@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "fts"
-version = "0.1.0"
+version = "0.2.0"
 description = "FTS — Factor Trading System: 独立因子策略系统，支持多因子挖掘、演化与交易"
 readme = "CODE_WIKI.md"
 requires-python = ">=3.10"

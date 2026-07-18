@@ -9,13 +9,16 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, PropertyMock, mock_open, patch
 
 import pytest
 
 from fts.cli import (
     _cmd_factor_list,
     _cmd_factor_show,
+    _cmd_evolution_run,
+    _cmd_meta_loop_run,
+    _cmd_portfolio_run,
     build_parser,
     main,
 )
@@ -36,7 +39,7 @@ class TestBuildParser:
         assert parser.prog == "fts"
 
     @pytest.mark.parametrize("subcmd", [
-        "version", "monitor", "evolution", "meta-loop", "portfolio", "factor",
+        "version", "monitor", "evolution", "meta-loop", "portfolio", "factor", "scheduler",
     ])
     def test_subcommands_exist(self, subcmd):
         """所有子命令都存在。"""
@@ -179,51 +182,93 @@ class TestMain:
         captured = capsys.readouterr()
         assert "ERROR" in captured.err.upper() or "ERROR" in captured.out
 
+    @patch("fts.cli.EvolutionLoop")
     @patch("fts.cli.generate_trace_id", return_value="l2_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
     def test_evolution_run_default_max_gen(
-        self, mock_run_id, mock_trace_id, capsys,
+        self, mock_run_id, mock_trace_id, mock_evoloop, capsys,
     ):
         """evolution run 默认 max_generations=10。"""
+        mock_loop = mock_evoloop.return_value
+        mock_loop.run.return_value = MagicMock(
+            status="completed", generations_completed=1,
+            elite_factor_ids=[], circuit_breaker_reason="",
+        )
         rc = main(["evolution", "run"])
         assert rc == 0
         captured = capsys.readouterr()
         assert "l2_abcd1234_20260718T000000" in captured.out
         assert "run_ef567890_20260718T000000" in captured.out
         assert "max_generations=10" in captured.out
+        mock_loop.run.assert_called_once()
 
+    @patch("fts.cli.EvolutionLoop")
     @patch("fts.cli.generate_trace_id", return_value="l2_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
     def test_evolution_run_custom_max_gen(
-        self, mock_run_id, mock_trace_id, capsys,
+        self, mock_run_id, mock_trace_id, mock_evoloop, capsys,
     ):
         """evolution run --max-generations 20 使用自定义值。"""
+        mock_loop = mock_evoloop.return_value
+        mock_loop.run.return_value = MagicMock(
+            status="completed", generations_completed=1,
+            elite_factor_ids=[], circuit_breaker_reason="",
+        )
         rc = main(["evolution", "run", "--max-generations", "20"])
         assert rc == 0
         captured = capsys.readouterr()
         assert "max_generations=20" in captured.out
 
+    @patch("fts.cli.MetaLoop")
     @patch("fts.cli.generate_trace_id", return_value="l1_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
-    def test_meta_loop_run(self, mock_run_id, mock_trace_id, capsys):
+    def test_meta_loop_run(
+        self, mock_run_id, mock_trace_id, mock_metal, capsys,
+    ):
         """meta-loop run 打印 trace_id 和 run_id。"""
+        mock_loop = mock_metal.return_value
+        mock_loop.run.return_value = MagicMock(
+            status="completed", injected=[],
+        )
         rc = main(["meta-loop", "run"])
         assert rc == 0
         captured = capsys.readouterr()
         assert "l1_abcd1234_20260718T000000" in captured.out
         assert "run_ef567890_20260718T000000" in captured.out
-        assert "Meta-Loop" in captured.out
+        assert "meta-loop" in captured.out
 
+    @patch("fts.cli.PortfolioLoop")
     @patch("fts.cli.generate_trace_id", return_value="l3_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
-    def test_portfolio_run(self, mock_run_id, mock_trace_id, capsys):
+    def test_portfolio_run(
+        self, mock_run_id, mock_trace_id, mock_port, capsys,
+    ):
         """portfolio run 打印 trace_id 和 run_id。"""
+        mock_loop = mock_port.return_value
+        mock_loop.run.return_value = MagicMock(
+            status="completed", factor_ids=[],
+            combined_sharpe=0.0,
+        )
         rc = main(["portfolio", "run"])
         assert rc == 0
         captured = capsys.readouterr()
         assert "l3_abcd1234_20260718T000000" in captured.out
         assert "run_ef567890_20260718T000000" in captured.out
-        assert "Portfolio" in captured.out
+        assert "portfolio" in captured.out
+
+    @patch("fts.cli.list_scheduler_tasks", return_value=[])
+    def test_scheduler_list_empty(self, mock_tasks, capsys):
+        """scheduler list 显示无任务。"""
+        rc = main(["scheduler", "list"])
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "无已注册任务" in captured.out
+
+    @patch("fts.cli._cmd_scheduler_list", return_value=0)
+    def test_scheduler_list(self, mock_cmd, capsys):
+        """scheduler list 调用 _cmd_scheduler_list。"""
+        rc = main(["scheduler", "list"])
+        assert rc == 0
 
     @patch("fts.cli._cmd_factor_list", return_value=0)
     def test_factor_list(self, mock_cmd, capsys):
@@ -338,8 +383,8 @@ class TestCmdFactorList:
         rc = _cmd_factor_list(args)
         assert rc == 0
         captured = capsys.readouterr()
-        # 默认路径不存在，应打印不存在提示
-        assert "不存在" in captured.out or "不存在" in captured.out
+        # 默认路径存在但无 JSON 文件
+        assert "无 elite 因子" in captured.out
 
 
 # ═══════════════════════════════════════════════════════════

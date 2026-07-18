@@ -65,6 +65,7 @@ CLAUDE.md — FTS 编码行为准则
 - docs/harness/07-operations.md（版本历史）
 - docs/harness/08-gap-analysis.md（差距管理）
 - docs/harness/09-advancement-plan.md（晋级计划）
+- docs/production_plan.md（生产就绪计划）
 
 5.2 commit 前 12 项检查清单 — 必须全部通过
 1. 数据流/架构变更是否反映？ → docs/harness/01-architecture.md
@@ -76,7 +77,7 @@ CLAUDE.md — FTS 编码行为准则
 7. 版本号和版本历史是否追加？ → docs/harness/07-operations.md + pyproject.toml
 8. 差距登记/关闭是否更新？ → docs/harness/08-gap-analysis.md
 9. 晋级里程碑是否更新？ → docs/harness/09-advancement-plan.md
-10. 流程文档是否同步？ → PLAN.md / CODE_WIKI.md
+10. 流程文档是否同步？ → CODE_WIKI.md / docs/production_plan.md
 11. CLAUDE.md 职责变更是否反映？ → CLAUDE.md
 12. README 快速参考是否刷新？ → CODE_WIKI.md（FTS 使用 CODE_WIKI.md 替代 README）
 

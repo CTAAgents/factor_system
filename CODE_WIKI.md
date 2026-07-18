@@ -296,7 +296,7 @@ factor_system/
 │   └── settings.yaml              # YAML 配置文件
 │
 ├── pyproject.toml                 # 包管理 (依赖 datacore)
-├── PLAN.md                        # 实施计划
+├── docs/production_plan.md        # 生产就绪实施计划
 └── CODE_WIKI.md                   # 本文档
 ```
 
@@ -1318,7 +1318,8 @@ for factor in elite_factors:
 
 | 文档 | 位置 | 说明 |
 |:-----|:-----|:-----|
-| FTS 实施计划 | [PLAN.md](file:///d:/Programs/factor_system/PLAN.md) | 项目详细设计 |
+| FTS 生产计划 | [docs/production_plan.md](file:///d:/Programs/factor_system/docs/production_plan.md) | 生产就绪路线图 |
+| FTS 初始计划（已归档） | [docs/archive/PLAN_v2.2.md](file:///d:/Programs/factor_system/docs/archive/PLAN_v2.2.md) | 初始构建详细设计（已完成） |
 | Data-Core README | [README.md](file:///d:/Programs/data-core/README.md) | 数据基础设施说明 |
 | Data-Core Code Wiki | [CODE_WIKI.md](file:///d:/Programs/data-core/CODE_WIKI.md) | Data-Core 代码 Wiki |
 | Data-Core 架构文档 | [ARCHITECTURE.md](file:///d:/Programs/data-core/ARCHITECTURE.md) | Data-Core 架构设计 |
@@ -1348,7 +1349,7 @@ for factor in elite_factors:
 | v2.0 | 2026-07-18 | 架构重大修正：明确三项目独立关系（FDT/FTS/Data-Core），仅剥离因子引擎+多因子策略，FDT保留完整数据层；新增剥离范围统计（8,259行/28文件/8.2%） |
 | v1.3 | 2026-07-18 | 修正 Data-Core 数据源：移除 Tushare（Data-Core 未使用） |
 | v1.2 | 2026-07-18 | 修正架构：FTS 不含数据层，数据层使用独立 Data-Core 项目 |
-| v1.1 | 2026-07-18 | 首次 Code Wiki 发布，基于 PLAN.md v1.1 规划 |
+| v1.1 | 2026-07-18 | 首次 Code Wiki 发布，基于 PLAN.md v1.1 规划（[已归档](docs/archive/PLAN_v2.2.md)） |
 
 ---
 

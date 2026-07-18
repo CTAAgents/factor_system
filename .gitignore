@@ -26,3 +26,10 @@ Thumbs.db
 .env
 .venv/
 venv/
+
+# Research / experimental
+brain_field_test.py
+check_alpha.py
+fetch_brain_fields.py
+probe_brain_api.py
+wq_brain_results.json

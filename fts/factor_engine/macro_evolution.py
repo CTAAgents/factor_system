@@ -1,5 +1,5 @@
 """
-loop_engine/macro_evolution.py — 宏观演化（LLM 改逻辑）
+FTS factor_engine/macro_evolution.py — 宏观演化（LLM 改逻辑）
 
 factorengine 核心约束（三层分离）：
     LLM 负责: 因子逻辑修改、新因子想法生成
@@ -9,7 +9,7 @@ factorengine 核心约束（三层分离）：
     每次调用必须读取经验链摘要
     新因子变异必须显式说明"避免重复踩坑"的依据
 
-版本: v8.10.0
+版本: v0.1.0（从 FDT v8.10.0 剥离，LLM 客户端改用 fts.llm）
 """
 # pylint: disable=too-few-public-methods,fixme
 
@@ -17,60 +17,12 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Optional, Protocol
+from typing import Optional
 
 from .contracts import EconomicLogic, ExperienceTrace, FactorProgram
 from .experience_chain import ExperienceChain
 from .factor_program import create_factor_program
-
-
-# ─── LLM 客户端协议 ───────────────────────────────────────
-
-class LLMClient(Protocol):
-    """LLM 客户端协议 — 任何实现此协议的客户端均可注入。"""
-
-    def complete(self, prompt: str, max_tokens: int = 4000) -> tuple[str, int]:
-        """生成补全。
-
-        Args:
-            prompt: 输入提示词
-            max_tokens: 最大生成 token 数
-
-        Returns:
-            (response_text, tokens_used)
-        """
-
-
-# ─── 默认 LLM 客户端（mock） ──────────────────────────────
-
-class MockLLMClient:
-    """Mock LLM 客户端 — 用于测试和 LLM 不可用时的兜底。
-
-    策略:
-        1. 在原因子代码上做小幅度参数扰动（不动逻辑结构）
-        2. 返回固定的经济逻辑评分（中等）
-        3. 不消耗真实 token
-
-    生产环境必须替换为真实 LLM 客户端。
-    """
-
-    def complete(self, _prompt: str, _max_tokens: int = 4000) -> tuple[str, int]:
-        """生成 mock 响应 — 简单的参数扰动。
-
-        Mock 策略：返回 JSON 指令，把 window 参数加 5。
-        """
-        # Mock 响应：window += 5
-        response = json.dumps({
-            "mutation_type": "macro_logic",
-            "mutation_summary": "Mock LLM: 参数 window 增大 5（测试用）",
-            "code_modification": "window_plus_5",
-            "economic_logic_modification": {
-                "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 5,
-                "narrative": "Mock LLM 生成的经济逻辑（测试用）"
-            },
-            "lessons_referenced": ["使用历史成功轨迹作参考"],
-        })
-        return response, 200  # mock 200 tokens
+from ..llm import LLMClient, MockLLMClient, get_llm_client as _get_llm_client
 
 
 # ─── 宏观演化器 ───────────────────────────────────────────
@@ -258,15 +210,22 @@ class MacroEvolver:
 
 
 def get_default_llm_client() -> LLMClient:
-    """获取默认 LLM 客户端（mock）。
+    """获取默认 LLM 客户端。
 
-    生产环境通过环境变量切换到真实 LLM：
-        FDT_LLM_PROVIDER=openai|anthropic|deepseek
-        FDT_LLM_API_KEY=...
-        FDT_LLM_MODEL=...
+    通过 fts.llm.get_llm_client() 自动检测可用的 LLM 后端。
+    自动检测顺序：
+        1. OPENAI_API_KEY → OpenAIClient
+        2. ANTHROPIC_API_KEY → AnthropicClient
+        3. 两者均无 → MockLLMClient
+
+    环境变量:
+        FTS_LLM_BACKEND: 强制指定 "openai" / "anthropic" / "mock"
+        OPENAI_API_KEY: OpenAI 的 API Key
+        OPENAI_MODEL: OpenAI 模型名 (默认 gpt-4o)
+        ANTHROPIC_API_KEY: Anthropic 的 API Key
+        ANTHROPIC_MODEL: Anthropic 模型名 (默认 claude-sonnet-4-20250514)
     """
-    # TODO: 接入 scripts/fdt_llm.py 的真实 LLM 客户端
-    return MockLLMClient()
+    return _get_llm_client()
 
 
 __all__ = [

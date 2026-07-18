@@ -74,13 +74,17 @@ tests/                        # 709 个测试，全部通过
 ├── test_cli.py               # CLI 测试
 └── test_monitor.py           # 监控测试
 
-docs/harness/                 # HARNESS 工程文档
-├── 01-architecture.md        # 系统架构
-├── 02-lifecycle.md           # 开发生命周期
-├── 06-testing.md             # 测试策略与覆盖率
-├── 07-operations.md          # 版本管理与运维
-├── 08-gap-analysis.md        # 差距分析
-└── 09-advancement-plan.md    # 晋级计划
+docs/                         # 项目文档
+├── production_plan.md        # 生产就绪实施计划
+├── archive/                  # 已完成/过时文档归档
+│   └── PLAN_v2.2.md          # 初始构建计划（已完成）
+└── harness/                  # HARNESS 工程文档（活文档）
+    ├── 01-architecture.md    # 系统架构
+    ├── 02-lifecycle.md       # 开发生命周期
+    ├── 06-testing.md         # 测试策略与覆盖率
+    ├── 07-operations.md      # 版本管理与运维
+    ├── 08-gap-analysis.md    # 差距管理
+    └── 09-advancement-plan.md# 晋级计划
 ```
 
 ## 架构概览

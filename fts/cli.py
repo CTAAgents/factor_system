@@ -24,23 +24,64 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+import pandas as pd
+
 from . import __version__ as FTS_VERSION
+from .config import get_config
+from .data import FTSDataProvider
 from .factor_engine import (
     EVOLUTION_VERSION,
+    DEFAULT_BUDGET_CONFIG,
+    EvolutionLoop,
+    FactorVerifier,
+    get_default_llm_client,
+    get_default_seed_pool,
     generate_run_id,
     generate_trace_id,
+    MacroEvolver,
+    MetaLoop,
+    MetaRunResult,
+    PortfolioLoop,
+    PortfolioRunResult,
 )
+from .llm import MockLLMClient
 from .monitor import (
     check_all_status,
     format_status_report,
     status_report_to_json,
 )
+from .scheduler import (
+    SchedulerEngine,
+    list_tasks as list_scheduler_tasks,
+)
+
+
+def _prepare_data(symbol: str = "RB", days: int = 500) -> tuple[pd.DataFrame, np.ndarray]:
+    """准备演化所需数据（生产: Data-Core | 回退: 合成数据）。"""
+    provider = FTSDataProvider()
+    df = provider.synthesize_ohlcv(n_days=days, base_price=100.0, seed=42)
+    # 先尝试 Data-Core，失败则使用合成数据
+    try:
+        dc_df = provider.get_ohlcv(symbol, days=days)
+        if dc_df is not None and not dc_df.empty and "close" in dc_df.columns:
+            df = dc_df
+    except Exception:  # noqa: BLE001
+        pass
+
+    forward_returns = np.zeros(len(df))
+    closes = df["close"].values
+    if len(closes) > 5:
+        forward_returns[:-5] = (closes[5:] - closes[:-5]) / np.maximum(closes[:-5], 1e-10)
+    return df, forward_returns
 
 
 def _cmd_version(_args: argparse.Namespace) -> int:
     """打印版本号。"""
+    cfg = get_config()
     print(f"FTS version: {FTS_VERSION}")
     print(f"Factor engine version: {EVOLUTION_VERSION}")
+    print(f"Config memory_dir: {cfg.memory_dir}")
     return 0
 
 
@@ -59,32 +100,127 @@ def _cmd_monitor(args: argparse.Namespace) -> int:
 
 
 def _cmd_evolution_run(args: argparse.Namespace) -> int:
-    """启动 L2 因子演化主循环。"""
+    """启动 L2 因子演化主循环（使用合成数据或 Data-Core 数据）。"""
     trace_id = generate_trace_id()
     run_id = generate_run_id()
+    cfg = get_config()
     print(f"[evolution] trace_id={trace_id} run_id={run_id}")
     print(f"[evolution] max_generations={args.max_generations}")
-    print("[evolution] L2 Evolution Loop 启动占位（实际实现见 factor_engine.evolution_loop）")
-    # 实际启动逻辑由 factor_engine.EvolutionLoop 承担
-    # 此处仅提供入口和 trace_id 注入，避免 CLI 与核心循环强耦合
-    return 0
+
+    # 准备数据
+    data_df, fwd_returns = _prepare_data(days=500)
+    print(f"[evolution] data shape: {data_df.shape}, forward_returns: {len(fwd_returns)}")
+
+    # 创建引擎
+    llm = get_default_llm_client()
+    print(f"[evolution] LLM backend: {type(llm).__name__}")
+
+    seed_pool = get_default_seed_pool()
+    verifier = FactorVerifier()
+
+    loop = EvolutionLoop(
+        data=data_df,
+        forward_returns=fwd_returns,
+        elite_dir=cfg.elite_dir,
+        memory_dir=cfg.memory_dir + "/evolution",
+        llm_client=llm,
+        seed_pool=seed_pool,
+        verifier=verifier,
+        n_trials_micro=min(args.max_generations * 5, cfg.micro_trials_per_generation),
+    )
+
+    # 熔断预算：每个因子最多 4000 token
+    budget = DEFAULT_BUDGET_CONFIG.copy()
+    budget["max_generation"] = args.max_generations
+    loop.budget = budget
+
+    # 执行演化
+    try:
+        result = loop.run(max_generation=args.max_generations)
+        print(f"[evolution] 完成: status={result.status} "
+              f"generations={result.generations_completed} "
+              f"elite_count={len(result.elite_factor_ids)}")
+        if result.circuit_breaker_reason:
+            print(f"[evolution] 熔断原因: {result.circuit_breaker_reason}")
+        return 0 if result.status == "completed" else 1
+    except Exception as e:  # noqa: BLE001
+        print(f"[evolution] 运行失败: {e}", file=sys.stderr)
+        return 2
 
 
-def _cmd_meta_loop_run(_args: argparse.Namespace) -> int:
-    """启动 L1 Meta-Loop。"""
+def _cmd_meta_loop_run(args: argparse.Namespace) -> int:
+    """启动 L1 Meta-Loop（市场感知 + Bootstrapping）。"""
     trace_id = generate_trace_id()
     run_id = generate_run_id()
+    cfg = get_config()
     print(f"[meta-loop] trace_id={trace_id} run_id={run_id}")
-    print("[meta-loop] L1 Meta-Loop 启动占位（实际实现见 factor_engine.meta_loop）")
+
+    llm = get_default_llm_client()
+    print(f"[meta-loop] LLM backend: {type(llm).__name__}")
+
+    try:
+        # MetaLoop 需要 data_provider 参数、memory_dir 等
+        loop = MetaLoop(
+            data_provider=_prepare_data,
+            memory_dir=cfg.memory_dir + "/meta_loop",
+            elite_dir=cfg.elite_dir,
+            llm_client=llm,
+        )
+        result = loop.run()
+        print(f"[meta-loop] 完成: status={result.status} injected={len(result.injected)}")
+        return 0
+    except Exception as e:  # noqa: BLE001
+        print(f"[meta-loop] 运行失败: {e}", file=sys.stderr)
+        return 2
+
+
+def _cmd_portfolio_run(args: argparse.Namespace) -> int:
+    """启动 L3 组合构建（加载 elite 因子 → 正交化 → 信号合成）。"""
+    trace_id = generate_trace_id()
+    run_id = generate_run_id()
+    cfg = get_config()
+    print(f"[portfolio] trace_id={trace_id} run_id={run_id}")
+
+    data_df, fwd_returns = _prepare_data(days=500)
+
+    try:
+        loop = PortfolioLoop(
+            data=data_df,
+            forward_returns=fwd_returns,
+            elite_dir=cfg.elite_dir,
+            memory_dir=cfg.memory_dir + "/portfolio",
+        )
+        result = loop.run()
+        print(f"[portfolio] 完成: status={result.status} "
+              f"factors={len(result.factor_ids)} "
+              f"sharpe={result.combined_sharpe:.4f}")
+        return 0
+    except Exception as e:  # noqa: BLE001
+        print(f"[portfolio] 运行失败: {e}", file=sys.stderr)
+        return 2
+
+
+def _cmd_scheduler_run(_args: argparse.Namespace) -> int:
+    """启动调度器后台运行。"""
+    engine = SchedulerEngine()
+    started = engine.start(daemon=True)
+    if not started:
+        print("[scheduler] 调度器启动失败（APScheduler 未安装）", file=sys.stderr)
+        return 1
+    print(f"[scheduler] 调度器已启动（{len(list_scheduler_tasks())} 个任务）")
     return 0
 
 
-def _cmd_portfolio_run(_args: argparse.Namespace) -> int:
-    """启动 L3 组合构建。"""
-    trace_id = generate_trace_id()
-    run_id = generate_run_id()
-    print(f"[portfolio] trace_id={trace_id} run_id={run_id}")
-    print("[portfolio] L3 Portfolio Loop 启动占位（实际实现见 factor_engine.portfolio_loop）")
+def _cmd_scheduler_list(_args: argparse.Namespace) -> int:
+    """列出所有已注册任务。"""
+    tasks = list_scheduler_tasks()
+    if not tasks:
+        print("[scheduler] 无已注册任务")
+        return 0
+    print(f"=== Scheduler Tasks ({len(tasks)}) ===")
+    for t in tasks:
+        status = "✔" if t.enabled else "✘"
+        print(f"  {status} {t.name:25s} | {t.cron_expression:12s} | {t.description}")
     return 0
 
 
@@ -163,6 +299,14 @@ def build_parser() -> argparse.ArgumentParser:
     port_sub = p_port.add_subparsers(dest="subcommand", required=False)
     p_port_run = port_sub.add_parser("run", help="启动 L3 组合构建")
     p_port_run.set_defaults(func=_cmd_portfolio_run)
+
+    # scheduler
+    p_sched = sub.add_parser("scheduler", help="任务调度器")
+    sched_sub = p_sched.add_subparsers(dest="subcommand", required=False)
+    p_sched_run = sched_sub.add_parser("run", help="启动调度器后台运行")
+    p_sched_run.set_defaults(func=_cmd_scheduler_run)
+    p_sched_list = sched_sub.add_parser("list", help="列出所有已注册任务")
+    p_sched_list.set_defaults(func=_cmd_scheduler_list)
 
     # factor
     p_factor = sub.add_parser("factor", help="因子管理")

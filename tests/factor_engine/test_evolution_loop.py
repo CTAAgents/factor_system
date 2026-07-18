@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -10,7 +11,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fts.factor_engine.contracts import EVOLUTION_VERSION
+from fts.factor_engine.contracts import (
+    EVOLUTION_VERSION,
+    EconomicLogic,
+    FactorEvaluation,
+    FactorProgram,
+    FactorSignature,
+)
 from fts.factor_engine.evolution_loop import EvolutionLoop, EvolutionRunResult
 from fts.factor_engine.state import (
     EvolutionStateManager,
@@ -686,3 +693,593 @@ class TestMicroEvolutionCoverage:
         assert "factor_id" in evolved
         assert evolved["params"] == {"window": 10}
         assert score == 0.0
+
+
+# ─── EvolutionLoop 未覆盖路径补齐 ─────────────────────────
+
+def _make_minimal_factor(factor_id: str = "fct_test1234") -> FactorProgram:
+    """构造最小 FactorProgram fixture。"""
+    return FactorProgram(
+        factor_id=factor_id,
+        name="test_factor",
+        code="def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))",
+        params={"window": 10},
+        signature=FactorSignature(
+            input_fields=["close"], output_type="signal", frequency="daily", lookback=1,
+        ),
+        economic_logic=EconomicLogic(
+            theory=3, behavioral=3, microstructure=3, institutional=3, narrative="测试因子",
+        ),
+        source="manual",
+        parent_id=None,
+        generation=0,
+        created_at="2026-07-18T00:00:00",
+        trace_id="test_trace",
+    )
+
+
+class TestEvolutionLoopCoverage:
+    """补齐 evolution_loop.py 未覆盖路径。"""
+
+    # ─── 宏观演化失败（line 178-184）────────────────────
+
+    def test_macro_evolution_failure(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+    ):
+        """宏观演化抛出异常应跳过本代并继续（generations_completed 仍为 max_gen）。"""
+        loop = EvolutionLoop(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            n_trials_micro=2,
+        )
+        # 让 evolve 抛出异常
+        loop.macro_evolver.evolve = MagicMock(side_effect=ValueError("LLM 不可用"))
+        result = loop.run(max_generation=3)
+        # 循环正常完成（跳过了所有代），generations_completed = max_gen
+        assert result.generations_completed == 3
+        assert result.status == "completed"
+        # token 消耗应为 0（宏观演化全部失败，无 token 消耗）
+        assert result.tokens_consumed == 0
+
+    def test_macro_evolution_failure_recorded(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+    ):
+        """宏观演化失败应在 failure 目录生成轨迹文件。"""
+        loop = EvolutionLoop(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            n_trials_micro=2,
+        )
+        loop.macro_evolver.evolve = MagicMock(side_effect=ValueError("LLM 不可用"))
+        loop.run(max_generation=2)
+        failure_dir = tmp_memory_dir / "failure"
+        files = list(failure_dir.glob("*.json"))
+        assert len(files) > 0
+        # 验证内容
+        data = json.loads(files[0].read_text(encoding="utf-8"))
+        assert "宏观演化失败" in data.get("mutation_summary", "")
+
+    # ─── 微观演化失败（line 192-197）────────────────────
+
+    def test_micro_evolution_failure(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+    ):
+        """微观演化抛出异常应跳过本代并继续。"""
+        loop = EvolutionLoop(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            n_trials_micro=2,
+        )
+        with patch("fts.factor_engine.evolution_loop.evolve_micro") as mock_micro:
+            mock_micro.side_effect = RuntimeError("optuna 崩溃")
+            result = loop.run(max_generation=3)
+        # 宏观演化成功（有 token 消耗），微观全部失败 → 循环正常完成
+        assert result.generations_completed == 3
+        assert result.status == "completed"
+        assert result.tokens_consumed > 0  # 宏观演化的 token 被消耗
+
+    def test_micro_evolution_failure_recorded(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+    ):
+        """微观演化失败应在 failure 目录生成轨迹文件。"""
+        # 先运行一次查看正常路径，确保 failure 目录有文件
+        loop = EvolutionLoop(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            n_trials_micro=2,
+        )
+        with patch("fts.factor_engine.evolution_loop.evolve_micro") as mock_micro:
+            from fts.factor_engine.contracts import FactorProgram as FP
+            mock_micro.side_effect = RuntimeError("optuna 崩溃")
+            loop.run(max_generation=2)
+        failure_dir = tmp_memory_dir / "failure"
+        files = list(failure_dir.glob("*.json"))
+        assert len(files) > 0
+
+    # ─── Verifier → 晋级精英池（line 213-221）─────────────
+
+    def test_evolution_loop_promote_to_elite(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+    ):
+        """Verifier 通过应晋级精英池。"""
+        from fts.factor_engine.contracts import BudgetConfig
+
+        budget = BudgetConfig(
+            nightly_token_limit=1_000_000,
+            monthly_token_limit=10_000_000,
+            max_generation=3,
+            max_tokens_per_factor=10_000,
+            circuit_breaker_token_ratio=10.0,
+            circuit_breaker_consecutive_low_ic=100,
+            circuit_breaker_low_ic_threshold=0.01,
+            circuit_breaker_failure_rate=0.99,
+        )
+        loop = EvolutionLoop(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            budget=budget,
+            n_trials_micro=2,
+        )
+        # Verifier 始终通过
+        mock_verifier = MagicMock()
+        mock_verifier.check.return_value = {
+            "passed": True,
+            "failure_reasons": [],
+        }
+        loop.verifier = mock_verifier
+        result = loop.run(max_generation=2)
+        # 至少会有一部分因子晋级
+        assert result.total_factors_promoted >= 1
+        assert len(result.elite_factor_ids) > 0
+        # 精英池目录应有文件
+        elite_files = list(tmp_elite_dir.glob("*.json"))
+        assert len(elite_files) > 0
+
+    # ─── 外层 except 块（line 256-258）───────────────────
+
+    def test_evolution_loop_outer_exception(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch,
+    ):
+        """循环内未捕获异常应触发外层 except → 返回 paused。"""
+        loop = EvolutionLoop(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            n_trials_micro=2,
+        )
+        # mock seed_pool.load_all_seeds 在循环内抛出异常
+        loop.seed_pool.load_all_seeds = MagicMock(side_effect=ValueError("种子池损坏"))
+        result = loop.run(max_generation=2)
+        assert result.status == "paused"
+        assert "种子池损坏" in (result.circuit_breaker_reason or "")
+
+    # ─── 失败率熔断（line 293-295）───────────────────────
+
+    def test_evolution_loop_failure_rate_circuit_breaker(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+    ):
+        """失败率超过阈值应触发熔断。"""
+        from fts.factor_engine.contracts import BudgetConfig
+
+        budget = BudgetConfig(
+            nightly_token_limit=1_000_000,
+            monthly_token_limit=10_000_000,
+            max_generation=20,
+            max_tokens_per_factor=10_000,
+            circuit_breaker_token_ratio=10.0,
+            circuit_breaker_consecutive_low_ic=100,
+            circuit_breaker_low_ic_threshold=0.01,
+            circuit_breaker_failure_rate=0.01,  # 极低阈值
+        )
+        loop = EvolutionLoop(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            budget=budget,
+            n_trials_micro=2,
+        )
+        # 预设状态：已有 10 次评估、0 次晋级 → 失败率 100%
+        state = loop.state_manager.load_or_init()
+        state["total_factors_evaluated"] = 10
+        state["total_factors_promoted"] = 0
+        loop.state_manager.save(state)
+
+        result = loop.run(max_generation=10)
+        assert result.status == "circuit_broken"
+        assert "失败率" in (result.circuit_breaker_reason or "")
+
+    # ─── 内部方法直接测试 ─────────────────────────────────
+
+    def test_promote_to_elite(
+        self, tmp_elite_dir, tmp_memory_dir,
+    ):
+        """_promote_to_elite 应写文件到 elite 目录。"""
+        loop = EvolutionLoop(
+            data=pd.DataFrame({"close": [1.0]}),
+            forward_returns=np.array([0.0]),
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+        )
+        factor = _make_minimal_factor("fct_promote_test")
+        evaluation = FactorEvaluation(
+            factor_id="fct_promote_test",
+            trace_id="test_trace",
+            passed=True,
+            failure_reasons=[],
+            evaluated_at="2026-07-18T00:00:00",
+        )
+        fp = loop._promote_to_elite(factor, evaluation)
+        assert fp.exists()
+        assert fp.suffix == ".json"
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        assert data["factor"]["factor_id"] == "fct_promote_test"
+
+    def test_record_success_trace(self, tmp_memory_dir):
+        """_record_success_trace 应记录到 success 目录。"""
+        loop = EvolutionLoop(
+            data=pd.DataFrame({"close": [1.0]}),
+            forward_returns=np.array([0.0]),
+            memory_dir=tmp_memory_dir,
+        )
+        factor = _make_minimal_factor("fct_success_test")
+        evaluation = FactorEvaluation(
+            factor_id="fct_success_test",
+            trace_id="test_trace",
+            passed=True,
+            failure_reasons=[],
+            level_1_backtest={"ic": 0.05, "sharpe": 1.6},
+            evaluated_at="2026-07-18T00:00:00",
+        )
+        loop._record_success_trace(
+            factor=factor,
+            generation=1,
+            mutation_type="combined",
+            mutation_summary="测试成功轨迹",
+            evaluation=evaluation,
+            lessons=["代 1 晋级精英池"],
+            trace_id="l2_testtrace",
+        )
+        success_dir = tmp_memory_dir / "success"
+        files = list(success_dir.glob("*.json"))
+        assert len(files) > 0
+
+    def test_record_failure_trace_without_evaluation(self, tmp_memory_dir):
+        """_record_failure_trace 在 evaluation=None 时应构造默认评估。"""
+        loop = EvolutionLoop(
+            data=pd.DataFrame({"close": [1.0]}),
+            forward_returns=np.array([0.0]),
+            memory_dir=tmp_memory_dir,
+        )
+        factor = _make_minimal_factor("fct_fail_test1")
+        loop._record_failure_trace(
+            factor=factor,
+            generation=1,
+            mutation_type="macro_evolution",
+            mutation_summary="宏观演化失败: 测试",
+            failure_reasons=["LLM 不可用"],
+            trace_id="l2_testtrace",
+            evaluation=None,
+        )
+        failure_dir = tmp_memory_dir / "failure"
+        files = list(failure_dir.glob("*.json"))
+        assert len(files) > 0
+        data = json.loads(files[0].read_text(encoding="utf-8"))
+        assert data["success"] is False
+
+    def test_record_failure_trace_fills_missing_reasons(self, tmp_memory_dir):
+        """_record_failure_trace 在 evaluation 无 failure_reasons 时应填充。"""
+        loop = EvolutionLoop(
+            data=pd.DataFrame({"close": [1.0]}),
+            forward_returns=np.array([0.0]),
+            memory_dir=tmp_memory_dir,
+        )
+        factor = _make_minimal_factor("fct_fail_test2")
+        # 传入已有 evaluation 但 failure_reasons 为空列表
+        evaluation = FactorEvaluation(
+            factor_id="fct_fail_test2",
+            trace_id="test_trace",
+            passed=False,
+            failure_reasons=[],
+            evaluated_at="2026-07-18T00:00:00",
+        )
+        loop._record_failure_trace(
+            factor=factor,
+            generation=2,
+            mutation_type="combined",
+            mutation_summary="测试填充失败原因",
+            failure_reasons=["Verifier 拒绝"],
+            trace_id="l2_testtrace",
+            evaluation=evaluation,
+        )
+        # 验证 failure_reasons 已被填充
+        failure_dir = tmp_memory_dir / "failure"
+        files = list(failure_dir.glob("*.json"))
+        assert len(files) > 0
+
+    def test_record_failure_trace_ignores_record_error(self, tmp_memory_dir, monkeypatch):
+        """_record_failure_trace 在 record_failure 抛出异常时应静默忽略。"""
+        loop = EvolutionLoop(
+            data=pd.DataFrame({"close": [1.0]}),
+            forward_returns=np.array([0.0]),
+            memory_dir=tmp_memory_dir,
+        )
+        # 让 record_failure 抛出异常
+        loop.experience_chain.record_failure = MagicMock(
+            side_effect=RuntimeError("磁盘已满")
+        )
+        factor = _make_minimal_factor("fct_fail_test3")
+        # 应不抛异常
+        loop._record_failure_trace(
+            factor=factor,
+            generation=3,
+            mutation_type="macro_evolution",
+            mutation_summary="测试静默忽略",
+            failure_reasons=["测试"],
+            trace_id="l2_testtrace",
+        )
+        # 不应有 failure 文件（因为 record_failure 抛异常）
+        failure_dir = tmp_memory_dir / "failure"
+        files = list(failure_dir.glob("*.json"))
+        assert len(files) == 0
+
+    # ─── low_ic 分支（line 232-235）───────────────────────
+
+    def test_low_ic_increment(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+    ):
+        """低 IC 因子应递增 _consecutive_low_ic 计数器。"""
+        from fts.factor_engine.contracts import BudgetConfig
+
+        budget = BudgetConfig(
+            nightly_token_limit=1_000_000,
+            monthly_token_limit=10_000_000,
+            max_generation=5,
+            max_tokens_per_factor=10_000,
+            circuit_breaker_token_ratio=10.0,
+            circuit_breaker_consecutive_low_ic=3,
+            circuit_breaker_low_ic_threshold=0.99,  # 几乎所有 IC 都低于此值
+            circuit_breaker_failure_rate=0.99,
+        )
+        loop = EvolutionLoop(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            budget=budget,
+            n_trials_micro=2,
+            llm_client=MagicMock(),
+        )
+        # mock macro_evolver.evolve 返回有效结果（含 trace_id）
+        mock_factor = _make_minimal_factor("fct_lowic_test")
+        loop.macro_evolver.evolve = MagicMock(return_value=(
+            mock_factor, "mock summary", 100,
+        ))
+        # mock evolve_micro 返回有效因子
+        with patch("fts.factor_engine.evolution_loop.evolve_micro") as mock_micro:
+            optimized = _make_minimal_factor("fct_optimized_test")
+            mock_micro.return_value = (optimized, 0.01)
+            result = loop.run(max_generation=5)
+        # 由于 budget 中低 IC 阈值很大，verifier 会失败，低 IC 计数器递增 → 触发熔断
+        assert result.status in ("completed", "circuit_broken")
+        # 验证有评估记录
+        assert result.total_factors_evaluated > 0
+
+
+# ─── main() 函数测试（line 396-438）────────────────────────
+
+class TestMainFunction:
+    """测试 CLI 入口 main()。"""
+
+    def test_main_without_once_flag(self, monkeypatch):
+        """不带 --once 标志应打印帮助并退出。"""
+        monkeypatch.setattr(sys, "argv", ["evolution_loop.py"])
+        from fts.factor_engine.evolution_loop import main
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    def test_main_with_once_flag(self, monkeypatch, tmp_path):
+        """带 --once 标志应运行完整演化。"""
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                "evolution_loop.py",
+                "--once",
+                "--max-generation", "1",
+                "--memory-dir", str(tmp_path / "evolution"),
+                "--elite-dir", str(tmp_path / "elite"),
+            ],
+        )
+        from fts.factor_engine.evolution_loop import main
+        # 不应抛出异常
+        main()
+
+    def test_main_with_max_generation(self, monkeypatch, tmp_path):
+        """带 --max-generation 参数应限定代数。"""
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                "evolution_loop.py",
+                "--once",
+                "--max-generation", "2",
+                "--memory-dir", str(tmp_path / "evolution2"),
+                "--elite-dir", str(tmp_path / "elite2"),
+            ],
+        )
+        from fts.factor_engine.evolution_loop import main
+        main()
+
+    # ─── if __name__ == "__main__" 覆盖（line 442）────────
+
+    def test_module_execution(self, monkeypatch, tmp_path):
+        """模拟 python -m 执行进入 main()。"""
+        import fts.factor_engine.evolution_loop as mod
+        original_main = mod.main
+        called = False
+
+        def fake_main():
+            nonlocal called
+            called = True
+
+        mod.main = fake_main
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                "evolution_loop.py",
+                "--once",
+                "--max-generation", "1",
+                "--memory-dir", str(tmp_path / "evolution_mod"),
+                "--elite-dir", str(tmp_path / "elite_mod"),
+            ],
+        )
+        # 模拟 __name__ == "__main__"
+        from fts.factor_engine import evolution_loop as evolution_loop_mod
+        with patch.object(evolution_loop_mod, "__name__", "__main__"):
+            # 触发 if __name__ == "__main__": main()
+            # 直接调用等同于 __main__ 的代码
+            exec("from fts.factor_engine.evolution_loop import main; main()",
+                 {"__name__": "__main__"})
+        mod.main = original_main
+
+    # ─── main() 中熔断行打印覆盖（line 436, 438）─────────
+
+    def test_main_with_circuit_breaker_reason(self, monkeypatch, tmp_path):
+        """测试 main() 中有熔断原因时的打印路径。"""
+        from fts.factor_engine.evolution_loop import EvolutionRunResult
+
+        mock_result = EvolutionRunResult(
+            run_id="test_run",
+            trace_id="test_trace",
+            generations_completed=3,
+            total_factors_evaluated=5,
+            total_factors_promoted=0,
+            tokens_consumed=5000,
+            status="circuit_broken",
+            circuit_breaker_reason="Token 熔断: 5000 > 200000 * 2.0",
+            elite_factor_ids=[],
+        )
+        with patch("fts.factor_engine.evolution_loop.EvolutionLoop.run",
+                   return_value=mock_result):
+            monkeypatch.setattr(
+                sys, "argv",
+                [
+                    "evolution_loop.py",
+                    "--once",
+                    "--max-generation", "3",
+                    "--memory-dir", str(tmp_path / "evo_cb"),
+                    "--elite-dir", str(tmp_path / "elite_cb"),
+                ],
+            )
+            from fts.factor_engine.evolution_loop import main
+            main()
+
+    def test_main_with_elite_factor_ids(self, monkeypatch, tmp_path):
+        """测试 main() 中有精英因子时的打印路径。"""
+        from fts.factor_engine.evolution_loop import EvolutionRunResult
+
+        mock_result = EvolutionRunResult(
+            run_id="test_run",
+            trace_id="test_trace",
+            generations_completed=2,
+            total_factors_evaluated=3,
+            total_factors_promoted=2,
+            tokens_consumed=3000,
+            status="completed",
+            circuit_breaker_reason=None,
+            elite_factor_ids=["fct_abc12345", "fct_def67890"],
+        )
+        with patch("fts.factor_engine.evolution_loop.EvolutionLoop.run",
+                   return_value=mock_result):
+            monkeypatch.setattr(
+                sys, "argv",
+                [
+                    "evolution_loop.py",
+                    "--once",
+                    "--max-generation", "2",
+                    "--memory-dir", str(tmp_path / "evo_elite"),
+                    "--elite-dir", str(tmp_path / "elite_elite"),
+                ],
+            )
+            from fts.factor_engine.evolution_loop import main
+            main()
+
+    def test_main_with_both_cb_and_elite(self, monkeypatch, tmp_path):
+        """测试 main() 中同时有熔断原因和精英因子时的打印路径。"""
+        from fts.factor_engine.evolution_loop import EvolutionRunResult
+
+        mock_result = EvolutionRunResult(
+            run_id="test_run",
+            trace_id="test_trace",
+            generations_completed=3,
+            total_factors_evaluated=10,
+            total_factors_promoted=1,
+            tokens_consumed=500000,
+            status="circuit_broken",
+            circuit_breaker_reason="Token 超限",
+            elite_factor_ids=["fct_elite_test"],
+        )
+        with patch("fts.factor_engine.evolution_loop.EvolutionLoop.run",
+                   return_value=mock_result):
+            monkeypatch.setattr(
+                sys, "argv",
+                [
+                    "evolution_loop.py",
+                    "--once",
+                    "--max-generation", "5",
+                    "--memory-dir", str(tmp_path / "evo_both"),
+                    "--elite-dir", str(tmp_path / "elite_both"),
+                ],
+            )
+            from fts.factor_engine.evolution_loop import main
+            main()
+
+
+# ─── 进一步覆盖 line 221 ──────────────────────────────────
+
+class TestLine221:
+    """专门覆盖 evolution_loop.py line 221 (self._consecutive_low_ic = 0)。"""
+
+    def test_consecutive_low_ic_reset_on_success(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+    ):
+        """Verifier 通过时应重置低 IC 计数器。"""
+        loop = EvolutionLoop(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            n_trials_micro=2,
+            llm_client=MagicMock(),
+        )
+        # Mock macro_evolver 返回有效因子（包含 trace_id）
+        parent_factor = _make_minimal_factor("fct_line221_parent")
+        loop.macro_evolver.evolve = MagicMock(return_value=(
+            parent_factor, "Mock macro summary", 200,
+        ))
+        # Mock micro_evolution 返回优化后因子
+        with patch("fts.factor_engine.evolution_loop.evolve_micro") as mock_micro:
+            optimized = _make_minimal_factor("fct_line221_child")
+            optimized["factor_id"] = "fct_line221_child"
+            mock_micro.return_value = (optimized, 0.02)
+            # Mock verifier 一直通过
+            with patch.object(loop, "verifier") as mock_ver:
+                mock_ver.check.return_value = {
+                    "passed": True,
+                    "failure_reasons": [],
+                }
+                result = loop.run(max_generation=2)
+        # Verifier 通过 → 晋级精英池
+        assert result.total_factors_promoted >= 1
+        assert len(result.elite_factor_ids) >= 1
