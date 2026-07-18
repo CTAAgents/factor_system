@@ -67,7 +67,7 @@ CLAUDE.md — FTS 编码行为准则
 - docs/harness/09-advancement-plan.md（晋级计划）
 - docs/production_plan.md（生产就绪计划）
 
-5.2 commit 前 12 项检查清单 — 必须全部通过
+5.2 commit 前 13 项检查清单 — 必须全部通过
 1. 数据流/架构变更是否反映？ → docs/harness/01-architecture.md
 2. 阶段/文件名/产出物是否反映？ → docs/harness/02-lifecycle.md
 3. （FTS 无独立配置文档，新配置项在 pyproject.toml 中更新）
@@ -79,7 +79,8 @@ CLAUDE.md — FTS 编码行为准则
 9. 晋级里程碑是否更新？ → docs/harness/09-advancement-plan.md
 10. 流程文档是否同步？ → CODE_WIKI.md / docs/production_plan.md
 11. CLAUDE.md 职责变更是否反映？ → CLAUDE.md
-12. README 快速参考是否刷新？ → CODE_WIKI.md（FTS 使用 CODE_WIKI.md 替代 README）
+12. README 工程指标（测试数/覆盖率/版本）是否同步？ → README.md
+13. README 快速参考是否刷新？ → CODE_WIKI.md（FTS 使用 CODE_WIKI.md 替代 README）
 
 5.3 契约优先原则
 先定义 TypedDict/接口契约，再实现代码。变更前必须更新 docs/harness/01-architecture.md 中的接口定义。

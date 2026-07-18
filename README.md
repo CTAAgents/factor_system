@@ -1,11 +1,10 @@
 # FTS — Factor Intelligence System
 
-> **因子智能系统** — 从 FDT 剥离的独立因子发现、评估、组合与演化引擎
+> **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-709%20passing-brightgreen)](#)
-[![Coverage](https://img.shields.io/badge/coverage-92%25-yellowgreen)](#)
-[![Code Quality](https://img.shields.io/badge/pylint-10.0%2F10-brightgreen)](#)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-778%20passing-brightgreen)](#)
+[![Coverage](https://img.shields.io/badge/coverage-89%25-yellowgreen)](#)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue)](#)
 
 ---
 
@@ -25,23 +24,29 @@ FTS 是一个 AI 原生的量化因子智能系统，实现三层进化循环：
 # 安装
 pip install -e .
 
-# 验证
-python -m fts.cli version
+# 查看版本与配置
+fts version
 
 # 运行测试
-python -m pytest tests/ --no-cov
+python -m pytest tests/ --no-cov --tb=short
 
-# 查看监控
-python -m fts.cli monitor
+# 查看监控状态
+fts monitor
 
-# 因子演化（L2）
-python -m fts.cli evolution run
+# L1 Meta-Loop（市场感知）
+fts meta-loop run
 
-# Meta-Loop（L1）
-python -m fts.cli meta-loop run
+# L2 因子演化
+fts evolution run --max-generations 3
 
-# 组合构建（L3）
-python -m fts.cli portfolio run
+# L3 组合构建
+fts portfolio run
+
+# 查看 elite 因子
+fts factor list
+
+# 调度器任务列表
+fts scheduler list
 ```
 
 可选依赖：
@@ -52,27 +57,44 @@ python -m fts.cli portfolio run
 | `llm` | LLM 客户端（openai/anthropic） | `pip install -e ".[llm]"` |
 | `data` | Data-Core 集成 | `pip install -e ".[data]"` |
 | `dev` | 开发工具（pytest/pytest-cov） | `pip install -e ".[dev]"` |
+| 全部 | 安装所有可选依赖 | `pip install -e ".[evolution,llm,data,dev]"` |
 
 ## 项目结构
 
 ```
-fts/                          # 核心源码
+fts/                          # 核心源码（~3,400 语句）
+├── config/                   # 配置系统（YAML + 环境变量 + 默认值）
 ├── core/                     # 核心契约（enums + TypedDict 重导出）
-├── factor_engine/            # 因子引擎（15 文件，L1/L2/L3 三层循环）
+├── factor_engine/            # 因子引擎（L1/L2/L3 三层循环）
 ├── pipeline/                 # 因子推演管线
 ├── strategies/               # 策略层（base_v2 + multi_factor）
-├── scheduler/                # 调度层（4 个默认定时任务）
+├── scheduler/                # 调度层（TaskRegistry + APScheduler 引擎）
+├── data.py                   # Data-Core 集成层
+├── llm.py                    # LLM 客户端统一接口（OpenAI/Anthropic/Mock）
 ├── cli.py                    # 统一命令行入口
 └── monitor.py                # 健康监控
 
-tests/                        # 709 个测试，全部通过
-├── factor_engine/            # 因子引擎测试（10 文件）
+tests/                        # 778 个测试，全部通过
+├── factor_engine/            # 因子引擎测试（13 文件）
 ├── pipeline/                 # 管线测试（2 文件）
 ├── scheduler/                # 调度测试
 ├── strategies/               # 策略测试（2 文件）
 ├── core/                     # 核心契约测试（2 文件）
-├── test_cli.py               # CLI 测试
+├── test_cli.py               # CLI 集成测试
+├── test_llm.py               # LLM 客户端测试
 └── test_monitor.py           # 监控测试
+
+config/                       # 项目级配置文件
+├── settings.yaml             # YAML 配置示例
+└── .gitignore
+
+memory/                       # 运行时持久化（自动创建）
+├── evolution/                # L2 演化状态
+├── meta_loop/                # L1 元循环状态
+├── portfolio/                # L3 组合状态
+└── knowledge/factors/        # 因子知识库
+    ├── elite/                # 精英因子
+    └── l1_injected/          # L1 注入因子
 
 docs/                         # 项目文档
 ├── production_plan.md        # 生产就绪实施计划
@@ -109,11 +131,11 @@ FDT（期货交易决策系统）
 
 | 指标 | 值 |
 |------|:---:|
-| **测试通过数** | 709 / 709（100%） |
-| **测试覆盖率** | 92%（19 个模块 100%） |
-| **代码审计** | pylint 10.00 / 10 |
-| **代码行数** | ~2,900 语句 |
-| **文件数** | 67 个源码 + 测试文件 |
+| **版本** | v0.2.0 |
+| **测试通过数** | 778 / 778（100%）|
+| **测试覆盖率** | 89%（27 个模块 ≥90%）|
+| **代码行数** | ~3,400 语句 |
+| **文件数** | 77 个源码 + 测试文件 |
 
 ## 依赖关系
 
