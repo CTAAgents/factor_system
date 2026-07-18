@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "fts"
+version = "0.1.0"
+description = "FTS — Factor Trading System: 独立因子策略系统，支持多因子挖掘、演化与交易"
+readme = "CODE_WIKI.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "FDT Team" }]
+
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+evolution = [
+    "optuna>=3.0",
+]
+llm = [
+    "openai>=1.0",
+    "anthropic>=0.20",
+]
+data = [
+    "datacore",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+]
+
+[project.scripts]
+fts = "fts.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=fts --cov-report=term-missing -v"
