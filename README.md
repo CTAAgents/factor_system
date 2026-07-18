@@ -95,7 +95,6 @@ memory/                       # 运行时持久化（自动创建）
 └── knowledge/factors/        # 因子知识库
     ├── elite/                # 精英因子
     └── l1_injected/          # L1 注入因子
-
 docs/                         # 项目文档
 ├── production_plan.md        # 生产就绪实施计划
 ├── archive/                  # 已完成/过时文档归档
