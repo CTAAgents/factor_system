@@ -46,6 +46,9 @@ class EconomicLogic(TypedDict, total=False):
     narrative: str                # LLM 生成的经济学解释（必填，非空）
 
 
+from .walk_forward import WalkForwardResult
+
+
 class FactorProgram(TypedDict, total=False):
     """因子程序 — 图灵完备代码表示（factorengine 核心）。
 
@@ -109,6 +112,7 @@ class FactorEvaluation(TypedDict, total=False):
     level_1_backtest: BacktestMetrics
     level_2_economic: EconomicScore
     level_3_multiple: MultipleTestResult
+    walk_forward: Optional[WalkForwardResult]    # 可选走航验证结果
     passed: bool                                 # 三级全部通过
     failure_reasons: list[str]                   # 失败维度（用于经验链）
     evaluated_at: str                            # ISO 8601

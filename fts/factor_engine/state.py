@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from ..core.atomic import atomic_write, atomic_write_state
 from .contracts import (
     DEFAULT_BUDGET_CONFIG,
     EVOLUTION_VERSION,
@@ -196,11 +197,8 @@ class EvolutionStateManager:
             return None
 
     def _write(self, state: EvolutionState) -> None:
-        """写入状态文件（不备份）。"""
-        self.state_file.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        """原子写入状态文件（临时文件 + rename，避免残缺文件）。"""
+        atomic_write(self.state_file, state)
 
     @staticmethod
     def _init_state(budget_limit: Optional[int]) -> EvolutionState:

@@ -9,25 +9,26 @@ from fts.factor_engine.seed_pool import SeedPool, get_default_seed_pool
 
 
 def test_seed_pool_loads_12_seeds():
-    """种子池必须包含 12 个种子因子（来自 multi_factor_strategy.py）。"""
+    """种子池必须包含 15 个种子因子（12 个通用 + 3 个 A 股）。"""
     pool = SeedPool()
     seeds = pool.load_all_seeds()
-    assert len(seeds) == 12
+    assert len(seeds) == 15
 
 
 def test_seed_pool_count():
     pool = SeedPool()
-    assert pool.count() == 12
+    assert pool.count() == 15
 
 
 def test_seed_pool_list_names():
-    """种子因子名称必须与 multi_factor_strategy.py FACTOR_WEIGHTS 对应。"""
+    """种子因子名称必须与 _SEED_DEFINITIONS 对应。"""
     pool = SeedPool()
     names = pool.list_names()
     expected = {
         "momentum", "volatility_reversion", "volume_flow", "oi_change",
         "basis", "inventory_pct", "capacity", "macro_regime",
         "rate_proxy", "pmi_proxy", "position_rank", "warrant_change",
+        "value_factor", "quality_factor", "size_factor",
     }
     assert set(names) == expected
 
@@ -96,5 +97,5 @@ def test_default_seed_pool_singleton():
     p1 = get_default_seed_pool()
     p2 = get_default_seed_pool()
     # 默认实现是新建实例
-    assert p1.count() == 12
-    assert p2.count() == 12
+    assert p1.count() == 15
+    assert p2.count() == 15

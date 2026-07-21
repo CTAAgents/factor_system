@@ -57,10 +57,10 @@ from .scheduler import (
 )
 
 
-def _prepare_data(symbol: str = "RB", days: int = 500) -> tuple[pd.DataFrame, np.ndarray]:
+def _prepare_data(symbol: str = "000001", days: int = 500) -> tuple[pd.DataFrame, np.ndarray]:
     """准备演化所需数据（生产: Data-Core | 回退: 合成数据）。"""
     provider = FTSDataProvider()
-    df = provider.synthesize_ohlcv(n_days=days, base_price=100.0, seed=42)
+    df = provider.synthesize_ohlcv(n_days=days, base_price=15.0, seed=42)  # A股默认基价15元
     # 先尝试 Data-Core，失败则使用合成数据
     try:
         dc_df = provider.get_ohlcv(symbol, days=days)
@@ -74,6 +74,37 @@ def _prepare_data(symbol: str = "RB", days: int = 500) -> tuple[pd.DataFrame, np
     if len(closes) > 5:
         forward_returns[:-5] = (closes[5:] - closes[:-5]) / np.maximum(closes[:-5], 1e-10)
     return df, forward_returns
+
+
+def _prepare_cross_section_data(
+    universe: str = "csi300",
+    days: int = 500,
+    max_stocks: int = 50,
+) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex, np.ndarray]:
+    """准备横截面演化所需的多标的面板数据。
+
+    Args:
+        universe: "csi300"（股票）或 "futures"（期货）
+        days: 回溯天数
+        max_stocks: 最大标的数量
+
+    Returns:
+        (panel, common_dates, forward_returns — 使用第一个标的作为微参参考)
+    """
+    provider = FTSDataProvider()
+    if universe == "futures":
+        panel, common_dates = provider.get_futures_panel(days=days, max_symbols=max_stocks)
+    else:
+        panel, common_dates = provider.get_csi300_panel(days=days, max_stocks=max_stocks)
+
+    first_sym = list(panel.keys())[0]
+    first_df = panel[first_sym]
+    closes = first_df["close"].values
+    fwd_ret = np.zeros(len(closes))
+    if len(closes) > 5:
+        fwd_ret[:-5] = (closes[5:] - closes[:-5]) / np.maximum(closes[:-5], 1e-10)
+
+    return panel, common_dates, fwd_ret
 
 
 def _cmd_version(_args: argparse.Namespace) -> int:
@@ -100,34 +131,65 @@ def _cmd_monitor(args: argparse.Namespace) -> int:
 
 
 def _cmd_evolution_run(args: argparse.Namespace) -> int:
-    """启动 L2 因子演化主循环（使用合成数据或 Data-Core 数据）。"""
+    """启动 L2 因子演化主循环（支持单标或横截面模式）。"""
     trace_id = generate_trace_id()
     run_id = generate_run_id()
     cfg = get_config()
     print(f"[evolution] trace_id={trace_id} run_id={run_id}")
     print(f"[evolution] max_generations={args.max_generations}")
 
-    # 准备数据
-    data_df, fwd_returns = _prepare_data(days=500)
-    print(f"[evolution] data shape: {data_df.shape}, forward_returns: {len(fwd_returns)}")
+    if args.universe in ("csi300", "futures"):
+        # ── 横截面模式（沪深300成分股 / 期货品种） ──
+        print(f"[evolution] universe={args.universe} (max_stocks={args.max_stocks})")
+        panel, common_dates, fwd_ret = _prepare_cross_section_data(
+            universe=args.universe, days=500, max_stocks=args.max_stocks,
+        )
+        print(f"[evolution] panel symbols={len(panel)}, common_dates={len(common_dates)}")
 
-    # 创建引擎
-    llm = get_default_llm_client()
-    print(f"[evolution] LLM backend: {type(llm).__name__}")
+        llm = get_default_llm_client()
+        print(f"[evolution] LLM backend: {type(llm).__name__}")
 
-    seed_pool = get_default_seed_pool()
-    verifier = FactorVerifier()
+        seed_pool = get_default_seed_pool()
+        verifier = FactorVerifier()
 
-    loop = EvolutionLoop(
-        data=data_df,
-        forward_returns=fwd_returns,
-        elite_dir=cfg.elite_dir,
-        memory_dir=cfg.memory_dir + "/evolution",
-        llm_client=llm,
-        seed_pool=seed_pool,
-        verifier=verifier,
-        n_trials_micro=min(args.max_generations * 5, cfg.micro_trials_per_generation),
-    )
+        # 用第一个股票构造常规 data/forward_returns（微参优化用）
+        first_sym = list(panel.keys())[0]
+        data_df = panel[first_sym]
+
+        loop = EvolutionLoop(
+            data=data_df,
+            forward_returns=fwd_ret,
+            elite_dir=cfg.elite_dir,
+            memory_dir=cfg.memory_dir + "/evolution",
+            llm_client=llm,
+            seed_pool=seed_pool,
+            verifier=verifier,
+            n_trials_micro=min(args.max_generations * 3, 30),
+            cross_section_data=panel,
+            cross_section_dates=common_dates,
+        )
+    else:
+        # ── 单标模式 ──
+        print(f"[evolution] symbol={args.symbol}")
+        data_df, fwd_ret = _prepare_data(symbol=args.symbol, days=500)
+        print(f"[evolution] data shape: {data_df.shape}, forward_returns: {len(fwd_ret)}")
+
+        llm = get_default_llm_client()
+        print(f"[evolution] LLM backend: {type(llm).__name__}")
+
+        seed_pool = get_default_seed_pool()
+        verifier = FactorVerifier()
+
+        loop = EvolutionLoop(
+            data=data_df,
+            forward_returns=fwd_ret,
+            elite_dir=cfg.elite_dir,
+            memory_dir=cfg.memory_dir + "/evolution",
+            llm_client=llm,
+            seed_pool=seed_pool,
+            verifier=verifier,
+            n_trials_micro=min(args.max_generations * 5, cfg.micro_trials_per_generation),
+        )
 
     # 熔断预算：每个因子最多 4000 token
     budget = DEFAULT_BUDGET_CONFIG.copy()
@@ -286,6 +348,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_evo_run = evo_sub.add_parser("run", help="启动 L2 演化")
     p_evo_run.add_argument("--max-generations", type=int, default=10,
                            help="最大演化代数（默认 10）")
+    p_evo_run.add_argument("--symbol", type=str, default="000001",
+                           help="演化目标品种代码（默认 000001 平安银行）")
+    p_evo_run.add_argument("--universe", type=str, default="single",
+                           choices=["single", "csi300", "futures"],
+                           help="演化股票池类型: single（单标）/ csi300（沪深300横截面）/ futures（期货横截面）")
+    p_evo_run.add_argument("--max-stocks", type=int, default=50,
+                           help="横截面模式最大标的数（默认 50，0 = 使用全部品种）")
     p_evo_run.set_defaults(func=_cmd_evolution_run)
 
     # meta-loop run

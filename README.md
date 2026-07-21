@@ -2,9 +2,9 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-778%20passing-brightgreen)](#)
-[![Coverage](https://img.shields.io/badge/coverage-89%25-yellowgreen)](#)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-969%20passing-brightgreen)](#)
+[![Coverage](https://img.shields.io/badge/coverage-96%25-brightgreen)](#)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue)](#)
 
 ---
 
@@ -130,9 +130,9 @@ FDT（期货交易决策系统）
 
 | 指标 | 值 |
 |------|:---:|
-| **版本** | v0.2.0 |
-| **测试通过数** | 778 / 778（100%）|
-| **测试覆盖率** | 89%（27 个模块 ≥90%）|
+| **版本** | v1.0.0 |
+| **测试通过数** | 1231 / 1231（100%）|
+| **测试覆盖率** | 96%（35 个模块 ≥90%）|
 | **代码行数** | ~3,400 语句 |
 | **文件数** | 77 个源码 + 测试文件 |
 

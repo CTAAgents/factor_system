@@ -34,6 +34,11 @@ class FTSConfig:
         default_factory=lambda: os.getenv("FTS_ELITE_DIR", DEFAULT_ELITE_DIR)
     )
 
+    # ── 数据配置 ──
+    default_market: str = field(
+        default_factory=lambda: os.getenv("FTS_DEFAULT_MARKET", "futures")
+    )
+
     # ── LLM 配置 ──
     llm_backend: str = field(
         default_factory=lambda: os.getenv("FTS_LLM_BACKEND", "")

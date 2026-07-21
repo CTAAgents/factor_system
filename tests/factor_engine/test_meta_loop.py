@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -243,6 +243,26 @@ class TestL1Verifier:
         assert DEFAULT_L1_VERIFIER_CONFIG["require_not_duplicate"] is True
         assert DEFAULT_L1_VERIFIER_CONFIG["min_narrative_length"] == 20
 
+    def test_verifier_rejects_duplicate_flag(self, valid_candidate):
+        """is_duplicate=True 的候选被拒绝（line 125）。"""
+        valid_candidate["is_duplicate"] = True
+        v = L1Verifier()
+        result = v.check(valid_candidate, SeedPool())
+        assert result["passed"] is False
+        assert any("重复" in r for r in result["failure_reasons"])
+
+    def test_is_duplicate_by_name_empty(self):
+        """空名称返回 False（line 146）。"""
+        assert L1Verifier._is_duplicate_by_name("", SeedPool()) is False
+
+    def test_lock_method(self):
+        """lock() 锁定 Verifier（line 152）。"""
+        v = L1Verifier()
+        v.unlock()
+        assert v.is_locked is False
+        v.lock()
+        assert v.is_locked is True
+
 
 # ════════════════════════════════════════════════════════
 # 2. MetaStateManager 测试
@@ -348,6 +368,27 @@ class TestMetaStateManager:
         with pytest.raises(MetaStateManagerError):
             sm.save(state)
 
+    def test_backup_recovery_failure(self, tmp_meta_dir):
+        """备份文件也损坏时恢复失败，冷启动（lines 205-207）。"""
+        sm = MetaStateManager(tmp_meta_dir)
+        state = sm.load_or_init(50000)
+        state["total_candidates_generated"] = 7
+        sm.save(state)
+        # 损坏主文件和备份文件
+        sm.state_file.write_text("not json", encoding="utf-8")
+        sm.backup_file.write_text("{invalid}", encoding="utf-8")
+        # 重新加载: 主文件损坏 → 尝试从 backup 恢复 → json.load 也失败 → 冷启动
+        new_state = sm.load_or_init(50000)
+        assert new_state["total_candidates_generated"] == 0  # 冷启动
+
+    def test_save_backup_failure_raises(self, tmp_meta_dir):
+        """save() 备份失败抛 MetaStateManagerError（lines 246-247）。"""
+        sm = MetaStateManager(tmp_meta_dir)
+        state = sm.load_or_init(50000)
+        with patch("shutil.copy2", side_effect=OSError("磁盘空间不足")):
+            with pytest.raises(MetaStateManagerError, match="备份失败"):
+                sm.save(state)
+
 
 # ════════════════════════════════════════════════════════
 # 3. FactorPoolManager 测试
@@ -435,6 +476,14 @@ class TestFactorPoolManager:
         pool = mgr.load_or_init()
         assert pool["total_count"] == 3
         assert pool["pending_count"] == 3
+
+    def test_load_corrupted_factor_pool(self, tmp_factor_pool_path):
+        """损坏的 factor_pool.json 触发冷启动（lines 297-298）。"""
+        tmp_factor_pool_path.write_text("{invalid json}", encoding="utf-8")
+        mgr = FactorPoolManager(tmp_factor_pool_path)
+        pool = mgr.load_or_init()
+        assert pool["total_count"] == 0
+        assert pool["factors"] == []
 
 
 # ════════════════════════════════════════════════════════
@@ -524,6 +573,71 @@ class TestDebateQualityAnalyzer:
         result = analyzer.analyze_latest_debate()
         assert len(result["topics"]) == 1
         assert result["topics"][0]["gap"] == "insufficient_rounds"
+
+    def test_journal_decode_error(self, tmp_debates_dir):
+        """辩论数据 JSON 解码失败（lines 409-411）。"""
+        journal_path = tmp_debates_dir.parent / "journal" / "debate_journal.json"
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        journal_path.write_text("not json", encoding="utf-8")
+        analyzer = DebateQualityAnalyzer(tmp_debates_dir)
+        result = analyzer.analyze_latest_debate()
+        assert "加载失败" in result["summary"]
+
+    def test_entries_empty_list(self, tmp_debates_dir):
+        """辩论日志 entries 为空（lines 415-416）。"""
+        journal_path = tmp_debates_dir.parent / "journal" / "debate_journal.json"
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(journal_path, "w", encoding="utf-8") as f:
+            json.dump({"entries": []}, f)
+        analyzer = DebateQualityAnalyzer(tmp_debates_dir)
+        result = analyzer.analyze_latest_debate()
+        assert "辩论日志为空" in result["summary"]
+
+    def test_analyze_no_gaps_detected(self, tmp_debates_dir):
+        """有辩论数据但无明显薄弱维度（line 444）。"""
+        journal_path = tmp_debates_dir.parent / "journal" / "debate_journal.json"
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(journal_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "entries": [
+                    {
+                        "action": "debate_record",
+                        "symbols": {
+                            "rb": {
+                                "debate_round": 3,
+                                "bullish_arguments": ["a", "b"],
+                                "bearish_arguments": ["c", "d"],
+                            }
+                        }
+                    }
+                ]
+            }, f)
+        analyzer = DebateQualityAnalyzer(tmp_debates_dir)
+        result = analyzer.analyze_latest_debate()
+        assert "无明显薄弱维度" in result["summary"]
+
+    def test_detect_gap_non_dict(self):
+        """非 dict 的 sym_data 返回 no_debate（line 452）。"""
+        result = DebateQualityAnalyzer._detect_gap("not_a_dict")
+        assert result == "no_debate"
+
+    def test_detect_gap_no_arguments(self):
+        """无多头空头论证返回 no_debate（line 459）。"""
+        result = DebateQualityAnalyzer._detect_gap({
+            "debate_round": 3,
+            "bullish_arguments": [],
+            "bearish_arguments": [],
+        })
+        assert result == "no_debate"
+
+    def test_detect_gap_balanced(self):
+        """多空论证平衡返回 None（line 464）。"""
+        result = DebateQualityAnalyzer._detect_gap({
+            "debate_round": 3,
+            "bullish_arguments": ["a", "b"],
+            "bearish_arguments": ["c", "d"],
+        })
+        assert result is None
 
 
 # ════════════════════════════════════════════════════════
@@ -636,6 +750,78 @@ class TestBootstrappingChain:
         )
         assert len(candidates) == 1
         assert candidates[0]["is_executable"] is False
+
+    def test_bootstrap_validate_code_raises(self, mock_llm_client):
+        """validate_factor_code 异常时标记 is_executable=False（lines 652-654）。"""
+        bad_candidate = SeedCandidate(
+            candidate_id="cand_bad",
+            name="bad_factor_raise",
+            code="def factor_program(data, params):\n    return None\n",
+            params={},
+            signature=FactorSignature(
+                input_fields=["close"], output_type="signal",
+                frequency="daily", lookback=1,
+            ),
+            economic_logic=EconomicLogic(
+                theory=4, behavioral=4, microstructure=4, institutional=4,
+                narrative="测试编译异常",
+            ),
+            source="l1_bootstrapping",
+            parent_topic="测试",
+            trace_id="t",
+            created_at="2026-07-18",
+        )
+        mock_llm_client.bootstrap_factors.return_value = [bad_candidate]
+        chain = BootstrappingChain(llm_client=mock_llm_client)
+        with patch("fts.factor_engine.meta_loop.validate_factor_code",
+                    side_effect=RuntimeError("沙箱异常")):
+            candidates = chain.bootstrap(
+                market_snapshot={}, debate_gaps=[], max_candidates=1,
+                seed_pool=SeedPool(), trace_id="t",
+            )
+        assert len(candidates) == 1
+        assert candidates[0]["is_executable"] is False
+        assert any("异常" in r for r in candidates[0].get("failure_reasons", []))
+
+    def test_bootstrap_llm_exception(self, mock_llm_client):
+        """LLM bootstrap_factors 异常时回退到模板（lines 683-685）。"""
+        mock_llm_client.bootstrap_factors.side_effect = RuntimeError("LLM 调用失败")
+        chain = BootstrappingChain(llm_client=mock_llm_client)
+        candidates = chain.bootstrap(
+            market_snapshot={}, debate_gaps=[], max_candidates=3,
+            seed_pool=SeedPool(), trace_id="t",
+        )
+        # 应从模板产生候选
+        assert len(candidates) >= 1
+
+    def test_bootstrap_skips_template_with_existing_name(self):
+        """模板名已存在于种子池时跳过该模板（line 713）。"""
+        pool = MagicMock(spec=SeedPool)
+        pool.list_names.return_value = ["bbands_width_reversion", "oi_price_divergence"]
+        chain = BootstrappingChain(llm_client=None)
+        candidates = chain.bootstrap(
+            market_snapshot={}, debate_gaps=[], max_candidates=10,
+            seed_pool=pool, trace_id="t",
+        )
+        candidate_names = [c["name"] for c in candidates]
+        assert "bbands_width_reversion" not in candidate_names
+        assert "oi_price_divergence" not in candidate_names
+        assert "news_sentiment_proxy" in candidate_names
+
+    def test_bootstrap_with_debate_gap_match(self):
+        """debate_gap 匹配模板 parent_topic 时关联参考信息（lines 724-726）。"""
+        chain = BootstrappingChain(llm_client=None)
+        candidates = chain.bootstrap(
+            market_snapshot={},
+            debate_gaps=[{"gap": "oi_change", "debate_round": 3}],
+            max_candidates=1,
+            seed_pool=SeedPool(),
+            trace_id="test_trace",
+        )
+        assert len(candidates) == 1
+        # oi_price_divergence 的 parent_topic 包含 "oi_change"
+        assert candidates[0]["debate_gap"] == "oi_change"
+        assert candidates[0]["debate_round_ref"] == 3
 
 
 # ════════════════════════════════════════════════════════
@@ -852,6 +1038,176 @@ class TestMetaLoop:
         assert result.status == "completed"
         assert result.debate_gaps_detected >= 1
 
+    def test_circuit_breaker_consecutive_low_quality_triggers(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
+    ):
+        """连续 5 次低质量后第 6 个候选触发熔断返回（lines 905-906, 1069）。"""
+        from fts.factor_engine.meta_loop import BootstrappingChain as BC
+
+        class FailingChain6(BC):
+            def bootstrap(self, *args, **kwargs):
+                return [
+                    SeedCandidate(
+                        candidate_id=f"cand_fail_{i}",
+                        name=f"fail_{i}",
+                        code="def factor_program(data, params):\n    return None\n",
+                        params={},
+                        signature=FactorSignature(
+                            input_fields=["close"], output_type="signal",
+                            frequency="daily", lookback=1,
+                        ),
+                        economic_logic=EconomicLogic(
+                            theory=1, behavioral=1, microstructure=1, institutional=1,
+                            narrative="不达标",
+                        ),
+                        source="l1_bootstrapping",
+                        parent_topic="失败测试",
+                        is_executable=False,
+                        is_duplicate=False,
+                        passed_l1_verifier=False,
+                        failure_reasons=[],
+                        trace_id="t",
+                        created_at="2026-07-18",
+                    )
+                    for i in range(6)  # 6 个失败候选触发熔断
+                ]
+
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+            budget=L1BudgetConfig(
+                daily_token_limit=50000,
+                monthly_token_limit=1500000,
+                max_bootstraps_per_run=6,
+                max_tokens_per_candidate=5000,
+                circuit_breaker_token_ratio=2.0,
+                circuit_breaker_failure_rate=0.95,
+                circuit_breaker_consecutive_low_quality=5,
+            ),
+        )
+        loop.bootstrap_chain = FailingChain6()
+        result = loop.run(max_bootstraps=6)
+        assert result.status == "circuit_broken"
+        assert "连续低质量" in result.circuit_breaker_reason
+
+    def test_check_circuit_breaker_token(self):
+        """Token 超限触发熔断（line 1054）。"""
+        loop = MetaLoop()
+        state = L1MetaLoopState(
+            run_id="test", started_at="", status="running",
+            tokens_consumed=200000,  # 超过 50000 * 2 = 100000
+            budget_limit=50000,
+        )
+        reason = loop._check_circuit_breaker(state, 0)
+        assert reason is not None
+        assert "Token 熔断" in reason
+
+    def test_check_circuit_breaker_failure_rate(self):
+        """高失败率触发熔断（lines 1063-1065）。"""
+        loop = MetaLoop()
+        state = L1MetaLoopState(
+            run_id="test", started_at="", status="running",
+            tokens_consumed=1000, budget_limit=50000,
+            total_candidates_generated=100,  # 累计生成 100 个
+            total_candidates_injected=2,     # 仅注入 2 个 → 98% 失败
+        )
+        reason = loop._check_circuit_breaker(state, 0)
+        assert reason is not None
+        assert "失败率熔断" in reason
+
+    def test_check_circuit_breaker_consecutive_low_quality(self):
+        """连续低质量触发熔断（line 1069）。"""
+        loop = MetaLoop()
+        loop._consecutive_low_quality = 5
+        state = L1MetaLoopState(
+            run_id="test", started_at="", status="running",
+            tokens_consumed=1000, budget_limit=50000,
+        )
+        reason = loop._check_circuit_breaker(state, 0)
+        assert reason is not None
+        assert "连续低质量" in reason
+
+    def test_perceive_market_collector_error(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
+    ):
+        """web_collector 异常时记录 error（lines 985-987）。"""
+        def failing_collector(sym):
+            if sym == "i":
+                raise RuntimeError("网络错误")
+            return {"symbol": sym, "ok": True}
+
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+            web_collector=failing_collector,
+            sample_symbols=["rb", "i"],
+        )
+        snapshot = loop._perceive_market("test_trace")
+        assert snapshot["skipped"] is False
+        assert "rb" in snapshot["snapshots"]
+        assert "i" in snapshot["snapshots"]
+        assert "error" in snapshot["snapshots"]["i"]
+
+    def test_inject_candidate_exception(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir,
+        valid_candidate
+    ):
+        """注入候选异常时返回 None（lines 1028-1030）。"""
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+        )
+        with patch("builtins.open", side_effect=PermissionError("无写入权限")):
+            result = loop._inject_candidate(valid_candidate, "test_trace")
+        assert result is None
+
+    def test_compute_priority_low(self):
+        """总分 < 12 返回 low 优先级（line 1044）。"""
+        cand = SeedCandidate(
+            candidate_id="cand_low",
+            name="low_priority",
+            code="def factor_program(data, params):\n    return None\n",
+            params={},
+            signature=FactorSignature(
+                input_fields=["close"], output_type="signal",
+                frequency="daily", lookback=1,
+            ),
+            economic_logic=EconomicLogic(
+                theory=2, behavioral=2, microstructure=3, institutional=2,  # 总分 = 9
+                narrative="低优先级因子",
+            ),
+            source="l1_bootstrapping",
+            parent_topic="测试",
+            trace_id="t",
+            created_at="2026-07-18",
+        )
+        priority = MetaLoop._compute_priority(cand)
+        assert priority == "low"
+
+    def test_run_exception_handling(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
+    ):
+        """run() 异常时返回 paused 状态（lines 960-963）。"""
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+        )
+        # 让 _perceive_market 抛异常（在 try 块内部，line 870）
+        loop._perceive_market = MagicMock(
+            side_effect=RuntimeError("市场感知异常")
+        )
+        result = loop.run(max_bootstraps=1)
+        assert result.status == "paused"
+        assert "市场感知异常" in str(result.circuit_breaker_reason)
+
 
 # ════════════════════════════════════════════════════════
 # 7. SeedPool L1 注入接口测试
@@ -992,3 +1348,43 @@ class TestMetaLoopEndToEnd:
         with open(tmp_meta_dir / "state.json", "r", encoding="utf-8") as f:
             state = json.load(f)
         assert state["total_candidates_generated"] >= r1.candidates_generated
+
+
+# ════════════════════════════════════════════════════════
+# 9. CLI 入口 main() 测试
+# ════════════════════════════════════════════════════════
+
+class TestMainFunction:
+    """CLI 入口 main() — lines 1087-1135。"""
+
+    def test_main_without_once(self, capsys):
+        """不传 --once 时打印提示并退出。"""
+        with patch.object(sys, "argv", ["meta_loop.py"]):
+            with pytest.raises(SystemExit) as exc:
+                from fts.factor_engine.meta_loop import main
+                main()
+        assert exc.value.code == 1
+        captured = capsys.readouterr()
+        assert "Use --once" in captured.out
+
+    def test_main_with_once(self, tmp_path, capsys):
+        """传 --once 时执行完整 L1 循环（lines 1111-1131）。"""
+        meta_dir = tmp_path / "meta_loop"
+        pool_path = tmp_path / "factor_pool.json"
+        inject_dir = tmp_path / "l1_injected"
+
+        with patch("fts.data.FTSDataProvider") as mock_provider:
+            mock_provider.return_value = MagicMock()
+            with patch.object(sys, "argv", [
+                "meta_loop.py", "--once",
+                "--memory-dir", str(meta_dir),
+                "--factor-pool", str(pool_path),
+                "--inject-dir", str(inject_dir),
+                "--max-bootstraps", "2",
+            ]):
+                from fts.factor_engine.meta_loop import main
+                with pytest.raises(SystemExit) as exc:
+                    main()
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert "L1 Meta-Loop 完成" in captured.out

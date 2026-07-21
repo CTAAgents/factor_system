@@ -1,0 +1,29 @@
+# FTS 全局配置
+# 配置加载优先级: 环境变量 > YAML > 默认值
+
+# ── 数据配置 ──
+default_market: "futures"
+
+# ── LLM 配置（因子演化用） ──
+llm_backend: "openai"
+# API Key 通过环境变量 FDT_LLM_API_KEY 设置
+# API 端点通过环境变量 OPENAI_BASE_URL=https://api.deepseek.com/v1 设置
+# 模型通过环境变量 OPENAI_MODEL=deepseek-v4-flash 设置
+
+# ── 演化配置 ──
+max_generations: 10
+population_size: 20
+micro_trials_per_generation: 50
+
+# ── L1 Meta-Loop ──
+meta_loop_interval_hours: 24
+meta_loop_max_tokens: 8000
+
+# ── L3 Portfolio ──
+portfolio_max_factors: 20
+portfolio_top_n: 5
+portfolio_decay_days: 90
+
+# ── 日志 ──
+log_level: "INFO"
+log_file: "logs/fts.log"

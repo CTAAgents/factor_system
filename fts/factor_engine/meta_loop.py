@@ -2,10 +2,10 @@
 loop_engine/meta_loop.py — L1 Meta-Loop 主循环
 
 HARNESS §11-loop-engineering.md §15:
-    L1 Meta-Loop — 每日 05:00 知识补给（Bootstrapping + f10 web_collector + debate_round）
+    L1 Meta-Loop — 每日 09:00 知识补给（Bootstrapping + Data-Core 感知 + debate 分析）
 
 流程（5 步）:
-    Step 1: agentic 感知 → f10/web_collector.collect_fundamental_web 拉取 62 品种市场快照
+    Step 1: agentic 感知 → FTSDataProvider 获取新闻与市场快照
     Step 2: debate_round 分析 → 读取昨日 fdt_langgraph 辩论数据，识别论证薄弱维度
     Step 3: factorengine Bootstrapping → 提取Agent / 验证Agent / 代码生成Agent 链
     Step 4: L1 Verifier → economic_logic >= 2/4 AND is_executable AND not_duplicate
@@ -1114,20 +1114,17 @@ def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    # 尝试加载 f10/web_collector
-    web_collector = None
-    try:
-        # 延迟导入，避免循环依赖
-        from futures_data_core.f10.web_collector import collect_fundamental_web
-        web_collector = collect_fundamental_web
-    except ImportError:
-        logger.warning("f10/web_collector 不可用，L1 感知步骤将跳过")
+    # 使用 FTSDataProvider 替代 futures_data_core
+    from fts.data import FTSDataProvider
+    provider = FTSDataProvider()
+    logger.info("FTSDataProvider 已就绪 — 将用于 L1 感知步骤")
 
+    # web_collector 保留为 None（参数为向后兼容保留），L1 感知在未来版本迁移至 FTSDataProvider 模式
     loop = MetaLoop(
         memory_dir=args.memory_dir,
         factor_pool_path=args.factor_pool,
         inject_dir=args.inject_dir,
-        web_collector=web_collector,
+        web_collector=None,
     )
     result = loop.run(max_bootstraps=args.max_bootstraps)
     print(f"L1 Meta-Loop 完成: {result.to_dict()}")

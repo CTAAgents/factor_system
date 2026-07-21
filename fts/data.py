@@ -20,6 +20,23 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# ─── DataType 枚举（从 Data-Core 导入） ─────────────────────
+
+try:
+    from datacore.models.enums import DataType as _DataType
+except ImportError:
+    # 回退：定义简化版枚举（无 Data-Core 时使用）
+    from enum import Enum
+    class _DataType(str, Enum):  # type: ignore[no-redef]
+        OHLCV = "ohlcv"
+        QUOTE = "quote"
+        FINANCIAL = "financial"
+        FUNDAMENTAL = "fundamental"
+        MACRO = "macro"
+        NEWS = "news"
+        SENTIMENT = "sentiment"
+        MARKET_STATE = "market_state"
+
 
 # ─── 数据不可用异常 ───────────────────────────────────────
 
@@ -64,9 +81,53 @@ class FTSDataProvider:
     """
 
     def __init__(self, datacore_provider: Optional[Any] = None,
-                 data_dir: Optional[str] = None):
+                 data_dir: Optional[str] = None,
+                 default_market: str = "futures",
+                 local_db: Optional[str] = None):
         self._dc = datacore_provider
         self._data_dir = Path(data_dir) if data_dir else Path.cwd() / "data"
+        self._default_market = default_market
+        # FTS 本地历史数据库（优先读取，支持长周期历史数据）
+        self._local_db_path = local_db or str(self._data_dir / "fts_history.duckdb")
+
+    # ── 本地历史数据库 ──
+
+    def _load_from_local_db(self, symbol: str, days: int,
+                            period: str = "daily") -> Optional[pd.DataFrame]:
+        """从 FTS 本地 DuckDB 读取历史 K 线。
+
+        本地数据库存储了所有期货品种的完整历史数据（2005年至今），
+        优先从此读取以支持长周期回测。
+
+        Args:
+            symbol: 品种代码
+            days: 回溯天数
+            period: K线周期
+
+        Returns:
+            pd.DataFrame 或 None（本地无数据时）
+        """
+        if not Path(self._local_db_path).exists():
+            return None
+        try:
+            import duckdb
+            from datetime import datetime, timedelta
+            cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            conn = duckdb.connect(self._local_db_path, read_only=True)
+            df = conn.execute(
+                "SELECT date, open, high, low, close, volume "
+                "FROM kline_cache WHERE symbol = ? AND period = ? AND date >= ? "
+                "ORDER BY date",
+                (symbol, period, cutoff)
+            ).fetchdf()
+            conn.close()
+            if df is None or df.empty:
+                return None
+            df["date"] = pd.to_datetime(df["date"])
+            df.set_index("date", inplace=True)
+            return df
+        except Exception:
+            return None
 
     # ── Data-Core 延迟导入 ──
 
@@ -106,9 +167,15 @@ class FTSDataProvider:
         Raises:
             DataUnavailableError: 所有数据源不可用
         """
+        # 优先从 FTS 本地历史数据库读取（支持长周期历史数据）
+        df = self._load_from_local_db(symbol, days, period)
+        if df is not None and not df.empty:
+            return df
+
+        # 回退到 Data-Core（实时数据/短周期）
         try:
             payload = self._provider.get(
-                symbol, "ohlcv",
+                symbol, _DataType.OHLCV,
                 params={"days": days, "period": period},
             )
             return self._payload_to_ohlcv_df(payload)
@@ -131,7 +198,7 @@ class FTSDataProvider:
         """
         try:
             payload = self._provider.get(
-                symbol, "financial",
+                symbol, _DataType.FINANCIAL,
                 params={"indicator": indicator} if indicator else None,
             )
             return self._payload_to_dict(payload)
@@ -152,7 +219,7 @@ class FTSDataProvider:
         """
         try:
             payload = self._provider.get(
-                "*", "macro",
+                "*", _DataType.MACRO,
                 params={"indicator": indicator} if indicator else None,
             )
             return self._payload_to_dict(payload)
@@ -203,7 +270,7 @@ class FTSDataProvider:
         """
         try:
             payload = self._provider.get(
-                symbol or "*", "sentiment",
+                symbol or "*", _DataType.SENTIMENT,
                 params={"days": days},
             )
             return self._payload_to_dict(payload)
@@ -220,7 +287,7 @@ class FTSDataProvider:
         """
         try:
             payload = self._provider.get(
-                symbol or "*", "market_state",
+                symbol or "*", _DataType.MARKET_STATE,
             )
             return self._payload_to_dict(payload)
         except Exception as e:
@@ -228,9 +295,24 @@ class FTSDataProvider:
             return {}
 
     def list_symbols(self, market: str = "futures") -> list[str]:
-        """列出可用品种代码。"""
+        """列出可用品种代码。
+
+        Args:
+            market: 市场类型（futures / stock / etf）
+
+        Returns:
+            list[str]: 品种代码列表
+        """
         try:
-            return self._provider.list_symbols(market=market)
+            raw = self._provider.list_symbols(market=market)
+            if not raw:
+                return []
+            if isinstance(raw, list) and len(raw) > 0:
+                if isinstance(raw[0], dict):
+                    return [item["symbol"] for item in raw if "symbol" in item]
+                if isinstance(raw[0], str):
+                    return list(raw)
+            return []
         except Exception as e:
             logger.warning(f"列表不可用 [{market}]: {e}")
             return []
@@ -292,6 +374,10 @@ class FTSDataProvider:
         """
         data = FTSDataProvider._extract_data(payload)
 
+        if data is None:
+            logger.warning("OHLCV 数据为空 (None)")
+            return pd.DataFrame()
+
         if isinstance(data, pd.DataFrame):
             return data
 
@@ -307,7 +393,20 @@ class FTSDataProvider:
                 df.set_index("date", inplace=True)
             return df
 
-        # 回退：返回空的 DataFrame
+        if hasattr(data, "bars") and hasattr(data, "symbol"):
+            rows = []
+            index = []
+            for bar in data.bars:
+                rows.append({
+                    "open": bar.open,
+                    "high": bar.high,
+                    "low": bar.low,
+                    "close": bar.close,
+                    "volume": bar.volume,
+                })
+                index.append(pd.Timestamp(bar.date))
+            return pd.DataFrame(rows, index=pd.DatetimeIndex(index))
+
         logger.warning(f"无法解析 OHLCV 载荷类型: {type(data)}")
         return pd.DataFrame()
 
@@ -318,6 +417,122 @@ class FTSDataProvider:
         if isinstance(data, dict):
             return data
         return {"raw": data}
+
+    # ── 期货批量数据 ──
+
+    def get_futures_panel(self, days: int = 500, period: str = "daily",
+                          max_symbols: int = 20,
+                          trace_id: str = "") -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+        """获取期货品种批量 OHLCV 面板数据。
+
+        Args:
+            days: 回溯天数
+            period: K线周期
+            max_symbols: 最大品种数（0 = 使用所有可用品种）
+            trace_id: HARNESS trace_id
+
+        Returns:
+            (panel, common_dates)
+            panel: dict[symbol, OHLCV DataFrame]
+            common_dates: 所有品种共有日期
+        """
+        if max_symbols <= 0:
+            available = self.list_symbols("futures")
+            symbols = available if available else FUTURES_CORE_SUBSET
+        else:
+            symbols = FUTURES_CORE_SUBSET[:max_symbols]
+        panel: dict[str, pd.DataFrame] = {}
+        dates_set: set[pd.Timestamp] = set()
+        first = True
+
+        for sym in symbols:
+            try:
+                df = self.get_ohlcv(sym, days=days, period=period, trace_id=trace_id)
+                if df is not None and not df.empty and "close" in df.columns:
+                    panel[sym] = df
+                    if first:
+                        dates_set = set(df.index)
+                        first = False
+                    else:
+                        dates_set &= set(df.index)
+            except Exception:  # noqa: BLE001
+                continue
+
+        if not panel:
+            df = self.synthesize_ohlcv(n_days=days, base_price=3000.0, seed=42)
+            panel["SYNTHETIC"] = df
+            return panel, df.index
+
+        common_dates = pd.DatetimeIndex(sorted(dates_set))
+        return panel, common_dates
+
+    # ── CSI 300 批量数据（保留，股票场景用） ──
+
+    def get_csi300_panel(self, days: int = 500, period: str = "daily",
+                         max_stocks: int = 50,
+                         trace_id: str = "") -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+        """获取 CSI 300 成分股批量 OHLCV 面板数据。
+
+        Returns:
+            (panel, common_dates)
+            panel: dict[symbol, OHLCV DataFrame]
+            common_dates: 所有股票共有日期
+        """
+        symbols = CSI300_SUBSET[:max_stocks]
+        panel: dict[str, pd.DataFrame] = {}
+        dates_set: set[pd.Timestamp] = set()
+        first = True
+
+        for sym in symbols:
+            try:
+                df = self.get_ohlcv(sym, days=days, period=period)
+                if df is not None and not df.empty and "close" in df.columns:
+                    panel[sym] = df
+                    if first:
+                        dates_set = set(df.index)
+                        first = False
+                    else:
+                        dates_set &= set(df.index)
+            except Exception:  # noqa: BLE001
+                continue
+
+        if not panel:
+            # 回退：合成数据
+            df = self.synthesize_ohlcv(n_days=days, base_price=15.0, seed=42)
+            panel["SYNTHETIC"] = df
+            return panel, df.index
+
+        common_dates = pd.DatetimeIndex(sorted(dates_set))
+        return panel, common_dates
+
+
+# --- 核心活跃期货品种（按流动性排序，约20个） ---
+
+FUTURES_CORE_SUBSET: list[str] = [
+    "RB", "HC", "I", "J", "JM",
+    "CU", "AL", "ZN", "NI", "AU", "AG",
+    "M", "RM", "Y", "P", "C", "CS",
+    "SR", "CF", "TA",
+    "SC", "FU", "BU",
+    "IF", "IH", "IC", "IM",
+]
+
+
+# --- CSI 300 representative subset (~50 stocks by volume/market cap) ---
+
+CSI300_SUBSET: list[str] = [
+    "000001", "000002", "000333", "000568", "000651", "000725", "000858",
+    "002027", "002142", "002230", "002304", "002371", "002415", "002475",
+    "002594", "002714", "300015", "300059", "300124", "300274", "300308",
+    "300413", "300433", "300450", "300498", "300502", "300628", "300750",
+    "300760", "600000", "600009", "600028", "600030", "600031", "600036",
+    "600048", "600085", "600104", "600276", "600309", "600406", "600436",
+    "600438", "600519", "600547", "600585", "600690", "600809", "600887",
+    "600900", "600941", "601012", "601088", "601127", "601166", "601288",
+    "601318", "601328", "601398", "601628", "601728", "601766", "601857",
+    "601888", "601899", "601985", "603259", "603288", "603501", "603659",
+    "688008", "688036", "688111", "688122", "688256", "688396",
+]
 
 
 # ─── 缺省实例（全局单例）───────────────────────────────────

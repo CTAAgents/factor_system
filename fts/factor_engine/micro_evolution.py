@@ -91,6 +91,8 @@ def optimize_params(
         def objective_fn(sig, ret):
             if len(sig) < 2 or len(sig) != len(ret):
                 return 0.0
+            if np.std(sig) < 1e-10 or np.std(ret) < 1e-10:
+                return 0.0
             ic, _ = sp_stats.spearmanr(sig, ret)
             return 0.0 if np.isnan(ic) else float(ic)
 

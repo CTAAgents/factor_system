@@ -1,12 +1,12 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "fts"
-version = "0.2.0"
+version = "1.0.0"
 description = "FTS — Factor Trading System: 独立因子策略系统，支持多因子挖掘、演化与交易"
-readme = "CODE_WIKI.md"
+readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "FDT Team" }]
@@ -14,6 +14,7 @@ authors = [{ name = "FDT Team" }]
 dependencies = [
     "numpy>=1.24",
     "pandas>=2.0",
+    "scipy>=1.10",
     "pyyaml>=6.0",
 ]
 

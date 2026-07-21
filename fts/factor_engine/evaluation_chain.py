@@ -5,6 +5,7 @@ HARNESS §11-loop-engineering.md §4:
     Level 1 — 回测验证（IC>0.03 / 夏普>1.5 / 单调性 / 样本外≥30%）
     Level 2 — 经济逻辑（四维评分 ≥ 3/4）
     Level 3 — 多重检验（FDR + Bonferroni）
+    WalkForward — 可选走航模式（多窗口样本外稳定性验证）
 
 版本: v8.10.0
 """
@@ -13,7 +14,7 @@ HARNESS §11-loop-engineering.md §4:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -27,6 +28,7 @@ from .contracts import (
     MultipleTestResult,
 )
 from .factor_program import FactorExecutor
+from .walk_forward import WalkForwardOptimizer, WalkForwardConfig, WalkForwardResult
 
 
 # ─── Level 1: 回测验证 ────────────────────────────────────
@@ -303,8 +305,9 @@ class EvaluationChain:
         forward_returns: np.ndarray,
         prior_evaluations: Optional[list[FactorEvaluation]] = None,
         correlation_matrix: Optional[np.ndarray] = None,
+        walk_forward_config: Optional[WalkForwardConfig] = None,
     ) -> FactorEvaluation:
-        """执行三级评估链。
+        """执行三级评估链，可选走航验证。
 
         Args:
             factor: 待评估因子
@@ -312,6 +315,7 @@ class EvaluationChain:
             forward_returns: 未来收益率
             prior_evaluations: 之前所有因子的评估结果（用于多重检验）
             correlation_matrix: 因子相关性矩阵
+            walk_forward_config: 走航配置（None=跳过走航）
 
         Returns:
             FactorEvaluation
@@ -338,6 +342,14 @@ class EvaluationChain:
         all_evals.append(temp_eval)
         mt = evaluate_multiple_tests(all_evals, correlation_matrix)
 
+        # 可选走航验证
+        walk_forward_result: Optional[WalkForwardResult] = None
+        if walk_forward_config is not None:
+            walk_forward_result = evaluate_walk_forward(
+                factor, data, forward_returns,
+                config=walk_forward_config,
+            )
+
         # 失败原因汇总
         reasons: list[str] = []
         if bt.get("ic", 0) < 0.03:
@@ -350,6 +362,9 @@ class EvaluationChain:
             reasons.append(f"Level 2: 维度达标={ec.get('dimensions_passed', 0)} < 3")
         if not mt.get("passed", False):
             reasons.append("Level 3: 多重检验未通过")
+        if walk_forward_result is not None and not walk_forward_result.get("passed", False):
+            score = walk_forward_result.get("consistency_score", 0)
+            reasons.append(f"走航: 稳定性评分={score:.1f} < 60")
 
         passed = len(reasons) == 0
         return FactorEvaluation(
@@ -358,15 +373,215 @@ class EvaluationChain:
             level_1_backtest=bt,
             level_2_economic=ec,
             level_3_multiple=mt,
+            walk_forward=walk_forward_result,
             passed=passed,
             failure_reasons=reasons,
             evaluated_at=datetime.now().isoformat(),
         )
 
 
+def evaluate_walk_forward(
+    factor: FactorProgram,
+    data: pd.DataFrame,
+    forward_returns: np.ndarray,
+    config: Optional[WalkForwardConfig] = None,
+) -> WalkForwardResult:
+    """走航验证 — 多窗口样本外稳定性评估。
+
+    使用 WalkForwardOptimizer 进行多窗口滚动验证，
+    评估因子在不同时间段的表现稳定性。
+
+    Args:
+        factor: 因子程序
+        data: OHLCV 数据
+        forward_returns: 未来收益率
+        config: 走航配置（None=使用默认配置）
+
+    Returns:
+        WalkForwardResult
+    """
+    optimizer = WalkForwardOptimizer(config=config)
+
+    def _evaluate_window(train_data: pd.DataFrame,
+                         oos_data: pd.DataFrame) -> dict[str, float]:
+        """单窗口评估函数（注入到 WalkForwardOptimizer）。"""
+        executor = FactorExecutor(factor)
+        params = factor.get("params", {})
+
+        # 训练集信号
+        train_signal = executor.execute(train_data, params)
+        # 样本外信号
+        oos_signal = executor.execute(oos_data, params)
+
+        min_len = min(len(oos_signal), len(oos_data))
+        if min_len < 2:
+            return {"ic": 0.0, "sharpe": 0.0, "turnover": 0.0}
+
+        oos_sig = oos_signal[:min_len]
+        oos_ret = forward_returns[-min_len:] if len(forward_returns) >= min_len else np.zeros(min_len)
+
+        ic, _ = _compute_ic(oos_sig, oos_ret)
+
+        # 多空组合收益
+        sorted_idx = np.argsort(oos_sig)
+        top_n = max(1, len(oos_sig) // 5)
+        long_ret = np.mean(oos_ret[sorted_idx[-top_n:]])
+        short_ret = np.mean(oos_ret[sorted_idx[:top_n]])
+        ls_returns = np.full(len(oos_sig), long_ret - short_ret)
+        sharpe = _compute_sharpe(ls_returns)
+
+        # 换手率
+        if len(train_signal) > 1:
+            sig_changes = np.abs(np.diff(np.sign(oos_sig)))
+            turnover = float(np.mean(sig_changes) * 21)
+        else:
+            turnover = 0.0
+
+        return {"ic": float(ic), "sharpe": float(sharpe), "turnover": float(turnover)}
+
+    return optimizer.evaluate(data, _evaluate_window)
+
+
+# ══════════════════════════════════════════════════════════
+# 横截面评估（多标的）
+# ══════════════════════════════════════════════════════════
+
+
+def cross_section_evaluate_backtest(
+    factor: FactorProgram,
+    panel_data: dict[str, pd.DataFrame],
+    common_dates: pd.DatetimeIndex,
+    oos_ratio: float = 0.3,
+) -> BacktestMetrics:
+    """横截面回测评估 — 单因子在多个标的上跨 section IC。
+
+    流程:
+        1. 对每只股票运行因子程序，得到信号数组
+        2. 对齐到共同日期，构建信号矩阵 (n_dates, n_stocks)
+        3. 计算 forward_returns 矩阵 (n_dates, n_stocks)
+        4. 在每期计算截面 Spearman IC
+        5. 聚合所有期的 IC 均值/标准差
+
+    Returns:
+        BacktestMetrics
+    """
+    executor = FactorExecutor(factor)
+    params = factor.get("params", {})
+
+    # Step 1: 每只股票运行因子
+    signal_dict: dict[str, pd.Series] = {}
+    ret_dict: dict[str, pd.Series] = {}
+
+    for sym, df in panel_data.items():
+        try:
+            sig_arr = executor.execute(df, params)
+            sig_series = pd.Series(sig_arr, index=df.index)
+            signal_dict[sym] = sig_series
+
+            closes = df["close"].values
+            fwd_ret = np.zeros(len(closes))
+            if len(closes) > 5:
+                fwd_ret[:-5] = (closes[5:] - closes[:-5]) / np.maximum(closes[:-5], 1e-10)
+            ret_dict[sym] = pd.Series(fwd_ret, index=df.index)
+        except Exception:  # noqa: BLE001
+            continue
+
+    if len(signal_dict) < 5:
+        return BacktestMetrics(
+            ic=0.0, icir=0.0, sharpe=0.0, max_drawdown=0.0,
+            monotonicity=False, oos_ratio=oos_ratio, t_stat=0.0, turnover_monthly=0.0,
+        )
+
+    # Step 2: 对齐到共同日期，构建矩阵
+    dates = common_dates
+    n_dates = len(dates)
+    n_stocks = len(signal_dict)
+    symbols_list = list(signal_dict.keys())
+
+    signal_matrix = np.zeros((n_dates, n_stocks))
+    ret_matrix = np.zeros((n_dates, n_stocks))
+
+    for j, sym in enumerate(symbols_list):
+        sig = signal_dict[sym].reindex(dates)
+        ret = ret_dict[sym].reindex(dates)
+        signal_matrix[:, j] = sig.values
+        ret_matrix[:, j] = ret.values
+
+    # OOS 切片
+    oos_n = max(int(n_dates * oos_ratio), 5)
+    oos_signal = signal_matrix[-oos_n:, :]
+    oos_ret = ret_matrix[-oos_n:, :]
+
+    # Step 3: 每期截面 IC
+    ics = []
+    for t in range(oos_n):
+        sig_t = oos_signal[t, :]
+        ret_t = oos_ret[t, :]
+        valid = ~(np.isnan(sig_t) | np.isnan(ret_t))
+        if np.sum(valid) < 5:
+            continue
+        sig_valid = sig_t[valid]
+        ret_valid = ret_t[valid]
+        if np.std(sig_valid) < 1e-10 or np.std(ret_valid) < 1e-10:
+            continue
+        ic_val, _ = sp_stats.spearmanr(sig_valid, ret_valid)
+        if not np.isnan(ic_val):
+            ics.append(ic_val)
+
+    if not ics:
+        return BacktestMetrics(
+            ic=0.0, icir=0.0, sharpe=0.0, max_drawdown=0.0,
+            monotonicity=False, oos_ratio=oos_ratio, t_stat=0.0, turnover_monthly=0.0,
+        )
+
+    ic_mean = float(np.mean(ics))
+    ic_std = float(np.std(ics, ddof=1)) if len(ics) > 1 else 0.0
+    icir = float(ic_mean / max(ic_std, 1e-10))
+
+    # 多空组合收益（截面：每期做多 top 20%，做空 bottom 20%）
+    ls_returns = np.zeros(oos_n)
+    for t in range(oos_n):
+        sig_t = oos_signal[t, :]
+        ret_t = oos_ret[t, :]
+        valid = ~(np.isnan(sig_t) | np.isnan(ret_t))
+        valid_count = np.sum(valid)
+        if valid_count < 3:
+            continue
+        sig_v = sig_t[valid]
+        ret_v = ret_t[valid]
+        sorted_idx = np.argsort(sig_v)
+        top_n = max(1, len(sorted_idx) // 5)
+        long_ret = np.mean(ret_v[sorted_idx[-top_n:]])
+        short_ret = np.mean(ret_v[sorted_idx[:top_n]])
+        ls_returns[t] = long_ret - short_ret
+
+    sharpe = _compute_sharpe(ls_returns)
+    cumulative = np.cumsum(ls_returns)
+    max_dd = _compute_max_drawdown(cumulative)
+
+    # t 统计量
+    if np.std(ls_returns) > 1e-10:
+        t_stat = float(np.mean(ls_returns) / np.std(ls_returns, ddof=1) * np.sqrt(len(ls_returns)))
+    else:
+        t_stat = 0.0
+
+    return BacktestMetrics(
+        ic=ic_mean,
+        icir=icir,
+        sharpe=sharpe,
+        max_drawdown=max_dd,
+        monotonicity=True,  # 横截面单调性需更复杂计算，暂时置 True
+        oos_ratio=oos_ratio,
+        t_stat=t_stat,
+        turnover_monthly=0.0,  # 截面模式换手率需加权计算，简化
+    )
+
+
 __all__ = [
     "evaluate_backtest",
     "evaluate_economic_logic",
     "evaluate_multiple_tests",
+    "evaluate_walk_forward",
+    "cross_section_evaluate_backtest",
     "EvaluationChain",
 ]

@@ -15,4 +15,4 @@ FTS — Factor Trading System
 版本: v0.1.0（从 FDT v8.10.0 剥离）
 """
 
-__version__ = "0.2.0"
+__version__ = "1.0.0"

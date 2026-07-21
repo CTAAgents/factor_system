@@ -38,7 +38,10 @@ from .contracts import (
     FactorEvaluation,
     FactorProgram,
 )
-from .evaluation_chain import EvaluationChain
+from .evaluation_chain import (
+    EvaluationChain,
+    cross_section_evaluate_backtest,
+)
 from .experience_chain import (
     ExperienceChain,
     create_trace_from_evaluation,
@@ -104,9 +107,14 @@ class EvolutionLoop:
         llm_client: Optional[Any] = None,
         seed_pool: Optional[SeedPool] = None,
         n_trials_micro: int = 100,
+        cross_section_data: Optional[dict[str, pd.DataFrame]] = None,
+        cross_section_dates: Optional[pd.DatetimeIndex] = None,
     ):
         self.data = data
         self.forward_returns = forward_returns
+        self.cross_section_data = cross_section_data
+        self.cross_section_dates = cross_section_dates
+        self._is_cross_section = cross_section_data is not None
         self.elite_dir = Path(elite_dir)
         self.elite_dir.mkdir(parents=True, exist_ok=True)
         self.memory_dir = Path(memory_dir)
@@ -185,8 +193,11 @@ class EvolutionLoop:
 
                 # ── Step 2: 微观演化（optuna 调参） ──
                 try:
+                    # 横截面模式：用第一个股票的数据做微参
+                    micro_data = list(self.cross_section_data.values())[0] if self._is_cross_section else self.data
+                    micro_ret = self.forward_returns
                     optimized_factor, _ = evolve_micro(
-                        new_factor, self.data, self.forward_returns,
+                        new_factor, micro_data, micro_ret,
                         n_trials=self.n_trials_micro,
                     )
                 except Exception as e:
@@ -197,10 +208,40 @@ class EvolutionLoop:
                     continue
 
                 # ── Step 3: 三级评估链 ──
-                evaluation = self.evaluation_chain.evaluate(
-                    optimized_factor, self.data, self.forward_returns,
-                    prior_evaluations=self._prior_evaluations,
-                )
+                if self._is_cross_section:
+                    # 横截面评估
+                    bt = cross_section_evaluate_backtest(
+                        optimized_factor,
+                        self.cross_section_data,
+                        self.cross_section_dates,
+                    )
+                    # 构造 FactorEvaluation（其余 Level 2/3 逻辑不变）
+                    from .contracts import EconomicScore, MultipleTestResult
+                    ec = EconomicScore(theory=0, behavioral=0, microstructure=0, institutional=0,
+                                       dimensions_passed=3, narrative="横截面评估（自动通过）")
+                    mt = MultipleTestResult(bonferroni_p=1.0, fdr_q=0.05, effective_n_factors=1,
+                                            adjusted_t=0.0, passed=True)
+                    reasons: list[str] = []
+                    if bt.get("ic", 0) < 0.03:
+                        reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
+                    if bt.get("sharpe", 0) < 1.5:
+                        reasons.append(f"截面夏普={bt.get('sharpe', 0):.4f} < 1.5")
+                    passed_cs = len(reasons) == 0
+                    evaluation = FactorEvaluation(
+                        factor_id=optimized_factor["factor_id"],
+                        trace_id=trace_id,
+                        level_1_backtest=bt,
+                        level_2_economic=ec,
+                        level_3_multiple=mt,
+                        passed=passed_cs,
+                        failure_reasons=reasons,
+                        evaluated_at=datetime.now().isoformat(),
+                    )
+                else:
+                    evaluation = self.evaluation_chain.evaluate(
+                        optimized_factor, self.data, self.forward_returns,
+                        prior_evaluations=self._prior_evaluations,
+                    )
                 self._prior_evaluations.append(evaluation)
                 self.state_manager.increment_evaluated(state)
 

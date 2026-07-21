@@ -10,6 +10,9 @@
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
 | **v0.1.0** | 2026-07-18 | 从 FDT 剥离，完成 Phase 1-7，220 测试全绿 |
+| **v1.0.0** | 2026-07-19 | 本地原生部署：进程守护/热重载/HTTP 监控/Windows 服务/CI/CD/E2E 测试/部署文档、1231 测试全绿 |
+| **v0.4.0** | 2026-07-19 | EliteFactorTracker、AutoRetireManager、WalkForwardOptimizer、EvaluationChain 走航集成、1104 测试全绿 |
+| **v0.3.0** | 2026-07-19 | Data-Core 集成适配、FDT 残留清除、覆盖率提升至 96%、969 测试全绿、原子持久化 |
 | **v0.2.0** | 2026-07-18 | CLI 引擎真实调用、Config+memory 目录、Scheduler 引擎、覆盖率提升至 89%、778 测试全绿 |
 
 ### 版本号位置
@@ -18,8 +21,8 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 
 | 文件 | 字段 |
 |:-----|:-----|
-| `fts/__init__.py` | `__version__ = "0.1.0"` |
-| `pyproject.toml` | `version = "0.2.0"` |
+| `fts/__init__.py` | `__version__ = "1.0.0"` |
+| `pyproject.toml` | `version = "1.0.0"` |
 
 异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v8.10.0），继承自 FDT，与 FTS 项目版本号独立管理。
 
@@ -168,13 +171,19 @@ Tokens today    : 0
    - 如有测试变更，更新 `06-testing.md`
    - 如有差距关闭，更新 `08-gap-analysis.md`
 
-3. **运行测试**
+3. **同步 README.md**
+   - 更新版本徽章
+   - 更新测试数和覆盖率
+   - 同步 API 使用示例、模块列表、文档链接
+   - 确认 13 项 commit 检查清单第 12 项（README 同步）通过
+
+4. **运行测试**
    ```bash
    python -m pytest tests/ --cov=fts --cov-report=term-missing
    ```
-   确认全部通过（220 passed, 0 failed）
+   确认全部通过
 
-4. **提交并打标签**
+5. **提交并打标签**
    ```bash
    git tag v0.2.0
    ```

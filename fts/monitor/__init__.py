@@ -1,10 +1,12 @@
 """
-fts.monitor — FTS 健康监控。
+fts.monitor — FTS 健康监控 + 精英因子跟踪。
 
 提供:
     - check_loop_status(): 检查单个循环状态
     - check_all_status():  检查所有循环状态
     - format_status_report(): 格式化状态报告（人类可读）
+    - EliteFactorTracker: 精英因子样本外跟踪
+    - AutoRetireManager: 自动淘汰管理
 
 HARNESS §可观测性: 监控数据应包含 trace_id、运行时间、状态、错误信息。
 
@@ -22,8 +24,15 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .factor_engine import EVOLUTION_VERSION
-from .factor_engine.monitor import AllStatus, LoopStatus, check_all, check_loop
+from ..factor_engine import EVOLUTION_VERSION
+from ..factor_engine.monitor import AllStatus, LoopStatus, check_all, check_loop
+
+from .elite_tracker import (
+    AutoRetireConfig,
+    AutoRetireManager,
+    EliteFactorTracker,
+    TrackingSnapshot,
+)
 
 
 # ─── 监控数据契约 ─────────────────────────────────────────
@@ -96,12 +105,10 @@ def check_loop_status(loop_name: str,
     """
     root = Path(project_root) if project_root else Path.cwd()
     memory = root / "memory"
-    # factor_engine.monitor.check_loop 期望 state_dir
     state_dir_map = {
         "L1": memory / "meta_loop",
         "L2": memory / "evolution",
         "L3": memory / "portfolio",
-        # 别名
         "meta_loop": memory / "meta_loop",
         "evolution": memory / "evolution",
         "portfolio": memory / "portfolio",
@@ -117,7 +124,7 @@ def check_loop_status(loop_name: str,
     try:
         status = check_loop(loop_name, state_dir)
         return _loop_status_to_report(status)
-    except Exception as e:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+    except Exception as e:  # noqa: BLE001
         return LoopStatusReport(
             loop_name=loop_name,
             healthy=False,
@@ -149,7 +156,7 @@ def check_all_status(project_root: Optional[Path] = None,
             any_stale=all_status.any_stale,
             total_tokens_today=all_status.total_tokens_today,
         )
-    except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+    except Exception:  # noqa: BLE001
         return SystemStatusReport(
             healthy=False,
             loops=[],
@@ -191,3 +198,21 @@ def format_status_report(report: SystemStatusReport) -> str:
 def status_report_to_json(report: SystemStatusReport) -> str:
     """转 JSON 字符串。"""
     return json.dumps(asdict(report), indent=2, ensure_ascii=False, default=str)
+
+
+# ─── Elite 因子跟踪导出 ────────────────────────────────────
+
+__all__ = [
+    # 监控
+    "LoopStatusReport",
+    "SystemStatusReport",
+    "check_loop_status",
+    "check_all_status",
+    "format_status_report",
+    "status_report_to_json",
+    # 因子跟踪
+    "TrackingSnapshot",
+    "EliteFactorTracker",
+    "AutoRetireConfig",
+    "AutoRetireManager",
+]
