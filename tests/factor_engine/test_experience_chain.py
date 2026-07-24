@@ -194,3 +194,83 @@ def test_update_summary(tmp_memory_dir):
     content = summary_path.read_text(encoding="utf-8")
     assert "经验链摘要" in content
     assert "fct_test" in content
+
+
+# ─── 覆盖遗漏行 ───────────────────────────────────────────
+
+class TestCoverageGaps:
+    """覆盖遗漏行 (98, 102, 130-131, 138-139, 182, 223-224)。"""
+
+    def test_read_all_success(self, tmp_memory_dir):
+        """line 98: read_all_success 应返回所有成功轨迹。"""
+        chain = ExperienceChain(tmp_memory_dir)
+        chain.record_success(make_trace(success=True, trace_id="s_a"))
+        chain.record_success(make_trace(success=True, trace_id="s_b"))
+        traces = chain.read_all_success()
+        assert len(traces) == 2
+
+    def test_read_all_failure(self, tmp_memory_dir):
+        """line 102: read_all_failure 应返回所有失败轨迹。"""
+        chain = ExperienceChain(tmp_memory_dir)
+        chain.record_failure(make_trace(success=False, trace_id="f_a"))
+        chain.record_failure(make_trace(success=False, trace_id="f_b"))
+        traces = chain.read_all_failure()
+        assert len(traces) == 2
+
+    def test_cleanup_oserror_on_stat(self, tmp_memory_dir, monkeypatch):
+        """lines 130-131: cleanup 时 stat 失败应静默跳过。"""
+        import os
+        chain = ExperienceChain(tmp_memory_dir)
+        chain.record_success(make_trace(success=True, trace_id="s_oserr"))
+        chain.record_success(make_trace(success=True, trace_id="s_oserr2"))
+
+        # 让 stat 抛出 OSError
+        original_stat = os.stat
+
+        def broken_stat(path, *args, **kwargs):
+            if "s_oserr" in str(path):
+                raise OSError("stat 失败")
+            return original_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", broken_stat)
+        deleted = chain.cleanup_if_needed()
+        assert deleted >= 0  # 不应抛异常
+
+    def test_cleanup_oserror_on_unlink(self, tmp_memory_dir, monkeypatch):
+        """lines 138-139: cleanup 时 unlink 失败应静默跳过。"""
+        chain = ExperienceChain(tmp_memory_dir)
+        for i in range(105):
+            chain.record_success(make_trace(success=True, trace_id=f"s_unlink_{i:03d}"))
+
+        original_unlink = Path.unlink
+
+        def broken_unlink(self, *args, **kwargs):
+            if "s_unlink" in str(self):
+                raise OSError("unlink 失败")
+            return original_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", broken_unlink)
+        deleted = chain.cleanup_if_needed()
+        # cleanup 应继续执行不抛异常
+        assert deleted >= 0
+
+    def test_validate_fails_empty_factor_id(self, tmp_memory_dir):
+        """line 182: factor_id 为空应抛出异常。"""
+        chain = ExperienceChain(tmp_memory_dir)
+        trace = make_trace(success=True, trace_id="no_fid")
+        trace["factor_id"] = ""
+        with pytest.raises(ExperienceChainError, match="factor_id 不能为空"):
+            chain.record_success(trace)
+
+    def test_read_dir_skip_corrupt_json(self, tmp_memory_dir):
+        """lines 223-224: _read_dir 遇到损坏 JSON 应跳过。"""
+        chain = ExperienceChain(tmp_memory_dir)
+        # 写入一个有效轨迹
+        chain.record_success(make_trace(success=True, trace_id="valid_trace"))
+        # 写入一个无效文件
+        bad_file = chain.success_dir / "corrupt.json"
+        bad_file.write_text("not valid json", encoding="utf-8")
+
+        traces = chain.read_all_success()
+        assert len(traces) == 1
+        assert traces[0]["trace_id"] == "valid_trace"

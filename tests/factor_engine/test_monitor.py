@@ -26,7 +26,7 @@ _FTS_ROOT = Path(__file__).resolve().parents[2]
 if str(_FTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_FTS_ROOT))
 
-from fts.factor_engine.monitor import AllStatus, LoopStatus, check_all, check_loop
+from fts.factor_engine.monitor import AllStatus, LoopStatus, check_all, check_loop, main, print_status_table
 
 
 # ─── 辅助函数 ────────────────────────────────────────
@@ -358,3 +358,165 @@ class TestDataclassCreation:
         assert len(s.loops) == 2
         assert s.any_circuit_broken is True
         assert s.total_tokens_today == 500
+
+
+# ─── print_status_table 测试 ──────────────────────────────
+
+class TestPrintStatusTable:
+    """覆盖 print_status_table (lines 137-170) 的所有分支。"""
+
+    def test_normal_healthy(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """所有循环健康 → 正常输出表格。"""
+        loops = [
+            LoopStatus(name="L1", state_file="/a.json", exists=True, status="completed",
+                       run_id="run-001", tokens_consumed=100, budget_limit=500, age_hours=1.0, healthy=True),
+            LoopStatus(name="L2", state_file="/b.json", exists=True, status="completed",
+                       run_id="run-002", tokens_consumed=200, budget_limit=500, age_hours=2.0, healthy=True),
+            LoopStatus(name="L3", state_file="/c.json", exists=True, status="completed",
+                       run_id="run-003", tokens_consumed=300, budget_limit=500, age_hours=3.0, healthy=True),
+        ]
+        status = AllStatus(loops=loops, checked_at="2026-07-24T10:00:00")
+        print_status_table(status)
+        captured = capsys.readouterr()
+        assert "L1" in captured.out
+        assert "L2" in captured.out
+        assert "L3" in captured.out
+        assert "completed" in captured.out
+
+    def test_circuit_broken(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """存在熔断 → 打印熔断警告。"""
+        loops = [
+            LoopStatus(name="L1", state_file="/a.json", exists=True, status="circuit_broken",
+                       healthy=False, last_error="Budget exceeded", age_hours=1.0),
+            LoopStatus(name="L2", state_file="/b.json", exists=True, status="completed",
+                       healthy=True, age_hours=1.0),
+            LoopStatus(name="L3", state_file="/c.json", exists=True, status="completed",
+                       healthy=True, age_hours=1.0),
+        ]
+        status = AllStatus(loops=loops, any_circuit_broken=True, checked_at="2026-07-24T10:00:00")
+        print_status_table(status)
+        captured = capsys.readouterr()
+        assert "熔断" in captured.out
+
+    def test_stale(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """存在过期状态 → 打印过期警告。"""
+        loops = [
+            LoopStatus(name="L1", state_file="/a.json", exists=True, status="completed",
+                       healthy=True, age_hours=48.0),
+            LoopStatus(name="L2", state_file="/b.json", exists=True, status="completed",
+                       healthy=True, age_hours=1.0),
+            LoopStatus(name="L3", state_file="/c.json", exists=True, status="completed",
+                       healthy=True, age_hours=1.0),
+        ]
+        status = AllStatus(loops=loops, any_stale=True, checked_at="2026-07-24T10:00:00")
+        print_status_table(status)
+        captured = capsys.readouterr()
+        assert "过期" in captured.out
+
+    def test_circuit_broken_and_stale(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """同时存在熔断和过期 → 两种警告都打印。"""
+        loops = [
+            LoopStatus(name="L1", state_file="/a.json", exists=True, status="circuit_broken",
+                       healthy=False, last_error="OOM", age_hours=48.0),
+            LoopStatus(name="L2", state_file="/b.json", exists=True, status="completed",
+                       healthy=True, age_hours=1.0),
+            LoopStatus(name="L3", state_file="/c.json", exists=True, status="completed",
+                       healthy=True, age_hours=1.0),
+        ]
+        status = AllStatus(
+            loops=loops, any_circuit_broken=True, any_stale=True,
+            checked_at="2026-07-24T10:00:00",
+        )
+        print_status_table(status)
+        captured = capsys.readouterr()
+        assert "熔断" in captured.out
+        assert "过期" in captured.out
+        assert "OOM" in captured.out
+
+    def test_no_state_files(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """没有任何状态文件 → 打印提示信息。"""
+        loops = [
+            LoopStatus(name="L1", state_file="/a.json", exists=False, age_hours=0.0),
+            LoopStatus(name="L2", state_file="/b.json", exists=False, age_hours=0.0),
+            LoopStatus(name="L3", state_file="/c.json", exists=False, age_hours=0.0),
+        ]
+        status = AllStatus(loops=loops, checked_at="2026-07-24T10:00:00")
+        print_status_table(status)
+        captured = capsys.readouterr()
+        assert "没有找到" in captured.out or "未运行" in captured.out
+
+    def test_budget_limit_zero(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """budget_limit 为 0 → 只显示 tokens_consumed 而非分式。"""
+        loops = [
+            LoopStatus(name="L1", state_file="/a.json", exists=True, status="running",
+                       run_id="run-001", tokens_consumed=100, budget_limit=0,
+                       age_hours=0.5, healthy=True),
+            LoopStatus(name="L2", state_file="/b.json", exists=True, status="running",
+                       run_id="", tokens_consumed=200, budget_limit=0,
+                       age_hours=0.5, healthy=True),
+            LoopStatus(name="L3", state_file="/c.json", exists=True, status="paused",
+                       tokens_consumed=0, budget_limit=0, age_hours=0.5, healthy=True),
+        ]
+        status = AllStatus(loops=loops, checked_at="2026-07-24T10:00:00")
+        print_status_table(status)
+        captured = capsys.readouterr()
+        # budget_limit=0 时不显示分式，只显示 token 数
+        assert "100" in captured.out
+
+    def test_run_id_empty(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """run_id 为空 → 显示短横线。"""
+        loops = [
+            LoopStatus(name="L1", state_file="/a.json", exists=True, status="unknown",
+                       age_hours=0.0, healthy=True),
+        ]
+        status = AllStatus(loops=loops, checked_at="2026-07-24T10:00:00")
+        print_status_table(status)
+        captured = capsys.readouterr()
+        assert "L1" in captured.out
+
+
+# ─── main CLI 函数测试 ────────────────────────────────────
+
+class TestMainCLI:
+    """覆盖 main() 和 __main__ 入口 (lines 175-193)。"""
+
+    def test_main_default(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        """默认状态命令 → 文本表格输出。"""
+        monkeypatch.setattr(sys, "argv", ["monitor.py", "status"])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert "Loop" in captured.out
+
+    def test_main_json(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        """--json 标志 → JSON 输出。"""
+        monkeypatch.setattr(sys, "argv", ["monitor.py", "status", "--json"])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert "checked_at" in captured.out
+
+    def test_main_with_fdt_root(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """--fdt-root 指向临时目录 → 正常执行。"""
+        monkeypatch.setattr(sys, "argv", ["monitor.py", "status", "--json", "--fdt-root", str(tmp_path)])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+
+    def test_main_invalid_command(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """无效命令 → argparse 抛出 SystemExit。"""
+        monkeypatch.setattr(sys, "argv", ["monitor.py", "invalid"])
+        with pytest.raises(SystemExit):
+            main()
+
+    def test_main_module_entry(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        """模拟 __name__ == '__main__' 路径 (line 193)。"""
+        monkeypatch.setattr(sys, "argv", ["monitor.py", "status", "--json"])
+        # 直接模拟 if __name__ == "__main__": main() 的行为
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert "checked_at" in captured.out

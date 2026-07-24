@@ -178,3 +178,133 @@ class TestReloadModule:
                     mock_logger.warning.assert_called_once()
                     args, _ = mock_logger.warning.call_args
                     assert "reload failed" in args[0]
+
+
+# ─── HotSwapWatcher start() 实际 ImportError 路径 ─────
+
+
+class TestHotSwapWatcherImportError:
+    """start() 中 ImportError 实际路径测试。"""
+
+    def test_start_returns_false_on_import_error(self):
+        """watchdog 未安装时 start 返回 False。"""
+        watcher = HotSwapWatcher()
+        # 将 watchdog 设为 None 使 import 失败
+        with patch.dict("sys.modules", {"watchdog": None, "watchdog.observers": None, "watchdog.events": None}):
+            result = watcher.start()
+        assert result is False
+        assert watcher.running is False
+
+    def test_start_logs_warning_on_import_error(self):
+        """watchdog 未安装时记录警告日志。"""
+        watcher = HotSwapWatcher()
+        with patch.dict("sys.modules", {"watchdog": None, "watchdog.observers": None, "watchdog.events": None}):
+            with patch("fts.scheduler.hotswap.logger") as mock_logger:
+                watcher.start()
+                mock_logger.warning.assert_called_once_with(
+                    "watchdog 未安装，热重载不可用。pip install watchdog"
+                )
+
+
+# ─── HotSwapWatcher start() 成功路径 ──────────────────
+
+
+class TestHotSwapWatcherStartSuccess:
+    """start() 成功时调度行为测试。"""
+
+    def test_start_schedules_existing_dirs(self):
+        """start 成功时应为每个存在的目录调度 observer。"""
+        watcher = HotSwapWatcher(watch_dirs=["fts/factor_engine", "fts/scheduler"])
+
+        mock_observer = MagicMock()
+
+        with (
+            patch("fts.scheduler.hotswap.logger"),
+            patch("watchdog.observers.Observer", return_value=mock_observer),
+        ):
+            result = watcher.start()
+
+        assert result is True
+        assert watcher.running is True
+        # 应为 2 个目录各调用一次 schedule
+        assert mock_observer.schedule.call_count == 2
+        # 每次调用 recursive=True
+        calls = mock_observer.schedule.call_args_list
+        for call in calls:
+            args, kwargs = call
+            assert kwargs.get("recursive") is True
+
+    def test_start_skips_nonexistent_dirs(self):
+        """start 时跳过不存在的目录。"""
+        watcher = HotSwapWatcher(watch_dirs=["/nonexistent/path"])
+
+        mock_observer = MagicMock()
+
+        with (
+            patch("fts.scheduler.hotswap.logger") as mock_logger,
+            patch("watchdog.observers.Observer", return_value=mock_observer),
+        ):
+            result = watcher.start()
+
+        assert result is True
+        # 不存在的目录不应调用 schedule
+        mock_observer.schedule.assert_not_called()
+        mock_logger.warning.assert_any_call("[hotswap] watch dir not found: %s", Path("/nonexistent/path"))
+
+    def test_on_modified_calls_reload_for_py_files(self):
+        """on_modified 中 .py 文件应调用 _reload_module。"""
+        watcher = HotSwapWatcher(watch_dirs=["fts/factor_engine"])
+
+        mock_observer = MagicMock()
+        captured_handler = [None]
+
+        def capture_schedule(handler, path, **kwargs):
+            captured_handler[0] = handler
+
+        mock_observer.schedule.side_effect = capture_schedule
+
+        with (
+            patch("fts.scheduler.hotswap.logger"),
+            patch("watchdog.observers.Observer", return_value=mock_observer),
+        ):
+            watcher.start()
+
+        # 获取捕获到的 handler（_ReloadHandler 实例）
+        handler = captured_handler[0]
+        assert handler is not None
+
+        # 测试 on_modified 调用 _reload_module
+        mock_event_py = MagicMock()
+        mock_event_py.src_path = "/path/to/module.py"
+
+        with patch("fts.scheduler.hotswap._reload_module") as mock_reload:
+            handler.on_modified(mock_event_py)
+            mock_reload.assert_called_once_with("/path/to/module.py")
+
+    def test_on_modified_ignores_non_py_files(self):
+        """on_modified 中非 .py 文件不调用 _reload_module。"""
+        watcher = HotSwapWatcher(watch_dirs=["fts/factor_engine"])
+
+        mock_observer = MagicMock()
+        captured_handler = [None]
+
+        def capture_schedule(handler, path, **kwargs):
+            captured_handler[0] = handler
+
+        mock_observer.schedule.side_effect = capture_schedule
+
+        with (
+            patch("fts.scheduler.hotswap.logger"),
+            patch("watchdog.observers.Observer", return_value=mock_observer),
+        ):
+            watcher.start()
+
+        handler = captured_handler[0]
+
+        # 测试非 .py 文件不触发 reload
+        mock_event_txt = MagicMock()
+        mock_event_txt.src_path = "/path/to/notes.txt"
+
+        with patch("fts.scheduler.hotswap._reload_module") as mock_reload:
+            handler.on_modified(mock_event_txt)
+            mock_reload.assert_not_called()

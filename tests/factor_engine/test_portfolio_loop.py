@@ -668,3 +668,222 @@ class TestGenerateAgentProposals:
         # 建议内容应包含组合信息
         assert "momentum" in prop["suggested_changes"]
         assert isinstance(prop["debate_round_ref"], type(None))
+
+
+# ─── 覆盖遗漏行 ───────────────────────────────────────────
+
+class TestCoverageGaps:
+    """覆盖 portfolio_loop.py 遗漏行。"""
+
+    # ── L3Verifier line 111 ──
+
+    def test_verifier_decay_rate_failure(self):
+        """line 111: 信号衰减率过高应失败。"""
+        v = L3Verifier(DEFAULT_L3_VERIFIER_CONFIG)
+        signals = [
+            PortfolioSignal(
+                factor_id="fct_d", name="decayed", weight=1.0,
+                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.5,
+                orthogonalized=True, retained=True,
+            ),
+        ]
+        combo = PortfolioCombo(
+            version=EVOLUTION_VERSION, updated_at="now",
+            combo_id="cmb_test", trace_id="l3_test",
+            synthesis_mode="equal_weight", signals=signals,
+            combo_sharpe=2.5, combo_turnover=0.3, max_correlation=0.2,
+            n_factors=1, status="pending", created_at="now",
+        )
+        passed, reasons = v.check(combo)
+        assert passed is False
+        assert any("衰减率" in r for r in reasons)
+
+    # ── PortfolioStateManager lines 154-155 ──
+
+    def test_state_manager_backup_oserror(self, tmp_portfolio_dir, monkeypatch):
+        """lines 154-155: backup 备份失败应抛 L3Error。"""
+        import shutil
+        psm = PortfolioStateManager(tmp_portfolio_dir)
+        state = psm.load_or_init()
+
+        def broken_copy2(*args, **kwargs):
+            raise OSError("备份失败")
+
+        monkeypatch.setattr(shutil, "copy2", broken_copy2)
+        with pytest.raises(L3Error, match="备份失败"):
+            psm.save(state)
+
+    # ── PortfolioStateManager line 181 ──
+
+    def test_state_manager_try_load_version_mismatch(self, tmp_portfolio_dir):
+        """line 181: _try_load 发现版本不匹配返回 None。"""
+        # 写入版本不匹配的 state
+        state_file = tmp_portfolio_dir / "state.json"
+        state_file.write_text(
+            json.dumps({"version": "0.0.0", "status": "completed"}),
+            encoding="utf-8",
+        )
+        psm = PortfolioStateManager(tmp_portfolio_dir)
+        # load_or_init 应重新初始化（因为 _try_load 返回 None）
+        state = psm.load_or_init()
+        assert state["version"] == EVOLUTION_VERSION
+
+    # ── PortfolioManager lines 225, 231-232 ──
+
+    def test_portfolio_manager_cache(self, tmp_portfolio_dir):
+        """line 225: load_or_init 使用缓存。"""
+        pm = PortfolioManager(tmp_portfolio_dir)
+        combo1 = pm.load_or_init()
+        combo1["status"] = "modified"
+        # 第二次调用应返回缓存（line 225）
+        combo2 = pm.load_or_init()
+        assert combo2["status"] == "modified"
+
+    def test_portfolio_manager_corrupt_json(self, tmp_portfolio_dir):
+        """lines 231-232: combo 文件损坏时重新初始化。"""
+        combo_file = tmp_portfolio_dir / "current_combo.json"
+        combo_file.write_text("corrupt json", encoding="utf-8")
+        pm = PortfolioManager(tmp_portfolio_dir)
+        combo = pm.load_or_init()
+        assert combo["status"] == "pending"
+        assert combo["combo_id"].startswith("cmb_")
+
+    # ── PortfolioManager lines 270, 276-277 ──
+
+    def test_list_active_proposals_empty_dir(self, tmp_portfolio_dir):
+        """line 270: 空 proposals 目录返回空列表。"""
+        pm = PortfolioManager(tmp_portfolio_dir)
+        # 确保 proposals_dir 为空
+        assert pm.proposals_dir.exists()
+        proposals = pm.list_active_proposals()
+        assert proposals == []
+
+    def test_list_active_proposals_skip_corrupt(self, tmp_portfolio_dir):
+        """lines 276-277: 损坏的 proposal 文件应跳过。"""
+        pm = PortfolioManager(tmp_portfolio_dir)
+        # 写入一个正常 proposal
+        good = AgentOptimizationProposal(
+            proposal_id="prop_good", trace_id="t", agent_name="闫判官",
+            created_at="now", current_prompt_summary="p",
+            suggested_changes="c", debate_round_ref=None, rationale="r",
+            priority="medium", status="draft",
+        )
+        pm.save_proposal(good)
+        # 写入一个损坏文件
+        bad_file = pm.proposals_dir / "prop_bad.json"
+        bad_file.write_text("corrupt", encoding="utf-8")
+
+        active = pm.list_active_proposals()
+        assert len(active) == 1
+        assert active[0]["proposal_id"] == "prop_good"
+
+    # ── load_elite_factors lines 505, 517-518 ──
+
+    def test_load_elite_factors_empty_dir(self, tmp_elite_dir):
+        """line 505: 空 elite 目录返回空列表。"""
+        factors = load_elite_factors(tmp_elite_dir)
+        assert factors == []
+
+    def test_load_elite_factors_skip_corrupt(self, tmp_elite_dir):
+        """lines 517-518: 损坏的 elite 文件应跳过。"""
+        # 写入一个正常文件
+        good = tmp_elite_dir / "good.json"
+        good.write_text(json.dumps({
+            "factor_id": "fct_good", "name": "good", "sharpe": 2.0,
+            "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+        }), encoding="utf-8")
+        # 写入一个损坏文件
+        bad = tmp_elite_dir / "bad.json"
+        bad.write_text("not json", encoding="utf-8")
+
+        factors = load_elite_factors(tmp_elite_dir)
+        assert len(factors) == 1
+        assert factors[0]["factor_id"] == "fct_good"
+
+    # ── main() CLI lines 737-759 + line 763 ──
+
+    def test_main_help(self, monkeypatch):
+        """main() 不带参数应显示帮助。"""
+        import sys
+        from fts.factor_engine.portfolio_loop import main
+        monkeypatch.setattr(sys, "argv", ["portfolio_loop.py"])
+        with pytest.raises(SystemExit):
+            main()
+
+    def test_main_with_factors(self, monkeypatch, tmp_path):
+        """main() 带 --once 和 elite 因子应运行。"""
+        import sys
+        # 创建 elite 因子
+        elite_dir = tmp_path / "elite"
+        elite_dir.mkdir(parents=True, exist_ok=True)
+        (elite_dir / "test.json").write_text(json.dumps({
+            "factor_id": "fct_main", "name": "main", "sharpe": 2.5,
+            "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+        }), encoding="utf-8")
+        memory_dir = tmp_path / "portfolio"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                "portfolio_loop.py", "--once",
+                "--mode", "equal_weight",
+                "--memory-dir", str(memory_dir),
+                "--elite-dir", str(elite_dir),
+            ],
+        )
+        from fts.factor_engine.portfolio_loop import main
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+
+    def test_main_verifier_warning(self, monkeypatch, tmp_path):
+        """main() verifier 未通过也正常退出。"""
+        import sys
+        elite_dir = tmp_path / "elite_warn"
+        elite_dir.mkdir(parents=True, exist_ok=True)
+        # 低 sharpe 因子触发 verifier warning
+        (elite_dir / "bad.json").write_text(json.dumps({
+            "factor_id": "fct_bad", "name": "bad", "sharpe": 1.0,
+            "ic": 0.01, "turnover": 0.8, "decay_6m": 0.5,
+        }), encoding="utf-8")
+        memory_dir = tmp_path / "portfolio_warn"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                "portfolio_loop.py", "--once",
+                "--memory-dir", str(memory_dir),
+                "--elite-dir", str(elite_dir),
+            ],
+        )
+        from fts.factor_engine.portfolio_loop import main
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+
+    # ── __name__ == "__main__" line 763 ──
+
+    def test_module_execution(self, monkeypatch, tmp_path):
+        """line 763: 模拟 __name__ == '__main__' 进入 main()。"""
+        import sys
+        from fts.factor_engine import portfolio_loop as pl_mod
+
+        elite_dir = tmp_path / "elite_main"
+        elite_dir.mkdir(parents=True, exist_ok=True)
+        memory_dir = tmp_path / "portfolio_main"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                "portfolio_loop.py", "--once",
+                "--memory-dir", str(memory_dir),
+                "--elite-dir", str(elite_dir),
+            ],
+        )
+        with patch.object(pl_mod, "__name__", "__main__"):
+            with pytest.raises(SystemExit):
+                exec("from fts.factor_engine.portfolio_loop import main; main()",
+                     {"__name__": "__main__"})

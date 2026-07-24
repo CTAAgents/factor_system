@@ -268,3 +268,45 @@ class TestIntegration:
         p = tmp_path / "nested" / "dir" / "state.json"
         atomic_write_state(p, {"ok": True})
         assert p.exists()
+
+
+# ─── 覆盖 lines 62-63, 111-112 ───────────────────────────
+
+
+class TestCoverageGaps:
+    """覆盖遗漏行。"""
+
+    def test_atomic_write_double_exception_cleanup(self, tmp_path: Path):
+        """lines 62-63: os.replace 和 tmp.unlink 都失败时静默处理。"""
+        p = tmp_path / "test.json"
+        with patch("fts.core.atomic.os.replace", side_effect=OSError("replace failed")):
+            with patch("pathlib.Path.unlink", side_effect=OSError("unlink failed")):
+                with pytest.raises(OSError):
+                    atomic_write(p, {"a": 1})
+        # tmp 文件应仍在（因为 unlink 失败）
+        assert p.with_suffix(".tmp").exists()
+
+    def test_atomic_write_state_backup_oserror(self, tmp_path: Path):
+        """lines 111-112: 备份轮转中 os.replace 失败时静默通过。"""
+        p = tmp_path / "state.json"
+        _real_replace = os.replace  # 保存真实引用
+        # 先写入两次，产生备份，确保 prev.exists() 条件满足
+        atomic_write_state(p, {"version": 1})
+        atomic_write_state(p, {"version": 2})
+
+        # 再次写入，让备份轮转触发 os.replace 并失败
+        os_replace_calls = [0]
+
+        def _failing_replace(src, dst):
+            os_replace_calls[0] += 1
+            # 前 2 次 os.replace 是备份轮转，需要失败
+            # 第 3 次是 atomic_write 内部的 os.replace，必须成功
+            if os_replace_calls[0] <= 2:
+                raise OSError("模拟备份失败")
+            return _real_replace(src, dst)
+
+        with patch("fts.core.atomic.os.replace", side_effect=_failing_replace):
+            atomic_write_state(p, {"version": 3})
+
+        # 主文件应被正确写入
+        assert atomic_read(p) == {"version": 3}

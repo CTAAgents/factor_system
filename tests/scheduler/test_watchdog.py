@@ -6,7 +6,7 @@ HARNESS §测试随重构: 覆盖 watchdog.py 核心路径。
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import ANY, MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -208,3 +208,204 @@ class TestProcessWatchdogCircuitBreak:
 
         assert wd._restart_count == 0
         assert wd._circuit_open_until == 0.0
+
+
+# ─── run() 熔断等待与恢复路径 ─────────────────────────
+
+
+class TestProcessWatchdogCircuitRun:
+    """run() 循环中熔断路径测试。"""
+
+    @patch("fts.scheduler.watchdog.time.sleep")
+    def test_circuit_broken_waits(self, mock_sleep):
+        """熔断中 (wait > 0) 应等待并继续循环。"""
+        wd = ProcessWatchdog(["echo", "test"])
+        wd._circuit_open_until = 100.0  # 未来时间
+        wd._last_restart = 2
+        wd._restart_count = 3
+
+        call_idx = [0]
+
+        def circuit_breaker():
+            call_idx[0] += 1
+            if call_idx[0] >= 2:  # 第二次调用后停止
+                wd._should_stop = True
+            return True  # 始终返回熔断
+
+        with patch.object(wd, "_is_circuit_broken", side_effect=circuit_breaker):
+            with patch("fts.scheduler.watchdog.time.time", return_value=90.0):
+                wd.run()
+
+        # wait = 100.0 - 90.0 = 10.0 > 0 → sleep(min(10, 5)), 可能跑两次
+        assert mock_sleep.call_count >= 1
+        mock_sleep.assert_any_call(5)
+        assert wd._restart_count == 3  # 未重置
+
+    @patch("fts.scheduler.watchdog.time.sleep")
+    def test_circuit_broken_restored(self, mock_sleep):
+        """熔断到期 (wait <= 0) 应重置计数并继续。"""
+        wd = ProcessWatchdog(["echo", "test"])
+        wd._circuit_open_until = 90.0  # 过期时间
+        wd._restart_count = 3
+
+        call_idx = [0]
+
+        def circuit_breaker():
+            call_idx[0] += 1
+            if call_idx[0] >= 2:  # 第二次调用后停止
+                wd._should_stop = True
+            return True  # 始终返回熔断
+
+        with patch.object(wd, "_is_circuit_broken", side_effect=circuit_breaker):
+            with patch("fts.scheduler.watchdog.time.time", return_value=100.0):
+                wd.run()
+
+        # wait = 90.0 - 100.0 = -10.0 <= 0 → 重置
+        mock_sleep.assert_not_called()
+        assert wd._restart_count == 0
+        assert wd._circuit_open_until == 0.0
+
+
+# ─── run() 异常处理路径 ────────────────────────────
+
+
+class TestProcessWatchdogErrorHandling:
+    """run() 循环异常处理测试。"""
+
+    @patch("fts.scheduler.watchdog.time.sleep")
+    def test_file_not_found_in_run(self, mock_sleep):
+        """FileNotFoundError 被捕获并记录，继续循环。"""
+        wd = ProcessWatchdog(["nonexistent_cmd"])
+        call_idx = [0]
+
+        def circuit_breaker():
+            call_idx[0] += 1
+            if call_idx[0] >= 2:
+                wd._should_stop = True
+            return False
+
+        with (
+            patch("fts.scheduler.watchdog.subprocess.Popen", side_effect=FileNotFoundError()),
+            patch.object(wd, "_is_circuit_broken", side_effect=circuit_breaker),
+            patch("fts.scheduler.watchdog.logger") as mock_logger,
+        ):
+            wd.run()
+
+        mock_logger.error.assert_any_call(
+            "[watchdog] command not found: %s", "nonexistent_cmd"
+        )
+        mock_sleep.assert_any_call(60)
+
+    @patch("fts.scheduler.watchdog.time.sleep")
+    def test_generic_exception_in_run(self, mock_sleep):
+        """通用 Exception 被捕获并记录，继续循环。"""
+        wd = ProcessWatchdog(["bad_cmd"])
+        call_idx = [0]
+
+        def circuit_breaker():
+            call_idx[0] += 1
+            if call_idx[0] >= 2:
+                wd._should_stop = True
+            return False
+
+        with (
+            patch("fts.scheduler.watchdog.subprocess.Popen", side_effect=RuntimeError("boom")),
+            patch.object(wd, "_is_circuit_broken", side_effect=circuit_breaker),
+            patch("fts.scheduler.watchdog.logger") as mock_logger,
+        ):
+            wd.run()
+
+        mock_logger.error.assert_any_call("[watchdog] process error: %s", ANY)
+        mock_sleep.assert_any_call(10)
+
+
+# ─── run() 重启计数与熔断触发 ──────────────────────────
+
+
+class TestProcessWatchdogRestartLogic:
+    """run() 循环中重启计数与熔断触发测试。"""
+
+    @patch("fts.scheduler.watchdog.time.sleep")
+    def test_restart_within_window_increments_count(self, mock_sleep):
+        """重启在窗口期内递增 _restart_count。"""
+        wd = ProcessWatchdog(["echo", "ok"])
+        wd._last_restart = 90.0  # 窗口期内 (100 - 90 = 10 < 30)
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        mock_proc.wait.return_value = 1
+
+        call_idx = [0]
+
+        def circuit_breaker():
+            call_idx[0] += 1
+            if call_idx[0] >= 2:
+                wd._should_stop = True
+            return False  # 不触发熔断
+
+        with (
+            patch("fts.scheduler.watchdog.subprocess.Popen", return_value=mock_proc),
+            patch.object(wd, "_is_circuit_broken", side_effect=circuit_breaker),
+            patch("fts.scheduler.watchdog.time.time", return_value=100.0),
+        ):
+            wd.run()
+
+        assert wd._restart_count == 1  # 从 0 递增
+
+    @patch("fts.scheduler.watchdog.time.sleep")
+    def test_restart_outside_window_resets_count(self, mock_sleep):
+        """重启超出窗口期重置 _restart_count 为 1。"""
+        wd = ProcessWatchdog(["echo", "ok"])
+        wd._restart_count = 3
+        wd._last_restart = 50.0  # 窗口期外 (100 - 50 = 50 >= 30)
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        mock_proc.wait.return_value = 1
+
+        call_idx = [0]
+
+        def circuit_breaker():
+            call_idx[0] += 1
+            if call_idx[0] >= 2:
+                wd._should_stop = True
+            return False  # 不触发熔断
+
+        with (
+            patch("fts.scheduler.watchdog.subprocess.Popen", return_value=mock_proc),
+            patch.object(wd, "_is_circuit_broken", side_effect=circuit_breaker),
+            patch("fts.scheduler.watchdog.time.time", return_value=100.0),
+        ):
+            wd.run()
+
+        assert wd._restart_count == 1  # 窗口外重置为 1
+
+    @patch("fts.scheduler.watchdog.time.sleep")
+    def test_circuit_breaker_triggers_on_max_restarts(self, mock_sleep):
+        """达到 MAX_RESTARTS 后触发熔断。"""
+        wd = ProcessWatchdog(["echo", "fail"])
+        wd._restart_count = MAX_RESTARTS - 1  # 2
+        wd._last_restart = 95.0  # 窗口期内
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        mock_proc.wait.return_value = 1
+
+        call_idx = [0]
+
+        def circuit_breaker():
+            call_idx[0] += 1
+            if call_idx[0] >= 2:
+                wd._should_stop = True
+                return True
+            return False
+
+        with (
+            patch("fts.scheduler.watchdog.subprocess.Popen", return_value=mock_proc),
+            patch.object(wd, "_is_circuit_broken", side_effect=circuit_breaker),
+            patch("fts.scheduler.watchdog.time.time", return_value=100.0),
+        ):
+            wd.run()
+
+        assert wd._restart_count == MAX_RESTARTS  # 3
+        assert wd._circuit_open_until > 0  # 熔断已触发

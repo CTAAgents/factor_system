@@ -16,6 +16,7 @@ import pytest
 from fts.llm import (
     AnthropicClient,
     LLMClient,
+    LLMCallRecord,
     LLMError,
     MockLLMClient,
     OpenAIClient,
@@ -239,3 +240,240 @@ class TestGetLLMClient:
         with patch.dict(os.environ, {"FTS_LLM_BACKEND": "mock"}, clear=True):
             client = get_llm_client()
             assert isinstance(client, MockLLMClient)
+
+
+# ═══════════════════════════════════════════════════════════
+# LLMCallRecord — total_tokens 属性
+# ═══════════════════════════════════════════════════════════
+
+class TestLLMCallRecord:
+    """测试 LLMCallRecord.total_tokens 属性（line 45）。"""
+
+    def test_total_tokens_sum(self):
+        """total_tokens 返回 tokens_in + tokens_out。"""
+        record = LLMCallRecord(tokens_in=100, tokens_out=50)
+        assert record.total_tokens == 150
+
+    def test_total_tokens_zero_when_empty(self):
+        """无数据时 total_tokens 返回 0。"""
+        record = LLMCallRecord()
+        assert record.total_tokens == 0
+
+    def test_total_tokens_partial(self):
+        """仅一方有数据时正确计算。"""
+        record = LLMCallRecord(tokens_in=80)
+        assert record.total_tokens == 80
+        record2 = LLMCallRecord(tokens_out=30)
+        assert record2.total_tokens == 30
+
+
+# ═══════════════════════════════════════════════════════════
+# OpenAIClient.complete — 错误处理与重试
+# ═══════════════════════════════════════════════════════════
+
+class TestOpenAIClientComplete:
+    """测试 OpenAIClient.complete 的 API 错误路径（lines 118-132）。"""
+
+    def _make_openai_env(self, mock_client: MagicMock) -> MagicMock:
+        """创建模拟的 openai 模块并注册到 sys.modules。"""
+        mock_openai_mod = types.ModuleType("openai")
+        mock_openai_mod.OpenAI = MagicMock(return_value=mock_client)
+        patch.dict("sys.modules", {"openai": mock_openai_mod}).start()
+        return mock_openai_mod
+
+    def test_api_error_retry_exhausted_raises(self):
+        """API 错误在重试用尽后抛出 LLMError。"""
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = Exception("API error")
+        mock_openai_mod = types.ModuleType("openai")
+        mock_openai_mod.OpenAI = MagicMock(return_value=mock_client)
+        with patch.dict("sys.modules", {"openai": mock_openai_mod}):
+            client = OpenAIClient(api_key="sk-test", max_retries=1)
+            with pytest.raises(LLMError, match="OpenAI 调用失败"):
+                client.complete("test")
+            # max_retries=1 → 2 次尝试
+            assert mock_client.chat.completions.create.call_count == 2
+
+    def test_api_error_retry_then_success(self):
+        """首次失败后重试成功。"""
+        mock_client = MagicMock()
+
+        # 构建成功响应
+        choice = MagicMock()
+        choice.message.content = "retry_success"
+        usage = MagicMock()
+        usage.total_tokens = 50
+
+        first_resp = MagicMock()
+        first_resp.choices = [choice]
+        first_resp.usage = usage
+
+        mock_client.chat.completions.create.side_effect = [
+            Exception("timeout"),  # 第一次失败
+            first_resp,           # 第二次成功
+        ]
+
+        mock_openai_mod = types.ModuleType("openai")
+        mock_openai_mod.OpenAI = MagicMock(return_value=mock_client)
+        with patch.dict("sys.modules", {"openai": mock_openai_mod}):
+            client = OpenAIClient(api_key="sk-test", max_retries=2)
+            text, tokens = client.complete("test")
+            assert text == "retry_success"
+            assert tokens == 50
+            assert mock_client.chat.completions.create.call_count == 2
+
+    def test_api_rate_limit_retry(self):
+        """Rate limit 错误也触发重试。"""
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = [
+            Exception("Rate limit exceeded"),
+            Exception("Rate limit exceeded"),
+            Exception("Rate limit exceeded"),
+        ]
+        mock_openai_mod = types.ModuleType("openai")
+        mock_openai_mod.OpenAI = MagicMock(return_value=mock_client)
+        with patch.dict("sys.modules", {"openai": mock_openai_mod}):
+            client = OpenAIClient(api_key="sk-test", max_retries=2)
+            with pytest.raises(LLMError, match="OpenAI 调用失败"):
+                client.complete("test")
+            assert mock_client.chat.completions.create.call_count == 3
+
+    def test_ensure_client_returns_cached(self):
+        """_ensure_client 第二次调用返回缓存的客户端（line 103）。"""
+        mock_client_obj = MagicMock()
+        mock_openai_mod = types.ModuleType("openai")
+        mock_openai_mod.OpenAI = MagicMock(return_value=mock_client_obj)
+        with patch.dict("sys.modules", {"openai": mock_openai_mod}):
+            client = OpenAIClient(api_key="sk-test")
+            c1 = client._ensure_client()
+            c2 = client._ensure_client()
+            assert c1 is c2
+            mock_openai_mod.OpenAI.assert_called_once()
+
+    def test_ensure_client_with_base_url(self):
+        """base_url 传入时传递给 OpenAI 构造函数（line 108）。"""
+        mock_client_obj = MagicMock()
+        mock_openai_mod = types.ModuleType("openai")
+        mock_openai_mod.OpenAI = MagicMock(return_value=mock_client_obj)
+        with patch.dict("sys.modules", {"openai": mock_openai_mod}):
+            client = OpenAIClient(api_key="sk-test", base_url="https://custom.api.com/v1")
+            client._ensure_client()
+            mock_openai_mod.OpenAI.assert_called_once_with(
+                api_key="sk-test", base_url="https://custom.api.com/v1",
+            )
+
+    def test_complete_no_usage_info(self):
+        """resp.usage 为 None 时 tokens 返回 0。"""
+        mock_client = MagicMock()
+        choice = MagicMock()
+        choice.message.content = "no_usage"
+        mock_resp = MagicMock()
+        mock_resp.choices = [choice]
+        mock_resp.usage = None
+        mock_client.chat.completions.create.return_value = mock_resp
+
+        mock_openai_mod = types.ModuleType("openai")
+        mock_openai_mod.OpenAI = MagicMock(return_value=mock_client)
+        with patch.dict("sys.modules", {"openai": mock_openai_mod}):
+            client = OpenAIClient(api_key="sk-test", max_retries=0)
+            text, tokens = client.complete("test")
+            assert text == "no_usage"
+            assert tokens == 0
+
+
+# ═══════════════════════════════════════════════════════════
+# AnthropicClient.complete — 错误处理与重试
+# ═══════════════════════════════════════════════════════════
+
+class TestAnthropicClientComplete:
+    """测试 AnthropicClient.complete 的 API 错误路径（lines 164-178）。"""
+
+    def test_api_error_retry_exhausted_raises(self):
+        """API 错误在重试用尽后抛出 LLMError。"""
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = Exception("API error")
+        mock_anthropic_mod = types.ModuleType("anthropic")
+        mock_anthropic_mod.Anthropic = MagicMock(return_value=mock_client)
+        with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
+            client = AnthropicClient(api_key="sk-ant-test", max_retries=1)
+            with pytest.raises(LLMError, match="Anthropic 调用失败"):
+                client.complete("test")
+            assert mock_client.messages.create.call_count == 2
+
+    def test_api_error_retry_then_success(self):
+        """首次失败后重试成功。"""
+        mock_client = MagicMock()
+
+        text_content = MagicMock()
+        text_content.text = "claude_response"
+        usage = MagicMock()
+        usage.input_tokens = 100
+        usage.output_tokens = 50
+
+        success_resp = MagicMock()
+        success_resp.content = [text_content]
+        success_resp.usage = usage
+
+        mock_client.messages.create.side_effect = [
+            Exception("timeout"),
+            success_resp,
+        ]
+
+        mock_anthropic_mod = types.ModuleType("anthropic")
+        mock_anthropic_mod.Anthropic = MagicMock(return_value=mock_client)
+        with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
+            client = AnthropicClient(api_key="sk-ant-test", max_retries=2)
+            text, tokens = client.complete("test")
+            assert text == "claude_response"
+            assert tokens == 150
+            assert mock_client.messages.create.call_count == 2
+
+    def test_ensure_client_returns_cached(self):
+        """_ensure_client 第二次调用返回缓存的客户端（line 152）。"""
+        mock_client_obj = MagicMock()
+        mock_anthropic_mod = types.ModuleType("anthropic")
+        mock_anthropic_mod.Anthropic = MagicMock(return_value=mock_client_obj)
+        with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
+            client = AnthropicClient(api_key="sk-ant-test")
+            c1 = client._ensure_client()
+            c2 = client._ensure_client()
+            assert c1 is c2
+            mock_anthropic_mod.Anthropic.assert_called_once()
+
+    def test_complete_empty_content(self):
+        """resp.content 为空列表时 text 返回空字符串。"""
+        mock_client = MagicMock()
+        usage = MagicMock()
+        usage.input_tokens = 10
+        usage.output_tokens = 5
+
+        mock_resp = MagicMock()
+        mock_resp.content = []
+        mock_resp.usage = usage
+        mock_client.messages.create.return_value = mock_resp
+
+        mock_anthropic_mod = types.ModuleType("anthropic")
+        mock_anthropic_mod.Anthropic = MagicMock(return_value=mock_client)
+        with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
+            client = AnthropicClient(api_key="sk-ant-test", max_retries=0)
+            text, tokens = client.complete("test")
+            assert text == ""
+            assert tokens == 15
+
+    def test_complete_no_usage_info(self):
+        """resp.usage 为 None 时 tokens 返回 0。"""
+        mock_client = MagicMock()
+        text_content = MagicMock()
+        text_content.text = "no_usage"
+        mock_resp = MagicMock()
+        mock_resp.content = [text_content]
+        mock_resp.usage = None
+        mock_client.messages.create.return_value = mock_resp
+
+        mock_anthropic_mod = types.ModuleType("anthropic")
+        mock_anthropic_mod.Anthropic = MagicMock(return_value=mock_client)
+        with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
+            client = AnthropicClient(api_key="sk-ant-test", max_retries=0)
+            text, tokens = client.complete("test")
+            assert text == "no_usage"
+            assert tokens == 0
