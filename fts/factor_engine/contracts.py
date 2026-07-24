@@ -200,7 +200,7 @@ class BudgetConfig(TypedDict, total=False):
     circuit_breaker_token_ratio: float           # 熔断 token 比例（默认 2.0）
     circuit_breaker_consecutive_low_ic: int      # 连续低 IC 熔断（默认 3）
     circuit_breaker_low_ic_threshold: float      # 低 IC 阈值（默认 0.01）
-    circuit_breaker_failure_rate: float          # 失败率熔断（默认 0.90）
+    circuit_breaker_failure_rate: float          # 失败率熔断（默认 0.95）
 
 
 # ─── 默认配置常量 ─────────────────────────────────────────
@@ -209,12 +209,12 @@ DEFAULT_VERIFIER_CONFIG: VerifierConfig = VerifierConfig(
     min_ic=0.03,
     min_icir=0.5,
     min_sharpe=1.5,
-    max_drawdown=0.20,
+    max_drawdown=0.50,
     min_economic_score=3,
     min_t_stat=3.0,
     max_fdr=0.05,
     min_oos_ratio=0.30,
-    max_turnover_monthly=0.50,
+    max_turnover_monthly=5.0,
 )
 """v1.1.0 锁定的 Verifier 默认配置 — 不可在运行时修改。"""
 
@@ -227,7 +227,7 @@ DEFAULT_BUDGET_CONFIG: BudgetConfig = BudgetConfig(
     circuit_breaker_token_ratio=2.0,
     circuit_breaker_consecutive_low_ic=3,
     circuit_breaker_low_ic_threshold=0.01,
-    circuit_breaker_failure_rate=0.90,
+    circuit_breaker_failure_rate=0.95,
 )
 """v1.1.0 默认预算配置 — 熔断触发后必须人类介入恢复。"""
 

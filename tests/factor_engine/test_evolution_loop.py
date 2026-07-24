@@ -928,7 +928,7 @@ class TestEvolutionLoopCoverage:
         assert fp.exists()
         assert fp.suffix == ".json"
         data = json.loads(fp.read_text(encoding="utf-8"))
-        assert data["factor"]["factor_id"] == "fct_promote_test"
+        assert data["factor_id"] == "fct_promote_test"
 
     def test_record_success_trace(self, tmp_memory_dir):
         """_record_success_trace 应记录到 success 目录。"""

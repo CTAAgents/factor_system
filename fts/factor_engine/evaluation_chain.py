@@ -69,11 +69,16 @@ def _compute_sharpe(returns: np.ndarray, periods_per_year: int = 252) -> float:
 
 
 def _compute_max_drawdown(cumulative: np.ndarray) -> float:
-    """计算最大回撤（0~1）。"""
+    """计算最大回撤（0~1）。
+
+    将 cumsum 收益转为组合净值（1 + return），确保峰值始终为正。
+    """
     if len(cumulative) < 2:
         return 0.0
-    peak = np.maximum.accumulate(cumulative)
-    drawdown = (peak - cumulative) / np.maximum(peak, 1e-10)
+    # 转为组合净值（避免 cumsum 负值导致分母除峰值）
+    nav = 1.0 + cumulative
+    peak = np.maximum.accumulate(nav)
+    drawdown = (peak - nav) / np.maximum(peak, 1e-10)
     return float(np.max(drawdown))
 
 

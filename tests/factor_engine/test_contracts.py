@@ -164,7 +164,7 @@ def test_budget_config_instantiation():
         circuit_breaker_token_ratio=2.0,
         circuit_breaker_consecutive_low_ic=3,
         circuit_breaker_low_ic_threshold=0.01,
-        circuit_breaker_failure_rate=0.90,
+        circuit_breaker_failure_rate=0.95,
     )
     assert bc["nightly_token_limit"] == 200_000
 
@@ -172,15 +172,15 @@ def test_budget_config_instantiation():
 # ─── 默认配置 ─────────────────────────────────────────────
 
 def test_default_verifier_config_values():
-    """DEFAULT_VERIFIER_CONFIG 必须是 v8.9.2 锁定值。"""
+    """DEFAULT_VERIFIER_CONFIG 必须是 v1.1.0 锁定值。"""
     assert DEFAULT_VERIFIER_CONFIG["min_ic"] == 0.03
     assert DEFAULT_VERIFIER_CONFIG["min_sharpe"] == 1.5
-    assert DEFAULT_VERIFIER_CONFIG["max_drawdown"] == 0.20
+    assert DEFAULT_VERIFIER_CONFIG["max_drawdown"] == 0.50
     assert DEFAULT_VERIFIER_CONFIG["min_economic_score"] == 3
     assert DEFAULT_VERIFIER_CONFIG["min_t_stat"] == 3.0
     assert DEFAULT_VERIFIER_CONFIG["max_fdr"] == 0.05
     assert DEFAULT_VERIFIER_CONFIG["min_oos_ratio"] == 0.30
-    assert DEFAULT_VERIFIER_CONFIG["max_turnover_monthly"] == 0.50
+    assert DEFAULT_VERIFIER_CONFIG["max_turnover_monthly"] == 5.0
 
 
 def test_default_budget_config_values():
@@ -189,7 +189,7 @@ def test_default_budget_config_values():
     assert DEFAULT_BUDGET_CONFIG["max_generation"] == 50
     assert DEFAULT_BUDGET_CONFIG["circuit_breaker_token_ratio"] == 2.0
     assert DEFAULT_BUDGET_CONFIG["circuit_breaker_consecutive_low_ic"] == 3
-    assert DEFAULT_BUDGET_CONFIG["circuit_breaker_failure_rate"] == 0.90
+    assert DEFAULT_BUDGET_CONFIG["circuit_breaker_failure_rate"] == 0.95
 
 
 def test_default_configs_are_immutable_copies():

@@ -378,11 +378,15 @@ class TestCmdFactorList:
         assert "BROKEN" in captured.out
         assert "读取失败" in captured.out
 
-    def test_default_elite_dir_none(self, capsys):
+    def test_default_elite_dir_none(self, capsys, tmp_path):
         """elite_dir 为 None 时使用默认路径。"""
+        from unittest.mock import patch
+        fake_elite = tmp_path / "elite"
+        fake_elite.mkdir(parents=True)
         args = MagicMock(spec=[])
         args.elite_dir = None
-        rc = _cmd_factor_list(args)
+        with patch("fts.cli.Path", return_value=fake_elite):
+            rc = _cmd_factor_list(args)
         assert rc == 0
         captured = capsys.readouterr()
         # 默认路径存在但无 JSON 文件

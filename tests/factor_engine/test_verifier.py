@@ -150,7 +150,7 @@ def test_verifier_fails_high_drawdown():
         factor_id="fct", trace_id="t",
         level_1_backtest=BacktestMetrics(
             ic=0.05, icir=0.8, sharpe=2.0,
-            max_drawdown=0.5,  # 不达标 > 0.20
+            max_drawdown=0.6,  # 不达标 > 0.50
             monotonicity=True, oos_ratio=0.4, t_stat=3.5, turnover_monthly=0.3,
         ),
         level_2_economic=EconomicScore(

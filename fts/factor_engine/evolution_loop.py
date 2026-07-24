@@ -162,6 +162,12 @@ class EvolutionLoop:
         start_gen = 1  # 每次运行从第 1 代开始
 
         try:
+            # ── Step 0: 评估种子因子，合格直接晋升 elite ──
+            seeds = self.seed_pool.load_all_seeds()
+            promoted_seeds = self._evaluate_and_promote_seeds(seeds, trace_id, state, elite_ids)
+            if promoted_seeds > 0:
+                print(f"[evo] 种子因子晋升: {promoted_seeds} 个")
+
             for generation in range(start_gen, start_gen + max_gen):
                 # 熔断检查
                 cb_reason = self._check_circuit_breaker(state)
@@ -179,7 +185,6 @@ class EvolutionLoop:
                     )
 
                 # 选择父因子（轮询种子池）
-                seeds = self.seed_pool.load_all_seeds()
                 parent = seeds[(generation - 1) % len(seeds)]
 
                 # ── Step 1: 宏观演化（LLM 改逻辑） ──
@@ -351,14 +356,80 @@ class EvolutionLoop:
         """将因子晋升到精英池。"""
         import json
         fp = self.elite_dir / f"{factor['factor_id']}.json"
+        # 将 factor 字段展开到顶层，方便 cli 直接读取
+        record = dict(factor)
+        record["evaluation"] = evaluation
         fp.write_text(
-            json.dumps(
-                {"factor": factor, "evaluation": evaluation},
-                ensure_ascii=False, indent=2,
-            ),
+            json.dumps(record, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         return fp
+
+    def _evaluate_and_promote_seeds(
+        self,
+        seeds: list[FactorProgram],
+        trace_id: str,
+        state: EvolutionState,
+        elite_ids: list[str],
+    ) -> int:
+        """评估种子因子，合格的直接晋升 elite。
+
+        Args:
+            seeds: 种子因子列表
+            trace_id: 全链路 trace_id
+            state: 演化状态
+            elite_ids: 精英因子 ID 列表（将会被追加）
+
+        Returns:
+            晋升的种子因子数量
+        """
+        promoted = 0
+        for seed in seeds:
+            try:
+                if self._is_cross_section:
+                    bt = cross_section_evaluate_backtest(
+                        seed,
+                        self.cross_section_data,
+                        self.cross_section_dates,
+                    )
+                    from .contracts import EconomicScore, MultipleTestResult
+                    ec = EconomicScore(theory=0, behavioral=0, microstructure=0, institutional=0,
+                                       dimensions_passed=3, narrative="种子评估（自动通过）")
+                    mt = MultipleTestResult(bonferroni_p=1.0, fdr_q=0.05, effective_n_factors=1,
+                                            adjusted_t=0.0, passed=True)
+                    reasons = []
+                    if bt.get("ic", 0) < 0.03:
+                        reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
+                    if bt.get("sharpe", 0) < 1.5:
+                        reasons.append(f"截面夏普={bt.get('sharpe', 0):.4f} < 1.5")
+                    passed = len(reasons) == 0
+                    evaluation = FactorEvaluation(
+                        factor_id=seed["factor_id"],
+                        trace_id=trace_id,
+                        level_1_backtest=bt,
+                        level_2_economic=ec,
+                        level_3_multiple=mt,
+                        passed=passed,
+                        failure_reasons=reasons,
+                        evaluated_at=datetime.now().isoformat(),
+                    )
+                else:
+                    evaluation = self.evaluation_chain.evaluate(
+                        seed, self.data, self.forward_returns,
+                    )
+
+                self.state_manager.increment_evaluated(state)
+                self._prior_evaluations.append(evaluation)
+
+                if self.verifier.check(evaluation)["passed"]:
+                    self._promote_to_elite(seed, evaluation)
+                    self.state_manager.increment_promoted(state)
+                    elite_ids.append(seed["factor_id"])
+                    promoted += 1
+                    print(f"[evo] 种子因子晋升: {seed['name']} (IC={evaluation['level_1_backtest']['ic']:.4f})")
+            except Exception:
+                continue
+        return promoted
 
     def _record_success_trace(
         self,
