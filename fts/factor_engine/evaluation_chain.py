@@ -78,29 +78,25 @@ def _compute_max_drawdown(cumulative: np.ndarray) -> float:
 
 
 def _check_monotonicity(signal: np.ndarray, returns: np.ndarray, n_buckets: int = 10) -> bool:
-    """检查十分位组合收益率是否严格单调。
+    """检查因子信号的预测单调性（Spearman 秩相关 >= 0.5）。
 
-    Args:
-        signal: 因子信号
-        returns: 未来收益率
-        n_buckets: 分组数（默认 10）
-
-    Returns:
-        True 如果严格单调（升序或降序）
+    将信号分为 n_buckets 组，检查组序与组收益的 Spearman 秩相关。
+    相比严格单调性检查，更适合时序单标的场景。
     """
     if len(signal) < n_buckets * 10:
         return False
-    df = pd.DataFrame({"signal": signal, "return": returns})
-    df = df.dropna()
+    df = pd.DataFrame({"signal": signal, "return": returns}).dropna()
     if len(df) < n_buckets:
         return False
     df["bucket"] = pd.qcut(df["signal"], n_buckets, labels=False, duplicates="drop")
     bucket_returns = df.groupby("bucket")["return"].mean()
-    if len(bucket_returns) < n_buckets:
+    if len(bucket_returns) < 3:
         return False
-    # 严格单调递增或递减
-    diffs = np.diff(bucket_returns.values)
-    return bool(np.all(diffs > 0) or np.all(diffs < 0))
+    # Spearman 秩相关：桶序 vs 收益
+    corr, p_value = sp_stats.spearmanr(range(len(bucket_returns)), bucket_returns.values)
+    if np.isnan(corr):
+        return False
+    return bool(abs(corr) >= 0.5 and p_value < 0.05)
 
 
 def evaluate_backtest(
@@ -141,14 +137,12 @@ def evaluate_backtest(
         ic_in, _ = _compute_ic(in_sample_signal, in_sample_returns)
         icir = float(np.mean([ic_in, ic]) / max(np.std([ic_in, ic]), 1e-10))
 
-    # 信号分组构建多空组合收益
+    # 信号分组构建多空组合收益（时变信号）
     if len(oos_signal) > 0:
-        # 用信号 top 20% 做多，bottom 20% 做空
-        sorted_idx = np.argsort(oos_signal)
-        top_n = max(1, len(oos_signal) // 5)
-        long_ret = np.mean(oos_returns[sorted_idx[-top_n:]])
-        short_ret = np.mean(oos_returns[sorted_idx[:top_n]])
-        ls_returns = np.full(oos_n, long_ret - short_ret)
+        # 用信号分位数构建时变多空权重，非恒定收益
+        ranked = sp_stats.rankdata(oos_signal, method="average")
+        positions = 2.0 * (ranked / len(ranked)) - 1.0  # 归一化到 [-1, 1]
+        ls_returns = positions * oos_returns
     else:
         ls_returns = np.zeros(oos_n)
 

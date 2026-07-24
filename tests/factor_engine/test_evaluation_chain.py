@@ -284,11 +284,12 @@ class TestEvaluationChainCoverage:
         assert _check_monotonicity(signal, returns, n_buckets=10)
 
     def test_monotonicity_not_monotonic(self):
-        """非单调应返回 False。"""
+        """非单调（倒 V 型）应返回 False。"""
         from fts.factor_engine.evaluation_chain import _check_monotonicity
         n = 500
-        signal = np.random.randn(n)
-        returns = np.random.randn(n)
+        # 信号递增，收益先降后升（倒 V）：低信号/高信号→正收益，中信号→负收益
+        signal = np.linspace(-1, 1, n)
+        returns = np.concatenate([np.linspace(0.1, -0.1, n // 2), np.linspace(-0.1, 0.1, n - n // 2)])
         assert not _check_monotonicity(signal, returns)
 
     # ── evaluate_backtest 边缘 ──
