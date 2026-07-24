@@ -16,6 +16,14 @@ if (Test-Path $envFile) {
     Write-Host ".env file not found, using defaults" -ForegroundColor Yellow
 }
 
+# ── 将 fts.exe 所在目录加入 PATH（如果不在 PATH 中） ──
+$pythonScripts = python -c "import site; print(site.USER_SITE.replace('site-packages', 'Scripts'))" 2>$null
+if (-not $pythonScripts) { $pythonScripts = "$([System.IO.Path]::GetDirectoryName((Get-Command python).Source))\Scripts" }
+if ($pythonScripts -and (Test-Path "$pythonScripts\fts.exe") -and ($env:Path -notlike "*$pythonScripts*")) {
+    $env:Path = "$pythonScripts;$env:Path"
+    Write-Host "Added $pythonScripts to PATH" -ForegroundColor Cyan
+}
+
 # ── FTS 路径配置（覆盖 .env 中的相对路径） ──
 $env:FTS_CONFIG_FILE = "D:\Programs\factor_system\config\settings.yaml"
 $env:FTS_MEMORY_DIR = "D:\Programs\factor_system\memory"

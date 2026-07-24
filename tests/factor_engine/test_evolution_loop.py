@@ -869,8 +869,8 @@ class TestEvolutionLoopCoverage:
     def test_evolution_loop_failure_rate_circuit_breaker(
         self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
     ):
-        """失败率超过阈值应触发熔断。"""
-        from fts.factor_engine.contracts import BudgetConfig
+        """运行内高失败率应触发熔断。"""
+        from fts.factor_engine.contracts import BudgetConfig, BacktestMetrics, EconomicScore, MultipleTestResult, FactorEvaluation
 
         budget = BudgetConfig(
             nightly_token_limit=1_000_000,
@@ -890,13 +890,17 @@ class TestEvolutionLoopCoverage:
             budget=budget,
             n_trials_micro=2,
         )
-        # 预设状态：已有 10 次评估、0 次晋级 → 失败率 100%
-        state = loop.state_manager.load_or_init()
-        state["total_factors_evaluated"] = 10
-        state["total_factors_promoted"] = 0
-        loop.state_manager.save(state)
-
-        result = loop.run(max_generation=10)
+        # 让所有评估返回失败，累计 10 次后触发失败率熔断
+        loop.evaluation_chain.evaluate = MagicMock(
+            return_value=FactorEvaluation(
+                factor_id="fct_fail", trace_id="t",
+                level_1_backtest=BacktestMetrics(ic=0.0, sharpe=0.0, monotonicity=False),
+                level_2_economic=EconomicScore(dimensions_passed=0),
+                level_3_multiple=MultipleTestResult(passed=False),
+                passed=False, failure_reasons=["模拟失败"], evaluated_at="",
+            ),
+        )
+        result = loop.run(max_generation=15)
         assert result.status == "circuit_broken"
         assert "失败率" in (result.circuit_breaker_reason or "")
 
