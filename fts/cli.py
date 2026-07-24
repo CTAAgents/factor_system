@@ -219,11 +219,9 @@ def _cmd_meta_loop_run(args: argparse.Namespace) -> int:
     print(f"[meta-loop] LLM backend: {type(llm).__name__}")
 
     try:
-        # MetaLoop 需要 data_provider 参数、memory_dir 等
+        # MetaLoop
         loop = MetaLoop(
-            data_provider=_prepare_data,
             memory_dir=cfg.memory_dir + "/meta_loop",
-            elite_dir=cfg.elite_dir,
             llm_client=llm,
         )
         result = loop.run()
@@ -241,12 +239,8 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
     cfg = get_config()
     print(f"[portfolio] trace_id={trace_id} run_id={run_id}")
 
-    data_df, fwd_returns = _prepare_data(days=500)
-
     try:
         loop = PortfolioLoop(
-            data=data_df,
-            forward_returns=fwd_returns,
             elite_dir=cfg.elite_dir,
             memory_dir=cfg.memory_dir + "/portfolio",
         )
