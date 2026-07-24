@@ -1,7 +1,7 @@
 # FTS 测试策略
 
-> 版本: v0.3.0
-> 最后更新: 2026-07-18
+> 版本: v1.1.0
+> 最后更新: 2026-07-24
 
 ---
 
@@ -22,9 +22,10 @@
 
 | 层级 | 测试文件数 | 用例数 | 说明 |
 |:-----|:----------|:-------|:-----|
-| 单元测试 | 24 | ~969 | 各模块独立测试 |
+| 单元测试 | 27 | ~1038 | 各模块独立测试 |
 | 集成测试 | 2 | ~143 | strategies 策略层 |
-| E2E | 0 | 0 | 全流程端到端（待补充） |
+| E2E | 1 | 10 | test_e2e.py |
+| 合计 | 35 | 1181 | 全部通过 |
 
 ---
 
@@ -62,7 +63,7 @@ tests/
 │   ├── test_base.py                 # 管线基础测试
 │   └── test_factor_combiner.py      # 因子组合器测试
 │
-├── scheduler/                       # 2 个测试文件
+├── scheduler/                       # 4 个测试文件
 │   ├── __init__.py
 │   ├── test_engine.py               # 调度引擎测试
 │   └── test_tasks.py                # 调度任务测试
@@ -106,7 +107,7 @@ python -m pytest tests/factor_engine/test_verifier.py -v
 
 ---
 
-## 4. 覆盖统计（v0.3.0）
+## 覆盖统计（v1.1.0）
 
 ### 总体统计
 
@@ -114,7 +115,8 @@ python -m pytest tests/factor_engine/test_verifier.py -v
 |:-----|:---|
 | Total statements | 3438 |
 | Overall coverage | 96% |
-| 测试用例数 | 969 passed, 0 failed |
+| 测试用例数 | 1231 passed, 0 failed |
+| 种子因子数 | 9（移除 6 个期货专用因子） |
 
 ### 模块覆盖详情
 
@@ -227,7 +229,7 @@ TOTAL                                      3438    129    96%
 | `tests/factor_engine/test_monitor.py` | ~23 | 因子引擎监控 |
 | `tests/factor_engine/test_portfolio_loop.py` | ~42 | L3 组合循环 |
 | `tests/factor_engine/test_program.py` | ~16 | Program.md |
-| `tests/factor_engine/test_seed_pool.py` | ~10 | 种子池 |
+| `tests/factor_engine/test_seed_pool.py` | ~9 | 种子池 |
 | `tests/factor_engine/test_verifier.py` | ~12 | Verifier |
 | `tests/pipeline/test_base.py` | ~25 | 管线基础 |
 | `tests/pipeline/test_factor_combiner.py` | ~33 | 因子组合器 |
@@ -239,7 +241,7 @@ TOTAL                                      3438    129    96%
 | `tests/test_llm.py` | ~22 | LLM 客户端 |
 | `tests/test_monitor.py` | ~46 | 项目级监控 |
 | `tests/test_data.py` | ~68 | 数据层 |
-| **合计** | **969** | |
+| **合计** | **1231** | |
 
 ---
 

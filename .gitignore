@@ -27,6 +27,10 @@ Thumbs.db
 .venv/
 venv/
 
+# Runtime data
+data/
+memory/
+
 # Research / experimental
 brain_field_test.py
 check_alpha.py

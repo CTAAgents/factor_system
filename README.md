@@ -2,9 +2,9 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-969%20passing-brightgreen)](#)
-[![Coverage](https://img.shields.io/badge/coverage-96%25-brightgreen)](#)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-1181%20passing-brightgreen)](#)
+[![Coverage](https://img.shields.io/badge/coverage-92%25-brightgreen)](#)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue)](#)
 
 ---
 
@@ -16,7 +16,9 @@ FTS 是一个 AI 原生的量化因子智能系统，实现三层进化循环：
 - **L2 Evolution Loop** — 夜间因子自动演化（LLM 宏观改逻辑 + optuna 微观调参）
 - **L3 Portfolio Loop** — 组合构建与信号产出（正交化 + 衰减检验 + 加权融合）
 
-项目定位：**数据层（Data-Core）← FTS（因子智能）← 决策层（FDT）**
+项目定位：**MCP/akshare（腾讯/东方财富数据源）← FTS（因子智能 → 交易信号）**
+
+仅支持 A 股和 ETF 因子演化（期货因子已移除）。
 
 ## 快速开始
 
@@ -39,6 +41,9 @@ fts meta-loop run
 # L2 因子演化
 fts evolution run --max-generations 3
 
+# L2 横截面演化（沪深300）
+fts evolution run --universe csi300 --max-stocks 20
+
 # L3 组合构建
 fts portfolio run
 
@@ -55,9 +60,9 @@ fts scheduler list
 |-------|------|------|
 | `evolution` | optuna 贝叶斯调参 | `pip install -e ".[evolution]"` |
 | `llm` | LLM 客户端（openai/anthropic） | `pip install -e ".[llm]"` |
-| `data` | Data-Core 集成 | `pip install -e ".[data]"` |
+| `mcp` | MCP 数据源（akshare 腾讯/东方财富） | `pip install -e ".[mcp]"` |
 | `dev` | 开发工具（pytest/pytest-cov） | `pip install -e ".[dev]"` |
-| 全部 | 安装所有可选依赖 | `pip install -e ".[evolution,llm,data,dev]"` |
+| 全部 | 安装所有可选依赖 | `pip install -e ".[evolution,llm,mcp,dev]"` |
 
 ## 项目结构
 
@@ -69,20 +74,24 @@ fts/                          # 核心源码（~3,400 语句）
 ├── pipeline/                 # 因子推演管线
 ├── strategies/               # 策略层（base_v2 + multi_factor）
 ├── scheduler/                # 调度层（TaskRegistry + APScheduler 引擎）
-├── data.py                   # Data-Core 集成层
+├── data.py                   # 数据层（MCP 统一入口）
+├── data_mcp.py               # MCP 数据适配层（akshare 腾讯/东方财富）
 ├── llm.py                    # LLM 客户端统一接口（OpenAI/Anthropic/Mock）
 ├── cli.py                    # 统一命令行入口
-└── monitor.py                # 健康监控
+└── monitor/                  # 健康监控 + HTTP 端点
 
-tests/                        # 778 个测试，全部通过
-├── factor_engine/            # 因子引擎测试（13 文件）
+tests/                        # 35 个测试文件，1181 全部通过
+├── factor_engine/            # 因子引擎测试（16 文件）
 ├── pipeline/                 # 管线测试（2 文件）
-├── scheduler/                # 调度测试
+├── scheduler/                # 调度测试（4 文件）
 ├── strategies/               # 策略测试（2 文件）
-├── core/                     # 核心契约测试（2 文件）
+├── core/                     # 核心契约测试（3 文件）
 ├── test_cli.py               # CLI 集成测试
 ├── test_llm.py               # LLM 客户端测试
-└── test_monitor.py           # 监控测试
+├── test_elite_tracker.py     # EliteTracker 测试
+├── test_http_server.py       # HTTP 监控测试
+├── test_data.py              # 数据层测试
+└── test_e2e.py               # E2E 集成测试
 
 config/                       # 项目级配置文件
 ├── settings.yaml             # YAML 配置示例
@@ -97,11 +106,9 @@ memory/                       # 运行时持久化（自动创建）
     └── l1_injected/          # L1 注入因子
 docs/                         # 项目文档
 ├── production_plan.md        # 生产就绪实施计划
-├── archive/                  # 已完成/过时文档归档
-│   └── PLAN_v2.2.md          # 初始构建计划（已完成）
+├── CODE_WIKI.md              # 代码 Wiki
 └── harness/                  # HARNESS 工程文档（活文档）
     ├── 01-architecture.md    # 系统架构
-    ├── 02-lifecycle.md       # 开发生命周期
     ├── 06-testing.md         # 测试策略与覆盖率
     ├── 07-operations.md      # 版本管理与运维
     ├── 08-gap-analysis.md    # 差距管理
@@ -111,11 +118,11 @@ docs/                         # 项目文档
 ## 架构概览
 
 ```
-Data-Core（数据基础设施）
-    ↑ UnifiedDataProvider.get(symbol, DataType, params)
+MCP/akshare（腾讯自选股/东方财富 API）
+    ↓ OHLCV K 线数据
 FTS（因子智能系统）
-    ↑ SignalPayload + FactorCombo
-FDT（期货交易决策系统）
+    ↓ 交易信号
+下游消费系统
 ```
 
 ### 三层循环
@@ -126,26 +133,30 @@ FDT（期货交易决策系统）
 | L2 Evolution | 每日 23:00 | 因子演化（LLM 改逻辑 + optuna 调参）、三级评估链 |
 | L3 Portfolio | 每周一 06:00 | 组合构建、正交化、衰减检验、信号输出 |
 
+### 演化模式
+
+| 模式 | 命令 | 说明 |
+|------|------|------|
+| 单标演化 | `fts evolution run` | 单只股票的因子演化（默认 000001） |
+| 横截面演化 | `fts evolution run --universe csi300` | 沪深 300 成分股横截面因子演化 |
+
 ## 工程指标
 
 | 指标 | 值 |
 |------|:---:|
-| **版本** | v1.0.0 |
-| **测试通过数** | 1231 / 1231（100%）|
-| **测试覆盖率** | 96%（35 个模块 ≥90%）|
-| **代码行数** | ~3,400 语句 |
-| **文件数** | 77 个源码 + 测试文件 |
+| **版本** | v1.1.0 |
+| **测试通过数** | 1181 / 1181（100%）|
+| **测试覆盖率** | 92%（35 个模块）|
+| **代码行数** | ~4,300 语句 |
+| **文件数** | 79 个源码 + 测试文件 |
+| **种子因子数** | 9 个（A 股/通用因子） |
 
 ## 依赖关系
 
-- **Data-Core**（上游）：数据采集与加工（含 LLM 情绪打分），FTS 通过 `UnifiedDataProvider` 消费
-- **FDT**（下游）：消费 FTS 产出的因子信号进行交易决策
+- **MCP/akshare**（数据源）：腾讯自选股/东方财富 API，提供 A 股和 ETF 行情数据
 
 ## 许可证
 
 MIT License
 
 ## 相关项目
-
-- [Data-Core](https://github.com/CTAAgents/data-core) — 量化数据基础设施
-- [FDT](https://github.com/CTAAgents/FDT) — 期货交易决策系统

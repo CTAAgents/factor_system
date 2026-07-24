@@ -31,7 +31,7 @@
 4. **可选依赖**
    ```bash
    pip install -e .[llm]       # LLM 因子演化
-   pip install -e .[data]      # Data-Core 数据接入
+   pip install -e .[mcp]       # MCP 行情数据接入（腾讯自选股/东方财富）
    pip install watchdog         # 热重载开发模式
    pip install prometheus_client  # Prometheus 指标导出
    ```

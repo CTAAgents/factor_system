@@ -112,7 +112,7 @@ class TransactionCostModel:
             if market not in self._market_configs:
                 self._market_configs[market] = cfg
 
-    def get_cost_bps(self, market: str = "futures") -> CostConfig:
+    def get_cost_bps(self, market: str = "stock") -> CostConfig:
         """获取指定市场的成本配置。
 
         Args:

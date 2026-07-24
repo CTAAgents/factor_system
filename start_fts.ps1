@@ -1,19 +1,27 @@
 # FTS 启动脚本
-# 设置环境变量后启动 FTS CLI
+# 自动加载 .env 文件中的环境变量
 
-# ── LLM 配置（DeepSeek） ──
-$env:OPENAI_API_KEY = $env:FDT_LLM_API_KEY
-$env:OPENAI_BASE_URL = "https://api.deepseek.com/v1"
-$env:OPENAI_MODEL = "deepseek-v4-flash"
-$env:FTS_LLM_BACKEND = "openai"
+# ── 从 .env 文件加载 ──
+$envFile = Join-Path $PSScriptRoot ".env"
+if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+        if ($_ -match '^\s*([^#=]+)=(.*)\s*$') {
+            $name = $matches[1].Trim()
+            $value = $matches[2].Trim()
+            Set-Item -Path "env:$name" -Value $value
+        }
+    }
+    Write-Host "Loaded .env file" -ForegroundColor Green
+} else {
+    Write-Host ".env file not found, using defaults" -ForegroundColor Yellow
+}
 
-# ── FTS 配置 ──
+# ── FTS 路径配置（覆盖 .env 中的相对路径） ──
 $env:FTS_CONFIG_FILE = "D:\Programs\factor_system\config\settings.yaml"
-$env:FTS_LOG_LEVEL = "INFO"
 $env:FTS_MEMORY_DIR = "D:\Programs\factor_system\memory"
 
 Write-Host "=== FTS Environment Ready ===" -ForegroundColor Green
-Write-Host "LLM: DeepSeek ($($env:OPENAI_MODEL))" -ForegroundColor Cyan
+Write-Host "LLM: $($env:OPENAI_MODEL) @ $($env:OPENAI_BASE_URL)" -ForegroundColor Cyan
 Write-Host "Config: $($env:FTS_CONFIG_FILE)" -ForegroundColor Cyan
 Write-Host "Memory: $($env:FTS_MEMORY_DIR)" -ForegroundColor Cyan
 Write-Host ""

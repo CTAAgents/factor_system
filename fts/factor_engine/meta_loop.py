@@ -512,32 +512,30 @@ def factor_program(data, params):
         },
         {
             "name": "oi_price_divergence",
-            "parent_topic": "oi_change 衍生 + 量价背离",
+            "parent_topic": "量价背离因子",
             "code": """
 def factor_program(data, params):
     import numpy as np
-    if 'open_interest' not in (data.columns if hasattr(data, 'columns') else data):
-        return np.zeros(len(data['close']))
-    oi = data['open_interest'].values if hasattr(data, 'open_interest') else data['open_interest']
     close = data['close'].values if hasattr(data, 'close') else data['close']
+    volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
     window = int(params.get('window', 5))
     n = len(close)
     if n < window + 1:
         return np.zeros(n)
-    oi_chg = np.zeros(n)
-    oi_chg[1:] = (oi[1:] - oi[:-1]) / np.maximum(oi[:-1], 1e-10)
+    vol_chg = np.zeros(n)
+    vol_chg[1:] = (volume[1:] - volume[:-1]) / np.maximum(volume[:-1], 1e-10)
     px_chg = np.zeros(n)
     px_chg[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
-    # 量价背离: OI 增但价跌 → 偏空；OI 减但价涨 → 偏多
+    # 量价背离: 放量但价跌 → 偏空；缩量但价涨 → 偏多
     divergence = np.where(
-        (oi_chg > 0.02) & (px_chg < -0.005), -0.5,
-        np.where((oi_chg < -0.02) & (px_chg > 0.005), 0.5, 0)
+        (vol_chg > 0.3) & (px_chg < -0.005), -0.5,
+        np.where((vol_chg < -0.3) & (px_chg > 0.005), 0.5, 0)
     )
     return np.clip(divergence, -1.0, 1.0)
 """,
             "params": {"window": 5},
             "signature": FactorSignature(
-                input_fields=["close", "open_interest"],
+                input_fields=["close", "volume"],
                 output_type="signal",
                 frequency="daily",
                 lookback=10,

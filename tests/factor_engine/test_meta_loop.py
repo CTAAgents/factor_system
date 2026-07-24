@@ -809,18 +809,18 @@ class TestBootstrappingChain:
         assert "news_sentiment_proxy" in candidate_names
 
     def test_bootstrap_with_debate_gap_match(self):
-        """debate_gap 匹配模板 parent_topic 时关联参考信息（lines 724-726）。"""
+        """debate_gap 匹配模板 parent_topic 时关联参考信息。"""
         chain = BootstrappingChain(llm_client=None)
         candidates = chain.bootstrap(
             market_snapshot={},
-            debate_gaps=[{"gap": "oi_change", "debate_round": 3}],
+            debate_gaps=[{"gap": "volatility_reversion", "debate_round": 3}],
             max_candidates=1,
             seed_pool=SeedPool(),
             trace_id="test_trace",
         )
         assert len(candidates) == 1
-        # oi_price_divergence 的 parent_topic 包含 "oi_change"
-        assert candidates[0]["debate_gap"] == "oi_change"
+        # volatility_reversion 衍生 的 parent_topic 包含 "volatility_reversion"
+        assert candidates[0]["debate_gap"] == "volatility_reversion"
         assert candidates[0]["debate_round_ref"] == 3
 
 

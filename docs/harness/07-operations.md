@@ -1,7 +1,7 @@
 # FTS 运维与版本管理
 
-> 版本: v0.2.0
-> 最后更新: 2026-07-18
+> 版本: v1.1.0
+> 最后更新: 2026-07-24
 
 ---
 
@@ -10,6 +10,7 @@
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
 | **v0.1.0** | 2026-07-18 | 从 FDT 剥离，完成 Phase 1-7，220 测试全绿 |
+| **v1.1.0** | 2026-07-24 | MCP 数据源迁移：Data-Core → akshare(腾讯/东方财富)；移除 6 个期货专用种子因子；CLI 移除 `--universe futures`；默认市场改为 stock；1231 测试全绿 |
 | **v1.0.0** | 2026-07-19 | 本地原生部署：进程守护/热重载/HTTP 监控/Windows 服务/CI/CD/E2E 测试/部署文档、1231 测试全绿 |
 | **v0.4.0** | 2026-07-19 | EliteFactorTracker、AutoRetireManager、WalkForwardOptimizer、EvaluationChain 走航集成、1104 测试全绿 |
 | **v0.3.0** | 2026-07-19 | Data-Core 集成适配、FDT 残留清除、覆盖率提升至 96%、969 测试全绿、原子持久化 |
@@ -39,9 +40,9 @@ pip install .
 # 带可选依赖
 pip install .[evolution]    # 带 optuna 演化支持
 pip install .[llm]          # 带 LLM 支持
-pip install .[data]         # 带 Data-Core 数据支持
+pip install .[mcp]         # 带 MCP 数据支持（akshare 腾讯/东方财富）
 pip install .[dev]          # 带开发工具（pytest）
-pip install .[evolution,llm,data,dev]  # 全部
+pip install .[evolution,llm,mcp,dev]  # 全部
 ```
 
 ### 核心依赖

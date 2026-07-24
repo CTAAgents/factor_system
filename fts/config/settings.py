@@ -36,7 +36,7 @@ class FTSConfig:
 
     # ── 数据配置 ──
     default_market: str = field(
-        default_factory=lambda: os.getenv("FTS_DEFAULT_MARKET", "futures")
+        default_factory=lambda: os.getenv("FTS_DEFAULT_MARKET", "stock")
     )
 
     # ── LLM 配置 ──

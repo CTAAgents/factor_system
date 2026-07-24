@@ -24,11 +24,11 @@ class FactorSignature(TypedDict, total=False):
     """因子程序的输入/输出签名。
 
     约束:
-        - input_fields 必须包含 'close' 或 'settle' 之一
+        - input_fields 必须包含 'close'
         - output_type 必须是 'signal'（-1~+1）或 'score'（任意 float）
         - frequency 必须是 'daily' / 'hourly' / 'minute'
     """
-    input_fields: list[str]       # 必需字段，如 ["close", "volume", "open_interest"]
+    input_fields: list[str]       # 必需字段，如 ["close", "volume"]
     output_type: Literal["signal", "score"]
     frequency: Literal["daily", "hourly", "minute"]
     lookback: int                 # 最小回看窗口

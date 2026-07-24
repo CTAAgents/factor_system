@@ -8,16 +8,16 @@ from fts.factor_engine.contracts import FactorProgram
 from fts.factor_engine.seed_pool import SeedPool, get_default_seed_pool
 
 
-def test_seed_pool_loads_12_seeds():
-    """种子池必须包含 15 个种子因子（12 个通用 + 3 个 A 股）。"""
+def test_seed_pool_loads_9_seeds():
+    """种子池必须包含 9 个种子因子（通用 + A 股）。"""
     pool = SeedPool()
     seeds = pool.load_all_seeds()
-    assert len(seeds) == 15
+    assert len(seeds) == 9
 
 
 def test_seed_pool_count():
     pool = SeedPool()
-    assert pool.count() == 15
+    assert pool.count() == 9
 
 
 def test_seed_pool_list_names():
@@ -25,9 +25,8 @@ def test_seed_pool_list_names():
     pool = SeedPool()
     names = pool.list_names()
     expected = {
-        "momentum", "volatility_reversion", "volume_flow", "oi_change",
-        "basis", "inventory_pct", "capacity", "macro_regime",
-        "rate_proxy", "pmi_proxy", "position_rank", "warrant_change",
+        "momentum", "volatility_reversion", "volume_flow",
+        "macro_regime", "rate_proxy", "pmi_proxy",
         "value_factor", "quality_factor", "size_factor",
     }
     assert set(names) == expected
@@ -97,5 +96,5 @@ def test_default_seed_pool_singleton():
     p1 = get_default_seed_pool()
     p2 = get_default_seed_pool()
     # 默认实现是新建实例
-    assert p1.count() == 15
-    assert p2.count() == 15
+    assert p1.count() == 9
+    assert p2.count() == 9

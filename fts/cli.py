@@ -58,16 +58,17 @@ from .scheduler import (
 
 
 def _prepare_data(symbol: str = "000001", days: int = 500) -> tuple[pd.DataFrame, np.ndarray]:
-    """准备演化所需数据（生产: Data-Core | 回退: 合成数据）。"""
+    """准备演化所需数据（腾讯 API 优先 → 合成数据降级）。
+
+    Args:
+        symbol: 股票/ETF 代码
+        days: 回溯天数
+
+    Returns:
+        (OHLCV DataFrame, forward_returns np.ndarray)
+    """
     provider = FTSDataProvider()
-    df = provider.synthesize_ohlcv(n_days=days, base_price=15.0, seed=42)  # A股默认基价15元
-    # 先尝试 Data-Core，失败则使用合成数据
-    try:
-        dc_df = provider.get_ohlcv(symbol, days=days)
-        if dc_df is not None and not dc_df.empty and "close" in dc_df.columns:
-            df = dc_df
-    except Exception:  # noqa: BLE001
-        pass
+    df = provider.get_ohlcv(symbol, days=days)
 
     forward_returns = np.zeros(len(df))
     closes = df["close"].values
@@ -81,10 +82,10 @@ def _prepare_cross_section_data(
     days: int = 500,
     max_stocks: int = 50,
 ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex, np.ndarray]:
-    """准备横截面演化所需的多标的面板数据。
+    """准备横截面演化所需的沪深300成分股面板数据。
 
     Args:
-        universe: "csi300"（股票）或 "futures"（期货）
+        universe: "csi300"（沪深300成分股）
         days: 回溯天数
         max_stocks: 最大标的数量
 
@@ -92,10 +93,7 @@ def _prepare_cross_section_data(
         (panel, common_dates, forward_returns — 使用第一个标的作为微参参考)
     """
     provider = FTSDataProvider()
-    if universe == "futures":
-        panel, common_dates = provider.get_futures_panel(days=days, max_symbols=max_stocks)
-    else:
-        panel, common_dates = provider.get_csi300_panel(days=days, max_stocks=max_stocks)
+    panel, common_dates = provider.get_csi300_panel(days=days, max_stocks=max_stocks)
 
     first_sym = list(panel.keys())[0]
     first_df = panel[first_sym]
@@ -138,8 +136,8 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
     print(f"[evolution] trace_id={trace_id} run_id={run_id}")
     print(f"[evolution] max_generations={args.max_generations}")
 
-    if args.universe in ("csi300", "futures"):
-        # ── 横截面模式（沪深300成分股 / 期货品种） ──
+    if args.universe == "csi300":
+        # ── 横截面模式（沪深300成分股） ──
         print(f"[evolution] universe={args.universe} (max_stocks={args.max_stocks})")
         panel, common_dates, fwd_ret = _prepare_cross_section_data(
             universe=args.universe, days=500, max_stocks=args.max_stocks,
@@ -351,8 +349,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_evo_run.add_argument("--symbol", type=str, default="000001",
                            help="演化目标品种代码（默认 000001 平安银行）")
     p_evo_run.add_argument("--universe", type=str, default="single",
-                           choices=["single", "csi300", "futures"],
-                           help="演化股票池类型: single（单标）/ csi300（沪深300横截面）/ futures（期货横截面）")
+                           choices=["single", "csi300"],
+                           help="演化股票池类型: single（单标）/ csi300（沪深300横截面）")
     p_evo_run.add_argument("--max-stocks", type=int, default=50,
                            help="横截面模式最大标的数（默认 50，0 = 使用全部品种）")
     p_evo_run.set_defaults(func=_cmd_evolution_run)
