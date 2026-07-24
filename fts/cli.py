@@ -47,6 +47,7 @@ from .factor_engine import (
 )
 from .llm import MockLLMClient
 from .monitor import (
+    FTSDashboardServer,
     check_all_status,
     format_status_report,
     status_report_to_json,
@@ -254,6 +255,25 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
         return 2
 
 
+def _cmd_ui(args: argparse.Namespace) -> int:
+    """启动 Web UI 仪表盘。"""
+    try:
+        server = FTSDashboardServer(host=args.host, port=args.port)
+        server.start()
+        # 保持主线程运行
+        import time as _time
+        try:
+            while True:
+                _time.sleep(1)
+        except KeyboardInterrupt:
+            print("[ui] 正在关闭...")
+            server.stop()
+        return 0
+    except Exception as e:  # noqa: BLE001
+        print(f"[ui] 启动失败: {e}", file=sys.stderr)
+        return 2
+
+
 def _cmd_scheduler_run(_args: argparse.Namespace) -> int:
     """启动调度器后台运行。"""
     engine = SchedulerEngine()
@@ -360,6 +380,12 @@ def build_parser() -> argparse.ArgumentParser:
     port_sub = p_port.add_subparsers(dest="subcommand", required=False)
     p_port_run = port_sub.add_parser("run", help="启动 L3 组合构建")
     p_port_run.set_defaults(func=_cmd_portfolio_run)
+
+    # ui
+    p_ui = sub.add_parser("ui", help="启动 Web UI 仪表盘")
+    p_ui.add_argument("--host", type=str, default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
+    p_ui.add_argument("--port", type=int, default=9100, help="监听端口（默认 9100）")
+    p_ui.set_defaults(func=_cmd_ui)
 
     # scheduler
     p_sched = sub.add_parser("scheduler", help="任务调度器")

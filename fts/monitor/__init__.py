@@ -33,6 +33,7 @@ from .elite_tracker import (
     EliteFactorTracker,
     TrackingSnapshot,
 )
+from .http_server import FTSDashboardServer
 
 
 # ─── 监控数据契约 ─────────────────────────────────────────
@@ -210,6 +211,8 @@ __all__ = [
     "check_all_status",
     "format_status_report",
     "status_report_to_json",
+    # Web UI
+    "FTSDashboardServer",
     # 因子跟踪
     "TrackingSnapshot",
     "EliteFactorTracker",
