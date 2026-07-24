@@ -149,12 +149,16 @@ class EvolutionLoop:
         """
         trace_id = generate_trace_id("l2")
         state = self.state_manager.load_or_init(self.budget["nightly_token_limit"])
+        # 每次新运行重置统计，避免前次熔断的累计计数阻塞新运行
+        state["last_generation"] = 0
+        state["total_factors_evaluated"] = 0
+        state["total_factors_promoted"] = 0
         state = self.state_manager.mark_running()
         run_id = state["run_id"]
 
         max_gen = max_generation or self.budget["max_generation"]
         elite_ids: list[str] = []
-        start_gen = state.get("last_generation", 0) + 1
+        start_gen = 1  # 每次运行从第 1 代开始
 
         try:
             for generation in range(start_gen, start_gen + max_gen):

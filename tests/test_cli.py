@@ -228,7 +228,7 @@ class TestMain:
         """meta-loop run 打印 trace_id 和 run_id。"""
         mock_loop = mock_metal.return_value
         mock_loop.run.return_value = MagicMock(
-            status="completed", injected=[],
+            status="completed", injected_candidate_ids=[],
         )
         rc = main(["meta-loop", "run"])
         assert rc == 0
@@ -246,8 +246,8 @@ class TestMain:
         """portfolio run 打印 trace_id 和 run_id。"""
         mock_loop = mock_port.return_value
         mock_loop.run.return_value = MagicMock(
-            status="completed", factor_ids=[],
-            combined_sharpe=0.0,
+            status="completed", n_factors_retained=0,
+            combo_sharpe=0.0,
         )
         rc = main(["portfolio", "run"])
         assert rc == 0

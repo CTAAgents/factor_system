@@ -225,7 +225,7 @@ def _cmd_meta_loop_run(args: argparse.Namespace) -> int:
             llm_client=llm,
         )
         result = loop.run()
-        print(f"[meta-loop] 完成: status={result.status} injected={len(result.injected)}")
+        print(f"[meta-loop] 完成: status={result.status} injected={len(result.injected_candidate_ids)}")
         return 0
     except Exception as e:  # noqa: BLE001
         print(f"[meta-loop] 运行失败: {e}", file=sys.stderr)
@@ -246,8 +246,8 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
         )
         result = loop.run()
         print(f"[portfolio] 完成: status={result.status} "
-              f"factors={len(result.factor_ids)} "
-              f"sharpe={result.combined_sharpe:.4f}")
+              f"factors={result.n_factors_retained} "
+              f"sharpe={result.combo_sharpe:.4f}")
         return 0
     except Exception as e:  # noqa: BLE001
         print(f"[portfolio] 运行失败: {e}", file=sys.stderr)
