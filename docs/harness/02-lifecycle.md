@@ -67,7 +67,7 @@ FTS 包含两个版本号，修改时必须同步：
 | `fts/__init__.py` | FTS 项目版本 | `"0.1.0"` |
 | `pyproject.toml` | 包版本 | `"0.1.0"` |
 
-`fts.factor_engine.__init__.py` 中的 `EVOLUTION_VERSION` 为因子引擎内部版本号（v8.10.0），继承自 FDT，与 FTS 项目版本独立。
+`fts.factor_engine.__init__.py` 中的 `EVOLUTION_VERSION` 为因子引擎内部版本号（v1.1.0），与 FTS 项目版本同步。
 
 ---
 

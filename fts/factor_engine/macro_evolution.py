@@ -9,7 +9,7 @@ factorengine 核心约束（三层分离）：
     每次调用必须读取经验链摘要
     新因子变异必须显式说明"避免重复踩坑"的依据
 
-版本: v0.1.0（从 FDT v8.10.0 剥离，LLM 客户端改用 fts.llm）
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=too-few-public-methods,fixme
 

@@ -16,7 +16,7 @@ HARNESS §11-loop-engineering.md §15:
     - 失败率 > 95% → circuit_broken
     - 连续 5 次低质量候选 → circuit_broken
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=too-many-lines,import-outside-toplevel,broad-exception-caught,too-few-public-methods,too-many-instance-attributes,too-many-arguments,too-many-locals,too-many-positional-arguments
 
@@ -474,7 +474,7 @@ class BootstrappingChain:
         - 验证Agent (ValidateAgent) — 经济逻辑评分
         - 代码生成Agent (CodeGenAgent) — 生成可执行因子代码
 
-    Phase 2 v8.10.0 提供 Mock 实现，用于验证流程闭环。
+    Phase 2 v1.1.0 提供 Mock 实现，用于验证流程闭环。
     LLM 客户端可通过 llm_client 参数注入。
     """
 

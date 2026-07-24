@@ -8,7 +8,7 @@ v2 策略可插拔框架 — 策略层插拔化重构核心。
 v2 策略可经过 Adapter 桥接到 v1 的 score() 接口（扫盘兼容），
 但推荐经 StrategyPipeline 直接在 v2 框架内运行。
 
-版本: v0.1.0（从 FDT v8.10.0 剥离，保持原 API 不变）
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=too-many-instance-attributes,too-many-arguments,protected-access
 

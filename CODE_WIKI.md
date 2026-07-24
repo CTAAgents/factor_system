@@ -1,7 +1,7 @@
 # FTS — Factor Intelligence System Code Wiki
 
 > **项目路径**: `d:\Programs\factor_system`
-> **版本**: v1.0.0 (factor_engine EVOLUTION_VERSION 8.10.0)
+> **版本**: v1.0.0 (factor_engine EVOLUTION_VERSION 1.1.0)
 > **Python**: >=3.10
 > **代码规模**: ~3,438 语句, 77 个源码+测试文件, 1,231 测试通过, 96% 覆盖率
 > **入口点**: `fts = "fts.cli:main"`
@@ -135,7 +135,7 @@ d:\Programs\factor_system\
 │   │   ├── contracts.py           # 91 LOC — 从 factor_engine.contracts 重导出
 │   │   └── enums.py               # enums — EvolutionStage / FactorPriority / FactorStatus
 │   ├── factor_engine/             # 核心引擎模块 (19 个文件, 最大模块)
-│   │   ├── __init__.py            # v8.10.0, 所有子模块重导出
+│   │   ├── __init__.py            # v1.1.0, 所有子模块重导出
 │   │   ├── contracts.py           # 560 LOC — 所有 TypedDict 契约 (L1+L2+L3)
 │   │   ├── evolution_loop.py      # L2 主循环编排器 (490+ LOC)
 │   │   ├── meta_loop.py           # L1 Meta-Loop (500+ LOC)
@@ -1147,7 +1147,7 @@ portfolio_max_factors: 20
   "last_error": null,
   "experience_chain_ref": ["ftr_...", "ftr_..."],
   "last_updated": "2026-07-24T12:30:00",
-  "version": "8.10.0"
+  "version": "1.1.0"
 }
 ```
 

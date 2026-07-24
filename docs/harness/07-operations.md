@@ -25,7 +25,7 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 | `fts/__init__.py` | `__version__ = "1.0.0"` |
 | `pyproject.toml` | `version = "1.0.0"` |
 
-异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v8.10.0），继承自 FDT，与 FTS 项目版本号独立管理。
+异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v1.1.0），与 FTS 项目版本同步。
 
 ---
 
@@ -124,7 +124,7 @@ python -m fts.cli monitor
 === FTS System Status ===
 Overall healthy : YES
 Checked at      : 2026-07-18T10:30:00
-FTS version     : 8.10.0
+FTS version     : 1.1.0
 Circuit broken  : NO
 Stale (>24h)    : NO
 Tokens today    : 0

@@ -10,7 +10,7 @@ HARNESS §11-loop-engineering.md §6:
     2. check() 严格按 VerifierConfig 判定，不接受任何 override
     3. 判定结果含 checked_against 快照，可审计
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=too-many-branches
 
@@ -168,13 +168,13 @@ class FactorVerifier:
         )
 
 
-# ─── 全局单例（v8.10.0 锁定值） ────────────────────────────
+# ─── 全局单例（v1.1.0 锁定值） ────────────────────────────
 
 _GLOBAL_VERIFIER: FactorVerifier | None = None
 
 
 def get_global_verifier() -> FactorVerifier:
-    """获取全局 Verifier 单例 — v8.10.0 锁定值。
+    """获取全局 Verifier 单例 — v1.1.0 锁定值。
 
     使用 DEFAULT_VERIFIER_CONFIG，全局共享一个实例。
     """

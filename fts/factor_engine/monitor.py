@@ -7,7 +7,7 @@ loop_engine/monitor.py — Loop Engineering 监控状态查询
     python -m loop_engine.monitor status          # 查看全部状态
     python -m loop_engine.monitor status --json   # JSON 格式输出
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=too-many-instance-attributes
 

@@ -9,7 +9,7 @@ fts.strategies — FTS 策略层。
     - multi_factor_strategy: 四维因子加权打分策略
     - rules: 策略规则知识库（占位，待填充）
 
-版本: v0.1.0（从 FDT v8.10.0 剥离）
+版本: v1.1.0（与 FTS 同步）
 """
 
 from .base_v2 import (

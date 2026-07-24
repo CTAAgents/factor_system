@@ -7,7 +7,7 @@ HARNESS §11-loop-engineering.md §4:
     Level 3 — 多重检验（FDR + Bonferroni）
     WalkForward — 可选走航模式（多窗口样本外稳定性验证）
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=too-many-locals,too-few-public-methods
 

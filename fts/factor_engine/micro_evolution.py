@@ -5,7 +5,7 @@ factorengine 核心约束（三层分离）：
     LLM 只管逻辑，CPU 只管参数。
     微观演化 = 贝叶斯优化参数空间，连续 20 次无提升跳出。
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=import-outside-toplevel,broad-exception-caught,too-many-arguments,too-many-positional-arguments,too-many-locals
 

@@ -22,7 +22,7 @@
   context.extra: {"oi_data": ..., "basis_data": ...} 来自 Data-Core UnifiedDataProvider 注入
   context.macro_signal: 宏观制度方向（bull/bear/neutral）
 
-版本: v0.1.0（从 FDT v8.10.0 剥离，保持原 API 不变）
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=too-many-locals
 

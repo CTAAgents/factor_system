@@ -115,7 +115,7 @@ fts/
 │   ├── atomic.py               # 原子文件操作
 │   └── enums.py                # 枚举定义
 ├── factor_engine/              # 因子引擎（核心模块）
-│   ├── __init__.py             # 模块入口 + 版本号 v8.10.0
+│   ├── __init__.py             # 模块入口 + 版本号 v1.1.0
 │   ├── contracts.py            # 完整 TypedDict 契约（L1+L2+L3）
 │   ├── evolution_loop.py       # L2 主循环
 │   ├── meta_loop.py            # L1 元循环

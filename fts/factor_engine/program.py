@@ -9,7 +9,7 @@ program.md 是 L0 的"唯一人类输入接口"：
     - 解析器自动提取所有配置字段
     - 熔断恢复后必须人类确认 program.md 中的配置
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=too-many-instance-attributes,too-many-locals,too-many-branches,too-many-statements
 

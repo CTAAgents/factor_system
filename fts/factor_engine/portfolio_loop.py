@@ -17,7 +17,7 @@ Verifier:
     - 组合换手率 < 50%/月
     - 衰减率 < 30%
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=broad-exception-caught,too-few-public-methods,too-many-instance-attributes,too-many-locals
 

@@ -18,7 +18,7 @@ factorengine 核心约束：
     - 失败轨迹的 failure_reasons 必须结构化（不能为空字符串）
     - LLM 每次必须读取最近 20 条（成功 10 + 失败 10）
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 

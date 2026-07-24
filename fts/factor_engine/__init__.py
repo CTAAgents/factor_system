@@ -18,7 +18,7 @@ fts.factor_engine — 因子引擎（L1 Meta-Loop + L2 Evolution Loop + L3 Portf
     - meta_loop: L1 主循环（每日知识补给 + Bootstrapping + debate_round 分析）
     - portfolio_loop: L3 主循环（组合构建 + 正交化 + 衰减检验 + 信号产出）
 
-版本: v0.1.0（从 FDT v8.10.0 剥离）
+版本: v1.1.0（与 FTS 项目版本同步）
 """
 
 from .contracts import (
@@ -37,7 +37,7 @@ from .contracts import (
     EVOLUTION_VERSION,
     DEFAULT_VERIFIER_CONFIG,
     DEFAULT_BUDGET_CONFIG,
-    # L1 契约（Phase 2 v8.10.0）
+    # L1 契约（Phase 2 v1.1.0 同步）
     L1BootstrappingSource,
     MetaLoopStatus,
     SeedCandidate,
@@ -120,7 +120,7 @@ from .monitor import (
     check_all,
 )
 
-__version__ = "8.10.0"
+__version__ = "1.1.0"
 __all__ = [
     # 版本
     "EVOLUTION_VERSION",
@@ -173,7 +173,7 @@ __all__ = [
     # L2 主循环
     "EvolutionLoop",
     "EvolutionRunResult",
-    # ─── L1 Meta-Loop（Phase 2 v8.10.0）─────────────────
+    # ─── L1 Meta-Loop（Phase 2 v1.1.0 同步）─────────────────
     "L1BootstrappingSource",
     "MetaLoopStatus",
     "SeedCandidate",
@@ -196,7 +196,7 @@ __all__ = [
     "BootstrappingChain",
     "MetaLoop",
     "MetaRunResult",
-    # ─── L3 Portfolio Loop（Phase 3 v8.10.0）────────────────
+    # ─── L3 Portfolio Loop（Phase 3 v1.1.0 同步）────────────────
     "L3Error",
     "L3Verifier",
     "PortfolioStateManager",

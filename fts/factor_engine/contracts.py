@@ -4,7 +4,7 @@ loop_engine/contracts.py — L2 演化引擎契约层
 HARNESS §契约优先：所有模块必须基于本文件的 TypedDict/常量实现。
 任何字段变更必须 bump 版本号并更新 docs/harness/11-loop-engineering.md。
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 项目版本同步）
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from typing import Any, Literal, Optional, TypedDict
 
 # ─── 版本号（HARNESS §版本号纪律）─────────────────────────
 
-EVOLUTION_VERSION: str = "8.10.0"
-"""Loop Engine 版本号，与 FDT 主版本同步（v8.10.0 = Phase 2 L1 Meta-Loop 落地）。"""
+EVOLUTION_VERSION: str = "1.1.0"
+"""Loop Engine 版本号，与 FTS 项目版本同步。"""
 
 
 # ─── 因子程序契约 ─────────────────────────────────────────
@@ -216,7 +216,7 @@ DEFAULT_VERIFIER_CONFIG: VerifierConfig = VerifierConfig(
     min_oos_ratio=0.30,
     max_turnover_monthly=0.50,
 )
-"""v8.10.0 锁定的 Verifier 默认配置 — 不可在运行时修改。"""
+"""v1.1.0 锁定的 Verifier 默认配置 — 不可在运行时修改。"""
 
 
 DEFAULT_BUDGET_CONFIG: BudgetConfig = BudgetConfig(
@@ -229,7 +229,7 @@ DEFAULT_BUDGET_CONFIG: BudgetConfig = BudgetConfig(
     circuit_breaker_low_ic_threshold=0.01,
     circuit_breaker_failure_rate=0.90,
 )
-"""v8.10.0 默认预算配置 — 熔断触发后必须人类介入恢复。"""
+"""v1.1.0 默认预算配置 — 熔断触发后必须人类介入恢复。"""
 
 
 # ─── 演化来源标签 ─────────────────────────────────────────
@@ -240,7 +240,7 @@ EvolutionStatus = Literal["running", "paused", "completed", "circuit_broken"]
 
 
 # ══════════════════════════════════════════════════════════
-# L1 Meta-Loop 契约（Phase 2 — v8.10.0 新增）
+# ─── L1 Meta-Loop 契约（Phase 2 — v1.1.0 新增，后与 FTS 同步）
 # ══════════════════════════════════════════════════════════
 
 L1BootstrappingSource = Literal[
@@ -386,7 +386,7 @@ DEFAULT_L1_VERIFIER_CONFIG: L1VerifierConfig = L1VerifierConfig(
     require_not_duplicate=True,
     min_narrative_length=20,
 )
-"""v8.10.0 锁定的 L1 Verifier 默认配置 — 不可在运行时修改。"""
+"""v1.1.0 锁定的 L1 Verifier 默认配置 — 不可在运行时修改。"""
 
 DEFAULT_L1_BUDGET_CONFIG: L1BudgetConfig = L1BudgetConfig(
     daily_token_limit=50_000,
@@ -397,11 +397,11 @@ DEFAULT_L1_BUDGET_CONFIG: L1BudgetConfig = L1BudgetConfig(
     circuit_breaker_failure_rate=0.95,
     circuit_breaker_consecutive_low_quality=5,
 )
-"""v8.10.0 默认 L1 预算配置 — 熔断触发后必须人类介入恢复。"""
+"""v1.1.0 默认 L1 预算配置 — 熔断触发后必须人类介入恢复。"""
 
 
 # ══════════════════════════════════════════════════════════
-# L3 Portfolio Loop 契约（Phase 3 — v8.10.0 新增）
+# L3 Portfolio Loop 契约（Phase 3 — v1.1.0 同步）
 # ══════════════════════════════════════════════════════════
 
 class FactorCorrelation(TypedDict, total=False):
@@ -502,7 +502,7 @@ DEFAULT_L3_VERIFIER_CONFIG: L3VerifierConfig = L3VerifierConfig(
     max_decay_rate=0.30,
     min_n_factors=3,
 )
-"""v8.10.0 锁定的 L3 Verifier 默认配置 — 不可在运行时修改。"""
+"""v1.1.0 锁定的 L3 Verifier 默认配置 — 不可在运行时修改。"""
 
 DEFAULT_L3_BUDGET = 100_000
 """L3 每周 token 预算 100K。"""
@@ -536,7 +536,7 @@ __all__ = [
     "FactorSource",
     "MutationType",
     "EvolutionStatus",
-    # ─── L1 Meta-Loop（Phase 2 v8.10.0 新增）─────────────
+# ─── L1 Meta-Loop（Phase 2 v1.1.0 同步）─────────────
     "L1BootstrappingSource",
     "MetaLoopStatus",
     "SeedCandidate",
@@ -548,7 +548,7 @@ __all__ = [
     "L1BudgetConfig",
     "DEFAULT_L1_VERIFIER_CONFIG",
     "DEFAULT_L1_BUDGET_CONFIG",
-    # ─── L3 Portfolio Loop（Phase 3 v8.10.0 新增）────────
+    # ─── L3 Portfolio Loop（Phase 3 v1.1.0 同步）────────
     "FactorCorrelation",
     "PortfolioSignal",
     "PortfolioCombo",

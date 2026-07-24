@@ -7,7 +7,7 @@ factorengine 核心约束：
     3. 输入为 OHLCV DataFrame，输出为 np.ndarray（-1~+1 信号 或 score）
     4. 必须可被安全沙箱编译执行，禁止 import os/sys/subprocess/open
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=too-many-branches,too-many-arguments,too-many-positional-arguments,exec-used,redefined-builtin
 

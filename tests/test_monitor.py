@@ -40,7 +40,7 @@ class TestLoopStatusReport:
             last_run_at="2026-07-18T00:00:00",
             status="running",
             last_error=None,
-            version="8.10.0",
+            version="1.1.0",
             run_id="run_abc_20260718",
             tokens_consumed=1500,
             age_hours=2.5,
@@ -50,7 +50,7 @@ class TestLoopStatusReport:
         assert r.last_run_at == "2026-07-18T00:00:00"
         assert r.status == "running"
         assert r.last_error is None
-        assert r.version == "8.10.0"
+        assert r.version == "1.1.0"
         assert r.run_id == "run_abc_20260718"
         assert r.tokens_consumed == 1500
         assert r.age_hours == 2.5
@@ -91,7 +91,7 @@ class TestSystemStatusReport:
             healthy=True,
             loops=loops,
             checked_at="2026-07-18T00:00:00",
-            fts_version="8.10.0",
+            fts_version="1.1.0",
             any_circuit_broken=False,
             any_stale=False,
             total_tokens_today=3000,
@@ -99,7 +99,7 @@ class TestSystemStatusReport:
         assert r.healthy is True
         assert len(r.loops) == 2
         assert r.checked_at == "2026-07-18T00:00:00"
-        assert r.fts_version == "8.10.0"
+        assert r.fts_version == "1.1.0"
         assert r.any_circuit_broken is False
         assert r.any_stale is False
         assert r.total_tokens_today == 3000
@@ -572,7 +572,7 @@ class TestStatusReportToJson:
             healthy=True,
             loops=[LoopStatusReport(loop_name="L1", healthy=True)],
             checked_at="2026-07-18T00:00:00",
-            fts_version="8.10.0",
+            fts_version="1.1.0",
             any_circuit_broken=False,
             any_stale=False,
             total_tokens_today=500,
@@ -583,7 +583,7 @@ class TestStatusReportToJson:
         assert len(parsed["loops"]) == 1
         assert parsed["loops"][0]["loop_name"] == "L1"
         assert parsed["checked_at"] == "2026-07-18T00:00:00"
-        assert parsed["fts_version"] == "8.10.0"
+        assert parsed["fts_version"] == "1.1.0"
         assert parsed["total_tokens_today"] == 500
 
     def test_empty_report(self):

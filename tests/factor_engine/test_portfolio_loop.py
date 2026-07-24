@@ -13,7 +13,7 @@ tests/factor_engine/test_portfolio_loop.py — L3 Portfolio Loop 测试
     - generate_agent_proposals Agent 建议生成
     - PortfolioLoop 主循环 + 熔断机制
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 
 from __future__ import annotations

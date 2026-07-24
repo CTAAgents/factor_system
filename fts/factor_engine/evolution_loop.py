@@ -15,7 +15,7 @@ HARNESS §11-loop-engineering.md §2.2:
     - 连续 3 代 IC < 0.01 → circuit_broken
     - 失败率 > 90% → circuit_broken
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 # pylint: disable=too-many-instance-attributes,too-many-arguments,too-many-positional-arguments,too-many-locals,too-few-public-methods,broad-exception-caught,import-outside-toplevel
 

@@ -143,7 +143,7 @@ class TestCheckLoop:
             "status": "running",
             "tokens_consumed": 5000,
             "budget_limit": 50000,
-            "version": "8.10.0",
+            "version": "1.1.0",
             "last_updated": "2026-07-18T10:00:00",
         }
         (state_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
@@ -160,7 +160,7 @@ class TestCheckLoop:
         state = {
             "status": "circuit_broken",
             "last_error": "Token 超限",
-            "version": "8.10.0",
+            "version": "1.1.0",
             "last_updated": "2026-07-18T10:00:00",
         }
         (state_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
@@ -185,7 +185,7 @@ class TestCheckAll:
         evo_dir = tmp_path / "memory" / "evolution"
         evo_dir.mkdir(parents=True)
         (evo_dir / "state.json").write_text(
-            json.dumps({"status": "running", "version": "8.10.0", "last_updated": "2026-07-18T10:00:00"}),
+            json.dumps({"status": "running", "version": "1.1.0", "last_updated": "2026-07-18T10:00:00"}),
             encoding="utf-8",
         )
         status = check_all(str(tmp_path))
@@ -200,7 +200,7 @@ class TestCheckAll:
             d = tmp_path / "memory" / name
             d.mkdir(parents=True)
             (d / "state.json").write_text(
-                json.dumps({"status": "circuit_broken", "last_error": "测试", "version": "8.10.0", "last_updated": "2026-07-18T10:00:00"}),
+                json.dumps({"status": "circuit_broken", "last_error": "测试", "version": "1.1.0", "last_updated": "2026-07-18T10:00:00"}),
                 encoding="utf-8",
             )
         # L2+L3 正常
@@ -208,7 +208,7 @@ class TestCheckAll:
             d = tmp_path / "memory" / name
             d.mkdir(parents=True)
             (d / "state.json").write_text(
-                json.dumps({"status": "completed", "version": "8.10.0", "last_updated": "2026-07-18T10:00:00"}),
+                json.dumps({"status": "completed", "version": "1.1.0", "last_updated": "2026-07-18T10:00:00"}),
                 encoding="utf-8",
             )
         status = check_all(str(tmp_path))
@@ -220,7 +220,7 @@ class TestCheckAll:
         d.mkdir(parents=True)
         # 48 小时前
         (d / "state.json").write_text(
-            json.dumps({"status": "running", "version": "8.10.0", "last_updated": "2026-07-16T10:00:00"}),
+            json.dumps({"status": "running", "version": "1.1.0", "last_updated": "2026-07-16T10:00:00"}),
             encoding="utf-8",
         )
         status = check_all(str(tmp_path), max_stale_hours=24)

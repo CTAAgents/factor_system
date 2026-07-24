@@ -10,7 +10,7 @@ tests/factor_engine/test_meta_loop.py — L1 Meta-Loop 测试
     - MetaLoop 主循环 5 步流程 + 熔断机制
     - CLI 入口
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 
 from __future__ import annotations

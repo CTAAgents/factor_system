@@ -28,9 +28,9 @@ from fts.factor_engine.contracts import (
 
 # ─── 版本号 ───────────────────────────────────────────────
 
-def test_evolution_version_is_810():
-    """版本号必须为 8.10.0（v8.10.0 = Phase 2 L1 Meta-Loop 落地）。"""
-    assert EVOLUTION_VERSION == "8.10.0"
+def test_evolution_version_matches_fts():
+    """版本号必须与 FTS 项目版本同步（v1.1.0 = MCP 数据源迁移）。"""
+    assert EVOLUTION_VERSION == "1.1.0"
 
 
 # ─── TypedDict 实例化 ────────────────────────────────────

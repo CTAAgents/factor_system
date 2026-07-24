@@ -15,7 +15,7 @@ HARNESS §11-loop-engineering.md §2.2:
     8. quality_factor        质量因子（A 股）
     9. size_factor           市值因子（A 股）
 
-版本: v8.10.0
+版本: v1.1.0（与 FTS 同步）
 """
 
 from __future__ import annotations
