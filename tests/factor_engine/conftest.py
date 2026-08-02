@@ -54,3 +54,38 @@ def tmp_memory_dir(tmp_path) -> Path:
 def tmp_elite_dir(tmp_path) -> Path:
     """临时 elite 池目录。"""
     return tmp_path / "elite"
+
+
+# ─── Mock fixtures（减少 test_evolution_loop.py 中的重复 Mock 代码）───
+
+@pytest.fixture
+def mock_trial():
+    """Mock optuna trial 对象。"""
+    from unittest.mock import MagicMock
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_optuna_study(monkeypatch):
+    """Mock optuna 完整环境（TPESampler + optuna 模块 + create_study）。
+
+    返回 (mock_optuna, mock_study)，测试可各自设置 mock_study 的行为。
+    """
+    from unittest.mock import MagicMock
+    import fts.factor_engine.micro_evolution as mev
+
+    monkeypatch.setattr(mev, 'TPESampler', MagicMock(), raising=False)
+    monkeypatch.setattr(mev, '_HAS_OPTUNA', True)
+    mock_optuna = MagicMock()
+    monkeypatch.setattr(mev, 'optuna', mock_optuna)
+    mock_study = MagicMock()
+    mock_optuna.create_study.return_value = mock_study
+    return mock_optuna, mock_study
+
+
+@pytest.fixture
+def mock_evolve_micro():
+    """Patch fts.factor_engine.evolution_loop.evolve_micro。"""
+    from unittest.mock import patch
+    with patch("fts.factor_engine.evolution_loop.evolve_micro") as m:
+        yield m

@@ -864,110 +864,150 @@ class MetaLoop:
         tokens_consumed = 0
 
         try:
-            # ─── Step 1: agentic 感知 (f10/web_collector) ────────
+            # ─── Step 1: agentic 感知 (f10/web_collector) ──
             market_snapshot = self._perceive_market(trace_id)
 
-            # ─── Step 2: debate_round 分析 ──────────────────────
-            debate_analysis = self.debate_analyzer.analyze_latest_debate()
-            debate_gaps = debate_analysis.get("topics", [])
-            debate_gaps_detected = len(debate_gaps)
-            state["total_debate_gaps_detected"] = (
-                state.get("total_debate_gaps_detected", 0) + debate_gaps_detected
-            )
-            logger.info(
-                "L1 Step 2: 辩论分析完成，识别 %d 个薄弱维度",
-                debate_gaps_detected,
+            # ─── Step 2: debate_round 分析 ──────────────────
+            debate_gaps, debate_gaps_detected = self._analyze_debate(state)
+
+            # ─── Step 3: factorengine Bootstrapping ─────────
+            candidates, candidates_generated = self._run_bootstrap(
+                market_snapshot, debate_gaps, max_cand, trace_id, state,
             )
 
-            # ─── Step 3: factorengine Bootstrapping ────────────
-            candidates = self.bootstrap_chain.bootstrap(
-                market_snapshot=market_snapshot,
-                debate_gaps=debate_gaps,
-                max_candidates=max_cand,
-                seed_pool=self.seed_pool,
-                trace_id=trace_id,
+            # ─── Step 4: L1 Verifier + 注入 ────────────────
+            circuit_broken = self._verify_and_inject(
+                candidates, state, trace_id, injected_ids, candidates_generated,
             )
-            candidates_generated = len(candidates)
-            state["total_candidates_generated"] = (
-                state.get("total_candidates_generated", 0) + candidates_generated
-            )
-            state["last_bootstrap_topic"] = (
-                candidates[0].get("parent_topic", "") if candidates else ""
-            )
+            if circuit_broken:
+                return self._make_result(
+                    run_id, trace_id, candidates_generated, len(injected_ids),
+                    debate_gaps_detected, tokens_consumed,
+                    status="circuit_broken", circuit_breaker_reason=circuit_broken,
+                    injected_ids=injected_ids,
+                )
 
-            # ─── Step 4: L1 Verifier + 注入 ────────────────────
-            for cand in candidates:
-                # 熔断检查
-                cb_reason = self._check_circuit_breaker(state, candidates_generated)
-                if cb_reason:
-                    state = self.state_manager.mark_circuit_broken(state, cb_reason)
-                    return MetaRunResult(
-                        run_id=run_id, trace_id=trace_id,
-                        candidates_generated=candidates_generated,
-                        candidates_injected=len(injected_ids),
-                        debate_gaps_detected=debate_gaps_detected,
-                        tokens_consumed=tokens_consumed,
-                        status="circuit_broken",
-                        circuit_breaker_reason=cb_reason,
-                        injected_candidate_ids=injected_ids,
-                    )
-
-                # L1 Verifier 检查
-                verdict = self.verifier.check(cand, self.seed_pool)
-                cand["passed_l1_verifier"] = verdict["passed"]
-                cand["failure_reasons"] = verdict["failure_reasons"]
-
-                if not verdict["passed"]:
-                    logger.info(
-                        "L1 Verifier 拒绝候选 %s: %s",
-                        cand.get("name"), verdict["failure_reasons"],
-                    )
-                    self._consecutive_low_quality += 1
-                    continue
-
-                # 通过 → 注入
-                injected_id = self._inject_candidate(cand, trace_id)
-                if injected_id:
-                    injected_ids.append(injected_id)
-                    state["total_candidates_injected"] = (
-                        state.get("total_candidates_injected", 0) + 1
-                    )
-                    state.setdefault("candidates_ref", []).append(injected_id)
-                    self._consecutive_low_quality = 0
-
-            # 估算 token 消耗（Mock）
+            # 估算 token 消耗
             tokens_consumed = self._estimate_tokens(candidates_generated, debate_gaps_detected)
             state["tokens_consumed"] = tokens_consumed
 
-            # ─── 完成 ─────────────────────────────────────────
+            # ─── 完成 ─────────────────────────────────────
             state = self.state_manager.mark_completed(state)
             logger.info(
                 "✅ L1 Meta-Loop 完成 (run_id=%s): 生成 %d, 注入 %d",
                 run_id, candidates_generated, len(injected_ids),
             )
-            return MetaRunResult(
-                run_id=run_id, trace_id=trace_id,
-                candidates_generated=candidates_generated,
-                candidates_injected=len(injected_ids),
-                debate_gaps_detected=debate_gaps_detected,
-                tokens_consumed=tokens_consumed,
-                status="completed",
-                injected_candidate_ids=injected_ids,
+            return self._make_result(
+                run_id, trace_id, candidates_generated, len(injected_ids),
+                debate_gaps_detected, tokens_consumed,
+                status="completed", injected_ids=injected_ids,
             )
 
         except Exception as e:
             logger.error("L1 Meta-Loop 异常: %s", e, exc_info=True)
             state = self.state_manager.mark_paused(state, str(e))
-            return MetaRunResult(
-                run_id=run_id, trace_id=trace_id,
-                candidates_generated=candidates_generated,
-                candidates_injected=len(injected_ids),
-                debate_gaps_detected=debate_gaps_detected,
-                tokens_consumed=tokens_consumed,
-                status="paused",
-                circuit_breaker_reason=str(e),
-                injected_candidate_ids=injected_ids,
+            return self._make_result(
+                run_id, trace_id, candidates_generated, len(injected_ids),
+                debate_gaps_detected, tokens_consumed,
+                status="paused", circuit_breaker_reason=str(e),
+                injected_ids=injected_ids,
             )
+
+    def _analyze_debate(
+        self, state: L1MetaLoopState
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Step 2: 分析辩论记录，识别薄弱维度。"""
+        debate_analysis = self.debate_analyzer.analyze_latest_debate()
+        debate_gaps = debate_analysis.get("topics", [])
+        debate_gaps_detected = len(debate_gaps)
+        state["total_debate_gaps_detected"] = (
+            state.get("total_debate_gaps_detected", 0) + debate_gaps_detected
+        )
+        logger.info("L1 Step 2: 辩论分析完成，识别 %d 个薄弱维度", debate_gaps_detected)
+        return debate_gaps, debate_gaps_detected
+
+    def _run_bootstrap(
+        self,
+        market_snapshot: dict[str, Any],
+        debate_gaps: list[dict[str, Any]],
+        max_cand: int,
+        trace_id: str,
+        state: L1MetaLoopState,
+    ) -> tuple[list[SeedCandidate], int]:
+        """Step 3: 执行 Bootstrapping 生成候选因子。"""
+        candidates = self.bootstrap_chain.bootstrap(
+            market_snapshot=market_snapshot,
+            debate_gaps=debate_gaps,
+            max_candidates=max_cand,
+            seed_pool=self.seed_pool,
+            trace_id=trace_id,
+        )
+        candidates_generated = len(candidates)
+        state["total_candidates_generated"] = (
+            state.get("total_candidates_generated", 0) + candidates_generated
+        )
+        state["last_bootstrap_topic"] = (
+            candidates[0].get("parent_topic", "") if candidates else ""
+        )
+        return candidates, candidates_generated
+
+    def _verify_and_inject(
+        self,
+        candidates: list[SeedCandidate],
+        state: L1MetaLoopState,
+        trace_id: str,
+        injected_ids: list[str],
+        candidates_generated: int,
+    ) -> Optional[str]:
+        """Step 4: L1 Verifier 检查 + 注入候选因子。返回熔断原因或 None。"""
+        for cand in candidates:
+            cb_reason = self._check_circuit_breaker(state, candidates_generated)
+            if cb_reason:
+                state = self.state_manager.mark_circuit_broken(state, cb_reason)
+                return cb_reason
+
+            verdict = self.verifier.check(cand, self.seed_pool)
+            cand["passed_l1_verifier"] = verdict["passed"]
+            cand["failure_reasons"] = verdict["failure_reasons"]
+
+            if not verdict["passed"]:
+                logger.info(
+                    "L1 Verifier 拒绝候选 %s: %s",
+                    cand.get("name"), verdict["failure_reasons"],
+                )
+                self._consecutive_low_quality += 1
+                continue
+
+            injected_id = self._inject_candidate(cand, trace_id)
+            if injected_id:
+                injected_ids.append(injected_id)
+                state["total_candidates_injected"] = (
+                    state.get("total_candidates_injected", 0) + 1
+                )
+                state.setdefault("candidates_ref", []).append(injected_id)
+                self._consecutive_low_quality = 0
+
+        return None
+
+    @staticmethod
+    def _make_result(
+        run_id: str, trace_id: str,
+        candidates_generated: int, candidates_injected: int,
+        debate_gaps_detected: int, tokens_consumed: int,
+        status: str, circuit_breaker_reason: Optional[str] = None,
+        injected_ids: Optional[list[str]] = None,
+    ) -> MetaRunResult:
+        """构造 MetaRunResult。"""
+        return MetaRunResult(
+            run_id=run_id, trace_id=trace_id,
+            candidates_generated=candidates_generated,
+            candidates_injected=candidates_injected,
+            debate_gaps_detected=debate_gaps_detected,
+            tokens_consumed=tokens_consumed,
+            status=status,
+            circuit_breaker_reason=circuit_breaker_reason,
+            injected_candidate_ids=injected_ids or [],
+        )
 
     def _perceive_market(self, trace_id: str) -> dict[str, Any]:
         """Step 1: agentic 感知 — f10/web_collector 拉取市场快照。"""
@@ -1129,7 +1169,7 @@ def main():
     sys.exit(0 if result.status == "completed" else 1)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()
 
 

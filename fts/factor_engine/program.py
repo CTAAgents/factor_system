@@ -44,10 +44,10 @@ market_regime: 震荡偏多
 
 ```yaml
 factor_preference:
-  priority_1: 低波因子
-  priority_2: 期限结构因子
-  avoid: 趋势动量因子
- # 可选优先级: 动量/反转/波动率/持仓量/基差/期限结构/低波/宏观
+  priority_1: 动量因子
+  priority_2: 质量因子
+  avoid: 反转因子
+ # 可选优先级: 动量/反转/价值/成长/质量/低波/红利/市值/宏观
 ```
 
 ## Agent LLM 配置
@@ -99,8 +99,8 @@ risk_constraints:
 class ProgramConfig:
     """解析 program.md 后得到的结构化配置。"""
     market_regime: str = "震荡偏多"
-    factor_priority: list[str] = field(default_factory=lambda: ["低波因子", "期限结构因子"])
-    factor_avoid: list[str] = field(default_factory=lambda: ["趋势动量因子"])
+    factor_priority: list[str] = field(default_factory=lambda: ["动量因子", "质量因子"])
+    factor_avoid: list[str] = field(default_factory=lambda: ["反转因子"])
     agent_llm_default: str = "deepseek-chat"
     agent_llm_overrides: dict[str, str] = field(default_factory=dict)
     daily_tokens: int = 50000
@@ -127,71 +127,64 @@ def parse_program_md(content: str) -> ProgramConfig:
     config = ProgramConfig()
     config.last_updated = datetime.now().isoformat()
 
-    errors: list[str] = []
+    # ── 数据驱动解析：定义每个字段的匹配规则 ──────────────
+    _str_fields: list[tuple[str, str]] = [
+        ("market_regime", r"market_regime:\s*(\S+)"),
+    ]
+    _int_fields: list[tuple[str, str]] = [
+        ("daily_tokens", r"daily_tokens:\s*(\d+)"),
+        ("nightly_tokens", r"nightly_tokens:\s*(\d+)"),
+        ("weekly_portfolio", r"weekly_portfolio:\s*(\d+)"),
+        ("max_per_factor", r"max_per_factor:\s*(\d+)"),
+        ("min_economic_logic_score", r"min_economic_logic_score:\s*(\d+)"),
+    ]
+    _float_fields: list[tuple[str, str]] = [
+        ("max_drawdown", r"max_drawdown:\s*([\d.]+)"),
+        ("max_turnover", r"max_turnover_per_month:\s*([\d.]+)"),
+        ("min_sharpe", r"min_sharpe:\s*([\d.]+)"),
+    ]
 
-    # 解析市场环境
-    regime_match = re.search(r"market_regime:\s*(\S+)", content)
-    if regime_match:
-        config.market_regime = regime_match.group(1)
+    for attr, pattern in _str_fields:
+        m = re.search(pattern, content)
+        if m:
+            setattr(config, attr, m.group(1))
 
-    # 解析因子偏好
-    priority_match = re.search(r"priority_1:\s*(\S+)", content)
-    if priority_match:
-        config.factor_priority = [priority_match.group(1)]
-    priority_2 = re.search(r"priority_2:\s*(\S+)", content)
-    if priority_2:
-        config.factor_priority.append(priority_2.group(1))
-    avoid_match = re.search(r"avoid:\s*(\S+)", content)
-    if avoid_match:
-        config.factor_avoid = [avoid_match.group(1)]
+    for attr, pattern in _int_fields:
+        m = re.search(pattern, content)
+        if m:
+            setattr(config, attr, int(m.group(1)))
 
-    # 解析 Agent LLM
-    llm_default = re.search(r"default:\s*(\S+)", content)
-    if llm_default:
-        config.agent_llm_default = llm_default.group(1)
+    for attr, pattern in _float_fields:
+        m = re.search(pattern, content)
+        if m:
+            setattr(config, attr, float(m.group(1)))
 
-    # 解析各 Agent 覆盖
+    # 因子偏好（特殊处理：priority_1 + priority_2 + avoid）
+    p1 = re.search(r"priority_1:\s*(\S+)", content)
+    if p1:
+        config.factor_priority = [p1.group(1)]
+    p2 = re.search(r"priority_2:\s*(\S+)", content)
+    if p2:
+        config.factor_priority.append(p2.group(1))
+    av = re.search(r"avoid:\s*(\S+)", content)
+    if av:
+        config.factor_avoid = [av.group(1)]
+
+    # Agent LLM 默认 + 覆盖
+    llm_def = re.search(r"default:\s*(\S+)", content)
+    if llm_def:
+        config.agent_llm_default = llm_def.group(1)
     for m in re.finditer(r"# (\w+):\s*(\S+)", content):
         agent_name, model = m.group(1), m.group(2)
         if agent_name not in ("必填", "可选"):
             config.agent_llm_overrides[agent_name] = model
 
-    # 解析预算
-    daily = re.search(r"daily_tokens:\s*(\d+)", content)
-    if daily:
-        config.daily_tokens = int(daily.group(1))
-    nightly = re.search(r"nightly_tokens:\s*(\d+)", content)
-    if nightly:
-        config.nightly_tokens = int(nightly.group(1))
-    weekly = re.search(r"weekly_portfolio:\s*(\d+)", content)
-    if weekly:
-        config.weekly_portfolio = int(weekly.group(1))
-    max_pt = re.search(r"max_per_factor:\s*(\d+)", content)
-    if max_pt:
-        config.max_per_factor = int(max_pt.group(1))
-
-    # 解析风险约束
-    dd = re.search(r"max_drawdown:\s*([\d.]+)", content)
-    if dd:
-        config.max_drawdown = float(dd.group(1))
-    turn = re.search(r"max_turnover_per_month:\s*([\d.]+)", content)
-    if turn:
-        config.max_turnover = float(turn.group(1))
-    sharpe = re.search(r"min_sharpe:\s*([\d.]+)", content)
-    if sharpe:
-        config.min_sharpe = float(sharpe.group(1))
-    econ = re.search(r"min_economic_logic_score:\s*(\d+)", content)
-    if econ:
-        config.min_economic_logic_score = int(econ.group(1))
-
-    # 解析熔断确认
+    # 熔断确认标记
     for m in re.finditer(r"\[(x|X| )\]\s*(L[123]) 熔断已审查", content):
         checked, level = m.group(1), m.group(2)
         if checked.lower() == "x":
             config.circuit_breakers_reviewed.append(level)
 
-    config.is_valid = len(errors) == 0
-    config.errors = errors
     return config
 
 

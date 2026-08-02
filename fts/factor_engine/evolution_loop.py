@@ -219,34 +219,7 @@ class EvolutionLoop:
 
                 # ── Step 3: 三级评估链 ──
                 if self._is_cross_section:
-                    # 横截面评估
-                    bt = cross_section_evaluate_backtest(
-                        optimized_factor,
-                        self.cross_section_data,
-                        self.cross_section_dates,
-                    )
-                    # 构造 FactorEvaluation（其余 Level 2/3 逻辑不变）
-                    from .contracts import EconomicScore, MultipleTestResult
-                    ec = EconomicScore(theory=0, behavioral=0, microstructure=0, institutional=0,
-                                       dimensions_passed=3, narrative="横截面评估（自动通过）")
-                    mt = MultipleTestResult(bonferroni_p=1.0, fdr_q=0.05, effective_n_factors=1,
-                                            adjusted_t=bt.get("t_stat", 3.0), passed=True)
-                    reasons: list[str] = []
-                    if bt.get("ic", 0) < 0.03:
-                        reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
-                    if bt.get("sharpe", 0) < 1.5:
-                        reasons.append(f"截面夏普={bt.get('sharpe', 0):.4f} < 1.5")
-                    passed_cs = len(reasons) == 0
-                    evaluation = FactorEvaluation(
-                        factor_id=optimized_factor["factor_id"],
-                        trace_id=trace_id,
-                        level_1_backtest=bt,
-                        level_2_economic=ec,
-                        level_3_multiple=mt,
-                        passed=passed_cs,
-                        failure_reasons=reasons,
-                        evaluated_at=datetime.now().isoformat(),
-                    )
+                    evaluation = self._evaluate_cross_section(optimized_factor, trace_id)
                 else:
                     evaluation = self.evaluation_chain.evaluate(
                         optimized_factor, self.data, self.forward_returns,
@@ -391,39 +364,53 @@ class EvolutionLoop:
         for seed in seeds:
             try:
                 if self._is_cross_section:
-                    bt = cross_section_evaluate_backtest(
-                        seed,
-                        self.cross_section_data,
-                        self.cross_section_dates,
-                    )
-                    reasons = []
-                    if bt.get("ic", 0) < 0.03:
-                        reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
-                    if bt.get("sharpe", 0) < 1.5:
-                        reasons.append(f"截面夏普={bt.get('sharpe', 0):.4f} < 1.5")
-                    passed = len(reasons) == 0
+                    evaluation = self._evaluate_cross_section(seed, trace_id)
                 else:
                     evaluation = self.evaluation_chain.evaluate(
                         seed, self.data, self.forward_returns,
                     )
-                    bt = evaluation.get("level_1_backtest", {})
-                    passed = evaluation.get("passed", False)
+                bt = evaluation.get("level_1_backtest", {})
+                passed = evaluation.get("passed", False)
 
                 if passed:
-                    self._promote_to_elite(seed, FactorEvaluation(
-                        factor_id=seed["factor_id"],
-                        trace_id=trace_id,
-                        level_1_backtest=bt,
-                        passed=True,
-                        failure_reasons=[],
-                        evaluated_at=datetime.now().isoformat(),
-                    ))
+                    self._promote_to_elite(seed, evaluation)
                     elite_ids.append(seed["factor_id"])
                     promoted += 1
                     print(f"[evo] 种子因子晋升: {seed['name']} (IC={bt.get('ic', 0):.4f})")
             except Exception:
                 continue
         return promoted
+
+    def _evaluate_cross_section(
+        self, factor: FactorProgram, trace_id: str
+    ) -> FactorEvaluation:
+        """横截面模式下的评估：直接回测 + 自动构造 FactorEvaluation。"""
+        from .contracts import EconomicScore, MultipleTestResult
+
+        bt = cross_section_evaluate_backtest(
+            factor,
+            self.cross_section_data,
+            self.cross_section_dates,
+        )
+        ec = EconomicScore(theory=0, behavioral=0, microstructure=0, institutional=0,
+                           dimensions_passed=3, narrative="横截面评估（自动通过）")
+        mt = MultipleTestResult(bonferroni_p=1.0, fdr_q=0.05, effective_n_factors=1,
+                                adjusted_t=bt.get("t_stat", 3.0), passed=True)
+        reasons: list[str] = []
+        if bt.get("ic", 0) < 0.03:
+            reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
+        if bt.get("sharpe", 0) < 1.5:
+            reasons.append(f"截面夏普={bt.get('sharpe', 0):.4f} < 1.5")
+        return FactorEvaluation(
+            factor_id=factor["factor_id"],
+            trace_id=trace_id,
+            level_1_backtest=bt,
+            level_2_economic=ec,
+            level_3_multiple=mt,
+            passed=len(reasons) == 0,
+            failure_reasons=reasons,
+            evaluated_at=datetime.now().isoformat(),
+        )
 
     def _record_success_trace(
         self,
@@ -549,7 +536,7 @@ def main():
         print(f"  精英: {result.elite_factor_ids}")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()
 
 

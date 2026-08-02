@@ -126,7 +126,7 @@ def decay_linear(x: np.ndarray, d: int) -> np.ndarray:
     w = w / w.sum()
 
     def _decay(v):
-        if len(v) < d:
+        if len(v) < d:  # pragma: no cover — min_periods=d 保证不会触发
             return np.nan
         return np.sum(v[-d:] * w)
     return _to_array(_to_series(x).rolling(d, min_periods=d).apply(_decay, raw=True))

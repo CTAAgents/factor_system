@@ -2,9 +2,9 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-1325%20passing-brightgreen)](#)
+[![Tests](https://img.shields.io/badge/tests-1432%20passing-brightgreen)](#)
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)](#)
-[![Version](https://img.shields.io/badge/version-1.3.0-blue)](#)
+[![Version](https://img.shields.io/badge/version-1.3.2-blue)](#)
 
 ---
 
@@ -80,7 +80,7 @@ fts/                          # 核心源码（~3,400 语句）
 ├── cli.py                    # 统一命令行入口
 └── monitor/                  # 健康监控 + HTTP 端点
 
-tests/                        # 35+ 个测试文件，1325 全部通过
+tests/                        # 40+ 个测试文件，1432 全部通过
 ├── factor_engine/            # 因子引擎测试（16 文件）
 ├── pipeline/                 # 管线测试（2 文件）
 ├── scheduler/                # 调度测试（4 文件）
@@ -150,9 +150,9 @@ FTS（因子智能系统）
 
 | 指标 | 值 |
 |------|:---:|
-| **版本** | v1.3.0 |
-| **测试通过数** | 1325 / 1325（100%）|
-| **测试覆盖率** | 99%（46 个模块）|
+| **版本** | v1.3.2 |
+| **测试通过数** | 1432 / 1432（100%）|
+| **测试覆盖率** | 99%（47/47 模块 100%，仅余 1 空白行）|
 | **代码行数** | ~4,300 语句 |
 | **文件数** | 79 个源码 + 测试文件 |
 | **种子因子数** | 459（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安） |

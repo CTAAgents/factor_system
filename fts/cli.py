@@ -425,5 +425,5 @@ def main(argv: Optional[list[str]] = None) -> int:
     return int(func(args) or 0)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())

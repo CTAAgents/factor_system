@@ -169,17 +169,32 @@ def mock_llm_client():
 def test_evolution_loop_runs_minimal(
     sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
 ):
-    """应能完整运行 1 代演化。"""
+    """应能完整运行 1 代演化（状态检查）。"""
     loop = EvolutionLoop(
         data=sample_ohlcv,
         forward_returns=forward_returns,
         elite_dir=tmp_elite_dir,
         memory_dir=tmp_memory_dir,
         llm_client=mock_llm_client,
-        n_trials_micro=5,  # 减少 trials 加速测试
+        n_trials_micro=5,
     )
     result = loop.run(max_generation=1)
     assert result.status in ("completed", "paused", "circuit_broken")
+
+
+def test_evolution_loop_produces_metrics(
+    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
+):
+    """运行后指标应被正确填充。"""
+    loop = EvolutionLoop(
+        data=sample_ohlcv,
+        forward_returns=forward_returns,
+        elite_dir=tmp_elite_dir,
+        memory_dir=tmp_memory_dir,
+        llm_client=mock_llm_client,
+        n_trials_micro=5,
+    )
+    result = loop.run(max_generation=1)
     assert result.generations_completed >= 0
     assert result.tokens_consumed > 0
 
@@ -494,48 +509,43 @@ class TestMicroEvolutionCoverage:
         assert callable(optimize_params)
         assert callable(evolve_micro)
 
-    def test_suggest_param_bool(self):
+    def test_suggest_param_bool(self, mock_trial):
         from fts.factor_engine.micro_evolution import _suggest_param
-        trial = MagicMock()
-        trial.suggest_categorical.return_value = True
-        result = _suggest_param(trial, "flag", True)
+        mock_trial.suggest_categorical.return_value = True
+        result = _suggest_param(mock_trial, "flag", True)
         assert result is True
-        trial.suggest_categorical.assert_called_once_with("flag", [True, False])
+        mock_trial.suggest_categorical.assert_called_once_with("flag", [True, False])
 
-    def test_suggest_param_int(self):
+    def test_suggest_param_int(self, mock_trial):
         from fts.factor_engine.micro_evolution import _suggest_param
-        trial = MagicMock()
-        trial.suggest_int.return_value = 20
-        result = _suggest_param(trial, "window", 10)
+        mock_trial.suggest_int.return_value = 20
+        result = _suggest_param(mock_trial, "window", 10)
         assert result == 20
-        trial.suggest_int.assert_called_once_with("window", 5, 20)
+        mock_trial.suggest_int.assert_called_once_with("window", 5, 20)
 
-    def test_suggest_param_int_min_value(self):
+    def test_suggest_param_int_min_value(self, mock_trial):
         """int 参数最小值应为 max(1, value//2)。"""
         from fts.factor_engine.micro_evolution import _suggest_param
-        trial = MagicMock()
-        trial.suggest_int.return_value = 2
-        result = _suggest_param(trial, "small", 2)
+        mock_trial.suggest_int.return_value = 2
+        result = _suggest_param(mock_trial, "small", 2)
         assert result == 2
-        trial.suggest_int.assert_called_once_with("small", 1, 4)
+        mock_trial.suggest_int.assert_called_once_with("small", 1, 4)
 
-    def test_suggest_param_float(self):
+    def test_suggest_param_float(self, mock_trial):
         from fts.factor_engine.micro_evolution import _suggest_param
-        trial = MagicMock()
-        trial.suggest_float.return_value = 0.5
-        result = _suggest_param(trial, "decay", 0.5)
+        mock_trial.suggest_float.return_value = 0.5
+        result = _suggest_param(mock_trial, "decay", 0.5)
         assert result == 0.5
-        trial.suggest_float.assert_called_once_with("decay", 0.25, 1.0)
+        mock_trial.suggest_float.assert_called_once_with("decay", 0.25, 1.0)
 
-    def test_suggest_param_other_type(self):
+    def test_suggest_param_other_type(self, mock_trial):
         """字符串等不可搜索类型应原值返回。"""
         from fts.factor_engine.micro_evolution import _suggest_param
-        trial = MagicMock()
-        result = _suggest_param(trial, "method", "spearman")
+        result = _suggest_param(mock_trial, "method", "spearman")
         assert result == "spearman"
-        trial.suggest_categorical.assert_not_called()
-        trial.suggest_int.assert_not_called()
-        trial.suggest_float.assert_not_called()
+        mock_trial.suggest_categorical.assert_not_called()
+        mock_trial.suggest_int.assert_not_called()
+        mock_trial.suggest_float.assert_not_called()
 
     def test_optimize_params_no_optuna_returns_defaults(
         self, sample_ohlcv, forward_returns, monkeypatch,
@@ -580,10 +590,10 @@ class TestMicroEvolutionCoverage:
         assert score == 0.0  # optuna 不可用时忽略 objective_fn
 
     def test_optimize_params_with_mock_optuna(
-        self, sample_ohlcv, forward_returns, monkeypatch,
+        self, sample_ohlcv, forward_returns, mock_optuna_study,
     ):
         """mock optuna 路径应完整走通。"""
-        import fts.factor_engine.micro_evolution as mev
+        mock_optuna, mock_study = mock_optuna_study
         from fts.factor_engine.contracts import EconomicLogic, FactorProgram, FactorSignature
 
         factor = FactorProgram(
@@ -595,28 +605,21 @@ class TestMicroEvolutionCoverage:
             economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="optuna测试"),
             source="manual",
         )
-
-        monkeypatch.setattr(mev, 'TPESampler', MagicMock(), raising=False)
-        monkeypatch.setattr(mev, '_HAS_OPTUNA', True)
-        mock_optuna = MagicMock()
-        monkeypatch.setattr(mev, 'optuna', mock_optuna)
-        # 模拟 study
-        mock_study = MagicMock()
         mock_study.best_params = {"window": 15}
         mock_study.best_value = 0.05
-        mock_study.trials = [MagicMock()]  # 非空 trials
-        mock_optuna.create_study.return_value = mock_study
+        mock_study.trials = [mock_study]  # 非空 trials
 
+        import fts.factor_engine.micro_evolution as mev
         params, score = mev.optimize_params(factor, sample_ohlcv, forward_returns, n_trials=5)
         assert params == {"window": 15}
         assert score == 0.05
         mock_optuna.create_study.assert_called_once()
 
     def test_optimize_params_study_raises(
-        self, sample_ohlcv, forward_returns, monkeypatch,
+        self, sample_ohlcv, forward_returns, mock_optuna_study,
     ):
         """study.optimize 抛出异常时应转为 MicroEvolutionError。"""
-        import fts.factor_engine.micro_evolution as mev
+        mock_optuna, mock_study = mock_optuna_study
         from fts.factor_engine.contracts import EconomicLogic, FactorProgram, FactorSignature
 
         factor = FactorProgram(
@@ -628,23 +631,17 @@ class TestMicroEvolutionCoverage:
             economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="error测试"),
             source="manual",
         )
-
-        monkeypatch.setattr(mev, 'TPESampler', MagicMock(), raising=False)
-        monkeypatch.setattr(mev, '_HAS_OPTUNA', True)
-        mock_optuna = MagicMock()
-        monkeypatch.setattr(mev, 'optuna', mock_optuna)
-        mock_study = MagicMock()
         mock_study.optimize.side_effect = RuntimeError("optuna 崩溃")
-        mock_optuna.create_study.return_value = mock_study
 
+        import fts.factor_engine.micro_evolution as mev
         with pytest.raises(mev.MicroEvolutionError, match="optuna 优化失败"):
             mev.optimize_params(factor, sample_ohlcv, forward_returns, n_trials=5)
 
     def test_optimize_params_no_best_params(
-        self, sample_ohlcv, forward_returns, monkeypatch,
+        self, sample_ohlcv, forward_returns, mock_optuna_study,
     ):
         """无 best_params 时返回原 params + 0.0。"""
-        import fts.factor_engine.micro_evolution as mev
+        mock_optuna, mock_study = mock_optuna_study
         from fts.factor_engine.contracts import EconomicLogic, FactorProgram, FactorSignature
 
         factor = FactorProgram(
@@ -656,17 +653,11 @@ class TestMicroEvolutionCoverage:
             economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="empty测试"),
             source="manual",
         )
-
-        monkeypatch.setattr(mev, 'TPESampler', MagicMock(), raising=False)
-        monkeypatch.setattr(mev, '_HAS_OPTUNA', True)
-        mock_optuna = MagicMock()
-        monkeypatch.setattr(mev, 'optuna', mock_optuna)
-        mock_study = MagicMock()
         mock_study.best_params = {}   # 空表示无最佳参数
         mock_study.best_value = 0.0
         mock_study.trials = []
-        mock_optuna.create_study.return_value = mock_study
 
+        import fts.factor_engine.micro_evolution as mev
         params, score = mev.optimize_params(factor, sample_ohlcv, forward_returns, n_trials=5)
         assert params == {"window": 10}
         assert score == 0.0
@@ -766,7 +757,7 @@ class TestEvolutionLoopCoverage:
     # ─── 微观演化失败（line 192-197）────────────────────
 
     def test_micro_evolution_failure(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_evolve_micro,
     ):
         """微观演化抛出异常应跳过本代并继续。"""
         loop = EvolutionLoop(
@@ -776,16 +767,15 @@ class TestEvolutionLoopCoverage:
             memory_dir=tmp_memory_dir,
             n_trials_micro=2,
         )
-        with patch("fts.factor_engine.evolution_loop.evolve_micro") as mock_micro:
-            mock_micro.side_effect = RuntimeError("optuna 崩溃")
-            result = loop.run(max_generation=3)
+        mock_evolve_micro.side_effect = RuntimeError("optuna 崩溃")
+        result = loop.run(max_generation=3)
         # 宏观演化成功（有 token 消耗），微观全部失败 → 循环正常完成
         assert result.generations_completed == 3
         assert result.status == "completed"
         assert result.tokens_consumed > 0  # 宏观演化的 token 被消耗
 
     def test_micro_evolution_failure_recorded(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_evolve_micro,
     ):
         """微观演化失败应在 failure 目录生成轨迹文件。"""
         # 先运行一次查看正常路径，确保 failure 目录有文件
@@ -796,10 +786,8 @@ class TestEvolutionLoopCoverage:
             memory_dir=tmp_memory_dir,
             n_trials_micro=2,
         )
-        with patch("fts.factor_engine.evolution_loop.evolve_micro") as mock_micro:
-            from fts.factor_engine.contracts import FactorProgram as FP
-            mock_micro.side_effect = RuntimeError("optuna 崩溃")
-            loop.run(max_generation=2)
+        mock_evolve_micro.side_effect = RuntimeError("optuna 崩溃")
+        loop.run(max_generation=2)
         failure_dir = tmp_memory_dir / "failure"
         files = list(failure_dir.glob("*.json"))
         assert len(files) > 0
@@ -1041,7 +1029,7 @@ class TestEvolutionLoopCoverage:
     # ─── low_ic 分支（line 232-235）───────────────────────
 
     def test_low_ic_increment(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_evolve_micro,
     ):
         """低 IC 因子应递增 _consecutive_low_ic 计数器。"""
         from fts.factor_engine.contracts import BudgetConfig
@@ -1071,10 +1059,9 @@ class TestEvolutionLoopCoverage:
             mock_factor, "mock summary", 100,
         ))
         # mock evolve_micro 返回有效因子
-        with patch("fts.factor_engine.evolution_loop.evolve_micro") as mock_micro:
-            optimized = _make_minimal_factor("fct_optimized_test")
-            mock_micro.return_value = (optimized, 0.01)
-            result = loop.run(max_generation=5)
+        optimized = _make_minimal_factor("fct_optimized_test")
+        mock_evolve_micro.return_value = (optimized, 0.01)
+        result = loop.run(max_generation=5)
         # 由于 budget 中低 IC 阈值很大，verifier 会失败，低 IC 计数器递增 → 触发熔断
         assert result.status in ("completed", "circuit_broken")
         # 验证有评估记录
@@ -1256,7 +1243,7 @@ class TestLine221:
     """专门覆盖 evolution_loop.py line 221 (self._consecutive_low_ic = 0)。"""
 
     def test_consecutive_low_ic_reset_on_success(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_evolve_micro,
     ):
         """Verifier 通过时应重置低 IC 计数器。"""
         loop = EvolutionLoop(
@@ -1273,17 +1260,16 @@ class TestLine221:
             parent_factor, "Mock macro summary", 200,
         ))
         # Mock micro_evolution 返回优化后因子
-        with patch("fts.factor_engine.evolution_loop.evolve_micro") as mock_micro:
-            optimized = _make_minimal_factor("fct_line221_child")
-            optimized["factor_id"] = "fct_line221_child"
-            mock_micro.return_value = (optimized, 0.02)
-            # Mock verifier 一直通过
-            with patch.object(loop, "verifier") as mock_ver:
-                mock_ver.check.return_value = {
-                    "passed": True,
-                    "failure_reasons": [],
-                }
-                result = loop.run(max_generation=2)
+        optimized = _make_minimal_factor("fct_line221_child")
+        optimized["factor_id"] = "fct_line221_child"
+        mock_evolve_micro.return_value = (optimized, 0.02)
+        # Mock verifier 一直通过
+        with patch.object(loop, "verifier") as mock_ver:
+            mock_ver.check.return_value = {
+                "passed": True,
+                "failure_reasons": [],
+            }
+            result = loop.run(max_generation=2)
         # Verifier 通过 → 晋级精英池
         assert result.total_factors_promoted >= 1
         assert len(result.elite_factor_ids) >= 1
@@ -1297,7 +1283,7 @@ class TestCoverageGaps:
     # ── cross_section 路径 lines 217-234 ──
 
     def test_cross_section_evaluation_path(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_evolve_micro,
     ):
         """lines 217-234: cross_section_data 为非 None 时应走横截面评估路径。"""
         from fts.factor_engine.contracts import BudgetConfig
@@ -1330,15 +1316,14 @@ class TestCoverageGaps:
             _make_minimal_factor("fct_cross_test"),
             "mock cross macro", 200,
         ))
-        with patch("fts.factor_engine.evolution_loop.evolve_micro") as mock_micro:
-            optimized = _make_minimal_factor("fct_cross_opt")
-            mock_micro.return_value = (optimized, 0.03)
-            result = loop.run(max_generation=1)
+        optimized = _make_minimal_factor("fct_cross_opt")
+        mock_evolve_micro.return_value = (optimized, 0.03)
+        result = loop.run(max_generation=1)
         assert result.status in ("completed", "circuit_broken")
         assert result.generations_completed >= 0
 
     def test_cross_section_failure_reasons_low_ic(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_evolve_micro,
     ):
         """横截面路径中 IC < 0.03 应有失败原因。"""
         from fts.factor_engine.contracts import BudgetConfig
@@ -1374,10 +1359,9 @@ class TestCoverageGaps:
                 _make_minimal_factor("fct_cross_lowic"),
                 "mock", 200,
             ))
-            with patch("fts.factor_engine.evolution_loop.evolve_micro") as mock_micro:
-                optimized = _make_minimal_factor("fct_cross_opt2")
-                mock_micro.return_value = (optimized, 0.01)
-                result = loop.run(max_generation=1)
+            optimized = _make_minimal_factor("fct_cross_opt2")
+            mock_evolve_micro.return_value = (optimized, 0.01)
+            result = loop.run(max_generation=1)
         assert result.status in ("completed", "circuit_broken")
 
     # ── line 266: consecutive_low_ic = 0 ──

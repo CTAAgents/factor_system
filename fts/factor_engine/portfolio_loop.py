@@ -776,7 +776,7 @@ def main() -> None:
     sys.exit(0 if result.status in ("passed", "verifier_warning", "completed") else 1)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()
 
 

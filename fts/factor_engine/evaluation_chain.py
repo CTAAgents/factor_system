@@ -467,16 +467,47 @@ def cross_section_evaluate_backtest(
     executor = FactorExecutor(factor)
     params = factor.get("params", {})
 
-    # Step 1: 每只股票运行因子
+    # Step 1: 每只股票运行因子 + 计算 forward_return
+    signal_dict, ret_dict = _cs_execute_factors(executor, params, panel_data)
+    if len(signal_dict) < 5:
+        return _cs_empty_metrics(oos_ratio)
+
+    # Step 2: 对齐到共同日期，构建矩阵 + OOS 切片
+    oos_n = max(int(len(common_dates) * oos_ratio), 5)
+    oos_signal, oos_ret = _cs_build_matrices(signal_dict, ret_dict, common_dates, oos_n)
+
+    # Step 3: 每期截面 IC
+    ics = _cs_compute_ics(oos_signal, oos_ret)
+    if not ics:
+        return _cs_empty_metrics(oos_ratio)
+
+    ic_mean = float(np.mean(ics))
+    ic_std = float(np.std(ics, ddof=1)) if len(ics) > 1 else 0.0
+    icir = float(ic_mean / max(ic_std, 1e-10))
+
+    # Step 4: 多空组合收益 + 最终指标
+    ls_returns = _cs_long_short_returns(oos_signal, oos_ret)
+    sharpe = _compute_sharpe(ls_returns)
+    cumulative = np.cumsum(ls_returns)
+    max_dd = _compute_max_drawdown(cumulative)
+    t_stat = _cs_t_stat(ls_returns)
+
+    return BacktestMetrics(
+        ic=ic_mean, icir=icir, sharpe=sharpe, max_drawdown=max_dd,
+        monotonicity=True, oos_ratio=oos_ratio, t_stat=t_stat, turnover_monthly=0.0,
+    )
+
+
+def _cs_execute_factors(
+    executor: FactorExecutor, params: dict, panel_data: dict[str, pd.DataFrame],
+) -> tuple[dict[str, pd.Series], dict[str, pd.Series]]:
+    """横截面 Step 1: 对每只股票运行因子 + forward_return。"""
     signal_dict: dict[str, pd.Series] = {}
     ret_dict: dict[str, pd.Series] = {}
-
     for sym, df in panel_data.items():
         try:
             sig_arr = executor.execute(df, params)
-            sig_series = pd.Series(sig_arr, index=df.index)
-            signal_dict[sym] = sig_series
-
+            signal_dict[sym] = pd.Series(sig_arr, index=df.index)
             closes = df["close"].values
             fwd_ret = np.zeros(len(closes))
             if len(closes) > 5:
@@ -484,36 +515,31 @@ def cross_section_evaluate_backtest(
             ret_dict[sym] = pd.Series(fwd_ret, index=df.index)
         except Exception:  # noqa: BLE001
             continue
+    return signal_dict, ret_dict
 
-    if len(signal_dict) < 5:
-        return BacktestMetrics(
-            ic=0.0, icir=0.0, sharpe=0.0, max_drawdown=0.0,
-            monotonicity=False, oos_ratio=oos_ratio, t_stat=0.0, turnover_monthly=0.0,
-        )
 
-    # Step 2: 对齐到共同日期，构建矩阵
-    dates = common_dates
-    n_dates = len(dates)
-    n_stocks = len(signal_dict)
+def _cs_build_matrices(
+    signal_dict: dict[str, pd.Series],
+    ret_dict: dict[str, pd.Series],
+    common_dates: pd.DatetimeIndex,
+    oos_n: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """横截面 Step 2: 对齐到共同日期，构建矩阵 + OOS 切片。"""
     symbols_list = list(signal_dict.keys())
-
+    n_dates = len(common_dates)
+    n_stocks = len(symbols_list)
     signal_matrix = np.zeros((n_dates, n_stocks))
     ret_matrix = np.zeros((n_dates, n_stocks))
-
     for j, sym in enumerate(symbols_list):
-        sig = signal_dict[sym].reindex(dates)
-        ret = ret_dict[sym].reindex(dates)
-        signal_matrix[:, j] = sig.values
-        ret_matrix[:, j] = ret.values
+        signal_matrix[:, j] = signal_dict[sym].reindex(common_dates).values
+        ret_matrix[:, j] = ret_dict[sym].reindex(common_dates).values
+    return signal_matrix[-oos_n:, :], ret_matrix[-oos_n:, :]
 
-    # OOS 切片
-    oos_n = max(int(n_dates * oos_ratio), 5)
-    oos_signal = signal_matrix[-oos_n:, :]
-    oos_ret = ret_matrix[-oos_n:, :]
 
-    # Step 3: 每期截面 IC
-    ics = []
-    for t in range(oos_n):
+def _cs_compute_ics(oos_signal: np.ndarray, oos_ret: np.ndarray) -> list[float]:
+    """横截面 Step 3: 每期 Spearman IC。"""
+    ics: list[float] = []
+    for t in range(oos_signal.shape[0]):
         sig_t = oos_signal[t, :]
         ret_t = oos_ret[t, :]
         valid = ~(np.isnan(sig_t) | np.isnan(ret_t))
@@ -526,18 +552,12 @@ def cross_section_evaluate_backtest(
         ic_val, _ = sp_stats.spearmanr(sig_valid, ret_valid)
         if not np.isnan(ic_val):
             ics.append(ic_val)
+    return ics
 
-    if not ics:
-        return BacktestMetrics(
-            ic=0.0, icir=0.0, sharpe=0.0, max_drawdown=0.0,
-            monotonicity=False, oos_ratio=oos_ratio, t_stat=0.0, turnover_monthly=0.0,
-        )
 
-    ic_mean = float(np.mean(ics))
-    ic_std = float(np.std(ics, ddof=1)) if len(ics) > 1 else 0.0
-    icir = float(ic_mean / max(ic_std, 1e-10))
-
-    # 多空组合收益（截面：每期做多 top 20%，做空 bottom 20%）
+def _cs_long_short_returns(oos_signal: np.ndarray, oos_ret: np.ndarray) -> np.ndarray:
+    """横截面: 多空组合收益（每期 top 20% - bottom 20%）。"""
+    oos_n = oos_signal.shape[0]
     ls_returns = np.zeros(oos_n)
     for t in range(oos_n):
         sig_t = oos_signal[t, :]
@@ -553,26 +573,21 @@ def cross_section_evaluate_backtest(
         long_ret = np.mean(ret_v[sorted_idx[-top_n:]])
         short_ret = np.mean(ret_v[sorted_idx[:top_n]])
         ls_returns[t] = long_ret - short_ret
+    return ls_returns
 
-    sharpe = _compute_sharpe(ls_returns)
-    cumulative = np.cumsum(ls_returns)
-    max_dd = _compute_max_drawdown(cumulative)
 
-    # t 统计量
+def _cs_t_stat(ls_returns: np.ndarray) -> float:
+    """横截面: t 统计量。"""
     if np.std(ls_returns) > 1e-10:
-        t_stat = float(np.mean(ls_returns) / np.std(ls_returns, ddof=1) * np.sqrt(len(ls_returns)))
-    else:
-        t_stat = 0.0
+        return float(np.mean(ls_returns) / np.std(ls_returns, ddof=1) * np.sqrt(len(ls_returns)))
+    return 0.0
 
+
+def _cs_empty_metrics(oos_ratio: float) -> BacktestMetrics:
+    """横截面: 数据不足时的空指标。"""
     return BacktestMetrics(
-        ic=ic_mean,
-        icir=icir,
-        sharpe=sharpe,
-        max_drawdown=max_dd,
-        monotonicity=True,  # 横截面单调性需更复杂计算，暂时置 True
-        oos_ratio=oos_ratio,
-        t_stat=t_stat,
-        turnover_monthly=0.0,  # 截面模式换手率需加权计算，简化
+        ic=0.0, icir=0.0, sharpe=0.0, max_drawdown=0.0,
+        monotonicity=False, oos_ratio=oos_ratio, t_stat=0.0, turnover_monthly=0.0,
     )
 
 

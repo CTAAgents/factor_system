@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import importlib
+import sys
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -60,6 +62,27 @@ class TestCoverageGaps:
         params, score = mev.optimize_params(factor, data, rets)
         assert params == {"window": 10}
         assert score == 0.0
+
+    def test_import_error_actual_import_fail(self):
+        """lines 28-30: 实际触发 ImportError 覆盖 except 块。
+
+        通过 patch optuna 的导入来触发 ImportError，然后重新加载模块。
+        """
+        with patch.dict('sys.modules', {'optuna': None}):
+            with patch('builtins.__import__') as mock_import:
+                def side_effect(name, *args, **kwargs):
+                    if name == 'optuna' or name.startswith('optuna.'):
+                        raise ImportError(f"No module named '{name}'")
+                    # 恢复原始 __import__ 行为
+                    return importlib.__import__(name, *args, **kwargs)
+                mock_import.side_effect = side_effect
+
+                # 重新加载模块以触发 ImportError
+                import fts.factor_engine.micro_evolution as mev
+                importlib.reload(mev)
+
+                assert mev._HAS_OPTUNA is False
+                assert mev.optuna is None
 
     def test_optimize_params_short_signal_covers_line93(self, monkeypatch):
         """line 93: objective_fn 中信号太短返回 0.0。

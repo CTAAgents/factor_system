@@ -66,11 +66,13 @@
 
 - **解决方式**: 安装 evolution extra 后补充 optuna 分支测试
 - **关闭时覆盖率**: micro_evolution.py 92%
+- **当前覆盖率**: 100%（v1.3.0 工程测试：ImportError 路径、optuna 异常路径、零方差信号路径全覆盖）
 
 ### GAP-004: evaluation_chain.py mock 路径未覆盖（已关闭）
 
 - **解决方式**: 通过 `tests/factor_engine/test_macro_evolution.py` 补充 LLM mock 场景
 - **关闭时覆盖率**: evaluation_chain.py 96%
+- **当前覆盖率**: 99%（仅余空白行，v1.3.0 工程测试改进）
 
 ### GAP-005: monitor 格式输出测试（已关闭）
 

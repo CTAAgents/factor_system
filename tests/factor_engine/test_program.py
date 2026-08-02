@@ -27,8 +27,8 @@ class TestParseProgramMd:
         """默认模板应解析出正确的默认值。"""
         config = parse_program_md(DEFAULT_PROGRAM_MD)
         assert config.market_regime == "震荡偏多"
-        assert "低波因子" in config.factor_priority
-        assert "趋势动量因子" in config.factor_avoid
+        assert "动量因子" in config.factor_priority
+        assert "反转因子" in config.factor_avoid
         assert config.agent_llm_default == "deepseek-chat"
         assert config.daily_tokens == 50000
         assert config.nightly_tokens == 200000
