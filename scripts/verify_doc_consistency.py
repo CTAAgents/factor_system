@@ -79,15 +79,15 @@ def check_doc_assertions(doc_path: Path) -> list[str]:
 
     # 01-architecture: 检查种子池数
     if doc_name == "01-architecture.md":
-        seed_count = len(re.findall(r"268", content))
+        seed_count = len(re.findall(r"459", content))
         if seed_count == 0:
-            issues.append("种子池数 268 未在文档中体现")
+            issues.append("种子池数 459 未在文档中体现")
 
     # 06-testing: 检查测试用例数
     if doc_name == "06-testing.md":
-        test_count = len(re.findall(r"1325", content))
+        test_count = len(re.findall(r"1328", content))
         if test_count == 0:
-            issues.append("测试用例数 1325 未在文档中体现")
+            issues.append("测试用例数 1328 未在文档中体现")
 
     # 07-operations: 检查版本号文件是否存在
     if doc_name == "07-operations.md":

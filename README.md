@@ -4,7 +4,7 @@
 
 [![Tests](https://img.shields.io/badge/tests-1325%20passing-brightgreen)](#)
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)](#)
-[![Version](https://img.shields.io/badge/version-1.2.0-blue)](#)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue)](#)
 
 ---
 
@@ -150,12 +150,12 @@ FTS（因子智能系统）
 
 | 指标 | 值 |
 |------|:---:|
-| **版本** | v1.2.0 |
+| **版本** | v1.3.0 |
 | **测试通过数** | 1325 / 1325（100%）|
 | **测试覆盖率** | 99%（46 个模块）|
 | **代码行数** | ~4,300 语句 |
 | **文件数** | 79 个源码 + 测试文件 |
-| **种子因子数** | 268（9 内置 + 101 世坤 + 158 Qlib） |
+| **种子因子数** | 459（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安） |
 
 ## 依赖关系
 

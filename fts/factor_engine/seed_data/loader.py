@@ -288,14 +288,23 @@ def load_qlib158_seeds(trace_id: str | None = None) -> list[FactorProgram]:
     return _load_definitions(QLIB158_DEFINITIONS, trace_id)
 
 
+def load_gtja191_seeds(trace_id: str | None = None) -> list[FactorProgram]:
+    """加载国泰君安 191 Alpha 因子种子。"""
+    from .gtja191 import GTJA191_DEFINITIONS
+    return _load_definitions(GTJA191_DEFINITIONS, trace_id)
+
+
 def load_all_external_seeds(trace_id: str | None = None) -> list[FactorProgram]:
     """加载所有外部种子因子。"""
-    return load_wq101_seeds(trace_id) + load_qlib158_seeds(trace_id)
+    return load_wq101_seeds(trace_id) + load_qlib158_seeds(trace_id) + load_gtja191_seeds(trace_id)
 
 
-def get_external_seed_count() -> tuple[int, int, int]:
-    """返回 (wq101_count, qlib158_count, total_count)。"""
+def get_external_seed_count() -> tuple[int, int, int, int]:
+    """返回 (wq101_count, qlib158_count, gtja191_count, total_count)。"""
     from .wq101 import WQ101_DEFINITIONS
     from .qlib158 import QLIB158_DEFINITIONS
-    return (len(WQ101_DEFINITIONS), len(QLIB158_DEFINITIONS),
-            len(WQ101_DEFINITIONS) + len(QLIB158_DEFINITIONS))
+    from .gtja191 import GTJA191_DEFINITIONS
+    wq = len(WQ101_DEFINITIONS)
+    ql = len(QLIB158_DEFINITIONS)
+    gj = len(GTJA191_DEFINITIONS)
+    return (wq, ql, gj, wq + ql + gj)

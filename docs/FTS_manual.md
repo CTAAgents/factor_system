@@ -1,6 +1,6 @@
 # FTS 用户手册
 
-> **版本 1.1.0 · 最后更新 2026-07-24**
+> **版本 1.2.0 · 最后更新 2026-08-02**
 
 FTS 是一个**因子智能系统**——它每天自动分析市场数据，生成交易信号，帮你做量化投资决策。
 
@@ -60,8 +60,8 @@ OPENAI_MODEL=deepseek-chat
 fts version
 
 # 看到类似输出就对了:
-# FTS version: 1.1.0
-# Factor engine version: 1.1.0
+# FTS version: 1.2.0
+# Factor engine version: 1.2.0
 ```
 
 > 如果提示 `fts` 命令找不到，请使用模块模式：
@@ -78,8 +78,8 @@ fts evolution run --symbol 510300 --max-generations 3
 ```
 
 系统会：
-1. 从腾讯自选股 API 获取 500 天的历史数据
-2. 用 9 个种子因子开始演化
+1. 从腾讯自选股/东方财富 API 获取 500 天的历史数据
+2. 用 268 个种子因子（9 内置 + 101 世坤 + 158 Qlib）开始演化
 3. 每代尝试改进因子代码和参数
 4. 输出评估结果
 
@@ -293,7 +293,7 @@ OPENAI_MODEL=deepseek-chat
 
 ### 数据源
 
-系统默认从**腾讯自选股 API**（qt.gtimg.cn）获取 A 股和 ETF 的日线数据。
+系统默认从**腾讯自选股 API**（qt.gtimg.cn）和**东方财富 API**（akshare）获取 A 股和 ETF 的日线数据。
 
 - 不需要额外的账号或 Key
 - 网络不可用时自动使用**合成数据**（不影响测试运行）
@@ -386,18 +386,21 @@ fts ui
 | 资源 | 位置 |
 |------|------|
 | 代码 Wiki | `docs/CODE_WIKI.md` |
+| 执行模式流程图 | `docs/execution_modes_flowchart.md` |
+| 业务流程图 | `docs/business_flow.md` |
 | 生产部署 | `docs/production_plan.md` |
 | 工程规范 | `docs/harness/` |
+| 角色职责 | `agents/fts-agent.md` |
 | README | `README.md` |
 
 ### 工程指标
 
 | 指标 | 值 |
 |------|:---:|
-| 版本 | v1.1.0 |
+| 版本 | v1.2.0 |
 | 测试通过 | 1325 / 1325（100%）|
 | 覆盖率 | 99%（46 个模块）|
-| 种子因子 | 9 个 |
+| 种子因子 | 268（9 内置 + 101 世坤 + 158 Qlib）|
 | 定时任务 | 4 个 |
 
 ### 项目结构（简版）

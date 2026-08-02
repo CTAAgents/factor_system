@@ -15,6 +15,11 @@ HARNESS §11-loop-engineering.md §2.2:
     8. quality_factor        质量因子（A 股）
     9. size_factor           市值因子（A 股）
 
+外部种子因子（450 个）:
+    - WQ 101 Alpha         101 个
+    - Qlib 158             158 个
+    - 国泰君安 191 Alpha   191 个
+
 版本: v1.1.0（与 FTS 同步）
 """
 
@@ -388,10 +393,10 @@ class SeedPool:
         self,
         include_external: bool = True,
     ) -> list[FactorProgram]:
-        """加载全部种子因子（内置 9 个 + 外部 259 个）。
+        """加载全部种子因子（内置 9 个 + 外部 450 个）。
 
         Args:
-            include_external: 是否加载 WQ 101 和 Qlib 158 外部种子（默认 True）。
+            include_external: 是否加载 WQ 101 / Qlib 158 / 国泰君安 191 外部种子（默认 True）。
 
         Returns:
             list[FactorProgram] — 所有种子因子列表（不含 L1 注入）。
@@ -414,7 +419,7 @@ class SeedPool:
             )
             self._cache[defn["name"]] = fp
 
-        # 外部种子（WQ 101 + Qlib 158）
+        # 外部种子（WQ 101 + Qlib 158 + 国泰君安 191）
         if include_external:
             for ext_fp in load_all_external_seeds(self._trace_id):
                 self._cache[ext_fp["name"]] = ext_fp

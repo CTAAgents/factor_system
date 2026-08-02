@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v1.1.0
+> 版本: v1.3.0
 > 最后更新: 2026-08-02
 
 ---
@@ -25,7 +25,7 @@
 | 单元测试 | 27 | ~1038 | 各模块独立测试 |
 | 集成测试 | 2 | ~143 | strategies 策略层 |
 | E2E | 1 | 10 | test_e2e.py |
-| 合计 | 35 | 1181 | 全部通过 |
+| 合计 | 35 | 1184 | 全部通过 |
 
 ---
 
@@ -117,7 +117,7 @@ python -m pytest tests/factor_engine/test_verifier.py -v
 | Overall coverage | 99% |
 | 测试用例数 | 1325 passed, 0 failed |
 | 测试文件数 | 35+ |
-| 种子因子数 | 268（9 内置 + 101 世坤 + 158 Qlib） |
+| 种子因子数 | 459（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安） |
 
 ### 模块覆盖详情
 
@@ -245,7 +245,7 @@ TOTAL                                      4380     32    99%
 | `tests/factor_engine/test_monitor.py` | ~45 | 因子引擎监控 |
 | `tests/factor_engine/test_portfolio_loop.py` | ~54 | L3 组合循环 |
 | `tests/factor_engine/test_program.py` | ~16 | Program.md |
-| `tests/factor_engine/test_seed_pool.py` | ~9 | 种子池 |
+| `tests/factor_engine/test_seed_pool.py` | ~16 | 种子池（含 GTJA191） |
 | `tests/factor_engine/test_stress_test.py` | ~32 | 压力测试 |
 | `tests/factor_engine/test_verifier.py` | ~12 | Verifier |
 | `tests/factor_engine/test_walk_forward.py` | ~57 | 走航验证 |
@@ -265,7 +265,7 @@ TOTAL                                      4380     32    99%
 | `tests/test_http_server.py` | ~31 | Web UI 仪表盘 |
 | `tests/test_llm.py` | ~36 | LLM 客户端 |
 | `tests/test_monitor.py` | ~46 | 项目级监控 |
-| **合计** | **1325** | |
+| **合计** | **1328** | |
 
 ---
 
@@ -276,3 +276,13 @@ TOTAL                                      4380     32    99%
 3. **trace_id 验证**：测试必须验证 trace_id 是否正确传播
 4. **Verifier 锁定测试**：必须测试锁定后的只读行为
 5. **覆盖率门禁**：新增代码必须有对应测试，覆盖率不得低于模块当前水平
+
+---
+
+## 一致性元数据
+
+| 字段 | 值 |
+|:-----|:----|
+| 代码→文档映射 | `test_seed_pool.py` → 16 个种子池测试用例（含 GTJA191） |
+| 可验证断言 | 种子池测试数 = 16，总测试数 = 1328 |
+| 检验方式 | `python -m pytest tests/factor_engine/test_seed_pool.py --no-cov -q 2>&1 | findstr "passed"` |

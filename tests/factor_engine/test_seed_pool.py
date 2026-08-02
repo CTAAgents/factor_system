@@ -7,8 +7,8 @@ import pytest
 from fts.factor_engine.contracts import FactorProgram
 from fts.factor_engine.seed_pool import SeedPool, get_default_seed_pool
 
-# 内置 9 个 + 外部 WQ101 101 个 + Qlib158 158 个 = 268
-_TOTAL_SEEDS = 9 + 101 + 158
+# 内置 9 个 + 外部 WQ101 101 个 + Qlib158 158 个 + GTJA191 191 个 = 459
+_TOTAL_SEEDS = 9 + 101 + 158 + 191
 _INTERNAL_NAMES = {
     "momentum", "volatility_reversion", "volume_flow",
     "macro_regime", "rate_proxy", "pmi_proxy",
@@ -17,7 +17,7 @@ _INTERNAL_NAMES = {
 
 
 def test_seed_pool_loads_all_seeds():
-    """种子池必须包含全部 268 个种子因子（内置 9 + 外部 259）。"""
+    """种子池必须包含全部 459 个种子因子（内置 9 + 外部 450）。"""
     pool = SeedPool()
     seeds = pool.load_all_seeds()
     assert len(seeds) == _TOTAL_SEEDS
@@ -36,7 +36,7 @@ def test_seed_pool_count():
 
 
 def test_seed_pool_list_names():
-    """种子因子名称列表必须包含所有 268 个名称。"""
+    """种子因子名称列表必须包含所有 459 个名称。"""
     pool = SeedPool()
     names = pool.list_names()
     # 必须包含所有内置名称
@@ -47,6 +47,9 @@ def test_seed_pool_list_names():
     # 必须包含 qlib_001 ~ qlib_158
     assert "qlib_001" in names
     assert "qlib_158" in names
+    # 必须包含 gtja_001 ~ gtja_191
+    assert "gtja_001" in names
+    assert "gtja_191" in names
     # 总数正确
     assert len(names) == _TOTAL_SEEDS
 
@@ -135,7 +138,7 @@ def test_external_seed_code_has_alpha_ops():
     """外部种子代码必须包含公共操作函数。"""
     pool = SeedPool()
     for seed in pool.load_all_seeds():
-        if seed["name"].startswith("alpha_") or seed["name"].startswith("qlib_"):
+        if seed["name"].startswith("alpha_") or seed["name"].startswith("qlib_") or seed["name"].startswith("gtja_"):
             assert "rank" in seed["code"], f"{seed['name']} 缺少 rank 操作"
             assert "ts_sum" in seed["code"], f"{seed['name']} 缺少 ts_sum 操作"
 
@@ -154,3 +157,11 @@ def test_qlib158_all_present():
     names = pool.list_names()
     for i in range(1, 159):
         assert f"qlib_{i:03d}" in names, f"缺少 qlib_{i:03d}"
+
+
+def test_gtja191_all_present():
+    """国泰君安 191 因子必须全部存在。"""
+    pool = SeedPool()
+    names = pool.list_names()
+    for i in range(1, 192):
+        assert f"gtja_{i:03d}" in names, f"缺少 gtja_{i:03d}"
