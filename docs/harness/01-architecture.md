@@ -1,7 +1,7 @@
 # FTS 系统架构文档
 
-> 版本: v1.1.0
-> 最后更新: 2026-08-02
+> 版本: v1.4.0
+> 最后更新: 2026-08-03
 
 ---
 
@@ -65,14 +65,15 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  (LLM 改逻辑)           (optuna 调参)          (三级评估链)              │
 │                                                                         │
 │  evolution_loop.py — L2 主循环协调器                                   │
-│  seed_pool.py — 种子池（459 个因子：9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + L1 注入接口）
+│  seed_pool.py — 种子池（482 个因子：9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面/另类/宏观 + L1 注入接口）
 │  ├── seed_data/               # 种子因子定义库
 │  │   ├── wq101.py             # 101 个 WorldQuant Alpha 因子
 │  │   ├── qlib158.py           # 158 个 Qlib 因子
 │  │   ├── gtja191.py           # 191 个国泰君安 Alpha 因子
-│  │   ├── alpha_ops.py         # 公共操作库（标准化计算函数）
-│  │   ├── loader.py            # 动态加载器：因子定义 → FactorProgram
-│  │   └── __init__.py          # 统一导出入口                    │
+│  │   ├── fundamental_seeds.py # 23 个基本面/另类/宏观因子
+│   │   ├── alpha_ops.py        # 公共操作库
+│   │   └── loader.py           # 动态加载器：因子定义 → FactorProgram（含基本面支持）
+│   │   └── __init__.py          # 统一导出入口                    │
 │  factor_program.py — 因子程序（图灵完备代码 + 安全沙箱）                  │
 │  verifier.py — Verifier 锁定协议                                       │
 │  state.py — 演化状态管理 + trace_id 全链路                              │
@@ -138,7 +139,7 @@ fts/
 │   │   ├── gtja191.py          # 191 个国泰君安 Alpha 因子
 │   │   ├── alpha_ops.py        # 公共操作库
 │   │   └── loader.py           # 动态加载器
-│   ├── seed_pool.py            # 种子池（459 个因子，含 WQ101 + Qlib158 + GTJA191 外部种子）
+│   ├── seed_pool.py            # 种子池（482 个因子，含 WQ101 + Qlib158 + GTJA191 + 基本面外部种子）
 │   ├── factor_program.py       # 因子程序（安全沙箱）
 │   ├── verifier.py             # Verifier 锁定协议
 │   ├── state.py                # 演化状态管理
@@ -266,6 +267,6 @@ Verifier 是 FTS 的核心安全机制，锁定后不可逆：
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `seed_pool.py` → 种子池 459 因子（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安） |
-| 可验证断言 | 种子池总数 = 459 |
-| 检验方式 | `python -c "from fts.factor_engine.seed_pool import SeedPool; assert len(SeedPool().load_all_seeds()) == 459"` |
+| 代码→文档映射 | `seed_pool.py` → 种子池 482 因子（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面/另类/宏观）；`data_fundamental.py` → FundamentalProvider 基本面数据层 |
+| 可验证断言 | 种子池总数 = 482；基本面数据层提供 4 大类 30+ 字段 |
+| 检验方式 | `python -c "from fts.factor_engine.seed_pool import SeedPool; assert len(SeedPool().load_all_seeds()) == 482"` |

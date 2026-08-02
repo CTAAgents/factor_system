@@ -2,10 +2,11 @@
 fts.data — FTS 数据层集成入口
 
 基于腾讯自选股 MCP (akshare) 为 FTS 因子引擎提供统一数据访问接口。
-替换原 Data-Core (datacore) 依赖，仅支持 A 股和 ETF 因子演化。
+替换原 Data-Core (datacore) 依赖，支持 A 股和 ETF 因子演化。
 
 数据流:
     因子引擎 → FTSDataProvider → MCPDataProvider(akshare) → 腾讯/东方财富 API
+                              → FundamentalProvider → MCP westock API
 
 HARNESS §契约优先: 所有数据接口通过本模块定义。
 """
@@ -20,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from .data_mcp import MCPDataProvider, MCPDataError
+from .data_fundamental import FundamentalProvider, FundamentalDataError
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +49,30 @@ class FTSDataProvider:
         df = provider.get_etf_ohlcv("510050", days=500)
     """
 
-    def __init__(self, mcp_provider: Optional[MCPDataProvider] = None):
+    def __init__(self, mcp_provider: Optional[MCPDataProvider] = None,
+                 fundamental_provider: Optional[FundamentalProvider] = None):
         self._mcp = mcp_provider or MCPDataProvider()
+        self._fundamental = fundamental_provider or FundamentalProvider(mcp_available=False)
+
+    # ── 基本面注入 ──
+
+    def set_fundamental_provider(self, provider: FundamentalProvider) -> None:
+        """设置基本面数据提供者（外部注入用）。"""
+        self._fundamental = provider
+
+    def enrich_with_fundamental(self, df: pd.DataFrame, symbol: str, *,
+                                trace_id: str = "") -> pd.DataFrame:
+        """将基本面字段注入 OHLCV DataFrame。
+
+        Args:
+            df: OHLCV DataFrame
+            symbol: 股票代码
+            trace_id: HARNESS trace_id
+
+        Returns:
+            DataFrame — 新增 pe_ttm, pb, total_market_cap 等基本面列。
+        """
+        return self._fundamental.enrich_ohlcv(df, symbol, trace_id=trace_id)
 
     # ── 单标的 OHLCV ──
 
@@ -56,6 +80,7 @@ class FTSDataProvider:
                   days: int = 500,
                   adjust: str = "qfq",
                   trace_id: str = "",
+                  fundamental: bool = False,
                   ) -> pd.DataFrame:
         """获取股票/ETF OHLCV K线数据。
 
@@ -64,10 +89,11 @@ class FTSDataProvider:
             days: 回溯天数
             adjust: 复权方式 ("qfq"前复权 / "hfq"后复权 / ""不复权)
             trace_id: HARNESS trace_id
+            fundamental: 是否注入基本面字段（pe_ttm, pb 等）
 
         Returns:
             pd.DataFrame with columns: open, high, low, close, volume
-            Index: DatetimeIndex
+            If fundamental=True, also includes pe_ttm, pb, etc.
 
         Raises:
             DataUnavailableError: 所有数据源不可用
@@ -75,13 +101,18 @@ class FTSDataProvider:
         try:
             df = self._mcp.get_ohlcv(symbol, days=days, adjust=adjust, trace_id=trace_id)
             if df is not None and not df.empty and "close" in df.columns:
+                if fundamental:
+                    df = self._fundamental.enrich_ohlcv(df, symbol, trace_id=trace_id)
                 return df
         except (MCPDataError, Exception) as e:
             logger.warning(f"MCP OHLCV 获取失败 [{symbol}]: {e}")
 
         # 回退：合成数据（确保系统可运行）
         logger.warning(f"使用合成数据回退 [{symbol}]")
-        return self.synthesize_ohlcv(n_days=days, base_price=15.0, seed=42)
+        df = self.synthesize_ohlcv(n_days=days, base_price=15.0, seed=42)
+        if fundamental:
+            df = self._fundamental.enrich_ohlcv(df, symbol, trace_id=trace_id)
+        return df
 
     # ── ETF 专用接口 ──
 
@@ -97,17 +128,20 @@ class FTSDataProvider:
 
     def get_csi300_panel(self, days: int = 500,
                          max_stocks: int = 50,
-                         trace_id: str = "") -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+                         trace_id: str = "",
+                         fundamental: bool = False,
+                         ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
         """获取沪深 300 成分股批量 OHLCV 面板数据。
 
         Args:
             days: 回溯天数
             max_stocks: 最大成分股数（0 = 使用全部）
             trace_id: HARNESS trace_id
+            fundamental: 是否注入基本面字段
 
         Returns:
             (panel, common_dates)
-            panel: dict[symbol, OHLCV DataFrame]
+            panel: dict[symbol, OHLCV DataFrame]（含基本面列如果 fundamental=True）
             common_dates: 所有股票共有日期
         """
         from .data_mcp import CSI300_SUBSET
@@ -119,7 +153,8 @@ class FTSDataProvider:
 
         for sym in symbols:
             try:
-                df = self.get_ohlcv(sym, days=days, adjust="qfq", trace_id=trace_id)
+                df = self.get_ohlcv(sym, days=days, adjust="qfq",
+                                    trace_id=trace_id, fundamental=fundamental)
                 if df is not None and not df.empty and "close" in df.columns:
                     panel[sym] = df
                     if first:
@@ -132,6 +167,8 @@ class FTSDataProvider:
 
         if not panel:
             df = self.synthesize_ohlcv(n_days=days, base_price=15.0, seed=42)
+            if fundamental:
+                df = self._fundamental.enrich_ohlcv(df, "SYNTHETIC", trace_id=trace_id)
             panel["SYNTHETIC"] = df
             return panel, df.index
 
@@ -187,5 +224,8 @@ def get_data_provider() -> FTSDataProvider:
 __all__ = [
     "FTSDataProvider",
     "DataUnavailableError",
+    "FundamentalProvider",
+    "FundamentalDataError",
     "get_data_provider",
+    "get_fundamental_provider",
 ]

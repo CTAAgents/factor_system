@@ -15,10 +15,11 @@ HARNESS §11-loop-engineering.md §2.2:
     8. quality_factor        质量因子（A 股）
     9. size_factor           市值因子（A 股）
 
-外部种子因子（450 个）:
+外部种子因子（473 个）:
     - WQ 101 Alpha         101 个
     - Qlib 158             158 个
     - 国泰君安 191 Alpha   191 个
+    - 基本面/另类/宏观      23 个
 
 版本: v1.1.0（与 FTS 同步）
 """

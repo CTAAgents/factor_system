@@ -13,7 +13,6 @@ FTS — Factor Trading System
     - cli: 统一命令行入口
     - data / data_mcp: MCP 数据适配层
 
-版本: v1.3.2（代码审核提升：消除种子评估重复逻辑 + 提取公共 Mock fixture，1432 测试全绿，47/47 模块 100% 覆盖率）
-"""
+版本: v1.4.0（基本面/另类/宏观因子集成：23 个基本面种子因子加入种子池，新增 FundamentalProvider 数据层，482 种子因子，1502 测试全绿）"""
 
-__version__ = "1.3.2"
+__version__ = "1.4.0"

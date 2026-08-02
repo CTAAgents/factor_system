@@ -508,3 +508,116 @@ class TestFTSCsi300PanelFallback:
         p = FTSDataProvider(mcp_provider=mocker.MagicMock())
         panel, dates = p.get_csi300_panel(days=100, max_stocks=3)
         assert len(panel) == 1  # 只有第一个成功
+
+
+# ═══════════════════════════════════════════════════════════
+# 17. FTSDataProvider 基本面注入接口
+# ═══════════════════════════════════════════════════════════
+
+class TestFTSFundamentalIntegration:
+    """覆盖 data.FTSDataProvider 的基本面注入接口（enrich_with_fundamental / set_fundamental_provider / fundamental 参数）。"""
+
+    def test_enrich_with_fundamental_delegates(self, mocker):
+        """enrich_with_fundamental 委托给 FundamentalProvider.enrich_ohlcv。"""
+        from fts.data_fundamental import FundamentalProvider
+        mock_fund = mocker.MagicMock(spec=FundamentalProvider)
+        mock_df = pd.DataFrame({"close": [1.0]})
+        mock_fund.enrich_ohlcv.return_value = mock_df
+        p = FTSDataProvider(mcp_provider=mocker.MagicMock(), fundamental_provider=mock_fund)
+        result = p.enrich_with_fundamental(pd.DataFrame({"close": [1.0]}), "000001")
+        mock_fund.enrich_ohlcv.assert_called_once()
+        assert result is mock_df
+
+    def test_set_fundamental_provider(self, mocker):
+        """set_fundamental_provider 替换内部 provider。"""
+        from fts.data_fundamental import FundamentalProvider
+        p = FTSDataProvider(mcp_provider=mocker.MagicMock())
+        assert p._fundamental is not None
+        new_provider = FundamentalProvider(mcp_available=False)
+        p.set_fundamental_provider(new_provider)
+        assert p._fundamental is new_provider
+
+    def test_get_ohlcv_with_fundamental_true(self, mocker):
+        """fundamental=True 时 get_ohlcv 应注入基本面字段。"""
+        from fts.data_fundamental import FundamentalProvider
+        mock_fund = mocker.MagicMock(spec=FundamentalProvider)
+        base_df = pd.DataFrame(
+            {"close": [1.0, 2.0], "open": [0.9, 1.8], "high": [1.1, 2.2],
+             "low": [0.8, 1.7], "volume": [1000.0, 2000.0]},
+            index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
+        )
+        enriched_df = base_df.copy()
+        enriched_df["pe_ttm"] = 15.0
+        mock_fund.enrich_ohlcv.return_value = enriched_df
+        mock_mcp = mocker.MagicMock()
+        mock_mcp.get_ohlcv.return_value = base_df
+        p = FTSDataProvider(mcp_provider=mock_mcp, fundamental_provider=mock_fund)
+        result = p.get_ohlcv("000001", days=100, fundamental=True)
+        assert "pe_ttm" in result.columns
+        mock_fund.enrich_ohlcv.assert_called_once()
+
+    def test_get_ohlcv_with_fundamental_false(self, mocker):
+        """fundamental=False 时 get_ohlcv 不应注入基本面字段。"""
+        from fts.data_fundamental import FundamentalProvider
+        mock_fund = mocker.MagicMock(spec=FundamentalProvider)
+        base_df = pd.DataFrame(
+            {"close": [1.0, 2.0], "open": [0.9, 1.8], "high": [1.1, 2.2],
+             "low": [0.8, 1.7], "volume": [1000.0, 2000.0]},
+            index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
+        )
+        mock_mcp = mocker.MagicMock()
+        mock_mcp.get_ohlcv.return_value = base_df
+        p = FTSDataProvider(mcp_provider=mock_mcp, fundamental_provider=mock_fund)
+        result = p.get_ohlcv("000001", days=100, fundamental=False)
+        assert "pe_ttm" not in result.columns
+        mock_fund.enrich_ohlcv.assert_not_called()
+
+    def test_get_ohlcv_fallback_with_fundamental(self, mocker):
+        """MCP 失败降级到合成数据时，fundamental=True 仍应注入基本面字段。"""
+        from fts.data_fundamental import FundamentalProvider
+        mock_fund = mocker.MagicMock(spec=FundamentalProvider)
+        mock_mcp = mocker.MagicMock()
+        mock_mcp.get_ohlcv.side_effect = Exception("fail")
+        synthetic_df = FTSDataProvider.synthesize_ohlcv(n_days=100, base_price=15.0, seed=42)
+        mock_fund.enrich_ohlcv.return_value = synthetic_df
+        # patch synthesize_ohlcv to return synthetic_df
+        mocker.patch.object(FTSDataProvider, "synthesize_ohlcv", return_value=synthetic_df)
+        p = FTSDataProvider(mcp_provider=mock_mcp, fundamental_provider=mock_fund)
+        result = p.get_ohlcv("000001", days=100, fundamental=True)
+        assert "close" in result.columns
+        mock_fund.enrich_ohlcv.assert_called_once()
+
+    def test_get_csi300_panel_with_fundamental(self, mocker):
+        """fundamental=True 时 get_csi300_panel 应注入基本面字段。"""
+        from fts.data_fundamental import FundamentalProvider
+        from fts.data_mcp import CSI300_SUBSET
+        mock_fund = mocker.MagicMock(spec=FundamentalProvider)
+        base_df = pd.DataFrame(
+            {"close": [1.0, 2.0], "open": [0.9, 1.8], "high": [1.1, 2.2],
+             "low": [0.8, 1.7], "volume": [1000.0, 2000.0]},
+            index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
+        )
+        enriched_df = base_df.copy()
+        enriched_df["pe_ttm"] = 15.0
+        mock_fund.enrich_ohlcv.return_value = enriched_df
+        mock_mcp = mocker.MagicMock()
+        mock_mcp.get_ohlcv.return_value = base_df
+        p = FTSDataProvider(mcp_provider=mock_mcp, fundamental_provider=mock_fund)
+        panel, dates = p.get_csi300_panel(days=100, max_stocks=2, fundamental=True)
+        for sym, df in panel.items():
+            assert "pe_ttm" in df.columns, f"{sym} 缺少基本面字段"
+        mock_fund.enrich_ohlcv.assert_called()
+
+    def test_get_csi300_panel_synthetic_fallback_fundamental(self, mocker):
+        """get_csi300_panel 全部失败时，合成数据应注入基本面字段。"""
+        from fts.data_fundamental import FundamentalProvider
+        mock_fund = mocker.MagicMock(spec=FundamentalProvider)
+        synthetic_df = FTSDataProvider.synthesize_ohlcv(n_days=100, base_price=15.0, seed=42)
+        enriched_synthetic = synthetic_df.copy()
+        enriched_synthetic["pe_ttm"] = 15.0
+        mock_fund.enrich_ohlcv.return_value = enriched_synthetic
+        mocker.patch.object(FTSDataProvider, "get_ohlcv", side_effect=Exception("fail"))
+        p = FTSDataProvider(fundamental_provider=mock_fund)
+        panel, dates = p.get_csi300_panel(days=100, max_stocks=2, fundamental=True)
+        assert "SYNTHETIC" in panel
+        assert "pe_ttm" in panel["SYNTHETIC"].columns

@@ -22,10 +22,10 @@
 
 | 层级 | 测试文件数 | 用例数 | 说明 |
 |:-----|:----------|:-------|:-----|
-| 单元测试 | 28 | ~1039 | 各模块独立测试 |
+| 单元测试 | 29 | ~1109 | 各模块独立测试（含基本面数据层） |
 | 集成测试 | 2 | ~143 | strategies 策略层 |
 | E2E | 1 | 10 | test_e2e.py |
-| 合计 | 35 | 1185 | 全部通过 |
+| 合计 | 36 | 1262 | 全部通过 |
 
 ---
 
@@ -115,9 +115,9 @@ python -m pytest tests/factor_engine/test_verifier.py -v
 |:-----|:---|
 | Total statements | 4573 |
 | Overall coverage | 99% (仅余 1 个空白行不可覆盖) |
-| 测试用例数 | 1432 passed, 0 failed |
+| 测试用例数 | 1435 passed, 0 failed |
 | 测试文件数 | 40+ |
-| 种子因子数 | 459（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安） |
+| 种子因子数 | 482（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面/另类/宏观） |
 
 ### 模块覆盖详情
 
@@ -132,7 +132,8 @@ fts\core\__init__.py                           0      0   100%
 fts\core\atomic.py                            44      0   100%
 fts\core\contracts.py                          3      0   100%
 fts\core\enums.py                             17      0   100%
-fts\data.py                                   62      0   100%
+fts\data.py                                   75      0   100%
+fts\data_fundamental.py                      161     44    73%   205-223, 240-268, 272-301
 fts\data_mcp.py                              120      0   100%
 fts\factor_engine\__init__.py                 16      0   100%
 fts\factor_engine\contracts.py               258      0   100%
@@ -192,6 +193,7 @@ TOTAL                                       4573      1    99%
 | `core/contracts.py` | **100%** | |
 | `core/enums.py` | **100%** | |
 | `data.py` | **100%** | 数据层全覆盖 |
+| `data_fundamental.py` | **73%** | 基本面数据层（MCP 路径需网络环境） |
 | `data_mcp.py` | **100%** | MCP 数据适配全覆盖 |
 | `factor_engine/__init__.py` | **100%** | |
 | `factor_engine/contracts.py` | **100%** | 契约定义全覆盖 |
@@ -233,7 +235,8 @@ TOTAL                                       4573      1    99%
 | `strategies/base_v2.py` | **100%** | |
 | `strategies/multi_factor_strategy.py` | **100%** | 多因子策略全覆盖 |
 | `strategies/rules/__init__.py` | **100%** | |
-| **≥99% 模块（1 个）** | | |
+| **≥73% 模块（2 个）** | | |
+| `data_fundamental.py` | **73%** | MCP 网络路径需集成测试环境 |
 | `factor_engine/evaluation_chain.py` | **99%** | 仅余 1 个空白行 |
 
 > 注：evaluation_chain.py 565 行为空白行，属于 coverage.py 报告的格式问题，不影响实际可执行代码覆盖率。
@@ -274,12 +277,13 @@ TOTAL                                       4573      1    99%
 | `tests/strategies/test_multi_factor.py` | ~88 | 多因子策略 |
 | `tests/test_cli.py` | ~62 | CLI 入口 |
 | `tests/test_data.py` | ~49 | 数据层 |
+| `tests/test_data_fundamental.py` | ~62 | 基本面数据层 |
 | `tests/test_e2e.py` | ~10 | 端到端集成 |
 | `tests/test_elite_tracker.py` | ~72 | Elite 因子跟踪 |
 | `tests/test_http_server.py` | ~31 | Web UI 仪表盘 |
 | `tests/test_llm.py` | ~36 | LLM 客户端 |
 | `tests/test_monitor.py` | ~46 | 项目级监控 |
-| **合计** | **1432** | |
+| **合计** | **1502** | |
 
 ---
 
@@ -297,6 +301,6 @@ TOTAL                                       4573      1    99%
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `test_seed_pool.py` → 16 个种子池测试用例（含 GTJA191） |
-| 可验证断言 | 种子池测试数 = 16，总测试数 = 1432 |
-| 检验方式 | `python -m pytest tests/factor_engine/test_seed_pool.py --no-cov -q 2>&1 | findstr "passed"` |
+| 代码→文档映射 | `test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面） |
+| 可验证断言 | 基本面数据层测试数 = 62，总测试数 = 1502 |
+| 检验方式 | `python -m pytest tests/test_data_fundamental.py --no-cov -q 2>&1 | findstr "passed"` |

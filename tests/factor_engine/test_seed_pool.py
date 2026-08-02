@@ -7,8 +7,8 @@ import pytest
 from fts.factor_engine.contracts import FactorProgram
 from fts.factor_engine.seed_pool import SeedPool, get_default_seed_pool
 
-# 内置 9 个 + 外部 WQ101 101 个 + Qlib158 158 个 + GTJA191 191 个 = 459
-_TOTAL_SEEDS = 9 + 101 + 158 + 191
+# 内置 9 个 + 外部 WQ101 101 个 + Qlib158 158 个 + GTJA191 191 个 + 基本面 23 个 = 482
+_TOTAL_SEEDS = 9 + 101 + 158 + 191 + 23
 _INTERNAL_NAMES = {
     "momentum", "volatility_reversion", "volume_flow",
     "macro_regime", "rate_proxy", "pmi_proxy",
@@ -17,7 +17,7 @@ _INTERNAL_NAMES = {
 
 
 def test_seed_pool_loads_all_seeds():
-    """种子池必须包含全部 459 个种子因子（内置 9 + 外部 450）。"""
+    """种子池必须包含全部 482 个种子因子（内置 9 + 外部 473）。"""
     pool = SeedPool()
     seeds = pool.load_all_seeds()
     assert len(seeds) == _TOTAL_SEEDS
@@ -36,7 +36,7 @@ def test_seed_pool_count():
 
 
 def test_seed_pool_list_names():
-    """种子因子名称列表必须包含所有 459 个名称。"""
+    """种子因子名称列表必须包含所有 482 个名称。"""
     pool = SeedPool()
     names = pool.list_names()
     # 必须包含所有内置名称
@@ -50,6 +50,12 @@ def test_seed_pool_list_names():
     # 必须包含 gtja_001 ~ gtja_191
     assert "gtja_001" in names
     assert "gtja_191" in names
+    # 必须包含基本面因子
+    assert "fund_val_pe" in names
+    assert "fund_quality_roe" in names
+    assert "fund_growth_revenue" in names
+    assert "fund_macro_pmi" in names
+    assert "fund_alt_val_quality" in names
     # 总数正确
     assert len(names) == _TOTAL_SEEDS
 
@@ -135,7 +141,7 @@ def test_default_seed_pool_singleton():
 
 
 def test_external_seed_code_has_alpha_ops():
-    """外部种子代码必须包含公共操作函数。"""
+    """量价外部种子代码必须包含公共操作函数（基本面种子使用不同模板）。"""
     pool = SeedPool()
     for seed in pool.load_all_seeds():
         if seed["name"].startswith("alpha_") or seed["name"].startswith("qlib_") or seed["name"].startswith("gtja_"):

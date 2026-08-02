@@ -294,17 +294,128 @@ def load_gtja191_seeds(trace_id: str | None = None) -> list[FactorProgram]:
     return _load_definitions(GTJA191_DEFINITIONS, trace_id)
 
 
+def make_fundamental_program(
+    name: str,
+    field_defs: str,
+    field_check: str,
+    expression: str,
+    narrative: str,
+    theory: int = 4,
+    behavioral: int = 3,
+    microstructure: int = 3,
+    institutional: int = 3,
+    params: dict[str, Any] | None = None,
+    lookback: int | None = None,
+    input_fields: list[str] | None = None,
+    trace_id: str | None = None,
+) -> FactorProgram:
+    """将基本面因子定义转换为 FactorProgram。
+
+    基本面因子使用 _FUNDAMENTAL_TEMPLATE（含字段定义/可用性检查/降级逻辑）。
+
+    Args:
+        name: 因子名称（如 fund_val_pe）。
+        field_defs: 字段定义代码（从 data 提取字段）。
+        field_check: 字段可用性检查条件。
+        expression: 因子表达式。
+        narrative: 经济逻辑描述。
+        theory/behavioral/microstructure/institutional: 四维评分（0-5）。
+        params: 因子参数。
+        lookback: 最小回看窗口。
+        input_fields: 输入字段列表。
+        trace_id: 全链路 trace_id。
+
+    Returns:
+        FactorProgram — 可注入 SeedPool 的因子程序。
+    """
+    from .fundamental_seeds import _FUNDAMENTAL_TEMPLATE
+
+    params = params or {}
+    if lookback is None:
+        lookback = 1
+    if input_fields is None:
+        input_fields = ["close"]
+
+    code = _FUNDAMENTAL_TEMPLATE.format(
+        name=name,
+        narrative=narrative,
+        field_defs=field_defs,
+        field_check=field_check,
+        expression=expression,
+    )
+
+    signature = FactorSignature(
+        input_fields=input_fields,
+        output_type="signal",
+        frequency="daily",
+        lookback=lookback,
+    )
+
+    economic_logic = EconomicLogic(
+        theory=theory,
+        behavioral=behavioral,
+        microstructure=microstructure,
+        institutional=institutional,
+        narrative=narrative,
+    )
+
+    return create_factor_program(
+        name=name,
+        code=code,
+        params=params,
+        signature=signature,
+        economic_logic=economic_logic,
+        source="seed",
+        parent_id=None,
+        generation=0,
+        trace_id=trace_id,
+    )
+
+
+def load_fundamental_seeds(trace_id: str | None = None) -> list[FactorProgram]:
+    """加载基本面/另类/宏观因子种子。"""
+    from .fundamental_seeds import FUNDAMENTAL_DEFINITIONS
+
+    result: list[FactorProgram] = []
+    for defn in FUNDAMENTAL_DEFINITIONS:
+        fp = make_fundamental_program(
+            name=defn["name"],
+            field_defs=defn["field_defs"],
+            field_check=defn["field_check"],
+            expression=defn["expression"],
+            narrative=defn.get("narrative", "基本面因子"),
+            theory=defn.get("theory", 4),
+            behavioral=defn.get("behavioral", 3),
+            microstructure=defn.get("microstructure", 3),
+            institutional=defn.get("institutional", 3),
+            params=defn.get("params", {}),
+            lookback=defn.get("lookback", 1),
+            input_fields=defn.get("input_fields", ["close"]),
+            trace_id=trace_id,
+        )
+        result.append(fp)
+    return result
+
+
 def load_all_external_seeds(trace_id: str | None = None) -> list[FactorProgram]:
-    """加载所有外部种子因子。"""
-    return load_wq101_seeds(trace_id) + load_qlib158_seeds(trace_id) + load_gtja191_seeds(trace_id)
+    """加载所有外部种子因子（量价 + 基本面）。"""
+    return (
+        load_wq101_seeds(trace_id)
+        + load_qlib158_seeds(trace_id)
+        + load_gtja191_seeds(trace_id)
+        + load_fundamental_seeds(trace_id)
+    )
 
 
-def get_external_seed_count() -> tuple[int, int, int, int]:
-    """返回 (wq101_count, qlib158_count, gtja191_count, total_count)。"""
+def get_external_seed_count() -> tuple[int, int, int, int, int]:
+    """返回 (wq101_count, qlib158_count, gtja191_count, fundamental_count, total_count)。"""
     from .wq101 import WQ101_DEFINITIONS
     from .qlib158 import QLIB158_DEFINITIONS
     from .gtja191 import GTJA191_DEFINITIONS
+    from .fundamental_seeds import FUNDAMENTAL_DEFINITIONS
+
     wq = len(WQ101_DEFINITIONS)
     ql = len(QLIB158_DEFINITIONS)
     gj = len(GTJA191_DEFINITIONS)
-    return (wq, ql, gj, wq + ql + gj)
+    fd = len(FUNDAMENTAL_DEFINITIONS)
+    return (wq, ql, gj, fd, wq + ql + gj + fd)

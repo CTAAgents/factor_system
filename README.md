@@ -2,9 +2,9 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-1432%20passing-brightgreen)](#)
+[![Tests](https://img.shields.io/badge/tests-1502%20passing-brightgreen)](#)
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)](#)
-[![Version](https://img.shields.io/badge/version-1.3.2-blue)](#)
+[![Version](https://img.shields.io/badge/version-1.4.0-blue)](#)
 
 ---
 
@@ -74,7 +74,8 @@ fts/                          # 核心源码（~3,400 语句）
 ├── pipeline/                 # 因子推演管线
 ├── strategies/               # 策略层（base_v2 + multi_factor）
 ├── scheduler/                # 调度层（TaskRegistry + APScheduler 引擎）
-├── data.py                   # 数据层（MCP 统一入口）
+├── data.py                   # 数据层（MCP 统一入口 + 基本面注入）
+├── data_fundamental.py       # 基本面数据层（估值/财务/宏观字段注入）
 ├── data_mcp.py               # MCP 数据适配层（akshare 腾讯/东方财富）
 ├── llm.py                    # LLM 客户端统一接口（OpenAI/Anthropic/Mock）
 ├── cli.py                    # 统一命令行入口
@@ -150,12 +151,12 @@ FTS（因子智能系统）
 
 | 指标 | 值 |
 |------|:---:|
-| **版本** | v1.3.2 |
-| **测试通过数** | 1432 / 1432（100%）|
-| **测试覆盖率** | 99%（47/47 模块 100%，仅余 1 空白行）|
+| **版本** | v1.4.0 |
+| **测试通过数** | 1502 / 1502（100%）|
+| **测试覆盖率** | 99%（46/47 模块 100%，1 模块 73% 需 MCP 网络环境）|
 | **代码行数** | ~4,300 语句 |
 | **文件数** | 79 个源码 + 测试文件 |
-| **种子因子数** | 459（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安） |
+| **种子因子数** | 482（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面/另类/宏观） |
 
 ## 依赖关系
 

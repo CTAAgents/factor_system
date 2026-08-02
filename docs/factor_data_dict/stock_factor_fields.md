@@ -1,9 +1,9 @@
 # FTS 股票专用因子消费数据字段字典
 
-> 版本: v1.2.0
+> 版本: v1.3.0
 > 适用项目: FTS (Factor Intelligence System)
 > 维护: FTS Team
-> 状态: 已与 MCP/akshare 数据源对齐
+> 状态: 已与 MCP/akshare 数据源对齐 + 基本面数据字段注入
 > 存放路径: factor_system/docs/factor_data_dict/stock_factor_fields.md
 
 本文档聚焦于 FTS 在 `--universe single` / `--universe csi300` 模式下，因子计算所消费的 MCP/akshare 数据字段。股票专用因子（value / quality / size）与全市场通用因子的区别在于：其 `signature.input_fields` 倾向于使用 `close` + `volume` 构造价量代理，而非依赖专属字段。
@@ -27,7 +27,7 @@ FTS 数据源已从 Data-Core 迁移至 MCP/akshare（腾讯自选股 / 东方�
 
 ## 1. 种子池股票因子总览
 
-FTS 种子池共 **268 个种子因子**（9 内置 + 101 世坤 + 158 Qlib），通过 `seed_pool.load_all_seeds(include_external=True)` 加载。其中与股票（A 股/ETF）相关的因子分为以下三类：
+FTS 种子池共 **482 个种子因子**（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面/另类/宏观），通过 `seed_pool.load_all_seeds(include_external=True)` 加载。其中与股票（A 股/ETF）相关的因子分为以下四类：
 
 ### 1.1 内置种子因子（9 个）
 
@@ -43,7 +43,7 @@ FTS 种子池共 **268 个种子因子**（9 内置 + 101 世坤 + 158 Qlib）�
 | 8 | `size_factor` | `close`, `volume` | 市值因子（量价代理） |
 | 9 | `macro_regime` | `close` | 宏观制度（价量近似） |
 
-### 1.2 外部种子因子（259 个）
+### 1.2 外部种子因子（473 个）
 
 外部种子因子通过 `seed_data/` 目录统一管理，以标准化因子表达式形式定义，运行时由 `loader.py` 动态转换为 `FactorProgram` 对象：
 
@@ -51,8 +51,11 @@ FTS 种子池共 **268 个种子因子**（9 内置 + 101 世坤 + 158 Qlib）�
 |------|------|:----:|-------------|
 | 世坤 Alpha | `seed_data/wq101.py` | 101 | `close`, `volume`, `high`, `low`, `open`, `amount` |
 | Qlib 因子 | `seed_data/qlib158.py` | 158 | `close`, `volume`, `high`, `low`, `vwap` |
+| 国泰君安 Alpha | `seed_data/gtja191.py` | 191 | `close`, `volume`, `high`, `low`, `open`, `amount` |
+| 基本面/另类/宏观 | `seed_data/fundamental_seeds.py` | 23 | `pe_ttm`, `pb`, `roe`, `revenue_growth`, `total_market_cap`, `turnover_rate`, `pmi`, `cpi` 等 |
 
-所有外部因子表达式均使用 `alpha_ops.py` 公共操作库（`ts_mean`, `ts_std`, `ts_rank`, `correlation`, `covariance` 等 60+ 操作），编译后通过安全沙箱执行。
+所有量价外部因子表达式均使用 `alpha_ops.py` 公共操作库（`ts_mean`, `ts_std`, `ts_rank`, `correlation`, `covariance` 等 60+ 操作），编译后通过安全沙箱执行。
+基本面因子使用 `_FUNDAMENTAL_TEMPLATE`（含字段定义/可用性检查/降级逻辑），通过 `FundamentalProvider` 注入字段后消费。
 
 > 期货专用因子（oi_change / basis / inventory_pct / capacity / position_rank / warrant_change）已在 v1.2.0 中移除，FTS 当前仅聚焦 A 股/ETF 因子演化。
 
@@ -64,7 +67,7 @@ FTS 种子池共 **268 个种子因子**（9 内置 + 101 世坤 + 158 Qlib）�
 
 | 字段 | MCP/akshare 来源 | FTS 因子消费 | 必备 |
 |------|-----------------|-------------|------|
-| `close` | `akshare` 东方财富/腾讯 API | 全部 268 个种子因子 | 是 |
+| `close` | `akshare` 东方财富/腾讯 API | 全部 482 个种子因子 | 是 |
 | `high` | `akshare` 东方财富/腾讯 API | 外部因子（wq101/qlib158） | 否 |
 | `low` | `akshare` 东方财富/腾讯 API | 外部因子（wq101/qlib158） | 否 |
 | `open` | `akshare` 东方财富/腾讯 API | 外部因子（wq101/qlib158） | 否 |
@@ -80,29 +83,84 @@ FTS 种子池共 **268 个种子因子**（9 内置 + 101 世坤 + 158 Qlib）�
 
 ---
 
-## 3. 股票专用字段（MCP/akshare 扩展）
+## 3. 基本面数据字段（FundamentalProvider 注入）
 
-股票因子在 A 股场景下可消费 MCP 扩展字段。当前 FTS 内置种子因子**不依赖**这些字段，仅用 `close` + `volume` 构造近似。但 **外部因子（wq101/qlib158）** 和 **L2 演化层** 自动生成的因子程序可能消费以下字段。
+FTS v1.4.0 新增 `FundamentalProvider`（`fts/data_fundamental.py`），通过 eastmoney MCP 获取基本面数据并注入 OHLCV DataFrame。基本面向导字段通过 `enrich_ohlcv()` 方法注入，供基本面种子因子消费。
 
-| 字段 | MCP/akshare 来源 | 注入方式 | 典型用途 |
-|------|-----------------|----------|----------|
-| `pe_ttm` | `akshare.stock_financial_abstract` | 扩展 K 线 DataFrame 列 | 估值因子 |
-| `pb` | `akshare.stock_financial_abstract` | 扩展 K 线 DataFrame 列 | 估值因子 |
-| `ps_ttm` | `akshare.stock_financial_abstract` | 扩展 K 线 DataFrame 列 | 估值因子 |
-| `total_market_cap` | `akshare.stock_individual_info` | 扩展 K 线 DataFrame 列 | 市值因子 |
-| `turnover_rate` | `akshare.stock_individual_info` | 扩展 K 线 DataFrame 列 | 换手率因子 |
-| `free_market_cap` | 由 `total_market_cap` 推算 | 扩展 K 线 DataFrame 列 | 流通市值因子 |
+### 3.1 估值类字段
 
-> **当前状态**：FTS 种子池中 A 股三因子（value / quality / size）**不依赖**上述字段，仅用 `close` + `volume` 构造近似。这是为了保证在 MCP 扩展字段未就绪时仍可运行。
-> 后续 L1 知识注入 + L2 演化的因子程序可消费上述字段。
+| 字段 | 数据来源 | 注入方式 | 消费因子 |
+|------|---------|----------|----------|
+| `pe_ttm` | eastmoney profile API | `FundamentalProvider.enrich_ohlcv()` | `fund_val_pe`, `fund_val_composite`, `fund_alt_val_quality`, `fund_alt_value_momentum`, `fund_alt_small_value` |
+| `pb` | eastmoney profile API | `FundamentalProvider.enrich_ohlcv()` | `fund_val_pb`, `fund_val_composite` |
+| `ps_ttm` | eastmoney profile API | `FundamentalProvider.enrich_ohlcv()` | `fund_val_ps`, `fund_val_composite` |
 
-### 3.1 字段注入时序
+### 3.2 质量类字段
+
+| 字段 | 数据来源 | 注入方式 | 消费因子 |
+|------|---------|----------|----------|
+| `roe` | eastmoney finance API | `FundamentalProvider.enrich_ohlcv()` | `fund_quality_roe`, `fund_quality_composite`, `fund_alt_val_quality`, `fund_alt_quality_growth` |
+| `roa` | eastmoney finance API | `FundamentalProvider.enrich_ohlcv()` | `fund_quality_roa`, `fund_quality_composite` |
+| `gross_margin` | eastmoney finance API | `FundamentalProvider.enrich_ohlcv()` | `fund_quality_margin`, `fund_quality_composite` |
+| `eps` | eastmoney finance API | `FundamentalProvider.enrich_ohlcv()` | `fund_quality_eps` |
+
+### 3.3 成长类字段
+
+| 字段 | 数据来源 | 注入方式 | 消费因子 |
+|------|---------|----------|----------|
+| `revenue_growth` | eastmoney finance API | `FundamentalProvider.enrich_ohlcv()` | `fund_growth_revenue`, `fund_growth_composite`, `fund_alt_quality_growth` |
+| `profit_growth` | eastmoney finance API | `FundamentalProvider.enrich_ohlcv()` | `fund_growth_profit`, `fund_growth_composite` |
+
+### 3.4 市值与换手率字段
+
+| 字段 | 数据来源 | 注入方式 | 消费因子 |
+|------|---------|----------|----------|
+| `total_market_cap` | eastmoney profile API | `FundamentalProvider.enrich_ohlcv()` | `fund_size_mcap`, `fund_size_log`, `fund_alt_small_value` |
+| `turnover_rate` | eastmoney profile API | `FundamentalProvider.enrich_ohlcv()` | `fund_turnover`, `fund_turnover_change` |
+
+### 3.5 宏观代理字段
+
+| 字段 | 数据来源 | 注入方式 | 消费因子 |
+|------|---------|----------|----------|
+| `pmi` | 宏观数据源 | `FundamentalProvider.enrich_ohlcv()` | `fund_macro_pmi`, `fund_macro_pmi_cpi` |
+| `cpi` | 宏观数据源 | `FundamentalProvider.enrich_ohlcv()` | `fund_macro_cpi`, `fund_macro_pmi_cpi` |
+
+### 3.6 字段注入流程
 
 ```text
-MCP/akshare 基础 K 线 → pandas DataFrame → 扩展字段注入 → 因子程序消费
-         ↑                          ↑                     ↑
-    akshare API              data['pe_ttm'] = ...    因子代码读取
+eastmoney MCP API
+    │
+    ├── profile API → pe_ttm, pb, ps_ttm, total_market_cap, turnover_rate
+    ├── finance API → roe, roa, gross_margin, eps, revenue_growth, profit_growth
+    └── macro API   → pmi, cpi
+         │
+         ▼
+FundamentalProvider._mcp_enrich()
+    │
+    ├── _fetch_profile(code) → 缓存 profile 数据
+    ├── _fetch_finance(code) → 缓存 finance 数据
+    └── _fetch_macro()       → 缓存宏观数据
+         │
+         ▼
+    _apply_profile() → 将估值/市值字段注入 DataFrame 列
+    _apply_finance() → 将质量/成长字段注入 DataFrame 列
+    _apply_macro()   → 将宏观字段注入 DataFrame 列
+         │
+         ▼
+    enriched_ohlcv DataFrame（含 close + 基本面扩展列）
 ```
+
+### 3.7 字段缺失降级策略
+
+当 MCP 基本面数据不可用时，`FundamentalProvider` 自动降级为合成数据（`_synthetic_enrich()`）：
+
+| 场景 | 行为 |
+|------|------|
+| MCP 不可用 | `fundamental_provider = FundamentalProvider(mcp_available=False)` 使用合成数据 |
+| MCP 请求失败 | 捕获 `FundamentalDataError`，日志警告后使用合成数据 |
+| 单个字段缺失 | 基本面因子代码中的 `field_check` 条件不满足，退化为 `close` 代理信号 |
+
+合成数据使用固定随机种子（`np.random.seed(42)`），确保可复现性。
 
 ---
 
@@ -340,13 +398,13 @@ def get_csi300_panel(self, days=250, max_stocks=300):
 
 ## 7. 股票数据消费要点
 
-FTS v1.2.0 已移除期货因子，当前仅聚焦 A 股/ETF 因子演化：
+FTS v1.4.0 已移除期货因子，当前仅聚焦 A 股/ETF 因子演化，支持基本面数据字段注入：
 
 | 维度 | 说明 |
 |------|------|
 | **OHLCV 必需字段** | `close` |
 | **常用字段** | `close` + `volume`（外部因子还消费 `high`/`low`/`open`/`amount`） |
-| **扩展字段** | `pe_ttm` / `pb` / `total_market_cap` / `turnover_rate`（通过 MCP/akshare 注入） |
+| **基本面扩展字段** | `pe_ttm` / `pb` / `ps_ttm` / `roe` / `roa` / `gross_margin` / `eps` / `revenue_growth` / `profit_growth` / `total_market_cap` / `turnover_rate` / `pmi` / `cpi`（通过 `FundamentalProvider` 注入） |
 | **横截面品种数** | 3（CSI 300 默认 300 只） |
 | **数据频率** | 日频 |
 | **复权方式** | 前复权（akshare 默认） |
@@ -361,6 +419,7 @@ FTS v1.2.0 已移除期货因子，当前仅聚焦 A 股/ETF 因子演化：
 |------|------|------|
 | v1.0.0 | 2026-07-21 | 初版：与 Data-Core v1.0.0 数据字典对齐 |
 | v1.2.0 | 2026-08-02 | 全面更新：数据源从 Data-Core 迁移至 MCP/akshare；种子池从 9 因子扩展至 268 因子（含世坤 101 + Qlib 158）；移除期货因子支持；更新代码示例、字段来源和降级策略 |
+| v1.3.0 | 2026-08-03 | 新增基本面数据字段文档：估值/质量/成长/市值/换手率/宏观字段共 13 个，通过 `FundamentalProvider` 注入；种子池扩展至 482 因子（含国泰君安 191 + 基本面 23） |
 
 维护：当 MCP/akshare 数据源字段新增/废弃/重命名时，必须同步更新本文档。
 

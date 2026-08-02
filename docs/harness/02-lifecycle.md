@@ -1,7 +1,7 @@
 # FTS 开发生命周期
 
-> 版本: v1.1.0
-> 最后更新: 2026-08-02
+> 版本: v1.4.0
+> 最后更新: 2026-08-03
 
 ---
 
@@ -20,6 +20,7 @@ FTS 从 FDT 剥离共经历 8 个 Phase，目前全部完成：
 | **Phase 7** | FTS 层级提升为独立项目，claude.md / fts-coding.mdc 割离 | ✅ 完成 | 完整项目独立 |
 | **Phase 8** | 种子因子集成：世坤 101 因子 + Qlib 158 因子加入种子池，seed_data 目录统一管理外部因子，支持 include_external 参数控制加载 | ✅ 完成 | 268 种子因子（9 内置 + 259 外部），1325 测试全绿 |
 | **Phase 9** | 国泰君安 191 因子集成 + 全量工程测试：全部模块边缘路径覆盖，46/47 模块 100% 覆盖率 | ✅ 完成 | 459 种子因子（9 内置 + 450 外部），1431 测试全绿，仅余 1 空白行 |
+| **Phase 10** | 基本面/另类/宏观因子集成：23 个基本面种子因子加入种子池，新增 FundamentalProvider 数据层 | ✅ 完成 | 482 种子因子（9 内置 + 473 外部），1502 测试全绿 |
 
 ---
 
@@ -58,7 +59,7 @@ tests/
 | **MINOR** | 功能新增或阶段完成 | v0.1.0 → v0.2.0 |
 | **PATCH** | bug 修复或文档更新 | v0.1.0 → v0.1.1 |
 
-当前版本：**v0.3.0**
+当前版本：**v1.4.0**
 
 ### 版本号同步规则
 
@@ -66,8 +67,8 @@ FTS 包含两个版本号，修改时必须同步：
 
 | 位置 | 用途 | 当前值 |
 |:-----|:-----|:-------|
-| `fts/__init__.py` | FTS 项目版本 | `"1.1.0"` |
-| `pyproject.toml` | 包版本 | `"1.1.0"` |
+| `fts/__init__.py` | FTS 项目版本 | `"1.4.0"` |
+| `pyproject.toml` | 包版本 | `"1.4.0"` |
 
 `fts.factor_engine.__init__.py` 中的 `EVOLUTION_VERSION` 为因子引擎内部版本号（v1.1.0），与 FTS 项目版本同步。
 
@@ -153,3 +154,13 @@ FTS 项目整体状态：
 ```
 [stopped] → [running] → [paused/completed] → [circuit_broken] → [recovered/stopped]
 ```
+
+---
+
+## 一致性元数据
+
+| 字段 | 值 |
+|:-----|:----|
+| 代码→文档映射 | Phase 10 → `data_fundamental.py` + `fundamental_seeds.py` + `loader.py` |
+| 可验证断言 | Phase 10 产出物：482 种子因子，1502 测试全绿 |
+| 检验方式 | `python -m pytest tests/test_data_fundamental.py tests/factor_engine/test_loader.py --no-cov -q 2>&1 | findstr "passed"` |

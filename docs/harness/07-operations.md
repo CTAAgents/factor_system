@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v1.3.2
+> 版本: v1.4.0
 > 最后更新: 2026-08-03
 
 ---
@@ -10,6 +10,7 @@
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
 | **v0.1.0** | 2026-07-18 | 从 FDT 剥离，完成 Phase 1-7，220 测试全绿 |
+| **v1.4.0** | 2026-08-03 | 基本面/另类/宏观因子加入种子池（482 种子）；新增 FundamentalProvider 数据层 + 23 个基本面种子因子（估值/质量/成长/市值/换手率/宏观/另类复合）；seed_data 新增 fundamental_seeds.py；loader 支持基本面种子加载；1502 测试全绿，99% 覆盖率 |
 | **v1.3.2** | 2026-08-03 | 代码审核提升：消除 `_evaluate_and_promote_seeds` 重复横截面逻辑，提取 3 个公共 Mock fixture（`mock_trial`/`mock_optuna_study`/`mock_evolve_micro`）；1432 测试全绿，99% 覆盖率，47/47 模块 100% 覆盖率 |
 | **v1.3.1** | 2026-08-03 | 代码审核提升：重构 `parse_program_md` 为数据驱动解析（76→48 行），提取 `_evaluate_cross_section` 方法（178→155 行），拆分 Eager Test；1432 测试全绿，99% 覆盖率，46/47 模块 100% 覆盖率 |
 | **v1.3.0** | 2026-08-03 | 国泰君安 191 因子加入种子池（459 种子）；seed_data 新增 gtja191.py；loader 支持 gtja191 批量加载；工程测试全覆盖：1431 测试全绿，46/47 模块 100% 覆盖率，仅余 1 空白行未覆盖 |
@@ -207,6 +208,6 @@ Tokens today    : 0
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `fts/__init__.py` __version__ = "1.3.0"；`pyproject.toml` version = "1.3.0" |
-| 可验证断言 | 版本号 v1.3.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
-| 检验方式 | `python -c "import fts; assert fts.__version__ == '1.3.0'"` |
+| 代码→文档映射 | `fts/__init__.py` __version__ = "1.4.0"；`pyproject.toml` version = "1.4.0" |
+| 可验证断言 | 版本号 v1.4.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
+| 检验方式 | `python -c "import fts; assert fts.__version__ == '1.4.0'"` |
