@@ -1,9 +1,9 @@
 # FTS — Factor Intelligence System Code Wiki
 
 > **项目路径**: `d:\Programs\factor_system`
-> **版本**: v1.0.0 (factor_engine EVOLUTION_VERSION 1.1.0)
+> **版本**: v1.2.0 (factor_engine EVOLUTION_VERSION 1.2.0)
 > **Python**: >=3.10
-> **代码规模**: ~3,438 语句, 77 个源码+测试文件, 1,231 测试通过, 96% 覆盖率
+> **代码规模**: ~3,400 语句, 79 个源码+测试文件, 1,325 测试通过, 99% 覆盖率
 > **入口点**: `fts = "fts.cli:main"`
 
 ---
@@ -122,9 +122,9 @@ Program.md (L0 周度设定)
 ```
 d:\Programs\factor_system\
 ├── fts/                           # 主源码包 (~30 个源文件)
-│   ├── __init__.py                # __version__ = "1.0.0", 模块 re-export
+│   ├── __init__.py                # __version__ = "1.2.0", 模块 re-export
 │   ├── cli.py                     # 409 LOC — 统一 CLI 入口
-│   ├── data.py                    # 300+ LOC — FTSDataProvider (Data-Core 适配器)
+│   ├── data.py                    # 300+ LOC — FTSDataProvider (MCP 数据适配器)
 │   ├── llm.py                     # 235+ LOC — LLM 客户端层次 (OpenAI/Anthropic/Mock)
 │   ├── config/                    # 配置系统
 │   │   ├── __init__.py
@@ -135,12 +135,13 @@ d:\Programs\factor_system\
 │   │   ├── contracts.py           # 91 LOC — 从 factor_engine.contracts 重导出
 │   │   └── enums.py               # enums — EvolutionStage / FactorPriority / FactorStatus
 │   ├── factor_engine/             # 核心引擎模块 (19 个文件, 最大模块)
-│   │   ├── __init__.py            # v1.1.0, 所有子模块重导出
+│   │   ├── __init__.py            # v1.2.0, 所有子模块重导出
 │   │   ├── contracts.py           # 560 LOC — 所有 TypedDict 契约 (L1+L2+L3)
 │   │   ├── evolution_loop.py      # L2 主循环编排器 (490+ LOC)
 │   │   ├── meta_loop.py           # L1 Meta-Loop (500+ LOC)
 │   │   ├── portfolio_loop.py      # L3 Portfolio Loop (400+ LOC)
-│   │   ├── seed_pool.py           # 15 个内置种子因子
+│   │   ├── seed_pool.py           # 种子池管理器 (268 个种子因子: 9 内置 + 101 世坤 + 158 Qlib)
+│   │   ├── seed_data/             # 种子因子定义库 (wq101.py, qlib158.py, alpha_ops.py, loader.py)
 │   │   ├── factor_program.py      # 安全沙箱执行器 + AST 验证
 │   │   ├── macro_evolution.py     # LLM 驱动的因子代码演化
 │   │   ├── micro_evolution.py     # optuna TPE 贝叶斯调参
@@ -169,7 +170,7 @@ d:\Programs\factor_system\
 │       ├── __init__.py            # LoopStatusReport / SystemStatusReport + 状态检查函数
 │       ├── http_server.py         # 纯 stdlib HTTP 服务器 (127.0.0.1:9100)
 │       └── elite_tracker.py       # EliteFactorTracker + AutoRetireManager
-├── tests/                         # 28 个测试文件
+├── tests/                         # 35+ 个测试文件，1325 全部通过
 │   ├── core/                      # 3 个文件
 │   ├── factor_engine/             # 16 个文件 (含 conftest.py)
 │   ├── pipeline/                  # 2 个文件
@@ -179,12 +180,14 @@ d:\Programs\factor_system\
 ├── config/
 │   └── settings.yaml              # 默认 YAML 配置
 ├── docs/
-│   ├── harness/                   # HARNESS 工程规范 (6 个文件)
+│   ├── harness/                   # HARNESS 工程规范 (7 个文件)
+│   ├── production_plan.md         # 生产就绪路线图
+│   ├── execution_modes_flowchart.md  # 执行模式流程图
+│   ├── business_flow.md           # 业务流程图
 │   ├── deploy/                    # 部署文档 (INSTALL.md, WINDOWS.md)
 │   ├── factor_data_dict/          # 因子数据字典
 │   ├── archive/                   # 已完成计划归档
 │   ├── pending_for_datacore/      # 待 Data-Core 需求
-│   └── production_plan.md         # 生产就绪路线图
 ├── memory/                        # 运行时持久化 (自动创建)
 │   ├── evolution/                 # L2 演化状态
 │   ├── meta_loop/                 # L1 元循环状态
@@ -192,7 +195,7 @@ d:\Programs\factor_system\
 │   └── knowledge/factors/         # 因子知识库
 │       ├── elite/                 # 精英因子 (晋升成功)
 │       └── l1_injected/           # L1 注入因子候选
-├── scripts/                       # 数据下载辅助脚本
+├── scripts/                       # 辅助脚本 (verify_doc_consistency.py 等)
 ├── data/                          # DuckDB 数据文件
 ├── .github/workflows/ci.yml       # GitHub Actions CI (Python 3.10/3.11/3.12)
 ├── pyproject.toml                 # 项目元数据 + 依赖 + 入口点
@@ -212,7 +215,7 @@ d:\Programs\factor_system\
 | `fts.core` | `atomic.py` | 原子文件写入 (`atomic_write`)、读取 (`atomic_read`)、带备份轮转的状态写入 (`atomic_write_state`) |
 | `fts.core` | `enums.py` | `EvolutionStage` (L0/L1/L2/L3), `FactorPriority` (HIGH/MEDIUM/LOW), `FactorStatus` (PENDING/INJECTED/DECAYED/REJECTED) |
 | `fts.core` | `contracts.py` | 从 `factor_engine.contracts` 重导出所有 TypedDict |
-| `fts.data` | `data.py` | `FTSDataProvider`: 包装 Data-Core 的 `UnifiedDataProvider`, 5 级数据质量降级 (PRIMARY→DAILY→CACHED→STALE→UNAVAILABLE), 合成数据回退 |
+| `fts.data` | `data.py` | `FTSDataProvider`: 包装 MCP 数据提供者 (`MCPDataProvider`), 5 级数据质量降级 (PRIMARY→DAILY→CACHED→STALE→UNAVAILABLE), 合成数据回退 |
 | `fts.llm` | `llm.py` | `LLMClient` (ABC) → `OpenAIClient` / `AnthropicClient` / `MockLLMClient`; `LLMCallRecord` 审计跟踪; 环境变量自动检测后端 |
 | `fts.factor_engine` | 19 个文件 | **核心引擎**: L1/L2/L3 三层循环、契约、评估、Verifier、沙箱、种子、经验链 |
 | `fts.pipeline` | `base.py` | Pipeline 框架: `DataPayload` dataclass, `ProcessingStage` Protocol, `FactorPipeline` ABC |
@@ -480,9 +483,11 @@ LLMClient (ABC)
 | `inject_to_fdt(combo)` | method | 写入 FDT 消费路径 |
 | `PortfolioLoop` | class | 每周一 06:00 运行的组合构建编排器 |
 
-#### 3.6.5 `seed_pool.py` — 种子因子池
+#### 3.6.5 `seed_pool.py` + `seed_data/` — 种子因子池
 
-15 个内置种子因子,涵盖 A 股 + 期货市场:
+268 个种子因子，涵盖 9 内置 + 101 世坤 + 158 Qlib:
+
+**内置种子因子 (9 个):**
 
 | # | 因子名 | 代码名 | 市场 |
 |---|---|---|---|
@@ -493,18 +498,20 @@ LLMClient (ABC)
 | 5 | 基差 | `basis` | 期货 |
 | 6 | 库存分位 | `inventory_pct` | 期货 |
 | 7 | 开工率 | `capacity` | 期货 |
-| 8 | 宏观制度 | `macro_regime` | 全市场 |
-| 9 | 利率代理 | `rate_proxy` | 全市场 |
-| 10 | PMI 代理 | `pmi_proxy` | 全市场 |
-| 11 | 龙虎持仓 | `position_rank` | 期货 |
-| 12 | 仓单变化 | `warrant_change` | 期货 |
-| 13 | 价值因子 | `value_factor` | A 股 |
-| 14 | 质量因子 | `quality_factor` | A 股 |
-| 15 | 市值因子 | `size_factor` | A 股 |
+| 8 | PMI 代理 | `pmi_proxy` | 全市场 |
+| 9 | 低波因子 | `low_volatility` | 全市场 |
+
+**外部种子因子 (259 个):**
+- `seed_data/wq101.py` — 101 个 WorldQuant Alpha 因子表达式
+- `seed_data/qlib158.py` — 158 个 Qlib 因子表达式
+- `seed_data/alpha_ops.py` — 公共操作库（标准化计算函数）
+- `seed_data/loader.py` — 动态加载器：因子定义 → FactorProgram
+- `seed_data/__init__.py` — 统一导出入口
 
 **关键函数:**
-- `SeedPool` — 种子池管理器, 提供 `fetch()`, `add_seed()`, `list_seeds()`
-- `get_default_seed_pool()` — 返回包含 15 个种子因子的默认 SeedPool 实例
+- `SeedPool` — 种子池管理器，提供 `fetch()`, `add_seed()`, `list_seeds()`, `load_all_seeds(include_external=True)`
+- `get_default_seed_pool()` — 返回包含 268 个种子因子的默认 SeedPool 实例
+- `_list_base_seeds()` — 基础种子列表（兼容 L1 注入）
 
 #### 3.6.6 `factor_program.py` — 安全沙箱执行器
 
@@ -898,7 +905,7 @@ pytest tests/scheduler/                        # 调度器测试 (4 文件)
 pytest tests/strategies/                       # 策略测试 (2 文件)
 pytest -k "test_verifier"                      # 按关键字过滤
 
-# 当前测试状态: 1,231 测试通过, 96% 覆盖率 (35 个模块 >=90%)
+# 当前测试状态: 1,325 测试通过, 99% 覆盖率 (46 个模块 >=90%)
 ```
 
 ### 6.5 CI/CD
@@ -1066,7 +1073,7 @@ state.json.bak.2    ← 上上上一次写入
 
 | 文件 | 用途 | 说明 |
 |---|---|---|
-| `pyproject.toml` | Python 项目构建 + 依赖 + CLI 入口点 | `name="fts"`, `version="1.0.0"`, `scripts: fts = "fts.cli:main"` |
+| `pyproject.toml` | Python 项目构建 + 依赖 + CLI 入口点 | `name="fts"`, `version="1.2.0"`, `scripts: fts = "fts.cli:main"` |
 | `config/settings.yaml` | 默认 YAML 配置 | 被 `load_config()` 消费 |
 | `fts/config/settings.py` | 配置加载器 | `FTSConfig` dataclass, `load_config()`, `get_config()` |
 | `CLAUDE.md` | AI 编码行为准则 | HARNESS 规范 + 13 项 commit 前检查清单 |
@@ -1078,14 +1085,14 @@ state.json.bak.2    ← 上上上一次写入
 ```toml
 [project]
 name = "fts"
-version = "1.0.0"
+version = "1.2.0"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "pandas>=2.0", "PyYAML>=6.0"]
 
 [project.optional-dependencies]
 evolution = ["optuna"]
 llm = ["openai", "anthropic"]
-data = ["datacore"]
+data = ["akshare"]
 dev = ["pytest", "pytest-cov"]
 
 [project.scripts]
@@ -1180,6 +1187,6 @@ FTS 是一个架构清晰的 AI 原生量化因子系统, 核心特点:
 3. **工程韧性** — 原子文件持久化 + 备份轮转 + 静默降级 + 进程看门狗 + 热重载
 4. **可观测性** — `trace_id` 全链路追踪 + HTTP metrics 服务器 (端点: /health /metrics /) + Elite 因子自动退役追踪
 5. **可扩展性** — Strategy v2 可插拔 ABC + Pipeline + Stage Protocol + 适配器模式
-6. **测试覆盖** — 1,231 测试 / 96% 覆盖率 / 28 个测试文件 / 10 个 E2E 场景 / CI 矩阵 (3.10/3.11/3.12)
+6. **测试覆盖** — 1,325 测试 / 99% 覆盖率 / 35+ 个测试文件 / 10 个 E2E 场景 / CI 矩阵 (3.10/3.11/3.12)
 
 项目处于生产就绪状态, 已在 Windows 上部署 3 种模式 (Task Scheduler / NSSM / 后台进程), 通过 GitHub Actions 持续集成。

@@ -13,7 +13,7 @@ FTS — Factor Trading System
     - cli: 统一命令行入口
     - data / data_mcp: MCP 数据适配层
 
-版本: v1.1.0（从 FDT 剥离，MCP 数据源迁移）
+版本: v1.2.0（种子因子集成：世坤101 + Qlib158）
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"

@@ -1,7 +1,7 @@
 # FTS 测试策略
 
 > 版本: v1.1.0
-> 最后更新: 2026-07-24
+> 最后更新: 2026-08-02
 
 ---
 
@@ -117,7 +117,7 @@ python -m pytest tests/factor_engine/test_verifier.py -v
 | Overall coverage | 99% |
 | 测试用例数 | 1325 passed, 0 failed |
 | 测试文件数 | 35+ |
-| 种子因子数 | 9（A 股/通用因子） |
+| 种子因子数 | 268（9 内置 + 101 世坤 + 158 Qlib） |
 
 ### 模块覆盖详情
 

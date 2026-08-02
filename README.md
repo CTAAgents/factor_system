@@ -4,7 +4,7 @@
 
 [![Tests](https://img.shields.io/badge/tests-1325%20passing-brightgreen)](#)
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)](#)
-[![Version](https://img.shields.io/badge/version-1.1.0-blue)](#)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue)](#)
 
 ---
 
@@ -107,12 +107,18 @@ memory/                       # 运行时持久化（自动创建）
 docs/                         # 项目文档
 ├── production_plan.md        # 生产就绪实施计划
 ├── CODE_WIKI.md              # 代码 Wiki
-└── harness/                  # HARNESS 工程文档（活文档）
-    ├── 01-architecture.md    # 系统架构
-    ├── 06-testing.md         # 测试策略与覆盖率
-    ├── 07-operations.md      # 版本管理与运维
-    ├── 08-gap-analysis.md    # 差距管理
-    └── 09-advancement-plan.md# 晋级计划
+├── execution_modes_flowchart.md  # 执行模式流程图
+├── business_flow.md          # 业务流程图
+├── harness/                  # HARNESS 工程文档（活文档）
+│   ├── 01-architecture.md    # 系统架构
+│   ├── 02-lifecycle.md       # 开发生命周期
+│   ├── 04-resilience.md      # 韧性设计
+│   ├── 06-testing.md         # 测试策略与覆盖率
+│   ├── 07-operations.md      # 版本管理与运维
+│   ├── 08-gap-analysis.md    # 差距管理
+│   └── 09-advancement-plan.md# 晋级计划
+└── agents/                   # 角色职责文档
+    └── fts-agent.md          # FTS Agent 职责定义
 ```
 
 ## 架构概览
@@ -144,12 +150,12 @@ FTS（因子智能系统）
 
 | 指标 | 值 |
 |------|:---:|
-| **版本** | v1.1.0 |
+| **版本** | v1.2.0 |
 | **测试通过数** | 1325 / 1325（100%）|
 | **测试覆盖率** | 99%（46 个模块）|
 | **代码行数** | ~4,300 语句 |
 | **文件数** | 79 个源码 + 测试文件 |
-| **种子因子数** | 9 个（A 股/通用因子） |
+| **种子因子数** | 268（9 内置 + 101 世坤 + 158 Qlib） |
 
 ## 依赖关系
 

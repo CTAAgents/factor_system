@@ -1,7 +1,7 @@
 # FTS 韧性设计
 
-> 版本: v1.1.0
-> 最后更新: 2026-07-24
+> 版本: v1.2.0
+> 最后更新: 2026-08-02
 
 ---
 
@@ -33,6 +33,10 @@
 | 单日 token 超支 | >2x daily_token_limit (50K) |
 | 失败率超限 | > circuit_breaker_failure_rate (95%) |
 | 连续低质量候选 | > circuit_breaker_consecutive_low_quality (5 次) |
+
+### 种子因子豁免规则
+
+种子因子评估不计入熔断计数器。种子因子是已知起点，仅通过简单 IC/Sharpe 筛选（IC≥0.03, Sharpe≥1.5）后直接晋升 elite，跳过 Verifier 三级验证。种子评估的通过/失败不计入 `evaluated`/`promoted` 计数器，不影响熔断判定。
 
 ### 熔断恢复流程
 

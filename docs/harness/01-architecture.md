@@ -1,7 +1,7 @@
 # FTS 系统架构文档
 
-> 版本: v0.3.0
-> 最后更新: 2026-07-24
+> 版本: v1.1.0
+> 最后更新: 2026-08-02
 
 ---
 
@@ -65,7 +65,13 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  (LLM 改逻辑)           (optuna 调参)          (三级评估链)              │
 │                                                                         │
 │  evolution_loop.py — L2 主循环协调器                                   │
-│  seed_pool.py — 种子池（9 个内置因子 + L1 注入接口）                    │
+│  seed_pool.py — 种子池（268 个因子：9 内置 + 101 世坤 + 158 Qlib + L1 注入接口）
+│  ├── seed_data/               # 种子因子定义库
+│  │   ├── wq101.py             # 101 个 WorldQuant Alpha 因子
+│  │   ├── qlib158.py           # 158 个 Qlib 因子
+│  │   ├── alpha_ops.py         # 公共操作库（标准化计算函数）
+│  │   ├── loader.py            # 动态加载器：因子定义 → FactorProgram
+│  │   └── __init__.py          # 统一导出入口                    │
 │  factor_program.py — 因子程序（图灵完备代码 + 安全沙箱）                  │
 │  verifier.py — Verifier 锁定协议                                       │
 │  state.py — 演化状态管理 + trace_id 全链路                              │
@@ -124,7 +130,13 @@ fts/
 │   ├── micro_evolution.py      # optuna 微观调参
 │   ├── evaluation_chain.py     # 三级评估链
 │   ├── experience_chain.py     # 经验链存储
-│   ├── seed_pool.py            # 种子池（9 个内置因子）
+│   ├── seed_data/              # 种子因子定义（WQ101 + Qlib158）
+│   │   ├── __init__.py
+│   │   ├── wq101.py            # 101 个 WorldQuant Alpha 因子
+│   │   ├── qlib158.py          # 158 个 Qlib 因子
+│   │   ├── alpha_ops.py        # 公共操作库
+│   │   └── loader.py           # 动态加载器
+│   ├── seed_pool.py            # 种子池（268 个因子，含 WQ101 + Qlib158 外部种子）
 │   ├── factor_program.py       # 因子程序（安全沙箱）
 │   ├── verifier.py             # Verifier 锁定协议
 │   ├── state.py                # 演化状态管理

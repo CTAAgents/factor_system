@@ -1,7 +1,7 @@
 # FTS 运维与版本管理
 
-> 版本: v1.1.0
-> 最后更新: 2026-07-24
+> 版本: v1.2.0
+> 最后更新: 2026-08-02
 
 ---
 
@@ -10,6 +10,7 @@
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
 | **v0.1.0** | 2026-07-18 | 从 FDT 剥离，完成 Phase 1-7，220 测试全绿 |
+| **v1.2.0** | 2026-08-02 | 种子因子集成：世坤 101 因子 + Qlib 158 因子加入种子池（268 种子）；seed_data 目录统一管理；熔断修复（种子评估不计入计数器）；纯多头回测策略；1325 测试全绿，99% 覆盖率 |
 | **v1.1.0** | 2026-07-24 | MCP 数据源迁移：Data-Core → akshare(腾讯/东方财富)；移除 6 个期货专用种子因子；CLI 移除 `--universe futures`；默认市场改为 stock；1231 测试全绿 |
 | **v1.0.0** | 2026-07-19 | 本地原生部署：进程守护/热重载/HTTP 监控/Windows 服务/CI/CD/E2E 测试/部署文档、1231 测试全绿 |
 | **v0.4.0** | 2026-07-19 | EliteFactorTracker、AutoRetireManager、WalkForwardOptimizer、EvaluationChain 走航集成、1104 测试全绿 |
@@ -22,8 +23,8 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 
 | 文件 | 字段 |
 |:-----|:-----|
-| `fts/__init__.py` | `__version__ = "1.0.0"` |
-| `pyproject.toml` | `version = "1.0.0"` |
+| `fts/__init__.py` | `__version__ = "1.2.0"` |
+| `pyproject.toml` | `version = "1.2.0"` |
 
 异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v1.1.0），与 FTS 项目版本同步。
 
