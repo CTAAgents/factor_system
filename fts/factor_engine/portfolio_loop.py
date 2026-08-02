@@ -498,7 +498,23 @@ def generate_agent_proposals(
 # ─── 精英因子读取 ────────────────────────────────────────
 
 def load_elite_factors(elite_dir: str | Path) -> list[dict[str, Any]]:
-    """从 elite 目录读取因子，返回简易 dict 列表。"""
+    """从 elite 目录读取因子，返回简易 dict 列表。
+
+    精英因子文件结构:
+        {
+            "factor_id": "...",
+            "name": "...",
+            "evaluation": {
+                "level_1_backtest": {
+                    "sharpe": ...,
+                    "ic": ...,
+                    "turnover_monthly": ...,
+                    ...
+                }
+            },
+            ...
+        }
+    """
     elite_path = Path(elite_dir)
     factors: list[dict[str, Any]] = []
     if not elite_path.exists():
@@ -506,12 +522,13 @@ def load_elite_factors(elite_dir: str | Path) -> list[dict[str, Any]]:
     for fp in sorted(elite_path.glob("*.json")):
         try:
             data = json.loads(fp.read_text(encoding="utf-8"))
+            bt = data.get("evaluation", {}).get("level_1_backtest", {})
             factors.append({
                 "factor_id": data.get("factor_id", fp.stem),
                 "name": data.get("name", fp.stem),
-                "sharpe": data.get("sharpe", data.get("backtest", {}).get("sharpe", 0.5)),
-                "ic": data.get("ic", data.get("backtest", {}).get("ic", 0.02)),
-                "turnover": data.get("turnover", data.get("backtest", {}).get("turnover_monthly", 0.3)),
+                "sharpe": bt.get("sharpe", 0.5),
+                "ic": bt.get("ic", 0.02),
+                "turnover": bt.get("turnover_monthly", 0.3),
                 "decay_6m": data.get("decay_6m", 0.05),
             })
         except (json.JSONDecodeError, TypeError):

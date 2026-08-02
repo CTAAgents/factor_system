@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from .contracts import EconomicLogic, FactorProgram, FactorSignature
 from .factor_program import create_factor_program
+from .seed_data import load_all_external_seeds
 
 
 # ─── 种子因子代码模板 ─────────────────────────────────────
@@ -383,37 +384,67 @@ class SeedPool:
         self._trace_id = trace_id
         self._cache: dict[str, FactorProgram] = {}
 
-    def load_all_seeds(self) -> list[FactorProgram]:
-        """加载全部 9 个种子因子。"""
-        if not self._cache:
-            for defn in _SEED_DEFINITIONS:
-                fp = create_factor_program(
-                    name=defn["name"],
-                    code=defn["code"],
-                    params=defn["params"],
-                    signature=defn["signature"],
-                    economic_logic=defn["economic_logic"],
-                    source="seed",
-                    parent_id=None,
-                    generation=0,
-                    trace_id=self._trace_id,
-                )
-                self._cache[defn["name"]] = fp
-        return list(self._cache.values())
+    def load_all_seeds(
+        self,
+        include_external: bool = True,
+    ) -> list[FactorProgram]:
+        """加载全部种子因子（内置 9 个 + 外部 259 个）。
+
+        Args:
+            include_external: 是否加载 WQ 101 和 Qlib 158 外部种子（默认 True）。
+
+        Returns:
+            list[FactorProgram] — 所有种子因子列表（不含 L1 注入）。
+        """
+        if self._cache:
+            return self._list_base_seeds()
+
+        # 内置种子
+        for defn in _SEED_DEFINITIONS:
+            fp = create_factor_program(
+                name=defn["name"],
+                code=defn["code"],
+                params=defn["params"],
+                signature=defn["signature"],
+                economic_logic=defn["economic_logic"],
+                source="seed",
+                parent_id=None,
+                generation=0,
+                trace_id=self._trace_id,
+            )
+            self._cache[defn["name"]] = fp
+
+        # 外部种子（WQ 101 + Qlib 158）
+        if include_external:
+            for ext_fp in load_all_external_seeds(self._trace_id):
+                self._cache[ext_fp["name"]] = ext_fp
+
+        return self._list_base_seeds()
+
+    def _list_base_seeds(self) -> list[FactorProgram]:
+        """返回非 L1 注入的种子因子（内置 + 外部）。"""
+        return [
+            fp for k, fp in self._cache.items()
+            if not k.startswith("l1:")
+        ]
 
     def get_seed(self, name: str) -> Optional[FactorProgram]:
-        """按名称获取种子因子。"""
+        """按名称获取种子因子（包括外部种子）。"""
         if not self._cache:
             self.load_all_seeds()
         return self._cache.get(name)
 
     def count(self) -> int:
-        """返回种子因子总数。"""
-        return len(_SEED_DEFINITIONS)
+        """返回种子因子总数（不含 L1 注入）。"""
+        if not self._cache:
+            self.load_all_seeds()
+        return len(self._list_base_seeds())
 
     def list_names(self) -> list[str]:
-        """返回种子因子名称列表。"""
-        return [d["name"] for d in _SEED_DEFINITIONS]
+        """返回种子因子名称列表（不含 L1 注入）。"""
+        if not self._cache:
+            self.load_all_seeds()
+        return [fp["name"] for fp in self._list_base_seeds()]
 
     def inject_from_l1(
         self,

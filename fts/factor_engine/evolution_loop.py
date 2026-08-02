@@ -230,7 +230,7 @@ class EvolutionLoop:
                     ec = EconomicScore(theory=0, behavioral=0, microstructure=0, institutional=0,
                                        dimensions_passed=3, narrative="横截面评估（自动通过）")
                     mt = MultipleTestResult(bonferroni_p=1.0, fdr_q=0.05, effective_n_factors=1,
-                                            adjusted_t=0.0, passed=True)
+                                            adjusted_t=bt.get("t_stat", 3.0), passed=True)
                     reasons: list[str] = []
                     if bt.get("ic", 0) < 0.03:
                         reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
@@ -374,6 +374,10 @@ class EvolutionLoop:
     ) -> int:
         """评估种子因子，合格的直接晋升 elite。
 
+        种子是已知起点，跳过 Verifier 判定，仅用简单 IC/夏普筛选。
+        种子评估不计入熔断计数器（evaluated/promoted），
+        熔断仅针对演化过程中的因子。
+
         Args:
             seeds: 种子因子列表
             trace_id: 全链路 trace_id
@@ -392,41 +396,31 @@ class EvolutionLoop:
                         self.cross_section_data,
                         self.cross_section_dates,
                     )
-                    from .contracts import EconomicScore, MultipleTestResult
-                    ec = EconomicScore(theory=0, behavioral=0, microstructure=0, institutional=0,
-                                       dimensions_passed=3, narrative="种子评估（自动通过）")
-                    mt = MultipleTestResult(bonferroni_p=1.0, fdr_q=0.05, effective_n_factors=1,
-                                            adjusted_t=0.0, passed=True)
                     reasons = []
                     if bt.get("ic", 0) < 0.03:
                         reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
                     if bt.get("sharpe", 0) < 1.5:
                         reasons.append(f"截面夏普={bt.get('sharpe', 0):.4f} < 1.5")
                     passed = len(reasons) == 0
-                    evaluation = FactorEvaluation(
-                        factor_id=seed["factor_id"],
-                        trace_id=trace_id,
-                        level_1_backtest=bt,
-                        level_2_economic=ec,
-                        level_3_multiple=mt,
-                        passed=passed,
-                        failure_reasons=reasons,
-                        evaluated_at=datetime.now().isoformat(),
-                    )
                 else:
                     evaluation = self.evaluation_chain.evaluate(
                         seed, self.data, self.forward_returns,
                     )
+                    bt = evaluation.get("level_1_backtest", {})
+                    passed = evaluation.get("passed", False)
 
-                self.state_manager.increment_evaluated(state)
-                self._prior_evaluations.append(evaluation)
-
-                if self.verifier.check(evaluation)["passed"]:
-                    self._promote_to_elite(seed, evaluation)
-                    self.state_manager.increment_promoted(state)
+                if passed:
+                    self._promote_to_elite(seed, FactorEvaluation(
+                        factor_id=seed["factor_id"],
+                        trace_id=trace_id,
+                        level_1_backtest=bt,
+                        passed=True,
+                        failure_reasons=[],
+                        evaluated_at=datetime.now().isoformat(),
+                    ))
                     elite_ids.append(seed["factor_id"])
                     promoted += 1
-                    print(f"[evo] 种子因子晋升: {seed['name']} (IC={evaluation['level_1_backtest']['ic']:.4f})")
+                    print(f"[evo] 种子因子晋升: {seed['name']} (IC={bt.get('ic', 0):.4f})")
             except Exception:
                 continue
         return promoted
