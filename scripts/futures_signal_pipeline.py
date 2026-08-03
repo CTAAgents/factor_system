@@ -34,11 +34,12 @@ import json
 import sys
 import time
 import warnings
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 # 抑制 numpy/scipy 运行时警告
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
@@ -55,6 +56,59 @@ def _yesterday_str() -> str:
     """返回昨日日期字符串 (YYYY-MM-DD)。"""
     from datetime import timedelta
     return (date.today() - timedelta(days=1)).isoformat()
+
+
+def _build_composite_ohlcv(
+    panel: dict[str, "pd.DataFrame"],
+    common_dates: list[str],
+) -> "pd.DataFrame":
+    """从品种面板构建市场综合 OHLCV（用于 Regime 检测）。
+
+    方法：取所有品种 close 的截面均值作为市场综合价格序列，
+    构建合成 OHLCV（open/high/low 用 close 近似，volume 取截面和）。
+
+    Args:
+        panel: 品种行情面板 (symbol → DataFrame)
+        common_dates: 共同交易日列表
+
+    Returns:
+        pd.DataFrame with columns open/high/low/close/volume, DatetimeIndex
+    """
+    # 收集所有品种的 close 序列，对齐到 common_dates
+    close_matrix: dict[str, pd.Series] = {}
+    for sym, df in panel.items():
+        if df is None or df.empty or "close" not in df.columns:
+            continue
+        close_s = df["close"].reindex(common_dates)
+        close_matrix[sym] = close_s
+
+    if not close_matrix:
+        return pd.DataFrame()
+
+    # 截面均值作为市场综合 close
+    close_df = pd.DataFrame(close_matrix)
+    composite_close = close_df.mean(axis=1).dropna()
+
+    if len(composite_close) < 20:
+        return pd.DataFrame()
+
+    # 合成 OHLCV（open/high/low 用 close 近似，volume 取截面和）
+    volume_df = pd.DataFrame({
+        sym: df["volume"].reindex(common_dates)
+        for sym, df in panel.items()
+        if "volume" in df.columns
+    })
+    composite_volume = volume_df.sum(axis=1).reindex(composite_close.index).fillna(0)
+
+    ohlcv = pd.DataFrame({
+        "open": composite_close.shift(1).fillna(composite_close),
+        "high": composite_close,
+        "low": composite_close,
+        "close": composite_close,
+        "volume": composite_volume,
+    }, index=composite_close.index)
+
+    return ohlcv
 
 
 def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]]:
@@ -480,9 +534,38 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
             print(f"      [提示] 剔除 {len(stale)} 个停更/陈旧品种: "
                   f"{', '.join(stale)} (数据止于共同交易日之前)")
 
+    # ── Step 2b: Market Regime 检测 ──
+    from fts.factor_engine.regime import RegimeAwareSelector
+
+    regime_selector = RegimeAwareSelector(lookback_days=60)
+    composite_ohlcv = _build_composite_ohlcv(panel, common_dates)
+    if not composite_ohlcv.empty:
+        market_regime = regime_selector.detect(composite_ohlcv)
+    else:
+        market_regime = {"regime": "unknown", "confidence": 0.0,
+                         "detected_at": datetime.now().isoformat(), "features": {}}
+
+    _REGIME_LABELS = {
+        "bull": "趋势上涨 (bull)",
+        "bear": "趋势下跌 (bear)",
+        "high_vol": "高波动 (high_vol)",
+        "low_vol": "低波动 (low_vol)",
+        "oscillate": "震荡 (oscillate)",
+        "unknown": "未知",
+    }
+    regime_label = _REGIME_LABELS.get(market_regime["regime"], market_regime["regime"])
+    features = market_regime.get("features", {})
+    print(f"\n[Regime] 当前市场制度: {regime_label}")
+    print(f"         置信度: {market_regime['confidence']:.2%}")
+    if features:
+        print(f"         特征: trend={features.get('trend_strength', '?'):.4f} "
+              f"vol={features.get('volatility', '?'):.4f} "
+              f"vol_ratio={features.get('volume_ratio', '?'):.2f} "
+              f"breadth={features.get('breadth', '?'):.4f}")
+
     # ── Step 3: 计算信号 ──
     n_factors = len(factors)
-    print(f"[3/5] 计算信号 ({n_factors} 因子 × {len(panel)} 品种)...")
+    print(f"\n[3/5] 计算信号 ({n_factors} 因子 × {len(panel)} 品种)...")
 
     # 3a: 一次性计算所有因子×品种的信号矩阵
     signal_matrix = _compute_signal_matrix(panel, factors)
@@ -633,6 +716,36 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     w(f"方向校正: 截面 IC 法（因子信号 vs 未来 5 日收益的 Spearman 秩相关）{flips_info}")
     w(f"最新价: 盘中实时价（AKShare 分时）优先，缺失用日线收盘 | 实时价覆盖 {rt_hit}/{len(sym_list)} 个品种")
     w()
+    w()
+    w("## 市场制度 (Market Regime)")
+    w()
+    w(f"- **当前制度**: {regime_label}")
+    w(f"- **置信度**: {market_regime['confidence']:.2%}")
+    if features:
+        w(f"- **趋势强度**: {features.get('trend_strength', 0):.4f} (MA20 斜率)")
+        w(f"- **波动率**: {features.get('volatility', 0):.4f} (ATR/价格)")
+        w(f"- **量比**: {features.get('volume_ratio', 1.0):.2f} (当前量/20日均量)")
+        w(f"- **市场广度**: {features.get('breadth', 0):.4f} (收益自相关)")
+    w()
+
+    # ── Regime 调整后的交易建议 ──
+    regime_type = market_regime["regime"]
+    if regime_type in ("bull", "bear"):
+        w("> **Regime 解读 (趋势友好)**")
+        w("> 市场处于明确趋势中，优先做空/做多增量最强的品种，可适当放大仓位。")
+        w("> 趋势延续概率高，逆势交易风险大。")
+    elif regime_type == "oscillate":
+        w("> **Regime 解读 (均值回归)**")
+        w("> 市场处于震荡状态，反向操作更优：做空减速品种（即将反转），做多加速品种。")
+        w("> 趋势持续性弱，应以区间交易为主。")
+    elif regime_type in ("high_vol",):
+        w("> **Regime 解读 (高波动/混沌)**")
+        w("> 市场波动率异常偏高，缩小仓位，只做增量绝对值 > 0.15 的品种。")
+        w("> 高波动环境下信号噪音大，需严格止损。")
+    elif regime_type == "low_vol":
+        w("> **Regime 解读 (低波动)**")
+        w("> 市场波动率偏低，信号可信度较高，可正常仓位操作。")
+        w("> 关注波动率突破信号，低波环境可能孕育趋势行情。")
     w()
     w("## 多头信号 (做多) — Top 20")
     w()

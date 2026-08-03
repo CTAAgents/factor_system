@@ -1,262 +1,316 @@
 # FTS — Factor Intelligence System Code Wiki
 
 > **项目路径**: `d:\Programs\factor_system`
-> **版本**: v1.2.0 (factor_engine EVOLUTION_VERSION 1.2.0)
+> **版本**: v1.8.0
 > **Python**: >=3.10
-> **代码规模**: ~3,400 语句, 79 个源码+测试文件, 1,325 测试通过, 99% 覆盖率
 > **入口点**: `fts = "fts.cli:main"`
+> **代码规模**: ~5,800 语句, 80+ 源码+测试文件, 1601 测试通过, 91% 覆盖率
 
 ---
 
 ## 目录
 
-1. [项目整体架构](#1-项目整体架构)
-2. [模块/包结构](#2-模块包结构)
-3. [关键类与函数说明](#3-关键类与函数说明)
-4. [模块间依赖关系](#4-模块间依赖关系)
-5. [外部依赖](#5-外部依赖)
-6. [运行/构建/测试方式](#6-运行构建测试方式)
-7. [核心设计模式](#7-核心设计模式)
-8. [配置体系](#8-配置体系)
-9. [运行时状态文件](#9-运行时状态文件)
+1. [项目概述与定位](#1-项目概述与定位)
+2. [整体架构](#2-整体架构)
+3. [模块结构](#3-模块结构)
+4. [关键类与函数](#4-关键类与函数)
+5. [模块间依赖关系](#5-模块间依赖关系)
+6. [外部依赖](#6-外部依赖)
+7. [运行/构建/测试方式](#7-运行构建测试方式)
+8. [核心设计模式](#8-核心设计模式)
+9. [配置体系](#9-配置体系)
+10. [运行时状态文件](#10-运行时状态文件)
 
 ---
 
-## 1. 项目整体架构
+## 1. 项目概述与定位
 
-FTS (Factor Intelligence System) 是一个 **AI 原生的量化因子发现、评估、组合与演化引擎**,位于数据流的中间位置:
-
-```
-MCP/akshare（腾讯自选股/东方财富 API）← 上游数据源
-    ↓
-FTS（因子智能系统）← 当前项目（因子发现 → 评估 → 组合 → 信号输出）
-    ↓
-下游系统（信号消费方）
-```
-
-### 1.1 三层循环 (Loop Engineering)
-
-系统采用 **人在回路 (L0) 顶层监督 + 三个自治循环层** 的 Loop Engineering 范式:
-
-| 循环 | 调度时间 | 职责 |
-|:-----|:---------|:-----|
-| **L0 Human Layer** | 周度人工 | 通过 `Program.md` 设定市场制度、因子偏好、风险约束、预算 |
-| **L1 Meta-Loop** | 每日 09:00 | 市场感知、Web 知识补给、Bootstrapping、debate 分析、因子池更新 |
-| **L2 Evolution Loop** | 每日 23:00 | 因子演化（LLM 宏观改逻辑 + optuna 微观调参）+ 三级评估链 + Verifier 锁定判定 |
-| **L3 Portfolio Loop** | 每周一 06:00 | 组合构建、正交化、衰减检验、信号合成、注入 FDT |
-
-### 1.2 架构数据流
+FTS（Factor Intelligence System，因子智能系统）是一个 **AI 原生的量化因子发现、评估、组合与演化引擎**。位于数据流中间位置：
 
 ```
-Program.md (L0 周度设定)
-    │
-    ▼
-┌──────────────────────────────────────────────────────────┐
-│  L1 META-LOOP (每日 09:00)                               │
-│  ┌─────────────────────────────────────────────────────┐ │
-│  │ Step 1: Web 感知 → Data-Core 新闻/市场快照          │ │
-│  │ Step 2: Debate 分析 → 读取辩论数据,识别薄弱维度     │ │
-│  │ Step 3: Bootstrapping → Agent 链提取/验证/代码生成  │ │
-│  │ Step 4: L1 Verifier → 宽松筛选(2/4 维度 + 可执行)   │ │
-│  │ Step 5: 注入 factor_pool.json + l1_injected/        │ │
-│  └─────────────────────────────────────────────────────┘ │
-│                          │                               │
-│                          ▼                               │
-│  factor_pool.json (种子候选 → L2 种子池)                 │
-└──────────────────────────────────────────────────────────┘
-    │
-    ▼
-┌──────────────────────────────────────────────────────────┐
-│  L2 EVOLUTION LOOP (每夜 23:00)                          │
-│  for generation in 1..MAX_GEN:                           │
-│  1. Macro Evolution → LLM 修改因子代码逻辑               │
-│  2. Micro Evolution → optuna TPE 调优参数               │
-│  3. Evaluation Chain → 3 级评估(回测/经济学/多重检验)    │
-│  4. Verifier → 锁定标准判定(pass → elite / fail → 淘汰) │
-│  5. Experience Chain → 记录经验(LLM 下一轮参考)         │
-│  6. State → 持久化状态,检查熔断器                       │
-│                                                          │
-│  熔断: token 超限 / 连续低 IC / 失败率超限 → 自动停止   │
-└──────────────────────────────────────────────────────────┘
-    │
-    ▼
-  elite/*.json (精英因子库)
-    │
-    ▼
-┌──────────────────────────────────────────────────────────┐
-│  L3 PORTFOLIO LOOP (每周一 06:00)                        │
-│  Step 1: 加载 elite 因子                                │
-│  Step 2: QR 正交化 → 剔除高相关性                        │
-│  Step 3: 6 个月衰减检验 → 衰减 >30% 剔除                 │
-│  Step 4: 信号合成(等权/夏普加权/LightGBM)                │
-│  Step 5: 注入下游 → combo.json + Agent 优化建议         │
-└──────────────────────────────────────────────────────────┘
-    │
-    ▼
-  FDT（期货交易决策系统）
+上游数据源                          FTS 核心                         下游消费
+┌──────────────────────┐    ┌──────────────────────┐    ┌──────────────────┐
+│ MCP/akshare          │    │ 因子发现 → 评估       │    │ 交易信号消费方    │
+│ (腾讯自选股/东方财富) │───→│ → 组合 → 信号输出    │───→│ (FDT 等下游系统)  │
+│ DuckDB kline_cache   │    │                      │    │                  │
+│ (期货连续合约)        │    │ L1/L2/L3 三层循环    │    │                  │
+└──────────────────────┘    └──────────────────────┘    └──────────────────┘
 ```
 
-### 1.3 关键架构属性
+### 1.1 核心能力
+
+| 能力 | 说明 |
+|:-----|:-----|
+| **因子推演** | L0 人类设定 → L1 知识感知 → L2 因子演化 → L3 组合构建 |
+| **多资产支持** | A 股、ETF、82 个期货品种（25 核心 + 57 全量），支持期货基本面数据注入 |
+| **种子因子库** | 482 个种子因子（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面） |
+| **定时调度** | APScheduler 自动化 L1/L2/L3 全链路定时执行，含看门狗和热重载 |
+| **健康监控** | HTTP 端点 + Web UI 仪表盘 + Elite 因子追踪 + 自动淘汰 |
+| **信号产出** | 交易信号输出到 `reports/` 目录，支持期货横截面信号管道（全量商品池） |
+
+### 1.2 项目边界
+
+| 职责 | 归属 |
+|:-----|:-----|
+| 行情数据获取（A 股/ETF） | FTS（通过 MCP/akshare 接入腾讯/东方财富 API） |
+| 行情数据获取（期货） | FTS（通过 DuckDB kline_cache + AKShare futures_zh_daily_sina） |
+| 基本面数据获取 | FTS（通过 MCPBridge 读取 Agent 预填充的缓存，或合成降级） |
+| 因子推演（挖掘/演化/评估） | **FTS 核心能力** |
+| 多因子策略组建 | **FTS 核心能力** |
+| 交易信号产出 | **FTS 核心能力** |
+| 循环调度与状态管理 | **FTS 核心能力** |
+| 健康监控与 HTTP 指标 | **FTS 核心能力** |
+
+---
+
+## 2. 整体架构
+
+### 2.1 四层循环架构（L0 → L1 → L2 → L3）
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  L0 人类设定层 (Human Configuration)                              │
+│  Program.md — 人类设定因子演化的目标、约束、市场偏好、风险偏好    │
+└───────────────────────────┬──────────────────────────────────────┘
+                            │
+                            ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  L1 Meta-Loop (元循环) — 每日 08:30                               │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ Step 1: Web 感知 → 新闻/市场快照获取                       │  │
+│  │ Step 2: Debate 分析 → 读取辩论数据，识别薄弱维度           │  │
+│  │ Step 3: Bootstrapping → Agent 链提取/验证/代码生成         │  │
+│  │ Step 4: L1 Verifier → 宽松筛选（2/4 维度 + 可执行）        │  │
+│  │ Step 5: 注入 factor_pool.json + l1_injected/               │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│  职责: 知识补给 → 种子因子注入 → 市场语境感知 → 演化方向指引    │
+└───────────────────────────┬──────────────────────────────────────┘
+                            │ 注入种子因子 + 演化方向
+                            ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  L2 Evolution Loop (演化循环) — 每日 23:00                        │
+│  for generation in 1..MAX_GEN:                                   │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ Step 1: Macro Evolution → LLM 修改因子代码逻辑             │  │
+│  │ Step 2: Micro Evolution → optuna TPE 贝叶斯调参            │  │
+│  │ Step 3: Evaluation Chain → 三级评估（回测+经济学+多重检验） │  │
+│  │ Step 4: Verifier → 锁定标准判定（pass→elite / fail→淘汰）  │  │
+│  │ Step 5: Experience Chain → 记录经验（LLM 下一轮参考）      │  │
+│  │ Step 6: State → 持久化状态，检查熔断器                     │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│  熔断: token 超限 / 连续低 IC / 失败率超限 → 自动停止           │
+│  职责: 夜间批量演化 → LLM 逻辑改造 → optuna 参数优化 → elite    │
+└───────────────────────────┬──────────────────────────────────────┘
+                            │ elite 因子
+                            ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  L3 Portfolio Loop (组合循环) — 每日 20:00                        │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ Step 1: 加载 elite 因子                                    │  │
+│  │ Step 2: QR 正交化 → 剔除高相关性                           │  │
+│  │ Step 3: 6 个月衰减检验 → 衰减 >30% 剔除                    │  │
+│  │ Step 4: 信号合成（等权/夏普加权/Ridge 回归）               │  │
+│  │ Step 5: 注入下游 → combo.json + 信号报告                   │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│  职责: 组合构建 → 正交化 → 衰减检验 → 信号合成                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 调度时间表
+
+| 循环 | 触发时间 | 频率 | 职责 |
+|:-----|:---------|:-----|:-----|
+| L1 Meta-Loop | 08:30 | 每日 | 知识补给 + 种子注入 |
+| L2 Evolution Loop | 23:00 | 每日 | 夜间因子演化（期货横截面） |
+| L3 Portfolio Loop | 20:00 | 每日 | 组合构建 + 正交化 + 信号合成 |
+| 期货信号管道 | 20:30 | 每日 | 横截面信号报告（全量商品池，Ridge 回归加权） |
+| Health Check | 每 10 分钟 | 高频 | 状态监控 |
+
+### 2.3 关键架构属性
 
 | 属性 | 说明 |
-|:-----|:------|
-| **trace_id 全链路** | 所有 CLI 子命令和工作流启动时生成 `{prefix}_{8hex}_{timestamp}`,贯穿所有模块和日志 |
-| **Verifier 锁定协议** | 评估配置初始化后锁定,任何运行时修改抛 `VerifierAlreadyLockedError`,防止 LLM 博弈评估标准 |
-| **TypedDict 契约优先** | 所有数据形状在 `contracts.py` 中声明为 TypedDict,模块间通过契约解耦 |
-| **原子持久化** | `atomic_write()` 临时文件 + `os.replace()` 实现崩溃安全;备份轮转最多保留 3 个 `.bak.*` 文件 |
-| **安全沙箱** | 因子代码执行使用白名单导入、黑名单函数名/模块名、AST 预验证,受限 `__builtins__` |
-| **静默降级** | 所有可选依赖惰性导入,缺失时自动回退 Mock 实现,零可选依赖仍可端到端运行 |
-| **熔断器** | 三阈值自动停止: token 预算耗尽 / 连续低 IC / 失败率超限,触发后须人类介入恢复 |
-
-参考文档:
-- [architecture](file:///d:/Programs/factor_system/docs/harness/01-architecture.md) — 详细架构图与层间交互
-- [lifecycle](file:///d:/Programs/factor_system/docs/harness/02-lifecycle.md) — 开发生命周期与文件命名规范
-- [README](file:///d:/Programs/factor_system/README.md) — 项目概览与 CLI 命令摘要
+|:-----|:-----|
+| **trace_id 全链路** | 所有 CLI 子命令和工作流启动时生成，贯穿所有模块和日志 |
+| **Verifier 锁定协议** | 评估配置初始化后锁定，任何运行时修改抛异常 |
+| **TypedDict 契约优先** | 所有数据形状在 `contracts.py` 中声明为 TypedDict |
+| **原子持久化** | `atomic_write()` 临时文件 + `os.replace()` 实现崩溃安全 |
+| **安全沙箱** | 白名单导入 + 黑名单函数名 + AST 预验证 + 受限 `__builtins__` |
+| **静默降级** | 所有可选依赖惰性导入，缺失时回退 Mock 实现 |
+| **熔断器** | 三阈值：token 预算 / 连续低 IC / 失败率超限 |
 
 ---
 
-## 2. 模块/包结构
+## 3. 模块结构
 
-### 2.1 顶层目录布局
+### 3.1 顶层目录布局
 
 ```
 d:\Programs\factor_system\
-├── fts/                           # 主源码包 (~30 个源文件)
-│   ├── __init__.py                # __version__ = "1.2.0", 模块 re-export
-│   ├── cli.py                     # 409 LOC — 统一 CLI 入口
-│   ├── data.py                    # 300+ LOC — FTSDataProvider (MCP 数据适配器)
-│   ├── llm.py                     # 235+ LOC — LLM 客户端层次 (OpenAI/Anthropic/Mock)
-│   ├── config/                    # 配置系统
+├── fts/                              # 核心源码包
+│   ├── __init__.py                   # 包入口 + 版本号 v1.8.0 + .env 自动加载
+│   ├── cli.py                        # 统一 CLI 入口
+│   ├── data.py                       # 数据层统一入口（FTSDataProvider）
+│   ├── data_mcp.py                   # MCP 数据适配层（akshare 腾讯/东方财富）
+│   ├── data_mcp_bridge.py            # MCP 数据桥接层（本地缓存读取 + MX API 解析）
+│   ├── data_fundamental.py           # 基本面数据层（估值/财务/宏观字段注入）
+│   ├── data_futures.py               # 期货数据适配层（DuckDB + AKShare）
+│   ├── data_futures_fundamental.py   # 期货基本面数据（库存/仓单/基差）
+│   ├── llm.py                        # LLM 客户端（OpenAI/Anthropic/Mock）
+│   ├── config/                       # 配置系统
 │   │   ├── __init__.py
-│   │   └── settings.py            # 156 LOC — FTSConfig + load_config() + get_config()
-│   ├── core/                      # 基础工具层
+│   │   └── settings.py               # FTSConfig + get_config()
+│   ├── core/                         # 核心契约层
 │   │   ├── __init__.py
-│   │   ├── atomic.py              # 92 LOC — 原子文件写入/读取 + 备份轮转
-│   │   ├── contracts.py           # 91 LOC — 从 factor_engine.contracts 重导出
-│   │   └── enums.py               # enums — EvolutionStage / FactorPriority / FactorStatus
-│   ├── factor_engine/             # 核心引擎模块 (19 个文件, 最大模块)
-│   │   ├── __init__.py            # v1.2.0, 所有子模块重导出
-│   │   ├── contracts.py           # 560 LOC — 所有 TypedDict 契约 (L1+L2+L3)
-│   │   ├── evolution_loop.py      # L2 主循环编排器 (490+ LOC)
-│   │   ├── meta_loop.py           # L1 Meta-Loop (500+ LOC)
-│   │   ├── portfolio_loop.py      # L3 Portfolio Loop (400+ LOC)
-│   │   ├── seed_pool.py           # 种子池管理器 (268 个种子因子: 9 内置 + 101 世坤 + 158 Qlib)
-│   │   ├── seed_data/             # 种子因子定义库 (wq101.py, qlib158.py, alpha_ops.py, loader.py)
-│   │   ├── factor_program.py      # 安全沙箱执行器 + AST 验证
-│   │   ├── macro_evolution.py     # LLM 驱动的因子代码演化
-│   │   ├── micro_evolution.py     # optuna TPE 贝叶斯调参
-│   │   ├── evaluation_chain.py    # 三级评估链 (回测+经济学+多重检验)
-│   │   ├── verifier.py            # 锁定 Verifier 协议 (FactoryVerifier)
-│   │   ├── state.py               # 状态管理器 + trace_id/run_id 生成
-│   │   ├── experience_chain.py    # 经验链存储 (LLM 记忆)
-│   │   ├── program.py             # L0 Program.md 解析器
-│   │   ├── walk_forward.py        # 走航验证 (Walk-forward OOS)
-│   │   ├── cost_model.py          # 交易成本模型
-│   │   ├── regime.py              # 市场制度检测 (bull/bear/oscillate/high_vol/low_vol)
-│   │   ├── stress_test.py         # 5 个历史压力场景测试
-│   │   └── monitor.py             # 三层循环状态监控 (LoopStatus/AllStatus)
-│   ├── pipeline/                  # 因子推演管线
-│   │   ├── base.py                # DataPayload / ProcessingStage / FactorPipeline ABC
-│   │   └── factor_combiner.py     # FactorCombiner (z-score + QR 正交 + 权重融合)
-│   ├── strategies/                # v2 可插拔策略框架
-│   │   ├── base_v2.py             # BaseStrategyV2 ABC + StrategyV1Adapter
-│   │   └── multi_factor_strategy.py  # 12 因子多策略 (3 种模式)
-│   ├── scheduler/                 # 任务调度
-│   │   ├── engine.py              # APScheduler 引擎包装
-│   │   ├── tasks.py               # TaskRegistry 任务注册表
-│   │   ├── watchdog.py            # ProcessWatchdog 进程看门狗
-│   │   └── hotswap.py             # HotSwapWatcher 热重载
-│   └── monitor/                   # 监控系统
-│       ├── __init__.py            # LoopStatusReport / SystemStatusReport + 状态检查函数
-│       ├── http_server.py         # 纯 stdlib HTTP 服务器 (127.0.0.1:9100)
-│       └── elite_tracker.py       # EliteFactorTracker + AutoRetireManager
-├── tests/                         # 35+ 个测试文件，1325 全部通过
-│   ├── core/                      # 3 个文件
-│   ├── factor_engine/             # 16 个文件 (含 conftest.py)
-│   ├── pipeline/                  # 2 个文件
-│   ├── scheduler/                 # 4 个文件
-│   ├── strategies/                # 2 个文件
-│   └── 顶层测试文件               # 8 个 (test_cli.py, test_llm.py, test_monitor.py, test_e2e.py 等)
+│   │   ├── atomic.py                 # 原子文件操作
+│   │   ├── contracts.py              # TypedDict 契约重导出
+│   │   └── enums.py                  # 枚举定义
+│   ├── factor_engine/                # 因子引擎（核心模块，19 文件）
+│   │   ├── __init__.py               # 模块入口 + 所有子模块重导出
+│   │   ├── contracts.py              # 完整 TypedDict 契约（L1+L2+L3）
+│   │   ├── evolution_loop.py         # L2 主循环编排器
+│   │   ├── meta_loop.py              # L1 Meta-Loop
+│   │   ├── portfolio_loop.py         # L3 Portfolio Loop
+│   │   ├── seed_pool.py              # 种子池管理器（482 个因子）
+│   │   ├── seed_data/                # 种子因子定义库
+│   │   │   ├── __init__.py           # 统一导出入口
+│   │   │   ├── wq101.py              # 101 个 WorldQuant Alpha 因子
+│   │   │   ├── qlib158.py            # 158 个 Qlib 因子
+│   │   │   ├── gtja191.py            # 191 个国泰君安 Alpha 因子
+│   │   │   ├── fundamental_seeds.py  # 23 个基本面/另类/宏观因子
+│   │   │   ├── alpha_ops.py          # 公共操作库
+│   │   │   └── loader.py             # 动态加载器：因子定义 → FactorProgram
+│   │   ├── seed_data_futures.py      # 期货种子因子（25 核心品种）
+│   │   ├── seed_data_futures_full.py # 期货种子因子（全量 50+ 因子）
+│   │   ├── factor_program.py         # 因子程序（安全沙箱）
+│   │   ├── macro_evolution.py        # LLM 宏观演化
+│   │   ├── micro_evolution.py        # optuna 微观调参
+│   │   ├── evaluation_chain.py       # 三级评估链
+│   │   ├── experience_chain.py       # 经验链存储
+│   │   ├── verifier.py               # Verifier 锁定协议
+│   │   ├── state.py                  # 演化状态管理 + trace_id 生成
+│   │   ├── program.py                # L0 Program.md 解析
+│   │   ├── walk_forward.py           # 走航验证
+│   │   ├── cost_model.py             # 交易成本模型
+│   │   ├── regime.py                 # 市场制度检测
+│   │   ├── stress_test.py            # 压力测试
+│   │   └── monitor.py                # 循环监控
+│   ├── pipeline/                     # 因子推演管线
+│   │   ├── __init__.py
+│   │   ├── base.py                   # FactorPipeline 抽象基类
+│   │   └── factor_combiner.py        # 因子组合器
+│   ├── strategies/                   # 策略层
+│   │   ├── rules/                    # 策略规则知识库（占位）
+│   │   │   └── __init__.py
+│   │   ├── __init__.py
+│   │   ├── base_v2.py                # BaseStrategyV2 + ScoredSignal
+│   │   ├── multi_factor_strategy.py  # 12 因子多策略（3 种模式）
+│   │   └── strategy_evolution.py     # 策略进化（动态权重/制度自适应/多周期融合）
+│   ├── scheduler/                    # 调度层
+│   │   ├── __init__.py               # 模块入口
+│   │   ├── engine.py                 # SchedulerEngine（APScheduler 包装器）
+│   │   ├── tasks.py                  # TaskRegistry + 5 个默认任务
+│   │   ├── jobs.py                   # 任务工作函数
+│   │   ├── watchdog.py               # ProcessWatchdog 进程看门狗
+│   │   └── hotswap.py                # HotSwapWatcher 热重载
+│   └── monitor/                      # 健康监控
+│       ├── __init__.py               # 状态报告函数
+│       ├── http_server.py            # HTTP 监控端点 + Web UI 仪表盘
+│       └── elite_tracker.py          # Elite 因子追踪
+├── agents/                           # Agent 角色定义
+│   └── fts-agent.md                  # FTS 开发代理职责与能力边界
+├── tests/                            # 40+ 个测试文件，1601 全部通过
+│   ├── core/                         # 3 个文件
+│   ├── factor_engine/                # 16 个文件
+│   ├── pipeline/                     # 2 个文件
+│   ├── scheduler/                    # 4 个文件
+│   ├── strategies/                   # 3 个文件
+│   ├── monitor/                      # 1 个文件
+│   └── 顶层测试                      # 10 个文件
 ├── config/
-│   └── settings.yaml              # 默认 YAML 配置
+│   └── settings.yaml                 # YAML 配置示例
 ├── docs/
-│   ├── harness/                   # HARNESS 工程规范 (7 个文件)
-│   ├── production_plan.md         # 生产就绪路线图
-│   ├── execution_modes_flowchart.md  # 执行模式流程图
-│   ├── business_flow.md           # 业务流程图
-│   ├── deploy/                    # 部署文档 (INSTALL.md, WINDOWS.md)
-│   ├── factor_data_dict/          # 因子数据字典
-│   ├── archive/                   # 已完成计划归档
-│   ├── pending_for_datacore/      # 待 Data-Core 需求
-├── memory/                        # 运行时持久化 (自动创建)
-│   ├── evolution/                 # L2 演化状态
-│   ├── meta_loop/                 # L1 元循环状态
-│   ├── portfolio/                 # L3 组合状态
-│   └── knowledge/factors/         # 因子知识库
-│       ├── elite/                 # 精英因子 (晋升成功)
-│       └── l1_injected/           # L1 注入因子候选
-├── scripts/                       # 辅助脚本 (verify_doc_consistency.py 等)
-├── data/                          # DuckDB 数据文件
-├── .github/workflows/ci.yml       # GitHub Actions CI (Python 3.10/3.11/3.12)
-├── pyproject.toml                 # 项目元数据 + 依赖 + 入口点
-├── CLAUDE.md                      # AI 编码行为准则 (HARNESS 规范)
-├── CODE_WIKI.md                   # 本文件 — 代码 Wiki
-├── README.md                      # 项目概览文件
-├── start_fts.ps1                  # PowerShell 启动脚本
-└── .gitignore
+│   ├── harness/                      # HARNESS 工程文档（9 个文件）
+│   ├── deploy/                       # 部署文档
+│   ├── factor_data_dict/             # 因子数据字典
+│   ├── templates/                    # 模板文件
+│   └── *.md                          # 业务文档
+├── scripts/                          # 辅助脚本
+│   ├── download_futures.py           # 期货数据下载（断点续传）
+│   ├── daily_signal_pipeline.py      # 每日信号管道
+│   ├── futures_signal_pipeline.py    # 期货横截面信号管道
+│   ├── futures_strategy.py           # 期货策略
+│   ├── futures_l3_portfolio.py       # 期货 L3 组合
+│   ├── run_futures_evolution.py      # 期货演化运行器
+│   ├── portfolio_analysis.py         # 组合分析
+│   ├── portfolio_backtest.py         # 组合回测
+│   ├── analyze_elite.py              # Elite 因子分析
+│   ├── build_fundamental_cache.py    # 基本面缓存构建
+│   ├── verify_doc_consistency.py     # 文档一致性校验
+│   ├── verify_gtja191.py             # 国泰君安 191 验证
+│   ├── verify_loader.py              # 加载器验证
+│   └── verify_seed_data.py           # 种子数据验证
+├── reports/                          # 信号报告输出目录（按日期）
+├── data/                             # DuckDB 数据文件 + MCP 缓存
+├── memory/                           # 运行时持久化（自动创建）
+│   ├── evolution/                    # L2 演化状态
+│   ├── meta_loop/                    # L1 元循环状态
+│   ├── portfolio/                    # L3 组合状态
+│   └── knowledge/factors/            # 因子知识库
+│       ├── elite/                    # 精英因子
+│       └── l1_injected/              # L1 注入因子
+├── .github/workflows/ci.yml          # GitHub Actions CI
+├── pyproject.toml                    # 项目元数据 + 依赖
+├── CLAUDE.md                         # AI 编码行为准则
+├── CODE_WIKI.md                      # 本文件
+├── README.md                         # 项目概览
+└── start_fts.ps1                     # PowerShell 启动脚本
 ```
 
-### 2.2 模块职责一览
+### 3.2 模块职责一览
 
-| 包 | 文件 | 职责 |
-|---|---|---|
-| `fts.cli` | `cli.py` | 统一 CLI 入口: version / monitor / evolution / meta-loop / portfolio / factor / scheduler |
-| `fts.config` | `settings.py` | 配置加载 (YAML → 环境变量 → 默认值 三级优先级); `FTSConfig` dataclass; `get_config()` 惰性单例 |
-| `fts.core` | `atomic.py` | 原子文件写入 (`atomic_write`)、读取 (`atomic_read`)、带备份轮转的状态写入 (`atomic_write_state`) |
-| `fts.core` | `enums.py` | `EvolutionStage` (L0/L1/L2/L3), `FactorPriority` (HIGH/MEDIUM/LOW), `FactorStatus` (PENDING/INJECTED/DECAYED/REJECTED) |
-| `fts.core` | `contracts.py` | 从 `factor_engine.contracts` 重导出所有 TypedDict |
-| `fts.data` | `data.py` | `FTSDataProvider`: 包装 MCP 数据提供者 (`MCPDataProvider`), 5 级数据质量降级 (PRIMARY→DAILY→CACHED→STALE→UNAVAILABLE), 合成数据回退 |
-| `fts.llm` | `llm.py` | `LLMClient` (ABC) → `OpenAIClient` / `AnthropicClient` / `MockLLMClient`; `LLMCallRecord` 审计跟踪; 环境变量自动检测后端 |
-| `fts.factor_engine` | 19 个文件 | **核心引擎**: L1/L2/L3 三层循环、契约、评估、Verifier、沙箱、种子、经验链 |
-| `fts.pipeline` | `base.py` | Pipeline 框架: `DataPayload` dataclass, `ProcessingStage` Protocol, `FactorPipeline` ABC |
-| `fts.pipeline` | `factor_combiner.py` | `FactorCombiner`: z-score 归一化、可选 QR 正交化、权重融合 |
-| `fts.strategies` | `base_v2.py` | v2 可插拔策略框架: `BaseStrategyV2` ABC, `RawSignal`/`ScoredSignal`, `StrategyV1Adapter` 适配器 |
-| `fts.strategies` | `multi_factor_strategy.py` | `MultiFactorStrategy`: 12 因子实现 (momentum/volatility/volume_flow/oi_change/basis 等), 3 种模式 (pure_momentum/long_short/neutral) |
-| `fts.scheduler` | `engine.py` | `SchedulerEngine`: 包装 APScheduler `BackgroundScheduler`, 可选依赖回退 |
-| `fts.scheduler` | `tasks.py` | `TaskRegistry`: 任务注册 + 4 个默认任务 (L1/L2/L3/health_check) |
-| `fts.scheduler` | `watchdog.py` | `ProcessWatchdog`: 重启策略 (30s 内 3 次重启 → 5min 熔断) |
-| `fts.scheduler` | `hotswap.py` | `HotSwapWatcher`: watchdog 库监听文件变更 → `importlib.reload`, 可选依赖回退 |
-| `fts.monitor` | `__init__.py` | `LoopStatusReport`/`SystemStatusReport`, `check_all_status()`, `format_status_report()`, `status_report_to_json()` |
-| `fts.monitor` | `http_server.py` | `MetricsHTTPServer`: 纯 stdlib HTTP (127.0.0.1:9100), 端点 /health /metrics / |
-| `fts.monitor` | `elite_tracker.py` | `EliteFactorTracker`: 追踪 + 自动退役 (cooldown_days); `AutoRetireManager` |
+| 模块 | 主要文件 | 职责 |
+|:-----|:---------|:-----|
+| `fts.cli` | `cli.py` | 统一 CLI 入口：version / monitor / evolution / meta-loop / portfolio / factor / scheduler / ui |
+| `fts.config` | `settings.py` | 配置加载（YAML → 环境变量 → 默认值 三级优先级）；`FTSConfig` dataclass |
+| `fts.core` | `atomic.py`, `contracts.py`, `enums.py` | 原子文件操作、契约重导出、枚举定义 |
+| `fts.data` | `data.py` | `FTSDataProvider`：统一数据入口，包装 MCP + 期货 + 基本面数据提供者，多级降级 |
+| `fts.data_mcp` | `data_mcp.py` | MCP 数据适配层，基于 akshare 获取 A 股/ETF OHLCV |
+| `fts.data_mcp_bridge` | `data_mcp_bridge.py` | MCP 数据桥接层：从本地缓存读取 Agent 预填充的基本面数据，含 MX API 响应解析 |
+| `fts.data_fundamental` | `data_fundamental.py` | 基本面数据注入（pe_ttm, pb, market_cap 等），MCP 缓存 → 合成降级 |
+| `fts.data_futures` | `data_futures.py` | 期货数据提供者（DuckDB kline_cache + AKShare 降级 + 合成数据），82 个品种 |
+| `fts.data_futures_fundamental` | `data_futures_fundamental.py` | 期货基本面数据（库存/仓单/基差） |
+| `fts.llm` | `llm.py` | LLM 客户端层次：`LLMClient`(ABC) → `OpenAIClient` / `AnthropicClient` / `MockLLMClient` |
+| `fts.factor_engine` | 19 个文件 | **核心引擎**：L1/L2/L3 三层循环、契约、评估、Verifier、沙箱、种子、经验链 |
+| `fts.pipeline` | `base.py`, `factor_combiner.py` | 因子推演管线框架：`ProcessingStage` Protocol + `FactorPipeline` ABC + `FactorCombiner` |
+| `fts.strategies` | `base_v2.py`, `multi_factor_strategy.py`, `strategy_evolution.py` | v2 可插拔策略框架 + 12 因子多策略 + 策略进化 |
+| `fts.scheduler` | `engine.py`, `tasks.py`, `jobs.py`, `watchdog.py`, `hotswap.py` | APScheduler 调度引擎 + 5 个默认任务 + 看门狗 + 热重载 |
+| `fts.monitor` | `__init__.py`, `http_server.py`, `elite_tracker.py` | 健康监控 + HTTP 端点 + Web UI 仪表盘 + Elite 因子追踪 |
 
 ---
 
-## 3. 关键类与函数说明
+## 4. 关键类与函数
 
-### 3.1 `fts.cli` — `fts/cli.py`
-
-统一命令行入口,使用 `argparse` 实现子命令分发。
-
-**函数:**
+### 4.1 `fts.cli` — 统一命令行入口
 
 | 函数 | 用途 |
-|---|---|
-| `main(argv=None)` | CLI 入口点,解析参数并分发到子命令处理器 |
-| `build_parser()` | 构建 `ArgumentParser`,注册所有子命令 |
+|:-----|:-----|
+| `main(argv=None)` | CLI 入口点，解析参数并分发到子命令处理器 |
+| `build_parser()` | 构建 `ArgumentParser`，注册所有子命令 |
 | `_cmd_version(_args)` | 打印版本号 + 引擎版本 + 配置路径 |
-| `_cmd_monitor(args)` | 调用 `check_all_status()` 检查 L1/L2/L3 健康状态,支持 `--json` |
-| `_cmd_evolution_run(args)` | 启动 L2 因子演化: 支持 `--universe single/csi300/futures`, `--max-generations`, `--symbol` |
-| `_cmd_meta_loop_run(_args)` | 启动 L1 Meta-Loop (市场感知 + Bootstrapping) |
-| `_cmd_portfolio_run(_args)` | 启动 L3 组合构建 (正交化 + 衰减检验 + 信号合成) |
+| `_cmd_monitor(args)` | 检查 L1/L2/L3 健康状态，支持 `--json` |
+| `_cmd_evolution_run(args)` | 启动 L2 因子演化：支持 `--universe single/csi300/futures` |
+| `_cmd_meta_loop_run(args)` | 启动 L1 Meta-Loop（市场感知 + Bootstrapping） |
+| `_cmd_portfolio_run(args)` | 启动 L3 组合构建，完成后自动触发期货信号管道 |
+| `_cmd_ui(args)` | 启动 Web UI 仪表盘（127.0.0.1:9100） |
 | `_cmd_scheduler_run(_args)` | 启动 APScheduler 后台运行 |
 | `_cmd_scheduler_list(_args)` | 列出所有已注册调度任务 |
-| `_cmd_factor_list(args)` | 列出 elite 目录中的因子 (JSON 元数据) |
-| `_cmd_factor_show(args)` | 查看单个因子 JSON 详情 (支持部分匹配) |
-| `_prepare_data(symbol, days)` | 准备单标 OHLCV 数据 (Data-Core → 合成回退) + 前向收益 |
-| `_prepare_cross_section_data(universe, days, max_stocks)` | 准备横截面面板数据 (csi300/futures) |
+| `_cmd_factor_list(args)` | 列出 elite 目录中的因子 |
+| `_cmd_factor_show(args)` | 查看单个因子 JSON 详情 |
+| `_prepare_data(symbol, days)` | 准备单标 OHLCV 数据 + 前向收益 |
+| `_prepare_cross_section_data(universe, days, max_stocks)` | 准备横截面面板数据（csi300 模式，含基本面注入） |
+| `_prepare_futures_data(days, max_symbols)` | 准备期货横截面面板数据 |
 
-**CLI 命令树:**
+**CLI 命令树：**
 
 ```
 fts
@@ -269,6 +323,10 @@ fts
 │   └── --max-stocks (默认 50)
 ├── meta-loop run        # L1 市场感知
 ├── portfolio run        # L3 组合构建
+│   └── --universe stock/futures
+├── ui                   # Web UI 仪表盘
+│   ├── --host (默认 127.0.0.1)
+│   └── --port (默认 9100)
 ├── scheduler            # 任务调度
 │   ├── run              # 启动后台调度
 │   └── list             # 列出任务
@@ -277,790 +335,606 @@ fts
     └── show <factor_id> [--elite-dir]
 ```
 
-### 3.2 `fts.config.settings` — `fts/config/settings.py`
+### 4.2 `fts.config.settings` — 配置系统
 
-**配置加载优先级:** 环境变量 (`FTS_*`) > YAML 配置文件 > 代码默认值。
-
-**关键类/函数:**
+**配置加载优先级：** 环境变量 (`FTS_*`) > YAML 配置文件 > 代码默认值
 
 | 名称 | 类型 | 说明 |
-|---|---|---|
-| `FTSConfig` | `@dataclass` | 全局配置容器,字段: `memory_dir`, `elite_dir`, `default_market`, `llm_backend`, `max_generations`, `population_size`, `micro_trials_per_generation`, `max_workers`, `meta_loop_interval_hours`, `meta_loop_max_tokens`, `portfolio_max_factors`, `portfolio_top_n`, `portfolio_decay_days`, `log_level`, `log_file` |
-| `load_config(config_path)` | 函数 | 加载 YAML → 应用环境变量覆盖 → 返回 FTSConfig |
+|:-----|:-----|:-----|
+| `FTSConfig` | `@dataclass` | 全局配置容器 |
+| `load_config(config_path)` | 函数 | 加载 YAML → 应用环境变量覆盖 |
 | `get_config()` | 函数 | 惰性单例访问器 |
 
-**`FTSConfig` 关键字段默认值:**
+**`FTSConfig` 关键字段：**
 
 | 字段 | 默认值 | 环境变量 |
-|---|---|---|
+|:-----|:-------|:---------|
 | `memory_dir` | `"memory"` | `FTS_MEMORY_DIR` |
 | `elite_dir` | `"memory/knowledge/factors/elite"` | `FTS_ELITE_DIR` |
-| `default_market` | `"futures"` | `FTS_DEFAULT_MARKET` |
+| `default_market` | `"stock"` | `FTS_DEFAULT_MARKET` |
+| `llm_backend` | `""` (自动检测) | `FTS_LLM_BACKEND` |
 | `max_generations` | `10` | — |
 | `micro_trials_per_generation` | `50` | — |
 | `max_workers` | `4` | `FTS_MAX_WORKERS` |
 | `portfolio_max_factors` | `20` | — |
+| `log_level` | `"INFO"` | `FTS_LOG_LEVEL` |
 
-### 3.3 `fts.core` — `fts/core/`
+### 4.3 `fts.core` — 核心契约层
 
-**`fts/core/atomic.py` — 原子文件操作:**
+#### `atomic.py` — 原子文件操作
 
 | 函数 | 说明 |
-|---|---|
-| `atomic_write(path, data, *, make_dir=True, encoding="utf-8")` | 临时文件 + `os.replace()` 原子写入 JSON |
-| `atomic_read(path, *, default=None, encoding="utf-8")` | 安全读取 JSON,失败返回 default,不抛异常 |
-| `atomic_write_state(path, state, *, backup_count=3)` | 原子写入 + 备份轮转: 旧文件 → `.bak.0` → `.bak.1` → `.bak.2` |
+|:-----|:-----|
+| `atomic_write(path, data, make_dir=True, encoding="utf-8")` | 临时文件 + `os.replace()` 原子写入 JSON |
+| `atomic_read(path, default=None, encoding="utf-8")` | 安全读取 JSON，失败返回 default |
+| `atomic_write_state(path, state, backup_count=3)` | 原子写入 + 备份轮转（`.bak.0` → `.bak.1` → `.bak.2`） |
 
-**`fts/core/enums.py` — 枚举:**
+#### `enums.py` — 枚举定义
 
 | 枚举 | 值 |
-|---|---|
+|:-----|:---|
 | `EvolutionStage` | `L0_HUMAN`, `L1_META_LOOP`, `L2_EVOLUTION`, `L3_PORTFOLIO` |
 | `FactorPriority` | `HIGH`, `MEDIUM`, `LOW` |
 | `FactorStatus` | `PENDING`, `INJECTED`, `DECAYED`, `REJECTED` |
 
-**`fts/core/contracts.py` — 91 LOC, 从 `fts.factor_engine.contracts` 重导出所有 TypedDict.**
+#### `contracts.py` — 从 `factor_engine.contracts` 重导出所有 TypedDict
 
-### 3.4 `fts.data` + `fts.data_mcp` — MCP 数据层
+### 4.4 `fts.data` — 数据层
 
-**`fts/data.py`** — 统一数据入口，包装 `MCPDataProvider` 提供 OHLCV 数据。
-**`fts/data_mcp.py`** — 腾讯自选股 MCP 数据适配层，基于 akshare（东方财富/腾讯数据源）。
+#### FTSDataProvider（统一数据入口）
 
-`FTSDataProvider` — MCP 数据集成器，自动处理代码格式转换（sh600519↔600519）。
+| 方法 | 说明 |
+|:-----|:-----|
+| `get_ohlcv(symbol, days, adjust, trace_id, fundamental)` | 获取 A 股/ETF OHLCV K 线数据（MCP → 合成降级） |
+| `get_etf_ohlcv(symbol, days, adjust, trace_id)` | 获取 ETF OHLCV 数据 |
+| `get_csi300_panel(days, max_stocks, trace_id, fundamental)` | 沪深 300 成分股面板数据 |
+| `get_etf_panel(days, trace_id)` | 常见 ETF 面板数据 |
+| `get_futures_ohlcv(symbol, days, trace_id)` | 期货连续合约 OHLCV（DuckDB → AKShare → 合成降级） |
+| `get_futures_panel(symbols, days, trace_id)` | 期货多品种面板数据（common_dates 多数对齐） |
+| `enrich_with_fundamental(df, symbol, trace_id)` | 基本面字段注入（pe_ttm, pb, market_cap 等） |
+| `enrich_futures_fundamental(df, symbol, trace_id)` | 期货基本面注入（库存/仓单/基差） |
+| `search_symbol(query, limit)` | 搜索股票/ETF 代码 |
+| `synthesize_ohlcv(n_days, base_price, seed)` | 合成 OHLCV 数据（降级回退） |
 
-**关键类/函数（`fts/data.py`）:**
+#### MCPBridge（数据桥接层）
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `DataUnavailableError` | Exception | 所有数据源失效时抛出 |
-| `FTSDataProvider` | class | 统一数据提供类，包装 MCPDataProvider；无网络时回退合成数据 |
-| `__init__(mcp_provider)` | ctor | 注入外部 MCP 提供者（用于测试） |
-| `get_ohlcv(symbol, days, adjust, trace_id)` | method | 获取 A 股/ETF 日 OHLCV 数据（前复权默认） |
-| `get_etf_ohlcv(symbol, days, adjust, trace_id)` | method | 获取 ETF OHLCV 数据 |
-| `get_csi300_panel(days, max_stocks)` | method | 获取沪深 300 成分股面板数据 |
-| `get_etf_panel(days)` | method | 获取常见 ETF 面板数据 |
-| `get_stock_panel(symbols, days)` | method | 获取任意股票列表面板数据 |
-| `search_symbol(query, limit)` | method | 搜索股票/ETF 代码 |
-| `synthesize_ohlcv(n_days, base_price, seed)` | static | 合成 OHLCV 数据（降级回退） |
-| `get_data_provider()` | 函数 | 全局单例访问器 |
+| 方法 | 说明 |
+|:-----|:-----|
+| `get_fundamental(symbol)` | 从本地缓存获取单只股票基本面数据 |
+| `get_batch(symbols)` | 批量获取多只股票基本面数据 |
+| `cache_size` (property) | 缓存中的股票数量 |
+| `cache_stocks` (property) | 缓存中的所有股票代码 |
+| `get_cache_age_hours()` | 缓存年龄（小时） |
 
-**关键类/函数（`fts/data_mcp.py`）:**
+**辅助函数：** `save_cache()` 保存缓存数据，`_parse_mx_response()` 解析 MX API 响应为结构化缓存。
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `MCPDataError` | Exception | MCP 数据获取失败 |
-| `MCPDataProvider` | class | 基于 akshare 的 MCP 数据提供者 |
-| `get_ohlcv(symbol, days, adjust)` | method | 自动识别股票/ETF 并获取 K 线 |
-| `get_etf_ohlcv(symbol, days)` | method | ETF 专用 OHLCV |
-| `get_stock_panel(symbols, days)` | method | 批量面板数据 |
-| `synthesize_ohlcv(n_days, base_price, seed)` | static | 合成数据回退 |
-| `search_symbol(query, limit)` | method | 搜索功能 |
-| `list_csi300()` | method | 沪深 300 成分股列表 |
-| `list_etf()` | method | 常见 ETF 列表 |
-| `CSI300_SUBSET` | 常量 | 76 只沪深 300 代表股 |
-| `ETF_SUBSET` | 常量 | 18 只常见 ETF |
+#### FuturesDataProvider（期货数据提供者）
 
-### 3.5 `fts.llm` — `fts/llm.py`
+| 方法 | 说明 |
+|:-----|:-----|
+| `get_ohlcv(symbol, days, trace_id)` | 获取期货连续合约 OHLCV（DuckDB kline_cache 优先） |
+| `get_futures_panel(symbols, days, trace_id)` | 多品种面板数据，common_dates 多数对齐 |
+| `get_dominant_contracts(date)` | 获取主力合约代码（按最大成交量判定） |
 
-**LLM 客户端层次结构:**
+#### FuturesFundamentalProvider（期货基本面）
+
+| 方法 | 说明 |
+|:-----|:-----|
+| `get_inventory(symbol)` | 获取库存数据（AKShare → 合成降级） |
+| `get_basis(symbol, days)` | 获取基差数据（现货价格 + 近月/主力基差） |
+| `get_warrant(symbol)` | 获取仓单数据 |
+
+### 4.5 `fts.llm` — LLM 客户端
+
+**LLM 客户端层次结构：**
 
 ```
 LLMClient (ABC)
-├── OpenAIClient      ← 默认后端, 环境变量: OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL
-├── AnthropicClient   ← 替代后端, 环境变量: ANTHROPIC_API_KEY
-└── MockLLMClient     ← 回退 (无 LLM 依赖时使用, 确定性输出)
+├── OpenAIClient      ← 默认后端（OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL）
+├── AnthropicClient   ← 替代后端（ANTHROPIC_API_KEY）
+└── MockLLMClient     ← 回退（无 LLM 依赖时使用，确定性输出）
 ```
 
-**关键类/函数:**
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `LLMError` | LLM 调用失败异常 |
+| `LLMCallRecord` | 单次调用记录：`prompt`, `response`, `model`, `tokens_in/out`, `duration_ms`, `trace_id` |
+| `LLMClient` (ABC) | 抽象基类：`complete(prompt, max_tokens)` → `(response, tokens_out)` |
+| `OpenAIClient` | OpenAI 兼容 API（支持 DeepSeek 等代理） |
+| `AnthropicClient` | Anthropic Claude API |
+| `MockLLMClient` | 确定性 mock，返回预设模板内容 |
+| `get_llm_client()` | 自动检测：`LLM_BACKEND` env → OpenAI → Anthropic → Mock |
+| `get_default_llm_client()` | 便捷函数，返回检测到的 LLM 客户端 |
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `LLMError` | Exception | LLM 调用失败异常 |
-| `LLMCallRecord` | `@dataclass` | 单次 LLM 调用记录: `prompt`, `response`, `model`, `tokens_in/out`, `duration_ms`, `error`, `trace_id`; `total_tokens` 属性 |
-| `LLMClient` | ABC | 抽象基类: `complete(prompt, max_tokens)` → `(response, tokens_out)`, `generate_json(prompt)` → `dict` |
-| `OpenAIClient` | class | OpenAI 兼容 API, 支持 `OPENAI_BASE_URL` (可用于 DeepSeek 等代理) |
-| `AnthropicClient` | class | Anthropic Claude API |
-| `MockLLMClient` | class | 确定性 mock, 返回预设模板内容 |
-| `get_llm_client()` | 函数 | 自动检测: `LLM_BACKEND` env → OpenAI → Anthropic → Mock 回退 |
-| `get_default_llm_client()` | 函数 | 便捷函数, 返回检测到的 LLM 客户端 |
+### 4.6 `fts.factor_engine` — 核心引擎
 
-### 3.6 `fts.factor_engine` — 核心引擎 (最大模块)
+#### 4.6.1 `contracts.py` — TypedDict 契约（L1+L2+L3）
 
-#### 3.6.1 `contracts.py` — TypedDict 契约 (560 LOC)
+**L2 核心契约：**
 
-**L2 Evolution Loop 契约:**
-
-| TypedDict / 常量 | 关键字段 |
-|---|---|
-| `FactorSignature` | `input_fields` (list[str]), `output_type` ("signal"/"score"), `frequency` ("daily"/"hourly"/"minute"), `lookback` (int) |
-| `EconomicLogic` | `theory` (0-5), `behavioral` (0-5), `microstructure` (0-5), `institutional` (0-5), `narrative` (str) |
-| `FactorProgram` | `factor_id` (fct\_\<8hex\>), `name`, `code` (str), `params` (dict), `signature`, `economic_logic`, `source` (seed/macro_evolution/bootstrapping/manual), `parent_id`, `generation`, `created_at`, `trace_id` |
-| `BacktestMetrics` | `ic`, `icir`, `sharpe`, `max_drawdown`, `monotonicity` (bool), `oos_ratio`, `t_stat`, `turnover_monthly` |
-| `EconomicScore` | `theory` (0-5), `behavioral` (0-5), `microstructure` (0-5), `institutional` (0-5), `dimensions_passed`, `narrative` |
-| `MultipleTestResult` | `bonferroni_p`, `fdr_q`, `effective_n_factors`, `adjusted_t`, `passed` (bool) |
-| `FactorEvaluation` | `factor_id`, `trace_id`, `level_1_backtest`, `level_2_economic`, `level_3_multiple`, `walk_forward`, `passed`, `failure_reasons` |
+| TypedDict | 关键字段 |
+|:-----|:-----|
+| `FactorProgram` | `factor_id` (fct_\<8hex\>), `name`, `code`, `params`, `signature`, `economic_logic`, `source`, `parent_id`, `generation`, `trace_id` |
+| `FactorSignature` | `input_fields`, `output_type` (signal/score), `frequency`, `lookback` |
+| `EconomicLogic` | `theory` (0-5), `behavioral` (0-5), `microstructure` (0-5), `institutional` (0-5), `narrative` |
+| `BacktestMetrics` | `ic`, `icir`, `sharpe`, `max_drawdown`, `monotonicity`, `oos_ratio`, `t_stat`, `turnover_monthly` |
+| `FactorEvaluation` | `factor_id`, `level_1_backtest`, `level_2_economic`, `level_3_multiple`, `walk_forward`, `passed`, `failure_reasons` |
 | `ExperienceTrace` | `trace_id`, `factor_id`, `parent_id`, `generation`, `mutation_type`, `mutation_summary`, `evaluation`, `success`, `lessons` |
-| `EvolutionState` | `run_id`, `started_at`, `last_generation`, `total_factors_evaluated/promoted`, `tokens_consumed`, `budget_limit`, `status` (running/paused/completed/circuit_broken) |
-| `VerifierConfig` | `min_ic` (0.03), `min_icir` (0.5), `min_sharpe` (1.5), `max_drawdown` (0.20), `min_economic_score` (3), `min_t_stat` (3.0), `max_fdr` (0.05), `min_oos_ratio` (0.30), `max_turnover_monthly` (0.50) |
-| `VerifierResult` | `passed` (bool), `failure_reasons` (list[str]), `checked_against` (VerifierConfig), `checked_at` |
-| `BudgetConfig` | `nightly_token_limit` (200K), `monthly_token_limit` (6M), `max_generation` (50), `max_tokens_per_factor` (10K), `circuit_breaker_token_ratio` (2.0), `circuit_breaker_consecutive_low_ic` (3), `circuit_breaker_low_ic_threshold` (0.01), `circuit_breaker_failure_rate` (0.90) |
-| `FactorSource` | Literal["seed", "macro_evolution", "bootstrapping", "manual"] |
-| `MutationType` | Literal["macro_logic", "micro_param", "combined"] |
-| `EvolutionStatus` | Literal["running", "paused", "completed", "circuit_broken"] |
+| `EvolutionState` | `run_id`, `last_generation`, `total_factors_evaluated/promoted`, `tokens_consumed`, `status` |
+| `VerifierConfig` | `min_ic` (0.03), `min_sharpe` (1.5), `min_economic_score` (3), `min_t_stat` (3.0), `max_fdr` (0.05) |
+| `BudgetConfig` | `nightly_token_limit` (200K), `max_generation` (50), `circuit_breaker_token_ratio` (2.0), `circuit_breaker_consecutive_low_ic` (3) |
 
-**L1 Meta-Loop 契约:**
+**L1 Meta-Loop 契约：**
 
-| TypedDict / 常量 | 关键字段 |
-|---|---|
-| `L1BootstrappingSource` | Literal["l1_bootstrapping", "l1_web_discovery", "l1_debate_gap", "l1_manual"] |
-| `SeedCandidate` | `candidate_id` (cand\_\<8hex\>), `name`, `code`, `params`, `signature`, `economic_logic`, `source`, `parent_topic`, `debate_round_ref`, `is_executable`, `is_duplicate`, `passed_l1_verifier`, `trace_id` |
-| `L1MetaLoopState` | `run_id`, `last_bootstrap_topic`, `total_candidates_generated/injected`, `tokens_consumed`, `status`, `candidates_ref` |
-| `FactorPoolEntry` | `factor_id`, `name`, `source`, `parent_topic`, `priority`, `status` (pending/injected/decayed/rejected) |
-| `FactorPool` | `version`, `updated_at`, `factors` (list[FactorPoolEntry]), `total_count`, `pending_count` |
-| `L1VerifierConfig` | `min_economic_score` (2), `require_executable` (True), `require_not_duplicate` (True), `min_narrative_length` (20) |
-| `L1BudgetConfig` | `daily_token_limit` (50K), `monthly_token_limit` (1.5M), `max_bootstraps_per_run` (5), `max_tokens_per_candidate` (5K), `circuit_breaker_token_ratio` (2.0), `circuit_breaker_failure_rate` (0.95), `circuit_breaker_consecutive_low_quality` (5) |
+| TypedDict | 关键字段 |
+|:-----|:-----|
+| `SeedCandidate` | `candidate_id` (cand_\<8hex\>), `name`, `code`, `economic_logic`, `source`, `is_executable`, `passed_l1_verifier` |
+| `L1MetaLoopState` | `run_id`, `last_bootstrap_topic`, `total_candidates_generated/injected`, `status` |
+| `FactorPool` | `version`, `factors` (list[FactorPoolEntry]), `total_count`, `pending_count` |
+| `L1VerifierConfig` | `min_economic_score` (2/4), `require_executable`, `require_not_duplicate` |
+| `L1BudgetConfig` | `daily_token_limit` (50K), `max_bootstraps_per_run` (5) |
 
-**L3 Portfolio Loop 契约:**
+**L3 Portfolio Loop 契约：**
 
-| TypedDict / 常量 | 关键字段 |
-|---|---|
-| `FactorCorrelation` | `factor_id_a`, `factor_id_b`, `pearson`, `spearman` |
-| `PortfolioSignal` | `factor_id`, `name`, `weight`, `sharpe`, `ic`, `turnover`, `decay_6m`, `orthogonalized` (bool), `retained` (bool) |
-| `PortfolioCombo` | `combo_id` (cmb\_\<8hex\>), `trace_id`, `synthesis_mode` (equal_weight/sharpe_weight/lightgbm), `signals` (list), `combo_sharpe`, `combo_turnover`, `max_correlation`, `n_factors`, `status` |
-| `AgentOptimizationProposal` | `proposal_id`, `agent_name`, `current_prompt_summary`, `suggested_changes`, `rationale`, `priority`, `status` |
-| `L3VerifierConfig` | `min_sharpe` (2.0), `max_correlation` (0.3), `max_turnover` (0.50), `max_decay_rate` (0.30), `min_n_factors` (3) |
-| `L3MetaLoopState` | `run_id`, `last_synthesis_mode`, `total_signals_processed/retained`, `status` |
+| TypedDict | 关键字段 |
+|:-----|:-----|
+| `PortfolioSignal` | `factor_id`, `weight`, `sharpe`, `ic`, `decay_6m`, `orthogonalized`, `retained` |
+| `PortfolioCombo` | `combo_id`, `synthesis_mode`, `signals`, `combo_sharpe`, `max_correlation`, `n_factors` |
+| `L3VerifierConfig` | `min_sharpe` (2.0), `max_correlation` (0.3), `max_turnover` (0.50), `max_decay_rate` (0.30) |
 
-#### 3.6.2 `evolution_loop.py` — L2 主循环
+#### 4.6.2 `evolution_loop.py` — L2 主循环
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `EvolutionRunResult` | `@dataclass` | 演化运行结果: `run_id`, `trace_id`, `generations_completed`, `total_factors_evaluated`, `total_factors_promoted`, `tokens_consumed`, `status`, `circuit_breaker_reason`, `elite_factor_ids` |
-| `EvolutionLoop` | class (490 LOC) | L2 主编排器, 每代执行 6 步流水线 |
-| `__init__(data, forward_returns, elite_dir, memory_dir, llm_client, seed_pool, verifier, n_trials_micro, cross_section_data, cross_section_dates)` | ctor | 初始化演化循环, 可接受横截面面板数据 |
-| `run(max_generation)` | method | 执行 6 步流水线: 1.macro → 2.micro → 3.eval → 4.verify → 5.experience → 6.save |
-| `_check_circuit_breaker()` | method | 三阈值检测: token 超限 / 连续 3 代 IC<0.01 / 失败率>90% |
-| `_promote_to_elite(factor)` | method | 写入 elite JSON 到 `elite_dir` |
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `EvolutionRunResult` | 演化运行结果：`run_id`, `trace_id`, `generations_completed`, `total_factors_evaluated/promoted`, `tokens_consumed`, `status`, `elite_factor_ids` |
+| `EvolutionLoop` | L2 主编排器，每代执行 6 步流水线 |
+| `__init__(data, forward_returns, elite_dir, llm_client, seed_pool, verifier, n_trials_micro, cross_section_data, cross_section_dates)` | 初始化，支持单标/横截面模式 |
+| `run(max_generation)` | 执行演化：种子评估 → macro → micro → eval → verify → experience → save |
+| `_check_circuit_breaker()` | 三阈值熔断检测 |
+| `_evaluate_cross_section(factor, trace_id)` | 横截面模式评估（截面 IC + 夏普） |
+| `_promote_to_elite(factor, evaluation)` | 写入 elite JSON |
 
-#### 3.6.3 `meta_loop.py` — L1 Meta-Loop
+**演化模式：**
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `MetaRunResult` | `@dataclass` | L1 运行结果: `run_id`, `status`, `injected` (injected candidate IDs) |
-| `MetaLoopError` | Exception | L1 操作失败 |
-| `L1VerifierLocked` | Exception | L1 Verifier 锁定异常 |
-| `FactorPoolError` | Exception | 因子池操作失败 |
-| `MetaStateManagerError` | Exception | 状态管理失败 |
-| `L1Verifier` | class | 锁定 Verifier: `min_economic_score>=2/4` + `executable=True` + `not_duplicate=True` |
-| `MetaStateManager` | class | L1 状态管理: `state.json` + 备份镜像 (`state.json.backup`) |
-| `FactorPoolManager` | class | 因子池管理: `factor_pool.json` 读写、注入、优先级排序 |
-| `DebateQualityAnalyzer` | class | 辩论质量分析: 读取 `debate_journal.json`, 标志 `bullish_weak`/`bearish_weak`/`insufficient_rounds`/`no_debate` |
-| `BootstrappingChain` | class | 种子候选生成链: 提取 Agent → 验证 Agent → 代码生成 Agent |
-| `MetaLoop` | class | L1 编排器: 每日 09:00 执行 5 步流程 |
+| 模式 | 命令 | 说明 |
+|:-----|:-----|:-----|
+| 单标演化 | `fts evolution run` | 单只股票/单个品种的因子演化 |
+| 横截面（股票） | `fts evolution run --universe csi300` | 沪深 300 成分股横截面因子演化 |
+| 横截面（期货） | `fts evolution run --universe futures` | 期货跨品种横截面因子演化 |
 
-**L1 流程 (5 步):**
-1. **感知**: Data-Core 获取新闻与市场快照
-2. **Debate 分析**: 读取 FDT 辩论数据, 识别论证薄弱维度
-3. **Bootstrapping**: Agent 链 → 提取市场主题 → 验证合理性 → 生成因子代码
-4. **L1 Verifier**: 宽松筛选 (economic_logic >= 2/4 维度 + 可执行 + 不重复)
-5. **注入**: 写入 `factor_pool.json` + `memory/knowledge/factors/l1_injected/`
+#### 4.6.3 `meta_loop.py` — L1 Meta-Loop
 
-#### 3.6.4 `portfolio_loop.py` — L3 Portfolio Loop
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `MetaRunResult` | L1 运行结果：`run_id`, `status`, `injected_candidate_ids` |
+| `MetaLoop` | L1 编排器：每日 08:30 执行 5 步流程 |
+| `L1Verifier` | 锁定 Verifier：`min_economic_score>=2/4` + `executable` + `not_duplicate` |
+| `MetaStateManager` | L1 状态管理：`state.json` + 备份镜像 |
+| `FactorPoolManager` | 因子池管理：`factor_pool.json` 读写、注入、优先级排序 |
+| `DebateQualityAnalyzer` | 辩论质量分析：识别 `bullish_weak`/`bearish_weak`/`insufficient_rounds` |
+| `BootstrappingChain` | 种子候选生成链：提取 Agent → 验证 Agent → 代码生成 Agent |
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `PortfolioRunResult` | `@dataclass` | 组合运行结果: `run_id`, `status`, `factor_ids`, `combined_sharpe`, `combined_turnover`, `n_factors`, `tokens_consumed` |
-| `L3Error` | Exception | L3 操作失败 |
-| `L3Verifier` | class | 锁定 Verifier: `combo_sharpe>=2.0`, `max_correlation<=0.3`, `combo_turnover<=0.50`, `decay_6m<=0.30`, `min_n_factors>=3` |
-| `PortfolioStateManager` | class | L3 状态管理: `current_combo.json` + `agent_proposals/` 目录 |
-| `PortfolioManager` | class | L3 主编排器 (140+ LOC) |
-| `load_elite_factors()` | method | 从 `elite_dir` 读取所有 elite 因子 JSON |
-| `orthogonalize_factors(factors)` | method | QR 正交化, 剔除相关性 > 0.7 的因子 |
-| `decay_test(factor, window)` | method | 6 个月滚动窗口衰减检验, 衰减 >30% 剔除 |
-| `synthesize_signals(factors, method)` | method | 信号合成, 支持 `equal_weight` / `sharpe_weight` / `lightgbm` |
-| `build_combo(factors)` | method | 构建最终组合, 权重归一化 + 十分位 + 多空 + 成本估算 |
-| `generate_agent_proposals()` | method | LLM 驱动的 Agent 优化建议 |
-| `inject_to_fdt(combo)` | method | 写入 FDT 消费路径 |
-| `PortfolioLoop` | class | 每周一 06:00 运行的组合构建编排器 |
+#### 4.6.4 `portfolio_loop.py` — L3 Portfolio Loop
 
-#### 3.6.5 `seed_pool.py` + `seed_data/` — 种子因子池
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `PortfolioRunResult` | 组合运行结果：`run_id`, `status`, `n_factors_retained`, `combo_sharpe` |
+| `PortfolioLoop` | L3 编排器：每日 20:00 运行 |
+| `L3Verifier` | 锁定 Verifier：`combo_sharpe>=2.0`, `max_correlation<=0.3`, `decay_6m<=0.30` |
+| `load_elite_factors()` | 从 `elite_dir` 读取所有 elite 因子 |
+| `orthogonalize_factors(factors)` | QR 正交化，剔除相关性 > 0.7 的因子 |
+| `decay_test(factor)` | 6 个月滚动窗口衰减检验 |
+| `synthesize_signals(factors)` | 信号合成（等权/夏普加权/Ridge 回归） |
+| `build_combo(factors)` | 构建最终组合 |
+| `generate_agent_proposals(combo)` | LLM 生成组合优化建议 |
+| `inject_to_fdt(combo)` | 输出到 FDT 下游 |
 
-268 个种子因子，涵盖 9 内置 + 101 世坤 + 158 Qlib:
+#### 4.6.5 `seed_pool.py` + `seed_data/` — 种子因子池
 
-**内置种子因子 (9 个):**
+**482 个种子因子：**
 
-| # | 因子名 | 代码名 | 市场 |
-|---|---|---|---|
-| 1 | 动量因子 | `momentum` | 全市场 |
-| 2 | 波动率回归 | `volatility_reversion` | 全市场 |
-| 3 | 资金流 | `volume_flow` | 全市场 |
-| 4 | 持仓量变化 | `oi_change` | 期货 |
-| 5 | 基差 | `basis` | 期货 |
-| 6 | 库存分位 | `inventory_pct` | 期货 |
-| 7 | 开工率 | `capacity` | 期货 |
-| 8 | PMI 代理 | `pmi_proxy` | 全市场 |
-| 9 | 低波因子 | `low_volatility` | 全市场 |
+| 类别 | 数量 | 来源文件 |
+|:-----|:-----|:-----|
+| 内置股票/期货因子 | 9 | `seed_pool.py` 内联代码 |
+| WorldQuant 101 Alpha | 101 | `seed_data/wq101.py` |
+| Qlib 158 | 158 | `seed_data/qlib158.py` |
+| 国泰君安 191 Alpha | 191 | `seed_data/gtja191.py` |
+| 基本面/另类/宏观 | 23 | `seed_data/fundamental_seeds.py` |
 
-**外部种子因子 (259 个):**
-- `seed_data/wq101.py` — 101 个 WorldQuant Alpha 因子表达式
-- `seed_data/qlib158.py` — 158 个 Qlib 因子表达式
-- `seed_data/alpha_ops.py` — 公共操作库（标准化计算函数）
-- `seed_data/loader.py` — 动态加载器：因子定义 → FactorProgram
-- `seed_data/__init__.py` — 统一导出入口
+**期货专用模式（50+ 因子）：**
 
-**关键函数:**
-- `SeedPool` — 种子池管理器，提供 `fetch()`, `add_seed()`, `list_seeds()`, `load_all_seeds(include_external=True)`
-- `get_default_seed_pool()` — 返回包含 268 个种子因子的默认 SeedPool 实例
-- `_list_base_seeds()` — 基础种子列表（兼容 L1 注入）
+| 因子家族 | 因子数 | 说明 |
+|:-----|:-----|:-----|
+| 动量 | 6 | 时间序列动量、截面动量、多周期动量等 |
+| 期限结构 | 5 | 基差、基差率、展期收益率等 |
+| 持仓 | 5 | 持仓量变化、持仓量分位、持仓结构等 |
+| 流动性 | 4 | 换手率、波动率调整成交量等 |
+| 高阶矩 | 4 | 偏度、峰度、尾部风险等 |
+| 波动率 | 5 | 实现波动率、波动率回归、波动率突破等 |
+| 基本面 | 5 | 库存、仓单、基差、开工率等 |
+| 拥挤度 | 4 | 持仓集中度、换手拥挤等 |
+| Alpha | 4 | 异常收益率、Alpha 动量等 |
+| 高频 | 3 | 已实现波动率、日内偏度等 |
+| 期权隐含 | 2 | 隐含波动率、偏度指数 |
+| 市场环境 | 3 | 市场制度、跨资产相关性等 |
 
-#### 3.6.6 `factor_program.py` — 安全沙箱执行器
+**SeedPool 关键方法：**
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `ALLOWED_IMPORTS` | 常量 | 白名单: `numpy`, `pandas`, `scipy`, `statsmodels`, `talib`, `math`, `statistics` |
-| `FORBIDDEN_NAMES` | 常量 | 黑名单: `open`, `exec`, `eval`, `compile`, `__import__`, `globals`, `locals` 等 |
-| `FORBIDDEN_MODULES` | 常量 | 黑名单: `os`, `sys`, `subprocess`, `socket`, `ctypes`, `pickle` 等 |
-| `FactorCompileError` | Exception | 因子编译失败 |
-| `validate_factor_code(code)` | 函数 | AST 预验证, 拒绝禁止的模式 |
-| `create_factor_program(name, code, params, signature, economic_logic, source, parent_id, generation, trace_id)` | 函数 | 创建 `FactorProgram` TypedDict 实例, 自动生成 `factor_id` |
-| `generate_factor_id(code)` | 函数 | 基于代码 SHA1 返回 `fct_<sha1[:8]>` |
-| `FactorExecutor` | class | 受限 `__builtins__` + `_safe_import` 的安全沙箱执行器 |
+| 方法 | 说明 |
+|:-----|:-----|
+| `load_all_seeds(include_external=True)` | 加载全部种子因子（stock 模式 482 个 / futures 模式 50+ 个） |
+| `get_seed(name)` | 按名称获取种子因子 |
+| `count()` | 返回种子因子总数 |
+| `inject_from_l1(candidate, trace_id)` | L1 注入接口：将候选因子注入种子池 |
+| `list_injected_l1()` | 列出所有从 L1 注入的因子 |
 
-#### 3.6.7 `macro_evolution.py` — 宏观演化
+#### 4.6.6 `factor_program.py` — 安全沙箱
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `MacroEvolver` | class | LLM 驱动的因子代码编辑器 |
-| `evolve(parent_factor, experience_chain)` | method | 构建 prompt (父因子 + 经验链上下文) → 调用 LLM → 解析返回新因子代码 |
-| `_apply_code_modification(code, modification)` | method | 通过正则替换实现 mock 级的代码修改 (如 `window_plus_5`) |
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `FactorCompileError` | 因子编译失败异常 |
+| `validate_factor_code(code)` | AST 预验证，拒绝禁止的模式 |
+| `create_factor_program(name, code, params, signature, economic_logic, source, parent_id, generation, trace_id)` | 创建 `FactorProgram` 实例 |
+| `generate_factor_id(code)` | 基于代码 SHA1 返回 `fct_<sha1[:8]>` |
+| `FactorExecutor` | 受限 `__builtins__` + `_safe_import` 的安全沙箱执行器 |
 
-#### 3.6.8 `micro_evolution.py` — 微观演化
+**安全检查：**
+- 白名单导入：`numpy`, `pandas`, `scipy`, `statsmodels`, `talib`, `math`, `statistics`
+- 黑名单名称：`open`, `exec`, `eval`, `compile`, `__import__`, `globals`, `locals`
+- 黑名单模块：`os`, `sys`, `subprocess`, `socket`, `ctypes`, `pickle`
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `optimize_params(factor, objective, n_trials)` | 函数 | optuna TPE 贝叶斯优化, 早停 (20 次连续无改进) |
-| `_suggest_param(trial, name, default_value)` | 函数 | 从默认值推断参数空间 (int→int 范围, float→float 范围, bool→分类) |
-| `evolve_micro(factor, data)` | 函数 | 执行微观调参, 返回带最佳参数的新 `FactorProgram` |
+#### 4.6.7 `macro_evolution.py` — 宏观演化
 
-#### 3.6.9 `evaluation_chain.py` — 三级评估链
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `MacroEvolver` | LLM 驱动的因子代码编辑器 |
+| `evolve(parent, generation, trace_id)` | 构建 prompt（父因子 + 经验链上下文）→ 调用 LLM → 返回新因子 |
+| `_validate_mutation(original, mutated)` | 验证变异后的代码可编译 |
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `evaluate_backtest(factor, data, forward_returns)` | 函数 | Level 1: IC / ICIR / Sharpe / max_drawdown / monotonicity / t_stat / turnover_monthly |
-| `evaluate_economic_logic(factor)` | 函数 | Level 2: 四维经济学评分 (theory/behavioral/microstructure/institutional, 0-5/维) |
-| `evaluate_multiple_tests(factors, evaluations)` | 函数 | Level 3: Bonferroni + FDR + PCA-based effective_n |
-| `EvaluationChain` | class | 三级评估编排器 |
-| `evaluate(factor, data, forward_returns, walk_forward)` | method | 执行三级评估 + 可选 walk-forward, 返回 `FactorEvaluation` |
+#### 4.6.8 `micro_evolution.py` — 微观演化
 
-#### 3.6.10 `verifier.py` — 锁定 Verifier 协议
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `evolve_micro(factor, data, forward_returns, n_trials)` | optuna TPE 贝叶斯调参，早停（20 次连续无改进） |
+| `optimize_params(factor, data, forward_returns, n_trials)` | 参数空间搜索 + 目标函数最大化 |
+| `_suggest_param(trial, key, value)` | 从默认值推断参数空间（int→range, float→range, bool→categorical） |
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `VerifierNotLockedError` | Exception | Verifier 未锁定则抛异常 |
-| `VerifierAlreadyLockedError` | Exception | 锁定后试图修改配置则抛异常 |
-| `FactorVerifier` | class | 核心 Verifier: `__init__` 后立即 `_locked=True` |
-| `check(evaluation)` | method | 严格按 `VerifierConfig` 逐项比较, 返回 `VerifierResult` |
-| `config` (property) | property | 返回配置只读副本 |
-| `locked` (property) | property | 返回是否锁定 |
-| `update_config(new_config)` | method | 锁定后调用抛 `VerifierAlreadyLockedError` |
-| `unlock()` | method | 仅测试用, 生产禁止 |
-| `get_global_verifier()` | 函数 | 进程级单例 (DEFAULT_VERIFIER_CONFIG) |
-| `reset_global_verifier()` | 函数 | 重置单例 (仅测试用) |
+#### 4.6.9 `evaluation_chain.py` — 三级评估链
 
-#### 3.6.11 `state.py` — 状态管理
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `EvaluationChain` | 三级评估编排器 |
+| `evaluate(factor, data, forward_returns)` | Level 1: IC / ICIR / Sharpe / max_drawdown / monotonicity / t_stat |
+| `evaluate_economic_logic(factor)` | Level 2: 四维经济学评分（theory/behavioral/microstructure/institutional, 0-5/维） |
+| `evaluate_multiple_tests(factors, evaluations)` | Level 3: Bonferroni + FDR + PCA-based effective_n |
+| `cross_section_evaluate_backtest(factor, panel, dates)` | 横截面模式专用评估（截面 IC + 夏普） |
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `generate_trace_id(prefix="ftr")` | 函数 | 返回 `{prefix}_{8hex}_{timestamp}` |
-| `generate_run_id()` | 函数 | 返回 `run_{8hex}_{timestamp}` |
-| `EvolutionStateManager` | class | 状态管理器: `state.json` + `state.json.backup` |
-| `save_state(state)` | method | 原子写入 + 备份轮转 |
-| `load_state()` | method | 安全读取, 主文件失败回退 backup |
+#### 4.6.10 `verifier.py` — Verifier 锁定协议
 
-#### 3.6.12 `experience_chain.py` — 经验链 (LLM 记忆)
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `FactorVerifier` | 核心 Verifier：`__init__` 后立即 `_locked=True` |
+| `check(evaluation)` | 严格按 `VerifierConfig` 逐项比较，返回 `VerifierResult` |
+| `get_global_verifier()` | 进程级单例（DEFAULT_VERIFIER_CONFIG） |
+| `reset_global_verifier()` | 重置单例（仅测试用） |
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `ExperienceChainError` | Exception | 经验链操作失败 |
-| `ExperienceChain` | class | 在 `success/` 和 `failure/` 子目录存储经验追踪 |
-| `MAX_CHAIN_SIZE` | 常量 | 100 (满时淘汰最旧 20 条) |
-| `read_recent_for_llm()` | method | 返回 10 条成功 + 10 条失败经验作为 Markdown |
-| `update(factor, evaluation)` | method | 更新经验链 + `update_summary()` |
-| `update_summary()` | method | 为 LLM 生成 markdown 摘要 |
-| `create_trace_from_evaluation(factor, evaluation, success)` | 函数 | 从评估结果创建 `ExperienceTrace` |
+#### 4.6.11 其他辅助模块
 
-#### 3.6.13 `program.py` — L0 Program.md 解析
+| 模块 | 说明 |
+|:-----|:-----|
+| `state.py` | `EvolutionStateManager`：状态持久化 + `generate_trace_id()` / `generate_run_id()` |
+| `experience_chain.py` | `ExperienceChain`：成功/失败经验追踪，MAX_CHAIN_SIZE=100 |
+| `program.py` | L0 Program.md 解析器：`parse_program_md()`, `load_program()`, `init_program()` |
+| `walk_forward.py` | `WalkForwardOptimizer`：滚动窗口验证（window_years=3, step_months=6） |
+| `cost_model.py` | `TransactionCostModel`：按市场配置交易成本 |
+| `regime.py` | `RegimeAwareSelector`：牛/熊/震荡/高波/低波制度检测 |
+| `stress_test.py` | `StressTester`：5 个历史压力场景测试 |
+| `monitor.py` | `check_loop()`, `check_all()`：三层循环状态监控 |
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `DEFAULT_PROGRAM_MD` | 常量 | 带 YAML frontmatter 的 L0 模板 |
-| `ProgramConfig` | class | 程序配置容器 |
-| `parse_program_md(content)` | 函数 | 正则提取: `market_regime`, `factor_preference`, `agent_llm`, `budget`, `risk_constraints`, `circuit_breakers_reviewed` |
-| `load_program()` | 函数 | 加载 Program.md |
-| `init_program()` | 函数 | 初始化 Program.md |
-| `get_llm_env_overrides(program_config)` | 函数 | 从 Program.md 获取 LLM 环境覆盖 |
+### 4.7 `fts.pipeline` — 因子推演管线
 
-#### 3.6.14 `walk_forward.py` — 走航验证
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `DataPayload` | 管线数据载体：`data_type`, `symbol`, `payload`, `metadata`, `trace_id` |
+| `ProcessingStage` (Protocol) | Stage 协议：`input_type`/`output_type` + `process(payload)` |
+| `FactorPipeline` (ABC) | 管线抽象：`build_stages()` (抽象) + `run()` (编排器) |
+| `PipelineResult` | 管线运行结果：`success`, `final_payload`, `stage_meta`, `trace_id` |
+| `FactorCombiner` | 因子组合器：z-score 归一化 → 可选 QR 正交化 → 加权融合 |
+| `CombinerConfig` | 组合配置：`weights`, `normalize_inputs`, `clip_sigma`, `orthogonalize` |
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `WalkForwardOptimizer` | class | 滚动窗口验证 (`window_years=3`, `step_months=6`) |
-| `optimize(factor, data)` | method | 计算 `ic_consistency` (IC>0 的窗口比例), `ic_volatility` |
-| `consistency_score` | property | 40% consistency + 30% volatility + 30% strength |
-| `WalkForwardResult` | TypedDict | `ic_consistency`, `ic_volatility`, `consistency_score`, `oos_sharpe` |
+### 4.8 `fts.strategies` — 策略层
 
-#### 3.6.15 `cost_model.py` — 交易成本模型
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `RawSignal` | 原始信号：`symbol`, `direction`, `signal_type`, `raw_score` |
+| `ScoredSignal` | 打分信号：`total`, `abs_score`, `grade` (STRONG/WATCH/WEAK/NOISE)，含技术指标字段 |
+| `BaseStrategyV2` (ABC) | v2 策略基类：`name`(抽象), `score()`(抽象), `compute()`, `filter()`, `validators`, `weight` |
+| `StrategyV1Adapter` | v1→v2 桥接适配器 |
+| `MultiFactorStrategy` | 12 因子多策略：`FACTOR_WEIGHTS` + `PURE_MOMENTUM_WEIGHTS`，3 种模式 |
+| `strategy_evolution.py` | 策略进化：`RegimeAdaptiveStrategy` / `DynamicWeightStrategy` / `MultiPeriodSignalFusion` |
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `TransactionCostModel` | class | 按市场配置交易成本 (`futures`/`stock`/`etf`) |
-| `adjust(metrics, market)` | method | 计算 `net_sharpe = gross_sharpe - cost_penalty`, 其中 `cost_penalty = total_cost_bps * 12 / 0.15` |
+### 4.9 `fts.scheduler` — 调度层
 
-#### 3.6.16 `regime.py` — 市场制度检测
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `TaskSpec` | 任务规格：`name`, `cron_expression`, `callable_path`, `description`, `enabled`, `trace_id_prefix` |
+| `TaskRegistry` | 任务注册表：`register()`, `unregister()`, `list_enabled()` |
+| `SchedulerEngine` | APScheduler 包装器：`start(daemon)`, `stop()`，APScheduler 不可用时静默降级 |
+| `register_default_tasks()` | 注册 5 个默认任务（幂等） |
+| `ProcessWatchdog` | 进程看门狗：30s 内 3 次重启 → 5min 熔断 |
+| `HotSwapWatcher` | 文件变更监听 → `importlib.reload` |
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `RegimeAwareSelector` | class | 从 OHLCV 数据检测市场制度 |
-| `detect_regime(data)` | method | 返回 `bull` / `bear` / `oscillate` / `high_vol` / `low_vol` |
-| `select_factors(factors, regime)` | method | 根据制度按历史表现筛选因子 |
+**5 个默认调度任务：**
 
-**制度判定逻辑:**
-- MA20 斜率 > +2% → `bull`; MA20 斜率 < -2% → `bear`
-- ATR/价格比 > 3% → `high_vol`; < 1% → `low_vol`
-- 其余 → `oscillate`
-
-#### 3.6.17 `stress_test.py` — 压力测试
-
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `StressTester` | class | 5 个内置历史压力场景测试 |
-| `run_test(scenario_name)` | method | 运行指定压力场景 |
-| `run_all()` | method | 运行全部 5 个场景 |
-| `passed` | property | 全部场景 max_drawdown <= 40% 为通过 |
-
-**压力场景:**
-1. **原油暴跌** (2020-03 ~ 2020-05)
-2. **双十一闪崩** (2016-11-11)
-3. **股灾** (2015-06 ~ 2015-09)
-4. **疫情冲击** (2020-02 ~ 2020-03)
-5. **供给侧改革** (2016)
-
-#### 3.6.18 `monitor.py` — 循环状态监控
-
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `LoopStatus` | `@dataclass` | 单层循环状态: `name`, `state_file`, `exists`, `run_id`, `status`, `tokens_consumed`, `budget_limit`, `age_hours`, `healthy` |
-| `AllStatus` | `@dataclass` | 三层汇总: `loops`, `any_circuit_broken`, `any_stale`, `total_tokens_today`, `checked_at` |
-| `check_loop(name, state_dir, max_stale_hours)` | 函数 | 检查单层循环状态, 读取 `state.json` |
-| `check_all(fdt_root, max_stale_hours)` | 函数 | 聚合 L1+L2+L3 状态 |
-| `print_status_table(status)` | 函数 | 打印格式化状态表 |
-| `main()` | 函数 | CLI 入口 |
-
-### 3.7 `fts.pipeline` — `fts/pipeline/`
-
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `DataPayload` | `@dataclass` | 管线数据载体: `data_type`, `symbol`, `payload`, `metadata`, `trace_id` |
-| `ProcessingStage` | Protocol | Stage 协议: `input_type`/`output_type` + `process(payload)` |
-| `FactorPipeline` | ABC | 管线抽象: `build_stages()` (抽象) + `run()` (具体编排器, 返回 `PipelineResult`) |
-| `CombinerConfig` | `@dataclass` | 组合配置: `weights`, `normalize_inputs=True`, `clip_sigma=3.0`, `orthogonalize=True`, `min_active_factors=3` |
-| `FactorCombiner` | class | z-score 归一化 → 可选 QR 正交化 → 加权融合 |
-
-### 3.8 `fts.strategies` — `fts/strategies/`
-
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `RawSignal` / `ScoredSignal` | `@dataclass` | 信号数据结构 |
-| `BaseStrategyV2` | ABC | 抽象策略基类: `name` (抽象), `score()` (抽象), `compute()`, `filter()`, `validators`, `weight`, `depends_on` |
-| `StrategyV1Adapter` | class | v1→v2 桥接 (适配器模式) |
-| `FACTOR_WEIGHTS` | 常量 | 12 因子权重表 (总和 1.0): `momentum` 0.15, `basis` 0.15, ... |
-| `PURE_MOMENTUM_WEIGHTS` | 常量 | 纯动量模式: 60% 量价 |
-| `MultiFactorStrategy` | class | 多因子策略, 3 种模式: `pure_momentum`, `long_short`, `neutral` |
-| `_calc_momentum` / `_calc_volatility_reversion` / ... | 函数 | 12 个因子计算函数 |
-
-12 个因子计算函数: `_calc_momentum`, `_calc_volatility_reversion`, `_calc_volume_flow`, `_calc_oi_change`, `_calc_basis`, `_calc_macro`, `_calc_position_rank`, `_calc_warrant_change`, `_calc_inventory`, `_calc_capacity`, `_calc_pmi_proxy`, `_calc_rate_proxy`
-
-### 3.9 `fts.scheduler` — `fts/scheduler/`
-
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `SchedulerEngine` | class | 包装 APScheduler `BackgroundScheduler`; `start(daemon=True)` 在 APScheduler 未安装时返回 False |
-| `TaskSpec` | `@dataclass` | 任务规范: `name`, `cron_expression`, `description`, `enabled` |
-| `TaskRegistry` | class | 任务注册表: `register`, `unregister`, `list_enabled` |
-| `list_tasks()` | 函数 | 列出所有已注册任务 |
-| `ProcessWatchdog` | class | 进程看门狗: 30s 内 3 次重启 → 5min 熔断 |
-| `HotSwapWatcher` | class | 文件变更监听 → `importlib.reload`; watchdog 库缺失时静默回退 |
-
-**默认调度任务:**
-
-| 任务 | cron | 描述 |
-|---|---|---|
-| `l1_meta_loop` | `0 9 * * *` | 每日 09:00 L1 Meta-Loop |
-| `l2_evolution_loop` | `0 23 * * *` | 每日 23:00 L2 因子演化 |
-| `l3_portfolio_loop` | `0 6 * * 1` | 每周一 06:00 L3 组合构建 |
+| 任务名 | cron | 描述 |
+|:-----|:-----|:-----|
+| `l1_meta_loop` | `30 8 * * *` | 每日 08:30 L1 Meta-Loop |
+| `l2_evolution_loop` | `0 23 * * *` | 每日 23:00 L2 因子演化（期货横截面） |
+| `l3_portfolio_loop` | `0 20 * * *` | 每日 20:00 L3 组合构建 + 自动触发期货信号管道 |
+| `futures_signal_pipeline` | `30 20 * * *` | 每日 20:30 期货信号管道（独立调度） |
 | `health_check` | `*/10 * * * *` | 每 10 分钟健康检查 |
 
-### 3.10 `fts.monitor` — `fts/monitor/`
+**任务工作函数（`jobs.py`）：**
 
-**`__init__.py` — 监控系统主入口:**
+| 函数 | 说明 |
+|:-----|:-----|
+| `l1_meta_loop_job()` | L1 Meta-Loop 入口：创建 MetaLoop 实例并执行 |
+| `l2_evolution_loop_job()` | L2 演化入口：准备期货横截面数据 → 创建 EvolutionLoop 并执行 |
+| `l3_portfolio_loop_job()` | L3 组合入口：执行 PortfolioLoop → 完成后自动触发期货信号管道 |
+| `futures_signal_pipeline_job()` | 独立期货信号管道入口 |
+| `health_check_job()` | 健康检查入口：调用 `check_all_status()` |
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `LoopStatusReport` | `@dataclass` | 单循环状态报告 |
-| `SystemStatusReport` | `@dataclass` | 系统整体状态 |
-| `check_loop_status(name, state_dir)` | 函数 | 检查单循环状态 |
-| `check_all_status()` | 函数 | 检查所有循环, 返回 `SystemStatusReport` |
-| `format_status_report(report)` | 函数 | 格式化人类可读报告 |
-| `status_report_to_json(report)` | 函数 | 序列化 JSON 报告 |
+### 4.10 `fts.monitor` — 健康监控
 
-**`http_server.py` — HTTP 监控服务器:**
+| 类/函数 | 说明 |
+|:-----|:-----|
+| `LoopStatusReport` | 单循环状态报告：`loop_name`, `healthy`, `status`, `last_error`, `run_id`, `age_hours` |
+| `SystemStatusReport` | 系统整体状态：`healthy`, `loops`, `any_circuit_broken`, `any_stale`, `total_tokens_today` |
+| `check_loop_status(name)` | 检查单循环状态 |
+| `check_all_status()` | 检查所有循环，返回 `SystemStatusReport` |
+| `format_status_report(report)` | 格式化人类可读报告 |
+| `status_report_to_json(report)` | 序列化 JSON 报告 |
+| `FTSDashboardServer` | HTTP 监控服务器（127.0.0.1:9100），纯标准库实现 |
+| `EliteFactorTracker` | Elite 因子追踪：`update()`, `get_decaying()`, `auto_retire()` |
+| `AutoRetireManager` | 基于 `cooldown_days` 的自动退役管理器 |
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `MetricsHTTPServer` | class | 纯 stdlib HTTP 服务器, 监听 `127.0.0.1:9100` |
-| `start()` | method | 守护线程启动 |
+**HTTP 端点：**
 
-**端点:**
-
-| 端点 | 输出 |
-|---|---|
-| `GET /health` | JSON 健康状态 (状态 + 循环摘要) |
-| `GET /metrics` | Prometheus 文本格式指标 (L1/L2/L3 状态 gauge, token 消耗 counter) |
-| `GET /` | HTML 仪表板 (含状态表格) |
-
-**`elite_tracker.py` — Elite 因子追踪:**
-
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `TrackingSnapshot` | TypedDict | 追踪快照: `factor_id`, `sharpe`, `ic`, `decay_6m`, `consecutive_low_ic` |
-| `EliteFactorTracker` | class | Elite 因子追踪器: `init_tracker()`, `update()`, `get_decaying(max_consecutive=4)`, `auto_retire()`, `report()` |
-| `_calc_decay_6m()` | method | 前半段 vs 后半段均值 IC 比较 |
-| `AutoRetireManager` | class | 基于 `cooldown_days` 的自动退役管理器 |
+| 端点 | 方法 | 说明 |
+|:-----|:-----|:-----|
+| `/` | GET | 现代仪表盘 HTML（零依赖单页应用） |
+| `/api/status` | GET | 系统状态 JSON |
+| `/api/factors` | GET | Elite 因子列表 JSON |
+| `/health` | GET | 健康检查 JSON |
 
 ---
 
-## 4. 模块间依赖关系
+## 5. 模块间依赖关系
 
-### 4.1 全局依赖图
+### 5.1 全局依赖图
 
 ```
 fts.cli (顶层编排器)
   ├── fts.config.settings          (get_config)
-  ├── fts.data                     (FTSDataProvider, _prepare_data)
-  ├── fts.llm                      (MockLLMClient)
-  ├── fts.factor_engine.*          (所有循环 + 因子管理 + 契约)
-  ├── fts.monitor                  (check_all_status, format_status_report)
+  ├── fts.data                     (FTSDataProvider)
+  ├── fts.llm                      (get_default_llm_client)
+  ├── fts.factor_engine.*          (所有循环 + 契约)
+  ├── fts.monitor                  (check_all_status, FTSDashboardServer)
   └── fts.scheduler                (SchedulerEngine, list_tasks)
 
-fts.factor_engine.evolution_loop (L2 主循环)
-  ├── fts.factor_engine.contracts          (TypedDict 契约)
-  ├── fts.factor_engine.evaluation_chain   (EvaluationChain)
-  ├── fts.factor_engine.macro_evolution    (MacroEvolver)
-  ├── fts.factor_engine.micro_evolution    (evolve_micro)
-  ├── fts.factor_engine.verifier           (FactorVerifier)
-  ├── fts.factor_engine.state              (EvolutionStateManager)
-  ├── fts.factor_engine.experience_chain   (ExperienceChain)
-  └── fts.factor_engine.seed_pool          (SeedPool)
+fts.factor_engine.evolution_loop (L2)
+  ├── fts.factor_engine.contracts
+  ├── fts.factor_engine.evaluation_chain
+  ├── fts.factor_engine.macro_evolution
+  ├── fts.factor_engine.micro_evolution
+  ├── fts.factor_engine.verifier
+  ├── fts.factor_engine.state
+  ├── fts.factor_engine.experience_chain
+  └── fts.factor_engine.seed_pool
 
-fts.factor_engine.meta_loop (L1 主循环)
+fts.factor_engine.meta_loop (L1)
   ├── fts.factor_engine.contracts
   ├── fts.factor_engine.seed_pool
-  ├── fts.factor_engine.state
-  └── fts.factor_engine.verifier           (L1Verifier)
+  └── fts.factor_engine.state
 
-fts.factor_engine.portfolio_loop (L3 主循环)
+fts.factor_engine.portfolio_loop (L3)
   ├── fts.factor_engine.contracts
   ├── fts.factor_engine.state
-  ├── fts.factor_engine.verifier           (L3Verifier)
-  ├── fts.factor_engine.walk_forward       (WalkForwardOptimizer)
-  └── fts.pipeline.factor_combiner         (orthogonalize_factors)
+  └── fts.factor_engine.verifier
 
-fts.factor_engine.evaluation_chain
-  ├── fts.factor_engine.contracts
-  ├── fts.factor_engine.walk_forward
-  └── numpy / pandas / scipy / statsmodels (统计计算)
+fts.data (数据层)
+  ├── fts.data_mcp                 (MCPDataProvider)
+  ├── fts.data_mcp_bridge          (MCPBridge)
+  ├── fts.data_fundamental         (FundamentalProvider)
+  ├── fts.data_futures             (FuturesDataProvider)
+  └── fts.data_futures_fundamental (FuturesFundamentalProvider)
 
 fts.core.contracts → fts.factor_engine.contracts (重导出)
-fts.strategies.base_v2 → fts.pipeline.base (StrategyV1Adapter 包装)
 ```
 
-### 4.2 依赖规则
+### 5.2 依赖规则
 
-- **`fts.core`** 是基础层 — 不依赖上层模块 (零依赖)
-- **`fts.factor_engine.contracts`** 是 TypedDict 单一真源; `fts.core.contracts` 仅重导出
-- **`fts.cli`** 是顶层编排器, 依赖所有子系统, 但不参与业务逻辑
-- **`fts.factor_engine`** 有内部子依赖, 但不依赖 `fts.pipeline`, `fts.strategies`, `fts.scheduler`, 或 `fts.monitor`
-- **`fts.strategies`** 依赖 `fts.pipeline` (通过 `StrategyV1Adapter`)
+- **`fts.core`** 是基础层 — 不依赖上层模块
+- **`fts.factor_engine.contracts`** 是 TypedDict 单一真源；`fts.core.contracts` 仅重导出
+- **`fts.cli`** 是顶层编排器，依赖所有子系统，但不参与业务逻辑
+- **`fts.factor_engine`** 有内部子依赖，但不依赖 `fts.pipeline`, `fts.strategies`, `fts.scheduler`
 - **`fts.scheduler`** 完全解耦 — 仅依赖 stdlib + 可选 `apscheduler`/`watchdog`
 
-### 4.3 数据流方向
+### 5.3 数据流方向
 
 ```
-Data-Core ──→ fts.data ──→ fts.factor_engine ──→ fts.monitor
-                                ↕                       ↕
-                          fts.pipeline            fts.monitor.http_server
-                                ↕
-                          fts.strategies
-                                ↕
-                          fts.scheduler
+MCP/akshare + DuckDB → fts.data → fts.factor_engine → 信号输出
+                             ↕
+                       fts.pipeline
+                             ↕
+                       fts.strategies
+                             ↕
+                       fts.scheduler
 ```
 
 ---
 
-## 5. 外部依赖
+## 6. 外部依赖
 
-### 5.1 必需依赖 (`pyproject.toml`)
+### 6.1 必需依赖
 
 | 库 | 最低版本 | 用途 |
-|---|---|---|
-| `numpy` | >=1.24 | 数值计算 (IC/Sharpe/矩阵运算/正交化) |
+|:---|:---------|:-----|
+| `numpy` | >=1.24 | 数值计算（IC/Sharpe/矩阵运算/正交化） |
 | `pandas` | >=2.0 | DataFrame / 时间序列 / OHLCV 处理 |
-| `PyYAML` | >=6.0 | YAML 配置解析 |
+| `scipy` | >=1.10 | 统计检验 |
+| `pyyaml` | >=6.0 | YAML 配置解析 |
 
-### 5.2 可选依赖 (extras)
+### 6.2 可选依赖（extras）
 
 | Extra | 库 | 用途 |
-|---|---|---|
-| `evolution` | `optuna` | Micro 演化 TPE 贝叶斯调参 |
-| `llm` | `openai` | OpenAI / DeepSeek 兼容 API 客户端 |
-| `llm` | `anthropic` | Anthropic Claude API 客户端 |
-| `mcp` | `akshare` | MCP 数据源（A 股/ETF 行情，腾讯/东方财富） |
-| `dev` | `pytest` | 测试框架 |
-| `dev` | `pytest-cov` | 覆盖率报告 |
+|:------|:---|:-----|
+| `evolution` | `optuna >= 3.0` | 微观演化 TPE 贝叶斯调参 |
+| `llm` | `openai >= 1.0` | OpenAI / DeepSeek 兼容 API |
+| `llm` | `anthropic >= 0.20` | Anthropic Claude API |
+| `mcp` | `akshare >= 1.18.64` | MCP 数据源（A 股/ETF 行情） |
+| `dev` | `pytest >= 7.4` | 测试框架 |
+| `dev` | `pytest-cov >= 4.1` | 覆盖率报告 |
 
-### 5.3 隐式/软依赖 (静默回退)
+### 6.3 隐式/软依赖（静默回退）
 
 | 库 | 用途 | 回退行为 |
-|---|---|---|
-| `scipy` | 统计检验, QR 分解 | 评估链降级 |
-| `statsmodels` | 多重检验校正 (Bonferroni/FDR) | 多重检验降级 |
-| `TA-Lib` | 技术分析指标 (沙箱中允许) | 因子代码中可用 |
-| `APScheduler` | 基于 cron 的任务调度 | `SchedulerEngine.start()` 返回 False |
-| `watchdog` | 文件系统变更监听 (热重载) | `HotSwapWatcher` 静默 no-op |
-| `lightgbm` | L3 可选信号合成方法 | 回退到等权/夏普加权 |
+|:---|:-----|:---------|
+| `duckdb` | 期货数据缓存 | 回退到 AKShare 即时获取 |
+| `apscheduler` | 定时任务调度 | `SchedulerEngine.start()` 返回 False |
+| `watchdog` | 文件热重载 | `HotSwapWatcher` 静默 no-op |
+| `lightgbm` | L3 信号合成 | 回退到等权/夏普加权 |
+| `dotenv` | .env 文件加载 | 静默跳过 |
 
 ---
 
-## 6. 运行/构建/测试方式
+## 7. 运行/构建/测试方式
 
-### 6.1 安装
+### 7.1 安装
 
 ```bash
-# 需要 Python 3.10+
-python -m venv venv
-venv\Scripts\activate       # Windows
-
-# 基础安装 (仅必需依赖)
+# 基础安装（仅必需依赖）
 pip install -e .
 
-# 开发安装 (含测试)
+# 开发安装（含测试）
 pip install -e ".[dev]"
 
-# 完整安装 (含演化 + LLM + 数据)
-pip install -e ".[dev,evolution,llm,data]"
+# 完整安装（含演化 + LLM + 数据）
+pip install -e ".[evolution,llm,mcp,dev]"
 ```
 
-### 6.2 环境变量
+### 7.2 环境变量
 
 ```powershell
-# PowerShell 设置 (参考 start_fts.ps1)
-$env:OPENAI_API_KEY = "your-key"
-$env:OPENAI_BASE_URL = "https://api.deepseek.com/v1"   # 可选: 使用 DeepSeek 代理
-$env:OPENAI_MODEL = "deepseek-chat"
-$env:FTS_CONFIG_FILE = "config/settings.yaml"
-$env:FTS_MEMORY_DIR = "memory"
-$env:FTS_LLM_BACKEND = ""           # 留空 = 自动检测
-$env:FTS_LOG_LEVEL = "INFO"
+# .env 文件（自动加载）
+OPENAI_API_KEY=your-key
+OPENAI_BASE_URL=https://api.deepseek.com/v1   # 可选：使用 DeepSeek 代理
+OPENAI_MODEL=deepseek-chat
+FTS_MEMORY_DIR=memory
+FTS_ELITE_DIR=memory/knowledge/factors/elite
+FTS_LLM_BACKEND=          # 留空 = 自动检测
+FTS_LOG_LEVEL=INFO
 ```
 
-### 6.3 CLI 命令
+### 7.3 CLI 命令
 
 ```bash
 fts version                                    # 打印版本 + 引擎版本 + 配置路径
-fts monitor [--json]                           # 显示 L1/L2/L3 循环状态 (默认文本, --json 输出 JSON)
+fts monitor [--json]                           # 显示 L1/L2/L3 循环状态
 fts evolution run [--max-generations 10]       # L2 单标因子演化
 fts evolution run --universe csi300            # L2 CSI300 横截面演化
 fts evolution run --universe futures           # L2 期货横截面演化
-fts meta-loop run                              # L1 市场感知 (每日 09:00)
-fts portfolio run                              # L3 组合构建 (每周一 06:00)
-fts scheduler run                              # 启动 APScheduler 后台运行
+fts meta-loop run                              # L1 市场感知
+fts portfolio run                              # L3 组合构建（stock）
+fts portfolio run --universe futures           # L3 期货组合构建
+fts ui [--host 127.0.0.1] [--port 9100]       # 启动 Web UI 仪表盘
+fts scheduler run                              # 启动后台调度
 fts scheduler list                             # 列出所有已注册任务
 fts factor list [--elite-dir]                  # 列出 elite 因子
-fts factor show <factor_id> [--elite-dir]      # 显示因子详情 (支持部分匹配)
+fts factor show <factor_id> [--elite-dir]      # 显示因子详情
 ```
 
-### 6.4 测试
+### 7.4 测试
 
 ```bash
-# 运行所有测试 (带覆盖率)
+# 运行所有测试（带覆盖率）
 pytest
 
-# 等同于:
-pytest --cov=fts --cov-report=term-missing -v
-
-# 仅运行特定测试模块
-pytest tests/test_e2e.py                       # 10 个 E2E 场景
-pytest tests/factor_engine/                    # 因子引擎测试 (16 文件)
-pytest tests/scheduler/                        # 调度器测试 (4 文件)
-pytest tests/strategies/                       # 策略测试 (2 文件)
+# 仅运行特定模块
+pytest tests/factor_engine/                    # 因子引擎测试（16 文件）
+pytest tests/scheduler/                        # 调度器测试（4 文件）
+pytest tests/strategies/                       # 策略测试（3 文件）
 pytest -k "test_verifier"                      # 按关键字过滤
 
-# 当前测试状态: 1,325 测试通过, 99% 覆盖率 (46 个模块 >=90%)
+# 当前测试状态：1601 测试通过，1 跳过，91% 覆盖率
 ```
 
-### 6.5 CI/CD
+### 7.5 CI/CD
 
-`.github/workflows/ci.yml` — GitHub Actions:
-
-- 矩阵: Python 3.10 / 3.11 / 3.12
-- 步骤: `pip install -e ".[dev,evolution]"` → `pytest --cov=fts --cov-report=xml` → codecov 上传
-- 触发: push / pull_request 到 main 分支
-
-### 6.6 生产部署 (Windows)
-
-3 种部署模式 (详见 `docs/deploy/WINDOWS.md`):
-
-| 模式 | 工具 | 适用场景 |
-|---|---|---|
-| 任务计划程序 | Windows Task Scheduler + `start_fts.ps1` | 开发测试 |
-| Windows 服务 | NSSM: `nssm install FTS python fts/cli.py scheduler run` | 生产稳定 |
-| 后台进程 | `pythonw fts/cli.py scheduler run` + stdio 重定向 | 轻量部署 |
-
-### 6.7 HTTP 监控端点
-
-运行时 FTS 暴露 HTTP 服务于 `127.0.0.1:9100`:
-
-| 端点 | 格式 | 内容 |
-|---|---|---|
-| `GET /health` | JSON | 健康状态 + L1/L2/L3 循环摘要 |
-| `GET /metrics` | Prometheus 文本 | L1/L2/L3 status gauge, token 消耗 counter |
-| `GET /` | HTML | 仪表板 (状态表格) |
+`.github/workflows/ci.yml` — GitHub Actions：
+- 矩阵：Python 3.10 / 3.11 / 3.12
+- 步骤：`pip install -e ".[dev,evolution]"` → `pytest --cov=fts --cov-report=xml`
+- 触发：push / pull_request 到 main 分支
 
 ---
 
-## 7. 核心设计模式
+## 8. 核心设计模式
 
-### 7.1 Verifier 锁定协议
+### 8.1 Verifier 锁定协议
 
-**核心防博弈机制。** `FactorVerifier`, `L1Verifier`, `L3Verifier` 都在 `__init__` 末尾设置 `_locked=True`。任何后续修改配置的尝试抛出 `VerifierAlreadyLockedError`。确保评估标准无法被 LLM (或人类) 在运行中博弈。
+**核心防博弈机制。** `FactorVerifier`, `L1Verifier`, `L3Verifier` 都在 `__init__` 末尾设置 `_locked=True`。任何后续修改配置的尝试抛出 `VerifierAlreadyLockedError`。确保评估标准无法被 LLM（或人类）在运行中博弈。
 
-- `get_global_verifier()` — 进程级单例, `DEFAULT_VERIFIER_CONFIG` 初始化
-- `check()` 返回 `checked_against` 快照, 可审计
+### 8.2 Loop Engineering 范式
 
-### 7.2 Loop Engineering 范式
+三个自治循环（L1/L2/L3）具有不同的节奏（每日/每夜/每日），由人在回路顶层（L0 Program.md）监督。每个循环有独立的 `StateManager`、`Verifier`、`Budget`。
 
-三个自治循环 (L1/L2/L3) 具有不同的节奏 (每日/每夜/每周), 由人在回路顶层 (L0 Program.md) 监督。每个循环有独立的:
-- `StateManager` — 状态持久化 + 备份镜像
-- `Verifier` — 锁定的判定标准
-- `Budget` — 熔断预算控制
+### 8.3 安全沙箱执行
 
-文件: `evolution_loop.py`, `meta_loop.py`, `portfolio_loop.py`
+**禁止 LLM 生成的因子代码执行危险操作。** 白名单导入 + 黑名单名称 + 黑名单模块 + AST 预验证 + 受限 `__builtins__`。
 
-### 7.3 安全沙箱执行
+### 8.4 Strategy v2 可插拔框架
 
-**禁止 LLM 生成的因子代码执行危险操作。**
+`BaseStrategyV2` ABC 定义 `name`（抽象），`score()`（抽象），并提供默认 `compute()`, `filter()`, `validators`, `weight`。新策略扩展 ABC 并只覆盖需要的部分。
 
-- 白名单导入: `numpy`, `pandas`, `scipy`, `statsmodels`, `talib`, `math`, `statistics`
-- 黑名单名称: `open`, `exec`, `eval`, `compile`, `__import__`, `globals`, `locals`
-- 黑名单模块: `os`, `sys`, `subprocess`, `socket`, `ctypes`, `pickle`
-- AST 预验证: `validate_factor_code()` 在任何执行前检测违规
-- 受限 `__builtins__` 字典
+### 8.5 Pipeline + Stage Protocol
 
-文件: `factor_program.py`
+`ProcessingStage` 是 `Protocol`，含 `input_type`/`output_type` 和 `process(payload)` 方法。`FactorPipeline` 是 ABC，含抽象 `build_stages()` 和具体 `run()` 编排器。
 
-### 7.4 Strategy v2 可插拔框架
+### 8.6 适配器模式
 
-`BaseStrategyV2` ABC 定义 `name` (抽象), `score()` (抽象), 并提供默认 `compute()`, `filter()`, `validators`, `weight`, `depends_on`。新策略扩展 ABC 并只覆盖需要的部分。
+`StrategyV1Adapter` 桥接 v1 策略接口到 v2 ABC，允许渐进迁移。
 
-- `StrategyV1Adapter` — 适配器模式, 桥接 v1 策略接口到 v2 ABC
-- `MultiFactorStrategy` — 12 因子实现, 3 种模式 (pure_momentum / long_short / neutral)
+### 8.7 原子文件操作
 
-文件: `strategies/base_v2.py`, `strategies/multi_factor_strategy.py`
+`atomic_write()` 临时文件 + `os.replace()`（跨平台原子 rename）。`atomic_write_state()` 添加备份轮转（`.bak.0` → `.bak.1` → `.bak.2`），实现崩溃安全。
 
-### 7.5 Pipeline + Stage Protocol
+### 8.8 经验链（LLM 记忆）
 
-`ProcessingStage` 是一个 `Protocol`, 含 `input_type`/`output_type` 和 `process(payload)` 方法。`FactorPipeline` 是 ABC, 含抽象 `build_stages()` 和具体 `run()` 编排器, 返回 `PipelineResult`。Stage 可组合, 通过 Protocol 进行类型安全校验。
+`ExperienceChain` 在独立子目录中存储成功和失败追踪。`read_recent_for_llm()` 返回 10 条成功 + 10 条失败追踪作为下次 LLM 调用的 Markdown 上下文。MAX_CHAIN_SIZE=100，满时 FIFO 淘汰。
 
-文件: `pipeline/base.py`
+### 8.9 熔断器（Circuit Breaker）
 
-### 7.6 适配器模式
-
-`StrategyV1Adapter` (在 `strategies/base_v2.py` 中) 桥接 v1 策略接口到 v2 ABC, 允许渐进迁移而不破坏现有策略。
-
-### 7.7 原子文件操作
-
-`atomic_write()` 临时文件 + `os.replace()` (跨平台原子 rename)。`atomic_write_state()` 添加备份轮转 (`.bak.0` → `.bak.1` → `.bak.2`), 实现崩溃安全的状态持久化。
-
-所有状态管理器 (`EvolutionStateManager`, `MetaStateManager`, `PortfolioStateManager`) 使用此原语。
-
-文件: `core/atomic.py`
-
-### 7.8 单例全局 Verifier
-
-`get_global_verifier()` 返回以 `DEFAULT_VERIFIER_CONFIG` 初始化的进程级单例。确保所有 L2 运行间评估标准一致。`reset_global_verifier()` 仅用于测试。
-
-文件: `factor_engine/verifier.py`
-
-### 7.9 经验链 (LLM 记忆)
-
-`ExperienceChain` 在独立子目录中存储成功和失败追踪。`read_recent_for_llm()` 返回 10 条成功 + 10 条失败追踪作为下次 LLM 调用的 Markdown 上下文, 防止 LLM 重复过去的错误。
-
-| 属性 | 值 |
-|---|---|
-| MAX_CHAIN_SIZE | 100 条 |
-| 淘汰策略 | FIFO, 满时淘汰最旧的 20 条 |
-| 存储目录 | `success/` + `failure/` 子目录 |
-| 调用上下文 | 每次 LLM 调用前注入经验链摘要 |
-
-文件: `factor_engine/experience_chain.py`
-
-### 7.10 熔断器 (Circuit Breaker)
-
-三阈值自动停止 L2 演化, 触发后须人类介入恢复:
+三阈值自动停止 L2 演化，触发后须人类介入恢复：
 
 | 熔断条件 | 阈值 |
-|---|---|
-| Token 预算耗尽 | `nightly_token_limit` (默认 200K) |
-| 连续低 IC | `circuit_breaker_consecutive_low_ic` (默认 3 代) + `circuit_breaker_low_ic_threshold` (默认 0.01) |
-| 失败率超限 | `circuit_breaker_failure_rate` (默认 90%) |
+|:-----|:-----|
+| Token 预算耗尽 | `nightly_token_limit` × 2.0 |
+| 连续低 IC | 3 代 IC < 0.01 |
+| 失败率超限 | > 90% |
 
-L1 和 L3 也有各自的熔断配置 (见 `L1BudgetConfig` / `L3` 常驻 budget)。
+### 8.10 静默降级
 
-文件: `factor_engine/evolution_loop.py` (`_check_circuit_breaker`)
+所有可选依赖都惰性导入，缺失时优雅回退到 Mock/No-op 实现。系统在零可选依赖安装的情况下仍可端到端运行。
 
-### 7.11 静默降级 (Graceful Degradation)
+### 8.11 MCP 数据桥接
 
-所有可选依赖都惰性导入, 缺失时优雅回退到 Mock/No-op 实现:
-
-| 可选依赖 | 缺失时行为 |
-|---|---|
-| `optuna` | Micro 演化跳过, 使用默认参数 |
-| `openai` / `anthropic` | 回退 `MockLLMClient` (确定性输出) |
-| `datacore` | 回退合成 OHLCV 数据 |
-| `apscheduler` | `SchedulerEngine.start()` 返回 False |
-| `watchdog` | `HotSwapWatcher` 静默不工作 |
-| `lightgbm` | L3 回退到等权/夏普加权 |
-
-系统在零可选依赖安装的情况下仍可端到端运行。
-
-### 7.12 备份轮转 (Backup Rotation)
-
-所有状态文件通过 `atomic_write_state()` 写入时自动执行备份轮转:
-
-```
-state.json          ← 最新版本
-state.json.bak.0    ← 上一次写入
-state.json.bak.1    ← 上上一次写入
-state.json.bak.2    ← 上上上一次写入
-```
-
-文件: `core/atomic.py`
+`MCPBridge` 实现了 Agent 运行时与 FTS 代码运行时的数据桥接。Agent 通过 `run_mcp` 预填充基本面缓存（`data/fundamental_cache.json`），FTS 代码运行时只读缓存。缓存未命中时返回空字典，由调用方自行降级。
 
 ---
 
-## 8. 配置体系
+## 9. 配置体系
 
-### 8.1 配置层次与优先级
+### 9.1 配置层次与优先级
 
 ```
 高优先级         环境变量 (FTS_* 前缀)
@@ -1069,82 +943,71 @@ state.json.bak.2    ← 上上上一次写入
 低优先级
 ```
 
-### 8.2 配置文件清单
+### 9.2 配置文件清单
 
-| 文件 | 用途 | 说明 |
-|---|---|---|
-| `pyproject.toml` | Python 项目构建 + 依赖 + CLI 入口点 | `name="fts"`, `version="1.2.0"`, `scripts: fts = "fts.cli:main"` |
-| `config/settings.yaml` | 默认 YAML 配置 | 被 `load_config()` 消费 |
-| `fts/config/settings.py` | 配置加载器 | `FTSConfig` dataclass, `load_config()`, `get_config()` |
-| `CLAUDE.md` | AI 编码行为准则 | HARNESS 规范 + 13 项 commit 前检查清单 |
-| `.github/workflows/ci.yml` | GitHub Actions CI | Python 3.10/3.11/3.12 矩阵 |
-| `start_fts.ps1` | PowerShell 启动脚本 | 设置环境变量后启动 FTS |
+| 文件 | 用途 |
+|:-----|:-----|
+| `pyproject.toml` | Python 项目构建 + 依赖 + CLI 入口点 |
+| `config/settings.yaml` | 默认 YAML 配置 |
+| `fts/config/settings.py` | 配置加载器（`FTSConfig` dataclass） |
+| `.env` | 环境变量（API Key 等，不提交到 Git） |
+| `CLAUDE.md` | AI 编码行为准则 |
+| `agents/fts-agent.md` | FTS Agent 角色定义与能力边界 |
+| `.github/workflows/ci.yml` | GitHub Actions CI |
+| `start_fts.ps1` | PowerShell 启动脚本 |
 
-### 8.3 `pyproject.toml` 关键配置
+### 9.3 `pyproject.toml` 关键配置
 
 ```toml
 [project]
 name = "fts"
-version = "1.2.0"
+version = "1.8.0"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24", "pandas>=2.0", "PyYAML>=6.0"]
+dependencies = ["numpy>=1.24", "pandas>=2.0", "scipy>=1.10", "pyyaml>=6.0"]
 
 [project.optional-dependencies]
-evolution = ["optuna"]
-llm = ["openai", "anthropic"]
-data = ["akshare"]
-dev = ["pytest", "pytest-cov"]
+evolution = ["optuna>=3.0"]
+llm = ["openai>=1.0", "anthropic>=0.20"]
+mcp = ["akshare>=1.18.64"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1"]
 
 [project.scripts]
 fts = "fts.cli:main"
 ```
 
-### 8.4 `config/settings.yaml` 示例
-
-```yaml
-default_market: "futures"
-llm_backend: "openai"
-max_generations: 10
-micro_trials_per_generation: 50
-portfolio_max_factors: 20
-```
-
-### 8.5 运行时配置 (memory/ 目录)
-
-所有运行时状态文件存储在 `memory/` 目录下, 通过 `FTS_MEMORY_DIR` 环境变量可配置。
-
 ---
 
-## 9. 运行时状态文件
+## 10. 运行时状态文件
 
-### 9.1 状态文件清单
+### 10.1 状态文件清单
 
 | 文件路径 | 用途 | 拥有者 |
-|---|---|---|
-| `memory/evolution/state.json` | L2 演化状态 (代数/试验/计数/熔断) | `EvolutionStateManager` |
+|:-----|:-----|:-----|
+| `memory/evolution/state.json` | L2 演化状态 | `EvolutionStateManager` |
 | `memory/evolution/state.json.backup` | L2 状态备份 | `atomic_write_state` |
 | `memory/meta_loop/state.json` | L1 Meta-Loop 状态 | `MetaStateManager` |
 | `memory/meta_loop/state.json.backup` | L1 状态备份 | `atomic_write_state` |
 | `memory/portfolio/state.json` | L3 组合状态 | `PortfolioStateManager` |
-| `memory/portfolio/state.json.backup` | L3 状态备份 | `atomic_write_state` |
-| `memory/portfolio/current_combo.json` | 当前 L3 组合 combo | `PortfolioManager` |
+| `memory/portfolio/current_combo.json` | 当前 L3 组合 | `PortfolioManager` |
 | `memory/portfolio/agent_proposals/*.json` | LLM 生成的组合优化提案 | `PortfolioManager` |
 | `memory/knowledge/factors/factor_pool.json` | L1 发现的因子池 | `FactorPoolManager` |
-| `memory/knowledge/factors/elite/*.json` | 晋升的 elite 因子 (每因子一文件) | `EvolutionLoop._promote_to_elite()` |
+| `memory/knowledge/factors/elite/*.json` | 晋升的 elite 因子 | `EvolutionLoop._promote_to_elite()` |
 | `memory/knowledge/factors/l1_injected/*.json` | L1 注入的因子候选 | `MetaLoop` |
-| `memory/meta_loop/debate_journal.json` | 辩论质量记录 | `DebateQualityAnalyzer` |
-| `memory/experience/success/*.json` | 成功经验追踪 (LLM 上下文) | `ExperienceChain` |
-| `memory/experience/failure/*.json` | 失败经验追踪 (LLM 上下文) | `ExperienceChain` |
-| `Program.md` (项目根目录) | L0 周度人工设定 | 人类 (由 `program.py` 解析) |
+| `memory/experience/success/*.json` | 成功经验追踪 | `ExperienceChain` |
+| `memory/experience/failure/*.json` | 失败经验追踪 | `ExperienceChain` |
+| `data/fts_history.duckdb` | 期货数据缓存 | `FuturesDataProvider` |
+| `data/fundamental_cache.json` | MCP 基本面数据缓存 | `MCPBridge` |
+| `reports/{date}/` | 信号报告输出 | `scripts/futures_signal_pipeline.py` |
+| `Program.md`（项目根目录） | L0 周度人工设定 | 人类（由 `program.py` 解析） |
 
-### 9.2 状态文件格式示例
+### 10.2 状态文件格式示例
 
-**L2 Evolution State (memory/evolution/state.json):**
+**L2 Evolution State (`memory/evolution/state.json`):**
 
 ```json
 {
-  "run_id": "run_abc12345_20260724T120000",
-  "started_at": "2026-07-24T12:00:00",
+  "run_id": "run_abc12345_20260803T120000",
+  "started_at": "2026-08-03T12:00:00",
   "last_generation": 5,
   "total_factors_evaluated": 25,
   "total_factors_promoted": 3,
@@ -1153,12 +1016,12 @@ portfolio_max_factors: 20
   "status": "completed",
   "last_error": null,
   "experience_chain_ref": ["ftr_...", "ftr_..."],
-  "last_updated": "2026-07-24T12:30:00",
+  "last_updated": "2026-08-03T12:30:00",
   "version": "1.1.0"
 }
 ```
 
-**Elite Factor (memory/knowledge/factors/elite/fct_a1b2c3d4.json):**
+**Elite Factor (`memory/knowledge/factors/elite/fct_a1b2c3d4.json`):**
 
 ```json
 {
@@ -1172,7 +1035,7 @@ portfolio_max_factors: 20
   "parent_id": "fct_seed_...",
   "generation": 3,
   "trace_id": "ftr_...",
-  "created_at": "2026-07-24T12:00:00"
+  "created_at": "2026-08-03T12:00:00"
 }
 ```
 
@@ -1180,13 +1043,14 @@ portfolio_max_factors: 20
 
 ## 总结
 
-FTS 是一个架构清晰的 AI 原生量化因子系统, 核心特点:
+FTS 是一个架构清晰的 AI 原生量化因子系统，核心特点：
 
-1. **Contract-First 设计** — 所有数据形状在 `contracts.py` 中声明为 TypedDict (L1+L2+L3 三层, ~560 LOC), 模块间通过契约解耦
-2. **安全防博弈** — Verifier 锁定协议 + 安全沙箱 + 熔断器 + 经验链, 防止 LLM 作弊和恶意代码执行
+1. **Contract-First 设计** — 所有数据形状在 `contracts.py` 中声明为 TypedDict（L1+L2+L3 三层），模块间通过契约解耦
+2. **安全防博弈** — Verifier 锁定协议 + 安全沙箱 + 熔断器 + 经验链，防止 LLM 作弊和恶意代码执行
 3. **工程韧性** — 原子文件持久化 + 备份轮转 + 静默降级 + 进程看门狗 + 热重载
-4. **可观测性** — `trace_id` 全链路追踪 + HTTP metrics 服务器 (端点: /health /metrics /) + Elite 因子自动退役追踪
+4. **可观测性** — `trace_id` 全链路追踪 + HTTP metrics 服务器 + Web UI 仪表盘 + Elite 因子自动退役追踪
 5. **可扩展性** — Strategy v2 可插拔 ABC + Pipeline + Stage Protocol + 适配器模式
-6. **测试覆盖** — 1,325 测试 / 99% 覆盖率 / 35+ 个测试文件 / 10 个 E2E 场景 / CI 矩阵 (3.10/3.11/3.12)
-
-项目处于生产就绪状态, 已在 Windows 上部署 3 种模式 (Task Scheduler / NSSM / 后台进程), 通过 GitHub Actions 持续集成。
+6. **多资产覆盖** — A 股/ETF/82 个期货品种，支持期货基本面数据（库存/仓单/基差）
+7. **自动化调度** — 5 个 APScheduler 定时任务，覆盖 L1/L2/L3 全链路 + 独立期货信号管道
+8. **数据桥接** — MCPBridge 实现 Agent 与 FTS 运行时的数据预填充和只读缓存机制
+9. **测试覆盖** — 1601 测试 / 91% 覆盖率 / 40+ 个测试文件 / CI 矩阵（3.10/3.11/3.12）
