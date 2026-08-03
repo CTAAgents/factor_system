@@ -13,6 +13,19 @@ FTS — Factor Trading System
     - cli: 统一命令行入口
     - data / data_mcp: MCP 数据适配层
 
-版本: v1.4.0（基本面/另类/宏观因子集成：23 个基本面种子因子加入种子池，新增 FundamentalProvider 数据层，482 种子因子，1502 测试全绿）"""
+版本: v1.5.0（MCPBridge 数据桥接 + 每日信号生成管道：447 Elite 因子 × CSI300 实时信号输出）"""
 
-__version__ = "1.4.0"
+from pathlib import Path
+
+__version__ = "1.5.0"
+
+# ── 自动加载 .env ────────────────────────────────────────
+_env_loaded = False
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).resolve().parent.parent / ".env"
+    if _env_path.exists():
+        load_dotenv(_env_path, override=False)
+        _env_loaded = True
+except Exception:  # noqa: BLE001  # pragma: no cover
+    pass

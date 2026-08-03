@@ -96,6 +96,15 @@ def _prepare_cross_section_data(
     provider = FTSDataProvider()
     panel, common_dates = provider.get_csi300_panel(days=days, max_stocks=max_stocks)
 
+    # 注入基本面数据（MCP 缓存 → 合成数据降级）
+    try:
+        from .data_fundamental import get_fundamental_provider
+        fp = get_fundamental_provider(mcp_available=True)
+        panel = fp.enrich_panel(panel, trace_id="cli_prepare")
+        print(f"[prepare] 基本面数据注入完成: {len(panel)} 只股票")
+    except Exception as e:
+        print(f"[prepare] 基本面注入失败（使用合成数据）: {e}")
+
     first_sym = list(panel.keys())[0]
     first_df = panel[first_sym]
     closes = first_df["close"].values

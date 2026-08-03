@@ -111,12 +111,12 @@ class FundamentalProvider:
         """
         Args:
             mcp_available: 是否尝试从 MCP 获取真实数据。
-                           True=尝试 MCP（失败时自动降级）;
+                           True=尝试 MCP 缓存（失败时自动降级）;
                            False=直接使用合成数据。
         """
         self._mcp_available = mcp_available
-        self._cache: dict[str, dict[str, Any]] = {}
-        # 宏觀数据缓存（所有股票共享）
+        self._bridge: Optional[Any] = None
+        # 宏观数据缓存（所有股票共享）
         self._macro_cache: dict[str, float] = {}
 
     # ── 公开接口 ──
@@ -169,102 +169,74 @@ class FundamentalProvider:
 
     def _mcp_enrich(self, df: pd.DataFrame, symbol: str,
                     trace_id: str) -> pd.DataFrame:
-        """从 MCP 获取真实基本面数据并注入 DataFrame。
+        """从 MCP 桥接缓存获取真实基本面数据并注入 DataFrame。
 
         数据来源:
-            - data_profile: 估值/市值/交易类字段
-            - data_finance: 财务质量/成长类字段
-            - data_macro: 宏观类字段
+            - MCPBridge（东方财富 mx API 缓存）: 估值/市值/财务质量/成长类字段
+            - 宏观数据: 合成常量（可后续扩展）
         """
         enriched = df.copy()
-        code = _to_westock_code(symbol)
 
-        # 1. 获取 profile 数据（估值+市值+交易）
-        profile = self._fetch_profile(code)
-        if profile:
-            self._apply_profile(enriched, profile)
+        # 1. 通过 MCPBridge 获取缓存数据
+        try:
+            data = self._get_bridge().get_fundamental(symbol)
+            if data:
+                self._apply_bridge_data(enriched, data)
+        except Exception as e:
+            logger.debug(f"MCP 桥接获取失败 [{symbol}]: {e}")
 
-        # 2. 获取财务数据
-        finance = self._fetch_finance(code)
-        if finance:
-            self._apply_finance(enriched, finance)
-
-        # 3. 获取宏观数据（所有股票共享）
+        # 2. 宏观数据（所有股票共享常量）
         macro = self._fetch_macro()
         if macro:
             self._apply_macro(enriched, macro)
 
         return enriched
 
-    def _fetch_profile(self, code: str) -> dict[str, Any]:
-        """从 MCP data_profile 获取个股概览数据。
+    def _get_bridge(self) -> Any:
+        """延迟初始化 MCPBridge。"""
+        if self._bridge is None:
+            from fts.data_mcp_bridge import MCPBridge
+            self._bridge = MCPBridge()
+        return self._bridge
 
-        返回字段可能包含: pe_ttm, pb, ps_ttm, total_market_cap,
-                         turnover_rate, free_market_cap 等。
-        """
-        try:
-            from fts.data_mcp import _get_http
-            client = _get_http()
-            # 使用 westock API 获取 profile 数据
-            resp = client.get(
-                f"https://push2ex.eastmoney.com/getStockIndustry",
-                params={
-                    "stockCode": code,
-                    "market": _get_market(code),
-                },
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if data:
-                return self._parse_profile(data)
-        except Exception as e:
-            logger.debug(f"profile 获取失败 [{code}]: {e}")
+    def _apply_bridge_data(self, df: pd.DataFrame,
+                           data: dict[str, Any]) -> None:
+        """将 MCP 桥接数据注入 DataFrame。"""
+        # 估值类
+        for field in VALUATION_FIELDS:
+            if field in data:
+                df[field] = data[field]
+
+        # 市值类
+        for field in SIZE_FIELDS:
+            if field in data:
+                df[field] = data[field]
+
+        # 交易类
+        for field in TRADING_FIELDS:
+            if field in data:
+                df[field] = data[field]
+
+        # 财务质量类
+        for field in QUALITY_FIELDS:
+            if field in data:
+                df[field] = data[field]
+
+        # 成长类
+        for field in GROWTH_FIELDS:
+            if field in data:
+                df[field] = data[field]
+
+    def _fetch_profile(self, code: str) -> dict[str, Any]:
+        """（保留兼容 — 已弃用，转而使用 MCPBridge）"""
         return {}
 
     def _parse_profile(self, data: dict) -> dict[str, Any]:
-        """解析 profile API 返回为字段字典。"""
-        result: dict[str, Any] = {}
-        if isinstance(data, dict):
-            for key in ("pe_ttm", "pb", "ps_ttm", "total_market_cap",
-                        "turnover_rate", "free_market_cap"):
-                if key in data:
-                    try:
-                        result[key] = float(data[key])
-                    except (ValueError, TypeError):
-                        pass
-        return result
+        """（保留兼容 — 已弃用）"""
+        return {}
 
     def _fetch_finance(self, code: str) -> dict[str, Any]:
-        """从财务数据源获取最近一期财务指标。"""
-        try:
-            from fts.data_mcp import _get_http
-            client = _get_http()
-            resp = client.get(
-                "https://datacenter.eastmoney.com/securities/api/data/v1/get",
-                params={
-                    "reportName": "RPT_LICO_FN_CPD",
-                    "columns": "SECUCODE,REPORT_DATE,BASIC_EPS,WEIGHTAVG_ROE",
-                    "filter": f'(SECUCODE="{code}")',
-                    "pageNumber": 1,
-                    "pageSize": 1,
-                    "sortTypes": -1,
-                    "sortColumns": "REPORT_DATE",
-                },
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if data.get("result") and data["result"].get("data"):
-                item = data["result"]["data"][0]
-                result: dict[str, float] = {}
-                if "WEIGHTAVG_ROE" in item:
-                    result["roe"] = float(item["WEIGHTAVG_ROE"]) / 100.0
-                if "BASIC_EPS" in item:
-                    result["eps"] = float(item["BASIC_EPS"])
-                return result
-        except Exception as e:
-            logger.debug(f"finance 获取失败 [{code}]: {e}")
+        """（保留兼容 — 已弃用，转而使用 MCPBridge）"""
         return {}
 
     def _fetch_macro(self) -> dict[str, float]:
