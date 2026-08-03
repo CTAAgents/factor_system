@@ -77,17 +77,25 @@ class MacroEvolver:
         except Exception as e:
             raise MacroEvolutionError(f"LLM 调用失败: {e}") from e
 
-        # 解析 LLM 响应
-        try:
-            response = json.loads(response_text)
-        except json.JSONDecodeError as e:
-            raise MacroEvolutionError(f"LLM 响应非 JSON: {e}") from e
+        # 解析 LLM 响应（处理 markdown 代码块包裹的情况）
+        parsed = self._parse_json_response(response_text)
+        if parsed is None:
+            raise MacroEvolutionError(
+                f"LLM 响应非 JSON:\n{response_text[:300]}"
+            )
+        response = parsed
 
-        # 构造新因子代码（在 mock 场景下做参数扰动）
-        new_code = self._apply_code_modification(
-            parent.get("code", ""),
-            response.get("code_modification", ""),
-        )
+        # 构造新因子代码
+        # 优先使用 LLM 生成的完整代码，否则回退到父因子代码
+        full_code = response.get("full_code", "").strip()
+        if full_code and "def factor_program" in full_code:
+            new_code = full_code
+        else:
+            # 兼容旧格式：尝试应用 code_modification
+            new_code = self._apply_code_modification(
+                parent.get("code", ""),
+                response.get("code_modification", ""),
+            )
 
         # 构造经济逻辑
         el_mod = response.get("economic_logic_modification", {})
@@ -151,11 +159,20 @@ class MacroEvolver:
 
 任务: 生成代 {generation} 的新因子变异。
 
+规则:
+1. 代码必须是完整的 Python 函数，函数签名固定为 `def factor_program(data, params):`
+2. 输入 data 是 dict，包含 'open','high','low','close','volume' 等 numpy 数组
+3. 输出必须是长度为 n 的 numpy 数组，值域在 [-1, 1] 之间
+4. 代码中使用局部变量，不修改全局状态
+5. 使用 `import numpy as np` 进行数值计算
+6. 因子逻辑应与父因子不同，体现创新性
+7. 简洁高效，避免冗余计算
+
 输出 JSON 格式:
 {{
     "mutation_type": "macro_logic",
     "mutation_summary": "<一句话描述本次变异>",
-    "code_modification": "<代码修改指令>",
+    "full_code": "<完整的 factor_program 函数代码>",
     "economic_logic_modification": {{
         "theory": <0-5>,
         "behavioral": <0-5>,
@@ -184,6 +201,30 @@ class MacroEvolver:
             for r in eval_.get("failure_reasons", [])[:2]:
                 lines.append(f"     失败: {r}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _parse_json_response(text: str) -> Optional[dict]:
+        """解析 LLM 响应 JSON，支持 markdown 代码块包裹的情况。"""
+        # 尝试直接解析
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        # 尝试从 ```json ... ``` 提取
+        if "```json" in text:
+            block = text.split("```json")[1].split("```")[0].strip()
+            try:
+                return json.loads(block)
+            except (json.JSONDecodeError, IndexError):
+                pass
+        # 尝试从 ``` ... ``` 提取
+        if "```" in text:
+            block = text.split("```")[1].split("```")[0].strip()
+            try:
+                return json.loads(block)
+            except (json.JSONDecodeError, IndexError):
+                pass
+        return None
 
     @staticmethod
     def _apply_code_modification(original_code: str, modification: str) -> str:

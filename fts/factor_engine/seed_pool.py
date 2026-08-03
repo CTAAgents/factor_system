@@ -380,24 +380,38 @@ _SEED_DEFINITIONS: list[dict[str, Any]] = [
 class SeedPool:
     """种子池管理器 — 加载/查询/注入种子因子。
 
+    Args:
+        trace_id: 全链路 trace_id。
+        market: 市场类型 ("stock" 或 "futures")。
+            - "stock"（默认）: 加载 9 个内置股票种子 + 外部 473 个量价/基本面种子。
+            - "futures": 加载 50 个期货专用种子（12大因子家族：动量/期限结构/持仓/流动性/高阶矩/波动率/基本面/拥挤度/Alpha/高频/期权隐含/市场环境）。
+
     Usage:
         pool = SeedPool()
         all_seeds = pool.load_all_seeds()
-        seed_by_name = pool.get_seed("momentum")
+
+        futures_pool = SeedPool(market="futures")
+        futures_seeds = futures_pool.load_all_seeds()
     """
 
-    def __init__(self, trace_id: Optional[str] = None):
+    def __init__(
+        self,
+        trace_id: Optional[str] = None,
+        market: str = "stock",
+    ):
         self._trace_id = trace_id
+        self._market = market
         self._cache: dict[str, FactorProgram] = {}
 
     def load_all_seeds(
         self,
         include_external: bool = True,
     ) -> list[FactorProgram]:
-        """加载全部种子因子（内置 9 个 + 外部 450 个）。
+        """加载全部种子因子。
 
         Args:
-            include_external: 是否加载 WQ 101 / Qlib 158 / 国泰君安 191 外部种子（默认 True）。
+            include_external: 仅 market="stock" 时有效。
+                是否加载 WQ 101 / Qlib 158 / 国泰君安 191 外部种子（默认 True）。
 
         Returns:
             list[FactorProgram] — 所有种子因子列表（不含 L1 注入）。
@@ -405,25 +419,32 @@ class SeedPool:
         if self._cache:
             return self._list_base_seeds()
 
-        # 内置种子
-        for defn in _SEED_DEFINITIONS:
-            fp = create_factor_program(
-                name=defn["name"],
-                code=defn["code"],
-                params=defn["params"],
-                signature=defn["signature"],
-                economic_logic=defn["economic_logic"],
-                source="seed",
-                parent_id=None,
-                generation=0,
-                trace_id=self._trace_id,
-            )
-            self._cache[defn["name"]] = fp
+        if self._market == "futures":
+            # ── 期货模式：加载 50 个期货专用种子（12大因子家族） ──
+            from .seed_data_futures_full import load_futures_seeds_full
+            futures_seeds = load_futures_seeds_full(self._trace_id)
+            for fp in futures_seeds:
+                self._cache[fp["name"]] = fp
+        else:
+            # ── 股票模式：内置 9 个种子 ──
+            for defn in _SEED_DEFINITIONS:
+                fp = create_factor_program(
+                    name=defn["name"],
+                    code=defn["code"],
+                    params=defn["params"],
+                    signature=defn["signature"],
+                    economic_logic=defn["economic_logic"],
+                    source="seed",
+                    parent_id=None,
+                    generation=0,
+                    trace_id=self._trace_id,
+                )
+                self._cache[defn["name"]] = fp
 
-        # 外部种子（WQ 101 + Qlib 158 + 国泰君安 191）
-        if include_external:
-            for ext_fp in load_all_external_seeds(self._trace_id):
-                self._cache[ext_fp["name"]] = ext_fp
+            # 外部种子（WQ 101 + Qlib 158 + 国泰君安 191 + 基本面）
+            if include_external:
+                for ext_fp in load_all_external_seeds(self._trace_id):
+                    self._cache[ext_fp["name"]] = ext_fp
 
         return self._list_base_seeds()
 

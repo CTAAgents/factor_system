@@ -35,6 +35,7 @@ from .factor_engine import (
     DEFAULT_BUDGET_CONFIG,
     EvolutionLoop,
     FactorVerifier,
+    SeedPool,
     get_default_llm_client,
     get_default_seed_pool,
     generate_run_id,
@@ -115,6 +116,39 @@ def _prepare_cross_section_data(
     return panel, common_dates, fwd_ret
 
 
+def _prepare_futures_data(
+    days: int = 500,
+    max_symbols: int = 0,
+) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex, np.ndarray]:
+    """准备期货横截面演化所需的面板数据。
+
+    Args:
+        days: 回溯天数
+        max_symbols: 最大品种数（0 = 使用全部 FUTURES_CORE_SUBSET）
+
+    Returns:
+        (panel, common_dates, forward_returns — 使用第一个品种作为微参参考)
+    """
+    from .data_futures import FUTURES_CORE_SUBSET
+    symbols = FUTURES_CORE_SUBSET[:max_symbols] if max_symbols > 0 else FUTURES_CORE_SUBSET
+
+    provider = FTSDataProvider()
+    panel, common_dates = provider.get_futures_panel(symbols, days=days, trace_id="cli_prepare")
+
+    print(f"[prepare] 期货品种数={len(panel)}, 共同日期={len(common_dates)}")
+    for sym, df in sorted(panel.items()):
+        print(f"  {sym}: {len(df)} 行, 最新 close={df['close'].iloc[-1]:.2f}")
+
+    first_sym = list(panel.keys())[0]
+    first_df = panel[first_sym]
+    closes = first_df["close"].values
+    fwd_ret = np.zeros(len(closes))
+    if len(closes) > 5:
+        fwd_ret[:-5] = (closes[5:] - closes[:-5]) / np.maximum(closes[:-5], 1e-10)
+
+    return panel, common_dates, fwd_ret
+
+
 def _cmd_version(_args: argparse.Namespace) -> int:
     """打印版本号。"""
     cfg = get_config()
@@ -160,7 +194,38 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
         seed_pool = get_default_seed_pool()
         verifier = FactorVerifier()
 
-        # 用第一个股票构造常规 data/forward_returns（微参优化用）
+        # 用第一个品种构造常规 data/forward_returns（微参优化用）
+        first_sym = list(panel.keys())[0]
+        data_df = panel[first_sym]
+
+        loop = EvolutionLoop(
+            data=data_df,
+            forward_returns=fwd_ret,
+            elite_dir=cfg.elite_dir,
+            memory_dir=cfg.memory_dir + "/evolution",
+            llm_client=llm,
+            seed_pool=seed_pool,
+            verifier=verifier,
+            n_trials_micro=min(args.max_generations * 3, 30),
+            cross_section_data=panel,
+            cross_section_dates=common_dates,
+        )
+    elif args.universe == "futures":
+        # ── 期货横截面模式（使用期货专用种子因子） ──
+        print(f"[evolution] universe=futures (max_symbols={args.max_stocks})")
+        panel, common_dates, fwd_ret = _prepare_futures_data(
+            days=500, max_symbols=args.max_stocks,
+        )
+        print(f"[evolution] 期货 panel symbols={len(panel)}, common_dates={len(common_dates)}")
+
+        llm = get_default_llm_client()
+        print(f"[evolution] LLM backend: {type(llm).__name__}")
+
+        # 期货模式使用期货专用种子因子（13个期货特有因子）
+        seed_pool = SeedPool(market="futures")
+        verifier = FactorVerifier()
+
+        # 用第一个品种构造常规 data/forward_returns（微参优化用）
         first_sym = list(panel.keys())[0]
         data_df = panel[first_sym]
 
@@ -372,8 +437,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_evo_run.add_argument("--symbol", type=str, default="000001",
                            help="演化目标品种代码（默认 000001 平安银行）")
     p_evo_run.add_argument("--universe", type=str, default="single",
-                           choices=["single", "csi300"],
-                           help="演化股票池类型: single（单标）/ csi300（沪深300横截面）")
+                           choices=["single", "csi300", "futures"],
+                           help="演化股票池类型: single（单标）/ csi300（沪深300横截面）/ futures（期货横截面）")
     p_evo_run.add_argument("--max-stocks", type=int, default=50,
                            help="横截面模式最大标的数（默认 50，0 = 使用全部品种）")
     p_evo_run.set_defaults(func=_cmd_evolution_run)

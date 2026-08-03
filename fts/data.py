@@ -2,11 +2,12 @@
 fts.data — FTS 数据层集成入口
 
 基于腾讯自选股 MCP (akshare) 为 FTS 因子引擎提供统一数据访问接口。
-替换原 Data-Core (datacore) 依赖，支持 A 股和 ETF 因子演化。
+替换原 Data-Core (datacore) 依赖，支持 A 股/ETF/期货因子演化。
 
 数据流:
     因子引擎 → FTSDataProvider → MCPDataProvider(akshare) → 腾讯/东方财富 API
                               → FundamentalProvider → MCP westock API
+                              → FuturesDataProvider → DuckDB kline_cache
 
 HARNESS §契约优先: 所有数据接口通过本模块定义。
 """
@@ -22,6 +23,8 @@ import pandas as pd
 
 from .data_mcp import MCPDataProvider, MCPDataError
 from .data_fundamental import FundamentalProvider, FundamentalDataError
+from .data_futures import FuturesDataProvider, FuturesDataError
+from .data_futures_fundamental import FuturesFundamentalProvider
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +53,13 @@ class FTSDataProvider:
     """
 
     def __init__(self, mcp_provider: Optional[MCPDataProvider] = None,
-                 fundamental_provider: Optional[FundamentalProvider] = None):
+                 fundamental_provider: Optional[FundamentalProvider] = None,
+                 futures_provider: Optional[FuturesDataProvider] = None,
+                 futures_fundamental_provider: Optional[FuturesFundamentalProvider] = None):
         self._mcp = mcp_provider or MCPDataProvider()
         self._fundamental = fundamental_provider or FundamentalProvider(mcp_available=False)
+        self._futures = futures_provider or FuturesDataProvider()
+        self._futures_fundamental = futures_fundamental_provider or FuturesFundamentalProvider()
 
     # ── 基本面注入 ──
 
@@ -183,6 +190,100 @@ class FTSDataProvider:
             ETF_SUBSET, days=days, adjust="qfq", trace_id=trace_id,
         )
 
+    # ── 期货接口 ──
+
+    def get_futures_ohlcv(self, symbol: str, *,
+                          days: int = 500,
+                          trace_id: str = "",
+                          ) -> pd.DataFrame:
+        """获取期货连续合约 OHLCV 数据。
+
+        Args:
+            symbol: 期货连续合约代码（如 "RB0" / "CU0" / "IF0"）
+            days: 回溯天数
+            trace_id: HARNESS trace_id
+
+        Returns:
+            pd.DataFrame with columns: open, high, low, close, volume, hold, settle
+        """
+        return self._futures.get_ohlcv(symbol, days=days, trace_id=trace_id)
+
+    def get_futures_panel(
+        self,
+        symbols: list[str] | None = None,
+        days: int = 500,
+        trace_id: str = "",
+    ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+        """获取多期货品种 OHLCV 面板数据。
+
+        Args:
+            symbols: 期货合约列表，默认使用 FUTURES_CORE_SUBSET
+            days: 回溯天数
+            trace_id: HARNESS trace_id
+
+        Returns:
+            (panel, common_dates)
+        """
+        if symbols is None:
+            from .data_futures import FUTURES_CORE_SUBSET
+            symbols = FUTURES_CORE_SUBSET
+        return self._futures.get_futures_panel(symbols, days=days, trace_id=trace_id)
+
+    # ── 期货基本面（库存 / 基差 / 仓单）──
+
+    def enrich_futures_fundamental(self, df: pd.DataFrame, symbol: str, *,
+                                   trace_id: str = "") -> pd.DataFrame:
+        """将期货基本面字段注入 OHLCV DataFrame。
+
+        注入字段（可用时）:
+            - inventory: 库存
+            - inventory_change: 库存增减
+            - spot_price: 现货价格
+            - near_basis: 近月基差
+            - dom_basis: 主力基差
+            - near_basis_rate: 近月基差率
+            - dom_basis_rate: 主力基差率
+
+        Args:
+            df: OHLCV DataFrame
+            symbol: 期货连续合约代码（如 "RB0"）
+            trace_id: HARNESS trace_id
+
+        Returns:
+            DataFrame — 新增基本面列（无数据时用 NaN 填充）。
+        """
+        # 注入库存
+        try:
+            inv_df = self._futures_fundamental.get_inventory(symbol)
+            if not inv_df.empty and "inventory" in inv_df.columns:
+                df = df.join(inv_df[["inventory", "change"]].rename(
+                    columns={"inventory": "fut_inventory", "change": "fut_inventory_chg"}
+                ), how="left")
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 注入基差
+        try:
+            basis_df = self._futures_fundamental.get_basis(symbol, days=60)
+            if not basis_df.empty:
+                basis_cols = ["spot_price", "near_basis", "dom_basis",
+                              "near_basis_rate", "dom_basis_rate"]
+                available = [c for c in basis_cols if c in basis_df.columns]
+                if available:
+                    rename = {c: f"fut_{c}" for c in available}
+                    df = df.join(basis_df[available].rename(columns=rename), how="left")
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 缺失列用 NaN 填充
+        for col in ["fut_inventory", "fut_inventory_chg", "fut_spot_price",
+                     "fut_near_basis", "fut_dom_basis",
+                     "fut_near_basis_rate", "fut_dom_basis_rate"]:
+            if col not in df.columns:
+                df[col] = float("nan")
+
+        return df
+
     def get_stock_panel(self, symbols: list[str], days: int = 500,
                         trace_id: str = "") -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
         """获取任意股票列表的 OHLCV 面板数据。"""
@@ -226,6 +327,8 @@ __all__ = [
     "DataUnavailableError",
     "FundamentalProvider",
     "FundamentalDataError",
+    "FuturesDataProvider",
+    "FuturesDataError",
     "get_data_provider",
     "get_fundamental_provider",
 ]

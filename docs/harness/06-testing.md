@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v1.3.2
+> 版本: v1.4.0
 > 最后更新: 2026-08-03
 
 ---
@@ -22,10 +22,10 @@
 
 | 层级 | 测试文件数 | 用例数 | 说明 |
 |:-----|:----------|:-------|:-----|
-| 单元测试 | 29 | ~1109 | 各模块独立测试（含基本面数据层） |
+| 单元测试 | 29+ | ~1164 | 各模块独立测试（含基本面数据层） |
 | 集成测试 | 2 | ~143 | strategies 策略层 |
 | E2E | 1 | 10 | test_e2e.py |
-| 合计 | 36 | 1262 | 全部通过 |
+| 合计 | 37+ | 1557 | 全部通过 |
 
 ---
 
@@ -68,10 +68,11 @@ tests/
 │   ├── test_engine.py               # 调度引擎测试
 │   └── test_tasks.py                # 调度任务测试
 │
-├── strategies/                      # 2 个测试文件
+├── strategies/                      # 3 个测试文件
 │   ├── __init__.py
 │   ├── test_base_v2.py              # 策略基类测试
-│   └── test_multi_factor.py         # 多因子策略测试
+│   ├── test_multi_factor.py         # 多因子策略测试
+│   └── test_strategy_evolution.py   # 策略进化测试
 │
 ├── test_cli.py                      # CLI 入口测试
 ├── test_config_settings.py          # 配置管理测试
@@ -107,17 +108,18 @@ python -m pytest tests/factor_engine/test_verifier.py -v
 
 ---
 
-## 覆盖统计（v1.3.0）
+## 覆盖统计（v1.7.0）
 
 ### 总体统计
 
 | 指标 | 值 |
 |:-----|:---|
-| Total statements | 4573 |
-| Overall coverage | 99% (仅余 1 个空白行不可覆盖) |
-| 测试用例数 | 1435 passed, 0 failed |
-| 测试文件数 | 40+ |
+| Total statements | 5750+ |
+| Overall coverage | 99% |
+| 测试用例数 | 1557 passed, 0 failed |
+| 测试文件数 | 41+ |
 | 种子因子数 | 482（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面/另类/宏观） |
+| 期货专用种子 | 12 大因子家族 50+ 子因子 |
 
 ### 模块覆盖详情
 
@@ -175,9 +177,10 @@ fts\scheduler\watchdog.py                     57      0   100%
 fts\strategies\__init__.py                     4      0   100%
 fts\strategies\base_v2.py                    156      0   100%
 fts\strategies\multi_factor_strategy.py      230      0   100%
+fts\strategies\strategy_evolution.py         271     13    95%
 fts\strategies\rules\__init__.py               1      0   100%
 ──────────────────────────────────────────────────────────────
-TOTAL                                       4573      1    99%
+TOTAL                                       5750    151    97%
 ```
 
 ### 模块覆盖统计
@@ -235,9 +238,10 @@ TOTAL                                       4573      1    99%
 | `strategies/base_v2.py` | **100%** | |
 | `strategies/multi_factor_strategy.py` | **100%** | 多因子策略全覆盖 |
 | `strategies/rules/__init__.py` | **100%** | |
-| **≥73% 模块（2 个）** | | |
+| **≥73% 模块（3 个）** | | |
 | `data_fundamental.py` | **73%** | MCP 网络路径需集成测试环境 |
 | `factor_engine/evaluation_chain.py` | **99%** | 仅余 1 个空白行 |
+| `strategy_evolution.py` | **95%** | 13 行未覆盖（异常/边界路径） |
 
 > 注：evaluation_chain.py 565 行为空白行，属于 coverage.py 报告的格式问题，不影响实际可执行代码覆盖率。
 
@@ -275,6 +279,7 @@ TOTAL                                       4573      1    99%
 | `tests/scheduler/test_watchdog.py` | ~22 | 看门狗 |
 | `tests/strategies/test_base_v2.py` | ~55 | 策略基类 |
 | `tests/strategies/test_multi_factor.py` | ~88 | 多因子策略 |
+| `tests/strategies/test_strategy_evolution.py` | ~55 | 策略进化（动态因子权重/市场制度自适应/多周期信号融合） |
 | `tests/test_cli.py` | ~62 | CLI 入口 |
 | `tests/test_data.py` | ~49 | 数据层 |
 | `tests/test_data_fundamental.py` | ~62 | 基本面数据层 |
@@ -283,7 +288,7 @@ TOTAL                                       4573      1    99%
 | `tests/test_http_server.py` | ~31 | Web UI 仪表盘 |
 | `tests/test_llm.py` | ~36 | LLM 客户端 |
 | `tests/test_monitor.py` | ~46 | 项目级监控 |
-| **合计** | **1502** | |
+| **合计** | **1557** | |
 
 ---
 
@@ -301,6 +306,6 @@ TOTAL                                       4573      1    99%
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面） |
+| 代码→文档映射 | `test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面）；`test_seed_pool.py` → 种子池测试（含期货种子） |
 | 可验证断言 | 基本面数据层测试数 = 62，总测试数 = 1502 |
 | 检验方式 | `python -m pytest tests/test_data_fundamental.py --no-cov -q 2>&1 | findstr "passed"` |

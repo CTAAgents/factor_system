@@ -2,7 +2,8 @@
 FTS — Factor Trading System
 
 从 FDT 剥离的独立因子策略系统，专注于多因子挖掘、演化与交易。
-数据层基于腾讯自选股 MCP (akshare) 提供 A 股和 ETF 行情数据。
+数据层基于腾讯自选股 MCP (akshare) 提供 A 股/ETF 行情数据，
+基于 DuckDB + AKShare 提供期货连续合约数据。
 
 核心模块：
     - core: 核心契约层（因子引擎 TypedDict 契约 + FTS 特有枚举）
@@ -11,13 +12,13 @@ FTS — Factor Trading System
     - strategies: 策略层（多因子策略）
     - scheduler: 调度层
     - cli: 统一命令行入口
-    - data / data_mcp: MCP 数据适配层
+    - data / data_mcp / data_futures: 数据适配层（A 股/ETF/期货）
 
-版本: v1.5.0（MCPBridge 数据桥接 + 每日信号生成管道：447 Elite 因子 × CSI300 实时信号输出）"""
+版本: v1.7.0（策略进化：动态因子权重 + 市场制度自适应 + 多周期信号融合）"""
 
 from pathlib import Path
 
-__version__ = "1.5.0"
+__version__ = "1.7.0"
 
 # ── 自动加载 .env ────────────────────────────────────────
 _env_loaded = False

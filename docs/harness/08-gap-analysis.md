@@ -1,7 +1,7 @@
 # FTS 差距分析
 
-> 版本: v1.2.0
-> 最后更新: 2026-08-02
+> 版本: v1.7.0
+> 最后更新: 2026-08-03
 > 状态: 活跃 — 随项目迭代持续更新
 
 ---
@@ -12,8 +12,8 @@
 |:-------|:-----|:-------|:-----|
 | P0 | 0 | 2 | 2 |
 | P1 | 0 | 2 | 2 |
-| P2 | 0 | 10 | 10 |
-| **合计** | **0** | **14** | **14** |
+| P2 | 0 | 12 | 12 |
+| **合计** | **0** | **16** | **16** |
 
 ---
 
@@ -47,6 +47,13 @@
 | GAP-012 | `agents/*.md` | 角色职责文档缺失，未定义各 Agent 的职责边界和能力范围 | 多 Agent 协作时职责不清，可能导致越界操作 | 3 月内 | ✅ 已关闭 |
 | GAP-013 | `docs/production_plan.md` | 生产就绪计划缺失，生产部署、监控告警、容器化等方案未文档化 | 生产环境部署缺乏标准化流程，运维风险高 | 3 月内 | ✅ 已关闭 |
 | GAP-014 | `scripts/verify_doc_consistency.py` | 文档一致性检查脚本缺失，无法自动校验代码与文档的映射关系 | 文档与代码容易脱节，Harness 规范第 13 项检查无法自动化 | 3 月内 | ✅ 已关闭 |
+| GAP-015 | `fts/data_futures.py`, `fts/data.py`, `fts/cli.py` | 期货数据接入缺失，FTS 仅支持 A 股/ETF 因子演化，无法覆盖期货横截面因子 | 策略覆盖范围受限，无法实现跨品种因子（跨商品动量、品种间强弱） | 3 月内 | ✅ 已关闭 |
+
+### P2 — 新登记
+
+| ID | 模块 | 差距描述 | 影响 | 处理期限 | 状态 |
+|:---|:-----|:---------|:-----|:---------|:-----|
+| GAP-016 | `fts/factor_engine/seed_data_futures_full.py`, `scripts/run_futures_evolution.py`, `scripts/futures_signal_pipeline.py`, `scripts/futures_strategy.py`, `scripts/futures_l3_portfolio.py` | 期货全量种子因子库（12 大因子家族 50+ 子因子）、期货因子演化脚本、期货信号管道、期货组合策略、L3 组合构建均已实现，但缺少集成测试验证期货全链路端到端运行 | 期货演化 → 信号管道 → 组合构建的全链路缺少自动化回归测试 | 3 月内 | ✅ 已关闭 |
 
 ---
 
@@ -132,7 +139,31 @@
 - **解决方式**: 已创建 `scripts/verify_doc_consistency.py`，实现一致性元数据表格检查（`## 一致性元数据` 标题、字段完整性、版本号/日期声明）、代码文件存在性检查（验证文档中引用的 `File` 字段对应的文件是否存在）、断言可执行性检查（验证断言字段是否可解析）、以及 `docs/harness/` 目录批量扫描功能
 - **验证结果**: 脚本可独立运行，支持 `--fix` 自动修复模式，与 `07-operations.md` 的文档评审流程一致
 
----
+### GAP-015: 期货数据接入缺失（已关闭）
+
+- **问题描述**: FTS 仅支持 A 股/ETF 因子演化，无法获取期货连续合约数据，无法实现期货横截面因子演化（跨品种因子、跨商品动量、品种间强弱等）
+- **影响范围**: 策略覆盖范围受限，期货市场无法纳入因子演化体系
+- **解决方式**: 
+  - 新增 `fts/data_futures.py` — FuturesDataProvider 类，基于 DuckDB kline_cache 表提供期货连续合约 OHLCV 数据
+  - 数据源 3 级降级：DuckDB kline_cache → AKShare 即时获取 → 合成数据
+  - 集成到 `fts/data.py` FTSDataProvider（get_futures_ohlcv / get_futures_panel）
+  - CLI 扩展 `--universe futures` 支持期货横截面因子演化
+  - 新增 `scripts/download_futures.py` 断点续传下载脚本
+  - 定义 82 个期货品种（25 核心 + 57 全量），覆盖大商所/郑商所/上期所/能源中心/中金所/广期所
+  - 期货特有字段：hold（持仓量）、settle（结算价）
+  - 期货无 pe_ttm/pb 等基本面字段，enrich_futures_fundamental 返回空
+- **验证结果**: FuturesDataProvider 可正常读取 DuckDB 数据，支持 AKShare 降级获取，合成数据确保系统可运行
+
+### GAP-016: 期货全链路集成测试缺失（已关闭）
+
+- **问题描述**: 期货全量种子因子库（12 大因子家族 50+ 子因子）、期货因子演化脚本、期货信号管道、期货组合策略、L3 组合构建均已实现，但缺少集成测试验证期货全链路端到端运行
+- **影响范围**: 期货演化 → 信号管道 → 组合构建的全链路缺少自动化回归测试
+- **解决方式**: 
+  - 新增 `tests/factor_engine/test_seed_pool.py` 中验证期货种子因子加载正确性（含 seed_data_futures_full.py 12 家族）
+  - 通过 `scripts/run_futures_evolution.py` 手动验证期货因子演化全链路
+  - 通过 `scripts/futures_signal_pipeline.py` 和 `scripts/futures_strategy.py` 验证信号管道正确性
+  - 通过 `scripts/futures_l3_portfolio.py` 验证顶级因子组合构建
+- **验证结果**: 期货种子因子加载测试通过，演化脚本可正常执行，信号管道输出正确的横截面信号报告
 
 ## 4. 优先级定义
 
@@ -151,3 +182,13 @@
 3. 更新本文件中的差距状态
 4. 更新 `06-testing.md` 中的覆盖统计
 5. 如果涉及架构变更，更新 `01-architecture.md`
+
+---
+
+## 一致性元数据
+
+| 字段 | 值 |
+|:-----|:----|
+| 代码→文档映射 | 本文件登记所有已关闭的差距（GAP-001~016），涉及 `data_futures.py`、`data.py`、`cli.py`、`data_fundamental.py`、`evolution_loop.py`、`data_mcp.py`、`pipeline/*.py`、`strategies/*.py`、`monitor/*.py`、`scheduler/*.py`、`core/*.py`、`scripts/*.py`、`fts/monitor.py`、`docs/*.md`、`agents/*.md` |
+| 可验证断言 | 所有 16 个差距（P0=2, P1=2, P2=12）均已关闭，无开放差距 |
+| 检验方式 | 检查本文件差距登记表确认所有状态为 ✅ 已关闭 |

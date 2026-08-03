@@ -168,6 +168,21 @@ class EvolutionLoop:
             if promoted_seeds > 0:
                 print(f"[evo] 种子因子晋升: {promoted_seeds} 个")
 
+            # 使用已晋升的种子作为父因子（只有高IC种子才值得演化）
+            parent_seeds = [s for s in seeds if s["factor_id"] in elite_ids]
+            if not parent_seeds:
+                print("[evo] 无合格父因子，跳过演化循环")
+                self.state_manager.mark_completed(state)
+                return EvolutionRunResult(
+                    run_id=run_id, trace_id=trace_id,
+                    generations_completed=0,
+                    total_factors_evaluated=0,
+                    total_factors_promoted=0,
+                    tokens_consumed=state.get("tokens_consumed", 0),
+                    status="completed",
+                    elite_factor_ids=elite_ids,
+                )
+
             for generation in range(start_gen, start_gen + max_gen):
                 # 熔断检查
                 cb_reason = self._check_circuit_breaker(state)
@@ -184,8 +199,8 @@ class EvolutionLoop:
                         elite_factor_ids=elite_ids,
                     )
 
-                # 选择父因子（轮询种子池）
-                parent = seeds[(generation - 1) % len(seeds)]
+                # 选择父因子（轮询已晋升的种子池）
+                parent = parent_seeds[(generation - 1) % len(parent_seeds)]
 
                 # ── Step 1: 宏观演化（LLM 改逻辑） ──
                 try:

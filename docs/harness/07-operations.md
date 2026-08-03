@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v1.4.0
+> 版本: v1.7.0
 > 最后更新: 2026-08-03
 
 ---
@@ -9,7 +9,11 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v1.7.0** | 2026-08-03 | 策略进化：动态因子权重（DynamicWeightStrategy）+ 市场制度自适应（RegimeAdaptiveStrategy）+ 多周期信号融合（MultiPeriodSignalFusion）+ 55 测试用例全绿，strategy_evolution.py 95% 覆盖率 |
+| **v1.6.0** | 2026-08-03 | 期货自治循环：L1/L2/L3 全自动调度（APScheduler 定时任务）+ 期货基本面数据接入（库存/仓单/基差）+ 信号管道定时任务 + 5 个注册任务（L1:08:30 / L2:23:00 / L3:20:00 / 信号管道:20:30 / 健康检查:每10m）+ 期货全量种子因子库（12 大因子家族 50+ 子因子）+ 期货因子演化脚本 + 顶级因子过滤（IC>0.3）接入信号管道 + 信号报告输出到 reports/{date}/ |
 | **v0.1.0** | 2026-07-18 | 从 FDT 剥离，完成 Phase 1-7，220 测试全绿 |
+| **v1.5.1** | 2026-08-03 | 期货组合构建与信号生成：L3 PortfolioLoop 构建组合策略（组合夏普 5.43），新增 scripts/futures_signal_pipeline.py 期货横截面信号管道（66 期货 Elite 因子），生成 25 核心品种信号报告（含 Top 20 排名与因子贡献分析） |
+| **v1.5.0** | 2026-08-03 | 期货数据接入：新增 FuturesDataProvider（DuckDB kline_cache + AKShare futures_zh_daily_sina），FTSDataProvider 集成 get_futures_ohlcv/get_futures_panel，CLI 扩展 --universe futures 支持期货横截面因子演化，新增 scripts/download_futures.py 断点续传下载脚本，82 个期货品种（25 核心 + 57 全量），3 级数据降级（DuckDB → AKShare → 合成） |
 | **v1.4.0** | 2026-08-03 | 基本面/另类/宏观因子加入种子池（482 种子）；新增 FundamentalProvider 数据层 + 23 个基本面种子因子（估值/质量/成长/市值/换手率/宏观/另类复合）；seed_data 新增 fundamental_seeds.py；loader 支持基本面种子加载；1502 测试全绿，99% 覆盖率 |
 | **v1.3.2** | 2026-08-03 | 代码审核提升：消除 `_evaluate_and_promote_seeds` 重复横截面逻辑，提取 3 个公共 Mock fixture（`mock_trial`/`mock_optuna_study`/`mock_evolve_micro`）；1432 测试全绿，99% 覆盖率，47/47 模块 100% 覆盖率 |
 | **v1.3.1** | 2026-08-03 | 代码审核提升：重构 `parse_program_md` 为数据驱动解析（76→48 行），提取 `_evaluate_cross_section` 方法（178→155 行），拆分 Eager Test；1432 测试全绿，99% 覆盖率，46/47 模块 100% 覆盖率 |
@@ -27,8 +31,8 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 
 | 文件 | 字段 |
 |:-----|:-----|
-| `fts/__init__.py` | `__version__ = "1.2.0"` |
-| `pyproject.toml` | `version = "1.2.0"` |
+| `fts/__init__.py` | `__version__ = "1.7.0"` |
+| `pyproject.toml` | `version = "1.7.0"` |
 
 异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v1.1.0），与 FTS 项目版本同步。
 
@@ -89,9 +93,11 @@ fts <command> [options]
 |:-------|:-----|:-----|
 | `version` | — | 打印版本号 |
 | `monitor` | `--json` | 检查所有循环健康状态 |
-| `evolution run` | `--max-generations N` | 启动 L2 因子演化主循环 |
+| `evolution run` | `--max-generations N`, `--universe {single,csi300,futures}`, `--max-stocks N` | 启动 L2 因子演化主循环（支持单标/沪深300/期货横截面） |
 | `meta-loop run` | — | 启动 L1 Meta-Loop |
 | `portfolio run` | — | 启动 L3 组合构建 |
+| `scheduler run` | — | 启动调度器后台运行（APScheduler） |
+| `scheduler list` | — | 列出所有已注册定时任务 |
 | `factor list` | `--elite-dir PATH` | 列出 elite 因子 |
 | `factor show <factor_id>` | `--elite-dir PATH` | 查看单个因子详情 |
 
@@ -163,7 +169,43 @@ Tokens today    : 0
 
 ---
 
-## 5. 版本升级流程
+## 5. 定时任务调度器
+
+### 启动方式
+
+```bash
+# 后台运行（APScheduler）
+python -m fts.cli scheduler run
+
+# 列出所有已注册任务
+python -m fts.cli scheduler list
+```
+
+### 注册任务清单
+
+| 任务名 | cron 表达式 | 时间 | 说明 |
+|:-------|:------------|:-----|:-----|
+| `l1_meta_loop` | `30 8 * * *` | 每日 08:30 | L1 Meta-Loop：知识补给 + Bootstrapping + 种子注入 |
+| `l2_evolution_loop` | `0 23 * * *` | 每日 23:00 | L2 Evolution Loop：夜间因子演化（LLM + optuna + 横截面） |
+| `l3_portfolio_loop` | `0 20 * * *` | 每日 20:00 | L3 Portfolio Loop：组合构建 + 正交化 + 衰减检验 + 信号合成 |
+| `futures_signal_pipeline` | `30 20 * * *` | 每日 20:30 | 期货信号管道：独立生成横截面信号报告 |
+| `health_check` | `*/10 * * * *` | 每 10 分钟 | 健康检查：监控所有循环状态 |
+
+### 依赖
+
+调度器依赖 APScheduler：
+
+```bash
+pip install apscheduler
+```
+
+### 降级策略
+
+如果 APScheduler 未安装，`SchedulerEngine.start()` 静默返回 False，所有任务不执行，系统正常运行。
+
+---
+
+## 6. 版本升级流程
 
 ### 常规升级步骤
 
@@ -208,6 +250,6 @@ Tokens today    : 0
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `fts/__init__.py` __version__ = "1.4.0"；`pyproject.toml` version = "1.4.0" |
-| 可验证断言 | 版本号 v1.4.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
-| 检验方式 | `python -c "import fts; assert fts.__version__ == '1.4.0'"` |
+| 代码→文档映射 | `fts/__init__.py` __version__ = "1.7.0"；`pyproject.toml` version = "1.7.0" |
+| 可验证断言 | 版本号 v1.7.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
+| 检验方式 | `python -c "import fts; assert fts.__version__ == '1.7.0'"` |

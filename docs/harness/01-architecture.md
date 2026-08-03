@@ -1,19 +1,20 @@
 # FTS 系统架构文档
 
-> 版本: v1.4.0
+> 版本: v1.7.0
 > 最后更新: 2026-08-03
 
 ---
 
 ## 1. 项目概述
 
-FTS（Factor Intelligence System，因子智能系统）是一个独立的因子策略系统，专注于因子推演、策略组建与交易信号产出。数据层基于腾讯自选股 MCP (akshare) 提供 A 股和 ETF 行情数据，FTS **本身包含自洽的数据源适配层**，无外部数据项目依赖。
+FTS（Factor Intelligence System，因子智能系统）是一个独立的因子策略系统，专注于因子推演、策略组建与交易信号产出。数据层基于腾讯自选股 MCP (akshare) 提供 A 股/ETF/期货行情数据，FTS **本身包含自洽的数据源适配层**，无外部数据项目依赖。
 
 ### 项目边界
 
 | 职责 | 归属 |
 |:-----|:-----|
 | 行情数据获取（A 股/ETF OHLCV） | **FTS（通过 MCP/akshare 接入腾讯/东方财富 API）** |
+| 行情数据获取（期货 OHLCV） | **FTS（通过 DuckDB kline_cache + AKShare futures_zh_daily_sina）** |
 | 因子推演（挖掘/演化/评估） | **FTS 核心能力** |
 | 多因子策略组建 | **FTS 核心能力** |
 | 交易信号产出 | **FTS 核心能力** |
@@ -111,10 +112,12 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 
 ```
 fts/
-├── __init__.py                 # 包入口 + 版本号 v1.1.0
+├── fts/__init__.py                 # 包入口 + 版本号 v1.7.0
 ├── cli.py                      # 统一命令行入口
-├── data.py                     # 数据层（MCP 统一入口）
+├── data.py                     # 数据层（MCP + 期货 + 期货基本面统一入口）
 ├── data_mcp.py                 # MCP 数据适配层（akshare 腾讯/东方财富）
+├── data_futures.py             # 期货数据适配层（DuckDB kline_cache + AKShare）
+├── data_futures_fundamental.py # 期货基本面数据（库存/仓单/基差 — AKShare）
 ├── llm.py                      # LLM 客户端（OpenAI/Anthropic/Mock）
 ├── config/                     # 配置系统
 │   └── settings.py             # FTSConfig + load_config()
@@ -154,11 +157,17 @@ fts/
 │   └── factor_combiner.py      # 因子组合器
 ├── strategies/                 # 策略层
 │   ├── base_v2.py              # BaseStrategyV2
-│   └── multi_factor_strategy.py# 多因子策略
+│   ├── multi_factor_strategy.py# 多因子策略
+│   └── strategy_evolution.py   # 策略进化（动态因子权重/市场制度自适应/多周期信号融合）
 └── monitor/                    # 健康监控
     ├── __init__.py             # 状态报告函数
     ├── http_server.py          # HTTP 监控端点
-    └── elite_tracker.py        # Elite 因子追踪
+ │   └── elite_tracker.py        # Elite 因子追踪
+├── scheduler/                   # 调度层
+│   ├── __init__.py             # 模块入口 + 导出
+│   ├── engine.py               # SchedulerEngine（APScheduler 包装器）
+│   ├── tasks.py                # TaskRegistry + TaskSpec + 注册默认任务
+│   └── jobs.py                 # 任务工作函数（L1/L2/L3/信号管道/健康检查）
 ```
 
 ---
@@ -168,16 +177,36 @@ fts/
 ### 全局数据流
 
 ```
-MCP/akshare (腾讯自选股/东方财富 API)
-    │
-    │ pip install fts[mcp] (akshare >=1.18.64)
-    │ OHLCV K 线数据 (A 股 / ETF)
-    ▼
-FTS (因子推演)
+MCP/akshare (腾讯自选股/东方财富 API)     DuckDB kline_cache (期货)
+    │                                          │
+    │ OHLCV K 线数据 (A 股 / ETF)              │ OHLCV 日线 (期货连续合约)
+    │                                          │
+    ▼                                          ▼
+FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
     │
     │ 因子引擎 → 策略组建 → 交易信号
     ▼
 下游系统（信号消费方）
+```
+
+### 期货数据流
+
+```
+AKShare futures_zh_daily_sina
+    │
+    │ scripts/download_futures.py（断点续传）
+    ▼
+DuckDB kline_cache (data/fts_history.duckdb)
+    │
+    │ FuturesDataProvider._from_kline_cache()     ← 优先级1
+    │ AKShare 即时获取（降级）                       ← 优先级2
+    │ 合成数据（降级）                                ← 优先级3
+    ▼
+FTSDataProvider.get_futures_ohlcv() / get_futures_panel()
+    │
+    │ --universe futures
+    ▼
+EvolutionLoop（期货横截面因子演化，跨品种因子计算）
 ```
 
 ### FTS 内部数据流
@@ -244,9 +273,10 @@ Verifier 是 FTS 的核心安全机制，锁定后不可逆：
 
 | 循环 | 触发时间 | 频率 | 职责 |
 |:-----|:---------|:-----|:-----|
-| L1 Meta-Loop | 09:00 | 每日 | 知识补给 + 种子注入 |
+| L1 Meta-Loop | 08:30 | 每日 | 知识补给 + 种子注入 |
 | L2 Evolution Loop | 23:00 | 每日 | 夜间因子演化 |
-| L3 Portfolio Loop | 06:00 (周一) | 每周 | 组合构建 + 信号合成 |
+| L3 Portfolio Loop | 20:00 | 每日 | 组合构建 + 正交化 + 信号合成 |
+| 期货信号管道 | 20:30 | 每日 | 横截面信号报告（IC>0.3 顶级因子） |
 | Health Check | 每 10 分钟 | 高频 | 状态监控 |
 
 ---
@@ -258,6 +288,7 @@ Verifier 是 FTS 的核心安全机制，锁定后不可逆：
 - **演化依赖（可选）**: optuna (evolution extra)
 - **LLM 依赖（可选）**: openai, anthropic (llm extra)
 - **数据依赖（可选）**: akshare >= 1.18.64 (mcp extra)
+- **期货数据（可选）**: duckdb >= 0.8.0, akshare >= 1.18.64
 - **测试**: pytest 7.4+, pytest-cov 4.1+
 - **打包**: setuptools, pyproject.toml
 
@@ -267,6 +298,6 @@ Verifier 是 FTS 的核心安全机制，锁定后不可逆：
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `seed_pool.py` → 种子池 482 因子（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面/另类/宏观）；`data_fundamental.py` → FundamentalProvider 基本面数据层 |
-| 可验证断言 | 种子池总数 = 482；基本面数据层提供 4 大类 30+ 字段 |
-| 检验方式 | `python -c "from fts.factor_engine.seed_pool import SeedPool; assert len(SeedPool().load_all_seeds()) == 482"` |
+| 代码→文档映射 | `seed_pool.py` → 种子池 482 因子（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面）+ 期货 12 家族 50+ 子因子；`data_fundamental.py` → FundamentalProvider 基本面数据层；`data_futures.py` → FuturesDataProvider 期货数据层（59 个品种，DuckDB kline_cache + AKShare 降级）；`data_futures_fundamental.py` → FuturesFundamentalProvider 期货基本面数据（库存/仓单/基差）；`scheduler/` → 调度层（5 个 APScheduler 定时任务：L1:08:30 / L2:23:00 / L3:20:00 / 信号管道:20:30 / 健康检查:每10m）；`strategies/strategy_evolution.py` → 策略进化（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion） |
+| 可验证断言 | 种子池总数 = 482；期货数据层支持 59 个连续合约品种，数据源优先级 3 级（DuckDB → AKShare → 合成）；调度器注册 5 个任务；策略进化模块包含 3 种策略（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion） |
+| 检验方式 | `python -c "from fts.scheduler.tasks import list_tasks; assert len(list_tasks()) == 5"` |

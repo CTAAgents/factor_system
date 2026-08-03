@@ -2,9 +2,9 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-1502%20passing-brightgreen)](#)
+[![Tests](https://img.shields.io/badge/tests-1557%20passing-brightgreen)](#)
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)](#)
-[![Version](https://img.shields.io/badge/version-1.4.0-blue)](#)
+[![Version](https://img.shields.io/badge/version-1.7.0-blue)](#)
 
 ---
 
@@ -18,7 +18,7 @@ FTS 是一个 AI 原生的量化因子智能系统，实现三层进化循环：
 
 项目定位：**MCP/akshare（腾讯/东方财富数据源）← FTS（因子智能 → 交易信号）**
 
-仅支持 A 股和 ETF 因子演化（期货因子已移除）。
+支持 A 股、ETF 和 82 个期货品种（25 核心 + 57 全量）的横截面因子演化，支持期货基本面数据（库存/仓单/基差）注入，支持 APScheduler 全自动 L1/L2/L3 定时调度。
 
 ## 快速开始
 

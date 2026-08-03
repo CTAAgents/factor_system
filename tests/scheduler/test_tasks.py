@@ -49,26 +49,32 @@ def fresh_registry() -> TaskRegistry:
 
 DEFAULT_TASKS = {
     "l1_meta_loop": {
-        "cron": "0 9 * * *",
-        "callable": "fts.factor_engine.meta_loop.MetaLoop.run",
-        "desc": "L1 Meta-Loop：每日知识补给 + Bootstrapping + debate_round 分析",
+        "cron": "30 8 * * *",
+        "callable": "fts.scheduler.jobs.l1_meta_loop_job",
+        "desc": "L1 Meta-Loop：每日知识补给 + Bootstrapping + 种子注入",
         "prefix": "fts.l1",
     },
     "l2_evolution_loop": {
         "cron": "0 23 * * *",
-        "callable": "fts.factor_engine.evolution_loop.EvolutionLoop.run",
-        "desc": "L2 Evolution Loop：夜间因子演化（LLM 改逻辑 + optuna 调参）",
+        "callable": "fts.scheduler.jobs.l2_evolution_loop_job",
+        "desc": "L2 Evolution Loop：夜间因子演化（LLM 改逻辑 + optuna 调参 + 横截面评估）",
         "prefix": "fts.l2",
     },
     "l3_portfolio_loop": {
-        "cron": "0 6 * * 1",
-        "callable": "fts.factor_engine.portfolio_loop.PortfolioLoop.run",
-        "desc": "L3 Portfolio Loop：组合构建 + 正交化 + 衰减检验",
+        "cron": "0 20 * * *",
+        "callable": "fts.scheduler.jobs.l3_portfolio_loop_job",
+        "desc": "L3 Portfolio Loop：组合构建 + 正交化 + 衰减检验 + 信号合成",
         "prefix": "fts.l3",
+    },
+    "futures_signal_pipeline": {
+        "cron": "30 20 * * *",
+        "callable": "fts.scheduler.jobs.futures_signal_pipeline_job",
+        "desc": "期货信号管道：独立生成期货横截面信号报告",
+        "prefix": "fts.signal",
     },
     "health_check": {
         "cron": "*/10 * * * *",
-        "callable": "fts.factor_engine.monitor.check_all",
+        "callable": "fts.scheduler.jobs.health_check_job",
         "desc": "健康检查：监控所有循环状态",
         "prefix": "fts.health",
     },
@@ -181,10 +187,10 @@ def test_registry_is_taskregistry():
 # ─── register_default_tasks ─────────────────────────────
 
 
-def test_register_default_tasks_registers_four():
-    """register_default_tasks 注册 4 个默认任务。"""
+def test_register_default_tasks_registers_five():
+    """register_default_tasks 注册 5 个默认任务。"""
     register_default_tasks()
-    assert len(REGISTRY) == 4
+    assert len(REGISTRY) == 5
 
 
 @pytest.mark.parametrize("name,expected", DEFAULT_TASKS.items())
@@ -215,10 +221,10 @@ def test_register_default_tasks_idempotent():
 def test_list_tasks_returns_sorted():
     """list_tasks 返回按 name 排序的列表，自动注册默认任务。"""
     tasks = list_tasks()
-    assert len(tasks) == 4
+    assert len(tasks) == 5
     names = [t.name for t in tasks]
     assert names == sorted(names)
-    assert names == ["health_check", "l1_meta_loop", "l2_evolution_loop", "l3_portfolio_loop"]
+    assert names == ["futures_signal_pipeline", "health_check", "l1_meta_loop", "l2_evolution_loop", "l3_portfolio_loop"]
 
 
 def test_list_tasks_after_manual_register():
@@ -226,7 +232,7 @@ def test_list_tasks_after_manual_register():
     register_default_tasks()
     REGISTRY.register(TaskSpec("custom_job", "0 12 * * *", "mod.custom"))
     tasks = list_tasks()
-    assert len(tasks) == 5
+    assert len(tasks) == 6
     names = [t.name for t in tasks]
     assert "custom_job" in names
 
@@ -239,7 +245,7 @@ def test_get_task_returns_spec():
     spec = get_task("l1_meta_loop")
     assert spec is not None
     assert spec.name == "l1_meta_loop"
-    assert spec.cron_expression == "0 9 * * *"
+    assert spec.cron_expression == "30 8 * * *"
 
 
 def test_get_task_nonexistent():

@@ -2,16 +2,17 @@
 fts.scheduler.tasks — FTS 定时任务注册表。
 
 任务清单（默认）:
-    - l1_meta_loop      : 每日 09:00 触发 L1 Meta-Loop（知识补给）
-    - l2_evolution_loop : 每日 23:00 触发 L2 因子演化（夜间演化）
-    - l3_portfolio_loop : 每周一 06:00 触发 L3 组合构建
-    - health_check      : 每 10 分钟触发健康检查
+    - l1_meta_loop          : 每日 08:30 触发 L1 Meta-Loop（知识补给 + 种子注入）
+    - l2_evolution_loop     : 每日 23:00 触发 L2 因子演化（夜间演化）
+    - l3_portfolio_loop     : 每日 20:00 触发 L3 组合构建（含信号合成）
+    - futures_signal_pipeline: 每日 20:30 触发期货信号管道（独立版）
+    - health_check          : 每 10 分钟触发健康检查
 
 cron 表达式格式（5 字段）: minute hour day-of-month month day-of-week
 
 HARNESS §trace_id 全链路: 每个 task 启动时生成独立 trace_id。
 
-版本: v0.1.0
+版本: v0.2.0
 """
 
 from __future__ import annotations
@@ -87,29 +88,36 @@ def register_default_tasks() -> None:
     defaults = [
         TaskSpec(
             name="l1_meta_loop",
-            cron_expression="0 9 * * *",          # 每日 09:00
-            callable_path="fts.factor_engine.meta_loop.MetaLoop.run",
-            description="L1 Meta-Loop：每日知识补给 + Bootstrapping + debate_round 分析",
+            cron_expression="30 8 * * *",          # 每日 08:30
+            callable_path="fts.scheduler.jobs.l1_meta_loop_job",
+            description="L1 Meta-Loop：每日知识补给 + Bootstrapping + 种子注入",
             trace_id_prefix="fts.l1",
         ),
         TaskSpec(
             name="l2_evolution_loop",
             cron_expression="0 23 * * *",         # 每日 23:00
-            callable_path="fts.factor_engine.evolution_loop.EvolutionLoop.run",
-            description="L2 Evolution Loop：夜间因子演化（LLM 改逻辑 + optuna 调参）",
+            callable_path="fts.scheduler.jobs.l2_evolution_loop_job",
+            description="L2 Evolution Loop：夜间因子演化（LLM 改逻辑 + optuna 调参 + 横截面评估）",
             trace_id_prefix="fts.l2",
         ),
         TaskSpec(
             name="l3_portfolio_loop",
-            cron_expression="0 6 * * 1",          # 每周一 06:00
-            callable_path="fts.factor_engine.portfolio_loop.PortfolioLoop.run",
-            description="L3 Portfolio Loop：组合构建 + 正交化 + 衰减检验",
+            cron_expression="0 20 * * *",         # 每日 20:00
+            callable_path="fts.scheduler.jobs.l3_portfolio_loop_job",
+            description="L3 Portfolio Loop：组合构建 + 正交化 + 衰减检验 + 信号合成",
             trace_id_prefix="fts.l3",
+        ),
+        TaskSpec(
+            name="futures_signal_pipeline",
+            cron_expression="30 20 * * *",        # 每日 20:30（L3 之后独立运行）
+            callable_path="fts.scheduler.jobs.futures_signal_pipeline_job",
+            description="期货信号管道：独立生成期货横截面信号报告",
+            trace_id_prefix="fts.signal",
         ),
         TaskSpec(
             name="health_check",
             cron_expression="*/10 * * * *",       # 每 10 分钟
-            callable_path="fts.factor_engine.monitor.check_all",
+            callable_path="fts.scheduler.jobs.health_check_job",
             description="健康检查：监控所有循环状态",
             trace_id_prefix="fts.health",
         ),

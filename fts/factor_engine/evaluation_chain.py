@@ -461,6 +461,10 @@ def cross_section_evaluate_backtest(
         4. 在每期计算截面 Spearman IC
         5. 聚合所有期的 IC 均值/标准差
 
+    自动检测信号方向:
+        - 如果多空组合收益均值为负，自动翻转信号并重新计算指标
+        - 确保因子方向与预测目标一致
+
     Returns:
         BacktestMetrics
     """
@@ -485,8 +489,20 @@ def cross_section_evaluate_backtest(
     ic_std = float(np.std(ics, ddof=1)) if len(ics) > 1 else 0.0
     icir = float(ic_mean / max(ic_std, 1e-10))
 
-    # Step 4: 多空组合收益 + 最终指标
+    # Step 4: 多空组合收益 + 方向检测
     ls_returns = _cs_long_short_returns(oos_signal, oos_ret)
+    ls_mean = float(np.mean(ls_returns))
+
+    # 如果多空收益为负，翻转信号方向
+    if ls_mean < 0:
+        oos_signal_flipped = -oos_signal
+        ls_returns = _cs_long_short_returns(oos_signal_flipped, oos_ret)
+        # 重新计算 IC（翻转后 Spearman 相关取反）
+        ics_flipped = [-ic for ic in ics]
+        ic_mean = -ic_mean  # Spearman 相关取反
+        icir = -icir
+        ics = ics_flipped
+
     sharpe = _compute_sharpe(ls_returns)
     cumulative = np.cumsum(ls_returns)
     max_dd = _compute_max_drawdown(cumulative)

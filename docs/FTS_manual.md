@@ -1,8 +1,8 @@
 # FTS 用户手册
 
-> **版本 1.2.0 · 最后更新 2026-08-02**
+> **版本 1.6.0 · 最后更新 2026-08-03**
 
-FTS 是一个**因子智能系统**——它每天自动分析市场数据，生成交易信号，帮你做量化投资决策。
+FTS 是一个**因子智能系统**——它每天自动分析市场数据，生成交易信号，帮你做量化投资决策。支持 A 股/ETF 和**期货**双市场因子演化与信号生成。
 
 ---
 
@@ -60,8 +60,8 @@ OPENAI_MODEL=deepseek-chat
 fts version
 
 # 看到类似输出就对了:
-# FTS version: 1.2.0
-# Factor engine version: 1.2.0
+# FTS version: 1.6.0
+# Factor engine version: 1.6.0
 ```
 
 > 如果提示 `fts` 命令找不到，请使用模块模式：
@@ -71,17 +71,24 @@ fts version
 
 ### 第四步：启动因子演化
 
-以沪深 300 ETF（代码 510300）为例：
+系统支持**股票**和**期货**双市场因子演化：
 
+**股票模式**（以沪深 300 ETF 为例）：
 ```powershell
 fts evolution run --symbol 510300 --max-generations 3
 ```
 
+**期货横截面模式**（跨品种因子演化）：
+```powershell
+fts evolution run --universe futures --max-generations 3
+```
+
 系统会：
-1. 从腾讯自选股/东方财富 API 获取 500 天的历史数据
-2. 用 268 个种子因子（9 内置 + 101 世坤 + 158 Qlib）开始演化
-3. 每代尝试改进因子代码和参数
-4. 输出评估结果
+1. 从腾讯自选股/东方财富 API 获取 A 股/ETF 数据，或从 DuckDB 加载期货截面数据
+2. 用 482 个种子因子（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面）开始演化
+3. 期货模式额外加载 12 大因子家族 50+ 子因子（期限结构、动量、波动率等）
+4. 每代尝试改进因子代码和参数
+5. 输出评估结果
 
 ### 第五步：打开监控仪表盘
 
@@ -102,9 +109,10 @@ fts ui
 ### 你每天该做什么
 
 ```
-早晨 09:00 → L1 Meta-Loop 自动运行（市场感知）
+早晨 08:30 → L1 Meta-Loop 自动运行（市场感知 + 知识补给）
+晚间 20:00 → L3 Portfolio 自动运行（组合构建 + 信号合成）
+晚间 20:30 → 期货信号管道自动运行（横截面信号报告）
 晚间 23:00 → L2 Evolution 自动运行（因子演化）
-每周一 06:00 → L3 Portfolio 自动运行（组合构建）
 随时       → fts ui 打开仪表盘查看状态
 ```
 
@@ -123,10 +131,13 @@ fts evolution run --symbol 000001 --max-generations 5
 # 4. 运行横截面演化（沪深300全部成分股）
 fts evolution run --universe csi300 --max-stocks 20
 
-# 5. 查看产出的因子
+# 5. 运行期货横截面因子演化
+fts evolution run --universe futures --max-generations 3
+
+# 6. 查看产出的因子
 fts factor list
 
-# 6. 查看某个因子的详情
+# 7. 查看某个因子的详情
 fts factor show fct_3f9a2b1c
 ```
 
@@ -153,9 +164,9 @@ fts portfolio run
 
 ## FTS 的一天
 
-系统每天自动运行三个循环，不需要你手动操作。
+系统每天自动运行三个循环 + 信号管道，不需要你手动操作。
 
-### 🌅 早上 09:00 — L1 Meta-Loop（市场感知）
+### 🌅 早上 08:30 — L1 Meta-Loop（市场感知 + 知识补给）
 
 系统起床后的第一件事：看看今天市场发生了什么。
 
@@ -189,9 +200,9 @@ fts portfolio run
 如果连续失败太多 → 熔断，停止演化
 ```
 
-### 📅 每周一 06:00 — L3 Portfolio Loop（组合构建）
+### 📊 晚上 20:00 — L3 Portfolio Loop（组合构建）
 
-把一周产出的因子组合成交易信号。
+把 Elite 因子组合成交易信号，每日运行。
 
 ```
 1. 加载所有 elite 因子
@@ -199,6 +210,18 @@ fts portfolio run
 3. 剔除相关度太高的因子（正交化）
 4. 计算衰减（过时的因子降低权重）
 5. 输出最终组合信号
+```
+
+### 📈 晚上 20:30 — 期货信号管道
+
+独立生成期货横截面信号报告，每日运行。
+
+```
+1. 加载期货 Elite 因子（IC>0.3 顶级因子）
+2. 从 DuckDB 加载 59 个期货品种日线数据
+3. 方向校正（截面 IC 法，自动反转 IC<0 的因子）
+4. IC 加权合成综合得分
+5. 输出排名 + 信号报告到 reports/{date}/
 ```
 
 ### ⏰ 每 10 分钟 — 健康检查
@@ -226,6 +249,7 @@ fts portfolio run
 | `fts evolution run --symbol 510300` | 对沪深 300 ETF 做演化 |
 | `fts evolution run --max-generations 5` | 只跑 5 代 |
 | `fts evolution run --universe csi300` | 横截面模式（沪深 300 成分股） |
+| `fts evolution run --universe futures` | 期货横截面模式（跨品种因子演化） |
 | `fts evolution run --universe csi300 --max-stocks 20` | 横截面模式，限 20 只股票 |
 
 ### 因子管理
@@ -267,7 +291,7 @@ fts ui --host 0.0.0.0           # 局域网可访问
 
 ```yaml
 # 主要配置项
-default_market: "stock"               # 只做股票/ETF
+default_market: "stock"               # 默认市场类型（stock/futures）
 max_generations: 10                   # 每轮演化最大代数
 micro_trials_per_generation: 50       # 每代调参次数
 log_level: "INFO"                     # 日志级别
@@ -293,11 +317,15 @@ OPENAI_MODEL=deepseek-chat
 
 ### 数据源
 
-系统默认从**腾讯自选股 API**（qt.gtimg.cn）和**东方财富 API**（akshare）获取 A 股和 ETF 的日线数据。
+**A 股/ETF**：系统从**腾讯自选股 API**（qt.gtimg.cn）和**东方财富 API**（akshare）获取日线数据。
+
+**期货**：系统从本地 DuckDB 数据库（`data/fts_history.duckdb`）读取 59 个期货品种日线数据，数据通过 AKShare `futures_zh_daily_sina` 下载。
+
+**期货基本面**：系统支持通过 AKShare 获取库存、仓单、基差等基本面数据。
 
 - 不需要额外的账号或 Key
 - 网络不可用时自动使用**合成数据**（不影响测试运行）
-- 仅支持股票和 ETF（不支持期货）
+- 数据源 3 级降级：DuckDB → AKShare → 合成数据
 
 ---
 
@@ -359,13 +387,21 @@ fts factor show fct_xxxx
 
 ### 5. 怎么获取真实数据
 
-系统使用腾讯自选股公开 API，不需要额外配置。
-如果取不到数据（网络问题），会自动使用合成数据，不影响系统运行。
+A 股/ETF 使用腾讯自选股公开 API，不需要额外配置。
+期货数据需要先运行下载脚本：
+
+```powershell
+python scripts/download_futures.py
+```
 
 验证数据是否正常：
 
 ```powershell
-python -c "from fts.data_mcp import MCPDataProvider; df = MCPDataProvider().get_ohlcv('510300', days=250); print(df.shape)"
+# A 股
+python -c "from fts.data import FTSDataProvider; df = FTSDataProvider().get_ohlcv('510300', days=250); print(df.shape)"
+
+# 期货
+python -c "from fts.data import FTSDataProvider; panel, dates = FTSDataProvider().get_futures_panel(['RB0','TA0'], days=250); print(len(panel))"
 ```
 
 ### 6. 怎么看系统在干什么
@@ -385,23 +421,25 @@ fts ui
 
 | 资源 | 位置 |
 |------|------|
-| 代码 Wiki | `docs/CODE_WIKI.md` |
+| 代码 Wiki | `CODE_WIKI.md` |
 | 执行模式流程图 | `docs/execution_modes_flowchart.md` |
 | 业务流程图 | `docs/business_flow.md` |
 | 生产部署 | `docs/production_plan.md` |
 | 工程规范 | `docs/harness/` |
 | 角色职责 | `agents/fts-agent.md` |
+| 策略手册 | `docs/strategy_manual.md` |
 | README | `README.md` |
 
 ### 工程指标
 
 | 指标 | 值 |
 |------|:---:|
-| 版本 | v1.2.0 |
-| 测试通过 | 1325 / 1325（100%）|
+| 版本 | v1.6.0 |
+| 测试通过 | 1502 / 1502（100%）|
 | 覆盖率 | 99%（46 个模块）|
-| 种子因子 | 268（9 内置 + 101 世坤 + 158 Qlib）|
-| 定时任务 | 4 个 |
+| 种子因子 | 482（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面）|
+| 期货专用种子 | 12 大因子家族 50+ 子因子 |
+| 定时任务 | 5 个 |
 
 ### 项目结构（简版）
 
@@ -409,13 +447,30 @@ fts ui
 factor_system/
 ├── fts/                   # 核心代码
 │   ├── cli.py             # 命令行入口
-│   ├── data_mcp.py        # 数据源（腾讯 API）
+│   ├── data.py            # 统一数据层（A 股/ETF/期货）
+│   ├── data_mcp.py        # MCP 数据适配（akshare 腾讯/东方财富）
+│   ├── data_futures.py    # 期货数据适配（DuckDB + AKShare）
+│   ├── data_futures_fundamental.py  # 期货基本面数据
 │   ├── llm.py             # AI 客户端
 │   ├── factor_engine/     # 因子引擎（核心）
+│   │   ├── seed_data/     # 种子因子库（WQ101 + Qlib158 + GTJA191）
+│   │   ├── evolution_loop.py    # L2 演化主循环
+│   │   ├── meta_loop.py         # L1 元循环
+│   │   ├── portfolio_loop.py    # L3 组合循环
+│   │   ├── seed_data_futures.py # 期货基础种子因子
+│   │   └── seed_data_futures_full.py # 期货全量种子因子（12 家族）
 │   ├── monitor/           # 监控 + Web UI
-│   └── scheduler/         # 定时任务
+│   └── scheduler/         # 定时任务调度
+├── scripts/               # 辅助脚本
+│   ├── download_futures.py          # 期货数据下载
+│   ├── futures_signal_pipeline.py   # 期货信号管道
+│   ├── futures_strategy.py          # 期货组合策略
+│   ├── futures_l3_portfolio.py      # 期货 L3 组合构建
+│   └── run_futures_evolution.py     # 期货因子演化启动
 ├── config/                # 配置文件
-├── tests/                 # 测试（1325 个）
+├── tests/                 # 测试（1502 个）
 ├── docs/                  # 文档
+│   └── harness/           # 工程规范
+├── reports/               # 信号报告（按日期分文件夹）
 └── memory/                # 运行时数据（自动创建）
 ```
