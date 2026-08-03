@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v1.7.3
+> 版本: v1.8.0
 > 最后更新: 2026-08-03
 
 ---
@@ -9,6 +9,7 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v1.8.0** | 2026-08-03 | 信号管道 v5 多空双向 + 信号增量：管道升级为多空双向排名（按信号强度绝对值排序），新增信号增量追踪（较昨日变化判断趋势加速/衰竭），信号快照 JSON 持久化 + JSONL 历史追加，L3 Portfolio Loop 自动触发信号管道（全量 82 品种），README 拆分股票/期货种子因子；版本号 1.7.3→1.8.0 |
 | **v1.7.3** | 2026-08-03 | 信号管道 Ridge 回归加权：`_compute_ridge_weights` 基于 L2 正则化学习因子权重（替代 IC>0.3 硬过滤+等权），弱因子保留不丢弃；新增 21 个测试用例（`tests/test_futures_signal_pipeline.py`）；调度任务修复（`futures_signal_pipeline` 默认注册）；基本面数据测试适配 FundamentalProvider API 变更 |
 | **v1.7.2** | 2026-08-03 | 信号管道全量商品池：L3/定时任务改为 `--universe all`（82 品种 FUTURES_SUBSET 剔除金融期货，剔除停更/陈旧品种后 72 品种参与评分）；报告输出品种中文名称（FUTURES_SYMBOL_NAMES）、主力合约代码（get_dominant_contracts：contract_kline 最新交易日最大成交量 + AKShare futures_zh_realtime 持仓量 fallback）、盘中实时价（AKShare 分时最新 close，覆盖 72/72）；新增 8 测试用例（名称映射 + 主力合约判定 + AKShare fallback） |
 | **v1.7.1** | 2026-08-03 | 期货全量信号修复：`get_futures_panel()` common_dates 改为多数对齐（≥ 品种数//2），修复 WH0/JR0/RI0/LR0 停更品种清空交集导致方向校正失效的问题；信号管道方向校正改为按日期定位（df.index.get_loc）；管道新增 `--universe all` 支持全量 76 商品期货（FUTURES_SUBSET 剔除金融期货）；信号管道剔除停更/陈旧品种（最新交易日早于共同日期末端）；Elite 因子 MA 计算修复（np.convolve mode='same' 尾部边界 bug → rolling mean）；新增 12 测试用例（test_data_futures_panel.py） |
@@ -33,8 +34,8 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 
 | 文件 | 字段 |
 |:-----|:-----|
-| `fts/__init__.py` | `__version__ = "1.7.3"` |
-| `pyproject.toml` | `version = "1.7.3"` |
+| `fts/__init__.py` | `__version__ = "1.8.0"` |
+| `pyproject.toml` | `version = "1.8.0"` |
 
 异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v1.1.0），与 FTS 项目版本同步。
 

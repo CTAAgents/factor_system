@@ -16,6 +16,11 @@ scripts/futures_signal_pipeline.py — 期货每日信号生成管道
     未来 5 日收益的 Spearman 秩相关性），如果平均 IC < 0 则反转信号。
     这比 v1 的时序相关性方法更符合横截面因子投资逻辑。
 
+排名方法（v5 — 多空双向 + 信号增量）:
+    期货支持多空双向交易，排名按信号强度（绝对值）排序，
+    输出分多头信号 (做多) 和空头信号 (做空) 两部分。
+    新增信号增量追踪（较昨日变化），用于判断趋势加速/衰竭。
+
 因子加权方法（v3 — Ridge 回归）:
     基于 Shen & Xiu 的弱信号理论：当因子信号普遍较弱时，
     L2 正则化（Ridge）优于 L1 选择（Lasso/硬阈值）。
@@ -44,6 +49,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 ELITE_DIR = PROJECT_ROOT / "memory/knowledge/factors/futures_elite"
 REPORTS_ROOT = PROJECT_ROOT / "reports"
+
+
+def _yesterday_str() -> str:
+    """返回昨日日期字符串 (YYYY-MM-DD)。"""
+    from datetime import timedelta
+    return (date.today() - timedelta(days=1)).isoformat()
 
 
 def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]]:
@@ -421,7 +432,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     t0 = time.time()
     today = date.today().isoformat()
     print("=" * 60)
-    print(f"  期货信号生成管道 v3 (Ridge加权) — {today}")
+    print(f"  期货信号生成管道 v5 (多空双向 + 信号增量) — {today}")
     print("=" * 60)
 
     # ── Step 1: 加载全部期货 Elite 因子（Ridge 加权模式下不过滤 IC）──
@@ -499,12 +510,54 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     elapsed = time.time() - t0
     print(f"\n  耗时: {elapsed:.1f}s, 成功: {len(sym_scores)} 个品种")
 
-    # ── Step 4: 输出信号排名 ──
+    # ── Step 4: 保存信号快照 + 加载昨日信号计算增量 ──
+    report_dir = REPORTS_ROOT / today
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    # 保存今日信号快照 (JSON)
+    snapshot_path = report_dir / "signal_scores.json"
+    snapshot_path.write_text(
+        json.dumps({"date": today, "scores": sym_scores}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    # 追加到历史 JSONL
+    history_path = REPORTS_ROOT / "signal_scores_history.jsonl"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(history_path, "a", encoding="utf-8") as hf:
+        hf.write(json.dumps({"date": today, "scores": sym_scores}, ensure_ascii=False) + "\n")
+
+    # 加载昨日信号，计算增量
+    try:
+        yesterday_snapshot = report_dir.parent / _yesterday_str() / "signal_scores.json"
+        if yesterday_snapshot.exists():
+            prev_data = json.loads(yesterday_snapshot.read_text(encoding="utf-8"))
+            prev_scores: dict[str, float] = prev_data.get("scores", {})
+            # 计算每个品种的信号增量
+            sym_deltas: dict[str, float] = {}
+            for sym, score in sym_scores.items():
+                prev = prev_scores.get(sym)
+                if prev is not None:
+                    sym_deltas[sym] = score - prev
+            has_delta = len(sym_deltas) > 0
+        else:
+            prev_scores = {}
+            sym_deltas = {}
+            has_delta = False
+    except Exception:
+        prev_scores = {}
+        sym_deltas = {}
+        has_delta = False
+
+    # ── Step 5: 输出信号排名 ──
     if not sym_scores:
         print("[ERROR] 无有效信号")
         return 1
 
-    ranked = sorted(sym_scores.items(), key=lambda x: -x[1])
+    # 多空双向排名：按信号强度（绝对值）排序
+    ranked = sorted(sym_scores.items(), key=lambda x: -abs(x[1]))
+    long_signals = [(s, sc) for s, sc in ranked if sc > 0]
+    short_signals = [(s, sc) for s, sc in ranked if sc < 0]
 
     # 4a: 品种元数据（名称 / 主力合约 / 盘中实时价）
     from fts.data_futures import (
@@ -531,34 +584,40 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
             return rt_prices[sym]
         return df.iloc[-1]["close"] if df is not None and not df.empty else 0.0
 
-    # 控制台输出
-    print(f"\n{'=' * 76}")
-    print(f"  期货信号排名 Top 20")
-    print(f"{'=' * 76}")
-    print(f"{'排名':>4s} {'品种':>6s} {'名称':>8s} {'主力合约':>9s} {'综合得分':>10s} {'实时价':>10s} {'Top因子':>28s}")
-    print(f"{'-'*4} {'-'*6} {'-'*8} {'-'*9} {'-'*10} {'-'*10} {'-'*28}")
+    # 控制台输出 — 多空双向
+    header = f"{'排名':>4s} {'品种':>6s} {'名称':>8s} {'主力合约':>9s} {'得分':>10s} {'实时价':>10s} {'Top因子':>28s}"
+    sep = f"{'-'*4} {'-'*6} {'-'*8} {'-'*9} {'-'*10} {'-'*10} {'-'*28}"
 
-    for i, (sym, score) in enumerate(ranked[:20], 1):
-        df = panel.get(sym)
-        price = _price(sym, df)
-        details = sym_details.get(sym, {})
-        top_factors = sorted(details.items(), key=lambda x: -abs(x[1]))[:3]
-        top_str = ", ".join(f"{n}({v:+.3f})" for n, v in top_factors)
-        print(f"{i:>4d} {sym:>6s} {_name(sym):>8s} {_contract(sym):>9s} "
-              f"{score:>+10.4f} {price:>10.2f} {top_str:<28s}")
+    def _print_signal_rows(signals, label, show_n=20):
+        if not signals:
+            print(f"\n  [{label}] 无信号")
+            return
+        print(f"\n{'=' * 76}")
+        print(f"  {label} (按信号强度排序)")
+        print(f"{'=' * 76}")
+        print(header)
+        print(sep)
+        for i, (sym, score) in enumerate(signals[:show_n], 1):
+            df = panel.get(sym)
+            price = _price(sym, df)
+            details = sym_details.get(sym, {})
+            top_factors = sorted(details.items(), key=lambda x: -abs(x[1]))[:3]
+            top_str = ", ".join(f"{n}({v:+.3f})" for n, v in top_factors)
+            print(f"{i:>4d} {sym:>6s} {_name(sym):>8s} {_contract(sym):>9s} "
+                  f"{score:>+10.4f} {price:>10.2f} {top_str:<28s}")
 
-    # 底部信号
-    print(f"\n{'─' * 76}")
-    print(f"  底部信号 Bottom 5")
-    for i, (sym, score) in enumerate(ranked[-5:], len(ranked) - 4):
-        df = panel.get(sym)
-        price = _price(sym, df)
-        print(f"  {i:>4d} {sym:>6s} {_name(sym):>8s} {_contract(sym):>9s} "
-              f"{score:>+10.4f} {price:>10.2f}")
+    _print_signal_rows(long_signals, "多头信号 (做多)")
+    _print_signal_rows(short_signals, "空头信号 (做空)")
 
-    # ── Step 5: 写入 Markdown 报告 ──
-    report_dir = REPORTS_ROOT / today
-    report_dir.mkdir(parents=True, exist_ok=True)
+    # 信号增量控制台输出
+    if has_delta:
+        delta_ranked = sorted(sym_deltas.items(), key=lambda x: x[1])
+        accel = [(s, d) for s, d in delta_ranked if d < 0][:5]
+        decel = [(s, d) for s, d in delta_ranked if d > 0][:5]
+        print(f"\n  [信号增量] 空头加速 Top5: {', '.join(f'{s}({d:+.3f})' for s, d in accel)}")
+        print(f"  [信号增量] 减速/反转 Top5: {', '.join(f'{s}({d:+.3f})' for s, d in decel)}")
+
+    # ── Step 6: 写入 Markdown 报告 ──
     suffix = "_all_commodities" if universe == "all" else ""
     out_path = report_dir / f"futures_signals{suffix}_{today}.md"
     lines: list[str] = []
@@ -574,40 +633,83 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     w(f"方向校正: 截面 IC 法（因子信号 vs 未来 5 日收益的 Spearman 秩相关）{flips_info}")
     w(f"最新价: 盘中实时价（AKShare 分时）优先，缺失用日线收盘 | 实时价覆盖 {rt_hit}/{len(sym_list)} 个品种")
     w()
-    w("## 信号排名 Top 20")
     w()
-    w("| 排名 | 品种 | 名称 | 主力合约 | 综合得分 | 最新价 | Top 3 因子贡献 |")
-    w("|------|------|------|----------|----------|--------|----------------|")
-    for i, (sym, score) in enumerate(ranked[:20], 1):
+    w("## 多头信号 (做多) — Top 20")
+    w()
+    w("| 排名 | 品种 | 名称 | 主力合约 | 方向 | 信号强度 | 最新价 | Top 3 因子贡献 |")
+    w("|------|------|------|----------|------|----------|--------|----------------|")
+    for i, (sym, score) in enumerate(long_signals[:20], 1):
         df = panel.get(sym)
         price = _price(sym, df)
         details = sym_details.get(sym, {})
         top3 = sorted(details.items(), key=lambda x: -abs(x[1]))[:3]
         top_str = " ".join(f"{n}({v:+.3f})" for n, v in top3)
-        w(f"| {i} | {sym} | {_name(sym)} | {_contract(sym)} | {score:+.4f} | {price:.2f} | {top_str} |")
+        w(f"| {i} | {sym} | {_name(sym)} | {_contract(sym)} | 多 | {abs(score):.4f} | {price:.2f} | {top_str} |")
+    if not long_signals:
+        w("| — | — | 无多头信号 | — | — | — | — | — |")
     w()
 
-    w("## 底部信号 Bottom 10")
+    w("## 空头信号 (做空) — Top 20")
     w()
-    w("| 排名 | 品种 | 名称 | 主力合约 | 综合得分 | 最新价 |")
-    w("|------|------|------|----------|----------|--------|")
-    for i, (sym, score) in enumerate(ranked[-10:], len(ranked) - 9):
+    w("| 排名 | 品种 | 名称 | 主力合约 | 方向 | 信号强度 | 最新价 | Top 3 因子贡献 |")
+    w("|------|------|------|----------|------|----------|--------|----------------|")
+    for i, (sym, score) in enumerate(short_signals[:20], 1):
         df = panel.get(sym)
         price = _price(sym, df)
-        w(f"| {i} | {sym} | {_name(sym)} | {_contract(sym)} | {score:+.4f} | {price:.2f} |")
+        details = sym_details.get(sym, {})
+        top3 = sorted(details.items(), key=lambda x: -abs(x[1]))[:3]
+        top_str = " ".join(f"{n}({v:+.3f})" for n, v in top3)
+        w(f"| {i} | {sym} | {_name(sym)} | {_contract(sym)} | 空 | {abs(score):.4f} | {price:.2f} | {top_str} |")
+    if not short_signals:
+        w("| — | — | 无空头信号 | — | — | — | — | — |")
     w()
 
     # 信号分布
     scores = [s for _, s in ranked]
+    abs_scores = [abs(s) for s in scores]
     w("## 信号分布")
     w()
-    w(f"- 均值: {np.mean(scores):+.4f}")
-    w(f"- 中位数: {np.median(scores):+.4f}")
-    w(f"- 标准差: {np.std(scores):.4f}")
-    w(f"- 最大值: {max(scores):+.4f}")
-    w(f"- 最小值: {min(scores):+.4f}")
-    w(f"- 正信号占比: {sum(1 for s in scores if s > 0) / len(scores) * 100:.1f}%")
+    w(f"- 多头信号: {len(long_signals)} 个  |  空头信号: {len(short_signals)} 个")
+    w(f"- 信号强度均值: {np.mean(abs_scores):.4f}")
+    w(f"- 信号强度中位数: {np.median(abs_scores):.4f}")
+    w(f"- 信号强度标准差: {np.std(abs_scores):.4f}")
+    w(f"- 最强信号: {max(abs_scores):.4f}")
+    w(f"- 最弱信号: {min(abs_scores):.4f}")
+    w(f"- 综合得分范围: [{min(scores):+.4f}, {max(scores):+.4f}]")
     w()
+
+    # 信号变化（增量）— 用于判断趋势加速/衰竭
+    if has_delta:
+        delta_ranked = sorted(sym_deltas.items(), key=lambda x: -x[1])
+        accelerating = [(s, d) for s, d in delta_ranked if d < 0][:10]  # 空头加速
+        decelerating = [(s, d) for s, d in delta_ranked if d > 0][:10]  # 空头减速/多头萌芽
+        w("## 信号变化 (较昨日增量)")
+        w()
+        w("> 增量 = 今日得分 - 昨日得分。负增量 = 空头信号加强（加速下跌），")
+        w("> 正增量 = 空头信号减弱或向多头方向移动（减速/反转萌芽）。")
+        w("> **交易含义**：做空选加速品种（增量最负），做多关注减速品种（增量最正），")
+        w("> 避免追已到极值但增量停滞的品种（趋势衰竭）。")
+        w()
+        w("### 空头加速 Top 10（做空优先关注）")
+        w()
+        w("| 品种 | 名称 | 今日得分 | 昨日得分 | 增量 | 方向 |")
+        w("|------|------|----------|----------|------|------|")
+        for sym, delta in accelerating:
+            today_score = sym_scores.get(sym, 0)
+            prev_score = prev_scores.get(sym, 0)
+            direction = "加速下跌" if delta < 0 else "减速"
+            w(f"| {sym} | {_name(sym)} | {today_score:+.4f} | {prev_score:+.4f} | {delta:+.4f} | {direction} |")
+        w()
+        w("### 空头减速/反转萌芽 Top 10（做多关注）")
+        w()
+        w("| 品种 | 名称 | 今日得分 | 昨日得分 | 增量 | 方向 |")
+        w("|------|------|----------|----------|------|------|")
+        for sym, delta in decelerating:
+            today_score = sym_scores.get(sym, 0)
+            prev_score = prev_scores.get(sym, 0)
+            direction = "反转萌芽" if today_score > 0 else "空头减弱"
+            w(f"| {sym} | {_name(sym)} | {today_score:+.4f} | {prev_score:+.4f} | {delta:+.4f} | {direction} |")
+        w()
 
     # 因子贡献排名
     w("## 因子贡献排名（当前市场最有效的因子）")
@@ -630,15 +732,16 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         w(f"| {i} | {name} | {avg:+.4f} | {std:.4f} |")
     w()
 
-    # 全部品种信号排名
+    # 全部品种信号排名（按信号强度，含多空方向）
     w("## 全部品种信号排名")
     w()
-    w("| 排名 | 品种 | 名称 | 主力合约 | 综合得分 | 最新价 |")
-    w("|------|------|------|----------|----------|--------|")
+    w("| 排名 | 品种 | 名称 | 主力合约 | 方向 | 信号强度 | 最新价 |")
+    w("|------|------|------|----------|------|----------|--------|")
     for i, (sym, score) in enumerate(ranked, 1):
         df = panel.get(sym)
         price = _price(sym, df)
-        w(f"| {i} | {sym} | {_name(sym)} | {_contract(sym)} | {score:+.4f} | {price:.2f} |")
+        direction = "多" if score > 0 else "空"
+        w(f"| {i} | {sym} | {_name(sym)} | {_contract(sym)} | {direction} | {abs(score):.4f} | {price:.2f} |")
     w()
 
     report_dir.mkdir(parents=True, exist_ok=True)

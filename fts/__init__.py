@@ -18,7 +18,7 @@ FTS — Factor Trading System
 
 from pathlib import Path
 
-__version__ = "1.7.3"
+__version__ = "1.8.0"
 
 # ── 自动加载 .env ────────────────────────────────────────
 _env_loaded = False

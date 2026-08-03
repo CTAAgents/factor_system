@@ -85,9 +85,9 @@ def check_doc_assertions(doc_path: Path) -> list[str]:
 
     # 06-testing: 检查测试用例数
     if doc_name == "06-testing.md":
-        test_count = len(re.findall(r"1502", content))
+        test_count = len(re.findall(r"1602", content))
         if test_count == 0:
-            issues.append("测试用例数 1502 未在文档中体现")
+            issues.append("测试用例数 1602 未在文档中体现")
 
     # 07-operations: 检查版本号文件是否存在
     if doc_name == "07-operations.md":

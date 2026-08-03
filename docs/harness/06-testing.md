@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v1.4.0
+> 版本: v1.8.0
 > 最后更新: 2026-08-03
 
 ---
@@ -25,7 +25,7 @@
 | 单元测试 | 29+ | ~1185 | 各模块独立测试（含基本面数据层 + 信号管道） |
 | 集成测试 | 2 | ~143 | strategies 策略层 |
 | E2E | 1 | 10 | test_e2e.py |
-| 合计 | 37+ | 1599 | 1597 passed, 2 failed, 1 skipped |
+| 合计 | 37+ | 1602 | 1601 passed, 1 failed, 1 skipped |
 
 ---
 
@@ -291,7 +291,7 @@ TOTAL                                       5828    533    91%
 | `tests/test_futures_signal_pipeline.py` | ~21 | 信号管道 Ridge 回归加权 + 方向校正 + 组合合成 |
 | `tests/test_llm.py` | ~36 | LLM 客户端 |
 | `tests/test_monitor.py` | ~46 | 项目级监控 |
-| **合计** | **1599** | |
+| **合计** | **1602** | |
 
 ---
 
@@ -310,5 +310,5 @@ TOTAL                                       5828    533    91%
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | `test_futures_signal_pipeline.py` → 21 个信号管道测试用例（Ridge 回归加权 + 方向校正 + 组合合成）；`test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面）；`test_seed_pool.py` → 种子池测试（含期货种子） |
-| 可验证断言 | 信号管道测试数 = 21，总测试数 = 1599 |
+| 可验证断言 | 信号管道测试数 = 21，总测试数 = 1602 |
 | 检验方式 | `python -m pytest tests/test_futures_signal_pipeline.py --no-cov -q 2>&1 | findstr "passed"` |

@@ -336,7 +336,7 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
         if universe == "futures" and result.status in ("passed", "verifier_warning", "completed"):
             print("[portfolio] 触发期货信号生成管道...")
             from scripts.futures_signal_pipeline import main as signal_main
-            rc = signal_main()
+            rc = signal_main(max_symbols=82, days=120, universe="all")
             if rc != 0:
                 print(f"[portfolio] 信号管道异常退出: rc={rc}", file=sys.stderr)
         return 0
