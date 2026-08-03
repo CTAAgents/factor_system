@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v1.8.1
+> 版本: v1.9.0
 > 最后更新: 2026-08-03
 
 ---
@@ -62,8 +62,8 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  L2 Evolution Loop (演化循环 — 因子核心演化层)                           │
 │                                                                         │
-│  macro_evolution    →   micro_evolution    →   evaluation_chain        │
-│  (LLM 改逻辑)           (optuna 调参)          (三级评估链)              │
+│  parent_selection  →   macro_evolution    →   micro_evolution    →   evaluation_chain        │
+│  (UCT 树搜索)           (LLM 改逻辑 + 失败模式聚类)  (optuna 调参)          (三级评估链)              │
 │                                                                         │
 │  evolution_loop.py — L2 主循环协调器                                   │
 │  seed_pool.py — 种子池（482 个因子：9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面/另类/宏观 + L1 注入接口）
@@ -79,7 +79,7 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  verifier.py — Verifier 锁定协议                                       │
 │  state.py — 演化状态管理 + trace_id 全链路                              │
 │                                                                         │
-│  职责: 夜间批量演化 → LLM 逻辑改造 → optuna 参数优化 → 三级评估 → elite │
+│  职责: 夜间批量演化 → UCT 父因子选择 → LLM 逻辑改造(含失败模式聚类) → optuna 参数优化 → 三级评估 → elite │
 └─────────────────────────────┬────────────────────────────────────────────┘
                               │ elite 因子
                               ▼

@@ -34,11 +34,13 @@ def l1_meta_loop_job() -> None:
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.factor_engine.meta_loop import MetaLoop
+        from fts.llm import get_llm_client
         from fts.config import get_config
         cfg = get_config()
 
         loop = MetaLoop(
             memory_dir=cfg.memory_dir + "/meta_loop",
+            llm_client=get_llm_client(),
         )
         result = loop.run()
         logger.info("[L1] 完成: status=%s injected=%d",

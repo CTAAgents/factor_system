@@ -9,7 +9,7 @@ factorengine 核心约束（三层分离）：
     每次调用必须读取经验链摘要
     新因子变异必须显式说明"避免重复踩坑"的依据
 
-版本: v1.1.0（与 FTS 同步）
+版本: v1.9.0（与 FTS 同步，引入失败模式聚类）
 """
 # pylint: disable=too-few-public-methods,fixme
 
@@ -20,7 +20,7 @@ import re
 from typing import Optional
 
 from .contracts import EconomicLogic, ExperienceTrace, FactorProgram
-from .experience_chain import ExperienceChain
+from .experience_chain import ExperienceChain, FailurePatternAnalyzer
 from .factor_program import create_factor_program
 from ..llm import LLMClient, MockLLMClient, get_llm_client as _get_llm_client
 
@@ -47,6 +47,10 @@ class MacroEvolver:
     ):
         self.llm = llm_client or MockLLMClient()
         self.experience_chain = experience_chain
+        self._failure_analyzer = (
+            FailurePatternAnalyzer(experience_chain)
+            if experience_chain else None
+        )
         self.max_tokens_per_call = max_tokens_per_call
 
     def evolve(
@@ -157,6 +161,9 @@ class MacroEvolver:
 最近失败轨迹（避免重复踩坑）:
 {self._format_experience_for_prompt(recent_failure)}
 
+失败模式聚类分析（避免系统性重复犯错）:
+{self._format_failure_patterns()}
+
 任务: 生成代 {generation} 的新因子变异。
 
 规则:
@@ -225,6 +232,12 @@ class MacroEvolver:
             except (json.JSONDecodeError, IndexError):
                 pass
         return None
+
+    def _format_failure_patterns(self) -> str:
+        """格式化失败模式聚类分析，供 LLM prompt 使用。"""
+        if self._failure_analyzer is None:
+            return "(无经验链数据，无法分析)"
+        return self._failure_analyzer.format_for_llm(max_traces=20)
 
     @staticmethod
     def _apply_code_modification(original_code: str, modification: str) -> str:

@@ -4,7 +4,7 @@ loop_engine/contracts.py — L2 演化引擎契约层
 HARNESS §契约优先：所有模块必须基于本文件的 TypedDict/常量实现。
 任何字段变更必须 bump 版本号并更新 docs/harness/11-loop-engineering.md。
 
-版本: v1.1.0（与 FTS 项目版本同步）
+版本: 动态读取自 fts.__version__
 """
 
 from __future__ import annotations
@@ -14,8 +14,31 @@ from typing import Any, Literal, Optional, TypedDict
 
 # ─── 版本号（HARNESS §版本号纪律）─────────────────────────
 
-EVOLUTION_VERSION: str = "1.1.0"
-"""Loop Engine 版本号，与 FTS 项目版本同步。"""
+def _get_evolution_version() -> str:
+    """动态获取 FTS 版本号（延迟导入避免循环依赖）。"""
+    import sys
+    # 延迟导入，避免循环依赖
+    if "fts" in sys.modules:
+        return sys.modules["fts"].__version__
+    # 如果 fts 模块还未加载，读取 __init__.py 文件
+    try:
+        from pathlib import Path
+        init_file = Path(__file__).parent.parent / "__init__.py"
+        if init_file.exists():
+            content = init_file.read_text(encoding="utf-8")
+            # 简单解析 __version__ = "x.y.z"
+            for line in content.split("\n"):
+                if line.startswith("__version__"):
+                    # 提取版本号
+                    match = line.split("=")
+                    if len(match) >= 2:
+                        return match[1].strip().strip('"\'')
+    except Exception:
+        pass
+    return "unknown"
+
+EVOLUTION_VERSION: str = _get_evolution_version()
+"""Loop Engine 版本号，动态读取自 fts.__version__。"""
 
 
 # ─── 因子程序契约 ─────────────────────────────────────────

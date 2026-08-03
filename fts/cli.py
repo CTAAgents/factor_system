@@ -314,18 +314,24 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
     cfg = get_config()
     print(f"[portfolio] trace_id={trace_id} run_id={run_id}")
 
-    # 根据 universe 选择 elite 目录
+    # 根据 universe 选择 elite 目录和合成模式
     universe = getattr(args, "universe", "stock")
+    synthesis_mode = getattr(args, "synthesis_mode", None)
     if universe == "futures":
         elite_dir = str(Path(cfg.memory_dir) / "knowledge" / "factors" / "futures_elite")
+        if synthesis_mode is None:
+            synthesis_mode = "sharpe_weight"  # 期货保持原逻辑
     else:
         elite_dir = cfg.elite_dir
-    print(f"[portfolio] universe={universe} elite_dir={elite_dir}")
+        if synthesis_mode is None:
+            synthesis_mode = "elastic_net"  # 股票默认 Elastic Net
+    print(f"[portfolio] universe={universe} elite_dir={elite_dir} mode={synthesis_mode}")
 
     try:
         loop = PortfolioLoop(
             elite_dir=elite_dir,
             memory_dir=cfg.memory_dir + "/portfolio",
+            synthesis_mode=synthesis_mode,
         )
         result = loop.run()
         print(f"[portfolio] 完成: status={result.status} "
@@ -452,11 +458,11 @@ def build_parser() -> argparse.ArgumentParser:
                            help="最大演化代数（默认 10）")
     p_evo_run.add_argument("--symbol", type=str, default="000001",
                            help="演化目标品种代码（默认 000001 平安银行）")
-    p_evo_run.add_argument("--universe", type=str, default="single",
+    p_evo_run.add_argument("--universe", type=str, default="futures",
                            choices=["single", "csi300", "futures"],
-                           help="演化股票池类型: single（单标）/ csi300（沪深300横截面）/ futures（期货横截面）")
-    p_evo_run.add_argument("--max-stocks", type=int, default=50,
-                           help="横截面模式最大标的数（默认 50，0 = 使用全部品种）")
+                           help="演化品种池类型: futures（期货，默认）/ csi300（沪深300）/ single（单标）")
+    p_evo_run.add_argument("--max-stocks", type=int, default=0,
+                           help="横截面模式最大标的数（0 = 使用全部品种）")
     p_evo_run.set_defaults(func=_cmd_evolution_run)
 
     # meta-loop run
@@ -472,6 +478,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_port_run.add_argument("--universe", type=str, default="stock",
                             choices=["stock", "futures"],
                             help="因子池类型: stock（股票）/ futures（期货）")
+    p_port_run.add_argument("--synthesis-mode", type=str, default=None,
+                            choices=["equal_weight", "sharpe_weight", "elastic_net"],
+                            help="信号合成模式: elastic_net（股票默认）/ sharpe_weight（期货默认）/ equal_weight")
     p_port_run.set_defaults(func=_cmd_portfolio_run)
 
     # ui

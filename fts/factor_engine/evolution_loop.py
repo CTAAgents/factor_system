@@ -15,13 +15,14 @@ HARNESS §11-loop-engineering.md §2.2:
     - 连续 3 代 IC < 0.01 → circuit_broken
     - 失败率 > 90% → circuit_broken
 
-版本: v1.1.0（与 FTS 同步）
+版本: v1.9.0（与 FTS 同步，引入 UCT 父因子选择）
 """
 # pylint: disable=too-many-instance-attributes,too-many-arguments,too-many-positional-arguments,too-many-locals,too-few-public-methods,broad-exception-caught,import-outside-toplevel
 
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -51,6 +52,12 @@ from .micro_evolution import evolve_micro
 from .seed_pool import SeedPool
 from .state import EvolutionStateManager, generate_trace_id
 from .verifier import FactorVerifier, get_global_verifier
+
+
+# ─── UCT 常量 ─────────────────────────────────────────────
+
+UCT_EXPLORATION_C: float = 1.0
+"""UCT 探索常数。越大越倾向探索未访问的父因子。"""
 
 
 # ─── 演化结果 ─────────────────────────────────────────────
@@ -137,6 +144,8 @@ class EvolutionLoop:
         # 状态
         self._prior_evaluations: list[FactorEvaluation] = []
         self._consecutive_low_ic: int = 0
+        # UCT 统计: {factor_id: {"visits": int, "total_reward": float}}
+        self._uct_stats: dict[str, dict[str, float]] = {}
 
     def run(self, max_generation: Optional[int] = None) -> EvolutionRunResult:
         """执行 L2 演化循环。
@@ -199,8 +208,8 @@ class EvolutionLoop:
                         elite_factor_ids=elite_ids,
                     )
 
-                # 选择父因子（轮询已晋升的种子池）
-                parent = parent_seeds[(generation - 1) % len(parent_seeds)]
+                # 选择父因子（UCT 树搜索，平衡探索与利用）
+                parent = self._select_parent_uct(parent_seeds)
 
                 # ── Step 1: 宏观演化（LLM 改逻辑） ──
                 try:
@@ -242,6 +251,9 @@ class EvolutionLoop:
                     )
                 self._prior_evaluations.append(evaluation)
                 self.state_manager.increment_evaluated(state)
+
+                # ── UCT 反馈: 根据子因子表现更新父因子统计 ──
+                self._update_uct_stats(parent, evaluation)
 
                 # ── Step 4: Verifier 判定 ──
                 verifier_result = self.verifier.check(evaluation)
@@ -306,6 +318,53 @@ class EvolutionLoop:
             )
 
     # ─── 内部方法 ───
+
+    def _select_parent_uct(self, parents: list[FactorProgram]) -> FactorProgram:
+        """UCT 树搜索选择父因子，平衡探索与利用。
+
+        UCB = avg_reward + c * sqrt(ln(total_visits) / visits)
+
+        未访问的父因子（visits=0）返回无限大 UCB，确保优先探索。
+        """
+        total_visits = sum(
+            s.get("visits", 0) for s in self._uct_stats.values()
+        )
+        best_score = -float("inf")
+        best_parent = parents[0]
+
+        for p in parents:
+            fid = p["factor_id"]
+            stats = self._uct_stats.get(fid, {"visits": 0, "total_reward": 0.0})
+            visits = stats["visits"]
+            if visits == 0:
+                # 未访问 → 优先探索
+                return p
+            avg_reward = stats["total_reward"] / visits
+            exploration = UCT_EXPLORATION_C * math.sqrt(
+                math.log(max(total_visits, 1)) / visits
+            )
+            ucb = avg_reward + exploration
+            if ucb > best_score:
+                best_score = ucb
+                best_parent = p
+
+        return best_parent
+
+    def _update_uct_stats(
+        self, parent: FactorProgram, evaluation: FactorEvaluation
+    ) -> None:
+        """根据子因子评估结果更新父因子的 UCT 统计。
+
+        奖励 = abs(IC)（通过）/ 0（失败），鼓励 IC 高的父因子。
+        """
+        fid = parent["factor_id"]
+        if fid not in self._uct_stats:
+            self._uct_stats[fid] = {"visits": 0, "total_reward": 0.0}
+        bt = evaluation.get("level_1_backtest", {})
+        passed = evaluation.get("passed", False)
+        reward = abs(bt.get("ic", 0.0)) if passed else 0.0
+        self._uct_stats[fid]["visits"] += 1
+        self._uct_stats[fid]["total_reward"] += reward
 
     def _check_circuit_breaker(self, state: EvolutionState) -> Optional[str]:
         """熔断检查。返回原因字符串（None = 未触发）。"""
@@ -556,6 +615,7 @@ if __name__ == "__main__":  # pragma: no cover
 
 
 __all__ = [
+    "UCT_EXPLORATION_C",
     "EvolutionRunResult",
     "EvolutionLoop",
     "main",

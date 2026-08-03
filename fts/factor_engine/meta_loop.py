@@ -1157,12 +1157,15 @@ def main():
     provider = FTSDataProvider()
     logger.info("FTSDataProvider 已就绪 — 将用于 L1 感知步骤")
 
+    from fts.llm import get_llm_client
+
     # web_collector 保留为 None（参数为向后兼容保留），L1 感知在未来版本迁移至 FTSDataProvider 模式
     loop = MetaLoop(
         memory_dir=args.memory_dir,
         factor_pool_path=args.factor_pool,
         inject_dir=args.inject_dir,
         web_collector=None,
+        llm_client=get_llm_client(),
     )
     result = loop.run(max_bootstraps=args.max_bootstraps)
     print(f"L1 Meta-Loop 完成: {result.to_dict()}")

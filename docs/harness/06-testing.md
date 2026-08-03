@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v1.8.1
+> 版本: v1.9.0
 > 最后更新: 2026-08-03
 
 ---
@@ -25,7 +25,7 @@
 | 单元测试 | 29+ | ~1185 | 各模块独立测试（含基本面数据层 + 信号管道） |
 | 集成测试 | 2 | ~143 | strategies 策略层 |
 | E2E | 1 | 10 | test_e2e.py |
-| 合计 | 37+ | 1602 | 1601 passed, 1 skipped |
+| 合计 | 39+ | 1633 | 1633 passed |
 
 ---
 
@@ -42,7 +42,7 @@ tests/
 │   ├── test_contracts.py            # core contracts 测试
 │   └── test_enums.py                # enums 测试
 │
-├── factor_engine/                   # 13 个测试文件
+├── factor_engine/                   # 15 个测试文件
 │   ├── __init__.py
 │   ├── conftest.py                  # factor_engine fixture
 │   ├── test_contracts.py            # 契约定义测试
@@ -50,12 +50,14 @@ tests/
 │   ├── test_evolution_loop.py       # L2 主循环测试
 │   ├── test_experience_chain.py     # 经验链测试
 │   ├── test_factor_program.py       # 因子程序（安全沙箱）测试
+│   ├── test_failure_pattern.py      # 失败模式聚类分析测试
 │   ├── test_macro_evolution.py      # 宏观演化测试
 │   ├── test_meta_loop.py            # L1 元循环测试
 │   ├── test_monitor.py              # factor_engine monitor 测试
 │   ├── test_portfolio_loop.py       # L3 组合循环测试
 │   ├── test_program.py              # Program.md 测试
 │   ├── test_seed_pool.py            # 种子池测试
+│   ├── test_uct_selection.py        # UCT 树搜索父因子选择测试
 │   └── test_verifier.py             # Verifier 锁定协议测试
 │
 ├── pipeline/                        # 2 个测试文件
@@ -262,6 +264,7 @@ TOTAL                                       5828    533    91%
 | `tests/factor_engine/test_evolution_loop.py` | ~58 | L2 主循环 |
 | `tests/factor_engine/test_experience_chain.py` | ~19 | 经验链 |
 | `tests/factor_engine/test_factor_program.py` | ~32 | 因子程序 |
+| `tests/factor_engine/test_failure_pattern.py` | ~22 | 失败模式聚类分析 |
 | `tests/factor_engine/test_macro_evolution.py` | ~30 | 宏观演化 |
 | `tests/factor_engine/test_meta_loop.py` | ~77 | L1 元循环 |
 | `tests/factor_engine/test_micro_evolution.py` | ~8 | 微观演化（含 ImportError 覆盖） |
@@ -270,6 +273,7 @@ TOTAL                                       5828    533    91%
 | `tests/factor_engine/test_program.py` | ~16 | Program.md |
 | `tests/factor_engine/test_seed_pool.py` | ~16 | 种子池（含 GTJA191） |
 | `tests/factor_engine/test_stress_test.py` | ~32 | 压力测试 |
+| `tests/factor_engine/test_uct_selection.py` | ~10 | UCT 树搜索父因子选择 |
 | `tests/factor_engine/test_verifier.py` | ~12 | Verifier |
 | `tests/factor_engine/test_walk_forward.py` | ~57 | 走航验证 |
 | `tests/factor_engine/test_regime.py` | ~25 | 市场体制 |
@@ -291,7 +295,7 @@ TOTAL                                       5828    533    91%
 | `tests/test_futures_signal_pipeline.py` | ~21 | 信号管道 Ridge 回归加权 + 方向校正 + 组合合成 |
 | `tests/test_llm.py` | ~36 | LLM 客户端 |
 | `tests/test_monitor.py` | ~46 | 项目级监控 |
-| **合计** | **1602** | |
+| **合计** | **1633** | |
 
 ---
 
@@ -310,5 +314,5 @@ TOTAL                                       5828    533    91%
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | `test_futures_signal_pipeline.py` → 21 个信号管道测试用例（Ridge 回归加权 + 方向校正 + 组合合成）；`test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面）；`test_seed_pool.py` → 种子池测试（含期货种子） |
-| 可验证断言 | 信号管道测试数 = 21，总测试数 = 1602 |
+| 可验证断言 | 信号管道测试数 = 21，总测试数 = 1633 |
 | 检验方式 | `python -m pytest tests/test_futures_signal_pipeline.py --no-cov -q 2>&1 | findstr "passed"` |

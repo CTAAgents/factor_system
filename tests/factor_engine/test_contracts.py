@@ -29,8 +29,9 @@ from fts.factor_engine.contracts import (
 # ─── 版本号 ───────────────────────────────────────────────
 
 def test_evolution_version_matches_fts():
-    """版本号必须与 FTS 项目版本同步（v1.1.0 = MCP 数据源迁移）。"""
-    assert EVOLUTION_VERSION == "1.1.0"
+    """版本号必须与 FTS 项目版本同步（动态读取）。"""
+    from fts import __version__
+    assert EVOLUTION_VERSION == __version__
 
 
 # ─── TypedDict 实例化 ────────────────────────────────────

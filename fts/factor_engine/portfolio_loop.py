@@ -283,12 +283,14 @@ class PortfolioManager:
 def synthesize_signals(
     factors: list[dict[str, Any]],
     mode: str = "equal_weight",
+    elite_dir: str | Path | None = None,
 ) -> tuple[list[PortfolioSignal], float, float]:
     """信号合成。
 
     Args:
         factors: 每个 dict 必须含 factor_id, name, sharpe, ic, turnover, decay_6m
-        mode: "equal_weight" | "sharpe_weight" | "lightgbm"
+        mode: "equal_weight" | "sharpe_weight" | "elastic_net"
+        elite_dir: 精英因子目录（elastic_net 模式需要，用于加载因子代码）
 
     Returns:
         (signals, max_correlation, combo_turnover)
@@ -297,10 +299,32 @@ def synthesize_signals(
         return [], 0.0, 0.0
 
     n = len(factors)
-    signals: list[PortfolioSignal] = []
 
-    if mode == "equal_weight":
+    if mode == "elastic_net" and elite_dir is not None:
+        elastic_weights = _compute_elastic_net_weights(factors, Path(elite_dir))
+        if not elastic_weights:
+            logger.warning("[L3] Elastic Net 权重计算失败，回退到 sharpe_weight")
+            return synthesize_signals(factors, "sharpe_weight")
+
+        signals: list[PortfolioSignal] = []
+        for f in factors:
+            w = elastic_weights.get(f["factor_id"], 0.0)
+            signals.append(PortfolioSignal(
+                factor_id=f["factor_id"],
+                name=f["name"],
+                weight=w,
+                sharpe=f.get("sharpe", 0.0),
+                ic=f.get("ic", 0.0),
+                turnover=f.get("turnover", 0.0),
+                decay_6m=f.get("decay_6m", 0.0),
+                orthogonalized=True,   # Elastic Net L1 已做变量选择
+                retained=w > 0.0,
+            ))
+        logger.info("[L3] Elastic Net 完成: %d/%d 因子获得非零权重",
+                    sum(1 for s in signals if s["retained"]), len(signals))
+    elif mode == "equal_weight":
         w = 1.0 / n
+        signals = []
         for f in factors:
             signals.append(PortfolioSignal(
                 factor_id=f["factor_id"],
@@ -315,6 +339,7 @@ def synthesize_signals(
             ))
     elif mode == "sharpe_weight":
         total_sharpe = sum(max(f.get("sharpe", 0), 0.01) for f in factors)
+        signals = []
         for f in factors:
             w = max(f.get("sharpe", 0), 0.01) / total_sharpe if total_sharpe > 0 else 1.0 / n
             signals.append(PortfolioSignal(
@@ -329,7 +354,8 @@ def synthesize_signals(
                 retained=True,
             ))
     else:
-        # lightgbm 模式暂回退等权
+        # lightgbm 等未实现模式暂回退等权
+        signals = []
         for f in factors:
             signals.append(PortfolioSignal(
                 factor_id=f["factor_id"],
@@ -348,6 +374,165 @@ def synthesize_signals(
     total_turnover = sum(s.get("turnover", 0) for s in signals) / len(signals) if signals else 0.0
 
     return signals, max_corr, total_turnover
+
+
+def _compute_elastic_net_weights(
+    factors: list[dict[str, Any]],
+    elite_dir: Path,
+    days: int = 120,
+    max_stocks: int = 50,
+    l1_ratio: float = 0.5,
+    cv_folds: int = 5,
+) -> dict[str, float]:
+    """Elastic Net 截面回归确定因子权重。
+
+    步骤:
+        1. 加载 CSI300 面板数据 + 基本面字段
+        2. 对每个因子，逐股票执行因子代码获取信号序列
+        3. 逐日截面回归: 因子信号[t] → 5 日前向收益
+        4. 平均各日回归系数绝对值 → 归一化 → 权重
+
+    Args:
+        factors: 因子列表
+        elite_dir: 精英因子目录（含因子代码 JSON）
+        days: 回溯天数
+        max_stocks: 最大股票数
+        l1_ratio: ElasticNet L1 比例（0=Ridge, 1=Lasso）
+        cv_folds: 交叉验证折数
+
+    Returns:
+        {factor_id: weight} 映射（权重和为 1.0）
+    """
+    try:
+        from sklearn.linear_model import ElasticNetCV
+    except ImportError:
+        logger.warning("[L3] scikit-learn 未安装，无法使用 Elastic Net")
+        return {}
+
+    import numpy as np
+    from ..data import FTSDataProvider
+    from .factor_program import FactorExecutor
+
+    # ── 1. 加载 CSI300 面板数据 ──
+    provider = FTSDataProvider()
+    panel, common_dates = provider.get_csi300_panel(
+        days=days, max_stocks=max_stocks, fundamental=True,
+    )
+    if not panel or len(common_dates) < 20:
+        logger.warning("[L3] 面板数据不足（需 ≥20 个交易日），回退")
+        return {}
+
+    n_dates = len(common_dates)
+    stocks = sorted(panel.keys())
+    n_stocks = len(stocks)
+    logger.info("[L3] Elastic Net 数据: %d 只股票 × %d 个交易日", n_stocks, n_dates)
+
+    # ── 2. 加载因子代码 ──
+    factor_codes: dict[str, dict[str, Any]] = {}
+    for fp in sorted(elite_dir.glob("*.json")):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            fid = data.get("factor_id", "")
+            if fid and data.get("code"):
+                factor_codes[fid] = data
+        except Exception:
+            continue
+
+    valid_factors = [f for f in factors if f["factor_id"] in factor_codes]
+    if len(valid_factors) < 2:
+        logger.warning("[L3] 有效因子不足（需 ≥2），回退")
+        return {}
+
+    n_factors = len(valid_factors)
+    logger.info("[L3] Elastic Net 因子: %d 个（含代码）", n_factors)
+
+    # ── 3. 计算因子信号矩阵: [n_dates, n_stocks, n_factors] ──
+    signal_matrix = np.full((n_dates, n_stocks, n_factors), np.nan)
+    for j, f in enumerate(valid_factors):
+        fid = f["factor_id"]
+        fdata = factor_codes[fid]
+        try:
+            executor = FactorExecutor(fdata)
+        except Exception:
+            continue
+        for i, sym in enumerate(stocks):
+            df = panel[sym]
+            try:
+                sig = executor.execute(df, fdata.get("params", {}))
+                aligned = np.full(n_dates, np.nan)
+                for t, d in enumerate(common_dates):
+                    if d in df.index:
+                        idx = list(df.index).index(d)
+                        aligned[t] = float(sig[idx]) if idx < len(sig) else np.nan
+                signal_matrix[:, i, j] = aligned
+            except Exception:
+                continue
+
+    # ── 4. 计算 5 日前向收益 ──
+    forward_returns = np.full((n_dates, n_stocks), np.nan)
+    horizon = 5
+    for i, sym in enumerate(stocks):
+        df = panel[sym]
+        closes = df["close"].values
+        fwd = np.full(len(closes), np.nan)
+        fwd[:-horizon] = (closes[horizon:] - closes[:-horizon]) / np.maximum(closes[:-horizon], 1e-10)
+        for t, d in enumerate(common_dates):
+            if d in df.index:
+                idx = list(df.index).index(d)
+                forward_returns[t, i] = fwd[idx] if idx < len(fwd) else np.nan
+
+    # ── 5. 逐日 Elastic Net 截面回归 ──
+    all_coefs = np.zeros((n_dates, n_factors))
+    valid_dates = 0
+
+    for t in range(n_dates):
+        X = signal_matrix[t]  # (n_stocks, n_factors)
+        y = forward_returns[t]  # (n_stocks,)
+
+        valid = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
+        n_valid = valid.sum()
+        if n_valid < 10:
+            continue
+
+        X_valid = X[valid]
+        y_valid = y[valid]
+
+        # 标准化
+        X_mean = X_valid.mean(axis=0)
+        X_std = X_valid.std(axis=0) + 1e-10
+        X_scaled = (X_valid - X_mean) / X_std
+
+        model = ElasticNetCV(
+            l1_ratio=[l1_ratio],
+            cv=min(cv_folds, n_valid),
+            max_iter=5000,
+            random_state=42,
+        )
+        model.fit(X_scaled, y_valid)
+        all_coefs[t] = model.coef_ / X_std  # 还原到原始尺度
+        valid_dates += 1
+
+    if valid_dates < 5:
+        logger.warning("[L3] 有效回归日不足（%d < 5），回退", valid_dates)
+        return {}
+
+    logger.info("[L3] Elastic Net 完成: %d 个有效截面回归日", valid_dates)
+
+    # ── 6. 平均系数 → 取绝对值 → 归一化为权重 ──
+    mean_coefs = np.nanmean(all_coefs, axis=0)
+    mean_coefs = np.nan_to_num(mean_coefs, 0.0)
+
+    abs_coefs = np.abs(mean_coefs)
+    total = abs_coefs.sum()
+    if total <= 0:
+        return {}
+
+    weights = abs_coefs / total
+
+    result = {valid_factors[j]["factor_id"]: float(weights[j]) for j in range(n_factors)}
+    n_nonzero = sum(1 for w in result.values() if w > 0.001)
+    logger.info("[L3] Elastic Net 权重: %d 个因子获非零权重（共 %d 个）", n_nonzero, len(result))
+    return result
 
 
 def orthogonalize_factors(
@@ -672,14 +857,19 @@ class PortfolioLoop:
                 return result
 
             # Step 2: 信号合成
-            signals, _max_corr, _combo_turn = synthesize_signals(factors, self.synthesis_mode)
+            signals, _max_corr, _combo_turn = synthesize_signals(
+                factors, self.synthesis_mode, elite_dir=self.elite_dir,
+            )
             logger.info("[L3] Step 2: 信号合成完成, mode=%s, 信号数=%d", self.synthesis_mode, len(signals))
             state["total_signals_processed"] = len(signals)
 
-            # Step 3: 因子正交化
-            signals = orthogonalize_factors(signals, max_corr_threshold=0.7)
-            logger.info("[L3] Step 3: 正交化完成, 保留 %d/%d",
-                        sum(1 for s in signals if s.get("retained", True)), len(signals))
+            # Step 3: 因子正交化（elastic_net 模式跳过，L1 已做变量选择）
+            if self.synthesis_mode != "elastic_net":
+                signals = orthogonalize_factors(signals, max_corr_threshold=0.7)
+                logger.info("[L3] Step 3: 正交化完成, 保留 %d/%d",
+                            sum(1 for s in signals if s.get("retained", True)), len(signals))
+            else:
+                logger.info("[L3] Step 3: 跳过正交化（elastic_net L1 已做变量选择）")
 
             # Step 4: 衰减检验
             signals = decay_test(signals, max_decay_rate=0.30)
@@ -753,7 +943,8 @@ def main() -> None:
     """CLI 入口: python -m loop_engine.portfolio_loop [--once] [--mode equal_weight|sharpe_weight]"""
     parser = argparse.ArgumentParser(description="L3 Portfolio Loop")
     parser.add_argument("--once", action="store_true", help="单次运行模式")
-    parser.add_argument("--mode", default="equal_weight", choices=["equal_weight", "sharpe_weight"],
+    parser.add_argument("--mode", default="equal_weight",
+                        choices=["equal_weight", "sharpe_weight", "elastic_net"],
                         help="信号合成模式")
     parser.add_argument("--memory-dir", default="memory/portfolio", help="状态/组合存储目录")
     parser.add_argument("--elite-dir", default="memory/knowledge/factors/elite", help="精英因子目录")

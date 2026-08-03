@@ -12,7 +12,7 @@ fts.monitor.http_server — FTS Web UI 仪表盘服务器。
     fts ui                    # 启动仪表盘（默认 9100 端口）
     fts ui --port 8080        # 自定义端口
 
-版本: v1.1.0
+版本: 动态读取自 fts.__version__
 """
 
 from __future__ import annotations
@@ -127,7 +127,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div class="value blue" id="cardVersion">--</div></div>
     <div class="card"><div class="label">今日 Token</div>
       <div class="value" id="cardTokens">--</div></div>
-    <div class="card"><div class="label">Elite 因子</div>
+    <div class="card"><div class="label">期货 Elite 因子</div>
       <div class="value" id="cardFactors">--</div>
       <div class="note" id="factorNote"></div></div>
   </div>
@@ -305,8 +305,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 any_circuit_broken=False, any_stale=False, total_tokens_today=0,
             )
 
-        # 补充 elite 因子计数
-        elite_dir = root / "memory" / "knowledge" / "factors" / "elite"
+        # 补充 elite 因子计数（期货）
+        elite_dir = root / "memory" / "knowledge" / "factors" / "futures_elite"
         elite_count = 0
         overload_count = 0
         retired_count = 0
@@ -350,7 +350,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         """构建 /api/factors 响应。"""
         import json as _json
 
-        elite_dir = Path.cwd() / "memory" / "knowledge" / "factors" / "elite"
+        elite_dir = Path.cwd() / "memory" / "knowledge" / "factors" / "futures_elite"
         factors = []
         if elite_dir.exists():
             for fp in sorted(elite_dir.glob("*.json"), reverse=True)[:50]:

@@ -11,6 +11,7 @@ fts.factor_engine — 因子引擎（L1 Meta-Loop + L2 Evolution Loop + L3 Portf
     - macro_evolution: 宏观演化（LLM 改逻辑）
     - micro_evolution: 微观演化（optuna 贝叶斯调参）
     - evaluation_chain: agentic 三级评估链
+    - standardizer: 标准化模块（6 种标准化方法）
     - experience_chain: 经验链存储
     - verifier: Verifier 协议（锁定评估机制）
     - state: 演化状态 + trace_id 全链路
@@ -64,6 +65,13 @@ from .factor_program import (
     validate_factor_code,
 )
 from .seed_pool import SeedPool, get_default_seed_pool
+from .standardizer import (
+    StandardizeMethod,
+    SUPPORTED_METHODS,
+    StandardizerConfig,
+    Standardizer,
+    standardize,
+)
 from .experience_chain import (
     ExperienceChain,
     ExperienceChainError,
@@ -163,6 +171,12 @@ __all__ = [
     "generate_run_id",
     # 评估链
     "EvaluationChain",
+    # 标准化
+    "StandardizeMethod",
+    "SUPPORTED_METHODS",
+    "StandardizerConfig",
+    "Standardizer",
+    "standardize",
     # 宏观演化
     "MacroEvolver",
     "MockLLMClient",

@@ -18,13 +18,15 @@ factorengine 核心约束：
     - 失败轨迹的 failure_reasons 必须结构化（不能为空字符串）
     - LLM 每次必须读取最近 20 条（成功 10 + 失败 10）
 
-版本: v1.1.0（与 FTS 同步）
+版本: v1.9.0（与 FTS 同步，引入失败模式聚类）
 """
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 
 from __future__ import annotations
 
 import json
+import re
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -42,6 +44,130 @@ LLM_READ_SUCCESS_COUNT: int = 10
 
 LLM_READ_FAILURE_COUNT: int = 10
 """LLM 每次读取的失败轨迹数。"""
+
+
+# ─── 失败模式关键词映射 ─────────────────────────────────────
+
+# 关键词 → 模式名称的映射，用于对 failure_reasons 做聚类
+FAILURE_PATTERN_KEYWORDS: dict[str, str] = {
+    "IC": "IC 过低",
+    "ICIR": "IC 信息比不足",
+    "sharpe": "夏普比率不达标",
+    "夏普": "夏普比率不达标",
+    "max_drawdown": "最大回撤过大",
+    "回撤": "最大回撤过大",
+    "monotonic": "十分位单调性不通过",
+    "monotonicity": "十分位单调性不通过",
+    "单调": "十分位单调性不通过",
+    "oos": "样本外比例不足",
+    "样本外": "样本外比例不足",
+    "turnover": "换手率过高",
+    "换手": "换手率过高",
+    "zero": "信号零方差/退化",
+    "零方差": "信号零方差/退化",
+    "nan": "信号含 NaN",
+    "theory": "理论支撑不足",
+    "behavioral": "行为金融解释不足",
+    "microstructure": "微观结构支撑不足",
+    "institutional": "机构可行性不足",
+    "bonferroni": "多重检验未通过",
+    "FDR": "多重检验未通过",
+    "adjusted_t": "t 统计量不显著",
+}
+
+# 默认模式（匹配不到任何关键词时）
+DEFAULT_PATTERN = "其他原因"
+
+
+# ─── 失败模式分析器 ────────────────────────────────────────
+
+class FailurePatternAnalyzer:
+    """对失败轨迹的 failure_reasons 做关键词聚类，产出结构化失败模式统计。
+
+    Usage:
+        analyzer = FailurePatternAnalyzer(experience_chain)
+        summary = analyzer.format_for_llm(max_traces=20)
+    """
+
+    def __init__(self, experience_chain: ExperienceChain):
+        self._chain = experience_chain
+        self._pattern_map = FAILURE_PATTERN_KEYWORDS
+
+    def analyze(
+        self, max_traces: int = 20
+    ) -> dict[str, int]:
+        """分析最近 N 条失败轨迹，返回模式计数。
+
+        Returns:
+            {"IC 过低": 6, "夏普比率不达标": 3, ...}
+        """
+        failures = self._chain.read_all_failure()
+        if not failures:
+            return {}
+        # 按时间倒序取最近 max_traces 条
+        failures.sort(
+            key=lambda t: t.get("recorded_at", ""), reverse=True
+        )
+        failures = failures[:max_traces]
+
+        pattern_counts: Counter = Counter()
+        for trace in failures:
+            reasons = trace.get("evaluation", {}).get("failure_reasons", [])
+            if not reasons:
+                pattern_counts[DEFAULT_PATTERN] += 1
+                continue
+            # 合并该轨迹所有 reason 的匹配模式（去重）
+            matched = set()
+            for reason in reasons:
+                matched.add(self._classify_reason(reason))
+            for pattern in matched:
+                pattern_counts[pattern] += 1
+
+        return dict(pattern_counts.most_common())
+
+    def format_for_llm(self, max_traces: int = 20) -> str:
+        """格式化失败模式统计为 LLM prompt 可用的字符串。
+
+        Returns:
+            "最近 20 次失败中:
+             - IC 过低: 6 次 (30%)
+             - 夏普比率不达标: 3 次 (15%)
+             ..."
+        """
+        patterns = self.analyze(max_traces=max_traces)
+        if not patterns:
+            return "(暂无失败轨迹)"
+
+        total = sum(patterns.values())
+        top_pattern = next(iter(patterns))
+        lines = [f"最近 {total} 次失败的模式分布:"]
+        for pattern, count in patterns.items():
+            pct = count / total * 100
+            lines.append(f"  - {pattern}: {count} 次 ({pct:.0f}%)")
+        lines.append(
+            f"重点: 超过 {patterns[top_pattern] / total * 100:.0f}% "
+            f"的失败集中在「{top_pattern}」，请针对性调整因子设计。"
+        )
+        return "\n".join(lines)
+
+    def _classify_reason(self, reason: str) -> str:
+        """根据关键词将单个 failure_reason 分类到模式。
+
+        对纯 ASCII 关键词使用词边界匹配（避免 'IC' 匹配 'monotonicity'），
+        对中文关键词使用子串匹配。
+        """
+        reason_lower = reason.lower()
+        for keyword, pattern in self._pattern_map.items():
+            kw_lower = keyword.lower()
+            if kw_lower.isascii():
+                # ASCII 关键词：词边界匹配
+                if re.search(r"\b" + re.escape(kw_lower) + r"\b", reason_lower):
+                    return pattern
+            else:
+                # 中文关键词：子串匹配
+                if kw_lower in reason_lower:
+                    return pattern
+        return DEFAULT_PATTERN
 
 
 class ExperienceChainError(Exception):
@@ -280,6 +406,9 @@ __all__ = [
     "MAX_CHAIN_SIZE",
     "LLM_READ_SUCCESS_COUNT",
     "LLM_READ_FAILURE_COUNT",
+    "FAILURE_PATTERN_KEYWORDS",
+    "DEFAULT_PATTERN",
+    "FailurePatternAnalyzer",
     "ExperienceChain",
     "ExperienceChainError",
     "create_trace_from_evaluation",

@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from .. import __version__ as FTS_VERSION
 from ..factor_engine import EVOLUTION_VERSION
 from ..factor_engine.monitor import AllStatus, LoopStatus, check_all, check_loop
 
@@ -152,7 +153,7 @@ def check_all_status(project_root: Optional[Path] = None,
             healthy=all_status.loops and all(l.healthy for l in all_status.loops),
             loops=loops,
             checked_at=all_status.checked_at,
-            fts_version=EVOLUTION_VERSION,
+            fts_version=FTS_VERSION,
             any_circuit_broken=all_status.any_circuit_broken,
             any_stale=all_status.any_stale,
             total_tokens_today=all_status.total_tokens_today,
@@ -162,7 +163,7 @@ def check_all_status(project_root: Optional[Path] = None,
             healthy=False,
             loops=[],
             checked_at="",
-            fts_version=EVOLUTION_VERSION,
+            fts_version=FTS_VERSION,
             any_circuit_broken=False,
             any_stale=False,
             total_tokens_today=0,
