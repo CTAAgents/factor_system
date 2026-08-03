@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v1.7.0
+> 版本: v1.7.3
 > 最后更新: 2026-08-03
 
 ---
@@ -207,7 +207,34 @@ FTSDataProvider.get_futures_ohlcv() / get_futures_panel()
     │ --universe futures
     ▼
 EvolutionLoop（期货横截面因子演化，跨品种因子计算）
+    │
+    ▼
+scripts/futures_signal_pipeline.py（横截面信号管道，方向校正 = 截面 IC 法，因子加权 = Ridge 回归 L2 正则化）
+    │
+    ▼
+reports/{date}/futures_signals_{date}.md
 ```
+
+**common_dates 语义（v1.7.1）**：
+- `get_futures_panel()` 返回的 `common_dates` 由「全品种日期交集」改为「多数对齐」：
+  取至少 `max(2, 品种数//2)` 个品种共有的日期。
+- 原因：全交集在 76 个商品期货（FUTURES_SUBSET）下会因个别停更品种
+  （WH0/JR0/RI0/LR0 数据止于 2022-2023）将交集清空，导致横截面方向校正
+  （截面 IC 法）静默失效，全部因子 flip=1.0。
+- 方向校正按日期定位（`df.index.get_loc`）而非位置索引，避免品种间
+  日期错位污染 IC 计算。
+- 信号管道剔除数据陈旧品种：最新交易日早于共同日期末端（如已停更的
+  WH0/JR0/RI0/LR0）的品种不参与横截面排名，防止陈旧价格混入当前信号。
+- 信号报告输出品种中文名称（FUTURES_SYMBOL_NAMES 映射）与主力合约代码
+  （get_dominant_contracts() 按 contract_kline 最新交易日最大成交量判定）。
+- L3 定时任务（20:00）触发信号管道时使用 `--universe all` 全量商品池。
+
+**因子加权方法（v1.7.3 — Ridge 回归）**：
+- 基于 Shen & Xiu 的弱信号理论：当因子信号普遍较弱时，L2 正则化（Ridge）优于 L1 选择（Lasso/硬阈值）。
+- 使用全部精英因子（不按 IC 过滤），以 Ridge 回归学习差异化权重：
+  强因子自动获得高权重，弱因子获得接近零的权重但不被丢弃。
+- 这替代了 v1.7.2 的 IC>0.3 硬过滤 + 等权合成。
+- 实现：`_compute_ridge_weights()` 在 `scripts/futures_signal_pipeline.py`。
 
 ### FTS 内部数据流
 
@@ -276,7 +303,7 @@ Verifier 是 FTS 的核心安全机制，锁定后不可逆：
 | L1 Meta-Loop | 08:30 | 每日 | 知识补给 + 种子注入 |
 | L2 Evolution Loop | 23:00 | 每日 | 夜间因子演化 |
 | L3 Portfolio Loop | 20:00 | 每日 | 组合构建 + 正交化 + 信号合成 |
-| 期货信号管道 | 20:30 | 每日 | 横截面信号报告（IC>0.3 顶级因子） |
+| 期货信号管道 | 20:30 | 每日 | 横截面信号报告（全量因子 Ridge 回归加权） |
 | Health Check | 每 10 分钟 | 高频 | 状态监控 |
 
 ---
@@ -298,6 +325,6 @@ Verifier 是 FTS 的核心安全机制，锁定后不可逆：
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `seed_pool.py` → 种子池 482 因子（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面）+ 期货 12 家族 50+ 子因子；`data_fundamental.py` → FundamentalProvider 基本面数据层；`data_futures.py` → FuturesDataProvider 期货数据层（59 个品种，DuckDB kline_cache + AKShare 降级）；`data_futures_fundamental.py` → FuturesFundamentalProvider 期货基本面数据（库存/仓单/基差）；`scheduler/` → 调度层（5 个 APScheduler 定时任务：L1:08:30 / L2:23:00 / L3:20:00 / 信号管道:20:30 / 健康检查:每10m）；`strategies/strategy_evolution.py` → 策略进化（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion） |
-| 可验证断言 | 种子池总数 = 482；期货数据层支持 59 个连续合约品种，数据源优先级 3 级（DuckDB → AKShare → 合成）；调度器注册 5 个任务；策略进化模块包含 3 种策略（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion） |
+| 代码→文档映射 | `seed_pool.py` → 种子池 482 因子（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面）+ 期货 12 家族 50+ 子因子；`data_fundamental.py` → FundamentalProvider 基本面数据层；`data_futures.py` → FuturesDataProvider 期货数据层（82 品种 FUTURES_SUBSET + 59 个品种 DuckDB 缓存 + AKShare 降级，`get_futures_panel()` common_dates 多数对齐 ≥ 品种数//2，FUTURES_SYMBOL_NAMES 名称映射，get_dominant_contracts() 主力合约判定）；`data_futures_fundamental.py` → FuturesFundamentalProvider 期货基本面数据（库存/仓单/基差）；`scheduler/` → 调度层（5 个 APScheduler 定时任务：L1:08:30 / L2:23:00 / L3:20:00 / 信号管道:20:30 / 健康检查:每10m）；`scripts/futures_signal_pipeline.py` → 横截面信号管道（方向校正 = 截面 IC 法，因子加权 = Ridge 回归 L2 正则化，按日期定位，`--universe all` 全量商品池，输出品种名称/主力合约）；`strategies/strategy_evolution.py` → 策略进化（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion） |
+| 可验证断言 | 种子池总数 = 482；期货数据层支持 82 个连续合约品种，数据源优先级 3 级（DuckDB → AKShare → 合成）；common_dates 多数对齐（WH0 等停更品种不清空交集）；方向校正按日期定位；信号管道因子加权 = Ridge 回归（全量因子，L2 正则化）；主力合约判定 = contract_kline 最新交易日最大成交量；调度器注册 5 个任务；策略进化模块包含 3 种策略（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion） |
 | 检验方式 | `python -c "from fts.scheduler.tasks import list_tasks; assert len(list_tasks()) == 5"` |

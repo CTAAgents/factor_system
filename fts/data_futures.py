@@ -137,22 +137,25 @@ class FuturesDataProvider:
         Returns:
             (panel, common_dates)
             panel: dict[symbol, OHLCV DataFrame]（含 hold/settle 列）
-            common_dates: 所有品种共有日期
+            common_dates: 多数品种共有日期（至少 max(2, 品种数//2) 个品种）
+
+        说明:
+            早期版本使用「全品种日期交集」，当品种扩展至全量（76 个商品期货）
+            时，个别停更品种（WH0/JR0/RI0/LR0 数据止于 2022-2023）会令交集
+            为空，导致下游横截面方向校正（截面 IC 法）静默失效。
+            现改为「多数对齐」：保留至少一半品种共有的日期。
         """
+        from collections import Counter
+
         panel: dict[str, pd.DataFrame] = {}
-        dates_set: set[pd.Timestamp] = set()
-        first = True
+        date_counts: Counter[str] = Counter()
 
         for sym in symbols:
             try:
                 df = self.get_ohlcv(sym, days=days, trace_id=trace_id)
                 if df is not None and not df.empty and "close" in df.columns:
                     panel[sym] = df
-                    if first:
-                        dates_set = set(df.index)
-                        first = False
-                    else:
-                        dates_set &= set(df.index)
+                    date_counts.update(set(df.index))
             except Exception:  # noqa: BLE001
                 continue
 
@@ -162,7 +165,11 @@ class FuturesDataProvider:
             panel["SYNTHETIC"] = df
             return panel, df.index
 
-        common_dates = pd.DatetimeIndex(sorted(dates_set))
+        # 多数对齐：至少 max(2, 品种数//2) 个品种共有的日期
+        min_syms = max(2, len(panel) // 2)
+        common_dates = pd.DatetimeIndex(sorted(
+            d for d, c in date_counts.items() if c >= min_syms
+        ))
         return panel, common_dates
 
     # ── DuckDB 读取 ──
@@ -371,6 +378,198 @@ FUTURES_CORE_SUBSET: list[str] = [
 ]
 
 
+# ─── 品种中文名称映射（FUTURES_SUBSET 全量）─────────────────
+
+FUTURES_SYMBOL_NAMES: dict[str, str] = {
+    # 大商所 (dce)
+    "V0": "聚氯乙烯", "P0": "棕榈油", "B0": "豆二", "M0": "豆粕",
+    "I0": "铁矿石", "JD0": "鸡蛋", "L0": "聚乙烯", "PP0": "聚丙烯",
+    "FB0": "纤维板", "Y0": "豆油", "C0": "玉米", "A0": "豆一",
+    "J0": "焦炭", "JM0": "焦煤", "CS0": "玉米淀粉", "EG0": "乙二醇",
+    "RR0": "粳米", "EB0": "苯乙烯", "PG0": "液化石油气", "LH0": "生猪",
+    "LG0": "原木", "BZ0": "苯",
+    # 郑商所 (czce)
+    "TA0": "PTA", "OI0": "菜籽油", "RS0": "菜籽", "RM0": "菜粕",
+    "WH0": "强麦", "JR0": "粳稻", "SR0": "白糖", "CF0": "棉花",
+    "RI0": "早籼稻", "MA0": "甲醇", "FG0": "玻璃", "LR0": "晚籼稻",
+    "SF0": "硅铁", "SM0": "锰硅", "CY0": "棉纱", "AP0": "苹果",
+    "CJ0": "红枣", "UR0": "尿素", "SA0": "纯碱", "PF0": "短纤",
+    "PK0": "花生", "SH0": "烧碱", "PX0": "对二甲苯", "PR0": "瓶片",
+    "PL0": "丙烯",
+    # 上期所 (shfe)
+    "FU0": "燃料油", "AL0": "铝", "RU0": "橡胶", "ZN0": "锌",
+    "CU0": "铜", "AU0": "黄金", "RB0": "螺纹钢", "PB0": "铅",
+    "AG0": "白银", "BU0": "沥青", "HC0": "热轧卷板", "SN0": "锡",
+    "NI0": "镍", "SP0": "纸浆", "SS0": "不锈钢", "AO0": "氧化铝",
+    "BR0": "丁二烯橡胶", "AD0": "铸造铝合金", "OP0": "钨",
+    # 能源中心 (ine)
+    "SC0": "原油", "NR0": "20号胶", "LU0": "低硫燃料油",
+    "BC0": "国际铜", "EC0": "集运欧线",
+    # 中金所 (cffex)
+    "IF0": "沪深300", "TF0": "5年期国债", "IH0": "上证50",
+    "IC0": "中证500", "TS0": "2年期国债", "IM0": "中证1000",
+    # 广期所 (gfex)
+    "SI0": "工业硅", "LC0": "碳酸锂", "PS0": "多晶硅",
+    "PT0": "铂", "PD0": "钯",
+}
+
+
+# FTS 连续合约代码 → AKShare futures_symbol_mark 中文名（用于实时行情查询）
+_SYMBOL_MARK_NAMES: dict[str, str] = {
+    # 大商所
+    "V0": "PVC", "P0": "棕榈", "B0": "豆二", "M0": "豆粕", "I0": "铁矿石",
+    "JD0": "鸡蛋", "L0": "塑料", "PP0": "PP", "FB0": "纤维板", "Y0": "豆油",
+    "C0": "玉米", "A0": "豆一", "J0": "焦炭", "JM0": "焦煤", "CS0": "玉米淀粉",
+    "EG0": "乙二醇", "RR0": "粳米", "EB0": "苯乙烯", "PG0": "液化石油气",
+    "LH0": "生猪", "LG0": "原木", "BZ0": "纯苯",
+    # 郑商所
+    "TA0": "PTA", "OI0": "菜油", "RS0": "菜籽", "RM0": "菜粕", "WH0": "强麦",
+    "JR0": "粳稻", "SR0": "白糖", "CF0": "棉花", "RI0": "早籼稻", "MA0": "郑醇",
+    "FG0": "玻璃", "LR0": "晚籼稻", "SF0": "硅铁", "SM0": "锰硅", "CY0": "棉纱",
+    "AP0": "鲜苹果", "CJ0": "红枣", "UR0": "尿素", "SA0": "纯碱", "PF0": "短纤",
+    "PK0": "花生", "SH0": "烧碱", "PX0": "二甲苯", "PR0": "瓶级聚酯切片",
+    "PL0": "丙烯",
+    # 上期所
+    "FU0": "燃油", "AL0": "沪铝", "RU0": "橡胶", "ZN0": "沪锌", "CU0": "沪铜",
+    "AU0": "黄金", "RB0": "螺纹钢", "PB0": "沪铅", "AG0": "白银", "BU0": "沥青",
+    "HC0": "热轧卷板", "SN0": "沪锡", "NI0": "沪镍", "SP0": "纸浆",
+    "SS0": "不锈钢", "AO0": "氧化铝", "BR0": "丁二烯橡胶",
+    "AD0": "铸造铝合金期货", "OP0": "胶版印刷纸期货",
+    # 能源中心
+    "SC0": "原油", "NR0": "20号胶", "LU0": "低硫燃料油", "BC0": "国际铜",
+    "EC0": "集运指数(欧线)期货",
+    # 中金所
+    "IF0": "沪深300指数期货", "TF0": "5年期国债期货", "IH0": "上证50指数期货",
+    "IC0": "中证500指数期货", "TS0": "2年期国债期货",
+    "IM0": "中证1000股指期货",
+    # 广期所
+    "SI0": "工业硅", "LC0": "碳酸锂", "PS0": "多晶硅", "PT0": "铂", "PD0": "钯",
+}
+
+
+def _fetch_dominant_akshare(symbols: list[str]) -> dict[str, str]:
+    """通过 AKShare futures_zh_realtime 查询主力合约（持仓量最大具体合约）。
+
+    Args:
+        symbols: FTS 连续合约代码列表（如 ["RU0", "EC0"]）
+
+    Returns:
+        dict[symbol, contract]，查询失败的品种不包含在内
+    """
+    result: dict[str, str] = {}
+    try:
+        import akshare as ak  # type: ignore[import-untyped]
+    except ImportError:
+        return result
+
+    for sym in symbols:
+        name = _SYMBOL_MARK_NAMES.get(sym)
+        if not name:
+            continue
+        try:
+            df = ak.futures_zh_realtime(symbol=name)
+            if df is None or df.empty or "symbol" not in df.columns:
+                continue
+            prefix = sym[:-1] if sym.endswith("0") else sym
+            # 排除连续合约（如 RU0），取持仓量最大的具体合约（如 RU2609）
+            concrete = df[
+                df["symbol"].str.startswith(prefix)
+                & (df["symbol"] != sym)
+                & (df["symbol"].str.len() > len(prefix))
+            ]
+            if concrete.empty:
+                continue
+            top = concrete.sort_values("position", ascending=False).iloc[0]
+            result[sym] = str(top["symbol"])
+        except Exception:  # noqa: BLE001
+            continue
+    return result
+
+
+def get_dominant_contracts(symbols: list[str] | None = None) -> dict[str, str]:
+    """查询各品种主力合约代码（contract_kline 最新交易日最大成交量）。
+
+    Args:
+        symbols: 品种列表（如 ["RB0", "CU0"]），默认 FUTURES_SUBSET
+
+    Returns:
+        dict[symbol, contract]，如 {"RB0": "RB2610"}；无数据品种返回空串
+    """
+    if symbols is None:
+        symbols = list(FUTURES_SUBSET)
+    result: dict[str, str] = {s: "" for s in symbols}
+    if not symbols:
+        return result
+    try:
+        db = _get_db()
+    except FuturesDataError:
+        return result
+
+    # contract_kline 中 symbol 无末尾 "0"（如 "RB"）
+    base_syms = [s[:-1] if s.endswith("0") else s for s in symbols]
+    placeholders = ",".join("?" * len(base_syms))
+    rows = db.execute(
+        f"""
+        WITH ranked AS (
+            SELECT symbol, contract,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY symbol
+                       ORDER BY date DESC, volume DESC
+                   ) AS rn
+            FROM contract_kline
+            WHERE symbol IN ({placeholders}) AND period = 'daily'
+        )
+        SELECT symbol, contract FROM ranked WHERE rn = 1
+        """,
+        base_syms,
+    ).fetchall()
+    code2sym = {s[:-1] if s.endswith("0") else s: s for s in symbols}
+    for base, contract in rows:
+        sym = code2sym.get(base)
+        if sym:
+            result[sym] = contract
+
+    # AKShare fallback：补全 DB 缺失品种的主力合约
+    missing = [s for s in symbols if not result.get(s)]
+    if missing:
+        ak_map = _fetch_dominant_akshare(missing)
+        for sym, contract in ak_map.items():
+            result[sym] = contract
+    return result
+
+
+def get_realtime_prices(symbols: list[str] | None = None) -> dict[str, float]:
+    """获取期货品种盘中实时价（AKShare futures_zh_minute_sina 最新分时 close）。
+
+    盘中实时价用于信号报告"最新价"展示；非交易时段返回当日最新分时价。
+
+    Args:
+        symbols: 品种列表（如 ["RB0", "CU0"]），默认 FUTURES_SUBSET
+
+    Returns:
+        dict[symbol, 实时价]；获取失败品种不包含在内
+    """
+    if symbols is None:
+        symbols = list(FUTURES_SUBSET)
+    prices: dict[str, float] = {}
+    try:
+        import akshare as ak  # type: ignore[import-untyped]
+    except ImportError:
+        return prices
+
+    for sym in symbols:
+        try:
+            df = ak.futures_zh_minute_sina(symbol=sym)
+            if df is None or df.empty:
+                continue
+            price = float(df["close"].iloc[-1])
+            if price > 0:
+                prices[sym] = price
+        except Exception:  # noqa: BLE001
+            continue
+    return prices
+
+
 # ─── 缺省实例 ─────────────────────────────────────────────
 
 _default_futures_provider: Optional[FuturesDataProvider] = None
@@ -390,4 +589,7 @@ __all__ = [
     "get_futures_provider",
     "FUTURES_SUBSET",
     "FUTURES_CORE_SUBSET",
+    "FUTURES_SYMBOL_NAMES",
+    "get_dominant_contracts",
+    "get_realtime_prices",
 ]

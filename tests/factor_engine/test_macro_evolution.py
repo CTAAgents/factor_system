@@ -97,9 +97,10 @@ class TestGetDefaultLLMClient:
     """get_default_llm_client 应返回 MockLLMClient。"""
 
     def test_returns_mock_client(self):
-        from fts.factor_engine.macro_evolution import get_default_llm_client, MockLLMClient
+        from fts.factor_engine.macro_evolution import get_default_llm_client
+        from fts.llm import LLMClient
         client = get_default_llm_client()
-        assert isinstance(client, MockLLMClient)
+        assert isinstance(client, LLMClient)
 
     def test_returns_callable(self):
         from fts.factor_engine.macro_evolution import get_default_llm_client

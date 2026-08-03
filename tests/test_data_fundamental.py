@@ -95,7 +95,7 @@ class TestInit:
 
     def test_cache_empty_on_init(self):
         p = FundamentalProvider()
-        assert p._cache == {}
+        assert p._bridge is None
         assert p._macro_cache == {}
 
 
@@ -300,11 +300,12 @@ class TestEnrichOhlcvMCP:
         assert result["pe_ttm"].iloc[0] == 15.0
 
     def test_mcp_enrich_profile_applied(self, mocker):
-        """_mcp_enrich 应调用 _fetch_profile 并注入字段。"""
+        """_mcp_enrich 应通过 _get_bridge() 获取数据并注入字段。"""
         p = FundamentalProvider(mcp_available=True)
         df = self._make_ohlcv(50)
-        mocker.patch.object(p, "_fetch_profile", return_value={"pe_ttm": 12.5, "pb": 1.5})
-        mocker.patch.object(p, "_fetch_finance", return_value={"roe": 0.15})
+        mock_bridge = mocker.MagicMock()
+        mock_bridge.get_fundamental.return_value = {"pe_ttm": 12.5, "pb": 1.5, "roe": 0.15}
+        mocker.patch.object(p, "_get_bridge", return_value=mock_bridge)
         mocker.patch.object(p, "_fetch_macro", return_value={"pmi": 51.0})
         result = p._mcp_enrich(df, "000001", "")
         assert result["pe_ttm"].iloc[0] == 12.5
@@ -313,11 +314,12 @@ class TestEnrichOhlcvMCP:
         assert result["pmi"].iloc[0] == 51.0
 
     def test_mcp_enrich_empty_profile(self, mocker):
-        """_fetch_profile 为空时不应报错。"""
+        """_get_bridge() 返回空时不应报错。"""
         p = FundamentalProvider(mcp_available=True)
         df = self._make_ohlcv(50)
-        mocker.patch.object(p, "_fetch_profile", return_value={})
-        mocker.patch.object(p, "_fetch_finance", return_value={})
+        mock_bridge = mocker.MagicMock()
+        mock_bridge.get_fundamental.return_value = {}
+        mocker.patch.object(p, "_get_bridge", return_value=mock_bridge)
         mocker.patch.object(p, "_fetch_macro", return_value={})
         result = p._mcp_enrich(df, "000001", "")
         assert "close" in result.columns
@@ -414,12 +416,11 @@ class TestGetFundamentalProvider:
 
 class TestParseProfile:
     def test_parse_valid_data(self):
+        """_parse_profile 已弃用，返回空 dict。"""
         p = FundamentalProvider(mcp_available=False)
         data = {"pe_ttm": 15.0, "pb": 2.5, "total_market_cap": "1000000000"}
         result = p._parse_profile(data)
-        assert result["pe_ttm"] == 15.0
-        assert result["pb"] == 2.5
-        assert result["total_market_cap"] == 1000000000.0
+        assert result == {}
 
     def test_parse_non_dict_data(self):
         p = FundamentalProvider(mcp_available=False)

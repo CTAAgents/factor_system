@@ -22,10 +22,10 @@
 
 | 层级 | 测试文件数 | 用例数 | 说明 |
 |:-----|:----------|:-------|:-----|
-| 单元测试 | 29+ | ~1164 | 各模块独立测试（含基本面数据层） |
+| 单元测试 | 29+ | ~1185 | 各模块独立测试（含基本面数据层 + 信号管道） |
 | 集成测试 | 2 | ~143 | strategies 策略层 |
 | E2E | 1 | 10 | test_e2e.py |
-| 合计 | 37+ | 1557 | 全部通过 |
+| 合计 | 37+ | 1599 | 1597 passed, 2 failed, 1 skipped |
 
 ---
 
@@ -77,6 +77,8 @@ tests/
 ├── test_cli.py                      # CLI 入口测试
 ├── test_config_settings.py          # 配置管理测试
 ├── test_data.py                     # 数据层测试
+├── test_data_futures_panel.py       # 期货面板 common_dates 多数对齐 + 方向校正日期定位测试
+├── test_futures_signal_pipeline.py  # 期货信号管道 Ridge 回归加权 + 方向校正 + 组合合成测试
 ├── test_llm.py                      # LLM 客户端测试
 └── test_monitor.py                  # 项目级 monitor 测试
 ```
@@ -108,16 +110,16 @@ python -m pytest tests/factor_engine/test_verifier.py -v
 
 ---
 
-## 覆盖统计（v1.7.0）
+## 覆盖统计（v1.7.3）
 
 ### 总体统计
 
 | 指标 | 值 |
 |:-----|:---|
-| Total statements | 5750+ |
-| Overall coverage | 99% |
-| 测试用例数 | 1557 passed, 0 failed |
-| 测试文件数 | 41+ |
+| Total statements | 5828 |
+| Overall coverage | 91% |
+| 测试用例数 | 1597 passed, 2 failed, 1 skipped |
+| 测试文件数 | 42+ |
 | 种子因子数 | 482（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面/另类/宏观） |
 | 期货专用种子 | 12 大因子家族 50+ 子因子 |
 
@@ -180,7 +182,7 @@ fts\strategies\multi_factor_strategy.py      230      0   100%
 fts\strategies\strategy_evolution.py         271     13    95%
 fts\strategies\rules\__init__.py               1      0   100%
 ──────────────────────────────────────────────────────────────
-TOTAL                                       5750    151    97%
+TOTAL                                       5828    533    91%
 ```
 
 ### 模块覆盖统计
@@ -286,9 +288,10 @@ TOTAL                                       5750    151    97%
 | `tests/test_e2e.py` | ~10 | 端到端集成 |
 | `tests/test_elite_tracker.py` | ~72 | Elite 因子跟踪 |
 | `tests/test_http_server.py` | ~31 | Web UI 仪表盘 |
+| `tests/test_futures_signal_pipeline.py` | ~21 | 信号管道 Ridge 回归加权 + 方向校正 + 组合合成 |
 | `tests/test_llm.py` | ~36 | LLM 客户端 |
 | `tests/test_monitor.py` | ~46 | 项目级监控 |
-| **合计** | **1557** | |
+| **合计** | **1599** | |
 
 ---
 
@@ -306,6 +309,6 @@ TOTAL                                       5750    151    97%
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面）；`test_seed_pool.py` → 种子池测试（含期货种子） |
-| 可验证断言 | 基本面数据层测试数 = 62，总测试数 = 1502 |
-| 检验方式 | `python -m pytest tests/test_data_fundamental.py --no-cov -q 2>&1 | findstr "passed"` |
+| 代码→文档映射 | `test_futures_signal_pipeline.py` → 21 个信号管道测试用例（Ridge 回归加权 + 方向校正 + 组合合成）；`test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面）；`test_seed_pool.py` → 种子池测试（含期货种子） |
+| 可验证断言 | 信号管道测试数 = 21，总测试数 = 1599 |
+| 检验方式 | `python -m pytest tests/test_futures_signal_pipeline.py --no-cov -q 2>&1 | findstr "passed"` |

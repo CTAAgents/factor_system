@@ -180,7 +180,7 @@ class TestSchedulerEngineStart:
 
     def test_start_happy_path(self, apscheduler_available: MagicMock, sample_task: TaskSpec, caplog):
         """正常启动流程：注册默认任务、添加 job、启动 scheduler。"""
-        # 先注册任务到全局 REGISTRY（start() 内部还会注册 4 个默认任务）
+        # 先注册任务到全局 REGISTRY（start() 内部还会注册 5 个默认任务）
         REGISTRY.register(sample_task)
 
         caplog.set_level(logging.INFO)

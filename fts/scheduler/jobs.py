@@ -139,11 +139,16 @@ def l3_portfolio_loop_job() -> None:
 # ── 期货信号管道 — 每日 20:00（L3 完成后执行）────────────
 
 def _run_futures_signal_pipeline() -> None:
-    """生成期货信号报告（L3 组合构建后自动触发）。"""
+    """生成期货信号报告（L3 组合构建后自动触发）。
+
+    使用全量商品期货池（--universe all）：
+    - 覆盖 FUTURES_SUBSET 中所有非僵尸品种（剔除停更/陈旧品种后参与排名）
+    - 报告输出品种中文名称、主力合约代码、盘中实时价
+    """
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from scripts.futures_signal_pipeline import main
-        exit_code = main(max_symbols=25, days=120)
+        exit_code = main(max_symbols=82, days=120, universe="all")
         logger.info("[信号管道] 完成: exit_code=%d", exit_code)
     except Exception as e:
         logger.error("[信号管道] 失败: %s", e, exc_info=True)

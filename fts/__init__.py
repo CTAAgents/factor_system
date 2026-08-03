@@ -14,11 +14,11 @@ FTS — Factor Trading System
     - cli: 统一命令行入口
     - data / data_mcp / data_futures: 数据适配层（A 股/ETF/期货）
 
-版本: v1.7.0（策略进化：动态因子权重 + 市场制度自适应 + 多周期信号融合）"""
+版本: v1.7.2（信号管道全量商品池 + 品种名称/主力合约/盘中实时价输出）"""
 
 from pathlib import Path
 
-__version__ = "1.7.0"
+__version__ = "1.7.3"
 
 # ── 自动加载 .env ────────────────────────────────────────
 _env_loaded = False

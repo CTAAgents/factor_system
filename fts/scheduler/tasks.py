@@ -4,8 +4,7 @@ fts.scheduler.tasks — FTS 定时任务注册表。
 任务清单（默认）:
     - l1_meta_loop          : 每日 08:30 触发 L1 Meta-Loop（知识补给 + 种子注入）
     - l2_evolution_loop     : 每日 23:00 触发 L2 因子演化（夜间演化）
-    - l3_portfolio_loop     : 每日 20:00 触发 L3 组合构建（含信号合成）
-    - futures_signal_pipeline: 每日 20:30 触发期货信号管道（独立版）
+    - l3_portfolio_loop     : 每日 20:00 触发 L3 组合构建（含信号合成 + 期货信号管道）
     - health_check          : 每 10 分钟触发健康检查
 
 cron 表达式格式（5 字段）: minute hour day-of-month month day-of-week
@@ -104,12 +103,12 @@ def register_default_tasks() -> None:
             name="l3_portfolio_loop",
             cron_expression="0 20 * * *",         # 每日 20:00
             callable_path="fts.scheduler.jobs.l3_portfolio_loop_job",
-            description="L3 Portfolio Loop：组合构建 + 正交化 + 衰减检验 + 信号合成",
+            description="L3 Portfolio Loop：组合构建 + 正交化 + 衰减检验 + 信号合成 + 期货信号管道",
             trace_id_prefix="fts.l3",
         ),
         TaskSpec(
             name="futures_signal_pipeline",
-            cron_expression="30 20 * * *",        # 每日 20:30（L3 之后独立运行）
+            cron_expression="30 20 * * *",        # 每日 20:30
             callable_path="fts.scheduler.jobs.futures_signal_pipeline_job",
             description="期货信号管道：独立生成期货横截面信号报告",
             trace_id_prefix="fts.signal",

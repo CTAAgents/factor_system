@@ -308,21 +308,37 @@ def _cmd_meta_loop_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_portfolio_run(args: argparse.Namespace) -> int:
-    """启动 L3 组合构建（加载 elite 因子 → 正交化 → 信号合成）。"""
+    """启动 L3 组合构建 → 期货信号管道（L3 完成后自动触发）。"""
     trace_id = generate_trace_id()
     run_id = generate_run_id()
     cfg = get_config()
     print(f"[portfolio] trace_id={trace_id} run_id={run_id}")
 
+    # 根据 universe 选择 elite 目录
+    universe = getattr(args, "universe", "stock")
+    if universe == "futures":
+        elite_dir = str(Path(cfg.memory_dir) / "knowledge" / "factors" / "futures_elite")
+    else:
+        elite_dir = cfg.elite_dir
+    print(f"[portfolio] universe={universe} elite_dir={elite_dir}")
+
     try:
         loop = PortfolioLoop(
-            elite_dir=cfg.elite_dir,
+            elite_dir=elite_dir,
             memory_dir=cfg.memory_dir + "/portfolio",
         )
         result = loop.run()
         print(f"[portfolio] 完成: status={result.status} "
               f"factors={result.n_factors_retained} "
               f"sharpe={result.combo_sharpe:.4f}")
+
+        # L3 完成后自动触发期货信号管道
+        if universe == "futures" and result.status in ("passed", "verifier_warning", "completed"):
+            print("[portfolio] 触发期货信号生成管道...")
+            from scripts.futures_signal_pipeline import main as signal_main
+            rc = signal_main()
+            if rc != 0:
+                print(f"[portfolio] 信号管道异常退出: rc={rc}", file=sys.stderr)
         return 0
     except Exception as e:  # noqa: BLE001
         print(f"[portfolio] 运行失败: {e}", file=sys.stderr)
@@ -453,6 +469,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_port = sub.add_parser("portfolio", help="L3 组合构建")
     port_sub = p_port.add_subparsers(dest="subcommand", required=False)
     p_port_run = port_sub.add_parser("run", help="启动 L3 组合构建")
+    p_port_run.add_argument("--universe", type=str, default="stock",
+                            choices=["stock", "futures"],
+                            help="因子池类型: stock（股票）/ futures（期货）")
     p_port_run.set_defaults(func=_cmd_portfolio_run)
 
     # ui

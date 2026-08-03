@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v1.7.0
+> 版本: v1.7.3
 > 最后更新: 2026-08-03
 
 ---
@@ -9,7 +9,9 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
-| **v1.7.0** | 2026-08-03 | 策略进化：动态因子权重（DynamicWeightStrategy）+ 市场制度自适应（RegimeAdaptiveStrategy）+ 多周期信号融合（MultiPeriodSignalFusion）+ 55 测试用例全绿，strategy_evolution.py 95% 覆盖率 |
+| **v1.7.3** | 2026-08-03 | 信号管道 Ridge 回归加权：`_compute_ridge_weights` 基于 L2 正则化学习因子权重（替代 IC>0.3 硬过滤+等权），弱因子保留不丢弃；新增 21 个测试用例（`tests/test_futures_signal_pipeline.py`）；调度任务修复（`futures_signal_pipeline` 默认注册）；基本面数据测试适配 FundamentalProvider API 变更 |
+| **v1.7.2** | 2026-08-03 | 信号管道全量商品池：L3/定时任务改为 `--universe all`（82 品种 FUTURES_SUBSET 剔除金融期货，剔除停更/陈旧品种后 72 品种参与评分）；报告输出品种中文名称（FUTURES_SYMBOL_NAMES）、主力合约代码（get_dominant_contracts：contract_kline 最新交易日最大成交量 + AKShare futures_zh_realtime 持仓量 fallback）、盘中实时价（AKShare 分时最新 close，覆盖 72/72）；新增 8 测试用例（名称映射 + 主力合约判定 + AKShare fallback） |
+| **v1.7.1** | 2026-08-03 | 期货全量信号修复：`get_futures_panel()` common_dates 改为多数对齐（≥ 品种数//2），修复 WH0/JR0/RI0/LR0 停更品种清空交集导致方向校正失效的问题；信号管道方向校正改为按日期定位（df.index.get_loc）；管道新增 `--universe all` 支持全量 76 商品期货（FUTURES_SUBSET 剔除金融期货）；信号管道剔除停更/陈旧品种（最新交易日早于共同日期末端）；Elite 因子 MA 计算修复（np.convolve mode='same' 尾部边界 bug → rolling mean）；新增 12 测试用例（test_data_futures_panel.py） |
 | **v1.6.0** | 2026-08-03 | 期货自治循环：L1/L2/L3 全自动调度（APScheduler 定时任务）+ 期货基本面数据接入（库存/仓单/基差）+ 信号管道定时任务 + 5 个注册任务（L1:08:30 / L2:23:00 / L3:20:00 / 信号管道:20:30 / 健康检查:每10m）+ 期货全量种子因子库（12 大因子家族 50+ 子因子）+ 期货因子演化脚本 + 顶级因子过滤（IC>0.3）接入信号管道 + 信号报告输出到 reports/{date}/ |
 | **v0.1.0** | 2026-07-18 | 从 FDT 剥离，完成 Phase 1-7，220 测试全绿 |
 | **v1.5.1** | 2026-08-03 | 期货组合构建与信号生成：L3 PortfolioLoop 构建组合策略（组合夏普 5.43），新增 scripts/futures_signal_pipeline.py 期货横截面信号管道（66 期货 Elite 因子），生成 25 核心品种信号报告（含 Top 20 排名与因子贡献分析） |
@@ -31,8 +33,8 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 
 | 文件 | 字段 |
 |:-----|:-----|
-| `fts/__init__.py` | `__version__ = "1.7.0"` |
-| `pyproject.toml` | `version = "1.7.0"` |
+| `fts/__init__.py` | `__version__ = "1.7.3"` |
+| `pyproject.toml` | `version = "1.7.3"` |
 
 异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v1.1.0），与 FTS 项目版本同步。
 
@@ -250,6 +252,6 @@ pip install apscheduler
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `fts/__init__.py` __version__ = "1.7.0"；`pyproject.toml` version = "1.7.0" |
-| 可验证断言 | 版本号 v1.7.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
-| 检验方式 | `python -c "import fts; assert fts.__version__ == '1.7.0'"` |
+| 代码→文档映射 | `fts/__init__.py` __version__ = "1.7.3"；`pyproject.toml` version = "1.7.3" |
+| 可验证断言 | 版本号 v1.7.3 在 fts/__init__.py 和 pyproject.toml 中一致 |
+| 检验方式 | `python -c "import fts; assert fts.__version__ == '1.7.3'"` |
