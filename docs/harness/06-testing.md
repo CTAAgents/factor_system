@@ -1,7 +1,7 @@
 # FTS 测试策略
 
-> 版本: v1.9.0
-> 最后更新: 2026-08-03
+> 版本: v2.2.0
+> 最后更新: 2026-08-04
 
 ---
 
@@ -22,10 +22,10 @@
 
 | 层级 | 测试文件数 | 用例数 | 说明 |
 |:-----|:----------|:-------|:-----|
-| 单元测试 | 29+ | ~1185 | 各模块独立测试（含基本面数据层 + 信号管道） |
+| 单元测试 | 38+ | ~1400 | 各模块独立测试（含基本面数据层 + 信号管道 + 消融实验 + 风险标签 + 场景测试 + SHAP分析 + 鲁棒性 + 因果验证 + 逻辑监控） |
 | 集成测试 | 2 | ~143 | strategies 策略层 |
 | E2E | 1 | 10 | test_e2e.py |
-| 合计 | 39+ | 1633 | 1633 passed |
+| 合计 | 48+ | 1850 | 1850+ passed |
 
 ---
 
@@ -42,7 +42,13 @@ tests/
 │   ├── test_contracts.py            # core contracts 测试
 │   └── test_enums.py                # enums 测试
 │
-├── factor_engine/                   # 15 个测试文件
+├── scenarios/                      # 1 个测试包（20 用例）
+│   ├── __init__.py
+│   ├── definitions.py              # 23 个宏观行为场景定义
+│   ├── validator.py                # 场景验证器
+│   └── test_scenarios.py           # 场景测试用例
+│
+├── factor_engine/                   # 22 个测试文件
 │   ├── __init__.py
 │   ├── conftest.py                  # factor_engine fixture
 │   ├── test_contracts.py            # 契约定义测试
@@ -120,7 +126,7 @@ python -m pytest tests/factor_engine/test_verifier.py -v
 |:-----|:---|
 | Total statements | 5828 |
 | Overall coverage | 91% |
-| 测试用例数 | 1597 passed, 2 failed, 1 skipped |
+| 测试用例数 | 1602 passed, 0 failed, 0 skipped |
 | 测试文件数 | 42+ |
 | 种子因子数 | 482（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面/另类/宏观） |
 | 期货专用种子 | 12 大因子家族 50+ 子因子 |
@@ -230,6 +236,7 @@ TOTAL                                       5828    533    91%
 | `monitor/__init__.py` | **100%** | |
 | `monitor/elite_tracker.py` | **100%** | Elite 因子跟踪全覆盖 |
 | `monitor/http_server.py` | **100%** | Web UI 全覆盖 |
+| `monitor/logic_monitor.py` | **100%** | 逻辑监控全覆盖 |
 | `pipeline/__init__.py` | **100%** | |
 | `pipeline/base.py` | **100%** | |
 | `pipeline/factor_combiner.py` | **100%** | |
@@ -259,6 +266,12 @@ TOTAL                                       5828    533    91%
 | `tests/core/test_contracts.py` | ~39 | core contracts |
 | `tests/core/test_enums.py` | ~17 | enums |
 | `tests/test_config_settings.py` | ~32 | 配置管理 |
+| `tests/factor_engine/test_ablation.py` | ~20 | 消融实验（五种消融模式 + 边界情况） |
+| `tests/factor_engine/test_risk_tag.py` | ~10 | 风险标签闭环验证 |
+| `tests/factor_engine/test_shap_analyzer.py` | ~14 | SHAP 局部可解释性分析 |
+| `tests/factor_engine/test_robustness.py` | ~20 | 鲁棒性审查（对抗样本/缺失值/分布外） |
+| `tests/factor_engine/test_causal_validator.py` | ~14 | 因果结构审查（自然实验/预测误差） |
+| `tests/scenarios/test_natural_experiments.py` | ~10 | 自然实验事件定义 |
 | `tests/factor_engine/test_contracts.py` | ~16 | 契约定义 |
 | `tests/factor_engine/test_evaluation_chain.py` | ~50 | 三级评估链 |
 | `tests/factor_engine/test_evolution_loop.py` | ~58 | L2 主循环 |
@@ -269,6 +282,7 @@ TOTAL                                       5828    533    91%
 | `tests/factor_engine/test_meta_loop.py` | ~77 | L1 元循环 |
 | `tests/factor_engine/test_micro_evolution.py` | ~8 | 微观演化（含 ImportError 覆盖） |
 | `tests/factor_engine/test_monitor.py` | ~45 | 因子引擎监控 |
+| `tests/monitor/test_logic_monitor.py` | ~15 | 逻辑监控仪表盘（漂移检测/极端预测/换月日） |
 | `tests/factor_engine/test_portfolio_loop.py` | ~54 | L3 组合循环 |
 | `tests/factor_engine/test_program.py` | ~16 | Program.md |
 | `tests/factor_engine/test_seed_pool.py` | ~16 | 种子池（含 GTJA191） |
@@ -277,6 +291,7 @@ TOTAL                                       5828    533    91%
 | `tests/factor_engine/test_verifier.py` | ~12 | Verifier |
 | `tests/factor_engine/test_walk_forward.py` | ~57 | 走航验证 |
 | `tests/factor_engine/test_regime.py` | ~25 | 市场体制 |
+| `tests/scenarios/test_scenarios.py` | ~20 | 宏观行为场景测试 |
 | `tests/pipeline/test_base.py` | ~25 | 管线基础 |
 | `tests/pipeline/test_factor_combiner.py` | ~33 | 因子组合器 |
 | `tests/scheduler/test_engine.py` | ~35 | 调度引擎 |
@@ -295,7 +310,7 @@ TOTAL                                       5828    533    91%
 | `tests/test_futures_signal_pipeline.py` | ~21 | 信号管道 Ridge 回归加权 + 方向校正 + 组合合成 |
 | `tests/test_llm.py` | ~36 | LLM 客户端 |
 | `tests/test_monitor.py` | ~46 | 项目级监控 |
-| **合计** | **1633** | |
+| **合计** | **1700+** | |
 
 ---
 
@@ -314,5 +329,5 @@ TOTAL                                       5828    533    91%
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | `test_futures_signal_pipeline.py` → 21 个信号管道测试用例（Ridge 回归加权 + 方向校正 + 组合合成）；`test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面）；`test_seed_pool.py` → 种子池测试（含期货种子） |
-| 可验证断言 | 信号管道测试数 = 21，总测试数 = 1633 |
+| 可验证断言 | 信号管道测试数 = 21，总测试数 = 1602 |
 | 检验方式 | `python -m pytest tests/test_futures_signal_pipeline.py --no-cov -q 2>&1 | findstr "passed"` |

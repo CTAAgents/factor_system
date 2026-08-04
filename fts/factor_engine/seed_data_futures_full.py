@@ -1023,14 +1023,16 @@ def factor_program(data, params):
     window = int(params.get('window', 60))
     if n < window + 1:
         return np.zeros(n)
-    # 市场趋势强度：用所有品种平均趋势（横截面视角）
-    # 单品种内用 R² 衡量趋势强度
+    # 市场趋势强度+方向：R² × 斜率符号
+    # R² 衡量趋势强度，斜率符号决定方向（上涨=+，下跌=-）
     trend = np.zeros(n)
     for i in range(window, n):
         y = close[i-window+1:i+1]
         x = np.arange(window)
         if np.std(y) > 1e-10:
-            trend[i] = np.corrcoef(x, y)[0, 1]**2
+            r2 = np.corrcoef(x, y)[0, 1]**2
+            slope_sign = np.sign(y[-1] - y[0])
+            trend[i] = r2 * slope_sign
     sig = np.tanh(trend * 5)
     return np.clip(sig, -1.0, 1.0)
 """

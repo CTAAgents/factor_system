@@ -189,7 +189,7 @@ def test_default_budget_config_values():
     assert DEFAULT_BUDGET_CONFIG["nightly_token_limit"] == 200_000
     assert DEFAULT_BUDGET_CONFIG["max_generation"] == 50
     assert DEFAULT_BUDGET_CONFIG["circuit_breaker_token_ratio"] == 2.0
-    assert DEFAULT_BUDGET_CONFIG["circuit_breaker_consecutive_low_ic"] == 3
+    assert DEFAULT_BUDGET_CONFIG["circuit_breaker_consecutive_low_ic"] == 5
     assert DEFAULT_BUDGET_CONFIG["circuit_breaker_failure_rate"] == 0.95
 
 

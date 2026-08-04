@@ -396,7 +396,14 @@ def _cmd_scheduler_list(_args: argparse.Namespace) -> int:
 
 def _cmd_factor_list(args: argparse.Namespace) -> int:
     """列出 elite 因子。"""
-    elite_dir = Path(args.elite_dir or "memory/knowledge/factors/elite")
+    # 根据 market 参数选择目录，默认期货
+    if args.elite_dir:
+        elite_dir = Path(args.elite_dir)
+    elif args.market == "stock":
+        elite_dir = Path("memory/knowledge/factors/elite")
+    else:
+        elite_dir = Path("memory/knowledge/factors/futures_elite")
+    
     if not elite_dir.exists():
         print(f"[factor list] elite 目录不存在: {elite_dir}")
         return 0
@@ -404,13 +411,42 @@ def _cmd_factor_list(args: argparse.Namespace) -> int:
     if not factors:
         print(f"[factor list] 无 elite 因子（{elite_dir}）")
         return 0
-    print(f"=== Elite Factors ({len(factors)}) ===")
+    market_label = "期货" if args.market == "futures" else "股票"
+    print(f"=== {market_label} Elite Factors ({len(factors)}) ===")
     for p in factors:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             print(f"  - {data.get('factor_id', p.stem)} | {data.get('name', '<unnamed>')} | gen={data.get('generation', '?')}")
         except Exception as e:  # noqa: BLE001
             print(f"  - {p.stem} [读取失败: {e}]")
+    return 0
+
+
+def _cmd_factor_seeds(args: argparse.Namespace) -> int:
+    """列出种子因子。"""
+    market = args.market
+    
+    if market == "futures":
+        from fts.factor_engine.seed_data_futures import load_futures_seeds
+        seeds = load_futures_seeds(trace_id="cli_seed_list")
+        print(f"=== 期货种子因子 ({len(seeds)}) ===")
+        for s in seeds:
+            sig = s.get("signature", {})
+            params = s.get("params", {})
+            print(f"  - {s.get('name', '?')}")
+            print(f"      输入: {sig.get('input_fields', [])}")
+            print(f"      参数: {params}")
+    else:
+        from fts.factor_engine.seed_data import load_stock_seeds
+        seeds = load_stock_seeds(trace_id="cli_seed_list")
+        print(f"=== 股票种子因子 ({len(seeds)}) ===")
+        for s in seeds:
+            sig = s.get("signature", {})
+            params = s.get("params", {})
+            print(f"  - {s.get('name', '?')}")
+            print(f"      输入: {sig.get('input_fields', [])}")
+            print(f"      参数: {params}")
+    
     return 0
 
 
@@ -502,12 +538,17 @@ def build_parser() -> argparse.ArgumentParser:
     factor_sub = p_factor.add_subparsers(dest="subcommand", required=False)
     p_factor_list = factor_sub.add_parser("list", help="列出 elite 因子")
     p_factor_list.add_argument("--elite-dir", default=None, help="elite 因子目录")
+    p_factor_list.add_argument("--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）")
     p_factor_list.set_defaults(func=_cmd_factor_list)
 
     p_factor_show = factor_sub.add_parser("show", help="查看因子详情")
     p_factor_show.add_argument("factor_id", help="因子 ID（支持部分匹配）")
     p_factor_show.add_argument("--elite-dir", default=None, help="elite 因子目录")
     p_factor_show.set_defaults(func=_cmd_factor_show)
+
+    p_factor_seeds = factor_sub.add_parser("seeds", help="列出种子因子")
+    p_factor_seeds.add_argument("--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）")
+    p_factor_seeds.set_defaults(func=_cmd_factor_seeds)
 
     return parser
 

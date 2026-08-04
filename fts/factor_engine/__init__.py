@@ -121,6 +121,30 @@ from .program import (
     init_program,
     get_llm_env_overrides,
 )
+from .ablation import (
+    AblationExperiment,
+    AblationResult,
+    SingleAblation,
+    ABLATION_MODES,
+)
+from .shap_analyzer import (
+    ShapAnalyzer,
+    ShapAnalysisResult,
+    ShapSampleAnalysis,
+    ShapFeatureImportance,
+)
+from .robustness import (
+    RobustnessTester,
+    RobustnessTestResult,
+    AdversarialTestResult,
+    MissingValueTestResult,
+    OODTestResult,
+)
+from .causal_validator import (
+    CausalValidator,
+    CausalValidationResult,
+    EventPredictionError,
+)
 from .monitor import (
     LoopStatus,
     AllStatus,
@@ -224,4 +248,24 @@ __all__ = [
     "inject_to_fdt",
     "PortfolioRunResult",
     "PortfolioLoop",
+    # ─── 消融实验（Phase A v1.10.0 逻辑审查）────────────────
+    "AblationExperiment",
+    "AblationResult",
+    "SingleAblation",
+    "ABLATION_MODES",
+    # ─── SHAP 分析（Phase B v1.11.0 逻辑审查）────────────────
+    "ShapAnalyzer",
+    "ShapAnalysisResult",
+    "ShapSampleAnalysis",
+    "ShapFeatureImportance",
+    # ─── 鲁棒性审查（Phase B v1.11.0 逻辑审查）────────────────
+    "RobustnessTester",
+    "RobustnessTestResult",
+    "AdversarialTestResult",
+    "MissingValueTestResult",
+    "OODTestResult",
+    # ─── 因果结构审查（Phase C v2.0.0 逻辑审查）────────────────
+    "CausalValidator",
+    "CausalValidationResult",
+    "EventPredictionError",
 ]

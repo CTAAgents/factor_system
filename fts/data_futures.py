@@ -12,6 +12,14 @@ fts.data_futures — 期货数据提供者
     - hold: 持仓量（open interest），日线和分钟线均有
     - settle: 结算价（仅日线）
 
+⚠️ VWAP 字段说明:
+    vwap 字段的计算逻辑:
+    - 精确 VWAP（有成交额时）: amount / volume
+    - AKShare 路径（有 settle 时）: (H + L + C + settle) / 4
+    - DuckDB 路径（无 settle 时）: (H + L + C) / 3（典型价格）
+    settle 参与计算的思路是：结算价是期货交易所官方定价基准，比
+    简单平均更贴近期货价格特征。最终信号质量由演化引擎的 IC/Sharpe 指标评判。
+
 期货截面含义:
     横截面是"不同品种 × 同一日期"，可做跨品种因子（如跨商品动量、品种间强弱）。
 
@@ -199,8 +207,12 @@ class FuturesDataProvider:
         sym = raw[:-1] if raw.endswith("0") else raw
 
         # 查询 kline_cache
+        # vwap: amount/volume（精确 VWAP，amount 有效时），否则用典型价格 (H+L+C)/3。
+        # kline_cache 无 settle 列，故用 (H+L+C)/3 而非 (H+L+C+settle)/4。
         result = db.execute(
-            "SELECT date, open, high, low, close, volume, amount "
+            "SELECT date, open, high, low, close, volume, amount, "
+            "  CASE WHEN amount > 0 AND volume > 0 THEN amount / volume "
+            "       ELSE (high + low + close) / 3.0 END AS vwap "
             "FROM kline_cache WHERE symbol = ? AND period = 'daily' "
             "ORDER BY date DESC LIMIT ?",
             [sym, days],
@@ -209,7 +221,7 @@ class FuturesDataProvider:
         if not rows:
             return None
 
-        df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+        df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume", "amount", "vwap"])
         df["date"] = pd.to_datetime(df["date"])
         df.set_index("date", inplace=True)
         df.sort_index(inplace=True)
@@ -219,7 +231,7 @@ class FuturesDataProvider:
         df["settle"] = np.nan
 
         # 标准列顺序
-        return df[["open", "high", "low", "close", "volume", "hold", "settle"]]
+        return df[["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]]
 
     # ── AKShare 即时获取 ──
 
@@ -281,6 +293,10 @@ class FuturesDataProvider:
                 df[c] = np.nan
                 cols.append(c)
 
+        # vwap: AKShare 有 settle，用 (H+L+C+settle)/4 作为期货定价基准的近似。
+        df["vwap"] = (df["high"] + df["low"] + df["close"] + df["settle"]) / 4.0
+        cols.append("vwap")
+
         # 限制天数
         if len(df) > days:
             df = df.iloc[-days:]
@@ -313,14 +329,17 @@ class FuturesDataProvider:
         close = base_price + np.cumsum(np.random.randn(n_days) * 30)
         close = np.maximum(close, base_price * 0.5)  # 防止负价格
         hold = np.random.randint(100000, 1000000, n_days).astype(float)
+        high = close + np.abs(np.random.randn(n_days)) * 30
+        low = close - np.abs(np.random.randn(n_days)) * 30
         return pd.DataFrame({
             "open": close + np.random.randn(n_days) * 10,
-            "high": close + np.abs(np.random.randn(n_days)) * 30,
-            "low": close - np.abs(np.random.randn(n_days)) * 30,
+            "high": high,
+            "low": low,
             "close": close,
             "volume": np.random.randint(10000, 500000, n_days).astype(float),
             "hold": hold,
             "settle": close + np.random.randn(n_days) * 5,
+            "vwap": (high + low + close + (close + np.random.randn(n_days) * 5)) / 4.0,
         }, index=dates)
 
 
@@ -375,6 +394,80 @@ FUTURES_CORE_SUBSET: list[str] = [
     "IM0",  # 中证1000股指
     "LC0",  # 碳酸锂
     "SI0",  # 工业硅
+]
+
+
+# 盲测品种池（不参与演化训练，用于验证因子泛化能力）
+# 从 FUTURES_SUBSET 中选取，覆盖不同产业链类别
+FUTURES_HOLDOUT: list[str] = [
+    "JD0",  # 鸡蛋 — 大商所，农产品
+    "AP0",  # 苹果 — 郑商所，农产品
+    "FG0",  # 玻璃 — 郑商所，建材
+    "AL0",  # 铝 — 上期所，有色金属
+    "UR0",  # 尿素 — 郑商所，化工
+    "NR0",  # 20号胶 — 能源中心，能源化工
+]
+
+
+# ─── 产业链分类映射（用于分层训练集选择）────────────────────
+
+FUTURES_SECTOR_MAP: dict[str, list[str]] = {
+    "黑色系": [
+        "I0", "RB0", "HC0", "SS0",   # 钢铁产业链
+        "J0", "JM0",                   # 焦煤焦炭
+        "SF0", "SM0",                  # 铁合金
+    ],
+    "有色金属": [
+        "CU0", "ZN0", "PB0", "SN0", "NI0",  # 基本金属
+        "BC0", "AO0", "AD0", "OP0",          # 铜/铝衍生
+    ],
+    "能源化工": [
+        "SC0", "FU0", "LU0", "BU0",          # 原油/燃料/沥青
+        "RU0", "NR0", "BR0",                  # 橡胶
+        "TA0", "MA0", "EG0", "EB0",           # 化工中间体
+        "L0", "PP0", "V0", "PG0",             # 塑料/液化气
+        "SA0", "UR0", "PF0", "SH0",           # 纯碱/尿素/化纤
+        "PX0", "PR0", "PL0", "BZ0",           # 芳烃/聚酯/丙烯
+        "SP0", "EC0",                          # 纸浆/集运
+        "FG0",                                 # 建材
+    ],
+    "农产品": [
+        "C0", "A0", "B0", "M0", "Y0", "P0",   # 大豆/玉米/油脂
+        "CS0", "RR0", "LH0", "LG0", "FB0",     # 淀粉/生猪/原木
+        "OI0", "RS0", "RM0",                    # 菜籽/菜粕
+        "SR0", "CF0", "CY0",                    # 白糖/棉花/棉纱
+        "WH0", "JR0", "RI0", "LR0",             # 谷物
+        "JD0", "AP0", "CJ0", "PK0",             # 软商品/果蔬
+    ],
+    "贵金属": [
+        "AU0", "AG0",
+    ],
+    "新能源/新材料": [
+        "LC0", "SI0", "PS0", "PT0", "PD0",
+    ],
+    "金融期货": [
+        "IF0", "IC0", "IH0", "IM0", "TF0", "TS0",
+    ],
+}
+
+
+# 分层训练品种集（按产业链从每组中选取 2-3 个代表品种，
+# 确保训练集覆盖所有产业链类别，排除盲测品种池）
+FUTURES_STRATIFIED_SUBSET: list[str] = [
+    # 黑色系
+    "RB0", "I0", "J0",
+    # 有色金属
+    "CU0", "ZN0", "NI0",
+    # 能源化工
+    "TA0", "MA0", "SC0",
+    # 农产品
+    "M0", "C0", "SR0",
+    # 贵金属
+    "AU0", "AG0",
+    # 新能源/新材料
+    "LC0", "SI0",
+    # 金融期货
+    "IF0", "IC0", "IH0",
 ]
 
 
@@ -589,6 +682,9 @@ __all__ = [
     "get_futures_provider",
     "FUTURES_SUBSET",
     "FUTURES_CORE_SUBSET",
+    "FUTURES_HOLDOUT",
+    "FUTURES_SECTOR_MAP",
+    "FUTURES_STRATIFIED_SUBSET",
     "FUTURES_SYMBOL_NAMES",
     "get_dominant_contracts",
     "get_realtime_prices",

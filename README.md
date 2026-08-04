@@ -2,9 +2,9 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-1601%20passing-brightgreen)](#)
+[![Tests](https://img.shields.io/badge/tests-1850%20passing-brightgreen)](#)
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)](#)
-[![Version](https://img.shields.io/badge/version-1.8.0-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue)](#)
 
 ---
 
@@ -81,7 +81,7 @@ fts/                          # 核心源码（~3,400 语句）
 ├── cli.py                    # 统一命令行入口
 └── monitor/                  # 健康监控 + HTTP 端点
 
-tests/                        # 40+ 个测试文件，1432 全部通过
+tests/                        # 48+ 个测试文件，1850+ 全部通过
 ├── factor_engine/            # 因子引擎测试（16 文件）
 ├── pipeline/                 # 管线测试（2 文件）
 ├── scheduler/                # 调度测试（4 文件）
@@ -92,7 +92,11 @@ tests/                        # 40+ 个测试文件，1432 全部通过
 ├── test_elite_tracker.py     # EliteTracker 测试
 ├── test_http_server.py       # HTTP 监控测试
 ├── test_data.py              # 数据层测试
-└── test_e2e.py               # E2E 集成测试
+├── test_e2e.py               # E2E 集成测试
+├── test_logic_monitor.py     # 逻辑监控测试
+├── test_causal_validator.py  # 因果验证器测试
+├── test_data_futures_panel.py# 期货面板测试
+└── test_futures_signal_pipeline.py # 信号管道测试
 
 config/                       # 项目级配置文件
 ├── settings.yaml             # YAML 配置示例
@@ -151,8 +155,8 @@ FTS（因子智能系统）
 
 | 指标 | 值 |
 |------|:---:|
-| **版本** | v1.8.1 |
-| **测试通过数** | 1601 / 1602（99.9%）|
+| **版本** | v2.2.0 |
+| **测试通过数** | 1850+ / 1850+（100%）|
 | **测试覆盖率** | 99%（46/47 模块 100%，1 模块 73% 需 MCP 网络环境）|
 | **代码行数** | ~5,000 语句 |
 | **文件数** | 85+ 个源码 + 测试文件 |

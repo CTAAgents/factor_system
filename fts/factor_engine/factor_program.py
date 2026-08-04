@@ -262,10 +262,14 @@ def create_factor_program(
     parent_id: Optional[str] = None,
     generation: int = 0,
     trace_id: Optional[str] = None,
+    risk_tag: Optional[str] = None,
 ) -> FactorProgram:
     """创建一个新的因子程序实例。
 
     自动生成 factor_id 和时间戳。
+
+    Args:
+        risk_tag: 风险标签，如 "vwap_approx" 用于标记高风险因子。
     """
     if not economic_logic.get("narrative", "").strip():
         raise ValueError("economic_logic.narrative 不能为空字符串")
@@ -283,6 +287,7 @@ def create_factor_program(
         generation=generation,
         created_at=datetime.now().isoformat(),
         trace_id=trace_id or factor_id,
+        risk_tag=risk_tag,
     )
 
 

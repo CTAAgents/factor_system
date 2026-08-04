@@ -599,6 +599,7 @@ def factor_program(data, params):
         max_candidates: int = 5,
         seed_pool: Optional[SeedPool] = None,
         trace_id: Optional[str] = None,
+        extra_existing_names: Optional[set[str]] = None,
     ) -> list[SeedCandidate]:
         """执行 Bootstrapping，返回候选因子列表。
 
@@ -608,6 +609,7 @@ def factor_program(data, params):
             max_candidates: 最大候选数
             seed_pool: 现有种子池（用于去重判断）
             trace_id: 全链路 trace_id
+            extra_existing_names: 额外已注入因子名（小写），用于冷启动后去重
 
         Returns:
             list[SeedCandidate] — 通过沙箱编译的候选因子
@@ -615,6 +617,8 @@ def factor_program(data, params):
         trace_id = trace_id or generate_trace_id("l1")
         candidates: list[SeedCandidate] = []
         existing_names = {n.lower() for n in (seed_pool or SeedPool()).list_names()}
+        if extra_existing_names:
+            existing_names |= extra_existing_names
 
         # 1. 如果有 LLM 客户端，调用 LLM 生成候选
         if self.llm_client is not None:
@@ -870,9 +874,18 @@ class MetaLoop:
             # ─── Step 2: debate_round 分析 ──────────────────
             debate_gaps, debate_gaps_detected = self._analyze_debate(state)
 
+            # ─── Step 2.5: 扫描已注入因子（冷启动去重） ────
+            extra_existing_names = self._scan_injected_names()
+            if extra_existing_names:
+                logger.info(
+                    "L1 扫描到 %d 个历史注入因子名用于去重",
+                    len(extra_existing_names),
+                )
+
             # ─── Step 3: factorengine Bootstrapping ─────────
             candidates, candidates_generated = self._run_bootstrap(
                 market_snapshot, debate_gaps, max_cand, trace_id, state,
+                extra_existing_names=extra_existing_names,
             )
 
             # ─── Step 4: L1 Verifier + 注入 ────────────────
@@ -933,6 +946,7 @@ class MetaLoop:
         max_cand: int,
         trace_id: str,
         state: L1MetaLoopState,
+        extra_existing_names: Optional[set[str]] = None,
     ) -> tuple[list[SeedCandidate], int]:
         """Step 3: 执行 Bootstrapping 生成候选因子。"""
         candidates = self.bootstrap_chain.bootstrap(
@@ -941,6 +955,7 @@ class MetaLoop:
             max_candidates=max_cand,
             seed_pool=self.seed_pool,
             trace_id=trace_id,
+            extra_existing_names=extra_existing_names,
         )
         candidates_generated = len(candidates)
         state["total_candidates_generated"] = (
@@ -950,6 +965,22 @@ class MetaLoop:
             candidates[0].get("parent_topic", "") if candidates else ""
         )
         return candidates, candidates_generated
+
+    def _scan_injected_names(self) -> set[str]:
+        """扫描 l1_injected/ 目录，返回已注入因子名称（小写）。"""
+        if not self.inject_dir.exists():
+            return set()
+        names: set[str] = set()
+        for f in self.inject_dir.glob("*.json"):
+            try:
+                with open(f, "r", encoding="utf-8") as fp:
+                    cand = json.load(fp)
+                    name = cand.get("name", "")
+                    if name:
+                        names.add(name.lower())
+            except (json.JSONDecodeError, OSError):
+                continue
+        return names
 
     def _verify_and_inject(
         self,

@@ -260,8 +260,11 @@ class EvolutionLoop:
 
                 # ── Step 5: 经验链记录 ──
                 if verifier_result["passed"]:
-                    # 晋级精英池
-                    self._promote_to_elite(optimized_factor, evaluation)
+                    # 晋级精英池（去重检查）
+                    promoted_path = self._promote_to_elite(optimized_factor, evaluation)
+                    if promoted_path is None:
+                        # 因子名称重复，跳过
+                        continue
                     self.state_manager.increment_promoted(state)
                     elite_ids.append(optimized_factor["factor_id"])
                     self._record_success_trace(
@@ -399,9 +402,26 @@ class EvolutionLoop:
 
     def _promote_to_elite(
         self, factor: FactorProgram, evaluation: FactorEvaluation
-    ) -> Path:
-        """将因子晋升到精英池。"""
+    ) -> Optional[Path]:
+        """将因子晋升到精英池。
+
+        Returns:
+            Path: 晋升成功
+            None: 因子名称重复，跳过晋升
+        """
         import json
+        
+        # 去重检查：检查因子名称是否已存在
+        factor_name = factor.get("name", "")
+        for existing_file in self.elite_dir.glob("*.json"):
+            try:
+                existing_data = json.loads(existing_file.read_text(encoding="utf-8"))
+                if existing_data.get("name") == factor_name:
+                    print(f"[evo] 跳过重复因子: {factor_name} (已存在: {existing_file.name})")
+                    return None
+            except Exception:
+                continue
+        
         fp = self.elite_dir / f"{factor['factor_id']}.json"
         # 将 factor 字段展开到顶层，方便 cli 直接读取
         record = dict(factor)
@@ -445,6 +465,13 @@ class EvolutionLoop:
                     )
                 bt = evaluation.get("level_1_backtest", {})
                 passed = evaluation.get("passed", False)
+
+                # 风险标签额外检查：标记为 vwap_approx 的因子需要更高 IC 阈值
+                if passed and seed.get("risk_tag") == "vwap_approx":
+                    ic = bt.get("ic", 0)
+                    if abs(ic) < 0.08:
+                        print(f"[evo] 跳过 vwap_approx 因子: {seed['name']} (IC={abs(ic):.4f} < 0.08)")
+                        continue
 
                 if passed:
                     self._promote_to_elite(seed, evaluation)

@@ -93,6 +93,7 @@ class FactorProgram(TypedDict, total=False):
     generation: int                             # 演化代数（0 = 种子）
     created_at: str                             # ISO 8601
     trace_id: str                               # 全链路 trace_id
+    risk_tag: Optional[str]                     # 风险标签，如 "vwap_approx"
 
 
 # ─── 评估结果契约 ─────────────────────────────────────────
@@ -248,8 +249,8 @@ DEFAULT_BUDGET_CONFIG: BudgetConfig = BudgetConfig(
     max_generation=50,
     max_tokens_per_factor=10_000,
     circuit_breaker_token_ratio=2.0,
-    circuit_breaker_consecutive_low_ic=3,
-    circuit_breaker_low_ic_threshold=0.01,
+    circuit_breaker_consecutive_low_ic=5,
+    circuit_breaker_low_ic_threshold=0.005,
     circuit_breaker_failure_rate=0.95,
 )
 """v1.1.0 默认预算配置 — 熔断触发后必须人类介入恢复。"""

@@ -1,7 +1,7 @@
 # FTS 系统架构文档
 
-> 版本: v1.9.0
-> 最后更新: 2026-08-03
+> 版本: v2.0.0
+> 最后更新: 2026-08-04
 
 ---
 
@@ -151,6 +151,10 @@ fts/
 │   ├── cost_model.py           # 交易成本模型
 │   ├── regime.py               # 市场制度检测
 │   ├── stress_test.py          # 压力测试
+│   ├── ablation.py             # 输入敏感性消融实验（Phase A 逻辑审查）
+│   ├── shap_analyzer.py        # SHAP 局部可解释性分析（Phase B 逻辑审查）
+│   ├── robustness.py           # 鲁棒性审查（Phase B 逻辑审查）
+│   ├── causal_validator.py     # 因果结构审查（Phase C 逻辑审查）
 │   └── monitor.py              # 循环监控
 ├── pipeline/                   # 因子推演管线
 │   ├── base.py                 # FactorPipeline 抽象基类
@@ -162,7 +166,8 @@ fts/
 └── monitor/                    # 健康监控
     ├── __init__.py             # 状态报告函数
     ├── http_server.py          # HTTP 监控端点
- │   └── elite_tracker.py        # Elite 因子追踪
+    ├── elite_tracker.py        # Elite 因子追踪
+    └── logic_monitor.py        # 逻辑监控仪表盘（Phase C 逻辑审查）
 ├── scheduler/                   # 调度层
 │   ├── __init__.py             # 模块入口 + 导出
 │   ├── engine.py               # SchedulerEngine（APScheduler 包装器）

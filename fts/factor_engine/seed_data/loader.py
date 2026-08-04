@@ -247,6 +247,7 @@ def make_factor_program(
         parent_id=None,
         generation=0,
         trace_id=trace_id,
+        risk_tag="vwap_approx" if "vwap" in expression.lower() else None,
     )
 
 
@@ -369,6 +370,7 @@ def make_fundamental_program(
         parent_id=None,
         generation=0,
         trace_id=trace_id,
+        risk_tag="vwap_approx" if "vwap" in expression.lower() else None,
     )
 
 

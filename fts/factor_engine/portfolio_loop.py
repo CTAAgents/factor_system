@@ -2,22 +2,29 @@
 loop_engine/portfolio_loop.py — L3 Portfolio Loop 主循环
 
 HARNESS §11-loop-engineering.md §16:
-    L3 Portfolio Loop — 每周五 15:30 组合构建（信号合成 + 正交化 + 衰减检验 + 注入 FDT）
+    L3 Portfolio Loop — 组合构建（因子筛选 + 信号合成 + Verifier 校验）
 
-流程（5 步）:
-    Step 1: 信号合成 → 读取 elite 因子库，等权/夏普加权合成
-    Step 2: 因子正交化 → 计算相关性矩阵，剔除 > 0.7
-    Step 3: 组合构建 → 权重归一化 + 十分位 + 多空 + 成本估算
-    Step 4: 衰减检验 → 6 个月滚动窗口，衰减 > 30% 剔除
-    Step 5: 注入 FDT → 输出 combo.json + Agent 优化建议
+流程:
+    Step 1: 加载 elite 因子 → 从 futures_elite 目录读取因子 JSON
+    Step 2: 信号合成 → 三种权重模式:
+        - equal_weight: 等权 1/N
+        - sharpe_weight: 按 Sharpe 比率归一化加权（期货默认）
+        - elastic_net: Elastic Net 截面回归（CSI300 面板，L1+L2）
+    Step 3: Verifier 校验 → 组合夏普、因子相关性、换手率
+    Step 4: 输出 PortfolioCombo → 期货场景自动触发信号管道
 
-Verifier:
+信号管道（期货专用，由 CLI 在 L3 完成后触发）:
+    scripts/futures_signal_pipeline.py — 独立于本模块的 Ridge 回归加权:
+        - 方向校正: 截面 IC 法（Spearman 秩相关 vs 未来 5 日收益）
+        - 权重学习: Ridge 回归（L2 正则化，弱因子保留不丢弃）
+        - 输出: 多空双向信号排名 → reports/{date}/futures_signals_*.md
+
+Verifier 阈值:
     - 组合夏普 > 2.0
     - 因子间最大相关性 < 0.3
     - 组合换手率 < 50%/月
-    - 衰减率 < 30%
 
-版本: v1.1.0（与 FTS 同步）
+版本: v1.2.0（与 FTS 同步）
 """
 # pylint: disable=broad-exception-caught,too-few-public-methods,too-many-instance-attributes,too-many-locals
 

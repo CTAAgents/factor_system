@@ -65,13 +65,21 @@ def l2_evolution_loop_job() -> None:
         from fts.llm import MockLLMClient, get_default_llm_client
         from fts.config import get_config
         from fts.data import FTSDataProvider
-        from fts.data_futures import FUTURES_CORE_SUBSET
+        from fts.data_futures import FUTURES_STRATIFIED_SUBSET, FUTURES_HOLDOUT
         cfg = get_config()
 
-        # 准备期货横截面数据
+        # 准备期货横截面数据（分层训练集 + 排除盲测品种池）
+        train_symbols = [
+            s for s in FUTURES_STRATIFIED_SUBSET if s not in FUTURES_HOLDOUT
+        ]
+        if len(train_symbols) < 10:
+            logger.error("[L2] 训练品种不足 (排除盲测后仅 %d 个)", len(train_symbols))
+            return
+        logger.info("[L2] 分层训练品种: %d 个 (排除 %d 个盲测品种)",
+                    len(train_symbols), len(FUTURES_HOLDOUT))
         provider = FTSDataProvider()
         panel, common_dates = provider.get_futures_panel(
-            symbols=FUTURES_CORE_SUBSET, days=500, trace_id=trace_id,
+            symbols=train_symbols, days=500, trace_id=trace_id,
         )
         if not panel:
             logger.error("[L2] 无期货数据，跳过")
@@ -114,7 +122,15 @@ def l2_evolution_loop_job() -> None:
 # ── L3 Portfolio Loop — 每日 20:00 组合构建 + 信号合成 ───
 
 def l3_portfolio_loop_job() -> None:
-    """执行 L3 Portfolio Loop（组合构建 + 正交化 + 衰减检验 + 信号合成）。"""
+    """执行 L3 Portfolio Loop（因子筛选 + 信号合成 + Verifier 校验）。
+
+    权重计算模式（portfolio_loop.py）:
+        - equal_weight: 等权 1/N
+        - sharpe_weight: 按 Sharpe 比率归一化加权（期货默认）
+        - elastic_net: Elastic Net 截面回归（CSI300 面板，L1+L2）
+
+    完成后自动触发期货信号管道（Ridge 回归加权）。
+    """
     trace_id = f"fts.l3.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L3] Portfolio Loop 启动 trace_id=%s", trace_id)
 
@@ -140,12 +156,17 @@ def l3_portfolio_loop_job() -> None:
 
 # ── 期货信号管道 — 每日 20:00（L3 完成后执行）────────────
 
-def _run_futures_signal_pipeline() -> None:
+def _run_futures_signals_pipeline() -> None:
     """生成期货信号报告（L3 组合构建后自动触发）。
 
     使用全量商品期货池（--universe all）：
     - 覆盖 FUTURES_SUBSET 中所有非僵尸品种（剔除停更/陈旧品种后参与排名）
     - 报告输出品种中文名称、主力合约代码、盘中实时价
+
+    权重计算方法（Ridge 回归）:
+    - 方向校正: 截面 IC 法（Spearman 秩相关 vs 未来 5 日收益）
+    - 权重学习: Ridge 回归（L2 正则化，弱因子保留不丢弃）
+    - 输出: 多空双向信号排名 → reports/{date}/futures_signals_*.md
     """
     try:
         sys.path.insert(0, str(PROJECT_ROOT))

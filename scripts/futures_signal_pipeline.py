@@ -30,6 +30,7 @@ scripts/futures_signal_pipeline.py — 期货每日信号生成管道
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import time
@@ -112,7 +113,19 @@ def _build_composite_ohlcv(
 
 
 def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]]:
-    """加载期货顶级 Elite 因子（IC>{threshold}）。"""
+    """加载期货顶级 Elite 因子（IC>{threshold}），两层去重。
+
+    去重策略:
+        1. 代码哈希去重：对每个因子的 code 字段做 SHA256 哈希，
+           相同哈希的因子只保留第一个（按文件名排序）。
+        2. 回测结果去重：如果两个因子的 (IC, sharpe, t_stat) 完全相同，
+           视为同一因子逻辑的不同符号/参数版本，只保留第一个。
+
+    避免同一因子逻辑被 Ridge 回归重复加权，导致该逻辑获得隐性超额权重。
+    """
+    seen_codes: set[str] = set()
+    seen_stats: set[tuple[float, float, float]] = set()
+    duplicate_count = 0
     factors: list[dict[str, Any]] = []
     for fp in sorted(ELITE_DIR.glob("*.json")):
         try:
@@ -122,9 +135,29 @@ def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]
             ic = bt.get("ic", 0)
             if abs(ic) < ic_threshold:
                 continue
+
+            # Layer 1: 代码哈希去重
+            code = data.get("code", "")
+            code_hash = hashlib.sha256(code.encode()).hexdigest()
+            if code_hash in seen_codes:
+                duplicate_count += 1
+                continue
+            seen_codes.add(code_hash)
+
+            # Layer 2: 回测结果去重（IC/sharpe/t_stat 完全相同 → 同一因子）
+            stat_key = (round(ic, 5), round(bt.get("sharpe", 0), 4),
+                        round(bt.get("t_stat", 0), 5))
+            if stat_key in seen_stats:
+                duplicate_count += 1
+                continue
+            seen_stats.add(stat_key)
+
             factors.append(data)
         except (json.JSONDecodeError, OSError):
             continue
+
+    if duplicate_count:
+        print(f"      [去重] 跳过 {duplicate_count} 个重复因子")
     return factors
 
 
@@ -167,6 +200,101 @@ def _compute_signal_matrix(
     if n_errors > 0:
         print(f"      [警告] 信号计算错误: {n_errors} 次")
     return signal_matrix
+
+
+def _generate_trading_advice(
+    regime: dict,
+    signal_scores: dict[str, float],
+    factor_weights: dict[str, float],
+    signal_deltas: dict[str, float] | None = None,
+    top_n: int = 5,
+) -> dict[str, Any]:
+    """生成交易建议。
+
+    Args:
+        regime: Market Regime 检测结果
+        signal_scores: 品种信号得分 {symbol: score}
+        factor_weights: 因子权重 {factor_name: weight}
+        signal_deltas: 信号增量 {symbol: delta}（可选）
+        top_n: 推荐品种数量
+
+    Returns:
+        交易建议字典，包含：
+        - regime_advice: 基于 regime 的方向建议
+        - long_candidates: 做多候选品种
+        - short_candidates: 做空候选品种
+        - key_factors: 关键因子
+        - risk_warnings: 风险提示
+    """
+    regime_type = regime.get("regime", "unknown")
+    confidence = regime.get("confidence", 0)
+
+    # 1. 基于 regime 的方向建议
+    if regime_type == "bull":
+        regime_advice = "趋势上涨，优先做多"
+        preferred_direction = "long"
+    elif regime_type == "bear":
+        regime_advice = "趋势下跌，优先做空"
+        preferred_direction = "short"
+    elif regime_type == "oscillate":
+        regime_advice = "震荡市，反向操作或观望"
+        preferred_direction = "neutral"
+    elif regime_type == "high_vol":
+        regime_advice = "高波动，缩小仓位，谨慎操作"
+        preferred_direction = "cautious"
+    else:
+        regime_advice = "regime 不明确，观望为主"
+        preferred_direction = "neutral"
+
+    # 2. 筛选候选品种
+    sorted_symbols = sorted(signal_scores.items(), key=lambda x: abs(x[1]), reverse=True)
+
+    long_candidates = []
+    short_candidates = []
+
+    for sym, score in sorted_symbols:
+        if score > 0 and len(long_candidates) < top_n:
+            delta = signal_deltas.get(sym, 0) if signal_deltas else 0
+            long_candidates.append({
+                "symbol": sym,
+                "score": score,
+                "delta": delta,
+                "accelerating": delta < -0.01,  # 多头加速
+            })
+        elif score < 0 and len(short_candidates) < top_n:
+            delta = signal_deltas.get(sym, 0) if signal_deltas else 0
+            short_candidates.append({
+                "symbol": sym,
+                "score": score,
+                "delta": delta,
+                "accelerating": delta < -0.01,  # 空头加速
+            })
+
+    # 3. 提取关键因子（权重最高的 5 个）
+    sorted_factors = sorted(factor_weights.items(), key=lambda x: x[1], reverse=True)
+    key_factors = [name for name, _ in sorted_factors[:5]]
+
+    # 4. 风险提示
+    risk_warnings = []
+    if confidence < 0.6:
+        risk_warnings.append("regime 置信度较低，信号可靠性下降")
+    if regime_type == "high_vol":
+        risk_warnings.append("高波动环境，止损幅度需放大")
+    if signal_deltas:
+        # 检查是否有品种信号剧烈变化
+        large_deltas = [abs(d) for d in signal_deltas.values() if abs(d) > 0.1]
+        if len(large_deltas) > len(signal_deltas) * 0.3:
+            risk_warnings.append("30% 以上品种信号剧烈变化，市场可能处于转折点")
+
+    return {
+        "regime_advice": regime_advice,
+        "preferred_direction": preferred_direction,
+        "regime_confidence": confidence,
+        "long_candidates": long_candidates,
+        "short_candidates": short_candidates,
+        "key_factors": key_factors,
+        "risk_warnings": risk_warnings,
+    }
 
 
 def _compute_factor_sign_flips(
@@ -434,16 +562,74 @@ def _compute_ridge_weights(
     return weights
 
 
+def _compute_per_variety_weights(
+    global_weights: dict[str, float],
+    per_variety_ic: dict[str, dict[str, float]],
+    min_ic: float = 0.01,
+) -> dict[str, dict[str, float]]:
+    """将全局 Ridge 权重与品种级 IC 结合，生成品种级因子权重。
+
+    方法：
+        对每个品种 v，因子 f 的有效权重 = global_weight[f] * |IC[f][v]|，
+        然后按品种归一化。
+        如果品种 v 在因子 f 上无 IC 数据，回退到 global_weight[f]。
+
+    Args:
+        global_weights: 全局 Ridge 权重 {factor_name: weight}
+        per_variety_ic: 品种-因子 IC 矩阵 {factor_name: {variety: ic}}
+        min_ic: IC 最小绝对值阈值，低于此值视为无效
+
+    Returns:
+        per_variety_weights: {variety: {factor_name: weight}}
+    """
+    # 收集所有因子和品种
+    factor_names = list(global_weights.keys())
+    varieties: set[str] = set()
+    for fname, vics in per_variety_ic.items():
+        varieties.update(vics.keys())
+
+    if not varieties:
+        # 无品种级 IC 数据，直接返回空
+        return {}
+
+    per_variety_weights: dict[str, dict[str, float]] = {}
+
+    for var in varieties:
+        raw_weights: dict[str, float] = {}
+        for fname in factor_names:
+            gw = global_weights.get(fname, 0.0)
+            if gw <= 0:
+                continue
+            vic = per_variety_ic.get(fname, {}).get(var, 0.0)
+            if abs(vic) < min_ic:
+                # IC 过低，该因子对此品种无效，赋予极低权重
+                raw_weights[fname] = gw * min_ic
+            else:
+                raw_weights[fname] = gw * abs(vic)
+
+        # 归一化
+        total = sum(raw_weights.values())
+        if total > 1e-10:
+            per_variety_weights[var] = {
+                f: w / total for f, w in raw_weights.items()
+            }
+
+    return per_variety_weights
+
+
 def _compute_composite_scores(
     signal_matrix: dict[str, dict[str, np.ndarray]],
     factor_sign_flips: dict[str, float],
     factors: list[dict[str, Any]],
     factor_weights: dict[str, float] | None = None,
+    per_variety_weights: dict[str, dict[str, float]] | None = None,
 ) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
     """合成因子信号（带方向校正 + 可选 Ridge 权重）。
 
     Args:
-        factor_weights: 因子权重字典（Ridge 学习结果），None 则等权。
+        factor_weights: 全局因子权重字典（Ridge 学习结果），None 则等权。
+        per_variety_weights: 品种级因子权重 {variety: {factor: weight}}，
+                              优先于 factor_weights 使用。
 
     Returns:
         sym_scores: 品种 → 综合得分
@@ -456,6 +642,12 @@ def _compute_composite_scores(
     sym_details: dict[str, dict[str, float]] = {}
 
     for sym, sym_signals in signal_matrix.items():
+        # 选择品种级权重（优先）或全局权重
+        if per_variety_weights and sym in per_variety_weights:
+            effective_weights = per_variety_weights[sym]
+        else:
+            effective_weights = factor_weights
+
         signal_sum = 0.0
         weight_sum = 0.0
         details: dict[str, float] = {}
@@ -469,7 +661,7 @@ def _compute_composite_scores(
             # 方向校正
             flip = factor_sign_flips.get(name, 1.0)
             val *= flip
-            w = factor_weights.get(name, default_weight) if factor_weights else default_weight
+            w = effective_weights.get(name, default_weight) if effective_weights else default_weight
             signal_sum += val * w
             weight_sum += w
             details[name] = val
@@ -480,6 +672,154 @@ def _compute_composite_scores(
             sym_details[sym] = details
 
     return sym_scores, sym_details
+
+
+def _compute_per_variety_ic_matrix(
+    signal_matrix: dict[str, dict[str, np.ndarray]],
+    panel: dict[str, "pd.DataFrame"],
+    common_dates: list[str],
+    factor_sign_flips: dict[str, float],
+) -> dict[str, dict[str, float]]:
+    """计算品种-因子有效性矩阵：每个因子 × 每个品种的时序 Spearman IC。
+
+    Returns:
+        {因子名: {品种: IC值}}  — 品种维度聚合的因子 IC 矩阵
+    """
+    n_dates = len(common_dates)
+    if n_dates < 10:
+        return {}
+
+    # 转置索引：因子名 → {品种名 → IC}
+    factor_ic_matrix: dict[str, dict[str, float]] = {}
+
+    for sym, sym_signals in signal_matrix.items():
+        df = panel.get(sym)
+        if df is None or df.empty:
+            continue
+
+        aligned = df.reindex(common_dates)
+        closes = aligned["close"].values
+        if len(closes) < 10:
+            continue
+
+        fwd_ret = np.zeros(len(closes))
+        fwd_ret[:-5] = (closes[5:] - closes[:-5]) / np.maximum(closes[:-5], 1e-10)
+
+        for fname, arr in sym_signals.items():
+            flip = factor_sign_flips.get(fname, 1.0)
+            sig = np.array(arr, dtype=float)
+            if len(sig) < len(closes):
+                sig = np.pad(sig, (0, len(closes) - len(sig)),
+                             constant_values=np.nan)[:len(closes)]
+            sig = np.where(np.isfinite(sig), sig, 0.0) * flip
+
+            valid = np.isfinite(sig) & np.isfinite(fwd_ret)
+            if valid.sum() < 10:
+                continue
+
+            from scipy.stats import spearmanr
+            ic, _ = spearmanr(sig[valid], fwd_ret[valid])
+
+            if fname not in factor_ic_matrix:
+                factor_ic_matrix[fname] = {}
+            factor_ic_matrix[fname][sym] = ic
+
+    return factor_ic_matrix
+
+
+def _compute_holdout_validation(
+    signal_matrix: dict[str, dict[str, np.ndarray]],
+    panel: dict[str, "pd.DataFrame"],
+    common_dates: list[str],
+    factor_sign_flips: dict[str, float],
+    holdout_set: set[str],
+) -> dict[str, Any]:
+    """盲测品种验证：计算盲测品种 vs 训练品种的因子 IC 对比。
+
+    Args:
+        signal_matrix: 信号矩阵
+        panel: 品种行情面板
+        common_dates: 共同交易日列表
+        factor_sign_flips: 方向校正
+        holdout_set: 盲测品种集合
+
+    Returns:
+        dict with keys: holdout_ic, train_ic, ic_retention, warning, details
+    """
+    n_dates = len(common_dates)
+    if n_dates < 10:
+        return {"holdout_ic": 0, "train_ic": 0, "ic_retention": 0,
+                "warning": "交易日不足", "details": {}}
+
+    holdout_ics: list[float] = []
+    train_ics: list[float] = []
+    sym_ics: dict[str, float] = {}
+
+    for sym, sym_signals in signal_matrix.items():
+        df = panel.get(sym)
+        if df is None or df.empty:
+            continue
+
+        # 对齐到共同日期
+        aligned = df.reindex(common_dates)
+        closes = aligned["close"].values
+        if len(closes) < 10:
+            continue
+
+        # 5 日前向收益
+        fwd_ret = np.zeros(len(closes))
+        fwd_ret[:-5] = (closes[5:] - closes[:-5]) / np.maximum(closes[:-5], 1e-10)
+
+        # 所有因子的平均信号（方向校正后）
+        composite_signal = np.zeros(len(closes))
+        n_active = 0
+        for fname, arr in sym_signals.items():
+            flip = factor_sign_flips.get(fname, 1.0)
+            sig = np.array(arr, dtype=float)
+            if len(sig) < len(closes):
+                sig = np.pad(sig, (0, len(closes) - len(sig)),
+                             constant_values=np.nan)[:len(closes)]
+            sig = np.where(np.isfinite(sig), sig, 0.0) * flip
+            composite_signal += sig
+            n_active += 1
+
+        if n_active > 0:
+            composite_signal /= n_active
+
+        # 计算时序 Spearman IC
+        valid = np.isfinite(composite_signal) & np.isfinite(fwd_ret)
+        if valid.sum() < 10:
+            continue
+
+        from scipy.stats import spearmanr
+        ic, _ = spearmanr(composite_signal[valid], fwd_ret[valid])
+        sym_ics[sym] = ic
+
+        if sym in holdout_set:
+            holdout_ics.append(ic)
+        else:
+            train_ics.append(ic)
+
+    avg_holdout = float(np.mean(holdout_ics)) if holdout_ics else 0.0
+    avg_train = float(np.mean(train_ics)) if train_ics else 0.0
+    retention = abs(avg_holdout / max(abs(avg_train), 1e-10)) if abs(avg_train) > 1e-10 else 0.0
+
+    warning = ""
+    if abs(avg_train) > 0.02 and retention < 0.5:
+        warning = (f"⚠️ 盲测 IC ({avg_holdout:.4f}) 不足训练 IC ({avg_train:.4f}) 的 50%"
+                   f"，因子泛化能力较弱")
+    elif len(holdout_ics) < 3:
+        warning = f"盲测品种有效数据不足 ({len(holdout_ics)}/{len(holdout_set)})"
+
+    return {
+        "holdout_ic": avg_holdout,
+        "train_ic": avg_train,
+        "ic_retention": retention,
+        "warning": warning,
+        "details": sym_ics,
+        "n_holdout_valid": len(holdout_ics),
+        "n_train_valid": len(train_ics),
+    }
 
 
 def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
@@ -499,7 +839,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
 
     # ── Step 2: 获取期货数据 ──
     from fts.data import FTSDataProvider
-    from fts.data_futures import FUTURES_CORE_SUBSET, FUTURES_SUBSET
+    from fts.data_futures import FUTURES_CORE_SUBSET, FUTURES_HOLDOUT, FUTURES_SUBSET
 
     provider = FTSDataProvider()
 
@@ -585,13 +925,73 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         signal_matrix, panel, common_dates, factor_sign_flips,
     )
 
-    # 3d: 加权合成（方向校正 + Ridge 权重）
+    # 3d: 品种-因子 IC 矩阵（每个因子 × 每个品种的时序 IC）
+    print("      品种-因子 IC 矩阵计算...")
+    per_variety_ic = _compute_per_variety_ic_matrix(
+        signal_matrix, panel, common_dates, factor_sign_flips,
+    )
+    n_factor_ic = len(per_variety_ic)
+    n_variety_ic = len(set(
+        v for vics in per_variety_ic.values() for v in vics
+    )) if per_variety_ic else 0
+    print(f"      IC 矩阵: {n_factor_ic} 因子 × {n_variety_ic} 品种")
+
+    # 3e: 品种级 Ridge 权重分配（结合全局 Ridge 权重 + 品种级 IC）
+    per_variety_weights = _compute_per_variety_weights(
+        factor_weights, per_variety_ic,
+    )
+    if per_variety_weights:
+        # 统计品种级权重相对于全局权重的平均偏离度
+        total_dev = 0.0
+        count = 0
+        for var, vw in per_variety_weights.items():
+            for fname, w in vw.items():
+                gw = factor_weights.get(fname, 0)
+                if gw > 0:
+                    total_dev += abs(w - gw)
+                    count += 1
+        avg_dev = total_dev / count if count > 0 else 0
+        print(f"      品种级权重: {len(per_variety_weights)} 个品种, "
+              f"平均偏离度: {avg_dev:.4f}")
+    else:
+        print("      品种级权重: 无数据，回退到全局 Ridge 权重")
+
+    # 3f: 加权合成（方向校正 + 品种级权重 / 全局 Ridge 权重）
     sym_scores, sym_details = _compute_composite_scores(
         signal_matrix, factor_sign_flips, factors, factor_weights,
+        per_variety_weights=per_variety_weights if per_variety_weights else None,
     )
+
+    # 3g: 对比全局权重 vs 品种级权重的合成结果
+    if per_variety_weights:
+        sym_scores_global, _ = _compute_composite_scores(
+            signal_matrix, factor_sign_flips, factors, factor_weights,
+        )
+        # 计算两种合成结果的排名差异
+        sorted_var = sorted(sym_scores.keys())
+        var_global = [(s, sym_scores_global.get(s, 0)) for s in sorted_var]
+        var_variety = [(s, sym_scores.get(s, 0)) for s in sorted_var]
+        from scipy.stats import spearmanr
+        g_scores = [v for _, v in var_global]
+        v_scores = [v for _, v in var_variety]
+        rank_corr, _ = spearmanr(g_scores, v_scores)
+        print(f"      品种级 vs 全局排名一致性: Spearman ρ={rank_corr:.4f}")
 
     elapsed = time.time() - t0
     print(f"\n  耗时: {elapsed:.1f}s, 成功: {len(sym_scores)} 个品种")
+
+    # ── Step 3e: 盲测品种验证（泛化能力检查） ──
+    holdout_set = set(FUTURES_HOLDOUT) & set(panel.keys())
+    holdout_result = _compute_holdout_validation(
+        signal_matrix, panel, common_dates, factor_sign_flips, holdout_set,
+    )
+    print(f"\n[盲测验证] 盲测品种: {len(holdout_set)} 个, "
+          f"有效: {holdout_result['n_holdout_valid']}/{holdout_result['n_train_valid']} (盲测/训练)")
+    print(f"          盲测平均 IC: {holdout_result['holdout_ic']:.4f}, "
+          f"训练平均 IC: {holdout_result['train_ic']:.4f}, "
+          f"保持率: {holdout_result['ic_retention']:.1%}")
+    if holdout_result["warning"]:
+        print(f"          {holdout_result['warning']}")
 
     # ── Step 4: 保存信号快照 + 加载昨日信号计算增量 ──
     report_dir = REPORTS_ROOT / today
@@ -711,7 +1111,10 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     w()
     w(f"生成时间: {today} | 耗时: {elapsed:.1f}s")
     w(f"因子池: {len(factors)} 个（全部精英因子） | 覆盖品种: {len(sym_scores)} 个")
-    w(f"合成方法: Ridge 回归加权（L2 正则化） | 方向校正: 截面 IC 法")
+    if per_variety_weights:
+        w(f"合成方法: 品种级 Ridge 权重（全局 Ridge 权重 × 品种 IC 自适应调整）")
+    else:
+        w(f"合成方法: Ridge 回归加权（L2 正则化） | 方向校正: 截面 IC 法")
     flips_info = f" | 方向反转: {n_flipped} 个因子 (截面 IC<0)"
     w(f"方向校正: 截面 IC 法（因子信号 vs 未来 5 日收益的 Spearman 秩相关）{flips_info}")
     w(f"最新价: 盘中实时价（AKShare 分时）优先，缺失用日线收盘 | 实时价覆盖 {rt_hit}/{len(sym_list)} 个品种")
@@ -747,6 +1150,161 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         w("> 市场波动率偏低，信号可信度较高，可正常仓位操作。")
         w("> 关注波动率突破信号，低波环境可能孕育趋势行情。")
     w()
+
+    # ── 交易建议 ──
+    w("## 交易建议")
+    w()
+    w("### 方向策略")
+    w()
+    if regime_type in ("bull", "bear"):
+        direction = "做多" if regime_type == "bull" else "做空"
+        w(f"- 当前处于 **{regime_label}** regime，建议 **顺势{direction}**")
+        w(f"- 优先选择信号强度 > 0.60 的品种作为核心标的")
+        if short_signals and regime_type == "bear":
+            top_shorts = [f"{_name(s)}({s})" for s, _ in short_signals[:5]]
+            w(f"- 空头核心标的: {', '.join(top_shorts)}")
+        if long_signals and regime_type == "bull":
+            top_longs = [f"{_name(s)}({s})" for s, _ in long_signals[:5]]
+            w(f"- 多头核心标的: {', '.join(top_longs)}")
+    elif regime_type == "oscillate":
+        w("- 当前处于 **震荡** regime，建议 **反向操作**")
+        w("- 做空信号加速品种（增量最负），做多信号减速品种（增量最正）")
+        w("- 避免追已到极值但增量停滞的品种（趋势衰竭）")
+    else:
+        w("- 当前 regime 信号较弱，建议 **缩小仓位** 或 **观望**")
+    w()
+
+    w("### 仓位管理")
+    w()
+    w("- 按 **波动率目标化** 原则分配仓位（参考 Robert Carver 框架）")
+    w("- 各品种按 ATR 等波动率标准化后等权分配")
+    w("- 单一品种风险敞口不超过总资金 **2-3%**")
+    w()
+
+    w("### 风控红线")
+    w()
+    w("- **止损**: 每笔交易设置 ATR 2 倍止损")
+    w("- **止盈**: 盈利达 ATR 3 倍后移动止损至成本")
+    w("- **最大持仓**: 同时持仓不超过 8-10 个品种")
+    w("- **相关性**: 同板块品种合计仓位不超过 30%")
+    w()
+
+    w("### 重点关注")
+    w()
+    # 空头加速品种
+    if has_delta and sym_deltas:
+        accel_syms = [(s, d) for s, d in sorted(sym_deltas.items(), key=lambda x: x[1]) if d < -0.02][:3]
+        if accel_syms:
+            accel_str = ", ".join(f"{_name(s)}(增量{d:+.3f})" for s, d in accel_syms)
+            w(f"- **空头加速**: {accel_str} — 做空优先关注")
+        decel_syms = [(s, d) for s, d in sorted(sym_deltas.items(), key=lambda x: -x[1]) if d > 0.02][:3]
+        if decel_syms:
+            decel_str = ", ".join(f"{_name(s)}(增量{d:+.3f})" for s, d in decel_syms)
+            w(f"- **空头减速/反转萌芽**: {decel_str} — 做多关注")
+    w()
+    w()
+    # ── 盲测品种验证 ──
+    w("## 盲测品种验证 (泛化能力)")
+    w()
+    w(f"盲测品种: {len(holdout_set)} 个 ({', '.join(sorted(holdout_set))})")
+    w()
+    w(f"盲测 IC: {holdout_result['holdout_ic']:.4f} | 训练 IC: {holdout_result['train_ic']:.4f} | "
+      f"保持率: {holdout_result['ic_retention']:.1%}")
+    if holdout_result["warning"]:
+        w(f"\n> {holdout_result['warning']}")
+    # 盲测品种 IC 详情
+    sym_ics = holdout_result.get("details", {})
+    holdout_sym_ics = {s: sym_ics.get(s, 0) for s in holdout_set if s in sym_ics}
+    if holdout_sym_ics:
+        w()
+        w("| 盲测品种 | IC | 判断 |")
+        w("|----------|----|------|")
+        train_ic = holdout_result["train_ic"]
+        for sym, ic in sorted(holdout_sym_ics.items(), key=lambda x: -abs(x[1])):
+            verdict = "✔ 有效" if abs(ic) > 0.02 else "⚠ 偏弱" if abs(ic) > 0.01 else "❌ 失效"
+            w(f"| {sym} | {ic:.4f} | {verdict} |")
+    w()
+
+    # ── 品种-因子 IC 矩阵概览 ──
+    w("## 品种-因子有效性矩阵 (IC)")
+    w()
+    w("> 每个因子 × 每个品种的时序 Spearman IC，反映因子在各品种上的预测有效性。")
+    w("> 品种级权重基于此矩阵调整，使每个品种更依赖对其有效的因子。")
+    w()
+    if per_variety_ic:
+        # 按品种聚合：每个品种 Top 3 最有效因子
+        # 先转置：品种 → {因子: IC}
+        variety_factor_ic: dict[str, dict[str, float]] = {}
+        for fname, vics in per_variety_ic.items():
+            for var, ic_val in vics.items():
+                if var not in variety_factor_ic:
+                    variety_factor_ic[var] = {}
+                variety_factor_ic[var][fname] = ic_val
+
+        w("### 各品种 Top 3 最有效因子")
+        w()
+        w("| 品种 | Top 1 因子 | IC | Top 2 因子 | IC | Top 3 因子 | IC |")
+        w("|------|-----------|----|-----------|----|-----------|----|")
+        for var in sorted(variety_factor_ic.keys()):
+            # 过滤掉 NaN IC 值
+            valid_ics = [(f, ic) for f, ic in variety_factor_ic[var].items()
+                         if np.isfinite(ic)]
+            top3 = sorted(valid_ics, key=lambda x: -abs(x[1]))[:3]
+            # 构建表格行: 1 (品种) + 3 (因子名+IC 对) = 4 个字符串段
+            row = [f"| {var} "]
+            for fname, ic_val in top3:
+                row.append(f"| {fname} | {ic_val:.4f} ")
+            # 补足到 3 个因子段（保持表格列数一致）
+            while len(row) < 4:
+                row.append("| — | — ")
+            row.append("|")
+            w("".join(row))
+        w()
+
+        # 全局最有效的因子（按在所有品种上的平均 |IC| 排序）
+        w("### 跨品种最有效因子 Top 10")
+        w()
+        factor_avg_ic: dict[str, float] = {}
+        for fname, vics in per_variety_ic.items():
+            ics = [abs(v) for v in vics.values() if np.isfinite(v)]
+            if ics:
+                factor_avg_ic[fname] = float(np.mean(ics))
+        if factor_avg_ic:
+            w("| 排名 | 因子名称 | 平均 |IC| | 覆盖品种数 |")
+            w("|------|----------|----------|----------|")
+            for i, (fname, avg_ic) in enumerate(
+                sorted(factor_avg_ic.items(), key=lambda x: -x[1])[:10], 1
+            ):
+                n_vars = len(per_variety_ic.get(fname, {}))
+                w(f"| {i} | {fname} | {avg_ic:.4f} | {n_vars} |")
+            w()
+
+        # 品种级权重 vs 全局权重对比
+        if per_variety_weights:
+            w("### 品种级权重 vs 全局权重偏离度")
+            w()
+            w("| 品种 | 最大偏离因子 | 偏离幅度 | 权重变化摘要 |")
+            w("|------|-------------|----------|-------------|")
+            for var in sorted(per_variety_weights.keys()):
+                vw = per_variety_weights[var]
+                # 找偏离最大的因子
+                max_dev = 0.0
+                max_dev_fname = ""
+                changes: list[str] = []
+                for fname, w_val in vw.items():
+                    gw = factor_weights.get(fname, 0)
+                    dev = abs(w_val - gw)
+                    if dev > max_dev:
+                        max_dev = dev
+                        max_dev_fname = fname
+                    if dev > 0.02:
+                        direction = "↑" if w_val > gw else "↓"
+                        changes.append(f"{fname}{direction}{dev:.3f}")
+                if max_dev_fname:
+                    change_summary = ", ".join(changes[:3])
+                    w(f"| {var} | {max_dev_fname} | {max_dev:.4f} | {change_summary} |")
+            w()
+
     w("## 多头信号 (做多) — Top 20")
     w()
     w("| 排名 | 品种 | 名称 | 主力合约 | 方向 | 信号强度 | 最新价 | Top 3 因子贡献 |")

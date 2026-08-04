@@ -103,7 +103,7 @@ def register_default_tasks() -> None:
             name="l3_portfolio_loop",
             cron_expression="0 20 * * *",         # 每日 20:00
             callable_path="fts.scheduler.jobs.l3_portfolio_loop_job",
-            description="L3 Portfolio Loop：组合构建 + 正交化 + 衰减检验 + 信号合成 + 期货信号管道",
+            description="L3 Portfolio Loop：因子筛选 + 信号合成（equal/sharpe/elastic_net）+ Verifier 校验 + 触发期货信号管道",
             trace_id_prefix="fts.l3",
         ),
         TaskSpec(

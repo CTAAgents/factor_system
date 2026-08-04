@@ -1,7 +1,7 @@
 # FTS 运维与版本管理
 
-> 版本: v1.9.0
-> 最后更新: 2026-08-03
+> 版本: v2.2.0
+> 最后更新: 2026-08-04
 
 ---
 
@@ -9,6 +9,9 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.2.0** | 2026-08-04 | Phase B 因子泛化优化 — 品种分层训练 + 精英因子全量重验证：新增 `FUTURES_SECTOR_MAP` 产业链分类映射（7 类覆盖所有期货品种）；新增 `FUTURES_STRATIFIED_SUBSET` 分层训练集（19 品种覆盖 7 大产业链）；L2 演化循环使用分层训练集排除盲测品种；新增 `scripts/futures_factor_revalidation.py` 精英因子全量重验证脚本（自动计算全量品种截面 IC、自动降级 CRITICAL 退化因子、输出验证报告到 reports/）；首次重验证自动降级 2 个退化因子（fut_basis_momentum_g1, fut_basis_momentum）；19 个差距全部关闭 |
+| **v2.1.0** | 2026-08-04 | Phase A 因子泛化优化 — 盲测品种池 + 单品种 IC 追踪 + 品种级权重分配：新增 `FUTURES_HOLDOUT` 盲测品种池（6 品种覆盖各产业链），L2 演化训练排除盲测品种；新增 `_compute_holdout_validation()` 盲测验证报告（盲测 IC vs 训练 IC 对比 + 保持率警告）；新增 `_compute_per_variety_ic_matrix()` 品种-因子 IC 矩阵（18 因子 × 25+ 品种）；新增 `_compute_per_variety_weights()` 品种级权重分配（全局 Ridge 权重 × 品种 IC 自适应调整）；修改 `_compute_composite_scores()` 支持品种级权重参数；报告新增「品种-因子有效性矩阵 (IC)」章节含 3 个子表；控制台输出品种级 vs 全局排名一致性 Spearman ρ；17 个差距全部关闭 |
+| **v2.0.0** | 2026-08-04 | Phase C 逻辑审查 — 因果结构审查 + 持续监控仪表盘：新增因果验证器（causal_validator.py）通过自然实验事件验证因子预测的因果意义（6 个预定义事件，3σ 异常检测，方向一致性校验）；新增逻辑监控仪表盘（logic_monitor.py）覆盖因子行为漂移检测（与动量/均值回归基准的相关性）、极端预测占比报警（>2σ 占比超 5%）、换月日信号异常检测（3σ 阈值）；新增 6 个自然实验事件定义（A 股 4 个 + 期货 2 个）；新增 ~40 个测试用例，1850+ 测试全绿；pyproject.toml 中 fts.__version__ 同步至 v2.0.0 |
 | **v1.9.0** | 2026-08-03 | Phase A 演化优化 — UCT 父因子选择 + 失败模式聚类：父因子选择从轮询改为 UCT 树搜索，宏观演化引入失败模式聚类分析注入 LLM prompt，新增 32 个测试用例（test_uct_selection.py 10 + test_failure_pattern.py 22） |
 | **v1.8.1** | 2026-08-03 | Market Regime 集成到信号管道：新增 `_build_composite_ohlcv()` 从品种面板构建市场综合 OHLCV，管道调用 `RegimeAwareSelector.detect()` 检测当前市场制度（5 种：bull/bear/high_vol/low_vol/oscillate），控制台输出制度名称+置信度+特征值，报告新增「市场制度」章节含 Regime 调整后的交易建议（趋势友好→放大仓位、震荡→反向操作、高波动→缩小仓位+增量绝对值>0.15）；版本号 1.8.0→1.8.1 |
 | **v1.8.0** | 2026-08-03 | 信号管道 v5 多空双向 + 信号增量：管道升级为多空双向排名（按信号强度绝对值排序），新增信号增量追踪（较昨日变化判断趋势加速/衰竭），信号快照 JSON 持久化 + JSONL 历史追加，L3 Portfolio Loop 自动触发信号管道（全量 82 品种），README 拆分股票/期货种子因子；版本号 1.7.3→1.8.0 |
@@ -36,8 +39,8 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 
 | 文件 | 字段 |
 |:-----|:-----|
-| `fts/__init__.py` | `__version__ = "1.8.0"` |
-| `pyproject.toml` | `version = "1.8.0"` |
+| `fts/__init__.py` | `__version__ = "2.2.0"` |
+| `pyproject.toml` | `version = "2.2.0"` |
 
 异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v1.1.0），与 FTS 项目版本同步。
 
@@ -255,6 +258,6 @@ pip install apscheduler
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `fts/__init__.py` __version__ = "1.9.0"；`pyproject.toml` version = "1.9.0" |
-| 可验证断言 | 版本号 v1.9.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
-| 检验方式 | `python -c "import fts; assert fts.__version__ == '1.9.0'"` |
+| 代码→文档映射 | `fts/__init__.py` __version__ = "2.1.0"；`pyproject.toml` version = "2.1.0" |
+| 可验证断言 | 版本号 v2.1.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
+| 检验方式 | `python -c "import fts; assert fts.__version__ == '2.1.0'"` |

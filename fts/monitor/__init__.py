@@ -35,6 +35,13 @@ from .elite_tracker import (
     TrackingSnapshot,
 )
 from .http_server import FTSDashboardServer
+from .logic_monitor import (
+    ContractSwitchResult,
+    DriftCheckResult,
+    ExtremePredictionResult,
+    LogicMonitor,
+    LogicMonitorResult,
+)
 
 
 # ─── 监控数据契约 ─────────────────────────────────────────
@@ -219,4 +226,10 @@ __all__ = [
     "EliteFactorTracker",
     "AutoRetireConfig",
     "AutoRetireManager",
+    # 逻辑监控（Phase C v2.0.0）
+    "LogicMonitor",
+    "LogicMonitorResult",
+    "DriftCheckResult",
+    "ExtremePredictionResult",
+    "ContractSwitchResult",
 ]
