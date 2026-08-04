@@ -46,10 +46,10 @@ def load_futures_panel(
     """
     con = duckdb.connect(db_path)
 
-    # 获取所有期货品种
+    # 获取所有期货品种（数据库中存储的是不带0后缀的品种代码）
     symbols = [
         r[0] for r in con.execute(
-            "SELECT DISTINCT symbol FROM kline_cache WHERE symbol NOT IN ('IC','IF','IH') ORDER BY symbol"
+            "SELECT DISTINCT symbol FROM kline_cache WHERE period='daily' ORDER BY symbol"
         ).fetchall()
     ]
     print(f"[data] 共 {len(symbols)} 个可用品种")
@@ -80,23 +80,31 @@ def load_futures_panel(
     con.close()
     print(f"[data] 加载 {len(panel)} 个品种（至少 {min_periods} 根K线）")
 
-    # 找到所有品种共有的日期
-    all_dates = None
+    # 找到至少有 min_symbols 个品种共有的日期（而非要求全部品种）
+    from collections import Counter
+    date_counts = Counter()
     for sym, df in panel.items():
-        dates = set(df.index)
-        if all_dates is None:
-            all_dates = dates
-        else:
-            all_dates &= dates
+        for d in df.index:
+            date_counts[d] += 1
 
-    common_dates = sorted(all_dates)
+    # 取至少有 min_symbols 个品种有数据的日期
+    common_dates = sorted([d for d, cnt in date_counts.items() if cnt >= min_symbols])
+    if not common_dates:
+        print(f"[data] 错误: 没有找到至少有 {min_symbols} 个品种共有的日期")
+        return {}, pd.DatetimeIndex([]), np.array([])
+
     print(f"[data] 共有交易日: {len(common_dates)} 天 ({common_dates[0]} ~ {common_dates[-1]})")
+    print(f"[data] 日期覆盖: 至少 {min_symbols} 个品种有数据")
 
-    # 过滤 panel 只保留共有日期
+    # 过滤 panel 只保留共有日期（允许某些品种缺少部分日期）
+    common_set = set(common_dates)
     filtered: dict[str, pd.DataFrame] = {}
     for sym, df in panel.items():
-        filtered[sym] = df.loc[common_dates]
+        valid_dates = [d for d in df.index if d in common_set]
+        if len(valid_dates) >= min_periods:
+            filtered[sym] = df.loc[valid_dates]
     panel = filtered
+    print(f"[data] 过滤后: {len(panel)} 个品种保留（至少 {min_periods} 个共有日期）")
 
     # 计算截面平均未来 5 日收益率作为 forward_returns
     close_panel = pd.DataFrame({sym: df["close"] for sym, df in panel.items()})

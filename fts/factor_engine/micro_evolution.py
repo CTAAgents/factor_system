@@ -89,11 +89,15 @@ def optimize_params(
     if objective_fn is None:
         from scipy import stats as sp_stats
         def objective_fn(sig, ret):
-            if len(sig) < 2 or len(sig) != len(ret):
+            # 处理不同长度的数据（截取共同部分）
+            min_len = min(len(sig), len(ret))
+            if min_len < 2:
                 return 0.0
-            if np.std(sig) < 1e-10 or np.std(ret) < 1e-10:
+            sig_aligned = sig[-min_len:]  # 取末尾对齐（最新数据）
+            ret_aligned = ret[-min_len:]
+            if np.std(sig_aligned) < 1e-10 or np.std(ret_aligned) < 1e-10:
                 return 0.0
-            ic, _ = sp_stats.spearmanr(sig, ret)
+            ic, _ = sp_stats.spearmanr(sig_aligned, ret_aligned)
             return 0.0 if np.isnan(ic) else float(ic)
 
     from .factor_program import FactorExecutor

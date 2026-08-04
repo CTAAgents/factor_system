@@ -31,6 +31,9 @@ venv/
 data/
 memory/
 
+# Knowledge base (private, do not push)
+docs/Knowledge/
+
 # Research / experimental
 brain_field_test.py
 check_alpha.py

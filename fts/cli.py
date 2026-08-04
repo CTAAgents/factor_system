@@ -427,8 +427,8 @@ def _cmd_factor_seeds(args: argparse.Namespace) -> int:
     market = args.market
     
     if market == "futures":
-        from fts.factor_engine.seed_data_futures import load_futures_seeds
-        seeds = load_futures_seeds(trace_id="cli_seed_list")
+        from fts.factor_engine.seed_data_futures_full import load_futures_seeds_full
+        seeds = load_futures_seeds_full(trace_id="cli_seed_list")
         print(f"=== 期货种子因子 ({len(seeds)}) ===")
         for s in seeds:
             sig = s.get("signature", {})

@@ -207,28 +207,40 @@ _FUTURES_SEED_NAMES = {
     "fut_macro_cpi", "fut_macro_interest_rate", "fut_macro_export",
     "fut_macro_us_bond", "fut_mkt_trend", "fut_mkt_speculation",
     "fut_mkt_rotation", "fut_mkt_concentration",
+    # 家族 13: CTA注册表补充因子 (7)
+    "tsmom_5d", "tsmom_22d", "basis_level", "volatility_annual",
+    "liquidity_ratio", "long_term_reversal", "oi_change_rate",
+    # 家族 14: 算子字典种子因子 (24)
+    "seed_kbar_mid", "seed_kbar_upper", "seed_kbar_lower", "seed_kbar_shift",
+    "seed_bull_bear", "seed_argmax_close", "seed_argmin_close",
+    "seed_vol_chg", "seed_vwap_proxy_1", "seed_vwap_proxy_2",
+    "seed_reversal_1d", "seed_mom_5d", "seed_mom_20d",
+    "seed_vol_5d", "seed_vol_20d", "seed_vol_ratio",
+    "seed_trend_slope", "seed_trend_rsqr",
+    "seed_vp_corr", "seed_vol_ratio_volume",
+    "seed_oi_chg", "seed_oi_ret_confirm", "seed_spread", "seed_settle_bias",
 }
 
 
 def test_futures_seed_pool_loads_all_seeds():
-    """期货模式加载 50 个期货专用种子因子（12大因子家族）。"""
+    """期货模式加载 81 个期货专用种子因子（14大因子家族）。"""
     pool = SeedPool(market="futures")
     seeds = pool.load_all_seeds()
-    assert len(seeds) == 50
+    assert len(seeds) == 81
 
 
 def test_futures_seed_pool_count():
-    """期货模式 count() 返回 50。"""
+    """期货模式 count() 返回 81。"""
     pool = SeedPool(market="futures")
-    assert pool.count() == 50
+    assert pool.count() == 81
 
 
 def test_futures_seed_pool_list_names():
-    """期货模式必须包含所有 50 个期货专用因子名称。"""
+    """期货模式必须包含所有 81 个期货专用因子名称。"""
     pool = SeedPool(market="futures")
     names = pool.list_names()
     assert _FUTURES_SEED_NAMES.issubset(set(names))
-    assert len(names) == 50
+    assert len(names) == 81
 
 
 def test_futures_seed_pool_no_stock_seeds():
@@ -302,7 +314,7 @@ def test_futures_seed_inject_from_l1():
     pool = SeedPool(market="futures")
     # 先加载种子，再注入 L1
     pool.load_all_seeds()
-    assert pool.count() == 50
+    assert pool.count() == 81
     candidate = {
         "name": "fut_test_candidate",
         "code": "def factor_program(data, params):\n    import numpy as np\n    return np.clip(data['close'], -1, 1)",
@@ -315,6 +327,6 @@ def test_futures_seed_inject_from_l1():
     assert injected is not None
     assert injected["source"] == "bootstrapping"
     # 注入后种子数不变（L1 注入不计入 base seeds）
-    assert pool.count() == 50
+    assert pool.count() == 81
     injected_list = pool.list_injected_l1()
     assert len(injected_list) == 1
