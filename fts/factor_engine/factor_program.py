@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import logging
 import secrets
 import types
 import warnings
@@ -23,6 +24,8 @@ from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # ─── 全局警告抑制 ─────────────────────────────────────────
 # 抑制 Pandas FutureWarning: Series.__getitem__ treating keys as positions is deprecated
@@ -156,15 +159,19 @@ _SANDBOX_ALLOWED_MODULES: frozenset[str] = frozenset({
     "math", "statistics",
 })
 
+# 沙箱内精确放行的 FTS 模块（全名匹配，不放开 fts 顶层）
+_SANDBOX_ALLOWED_FTS_MODULES: frozenset[str] = frozenset({
+    "fts.factor_engine.expr_dsl.runtime",
+})
+
 
 def _safe_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
-    """沙箱安全的 __import__ — 仅允许白名单模块。
-
-    任何尝试导入 FORBIDDEN_MODULES 或非白名单模块的请求都抛 ImportError。
-    """
+    """沙箱安全的 __import__ — 仅允许白名单模块 + 精确放行的 FTS runtime。"""
     mod_top = name.split(".")[0] if name else ""
     if mod_top in FORBIDDEN_MODULES:
         raise ImportError(f"禁止导入模块: {name}")
+    if name in _SANDBOX_ALLOWED_FTS_MODULES:
+        return __import__(name, globals, locals, fromlist, level)
     if mod_top not in _SANDBOX_ALLOWED_MODULES:
         raise ImportError(f"模块不在沙箱白名单: {name}")
     return __import__(name, globals, locals, fromlist, level)
@@ -209,6 +216,19 @@ class _ArrayDataWrapper:
 
     def __repr__(self) -> str:
         return f"_ArrayDataWrapper(columns={self._columns}, len={len(self._df)})"
+
+
+_OPERATOR_AST_CACHE: dict[str, Any] = {}
+_operator_registry: Optional[Any] = None
+
+
+def _get_operator_registry():
+    """延迟构建 DSL 算子注册表单例。"""
+    global _operator_registry
+    if _operator_registry is None:
+        from .expr_dsl import build_registry
+        _operator_registry = build_registry()
+    return _operator_registry
 
 
 class FactorExecutor:
@@ -270,6 +290,10 @@ class FactorExecutor:
         try:
             local_ns: dict[str, Any] = {}
             exec(code, safe_globals, local_ns)  # noqa: S102 — 受控沙箱
+            # 模块级 import 绑定（如 from fts...runtime import eval_fts_expr）落在
+            # local_ns，而 factor_program 的 __globals__ 指向 safe_globals；合并后
+            # 保证函数内可解析算子 runtime 桥接 (Phase C.2)。
+            safe_globals.update(local_ns)
             func = local_ns.get("factor_program")
             if func is None or not callable(func):
                 raise FactorCompileError("编译后未找到 factor_program 函数")
@@ -289,6 +313,16 @@ class FactorExecutor:
         Returns:
             np.ndarray: 信号数组（-1~+1）或评分数组，长度与 data 行数对齐
         """
+        # ── 算子因子快速路径 (Phase C.2): 直接解释 FTS-Expr，不编译沙箱代码 ──
+        if self.program.get("kind") == "operator" and self.program.get("expression"):
+            try:
+                return self._execute_operator(data)
+            except Exception as e:
+                logger.warning(
+                    "算子快速路径失败 (factor_id=%s), 回退沙箱: %s",
+                    self.program.get("factor_id", "?"), e,
+                )
+
         if self._compiled is None:
             self.compile()
 
@@ -331,6 +365,27 @@ class FactorExecutor:
         result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
         result = np.clip(result, -10.0, 10.0)
 
+        return result
+
+    def _execute_operator(self, data: pd.DataFrame) -> np.ndarray:
+        """算子快速路径 — 直接解释 FTS-Expr AST，向量化执行。"""
+        if not hasattr(data, "columns"):
+            raise TypeError("算子快速路径需要 DataFrame 输入")
+        from .expr_dsl import evaluate, parse_expression
+
+        expression = self.program["expression"]
+        node = _OPERATOR_AST_CACHE.get(expression)
+        if node is None:
+            node = parse_expression(expression)
+            _OPERATOR_AST_CACHE[expression] = node
+        series = evaluate(node, data, _get_operator_registry())
+        result = series.values.astype(np.float64)
+
+        expected_len = len(data)
+        if len(result) != expected_len:
+            result = self._align_output(result, expected_len)
+        result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
+        result = np.clip(result, -10.0, 10.0)
         return result
 
     @staticmethod
