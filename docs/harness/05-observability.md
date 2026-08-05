@@ -63,8 +63,13 @@ CLI 入口 (cli.py)
 | 端点 | 格式 | 内容 |
 |:-----|:-----|:-----|
 | `GET /health` | JSON | 健康状态 + L1/L2/L3 循环摘要 |
-| `GET /metrics` | 文本 (Prometheus) | 各循环 status gauge, token counter |
+| `GET /metrics` | 文本 (Prometheus) | 各循环 status gauge, token counter, 衰减/Regime/权重/质量/Live/风控/反馈指标 |
+| `GET /metrics/data-sources` | 文本 (Prometheus) | 数据源专用指标（熔断状态/成功率） |
 | `GET /` | HTML | 仪表板 (状态表格) |
+| `POST /api/v1/signal/submit` | JSON | 信号提交（验证 → 风控 → 模拟成交） |
+| `GET /api/v1/risk/status` | JSON | 风控规则状态 |
+| `GET /api/v1/live/factors` | JSON | Live 因子偏离监控列表 |
+| `GET /api/v1/live/factors/{id}/deviation` | JSON | 单因子偏离详情 |
 
 ### 指标字段
 
@@ -80,6 +85,21 @@ fts_loop_status{loop="L3"} 3.0
 fts_tokens_consumed{loop="L1"} 15000.0
 fts_tokens_consumed{loop="L2"} 85000.0
 fts_tokens_consumed{loop="L3"} 5000.0
+
+# HELP fts_factor_decay_ic 因子衰减监控 IC（A.2）
+# TYPE fts_factor_decay_ic gauge
+# HELP fts_quality_score 因子质量评分（A.1）
+# TYPE fts_quality_score gauge
+# HELP fts_regime_weight_adjustment 市场制度权重调整（A.3）
+# TYPE fts_regime_weight_adjustment gauge
+# HELP fts_dq_completeness 数据完整性指标（B.1）
+# TYPE fts_dq_completeness gauge
+# HELP fts_live_factor_ic 实盘因子 IC（C.2）
+# TYPE fts_live_factor_ic gauge
+# HELP fts_risk_check_total 风控检查次数（C.2）
+# TYPE fts_risk_check_total counter
+# HELP fts_feedback_triggers_total 反馈触发次数（C.3）
+# TYPE fts_feedback_triggers_total counter
 ```
 
 ## 4. Elite 因子追踪

@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.8.5
+> 版本: v2.9.0
 > 最后更新: 2026-08-06
 
 ---
@@ -9,6 +9,7 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.9.0** | 2026-08-06 | Design 全量落地（docs/harness/design 9 设计全部完成）：S1 数据层（factor_quality_scores/factor_status_history/factor_audit_reports 三表 + 3 仓储类 + factor_catalog 生命周期字段）；S2 监控调度（Prometheus 衰减/Regime 指标 + adaptive_weight 封装 + 数据质量三维指标 + monthly_decay_eval/data_quality_eval 任务）；S3 回测流水线增强（7 阶段类 FactorScreener/SignalGenerator/PortfolioConstructor/CostSimulator/RiskAttributor/ReportGenerator/CapitalAllocator + run_batch + BacktestPipelineBuilder + CLI fts backtest）；S4 C.1 CLI（fts feature list/analyze + fts gp evolve）；S5 C.2 实盘对接（signal_contract/SignalValidator + fts/risk 风控包 + LiveFactorMonitor + HTTP 端点 + live/risk 指标）；S6 C.3 反馈闭环（FeedbackLoop 家族 + 4 张反馈表 + CLI fts feedback + 反馈指标）；新增 79 测试用例（S1 11 + S2 19 + S3 27 + S4 5 + S5 27 + S6 20 去重后 79）；全量回归通过（排除既有 3 个失败测试文件） |
 | **v2.8.5** | 2026-08-06 | P0/P1 演化质量修复与 OPERATOR 演化模式基础层：OPT-001 快速预筛选层（Step 1.4，nunique>10 / abs(IC)>0.02 / std>1e-6，过滤常数信号和伪相关）；OPT-002 种子因子晋升修复（重复判断 + EliteFactorTracker 初始化）；OPT-003 精英因子重评估保护（跳过不存在的跟踪记录）；OPT-004 期货质量评分卡差异化配置（get_futures_config，IC/Sharpe/换手率阈值下调适应日频期货）；OPT-005 LLM Prompt 增强（添加质量约束、OOS 一致性、因果链要求）；OPT-007 多父代交叉策略（GP 演化 3-parent crossover，锦标赛选择 n 父代，30% 概率）；OPT-008 FTS-Expr DSL OPERATOR 演化模式集成（_generate_operator_factor 方法，基于算子注册表随机生成合法表达式，10 次尝试上限）；OPT-006 OOS 审计误判修复（ICIR 一致性计算替代 oos_ratio）；新增 38+ 测试用例；全量回归测试通过 |
 | **v2.8.2** | 2026-08-06 | 回测流水线兼容修复：`_execute_factor_code` 支持标准 `factor_program(data, params)` 代码约定（此前仅支持 `output` 变量约定，导致所有 YAML 种子/GP 因子返回全零「未设置 output 变量」）；`_compute_factor` 滚动 IC 与日期构造在无 `date` 列时回退到 DatetimeIndex（修复期货面板 KeyError: 'date'）；新增 tests/factor_engine/test_backtest_pipeline.py（5 用例，覆盖标准约定/传统约定/显式 date 列/无效代码/缺列），流水线覆盖率 88%→90% |
 | **v2.8.1** | 2026-08-06 | 孤立模块集成修正：按真实 API 修正 6 处集成调用点（AblationExperiment.run / CausalValidator.validate / RobustnessTester.run / ShapAnalyzer.analyze 均改为 `(factor, data, forward_returns)`；FeatureImportanceAnalyzer.analyze 改为 `(factor_series, data, target_col)`；LogicMonitor 改用 `run(factor, data, switch_dates)` 从 elite 快照加载因子程序）；4 个审查门禁 passed 判定落地（消融 IC 降幅超基线 50% 判伪相关、因果 n_anomalous>0 判事件敏感、鲁棒性总体通过率≥90%、SHAP 恒通过）；新增门禁判定测试与 `_mock_review_pass` 端到端 mock helper；109 测试全绿 |
@@ -47,8 +48,8 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 
 | 文件 | 字段 |
 |:-----|:-----|
-| `fts/__init__.py` | `__version__ = "2.8.4"` |
-| `pyproject.toml` | `version = "2.8.4"` |
+| `fts/__init__.py` | `__version__ = "2.9.0"` |
+| `pyproject.toml` | `version = "2.9.0"` |
 
 异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v1.1.0），与 FTS 项目版本同步。
 
@@ -266,6 +267,6 @@ pip install apscheduler
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `fts/__init__.py` __version__ = "2.8.5"；`pyproject.toml` version = "2.8.5"；`fts/factor_engine/__init__.py` EVOLUTION_VERSION = "1.1.0" |
-| 可验证断言 | 版本号 v2.8.5 在 fts/__init__.py 和 pyproject.toml 中一致 |
-| 检验方式 | `python -c "import fts; assert fts.__version__ == '2.8.5'; from fts.factor_engine import __version__; assert __version__ == '1.1.0'"` |
+| 代码→文档映射 | `fts/__init__.py` __version__ = "2.9.0"；`pyproject.toml` version = "2.9.0"；`fts/factor_engine/__init__.py` EVOLUTION_VERSION = "1.1.0" |
+| 可验证断言 | 版本号 v2.9.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
+| 检验方式 | `python -c "import fts; assert fts.__version__ == '2.9.0'; from fts.factor_engine import __version__; assert __version__ == '1.1.0'"` |

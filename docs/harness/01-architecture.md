@@ -208,6 +208,21 @@ fts/
 │   ├── factor_lineage.py       # 因子血缘追踪（谱系/趋势/退化检测/批量审计）
 │   ├── factor_inspector.py     # 定时巡检（自动检测退化因子并降级）
 │   ├── monitor.py              # 循环监控
+│   ├── factor_quality_card.py  # 因子质量评分卡（10 维评分，A/B/C 分级准入）
+│   ├── adaptive_weight.py      # 自适应权重（AdaptiveWeightManager + RegimeSmoother 热更新）
+│   ├── feature_ops.py          # 特征算子注册表（50 算子 / 7 类）
+│   ├── feature_importance.py   # 特征重要性分析（置换重要性）
+│   ├── gp_evolver.py           # GP 演化器（ExpressionTree + 交叉/变异）
+│   ├── backtest_pipeline.py    # 回测流水线（B.2）：run_batch 批量对比 + Builder
+│   ├── factor_screener.py      # 回测阶段 1：因子筛选
+│   ├── signal_generator.py     # 回测阶段 2：时序/横截面信号生成
+│   ├── portfolio_constructor.py# 回测阶段 3：等权/Sharpe/自适应组合构建
+│   ├── cost_simulator.py       # 回测阶段 4：交易成本模拟（品种差异化费率）
+│   ├── risk_attributor.py      # 回测阶段 5：风险归因（因子贡献/暴露/VaR-ES）
+│   ├── report_generator.py     # 回测阶段 6：Markdown 报告
+│   ├── capital_allocator.py    # 资金分配（fixed/vol_target/risk_parity/kelly）
+│   ├── signal_contract.py      # 信号契约（C.2）：FactorSignal + SignalValidator
+│   ├── feedback_loop.py        # 反馈闭环（C.3）：Trigger/归因/方向调整/效果评估
 │   └── expr_dsl/               # 算子演化基础层 (Phase C.2): FTS-Expr DSL
 │       ├── parser.py           # 递归下降解析器 (表达式 → AST)
 │       ├── validator.py        # 静态校验 (算子/字段/参数边界/max_lookback PIT)
@@ -225,21 +240,32 @@ fts/
 │   └── strategy_evolution.py   # 策略进化（RegimeAdaptive/DynamicWeight/MultiPeriodFusion）
 ├── monitor/                    # 健康监控
 │   ├── __init__.py             # 状态报告函数
-│   ├── http_server.py          # HTTP 监控端点
+│   ├── http_server.py          # HTTP 监控端点（/metrics 含 Prometheus 指标、/api/v1/*）
+│   ├── prometheus_metrics.py   # Prometheus 指标注册表（衰减/Regime/权重/质量/Live/风控/反馈）
 │   ├── elite_tracker.py        # Elite 因子追踪
+│   ├── data_quality_monitor.py # 数据质量监控（B.1）：完整性/准确性/及时性三维指标
+│   ├── live_factor_monitor.py  # Live 因子偏离监控（C.2）：30% 偏离阈值
 │   ├── logic_monitor.py        # 逻辑监控仪表盘（Phase C）
 │   ├── k8s_deploy.py          # K8s 部署配置
 │   └── prometheus_setup.py     # Prometheus 指标配置
+├── risk/                       # 风控层（C.2）
+│   ├── __init__.py             # 导出 RiskManager/TradeAdapter/SimulatedTradeAdapter
+│   ├── risk_manager.py         # RiskManager 五项风控规则（仓位/回撤/亏损/杠杆/集中度）
+│   ├── trade_adapter.py        # TradeAdapter 抽象基类（Liskov 替换）
+│   └── simulated_adapter.py    # SimulatedTradeAdapter 模拟成交
 └── scheduler/                  # 调度层
     ├── __init__.py             # 模块入口 + 导出
     ├── engine.py               # SchedulerEngine（APScheduler 包装器）
-    ├── tasks.py                # TaskRegistry + TaskSpec + 注册默认任务
-    ├── jobs.py                 # 任务工作函数（L1/L2/L3/信号管道/健康检查/因子巡检）
+    ├── tasks.py                # TaskRegistry + TaskSpec + 注册默认任务（6 个）
+    ├── jobs.py                 # 任务工作函数（L1/L2/L3/信号管道/健康检查/因子巡检/月度衰减/数据质量）
     ├── hotswap.py              # 热更新支持
     └── watchdog.py             # 看门狗进程
 ├── factor_db/                   # DuckDB 因子数据库层
-    ├── schema.py               # 数据库 Schema 定义
+    ├── schema.py               # 数据库 Schema 定义（11 张表，含质量评分/状态历史/审计报告/反馈 4 表）
     ├── repository.py           # FactorRepository CRUD
+    ├── quality_repository.py   # FactorQualityScoreRepository（质量评分持久化）
+    ├── status_repository.py    # FactorStatusRepository（生命周期状态历史）
+    ├── audit_repository.py     # FactorAuditReportRepository（审计报告持久化）
     ├── lineage.py              # FactorLineage 血缘追踪 + 批量审计
     └── correlations.py         # 因子相关性矩阵
 ```

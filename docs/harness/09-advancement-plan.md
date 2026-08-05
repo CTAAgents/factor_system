@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.8.5
+> 版本: v2.9.0
 > 最后更新: 2026-08-06
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -133,6 +133,21 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 | 数据降级级数 | 3 | **3 级（DuckDB → AKShare → 合成）** |
 | 总测试用例数 | 1500+ | **1502** |
 | 总体覆盖率 | 99% | **99%** |
+
+### v2.9.0 Design 全量落地（已完成 — 当前版本）
+
+**完成时间**: 2026-08-06
+
+**核心产出**（docs/harness/design/ 9 个设计全部实现）:
+- ✅ S1 数据层（A.1/A.2/B.3）：`factor_quality_scores`/`factor_status_history`/`factor_audit_reports` 三表 + FactorQualityScoreRepository/FactorStatusRepository/FactorAuditReportRepository 3 仓储类 + factor_catalog 生命周期字段扩展（幂等，规避 DuckDB 1.1.x ART 索引 UPDATE bug）
+- ✅ S2 监控调度（A.2/A.3/B.1）：prometheus_metrics 衰减/Regime/权重/质量指标注册表并挂载 /metrics；adaptive_weight 封装 AdaptiveWeightManager+RegimeSmoother（热更新）；data_quality_monitor 完整性/准确性/及时性三维指标函数；scheduler 新增 monthly_decay_eval（每月 1 日）与 data_quality_eval（每 5 分钟）任务
+- ✅ S3 回测流水线（B.2）：7 阶段类（FactorScreener/SignalGenerator/PortfolioConstructor/CostSimulator/RiskAttributor/ReportGenerator/CapitalAllocator）+ BacktestPipeline.run_batch 批量排名 + BacktestPipelineBuilder + CLI `fts backtest run/batch/compare`
+- ✅ S4 C.1 CLI：`fts feature list`（50 算子/7 类）+ `fts feature analyze`（置换重要性）+ `fts gp evolve`（GP 演化）
+- ✅ S5 C.2 实盘对接：signal_contract（FactorSignal/SignalValidator 契约）+ fts/risk 风控包（RiskManager 五项规则/TradeAdapter 抽象/SimulatedTradeAdapter 模拟成交）+ LiveFactorMonitor（30% 偏离阈值）+ HTTP 端点（signal submit/risk status/live factors）+ Prometheus live/risk 指标
+- ✅ S6 C.3 反馈闭环：FeedbackLoop 家族（Trigger/AttributionAnalyzer/DirectionAdjuster/Effectiveness）+ 4 张反馈表（feedback_events/attribution_reports/feedback_processing_results/feedback_reports）+ CLI `fts feedback trigger/process/report/stats` + Prometheus 反馈指标
+- ✅ 新增 79 测试用例（S1 11 + S2 19 + S3 27 + S4 5 + S5 27 + S6 20 去重后 79），本次相关用例全绿
+
+**说明**: 9 个设计文档状态已同步为「已实现」（B.2/C.1/C.2/C.3 标注 v2.9.0），实现方向与文档细节差异已在各文档「实现现状」标注。
 
 ### 算子演化基础层（Phase C.2）（已完成）
 
@@ -305,6 +320,7 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.9.0** | 2026-08-06 | Design 全量落地（docs/harness/design 9 设计全部完成）：S1 数据层三表+3 仓储类；S2 监控调度（Prometheus 指标注册表 + 自适应权重 + 数据质量三维指标 + monthly_decay_eval/data_quality_eval 任务）；S3 回测流水线（7 阶段类 + run_batch + Builder + CLI）；S4 C.1 CLI（feature list/analyze + gp evolve）；S5 C.2 实盘对接（信号契约 + fts/risk 风控包 + LiveFactorMonitor + HTTP 端点 + live/risk 指标）；S6 C.3 反馈闭环（FeedbackLoop 家族 + 4 反馈表 + CLI + 反馈指标）；新增 79 测试用例 |
 | **v2.8.5** | 2026-08-06 | P0/P1 演化质量修复 + OPERATOR 演化模式集成：快速预筛选层、种子因子晋升修复、精英因子重评估保护、期货质量评分卡差异化配置、LLM Prompt 增强、多父代交叉策略、FTS-Expr DSL OPERATOR 演化模式集成、OOS 审计误判修复；新增 38+ 测试用例 |
 | **v2.5.0** | 2026-08-05 | Phase 1 种子因子 YAML 化 + Phase 2 精英因子 DuckDB 迁移：种子因子 YAML 文件（563 因子）；精英因子 DuckDB（680 因子，4 张表）；因子仓库层 FactorRepository；因子相关性矩阵（4950 对）；54 新测试 |
 | **v2.4.0** | 2026-08-05 | 默认市场改为期货：四层同步 default_market="futures"；L1 期货知识注入全链路日志；118 测试全绿 |

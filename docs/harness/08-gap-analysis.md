@@ -59,6 +59,7 @@
 | GAP-025 | `fts/factor_engine/evolution_loop.py` | 6 个孤立模块（AblationExperiment/ShapAnalyzer/RobustnessTester/CausalValidator/FeatureImportanceAnalyzer/LogicMonitor）已集成进演化循环，但集成调用签名与模块真实 API 不符，运行期全部落入 except 默认放行，审查门禁未真正生效 | 伪相关/事件敏感/不鲁棒因子可绕过审查直接晋升精英池 | 1 周内 | ✅ 已关闭 |
 | GAP-026 | `fts/factor_engine/expr_dsl/` + GP 引擎 | GP 引擎算子命名与 DSL 未对齐（`delta`/`pct_change`/`scale` vs `ts_delta`/`ts_pct_change`），GP 产物暂为 CODE 类型 | 算子语义无法直接映射，GP 产物维持 CODE，对齐属后续演化引擎计划 | 3 月内 | ⭕ 开放 |
 | GAP-027 | `fts/factor_engine/contracts.py` + `factor_program.py` | `code: str\|None` 可选化未审计：算子因子暂保留确定性生成代码，需审计全部 `factor["code"]` 读取点后方可可选化 | 契约中 `code` 保持必填，可选化存在隐性破坏风险 | 3 月内 | ⭕ 开放 |
+| GAP-028 | `tests/cli/test_data_cli.py` 等 | 既有失败测试文件（test_data_cli.py 断言 `_cmd_data_*` 旧接口、test_tasks.py 任务数断言过期、test_hotswap.py 依赖 watchdog、test_engine.py MagicMock 断言、test_shap_analyzer.py 依赖 shap、test_factor_lineage.py 触发 DuckDB ART 索引 bug、test_data_source_metrics.py 缺 `_metrics_cache`）与当前实现不匹配 | 全量回归需排除这些文件，无法一键全绿验证 | 3 月内 | ⭕ 开放 |
 ---
 
 ## 3. 差距详情

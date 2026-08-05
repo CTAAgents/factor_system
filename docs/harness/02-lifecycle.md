@@ -24,6 +24,7 @@ FTS 从 FDT 剥离共经历 8 个 Phase，目前全部完成：
 | **Phase 11** | 期货自治循环：L1/L2/L3 全自动调度 + 期货基本面数据接入（库存/仓单/基差）+ 信号管道定时任务 + 期货全量种子因子库（12 大因子家族 50+ 子因子）+ 顶级因子过滤（IC>0.3）+ 信号管道输出到 reports/{date}/ | ✅ 完成 | 482 种子因子（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面），期货 12 家族 50+ 子因子，5 个定时任务，信号报告输出到 reports/ |
 | **Phase 12** | 策略进化：动态因子权重（DynamicWeightStrategy）、市场制度自适应（RegimeAdaptiveStrategy）、多周期信号融合（MultiPeriodSignalFusion） | ✅ 完成 | 3 种策略进化能力，55 个测试用例全绿，strategy_evolution.py 95% 覆盖率 |
 | **Phase 13** | 信号管道 v5 多空双向 + 信号增量：信号管道升级为多空双向排名（按绝对值排序），新增信号增量追踪（较昨日变化判断趋势加速/衰竭），信号快照 JSON 持久化 + JSONL 历史追加，L3 Portfolio Loop 自动触发信号管道（全量 82 品种），README 拆分股票/期货种子因子 | ✅ 完成 | 1601 测试全绿，12 大期货因子家族 50+ 子因子 |
+| **Phase 14** | Design 全量落地（v2.9.0）：9 个设计文档（A.1-C.3）全部完成——S1 数据层（质量评分/状态历史/审计报告 3 表 + 3 仓储类）、S2 监控调度（Prometheus 指标注册表 + 自适应权重封装 + 数据质量三维指标 + 月度衰减/数据质量 2 任务）、S3 回测流水线（7 阶段类 + run_batch + Builder + CLI）、S4 C.1 CLI（feature list/analyze + gp evolve）、S5 C.2 实盘对接（信号契约 + fts/risk 风控包 + LiveFactorMonitor + HTTP 端点）、S6 C.3 反馈闭环（FeedbackLoop 家族 + 4 反馈表 + CLI）；新增 79 测试用例 | ✅ 完成 | 2066+ 测试，9 设计全部实现（详见 docs/harness/design/） |
 
 ---
 

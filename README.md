@@ -2,8 +2,8 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-2848%20collected-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.8.5-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-2066%2B%20collected-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.9.0-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -122,6 +122,31 @@ L3 参数：
 |------|------|
 | `fts scheduler run` | 启动定时调度器（后台运行） |
 | `fts scheduler list` | 列出所有已注册的定时任务 |
+
+### 回测流水线（B.2）
+
+| 命令 | 说明 |
+|------|------|
+| `fts backtest run <factor_id> [--days] [--capital]` | 单个因子回测 |
+| `fts backtest batch --family <family>` | 批量回测 + Sharpe 排名 |
+| `fts backtest compare <id1> <id2>` | 两个因子对比回测 |
+
+### 特征工程（C.1）
+
+| 命令 | 说明 |
+|------|------|
+| `fts feature list [--category]` | 列出特征算子（50 算子 / 7 类） |
+| `fts feature analyze <factor_id>` | 特征重要性分析（置换重要性） |
+| `fts gp evolve [--generations] [--population]` | GP 演化 |
+
+### 反馈闭环（C.3）
+
+| 命令 | 说明 |
+|------|------|
+| `fts feedback trigger` | 触发反馈检查（Live 偏离 + 定期评估） |
+| `fts feedback process` | 处理待处理反馈事件（归因 + 方向调整） |
+| `fts feedback report [--month]` | 生成月度效果报告 |
+| `fts feedback stats` | 反馈闭环统计 |
 
 ### Web UI
 
