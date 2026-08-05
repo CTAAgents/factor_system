@@ -9,6 +9,7 @@ HARNESS §契约优先：所有模块必须基于本文件的 TypedDict/常量�
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Literal, Optional, TypedDict
 
 
@@ -97,6 +98,18 @@ class EconomicLogic(TypedDict, total=False):
 from .walk_forward import WalkForwardResult
 
 
+class FactorKind(str, Enum):
+    """因子表达类型。
+
+    - OPERATOR: 算子表达式 (FTS-Expr DSL)，经 OperatorRegistry 解释执行
+    - CODE: 代码级因子 (Python 沙箱)，现有默认类型
+    - HYBRID: 算子外壳 + 代码内核 (预留)
+    """
+    OPERATOR = "operator"
+    CODE = "code"
+    HYBRID = "hybrid"
+
+
 class FactorProgram(TypedDict, total=False):
     """因子程序 — 图灵完备代码表示（factorengine 核心）。
 
@@ -126,6 +139,11 @@ class FactorProgram(TypedDict, total=False):
     symbols: list[str]                          # 适用品种列表（空=全品种适用）
     factor_version: str                          # 因子定义版本 (e.g., "v2")
     is_multi_symbol: bool                       # 是否为多品种因子
+    kind: FactorKind                    # 因子表达类型 (默认 code, 向后兼容)
+    expression: Optional[str]           # 算子因子表达式 (FTS-Expr DSL)
+    operator_depth: Optional[int]       # 表达式 AST 深度
+    operator_count: Optional[int]       # 算子个数
+    max_lookback: Optional[int]         # 最大 lookback (PIT 静态分析, 防未来函数)
 
 
 # ─── 评估结果契约 ─────────────────────────────────────────
@@ -757,6 +775,13 @@ def normalize_factor_program(factor: FactorProgram, market_hint: str | None = No
     # 补全 is_multi_symbol
     symbols = normalized.get("symbols", [])
     normalized["is_multi_symbol"] = len(symbols) > 1 if symbols else False
+
+    # 因子表达类型推断: 有 expression 视为算子因子, 否则视为代码因子
+    if "kind" not in normalized or not normalized.get("kind"):
+        normalized["kind"] = (
+            FactorKind.OPERATOR if normalized.get("expression")
+            else FactorKind.CODE
+        )
 
     return normalized
 
