@@ -134,6 +134,20 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 | 总测试用例数 | 1500+ | **1502** |
 | 总体覆盖率 | 99% | **99%** |
 
+### 算子演化基础层（Phase C.2）（已完成）
+
+**完成时间**: 2026-08-06
+
+**核心产出**:
+- ✅ FTS-Expr DSL 落地：`fts/factor_engine/expr_dsl/` 包（parser → validator → executor/compiler → runtime）；递归下降解析器 + AST，解释执行器复用 `feature_ops.py` 既有算子（pandas 向量化快速路径），编译器生成确定性沙箱代码
+- ✅ 算子注册表：FTS-Expr 算子注册表元数据（语义/梯度/边界）+ L0-L5 分层
+- ✅ FactorProgram kind 扩展：FactorKind 枚举（`operator`/`code`/`hybrid`）+ 可选字段（`expression`/`operator_depth`/`operator_count`/`max_lookback`）；向后兼容，存量因子经 `normalize_factor_program` 默认 `code`，对上层零破坏
+- ✅ FactorExecutor 按 kind 分派：`operator` 走 DSL 解释执行快速路径（异常回退沙箱），`code` 走现有沙箱路径；评估链/Verifier 接口不变
+- ✅ evolution_mode 配置：`settings.py` + `config/settings.yaml` 新增 `evolution_mode`（`operator`/`code`/`hybrid`），支持 `FTS_EVOLUTION_MODE` 环境变量
+- ✅ 新增 expr_dsl 六个测试文件 + test_contracts_kind / test_executor_dispatch / test_config_settings 等用例，全量回归中本次相关用例全绿
+
+**说明**: 本里程碑为后续「算子演化引擎」计划的前置基础层——算子因子与代码因子统一表现为 `FactorProgram`，对上层（持久化/评估链/Verifier）透明。
+
 ### v2.8.1（已完成）
 
 **完成时间**: 2026-08-06
@@ -267,6 +281,7 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 
 | 版本 | 主题 | 核心产出 |
 |:-----|:-----|:---------|
+| **算子演化引擎（Phase C.3，计划中）** | 算子演化引擎 | 基于 Phase C.2 基础层（FTS-Expr DSL / 算子注册表 / kind 分派 / evolution_mode），实现算子级因子创新与演化 |
 | **v2.0.0** | 生产部署 | 监控告警完善、容器化、CI/CD 流水线、期货全链路 E2E 测试 |
 
 ---
