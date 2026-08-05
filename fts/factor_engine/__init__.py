@@ -204,6 +204,25 @@ from .feature_importance import (
     FeatureImportanceResult,
     FeatureImportanceAnalyzer,
 )
+from .backtest_pipeline import (
+    BacktestPipeline,
+    BacktestInput,
+    BacktestReport,
+    BacktestResult,
+    BacktestPipelineBuilder,
+    PipelineResult,
+    PipelineStage,
+    PerformanceMetrics,
+    FactorOutput,
+    PipelineConfig,
+)
+from .factor_screener import FactorScreener
+from .signal_generator import SignalGenerator
+from .portfolio_constructor import PortfolioConstructor, PortfolioResult
+from .cost_simulator import CostSimulator, CostResult
+from .risk_attributor import RiskAttributor, RiskAttributionReport
+from .report_generator import ReportGenerator
+from .capital_allocator import CapitalAllocator, AllocationResult
 
 __version__ = "1.1.0"
 __all__ = [
@@ -362,4 +381,26 @@ __all__ = [
     "tree_to_factor_program",
     "FeatureImportanceResult",
     "FeatureImportanceAnalyzer",
+    # ─── B.2 回测流水线（v2.9.0 增强）────────────────
+    "BacktestPipeline",
+    "BacktestInput",
+    "BacktestReport",
+    "BacktestResult",
+    "BacktestPipelineBuilder",
+    "PipelineResult",
+    "PipelineStage",
+    "PerformanceMetrics",
+    "FactorOutput",
+    "PipelineConfig",
+    "FactorScreener",
+    "SignalGenerator",
+    "PortfolioConstructor",
+    "PortfolioResult",
+    "CostSimulator",
+    "CostResult",
+    "RiskAttributor",
+    "RiskAttributionReport",
+    "ReportGenerator",
+    "CapitalAllocator",
+    "AllocationResult",
 ]

@@ -149,6 +149,44 @@ class PipelineResult:
         return not self.success
 
 
+@dataclass
+class BacktestResult:
+    """批量回测单项结果（B.2）。"""
+
+    factor_id: str
+    rank: int = 0
+    report: Optional[BacktestReport] = None
+    error: Optional[str] = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def sharpe(self) -> float:
+        if self.report is not None:
+            return self.report.metrics.sharpe_ratio
+        return 0.0
+
+    @property
+    def ic_mean(self) -> float:
+        if self.report is not None:
+            return self.report.metrics.ic_mean
+        return 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        """序列化为字典（用于 CLI 对比排名输出）。"""
+        d: dict[str, Any] = {
+            "factor_id": self.factor_id,
+            "rank": self.rank,
+            "sharpe": round(self.sharpe, 4),
+            "ic_mean": round(self.ic_mean, 4),
+        }
+        if self.report is not None:
+            d["max_drawdown"] = round(self.report.metrics.max_drawdown, 4)
+            d["total_return"] = round(self.report.metrics.total_return, 4)
+        if self.error:
+            d["error"] = self.error
+        return d
+
+
 # ─── 异常类 ───────────────────────────────────────────────
 
 
@@ -197,6 +235,79 @@ class BacktestPipeline:
         self._config = config or PipelineConfig()
         self._intermediate: dict[str, Any] = {}
         self._current_stage: Optional[PipelineStage] = None
+
+    def run_batch(
+        self,
+        factors: list[dict[str, Any]],
+        data: pd.DataFrame,
+        benchmark: Optional[pd.Series] = None,
+        forward_period: int = 1,
+        cost_rate: float = 0.0003,
+        slippage: float = 0.0001,
+        initialization_capital: float = 1_000_000.0,
+        date_range: Optional[tuple[str, str]] = None,
+        **kwargs: Any,
+    ) -> list[BacktestResult]:
+        """批量回测多个因子并输出对比排名（B.2）。
+
+        每个因子独立执行单因子回测，结果按 Sharpe 降序排名。
+
+        Args:
+            factors: 因子字典列表（含 code/factor_id）
+            data: OHLCV 数据
+            benchmark: 基准收益率序列
+            forward_period: 预测周期（天）
+            cost_rate: 交易成本率
+            slippage: 滑点率
+            initialization_capital: 初始资金
+            date_range: 回测日期范围
+            **kwargs: 额外参数（透传 BacktestInput.extra_params）
+
+        Returns:
+            list[BacktestResult]，已按 Sharpe 排名（rank=1 最优）。
+        """
+        results: list[BacktestResult] = []
+        for factor in factors:
+            factor_id = factor.get("factor_id", "unknown")
+            try:
+                input_data = BacktestInput(
+                    factor=factor,
+                    data=data,
+                    benchmark=benchmark,
+                    forward_period=forward_period,
+                    cost_rate=cost_rate,
+                    slippage=slippage,
+                    initialization_capital=initialization_capital,
+                    date_range=date_range,
+                    extra_params=kwargs,
+                )
+                result = self.run(input_data)
+                if result.success:
+                    results.append(BacktestResult(
+                        factor_id=factor_id, report=result.output,
+                    ))
+                else:
+                    results.append(BacktestResult(
+                        factor_id=factor_id, error=result.error,
+                    ))
+            except Exception as e:  # noqa: BLE001
+                logger.exception("[run_batch] 因子 %s 回测异常", factor_id)
+                results.append(BacktestResult(factor_id=factor_id, error=str(e)))
+
+        # 按 Sharpe 降序排名（失败因子排最后，保持 rank 连续）
+        succeeded = [r for r in results if r.report is not None]
+        succeeded.sort(key=lambda r: r.report.metrics.sharpe_ratio, reverse=True)
+        for rank, r in enumerate(succeeded, start=1):
+            r.rank = rank
+        failed = [r for r in results if r.report is None]
+        for rank, r in enumerate(failed, start=len(succeeded) + 1):
+            r.rank = rank
+
+        logger.info(
+            "[run_batch] 批量回测完成 [total=%d, ok=%d, failed=%d]",
+            len(results), len(succeeded), len(results) - len(succeeded),
+        )
+        return results
 
     def run(
         self,
@@ -745,10 +856,124 @@ class PipelineConfig:
     compute_benchmark: bool = True
 
 
+# ─── 流水线构建器（B.2） ──────────────────────────────
+
+
+class BacktestPipelineBuilder:
+    """回测流水线构建器（Builder 模式，B.2）。
+
+    链式配置回测参数，build() 返回配置好的 BacktestPipeline。
+
+    Usage:
+        pipeline = (BacktestPipelineBuilder()
+            .set_period('2020-01-01', '2025-12-31')
+            .set_signal_type('time_series')
+            .set_weight_method('adaptive')
+            .set_capital_mode('vol_target', target_vol=0.15)
+            .enable_cost_model(True)
+            .enable_risk_attribution(True)
+            .build())
+    """
+
+    def __init__(self) -> None:
+        self._start: Optional[str] = None
+        self._end: Optional[str] = None
+        self._signal_type: str = "time_series"
+        self._weight_method: str = "equal"
+        self._capital_mode: str = "vol_target"
+        self._capital_kwargs: dict[str, Any] = {}
+        self._use_cost_model: bool = True
+        self._include_risk_attribution: bool = True
+        self._forward_period: int = 1
+        self._initialization_capital: float = 1_000_000.0
+
+    # ─── 链式配置 ────────────────────────────────────────
+
+    def set_period(self, start: str, end: str) -> "BacktestPipelineBuilder":
+        """设置回测日期范围。"""
+        self._start = start
+        self._end = end
+        return self
+
+    def set_signal_type(self, stype: str) -> "BacktestPipelineBuilder":
+        """设置信号类型（time_series / cross_section）。"""
+        self._signal_type = stype
+        return self
+
+    def set_weight_method(self, method: str) -> "BacktestPipelineBuilder":
+        """设置权重方法（equal / sharpe / adaptive）。"""
+        self._weight_method = method
+        return self
+
+    def set_capital_mode(self, mode: str, **kwargs: Any) -> "BacktestPipelineBuilder":
+        """设置资金管理模式（fixed / vol_target / risk_parity / kelly）。"""
+        self._capital_mode = mode
+        self._capital_kwargs = dict(kwargs)
+        return self
+
+    def enable_cost_model(self, enabled: bool) -> "BacktestPipelineBuilder":
+        """启用/禁用成本模型。"""
+        self._use_cost_model = bool(enabled)
+        return self
+
+    def enable_risk_attribution(self, enabled: bool) -> "BacktestPipelineBuilder":
+        """启用/禁用风险归因。"""
+        self._include_risk_attribution = bool(enabled)
+        return self
+
+    def set_forward_period(self, period: int) -> "BacktestPipelineBuilder":
+        """设置预测周期。"""
+        self._forward_period = int(period)
+        return self
+
+    def set_initial_capital(self, capital: float) -> "BacktestPipelineBuilder":
+        """设置初始资金。"""
+        self._initialization_capital = float(capital)
+        return self
+
+    # ─── 构建 ────────────────────────────────────────────
+
+    def build(self) -> BacktestPipeline:
+        """构建 BacktestPipeline 实例。"""
+        config = PipelineConfig()
+        pipeline = BacktestPipeline(config=config)
+        # 注入构建参数（run_batch 时读取）
+        pipeline._builder_config = {  # noqa: SLF001
+            "start": self._start,
+            "end": self._end,
+            "signal_type": self._signal_type,
+            "weight_method": self._weight_method,
+            "capital_mode": self._capital_mode,
+            "capital_kwargs": dict(self._capital_kwargs),
+            "use_cost_model": self._use_cost_model,
+            "include_risk_attribution": self._include_risk_attribution,
+            "forward_period": self._forward_period,
+            "initialization_capital": self._initialization_capital,
+        }
+        return pipeline
+
+    def get_config(self) -> dict[str, Any]:
+        """返回构建参数快照。"""
+        return {
+            "start": self._start,
+            "end": self._end,
+            "signal_type": self._signal_type,
+            "weight_method": self._weight_method,
+            "capital_mode": self._capital_mode,
+            "capital_kwargs": dict(self._capital_kwargs),
+            "use_cost_model": self._use_cost_model,
+            "include_risk_attribution": self._include_risk_attribution,
+            "forward_period": self._forward_period,
+            "initialization_capital": self._initialization_capital,
+        }
+
+
 __all__ = [
     "BacktestPipeline",
     "BacktestInput",
     "BacktestReport",
+    "BacktestResult",
+    "BacktestPipelineBuilder",
     "PipelineResult",
     "PipelineStage",
     "PerformanceMetrics",

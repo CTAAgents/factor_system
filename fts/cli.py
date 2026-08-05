@@ -613,6 +613,151 @@ def _cmd_factor_show(args: argparse.Namespace) -> int:
         return 2
 
 
+# ─── fts backtest（B.2 回测流水线 CLI） ─────────────────
+
+
+def _load_factor_by_id(factor_id: str, market: str = "futures") -> dict | None:
+    """按 ID 从 elite 目录/DuckDB 加载因子。"""
+    cfg = get_config()
+    elite_dir = Path(cfg.get_elite_dir(market))
+    if elite_dir.exists():
+        candidates = list(elite_dir.glob(f"*{factor_id}*.json"))
+        if candidates:
+            try:
+                return json.loads(candidates[0].read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                pass
+    try:
+        repo = _load_factor_repo()
+        return repo.get_by_id(factor_id, market=market)
+    except Exception as e:  # noqa: BLE001
+        print(f"[backtest] 因子加载失败: {e}", file=sys.stderr)
+        return None
+
+
+def _cmd_backtest_run(args: argparse.Namespace) -> int:
+    """单个因子回测。"""
+    factor = _load_factor_by_id(args.factor_id, getattr(args, "market", "futures"))
+    if factor is None:
+        print(f"[backtest] 未找到因子: {args.factor_id}")
+        return 1
+
+    data, _ = _prepare_data(getattr(args, "symbol", "000001"), days=args.days)
+    date_range = None
+    if args.start and args.end:
+        date_range = (args.start, args.end)
+
+    from .factor_engine.backtest_pipeline import (
+        BacktestInput, BacktestPipeline,
+    )
+    from .factor_engine.report_generator import ReportGenerator
+
+    result = BacktestPipeline().run(BacktestInput(
+        factor=factor,
+        data=data,
+        date_range=date_range,
+        initialization_capital=args.capital,
+    ))
+    if not result.success:
+        print(f"[backtest] 回测失败: {result.error}", file=sys.stderr)
+        return 1
+
+    report = result.output
+    m = report.metrics
+    print(f"=== 回测结果: {report.factor_id} ===")
+    print(f"期间: {report.start_date} ~ {report.end_date}")
+    print(f"总收益: {m.total_return:.2%} | 年化: {m.annual_return:.2%} | "
+          f"Sharpe: {m.sharpe_ratio:.3f}")
+    print(f"最大回撤: {m.max_drawdown:.2%} | Calmar: {m.calmar_ratio:.3f} | "
+          f"胜率: {m.win_rate:.2%}")
+    print(f"IC 均值: {m.ic_mean:.4f} | IC IR: {m.ic_ir:.3f} | 换手: {m.turnover:.3f}")
+
+    if args.output:
+        gen = ReportGenerator()
+        path = gen.generate(report, output_dir=args.output)
+        print(f"报告已生成: {path}")
+    return 0
+
+
+def _cmd_backtest_batch(args: argparse.Namespace) -> int:
+    """批量回测 + 对比排名。"""
+    from .factor_engine.factor_screener import FactorScreener
+    from .factor_engine.backtest_pipeline import BacktestPipeline
+
+    market = getattr(args, "market", "futures")
+    cfg = get_config()
+    elite_dir = Path(cfg.get_elite_dir(market))
+    if not elite_dir.exists():
+        print(f"[backtest] elite 目录不存在: {elite_dir}", file=sys.stderr)
+        return 1
+    factors = []
+    for p in sorted(elite_dir.glob("*.json")):
+        try:
+            factors.append(json.loads(p.read_text(encoding="utf-8")))
+        except Exception:  # noqa: BLE001
+            continue
+
+    screened = FactorScreener(market=market).screen(
+        factors=factors,
+        min_grade=getattr(args, "grade", "B"),
+        min_total_score=getattr(args, "min_score", None),
+        limit=getattr(args, "limit", 20),
+    )
+    if not screened:
+        print("[backtest] 无符合条件的因子")
+        return 0
+
+    data, _ = _prepare_data(getattr(args, "symbol", "000001"), days=args.days)
+    results = BacktestPipeline().run_batch(
+        screened, data, initialization_capital=args.capital,
+    )
+    _print_backtest_ranking(results)
+    return 0
+
+
+def _cmd_backtest_compare(args: argparse.Namespace) -> int:
+    """对比回测多个因子。"""
+    from .factor_engine.backtest_pipeline import BacktestPipeline
+
+    factor_ids = [s.strip() for s in args.factor_ids.split(",") if s.strip()]
+    if not factor_ids:
+        print("[backtest] 请提供 --factor-ids")
+        return 1
+
+    market = getattr(args, "market", "futures")
+    factors = []
+    for fid in factor_ids:
+        f = _load_factor_by_id(fid, market)
+        if f is not None:
+            factors.append(f)
+
+    if not factors:
+        print("[backtest] 所有因子加载失败")
+        return 1
+
+    data, _ = _prepare_data(getattr(args, "symbol", "000001"), days=args.days)
+    results = BacktestPipeline().run_batch(
+        factors, data, initialization_capital=args.capital,
+    )
+    _print_backtest_ranking(results)
+    return 0
+
+
+def _print_backtest_ranking(results: list) -> int:
+    """打印批量回测对比排名表。"""
+    print(f"=== 回测对比排名 ({len(results)} 因子) ===")
+    print(f"{'Rank':<5}{'Factor ID':<40}{'Sharpe':<10}{'IC':<10}{'MaxDD':<10}{'TotalRet':<10}")
+    print("-" * 85)
+    for r in sorted(results, key=lambda x: x.rank):
+        if r.report is not None:
+            m = r.report.metrics
+            print(f"{r.rank:<5}{r.factor_id:<40}{m.sharpe_ratio:<10.3f}"
+                  f"{m.ic_mean:<10.4f}{m.max_drawdown:<10.2%}{m.total_return:<10.2%}")
+        else:
+            print(f"{r.rank:<5}{r.factor_id:<40}失败: {r.error}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建 CLI parser。"""
     parser = argparse.ArgumentParser(
@@ -721,6 +866,45 @@ def build_parser() -> argparse.ArgumentParser:
     p_factor_lineage = factor_sub.add_parser("lineage", help="查询因子演化血缘")
     p_factor_lineage.add_argument("factor_id", help="因子 ID")
     p_factor_lineage.set_defaults(func=_cmd_factor_lineage)
+
+    # backtest（B.2 回测流水线）
+    p_backtest = sub.add_parser("backtest", help="回测流水线（B.2）")
+    bt_sub = p_backtest.add_subparsers(dest="subcommand", required=False)
+
+    # backtest run
+    p_bt_run = bt_sub.add_parser("run", help="单个因子回测")
+    p_bt_run.add_argument("--factor-id", required=True, help="因子 ID")
+    p_bt_run.add_argument("--market", default="futures", choices=["futures", "stock"],
+                          help="市场类型（默认：futures）")
+    p_bt_run.add_argument("--symbol", default="000001", help="回测标的代码（默认 000001）")
+    p_bt_run.add_argument("--start", default=None, help="开始日期 YYYY-MM-DD")
+    p_bt_run.add_argument("--end", default=None, help="结束日期 YYYY-MM-DD")
+    p_bt_run.add_argument("--days", type=int, default=500, help="回溯天数（默认 500）")
+    p_bt_run.add_argument("--capital", type=float, default=1_000_000.0, help="初始资金")
+    p_bt_run.add_argument("--output", default=None, help="报告输出目录")
+    p_bt_run.set_defaults(func=_cmd_backtest_run)
+
+    # backtest batch
+    p_bt_batch = bt_sub.add_parser("batch", help="批量回测 + 对比排名")
+    p_bt_batch.add_argument("--market", default="futures", choices=["futures", "stock"],
+                            help="市场类型（默认：futures）")
+    p_bt_batch.add_argument("--grade", default="B", help="最低等级 A/B/C（默认 B）")
+    p_bt_batch.add_argument("--min-score", type=float, default=None, help="最低质量总分")
+    p_bt_batch.add_argument("--limit", type=int, default=20, help="最大回测因子数（默认 20）")
+    p_bt_batch.add_argument("--symbol", default="000001", help="回测标的代码")
+    p_bt_batch.add_argument("--days", type=int, default=500, help="回溯天数")
+    p_bt_batch.add_argument("--capital", type=float, default=1_000_000.0, help="初始资金")
+    p_bt_batch.set_defaults(func=_cmd_backtest_batch)
+
+    # backtest compare
+    p_bt_cmp = bt_sub.add_parser("compare", help="对比回测多个因子")
+    p_bt_cmp.add_argument("--factor-ids", required=True, help="逗号分隔的因子 ID 列表")
+    p_bt_cmp.add_argument("--market", default="futures", choices=["futures", "stock"],
+                          help="市场类型（默认：futures）")
+    p_bt_cmp.add_argument("--symbol", default="000001", help="回测标的代码")
+    p_bt_cmp.add_argument("--days", type=int, default=500, help="回溯天数")
+    p_bt_cmp.add_argument("--capital", type=float, default=1_000_000.0, help="初始资金")
+    p_bt_cmp.set_defaults(func=_cmd_backtest_compare)
 
     return parser
 
