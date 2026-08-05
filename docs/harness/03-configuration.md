@@ -24,6 +24,7 @@ FTS 配置采用三级优先级（高→低）：
 | `elite_dir` | str | `"memory/knowledge/factors/elite"` | `FTS_ELITE_DIR` | elite 因子存储目录 |
 | `default_market` | str | `"futures"` | `FTS_DEFAULT_MARKET` | 默认市场类型 |
 | `llm_backend` | str | `""` | `FTS_LLM_BACKEND` | LLM 后端选择（空=自动检测）|
+| `evolution_mode` | str | `"hybrid"` | `FTS_EVOLUTION_MODE` | 演化模式: operator(算子主干) / code(代码创新) / hybrid(混合) |
 | `max_generations` | int | 10 | — | L2 最大演化代数 |
 | `population_size` | int | 20 | — | 种群大小 |
 | `micro_trials_per_generation` | int | 50 | — | 每代 optuna 试验数 |
@@ -46,7 +47,10 @@ llm_backend: "openai"
 max_generations: 10
 micro_trials_per_generation: 50
 portfolio_max_factors: 20
+evolution_mode: "hybrid"   # operator(算子主干) / code(代码创新) / hybrid(混合)
 ```
+
+> **evolution_mode 说明（Phase C.2）**：取值 `operator`（算子主干）/ `code`（代码创新）/ `hybrid`（混合），默认 `hybrid`，支持环境变量 `FTS_EVOLUTION_MODE` 覆盖。本计划仅落地配置字段（`FTSConfig.evolution_mode` + `config/settings.yaml`），`EvolutionLoop` 对演化模式的分支消费在后续「算子演化引擎」计划中实现。
 
 ## 4. Verifier 配置（锁定不可修改）
 

@@ -12,8 +12,8 @@
 |:-------|:-----|:-------|:-----|
 | P0 | 0 | 3 | 3 |
 | P1 | 0 | 2 | 2 |
-| P2 | 1 | 19 | 20 |
-| **合计** | **1** | **24** | **25** |
+| P2 | 3 | 19 | 22 |
+| **合计** | **3** | **24** | **27** |
 
 ---
 
@@ -57,6 +57,8 @@
 | GAP-016 | `fts/factor_engine/seed_data_futures_full.py`, `scripts/run_futures_evolution.py`, `scripts/futures_signal_pipeline.py`, `scripts/futures_strategy.py`, `scripts/futures_l3_portfolio.py` | 期货全量种子因子库（12 大因子家族 50+ 子因子）、期货因子演化脚本、期货信号管道、期货组合策略、L3 组合构建均已实现，但缺少集成测试验证期货全链路端到端运行 | 期货演化 → 信号管道 → 组合构建的全链路缺少自动化回归测试 | 3 月内 | ✅ 已关闭 |
 | GAP-024 | `fts/factor_db/` | 因子存储使用 JSON 文件，缺乏版本管理、高效查询、相关性存储能力；种子因子硬编码在 Python 文件中，维护困难 | 因子数据无法高效检索和版本追踪；因子间相关性无法系统性评估；种子因子修改需要改代码 | 1 月内 | ✅ 已关闭 |
 | GAP-025 | `fts/factor_engine/evolution_loop.py` | 6 个孤立模块（AblationExperiment/ShapAnalyzer/RobustnessTester/CausalValidator/FeatureImportanceAnalyzer/LogicMonitor）已集成进演化循环，但集成调用签名与模块真实 API 不符，运行期全部落入 except 默认放行，审查门禁未真正生效 | 伪相关/事件敏感/不鲁棒因子可绕过审查直接晋升精英池 | 1 周内 | ✅ 已关闭 |
+| GAP-026 | `fts/factor_engine/expr_dsl/` + GP 引擎 | GP 引擎算子命名与 DSL 未对齐（`delta`/`pct_change`/`scale` vs `ts_delta`/`ts_pct_change`），GP 产物暂为 CODE 类型 | 算子语义无法直接映射，GP 产物维持 CODE，对齐属后续演化引擎计划 | 3 月内 | ⭕ 开放 |
+| GAP-027 | `fts/factor_engine/contracts.py` + `factor_program.py` | `code: str\|None` 可选化未审计：算子因子暂保留确定性生成代码，需审计全部 `factor["code"]` 读取点后方可可选化 | 契约中 `code` 保持必填，可选化存在隐性破坏风险 | 3 月内 | ⭕ 开放 |
 ---
 
 ## 3. 差距详情
@@ -254,6 +256,18 @@
   - 修正测试 mock 构造为真实签名，新增门禁判定测试
 - **验证结果**: 109 项 evolution_loop 测试全绿（含 17 项定向集成测试）
 
+### GAP-026: GP 引擎算子命名与 DSL 未对齐（开放）
+
+- **问题描述**: GP 引擎算子命名（`delta`/`pct_change`/`scale`）与 FTS-Expr DSL（`ts_delta`/`ts_pct_change`）未对齐
+- **影响范围**: 算子因子与代码因子的算子语义无法直接映射，GP 产物暂为 CODE 类型
+- **当前进展**: 待 Plan 2（算子演化引擎）实现 GP 算子命名对齐 DSL 后关闭
+
+### GAP-027: `code: str | None` 可选化未审计（开放）
+
+- **问题描述**: `FactorProgram.code` 全字段可选化（`code: str | None`）需先审计全部 `factor["code"]` 读取点
+- **影响范围**: 算子因子暂保留确定性生成代码（DSL 编译器输出），`code` 保持必填，可选化存在隐性破坏风险
+- **当前进展**: 待审计全部 `factor["code"]` 读取点（持久化/评估链/Verifier/组合构建）后方可可选化
+
 ## 4. 优先级定义
 
 | 优先级 | 定义 | 处理时限 | 验证标准 |
@@ -279,5 +293,5 @@
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | 本文件登记所有已关闭的差距（GAP-001~019）+ 新登记（GAP-020~023），涉及 `data_futures.py`、`data.py`、`cli.py`、`data_fundamental.py`、`evolution_loop.py`、`data_mcp.py`、`pipeline/*.py`、`strategies/*.py`、`monitor/*.py`、`scheduler/*.py`、`core/*.py`、`scripts/*.py`、`fts/monitor.py`、`docs/*.md`、`agents/*.md`。GAP-020~023 关联 `docs/factor-management-optimization-plan.md` |
-| 可验证断言 | 25 个差距（P0=3 已关闭, P1=2 已关闭, P2=19 已关闭+1 开放）。GAP-025 为孤立模块集成修正新登记，状态为已关闭 |
+| 可验证断言 | 27 个差距（P0=3 已关闭, P1=2 已关闭, P2=19 已关闭+3 开放）。GAP-025 为孤立模块集成修正新登记，状态为已关闭；GAP-026/027 为算子演化基础层新登记技术债（Phase C.2），状态为开放 |
 | 检验方式 | 检查本文件差距登记表确认状态一致性，关联文档 `docs/factor-management-optimization-plan.md` |

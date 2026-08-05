@@ -189,7 +189,15 @@ fts/
 │   ├── failure_classifier.py   # 失败模式分类器（10 种失败模式 + 改善建议）
 │   ├── factor_lineage.py       # 因子血缘追踪（谱系/趋势/退化检测/批量审计）
 │   ├── factor_inspector.py     # 定时巡检（自动检测退化因子并降级）
-│   └── monitor.py              # 循环监控
+│   ├── monitor.py              # 循环监控
+│   └── expr_dsl/               # 算子演化基础层 (Phase C.2): FTS-Expr DSL
+│       ├── parser.py           # 递归下降解析器 (表达式 → AST)
+│       ├── validator.py        # 静态校验 (算子/字段/参数边界/max_lookback PIT)
+│       ├── registry.py         # 算子注册表 (语义/梯度/边界, L0-L5 分层)
+│       ├── executor.py         # AST 解释执行 (pandas 向量化快速路径)
+│       ├── compiler.py         # DSL → 确定性沙箱安全 code
+│       ├── runtime.py          # 沙箱 runtime 桥接 (eval_fts_expr)
+│       └── factory.py          # 算子因子工厂 (FTS-Expr → FactorProgram)
 ├── pipeline/                   # 因子推演管线
 │   ├── base.py                 # FactorPipeline 抽象基类
 │   └── factor_combiner.py      # 因子组合器
@@ -216,6 +224,27 @@ fts/
     ├── repository.py           # FactorRepository CRUD
     ├── lineage.py              # FactorLineage 血缘追踪 + 批量审计
     └── correlations.py         # 因子相关性矩阵
+```
+
+### 算子演化基础层（Phase C.2）
+
+算子因子与代码因子都表现为 `FactorProgram`（对上层透明）。本区块落地算子因子的"第一公民"基础能力：FTS-Expr DSL、算子注册表元数据、FactorProgram kind 扩展、FactorExecutor 按 kind 分派。
+
+1. **FTS-Expr DSL 层**：`fts/factor_engine/expr_dsl/` 包（parser → validator → executor/compiler → runtime），表达式为受控函数调用形式，如 `rank(ts_zscore(close, 60))`。解析器（递归下降）转 AST，校验器做静态分析，执行器直接解释 AST 走算子快速路径（复用 `feature_ops.py` 既有算子实现，pandas 向量化），编译器生成确定性沙箱安全代码。
+2. **因子双表达**：`FactorProgram` 新增可选字段 `kind`/`expression`/`operator_depth`/`operator_count`/`max_lookback`；`kind` 枚举 `operator`/`code`/`hybrid`，存量因子经 `normalize_factor_program` 默认 `code`（向后兼容，对上层零破坏）。算子因子保留确定性生成的 `code`，持久化/评估链/Verifier 零改动。
+3. **执行分派**：`FactorExecutor.execute()` 按 `kind` 分派——`operator` 走 DSL 解释执行（快速路径，异常回退沙箱），`code` 走现有沙箱路径。评估链/Verifier 接口不变。
+4. **接口契约**：FactorKind 枚举与新增可选字段说明见第 5 节「关键契约」— `### FactorKind 枚举与 FactorProgram 可选字段（Phase C.2）`。
+5. **架构数据流**：
+
+```
+FTS-Expr 表达式 (如 rank(ts_zscore(close, 60)))
+    │
+    ▼ parser.py (递归下降)
+AST (ExprNode 树)
+    │
+    ├─→ validator.py 校验器静态分析: 算子存在性 / 参数边界 / 最大 lookback (PIT 防未来函数)
+    ├─→ executor.py  执行器向量化计算: pandas Series 快速路径 (复用 feature_ops 50 算子)
+    └─→ compiler.py  编译器生成确定性沙箱 code → runtime.py 桥接 (eval_fts_expr)
 ```
 
 ---
@@ -376,6 +405,32 @@ class FactorCorrelation(TypedDict):
 - ProgramConfig: 目标、约束、市场偏好、风险偏好
 - `parse_program_md()`: 解析 Program.md → ProgramConfig
 - `load_program()`: 加载并验证 Program 配置
+
+### FactorKind 枚举与 FactorProgram 可选字段（Phase C.2）
+
+算子演化基础层为 `FactorProgram` TypedDict 追加可选字段（契约向后兼容扩展，全字段可选，存量因子经 `normalize_factor_program` 默认 `kind=CODE`）：
+
+```python
+class FactorKind(str, Enum):
+    """因子表达类型。
+    - OPERATOR: 算子表达式 (FTS-Expr DSL)，经 OperatorRegistry 解释执行
+    - CODE: 代码级因子 (Python 沙箱)，现有默认类型
+    - HYBRID: 算子外壳 + 代码内核 (预留，本计划仅定义枚举，消费在后续计划实现)
+    """
+    OPERATOR = "operator"
+    CODE = "code"
+    HYBRID = "hybrid"
+```
+
+`FactorProgram` 新增可选字段（`is_multi_symbol` 之后）：
+
+```python
+    kind: Optional[FactorKind]     # 因子表达类型 (默认 code, 向后兼容)
+    expression: Optional[str]      # 算子因子表达式 (FTS-Expr DSL)
+    operator_depth: Optional[int]  # 表达式 AST 深度
+    operator_count: Optional[int]  # 算子个数
+    max_lookback: Optional[int]    # 最大 lookback (PIT 静态分析, 防未来函数)
+```
 
 ---
 
