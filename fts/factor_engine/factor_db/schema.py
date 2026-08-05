@@ -251,6 +251,77 @@ ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS decay_rate_6m DOUBLE DEFAULT
 """
 
 
+# ─── C.3: 反馈闭环 4 张表 ──────────────────────────────
+
+_CREATE_FEEDBACK_EVENTS = """
+CREATE TABLE IF NOT EXISTS feedback_events (
+    event_id        VARCHAR PRIMARY KEY,
+    event_type      VARCHAR(50) NOT NULL,
+    factor_id       VARCHAR(36),
+    trigger_reason  VARCHAR(500) NOT NULL,
+    severity        VARCHAR(20) NOT NULL,
+    payload         JSON,
+    timestamp       TIMESTAMP NOT NULL,
+    handled         BOOLEAN DEFAULT FALSE,
+    handled_at      TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_fe_event_type ON feedback_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_fe_handled ON feedback_events(handled);
+CREATE INDEX IF NOT EXISTS idx_fe_timestamp ON feedback_events(timestamp);
+"""
+
+_CREATE_ATTRIBUTION_REPORTS = """
+CREATE TABLE IF NOT EXISTS attribution_reports (
+    report_id       VARCHAR PRIMARY KEY,
+    event_id        VARCHAR(36) NOT NULL,
+    root_cause      VARCHAR(50) NOT NULL,
+    confidence      DOUBLE NOT NULL,
+    analyses_json   JSON NOT NULL,
+    recommendation  JSON NOT NULL,
+    created_at      TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ar_event_id ON attribution_reports(event_id);
+CREATE INDEX IF NOT EXISTS idx_ar_root_cause ON attribution_reports(root_cause);
+"""
+
+_CREATE_FEEDBACK_PROCESSING_RESULTS = """
+CREATE TABLE IF NOT EXISTS feedback_processing_results (
+    result_id       VARCHAR PRIMARY KEY,
+    event_id        VARCHAR(36) NOT NULL,
+    report_id       VARCHAR(36),
+    action_taken    VARCHAR(50) NOT NULL,
+    success         BOOLEAN NOT NULL,
+    execution_details JSON,
+    processed_at    TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fpr_event_id ON feedback_processing_results(event_id);
+CREATE INDEX IF NOT EXISTS idx_fpr_processed_at ON feedback_processing_results(processed_at);
+"""
+
+_CREATE_FEEDBACK_REPORTS = """
+CREATE TABLE IF NOT EXISTS feedback_reports (
+    report_id       VARCHAR PRIMARY KEY,
+    period          VARCHAR(7) NOT NULL,
+    new_factors     INT NOT NULL,
+    effective_rate  DOUBLE NOT NULL,
+    avg_sharpe_improvement DOUBLE,
+    decay_rate_reduction DOUBLE,
+    evolution_rounds INT NOT NULL,
+    feedback_events_handled INT NOT NULL,
+    attribution_accuracy DOUBLE,
+    recommendations_accepted INT NOT NULL,
+    recommendations_total INT NOT NULL,
+    summary_text    TEXT,
+    created_at      TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fr_period ON feedback_reports(period);
+"""
+
+
 # ─── 初始化函数 ──────────────────────────────────────────
 
 def init_database(db_path: Optional[Path] = None) -> Path:
@@ -280,6 +351,11 @@ def init_database(db_path: Optional[Path] = None) -> Path:
         conn.execute(_CREATE_FACTOR_AUDIT_REPORTS)
         # 幂等扩展 factor_catalog 生命周期字段（A.2）
         conn.execute(_FACTOR_CATALOG_STATUS_EXTENSIONS)
+        # C.3 反馈闭环 4 张表
+        conn.execute(_CREATE_FEEDBACK_EVENTS)
+        conn.execute(_CREATE_ATTRIBUTION_REPORTS)
+        conn.execute(_CREATE_FEEDBACK_PROCESSING_RESULTS)
+        conn.execute(_CREATE_FEEDBACK_REPORTS)
 
         conn.execute("CHECKPOINT")
         logger.info("[FactorDB] ✅ 数据库初始化完成")

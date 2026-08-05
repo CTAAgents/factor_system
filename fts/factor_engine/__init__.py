@@ -230,6 +230,15 @@ from .signal_contract import (
     FactorSignal,
     SignalValidator,
 )
+from .feedback_loop import (
+    FeedbackEventType,
+    RootCause,
+    FeedbackTrigger,
+    AttributionAnalyzer,
+    EvolutionDirectionAdjuster,
+    EvolutionEffectiveness,
+    FeedbackLoop,
+)
 
 __version__ = "1.1.0"
 __all__ = [
@@ -416,4 +425,12 @@ __all__ = [
     "SignalMeta",
     "FactorSignal",
     "SignalValidator",
+    # ─── C.3 反馈闭环（v2.9.0）────────────────
+    "FeedbackEventType",
+    "RootCause",
+    "FeedbackTrigger",
+    "AttributionAnalyzer",
+    "EvolutionDirectionAdjuster",
+    "EvolutionEffectiveness",
+    "FeedbackLoop",
 ]

@@ -58,6 +58,17 @@ class MetricsRegistry:
         self._risk_check_total: dict[tuple[str, str], int] = {}
         # C.2 风控拦截计数: check_name -> 次数
         self._risk_check_blocked: dict[str, int] = {}
+        # C.3 反馈指标: event_type -> 触发次数
+        self._feedback_triggers: dict[str, int] = {}
+        # C.3 反馈处理: (action, success) -> 次数
+        self._feedback_processing: dict[tuple[str, str], int] = {}
+        # C.3 待处理事件数: event_type -> 数量
+        self._feedback_pending: dict[str, int] = {}
+        # C.3 效果指标
+        self._attribution_accuracy: float = 0.0
+        self._recommendations_accepted: float = 0.0
+        self._new_factors: int = 0
+        self._effective_rate: float = 0.0
 
     # ─── 衰减追踪指标 (A.2) ────────────────────────────────
 
@@ -133,6 +144,45 @@ class MetricsRegistry:
                 self._risk_check_blocked[check_name] = (
                     self._risk_check_blocked.get(check_name, 0) + 1
                 )
+
+    # ─── 反馈闭环指标 (C.3) ─────────────────────────────
+
+    def record_feedback_trigger(self, event_type: str) -> None:
+        """记录一次反馈触发。"""
+        with self._lock:
+            self._feedback_triggers[event_type or "unknown"] = (
+                self._feedback_triggers.get(event_type or "unknown", 0) + 1
+            )
+
+    def update_feedback_pending(self, pending: dict[str, int]) -> None:
+        """更新待处理事件数。"""
+        with self._lock:
+            self._feedback_pending = {
+                k: max(0, int(v)) for k, v in (pending or {}).items()
+            }
+
+    def record_feedback_processing(self, action: str, success: bool) -> None:
+        """记录一次反馈处理。"""
+        with self._lock:
+            key = (action or "unknown", "ok" if success else "fail")
+            self._feedback_processing[key] = (
+                self._feedback_processing.get(key, 0) + 1
+            )
+
+    def update_effectiveness(self, *, attribution_accuracy: float | None = None,
+                             recommendations_accepted: float | None = None,
+                             new_factors: int | None = None,
+                             effective_rate: float | None = None) -> None:
+        """更新迭代效果指标。"""
+        with self._lock:
+            if attribution_accuracy is not None:
+                self._attribution_accuracy = float(attribution_accuracy)
+            if recommendations_accepted is not None:
+                self._recommendations_accepted = float(recommendations_accepted)
+            if new_factors is not None:
+                self._new_factors = int(new_factors)
+            if effective_rate is not None:
+                self._effective_rate = float(effective_rate)
 
     # ─── 渲染 ─────────────────────────────────────────────
 
@@ -232,6 +282,62 @@ class MetricsRegistry:
                 lines.append(f'fts_risk_check_blocked_total{{check_name="{check}"}} {n}')
         else:
             lines.append("fts_risk_check_blocked_total 0")
+        lines.append("")
+
+        # ── 反馈闭环指标 (C.3) ──
+        triggers = dict(self._feedback_triggers)
+        lines.append("# HELP fts_feedback_triggers_total 反馈触发次数")
+        lines.append("# TYPE fts_feedback_triggers_total counter")
+        if triggers:
+            for etype, n in sorted(triggers.items()):
+                lines.append(f'fts_feedback_triggers_total{{event_type="{etype}"}} {n}')
+        else:
+            lines.append("fts_feedback_triggers_total 0")
+        lines.append("")
+
+        pending = dict(self._feedback_pending)
+        lines.append("# HELP fts_feedback_events_pending 待处理反馈事件数")
+        lines.append("# TYPE fts_feedback_events_pending gauge")
+        if pending:
+            for etype, n in sorted(pending.items()):
+                lines.append(f'fts_feedback_events_pending{{event_type="{etype}"}} {n}')
+        else:
+            lines.append("fts_feedback_events_pending 0")
+        lines.append("")
+
+        processing = dict(self._feedback_processing)
+        lines.append("# HELP fts_feedback_processing_total 反馈处理次数")
+        lines.append("# TYPE fts_feedback_processing_total counter")
+        if processing:
+            for (action, success), n in sorted(processing.items()):
+                lines.append(
+                    f'fts_feedback_processing_total{{action_taken="{action}",'
+                    f'success="{success}"}} {n}'
+                )
+        else:
+            lines.append("fts_feedback_processing_total 0")
+        lines.append("")
+
+        lines.append("# HELP fts_feedback_attribution_accuracy 归因准确率")
+        lines.append("# TYPE fts_feedback_attribution_accuracy gauge")
+        lines.append(f"fts_feedback_attribution_accuracy {self._attribution_accuracy}")
+        lines.append("")
+
+        lines.append("# HELP fts_feedback_recommendations_accepted 建议采纳率")
+        lines.append("# TYPE fts_feedback_recommendations_accepted gauge")
+        lines.append(
+            f"fts_feedback_recommendations_accepted {self._recommendations_accepted}"
+        )
+        lines.append("")
+
+        lines.append("# HELP fts_evolution_new_factors 新因子数")
+        lines.append("# TYPE fts_evolution_new_factors counter")
+        lines.append(f"fts_evolution_new_factors {self._new_factors}")
+        lines.append("")
+
+        lines.append("# HELP fts_evolution_effective_rate 因子有效率")
+        lines.append("# TYPE fts_evolution_effective_rate gauge")
+        lines.append(f"fts_evolution_effective_rate {self._effective_rate}")
         lines.append("")
         return lines
 

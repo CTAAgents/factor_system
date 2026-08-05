@@ -912,6 +912,64 @@ def _cmd_gp_evolve(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─── fts feedback（C.3 反馈闭环 CLI） ────────────────────
+
+
+def _cmd_feedback_trigger(args: argparse.Namespace) -> int:
+    """手动触发反馈事件。"""
+    from .factor_engine.feedback_loop import FeedbackLoop
+
+    loop = FeedbackLoop()
+    event = loop.trigger_manual_feedback(
+        factor_id=getattr(args, "factor_id", "") or "",
+        reason=args.reason,
+    )
+    print(f"=== 反馈事件已触发 ===")
+    print(json.dumps(event, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _cmd_feedback_process(args: argparse.Namespace) -> int:
+    """处理待处理的反馈事件。"""
+    from .factor_engine.feedback_loop import FeedbackLoop
+
+    loop = FeedbackLoop()
+    results = loop.process_feedback()
+    if not results:
+        print("[feedback] 无待处理反馈事件")
+        return 0
+    print(f"=== 反馈处理结果 ({len(results)}) ===")
+    for r in results:
+        print(f"  - {r['event_id']}: root_cause={r['root_cause']}, "
+              f"action={r['action_taken']}, success={r['success']}")
+    return 0
+
+
+def _cmd_feedback_report(args: argparse.Namespace) -> int:
+    """生成月度迭代效果报告。"""
+    from .factor_engine.feedback_loop import FeedbackLoop
+
+    loop = FeedbackLoop()
+    report = loop.generate_monthly_report(period=getattr(args, "month", None))
+    print(f"=== 迭代效果月报 ({report['period']}) ===")
+    print(f"新因子: {report['new_factors']} | 有效率: {report['effective_rate']:.1%}")
+    print(f"反馈处理: {report['feedback_events_handled']} | "
+          f"建议采纳: {report['recommendations_accepted']}/{report['recommendations_total']}")
+    print(report["summary_text"])
+    return 0
+
+
+def _cmd_feedback_stats(args: argparse.Namespace) -> int:
+    """查看反馈闭环统计。"""
+    from .factor_engine.feedback_loop import FeedbackLoop
+
+    loop = FeedbackLoop()
+    stats = loop.get_statistics()
+    print("=== 反馈闭环统计 ===")
+    print(json.dumps(stats, indent=2, ensure_ascii=False))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建 CLI parser。"""
     parser = argparse.ArgumentParser(
@@ -1093,6 +1151,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_gp_evolve.add_argument("--forward", type=int, default=20, help="预测周期（默认 20）")
     p_gp_evolve.add_argument("--output", default=None, help="结果输出目录")
     p_gp_evolve.set_defaults(func=_cmd_gp_evolve)
+
+    # feedback（C.3 反馈闭环）
+    p_feedback = sub.add_parser("feedback", help="反馈闭环（C.3）")
+    fb_sub = p_feedback.add_subparsers(dest="subcommand", required=False)
+
+    p_fb_trigger = fb_sub.add_parser("trigger", help="手动触发反馈事件")
+    p_fb_trigger.add_argument("--factor-id", default="", help="因子 ID（可选）")
+    p_fb_trigger.add_argument("--reason", default="manual review", help="触发原因")
+    p_fb_trigger.set_defaults(func=_cmd_feedback_trigger)
+
+    p_fb_process = fb_sub.add_parser("process", help="处理待处理的反馈事件")
+    p_fb_process.set_defaults(func=_cmd_feedback_process)
+
+    p_fb_report = fb_sub.add_parser("report", help="生成月度迭代效果报告")
+    p_fb_report.add_argument("--month", default=None, help="月份 YYYY-MM（默认当月）")
+    p_fb_report.set_defaults(func=_cmd_feedback_report)
+
+    p_fb_stats = fb_sub.add_parser("stats", help="查看反馈闭环统计")
+    p_fb_stats.set_defaults(func=_cmd_feedback_stats)
 
     return parser
 
