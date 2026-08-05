@@ -50,6 +50,14 @@ class MetricsRegistry:
         self._current_regime: str = ""
         # 再平衡计数: regime -> 次数
         self._rebalance_total: dict[str, int] = {}
+        # C.2 Live 因子表现: factor_id -> {metric: value}
+        self._live_factor_values: dict[str, dict[str, float]] = {}
+        # C.2 Live 偏离告警计数: (factor_id, severity) -> 次数
+        self._live_deviation_alerts: dict[tuple[str, str], int] = {}
+        # C.2 风控检查计数: (check_name, result) -> 次数
+        self._risk_check_total: dict[tuple[str, str], int] = {}
+        # C.2 风控拦截计数: check_name -> 次数
+        self._risk_check_blocked: dict[str, int] = {}
 
     # ─── 衰减追踪指标 (A.2) ────────────────────────────────
 
@@ -95,6 +103,36 @@ class MetricsRegistry:
             self._rebalance_total[regime or "unknown"] = (
                 self._rebalance_total.get(regime or "unknown", 0) + 1
             )
+
+    # ─── Live 因子指标 (C.2) ─────────────────────────────
+
+    def update_live_factor(self, factor_id: str, metrics: dict[str, float]) -> None:
+        """更新因子 Live 表现指标（ic/sharpe/max_drawdown）。"""
+        with self._lock:
+            cleaned = {k: float(v) for k, v in metrics.items() if v is not None}
+            if cleaned:
+                self._live_factor_values[factor_id] = cleaned
+
+    def record_live_deviation_alert(self, factor_id: str, severity: str) -> None:
+        """记录一次 Live 偏离告警。"""
+        with self._lock:
+            key = (factor_id, severity)
+            self._live_deviation_alerts[key] = (
+                self._live_deviation_alerts.get(key, 0) + 1
+            )
+
+    # ─── 风控指标 (C.2) ─────────────────────────────────
+
+    def record_risk_check(self, check_name: str, result: str) -> None:
+        """记录一次风控检查（result: passed/blocked）。"""
+        with self._lock:
+            self._risk_check_total[(check_name, result)] = (
+                self._risk_check_total.get((check_name, result), 0) + 1
+            )
+            if result == "blocked":
+                self._risk_check_blocked[check_name] = (
+                    self._risk_check_blocked.get(check_name, 0) + 1
+                )
 
     # ─── 渲染 ─────────────────────────────────────────────
 
@@ -142,6 +180,58 @@ class MetricsRegistry:
                 lines.append(f'fts_weight_rebalance_total{{regime="{r}"}} {n}')
         else:
             lines.append("fts_weight_rebalance_total 0")
+        lines.append("")
+
+        # ── Live 因子指标 (C.2) ──
+        live_values = dict(self._live_factor_values)
+        lines.append("# HELP fts_live_factor_ic Live 因子 IC 值")
+        lines.append("# TYPE fts_live_factor_ic gauge")
+        for fid, m in sorted(live_values.items()):
+            if "ic" in m:
+                lines.append(f'fts_live_factor_ic{{factor_id="{fid}"}} {m["ic"]}')
+        lines.append("")
+
+        lines.append("# HELP fts_live_factor_sharpe Live 因子 Sharpe 值")
+        lines.append("# TYPE fts_live_factor_sharpe gauge")
+        for fid, m in sorted(live_values.items()):
+            if "sharpe" in m:
+                lines.append(f'fts_live_factor_sharpe{{factor_id="{fid}"}} {m["sharpe"]}')
+        lines.append("")
+
+        alerts = dict(self._live_deviation_alerts)
+        lines.append("# HELP fts_live_factor_deviation_alerts_total Live 偏离告警次数")
+        lines.append("# TYPE fts_live_factor_deviation_alerts_total counter")
+        if alerts:
+            for (fid, sev), n in sorted(alerts.items()):
+                lines.append(
+                    f'fts_live_factor_deviation_alerts_total{{factor_id="{fid}",'
+                    f'severity="{sev}"}} {n}'
+                )
+        else:
+            lines.append("fts_live_factor_deviation_alerts_total 0")
+        lines.append("")
+
+        # ── 风控指标 (C.2) ──
+        risk_total = dict(self._risk_check_total)
+        lines.append("# HELP fts_risk_check_total 风控检查次数")
+        lines.append("# TYPE fts_risk_check_total counter")
+        if risk_total:
+            for (check, result), n in sorted(risk_total.items()):
+                lines.append(
+                    f'fts_risk_check_total{{check_name="{check}",result="{result}"}} {n}'
+                )
+        else:
+            lines.append("fts_risk_check_total 0")
+        lines.append("")
+
+        risk_blocked = dict(self._risk_check_blocked)
+        lines.append("# HELP fts_risk_check_blocked_total 风控拦截次数")
+        lines.append("# TYPE fts_risk_check_blocked_total counter")
+        if risk_blocked:
+            for check, n in sorted(risk_blocked.items()):
+                lines.append(f'fts_risk_check_blocked_total{{check_name="{check}"}} {n}')
+        else:
+            lines.append("fts_risk_check_blocked_total 0")
         lines.append("")
         return lines
 

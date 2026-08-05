@@ -223,6 +223,13 @@ from .cost_simulator import CostSimulator, CostResult
 from .risk_attributor import RiskAttributor, RiskAttributionReport
 from .report_generator import ReportGenerator
 from .capital_allocator import CapitalAllocator, AllocationResult
+from .signal_contract import (
+    FactorContribution,
+    SignalDetail,
+    SignalMeta,
+    FactorSignal,
+    SignalValidator,
+)
 
 __version__ = "1.1.0"
 __all__ = [
@@ -403,4 +410,10 @@ __all__ = [
     "ReportGenerator",
     "CapitalAllocator",
     "AllocationResult",
+    # ─── C.2 实盘信号契约（v2.9.0）────────────────
+    "FactorContribution",
+    "SignalDetail",
+    "SignalMeta",
+    "FactorSignal",
+    "SignalValidator",
 ]

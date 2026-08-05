@@ -506,8 +506,74 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             })
 
+        elif path == "/api/v1/risk/status":
+            self._respond_json(_build_risk_status())
+
+        elif path == "/api/v1/live/factors":
+            self._respond_json(_build_live_factors())
+
+        elif path.startswith("/api/v1/live/factors/") and path.endswith("/deviation"):
+            factor_id = path[len("/api/v1/live/factors/"):-len("/deviation")]
+            self._respond_json(_build_live_deviation(factor_id))
+
         else:
             self._respond_json({"error": "not found"}, 404)
+
+    def do_POST(self):  # noqa: N802
+        """处理 POST 请求（信号提交）。"""
+        path = self.path.rstrip("/")
+
+        if path == "/api/v1/signal/submit":
+            self._handle_signal_submit()
+        else:
+            self._respond_json({"error": "not found"}, 404)
+
+    def _handle_signal_submit(self):
+        """处理信号提交：验证 → 风控 → 模拟成交。"""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+            signal = json.loads(body or "{}")
+        except Exception as e:  # noqa: BLE001
+            self._respond_json({"error": f"invalid json: {e}"}, 400)
+            return
+
+        # 1. 格式验证
+        from ..factor_engine.signal_contract import SignalValidator
+
+        errors = SignalValidator().validate(signal)
+        if errors:
+            self._respond_json({"approved": False, "errors": errors}, 422)
+            return
+
+        # 2. 风控检查
+        risk = _get_risk_manager()
+        account = _sim_account_status()
+        positions = _sim_positions()
+        result = risk.check(signal, account, positions)
+        _record_risk_metrics(result)
+
+        if not result.get("approved"):
+            self._respond_json({
+                "approved": False,
+                "violations": result.get("blocking_violations", []),
+            }, 403)
+            return
+
+        # 3. 模拟成交
+        try:
+            from ..risk import SimulatedTradeAdapter
+
+            adapter = _get_sim_adapter()
+            if not adapter.is_connected():
+                adapter.connect({})
+            order = adapter.submit_signal(signal)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("[ui] 模拟成交失败")
+            self._respond_json({"approved": False, "error": str(e)}, 500)
+            return
+
+        self._respond_json({"approved": True, "order": order})
 
 
 # ─── 指标注册表（兼容旧版调用） ──────────────────────────
@@ -536,6 +602,131 @@ def set_data_quality_monitor(monitor: Any) -> None:
 def get_data_quality_monitor() -> Optional[Any]:
     """获取 DataQualityMonitor 实例。"""
     return _data_quality_monitor
+
+
+# ─── C.2 实盘对接端点辅助 ──────────────────────────────
+
+_risk_manager: Optional[Any] = None
+_sim_adapter: Optional[Any] = None
+_live_monitor: Optional[Any] = None
+
+
+def _get_risk_manager() -> Any:
+    """获取全局 RiskManager 实例。"""
+    global _risk_manager
+    if _risk_manager is None:
+        from ..risk import RiskManager
+
+        _risk_manager = RiskManager()
+    return _risk_manager
+
+
+def _get_sim_adapter() -> Any:
+    """获取全局 SimulatedTradeAdapter 实例。"""
+    global _sim_adapter
+    if _sim_adapter is None:
+        from ..risk import SimulatedTradeAdapter
+
+        _sim_adapter = SimulatedTradeAdapter()
+    return _sim_adapter
+
+
+def _get_live_monitor() -> Any:
+    """获取全局 LiveFactorMonitor 实例。"""
+    global _live_monitor
+    if _live_monitor is None:
+        from .live_factor_monitor import LiveFactorMonitor
+
+        _live_monitor = LiveFactorMonitor()
+    return _live_monitor
+
+
+def _sim_account_status() -> dict[str, Any]:
+    """构造模拟账户状态。"""
+    try:
+        return _get_sim_adapter().get_account_status()
+    except Exception:  # noqa: BLE001
+        return {"total_equity": 1_000_000.0, "balance": 1_000_000.0,
+                "peak_equity": 1_000_000.0, "daily_pnl": 0.0,
+                "position_value": 0.0}
+
+
+def _sim_positions() -> dict[str, Any]:
+    """构造模拟持仓（从适配器读取）。"""
+    try:
+        adapter = _get_sim_adapter()
+        positions: dict[str, Any] = {}
+        for sym in ("RB0", "CU0", "TA0"):
+            pos = adapter.get_position(sym)
+            if pos.get("market_value", 0) or pos.get("quantity", 0):
+                positions[sym] = pos
+        return positions
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _record_risk_metrics(result: dict[str, Any]) -> None:
+    """将风控检查结果写入 Prometheus 指标。"""
+    from .prometheus_metrics import metrics_registry
+
+    for check in result.get("checks", []):
+        check_name = check.get("check_name", "unknown")
+        passed = bool(check.get("passed", False))
+        metrics_registry.record_risk_check(
+            check_name, "passed" if passed else "blocked"
+        )
+
+
+def _build_risk_status() -> dict[str, Any]:
+    """构建 /api/v1/risk/status 响应。"""
+    try:
+        risk = _get_risk_manager()
+        account = _sim_account_status()
+        positions = _sim_positions()
+        # 空信号探测
+        result = risk.check(
+            {"signal_id": "probe", "signals": [], "timestamp": ""},
+            account, positions,
+        )
+        violations = [c for c in result.get("checks", [])
+                      if not c.get("passed", False)]
+        return {
+            "positions": list(positions.keys()),
+            "risk_level": "critical" if violations else "normal",
+            "violations": violations,
+            "account": account,
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.error("[ui] 风控状态查询失败: %s", e)
+        return {"risk_level": "unknown", "error": str(e)}
+
+
+def _build_live_factors() -> dict[str, Any]:
+    """构建 /api/v1/live/factors 响应。"""
+    try:
+        monitor = _get_live_monitor()
+        alerts = monitor.check_deviation()
+        return {
+            "factors": [
+                {"factor_id": fid, "live": monitor._live.get(fid, {})}  # noqa: SLF001
+                for fid in monitor.get_factor_ids()
+            ],
+            "alerts": alerts,
+            "count": len(monitor.get_factor_ids()),
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.error("[ui] Live 因子查询失败: %s", e)
+        return {"factors": [], "alerts": [], "error": str(e)}
+
+
+def _build_live_deviation(factor_id: str) -> dict[str, Any]:
+    """构建 /api/v1/live/factors/{id}/deviation 响应。"""
+    try:
+        monitor = _get_live_monitor()
+        return monitor.get_factor_deviation(factor_id)
+    except Exception as e:  # noqa: BLE001
+        logger.error("[ui] Live 偏离查询失败: %s", e)
+        return {"factor_id": factor_id, "error": str(e)}
 
 
 def set_metric(name: str, value: Any) -> None:

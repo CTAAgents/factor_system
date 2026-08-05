@@ -42,6 +42,7 @@ from .logic_monitor import (
     LogicMonitor,
     LogicMonitorResult,
 )
+from .live_factor_monitor import LiveFactorMonitor
 
 
 # ─── 监控数据契约 ─────────────────────────────────────────
@@ -234,4 +235,6 @@ __all__ = [
     "DriftCheckResult",
     "ExtremePredictionResult",
     "ContractSwitchResult",
+    # C.2 Live 因子监控
+    "LiveFactorMonitor",
 ]
