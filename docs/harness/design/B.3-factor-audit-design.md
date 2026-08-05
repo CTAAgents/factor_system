@@ -2,7 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase B.3
-> 状态: 规划中
+> 状态: **已实现**（实现文件与接口与原设计不同）
+> 实现说明: 实际实现为 `fts/factor_engine/audit.py`（v0.1.0）的 `FactorAuditor`，6 项审计（`causal_validity`/`oos_consistency`/`cross_symbol`/`stress_resilience`/`multiple_testing`/`snooping_check`）采用**渐进式**接口（每项独立传入数据，缺失时标记 `skipped`，非 skipped 项须全部通过），并新增 `FailureClassifier` 失败模式分类与改善建议。`factor_audit_reports` 表未实现（审计报告以 `FactorAuditReport.to_dict()` 结构化输出）；原设计的 `factor_auditor.py` 文件名、`run_check`/`get_audit_history` 等接口均未实现。
 
 ---
 
@@ -29,14 +30,18 @@
 
 ### 2.1 六项审计检查
 
-| # | 审计项 | 名称 | 核心问题 | 依赖模块 |
-|---|--------|------|----------|----------|
-| 1 | 因果检验 | `causal_check` | 因子是结果的真正原因吗？ | `causal_validator.py` |
-| 2 | 样本外验证 | `oos_check` | 因子在未见数据上表现如何？ | `walk_forward.py` |
-| 3 | 跨品种验证 | `cross_symbol_check` | 因子在其他品种上是否有效？ | `evaluation_chain.py` |
-| 4 | 压力测试 | `stress_check` | 因子在极端行情下表现如何？ | `stress_test.py` |
-| 5 | 多重检验 | `multiple_test_check` | 因子不是统计偶然吗？ | `evaluation_chain.py` (Level 3) |
-| 6 | 数据窥探检验 | `look_ahead_check` | 因子是否使用了未来数据？ | `factor_program.py` |
+> **实现现状**: 审计项名称与 `fts/factor_engine/audit.py` 的 `FactorAuditor.ITEM_NAMES` 一致。原设计名称映射如下:
+
+| # | 审计项 | 实际名称（audit.py） | 原设计名称 | 依赖模块 |
+|---|--------|----------------------|------------|----------|
+| 1 | 因果检验 | `causal_validity` | `causal_check` | `causal_validator.py`（CausalValidator） |
+| 2 | 样本外验证 | `oos_consistency` | `oos_check` | `walk_forward.py`（WalkForwardOptimizer） |
+| 3 | 跨品种验证 | `cross_symbol` | `cross_symbol_check` | 符号级 IC 映射（`symbol_ic_map`） |
+| 4 | 压力测试 | `stress_resilience` | `stress_check` | `stress_test.py`（StressTester） |
+| 5 | 多重检验 | `multiple_testing` | `multiple_test_check` | `_bh_fdr_correction`（内置） |
+| 6 | 数据窥探检验 | `snooping_check` | `look_ahead_check` | 滞后相关分析（内置） |
+
+**审计判定规则**（实际）: 每项可标记 `passed`/`failed`/`skipped`；**所有非 skipped 项必须全部通过**（`passed = bool(non_skipped) and all(passed)`），缺失数据项自动 `skipped` 不阻塞流程。新增 `FailureClassifier`：审计失败时自动识别失败模式（negative_ic/ic_decay/oos_instability/cross_symbol_failure/multiple_testing/snooping_suspected/stress_vulnerable/causal_weak/sharpe_low/high_turnover）并给出改善建议。
 
 ### 2.2 审计项详细设计
 
@@ -216,45 +221,77 @@ class DataLineageResult(TypedDict, total=False):
 
 ### 3.1 `FactorAuditor` 类
 
+> **实现现状**: 实际接口如下（`fts/factor_engine/audit.py` v0.1.0）。原设计的 `run_check`/`run_all_checks`/`generate_report`/`get_audit_history`/`get_audit_statistics` 均未实现。
+
 ```python
+@dataclass
+class FactorAuditConfig:
+    """因子审计配置。"""
+    min_cross_symbol_ratio: float = 0.8   # ≥80% 品种 IC 为正
+    bonferroni_alpha: float = 0.05        # Bonferroni 校正显著性
+    fdr_alpha: float = 0.05               # FDR 校正显著性
+    lookback_max_lag: int = 5             # 最大滞后阶数
+    snooping_alpha: float = 0.05          # 窥探检验显著性
+    stress_max_drawdown: float = 0.40     # 压力场景最大回撤上限
+    min_oos_pass_ratio: float = 0.5       # OOS 最小窗口通过率
+
 class FactorAuditor:
-    """因子审计器。
+    """因子审计执行器。
 
     Usage:
-        auditor = FactorAuditor(config)
-        report = auditor.audit(factor)
-        if report.passed:
-            # 允许入库
-        else:
-            # 展示未通过的审计项
+        auditor = FactorAuditor()
+        report = auditor.audit(
+            factor=factor_program,
+            data=ohlcv_data,
+            forward_returns=future_returns,
+            symbol_ic_map={"RB": 0.05, "HC": 0.03, ...},
+        )
+        assert report.passed
     """
 
-    def __init__(self, config: AuditConfig | None = None) -> None: ...
+    def __init__(self, config: FactorAuditConfig | None = None) -> None: ...
 
-    def audit(self, factor: FactorCatalog) -> AuditReport:
-        """执行完整审计流程。"""
-        ...
+    def audit(self,
+              factor: dict[str, Any] | None = None,
+              data: pd.DataFrame | None = None,
+              forward_returns: np.ndarray | None = None,
+              symbol_ic_map: dict[str, float] | None = None,
+              signals_by_symbol: dict[str, np.ndarray] | None = None,
+              ohlcv_by_symbol: dict[str, pd.DataFrame] | None = None,
+              oos_result: dict[str, Any] | None = None,
+              p_values: list[float] | None = None,
+              **kwargs) -> FactorAuditReport:
+        """执行完整审计流程。各审计项独立传入所需数据，缺失时该项标记 skipped。"""
 
-    def run_check(self, factor: FactorCatalog,
-                   check_name: AuditCheckName) -> AuditCheckResult:
-        """执行单个审计检查。"""
-        ...
+    # 内部实现: _check_causal_validity / _check_oos_consistency /
+    #           _check_cross_symbol / _check_stress_resilience /
+    #           _check_multiple_testing / _check_snooping
+```
 
-    def run_all_checks(self, factor: FactorCatalog) -> dict[AuditCheckName, AuditCheckResult]:
-        """执行所有审计检查。"""
-        ...
+**输出类型**（实际为 dataclass，替代原设计 TypedDict）:
 
-    def generate_report(self, results: dict, factor: FactorCatalog) -> AuditReport:
-        """生成标准化审计报告。"""
-        ...
+```python
+AuditItemStatus = Literal["passed", "failed", "skipped"]
 
-    def get_audit_history(self, factor_id: str) -> list[AuditReport]:
-        """获取因子的审计历史。"""
-        ...
+@dataclass
+class AuditItemResult:
+    name: str
+    status: AuditItemStatus
+    evidence: str = ""
+    score: float = 0.0
+    details: dict[str, Any] = field(default_factory=dict)
 
-    def get_audit_statistics(self) -> AuditStatistics:
-        """获取审计统计（通过率、常见失败原因）。"""
-        ...
+@dataclass
+class FactorAuditReport:
+    factor_id: str
+    factor_name: str
+    audited_at: str
+    items: list[AuditItemResult]
+    passed: bool
+    pass_rate: float
+    summary: dict[str, Any]
+    failure_analysis: dict[str, Any] | None = None   # 失败模式分类（FailureClassifier）
+    # 便捷查询: item(name) / failed_items / to_dict()
 ```
 
 ### 3.2 核心类型
@@ -382,6 +419,8 @@ class FactorQualityCard:
 
 ### 5.1 审计报告存储
 
+> **实现现状**: **未实现**。审计报告未落 DuckDB `factor_audit_reports` 表，以 `FactorAuditReport.to_dict()` 结构化字典输出并记录日志。以下表为原设计预留。
+
 ```sql
 CREATE TABLE IF NOT EXISTS factor_audit_reports (
     report_id       VARCHAR(36) PRIMARY KEY,
@@ -422,16 +461,16 @@ CREATE INDEX IF NOT EXISTS idx_far_audited_at ON factor_audit_reports(audited_at
 
 ## 7. 文件改动清单
 
-| 文件 | 动作 | 说明 |
-|------|------|------|
-| `fts/factor_engine/factor_auditor.py` | **新增** | `FactorAuditor` 类及六项审计检查实现 |
-| `fts/factor_engine/factor_db/schema.py` | **修改** | 新增 `factor_audit_reports` 表 |
-| `fts/factor_engine/factor_db/repository.py` | **修改** | 审计报告 CRUD |
-| `fts/factor_engine/evolution_loop.py` | **修改** | L3 评估后插入审计 Gate |
-| `fts/factor_engine/evaluation_chain.py` | **修改** | 审计结果作为评分卡输入 |
-| `tests/factor_engine/test_factor_auditor.py` | **新增** | 审计器单元测试 |
-| `tests/factor_engine/test_audit_causal.py` | **新增** | 因果检验测试 |
-| `tests/factor_engine/test_audit_look_ahead.py` | **新增** | 数据窥探检验测试 |
+| 文件 | 动作 | 现状 | 说明 |
+|------|------|------|------|
+| `fts/factor_engine/factor_auditor.py` | **新增** | ⬜ 未实现 | 实际实现于 `fts/factor_engine/audit.py`（`FactorAuditor` + `FactorAuditConfig` + `FailureClassifier`） |
+| `fts/factor_engine/factor_db/schema.py` | **修改** | ⬜ 未实现 | `factor_audit_reports` 表未新增 |
+| `fts/factor_engine/factor_db/repository.py` | **修改** | ⬜ 未实现 | 审计报告 CRUD 未实现 |
+| `fts/factor_engine/evolution_loop.py` | **修改** | ✅ 已实现 | L3 评估后插入审计 Gate（审计失败阻止晋升 elite，`evolution_loop.py:392-405`） |
+| `fts/factor_engine/evaluation_chain.py` | **修改** | ⬜ 未实现 | 审计结果作为评分卡输入未实现 |
+| `tests/factor_engine/test_factor_auditor.py` | **新增** | ✅ 已实现 | 审计器单元测试（对应测试文件存在） |
+| `tests/factor_engine/test_audit_causal.py` | **新增** | ⬜ 未实现 | 原设计拆分测试未实现（覆盖于审计器测试） |
+| `tests/factor_engine/test_audit_look_ahead.py` | **新增** | ⬜ 未实现 | 原设计拆分测试未实现（覆盖于审计器测试） |
 
 ---
 

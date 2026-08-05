@@ -2,7 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase A.1
-> 状态: 规划中
+> 状态: **已实现**（`fts/factor_engine/factor_quality_card.py` v1.0.0）
+> 实现说明: 核心类 `FactorQualityCard` 与 10 维度评分体系已实现并接入演化循环；`factor_quality_scores` 表与 `FactorQualityCardRepository` **未实现**（评分卡当前由 `EliteFactorTracker` 以 JSON 快照方式持久化，见 A.2）。
 
 ---
 
@@ -23,6 +24,8 @@
 ## 2. 数据模型设计
 
 ### 2.1 DuckDB Schema 扩展
+
+> **实现现状**: **未实现**（`factor_db/schema.py` 未新增此表，见第 7 节文件改动清单）。
 
 在 `factor_db` 中新增 `factor_quality_scores` 表。
 
@@ -90,6 +93,8 @@ class FactorQualityCardConfig(TypedDict, total=False):
 
 ## 3. 评分维度与算法
 
+> **实现现状**: 以下评分映射函数已在 `factor_quality_card.py` 中实现，并在实现中做了期货优化与扩展（见 3.2）。
+
 ### 3.1 十个维度
 
 | # | 维度 | 名称 | 权重 | 输入来源 |
@@ -109,7 +114,17 @@ class FactorQualityCardConfig(TypedDict, total=False):
 
 ### 3.2 评分映射函数
 
-每个维度将原始指标映射到 0–5 分：
+每个维度将原始指标映射到 0–5 分。**实现补充（期货优化）**:
+
+- **有效性维度**（`ic_score`）: 综合 IC 与 ICIR 的平均值，新增 `_map_icir_to_score`（ICIR=3→5分, 2→3分, 1→1分）。
+- **收益性维度**（`sharpe_score`）: 综合 Sharpe 与 Calmar 的平均值，新增 `_map_calmar_to_score`（Calmar=2→5分, 1→3分, 0.5→1分）。
+- **稳定性维度**（`stability_score`）: 从单一分数扩展为 **4 分量**（`_map_stability_to_score`）:
+  - IC 一致性 (0-2.0): `min(consistency/0.8, 1.0) * 2.0`
+  - IC 波动率 (0-1.5): 波动率越低分越高
+  - 综合评分 (0-1.0): `min(consistency_score/100, 1.0)`
+  - 窗口数量 (0-0.5): `min(n_windows/4, 1.0) * 0.5`
+- **交易性维度**（`tradability_score`）: 换手率**自动格式检测**（≤10 视为小数，>10 视为百分比）；期货优化阈值: 50%-500%→5分, 10%-1000%→3分, 其余 1 分。
+- **容量/实时性/兼容性维度**: 均按期货品种特性调整了阈值（容量 1 亿→5分起，daily 频率→2分，单一品种覆盖也给基础分）。
 
 ```python
 def _map_ic_to_score(ic: float) -> float:
@@ -208,18 +223,24 @@ class FactorQualityCard:
                  logic_score: int,
                  data_frequency: Literal['tick', 'minute', 'hour', 'daily'],
                  cross_symbol_coverage: float,
-                 capacity_estimate: float) -> FactorQualityScore: ...
+                 capacity_estimate: float,
+                 icir: float = 0.0,      # [已实现] ICIR 补充输入
+                 calmar: float = 0.0) -> FactorQualityScore: ...   # [已实现] Calmar 补充输入
 
     def _compute_dimension_scores(self, ...) -> list[DimensionScore]: ...
     def _compute_total(self, dims: list[DimensionScore]) -> float: ...
     def _determine_grade(self, total: float) -> Literal['A', 'B', 'C']: ...
 ```
 
+> **实现现状**: 以上接口与 `fts/factor_engine/factor_quality_card.py` 完全一致（`icir`/`calmar` 为实现的扩展参数，默认 0.0）。
+
 ### 4.2 `FactorQualityCardRepository` 类
+
+> **实现现状**: **未实现**。评分卡结果当前由 `EliteFactorTracker`（`fts/monitor/elite_tracker.py`）以 JSON 快照（`memory/tracking/{factor_id}.json`）持久化，未落 DuckDB `factor_quality_scores` 表。以下接口为预留设计。
 
 ```python
 class FactorQualityCardRepository:
-    """DuckDB 评分卡读写仓储。
+    """DuckDB 评分卡读写仓储（预留设计，未实现）。
 
     Usage:
         repo = FactorQualityCardRepository(db)
@@ -305,14 +326,15 @@ flowchart TD
 
 ## 7. 文件改动清单
 
-| 文件 | 动作 | 说明 |
-|------|------|------|
-| `fts/factor_engine/factor_quality_card.py` | **新增** | `FactorQualityCard` 类及评分映射函数 |
-| `fts/factor_engine/factor_db/schema.py` | **修改** | 新增 `factor_quality_scores` 表定义 |
-| `fts/factor_engine/factor_db/repository.py` | **修改** | 新增评分卡 CRUD 方法 |
-| `fts/factor_engine/evolution_loop.py` | **修改** | L3 评估后调用评分卡，分级准入 |
-| `tests/factor_engine/test_factor_quality_card.py` | **新增** | 评分卡单元测试 |
-| `tests/factor_engine/test_grade_classification.py` | **新增** | 分级准入测试 |
+| 文件 | 动作 | 现状 | 说明 |
+|------|------|------|------|
+| `fts/factor_engine/factor_quality_card.py` | **新增** | ✅ 已实现 | `FactorQualityCard` 类及评分映射函数 |
+| `fts/factor_engine/factor_db/schema.py` | **修改** | ⬜ 未实现 | `factor_quality_scores` 表未新增（当前仅 4 张表: factor_catalog/factor_evaluations/factor_versions/factor_correlations） |
+| `fts/factor_engine/factor_db/repository.py` | **修改** | ⬜ 未实现 | 评分卡 CRUD 未实现 |
+| `fts/factor_engine/evolution_loop.py` | **修改** | ✅ 已实现 | L3 评估后调用评分卡，A/B/C 分级准入（记录每个因子得分与淘汰原因） |
+| `fts/monitor/elite_tracker.py` | **修改** | ✅ 已实现 | 评分卡结果经 `EliteFactorTracker` 以 JSON 快照持久化并跟踪（替代原设计 DB 落库） |
+| `tests/factor_engine/test_factor_quality_card.py` | **新增** | ✅ 已实现 | 评分卡单元测试 |
+| `tests/factor_engine/test_grade_classification.py` | **新增** | ✅ 已实现 | 分级准入测试 |
 
 ---
 

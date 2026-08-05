@@ -2,7 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase C.3
-> 状态: 规划中
+> 状态: **部分实现**（以经验链形式落地）
+> 实现说明: 反馈闭环的**经验沉淀**部分已实现于 `fts/factor_engine/experience_chain.py`（`ExperienceChain` 经验链 + `FailurePatternAnalyzer` 失败模式分析 + `create_trace_from_evaluation`，将演化失败经验注入 LLM prompt 引导后续演化）。原设计的 `FeedbackLoop`/`FeedbackTrigger`/`AttributionAnalyzer`/`EvolutionDirectionAdjuster`/`EvolutionEffectiveness` 类、`feedback_events` 等 4 张表、CLI `fts feedback` 子命令均**未实现**。
 
 ---
 
@@ -440,9 +441,30 @@ Top 归因原因
 
 ## 6. `FeedbackLoop` 主类
 
+> **实现现状**: `FeedbackLoop` 类**未实现**。反馈闭环的经验沉淀由 `fts/factor_engine/experience_chain.py` 承担:
+
+```python
+class ExperienceChain:
+    """演化经验链（实际实现）。
+
+    记录演化过程中的失败轨迹与经验，注入 LLM prompt 引导后续演化，
+    构成"失败 → 经验 → 搜索方向调整"的轻量反馈闭环。
+    """
+    # 关键方法: record_failure / get_relevant_experiences / build_prompt /
+    #           add_lesson / list_lessons ...
+
+class FailurePatternAnalyzer:
+    """失败模式分析器（实际实现）。"""
+
+def create_trace_from_evaluation(...) -> str:
+    """从评估结果创建经验 trace（实际实现）。"""
+```
+
+> 原设计 `FeedbackLoop`/`FeedbackTrigger`/`AttributionAnalyzer`/`EvolutionDirectionAdjuster`/`EvolutionEffectiveness` 系列类为完整闭环的规划形态（未实现），保留如下。
+
 ```python
 class FeedbackLoop:
-    """反馈闭环主类。
+    """反馈闭环主类（原设计，未实现）。
 
     Usage:
         loop = FeedbackLoop(config)
@@ -576,6 +598,8 @@ flowchart TD
 
 ## 8. 数据模型设计
 
+> **实现现状**: 以下 4 张表（feedback_events/attribution_reports/feedback_processing_results/feedback_reports）**均未实现**（`factor_db/schema.py` 仅含 factor_catalog/factor_evaluations/factor_versions/factor_correlations）。经验链数据由 `ExperienceChain` 自行持久化。
+
 ### 8.1 反馈数据存储
 
 ```sql
@@ -673,23 +697,28 @@ CREATE INDEX IF NOT EXISTS idx_fr_period ON feedback_reports(period);
 
 ## 11. 文件改动清单
 
-| 文件 | 动作 | 说明 |
-|------|------|------|
-| `fts/factor_engine/feedback_loop.py` | **新增** | `FeedbackLoop`、`FeedbackTrigger` 类 |
-| `fts/factor_engine/attribution_analyzer.py` | **新增** | `AttributionAnalyzer` 类 |
-| `fts/factor_engine/direction_adjuster.py` | **新增** | `EvolutionDirectionAdjuster` 类 |
-| `fts/factor_engine/evolution_effectiveness.py` | **新增** | `EvolutionEffectiveness` 类 |
-| `fts/factor_engine/factor_db/schema.py` | **修改** | 新增反馈相关表 |
-| `fts/factor_engine/factor_db/repository.py` | **修改** | 反馈数据 CRUD |
-| `fts/factor_engine/evolution_loop.py` | **修改** | 集成反馈检查 |
-| `fts/monitor/prometheus_metrics.py` | **修改** | 新增反馈闭环指标 |
-| `tests/factor_engine/test_feedback_loop.py` | **新增** | 反馈闭环测试 |
-| `tests/factor_engine/test_attribution_analyzer.py` | **新增** | 归因分析器测试 |
-| `tests/factor_engine/test_direction_adjuster.py` | **新增** | 方向调整器测试 |
+> **实现现状**: 原设计新增文件均未实现，实际以 `fts/factor_engine/experience_chain.py`（经验链）承担部分反馈闭环职责。
+
+| 文件 | 动作 | 现状 | 说明 |
+|------|------|------|------|
+| `fts/factor_engine/experience_chain.py` | **新增** | ✅ 已实现 | `ExperienceChain` + `FailurePatternAnalyzer` + `create_trace_from_evaluation` |
+| `fts/factor_engine/feedback_loop.py` | **新增** | ⬜ 未实现 | `FeedbackLoop`/`FeedbackTrigger` 未实现 |
+| `fts/factor_engine/attribution_analyzer.py` | **新增** | ⬜ 未实现 | `AttributionAnalyzer` 未实现 |
+| `fts/factor_engine/direction_adjuster.py` | **新增** | ⬜ 未实现 | `EvolutionDirectionAdjuster` 未实现 |
+| `fts/factor_engine/evolution_effectiveness.py` | **新增** | ⬜ 未实现 | `EvolutionEffectiveness` 未实现 |
+| `fts/factor_engine/factor_db/schema.py` | **修改** | ⬜ 未实现 | 反馈相关 4 张表未新增 |
+| `fts/factor_engine/factor_db/repository.py` | **修改** | ⬜ 未实现 | 反馈数据 CRUD 未实现 |
+| `fts/factor_engine/evolution_loop.py` | **修改** | ⬜ 未实现 | 反馈检查集成未实现（演化失败经验经 experience_chain 注入） |
+| `fts/monitor/prometheus_metrics.py` | **修改** | ⬜ 未实现 | 反馈闭环指标未实现 |
+| `tests/factor_engine/test_feedback_loop.py` | **新增** | ⬜ 未实现 | 反馈闭环测试未实现 |
+| `tests/factor_engine/test_attribution_analyzer.py` | **新增** | ⬜ 未实现 | 归因分析器测试未实现 |
+| `tests/factor_engine/test_direction_adjuster.py` | **新增** | ⬜ 未实现 | 方向调整器测试未实现 |
 
 ---
 
 ## 12. CLI 命令设计
+
+> **实现现状**: **未实现**。`fts/cli.py` 无 `feedback` 子命令。以下为原设计预留。
 
 ```bash
 # 手动触发反馈

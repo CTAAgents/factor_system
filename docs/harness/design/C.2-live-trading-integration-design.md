@@ -2,7 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase C.2
-> 状态: 规划中
+> 状态: **规划中**（角色边界内部分已落地）
+> 实现说明: FTS 定位为**因子智能系统**，输出 `ScoredSignal`（定义于 `fts/strategies/base_v2.py`，含 symbol/direction/grade/total/weight 及指标字段）供下游交易系统（FDT）消费；本设计的 JSON Schema 信号契约（`FactorSignal`）、`SignalValidator`、`fts/risk/` 交易适配层、`RiskManager`、`LiveFactorMonitor`、HTTP 端点均**未实现**。交易执行严格由下游系统负责（角色边界原则）。
 
 ---
 
@@ -137,9 +138,31 @@
 
 ### 2.2 Python 类型定义
 
+> **实现现状**: 原设计 `FactorSignal`/`SignalDetail`/`SignalMeta` 类型**未实现**。FTS 实际输出的信号契约为 `fts/strategies/base_v2.py` 的 `ScoredSignal`（策略层打分信号，供融合与下游消费）:
+
+```python
+@dataclass
+class ScoredSignal:
+    """策略 score 阶段的打分信号（已过滤+打分，准备交付融合）。"""
+    symbol: str
+    direction: str                    # "bull" | "bear" | "neutral"
+    signal_type: str
+    strategy_name: str
+    total: float = 0.0                # 带方向总分（正=多头, 负=空头）
+    abs_score: float = 0.0
+    grade: str = "NOISE"              # "STRONG" | "WATCH" | "WEAK" | "NOISE"
+    weight: float = 1.0               # 跨策略融合权重
+    # 指标字段: price/change_pct/volume/adx/rsi/cci/ma_slope/macd_cross/
+    #          dc20_break/ma_align/z_score/stage/atr
+    sub_scores: dict = field(default_factory=dict)
+    extra: dict = field(default_factory=dict)
+```
+
+> 以下原设计 `FactorSignal` 系列类型保留作为实盘信号契约的扩展方向参考（未实现）。
+
 ```python
 class SignalDetail(TypedDict, total=False):
-    """单个品种的信号详情。"""
+    """单个品种的信号详情（原设计，未实现）。"""
     symbol: str
     direction: Literal['long', 'short', 'flat']
     position: float
@@ -622,21 +645,21 @@ Response: AccountStatus
 
 ## 9. 文件改动清单
 
-| 文件 | 动作 | 说明 |
-|------|------|------|
-| `fts/factor_engine/signal_contract.py` | **新增** | 信号 Schema 和类型定义 |
-| `fts/factor_engine/signal_validator.py` | **新增** | `SignalValidator` 类 |
-| `fts/risk/__init__.py` | **新增** | 风控包 |
-| `fts/risk/risk_manager.py` | **新增** | `RiskManager` 类 |
-| `fts/risk/trade_adapter.py` | **新增** | `TradeAdapter` 抽象基类 |
-| `fts/risk/simulated_adapter.py` | **新增** | `SimulatedTradeAdapter` 实现 |
-| `fts/monitor/live_factor_monitor.py` | **新增** | `LiveFactorMonitor` 类 |
-| `fts/monitor/prometheus_metrics.py` | **修改** | 新增风控和 Live 监控指标 |
-| `fts/monitor/http_server.py` | **修改** | 新增信号/风控/Live 监控端点 |
-| `tests/risk/test_risk_manager.py` | **新增** | 风控管理器测试 |
-| `tests/risk/test_signal_validator.py` | **新增** | 信号验证测试 |
-| `tests/risk/test_simulated_adapter.py` | **新增** | 模拟适配器测试 |
-| `tests/monitor/test_live_factor_monitor.py` | **新增** | Live 因子监控测试 |
+> **实现现状**: 以下文件均**未实现**（C.2 整体处于规划状态，FTS 输出 `ScoredSignal` 由下游 FDT 消费，符合角色边界原则）。
+
+| 文件 | 动作 | 现状 | 说明 |
+|------|------|------|------|
+| `fts/factor_engine/signal_contract.py` | **新增** | ⬜ 未实现 | 信号 Schema 和类型定义未实现（实际契约为 `fts/strategies/base_v2.py::ScoredSignal`） |
+| `fts/factor_engine/signal_validator.py` | **新增** | ⬜ 未实现 | `SignalValidator` 类未实现 |
+| `fts/risk/__init__.py` | **新增** | ⬜ 未实现 | 风控包未实现 |
+| `fts/risk/risk_manager.py` | **新增** | ⬜ 未实现 | `RiskManager` 类未实现 |
+| `fts/risk/trade_adapter.py` | **新增** | ⬜ 未实现 | `TradeAdapter` 抽象基类未实现 |
+| `fts/risk/simulated_adapter.py` | **新增** | ⬜ 未实现 | `SimulatedTradeAdapter` 未实现 |
+| `fts/monitor/live_factor_monitor.py` | **新增** | ⬜ 未实现 | `LiveFactorMonitor` 未实现（Live 表现监控由 `elite_tracker.py` 覆盖部分） |
+| `fts/monitor/prometheus_metrics.py` | **修改** | ⬜ 未实现 | 风控/Live 指标未实现 |
+| `fts/monitor/http_server.py` | **修改** | ⬜ 未实现 | 信号/风控/Live 端点未实现（现有端点: /api/status、/api/factors、/metrics、/metrics/data-sources、/health） |
+| `tests/risk/*` | **新增** | ⬜ 未实现 | 风控/信号/模拟适配器测试未实现 |
+| `tests/monitor/test_live_factor_monitor.py` | **新增** | ⬜ 未实现 | Live 因子监控测试未实现 |
 
 ---
 

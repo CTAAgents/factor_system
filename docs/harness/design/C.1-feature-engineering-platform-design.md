@@ -2,7 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase C.1
-> 状态: 规划中
+> 状态: **已实现**（文件结构与算子类别与原设计不同）
+> 实现说明: 实际实现为 `fts/factor_engine/feature_ops.py`（单文件，7 类算子: TimeSeriesOps/PriceOps/RollingOps/**TechnicalOps**/CrossSectionOps/CrossSymbolOps/CompositeOps + `OperatorRegistry` + `FeatureOpsEngine`）、`fts/factor_engine/gp_evolver.py`（`GPEvolver`/`ExpressionTree`/`tree_to_factor_program`）、`fts/factor_engine/feature_importance.py`。另新增 **`fts/factor_engine/expr_dsl/`**（FTS-Expr 算子表达式 DSL + `OperatorRegistry` 58 算子 L0-L5 分层，2026-08 算子演化基础层）。原设计 `feature_ops/` 包目录结构与 CLI `fts feature/gp` 子命令未实现。
 
 ---
 
@@ -30,13 +31,17 @@
 
 ### 2.1 算子分类架构
 
+> **实现现状**: 实际为 **7 类**算子（`fts/factor_engine/feature_ops.py`），在原设计 6 类基础上新增 `TechnicalOps`（技术指标算子，如 ADX/RSI/BOLL 等）；`CompositeOps` 与 `CrossSymbolOps` 均已实现。另有 `expr_dsl/` 提供新一代算子表达式（FTS-Expr DSL + 58 算子 L0-L5 分层）。
+
 ```
-特征算子库
-├── 基础算子 (BasicOps)
+特征算子库（feature_ops.py — 实际实现，7 类）
+├── 时序算子 (TimeSeriesOps)
 │   ├── 时序算子: ts_mean, ts_std, ts_max, ts_min, ts_sum, ts_product
 │   ├── 价格算子: rank, zscore, delta, pct_change, log_return
 │   ├── 滚动算子: ts_rank, ts_zscore, ts_momentum, ts_volatility
 │   └── 截面算子: cross_rank, cross_zscore, industry_neutral
+├── 技术算子 (TechnicalOps)          # [新增]
+│   └── 技术指标: adx, rsi, boll, macd 等
 ├── 组合算子 (CompositeOps)
 │   ├── 嵌套算子: nest(op1, op2, ...)
 │   ├── 条件算子: if_then_else, conditional_weight
@@ -45,6 +50,9 @@
     ├── 行业中性化: industry_demean, industry_neutralize
     ├── 市值中性化: cap_demean, cap_neutralize
     └── 区域中性化: region_demean
+
+FTS-Expr DSL（expr_dsl/ — 算子演化基础层，2026-08）
+└── OperatorRegistry: 58 个算子，L0-L5 分层（fields/price/time_series/rolling/cross_section/composite）
 ```
 
 ### 2.2 基础算子详细定义
@@ -183,9 +191,11 @@ class CrossSectionOps:
 
 ### 2.3 算子注册表
 
+> **实现现状**: `OperatorRegistry` 已实现于 `fts/factor_engine/feature_ops.py`（支持 register/call/list_operators/get_operator，用法与原设计一致）。此外 `fts/factor_engine/expr_dsl/registry.py` 提供新一代 `OperatorRegistry`（`OperatorMeta` dataclass，含语义/参数边界/lookback/经济含义元数据，58 算子）。
+
 ```python
 class OperatorRegistry:
-    """特征算子注册表。
+    """特征算子注册表（feature_ops.py — 实际实现）。
 
     管理所有可用算子，支持运行时查询和调用。
 
@@ -218,6 +228,9 @@ class OperatorRegistry:
         """获取算子信息。"""
         ...
 ```
+
+> **新一代算子元数据**（`expr_dsl/registry.py`，`OperatorMeta`）:
+> `name` / `func` / `category`（L0-L5）/ `params` / `int_params` / `float_params` / `param_bounds` / `lookback_param` / `differentiable` / `economic_meaning` — 为算子演化（OperatorMacroEvolver）提供语义、梯度与边界约束。
 
 ### 2.4 算子元数据
 
@@ -564,23 +577,27 @@ graph LR
 
 ## 9. 文件改动清单
 
-| 文件 | 动作 | 说明 |
-|------|------|------|
-| `fts/factor_engine/feature_ops/` | **新增** | 算子包目录 |
-| `fts/factor_engine/feature_ops/basic_ops.py` | **新增** | 基础算子实现 |
-| `fts/factor_engine/feature_ops/operator_registry.py` | **新增** | 算子注册表 |
-| `fts/factor_engine/gp_evolver.py` | **新增** | GP 演化器 |
-| `fts/factor_engine/feature_importance.py` | **新增** | 特征重要性分析 |
-| `fts/factor_engine/feature_ops_engine.py` | **新增** | `FeatureOpsEngine` 主类 |
-| `fts/factor_engine/evolution_loop.py` | **修改** | 集成 GP 演化路径 |
-| `fts/cli.py` | **修改** | 新增 `gp evolve` 和 `feature analyze` 子命令 |
-| `tests/factor_engine/test_operator_registry.py` | **新增** | 算子注册表测试 |
-| `tests/factor_engine/test_gp_evolver.py` | **新增** | GP 演化器测试 |
-| `tests/factor_engine/test_feature_importance.py` | **新增** | 特征重要性测试 |
+| 文件 | 动作 | 现状 | 说明 |
+|------|------|------|------|
+| `fts/factor_engine/feature_ops/` | **新增** | ⬜ 未实现 | 实际为单文件 `fts/factor_engine/feature_ops.py`（7 类算子 + OperatorRegistry + FeatureOpsEngine） |
+| `fts/factor_engine/feature_ops/basic_ops.py` | **新增** | ⬜ 未实现 | 原设计拆分未实现（算子内聚于 feature_ops.py） |
+| `fts/factor_engine/feature_ops/operator_registry.py` | **新增** | ⬜ 未实现 | 原设计拆分未实现（OperatorRegistry 在 feature_ops.py） |
+| `fts/factor_engine/gp_evolver.py` | **新增** | ✅ 已实现 | `GPEvolver` + `ExpressionTree`/`TreeNode`/`tree_to_factor_program` |
+| `fts/factor_engine/feature_importance.py` | **新增** | ✅ 已实现 | 特征重要性分析 |
+| `fts/factor_engine/feature_ops_engine.py` | **新增** | ⬜ 未实现 | `FeatureOpsEngine` 已实现于 `feature_ops.py` 内 |
+| `fts/factor_engine/evolution_loop.py` | **修改** | ✅ 已实现 | GP 演化路径集成（`_gp_evolve` 方法） |
+| `fts/factor_engine/expr_dsl/` | **新增** | ✅ 已实现 | 算子演化基础层（2026-08）: FTS-Expr DSL + 58 算子 L0-L5 |
+| `fts/cli.py` | **修改** | ⬜ 未实现 | `gp evolve`/`feature analyze` 子命令未实现 |
+| `tests/factor_engine/test_operator_registry.py` | **新增** | ✅ 已实现 | 算子注册表测试 |
+| `tests/factor_engine/test_gp_evolver.py` | **新增** | ✅ 已实现 | GP 演化器测试 |
+| `tests/factor_engine/test_feature_importance.py` | **新增** | ✅ 已实现 | 特征重要性测试 |
+| `tests/factor_engine/expr_dsl/` | **新增** | ✅ 已实现 | DSL 解析/校验/执行/编译/注册表测试 |
 
 ---
 
 ## 10. CLI 命令设计
+
+> **实现现状**: **未实现**。`fts/cli.py` 无 `feature`/`gp` 子命令。以下为原设计预留。
 
 ```bash
 # 列出所有可用算子

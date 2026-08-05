@@ -2,7 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase B.1
-> 状态: 规划中
+> 状态: **已实现**（实现方向与原设计不同）
+> 实现说明: 实际实现为 `fts/monitor/data_quality_monitor.py`（v0.1.0），监控对象从"数据源三维指标（完整性/准确性/及时性）"调整为**因子级质量监控**：IC 漂移（IC Z-Score 阈值告警）+ 容量突变（容量变化率阈值告警）+ `validate_market_data()` 市场数据完整性校验。HTTP 端点: `GET /metrics`、`GET /metrics/data-sources`（`fts/monitor/http_server.py`）。原设计的 `register_source`/`evaluate_all`/多源交叉偏差/跳点检测/PSI 漂移等均未实现。
 
 ---
 
@@ -26,6 +27,15 @@
 ---
 
 ## 2. 指标体系设计
+
+> **实现现状**: 原设计的三维指标体系（完整性/准确性/及时性）**未实现**。实际实现为因子级二维告警体系:
+
+| 指标 | 告警类型 | 阈值（`MonitorConfig`） | 计算逻辑 |
+|------|----------|------------------------|----------|
+| IC 漂移 | `ic_drift` | Z-Score warning=2.0 / critical=3.0 | `(current_ic - baseline_ic) / ic_std` |
+| 容量突变 | `capacity_shock` | 变化率 warning=50% / critical=80% | `abs(current_capacity - baseline_capacity) / baseline_capacity` |
+
+另有 `validate_market_data()`（市场数据完整性校验，含 `_last_completeness_ratio` 等指标追踪）与告警冷却机制（`alert_cooldown`，默认 3600s）。以下原设计三维指标体系保留作为扩展方向参考。
 
 ### 2.1 三维指标架构
 
@@ -188,42 +198,55 @@ class DataQualityAlertConfig(TypedDict, total=False):
 
 ### 3.1 `DataQualityMonitor` 类
 
+> **实现现状**: 实际接口如下（`fts/monitor/data_quality_monitor.py` v0.1.0）。原设计的 `register_source`/`evaluate_all`/`evaluate_source`/`check_alerts`/`get_metrics_snapshot`/`reset_cache_stats` **均未实现**。
+
 ```python
+@dataclass
+class FactorBaseline:
+    """因子基准数据。"""
+    factor_id: str
+    baseline_ic: float
+    baseline_capacity: float
+    ic_std: float = 0.01          # IC 标准差 (用于 Z-Score 计算)
+    capacity_std: float = 0.0     # 容量标准差
+
+@dataclass
+class QualityAlert:
+    """质量告警信息。"""
+    factor_id: str
+    alert_type: Literal["ic_drift", "capacity_shock"]
+    severity: Literal["warning", "critical"]
+    message: str
+    metric_name: str
+    metric_value: float
+    baseline_value: float
+    threshold: float
+    timestamp: float
+
 class DataQualityMonitor:
-    """数据质量实时监控器。
+    """因子数据质量实时监控器。
 
     Usage:
         monitor = DataQualityMonitor(config)
-        monitor.register_source('tq', data_futures_provider)
-        metrics = monitor.evaluate_all()
-        alerts = monitor.check_alerts()
+        monitor.register_factor("factor_001", baseline_ic=0.05, baseline_capacity=1_000_000)
+        alert = monitor.check("factor_001", current_ic=0.01, current_capacity=200_000)
+        if alert:
+            print(f"Alert: {alert}")
     """
 
-    def __init__(self, config: DataQualityAlertConfig | None = None) -> None: ...
+    def __init__(self, config: MonitorConfig | None = None,
+                 alert_callback: Callable[[QualityAlert], None] | None = None) -> None: ...
 
-    def register_source(self, source_name: str, provider: DataProvider) -> None:
-        """注册数据源适配器。"""
-        ...
+    def register_factor(self, factor_id: str, baseline_ic: float,
+                        baseline_capacity: float, **kwargs) -> None:
+        """注册因子基准数据。"""
 
-    def evaluate_all(self) -> DataQualityReport:
-        """评估所有注册数据源的质量指标。"""
-        ...
+    def check(self, factor_id: str, current_ic: float | None = None,
+              current_capacity: float | None = None, **kwargs) -> QualityAlert | None:
+        """检查因子质量，超阈值返回告警（含冷却控制）。"""
 
-    def evaluate_source(self, source_name: str) -> SourceQualityMetrics:
-        """评估单个数据源。"""
-        ...
-
-    def check_alerts(self) -> list[DataQualityAlert]:
-        """检查是否触发告警。"""
-        ...
-
-    def get_metrics_snapshot(self) -> PrometheusSnapshot:
-        """获取当前所有指标快照（供 HTTP 端点使用）。"""
-        ...
-
-    def reset_cache_stats(self) -> None:
-        """重置缓存命中率统计。"""
-        ...
+    def validate_market_data(self, data: pd.DataFrame, ...) -> dict:
+        """市场数据完整性校验（启动时由 EvolutionLoop 调用）。"""
 ```
 
 ### 3.2 核心类型
@@ -346,14 +369,21 @@ sequenceDiagram
 
 ### 4.3 HTTP 端点
 
+> **实现现状**: 实际端点为 `fts/monitor/http_server.py` 提供的:
+> - `GET /metrics` — 完整 Prometheus 指标
+> - `GET /metrics/data-sources` — 数据源专用指标
+> - 另有 `GET /api/status`、`GET /api/factors`、`GET /health`
+>
+> 原设计的 `/api/v1/monitor/data-quality` 系列端点未实现。
+
 ```
-GET /api/v1/monitor/data-quality
+GET /api/v1/monitor/data-quality        （原设计，未实现）
 → 200 OK { "overall_status": "healthy", "source_metrics": {...}, "alerts": [] }
 
-GET /api/v1/monitor/data-quality/alerts
+GET /api/v1/monitor/data-quality/alerts （原设计，未实现）
 → 200 OK { "active_alerts": [...] }
 
-GET /api/v1/monitor/data-quality/metrics
+GET /api/v1/monitor/data-quality/metrics （原设计，未实现）
 → 200 OK { Prometheus text format }
 ```
 
@@ -420,15 +450,15 @@ class PrometheusMetrics:
 
 ## 7. 文件改动清单
 
-| 文件 | 动作 | 说明 |
-|------|------|------|
-| `fts/monitor/data_quality_monitor.py` | **新增** | `DataQualityMonitor` 类及质量指标计算函数 |
-| `fts/data_sources/aggregator.py` | **修改** | 添加数据质量埋点 |
-| `fts/monitor/prometheus_metrics.py` | **修改** | 新增数据质量 Prometheus 指标 |
-| `fts/scheduler/schedules.py` | **修改** | 新增质量评估定时任务 |
-| `fts/monitor/http_server.py` | **修改** | 新增数据质量 HTTP 端点 |
-| `docs/harness/05-observability.md` | **修改** | 更新监控指标文档 |
-| `tests/monitor/test_data_quality_monitor.py` | **新增** | 数据质量监控单元测试 |
+| 文件 | 动作 | 现状 | 说明 |
+|------|------|------|------|
+| `fts/monitor/data_quality_monitor.py` | **新增** | ✅ 已实现 | `DataQualityMonitor` 类（IC 漂移/容量突变告警 + `validate_market_data`） |
+| `fts/data_sources/aggregator.py` | **修改** | ⬜ 未实现 | 数据质量埋点未添加（未发现 aggregator.py） |
+| `fts/monitor/prometheus_metrics.py` | **修改** | ⬜ 未实现 | 文件不存在（指标由 `prometheus_setup.py` + `http_server.py` 暴露） |
+| `fts/scheduler/schedules.py` | **修改** | ⬜ 未实现 | 质量评估定时任务未实现 |
+| `fts/monitor/http_server.py` | **修改** | ✅ 已实现 | `GET /metrics`、`GET /metrics/data-sources` 端点 |
+| `docs/harness/05-observability.md` | **修改** | ✅ 已实现 | 监控指标文档已同步 |
+| `tests/monitor/test_data_quality_monitor.py` | **新增** | ✅ 已实现 | 数据质量监控单元测试 |
 
 ---
 

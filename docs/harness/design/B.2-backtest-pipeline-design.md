@@ -2,7 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase B.2
-> 状态: 规划中
+> 状态: **已实现**（结构与原设计不同）
+> 实现说明: 实际实现为 `fts/factor_engine/backtest_pipeline.py`（v0.1.0）**4 阶段**流水线（DataLoadStage/FactorComputeStage/PerformanceStage/ReportStage），单因子入口 `BacktestPipeline.run(factor, data, benchmark, ...)`，含 `_execute_factor_code()`（被演化循环 `_check_factor_runtime` 复用）。原设计的 6 阶段拆分、`BacktestPipelineBuilder`、独立类（FactorScreener/SignalGenerator/PortfolioConstructor/CostSimulator/RiskAttributor/ReportGenerator/CapitalAllocator）与 CLI `fts backtest` 子命令均未实现。
 
 ---
 
@@ -28,11 +29,72 @@
 
 ## 2. 流水线架构设计
 
-### 2.1 六阶段流水线
+### 2.1 流水线阶段（实际实现 4 阶段）
+
+> **实现现状**: 实际为 4 阶段（`fts/factor_engine/backtest_pipeline.py`），原设计 6 阶段（screening/signal/portfolio/cost/risk/report）未实现。
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                       BacktestPipeline                             │
+│                                                                     │
+│  1. data_load         → 数据加载与校验                             │
+│  2. factor_compute    → 因子计算（含成本/滑点参数）                │
+│  3. performance       → 绩效评估（IC/Sharpe/回撤等）               │
+│  4. report            → 回测报告生成（净值/回撤/IC 时序/成交）     │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**核心输入输出**:
+
+```python
+@dataclass
+class BacktestInput:
+    factor: dict[str, Any]          # 因子元数据和代码
+    data: pd.DataFrame              # OHLCV 数据
+    benchmark: pd.Series | None = None   # 基准收益率序列
+    forward_period: int = 1         # 预测周期 (天)
+    cost_rate: float = 0.0003       # 交易成本率 (单边)
+    slippage: float = 0.0001        # 滑点率
+    initialization_capital: float = 1_000_000.0
+    date_range: tuple[str, str] | None = None
+
+@dataclass
+class PerformanceMetrics:
+    total_return: float = 0.0
+    annual_return: float = 0.0
+    sharpe_ratio: float = 0.0       # 注意: 字段为 sharpe_ratio（非设计中的 sharpe）
+    max_drawdown: float = 0.0
+    calmar_ratio: float = 0.0
+    win_rate: float = 0.0
+    volatility: float = 0.0
+    ic_mean: float = 0.0
+    ic_std: float = 0.0
+    ic_ir: float = 0.0              # IC Information Ratio
+    turnover: float = 0.0
+    exposure: float = 0.0
+    # 另含 downside_volatility / best_day / worst_day
+
+@dataclass
+class BacktestReport:
+    factor_id: str
+    factor_name: str
+    start_date: str
+    end_date: str
+    metrics: PerformanceMetrics
+    ic_series: pd.Series
+    equity_curve: pd.Series
+    drawdown_curve: pd.Series
+    trades: pd.DataFrame
+    benchmark_curve: pd.Series | None = None
+    benchmark_excess: pd.Series | None = None
+```
+
+### 2.2 原设计六阶段（未实现，保留参考）
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        BacktestPipeline（原设计）                   │
 │                                                                     │
 │  1. factor_screening    → 筛选候选因子                              │
 │  2. signal_generation  → 生成因子信号                              │
@@ -350,38 +412,39 @@ class PerformanceMetrics(TypedDict, total=False):
 
 ### 4.1 `BacktestPipeline` 主类
 
+> **实现现状**: 实际接口如下。原设计 `run(factors, data)` 批量入口与 `BacktestPipelineBuilder` 未实现（`run_batch` 亦不存在）。
+
 ```python
 class BacktestPipeline:
     """端到端回测流水线。
 
     Usage:
-        pipeline = BacktestPipeline(config)
-        result = pipeline.run(factors)
-        # result.report_path → 报告文件路径
-
-        # 批量回测
-        results = pipeline.run_batch(factor_groups)
+        pipeline = BacktestPipeline()
+        results = pipeline.run(
+            factor=factor_program,
+            data=ohlcv_dataframe,
+            benchmark=benchmark_returns,
+        )
+        report = results.report
+        print(report.sharpe_ratio, report.max_drawdown)
     """
 
-    def __init__(self, config: BacktestPipelineConfig) -> None: ...
+    def __init__(self) -> None: ...
 
-    def run(self, factors: list[FactorCatalog],
-             data: dict[str, pd.DataFrame] | None = None) -> BacktestResult:
-        """执行单个回测流水线。"""
-        ...
+    def run(self, factor: dict[str, Any],
+            data: pd.DataFrame,
+            benchmark: pd.Series | None = None,
+            forward_period: int = 1,
+            cost_rate: float = 0.0003,
+            slippage: float = 0.0001,
+            initialization_capital: float = 1_000_000.0,
+            date_range: tuple[str, str] | None = None,
+            **kwargs) -> BacktestRunResult:
+        """执行单个因子回测，返回含 report 的结果对象。"""
 
-    def run_batch(self,
-                  factor_groups: list[list[FactorCatalog]],
-                  data: dict[str, pd.DataFrame] | None = None) -> list[BacktestResult]:
-        """批量执行回测。"""
-        ...
-
-    def _run_stage_screening(self, factors: list[FactorCatalog]) -> list[FactorCatalog]: ...
-    def _run_stage_signal(self, factors, data) -> FactorSignals: ...
-    def _run_stage_portfolio(self, signals) -> PortfolioResult: ...
-    def _run_stage_cost(self, portfolio, data) -> CostResult: ...
-    def _run_stage_risk(self, portfolio) -> RiskAttributionReport: ...
-    def _run_stage_report(self, result) -> str: ...
+    def _execute_factor_code(self, code: str, data: pd.DataFrame,
+                             params: dict[str, Any]) -> np.ndarray:
+        """执行因子代码（静态方法，被 evolution_loop._check_factor_runtime 复用）。"""
 ```
 
 ### 4.2 流水线构建器
@@ -480,6 +543,8 @@ report.html
 
 ## 6. CLI 命令设计
 
+> **实现现状**: **未实现**。`fts/cli.py` 无 `backtest` 子命令组（现有子命令: version/monitor/evolution/meta-loop/portfolio/ui/scheduler/factor/data）。以下为原设计预留。
+
 ```bash
 # 单个因子回测
 fts backtest run \
@@ -526,20 +591,20 @@ fts backtest compare \
 
 ## 8. 文件改动清单
 
-| 文件 | 动作 | 说明 |
-|------|------|------|
-| `fts/factor_engine/backtest_pipeline.py` | **新增** | `BacktestPipeline` 主类及 `BacktestPipelineBuilder` |
-| `fts/factor_engine/factor_screener.py` | **新增** | `FactorScreener` 类 |
-| `fts/factor_engine/signal_generator.py` | **新增** | `SignalGenerator` 类 |
-| `fts/factor_engine/portfolio_constructor.py` | **新增** | `PortfolioConstructor` 类 |
-| `fts/factor_engine/cost_simulator.py` | **新增** | `CostSimulator` 类 |
-| `fts/factor_engine/risk_attributor.py` | **新增** | `RiskAttributor` 类 |
-| `fts/factor_engine/report_generator.py` | **新增** | `ReportGenerator` 类 |
-| `fts/factor_engine/capital_allocator.py` | **新增** | `CapitalAllocator` 类 |
-| `fts/cli.py` | **修改** | 新增 `backtest run/batch/compare` 子命令 |
-| `tests/factor_engine/test_backtest_pipeline.py` | **新增** | 流水线单元测试 |
-| `tests/factor_engine/test_cost_simulator.py` | **新增** | 成本模拟测试 |
-| `tests/factor_engine/test_capital_allocator.py` | **新增** | 资金分配测试 |
+| 文件 | 动作 | 现状 | 说明 |
+|------|------|------|------|
+| `fts/factor_engine/backtest_pipeline.py` | **新增** | ✅ 已实现 | `BacktestPipeline` 4 阶段流水线（无 Builder） |
+| `fts/factor_engine/factor_screener.py` | **新增** | ⬜ 未实现 | 原设计独立类未实现 |
+| `fts/factor_engine/signal_generator.py` | **新增** | ⬜ 未实现 | 原设计独立类未实现 |
+| `fts/factor_engine/portfolio_constructor.py` | **新增** | ⬜ 未实现 | 原设计独立类未实现 |
+| `fts/factor_engine/cost_simulator.py` | **新增** | ⬜ 未实现 | 成本逻辑在 backtest_pipeline.py 内（另有 `cost_model.py`） |
+| `fts/factor_engine/risk_attributor.py` | **新增** | ⬜ 未实现 | 原设计独立类未实现 |
+| `fts/factor_engine/report_generator.py` | **新增** | ⬜ 未实现 | 报告逻辑在 backtest_pipeline.py 内 |
+| `fts/factor_engine/capital_allocator.py` | **新增** | ⬜ 未实现 | 原设计独立类未实现 |
+| `fts/cli.py` | **修改** | ⬜ 未实现 | `backtest run/batch/compare` 子命令未实现 |
+| `tests/factor_engine/test_backtest_pipeline.py` | **新增** | ✅ 已实现 | 流水线单元测试 |
+| `tests/factor_engine/test_cost_simulator.py` | **新增** | ⬜ 未实现 | 对应测试为 cost_model 相关测试 |
+| `tests/factor_engine/test_capital_allocator.py` | **新增** | ⬜ 未实现 | 原设计测试未实现 |
 
 ---
 

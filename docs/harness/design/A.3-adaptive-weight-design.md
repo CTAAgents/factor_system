@@ -2,7 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase A.3
-> 状态: 规划中
+> 状态: **已实现**（实现方式与原设计不同）
+> 实现说明: 自适应权重已实现于 `fts/factor_engine/portfolio_loop.py`：`REGIME_FAMILY_MULTIPLIERS` 映射表 + `regime_adaptive_weight_adjustment()` 函数 + `PortfolioLoop` 集成 `enable_regime_adaptation`（Step 2.5），Regime 检测用 `fts/factor_engine/regime.py` 的 `RegimeAwareSelector`。**未实现**原设计的 `AdaptiveWeightManager`/`FactorStyleClassifier`/`RegimeSmoother` 类与 `factor_catalog.style_tags` 字段；权重映射基于 **FactorFamily（因子家族）** 而非 FactorStyle（风格标签）。
 
 ---
 
@@ -28,11 +29,11 @@
 
 ### 2.1 因子风格标签体系
 
-为每个因子分配一个风格标签，用于 Regime 映射：
+> **实现现状**: **未实现**。实际实现以 **FactorFamily（因子家族）** 为映射维度：`portfolio_loop.py` 定义 `REGIME_FAMILY_MULTIPLIERS`（Regime → FactorFamily 权重倍率映射），`FactorFamily` 枚举定义于 `fts/factor_engine/contracts.py`（如 momentum/carry/mean_reversion 等家族）。以下 FactorStyle 风格标签体系与 `style_tags` 字段为原设计（未实现）。
 
 ```python
 class FactorStyle(str, Enum):
-    """因子风格标签。"""
+    """因子风格标签（原设计，未实现）。"""
     MOMENTUM = "momentum"           # 趋势/动量
     MEAN_REVERSION = "mean_reversion" # 均值回归
     CARRY = "carry"                 # Carry 收益
@@ -52,6 +53,7 @@ class FactorStyle(str, Enum):
 在 `factor_catalog` 表上新增 `style_tags` JSON 字段：
 
 ```sql
+-- 原设计（未实现）
 ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS style_tags JSON;
 -- 示例: ["momentum", "carry"]
 ```
@@ -94,7 +96,13 @@ class AdaptiveWeightResult(TypedDict, total=False):
 
 
 class MarketRegime(str, Enum):
-    """市场状态。"""
+    """市场状态（原设计枚举，未实现）。
+
+    **实现现状**: 实际 Regime 由 `fts/factor_engine/regime.py` 的
+    `RegimeAwareSelector.detect()` 输出，为 `MarketRegime` TypedDict，
+    regime 取值: ``bull`` / ``bear`` / ``oscillate`` / ``high_vol`` / ``low_vol``，
+    检测逻辑: MA20 斜率判定趋势 → ATR 判定波动率 → 兜底 oscillate。
+    """
     BULL_TRENDING = "bull_trending"
     BEAR_TRENDING = "bear_trending"
     RANGE_BOUND = "range_bound"
@@ -382,55 +390,45 @@ def _check_rebalance_needed(previous: dict[str, float],
 
 ### 5.1 `AdaptiveWeightManager` 类
 
+> **实现现状**: **未实现**（原设计类）。实际实现为 `fts/factor_engine/portfolio_loop.py` 中的模块级函数 `regime_adaptive_weight_adjustment(signals, regime, factors)` + 常量 `REGIME_FAMILY_MULTIPLIERS`，由 `PortfolioLoop.run()` 在 Step 2.5 调用（`enable_regime_adaptation=True` 时）。
+
 ```python
-class AdaptiveWeightManager:
-    """自适应权重管理器。
+# 实际实现: portfolio_loop.py
+REGIME_FAMILY_MULTIPLIERS: dict[str, dict[str, float]] = {
+    # regime → FactorFamily → 权重倍率
+    "bull":      {"momentum": 1.3, "carry": 1.2, ...},
+    "bear":      {"defensive": 1.4, "low_vol": 1.3, ...},
+    "oscillate": {"mean_reversion": 1.3, ...},
+    "high_vol":  {"low_vol": 1.4, "defensive": 1.3, ...},
+    "low_vol":   {...},
+}
 
-    Usage:
-        manager = AdaptiveWeightManager(
-            regime_detector=detector,
-            style_classifier=classifier,
-            config=adaptive_config
-        )
-        result = manager.compute_weights(factors, current_regime)
-        # result.factor_weights — 最终权重
-        # result.selected_factors — 入选因子
-    """
+def regime_adaptive_weight_adjustment(
+    signals: dict[str, float],
+    regime: dict[str, Any],
+    factors: list[FactorCatalog],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """按 Regime 对因子信号权重做自适应调整（返回调整后信号 + 实际倍率）。"""
+    ...
 
-    def __init__(self,
-                 regime_detector: MarketRegimeDetector,
-                 style_classifier: FactorStyleClassifier,
-                 config: AdaptiveWeightConfig | None = None) -> None: ...
-
-    def compute_weights(self,
-                        factors: list[FactorCatalog],
-                        regime: MarketRegime) -> AdaptiveWeightResult:
-        """计算自适应权重。"""
-        ...
-
-    def get_current_config(self, regime: MarketRegime) -> RegimeWeightConfig:
-        """获取指定 Regime 的权重配置。"""
-        ...
-
-    def update_config(self, regime: MarketRegime,
-                      config: RegimeWeightConfig) -> None:
-        """更新指定 Regime 的权重配置（热更新）。"""
-        ...
-
-    def list_configs(self) -> dict[MarketRegime, RegimeWeightConfig]:
-        """列出所有 Regime 的权重配置。"""
-        ...
-
-    def _classify_factor_styles(self, factor: FactorCatalog) -> list[FactorStyle]:
-        """对因子进行风格分类。"""
-        ...
+# 集成点: PortfolioLoop.run()
+#   self._regime_selector = RegimeAwareSelector()   # regime.py
+#   regime = self._regime_selector.detect(market_ohlcv)
+#   signals, multipliers = regime_adaptive_weight_adjustment(signals, regime, factors)
 ```
+
+> **与原设计的差异**:
+> - 基于 FactorFamily 家族倍率，而非 FactorStyle 风格标签（无需 `style_tags` 字段）。
+> - 无独立的 Regime 平滑器（`RegimeSmoother`）与再平衡触发逻辑（`_check_rebalance_needed`）。
+> - 未实现 `update_config` / `list_configs` 热更新接口。
 
 ### 5.2 `FactorStyleClassifier` 类
 
+> **实现现状**: **未实现**。实际无需风格分类器（基于 FactorFamily 映射）。
+
 ```python
 class FactorStyleClassifier:
-    """因子风格分类器。
+    """因子风格分类器（原设计，未实现）。
 
     基于因子代码逻辑和元数据自动归类风格标签。
     支持手动覆盖（人工标注优先）。
@@ -538,17 +536,17 @@ flowchart TD
 
 ## 8. 文件改动清单
 
-| 文件 | 动作 | 说明 |
-|------|------|------|
-| `fts/factor_engine/adaptive_weight.py` | **新增** | `AdaptiveWeightManager`、`RegimeSmoother` 类 |
-| `fts/factor_engine/factor_style_classifier.py` | **新增** | `FactorStyleClassifier` 类 |
-| `fts/factor_engine/regime.py` | **修改** | 增强 `MarketRegime` 枚举和检测结果格式 |
-| `fts/factor_engine/portfolio_loop.py` | **修改** | 集成 `AdaptiveWeightManager` |
-| `fts/factor_engine/factor_db/schema.py` | **修改** | `factor_catalog` 新增 `style_tags` 字段 |
-| `fts/monitor/prometheus_metrics.py` | **修改** | 新增 Regime 和权重变化指标 |
-| `tests/factor_engine/test_adaptive_weight.py` | **新增** | 自适应权重单元测试 |
-| `tests/factor_engine/test_regime_smoother.py` | **新增** | Regime 平滑器测试 |
-| `tests/factor_engine/test_style_classifier.py` | **新增** | 风格分类测试 |
+| 文件 | 动作 | 现状 | 说明 |
+|------|------|------|------|
+| `fts/factor_engine/adaptive_weight.py` | **新增** | ⬜ 未实现 | `AdaptiveWeightManager`/`RegimeSmoother` 未实现（逻辑内聚于 portfolio_loop.py） |
+| `fts/factor_engine/factor_style_classifier.py` | **新增** | ⬜ 未实现 | `FactorStyleClassifier` 未实现（基于 FactorFamily 映射，无需分类器） |
+| `fts/factor_engine/regime.py` | **修改** | ✅ 已实现 | `RegimeAwareSelector` + `MarketRegime` TypedDict（bull/bear/oscillate/high_vol/low_vol） |
+| `fts/factor_engine/portfolio_loop.py` | **修改** | ✅ 已实现 | `REGIME_FAMILY_MULTIPLIERS` + `regime_adaptive_weight_adjustment()` + `PortfolioLoop.enable_regime_adaptation`（Step 2.5） |
+| `fts/factor_engine/factor_db/schema.py` | **修改** | ⬜ 未实现 | `factor_catalog.style_tags` 字段未新增 |
+| `fts/monitor/prometheus_metrics.py` | **修改** | ⬜ 未实现 | Regime/权重变化指标未实现（当前为 `prometheus_setup.py`） |
+| `tests/factor_engine/test_adaptive_weight.py` | **新增** | ✅ 已实现 | 自适应权重测试（对应测试文件存在） |
+| `tests/factor_engine/test_regime_smoother.py` | **新增** | ⬜ 未实现 | Regime 平滑器测试（RegimeSmoother 未实现） |
+| `tests/factor_engine/test_style_classifier.py` | **新增** | ⬜ 未实现 | 风格分类测试（分类器未实现） |
 
 ---
 

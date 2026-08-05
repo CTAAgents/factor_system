@@ -2,7 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase A.2
-> 状态: 规划中
+> 状态: **部分实现**（`fts/monitor/elite_tracker.py`）
+> 实现说明: 生命周期管理以 `EliteFactorTracker` + `AutoRetireManager`（`fts/monitor/elite_tracker.py`）实现，持久化为 JSON 快照（`memory/tracking/{factor_id}.json`），**未**采用原设计的 DuckDB `factor_status_history` 表与 `FactorDecayTracker` 类；`factor_catalog` 状态字段扩展未实现。
 
 ---
 
@@ -26,43 +27,45 @@
 
 ### 2.1 因子状态枚举
 
+> **实现现状**: `EliteFactorTracker`（`fts/monitor/elite_tracker.py`）定义了 7 状态生命周期，状态枚举为 `Literal` 类型而非 `str Enum`。**缺少**原设计中的 `DELETED` 状态；新增 `RETIRED`（自动淘汰）与 `REJECTED`（准入被拒）状态。
+
 ```python
-class FactorStatus(str, Enum):
-    """因子生命周期状态。"""
-    ACTIVE = "active"                   # 活跃：参与组合构建
-    OBSERVING = "observing"             # 观察期：B 级准入后观察
-    DECAYING = "decaying"               # 衰减中：连续 3 月 IC < 0
-    CRITICAL = "critical_deprecated"    # 严重衰减：连续 6 月 Sharpe 下降 > 50%
-    DEPRECATED = "deprecated"           # 已淘汰：连续 12 月无改善
-    DELETED = "deleted"                 # 已删除：手动清理
+FactorStatus = Literal[
+    "active",           # 活跃
+    "observing",        # 观察期 (B级因子)
+    "decaying",         # 衰减中
+    "critical_decay",   # 严重衰减
+    "retired",          # 已淘汰
+    "deprecated",       # 已废弃 (保留历史)
+    "rejected",         # 被拒绝准入
+]
+"""因子生命周期状态。"""
 ```
 
-**状态转移规则**:
+**实际状态转移规则**（`EliteFactorTracker._check_state_transition`）:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ACTIVE: A 级准入
-    [*] --> OBSERVING: B 级准入
+    [*] --> active: A级准入 (score>=40)
+    [*] --> observing: B级准入 (30<=score<40)
+    [*] --> rejected: C级 (score<30)
     
-    ACTIVE --> OBSERVING: 每月增量评估降级为 B 级
-    ACTIVE --> DECAYING: 连续 3 月 IC < 0
+    observing --> active: 观察期结束且 quality_score>=B 阈值
+    observing --> decaying: 观察期结束未达标
     
-    OBSERVING --> ACTIVE: 连续 3 月达 A 级
-    OBSERVING --> DECAYING: 观察期结束未达标
+    active --> decaying: 连续3月IC<0 或 周度连续4周零IC
+    active --> critical_decay: 连续6月Sharpe降>50%
+    decaying --> critical_decay: 连续6月Sharpe降>50%
     
-    DECAYING --> ACTIVE: 连续 3 月 IC > 0
-    DECAYING --> CRITICAL: 连续 6 月 Sharpe 降 > 50%
-    
-    CRITICAL --> DECAYING: 表现回升
-    CRITICAL --> DEPRECATED: 连续 12 月无改善
-    
-    DEPRECATED --> ACTIVE: 手动/回滚恢复
-    DEPRECATED --> [*]: 超过保留期（24 个月）
-    
-    DELETED --> [*]
+    active/decaying --> retired: AutoRetireManager 自动淘汰
+    retired/deprecated --> active: 冷却期后可重新评估
 ```
 
+**分级准入阈值**（`GradeThreshold`）: A级≥40 / B级≥30 / 观察期 3 个月 / 连续 IC<0 3 个月判定衰减 / 连续 Sharpe 下降 6 个月判定严重衰减。
+
 ### 2.2 Schema 扩展
+
+> **实现现状**: **未实现**。实际持久化为 JSON 快照：`memory/tracking/{factor_id}.json`（`TrackingSnapshot` dict，含 `status`/`consecutive_zero_months`/`consecutive_sharpe_decline_months`/`observation_end` 等字段），由 `EliteFactorTracker` 通过 `atomic_read`/`atomic_write` 维护。以下 DuckDB 表扩展为预留设计。
 
 在 `factor_catalog` 表上扩展状态追踪字段：
 
@@ -280,50 +283,61 @@ def evaluate_decay(factor: FactorCatalog,
 
 ## 4. 接口契约
 
-### 4.1 `FactorDecayTracker` 类
+### 4.1 `EliteFactorTracker` 类（实际实现，替代原设计 `FactorDecayTracker`）
+
+> **实现现状**: 生命周期管理实际由 `fts/monitor/elite_tracker.py` 的 `EliteFactorTracker` 与 `AutoRetireManager` 承担。原设计中的 `FactorDecayTracker` 类未实现。
 
 ```python
-class FactorDecayTracker:
-    """因子衰减追踪器。
+class EliteFactorTracker:
+    """精英因子样本外跟踪器。
 
     Usage:
-        tracker = FactorDecayTracker(repository, config)
-        # 运行月度增量评估
-        report = tracker.run_monthly_eval()
-        # 查看单个因子衰减状态
-        status = tracker.get_decay_status(factor_id)
-        # 生成衰减报告
-        report = tracker.generate_decay_report()
+        tracker = EliteFactorTracker(tracking_dir="memory/tracking")
+        tracker.init_tracker(factor_id, quality_score=42.0, grade="A")
+        tracker.update(factor_id, ic=0.03, sharpe=1.8, ...)   # 月度指标更新
+        decaying = tracker.get_decaying()                      # 衰减边缘因子
+        retired = tracker.auto_retire(...)                     # 自动淘汰
+        report = tracker.run_monthly_evaluation()              # 月度评估
     """
 
-    def __init__(self, repository: FactorDbRepository,
-                 config: DecayConfig | None = None) -> None: ...
+    def __init__(self, tracking_dir: str = "memory/tracking",
+                 grade_threshold: GradeThreshold | None = None) -> None: ...
 
-    def run_monthly_eval(self) -> list[DecayEvalResult]:
-        """对所有 active/observing 因子执行增量评估。"""
-        ...
+    def init_tracker(self, factor_id: str, quality_score: float,
+                     grade: FactorGrade, ...) -> None:
+        """初始化跟踪记录（晋升精英池时调用）。"""
 
-    def evaluate_single(self, factor_id: str) -> DecayEvalResult:
-        """评估单个因子的衰减状态。"""
-        ...
+    def update(self, factor_id: str, ic: float, sharpe: float,
+               quality_score: float, ...) -> dict:
+        """更新月度指标，触发状态机检查。"""
 
-    def get_decay_status(self, factor_id: str) -> FactorDecayStatus:
-        """获取因子当前衰减状态。"""
-        ...
+    def determine_grade(self, quality_score: float) -> FactorGrade:
+        """按阈值分级 A/B/C。"""
 
-    def generate_decay_report(self) -> DecayReport:
-        """生成全量因子衰减报告。"""
-        ...
+    def get(self, factor_id: str) -> dict | None: ...
+    def list_all(self) -> list[dict]: ...
+    def get_decaying(self, max_consecutive: int = 4) -> list[dict]: ...
+    def get_by_status(self, status: FactorStatus) -> list[dict]: ...
+    def run_monthly_evaluation(self) -> dict:
+        """对所有跟踪因子执行月度增量评估。"""
+    def report(self) -> dict:
+        """生成全量衰减报告。"""
 
-    def promote_deprecated(self, factor_id: str,
-                           reason: str = '') -> DecayEvalResult:
-        """手动将废弃因子恢复为 active。"""
-        ...
 
-    def permanent_delete_elapsed(self) -> int:
-        """清理超过保留期的废弃因子。"""
-        ...
+class AutoRetireManager:
+    """自动淘汰管理器（替代原设计 permanent_delete_elapsed）。"""
+
+    def run(self) -> list[str]:
+        """扫描并淘汰连续零 IC / 6 月衰减率超限的因子。"""
+    def can_reevaluate(self, factor_id: str) -> bool:
+        """冷却期内不可重新评估（默认 7 天）。"""
 ```
+
+> **与原设计的差异**:
+> - 存储: JSON 快照（`memory/tracking/`）替代 DuckDB `factor_status_history` 表。
+> - 淘汰: `AutoRetireManager`（周度零 IC 4 次 / 6 月衰减率 > 30%）替代"连续 12 月无改善"规则。
+> - 恢复: 淘汰后经冷却期（7 天）可重新评估，替代"保留期 24 个月 + 手动恢复"。
+> - Prometheus 衰减指标（第 6 节）未实现。
 
 ### 4.2 `DecayReport` 类型
 
@@ -437,15 +451,15 @@ scheduler/  (每月 1 日)
 
 ## 8. 文件改动清单
 
-| 文件 | 动作 | 说明 |
-|------|------|------|
-| `fts/factor_engine/factor_decay_tracker.py` | **新增** | `FactorDecayTracker` 类及判定算法 |
-| `fts/factor_engine/factor_db/schema.py` | **修改** | `factor_catalog` 扩展状态字段 + `factor_status_history` 表 |
-| `fts/factor_engine/factor_db/repository.py` | **修改** | 衰减追踪相关 CRUD |
-| `fts/monitor/prometheus_metrics.py` | **修改** | 新增衰减追踪 Prometheus 指标 |
-| `fts/scheduler/schedules.py` | **修改** | 新增月度增量评估定时任务 |
-| `tests/factor_engine/test_factor_decay_tracker.py` | **新增** | 衰减追踪单元测试 |
-| `tests/factor_engine/test_decay_state_machine.py` | **新增** | 状态机转移测试 |
+| 文件 | 动作 | 现状 | 说明 |
+|------|------|------|------|
+| `fts/monitor/elite_tracker.py` | **新增** | ✅ 已实现 | `EliteFactorTracker`（状态机/分级准入/月度评估）+ `AutoRetireManager`（自动淘汰） |
+| `fts/factor_engine/factor_db/schema.py` | **修改** | ⬜ 未实现 | `factor_catalog` 状态字段 + `factor_status_history` 表未新增 |
+| `fts/factor_engine/factor_db/repository.py` | **修改** | ⬜ 未实现 | 衰减追踪 CRUD 未实现（改用 JSON 快照） |
+| `fts/monitor/prometheus_metrics.py` | **修改** | ⬜ 未实现 | 衰减追踪 Prometheus 指标未实现（当前为 `prometheus_setup.py`，未含衰减指标） |
+| `fts/scheduler/schedules.py` | **修改** | ⬜ 未实现 | 月度增量评估定时任务未实现（月度评估由演化循环 `finally` 块触发） |
+| `tests/factor_engine/test_factor_decay_tracker.py` | **新增** | ⬜ 未实现 | 对应测试以 `tests/factor_engine/test_elite_tracker.py` 等实现 |
+| `tests/factor_engine/test_decay_state_machine.py` | **新增** | ⬜ 未实现 | 状态机转移测试未单独存在（覆盖于 elite_tracker 测试） |
 
 ---
 
