@@ -414,6 +414,13 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         lines.append(f"fts_combo_sharpe {_metrics.get('fts_combo_sharpe', 0.0)}")
         lines.append("")
 
+        # ── 因子生命周期 / Regime 权重指标 (A.2/A.3) ──
+        try:
+            from .prometheus_metrics import metrics_registry
+            lines.extend(metrics_registry.render())
+        except Exception as e:  # noqa: BLE001
+            logger.error("获取生命周期/Regime 指标失败: %s", e)
+
         # ── DataQualityMonitor 指标 ──
         dq_monitor = get_data_quality_monitor()
         if dq_monitor is not None:

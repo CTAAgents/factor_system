@@ -513,6 +513,169 @@ class DataQualityMonitor:
         }
 
 
+# ─── B.1 三维指标计算函数（完整性/准确性/及时性） ──────────
+
+
+def compute_coverage_ratio(df: pd.DataFrame, expected_symbols: set[str]) -> float:
+    """完整性: 品种覆盖率 = 实际品种 ∩ 预期品种 / 预期品种数。"""
+    if not expected_symbols:
+        return 0.0
+    if "symbol" not in df.columns or df.empty:
+        return 0.0
+    actual = set(df["symbol"].unique())
+    return len(actual & expected_symbols) / len(expected_symbols)
+
+
+def compute_timestamp_continuity(df: pd.DataFrame, freq: str = "D") -> float:
+    """完整性: 时间戳连续率（按指定频率的连续时间戳对齐）。"""
+    if df.empty or "timestamp" not in df.columns:
+        return 0.0
+    timestamps = pd.to_datetime(df["timestamp"]).sort_values().unique()
+    if len(timestamps) < 2:
+        return 1.0
+    expected = pd.date_range(start=timestamps[0], end=timestamps[-1], freq=freq)
+    if len(expected) == 0:
+        return 0.0
+    actual_set = set(timestamps)
+    return len(actual_set & set(expected)) / len(expected)
+
+
+def compute_field_completeness(df: pd.DataFrame, field: str) -> float:
+    """完整性: 单个字段非空率。"""
+    if field not in df.columns:
+        return 0.0
+    if df.empty:
+        return 0.0
+    return float(df[field].notna().mean())
+
+
+def compute_missing_ratio(df: pd.DataFrame) -> float:
+    """完整性: 缺失值率（全表 NaN 占比）。"""
+    if df.empty:
+        return 0.0
+    return float(df.isna().sum().sum() / (df.shape[0] * df.shape[1]))
+
+
+def compute_cross_source_deviation(primary: pd.Series, secondary: pd.Series) -> float:
+    """准确性: 多源交叉偏差率（相对偏差的中位数）。"""
+    merged = pd.concat([primary.rename("p"), secondary.rename("s")], axis=1).dropna()
+    if merged.empty:
+        return 0.0
+    deviations = (merged["p"] - merged["s"]).abs() / merged["s"].abs().clip(lower=0.001)
+    return float(deviations.median())
+
+
+def compute_outlier_ratio(series: pd.Series, threshold: float = 3.0) -> float:
+    """准确性: 异常值比率（3σ 准则）。"""
+    if len(series) < 2:
+        return 0.0
+    mean, std = float(series.mean()), float(series.std())
+    if std == 0:
+        return 0.0
+    outliers = ((series - mean).abs() > threshold * std).sum()
+    return float(outliers / len(series))
+
+
+def compute_jump_detection(df: pd.DataFrame, threshold: float = 0.15) -> int:
+    """准确性: 价格跳变次数（单日涨跌 > threshold）。"""
+    if "close" not in df.columns or len(df) < 2:
+        return 0
+    returns = df["close"].pct_change().abs()
+    return int((returns > threshold).sum())
+
+
+def compute_data_drift_rate(reference: pd.Series, current: pd.Series,
+                            bins: int = 10) -> float:
+    """准确性: PSI 数据漂移率（> 0.25 表示严重漂移）。"""
+    if reference.dropna().empty or current.dropna().empty:
+        return 0.0
+    ref_counts, bin_edges = np.histogram(reference.dropna(), bins=bins)
+    curr_counts, _ = np.histogram(current.dropna(), bins=bin_edges)
+    ref_ratios = np.clip(ref_counts / ref_counts.sum(), 1e-6, None)
+    curr_ratios = np.clip(curr_counts / curr_counts.sum(), 1e-6, None)
+    return float(np.sum((curr_ratios - ref_ratios) * np.log(curr_ratios / ref_ratios)))
+
+
+def compute_update_delay(latest_timestamp, now=None) -> float:
+    """及时性: 数据更新延迟（秒）。"""
+    from datetime import datetime
+
+    now = now or datetime.now()
+    ts = pd.to_datetime(latest_timestamp)
+    return float((now - ts.to_pydatetime()).total_seconds())
+
+
+def compute_cache_hit_ratio(hits: int, total: int) -> float:
+    """及时性: 缓存命中率。"""
+    return hits / total if total > 0 else 0.0
+
+
+def compute_freshness(df: pd.DataFrame, now=None) -> float:
+    """及时性: 数据新鲜度（最大数据年龄，秒）。"""
+    from datetime import datetime
+
+    if df.empty or "timestamp" not in df.columns:
+        return float("inf")
+    now = now or datetime.now()
+    latest = pd.to_datetime(df["timestamp"]).max().to_pydatetime()
+    return float((now - latest).total_seconds())
+
+
+def evaluate_source_data(df: pd.DataFrame,
+                         expected_symbols: set[str] | None = None,
+                         freq: str = "D",
+                         reference_close: pd.Series | None = None) -> dict[str, Any]:
+    """汇总评估单数据源的三维质量指标（B.1）。
+
+    Args:
+        df: OHLCV DataFrame（含 symbol/timestamp/close 等列）
+        expected_symbols: 预期品种集合（缺省取实际品种）
+        freq: 时间戳连续率频率
+        reference_close: 参考 close 序列（用于 PSI 漂移，可选）
+
+    Returns:
+        {
+            "completeness": {...},
+            "accuracy": {...},
+            "timeliness": {...},
+        }
+    """
+    expected = expected_symbols or (
+        set(df["symbol"].unique()) if "symbol" in df.columns else set()
+    )
+    completeness = {
+        "coverage_ratio": compute_coverage_ratio(df, expected),
+        "timestamp_continuity": compute_timestamp_continuity(df, freq),
+        "missing_ratio": compute_missing_ratio(df),
+    }
+    if "close" in df.columns:
+        completeness["field_completeness_close"] = compute_field_completeness(df, "close")
+
+    accuracy: dict[str, Any] = {"outlier_ratio": 0.0, "jump_detection_count": 0}
+    if "close" in df.columns:
+        accuracy["outlier_ratio"] = compute_outlier_ratio(df["close"])
+        accuracy["jump_detection_count"] = compute_jump_detection(df)
+        if reference_close is not None and len(reference_close) > 0:
+            accuracy["data_drift_rate"] = compute_data_drift_rate(
+                reference_close, df["close"]
+            )
+
+    timeliness = {
+        "freshness_seconds": compute_freshness(df),
+        "cache_hit_ratio": 0.0,
+    }
+    if "timestamp" in df.columns and not df.empty:
+        timeliness["update_delay_seconds"] = compute_update_delay(
+            pd.to_datetime(df["timestamp"]).max()
+        )
+
+    return {
+        "completeness": completeness,
+        "accuracy": accuracy,
+        "timeliness": timeliness,
+    }
+
+
 # ─── 便捷函数 ───────────────────────────────────────────────
 
 

@@ -113,6 +113,20 @@ def register_default_tasks() -> None:
             description="健康检查：监控所有循环状态",
             trace_id_prefix="fts.health",
         ),
+        TaskSpec(
+            name="monthly_decay_eval",
+            cron_expression="0 2 1 * *",          # 每月 1 日 02:00
+            callable_path="fts.scheduler.jobs.monthly_decay_eval_job",
+            description="月度因子衰减评估（A.2）：精英池增量评估 + 状态机 + 自动淘汰",
+            trace_id_prefix="fts.decay",
+        ),
+        TaskSpec(
+            name="data_quality_eval",
+            cron_expression="*/5 * * * *",        # 每 5 分钟
+            callable_path="fts.scheduler.jobs.data_quality_eval_job",
+            description="数据质量周期评估（B.1）：质量快照 + 告警检查",
+            trace_id_prefix="fts.dq",
+        ),
     ]
     for spec in defaults:
         if spec.name not in REGISTRY:

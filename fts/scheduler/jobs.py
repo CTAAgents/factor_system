@@ -200,10 +200,80 @@ def health_check_job() -> None:
         logger.error("[健康检查] 失败: %s", e, exc_info=True)
 
 
+# ── 月度衰减评估 — 每月 1 日 02:00（A.2）───────────────────
+
+def monthly_decay_eval_job() -> None:
+    """月度因子衰减评估：对精英池执行增量评估并触发状态机/自动淘汰。
+
+    关联设计: A.2 因子衰减追踪（EliteFactorTracker.run_monthly_evaluation）。
+    """
+    trace_id = f"fts.decay.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[衰减评估] 启动 trace_id=%s", trace_id)
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.monitor.elite_tracker import EliteFactorTracker, AutoRetireManager
+        from fts.config import get_config
+
+        cfg = get_config()
+        tracker = EliteFactorTracker(tracking_dir=f"{cfg.memory_dir}/tracking")
+        report = tracker.run_monthly_evaluation()
+        logger.info("[衰减评估] 完成: %s", report)
+
+        # 同步衰减计数到 Prometheus 指标
+        try:
+            from fts.monitor.prometheus_metrics import metrics_registry
+            snapshots = tracker.list_all()
+            counts = {"active": 0, "decaying": 0, "critical_decay": 0, "deprecated": 0}
+            for snap in snapshots:
+                status = snap.get("status", "active")
+                counts[status] = counts.get(status, 0) + 1
+            metrics_registry.update_decay_counts(
+                active=counts.get("active", 0),
+                decaying=counts.get("decaying", 0),
+                critical=counts.get("critical_decay", 0),
+                deprecated=counts.get("deprecated", 0),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[衰减评估] 指标同步失败: %s", e)
+
+        # 自动淘汰
+        retire_mgr = AutoRetireManager(tracker)
+        retired = retire_mgr.run()
+        if retired:
+            logger.warning("[衰减评估] 自动淘汰: %s", retired)
+    except Exception as e:
+        logger.error("[衰减评估] 失败: %s", e, exc_info=True)
+
+
+# ── 数据质量评估 — 每 5 分钟（B.1）─────────────────────────
+
+def data_quality_eval_job() -> None:
+    """数据质量周期评估（B.1）。
+
+    当前对已注册的数据源质量监控器执行 evaluate 并输出日志；
+    数据获取由数据源层负责，本任务仅做质量评估与告警检查。
+    """
+    trace_id = f"fts.dq.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.monitor.http_server import get_data_quality_monitor
+
+        monitor = get_data_quality_monitor()
+        if monitor is None:
+            logger.info("[数据质量] 无已注册监控器，跳过 (trace_id=%s)", trace_id)
+            return
+        snapshot = monitor.get_metrics_snapshot()
+        logger.info("[数据质量] 评估完成 (trace_id=%s): %s", trace_id, snapshot)
+    except Exception as e:
+        logger.error("[数据质量] 评估失败: %s (trace_id=%s)", e, trace_id)
+
+
 __all__ = [
     "l1_meta_loop_job",
     "l2_evolution_loop_job",
     "l3_portfolio_loop_job",
     "futures_signal_pipeline_job",
     "health_check_job",
+    "monthly_decay_eval_job",
+    "data_quality_eval_job",
 ]
