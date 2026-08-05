@@ -616,15 +616,160 @@ class GPEvolver:
 # ─── 表达式树 → FactorProgram 转换 ───────────────────────────
 
 
+def _render_expression(expression: str) -> str:
+    """将 GP 表达式字符串重写为可静态嵌入的代码。
+
+    表达式中的名称引用（数据列名 / 算子名）统一改写为
+    ``_ns['name']`` 形式，运行时从执行命名空间解析：
+        ts_mean(close) - close
+        → _ns['ts_mean'](_ns['close']) - _ns['close']
+
+    避免 eval/exec 调用（沙箱 FORBIDDEN_NAMES 禁止），
+    保证生成的代码可通过 validate_factor_code 沙箱校验。
+    """
+    import ast
+
+    class _NameToSubscript(ast.NodeTransformer):
+        def visit_Name(self, node: ast.Name) -> ast.AST:  # type: ignore[override]
+            return ast.Subscript(
+                value=ast.Name(id="_ns", ctx=ast.Load()),
+                slice=ast.Constant(value=node.id),
+                ctx=ast.Load(),
+            )
+
+    tree = ast.parse(expression, mode="eval")
+    tree = _NameToSubscript().visit(tree)  # type: ignore[assignment]
+    ast.fix_missing_locations(tree)
+    return ast.unparse(tree.body)  # type: ignore[arg-type]
+
+
+# 生成的因子代码遵循 FTS 标准约定 (def factor_program(data, params))，
+# 可直接在 BacktestPipeline._execute_factor_code / FactorProgram 沙箱中执行；
+# 表达式中的 GP 算子（ts_mean/rank 等）以内联实现注入执行命名空间，
+# 语义与 _evaluate_tree 保持一致。{factor_id} 与 {expression} 由
+# tree_to_factor_program 格式化填充（{expression} 为已重写的静态代码）。
+_GP_FACTOR_CODE_TEMPLATE = '''\
+"""GP 演化因子 {factor_id}."""
+
+def factor_program(data, params):
+    """GP 表达式因子 — 标准 factor_program 约定。"""
+    import numpy as np
+    import pandas as pd
+
+    # 数据列绑定到局部命名空间（兼容 DataFrame / dict[str, ndarray] 输入）
+    _ns = {{}}
+    if isinstance(data, pd.DataFrame):
+        for _col in data.columns:
+            _ns[_col] = data[_col]
+    else:
+        for _col, _v in data.items():
+            _ns[_col] = pd.Series(_v)
+
+    # ── GP 算子内联实现（与 gp_evolver._evaluate_tree 语义一致） ──
+    def add(a, b):
+        return a + b
+
+    def sub(a, b):
+        return a - b
+
+    def mul(a, b):
+        return a * b
+
+    def div(a, b):
+        b_arr = np.asarray(b, dtype=float)
+        return np.divide(a, np.where(b_arr == 0, np.nan, b_arr))
+
+    def scale(x, factor=1.0):
+        return x * float(factor)
+
+    def ts_mean(x, window=20):
+        return x.rolling(window).mean()
+
+    def ts_std(x, window=20):
+        return x.rolling(window).std()
+
+    def ts_max(x, window=20):
+        return x.rolling(window).max()
+
+    def ts_min(x, window=20):
+        return x.rolling(window).min()
+
+    def ts_sum(x, window=20):
+        return x.rolling(window).sum()
+
+    def ts_product(x, window=20):
+        return x.rolling(window).prod()
+
+    def ts_rank(x, window=20):
+        return x.rolling(window).rank(pct=True)
+
+    def ts_zscore(x, window=20):
+        m = x.rolling(window).mean()
+        s = x.rolling(window).std()
+        return (x - m) / s.replace(0, np.nan)
+
+    def ts_momentum(x, window=20):
+        return x / x.shift(window) - 1.0
+
+    def ts_volatility(x, window=20):
+        return x.pct_change().rolling(window).std()
+
+    def ts_skewness(x, window=20):
+        return x.rolling(window).skew()
+
+    def ts_kurtosis(x, window=20):
+        return x.rolling(window).kurt()
+
+    def delta(x, periods=1):
+        return x.diff(periods)
+
+    def pct_change(x, periods=1):
+        return x.pct_change(periods)
+
+    def rank(x):
+        return x.rank(pct=True)
+
+    def zscore(x):
+        return (x - x.mean()) / x.std()
+
+    def log_return(x):
+        return np.log(x / x.shift(1))
+
+    def if_then_else(cond, a, b):
+        return pd.Series(np.where(cond > 0, a, b), index=cond.index)
+
+    def conditional_weight(a, b, threshold=0.0):
+        return pd.Series(np.where(a > threshold, a * b, 0.0), index=a.index)
+
+    _ns.update(
+        add=add, sub=sub, mul=mul, div=div, scale=scale,
+        ts_mean=ts_mean, ts_std=ts_std, ts_max=ts_max, ts_min=ts_min,
+        ts_sum=ts_sum, ts_product=ts_product, ts_rank=ts_rank,
+        ts_zscore=ts_zscore, ts_momentum=ts_momentum,
+        ts_volatility=ts_volatility, ts_skewness=ts_skewness,
+        ts_kurtosis=ts_kurtosis, delta=delta, pct_change=pct_change,
+        rank=rank, zscore=zscore, log_return=log_return,
+        if_then_else=if_then_else, conditional_weight=conditional_weight,
+    )
+
+    _result = ({expression})
+    if isinstance(_result, pd.Series):
+        return _result.values
+    return np.asarray(_result, dtype=float)
+'''
+
+
 def tree_to_factor_program(tree: ExpressionTree) -> dict[str, Any]:
     """将 GP 表达式树转换为因子程序字典。
 
-    生成的因子代码示例::
+    生成的因子代码遵循标准约定 `def factor_program(data, params)`，
+    与 BacktestPipeline._execute_factor_code / FactorProgram 沙箱兼容，
+    示例表达式求值::
 
-        def compute(close, high, low, volume):
-            from .ops import ts_mean, rank
-            x1 = ts_mean(close, window=20)
-            return rank(x1)
+        def factor_program(data, params):
+            ...
+            _result = eval("ts_mean(close, 20) - close", ...)
+            return np.asarray(_result, dtype=float)
 
     Args:
         tree: GP 表达式树
@@ -641,18 +786,10 @@ def tree_to_factor_program(tree: ExpressionTree) -> dict[str, Any]:
         unique_key.encode()
     ).hexdigest()[:8]
 
-    code_lines = [
-        f'"""GP 演化因子 {factor_id}."""',
-        "",
-        "import numpy as np",
-        "import pandas as pd",
-        "",
-        "def compute(close, high, low, volume):",
-        f'    """计算因子值."""',
-        f"    return ({expression})",
-        "",
-    ]
-    code = "\n".join(code_lines)
+    code = _GP_FACTOR_CODE_TEMPLATE.format(
+        factor_id=factor_id,
+        expression=_render_expression(expression),
+    )
 
     return {
         "factor_id": factor_id,

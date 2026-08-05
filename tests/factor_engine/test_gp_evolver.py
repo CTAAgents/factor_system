@@ -528,7 +528,7 @@ class TestTreeToFactorProgram:
         assert result["tree_depth"] == 1
         assert result["tree_size"] == 3
         assert result["expression"] == "add(close, high)"
-        assert "compute" in result["code"]
+        assert "def factor_program" in result["code"]
 
     def test_unique_factor_ids(self):
         tree1 = ExpressionTree(
@@ -565,4 +565,116 @@ class TestTreeToFactorProgram:
             fitness=0.9,
         )
         result = tree_to_factor_program(tree)
-        assert "mul(close, volume)" in result["code"]
+        assert "_ns['mul'](_ns['close'], _ns['volume'])" in result["code"]
+
+
+# ─── GP 因子代码可执行性 ──────────────────────────────────
+
+
+class TestGpFactorExecutable:
+    """GP 因子代码在标准执行路径下的可执行性。
+
+    回归: 此前 tree_to_factor_program 生成 `compute` 函数约定，
+    不匹配 factor_program/output 约定，_execute_factor_code 静默返回
+    全零信号，导致 GP 后代因子全部被「常数信号」拦截、失败率 100% 熔断。
+    """
+
+    @staticmethod
+    def _make_data() -> pd.DataFrame:
+        """合成 OHLCV 数据（含 open 列，_execute_factor_code 前置访问 data['open']）。"""
+        rng = np.random.default_rng(7)
+        n = 200
+        close = 100 + np.cumsum(rng.normal(0, 0.5, n))
+        return pd.DataFrame({
+            "open": close + rng.normal(0, 0.1, n),
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": rng.uniform(1e4, 1e6, n),
+        })
+
+    @staticmethod
+    def _make_tree(expression: str) -> ExpressionTree:
+        if expression == "ts_mean(close) - close":
+            ts_node = TreeNode(
+                op_name="ts_mean",
+                children=[TreeNode(operand="close", is_terminal=True)],
+                is_terminal=False,
+            )
+            root = TreeNode(
+                op_name="sub",
+                children=[ts_node, TreeNode(operand="close", is_terminal=True)],
+                is_terminal=False,
+            )
+            return ExpressionTree(
+                root=root, depth=2, size=5, expression=expression, fitness=0.5,
+            )
+        root = TreeNode(
+            op_name="add",
+            children=[
+                TreeNode(operand="close", is_terminal=True),
+                TreeNode(operand="high", is_terminal=True),
+            ],
+            is_terminal=False,
+        )
+        return ExpressionTree(
+            root=root, depth=1, size=3, expression=expression, fitness=0.8,
+        )
+
+    def test_code_uses_standard_convention(self):
+        """生成的代码应遵循 factor_program 约定，而非 compute 约定。"""
+        tree = self._make_tree("ts_mean(close) - close")
+        result = tree_to_factor_program(tree)
+        assert "def factor_program(data, params)" in result["code"]
+        assert "def compute" not in result["code"]
+
+    def test_executable_in_backtest_pipeline(self):
+        """GP 因子代码经 BacktestPipeline._execute_factor_code 应返回非零信号。"""
+        from fts.factor_engine.backtest_pipeline import BacktestPipeline
+
+        data = self._make_data()
+        tree = self._make_tree("ts_mean(close) - close")
+        result = tree_to_factor_program(tree)
+        signal = BacktestPipeline._execute_factor_code(result["code"], data, {})
+        assert isinstance(signal, np.ndarray)
+        assert len(signal) == len(data)
+        assert np.std(signal) > 1e-9
+
+    def test_executable_via_factor_executor(self):
+        """GP 因子代码应通过 FactorExecutor 沙箱编译并执行。"""
+        from fts.factor_engine.factor_program import FactorExecutor
+
+        data = self._make_data()
+        tree = self._make_tree("ts_mean(close) - close")
+        result = tree_to_factor_program(tree)
+        executor = FactorExecutor(result)
+        out = executor.execute(data, {})
+        assert isinstance(out, np.ndarray)
+        assert len(out) == len(data)
+        assert np.std(out) > 1e-9
+
+    def test_runtime_check_passes(self):
+        """演化循环 _check_factor_runtime 的判定逻辑应放行 GP 因子。"""
+        from fts.factor_engine.backtest_pipeline import BacktestPipeline
+
+        data = self._make_data()
+        tree = self._make_tree("ts_mean(close) - close")
+        result = tree_to_factor_program(tree)
+        signal = BacktestPipeline._execute_factor_code(result["code"], data, {})
+        assert isinstance(signal, np.ndarray) and len(signal) == len(data)
+        assert np.std(signal) >= 1e-12  # 非「常数信号」
+
+    def test_execute_factor_code_accepts_series_return(self):
+        """_execute_factor_code 应接受 factor_program 返回 pd.Series（此前静默返回全零）。"""
+        from fts.factor_engine.backtest_pipeline import BacktestPipeline
+
+        data = self._make_data()
+        code = (
+            "def factor_program(data, params):\n"
+            "    import pandas as pd\n"
+            "    return pd.Series(data['close'] - data['close'].mean())\n"
+        )
+        signal = BacktestPipeline._execute_factor_code(code, data, {})
+        assert isinstance(signal, np.ndarray)
+        assert len(signal) == len(data)
+        assert np.std(signal) > 1e-9

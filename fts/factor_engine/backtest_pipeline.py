@@ -450,7 +450,7 @@ class BacktestPipeline:
                 for col in data.columns
             }
             result = factor_fn(data_dict, params)
-            if isinstance(result, np.ndarray):
+            if isinstance(result, (np.ndarray, pd.Series)):
                 result = np.asarray(result, dtype=float)
                 result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
                 result = np.clip(result, -10.0, 10.0)
