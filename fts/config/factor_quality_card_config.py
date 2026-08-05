@@ -355,6 +355,65 @@ def create_config(
 
 # ─── 预设配置 ──────────────────────────────────────────
 
+def get_futures_config() -> FactorQualityCardFullConfig:
+    """期货专用配置: 针对日频期货因子降低准入标准。
+
+    日频期货数据信噪比低，IC/Sharpe 天然低于股票日频。
+    调整策略:
+    - IC 阈值下调 30% (0.08→0.06, 0.03→0.02)
+    - Sharpe 阈值下调 30% (3.0→2.0, 1.5→1.0)
+    - 换手率放宽 (期货高频交易更频繁)
+    - 容量阈值下调 (期货主力合约规模小于股票)
+
+    A 级 >= 38 分, B 级 >= 28 分
+    """
+    config = FactorQualityCardFullConfig()
+
+    # 分级阈值降低
+    config.grades.grade_A_threshold = 38.0
+    config.grades.grade_B_min = 28.0
+    config.grades.min_grade = "B"
+
+    # IC 阈值下调（日频期货信噪比低）
+    config.ic_mapping.ic_high = 0.06
+    config.ic_mapping.ic_mid = 0.02
+    config.ic_mapping.ic_low = 0.008
+
+    # ICIR 阈值下调
+    config.icir_mapping.icir_high = 2.0
+    config.icir_mapping.icir_mid = 1.0
+    config.icir_mapping.icir_low = 0.5
+
+    # Sharpe 阈值下调（期货波动更大）
+    config.sharpe_mapping.sharpe_high = 2.0
+    config.sharpe_mapping.sharpe_mid = 1.0
+    config.sharpe_mapping.sharpe_low = 0.3
+
+    # Calmar 阈值下调
+    config.calmar_mapping.calmar_high = 1.5
+    config.calmar_mapping.calmar_mid = 0.8
+    config.calmar_mapping.calmar_low = 0.3
+
+    # 换手率放宽（期货可支持更高换手）
+    config.turnover_mapping.turnover_opt_low = 30.0
+    config.turnover_mapping.turnover_opt_high = 800.0
+    config.turnover_mapping.turnover_mid_low = 5.0
+    config.turnover_mapping.turnover_mid_high = 1500.0
+
+    # 容量阈值下调（期货主力合约规模小于股票）
+    config.capacity_mapping.capacity_high = 50_000_000
+    config.capacity_mapping.capacity_mid_high = 20_000_000
+    config.capacity_mapping.capacity_mid = 5_000_000
+    config.capacity_mapping.capacity_low = 500_000
+
+    # 默认值调整
+    config.defaults.data_frequency = "daily"
+    config.defaults.turnover = 0.5
+    config.defaults.capacity_estimate = 5_000_000
+
+    return config
+
+
 def get_conservative_config() -> FactorQualityCardFullConfig:
     """保守配置: 更严格的准入标准。
 
@@ -405,6 +464,7 @@ __all__ = [
     "FactorQualityCardFullConfig",
     "get_quality_card_config",
     "create_config",
+    "get_futures_config",
     "get_conservative_config",
     "get_aggressive_config",
     "get_permissive_config",

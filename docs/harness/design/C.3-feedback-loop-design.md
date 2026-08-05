@@ -2,8 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase C.3
-> 状态: **部分实现**（以经验链形式落地）
-> 实现说明: 反馈闭环的**经验沉淀**部分已实现于 `fts/factor_engine/experience_chain.py`（`ExperienceChain` 经验链 + `FailurePatternAnalyzer` 失败模式分析 + `create_trace_from_evaluation`，将演化失败经验注入 LLM prompt 引导后续演化）。原设计的 `FeedbackLoop`/`FeedbackTrigger`/`AttributionAnalyzer`/`EvolutionDirectionAdjuster`/`EvolutionEffectiveness` 类、`feedback_events` 等 4 张表、CLI `fts feedback` 子命令均**未实现**。
+> 状态: **已实现**（FeedbackLoop 家族 + 4 张反馈表 + CLI）
+> 实现说明: 反馈闭环完整实现于 `fts/factor_engine/feedback_loop.py`（`FeedbackTrigger`/`AttributionAnalyzer`/`EvolutionDirectionAdjuster`/`EvolutionEffectiveness`/`FeedbackLoop` 主类）、`factor_db/schema.py` 4 张反馈表（feedback_events/attribution_reports/feedback_processing_results/feedback_reports）、CLI `fts feedback` 子命令（trigger/process/report/stats）、Prometheus 反馈指标。经验沉淀复用 `fts/factor_engine/experience_chain.py`（`ExperienceChain` 经验链 + `FailurePatternAnalyzer`）作为归因输入之一。
 
 ---
 
@@ -697,22 +697,16 @@ CREATE INDEX IF NOT EXISTS idx_fr_period ON feedback_reports(period);
 
 ## 11. 文件改动清单
 
-> **实现现状**: 原设计新增文件均未实现，实际以 `fts/factor_engine/experience_chain.py`（经验链）承担部分反馈闭环职责。
+> **实现现状**: 反馈闭环完整实现（v2.9.0）。`FeedbackLoop` 家族合并于 `fts/factor_engine/feedback_loop.py` 单文件。
 
 | 文件 | 动作 | 现状 | 说明 |
 |------|------|------|------|
 | `fts/factor_engine/experience_chain.py` | **新增** | ✅ 已实现 | `ExperienceChain` + `FailurePatternAnalyzer` + `create_trace_from_evaluation` |
-| `fts/factor_engine/feedback_loop.py` | **新增** | ⬜ 未实现 | `FeedbackLoop`/`FeedbackTrigger` 未实现 |
-| `fts/factor_engine/attribution_analyzer.py` | **新增** | ⬜ 未实现 | `AttributionAnalyzer` 未实现 |
-| `fts/factor_engine/direction_adjuster.py` | **新增** | ⬜ 未实现 | `EvolutionDirectionAdjuster` 未实现 |
-| `fts/factor_engine/evolution_effectiveness.py` | **新增** | ⬜ 未实现 | `EvolutionEffectiveness` 未实现 |
-| `fts/factor_engine/factor_db/schema.py` | **修改** | ⬜ 未实现 | 反馈相关 4 张表未新增 |
-| `fts/factor_engine/factor_db/repository.py` | **修改** | ⬜ 未实现 | 反馈数据 CRUD 未实现 |
-| `fts/factor_engine/evolution_loop.py` | **修改** | ⬜ 未实现 | 反馈检查集成未实现（演化失败经验经 experience_chain 注入） |
-| `fts/monitor/prometheus_metrics.py` | **修改** | ⬜ 未实现 | 反馈闭环指标未实现 |
-| `tests/factor_engine/test_feedback_loop.py` | **新增** | ⬜ 未实现 | 反馈闭环测试未实现 |
-| `tests/factor_engine/test_attribution_analyzer.py` | **新增** | ⬜ 未实现 | 归因分析器测试未实现 |
-| `tests/factor_engine/test_direction_adjuster.py` | **新增** | ⬜ 未实现 | 方向调整器测试未实现 |
+| `fts/factor_engine/feedback_loop.py` | **新增** | ✅ 已实现 | `FeedbackLoop`/`FeedbackTrigger`/`AttributionAnalyzer`/`EvolutionDirectionAdjuster`/`EvolutionEffectiveness`（v2.9.0） |
+| `fts/factor_engine/factor_db/schema.py` | **修改** | ✅ 已实现 | 反馈相关 4 张表（feedback_events/attribution_reports/feedback_processing_results/feedback_reports） |
+| `fts/monitor/prometheus_metrics.py` | **修改** | ✅ 已实现 | 反馈闭环指标（triggers_total/events_pending/processing_total/attribution_accuracy 等） |
+| `fts/cli.py` | **修改** | ✅ 已实现 | `fts feedback trigger/process/report/stats` 子命令（v2.9.0） |
+| `tests/factor_engine/test_feedback_loop.py` | **新增** | ✅ 已实现 | 触发器/归因/方向调整/幂等/月度报告/CLI/指标/schema 测试（20 用例） |
 
 ---
 

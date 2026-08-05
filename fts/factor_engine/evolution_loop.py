@@ -323,18 +323,26 @@ class EvolutionLoop:
 
             # 使用已晋升的种子作为父因子（只有高IC种子才值得演化）
             parent_seeds = [s for s in seeds if s["factor_id"] in elite_ids]
+            # 种子因子全部已存在 elite 快照（重复跳过、无新晋升）时，
+            # 回退加载 elite 池作为父因子，使演化可基于既有精英因子继续
             if not parent_seeds:
-                print("[evo] 无合格父因子，跳过演化循环")
-                self.state_manager.mark_completed(state)
-                return EvolutionRunResult(
-                    run_id=run_id, trace_id=trace_id,
-                    generations_completed=0,
-                    total_factors_evaluated=0,
-                    total_factors_promoted=0,
-                    tokens_consumed=state.get("tokens_consumed", 0),
-                    status="completed",
-                    elite_factor_ids=elite_ids,
-                    seed_correlations=seed_correlations,
+                parent_seeds = self._load_elite_parent_factors()
+                if not parent_seeds:
+                    print("[evo] 无合格父因子，跳过演化循环")
+                    self.state_manager.mark_completed(state)
+                    return EvolutionRunResult(
+                        run_id=run_id, trace_id=trace_id,
+                        generations_completed=0,
+                        total_factors_evaluated=0,
+                        total_factors_promoted=0,
+                        tokens_consumed=state.get("tokens_consumed", 0),
+                        status="completed",
+                        elite_factor_ids=elite_ids,
+                        seed_correlations=seed_correlations,
+                    )
+                print(
+                    f"[evo] 种子因子均已晋升过，改用 elite 池 "
+                    f"{len(parent_seeds)} 个因子作为父因子"
                 )
 
             for generation in range(start_gen, start_gen + max_gen):
@@ -357,49 +365,102 @@ class EvolutionLoop:
                 # 选择父因子（UCT 树搜索，平衡探索与利用）
                 parent = self._select_parent_uct(parent_seeds)
 
-                # ── Step 1: 宏观演化（LLM 改逻辑） ──
+                # ── Step 1: 根据 evolution_mode 选择演化方式 ──
                 new_factor = None
                 evolution_method = "macro_evolution"
                 evolution_summary = ""
-                
-                # 1.1 宏观演化尝试
-                try:
-                    new_factor, macro_summary, macro_tokens = self.macro_evolver.evolve(
-                        parent, generation=generation, trace_id=trace_id
-                    )
-                    self.state_manager.add_tokens(state, macro_tokens)
-                    evolution_summary = macro_summary
-                except Exception as e:
-                    logger.warning(
-                        "宏观演化失败 [%s]: %s, 尝试 GP 演化作为备选",
-                        parent.get("name", "?"), e,
-                    )
-                
-                # 1.2 若宏观演化失败，回退到 GP 演化 (Phase C.1)
-                if new_factor is None:
+
+                # 读取演化模式配置 (Phase C.2)
+                from fts.config.settings import get_config
+                _fts_evo_cfg = get_config()
+                _evo_mode = getattr(_fts_evo_cfg, 'evolution_mode', 'hybrid')
+
+                if _evo_mode == "operator":
+                    # OPERATOR 模式：使用 expr_dsl 生成因子表达式
                     try:
-                        new_factor, gp_summary = self._run_gp_evolution(
+                        new_factor, op_summary = self._generate_operator_factor(
                             parent, generation=generation, trace_id=trace_id,
                         )
-                        evolution_method = "gp_evolution"
-                        evolution_summary = gp_summary
+                        evolution_method = "operator_evolution"
+                        evolution_summary = op_summary
                         logger.info(
-                            "GP 演化成功 [%s]: %s",
-                            parent.get("name", "?"), gp_summary,
+                            "算子演化成功 [%s]: %s",
+                            parent.get("name", "?"), op_summary,
                         )
-                    except Exception as gp_e:
+                    except Exception as e:
+                        logger.warning(
+                            "算子演化失败 [%s]: %s",
+                            parent.get("name", "?"), e,
+                        )
                         self._record_failure_trace(
-                            parent, generation, "gp_evolution",
-                            f"GP 演化也失败: {gp_e}", [], trace_id,
+                            parent, generation, "operator_evolution",
+                            f"算子演化失败: {e}", [], trace_id,
                         )
                         continue
+                else:
+                    # CODE / HYBRID 模式: 1.1 宏观演化尝试（LLM 改逻辑）
+                    try:
+                        new_factor, macro_summary, macro_tokens = self.macro_evolver.evolve(
+                            parent, generation=generation, trace_id=trace_id
+                        )
+                        self.state_manager.add_tokens(state, macro_tokens)
+                        evolution_summary = macro_summary
+                    except Exception as e:
+                        logger.warning(
+                            "宏观演化失败 [%s]: %s, 尝试 GP 演化作为备选",
+                            parent.get("name", "?"), e,
+                        )
 
-                if new_factor is None:
-                    self._record_failure_trace(
-                        parent, generation, "evolution",
-                        "宏观演化和 GP 演化均失败", [], trace_id,
-                    )
-                    continue
+                    # 1.2 若宏观演化失败，回退到 GP 演化 (Phase C.1)
+                    if new_factor is None:
+                        try:
+                            new_factor, gp_summary = self._run_gp_evolution(
+                                parent, generation=generation, trace_id=trace_id,
+                            )
+                            evolution_method = "gp_evolution"
+                            evolution_summary = gp_summary
+                            logger.info(
+                                "GP 演化成功 [%s]: %s",
+                                parent.get("name", "?"), gp_summary,
+                            )
+                        except Exception as gp_e:
+                            if _evo_mode == "hybrid":
+                                # hybrid 模式: GP 也失败时尝试算子演化
+                                try:
+                                    new_factor, op_summary = self._generate_operator_factor(
+                                        parent, generation=generation, trace_id=trace_id,
+                                    )
+                                    evolution_method = "operator_evolution"
+                                    evolution_summary = op_summary
+                                    logger.info(
+                                        "算子演化成功 (hybrid fallback) [%s]: %s",
+                                        parent.get("name", "?"), op_summary,
+                                    )
+                                except Exception as op_e:
+                                    self._record_failure_trace(
+                                        parent, generation, "hybrid_evolution",
+                                        f"GP 失败: {gp_e}, 算子也失败: {op_e}",
+                                        [], trace_id,
+                                    )
+                                    continue
+                            else:
+                                self._record_failure_trace(
+                                    parent, generation, "gp_evolution",
+                                    f"GP 演化也失败: {gp_e}", [], trace_id,
+                                )
+                                continue
+
+                    if new_factor is None:
+                        fail_msg = (
+                            "LLM、GP 和算子演化均失败"
+                            if _evo_mode == "hybrid"
+                            else "宏观演化和 GP 演化均失败"
+                        )
+                        self._record_failure_trace(
+                            parent, generation, "evolution",
+                            fail_msg, [], trace_id,
+                        )
+                        continue
 
                 # ── Step 1.3: 后代因子运行时校验（源头拦截广播错误/常数信号） ──
                 runtime_ok, runtime_reason = self._check_factor_runtime(new_factor)
@@ -411,6 +472,21 @@ class EvolutionLoop:
                     self._record_failure_trace(
                         new_factor, generation, evolution_method,
                         f"运行时校验失败: {runtime_reason}", [], trace_id,
+                    )
+                    continue
+
+                # ── Step 1.4: 快速预筛选（源头拦截低质量信号，避免浪费评估资源） ──
+                prefilter_ok, prefilter_reason = self._quick_prefilter(
+                    new_factor, trace_id,
+                )
+                if not prefilter_ok:
+                    logger.warning(
+                        "[%s] 快速预筛选失败: %s",
+                        new_factor.get("name", "?"), prefilter_reason,
+                    )
+                    self._record_failure_trace(
+                        new_factor, generation, evolution_method,
+                        f"快速预筛选失败: {prefilter_reason}", [], trace_id,
                     )
                     continue
 
@@ -758,6 +834,27 @@ class EvolutionLoop:
 
         return None
 
+    def _load_elite_parent_factors(self) -> list[dict[str, Any]]:
+        """从 elite 快照目录加载因子作为父因子池。
+
+        场景: 种子因子全部已存在 elite 快照（去重跳过、无新晋升）时，
+        无合格父因子导致演化循环 0 代跳过。回退使用既有精英因子继续
+        演化（种子重复晋升由 _promote_to_elite 去重保护）。
+        """
+        import json
+
+        parents: list[dict[str, Any]] = []
+        for fp in sorted(self.elite_dir.glob("*.json")):
+            if fp.name == "_l2_seed_correlation_index.json":
+                continue
+            try:
+                data = json.loads(fp.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(data, dict) and data.get("code") and data.get("factor_id"):
+                parents.append(data)
+        return parents
+
     def _get_repo(self):
         """延迟初始化 DuckDB 仓储。"""
         if self._repo is None:
@@ -1097,12 +1194,15 @@ class EvolutionLoop:
                     self._log_inspection_detail(
                         seed, inspection, "通过", 0,
                     )
-                    self._promote_to_elite(
+                    promoted_path = self._promote_to_elite(
                         seed, evaluation,
                         seed_correlations=seed_correlations,
                         quality_score=inspection.quality_score,
                         audit_report=audit_report,
                     )
+                    if promoted_path is None:
+                        # 因子名称重复，跳过
+                        continue
                     elite_ids.append(seed["factor_id"])
                     promoted += 1
                     print(f"[evo] 种子因子晋升: {seed['name']} (IC={bt.get('ic', 0):.4f}, "
@@ -1213,6 +1313,14 @@ class EvolutionLoop:
 
             # 2. 为每个精英因子更新跟踪快照 + 逻辑监控
             for fid in elite_ids:
+                # 先检查跟踪记录是否存在，不存在则跳过（可能种子因子重复跳过）
+                tracker_snapshot = self.elite_tracker.get(fid)
+                if tracker_snapshot is None:
+                    logger.debug(
+                        "跳过重评估: 跟踪记录不存在 [factor_id=%s]（可能种子因子重复跳过）",
+                        fid,
+                    )
+                    continue
                 factor_data = self._get_factor_data_for_review(fid)
                 if factor_data is None:
                     continue
@@ -1424,6 +1532,193 @@ class EvolutionLoop:
 
         logger.info("GP 演化完成 [%s]: %s", parent.get("name", "?"), summary)
         return factor_program, summary
+
+    # ── Phase C.2: 算子演化（FTS-Expr DSL） ──────────────
+
+    def _generate_operator_factor(
+        self,
+        parent: FactorProgram,
+        generation: int,
+        trace_id: str,
+    ) -> tuple[FactorProgram, str]:
+        """使用 FTS-Expr DSL 算子生成因子表达式 (Phase C.2)。
+
+        基于算子注册表随机组合合法因子表达式，通过:
+        1. 从 L0 字段池采样
+        2. 随机选择 L1 时序算子（带合理的窗口参数）
+        3. 可选 L2 横截面或 L4 组合算子封装
+        4. 全程校验通过（参数边界、最大 lookback）
+
+        Args:
+            parent: 父因子
+            generation: 当前代数
+            trace_id: 全链路 trace_id
+
+        Returns:
+            (新因子程序, 演化摘要)
+        """
+        import hashlib
+        import random
+        import time
+
+        from .expr_dsl.factory import create_operator_factor
+        from .expr_dsl.parser import parse_expression
+        from .expr_dsl.registry import L0_FIELDS, build_registry
+        from .expr_dsl.validator import validate_expr
+
+        # 构建算子注册表
+        registry = build_registry()
+
+        # 按类别分组算子
+        l1_ops = [
+            name for name, meta in registry.items()
+            if meta.category == "L1" and name not in ("ts_covariance", "ts_correlation")
+        ]
+        l2_ops = [name for name, meta in registry.items() if meta.category == "L2"]
+        l4_ops = [name for name, meta in registry.items() if meta.category == "L4"]
+
+        # 种子随机（基于父因子，保证可复现性）
+        seed = int(hashlib.md5(
+            f"{parent.get('factor_id', '?')}_{generation}_{time.time_ns()}".encode()
+        ).hexdigest()[:8], 16) % (2 ** 31)
+        rng = random.Random(seed)
+
+        # 尝试生成合法的表达式，最多 10 次
+        for attempt in range(10):
+            try:
+                # Step 1: 选择 1-2 个 L0 字段
+                n_fields = rng.randint(1, 2)
+                fields = rng.sample(list(L0_FIELDS), n_fields)
+
+                # Step 2: 随机选择 1 个 L1 时序算子
+                l1_op = rng.choice(l1_ops)
+
+                # 确定窗口参数（5 的倍数，看起来更"专业"）
+                window = ((rng.randint(5, 60) + 4) // 5) * 5
+
+                # 构建表达式
+                expr_parts = [f"{l1_op}({f}, {window})" for f in fields]
+
+                # Step 3: 可选 L4 组合算子
+                if len(expr_parts) == 2 and rng.random() < 0.5:
+                    l4_op = rng.choice(l4_ops)
+                    expression = f"{l4_op}({expr_parts[0]}, {expr_parts[1]})"
+                else:
+                    expression = expr_parts[0]
+
+                # Step 4: 可选 L2 横截面封装
+                if rng.random() < 0.4:
+                    l2_op = rng.choice(l2_ops)
+                    expression = f"{l2_op}({expression})"
+
+                # 校验
+                node = parse_expression(expression)
+                errors, max_lookback = validate_expr(node, registry)
+                if errors:
+                    continue
+
+                # 创建因子程序
+                parent_id = parent.get("factor_id", "?")
+                unique_key = f"op_{parent_id}_{generation}_{expression}_{time.time_ns()}"
+                factor_id = "fct_" + hashlib.md5(unique_key.encode()).hexdigest()[:8]
+
+                factor_name = f"op_{l1_op}_{generation}_{factor_id[:6]}"
+
+                new_factor = create_operator_factor(
+                    expression=expression,
+                    name=factor_name,
+                    market=self.market,
+                    family=parent.get("family", "operator"),
+                    narrative=(
+                        f"算子演化: {expression} "
+                        f"(基于父因子 {parent.get('name', '?')})"
+                    ),
+                    params={},
+                    trace_id=trace_id,
+                    source="operator_evolution",
+                )
+                # 覆盖产生的 factor_id 确保唯一
+                new_factor["factor_id"] = factor_id
+                new_factor["parent_id"] = parent_id
+                new_factor["generation"] = generation
+
+                summary = (
+                    f"OpGen: {expression}, "
+                    f"lookback={max_lookback}, "
+                    f"fields={fields}"
+                )
+
+                logger.info("算子因子生成成功 [%s]: %s", factor_name, summary)
+                return new_factor, summary
+
+            except Exception as e:
+                logger.debug("算子因子生成尝试 %d/10 失败: %s", attempt + 1, e)
+                continue
+
+        raise RuntimeError(
+            f"无法生成合法算子因子 (10 次尝试均失败, "
+            f"parent={parent.get('name', '?')})"
+        )
+
+    # ── Phase B.2.1: 快速预筛选（新增） ──────────────────
+
+    def _quick_prefilter(
+        self, factor: FactorProgram, trace_id: str,
+    ) -> tuple[bool, str]:
+        """快速预筛选：在源头拦截低质量信号，避免浪费评估资源。
+
+        检查项:
+            1. 信号非全常数: nunique > 10
+            2. 快速 IC 检查: abs(IC) > 0.02（Spearman 秩相关）
+            3. 信号标准差 > 1e-6
+
+        Args:
+            factor: 因子程序
+            trace_id: 全链路 trace_id
+
+        Returns:
+            (是否通过, 失败原因；通过时原因为空)
+        """
+        from scipy import stats as sp_stats
+        from .backtest_pipeline import BacktestPipeline
+
+        probe_data = (
+            list(self.cross_section_data.values())[0]
+            if self._is_cross_section else self.data
+        )
+        try:
+            signal = BacktestPipeline._execute_factor_code(
+                factor.get("code", ""), probe_data, factor.get("params", {}),
+            )
+        except Exception as e:
+            return False, f"预筛选执行失败: {type(e).__name__}: {e}"
+
+        if not isinstance(signal, np.ndarray) or len(signal) != len(probe_data):
+            return False, f"预筛选输出长度不匹配: {len(signal) if hasattr(signal, '__len__') else '?'} != {len(probe_data)}"
+
+        # 检查1: 信号非全常数
+        nunique = len(np.unique(signal))
+        if nunique <= 10:
+            return False, f"信号无足够变化: nunique={nunique} <= 10"
+
+        # 检查2: 信号标准差
+        sig_std = np.nanstd(signal)
+        if sig_std < 1e-6:
+            return False, f"信号标准差过小: {sig_std:.2e} < 1e-6"
+
+        # 检查3: 快速 IC 检查（导致 NaN 也视为无效）
+        fr = self.forward_returns
+        if fr is not None and len(fr) == len(signal):
+            valid = ~(np.isnan(signal) | np.isnan(fr))
+            if valid.sum() >= 10:
+                ic, pval = sp_stats.spearmanr(signal[valid], fr[valid])
+                if np.isnan(ic) or abs(ic) < 0.02:
+                    return False, (
+                        f"快速 IC 过低: abs(IC)={abs(ic):.4f} < 0.02"
+                        f"{'' if np.isnan(ic) else f', p={pval:.4f}'}"
+                    )
+
+        return True, ""
 
     # ── Phase B.2.1: 后代因子运行时校验 ──────────────────
 

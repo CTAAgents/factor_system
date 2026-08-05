@@ -2860,3 +2860,84 @@ class TestFactorRuntimeValidation:
         ok, reason = minimal_loop._check_factor_runtime(self._make_factor(code))
         assert ok is False
         assert "长度" in reason
+
+
+# ─── elite 父因子回退（v2.8.4） ───────────────────────────
+
+
+class TestEliteParentFallback:
+    """种子因子全部已存在 elite 快照（重复跳过）时，应回退 elite 池继续演化。"""
+
+    @staticmethod
+    def _make_loop(tmp_memory_dir, tmp_elite_dir, mock_llm_client, sample_ohlcv, forward_returns):
+        return EvolutionLoop(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            llm_client=mock_llm_client,
+            n_trials_micro=3,
+        )
+
+    @staticmethod
+    def _write_elite_factor(elite_dir: Path, factor_id: str, name: str) -> None:
+        elite_dir.mkdir(exist_ok=True)
+        (elite_dir / f"{factor_id}.json").write_text(json.dumps({
+            "factor_id": factor_id,
+            "name": name,
+            "code": (
+                "def factor_program(data, params):\n"
+                "    import numpy as np\n"
+                "    close = data['close']\n"
+                "    return np.tanh((close - close.mean()) / (close.std() + 1e-10))\n"
+            ),
+            "params": {},
+            "economic_logic": {"narrative": "elite 快照因子"},
+        }), encoding="utf-8")
+
+    def test_load_elite_parent_factors(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+    ):
+        """应从 elite 目录加载因子快照（排除相关性索引文件）。"""
+        self._write_elite_factor(tmp_elite_dir, "fct_aaa111", "elite_a")
+        (tmp_elite_dir / "_l2_seed_correlation_index.json").write_text("{}", encoding="utf-8")
+        loop = self._make_loop(
+            tmp_memory_dir, tmp_elite_dir, mock_llm_client, sample_ohlcv, forward_returns,
+        )
+        parents = loop._load_elite_parent_factors()
+        assert len(parents) == 1
+        assert parents[0]["factor_id"] == "fct_aaa111"
+        assert parents[0]["code"]
+
+    def test_run_uses_elite_pool_when_seeds_duplicated(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+    ):
+        """种子全部重复跳过（无晋升）时，应回退 elite 池进入演化循环而非 0 代跳过。"""
+        # elite 目录预置与种子同名的因子 → 种子评估通过但晋升时重复跳过
+        self._write_elite_factor(tmp_elite_dir, "fct_elite001", "test_seed_factor")
+        loop = self._make_loop(
+            tmp_memory_dir, tmp_elite_dir, mock_llm_client, sample_ohlcv, forward_returns,
+        )
+
+        # mock 种子池：单个种子，与 elite 预置同名
+        fake_seed = {
+            "factor_id": "fct_seed001",
+            "name": "test_seed_factor",
+            "code": (
+                "def factor_program(data, params):\n"
+                "    import numpy as np\n"
+                "    close = data['close']\n"
+                "    return np.tanh((close - close.mean()) / (close.std() + 1e-10))\n"
+            ),
+            "params": {},
+        }
+        loop.seed_pool.load_all_seeds = MagicMock(return_value=[fake_seed])
+        # 种子评估链/质检/审计 mock 通过（评估本身成功，但晋升时被 elite 去重拦截）
+        _mock_seed_evaluation_pass(loop)
+        _mock_review_pass(loop)
+
+        result = loop.run(max_generation=2)
+        assert result.status == "completed"
+        assert result.generations_completed >= 1, (
+            "种子重复跳过时应回退 elite 池继续演化，而非 0 代跳过"
+        )

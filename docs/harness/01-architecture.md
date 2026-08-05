@@ -1,7 +1,7 @@
 # FTS 系统架构文档
 
-> 版本: v2.7.0
-> 最后更新: 2026-08-05
+> 版本: v2.8.5
+> 最后更新: 2026-08-06
 
 ---
 
@@ -75,8 +75,12 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  └─────────────────────────────────────────────────────────────────────┘     │
 │                                                                         │
 │  ┌─ 期货 L2 (横截面面板) ─────────────────────────────────────────┐     │
-│  │ parent_selection → macro_evolution → micro_evolution              │     │
-│  │ (UCT 树搜索)      (LLM 改逻辑)       (optuna 调参)               │     │
+│  │ parent_selection → evolution_mode → micro_evolution              │     │
+│  │ (UCT 树搜索)       (code/hybrid/operator)  (optuna 调参)         │     │
+│  │                      ├─ LLM 改逻辑 (code)                        │     │
+│  │                      ├─ GP 演化 (code/hybrid fallback)            │     │
+│  │                      ├─ 算子演化 (operator/hybrid fallback)       │     │
+│  │                      └─ FTS-Expr DSL (Phase C.2)                  │     │
 │  │   → cross_section_evaluate → elite                                │     │
 │  │   (横截面直接回测)                                                  │     │
 │  │                                                                         │
@@ -93,9 +97,23 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  factor_program.py — 因子程序（图灵完备代码 + 安全沙箱）                  │
 │  verifier.py — Verifier 锁定协议                                       │
 │  state.py — 演化状态管理 + trace_id 全链路                              │
+│  gp_evolver.py — GP 遗传规划搜索引擎 (Phase C.1)                        │
+│  expr_dsl/ — FTS-Expr 算子表达式语言 (Phase C.2)                        │
+│    registry.py — 58 算子注册表 (L0-L5 分层, 参数边界, 经济语义)          │
+│    parser.py — 递归下降解析器 → AST                                    │
+│    validator.py — 静态校验 (参数边界, 最大 lookback, PIT)               │
+│    executor.py — 解释执行器 (pandas 向量化快速路径)                      │
+│    compiler.py — 编译器 (表达式 → 确定性沙箱代码)                       │
+│    factory.py — 算子因子工厂 (FTS-Expr → FactorProgram)                │
 │                                                                         │
-│  职责: 夜间批量演化 → 父因子选择 → LLM 逻辑改造 → optuna 参数优化 →      │
-│        评估 → 审计 → 4 重审查门禁(消融/因果/鲁棒/SHAP) → elite 因子 →     │
+│  GP 演化支持多父代交叉策略:                                              │
+│  - 标准双亲交叉 (70% 概率)                                              │
+│  - 多父代交叉 (30% 概率, 3 父代融合)                                     │
+│  - 锦标赛选择 n 个父代 (_tournament_select_n)                          │
+│  - 多父代交叉提升种群多样性, 避免局部最优                                │
+│                                                                         │
+│  职责: 夜间批量演化 → 父因子选择 → 演化模式分派(code/hybrid/operator) →  │
+│        optuna 参数优化 → 评估 → 审计 → 4 重审查门禁 → elite 因子 →       │
 │        传递相关性预检结果给 L3                                           │
 └─────────────────────────────┬────────────────────────────────────────────┘
                               │ elite 因子

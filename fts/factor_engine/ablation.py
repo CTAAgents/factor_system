@@ -44,6 +44,8 @@ class SingleAblation(dict):
         sharpe: float,
         ic_change: float,
         sharpe_change: float,
+        ic_decay_ratio: float = 0.0,
+        p_value: float = 1.0,
     ) -> None:
         super().__init__()
         self["mode"] = mode
@@ -52,6 +54,8 @@ class SingleAblation(dict):
         self["sharpe"] = sharpe
         self["ic_change"] = ic_change
         self["sharpe_change"] = sharpe_change
+        self["ic_decay_ratio"] = ic_decay_ratio  # IC 衰减比例（相对于基线）
+        self["p_value"] = p_value  # 消融前后 IC 差异的显著性
 
 
 class AblationResult(dict):
@@ -140,7 +144,9 @@ def _run_single_ablation(
     description: str,
     **eval_kwargs: Any,
 ) -> SingleAblation:
-    """对扰动后的数据运行回测，返回消融结果。"""
+    """对扰动后的数据运行回测，返回消融结果（含 IC 衰减比例和 p 值）。"""
+    from scipy import stats as sp_stats
+
     try:
         bt = evaluate_backtest(factor, modified_data, forward_returns, **eval_kwargs)
         ic = bt.get("ic", 0.0)
@@ -149,6 +155,25 @@ def _run_single_ablation(
         ic = 0.0
         sharpe = 0.0
 
+    # 计算 IC 衰减比例（相对于基线）
+    ic_decay_ratio = 0.0
+    if abs(baseline_ic) > 1e-9:
+        ic_decay_ratio = (baseline_ic - ic) / abs(baseline_ic)
+        ic_decay_ratio = max(0.0, ic_decay_ratio)  # 截断负值（IC 变好不算衰减）
+
+    # 计算 p 值（消融前后 IC 差异的显著性）
+    p_value = 1.0
+    try:
+        # 使用 Fisher Z 变换比较两个相关系数的差异
+        if abs(baseline_ic) < 1.0 and abs(ic) < 1.0 and len(forward_returns) > 10:
+            n = len(forward_returns)
+            z1 = np.arctanh(max(min(baseline_ic, 0.999), -0.999))
+            z2 = np.arctanh(max(min(ic, 0.999), -0.999))
+            z_diff = (z1 - z2) / np.sqrt(2.0 / (n - 3))
+            p_value = 2.0 * (1.0 - sp_stats.norm.cdf(abs(z_diff)))
+    except Exception:
+        pass
+
     return SingleAblation(
         mode=mode,
         description=description,
@@ -156,6 +181,8 @@ def _run_single_ablation(
         sharpe=sharpe,
         ic_change=ic - baseline_ic,
         sharpe_change=sharpe - baseline_sharpe,
+        ic_decay_ratio=ic_decay_ratio,
+        p_value=p_value,
     )
 
 
@@ -296,7 +323,7 @@ class AblationExperiment:
 
     @staticmethod
     def report(results: list[AblationResult]) -> str:
-        """生成可读的消融实验报告。"""
+        """生成可读的消融实验报告（含 IC 衰减比例和 p 值）。"""
         lines: list[str] = []
         lines.append("=" * 70)
         lines.append("消融实验报告")
@@ -305,13 +332,13 @@ class AblationExperiment:
         for result in results:
             lines.append(f"\n因子: {result['factor_name']} ({result['factor_id']})")
             lines.append(f"  Baseline IC={result['baseline_ic']:.4f}, Sharpe={result['baseline_sharpe']:.4f}")
-            lines.append(f"  {'消融模式':<25} {'IC':>8} {'IC变化':>10} {'Sharpe':>8} {'Sharpe变化':>10}")
-            lines.append(f"  {'-'*25} {'-'*8} {'-'*10} {'-'*8} {'-'*10}")
+            lines.append(f"  {'消融模式':<25} {'IC':>8} {'IC变化':>10} {'IC衰减比':>10} {'p值':>8} {'Sharpe':>8}")
+            lines.append(f"  {'-'*25} {'-'*8} {'-'*10} {'-'*10} {'-'*8} {'-'*8}")
             for ab in result["ablations"]:
                 lines.append(
                     f"  {ab['description']:<25} {ab['ic']:>8.4f} "
-                    f"{ab['ic_change']:>+10.4f} {ab['sharpe']:>8.4f} "
-                    f"{ab['sharpe_change']:>+10.4f}"
+                    f"{ab['ic_change']:>+10.4f} {ab['ic_decay_ratio']:>10.2%} "
+                    f"{ab['p_value']:>8.4f} {ab['sharpe']:>8.4f}"
                 )
 
         lines.append("\n" + "=" * 70)

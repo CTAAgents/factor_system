@@ -2,8 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase C.2
-> 状态: **规划中**（角色边界内部分已落地）
-> 实现说明: FTS 定位为**因子智能系统**，输出 `ScoredSignal`（定义于 `fts/strategies/base_v2.py`，含 symbol/direction/grade/total/weight 及指标字段）供下游交易系统（FDT）消费；本设计的 JSON Schema 信号契约（`FactorSignal`）、`SignalValidator`、`fts/risk/` 交易适配层、`RiskManager`、`LiveFactorMonitor`、HTTP 端点均**未实现**。交易执行严格由下游系统负责（角色边界原则）。
+> 状态: **已实现**（信号契约/风控/模拟适配/Live 监控已落地）
+> 实现说明: FTS 定位为**因子智能系统**，输出 `ScoredSignal`（定义于 `fts/strategies/base_v2.py`，含 symbol/direction/grade/total/weight 及指标字段）供下游交易系统（FDT）消费。本设计的 JSON Schema 信号契约（`FactorSignal`/`SignalDetail` 定义于 `fts/factor_engine/signal_contract.py`）、`SignalValidator`、`fts/risk/` 交易适配层（`RiskManager` 五项风控规则 + `TradeAdapter` 抽象基类 + `SimulatedTradeAdapter`）、`LiveFactorMonitor`（30% 偏离阈值）、HTTP 端点（`POST /api/v1/signal/submit` 等）均已实现。交易执行严格由下游系统负责（角色边界原则）。
 
 ---
 
@@ -645,21 +645,20 @@ Response: AccountStatus
 
 ## 9. 文件改动清单
 
-> **实现现状**: 以下文件均**未实现**（C.2 整体处于规划状态，FTS 输出 `ScoredSignal` 由下游 FDT 消费，符合角色边界原则）。
+> **实现现状**: 以下文件均已实现（v2.9.0）。FTS 输出 `ScoredSignal` 由下游 FDT 消费，符合角色边界原则；本层仅做契约/风控/模拟/监控。
 
 | 文件 | 动作 | 现状 | 说明 |
 |------|------|------|------|
-| `fts/factor_engine/signal_contract.py` | **新增** | ⬜ 未实现 | 信号 Schema 和类型定义未实现（实际契约为 `fts/strategies/base_v2.py::ScoredSignal`） |
-| `fts/factor_engine/signal_validator.py` | **新增** | ⬜ 未实现 | `SignalValidator` 类未实现 |
-| `fts/risk/__init__.py` | **新增** | ⬜ 未实现 | 风控包未实现 |
-| `fts/risk/risk_manager.py` | **新增** | ⬜ 未实现 | `RiskManager` 类未实现 |
-| `fts/risk/trade_adapter.py` | **新增** | ⬜ 未实现 | `TradeAdapter` 抽象基类未实现 |
-| `fts/risk/simulated_adapter.py` | **新增** | ⬜ 未实现 | `SimulatedTradeAdapter` 未实现 |
-| `fts/monitor/live_factor_monitor.py` | **新增** | ⬜ 未实现 | `LiveFactorMonitor` 未实现（Live 表现监控由 `elite_tracker.py` 覆盖部分） |
-| `fts/monitor/prometheus_metrics.py` | **修改** | ⬜ 未实现 | 风控/Live 指标未实现 |
-| `fts/monitor/http_server.py` | **修改** | ⬜ 未实现 | 信号/风控/Live 端点未实现（现有端点: /api/status、/api/factors、/metrics、/metrics/data-sources、/health） |
-| `tests/risk/*` | **新增** | ⬜ 未实现 | 风控/信号/模拟适配器测试未实现 |
-| `tests/monitor/test_live_factor_monitor.py` | **新增** | ⬜ 未实现 | Live 因子监控测试未实现 |
+| `fts/factor_engine/signal_contract.py` | **新增** | ✅ 已实现 | `FactorSignal`/`SignalDetail`/`SignalMeta` TypedDict + `SignalValidator`（含 `to_factor_signal` ScoredSignal 转换） |
+| `fts/factor_engine/signal_contract.py` | **新增** | ✅ 已实现 | 信号契约与验证器（v2.9.0，与 signal_validator 合并） |
+| `fts/risk/__init__.py` | **新增** | ✅ 已实现 | 风控包导出（RiskManager/TradeAdapter/SimulatedTradeAdapter） |
+| `fts/risk/risk_manager.py` | **新增** | ✅ 已实现 | `RiskManager` 五项风控规则（仓位/回撤/亏损/杠杆/集中度） |
+| `fts/risk/trade_adapter.py` | **新增** | ✅ 已实现 | `TradeAdapter` 抽象基类（Liskov 替换原则） |
+| `fts/risk/simulated_adapter.py` | **新增** | ✅ 已实现 | `SimulatedTradeAdapter` 模拟成交 |
+| `fts/monitor/live_factor_monitor.py` | **新增** | ✅ 已实现 | `LiveFactorMonitor` 偏离检测（30% 阈值） |
+| `fts/monitor/prometheus_metrics.py` | **修改** | ✅ 已实现 | 风控/Live 指标（fts_live_factor_ic/ic_deviation、fts_risk_check_total/blocked_total） |
+| `fts/monitor/http_server.py` | **修改** | ✅ 已实现 | 端点: POST /api/v1/signal/submit、GET /api/v1/risk/status、GET /api/v1/live/factors、GET /api/v1/live/factors/{id}/deviation |
+| `tests/test_stage5_risk_live.py` | **新增** | ✅ 已实现 | 风控/信号/模拟适配器/Live/指标/HTTP 测试（27 用例） |
 
 ---
 

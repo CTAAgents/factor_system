@@ -2,8 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase B.2
-> 状态: **已实现**（结构与原设计不同）
-> 实现说明: 实际实现为 `fts/factor_engine/backtest_pipeline.py`（v0.1.0）**4 阶段**流水线（DataLoadStage/FactorComputeStage/PerformanceStage/ReportStage），单因子入口 `BacktestPipeline.run(factor, data, benchmark, ...)`，含 `_execute_factor_code()`（被演化循环 `_check_factor_runtime` 复用）。原设计的 6 阶段拆分、`BacktestPipelineBuilder`、独立类（FactorScreener/SignalGenerator/PortfolioConstructor/CostSimulator/RiskAttributor/ReportGenerator/CapitalAllocator）与 CLI `fts backtest` 子命令均未实现。
+> 状态: **已实现**（4 阶段流水线 + 6 阶段类 + Builder + CLI）
+> 实现说明: 实际实现为 `fts/factor_engine/backtest_pipeline.py`（v0.1.0）**4 阶段**流水线（DataLoadStage/FactorComputeStage/PerformanceStage/ReportStage），单因子入口 `BacktestPipeline.run(factor, data, benchmark, ...)`，含 `_execute_factor_code()`（被演化循环 `_check_factor_runtime` 复用）。**v2.9.0 增强**：新增 7 个独立阶段类（`FactorScreener`/`SignalGenerator`/`PortfolioConstructor`/`CostSimulator`/`RiskAttributor`/`ReportGenerator`/`CapitalAllocator`）、`BacktestPipeline.run_batch()` 批量对比排名、`BacktestPipelineBuilder` 构建器、CLI `fts backtest run/batch/compare` 子命令。
 
 ---
 
@@ -593,18 +593,17 @@ fts backtest compare \
 
 | 文件 | 动作 | 现状 | 说明 |
 |------|------|------|------|
-| `fts/factor_engine/backtest_pipeline.py` | **新增** | ✅ 已实现 | `BacktestPipeline` 4 阶段流水线（无 Builder） |
-| `fts/factor_engine/factor_screener.py` | **新增** | ⬜ 未实现 | 原设计独立类未实现 |
-| `fts/factor_engine/signal_generator.py` | **新增** | ⬜ 未实现 | 原设计独立类未实现 |
-| `fts/factor_engine/portfolio_constructor.py` | **新增** | ⬜ 未实现 | 原设计独立类未实现 |
-| `fts/factor_engine/cost_simulator.py` | **新增** | ⬜ 未实现 | 成本逻辑在 backtest_pipeline.py 内（另有 `cost_model.py`） |
-| `fts/factor_engine/risk_attributor.py` | **新增** | ⬜ 未实现 | 原设计独立类未实现 |
-| `fts/factor_engine/report_generator.py` | **新增** | ⬜ 未实现 | 报告逻辑在 backtest_pipeline.py 内 |
-| `fts/factor_engine/capital_allocator.py` | **新增** | ⬜ 未实现 | 原设计独立类未实现 |
-| `fts/cli.py` | **修改** | ⬜ 未实现 | `backtest run/batch/compare` 子命令未实现 |
+| `fts/factor_engine/backtest_pipeline.py` | **新增** | ✅ 已实现 | `BacktestPipeline` 4 阶段流水线 + `run_batch` + `BacktestPipelineBuilder`（v2.9.0） |
+| `fts/factor_engine/factor_screener.py` | **新增** | ✅ 已实现 | `FactorScreener` 按等级/总分/状态/风格筛选（v2.9.0） |
+| `fts/factor_engine/signal_generator.py` | **新增** | ✅ 已实现 | `SignalGenerator` 时序/横截面信号（v2.9.0） |
+| `fts/factor_engine/portfolio_constructor.py` | **新增** | ✅ 已实现 | `PortfolioConstructor` 等权/Sharpe/自适应加权（v2.9.0） |
+| `fts/factor_engine/cost_simulator.py` | **新增** | ✅ 已实现 | `CostSimulator` 品种差异化费率，复用 `cost_model.py`（v2.9.0） |
+| `fts/factor_engine/risk_attributor.py` | **新增** | ✅ 已实现 | `RiskAttributor` 因子贡献/暴露/VaR-ES（v2.9.0） |
+| `fts/factor_engine/report_generator.py` | **新增** | ✅ 已实现 | `ReportGenerator` Markdown 报告（净值/回撤/IC/月度热力表）（v2.9.0） |
+| `fts/factor_engine/capital_allocator.py` | **新增** | ✅ 已实现 | `CapitalAllocator` fixed/vol_target/risk_parity/kelly（v2.9.0） |
+| `fts/cli.py` | **修改** | ✅ 已实现 | `fts backtest run/batch/compare` 子命令（v2.9.0） |
 | `tests/factor_engine/test_backtest_pipeline.py` | **新增** | ✅ 已实现 | 流水线单元测试 |
-| `tests/factor_engine/test_cost_simulator.py` | **新增** | ⬜ 未实现 | 对应测试为 cost_model 相关测试 |
-| `tests/factor_engine/test_capital_allocator.py` | **新增** | ⬜ 未实现 | 原设计测试未实现 |
+| `tests/factor_engine/test_backtest_stage3.py` | **新增** | ✅ 已实现 | 7 阶段类 + run_batch + Builder + CLI 测试（27 用例） |
 
 ---
 

@@ -23,7 +23,7 @@ from .contracts import FactorProgram
 
 try:
     import optuna
-    from optuna.samplers import TPESampler
+    from optuna.samplers import TPESampler, RandomSampler
     _HAS_OPTUNA = True
 except ImportError:
     optuna = None  # type: ignore[assignment]
@@ -34,6 +34,8 @@ except ImportError:
 
 DEFAULT_N_TRIALS: int = 100
 DEFAULT_EARLY_STOPPING_FAILURES: int = 20
+RANDOM_SEARCH_TRIALS: int = 50
+"""随机搜索的默认试验次数（比贝叶斯少，适用于参数空间简单时）。"""
 
 
 class MicroEvolutionError(Exception):
@@ -69,6 +71,7 @@ def optimize_params(
     objective_fn: Optional[Callable[[np.ndarray, np.ndarray], float]] = None,
     n_trials: int = DEFAULT_N_TRIALS,
     early_stopping_failures: int = DEFAULT_EARLY_STOPPING_FAILURES,
+    use_random_search: bool = False,
 ) -> tuple[dict[str, Any], float]:
     """贝叶斯优化因子参数。
 
@@ -79,6 +82,7 @@ def optimize_params(
         objective_fn: 目标函数（signal, returns）-> score，默认 IC
         n_trials: 最大试验次数
         early_stopping_failures: 连续无提升跳出阈值
+        use_random_search: 使用随机搜索代替贝叶斯优化（参数空间简单时更高效）
 
     Returns:
         (best_params, best_score)
@@ -118,10 +122,18 @@ def optimize_params(
         except Exception:
             return -1.0  # 异常试验返回极差分数
 
-    # 创建 study
+    # 创建 study（支持随机搜索和贝叶斯优化两种模式）
+    if use_random_search:
+        sampler = RandomSampler(seed=42)
+        # 随机搜索不用早停，直接跑满 n_trials
+        actual_early_stop = 999999
+    else:
+        sampler = TPESampler(seed=42)
+        actual_early_stop = early_stopping_failures
+
     study = optuna.create_study(
         direction="maximize",
-        sampler=TPESampler(seed=42),
+        sampler=sampler,
     )
 
     # 早停回调
@@ -136,7 +148,7 @@ def optimize_params(
             no_improve_count = 0
         else:
             no_improve_count += 1
-        if no_improve_count >= early_stopping_failures:
+        if no_improve_count >= actual_early_stop:
             study.stop()
 
     try:
@@ -162,6 +174,7 @@ def evolve_micro(
     data: pd.DataFrame,
     forward_returns: np.ndarray,
     n_trials: int = DEFAULT_N_TRIALS,
+    use_random_search: bool = False,
 ) -> tuple[FactorProgram, float]:
     """微观演化主入口 — 优化因子参数。
 
@@ -172,12 +185,14 @@ def evolve_micro(
         data: OHLCV 数据
         forward_returns: 未来收益率
         n_trials: optuna 试验次数
+        use_random_search: 使用随机搜索代替贝叶斯优化
 
     Returns:
         (optimized_factor, best_score)
     """
     best_params, best_score = optimize_params(
-        factor, data, forward_returns, n_trials=n_trials
+        factor, data, forward_returns, n_trials=n_trials,
+        use_random_search=use_random_search,
     )
 
     # 返回新因子实例（不修改原因子）
@@ -188,6 +203,7 @@ def evolve_micro(
 __all__ = [
     "DEFAULT_N_TRIALS",
     "DEFAULT_EARLY_STOPPING_FAILURES",
+    "RANDOM_SEARCH_TRIALS",
     "MicroEvolutionError",
     "optimize_params",
     "evolve_micro",

@@ -2,8 +2,8 @@
 
 > 版本: v1.0.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase C.1
-> 状态: **已实现**（文件结构与算子类别与原设计不同）
-> 实现说明: 实际实现为 `fts/factor_engine/feature_ops.py`（单文件，7 类算子: TimeSeriesOps/PriceOps/RollingOps/**TechnicalOps**/CrossSectionOps/CrossSymbolOps/CompositeOps + `OperatorRegistry` + `FeatureOpsEngine`）、`fts/factor_engine/gp_evolver.py`（`GPEvolver`/`ExpressionTree`/`tree_to_factor_program`）、`fts/factor_engine/feature_importance.py`。另新增 **`fts/factor_engine/expr_dsl/`**（FTS-Expr 算子表达式 DSL + `OperatorRegistry` 58 算子 L0-L5 分层，2026-08 算子演化基础层）。原设计 `feature_ops/` 包目录结构与 CLI `fts feature/gp` 子命令未实现。
+> 状态: **已实现**（文件结构与算子类别与原设计不同；v2.9.0 补齐 CLI）
+> 实现说明: 特征工程中台由 `fts/factor_engine/feature_ops.py`（单文件，7 类算子: TimeSeriesOps/PriceOps/RollingOps/**TechnicalOps**/CrossSectionOps/CrossSymbolOps/CompositeOps + `OperatorRegistry` + `FeatureOpsEngine`）、`fts/factor_engine/gp_evolver.py`（`GPEvolver`/`ExpressionTree`/`tree_to_factor_program`）、`fts/factor_engine/feature_importance.py` 承担。另新增 **`fts/factor_engine/expr_dsl/`**（FTS-Expr 算子表达式 DSL + `OperatorRegistry` 58 算子 L0-L5 分层，2026-08 算子演化基础层）。**v2.9.0 补齐 CLI**：`fts feature list`（列算子）、`fts feature analyze`（置换重要性）、`fts gp evolve`（GP 遗传规划演化）。原设计 `feature_ops/` 包目录结构未实现。
 
 ---
 
@@ -587,7 +587,7 @@ graph LR
 | `fts/factor_engine/feature_ops_engine.py` | **新增** | ⬜ 未实现 | `FeatureOpsEngine` 已实现于 `feature_ops.py` 内 |
 | `fts/factor_engine/evolution_loop.py` | **修改** | ✅ 已实现 | GP 演化路径集成（`_gp_evolve` 方法） |
 | `fts/factor_engine/expr_dsl/` | **新增** | ✅ 已实现 | 算子演化基础层（2026-08）: FTS-Expr DSL + 58 算子 L0-L5 |
-| `fts/cli.py` | **修改** | ⬜ 未实现 | `gp evolve`/`feature analyze` 子命令未实现 |
+| `fts/cli.py` | **修改** | ✅ 已实现 | `fts feature list`/`fts feature analyze`/`fts gp evolve` 子命令（v2.9.0） |
 | `tests/factor_engine/test_operator_registry.py` | **新增** | ✅ 已实现 | 算子注册表测试 |
 | `tests/factor_engine/test_gp_evolver.py` | **新增** | ✅ 已实现 | GP 演化器测试 |
 | `tests/factor_engine/test_feature_importance.py` | **新增** | ✅ 已实现 | 特征重要性测试 |

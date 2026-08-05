@@ -178,11 +178,19 @@ class MacroEvolver:
 6. 因子逻辑应与父因子不同，体现创新性
 7. 简洁高效，避免冗余计算
 
+=== 信号质量标准（必须满足） ===
+✅ 输出信号必须有意义的变化: `np.unique(signal).shape[0] > 10`（非常数信号）
+✅ 预期 ICIR > 0.5（IC 均值 / IC 标准差），信号应具有稳定的预测能力
+✅ 信号不能全为 0 或全为相同值，标准差必须 > 1e-6
+✅ 因子逻辑必须基于经济学直觉，避免纯数据挖掘
+
 === 常见错误（必须避免） ===
 ❌ 使用未定义变量: `c = data['close']` 然后 `close_mean = c.mean()` — 变量 `c` 未定义或后续未使用
 ❌ 长度不匹配: `diff = np.diff(close)` 输出 n-1 长度，必须填充: `diff = np.zeros_like(close); diff[1:] = np.diff(close)`
 ❌ 忘记 import: 使用 `np` 前必须 `import numpy as np`
 ❌ 未保持输出长度: 任何运算（np.diff, np.roll, np.convolve）后必须用 np.pad 或 np.zeros 保持输出长度为 n
+❌ 常数信号: 输出全为 0 或全为相同值，毫无信息量
+❌ 纯数学变换无经济含义: 仅做标准化/归一化不构成新因子
 
 输出 JSON 格式:
 {{

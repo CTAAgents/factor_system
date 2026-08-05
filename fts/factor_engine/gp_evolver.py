@@ -80,6 +80,8 @@ class GPEvolverConfig:
     min_tree_depth: int = 2
     elitism_size: int = 5
     fitness_metric: Literal["ic", "sharpe", "ic_sharpe_combo"] = "ic_sharpe_combo"
+    multi_parent_crossover_rate: float = 0.3
+    """多父代交叉概率（0.0-1.0，默认 30% 概率使用 3 父代交叉）。"""
 
 
 @dataclass
@@ -472,13 +474,19 @@ class GPEvolver:
         elites = sorted_pop[: config.elitism_size]
         new_population.extend(elites)
 
-        # 锦标赛选择 + 交叉 + 变异
+        # 锦标赛选择 + 交叉（支持多父代）+ 变异
         while len(new_population) < config.population_size:
             parent1 = self._tournament_select(population)
             parent2 = self._tournament_select(population)
 
             if random.random() < config.crossover_rate:
-                child = self._crossover(parent1, parent2)
+                if random.random() < config.multi_parent_crossover_rate:
+                    # 多父代交叉: 选择 3 个父代
+                    parents = self._tournament_select_n(population, n=3)
+                    child = self._multi_parent_crossover(parents)
+                else:
+                    # 标准双亲交叉
+                    child = self._crossover(parent1, parent2)
             else:
                 child = ExpressionTree(
                     root=self._copy_tree(parent1.root),
@@ -494,6 +502,27 @@ class GPEvolver:
 
         # 截断到种群大小
         return new_population[: config.population_size]
+
+    def _tournament_select_n(
+        self,
+        population: list[ExpressionTree],
+        n: int = 1,
+    ) -> list[ExpressionTree]:
+        """锦标赛选择 N 个父代。
+
+        Args:
+            population: 种群
+            n: 返回的父代数量
+
+        Returns:
+            按适应度降序排列的 N 个父代
+        """
+        size = min(self._config.tournament_size, len(population))
+        selected: list[ExpressionTree] = []
+        for _ in range(n):
+            candidates = random.sample(population, size)
+            selected.append(max(candidates, key=lambda t: t.fitness))
+        return selected
 
     def _tournament_select(
         self,
@@ -576,6 +605,75 @@ class GPEvolver:
             root=root,
             depth=_tree_depth(root),
             size=_tree_size(root),
+            expression=expr,
+        )
+
+    def _multi_parent_crossover(
+        self,
+        parents: list[ExpressionTree],
+    ) -> ExpressionTree:
+        """多父代交叉策略: 3 父代 → 子树多源融合.
+
+        与标准双亲交叉不同，多父代交叉从 3 个父代中提取遗传材料:
+        - 父代 A (base): 作为主框架
+        - 父代 B (donor1): 提供第一个子树替换
+        - 父代 C (donor2): 提供第二个子树替换（如果存在多个内部节点）
+
+        优势:
+        - 增加种群多样性，避免陷入局部最优
+        - 融合多个父代的"有效片段"，加速收敛
+        - 对浅层因子表达式树尤为有效
+
+        Args:
+            parents: 3 个父代（按适应度降序）
+
+        Returns:
+            交叉后的子代
+        """
+        if len(parents) < 3:
+            # 不足 3 个父代时回退到标准双亲交叉
+            return self._crossover(parents[0], parents[-1])
+
+        # 父代 A: 主框架
+        child_root = self._copy_tree(parents[0].root)
+        child_nodes = self._collect_internal_nodes(child_root)
+
+        if not child_nodes:
+            return ExpressionTree(
+                root=child_root,
+                depth=_tree_depth(child_root),
+                size=_tree_size(child_root),
+                expression=_tree_to_expression(child_root),
+            )
+
+        # 父代 B: 第一个子树替换
+        donor1_root = self._copy_tree(parents[1].root)
+        donor1_nodes = self._collect_internal_nodes(donor1_root)
+        if donor1_nodes:
+            target = random.choice(child_nodes)
+            source = random.choice(donor1_nodes)
+            target.op_name = source.op_name
+            target.children = self._copy_children(source.children)
+
+        # 重新收集子节点（子树结构已变）
+        if len(child_nodes) > 1:
+            child_nodes = self._collect_internal_nodes(child_root)
+
+        # 父代 C: 第二个子树替换（如果还有节点）
+        if len(child_nodes) > 1 and len(parents) > 2:
+            donor2_root = self._copy_tree(parents[2].root)
+            donor2_nodes = self._collect_internal_nodes(donor2_root)
+            if donor2_nodes:
+                target = random.choice(child_nodes)
+                source = random.choice(donor2_nodes)
+                target.op_name = source.op_name
+                target.children = self._copy_children(source.children)
+
+        expr = _tree_to_expression(child_root)
+        return ExpressionTree(
+            root=child_root,
+            depth=_tree_depth(child_root),
+            size=_tree_size(child_root),
             expression=expr,
         )
 
