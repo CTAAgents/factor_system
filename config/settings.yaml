@@ -15,6 +15,10 @@ max_generations: 10
 population_size: 20
 micro_trials_per_generation: 50
 
+# ── 演化模式 (Phase C.2) ──
+# operator(算子主干) / code(代码创新) / hybrid(混合)
+evolution_mode: "hybrid"
+
 # ── L1 Meta-Loop ──
 meta_loop_interval_hours: 24
 meta_loop_max_tokens: 8000

@@ -417,3 +417,32 @@ class TestConfigPriority:
         assert cfg.population_size == 100  # YAML
         assert cfg.meta_loop_interval_hours == 12  # YAML
         assert cfg.micro_trials_per_generation == 50  # 默认值
+
+
+# ═══════════════════════════════════════════════════════════
+# evolution_mode 配置字段 (Phase C.2)
+# ═══════════════════════════════════════════════════════════
+
+def test_evolution_mode_default_hybrid():
+    cfg = load_config(config_path=None)  # 不落盘场景下取默认值
+    assert cfg.evolution_mode in ("operator", "code", "hybrid")
+
+
+def test_validate_evolution_mode():
+    from fts.config.settings import EVOLUTION_MODES, validate_evolution_mode
+    assert validate_evolution_mode("operator") == "operator"
+    assert validate_evolution_mode("hybrid") == "hybrid"
+
+
+def test_validate_evolution_mode_rejects_invalid():
+    import pytest
+    from fts.config.settings import validate_evolution_mode
+    with pytest.raises(ValueError):
+        validate_evolution_mode("quantum")
+
+
+def test_evolution_mode_env_override(monkeypatch):
+    from fts.config.settings import load_config
+    monkeypatch.setenv("FTS_EVOLUTION_MODE", "operator")
+    cfg = load_config(config_path=None)
+    assert cfg.evolution_mode == "operator"

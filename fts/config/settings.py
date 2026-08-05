@@ -62,6 +62,10 @@ class FTSConfig:
     )
 
     # ── 演化配置 ──
+    # ── 演化模式 (Phase C.2): operator(算子主干) / code(代码创新) / hybrid(混合) ──
+    evolution_mode: str = field(
+        default_factory=lambda: os.getenv("FTS_EVOLUTION_MODE", "hybrid")
+    )
     max_generations: int = 10
     population_size: int = 20
     micro_trials_per_generation: int = 50
@@ -186,10 +190,24 @@ def _apply_env_overrides(cfg: FTSConfig) -> None:
                 setattr(cfg, key, env_val)
 
 
+EVOLUTION_MODES: tuple[str, ...] = ("operator", "code", "hybrid")
+
+
+def validate_evolution_mode(mode: str) -> str:
+    """校验演化模式合法性。"""
+    if mode not in EVOLUTION_MODES:
+        raise ValueError(
+            f"evolution_mode 必须是 {EVOLUTION_MODES} 之一, 实际: {mode}"
+        )
+    return mode
+
+
 __all__ = [
     "FTSConfig",
     "get_config",
     "load_config",
     "DEFAULT_MEMORY_DIR",
     "DEFAULT_ELITE_DIR",
+    "EVOLUTION_MODES",
+    "validate_evolution_mode",
 ]
