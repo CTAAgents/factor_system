@@ -758,6 +758,160 @@ def _print_backtest_ranking(results: list) -> int:
     return 0
 
 
+# ─── fts feature / fts gp（C.1 特征工程中台 CLI） ──────────
+
+
+def _cmd_feature_list(args: argparse.Namespace) -> int:
+    """列出特征算子。"""
+    from .factor_engine.feature_ops import FeatureOpsEngine
+
+    engine = FeatureOpsEngine()
+    category = getattr(args, "category", None)
+    ops = engine.registry.list_operators(category=category)
+
+    if not ops:
+        print(f"[feature] 无算子 (category={category})")
+        return 0
+
+    print(f"=== 特征算子 ({len(ops)} 个) ===")
+    if getattr(args, "json", False):
+        print(json.dumps(
+            [op.__dict__ for op in ops], indent=2, ensure_ascii=False,
+        ))
+        return 0
+
+    print(f"{'算子':<24}{'类别':<16}{'签名'}")
+    print("-" * 70)
+    for op in ops:
+        print(f"{op.name:<24}{op.category:<16}{op.signature}")
+    return 0
+
+
+def _cmd_feature_analyze(args: argparse.Namespace) -> int:
+    """特征重要性分析。"""
+    from .factor_engine.feature_importance import FeatureImportanceAnalyzer
+
+    factor = _load_factor_by_id(args.factor_id, getattr(args, "market", "futures"))
+    if factor is None:
+        print(f"[feature] 未找到因子: {args.factor_id}")
+        return 1
+
+    # 准备面板数据（feature 分析需要 forward_return_20d 目标列）
+    panel, common_dates, _ = _prepare_futures_data(days=args.days)
+    if not panel:
+        print("[feature] 数据准备失败", file=sys.stderr)
+        return 1
+
+    # 用第一个品种构造分析数据
+    first_sym = list(panel.keys())[0]
+    df = panel[first_sym].copy()
+    closes = df["close"].values
+    fwd = np.zeros(len(closes))
+    if len(closes) > 20:
+        fwd[:-20] = (closes[20:] - closes[:-20]) / np.maximum(closes[:-20], 1e-10)
+    df["forward_return_20d"] = fwd
+
+    # 计算因子值
+    from .factor_engine.signal_generator import SignalGenerator
+
+    values = SignalGenerator._compute_factor_values(factor, df)
+    if values is None:
+        print("[feature] 因子计算失败", file=sys.stderr)
+        return 1
+
+    analyzer = FeatureImportanceAnalyzer()
+    result = analyzer.analyze(
+        factor_series=pd.Series(values, index=df.index),
+        data=df,
+        target_col="forward_return_20d",
+    )
+
+    print(f"=== 特征重要性: {result.factor_id or args.factor_id} ===")
+    print(f"方法: {result.analysis_method} | 基线 IC: {result.baseline_ic:.4f}")
+    print(f"{'特征':<24}{'重要性':<12}")
+    print("-" * 40)
+    for name, imp in result.feature_importance.items():
+        print(f"{name:<24}{imp:<12.6f}")
+
+    if args.output:
+        Path(args.output).mkdir(parents=True, exist_ok=True)
+        out = Path(args.output) / f"feature_importance_{args.factor_id}.json"
+        out.write_text(
+            json.dumps({
+                "factor_id": args.factor_id,
+                "baseline_ic": result.baseline_ic,
+                "importance": result.feature_importance,
+            }, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"结果已保存: {out}")
+    return 0
+
+
+def _cmd_gp_evolve(args: argparse.Namespace) -> int:
+    """GP 遗传规划因子演化。"""
+    from .factor_engine.feature_ops import FeatureOpsEngine
+    from .factor_engine.gp_evolver import GPEvolver, GPEvolverConfig
+
+    # 准备面板数据
+    if getattr(args, "universe", "futures") == "csi300":
+        panel, common_dates, _ = _prepare_cross_section_data(
+            days=args.days, max_stocks=args.max_stocks,
+        )
+    else:
+        panel, common_dates, _ = _prepare_futures_data(
+            days=args.days, max_symbols=args.max_symbols,
+        )
+    if not panel:
+        print("[gp] 数据准备失败", file=sys.stderr)
+        return 1
+
+    # 构造宽表面板 + 目标列
+    first_sym = list(panel.keys())[0]
+    df = panel[first_sym].copy()
+    closes = df["close"].values
+    fwd = np.zeros(len(closes))
+    if len(closes) > args.forward:
+        fwd[:-args.forward] = (
+            closes[args.forward:] - closes[:-args.forward]
+        ) / np.maximum(closes[:-args.forward], 1e-10)
+    df["forward_return_20d"] = fwd
+
+    engine = FeatureOpsEngine()
+    config = GPEvolverConfig(
+        population_size=args.population,
+        max_generations=args.generations,
+    )
+    gp = GPEvolver(
+        operator_registry=engine.registry,
+        data_panel=df,
+        target_col="forward_return_20d",
+        config=config,
+    )
+    result = gp.evolve()
+
+    print(f"=== GP 演化结果 (universe={args.universe}) ===")
+    print(f"最优表达式: {result.best_expression}")
+    print(f"适应度: {result.best_fitness:.4f}")
+    print(f"IC: {result.best_ic:.4f} | Sharpe: {result.best_sharpe:.4f}")
+    print(f"代数: {result.generations_completed} | 评估次数: {result.total_evaluations}")
+
+    if args.output:
+        Path(args.output).mkdir(parents=True, exist_ok=True)
+        out = Path(args.output) / "gp_best_factor.json"
+        out.write_text(
+            json.dumps({
+                "expression": result.best_expression,
+                "fitness": result.best_fitness,
+                "ic": result.best_ic,
+                "sharpe": result.best_sharpe,
+            }, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"最优因子已保存: {out}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建 CLI parser。"""
     parser = argparse.ArgumentParser(
@@ -905,6 +1059,40 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt_cmp.add_argument("--days", type=int, default=500, help="回溯天数")
     p_bt_cmp.add_argument("--capital", type=float, default=1_000_000.0, help="初始资金")
     p_bt_cmp.set_defaults(func=_cmd_backtest_compare)
+
+    # feature（C.1 特征工程中台）
+    p_feature = sub.add_parser("feature", help="特征工程中台（C.1）")
+    feat_sub = p_feature.add_subparsers(dest="subcommand", required=False)
+
+    p_feat_list = feat_sub.add_parser("list", help="列出特征算子")
+    p_feat_list.add_argument("--category", default=None,
+                             help="算子类别（time_series/price/rolling/technical/cross_section/cross_symbol/composite）")
+    p_feat_list.add_argument("--json", action="store_true", help="JSON 格式输出")
+    p_feat_list.set_defaults(func=_cmd_feature_list)
+
+    p_feat_analyze = feat_sub.add_parser("analyze", help="特征重要性分析")
+    p_feat_analyze.add_argument("--factor-id", required=True, help="因子 ID")
+    p_feat_analyze.add_argument("--market", default="futures", choices=["futures", "stock"],
+                                help="市场类型（默认：futures）")
+    p_feat_analyze.add_argument("--days", type=int, default=500, help="回溯天数")
+    p_feat_analyze.add_argument("--output", default=None, help="结果输出目录")
+    p_feat_analyze.set_defaults(func=_cmd_feature_analyze)
+
+    # gp（C.1 GP 遗传规划演化）
+    p_gp = sub.add_parser("gp", help="GP 遗传规划因子演化（C.1）")
+    gp_sub = p_gp.add_subparsers(dest="subcommand", required=False)
+
+    p_gp_evolve = gp_sub.add_parser("evolve", help="运行 GP 演化")
+    p_gp_evolve.add_argument("--universe", default="futures", choices=["futures", "csi300"],
+                             help="品种池类型（默认：futures）")
+    p_gp_evolve.add_argument("--population", type=int, default=200, help="种群大小（默认 200）")
+    p_gp_evolve.add_argument("--generations", type=int, default=50, help="最大代数（默认 50）")
+    p_gp_evolve.add_argument("--days", type=int, default=500, help="回溯天数")
+    p_gp_evolve.add_argument("--max-stocks", type=int, default=30, help="横截面模式最大标的数")
+    p_gp_evolve.add_argument("--max-symbols", type=int, default=0, help="期货模式最大品种数（0=全部）")
+    p_gp_evolve.add_argument("--forward", type=int, default=20, help="预测周期（默认 20）")
+    p_gp_evolve.add_argument("--output", default=None, help="结果输出目录")
+    p_gp_evolve.set_defaults(func=_cmd_gp_evolve)
 
     return parser
 
