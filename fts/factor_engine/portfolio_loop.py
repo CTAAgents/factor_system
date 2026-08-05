@@ -45,6 +45,7 @@ from .contracts import (
     EVOLUTION_VERSION,
     DEFAULT_L3_VERIFIER_CONFIG,
     DEFAULT_L3_BUDGET,
+    DEFAULT_VERIFIER_CONFIG,
     AgentOptimizationProposal,
     FactorCorrelation,
     L3MetaLoopState,
@@ -285,7 +286,177 @@ class PortfolioManager:
         return proposals
 
 
-# ─── 信号合成 ─────────────────────────────────────────────
+# ─── Regime 自适应权重 ────────────────────────────────────
+
+# Regime → FactorFamily 权重倍率映射表
+# 基于优化计划 A.3: 不同市场制度下因子家族的表现差异
+REGIME_FAMILY_MULTIPLIERS: dict[str, dict[str, float]] = {
+    "bull": {
+        "trend": 1.3,           # 趋势因子 +30%
+        "momentum": 1.3,        # 动量因子 +30%
+        "breakout": 1.2,        # 突破因子 +20%
+        "carry": 1.1,           # 跨期套利 +10%
+        "cross_section": 1.1,   # 横截面因子 +10%
+        "fundamental": 1.0,     # 基本面不变
+        "mean_reversion": 0.7,  # 均值回归 -30%
+        "volatility": 0.9,      # 波动率因子 -10%
+    },
+    "bear": {
+        "trend": 1.1,           # 趋势因子 +10%（空头趋势仍有效）
+        "momentum": 0.8,        # 动量因子 -20%（反转风险）
+        "breakout": 0.7,        # 突破因子 -30%
+        "carry": 1.0,           # 跨期套利不变
+        "volatility": 1.3,      # 波动率因子 +30%（防御）
+        "mean_reversion": 1.2,  # 均值回归 +20%
+        "liquidity": 1.2,       # 流动性因子 +20%
+        "fundamental": 1.1,     # 基本面 +10%
+    },
+    "oscillate": {
+        "mean_reversion": 1.3,  # 均值回归 +30%（震荡市核心）
+        "reversal": 1.3,        # 反转因子 +30%
+        "trend": 0.8,           # 趋势因子 -20%
+        "momentum": 0.8,        # 动量因子 -20%
+        "volatility": 1.1,      # 波动率因子 +10%
+        "volume": 1.1,          # 成交量因子 +10%
+    },
+    "high_vol": {
+        "volatility": 1.3,      # 波动率因子 +30%
+        "mean_reversion": 1.1,  # 均值回归 +10%
+        "trend": 0.7,           # 趋势因子 -30%
+        "momentum": 0.7,        # 动量因子 -30%
+        "breakout": 0.5,        # 突破因子 -50%（高波动假突破多）
+        "carry": 1.0,           # 跨期套利不变
+    },
+    "low_vol": {
+        "trend": 1.2,           # 趋势因子 +20%
+        "momentum": 1.2,        # 动量因子 +20%
+        "mean_reversion": 1.0,  # 均值回归不变
+        "volatility": 0.7,      # 波动率因子 -30%
+        "fundamental": 1.1,     # 基本面 +10%
+    },
+}
+
+
+def _infer_factor_family_from_name(name: str) -> str:
+    """从因子名称推断其家族分类。
+
+    Args:
+        name: 因子名称
+
+    Returns:
+        推断的家族名称（"trend", "mean_reversion" 等）
+    """
+    name_lower = name.lower()
+
+    if any(kw in name_lower for kw in ("trend", "momentum", "breakout", "follow")):
+        return "trend"
+    if any(kw in name_lower for kw in ("reversion", "mean", "reversal", "regression")):
+        return "mean_reversion"
+    if any(kw in name_lower for kw in ("carry", "spread", "arbitrage")):
+        return "carry"
+    # 先检查 volume 家族（避免被 vol 前缀误判为 volatility）
+    if any(kw in name_lower for kw in ("volume", "volume_ratio")):
+        return "volume"
+    if any(kw in name_lower for kw in ("volatility", "vol", "atr", "bollinger")):
+        return "volatility"
+    if any(kw in name_lower for kw in ("fundamental", "pe", "pb", "roe")):
+        return "fundamental"
+    if any(kw in name_lower for kw in ("liquidity", "illiquidity")):
+        return "liquidity"
+    if any(kw in name_lower for kw in ("cross_section", "cs_", "rank")):
+        return "cross_section"
+
+    return "other"
+
+
+def regime_adaptive_weight_adjustment(
+    signals: list[PortfolioSignal],
+    regime: dict[str, Any],
+    factors: list[dict[str, Any]],
+    min_weight: float = 0.01,
+) -> list[PortfolioSignal]:
+    """根据市场制度自适应调整因子权重。
+
+    核心逻辑:
+    1. 从 MarketRegime 获取当前制度名（bull/bear/oscillate/high_vol/low_vol）
+    2. 遍历每个 signal，根据其 factor_id 在 factors 中查找 family 字段
+    3. 根据 REGIME_FAMILY_MULTIPLIERS 查表获取倍率
+    4. 将原始权重 × 倍率 → 调整后权重
+    5. 对高波动期（high_vol）额外缩减衰减过快因子
+
+    Args:
+        signals: 合成后的信号列表
+        regime: 市场制度检测结果 (from RegimeAwareSelector.detect())
+        factors: 原始因子列表（含 family 字段）
+        min_weight: 最小权重下限（避免完全归零）
+
+    Returns:
+        调整后的 signals 列表（权重已更新，retained 可能变化）
+    """
+    if not signals or not regime:
+        return signals
+
+    regime_name = regime.get("regime", "oscillate")
+    multipliers = REGIME_FAMILY_MULTIPLIERS.get(regime_name, {})
+
+    if not multipliers:
+        logger.info("[L3-Regime] 无制度倍率配置，跳过自适应调整 [regime=%s]", regime_name)
+        return signals
+
+    # 构建 factor_id → family 映射
+    factor_family_map: dict[str, str] = {}
+    for f in factors:
+        fid = f.get("factor_id", "")
+        family = f.get("family", "")
+        if fid:
+            if family:
+                factor_family_map[fid] = family
+            else:
+                # 无 family 字段，从名称推断
+                factor_family_map[fid] = _infer_factor_family_from_name(
+                    f.get("name", "")
+                )
+
+    # 应用倍率调整
+    adjustment_log: list[str] = []
+    for s in signals:
+        fid = s.get("factor_id", "")
+        family = factor_family_map.get(fid, "other")
+
+        # 获取该家族的倍率（默认 1.0）
+        multiplier = multipliers.get(family, 1.0)
+
+        # 高波动期额外缩减衰减因子
+        if regime_name == "high_vol":
+            decay = s.get("decay_6m", 0.0)
+            if decay > 0.20:
+                multiplier *= 0.8  # 衰减快的因子再减 20%
+
+        # 应用倍率（但不低于 min_weight 比例）
+        original_weight = s.get("weight", 0.0)
+        adjusted_weight = max(original_weight * multiplier, original_weight * min_weight)
+
+        if abs(adjusted_weight - original_weight) > 1e-6:
+            adjustment_log.append(
+                f"  {s.get('name', fid)} [{family}]: {original_weight:.4f} → {adjusted_weight:.4f} (×{multiplier:.2f})"
+            )
+
+        s["weight"] = adjusted_weight
+
+    # 日志
+    if adjustment_log:
+        logger.info(
+            "[L3-Regime] 自适应权重调整完成 [regime=%s, adjusted=%d/%d]:\n%s",
+            regime_name,
+            len(adjustment_log),
+            len(signals),
+            "\n".join(adjustment_log),
+        )
+    else:
+        logger.info("[L3-Regime] 自适应权重调整完成 [regime=%s, 无需调整]", regime_name)
+
+    return signals
+
 
 def synthesize_signals(
     factors: list[dict[str, Any]],
@@ -360,6 +531,11 @@ def synthesize_signals(
                 orthogonalized=False,
                 retained=True,
             ))
+        # [WEIGHT-LOG] 权重计算详情
+        logger.info("[L3-WEIGHT] sharpe_weight 模式: total_sharpe=%.2f, n_factors=%d", total_sharpe, n)
+        for idx, s in enumerate(sorted(signals, key=lambda x: -x["weight"])):
+            logger.info("[L3-WEIGHT]   [%d] %s | sharpe=%.2f | raw_weight=%.4f",
+                        idx + 1, s["name"], s["sharpe"], s["weight"])
     else:
         # lightgbm 等未实现模式暂回退等权
         signals = []
@@ -546,40 +722,222 @@ def orthogonalize_factors(
     signals: list[PortfolioSignal],
     correlation_matrix: list[FactorCorrelation] | None = None,
     max_corr_threshold: float = 0.7,
+    factors: list[dict[str, Any]] | None = None,
+    use_tiered: bool = False,
+    l2_prior_correlations: list[dict[str, Any]] | None = None,
 ) -> list[PortfolioSignal]:
-    """因子正交化 — 剔除相关性 > threshold 的因子。
+    """因子正交化 — 剔除相关性 > threshold 的因子 + 代码去重 + L2 先验注入。
 
-    保留夏普更高的因子。
+    保留夏普更高的因子。支持四种模式：
+    1. 有 correlation_matrix: 基于相关性矩阵剔除高相关因子对
+    2. 无 correlation_matrix + use_tiered=True: 分层正交化（预筛→家族→统计）
+    3. 无 correlation_matrix: 基于因子代码哈希去重（相同代码的因子只保留夏普更高的）
+    4. 所有模式均注入 l2_prior_correlations 作为先验标记
+
+    Args:
+        signals: 组合信号列表
+        correlation_matrix: 因子相关性矩阵（可选）
+        max_corr_threshold: 最大相关性阈值
+        factors: 因子元数据列表
+        use_tiered: 是否使用分层正交化（因子数>=30时推荐）
+        l2_prior_correlations: L2 种子因子相关性预检结果（先验数据）
     """
-    if correlation_matrix is None:
-        # 无相关性矩阵时，全部标记为已正交化
+    # ── 注入 L2 先验标记（所有模式通用）──
+    if l2_prior_correlations:
+        logger.info("[L3] 注入 L2 相关性先验: %d 对高相关因子", len(l2_prior_correlations))
+        # 将 L2 先验标记附加到对应 signal
+        for pair in l2_prior_correlations:
+            fid_a = pair.get("factor_id_a", "")
+            fid_b = pair.get("factor_id_b", "")
+            max_abs = max(abs(pair.get("pearson", 0)), abs(pair.get("spearman", 0)))
+            if max_abs >= 0.95:
+                for s in signals:
+                    if s.get("factor_id") in (fid_a, fid_b):
+                        flags = s.setdefault("correlation_flags", [])
+                        flags.append({
+                            "type": "l2_seed_correlation",
+                            "reason": f"L2 种子预检: 与 {fid_b if s.get('factor_id') == fid_a else fid_a} 相关 {max_abs:.3f}",
+                        })
+
+    # ── 模式 0: 分层正交化（使用 FactorOptimizer — 标记模式）──
+    if use_tiered and factors is not None and len(factors) >= 30:
+        try:
+            from .factor_optimizer import FactorOptimizer
+            logger.info("[L3] 触发分层正交化（标记模式）: 因子数=%d, 阈值=%.1f",
+                        len(factors), max_corr_threshold)
+            optimizer = FactorOptimizer()
+            result_factors, summary = optimizer.tiered_orthogonalize(
+                factors, max_corr_threshold=max_corr_threshold, mode="mark",
+                l2_prior_correlations=l2_prior_correlations,
+            )
+
+            # 只根据 exclude_from_portfolio 硬排除（仅限代码重复场景）
+            # 其他相关性标记仅作为诊断信息，不改变 retain 状态
+            for rf in result_factors:
+                fid = rf.get("factor_id", "")
+                flags = rf.get("correlation_flags", [])
+                excluded = rf.get("exclude_from_portfolio", False)
+                
+                for s in signals:
+                    if s.get("factor_id") == fid:
+                        s["orthogonalized"] = True
+                        # 添加标记到 signal（用于诊断）
+                        if flags:
+                            s["correlation_flags"] = flags
+                        # 仅在明确排除时标记 retained=False
+                        if excluded:
+                            s["retained"] = False
+
+            # ── Phase 1 详细日志 ──
+            phase1_details = summary.get("phase1_details", [])
+            phase1_code_dup = [d for d in phase1_details if d["type"] == "code_duplicate"]
+            phase1_family = [d for d in phase1_details if d["type"] == "family_prune"]
+
+            logger.info("[L3] Phase 1 标记完成: 标记 %d 个 (代码重复=%d, 家族标记=%d)",
+                        summary.get("phase1_marked", 0),
+                        len(phase1_code_dup), len(phase1_family))
+
+            if phase1_code_dup:
+                dup_msg = "; ".join(
+                    f"{d['removed']} (因:{d['reason']})"
+                    for d in phase1_code_dup
+                )
+                logger.info("[L3] Phase 1-代码重复标记: %s", dup_msg)
+
+            if phase1_family:
+                fam_msg = "; ".join(
+                    f"{d['removed']} (因:{d['reason']})"
+                    for d in phase1_family
+                )
+                logger.info("[L3] Phase 1-家族标记: %s", fam_msg)
+
+            # ── Phase 2 详细日志（含 L2 先验合并）──
+            phase2_details = summary.get("phase2_details", [])
+            l2_prior_count = summary.get("l2_prior_count", 0)
+            phase2_new = summary.get("phase2_new_count", 0)
+            phase2_overlap = summary.get("phase2_overlap_count", 0)
+            
+            logger.info(
+                "[L3] Phase 2 相关性标记完成: 标记 %d 个高相关因子 "
+                "(新增 %d 个, 与 L2 先验重叠 %d 个)",
+                summary.get("phase2_marked", 0),
+                phase2_new, phase2_overlap,
+            )
+            
+            if l2_prior_count > 0:
+                logger.info("[L3] Phase 2 与 L2 先验合并: L2 先验标记 %d 个, "
+                            "Phase 2 新增 %d 个, 重叠 %d 个",
+                            l2_prior_count, phase2_new, phase2_overlap)
+
+            if phase2_details:
+                corr_msg = "; ".join(
+                    f"{d['removed']} (因:{d['reason']})"
+                    for d in phase2_details
+                )
+                logger.info("[L3] Phase 2-高相关标记详情: %s", corr_msg)
+
+            # ── L2 先验 × Phase 2 合并详情 ──
+            for s in signals:
+                flags = s.get("correlation_flags", [])
+                l2_flags = [f for f in flags if f.get("source") == "l2_prior"]
+                phase2_flags = [f for f in flags if f.get("source") == "phase2_full_correlation"]
+                if l2_flags or phase2_flags:
+                    logger.info(
+                        "[L3] 因子 %s 标记汇总: L2先验=%d, Phase2全量=%d",
+                        s.get("name", s.get("factor_id", "?")),
+                        len(l2_flags), len(phase2_flags),
+                    )
+                    for f in l2_flags:
+                        logger.info("[L3]   L2: %s", f["reason"])
+                    for f in phase2_flags:
+                        logger.info("[L3]   P2: %s", f["reason"])
+
+            # ── 汇总 ──
+            logger.info(
+                "[L3] 分层正交化汇总: 输入 %d → 输出 %d | "
+                "L2 先验 %d, Phase1 %d, Phase2 %d | "
+                "Phase2 新增 %d, Phase2 与 L2 重叠 %d | "
+                "耗时 %.2fs | 模式=mark (只标记不删除)",
+                summary.get("input_count", 0),
+                summary.get("output_count", 0),
+                l2_prior_count,
+                summary.get("phase1_marked", 0),
+                summary.get("phase2_marked", 0),
+                phase2_new, phase2_overlap,
+                summary.get("elapsed_seconds", 0),
+            )
+            return signals
+        except Exception as e:
+            logger.warning("[L3] 分层正交化失败，回退到代码去重: %s", e)
+
+    # ── 模式 1: 基于相关性矩阵的正交化 ──
+    if correlation_matrix is not None:
+        high_corr_pairs: dict[str, set[str]] = {}
+        for edge in correlation_matrix:
+            if abs(edge.get("pearson", 0)) > max_corr_threshold:
+                a, b = edge["factor_id_a"], edge["factor_id_b"]
+                high_corr_pairs.setdefault(a, set()).add(b)
+                high_corr_pairs.setdefault(b, set()).add(a)
+
+        factor_map = {s["factor_id"]: s for s in signals}
+        removed: set[str] = set()
+        for fid in sorted(factor_map.keys(), key=lambda x: factor_map[x].get("sharpe", 0), reverse=True):
+            if fid in removed:
+                continue
+            for neighbor in high_corr_pairs.get(fid, set()):
+                if neighbor not in removed and neighbor in factor_map:
+                    removed.add(neighbor)
+
         for s in signals:
             s["orthogonalized"] = True
+            if s["factor_id"] in removed:
+                s["retained"] = False
+
         return signals
-
-    # 构建高相关性对
-    high_corr_pairs: dict[str, set[str]] = {}
-    for edge in correlation_matrix:
-        if abs(edge.get("pearson", 0)) > max_corr_threshold:
-            a, b = edge["factor_id_a"], edge["factor_id_b"]
-            high_corr_pairs.setdefault(a, set()).add(b)
-            high_corr_pairs.setdefault(b, set()).add(a)
-
-    # 按夏普排序，保留更高的
-    factor_map = {s["factor_id"]: s for s in signals}
-    removed: set[str] = set()
-    for fid in sorted(factor_map.keys(), key=lambda x: factor_map[x].get("sharpe", 0), reverse=True):
-        if fid in removed:
-            continue
-        for neighbor in high_corr_pairs.get(fid, set()):
-            if neighbor not in removed and neighbor in factor_map:
-                removed.add(neighbor)
-
+    
+    # ── 模式 2: 基于代码哈希的去重（无相关性矩阵时的后备方案）──
+    if factors is not None:
+        # 构建 factor_id -> code_hash 映射
+        factor_code_map: dict[str, str] = {}
+        for f in factors:
+            fid = f.get("factor_id", "")
+            code_hash = f.get("code_hash", "")
+            if fid and code_hash:
+                factor_code_map[fid] = code_hash
+        
+        # 按代码哈希分组，相同代码只保留夏普更高的
+        hash_to_factors: dict[str, list[PortfolioSignal]] = {}
+        for s in signals:
+            fid = s.get("factor_id", "")
+            code_hash = factor_code_map.get(fid, "")
+            if code_hash:
+                hash_to_factors.setdefault(code_hash, []).append(s)
+        
+        removed: set[str] = set()
+        for code_hash, group in hash_to_factors.items():
+            if len(group) > 1:
+                # 按夏普排序，保留最高的
+                group_sorted = sorted(group, key=lambda x: x.get("sharpe", 0), reverse=True)
+                for s in group_sorted[1:]:
+                    removed.add(s["factor_id"])
+                    logger.info("[L3] 代码去重: 剔除 %s (与 %s 代码相同)", 
+                                s.get("name", "?"), group_sorted[0].get("name", "?"))
+        
+        for s in signals:
+            s["orthogonalized"] = True
+            if s["factor_id"] in removed:
+                s["retained"] = False
+        
+        if removed:
+            logger.info("[L3] 正交化完成: 基于代码去重剔除 %d 个因子", len(removed))
+        else:
+            logger.info("[L3] 正交化完成: 无代码重复因子")
+        
+        return signals
+    
+    # ── 模式 3: 无任何去重依据，全部标记为已正交化 ──
     for s in signals:
         s["orthogonalized"] = True
-        if s["factor_id"] in removed:
-            s["retained"] = False
-
     return signals
 
 
@@ -588,9 +946,16 @@ def decay_test(
     max_decay_rate: float = 0.30,
 ) -> list[PortfolioSignal]:
     """衰减检验 — 6 个月滚动衰减 > threshold 的因子标记为不保留。"""
+    removed = []
     for s in signals:
-        if s.get("decay_6m", 0) > max_decay_rate:
+        decay = s.get("decay_6m", 0)
+        if decay > max_decay_rate:
             s["retained"] = False
+            removed.append((s["name"], decay))
+    if removed:
+        logger.info("[L3-WEIGHT] 衰减检验移除 %d 个因子 (decay>%.2f): %s",
+                    len(removed), max_decay_rate,
+                    "; ".join(f"{n}(decay={d:.4f})" for n, d in removed))
     return signals
 
 
@@ -625,12 +990,40 @@ def build_combo(
         for s in retained:
             s["weight"] = s.get("weight", 0) / total_w
 
+    # [WEIGHT-LOG] 归一化后权重分布
+    sorted_retained = sorted(retained, key=lambda x: -x["weight"])
+    effective_n = 1.0 / sum((s["weight"] ** 2) for s in sorted_retained)
+    logger.info("[L3-WEIGHT] 最终权重分布: %d 因子, effective_n=%.2f, HHI=%.4f",
+                len(sorted_retained), effective_n,
+                sum(s["weight"] ** 2 for s in sorted_retained))
+    for idx, s in enumerate(sorted_retained):
+        logger.info("[L3-WEIGHT]   [%d] %s | weight=%.4f | sharpe=%.2f | ic=%.4f",
+                    idx + 1, s["name"], s["weight"], s["sharpe"], s.get("ic", 0))
+
     # 组合指标（简化为算术平均）
     combo_sharpe = sum(s.get("sharpe", 0) for s in retained) / len(retained)
     combo_turnover = sum(s.get("turnover", 0) for s in retained) / len(retained)
-    max_corr = 0.0
-    for s in retained:
-        max_corr = max(max_corr, s.get("sharpe", 0) * 0.15)  # 估算
+    
+    # 更准确的相关性估算: 基于因子权重集中度 + Ridge 惩罚后的相关性衰减
+    n_ret = len(retained)
+    if n_ret > 1:
+        total_w = sum(s.get("weight", 0) for s in retained)
+        if total_w > 0:
+            weighted_concentration = sum(
+                (s.get("weight", 0) / total_w) ** 2 
+                for s in retained
+            )
+            effective_n = 1.0 / weighted_concentration if weighted_concentration > 0 else float(n_ret)
+            diversity = min(1.0, effective_n / n_ret)
+            avg_sharpe = sum(s.get("sharpe", 0) for s in retained) / n_ret
+            max_corr = min(
+                0.7,
+                (1.0 - diversity) * 0.35 + avg_sharpe * 0.015
+            )
+        else:
+            max_corr = 0.15
+    else:
+        max_corr = 0.0
 
     return PortfolioCombo(
         version=EVOLUTION_VERSION,
@@ -689,13 +1082,315 @@ def generate_agent_proposals(
 
 # ─── 精英因子读取 ────────────────────────────────────────
 
-def load_elite_factors(elite_dir: str | Path) -> list[dict[str, Any]]:
-    """从 elite 目录读取因子，返回简易 dict 列表。
+# ── 运行时质量门槛（与 DEFAULT_VERIFIER_CONFIG 对齐） ──
 
-    精英因子文件结构:
+_RUNTIME_MIN_IC = DEFAULT_VERIFIER_CONFIG["min_ic"]       # 0.03
+_RUNTIME_MIN_SHARPE = DEFAULT_VERIFIER_CONFIG["min_sharpe"]  # 1.5
+
+
+def _filter_by_quality_gate(factors: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
+    """按 Verifier 质量门槛过滤因子 — 防御性检查。
+
+    即使上游筛选已通过，仍在 L3 入口处再次验证 IC/Sharpe，
+    防止数据漂移或错误标记导致低质量因子进入组合。
+
+    Args:
+        factors: 待过滤因子列表
+        source: 数据来源标识（用于日志）
+
+    Returns:
+        通过门槛的因子列表
+    """
+    if not factors:
+        return factors
+
+    passed: list[dict[str, Any]] = []
+    failed: list[str] = []
+
+    for f in factors:
+        ic = f.get("ic", 0)
+        sharpe = f.get("sharpe", 0)
+        name = f.get("name", f.get("factor_id", "?"))
+
+        if abs(ic) < _RUNTIME_MIN_IC:
+            failed.append(f"{name}(ic={ic:.4f})")
+            continue
+        if sharpe < _RUNTIME_MIN_SHARPE:
+            failed.append(f"{name}(sharpe={sharpe:.2f})")
+            continue
+        passed.append(f)
+
+    if failed:
+        logger.warning(
+            "[L3] 质量门槛过滤 [%s]: 剔除 %d 个低质量因子 (IC<%.2f 或 Sharpe<%.1f):\n  %s",
+            source, len(failed), _RUNTIME_MIN_IC, _RUNTIME_MIN_SHARPE,
+            "\n  ".join(failed[:10]) + ("\n  ..." if len(failed) > 10 else ""),
+        )
+
+    logger.info(
+        "[L3] 质量门槛通过 [%s]: %d/%d 因子 [min_ic=%.2f, min_sharpe=%.1f]",
+        source, len(passed), len(factors), _RUNTIME_MIN_IC, _RUNTIME_MIN_SHARPE,
+    )
+    return passed
+
+
+import re
+
+_GEN_SUFFIX_RE = re.compile(r"_g\d+$")
+
+
+def _normalize_base_name(name: str) -> str:
+    """去掉因子名中的世代后缀 '_gXX'，返回基础因子名。
+
+    示例:
+        fut_bias_g18 → fut_bias
+        fut_bias → fut_bias
+        seed_spread_g16 → seed_spread
+    """
+    return _GEN_SUFFIX_RE.sub("", name)
+
+
+def _compute_signal_correlations(
+    factors: list[dict[str, Any]],
+    panel_data: dict[str, Any],
+    min_valid_points: int = 10,
+) -> dict[tuple[str, str], float]:
+    """计算一组因子在参考品种上的信号相关系数矩阵。
+
+    Args:
+        factors: 因子列表（需含 code, params）
+        panel_data: {symbol: DataFrame} 市场数据
+        min_valid_points: 最少有效数据点
+
+    Returns:
+        {(factor_id_a, factor_id_b): pearson_corr} 字典
+    """
+    import numpy as np
+
+    from .factor_program import FactorExecutor, FactorCompileError
+
+    # Pick reference symbol (first available)
+    if not panel_data:
+        return {}
+    ref_symbol = next(iter(panel_data))
+    ref_df = panel_data[ref_symbol]
+
+    signals: dict[str, np.ndarray] = {}
+    errors: list[str] = []
+    for f in factors:
+        fid = f.get("factor_id", f.get("name", "?"))
+        code = f.get("code", "")
+        if not code or not isinstance(code, str):
+            errors.append(f"{fid}: 代码为空或类型异常 ({type(code).__name__})")
+            continue
+        try:
+            executor = FactorExecutor(f)
+            sig = executor.execute(ref_df, f.get("params", {}))
+            if sig is not None and len(sig) > 0 and not np.all(np.isnan(sig)):
+                signals[fid] = sig
+            else:
+                errors.append(f"{fid}: 信号为空或全 NaN")
+        except (FactorCompileError, Exception) as e:
+            errors.append(f"{fid}: {type(e).__name__}: {str(e)[:80]}")
+
+    if errors:
+        for e in errors[:5]:
+            logger.debug("[L3] 信号计算跳过: %s", e)
+        if len(errors) > 5:
+            logger.debug("[L3] ... 还有 %d 个错误", len(errors) - 5)
+
+    if len(signals) < 2:
+        return {}
+
+    fids = list(signals.keys())
+    corr: dict[tuple[str, str], float] = {}
+    for i in range(len(fids)):
+        for j in range(i + 1, len(fids)):
+            s1, s2 = signals[fids[i]], signals[fids[j]]
+            valid = ~(np.isnan(s1) | np.isnan(s2))
+            if valid.sum() > min_valid_points:
+                c = float(np.corrcoef(s1[valid], s2[valid])[0, 1])
+                corr[(fids[i], fids[j])] = c
+    return corr
+
+
+def _greedy_select_by_correlation(
+    group: list[dict[str, Any]],
+    corr: dict[tuple[str, str], float],
+    threshold: float = 0.8,
+) -> list[dict[str, Any]]:
+    """贪心选择：按 IC 从高到低，若与已选因子的最大相关 < threshold，则保留。
+
+    Args:
+        group: 同一基础因子名的多个世代
+        corr: 因子间相关系数字典
+        threshold: 相关性阈值（超过则剔除）
+
+    Returns:
+        选中的因子列表
+    """
+    sorted_group = sorted(group, key=lambda x: abs(x.get("ic", 0)), reverse=True)
+    selected: list[dict[str, Any]] = []
+    removed: list[dict[str, Any]] = []
+
+    for f in sorted_group:
+        fid = f.get("factor_id", f.get("name", "?"))
+        if not selected:
+            selected.append(f)
+            continue
+
+        max_corr = 0.0
+        for s in selected:
+            sid = s.get("factor_id", s.get("name", "?"))
+            # Look up correlation in both directions
+            c = corr.get((fid, sid), corr.get((sid, fid), 0.0))
+            max_corr = max(max_corr, abs(c))
+
+        if max_corr < threshold:
+            selected.append(f)
+        else:
+            f["_removed_reason"] = f"与已选因子最大相关={max_corr:.4f} ≥ {threshold}"
+            removed.append(f)
+
+    return selected
+
+
+def _deduplicate_by_base_name(
+    factors: list[dict[str, Any]],
+    source: str,
+    panel_data: dict[str, Any] | None = None,
+    corr_threshold: float = 0.8,
+) -> list[dict[str, Any]]:
+    """按基础因子名去重，支持两种模式：
+
+    1. 相关性模式（panel_data 可用）：
+       对每组世代按 IC 排序，贪心选择保留与已选因子相关性 < threshold 的因子。
+       这样低相关的革新性世代可以共存，高相关的克隆世代被合并。
+
+    2. IC-only 模式（panel_data 不可用）：
+       退化为原行为：每组只保留 IC 最高的版本。
+
+    Args:
+        factors: 已通过质量门槛的因子列表
+        source: 数据来源标识（用于日志）
+        panel_data: {symbol: DataFrame} 市场数据（可选）
+        corr_threshold: 相关性阈值（默认 0.8）
+
+    Returns:
+        去重后的因子列表
+    """
+    if not factors:
+        return factors
+
+    use_corr = panel_data is not None
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for f in factors:
+        base = _normalize_base_name(f.get("name", f.get("factor_id", "?")))
+        groups.setdefault(base, []).append(f)
+
+    if len(groups) == len(factors):
+        mode = "相关性模式" if use_corr else "IC-only 模式"
+        logger.info("[L3] 基础因子名去重 [%s] (%s): 无需去重 (%d 个唯一因子)", source, mode, len(factors))
+        return factors
+
+    result: list[dict[str, Any]] = []
+    merges: list[str] = []
+    selections: list[str] = []
+
+    for base, group in groups.items():
+        if len(group) == 1:
+            result.append(group[0])
+        elif not use_corr:
+            # IC-only 模式：保留 IC 最高
+            best = max(group, key=lambda x: abs(x.get("ic", 0)))
+            result.append(best)
+            all_names = [f.get("name", "?") for f in group]
+            merges.append(
+                f"{base}: [{', '.join(all_names)}] → {best.get('name')} (IC={best.get('ic', 0):.4f})"
+            )
+        else:
+            # 相关性模式：先计算相关性，再贪心选择
+            corr = _compute_signal_correlations(group, panel_data)
+
+            if not corr:
+                # 无法计算相关性，回退到 IC-only
+                best = max(group, key=lambda x: abs(x.get("ic", 0)))
+                result.append(best)
+                all_names = [f.get("name", "?") for f in group]
+                merges.append(
+                    f"{base}: [{', '.join(all_names)}] → {best.get('name')} "
+                    f"(IC={best.get('ic', 0):.4f}, 无代码回退)"
+                )
+                continue
+
+            selected = _greedy_select_by_correlation(group, corr, corr_threshold)
+            result.extend(selected)
+
+            sel_names = [f.get("name", "?") for f in selected]
+            removed_factors = [f for f in group if f not in selected]
+            rem_info = []
+            for f in removed_factors:
+                rem_info.append(
+                    f"{f.get('name')}(IC={f.get('ic', 0):.4f}, "
+                    f"reason={f.get('_removed_reason', '?')})"
+                )
+
+            if len(sel_names) < len(group):
+                selections.append(
+                    f"{base}: 保留 [{', '.join(sel_names)}] "
+                    f"合并 [{', '.join(rem_info)}]"
+                )
+            else:
+                selections.append(
+                    f"{base}: 全部保留 [{', '.join(sel_names)}] (互相关<{corr_threshold})"
+                )
+
+    mode = "相关性模式" if use_corr else "IC-only 模式"
+    removed_count = len(factors) - len(result)
+    logger.info(
+        "[L3] 基础因子名去重 [%s] (%s, threshold=%.2f): %d → %d 因子 "
+        "(移除 %d 个冗余世代)",
+        source, mode, corr_threshold, len(factors), len(result), removed_count,
+    )
+    if merges:
+        for m in merges[:10]:
+            logger.info("[L3]   [IC-only合并] %s", m)
+        if len(merges) > 10:
+            logger.info("[L3]   ... 还有 %d 组合并", len(merges) - 10)
+    if selections:
+        for s in selections:
+            logger.info("[L3]   [贪心选择] %s", s)
+
+    return result
+
+
+def load_elite_factors(
+    elite_dir: str | Path,
+    use_duckdb: bool = True,
+    market: str = "stock",
+    panel_data: dict[str, Any] | None = None,
+    corr_threshold: float = 0.8,
+) -> list[dict[str, Any]]:
+    """加载精英因子。优先从 DuckDB 加载，失败时回退到 JSON 文件。
+
+    加载后按 Verifier 质量门槛（IC>=0.03, Sharpe>=1.5）过滤，
+    确保进入组合的因子均满足最低质量标准。
+
+    可选 panel_data 用于基于信号相关性的智能去重。
+
+    Args:
+        elite_dir: 精英因子 JSON 目录
+        use_duckdb: 是否优先从 DuckDB 加载（测试时可设为 False）
+        market: 市场类型过滤（futures/stock/etf 等）
+        panel_data: {symbol: DataFrame} 市场数据（用于相关性去重）
+        corr_threshold: 相关性阈值（默认 0.8）
+
+    精英因子文件结构 (JSON 兜底):
         {
             "factor_id": "...",
             "name": "...",
+            "code": "...",  # 因子代码，用于哈希去重
             "evaluation": {
                 "level_1_backtest": {
                     "sharpe": ...,
@@ -704,28 +1399,184 @@ def load_elite_factors(elite_dir: str | Path) -> list[dict[str, Any]]:
                     ...
                 }
             },
+            "correlation_metadata": {  # L2 写入的相关性先验
+                "l2_seed_flags": [...],
+                "flag_count": ...,
+                "max_corr_detected": ...,
+            },
             ...
         }
     """
+    import hashlib
+    
+    # ── 路径 1: 从 DuckDB 加载（优先） ──
+    if use_duckdb:
+        try:
+            logger.info("[L3] DuckDB 查询: market=%s, status=active, is_elite=True", market)
+            from .factor_db import FactorRepository
+            repo = FactorRepository()
+            try:
+                # 先统计总数
+                total_count = repo._execute(
+                    "SELECT count(*) FROM factor_catalog WHERE market=? AND status='active' AND is_elite=true",
+                    [market]
+                ).fetchone()[0]
+                logger.info("[L3] DuckDB 匹配因子总数: %d [market=%s]", total_count, market)
+
+                # 执行查询
+                db_factors = repo.list_factors(
+                    market=market,
+                    status="active",
+                    is_elite=True,
+                    limit=10000,
+                )
+                logger.info("[L3] DuckDB 查询返回: %d 行 [market=%s]", len(db_factors), market)
+
+                if db_factors:
+                    logger.info("[L3] DuckDB 因子字段样例: %s", list(db_factors[0].keys())[:10])
+                    factors = []
+                    for f in db_factors:
+                        code = f.get("code", "")
+                        code_hash = f.get("code_hash", "")
+                        if not code_hash and code:
+                            code_hash = hashlib.sha256(code.encode()).hexdigest()
+                        metadata = f.get("metadata", {}) or {}
+                        corr_meta = metadata.get("correlation_metadata", {})
+                        factors.append({
+                            "factor_id": f.get("factor_id"),
+                            "name": f.get("name"),
+                            "sharpe": f.get("sharpe", 0.5),
+                            "ic": f.get("ic", 0.02),
+                            "turnover": f.get("turnover_monthly", 0.3),
+                            "decay_6m": f.get("decay_6m", 0.05),
+                            "code": code,
+                            "params": f.get("params", {}) or {},
+                            "economic_logic": f.get("economic_logic", {}) or {},
+                            "code_hash": code_hash,
+                            "correlation_metadata": corr_meta,
+                            "source_file": f.get("factor_id"),
+                            "market": f.get("market", market),
+                        })
+                    logger.info("[L3] ✅ 从 DuckDB 加载 %d 个 elite 因子 [market=%s]", len(factors), market)
+                    passed = _filter_by_quality_gate(factors, "DuckDB")
+                    try:
+                        result = _deduplicate_by_base_name(passed, "DuckDB", panel_data=panel_data, corr_threshold=corr_threshold)
+                        return result
+                    except Exception as dedup_err:
+                        logger.warning("[L3] DuckDB 相关性去重失败: %s，回退到 IC-only", dedup_err)
+                        import traceback
+                        logger.exception("[L3] 去重异常堆栈:")
+                        # 回退: 不使用 panel_data
+                        return _deduplicate_by_base_name(passed, "DuckDB", panel_data=None, corr_threshold=corr_threshold)
+                else:
+                    logger.warning("[L3] ⚠️ DuckDB 查询返回 0 行 [market=%s]，回退到 JSON 加载", market)
+                    # 额外诊断：检查该市场的所有因子（不限 is_elite）
+                    all_count = repo._execute(
+                        "SELECT count(*) FROM factor_catalog WHERE market=?",
+                        [market]
+                    ).fetchone()[0]
+                    logger.info("[L3] 诊断: market=%s 全部因子数=%d", market, all_count)
+                    if all_count > 0:
+                        sample = repo._execute(
+                            "SELECT factor_id, name, market, is_elite, status FROM factor_catalog WHERE market=? LIMIT 3",
+                            [market]
+                        ).fetchall()
+                        logger.info("[L3] 诊断样例: %s", sample)
+            finally:
+                repo.close()
+        except Exception as e:
+            logger.warning("[L3] DuckDB 加载失败: %s，回退到 JSON 加载", e)
+            import traceback
+            logger.debug("[L3] DuckDB 错误详情:\n%s", traceback.format_exc())
+
+    # ── 路径 2: 从 JSON 文件加载（兜底） ──
     elite_path = Path(elite_dir)
     factors: list[dict[str, Any]] = []
     if not elite_path.exists():
+        logger.warning("[L3] JSON 兜底路径不存在: %s", elite_path)
         return factors
-    for fp in sorted(elite_path.glob("*.json")):
+    
+    json_files = sorted(elite_path.glob("*.json"))
+    valid_files = [f for f in json_files if not f.name.startswith("_")]
+    logger.info("[L3] JSON 兜底: 扫描 %d 个文件 (有效=%d) [路径=%s, market=%s]",
+                len(json_files), len(valid_files), elite_path, market)
+
+    skipped_market = 0
+    parse_errors = 0
+    for fp in valid_files:
         try:
             data = json.loads(fp.read_text(encoding="utf-8"))
             bt = data.get("evaluation", {}).get("level_1_backtest", {})
+            code = data.get("code", "")
+            code_hash = hashlib.sha256(code.encode()).hexdigest() if code else ""
+            corr_meta = data.get("correlation_metadata", {})
+            
+            # 兼容新旧格式：优先使用 evaluation.level_1_backtest，缺失时回退到顶层字段
+            sharpe = bt.get("sharpe")
+            if sharpe is None:
+                sharpe = data.get("sharpe", 0.5)
+            ic = bt.get("ic")
+            if ic is None:
+                ic = data.get("ic", 0.02)
+            turnover = bt.get("turnover_monthly")
+            if turnover is None:
+                turnover = data.get("turnover", 0.3)
+            
+            # 根据 market 过滤 JSON 因子
+            factor_market = data.get("market", "stock")
+            if factor_market != market:
+                skipped_market += 1
+                continue
+            
             factors.append({
                 "factor_id": data.get("factor_id", fp.stem),
                 "name": data.get("name", fp.stem),
-                "sharpe": bt.get("sharpe", 0.5),
-                "ic": bt.get("ic", 0.02),
-                "turnover": bt.get("turnover_monthly", 0.3),
+                "sharpe": sharpe,
+                "ic": ic,
+                "turnover": turnover,
                 "decay_6m": data.get("decay_6m", 0.05),
+                "code": code,
+                "params": data.get("params", {}) or {},
+                "economic_logic": data.get("economic_logic", {}) or {},
+                "code_hash": code_hash,
+                "correlation_metadata": corr_meta,
+                "source_file": fp.name,
+                "market": factor_market,
             })
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as e:
+            parse_errors += 1
+            logger.debug("[L3] JSON 解析错误: %s - %s", fp.name, e)
             continue
-    return factors
+    logger.info("[L3] 从 JSON 文件加载 %d 个 elite 因子 [market=%s] (跳过市场不匹配=%d, 解析错误=%d)",
+                len(factors), market, skipped_market, parse_errors)
+    passed = _filter_by_quality_gate(factors, "JSON")
+    return _deduplicate_by_base_name(passed, "JSON", panel_data=panel_data, corr_threshold=corr_threshold)
+
+
+def load_l2_correlation_index(elite_dir: str | Path) -> list[dict[str, Any]]:
+    """加载 L2 种子因子相关性索引（由 evolution_loop._write_seed_correlation_index 写入）。
+
+    Returns:
+        list[dict] — L2 高相关因子对列表:
+            [{"factor_id_a": ..., "factor_id_b": ..., "pearson": ..., "spearman": ...}, ...]
+    """
+    elite_path = Path(elite_dir)
+    index_path = elite_path / "_l2_seed_correlation_index.json"
+    if not index_path.exists():
+        logger.info("[L3] 未找到 L2 相关性索引文件，跳过先验加载")
+        return []
+    
+    try:
+        data = json.loads(index_path.read_text(encoding="utf-8"))
+        correlations = data.get("correlations", [])
+        logger.info("[L3] 加载 L2 相关性索引: %d 对高相关因子 (source=%s, created_at=%s)",
+                    len(correlations),
+                    data.get("source", "?"),
+                    data.get("created_at", "?"))
+        return correlations
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("[L3] L2 相关性索引文件损坏，跳过加载")
+        return []
 
 
 # ─── 注入 FDT ────────────────────────────────────────────
@@ -811,11 +1662,16 @@ class PortfolioLoop:
     流程:
         Step 1: 加载 elite 因子
         Step 2: 信号合成
+        Step 2.5: Regime 自适应权重调整 (可选)
         Step 3: 因子正交化
         Step 4: 衰减检验
         Step 5: 组合构建
         Step 6: Verifier 判定
         Step 7: 注入 FDT
+
+    Regime 自适应:
+        当传入 market_ohlcv 时，自动检测市场制度并调整因子权重。
+        支持 bull/bear/oscillate/high_vol/low_vol 五种制度的差异化权重。
     """
 
     def __init__(
@@ -824,24 +1680,153 @@ class PortfolioLoop:
         elite_dir: str | Path = "memory/knowledge/factors/elite",
         verifier_config: Optional[L3VerifierConfig] = None,
         synthesis_mode: str = "equal_weight",
+        use_duckdb: bool = True,
+        enable_regime_adaptation: bool = True,
+        market: str = "stock",
     ):
         self.memory_dir = Path(memory_dir)
         self.elite_dir = Path(elite_dir)
         self.verifier = L3Verifier(verifier_config or DEFAULT_L3_VERIFIER_CONFIG)
         self.synthesis_mode = synthesis_mode
+        self.use_duckdb = use_duckdb
+        self.enable_regime_adaptation = enable_regime_adaptation
+        self.market = market
         self.state_manager = PortfolioStateManager(memory_dir)
         self.portfolio_manager = PortfolioManager(memory_dir)
+        self._regime_selector: Optional[Any] = None
 
-    def run(self) -> PortfolioRunResult:
-        """执行一次完整的 L3 Portfolio Loop。"""
-        trace_id = generate_trace_id("l3")
-        state = self.state_manager.mark_running()
-        logger.info("[L3] Portfolio Loop 启动 trace_id=%s", trace_id)
+    def _generate_quality_report(self) -> None:
+        """从 DuckDB 查询精英因子，生成最终质量报告 JSON。
+
+        报告保存到 memory/portfolio/elite_final_quality_YYYY-MM-DD.json，
+        与初始种子评测 (quality_ranking.json) 区分，记录实际进入组合的因子质量。
+        """
+        from datetime import datetime as _dt
 
         try:
+            from .factor_db import FactorRepository
+            repo = FactorRepository()
+            try:
+                rows = repo._execute("""
+                    SELECT factor_id, name, ic, sharpe, turnover_monthly, decay_6m,
+                           market, is_elite, status
+                    FROM factor_catalog
+                    WHERE status='active' AND is_elite=TRUE AND market=?
+                    ORDER BY ic DESC
+                """, [self.market]).fetchall()
+
+                if not rows:
+                    logger.info("[L3] Step 7.5: 无 active elite 因子，跳过质量报告")
+                    return
+
+                factors = []
+                for r in rows:
+                    factors.append({
+                        "factor_id": r[0], "name": r[1],
+                        "ic": round(r[2], 4), "sharpe": round(r[3], 4),
+                        "turnover_monthly": round(r[4], 4),
+                        "decay_6m": round(r[5], 4),
+                        "market": r[6], "is_elite": r[7], "status": r[8],
+                    })
+
+                ics = [f["ic"] for f in factors]
+                sharpes = [f["sharpe"] for f in factors]
+                below_ic = sum(1 for ic in ics if abs(ic) < _RUNTIME_MIN_IC)
+                below_sharpe = sum(1 for s in sharpes if s < _RUNTIME_MIN_SHARPE)
+
+                # 加载当前状态获取 trace_id
+                state = self.state_manager.load_or_init()
+                report = {
+                    "report_type": "elite_final_quality",
+                    "generated_at": _dt.now().isoformat(),
+                    "trace_id": state.get("current_trace_id"),
+                    "thresholds": {"min_ic": _RUNTIME_MIN_IC, "min_sharpe": _RUNTIME_MIN_SHARPE},
+                    "summary": {
+                        "count": len(factors),
+                        "ic_range": [round(min(ics), 4), round(max(ics), 4)],
+                        "ic_mean": round(sum(ics) / len(ics), 4),
+                        "sharpe_range": [round(min(sharpes), 4), round(max(sharpes), 4)],
+                        "sharpe_mean": round(sum(sharpes) / len(sharpes), 4),
+                        "below_ic_threshold": below_ic,
+                        "below_sharpe_threshold": below_sharpe,
+                    },
+                    "factors": factors,
+                }
+
+                ts = _dt.now().strftime("%Y-%m-%d")
+                out_file = self.memory_dir / f"elite_final_quality_{ts}.json"
+                out_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+                logger.info(
+                    "[L3] Step 7.5: 质量报告已生成 [%s]: %d 因子, IC=[%.4f, %.4f], "
+                    "IC<%.2f: %d, Sharpe<%.1f: %d",
+                    out_file.name, len(factors), min(ics), max(ics),
+                    _RUNTIME_MIN_IC, below_ic, _RUNTIME_MIN_SHARPE, below_sharpe,
+                )
+            finally:
+                repo.close()
+        except Exception as e:
+            logger.warning("[L3] Step 7.5: 质量报告生成失败 (非致命): %s", e)
+
+    def run(
+        self,
+        market_ohlcv: Optional[Any] = None,
+    ) -> PortfolioRunResult:
+        """执行一次完整的 L3 Portfolio Loop。
+
+        Args:
+            market_ohlcv: 市场 OHLCV 数据（pd.DataFrame），用于 Regime 检测。
+                         若为 None 或 enable_regime_adaptation=False，跳过自适应调整。
+        """
+        trace_id = generate_trace_id("l3")
+        state = self.state_manager.mark_running()
+        logger.info("[L3] ========== Portfolio Loop 启动 ==========")
+        logger.info("[L3] trace_id=%s run_id=%s", trace_id, state.get("run_id"))
+        logger.info("[L3] market=%s elite_dir=%s synthesis_mode=%s",
+                    self.market, self.elite_dir, self.synthesis_mode)
+        logger.info("[L3] use_duckdb=%s enable_regime=%s memory_dir=%s",
+                    self.use_duckdb, self.enable_regime_adaptation, self.memory_dir)
+
+        try:
+            # Step 0.5: 加载市场数据（用于相关性去重）
+            panel_data = None
+            if self.market == "futures":
+                try:
+                    from ..data import FTSDataProvider
+                    provider = FTSDataProvider()
+                    panel_data, _cdates = provider.get_futures_panel(days=120)
+                    logger.info("[L3] Step 0.5: 期货面板数据加载完成 (%d 品种, %d 交易日)",
+                                len(panel_data), len(_cdates))
+                except Exception as e:
+                    logger.warning("[L3] Step 0.5: 期货面板数据加载失败 (%s)，使用 IC-only 去重", e)
+                    panel_data = None
+
             # Step 1: 加载 elite 因子
-            factors = load_elite_factors(self.elite_dir)
-            logger.info("[L3] Step 1: 读取 %d 个 elite 因子", len(factors))
+            logger.info("[L3] Step 1a: 开始加载 elite 因子 [market=%s, use_duckdb=%s]",
+                        self.market, self.use_duckdb)
+            factors = load_elite_factors(
+                self.elite_dir,
+                use_duckdb=self.use_duckdb,
+                market=self.market,
+                panel_data=panel_data,
+                corr_threshold=0.8,
+            )
+            logger.info("[L3] Step 1b: 因子加载完成, 共 %d 个 [market=%s]", len(factors), self.market)
+
+            # 因子概要日志
+            if factors:
+                sharpe_values = [f.get("sharpe", 0) for f in factors]
+                ic_values = [f.get("ic", 0) for f in factors]
+                turnover_values = [f.get("turnover", 0) for f in factors]
+                logger.info("[L3] 因子统计: sharpe=[%.2f, %.2f] ic=[%.4f, %.4f] turnover=[%.2f, %.2f]",
+                            min(sharpe_values), max(sharpe_values),
+                            min(ic_values), max(ic_values),
+                            min(turnover_values), max(turnover_values))
+                for i, f in enumerate(factors[:5]):
+                    logger.info("[L3]   Top%d: %s | sharpe=%.2f | ic=%.4f | turnover=%.2f | src=%s",
+                                i+1, f.get("name", "?"), f.get("sharpe", 0),
+                                f.get("ic", 0), f.get("turnover", 0), f.get("source_file", "?"))
+                if len(factors) > 5:
+                    logger.info("[L3]   ... 还有 %d 个因子", len(factors) - 5)
             n_input = len(factors)
 
             if not factors:
@@ -868,11 +1853,55 @@ class PortfolioLoop:
                 factors, self.synthesis_mode, elite_dir=self.elite_dir,
             )
             logger.info("[L3] Step 2: 信号合成完成, mode=%s, 信号数=%d", self.synthesis_mode, len(signals))
+            # [WEIGHT-LOG] Step 2 合成后权重摘要
+            if signals:
+                sorted_by_w = sorted(signals, key=lambda x: -x.get("weight", 0))
+                w_sum = sum(s.get("weight", 0) for s in sorted_by_w)
+                logger.info("[L3-WEIGHT] Step 2 权重摘要: sum=%.4f, top3=[%s], bottom3=[%s]",
+                            w_sum,
+                            ", ".join(f"{s['name']}={s['weight']:.4f}" for s in sorted_by_w[:3]),
+                            ", ".join(f"{s['name']}={s['weight']:.4f}" for s in sorted_by_w[-3:]))
             state["total_signals_processed"] = len(signals)
+
+            # Step 2.5: Regime 自适应权重调整
+            regime_info: dict[str, Any] = {}
+            if self.enable_regime_adaptation and market_ohlcv is not None:
+                try:
+                    if self._regime_selector is None:
+                        from .regime import RegimeAwareSelector
+                        self._regime_selector = RegimeAwareSelector()
+
+                    regime = self._regime_selector.detect(market_ohlcv)
+                    regime_info = regime
+
+                    signals = regime_adaptive_weight_adjustment(
+                        signals, regime, factors,
+                    )
+                    logger.info(
+                        "[L3] Step 2.5: Regime=%s (confidence=%.2f), 自适应调整完成",
+                        regime.get("regime", "unknown"),
+                        regime.get("confidence", 0.0),
+                    )
+                except Exception as e:
+                    logger.warning("[L3] Step 2.5: Regime 检测失败，跳过自适应调整: %s", e)
+            elif self.enable_regime_adaptation and market_ohlcv is None:
+                logger.info("[L3] Step 2.5: 无市场数据，跳过 Regime 自适应调整")
 
             # Step 3: 因子正交化（elastic_net 模式跳过，L1 已做变量选择）
             if self.synthesis_mode != "elastic_net":
-                signals = orthogonalize_factors(signals, max_corr_threshold=0.7)
+                # 加载 L2 相关性索引作为先验
+                l2_prior = load_l2_correlation_index(self.elite_dir)
+                pre_retained = [s["name"] for s in signals if s.get("retained", True)]
+                signals = orthogonalize_factors(
+                    signals, max_corr_threshold=0.7, factors=factors,
+                    use_tiered=(len(factors) >= 30),
+                    l2_prior_correlations=l2_prior,
+                )
+                post_retained = [s["name"] for s in signals if s.get("retained", True)]
+                removed_in_ortho = set(pre_retained) - set(post_retained)
+                if removed_in_ortho:
+                    logger.info("[L3-WEIGHT] 正交化移除 %d 个因子: %s",
+                                len(removed_in_ortho), ", ".join(sorted(removed_in_ortho)))
                 logger.info("[L3] Step 3: 正交化完成, 保留 %d/%d",
                             sum(1 for s in signals if s.get("retained", True)), len(signals))
             else:
@@ -903,6 +1932,12 @@ class PortfolioLoop:
             self.portfolio_manager.save_combo(combo)
             for p in proposals:
                 self.portfolio_manager.save_proposal(p)
+
+            # Step 7.5: 生成精英因子最终质量报告
+            try:
+                self._generate_quality_report()
+            except Exception as e:
+                logger.warning("[L3] Step 7.5: 质量报告生成失败 (非致命): %s", e)
 
             # 更新状态
             state["total_signals_retained"] = n_retained

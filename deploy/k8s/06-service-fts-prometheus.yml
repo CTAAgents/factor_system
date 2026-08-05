@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fts-prometheus
+  namespace: monitoring
+  labels:
+    app: fts-prometheus
+    app.kubernetes.io/managed-by: fts
+spec:
+  type: ClusterIP
+  selector:
+    app: fts-prometheus
+  ports:
+  - name: http
+    port: 9090
+    targetPort: 9090
+    protocol: TCP

@@ -119,7 +119,7 @@ def _download_symbol(symbol: str, db) -> int:
     # 批量插入（先删后插 = 刷新）
     db.execute("DELETE FROM kline_cache WHERE symbol = ? AND period = 'daily'", [sym])
     db.executemany(
-        "INSERT INTO kline_cache VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO kline_cache (symbol, period, date, open, high, low, close, volume, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     logger.info("  [OK] %s: %d 行", symbol, len(rows))

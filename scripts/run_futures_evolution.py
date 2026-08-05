@@ -178,6 +178,7 @@ def main():
         n_trials_micro=args.n_trials,
         cross_section_data=cross_section_data,
         cross_section_dates=common_dates,
+        market="futures",
     )
 
     # ─── 5. 运行演化 ────────────────────────────────────

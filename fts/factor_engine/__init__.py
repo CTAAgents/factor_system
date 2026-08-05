@@ -35,6 +35,7 @@ from .contracts import (
     VerifierConfig,
     VerifierResult,
     BudgetConfig,
+    FactorCorrelation,
     EVOLUTION_VERSION,
     DEFAULT_VERIFIER_CONFIG,
     DEFAULT_BUDGET_CONFIG,
@@ -50,6 +51,11 @@ from .contracts import (
     L1BudgetConfig,
     DEFAULT_L1_VERIFIER_CONFIG,
     DEFAULT_L1_BUDGET_CONFIG,
+    # L3 契约
+    L3VerifierConfig,
+    L3MetaLoopState,
+    DEFAULT_L3_VERIFIER_CONFIG,
+    DEFAULT_L3_BUDGET,
 )
 from .verifier import (
     FactorVerifier,
@@ -64,7 +70,13 @@ from .factor_program import (
     generate_factor_id,
     validate_factor_code,
 )
-from .seed_pool import SeedPool, get_default_seed_pool
+from .seed_pool import SeedPool, get_default_seed_pool, compute_seed_correlations, compute_cross_section_correlations
+from .seed_loader import (
+    load_all_yaml_seeds,
+    load_factors_from_dir,
+    load_factors_from_yaml,
+    verify_yaml_integrity,
+)
 from .standardizer import (
     StandardizeMethod,
     SUPPORTED_METHODS,
@@ -151,6 +163,46 @@ from .monitor import (
     check_loop,
     check_all,
 )
+from .factor_quality_card import (
+    FactorQualityCard,
+    FactorQualityCardConfig,
+    FactorQualityScore,
+    DimensionScore,
+    compute_total_score,
+    determine_grade,
+)
+from .audit import (
+    FactorAuditor,
+    FactorAuditConfig,
+    FactorAuditReport,
+    AuditItemResult,
+    AuditItemStatus,
+)
+from .feature_ops import (
+    OperatorInfo,
+    OperatorRegistry,
+    TimeSeriesOps,
+    PriceOps,
+    RollingOps,
+    CrossSectionOps,
+    CrossSymbolOps,
+    CompositeOps,
+    FeatureOpsEngine,
+)
+from .gp_evolver import (
+    TreeNode,
+    ExpressionTree,
+    FitnessResult,
+    GPEvolverConfig,
+    GenerationSnapshot,
+    GPEvolveResult,
+    GPEvolver,
+    tree_to_factor_program,
+)
+from .feature_importance import (
+    FeatureImportanceResult,
+    FeatureImportanceAnalyzer,
+)
 
 __version__ = "1.1.0"
 __all__ = [
@@ -169,6 +221,7 @@ __all__ = [
     "VerifierConfig",
     "VerifierResult",
     "BudgetConfig",
+    "FactorCorrelation",
     "DEFAULT_VERIFIER_CONFIG",
     "DEFAULT_BUDGET_CONFIG",
     # Verifier
@@ -185,6 +238,8 @@ __all__ = [
     # 种子池
     "SeedPool",
     "get_default_seed_pool",
+    "compute_seed_correlations",
+    "compute_cross_section_correlations",
     # 经验链
     "ExperienceChain",
     "ExperienceChainError",
@@ -237,6 +292,10 @@ __all__ = [
     # ─── L3 Portfolio Loop（Phase 3 v1.1.0 同步）────────────────
     "L3Error",
     "L3Verifier",
+    "L3VerifierConfig",
+    "L3MetaLoopState",
+    "DEFAULT_L3_VERIFIER_CONFIG",
+    "DEFAULT_L3_BUDGET",
     "PortfolioStateManager",
     "PortfolioManager",
     "synthesize_signals",
@@ -268,4 +327,37 @@ __all__ = [
     "CausalValidator",
     "CausalValidationResult",
     "EventPredictionError",
+    # ─── 因子质量评分卡（Phase A.1 v1.0.0）────────────────
+    "FactorQualityCard",
+    "FactorQualityCardConfig",
+    "FactorQualityScore",
+    "DimensionScore",
+    "compute_total_score",
+    "determine_grade",
+    # ─── 因子审计流程 (Phase B.3 v0.1.0)────────────────
+    "FactorAuditor",
+    "FactorAuditConfig",
+    "FactorAuditReport",
+    "AuditItemResult",
+    "AuditItemStatus",
+    # ─── 特征工程中台 (Phase C.1 v0.1.0)────────────────
+    "OperatorInfo",
+    "OperatorRegistry",
+    "TimeSeriesOps",
+    "PriceOps",
+    "RollingOps",
+    "CrossSectionOps",
+    "CrossSymbolOps",
+    "CompositeOps",
+    "FeatureOpsEngine",
+    "TreeNode",
+    "ExpressionTree",
+    "FitnessResult",
+    "GPEvolverConfig",
+    "GenerationSnapshot",
+    "GPEvolveResult",
+    "GPEvolver",
+    "tree_to_factor_program",
+    "FeatureImportanceResult",
+    "FeatureImportanceAnalyzer",
 ]

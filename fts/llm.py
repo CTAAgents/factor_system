@@ -80,6 +80,30 @@ class LLMClient(ABC):
             return json.loads(block)
         raise LLMError(f"LLM 响应不是合法 JSON: {text[:200]}...")
 
+    def bootstrap_factors(
+        self,
+        market_snapshot: dict[str, Any],
+        debate_gaps: list[dict[str, Any]],
+        max_candidates: int,
+        trace_id: str,
+    ) -> list[dict[str, Any]]:
+        """L1 Bootstrapping — 生成种子候选因子。
+
+        Args:
+            market_snapshot: 市场快照（来自 f10/web_collector）
+            debate_gaps: 辩论薄弱维度列表
+            max_candidates: 最大候选数
+            trace_id: 全链路 trace_id
+
+        Returns:
+            list[SeedCandidate dict] — 每个 dict 包含 name, code, params, signature, economic_logic 等字段
+        """
+        logger.info(
+            "[bootstrap_factors] 基类默认实现, trace_id=%s, max_candidates=%d, debate_gaps=%d, snapshot_keys=%d",
+            trace_id, max_candidates, len(debate_gaps), len(market_snapshot),
+        )
+        return []
+
 
 # ─── OpenAI 客户端 ────────────────────────────────────────
 
@@ -130,6 +154,135 @@ class OpenAIClient(LLMClient):
                     logger.warning(f"OpenAI 调用失败 (重试 {attempt+1}): {e}")
                     continue
                 raise LLMError(f"OpenAI 调用失败: {e}")
+
+    def bootstrap_factors(
+        self,
+        market_snapshot: dict[str, Any],
+        debate_gaps: list[dict[str, Any]],
+        max_candidates: int,
+        trace_id: str,
+    ) -> list[dict[str, Any]]:
+        """L1 Bootstrapping — 通过 LLM 生成种子候选因子。"""
+        import time
+        t0 = time.time()
+        logger.info(
+            "[bootstrap_factors] OpenAI 开始, trace_id=%s, max_candidates=%d, debate_gaps=%d, snapshot_keys=%d",
+            trace_id, max_candidates, len(debate_gaps), len(market_snapshot),
+        )
+        prompt = self._build_bootstrap_prompt(
+            market_snapshot, debate_gaps, max_candidates, trace_id
+        )
+        logger.info(
+            "[bootstrap_factors] Prompt 构造完成, trace_id=%s, prompt_len=%d",
+            trace_id, len(prompt),
+        )
+        try:
+            data = self.generate_json(prompt, max_tokens=4000)
+        except LLMError as e:
+            elapsed = (time.time() - t0) * 1000
+            logger.warning(
+                "[bootstrap_factors] JSON 解析失败, trace_id=%s, elapsed_ms=%.1f, error=%s",
+                trace_id, elapsed, e,
+            )
+            return []
+        except Exception as e:
+            elapsed = (time.time() - t0) * 1000
+            logger.error(
+                "[bootstrap_factors] LLM 调用异常, trace_id=%s, elapsed_ms=%.1f, error=%s",
+                trace_id, elapsed, e, exc_info=True,
+            )
+            return []
+        candidates = data.get("candidates", [])
+        if not isinstance(candidates, list):
+            elapsed = (time.time() - t0) * 1000
+            logger.warning(
+                "[bootstrap_factors] candidates 字段非列表, trace_id=%s, elapsed_ms=%.1f, type=%s",
+                trace_id, elapsed, type(candidates).__name__,
+            )
+            return []
+        truncated = candidates[:max_candidates]
+        elapsed = (time.time() - t0) * 1000
+        logger.info(
+            "[bootstrap_factors] OpenAI 完成, trace_id=%s, elapsed_ms=%.1f, raw_count=%d, returned=%d, names=%s",
+            trace_id, elapsed, len(candidates), len(truncated),
+            [c.get("name", "?") for c in truncated],
+        )
+        return truncated
+
+    @staticmethod
+    def _build_bootstrap_prompt(
+        market_snapshot: dict[str, Any],
+        debate_gaps: list[dict[str, Any]],
+        max_candidates: int,
+        trace_id: str,
+    ) -> str:
+        """构造 L1 Bootstrapping Prompt。"""
+        snapshot_summary = json.dumps(
+            {k: v for k, v in market_snapshot.items() if k != "trace_id"},
+            ensure_ascii=False, default=str,
+        )[:2000]
+        gaps_summary = json.dumps(
+            debate_gaps[:5], ensure_ascii=False, default=str
+        )[:1000]
+        return f"""你是因子工程专家（FTS L1 Bootstrapping Agent）。基于市场快照和辩论薄弱维度，生成 {max_candidates} 个期货因子候选。
+
+【市场快照】
+{snapshot_summary}
+
+【辩论薄弱维度】
+{gaps_summary}
+
+【任务】
+生成 {max_candidates} 个因子候选，每个因子必须包含完整的 Python 代码。
+
+【规则 — 必须严格遵守】
+1. 代码函数签名固定为 `def factor_program(data, params):`
+2. 输入: data 是 dict，键为 'open','high','low','close','volume' 等，值为 numpy 数组（长度 n）
+   - 推荐写法: `close = data['close']`（返回 np.ndarray）
+   - 兼容写法: `close = data['close'].values if hasattr(data, 'close') else data['close']`
+3. 输出: 长度为 n 的 numpy 数组，值域在 [-1, 1] 之间
+4. 代码中必须 `import numpy as np`
+5. 任何运算（np.diff, np.roll, np.convolve）后必须保持输出长度为 n
+6. 使用 `np.clip` 确保输出值域 [-1, 1]
+7. 使用 `np.zeros(n)` 初始化数组
+8. 因子逻辑应体现创新性，避免与常见因子重复
+9. 代码必须简洁，不超过 50 行
+
+【常见错误 — 必须避免】
+❌ 使用未定义变量
+❌ 长度不匹配: np.diff 输出 n-1，必须填充
+❌ 忘记 import numpy as np
+❌ 未保持输出长度
+❌ 输出值超出 [-1, 1] 范围
+
+【输出 JSON 格式】
+{{
+    "candidates": [
+        {{
+            "name": "<因子名称>",
+            "code": "<完整 factor_program 函数代码>",
+            "params": {{"<param>": <value>}},
+            "signature": {{
+                "input_fields": ["close", "volume"],
+                "output_type": "signal",
+                "frequency": "daily",
+                "lookback": 20
+            }},
+            "economic_logic": {{
+                "theory": <0-5>,
+                "behavioral": <0-5>,
+                "microstructure": <0-5>,
+                "institutional": <0-5>,
+                "narrative": "<经济学解释，>= 20 字>"
+            }},
+            "parent_topic": "<主题来源>",
+            "source": "l1_bootstrapping"
+        }}
+    ]
+}}
+
+【trace_id】: {trace_id}
+现在请生成 {max_candidates} 个候选因子。"""
 
 
 # ─── Anthropic 客户端 ─────────────────────────────────────
@@ -210,6 +363,60 @@ class MockLLMClient(LLMClient):
             "lessons_referenced": [],
         })
         return default_response, 200
+
+    def bootstrap_factors(
+        self,
+        market_snapshot: dict[str, Any],
+        debate_gaps: list[dict[str, Any]],
+        max_candidates: int,
+        trace_id: str,
+    ) -> list[dict[str, Any]]:
+        """Mock Bootstrapping — 返回预设因子候选。"""
+        logger.info(
+            "[bootstrap_factors] Mock 开始, trace_id=%s, max_candidates=%d, debate_gaps=%d, snapshot_keys=%d",
+            trace_id, max_candidates, len(debate_gaps), len(market_snapshot),
+        )
+        candidates = [
+            {
+                "name": "mock_volume_price_divergence",
+                "code": (
+                    "def factor_program(data, params):\n"
+                    "    import numpy as np\n"
+                    "    close = data['close']\n"
+                    "    volume = data['volume']\n"
+                    "    window = int(params.get('window', 10))\n"
+                    "    n = len(close)\n"
+                    "    if n < window + 1:\n"
+                    "        return np.zeros(n)\n"
+                    "    vol_ma = np.zeros(n)\n"
+                    "    vol_ma[window:] = np.convolve(volume, np.ones(window)/window, mode='valid')\n"
+                    "    price_chg = np.zeros(n)\n"
+                    "    price_chg[1:] = close[1:] - close[:-1]\n"
+                    "    vol_ratio = np.where(vol_ma > 0, volume / np.maximum(vol_ma, 1e-10), 1.0)\n"
+                    "    score = np.where((vol_ratio > 1.5) & (price_chg < 0), -0.6,\n"
+                    "             np.where((vol_ratio < 0.7) & (price_chg > 0), 0.4, 0.0))\n"
+                    "    return np.clip(score, -1.0, 1.0)\n"
+                ),
+                "params": {"window": 10},
+                "signature": {
+                    "input_fields": ["close", "volume"],
+                    "output_type": "signal",
+                    "frequency": "daily",
+                    "lookback": 20,
+                },
+                "economic_logic": {
+                    "theory": 4, "behavioral": 4, "microstructure": 3, "institutional": 4,
+                    "narrative": "量价背离因子: 放量下跌反映空头主导，缩量上涨反映空头回补，捕捉短期反转机会。",
+                },
+                "parent_topic": "mock_bootstrapping_test",
+                "source": "l1_bootstrapping",
+            }
+        ]
+        logger.info(
+            "[bootstrap_factors] Mock 完成, trace_id=%s, returned=%d, names=%s",
+            trace_id, len(candidates), [c["name"] for c in candidates],
+        )
+        return candidates
 
 
 # ─── 工厂函数 ─────────────────────────────────────────────

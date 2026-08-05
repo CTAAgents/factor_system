@@ -1,0 +1,69 @@
+# FTS Prometheus 主配置
+# 版本: v2.5.0
+# 用途: 定义 Prometheus 抓取任务和引用告警规则
+#
+# 使用方法:
+#   1. 修改 scrape_configs 中的 targets 为实际的 FTS 实例地址
+#   2. 启动 prometheus: prometheus --config.file=prometheus.yml
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: "fts-monitor"
+    environment: "development"
+
+# 引用告警规则文件
+rule_files:
+  - "prometheus_alerts.yml"
+
+# AlertManager 端点配置
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "localhost:9093"
+
+# 抓取任务配置
+scrape_configs:
+  # FTS 核心指标端点
+  - job_name: "fts-metrics"
+    scheme: "http"
+    static_configs:
+      - targets:
+          - "localhost:9100"
+        labels:
+          service: "fts"
+          component: "core"
+    metrics_path: "/metrics"
+    scrape_interval: 10s
+
+  # FTS 数据源指标端点
+  - job_name: "fts-data-sources"
+    scheme: "http"
+    static_configs:
+      - targets:
+          - "localhost:9100"
+        labels:
+          service: "fts"
+          component: "data_source"
+    metrics_path: "/metrics/data-sources"
+    scrape_interval: 30s
+
+  # FTS 健康检查端点
+  - job_name: "fts-health"
+    scheme: "http"
+    static_configs:
+      - targets:
+          - "localhost:9100"
+        labels:
+          service: "fts"
+          component: "health"
+    metrics_path: "/health"
+    scrape_interval: 10s
+
+  # Prometheus 自身监控
+  - job_name: "prometheus"
+    static_configs:
+      - targets:
+          - "localhost:9090"

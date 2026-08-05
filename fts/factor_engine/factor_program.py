@@ -234,20 +234,53 @@ class FactorExecutor:
             params: 因子参数
 
         Returns:
-            np.ndarray: 信号数组（-1~+1）或评分数组
+            np.ndarray: 信号数组（-1~+1）或评分数组，长度与 data 行数对齐
         """
         if self._compiled is None:
             self.compile()
+
+        expected_len = len(data)
+
+        # 策略: 先尝试 DataFrame 执行（兼容种子因子），失败回退 dict
+        # 种子因子代码使用 data['close'].values 等 DataFrame 专用接口
+        # LLM 生成因子使用 data['close'] 直接获取 ndarray
         try:
             result = self._compiled(data, params)  # type: ignore[misc]
-        except Exception as e:
-            raise FactorCompileError(f"执行失败: {type(e).__name__}: {e}") from e
+        except Exception:
+            # 回退: 转换为 dict[str, np.ndarray] 格式
+            data_dict = {
+                col: data[col].values.astype(np.float64)
+                for col in data.columns
+            }
+            try:
+                result = self._compiled(data_dict, params)  # type: ignore[misc]
+            except Exception as e:
+                raise FactorCompileError(f"执行失败: {type(e).__name__}: {e}") from e
 
         if not isinstance(result, np.ndarray):
             raise FactorCompileError(
                 f"因子输出必须为 np.ndarray，实际为 {type(result).__name__}"
             )
+
+        if len(result) != expected_len:
+            result = self._align_output(result, expected_len)
         return result
+
+    @staticmethod
+    def _align_output(result: np.ndarray, expected_len: int) -> np.ndarray:
+        """将因子输出对齐到期望长度。
+
+        场景: LLM 生成的因子代码常用 rolling/shift/diff，导致输出比输入短
+              (如 rolling(10) 产生 NaN 前缀或直接缩短 1 行)。
+        策略: 短 => 前置 NaN 填充 (保持尾部有效值对齐日期)
+              长 => 截断到期望长度
+        """
+        if len(result) == expected_len:
+            return result
+        if len(result) < expected_len:
+            pad = np.zeros(expected_len - len(result), dtype=result.dtype)
+            return np.concatenate([pad, result])
+        return result[:expected_len]
 
 
 # ─── 因子程序工厂 ─────────────────────────────────────────
@@ -263,18 +296,28 @@ def create_factor_program(
     generation: int = 0,
     trace_id: Optional[str] = None,
     risk_tag: Optional[str] = None,
+    market: Optional[str] = None,
+    family: Optional[str] = None,
+    symbols: Optional[list[str]] = None,
+    factor_version: str = "v2",
 ) -> FactorProgram:
     """创建一个新的因子程序实例。
 
     自动生成 factor_id 和时间戳。
+    支持多品种元数据（market/family/symbols），减少跨品种类型检查错误。
 
     Args:
         risk_tag: 风险标签，如 "vwap_approx" 用于标记高风险因子。
+        market: 适用市场 (futures/stock/etf/multi)
+        family: 因子家族分类
+        symbols: 适用品种列表（空列表=全品种适用）
+        factor_version: 因子定义版本号
     """
     if not economic_logic.get("narrative", "").strip():
         raise ValueError("economic_logic.narrative 不能为空字符串")
 
     factor_id = generate_factor_id(name, code)
+    normalized_symbols = symbols if symbols is not None else []
     return FactorProgram(
         factor_id=factor_id,
         name=name,
@@ -288,6 +331,11 @@ def create_factor_program(
         created_at=datetime.now().isoformat(),
         trace_id=trace_id or factor_id,
         risk_tag=risk_tag,
+        market=market or "multi",  # type: ignore[typeddict-item]
+        family=family or "other",  # type: ignore[typeddict-item]
+        symbols=normalized_symbols,
+        factor_version=factor_version,
+        is_multi_symbol=len(normalized_symbols) > 1,
     )
 
 

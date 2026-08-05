@@ -30,6 +30,7 @@ HARNESS §契约优先: 每个因子符合 FactorProgram 接口。
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from .contracts import EconomicLogic, FactorSignature
@@ -2285,6 +2286,36 @@ _FUTURES_FULL_DEFINITIONS: list[dict[str, Any]] = [
 ]
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 家族映射表 — 用于加载时的分家族日志追踪
+# ══════════════════════════════════════════════════════════════════════════════
+
+logger = logging.getLogger(__name__)
+
+_FACTOR_FAMILY_MAP: dict[str, tuple[int, str]] = {}
+
+_FAMILY_SUMMARY: dict[int, tuple[str, list[str]]] = {
+    1: ("动量因子家族", ["fut_xsmom", "fut_tsmom", "fut_short_reversal", "fut_composite_momentum", "fut_basis_momentum"]),
+    2: ("期限结构因子家族", ["fut_roll_yield_carry", "fut_stable_term_structure", "fut_basis_factor"]),
+    3: ("持仓/资金流因子家族", ["fut_open_interest_full", "fut_warehouse_receipt", "fut_hedge_pressure"]),
+    4: ("流动性因子家族", ["fut_turnover", "fut_bid_ask_spread", "fut_amihud_full"]),
+    5: ("偏度/峰度/高阶矩因子家族", ["fut_skewness_full", "fut_upside_skewness", "fut_kurtosis"]),
+    6: ("波动率因子家族", ["fut_cv", "fut_downside_volatility"]),
+    7: ("基本面因子家族", ["fut_volume_price_corr_full", "fut_trend_strength", "fut_amplitude", "fut_mobile_big_data"]),
+    8: ("拥挤度因子家族", ["fut_crowd_volume", "fut_crowd_volatility", "fut_crowd_turnover", "fut_crowd_bias_volume", "fut_crowd_bias_amount", "fut_crowd_composite"]),
+    9: ("Alpha/量价行为因子家族", ["fut_time_series_regression", "fut_bias", "fut_gp_alpha1", "fut_ht_alpha"]),
+    10: ("高频因子家族", ["fut_hf_quote_imbalance", "fut_hf_trade_imbalance", "fut_hf_historical_return", "fut_hf_turnover", "fut_hf_spread", "fut_hf_down_vol"]),
+    11: ("期权隐含信息因子家族", ["fut_option_vol_term", "fut_option_skew", "fut_option_pcr"]),
+    12: ("市场环境因子家族", ["fut_macro_cpi", "fut_macro_interest_rate", "fut_macro_export", "fut_macro_us_bond", "fut_mkt_trend", "fut_mkt_speculation", "fut_mkt_rotation", "fut_mkt_concentration"]),
+    13: ("CTA注册表补充因子 V2.0", ["tsmom_5d", "tsmom_22d", "basis_level", "volatility_annual", "liquidity_ratio", "long_term_reversal", "oi_change_rate"]),
+    14: ("算子字典种子因子", ["seed_kbar_mid", "seed_kbar_upper", "seed_kbar_lower", "seed_kbar_shift", "seed_bull_bear", "seed_argmax_close", "seed_argmin_close", "seed_vol_chg", "seed_vwap_proxy_1", "seed_vwap_proxy_2", "seed_reversal_1d", "seed_mom_5d", "seed_mom_20d", "seed_vol_5d", "seed_vol_20d", "seed_vol_ratio", "seed_trend_slope", "seed_trend_rsqr", "seed_vp_corr", "seed_vol_ratio_volume", "seed_oi_chg", "seed_oi_ret_confirm", "seed_spread", "seed_settle_bias"]),
+}
+
+for _fid, (_fname, _factors) in _FAMILY_SUMMARY.items():
+    for _fn in _factors:
+        _FACTOR_FAMILY_MAP[_fn] = (_fid, _fname)
+
+
 # ─── 加载器 ───────────────────────────────────────────────
 
 def load_futures_seeds_full(
@@ -2299,7 +2330,14 @@ def load_futures_seeds_full(
         list[FactorProgram] — 81 个期货专用种子因子。
     """
     from .factor_program import create_factor_program
+
+    logger.info(
+        "[futures_seed] 开始加载 14 大因子家族 (总计 81 个因子), trace_id=%s", trace_id,
+    )
+
     result: list[FactorProgram] = []
+    family_loaded: dict[int, int] = {}
+
     for defn in _FUTURES_FULL_DEFINITIONS:
         fp = create_factor_program(
             name=defn["name"],
@@ -2313,6 +2351,37 @@ def load_futures_seeds_full(
             trace_id=trace_id,
         )
         result.append(fp)
+
+        # ── 分家族加载进度追踪 ──
+        factor_name = defn["name"]
+        if factor_name in _FACTOR_FAMILY_MAP:
+            fid, fname = _FACTOR_FAMILY_MAP[factor_name]
+            family_loaded[fid] = family_loaded.get(fid, 0) + 1
+            expected_count = len(_FAMILY_SUMMARY[fid][1])
+            if family_loaded[fid] == expected_count:
+                logger.info(
+                    "[futures_seed] ★ 家族 %2d 加载完成: %s (%d/%d 个因子), trace_id=%s",
+                    fid, fname, expected_count, expected_count, trace_id,
+                )
+
+    # ── 最终汇总验证 ──
+    total = len(result)
+    logger.info(
+        "[futures_seed] ✅ 全部加载完成: 总计 %d 个因子, 涉及 %d 个家族, trace_id=%s",
+        total, len(family_loaded), trace_id,
+    )
+
+    # 校验: 确保所有 14 个家族都已加载
+    missing_families = [fid for fid in range(1, 15) if fid not in family_loaded]
+    if missing_families:
+        logger.error(
+            "[futures_seed] ❌ 缺少家族: %s, trace_id=%s", missing_families, trace_id,
+        )
+    elif total != 81:
+        logger.warning(
+            "[futures_seed] ⚠ 因子总数异常: 期望 81, 实际 %d, trace_id=%s", total, trace_id,
+        )
+
     return result
 
 

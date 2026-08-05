@@ -168,12 +168,21 @@ class MacroEvolver:
 
 规则:
 1. 代码必须是完整的 Python 函数，函数签名固定为 `def factor_program(data, params):`
-2. 输入 data 是 dict，包含 'open','high','low','close','volume' 等 numpy 数组
+2. 输入 data 是 dict，键为 'open','high','low','close','volume' 等，值为 numpy 数组（长度 n）
+   - 访问方式: `close = data['close']` 返回 np.ndarray，直接用于 numpy 运算
+   - 兼容写法（同时支持 DataFrame 和 dict）: `close = data['close'].values if hasattr(data, 'close') else data['close']`
+   - 推荐直接用 dict 写法: `close = data['close']`（返回 np.ndarray，无需 .values）
 3. 输出必须是长度为 n 的 numpy 数组，值域在 [-1, 1] 之间
 4. 代码中使用局部变量，不修改全局状态
 5. 使用 `import numpy as np` 进行数值计算
 6. 因子逻辑应与父因子不同，体现创新性
 7. 简洁高效，避免冗余计算
+
+=== 常见错误（必须避免） ===
+❌ 使用未定义变量: `c = data['close']` 然后 `close_mean = c.mean()` — 变量 `c` 未定义或后续未使用
+❌ 长度不匹配: `diff = np.diff(close)` 输出 n-1 长度，必须填充: `diff = np.zeros_like(close); diff[1:] = np.diff(close)`
+❌ 忘记 import: 使用 `np` 前必须 `import numpy as np`
+❌ 未保持输出长度: 任何运算（np.diff, np.roll, np.convolve）后必须用 np.pad 或 np.zeros 保持输出长度为 n
 
 输出 JSON 格式:
 {{

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fts-alertmanager
+  namespace: monitoring
+  labels:
+    app: fts-alertmanager
+    app.kubernetes.io/managed-by: fts
+spec:
+  type: ClusterIP
+  selector:
+    app: fts-alertmanager
+  ports:
+  - name: http
+    port: 9093
+    targetPort: 9093
+    protocol: TCP

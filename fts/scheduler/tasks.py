@@ -11,7 +11,7 @@ cron 表达式格式（5 字段）: minute hour day-of-month month day-of-week
 
 HARNESS §trace_id 全链路: 每个 task 启动时生成独立 trace_id。
 
-版本: v0.2.0
+版本: v0.2.1
 """
 
 from __future__ import annotations
@@ -103,15 +103,8 @@ def register_default_tasks() -> None:
             name="l3_portfolio_loop",
             cron_expression="0 20 * * *",         # 每日 20:00
             callable_path="fts.scheduler.jobs.l3_portfolio_loop_job",
-            description="L3 Portfolio Loop：因子筛选 + 信号合成（equal/sharpe/elastic_net）+ Verifier 校验 + 触发期货信号管道",
+            description="L3 Portfolio Loop：因子筛选 + 信号合成（equal/sharpe/elastic_net）+ Verifier 校验 + 期货信号管道",
             trace_id_prefix="fts.l3",
-        ),
-        TaskSpec(
-            name="futures_signal_pipeline",
-            cron_expression="30 20 * * *",        # 每日 20:30
-            callable_path="fts.scheduler.jobs.futures_signal_pipeline_job",
-            description="期货信号管道：独立生成期货横截面信号报告",
-            trace_id_prefix="fts.signal",
         ),
         TaskSpec(
             name="health_check",

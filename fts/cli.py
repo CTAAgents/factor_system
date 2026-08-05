@@ -6,13 +6,16 @@ fts.cli — FTS 统一命令行入口。
     python -m fts.cli meta-loop run          : 启动 L1 Meta-Loop
     python -m fts.cli portfolio run          : 启动 L3 组合构建
     python -m fts.cli monitor                : 检查所有循环健康状态
-    python -m fts.cli factor list            : 列出 elite 因子
-    python -m fts.cli factor show <factor_id>: 查看单个因子详情
+    python -m fts.cli factor list [filters] : 列出 elite 因子（支持筛选/多样性）
+    python -m fts.cli factor show <id>       : 查看单个因子详情
+    python -m fts.cli factor stats           : 因子家族分布统计
+    python -m fts.cli factor lineage <id>    : 因子演化血缘查询
+    python -m fts.cli factor seeds           : 列出种子因子
     python -m fts.cli version                : 打印版本号
 
 HARNESS §trace_id 全链路: 所有子命令启动时生成 trace_id 并贯穿整个执行流程。
 
-版本: v0.1.0
+版本: v0.2.0
 """
 # pylint: disable=broad-exception-caught,too-many-locals
 
@@ -33,6 +36,8 @@ from .data import FTSDataProvider
 from .factor_engine import (
     EVOLUTION_VERSION,
     DEFAULT_BUDGET_CONFIG,
+    DEFAULT_L3_VERIFIER_CONFIG,
+    L3VerifierConfig,
     EvolutionLoop,
     FactorVerifier,
     SeedPool,
@@ -191,7 +196,7 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
         llm = get_default_llm_client()
         print(f"[evolution] LLM backend: {type(llm).__name__}")
 
-        seed_pool = get_default_seed_pool()
+        seed_pool = get_default_seed_pool(market="stock")
         verifier = FactorVerifier()
 
         # 用第一个品种构造常规 data/forward_returns（微参优化用）
@@ -201,7 +206,7 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
         loop = EvolutionLoop(
             data=data_df,
             forward_returns=fwd_ret,
-            elite_dir=cfg.elite_dir,
+            elite_dir=cfg.get_elite_dir("stock"),
             memory_dir=cfg.memory_dir + "/evolution",
             llm_client=llm,
             seed_pool=seed_pool,
@@ -209,6 +214,7 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
             n_trials_micro=min(args.max_generations * 3, 30),
             cross_section_data=panel,
             cross_section_dates=common_dates,
+            market="stock",
         )
     elif args.universe == "futures":
         # ── 期货横截面模式（使用期货专用种子因子） ──
@@ -232,7 +238,7 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
         loop = EvolutionLoop(
             data=data_df,
             forward_returns=fwd_ret,
-            elite_dir=cfg.elite_dir,
+            elite_dir=cfg.get_elite_dir("futures"),
             memory_dir=cfg.memory_dir + "/evolution",
             llm_client=llm,
             seed_pool=seed_pool,
@@ -240,6 +246,7 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
             n_trials_micro=min(args.max_generations * 3, 30),
             cross_section_data=panel,
             cross_section_dates=common_dates,
+            market="futures",
         )
     else:
         # ── 单标模式 ──
@@ -256,12 +263,13 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
         loop = EvolutionLoop(
             data=data_df,
             forward_returns=fwd_ret,
-            elite_dir=cfg.elite_dir,
+            elite_dir=cfg.get_elite_dir("stock"),
             memory_dir=cfg.memory_dir + "/evolution",
             llm_client=llm,
             seed_pool=seed_pool,
             verifier=verifier,
             n_trials_micro=min(args.max_generations * 5, cfg.micro_trials_per_generation),
+            market="stock",
         )
 
     # 熔断预算：每个因子最多 4000 token
@@ -288,7 +296,8 @@ def _cmd_meta_loop_run(args: argparse.Namespace) -> int:
     trace_id = generate_trace_id()
     run_id = generate_run_id()
     cfg = get_config()
-    print(f"[meta-loop] trace_id={trace_id} run_id={run_id}")
+    market = getattr(args, "market", None) or cfg.default_market
+    print(f"[meta-loop] trace_id={trace_id} run_id={run_id} market={market}")
 
     llm = get_default_llm_client()
     print(f"[meta-loop] LLM backend: {type(llm).__name__}")
@@ -298,6 +307,7 @@ def _cmd_meta_loop_run(args: argparse.Namespace) -> int:
         loop = MetaLoop(
             memory_dir=cfg.memory_dir + "/meta_loop",
             llm_client=llm,
+            market=market,
         )
         result = loop.run()
         print(f"[meta-loop] 完成: status={result.status} injected={len(result.injected_candidate_ids)}")
@@ -318,20 +328,29 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
     universe = getattr(args, "universe", "stock")
     synthesis_mode = getattr(args, "synthesis_mode", None)
     if universe == "futures":
-        elite_dir = str(Path(cfg.memory_dir) / "knowledge" / "factors" / "futures_elite")
+        elite_dir = cfg.get_elite_dir("futures")
         if synthesis_mode is None:
-            synthesis_mode = "sharpe_weight"  # 期货保持原逻辑
+            synthesis_mode = "sharpe_weight"
     else:
-        elite_dir = cfg.elite_dir
+        elite_dir = cfg.get_elite_dir("stock")
         if synthesis_mode is None:
-            synthesis_mode = "elastic_net"  # 股票默认 Elastic Net
+            synthesis_mode = "elastic_net"
     print(f"[portfolio] universe={universe} elite_dir={elite_dir} mode={synthesis_mode}")
+
+    # 从配置加载 Verifier 配置
+    verifier_cfg = L3VerifierConfig(DEFAULT_L3_VERIFIER_CONFIG)
+    if hasattr(cfg, 'verifier') and isinstance(cfg.verifier, dict):
+        merged = {**DEFAULT_L3_VERIFIER_CONFIG, **cfg.verifier}
+        verifier_cfg = L3VerifierConfig(merged)
+        print(f"[portfolio] Verifier 配置已加载: max_correlation={verifier_cfg.get('max_correlation', 0.5)}")
 
     try:
         loop = PortfolioLoop(
             elite_dir=elite_dir,
             memory_dir=cfg.memory_dir + "/portfolio",
+            verifier_config=verifier_cfg,
             synthesis_mode=synthesis_mode,
+            market=universe,
         )
         result = loop.run()
         print(f"[portfolio] 完成: status={result.status} "
@@ -394,31 +413,153 @@ def _cmd_scheduler_list(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_factor_repo():
+    """延迟加载 FactorRepository（避免 CLI 启动依赖 DuckDB）。"""
+    from .factor_engine.factor_db.repository import FactorRepository
+    return FactorRepository()
+
+
 def _cmd_factor_list(args: argparse.Namespace) -> int:
-    """列出 elite 因子。"""
-    # 根据 market 参数选择目录，默认期货
-    if args.elite_dir:
-        elite_dir = Path(args.elite_dir)
-    elif args.market == "stock":
-        elite_dir = Path("memory/knowledge/factors/elite")
-    else:
-        elite_dir = Path("memory/knowledge/factors/futures_elite")
-    
-    if not elite_dir.exists():
-        print(f"[factor list] elite 目录不存在: {elite_dir}")
-        return 0
-    factors = sorted(elite_dir.glob("*.json"))
-    if not factors:
-        print(f"[factor list] 无 elite 因子（{elite_dir}）")
-        return 0
-    market_label = "期货" if args.market == "futures" else "股票"
-    print(f"=== {market_label} Elite Factors ({len(factors)}) ===")
-    for p in factors:
+    """列出 elite 因子（支持目录直读 + DuckDB 查询两种模式）。"""
+    cfg = get_config()
+    market = getattr(args, "market", "futures")
+
+    # 筛选参数决定是否走 DuckDB 查询
+    family = getattr(args, "family", None)
+    min_ic = getattr(args, "min_ic", None)
+    min_sharpe = getattr(args, "min_sharpe", None)
+    use_diverse = getattr(args, "diverse", False)
+    total_count = getattr(args, "total_count", 10)
+    use_db = any([family, min_ic is not None, min_sharpe is not None, use_diverse])
+
+    if use_db:
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            print(f"  - {data.get('factor_id', p.stem)} | {data.get('name', '<unnamed>')} | gen={data.get('generation', '?')}")
+            repo = _load_factor_repo()
+            if use_diverse:
+                factors = repo.get_diverse_factors(
+                    market=market,
+                    total_count=total_count,
+                    max_per_family=getattr(args, "max_per_family", 3),
+                    min_ic=min_ic if min_ic is not None else 0.02,
+                    min_sharpe=min_sharpe if min_sharpe is not None else 0.5,
+                )
+            elif family:
+                factors = repo.get_by_family(
+                    family=family,
+                    market=market,
+                    min_sharpe=min_sharpe,
+                    min_ic=min_ic,
+                    limit=getattr(args, "limit", 50),
+                )
+            else:
+                factors = repo.get_eligible(
+                    market=market,
+                    min_ic=min_ic if min_ic is not None else 0.02,
+                    min_sharpe=min_sharpe if min_sharpe is not None else 0.5,
+                    require_elite=True,
+                )
         except Exception as e:  # noqa: BLE001
-            print(f"  - {p.stem} [读取失败: {e}]")
+            print(f"[factor list] DuckDB 查询失败，回退目录模式: {e}", file=sys.stderr)
+            use_db = False
+
+    if not use_db:
+        # 根据 market 参数选择目录，默认期货
+        if args.elite_dir:
+            elite_dir = Path(args.elite_dir)
+        else:
+            elite_dir = Path(cfg.get_elite_dir(market))
+
+        if not elite_dir.exists():
+            print(f"[factor list] elite 目录不存在: {elite_dir}")
+            return 0
+        factors = []
+        for p in sorted(elite_dir.glob("*.json")):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                factors.append(data)
+            except Exception as e:  # noqa: BLE001
+                print(f"  - {p.stem} [读取失败: {e}]")
+
+    if not factors:
+        print(f"[factor list] 无符合条件的因子")
+        return 0
+
+    market_label = "期货" if market == "futures" else "股票"
+    print(f"=== {market_label} Factors ({len(factors)}) ===")
+
+    # JSON 模式输出
+    if getattr(args, "json", False):
+        print(json.dumps(factors, indent=2, ensure_ascii=False, default=str))
+        return 0
+
+    # 文本表格输出
+    if isinstance(factors[0], dict):
+        keys = ["factor_id", "name", "family", "market", "generation", "ic", "sharpe"]
+        header = "  ".join(f"{k:<12}" for k in keys)
+        print(header)
+        print("-" * len(header))
+        for f in factors:
+            vals = []
+            for k in keys:
+                v = f.get(k, "-")
+                if isinstance(v, float):
+                    vals.append(f"{v:<12.4f}")
+                else:
+                    vals.append(f"{str(v):<12}")
+            print("  ".join(vals))
+    return 0
+
+
+def _cmd_factor_stats(args: argparse.Namespace) -> int:
+    """统计因子家族分布（DuckDB 模式）。"""
+    market = getattr(args, "market", None)
+    min_sharpe = getattr(args, "min_sharpe", 0.0)
+    try:
+        repo = _load_factor_repo()
+        dist = repo.get_family_distribution(market=market, min_sharpe=min_sharpe)
+    except Exception as e:  # noqa: BLE001
+        print(f"[factor stats] 查询失败: {e}", file=sys.stderr)
+        return 1
+
+    if not dist:
+        print("[factor stats] 无符合条件的因子")
+        return 0
+
+    if getattr(args, "json", False):
+        print(json.dumps(dist, indent=2, ensure_ascii=False, default=str))
+        return 0
+
+    total = sum(row.get("count", 0) for row in dist)
+    scope = market or "全部市场"
+    print(f"=== 因子家族分布 ({scope}, min_sharpe={min_sharpe}) ===")
+    print(f"{'家族':<24} {'数量':>6}  {'占比':>8}")
+    print("-" * 42)
+    for row in dist:
+        fam = row.get("family", "unknown")
+        count = row.get("count", 0)
+        pct = (count / total * 100) if total > 0 else 0
+        print(f"{fam:<24} {count:>6}  {pct:>7.1f}%")
+    print("-" * 42)
+    print(f"{'合计':<24} {total:>6}")
+    return 0
+
+
+def _cmd_factor_lineage(args: argparse.Namespace) -> int:
+    """查询单个因子的演化血缘（DuckDB 模式）。"""
+    factor_id = args.factor_id
+    try:
+        repo = _load_factor_repo()
+        lineage = repo.get_factor_lineage(factor_id)
+    except Exception as e:  # noqa: BLE001
+        print(f"[factor lineage] 查询失败: {e}", file=sys.stderr)
+        return 1
+
+    if lineage is None:
+        print(f"[factor lineage] 未找到因子: {factor_id}")
+        return 1
+
+    print(f"=== 因子血缘: {factor_id} ===")
+    print(json.dumps(lineage, indent=2, ensure_ascii=False, default=str))
     return 0
 
 
@@ -452,8 +593,12 @@ def _cmd_factor_seeds(args: argparse.Namespace) -> int:
 
 def _cmd_factor_show(args: argparse.Namespace) -> int:
     """查看单个因子详情。"""
+    cfg = get_config()
     factor_id = args.factor_id
-    elite_dir = Path(args.elite_dir or "memory/knowledge/factors/elite")
+    if args.elite_dir:
+        elite_dir = Path(args.elite_dir)
+    else:
+        elite_dir = Path(cfg.get_elite_dir(getattr(args, "market", "stock")))
     candidates = list(elite_dir.glob(f"*{factor_id}*.json"))
     if not candidates:
         print(f"[factor show] 未找到因子: {factor_id} (搜索目录: {elite_dir})")
@@ -505,6 +650,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_meta = sub.add_parser("meta-loop", help="L1 Meta-Loop")
     meta_sub = p_meta.add_subparsers(dest="subcommand", required=False)
     p_meta_run = meta_sub.add_parser("run", help="启动 L1 Meta-Loop")
+    p_meta_run.add_argument("--market", type=str, default=None,
+                            choices=["stock", "futures"],
+                            help="市场类型: stock（股票）/ futures（期货），默认使用 config default_market")
     p_meta_run.set_defaults(func=_cmd_meta_loop_run)
 
     # portfolio run
@@ -536,25 +684,52 @@ def build_parser() -> argparse.ArgumentParser:
     # factor
     p_factor = sub.add_parser("factor", help="因子管理")
     factor_sub = p_factor.add_subparsers(dest="subcommand", required=False)
+
+    # factor list (增强：支持 DuckDB 查询与筛选)
     p_factor_list = factor_sub.add_parser("list", help="列出 elite 因子")
-    p_factor_list.add_argument("--elite-dir", default=None, help="elite 因子目录")
+    p_factor_list.add_argument("--elite-dir", default=None, help="elite 因子目录（仅目录模式使用）")
     p_factor_list.add_argument("--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）")
+    p_factor_list.add_argument("--family", default=None, help="按家族筛选（DuckDB 模式）")
+    p_factor_list.add_argument("--min-ic", type=float, default=None, help="最低 IC 阈值")
+    p_factor_list.add_argument("--min-sharpe", type=float, default=None, help="最低 Sharpe 阈值")
+    p_factor_list.add_argument("--diverse", action="store_true", help="启用多样性选择")
+    p_factor_list.add_argument("--total-count", type=int, default=10, help="多样性选择总数（默认 10）")
+    p_factor_list.add_argument("--max-per-family", type=int, default=3, help="单家族最大因子数（默认 3）")
+    p_factor_list.add_argument("--limit", type=int, default=50, help="查询结果上限（默认 50）")
+    p_factor_list.add_argument("--json", action="store_true", help="JSON 格式输出")
     p_factor_list.set_defaults(func=_cmd_factor_list)
 
+    # factor show
     p_factor_show = factor_sub.add_parser("show", help="查看因子详情")
     p_factor_show.add_argument("factor_id", help="因子 ID（支持部分匹配）")
     p_factor_show.add_argument("--elite-dir", default=None, help="elite 因子目录")
     p_factor_show.set_defaults(func=_cmd_factor_show)
 
+    # factor seeds
     p_factor_seeds = factor_sub.add_parser("seeds", help="列出种子因子")
     p_factor_seeds.add_argument("--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）")
     p_factor_seeds.set_defaults(func=_cmd_factor_seeds)
+
+    # factor stats
+    p_factor_stats = factor_sub.add_parser("stats", help="因子家族分布统计")
+    p_factor_stats.add_argument("--market", default=None, choices=["futures", "stock"], help="市场类型（可选）")
+    p_factor_stats.add_argument("--min-sharpe", type=float, default=0.0, help="最低 Sharpe 阈值（默认 0.0）")
+    p_factor_stats.add_argument("--json", action="store_true", help="JSON 格式输出")
+    p_factor_stats.set_defaults(func=_cmd_factor_stats)
+
+    # factor lineage
+    p_factor_lineage = factor_sub.add_parser("lineage", help="查询因子演化血缘")
+    p_factor_lineage.add_argument("factor_id", help="因子 ID")
+    p_factor_lineage.set_defaults(func=_cmd_factor_lineage)
 
     return parser
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI 入口。"""
+    import logging
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     parser = build_parser()
     args = parser.parse_args(argv)
 

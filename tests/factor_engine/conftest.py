@@ -89,3 +89,61 @@ def mock_evolve_micro():
     from unittest.mock import patch
     with patch("fts.factor_engine.evolution_loop.evolve_micro") as m:
         yield m
+
+
+# ─── EvolutionLoop 集成测试 fixtures ──────────────────────
+
+@pytest.fixture
+def sample_seed() -> dict:
+    """示例种子因子数据。"""
+    return {
+        "factor_id": "seed_test_001",
+        "name": "test_momentum",
+        "code": "close - close.shift(1)",
+        "factor_type": "momentum",
+        "description": "测试动量因子",
+    }
+
+
+@pytest.fixture
+def sample_evaluation() -> dict:
+    """示例评估结果。"""
+    return {
+        "ic": 0.05,
+        "icir": 1.2,
+        "sharpe": 1.5,
+        "max_drawdown": 0.08,
+        "total_return": 0.25,
+        "passed": True,
+        "level_1_backtest": {
+            "ic": 0.05,
+            "sharpe": 1.5,
+            "max_drawdown": 0.08,
+        },
+    }
+
+
+@pytest.fixture
+def sample_dataframe(sample_ohlcv) -> pd.DataFrame:
+    """与 sample_ohlcv 相同的 DataFrame。"""
+    return sample_ohlcv
+
+
+@pytest.fixture
+def sample_forward_returns(forward_returns) -> np.ndarray:
+    """与 forward_returns 相同的数组。"""
+    return forward_returns
+
+
+@pytest.fixture
+def minimal_loop(sample_dataframe, sample_forward_returns, tmp_path) -> "EvolutionLoop":
+    """最小化配置的 EvolutionLoop 实例。"""
+    from fts.factor_engine.evolution_loop import EvolutionLoop
+
+    return EvolutionLoop(
+        data=sample_dataframe,
+        forward_returns=sample_forward_returns,
+        elite_dir=str(tmp_path / "elite"),
+        memory_dir=str(tmp_path / "memory"),
+        n_trials_micro=5,
+    )

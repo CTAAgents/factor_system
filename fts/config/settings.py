@@ -18,6 +18,7 @@ from typing import Any, Optional
 
 DEFAULT_MEMORY_DIR = "memory"
 DEFAULT_ELITE_DIR = "memory/knowledge/factors/elite"
+DEFAULT_FUTURES_ELITE_DIR = "memory/knowledge/factors/futures_elite"
 
 
 # ─── 配置类 ──────────────────────────────────────────────
@@ -33,10 +34,26 @@ class FTSConfig:
     elite_dir: str = field(
         default_factory=lambda: os.getenv("FTS_ELITE_DIR", DEFAULT_ELITE_DIR)
     )
+    futures_elite_dir: str = field(
+        default_factory=lambda: os.getenv("FTS_FUTURES_ELITE_DIR", DEFAULT_FUTURES_ELITE_DIR)
+    )
+
+    def get_elite_dir(self, market: str = "stock") -> str:
+        """按市场获取对应的 elite 目录。
+
+        Args:
+            market: "stock" 或 "futures"
+
+        Returns:
+            对应的 elite 目录路径
+        """
+        if market == "futures":
+            return self.futures_elite_dir
+        return self.elite_dir
 
     # ── 数据配置 ──
     default_market: str = field(
-        default_factory=lambda: os.getenv("FTS_DEFAULT_MARKET", "stock")
+        default_factory=lambda: os.getenv("FTS_DEFAULT_MARKET", "futures")
     )
 
     # ── LLM 配置 ──
@@ -62,6 +79,15 @@ class FTSConfig:
     portfolio_max_factors: int = 20
     portfolio_top_n: int = 5
     portfolio_decay_days: int = 90
+
+    # ── L3 Verifier ──
+    verifier: dict = field(default_factory=lambda: {
+        "min_sharpe": 1.5,
+        "max_correlation": 0.5,
+        "max_turnover": 0.50,
+        "max_decay_rate": 0.30,
+        "min_n_factors": 3,
+    })
 
     # ── 日志 ──
     log_level: str = field(
@@ -89,7 +115,7 @@ def load_config(config_path: Optional[str] = None) -> FTSConfig:
     """加载配置（YAML + 环境变量覆盖）。
 
     Args:
-        config_path: YAML 配置文件路径，None=自动查找
+        config_path: YAML 配置文件路径，None=自动查找 config/settings.yaml
 
     Returns:
         FTSConfig 实例
@@ -99,6 +125,11 @@ def load_config(config_path: Optional[str] = None) -> FTSConfig:
     # 尝试加载 YAML 文件
     if config_path is None:
         config_path = os.getenv("FTS_CONFIG_FILE", "")
+    if not config_path:
+        # 自动查找 config/settings.yaml
+        default_config = Path("config/settings.yaml")
+        if default_config.exists():
+            config_path = str(default_config)
     if config_path:
         p = Path(config_path)
         if p.exists():
@@ -125,7 +156,15 @@ def _apply_dict(cfg: FTSConfig, d: dict[str, Any]) -> None:
     """将字典值应用到配置实例。"""
     for key, value in d.items():
         if hasattr(cfg, key) and value is not None:
-            setattr(cfg, key, value)
+            if key == "verifier" and isinstance(value, dict):
+                current = getattr(cfg, key, {})
+                if isinstance(current, dict):
+                    current.update(value)
+                    setattr(cfg, key, current)
+                else:
+                    setattr(cfg, key, value)
+            else:
+                setattr(cfg, key, value)
 
 
 def _apply_env_overrides(cfg: FTSConfig) -> None:

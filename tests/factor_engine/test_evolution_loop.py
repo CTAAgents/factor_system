@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from fts.factor_engine.audit import FactorAuditReport
 from fts.factor_engine.contracts import (
     EVOLUTION_VERSION,
     EconomicLogic,
@@ -166,6 +167,63 @@ def mock_llm_client():
     return client
 
 
+def _make_passing_audit_report() -> FactorAuditReport:
+    """构造一个通过所有审计项的 Mock 报告。"""
+    from fts.factor_engine.audit import AuditItemResult
+
+    items = [
+        AuditItemResult(name=n, status="passed", evidence="mock")
+        for n in (
+            "causal_validity", "oos_consistency", "cross_symbol",
+            "stress_resilience", "multiple_testing", "snooping_check",
+        )
+    ]
+    return FactorAuditReport(
+        factor_id="test_factor",
+        factor_name="test",
+        audited_at="2026-08-05T00:00:00",
+        items=items,
+        passed=True,
+        pass_rate=1.0,
+        summary={"total": 6, "passed": 6, "failed": 0, "skipped": 0, "pass_rate": 1.0},
+    )
+
+
+def _mock_auditor_pass(loop: EvolutionLoop) -> None:
+    """将 loop.auditor.audit mock 为恒通过。"""
+    loop.auditor = MagicMock()
+    loop.auditor.audit = MagicMock(return_value=_make_passing_audit_report())
+
+
+def _mock_seed_evaluation_pass(loop: EvolutionLoop) -> None:
+    """Mock 评估链 + 审计器 + 质检 + DuckDB，使种子评估通过。"""
+    _mock_auditor_pass(loop)
+    mock_eval = MagicMock()
+    mock_eval.return_value = {
+        "passed": True,
+        "level_1_backtest": {
+            "ic": 0.05, "icir": 1.5, "sharpe": 2.0,
+            "monotonicity": True, "max_drawdown": 0.05,
+            "turnover_monthly": 0.3,
+        },
+        "economic_score": {"dimensions_passed": 4},
+        "multiple_test": {"passed": True},
+        "total_ic": 0.05,
+        "oos_results": [{"passed": True, "ic_consistency": 0.8}],
+        "p_values": [0.01, 0.02],
+    }
+    loop.evaluation_chain.evaluate = mock_eval
+    mock_inspection = MagicMock()
+    mock_inspection.filtered = False
+    mock_inspection.grade = "A"
+    mock_inspection.total_score = 45.0
+    mock_inspection.quality_score = {"total_score": 45.0, "grade": "A"}
+    loop.quality_inspector.inspect = MagicMock(return_value=mock_inspection)
+    mock_repo = MagicMock()
+    mock_repo.get_factor_by_name = MagicMock(return_value=None)
+    loop._get_repo = MagicMock(return_value=mock_repo)
+
+
 def test_evolution_loop_runs_minimal(
     sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
 ):
@@ -178,6 +236,7 @@ def test_evolution_loop_runs_minimal(
         llm_client=mock_llm_client,
         n_trials_micro=5,
     )
+    _mock_auditor_pass(loop)
     result = loop.run(max_generation=1)
     assert result.status in ("completed", "paused", "circuit_broken")
 
@@ -194,6 +253,7 @@ def test_evolution_loop_produces_metrics(
         llm_client=mock_llm_client,
         n_trials_micro=5,
     )
+    _mock_auditor_pass(loop)
     result = loop.run(max_generation=1)
     assert result.generations_completed >= 0
     assert result.tokens_consumed > 0
@@ -296,6 +356,7 @@ def test_evolution_loop_circuit_breaker_on_token(
         llm_client=mock_llm_client,
         n_trials_micro=2,
     )
+    _mock_seed_evaluation_pass(loop)
     result = loop.run(max_generation=5)
     assert result.status == "circuit_broken"
     assert "Token" in (result.circuit_breaker_reason or "")
@@ -480,6 +541,52 @@ def test_evolution_run_result_defaults():
     assert rr.elite_factor_ids is None or rr.elite_factor_ids == []
     d = rr.to_dict()
     assert d["elite_factor_ids"] == []
+
+
+def test_evolution_run_result_contains_seed_correlations(
+    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
+):
+    """EvolutionRunResult 应包含 seed_correlations 字段。"""
+    loop = EvolutionLoop(
+        data=sample_ohlcv,
+        forward_returns=forward_returns,
+        elite_dir=tmp_elite_dir,
+        memory_dir=tmp_memory_dir,
+        llm_client=mock_llm_client,
+        n_trials_micro=2,
+    )
+    result = loop.run(max_generation=1)
+    # seed_correlations 字段应存在
+    assert hasattr(result, 'seed_correlations')
+    assert isinstance(result.seed_correlations, list)
+    # to_dict 应包含 seed_correlations
+    d = result.to_dict()
+    assert "seed_correlations" in d
+    assert isinstance(d["seed_correlations"], list)
+
+
+def test_seed_correlation_check_in_run(
+    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
+):
+    """run() 应在种子加载后执行相关性预检。"""
+    loop = EvolutionLoop(
+        data=sample_ohlcv,
+        forward_returns=forward_returns,
+        elite_dir=tmp_elite_dir,
+        memory_dir=tmp_memory_dir,
+        llm_client=mock_llm_client,
+        n_trials_micro=2,
+    )
+    # 直接调用内部方法验证
+    seeds = loop.seed_pool.load_all_seeds()
+    correlations = loop._run_seed_correlation_check(seeds, "test_trace")
+    assert isinstance(correlations, list)
+    # 每个条目都应有正确的结构
+    for item in correlations:
+        assert "factor_id_a" in item
+        assert "factor_id_b" in item
+        assert "pearson" in item
+        assert "spearman" in item
 
 
 # ─── micro_evolution coverage ──────────────────────────
@@ -727,6 +834,7 @@ class TestEvolutionLoopCoverage:
             memory_dir=tmp_memory_dir,
             n_trials_micro=2,
         )
+        _mock_seed_evaluation_pass(loop)
         # 让 evolve 抛出异常
         loop.macro_evolver.evolve = MagicMock(side_effect=ValueError("LLM 不可用"))
         result = loop.run(max_generation=3)
@@ -747,6 +855,7 @@ class TestEvolutionLoopCoverage:
             memory_dir=tmp_memory_dir,
             n_trials_micro=2,
         )
+        _mock_seed_evaluation_pass(loop)
         loop.macro_evolver.evolve = MagicMock(side_effect=ValueError("LLM 不可用"))
         loop.run(max_generation=2)
         failure_dir = tmp_memory_dir / "failure"
@@ -769,6 +878,7 @@ class TestEvolutionLoopCoverage:
             memory_dir=tmp_memory_dir,
             n_trials_micro=2,
         )
+        _mock_seed_evaluation_pass(loop)
         mock_evolve_micro.side_effect = RuntimeError("optuna 崩溃")
         result = loop.run(max_generation=3)
         # 宏观演化成功（有 token 消耗），微观全部失败 → 循环正常完成
@@ -788,6 +898,7 @@ class TestEvolutionLoopCoverage:
             memory_dir=tmp_memory_dir,
             n_trials_micro=2,
         )
+        _mock_seed_evaluation_pass(loop)
         mock_evolve_micro.side_effect = RuntimeError("optuna 崩溃")
         loop.run(max_generation=2)
         failure_dir = tmp_memory_dir / "failure"
@@ -821,6 +932,7 @@ class TestEvolutionLoopCoverage:
             n_trials_micro=2,
             llm_client=mock_llm_client,
         )
+        _mock_seed_evaluation_pass(loop)
         # Verifier 始终通过
         mock_verifier = MagicMock()
         mock_verifier.check.return_value = {
@@ -882,6 +994,7 @@ class TestEvolutionLoopCoverage:
             n_trials_micro=2,
             llm_client=mock_llm_client,
         )
+        _mock_seed_evaluation_pass(loop)
         # 让 Verifier 拒绝所有因子（主循环中评估通过但 Verifier 判定失败）
         # 这样种子因子能通过评估（IC>=0.03 的种子晋升），
         # 但主循环中所有因子都失败 → 失败率熔断
@@ -904,9 +1017,14 @@ class TestEvolutionLoopCoverage:
             elite_dir=tmp_elite_dir,
             memory_dir=tmp_memory_dir,
         )
-        factor = _make_minimal_factor("fct_promote_test")
+        # Mock DuckDB repo to avoid shared state issues
+        mock_repo = MagicMock()
+        mock_repo.get_factor_by_name = MagicMock(return_value=None)
+        loop._get_repo = MagicMock(return_value=mock_repo)
+        factor = _make_minimal_factor("fct_promote_test_unique")
+        factor["name"] = "fct_promote_test_unique"
         evaluation = FactorEvaluation(
-            factor_id="fct_promote_test",
+            factor_id="fct_promote_test_unique",
             trace_id="test_trace",
             passed=True,
             failure_reasons=[],
@@ -916,7 +1034,7 @@ class TestEvolutionLoopCoverage:
         assert fp.exists()
         assert fp.suffix == ".json"
         data = json.loads(fp.read_text(encoding="utf-8"))
-        assert data["factor_id"] == "fct_promote_test"
+        assert data["factor_id"] == "fct_promote_test_unique"
 
     def test_record_success_trace(self, tmp_memory_dir):
         """_record_success_trace 应记录到 success 目录。"""
@@ -1053,6 +1171,7 @@ class TestEvolutionLoopCoverage:
             n_trials_micro=2,
             llm_client=MagicMock(),
         )
+        _mock_seed_evaluation_pass(loop)
         # mock macro_evolver.evolve 返回有效结果（含 trace_id）
         mock_factor = _make_minimal_factor("fct_lowic_test")
         loop.macro_evolver.evolve = MagicMock(return_value=(
@@ -1254,6 +1373,7 @@ class TestLine221:
             n_trials_micro=2,
             llm_client=MagicMock(),
         )
+        _mock_seed_evaluation_pass(loop)
         # Mock macro_evolver 返回有效因子（包含 trace_id）
         parent_factor = _make_minimal_factor("fct_line221_parent")
         loop.macro_evolver.evolve = MagicMock(return_value=(
@@ -1269,8 +1389,17 @@ class TestLine221:
                 "passed": True,
                 "failure_reasons": [],
             }
+            # Mock quality_inspector 也通过（返回 A 级）
+            mock_inspection = MagicMock()
+            mock_inspection.filtered = False
+            mock_inspection.grade = "A"
+            mock_inspection.total_score = 45.0
+            mock_inspection.quality_score = {"total_score": 45.0, "grade": "A"}
+            loop.quality_inspector.inspect = MagicMock(return_value=mock_inspection)
+            # Mock auditor 也通过
+            _mock_auditor_pass(loop)
             result = loop.run(max_generation=2)
-        # Verifier 通过 → 晋级精英池
+        # Verifier 通过 + 质检通过 → 晋级精英池
         assert result.total_factors_promoted >= 1
         assert len(result.elite_factor_ids) >= 1
 
@@ -1414,3 +1543,208 @@ class TestCoverageGaps:
         with patch.object(el_mod, "__name__", "__main__"):
             exec("from fts.factor_engine.evolution_loop import main; main()",
                  {"__name__": "__main__"})
+
+
+# ─── Phase B.2: BacktestPipeline 集成测试 ────────────────
+
+
+class TestBacktestPipelineIntegration:
+    """测试 BacktestPipeline 在演化循环中的集成。"""
+
+    def test_backtest_pipeline_initialization(self, minimal_loop):
+        """验证 BacktestPipeline 在 EvolutionLoop 中初始化。"""
+        assert minimal_loop.backtest_pipeline is not None
+
+    def test_run_backtest_pipeline_success(
+        self, minimal_loop, sample_seed, sample_evaluation
+    ):
+        """验证 _run_backtest_pipeline 成功执行。"""
+        from fts.factor_engine.backtest_pipeline import PipelineResult
+
+        mock_result = PipelineResult(
+            success=True,
+            stage="report",
+            duration_ms=100.0,
+            output=None,
+        )
+        minimal_loop.backtest_pipeline.run = MagicMock(return_value=mock_result)
+
+        result = minimal_loop._run_backtest_pipeline(
+            sample_seed, sample_evaluation, "test_trace"
+        )
+        assert result is not None
+        assert result["success"] is True
+        assert result["duration_ms"] == 100.0
+
+    def test_run_backtest_pipeline_failure(
+        self, minimal_loop, sample_seed, sample_evaluation
+    ):
+        """验证 _run_backtest_pipeline 失败返回 None。"""
+        from fts.factor_engine.backtest_pipeline import PipelineResult
+
+        mock_result = PipelineResult(
+            success=False,
+            stage="data_load",
+            duration_ms=50.0,
+            error="data not found",
+        )
+        minimal_loop.backtest_pipeline.run = MagicMock(return_value=mock_result)
+
+        result = minimal_loop._run_backtest_pipeline(
+            sample_seed, sample_evaluation, "test_trace"
+        )
+        assert result is None
+
+    def test_run_backtest_pipeline_exception(
+        self, minimal_loop, sample_seed, sample_evaluation
+    ):
+        """验证 _run_backtest_pipeline 异常返回 None。"""
+        minimal_loop.backtest_pipeline.run = MagicMock(
+            side_effect=RuntimeError("boom")
+        )
+        result = minimal_loop._run_backtest_pipeline(
+            sample_seed, sample_evaluation, "test_trace"
+        )
+        assert result is None
+
+
+# ─── Phase B.1: DataQualityMonitor 集成测试 ──────────────
+
+
+class TestDataQualityIntegration:
+    """测试 DataQualityMonitor 在演化循环中的集成。"""
+
+    def test_data_quality_monitor_initialization(self, minimal_loop):
+        """验证 DataQualityMonitor 在 EvolutionLoop 中初始化。"""
+        assert minimal_loop.data_quality_monitor is not None
+
+    def test_register_factor_baseline(
+        self, minimal_loop, sample_seed, sample_evaluation
+    ):
+        """验证注册因子基准数据。"""
+        minimal_loop.data_quality_monitor.register_factor = MagicMock()
+        minimal_loop._register_factor_baseline(sample_seed, sample_evaluation)
+
+        minimal_loop.data_quality_monitor.register_factor.assert_called_once()
+        call_kwargs = minimal_loop.data_quality_monitor.register_factor.call_args
+        assert call_kwargs[1]["factor_id"] == sample_seed["factor_id"]
+
+    def test_check_factor_data_quality_no_alerts(
+        self, minimal_loop, sample_seed, sample_evaluation
+    ):
+        """验证数据质量检查无告警时返回空列表。"""
+        minimal_loop.data_quality_monitor.check = MagicMock(return_value=[])
+        alerts = minimal_loop._check_factor_data_quality(
+            sample_seed, sample_evaluation
+        )
+        assert alerts == []
+
+    def test_check_factor_data_quality_with_alerts(
+        self, minimal_loop, sample_seed, sample_evaluation
+    ):
+        """验证数据质量检查返回告警。"""
+        from fts.monitor.data_quality_monitor import QualityAlert
+
+        alert = QualityAlert(
+            factor_id=sample_seed["factor_id"],
+            alert_type="ic_drift",
+            severity="warning",
+            message="IC drift detected",
+            metric_name="ic",
+            metric_value=0.01,
+            baseline_value=0.05,
+            threshold=0.03,
+        )
+        minimal_loop.data_quality_monitor.check = MagicMock(
+            return_value=[alert]
+        )
+        alerts = minimal_loop._check_factor_data_quality(
+            sample_seed, sample_evaluation
+        )
+        assert len(alerts) == 1
+        assert alerts[0].alert_type == "ic_drift"
+
+
+# ─── Phase A.2: EliteFactorTracker 定期重评估测试 ──────────
+
+
+class TestEliteFactorTrackerIntegration:
+    """测试 EliteFactorTracker 在演化循环结束时的定期重评估。"""
+
+    def test_elite_tracker_initialization(self, minimal_loop):
+        """验证 EliteFactorTracker 在 EvolutionLoop 中初始化。"""
+        assert minimal_loop.elite_tracker is not None
+
+    def test_run_periodic_factor_review_no_elite(self, minimal_loop):
+        """验证无精英因子时定期重评估不报错。"""
+        minimal_loop.elite_tracker.auto_retire = MagicMock(return_value=[])
+        minimal_loop.elite_tracker.report = MagicMock(
+            return_value={"status_counts": {}, "grade_counts": {}}
+        )
+        minimal_loop._run_periodic_factor_review([], "test_trace")
+
+    def test_run_periodic_factor_review_with_elite(
+        self, minimal_loop, sample_seed
+    ):
+        """验证有精英因子时定期重评估正常执行。"""
+        fid = sample_seed["factor_id"]
+        minimal_loop.elite_tracker.auto_retire = MagicMock(return_value=[])
+        minimal_loop.elite_tracker.report = MagicMock(
+            return_value={
+                "status_counts": {"active": 1, "total": 1},
+                "grade_counts": {"A": 1},
+            }
+        )
+        minimal_loop.elite_tracker.update = MagicMock()
+
+        minimal_loop._run_periodic_factor_review([fid], "test_trace")
+        minimal_loop.elite_tracker.update.assert_called_once()
+
+    def test_run_periodic_factor_review_with_retirement(
+        self, minimal_loop, sample_seed
+    ):
+        """验证有因子被淘汰时定期重评估正常处理。"""
+        fid = sample_seed["factor_id"]
+        minimal_loop.elite_tracker.auto_retire = MagicMock(
+            return_value=[fid]
+        )
+        minimal_loop.elite_tracker.report = MagicMock(
+            return_value={
+                "status_counts": {"retired": 1, "total": 1},
+                "grade_counts": {"C": 1},
+            }
+        )
+        minimal_loop.elite_tracker.update = MagicMock()
+
+        minimal_loop._run_periodic_factor_review([fid], "test_trace")
+
+    def test_get_factor_data_for_review(self, minimal_loop, sample_seed):
+        """验证 _get_factor_data_for_review 返回默认值。"""
+        result = minimal_loop._get_factor_data_for_review(
+            sample_seed["factor_id"]
+        )
+        assert result is not None
+        assert "ic" in result
+        assert "sharpe" in result
+
+    def test_periodic_review_in_run_finally(
+        self, minimal_loop, sample_dataframe, sample_forward_returns
+    ):
+        """验证定期重评估在 run() 的 finally 块中被调用。"""
+        minimal_loop.elite_tracker.auto_retire = MagicMock(return_value=[])
+        minimal_loop.elite_tracker.report = MagicMock(
+            return_value={"status_counts": {}, "grade_counts": {}}
+        )
+        minimal_loop.elite_tracker.update = MagicMock()
+
+        with patch.object(
+            minimal_loop, "_run_periodic_factor_review"
+        ) as mock_review:
+            with patch.object(
+                minimal_loop, "_evaluate_and_promote_seeds", return_value=0
+            ):
+                with patch.object(
+                    minimal_loop.seed_pool, "load_all_seeds", return_value=[]
+                ):
+                    minimal_loop.run(max_generation=1)
+                    mock_review.assert_called_once()

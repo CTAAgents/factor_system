@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fts-prometheus-alerts
+  namespace: monitoring
+  labels:
+    app: fts-prometheus
+    app.kubernetes.io/managed-by: fts
+data:
+  prometheus_alerts.yml: "groups:\n- name: fts_data_source\n  interval: 30s\n  rules:\n\
+    \  - alert: FTSDataSourceCircuitOpen\n    expr: fts_circuit_open == 1\n    for:\
+    \ 1m\n    labels:\n      severity: critical\n      team: fts\n      component:\
+    \ data_source\n    annotations:\n      summary: FTS 数据源熔断器开启\n      description:\
+    \ 数据源熔断器已开启，数据采集可能中断。\n      runbook_url: https://wiki.example.com/fts/alerts/circuit-open\n\
+    \  - alert: FTSDataSourceSuccessRateLow\n    expr: fts_data_source_success_rate\
+    \ < 0.8\n    for: 5m\n    labels:\n      severity: warning\n      team: fts\n\
+    \      component: data_source\n    annotations:\n      summary: FTS 数据源成功率低于 80%\n\
+    \      description: 数据源成功率为 {{ $value | humanizePercentage }}，低于阈值 80%。\n  - alert:\
+    \ FTSDataSourceDown\n    expr: up{job=\"fts-metrics\"} == 0\n    for: 2m\n   \
+    \ labels:\n      severity: critical\n      team: fts\n      component: fts_service\n\
+    \    annotations:\n      summary: FTS 指标端点不可达\n      description: Prometheus 无法抓取\
+    \ FTS /metrics 端点。FTS 进程可能已崩溃。\n- name: fts_scheduler\n  interval: 60s\n  rules:\n\
+    \  - alert: FTSSchedulerNotRunning\n    expr: fts_scheduler_running == 0\n   \
+    \ for: 5m\n    labels:\n      severity: critical\n      team: fts\n      component:\
+    \ scheduler\n    annotations:\n      summary: FTS 调度器未运行\n      description: 调度器已停止运行超过\
+    \ 5 分钟。定时任务将不会执行。\n- name: fts_factor_quality\n  interval: 5m\n  rules:\n  - alert:\
+    \ FTSEliteFactorCountLow\n    expr: fts_elite_factor_count < 10\n    for: 15m\n\
+    \    labels:\n      severity: warning\n      team: fts\n      component: factor_engine\n\
+    \    annotations:\n      summary: Elite 因子数量偏低\n      description: Elite 因子数量为\
+    \ {{ $value }}，低于 10 个。\n"

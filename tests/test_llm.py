@@ -477,3 +477,255 @@ class TestAnthropicClientComplete:
             text, tokens = client.complete("test")
             assert text == "no_usage"
             assert tokens == 0
+
+
+# ═══════════════════════════════════════════════════════════
+# LLMClient.bootstrap_factors — 基类默认行为
+# ═══════════════════════════════════════════════════════════
+
+class TestBootstrapFactorsBase:
+    """测试 LLMClient.bootstrap_factors 基类默认实现。"""
+
+    def test_base_returns_empty_list(self):
+        """基类默认实现返回空列表。"""
+        client = MockLLMClient()
+        # 绕过 MockLLMClient 的重写，直接调用基类方法
+        result = LLMClient.bootstrap_factors(
+            client, {}, [], 5, "trace_001"
+        )
+        assert result == []
+
+    def test_base_accepts_params(self):
+        """基类接受所有必要参数不报错。"""
+        client = MockLLMClient()
+        snapshot = {"key": "value"}
+        gaps = [{"gap": "weak_momentum"}]
+        result = LLMClient.bootstrap_factors(
+            client, snapshot, gaps, 3, "trace_002"
+        )
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+
+# ═══════════════════════════════════════════════════════════
+# MockLLMClient.bootstrap_factors — 预设候选返回
+# ═══════════════════════════════════════════════════════════
+
+class TestMockBootstrapFactors:
+    """测试 MockLLMClient.bootstrap_factors。"""
+
+    def test_returns_candidate_with_correct_structure(self):
+        """返回的候选因子结构完整。"""
+        client = MockLLMClient()
+        result = client.bootstrap_factors(
+            {"close": [1, 2, 3]}, [], 5, "trace_mock_001"
+        )
+        assert len(result) == 1
+        cand = result[0]
+        assert cand["name"] == "mock_volume_price_divergence"
+        assert "code" in cand
+        assert "def factor_program(data, params):" in cand["code"]
+        assert "params" in cand
+        assert "signature" in cand
+        assert "economic_logic" in cand
+        assert cand["source"] == "l1_bootstrapping"
+
+    def test_candidate_code_contains_numpy_import(self):
+        """候选代码包含 numpy import。"""
+        client = MockLLMClient()
+        result = client.bootstrap_factors({}, [], 5, "trace_mock_002")
+        assert "import numpy as np" in result[0]["code"]
+
+    def test_candidate_has_economic_logic_fields(self):
+        """候选经济逻辑字段完整。"""
+        client = MockLLMClient()
+        result = client.bootstrap_factors({}, [], 5, "trace_mock_003")
+        el = result[0]["economic_logic"]
+        assert "theory" in el
+        assert "behavioral" in el
+        assert "microstructure" in el
+        assert "institutional" in el
+        assert "narrative" in el
+        assert len(el["narrative"]) >= 10
+
+    def test_candidate_signature_has_required_fields(self):
+        """候选签名字段完整。"""
+        client = MockLLMClient()
+        result = client.bootstrap_factors({}, [], 5, "trace_mock_004")
+        sig = result[0]["signature"]
+        assert "input_fields" in sig
+        assert "close" in sig["input_fields"]
+        assert "volume" in sig["input_fields"]
+
+    def test_ignores_max_candidates_limitation(self):
+        """Mock 返回固定数量不受 max_candidates 限制（Mock 特性）。"""
+        client = MockLLMClient()
+        result = client.bootstrap_factors({}, [], 1, "trace_mock_005")
+        assert len(result) == 1  # Mock 固定返回 1 个
+
+    def test_handles_empty_inputs(self):
+        """空市场快照和空辩论缺口正常处理。"""
+        client = MockLLMClient()
+        result = client.bootstrap_factors({}, [], 5, "trace_mock_006")
+        assert len(result) == 1
+        assert result[0]["name"] == "mock_volume_price_divergence"
+
+
+# ═══════════════════════════════════════════════════════════
+# OpenAIClient.bootstrap_factors — LLM 交互分支
+# ═══════════════════════════════════════════════════════════
+
+class TestOpenAIBootstrapFactors:
+    """测试 OpenAIClient.bootstrap_factors 的各分支。"""
+
+    def _make_openai_mock(self, response_text: str) -> OpenAIClient:
+        """创建带 Mock generate_json 的 OpenAIClient。"""
+        client = OpenAIClient(api_key="sk-test", max_retries=0)
+        client.generate_json = MagicMock(return_value=json.loads(response_text))
+        return client
+
+    def test_valid_response_returns_candidates(self):
+        """LLM 返回合法 candidates 时正确解析。"""
+        payload = json.dumps({
+            "candidates": [
+                {"name": "factor_a", "code": "def factor_program(data, params): pass"},
+                {"name": "factor_b", "code": "def factor_program(data, params): pass"},
+            ]
+        })
+        client = self._make_openai_mock(payload)
+        result = client.bootstrap_factors(
+            {"close": [1]}, [], 5, "trace_ai_001"
+        )
+        assert len(result) == 2
+        assert result[0]["name"] == "factor_a"
+        assert result[1]["name"] == "factor_b"
+
+    def test_truncates_to_max_candidates(self):
+        """候选数超过 max_candidates 时截断。"""
+        candidates = [
+            {"name": f"factor_{i}", "code": "def f(data, params): pass"}
+            for i in range(10)
+        ]
+        payload = json.dumps({"candidates": candidates})
+        client = self._make_openai_mock(payload)
+        result = client.bootstrap_factors(
+            {"close": [1]}, [], 3, "trace_ai_002"
+        )
+        assert len(result) == 3
+        assert result[0]["name"] == "factor_0"
+        assert result[2]["name"] == "factor_2"
+
+    def test_json_parse_error_returns_empty(self):
+        """LLM 返回非法 JSON 时返回空列表。"""
+        client = OpenAIClient(api_key="sk-test", max_retries=0)
+        client.generate_json = MagicMock(side_effect=LLMError("非法 JSON"))
+        result = client.bootstrap_factors(
+            {"close": [1]}, [], 5, "trace_ai_003"
+        )
+        assert result == []
+
+    def test_non_list_candidates_returns_empty(self):
+        """candidates 字段非列表时返回空。"""
+        payload = json.dumps({"candidates": "not_a_list"})
+        client = self._make_openai_mock(payload)
+        result = client.bootstrap_factors(
+            {"close": [1]}, [], 5, "trace_ai_004"
+        )
+        assert result == []
+
+    def test_missing_candidates_key_returns_empty(self):
+        """缺少 candidates 键时返回空列表。"""
+        payload = json.dumps({"other_key": "value"})
+        client = self._make_openai_mock(payload)
+        result = client.bootstrap_factors(
+            {"close": [1]}, [], 5, "trace_ai_005"
+        )
+        assert result == []
+
+    def test_empty_candidates_returns_empty(self):
+        """candidates 为空列表时返回空。"""
+        payload = json.dumps({"candidates": []})
+        client = self._make_openai_mock(payload)
+        result = client.bootstrap_factors(
+            {"close": [1]}, [], 5, "trace_ai_006"
+        )
+        assert result == []
+
+    def test_generic_exception_returns_empty(self):
+        """LLM 调用抛出非 LLMError 异常时返回空。"""
+        client = OpenAIClient(api_key="sk-test", max_retries=0)
+        client.generate_json = MagicMock(side_effect=RuntimeError("network"))
+        result = client.bootstrap_factors(
+            {"close": [1]}, [], 5, "trace_ai_007"
+        )
+        assert result == []
+
+
+# ═══════════════════════════════════════════════════════════
+# _build_bootstrap_prompt — Prompt 构造
+# ═══════════════════════════════════════════════════════════
+
+class TestBuildBootstrapPrompt:
+    """测试 _build_bootstrap_prompt 静态方法。"""
+
+    def test_prompt_contains_trace_id(self):
+        """Prompt 中包含 trace_id。"""
+        prompt = OpenAIClient._build_bootstrap_prompt(
+            {"close": [1, 2]}, [], 5, "trace_prompt_001"
+        )
+        assert "trace_prompt_001" in prompt
+
+    def test_prompt_contains_max_candidates(self):
+        """Prompt 中包含候选数量要求。"""
+        prompt = OpenAIClient._build_bootstrap_prompt(
+            {"close": [1]}, [], 3, "trace_prompt_002"
+        )
+        assert "3" in prompt
+
+    def test_prompt_contains_snapshot_data(self):
+        """Prompt 中包含市场快照摘要。"""
+        prompt = OpenAIClient._build_bootstrap_prompt(
+            {"close": [1, 2, 3], "volume": [100, 200, 300]},
+            [], 5, "trace_prompt_003",
+        )
+        assert "close" in prompt
+
+    def test_prompt_contains_code_rules(self):
+        """Prompt 中包含代码规则。"""
+        prompt = OpenAIClient._build_bootstrap_prompt(
+            {}, [], 5, "trace_prompt_004"
+        )
+        assert "factor_program" in prompt
+        assert "numpy" in prompt
+
+    def test_prompt_contains_json_format(self):
+        """Prompt 中包含输出 JSON 格式说明。"""
+        prompt = OpenAIClient._build_bootstrap_prompt(
+            {}, [], 5, "trace_prompt_005"
+        )
+        assert "candidates" in prompt
+        assert "economic_logic" in prompt
+
+    def test_prompt_contains_common_errors(self):
+        """Prompt 中包含常见错误提醒。"""
+        prompt = OpenAIClient._build_bootstrap_prompt(
+            {}, [], 5, "trace_prompt_006"
+        )
+        assert "未定义变量" in prompt or "❌" in prompt
+
+    def test_prompt_handles_empty_gaps(self):
+        """空辩论缺口不报错。"""
+        prompt = OpenAIClient._build_bootstrap_prompt(
+            {"close": [1]}, [], 5, "trace_prompt_007"
+        )
+        assert isinstance(prompt, str)
+        assert len(prompt) > 100
+
+    def test_prompt_truncates_long_snapshot(self):
+        """过长的市场快照被截断。"""
+        long_snapshot = {f"key_{i}": "x" * 100 for i in range(50)}
+        prompt = OpenAIClient._build_bootstrap_prompt(
+            long_snapshot, [], 5, "trace_prompt_008"
+        )
+        assert isinstance(prompt, str)
+        assert len(prompt) > 0

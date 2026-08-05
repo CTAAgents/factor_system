@@ -206,7 +206,7 @@ class TestL1Verifier:
         # 名字设为已有种子的名字
         valid_candidate["name"] = "momentum"
         v = L1Verifier()
-        result = v.check(valid_candidate, SeedPool())
+        result = v.check(valid_candidate, SeedPool(market="stock"))
         assert result["passed"] is False
         assert any("重复" in r for r in result["failure_reasons"])
 

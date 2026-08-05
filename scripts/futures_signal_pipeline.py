@@ -52,6 +52,20 @@ sys.path.insert(0, str(PROJECT_ROOT))
 ELITE_DIR = PROJECT_ROOT / "memory/knowledge/factors/futures_elite"
 REPORTS_ROOT = PROJECT_ROOT / "reports"
 
+# 优化器懒加载（可选依赖，失败时回退到原始实现）
+_OPTIMIZER = None
+
+def _get_optimizer():
+    """获取或创建因子优化器（懒加载）。"""
+    global _OPTIMIZER
+    if _OPTIMIZER is None:
+        try:
+            from fts.factor_engine.factor_optimizer import FactorOptimizer, set_panel_ref
+            _OPTIMIZER = FactorOptimizer()
+        except ImportError:
+            pass
+    return _OPTIMIZER
+
 
 def _yesterday_str() -> str:
     """返回昨日日期字符串 (YYYY-MM-DD)。"""
@@ -136,13 +150,14 @@ def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]
             if abs(ic) < ic_threshold:
                 continue
 
-            # Layer 1: 代码哈希去重
+            # Layer 1: 代码哈希去重（仅对有 code 的因子生效）
             code = data.get("code", "")
-            code_hash = hashlib.sha256(code.encode()).hexdigest()
-            if code_hash in seen_codes:
-                duplicate_count += 1
-                continue
-            seen_codes.add(code_hash)
+            if code:
+                code_hash = hashlib.sha256(code.encode()).hexdigest()
+                if code_hash in seen_codes:
+                    duplicate_count += 1
+                    continue
+                seen_codes.add(code_hash)
 
             # Layer 2: 回测结果去重（IC/sharpe/t_stat 完全相同 → 同一因子）
             stat_key = (round(ic, 5), round(bt.get("sharpe", 0), 4),
@@ -164,13 +179,30 @@ def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]
 def _compute_signal_matrix(
     panel: dict[str, "pd.DataFrame"],
     factors: list[dict[str, Any]],
+    use_optimizer: bool = False,
 ) -> dict[str, dict[str, np.ndarray]]:
     """一次性计算所有因子 × 所有品种的信号矩阵。
+
+    Args:
+        panel: 品种行情面板
+        factors: 因子列表
+        use_optimizer: 是否使用优化器（并行+缓存，因子>=30自动启用）
 
     Returns:
         signal_matrix[symbol][factor_name] = np.ndarray (信号值时间序列)
     """
     from fts.factor_engine.factor_program import FactorExecutor
+
+    # 检查是否使用优化器
+    optimizer = _get_optimizer() if use_optimizer else None
+    if optimizer is not None and len(factors) >= 30:
+        try:
+            from fts.factor_engine.factor_optimizer import set_panel_ref
+            set_panel_ref(panel)
+            print(f"      [优化器] 使用 Tier 1 并行计算...")
+            return optimizer.compute_signal_matrix_parallel(panel, factors)
+        except Exception as e:
+            print(f"      [警告] 优化器计算失败，回退到顺序计算: {e}")
 
     signal_matrix: dict[str, dict[str, np.ndarray]] = {}
     n_errors = 0
@@ -339,6 +371,8 @@ def _compute_factor_sign_flips(
             t_date = common_dates[t]
             for sym in signal_matrix:
                 sig = signal_matrix[sym].get(fname)
+                if sig is None:
+                    continue
                 df = panel.get(sym)
                 if df is None or df.empty:
                     continue
@@ -534,15 +568,64 @@ def _compute_ridge_weights(
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
+    # ── 因子间相关性惩罚 (v6 新增) ──
+    corr_matrix = np.corrcoef(X_scaled, rowvar=False)
+    corr_matrix = np.nan_to_num(corr_matrix, nan=0.0, posinf=1.0, neginf=-1.0)
+    
+    corr_threshold = 0.6
+    penalty_matrix = np.zeros_like(corr_matrix)
+    high_corr_pairs = []
+    for i in range(n_factors):
+        for j in range(i + 1, n_factors):
+            c = abs(corr_matrix[i, j])
+            if c > corr_threshold:
+                penalty_matrix[i, j] = c
+                penalty_matrix[j, i] = c
+                high_corr_pairs.append((factor_names[i], factor_names[j], c))
+    
+    if high_corr_pairs:
+        print(f"      [相关性惩罚] 检测到 {len(high_corr_pairs)} 个高相关因子对 (|corr|>{corr_threshold}):")
+        for f1, f2, c in high_corr_pairs[:5]:
+            print(f"        - {f1} × {f2}: {c:.3f}")
+        if len(high_corr_pairs) > 5:
+            print(f"        ... 及其他 {len(high_corr_pairs) - 5} 对")
+
+    lambda_corr = 0.1
+    
+    penalty_features_list = []
+    penalty_targets = []
+    for i in range(n_factors):
+        for j in range(i + 1, n_factors):
+            c = penalty_matrix[i, j]
+            if c > 0:
+                feat = np.zeros(n_factors)
+                feat[i] = np.sqrt(lambda_corr) * c
+                feat[j] = np.sqrt(lambda_corr) * c
+                penalty_features_list.append(feat)
+                penalty_targets.append(0.0)
+    
+    if penalty_features_list:
+        penalty_X = np.array(penalty_features_list)
+        penalty_y = np.array(penalty_targets)
+        
+        X_augmented = np.vstack([X_scaled, penalty_X])
+        y_augmented = np.concatenate([y, penalty_y])
+        
+        print(f"      [相关性惩罚] 追加 {len(penalty_features_list)} 个惩罚样本，"
+              f"训练集从 {len(X_scaled)} 增至 {len(X_augmented)}")
+    else:
+        X_augmented = X_scaled
+        y_augmented = y
+
     # Ridge 回归（自动选择 alpha）
     if alpha is not None:
         from sklearn.linear_model import Ridge
         ridge = Ridge(alpha=alpha, fit_intercept=True)
     else:
         ridge = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0], fit_intercept=True)
-    ridge.fit(X_scaled, y)
+    ridge.fit(X_augmented, y_augmented)
 
-    # 系数取绝对值 → 权重（方向校正已处理符号，权重只反映预测强度）
+    # 系数取绝对值 → 权重
     coefs = np.abs(ridge.coef_)
     total = coefs.sum()
     if total < 1e-10:
@@ -551,6 +634,76 @@ def _compute_ridge_weights(
     weights = {fname: float(coef) / float(total)
                for fname, coef in zip(factor_names, coefs)}
 
+    # ── 极端相关因子硬删除 (|corr| > 0.95) ──
+    extreme_threshold = 0.95
+    extreme_pairs = [(f1, f2, c) for f1, f2, c in high_corr_pairs if c > extreme_threshold]
+    removed_factors: set[str] = set()
+    
+    # 保存原始因子列表（用于后续相关性监控时索引 X_scaled）
+    orig_factor_names = list(factor_names)
+    
+    if extreme_pairs:
+        print(f"      [硬删除] 检测到 {len(extreme_pairs)} 个极端相关因子对 (|corr|>{extreme_threshold}):")
+        for f1, f2, c in extreme_pairs:
+            print(f"        🔴 {f1} × {f2} = {c:.4f}")
+        
+        # 按权重保留更高的因子
+        extreme_factor_degree: dict[str, int] = {}
+        for f1, f2, _ in extreme_pairs:
+            extreme_factor_degree[f1] = extreme_factor_degree.get(f1, 0) + 1
+            extreme_factor_degree[f2] = extreme_factor_degree.get(f2, 0) + 1
+        
+        for f1, f2, c in extreme_pairs:
+            w1 = weights.get(f1, 0)
+            w2 = weights.get(f2, 0)
+            if f1 not in removed_factors and f2 not in removed_factors:
+                keep = f1 if w1 >= w2 else f2
+                drop = f2 if keep == f1 else f1
+                # 完全转移权重
+                weights[keep] += weights[drop]
+                weights[drop] = 0.0
+                removed_factors.add(drop)
+                print(f"        → 保留 {keep} (w={weights[keep]:.4f}), 剔除 {drop} (w=0)")
+            elif f1 in removed_factors and f2 not in removed_factors:
+                weights[f2] += weights[f1]
+                removed_factors.add(f1)
+                print(f"        → 连锁: 剔除 {f1}, 保留 {f2}")
+            elif f2 in removed_factors and f1 not in removed_factors:
+                weights[f1] += weights[f2]
+                removed_factors.add(f2)
+                print(f"        → 连锁: 剔除 {f2}, 保留 {f1}")
+        
+        # 移除被删除因子
+        weights = {k: v for k, v in weights.items() if k not in removed_factors}
+        factor_names = [f for f in factor_names if f not in removed_factors]
+        n_factors = len(factor_names)
+        print(f"      [硬删除] 已剔除 {len(removed_factors)} 个冗余因子: {', '.join(sorted(removed_factors))}")
+        print(f"      [硬删除] 剩余 {n_factors} 个因子")
+    
+    # ── 高相关因子对权重调整 (0.7 < |corr| <= 0.95) ──
+    corr_adjusted = 0
+    for f1, f2, c in high_corr_pairs:
+        if 0.7 < c <= extreme_threshold:
+            # 跳过已被硬删除的因子
+            if f1 in removed_factors or f2 in removed_factors:
+                continue
+            w1 = weights.get(f1, 0)
+            w2 = weights.get(f2, 0)
+            if w1 + w2 > 0.01:
+                keep_factor = f1 if w1 >= w2 else f2
+                drop_factor = f2 if keep_factor == f1 else f1
+                shift_amount = weights.get(drop_factor, 0.0) * 0.5
+                weights[keep_factor] = weights.get(keep_factor, 0.0) + shift_amount
+                weights[drop_factor] = weights.get(drop_factor, 0.0) - shift_amount
+                corr_adjusted += 1
+    
+    if corr_adjusted > 0:
+        print(f"      [相关性调整] 对 {corr_adjusted} 个高相关因子对进行权重转移")
+    
+    total_w = sum(w for w in weights.values() if w > 0)
+    if total_w > 0:
+        weights = {k: max(0.0, v) / total_w for k, v in weights.items()}
+
     # 输出权重分布
     w_sorted = sorted(weights.items(), key=lambda x: -x[1])
     top3_str = ", ".join(f"{n}({w:.3f})" for n, w in w_sorted[:3])
@@ -558,6 +711,33 @@ def _compute_ridge_weights(
     alpha_used = ridge.alpha_ if hasattr(ridge, 'alpha_') else alpha
     print(f"      Ridge α={alpha_used:.2f} | 权重 Top3: {top3_str} | "
           f"Bottom3: {bottom3_str}")
+
+    # 输出调整后的相关性监控（重新计算筛选后因子的相关矩阵）
+    try:
+        if removed_factors:
+            # 重新构建筛选后的因子特征矩阵，计算新的相关矩阵
+            X_filtered_list = []
+            for i, fname in enumerate(orig_factor_names):
+                if fname not in removed_factors:
+                    X_filtered_list.append(X_scaled[:, i])
+            if X_filtered_list:
+                X_filtered = np.column_stack(X_filtered_list)
+                corr_matrix_filtered = np.corrcoef(X_filtered, rowvar=False)
+                corr_matrix_filtered = np.nan_to_num(corr_matrix_filtered, nan=0.0)
+            else:
+                corr_matrix_filtered = corr_matrix
+        else:
+            corr_matrix_filtered = corr_matrix
+        
+        w_vec = np.array([weights.get(f, 0) for f in factor_names])
+        port_corr = float(w_vec @ corr_matrix_filtered @ w_vec)
+        n_remaining = len(factor_names)
+        upper_tri_idx = np.triu_indices(n_remaining, k=1)
+        max_pair_corr = float(np.max(np.abs(corr_matrix_filtered[upper_tri_idx]))) if len(upper_tri_idx[0]) > 0 else 0.0
+        print(f"      [相关性监控] 组合相关性(w^T*C*w)={port_corr:.4f} | "
+              f"最大因子对相关性={max_pair_corr:.4f}")
+    except (np.linalg.LinAlgError, ValueError):
+        print(f"      [相关性监控] 计算异常，跳过")
 
     return weights
 
@@ -908,7 +1088,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     print(f"\n[3/5] 计算信号 ({n_factors} 因子 × {len(panel)} 品种)...")
 
     # 3a: 一次性计算所有因子×品种的信号矩阵
-    signal_matrix = _compute_signal_matrix(panel, factors)
+    signal_matrix = _compute_signal_matrix(panel, factors, use_optimizer=True)
     print(f"      信号矩阵: {sum(len(v) for v in signal_matrix.values())} 项")
 
     # 3b: 方向校正（截面 IC 法）
@@ -979,6 +1159,55 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
 
     elapsed = time.time() - t0
     print(f"\n  耗时: {elapsed:.1f}s, 成功: {len(sym_scores)} 个品种")
+
+    # ── Step 3h: 实时价格动量叠加 — 修复信号"僵化"问题 ──
+    # 因子信号基于 120 天日线面板数据，sig[-1] 为最新日线收盘价，
+    # 120 天窗口滚动加 1 天新数据，因子值变化仅 ~0.8%，
+    # 导致信号对盘中大幅波动不敏感（如黄金今日大涨但信号几乎不变）。
+    # 此处用实时价计算盘中涨跌幅，叠加到综合信号上。
+    _PRICE_MOMENTUM_BLEND = 0.15  # 动量权重 (0.0=关闭, 0.3=最大)
+    _PRICE_MOMENTUM_CLIP = 3.0    # 标准化回报的截断边界
+    if _PRICE_MOMENTUM_BLEND > 0:
+        # 1) 计算各品种的典型波动率
+        typical_vols: dict[str, float] = {}
+        for sym, df in panel.items():
+            if df is None or df.empty or len(df) < 20:
+                continue
+            returns = df["close"].pct_change().dropna().values
+            if len(returns) > 0:
+                typical_vols[sym] = max(float(np.nanstd(returns)), 1e-8)
+        # 2) 获取实时价
+        try:
+            from fts.data_futures import get_realtime_prices
+            rt_prices = get_realtime_prices(list(sym_scores.keys()))
+        except Exception:
+            rt_prices = {}
+        # 3) 动量调整
+        n_adjusted = 0
+        n_skipped = 0
+        for sym in list(sym_scores.keys()):
+            df = panel.get(sym)
+            if df is None or df.empty:
+                n_skipped += 1
+                continue
+            latest_close = float(df["close"].iloc[-1])
+            rt_price = rt_prices.get(sym)
+            if rt_price is None or latest_close <= 0:
+                n_skipped += 1
+                continue
+            intraday_return = (rt_price - latest_close) / latest_close
+            if abs(intraday_return) < 1e-8:
+                n_skipped += 1
+                continue
+            vol = typical_vols.get(sym, 0.01)
+            norm_return = np.clip(intraday_return / vol, -_PRICE_MOMENTUM_CLIP, _PRICE_MOMENTUM_CLIP)
+            # 正回报 → 提高得分（减弱空头信号）
+            adjustment = _PRICE_MOMENTUM_BLEND * norm_return
+            sym_scores[sym] += adjustment
+            n_adjusted += 1
+        if n_adjusted > 0:
+            print(f"      [价格动量] 调整 {n_adjusted} 个品种的信号 "
+                  f"(blend={_PRICE_MOMENTUM_BLEND}, skip={n_skipped})")
 
     # ── Step 3e: 盲测品种验证（泛化能力检查） ──
     holdout_set = set(FUTURES_HOLDOUT) & set(panel.keys())

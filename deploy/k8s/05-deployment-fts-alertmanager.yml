@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fts-alertmanager
+  namespace: monitoring
+  labels:
+    app: fts-alertmanager
+    app.kubernetes.io/managed-by: fts
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fts-alertmanager
+  template:
+    metadata:
+      labels:
+        app: fts-alertmanager
+    spec:
+      containers:
+      - name: alertmanager
+        image: prom/alertmanager:v0.27.0
+        args:
+        - --config.file=/etc/alertmanager/alertmanager.yml
+        - --storage.path=/alertmanager
+        ports:
+        - containerPort: 9093
+          name: http
+        volumeMounts:
+        - name: alertmanager-config
+          mountPath: /etc/alertmanager
+          readOnly: true
+        - name: alertmanager-data
+          mountPath: /alertmanager
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: alertmanager-config
+        configMap:
+          name: fts-alertmanager-config
+      - name: alertmanager-data
+        emptyDir: {}

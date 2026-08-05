@@ -18,6 +18,8 @@ import pytest
 from fts.cli import (
     _cmd_factor_list,
     _cmd_factor_show,
+    _cmd_factor_stats,
+    _cmd_factor_lineage,
     _cmd_evolution_run,
     _cmd_meta_loop_run,
     _cmd_portfolio_run,
@@ -336,7 +338,7 @@ class TestCmdFactorList:
         rc = _cmd_factor_list(args)
         assert rc == 0
         captured = capsys.readouterr()
-        assert "无 elite 因子" in captured.out
+        assert "无符合条件的因子" in captured.out
 
     @patch("pathlib.Path.exists", return_value=True)
     @patch("pathlib.Path.glob")
@@ -390,7 +392,7 @@ class TestCmdFactorList:
         assert rc == 0
         captured = capsys.readouterr()
         # 默认路径存在但无 JSON 文件
-        assert "无 elite 因子" in captured.out
+        assert "无符合条件的因子" in captured.out
 
 
 # ═══════════════════════════════════════════════════════════
@@ -752,5 +754,217 @@ class TestCmdEvolutionRunCircuitBreaker:
         assert rc == 0
         captured = capsys.readouterr()
         assert "token budget exceeded" in captured.out
+
+
+# ═══════════════════════════════════════════════════════════
+# factor stats / lineage 子命令
+# ═══════════════════════════════════════════════════════════
+
+class TestFactorStatsParser:
+    """factor stats / lineage 能被 parser 正确解析。"""
+
+    def test_factor_stats_parser(self):
+        parser = build_parser()
+        args = parser.parse_args(["factor", "stats", "--market", "stock", "--min-sharpe", "0.5"])
+        assert args.command == "factor"
+        assert args.subcommand == "stats"
+        assert args.market == "stock"
+        assert args.min_sharpe == 0.5
+
+    def test_factor_lineage_parser(self):
+        parser = build_parser()
+        args = parser.parse_args(["factor", "lineage", "F_001"])
+        assert args.command == "factor"
+        assert args.subcommand == "lineage"
+        assert args.factor_id == "F_001"
+
+    def test_factor_list_diverse_parser(self):
+        parser = build_parser()
+        args = parser.parse_args([
+            "factor", "list", "--diverse", "--total-count", "8", "--max-per-family", "2"
+        ])
+        assert args.diverse is True
+        assert args.total_count == 8
+        assert args.max_per_family == 2
+
+
+class TestCmdFactorStats:
+    """测试 _cmd_factor_stats。"""
+
+    @patch("fts.cli._load_factor_repo")
+    def test_stats_with_data(self, mock_load, capsys):
+        """有数据时输出家族分布。"""
+        mock_repo = mock_load.return_value
+        mock_repo.get_family_distribution.return_value = [
+            {"family": "trend", "count": 5},
+            {"family": "mean_reversion", "count": 3},
+            {"family": "volume", "count": 2},
+        ]
+        args = MagicMock(spec=[])
+        args.market = "futures"
+        args.min_sharpe = 0.0
+        args.json = False
+        rc = _cmd_factor_stats(args)
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "trend" in captured.out
+        assert "10" in captured.out  # 合计
+
+    @patch("fts.cli._load_factor_repo")
+    def test_stats_empty(self, mock_load, capsys):
+        """无数据时打印空提示。"""
+        mock_repo = mock_load.return_value
+        mock_repo.get_family_distribution.return_value = []
+        args = MagicMock(spec=[])
+        args.market = None
+        args.min_sharpe = 0.0
+        args.json = False
+        rc = _cmd_factor_stats(args)
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "无符合条件的因子" in captured.out
+
+    @patch("fts.cli._load_factor_repo")
+    def test_stats_json_mode(self, mock_load, capsys):
+        """--json 模式输出 JSON。"""
+        mock_repo = mock_load.return_value
+        mock_repo.get_family_distribution.return_value = [
+            {"family": "trend", "count": 5},
+        ]
+        args = MagicMock(spec=[])
+        args.market = None
+        args.min_sharpe = 0.0
+        args.json = True
+        rc = _cmd_factor_stats(args)
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert '"family"' in captured.out
+        assert '"trend"' in captured.out
+
+    @patch("fts.cli._load_factor_repo")
+    def test_stats_repo_error(self, mock_load, capsys):
+        """仓储异常时返回 1。"""
+        mock_load.side_effect = RuntimeError("db down")
+        args = MagicMock(spec=[])
+        args.market = None
+        args.min_sharpe = 0.0
+        args.json = False
+        rc = _cmd_factor_stats(args)
+        assert rc == 1
+
+
+class TestCmdFactorLineage:
+    """测试 _cmd_factor_lineage。"""
+
+    @patch("fts.cli._load_factor_repo")
+    def test_lineage_found(self, mock_load, capsys):
+        """找到因子血缘时打印。"""
+        mock_repo = mock_load.return_value
+        mock_repo.get_factor_lineage.return_value = {
+            "factor_id": "F_001",
+            "parents": [{"factor_id": "F_000", "generation": 1}],
+        }
+        args = MagicMock(spec=[])
+        args.factor_id = "F_001"
+        rc = _cmd_factor_lineage(args)
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "F_001" in captured.out
+        assert "parents" in captured.out
+
+    @patch("fts.cli._load_factor_repo")
+    def test_lineage_not_found(self, mock_load, capsys):
+        """未找到因子时返回 1。"""
+        mock_repo = mock_load.return_value
+        mock_repo.get_factor_lineage.return_value = None
+        args = MagicMock(spec=[])
+        args.factor_id = "UNKNOWN"
+        rc = _cmd_factor_lineage(args)
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "未找到因子" in captured.out
+
+    @patch("fts.cli._load_factor_repo")
+    def test_lineage_repo_error(self, mock_load, capsys):
+        """仓储异常时返回 1。"""
+        mock_load.side_effect = RuntimeError("db down")
+        args = MagicMock(spec=[])
+        args.factor_id = "F_001"
+        rc = _cmd_factor_lineage(args)
+        assert rc == 1
+
+
+class TestCmdFactorListDuckDB:
+    """测试 _cmd_factor_list 的 DuckDB 分支。"""
+
+    @patch("fts.cli._load_factor_repo")
+    def test_list_by_family(self, mock_load, capsys):
+        """--family 走 DuckDB 分支。"""
+        mock_repo = mock_load.return_value
+        mock_repo.get_by_family.return_value = [
+            {"factor_id": "F_001", "name": "trend_a", "family": "trend", "market": "futures"},
+        ]
+        args = MagicMock(spec=[])
+        args.elite_dir = None
+        args.market = "futures"
+        args.family = "trend"
+        args.min_ic = None
+        args.min_sharpe = None
+        args.diverse = False
+        args.total_count = 10
+        args.max_per_family = 3
+        args.limit = 50
+        args.json = False
+        rc = _cmd_factor_list(args)
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "F_001" in captured.out
+        mock_repo.get_by_family.assert_called_once()
+
+    @patch("fts.cli._load_factor_repo")
+    def test_list_diverse(self, mock_load, capsys):
+        """--diverse 走多样性选择。"""
+        mock_repo = mock_load.return_value
+        mock_repo.get_diverse_factors.return_value = [
+            {"factor_id": "F_001", "name": "trend_a", "family": "trend"},
+            {"factor_id": "F_002", "name": "mr_b", "family": "mean_reversion"},
+        ]
+        args = MagicMock(spec=[])
+        args.elite_dir = None
+        args.market = "futures"
+        args.family = None
+        args.min_ic = None
+        args.min_sharpe = None
+        args.diverse = True
+        args.total_count = 5
+        args.max_per_family = 2
+        args.limit = 50
+        args.json = False
+        rc = _cmd_factor_list(args)
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "F_001" in captured.out
+        mock_repo.get_diverse_factors.assert_called_once()
+
+    @patch("fts.cli._load_factor_repo")
+    def test_list_duckdb_fallback(self, mock_load, capsys):
+        """DuckDB 查询失败时回退目录模式。"""
+        mock_load.side_effect = RuntimeError("duckdb unavailable")
+        # 目录模式会因为 elite_dir=None 走默认路径，不存在就返回 0
+        args = MagicMock(spec=[])
+        args.elite_dir = None
+        args.market = "futures"
+        args.family = "trend"
+        args.min_ic = None
+        args.min_sharpe = None
+        args.diverse = False
+        args.total_count = 10
+        args.max_per_family = 3
+        args.limit = 50
+        args.json = False
+        rc = _cmd_factor_list(args)
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "回退目录模式" in captured.err or "回退目录模式" in captured.out
 
 

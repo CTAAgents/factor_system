@@ -1,0 +1,103 @@
+# FTS Prometheus 告警规则
+# 版本: v2.5.0
+# 用途: 定义针对 FTS 系统健康状况的告警规则
+#
+# 使用方法:
+#   1. 将此文件挂载到 Prometheus 配置目录
+#   2. 在 prometheus.yml 中通过 rule_files 引用:
+#      rule_files:
+#        - "prometheus_alerts.yml"
+
+groups:
+  # ── 数据源健康告警 ──
+  - name: fts_data_source
+    interval: 30s
+    rules:
+      - alert: FTSDataSourceCircuitOpen
+        expr: fts_circuit_open == 1
+        for: 1m
+        labels:
+          severity: critical
+          team: fts
+          component: data_source
+        annotations:
+          summary: "FTS 数据源熔断器开启"
+          description: "数据源熔断器已开启，数据采集可能中断。请检查数据源配置和网络连接。"
+          runbook_url: "https://wiki.example.com/fts/alerts/circuit-open"
+
+      - alert: FTSDataSourceSuccessRateLow
+        expr: fts_data_source_success_rate < 0.8
+        for: 5m
+        labels:
+          severity: warning
+          team: fts
+          component: data_source
+        annotations:
+          summary: "FTS 数据源成功率低于 80%"
+          description: "数据源成功率为 {{ $value | humanizePercentage }}，低于阈值 80%。可能是某个数据源出现问题。"
+          runbook_url: "https://wiki.example.com/fts/alerts/success-rate-low"
+
+      - alert: FTSDataSourceDown
+        expr: up{job="fts-metrics"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          team: fts
+          component: fts_service
+        annotations:
+          summary: "FTS 指标端点不可达"
+          description: "Prometheus 无法抓取 FTS /metrics 端点。FTS 进程可能已崩溃或网络不通。"
+          runbook_url: "https://wiki.example.com/fts/alerts/service-down"
+
+  # ── 调度器健康告警 ──
+  - name: fts_scheduler
+    interval: 60s
+    rules:
+      - alert: FTSSchedulerNotRunning
+        expr: fts_scheduler_running == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: fts
+          component: scheduler
+        annotations:
+          summary: "FTS 调度器未运行"
+          description: "调度器已停止运行超过 5 分钟。定时任务（因子演化、数据同步）将不会执行。"
+          runbook_url: "https://wiki.example.com/fts/alerts/scheduler-down"
+
+      - alert: FTSSchedulerTaskFailed
+        expr: increase(fts_scheduler_task_failures_total[1h]) > 3
+        for: 10m
+        labels:
+          severity: warning
+          team: fts
+          component: scheduler
+        annotations:
+          summary: "FTS 调度任务频繁失败"
+          description: "过去 1 小时内调度任务失败次数超过 3 次。请检查日志定位具体失败原因。"
+
+  # ── 因子质量告警 ──
+  - name: fts_factor_quality
+    interval: 5m
+    rules:
+      - alert: FTSEliteFactorCountLow
+        expr: fts_elite_factor_count < 10
+        for: 15m
+        labels:
+          severity: warning
+          team: fts
+          component: factor_engine
+        annotations:
+          summary: "Elite 因子数量偏低"
+          description: "Elite 因子数量为 {{ $value }}，低于 10 个。可能是因子演化回路出现问题或种子因子不足。"
+
+      - alert: FTSLoopStuck
+        expr: fts_loop_status{status="running"} == 1 and time() - fts_loop_last_run_timestamp > 3600
+        for: 10m
+        labels:
+          severity: warning
+          team: fts
+          component: factor_engine
+        annotations:
+          summary: "因子演化回路可能卡住"
+          description: "回路已运行超过 1 小时未完成（上次完成时间戳距今超过 1 小时）。可能需要检查 LLM 调用或 Optuna 优化过程。"

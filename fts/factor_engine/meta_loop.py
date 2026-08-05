@@ -617,8 +617,17 @@ def factor_program(data, params):
         trace_id = trace_id or generate_trace_id("l1")
         candidates: list[SeedCandidate] = []
         existing_names = {n.lower() for n in (seed_pool or SeedPool()).list_names()}
+        if not seed_pool:
+            logger.warning(
+                "[bootstrap] seed_pool 未提供, 使用默认 SeedPool() (市场=futures), existing_count=%d",
+                len(existing_names),
+            )
         if extra_existing_names:
             existing_names |= extra_existing_names
+        logger.info(
+            "[bootstrap] 开始, trace_id=%s, max_candidates=%d, existing_seed_names=%d, extra_names=%d",
+            trace_id, max_candidates, len(existing_names), len(extra_existing_names or set()),
+        )
 
         # 1. 如果有 LLM 客户端，调用 LLM 生成候选
         if self.llm_client is not None:
@@ -626,21 +635,39 @@ def factor_program(data, params):
                 market_snapshot, debate_gaps, max_candidates, trace_id
             )
             candidates.extend(llm_candidates)
+            logger.info(
+                "[bootstrap] LLM 候选已加入, trace_id=%s, llm_count=%d, total=%d",
+                trace_id, len(llm_candidates), len(candidates),
+            )
 
         # 2. 如果候选数不足，从内置模板补充
         if len(candidates) < max_candidates:
+            needed = max_candidates - len(candidates)
             template_candidates = self._bootstrap_from_templates(
-                market_snapshot, debate_gaps, max_candidates - len(candidates),
+                market_snapshot, debate_gaps, needed,
                 existing_names, trace_id,
             )
             candidates.extend(template_candidates)
+            logger.info(
+                "[bootstrap] 模板候选已加入, trace_id=%s, needed=%d, template_count=%d, total=%d",
+                trace_id, needed, len(template_candidates), len(candidates),
+            )
+        else:
+            logger.info(
+                "[bootstrap] 候选数已满足, 跳过模板补充, trace_id=%s, current=%d, max=%d",
+                trace_id, len(candidates), max_candidates,
+            )
 
         # 3. 限制数量
         candidates = candidates[:max_candidates]
 
         # 4. 编译验证 + 去重标记
         validated: list[SeedCandidate] = []
+        dup_count = 0
+        fail_count = 0
         for cand in candidates:
+            cand_name = cand.get("name", "unknown")
+            cand_id = cand.get("candidate_id", "unknown")
             # 编译验证 — validate_factor_code 返回 (passed, reasons) tuple
             try:
                 ok, reasons = validate_factor_code(cand["code"])
@@ -657,8 +684,20 @@ def factor_program(data, params):
 
             # 去重判断
             cand["is_duplicate"] = cand.get("name", "").lower() in existing_names
+            if cand["is_duplicate"]:
+                dup_count += 1
+                logger.warning(
+                    "[bootstrap] 重复候选, trace_id=%s, candidate_id=%s, name=%s",
+                    trace_id, cand_id, cand_name,
+                )
+            if not cand["is_executable"]:
+                fail_count += 1
             validated.append(cand)
 
+        logger.info(
+            "[bootstrap] 完成, trace_id=%s, total=%d, validated=%d, duplicates=%d, failed_compile=%d",
+            trace_id, len(candidates), len(validated), dup_count, fail_count,
+        )
         return validated
 
     def _bootstrap_with_llm(
@@ -668,23 +707,85 @@ def factor_program(data, params):
         max_candidates: int,
         trace_id: str,
     ) -> list[SeedCandidate]:
-        """用 LLM 生成候选因子（Mock 版本，返回空列表）。
-
-        生产环境应:
-            1. 构造 prompt（含 market_snapshot + debate_gaps）
-            2. 调用 LLM 生成 JSON 格式的候选因子
-            3. 解析并返回 SeedCandidate 列表
-        """
-        # Mock: LLM 客户端未配置具体实现时返回空列表
-        # 测试时可通过 mock 注入
+        """用 LLM 生成候选因子。"""
+        import time
+        t0 = time.time()
+        logger.info(
+            "[_bootstrap_with_llm] 开始, trace_id=%s, max_candidates=%d, debate_gaps=%d, has_bootstrap=%s",
+            trace_id, max_candidates, len(debate_gaps),
+            hasattr(self.llm_client, "bootstrap_factors"),
+        )
         try:
-            if hasattr(self.llm_client, "bootstrap_factors"):
-                return self.llm_client.bootstrap_factors(
-                    market_snapshot, debate_gaps, max_candidates, trace_id,
+            if not hasattr(self.llm_client, "bootstrap_factors"):
+                logger.info(
+                    "[_bootstrap_with_llm] 客户端无 bootstrap_factors 方法, 跳过, trace_id=%s",
+                    trace_id,
                 )
+                return []
+            raw_candidates = self.llm_client.bootstrap_factors(
+                market_snapshot, debate_gaps, max_candidates, trace_id,
+            )
+            elapsed = (time.time() - t0) * 1000
+            logger.info(
+                "[_bootstrap_with_llm] LLM 返回, trace_id=%s, elapsed_ms=%.1f, raw_count=%d",
+                trace_id, elapsed, len(raw_candidates),
+            )
+            if not raw_candidates:
+                logger.warning(
+                    "[_bootstrap_with_llm] LLM 返回空候选列表, trace_id=%s",
+                    trace_id,
+                )
+                return []
+            candidates: list[SeedCandidate] = []
+            skipped = 0
+            for i, raw in enumerate(raw_candidates):
+                name = raw.get("name", "unknown")
+                code = raw.get("code", "")
+                if not code:
+                    skipped += 1
+                    logger.warning(
+                        "[_bootstrap_with_llm] 候选 %d 缺少 code, 跳过, trace_id=%s, name=%s",
+                        i, trace_id, name,
+                    )
+                    continue
+                raw_id = f"{name}|{secrets.token_hex(8)}"
+                cand_id = "cand_" + hashlib.sha1(raw_id.encode("utf-8")).hexdigest()[:8]
+                cand = SeedCandidate(
+                    candidate_id=cand_id,
+                    name=name,
+                    code=code,
+                    params=raw.get("params", {}),
+                    signature=raw.get("signature", {}),
+                    economic_logic=raw.get("economic_logic", {}),
+                    source=raw.get("source", "l1_bootstrapping"),
+                    parent_topic=raw.get("parent_topic", ""),
+                    debate_round_ref=None,
+                    debate_gap=None,
+                    web_snapshot_ref=market_snapshot.get("trace_id"),
+                    is_executable=False,
+                    is_duplicate=False,
+                    passed_l1_verifier=False,
+                    failure_reasons=[],
+                    trace_id=trace_id,
+                    created_at=datetime.now().isoformat(),
+                    injected_to_l2=False,
+                    injected_at=None,
+                )
+                candidates.append(cand)
+            elapsed_total = (time.time() - t0) * 1000
+            logger.info(
+                "[_bootstrap_with_llm] 完成, trace_id=%s, total_ms=%.1f, candidates=%d, skipped=%d, names=%s",
+                trace_id, elapsed_total, len(candidates), skipped,
+                [c["name"] for c in candidates],
+            )
+            return candidates
         except Exception as e:
-            logger.warning("LLM Bootstrapping 失败，回退到模板: %s", e)
-        return []
+            elapsed = (time.time() - t0) * 1000
+            logger.error(
+                "[_bootstrap_with_llm] 异常, trace_id=%s, elapsed_ms=%.1f, error=%s",
+                trace_id, elapsed, e, exc_info=True,
+            )
+            return []
 
     def _bootstrap_from_templates(
         self,
@@ -712,6 +813,10 @@ def factor_program(data, params):
             if len(candidates) >= max_candidates:
                 break
             if tmpl["name"].lower() in existing_names:
+                logger.debug(
+                    "[_bootstrap_from_templates] 模板跳过(名称已存在), name=%s",
+                    tmpl["name"],
+                )
                 continue
 
             # 生成唯一 candidate_id
@@ -806,6 +911,7 @@ class MetaLoop:
         web_collector: Optional[Callable[..., dict]] = None,
         seed_pool: Optional[SeedPool] = None,
         sample_symbols: Optional[list[str]] = None,
+        market: str = "futures",
     ):
         """
         Args:
@@ -819,6 +925,7 @@ class MetaLoop:
             web_collector: f10/web_collector 函数
             seed_pool: 现有种子池
             sample_symbols: 感知层抽样品种（None 时用默认 3 个）
+            market: 市场类型 ("futures" 或 "stock")，默认 "futures"
         """
         self.memory_dir = Path(memory_dir)
         self.factor_pool_path = Path(factor_pool_path)
@@ -828,8 +935,36 @@ class MetaLoop:
         self.verifier = verifier or L1Verifier(DEFAULT_L1_VERIFIER_CONFIG)
         self.llm_client = llm_client
         self.web_collector = web_collector
-        self.seed_pool = seed_pool or SeedPool()
-        self.sample_symbols = sample_symbols or ["rb", "i", "j"]  # 默认抽样 3 个品种
+        self.market = market
+
+        # ── 日志: 市场类型与种子池初始化 ──
+        logger.info(
+            "[L1.init] market=%s, seed_pool_mode=%s, sample_symbols=%s",
+            market, market, sample_symbols or ["rb", "i", "j"],
+        )
+        if market == "futures":
+            logger.info(
+                "[L1.init] 期货知识注入模式: 将加载 81 个期货专用种子因子 (14 大因子家族)",
+            )
+        elif market == "stock":
+            counts = SeedPool.get_seed_counts()
+            logger.info(
+                "[L1.init] 股票知识注入模式: 将加载 %d 内置 + %d 外部 (WQ101=%d, Qlib158=%d, GTJA191=%d, 基本面=%d)",
+                counts["stock_internal"], counts["stock_external_total"],
+                counts["stock_wq101"], counts["stock_qlib158"],
+                counts["stock_gtja191"], counts["stock_fundamental"],
+            )
+        else:
+            logger.warning("[L1.init] 未知市场类型: %s", market)
+
+        self.seed_pool = seed_pool or SeedPool(market=market)
+        seed_count = len(self.seed_pool.load_all_seeds())
+        logger.info(
+            "[L1.init] SeedPool 初始化完成: market=%s, total_seeds=%d, seed_names=%s",
+            market, seed_count, self.seed_pool.list_names()[:5],
+        )
+
+        self.sample_symbols = sample_symbols or ["rb", "i", "j"]  # 默认抽样 3 个期货品种
 
         self.state_manager = MetaStateManager(self.memory_dir)
         self.factor_pool_manager = FactorPoolManager(self.factor_pool_path)
@@ -860,7 +995,18 @@ class MetaLoop:
         state = self.state_manager.mark_running(state)
         run_id = state["run_id"]
 
-        logger.info("🧠 L1 Meta-Loop 启动 (run_id=%s, trace_id=%s)", run_id, trace_id)
+        logger.info(
+            "🧠 L1 Meta-Loop 启动 (run_id=%s, trace_id=%s, market=%s, max_cand=%d, budget_limit=%d)",
+            run_id, trace_id, self.market, max_cand, budget_limit,
+        )
+        logger.info(
+            "[L1.run] 种子池状态: total=%d, names=%s",
+            len(self.seed_pool.list_names()), self.seed_pool.list_names()[:10],
+        )
+        logger.info(
+            "[L1.run] 注入目录: %s, 种子池路径: %s",
+            self.inject_dir, self.factor_pool_path,
+        )
 
         injected_ids: list[str] = []
         candidates_generated = 0
@@ -869,30 +1015,58 @@ class MetaLoop:
 
         try:
             # ─── Step 1: agentic 感知 (f10/web_collector) ──
+            logger.info("[L1.run] Step 1: agentic 感知, sample_symbols=%s", self.sample_symbols)
             market_snapshot = self._perceive_market(trace_id)
+            snapshot_count = len(market_snapshot.get("snapshots", {}))
+            logger.info(
+                "[L1.run] Step 1 完成: snapshots=%d, skipped=%s",
+                snapshot_count, market_snapshot.get("skipped", False),
+            )
 
             # ─── Step 2: debate_round 分析 ──────────────────
+            logger.info("[L1.run] Step 2: debate_round 分析")
             debate_gaps, debate_gaps_detected = self._analyze_debate(state)
+            logger.info(
+                "[L1.run] Step 2 完成: gaps=%d, gap_topics=%s",
+                debate_gaps_detected, [g.get("topic", "") for g in debate_gaps[:3]],
+            )
 
             # ─── Step 2.5: 扫描已注入因子（冷启动去重） ────
             extra_existing_names = self._scan_injected_names()
             if extra_existing_names:
                 logger.info(
-                    "L1 扫描到 %d 个历史注入因子名用于去重",
+                    "[L1.run] Step 2.5: 扫描到 %d 个历史注入因子名用于去重",
                     len(extra_existing_names),
                 )
+            else:
+                logger.info("[L1.run] Step 2.5: 无历史注入因子，跳过去重")
 
             # ─── Step 3: factorengine Bootstrapping ─────────
+            logger.info(
+                "[L1.run] Step 3: Bootstrapping 开始, max_cand=%d, debate_gaps=%d, existing_names=%d",
+                max_cand, len(debate_gaps), len(extra_existing_names or set()),
+            )
             candidates, candidates_generated = self._run_bootstrap(
                 market_snapshot, debate_gaps, max_cand, trace_id, state,
                 extra_existing_names=extra_existing_names,
             )
+            logger.info(
+                "[L1.run] Step 3 完成: candidates_generated=%d, candidate_names=%s",
+                candidates_generated, [c.get("name", "") for c in candidates[:5]],
+            )
 
             # ─── Step 4: L1 Verifier + 注入 ────────────────
+            logger.info(
+                "[L1.run] Step 4: Verifier + 注入开始, candidates=%d", len(candidates),
+            )
             circuit_broken = self._verify_and_inject(
                 candidates, state, trace_id, injected_ids, candidates_generated,
             )
             if circuit_broken:
+                logger.warning(
+                    "[L1.run] Step 4 熔断触发: reason=%s, injected=%d",
+                    circuit_broken, len(injected_ids),
+                )
                 return self._make_result(
                     run_id, trace_id, candidates_generated, len(injected_ids),
                     debate_gaps_detected, tokens_consumed,
@@ -907,8 +1081,9 @@ class MetaLoop:
             # ─── 完成 ─────────────────────────────────────
             state = self.state_manager.mark_completed(state)
             logger.info(
-                "✅ L1 Meta-Loop 完成 (run_id=%s): 生成 %d, 注入 %d",
-                run_id, candidates_generated, len(injected_ids),
+                "✅ L1 Meta-Loop 完成 (run_id=%s, market=%s): 生成 %d, 注入 %d, tokens=%d, injected_ids=%s",
+                run_id, self.market, candidates_generated, len(injected_ids),
+                tokens_consumed, injected_ids,
             )
             return self._make_result(
                 run_id, trace_id, candidates_generated, len(injected_ids),
@@ -917,7 +1092,10 @@ class MetaLoop:
             )
 
         except Exception as e:
-            logger.error("L1 Meta-Loop 异常: %s", e, exc_info=True)
+            logger.error(
+                "❌ L1 Meta-Loop 异常 (run_id=%s, market=%s): %s",
+                run_id, self.market, e, exc_info=True,
+            )
             state = self.state_manager.mark_paused(state, str(e))
             return self._make_result(
                 run_id, trace_id, candidates_generated, len(injected_ids),
@@ -991,9 +1169,26 @@ class MetaLoop:
         candidates_generated: int,
     ) -> Optional[str]:
         """Step 4: L1 Verifier 检查 + 注入候选因子。返回熔断原因或 None。"""
-        for cand in candidates:
+        cfg = self.verifier._config  # noqa: SLF001 — L1 Verifier 配置引用
+        logger.info(
+            "[L1.verify] 开始验证注入: candidates=%d, verifier=min_economic=%s, require_exec=%s, require_nodup=%s",
+            len(candidates),
+            cfg.get("min_economic_score", "?"),
+            cfg.get("require_executable", "?"),
+            cfg.get("require_not_duplicate", "?"),
+        )
+        passed_count = 0
+        rejected_count = 0
+        for i, cand in enumerate(candidates):
+            cand_name = cand.get("name", "unknown")
+            cand_id = cand.get("candidate_id", "unknown")
+
             cb_reason = self._check_circuit_breaker(state, candidates_generated)
             if cb_reason:
+                logger.warning(
+                    "[L1.verify] 熔断触发: reason=%s, 已处理=%d/%d, 剩余跳过",
+                    cb_reason, i, len(candidates),
+                )
                 state = self.state_manager.mark_circuit_broken(state, cb_reason)
                 return cb_reason
 
@@ -1002,12 +1197,20 @@ class MetaLoop:
             cand["failure_reasons"] = verdict["failure_reasons"]
 
             if not verdict["passed"]:
-                logger.info(
-                    "L1 Verifier 拒绝候选 %s: %s",
-                    cand.get("name"), verdict["failure_reasons"],
+                rejected_count += 1
+                logger.warning(
+                    "[L1.verify] 候选[%d/%d] 未通过: name=%s, candidate_id=%s, reasons=%s",
+                    i + 1, len(candidates), cand_name, cand_id, verdict["failure_reasons"],
                 )
                 self._consecutive_low_quality += 1
                 continue
+
+            passed_count += 1
+            logger.info(
+                "[L1.verify] 候选[%d/%d] 通过: name=%s, candidate_id=%s, source=%s, code_len=%d",
+                i + 1, len(candidates), cand_name, cand_id,
+                cand.get("source", "unknown"), len(cand.get("code", "")),
+            )
 
             injected_id = self._inject_candidate(cand, trace_id)
             if injected_id:
@@ -1018,6 +1221,10 @@ class MetaLoop:
                 state.setdefault("candidates_ref", []).append(injected_id)
                 self._consecutive_low_quality = 0
 
+        logger.info(
+            "[L1.verify] 验证注入完成: total=%d, passed=%d, rejected=%d, injected=%d, consecutive_low_quality=%d",
+            len(candidates), passed_count, rejected_count, len(injected_ids), self._consecutive_low_quality,
+        )
         return None
 
     @staticmethod
@@ -1063,12 +1270,19 @@ class MetaLoop:
 
     def _inject_candidate(self, cand: SeedCandidate, trace_id: str) -> Optional[str]:
         """Step 5: 注入候选到 L2 种子池入口。"""
+        cand_name = cand.get("name", "unknown")
+        cand_id = cand.get("candidate_id", "unknown")
+        logger.info(
+            "[L1.inject] 开始注入: name=%s, candidate_id=%s, source=%s, code_len=%d",
+            cand_name, cand_id, cand.get("source", "unknown"), len(cand.get("code", "")),
+        )
         try:
             # 1. 持久化到 l1_injected/ 目录
             self.inject_dir.mkdir(parents=True, exist_ok=True)
             inject_file = self.inject_dir / f"{cand['candidate_id']}.json"
             with open(inject_file, "w", encoding="utf-8") as f:
                 json.dump(cand, f, ensure_ascii=False, indent=2, default=str)
+            logger.info("[L1.inject] 持久化完成: path=%s, size=%d", inject_file, inject_file.stat().st_size)
 
             # 2. 更新 factor_pool.json
             entry = FactorPoolEntry(
@@ -1086,16 +1300,23 @@ class MetaLoop:
                 updated_at=datetime.now().isoformat(),
             )
             self.factor_pool_manager.add_entry(entry)
+            logger.info("[L1.inject] factor_pool.json 更新完成: factor_id=%s, priority=%s", cand["candidate_id"], entry["priority"])
 
             # 3. 标记候选已注入
             cand["injected_to_l2"] = True
             cand["injected_at"] = datetime.now().isoformat()
 
-            logger.info("L1 注入候选 %s → %s", cand.get("name"), inject_file)
+            logger.info(
+                "✅ [L1.inject] 注入成功: name=%s, candidate_id=%s, file=%s",
+                cand_name, cand_id, inject_file,
+            )
             return cand["candidate_id"]
 
         except Exception as e:
-            logger.error("L1 注入失败 %s: %s", cand.get("candidate_id"), e)
+            logger.error(
+                "❌ [L1.inject] 注入失败: name=%s, candidate_id=%s, error=%s",
+                cand_name, cand_id, e, exc_info=True,
+            )
             return None
 
     @staticmethod

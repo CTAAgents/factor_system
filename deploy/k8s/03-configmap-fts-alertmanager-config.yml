@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fts-alertmanager-config
+  namespace: monitoring
+  labels:
+    app: fts-alertmanager
+    app.kubernetes.io/managed-by: fts
+data:
+  alertmanager.yml: "global:\n  external_labels:\n    monitor: fts-monitor\n    environment:\
+    \ production\nroute:\n  group_by:\n  - alertname\n  - component\n  group_wait:\
+    \ 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  receiver: default-receiver\n\
+    \  routes:\n  - match:\n      severity: critical\n    receiver: critical-receiver\n\
+    \    group_wait: 10s\n    repeat_interval: 10m\n    continue: true\ninhibit_rules:\n\
+    - source_match:\n    severity: critical\n  target_match:\n    severity: warning\n\
+    \  equal:\n  - alertname\n  - component\nreceivers:\n- name: default-receiver\n\
+    \  webhook_configs:\n  - url: https://hooks.example.com/services/xxx/yyy\n   \
+    \ send_resolved: true\n- name: critical-receiver\n  webhook_configs:\n  - url:\
+    \ https://hooks.example.com/services/xxx/yyy/critical\n    send_resolved: true\n"

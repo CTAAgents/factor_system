@@ -12,6 +12,31 @@ from __future__ import annotations
 from typing import Any, Literal, Optional, TypedDict
 
 
+# ─── 市场与家族枚举 ─────────────────────────────────────────
+
+FactorMarket = Literal["futures", "stock", "etf", "bond", "multi"]
+"""因子适用的市场类型。"""
+
+FactorFamily = Literal[
+    "trend",          # 趋势跟踪
+    "mean_reversion", # 均值回归
+    "carry",          # 跨期/跨品种套利
+    "seasonality",    # 季节性
+    "cross_section",  # 横截面
+    "fundamental",    # 基本面
+    "technical",      # 技术指标
+    "microstructure", # 微观结构
+    "macro",          # 宏观
+    "behavioral",     # 行为金融
+    "liquidity",      # 流动性
+    "volatility",     # 波动率
+    "volume",         # 成交量
+    "multi_factor",   # 多因子组合
+    "other",          # 其他
+]
+"""因子家族分类（14 大类）。"""
+
+
 # ─── 版本号（HARNESS §版本号纪律）─────────────────────────
 
 def _get_evolution_version() -> str:
@@ -81,6 +106,8 @@ class FactorProgram(TypedDict, total=False):
         - params 中的每个值必须是 optuna 可搜索的类型（int/float/str/list）
         - economic_logic.narrative 不能为空字符串
         - trace_id 必须贯穿所有衍生因子
+        - market 标识因子适用市场，symbols 列出具体品种
+        - factor_version 用于契约版本管理
     """
     factor_id: str                              # 唯一标识: fct_<8hex>
     name: str                                   # 人类可读名
@@ -94,6 +121,11 @@ class FactorProgram(TypedDict, total=False):
     created_at: str                             # ISO 8601
     trace_id: str                               # 全链路 trace_id
     risk_tag: Optional[str]                     # 风险标签，如 "vwap_approx"
+    market: FactorMarket                        # 适用市场: futures/stock/etf/multi
+    family: FactorFamily                        # 因子家族分类
+    symbols: list[str]                          # 适用品种列表（空=全品种适用）
+    factor_version: str                          # 因子定义版本 (e.g., "v2")
+    is_multi_symbol: bool                       # 是否为多品种因子
 
 
 # ─── 评估结果契约 ─────────────────────────────────────────
@@ -535,6 +567,9 @@ DEFAULT_L3_BUDGET = 100_000
 __all__ = [
     # 版本
     "EVOLUTION_VERSION",
+    # 枚举类型
+    "FactorMarket",
+    "FactorFamily",
     # 因子契约
     "FactorProgram",
     "FactorSignature",
@@ -581,4 +616,189 @@ __all__ = [
     "L3MetaLoopState",
     "DEFAULT_L3_VERIFIER_CONFIG",
     "DEFAULT_L3_BUDGET",
+    # 规范化工具
+    "normalize_factor_program",
+    "normalize_factor_signature",
+    "detect_factor_market",
 ]
+
+
+# ─── 因子规范化工具 ─────────────────────────────────────────
+
+
+def normalize_factor_signature(signature: dict[str, Any]) -> FactorSignature:
+    """规范化因子签名，兼容旧版和新版定义。
+
+    旧版格式（测试中常见）:
+        {"inputs": ["close"], "outputs": ["signal"], "feature_dim": 1}
+    新版格式（标准契约）:
+        {"input_fields": ["close"], "output_type": "signal", "frequency": "daily", "lookback": 10}
+
+    Args:
+        signature: 原始签名字典
+
+    Returns:
+        FactorSignature 规范化后的签名
+    """
+    if not signature:
+        return FactorSignature(
+            input_fields=["close"],
+            output_type="signal",
+            frequency="daily",
+            lookback=10,
+        )
+
+    # 旧版字段映射
+    input_fields = signature.get("input_fields") or signature.get("inputs", ["close"])
+    output_type = signature.get("output_type") or _map_output_type(signature.get("outputs", ["signal"]))
+    frequency = signature.get("frequency", "daily")
+    lookback = signature.get("lookback", 10)
+
+    return FactorSignature(
+        input_fields=input_fields if isinstance(input_fields, list) else [input_fields],
+        output_type=output_type,
+        frequency=frequency,
+        lookback=lookback,
+    )
+
+
+def _map_output_type(outputs: list[str]) -> Literal["signal", "score"]:
+    """将旧版 outputs 格式映射到 output_type。"""
+    if outputs and "signal" in outputs:
+        return "signal"
+    return "score"
+
+
+def detect_factor_market(symbols: list[str] | None, market_hint: str | None = None) -> FactorMarket:
+    """检测因子适用的市场类型。
+
+    Args:
+        symbols: 品种列表
+        market_hint: 市场提示
+
+    Returns:
+        FactorMarket 市场类型
+    """
+    if market_hint and market_hint in ("futures", "stock", "etf", "bond", "multi"):
+        return market_hint
+
+    if not symbols:
+        return "multi"
+
+    # 根据品种代码格式判断
+    futures_patterns = ("RB", "M", "CU", "AU", "AG", "AL", "ZN", "PB", "NI", "SN",
+                         "SC", "FU", "BU", "TA", "MA", "PP", "L", "V", "EB", "EG",
+                         "PG", "SA", "UR", "RU", "NR", "SP", "LU", "EC", "BC", "LC")
+    stock_patterns = ("SH", "SZ", "BJ", "6", "0", "3")
+
+    has_futures = any(sym.startswith(p) for sym in symbols for p in futures_patterns)
+    has_stock = any(sym.startswith(p) for sym in symbols for p in stock_patterns)
+
+    if has_futures and has_stock:
+        return "multi"
+    if has_futures:
+        return "futures"
+    if has_stock:
+        return "stock"
+    return "multi"
+
+
+def normalize_factor_program(factor: FactorProgram, market_hint: str | None = None) -> FactorProgram:
+    """规范化因子定义，确保符合最新契约。
+
+    处理内容:
+    1. 规范化 signature 格式
+    2. 自动检测/补全 market/family/symbols 字段
+    3. 填充默认值
+
+    Args:
+        factor: 原始因子定义
+        market_hint: 市场提示
+
+    Returns:
+        FactorProgram 规范化后的因子定义
+    """
+    normalized = FactorProgram(factor)
+
+    # 规范化 signature
+    if "signature" in normalized and isinstance(normalized["signature"], dict):
+        normalized["signature"] = normalize_factor_signature(normalized["signature"])
+    elif "signature" not in normalized:
+        normalized["signature"] = FactorSignature(
+            input_fields=["close"],
+            output_type="signal",
+            frequency="daily",
+            lookback=10,
+        )
+
+    # 补全 market
+    if "market" not in normalized or not normalized.get("market"):
+        symbols = normalized.get("symbols", [])
+        normalized["market"] = detect_factor_market(symbols, market_hint)
+
+    # 补全 family（非标准值也需要重新推断）
+    family = normalized.get("family", "")
+    standard_families = {"trend", "mean_reversion", "carry", "seasonality",
+                         "cross_section", "fundamental", "technical",
+                         "microstructure", "macro", "behavioral",
+                         "liquidity", "volatility", "volume",
+                         "multi_factor", "other"}
+    if not family or family not in standard_families:
+        normalized["family"] = _infer_factor_family(normalized)
+
+    # 补全 symbols
+    if "symbols" not in normalized:
+        normalized["symbols"] = []
+
+    # 补全版本
+    if "factor_version" not in normalized:
+        normalized["factor_version"] = "v2"
+
+    # 补全 is_multi_symbol
+    symbols = normalized.get("symbols", [])
+    normalized["is_multi_symbol"] = len(symbols) > 1 if symbols else False
+
+    return normalized
+
+
+def _infer_factor_family(factor: FactorProgram) -> FactorFamily:
+    """根据因子特征推断其家族分类。
+
+    规则:
+    - name 包含 trend/momentum → trend
+    - name 包含 reversion/mean/regression → mean_reversion
+    - name 包含 carry/spread/arbitrage → carry
+    - name 包含 volume/flow → volume
+    - name 包含 volatility/vol → volatility
+    - name 包含 fundamental → fundamental
+    - name 包含 liquidity → liquidity
+    - code 包含 open_interest → microstructure
+    - name 以 qlib_/gtja_/wq_ 开头 → trend（传统量价因子多为趋势类）
+    """
+    name = (factor.get("name", "") or "").lower()
+    code = (factor.get("code", "") or "").lower()
+    sig = factor.get("signature", {})
+    input_fields = sig.get("input_fields", []) if sig else []
+
+    if any(kw in name for kw in ("trend", "momentum", "follow", "breakout")):
+        return "trend"
+    if any(kw in name for kw in ("reversion", "mean", "regression", "bounce")):
+        return "mean_reversion"
+    if any(kw in name for kw in ("carry", "spread", "arbitrage", "basis")):
+        return "carry"
+    if any(kw in name for kw in ("volume", "flow", "money", "capital")):
+        return "volume"
+    if any(kw in name for kw in ("volatility", "vol_", "garch", "variance")):
+        return "volatility"
+    if any(kw in name for kw in ("fundamental", "value", "quality", "growth")):
+        return "fundamental"
+    if any(kw in name for kw in ("liquidity", "liquid", "depth")):
+        return "liquidity"
+    # 因子库来源前缀：qlib/gtja/wq 因子多为趋势类
+    if name.startswith(("qlib_", "gtja_", "wq_", "fut_")):
+        return "trend"
+    if any(kw in code for kw in ("open_interest", "order_flow", "tick")):
+        return "microstructure"
+    if any(kw in str(input_fields).lower() for kw in ("macro", "gdp", "cpi", "pmi")):
+        return "macro"
+    return "other"

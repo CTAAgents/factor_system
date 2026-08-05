@@ -30,9 +30,10 @@ venv/
 # Runtime data
 data/
 memory/
+seeds/
 
-# Knowledge base (private, do not push)
-docs/Knowledge/
+# Documentation (only README.md at root is tracked)
+docs/
 
 # Research / experimental
 brain_field_test.py
@@ -40,3 +41,22 @@ check_alpha.py
 fetch_brain_fields.py
 probe_brain_api.py
 wq_brain_results.json
+
+# Temp output files
+logs_full_test.txt
+test_cli_output.txt
+test_results.txt
+test_factor_list.txt
+*.log.txt
+
+# Reports generated output
+reports/
+
+# Project-local docs / AI context (not for GitHub)
+CLAUDE.md
+CODE_WIKI.md
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml

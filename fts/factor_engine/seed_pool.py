@@ -21,16 +21,23 @@ HARNESS §11-loop-engineering.md §2.2:
     - 国泰君安 191 Alpha   191 个
     - 基本面/另类/宏观      23 个
 
-版本: v1.1.0（与 FTS 同步）
+版本: v1.2.0（新增种子因子相关性预检）
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
-from .contracts import EconomicLogic, FactorProgram, FactorSignature
-from .factor_program import create_factor_program
+import numpy as np
+import pandas as pd
+from scipy import stats as sp_stats
+
+from .contracts import EconomicLogic, FactorCorrelation, FactorProgram, FactorSignature
+from .factor_program import FactorExecutor, create_factor_program
 from .seed_data import load_all_external_seeds
+
+logger = logging.getLogger(__name__)
 
 
 # ─── 种子因子代码模板 ─────────────────────────────────────
@@ -380,28 +387,84 @@ _SEED_DEFINITIONS: list[dict[str, Any]] = [
 class SeedPool:
     """种子池管理器 — 加载/查询/注入种子因子。
 
+    种子数据来源:
+        - 股票内置: _SEED_DEFINITIONS (9 个)
+        - 股票外部: WQ101 (101) + Qlib158 (158) + GTJA191 (191) + 基本面 (23) = 473 个
+        - 期货专用: seed_data_futures_full._FUTURES_FULL_DEFINITIONS (81 个, 14 大因子家族)
+
     Args:
         trace_id: 全链路 trace_id。
-        market: 市场类型 ("stock" 或 "futures")。
-            - "stock"（默认）: 加载 9 个内置股票种子 + 外部 473 个量价/基本面种子。
-            - "futures": 加载 50 个期货专用种子（12大因子家族：动量/期限结构/持仓/流动性/高阶矩/波动率/基本面/拥挤度/Alpha/高频/期权隐含/市场环境）。
+        market: 市场类型 ("futures" 或 "stock")。
+            - "futures"（默认）: 加载 81 个期货专用种子（14 大因子家族）。
+            - "stock": 加载 9 内置 + 473 外部股票种子。
 
     Usage:
-        pool = SeedPool()
+        pool = SeedPool()  # 默认 futures
         all_seeds = pool.load_all_seeds()
 
-        futures_pool = SeedPool(market="futures")
-        futures_seeds = futures_pool.load_all_seeds()
+        stock_pool = SeedPool(market="stock")
+        stock_seeds = stock_pool.load_all_seeds()
     """
 
     def __init__(
         self,
         trace_id: Optional[str] = None,
-        market: str = "stock",
+        market: str = "futures",
+        use_yaml: bool = True,
     ):
         self._trace_id = trace_id
         self._market = market
         self._cache: dict[str, FactorProgram] = {}
+        self._use_yaml = use_yaml
+
+        # ── 关键日志: 确认默认市场配置 ──
+        if market == "futures":
+            logger.info(
+                "[SeedPool.init] ★ 期货模式 (默认) market=futures, trace_id=%s, "
+                "use_yaml=%s, 将加载 81 个期货专用种子 (14 大因子家族)",
+                trace_id, use_yaml,
+            )
+        elif market == "stock":
+            logger.info(
+                "[SeedPool.init] ★ 股票模式 market=stock, trace_id=%s, "
+                "use_yaml=%s, 将加载 9 内置 + 473 外部股票种子",
+                trace_id, use_yaml,
+            )
+        else:
+            logger.warning(
+                "[SeedPool.init] ⚠ 未知市场类型 market=%s, trace_id=%s",
+                market, trace_id,
+            )
+
+    @classmethod
+    def get_seed_counts(cls) -> dict[str, int]:
+        """返回各市场种子因子的最新动态数量（消除硬编码）。"""
+        from .seed_data_futures_full import get_futures_full_seed_count
+        from .seed_data.loader import get_external_seed_count
+
+        wq, ql, gj, fd, ext_total = get_external_seed_count()
+        futures_total = get_futures_full_seed_count()
+        stock_internal = len(_SEED_DEFINITIONS)
+        stock_total = stock_internal + ext_total
+
+        counts = {
+            "stock_internal": stock_internal,
+            "stock_wq101": wq,
+            "stock_qlib158": ql,
+            "stock_gtja191": gj,
+            "stock_fundamental": fd,
+            "stock_external_total": ext_total,
+            "stock_total": stock_total,
+            "futures_total": futures_total,
+        }
+
+        # ── 关键日志: 动态种子统计快照 ──
+        logger.info(
+            "[SeedPool.get_seed_counts] 动态统计: 期货=%d (14 家族) | "
+            "股票=9 内置 + %d 外部 (WQ101=%d, Qlib158=%d, GTJA191=%d, 基本面=%d) = %d",
+            futures_total, ext_total, wq, ql, gj, fd, stock_total,
+        )
+        return counts
 
     def load_all_seeds(
         self,
@@ -409,24 +472,56 @@ class SeedPool:
     ) -> list[FactorProgram]:
         """加载全部种子因子。
 
+        优先从 YAML 文件加载，失败时回退到硬编码路径。
+
         Args:
             include_external: 仅 market="stock" 时有效。
                 是否加载 WQ 101 / Qlib 158 / 国泰君安 191 外部种子（默认 True）。
+            use_yaml: 是否优先使用 YAML 加载（默认 True）。
 
         Returns:
             list[FactorProgram] — 所有种子因子列表（不含 L1 注入）。
         """
         if self._cache:
+            logger.debug("[SeedPool.load] 使用缓存, count=%d", len(self._cache))
             return self._list_base_seeds()
 
+        # ── 路径 1: YAML 加载（优先） ──
+        if self._use_yaml:
+            try:
+                from .seed_loader import load_all_yaml_seeds
+                logger.info("[SeedPool.load] 尝试 YAML 种子加载 (market=%s, include_external=%s)...", self._market, include_external)
+                yaml_seeds = load_all_yaml_seeds(
+                    trace_id=self._trace_id,
+                    market=self._market,
+                    include_external=include_external,
+                )
+                if yaml_seeds:
+                    for fp in yaml_seeds:
+                        self._cache[fp["name"]] = fp
+                    logger.info(
+                        "[SeedPool.load] ✅ YAML 种子加载成功: count=%d, sample=%s",
+                        len(yaml_seeds), [s["name"] for s in yaml_seeds[:5]],
+                    )
+                    return self._list_base_seeds()
+                else:
+                    logger.warning("[SeedPool.load] YAML 种子为空，回退到硬编码路径")
+            except Exception as e:
+                logger.warning("[SeedPool.load] YAML 加载失败: %s，回退到硬编码路径", e)
+
+        # ── 路径 2: 硬编码兜底 ──
         if self._market == "futures":
-            # ── 期货模式：加载 50 个期货专用种子（12大因子家族） ──
+            logger.info("[SeedPool.load] 加载期货专用种子 (14 大因子家族, 81 个, 硬编码路径)...")
             from .seed_data_futures_full import load_futures_seeds_full
             futures_seeds = load_futures_seeds_full(self._trace_id)
             for fp in futures_seeds:
                 self._cache[fp["name"]] = fp
+            logger.info(
+                "[SeedPool.load] 期货种子加载完成: total=%d, sample_names=%s",
+                len(futures_seeds), [s["name"] for s in futures_seeds[:5]],
+            )
         else:
-            # ── 股票模式：内置 9 个种子 ──
+            logger.info("[SeedPool.load] 加载股票内置种子 (9 个, 硬编码路径)...")
             for defn in _SEED_DEFINITIONS:
                 fp = create_factor_program(
                     name=defn["name"],
@@ -441,12 +536,20 @@ class SeedPool:
                 )
                 self._cache[defn["name"]] = fp
 
-            # 外部种子（WQ 101 + Qlib 158 + 国泰君安 191 + 基本面）
             if include_external:
+                logger.info("[SeedPool.load] 加载外部种子 (WQ101 + Qlib158 + GTJA191 + 基本面, 硬编码路径)...")
+                ext_count = 0
                 for ext_fp in load_all_external_seeds(self._trace_id):
                     self._cache[ext_fp["name"]] = ext_fp
+                    ext_count += 1
+                logger.info("[SeedPool.load] 外部种子加载完成: external=%d", ext_count)
 
-        return self._list_base_seeds()
+        all_seeds = self._list_base_seeds()
+        logger.info(
+            "[SeedPool.load] 全部种子加载完成: market=%s, total=%d, names_sample=%s",
+            self._market, len(all_seeds), [s["name"] for s in all_seeds[:3]],
+        )
+        return all_seeds
 
     def _list_base_seeds(self) -> list[FactorProgram]:
         """返回非 L1 注入的种子因子（内置 + 外部）。"""
@@ -493,26 +596,54 @@ class SeedPool:
         Raises:
             ValueError: candidate 缺少必需字段
         """
+        import time
+        t0 = time.time()
         required = ("name", "code", "params", "signature", "economic_logic")
-        for k in required:
-            if k not in candidate:
-                raise ValueError(f"SeedCandidate 缺少必需字段: {k}")
+        missing = [k for k in required if k not in candidate]
+        if missing:
+            logger.error(
+                "[inject_from_l1] 缺少必需字段, missing=%s, candidate_keys=%s, trace_id=%s",
+                missing, list(candidate.keys()), trace_id or candidate.get("trace_id"),
+            )
+            raise ValueError(f"SeedCandidate 缺少必需字段: {missing}")
 
         injected_trace = trace_id or candidate.get("trace_id") or self._trace_id
-        fp = create_factor_program(
-            name=candidate["name"],
-            code=candidate["code"],
-            params=candidate["params"],
-            signature=candidate["signature"],
-            economic_logic=candidate["economic_logic"],
-            source="bootstrapping",
-            parent_id=candidate.get("candidate_id"),
-            generation=0,
-            trace_id=injected_trace,
+        cand_name = candidate["name"]
+        cand_id = candidate.get("candidate_id", cand_name)
+        logger.info(
+            "[inject_from_l1] 开始注入, trace_id=%s, candidate_id=%s, name=%s, source=%s, code_len=%d",
+            injected_trace, cand_id, cand_name,
+            candidate.get("source", "unknown"), len(candidate["code"]),
         )
+
+        try:
+            fp = create_factor_program(
+                name=cand_name,
+                code=candidate["code"],
+                params=candidate["params"],
+                signature=candidate["signature"],
+                economic_logic=candidate["economic_logic"],
+                source="bootstrapping",
+                parent_id=cand_id,
+                generation=0,
+                trace_id=injected_trace,
+            )
+        except Exception as e:
+            elapsed = (time.time() - t0) * 1000
+            logger.error(
+                "[inject_from_l1] create_factor_program 异常, trace_id=%s, candidate_id=%s, name=%s, elapsed_ms=%.1f, error=%s",
+                injected_trace, cand_id, cand_name, elapsed, e, exc_info=True,
+            )
+            raise
+
         # 注入到缓存（按 candidate_id 索引，避免与内置种子碰撞）
-        cache_key = f"l1:{candidate.get('candidate_id', candidate['name'])}"
+        cache_key = f"l1:{cand_id}"
         self._cache[cache_key] = fp
+        elapsed = (time.time() - t0) * 1000
+        logger.info(
+            "[inject_from_l1] 注入成功, trace_id=%s, candidate_id=%s, name=%s, cache_key=%s, elapsed_ms=%.1f, cache_size=%d",
+            injected_trace, cand_id, cand_name, cache_key, elapsed, len(self._cache),
+        )
         return fp
 
     def list_injected_l1(self) -> list[FactorProgram]:
@@ -522,13 +653,273 @@ class SeedPool:
             if k.startswith("l1:") and fp.get("source") == "bootstrapping"
         ]
 
+    def compute_correlations(
+        self,
+        data: pd.DataFrame | dict[str, pd.DataFrame],
+        threshold: float = 0.95,
+        max_factors: Optional[int] = None,
+        common_dates: Optional[pd.DatetimeIndex] = None,
+    ) -> list[FactorCorrelation]:
+        """对种子因子执行相关性预检（L2 阶段轻量扫描）。
 
-def get_default_seed_pool() -> SeedPool:
+        自动检测数据模式:
+        - 单 DataFrame → 股票时序模式 (Pearson/Spearman)
+        - dict[str, DataFrame] + common_dates → 期货横截面模式 (截面排名 Spearman)
+
+        Args:
+            data: OHLCV 数据 (单标的) 或 面板数据 (品种名→DataFrame)
+            threshold: 高相关性阈值（默认 0.95）
+            max_factors: 最多处理的因子数（None = 全部）
+            common_dates: 横截面模式的共同日期索引
+
+        Returns:
+            list[FactorCorrelation] — 超过阈值的高相关因子对列表
+        """
+        seeds = self.load_all_seeds()
+        if max_factors is not None:
+            seeds = seeds[:max_factors]
+
+        if isinstance(data, dict):
+            # 横截面模式
+            if common_dates is None:
+                return []
+            return compute_cross_section_correlations(seeds, data, common_dates, threshold)
+        else:
+            # 时序模式
+            return compute_seed_correlations(seeds, data, threshold)
+
+
+def compute_seed_correlations(
+    seeds: list[FactorProgram],
+    data: pd.DataFrame,
+    threshold: float = 0.95,
+) -> list[FactorCorrelation]:
+    """执行种子因子相关性预检。
+
+    流程:
+    1. 逐一执行种子因子获取信号数组
+    2. 构建 (n_dates × n_factors) 信号矩阵
+    3. 计算 Pearson + Spearman 相关矩阵
+    4. 标记 abs(corr) >= threshold 的因子对
+
+    Args:
+        seeds: 种子因子列表
+        data: OHLCV 数据
+        threshold: 高相关性阈值（默认 0.95）
+
+    Returns:
+        list[FactorCorrelation] — 超过阈值的高相关因子对
+    """
+    if len(seeds) < 2:
+        return []
+
+    n_factors = len(seeds)
+    n_dates = len(data)
+    signal_matrix = np.zeros((n_dates, n_factors))
+
+    for i, seed in enumerate(seeds):
+        try:
+            executor = FactorExecutor(seed)
+            signal = executor.execute(data, seed.get("params", {}))
+            if len(signal) == n_dates:
+                signal_matrix[:, i] = signal
+            else:
+                signal_matrix[:, i] = 0.0
+        except Exception:
+            signal_matrix[:, i] = 0.0
+
+    # 剔除全零信号和常数信号（零方差 → 无意义相关）
+    valid_mask = (np.any(signal_matrix != 0, axis=0) &
+                  (np.std(signal_matrix, axis=0) > 1e-10))
+    valid_indices = np.where(valid_mask)[0]
+    valid_seeds = [seeds[i] for i in valid_indices]
+    valid_signals = signal_matrix[:, valid_indices]
+
+    if len(valid_seeds) < 2:
+        return []
+
+    # 计算相关矩阵
+    pearson_matrix = np.corrcoef(valid_signals, rowvar=False)
+    spearman_matrix = np.zeros((len(valid_seeds), len(valid_seeds)))
+    for i in range(len(valid_seeds)):
+        for j in range(i + 1, len(valid_seeds)):
+            if np.std(valid_signals[:, i]) > 1e-10 and np.std(valid_signals[:, j]) > 1e-10:
+                sp_corr, _ = sp_stats.spearmanr(valid_signals[:, i], valid_signals[:, j])
+                spearman_matrix[i, j] = sp_corr
+                spearman_matrix[j, i] = sp_corr
+
+    # 收集高相关对
+    high_corr_pairs: list[FactorCorrelation] = []
+    for i in range(len(valid_seeds)):
+        for j in range(i + 1, len(valid_seeds)):
+            pearson_val = float(pearson_matrix[i, j])
+            spearman_val = float(spearman_matrix[i, j])
+            max_abs = max(abs(pearson_val), abs(spearman_val))
+            if max_abs >= threshold:
+                high_corr_pairs.append(FactorCorrelation(
+                    factor_id_a=valid_seeds[i]["factor_id"],
+                    factor_id_b=valid_seeds[j]["factor_id"],
+                    pearson=pearson_val,
+                    spearman=spearman_val,
+                ))
+
+    return high_corr_pairs
+
+
+def compute_cross_section_correlations(
+    seeds: list[FactorProgram],
+    panel_data: dict[str, pd.DataFrame],
+    common_dates: pd.DatetimeIndex,
+    threshold: float = 0.95,
+) -> list[FactorCorrelation]:
+    """期货横截面种子因子相关性预检 — 截面排名 Spearman 相关。
+
+    流程:
+    1. 对每个因子执行所有品种，构建 signal_matrix (n_dates × n_varieties)
+    2. 剔除全零信号的因子（执行失败或常数信号）
+    3. 在每个时间点对各品种信号做 rank
+    4. 计算因子间 rank 的 Spearman 相关（跨时间取均值）
+    5. 标记 abs(corr) >= threshold 的因子对
+
+    与股票时序版本的区别:
+    - 股票: 直接计算时序信号的 Pearson/Spearman
+    - 期货: 先计算每期的截面排名，再比较排名序列的 Spearman 相关
+      这反映因子在横截面选股（品种）上的信息重叠程度
+
+    Args:
+        seeds: 种子因子列表
+        panel_data: 面板数据 {品种名: DataFrame(含OHLCV)}
+        common_dates: 共同日期索引
+        threshold: 高相关性阈值（默认 0.95）
+
+    Returns:
+        list[FactorCorrelation] — 超过阈值的高相关因子对
+    """
+    if len(seeds) < 2:
+        return []
+
+    n_dates = len(common_dates)
+    varieties = list(panel_data.keys())
+    n_varieties = len(varieties)
+
+    if n_varieties < 5:
+        return []
+
+    # Step 1: 执行每个因子，构建信号矩阵 (n_dates, n_varieties)
+    n_factors = len(seeds)
+    # 每个因子存 signal_matrix: (n_dates, n_varieties)
+    factor_signals: dict[int, np.ndarray] = {}
+
+    for i, seed in enumerate(seeds):
+        try:
+            executor = FactorExecutor(seed)
+            params = seed.get("params", {})
+            signal_matrix = np.zeros((n_dates, n_varieties))
+            valid_varieties = 0
+            for j, variety in enumerate(varieties):
+                df = panel_data.get(variety)
+                if df is None or len(df) == 0:
+                    continue
+                try:
+                    sig = executor.execute(df, params)
+                    if len(sig) > 0:
+                        # 位置对齐: 截断或填充到 n_dates 长度
+                        sig_arr = np.asarray(sig, dtype=float)
+                        if len(sig_arr) >= n_dates:
+                            aligned = sig_arr[:n_dates]
+                        else:
+                            aligned = np.zeros(n_dates)
+                            aligned[:len(sig_arr)] = sig_arr
+                        signal_matrix[:, j] = aligned
+                        valid_varieties += 1
+                except Exception:
+                    continue
+
+            # 要求至少 5 个品种有有效信号
+            if valid_varieties >= 5:
+                # 检查因子是否有足够方差
+                overall_std = np.std(signal_matrix)
+                if overall_std > 1e-10:
+                    factor_signals[i] = signal_matrix
+        except Exception:
+            continue
+
+    if len(factor_signals) < 2:
+        return []
+
+    # Step 2: 构建因子列表和信号矩阵
+    valid_indices = sorted(factor_signals.keys())
+    valid_seeds = [seeds[i] for i in valid_indices]
+    valid_matrices = [factor_signals[i] for i in valid_indices]
+    n_valid = len(valid_seeds)
+
+    # Step 3: 计算每期截面 rank，然后计算因子间 rank 的 Spearman 相关
+    # 先计算每个因子在每期的截面排名
+    # rank_matrices: list of (n_dates, n_varieties) — 每期截面 rank
+    from scipy.stats import rankdata
+
+    rank_matrices: list[np.ndarray] = []
+    for mat in valid_matrices:
+        rank_mat = np.zeros_like(mat)
+        for t in range(n_dates):
+            row = mat[t, :]
+            valid_mask = ~np.isnan(row) & (row != 0)
+            if np.sum(valid_mask) >= 3:
+                ranks = np.full(n_varieties, np.nan)
+                valid_indices_in_row = np.where(valid_mask)[0]
+                valid_values = row[valid_mask]
+                ranks[valid_indices_in_row] = rankdata(valid_values)
+                rank_mat[t, :] = ranks
+            else:
+                rank_mat[t, :] = np.nan
+        rank_matrices.append(rank_mat)
+
+    # Step 4: 计算因子间截面 rank 的 Spearman 相关
+    high_corr_pairs: list[FactorCorrelation] = []
+    for i in range(n_valid):
+        for j in range(i + 1, n_valid):
+            rank_i = rank_matrices[i]  # (n_dates, n_varieties)
+            rank_j = rank_matrices[j]
+
+            # 每期计算两个因子截面排名的 Spearman 相关
+            corr_per_date: list[float] = []
+            for t in range(n_dates):
+                r_i = rank_i[t, :]
+                r_j = rank_j[t, :]
+                valid = ~(np.isnan(r_i) | np.isnan(r_j))
+                if np.sum(valid) < 3:
+                    continue
+                r_i_valid = r_i[valid]
+                r_j_valid = r_j[valid]
+                if np.std(r_i_valid) < 1e-10 or np.std(r_j_valid) < 1e-10:
+                    continue
+                corr_val, _ = sp_stats.spearmanr(r_i_valid, r_j_valid)
+                if not np.isnan(corr_val):
+                    corr_per_date.append(float(corr_val))
+
+            if len(corr_per_date) == 0:
+                continue
+
+            # 跨时间取均值
+            mean_corr = float(np.mean(corr_per_date))
+            if abs(mean_corr) >= threshold:
+                high_corr_pairs.append(FactorCorrelation(
+                    factor_id_a=valid_seeds[i]["factor_id"],
+                    factor_id_b=valid_seeds[j]["factor_id"],
+                    pearson=mean_corr,  # 复用 pearson 字段存储截面 Spearman
+                    spearman=mean_corr,
+                ))
+
+    return high_corr_pairs
+
+
+def get_default_seed_pool(market: str = "futures") -> SeedPool:
     """获取默认种子池实例。"""
-    return SeedPool()
+    return SeedPool(market=market)
 
 
 __all__ = [
     "SeedPool",
+    "compute_seed_correlations",
     "get_default_seed_pool",
 ]

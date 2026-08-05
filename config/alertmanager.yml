@@ -1,0 +1,63 @@
+# FTS AlertManager 配置
+# 版本: v2.5.0
+# 用途: 定义告警路由、抑制规则和通知渠道
+#
+# 使用方法:
+#   1. 替换 receivers 中的 webhook_urls 为实际的告警通知地址
+#   2. 或配置 email、pagerduty、slack 等通知渠道
+#   3. 启动 alertmanager: alertmanager --config.file=alertmanager.yml
+
+global:
+  # 解析告警标签时使用的外部标签
+  external_labels:
+    monitor: "fts-monitor"
+    environment: "development"
+
+# 默认路由: 所有告警都先发送到 default-receiver
+route:
+  group_by: ["alertname", "component"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: "default-receiver"
+  routes:
+    # 严重告警 (critical) -> 发送到紧急通知渠道
+    - match:
+        severity: critical
+      receiver: "critical-receiver"
+      group_wait: 10s
+      repeat_interval: 10m
+      continue: true
+
+# 抑制规则: 当严重告警已触发时，抑制同一组件的警告告警
+inhibit_rules:
+  - source_match:
+      severity: "critical"
+    target_match:
+      severity: "warning"
+    equal: ["alertname", "component"]
+
+# 通知接收者定义
+receivers:
+  - name: "default-receiver"
+    webhook_configs:
+      - url: "http://localhost:5001/webhook"
+        send_resolved: true
+
+  - name: "critical-receiver"
+    webhook_configs:
+      - url: "http://localhost:5001/webhook/critical"
+        send_resolved: true
+    # 邮件通知 (可选)
+    # email_configs:
+    #   - to: "oncall@example.com"
+    #     from: "alertmanager@example.com"
+    #     smarthost:
+    #       url: "smtp.example.com:587"
+    #       require_tls: true
+    #       auth_username: "alertmanager@example.com"
+    #       auth_password: "<password>"
+
+# 模板文件 (可选, 用于自定义告警通知格式)
+# templates:
+#   - "/etc/alertmanager/templates/*.tmpl"

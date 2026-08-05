@@ -2,25 +2,28 @@
 fts.monitor.elite_tracker — 精英因子样本外跟踪与自动淘汰。
 
 Tracks elite factors post-insertion: weekly IC, decay detection, auto-retirement.
+Phase A.2: 增加分级准入（A/B/C级）、增强衰减判定、观察期机制。
 
 用法:
     tracker = EliteFactorTracker(tracking_dir="memory/tracking")
-    tracker.init_tracker(factor_id="f_001", name="momentum", entry_ic=0.05, entry_sharpe=1.2)
+    # 分级准入 (A 级直接 active, B 级进入观察期, C 级淘汰)
+    tracker.init_tracker(factor_id="f_001", name="momentum", entry_ic=0.05, 
+                         entry_sharpe=1.2, grade="A", quality_score=42.0)
     tracker.update("f_001", 0.03)
     decaying = tracker.get_decaying(max_consecutive=4)
     retired = tracker.auto_retire()
     report = tracker.report()
 
-版本: v0.1.0
+版本: v0.2.0
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, Optional
 
 from fts.core.atomic import atomic_read, atomic_write
 
@@ -29,25 +32,57 @@ logger = logging.getLogger(__name__)
 
 # ─── 契约 ───────────────────────────────────────────────────
 
+FactorGrade = Literal["A", "B", "C"]
+"""因子质量等级。A(优秀)/B(合格)/C(不合格)"""
 
-class TrackingSnapshot(TypedDict, total=False):
+FactorStatus = Literal[
+    "active",           # 活跃
+    "observing",        # 观察期 (B级因子)
+    "decaying",         # 衰减中
+    "critical_decay",   # 严重衰减
+    "retired",          # 已淘汰
+    "deprecated",       # 已废弃 (保留历史)
+    "rejected",         # 被拒绝准入
+]
+"""因子生命周期状态。"""
+
+
+class TrackingSnapshot(dict):
     """精英因子跟踪快照。
 
     存储位置: ``{tracking_dir}/{factor_id}.json``
+
+    状态转换:
+    - A级 (score>=40): active
+    - B级 (30<=score<40): observing → 观察期结束 → active/decaying
+    - C级 (score<30): rejected
+    - active: 连续3月IC<0 → decaying → 连续6月Sharpe降>50% → critical_decay → retired
     """
-    factor_id: str                       # 因子唯一标识
-    name: str                            # 人类可读名
-    entry_ic: float                      # 入库时 IC
-    entry_sharpe: float                  # 入库时夏普
-    entry_at: str                        # ISO datetime 入库时间
-    weekly_ic: list[float]               # 周度 IC 序列（追加）
-    monthly_ic: list[float]              # 月度 IC 序列（追加）
-    current_ic: float                    # 最近一期 IC
-    current_sharpe: float                # 最近一期夏普
-    consecutive_zero_ic: int             # IC <= 0 连续次数
-    decay_6m: float                      # 6 个月衰减率（>0.30 表示显著衰减）
-    status: str                          # "active" / "decaying" / "decayed" / "retired"
-    last_updated: str                    # ISO datetime
+    pass  # 使用 dict 保持向后兼容
+
+
+# ─── 配置 ──────────────────────────────────────────────────
+
+
+@dataclass
+class GradeThreshold:
+    """分级准入阈值配置。"""
+    a_threshold: float = 40.0       # A级下限 (总分)
+    b_threshold: float = 30.0       # B级下限 (总分)
+    observation_months: int = 3     # B级观察期 (月)
+    ic_decay_months: int = 3        # 连续IC<0 衰减判定
+    sharpe_decline_months: int = 6  # 连续Sharpe下降 严重衰减判定
+    sharpe_decline_ratio: float = 0.5  # Sharpe下降比例阈值
+
+
+@dataclass
+class AutoRetireConfig:
+    """自动淘汰配置。"""
+    max_consecutive_zero_ic: int = 4         # 周度连续零值 IC 阈值
+    max_decay_6m: float = 0.30              # 衰减率阈值
+    min_active_days: int = 30               # 最小活跃天数
+    cooldown_days: int = 7                  # 冷却期（淘汰后多久可重新评估）
+    grade_threshold: GradeThreshold = field(default_factory=GradeThreshold)
 
 
 # ─── EliteFactorTracker ─────────────────────────────────────
@@ -57,22 +92,46 @@ class EliteFactorTracker:
     """精英因子样本外跟踪器。
 
     为每个精英因子维护一个 ``TrackingSnapshot``，持久化到 ``tracking_dir`` 目录。
-    支持 IC 追踪、衰减检测与自动淘汰。
+    支持 IC 追踪、衰减检测、分级准入与自动淘汰。
 
     Args:
         tracking_dir: 跟踪快照存储目录（默认 "memory/tracking"）
+        grade_threshold: 分级准入阈值配置
     """
 
-    def __init__(self, tracking_dir: str = "memory/tracking") -> None:
+    def __init__(
+        self,
+        tracking_dir: str = "memory/tracking",
+        grade_threshold: Optional[GradeThreshold] = None,
+    ) -> None:
         self._tracking_dir = Path(tracking_dir)
         self._tracking_dir.mkdir(parents=True, exist_ok=True)
+        self._threshold = grade_threshold or GradeThreshold()
 
     # ─── 路径辅助 ────────────────────────────────────────
 
     def _path(self, factor_id: str) -> Path:
         return self._tracking_dir / f"{factor_id}.json"
 
-    # ─── 初始化 ──────────────────────────────────────────
+    # ─── 分级判定 ─────────────────────────────────────────
+
+    def determine_grade(self, quality_score: float) -> FactorGrade:
+        """根据质量评分确定因子等级。
+
+        Args:
+            quality_score: 因子质量评分 (0-50)
+
+        Returns:
+            FactorGrade: "A" / "B" / "C"
+        """
+        if quality_score >= self._threshold.a_threshold:
+            return "A"
+        elif quality_score >= self._threshold.b_threshold:
+            return "B"
+        else:
+            return "C"
+
+    # ─── 初始化 (增强版) ──────────────────────────────────
 
     def init_tracker(
         self,
@@ -80,9 +139,11 @@ class EliteFactorTracker:
         name: str,
         entry_ic: float,
         entry_sharpe: float,
-        entry_at: str | None = None,
-    ) -> TrackingSnapshot:
-        """创建新的跟踪记录。
+        entry_at: Optional[str] = None,
+        grade: Optional[FactorGrade] = None,
+        quality_score: Optional[float] = None,
+    ) -> dict:
+        """创建新的跟踪记录（支持分级准入）。
 
         Args:
             factor_id: 因子唯一标识
@@ -90,47 +151,95 @@ class EliteFactorTracker:
             entry_ic: 入库时 IC
             entry_sharpe: 入库时夏普
             entry_at: 入库时间（ISO 格式，默认当前 UTC 时间）
+            grade: 质量等级（A/B/C），若提供 quality_score 则自动判定
+            quality_score: 质量评分（0-50），用于自动判定等级
 
         Returns:
             新创建的 TrackingSnapshot
+
+        Raises:
+            ValueError: C级因子被拒绝准入时
         """
         now = entry_at or datetime.now(timezone.utc).isoformat()
 
-        snapshot: TrackingSnapshot = TrackingSnapshot(
-            factor_id=factor_id,
-            name=name,
-            entry_ic=entry_ic,
-            entry_sharpe=entry_sharpe,
-            entry_at=now,
-            weekly_ic=[entry_ic],
-            monthly_ic=[],
-            current_ic=entry_ic,
-            current_sharpe=entry_sharpe,
-            consecutive_zero_ic=0,
-            decay_6m=0.0,
-            status="active",
-            last_updated=now,
-        )
+        # 确定等级
+        if grade is None and quality_score is not None:
+            grade = self.determine_grade(quality_score)
+        elif grade is None:
+            grade = "A"  # 默认 A 级（向后兼容）
+
+        # 分级准入逻辑
+        if grade == "C":
+            status = "rejected"
+        elif grade == "B":
+            status = "observing"
+        else:
+            status = "active"
+
+        # 计算观察期结束时间
+        observation_end = None
+        if grade == "B":
+            obs_end_dt = datetime.fromisoformat(now) + timedelta(
+                days=self._threshold.observation_months * 30
+            )
+            observation_end = obs_end_dt.isoformat()
+
+        snapshot: dict = {
+            "factor_id": factor_id,
+            "name": name,
+            "entry_ic": entry_ic,
+            "entry_sharpe": entry_sharpe,
+            "entry_at": now,
+            "weekly_ic": [entry_ic] if status != "rejected" else [],
+            "monthly_ic": [],
+            "monthly_sharpe": [],
+            "current_ic": entry_ic,
+            "current_sharpe": entry_sharpe,
+            "consecutive_zero_ic": 0,
+            "consecutive_zero_months": 0,
+            "consecutive_sharpe_decline_months": 0,
+            "decay_6m": 0.0,
+            "status": status,
+            "grade": grade,
+            "quality_score": quality_score,
+            "observation_end": observation_end,
+            "last_updated": now,
+        }
         atomic_write(str(self._path(factor_id)), snapshot)
-        logger.info("初始化跟踪记录 [factor_id=%s, name=%s, entry_ic=%.4f]", factor_id, name, entry_ic)
+
+        if status == "rejected":
+            logger.warning(
+                "因子被拒绝准入 [factor_id=%s, name=%s, grade=C, score=%.2f]",
+                factor_id, name, quality_score or 0,
+            )
+        elif status == "observing":
+            logger.info(
+                "因子进入观察期 [factor_id=%s, name=%s, grade=B, obs_end=%s]",
+                factor_id, name, observation_end,
+            )
+        else:
+            logger.info(
+                "因子准入 [factor_id=%s, name=%s, grade=%s, entry_ic=%.4f]",
+                factor_id, name, grade, entry_ic,
+            )
         return snapshot
 
-    # ─── 更新 ────────────────────────────────────────────
+    # ─── 更新 (增强版) ────────────────────────────────────
 
     def update(
         self,
         factor_id: str,
         new_ic: float,
-        new_sharpe: float | None = None,
-    ) -> TrackingSnapshot | None:
-        """更新因子跟踪数据。
-
-        追加周度 IC、更新当前 IC/夏普、累计零值次数、计算衰减率。
+        new_sharpe: Optional[float] = None,
+        is_monthly: bool = False,
+    ) -> Optional[dict]:
+        """更新因子跟踪数据（支持月度评估）。
 
         Args:
             factor_id: 因子唯一标识
             new_ic: 最新一期 IC 值
             new_sharpe: 最新一期夏普（可选）
+            is_monthly: 是否为月度更新（触发月度衰减检测）
 
         Returns:
             更新后的 TrackingSnapshot，因子不存在时返回 None
@@ -140,37 +249,139 @@ class EliteFactorTracker:
             logger.warning("更新失败：跟踪记录不存在 [factor_id=%s]", factor_id)
             return None
 
+        # 被拒绝的因子不允许更新
+        if snapshot.get("status") == "rejected":
+            logger.debug("跳过更新：因子已被拒绝 [factor_id=%s]", factor_id)
+            return snapshot
+
         now = datetime.now(timezone.utc).isoformat()
 
-        # 更新 IC 序列与当前值
+        # 更新周度 IC 序列
         weekly_ic = list(snapshot.get("weekly_ic", []))
         weekly_ic.append(new_ic)
         snapshot["weekly_ic"] = weekly_ic
         snapshot["current_ic"] = new_ic
+
         if new_sharpe is not None:
             snapshot["current_sharpe"] = new_sharpe
 
-        # 连续零值 IC 计数
+        # 周度连续零值 IC 计数
         if new_ic <= 0:
             snapshot["consecutive_zero_ic"] = snapshot.get("consecutive_zero_ic", 0) + 1
         else:
             snapshot["consecutive_zero_ic"] = 0
 
-        # 衰减率计算（至少 4 期数据）
+        # 衰减率计算
         snapshot["decay_6m"] = _calc_decay_6m(weekly_ic)
 
+        # 月度更新：触发月度衰减检测
+        if is_monthly:
+            self._update_monthly_metrics(snapshot, new_ic, new_sharpe)
+
         # 状态自动转换
-        if snapshot.get("status") == "active" and snapshot["consecutive_zero_ic"] >= 4:
-            snapshot["status"] = "decaying"
+        self._check_state_transition(snapshot)
 
         snapshot["last_updated"] = now
-
         atomic_write(str(self._path(factor_id)), snapshot)
         return snapshot
 
+    def _update_monthly_metrics(
+        self,
+        snapshot: dict,
+        new_ic: float,
+        new_sharpe: Optional[float],
+    ) -> None:
+        """更新月度指标。
+
+        Args:
+            snapshot: 跟踪快照（可变）
+            new_ic: 月度 IC
+            new_sharpe: 月度 Sharpe
+        """
+        # 追加月度 IC
+        monthly_ic = list(snapshot.get("monthly_ic", []))
+        monthly_ic.append(new_ic)
+        snapshot["monthly_ic"] = monthly_ic
+
+        # 月度 IC 衰减计数
+        if new_ic <= 0:
+            snapshot["consecutive_zero_months"] = (
+                snapshot.get("consecutive_zero_months", 0) + 1
+            )
+        else:
+            snapshot["consecutive_zero_months"] = 0
+
+        # 月度 Sharpe 衰减计数
+        if new_sharpe is not None:
+            monthly_sharpe = list(snapshot.get("monthly_sharpe", []))
+            if monthly_sharpe:
+                prev_sharpe = monthly_sharpe[-1]
+                if prev_sharpe > 0:
+                    decline = (prev_sharpe - new_sharpe) / prev_sharpe
+                    if decline > self._threshold.sharpe_decline_ratio:
+                        snapshot["consecutive_sharpe_decline_months"] = (
+                            snapshot.get("consecutive_sharpe_decline_months", 0) + 1
+                        )
+                    else:
+                        snapshot["consecutive_sharpe_decline_months"] = 0
+                else:
+                    snapshot["consecutive_sharpe_decline_months"] = 0
+            monthly_sharpe.append(new_sharpe)
+            snapshot["monthly_sharpe"] = monthly_sharpe
+
+    def _check_state_transition(self, snapshot: dict) -> None:
+        """检查并执行状态转换。
+
+        Args:
+            snapshot: 跟踪快照（可变）
+        """
+        status = snapshot.get("status", "active")
+
+        # 观察期 → active / decaying
+        if status == "observing":
+            obs_end = snapshot.get("observation_end")
+            if obs_end and _is_past(obs_end):
+                # 观察期结束，检查表现
+                quality_score = snapshot.get("quality_score", 0)
+                if quality_score is not None and quality_score >= self._threshold.b_threshold:
+                    snapshot["status"] = "active"
+                    logger.info(
+                        "因子观察期结束，转为 active [factor_id=%s]",
+                        snapshot["factor_id"],
+                    )
+                else:
+                    snapshot["status"] = "decaying"
+                    logger.warning(
+                        "因子观察期结束，转为 decaying [factor_id=%s]",
+                        snapshot["factor_id"],
+                    )
+            return
+
+        # active / decaying → critical_decay
+        if status in ("active", "decaying"):
+            # 连续月度 IC < 0 → decaying
+            zero_months = snapshot.get("consecutive_zero_months", 0)
+            if zero_months >= self._threshold.ic_decay_months:
+                snapshot["status"] = "decaying"
+
+            # 连续月度 Sharpe 降 > 50% → critical_decay
+            sharpe_decline = snapshot.get("consecutive_sharpe_decline_months", 0)
+            if sharpe_decline >= self._threshold.sharpe_decline_months:
+                snapshot["status"] = "critical_decay"
+                logger.warning(
+                    "因子进入严重衰减状态 [factor_id=%s, decline_months=%d]",
+                    snapshot["factor_id"], sharpe_decline,
+                )
+
+        # active → decaying (周度快速衰减)
+        if status == "active":
+            consec_zero = snapshot.get("consecutive_zero_ic", 0)
+            if consec_zero >= 4:
+                snapshot["status"] = "decaying"
+
     # ─── 读取 ────────────────────────────────────────────
 
-    def get(self, factor_id: str) -> TrackingSnapshot | None:
+    def get(self, factor_id: str) -> Optional[dict]:
         """从磁盘读取跟踪记录。
 
         Args:
@@ -181,9 +392,22 @@ class EliteFactorTracker:
         """
         return atomic_read(str(self._path(factor_id)), default=None)
 
+    def list_all(self) -> list[dict]:
+        """列出所有因子跟踪快照。
+
+        Returns:
+            所有 TrackingSnapshot 列表
+        """
+        snapshots: list[dict] = []
+        for fp in sorted(self._tracking_dir.glob("*.json")):
+            snapshot = atomic_read(str(fp), default=None)
+            if snapshot is not None:
+                snapshots.append(snapshot)
+        return snapshots
+
     # ─── 衰减检测 ────────────────────────────────────────
 
-    def get_decaying(self, max_consecutive: int = 4) -> list[TrackingSnapshot]:
+    def get_decaying(self, max_consecutive: int = 4) -> list[dict]:
         """返回处于衰减边缘的活跃因子列表。
 
         筛选条件：连续零值 IC 次数 >= ``max_consecutive`` 且状态为 "active"。
@@ -194,7 +418,7 @@ class EliteFactorTracker:
         Returns:
             符合条件的 TrackingSnapshot 列表
         """
-        decaying: list[TrackingSnapshot] = []
+        decaying: list[dict] = []
         for fp in sorted(self._tracking_dir.glob("*.json")):
             snapshot = atomic_read(str(fp), default=None)
             if (
@@ -205,7 +429,23 @@ class EliteFactorTracker:
                 decaying.append(snapshot)
         return decaying
 
-    # ─── 自动淘汰 ────────────────────────────────────────
+    def get_by_status(self, status: FactorStatus) -> list[dict]:
+        """按状态筛选因子。
+
+        Args:
+            status: 因子状态
+
+        Returns:
+            符合状态的 TrackingSnapshot 列表
+        """
+        results: list[dict] = []
+        for fp in sorted(self._tracking_dir.glob("*.json")):
+            snapshot = atomic_read(str(fp), default=None)
+            if snapshot is not None and snapshot.get("status") == status:
+                results.append(snapshot)
+        return results
+
+    # ─── 自动淘汰 (增强版) ────────────────────────────────
 
     def auto_retire(
         self,
@@ -215,13 +455,14 @@ class EliteFactorTracker:
     ) -> list[str]:
         """自动淘汰表现不佳的因子。
 
-        淘汰条件（同时满足）：
-        1. 因子状态为 "active" 或 "decaying"
-        2. 连续零值 IC >= ``max_consecutive`` **或** 衰减率 >= ``max_decay_6m``
-        3. 入库时间 >= ``min_active_days`` 天
+        淘汰条件（满足任一）：
+        1. 连续零值 IC >= ``max_consecutive``（周度）
+        2. 衰减率 >= ``max_decay_6m``
+        3. 状态为 "critical_decay"
+        4. 连续月度 IC < 0 超过 12 个月
 
         Args:
-            max_consecutive: 连续零值 IC 阈值
+            max_consecutive: 周度连续零值 IC 阈值
             max_decay_6m: 衰减率阈值
             min_active_days: 最小活跃天数（防止过早淘汰）
 
@@ -237,7 +478,7 @@ class EliteFactorTracker:
                 continue
 
             status = snapshot.get("status", "active")
-            if status in ("retired", "decayed"):
+            if status in ("retired", "deprecated", "rejected"):
                 continue
 
             # 检查最小活跃天数
@@ -257,19 +498,78 @@ class EliteFactorTracker:
             # 判定是否应淘汰
             consecutive_zero = snapshot.get("consecutive_zero_ic", 0)
             decay_6m = snapshot.get("decay_6m", 0.0)
+            zero_months = snapshot.get("consecutive_zero_months", 0)
+            sharpe_decline = snapshot.get("consecutive_sharpe_decline_months", 0)
 
-            if consecutive_zero >= max_consecutive or decay_6m >= max_decay_6m:
+            should_retire = (
+                consecutive_zero >= max_consecutive
+                or decay_6m >= max_decay_6m
+                or status == "critical_decay"
+                or zero_months >= 12
+                or sharpe_decline >= 12
+            )
+
+            if should_retire:
                 snapshot["status"] = "retired"
                 snapshot["last_updated"] = now.isoformat()
                 atomic_write(str(fp), snapshot)
                 retired_ids.append(snapshot["factor_id"])
                 logger.info(
-                    "自动淘汰因子 [factor_id=%s, name=%s, consecutive_zero=%d, decay_6m=%.4f]",
-                    snapshot["factor_id"], snapshot.get("name"),
-                    consecutive_zero, decay_6m,
+                    "自动淘汰因子 [factor_id=%s, name=%s, status=%s, consec_zero=%d, "
+                    "decay_6m=%.4f, zero_months=%d, sharpe_decline=%d]",
+                    snapshot["factor_id"], snapshot.get("name"), status,
+                    consecutive_zero, decay_6m, zero_months, sharpe_decline,
                 )
 
         return retired_ids
+
+    def run_monthly_evaluation(self) -> dict:
+        """执行月度增量评估。
+
+        遍历所有因子，检查衰减状态，生成月度报告。
+
+        Returns:
+            月度评估报告摘要
+        """
+        all_snapshots = self.list_all()
+        report = {
+            "total": len(all_snapshots),
+            "status_changes": [],
+            "grade_distribution": {"A": 0, "B": 0, "C": 0, "unknown": 0},
+            "retired": [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        for snap in all_snapshots:
+            grade = snap.get("grade", "unknown")
+            if grade in report["grade_distribution"]:
+                report["grade_distribution"][grade] += 1
+            else:
+                report["grade_distribution"]["unknown"] += 1
+
+            # 检查状态转换
+            old_status = snap.get("status", "active")
+            self._check_state_transition(snap)
+            new_status = snap.get("status", old_status)
+
+            if old_status != new_status:
+                report["status_changes"].append({
+                    "factor_id": snap["factor_id"],
+                    "name": snap.get("name", ""),
+                    "from": old_status,
+                    "to": new_status,
+                })
+                snap["last_updated"] = datetime.now(timezone.utc).isoformat()
+                atomic_write(str(self._path(snap["factor_id"])), snap)
+
+        # 执行自动淘汰
+        report["retired"] = self.auto_retire()
+
+        logger.info(
+            "月度评估完成 [total=%d, changes=%d, retired=%d]",
+            report["total"], len(report["status_changes"]), len(report["retired"]),
+        )
+        return report
 
     # ─── 报告 ────────────────────────────────────────────
 
@@ -281,11 +581,16 @@ class EliteFactorTracker:
         """
         counts: dict[str, int] = {
             "active": 0,
+            "observing": 0,
             "decaying": 0,
-            "decayed": 0,
+            "critical_decay": 0,
             "retired": 0,
+            "deprecated": 0,
+            "rejected": 0,
             "total": 0,
         }
+        grade_counts: dict[str, int] = {"A": 0, "B": 0, "C": 0, "unknown": 0}
+
         for fp in self._tracking_dir.glob("*.json"):
             snapshot = atomic_read(str(fp), default=None)
             if snapshot is not None:
@@ -293,19 +598,17 @@ class EliteFactorTracker:
                 counts[status] = counts.get(status, 0) + 1
                 counts["total"] += 1
 
-        return counts
+                grade = snapshot.get("grade", "unknown")
+                grade_counts[grade] = grade_counts.get(grade, 0) + 1
+
+        return {
+            "status_counts": counts,
+            "grade_distribution": grade_counts,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
 
 
 # ─── AutoRetireManager ──────────────────────────────────────
-
-
-@dataclass
-class AutoRetireConfig:
-    """自动淘汰配置。"""
-    max_consecutive_zero_ic: int = 4         # 连续零值 IC 阈值
-    max_decay_6m: float = 0.30              # 衰减率阈值
-    min_active_days: int = 30               # 最小活跃天数
-    cooldown_days: int = 7                  # 冷却期（淘汰后多久可重新评估）
 
 
 class AutoRetireManager:
@@ -318,7 +621,11 @@ class AutoRetireManager:
         config: AutoRetireConfig 配置（使用默认值若为 None）
     """
 
-    def __init__(self, tracker: EliteFactorTracker, config: AutoRetireConfig | None = None) -> None:
+    def __init__(
+        self,
+        tracker: EliteFactorTracker,
+        config: Optional[AutoRetireConfig] = None,
+    ) -> None:
         self._tracker = tracker
         self._config = config or AutoRetireConfig()
 
@@ -347,7 +654,7 @@ class AutoRetireManager:
         if snapshot is None:
             return False
 
-        if snapshot.get("status") not in ("retired", "decayed"):
+        if snapshot.get("status") not in ("retired", "deprecated"):
             return False
 
         last_updated_str = snapshot.get("last_updated")
@@ -394,9 +701,30 @@ def _calc_decay_6m(weekly_ic: list[float]) -> float:
     return max(decay, 0.0)
 
 
+def _is_past(iso_datetime: str) -> bool:
+    """检查 ISO 时间戳是否已过。
+
+    Args:
+        iso_datetime: ISO 格式时间字符串
+
+    Returns:
+        True 如果时间已过
+    """
+    try:
+        dt = datetime.fromisoformat(iso_datetime)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) >= dt
+    except (ValueError, TypeError):
+        return False
+
+
 __all__ = [
     "TrackingSnapshot",
-    "EliteFactorTracker",
+    "FactorGrade",
+    "FactorStatus",
+    "GradeThreshold",
     "AutoRetireConfig",
+    "EliteFactorTracker",
     "AutoRetireManager",
 ]

@@ -515,7 +515,7 @@ class TestLoadEliteFactors:
 
     def test_load_from_empty_dir(self, tmp_elite_dir):
         """空目录返回空列表。"""
-        factors = load_elite_factors(tmp_elite_dir)
+        factors = load_elite_factors(tmp_elite_dir, use_duckdb=False)
         assert factors == []
 
     def test_load_from_files(self, tmp_elite_dir):
@@ -524,9 +524,14 @@ class TestLoadEliteFactors:
         f1.write_text(json.dumps({
             "factor_id": "fct_alpha",
             "name": "alpha_001",
-            "sharpe": 2.5,
-            "ic": 0.05,
-            "turnover": 0.3,
+            "code": "alpha_code_v1",
+            "evaluation": {
+                "level_1_backtest": {
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover_monthly": 0.3,
+                }
+            },
             "decay_6m": 0.1,
         }), encoding="utf-8")
 
@@ -534,13 +539,18 @@ class TestLoadEliteFactors:
         f2.write_text(json.dumps({
             "factor_id": "fct_beta",
             "name": "beta_002",
-            "sharpe": 1.8,
-            "ic": 0.03,
-            "turnover": 0.4,
+            "code": "beta_code_v1",
+            "evaluation": {
+                "level_1_backtest": {
+                    "sharpe": 1.8,
+                    "ic": 0.04,
+                    "turnover_monthly": 0.4,
+                }
+            },
             "decay_6m": 0.2,
         }), encoding="utf-8")
 
-        factors = load_elite_factors(tmp_elite_dir)
+        factors = load_elite_factors(tmp_elite_dir, use_duckdb=False)
         assert len(factors) == 2
         ids = {f["factor_id"] for f in factors}
         assert ids == {"fct_alpha", "fct_beta"}
@@ -558,6 +568,7 @@ class TestPortfolioLoop:
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
             elite_dir=tmp_elite_dir,
+            use_duckdb=False,
         )
         result = loop.run()
         assert result.status == "completed"
@@ -581,6 +592,7 @@ class TestPortfolioLoop:
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
             elite_dir=tmp_elite_dir,
+            use_duckdb=False,
         )
         result = loop.run()
         assert result.status in ("passed", "verifier_warning", "completed")
@@ -599,6 +611,7 @@ class TestPortfolioLoop:
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
             elite_dir=tmp_elite_dir,
+            use_duckdb=False,
         )
         result = loop.run()
 
@@ -619,6 +632,7 @@ class TestPortfolioLoop:
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
             elite_dir=tmp_elite_dir,
+            use_duckdb=False,
         )
         with patch("fts.factor_engine.portfolio_loop.load_elite_factors") as mock_load:
             mock_load.side_effect = RuntimeError("模拟致命错误")
@@ -781,7 +795,7 @@ class TestCoverageGaps:
 
     def test_load_elite_factors_empty_dir(self, tmp_elite_dir):
         """line 505: 空 elite 目录返回空列表。"""
-        factors = load_elite_factors(tmp_elite_dir)
+        factors = load_elite_factors(tmp_elite_dir, use_duckdb=False)
         assert factors == []
 
     def test_load_elite_factors_skip_corrupt(self, tmp_elite_dir):
@@ -796,7 +810,7 @@ class TestCoverageGaps:
         bad = tmp_elite_dir / "bad.json"
         bad.write_text("not json", encoding="utf-8")
 
-        factors = load_elite_factors(tmp_elite_dir)
+        factors = load_elite_factors(tmp_elite_dir, use_duckdb=False)
         assert len(factors) == 1
         assert factors[0]["factor_id"] == "fct_good"
 
@@ -887,3 +901,281 @@ class TestCoverageGaps:
             with pytest.raises(SystemExit):
                 exec("from fts.factor_engine.portfolio_loop import main; main()",
                      {"__name__": "__main__"})
+
+
+# ════════════════════════════════════════════════════════════
+# 12. Regime 自适应权重调整测试 (A.3)
+# ════════════════════════════════════════════════════════════
+
+class TestRegimeAdaptiveWeight:
+    """A.3: Regime 自适应权重调整测试。"""
+
+    @pytest.fixture
+    def regime_fixtures(self):
+        """构建带 family 字段的因子和对应 signals。"""
+        factors = [
+            {"factor_id": "fct_trend", "name": "momentum_trend", "sharpe": 2.5,
+             "ic": 0.05, "turnover": 0.3, "decay_6m": 0.05, "family": "trend"},
+            {"factor_id": "fct_reversion", "name": "mean_reversion", "sharpe": 2.0,
+             "ic": 0.04, "turnover": 0.4, "decay_6m": 0.1, "family": "mean_reversion"},
+            {"factor_id": "fct_vol", "name": "volatility_screener", "sharpe": 1.8,
+             "ic": 0.03, "turnover": 0.2, "decay_6m": 0.08, "family": "volatility"},
+            {"factor_id": "fct_carry", "name": "carry_spread", "sharpe": 1.5,
+             "ic": 0.03, "turnover": 0.15, "decay_6m": 0.12, "family": "carry"},
+        ]
+        signals = [
+            PortfolioSignal(factor_id="fct_trend", name="momentum_trend",
+                            weight=0.25, sharpe=2.5, ic=0.05, turnover=0.3,
+                            decay_6m=0.05, orthogonalized=False, retained=True),
+            PortfolioSignal(factor_id="fct_reversion", name="mean_reversion",
+                            weight=0.25, sharpe=2.0, ic=0.04, turnover=0.4,
+                            decay_6m=0.1, orthogonalized=False, retained=True),
+            PortfolioSignal(factor_id="fct_vol", name="volatility_screener",
+                            weight=0.25, sharpe=1.8, ic=0.03, turnover=0.2,
+                            decay_6m=0.08, orthogonalized=False, retained=True),
+            PortfolioSignal(factor_id="fct_carry", name="carry_spread",
+                            weight=0.25, sharpe=1.5, ic=0.03, turnover=0.15,
+                            decay_6m=0.12, orthogonalized=False, retained=True),
+        ]
+        return factors, signals
+
+    def test_bull_regime_increases_trend_weight(self, regime_fixtures):
+        """牛市制度: trend 因子权重增加 30%。"""
+        factors, signals = regime_fixtures
+        from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
+        regime = {"regime": "bull", "confidence": 0.9, "detected_at": "now", "features": {}}
+        result = regime_adaptive_weight_adjustment(signals, regime, factors)
+
+        trend_signal = next(s for s in result if s["factor_id"] == "fct_trend")
+        # 原始 0.25 × 1.3 = 0.325
+        assert abs(trend_signal["weight"] - 0.325) < 1e-6, (
+            f"Bull 下 trend 权重应为 0.325，实际 {trend_signal['weight']}"
+        )
+
+    def test_bull_regime_decreases_reversion_weight(self, regime_fixtures):
+        """牛市制度: mean_reversion 因子权重减少 30%。"""
+        factors, signals = regime_fixtures
+        from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
+        regime = {"regime": "bull", "confidence": 0.9, "detected_at": "now", "features": {}}
+        result = regime_adaptive_weight_adjustment(signals, regime, factors)
+
+        reversion_signal = next(s for s in result if s["factor_id"] == "fct_reversion")
+        # 原始 0.25 × 0.7 = 0.175
+        assert abs(reversion_signal["weight"] - 0.175) < 1e-6
+
+    def test_bear_regime_increases_volatility_weight(self, regime_fixtures):
+        """熊市制度: volatility 因子权重增加 30%。"""
+        factors, signals = regime_fixtures
+        from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
+        regime = {"regime": "bear", "confidence": 0.85, "detected_at": "now", "features": {}}
+        result = regime_adaptive_weight_adjustment(signals, regime, factors)
+
+        vol_signal = next(s for s in result if s["factor_id"] == "fct_vol")
+        # 原始 0.25 × 1.3 = 0.325
+        assert abs(vol_signal["weight"] - 0.325) < 1e-6
+
+    def test_oscillate_regime_increases_reversion_weight(self, regime_fixtures):
+        """震荡市: mean_reversion 因子权重增加 30%。"""
+        factors, signals = regime_fixtures
+        from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
+        regime = {"regime": "oscillate", "confidence": 0.5, "detected_at": "now", "features": {}}
+        result = regime_adaptive_weight_adjustment(signals, regime, factors)
+
+        reversion_signal = next(s for s in result if s["factor_id"] == "fct_reversion")
+        # 原始 0.25 × 1.3 = 0.325
+        assert abs(reversion_signal["weight"] - 0.325) < 1e-6
+
+    def test_high_vol_reduces_trend_weight(self, regime_fixtures):
+        """高波动期: trend 因子权重减少 30%，衰减快的额外减 20%。"""
+        factors, signals = regime_fixtures
+        from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
+        regime = {"regime": "high_vol", "confidence": 0.8, "detected_at": "now", "features": {}}
+        result = regime_adaptive_weight_adjustment(signals, regime, factors)
+
+        trend_signal = next(s for s in result if s["factor_id"] == "fct_trend")
+        # trend 衰减率 0.05 < 0.20，不触发额外缩减: 0.25 × 0.7 = 0.175
+        assert abs(trend_signal["weight"] - 0.175) < 1e-6
+
+    def test_high_vol_extra_penalty_on_decaying(self):
+        """高波动期: 衰减率 > 0.20 的因子额外减 20%。"""
+        from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
+        factors = [
+            {"factor_id": "fct_decay", "name": "decaying_factor", "sharpe": 1.5,
+             "ic": 0.02, "turnover": 0.5, "decay_6m": 0.25, "family": "trend"},
+        ]
+        signals = [
+            PortfolioSignal(factor_id="fct_decay", name="decaying_factor",
+                            weight=0.3, sharpe=1.5, ic=0.02, turnover=0.5,
+                            decay_6m=0.25, orthogonalized=False, retained=True),
+        ]
+        regime = {"regime": "high_vol", "confidence": 0.8, "detected_at": "now", "features": {}}
+        result = regime_adaptive_weight_adjustment(signals, regime, factors)
+
+        decay_signal = next(s for s in result if s["factor_id"] == "fct_decay")
+        # trend in high_vol: 0.7 * 0.8 = 0.56 → 0.3 × 0.56 = 0.168
+        expected = 0.3 * 0.7 * 0.8
+        assert abs(decay_signal["weight"] - expected) < 1e-6
+
+    def test_low_vol_increases_trend_weight(self, regime_fixtures):
+        """低波动期: trend 因子权重增加 20%。"""
+        factors, signals = regime_fixtures
+        from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
+        regime = {"regime": "low_vol", "confidence": 0.7, "detected_at": "now", "features": {}}
+        result = regime_adaptive_weight_adjustment(signals, regime, factors)
+
+        trend_signal = next(s for s in result if s["factor_id"] == "fct_trend")
+        # 原始 0.25 × 1.2 = 0.30
+        assert abs(trend_signal["weight"] - 0.30) < 1e-6
+
+    def test_empty_signals_returns_empty(self):
+        """空信号列表直接返回空。"""
+        from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+        result = regime_adaptive_weight_adjustment([], {"regime": "bull"}, [])
+        assert result == []
+
+    def test_none_regime_skips_adjustment(self, regime_fixtures):
+        """regime 为 None 时跳过调整。"""
+        factors, signals = regime_fixtures
+        from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+        result = regime_adaptive_weight_adjustment(signals, {}, factors)
+        # 权重保持不变
+        for s in result:
+            assert s["weight"] == 0.25
+
+    def test_unknown_regime_skips_adjustment(self, regime_fixtures):
+        """未知制度 (如 crash) 时跳过调整。"""
+        factors, signals = regime_fixtures
+        from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+        regime = {"regime": "crash", "confidence": 0.0, "detected_at": "now", "features": {}}
+        result = regime_adaptive_weight_adjustment(signals, regime, factors)
+        # 权重保持不变
+        for s in result:
+            assert s["weight"] == 0.25
+
+    def test_infer_family_from_name(self):
+        """从因子名称推断家族分类。"""
+        from fts.factor_engine.portfolio_loop import _infer_factor_family_from_name
+
+        assert _infer_factor_family_from_name("momentum_factor") == "trend"
+        assert _infer_factor_family_from_name("trend_following") == "trend"
+        assert _infer_factor_family_from_name("breakout_signal") == "trend"
+        assert _infer_factor_family_from_name("mean_reversion") == "mean_reversion"
+        assert _infer_factor_family_from_name("price_reversal") == "mean_reversion"
+        assert _infer_factor_family_from_name("carry_spread") == "carry"
+        assert _infer_factor_family_from_name("volatility_ratio") == "volatility"
+        assert _infer_factor_family_from_name("atr_filter") == "volatility"
+        assert _infer_factor_family_from_name("volume_weighted") == "volume"
+        assert _infer_factor_family_from_name("fundamental_pe") == "fundamental"
+        assert _infer_factor_family_from_name("illiquidity") == "liquidity"
+        assert _infer_factor_family_from_name("unknown_factor") == "other"
+
+    def test_fallback_name_inference_when_no_family(self):
+        """因子无 family 字段时从名称推断。"""
+        from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
+        # 因子只有 name 字段，无 family
+        factors = [
+            {"factor_id": "fct_1", "name": "momentum_factor", "sharpe": 2.0,
+             "ic": 0.04, "turnover": 0.3, "decay_6m": 0.1},
+        ]
+        signals = [
+            PortfolioSignal(factor_id="fct_1", name="momentum_factor",
+                            weight=0.5, sharpe=2.0, ic=0.04, turnover=0.3,
+                            decay_6m=0.1, orthogonalized=False, retained=True),
+        ]
+        regime = {"regime": "bull", "confidence": 0.9, "detected_at": "now", "features": {}}
+        result = regime_adaptive_weight_adjustment(signals, regime, factors)
+
+        # momentum_factor → trend (通过名称推断) → bull 下 ×1.3
+        adjusted = next(s for s in result)
+        assert abs(adjusted["weight"] - 0.65) < 1e-6  # 0.5 × 1.3 = 0.65
+
+    def test_regime_adaptation_via_portfolio_loop(self, tmp_portfolio_dir, tmp_elite_dir):
+        """PortfolioLoop.run() 传入 market_ohlcv 触发 Regime 自适应。"""
+        import numpy as np
+        import pandas as pd
+        from fts.factor_engine.portfolio_loop import PortfolioLoop
+
+        # 创建 elite 因子
+        (tmp_elite_dir / "test.json").write_text(json.dumps({
+            "factor_id": "fct_test", "name": "test_factor", "sharpe": 2.5,
+            "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+        }), encoding="utf-8")
+
+        # 构造市场数据（牛市趋势）
+        n = 200
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        close = 100 + np.cumsum(np.random.randn(n) * 0.3 + 0.5)
+        ohlcv = pd.DataFrame({
+            "open": close * 1.001,
+            "high": close * 1.005,
+            "low": close * 0.995,
+            "close": close,
+            "volume": np.random.randint(800, 1200, n).astype(float),
+        }, index=dates)
+
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            enable_regime_adaptation=True,
+        )
+        result = loop.run(market_ohlcv=ohlcv)
+
+        assert result.status in ("passed", "verifier_warning", "completed")
+        assert result.n_factors_input > 0
+
+    def test_disable_regime_adaptation(self, tmp_portfolio_dir, tmp_elite_dir):
+        """enable_regime_adaptation=False 时跳过 Regime 调整。"""
+        import numpy as np
+        import pandas as pd
+        from fts.factor_engine.portfolio_loop import PortfolioLoop
+
+        (tmp_elite_dir / "test.json").write_text(json.dumps({
+            "factor_id": "fct_test", "name": "test_factor", "sharpe": 2.5,
+            "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+        }), encoding="utf-8")
+
+        n = 200
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        close = 100 + np.cumsum(np.random.randn(n) * 0.3 + 0.5)
+        ohlcv = pd.DataFrame({
+            "open": close * 1.001, "high": close * 1.005, "low": close * 0.995,
+            "close": close, "volume": np.random.randint(800, 1200, n).astype(float),
+        }, index=dates)
+
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            enable_regime_adaptation=False,  # 禁用
+        )
+        result = loop.run(market_ohlcv=ohlcv)
+
+        assert result.status in ("passed", "verifier_warning", "completed")
+
+    def test_no_market_data_skips_regime(self, tmp_portfolio_dir, tmp_elite_dir):
+        """不传 market_ohlcv 时跳过 Regime 调整。"""
+        from fts.factor_engine.portfolio_loop import PortfolioLoop
+
+        (tmp_elite_dir / "test.json").write_text(json.dumps({
+            "factor_id": "fct_test", "name": "test_factor", "sharpe": 2.5,
+            "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+        }), encoding="utf-8")
+
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            enable_regime_adaptation=True,
+        )
+        result = loop.run(market_ohlcv=None)  # 不传数据
+
+        assert result.status in ("passed", "verifier_warning", "completed")

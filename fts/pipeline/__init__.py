@@ -9,14 +9,20 @@ fts.pipeline — 因子推演管线（FTS 因子计算层）。
 模块:
     - base: FactorPipeline 抽象基类 + ProcessingStage 协议
     - factor_combiner: 多因子加权/融合器
+    - factor_quality_inspection: 因子质检过滤层 (Phase A.1)
 
-版本: v0.1.0
+版本: v0.2.0
 """
 
 from .base import ProcessingStage, FactorPipeline, PipelineResult
 from .factor_combiner import FactorCombiner, CombinerConfig, WeightedFactor
+from .factor_quality_inspection import (
+    FactorQualityInspection,
+    InspectionResult,
+    inspect_factor,
+)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "ProcessingStage",
     "FactorPipeline",
@@ -24,4 +30,7 @@ __all__ = [
     "FactorCombiner",
     "CombinerConfig",
     "WeightedFactor",
+    "FactorQualityInspection",
+    "InspectionResult",
+    "inspect_factor",
 ]
