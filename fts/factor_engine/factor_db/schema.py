@@ -1,18 +1,27 @@
 """factor_db/schema.py — DuckDB 表结构定义与初始化
 
 精英因子数据库 Schema:
-1. factor_catalog      — 因子主表（当前活跃版本）
-2. factor_evaluations  — 因子评估历史
-3. factor_versions     — 因子代码版本历史
-4. factor_correlations — 因子间相关性矩阵
+1. factor_catalog        — 因子主表（当前活跃版本）
+2. factor_evaluations    — 因子评估历史
+3. factor_versions       — 因子代码版本历史
+4. factor_correlations   — 因子间相关性矩阵
+5. factor_quality_scores — 因子质量评分卡（A.1）
+6. factor_status_history — 因子生命周期状态变迁历史（A.2）
+7. factor_audit_reports  — 因子审计报告（B.3）
+8. feedback_events       — 反馈事件（C.3）
+9. attribution_reports   — 归因分析报告（C.3）
+10. feedback_processing_results — 反馈处理结果（C.3）
+11. feedback_reports     — 迭代效果月度报告（C.3）
 
 设计原则:
 - 因子主表存储当前最优版本的完整信息
 - 评估表支持历史回溯和趋势分析
 - 版本表追踪代码变更，支持回滚
 - 相关性表支持组合构建时的去冗余
+- 质量评分/状态历史/审计报告支持分级准入与生命周期管理
+- 反馈系列表支撑"因子表现→归因→演化方向调整"闭环
 
-版本: v1.0
+版本: v1.1
 """
 
 from __future__ import annotations
@@ -52,6 +61,12 @@ CREATE TABLE IF NOT EXISTS factor_catalog (
     turnover_monthly DOUBLE DEFAULT 0.0,
     decay_6m        DOUBLE DEFAULT 0.05,
     status          VARCHAR DEFAULT 'active',
+    status_updated_at TIMESTAMP,
+    consecutive_ic_negative_months INTEGER DEFAULT 0,
+    consecutive_sharpe_drop_months INTEGER DEFAULT 0,
+    last_incremental_eval_at TIMESTAMP,
+    decay_rate_3m    DOUBLE DEFAULT 0.0,
+    decay_rate_6m    DOUBLE DEFAULT 0.0,
     market          VARCHAR NOT NULL DEFAULT 'stock',
     family          VARCHAR NOT NULL DEFAULT 'other',
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -147,6 +162,95 @@ CREATE INDEX IF NOT EXISTS idx_corr_pearson
 """
 
 
+# ─── A.1: 因子质量评分卡 ────────────────────────────────────
+
+_CREATE_FACTOR_QUALITY_SCORES = """
+CREATE TABLE IF NOT EXISTS factor_quality_scores (
+    score_id        VARCHAR PRIMARY KEY,
+    factor_id       VARCHAR NOT NULL,
+    total_score     DOUBLE NOT NULL DEFAULT 0,
+    dimension_scores JSON NOT NULL,        -- 各维度明细 JSON
+    grade           VARCHAR NOT NULL DEFAULT 'C',
+    evaluated_at    TIMESTAMP NOT NULL,
+    score_version   VARCHAR(20) NOT NULL DEFAULT 'v1',
+    -- 关键维度快捷索引列
+    ic_score        DOUBLE NOT NULL DEFAULT 0,
+    sharpe_score    DOUBLE NOT NULL DEFAULT 0,
+    stability_score DOUBLE NOT NULL DEFAULT 0,
+    robustness_score DOUBLE NOT NULL DEFAULT 0,
+    capacity_score  DOUBLE NOT NULL DEFAULT 0,
+    tradability_score DOUBLE NOT NULL DEFAULT 0,
+    diversity_score DOUBLE NOT NULL DEFAULT 0,
+    logic_score     DOUBLE NOT NULL DEFAULT 0,
+    timeliness_score DOUBLE NOT NULL DEFAULT 0,
+    compatibility_score DOUBLE NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_fqs_factor_id
+    ON factor_quality_scores(factor_id);
+CREATE INDEX IF NOT EXISTS idx_fqs_total_score
+    ON factor_quality_scores(total_score DESC);
+CREATE INDEX IF NOT EXISTS idx_fqs_evaluated_at
+    ON factor_quality_scores(evaluated_at);
+"""
+
+
+# ─── A.2: 因子状态变迁历史 ──────────────────────────────────
+
+_CREATE_FACTOR_STATUS_HISTORY = """
+CREATE TABLE IF NOT EXISTS factor_status_history (
+    history_id      VARCHAR PRIMARY KEY,
+    factor_id       VARCHAR NOT NULL,
+    from_status     VARCHAR NOT NULL,
+    to_status       VARCHAR NOT NULL,
+    reason          VARCHAR NOT NULL,
+    changed_at      TIMESTAMP NOT NULL,
+    snapshot        JSON NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fsh_factor_id ON factor_status_history(factor_id);
+CREATE INDEX IF NOT EXISTS idx_fsh_changed_at ON factor_status_history(changed_at);
+"""
+
+
+# ─── B.3: 因子审计报告 ─────────────────────────────────────
+
+_CREATE_FACTOR_AUDIT_REPORTS = """
+CREATE TABLE IF NOT EXISTS factor_audit_reports (
+    report_id       VARCHAR PRIMARY KEY,
+    factor_id       VARCHAR NOT NULL,
+    factor_version_id VARCHAR,
+    passed          BOOLEAN NOT NULL,
+    overall_score   DOUBLE NOT NULL,
+    total_checks    INT NOT NULL,
+    passed_checks   INT NOT NULL,
+    results_json    JSON NOT NULL,          -- AuditCheckResult 详情
+    summary_json    JSON NOT NULL,          -- AuditSummary
+    recommendations JSON,
+    audited_at      TIMESTAMP NOT NULL,
+    audit_version   VARCHAR(20) NOT NULL DEFAULT 'v1'
+);
+
+CREATE INDEX IF NOT EXISTS idx_far_factor_id ON factor_audit_reports(factor_id);
+CREATE INDEX IF NOT EXISTS idx_far_passed ON factor_audit_reports(passed);
+CREATE INDEX IF NOT EXISTS idx_far_audited_at ON factor_audit_reports(audited_at);
+"""
+
+
+# ─── factor_catalog 生命周期扩展字段（A.2，幂等，兼容旧库） ──
+
+# 注: DuckDB 的 ALTER TABLE ADD COLUMN 不支持带 NOT NULL DEFAULT 约束的列，
+#     新库字段已在 CREATE TABLE 中定义；此处仅对旧库做无约束补列。
+_FACTOR_CATALOG_STATUS_EXTENSIONS = """
+ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS status_updated_at TIMESTAMP;
+ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS consecutive_ic_negative_months INTEGER DEFAULT 0;
+ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS consecutive_sharpe_drop_months INTEGER DEFAULT 0;
+ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS last_incremental_eval_at TIMESTAMP;
+ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS decay_rate_3m DOUBLE DEFAULT 0.0;
+ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS decay_rate_6m DOUBLE DEFAULT 0.0;
+"""
+
+
 # ─── 初始化函数 ──────────────────────────────────────────
 
 def init_database(db_path: Optional[Path] = None) -> Path:
@@ -171,6 +275,11 @@ def init_database(db_path: Optional[Path] = None) -> Path:
         conn.execute(_CREATE_FACTOR_EVALUATIONS)
         conn.execute(_CREATE_FACTOR_VERSIONS)
         conn.execute(_CREATE_FACTOR_CORRELATIONS)
+        conn.execute(_CREATE_FACTOR_QUALITY_SCORES)
+        conn.execute(_CREATE_FACTOR_STATUS_HISTORY)
+        conn.execute(_CREATE_FACTOR_AUDIT_REPORTS)
+        # 幂等扩展 factor_catalog 生命周期字段（A.2）
+        conn.execute(_FACTOR_CATALOG_STATUS_EXTENSIONS)
 
         conn.execute("CHECKPOINT")
         logger.info("[FactorDB] ✅ 数据库初始化完成")

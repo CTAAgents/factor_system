@@ -825,3 +825,424 @@ class FactorRepository:
     def _rows_to_dicts(self, rows) -> list[dict[str, Any]]:
         """将多行数据转为字典列表。"""
         return [self._row_to_dict(row) for row in rows]
+
+
+# ─=== A.1: 因子质量评分卡仓储 ──────────────────────────────
+
+class FactorQualityScoreRepository:
+    """因子质量评分卡仓储（A.1）。
+
+    提供对 ``factor_quality_scores`` 表的读写访问：
+    - ``save_score``: upsert（同一 factor_id 覆盖旧评分）
+    - ``list_top_scores``: 按总分排序取 Top-N
+    """
+
+    _JSON_COLS = frozenset({"dimension_scores"})
+
+    def __init__(self, db_path: str | Path | None = None):
+        from .schema import DATABASE_PATH
+
+        self._db_path = Path(db_path) if db_path else DATABASE_PATH
+        self._conn = None
+
+    def _get_conn(self):
+        if self._conn is None:
+            import duckdb
+            self._conn = duckdb.connect(str(self._db_path))
+        return self._conn
+
+    def close(self) -> None:
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def _row_to_dict(self, row) -> dict[str, Any]:
+        cols = [
+            "score_id", "factor_id", "total_score", "dimension_scores",
+            "grade", "evaluated_at", "score_version",
+            "ic_score", "sharpe_score", "stability_score", "robustness_score",
+            "capacity_score", "tradability_score", "diversity_score",
+            "logic_score", "timeliness_score", "compatibility_score",
+        ]
+        result = {}
+        for i, val in enumerate(row):
+            if i >= len(cols):
+                break
+            col = cols[i]
+            if col == "dimension_scores" and val:
+                try:
+                    result[col] = json.loads(val)
+                except (json.JSONDecodeError, TypeError):
+                    result[col] = val
+            elif col == "evaluated_at":
+                result[col] = str(val) if val else None
+            else:
+                result[col] = val
+        return result
+
+    def save_score(self, score: dict[str, Any]) -> str:
+        """保存评分卡（每次插入新行，保留历史；同一因子最新分可查）。
+
+        Args:
+            score: FactorQualityScore 字典（含 factor_id/total_score/grade 等）
+
+        Returns:
+            score_id
+        """
+        from datetime import datetime, timezone
+
+        conn = self._get_conn()
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        score_id = score.get("score_id") or f"qsc_{score.get('factor_id', 'unknown')}_{ts}"
+        dims = score.get("dimension_scores", [])
+        dim_map = {d.get("name"): d.get("score", 0.0) for d in dims if isinstance(d, dict)}
+        evaluated_at = score.get("evaluated_at") or datetime.now(timezone.utc).isoformat()
+
+        conn.execute("""
+            INSERT INTO factor_quality_scores (
+                score_id, factor_id, total_score, dimension_scores, grade,
+                evaluated_at, score_version,
+                ic_score, sharpe_score, stability_score, robustness_score,
+                capacity_score, tradability_score, diversity_score,
+                logic_score, timeliness_score, compatibility_score
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            score_id,
+            score.get("factor_id", "unknown"),
+            float(score.get("total_score", 0.0)),
+            json.dumps(dims),
+            score.get("grade", "C"),
+            evaluated_at,
+            score.get("score_version", "v1"),
+            float(dim_map.get("ic_score", 0.0)),
+            float(dim_map.get("sharpe_score", 0.0)),
+            float(dim_map.get("stability_score", 0.0)),
+            float(dim_map.get("robustness_score", 0.0)),
+            float(dim_map.get("capacity_score", 0.0)),
+            float(dim_map.get("tradability_score", 0.0)),
+            float(dim_map.get("diversity_score", 0.0)),
+            float(dim_map.get("logic_score", 0.0)),
+            float(dim_map.get("timeliness_score", 0.0)),
+            float(dim_map.get("compatibility_score", 0.0)),
+        ])
+        conn.execute("CHECKPOINT")
+        logger.info("[QualityScoreRepo] 保存评分卡: %s (total=%.2f, grade=%s)",
+                    score.get("factor_id", "unknown"),
+                    float(score.get("total_score", 0.0)),
+                    score.get("grade", "C"))
+        return score_id
+
+    def get_latest_score(self, factor_id: str) -> dict[str, Any] | None:
+        """获取因子最新评分卡。"""
+        result = self._get_conn().execute(
+            "SELECT * FROM factor_quality_scores WHERE factor_id = ? "
+            "ORDER BY evaluated_at DESC LIMIT 1",
+            [factor_id],
+        )
+        row = result.fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def list_top_scores(self, limit: int = 20,
+                        grade: str | None = None) -> list[dict[str, Any]]:
+        """按总分降序取 Top-N（每因子仅取最新评分），可选按等级过滤。"""
+        grade_filter = "WHERE grade = ?" if grade else ""
+        params: list[Any] = [grade] if grade else []
+        result = self._get_conn().execute(
+            f"""
+            SELECT * FROM factor_quality_scores
+            {grade_filter}
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY factor_id ORDER BY evaluated_at DESC
+            ) = 1
+            ORDER BY total_score DESC
+            LIMIT ?
+            """,
+            params + [limit],
+        )
+        return [self._row_to_dict(row) for row in result.fetchall()]
+
+    def get_score_history(self, factor_id: str) -> list[dict[str, Any]]:
+        """获取因子评分历史（按时间升序）。"""
+        result = self._get_conn().execute(
+            "SELECT * FROM factor_quality_scores WHERE factor_id = ? "
+            "ORDER BY evaluated_at ASC",
+            [factor_id],
+        )
+        return [self._row_to_dict(row) for row in result.fetchall()]
+
+    def delete_scores_for_factor(self, factor_id: str) -> int:
+        """删除因子的全部评分记录，返回删除行数。"""
+        conn = self._get_conn()
+        count = conn.execute(
+            "SELECT COUNT(*) FROM factor_quality_scores WHERE factor_id = ?",
+            [factor_id],
+        ).fetchone()[0]
+        conn.execute(
+            "DELETE FROM factor_quality_scores WHERE factor_id = ?", [factor_id]
+        )
+        conn.execute("CHECKPOINT")
+        return int(count)
+
+
+# ─=== A.2: 因子状态变迁仓储 ────────────────────────────────
+
+class FactorStatusRepository:
+    """因子生命周期状态仓储（A.2）。
+
+    提供 ``factor_status_history`` 表读写与 ``factor_catalog`` 状态字段更新。
+    """
+
+    def __init__(self, db_path: str | Path | None = None):
+        from .schema import DATABASE_PATH
+
+        self._db_path = Path(db_path) if db_path else DATABASE_PATH
+        self._conn = None
+
+    def _get_conn(self):
+        if self._conn is None:
+            import duckdb
+            self._conn = duckdb.connect(str(self._db_path))
+        return self._conn
+
+    def close(self) -> None:
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
+    def log_transition(self, factor_id: str, from_status: str, to_status: str,
+                       reason: str, snapshot: dict[str, Any] | None = None) -> str:
+        """记录一次状态变迁。
+
+        Args:
+            factor_id: 因子 ID
+            from_status: 原状态
+            to_status: 新状态
+            reason: 变迁原因
+            snapshot: 变迁时快照（JSON）
+
+        Returns:
+            history_id
+        """
+        from datetime import datetime, timezone
+
+        conn = self._get_conn()
+        history_id = f"fsh_{factor_id[:8]}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+        changed_at = datetime.now(timezone.utc).isoformat()
+        conn.execute("""
+            INSERT INTO factor_status_history (
+                history_id, factor_id, from_status, to_status,
+                reason, changed_at, snapshot
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, [history_id, factor_id, from_status, to_status, reason,
+              changed_at, json.dumps(snapshot or {})])
+        conn.execute("CHECKPOINT")
+        logger.info("[StatusRepo] 状态变迁: %s %s→%s (%s)",
+                    factor_id, from_status, to_status, reason)
+        return history_id
+
+    def get_history(self, factor_id: str) -> list[dict[str, Any]]:
+        """获取因子状态变迁历史（按时间升序）。"""
+        result = self._get_conn().execute(
+            "SELECT * FROM factor_status_history WHERE factor_id = ? "
+            "ORDER BY changed_at ASC",
+            [factor_id],
+        )
+        cols = ["history_id", "factor_id", "from_status", "to_status",
+                "reason", "changed_at", "snapshot"]
+        out = []
+        for row in result.fetchall():
+            item = {}
+            for i, val in enumerate(row):
+                if i >= len(cols):
+                    break
+                if cols[i] == "snapshot" and val:
+                    try:
+                        item[cols[i]] = json.loads(val)
+                    except (json.JSONDecodeError, TypeError):
+                        item[cols[i]] = val
+                elif cols[i] == "changed_at":
+                    item[cols[i]] = str(val) if val else None
+                else:
+                    item[cols[i]] = val
+            out.append(item)
+        return out
+
+    def update_factor_status(self, factor_id: str, status: str, **fields) -> bool:
+        """更新 factor_catalog 中的状态与衰减追踪字段（幂等）。
+
+        注: DuckDB 1.1.x 存在 ART 索引 bug——UPDATE 被二级索引引用的列
+        （``status`` 上的 ``idx_factor_catalog_status``）会误报主键冲突。
+        通过 DROP INDEX → UPDATE → CREATE INDEX 规避。
+        """
+        from datetime import datetime, timezone
+
+        conn = self._get_conn()
+        allowed = {
+            "status", "status_updated_at", "consecutive_ic_negative_months",
+            "consecutive_sharpe_drop_months", "last_incremental_eval_at",
+            "decay_rate_3m", "decay_rate_6m",
+        }
+        set_clauses = []
+        params = []
+        for key, value in fields.items():
+            if key in allowed:
+                set_clauses.append(f"{key} = ?")
+                params.append(value)
+        if status:
+            set_clauses.append("status = ?")
+            params.append(status)
+        if not set_clauses:
+            return False
+        set_clauses.append("status_updated_at = ?")
+        params.append(datetime.now(timezone.utc).isoformat())
+        params.append(factor_id)
+
+        drop_idx = "DROP INDEX IF EXISTS idx_factor_catalog_status"
+        create_idx = "CREATE INDEX IF NOT EXISTS idx_factor_catalog_status ON factor_catalog(status)"
+        conn.execute(drop_idx)
+        try:
+            conn.execute(
+                f"UPDATE factor_catalog SET {', '.join(set_clauses)} WHERE factor_id = ?",
+                params,
+            )
+        finally:
+            conn.execute(create_idx)
+        conn.execute("CHECKPOINT")
+        return True
+
+
+# ─=== B.3: 因子审计报告仓储 ────────────────────────────────
+
+class FactorAuditReportRepository:
+    """因子审计报告仓储（B.3）。
+
+    提供 ``factor_audit_reports`` 表读写与审计统计。
+    """
+
+    _JSON_COLS = frozenset({"results_json", "summary_json", "recommendations"})
+
+    def __init__(self, db_path: str | Path | None = None):
+        from .schema import DATABASE_PATH
+
+        self._db_path = Path(db_path) if db_path else DATABASE_PATH
+        self._conn = None
+
+    def _get_conn(self):
+        if self._conn is None:
+            import duckdb
+            self._conn = duckdb.connect(str(self._db_path))
+        return self._conn
+
+    def close(self) -> None:
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
+    def save_report(self, report: dict[str, Any]) -> str:
+        """保存审计报告（每次插入新行保留历史；同因子最新报告可查）。
+
+        注: DuckDB 1.1.x 的 ON CONFLICT UPDATE 不能更新被索引引用的列
+        （``passed``/``factor_id`` 均有索引），故不做 upsert。
+
+        Args:
+            report: 审计报告字典（含 report_id/factor_id/passed/overall_score 等）
+
+        Returns:
+            report_id
+        """
+        from datetime import datetime, timezone
+
+        conn = self._get_conn()
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        report_id = report.get("report_id") or f"far_{report.get('factor_id', 'unknown')}_{ts}"
+        summary = report.get("summary", {})
+        conn.execute("""
+            INSERT INTO factor_audit_reports (
+                report_id, factor_id, factor_version_id, passed, overall_score,
+                total_checks, passed_checks, results_json, summary_json,
+                recommendations, audited_at, audit_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            report_id,
+            report.get("factor_id", "unknown"),
+            report.get("factor_version_id"),
+            bool(report.get("passed", False)),
+            float(report.get("overall_score", 0.0)),
+            int(report.get("total_checks", summary.get("total", 0))),
+            int(report.get("passed_checks", summary.get("passed", 0))),
+            json.dumps(report.get("results", summary.get("failed_items", []))),
+            json.dumps(summary),
+            json.dumps(report.get("recommendations", [])),
+            report.get("audited_at") or datetime.now(timezone.utc).isoformat(),
+            report.get("audit_version", "v1"),
+        ])
+        conn.execute("CHECKPOINT")
+        logger.info("[AuditRepo] 保存审计报告: %s (passed=%s, score=%.2f)",
+                    report.get("factor_id", "unknown"),
+                    report.get("passed"), float(report.get("overall_score", 0.0)))
+        return report_id
+
+    def get_latest_report(self, factor_id: str) -> dict[str, Any] | None:
+        """获取因子最新审计报告。"""
+        result = self._get_conn().execute(
+            "SELECT * FROM factor_audit_reports WHERE factor_id = ? "
+            "ORDER BY audited_at DESC LIMIT 1",
+            [factor_id],
+        )
+        row = result.fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def get_history(self, factor_id: str) -> list[dict[str, Any]]:
+        """获取因子审计历史（按时间升序）。"""
+        result = self._get_conn().execute(
+            "SELECT * FROM factor_audit_reports WHERE factor_id = ? "
+            "ORDER BY audited_at ASC",
+            [factor_id],
+        )
+        return [self._row_to_dict(row) for row in result.fetchall()]
+
+    def get_statistics(self) -> dict[str, Any]:
+        """获取审计统计（总数/通过率/各因子最新通过状态）。"""
+        conn = self._get_conn()
+        total = conn.execute("SELECT COUNT(*) FROM factor_audit_reports").fetchone()[0]
+        passed_total = conn.execute(
+            "SELECT COUNT(*) FROM factor_audit_reports WHERE passed = TRUE"
+        ).fetchone()[0]
+        distinct_factors = conn.execute(
+            "SELECT COUNT(DISTINCT factor_id) FROM factor_audit_reports"
+        ).fetchone()[0]
+        return {
+            "total_audits": int(total),
+            "passed_audits": int(passed_total),
+            "pass_rate": round(passed_total / total, 4) if total else 0.0,
+            "distinct_factors": int(distinct_factors),
+        }
+
+    def _row_to_dict(self, row) -> dict[str, Any]:
+        cols = [
+            "report_id", "factor_id", "factor_version_id", "passed",
+            "overall_score", "total_checks", "passed_checks",
+            "results_json", "summary_json", "recommendations",
+            "audited_at", "audit_version",
+        ]
+        result = {}
+        for i, val in enumerate(row):
+            if i >= len(cols):
+                break
+            col = cols[i]
+            if col in self._JSON_COLS and val:
+                try:
+                    result[col] = json.loads(val)
+                except (json.JSONDecodeError, TypeError):
+                    result[col] = val
+            elif col == "audited_at":
+                result[col] = str(val) if val else None
+            else:
+                result[col] = val
+        return result

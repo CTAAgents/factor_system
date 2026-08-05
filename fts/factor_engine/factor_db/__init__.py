@@ -7,7 +7,12 @@
 """
 
 from .schema import init_database, verify_database, DATABASE_PATH
-from .repository import FactorRepository
+from .repository import (
+    FactorRepository,
+    FactorQualityScoreRepository,
+    FactorStatusRepository,
+    FactorAuditReportRepository,
+)
 from .lineage import FactorLineage
 
 __all__ = [
@@ -15,5 +20,8 @@ __all__ = [
     "verify_database",
     "DATABASE_PATH",
     "FactorRepository",
+    "FactorQualityScoreRepository",
+    "FactorStatusRepository",
+    "FactorAuditReportRepository",
     "FactorLineage",
 ]
