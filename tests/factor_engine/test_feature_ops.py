@@ -15,6 +15,7 @@ from fts.factor_engine.feature_ops import (
     OperatorRegistry,
     PriceOps,
     RollingOps,
+    TechnicalOps,
     TimeSeriesOps,
 )
 
@@ -453,3 +454,74 @@ class TestFeatureOpsEngine:
             feature_names=["close", "volume"],
         )
         assert result.n_features_analyzed == 2
+
+
+# ─── TechnicalOps ──────────────────────────────────────────
+
+
+class TestTechnicalOps:
+    """技术指标算子测试。"""
+
+    def test_rsi(self):
+        s = pd.Series([100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0])
+        result = TechnicalOps.rsi(s, window=5)
+        assert not pd.isna(result.iloc[-1])
+        assert 0 <= result.iloc[-1] <= 100
+
+    def test_bollinger_upper(self):
+        s = pd.Series([100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0])
+        result = TechnicalOps.bollinger_upper(s, window=5)
+        assert not pd.isna(result.iloc[-1])
+
+    def test_bollinger_lower(self):
+        s = pd.Series([100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0])
+        result = TechnicalOps.bollinger_lower(s, window=5)
+        assert not pd.isna(result.iloc[-1])
+
+    def test_bollinger_width(self):
+        s = pd.Series([100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0])
+        result = TechnicalOps.bollinger_width(s, window=5)
+        assert not pd.isna(result.iloc[-1])
+
+    def test_atr(self):
+        high = pd.Series([102.0, 104.0, 103.0, 105.0, 107.0, 106.0, 108.0, 110.0, 109.0, 111.0])
+        low = pd.Series([98.0, 100.0, 99.0, 101.0, 103.0, 102.0, 104.0, 106.0, 105.0, 107.0])
+        close = pd.Series([100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0])
+        result = TechnicalOps.atr(high, low, close, window=5)
+        assert not pd.isna(result.iloc[-1])
+        assert result.iloc[-1] > 0
+
+    def test_macd(self):
+        s = pd.Series([100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0])
+        result = TechnicalOps.macd(s, fast=5, slow=10, signal=3)
+        assert not pd.isna(result.iloc[-1])
+
+    def test_max_drawdown(self):
+        s = pd.Series([100.0, 105.0, 103.0, 108.0, 102.0, 110.0])
+        result = TechnicalOps.max_drawdown(s, window=5)
+        assert not pd.isna(result.iloc[-1])
+        assert result.iloc[-1] <= 0
+
+
+# ─── Additional RollingOps ────────────────────────────────
+
+
+class TestRollingOpsAdditional:
+    """额外滚动算子测试。"""
+
+    def test_ts_median(self):
+        s = pd.Series([1.0, 3.0, 2.0, 5.0, 4.0])
+        result = RollingOps.ts_median(s, window=3)
+        assert not pd.isna(result.iloc[-1])
+        assert result.iloc[-1] == 4.0  # median of [2.0, 5.0, 4.0] = 4.0
+
+    def test_ts_min_max_diff(self):
+        s = pd.Series([1.0, 3.0, 2.0, 5.0, 4.0])
+        result = RollingOps.ts_min_max_diff(s, window=3)
+        assert not pd.isna(result.iloc[-1])
+        assert result.iloc[-1] == 3.0  # max(5,4,2) - min(5,4,2) = 5-2 = 3
+
+    def test_ts_cum_max(self):
+        s = pd.Series([1.0, 3.0, 2.0, 5.0, 4.0])
+        result = RollingOps.ts_cum_max(s, window=3)
+        assert not pd.isna(result.iloc[-1])

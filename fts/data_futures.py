@@ -2,7 +2,10 @@
 fts.data_futures — 期货数据提供者
 
 基于 DuckDB（data/fts_history.duckdb）的 kline_cache 表提供期货连续合约 OHLCV 数据。
-数据来源: AKShare futures_zh_daily_sina API → DuckDB 持久化。
+
+数据源优先级:
+    K 线主路径: DuckDB → TQ_LOCAL → TQ_PYTHON → AKShare → SYNTHETIC
+    实时价路径: TQ_LOCAL → AKShare（降级）
 
 数据流:
     因子引擎 → FTSDataProvider → FuturesDataProvider → DuckDB (kline_cache)
@@ -631,19 +634,67 @@ def get_dominant_contracts(symbols: list[str] | None = None) -> dict[str, str]:
     return result
 
 
-def get_realtime_prices(symbols: list[str] | None = None) -> dict[str, float]:
-    """获取期货品种盘中实时价（AKShare futures_zh_minute_sina 最新分时 close）。
-
-    盘中实时价用于信号报告"最新价"展示；非交易时段返回当日最新分时价。
-
-    Args:
-        symbols: 品种列表（如 ["RB0", "CU0"]），默认 FUTURES_SUBSET
+def _try_tq_realtime(symbols: list[str]) -> tuple[dict[str, float], set[str]]:
+    """通过 TQ-Local HTTP 获取实时快照（主路径）。
 
     Returns:
-        dict[symbol, 实时价]；获取失败品种不包含在内
+        (成功价格字典, 失败品种集合)
     """
-    if symbols is None:
-        symbols = list(FUTURES_SUBSET)
+    prices: dict[str, float] = {}
+    failed: set[str] = set()
+
+    try:
+        from fts.data_sources.tq_source import TQLocalSource
+    except ImportError:
+        return prices, set(symbols)
+
+    tq = TQLocalSource()
+    if not tq.is_available():
+        logger.warning("TQ-Local 探活失败，跳过 TQ 实时路径")
+        return prices, set(symbols)
+
+    logger.info(f"[realtime] TQ-Local 探活成功，尝试获取 {len(symbols)} 个品种实时价")
+    for sym in symbols:
+        try:
+            quote = tq.fetch_quote(sym, trace_id="realtime_price")
+            if quote is None:
+                failed.add(sym)
+                continue
+            price = _extract_quote_price(quote)
+            if price is not None and price > 0:
+                prices[sym] = price
+            else:
+                failed.add(sym)
+        except Exception:  # noqa: BLE001
+            failed.add(sym)
+
+    logger.info(f"[realtime] TQ 成功 {len(prices)}/{len(symbols)} 品种")
+    return prices, failed
+
+
+def _extract_quote_price(quote: dict[str, Any]) -> Optional[float]:
+    """从 TQ 实时快照中提取价格字段。
+
+    TQ 协议返回字段名可能为 last_price / price / close / bid_price 等，
+    按优先级逐一尝试。
+    """
+    for field in ("last_price", "price", "close", "bid_price", "current", "now"):
+        val = quote.get(field)
+        if val is not None:
+            try:
+                p = float(val)
+                if p > 0:
+                    return p
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _try_akshare_realtime(symbols: list[str]) -> dict[str, float]:
+    """通过 AKShare 获取盘中实时价（降级路径）。
+
+    使用 futures_zh_minute_sina 最新分时 close。
+    """
     prices: dict[str, float] = {}
     try:
         import akshare as ak  # type: ignore[import-untyped]
@@ -660,6 +711,44 @@ def get_realtime_prices(symbols: list[str] | None = None) -> dict[str, float]:
                 prices[sym] = price
         except Exception:  # noqa: BLE001
             continue
+    return prices
+
+
+def get_realtime_prices(symbols: list[str] | None = None) -> dict[str, float]:
+    """获取期货品种盘中实时价。
+
+    数据源优先级（与 K 线主路径一致）:
+        1. TQ_LOCAL — 通达信本地 HTTP 实时快照（tq_get_quote）
+        2. AKSHARE — AKShare futures_zh_minute_sina 分时行情（降级）
+
+    盘中实时价用于信号报告"最新价"展示；非交易时段返回当日最新分时价。
+
+    Args:
+        symbols: 品种列表（如 ["RB0", "CU0"]），默认 FUTURES_SUBSET
+
+    Returns:
+        dict[symbol, 实时价]；获取失败品种不包含在内
+    """
+    if symbols is None:
+        symbols = list(FUTURES_SUBSET)
+
+    # Path 1: TQ-Local 实时快照
+    tq_prices, tq_failed = _try_tq_realtime(symbols)
+    prices = dict(tq_prices)
+
+    # Path 2: AKShare 降级（TQ 失败的品种）
+    if tq_failed:
+        ak_prices = _try_akshare_realtime(list(tq_failed))
+        prices.update(ak_prices)
+        if ak_prices:
+            logger.info(
+                f"[realtime] AKShare 降级补全 {len(ak_prices)} 个品种"
+            )
+
+    logger.info(
+        f"[realtime] 最终覆盖 {len(prices)}/{len(symbols)} 品种 "
+        f"(TQ:{len(tq_prices)} + AKShare:{len(prices)-len(tq_prices)})"
+    )
     return prices
 
 
@@ -688,4 +777,7 @@ __all__ = [
     "FUTURES_SYMBOL_NAMES",
     "get_dominant_contracts",
     "get_realtime_prices",
+    "_try_tq_realtime",
+    "_try_akshare_realtime",
+    "_extract_quote_price",
 ]

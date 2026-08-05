@@ -34,7 +34,7 @@ from .elite_tracker import (
     EliteFactorTracker,
     TrackingSnapshot,
 )
-from .http_server import FTSDashboardServer
+from .http_server import FTSDashboardServer, set_data_quality_monitor, get_data_quality_monitor
 from .logic_monitor import (
     ContractSwitchResult,
     DriftCheckResult,
@@ -221,6 +221,8 @@ __all__ = [
     "status_report_to_json",
     # Web UI
     "FTSDashboardServer",
+    "set_data_quality_monitor",
+    "get_data_quality_monitor",
     # 因子跟踪
     "TrackingSnapshot",
     "EliteFactorTracker",

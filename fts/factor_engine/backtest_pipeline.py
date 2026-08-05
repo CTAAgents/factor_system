@@ -336,7 +336,8 @@ class BacktestPipeline:
                 )
 
             # 执行因子代码
-            factor_values = self._execute_factor_code(code_str, data)
+            params = factor_code.get("params") or {}
+            factor_values = self._execute_factor_code(code_str, data, params)
 
             if factor_values is None or len(factor_values) == 0:
                 raise FactorComputeError(
@@ -359,9 +360,10 @@ class BacktestPipeline:
                 data["close"].values, input_data.forward_period
             )
 
-            # 计算滚动 IC
+            # 计算滚动 IC（无 date 列时回退到 index，兼容期货面板 DatetimeIndex 数据）
+            date_values = data["date"].values if "date" in data.columns else data.index.values
             ic_series = self._compute_ic_series(
-                factor_values, forward_returns, data["date"].values
+                factor_values, forward_returns, date_values
             )
 
             factor_id = factor_code.get("factor_id", "unknown")
@@ -372,7 +374,9 @@ class BacktestPipeline:
 
             return FactorOutput(
                 values=factor_values,
-                dates=pd.DatetimeIndex(data["date"] if "date" in data.columns else range(n)),
+                dates=pd.DatetimeIndex(
+                    data["date"] if "date" in data.columns else data.index
+                ),
                 forward_returns=forward_returns,
                 ic_series=ic_series,
                 metadata={"factor_id": factor_id},
@@ -387,50 +391,86 @@ class BacktestPipeline:
             ) from e
 
     @staticmethod
-    def _execute_factor_code(code_str: str, data: pd.DataFrame) -> np.ndarray:
+    def _execute_factor_code(
+        code_str: str,
+        data: pd.DataFrame,
+        params: dict[str, Any] | None = None,
+    ) -> np.ndarray:
         """执行因子代码。
 
-        因子代码应使用 OHLCV 列 (open/high/low/close/volume) 作为输入，
-        并将结果存储到 output 变量中。
+        支持两种因子代码约定:
+            1. 标准约定 (factor_program.py / seeds YAML):
+               `def factor_program(data, params): ... return np.ndarray`
+            2. 传统约定: 直接使用 open/high/low/close/volume 变量，
+               并将结果存储到 output 变量。
 
         Args:
             code_str: 因子代码字符串
             data: OHLCV DataFrame
+            params: 因子参数（标准约定使用）
 
         Returns:
             因子值数组
         """
         import numpy as np
+        import warnings
 
-        # 准备执行环境
-        open_price = data["open"].values
-        high = data["high"].values
-        low = data["low"].values
-        close = data["close"].values
-        volume = data["volume"].values
-        n = len(close)
+        params = params or {}
 
-        # 执行因子代码
-        local_vars = {
-            "open": open_price,
-            "high": high,
-            "low": low,
-            "close": close,
-            "volume": volume,
-            "n": n,
-            "np": np,
-        }
-        exec(code_str, {}, local_vars)
+        # 抑制因子执行期间的警告
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
 
-        # 获取输出
+            # 准备执行环境（直接使用 .values 获取 ndarray，避免 Series 索引警告）
+            open_price = data["open"].values.astype(np.float64)
+            high = data["high"].values.astype(np.float64)
+            low = data["low"].values.astype(np.float64)
+            close = data["close"].values.astype(np.float64)
+            volume = data["volume"].values.astype(np.float64)
+            n = len(close)
+
+            # 执行因子代码
+            local_vars = {
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": volume,
+                "n": n,
+                "np": np,
+            }
+            exec(code_str, {}, local_vars)
+
+        # 约定 1 (标准): def factor_program(data, params) -> np.ndarray
+        factor_fn = local_vars.get("factor_program")
+        if callable(factor_fn):
+            # 以 dict[str, ndarray] 传入，兼容种子因子的 data['close'] / data.get('hold') 用法
+            data_dict = {
+                col: data[col].values.astype(np.float64)
+                for col in data.columns
+            }
+            result = factor_fn(data_dict, params)
+            if isinstance(result, np.ndarray):
+                result = np.asarray(result, dtype=float)
+                result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
+                result = np.clip(result, -10.0, 10.0)
+                return result
+
+        # 约定 2 (传统): output 变量
         if "output" in local_vars:
             output = local_vars["output"]
             if isinstance(output, np.ndarray):
-                return output.astype(float)
-            return np.asarray(output, dtype=float)
+                result = output.astype(float)
+            else:
+                result = np.asarray(output, dtype=float)
 
-        # 如果没有 output 变量，尝试返回最后一个被赋值的变量
-        logger.warning("因子代码未设置 output 变量，返回零值")
+            # 数值稳定性处理
+            result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
+            result = np.clip(result, -10.0, 10.0)
+            return result
+
+        # 两种约定均未命中
+        logger.warning("因子代码未定义 factor_program 且未设置 output 变量，返回零值")
         return np.zeros(n)
 
     # ─── Stage 3: Performance Evaluation ────────────────

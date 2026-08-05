@@ -146,6 +146,84 @@ class RollingOps:
         """滚动峰度。"""
         return series.rolling(window=window).kurt()
 
+    @staticmethod
+    def ts_median(series: pd.Series, window: int = 20) -> pd.Series:
+        """滚动中位数。"""
+        return series.rolling(window=window).median()
+
+    @staticmethod
+    def ts_min_max_diff(series: pd.Series, window: int = 20) -> pd.Series:
+        """滚动极差。"""
+        return series.rolling(window=window).apply(lambda x: x.max() - x.min())
+
+    @staticmethod
+    def ts_cum_max(series: pd.Series, window: int = 20) -> pd.Series:
+        """滚动累计最大值。"""
+        return series.rolling(window=window).apply(lambda x: x.cummax().iloc[-1])
+
+
+# ─── 技术指标算子 ──────────────────────────────────────────
+
+
+class TechnicalOps:
+    """技术指标算子集合。"""
+
+    @staticmethod
+    def rsi(series: pd.Series, window: int = 14) -> pd.Series:
+        """RSI 相对强弱指数。"""
+        delta = series.diff()
+        gain = delta.where(delta > 0, 0.0)
+        loss = -delta.where(delta < 0, 0.0)
+        avg_gain = gain.rolling(window=window).mean()
+        avg_loss = loss.rolling(window=window).mean()
+        rs = avg_gain / avg_loss.replace(0, np.nan)
+        return 100 - (100 / (1 + rs))
+
+    @staticmethod
+    def bollinger_upper(series: pd.Series, window: int = 20, num_std: float = 2.0) -> pd.Series:
+        """布林带上轨。"""
+        ma = series.rolling(window=window).mean()
+        std = series.rolling(window=window).std()
+        return ma + num_std * std
+
+    @staticmethod
+    def bollinger_lower(series: pd.Series, window: int = 20, num_std: float = 2.0) -> pd.Series:
+        """布林带下轨。"""
+        ma = series.rolling(window=window).mean()
+        std = series.rolling(window=window).std()
+        return ma - num_std * std
+
+    @staticmethod
+    def bollinger_width(series: pd.Series, window: int = 20, num_std: float = 2.0) -> pd.Series:
+        """布林带宽度。"""
+        upper = TechnicalOps.bollinger_upper(series, window, num_std)
+        lower = TechnicalOps.bollinger_lower(series, window, num_std)
+        return (upper - lower) / series.rolling(window=window).mean()
+
+    @staticmethod
+    def atr(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> pd.Series:
+        """平均真实波幅。"""
+        tr1 = high - low
+        tr2 = (high - close.shift(1)).abs()
+        tr3 = (low - close.shift(1)).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        return tr.rolling(window=window).mean()
+
+    @staticmethod
+    def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.Series:
+        """MACD 指标。"""
+        ema_fast = series.ewm(span=fast, adjust=False).mean()
+        ema_slow = series.ewm(span=slow, adjust=False).mean()
+        dif = ema_fast - ema_slow
+        return dif.ewm(span=signal, adjust=False).mean()
+
+    @staticmethod
+    def max_drawdown(series: pd.Series, window: int = 252) -> pd.Series:
+        """滚动最大回撤。"""
+        return series.rolling(window=window).apply(
+            lambda x: (x / x.cummax() - 1).min()
+        )
+
 
 # ─── 截面算子 ───────────────────────────────────────────────
 
@@ -389,6 +467,8 @@ class OperatorRegistry:
             ("delta", PriceOps.delta, ["series", "periods"]),
             ("pct_change", PriceOps.pct_change, ["series", "periods"]),
             ("log_return", PriceOps.log_return, ["series"]),
+            ("abs", lambda s: s.abs(), ["series"]),
+            ("sign", lambda s: np.sign(s), ["series"]),
         ]
         for name, func, params in price_ops:
             self.register(name, func, "price", params)
@@ -401,15 +481,33 @@ class OperatorRegistry:
             ("ts_volatility", RollingOps.ts_volatility, ["series", "window"]),
             ("ts_skewness", RollingOps.ts_skewness, ["series", "window"]),
             ("ts_kurtosis", RollingOps.ts_kurtosis, ["series", "window"]),
+            ("ts_median", RollingOps.ts_median, ["series", "window"]),
+            ("ts_min_max_diff", RollingOps.ts_min_max_diff, ["series", "window"]),
+            ("ts_cum_max", RollingOps.ts_cum_max, ["series", "window"]),
         ]
         for name, func, params in rolling_ops:
             self.register(name, func, "rolling", params)
+
+        # 技术指标算子
+        tech_ops = [
+            ("rsi", TechnicalOps.rsi, ["series", "window"]),
+            ("bollinger_upper", TechnicalOps.bollinger_upper, ["series", "window", "num_std"]),
+            ("bollinger_lower", TechnicalOps.bollinger_lower, ["series", "window", "num_std"]),
+            ("bollinger_width", TechnicalOps.bollinger_width, ["series", "window", "num_std"]),
+            ("atr", TechnicalOps.atr, ["high", "low", "close", "window"]),
+            ("macd", TechnicalOps.macd, ["series", "fast", "slow", "signal"]),
+            ("max_drawdown", TechnicalOps.max_drawdown, ["series", "window"]),
+        ]
+        for name, func, params in tech_ops:
+            self.register(name, func, "technical", params)
 
         # 截面算子
         cs_ops = [
             ("cross_rank", CrossSectionOps.cross_rank, ["panel", "group_col", "value_col"]),
             ("cross_zscore", CrossSectionOps.cross_zscore, ["panel", "group_col", "value_col"]),
-            ("industry_neutral", CrossSectionOps.industry_neutral, ["panel", "group_col", "industry_col", "value_col"]),
+            ("cross_demean", lambda p, g, v: p.assign(**{v: p[v] - p.groupby(g)[v].transform("mean")}), ["panel", "group_col", "value_col"]),
+            ("cross_median", lambda p, g, v: p.groupby(g)[v].transform("median"), ["panel", "group_col", "value_col"]),
+            ("cross_std", lambda p, g, v: p.groupby(g)[v].transform("std"), ["panel", "group_col", "value_col"]),
         ]
         for name, func, params in cs_ops:
             self.register(name, func, "cross_section", params)
@@ -432,6 +530,12 @@ class OperatorRegistry:
             ("scale", CompositeOps.scale, ["series", "factor"]),
             ("if_then_else", CompositeOps.if_then_else, ["condition", "then_value", "else_value"]),
             ("conditional_weight", CompositeOps.conditional_weight, ["series", "weight", "threshold"]),
+            ("max", lambda a, b: np.maximum(a, b), ["a", "b"]),
+            ("min", lambda a, b: np.minimum(a, b), ["a", "b"]),
+            ("pow", lambda a, b: np.power(a, b), ["a", "b"]),
+            ("sqrt", lambda s: np.sqrt(s.abs()), ["series"]),
+            ("exp", lambda s: np.exp(s), ["series"]),
+            ("log", lambda s: np.log(s.abs() + 1e-10), ["series"]),
         ]
         for name, func, params in comp_ops:
             self.register(name, func, "composite", params)

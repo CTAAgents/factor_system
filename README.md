@@ -2,9 +2,16 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-2635%20collected-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.8.0-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-2640%20collected-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.8.2-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
+
+> **⚠️ 合规提示 / Compliance Notice**
+>
+> FTS 以 **Apache License 2.0** 开源，仅用于研究与教育用途，**不构成任何投资建议**。
+> 本发行版**不包含** WorldQuant 101 Alphas、GTJA 191 Alphas 等第三方专有因子的实现或复现。
+> 使用前请阅读 [免责声明](DISCLAIMER.md) 与 [开源合规指南](COMPLIANCE.md)，并查看 [NOTICE](NOTICE) 中的第三方声明。
 
 ---
 
@@ -270,7 +277,7 @@ fts/                          # 核心源码（84 个 Python 文件）
 ├── llm.py                    # LLM 客户端（OpenAI/Anthropic/Mock）
 └── cli.py                    # CLI 统一入口
 
-tests/                        # 98 个测试文件，2635 个测试用例
+tests/                        # 99 个测试文件，2640 个测试用例
 scripts/                      # 工具脚本
 config/                       # 项目配置
 memory/                       # 运行时持久化（自动创建）
@@ -324,4 +331,8 @@ python -m pytest tests/ --cov=fts --cov-report=term-missing
 
 ## 许可证
 
-MIT License
+本项目基于 **Apache License 2.0** 开源，仅供研究与教育用途，不构成任何投资建议。详见 [LICENSE](LICENSE)。
+
+- [NOTICE](NOTICE) — 版权与第三方声明（Qlib / WorldQuant / GTJA）
+- [免责声明](DISCLAIMER.md) — 风险、责任与用户义务声明
+- [开源合规指南](COMPLIANCE.md) — 包含项、排除项、种子库构建与第三方数据使用指引

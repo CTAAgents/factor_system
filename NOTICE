@@ -1,0 +1,63 @@
+FTS (Factor Trading System)
+
+Copyright 2026 CTAAgents
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+============================================================================
+Third-Party Notices
+============================================================================
+
+This product includes software or intellectual property from the following
+third parties:
+
+1. Qlib Alpha158 Factor Set
+   - Source: Microsoft Qlib (https://github.com/microsoft/qlib)
+   - License: Apache 2.0
+   - This product contains a limited set of reimplemented factors derived
+     from the Qlib Alpha158 factor set for demonstration purposes only.
+   - Copyright (c) Microsoft Corporation. All rights reserved.
+
+2. WorldQuant 101 Alphas
+   - Reference: "101 Formulaic Alphas" by Zura Kakushadze
+     (arXiv:1601.00991, Quantitative Finance, 2016)
+   - The original paper states that the alphas are proprietary to
+     WorldQuant LLC and are used therein with express permission.
+   - THIS PRODUCT DOES NOT CONTAIN any implementation or reproduction
+     of the WorldQuant 101 Alphas. Users must independently ensure
+     compliance with WorldQuant's intellectual property rights.
+
+3. GTJA 191 Alphas
+   - Reference: Research report "Multi-factor Stock Selection System
+     Based on Short-term Price-Volume Characteristics" by Guotai Junan
+     Securities, 2017
+   - This research report is protected by copyright owned by Guotai Junan
+     Securities Co., Ltd.
+   - THIS PRODUCT DOES NOT CONTAIN any implementation or reproduction
+     of the GTJA 191 Alphas. Users must independently obtain proper
+     authorization from Guotai Junan Securities before using these factors.
+
+============================================================================
+Disclaimer
+============================================================================
+
+THIS SOFTWARE IS PROVIDED FOR RESEARCH AND EDUCATIONAL PURPOSES ONLY.
+It does not constitute investment advice, and no representation is made
+regarding the suitability of any trading strategy for any particular
+investor. Past performance of any factor or strategy is not indicative
+of future results.
+
+The example seed factors included in this distribution are provided
+solely for demonstrating the functionality of the FTS framework. Users
+are responsible for ensuring that their use of any factors complies
+with all applicable laws, regulations, and third-party rights.

@@ -186,6 +186,9 @@ class MockRequestHandler:
         handler.wfile = BytesIO()
         handler._respond_json = _DashboardHandler._respond_json.__get__(handler, _DashboardHandler)
         handler._respond_html = _DashboardHandler._respond_html.__get__(handler, _DashboardHandler)
+        handler._respond_metrics = _DashboardHandler._respond_metrics.__get__(handler, _DashboardHandler)
+        handler._build_metrics = _DashboardHandler._build_metrics.__get__(handler, _DashboardHandler)
+        handler._build_data_source_metrics = _DashboardHandler._build_data_source_metrics.__get__(handler, _DashboardHandler)
         handler.do_GET = _DashboardHandler.do_GET.__get__(handler, _DashboardHandler)
         return handler
 
@@ -478,3 +481,85 @@ class TestDashboardHandlerBuildFactorList:
         # sorted(..., reverse=True)[:50] - sorted by stem, reversed
         assert result["count"] == 50
         assert len(result["factors"]) == 50
+
+
+# ─── /metrics 端点 ──────────────────────────────────────
+
+
+class TestDashboardHandlerMetrics:
+    """_DashboardHandler /metrics 端点测试。"""
+
+    def test_metrics_endpoint_returns_text(self):
+        """GET /metrics 应返回 Prometheus 文本。"""
+        handler = MockRequestHandler.make_handler(path="/metrics")
+        handler.do_GET()
+
+        handler.send_response.assert_called_once_with(200)
+        handler.send_header.assert_any_call(
+            "Content-Type", "text/plain; version=0.0.4; charset=utf-8"
+        )
+        body = handler.wfile.getvalue().decode()
+        assert "# HELP" in body
+        assert "# TYPE" in body
+
+    def test_metrics_endpoint_contains_fts_up(self):
+        """指标应包含 fts_up 在线指标。"""
+        handler = MockRequestHandler.make_handler(path="/metrics")
+        handler.do_GET()
+
+        body = handler.wfile.getvalue().decode()
+        assert "fts_up" in body
+        assert "fts_up 1" in body
+
+    def test_metrics_endpoint_contains_data_quality(self):
+        """指标应包含数据质量指标。"""
+        handler = MockRequestHandler.make_handler(path="/metrics")
+        handler.do_GET()
+
+        body = handler.wfile.getvalue().decode()
+        assert "fts_data_quality_data_completeness_ratio" in body
+        assert "fts_data_quality_market_data_valid" in body
+
+    def test_metrics_endpoint_with_monitor_set(self):
+        """设置 DataQualityMonitor 后指标应包含实时数据。"""
+        from fts.monitor.data_quality_monitor import DataQualityMonitor
+        from fts.monitor import set_data_quality_monitor
+
+        monitor = DataQualityMonitor()
+        from tests.monitor.test_data_quality_monitor import _make_good_data
+        monitor.validate_market_data(_make_good_data())
+        set_data_quality_monitor(monitor)
+
+        handler = MockRequestHandler.make_handler(path="/metrics")
+        handler.do_GET()
+
+        body = handler.wfile.getvalue().decode()
+        assert "fts_data_quality_total_checks 1" in body
+        assert "fts_data_quality_market_data_valid 1.0" in body
+
+        set_data_quality_monitor(None)  # cleanup
+
+    def test_data_sources_metrics_endpoint(self):
+        """GET /metrics/data-sources 应返回数据源指标。"""
+        handler = MockRequestHandler.make_handler(path="/metrics/data-sources")
+        handler.do_GET()
+
+        handler.send_response.assert_called_once_with(200)
+        body = handler.wfile.getvalue().decode()
+        assert "fts_circuit_open" in body
+        assert "fts_data_source_success_rate" in body
+
+    def test_set_and_get_data_quality_monitor(self):
+        """set/get_data_quality_monitor 正常工作。"""
+        from fts.monitor.data_quality_monitor import DataQualityMonitor
+        from fts.monitor import set_data_quality_monitor, get_data_quality_monitor
+
+        saved = get_data_quality_monitor()
+        set_data_quality_monitor(None)
+        assert get_data_quality_monitor() is None
+
+        monitor = DataQualityMonitor()
+        set_data_quality_monitor(monitor)
+        assert get_data_quality_monitor() is monitor
+
+        set_data_quality_monitor(saved)  # restore

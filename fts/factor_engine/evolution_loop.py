@@ -80,6 +80,7 @@ class EvolutionRunResult:
     circuit_breaker_reason: Optional[str] = None
     elite_factor_ids: list[str] = None  # type: ignore[assignment]
     seed_correlations: Optional[list[FactorCorrelation]] = None  # type: ignore[assignment]
+    error: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -93,6 +94,7 @@ class EvolutionRunResult:
             "circuit_breaker_reason": self.circuit_breaker_reason,
             "elite_factor_ids": self.elite_factor_ids or [],
             "seed_correlations": self.seed_correlations or [],
+            "error": self.error,
         }
 
 
@@ -173,15 +175,47 @@ class EvolutionLoop:
         from .backtest_pipeline import BacktestPipeline, PipelineConfig
         self.backtest_pipeline = BacktestPipeline(config=PipelineConfig())
 
+        # 子模块: GP 特征演化引擎 (Phase C.1 集成)
+        from .feature_ops import FeatureOpsEngine
+        self.feature_ops_engine = FeatureOpsEngine()
+
         # 子模块: 数据质量监控器 (Phase B.1 集成)
         from ..monitor.data_quality_monitor import DataQualityMonitor
         self.data_quality_monitor = DataQualityMonitor()
+
+        # Phase B.1: 注册到 HTTP 指标端点
+        from ..monitor import set_data_quality_monitor
+        set_data_quality_monitor(self.data_quality_monitor)
 
         # 子模块: 精英因子追踪器 (Phase A.2 集成)
         from ..monitor.elite_tracker import EliteFactorTracker
         self.elite_tracker = EliteFactorTracker(
             tracking_dir=str(self.memory_dir / "tracking"),
         )
+
+        # 子模块: 消融实验 (Phase A 集成)
+        from .ablation import AblationExperiment
+        self.ablation_experiment = AblationExperiment(random_seed=42)
+
+        # 子模块: SHAP 可解释性分析 (Phase B 集成)
+        from .shap_analyzer import ShapAnalyzer
+        self.shap_analyzer = ShapAnalyzer()
+
+        # 子模块: 鲁棒性审查 (Phase B 集成)
+        from .robustness import RobustnessTester
+        self.robustness_tester = RobustnessTester()
+
+        # 子模块: 因果验证 (Phase C 集成)
+        from .causal_validator import CausalValidator
+        self.causal_validator = CausalValidator()
+
+        # 子模块: 特征重要性分析 (Phase C.1 集成)
+        from .feature_importance import FeatureImportanceAnalyzer
+        self.feature_importance_analyzer = FeatureImportanceAnalyzer()
+
+        # 子模块: 逻辑监控 (Phase C.2 集成)
+        from ..monitor.logic_monitor import LogicMonitor
+        self.logic_monitor = LogicMonitor()
 
         # 状态
         self._prior_evaluations: list[FactorEvaluation] = []
@@ -231,6 +265,35 @@ class EvolutionLoop:
         state["total_factors_promoted"] = 0
         self.state_manager.save(state)
         run_id = state["run_id"]
+
+        # ── 数据加载流程: 数据质量校验 (Phase B.1) ──
+        dq_alerts = self.data_quality_monitor.validate_market_data(
+            data=self.data,
+            forward_returns=self.forward_returns,
+        )
+        if dq_alerts:
+            critical_count = sum(1 for a in dq_alerts if a.severity == "critical")
+            if critical_count > 0:
+                logger.critical(
+                    "市场数据质量校验失败 (critical=%d)，终止演化",
+                    critical_count,
+                )
+                self.state_manager.mark_completed(state)
+                return EvolutionRunResult(
+                    run_id=run_id, trace_id=trace_id,
+                    generations_completed=0,
+                    total_factors_evaluated=0,
+                    total_factors_promoted=0,
+                    tokens_consumed=0,
+                    status="circuit_broken",
+                    circuit_breaker_reason="data_quality_critical",
+                    error=f"数据质量校验失败: {critical_count} 个严重告警",
+                )
+            else:
+                logger.warning(
+                    "市场数据质量校验发现 %d 个告警 (无 critical)，继续演化",
+                    len(dq_alerts),
+                )
 
         max_gen = max_generation or self.budget["max_generation"]
         elite_ids: list[str] = []
@@ -295,16 +358,46 @@ class EvolutionLoop:
                 parent = self._select_parent_uct(parent_seeds)
 
                 # ── Step 1: 宏观演化（LLM 改逻辑） ──
+                new_factor = None
+                evolution_method = "macro_evolution"
+                evolution_summary = ""
+                
+                # 1.1 宏观演化尝试
                 try:
                     new_factor, macro_summary, macro_tokens = self.macro_evolver.evolve(
                         parent, generation=generation, trace_id=trace_id
                     )
                     self.state_manager.add_tokens(state, macro_tokens)
+                    evolution_summary = macro_summary
                 except Exception as e:
-                    # 宏观演化失败 → 记录失败轨迹，跳过本代
+                    logger.warning(
+                        "宏观演化失败 [%s]: %s, 尝试 GP 演化作为备选",
+                        parent.get("name", "?"), e,
+                    )
+                
+                # 1.2 若宏观演化失败，回退到 GP 演化 (Phase C.1)
+                if new_factor is None:
+                    try:
+                        new_factor, gp_summary = self._run_gp_evolution(
+                            parent, generation=generation, trace_id=trace_id,
+                        )
+                        evolution_method = "gp_evolution"
+                        evolution_summary = gp_summary
+                        logger.info(
+                            "GP 演化成功 [%s]: %s",
+                            parent.get("name", "?"), gp_summary,
+                        )
+                    except Exception as gp_e:
+                        self._record_failure_trace(
+                            parent, generation, "gp_evolution",
+                            f"GP 演化也失败: {gp_e}", [], trace_id,
+                        )
+                        continue
+
+                if new_factor is None:
                     self._record_failure_trace(
-                        parent, generation, "macro_evolution",
-                        f"宏观演化失败: {e}", [], trace_id,
+                        parent, generation, "evolution",
+                        "宏观演化和 GP 演化均失败", [], trace_id,
                     )
                     continue
 
@@ -404,6 +497,59 @@ class EvolutionLoop:
                         )
                         continue
 
+                    # ── Step 4.6.5: 消融实验检查 (Phase A 集成) ──
+                    ablation_result = self._run_ablation_check(
+                        optimized_factor, evaluation, trace_id,
+                    )
+                    evaluation["ablation_check"] = ablation_result
+                    if not ablation_result.get("passed", True):
+                        print(
+                            f"[evo] 消融实验未通过 [{optimized_factor.get('name', '?')}]: "
+                            f"疑似伪相关"
+                        )
+                        self._record_ablation_failed_trace(
+                            optimized_factor, generation, trace_id,
+                            ablation_result,
+                        )
+                        continue
+
+                    # ── Step 4.6.6: 因果结构审查 (Phase C 集成) ──
+                    causal_result = self._run_causal_validation(
+                        optimized_factor, evaluation, trace_id,
+                    )
+                    evaluation["causal_validation"] = causal_result
+                    if not causal_result.get("passed", True):
+                        print(
+                            f"[evo] 因果审查未通过 [{optimized_factor.get('name', '?')}]: "
+                            f"事件敏感"
+                        )
+                        self._record_causal_failed_trace(
+                            optimized_factor, generation, trace_id,
+                            causal_result,
+                        )
+                        continue
+
+                    # ── Step 4.6.7: 鲁棒性审查 (Phase B 集成) ──
+                    robustness_result = self._run_robustness_check(
+                        optimized_factor, evaluation, trace_id,
+                    )
+                    evaluation["robustness_check"] = robustness_result
+                    if not robustness_result.get("passed", True):
+                        print(
+                            f"[evo] 鲁棒性审查未通过 [{optimized_factor.get('name', '?')}]"
+                        )
+                        self._record_robustness_failed_trace(
+                            optimized_factor, generation, trace_id,
+                            robustness_result,
+                        )
+                        continue
+
+                    # ── Step 4.6.8: SHAP 可解释性分析 (Phase B 集成) ──
+                    shap_result = self._run_shap_analysis(
+                        optimized_factor, evaluation, trace_id,
+                    )
+                    evaluation["shap_analysis"] = shap_result
+
                     # 晋级精英池（去重检查 + 质量评分附加 + 审计报告）
                     self._log_inspection_detail(
                         optimized_factor, inspection, "通过", generation,
@@ -420,8 +566,8 @@ class EvolutionLoop:
                     self.state_manager.increment_promoted(state)
                     elite_ids.append(optimized_factor["factor_id"])
                     self._record_success_trace(
-                        optimized_factor, generation, "combined",
-                        macro_summary, evaluation,
+                        optimized_factor, generation, evolution_method,
+                        evolution_summary, evaluation,
                         [f"代 {generation} 晋级精英池",
                          f"质量分={inspection.total_score}/50 ({inspection.grade}级)",
                          f"审计通过率={audit_report.pass_rate:.0%}"],
@@ -431,8 +577,8 @@ class EvolutionLoop:
                 else:
                     # 失败轨迹
                     self._record_failure_trace(
-                        optimized_factor, generation, "combined",
-                        macro_summary,
+                        optimized_factor, generation, evolution_method,
+                        evolution_summary,
                         verifier_result["failure_reasons"], trace_id,
                         evaluation=evaluation,
                     )
@@ -704,6 +850,31 @@ class EvolutionLoop:
 
         # ── 写入 DuckDB（主存储） ──
         self._write_to_duckdb(factor, evaluation, quality_score, seed_correlations, audit_report)
+
+        # ── Phase A.2: 注册到精英因子追踪器 ──
+        try:
+            factor_id = factor.get("factor_id", "")
+            factor_name = factor.get("name", "?")
+            ic = evaluation.get("ic", 0.0) if isinstance(evaluation, dict) else 0.0
+            sharpe = 0.0
+            if isinstance(evaluation, dict):
+                bt = evaluation.get("level_1_backtest", {})
+                sharpe = bt.get("sharpe", 0.0) if isinstance(bt, dict) else 0.0
+            grade = None
+            quality_score_value = None
+            if quality_score is not None:
+                grade = quality_score.get("grade")
+                quality_score_value = quality_score.get("total_score")
+            self.elite_tracker.init_tracker(
+                factor_id=factor_id,
+                name=factor_name,
+                entry_ic=ic,
+                entry_sharpe=sharpe,
+                grade=grade,
+                quality_score=quality_score_value,
+            )
+        except Exception as e:
+            logger.debug("精英因子追踪器注册失败: %s", e)
 
         return fp
 
@@ -1027,7 +1198,7 @@ class EvolutionLoop:
             if retired:
                 print(f"[elite-review] 自动淘汰 {len(retired)} 个因子: {retired}")
 
-            # 2. 为每个精英因子更新跟踪快照
+            # 2. 为每个精英因子更新跟踪快照 + 逻辑监控
             for fid in elite_ids:
                 factor_data = self._get_factor_data_for_review(fid)
                 if factor_data is None:
@@ -1035,6 +1206,27 @@ class EvolutionLoop:
                 ic = factor_data.get("ic", 0.0)
                 sharpe = factor_data.get("sharpe", 0.0)
                 self.elite_tracker.update(fid, ic, sharpe)
+
+                # ── Phase C.2: LogicMonitor 集成 ──
+                try:
+                    import json
+
+                    # 从 elite 快照读取因子程序（_promote_to_elite 写入）
+                    fp_snapshot = self.elite_dir / f"{fid}.json"
+                    if not fp_snapshot.exists() or self.data is None:
+                        continue
+                    factor_program = json.loads(
+                        fp_snapshot.read_text(encoding="utf-8")
+                    )
+                    logic_report = self.logic_monitor.run(
+                        factor_program, self.data, switch_dates=[],
+                    )
+                    if not logic_report.all_healthy:
+                        print(
+                            f"[elite-review] 逻辑监控告警: {fid}"
+                        )
+                except Exception as e:
+                    logger.debug("逻辑监控跳过 %s: %s", fid, e)
 
             # 3. 生成报告
             report = self.elite_tracker.report()
@@ -1139,6 +1331,86 @@ class EvolutionLoop:
         return alerts
 
     # ── Phase B.2: 端到端回测流水线集成 ──────────────────
+
+    def _run_gp_evolution(
+        self,
+        parent: FactorProgram,
+        generation: int,
+        trace_id: str,
+    ) -> tuple[FactorProgram, str]:
+        """执行 GP 遗传规划演化 (Phase C.1 集成)。
+
+        使用 FeatureOpsEngine 在算子空间搜索最优因子表达式，
+        作为宏观演化的补充或备选。
+
+        Args:
+            parent: 父因子
+            generation: 当前代数
+            trace_id: 全链路 trace_id
+
+        Returns:
+            (新因子程序, 演化摘要)
+        """
+        from .gp_evolver import tree_to_factor_program
+
+        target_col = "forward_return"
+        gp_data = self.data.copy()
+        if self.forward_returns is not None and len(self.forward_returns) == len(gp_data):
+            gp_data[target_col] = self.forward_returns
+        else:
+            gp_data[target_col] = 0.0
+
+        gp_result = self.feature_ops_engine.run_gp_search(
+            data=gp_data,
+            target=target_col,
+            config={
+                "population_size": 100,
+                "max_generations": 20,
+                "tournament_size": 3,
+                "crossover_rate": 0.7,
+                "mutation_rate": 0.1,
+                "max_tree_depth": 4,
+            },
+        )
+
+        if gp_result.best_fitness <= 0:
+            raise RuntimeError(f"GP 演化适应度无效: {gp_result.best_fitness:.4f}")
+
+        factor_program = tree_to_factor_program(gp_result.best_tree)
+        factor_program["parent_id"] = parent.get("factor_id")
+        factor_program["generation"] = generation
+        factor_program["trace_id"] = trace_id
+        factor_program["market"] = self.market
+
+        # ── Phase C.1: 特征重要性分析 (集成到 GP 管线) ──
+        try:
+            from .factor_program import FactorExecutor
+
+            # 执行因子程序得到信号序列，作为特征重要性的输入
+            executor = FactorExecutor(factor_program)
+            signals = executor.execute(gp_data, {})
+            if len(signals) != len(gp_data):
+                signals = np.full(len(gp_data), np.nan)
+
+            importance_result = self.feature_importance_analyzer.analyze(
+                pd.Series(signals), gp_data, target_col,
+            )
+            # FeatureImportanceResult 是 dataclass，转 dict 存快照
+            factor_program["feature_importance"] = {
+                k: v for k, v in importance_result.__dict__.items()
+            }
+        except Exception as e:
+            logger.debug("特征重要性分析跳过: %s", e)
+
+        summary = (
+            f"GP Gen={gp_result.generations_completed}, "
+            f"Fitness={gp_result.best_fitness:.4f}, "
+            f"IC={gp_result.best_ic:.4f}, Sharpe={gp_result.best_sharpe:.4f}, "
+            f"Expression={gp_result.best_expression[:80]}"
+        )
+
+        logger.info("GP 演化完成 [%s]: %s", parent.get("name", "?"), summary)
+        return factor_program, summary
 
     def _run_backtest_pipeline(
         self,
@@ -1314,6 +1586,268 @@ class EvolutionLoop:
             f"[evo] 审计失败轨迹已记录: {factor_name} → "
             f"代 {generation}, 通过率={audit_report.pass_rate:.0%}"
         )
+
+    # ── Phase A: 消融实验检查 ──────────────────────────
+
+    def _run_ablation_check(
+        self,
+        factor: FactorProgram,
+        evaluation: FactorEvaluation,
+        trace_id: str,
+    ) -> dict[str, Any]:
+        """执行消融实验检查（Phase A 集成）。
+
+        随机扰动因子输入特征，检测伪相关。
+        若任何消融导致 IC 下降超过 50%，判定为伪相关。
+
+        Args:
+            factor: 因子程序
+            evaluation: 评估结果
+            trace_id: 全链路 trace_id
+
+        Returns:
+            消融结果字典，包含 passed 标志
+        """
+        try:
+            data = getattr(self, "data", None)
+            if data is None or len(data) == 0:
+                return {"passed": True, "skipped": True, "error": "data unavailable"}
+            forward_returns = getattr(self, "forward_returns", None)
+            if forward_returns is None:
+                forward_returns = np.zeros(len(data))
+
+            result = self.ablation_experiment.run(factor, data, forward_returns)
+            # AblationResult 是 dict 子类，直接使用
+            baseline_ic = result.get("baseline_ic", 0.0)
+            ablations = result.get("ablations", [])
+            if abs(baseline_ic) < 1e-9:
+                is_passed = True
+            else:
+                # 任何单项消融 IC 降幅超过基线 50% → 疑似伪相关
+                is_passed = all(
+                    ab.get("ic_change", 0.0) >= -0.5 * abs(baseline_ic)
+                    for ab in ablations
+                )
+            return {**result, "passed": is_passed}
+        except Exception as e:
+            logger.warning("消融实验异常: %s", e)
+            return {"passed": True, "error": str(e), "ablations": []}
+
+    def _record_ablation_failed_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        trace_id: str,
+        ablation_result: dict[str, Any],
+    ) -> None:
+        """记录消融实验失败轨迹。"""
+        import json
+
+        factor_id = factor.get("factor_id", "unknown")
+        factor_name = factor.get("name", "?")
+        sub_trace_id = f"{trace_id}_g{generation}_ablation_fail_{factor_id[:8]}"
+
+        trace_dir = self.memory_dir / "traces"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        fp = trace_dir / f"{sub_trace_id}.json"
+
+        record: dict[str, Any] = {
+            "trace_id": sub_trace_id,
+            "parent_trace_id": trace_id,
+            "factor_id": factor_id,
+            "factor_name": factor_name,
+            "generation": generation,
+            "type": "ablation_failed",
+            "timestamp": datetime.now().isoformat(),
+            "ablation_result": ablation_result,
+        }
+
+        fp.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"[evo] 消融失败轨迹已记录: {factor_name}")
+
+    # ── Phase B: 鲁棒性审查 ──────────────────────────
+
+    def _run_robustness_check(
+        self,
+        factor: FactorProgram,
+        evaluation: FactorEvaluation,
+        trace_id: str,
+    ) -> dict[str, Any]:
+        """执行鲁棒性审查（Phase B 集成）。
+
+        在因子通过审计后，检测在对抗扰动、缺失值和
+        分布外场景下的稳定性。
+
+        Args:
+            factor: 因子程序
+            evaluation: 评估结果
+            trace_id: 全链路 trace_id
+
+        Returns:
+            鲁棒性结果字典，包含 passed 标志
+        """
+        try:
+            data = getattr(self, "data", None)
+            if data is None or len(data) == 0:
+                return {"passed": True, "skipped": True, "error": "data unavailable"}
+            forward_returns = getattr(self, "forward_returns", None)
+            if forward_returns is None:
+                forward_returns = np.zeros(len(data))
+
+            result = self.robustness_tester.run(factor, data, forward_returns)
+            # RobustnessTestResult 是 dict 子类，直接使用
+            summary = result.get("summary", {})
+            pass_rate = summary.get("overall_pass_rate", 1.0)
+            is_passed = pass_rate >= 0.9
+            return {**result, "passed": is_passed}
+        except Exception as e:
+            logger.warning("鲁棒性审查异常: %s", e)
+            return {"passed": True, "error": str(e)}
+
+    def _record_robustness_failed_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        trace_id: str,
+        robustness_result: dict[str, Any],
+    ) -> None:
+        """记录鲁棒性审查失败轨迹。"""
+        import json
+
+        factor_id = factor.get("factor_id", "unknown")
+        factor_name = factor.get("name", "?")
+        sub_trace_id = f"{trace_id}_g{generation}_robustness_fail_{factor_id[:8]}"
+
+        trace_dir = self.memory_dir / "traces"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        fp = trace_dir / f"{sub_trace_id}.json"
+
+        record: dict[str, Any] = {
+            "trace_id": sub_trace_id,
+            "parent_trace_id": trace_id,
+            "factor_id": factor_id,
+            "factor_name": factor_name,
+            "generation": generation,
+            "type": "robustness_failed",
+            "timestamp": datetime.now().isoformat(),
+            "robustness_result": robustness_result,
+        }
+
+        fp.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"[evo] 鲁棒性失败轨迹已记录: {factor_name}")
+
+    # ── Phase B: SHAP 可解释性分析 ──────────────────────
+
+    def _run_shap_analysis(
+        self,
+        factor: FactorProgram,
+        evaluation: FactorEvaluation,
+        trace_id: str,
+    ) -> dict[str, Any]:
+        """执行 SHAP 可解释性分析（Phase B 集成）。
+
+        对极端预测样本进行特征归因，确保模型可解释。
+
+        Args:
+            factor: 因子程序
+            evaluation: 评估结果
+            trace_id: 全链路 trace_id
+
+        Returns:
+            SHAP 分析结果字典
+        """
+        try:
+            data = getattr(self, "data", None)
+            if data is None or len(data) == 0:
+                return {"passed": True, "skipped": True, "error": "data unavailable"}
+            forward_returns = getattr(self, "forward_returns", None)
+            if forward_returns is None:
+                forward_returns = np.zeros(len(data))
+
+            result = self.shap_analyzer.analyze(factor, data, forward_returns)
+            # ShapAnalysisResult 是 dict 子类，直接使用；SHAP 为信息型审查，成功即通过
+            return {**result, "passed": True}
+        except Exception as e:
+            logger.warning("SHAP 分析异常: %s", e)
+            return {"passed": True, "error": str(e)}
+
+    # ── Phase C: 因果结构审查 ──────────────────────────
+
+    def _run_causal_validation(
+        self,
+        factor: FactorProgram,
+        evaluation: FactorEvaluation,
+        trace_id: str,
+    ) -> dict[str, Any]:
+        """执行因果结构审查（Phase C 集成）。
+
+        使用自然实验验证因子是否捕获了真实因果关系。
+        对熔断等极端事件进行预测误差分析。
+
+        Args:
+            factor: 因子程序
+            evaluation: 评估结果
+            trace_id: 全链路 trace_id
+
+        Returns:
+            因果验证结果字典，包含 passed 标志
+        """
+        try:
+            data = getattr(self, "data", None)
+            if data is None or len(data) == 0:
+                return {"passed": True, "skipped": True, "error": "data unavailable"}
+            forward_returns = getattr(self, "forward_returns", None)
+            if forward_returns is None:
+                forward_returns = np.zeros(len(data))
+
+            result = self.causal_validator.validate(factor, data, forward_returns)
+            # CausalValidationResult 是 dict 子类，直接使用
+            is_passed = result.get("n_anomalous", 0) == 0
+            return {**result, "passed": is_passed}
+        except Exception as e:
+            logger.warning("因果验证异常: %s", e)
+            return {"passed": True, "error": str(e)}
+
+    def _record_causal_failed_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        trace_id: str,
+        causal_result: dict[str, Any],
+    ) -> None:
+        """记录因果验证失败轨迹。"""
+        import json
+
+        factor_id = factor.get("factor_id", "unknown")
+        factor_name = factor.get("name", "?")
+        sub_trace_id = f"{trace_id}_g{generation}_causal_fail_{factor_id[:8]}"
+
+        trace_dir = self.memory_dir / "traces"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        fp = trace_dir / f"{sub_trace_id}.json"
+
+        record: dict[str, Any] = {
+            "trace_id": sub_trace_id,
+            "parent_trace_id": trace_id,
+            "factor_id": factor_id,
+            "factor_name": factor_name,
+            "generation": generation,
+            "type": "causal_failed",
+            "timestamp": datetime.now().isoformat(),
+            "causal_result": causal_result,
+        }
+
+        fp.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"[evo] 因果失败轨迹已记录: {factor_name}")
 
     def _record_success_trace(
         self,

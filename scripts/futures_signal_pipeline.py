@@ -45,6 +45,15 @@ import pandas as pd
 # 抑制 numpy/scipy 运行时警告
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
 warnings.filterwarnings("ignore", category=FutureWarning, module="numpy")
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*treating keys as positions is deprecated.*")
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*Series.__setitem__ treating keys as positions is deprecated.*")
+# 抑制 ConstantInputWarning: scipy 在计算相关性时常数输入导致的警告
+try:
+    from scipy.stats import ConstantInputWarning
+    warnings.filterwarnings("ignore", category=ConstantInputWarning)
+except ImportError:
+    pass
+warnings.filterwarnings("ignore", message=".*An input array is constant.*")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -402,6 +411,11 @@ def _compute_factor_sign_flips(
                 r_vals = [future_rets[s] for s in common]
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=RuntimeWarning)
+                    try:
+                        from scipy.stats import ConstantInputWarning
+                        warnings.filterwarnings("ignore", category=ConstantInputWarning)
+                    except ImportError:
+                        pass
                     r, _ = spearmanr(s_vals, r_vals)
                 if not np.isnan(r):
                     daily_ics.append(r)
@@ -898,7 +912,14 @@ def _compute_per_variety_ic_matrix(
                 continue
 
             from scipy.stats import spearmanr
-            ic, _ = spearmanr(sig[valid], fwd_ret[valid])
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=RuntimeWarning)
+                try:
+                    from scipy.stats import ConstantInputWarning
+                    warnings.filterwarnings("ignore", category=ConstantInputWarning)
+                except ImportError:
+                    pass
+                ic, _ = spearmanr(sig[valid], fwd_ret[valid])
 
             if fname not in factor_ic_matrix:
                 factor_ic_matrix[fname] = {}
@@ -972,7 +993,14 @@ def _compute_holdout_validation(
             continue
 
         from scipy.stats import spearmanr
-        ic, _ = spearmanr(composite_signal[valid], fwd_ret[valid])
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+            try:
+                from scipy.stats import ConstantInputWarning
+                warnings.filterwarnings("ignore", category=ConstantInputWarning)
+            except ImportError:
+                pass
+            ic, _ = spearmanr(composite_signal[valid], fwd_ret[valid])
         sym_ics[sym] = ic
 
         if sym in holdout_set:
@@ -1154,7 +1182,14 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         from scipy.stats import spearmanr
         g_scores = [v for _, v in var_global]
         v_scores = [v for _, v in var_variety]
-        rank_corr, _ = spearmanr(g_scores, v_scores)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+            try:
+                from scipy.stats import ConstantInputWarning
+                warnings.filterwarnings("ignore", category=ConstantInputWarning)
+            except ImportError:
+                pass
+            rank_corr, _ = spearmanr(g_scores, v_scores)
         print(f"      品种级 vs 全局排名一致性: Spearman ρ={rank_corr:.4f}")
 
     elapsed = time.time() - t0
@@ -1279,7 +1314,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     )
     sym_list = [s for s, _ in ranked]
     dominant = get_dominant_contracts(sym_list)
-    print("      获取盘中实时价（AKShare 分时）...")
+    print("      获取盘中实时价（TQ-Local 优先 → AKShare 降级）...")
     rt_prices = get_realtime_prices(sym_list)
     rt_hit = len(rt_prices)
     print(f"      实时价: {rt_hit}/{len(sym_list)} 个品种可用")
@@ -1346,7 +1381,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         w(f"合成方法: Ridge 回归加权（L2 正则化） | 方向校正: 截面 IC 法")
     flips_info = f" | 方向反转: {n_flipped} 个因子 (截面 IC<0)"
     w(f"方向校正: 截面 IC 法（因子信号 vs 未来 5 日收益的 Spearman 秩相关）{flips_info}")
-    w(f"最新价: 盘中实时价（AKShare 分时）优先，缺失用日线收盘 | 实时价覆盖 {rt_hit}/{len(sym_list)} 个品种")
+    w(f"最新价: 盘中实时价（TQ-Local 优先，AKShare 降级） | 实时价覆盖 {rt_hit}/{len(sym_list)} 个品种")
     w()
     w()
     w("## 市场制度 (Market Regime)")

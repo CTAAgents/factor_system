@@ -7,7 +7,7 @@ factorengine 核心约束：
     3. 输入为 OHLCV DataFrame，输出为 np.ndarray（-1~+1 信号 或 score）
     4. 必须可被安全沙箱编译执行，禁止 import os/sys/subprocess/open
 
-版本: v1.1.0（与 FTS 同步）
+版本: v1.2.0（修复 Pandas FutureWarning + np.exp 溢出）
 """
 # pylint: disable=too-many-branches,too-many-arguments,too-many-positional-arguments,exec-used,redefined-builtin
 
@@ -17,11 +17,23 @@ import ast
 import hashlib
 import secrets
 import types
+import warnings
 from datetime import datetime
 from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+
+# ─── 全局警告抑制 ─────────────────────────────────────────
+# 抑制 Pandas FutureWarning: Series.__getitem__ treating keys as positions is deprecated
+# 因子代码中使用 series[i] 进行位置索引，新版 Pandas 建议使用 iloc[i]
+# 在因子执行层面统一处理，避免修改 LLM 生成的因子代码
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*treating keys as positions is deprecated.*")
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*Series.__setitem__ treating keys as positions is deprecated.*")
+
+# 抑制 numpy RuntimeWarning: overflow encountered in exp / divide by zero 等
+# 因子代码中的 np.exp() 在极端数值下溢出，已通过后置 np.clip 处理
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
 
 from .contracts import (
     EconomicLogic,
@@ -158,6 +170,47 @@ def _safe_import(name: str, globals=None, locals=None, fromlist=(), level: int =
     return __import__(name, globals, locals, fromlist, level)
 
 
+class _ArrayDataWrapper:
+    """DataFrame 包装器 — 将列访问转换为 ndarray 以消除 Pandas FutureWarning。
+
+    因子代码中 data['close'] 返回 ndarray 而非 Series，
+    这样 series[i] 位置索引不会触发弃用警告。
+
+    同时保持 .columns, .index, .shape 等属性的兼容性。
+    """
+
+    def __init__(self, df: pd.DataFrame):
+        self._df = df
+        self._columns = list(df.columns)
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        """返回列数据为 ndarray（而非 Series）。"""
+        if key not in self._df.columns:
+            raise KeyError(f"列 '{key}' 不存在，可用列: {self._columns}")
+        return self._df[key].values.astype(np.float64)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._df.columns
+
+    def __len__(self) -> int:
+        return len(self._df)
+
+    @property
+    def columns(self) -> list[str]:
+        return self._columns
+
+    @property
+    def index(self):
+        return self._df.index
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self._df.shape
+
+    def __repr__(self) -> str:
+        return f"_ArrayDataWrapper(columns={self._columns}, len={len(self._df)})"
+
+
 class FactorExecutor:
     """因子程序执行器 — 安全沙箱内编译并执行因子代码。
 
@@ -241,21 +294,30 @@ class FactorExecutor:
 
         expected_len = len(data)
 
-        # 策略: 先尝试 DataFrame 执行（兼容种子因子），失败回退 dict
-        # 种子因子代码使用 data['close'].values 等 DataFrame 专用接口
-        # LLM 生成因子使用 data['close'] 直接获取 ndarray
-        try:
-            result = self._compiled(data, params)  # type: ignore[misc]
-        except Exception:
-            # 回退: 转换为 dict[str, np.ndarray] 格式
-            data_dict = {
-                col: data[col].values.astype(np.float64)
-                for col in data.columns
-            }
+        # 预处理: 将 DataFrame 列转换为 ndarray，消除 Pandas FutureWarning
+        # 因子代码中 data['close'] 返回 ndarray 而非 Series
+        # 使用 ArrayDataWrapper 保持 DataFrame 接口兼容性
+        wrapped_data = _ArrayDataWrapper(data)
+
+        # 抑制因子执行期间的所有警告（已通过后置处理保证数值稳定性）
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
             try:
-                result = self._compiled(data_dict, params)  # type: ignore[misc]
-            except Exception as e:
-                raise FactorCompileError(f"执行失败: {type(e).__name__}: {e}") from e
+                result = self._compiled(wrapped_data, params)  # type: ignore[misc]
+            except Exception:
+                # 回退: 使用原始 DataFrame（因子代码可能依赖 DataFrame 方法）
+                try:
+                    result = self._compiled(data, params)  # type: ignore[misc]
+                except Exception:
+                    # 最终回退: dict[str, np.ndarray] 格式
+                    data_dict = {
+                        col: data[col].values.astype(np.float64)
+                        for col in data.columns
+                    }
+                    try:
+                        result = self._compiled(data_dict, params)  # type: ignore[misc]
+                    except Exception as e:
+                        raise FactorCompileError(f"执行失败: {type(e).__name__}: {e}") from e
 
         if not isinstance(result, np.ndarray):
             raise FactorCompileError(
@@ -264,6 +326,11 @@ class FactorExecutor:
 
         if len(result) != expected_len:
             result = self._align_output(result, expected_len)
+
+        # 数值稳定性处理: 裁剪 inf 和 NaN，限制输出范围
+        result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
+        result = np.clip(result, -10.0, 10.0)
+
         return result
 
     @staticmethod

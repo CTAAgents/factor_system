@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,17 @@ class DataQualityMonitor:
         self._baselines: dict[str, FactorBaseline] = {}
         # 记录最近告警时间用于冷却
         self._last_alert_time: dict[str, float] = {}
+        # Prometheus 指标追踪
+        self._total_checks = 0
+        self._total_alerts = 0
+        self._critical_alerts = 0
+        self._warning_alerts = 0
+        self._last_completeness_ratio = 1.0
+        self._last_validation_time = 0.0
+        self._market_data_valid = True
+        self._factor_check_count = 0
+        self._ic_drift_alerts = 0
+        self._capacity_shock_alerts = 0
 
     def register_factor(
         self,
@@ -157,6 +169,9 @@ class DataQualityMonitor:
         Returns:
             触发的告警列表 (可能为空)
         """
+        self._total_checks += 1
+        self._factor_check_count += 1
+
         baseline = self._baselines.get(factor_id)
         if baseline is None:
             logger.warning("因子未注册，跳过检查 [factor_id=%s]", factor_id)
@@ -169,12 +184,14 @@ class DataQualityMonitor:
             ic_alert = self._check_ic_drift(baseline, current_ic)
             if ic_alert:
                 alerts.append(ic_alert)
+                self._ic_drift_alerts += 1
 
         # 2. 容量突变检测
         if current_capacity is not None:
             cap_alert = self._check_capacity_shock(baseline, current_capacity)
             if cap_alert:
                 alerts.append(cap_alert)
+                self._capacity_shock_alerts += 1
 
         # 处理告警
         for alert in alerts:
@@ -249,7 +266,13 @@ class DataQualityMonitor:
         )
 
     def _handle_alert(self, alert: QualityAlert) -> None:
-        """处理告警（冷却检查 + 日志 + 回调）。"""
+        """处理告警（冷却检查 + 日志 + 回调 + 指标累积）。"""
+        self._total_alerts += 1
+        if alert.severity == "critical":
+            self._critical_alerts += 1
+        else:
+            self._warning_alerts += 1
+
         # 检查冷却
         cooldown_key = f"{alert.factor_id}_{alert.alert_type}"
         last_time = self._last_alert_time.get(cooldown_key, 0)
@@ -295,6 +318,199 @@ class DataQualityMonitor:
     def list_registered(self) -> list[str]:
         """列出所有已注册因子。"""
         return list(self._baselines.keys())
+
+    def validate_market_data(
+        self,
+        data: pd.DataFrame,
+        forward_returns: Optional[np.ndarray] = None,
+    ) -> list[QualityAlert]:
+        """校验市场数据质量（完整性检查）。
+
+        在数据加载流程中调用，检查关键字段的完整性和时效性。
+
+        Args:
+            data: OHLCV DataFrame (index=timestamp, columns=[open,high,low,close,volume])
+            forward_returns: 未来收益率数组 (可选)
+
+        Returns:
+            数据质量告警列表
+        """
+        alerts: list[QualityAlert] = []
+        self._last_validation_time = time.time()
+
+        if data is None or data.empty:
+            self._market_data_valid = False
+            self._last_completeness_ratio = 0.0
+            alerts.append(QualityAlert(
+                factor_id="market_data",
+                alert_type="ic_drift",
+                severity="critical",
+                message="市场数据为空，无法执行演化",
+                metric_name="data_completeness",
+                metric_value=0.0,
+                baseline_value=1.0,
+                threshold=0.5,
+            ))
+            self._total_alerts += 1
+            self._critical_alerts += 1
+            self._total_checks += 1
+            return alerts
+
+        n_rows = len(data)
+        required_cols = {"open", "high", "low", "close", "volume"}
+        existing_cols = set(data.columns)
+        missing_cols = required_cols - existing_cols
+
+        if missing_cols:
+            self._market_data_valid = False
+            alerts.append(QualityAlert(
+                factor_id="market_data",
+                alert_type="ic_drift",
+                severity="critical",
+                message=f"缺少必要字段: {missing_cols}",
+                metric_name="field_completeness",
+                metric_value=0.0,
+                baseline_value=1.0,
+                threshold=0.8,
+            ))
+            self._total_alerts += 1
+            self._critical_alerts += 1
+
+        total_missing_ratio = 0.0
+        n_checked = 0
+        for col in required_cols & existing_cols:
+            missing_ratio = float(data[col].isna().sum()) / n_rows if n_rows > 0 else 1.0
+            total_missing_ratio += missing_ratio
+            n_checked += 1
+            if missing_ratio > 0.05:
+                sev = "critical" if missing_ratio > 0.2 else "warning"
+                alerts.append(QualityAlert(
+                    factor_id="market_data",
+                    alert_type="ic_drift",
+                    severity=sev,
+                    message=f"字段 {col} 缺失率 {missing_ratio:.1%}",
+                    metric_name="missing_ratio",
+                    metric_value=missing_ratio,
+                    baseline_value=0.0,
+                    threshold=0.05,
+                ))
+                self._total_alerts += 1
+                if sev == "critical":
+                    self._critical_alerts += 1
+                else:
+                    self._warning_alerts += 1
+
+        if n_checked > 0:
+            avg_missing = total_missing_ratio / n_checked
+            self._last_completeness_ratio = max(0.0, 1.0 - avg_missing)
+        else:
+            self._last_completeness_ratio = 0.0
+
+        if forward_returns is not None and len(forward_returns) > 0:
+            fr_missing = float(np.isnan(forward_returns).sum()) / len(forward_returns)
+            if fr_missing > 0.05:
+                sev = "critical" if fr_missing > 0.2 else "warning"
+                alerts.append(QualityAlert(
+                    factor_id="market_data",
+                    alert_type="ic_drift",
+                    severity=sev,
+                    message=f"forward_returns 缺失率 {fr_missing:.1%}",
+                    metric_name="forward_returns_missing",
+                    metric_value=fr_missing,
+                    baseline_value=0.0,
+                    threshold=0.05,
+                ))
+                self._total_alerts += 1
+                if sev == "critical":
+                    self._critical_alerts += 1
+                else:
+                    self._warning_alerts += 1
+
+        self._market_data_valid = not any(a.severity == "critical" for a in alerts)
+
+        for alert in alerts:
+            self._handle_alert(alert)
+
+        if alerts:
+            logger.warning(
+                "市场数据质量检查发现 %d 个告警 (critical=%d)",
+                len(alerts),
+                sum(1 for a in alerts if a.severity == "critical"),
+            )
+
+        self._total_checks += 1
+        return alerts
+
+    def get_prometheus_metrics(self) -> str:
+        """生成 Prometheus 文本格式指标。
+
+        Returns:
+            Prometheus exposition format 字符串
+        """
+        registered_count = len(self._baselines)
+        lines = [
+            "# HELP fts_data_quality_data_completeness_ratio 数据完整性比率 (1.0=完美)",
+            "# TYPE fts_data_quality_data_completeness_ratio gauge",
+            f"fts_data_quality_data_completeness_ratio {self._last_completeness_ratio:.4f}",
+            "",
+            "# HELP fts_data_quality_market_data_valid 市场数据是否有效 (1=有效)",
+            "# TYPE fts_data_quality_market_data_valid gauge",
+            f"fts_data_quality_market_data_valid {1.0 if self._market_data_valid else 0.0}",
+            "",
+            "# HELP fts_data_quality_total_checks 数据质量检查总次数",
+            "# TYPE fts_data_quality_total_checks counter",
+            f"fts_data_quality_total_checks {self._total_checks}",
+            "",
+            "# HELP fts_data_quality_factor_check_count 因子质量检查次数",
+            "# TYPE fts_data_quality_factor_check_count counter",
+            f"fts_data_quality_factor_check_count {self._factor_check_count}",
+            "",
+            "# HELP fts_data_quality_total_alerts 告警总次数",
+            "# TYPE fts_data_quality_total_alerts counter",
+            f"fts_data_quality_total_alerts {self._total_alerts}",
+            "",
+            "# HELP fts_data_quality_critical_alerts 严重告警次数",
+            "# TYPE fts_data_quality_critical_alerts counter",
+            f"fts_data_quality_critical_alerts {self._critical_alerts}",
+            "",
+            "# HELP fts_data_quality_warning_alerts 警告告警次数",
+            "# TYPE fts_data_quality_warning_alerts counter",
+            f"fts_data_quality_warning_alerts {self._warning_alerts}",
+            "",
+            "# HELP fts_data_quality_ic_drift_alerts IC 漂移告警次数",
+            "# TYPE fts_data_quality_ic_drift_alerts counter",
+            f"fts_data_quality_ic_drift_alerts {self._ic_drift_alerts}",
+            "",
+            "# HELP fts_data_quality_capacity_shock_alerts 容量突变告警次数",
+            "# TYPE fts_data_quality_capacity_shock_alerts counter",
+            f"fts_data_quality_capacity_shock_alerts {self._capacity_shock_alerts}",
+            "",
+            "# HELP fts_data_quality_registered_factors 已注册基准的因子数",
+            "# TYPE fts_data_quality_registered_factors gauge",
+            f"fts_data_quality_registered_factors {registered_count}",
+            "",
+            "# HELP fts_data_quality_last_validation_timestamp 最近校验时间戳",
+            "# TYPE fts_data_quality_last_validation_timestamp gauge",
+            f"fts_data_quality_last_validation_timestamp {self._last_validation_time}",
+            "",
+        ]
+        return "\n".join(lines)
+
+    def get_metrics_snapshot(self) -> dict[str, Any]:
+        """获取指标快照（JSON 格式）。"""
+        return {
+            "data_completeness_ratio": self._last_completeness_ratio,
+            "market_data_valid": self._market_data_valid,
+            "total_checks": self._total_checks,
+            "factor_check_count": self._factor_check_count,
+            "total_alerts": self._total_alerts,
+            "critical_alerts": self._critical_alerts,
+            "warning_alerts": self._warning_alerts,
+            "ic_drift_alerts": self._ic_drift_alerts,
+            "capacity_shock_alerts": self._capacity_shock_alerts,
+            "registered_factors": len(self._baselines),
+            "last_validation_time": self._last_validation_time,
+        }
 
 
 # ─── 便捷函数 ───────────────────────────────────────────────

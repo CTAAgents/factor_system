@@ -369,6 +369,112 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                     continue
         return {"factors": factors, "count": len(factors)}
 
+    def _respond_metrics(self, text: str):
+        """响应 Prometheus 指标文本。"""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(text.encode("utf-8"))
+
+    def _build_metrics(self) -> str:
+        """构建 Prometheus 指标响应（文本格式）。"""
+        lines: list[str] = []
+
+        # ── 基础指标 ──
+        lines.append("# HELP fts_up FTS 服务是否在线")
+        lines.append("# TYPE fts_up gauge")
+        lines.append("fts_up 1")
+        lines.append("")
+
+        lines.append("# HELP fts_started_at FTS 启动时间戳")
+        lines.append("# TYPE fts_started_at gauge")
+        lines.append(f"fts_started_at {_metrics.get('fts_started_at', 0)}")
+        lines.append("")
+
+        lines.append("# HELP fts_tokens_consumed FTS 今日 Token 消耗")
+        lines.append("# TYPE fts_tokens_consumed counter")
+        lines.append(f"fts_tokens_consumed {_metrics.get('fts_tokens_consumed', 0)}")
+        lines.append("")
+
+        lines.append("# HELP fts_elite_factor_count Elite 因子数量")
+        lines.append("# TYPE fts_elite_factor_count gauge")
+        lines.append(f"fts_elite_factor_count {_metrics.get('fts_elite_factor_count', 0)}")
+        lines.append("")
+
+        # ── 循环状态指标 ──
+        for loop_name in ("L1", "L2", "L3"):
+            lines.append(f"# HELP fts_loop_status_{loop_name.lower()} 循环状态 (1=正常)")
+            lines.append(f"# TYPE fts_loop_status_{loop_name.lower()} gauge")
+            lines.append(f"fts_loop_status_{loop_name.lower()} {_metrics.get(f'fts_loop_status_{loop_name}', 0)}")
+            lines.append("")
+
+        lines.append("# HELP fts_combo_sharpe 组合夏普比率")
+        lines.append("# TYPE fts_combo_sharpe gauge")
+        lines.append(f"fts_combo_sharpe {_metrics.get('fts_combo_sharpe', 0.0)}")
+        lines.append("")
+
+        # ── DataQualityMonitor 指标 ──
+        dq_monitor = get_data_quality_monitor()
+        if dq_monitor is not None:
+            try:
+                lines.append(dq_monitor.get_prometheus_metrics())
+            except Exception as e:  # noqa: BLE001
+                logger.error("获取 DataQualityMonitor 指标失败: %s", e)
+                lines.append(f"# ERROR 获取数据质量指标失败: {e}")
+        else:
+            # DataQualityMonitor 未注册时输出默认零值
+            lines.extend([
+                "# HELP fts_data_quality_data_completeness_ratio 数据完整性比率 (1.0=完美)",
+                "# TYPE fts_data_quality_data_completeness_ratio gauge",
+                "fts_data_quality_data_completeness_ratio 1.0",
+                "",
+                "# HELP fts_data_quality_market_data_valid 市场数据是否有效 (1=有效)",
+                "# TYPE fts_data_quality_market_data_valid gauge",
+                "fts_data_quality_market_data_valid 1.0",
+                "",
+                "# HELP fts_data_quality_total_checks 数据质量检查总次数",
+                "# TYPE fts_data_quality_total_checks counter",
+                "fts_data_quality_total_checks 0",
+                "",
+                "# HELP fts_data_quality_total_alerts 告警总次数",
+                "# TYPE fts_data_quality_total_alerts counter",
+                "fts_data_quality_total_alerts 0",
+                "",
+                "# HELP fts_data_quality_critical_alerts 严重告警次数",
+                "# TYPE fts_data_quality_critical_alerts counter",
+                "fts_data_quality_critical_alerts 0",
+                "",
+                "# HELP fts_data_quality_registered_factors 已注册基准的因子数",
+                "# TYPE fts_data_quality_registered_factors gauge",
+                "fts_data_quality_registered_factors 0",
+                "",
+            ])
+
+        return "\n".join(lines)
+
+    def _build_data_source_metrics(self) -> str:
+        """构建数据源特定指标。"""
+        lines = [
+            "# HELP fts_circuit_open 数据源熔断器是否开启",
+            "# TYPE fts_circuit_open gauge",
+            "fts_circuit_open 0",
+            "",
+            "# HELP fts_data_source_success_rate 数据源成功率",
+            "# TYPE fts_data_source_success_rate gauge",
+            "fts_data_source_success_rate 1.0",
+            "",
+        ]
+        dq_monitor = get_data_quality_monitor()
+        if dq_monitor is not None:
+            try:
+                snapshot = dq_monitor.get_metrics_snapshot()
+                valid = 1.0 if snapshot.get("market_data_valid", True) else 0.0
+                lines.append(f"fts_data_source_success_rate {valid}")
+            except Exception:  # noqa: BLE001
+                pass
+        return "\n".join(lines)
+
     def do_GET(self):  # noqa: N802
         path = self.path.rstrip("/")
 
@@ -380,6 +486,12 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/factors":
             self._respond_json(self._build_factor_list())
+
+        elif path == "/metrics":
+            self._respond_metrics(self._build_metrics())
+
+        elif path == "/metrics/data-sources":
+            self._respond_metrics(self._build_data_source_metrics())
 
         elif path == "/health":
             self._respond_json({
@@ -402,6 +514,21 @@ _metrics: dict[str, Any] = {
     "fts_combo_sharpe": 0.0,
     "fts_started_at": time.time(),
 }
+
+# ─── DataQualityMonitor 引用 ─────────────────────────────
+
+_data_quality_monitor: Optional[Any] = None
+
+
+def set_data_quality_monitor(monitor: Any) -> None:
+    """设置 DataQualityMonitor 实例用于指标暴露。"""
+    global _data_quality_monitor
+    _data_quality_monitor = monitor
+
+
+def get_data_quality_monitor() -> Optional[Any]:
+    """获取 DataQualityMonitor 实例。"""
+    return _data_quality_monitor
 
 
 def set_metric(name: str, value: Any) -> None:
@@ -466,4 +593,6 @@ __all__ = [
     "set_metric",
     "get_metric",
     "_metrics",
+    "set_data_quality_monitor",
+    "get_data_quality_monitor",
 ]

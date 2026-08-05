@@ -14,6 +14,7 @@ htmlcov/
 # IDE
 .vscode/
 .idea/
+.trae/
 *.swp
 *.swo
 *~
@@ -32,8 +33,11 @@ data/
 memory/
 seeds/
 
-# Documentation (only README.md at root is tracked)
-docs/
+# Documentation (Harness specs and key project docs are tracked; other project-local docs are not)
+docs/*
+!docs/harness/
+!docs/FTS_manual.md
+!docs/business_flow.md
 
 # Research / experimental
 brain_field_test.py
@@ -51,10 +55,6 @@ test_factor_list.txt
 
 # Reports generated output
 reports/
-
-# Project-local docs / AI context (not for GitHub)
-CLAUDE.md
-CODE_WIKI.md
 
 # Coverage
 .coverage
