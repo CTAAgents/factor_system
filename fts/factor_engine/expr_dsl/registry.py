@@ -100,8 +100,8 @@ def build_registry() -> dict[str, OperatorMeta]:
         int_params=("n",), bounds={"n": (2, 250)}, lookback="n", meaning="窗口内最大值位置")
 
     # ── L2 横截面算子（跨截面变换） ──
-    add("rank", PriceOps.rank, "L2", ("x",), meaning="截面排名(0-1)")
-    add("zscore", PriceOps.zscore, "L2", ("x",), meaning="截面 Z-Score")
+    add("rank", lambda x: PriceOps.rank(x), "L2", ("x",), meaning="截面排名(0-1)")
+    add("zscore", lambda x: PriceOps.zscore(x), "L2", ("x",), meaning="截面 Z-Score")
     add("normalize", lambda x: (x - x.min()) / (x.max() - x.min())
         if x.max() != x.min() else x * 0.0, "L2", ("x",), meaning="min-max 归一化")
     add("quantile", lambda x, q: x.quantile(q), "L2", ("x", "q"),
