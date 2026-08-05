@@ -401,6 +401,19 @@ class EvolutionLoop:
                     )
                     continue
 
+                # ── Step 1.3: 后代因子运行时校验（源头拦截广播错误/常数信号） ──
+                runtime_ok, runtime_reason = self._check_factor_runtime(new_factor)
+                if not runtime_ok:
+                    logger.warning(
+                        "[%s] 后代因子运行时校验失败: %s",
+                        new_factor.get("name", "?"), runtime_reason,
+                    )
+                    self._record_failure_trace(
+                        new_factor, generation, evolution_method,
+                        f"运行时校验失败: {runtime_reason}", [], trace_id,
+                    )
+                    continue
+
                 # ── Step 2: 微观演化（optuna 调参） ──
                 try:
                     # 横截面模式：用第一个股票的数据做微参
@@ -1412,6 +1425,49 @@ class EvolutionLoop:
         logger.info("GP 演化完成 [%s]: %s", parent.get("name", "?"), summary)
         return factor_program, summary
 
+    # ── Phase B.2.1: 后代因子运行时校验 ──────────────────
+
+    def _check_factor_runtime(
+        self, factor: FactorProgram,
+    ) -> tuple[bool, str]:
+        """试运行因子程序，在源头拦截 LLM 生成代码的运行时错误。
+
+        拦截场景:
+            - 广播错误（如 shapes (n,) 与 (2,) 混合运算）
+            - 输出长度与输入不匹配（np.diff/np.convolve 未保持长度 n）
+            - 常数信号（无信息量）
+
+        复用 BacktestPipeline._execute_factor_code（与回测流水线同一执行路径），
+        保证「校验通过 = 流水线可执行」，避免无效后代进入下游评估。
+
+        Args:
+            factor: 因子程序
+
+        Returns:
+            (是否通过, 失败原因；通过时原因为空)
+        """
+        from .backtest_pipeline import BacktestPipeline
+
+        probe_data = (
+            list(self.cross_section_data.values())[0]
+            if self._is_cross_section else self.data
+        )
+        try:
+            signal = BacktestPipeline._execute_factor_code(
+                factor.get("code", ""), probe_data, factor.get("params", {}),
+            )
+        except Exception as e:
+            return False, f"执行失败: {type(e).__name__}: {e}"
+
+        if not isinstance(signal, np.ndarray) or len(signal) != len(probe_data):
+            return False, (
+                f"输出长度不匹配: "
+                f"{len(signal) if hasattr(signal, '__len__') else '?'} != {len(probe_data)}"
+            )
+        if np.std(signal) < 1e-12:
+            return False, "输出为常数信号（无信息量）"
+        return True, ""
+
     def _run_backtest_pipeline(
         self,
         factor: FactorProgram,
@@ -1496,13 +1552,18 @@ class EvolutionLoop:
         l3 = evaluation.get("level_3_multiple", {})
 
         # 构造 OOS 结果（从评估链 L1 提取）
+        # 注意: L1 的 oos_ratio 是样本外数据切分比例（评估链默认 0.3），
+        # 并非一致性通过率，不能直接与审计阈值 0.5 比较。
+        # 样本外一致性以 OOS ICIR 度量（|ICIR| ≥ 1.0 → ic_consistency=1.0）。
         oos_ratio = l1.get("oos_ratio", 0)
+        oos_ic = l1.get("ic", 0)
+        oos_icir = l1.get("icir", 0)
         oos_result = None
         if oos_ratio > 0:
             oos_result = {
-                "ic_consistency": oos_ratio >= 0.5,
-                "oos_ic": l1.get("ic", 0) * oos_ratio,
-                "passed": oos_ratio >= 0.5,
+                "ic_consistency": min(1.0, abs(oos_icir)),
+                "oos_ic": oos_ic,
+                "passed": abs(oos_icir) >= 1.0,
             }
 
         # 构造 p-values（从 L3 提取，仅当非默认值时传递）

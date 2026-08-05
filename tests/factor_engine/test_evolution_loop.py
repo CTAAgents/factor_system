@@ -839,7 +839,17 @@ def _make_minimal_factor(factor_id: str = "fct_test1234") -> FactorProgram:
     return FactorProgram(
         factor_id=factor_id,
         name="test_factor",
-        code="def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))",
+        # 有效信号代码（非常数、长度与输入一致），通过运行时校验
+        code=(
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    close = data['close']\n"
+            "    n = len(close)\n"
+            "    ret = np.zeros(n)\n"
+            "    if n > 1:\n"
+            "        ret[1:] = np.diff(close) / np.maximum(np.abs(close[1:]), 1e-10)\n"
+            "    return np.tanh(ret * 10)\n"
+        ),
         params={"window": 10},
         signature=FactorSignature(
             input_fields=["close"], output_type="signal", frequency="daily", lookback=1,
@@ -2710,3 +2720,143 @@ class TestFullIntegrationPipeline:
 
         result = minimal_loop._run_ablation_check(sample_seed, eval_result, "fail")
         assert result["passed"] is False
+
+
+# ─── 审计 OOS 语义回归测试 ──────────────────────────────
+
+class TestRunFactorAuditOosSemantics:
+    """回归: oos_ratio 是样本外数据切分比例，不应使 oos_consistency 恒失败。
+
+    修复前 `_run_factor_audit` 以 `oos_ratio >= 0.5` 构造 ic_consistency，
+    而评估链 L1 的 oos_ratio 默认 0.3（OOS 切片比例），导致所有种子因子
+    的 oos_consistency 审计恒失败，夜间演化循环永远无法晋升父因子。
+    """
+
+    def test_oos_result_derived_from_icir_not_split_ratio(
+        self, minimal_loop, sample_seed
+    ):
+        """OOS 切分比例 0.3 + OOS ICIR 达标时，传递给审计器的 OOS 结果应通过。"""
+        captured: dict = {}
+
+        def fake_audit(**kwargs):
+            captured["oos_result"] = kwargs.get("oos_result")
+            return _make_passing_audit_report()
+
+        minimal_loop.auditor.audit = fake_audit
+
+        evaluation = {
+            "passed": True,
+            "level_1_backtest": {
+                "oos_ratio": 0.3,   # OOS 切片比例（非一致性率）
+                "ic": 0.05,
+                "icir": 1.5,
+            },
+            "level_3_multiple": {},
+        }
+        minimal_loop._run_factor_audit(
+            sample_seed, evaluation, "test_trace",
+        )
+        oos = captured.get("oos_result")
+        assert oos is not None, "oos_ratio>0 时应构造 OOS 结果"
+        assert oos["passed"] is True, "OOS ICIR 达标时应通过"
+        assert oos["ic_consistency"] >= 0.5
+
+    def test_oos_result_weak_icir_fails(self, minimal_loop, sample_seed):
+        """OOS ICIR 很弱时 oos_consistency 应失败。"""
+        captured: dict = {}
+
+        def fake_audit(**kwargs):
+            captured["oos_result"] = kwargs.get("oos_result")
+            return _make_passing_audit_report()
+
+        minimal_loop.auditor.audit = fake_audit
+
+        evaluation = {
+            "passed": True,
+            "level_1_backtest": {
+                "oos_ratio": 0.3,
+                "ic": 0.001,
+                "icir": 0.1,
+            },
+            "level_3_multiple": {},
+        }
+        minimal_loop._run_factor_audit(
+            sample_seed, evaluation, "test_trace",
+        )
+        oos = captured.get("oos_result")
+        assert oos is not None
+        assert oos["passed"] is False
+        assert oos["ic_consistency"] < 0.5
+
+
+# ─── 因子运行时校验回归测试 ─────────────────────────────
+
+class TestFactorRuntimeValidation:
+    """回归: LLM 生成后代因子的广播错误/常数信号应在源头被拦截。
+
+    此前广播错误因子（如 shapes (496,) (2,)）进入下游评估与回测流水线，
+    增加诊断噪音与无效评估开销；现由 _check_factor_runtime 在演化循环中
+    试运行拦截，并把教训写入经验链供 LLM 参考。
+    """
+
+    def _make_factor(self, code: str) -> dict:
+        return {
+            "factor_id": "fct_runtime_test",
+            "name": "runtime_test",
+            "code": code,
+            "params": {},
+            "economic_logic": {},
+        }
+
+    def test_normal_factor_passes(self, minimal_loop, sample_dataframe):
+        """正常因子代码应通过运行时校验。"""
+        minimal_loop.data = sample_dataframe
+        code = (
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    close = data['close']\n"
+            "    n = len(close)\n"
+            "    ret = np.zeros(n)\n"
+            "    if n > 5:\n"
+            "        ret[5:] = (close[5:] - close[:-5]) / np.maximum(close[:-5], 1e-10)\n"
+            "    return np.tanh(ret * 10)\n"
+        )
+        ok, reason = minimal_loop._check_factor_runtime(self._make_factor(code))
+        assert ok is True, reason
+
+    def test_broadcast_error_factor_fails(self, minimal_loop, sample_dataframe):
+        """广播错误代码（(n,) 与 (2,) 运算）应被拦截。"""
+        minimal_loop.data = sample_dataframe
+        code = (
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    close = data['close']\n"
+            "    return np.ones(len(close)) * np.array([1.0, 2.0])  # (n,) vs (2,) 广播错误\n"
+        )
+        ok, reason = minimal_loop._check_factor_runtime(self._make_factor(code))
+        assert ok is False
+        assert "broadcast" in reason or "执行失败" in reason
+
+    def test_constant_signal_factor_fails(self, minimal_loop, sample_dataframe):
+        """常数信号（无信息量）应被拦截。"""
+        minimal_loop.data = sample_dataframe
+        code = (
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    return np.full(len(data['close']), 0.5)\n"
+        )
+        ok, reason = minimal_loop._check_factor_runtime(self._make_factor(code))
+        assert ok is False
+        assert "常数" in reason
+
+    def test_wrong_length_factor_fails(self, minimal_loop, sample_dataframe):
+        """输出长度不匹配应被拦截。"""
+        minimal_loop.data = sample_dataframe
+        code = (
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    return np.diff(data['close'])  # 长度 n-1\n"
+        )
+        ok, reason = minimal_loop._check_factor_runtime(self._make_factor(code))
+        assert ok is False
+        assert "长度" in reason

@@ -277,7 +277,7 @@ fts/                          # 核心源码（84 个 Python 文件）
 ├── llm.py                    # LLM 客户端（OpenAI/Anthropic/Mock）
 └── cli.py                    # CLI 统一入口
 
-tests/                        # 99 个测试文件，2640 个测试用例
+tests/                        # 99 个测试文件，2644 个测试用例
 scripts/                      # 工具脚本
 config/                       # 项目配置
 memory/                       # 运行时持久化（自动创建）

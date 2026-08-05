@@ -46,8 +46,8 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 
 | 文件 | 字段 |
 |:-----|:-----|
-| `fts/__init__.py` | `__version__ = "2.8.2"` |
-| `pyproject.toml` | `version = "2.8.2"` |
+| `fts/__init__.py` | `__version__ = "2.8.3"` |
+| `pyproject.toml` | `version = "2.8.3"` |
 
 异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v1.1.0），与 FTS 项目版本同步。
 

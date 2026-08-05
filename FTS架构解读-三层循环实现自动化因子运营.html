@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FTS 架构解读：三层循环如何实现自动化因子运营</title>
+</head>
+<body style="margin:0; padding:0; background:#ffffff; font-family:-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif; color:#333333; font-size:16px; line-height:1.8; letter-spacing:0.2px;">
+
+<div style="max-width:680px; margin:0 auto; padding:24px 20px 60px;">
+
+  <!-- 标题区 -->
+  <h1 style="font-size:26px; font-weight:700; color:#1a1a1a; line-height:1.4; margin:0 0 8px 0;">FTS 架构解读：三层循环如何实现自动化因子运营</h1>
+  <div style="font-size:13px; color:#999999; margin-bottom:20px; padding-bottom:16px; border-bottom:1px solid #eeeeee;">量化因子系统 · 架构剖析</div>
+
+  <!-- 导语 -->
+  <p style="margin:16px 0;">因子研究是一项高度依赖人力的工作：提出假设、写代码、跑回测、看 IC、调参数、反复验证。一个研究员一晚上能手工迭代的因子数量，往往只有个位数。而当因子池膨胀到数百个，谁来保证每个因子都经得起审计？谁来判断它们之间的相关性？谁在深夜持续盯盘、定期给失效因子"退役"？</p>
+  <p style="margin:16px 0;">FTS（Factor Trading System）给出的答案是：<strong style="color:#1a1a1a;">把因子运营的完整生命周期，交给三层自动化循环来运转</strong>。本文从架构视角拆解 L1 / L2 / L3 三层循环的设计逻辑，看看一个"因子工厂"是如何实现从数据到信号的无人值守流水线。</p>
+
+  <!-- 一、总体架构 -->
+  <h2 style="font-size:21px; font-weight:700; color:#1a1a1a; margin:36px 0 12px 0; padding-left:12px; border-left:4px solid #2b6cb0;">一、总体架构：一个"因子工厂"的分层设计</h2>
+  <p style="margin:16px 0;">FTS 的整体链路可以用一条流水线概括：</p>
+  <div style="background:#f7f9fc; border-radius:6px; padding:16px 18px; font-size:14px; line-height:2.0; color:#2d3748; margin:16px 0;">
+    数据接入层（多源融合）→ L0 人类设定层 → <strong>L1 知识感知 → L2 因子演化 → L3 组合构建</strong> → 信号输出层（ScoredSignal）→ 下游执行系统
+  </div>
+  <p style="margin:16px 0;">各层职责严格分离：</p>
+  <table style="width:100%; border-collapse:collapse; font-size:14px; margin:16px 0;">
+    <tr style="background:#f0f4fa;">
+      <th style="border:1px solid #e2e8f0; padding:8px 10px; text-align:left; font-weight:600; color:#1a1a1a; width:30%;">层级</th>
+      <th style="border:1px solid #e2e8f0; padding:8px 10px; text-align:left; font-weight:600; color:#1a1a1a;">定位</th>
+      <th style="border:1px solid #e2e8f0; padding:8px 10px; text-align:left; font-weight:600; color:#1a1a1a;">核心职责</th>
+    </tr>
+    <tr>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">L0 人类设定层</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">目标与约束</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">设定目标（收益/夏普/回撤）、约束（持仓数/集中度/换手）、市场与风险偏好</td>
+    </tr>
+    <tr style="background:#fafbfc;">
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">L1 Meta-Loop</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">知识感知</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">市场感知、知识补给、种子注入、演化方向指引</td>
+    </tr>
+    <tr>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">L2 Evolution Loop</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">因子演化</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">因子发现、评估、演化、审计、质量分级</td>
+    </tr>
+    <tr style="background:#fafbfc;">
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">L3 Portfolio Loop</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">组合构建</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">因子筛选、正交化、信号合成、组合输出</td>
+    </tr>
+    <tr>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">下游系统</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">交易执行</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">消费交易信号，执行下单与风控</td>
+    </tr>
+  </table>
+  <p style="margin:16px 0;">三层循环就像一条自动化产线：L1 负责"看盘与晨会"，L2 负责"通宵研究"，L3 负责"盘前决策"。三者各司其职、串行接力，由调度器按时唤醒。</p>
+
+  <!-- 二、L1 -->
+  <h2 style="font-size:21px; font-weight:700; color:#1a1a1a; margin:36px 0 12px 0; padding-left:12px; border-left:4px solid #2b6cb0;">二、L1 Meta-Loop：让系统"懂市场"</h2>
+  <p style="margin:16px 0;">L1 是每天早晨的第一班岗（默认 08:30 启动），扮演"研究员晨会"的角色。它的核心组件包括：</p>
+  <ul style="margin:16px 0; padding-left:22px;">
+    <li style="margin:6px 0;"><strong style="color:#1a1a1a;">BootstrappingChain</strong>：通过 Web 感知收集财经新闻与市场数据，生成市场摘要，完成知识补给；若发现新的交易模式，生成候选因子。</li>
+    <li style="margin:6px 0;"><strong style="color:#1a1a1a;">DebateQualityAnalyzer</strong>：对市场多空观点做辩论质量分析，避免"只看得多、不看空"的单一视角。</li>
+    <li style="margin:6px 0;"><strong style="color:#1a1a1a;">FactorPoolManager</strong>：管理因子池——注入新种子、淘汰劣质因子。</li>
+    <li style="margin:6px 0;"><strong style="color:#1a1a1a;">L1Verifier 与 MetaStateManager</strong>：对知识补给结果执行锁定协议，并统一管理循环状态。</li>
+  </ul>
+  <p style="margin:16px 0;">L1 的产出是<strong style="color:#1a1a1a;">种子因子注入</strong>与<strong style="color:#1a1a1a;">演化方向指引</strong>，它们被递交给 L2 作为当晚演化的输入。值得注意的是，L1 只负责"给方向"，绝不直接修改因子代码——这是架构上的角色边界。</p>
+
+  <!-- 三、L2 -->
+  <h2 style="font-size:21px; font-weight:700; color:#1a1a1a; margin:36px 0 12px 0; padding-left:12px; border-left:4px solid #2b6cb0;">三、L2 Evolution Loop：自动化因子生产的发动机</h2>
+  <p style="margin:16px 0;">L2（默认 23:00 启动）是整个系统的核心，相当于"通宵加班的因子研究员"。它从种子池出发，逐代演化和筛选因子，最终沉淀出可用的 elite 因子。</p>
+
+  <h3 style="font-size:17px; font-weight:700; color:#1a1a1a; margin:24px 0 8px 0;">3.1 种子池：演化的起点</h3>
+  <p style="margin:16px 0;">系统内置了跨市场、多家族的种子因子库：股票侧 482 个（9 个内置 + 101 个经典公式化 Alpha + 158 个 Qlib 因子 + 191 个国泰君安因子 + 23 个基本面因子），期货侧 81 个（覆盖趋势、基差、动量、波动等 14 大因子家族）。所有种子因子在进入演化前都要通过契约校验与沙箱编译，并经过 IC 与夏普的初筛门槛。</p>
+
+  <h3 style="font-size:17px; font-weight:700; color:#1a1a1a; margin:24px 0 8px 0;">3.2 每代演化的七个步骤</h3>
+  <div style="background:#f7f9fc; border-radius:6px; padding:16px 18px; font-size:14px; line-height:2.0; color:#2d3748; margin:16px 0;">
+    Step 1 · UCT 父因子选择：平衡"探索"与"利用"，选出最优父因子<br>
+    Step 2 · LLM 宏观演化：让大模型分析因子优缺点并改写因子逻辑<br>
+    Step 3 · Optuna 微观调参：自动化搜索最优参数<br>
+    Step 4 · 三级评估链：回测验证 → 经济逻辑 → 多重检验<br>
+    Step 5 · 六项强制审计：因果、样本外、跨品种、压力、多重检验、数据窥探<br>
+    Step 6 · 质量评分卡：50 分制多维打分，A/B/C 分级<br>
+    Step 7 · 结果处置：晋升 elite / 记录失败经验 / 触发熔断
+  </div>
+  <p style="margin:16px 0;">其中，<strong style="color:#1a1a1a;">宏观演化改逻辑、微观调参改参数</strong>的分工很关键：大模型负责"想出新思路"，Optuna 负责"把参数调到最优"，两者叠加让每一代都有真实的改进空间。</p>
+
+  <h3 style="font-size:17px; font-weight:700; color:#1a1a1a; margin:24px 0 8px 0;">3.3 三级评估链：从"赚钱"到"靠谱"</h3>
+  <table style="width:100%; border-collapse:collapse; font-size:14px; margin:16px 0;">
+    <tr style="background:#f0f4fa;">
+      <th style="border:1px solid #e2e8f0; padding:8px 10px; text-align:left; font-weight:600; color:#1a1a1a;">级别</th>
+      <th style="border:1px solid #e2e8f0; padding:8px 10px; text-align:left; font-weight:600; color:#1a1a1a;">检验内容</th>
+    </tr>
+    <tr>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">Level 1 回测验证</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">IC、夏普、收益是否达标（如 IC &gt; 0.03、夏普 &gt; 1.5）</td>
+    </tr>
+    <tr style="background:#fafbfc;">
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">Level 2 经济逻辑</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">因子是否有经济学道理、可解释性如何</td>
+    </tr>
+    <tr>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">Level 3 多重检验</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">Bonferroni / FDR / adjusted-t 校正，排除"碰巧显著"</td>
+    </tr>
+  </table>
+
+  <h3 style="font-size:17px; font-weight:700; color:#1a1a1a; margin:24px 0 8px 0;">3.4 六项强制审计与 50 分质量评分卡</h3>
+  <p style="margin:16px 0;">通过评估链只是第一步。每个因子晋升前还必须通过<strong style="color:#1a1a1a;">六项强制审计</strong>：因果检验（Granger / 反事实）、样本外验证（Walk-Forward 滚动检验）、跨品种验证（要求大多数品种 IC 为正）、压力测试（极端行情鲁棒性）、多重检验（错误率控制）、数据窥探检验（确保无未来函数）。</p>
+  <p style="margin:16px 0;">审计之后是<strong style="color:#1a1a1a;">50 分制质量评分卡</strong>，从 IC 稳定性（10 分）、夏普（8 分）、换手率（6 分）、容量（5 分）、频率（5 分）、覆盖率（5 分）、鲁棒性（6 分）、经济逻辑（5 分）八个维度打分，按 A / B / C 分级准入——A、B 级晋级精英池，C 级淘汰并记录失败轨迹。</p>
+  <p style="margin:16px 0;">这一整套"评估 + 审计 + 评分卡"的设计，本质上是在回答一个核心问题：<strong style="color:#1a1a1a;">这个因子不是回测巧合，而是经得起检验的规律</strong>。</p>
+
+  <!-- 四、L3 -->
+  <h2 style="font-size:21px; font-weight:700; color:#1a1a1a; margin:36px 0 12px 0; padding-left:12px; border-left:4px solid #2b6cb0;">四、L3 Portfolio Loop：从因子到信号</h2>
+  <p style="margin:16px 0;">L2 沉淀出 elite 因子后，L3（默认 20:00 启动）负责把它们组合成可用的交易信号，链路如下：</p>
+  <div style="background:#f7f9fc; border-radius:6px; padding:16px 18px; font-size:14px; line-height:2.0; color:#2d3748; margin:16px 0;">
+    加载 elite 因子 → 因子正交化（去相关性）→ 衰减检验（淘汰失效因子）→ 组合构建（等权 / 夏普加权 / Elastic Net）→ 信号合成 → L3 Verifier 锁定校验
+  </div>
+  <p style="margin:16px 0;">组合构建支持三种合成模式：<strong style="color:#1a1a1a;">等权</strong>（1/N 简单稳健）、<strong style="color:#1a1a1a;">夏普加权</strong>（按因子夏普比率配权，期货市场默认）、<strong style="color:#1a1a1a;">Elastic Net</strong>（L1 + L2 正则化学习权重，股票市场默认）。合成后的组合还要经过 Verifier 校验——例如组合夏普、因子间最大相关性、月度换手率等硬性门槛，通过后才输出信号。</p>
+  <p style="margin:16px 0;">最终产出的 <strong style="color:#1a1a1a;">ScoredSignal</strong> 是一份结构化的交易信号：包含标的代码、方向（多/空）、加权得分、综合评分、因子贡献明细，以及贯穿全链路的 trace_id。值得强调的是，<strong style="color:#1a1a1a;">FTS 止步于信号，不执行交易</strong>——下单、风控与合规由下游交易系统完成，这是刻意划定的角色边界。</p>
+
+  <!-- 五、调度与可靠性 -->
+  <h2 style="font-size:21px; font-weight:700; color:#1a1a1a; margin:36px 0 12px 0; padding-left:12px; border-left:4px solid #2b6cb0;">五、调度、监控与可靠性：无人值守的保障</h2>
+  <p style="margin:16px 0;">自动化运营的前提是"该跑的时候一定在跑，出问题的时候一定知道"。</p>
+  <h3 style="font-size:17px; font-weight:700; color:#1a1a1a; margin:24px 0 8px 0;">5.1 定时调度</h3>
+  <table style="width:100%; border-collapse:collapse; font-size:14px; margin:16px 0;">
+    <tr style="background:#f0f4fa;">
+      <th style="border:1px solid #e2e8f0; padding:8px 10px; text-align:left; font-weight:600; color:#1a1a1a;">时间</th>
+      <th style="border:1px solid #e2e8f0; padding:8px 10px; text-align:left; font-weight:600; color:#1a1a1a;">任务</th>
+    </tr>
+    <tr>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">08:30</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">L1 Meta-Loop：市场感知 + 知识补给 + 种子注入</td>
+    </tr>
+    <tr style="background:#fafbfc;">
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">20:00</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">L3 Portfolio Loop：组合构建 + 信号合成</td>
+    </tr>
+    <tr>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">23:00</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">L2 Evolution Loop：因子演化</td>
+    </tr>
+    <tr style="background:#fafbfc;">
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">每 10 分钟</td>
+      <td style="border:1px solid #e2e8f0; padding:8px 10px;">健康检查：状态轮询、熔断检测、告警通知</td>
+    </tr>
+  </table>
+
+  <h3 style="font-size:17px; font-weight:700; color:#1a1a1a; margin:24px 0 8px 0;">5.2 多层熔断</h3>
+  <p style="margin:16px 0;">系统内置了多层熔断保护，避免"失控跑偏"：Token 消耗超预算 2 倍时停止当前演化；连续 5 代 IC 低于阈值时暂停演化；因子失败率超 95% 时停止本轮；连续 3 代质量分过低时暂停。数据侧同样有熔断：数据源连续 5 次失败即标记为不可用，冷却 6 小时后自动探活。</p>
+
+  <h3 style="font-size:17px; font-weight:700; color:#1a1a1a; margin:24px 0 8px 0;">5.3 可观测性</h3>
+  <p style="margin:16px 0;">系统提供 Web UI 仪表盘与 Prometheus 指标端点，实时展示三个循环的运行状态、Token 消耗、elite 因子数量与熔断状态。而贯穿所有模块的 trace_id，让每一个因子从诞生、评估、演化到退役的完整旅程都可追溯——这也是"自动化"与"黑箱"之间最重要的分界线。</p>
+
+  <!-- 六、总结 -->
+  <h2 style="font-size:21px; font-weight:700; color:#1a1a1a; margin:36px 0 12px 0; padding-left:12px; border-left:4px solid #2b6cb0;">六、总结：自动化，但绝不开黑箱</h2>
+  <p style="margin:16px 0;">回到开头的比喻：三层循环本质上把研究员一天的工作程序化了——</p>
+  <div style="background:#f7f9fc; border-radius:6px; padding:16px 18px; font-size:14px; line-height:2.0; color:#2d3748; margin:16px 0;">
+    L1 = 每天早晨的晨会：看新闻、定方向、备弹药<br>
+    L2 = 每晚的通宵研究：想新思路、试参数、过审计、评质量<br>
+    L3 = 盘前的组合决策：挑因子、去相关、合成信号、交棒给执行
+  </div>
+  <p style="margin:16px 0;">这个架构最值得借鉴的，不是"用 AI 自动写因子"这个表象，而是它背后的工程纪律：<strong style="color:#1a1a1a;">评估链三级把关、审计六项强制、评分卡多维分级、熔断层层设防、trace_id 全链追溯、角色边界钉死</strong>。自动化降低了人力成本，而严谨的验证体系守住了质量底线——两者缺一不可，这正是"自动化因子运营"能够从口号变成现实的关键。</p>
+
+  <div style="margin-top:36px; padding-top:16px; border-top:1px solid #eeeeee; font-size:13px; color:#999999;">本文仅用于技术交流，不构成任何投资建议。文中涉及的因子与策略仅作框架示例。</div>
+
+</div>
+</body>
+</html>
