@@ -100,6 +100,11 @@ Agent 职责不可越界。FTS 专注因子发现、评估、组合与演化。�
 5.8 版本号纪律原则
 每阶段完成后必须 bump 版本号，更新 pyproject.toml 和 docs/harness/07-operations.md。
 
+5.9 安全与可移植性原则
+- 禁止硬编码绝对路径（如 D:\Programs\...）：一律使用相对路径、`Path(__file__)` 或配置系统解析
+- 禁止在代码/配置中硬编码 API key 等敏感凭据：必须通过 `.env` + `os.environ` 读取，`.env` 不入库
+- 脚本禁止 `sys.path.insert` 写入绝对路径引导导入：使用相对导入或基于项目根目录的动态解析
+
 生效标志
 这些准则生效的标志：
 

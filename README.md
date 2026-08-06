@@ -2,8 +2,8 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-2066%2B%20collected-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.9.0-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-2928%2B%20collected-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.14.0-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -302,7 +302,7 @@ fts/                          # 核心源码（84 个 Python 文件）
 ├── llm.py                    # LLM 客户端（OpenAI/Anthropic/Mock）
 └── cli.py                    # CLI 统一入口
 
-tests/                        # 100 个测试文件，2848 个测试用例
+tests/                        # 100+ 个测试文件，2893+ 个测试用例
 scripts/                      # 工具脚本
 config/                       # 项目配置
 memory/                       # 运行时持久化（自动创建）

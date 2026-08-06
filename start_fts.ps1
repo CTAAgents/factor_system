@@ -24,9 +24,9 @@ if ($pythonScripts -and (Test-Path "$pythonScripts\fts.exe") -and ($env:Path -no
     Write-Host "Added $pythonScripts to PATH" -ForegroundColor Cyan
 }
 
-# ── FTS 路径配置（覆盖 .env 中的相对路径） ──
-$env:FTS_CONFIG_FILE = "D:\Programs\factor_system\config\settings.yaml"
-$env:FTS_MEMORY_DIR = "D:\Programs\factor_system\memory"
+# ── FTS 路径配置（基于脚本目录，可移植；覆盖 .env 中的相对路径） ──
+$env:FTS_CONFIG_FILE = Join-Path $PSScriptRoot "config\settings.yaml"
+$env:FTS_MEMORY_DIR = Join-Path $PSScriptRoot "memory"
 
 Write-Host "=== FTS Environment Ready ===" -ForegroundColor Green
 Write-Host "LLM: $($env:OPENAI_MODEL) @ $($env:OPENAI_BASE_URL)" -ForegroundColor Cyan
@@ -36,9 +36,14 @@ Write-Host ""
 Write-Host "Available commands:" -ForegroundColor Yellow
 Write-Host "  fts version             - 查看版本" -ForegroundColor White
 Write-Host "  fts monitor             - 系统监控" -ForegroundColor White
-Write-Host "  fts evolution run       - L2 因子演化" -ForegroundColor White
 Write-Host "  fts meta-loop run       - L1 市场感知" -ForegroundColor White
+Write-Host "  fts evolution run       - L2 因子演化" -ForegroundColor White
 Write-Host "  fts portfolio run       - L3 组合构建" -ForegroundColor White
+Write-Host "  fts backtest batch      - 批量回测 + 对比排名" -ForegroundColor White
+Write-Host "  fts feature list        - 特征算子清单 (50 算子)" -ForegroundColor White
+Write-Host "  fts gp evolve           - GP 遗传规划演化" -ForegroundColor White
+Write-Host "  fts factor stats        - 因子家族分布统计" -ForegroundColor White
+Write-Host "  fts feedback trigger    - 反馈闭环" -ForegroundColor White
 Write-Host "  fts factor list         - 查看 elite 因子" -ForegroundColor White
 Write-Host "  fts scheduler list      - 查看调度任务" -ForegroundColor White
 Write-Host ""

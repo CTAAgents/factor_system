@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.9.0
+> 版本: v2.14.0
 > 最后更新: 2026-08-06
 
 ---
@@ -9,6 +9,13 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.14.0** | 2026-08-06 | GAP-030 测试隔离根治：EvolutionLoop 新增 `factor_db_path` 注入点，test_evolution_loop.py 全部 run() 集成测试注入临时 DuckDB，杜绝测试写入真实 factor_catalog（此前每次全量回归写入约 44 条重复 seed 记录，fut_option_pcr 累计 267 条）；一次性清理 catalog 重复 seed 记录（保留每 name 最早一条 + 快照引用保护） |
+| **v2.13.0** | 2026-08-06 | GAP-032 L2 晋升产物双写一致性：`_write_to_duckdb` 返回 bool（失败不再吞异常）；`_promote_to_elite` 严格一致——DuckDB（主存储）写入失败回滚已写 JSON 快照并判定晋升失败，杜绝"快照有、catalog 无"孤儿；一次性数据修复：补入 1 个真缺失演化产物（fut_mobile_big_data_g5）+ 归档 515 个同名重复快照至 `_archive/`；新增双写原子化测试 |
+| **v2.12.1** | 2026-08-06 | session_id 全链路补齐：`state.py` 新增 `generate_session_id()`（格式 `session_<8hex>_<timestamp>`，与 trace_id 同构）；`fts/cli.py` 入口 `main()` 生成 session_id 并挂载到 `args.session_id`，作用域为整个 CLI 会话；evolution/meta-loop/portfolio 子命令启动日志输出 session_id 作为日志聚合标识；02-lifecycle 章节 4 校正 trace_id/run_id 格式描述（`{prefix}_{8hex}_{timestamp}`）并补充 session_id 实现说明；新增 3 测试用例（CLI 挂载/输出 + state 格式） |
+| **v2.12.0** | 2026-08-06 | GAP-031 L1→L2 数据流打通：EvolutionLoop 启动时合并 L1 注入候选（`_merge_l1_candidates`，pending 门控 + market 过滤 + 名称去重 + 幂等更新 factor_pool.json pending→injected）；L1 `_inject_candidate` 注入时写入 market 标记；`SeedCandidate` 契约新增可选 `market` 字段；新增 `test_evolution_l1_merge.py` 8 用例全绿；业务流文档同步 L1→L2 衔接 |
+| **v2.11.0** | 2026-08-06 | L3 组合漂移治理：新增 DriftMonitor（成员重合率 Jaccard + 权重 L1 变化率，持久化 drift_history/YYYY-MM-DD.json）+ PortfolioManager combo_history 归档 + build_combo 粘性约束（默认启用：±30% 变动 / 新因子首日封顶 0.10）+ L2 影子池（新晋升因子 shadow_pool 观察 5 个交易日，种子因子直接进正式组合）；新增 20 测试用例，82 个 portfolio_loop 测试全绿 |
+| **v2.10.1** | 2026-08-06 | 冷启动机制修正：L1/L2/L3 状态文件冷启动判定从 `EVOLUTION_VERSION`（系统版本）改为 `STATE_SCHEMA_VERSION`（状态结构版本），新增 `STATE_SCHEMA_VERSION` 常量；状态文件字段 `version` → `schema_version`（MetaStateManager / EvolutionStateManager / PortfolioStateManager 三处同步）；功能版本号变更不再触发冷启动，避免小版本升级清空演化进度；新增 `test_schema_version_compatible_keeps_state` 测试，78 个 meta_loop 测试全绿 |
+| **v2.10.0** | 2026-08-06 | 算子演化引擎（Phase 3+ / C.4）：新增 `fts/factor_engine/operator_evolution.py`（`OperatorEvolutionEngine`，DSL 算子空间适应度导向进化搜索——种群初始化（validator 校验）/IC+Sharpe 适应度评估（DSL executor，带缓存）/锦标赛选择/子树交叉与变异（参数受 param_bounds 约束）/精英保留），取代 `_generate_operator_factor` 纯随机组合；evolution_loop `_try_operator_engine_evolution` 接入 operator/hybrid 模式（无评估数据或引擎失败回退随机生成）；产物为 `kind=OPERATOR` 因子；关闭 GAP-026；新增 13 测试用例（引擎 11 + 集成 2）；设计文档 C.4 落地 |
 | **v2.9.0** | 2026-08-06 | Design 全量落地（docs/harness/design 9 设计全部完成）：S1 数据层（factor_quality_scores/factor_status_history/factor_audit_reports 三表 + 3 仓储类 + factor_catalog 生命周期字段）；S2 监控调度（Prometheus 衰减/Regime 指标 + adaptive_weight 封装 + 数据质量三维指标 + monthly_decay_eval/data_quality_eval 任务）；S3 回测流水线增强（7 阶段类 FactorScreener/SignalGenerator/PortfolioConstructor/CostSimulator/RiskAttributor/ReportGenerator/CapitalAllocator + run_batch + BacktestPipelineBuilder + CLI fts backtest）；S4 C.1 CLI（fts feature list/analyze + fts gp evolve）；S5 C.2 实盘对接（signal_contract/SignalValidator + fts/risk 风控包 + LiveFactorMonitor + HTTP 端点 + live/risk 指标）；S6 C.3 反馈闭环（FeedbackLoop 家族 + 4 张反馈表 + CLI fts feedback + 反馈指标）；新增 79 测试用例（S1 11 + S2 19 + S3 27 + S4 5 + S5 27 + S6 20 去重后 79）；全量回归通过（排除既有 3 个失败测试文件） |
 | **v2.8.5** | 2026-08-06 | P0/P1 演化质量修复与 OPERATOR 演化模式基础层：OPT-001 快速预筛选层（Step 1.4，nunique>10 / abs(IC)>0.02 / std>1e-6，过滤常数信号和伪相关）；OPT-002 种子因子晋升修复（重复判断 + EliteFactorTracker 初始化）；OPT-003 精英因子重评估保护（跳过不存在的跟踪记录）；OPT-004 期货质量评分卡差异化配置（get_futures_config，IC/Sharpe/换手率阈值下调适应日频期货）；OPT-005 LLM Prompt 增强（添加质量约束、OOS 一致性、因果链要求）；OPT-007 多父代交叉策略（GP 演化 3-parent crossover，锦标赛选择 n 父代，30% 概率）；OPT-008 FTS-Expr DSL OPERATOR 演化模式集成（_generate_operator_factor 方法，基于算子注册表随机生成合法表达式，10 次尝试上限）；OPT-006 OOS 审计误判修复（ICIR 一致性计算替代 oos_ratio）；新增 38+ 测试用例；全量回归测试通过 |
 | **v2.8.2** | 2026-08-06 | 回测流水线兼容修复：`_execute_factor_code` 支持标准 `factor_program(data, params)` 代码约定（此前仅支持 `output` 变量约定，导致所有 YAML 种子/GP 因子返回全零「未设置 output 变量」）；`_compute_factor` 滚动 IC 与日期构造在无 `date` 列时回退到 DatetimeIndex（修复期货面板 KeyError: 'date'）；新增 tests/factor_engine/test_backtest_pipeline.py（5 用例，覆盖标准约定/传统约定/显式 date 列/无效代码/缺列），流水线覆盖率 88%→90% |
@@ -48,8 +55,8 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 
 | 文件 | 字段 |
 |:-----|:-----|
-| `fts/__init__.py` | `__version__ = "2.9.0"` |
-| `pyproject.toml` | `version = "2.9.0"` |
+| `fts/__init__.py` | `__version__ = "2.10.1"` |
+| `pyproject.toml` | `version = "2.10.1"` |
 
 异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v1.1.0），与 FTS 项目版本同步。
 
@@ -267,6 +274,6 @@ pip install apscheduler
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `fts/__init__.py` __version__ = "2.9.0"；`pyproject.toml` version = "2.9.0"；`fts/factor_engine/__init__.py` EVOLUTION_VERSION = "1.1.0" |
-| 可验证断言 | 版本号 v2.9.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
-| 检验方式 | `python -c "import fts; assert fts.__version__ == '2.9.0'; from fts.factor_engine import __version__; assert __version__ == '1.1.0'"` |
+| 代码→文档映射 | `fts/__init__.py` __version__ = "2.14.0"；`pyproject.toml` version = "2.14.0"；`fts/factor_engine/contracts.py` STATE_SCHEMA_VERSION = "1" |
+| 可验证断言 | 版本号 v2.14.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
+| 检验方式 | `python -c "import fts; assert fts.__version__ == '2.14.0'; from fts.factor_engine.contracts import STATE_SCHEMA_VERSION; assert STATE_SCHEMA_VERSION == '1'"` |

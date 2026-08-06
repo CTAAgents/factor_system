@@ -1,6 +1,8 @@
 """验证 loader 模块能正确生成 FactorProgram。"""
 import sys
-sys.path.insert(0, 'D:/Programs/factor_system')
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fts.factor_engine.seed_data.loader import (
     load_wq101_seeds,

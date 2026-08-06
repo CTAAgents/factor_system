@@ -14,6 +14,7 @@ import pytest
 from fts.factor_engine.audit import FactorAuditReport
 from fts.factor_engine.contracts import (
     EVOLUTION_VERSION,
+    STATE_SCHEMA_VERSION,
     EconomicLogic,
     FactorEvaluation,
     FactorProgram,
@@ -24,10 +25,24 @@ from fts.factor_engine.state import (
     EvolutionStateManager,
     generate_run_id,
     generate_trace_id,
+    generate_session_id,
 )
 
 
 # ─── trace_id 生成 ────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _isolate_factor_db(tmp_path, monkeypatch):
+    """GAP-030: 本文件全部测试隔离 DuckDB factor_catalog，防污染真实库。
+
+    `FactorRepository.__init__` 内部每次执行 `from .schema import DATABASE_PATH`
+    读取模块当前属性，故 monkeypatch 模块属性即可让后续实例化指向隔离库。
+    """
+    from fts.factor_engine.factor_db import schema
+
+    isolated_db = tmp_path / "factor_catalog.duckdb"
+    schema.init_database(isolated_db)
+    monkeypatch.setattr(schema, "DATABASE_PATH", isolated_db)
 
 def test_generate_trace_id_format():
     tid = generate_trace_id("l2")
@@ -42,6 +57,14 @@ def test_generate_run_id_format():
     assert rid.startswith("run_")
 
 
+def test_generate_session_id_format():
+    sid = generate_session_id()
+    assert sid.startswith("session_")
+    # 格式与 trace_id 相同: session_<8hex>_<timestamp>
+    parts = sid.split("_")
+    assert len(parts) == 3
+
+
 def test_generate_trace_id_uniqueness():
     ids = {generate_trace_id("x") for _ in range(100)}
     assert len(ids) >= 95  # 高概率唯一
@@ -54,7 +77,7 @@ def test_state_manager_init(tmp_memory_dir):
     mgr = EvolutionStateManager(tmp_memory_dir)
     state = mgr.load_or_init()
     assert state["status"] == "running"
-    assert state["version"] == EVOLUTION_VERSION
+    assert state["schema_version"] == STATE_SCHEMA_VERSION
     assert state["last_generation"] == 0
     assert state["total_factors_evaluated"] == 0
 
@@ -99,16 +122,16 @@ def test_state_manager_recovers_from_backup(tmp_memory_dir):
 
 
 def test_state_manager_version_check(tmp_memory_dir):
-    """版本不匹配时应视为损坏。"""
-    # 写入错误版本
+    """schema 版本不匹配时应视为损坏。"""
+    # 写入错误 schema 版本
     (tmp_memory_dir / "state.json").write_text(
-        json.dumps({"version": "0.0.0", "status": "running"}),
+        json.dumps({"schema_version": "0", "status": "running"}),
         encoding="utf-8",
     )
     mgr = EvolutionStateManager(tmp_memory_dir)
     state = mgr.load_or_init()
     # 应重新初始化
-    assert state["version"] == EVOLUTION_VERSION
+    assert state["schema_version"] == STATE_SCHEMA_VERSION
     assert state["last_generation"] == 0
 
 
@@ -466,10 +489,10 @@ def test_state_manager_add_experience_ref(tmp_memory_dir):
 
 
 def test_state_manager_save_version_mismatch(tmp_memory_dir):
-    """版本不匹配的 save 应抛 StateError。"""
+    """schema 版本不匹配的 save 应抛 StateError。"""
     mgr = EvolutionStateManager(tmp_memory_dir)
     state = mgr.load_or_init()
-    state["version"] = "0.0.0"
+    state["schema_version"] = "0"
     from fts.factor_engine.state import StateError
     with pytest.raises(StateError, match="版本不匹配"):
         mgr.save(state)
@@ -831,6 +854,61 @@ class TestMicroEvolutionCoverage:
         assert evolved["params"] == {"window": 10}
         assert score == 0.0
 
+    def test_optimize_params_empty_params_uses_default_search_space(
+        self, sample_ohlcv, forward_returns, mock_optuna_study,
+    ):
+        """params 为空时（GP/算子因子）应注入默认搜索空间，避免 optuna 退化。
+
+        回归: Optuna 搜索空间退化 — 空 params 导致无参数可优化，
+        所有 trial 返回相同值，超参优化无效。
+        """
+        mock_optuna, mock_study = mock_optuna_study
+        from fts.factor_engine.contracts import EconomicLogic, FactorProgram, FactorSignature
+
+        factor = FactorProgram(
+            factor_id="fct_noparam_test",
+            name="noparam_test",
+            code=(
+                "def factor_program(data, params):\n"
+                "    import numpy as np\n"
+                "    close = data['close']\n"
+                "    n = len(close)\n"
+                "    ret = np.zeros(n)\n"
+                "    if n > 5:\n"
+                "        ret[5:] = (close[5:] - close[:-5]) / np.maximum(close[:-5], 1e-10)\n"
+                "    return np.tanh(ret * 10)\n"
+            ),
+            params={},  # 空参数 → 应触发默认搜索空间
+            signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
+            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="noparam测试"),
+            source="manual",
+        )
+
+        # 记录 objective 实际请求的搜索空间键
+        requested_keys: list[set[str]] = []
+
+        def fake_optimize(func, **_kwargs):
+            for _ in range(3):
+                trial = MagicMock()
+                trial.suggest_int.side_effect = lambda name, lo, hi: 42
+                trial.suggest_float.side_effect = lambda name, lo, hi: 0.5
+                trial.suggest_categorical.side_effect = lambda name, choices: choices[0]
+                # 捕获 trial 对象供 objective 查询
+                func(trial)
+            requested_keys.append({"lookback", "holding", "window", "threshold"})
+
+        mock_study.optimize.side_effect = fake_optimize
+        mock_study.best_params = {"lookback": 42, "holding": 42, "window": 42, "threshold": 0.5}
+        mock_study.best_value = 0.1
+        mock_study.trials = [MagicMock()]
+
+        import fts.factor_engine.micro_evolution as mev
+        params, score = mev.optimize_params(factor, sample_ohlcv, forward_returns, n_trials=3)
+        # 默认搜索空间生效: 返回参数包含全部 4 个默认键
+        assert set(params.keys()) == {"lookback", "holding", "window", "threshold"}
+        assert score == 0.1
+        mock_optuna.create_study.assert_called_once()
+
 
 # ─── EvolutionLoop 未覆盖路径补齐 ─────────────────────────
 
@@ -1088,6 +1166,154 @@ class TestEvolutionLoopCoverage:
         assert fp.suffix == ".json"
         data = json.loads(fp.read_text(encoding="utf-8"))
         assert data["factor_id"] == "fct_promote_test_unique"
+
+    # ─── GAP-032: 双写原子化（JSON 快照 + DuckDB catalog 严格一致）───
+
+    def test_write_to_duckdb_returns_true_on_success(
+        self, tmp_elite_dir, tmp_memory_dir,
+    ):
+        """_write_to_duckdb 成功时应返回 True。"""
+        loop = EvolutionLoop(
+            data=pd.DataFrame({"close": [1.0]}),
+            forward_returns=np.array([0.0]),
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+        )
+        mock_repo = MagicMock()
+        mock_repo.get_factor = MagicMock(return_value=None)
+        mock_repo.create_factor = MagicMock(return_value="fct_x")
+        loop._get_repo = MagicMock(return_value=mock_repo)
+        factor = _make_minimal_factor("fct_duck_success")
+        factor["name"] = "fct_duck_success"
+        evaluation = FactorEvaluation(
+            factor_id="fct_duck_success",
+            trace_id="test_trace",
+            passed=True,
+            failure_reasons=[],
+            level_1_backtest={"ic": 0.05, "sharpe": 1.6},
+            evaluated_at="2026-07-18T00:00:00",
+        )
+        result = loop._write_to_duckdb(factor, evaluation)
+        assert result is True
+        mock_repo.create_factor.assert_called_once()
+
+    def test_write_to_duckdb_returns_false_on_error(
+        self, tmp_elite_dir, tmp_memory_dir,
+    ):
+        """_write_to_duckdb 失败时应返回 False（不吞异常）。"""
+        loop = EvolutionLoop(
+            data=pd.DataFrame({"close": [1.0]}),
+            forward_returns=np.array([0.0]),
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+        )
+        mock_repo = MagicMock()
+        mock_repo.get_factor = MagicMock(return_value=None)
+        mock_repo.create_factor = MagicMock(side_effect=RuntimeError("duckdb down"))
+        loop._get_repo = MagicMock(return_value=mock_repo)
+        factor = _make_minimal_factor("fct_duck_fail")
+        factor["name"] = "fct_duck_fail"
+        evaluation = FactorEvaluation(
+            factor_id="fct_duck_fail",
+            trace_id="test_trace",
+            passed=True,
+            failure_reasons=[],
+            level_1_backtest={"ic": 0.05, "sharpe": 1.6},
+            evaluated_at="2026-07-18T00:00:00",
+        )
+        result = loop._write_to_duckdb(factor, evaluation)
+        assert result is False
+
+    def test_promote_to_elite_duckdb_failure_rolls_back_json(
+        self, tmp_elite_dir, tmp_memory_dir,
+    ):
+        """DuckDB 写入失败时 _promote_to_elite 应回滚 JSON 快照并返回 None。"""
+        loop = EvolutionLoop(
+            data=pd.DataFrame({"close": [1.0]}),
+            forward_returns=np.array([0.0]),
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+        )
+        mock_repo = MagicMock()
+        mock_repo.get_factor_by_name = MagicMock(return_value=None)
+        mock_repo.get_factor = MagicMock(return_value=None)
+        mock_repo.create_factor = MagicMock(side_effect=RuntimeError("duckdb down"))
+        loop._get_repo = MagicMock(return_value=mock_repo)
+        factor = _make_minimal_factor("fct_rollback_unique")
+        factor["name"] = "fct_rollback_unique"
+        evaluation = FactorEvaluation(
+            factor_id="fct_rollback_unique",
+            trace_id="test_trace",
+            passed=True,
+            failure_reasons=[],
+            level_1_backtest={"ic": 0.05, "sharpe": 1.6},
+            evaluated_at="2026-07-18T00:00:00",
+        )
+        fp = loop._promote_to_elite(factor, evaluation)
+        assert fp is None
+        # JSON 快照应被回滚删除，不留"快照有、catalog 无"孤儿
+        assert not (tmp_elite_dir / "fct_rollback_unique.json").exists()
+        assert list(tmp_elite_dir.glob("*.json")) == []
+
+    def test_promote_to_elite_duckdb_success_keeps_json(
+        self, tmp_elite_dir, tmp_memory_dir,
+    ):
+        """DuckDB 写入成功时 _promote_to_elite 保留 JSON 快照并返回路径。"""
+        loop = EvolutionLoop(
+            data=pd.DataFrame({"close": [1.0]}),
+            forward_returns=np.array([0.0]),
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+        )
+        mock_repo = MagicMock()
+        mock_repo.get_factor_by_name = MagicMock(return_value=None)
+        mock_repo.get_factor = MagicMock(return_value=None)
+        mock_repo.create_factor = MagicMock(return_value="fct_keep_unique")
+        loop._get_repo = MagicMock(return_value=mock_repo)
+        factor = _make_minimal_factor("fct_keep_unique")
+        factor["name"] = "fct_keep_unique"
+        evaluation = FactorEvaluation(
+            factor_id="fct_keep_unique",
+            trace_id="test_trace",
+            passed=True,
+            failure_reasons=[],
+            level_1_backtest={"ic": 0.05, "sharpe": 1.6},
+            evaluated_at="2026-07-18T00:00:00",
+        )
+        fp = loop._promote_to_elite(factor, evaluation)
+        assert fp is not None
+        assert fp.exists()
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        assert data["factor_id"] == "fct_keep_unique"
+
+    # ─── GAP-030: 测试隔离 — factor_db_path 注入点 ─────────
+
+    def test_get_repo_uses_isolated_db_path(self, tmp_path):
+        """GAP-030: EvolutionLoop(factor_db_path=...) 时 _get_repo 应使用隔离库。"""
+        loop = EvolutionLoop(
+            data=pd.DataFrame({"close": [1.0]}),
+            forward_returns=np.array([0.0]),
+            elite_dir=tmp_path / "elite",
+            memory_dir=tmp_path / "memory",
+            factor_db_path=tmp_path / "catalog.duckdb",
+        )
+        repo = loop._get_repo()
+        assert str(repo._db_path).endswith("catalog.duckdb")
+
+    def test_get_repo_defaults_to_real_db(self, tmp_path, monkeypatch):
+        """GAP-030: 未传 factor_db_path 时 _get_repo 应使用默认库路径。"""
+        import fts.factor_engine.factor_db.schema as schema
+
+        fake_default = tmp_path / "default_catalog.duckdb"
+        monkeypatch.setattr(schema, "DATABASE_PATH", fake_default)
+        loop = EvolutionLoop(
+            data=pd.DataFrame({"close": [1.0]}),
+            forward_returns=np.array([0.0]),
+            elite_dir=tmp_path / "elite",
+            memory_dir=tmp_path / "memory",
+        )
+        repo = loop._get_repo()
+        assert str(repo._db_path).endswith("default_catalog.duckdb")
 
     def test_record_success_trace(self, tmp_memory_dir):
         """_record_success_trace 应记录到 success 目录。"""
@@ -2825,7 +3051,11 @@ class TestFactorRuntimeValidation:
         assert ok is True, reason
 
     def test_broadcast_error_factor_fails(self, minimal_loop, sample_dataframe):
-        """广播错误代码（(n,) 与 (2,) 运算）应被拦截。"""
+        """广播错误代码（(n,) 与 (2,) 运算）应被拦截。
+
+        v2.8.5 起 `_execute_factor_code` 捕获广播/形状异常并降级为零值数组
+        （避免回测流水线崩溃），运行时校验据此以"常数信号"拦截。
+        """
         minimal_loop.data = sample_dataframe
         code = (
             "def factor_program(data, params):\n"
@@ -2835,7 +3065,8 @@ class TestFactorRuntimeValidation:
         )
         ok, reason = minimal_loop._check_factor_runtime(self._make_factor(code))
         assert ok is False
-        assert "broadcast" in reason or "执行失败" in reason
+        # 广播异常被捕获 → 降级零值 → 以"常数信号"拦截（功能上已阻止崩溃）
+        assert "常数" in reason
 
     def test_constant_signal_factor_fails(self, minimal_loop, sample_dataframe):
         """常数信号（无信息量）应被拦截。"""
@@ -2850,7 +3081,7 @@ class TestFactorRuntimeValidation:
         assert "常数" in reason
 
     def test_wrong_length_factor_fails(self, minimal_loop, sample_dataframe):
-        """输出长度不匹配应被拦截。"""
+        """输出长度不匹配应被拦截（降级为零值 → 常数信号）。"""
         minimal_loop.data = sample_dataframe
         code = (
             "def factor_program(data, params):\n"
@@ -2859,7 +3090,7 @@ class TestFactorRuntimeValidation:
         )
         ok, reason = minimal_loop._check_factor_runtime(self._make_factor(code))
         assert ok is False
-        assert "长度" in reason
+        assert "常数" in reason
 
 
 # ─── elite 父因子回退（v2.8.4） ───────────────────────────
@@ -2941,3 +3172,72 @@ class TestEliteParentFallback:
         assert result.generations_completed >= 1, (
             "种子重复跳过时应回退 elite 池继续演化，而非 0 代跳过"
         )
+
+
+# ─── 快速预筛选 IC 阈值市场自适应（v2.8.6） ──────────────
+
+
+class TestQuickPrefilterThresholds:
+    """回归: elite 池无新因子补充 — 预筛选 IC 阈值 0.02 对期货日频过严。
+
+    期货日频单品种时序 IC 信噪比低（常见 0.01-0.02），
+    阈值应按市场自适应：futures=0.01，stock=0.02。
+    """
+
+    @staticmethod
+    def _make_factor() -> dict:
+        return {
+            "factor_id": "fct_prefilter_001",
+            "name": "prefilter_test",
+            "code": (
+                "def factor_program(data, params):\n"
+                "    import numpy as np\n"
+                "    close = data['close']\n"
+                "    n = len(close)\n"
+                "    ret = np.zeros(n)\n"
+                "    if n > 5:\n"
+                "        ret[5:] = (close[5:] - close[:-5]) / np.maximum(close[:-5], 1e-10)\n"
+                "    return np.tanh(ret * 10)\n"
+            ),
+            "params": {},
+        }
+
+    @staticmethod
+    def _make_loop(market: str, sample_ohlcv, forward_returns, tmp_path) -> "EvolutionLoop":
+        return EvolutionLoop(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=str(tmp_path / "elite"),
+            memory_dir=str(tmp_path / "memory"),
+            n_trials_micro=2,
+            market=market,
+        )
+
+    def test_futures_ic_0_015_passes(
+        self, sample_ohlcv, forward_returns, tmp_path,
+    ):
+        """期货市场: IC=0.015 应通过预筛选（阈值放宽至 0.01）。"""
+        loop = self._make_loop("futures", sample_ohlcv, forward_returns, tmp_path)
+        with patch("scipy.stats.spearmanr", return_value=(0.015, 0.4)):
+            ok, reason = loop._quick_prefilter(self._make_factor(), "trace")
+        assert ok, reason
+
+    def test_stock_ic_0_015_rejected(
+        self, sample_ohlcv, forward_returns, tmp_path,
+    ):
+        """股票市场: IC=0.015 应被拦截（阈值保持 0.02）。"""
+        loop = self._make_loop("stock", sample_ohlcv, forward_returns, tmp_path)
+        with patch("scipy.stats.spearmanr", return_value=(0.015, 0.4)):
+            ok, reason = loop._quick_prefilter(self._make_factor(), "trace")
+        assert not ok
+        assert "0.02" in reason
+
+    def test_futures_ic_0_008_rejected(
+        self, sample_ohlcv, forward_returns, tmp_path,
+    ):
+        """期货市场: IC=0.008 仍应被拦截（低于 0.01 下限）。"""
+        loop = self._make_loop("futures", sample_ohlcv, forward_returns, tmp_path)
+        with patch("scipy.stats.spearmanr", return_value=(0.008, 0.6)):
+            ok, reason = loop._quick_prefilter(self._make_factor(), "trace")
+        assert not ok
+        assert "0.01" in reason

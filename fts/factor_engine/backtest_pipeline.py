@@ -550,7 +550,16 @@ class BacktestPipeline:
                 "n": n,
                 "np": np,
             }
-            exec(code_str, {}, local_vars)
+            try:
+                exec(code_str, {}, local_vars)
+            except Exception as e:
+                # 捕获广播错误/形状不匹配等顶层运行时异常（传统约定代码），
+                # 与 factor_program 约定行为一致，返回零值数组而非向上抛出
+                logger.warning(
+                    "因子代码顶层执行异常 (shape/broadcast): %s, 返回零值",
+                    e,
+                )
+                return np.zeros(n)
 
         # 约定 1 (标准): def factor_program(data, params) -> np.ndarray
         factor_fn = local_vars.get("factor_program")
@@ -560,9 +569,24 @@ class BacktestPipeline:
                 col: data[col].values.astype(np.float64)
                 for col in data.columns
             }
-            result = factor_fn(data_dict, params)
+            try:
+                result = factor_fn(data_dict, params)
+            except Exception as e:
+                # 捕获广播错误/形状不匹配等运行时异常，返回零值数组
+                logger.warning(
+                    "因子代码执行异常 (shape/broadcast): %s, 返回零值",
+                    e,
+                )
+                return np.zeros(n)
             if isinstance(result, (np.ndarray, pd.Series)):
                 result = np.asarray(result, dtype=float)
+                # 检查输出长度是否匹配，不匹配时返回零值
+                if len(result) != n:
+                    logger.warning(
+                        "因子输出长度不匹配: %d != %d, 返回零值",
+                        len(result), n,
+                    )
+                    return np.zeros(n)
                 result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
                 result = np.clip(result, -10.0, 10.0)
                 return result

@@ -35,6 +35,30 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# 影子池观察期（交易日数）— 新晋升因子先进影子池观察，期满后才进正式组合。
+# 与 portfolio_loop.SHADOW_OBSERVE_TRADING_DAYS 保持一致。
+_SHADOW_OBSERVE_TRADING_DAYS: int = 5
+
+
+def _add_trading_days(start: datetime, days: int) -> datetime:
+    """计算 N 个交易日后的日期时间（跳过周末，近似交易日）。"""
+    end = np.busday_offset(start.date(), days, roll="forward")
+    return datetime.combine(end.astype(object), datetime.min.time())
+
+
+def _build_shadow_pool(now: Optional[datetime] = None) -> dict[str, Any]:
+    """构造因子影子池标记。
+
+    新晋升因子进入影子池观察，观察期内 L3 组合不纳入该因子。
+    """
+    now = now or datetime.now()
+    observe_until = _add_trading_days(now, _SHADOW_OBSERVE_TRADING_DAYS)
+    return {
+        "promoted_at": now.isoformat(),
+        "observe_trading_days": _SHADOW_OBSERVE_TRADING_DAYS,
+        "observe_until": observe_until.isoformat(),
+    }
+
 from .contracts import (
     DEFAULT_BUDGET_CONFIG,
     BudgetConfig,
@@ -128,12 +152,14 @@ class EvolutionLoop:
         quality_card_config: Optional[Any] = None,
         quality_min_grade: str = "B",
         market: str = "stock",
+        factor_db_path: Optional[str | Path] = None,
     ):
         self.data = data
         self.forward_returns = forward_returns
         self.cross_section_data = cross_section_data
         self.cross_section_dates = cross_section_dates
         self.market = market
+        self.factor_db_path = factor_db_path
         self._is_cross_section = cross_section_data is not None
 
         # ── 市场隔离: 自动按 market 选择 elite 目录 ──
@@ -303,6 +329,9 @@ class EvolutionLoop:
         try:
             # ── Step 0: 种子因子相关性预检（轻量扫描，仅标记不删除） ──
             seeds = self.seed_pool.load_all_seeds()
+            # GAP-031: 合并 L1 注入候选（pending 门控 + market 过滤 + 去重），
+            # 与种子同等参与相关性预检与种子评估晋升
+            seeds = self._merge_l1_candidates(seeds, trace_id)
             seed_correlations = self._run_seed_correlation_check(seeds, trace_id)
             if seed_correlations:
                 high_corr_count = len(seed_correlations)
@@ -856,10 +885,13 @@ class EvolutionLoop:
         return parents
 
     def _get_repo(self):
-        """延迟初始化 DuckDB 仓储。"""
+        """延迟初始化 DuckDB 仓储（GAP-030: 支持 factor_db_path 注入隔离库）。"""
         if self._repo is None:
             from .factor_db import FactorRepository
-            self._repo = FactorRepository()
+            self._repo = (
+                FactorRepository(db_path=self.factor_db_path)
+                if self.factor_db_path else FactorRepository()
+            )
         return self._repo
 
     def _promote_to_elite(
@@ -867,6 +899,7 @@ class EvolutionLoop:
         seed_correlations: Optional[list[FactorCorrelation]] = None,
         quality_score: Optional[dict] = None,
         audit_report: Optional[FactorAuditReport] = None,
+        shadow_observe: bool = True,
     ) -> Optional[Path]:
         """将因子晋升到精英池。
 
@@ -876,6 +909,8 @@ class EvolutionLoop:
             seed_correlations: L2 种子因子相关性标记（可选）
             quality_score: 质量评分卡结果（Phase A.1 集成）
             audit_report: 因子审计报告（Phase B.3 集成）
+            shadow_observe: 是否进入影子池观察（新演化因子默认 True；
+                            种子因子/初始池导入传 False 直接进正式组合）
 
         Returns:
             Path: 晋升成功
@@ -952,6 +987,12 @@ class EvolutionLoop:
                 print(f"[evo] 因子 {factor.get('name', '?')} 写入 L2 相关性标记: "
                       f"{len(corr_flags)} 个高相关对")
 
+        # ── 影子池标记（L2 晋升节奏控制）：新演化因子先进影子池观察 ──
+        if shadow_observe:
+            record["shadow_pool"] = _build_shadow_pool()
+            print(f"[evo] 因子 {factor.get('name', '?')} 进入影子池观察 "
+                  f"({_SHADOW_OBSERVE_TRADING_DAYS} 个交易日)")
+
         # ── 写入 JSON 文件（debug/备份） ──
         fp.write_text(
             json.dumps(record, ensure_ascii=False, indent=2),
@@ -959,7 +1000,20 @@ class EvolutionLoop:
         )
 
         # ── 写入 DuckDB（主存储） ──
-        self._write_to_duckdb(factor, evaluation, quality_score, seed_correlations, audit_report)
+        # GAP-032 严格一致：DuckDB 是主存储，写入失败则回滚已写 JSON 快照并判定
+        # 晋升失败，杜绝"快照有、catalog 无"的孤儿数据
+        write_ok = self._write_to_duckdb(
+            factor, evaluation, quality_score, seed_correlations, audit_report,
+            shadow_pool=record.get("shadow_pool"),
+        )
+        if not write_ok:
+            try:
+                fp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            print(f"[evo] ❌ 晋升失败 [{factor.get('name', '?')}]: "
+                  f"DuckDB 写入失败，已回滚 JSON 快照 {fp.name}")
+            return None
 
         # ── Phase A.2: 注册到精英因子追踪器 ──
         try:
@@ -995,7 +1049,8 @@ class EvolutionLoop:
         quality_score: Optional[dict] = None,
         seed_correlations: Optional[list[FactorCorrelation]] = None,
         audit_report: Optional[FactorAuditReport] = None,
-    ) -> None:
+        shadow_pool: Optional[dict] = None,
+    ) -> bool:
         """将因子写入 DuckDB（主存储层）。
 
         支持幂等写入：若 factor_id 已存在则更新，不存在则创建。
@@ -1006,6 +1061,12 @@ class EvolutionLoop:
             quality_score: 质量评分卡结果
             seed_correlations: L2 种子因子相关性标记
             audit_report: 因子审计报告（Phase B.3 集成）
+            shadow_pool: 影子池标记（L2 晋升节奏控制，可选）
+
+        Returns:
+            True: 写入成功
+            False: 写入失败（GAP-032 严格一致：失败不再吞异常，
+                   由调用方决定是否回滚 JSON 快照）
         """
         try:
             repo = self._get_repo()
@@ -1046,6 +1107,7 @@ class EvolutionLoop:
                     "risk_tag": factor.get("risk_tag"),
                     "factor_version": factor.get("factor_version", "v2"),
                     "audit_report": audit_report.to_dict() if audit_report else None,
+                    "shadow_pool": shadow_pool,
                 },
             }
 
@@ -1088,12 +1150,14 @@ class EvolutionLoop:
             }
 
             repo.add_evaluation(factor_id, eval_dict)
+            return True
 
         except Exception as e:
             factor_name = factor.get("name", "?")
             print(f"[evo] ⚠️ DuckDB 写入失败 [{factor_name}]: {e}")
             import traceback
             traceback.print_exc()
+            return False
 
     def _evaluate_and_promote_seeds(
         self,
@@ -1199,6 +1263,7 @@ class EvolutionLoop:
                         seed_correlations=seed_correlations,
                         quality_score=inspection.quality_score,
                         audit_report=audit_report,
+                        shadow_observe=False,  # 种子因子直接进正式组合，不走影子池
                     )
                     if promoted_path is None:
                         # 因子名称重复，跳过
@@ -1210,6 +1275,126 @@ class EvolutionLoop:
             except Exception:
                 continue
         return promoted
+
+    def _merge_l1_candidates(
+        self,
+        seeds: list[FactorProgram],
+        trace_id: str,
+    ) -> list[FactorProgram]:
+        """GAP-031: 合并 L1 注入候选到种子列表。
+
+        读取 memory/knowledge/factors/l1_injected/*.json，经
+        pending 门控（factor_pool.json status=pending）+ market 过滤 + 名称去重后，
+        转为 FactorProgram（source="bootstrapping"）并入种子列表，
+        与种子同等参与相关性预检与种子评估晋升。
+
+        幂等: 消费后更新 factor_pool.json 中对应记录 status pending → injected。
+
+        Args:
+            seeds: 现有种子因子列表（load_all_seeds 结果）
+            trace_id: 全链路 trace_id
+
+        Returns:
+            合并 L1 候选后的种子因子列表
+        """
+        import json
+
+        inject_dir = Path("memory/knowledge/factors/l1_injected")
+        pool_path = Path("memory/knowledge/factors/factor_pool.json")
+        if not inject_dir.exists():
+            return seeds
+
+        # 1. pending 门控: factor_pool.json 中 status == "pending" 的 factor_id
+        pending_ids: set[str] = set()
+        pool_loaded = False
+        pool_data: Optional[dict[str, Any]] = None
+        if pool_path.exists():
+            try:
+                pool_data = json.loads(pool_path.read_text(encoding="utf-8"))
+                pending_ids = {
+                    f.get("factor_id") for f in pool_data.get("factors", [])
+                    if f.get("status") == "pending" and f.get("factor_id")
+                }
+                pool_loaded = True
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("[L1.merge] factor_pool.json 读取失败，退化为扫描全部候选: %s", e)
+
+        # 2. 已有种子名称集（去重基准）
+        from .factor_program import create_factor_program
+        existing_names = {fp.get("name") for fp in seeds}
+
+        # 3. 扫描候选并合并
+        merged: list[FactorProgram] = list(seeds)
+        consumed_ids: list[str] = []
+        for cand_file in sorted(inject_dir.glob("*.json")):
+            try:
+                cand = json.loads(cand_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("[L1.merge] 候选文件解析失败: %s, err=%s", cand_file.name, e)
+                continue
+
+            cand_id = cand.get("candidate_id") or cand.get("factor_id")
+            cand_name = cand.get("name", "")
+            if not cand_id or not cand_name or not cand.get("code"):
+                continue
+            # pending 门控（pool 加载成功即严格；pool 缺失/损坏时放行）
+            if pool_loaded and cand_id not in pending_ids:
+                continue
+            # 已消费标记（兼容无 pool 场景）
+            if cand.get("injected_to_l2"):
+                continue
+            # market 过滤: 候选带 market 时严格匹配，缺失时放行（老文件兼容）
+            cand_market = cand.get("market")
+            if cand_market is not None and cand_market != self.market:
+                continue
+            # 名称去重
+            if cand_name in existing_names:
+                continue
+
+            try:
+                fp = create_factor_program(
+                    name=cand_name,
+                    code=cand["code"],
+                    params=cand.get("params", {}),
+                    signature=cand.get("signature"),
+                    economic_logic=cand.get("economic_logic", {}),
+                    source="bootstrapping",
+                    parent_id=cand_id,
+                    generation=0,
+                    trace_id=trace_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[L1.merge] 候选转 FactorProgram 失败: %s, err=%s",
+                    cand_file.name, e,
+                )
+                continue
+
+            merged.append(fp)
+            existing_names.add(cand_name)
+            consumed_ids.append(cand_id)
+            logger.info(
+                "[L1.merge] 合并候选: name=%s, candidate_id=%s, market=%s",
+                cand_name, cand_id, cand_market,
+            )
+
+        # 4. 幂等: factor_pool.json pending → injected
+        if consumed_ids and pool_data is not None:
+            for entry in pool_data.get("factors", []):
+                if entry.get("factor_id") in consumed_ids:
+                    entry["status"] = "injected"
+                    entry["updated_at"] = datetime.now().isoformat()
+            try:
+                pool_path.write_text(
+                    json.dumps(pool_data, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError as e:
+                logger.warning("[L1.merge] factor_pool.json 状态更新失败: %s", e)
+
+        if consumed_ids:
+            print(f"[evo] 合并 L1 注入候选: {len(consumed_ids)} 个 (GAP-031)")
+        return merged
 
     def _run_seed_correlation_check(
         self,
@@ -1557,6 +1742,22 @@ class EvolutionLoop:
         Returns:
             (新因子程序, 演化摘要)
         """
+        # ── Phase 3+ / C.4: 优先适应度导向进化搜索 ──
+        engine_factor = self._try_operator_engine_evolution(
+            parent, generation, trace_id,
+        )
+        if engine_factor is not None:
+            new_factor = engine_factor
+            summary = (
+                f"OpEvolve: {new_factor.get('expression', '?')}"
+            )
+            logger.info(
+                "算子演化引擎因子生成成功 [%s]: %s",
+                new_factor.get("name", "?"), summary,
+            )
+            return new_factor, summary
+
+        # ── fallback: 随机组合生成（无评估数据或引擎失败） ──
         import hashlib
         import random
         import time
@@ -1656,9 +1857,90 @@ class EvolutionLoop:
                 continue
 
         raise RuntimeError(
-            f"无法生成合法算子因子 (10 次尝试均失败, "
+            "无法生成合法算子因子 (10 次尝试均失败, "
             f"parent={parent.get('name', '?')})"
         )
+
+    def _try_operator_engine_evolution(
+        self,
+        parent: FactorProgram,
+        generation: int,
+        trace_id: str,
+    ) -> Optional[FactorProgram]:
+        """算子演化引擎搜索（Phase 3+ / C.4）。
+
+        在 DSL 算子空间做适应度导向进化搜索，产物为 kind=OPERATOR 因子。
+        无评估数据或引擎失败时返回 None（由调用方回退随机组合生成）。
+
+        Returns:
+            引擎产出的 OPERATOR 因子，或 None
+        """
+        import hashlib
+
+        try:
+            from .operator_evolution import (
+                OperatorEvolutionConfig,
+                OperatorEvolutionEngine,
+            )
+        except Exception as e:
+            logger.debug("算子演化引擎导入失败: %s", e)
+            return None
+
+        try:
+            # 评估数据源: 横截面模式用代表序列（与 micro_evolution 一致）
+            if self._is_cross_section:
+                data = list(self.cross_section_data.values())[0].copy()
+            else:
+                data = self.data.copy()
+            target_col = "forward_return"
+            if self.forward_returns is None or len(self.forward_returns) != len(data):
+                logger.debug("算子演化引擎跳过: 无 forward_returns 评估数据")
+                return None
+            data[target_col] = self.forward_returns
+
+            # 种子由父因子派生，保证同一父因子结果可复现
+            seed = int(hashlib.md5(
+                str(parent.get("factor_id", "?")).encode(),
+            ).hexdigest()[:8], 16) % (2 ** 31)
+
+            engine = OperatorEvolutionEngine(
+                data_panel=data,
+                target_col=target_col,
+                config=OperatorEvolutionConfig(
+                    population_size=40,
+                    max_generations=8,
+                    random_seed=seed,
+                ),
+            )
+            result = engine.evolve()
+            if result.best_fitness <= 0:
+                logger.info(
+                    "算子演化引擎无正适应度因子 [%s]，回退随机生成",
+                    parent.get("name", "?"),
+                )
+                return None
+
+            factor = engine.best_factor_program(
+                result,
+                name=f"op_evolved_{generation}_{parent.get('factor_id', '?')[:6]}",
+                market=self.market,
+                family=parent.get("family", "operator"),
+                narrative=(
+                    f"算子演化引擎: {result.best_expression} "
+                    f"(基于父因子 {parent.get('name', '?')})"
+                ),
+                trace_id=trace_id,
+                parent_id=parent.get("factor_id", "?"),
+                generation=generation,
+            )
+            logger.info(
+                "算子演化引擎成功 [%s]: %s (fitness=%.4f)",
+                parent.get("name", "?"), result.best_expression, result.best_fitness,
+            )
+            return factor
+        except Exception as e:
+            logger.debug("算子演化引擎失败，回退随机生成: %s", e)
+            return None
 
     # ── Phase B.2.1: 快速预筛选（新增） ──────────────────
 
@@ -1707,14 +1989,17 @@ class EvolutionLoop:
             return False, f"信号标准差过小: {sig_std:.2e} < 1e-6"
 
         # 检查3: 快速 IC 检查（导致 NaN 也视为无效）
+        # 期货日频单品种时序 IC 信噪比低（常见 0.01-0.02 区间），
+        # 阈值按市场自适应放宽，避免拦截本可进入截面评估的后代
+        ic_threshold = 0.01 if self.market == "futures" else 0.02
         fr = self.forward_returns
         if fr is not None and len(fr) == len(signal):
             valid = ~(np.isnan(signal) | np.isnan(fr))
             if valid.sum() >= 10:
                 ic, pval = sp_stats.spearmanr(signal[valid], fr[valid])
-                if np.isnan(ic) or abs(ic) < 0.02:
+                if np.isnan(ic) or abs(ic) < ic_threshold:
                     return False, (
-                        f"快速 IC 过低: abs(IC)={abs(ic):.4f} < 0.02"
+                        f"快速 IC 过低: abs(IC)={abs(ic):.4f} < {ic_threshold}"
                         f"{'' if np.isnan(ic) else f', p={pval:.4f}'}"
                     )
 

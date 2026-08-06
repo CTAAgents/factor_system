@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.8.5
+> 版本: v2.14.0
 > 最后更新: 2026-08-06
 
 ---
@@ -22,10 +22,10 @@
 
 | 层级 | 测试文件数 | 用例数 | 说明 |
 |:-----|:----------|:-------|:-----|
-| 单元测试 | 90+ | ~2600 | 各模块独立测试（含基本面数据层 + 信号管道 + 消融实验 + 风险标签 + 场景测试 + SHAP分析 + 鲁棒性 + 因果验证 + 逻辑监控 + 种子因子相关性预检 + DuckDB因子仓库 + 因子相关性矩阵 + 因子血缘审计 + 失败模式分类 + 因子巡检 + 生命周期E2E闭环 + 回测流水线 + 后代因子运行时校验 + FTS-Expr DSL 算子因子 + GP 多父代交叉 + 快速预筛选 + 评分卡配置） |
+| 单元测试 | 90+ | ~2600 | 各模块独立测试（含基本面数据层 + 信号管道 + 消融实验 + 风险标签 + 场景测试 + SHAP分析 + 鲁棒性 + 因果验证 + 逻辑监控 + 种子因子相关性预检 + DuckDB因子仓库 + 因子相关性矩阵 + 因子血缘审计 + 失败模式分类 + 因子巡检 + 生命周期E2E闭环 + 回测流水线 + 后代因子运行时校验 + FTS-Expr DSL 算子因子 + GP 多父代交叉 + 快速预筛选 + 评分卡配置 + **算子演化引擎（C.4，13 用例）** + **L1→L2 候选合并（GAP-031，8 用例）** + **L2 晋升双写原子化（GAP-032，4 用例）** + **factor_db_path 测试隔离注入（GAP-030，2 用例）**） |
 | 集成测试 | 5 | ~200 | strategies 策略层 + 演化循环集成 + 数据源聚合 + 期货同步 |
 | E2E | 2 | 24 | test_e2e.py(10) + test_factor_lifecycle.py(14) |
-| 合计 | 100+ | 2848 | 2848+ passed |
+| 合计 | 100+ | 2862 | 2862+ passed |
 
 ---
 
@@ -67,7 +67,18 @@ tests/
 │   ├── test_uct_selection.py        # UCT 树搜索父因子选择测试
 │   ├── test_factor_inspector.py     # FactorInspector 定时巡检测试
 │   ├── test_factor_lifecycle.py     # E2E 生命周期闭环测试（14 用例）
-│   └── test_verifier.py             # Verifier 锁定协议测试
+│   ├── test_verifier.py             # Verifier 锁定协议测试
+│   │
+│   ├── operator_evolution/          # 算子演化引擎测试（C.4，13 用例）
+│   │   └── test_operator_evolution.py  # 初始化合法性/进化收敛/交叉变异/OPERATOR 产物/罚分/缓存/集成
+│   │
+│   └── expr_dsl/                    # FTS-Expr DSL 测试（6 文件）
+│       ├── test_parser.py           # 解析器测试
+│       ├── test_registry.py         # 算子注册表测试
+│       ├── test_validator.py        # 校验器测试
+│       ├── test_compiler.py         # 编译器测试
+│       ├── test_executor.py         # 执行器测试
+│       └── test_factory.py          # 算子因子工厂测试
 │
 ├── pipeline/                        # 2 个测试文件
 │   ├── __init__.py
@@ -300,16 +311,16 @@ TOTAL                                       6229    533    91%
 | `tests/scenarios/test_natural_experiments.py` | ~10 | 自然实验事件定义 |
 | `tests/factor_engine/test_contracts.py` | ~16 | 契约定义 |
 | `tests/factor_engine/test_evaluation_chain.py` | ~50 | 三级评估链 |
-| `tests/factor_engine/test_evolution_loop.py` | ~110 | L2 主循环（含孤立模块集成审查门禁测试：消融/因果/鲁棒/SHAP/特征重要性/逻辑监控 + 端到端流水线） |
+| `tests/factor_engine/test_evolution_loop.py` | ~111 | L2 主循环（含孤立模块集成审查门禁测试：消融/因果/鲁棒/SHAP/特征重要性/逻辑监控 + 端到端流水线） |
 | `tests/factor_engine/test_experience_chain.py` | ~19 | 经验链 |
 | `tests/factor_engine/test_factor_program.py` | ~32 | 因子程序 |
 | `tests/factor_engine/test_failure_pattern.py` | ~22 | 失败模式聚类分析 |
 | `tests/factor_engine/test_macro_evolution.py` | ~30 | 宏观演化 |
-| `tests/factor_engine/test_meta_loop.py` | ~77 | L1 元循环 |
+| `tests/factor_engine/test_meta_loop.py` | ~78 | L1 元循环（含 schema 版本兼容冷启动测试） |
 | `tests/factor_engine/test_micro_evolution.py` | ~8 | 微观演化（含 ImportError 覆盖） |
 | `tests/factor_engine/test_monitor.py` | ~45 | 因子引擎监控 |
 | `tests/monitor/test_logic_monitor.py` | ~15 | 逻辑监控仪表盘（漂移检测/极端预测/换月日） |
-| `tests/factor_engine/test_portfolio_loop.py` | ~54 | L3 组合循环 |
+| `tests/factor_engine/test_portfolio_loop.py` | ~72 | L3 组合循环（含粘性约束 5 + 漂移监控 7 + 影子池 6） |
 | `tests/factor_engine/test_program.py` | ~16 | Program.md |
 | `tests/factor_engine/test_seed_pool.py` | ~16 | 种子池（含 GTJA191） |
 | `tests/factor_engine/test_stress_test.py` | ~32 | 压力测试 |
@@ -327,7 +338,7 @@ TOTAL                                       6229    533    91%
 | `tests/strategies/test_base_v2.py` | ~55 | 策略基类 |
 | `tests/strategies/test_multi_factor.py` | ~88 | 多因子策略 |
 | `tests/strategies/test_strategy_evolution.py` | ~55 | 策略进化（动态因子权重/市场制度自适应/多周期信号融合） |
-| `tests/test_cli.py` | ~62 | CLI 入口 |
+| `tests/test_cli.py` | ~64 | CLI 入口 |
 | `tests/test_data.py` | ~49 | 数据层 |
 | `tests/test_data_fundamental.py` | ~62 | 基本面数据层 |
 | `tests/test_e2e.py` | ~10 | 端到端集成 |
@@ -366,6 +377,6 @@ TOTAL                                       6229    533    91%
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `test_futures_signal_pipeline.py` → 21 个信号管道测试用例（Ridge 回归加权 + 方向校正 + 组合合成）；`test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面）；`test_seed_pool.py` → 种子池测试（含期货种子）；`factor_db/test_*` → 54 个 DuckDB 因子仓库测试用例；`test_gp_evolver.py::TestGpFactorExecutable` → 5 个 GP 因子代码可执行性测试用例（v2.8.4）；`test_expr_*.py` → FTS-Expr DSL 算子因子测试（v2.8.5）；`test_backtest_stage3.py` → 27 个 B.2 回测增强用例（v2.9.0）；`test_feedback_loop.py` → 20 个 C.3 反馈闭环用例（v2.9.0）；`test_cli_feature_gp.py` → 5 个 C.1 CLI 用例（v2.9.0）；`test_stage5_risk_live.py` → 27 个 C.2 实盘对接用例（v2.9.0） |
-| 可验证断言 | 总测试数 = 2848+ |
+| 代码→文档映射 | `test_futures_signal_pipeline.py` → 21 个信号管道测试用例（Ridge 回归加权 + 方向校正 + 组合合成）；`test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面）；`test_seed_pool.py` → 种子池测试（含期货种子）；`factor_db/test_*` → 54 个 DuckDB 因子仓库测试用例；`test_gp_evolver.py::TestGpFactorExecutable` → 5 个 GP 因子代码可执行性测试用例（v2.8.4）；`test_expr_*.py` → FTS-Expr DSL 算子因子测试（v2.8.5）；`test_backtest_stage3.py` → 27 个 B.2 回测增强用例（v2.9.0）；`test_feedback_loop.py` → 20 个 C.3 反馈闭环用例（v2.9.0）；`test_cli_feature_gp.py` → 5 个 C.1 CLI 用例（v2.9.0）；`test_stage5_risk_live.py` → 27 个 C.2 实盘对接用例（v2.9.0）；`test_portfolio_loop.py` → 20 个漂移治理用例（粘性约束 7 + 漂移监控 7 + 影子池 6，v2.11.0）；`test_evolution_loop.py` → 4 个 L2 晋升双写原子化用例（DuckDB 失败回滚 JSON，v2.13.0）+ 2 个 factor_db_path 注入用例（GAP-030 测试隔离，v2.14.0） |
+| 可验证断言 | 总测试数 = 2874+ |
 | 检验方式 | `python -m pytest tests/ --no-cov -q 2>&1 | Select-String "passed"` |

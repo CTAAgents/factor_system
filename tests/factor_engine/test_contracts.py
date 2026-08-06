@@ -11,6 +11,7 @@ from fts.factor_engine.contracts import (
     DEFAULT_BUDGET_CONFIG,
     DEFAULT_VERIFIER_CONFIG,
     EVOLUTION_VERSION,
+    STATE_SCHEMA_VERSION,
     BacktestMetrics,
     BudgetConfig,
     EconomicLogic,
@@ -132,10 +133,10 @@ def test_evolution_state_instantiation():
         total_factors_promoted=3, tokens_consumed=50000,
         budget_limit=200000, status="running", last_error=None,
         experience_chain_ref=[], last_updated="2026-07-18T00:00:00",
-        version=EVOLUTION_VERSION,
+        schema_version=STATE_SCHEMA_VERSION,
     )
     assert state["status"] == "running"
-    assert state["version"] == EVOLUTION_VERSION
+    assert state["schema_version"] == STATE_SCHEMA_VERSION
 
 
 def test_verifier_config_instantiation():

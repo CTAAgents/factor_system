@@ -93,6 +93,7 @@ from .state import (
     EvolutionStateManager,
     generate_trace_id,
     generate_run_id,
+    generate_session_id,
 )
 from .evaluation_chain import EvaluationChain
 from .macro_evolution import MacroEvolver, MockLLMClient, get_default_llm_client
@@ -284,6 +285,7 @@ __all__ = [
     "EvolutionStateManager",
     "generate_trace_id",
     "generate_run_id",
+    "generate_session_id",
     # 评估链
     "EvaluationChain",
     # 标准化

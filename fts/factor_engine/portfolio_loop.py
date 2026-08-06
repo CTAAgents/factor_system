@@ -43,15 +43,19 @@ from typing import Any, Optional
 
 from .contracts import (
     EVOLUTION_VERSION,
+    STATE_SCHEMA_VERSION,
     DEFAULT_L3_VERIFIER_CONFIG,
     DEFAULT_L3_BUDGET,
     DEFAULT_VERIFIER_CONFIG,
+    DEFAULT_STICKY_CONFIG,
     AgentOptimizationProposal,
+    DriftMetrics,
     FactorCorrelation,
     L3MetaLoopState,
     L3VerifierConfig,
     PortfolioCombo,
     PortfolioSignal,
+    StickyConfig,
 )
 from .state import generate_run_id, generate_trace_id
 
@@ -70,6 +74,11 @@ STATE_FILE_NAME: str = "state.json"
 BACKUP_FILE_NAME: str = "state.json.backup"
 COMBO_FILE_NAME: str = "current_combo.json"
 PROPOSALS_DIR: str = "agent_proposals"
+COMBO_HISTORY_DIR: str = "combo_history"
+DRIFT_HISTORY_DIR: str = "drift_history"
+
+# 影子池观察期（交易日数）— L2 新晋升因子先进影子池观察，期满后才进正式组合
+SHADOW_OBSERVE_TRADING_DAYS: int = 5
 
 
 # ─── Verifier ──────────────────────────────────────────────
@@ -151,9 +160,9 @@ class PortfolioStateManager:
         return state
 
     def save(self, state: L3MetaLoopState) -> None:
-        if state.get("version") != EVOLUTION_VERSION:
+        if state.get("schema_version") != STATE_SCHEMA_VERSION:
             raise L3Error(
-                f"状态版本不匹配: {state.get('version')} != {EVOLUTION_VERSION}"
+                f"状态 schema 版本不匹配: {state.get('schema_version')} != {STATE_SCHEMA_VERSION}"
             )
         state["last_updated"] = datetime.now().isoformat()
         self._write(state)
@@ -185,7 +194,7 @@ class PortfolioStateManager:
             return None
         try:
             data = json.loads(fp.read_text(encoding="utf-8"))
-            if data.get("version") != EVOLUTION_VERSION:
+            if data.get("schema_version") != STATE_SCHEMA_VERSION:
                 return None
             return L3MetaLoopState(**data)
         except (json.JSONDecodeError, TypeError, ValueError):
@@ -211,21 +220,23 @@ class PortfolioStateManager:
             last_error=None,
             combo_ref=[],
             last_updated=datetime.now().isoformat(),
-            version=EVOLUTION_VERSION,
+            schema_version=STATE_SCHEMA_VERSION,
         )
 
 
 # ─── 组合管理器 ───────────────────────────────────────────
 
 class PortfolioManager:
-    """管理组合文件（memory/portfolio/current_combo.json）。"""
+    """管理组合文件（memory/portfolio/current_combo.json + 历史归档）。"""
 
     def __init__(self, portfolio_dir: str | Path = "memory/portfolio"):
         self.portfolio_dir = Path(portfolio_dir)
         self.combo_file = self.portfolio_dir / COMBO_FILE_NAME
         self.proposals_dir = self.portfolio_dir / PROPOSALS_DIR
+        self.combo_history_dir = self.portfolio_dir / COMBO_HISTORY_DIR
         self.portfolio_dir.mkdir(parents=True, exist_ok=True)
         self.proposals_dir.mkdir(parents=True, exist_ok=True)
+        self.combo_history_dir.mkdir(parents=True, exist_ok=True)
         self._cache: PortfolioCombo | None = None
 
     def load_or_init(self) -> PortfolioCombo:
@@ -257,10 +268,51 @@ class PortfolioManager:
         return combo
 
     def save_combo(self, combo: PortfolioCombo) -> None:
+        # 保存前归档旧组合，供漂移对比 / 粘性约束读取上次权重
+        if self.combo_file.exists():
+            try:
+                old = json.loads(self.combo_file.read_text(encoding="utf-8"))
+                old_id = old.get("combo_id") or "unknown"
+                hist_fp = self.combo_history_dir / f"{old_id}.json"
+                if not hist_fp.exists():
+                    hist_fp.write_text(
+                        json.dumps(old, ensure_ascii=False, indent=2), encoding="utf-8",
+                    )
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
         self._cache = combo
         self.combo_file.write_text(
             json.dumps(combo, ensure_ascii=False, indent=2), encoding="utf-8",
         )
+
+    def load_prev_combo(self) -> PortfolioCombo | None:
+        """读取上一次组合（current_combo.json 覆盖前的历史归档）。
+
+        Returns:
+            最近一次历史组合；无历史返回 None（冷启动）。
+        """
+        # 优先读磁盘上当前 combo 覆盖前的最新归档（combo_history 中时间最新者）
+        history_files = sorted(
+            self.combo_history_dir.glob("*.json"),
+            key=lambda fp: fp.stat().st_mtime, reverse=True,
+        )
+        if not history_files:
+            return None
+        try:
+            data = json.loads(history_files[0].read_text(encoding="utf-8"))
+            return PortfolioCombo(**data)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+    def extract_prev_weights(self, prev_combo: PortfolioCombo | None) -> dict[str, float]:
+        """从历史组合提取 {factor_id: weight}，供粘性约束使用。"""
+        if not prev_combo:
+            return {}
+        return {
+            s.get("factor_id"): s.get("weight", 0.0)
+            for s in prev_combo.get("signals", [])
+            if s.get("retained", True) and s.get("factor_id")
+        }
 
     def save_proposal(self, proposal: AgentOptimizationProposal) -> str:
         """保存 Agent 优化建议，返回文件路径。"""
@@ -961,12 +1013,67 @@ def decay_test(
 
 # ─── 组合构建 ─────────────────────────────────────────────
 
+def _apply_sticky_constraints(
+    signals: list[PortfolioSignal],
+    prev_weights: dict[str, float],
+    config: StickyConfig,
+) -> list[PortfolioSignal]:
+    """组合粘性约束 — 平滑换血，防止策略漂移。
+
+    在权重归一化之前执行:
+        - 存量因子: 权重相对上次组合变动 clamp 在 ±max_delta
+        - 新因子: 首日权重封顶 new_factor_cap
+
+    Args:
+        signals: 待构建信号（权重尚未归一化）
+        prev_weights: {factor_id: weight} 上次组合权重
+        config: 粘性配置
+
+    Returns:
+        施加约束后的信号列表（就地修改 weight 字段）
+    """
+    if not config.get("enabled", True) or not prev_weights:
+        return signals
+
+    max_delta = config.get("max_delta", 0.30)
+    new_factor_cap = config.get("new_factor_cap", 0.10)
+
+    for s in signals:
+        if not s.get("retained", True):
+            continue
+        fid = s.get("factor_id")
+        prev_w = prev_weights.get(fid)
+        if prev_w is not None and prev_w > 0:
+            # 存量因子: 相对上次变动 clamp 在 ±max_delta
+            low = max(0.0, prev_w * (1.0 - max_delta))
+            high = prev_w * (1.0 + max_delta)
+            s["weight"] = min(max(s.get("weight", 0.0), low), high)
+        else:
+            # 新因子: 首日权重封顶
+            s["weight"] = min(s.get("weight", 0.0), new_factor_cap)
+
+    return signals
+
+
 def build_combo(
     signals: list[PortfolioSignal],
     mode: str = "equal_weight",
     trace_id: Optional[str] = None,
+    prev_weights: Optional[dict[str, float]] = None,
+    sticky_config: Optional[StickyConfig] = None,
 ) -> PortfolioCombo:
-    """构建组合 — 归一化权重 + 计算组合指标。"""
+    """构建组合 — 归一化权重 + 计算组合指标。
+
+    Args:
+        signals: 信号列表
+        mode: 合成模式
+        trace_id: 追踪 ID
+        prev_weights: 上次组合权重（粘性约束输入，可选）
+        sticky_config: 粘性约束配置（可选，默认关闭）
+
+    Returns:
+        PortfolioCombo
+    """
     retained = [s for s in signals if s.get("retained", True)]
     if not retained:
         return PortfolioCombo(
@@ -982,6 +1089,16 @@ def build_combo(
             n_factors=0,
             status="pending",
             created_at=datetime.now().isoformat(),
+        )
+
+    # 粘性约束（归一化前，保证约束后的权重和为 1 的归一化语义一致）
+    if sticky_config and prev_weights:
+        _apply_sticky_constraints(retained, prev_weights, sticky_config)
+        logger.info(
+            "[L3] Step 5: 粘性约束已应用 (max_delta=%.2f, new_cap=%.2f, prev=%d 因子)",
+            sticky_config.get("max_delta", 0.30),
+            sticky_config.get("new_factor_cap", 0.10),
+            len(prev_weights),
         )
 
     # 权重归一化
@@ -1039,6 +1156,139 @@ def build_combo(
         status="active",
         created_at=datetime.now().isoformat(),
     )
+
+
+# ─── 组合漂移监控 ─────────────────────────────────────────
+
+class DriftMonitor:
+    """L3 组合漂移监控 — 记录成员重合率 + 权重 L1 变化率。
+
+    每次组合构建后对比上次组合（combo_history 归档），
+    指标持久化到 memory/portfolio/drift_history/YYYY-MM-DD.json。
+    """
+
+    def __init__(self, portfolio_dir: str | Path = "memory/portfolio"):
+        self.portfolio_dir = Path(portfolio_dir)
+        self.drift_history_dir = self.portfolio_dir / DRIFT_HISTORY_DIR
+        self.drift_history_dir.mkdir(parents=True, exist_ok=True)
+
+    def compute(
+        self,
+        prev_combo: PortfolioCombo | None,
+        new_combo: PortfolioCombo,
+        trace_id: Optional[str] = None,
+    ) -> DriftMetrics:
+        """计算漂移指标。
+
+        Args:
+            prev_combo: 上次组合（可为 None = 冷启动）
+            new_combo: 本次组合
+            trace_id: 追踪 ID
+
+        Returns:
+            DriftMetrics 指标字典
+        """
+        prev_members: dict[str, str] = {}   # factor_id -> name
+        prev_weights: dict[str, float] = {}
+        if prev_combo:
+            for s in prev_combo.get("signals", []):
+                if s.get("retained", True) and s.get("factor_id"):
+                    prev_members[s["factor_id"]] = s.get("name", s["factor_id"])
+                    prev_weights[s["factor_id"]] = s.get("weight", 0.0)
+
+        new_members: dict[str, str] = {}
+        new_weights: dict[str, float] = {}
+        for s in new_combo.get("signals", []):
+            if s.get("retained", True) and s.get("factor_id"):
+                new_members[s["factor_id"]] = s.get("name", s["factor_id"])
+                new_weights[s["factor_id"]] = s.get("weight", 0.0)
+
+        prev_ids = set(prev_members)
+        new_ids = set(new_members)
+
+        # 冷启动（无上次组合）：无漂移对比基准，仅记录新增成员
+        if not prev_ids:
+            return DriftMetrics(
+                date=datetime.now().strftime("%Y-%m-%d"),
+                combo_id=new_combo.get("combo_id", ""),
+                prev_combo_id="",
+                trace_id=trace_id or new_combo.get("trace_id", ""),
+                member_overlap_rate=0.0,
+                weight_l1_change=0.0,
+                n_prev_members=0,
+                n_new_members=len(new_ids),
+                n_common_members=0,
+                added=sorted(new_members[fid] for fid in new_ids),
+                removed=[],
+            )
+
+        common = prev_ids & new_ids
+        union = prev_ids | new_ids
+
+        # 成员重合率 Jaccard: |A∩B| / |A∪B|（0~1，1=完全重合）
+        overlap_rate = len(common) / len(union) if union else 0.0
+
+        # 权重 L1 变化率: Σ|w_new - w_prev| / 2（除以 2 归一化到 0~1）
+        l1_total = 0.0
+        for fid in union:
+            l1_total += abs(new_weights.get(fid, 0.0) - prev_weights.get(fid, 0.0))
+        weight_l1 = l1_total / 2.0 if union else 0.0
+
+        added = sorted(new_members[fid] for fid in (new_ids - prev_ids))
+        removed = sorted(prev_members[fid] for fid in (prev_ids - new_ids))
+
+        return DriftMetrics(
+            date=datetime.now().strftime("%Y-%m-%d"),
+            combo_id=new_combo.get("combo_id", ""),
+            prev_combo_id=prev_combo.get("combo_id", "") if prev_combo else "",
+            trace_id=trace_id or new_combo.get("trace_id", ""),
+            member_overlap_rate=round(overlap_rate, 4),
+            weight_l1_change=round(weight_l1, 4),
+            n_prev_members=len(prev_ids),
+            n_new_members=len(new_ids),
+            n_common_members=len(common),
+            added=added,
+            removed=removed,
+        )
+
+    def record(self, metrics: DriftMetrics) -> Path:
+        """持久化漂移指标到 drift_history/YYYY-MM-DD.json（当日多条追加）。"""
+        date = metrics.get("date") or datetime.now().strftime("%Y-%m-%d")
+        fp = self.drift_history_dir / f"{date}.json"
+
+        records: list[DriftMetrics] = []
+        if fp.exists():
+            try:
+                loaded = json.loads(fp.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    records = [DriftMetrics(**r) for r in loaded if isinstance(r, dict)]
+            except (json.JSONDecodeError, TypeError, ValueError):
+                records = []
+
+        records.append(metrics)
+        fp.write_text(
+            json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
+        logger.info(
+            "[L3] 漂移记录已写入 %s: 重合率=%.4f L1变化=%.4f (prev=%d→new=%d)",
+            fp.name, metrics.get("member_overlap_rate", 0),
+            metrics.get("weight_l1_change", 0),
+            metrics.get("n_prev_members", 0), metrics.get("n_new_members", 0),
+        )
+        return fp
+
+    def load_history(self, date: str) -> list[DriftMetrics]:
+        """读取指定日期的漂移记录列表。"""
+        fp = self.drift_history_dir / f"{date}.json"
+        if not fp.exists():
+            return []
+        try:
+            loaded = json.loads(fp.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                return [DriftMetrics(**r) for r in loaded if isinstance(r, dict)]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+        return []
 
 
 # ─── Agent 优化建议生成 ──────────────────────────────────
@@ -1365,6 +1615,60 @@ def _deduplicate_by_base_name(
     return result
 
 
+def _add_trading_days(start: datetime, days: int) -> datetime:
+    """计算 N 个交易日后的日期时间（跳过周末，近似交易日）。"""
+    import numpy as np
+
+    end = np.busday_offset(start.date(), days, roll="forward")
+    return datetime.combine(end.astype(object), datetime.min.time())
+
+
+def _is_shadow_pending(factor: dict[str, Any], today: datetime | None = None) -> bool:
+    """判断因子是否处于 L2 影子池观察期（观察期内不进正式组合）。
+
+    因子 JSON/元数据含 shadow_pool 标记:
+        {"promoted_at": iso, "observe_trading_days": 5, "observe_until": iso}
+
+    Returns:
+        True = 仍在影子池观察期，应排除出正式组合
+        False = 无标记或观察期已过
+    """
+    sp = factor.get("shadow_pool")
+    if not sp or not isinstance(sp, dict):
+        return False
+    observe_until = sp.get("observe_until")
+    if not observe_until:
+        return False
+    today = today or datetime.now()
+    try:
+        until = datetime.fromisoformat(str(observe_until))
+    except ValueError:
+        return False
+    return today < until
+
+
+def _filter_shadow_pending(factors: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
+    """过滤影子池观察期内的因子 — 观察期内不进正式组合。
+
+    Args:
+        factors: 待过滤因子列表
+        source: 数据来源标识（用于日志）
+
+    Returns:
+        通过观察期的因子列表（保留 shadow_pool 标记供日志追踪）
+    """
+    if not factors:
+        return factors
+    pending = [f for f in factors if _is_shadow_pending(f)]
+    if pending:
+        names = [f.get("name", f.get("factor_id", "?")) for f in pending]
+        logger.info(
+            "[L3] 影子池过滤 [%s]: %d 个因子仍在观察期，暂不进组合: %s",
+            source, len(pending), ", ".join(names[:10]) + ("..." if len(names) > 10 else ""),
+        )
+    return [f for f in factors if not _is_shadow_pending(f)]
+
+
 def load_elite_factors(
     elite_dir: str | Path,
     use_duckdb: bool = True,
@@ -1456,9 +1760,11 @@ def load_elite_factors(
                             "correlation_metadata": corr_meta,
                             "source_file": f.get("factor_id"),
                             "market": f.get("market", market),
+                            "shadow_pool": metadata.get("shadow_pool"),
                         })
                     logger.info("[L3] ✅ 从 DuckDB 加载 %d 个 elite 因子 [market=%s]", len(factors), market)
                     passed = _filter_by_quality_gate(factors, "DuckDB")
+                    passed = _filter_shadow_pending(passed, "DuckDB")
                     try:
                         result = _deduplicate_by_base_name(passed, "DuckDB", panel_data=panel_data, corr_threshold=corr_threshold)
                         return result
@@ -1542,6 +1848,7 @@ def load_elite_factors(
                 "correlation_metadata": corr_meta,
                 "source_file": fp.name,
                 "market": factor_market,
+                "shadow_pool": data.get("shadow_pool"),
             })
         except (json.JSONDecodeError, TypeError) as e:
             parse_errors += 1
@@ -1550,6 +1857,7 @@ def load_elite_factors(
     logger.info("[L3] 从 JSON 文件加载 %d 个 elite 因子 [market=%s] (跳过市场不匹配=%d, 解析错误=%d)",
                 len(factors), market, skipped_market, parse_errors)
     passed = _filter_by_quality_gate(factors, "JSON")
+    passed = _filter_shadow_pending(passed, "JSON")
     return _deduplicate_by_base_name(passed, "JSON", panel_data=panel_data, corr_threshold=corr_threshold)
 
 
@@ -1683,6 +1991,7 @@ class PortfolioLoop:
         use_duckdb: bool = True,
         enable_regime_adaptation: bool = True,
         market: str = "stock",
+        sticky_config: Optional[StickyConfig] = None,
     ):
         self.memory_dir = Path(memory_dir)
         self.elite_dir = Path(elite_dir)
@@ -1691,8 +2000,11 @@ class PortfolioLoop:
         self.use_duckdb = use_duckdb
         self.enable_regime_adaptation = enable_regime_adaptation
         self.market = market
+        # 粘性约束默认启用（DEFAULT_STICKY_CONFIG: ±30% 变动 / 新因子首日封顶 0.10）
+        self.sticky_config = sticky_config or DEFAULT_STICKY_CONFIG
         self.state_manager = PortfolioStateManager(memory_dir)
         self.portfolio_manager = PortfolioManager(memory_dir)
+        self.drift_monitor = DriftMonitor(memory_dir)
         self._regime_selector: Optional[Any] = None
 
     def _generate_quality_report(self) -> None:
@@ -1912,10 +2224,26 @@ class PortfolioLoop:
             n_retained = sum(1 for s in signals if s.get("retained", True))
             logger.info("[L3] Step 4: 衰减检验完成, 保留 %d 个因子", n_retained)
 
-            # Step 5: 组合构建
-            combo = build_combo(signals, self.synthesis_mode, trace_id)
+            # Step 5: 组合构建（含粘性约束 + 漂移监控）
+            prev_combo = self.portfolio_manager.load_prev_combo()
+            prev_weights = self.portfolio_manager.extract_prev_weights(prev_combo)
+            if self.sticky_config and prev_weights:
+                logger.info("[L3] Step 5: 读取上次组合 %s 共 %d 个因子权重 (粘性约束)",
+                            prev_combo.get("combo_id", "?"), len(prev_weights))
+            combo = build_combo(
+                signals, self.synthesis_mode, trace_id,
+                prev_weights=prev_weights or None,
+                sticky_config=self.sticky_config,
+            )
             logger.info("[L3] Step 5: 组合构建完成, 夏普=%.2f, 换手率=%.2f",
                         combo.get("combo_sharpe", 0), combo.get("combo_turnover", 0))
+
+            # Step 5.5: 漂移监控 — 记录成员重合率 + 权重 L1 变化率
+            try:
+                drift = self.drift_monitor.compute(prev_combo, combo, trace_id)
+                self.drift_monitor.record(drift)
+            except Exception as e:
+                logger.warning("[L3] Step 5.5: 漂移监控记录失败 (非致命): %s", e)
 
             # Step 6: Verifier 判定
             passed, reasons = self.verifier.check(combo)

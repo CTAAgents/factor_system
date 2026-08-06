@@ -126,7 +126,7 @@
   │
 08:30  L1 Meta-Loop 启动
   │      ├── Web 感知 → 市场知识补给
-  │      ├── 种子因子注入 → seed_pool.py
+  │      ├── 种子因子注入 → l1_injected/ + factor_pool.json（pending）
   │      └── 演化方向指引 → L2
   │
 20:00  L3 Portfolio Loop 启动
@@ -139,6 +139,7 @@
   │
 23:00  L2 Evolution Loop 启动
   │      ├── 加载种子因子 (81 期货专用)
+  │      ├── 合并 L1 注入候选 (GAP-031: pending 门控 + market 过滤 + 去重)
   │      ├── 种子评估 → 晋升 elite (IC≥0.03, Sharpe≥1.5)
   │      ├── LLM 宏观演化 → 新因子生成
   │      ├── optuna 微观调参 → 参数优化

@@ -32,6 +32,7 @@ venv/
 data/
 memory/
 seeds/
+logs/
 
 # Documentation (Harness specs and key project docs are tracked; other project-local docs are not)
 docs/*

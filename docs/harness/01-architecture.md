@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.8.5
+> 版本: v2.14.0
 > 最后更新: 2026-08-06
 
 ---
@@ -122,16 +122,18 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  L3 Portfolio Loop (组合循环 — 组合构建与信号产出层)                     │
 │                                                                         │
 │  portfolio_loop.py                                                     │
-│  - PortfolioManager（组合管理器）                                       │
+│  - PortfolioManager（组合管理器，含 combo_history 归档）                │
 │  - orthogonalize_factors（因子正交化）                                  │
 │  - decay_test（衰减检验）                                              │
-│  - build_combo（构建组合）                                             │
+│  - build_combo（构建组合，支持粘性约束）                                │
 │  - synthesize_signals（信号合成）                                      │
 │  - generate_agent_proposals（Agent 提案生成）                          │
-│  - load_elite_factors（加载 elite 因子）                               │
+│  - load_elite_factors（加载 elite 因子，过滤影子池观察期因子）          │
 │  - L3Verifier（L3 锁定协议）                                           │
+│  - DriftMonitor（组合漂移监控：成员重合率 + 权重 L1 变化率）            │
+│  - _apply_sticky_constraints（粘性约束：±30% 变动 / 新因子首日封顶）    │
 │                                                                         │
-│  职责: 组合构建 → 正交化 → 衰减检验 → 信号合成                          │
+│  职责: 组合构建 → 正交化 → 衰减检验 → 粘性约束 → 漂移监控 → 信号合成    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -213,6 +215,7 @@ fts/
 │   ├── feature_ops.py          # 特征算子注册表（50 算子 / 7 类）
 │   ├── feature_importance.py   # 特征重要性分析（置换重要性）
 │   ├── gp_evolver.py           # GP 演化器（ExpressionTree + 交叉/变异）
+│   ├── operator_evolution.py   # 算子演化引擎 (Phase 3+ / C.4)：DSL 算子空间进化式搜索
 │   ├── backtest_pipeline.py    # 回测流水线（B.2）：run_batch 批量对比 + Builder
 │   ├── factor_screener.py      # 回测阶段 1：因子筛选
 │   ├── signal_generator.py     # 回测阶段 2：时序/横截面信号生成
@@ -290,6 +293,10 @@ AST (ExprNode 树)
     ├─→ executor.py  执行器向量化计算: pandas Series 快速路径 (复用 feature_ops 50 算子)
     └─→ compiler.py  编译器生成确定性沙箱 code → runtime.py 桥接 (eval_fts_expr)
 ```
+
+### 算子演化引擎（Phase 3+ / C.4）
+
+在 DSL 算子空间做**适应度导向的进化式搜索**，取代 `_generate_operator_factor` 的纯随机组合。`fts/factor_engine/operator_evolution.py` 提供 `OperatorEvolutionEngine`：种群初始化（validator 校验通过）→ 适应度评估（DSL executor → IC/Sharpe）→ 锦标赛选择 → 子树交叉/变异（ExprNode 层面，参数受 `param_bounds` 约束）→ 精英保留，多代迭代后取最优表达式经 `create_operator_factor` 产出 `kind=OPERATOR` 因子。设计文档见 [C.4-operator-evolution-engine-design.md](design/C.4-operator-evolution-engine-design.md)。GAP-026（GP 算子命名与 DSL 未对齐）随本引擎落地关闭。
 
 ---
 
@@ -394,7 +401,7 @@ L1 Meta-Loop ──→ 知识补给 + 种子注入 ──→ seed_pool.py
     │                              └───────────────────────────┘
     │                                       │
     │                                       ▼
-    │                              elite 因子 (JSON)
+    │                              elite 因子 (JSON 快照 + DuckDB catalog 双写，GAP-032)
     │                                       │
     │                                       ▼
     └──────────────────────→ L3 Portfolio Loop
@@ -509,5 +516,5 @@ class FactorKind(str, Enum):
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | `seed_pool.py` → 双种子池（股票 482 因子：9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面；期货 81 因子：14 家族，见 seed_data_futures_full.py）；种子因子相关性预检（compute_seed_correlations，仅股票时序模式，≥0.95 标记高相关对）；`data_fundamental.py` → FundamentalProvider 基本面数据层；`data_futures.py` → FuturesDataProvider 期货数据层（82 品种 FUTURES_SUBSET + 59 个品种 DuckDB 缓存 + AKShare 降级，`get_futures_panel()` common_dates 多数对齐 ≥ 品种数//2，FUTURES_SYMBOL_NAMES 名称映射，get_dominant_contracts() 主力合约判定）；`data_futures_fundamental.py` → FuturesFundamentalProvider 期货基本面数据（库存/仓单/基差）；`scheduler/` → 调度层（5 个 APScheduler 定时任务：L1:08:30 / L2:23:00 / L3:20:00 / 信号管道:20:30 / 健康检查:每10m）；`scripts/futures_signal_pipeline.py` → 横截面信号管道（方向校正 = 截面 IC 法，因子加权 = Ridge 回归 L2 正则化，Market Regime 检测 = RegimeAwareSelector 分层判定，`_build_composite_ohlcv()` 构建市场综合 OHLCV，按日期定位，`--universe all` 全量商品池，输出品种名称/主力合约 + Regime 调整交易建议）；`fts/factor_engine/regime.py` → RegimeAwareSelector 市场制度感知（5 种制度：bull/bear/high_vol/low_vol/oscillate，MA20 斜率 + ATR/价格 + 量比 + 收益自相关）；`strategies/strategy_evolution.py` → 策略进化（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion） |
-| 可验证断言 | 股票种子池总数 = 482；期货种子池总数 = 81（14 家族）；期货数据层支持 82 个连续合约品种，数据源优先级 3 级（DuckDB → AKShare → 合成）；common_dates 多数对齐（WH0 等停更品种不清空交集）；方向校正按日期定位；信号管道因子加权 = Ridge 回归（全量因子，L2 正则化）；主力合约判定 = contract_kline 最新交易日最大成交量；调度器注册 5 个任务；信号管道集成 Market Regime 检测（5 种制度分层判定，输出 Regime 调整交易建议）；策略进化模块包含 3 种策略（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion）；股票 L2 启用种子因子相关性预检（≥0.95 标记），期货 L2 跳过 |
+| 可验证断言 | 股票种子池总数 = 482；期货种子池总数 = 81（14 家族）；期货数据层支持 82 个连续合约品种，数据源优先级 3 级（DuckDB → AKShare → 合成）；common_dates 多数对齐（WH0 等停更品种不清空交集）；方向校正按日期定位；信号管道因子加权 = Ridge 回归（全量因子，L2 正则化）；主力合约判定 = contract_kline 最新交易日最大成交量；调度器注册 5 个任务；信号管道集成 Market Regime 检测（5 种制度分层判定，输出 Regime 调整交易建议）；策略进化模块包含 3 种策略（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion）；股票 L2 启用种子因子相关性预检（≥0.95 标记），期货 L2 跳过；L3 组合支持粘性约束（StickyConfig ±30% / 新因子首日封顶）+ 漂移监控（DriftMonitor → drift_history/YYYY-MM-DD.json）；L2 新晋升因子进影子池（shadow_pool 观察 5 交易日，种子因子 shadow_observe=False 直接进正式组合） |
 | 检验方式 | `python -c "from fts.scheduler.tasks import list_tasks; assert len(list_tasks()) == 5"` |

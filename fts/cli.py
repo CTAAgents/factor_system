@@ -32,6 +32,7 @@ import pandas as pd
 
 from . import __version__ as FTS_VERSION
 from .config import get_config
+from .config.factor_quality_card_config import get_futures_config
 from .data import FTSDataProvider
 from .factor_engine import (
     EVOLUTION_VERSION,
@@ -45,6 +46,7 @@ from .factor_engine import (
     get_default_seed_pool,
     generate_run_id,
     generate_trace_id,
+    generate_session_id,
     MacroEvolver,
     MetaLoop,
     MetaRunResult,
@@ -177,12 +179,28 @@ def _cmd_monitor(args: argparse.Namespace) -> int:
         return 2
 
 
+def _relaxed_futures_quality_config():
+    """期货质检配置（放宽准入线）。
+
+    在 get_futures_config() 基础上进一步降低 B 级准入分，
+    缓解日频期货 500 行短样本导致的后代因子总分普遍接近
+    边界线（28-30/50）却无法晋升、进而触发失败率熔断的问题。
+
+    返回 dict（FactorQualityCardConfig 契约）而非 dataclass 对象，
+    与 FactorQualityCard 内部的 .get() 访问方式兼容。
+    """
+    config = get_futures_config()
+    config.grades.grade_B_min = 24.0
+    return config.to_factor_quality_card_config()
+
+
 def _cmd_evolution_run(args: argparse.Namespace) -> int:
     """启动 L2 因子演化主循环（支持单标或横截面模式）。"""
     trace_id = generate_trace_id()
     run_id = generate_run_id()
+    session_id = getattr(args, "session_id", "") or ""
     cfg = get_config()
-    print(f"[evolution] trace_id={trace_id} run_id={run_id}")
+    print(f"[evolution] session_id={session_id} trace_id={trace_id} run_id={run_id}")
     print(f"[evolution] max_generations={args.max_generations}")
 
     if args.universe == "csi300":
@@ -247,6 +265,8 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
             cross_section_data=panel,
             cross_section_dates=common_dates,
             market="futures",
+            # 期货专用质检配置：降低 IC/Sharpe 阈值以适配日频期货低信噪比
+            quality_card_config=_relaxed_futures_quality_config(),
         )
     else:
         # ── 单标模式 ──
@@ -275,6 +295,9 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
     # 熔断预算：每个因子最多 4000 token
     budget = DEFAULT_BUDGET_CONFIG.copy()
     budget["max_generation"] = args.max_generations
+    # 短样本演化期放宽失败率熔断（0.95 → 0.99），
+    # 避免后代因子因评分卡边界线批量淘汰而提前熔断
+    budget["circuit_breaker_failure_rate"] = 0.99
     loop.budget = budget
 
     # 执行演化
@@ -295,19 +318,34 @@ def _cmd_meta_loop_run(args: argparse.Namespace) -> int:
     """启动 L1 Meta-Loop（市场感知 + Bootstrapping）。"""
     trace_id = generate_trace_id()
     run_id = generate_run_id()
+    session_id = getattr(args, "session_id", "") or ""
     cfg = get_config()
     market = getattr(args, "market", None) or cfg.default_market
-    print(f"[meta-loop] trace_id={trace_id} run_id={run_id} market={market}")
+    print(f"[meta-loop] session_id={session_id} trace_id={trace_id} run_id={run_id} market={market}")
+
+    # 解析 --symbols 参数（逗号分隔）
+    sample_symbols = None
+    symbols_raw = getattr(args, "symbols", None)
+    if symbols_raw:
+        sample_symbols = [s.strip().lower() for s in symbols_raw.split(",") if s.strip()]
+        print(f"[meta-loop] 自定义感知品种: {sample_symbols}")
 
     llm = get_default_llm_client()
     print(f"[meta-loop] LLM backend: {type(llm).__name__}")
 
     try:
+        # 创建 web_collector — 基于 FTSDataProvider 的市场快照采集
+        from .factor_engine.meta_loop import _make_web_collector
+        web_collector = _make_web_collector(FTSDataProvider())
+        print("[meta-loop] web_collector 已就绪 — 市场快照感知已启用")
+
         # MetaLoop
         loop = MetaLoop(
             memory_dir=cfg.memory_dir + "/meta_loop",
             llm_client=llm,
             market=market,
+            web_collector=web_collector,
+            sample_symbols=sample_symbols,
         )
         result = loop.run()
         print(f"[meta-loop] 完成: status={result.status} injected={len(result.injected_candidate_ids)}")
@@ -321,8 +359,9 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
     """启动 L3 组合构建 → 期货信号管道（L3 完成后自动触发）。"""
     trace_id = generate_trace_id()
     run_id = generate_run_id()
+    session_id = getattr(args, "session_id", "") or ""
     cfg = get_config()
-    print(f"[portfolio] trace_id={trace_id} run_id={run_id}")
+    print(f"[portfolio] session_id={session_id} trace_id={trace_id} run_id={run_id}")
 
     # 根据 universe 选择 elite 目录和合成模式
     universe = getattr(args, "universe", "stock")
@@ -474,6 +513,9 @@ def _cmd_factor_list(args: argparse.Namespace) -> int:
             return 0
         factors = []
         for p in sorted(elite_dir.glob("*.json")):
+            # 跳过内部索引/临时文件（_l2_seed_correlation_index.json 等）
+            if p.name.startswith("_") or p.name.startswith("."):
+                continue
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
                 factors.append(data)
@@ -501,7 +543,11 @@ def _cmd_factor_list(args: argparse.Namespace) -> int:
         for f in factors:
             vals = []
             for k in keys:
-                v = f.get(k, "-")
+                # ic/sharpe 嵌套在 evaluation.level_1_backtest 中（顶层无此字段）
+                if k in ("ic", "sharpe"):
+                    v = ((f.get("evaluation") or {}).get("level_1_backtest") or {}).get(k, "-")
+                else:
+                    v = f.get(k, "-")
                 if isinstance(v, float):
                     vals.append(f"{v:<12.4f}")
                 else:
@@ -692,6 +738,9 @@ def _cmd_backtest_batch(args: argparse.Namespace) -> int:
         return 1
     factors = []
     for p in sorted(elite_dir.glob("*.json")):
+        # 跳过内部索引/临时文件（_l2_seed_correlation_index.json 等）
+        if p.name.startswith("_") or p.name.startswith("."):
+            continue
         try:
             factors.append(json.loads(p.read_text(encoding="utf-8")))
         except Exception:  # noqa: BLE001
@@ -1010,6 +1059,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_meta_run.add_argument("--market", type=str, default=None,
                             choices=["stock", "futures"],
                             help="市场类型: stock（股票）/ futures（期货），默认使用 config default_market")
+    p_meta_run.add_argument("--symbols", type=str, default=None,
+                            help="感知层抽样品种，逗号分隔（如 rb,i,au,sc），默认覆盖五大板块共 13 个品种")
     p_meta_run.set_defaults(func=_cmd_meta_loop_run)
 
     # portfolio run
@@ -1181,6 +1232,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # session_id: 整个 CLI 会话唯一标识（一次 `fts` 命令执行），
+    # 挂载到 args 传递到各子命令作为日志聚合标识
+    args.session_id = generate_session_id()
 
     if getattr(args, "version", False):
         return _cmd_version(args)

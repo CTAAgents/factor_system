@@ -110,6 +110,15 @@ def optimize_params(
 
     base_params = factor.get("params", {})
 
+    # 当 params 为空时，添加默认搜索空间（GP/算子因子通常无显式 params）
+    if not base_params:
+        base_params = {
+            "lookback": 20,
+            "holding": 5,
+            "window": 20,
+            "threshold": 0.0,
+        }
+
     def optuna_objective(trial):
         # 构造本次试验的参数
         trial_params = {

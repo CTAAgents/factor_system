@@ -181,12 +181,12 @@ class MetaStateManager:
             try:
                 with open(self.state_file, "r", encoding="utf-8") as f:
                     state = json.load(f)
-                # 版本检查（避免契约不兼容）
-                from .contracts import EVOLUTION_VERSION
-                if state.get("version") != EVOLUTION_VERSION:
+                # schema 版本检查（仅状态结构变更时冷启动）
+                from .contracts import STATE_SCHEMA_VERSION
+                if state.get("schema_version") != STATE_SCHEMA_VERSION:
                     logger.warning(
-                        "L1 状态版本不匹配: %s != %s, 冷启动",
-                        state.get("version"), EVOLUTION_VERSION,
+                        "L1 状态 schema 版本不匹配: %s != %s, 冷启动",
+                        state.get("schema_version"), STATE_SCHEMA_VERSION,
                     )
                     return self._init_state(budget_limit)
                 return state
@@ -209,7 +209,7 @@ class MetaStateManager:
     @staticmethod
     def _init_state(budget_limit: int) -> L1MetaLoopState:
         """初始化新的状态。"""
-        from .contracts import EVOLUTION_VERSION
+        from .contracts import STATE_SCHEMA_VERSION
         # generate_run_id 不接受参数，用 prefix 通过 trace_id 体系区分
         # run_id 格式: run_<8hex>_<timestamp>
         return L1MetaLoopState(
@@ -225,15 +225,15 @@ class MetaStateManager:
             last_error=None,
             candidates_ref=[],
             last_updated=datetime.now().isoformat(),
-            version=EVOLUTION_VERSION,
+            schema_version=STATE_SCHEMA_VERSION,
         )
 
     def save(self, state: L1MetaLoopState) -> None:
         """持久化状态 — 先写主文件，再镜像到 backup。"""
-        from .contracts import EVOLUTION_VERSION
-        if state.get("version") != EVOLUTION_VERSION:
+        from .contracts import STATE_SCHEMA_VERSION
+        if state.get("schema_version") != STATE_SCHEMA_VERSION:
             raise MetaStateManagerError(
-                f"状态版本不匹配: {state.get('version')} != {EVOLUTION_VERSION}"
+                f"状态 schema 版本不匹配: {state.get('schema_version')} != {STATE_SCHEMA_VERSION}"
             )
         state["last_updated"] = datetime.now().isoformat()
         self.memory_dir.mkdir(parents=True, exist_ok=True)
@@ -940,7 +940,12 @@ class MetaLoop:
         # ── 日志: 市场类型与种子池初始化 ──
         logger.info(
             "[L1.init] market=%s, seed_pool_mode=%s, sample_symbols=%s",
-            market, market, sample_symbols or ["rb", "i", "j"],
+            market, market, sample_symbols or [
+                "rb", "i", "j", "hc",
+                "au", "ag", "cu",
+                "sc", "ta", "ma",
+                "m", "a", "y",
+            ],
         )
         if market == "futures":
             logger.info(
@@ -964,7 +969,12 @@ class MetaLoop:
             market, seed_count, self.seed_pool.list_names()[:5],
         )
 
-        self.sample_symbols = sample_symbols or ["rb", "i", "j"]  # 默认抽样 3 个期货品种
+        self.sample_symbols = sample_symbols or [
+            "rb", "i", "j", "hc",        # 黑色系
+            "au", "ag", "cu",            # 有色金属
+            "sc", "ta", "ma",            # 能源化工
+            "m", "a", "y",               # 农产品
+        ]  # 默认抽样 13 个期货品种，覆盖五大板块
 
         self.state_manager = MetaStateManager(self.memory_dir)
         self.factor_pool_manager = FactorPoolManager(self.factor_pool_path)
@@ -1277,6 +1287,8 @@ class MetaLoop:
             cand_name, cand_id, cand.get("source", "unknown"), len(cand.get("code", "")),
         )
         try:
+            # 0. 标记市场归属（GAP-031: L2 合并时按 market 过滤）
+            cand["market"] = self.market
             # 1. 持久化到 l1_injected/ 目录
             self.inject_dir.mkdir(parents=True, exist_ok=True)
             inject_file = self.inject_dir / f"{cand['candidate_id']}.json"
@@ -1370,6 +1382,86 @@ class MetaLoop:
         return 1000 + candidates_generated * 5000 + debate_gaps_detected * 200
 
 
+# ─── web_collector ──────────────────────────────────────
+
+def _make_web_collector(provider: Any | None = None) -> Callable[..., dict]:
+    """创建 web_collector 可调用对象 — 基于 FTSDataProvider 的市场快照采集。
+
+    Args:
+        provider: FTSDataProvider 实例（None 时惰性初始化）
+
+    Returns:
+        Callable(symbol: str) -> dict — 市场快照，包含 quote、kline、news 等字段
+    """
+    lazy_provider: Any | None = provider
+
+    def _collect(symbol: str) -> dict:
+        """采集单个品种的市场快照。"""
+        nonlocal lazy_provider
+        if lazy_provider is None:
+            from fts.data import FTSDataProvider
+            lazy_provider = FTSDataProvider()
+
+        # 转换 symbol 格式: "rb" → "RB0"
+        symbol_upper = symbol.upper().strip()
+        contract_symbol = symbol_upper if symbol_upper.endswith("0") else f"{symbol_upper}0"
+
+        result: dict = {
+            "symbol": symbol,
+            "contract_symbol": contract_symbol,
+            "source": "fts_data_provider",
+            "fetched_at": datetime.now().isoformat(),
+            "quote": {},
+            "kline": {"bars": []},
+            "news": [],
+            "warnings": [],
+        }
+
+        # 1. 获取 OHLCV 数据
+        try:
+            df = lazy_provider._futures.get_ohlcv(contract_symbol, days=60)
+            if df is not None and not df.empty:
+                # 取最新 5 根 K 线
+                recent = df.tail(5)
+                bars = []
+                for idx, row in recent.iterrows():
+                    bar = {
+                        "date": str(idx.date()) if hasattr(idx, "date") else str(idx),
+                        "open": float(row.get("open", 0)),
+                        "high": float(row.get("high", 0)),
+                        "low": float(row.get("low", 0)),
+                        "close": float(row.get("close", 0)),
+                        "volume": float(row.get("volume", 0)),
+                    }
+                    bars.append(bar)
+                result["kline"]["bars"] = bars
+
+                # 最新 quote
+                last = recent.iloc[-1]
+                result["quote"] = {
+                    "last_price": float(last.get("close", 0)),
+                    "volume": float(last.get("volume", 0)),
+                    "open": float(last.get("open", 0)),
+                    "high": float(last.get("high", 0)),
+                    "low": float(last.get("low", 0)),
+                }
+        except Exception as e:
+            result["warnings"].append(f"OHLCV 获取失败: {e}")
+
+        # 2. 获取实时价格
+        try:
+            from fts.data_futures import get_realtime_prices
+            prices = get_realtime_prices([contract_symbol])
+            if contract_symbol in prices:
+                result["quote"]["realtime_price"] = prices[contract_symbol]
+        except Exception as e:
+            result["warnings"].append(f"实时价获取失败: {e}")
+
+        return result
+
+    return _collect
+
+
 # ─── CLI 入口 ───────────────────────────────────────────
 
 def main():
@@ -1411,12 +1503,15 @@ def main():
 
     from fts.llm import get_llm_client
 
-    # web_collector 保留为 None（参数为向后兼容保留），L1 感知在未来版本迁移至 FTSDataProvider 模式
+    # 创建 web_collector — 基于 FTSDataProvider 的市场快照采集
+    web_collector = _make_web_collector(provider)
+    logger.info("web_collector 已就绪 — 市场快照感知已启用")
+
     loop = MetaLoop(
         memory_dir=args.memory_dir,
         factor_pool_path=args.factor_pool,
         inject_dir=args.inject_dir,
-        web_collector=None,
+        web_collector=web_collector,
         llm_client=get_llm_client(),
     )
     result = loop.run(max_bootstraps=args.max_bootstraps)

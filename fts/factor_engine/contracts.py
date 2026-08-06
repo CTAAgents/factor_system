@@ -66,6 +66,10 @@ def _get_evolution_version() -> str:
 EVOLUTION_VERSION: str = _get_evolution_version()
 """Loop Engine 版本号，动态读取自 fts.__version__。"""
 
+# L1/L2 状态文件 schema 版本 — 仅 L1MetaLoopState / L2EvolveState TypedDict
+# 字段变更时手动递增，用于冷启动决策。小版本/功能版本不触发冷启动。
+STATE_SCHEMA_VERSION: str = "1"
+
 
 # ─── 因子程序契约 ─────────────────────────────────────────
 
@@ -233,7 +237,7 @@ class EvolutionState(TypedDict, total=False):
     last_error: Optional[str]
     experience_chain_ref: list[str]              # 经验链 trace_id 列表
     last_updated: str                            # ISO 8601
-    version: str                                 # 契约版本（= EVOLUTION_VERSION）
+    schema_version: str                          # 状态 schema 版本（= STATE_SCHEMA_VERSION）
 
 
 # ─── Verifier 契约 ────────────────────────────────────────
@@ -348,6 +352,7 @@ class SeedCandidate(TypedDict, total=False):
     signature: FactorSignature                     # 输入/输出契约
     economic_logic: EconomicLogic                  # 四维经济逻辑评分
     source: L1BootstrappingSource                  # 来源标签
+    market: Optional[str]                          # 所属市场 (futures/stock)，GAP-031 起注入时写入
     parent_topic: str                              # 触发 Bootstrapping 的市场主题/研报
     debate_round_ref: Optional[int]                # 关联的 debate_round（质量信号源）
     debate_gap: Optional[str]                      # 从 debate_round 推断的论证缺口
@@ -380,7 +385,7 @@ class L1MetaLoopState(TypedDict, total=False):
     last_error: Optional[str]
     candidates_ref: list[str]                      # 候选 ID 列表
     last_updated: str                              # ISO 8601
-    version: str                                   # 契约版本（= EVOLUTION_VERSION）
+    schema_version: str                            # 状态 schema 版本（= STATE_SCHEMA_VERSION）
 
 
 class FactorPoolEntry(TypedDict, total=False):
@@ -564,7 +569,7 @@ class L3MetaLoopState(TypedDict, total=False):
     last_error: Optional[str]
     combo_ref: list[str]          # 组合 ID 列表
     last_updated: str
-    version: str
+    schema_version: str                          # 状态 schema 版本（= STATE_SCHEMA_VERSION）
 
 
 # ─── L3 默认配置 ───────────────────────────────────────────
@@ -582,9 +587,54 @@ DEFAULT_L3_BUDGET = 100_000
 """L3 每周 token 预算 100K。"""
 
 
+# ─── L3 组合粘性约束 ──────────────────────────────────────
+
+class StickyConfig(TypedDict, total=False):
+    """L3 组合粘性约束配置 — 平滑组合换血，防止策略漂移。
+
+    约束时机: build_combo 权重归一化之前。
+    约束规则:
+        - 存量因子: 权重相对上次组合变动 clamp 在 ±max_delta
+        - 新因子: 首日权重封顶 new_factor_cap
+    """
+    enabled: bool               # 是否启用粘性约束（默认 True）
+    max_delta: float            # 单因子权重相对上次组合变动上限（默认 0.30）
+    new_factor_cap: float       # 新因子首日权重封顶（默认 0.10）
+
+
+DEFAULT_STICKY_CONFIG: StickyConfig = StickyConfig(
+    enabled=True,
+    max_delta=0.30,
+    new_factor_cap=0.10,
+)
+"""v2.11.0 锁定的 L3 粘性约束默认配置。"""
+
+
+# ─── L3 组合漂移监控 ──────────────────────────────────────
+
+class DriftMetrics(TypedDict, total=False):
+    """L3 组合漂移监控指标 — 每次组合构建后记录。
+
+    存储位置: memory/portfolio/drift_history/YYYY-MM-DD.json
+    对比基准: 上一次组合（current_combo.json 归档到 combo_history/）。
+    """
+    date: str                    # 记录日期 YYYY-MM-DD
+    combo_id: str                # 本次组合 ID
+    prev_combo_id: str           # 上次组合 ID（首次为空）
+    trace_id: str                # 本次运行 trace_id
+    member_overlap_rate: float   # 成员重合率 Jaccard = |A∩B| / |A∪B|（0~1）
+    weight_l1_change: float      # 权重 L1 变化率 Σ|w_new - w_prev| / 2（0~1）
+    n_prev_members: int          # 上次组合因子数
+    n_new_members: int           # 本次组合因子数
+    n_common_members: int        # 两期共有因子数
+    added: list[str]             # 新增因子名列表
+    removed: list[str]           # 移除因子名列表
+
+
 __all__ = [
     # 版本
     "EVOLUTION_VERSION",
+    "STATE_SCHEMA_VERSION",
     # 枚举类型
     "FactorMarket",
     "FactorFamily",
@@ -634,6 +684,10 @@ __all__ = [
     "L3MetaLoopState",
     "DEFAULT_L3_VERIFIER_CONFIG",
     "DEFAULT_L3_BUDGET",
+    # ─── L3 粘性约束 + 漂移监控（v2.11.0）─────────────
+    "StickyConfig",
+    "DEFAULT_STICKY_CONFIG",
+    "DriftMetrics",
     # 规范化工具
     "normalize_factor_program",
     "normalize_factor_signature",

@@ -32,6 +32,7 @@ from fts.factor_engine.contracts import (
     DEFAULT_L1_VERIFIER_CONFIG,
     EconomicLogic,
     EVOLUTION_VERSION,
+    STATE_SCHEMA_VERSION,
     FactorSignature,
     L1BudgetConfig,
     L1MetaLoopState,
@@ -277,7 +278,7 @@ class TestMetaStateManager:
         state = sm.load_or_init(budget_limit=50000)
         assert state["status"] == "paused"
         assert state["budget_limit"] == 50000
-        assert state["version"] == EVOLUTION_VERSION
+        assert state["schema_version"] == STATE_SCHEMA_VERSION
         assert state["total_candidates_generated"] == 0
 
     def test_save_persists_state(self, tmp_meta_dir):
@@ -344,27 +345,45 @@ class TestMetaStateManager:
         recovered = sm.load_or_init(50000)
         assert recovered["total_candidates_generated"] == 7
 
-    def test_version_mismatch_triggers_cold_start(self, tmp_meta_dir):
-        """版本不匹配触发冷启动。"""
+    def test_schema_version_mismatch_triggers_cold_start(self, tmp_meta_dir):
+        """schema 版本不匹配触发冷启动。"""
         sm = MetaStateManager(tmp_meta_dir)
-        # 写入旧版本状态
+        # 写入旧 schema 版本状态
         old_state = {
             "run_id": "old",
-            "version": "8.9.0",  # 旧版本
+            "schema_version": "0",  # 旧 schema 版本
             "status": "completed",
         }
         with open(sm.state_file, "w", encoding="utf-8") as f:
             json.dump(old_state, f)
         # 重新加载应冷启动
         state = sm.load_or_init(50000)
-        assert state["version"] == EVOLUTION_VERSION
+        assert state["schema_version"] == STATE_SCHEMA_VERSION
         assert state["status"] == "paused"  # 冷启动默认
 
-    def test_save_with_wrong_version_raises(self, tmp_meta_dir):
-        """save() 版本不匹配抛异常。"""
+    def test_schema_version_compatible_keeps_state(self, tmp_meta_dir):
+        """schema 版本一致时不冷启动，保留原状态。"""
+        sm = MetaStateManager(tmp_meta_dir)
+        # 写入当前 schema 版本状态（模拟升级版本号但 schema 未变）
+        existing_state = {
+            "run_id": "existing_run",
+            "schema_version": STATE_SCHEMA_VERSION,
+            "status": "completed",
+            "total_candidates_generated": 42,
+        }
+        with open(sm.state_file, "w", encoding="utf-8") as f:
+            json.dump(existing_state, f)
+        # 重新加载应保留状态，不冷启动
+        state = sm.load_or_init(50000)
+        assert state["run_id"] == "existing_run"
+        assert state["total_candidates_generated"] == 42
+        assert state["status"] == "completed"
+
+    def test_save_with_wrong_schema_version_raises(self, tmp_meta_dir):
+        """save() schema 版本不匹配抛异常。"""
         sm = MetaStateManager(tmp_meta_dir)
         state = sm.load_or_init(50000)
-        state["version"] = "8.0.0"  # 篡改版本
+        state["schema_version"] = "0"  # 篡改 schema 版本
         with pytest.raises(MetaStateManagerError):
             sm.save(state)
 

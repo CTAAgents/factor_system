@@ -23,6 +23,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
+import pandas as pd
 import pytest
 
 # 确保能导入 fts.factor_engine
@@ -32,19 +34,23 @@ if str(_FTS_ROOT) not in sys.path:
 
 from fts.factor_engine.contracts import (
     EVOLUTION_VERSION,
+    STATE_SCHEMA_VERSION,
     DEFAULT_L3_VERIFIER_CONFIG,
     AgentOptimizationProposal,
+    DriftMetrics,
     FactorCorrelation,
     L3MetaLoopState,
     L3VerifierConfig,
     PortfolioCombo,
     PortfolioSignal,
+    StickyConfig,
 )
 from fts.factor_engine.portfolio_loop import (
     L3Error,
     L3Verifier,
     PortfolioStateManager,
     PortfolioManager,
+    DriftMonitor,
     synthesize_signals,
     orthogonalize_factors,
     decay_test,
@@ -212,7 +218,7 @@ class TestPortfolioStateManager:
         loaded = psm2.load_or_init()
         assert loaded["total_signals_processed"] == 10
         assert loaded["total_signals_retained"] == 5
-        assert loaded["version"] == EVOLUTION_VERSION
+        assert loaded["schema_version"] == STATE_SCHEMA_VERSION
 
     def test_backup_recovery(self, tmp_portfolio_dir):
         """主文件损坏后从 backup 恢复。"""
@@ -232,10 +238,10 @@ class TestPortfolioStateManager:
         assert recovered["total_proposals_generated"] == 3
 
     def test_version_mismatch(self, tmp_portfolio_dir):
-        """版本号不匹配抛 L3Error。"""
+        """schema 版本号不匹配抛 L3Error。"""
         psm = PortfolioStateManager(tmp_portfolio_dir)
         state = psm.load_or_init()
-        state["version"] = "0.0.0"  # 篡改版本
+        state["schema_version"] = "0"  # 篡改 schema 版本
 
         with pytest.raises(L3Error, match="版本不匹配"):
             psm.save(state)
@@ -730,17 +736,17 @@ class TestCoverageGaps:
     # ── PortfolioStateManager line 181 ──
 
     def test_state_manager_try_load_version_mismatch(self, tmp_portfolio_dir):
-        """line 181: _try_load 发现版本不匹配返回 None。"""
-        # 写入版本不匹配的 state
+        """line 181: _try_load 发现 schema 版本不匹配返回 None。"""
+        # 写入 schema 版本不匹配的 state
         state_file = tmp_portfolio_dir / "state.json"
         state_file.write_text(
-            json.dumps({"version": "0.0.0", "status": "completed"}),
+            json.dumps({"schema_version": "0", "status": "completed"}),
             encoding="utf-8",
         )
         psm = PortfolioStateManager(tmp_portfolio_dir)
         # load_or_init 应重新初始化（因为 _try_load 返回 None）
         state = psm.load_or_init()
-        assert state["version"] == EVOLUTION_VERSION
+        assert state["schema_version"] == STATE_SCHEMA_VERSION
 
     # ── PortfolioManager lines 225, 231-232 ──
 
@@ -1179,3 +1185,381 @@ class TestRegimeAdaptiveWeight:
         result = loop.run(market_ohlcv=None)  # 不传数据
 
         assert result.status in ("passed", "verifier_warning", "completed")
+
+
+# ════════════════════════════════════════════════════════════
+# 13. 组合粘性约束测试 (v2.11.0)
+# ════════════════════════════════════════════════════════════
+
+class TestStickyConstraints:
+    """组合粘性约束 — 平滑换血，防止策略漂移。"""
+
+    def _make_signals(self, weights: dict[str, float]) -> list[PortfolioSignal]:
+        """根据 {factor_id: weight} 构造信号。"""
+        return [
+            PortfolioSignal(
+                factor_id=fid, name=fid, weight=w,
+                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.1,
+                orthogonalized=True, retained=True,
+            )
+            for fid, w in weights.items()
+        ]
+
+    def test_sticky_caps_existing_weight_increase(self):
+        """存量因子权重相对上次变动 clamp 在 +30%。"""
+        prev_weights = {"f_a": 0.10, "f_b": 0.30, "f_c": 0.60}
+        signals = self._make_signals({"f_a": 0.30, "f_b": 0.30, "f_c": 0.40})
+
+        from fts.factor_engine.portfolio_loop import _apply_sticky_constraints
+        from fts.factor_engine.contracts import StickyConfig
+
+        config = StickyConfig(enabled=True, max_delta=0.30, new_factor_cap=0.10)
+        result = _apply_sticky_constraints(signals, prev_weights, config)
+        w_map = {s["factor_id"]: s["weight"] for s in result}
+
+        # f_a: 0.30 → clamp 上限 0.10 * 1.3 = 0.13
+        assert w_map["f_a"] == pytest.approx(0.13)
+        # f_b: 0.30 在 [0.21, 0.39] 内，不变
+        assert w_map["f_b"] == pytest.approx(0.30)
+        # f_c: 0.40 → clamp 下限 0.60 * 0.7 = 0.42
+        assert w_map["f_c"] == pytest.approx(0.42)
+
+    def test_sticky_floors_existing_weight_decrease(self):
+        """存量因子权重相对上次变动 clamp 在 -30%。"""
+        prev_weights = {"f_a": 0.50, "f_b": 0.50}
+        signals = self._make_signals({"f_a": 0.10, "f_b": 0.90})
+
+        from fts.factor_engine.portfolio_loop import _apply_sticky_constraints
+        from fts.factor_engine.contracts import StickyConfig
+
+        config = StickyConfig(enabled=True, max_delta=0.30, new_factor_cap=0.10)
+        result = _apply_sticky_constraints(signals, prev_weights, config)
+        w_map = {s["factor_id"]: s["weight"] for s in result}
+
+        # f_a: 0.10 → clamp 下限 0.50 * 0.7 = 0.35
+        assert w_map["f_a"] == pytest.approx(0.35)
+        # f_b: 0.90 → clamp 上限 0.50 * 1.3 = 0.65
+        assert w_map["f_b"] == pytest.approx(0.65)
+
+    def test_new_factor_capped(self):
+        """新因子（上次无权重）首日权重封顶。"""
+        prev_weights = {"f_a": 0.50, "f_b": 0.50}
+        signals = self._make_signals({"f_a": 0.40, "f_b": 0.40, "f_new": 0.20})
+
+        from fts.factor_engine.portfolio_loop import _apply_sticky_constraints
+        from fts.factor_engine.contracts import StickyConfig
+
+        config = StickyConfig(enabled=True, max_delta=0.30, new_factor_cap=0.10)
+        result = _apply_sticky_constraints(signals, prev_weights, config)
+        w_map = {s["factor_id"]: s["weight"] for s in result}
+
+        # f_new 是新增因子，权重 0.20 封顶到 0.10
+        assert w_map["f_new"] == pytest.approx(0.10)
+
+    def test_disabled_or_empty_prev_skips(self):
+        """disabled 或 prev_weights 为空时权重不变。"""
+        from fts.factor_engine.portfolio_loop import _apply_sticky_constraints
+        from fts.factor_engine.contracts import StickyConfig
+
+        signals = self._make_signals({"f_a": 0.30, "f_b": 0.70})
+
+        # disabled
+        cfg_off = StickyConfig(enabled=False, max_delta=0.30, new_factor_cap=0.10)
+        result = _apply_sticky_constraints(signals, {"f_a": 0.1}, cfg_off)
+        assert {s["factor_id"]: s["weight"] for s in result} == {"f_a": 0.30, "f_b": 0.70}
+
+        # 空 prev
+        cfg_on = StickyConfig(enabled=True, max_delta=0.30, new_factor_cap=0.10)
+        result2 = _apply_sticky_constraints(signals, {}, cfg_on)
+        assert {s["factor_id"]: s["weight"] for s in result2} == {"f_a": 0.30, "f_b": 0.70}
+
+    def test_build_combo_with_sticky(self):
+        """build_combo 传入 prev_weights + sticky_config 生效且归一化。"""
+        from fts.factor_engine.contracts import StickyConfig
+
+        signals = [
+            PortfolioSignal(
+                factor_id="f_a", name="a", weight=0.30,
+                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.1,
+                orthogonalized=True, retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="f_b", name="b", weight=0.70,
+                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.1,
+                orthogonalized=True, retained=True,
+            ),
+        ]
+        prev_weights = {"f_a": 0.05, "f_b": 0.95}
+        config = StickyConfig(enabled=True, max_delta=0.30, new_factor_cap=0.10)
+        combo = build_combo(signals, mode="equal_weight", trace_id="l3_sticky",
+                            prev_weights=prev_weights, sticky_config=config)
+        w_map = {s["factor_id"]: s["weight"] for s in combo["signals"]}
+        # f_a: 0.30 → clamp 上限 0.05 * 1.3 = 0.065
+        # f_b: 0.70 在 [0.665, 1.235] 内，不变
+        total = 0.065 + 0.70
+        assert w_map["f_a"] == pytest.approx(0.065 / total)
+        assert w_map["f_b"] == pytest.approx(0.70 / total)
+        assert sum(w_map.values()) == pytest.approx(1.0)
+
+    def test_portfolio_loop_sticky_default_enabled(self, tmp_portfolio_dir, tmp_elite_dir):
+        """PortfolioLoop 未传 sticky_config 时默认启用（DEFAULT_STICKY_CONFIG）。"""
+        from fts.factor_engine.contracts import DEFAULT_STICKY_CONFIG
+
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+        )
+        assert loop.sticky_config is not None
+        assert loop.sticky_config.get("enabled", True) is True
+        assert loop.sticky_config.get("max_delta", 0.30) == pytest.approx(DEFAULT_STICKY_CONFIG["max_delta"])
+        assert loop.sticky_config.get("new_factor_cap", 0.10) == pytest.approx(DEFAULT_STICKY_CONFIG["new_factor_cap"])
+
+    def test_portfolio_loop_sticky_explicit_override(self, tmp_portfolio_dir, tmp_elite_dir):
+        """显式传入 sticky_config 覆盖默认配置。"""
+        from fts.factor_engine.contracts import StickyConfig
+
+        custom = StickyConfig(enabled=False, max_delta=0.10, new_factor_cap=0.05)
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            sticky_config=custom,
+        )
+        assert loop.sticky_config == custom
+        assert loop.sticky_config["enabled"] is False
+
+
+# ════════════════════════════════════════════════════════════
+# 14. 组合漂移监控测试 (v2.11.0)
+# ════════════════════════════════════════════════════════════
+
+class TestDriftMonitor:
+    """L3 组合漂移监控 — 成员重合率 + 权重 L1 变化率。"""
+
+    def _make_combo(self, combo_id: str, weights: dict[str, float],
+                    trace_id: str = "l3_drift") -> PortfolioCombo:
+        signals = [
+            PortfolioSignal(
+                factor_id=fid, name=fid, weight=w,
+                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.1,
+                orthogonalized=True, retained=True,
+            )
+            for fid, w in weights.items()
+        ]
+        return PortfolioCombo(
+            version=EVOLUTION_VERSION, updated_at="now",
+            combo_id=combo_id, trace_id=trace_id,
+            synthesis_mode="equal_weight", signals=signals,
+            combo_sharpe=2.5, combo_turnover=0.3, max_correlation=0.2,
+            n_factors=len(weights), status="active", created_at="now",
+        )
+
+    def test_identical_combo_zero_drift(self, tmp_portfolio_dir):
+        """完全相同的组合漂移为零。"""
+        mon = DriftMonitor(tmp_portfolio_dir)
+        prev = self._make_combo("cmb_prev", {"f_a": 0.5, "f_b": 0.5})
+        new = self._make_combo("cmb_new", {"f_a": 0.5, "f_b": 0.5})
+        m = mon.compute(prev, new)
+        assert m["member_overlap_rate"] == 1.0
+        assert m["weight_l1_change"] == 0.0
+        assert m["n_common_members"] == 2
+        assert m["added"] == []
+        assert m["removed"] == []
+
+    def test_full_replacement_zero_overlap(self, tmp_portfolio_dir):
+        """全部更换因子时重合率为 0，L1 变化为 1。"""
+        mon = DriftMonitor(tmp_portfolio_dir)
+        prev = self._make_combo("cmb_prev", {"f_a": 0.5, "f_b": 0.5})
+        new = self._make_combo("cmb_new", {"f_c": 0.5, "f_d": 0.5})
+        m = mon.compute(prev, new)
+        assert m["member_overlap_rate"] == 0.0
+        assert m["weight_l1_change"] == pytest.approx(1.0)
+        assert m["added"] == ["f_c", "f_d"]
+        assert m["removed"] == ["f_a", "f_b"]
+
+    def test_partial_change(self, tmp_portfolio_dir):
+        """部分因子更换 + 权重变化。"""
+        mon = DriftMonitor(tmp_portfolio_dir)
+        prev = self._make_combo("cmb_prev", {"f_a": 0.5, "f_b": 0.5})
+        new = self._make_combo("cmb_new", {"f_a": 0.3, "f_b": 0.3, "f_c": 0.4})
+        m = mon.compute(prev, new)
+        # Jaccard: 交集 {f_a,f_b}=2, 并集 {f_a,f_b,f_c}=3 → 2/3 (round 4位=0.6667)
+        assert m["member_overlap_rate"] == pytest.approx(2 / 3, abs=1e-4)
+        # L1: |0.3-0.5|+|0.3-0.5|+|0.4-0| = 0.2+0.2+0.4 = 0.8 → /2 = 0.4
+        assert m["weight_l1_change"] == pytest.approx(0.4)
+        assert m["added"] == ["f_c"]
+        assert m["removed"] == []
+
+    def test_cold_start_no_prev(self, tmp_portfolio_dir):
+        """无上次组合（冷启动）漂移指标为空基准。"""
+        mon = DriftMonitor(tmp_portfolio_dir)
+        new = self._make_combo("cmb_new", {"f_a": 1.0})
+        m = mon.compute(None, new)
+        assert m["member_overlap_rate"] == 0.0
+        assert m["weight_l1_change"] == 0.0
+        assert m["n_prev_members"] == 0
+        assert m["prev_combo_id"] == ""
+
+    def test_record_persists_daily_file(self, tmp_portfolio_dir):
+        """record 持久化到 drift_history/YYYY-MM-DD.json。"""
+        mon = DriftMonitor(tmp_portfolio_dir)
+        prev = self._make_combo("cmb_prev", {"f_a": 0.5, "f_b": 0.5})
+        new = self._make_combo("cmb_new", {"f_a": 0.5, "f_b": 0.5})
+        metrics = mon.compute(prev, new)
+        fp = mon.record(metrics)
+        assert fp.exists()
+        assert fp.name == "drift_history.json" or fp.name.endswith(".json")
+        # 读回验证
+        records = mon.load_history(metrics["date"])
+        assert len(records) == 1
+        assert records[0]["combo_id"] == "cmb_new"
+        assert records[0]["member_overlap_rate"] == 1.0
+
+    def test_record_appends_multiple_entries(self, tmp_portfolio_dir):
+        """同一天多次记录追加不覆盖。"""
+        mon = DriftMonitor(tmp_portfolio_dir)
+        prev = self._make_combo("cmb_prev", {"f_a": 1.0})
+        new1 = self._make_combo("cmb_new1", {"f_a": 1.0})
+        new2 = self._make_combo("cmb_new2", {"f_a": 1.0})
+        mon.record(mon.compute(prev, new1))
+        mon.record(mon.compute(prev, new2))
+        records = mon.load_history(mon.compute(prev, new1)["date"])
+        assert len(records) == 2
+        assert {r["combo_id"] for r in records} == {"cmb_new1", "cmb_new2"}
+
+    def test_load_history_missing_date(self, tmp_portfolio_dir):
+        """不存在的日期返回空列表。"""
+        mon = DriftMonitor(tmp_portfolio_dir)
+        assert mon.load_history("2099-01-01") == []
+
+
+# ════════════════════════════════════════════════════════════
+# 15. L2 影子池测试 (v2.11.0)
+# ════════════════════════════════════════════════════════════
+
+class TestShadowPool:
+    """L2 影子池 — 新晋升因子观察 5 个交易日后才进正式组合。"""
+
+    def test_is_shadow_pending_within_window(self):
+        """观察期内（今日 < observe_until）标记为 pending。"""
+        from fts.factor_engine.portfolio_loop import _is_shadow_pending
+        from datetime import datetime, timedelta
+
+        today = datetime(2026, 8, 6)
+        factor = {
+            "shadow_pool": {
+                "promoted_at": today.isoformat(),
+                "observe_trading_days": 5,
+                "observe_until": (today + timedelta(days=5)).isoformat(),
+            }
+        }
+        assert _is_shadow_pending(factor, today=today) is True
+
+    def test_is_shadow_pending_expired(self):
+        """观察期已过（今日 >= observe_until）不标记 pending。"""
+        from fts.factor_engine.portfolio_loop import _is_shadow_pending
+        from datetime import datetime, timedelta
+
+        today = datetime(2026, 8, 6)
+        factor = {
+            "shadow_pool": {
+                "promoted_at": "2026-07-01T00:00:00",
+                "observe_trading_days": 5,
+                "observe_until": (datetime(2026, 7, 8)).isoformat(),
+            }
+        }
+        assert _is_shadow_pending(factor, today=today) is False
+
+    def test_no_shadow_pool_not_pending(self):
+        """无 shadow_pool 标记（种子/存量因子）不是 pending。"""
+        from fts.factor_engine.portfolio_loop import _is_shadow_pending
+
+        assert _is_shadow_pending({"factor_id": "f_a"}) is False
+        assert _is_shadow_pending({"shadow_pool": {}}) is False
+        assert _is_shadow_pending({"shadow_pool": {"promoted_at": "bad"}}) is False
+
+    def test_filter_shadow_pending(self, tmp_elite_dir):
+        """load_elite_factors 过滤掉观察期内因子，保留正式因子。"""
+        from fts.factor_engine.portfolio_loop import load_elite_factors
+        from datetime import datetime, timedelta
+
+        today = datetime(2026, 8, 6)
+        # 正式因子（无标记）
+        (tmp_elite_dir / "f_normal.json").write_text(json.dumps({
+            "factor_id": "fct_normal", "name": "normal",
+            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+            "market": "stock",
+        }), encoding="utf-8")
+        # 影子因子（观察期内）
+        (tmp_elite_dir / "f_shadow.json").write_text(json.dumps({
+            "factor_id": "fct_shadow", "name": "shadowed",
+            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+            "market": "stock",
+            "shadow_pool": {
+                "promoted_at": today.isoformat(),
+                "observe_trading_days": 5,
+                "observe_until": (today + timedelta(days=5)).isoformat(),
+            },
+        }), encoding="utf-8")
+
+        factors = load_elite_factors(tmp_elite_dir, use_duckdb=False, market="stock")
+        ids = {f["factor_id"] for f in factors}
+        assert ids == {"fct_normal"}
+        assert "fct_shadow" not in ids
+
+    def _make_evolution_loop(self, tmp_path, market="futures"):
+        """构造最小 EvolutionLoop（mock DuckDB，避免真实写入）。"""
+        from fts.factor_engine.evolution_loop import EvolutionLoop
+
+        elite_dir = tmp_path / f"{market}_elite"
+        elite_dir.mkdir(parents=True, exist_ok=True)
+        memory_dir = tmp_path / f"{market}_memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+
+        loop = EvolutionLoop(
+            data=pd.DataFrame({"close": [1.0, 2.0, 3.0, 4.0, 5.0]},
+                              index=pd.date_range("2024-01-01", periods=5)),
+            forward_returns=np.array([0.1, 0.1, 0.1, 0.1, 0.0]),
+            elite_dir=str(elite_dir),
+            memory_dir=str(memory_dir),
+            market=market,
+            n_trials_micro=1,
+        )
+        # mock DuckDB 仓储，避免真实数据库依赖
+        mock_repo = MagicMock()
+        mock_repo.get_factor_by_name.return_value = None
+        mock_repo.get_factor.return_value = None
+        loop._get_repo = MagicMock(return_value=mock_repo)
+        return loop, elite_dir
+
+    def test_promote_to_elite_writes_shadow_pool(self, tmp_path):
+        """_promote_to_elite 默认给新因子写入 shadow_pool 标记。"""
+        loop, elite_dir = self._make_evolution_loop(tmp_path)
+
+        factor = {
+            "factor_id": "fct_shadow1", "name": "shadow_factor",
+            "code": "code", "market": "futures", "family": "trend",
+        }
+        evaluation = {"level_1_backtest": {"sharpe": 2.0, "ic": 0.05}, "passed": True}
+        # 直接调用 _promote_to_elite（repo 已 mock）
+        path = loop._promote_to_elite(factor, evaluation)
+        assert path is not None
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        assert "shadow_pool" in data
+        assert data["shadow_pool"]["observe_trading_days"] == 5
+        assert "observe_until" in data["shadow_pool"]
+
+    def test_promote_seed_skips_shadow_pool(self, tmp_path):
+        """种子因子（shadow_observe=False）不写 shadow_pool。"""
+        loop, elite_dir = self._make_evolution_loop(tmp_path)
+
+        factor = {
+            "factor_id": "fct_seed1", "name": "seed_factor",
+            "code": "code", "market": "futures", "family": "trend",
+        }
+        evaluation = {"level_1_backtest": {"sharpe": 2.0, "ic": 0.05}, "passed": True}
+        path = loop._promote_to_elite(factor, evaluation, shadow_observe=False)
+        assert path is not None
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        assert "shadow_pool" not in data

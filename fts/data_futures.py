@@ -76,8 +76,9 @@ class FuturesDataProvider:
 
     数据源优先级:
         1. DuckDB kline_cache（连续合约，已持久化）
-        2. AKShare 即时获取（futures_zh_daily_sina API）
-        3. 合成数据降级（保证系统可运行）
+        2. TQ-Local 通达信本地客户端（HTTP 7721）
+        3. AKShare 即时获取（futures_zh_daily_sina API）
+        4. 合成数据降级（保证系统可运行）
 
     用法:
         provider = FuturesDataProvider()
@@ -122,7 +123,15 @@ class FuturesDataProvider:
         except Exception as e:
             logger.debug(f"DuckDB kline_cache 获取失败 [{symbol}]: {e}")
 
-        # 2. AKShare 即时获取
+        # 2. TQ-Local 通达信本地客户端（HTTP 7721）
+        try:
+            df = self._from_tq_local(symbol, days)
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            logger.debug(f"TQ-Local 获取失败 [{symbol}]: {e}")
+
+        # 3. AKShare 即时获取
         if self._use_akshare:
             try:
                 df = self._from_akshare(symbol, days)
@@ -131,7 +140,7 @@ class FuturesDataProvider:
             except Exception as e:
                 logger.debug(f"AKShare 获取失败 [{symbol}]: {e}")
 
-        # 3. 合成数据降级
+        # 4. 合成数据降级
         logger.warning(f"使用合成数据回退 [期货 {symbol}]")
         return self.synthesize_ohlcv(n_days=days, base_price=3000.0, seed=42)
 
@@ -235,6 +244,44 @@ class FuturesDataProvider:
 
         # 标准列顺序
         return df[["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]]
+
+    # ── TQ-Local 通达信本地客户端 ──
+
+    def _from_tq_local(self, symbol: str, days: int) -> Optional[pd.DataFrame]:
+        """从通达信 TQ-Local HTTP 服务获取 K 线数据。
+
+        TQ-Local 默认端口 7721，协议 JSON-RPC 2.0。
+        失败时返回 None（不抛异常，供上层降级）。
+
+        Args:
+            symbol: 期货连续合约代码（如 "RB0"）
+            days: 回溯天数
+
+        Returns:
+            OHLCV DataFrame（含 hold/settle 列），或 None
+        """
+        try:
+            from fts.data_sources.tq_source import TQLocalSource
+            source = TQLocalSource()
+            if not source.is_available():
+                logger.debug("TQ-Local 服务不可达 (127.0.0.1:7721)")
+                return None
+            df = source.fetch_ohlcv(symbol, days)
+            if df is None or df.empty:
+                return None
+            # 标准化为 FuturesDataProvider 输出格式
+            df["date"] = pd.to_datetime(df["date"])
+            df.set_index("date", inplace=True)
+            df.sort_index(inplace=True)
+            if "close" not in df.columns:
+                return None
+            return df[["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]]
+        except ImportError:
+            logger.debug("TQLocalSource 不可用（依赖缺失）")
+            return None
+        except Exception:
+            logger.debug("TQ-Local 获取异常", exc_info=True)
+            return None
 
     # ── AKShare 即时获取 ──
 

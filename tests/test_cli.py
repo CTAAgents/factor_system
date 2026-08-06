@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 
 from fts.cli import (
+    _cmd_backtest_batch,
     _cmd_factor_list,
     _cmd_factor_show,
     _cmd_factor_stats,
@@ -136,6 +137,15 @@ class TestMain:
         assert rc == 0
         mock_cmd_version.assert_called_once()
 
+    @patch("fts.cli._cmd_monitor", return_value=0)
+    def test_main_attaches_session_id(self, mock_monitor, capsys):
+        """main() 生成 session_id 并挂载到 args 传递到子命令。"""
+        rc = main(["monitor"])
+        assert rc == 0
+        args = mock_monitor.call_args.args[0]
+        assert args.session_id.startswith("session_")
+        assert len(args.session_id) > len("session_")
+
     @patch("fts.cli.check_all_status")
     def test_monitor_healthy_returns_0(self, mock_check_all, capsys):
         """monitor 健康时返回 0。"""
@@ -205,6 +215,24 @@ class TestMain:
         assert "run_ef567890_20260718T000000" in captured.out
         assert "max_generations=10" in captured.out
         mock_loop.run.assert_called_once()
+
+    @patch("fts.cli.EvolutionLoop")
+    @patch("fts.cli.generate_session_id", return_value="session_abcd1234_20260718T000000")
+    @patch("fts.cli.generate_trace_id", return_value="l2_abcd1234_20260718T000000")
+    @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
+    def test_evolution_run_prints_session_id(
+        self, mock_run_id, mock_trace_id, mock_session, mock_evoloop, capsys,
+    ):
+        """evolution run 启动日志输出 session_id。"""
+        mock_loop = mock_evoloop.return_value
+        mock_loop.run.return_value = MagicMock(
+            status="completed", generations_completed=1,
+            elite_factor_ids=[], circuit_breaker_reason="",
+        )
+        rc = main(["evolution", "run"])
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "session_abcd1234_20260718T000000" in captured.out
 
     @patch("fts.cli.EvolutionLoop")
     @patch("fts.cli.generate_trace_id", return_value="l2_abcd1234_20260718T000000")
@@ -597,6 +625,105 @@ class TestCmdEvolutionRunErrors:
         """_prepare_data 失败时传播异常（未在 try 内）。"""
         with pytest.raises(RuntimeError, match="prepare_data failed"):
             main(["evolution", "run"])
+
+
+# ═══════════════════════════════════════════════════════════
+# _cmd_factor_list / _cmd_backtest_batch — 目录直读修复
+# ═══════════════════════════════════════════════════════════
+
+def _write_factor_snapshot(elite_dir: Path, factor_id: str, name: str, ic: float = 0.1234, sharpe: float = 2.5) -> None:
+    """写入一份完整因子快照（含嵌套 evaluation）。"""
+    elite_dir.mkdir(parents=True, exist_ok=True)
+    (elite_dir / f"{factor_id}.json").write_text(json.dumps({
+        "factor_id": factor_id,
+        "name": name,
+        "code": "close - close.shift(5)",
+        "params": {},
+        "signature": {"input_fields": ["close"], "output_type": "signal"},
+        "economic_logic": {"narrative": "test", "theory": 4, "behavioral": 3, "microstructure": 2, "institutional": 1},
+        "source": "seed",
+        "parent_id": None,
+        "generation": 0,
+        "trace_id": "trace-test",
+        "market": "futures",
+        "family": "momentum",
+        "evaluation": {
+            "level_1_backtest": {"ic": ic, "sharpe": sharpe, "max_drawdown": 0.05},
+        },
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+class TestFactorListDirectoryRead:
+    """factor list 目录直读：跳过内部索引文件 + 提取嵌套评估。"""
+
+    def test_factor_list_skips_underscore_index_file(self, tmp_path, capsys):
+        """_l2_seed_correlation_index.json 等内部文件不计入因子。"""
+        elite_dir = tmp_path / "elite"
+        elite_dir.mkdir(parents=True, exist_ok=True)
+        (elite_dir / "_l2_seed_correlation_index.json").write_text(
+            json.dumps({"pairs": []}), encoding="utf-8",
+        )
+        _write_factor_snapshot(elite_dir, "fct_abc12345", "test_factor")
+        from argparse import Namespace
+        args = Namespace(elite_dir=str(elite_dir), market="futures", family=None,
+                         min_ic=None, min_sharpe=None, diverse=False, total_count=10,
+                         limit=50, json=False)
+        rc = _cmd_factor_list(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Factors (1)" in out
+        assert "test_factor" in out
+        assert "fct_abc12345" in out
+
+    def test_factor_list_extracts_evaluation_ic_sharpe(self, tmp_path, capsys):
+        """ic/sharpe 从 evaluation.level_1_backtest 提取（而非显示 -）。"""
+        elite_dir = tmp_path / "elite"
+        _write_factor_snapshot(elite_dir, "fct_abc12345", "test_factor", ic=0.1234, sharpe=2.5)
+        from argparse import Namespace
+        args = Namespace(elite_dir=str(elite_dir), market="futures", family=None,
+                         min_ic=None, min_sharpe=None, diverse=False, total_count=10,
+                         limit=50, json=False)
+        rc = _cmd_factor_list(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "0.1234" in out
+        assert "2.5000" in out
+        assert "momentum" in out  # family 顶层字段正常显示
+
+
+class TestBacktestBatchDirectoryRead:
+    """backtest batch 目录直读：跳过内部索引文件。"""
+
+    @patch("fts.cli.get_config")
+    @patch("fts.cli._prepare_data", return_value=(pd.DataFrame(), None))
+    @patch("fts.factor_engine.backtest_pipeline.BacktestPipeline")
+    def test_backtest_batch_skips_underscore_index_file(self, mock_pipeline_cls, mock_prep, mock_config, tmp_path, capsys):
+        """_l2_seed_correlation_index.json 不进入 screener。"""
+        from argparse import Namespace
+        elite_dir = tmp_path / "elite"
+        elite_dir.mkdir(parents=True, exist_ok=True)
+        (elite_dir / "_l2_seed_correlation_index.json").write_text(
+            json.dumps({"pairs": []}), encoding="utf-8",
+        )
+        _write_factor_snapshot(elite_dir, "fct_abc12345", "test_factor")
+        mock_cfg = mock_config.return_value
+        mock_cfg.get_elite_dir.return_value = str(elite_dir)
+
+        mock_pipeline = mock_pipeline_cls.return_value
+        mock_pipeline.run_batch.return_value = []
+        from fts.factor_engine.factor_screener import FactorScreener
+        with patch.object(FactorScreener, "screen", wraps=None) as mock_screen:
+            mock_screen.return_value = [{"factor_id": "fct_abc12345", "name": "test_factor"}]
+            args = Namespace(market="futures", grade="C", min_score=None, limit=20,
+                             symbol="RB0", days=300, capital=1_000_000.0)
+            rc = _cmd_backtest_batch(args)
+        assert rc == 0
+        # screener 收到的 factors 只含正常因子（内部索引文件被跳过）
+        call_args = mock_screen.call_args
+        received = call_args.kwargs.get("factors")
+        assert received is not None
+        assert len(received) == 1
+        assert received[0]["factor_id"] == "fct_abc12345"
 
 
 # ═══════════════════════════════════════════════════════════

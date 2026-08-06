@@ -22,7 +22,7 @@ from typing import Optional
 from ..core.atomic import atomic_write, atomic_write_state
 from .contracts import (
     DEFAULT_BUDGET_CONFIG,
-    EVOLUTION_VERSION,
+    STATE_SCHEMA_VERSION,
     EvolutionState,
 )
 
@@ -54,6 +54,15 @@ def generate_run_id() -> str:
     rand = secrets.token_hex(4)
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     return f"run_{rand}_{ts}"
+
+
+def generate_session_id() -> str:
+    """生成 CLI 会话 ID: session_<8hex>_<timestamp>。
+
+    作用域为整个 CLI 会话（一次 `fts` 命令执行），
+    由 CLI 入口生成并传递到各子命令作为日志聚合标识。
+    """
+    return generate_trace_id("session")
 
 
 # ─── 状态管理器 ───────────────────────────────────────────
@@ -111,10 +120,10 @@ class EvolutionStateManager:
 
         backup 始终反映最新已知良好状态，主文件外部损坏时可从 backup 恢复最新数据。
         """
-        # 版本一致性检查
-        if state.get("version") != EVOLUTION_VERSION:
+        # schema 版本一致性检查（仅状态结构变更时冷启动）
+        if state.get("schema_version") != STATE_SCHEMA_VERSION:
             raise StateError(
-                f"状态版本不匹配: {state.get('version')} != {EVOLUTION_VERSION}"
+                f"状态 schema 版本不匹配: {state.get('schema_version')} != {STATE_SCHEMA_VERSION}"
             )
         # 更新时间戳
         state["last_updated"] = datetime.now().isoformat()
@@ -189,8 +198,8 @@ class EvolutionStateManager:
             return None
         try:
             data = json.loads(fp.read_text(encoding="utf-8"))
-            # 版本检查（缺失视为不匹配）
-            if data.get("version") != EVOLUTION_VERSION:
+            # schema 版本检查（缺失视为不匹配）
+            if data.get("schema_version") != STATE_SCHEMA_VERSION:
                 return None
             return EvolutionState(**data)  # type: ignore[typeddict-item]
         except (json.JSONDecodeError, TypeError, ValueError):
@@ -215,7 +224,7 @@ class EvolutionStateManager:
             last_error=None,
             experience_chain_ref=[],
             last_updated=datetime.now().isoformat(),
-            version=EVOLUTION_VERSION,
+            schema_version=STATE_SCHEMA_VERSION,
         )
 
 
@@ -226,4 +235,5 @@ __all__ = [
     "EvolutionStateManager",
     "generate_trace_id",
     "generate_run_id",
+    "generate_session_id",
 ]

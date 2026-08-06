@@ -48,6 +48,9 @@ def _compute_ic(
     """
     if len(signal) != len(forward_returns) or len(signal) < 2:
         return 0.0, 0.0
+    # 常数输入检查：若任一输入为常数，相关系数无定义，返回 0.0
+    if np.std(signal) < 1e-12 or np.std(forward_returns) < 1e-12:
+        return 0.0, 0.0
     if method == "spearman":
         ic, _ = sp_stats.spearmanr(signal, forward_returns)
     else:

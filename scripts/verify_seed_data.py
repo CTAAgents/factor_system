@@ -1,6 +1,8 @@
 """验证 WQ 101 和 Qlib 158 定义文件。"""
 import sys
-sys.path.insert(0, 'D:/Programs/factor_system')
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fts.factor_engine.seed_data.wq101 import WQ101_DEFINITIONS
 from fts.factor_engine.seed_data.qlib158 import QLIB158_DEFINITIONS

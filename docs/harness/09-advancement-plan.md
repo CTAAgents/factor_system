@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.9.0
+> 版本: v2.14.0
 > 最后更新: 2026-08-06
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -133,6 +133,28 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 | 数据降级级数 | 3 | **3 级（DuckDB → AKShare → 合成）** |
 | 总测试用例数 | 1500+ | **1502** |
 | 总体覆盖率 | 99% | **99%** |
+
+### v2.10.0 算子演化引擎（Phase 3+ / C.4）（已完成）
+
+**完成时间**: 2026-08-06
+
+**核心产出**:
+- ✅ 新增 `fts/factor_engine/operator_evolution.py`（`OperatorEvolutionEngine`）：在 DSL 算子空间（58 算子 L0-L5）做适应度导向进化搜索——种群初始化（validator 参数边界 + PIT lookback 校验）→ IC+Sharpe 适应度评估（DSL executor，带表达式缓存）→ 锦标赛选择 → 子树交叉/变异（ExprNode 层面，参数受 param_bounds 约束）→ 精英保留，多代迭代后取最优表达式
+- ✅ 产物为 `kind=OPERATOR` 因子：`best_factor_program()` 经 `create_operator_factor` 产出，携带 `expression`/`max_lookback`/`parent_id`/`generation`
+- ✅ evolution_loop 集成：`_generate_operator_factor` 优先走 `_try_operator_engine_evolution`（operator/hybrid 模式），无评估数据或引擎失败时回退随机组合生成（原逻辑保留）
+- ✅ 关闭 GAP-026：进化搜索直接在 DSL 命名空间进行，无需 GP 算子命名映射（GP 引擎维持 feature_ops 路径，双路径并存）
+- ✅ 新增 13 测试用例（引擎 11 + 集成 2：初始化合法性/进化收敛/交叉变异产物校验/OPERATOR 产物/常信号罚分/评估缓存/evolution_loop 调用路径/无数据回退）
+- ✅ 设计文档 `docs/harness/design/C.4-operator-evolution-engine-design.md` 落地，全量回归通过（排除既有失败文件）
+
+### v2.11.0 组合漂移治理（已完成 — 当前版本）
+
+**完成时间**: 2026-08-06
+
+**核心产出**:
+- ✅ 漂移监控（DriftMonitor）：每次 L3 组合构建后对比上次组合，记录成员重合率（Jaccard）与权重 L1 变化率，持久化到 `memory/portfolio/drift_history/YYYY-MM-DD.json`；`PortfolioManager.save_combo` 自动归档旧组合到 `combo_history/` 供对比；冷启动（无上次组合）L1 变化记为 0
+- ✅ 组合粘性约束（_apply_sticky_constraints）：build_combo 权重归一化前施加 — 存量因子权重相对上次组合变动 clamp 在 ±30%（`StickyConfig.max_delta`），新因子首日权重封顶（`new_factor_cap` 默认 0.10）；`PortfolioLoop` 默认启用（`DEFAULT_STICKY_CONFIG`），可显式传 `sticky_config` 覆盖
+- ✅ L2 影子池（shadow_pool）：新晋升因子写入 `shadow_pool` 标记（promoted_at/observe_trading_days=5/observe_until，跳过周末），L3 `load_elite_factors` 过滤观察期内因子；种子因子 `shadow_observe=False` 直接进正式组合；DuckDB metadata + JSON 双存储
+- ✅ 新增 20 测试用例（粘性约束 7 + 漂移监控 7 + 影子池 6），82 个 portfolio_loop 测试全绿；evolution_loop 既有环境性失败（6 个）经 git stash 验证与本改动无关
 
 ### v2.9.0 Design 全量落地（已完成 — 当前版本）
 
@@ -311,7 +333,7 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 
 | 版本 | 主题 | 核心产出 |
 |:-----|:-----|:---------|
-| **算子演化引擎（Phase C.3，计划中）** | 算子演化引擎 | 基于 Phase C.2 基础层（FTS-Expr DSL / 算子注册表 / kind 分派 / evolution_mode），实现算子级因子创新与演化 |
+| **算子演化引擎（Phase 3+ / C.4）** | ✅ 已实现（v2.10.0） | 基于 Phase C.2 基础层（FTS-Expr DSL / 算子注册表 / kind 分派 / evolution_mode），实现算子级因子创新与演化（`OperatorEvolutionEngine`，见第 2 节 v2.10.0 里程碑） |
 | **v2.0.0** | 生产部署 | 监控告警完善、容器化、CI/CD 流水线、期货全链路 E2E 测试 |
 
 ---
@@ -320,6 +342,11 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.14.0** | 2026-08-06 | GAP-030 测试隔离根治：EvolutionLoop `factor_db_path` 注入点 + run() 测试隔离 DuckDB + catalog 重复 seed 清理 |
+| **v2.13.0** | 2026-08-06 | GAP-032 L2 晋升产物双写一致性：`_write_to_duckdb` 返回 bool + `_promote_to_elite` 严格一致（DuckDB 失败回滚 JSON 快照，晋升失败）；数据修复补入 fut_mobile_big_data_g5 + 归档 515 个同名重复快照 |
+| **v2.12.1** | 2026-08-06 | session_id 全链路补齐：`generate_session_id()` + CLI 入口生成并挂载 `args.session_id` + 子命令日志聚合；02-lifecycle 校正 trace_id/run_id 格式描述；新增 3 测试用例 |
+| **v2.12.0** | 2026-08-06 | GAP-031 L1→L2 数据流打通：EvolutionLoop 启动合并 L1 注入候选（pending 门控 + market 过滤 + 去重 + 幂等）；L1 注入写入 market 标记；SeedCandidate 契约扩展；新增 8 测试用例 |
+| **v2.10.0** | 2026-08-06 | 算子演化引擎（Phase 3+ / C.4）：`OperatorEvolutionEngine` DSL 算子空间进化搜索（种群初始化/IC+Sharpe 评估/锦标赛选择/交叉变异/精英保留）+ evolution_loop 集成 + 关闭 GAP-026；新增 13 测试用例 |
 | **v2.9.0** | 2026-08-06 | Design 全量落地（docs/harness/design 9 设计全部完成）：S1 数据层三表+3 仓储类；S2 监控调度（Prometheus 指标注册表 + 自适应权重 + 数据质量三维指标 + monthly_decay_eval/data_quality_eval 任务）；S3 回测流水线（7 阶段类 + run_batch + Builder + CLI）；S4 C.1 CLI（feature list/analyze + gp evolve）；S5 C.2 实盘对接（信号契约 + fts/risk 风控包 + LiveFactorMonitor + HTTP 端点 + live/risk 指标）；S6 C.3 反馈闭环（FeedbackLoop 家族 + 4 反馈表 + CLI + 反馈指标）；新增 79 测试用例 |
 | **v2.8.5** | 2026-08-06 | P0/P1 演化质量修复 + OPERATOR 演化模式集成：快速预筛选层、种子因子晋升修复、精英因子重评估保护、期货质量评分卡差异化配置、LLM Prompt 增强、多父代交叉策略、FTS-Expr DSL OPERATOR 演化模式集成、OOS 审计误判修复；新增 38+ 测试用例 |
 | **v2.5.0** | 2026-08-05 | Phase 1 种子因子 YAML 化 + Phase 2 精英因子 DuckDB 迁移：种子因子 YAML 文件（563 因子）；精英因子 DuckDB（680 因子，4 张表）；因子仓库层 FactorRepository；因子相关性矩阵（4950 对）；54 新测试 |
@@ -349,6 +376,6 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | 本文件定义 FTS 版本路线图（v2.8.5 演化质量修复 + OPERATOR 演化模式集成），里程碑记录引用 `docs/harness/07-operations.md` 版本历史 |
-| 可验证断言 | 当前版本 v2.8.5 里程碑已登记，v2.0.0 按路线图推进 |
+| 代码→文档映射 | 本文件定义 FTS 版本路线图（v2.10.0 算子演化引擎 + v2.8.5 演化质量修复 + OPERATOR 演化模式基础层），里程碑记录引用 `docs/harness/07-operations.md` 版本历史 |
+| 可验证断言 | 当前版本 v2.10.0 里程碑已登记，v2.0.0 按路线图推进 |
 | 检验方式 | 检查本文件下阶段目标表和版本历史确认当前版本和路线图 |
