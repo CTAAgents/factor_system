@@ -1,7 +1,7 @@
 # FTS 系统架构文档
 
-> 版本: v2.14.0
-> 最后更新: 2026-08-06
+> 版本: v2.17.0
+> 最后更新: 2026-08-07
 
 ---
 
@@ -265,9 +265,9 @@ fts/
     └── watchdog.py             # 看门狗进程
 ├── factor_db/                   # DuckDB 因子数据库层
     ├── schema.py               # 数据库 Schema 定义（11 张表，含质量评分/状态历史/审计报告/反馈 4 表）
-    ├── repository.py           # FactorRepository CRUD
+    ├── repository.py           # FactorRepository CRUD（含 `retire_factor()` 因子淘汰方法）
     ├── quality_repository.py   # FactorQualityScoreRepository（质量评分持久化）
-    ├── status_repository.py    # FactorStatusRepository（生命周期状态历史）
+    ├── status_repository.py    # FactorStatusRepository（生命周期状态历史，记录状态变迁日志）
     ├── audit_repository.py     # FactorAuditReportRepository（审计报告持久化）
     ├── lineage.py              # FactorLineage 血缘追踪 + 批量审计
     └── correlations.py         # 因子相关性矩阵
@@ -409,6 +409,24 @@ L1 Meta-Loop ──→ 知识补给 + 种子注入 ──→ seed_pool.py
                               ├── 衰减检验
                               ├── 组合构建
                               └── 信号合成
+
+### 因子淘汰流（v2.17.0）
+
+因子淘汰是主流程的正式环节，通过月度衰减评估触发，确保退化因子从活跃池中移除：
+
+```
+monthly_decay_eval_job (每月1日 02:00)
+    │
+    ├── EliteFactorTracker.run_monthly_evaluation() → 快照状态标记
+    ├── AutoRetireManager.run() → 识别需淘汰因子
+    │
+    └── FactorRepository.retire_factor(factor_id, reason, elite_dir)
+            │
+            ├── 1. FactorStatusRepository.update_factor_status() → DuckDB status = "retired"
+            ├── 2. FactorStatusRepository.log_transition() → 记录状态变迁（old_status → retired）
+            ├── 3. 移动 JSON 快照到 elite/_retired/{factor_id}.json
+            │
+            └── 因子从活跃池移除，不再参与 L3 组合构建与信号合成
 ```
 
 ---

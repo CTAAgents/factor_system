@@ -236,11 +236,27 @@ def monthly_decay_eval_job() -> None:
         except Exception as e:  # noqa: BLE001
             logger.warning("[衰减评估] 指标同步失败: %s", e)
 
-        # 自动淘汰
+        # 自动淘汰（EliteFactorTracker 快照标记 retired）
         retire_mgr = AutoRetireManager(tracker)
         retired = retire_mgr.run()
         if retired:
-            logger.warning("[衰减评估] 自动淘汰: %s", retired)
+            logger.warning("[衰减评估] 快照标记淘汰: %d 个因子", len(retired))
+
+            # 同步淘汰到 DuckDB + JSON 文件（主流程中真正生效）
+            from fts.factor_engine.factor_db import FactorRepository
+            repo = FactorRepository()
+            retired_count = 0
+            for fid in retired:
+                factor = repo.get_factor(fid)
+                if factor:
+                    mkt = factor.get("market", "stock")
+                    elite_dir = cfg.get_elite_dir(mkt)
+                else:
+                    elite_dir = cfg.get_elite_dir("stock")
+                if repo.retire_factor(fid, reason="月度衰减评估自动淘汰", elite_dir=elite_dir):
+                    retired_count += 1
+            logger.warning("[衰减评估] 淘汰已同步至 DuckDB + JSON: %d/%d 个因子",
+                           retired_count, len(retired))
     except Exception as e:
         logger.error("[衰减评估] 失败: %s", e, exc_info=True)
 

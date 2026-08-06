@@ -1,7 +1,7 @@
 # FTS 开发生命周期
 
-> 版本: v2.14.0
-> 最后更新: 2026-08-06
+> 版本: v2.17.0
+> 最后更新: 2026-08-07
 
 ---
 
@@ -28,6 +28,7 @@ FTS 从 FDT 剥离共经历 16 个 Phase，目前全部完成：
 | **Phase 15** | 算子演化引擎（v2.10.0，Phase 3+ / C.4）：`OperatorEvolutionEngine` 在 DSL 算子空间（58 算子 L0-L5）做适应度导向进化搜索（种群初始化 validator 校验 → IC+Sharpe 评估（DSL executor + 缓存）→ 锦标赛选择 → 子树交叉/变异（参数受 param_bounds 约束）→ 精英保留），取代 `_generate_operator_factor` 纯随机组合；evolution_loop operator/hybrid 模式接入（无评估数据回退随机生成）；产物为 `kind=OPERATOR` 因子；关闭 GAP-026 | ✅ 完成 | 算子演化引擎 + 13 测试用例（引擎 11 + 集成 2），C.4 设计落地（详见 docs/harness/design/C.4） |
 | **Phase 16** | 组合漂移治理（v2.11.0）：L3 组合漂移监控（DriftMonitor 成员重合率 + 权重 L1 变化率 → drift_history/YYYY-MM-DD.json）+ PortfolioManager combo_history 归档 + build_combo 粘性约束（±30% 变动 / 新因子首日封顶）+ L2 影子池（新晋升因子观察 5 个交易日，种子因子直接进正式组合）；新增 20 测试用例 | ✅ 完成 | 82 个 portfolio_loop 测试全绿，漂移数据持久化 memory/portfolio/drift_history/ |
 | **Phase 17** | 孤立模块集成 Phase 2（v2.16.0）：`LogicMonitor`/`FactorInspector` 注册为定时任务（每日 22:00/03:00）；`ProcessWatchdog` 集成到 `SchedulerEngine`（`start_watchdog()` 方法）；任务注册表增至 8 个任务 | ✅ 完成 | 2043 回归测试通过，8 个定时任务（L1/L2/L3 + 健康检查 + 月度衰减 + 数据质量 + 逻辑监控 + 因子巡检） |
+| **Phase 18** | 因子淘汰主流程集成（v2.17.0）：`FactorRepository.retire_factor()` 实现 DuckDB 状态更新 + JSON 文件迁移至 `_retired/` + 状态变迁记录；`monthly_decay_eval_job` 调用 `retire_factor()` 同步淘汰到主存储；修复 `update_factor`/`update_factor_status` DuckDB ART 索引 bug（DROP → UPDATE → 重建索引） | ✅ 完成 | 因子淘汰正式成为主流程环节，退化因子自动从活跃池移除 |
 
 ---
 

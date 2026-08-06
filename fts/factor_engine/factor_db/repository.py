@@ -200,7 +200,21 @@ class FactorRepository:
         params.append(factor_id)
 
         sql = f"UPDATE factor_catalog SET {', '.join(set_clauses)} WHERE factor_id = ?"
-        conn.execute(sql, params)
+        # 规避 DuckDB 1.1.x ART 索引 bug: UPDATE 被二级索引引用的列
+        # 可能误报主键冲突，需 DROP 所有二级索引 → UPDATE → 重建索引
+        idx_map = {
+            "idx_factor_catalog_status": "status",
+            "idx_factor_catalog_name": "name",
+            "idx_factor_catalog_market": "market",
+            "idx_factor_catalog_sharpe": "sharpe DESC",
+        }
+        for idx_name in idx_map:
+            conn.execute(f"DROP INDEX IF EXISTS {idx_name}")
+        try:
+            conn.execute(sql, params)
+        finally:
+            for idx_name, idx_col in idx_map.items():
+                conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON factor_catalog({idx_col})")
         conn.execute("CHECKPOINT")
 
         logger.info("[FactorRepo] 更新因子: %s", factor_id)
@@ -209,6 +223,68 @@ class FactorRepository:
     def delete_factor(self, factor_id: str) -> bool:
         """删除因子（软删除，将状态设为 'deleted'）。"""
         return self.update_factor(factor_id, {"status": "deleted"})
+
+    def retire_factor(
+        self,
+        factor_id: str,
+        reason: str = "自动淘汰",
+        elite_dir: str | Path | None = None,
+    ) -> bool:
+        """淘汰因子：更新 DuckDB 状态 + 记录状态变迁 + 移动 JSON 文件到 _retired/。
+
+        Args:
+            factor_id: 因子唯一标识
+            reason: 淘汰原因
+            elite_dir: 精英因子 JSON 目录（用于移动 JSON 文件，None 则跳过）
+
+        Returns:
+            是否成功
+        """
+        factor = self.get_factor(factor_id)
+        if not factor:
+            logger.warning("[FactorRepo] 淘汰失败: 因子不存在 %s", factor_id)
+            return False
+
+        old_status = factor.get("status", "active")
+        if old_status == "retired":
+            logger.info("[FactorRepo] 因子已淘汰: %s", factor_id)
+            return True
+
+        # 1. 更新 factor_catalog 状态（使用 ART 索引 bug 规避）
+        from .repository import FactorStatusRepository
+        status_repo = FactorStatusRepository(self._db_path)
+        status_repo.update_factor_status(factor_id, "retired")
+
+        # 2. 记录状态变迁
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        status_repo.log_transition(
+            factor_id, old_status, "retired", reason,
+            snapshot={
+                "retired_at": now,
+                "retired_by": "monthly_decay_eval",
+                "reason": reason,
+            },
+        )
+
+        # 3. 移动 JSON 文件到 _retired/ 目录
+        if elite_dir:
+            import shutil
+            elite_path = Path(elite_dir)
+            retired_dir = elite_path / "_retired"
+            retired_dir.mkdir(parents=True, exist_ok=True)
+            json_path = elite_path / f"{factor_id}.json"
+            if json_path.exists():
+                shutil.move(str(json_path), str(retired_dir / json_path.name))
+                logger.info("[FactorRepo] JSON 已移至 _retired/: %s", factor_id)
+            else:
+                # 可能已在 _retired/ 中
+                already_retired = retired_dir / f"{factor_id}.json"
+                if not already_retired.exists():
+                    logger.warning("[FactorRepo] JSON 文件不存在: %s", json_path)
+
+        logger.info("[FactorRepo] 淘汰因子: %s (%s)", factor_id, factor.get("name", ""))
+        return True
 
     # ─=== 批量查询 ──────────────────────────────────────
 
@@ -1077,8 +1153,8 @@ class FactorStatusRepository:
         """更新 factor_catalog 中的状态与衰减追踪字段（幂等）。
 
         注: DuckDB 1.1.x 存在 ART 索引 bug——UPDATE 被二级索引引用的列
-        （``status`` 上的 ``idx_factor_catalog_status``）会误报主键冲突。
-        通过 DROP INDEX → UPDATE → CREATE INDEX 规避。
+        （``status``/``sharpe``/``name``/``market`` 上的二级索引）会误报
+        主键冲突。通过 DROP 所有二级索引 → UPDATE → 重建索引 规避。
         """
         from datetime import datetime, timezone
 
@@ -1103,16 +1179,23 @@ class FactorStatusRepository:
         params.append(datetime.now(timezone.utc).isoformat())
         params.append(factor_id)
 
-        drop_idx = "DROP INDEX IF EXISTS idx_factor_catalog_status"
-        create_idx = "CREATE INDEX IF NOT EXISTS idx_factor_catalog_status ON factor_catalog(status)"
-        conn.execute(drop_idx)
+        # 规避 DuckDB 1.1.x ART 索引 bug: 需 DROP 所有二级索引 → UPDATE → 重建
+        idx_map = {
+            "idx_factor_catalog_status": "status",
+            "idx_factor_catalog_name": "name",
+            "idx_factor_catalog_market": "market",
+            "idx_factor_catalog_sharpe": "sharpe DESC",
+        }
+        for idx_name in idx_map:
+            conn.execute(f"DROP INDEX IF EXISTS {idx_name}")
         try:
             conn.execute(
                 f"UPDATE factor_catalog SET {', '.join(set_clauses)} WHERE factor_id = ?",
                 params,
             )
         finally:
-            conn.execute(create_idx)
+            for idx_name, idx_col in idx_map.items():
+                conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON factor_catalog({idx_col})")
         conn.execute("CHECKPOINT")
         return True
 
