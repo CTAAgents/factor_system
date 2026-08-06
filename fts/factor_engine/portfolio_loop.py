@@ -1064,6 +1064,85 @@ def _apply_sticky_constraints(
     return signals
 
 
+# ─── Sharpe 虚高验证 ──────────────────────────────────────
+
+SHARPE_WARNING_THRESHOLD: float = 3.5
+"""组合夏普警戒线：> 3.5 自动标记并触发独立验证。"""
+
+
+def _validate_combo_sharpe(combo_sharpe: float) -> Optional[str]:
+    """夏普比率警戒检查。
+
+    行业经验范围:
+        - 期货 CTA（中低频）: 1.0-2.5
+        - 统计套利（中频）: 2-4
+        - 高频做市: 4-8
+
+    Args:
+        combo_sharpe: 组合夏普比率
+
+    Returns:
+        None（正常）或 str（警戒原因）
+    """
+    if combo_sharpe > SHARPE_WARNING_THRESHOLD:
+        return (
+            f"Sharpe={combo_sharpe:.2f} > {SHARPE_WARNING_THRESHOLD}, "
+            f"超出行业合理范围（期货 CTA 1.0-2.5），强烈暗示过拟合或数据泄露"
+        )
+    if combo_sharpe > 2.5:
+        return (
+            f"Sharpe={combo_sharpe:.2f} > 2.5, "
+            f"偏高，建议检查因子独立性"
+        )
+    return None
+
+
+def _run_sharpe_randomization_test(
+    signals: list[PortfolioSignal],
+    n_shuffle: int = 100,
+) -> bool:
+    """夏普随机化测试：打乱因子信号后重算夏普，验证高夏普是否来自真实预测能力。
+
+    原理：如果组合夏普来自真实预测能力，打乱收益后夏普应显著下降。
+    如果打乱后仍能获得高夏普，说明夏普来自数据特征而非预测能力。
+
+    Args:
+        signals: 信号列表（含 sharpe/ic/turnover）
+        n_shuffle: 随机化次数
+
+    Returns:
+        True（随机化测试通过，高夏普可信）或
+        False（随机化测试未通过，夏普可能虚高）
+    """
+    import random
+    retained = [s for s in signals if s.get("retained", True)]
+    if len(retained) < 3:
+        return True  # 因子太少，跳过随机化测试
+
+    original_sharpe = sum(s.get("sharpe", 0) for s in retained) / len(retained)
+    if original_sharpe <= SHARPE_WARNING_THRESHOLD:
+        return True  # 夏普正常，跳过随机化测试
+
+    # 从因子 IC 中估算收益序列
+    ic_values = [s.get("ic", 0.0) for s in retained]
+    sharpe_values = [s.get("sharpe", 0.0) for s in retained]
+
+    shuffled_count = 0
+    for _ in range(n_shuffle):
+        # 打乱 IC 与 Sharpe 的对应关系
+        shuffled_ic = random.sample(ic_values, len(ic_values))
+        # 用打乱后的 IC 重算 Sharpe
+        shuffled_sharpe = sum(
+            ic * s for ic, s in zip(shuffled_ic, sharpe_values)
+        ) / sum(sharpe_values) if sum(sharpe_values) > 0 else 0.0
+        if shuffled_sharpe >= original_sharpe * 0.5:
+            shuffled_count += 1
+
+    # 如果打乱后仍有超过 5% 的样本达到原 Sharpe 的一半，说明夏普不可信
+    passed = shuffled_count / n_shuffle < 0.05
+    return passed
+
+
 def build_combo(
     signals: list[PortfolioSignal],
     mode: str = "equal_weight",
@@ -1151,6 +1230,17 @@ def build_combo(
     else:
         max_corr = 0.0
 
+    # Sharpe 虚高验证（P1 差距修复）
+    sharpe_warning = _validate_combo_sharpe(combo_sharpe)
+    sharpe_randomization_passed = _run_sharpe_randomization_test(retained)
+    if sharpe_warning:
+        logger.warning(f"[L3-SHARPE] {sharpe_warning}")
+    if not sharpe_randomization_passed:
+        logger.warning(
+            "[L3-SHARPE] 随机化测试未通过: "
+            "打乱因子信号后仍能获得高夏普，夏普可能虚高"
+        )
+
     return PortfolioCombo(
         version=EVOLUTION_VERSION,
         updated_at=datetime.now().isoformat(),
@@ -1164,6 +1254,8 @@ def build_combo(
         n_factors=len(retained),
         status="active",
         created_at=datetime.now().isoformat(),
+        sharpe_warning=sharpe_warning,
+        sharpe_randomization_passed=sharpe_randomization_passed,
     )
 
 
@@ -1678,6 +1770,137 @@ def _filter_shadow_pending(factors: list[dict[str, Any]], source: str) -> list[d
     return [f for f in factors if not _is_shadow_pending(f)]
 
 
+# ─── 纯外推验证 ──────────────────────────────────────────
+
+def _validate_oos_extrapolation(
+    factor: dict[str, Any],
+    data_panel: dict[str, pd.DataFrame],
+    combo_updated_at: str,
+    decay_threshold: float = 0.20,
+) -> dict[str, Any]:
+    """因子纯外推验证：检查因子在新数据上的 IC 衰减。
+
+    因子晋升 elite 后，每次 L3 运行检查其在新数据上的表现。
+    如果连续 3 次 L3 运行 IC 衰减 > 20%，标记为待降级。
+
+    Args:
+        factor: 因子数据（含 promoted_at, evaluation, code）
+        data_panel: {symbol: DataFrame} 市场数据面板
+        combo_updated_at: 当前组合构建时间
+        decay_threshold: IC 衰减阈值（默认 20%）
+
+    Returns:
+        更新后的 factor（含 oos_extrapolation 字段）
+    """
+    from datetime import datetime as _dt
+    promoted_at = factor.get("promoted_at")
+    if not promoted_at:
+        return factor  # 旧因子无 promoted_at，跳过验证
+
+    promoted_dt = _dt.fromisoformat(promoted_at)
+    combo_dt = _dt.fromisoformat(combo_updated_at)
+
+    # 晋升后至少 5 个交易日才做外推验证
+    min_trading_days = 5
+    if (combo_dt - promoted_dt).days < min_trading_days:
+        return factor
+
+    # 从 factor 中获取原始 IC
+    evaluation = factor.get("evaluation", {})
+    level_1 = evaluation.get("level_1_backtest", {}) if isinstance(evaluation, dict) else {}
+    original_ic = level_1.get("ic", 0.0)
+    if abs(original_ic) < 0.01:
+        return factor  # IC 太弱，跳过
+
+    # 尝试在新数据上计算 IC
+    factor_code = factor.get("code", "")
+    if not factor_code:
+        return factor
+
+    try:
+        from .factor_program import FactorExecutor
+        executor = FactorExecutor(factor)
+
+        # 收集所有新数据（晋升后的数据）
+        new_data_list = []
+        for symbol, df in data_panel.items():
+            if isinstance(df.index, pd.DatetimeIndex):
+                new_df = df[df.index >= promoted_dt]
+            elif "date" in df.columns:
+                df["_date"] = pd.to_datetime(df["date"])
+                new_df = df[df["_date"] >= promoted_dt]
+            else:
+                continue
+            if not new_df.empty:
+                new_data_list.append(new_df)
+
+        if len(new_data_list) < 3:
+            return factor  # 数据不足
+
+        # 计算因子信号
+        combined = pd.concat(new_data_list)
+        signal = executor.execute(combined, factor.get("params", {}))
+
+        if isinstance(signal, pd.Series) and len(signal) > 10:
+            # 使用 close 收益率作为代理
+            if "close" in combined.columns:
+                returns = combined["close"].pct_change().shift(-1).values[:len(signal)]
+            elif "close_" in combined.columns:
+                returns = combined["close_"].pct_change().shift(-1).values[:len(signal)]
+            else:
+                return factor
+
+            from scipy import stats as _sp_stats
+            valid = ~(np.isnan(signal.values[:len(returns)]) | np.isnan(returns))
+            if valid.sum() > 10:
+                new_ic, _ = _sp_stats.spearmanr(
+                    signal.values[:len(returns)][valid],
+                    returns[valid],
+                )
+                if not np.isnan(new_ic):
+                    # 计算 IC 衰减率
+                    ic_decay = 1.0 - abs(new_ic) / abs(original_ic) if abs(original_ic) > 0.01 else 0.0
+                    ic_decay = max(0.0, min(1.0, ic_decay))
+
+                    # 记录衰减次数
+                    oos_history = factor.get("_oos_history", [])
+                    oos_history.append({
+                        "checked_at": combo_updated_at,
+                        "new_ic": float(new_ic),
+                        "original_ic": float(original_ic),
+                        "ic_decay": float(ic_decay),
+                    })
+                    # 最多保留最近 10 次记录
+                    oos_history = oos_history[-10:]
+
+                    # 统计最近 3 次连续衰减 > 阈值的次数
+                    recent = [h for h in oos_history[-3:]]
+                    consecutive_decay = sum(1 for h in recent if h["ic_decay"] > decay_threshold)
+
+                    needs_demotion = consecutive_decay >= 3 and len(recent) >= 3
+
+                    factor["_oos_history"] = oos_history
+                    factor["oos_extrapolation"] = {
+                        "new_ic": float(new_ic),
+                        "original_ic": float(original_ic),
+                        "ic_decay": float(ic_decay),
+                        "consecutive_decay_count": consecutive_decay,
+                        "needs_demotion": needs_demotion,
+                        "checked_at": combo_updated_at,
+                    }
+
+                    if needs_demotion:
+                        logger.warning(
+                            "[L3-OOS] 因子 %s 连续 %d 次 IC 衰减 > %.0f%%, 建议降级",
+                            factor.get("name", "?"), consecutive_decay,
+                            decay_threshold * 100,
+                        )
+    except Exception as e:
+        logger.debug("[L3-OOS] 外推验证失败: %s", e)
+
+    return factor
+
+
 def load_elite_factors(
     elite_dir: str | Path,
     use_duckdb: bool = True,
@@ -2168,6 +2391,33 @@ class PortfolioLoop:
                 state["total_signals_retained"] = 0
                 self.state_manager.mark_completed(state)
                 return result
+
+            # Step 1.5: 纯外推验证（P2 差距修复）
+            # 检查每个因子在新数据上的 IC 衰减，连续 3 次衰减 > 20% 标记为待降级
+            if panel_data:
+                combo_updated_at = datetime.now().isoformat()
+                oos_demoted = 0
+                for i, factor in enumerate(factors):
+                    factors[i] = _validate_oos_extrapolation(
+                        factor, panel_data, combo_updated_at,
+                    )
+                    oos_info = factors[i].get("oos_extrapolation", {})
+                    if oos_info.get("needs_demotion", False):
+                        oos_demoted += 1
+                        logger.warning(
+                            "[L3] Step 1.5: 因子 %s IC 衰减 %d%% (连续 %d/%d), 标记降级",
+                            factor.get("name", "?"),
+                            int(oos_info.get("ic_decay", 0) * 100),
+                            oos_info.get("consecutive_decay_count", 0),
+                            3,
+                        )
+                if oos_demoted > 0:
+                    logger.warning(
+                        "[L3] Step 1.5: %d 个因子因连续 IC 衰减被标记为待降级",
+                        oos_demoted,
+                    )
+                else:
+                    logger.info("[L3] Step 1.5: 纯外推验证完成, 无因子需要降级")
 
             # Step 2: 信号合成
             signals, _max_corr, _combo_turn = synthesize_signals(

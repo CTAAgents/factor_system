@@ -21,12 +21,13 @@ FTS 从 FDT 剥离共经历 16 个 Phase，目前全部完成：
 | **Phase 8** | 种子因子集成：世坤 101 因子 + Qlib 158 因子加入种子池，seed_data 目录统一管理外部因子，支持 include_external 参数控制加载 | ✅ 完成 | 268 种子因子（9 内置 + 259 外部），1325 测试全绿 |
 | **Phase 9** | 国泰君安 191 因子集成 + 全量工程测试：全部模块边缘路径覆盖，46/47 模块 100% 覆盖率 | ✅ 完成 | 459 种子因子（9 内置 + 450 外部），1431 测试全绿，仅余 1 空白行 |
 | **Phase 10** | 基本面/另类/宏观因子集成：23 个基本面种子因子加入种子池，新增 FundamentalProvider 数据层 | ✅ 完成 | 482 种子因子（9 内置 + 473 外部），1502 测试全绿 |
-| **Phase 11** | 期货自治循环：L1/L2/L3 全自动调度 + 期货基本面数据接入（库存/仓单/基差）+ 信号管道定时任务 + 期货全量种子因子库（12 大因子家族 50+ 子因子）+ 顶级因子过滤（IC>0.3）+ 信号管道输出到 reports/{date}/ | ✅ 完成 | 482 种子因子（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面），期货 12 家族 50+ 子因子，5 个定时任务，信号报告输出到 reports/ |
+| **Phase 11** | 期货自治循环：L1/L2/L3 全自动调度 + 期货基本面数据接入（库存/仓单/基差）+ 信号管道定时任务 + 期货全量种子因子库（12 大因子家族 50+ 子因子）+ 顶级因子过滤（IC>0.3）+ 信号管道输出到 reports/{date}/ | ✅ 完成 | 482 种子因子（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面），期货 12 家族 50+ 子因子，8 个定时任务，信号报告输出到 reports/ |
 | **Phase 12** | 策略进化：动态因子权重（DynamicWeightStrategy）、市场制度自适应（RegimeAdaptiveStrategy）、多周期信号融合（MultiPeriodSignalFusion） | ✅ 完成 | 3 种策略进化能力，55 个测试用例全绿，strategy_evolution.py 95% 覆盖率 |
 | **Phase 13** | 信号管道 v5 多空双向 + 信号增量：信号管道升级为多空双向排名（按绝对值排序），新增信号增量追踪（较昨日变化判断趋势加速/衰竭），信号快照 JSON 持久化 + JSONL 历史追加，L3 Portfolio Loop 自动触发信号管道（全量 82 品种），README 拆分股票/期货种子因子 | ✅ 完成 | 1601 测试全绿，12 大期货因子家族 50+ 子因子 |
 | **Phase 14** | Design 全量落地（v2.9.0）：9 个设计文档（A.1-C.3）全部完成——S1 数据层（质量评分/状态历史/审计报告 3 表 + 3 仓储类）、S2 监控调度（Prometheus 指标注册表 + 自适应权重封装 + 数据质量三维指标 + 月度衰减/数据质量 2 任务）、S3 回测流水线（7 阶段类 + run_batch + Builder + CLI）、S4 C.1 CLI（feature list/analyze + gp evolve）、S5 C.2 实盘对接（信号契约 + fts/risk 风控包 + LiveFactorMonitor + HTTP 端点）、S6 C.3 反馈闭环（FeedbackLoop 家族 + 4 反馈表 + CLI）；新增 79 测试用例 | ✅ 完成 | 2066+ 测试，9 设计全部实现（详见 docs/harness/design/） |
 | **Phase 15** | 算子演化引擎（v2.10.0，Phase 3+ / C.4）：`OperatorEvolutionEngine` 在 DSL 算子空间（58 算子 L0-L5）做适应度导向进化搜索（种群初始化 validator 校验 → IC+Sharpe 评估（DSL executor + 缓存）→ 锦标赛选择 → 子树交叉/变异（参数受 param_bounds 约束）→ 精英保留），取代 `_generate_operator_factor` 纯随机组合；evolution_loop operator/hybrid 模式接入（无评估数据回退随机生成）；产物为 `kind=OPERATOR` 因子；关闭 GAP-026 | ✅ 完成 | 算子演化引擎 + 13 测试用例（引擎 11 + 集成 2），C.4 设计落地（详见 docs/harness/design/C.4） |
 | **Phase 16** | 组合漂移治理（v2.11.0）：L3 组合漂移监控（DriftMonitor 成员重合率 + 权重 L1 变化率 → drift_history/YYYY-MM-DD.json）+ PortfolioManager combo_history 归档 + build_combo 粘性约束（±30% 变动 / 新因子首日封顶）+ L2 影子池（新晋升因子观察 5 个交易日，种子因子直接进正式组合）；新增 20 测试用例 | ✅ 完成 | 82 个 portfolio_loop 测试全绿，漂移数据持久化 memory/portfolio/drift_history/ |
+| **Phase 17** | 孤立模块集成 Phase 2（v2.16.0）：`LogicMonitor`/`FactorInspector` 注册为定时任务（每日 22:00/03:00）；`ProcessWatchdog` 集成到 `SchedulerEngine`（`start_watchdog()` 方法）；任务注册表增至 8 个任务 | ✅ 完成 | 2043 回归测试通过，8 个定时任务（L1/L2/L3 + 健康检查 + 月度衰减 + 数据质量 + 逻辑监控 + 因子巡检） |
 
 ---
 
@@ -181,5 +182,5 @@ FTS 项目整体状态：
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | Phase 11 → `data_futures.py` + `data_futures_fundamental.py` + `seed_data_futures_full.py` + `scheduler/jobs.py` + `scripts/` |
-| 可验证断言 | Phase 11 产出物：482 种子因子（9+101+158+191+23），期货 12 家族 50+ 子因子，5 个定时任务 |
+| 可验证断言 | Phase 11 产出物：482 种子因子（9+101+158+191+23），期货 12 家族 50+ 子因子，8 个定时任务 |
 | 检验方式 | `python -m pytest tests/factor_engine/test_seed_pool.py --no-cov -q 2>&1 | findstr "passed"` |

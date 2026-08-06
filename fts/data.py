@@ -24,7 +24,6 @@ import pandas as pd
 from .data_mcp import MCPDataProvider, MCPDataError
 from .data_fundamental import FundamentalProvider, FundamentalDataError
 from .data_futures import FuturesDataProvider, FuturesDataError
-from .data_futures_fundamental import FuturesFundamentalProvider
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +53,10 @@ class FTSDataProvider:
 
     def __init__(self, mcp_provider: Optional[MCPDataProvider] = None,
                  fundamental_provider: Optional[FundamentalProvider] = None,
-                 futures_provider: Optional[FuturesDataProvider] = None,
-                 futures_fundamental_provider: Optional[FuturesFundamentalProvider] = None):
+                 futures_provider: Optional[FuturesDataProvider] = None):
         self._mcp = mcp_provider or MCPDataProvider()
         self._fundamental = fundamental_provider or FundamentalProvider(mcp_available=False)
         self._futures = futures_provider or FuturesDataProvider()
-        self._futures_fundamental = futures_fundamental_provider or FuturesFundamentalProvider()
 
     # ── 基本面注入 ──
 

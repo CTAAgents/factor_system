@@ -163,6 +163,8 @@ class BacktestMetrics(TypedDict, total=False):
     t_stat: float                                # t 统计量
     turnover_monthly: float                      # 月度换手率（0~1）
     decay_6m: float                              # 6 个月 IC 衰减率（0~1, 越大衰减越快）
+    ic_volatility: float                         # 跨窗口 IC 标准差（WalkForward, 0=单窗口）
+    n_walk_windows: int                          # WalkForward 有效窗口数
 
 
 class EconomicScore(TypedDict, total=False):
@@ -522,6 +524,8 @@ class PortfolioCombo(TypedDict, total=False):
     n_factors: int                # 最终保留因子数
     status: Literal["pending", "active", "decayed"]
     created_at: str
+    sharpe_warning: Optional[str] # 夏普警戒提示（None=正常, str=警戒原因）
+    sharpe_randomization_passed: Optional[bool]  # 随机化测试是否通过
 
 
 class AgentOptimizationProposal(TypedDict, total=False):

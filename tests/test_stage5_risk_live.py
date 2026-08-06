@@ -4,11 +4,9 @@
 1. SignalValidator 信号契约验证（必填/方向/置信度）
 2. to_factor_signal ScoredSignal 转换
 3. RiskManager 五项风控规则
-4. SimulatedTradeAdapter 模拟成交
-5. TradeAdapter 抽象基类接口
-6. LiveFactorMonitor 偏离检测
-7. Prometheus live/risk 指标渲染
-8. HTTP 端点（signal submit / risk status / live factors）
+4. LiveFactorMonitor 偏离检测
+5. Prometheus live/risk 指标渲染
+6. HTTP 端点（signal submit / risk status / live factors）
 """
 
 import json
@@ -20,7 +18,7 @@ import pytest
 from fts.factor_engine.signal_contract import SignalValidator
 from fts.monitor.live_factor_monitor import LiveFactorMonitor
 from fts.monitor.prometheus_metrics import MetricsRegistry
-from fts.risk import RiskManager, SimulatedTradeAdapter, TradeAdapter
+from fts.risk import RiskManager
 
 
 def _valid_signal() -> dict:
@@ -198,45 +196,7 @@ def test_risk_concentration():
     assert "concentration_limit" in names
 
 
-# ─── 4. SimulatedTradeAdapter ───────────────────────────
 
-
-def test_sim_adapter_submit():
-    adapter = SimulatedTradeAdapter(balance=1_000_000)
-    assert adapter.is_connected() is False
-    adapter.connect({})
-    assert adapter.is_connected() is True
-
-    sig = _valid_signal()
-    order = adapter.submit_signal(sig)
-    assert order["status"] == "filled"
-    assert order["symbol"] == "RB0"
-    assert order["direction"] == "long"
-    assert order["fill_quantity"] == 2.0
-
-    pos = adapter.get_position("RB0")
-    assert pos["quantity"] == 2.0
-    acct = adapter.get_account_status()
-    assert acct["position_value"] == 6000.0
-
-
-def test_sim_adapter_reject_not_connected():
-    adapter = SimulatedTradeAdapter()
-    order = adapter.submit_signal(_valid_signal())
-    assert order["status"] == "rejected"
-    assert "Not connected" in order.get("error_message", "")
-
-
-# ─── 5. TradeAdapter 抽象基类 ───────────────────────────
-
-
-def test_trade_adapter_abstract():
-    with pytest.raises(TypeError):
-        TradeAdapter()  # type: ignore[abstract]
-
-
-def test_sim_adapter_is_subclass():
-    assert issubclass(SimulatedTradeAdapter, TradeAdapter)
 
 
 # ─── 6. LiveFactorMonitor ───────────────────────────────

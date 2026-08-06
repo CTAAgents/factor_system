@@ -583,63 +583,6 @@ class TestPortfolioLoopDirNotExist:
         assert factors == []
 
 
-# ═══════════════════════════════════════════════════════════════
-# multi_factor_strategy.py — direction == "neutral" 跳过
-# ═══════════════════════════════════════════════════════════════
 
 
-class TestMultiFactorNeutral:
-    """测试 direction == "neutral" 时跳过。"""
 
-    def test_neutral_direction_skipped(self):
-        """total_score == 0 时 direction 为 neutral 应跳过（line 419-420）。
-
-        通过 mock _calc_* 函数使 total_score 精确为 0.0 且 active_factors >= 3：
-        - momentum=0.5 (weight=0.5) → 0.25
-        - volatility_reversion=-0.5 (weight=0.5) → -0.25
-        - volume_flow=0.5 (weight=0) → 0.0
-        - 其他因子 mock 为 0
-        total = 0.25 - 0.25 + 0.0 = 0.0 (exact)
-        active_factors = 3 (三个因子 |score| > 0.05)
-        """
-        from unittest.mock import patch
-
-        from fts.strategies.multi_factor_strategy import MultiFactorStrategy
-
-        strategy = MultiFactorStrategy(mode="pure_momentum")
-
-        tech_list = [{
-            "symbol": "RB",
-            "price": 3500.0,
-            "change_pct": 0.0,
-            "ma_slope": 0.0,
-            "macd_cross": "none",
-            "atr": 50.0,
-            "bb": 0.5,
-            "bb_width": 0.05,
-            "vol_ratio": 1.0,
-        }]
-
-        # Mock 因子得分函数，使 total_score 精确为 0
-        with (
-            patch("fts.strategies.multi_factor_strategy._calc_momentum", return_value=0.5),
-            patch("fts.strategies.multi_factor_strategy._calc_volatility_reversion", return_value=-0.5),
-            patch("fts.strategies.multi_factor_strategy._calc_volume_flow", return_value=0.5),
-            patch("fts.strategies.multi_factor_strategy._calc_oi_change", return_value=0.0),
-            patch("fts.strategies.multi_factor_strategy._calc_basis", return_value=0.0),
-            patch("fts.strategies.multi_factor_strategy._calc_inventory", return_value=0.0),
-            patch("fts.strategies.multi_factor_strategy._calc_capacity", return_value=0.0),
-            patch("fts.strategies.multi_factor_strategy._calc_macro", return_value=0.0),
-            patch("fts.strategies.multi_factor_strategy._calc_rate_proxy", return_value=0.0),
-            patch("fts.strategies.multi_factor_strategy._calc_pmi_proxy", return_value=0.0),
-            patch("fts.strategies.multi_factor_strategy._calc_position_rank", return_value=0.0),
-            patch("fts.strategies.multi_factor_strategy._calc_warrant_change", return_value=0.0),
-        ):
-            # Patch weights 使 momentum 和 volatility_reversion 权重相等且精确
-            # 0.5 * 0.5 + (-0.5) * 0.5 = 0.25 - 0.25 = 0.0 (exact)
-            strategy._weights = {"momentum": 0.5, "volatility_reversion": 0.5}
-
-            signals = strategy.compute(tech_list, {}, {"extra": {}})
-
-        # direction == "neutral" → continue → 无信号被追加
-        assert len(signals) == 0

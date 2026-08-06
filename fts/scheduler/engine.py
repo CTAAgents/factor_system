@@ -18,6 +18,7 @@ HARNESS §降级/熔断: APScheduler 不可用时静默回退到空操作。
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Optional
 
@@ -83,6 +84,33 @@ class SchedulerEngine:
     def running(self) -> bool:
         """调度器是否在运行。"""
         return self._running
+
+    def start_watchdog(self, name: str = "fts-scheduler") -> Optional[threading.Thread]:
+        """启动进程看门狗（后台线程）。
+
+        监控当前进程（通过 subprocess 自启动），崩溃后自动拉起。
+        重启策略：连续 3 次且间隔 < 30 秒 → 熔断 5 分钟。
+
+        Args:
+            name: 看门狗名称
+
+        Returns:
+            watchdog 线程, 或 None（未启动）
+        """
+        try:
+            from .watchdog import ProcessWatchdog
+            import sys
+
+            cmd = [sys.executable, "-m", "fts.cli", "scheduler", "run"]
+            watchdog = ProcessWatchdog(cmd, name=name)
+
+            thread = threading.Thread(target=watchdog.run, daemon=True, name=f"{name}-watchdog")
+            thread.start()
+            logger.info("[watchdog] 看门狗线程已启动: %s", name)
+            return thread
+        except Exception as e:
+            logger.warning("[watchdog] 看门狗启动失败: %s", e)
+            return None
 
     # ── 内部方法 ──
 

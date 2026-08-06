@@ -23,6 +23,9 @@ from .engine import (
     SchedulerEngine,
     run_scheduler,
 )
+from .watchdog import (
+    ProcessWatchdog,
+)
 
 __version__ = "0.1.0"
 __all__ = [
@@ -35,4 +38,5 @@ __all__ = [
     "make_trace_id",
     "SchedulerEngine",
     "run_scheduler",
+    "ProcessWatchdog",
 ]

@@ -37,7 +37,6 @@ logs/
 # Documentation (Harness specs and key project docs are tracked; other project-local docs are not)
 docs/*
 !docs/harness/
-!docs/gap_analysis_institutional_vs_current.md
 !docs/FTS_manual.md
 !docs/business_flow.md
 

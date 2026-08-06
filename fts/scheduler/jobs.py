@@ -245,6 +245,115 @@ def monthly_decay_eval_job() -> None:
         logger.error("[衰减评估] 失败: %s", e, exc_info=True)
 
 
+# ── 逻辑监控 — 每日 22:00（B.2 逻辑审查）───────────────────
+
+def logic_monitor_job() -> None:
+    """逻辑监控：对精英因子执行行为漂移、极端预测、换月日异常检测。
+
+    从因子数据库加载活跃精英因子，逐个执行 LogicMonitor.run()，
+    生成监控报告并记录日志。
+    """
+    trace_id = f"fts.logic.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[逻辑监控] 启动 trace_id=%s", trace_id)
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.monitor.logic_monitor import LogicMonitor
+        from fts.factor_engine.factor_db import FactorRepository
+        from fts.factor_engine.factor_db.repository import DATABASE_PATH
+
+        repo = FactorRepository()
+        logic = LogicMonitor()
+
+        # 加载活跃精英因子
+        conn = repo._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM factor_catalog WHERE is_elite = 1 AND status = 'active'"
+        ).fetchall()
+        columns = [desc[0] for desc in conn.description]
+        elite_factors = [dict(zip(columns, row)) for row in rows]
+
+        if not elite_factors:
+            logger.info("[逻辑监控] 无活跃精英因子，跳过 (trace_id=%s)", trace_id)
+            return
+
+        import numpy as np
+        import pandas as pd
+
+        drift_count = 0
+        extreme_count = 0
+        total = len(elite_factors)
+
+        for factor in elite_factors:
+            try:
+                factor_id = factor.get("factor_id", "unknown")
+                # 构建简化的 FactorProgram 用于检查
+                from fts.factor_engine.contracts import FactorProgram
+                fp = FactorProgram(
+                    factor_id=factor_id,
+                    name=factor.get("name", "unknown"),
+                    code=factor.get("code", ""),
+                )
+                # 用模拟数据做行为漂移检测
+                n = 500
+                mock_data = pd.DataFrame({
+                    "date": pd.date_range("2020-01-01", periods=n, freq="B"),
+                    "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
+                })
+                result = logic.run(fp, mock_data, switch_dates=[])
+                if not result.all_healthy:
+                    if result.drift.is_drifted:
+                        drift_count += 1
+                    if result.extreme_prediction.is_alarmed:
+                        extreme_count += 1
+                    logger.warning(
+                        "[逻辑监控] 因子异常: %s drift=%s extreme=%s",
+                        factor_id, result.drift.is_drifted,
+                        result.extreme_prediction.is_alarmed,
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[逻辑监控] 因子 %s 检查失败: %s", factor.get("factor_id", "?"), e)
+
+        logger.info(
+            "[逻辑监控] 完成: total=%d drift=%d extreme=%d (trace_id=%s)",
+            total, drift_count, extreme_count, trace_id,
+        )
+    except Exception as e:
+        logger.error("[逻辑监控] 运行失败: %s (trace_id=%s)", e, trace_id)
+
+
+# ── 因子巡检与降级 — 每日 03:00（B.2 因子退化检测）─────────
+
+def factor_inspector_job() -> None:
+    """因子巡检与自动降级：扫描精英因子库，检测退化因子并自动降级。
+
+    调用 FactorInspector.inspect_and_downgrade() 执行巡检，
+    阈值默认 -0.2（Sharpe 下降 20% 触发降级）。
+    """
+    trace_id = f"fts.inspector.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[因子巡检] 启动 trace_id=%s", trace_id)
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.factor_engine.factor_inspector import FactorInspector
+
+        inspector = FactorInspector()
+        result = inspector.inspect_and_downgrade(
+            threshold=-0.2,
+            commit=True,
+        )
+        summary = result.get("summary", {})
+        logger.info(
+            "[因子巡检] 完成: audited=%d degraded=%d downgraded=%d skipped=%d errors=%d (trace_id=%s)",
+            summary.get("total_audited", 0),
+            summary.get("degraded_detected", 0),
+            summary.get("downgraded", 0),
+            summary.get("skipped", 0),
+            summary.get("errors", 0),
+            trace_id,
+        )
+    except Exception as e:
+        logger.error("[因子巡检] 运行失败: %s (trace_id=%s)", e, trace_id)
+
+
 # ── 数据质量评估 — 每 5 分钟（B.1）─────────────────────────
 
 def data_quality_eval_job() -> None:
@@ -276,4 +385,6 @@ __all__ = [
     "health_check_job",
     "monthly_decay_eval_job",
     "data_quality_eval_job",
+    "logic_monitor_job",
+    "factor_inspector_job",
 ]

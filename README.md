@@ -2,8 +2,8 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-2928%2B%20collected-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.14.0-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-2043%2B%20passing-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.16.0-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 

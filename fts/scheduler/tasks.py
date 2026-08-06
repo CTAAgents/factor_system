@@ -127,6 +127,20 @@ def register_default_tasks() -> None:
             description="数据质量周期评估（B.1）：质量快照 + 告警检查",
             trace_id_prefix="fts.dq",
         ),
+        TaskSpec(
+            name="logic_monitor",
+            cron_expression="0 22 * * *",         # 每日 22:00
+            callable_path="fts.scheduler.jobs.logic_monitor_job",
+            description="逻辑监控（B.2）：因子行为漂移 + 极端预测 + 换月日异常检测",
+            trace_id_prefix="fts.logic",
+        ),
+        TaskSpec(
+            name="factor_inspector",
+            cron_expression="0 3 * * *",          # 每日 03:00
+            callable_path="fts.scheduler.jobs.factor_inspector_job",
+            description="因子巡检与自动降级（B.2）：扫描精英因子，检测退化并降级",
+            trace_id_prefix="fts.inspector",
+        ),
     ]
     for spec in defaults:
         if spec.name not in REGISTRY:

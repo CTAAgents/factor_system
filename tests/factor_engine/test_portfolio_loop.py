@@ -1541,7 +1541,7 @@ class TestShadowPool:
             "factor_id": "fct_shadow1", "name": "shadow_factor",
             "code": "code", "market": "futures", "family": "trend",
         }
-        evaluation = {"level_1_backtest": {"sharpe": 2.0, "ic": 0.05}, "passed": True}
+        evaluation = {"level_1_backtest": {"sharpe": 2.0, "ic": 0.05}, "level_3_multiple": {"passed": True}, "passed": True}
         # 直接调用 _promote_to_elite（repo 已 mock）
         path = loop._promote_to_elite(factor, evaluation)
         assert path is not None
@@ -1558,7 +1558,7 @@ class TestShadowPool:
             "factor_id": "fct_seed1", "name": "seed_factor",
             "code": "code", "market": "futures", "family": "trend",
         }
-        evaluation = {"level_1_backtest": {"sharpe": 2.0, "ic": 0.05}, "passed": True}
+        evaluation = {"level_1_backtest": {"sharpe": 2.0, "ic": 0.05}, "level_3_multiple": {"passed": True}, "passed": True}
         path = loop._promote_to_elite(factor, evaluation, shadow_observe=False)
         assert path is not None
         data = json.loads(Path(path).read_text(encoding="utf-8"))

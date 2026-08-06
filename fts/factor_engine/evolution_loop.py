@@ -948,6 +948,19 @@ class EvolutionLoop:
             record["market"] = self.market
         record["evaluation"] = evaluation
 
+        # ── 多重检验强制门: 拒绝未通过多重检验校正的因子 ──
+        level_3 = evaluation.get("level_3_multiple", {})
+        if not level_3.get("passed", False):
+            bonf_p = level_3.get('bonferroni_p', 'N/A')
+            adj_t = level_3.get('adjusted_t', 'N/A')
+            p_str = f"{bonf_p:.4f}" if isinstance(bonf_p, float) else str(bonf_p)
+            t_str = f"{adj_t:.4f}" if isinstance(adj_t, float) else str(adj_t)
+            print(
+                f"[evo] 多重检验未通过 [{factor_name}]: "
+                f"Bonferroni p={p_str}, adjusted_t={t_str}"
+            )
+            return None
+
         # ── 写入质量评分卡 (Phase A.1 集成) ──
         if quality_score is not None:
             record["quality_score"] = quality_score
@@ -993,6 +1006,9 @@ class EvolutionLoop:
             record["shadow_pool"] = _build_shadow_pool()
             print(f"[evo] 因子 {factor.get('name', '?')} 进入影子池观察 "
                   f"({_SHADOW_OBSERVE_TRADING_DAYS} 个交易日)")
+
+        # ── 晋升时间戳（用于纯外推验证，P2 差距修复） ──
+        record["promoted_at"] = datetime.now().isoformat()
 
         # ── 写入 JSON 文件（debug/备份） ──
         fp.write_text(

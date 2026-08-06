@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.15.0
+> 版本: v2.16.0
 > 最后更新: 2026-08-06
 
 ---
@@ -10,6 +10,7 @@
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
 | **v2.14.0** | 2026-08-06 | GAP-030 测试隔离根治：EvolutionLoop 新增 `factor_db_path` 注入点，test_evolution_loop.py 全部 run() 集成测试注入临时 DuckDB，杜绝测试写入真实 factor_catalog（此前每次全量回归写入约 44 条重复 seed 记录，fut_option_pcr 累计 267 条）；一次性清理 catalog 重复 seed 记录（保留每 name 最早一条 + 快照引用保护） |
+| **v2.16.0** | 2026-08-06 | 孤立模块集成 Phase 2：`LogicMonitor`/`FactorInspector` 注册为定时任务（每日 22:00/03:00）；`ProcessWatchdog` 集成到 `SchedulerEngine`（`start_watchdog()` 方法）；`scheduler/__init__.py` 导出 `ProcessWatchdog`；任务注册表增至 8 个任务；2043 回归测试通过 |
 | **v2.15.0** | 2026-08-06 | P0 修复：GP 演化/算子演化数据泄露（`train_mask` 隔离训练集适应度，阻止 OOS 数据泄漏）；IC 衰减硬编码修复（`_compute_decay_6m` 滑动窗口 IC 线性回归）；GAP-033 关闭；`test_evolution_loop.py` 128 测试全绿 |
 | **v2.13.0** | 2026-08-06 | GAP-032 L2 晋升产物双写一致性：`_write_to_duckdb` 返回 bool（失败不再吞异常）；`_promote_to_elite` 严格一致——DuckDB（主存储）写入失败回滚已写 JSON 快照并判定晋升失败，杜绝"快照有、catalog 无"孤儿；一次性数据修复：补入 1 个真缺失演化产物（fut_mobile_big_data_g5）+ 归档 515 个同名重复快照至 `_archive/`；新增双写原子化测试 |
 | **v2.12.1** | 2026-08-06 | session_id 全链路补齐：`state.py` 新增 `generate_session_id()`（格式 `session_<8hex>_<timestamp>`，与 trace_id 同构）；`fts/cli.py` 入口 `main()` 生成 session_id 并挂载到 `args.session_id`，作用域为整个 CLI 会话；evolution/meta-loop/portfolio 子命令启动日志输出 session_id 作为日志聚合标识；02-lifecycle 章节 4 校正 trace_id/run_id 格式描述（`{prefix}_{8hex}_{timestamp}`）并补充 session_id 实现说明；新增 3 测试用例（CLI 挂载/输出 + state 格式） |
@@ -56,8 +57,8 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 
 | 文件 | 字段 |
 |:-----|:-----|
-| `fts/__init__.py` | `__version__ = "2.10.1"` |
-| `pyproject.toml` | `version = "2.10.1"` |
+| `fts/__init__.py` | `__version__ = "2.16.0"` |
+| `pyproject.toml` | `version = "2.16.0"` |
 
 异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v1.1.0），与 FTS 项目版本同步。
 
@@ -275,6 +276,6 @@ pip install apscheduler
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `fts/__init__.py` __version__ = "2.15.0"；`pyproject.toml` version = "2.15.0"；`fts/factor_engine/contracts.py` STATE_SCHEMA_VERSION = "1" |
-| 可验证断言 | 版本号 v2.15.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
-| 检验方式 | `python -c "import fts; assert fts.__version__ == '2.15.0'; from fts.factor_engine.contracts import STATE_SCHEMA_VERSION; assert STATE_SCHEMA_VERSION == '1'"` |
+| 代码→文档映射 | `fts/__init__.py` __version__ = "2.16.0"；`pyproject.toml` version = "2.16.0"；`fts/factor_engine/contracts.py` STATE_SCHEMA_VERSION = "1" |
+| 可验证断言 | 版本号 v2.16.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
+| 检验方式 | `python -c "import fts; assert fts.__version__ == '2.16.0'; from fts.factor_engine.contracts import STATE_SCHEMA_VERSION; assert STATE_SCHEMA_VERSION == '1'"` |

@@ -28,7 +28,7 @@ from .contracts import (
     MultipleTestResult,
 )
 from .factor_program import FactorExecutor
-from .walk_forward import WalkForwardOptimizer, WalkForwardConfig, WalkForwardResult
+from .walk_forward import WalkForwardOptimizer, WalkForwardConfig, WalkForwardResult, DEFAULT_WALK_FORWARD_CONFIG
 
 
 # ─── Level 1: 回测验证 ────────────────────────────────────
@@ -306,9 +306,15 @@ class EvaluationChain:
         evaluation = chain.evaluate(factor, data, forward_returns, all_evaluations)
     """
 
-    def __init__(self, oos_ratio: float = 0.3, periods_per_year: int = 252):
+    def __init__(
+        self,
+        oos_ratio: float = 0.3,
+        periods_per_year: int = 252,
+        walk_forward_config: Optional[WalkForwardConfig] = None,
+    ):
         self.oos_ratio = oos_ratio
         self.periods_per_year = periods_per_year
+        self._walk_forward_config = walk_forward_config or dict(DEFAULT_WALK_FORWARD_CONFIG)
 
     def evaluate(
         self,
@@ -319,7 +325,7 @@ class EvaluationChain:
         correlation_matrix: Optional[np.ndarray] = None,
         walk_forward_config: Optional[WalkForwardConfig] = None,
     ) -> FactorEvaluation:
-        """执行三级评估链，可选走航验证。
+        """执行三级评估链（WalkForward 强制走航）。
 
         Args:
             factor: 待评估因子
@@ -327,7 +333,7 @@ class EvaluationChain:
             forward_returns: 未来收益率
             prior_evaluations: 之前所有因子的评估结果（用于多重检验）
             correlation_matrix: 因子相关性矩阵
-            walk_forward_config: 走航配置（None=跳过走航）
+            walk_forward_config: 走航配置（覆盖默认值）
 
         Returns:
             FactorEvaluation
@@ -354,13 +360,24 @@ class EvaluationChain:
         all_evals.append(temp_eval)
         mt = evaluate_multiple_tests(all_evals, correlation_matrix)
 
-        # 可选走航验证
-        walk_forward_result: Optional[WalkForwardResult] = None
-        if walk_forward_config is not None:
-            walk_forward_result = evaluate_walk_forward(
-                factor, data, forward_returns,
-                config=walk_forward_config,
-            )
+        # 强制走航验证（多窗口 OOS 评估，替代单窗口切片）
+        wf_config = walk_forward_config or self._walk_forward_config
+        walk_forward_result = evaluate_walk_forward(
+            factor, data, forward_returns,
+            config=wf_config,
+        )
+
+        # 如果走航成功，用多窗口 IC 均值/标准差更新 BacktestMetrics
+        if walk_forward_result and walk_forward_result.get("n_windows_completed", 0) > 0:
+            wf_ic_values = [w["ic"] for w in walk_forward_result.get("windows", [])]
+            if wf_ic_values:
+                import statistics as _stat
+                bt["ic"] = _stat.mean(wf_ic_values)
+                bt["ic_volatility"] = _stat.stdev(wf_ic_values) if len(wf_ic_values) > 1 else 0.0
+                bt["n_walk_windows"] = walk_forward_result.get("n_windows_completed", 0)
+                # 更新 backtest 中的 decay_6m 为走航窗口间衰减
+                wf_consistency = walk_forward_result.get("ic_consistency", 0.0)
+                bt["decay_6m"] = max(0.0, 1.0 - wf_consistency)
 
         # 失败原因汇总
         reasons: list[str] = []
