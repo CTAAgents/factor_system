@@ -133,8 +133,10 @@ class OperatorEvolutionEngine:
         target_col: str,
         registry: Optional[dict[str, OperatorMeta]] = None,
         config: Optional[OperatorEvolutionConfig] = None,
+        train_mask: Optional[pd.Series] = None,
     ) -> None:
         self._data = data_panel
+        self._train_mask = train_mask
         self._target_col = target_col
         self._registry = registry if registry is not None else build_registry()
         self._config = config or OperatorEvolutionConfig()
@@ -216,7 +218,11 @@ class OperatorEvolutionEngine:
     # ── 适应度评估 ───────────────────────────────────────────
 
     def _evaluate_fitness(self, expr: str) -> _FitnessScore:
-        """评估单个表达式适应度（IC + Sharpe，带缓存）。"""
+        """评估单个表达式适应度（IC + Sharpe，带缓存）。
+
+        数据泄露防护: 当 train_mask 存在时，仅在训练集上计算适应度，
+        确保 OOS 数据不被用于 GP/算子搜索过程中的选择。
+        """
         cached = self._fitness_cache.get(expr)
         if cached is not None:
             return cached
@@ -224,24 +230,26 @@ class OperatorEvolutionEngine:
         self._total_evaluations += 1
         try:
             node = parse_expression(expr)
-            values = evaluate(node, self._data, self._registry)
+            # 使用训练掩码防止数据泄露
+            eval_data = self._data[self._train_mask] if self._train_mask is not None else self._data
+            values = evaluate(node, eval_data, self._registry)
         except Exception:
             score = _FitnessScore(fitness=_PENALTY_WEAK)
             self._fitness_cache[expr] = score
             return score
 
         if isinstance(values, float):
-            values = pd.Series(values, index=self._data.index)
+            values = pd.Series(values, index=eval_data.index)
         else:
             values = pd.Series(values)
-        values.index = self._data.index
+        values.index = eval_data.index
 
         if values.isna().all():
             score = _FitnessScore(fitness=_PENALTY_NO_SIGNAL)
             self._fitness_cache[expr] = score
             return score
 
-        target = self._data[self._target_col]
+        target = eval_data[self._target_col]
         aligned = pd.concat([values, target], axis=1).dropna()
         if len(aligned) < _MIN_SAMPLES:
             score = _FitnessScore(fitness=_PENALTY_NO_SIGNAL)

@@ -306,9 +306,11 @@ class GPEvolver:
         data_panel: pd.DataFrame,
         target_col: str,
         config: Optional[GPEvolverConfig] = None,
+        train_mask: Optional[pd.Series] = None,
     ) -> None:
         self._registry = operator_registry
         self._data = data_panel
+        self._train_mask = train_mask
         self._target_col = target_col
         self._config = config or GPEvolverConfig()
         self._columns = list(data_panel.columns)
@@ -415,16 +417,22 @@ class GPEvolver:
         return population
 
     def _evaluate_fitness(self, tree: ExpressionTree) -> FitnessResult:
-        """评估单个表达式树的适应度。"""
+        """评估单个表达式树的适应度。
+
+        使用 train_mask 限制仅在训练集上计算适应度（数据泄露防护）。
+        """
         start_ms = time.time() * 1000
 
+        # 使用训练掩码防止数据泄露
+        eval_data = self._data[self._train_mask] if self._train_mask is not None else self._data
+
         # 计算因子值
-        factor_values = _evaluate_tree(tree.root, self._registry, self._data)
+        factor_values = _evaluate_tree(tree.root, self._registry, eval_data)
         if factor_values is None or factor_values.isna().all():
             return FitnessResult(fitness=-10.0, evaluation_time_ms=0)
 
-        # 计算 IC
-        target = self._data[self._target_col]
+        # 计算 IC（使用训练集，防止数据泄露）
+        target = eval_data[self._target_col]
         aligned = pd.concat([factor_values, target], axis=1).dropna()
         if len(aligned) < 20:
             return FitnessResult(fitness=-5.0, evaluation_time_ms=0)
@@ -433,7 +441,7 @@ class GPEvolver:
         if np.isnan(ic):
             return FitnessResult(fitness=-5.0, evaluation_time_ms=0)
 
-        # 计算 Sharpe
+        # 计算 Sharpe（使用训练集）
         try:
             rets = factor_values.pct_change().dropna()
             if len(rets) > 1 and rets.std() > 0:

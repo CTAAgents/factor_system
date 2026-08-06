@@ -162,6 +162,7 @@ class BacktestMetrics(TypedDict, total=False):
     oos_ratio: float                             # 样本外比例（0~1）
     t_stat: float                                # t 统计量
     turnover_monthly: float                      # 月度换手率（0~1）
+    decay_6m: float                              # 6 个月 IC 衰减率（0~1, 越大衰减越快）
 
 
 class EconomicScore(TypedDict, total=False):

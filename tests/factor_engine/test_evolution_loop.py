@@ -985,14 +985,16 @@ class TestEvolutionLoopCoverage:
         _mock_seed_evaluation_pass(loop)
         loop.macro_evolver.evolve = MagicMock(side_effect=ValueError("LLM 不可用"))
         loop._run_gp_evolution = MagicMock(side_effect=RuntimeError("GP 初始化失败"))
+        # hybrid 模式下 GP 失败后回退算子演化，也 mock 失败以验证 GP 失败被记录
+        loop._generate_operator_factor = MagicMock(side_effect=RuntimeError("算子演化失败"))
         loop.run(max_generation=2)
         failure_dir = tmp_memory_dir / "failure"
         files = list(failure_dir.glob("*.json"))
         assert len(files) > 0
         data = json.loads(files[0].read_text(encoding="utf-8"))
-        # 验证 GP 演化失败被记录
-        assert "GP 演化" in data.get("mutation_summary", "") or \
-               "宏观演化" in data.get("mutation_summary", "")
+        # 验证演化失败被记录（GP 失败或 hybrid 演化失败）
+        mutation = data.get("mutation_summary", "")
+        assert any(kw in mutation for kw in ["GP 演化", "宏观演化", "GP 失败", "hybrid_evolution"])
 
     # ─── 微观演化失败（line 192-197）────────────────────
 
@@ -1071,6 +1073,9 @@ class TestEvolutionLoopCoverage:
             "failure_reasons": [],
         }
         loop.verifier = mock_verifier
+        # 运行时校验和快速预筛选 mock 通过（算子因子需 mock 绕过实时执行）
+        loop._check_factor_runtime = MagicMock(return_value=(True, ""))
+        loop._quick_prefilter = MagicMock(return_value=(True, ""))
         result = loop.run(max_generation=2)
         # 至少会有一部分因子晋级
         assert result.total_factors_promoted >= 1
@@ -1126,6 +1131,9 @@ class TestEvolutionLoopCoverage:
             llm_client=mock_llm_client,
         )
         _mock_seed_evaluation_pass(loop)
+        # 运行时校验和快速预筛选 mock 通过（算子因子需 mock 绕过实时执行）
+        loop._check_factor_runtime = MagicMock(return_value=(True, ""))
+        loop._quick_prefilter = MagicMock(return_value=(True, ""))
         # 让 Verifier 拒绝所有因子（主循环中评估通过但 Verifier 判定失败）
         # 这样种子因子能通过评估（IC>=0.03 的种子晋升），
         # 但主循环中所有因子都失败 → 失败率熔断
@@ -1451,6 +1459,9 @@ class TestEvolutionLoopCoverage:
             llm_client=MagicMock(),
         )
         _mock_seed_evaluation_pass(loop)
+        # 运行时校验和快速预筛选 mock 通过（算子因子需 mock 绕过实时执行）
+        loop._check_factor_runtime = MagicMock(return_value=(True, ""))
+        loop._quick_prefilter = MagicMock(return_value=(True, ""))
         # mock macro_evolver.evolve 返回有效结果（含 trace_id）
         mock_factor = _make_minimal_factor("fct_lowic_test")
         loop.macro_evolver.evolve = MagicMock(return_value=(
@@ -1655,6 +1666,9 @@ class TestLine221:
         _mock_seed_evaluation_pass(loop)
         # 审查模块 mock 通过，聚焦主流程晋升链路
         _mock_review_pass(loop)
+        # 运行时校验和快速预筛选 mock 通过（算子因子需 mock 绕过实时执行）
+        loop._check_factor_runtime = MagicMock(return_value=(True, ""))
+        loop._quick_prefilter = MagicMock(return_value=(True, ""))
         # Mock macro_evolver 返回有效因子（包含 trace_id）
         parent_factor = _make_minimal_factor("fct_line221_parent")
         loop.macro_evolver.evolve = MagicMock(return_value=(
@@ -1977,6 +1991,15 @@ class TestEliteFactorTrackerIntegration:
             }
         )
         minimal_loop.elite_tracker.update = MagicMock()
+        # Mock get 返回有效跟踪记录，使 _run_periodic_factor_review 执行 update
+        minimal_loop.elite_tracker.get = MagicMock(
+            return_value={
+                "factor_id": fid,
+                "name": "test_factor",
+                "status": "active",
+                "grade": "A",
+            }
+        )
 
         minimal_loop._run_periodic_factor_review([fid], "test_trace")
         minimal_loop.elite_tracker.update.assert_called_once()

@@ -172,6 +172,15 @@ def evaluate_backtest(
     else:
         turnover = 0.0
 
+    # 6 个月 IC 衰减率计算: OOS 期前后两半的 IC 对比
+    decay_6m = 0.0
+    if len(oos_signal) >= 20:
+        half = len(oos_signal) // 2
+        ic_first, _ = _compute_ic(oos_signal[:half], oos_returns[:half])
+        ic_second, _ = _compute_ic(oos_signal[half:], oos_returns[half:])
+        if abs(ic_first) > 0.01:
+            decay_6m = max(0.0, min(1.0, 1.0 - abs(ic_second) / abs(ic_first)))
+
     return BacktestMetrics(
         ic=ic,
         icir=icir,
@@ -181,6 +190,7 @@ def evaluate_backtest(
         oos_ratio=oos_ratio,
         t_stat=t_stat,
         turnover_monthly=turnover,
+        decay_6m=decay_6m,
     )
 
 

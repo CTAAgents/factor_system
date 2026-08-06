@@ -592,6 +592,7 @@ class FeatureOpsEngine:
         data: pd.DataFrame,
         target: str,
         config: Optional[dict[str, Any]] = None,
+        train_mask: Optional[pd.Series] = None,
     ) -> Any:
         """运行 GP 演化搜索。
 
@@ -599,6 +600,8 @@ class FeatureOpsEngine:
             data: 特征数据面板
             target: 目标列名
             config: GP 配置覆盖
+            train_mask: 训练集掩码（数据泄露防护），
+                        仅当 train_mask 存在时，GPEvolver 在训练集上计算适应度
 
         Returns:
             GPEvolveResult
@@ -616,6 +619,7 @@ class FeatureOpsEngine:
             data_panel=data,
             target_col=target,
             config=gp_config,
+            train_mask=train_mask,
         )
         return gp.evolve()
 

@@ -289,6 +289,7 @@ class EvolutionLoop:
         state["last_generation"] = 0
         state["total_factors_evaluated"] = 0
         state["total_factors_promoted"] = 0
+        state["tokens_consumed"] = 0  # 每次新运行重置 token 计数器，避免跨运行积累触发熔断
         self.state_manager.save(state)
         run_id = state["run_id"]
 
@@ -1099,7 +1100,7 @@ class EvolutionLoop:
                 "icir": l1.get("icir", 0.0),
                 "max_drawdown": l1.get("max_drawdown", 0.0),
                 "turnover_monthly": l1.get("turnover_monthly", 0.0),
-                "decay_6m": l1.get("decay_6m", 0.05),
+                "decay_6m": l1.get("decay_6m", 0.0),
                 "metadata": {
                     "quality_score": quality_score,
                     "correlation_metadata": factor.get("correlation_metadata", {}),
@@ -1666,6 +1667,15 @@ class EvolutionLoop:
         else:
             gp_data[target_col] = 0.0
 
+        # 数据泄露防护: 构建训练集掩码（前 60% 数据），
+        # 确保 GP 搜索仅在训练集上计算适应度
+        train_ratio = 0.6
+        train_size = max(int(len(gp_data) * train_ratio), 1)
+        train_mask = pd.Series(
+            [True] * train_size + [False] * (len(gp_data) - train_size),
+            index=gp_data.index,
+        )
+
         gp_result = self.feature_ops_engine.run_gp_search(
             data=gp_data,
             target=target_col,
@@ -1677,6 +1687,7 @@ class EvolutionLoop:
                 "mutation_rate": 0.1,
                 "max_tree_depth": 4,
             },
+            train_mask=train_mask,
         )
 
         if gp_result.best_fitness <= 0:
@@ -1903,6 +1914,15 @@ class EvolutionLoop:
                 str(parent.get("factor_id", "?")).encode(),
             ).hexdigest()[:8], 16) % (2 ** 31)
 
+            # 数据泄露防护: 构建训练集掩码（前 60% 数据），
+            # 确保算子演化仅在训练集上计算适应度
+            train_ratio = 0.6
+            train_size = max(int(len(data) * train_ratio), 1)
+            train_mask = pd.Series(
+                [True] * train_size + [False] * (len(data) - train_size),
+                index=data.index,
+            )
+
             engine = OperatorEvolutionEngine(
                 data_panel=data,
                 target_col=target_col,
@@ -1911,6 +1931,7 @@ class EvolutionLoop:
                     max_generations=8,
                     random_seed=seed,
                 ),
+                train_mask=train_mask,
             )
             result = engine.evolve()
             if result.best_fitness <= 0:

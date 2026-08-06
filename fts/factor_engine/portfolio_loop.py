@@ -530,6 +530,15 @@ def synthesize_signals(
 
     n = len(factors)
 
+    # IC 上限截断（P2 差距修复）：IC > 0.15 的因子按 0.15 计算权重，
+    # 防止过拟合因子主导组合权重分配。IC 原始值保留在 _ic_raw 字段中供审计。
+    IC_CAP = 0.15
+    for f in factors:
+        raw_ic = f.get("ic", 0.0)
+        if abs(raw_ic) > IC_CAP:
+            f["_ic_raw"] = raw_ic
+            f["ic"] = IC_CAP * (1 if raw_ic > 0 else -1)
+
     if mode == "elastic_net" and elite_dir is not None:
         elastic_weights = _compute_elastic_net_weights(factors, Path(elite_dir))
         if not elastic_weights:

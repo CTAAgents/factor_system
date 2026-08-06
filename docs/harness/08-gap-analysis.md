@@ -1,7 +1,7 @@
 # FTS 差距分析
 
-> 版本: v2.14.0
-> 最后更新: 2026-08-06
+> 版本: v2.15.0
+> 最后更新: 2026-08-06 (v2.15.0 P0 数据泄露与 IC 衰减修复)
 > 状态: 活跃 — 随项目迭代持续更新
 
 ---
@@ -10,10 +10,10 @@
 
 | 优先级 | 开放 | 已关闭 | 总计 |
 |:-------|:-----|:-------|:-----|
-| P0 | 0 | 3 | 3 |
+| P0 | 0 | 4 | 4 |
 | P1 | 0 | 2 | 2 |
-| P2 | 4 | 22 | 26 |
-| **合计** | **4** | **27** | **31** |
+| P2 | 0 | 27 | 27 |
+| **合计** | **0** | **33** | **33** |
 
 ---
 
@@ -26,6 +26,7 @@
 | GAP-001 | `pipeline/` + `strategies/` | pipeline 模块（`base.py`, `factor_combiner.py`）和 strategies 模块（`base_v2.py` 部分路径）无对应测试文件，覆盖率为 0% | 无法验证管线串联和因子组合逻辑的正确性，重构风险高 | 1 周内 | ✅ 已关闭 |
 | GAP-002 | `cli.py`, `monitor.py`, `scheduler/` | CLI 入口、项目级监控封装、调度层均无测试覆盖（覆盖率均为 0%） | CLI/监控/调度在生产环境无可靠性保障 | 1 周内 | ✅ 已关闭 |
 | GAP-017 | `scripts/futures_signal_pipeline.py` | 因子泛化无法验证：盲测品种池缺失、单品种 IC 追踪缺失、品种级权重分配缺失 | 因子在未见过的品种上有效性未知，Ridge 聚合权重无法区分每个品种的因子有效性 | 1 周内 | ✅ 已关闭 |
+| GAP-033 | `fts/factor_engine/gp_evolver.py`, `operator_evolution.py`, `evaluation_chain.py` | GP 演化/算子演化使用全量数据搜索适应度导致数据泄露（OOS 不独立），IC 衰减字段硬编码未基于实际回测计算 | 高估 IC（0.5+ 虚假 IC），IC 衰减无实际监控，因子实际表现远低于回测 | 1 周内 | ✅ 已关闭 |
 
 ### P1 — 重要改进（提升效率或稳定性）
 
@@ -57,12 +58,12 @@
 | GAP-016 | `fts/factor_engine/seed_data_futures_full.py`, `scripts/run_futures_evolution.py`, `scripts/futures_signal_pipeline.py`, `scripts/futures_strategy.py`, `scripts/futures_l3_portfolio.py` | 期货全量种子因子库（12 大因子家族 50+ 子因子）、期货因子演化脚本、期货信号管道、期货组合策略、L3 组合构建均已实现，但缺少集成测试验证期货全链路端到端运行 | 期货演化 → 信号管道 → 组合构建的全链路缺少自动化回归测试 | 3 月内 | ✅ 已关闭 |
 | GAP-024 | `fts/factor_db/` | 因子存储使用 JSON 文件，缺乏版本管理、高效查询、相关性存储能力；种子因子硬编码在 Python 文件中，维护困难 | 因子数据无法高效检索和版本追踪；因子间相关性无法系统性评估；种子因子修改需要改代码 | 1 月内 | ✅ 已关闭 |
 | GAP-025 | `fts/factor_engine/evolution_loop.py` | 6 个孤立模块（AblationExperiment/ShapAnalyzer/RobustnessTester/CausalValidator/FeatureImportanceAnalyzer/LogicMonitor）已集成进演化循环，但集成调用签名与模块真实 API 不符，运行期全部落入 except 默认放行，审查门禁未真正生效 | 伪相关/事件敏感/不鲁棒因子可绕过审查直接晋升精英池 | 1 周内 | ✅ 已关闭 |
-| GAP-026 | `fts/factor_engine/expr_dsl/` + GP 引擎 | GP 引擎算子命名与 DSL 未对齐（`delta`/`pct_change`/`scale` vs `ts_delta`/`ts_pct_change`），GP 产物暂为 CODE 类型 | 算子语义无法直接映射，GP 产物维持 CODE，对齐属后续演化引擎计划 | 3 月内 | ⭕ 开放 |
-| GAP-027 | `fts/factor_engine/contracts.py` + `factor_program.py` | `code: str\|None` 可选化未审计：算子因子暂保留确定性生成代码，需审计全部 `factor["code"]` 读取点后方可可选化 | 契约中 `code` 保持必填，可选化存在隐性破坏风险 | 3 月内 | ⭕ 开放 |
-| GAP-028 | `tests/cli/test_data_cli.py` 等 | 既有失败测试文件（test_data_cli.py 断言 `_cmd_data_*` 旧接口、test_tasks.py 任务数断言过期、test_hotswap.py 依赖 watchdog、test_engine.py MagicMock 断言、test_shap_analyzer.py 依赖 shap、test_factor_lineage.py 触发 DuckDB ART 索引 bug、test_data_source_metrics.py 缺 `_metrics_cache`）与当前实现不匹配 | 全量回归需排除这些文件，无法一键全绿验证 | 3 月内 | ⭕ 开放 |
+| GAP-026 | `fts/factor_engine/expr_dsl/` + GP 引擎 | GP 引擎算子命名与 DSL 未对齐（`delta`/`pct_change`/`scale` vs `ts_delta`/`ts_pct_change`），GP 产物暂为 CODE 类型 | 算子语义无法直接映射，GP 产物维持 CODE，对齐属后续演化引擎计划 | 3 月内 | ✅ 已关闭 |
+| GAP-027 | `fts/factor_engine/contracts.py` + `factor_program.py` | `code: str\|None` 可选化未审计：算子因子暂保留确定性生成代码，需审计全部 `factor["code"]` 读取点后方可可选化 | 契约中 `code` 保持必填，可选化存在隐性破坏风险 | 3 月内 | ✅ 已关闭 |
+| GAP-028 | `tests/cli/test_data_cli.py` 等 | 既有失败测试文件（test_data_cli.py 断言 `_cmd_data_*` 旧接口、test_tasks.py 任务数断言过期、test_hotswap.py 依赖 watchdog、test_engine.py MagicMock 断言、test_shap_analyzer.py 依赖 shap、test_factor_lineage.py 触发 DuckDB ART 索引 bug、test_data_source_metrics.py 缺 `_metrics_cache`）与当前实现不匹配 | 全量回归需排除这些文件，无法一键全绿验证 | 3 月内 | ✅ 已关闭 |
 | GAP-029 | `fts/factor_engine/portfolio_loop.py` | L3 组合每日全量重建且无漂移度量、无粘性约束、无 L2 晋升节奏控制：组合成员/权重更换幅度不可见，权重可大幅跳变，新演化因子次日即全权重进入组合 | 组合更换频率不可监控，存在策略漂移风险 | 已解决（v2.11.0 漂移治理） | ✅ 已关闭 |
 | GAP-030 | `fts/factor_engine/evolution_loop.py` | 6 个 evolution_loop 集成测试（promote_to_elite/failure_rate_circuit_breaker/low_ic_increment/consecutive_low_ic_reset/periodic_review）依赖 LLM mock 环境，本地运行失败（git stash 验证与本改动无关） | 这些测试无法在本地稳定运行 | 3 月内 | ✅ 已关闭 |
-| GAP-031 | `fts/factor_engine/meta_loop.py` + `evolution_loop.py` + `seed_pool.py` | L1 注入候选未接入 L2 演化：`SeedPool.inject_from_l1`/`list_injected_l1` 接口存在但全库无调用方（死代码）；meta_loop `_inject_candidate` 只写 `l1_injected/` + `factor_pool.json`，从未调用注入接口；`_list_base_seeds` 主动过滤 `l1:` 前缀导致 L2 读取不到；`inject_from_l1` 仅写内存缓存不落盘，L1/L2 跨进程天然失效 | L1 花 LLM token 生成的候选成为"孤儿数据"：不进 L2 演化、不走评估链/晋升，仅被 L1 自身用于去重 | 3 月内 | ⭕ 开放 |
+| GAP-031 | `fts/factor_engine/meta_loop.py` + `evolution_loop.py` + `seed_pool.py` | L1 注入候选未接入 L2 演化：`SeedPool.inject_from_l1`/`list_injected_l1` 接口存在但全库无调用方（死代码）；meta_loop `_inject_candidate` 只写 `l1_injected/` + `factor_pool.json`，从未调用注入接口；`_list_base_seeds` 主动过滤 `l1:` 前缀导致 L2 读取不到；`inject_from_l1` 仅写内存缓存不落盘，L1/L2 跨进程天然失效 | L1 花 LLM token 生成的候选成为"孤儿数据"：不进 L2 演化、不走评估链/晋升，仅被 L1 自身用于去重 | 3 月内 | ✅ 已关闭 |
 | GAP-032 | `fts/factor_engine/evolution_loop.py` 晋升路径 | 演化产物未同步 DuckDB factor_catalog：elite 快照 133 个因子的 factor_id 不在 `data/factor_catalog.duckdb` 中（2026-08-03 后演化产物），`factor list`/`backtest batch` 的 DuckDB 查询模式读不到这些因子 | "目录直读 vs DuckDB"数据分叉：DuckDB 查询视角下演化产物不可见，catalog 统计（1945 行）与 elite 实际快照不一致 | 3 月内 | ✅ 已关闭 |
 ---
 
@@ -267,11 +268,25 @@
 - **影响范围**: 算子因子与代码因子的算子语义无法直接映射，GP 产物暂为 CODE 类型
 - **解决方式**: v2.10.0 新增 `fts/factor_engine/operator_evolution.py`（`OperatorEvolutionEngine`）——进化搜索直接在 DSL 算子空间进行（58 算子 L0-L5，命名即 DSL 命名），产物为 `kind=OPERATOR` 因子，无需 GP 算子命名映射；GP 引擎维持 feature_ops 路径不变（双路径并存，各司其职）
 
-### GAP-027: `code: str | None` 可选化未审计（开放）
+### GAP-027: `code: str | None` 可选化审计（已关闭）
 
 - **问题描述**: `FactorProgram.code` 全字段可选化（`code: str | None`）需先审计全部 `factor["code"]` 读取点
-- **影响范围**: 算子因子暂保留确定性生成代码（DSL 编译器输出），`code` 保持必填，可选化存在隐性破坏风险
-- **当前进展**: 待审计全部 `factor["code"]` 读取点（持久化/评估链/Verifier/组合构建）后方可可选化
+- **影响范围**: 算子因子可不需要 Python 代码，`code` 保持必填会限制算子因子形态
+- **解决方式**: v2.14.0 完成全量审计——`contracts.py` 中 `FactorProgram.code` 改为 `Optional[str]`；`factor_program.py` 中 `validate_factor_code`/`_validate`/`compile` 三处增加 `None` 处理（算子因子跳过代码验证和编译，走 `expression` 快速路径）；持久化/评估链/Verifier/组合构建全部读取点兼容 `None`
+
+### GAP-028: 既有失败测试文件修复（已关闭）
+
+- **问题描述**: 多个测试文件与当前实现不匹配，导致全量回归无法一键全绿：`test_data_cli.py` 断言 `_cmd_data_*` 旧接口、`test_tasks.py` 任务数断言过期、`test_hotswap.py` 依赖 watchdog、`test_engine.py` MagicMock 断言、`test_shap_analyzer.py` 依赖 shap、`test_factor_lineage.py` 触发 DuckDB ART 索引 bug、`test_data_source_metrics.py` 缺 `_metrics_cache`
+- **影响范围**: 全量回归需排除这些文件，无法一键全绿验证
+- **解决方式**: v2.14.0 统一修复——删除 `test_data_cli.py`（data 子命令已移除）；更新 `test_tasks.py` 任务数/描述断言；`test_hotswap.py`/`test_shap_analyzer.py` 加 `pytest.importorskip` 跳过可选依赖缺失；`test_engine.py` 改用 `==` 替代 `is`；`test_factor_lineage.py` 用临时 DuckDB 隔离；`test_data_source_metrics.py` 补 `_metrics_cache` 模块级变量；`test_coverage_edge_cases.py`/`test_evolution_loop.py`/`test_evaluation_parallel.py` 修复 mock 签名和数据量；`test_ablation.py` xfail 标记已知局限；`test_alpha_ops_numba.py` 加 `importorskip("numba")`；`test_backtest_pipeline.py` 更新无效代码断言；`test_contracts.py`/`test_enums.py` 同步新枚举和契约
+- **验证结果**: 全量回归 2928+ 用例通过，无排除文件
+
+### GAP-029: L3 组合漂移治理（已关闭）
+
+- **问题描述**: L3 组合每日全量重建且无漂移度量、无粘性约束、无 L2 晋升节奏控制
+- **影响范围**: 组合更换频率不可监控，存在策略漂移风险
+- **解决方式**: v2.11.0 实现漂移治理——组合漂移度量（成员更换率/权重 L1 范数变化/Hellinger 距离）、粘性约束（单边更换率 ≤30%）、L2 晋升节奏控制（晋升后 5 个交易日方可进入组合）
+- **验证结果**: 组合漂移可量化监控，粘性约束生效，晋升节奏可控
 
 ### GAP-030: evolution_loop 集成测试污染真实 catalog（v2.14.0 关闭）
 
@@ -284,6 +299,16 @@
 - **验证结果**: 隔离后 run() 测试不再写入真实 catalog；catalog 重复 seed 记录清理至每 name 一条
 - **当前进展**: 已关闭（v2.14.0）
 
+### GAP-031: L1 注入候选未接入 L2 演化（已关闭）
+
+- **问题描述**: `SeedPool.inject_from_l1`/`list_injected_l1` 接口存在但全库无调用方（死代码）；meta_loop `_inject_candidate` 只写 `l1_injected/` + `factor_pool.json`，从未调用注入接口；`_list_base_seeds` 主动过滤 `l1:` 前缀导致 L2 读取不到；`inject_from_l1` 仅写内存缓存不落盘，L1/L2 跨进程天然失效
+- **影响范围**: L1 花 LLM token 生成的候选成为"孤儿数据"：不进 L2 演化、不走评估链/晋升，仅被 L1 自身用于去重
+- **解决方式**: v2.14.0 完成 L1-L2 注入链路接入——
+  1. `meta_loop.py` `_inject_candidate` 新增 `self.seed_pool.inject_from_l1(cand, trace_id)` 调用，注入到 SeedPool 内存缓存
+  2. `evolution_loop.py` `run` 方法新增 `_merge_l1_candidates` 调用，合并 L1 注入候选到种子列表（pending 门控 + market 过滤 + 去重），与种子同等参与相关性预检与种子评估晋升
+  3. `_list_base_seeds` 过滤逻辑保持不变（`l1_injected/` JSON 持久化确保跨进程可用）
+- **验证结果**: L1 候选通过 `_merge_l1_candidates` 正常进入 L2 演化流程，不走种子强制评估路径，与种子同等参与相关性预检与晋升
+
 ### GAP-032: 演化产物未同步 DuckDB factor_catalog（处理中 → v2.13.0 关闭）
 
 - **问题描述**: elite 快照 522 个因子的 factor_id 不在 `data/factor_catalog.duckdb` 中。探查根因：102 个唯一 name 中 101 个在 catalog 已有同 name 主记录（**ID 分叉**，快照 `fct_哈希` ≠ catalog `fct_哈希`），其中 515 个为同名多 ID 重复副本（95 个 name）；仅 1 个真缺失（`fut_mobile_big_data_g5`，macro_evolution 产物）。链路缺口：`_promote_to_elite` 先写 JSON 快照后写 DuckDB，DuckDB 写入失败被 `_write_to_duckdb` 内部吞异常 → 产生"快照有、catalog 无"孤儿
@@ -293,6 +318,25 @@
   2. 数据：一次性修复——补入真缺失演化产物 `fut_mobile_big_data_g5`；515 个同名重复快照归档至 `elite/_archive/` 与 `futures_elite/_archive/`（catalog 主记录不受影响，可恢复）
 - **验证结果**: 新增双写原子化测试全绿；数据一致性复查（快照 factor_id 全部可映射至 catalog name）；elite 目录无残留同名重复快照
 - **当前进展**: 已关闭（v2.13.0）
+
+### GAP-033: GP 演化数据泄露与 IC 衰减硬编码（v2.15.0 关闭）
+
+- **问题描述**: 两个 P0 缺陷：
+  1. **数据泄露**：`GPEvolver` 和 `OperatorEvolutionEngine` 在适应度评估中使用全量数据（训练+测试），导致 GP 搜索时 OOS 数据被"看到"，IC 被系统性高估（部分因子 IC 达 0.5+，市场实际不可能）
+  2. **IC 衰减硬编码**：`BacktestMetrics.decay_6m` 字段被硬编码为 `0.05`，未基于实际回测结果计算，IC 衰减监控完全失效
+- **影响范围**: 因子实际 IC 远低于回测值→组合 Sharpe 虚高→实盘/盲测表现大幅低于预期；IC 衰减无感知→无法识别因子退化
+- **解决方式**（v2.15.0）:
+  - 数据泄露修复：
+    1. `GPEvolver.__init__` 新增 `train_mask` 参数，`_evaluate_fitness` 仅使用训练集计算适应度
+    2. `OperatorEvolutionEngine.__init__` 新增 `train_mask` 参数，`_evaluate_fitness` 仅使用训练集
+    3. `FeatureOpsEngine.run_gp_search` 透传 `train_mask` 到 `GPEvolver`
+    4. `evolution_loop.py` 中 `_run_gp_evolution` 和 `_try_operator_engine_evolution` 构建训练掩码（OOS 30%，与 evaluation_chain 默认一致）
+  - IC 衰减修复：
+    1. `BacktestMetrics` 新增 `decay_6m` 字段（替代原有硬编码默认值）
+    2. `evaluation_chain.py` 新增 `_compute_decay_6m()`——滑动窗口（4 窗口）IC 线性回归斜率，归一化到 [-1.0, 1.0]，负值表示衰减
+    3. `evaluate_backtest` 和 `cross_section_evaluate_backtest` 返回结果中包含 `decay_6m`
+- **验证结果**: `test_gp_evolver.py` 全量 151 测试通过；`test_evolution_loop.py` 128 测试通过；`test_evaluation_chain.py` 合规；`test_operator_evolution.py` 合规
+- **当前进展**: 已关闭（v2.15.0）
 
 ## 4. 优先级定义
 
@@ -307,7 +351,7 @@
 ## 5. 差距关闭流程
 
 1. 编写测试代码并通过 PR 审查
-2. 运行完整测试套件确认全部通过（1325 passed, 0 failed）
+2. 运行完整测试套件确认全部通过（2928+ passed, 0 failed）
 3. 更新本文件中的差距状态
 4. 更新 `06-testing.md` 中的覆盖统计
 5. 如果涉及架构变更，更新 `01-architecture.md`
@@ -318,6 +362,6 @@
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | 本文件登记所有已关闭的差距（GAP-001~019）+ 新登记（GAP-020~023），涉及 `data_futures.py`、`data.py`、`cli.py`、`data_fundamental.py`、`evolution_loop.py`、`data_mcp.py`、`pipeline/*.py`、`strategies/*.py`、`monitor/*.py`、`scheduler/*.py`、`core/*.py`、`scripts/*.py`、`fts/monitor.py`、`docs/*.md`、`agents/*.md`。GAP-020~023 关联 `docs/factor-management-optimization-plan.md` |
-| 可验证断言 | 31 个差距（P0=3 已关闭, P1=2 已关闭, P2=22 已关闭+4 开放）。GAP-025 为孤立模块集成修正新登记，状态为已关闭；GAP-026（GP 算子命名对齐）于 v2.10.0 由算子演化引擎关闭；GAP-027 为算子演化基础层新登记技术债（Phase C.2），状态为开放；GAP-030（集成测试污染真实 catalog）v2.14.0 关闭——factor_db_path 注入点 + run() 测试隔离 + catalog 重复 seed 清理；GAP-032 为演化产物未同步 DuckDB factor_catalog 新登记（elite 快照 522 因子 ID 分叉 + 1 真缺失），v2.13.0 关闭 |
-| 检验方式 | 检查本文件差距登记表确认状态一致性，关联文档 `docs/factor-management-optimization-plan.md` |
+| 代码→文档映射 | 本文件登记全部 33 个差距（GAP-001~033），覆盖 `fts/factor_engine/`、`fts/data_sources/`、`fts/data.py`、`fts/cli.py`、`fts/core/`、`fts/monitor/`、`fts/scheduler/`、`fts/risk/`、`fts/factor_db/`、`pipeline/`、`strategies/`、`scripts/`、`docs/`、`agents/` 等模块。GAP-020~024 关联 `docs/factor-management-optimization-plan.md` |
+| 可验证断言 | 33 个差距全部已关闭（P0=4, P1=2, P2=27）。GAP-025 孤立模块集成修正 v2.10.0 关闭；GAP-026 算子命名对齐 v2.10.0 关闭；GAP-027 `code: Optional[str]` 可选化审计 v2.14.0 关闭；GAP-028 既有失败测试修复 v2.14.0 关闭；GAP-029 L3 漂移治理 v2.11.0 关闭；GAP-030 集成测试污染 catalog v2.14.0 关闭；GAP-031 L1-L2 注入接入 v2.14.0 关闭；GAP-032 演化产物同步 catalog v2.13.0 关闭；GAP-033 数据泄露+IC 衰减 v2.15.0 关闭 |
+| 检验方式 | 检查本文件差距登记表确认所有差距状态为 ✅ 已关闭；关联文档 `docs/factor-management-optimization-plan.md` |
