@@ -149,11 +149,17 @@ def _map_sharpe_to_score(sharpe: float) -> float:
     """Sharpe → 收益性分 (0-5)。
 
     阈值: Sharpe=3→5分, 1.5→3分, 0.5→1分
+    过拟合惩罚: Sharpe>10 时逐步减分，Sharpe=20 时归零（P1 过拟合保护）
     """
     if sharpe <= 0:
         return 0.0
     if sharpe >= 3:
-        return 5.0
+        if sharpe <= 10:
+            return 5.0
+        # Sharpe > 10: 过拟合惩罚，逐步减分
+        # Sharpe=10→5.0, Sharpe=12→4.0, Sharpe=15→2.5, Sharpe=20→0.0
+        penalty = min(5.0, (sharpe - 10) * 0.5)
+        return max(0.0, 5.0 - penalty)
     if sharpe >= 1.5:
         return 3.0
     if sharpe >= 0.5:

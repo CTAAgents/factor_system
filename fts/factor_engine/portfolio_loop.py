@@ -92,6 +92,7 @@ class L3Verifier:
         3. combo_turnover <= config.max_turnover
         4. 每个信号 decay_6m <= config.max_decay_rate
         5. n_factors >= config.min_n_factors
+        6. combo_sharpe <= config.max_sharpe（过拟合保护）
     """
 
     def __init__(self, config: L3VerifierConfig):
@@ -104,10 +105,18 @@ class L3Verifier:
             raise RuntimeError("L3 Verifier 未锁定")
         reasons: list[str] = []
 
-        # 维度 1: 组合夏普
+        # 维度 1: 组合夏普（下限）
         if combo.get("combo_sharpe", 0) < self._config.get("min_sharpe", 2.0):
             reasons.append(
                 f"组合夏普 {combo.get('combo_sharpe', 0):.2f} < {self._config['min_sharpe']}"
+            )
+
+        # 维度 6: 组合夏普（上限 — P1 过拟合保护）
+        max_sharpe = self._config.get("max_sharpe", 3.5)
+        if combo.get("combo_sharpe", 0) > max_sharpe:
+            reasons.append(
+                f"组合夏普 {combo.get('combo_sharpe', 0):.2f} > {max_sharpe}（上限），"
+                f"强烈暗示过拟合，需人工复核"
             )
 
         # 维度 2: 最大相关性
@@ -539,6 +548,14 @@ def synthesize_signals(
             f["_ic_raw"] = raw_ic
             f["ic"] = IC_CAP * (1 if raw_ic > 0 else -1)
 
+    # Sharpe 上限截断（P0 过拟合修复）：Sharpe > 3.0 的因子按 3.0 计算权重，
+    # 防止过拟合因子主导组合权重分配。Sharpe 原始值保留在 _sharpe_raw 字段中供审计。
+    for f in factors:
+        raw_sharpe = f.get("sharpe", 0.0)
+        if raw_sharpe > SHARPE_CAP:
+            f["_sharpe_raw"] = raw_sharpe
+            f["sharpe"] = SHARPE_CAP
+
     if mode == "elastic_net" and elite_dir is not None:
         elastic_weights = _compute_elastic_net_weights(factors, Path(elite_dir))
         if not elastic_weights:
@@ -581,7 +598,7 @@ def synthesize_signals(
         signals = []
         for f in factors:
             w = max(f.get("sharpe", 0), 0.01) / total_sharpe if total_sharpe > 0 else 1.0 / n
-            signals.append(PortfolioSignal(
+            signal = PortfolioSignal(
                 factor_id=f["factor_id"],
                 name=f["name"],
                 weight=w,
@@ -591,7 +608,13 @@ def synthesize_signals(
                 decay_6m=f.get("decay_6m", 0.0),
                 orthogonalized=False,
                 retained=True,
-            ))
+            )
+            # 传递截断前的原始值（P0 过拟合修复）
+            if "_sharpe_raw" in f:
+                signal["_sharpe_raw"] = f["_sharpe_raw"]
+            if "_ic_raw" in f:
+                signal["_ic_raw"] = f["_ic_raw"]
+            signals.append(signal)
         # [WEIGHT-LOG] 权重计算详情
         logger.info("[L3-WEIGHT] sharpe_weight 模式: total_sharpe=%.2f, n_factors=%d", total_sharpe, n)
         for idx, s in enumerate(sorted(signals, key=lambda x: -x["weight"])):
@@ -1069,6 +1092,12 @@ def _apply_sticky_constraints(
 SHARPE_WARNING_THRESHOLD: float = 3.5
 """组合夏普警戒线：> 3.5 自动标记并触发独立验证。"""
 
+SHARPE_CAP: float = 3.0
+"""因子 Sharpe 上限截断：> 3.0 的因子按 3.0 计算权重，防止过拟合因子主导组合。"""
+
+MIN_EVAL_DAYS: int = 500
+"""最小评价窗口（交易日数）：面板数据回溯天数，确保评价窗口足够长避免短窗口虚高。"""
+
 
 def _validate_combo_sharpe(combo_sharpe: float) -> Optional[str]:
     """夏普比率警戒检查。
@@ -1099,47 +1128,56 @@ def _validate_combo_sharpe(combo_sharpe: float) -> Optional[str]:
 
 def _run_sharpe_randomization_test(
     signals: list[PortfolioSignal],
-    n_shuffle: int = 100,
+    n_shuffle: int = 1000,
 ) -> bool:
-    """夏普随机化测试：打乱因子信号后重算夏普，验证高夏普是否来自真实预测能力。
+    """夏普随机化测试：基于 Dirichlet 权重重采样，验证高夏普是否来自真实预测能力。
 
-    原理：如果组合夏普来自真实预测能力，打乱收益后夏普应显著下降。
-    如果打乱后仍能获得高夏普，说明夏普来自数据特征而非预测能力。
+    原理：
+        1. 计算组合的实际加权夏普（actual_weighted_sharpe）
+        2. 从 Dirichlet(1,1,...,1) 生成 1000 组随机权重向量
+        3. 对每组随机权重计算加权夏普，得到随机分布
+        4. 如果实际夏普 > 随机分布的 95% 分位数，说明夏普显著优于随机权重配置
+        5. 否则说明夏普可能来自权重集中而非真实预测能力
 
     Args:
-        signals: 信号列表（含 sharpe/ic/turnover）
-        n_shuffle: 随机化次数
+        signals: 信号列表（含 sharpe/weight）
+        n_shuffle: 随机化次数（默认 1000）
 
     Returns:
         True（随机化测试通过，高夏普可信）或
         False（随机化测试未通过，夏普可能虚高）
     """
-    import random
+    import numpy as np
+
     retained = [s for s in signals if s.get("retained", True)]
     if len(retained) < 3:
         return True  # 因子太少，跳过随机化测试
 
-    original_sharpe = sum(s.get("sharpe", 0) for s in retained) / len(retained)
-    if original_sharpe <= SHARPE_WARNING_THRESHOLD:
-        return True  # 夏普正常，跳过随机化测试
+    # 实际组合加权夏普
+    total_w = sum(s.get("weight", 0) for s in retained)
+    if total_w <= 0:
+        return True
+    actual_sharpe = sum(
+        s.get("weight", 0) * s.get("sharpe", 0) for s in retained
+    ) / total_w
 
-    # 从因子 IC 中估算收益序列
-    ic_values = [s.get("ic", 0.0) for s in retained]
-    sharpe_values = [s.get("sharpe", 0.0) for s in retained]
+    # 夏普正常，跳过随机化测试
+    if actual_sharpe <= 2.5:
+        return True
 
-    shuffled_count = 0
-    for _ in range(n_shuffle):
-        # 打乱 IC 与 Sharpe 的对应关系
-        shuffled_ic = random.sample(ic_values, len(ic_values))
-        # 用打乱后的 IC 重算 Sharpe
-        shuffled_sharpe = sum(
-            ic * s for ic, s in zip(shuffled_ic, sharpe_values)
-        ) / sum(sharpe_values) if sum(sharpe_values) > 0 else 0.0
-        if shuffled_sharpe >= original_sharpe * 0.5:
-            shuffled_count += 1
+    # 提取因子 Sharpe 值
+    sharpe_values = np.array([s.get("sharpe", 0.0) for s in retained])
+    n = len(sharpe_values)
 
-    # 如果打乱后仍有超过 5% 的样本达到原 Sharpe 的一半，说明夏普不可信
-    passed = shuffled_count / n_shuffle < 0.05
+    # 从 Dirichlet 分布生成随机权重（均匀分布的先验）
+    random_weights = np.random.dirichlet(np.ones(n), size=n_shuffle)
+    random_sharpes = random_weights @ sharpe_values  # 矩阵乘法批量计算
+
+    # 计算随机分布的 95% 分位数
+    percentile_95 = float(np.percentile(random_sharpes, 95))
+
+    # 如果实际夏普 > 95% 分位数，说明显著优于随机配置
+    passed = actual_sharpe > percentile_95
     return passed
 
 
@@ -1205,12 +1243,19 @@ def build_combo(
         logger.info("[L3-WEIGHT]   [%d] %s | weight=%.4f | sharpe=%.2f | ic=%.4f",
                     idx + 1, s["name"], s["weight"], s["sharpe"], s.get("ic", 0))
 
-    # 组合指标（简化为算术平均）
-    combo_sharpe = sum(s.get("sharpe", 0) for s in retained) / len(retained)
-    combo_turnover = sum(s.get("turnover", 0) for s in retained) / len(retained)
+    n_ret = len(retained)
+
+    # 组合指标：diversity-adjusted 加权 Sharpe（P0 过拟合修复）
+    # 用权重集中度（HHI）调整组合 Sharpe，集中度越高折扣越大。
+    # 等权组合 diversity_factor≈1.0，极度集中组合 diversity_factor→0。
+    weighted_sharpe = sum(s.get("weight", 0) * s.get("sharpe", 0) for s in retained)
+    hhi = sum(s.get("weight", 0) ** 2 for s in retained)
+    effective_n = 1.0 / hhi if hhi > 0 else float(n_ret)
+    diversity_factor = min(1.0, effective_n / n_ret)
+    combo_sharpe = weighted_sharpe * diversity_factor
+    combo_turnover = sum(s.get("turnover", 0) for s in retained) / n_ret
     
     # 更准确的相关性估算: 基于因子权重集中度 + Ridge 惩罚后的相关性衰减
-    n_ret = len(retained)
     if n_ret > 1:
         total_w = sum(s.get("weight", 0) for s in retained)
         if total_w > 0:
@@ -2337,7 +2382,7 @@ class PortfolioLoop:
                 try:
                     from ..data import FTSDataProvider
                     provider = FTSDataProvider()
-                    panel_data, _cdates = provider.get_futures_panel(days=120)
+                    panel_data, _cdates = provider.get_futures_panel(days=MIN_EVAL_DAYS)
                     logger.info("[L3] Step 0.5: 期货面板数据加载完成 (%d 品种, %d 交易日)",
                                 len(panel_data), len(_cdates))
                 except Exception as e:

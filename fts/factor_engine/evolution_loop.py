@@ -122,6 +122,78 @@ class EvolutionRunResult:
         }
 
 
+# ─── 兼容包装: 替代已删除的 FactorQualityInspection ────
+
+class _QualityInspectionResult:
+    """兼容 InspectionResult 属性接口，用于 evolution_loop 内部。"""
+    def __init__(self, score: dict, filtered: bool, reason: str = "") -> None:
+        self.total_score: float = score.get("total_score", 0.0)
+        self.grade: str = score.get("grade", "C")
+        self.reason: str = reason
+        self.filtered: bool = filtered
+        self.quality_score: dict = score
+
+
+class _QualityInspectionCompat:
+    """兼容包装: 将 FactorQualityCard 适配为旧的 FactorQualityInspection 接口。
+
+    原 pipeline/factor_quality_inspection.py 在死代码清理时删除，
+    此处直接使用 fts/factor_engine/factor_quality_card.py 的 FactorQualityCard。
+    """
+
+    def __init__(self, card_config: Any = None, min_grade: str = "B") -> None:
+        from fts.factor_engine.factor_quality_card import FactorQualityCard
+        self.card = FactorQualityCard(card_config)
+        self.min_grade = min_grade
+
+    def inspect(self, factor: dict, evaluation: dict) -> _QualityInspectionResult:
+        """将因子+评估映射到评分卡，返回兼容结果。"""
+        bt = evaluation.get("level_1_backtest", {}) or {}
+        econ = evaluation.get("level_2_economic", {}) or {}
+
+        factor_id = factor.get("factor_id", "?")
+        ic = bt.get("ic", 0.0)
+        sharpe = bt.get("sharpe", 0.0)
+        icir = bt.get("icir", 0.0)
+        decay_rate = bt.get("decay_6m", 0.2)
+        turnover = bt.get("turnover_monthly", 0.3)
+        walk_forward = evaluation.get("walk_forward")
+
+        # 经济逻辑评分: 四维平均
+        theory = econ.get("theory", 3)
+        behavioral = econ.get("behavioral", 3)
+        microstructure = econ.get("microstructure", 3)
+        institutional = econ.get("institutional", 3)
+        logic_score = int(round((theory + behavioral + microstructure + institutional) / 4.0))
+
+        # 跨品种覆盖率: 从 symbols 列表估算
+        symbols = factor.get("symbols", [])
+        cross_symbol_coverage = min(1.0, len(symbols) / 10.0) if symbols else 0.6
+
+        score = self.card.evaluate(
+            factor_id=factor_id,
+            ic=ic,
+            sharpe=sharpe,
+            walk_forward_result=walk_forward,
+            decay_rate=decay_rate,
+            turnover=turnover,
+            correlation_max=0.5,
+            logic_score=logic_score,
+            data_frequency="daily",
+            cross_symbol_coverage=cross_symbol_coverage,
+            icir=icir,
+        )
+
+        grade = score.get("grade", "C")
+        filtered = grade not in ("A", "B") or grade > self.min_grade
+        # 如果因子等级为 C 则淘汰
+        if grade == "C" and self.min_grade in ("A", "B"):
+            filtered = True
+        reason = f"质检淘汰: 等级={grade}, 总分={score.get('total_score', 0):.1f}/50" if filtered else ""
+
+        return _QualityInspectionResult(score, filtered, reason)
+
+
 # ─── 演化循环 ─────────────────────────────────────────────
 
 class EvolutionLoop:
@@ -187,9 +259,9 @@ class EvolutionLoop:
         )
         self.evaluation_chain = EvaluationChain()
 
-        # 子模块: 因子质检过滤器 (Phase A.1 集成) — 延迟导入避免循环依赖
-        from ..pipeline.factor_quality_inspection import FactorQualityInspection
-        self.quality_inspector = FactorQualityInspection(
+        # 子模块: 因子质检过滤器 (Phase A.1 集成)
+        # 使用 _QualityInspectionCompat 替代已删除的 pipeline.FactorQualityInspection
+        self.quality_inspector = _QualityInspectionCompat(
             card_config=quality_card_config,
             min_grade=quality_min_grade,
         )
@@ -554,7 +626,7 @@ class EvolutionLoop:
                 verifier_result = self.verifier.check(evaluation)
 
                 # ── Step 4.5: 因子质量评分卡 (Phase A.1) ──
-                inspection: InspectionResult = self.quality_inspector.inspect(
+                inspection: _QualityInspectionResult = self.quality_inspector.inspect(
                     factor=optimized_factor,
                     evaluation=evaluation,
                 )
@@ -936,6 +1008,26 @@ class EvolutionLoop:
             existing = repo.get_factor_by_name(factor_name, market=self.market)
             if existing:
                 print(f"[evo] 跳过重复因子: {factor_name} (DuckDB 已存在, market={self.market})")
+                return None
+        except Exception:
+            pass
+
+        # ── 家族多样性检查：限制单一家族因子数量，避免演化收敛过度集中 ──
+        factor_family = factor.get("family", "unknown")
+        max_per_family = self.budget.get("max_per_family", 3)
+        try:
+            repo = self._get_repo()
+            existing_family = repo.get_by_family(
+                family=factor_family,
+                market=self.market,
+                limit=100,
+            )
+            if len(existing_family) >= max_per_family:
+                print(
+                    f"[evo] 家族多样性限制 [{factor_name}]: "
+                    f"家族 '{factor_family}' 已有 {len(existing_family)} 个因子 "
+                    f"(上限 {max_per_family})"
+                )
                 return None
         except Exception:
             pass
@@ -2604,7 +2696,7 @@ class EvolutionLoop:
     def _log_inspection_detail(
         self,
         factor: FactorProgram,
-        inspection: InspectionResult,
+        inspection: _QualityInspectionResult,
         status: str,
         generation: int,
     ) -> None:
@@ -2647,7 +2739,7 @@ class EvolutionLoop:
         factor: FactorProgram,
         generation: int,
         trace_id: str,
-        inspection: InspectionResult,
+        inspection: _QualityInspectionResult,
         evaluation: Optional[FactorEvaluation] = None,
     ) -> None:
         """记录质检过滤轨迹 (Phase A.1)。

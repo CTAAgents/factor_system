@@ -191,6 +191,14 @@ class TestL3Verifier:
         assert any("换手率" in r for r in reasons)
         assert any("0.80" in r for r in reasons)
 
+    def test_fails_high_sharpe(self):
+        """夏普 4.0 > 3.5 应失败（P0 过拟合保护）。"""
+        v = L3Verifier(DEFAULT_L3_VERIFIER_CONFIG)
+        combo = self.make_combo(sharpe=4.0, corr=0.2, turnover=0.3)
+        passed, reasons = v.check(combo)
+        assert passed is False
+        assert any("夏普" in r and "4.00" in r and "3.5" in r for r in reasons)
+
 
 # ════════════════════════════════════════════════════════════
 # 2. PortfolioStateManager 测试
@@ -366,6 +374,21 @@ class TestSynthesizeSignals:
         assert signals[1]["weight"] == pytest.approx(2.0 / total)
         assert signals[2]["weight"] == pytest.approx(1.8 / total)
 
+    def test_sharpe_cap(self):
+        """Sharpe > 3.0 的因子按 3.0 计算权重（P0 过拟合修复）。"""
+        factors = [
+            {"factor_id": "fct_a", "name": "factor_a", "sharpe": 5.0, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1},
+            {"factor_id": "fct_b", "name": "factor_b", "sharpe": 2.0, "ic": 0.04, "turnover": 0.4, "decay_6m": 0.2},
+        ]
+        signals, _, _ = synthesize_signals(factors, mode="sharpe_weight")
+        # factor_a sharpe 5.0 被截断为 3.0, factor_b 保持 2.0
+        total = 3.0 + 2.0
+        assert signals[0]["sharpe"] == 3.0  # 被截断
+        assert signals[0]["weight"] == pytest.approx(3.0 / total)
+        assert signals[1]["sharpe"] == 2.0  # 未被截断
+        # 原始值应保留在 _sharpe_raw
+        assert signals[0].get("_sharpe_raw") == 5.0
+
     def test_empty_factors(self):
         """空列表返回空。"""
         signals, max_corr, turnover = synthesize_signals([], mode="equal_weight")
@@ -503,6 +526,30 @@ class TestBuildCombo:
         combo = build_combo(signals, mode="equal_weight")
         total_w = sum(s["weight"] for s in combo["signals"] if s["retained"])
         assert total_w == pytest.approx(1.0)
+
+    def test_diversity_adjusted_sharpe(self):
+        """组合夏普使用 diversity-adjusted 加权（P0 过拟合修复）。"""
+        # 高度集中的权重：一个因子占 90%，另一个占 10%
+        signals = [
+            PortfolioSignal(
+                factor_id="f_a", name="a", weight=0.9,
+                sharpe=3.0, ic=0.06, turnover=0.3, decay_6m=0.1,
+                orthogonalized=True, retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="f_b", name="b", weight=0.1,
+                sharpe=1.0, ic=0.02, turnover=0.3, decay_6m=0.1,
+                orthogonalized=True, retained=True,
+            ),
+        ]
+        combo = build_combo(signals, mode="sharpe_weight")
+        # 加权夏普 = 0.9*3.0 + 0.1*1.0 = 2.8
+        # HHI = 0.9^2 + 0.1^2 = 0.82, effective_n = 1/0.82 ≈ 1.22
+        # diversity_factor = 1.22/2 ≈ 0.61
+        # combo_sharpe = 2.8 * 0.61 ≈ 1.71
+        assert combo["combo_sharpe"] < 2.8  # 应低于简单加权
+        assert combo["combo_sharpe"] > 0
+        assert "sharpe_warning" in combo
 
     def test_empty_signals(self):
         """空信号返回空组合。"""
@@ -907,6 +954,75 @@ class TestCoverageGaps:
             with pytest.raises(SystemExit):
                 exec("from fts.factor_engine.portfolio_loop import main; main()",
                      {"__name__": "__main__"})
+
+    # ── MIN_EVAL_DAYS 常量 ──
+
+    def test_min_eval_days_constant(self):
+        """MIN_EVAL_DAYS = 500（C 修复：扩展评价窗口）。"""
+        from fts.factor_engine.portfolio_loop import MIN_EVAL_DAYS
+        assert MIN_EVAL_DAYS == 500
+
+
+# ════════════════════════════════════════════════════════════
+# 11. Sharpe 随机化测试 (E 修复)
+# ════════════════════════════════════════════════════════════
+
+class TestSharpeRandomization:
+    """夏普随机化测试 — 基于 Dirichlet 权重验证高夏普是否来自真实预测能力。"""
+
+    def test_low_sharpe_skips_test(self):
+        """夏普 <= 2.5 时跳过随机化测试。"""
+        from fts.factor_engine.portfolio_loop import _run_sharpe_randomization_test
+        signals = [
+            PortfolioSignal(factor_id="f_a", name="a", weight=0.5, sharpe=2.0,
+                            ic=0.04, turnover=0.3, decay_6m=0.1,
+                            orthogonalized=True, retained=True),
+            PortfolioSignal(factor_id="f_b", name="b", weight=0.5, sharpe=1.5,
+                            ic=0.03, turnover=0.3, decay_6m=0.1,
+                            orthogonalized=True, retained=True),
+        ]
+        assert _run_sharpe_randomization_test(signals, n_shuffle=10) is True
+
+    def test_few_signals_skips_test(self):
+        """因子数 < 3 时跳过随机化测试。"""
+        from fts.factor_engine.portfolio_loop import _run_sharpe_randomization_test
+        signals = [
+            PortfolioSignal(factor_id="f_a", name="a", weight=1.0, sharpe=3.0,
+                            ic=0.06, turnover=0.3, decay_6m=0.1,
+                            orthogonalized=True, retained=True),
+        ]
+        assert _run_sharpe_randomization_test(signals, n_shuffle=10) is True
+
+    def test_zero_total_weight_skips(self):
+        """总权重为 0 时跳过随机化测试。"""
+        from fts.factor_engine.portfolio_loop import _run_sharpe_randomization_test
+        signals = [
+            PortfolioSignal(factor_id="f_a", name="a", weight=0.0, sharpe=3.0,
+                            ic=0.06, turnover=0.3, decay_6m=0.1,
+                            orthogonalized=True, retained=True),
+        ]
+        assert _run_sharpe_randomization_test(signals, n_shuffle=10) is True
+
+    def test_high_sharpe_with_retained_only(self):
+        """只使用 retained=True 的信号计算随机化测试。"""
+        from fts.factor_engine.portfolio_loop import _run_sharpe_randomization_test
+        signals = [
+            PortfolioSignal(factor_id="f_a", name="a", weight=0.4, sharpe=3.5,
+                            ic=0.07, turnover=0.3, decay_6m=0.1,
+                            orthogonalized=True, retained=True),
+            PortfolioSignal(factor_id="f_b", name="b", weight=0.3, sharpe=3.0,
+                            ic=0.06, turnover=0.3, decay_6m=0.1,
+                            orthogonalized=True, retained=True),
+            PortfolioSignal(factor_id="f_c", name="c", weight=0.3, sharpe=2.8,
+                            ic=0.05, turnover=0.3, decay_6m=0.1,
+                            orthogonalized=True, retained=True),
+            PortfolioSignal(factor_id="f_d", name="d", weight=0.0, sharpe=0.5,
+                            ic=0.01, turnover=0.3, decay_6m=0.1,
+                            orthogonalized=True, retained=False),
+        ]
+        # 不应报错，且返回 bool
+        result = _run_sharpe_randomization_test(signals, n_shuffle=50)
+        assert isinstance(result, bool)
 
 
 # ════════════════════════════════════════════════════════════

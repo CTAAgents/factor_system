@@ -147,7 +147,7 @@ python -m pytest tests/factor_engine/test_verifier.py -v
 |:-----|:---|
 | Total statements | 6200+ |
 | Overall coverage | 92%+ |
-| 测试用例数 | 1915+ passed, 0 failed, 0 skipped |
+| 测试用例数 | 2020+ passed, 0 failed, 0 skipped |
 | 测试文件数 | 51+ |
 | 种子因子数 | 563（YAML 化管理，19 个文件） |
 | 精英因子数 | 680（DuckDB 存储） |
@@ -320,7 +320,7 @@ TOTAL                                       6229    533    91%
 | `tests/factor_engine/test_micro_evolution.py` | ~8 | 微观演化（含 ImportError 覆盖） |
 | `tests/factor_engine/test_monitor.py` | ~45 | 因子引擎监控 |
 | `tests/monitor/test_logic_monitor.py` | ~15 | 逻辑监控仪表盘（漂移检测/极端预测/换月日） |
-| `tests/factor_engine/test_portfolio_loop.py` | ~72 | L3 组合循环（含粘性约束 5 + 漂移监控 7 + 影子池 6） |
+| `tests/factor_engine/test_portfolio_loop.py` | ~90 | L3 组合循环（含粘性约束 5 + 漂移监控 7 + 影子池 6 + 过拟合保护 6） |
 | `tests/factor_engine/test_program.py` | ~16 | Program.md |
 | `tests/factor_engine/test_seed_pool.py` | ~16 | 种子池（含 GTJA191） |
 | `tests/factor_engine/test_stress_test.py` | ~32 | 压力测试 |

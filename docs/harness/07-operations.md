@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.17.0
+> 版本: v2.19.0
 > 最后更新: 2026-08-07
 
 ---
@@ -9,9 +9,12 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
-| **v2.14.0** | 2026-08-06 | GAP-030 测试隔离根治：EvolutionLoop 新增 `factor_db_path` 注入点，test_evolution_loop.py 全部 run() 集成测试注入临时 DuckDB，杜绝测试写入真实 factor_catalog（此前每次全量回归写入约 44 条重复 seed 记录，fut_option_pcr 累计 267 条）；一次性清理 catalog 重复 seed 记录（保留每 name 最早一条 + 快照引用保护） |
+| **v2.19.0** | 2026-08-07 | P0/P1 过拟合修复：A. 组合夏普改为 diversity-adjusted 加权（HHI 权重集中度折扣）；B. 因子 Sharpe 上限截断 3.0（原始值保留 `_sharpe_raw`）；C. 评价窗口从 120d 扩展至 500d（`MIN_EVAL_DAYS=500`）；D. L3Verifier 新增 `max_sharpe=3.5` 过拟合保护检查；E. 随机化测试改为 Dirichlet 权重重采样；F. 质量卡 Sharpe>10 线性惩罚（Sharpe=20 归零）；修复 `build_combo` 中 `n_ret` 引用前赋值 bug；修复 `EvolutionLoop` 引用的已删除 `pipeline.FactorQualityInspection` 回归错误（`_QualityInspectionCompat` 兼容包装）；`test_portfolio_loop.py` 新增 6 测试用例，90 全绿；`test_factor_quality_card.py` 105 全绿 |
+| **v2.18.0** | 2026-08-07 | 因子家族多样性约束：`_promote_to_elite` 新增家族数量检查（`max_per_family=3`），限制单一家族因子过度繁殖；`BudgetConfig` 新增 `max_per_family` 字段；配置文档同步更新 |
 | **v2.17.0** | 2026-08-07 | 因子淘汰主流程集成：`FactorRepository.retire_factor()` 方法实现 DuckDB 状态更新 + JSON 文件迁移至 `_retired/` + 状态变迁记录；`monthly_decay_eval_job` 调用 `retire_factor()` 将 AutoRetireManager 标记的淘汰因子同步到主存储；修复 `update_factor`/`update_factor_status` DuckDB ART 索引 bug（DROP → UPDATE → 重建索引）；因子淘汰正式成为主流程环节 |
+| **v2.16.0** | 2026-08-06 | 孤立模块集成 Phase 2：清理 30+ 死代码文件（strategies/pipeline/data_cache 等）+ LogicMonitor 注册为每日 22:00 调度任务 + FactorInspector 注册为每日 03:00 调度任务 + ProcessWatchdog 集成到 SchedulerEngine.start_watchdog() 后台守护线程 + 文档同步 |
 | **v2.15.0** | 2026-08-06 | P0 修复：GP 演化/算子演化数据泄露（`train_mask` 隔离训练集适应度，阻止 OOS 数据泄漏）；IC 衰减硬编码修复（`_compute_decay_6m` 滑动窗口 IC 线性回归）；GAP-033 关闭；`test_evolution_loop.py` 128 测试全绿 |
+| **v2.14.0** | 2026-08-06 | GAP-030 测试隔离根治：EvolutionLoop 新增 `factor_db_path` 注入点，test_evolution_loop.py 全部 run() 集成测试注入临时 DuckDB，杜绝测试写入真实 factor_catalog（此前每次全量回归写入约 44 条重复 seed 记录，fut_option_pcr 累计 267 条）；一次性清理 catalog 重复 seed 记录（保留每 name 最早一条 + 快照引用保护） |
 | **v2.13.0** | 2026-08-06 | GAP-032 L2 晋升产物双写一致性：`_write_to_duckdb` 返回 bool（失败不再吞异常）；`_promote_to_elite` 严格一致——DuckDB（主存储）写入失败回滚已写 JSON 快照并判定晋升失败，杜绝"快照有、catalog 无"孤儿；一次性数据修复：补入 1 个真缺失演化产物（fut_mobile_big_data_g5）+ 归档 515 个同名重复快照至 `_archive/`；新增双写原子化测试 |
 | **v2.12.1** | 2026-08-06 | session_id 全链路补齐：`state.py` 新增 `generate_session_id()`（格式 `session_<8hex>_<timestamp>`，与 trace_id 同构）；`fts/cli.py` 入口 `main()` 生成 session_id 并挂载到 `args.session_id`，作用域为整个 CLI 会话；evolution/meta-loop/portfolio 子命令启动日志输出 session_id 作为日志聚合标识；02-lifecycle 章节 4 校正 trace_id/run_id 格式描述（`{prefix}_{8hex}_{timestamp}`）并补充 session_id 实现说明；新增 3 测试用例（CLI 挂载/输出 + state 格式） |
 | **v2.12.0** | 2026-08-06 | GAP-031 L1→L2 数据流打通：EvolutionLoop 启动时合并 L1 注入候选（`_merge_l1_candidates`，pending 门控 + market 过滤 + 名称去重 + 幂等更新 factor_pool.json pending→injected）；L1 `_inject_candidate` 注入时写入 market 标记；`SeedCandidate` 契约新增可选 `market` 字段；新增 `test_evolution_l1_merge.py` 8 用例全绿；业务流文档同步 L1→L2 衔接 |

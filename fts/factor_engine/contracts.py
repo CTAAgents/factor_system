@@ -282,6 +282,7 @@ class BudgetConfig(TypedDict, total=False):
     circuit_breaker_consecutive_low_ic: int      # 连续低 IC 熔断（默认 3）
     circuit_breaker_low_ic_threshold: float      # 低 IC 阈值（默认 0.01）
     circuit_breaker_failure_rate: float          # 失败率熔断（默认 0.95）
+    max_per_family: int                          # 单一家族最大精英因子数（默认 3）
 
 
 # ─── 默认配置常量 ─────────────────────────────────────────
@@ -309,6 +310,7 @@ DEFAULT_BUDGET_CONFIG: BudgetConfig = BudgetConfig(
     circuit_breaker_consecutive_low_ic=5,
     circuit_breaker_low_ic_threshold=0.005,
     circuit_breaker_failure_rate=0.95,
+    max_per_family=3,
 )
 """v1.1.0 默认预算配置 — 熔断触发后必须人类介入恢复。"""
 
@@ -555,6 +557,7 @@ class L3VerifierConfig(TypedDict, total=False):
     max_turnover: float           # 最大组合换手率（默认 0.50）
     max_decay_rate: float         # 最大衰减率（默认 0.30）
     min_n_factors: int            # 最少因子数（默认 3）
+    max_sharpe: float             # 最大组合夏普上限（默认 3.5，防止过拟合虚高）
 
 
 class L3MetaLoopState(TypedDict, total=False):
@@ -585,6 +588,7 @@ DEFAULT_L3_VERIFIER_CONFIG: L3VerifierConfig = L3VerifierConfig(
     max_turnover=0.50,
     max_decay_rate=0.30,
     min_n_factors=3,
+    max_sharpe=3.5,
 )
 """v1.1.0 锁定的 L3 Verifier 默认配置 — 不可在运行时修改。"""
 

@@ -116,6 +116,17 @@ class TestSharpeMapping:
     def test_sharpe_above_3(self) -> None:
         assert _map_sharpe_to_score(4.0) == 5.0
 
+    def test_sharpe_at_10(self) -> None:
+        """Sharpe=10 是惩罚边界，应得 5 分（P1 过拟合保护）。"""
+        assert _map_sharpe_to_score(10.0) == 5.0
+
+    def test_sharpe_above_10_penalty(self) -> None:
+        """Sharpe>10 时线性减分（P1 过拟合保护）。"""
+        assert _map_sharpe_to_score(12) == 4.0    # (12-10)*0.5=1.0 penalty → 5-1=4
+        assert _map_sharpe_to_score(15) == 2.5    # (15-10)*0.5=2.5 penalty → 5-2.5=2.5
+        assert _map_sharpe_to_score(20) == 0.0    # (20-10)*0.5=5.0 penalty → 5-5=0
+        assert _map_sharpe_to_score(25) == 0.0    # 惩罚上限 5.0
+
     def test_sharpe_between_05_and_15(self) -> None:
         score = _map_sharpe_to_score(1.0)
         assert 1.0 <= score <= 3.0

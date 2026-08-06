@@ -1,7 +1,7 @@
 # FTS 晋级计划
 
-> 版本: v2.16.0
-> 最后更新: 2026-08-06
+> 版本: v2.19.0
+> 最后更新: 2026-08-07
 > 状态: 活跃 — 随项目迭代持续更新
 
 ---
@@ -341,7 +341,9 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 ## 4. 版本历史
 
 | 版本 | 日期 | 说明 |
-|:-----|:-----|:-----|
+|:-----|:-----|:-----|| **v2.19.0** | 2026-08-07 | P0/P1 过拟合修复：A. combosharp  diversity-adjusted 加权；B. 因子 Sharpe 上限截断 3.0；C. 评价窗口 120d→500d；D. L3Verifier max_sharpe=3.5；E. Dirichlet 随机化测试；F. 质量卡 Sharpe>10 惩罚；修复 `build_combo` `n_ret` 赋值顺序 bug；修复 `EvolutionLoop` pipeline 引用回归；`test_portfolio_loop.py` 90 全绿 |
+| **v2.18.0** | 2026-08-07 | 因子家族多样性约束：`_promote_to_elite` 新增家族数量检查（`max_per_family=3`），限制单一家族因子过度繁殖；`BudgetConfig` 新增 `max_per_family` 字段；配置文档同步更新 |
+| **v2.17.0** | 2026-08-07 | 因子淘汰主流程集成：`FactorRepository.retire_factor()` DuckDB 状态更新 + JSON 迁移 _retired/ + 状态变迁记录；`monthly_decay_eval_job` 调用 `retire_factor()`；修复 DuckDB ART 索引 bug |
 | **v2.16.0** | 2026-08-06 | 孤立模块集成 Phase 2：`LogicMonitor`/`FactorInspector` 注册为定时任务（每日 22:00/03:00）；`ProcessWatchdog` 集成到 `SchedulerEngine`；任务注册表增至 8 个任务 |
 | **v2.15.0** | 2026-08-06 | P0 修复：GP 演化/算子演化数据泄露（`train_mask` 隔离训练集）；IC 衰减硬编码修复（`_compute_decay_6m` 滑动窗口 IC 线性回归）；GAP-033 关闭 |
 | **v2.14.0** | 2026-08-06 | GAP-030 测试隔离根治：EvolutionLoop `factor_db_path` 注入点 + run() 测试隔离 DuckDB + catalog 重复 seed 清理 |
