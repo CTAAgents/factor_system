@@ -445,7 +445,7 @@ class SeedPool:
         from .seed_data_futures_full import get_futures_full_seed_count
         from .seed_data.loader import get_external_seed_count
 
-        wq, ql, gj, fd, ext_total = get_external_seed_count()
+        wq, ql, gj, fd, jq, ext_total = get_external_seed_count()
         futures_total = get_futures_full_seed_count()
         stock_internal = len(_SEED_DEFINITIONS)
         stock_total = stock_internal + ext_total
@@ -456,6 +456,7 @@ class SeedPool:
             "stock_qlib158": ql,
             "stock_gtja191": gj,
             "stock_fundamental": fd,
+            "stock_jq": jq,
             "stock_external_total": ext_total,
             "stock_total": stock_total,
             "futures_total": futures_total,
@@ -464,8 +465,8 @@ class SeedPool:
         # ── 关键日志: 动态种子统计快照 ──
         logger.info(
             "[SeedPool.get_seed_counts] 动态统计: 期货=%d (14 家族) | "
-            "股票=9 内置 + %d 外部 (WQ101=%d, Qlib158=%d, GTJA191=%d, 基本面=%d) = %d",
-            futures_total, ext_total, wq, ql, gj, fd, stock_total,
+            "股票=9 内置 + %d 外部 (WQ101=%d, Qlib158=%d, GTJA191=%d, 基本面=%d, JQ=%d) = %d",
+            futures_total, ext_total, wq, ql, gj, fd, jq, stock_total,
         )
         return counts
 

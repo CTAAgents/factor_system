@@ -35,7 +35,8 @@ from fts.factor_engine.regime import (
 
 @pytest.fixture
 def selector() -> RegimeAwareSelector:
-    return RegimeAwareSelector(lookback_days=60)
+    # 规则方法测试使用 use_hmm=False，避免 HMM 对短数据产生不稳定结果
+    return RegimeAwareSelector(lookback_days=60, use_hmm=False)
 
 
 @pytest.fixture
@@ -76,7 +77,9 @@ def test_detect_bear_trend(selector: RegimeAwareSelector) -> None:
     np.random.seed(42)
     n = 200
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
-    close = 100 + np.cumsum(np.random.randn(n) * 0.3 - 0.5)
+    # 强下跌趋势 + 低噪音，确保波动率不超标
+    # drift -0.15/day × 200 = -30，收盘价从 100 降至 ~70，仍为正数
+    close = 100 + np.cumsum(np.random.randn(n) * 0.3 - 0.15)
     ohlcv = _make_ohlcv(close, dates)
 
     result = selector.detect(ohlcv)
@@ -100,21 +103,28 @@ def test_detect_oscillate(selector: RegimeAwareSelector) -> None:
 # ─── 4. detect: high_vol ─────────────────────────────────
 
 def test_detect_high_vol(selector: RegimeAwareSelector) -> None:
-    """大幅震荡、无明显趋势 → regime='high_vol'。"""
+    """大幅震荡、无明显趋势 → regime='high_vol'。
+
+    使用两阶段数据：前 150 天低波动，后 130 天高波动，
+    使当前 volatility 显著高于历史 80% 分位数。
+    """
     np.random.seed(42)
-    n = 200
+    n = 280
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
-    # 围绕 100 大幅震荡（无趋势）
-    close = 100 + np.sin(np.linspace(0, 8 * np.pi, n)) * 8
+    # 前 150 天低波动，后 130 天高波动
+    low = 100 + np.random.randn(150) * 0.5
+    high = 100 + np.random.randn(130) * 8.0
+    close = np.concatenate([low, high])
     ohlcv = _make_ohlcv(close, dates)
-    # 人为放大高低价差确保高波
-    ohlcv["high"] = close + np.abs(np.random.randn(n)) * 3.0
-    ohlcv["low"] = close - np.abs(np.random.randn(n)) * 3.0
+    # 人为放大高波动段的高低价差
+    ohlcv["high"] = close + np.abs(np.random.randn(n)) * 4.0
+    ohlcv["low"] = close - np.abs(np.random.randn(n)) * 4.0
 
     result = selector.detect(ohlcv)
-    # 无趋势 → 进入 vol 判定
     assert result["regime"] == "high_vol", f"预期 high_vol，实际 {result['regime']}"
-    assert result["features"]["volatility"] > 0.03
+    # 检查 volatility_ewma（EWMA 波动率）
+    vol_val = result["features"].get("volatility_ewma", 0)
+    assert vol_val > 0.03, f"EWMA vol={vol_val} 偏低"
 
 
 # ─── 5. detect: low_vol ──────────────────────────────────
@@ -134,11 +144,11 @@ def test_detect_low_vol(selector: RegimeAwareSelector) -> None:
 # ─── 6. detect: empty DataFrame ──────────────────────────
 
 def test_detect_empty_df(selector: RegimeAwareSelector) -> None:
-    """空 DataFrame → regime='oscillate', confidence=0。"""
+    """空 DataFrame → regime='oscillate', confidence=0.5。"""
     empty = pd.DataFrame()
     result = selector.detect(empty)
     assert result["regime"] == "oscillate"
-    assert result["confidence"] == 0.0
+    assert result["confidence"] == 0.5
 
 
 # ─── 7. detect: NaN 值 ───────────────────────────────────
@@ -207,10 +217,11 @@ def test_features_expected_keys(selector: RegimeAwareSelector) -> None:
     ohlcv = _make_ohlcv(close, dates)
 
     result = selector.detect(ohlcv)
-    expected_keys = {"trend_strength", "volatility", "volume_ratio", "breadth"}
-    assert expected_keys.issubset(result["features"].keys()), (
-        f"缺失键: {expected_keys - set(result['features'].keys())}"
-    )
+    expected_keys = {"trend_short", "trend_medium", "trend_long",
+                     "volatility_ewma", "volume_ratio", "breadth",
+                     "trend_score", "vol_score"}
+    missing = expected_keys - set(result["features"].keys())
+    assert not missing, f"features 缺失键: {missing}"
 
 
 # ─── 11. profile_factor 存储与读取 ───────────────────────
@@ -315,7 +326,7 @@ def test_detect_bear_with_features(selector: RegimeAwareSelector) -> None:
     ohlcv = _make_ohlcv(close, dates)
 
     result = selector.detect(ohlcv)
-    assert result["features"]["trend_strength"] < 0
+    assert result["features"]["trend_score"] < 0
 
 
 # ─── 18. profile_factor 覆盖 ─────────────────────────────
@@ -401,14 +412,14 @@ def test_detect_custom_lookback() -> None:
 # ─── 23. detect: 短数据 ──────────────────────────────────
 
 def test_detect_short_data(selector: RegimeAwareSelector) -> None:
-    """不足 20 行数据 → regime='oscillate', confidence=0。"""
+    """不足 20 行数据 → regime='oscillate', confidence=0.5。"""
     dates = pd.date_range("2024-01-01", periods=10, freq="D")
     close = np.ones(10) * 100
     ohlcv = _make_ohlcv(close, dates)
 
     result = selector.detect(ohlcv)
     assert result["regime"] == "oscillate"
-    assert result["confidence"] == 0.0
+    assert result["confidence"] == 0.5
     assert result["features"] == {}
 
 

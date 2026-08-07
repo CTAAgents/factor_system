@@ -219,28 +219,29 @@ def migrate_schema(db_path: str | Path) -> dict[str, int]:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
+    import duckdb
+
+    columns_added = 0
+    tables_created = 0
+    indexes_created = 0
+
     con = duckdb.connect(str(db_path))
     try:
         # 1) kline_cache 处理：旧版扩列 / 不存在则创建
-        columns_added = 0
         if _table_exists(con, "kline_cache"):
-            # 旧版表：ALTER 追加缺失的 8 列
             columns_added = _add_missing_columns(
                 con, "kline_cache", KLINE_CACHE_NEW_COLUMNS
             )
         else:
-            # 全新 DB：按 17 列 schema 一次性创建（不算 columns_added）
             con.execute(KLINE_CACHE_CREATE_DDL)
 
         # 2) edb_cache / option_chain_cache：IF NOT EXISTS
-        tables_created = 0
         if _create_table_if_absent(con, "edb_cache", EDB_CACHE_DDL):
             tables_created += 1
         if _create_table_if_absent(con, "option_chain_cache", OPTION_CHAIN_CACHE_DDL):
             tables_created += 1
 
         # 3) 索引：IF NOT EXISTS
-        indexes_created = 0
         index_ddl = (
             "CREATE INDEX IF NOT EXISTS idx_kline_symbol_date_source "
             "ON kline_cache(symbol, date, source)"

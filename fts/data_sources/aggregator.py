@@ -229,7 +229,20 @@ class FuturesDataAggregator:
                 self._record_failure(enhancer.source_name, str(e))
         return df
 
-    # ─── DuckDB 缓存 ──
+    # ─── DuckDB 缓存（单连接模式，避免 read_only 冲突）──
+
+    def _get_cache_conn(self):
+        """获取或创建持久化 DuckDB 连接。"""
+        if self.db_path is None:
+            return None
+        if not hasattr(self, "_cache_conn") or self._cache_conn is None:
+            try:
+                import duckdb
+                self._cache_conn = duckdb.connect(str(self.db_path))
+            except Exception as e:
+                logger.warning("[cache] DuckDB 连接失败: %s", e)
+                return None
+        return self._cache_conn
 
     def _try_cache(
         self,
@@ -240,11 +253,8 @@ class FuturesDataAggregator:
         if self.db_path is None or not self.db_path.exists():
             return None
 
-        try:
-            import duckdb
-            con = duckdb.connect(str(self.db_path), read_only=True)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("[cache] DuckDB 连接失败: %s", e)
+        con = self._get_cache_conn()
+        if con is None:
             return None
 
         try:
@@ -272,42 +282,42 @@ class FuturesDataAggregator:
         except Exception as e:  # noqa: BLE001
             logger.warning("[cache] 读取失败: %s", e)
             return None
-        finally:
-            con.close()
 
     def _write_cache(self, df: pd.DataFrame) -> None:
         """将 K 线写入 DuckDB 缓存。失败不抛异常（缓存是次要路径）。"""
         if self.db_path is None or df.empty:
             return
+        # 确保 schema 已迁移
         try:
-            import duckdb
-            con = duckdb.connect(str(self.db_path))
-            try:
-                # 确保 schema 已迁移
-                from fts.data_sources.migrate import migrate_schema
-                migrate_schema(self.db_path)
-                con.register("df_new", df)
-                # 显式列 + CAST(date AS VARCHAR)：双 schema 兼容
-                # - 新 schema（date DATE）：CAST 转为 'YYYY-MM-DD' 字符串
-                # - 老 schema（date VARCHAR）：CAST 透传，零成本
-                con.execute(
-                    """
-                    INSERT INTO kline_cache (
-                        symbol, period, date, open, high, low, close,
-                        volume, amount, hold, settle, pre_settle, oi_change, vwap,
-                        source, fetched_at, trace_id
-                    )
-                    SELECT
-                        symbol, period, CAST(date AS VARCHAR) AS date,
-                        open, high, low, close,
-                        volume, amount, hold, settle, pre_settle, oi_change, vwap,
-                        source, fetched_at, trace_id
-                    FROM df_new
-                    """
+            from fts.data_sources.migrate import migrate_schema
+            migrate_schema(self.db_path)
+        except Exception as e:
+            logger.warning("[cache] migrate_schema 失败: %s", e)
+
+        con = self._get_cache_conn()
+        if con is None:
+            return
+        try:
+            con.register("df_new", df)
+            # 显式列 + CAST(date AS VARCHAR)：双 schema 兼容
+            # - 新 schema（date DATE）：CAST 转为 'YYYY-MM-DD' 字符串
+            # - 老 schema（date VARCHAR）：CAST 透传，零成本
+            con.execute(
+                """
+                INSERT INTO kline_cache (
+                    symbol, period, date, open, high, low, close,
+                    volume, amount, hold, settle, pre_settle, oi_change, vwap,
+                    source, fetched_at, trace_id
                 )
-                con.unregister("df_new")
-            finally:
-                con.close()
+                SELECT
+                    symbol, period, CAST(date AS VARCHAR) AS date,
+                    open, high, low, close,
+                    volume, amount, hold, settle, pre_settle, oi_change, vwap,
+                    source, fetched_at, trace_id
+                FROM df_new
+                """
+            )
+            con.unregister("df_new")
         except Exception as e:  # noqa: BLE001
             logger.warning("[cache] 写入失败: %s", e)
 
@@ -560,6 +570,18 @@ class FuturesDataAggregator:
             alerts = self.cross_check(symbol, date_str, trace_id=trace_id)
             all_alerts.extend(alerts)
         return all_alerts
+
+    # ─── 资源清理 ──
+
+    def close(self) -> None:
+        """关闭持久连接。"""
+        conn = getattr(self, "_cache_conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._cache_conn = None
 
 
 __all__ = ["FuturesDataAggregator", "BreakerState"]

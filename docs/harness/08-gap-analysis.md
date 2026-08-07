@@ -1,7 +1,7 @@
 # FTS 差距分析
 
-> 版本: v2.15.0
-> 最后更新: 2026-08-06 (v2.15.0 P0 数据泄露与 IC 衰减修复)
+> 版本: v2.22.0
+> 最后更新: 2026-08-07 (v2.22.0 统一版本号管理)
 > 状态: 活跃 — 随项目迭代持续更新
 
 ---
@@ -45,7 +45,7 @@
 | GAP-008 | `data.py`, `data_mcp.py`, `pyproject.toml` | 数据源从 Data-Core 迁移至 MCP/akshare，移除期货因子演化 | 消除 Data-Core 外部依赖，简化部署，仅保留 A 股/ETF 因子演化 | 立即 | ✅ 已关闭 |
 | GAP-009 | `evolution_loop.py` | 种子因子评估计入熔断计数器，导致高失败率提前熔断 | 种子因子大量失败拉高失败率，触发熔断，演化无法正常进行 | 立即 | ✅ 已关闭 |
 | GAP-010 | `docs/harness/09-advancement-plan.md` | 晋级计划文档未同步至 v1.1.0，里程碑记录停留在 v0.3.0 | 历史里程碑缺失，项目状态不透明 | 1 月内 | ✅ 已关闭 |
-| GAP-011 | `docs/execution_modes_flowchart.md`, `docs/business_flow.md` | 流程文档缺失，执行模式流程图和业务流程图未创建 | 系统执行流程不透明，新成员难以理解系统运行方式 | 3 月内 | ✅ 已关闭 |
+| GAP-011 | `execution_modes_flowchart.md`, `business_flow.md` | 流程文档缺失，执行模式流程图和业务流程图未创建 | 系统执行流程不透明，新成员难以理解系统运行方式 | 3 月内 | ✅ 已关闭 |
 | GAP-012 | `agents/*.md` | 角色职责文档缺失，未定义各 Agent 的职责边界和能力范围 | 多 Agent 协作时职责不清，可能导致越界操作 | 3 月内 | ✅ 已关闭 |
 | GAP-013 | `plans/production_plan.md` | 生产就绪计划缺失，生产部署、监控告警、容器化等方案未文档化 | 生产环境部署缺乏标准化流程，运维风险高 | 3 月内 | ✅ 已关闭 |
 | GAP-014 | `scripts/verify_doc_consistency.py` | 文档一致性检查脚本缺失，无法自动校验代码与文档的映射关系 | 文档与代码容易脱节，Harness 规范第 13 项检查无法自动化 | 3 月内 | ✅ 已关闭 |
@@ -123,9 +123,9 @@
 
 ### GAP-011: 流程文档缺失（已关闭）
 
-- **问题描述**: `../execution_modes_flowchart.md`（执行模式流程图）和 `../business_flow.md`（业务流程图）均未创建
+- **问题描述**: `execution_modes_flowchart.md`（执行模式流程图）和 `business_flow.md`（业务流程图）均未创建
 - **影响范围**: 新成员无法快速理解系统执行流程，跨模块调试时缺乏全局视图
-- **解决方式**: 已创建 `../execution_modes_flowchart.md`（CLI/Scheduler/Monitor 三种执行模式）和 `../business_flow.md`（L0→L1→L2→L3→交易信号全景业务流）
+- **解决方式**: 已创建 `execution_modes_flowchart.md`（CLI/Scheduler/Monitor 三种执行模式）和 `business_flow.md`（L0→L1→L2→L3→交易信号全景业务流）
 - **验证结果**: 文档结构完整，包含 ASCII 流程图和模块映射，与 `01-architecture.md` 架构定义一致
 
 ### GAP-012: 角色职责文档缺失（已关闭）

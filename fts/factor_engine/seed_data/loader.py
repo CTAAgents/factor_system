@@ -399,25 +399,70 @@ def load_fundamental_seeds(trace_id: str | None = None) -> list[FactorProgram]:
     return result
 
 
+def load_jq_seeds(trace_id: str | None = None) -> list[FactorProgram]:
+    """加载聚宽(JoinQuant)因子种子。"""
+    from .jq_factors import JQ_DEFINITIONS
+
+    result: list[FactorProgram] = []
+    for defn in JQ_DEFINITIONS:
+        if "field_defs" in defn:
+            # 基本面因子 → 使用 fundamental 模板
+            fp = make_fundamental_program(
+                name=defn["name"],
+                field_defs=defn["field_defs"],
+                field_check=defn["field_check"],
+                expression=defn["expression"],
+                narrative=defn.get("narrative", "JQ因子"),
+                theory=defn.get("theory", 4),
+                behavioral=defn.get("behavioral", 3),
+                microstructure=defn.get("microstructure", 3),
+                institutional=defn.get("institutional", 3),
+                params=defn.get("params", {}),
+                lookback=defn.get("lookback", 1),
+                input_fields=defn.get("input_fields", ["close"]),
+                trace_id=trace_id,
+            )
+        else:
+            # 量价因子 → 使用 alpha ops 模板
+            fp = make_factor_program(
+                name=defn["name"],
+                expression=defn["expression"],
+                narrative=defn.get("narrative", "JQ因子"),
+                theory=defn.get("theory", 4),
+                behavioral=defn.get("behavioral", 3),
+                microstructure=defn.get("microstructure", 3),
+                institutional=defn.get("institutional", 3),
+                params=defn.get("params", {}),
+                lookback=defn.get("lookback"),
+                input_fields=defn.get("input_fields"),
+                trace_id=trace_id,
+            )
+        result.append(fp)
+    return result
+
+
 def load_all_external_seeds(trace_id: str | None = None) -> list[FactorProgram]:
-    """加载所有外部种子因子（量价 + 基本面）。"""
+    """加载所有外部种子因子（量价 + 基本面 + JQ）。"""
     return (
         load_wq101_seeds(trace_id)
         + load_qlib158_seeds(trace_id)
         + load_gtja191_seeds(trace_id)
         + load_fundamental_seeds(trace_id)
+        + load_jq_seeds(trace_id)
     )
 
 
-def get_external_seed_count() -> tuple[int, int, int, int, int]:
-    """返回 (wq101_count, qlib158_count, gtja191_count, fundamental_count, total_count)。"""
+def get_external_seed_count() -> tuple[int, int, int, int, int, int]:
+    """返回 (wq101_count, qlib158_count, gtja191_count, fundamental_count, jq_count, total_count)。"""
     from .wq101 import WQ101_DEFINITIONS
     from .qlib158 import QLIB158_DEFINITIONS
     from .gtja191 import GTJA191_DEFINITIONS
     from .fundamental_seeds import FUNDAMENTAL_DEFINITIONS
+    from .jq_factors import JQ_DEFINITIONS
 
     wq = len(WQ101_DEFINITIONS)
     ql = len(QLIB158_DEFINITIONS)
     gj = len(GTJA191_DEFINITIONS)
     fd = len(FUNDAMENTAL_DEFINITIONS)
-    return (wq, ql, gj, fd, wq + ql + gj + fd)
+    jq = len(JQ_DEFINITIONS)
+    return (wq, ql, gj, fd, jq, wq + ql + gj + fd + jq)

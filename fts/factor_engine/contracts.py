@@ -612,7 +612,7 @@ class StickyConfig(TypedDict, total=False):
 
 
 DEFAULT_STICKY_CONFIG: StickyConfig = StickyConfig(
-    enabled=True,
+    enabled=False,
     max_delta=0.30,
     new_factor_cap=0.10,
 )

@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.21.0
+> 版本: v2.23.0
 > 最后更新: 2026-08-07
 
 ---
@@ -9,6 +9,7 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.23.0** | 2026-08-07 | 新增 seed_lineage 种子溯源表（L0→L2 全链路）：schema.py 新增第 12 张表 seed_lineage（lineage_id/seed_name/seed_family/seed_market/evolved_factor_id/evolved_factor_name/generation/parent_id/trace_id/promoted_at + 4 索引）；verify_database 新增 seed_lineage 统计（行数/家族分布）；迁移脚本 scripts/migrate_add_seed_lineage.py（幂等，支持 --dry-run）；01-architecture 文档同步表数 11→12 |
 | **v2.22.0** | 2026-08-07 | L1 候选因子评分缺陷修复 4 项：P1 经济逻辑评分默认值统一为 3（evaluation_chain.py evaluate_economic_logic 默认值 0→3，evolution_loop.py _merge_l1_candidates 预填默认值）；P2 换手率缺失保护（L1 候选因子 turnover=0 时默认 0.5）；P3 种子因子 WalkForward 缺失补全（轻量 2 窗口验证）；P4 评分映射函数可配置化（factor_quality_card.py 从 config 读取阈值，factor_quality_card_config.py 扩展 to_factor_quality_card_config 输出）；150 测试全绿 |
 | **v2.21.0** | 2026-08-07 | 存储方案优化 4 项：P1 _promote_to_elite 去重仅依赖 DuckDB 权威数据源，移除冗余 JSON 文件 glob 扫描；P2 新增 oversub-type 参数；P3 晋升/淘汰操作自动写 catalog_consistency.jsonl 一致性日志；P4 ART 索引 workaround 添加 DROP/CREATE 计数器日志；新增 `fts catalog stats/verify/backup` CLI 命令组；11 测试全绿 |
 | **v2.20.2** | 2026-08-07 | 修复 Step 7.5 质量报告 DuckDB 失败：`_generate_quality_report` 新增 DuckDB C 扩展加载失败时 combo 文件回退机制（双路径 A→B），增加异常堆栈 debug 日志和报告 source 字段标记数据来源；90 测试全绿 |
@@ -278,12 +279,31 @@ pip install apscheduler
 | MINOR | v0.2.0 | 功能新增 / 阶段完成 |
 | PATCH | v0.1.1 | bug 修复 / 文档更新 |
 
+### 版本号统一管理规范（v2.22.0+）
+
+FTS 从 v2.22.0 起使用 **单一真实源（Single Source of Truth）** 管理版本号：
+
+1. **唯一源头**：`pyproject.toml` 中的 `version` 字段
+2. **代码动态读取**：`fts/__init__.py` 通过 `tomllib`/`tomli` 从 `pyproject.toml` 读取，避免手动同步
+3. **文档自动同步**：`scripts/update_doc_versions.py` 自动扫描并更新所有 Harness 文档的版本头
+4. **CI 检查**：`scripts/verify_doc_consistency.py` 内置版本号一致性检查，commit 前自动执行
+
+**操作流程**：
+```bash
+# 1. 修改版本号（仅需修改 pyproject.toml）
+# 2. 同步文档版本号
+python scripts/update_doc_versions.py --apply
+# 3. 验证一致性
+python scripts/verify_doc_consistency.py
+python scripts/verify_doc_consistency.py --fix-versions  # 自动修复版本号不一致
+```
+
 ---
 
 ## 一致性元数据
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `fts/__init__.py` __version__ = "2.16.0"；`pyproject.toml` version = "2.16.0"；`fts/factor_engine/contracts.py` STATE_SCHEMA_VERSION = "1" |
-| 可验证断言 | 版本号 v2.16.0 在 fts/__init__.py 和 pyproject.toml 中一致 |
-| 检验方式 | `python -c "import fts; assert fts.__version__ == '2.16.0'; from fts.factor_engine.contracts import STATE_SCHEMA_VERSION; assert STATE_SCHEMA_VERSION == '1'"` |
+| 代码→文档映射 | `pyproject.toml` version = "2.22.0"（单一真实源）；`fts/__init__.py` 动态读取；`fts/factor_engine/contracts.py` EVOLUTION_VERSION 动态读取；`scripts/update_doc_versions.py` 自动同步文档版本 |
+| 可验证断言 | 版本号 v2.22.0 在 pyproject.toml 中定义，fts/__init__.py 动态读取，所有 Harness 文档版本头一致 |
+| 检验方式 | `python -c "from fts import __version__; assert __version__ == '2.22.0'"`；`python scripts/update_doc_versions.py --check`；`python scripts/verify_doc_consistency.py` |

@@ -819,6 +819,7 @@ def orthogonalize_factors(
     factors: list[dict[str, Any]] | None = None,
     use_tiered: bool = False,
     l2_prior_correlations: list[dict[str, Any]] | None = None,
+    signal_matrix: dict[str, dict[str, np.ndarray]] | None = None,
 ) -> list[PortfolioSignal]:
     """因子正交化 — 剔除相关性 > threshold 的因子 + 代码去重 + L2 先验注入。
 
@@ -835,6 +836,8 @@ def orthogonalize_factors(
         factors: 因子元数据列表
         use_tiered: 是否使用分层正交化（因子数>=30时推荐）
         l2_prior_correlations: L2 种子因子相关性预检结果（先验数据）
+        signal_matrix: 因子信号矩阵（可选，Phase 2 相关性分析需要时传入）
+                      结构: {factor_name: {symbol: signal_array}}
     """
     # ── 注入 L2 先验标记（所有模式通用）──
     if l2_prior_correlations:
@@ -861,8 +864,9 @@ def orthogonalize_factors(
                         len(factors), max_corr_threshold)
             optimizer = FactorOptimizer()
             result_factors, summary = optimizer.tiered_orthogonalize(
-                factors, max_corr_threshold=max_corr_threshold, mode="mark",
+                factors, max_corr_threshold=max_corr_threshold, mode="remove",
                 l2_prior_correlations=l2_prior_correlations,
+                signal_matrix=signal_matrix,
             )
 
             # 只根据 exclude_from_portfolio 硬排除（仅限代码重复场景）
@@ -1261,7 +1265,7 @@ def build_combo(
     weighted_sharpe = sum(s.get("weight", 0) * s.get("sharpe", 0) for s in retained)
     hhi = sum(s.get("weight", 0) ** 2 for s in retained)
     effective_n = 1.0 / hhi if hhi > 0 else float(n_ret)
-    diversity_factor = min(1.0, effective_n / n_ret)
+    diversity_factor = min(1.0, (effective_n / n_ret) ** 0.5)
     combo_sharpe = weighted_sharpe * diversity_factor
     combo_turnover = sum(s.get("turnover", 0) for s in retained) / n_ret
     

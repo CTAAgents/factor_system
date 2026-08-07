@@ -444,10 +444,10 @@ class TestRegimeEdgeCases:
         })
         regime = selector.detect(df)
         assert regime["regime"] == "oscillate"
-        assert regime["confidence"] == 0.0
+        assert regime["confidence"] == 0.5
 
     def test_close_insufficient_after_dropna(self):
-        """dropna 后 close 少于 20 个应返回兜底 regime。"""
+        """dropna 后 close 少于 20 个应返回兜底 regime（confidence=0.5）。"""
         from fts.factor_engine.regime import RegimeAwareSelector
         selector = RegimeAwareSelector()
 
@@ -461,7 +461,7 @@ class TestRegimeEdgeCases:
         })
         regime = selector.detect(df)
         assert regime["regime"] == "oscillate"
-        assert regime["confidence"] == 0.0
+        assert regime["confidence"] == 0.5
 
     def test_regime_no_performance_record(self):
         """regime 无表现记录时应保留因子（line 225）。"""

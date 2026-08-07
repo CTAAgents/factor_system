@@ -12,8 +12,8 @@ from fts.factor_engine.seed_data.loader import (
 )
 
 # 验证计数
-wq, ql, gj, fd, total = get_external_seed_count()
-print(f"External seed count: WQ={wq}, Qlib={ql}, GTJA={gj}, Fundamental={fd}, Total={total}")
+wq, ql, gj, fd, jq, total = get_external_seed_count()
+print(f"External seed count: WQ={wq}, Qlib={ql}, GTJA={gj}, Fundamental={fd}, JQ={jq}, Total={total}")
 
 # 加载 WQ 101
 wq_seeds = load_wq101_seeds()

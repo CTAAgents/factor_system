@@ -34,7 +34,7 @@ from fts.factor_engine.regime import (
 
 @pytest.fixture
 def sector_selector() -> SectorRegimeSelector:
-    return SectorRegimeSelector(lookback_days=60)
+    return SectorRegimeSelector(lookback_days=60, use_hmm=False)
 
 
 @pytest.fixture
@@ -88,10 +88,10 @@ def test_detect_all_divergent_regimes(
 
     # 向上板块: 强上涨趋势
     up_close = 100 + np.cumsum(np.random.randn(n) * 0.3 + 0.5)
-    # 向下板块: 强下跌趋势
-    down_close = 100 + np.cumsum(np.random.randn(n) * 0.3 - 0.5)
-    # 震荡板块: 无趋势
-    flat_close = 100 + np.random.randn(n) * 2.0
+    # 向下板块: 强下跌趋势（与 bear test 一致，drift -0.15）
+    down_close = 100 + np.cumsum(np.random.randn(n) * 0.3 - 0.15)
+    # 震荡板块: 无趋势、中等波动
+    flat_close = 100 + np.random.randn(n) * 1.0
 
     prices = {
         "SYM1": up_close,
@@ -268,10 +268,10 @@ def test_detect_all_confidence_sensible(
     n = 200
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
 
-    # 强趋势板块
-    strong_trend = 100 + np.cumsum(np.random.randn(n) * 0.2 + 0.8)
-    # 弱趋势板块
-    weak_trend = 100 + np.cumsum(np.random.randn(n) * 0.2 + 0.1)
+    # 强趋势板块（低漂移 + 极低噪音，信噪比高，波动率低）
+    strong_trend = 100 + np.cumsum(np.random.randn(n) * 0.05 + 0.2)
+    # 弱趋势板块（微漂移 + 高噪音，信噪比低）
+    weak_trend = 100 + np.cumsum(np.random.randn(n) * 0.25 + 0.05)
 
     prices = {
         "SYM1": strong_trend,

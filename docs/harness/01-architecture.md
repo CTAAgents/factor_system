@@ -264,7 +264,7 @@ fts/
     ├── hotswap.py              # 热更新支持
     └── watchdog.py             # 看门狗进程
 ├── factor_db/                   # DuckDB 因子数据库层
-    ├── schema.py               # 数据库 Schema 定义（11 张表，含质量评分/状态历史/审计报告/反馈 4 表）
+    ├── schema.py               # 数据库 Schema 定义（12 张表，含质量评分/状态历史/审计报告/反馈 4 表 + seed_lineage 溯源）
     ├── repository.py           # FactorRepository CRUD（含 `retire_factor()` 因子淘汰方法）
     ├── quality_repository.py   # FactorQualityScoreRepository（质量评分持久化）
     ├── status_repository.py    # FactorStatusRepository（生命周期状态历史，记录状态变迁日志）

@@ -1,0 +1,1707 @@
+"""
+seed_data/jq_factors.py — 聚宽(JoinQuant)因子库种子定义
+
+从聚宽官方文档整理，包含风格因子、基础科目、质量因子、情绪因子、
+成长因子、每股指标、动量因子、估值因子及技术分析指标。
+
+来源: https://www.joinquant.com/help/api/help?name=factor_values
+      https://www.joinquant.com/help/api/help?name=technicalanalysis
+
+数据依赖:
+    基本面因子通过 FundamentalProvider 注入的字段消费。
+    量价因子通过 KlineProvider 注入的 OHLCV 数据消费。
+
+版本: v1.0.0 (去重后共 163 个因子)
+"""
+
+from __future__ import annotations
+from typing import Any
+
+
+# ─── 因子定义 ─────────────────────────────────────────────
+
+JQ_DEFINITIONS: list[dict[str, Any]] = [
+    # 共 163 个因子（去重后）
+
+    # ── beta: 贝塔因子：股票相对于市场的波动敏感度 ──
+    {
+        "name": "beta",
+        "narrative": "贝塔因子：股票相对于市场的波动敏感度",
+        "field_defs": "returns_vol = np.std(returns)",
+        "field_check": "returns_vol is not None and len(returns_vol) > 0",
+        "expression": "np.tanh(returns_vol * 10)",
+        "input_fields": ['close'],
+        "lookback": 65,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── book_to_price_ratio: 市净率因子：估值高低产生的收益差异（价值因子） ──
+    {
+        "name": "book_to_price_ratio",
+        "narrative": "市净率因子：估值高低产生的收益差异（价值因子）",
+        "field_defs": "pb = data['pb'].values if hasattr(data, 'pb') else data.get('pb')",
+        "field_check": "pb is not None and len(pb) > 0",
+        "expression": "np.tanh(1.0 / (np.maximum(pb, 0.1) / 2.0))",
+        "input_fields": ['pb'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── earnings_yield: 盈利预期因子：盈利收益导致的收益差异 ──
+    {
+        "name": "earnings_yield",
+        "narrative": "盈利预期因子：盈利收益导致的收益差异",
+        "field_defs": "pe_ttm = data['pe_ttm'].values if hasattr(data, 'pe_ttm') else data.get('pe_ttm')",
+        "field_check": "pe_ttm is not None and len(pe_ttm) > 0",
+        "expression": "np.tanh(1.0 / (np.maximum(pe_ttm, 0.1) / 15.0))",
+        "input_fields": ['pe_ttm'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── growth: 成长因子：销售或盈利增长预期差异 ──
+    {
+        "name": "growth",
+        "narrative": "成长因子：销售或盈利增长预期差异",
+        "field_defs": "revenue_growth = data['revenue_growth'].values if hasattr(data, 'revenue_growth') else data.get('revenue_growth')",
+        "field_check": "revenue_growth is not None and len(revenue_growth) > 0",
+        "expression": "np.tanh(revenue_growth / 0.2)",
+        "input_fields": ['revenue_growth'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── leverage: 杠杆因子：高杠杆与低杠杆股票收益差异 ──
+    {
+        "name": "leverage",
+        "narrative": "杠杆因子：高杠杆与低杠杆股票收益差异",
+        "field_defs": "debt_to_asset = data['debt_to_asset'].values if hasattr(data, 'debt_to_asset') else data.get('debt_to_asset')",
+        "field_check": "debt_to_asset is not None and len(debt_to_asset) > 0",
+        "expression": "-np.tanh(debt_to_asset / 0.5)",
+        "input_fields": ['debt_to_asset'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── liquidity: 流动性因子：交易活跃度不同产生的收益率差异 ──
+    {
+        "name": "liquidity",
+        "narrative": "流动性因子：交易活跃度不同产生的收益率差异",
+        "expression": "-np.tanh(ts_mean(volume, 20) / (ts_mean(close, 20) + 1e-10))",
+        "input_fields": ['close', 'volume'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── non_linear_size: 非线性市值因子：中盘股收益差异 ──
+    {
+        "name": "non_linear_size",
+        "narrative": "非线性市值因子：中盘股收益差异",
+        "field_defs": "total_market_cap = data['total_market_cap'].values if hasattr(data, 'total_market_cap') else data.get('total_market_cap')",
+        "field_check": "total_market_cap is not None and len(total_market_cap) > 0",
+        "expression": "np.tanh(1e11 / np.maximum(total_market_cap, 1e7)) - 0.5 * np.tanh(np.log(np.maximum(total_market_cap, 1e7)) / 5.0)",
+        "input_fields": ['total_market_cap'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── residual_volatility: 残差波动率因子：剥离市场风险后的波动率 ──
+    {
+        "name": "residual_volatility",
+        "narrative": "残差波动率因子：剥离市场风险后的波动率",
+        "expression": "-np.tanh(ts_stddev(returns, 20) * 10)",
+        "input_fields": ['close'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── size: 市值因子：大盘股与小盘股收益差异 ──
+    {
+        "name": "size",
+        "narrative": "市值因子：大盘股与小盘股收益差异",
+        "field_defs": "total_market_cap = data['total_market_cap'].values if hasattr(data, 'total_market_cap') else data.get('total_market_cap')",
+        "field_check": "total_market_cap is not None and len(total_market_cap) > 0",
+        "expression": "-np.tanh(np.log(np.maximum(total_market_cap, 1e7)) / 5.0)",
+        "input_fields": ['total_market_cap'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── btop: 市净率因子PRO：价值因子（升级版） ──
+    {
+        "name": "btop",
+        "narrative": "市净率因子PRO：价值因子（升级版）",
+        "field_defs": "pb = data['pb'].values if hasattr(data, 'pb') else data.get('pb')",
+        "field_check": "pb is not None and len(pb) > 0",
+        "expression": "np.tanh(1.0 / (np.maximum(pb, 0.1) / 2.0))",
+        "input_fields": ['pb'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── divyild: 分红因子PRO：股息价格比差异 ──
+    {
+        "name": "divyild",
+        "narrative": "分红因子PRO：股息价格比差异",
+        "field_defs": "dividend_yield = data['dividend_yield'].values if hasattr(data, 'dividend_yield') else data.get('dividend_yield')",
+        "field_check": "dividend_yield is not None and len(dividend_yield) > 0",
+        "expression": "np.tanh(dividend_yield * 10)",
+        "input_fields": ['dividend_yield'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── earnqlty: 盈利质量因子PRO：应计部分产生的收益差异 ──
+    {
+        "name": "earnqlty",
+        "narrative": "盈利质量因子PRO：应计部分产生的收益差异",
+        "field_defs": "roe = data['roe'].values if hasattr(data, 'roe') else data.get('roe')",
+        "field_check": "roe is not None and len(roe) > 0",
+        "expression": "np.tanh((roe - 0.08) / 0.05)",
+        "input_fields": ['roe'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── earnvar: 盈利变动率因子PRO：收益/销售额/现金流可变性 ──
+    {
+        "name": "earnvar",
+        "narrative": "盈利变动率因子PRO：收益/销售额/现金流可变性",
+        "expression": "-np.tanh(ts_stddev(returns, 20) * 10)",
+        "input_fields": ['close'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── earnyild: 收益因子PRO：盈利收益导致的收益差异 ──
+    {
+        "name": "earnyild",
+        "narrative": "收益因子PRO：盈利收益导致的收益差异",
+        "field_defs": "pe_ttm = data['pe_ttm'].values if hasattr(data, 'pe_ttm') else data.get('pe_ttm')",
+        "field_check": "pe_ttm is not None and len(pe_ttm) > 0",
+        "expression": "np.tanh(1.0 / (np.maximum(pe_ttm, 0.1) / 15.0))",
+        "input_fields": ['pe_ttm'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── financial_leverage: 财务杠杆因子PRO：高杠杆与低杠杆股票收益差异 ──
+    {
+        "name": "financial_leverage",
+        "narrative": "财务杠杆因子PRO：高杠杆与低杠杆股票收益差异",
+        "field_defs": "debt_to_asset = data['debt_to_asset'].values if hasattr(data, 'debt_to_asset') else data.get('debt_to_asset')",
+        "field_check": "debt_to_asset is not None and len(debt_to_asset) > 0",
+        "expression": "-np.tanh(debt_to_asset / 0.5)",
+        "input_fields": ['debt_to_asset'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── invsqlty: 投资能力因子PRO：资产扩张/紧缩倾向 ──
+    {
+        "name": "invsqlty",
+        "narrative": "投资能力因子PRO：资产扩张/紧缩倾向",
+        "field_defs": "total_asset_growth_rate = data['total_asset_growth_rate'].values if hasattr(data, 'total_asset_growth_rate') else data.get('total_asset_growth_rate')",
+        "field_check": "total_asset_growth_rate is not None and len(total_asset_growth_rate) > 0",
+        "expression": "-np.tanh(total_asset_growth_rate / 0.2)",
+        "input_fields": ['total_asset_growth_rate'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── liquidty: 流动性因子PRO：交易活跃度差异 ──
+    {
+        "name": "liquidty",
+        "narrative": "流动性因子PRO：交易活跃度差异",
+        "expression": "-np.tanh(ts_mean(volume, 20) / (ts_mean(close, 20) + 1e-10))",
+        "input_fields": ['close', 'volume'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── long_growth: 长期成长因子PRO：销售或盈利长期增长预期差异 ──
+    {
+        "name": "long_growth",
+        "narrative": "长期成长因子PRO：销售或盈利长期增长预期差异",
+        "field_defs": "revenue_growth = data['revenue_growth'].values if hasattr(data, 'revenue_growth') else data.get('revenue_growth')",
+        "field_check": "revenue_growth is not None and len(revenue_growth) > 0",
+        "expression": "np.tanh(revenue_growth / 0.2)",
+        "input_fields": ['revenue_growth'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── ltrevrsl: 长期反转因子PRO：长期股票价格行为相关回报 ──
+    {
+        "name": "ltrevrsl",
+        "narrative": "长期反转因子PRO：长期股票价格行为相关回报",
+        "expression": "-np.tanh(ts_mean(returns, 252) * 5)",
+        "input_fields": ['close'],
+        "lookback": 257,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── market_beta: 市场波动率因子PRO：股票相对于市场的波动敏感度 ──
+    {
+        "name": "market_beta",
+        "narrative": "市场波动率因子PRO：股票相对于市场的波动敏感度",
+        "field_defs": "returns_vol = np.std(returns)",
+        "field_check": "returns_vol is not None and len(returns_vol) > 0",
+        "expression": "np.tanh(returns_vol * 10)",
+        "input_fields": ['close'],
+        "lookback": 65,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── market_size: 市值规模因子PRO：大盘股与小盘股收益差异 ──
+    {
+        "name": "market_size",
+        "narrative": "市值规模因子PRO：大盘股与小盘股收益差异",
+        "field_defs": "total_market_cap = data['total_market_cap'].values if hasattr(data, 'total_market_cap') else data.get('total_market_cap')",
+        "field_check": "total_market_cap is not None and len(total_market_cap) > 0",
+        "expression": "-np.tanh(np.log(np.maximum(total_market_cap, 1e7)) / 5.0)",
+        "input_fields": ['total_market_cap'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── midcap: 中等市值因子PRO：中等市值股票收益差异 ──
+    {
+        "name": "midcap",
+        "narrative": "中等市值因子PRO：中等市值股票收益差异",
+        "field_defs": "total_market_cap = data['total_market_cap'].values if hasattr(data, 'total_market_cap') else data.get('total_market_cap')",
+        "field_check": "total_market_cap is not None and len(total_market_cap) > 0",
+        "expression": "np.tanh(1e11 / np.maximum(total_market_cap, 1e7)) - 0.5 * np.tanh(np.log(np.maximum(total_market_cap, 1e7)) / 5.0)",
+        "input_fields": ['total_market_cap'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── profit: 盈利能力因子PRO：公司运营效率 ──
+    {
+        "name": "profit",
+        "narrative": "盈利能力因子PRO：公司运营效率",
+        "field_defs": "roe = data['roe'].values if hasattr(data, 'roe') else data.get('roe')",
+        "field_check": "roe is not None and len(roe) > 0",
+        "expression": "np.tanh((roe - 0.08) / 0.05)",
+        "input_fields": ['roe'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── relative_momentum: 相对动量因子PRO：最近12个月股价行为回报 ──
+    {
+        "name": "relative_momentum",
+        "narrative": "相对动量因子PRO：最近12个月股价行为回报",
+        "expression": "np.tanh(ts_mean(returns, 252) * 5)",
+        "input_fields": ['close'],
+        "lookback": 257,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── resvol: 残余波动率因子PRO：相对波动性（不能被市场解释的部分） ──
+    {
+        "name": "resvol",
+        "narrative": "残余波动率因子PRO：相对波动性（不能被市场解释的部分）",
+        "expression": "-np.tanh(ts_stddev(returns, 20) * 10)",
+        "input_fields": ['close'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── administration_expense_ttm: 管理费用TTM：管理费用(TTM) ──
+    {
+        "name": "administration_expense_ttm",
+        "narrative": "管理费用TTM：管理费用(TTM)",
+        "field_defs": "administration_expense = data['administration_expense'].values if hasattr(data, 'administration_expense') else data.get('administration_expense')",
+        "field_check": "administration_expense is not None and len(administration_expense) > 0",
+        "expression": "-np.tanh(administration_expense / 1e9)",
+        "input_fields": ['administration_expense'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── asset_impairment_loss_ttm: 资产减值损失TTM：资产减值损失(TTM) ──
+    {
+        "name": "asset_impairment_loss_ttm",
+        "narrative": "资产减值损失TTM：资产减值损失(TTM)",
+        "field_defs": "asset_impairment_loss = data['asset_impairment_loss'].values if hasattr(data, 'asset_impairment_loss') else data.get('asset_impairment_loss')",
+        "field_check": "asset_impairment_loss is not None and len(asset_impairment_loss) > 0",
+        "expression": "-np.tanh(asset_impairment_loss / 1e8)",
+        "input_fields": ['asset_impairment_loss'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── EBIT: 息税前利润：息税前利润 ──
+    {
+        "name": "EBIT",
+        "narrative": "息税前利润：息税前利润",
+        "field_defs": "ebit = data['ebit'].values if hasattr(data, 'ebit') else data.get('ebit')",
+        "field_check": "ebit is not None and len(ebit) > 0",
+        "expression": "np.tanh(ebit / 1e9)",
+        "input_fields": ['ebit'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── EBITDA: 息税折旧摊销前利润：EBITDA ──
+    {
+        "name": "EBITDA",
+        "narrative": "息税折旧摊销前利润：EBITDA",
+        "field_defs": "ebitda = data['ebitda'].values if hasattr(data, 'ebitda') else data.get('ebitda')",
+        "field_check": "ebitda is not None and len(ebitda) > 0",
+        "expression": "np.tanh(ebitda / 1e9)",
+        "input_fields": ['ebitda'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── FCFF: 企业自由现金流量：企业自由现金流量TTM ──
+    {
+        "name": "FCFF",
+        "narrative": "企业自由现金流量：企业自由现金流量TTM",
+        "field_defs": "fcff = data['fcff'].values if hasattr(data, 'fcff') else data.get('fcff')",
+        "field_check": "fcff is not None and len(fcff) > 0",
+        "expression": "np.tanh(fcff / 1e9)",
+        "input_fields": ['fcff'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── FCFE: 股权自由现金流量：股权自由现金流量TTM ──
+    {
+        "name": "FCFE",
+        "narrative": "股权自由现金流量：股权自由现金流量TTM",
+        "field_defs": "fcfe = data['fcfe'].values if hasattr(data, 'fcfe') else data.get('fcfe')",
+        "field_check": "fcfe is not None and len(fcfe) > 0",
+        "expression": "np.tanh(fcfe / 1e9)",
+        "input_fields": ['fcfe'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── financing_expense_ttm: 财务费用TTM：财务费用(TTM) ──
+    {
+        "name": "financing_expense_ttm",
+        "narrative": "财务费用TTM：财务费用(TTM)",
+        "field_defs": "financing_expense = data['financing_expense'].values if hasattr(data, 'financing_expense') else data.get('financing_expense')",
+        "field_check": "financing_expense is not None and len(financing_expense) > 0",
+        "expression": "-np.tanh(financing_expense / 1e8)",
+        "input_fields": ['financing_expense'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── gross_profit_ttm: 毛利润TTM：毛利润(TTM) ──
+    {
+        "name": "gross_profit_ttm",
+        "narrative": "毛利润TTM：毛利润(TTM)",
+        "field_defs": "gross_profit = data['gross_profit'].values if hasattr(data, 'gross_profit') else data.get('gross_profit')",
+        "field_check": "gross_profit is not None and len(gross_profit) > 0",
+        "expression": "np.tanh(gross_profit / 1e9)",
+        "input_fields": ['gross_profit'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── income_tax_ttm: 所得税TTM：所得税(TTM) ──
+    {
+        "name": "income_tax_ttm",
+        "narrative": "所得税TTM：所得税(TTM)",
+        "field_defs": "income_tax = data['income_tax'].values if hasattr(data, 'income_tax') else data.get('income_tax')",
+        "field_check": "income_tax is not None and len(income_tax) > 0",
+        "expression": "-np.tanh(income_tax / 1e8)",
+        "input_fields": ['income_tax'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── interest_expense_ttm: 利息费用TTM：利息费用(TTM) ──
+    {
+        "name": "interest_expense_ttm",
+        "narrative": "利息费用TTM：利息费用(TTM)",
+        "field_defs": "interest_expense = data['interest_expense'].values if hasattr(data, 'interest_expense') else data.get('interest_expense')",
+        "field_check": "interest_expense is not None and len(interest_expense) > 0",
+        "expression": "-np.tanh(interest_expense / 1e8)",
+        "input_fields": ['interest_expense'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_operating_cash_flow_ttm: 经营活动现金流量净额TTM：经营活动现金流量净额(TTM) ──
+    {
+        "name": "net_operating_cash_flow_ttm",
+        "narrative": "经营活动现金流量净额TTM：经营活动现金流量净额(TTM)",
+        "field_defs": "net_operating_cash_flow = data['net_operating_cash_flow'].values if hasattr(data, 'net_operating_cash_flow') else data.get('net_operating_cash_flow')",
+        "field_check": "net_operating_cash_flow is not None and len(net_operating_cash_flow) > 0",
+        "expression": "np.tanh(net_operating_cash_flow / 1e9)",
+        "input_fields": ['net_operating_cash_flow'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_profit_ttm: 净利润TTM：净利润(TTM) ──
+    {
+        "name": "net_profit_ttm",
+        "narrative": "净利润TTM：净利润(TTM)",
+        "field_defs": "net_profit = data['net_profit'].values if hasattr(data, 'net_profit') else data.get('net_profit')",
+        "field_check": "net_profit is not None and len(net_profit) > 0",
+        "expression": "np.tanh(net_profit / 1e9)",
+        "input_fields": ['net_profit'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_financing_cash_flow_ttm: 筹资活动现金流量净额TTM：筹资活动现金流量净额(TTM) ──
+    {
+        "name": "net_financing_cash_flow_ttm",
+        "narrative": "筹资活动现金流量净额TTM：筹资活动现金流量净额(TTM)",
+        "field_defs": "net_financing_cash_flow = data['net_financing_cash_flow'].values if hasattr(data, 'net_financing_cash_flow') else data.get('net_financing_cash_flow')",
+        "field_check": "net_financing_cash_flow is not None and len(net_financing_cash_flow) > 0",
+        "expression": "np.tanh(net_financing_cash_flow / 1e9)",
+        "input_fields": ['net_financing_cash_flow'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_investing_cash_flow_ttm: 投资活动现金流量净额TTM：投资活动现金流量净额(TTM) ──
+    {
+        "name": "net_investing_cash_flow_ttm",
+        "narrative": "投资活动现金流量净额TTM：投资活动现金流量净额(TTM)",
+        "field_defs": "net_investing_cash_flow = data['net_investing_cash_flow'].values if hasattr(data, 'net_investing_cash_flow') else data.get('net_investing_cash_flow')",
+        "field_check": "net_investing_cash_flow is not None and len(net_investing_cash_flow) > 0",
+        "expression": "-np.tanh(net_investing_cash_flow / 1e9)",
+        "input_fields": ['net_investing_cash_flow'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── non_operating_income_ttm: 营业外收入TTM：营业外收入(TTM) ──
+    {
+        "name": "non_operating_income_ttm",
+        "narrative": "营业外收入TTM：营业外收入(TTM)",
+        "field_defs": "non_operating_income = data['non_operating_income'].values if hasattr(data, 'non_operating_income') else data.get('non_operating_income')",
+        "field_check": "non_operating_income is not None and len(non_operating_income) > 0",
+        "expression": "np.tanh(non_operating_income / 1e8)",
+        "input_fields": ['non_operating_income'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── operating_profit_ttm: 营业利润TTM：营业利润(TTM) ──
+    {
+        "name": "operating_profit_ttm",
+        "narrative": "营业利润TTM：营业利润(TTM)",
+        "field_defs": "operating_profit = data['operating_profit'].values if hasattr(data, 'operating_profit') else data.get('operating_profit')",
+        "field_check": "operating_profit is not None and len(operating_profit) > 0",
+        "expression": "np.tanh(operating_profit / 1e9)",
+        "input_fields": ['operating_profit'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── operating_revenue_ttm: 营业总收入TTM：营业总收入(TTM) ──
+    {
+        "name": "operating_revenue_ttm",
+        "narrative": "营业总收入TTM：营业总收入(TTM)",
+        "field_defs": "operating_revenue = data['operating_revenue'].values if hasattr(data, 'operating_revenue') else data.get('operating_revenue')",
+        "field_check": "operating_revenue is not None and len(operating_revenue) > 0",
+        "expression": "np.tanh(operating_revenue / 1e9)",
+        "input_fields": ['operating_revenue'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── research_and_development_expense_ttm: 研发费用TTM：研发费用(TTM) ──
+    {
+        "name": "research_and_development_expense_ttm",
+        "narrative": "研发费用TTM：研发费用(TTM)",
+        "field_defs": "r_and_d_expense = data['r_and_d_expense'].values if hasattr(data, 'r_and_d_expense') else data.get('r_and_d_expense')",
+        "field_check": "r_and_d_expense is not None and len(r_and_d_expense) > 0",
+        "expression": "np.tanh(r_and_d_expense / 1e8)",
+        "input_fields": ['r_and_d_expense'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── sale_expense_ttm: 销售费用TTM：销售费用(TTM) ──
+    {
+        "name": "sale_expense_ttm",
+        "narrative": "销售费用TTM：销售费用(TTM)",
+        "field_defs": "sale_expense = data['sale_expense'].values if hasattr(data, 'sale_expense') else data.get('sale_expense')",
+        "field_check": "sale_expense is not None and len(sale_expense) > 0",
+        "expression": "-np.tanh(sale_expense / 1e9)",
+        "input_fields": ['sale_expense'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── total_operating_cost_ttm: 营业总成本TTM：营业总成本(TTM) ──
+    {
+        "name": "total_operating_cost_ttm",
+        "narrative": "营业总成本TTM：营业总成本(TTM)",
+        "field_defs": "total_operating_cost = data['total_operating_cost'].values if hasattr(data, 'total_operating_cost') else data.get('total_operating_cost')",
+        "field_check": "total_operating_cost is not None and len(total_operating_cost) > 0",
+        "expression": "-np.tanh(total_operating_cost / 1e9)",
+        "input_fields": ['total_operating_cost'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── total_operating_revenue_ttm: 营业总收入TTM(同)：营业总收入(TTM) ──
+    {
+        "name": "total_operating_revenue_ttm",
+        "narrative": "营业总收入TTM(同)：营业总收入(TTM)",
+        "field_defs": "total_operating_revenue = data['total_operating_revenue'].values if hasattr(data, 'total_operating_revenue') else data.get('total_operating_revenue')",
+        "field_check": "total_operating_revenue is not None and len(total_operating_revenue) > 0",
+        "expression": "np.tanh(total_operating_revenue / 1e9)",
+        "input_fields": ['total_operating_revenue'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_working_capital: 净运营资本：流动资产-流动负债 ──
+    {
+        "name": "net_working_capital",
+        "narrative": "净运营资本：流动资产-流动负债",
+        "field_defs": "net_working_capital = data['net_working_capital'].values if hasattr(data, 'net_working_capital') else data.get('net_working_capital')",
+        "field_check": "net_working_capital is not None and len(net_working_capital) > 0",
+        "expression": "np.tanh(net_working_capital / 1e9)",
+        "input_fields": ['net_working_capital'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_profit_to_total_operate_revenue_ttm: 净利润与营业总收入之比：净利润(TTM)/营业总收入(TTM) ──
+    {
+        "name": "net_profit_to_total_operate_revenue_ttm",
+        "narrative": "净利润与营业总收入之比：净利润(TTM)/营业总收入(TTM)",
+        "field_defs": "net_profit_margin = data['net_profit_margin'].values if hasattr(data, 'net_profit_margin') else data.get('net_profit_margin')",
+        "field_check": "net_profit_margin is not None and len(net_profit_margin) > 0",
+        "expression": "np.tanh(net_profit_margin)",
+        "input_fields": ['net_profit_margin'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── cfo_to_ev: 经营活动现金流量净额与企业价值之比：经营活动现金流量净额TTM/企业价值 ──
+    {
+        "name": "cfo_to_ev",
+        "narrative": "经营活动现金流量净额与企业价值之比：经营活动现金流量净额TTM/企业价值",
+        "field_defs": "cfo_to_ev = data['cfo_to_ev'].values if hasattr(data, 'cfo_to_ev') else data.get('cfo_to_ev')",
+        "field_check": "cfo_to_ev is not None and len(cfo_to_ev) > 0",
+        "expression": "np.tanh(cfo_to_ev)",
+        "input_fields": ['cfo_to_ev'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── accounts_payable_turnover_days: 应付账款周转天数：360/应付账款周转率 ──
+    {
+        "name": "accounts_payable_turnover_days",
+        "narrative": "应付账款周转天数：360/应付账款周转率",
+        "field_defs": "accounts_payable_turnover_days = data['accounts_payable_turnover_days'].values if hasattr(data, 'accounts_payable_turnover_days') else data.get('accounts_payable_turnover_days')",
+        "field_check": "accounts_payable_turnover_days is not None and len(accounts_payable_turnover_days) > 0",
+        "expression": "-np.tanh(accounts_payable_turnover_days / 90)",
+        "input_fields": ['accounts_payable_turnover_days'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_profit_ratio: 销售净利率：净利润(TTM)/营业收入(TTM) ──
+    {
+        "name": "net_profit_ratio",
+        "narrative": "销售净利率：净利润(TTM)/营业收入(TTM)",
+        "field_defs": "net_profit_margin = data['net_profit_margin'].values if hasattr(data, 'net_profit_margin') else data.get('net_profit_margin')",
+        "field_check": "net_profit_margin is not None and len(net_profit_margin) > 0",
+        "expression": "np.tanh(net_profit_margin)",
+        "input_fields": ['net_profit_margin'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_non_operating_income_to_total_profit: 营业外收支利润净额/利润总额：营业外收支利润净额/利润总额 ──
+    {
+        "name": "net_non_operating_income_to_total_profit",
+        "narrative": "营业外收支利润净额/利润总额：营业外收支利润净额/利润总额",
+        "field_defs": "net_non_operating_income_to_profit = data['net_non_operating_income_to_profit'].values if hasattr(data, 'net_non_operating_income_to_profit') else data.get('net_non_operating_income_to_profit')",
+        "field_check": "net_non_operating_income_to_profit is not None and len(net_non_operating_income_to_profit) > 0",
+        "expression": "-np.tanh(abs(net_non_operating_income_to_profit))",
+        "input_fields": ['net_non_operating_income_to_profit'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── fixed_asset_ratio: 固定资产比率：(固定资产+工程物资+在建工程)/总资产 ──
+    {
+        "name": "fixed_asset_ratio",
+        "narrative": "固定资产比率：(固定资产+工程物资+在建工程)/总资产",
+        "field_defs": "fixed_asset_ratio = data['fixed_asset_ratio'].values if hasattr(data, 'fixed_asset_ratio') else data.get('fixed_asset_ratio')",
+        "field_check": "fixed_asset_ratio is not None and len(fixed_asset_ratio) > 0",
+        "expression": "-np.tanh(fixed_asset_ratio)",
+        "input_fields": ['fixed_asset_ratio'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── account_receivable_turnover_days: 应收账款周转天数：360/应收账款周转率 ──
+    {
+        "name": "account_receivable_turnover_days",
+        "narrative": "应收账款周转天数：360/应收账款周转率",
+        "field_defs": "account_receivable_turnover_days = data['account_receivable_turnover_days'].values if hasattr(data, 'account_receivable_turnover_days') else data.get('account_receivable_turnover_days')",
+        "field_check": "account_receivable_turnover_days is not None and len(account_receivable_turnover_days) > 0",
+        "expression": "-np.tanh(account_receivable_turnover_days / 90)",
+        "input_fields": ['account_receivable_turnover_days'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── DEGM: 毛利率增长：毛利率增长=(今年毛利率(TTM)/去年毛利率(TTM))-1 ──
+    {
+        "name": "DEGM",
+        "narrative": "毛利率增长：毛利率增长=(今年毛利率(TTM)/去年毛利率(TTM))-1",
+        "field_defs": "degm = data['degm'].values if hasattr(data, 'degm') else data.get('degm')",
+        "field_check": "degm is not None and len(degm) > 0",
+        "expression": "np.tanh(degm)",
+        "input_fields": ['degm'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── sale_expense_to_operating_revenue: 营业费用与营业总收入之比：销售费用(TTM)/营业总收入(TTM) ──
+    {
+        "name": "sale_expense_to_operating_revenue",
+        "narrative": "营业费用与营业总收入之比：销售费用(TTM)/营业总收入(TTM)",
+        "field_defs": "sale_expense_to_revenue = data['sale_expense_to_revenue'].values if hasattr(data, 'sale_expense_to_revenue') else data.get('sale_expense_to_revenue')",
+        "field_check": "sale_expense_to_revenue is not None and len(sale_expense_to_revenue) > 0",
+        "expression": "-np.tanh(sale_expense_to_revenue)",
+        "input_fields": ['sale_expense_to_revenue'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── operating_tax_to_operating_revenue_ratio_ttm: 销售税金率：营业税金及附加(TTM)/营业收入(TTM) ──
+    {
+        "name": "operating_tax_to_operating_revenue_ratio_ttm",
+        "narrative": "销售税金率：营业税金及附加(TTM)/营业收入(TTM)",
+        "field_defs": "operating_tax_rate = data['operating_tax_rate'].values if hasattr(data, 'operating_tax_rate') else data.get('operating_tax_rate')",
+        "field_check": "operating_tax_rate is not None and len(operating_tax_rate) > 0",
+        "expression": "-np.tanh(operating_tax_rate)",
+        "input_fields": ['operating_tax_rate'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── inventory_turnover_days: 存货周转天数：360/存货周转率 ──
+    {
+        "name": "inventory_turnover_days",
+        "narrative": "存货周转天数：360/存货周转率",
+        "field_defs": "inventory_turnover_days = data['inventory_turnover_days'].values if hasattr(data, 'inventory_turnover_days') else data.get('inventory_turnover_days')",
+        "field_check": "inventory_turnover_days is not None and len(inventory_turnover_days) > 0",
+        "expression": "-np.tanh(inventory_turnover_days / 90)",
+        "input_fields": ['inventory_turnover_days'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── OperatingCycle: 营业周期：应收账款周转天数+存货周转天数 ──
+    {
+        "name": "OperatingCycle",
+        "narrative": "营业周期：应收账款周转天数+存货周转天数",
+        "field_defs": "operating_cycle = data['operating_cycle'].values if hasattr(data, 'operating_cycle') else data.get('operating_cycle')",
+        "field_check": "operating_cycle is not None and len(operating_cycle) > 0",
+        "expression": "-np.tanh(operating_cycle / 180)",
+        "input_fields": ['operating_cycle'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_operate_cash_flow_to_operate_income: 经营活动现金流量净额与经营活动净收益之比： ──
+    {
+        "name": "net_operate_cash_flow_to_operate_income",
+        "narrative": "经营活动现金流量净额与经营活动净收益之比：",
+        "field_defs": "net_operating_cash_flow_to_operating_income = data['net_operating_cash_flow_to_operating_income'].values if hasattr(data, 'net_operating_cash_flow_to_operating_income') else data.get('net_operating_cash_flow_to_operating_income')",
+        "field_check": "net_operating_cash_flow_to_operating_income is not None and len(net_operating_cash_flow_to_operating_income) > 0",
+        "expression": "np.tanh(net_operating_cash_flow_to_operating_income)",
+        "input_fields": ['net_operating_cash_flow_to_operating_income'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_operating_cash_flow_coverage: 净利润现金含量：经营活动现金流量净额/归母净利润 ──
+    {
+        "name": "net_operating_cash_flow_coverage",
+        "narrative": "净利润现金含量：经营活动现金流量净额/归母净利润",
+        "field_defs": "net_operating_cash_flow_to_net_profit = data['net_operating_cash_flow_to_net_profit'].values if hasattr(data, 'net_operating_cash_flow_to_net_profit') else data.get('net_operating_cash_flow_to_net_profit')",
+        "field_check": "net_operating_cash_flow_to_net_profit is not None and len(net_operating_cash_flow_to_net_profit) > 0",
+        "expression": "np.tanh(net_operating_cash_flow_to_net_profit)",
+        "input_fields": ['net_operating_cash_flow_to_net_profit'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── quick_ratio: 速动比率：(流动资产-存货)/流动负债 ──
+    {
+        "name": "quick_ratio",
+        "narrative": "速动比率：(流动资产-存货)/流动负债",
+        "field_defs": "quick_ratio = data['quick_ratio'].values if hasattr(data, 'quick_ratio') else data.get('quick_ratio')",
+        "field_check": "quick_ratio is not None and len(quick_ratio) > 0",
+        "expression": "np.tanh(quick_ratio)",
+        "input_fields": ['quick_ratio'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── intangible_asset_ratio: 无形资产比率：(无形资产+研发支出+商誉)/总资产 ──
+    {
+        "name": "intangible_asset_ratio",
+        "narrative": "无形资产比率：(无形资产+研发支出+商誉)/总资产",
+        "field_defs": "intangible_asset_ratio = data['intangible_asset_ratio'].values if hasattr(data, 'intangible_asset_ratio') else data.get('intangible_asset_ratio')",
+        "field_check": "intangible_asset_ratio is not None and len(intangible_asset_ratio) > 0",
+        "expression": "-np.tanh(intangible_asset_ratio)",
+        "input_fields": ['intangible_asset_ratio'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── MLEV: 市场杠杆：非流动负债/(非流动负债+总市值) ──
+    {
+        "name": "MLEV",
+        "narrative": "市场杠杆：非流动负债/(非流动负债+总市值)",
+        "field_defs": "mlev = data['mlev'].values if hasattr(data, 'mlev') else data.get('mlev')",
+        "field_check": "mlev is not None and len(mlev) > 0",
+        "expression": "-np.tanh(mlev)",
+        "input_fields": ['mlev'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── debt_to_equity_ratio: 产权比率：负债合计/归母权益合计 ──
+    {
+        "name": "debt_to_equity_ratio",
+        "narrative": "产权比率：负债合计/归母权益合计",
+        "field_defs": "debt_to_equity = data['debt_to_equity'].values if hasattr(data, 'debt_to_equity') else data.get('debt_to_equity')",
+        "field_check": "debt_to_equity is not None and len(debt_to_equity) > 0",
+        "expression": "-np.tanh(debt_to_equity)",
+        "input_fields": ['debt_to_equity'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── super_quick_ratio: 超速动比率：(货币资金+交易性金融资产+应收票据+应收账款+其他应收款)/流动负债 ──
+    {
+        "name": "super_quick_ratio",
+        "narrative": "超速动比率：(货币资金+交易性金融资产+应收票据+应收账款+其他应收款)/流动负债",
+        "field_defs": "super_quick_ratio = data['super_quick_ratio'].values if hasattr(data, 'super_quick_ratio') else data.get('super_quick_ratio')",
+        "field_check": "super_quick_ratio is not None and len(super_quick_ratio) > 0",
+        "expression": "np.tanh(super_quick_ratio)",
+        "input_fields": ['super_quick_ratio'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── inventory_turnover_rate: 存货周转率：营业成本(TTM)/AvgQ(存货) ──
+    {
+        "name": "inventory_turnover_rate",
+        "narrative": "存货周转率：营业成本(TTM)/AvgQ(存货)",
+        "field_defs": "inventory_turnover_rate = data['inventory_turnover_rate'].values if hasattr(data, 'inventory_turnover_rate') else data.get('inventory_turnover_rate')",
+        "field_check": "inventory_turnover_rate is not None and len(inventory_turnover_rate) > 0",
+        "expression": "np.tanh(inventory_turnover_rate)",
+        "input_fields": ['inventory_turnover_rate'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── operating_profit_growth_rate: 营业利润增长率：(今年营业利润(TTM)/去年营业利润(TTM))-1 ──
+    {
+        "name": "operating_profit_growth_rate",
+        "narrative": "营业利润增长率：(今年营业利润(TTM)/去年营业利润(TTM))-1",
+        "field_defs": "operating_profit_growth_rate = data['operating_profit_growth_rate'].values if hasattr(data, 'operating_profit_growth_rate') else data.get('operating_profit_growth_rate')",
+        "field_check": "operating_profit_growth_rate is not None and len(operating_profit_growth_rate) > 0",
+        "expression": "np.tanh(operating_profit_growth_rate)",
+        "input_fields": ['operating_profit_growth_rate'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── long_debt_to_working_capital_ratio: 长期负债与营运资金比率：非流动负债/(流动资产-流动负债) ──
+    {
+        "name": "long_debt_to_working_capital_ratio",
+        "narrative": "长期负债与营运资金比率：非流动负债/(流动资产-流动负债)",
+        "field_defs": "long_debt_to_working_capital = data['long_debt_to_working_capital'].values if hasattr(data, 'long_debt_to_working_capital') else data.get('long_debt_to_working_capital')",
+        "field_check": "long_debt_to_working_capital is not None and len(long_debt_to_working_capital) > 0",
+        "expression": "-np.tanh(long_debt_to_working_capital)",
+        "input_fields": ['long_debt_to_working_capital'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── current_ratio: 流动比率(单季度)：流动资产/流动负债 ──
+    {
+        "name": "current_ratio",
+        "narrative": "流动比率(单季度)：流动资产/流动负债",
+        "field_defs": "current_ratio = data['current_ratio'].values if hasattr(data, 'current_ratio') else data.get('current_ratio')",
+        "field_check": "current_ratio is not None and len(current_ratio) > 0",
+        "expression": "np.tanh(current_ratio)",
+        "input_fields": ['current_ratio'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_operate_cash_flow_to_net_debt: 经营活动现金流量净额/净债务： ──
+    {
+        "name": "net_operate_cash_flow_to_net_debt",
+        "narrative": "经营活动现金流量净额/净债务：",
+        "field_defs": "net_operating_cash_flow_to_net_debt = data['net_operating_cash_flow_to_net_debt'].values if hasattr(data, 'net_operating_cash_flow_to_net_debt') else data.get('net_operating_cash_flow_to_net_debt')",
+        "field_check": "net_operating_cash_flow_to_net_debt is not None and len(net_operating_cash_flow_to_net_debt) > 0",
+        "expression": "np.tanh(net_operating_cash_flow_to_net_debt)",
+        "input_fields": ['net_operating_cash_flow_to_net_debt'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_operate_cash_flow_to_asset: 总资产现金回收率：经营活动现金流量净额(TTM)/总资产 ──
+    {
+        "name": "net_operate_cash_flow_to_asset",
+        "narrative": "总资产现金回收率：经营活动现金流量净额(TTM)/总资产",
+        "field_defs": "net_operating_cash_flow_to_asset = data['net_operating_cash_flow_to_asset'].values if hasattr(data, 'net_operating_cash_flow_to_asset') else data.get('net_operating_cash_flow_to_asset')",
+        "field_check": "net_operating_cash_flow_to_asset is not None and len(net_operating_cash_flow_to_asset) > 0",
+        "expression": "np.tanh(net_operating_cash_flow_to_asset)",
+        "input_fields": ['net_operating_cash_flow_to_asset'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── non_current_asset_ratio: 非流动资产比率：非流动资产/总资产 ──
+    {
+        "name": "non_current_asset_ratio",
+        "narrative": "非流动资产比率：非流动资产/总资产",
+        "field_defs": "non_current_asset_ratio = data['non_current_asset_ratio'].values if hasattr(data, 'non_current_asset_ratio') else data.get('non_current_asset_ratio')",
+        "field_check": "non_current_asset_ratio is not None and len(non_current_asset_ratio) > 0",
+        "expression": "-np.tanh(non_current_asset_ratio)",
+        "input_fields": ['non_current_asset_ratio'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── total_asset_turnover_rate: 总资产周转率：营业收入(TTM)/总资产 ──
+    {
+        "name": "total_asset_turnover_rate",
+        "narrative": "总资产周转率：营业收入(TTM)/总资产",
+        "field_defs": "total_asset_turnover_rate = data['total_asset_turnover_rate'].values if hasattr(data, 'total_asset_turnover_rate') else data.get('total_asset_turnover_rate')",
+        "field_check": "total_asset_turnover_rate is not None and len(total_asset_turnover_rate) > 0",
+        "expression": "np.tanh(total_asset_turnover_rate)",
+        "input_fields": ['total_asset_turnover_rate'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── long_debt_to_asset_ratio: 长期借款与资产总计之比：长期借款/总资产 ──
+    {
+        "name": "long_debt_to_asset_ratio",
+        "narrative": "长期借款与资产总计之比：长期借款/总资产",
+        "field_defs": "long_debt_to_asset = data['long_debt_to_asset'].values if hasattr(data, 'long_debt_to_asset') else data.get('long_debt_to_asset')",
+        "field_check": "long_debt_to_asset is not None and len(long_debt_to_asset) > 0",
+        "expression": "-np.tanh(long_debt_to_asset)",
+        "input_fields": ['long_debt_to_asset'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── debt_to_tangible_equity_ratio: 有形净值债务率：负债合计/(股东权益-无形资产净值) ──
+    {
+        "name": "debt_to_tangible_equity_ratio",
+        "narrative": "有形净值债务率：负债合计/(股东权益-无形资产净值)",
+        "field_defs": "debt_to_tangible_equity = data['debt_to_tangible_equity'].values if hasattr(data, 'debt_to_tangible_equity') else data.get('debt_to_tangible_equity')",
+        "field_check": "debt_to_tangible_equity is not None and len(debt_to_tangible_equity) > 0",
+        "expression": "-np.tanh(debt_to_tangible_equity)",
+        "input_fields": ['debt_to_tangible_equity'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── ROAEBITTTM: 总资产报酬率：(利润总额(TTM)+利息支出(TTM))/总资产平均 ──
+    {
+        "name": "ROAEBITTTM",
+        "narrative": "总资产报酬率：(利润总额(TTM)+利息支出(TTM))/总资产平均",
+        "field_defs": "roa_ebit = data['roa_ebit'].values if hasattr(data, 'roa_ebit') else data.get('roa_ebit')",
+        "field_check": "roa_ebit is not None and len(roa_ebit) > 0",
+        "expression": "np.tanh(roa_ebit)",
+        "input_fields": ['roa_ebit'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── operating_profit_ratio: 营业利润率：营业利润(TTM)/营业收入(TTM) ──
+    {
+        "name": "operating_profit_ratio",
+        "narrative": "营业利润率：营业利润(TTM)/营业收入(TTM)",
+        "field_defs": "operating_profit_ratio = data['operating_profit_ratio'].values if hasattr(data, 'operating_profit_ratio') else data.get('operating_profit_ratio')",
+        "field_check": "operating_profit_ratio is not None and len(operating_profit_ratio) > 0",
+        "expression": "np.tanh(operating_profit_ratio)",
+        "input_fields": ['operating_profit_ratio'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── long_term_debt_to_asset_ratio: 长期负债与资产总计之比：非流动负债/总资产 ──
+    {
+        "name": "long_term_debt_to_asset_ratio",
+        "narrative": "长期负债与资产总计之比：非流动负债/总资产",
+        "field_defs": "long_term_debt_to_asset = data['long_term_debt_to_asset'].values if hasattr(data, 'long_term_debt_to_asset') else data.get('long_term_debt_to_asset')",
+        "field_check": "long_term_debt_to_asset is not None and len(long_term_debt_to_asset) > 0",
+        "expression": "-np.tanh(long_term_debt_to_asset)",
+        "input_fields": ['long_term_debt_to_asset'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── current_asset_turnover_rate: 流动资产周转率TTM：营业收入(TTM)/流动资产平均 ──
+    {
+        "name": "current_asset_turnover_rate",
+        "narrative": "流动资产周转率TTM：营业收入(TTM)/流动资产平均",
+        "field_defs": "current_asset_turnover_rate = data['current_asset_turnover_rate'].values if hasattr(data, 'current_asset_turnover_rate') else data.get('current_asset_turnover_rate')",
+        "field_check": "current_asset_turnover_rate is not None and len(current_asset_turnover_rate) > 0",
+        "expression": "np.tanh(current_asset_turnover_rate)",
+        "input_fields": ['current_asset_turnover_rate'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── financial_expense_rate: 财务费用与营业总收入之比：财务费用(TTM)/营业总收入(TTM) ──
+    {
+        "name": "financial_expense_rate",
+        "narrative": "财务费用与营业总收入之比：财务费用(TTM)/营业总收入(TTM)",
+        "field_defs": "financial_expense_rate = data['financial_expense_rate'].values if hasattr(data, 'financial_expense_rate') else data.get('financial_expense_rate')",
+        "field_check": "financial_expense_rate is not None and len(financial_expense_rate) > 0",
+        "expression": "-np.tanh(financial_expense_rate)",
+        "input_fields": ['financial_expense_rate'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── operating_profit_to_total_profit: 经营活动净收益/利润总额： ──
+    {
+        "name": "operating_profit_to_total_profit",
+        "narrative": "经营活动净收益/利润总额：",
+        "field_defs": "operating_profit_to_total_profit = data['operating_profit_to_total_profit'].values if hasattr(data, 'operating_profit_to_total_profit') else data.get('operating_profit_to_total_profit')",
+        "field_check": "operating_profit_to_total_profit is not None and len(operating_profit_to_total_profit) > 0",
+        "expression": "np.tanh(operating_profit_to_total_profit)",
+        "input_fields": ['operating_profit_to_total_profit'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── debt_to_asset_ratio: 债务总资产比：负债合计/总资产 ──
+    {
+        "name": "debt_to_asset_ratio",
+        "narrative": "债务总资产比：负债合计/总资产",
+        "field_defs": "debt_to_asset = data['debt_to_asset'].values if hasattr(data, 'debt_to_asset') else data.get('debt_to_asset')",
+        "field_check": "debt_to_asset is not None and len(debt_to_asset) > 0",
+        "expression": "-np.tanh(debt_to_asset)",
+        "input_fields": ['debt_to_asset'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── equity_to_fixed_asset_ratio: 股东权益与固定资产比率：股东权益/(固定资产+工程物资+在建工程) ──
+    {
+        "name": "equity_to_fixed_asset_ratio",
+        "narrative": "股东权益与固定资产比率：股东权益/(固定资产+工程物资+在建工程)",
+        "field_defs": "equity_to_fixed_asset = data['equity_to_fixed_asset'].values if hasattr(data, 'equity_to_fixed_asset') else data.get('equity_to_fixed_asset')",
+        "field_check": "equity_to_fixed_asset is not None and len(equity_to_fixed_asset) > 0",
+        "expression": "np.tanh(equity_to_fixed_asset)",
+        "input_fields": ['equity_to_fixed_asset'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_operate_cash_flow_to_total_liability: 经营活动现金流量净额/负债合计： ──
+    {
+        "name": "net_operate_cash_flow_to_total_liability",
+        "narrative": "经营活动现金流量净额/负债合计：",
+        "field_defs": "net_operating_cash_flow_to_total_liability = data['net_operating_cash_flow_to_total_liability'].values if hasattr(data, 'net_operating_cash_flow_to_total_liability') else data.get('net_operating_cash_flow_to_total_liability')",
+        "field_check": "net_operating_cash_flow_to_total_liability is not None and len(net_operating_cash_flow_to_total_liability) > 0",
+        "expression": "np.tanh(net_operating_cash_flow_to_total_liability)",
+        "input_fields": ['net_operating_cash_flow_to_total_liability'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── cash_rate_of_sales: 经营活动现金流量净额与营业收入之比：经营活动现金流量净额(TTM)/营业收入(TTM) ──
+    {
+        "name": "cash_rate_of_sales",
+        "narrative": "经营活动现金流量净额与营业收入之比：经营活动现金流量净额(TTM)/营业收入(TTM)",
+        "field_defs": "cash_rate_of_sales = data['cash_rate_of_sales'].values if hasattr(data, 'cash_rate_of_sales') else data.get('cash_rate_of_sales')",
+        "field_check": "cash_rate_of_sales is not None and len(cash_rate_of_sales) > 0",
+        "expression": "np.tanh(cash_rate_of_sales)",
+        "input_fields": ['cash_rate_of_sales'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── admin_expense_rate: 管理费用与营业总收入之比：管理费用(TTM)/营业总收入(TTM) ──
+    {
+        "name": "admin_expense_rate",
+        "narrative": "管理费用与营业总收入之比：管理费用(TTM)/营业总收入(TTM)",
+        "field_defs": "admin_expense_rate = data['admin_expense_rate'].values if hasattr(data, 'admin_expense_rate') else data.get('admin_expense_rate')",
+        "field_check": "admin_expense_rate is not None and len(admin_expense_rate) > 0",
+        "expression": "-np.tanh(admin_expense_rate)",
+        "input_fields": ['admin_expense_rate'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── gross_profit_margin: 销售毛利率：(营业收入-营业成本)/营业收入 ──
+    {
+        "name": "gross_profit_margin",
+        "narrative": "销售毛利率：(营业收入-营业成本)/营业收入",
+        "field_defs": "gross_profit_margin = data['gross_profit_margin'].values if hasattr(data, 'gross_profit_margin') else data.get('gross_profit_margin')",
+        "field_check": "gross_profit_margin is not None and len(gross_profit_margin) > 0",
+        "expression": "np.tanh(gross_profit_margin)",
+        "input_fields": ['gross_profit_margin'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── roe_ttm_8y: ROE(TTM,8年)：净资产收益率(TTM,8年) ──
+    {
+        "name": "roe_ttm_8y",
+        "narrative": "ROE(TTM,8年)：净资产收益率(TTM,8年)",
+        "field_defs": "roe_ttm_8y = data['roe_ttm_8y'].values if hasattr(data, 'roe_ttm_8y') else data.get('roe_ttm_8y')",
+        "field_check": "roe_ttm_8y is not None and len(roe_ttm_8y) > 0",
+        "expression": "np.tanh(roe_ttm_8y)",
+        "input_fields": ['roe_ttm_8y'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── ATR6: 6日均幅指标：6日平均真实波幅 ──
+    {
+        "name": "ATR6",
+        "narrative": "6日均幅指标：6日平均真实波幅",
+        "expression": "ts_mean(high - low, 6)",
+        "input_fields": ['close', 'high', 'low'],
+        "lookback": 11,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── ATR12: 12日均幅指标：12日平均真实波幅 ──
+    {
+        "name": "ATR12",
+        "narrative": "12日均幅指标：12日平均真实波幅",
+        "expression": "ts_mean(high - low, 12)",
+        "input_fields": ['close', 'high', 'low'],
+        "lookback": 17,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── ATR20: 20日均幅指标：20日平均真实波幅 ──
+    {
+        "name": "ATR20",
+        "narrative": "20日均幅指标：20日平均真实波幅",
+        "expression": "ts_mean(high - low, 20)",
+        "input_fields": ['close', 'high', 'low'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── BIAS10: 10日乖离率：10日乖离率 ──
+    {
+        "name": "BIAS10",
+        "narrative": "10日乖离率：10日乖离率",
+        "expression": "(close - ts_mean(close, 10)) / (ts_mean(close, 10) + _EPS)",
+        "input_fields": ['close'],
+        "lookback": 15,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── BIAS20: 20日乖离率：20日乖离率 ──
+    {
+        "name": "BIAS20",
+        "narrative": "20日乖离率：20日乖离率",
+        "expression": "(close - ts_mean(close, 20)) / (ts_mean(close, 20) + _EPS)",
+        "input_fields": ['close'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── BIAS30: 30日乖离率：30日乖离率 ──
+    {
+        "name": "BIAS30",
+        "narrative": "30日乖离率：30日乖离率",
+        "expression": "(close - ts_mean(close, 30)) / (ts_mean(close, 30) + _EPS)",
+        "input_fields": ['close'],
+        "lookback": 35,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── BIAS60: 60日乖离率：60日乖离率 ──
+    {
+        "name": "BIAS60",
+        "narrative": "60日乖离率：60日乖离率",
+        "expression": "(close - ts_mean(close, 60)) / (ts_mean(close, 60) + _EPS)",
+        "input_fields": ['close'],
+        "lookback": 65,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── DAVOL10: 10日平均额：10日平均成交额 ──
+    {
+        "name": "DAVOL10",
+        "narrative": "10日平均额：10日平均成交额",
+        "expression": "ts_mean(volume, 10) * close",
+        "input_fields": ['close', 'volume'],
+        "lookback": 15,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── DAVOL20: 20日平均额：20日平均成交额 ──
+    {
+        "name": "DAVOL20",
+        "narrative": "20日平均额：20日平均成交额",
+        "expression": "ts_mean(volume, 20) * close",
+        "input_fields": ['close', 'volume'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── DAVOL5: 5日平均额：5日平均成交额 ──
+    {
+        "name": "DAVOL5",
+        "narrative": "5日平均额：5日平均成交额",
+        "expression": "ts_mean(volume, 5) * close",
+        "input_fields": ['close', 'volume'],
+        "lookback": 10,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── DAVOL60: 60日平均额：60日平均成交额 ──
+    {
+        "name": "DAVOL60",
+        "narrative": "60日平均额：60日平均成交额",
+        "expression": "ts_mean(volume, 60) * close",
+        "input_fields": ['close', 'volume'],
+        "lookback": 65,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── DBQ: 多空强度：多空强度指标 ──
+    {
+        "name": "DBQ",
+        "narrative": "多空强度：多空强度指标",
+        "expression": "(close - open_) / (high - low + _EPS)",
+        "input_fields": ['close', 'open', 'high', 'low'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── EMA5: 5日指数移动平均：5日EMA ──
+    {
+        "name": "EMA5",
+        "narrative": "5日指数移动平均：5日EMA",
+        "expression": "ts_mean(close, 5)",
+        "input_fields": ['close'],
+        "lookback": 10,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── EMA10: 10日指数移动平均：10日EMA ──
+    {
+        "name": "EMA10",
+        "narrative": "10日指数移动平均：10日EMA",
+        "expression": "ts_mean(close, 10)",
+        "input_fields": ['close'],
+        "lookback": 15,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── EMA20: 20日指数移动平均：20日EMA ──
+    {
+        "name": "EMA20",
+        "narrative": "20日指数移动平均：20日EMA",
+        "expression": "ts_mean(close, 20)",
+        "input_fields": ['close'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── HSIGMA: 历史波动率：历史波动率 ──
+    {
+        "name": "HSIGMA",
+        "narrative": "历史波动率：历史波动率",
+        "expression": "ts_stddev(returns, 20)",
+        "input_fields": ['close'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── MA5: 5日移动平均：5日移动平均价 ──
+    {
+        "name": "MA5",
+        "narrative": "5日移动平均：5日移动平均价",
+        "expression": "ts_mean(close, 5)",
+        "input_fields": ['close'],
+        "lookback": 10,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── MA10: 10日移动平均：10日移动平均价 ──
+    {
+        "name": "MA10",
+        "narrative": "10日移动平均：10日移动平均价",
+        "expression": "ts_mean(close, 10)",
+        "input_fields": ['close'],
+        "lookback": 15,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── MA20: 20日移动平均：20日移动平均价 ──
+    {
+        "name": "MA20",
+        "narrative": "20日移动平均：20日移动平均价",
+        "expression": "ts_mean(close, 20)",
+        "input_fields": ['close'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── MA60: 60日移动平均：60日移动平均价 ──
+    {
+        "name": "MA60",
+        "narrative": "60日移动平均：60日移动平均价",
+        "expression": "ts_mean(close, 60)",
+        "input_fields": ['close'],
+        "lookback": 65,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── MTM: 动量线：动量指标 ──
+    {
+        "name": "MTM",
+        "narrative": "动量线：动量指标",
+        "expression": "close - delay(close, 10)",
+        "input_fields": ['close'],
+        "lookback": 15,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── PVT: 价量趋势：价量趋势指标 ──
+    {
+        "name": "PVT",
+        "narrative": "价量趋势：价量趋势指标",
+        "expression": "ts_sum(returns * volume, 20)",
+        "input_fields": ['close', 'volume'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── ROC: 变动率：变动率指标 ──
+    {
+        "name": "ROC",
+        "narrative": "变动率：变动率指标",
+        "expression": "close / delay(close, 10) - 1",
+        "input_fields": ['close'],
+        "lookback": 15,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── Skewness60: 60日偏度：个股收益60日偏度 ──
+    {
+        "name": "Skewness60",
+        "narrative": "60日偏度：个股收益60日偏度",
+        "expression": "ts_skew(returns, 60)",
+        "input_fields": ['close'],
+        "lookback": 65,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── Kurtosis60: 60日峰度：个股收益60日峰度 ──
+    {
+        "name": "Kurtosis60",
+        "narrative": "60日峰度：个股收益60日峰度",
+        "expression": "ts_kurt(returns, 60)",
+        "input_fields": ['close'],
+        "lookback": 65,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── VEMA5: 成交量5日指数移动平均：成交量5日EMA ──
+    {
+        "name": "VEMA5",
+        "narrative": "成交量5日指数移动平均：成交量5日EMA",
+        "expression": "ts_mean(volume, 5)",
+        "input_fields": ['close', 'volume'],
+        "lookback": 10,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── VEMA10: 成交量10日指数移动平均：成交量10日EMA ──
+    {
+        "name": "VEMA10",
+        "narrative": "成交量10日指数移动平均：成交量10日EMA",
+        "expression": "ts_mean(volume, 10)",
+        "input_fields": ['close', 'volume'],
+        "lookback": 15,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── VEMA20: 成交量20日指数移动平均：成交量20日EMA ──
+    {
+        "name": "VEMA20",
+        "narrative": "成交量20日指数移动平均：成交量20日EMA",
+        "expression": "ts_mean(volume, 20)",
+        "input_fields": ['close', 'volume'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── turnover_ratio: 换手率：日换手率 ──
+    {
+        "name": "turnover_ratio",
+        "narrative": "换手率：日换手率",
+        "expression": "volume",
+        "input_fields": ['close', 'volume'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_profit_growth_rate: 净利润增长率：净利润同比增长率 ──
+    {
+        "name": "net_profit_growth_rate",
+        "narrative": "净利润增长率：净利润同比增长率",
+        "field_defs": "net_profit_growth_rate = data['net_profit_growth_rate'].values if hasattr(data, 'net_profit_growth_rate') else data.get('net_profit_growth_rate')",
+        "field_check": "net_profit_growth_rate is not None and len(net_profit_growth_rate) > 0",
+        "expression": "np.tanh(net_profit_growth_rate)",
+        "input_fields": ['net_profit_growth_rate'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── operating_revenue_growth_rate: 营业收入增长率：营业收入同比增长率 ──
+    {
+        "name": "operating_revenue_growth_rate",
+        "narrative": "营业收入增长率：营业收入同比增长率",
+        "field_defs": "operating_revenue_growth_rate = data['operating_revenue_growth_rate'].values if hasattr(data, 'operating_revenue_growth_rate') else data.get('operating_revenue_growth_rate')",
+        "field_check": "operating_revenue_growth_rate is not None and len(operating_revenue_growth_rate) > 0",
+        "expression": "np.tanh(operating_revenue_growth_rate)",
+        "input_fields": ['operating_revenue_growth_rate'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── total_asset_growth_rate: 总资产增长率：总资产同比增长率 ──
+    {
+        "name": "total_asset_growth_rate",
+        "narrative": "总资产增长率：总资产同比增长率",
+        "field_defs": "total_asset_growth_rate = data['total_asset_growth_rate'].values if hasattr(data, 'total_asset_growth_rate') else data.get('total_asset_growth_rate')",
+        "field_check": "total_asset_growth_rate is not None and len(total_asset_growth_rate) > 0",
+        "expression": "np.tanh(total_asset_growth_rate)",
+        "input_fields": ['total_asset_growth_rate'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── book_value_growth_rate: 净资产增长率：净资产同比增长率 ──
+    {
+        "name": "book_value_growth_rate",
+        "narrative": "净资产增长率：净资产同比增长率",
+        "field_defs": "book_value_growth_rate = data['book_value_growth_rate'].values if hasattr(data, 'book_value_growth_rate') else data.get('book_value_growth_rate')",
+        "field_check": "book_value_growth_rate is not None and len(book_value_growth_rate) > 0",
+        "expression": "np.tanh(book_value_growth_rate)",
+        "input_fields": ['book_value_growth_rate'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── operating_profit_growth_rate_3y: 营业利润3年复利增长率： ──
+    {
+        "name": "operating_profit_growth_rate_3y",
+        "narrative": "营业利润3年复利增长率：",
+        "field_defs": "operating_profit_growth_rate_3y = data['operating_profit_growth_rate_3y'].values if hasattr(data, 'operating_profit_growth_rate_3y') else data.get('operating_profit_growth_rate_3y')",
+        "field_check": "operating_profit_growth_rate_3y is not None and len(operating_profit_growth_rate_3y) > 0",
+        "expression": "np.tanh(operating_profit_growth_rate_3y)",
+        "input_fields": ['operating_profit_growth_rate_3y'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_profit_growth_rate_3y: 净利润3年复利增长率： ──
+    {
+        "name": "net_profit_growth_rate_3y",
+        "narrative": "净利润3年复利增长率：",
+        "field_defs": "net_profit_growth_rate_3y = data['net_profit_growth_rate_3y'].values if hasattr(data, 'net_profit_growth_rate_3y') else data.get('net_profit_growth_rate_3y')",
+        "field_check": "net_profit_growth_rate_3y is not None and len(net_profit_growth_rate_3y) > 0",
+        "expression": "np.tanh(net_profit_growth_rate_3y)",
+        "input_fields": ['net_profit_growth_rate_3y'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── operating_revenue_growth_rate_3y: 营业收入3年复利增长率： ──
+    {
+        "name": "operating_revenue_growth_rate_3y",
+        "narrative": "营业收入3年复利增长率：",
+        "field_defs": "operating_revenue_growth_rate_3y = data['operating_revenue_growth_rate_3y'].values if hasattr(data, 'operating_revenue_growth_rate_3y') else data.get('operating_revenue_growth_rate_3y')",
+        "field_check": "operating_revenue_growth_rate_3y is not None and len(operating_revenue_growth_rate_3y) > 0",
+        "expression": "np.tanh(operating_revenue_growth_rate_3y)",
+        "input_fields": ['operating_revenue_growth_rate_3y'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── eps: 基本每股收益：每股收益 ──
+    {
+        "name": "eps",
+        "narrative": "基本每股收益：每股收益",
+        "field_defs": "eps = data['eps'].values if hasattr(data, 'eps') else data.get('eps')",
+        "field_check": "eps is not None and len(eps) > 0",
+        "expression": "np.tanh(eps)",
+        "input_fields": ['eps'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── eps_diluted: 稀释每股收益：稀释每股收益 ──
+    {
+        "name": "eps_diluted",
+        "narrative": "稀释每股收益：稀释每股收益",
+        "field_defs": "eps_diluted = data['eps_diluted'].values if hasattr(data, 'eps_diluted') else data.get('eps_diluted')",
+        "field_check": "eps_diluted is not None and len(eps_diluted) > 0",
+        "expression": "np.tanh(eps_diluted)",
+        "input_fields": ['eps_diluted'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── bvps: 每股净资产：每股净资产 ──
+    {
+        "name": "bvps",
+        "narrative": "每股净资产：每股净资产",
+        "field_defs": "bvps = data['bvps'].values if hasattr(data, 'bvps') else data.get('bvps')",
+        "field_check": "bvps is not None and len(bvps) > 0",
+        "expression": "np.tanh(bvps)",
+        "input_fields": ['bvps'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── operating_revenue_per_share: 每股营业收入：每股营业收入 ──
+    {
+        "name": "operating_revenue_per_share",
+        "narrative": "每股营业收入：每股营业收入",
+        "field_defs": "operating_revenue_per_share = data['operating_revenue_per_share'].values if hasattr(data, 'operating_revenue_per_share') else data.get('operating_revenue_per_share')",
+        "field_check": "operating_revenue_per_share is not None and len(operating_revenue_per_share) > 0",
+        "expression": "np.tanh(operating_revenue_per_share)",
+        "input_fields": ['operating_revenue_per_share'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── net_profit_per_share: 每股净利润：每股净利润 ──
+    {
+        "name": "net_profit_per_share",
+        "narrative": "每股净利润：每股净利润",
+        "field_defs": "net_profit_per_share = data['net_profit_per_share'].values if hasattr(data, 'net_profit_per_share') else data.get('net_profit_per_share')",
+        "field_check": "net_profit_per_share is not None and len(net_profit_per_share) > 0",
+        "expression": "np.tanh(net_profit_per_share)",
+        "input_fields": ['net_profit_per_share'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── operating_cash_flow_per_share: 每股经营活动现金流量： ──
+    {
+        "name": "operating_cash_flow_per_share",
+        "narrative": "每股经营活动现金流量：",
+        "field_defs": "operating_cash_flow_per_share = data['operating_cash_flow_per_share'].values if hasattr(data, 'operating_cash_flow_per_share') else data.get('operating_cash_flow_per_share')",
+        "field_check": "operating_cash_flow_per_share is not None and len(operating_cash_flow_per_share) > 0",
+        "expression": "np.tanh(operating_cash_flow_per_share)",
+        "input_fields": ['operating_cash_flow_per_share'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── book_value_per_share: 每股净资产(同)：每股净资产 ──
+    {
+        "name": "book_value_per_share",
+        "narrative": "每股净资产(同)：每股净资产",
+        "field_defs": "book_value_per_share = data['book_value_per_share'].values if hasattr(data, 'book_value_per_share') else data.get('book_value_per_share')",
+        "field_check": "book_value_per_share is not None and len(book_value_per_share) > 0",
+        "expression": "np.tanh(book_value_per_share)",
+        "input_fields": ['book_value_per_share'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── capital_reserve_per_share: 每股资本公积： ──
+    {
+        "name": "capital_reserve_per_share",
+        "narrative": "每股资本公积：",
+        "field_defs": "capital_reserve_per_share = data['capital_reserve_per_share'].values if hasattr(data, 'capital_reserve_per_share') else data.get('capital_reserve_per_share')",
+        "field_check": "capital_reserve_per_share is not None and len(capital_reserve_per_share) > 0",
+        "expression": "np.tanh(capital_reserve_per_share)",
+        "input_fields": ['capital_reserve_per_share'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── surplus_reserve_per_share: 每股盈余公积： ──
+    {
+        "name": "surplus_reserve_per_share",
+        "narrative": "每股盈余公积：",
+        "field_defs": "surplus_reserve_per_share = data['surplus_reserve_per_share'].values if hasattr(data, 'surplus_reserve_per_share') else data.get('surplus_reserve_per_share')",
+        "field_check": "surplus_reserve_per_share is not None and len(surplus_reserve_per_share) > 0",
+        "expression": "np.tanh(surplus_reserve_per_share)",
+        "input_fields": ['surplus_reserve_per_share'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── retained_earnings_per_share: 每股未分配利润： ──
+    {
+        "name": "retained_earnings_per_share",
+        "narrative": "每股未分配利润：",
+        "field_defs": "retained_earnings_per_share = data['retained_earnings_per_share'].values if hasattr(data, 'retained_earnings_per_share') else data.get('retained_earnings_per_share')",
+        "field_check": "retained_earnings_per_share is not None and len(retained_earnings_per_share) > 0",
+        "expression": "np.tanh(retained_earnings_per_share)",
+        "input_fields": ['retained_earnings_per_share'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── Momentum_1M: 1个月动量：过去1个月收益率 ──
+    {
+        "name": "Momentum_1M",
+        "narrative": "1个月动量：过去1个月收益率",
+        "expression": "close / delay(close, 21) - 1",
+        "input_fields": ['close'],
+        "lookback": 26,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── Momentum_3M: 3个月动量：过去3个月收益率 ──
+    {
+        "name": "Momentum_3M",
+        "narrative": "3个月动量：过去3个月收益率",
+        "expression": "close / delay(close, 63) - 1",
+        "input_fields": ['close'],
+        "lookback": 68,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── Momentum_6M: 6个月动量：过去6个月收益率 ──
+    {
+        "name": "Momentum_6M",
+        "narrative": "6个月动量：过去6个月收益率",
+        "expression": "close / delay(close, 126) - 1",
+        "input_fields": ['close'],
+        "lookback": 131,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── Momentum_12M: 12个月动量：过去12个月收益率 ──
+    {
+        "name": "Momentum_12M",
+        "narrative": "12个月动量：过去12个月收益率",
+        "expression": "close / delay(close, 252) - 1",
+        "input_fields": ['close'],
+        "lookback": 257,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── Momentum_60D: 60日动量：过去60日收益率 ──
+    {
+        "name": "Momentum_60D",
+        "narrative": "60日动量：过去60日收益率",
+        "expression": "close / delay(close, 60) - 1",
+        "input_fields": ['close'],
+        "lookback": 65,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── Momentum_120D: 120日动量：过去120日收益率 ──
+    {
+        "name": "Momentum_120D",
+        "narrative": "120日动量：过去120日收益率",
+        "expression": "close / delay(close, 120) - 1",
+        "input_fields": ['close'],
+        "lookback": 125,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── pe_ratio: 市盈率：市盈率(PE) ──
+    {
+        "name": "pe_ratio",
+        "narrative": "市盈率：市盈率(PE)",
+        "field_defs": "pe = data['pe'].values if hasattr(data, 'pe') else data.get('pe')",
+        "field_check": "pe is not None and len(pe) > 0",
+        "expression": "np.tanh(1.0 / (np.maximum(pe, 0.1) / 15.0))",
+        "input_fields": ['pe'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── pe_ratio_ttm: 市盈率TTM：滚动市盈率 ──
+    {
+        "name": "pe_ratio_ttm",
+        "narrative": "市盈率TTM：滚动市盈率",
+        "field_defs": "pe_ttm = data['pe_ttm'].values if hasattr(data, 'pe_ttm') else data.get('pe_ttm')",
+        "field_check": "pe_ttm is not None and len(pe_ttm) > 0",
+        "expression": "np.tanh(1.0 / (np.maximum(pe_ttm, 0.1) / 15.0))",
+        "input_fields": ['pe_ttm'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── pb_ratio: 市净率：市净率(PB) ──
+    {
+        "name": "pb_ratio",
+        "narrative": "市净率：市净率(PB)",
+        "field_defs": "pb = data['pb'].values if hasattr(data, 'pb') else data.get('pb')",
+        "field_check": "pb is not None and len(pb) > 0",
+        "expression": "np.tanh(1.0 / (np.maximum(pb, 0.1) / 2.0))",
+        "input_fields": ['pb'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── ps_ratio: 市销率：市销率(PS) ──
+    {
+        "name": "ps_ratio",
+        "narrative": "市销率：市销率(PS)",
+        "field_defs": "ps = data['ps'].values if hasattr(data, 'ps') else data.get('ps')",
+        "field_check": "ps is not None and len(ps) > 0",
+        "expression": "np.tanh(1.0 / (np.maximum(ps, 0.1) / 3.0))",
+        "input_fields": ['ps'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── ps_ratio_ttm: 市销率TTM：滚动市销率 ──
+    {
+        "name": "ps_ratio_ttm",
+        "narrative": "市销率TTM：滚动市销率",
+        "field_defs": "ps_ttm = data['ps_ttm'].values if hasattr(data, 'ps_ttm') else data.get('ps_ttm')",
+        "field_check": "ps_ttm is not None and len(ps_ttm) > 0",
+        "expression": "np.tanh(1.0 / (np.maximum(ps_ttm, 0.1) / 3.0))",
+        "input_fields": ['ps_ttm'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── pcf_ratio: 市现率：市现率(PCF) ──
+    {
+        "name": "pcf_ratio",
+        "narrative": "市现率：市现率(PCF)",
+        "field_defs": "pcf = data['pcf'].values if hasattr(data, 'pcf') else data.get('pcf')",
+        "field_check": "pcf is not None and len(pcf) > 0",
+        "expression": "np.tanh(1.0 / (np.maximum(pcf, 0.1) / 10.0))",
+        "input_fields": ['pcf'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── dividend_yield_ratio: 股息率：股息率 ──
+    {
+        "name": "dividend_yield_ratio",
+        "narrative": "股息率：股息率",
+        "field_defs": "dividend_yield = data['dividend_yield'].values if hasattr(data, 'dividend_yield') else data.get('dividend_yield')",
+        "field_check": "dividend_yield is not None and len(dividend_yield) > 0",
+        "expression": "np.tanh(dividend_yield)",
+        "input_fields": ['dividend_yield'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── dividend_payout_ratio: 股利支付率：股利支付率 ──
+    {
+        "name": "dividend_payout_ratio",
+        "narrative": "股利支付率：股利支付率",
+        "field_defs": "dividend_payout_ratio = data['dividend_payout_ratio'].values if hasattr(data, 'dividend_payout_ratio') else data.get('dividend_payout_ratio')",
+        "field_check": "dividend_payout_ratio is not None and len(dividend_payout_ratio) > 0",
+        "expression": "np.tanh(dividend_payout_ratio)",
+        "input_fields": ['dividend_payout_ratio'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── KDJ: KDJ：随机指标 ──
+    {
+        "name": "KDJ",
+        "narrative": "KDJ：随机指标",
+        "expression": "rank(close - ts_min(low, 9)) / (rank(ts_max(high, 9) - ts_min(low, 9)) + _EPS)",
+        "input_fields": ['close', 'high', 'low'],
+        "lookback": 14,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── BOLL: 布林带：布林线 ──
+    {
+        "name": "BOLL",
+        "narrative": "布林带：布林线",
+        "expression": "(close - ts_mean(close, 20)) / (ts_stddev(close, 20) * 2 + _EPS)",
+        "input_fields": ['close'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── MA: 移动平均线：移动平均线 ──
+    {
+        "name": "MA",
+        "narrative": "移动平均线：移动平均线",
+        "expression": "ts_mean(close, 20)",
+        "input_fields": ['close'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── EMA: 指数移动平均：指数移动平均线 ──
+    {
+        "name": "EMA",
+        "narrative": "指数移动平均：指数移动平均线",
+        "expression": "ts_mean(close, 20)",
+        "input_fields": ['close'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── VOLUME: 成交量：成交量 ──
+    {
+        "name": "VOLUME",
+        "narrative": "成交量：成交量",
+        "expression": "volume",
+        "input_fields": ['close', 'volume'],
+        "lookback": 1,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── OBV: OBV：能量潮 ──
+    {
+        "name": "OBV",
+        "narrative": "OBV：能量潮",
+        "expression": "ts_sum(ifelse(close > delay(close, 1), volume, ifelse(close < delay(close, 1), -volume, 0)), 20)",
+        "input_fields": ['close', 'volume'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── DMI: DMI：趋向指标 ──
+    {
+        "name": "DMI",
+        "narrative": "DMI：趋向指标",
+        "expression": "ts_mean(high - low, 14)",
+        "input_fields": ['close', 'high', 'low'],
+        "lookback": 19,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── ARBR: ARBR：人气意愿指标 ──
+    {
+        "name": "ARBR",
+        "narrative": "ARBR：人气意愿指标",
+        "expression": "(ts_sum(high - open_, 26) / (ts_sum(open_ - low, 26) + _EPS))",
+        "input_fields": ['close', 'open', 'high', 'low'],
+        "lookback": 31,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── CR: CR：能量指标 ──
+    {
+        "name": "CR",
+        "narrative": "CR：能量指标",
+        "expression": "ts_sum(high - delay(close, 1), 26) / (ts_sum(delay(close, 1) - low, 26) + _EPS)",
+        "input_fields": ['close', 'high', 'low'],
+        "lookback": 31,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── TRIX: TRIX：三重指数平滑移动平均 ──
+    {
+        "name": "TRIX",
+        "narrative": "TRIX：三重指数平滑移动平均",
+        "expression": "ts_mean(ts_mean(ts_mean(close, 12), 12), 12)",
+        "input_fields": ['close'],
+        "lookback": 36,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── DPO: DPO：区间震荡线 ──
+    {
+        "name": "DPO",
+        "narrative": "DPO：区间震荡线",
+        "expression": "close - ts_mean(close, 20)",
+        "input_fields": ['close'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── BBI: BBI：多空指标 ──
+    {
+        "name": "BBI",
+        "narrative": "BBI：多空指标",
+        "expression": "(ts_mean(close, 3) + ts_mean(close, 6) + ts_mean(close, 12) + ts_mean(close, 24)) / 4",
+        "input_fields": ['close'],
+        "lookback": 29,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── EXPMA: EXPMA：指数平均数 ──
+    {
+        "name": "EXPMA",
+        "narrative": "EXPMA：指数平均数",
+        "expression": "ts_mean(close, 12)",
+        "input_fields": ['close'],
+        "lookback": 17,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+    # ── VHF: VHF：十字过滤线 ──
+    {
+        "name": "VHF",
+        "narrative": "VHF：十字过滤线",
+        "expression": "(ts_max(close, 20) - ts_min(close, 20)) / (ts_sum(abs(close - ts_mean(close, 20)), 20) + _EPS)",
+        "input_fields": ['close'],
+        "lookback": 25,
+        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
+    },
+]

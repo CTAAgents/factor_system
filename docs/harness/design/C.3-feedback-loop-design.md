@@ -1,6 +1,6 @@
 # C.3 系统化反馈闭环 — 详细技术设计
 
-> 版本: v1.0.0
+> 版本: v2.22.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase C.3
 > 状态: **已实现**（FeedbackLoop 家族 + 4 张反馈表 + CLI）
 > 实现说明: 反馈闭环完整实现于 `fts/factor_engine/feedback_loop.py`（`FeedbackTrigger`/`AttributionAnalyzer`/`EvolutionDirectionAdjuster`/`EvolutionEffectiveness`/`FeedbackLoop` 主类）、`factor_db/schema.py` 4 张反馈表（feedback_events/attribution_reports/feedback_processing_results/feedback_reports）、CLI `fts feedback` 子命令（trigger/process/report/stats）、Prometheus 反馈指标。经验沉淀复用 `fts/factor_engine/experience_chain.py`（`ExperienceChain` 经验链 + `FailurePatternAnalyzer`）作为归因输入之一。

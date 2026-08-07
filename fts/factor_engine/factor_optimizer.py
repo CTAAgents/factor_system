@@ -414,7 +414,7 @@ class FactorOptimizer:
         # 分批并行执行
         batch_size = self.max_workers * 4
         signal_matrix: dict[str, dict[str, np.ndarray]] = {}
-        n_workers = min(self.max_workers, len(tasks))
+        n_workers = max(1, min(self.max_workers, len(tasks)))
 
         cache_hits = 0
         cache_misses = 0

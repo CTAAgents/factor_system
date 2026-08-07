@@ -1,6 +1,6 @@
 # A.3 自适应动态权重调整 — 详细技术设计
 
-> 版本: v1.0.0
+> 版本: v2.22.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase A.3
 > 状态: **已实现**（实现方式与原设计不同）
 > 实现说明: 自适应权重已实现于 `fts/factor_engine/portfolio_loop.py`：`REGIME_FAMILY_MULTIPLIERS` 映射表 + `regime_adaptive_weight_adjustment()` 函数 + `PortfolioLoop` 集成 `enable_regime_adaptation`（Step 2.5），Regime 检测用 `fts/factor_engine/regime.py` 的 `RegimeAwareSelector`。**未实现**原设计的 `AdaptiveWeightManager`/`FactorStyleClassifier`/`RegimeSmoother` 类与 `factor_catalog.style_tags` 字段；权重映射基于 **FactorFamily（因子家族）** 而非 FactorStyle（风格标签）。

@@ -116,6 +116,7 @@ class FuturesDataProvider:
             self._aggregator = FuturesDataAggregator(
                 sources=sources, enhancers=[],
                 db_path=db_path,
+                cache_max_age_days=30,
             )
             logger.info("FuturesDataAggregator 初始化完成（源数=%d）", len(sources))
         except Exception as e:

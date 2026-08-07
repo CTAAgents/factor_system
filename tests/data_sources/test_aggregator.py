@@ -900,7 +900,8 @@ def test_write_cache_writes_to_legacy_varchar_schema(legacy_varchar_db: Path):
     agg._write_cache(df)
 
     # 验证写入成功（修复前 count==0；修复后 count==5）
-    con = duckdb.connect(str(legacy_varchar_db), read_only=True)
+    # 使用默认连接模式（不传 read_only），避免与聚合器持久连接冲突
+    con = duckdb.connect(str(legacy_varchar_db))
     try:
         count = con.execute(
             "SELECT COUNT(*) FROM kline_cache WHERE symbol='RB0'"
@@ -938,7 +939,8 @@ def test_write_cache_writes_to_fresh_date_schema(tmp_db: Path):
     agg._write_cache(df)
 
     import duckdb
-    con = duckdb.connect(str(tmp_db), read_only=True)
+    # 使用默认连接模式，避免与聚合器持久连接冲突
+    con = duckdb.connect(str(tmp_db))
     try:
         count = con.execute(
             "SELECT COUNT(*) FROM kline_cache WHERE symbol='RB0'"
@@ -976,7 +978,8 @@ def test_synthesize_path_writes_to_cache_when_all_sources_fail(tmp_db: Path):
     assert (df["source"] == DataSource.SYNTHETIC.value).all()
 
     # 2) 关键：缓存也必须被写入（修复前 _synthesize 直接 return，count=0）
-    con = duckdb.connect(str(tmp_db), read_only=True)
+    # 使用默认连接模式，避免与聚合器持久连接冲突
+    con = duckdb.connect(str(tmp_db))
     try:
         count = con.execute(
             "SELECT COUNT(*) FROM kline_cache WHERE symbol='RB0'"
