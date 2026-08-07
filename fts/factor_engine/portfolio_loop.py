@@ -2295,13 +2295,17 @@ class PortfolioLoop:
         self._regime_selector: Optional[Any] = None
 
     def _generate_quality_report(self) -> None:
-        """从 DuckDB 查询精英因子，生成最终质量报告 JSON。
+        """从 DuckDB 或 combo 回退，生成精英因子最终质量报告 JSON。
 
         报告保存到 memory/portfolio/elite_final_quality_YYYY-MM-DD.json，
         与初始种子评测 (quality_ranking.json) 区分，记录实际进入组合的因子质量。
         """
         from datetime import datetime as _dt
 
+        factors: list[dict[str, Any]] = []
+        source = ""
+
+        # ── 路径 A: 优先从 DuckDB 查询 ──
         try:
             from .factor_db import FactorRepository
             repo = FactorRepository()
@@ -2314,57 +2318,88 @@ class PortfolioLoop:
                     ORDER BY ic DESC
                 """, [self.market]).fetchall()
 
-                if not rows:
-                    logger.info("[L3] Step 7.5: 无 active elite 因子，跳过质量报告")
-                    return
-
-                factors = []
-                for r in rows:
-                    factors.append({
-                        "factor_id": r[0], "name": r[1],
-                        "ic": round(r[2], 4), "sharpe": round(r[3], 4),
-                        "turnover_monthly": round(r[4], 4),
-                        "decay_6m": round(r[5], 4),
-                        "market": r[6], "is_elite": r[7], "status": r[8],
-                    })
-
-                ics = [f["ic"] for f in factors]
-                sharpes = [f["sharpe"] for f in factors]
-                below_ic = sum(1 for ic in ics if abs(ic) < _RUNTIME_MIN_IC)
-                below_sharpe = sum(1 for s in sharpes if s < _RUNTIME_MIN_SHARPE)
-
-                # 加载当前状态获取 trace_id
-                state = self.state_manager.load_or_init()
-                report = {
-                    "report_type": "elite_final_quality",
-                    "generated_at": _dt.now().isoformat(),
-                    "trace_id": state.get("current_trace_id"),
-                    "thresholds": {"min_ic": _RUNTIME_MIN_IC, "min_sharpe": _RUNTIME_MIN_SHARPE},
-                    "summary": {
-                        "count": len(factors),
-                        "ic_range": [round(min(ics), 4), round(max(ics), 4)],
-                        "ic_mean": round(sum(ics) / len(ics), 4),
-                        "sharpe_range": [round(min(sharpes), 4), round(max(sharpes), 4)],
-                        "sharpe_mean": round(sum(sharpes) / len(sharpes), 4),
-                        "below_ic_threshold": below_ic,
-                        "below_sharpe_threshold": below_sharpe,
-                    },
-                    "factors": factors,
-                }
-
-                ts = _dt.now().strftime("%Y-%m-%d")
-                out_file = self.memory_dir / f"elite_final_quality_{ts}.json"
-                out_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-                logger.info(
-                    "[L3] Step 7.5: 质量报告已生成 [%s]: %d 因子, IC=[%.4f, %.4f], "
-                    "IC<%.2f: %d, Sharpe<%.1f: %d",
-                    out_file.name, len(factors), min(ics), max(ics),
-                    _RUNTIME_MIN_IC, below_ic, _RUNTIME_MIN_SHARPE, below_sharpe,
-                )
+                if rows:
+                    for r in rows:
+                        factors.append({
+                            "factor_id": r[0], "name": r[1],
+                            "ic": round(r[2], 4), "sharpe": round(r[3], 4),
+                            "turnover_monthly": round(r[4], 4),
+                            "decay_6m": round(r[5], 4),
+                            "market": r[6], "is_elite": r[7], "status": r[8],
+                        })
+                    source = "DuckDB"
             finally:
                 repo.close()
         except Exception as e:
-            logger.warning("[L3] Step 7.5: 质量报告生成失败 (非致命): %s", e)
+            import traceback
+            logger.warning("[L3] Step 7.5: DuckDB 查询失败 (%s)，尝试 combo 回退", e)
+            logger.debug("[L3] Step 7.5: DuckDB 异常详情:\n%s", traceback.format_exc())
+
+        # ── 路径 B: 从 combo 文件回退 ──
+        if not factors:
+            try:
+                combo_file = self.memory_dir / "current_combo.json"
+                if combo_file.exists():
+                    combo = json.loads(combo_file.read_text(encoding="utf-8"))
+                    weights = combo.get("weights", {}) or {}
+                    # 从 weights 构建因子列表
+                    for name, w in weights.items():
+                        factors.append({
+                            "factor_id": name,
+                            "name": name,
+                            "ic": round(w.get("ic", 0), 4) if isinstance(w, dict) else 0.0,
+                            "sharpe": round(w.get("sharpe", 0), 4) if isinstance(w, dict) else 0.0,
+                            "turnover_monthly": 0.0,
+                            "decay_6m": 0.0,
+                            "market": self.market,
+                            "is_elite": True,
+                            "status": "active",
+                        })
+                    source = "combo_fallback"
+                    logger.info("[L3] Step 7.5: combo 回退加载 %d 个因子", len(factors))
+                else:
+                    logger.info("[L3] Step 7.5: combo 文件不存在，跳过质量报告")
+                    return
+            except Exception as e2:
+                logger.warning("[L3] Step 7.5: combo 回退也失败: %s", e2)
+                return
+
+        if not factors:
+            logger.info("[L3] Step 7.5: 无因子数据，跳过质量报告")
+            return
+
+        ics = [f["ic"] for f in factors if f.get("ic") is not None]
+        sharpes = [f["sharpe"] for f in factors if f.get("sharpe") is not None]
+
+        state = self.state_manager.load_or_init()
+        report = {
+            "report_type": "elite_final_quality",
+            "generated_at": _dt.now().isoformat(),
+            "source": source,
+            "trace_id": state.get("current_trace_id"),
+            "thresholds": {"min_ic": _RUNTIME_MIN_IC, "min_sharpe": _RUNTIME_MIN_SHARPE},
+            "summary": {
+                "count": len(factors),
+                "ic_range": [round(min(ics), 4), round(max(ics), 4)] if ics else [0, 0],
+                "ic_mean": round(sum(ics) / len(ics), 4) if ics else 0,
+                "sharpe_range": [round(min(sharpes), 4), round(max(sharpes), 4)] if sharpes else [0, 0],
+                "sharpe_mean": round(sum(sharpes) / len(sharpes), 4) if sharpes else 0,
+                "below_ic_threshold": sum(1 for ic in ics if abs(ic) < _RUNTIME_MIN_IC) if ics else 0,
+                "below_sharpe_threshold": sum(1 for s in sharpes if s < _RUNTIME_MIN_SHARPE) if sharpes else 0,
+            },
+            "factors": factors,
+        }
+
+        ts = _dt.now().strftime("%Y-%m-%d")
+        out_file = self.memory_dir / f"elite_final_quality_{ts}.json"
+        out_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+        logger.info(
+            "[L3] Step 7.5: 质量报告已生成 [%s, source=%s]: %d 因子, IC=[%.4f, %.4f], "
+            "IC<%.2f: %d, Sharpe<%.1f: %d",
+            out_file.name, source, len(factors), min(ics), max(ics) if ics else 0,
+            _RUNTIME_MIN_IC, sum(1 for ic in ics if abs(ic) < _RUNTIME_MIN_IC) if ics else 0,
+            _RUNTIME_MIN_SHARPE, sum(1 for s in sharpes if s < _RUNTIME_MIN_SHARPE) if sharpes else 0,
+        )
 
     def run(
         self,
