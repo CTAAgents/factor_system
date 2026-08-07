@@ -66,19 +66,67 @@ class LLMClient(ABC):
     def generate_json(self, prompt: str, max_tokens: int = 4000) -> dict:
         """生成 JSON 响应（解析 response 为 dict）。"""
         text, _ = self.complete(prompt, max_tokens=max_tokens)
-        # 尝试提取 JSON 块
+        return self._parse_json(text)
+
+    @staticmethod
+    def _parse_json(text: str) -> dict:
+        """尝试解析 JSON 文本，含修复逻辑。"""
+        # 1. 直接解析
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
-        # 尝试从 markdown 代码块提取
-        if "```json" in text:
-            block = text.split("```json")[1].split("```")[0].strip()
-            return json.loads(block)
-        if "```" in text:
-            block = text.split("```")[1].split("```")[0].strip()
-            return json.loads(block)
+
+        # 2. 从 markdown 代码块提取
+        for marker in ["```json", "```"]:
+            if marker in text:
+                try:
+                    block = text.split(marker)[1].split("```")[0].strip()
+                    return json.loads(block)
+                except (json.JSONDecodeError, IndexError):
+                    pass
+
+        # 3. 尝试修复式解析
+        repaired = LLMClient._repair_json(text)
+        if repaired is not None:
+            return repaired
+
         raise LLMError(f"LLM 响应不是合法 JSON: {text[:200]}...")
+
+    @staticmethod
+    def _repair_json(text: str) -> Optional[dict]:
+        """尝试修复常见 JSON 格式错误并解析。
+
+        处理策略:
+          1. 提取最外层 {} 区域
+          2. 逐段截断修复（去掉末尾不完整字段）
+          3. 最多尝试 20 轮截断
+        """
+        # 提取最外层 {} 区域
+        first_brace = text.find("{")
+        last_brace = text.rfind("}")
+        if first_brace == -1 or last_brace == -1 or last_brace <= first_brace:
+            return None
+        candidate = text[first_brace : last_brace + 1]
+
+        # 尝试直接解析
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+        # 逐段截断: 去掉末尾不完整字段（最多 100 轮，10 候选约有 100-200 个逗号）
+        for _ in range(100):
+            last_comma = candidate.rfind(",")
+            if last_comma == -1:
+                break
+            candidate = candidate[:last_comma].rstrip() + "}"
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+
+        return None
 
     def bootstrap_factors(
         self,
@@ -176,22 +224,48 @@ class OpenAIClient(LLMClient):
             "[bootstrap_factors] Prompt 构造完成, trace_id=%s, prompt_len=%d",
             trace_id, len(prompt),
         )
-        try:
-            data = self.generate_json(prompt, max_tokens=4000)
-        except LLMError as e:
-            elapsed = (time.time() - t0) * 1000
-            logger.warning(
-                "[bootstrap_factors] JSON 解析失败, trace_id=%s, elapsed_ms=%.1f, error=%s",
-                trace_id, elapsed, e,
-            )
-            return []
-        except Exception as e:
-            elapsed = (time.time() - t0) * 1000
-            logger.error(
-                "[bootstrap_factors] LLM 调用异常, trace_id=%s, elapsed_ms=%.1f, error=%s",
-                trace_id, elapsed, e, exc_info=True,
-            )
-            return []
+
+        # 最多 2 次尝试: 首次 + 1 次 JSON 修复重试
+        max_attempts = 2
+        data: Optional[dict] = None
+        for attempt in range(max_attempts):
+            # 第 1 步: 调用 complete()
+            try:
+                raw_text, _ = self.complete(prompt, max_tokens=4000)
+            except Exception as e:
+                elapsed = (time.time() - t0) * 1000
+                if attempt == max_attempts - 1:
+                    logger.error(
+                        "[bootstrap_factors] LLM 调用失败 (重试耗尽), trace_id=%s, elapsed_ms=%.1f, error=%s",
+                        trace_id, elapsed, e, exc_info=True,
+                    )
+                    return []
+                logger.warning(
+                    "[bootstrap_factors] LLM 调用失败 (重试 %d), trace_id=%s, elapsed_ms=%.1f, error=%s",
+                    attempt + 1, trace_id, elapsed, e,
+                )
+                continue
+
+            # 第 2 步: 解析 JSON
+            try:
+                data = LLMClient._parse_json(raw_text)
+                break  # 解析成功
+            except LLMError as e:
+                elapsed = (time.time() - t0) * 1000
+                if attempt == max_attempts - 1:
+                    logger.warning(
+                        "[bootstrap_factors] JSON 解析失败 (重试耗尽), trace_id=%s, elapsed_ms=%.1f, error=%s",
+                        trace_id, elapsed, e,
+                    )
+                    return []
+                logger.warning(
+                    "[bootstrap_factors] JSON 解析失败 (重试 %d), trace_id=%s, elapsed_ms=%.1f, error=%s",
+                    attempt + 1, trace_id, elapsed, e,
+                )
+                # 构造修复 prompt: 告知 LLM 其 JSON 不合法，要求重输出
+                prompt = self._build_repair_prompt(raw_text, max_candidates)
+                continue
+        assert data is not None  # 确保此处 data 已赋值
         candidates = data.get("candidates", [])
         if not isinstance(candidates, list):
             elapsed = (time.time() - t0) * 1000
@@ -283,6 +357,36 @@ class OpenAIClient(LLMClient):
 
 【trace_id】: {trace_id}
 现在请生成 {max_candidates} 个候选因子。"""
+
+    @staticmethod
+    def _build_repair_prompt(broken_raw: str, max_candidates: int) -> str:
+        """构造 JSON 修复 Prompt — 告知 LLM 上次响应不合法，要求重输出。"""
+        # 取前 2000 字符作为上下文
+        snippet = broken_raw[:2000]
+        return f"""你上次的响应包含不合法的 JSON，请重新生成 {max_candidates} 个因子候选。
+
+【你上次输出的前 2000 字符】
+{snippet}
+
+【要求】
+1. 输出必须是 **纯 JSON 格式**，不包含任何 markdown 代码块标记（```json）
+2. 注意 JSON 中 code 字段的 Python 代码内换行符必须正确转义为 \\n
+3. 每个字符串字段都必须正确闭合引号
+4. 不要使用注释或额外文字
+5. 只输出 JSON 对象，结构如下:
+{{
+    "candidates": [
+        {{
+            "name": "...",
+            "code": "def factor_program(data, params):\\n...",
+            "params": {{}},
+            "signature": {{"input_fields": [...], "output_type": "signal", "frequency": "daily", "lookback": 20}},
+            "economic_logic": {{"theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3, "narrative": "..."}},
+            "parent_topic": "l1_bootstrapping_repair",
+            "source": "l1_bootstrapping"
+        }}
+    ]
+}}"""
 
 
 # ─── Anthropic 客户端 ─────────────────────────────────────

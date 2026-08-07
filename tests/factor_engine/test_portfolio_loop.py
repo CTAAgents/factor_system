@@ -375,16 +375,16 @@ class TestSynthesizeSignals:
         assert signals[2]["weight"] == pytest.approx(1.8 / total)
 
     def test_sharpe_cap(self):
-        """Sharpe > 3.0 的因子按 3.0 计算权重（P0 过拟合修复）。"""
+        """Sharpe > 2.0 的因子按 2.0 显示，权重用原始值计算（P0 过拟合修复）。"""
         factors = [
             {"factor_id": "fct_a", "name": "factor_a", "sharpe": 5.0, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1},
             {"factor_id": "fct_b", "name": "factor_b", "sharpe": 2.0, "ic": 0.04, "turnover": 0.4, "decay_6m": 0.2},
         ]
         signals, _, _ = synthesize_signals(factors, mode="sharpe_weight")
-        # factor_a sharpe 5.0 被截断为 3.0, factor_b 保持 2.0
-        total = 3.0 + 2.0
-        assert signals[0]["sharpe"] == 3.0  # 被截断
-        assert signals[0]["weight"] == pytest.approx(3.0 / total)
+        # sharpe 字段显示截断值（2.0），权重用原始值（5.0+2.0）计算
+        total_raw = 5.0 + 2.0
+        assert signals[0]["sharpe"] == 2.0  # 被截断（显示值）
+        assert signals[0]["weight"] == pytest.approx(5.0 / total_raw)  # 权重用原始值
         assert signals[1]["sharpe"] == 2.0  # 未被截断
         # 原始值应保留在 _sharpe_raw
         assert signals[0].get("_sharpe_raw") == 5.0

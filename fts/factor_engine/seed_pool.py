@@ -409,10 +409,13 @@ class SeedPool:
     def __init__(
         self,
         trace_id: Optional[str] = None,
-        market: str = "futures",
+        market: Optional[str] = None,
         use_yaml: bool = True,
     ):
         self._trace_id = trace_id
+        if market is None:
+            from fts.config.settings import get_config
+            market = get_config().default_market
         self._market = market
         self._cache: dict[str, FactorProgram] = {}
         self._use_yaml = use_yaml

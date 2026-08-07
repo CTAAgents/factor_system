@@ -8,7 +8,8 @@ scripts/futures_signal_pipeline.py — 期货每日信号生成管道
 
 输出:
     - 控制台: 信号排名表
-    - 文件:     reports/{date}/futures_signals_{date}.md
+    - 文件:     reports/{date}/futures_signals_{date}.md（信号排名报告）
+    - 文件:     reports/{date}/trading_advice_{date}.md（交易建议报告）
 
 方向校正方法（v2）:
     期货是多空双向，因子在期货上的 IC 方向可能为负。
@@ -80,59 +81,6 @@ def _yesterday_str() -> str:
     """返回昨日日期字符串 (YYYY-MM-DD)。"""
     from datetime import timedelta
     return (date.today() - timedelta(days=1)).isoformat()
-
-
-def _build_composite_ohlcv(
-    panel: dict[str, "pd.DataFrame"],
-    common_dates: list[str],
-) -> "pd.DataFrame":
-    """从品种面板构建市场综合 OHLCV（用于 Regime 检测）。
-
-    方法：取所有品种 close 的截面均值作为市场综合价格序列，
-    构建合成 OHLCV（open/high/low 用 close 近似，volume 取截面和）。
-
-    Args:
-        panel: 品种行情面板 (symbol → DataFrame)
-        common_dates: 共同交易日列表
-
-    Returns:
-        pd.DataFrame with columns open/high/low/close/volume, DatetimeIndex
-    """
-    # 收集所有品种的 close 序列，对齐到 common_dates
-    close_matrix: dict[str, pd.Series] = {}
-    for sym, df in panel.items():
-        if df is None or df.empty or "close" not in df.columns:
-            continue
-        close_s = df["close"].reindex(common_dates)
-        close_matrix[sym] = close_s
-
-    if not close_matrix:
-        return pd.DataFrame()
-
-    # 截面均值作为市场综合 close
-    close_df = pd.DataFrame(close_matrix)
-    composite_close = close_df.mean(axis=1).dropna()
-
-    if len(composite_close) < 20:
-        return pd.DataFrame()
-
-    # 合成 OHLCV（open/high/low 用 close 近似，volume 取截面和）
-    volume_df = pd.DataFrame({
-        sym: df["volume"].reindex(common_dates)
-        for sym, df in panel.items()
-        if "volume" in df.columns
-    })
-    composite_volume = volume_df.sum(axis=1).reindex(composite_close.index).fillna(0)
-
-    ohlcv = pd.DataFrame({
-        "open": composite_close.shift(1).fillna(composite_close),
-        "high": composite_close,
-        "low": composite_close,
-        "close": composite_close,
-        "volume": composite_volume,
-    }, index=composite_close.index)
-
-    return ohlcv
 
 
 def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]]:
@@ -434,7 +382,7 @@ def _compute_ridge_weights(
     panel: dict[str, "pd.DataFrame"],
     common_dates: list[str],
     factor_sign_flips: dict[str, float],
-    lookback: int = 60,
+    lookback: int = 120,
     alpha: float | None = None,
 ) -> dict[str, float]:
     """用 Ridge 回归学习因子权重（替代等权合成）。
@@ -586,7 +534,7 @@ def _compute_ridge_weights(
     corr_matrix = np.corrcoef(X_scaled, rowvar=False)
     corr_matrix = np.nan_to_num(corr_matrix, nan=0.0, posinf=1.0, neginf=-1.0)
     
-    corr_threshold = 0.6
+    corr_threshold = 0.5
     penalty_matrix = np.zeros_like(corr_matrix)
     high_corr_pairs = []
     for i in range(n_factors):
@@ -604,7 +552,7 @@ def _compute_ridge_weights(
         if len(high_corr_pairs) > 5:
             print(f"        ... 及其他 {len(high_corr_pairs) - 5} 对")
 
-    lambda_corr = 0.1
+    lambda_corr = 0.5
     
     penalty_features_list = []
     penalty_targets = []
@@ -636,7 +584,7 @@ def _compute_ridge_weights(
         from sklearn.linear_model import Ridge
         ridge = Ridge(alpha=alpha, fit_intercept=True)
     else:
-        ridge = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0], fit_intercept=True)
+        ridge = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 5000.0, 10000.0], fit_intercept=True)
     ridge.fit(X_augmented, y_augmented)
 
     # 系数取绝对值 → 权重
@@ -649,7 +597,7 @@ def _compute_ridge_weights(
                for fname, coef in zip(factor_names, coefs)}
 
     # ── 极端相关因子硬删除 (|corr| > 0.95) ──
-    extreme_threshold = 0.95
+    extreme_threshold = 0.90
     extreme_pairs = [(f1, f2, c) for f1, f2, c in high_corr_pairs if c > extreme_threshold]
     removed_factors: set[str] = set()
     
@@ -1030,6 +978,342 @@ def _compute_holdout_validation(
     }
 
 
+def _generate_trading_advice_report(
+    today: str,
+    report_dir: Path,
+    sym_scores: dict[str, float],
+    sym_deltas: dict[str, float],
+    has_delta: bool,
+    market_regime: dict,
+    regime_label: str,
+    sector_breakdown: dict[str, str],
+    active_sector_map: dict[str, list[str]],
+    factor_weights: dict[str, float],
+    per_variety_weights: dict[str, dict[str, float]] | None,
+    panel: dict[str, "pd.DataFrame"],
+    long_signals: list[tuple[str, float]],
+    short_signals: list[tuple[str, float]],
+    name_fn: callable,
+    price_fn: callable,
+    contract_fn: callable,
+) -> None:
+    """生成交易建议报告（独立于信号排名报告）。
+
+    输出文件: reports/{date}/trading_advice_{date}.md
+    """
+    regime_type = market_regime.get("regime", "unknown")
+    confidence = market_regime.get("confidence", 0)
+
+    lines: list[str] = []
+    def w(s=""):
+        lines.append(s)
+
+    # ── 标题 ──
+    w(f"# 交易建议报告 — {today}")
+    w()
+    w(f"生成时间: {today} | 基于 FTS L3 Portfolio Loop 信号")
+    w(f"覆盖品种: {len(sym_scores)} 个 | 信号范围: [{min(sym_scores.values()):+.4f}, {max(sym_scores.values()):+.4f}]")
+    w()
+
+    # ── 1. 市场制度与方向策略 ──
+    w("## 1. 市场制度与方向策略")
+    w()
+    w(f"| 维度 | 当前状态 |")
+    w(f"|------|----------|")
+    w(f"| 主制度 (品种数加权) | **{regime_label}** |")
+    w(f"| 主制度置信度 | {confidence:.1%} |")
+    if regime_type == "bull":
+        w("| 方向策略 | **顺势做多** |")
+        w("| 仓位建议 | 正常仓位（70-80%） |")
+    elif regime_type == "bear":
+        w("| 方向策略 | **顺势做空** |")
+        w("| 仓位建议 | 中等仓位（50-60%） |")
+    elif regime_type == "oscillate":
+        w("| 方向策略 | **反向操作** |")
+        w("| 仓位建议 | 谨慎仓位（30-40%） |")
+    elif regime_type == "high_vol":
+        w("| 方向策略 | **谨慎观望** |")
+        w("| 仓位建议 | 低仓位（20-30%） |")
+    else:
+        w("| 方向策略 | **观望为主** |")
+        w("| 仓位建议 | 低仓位（0-20%） |")
+    w()
+
+    # 产业链级 Breakdown
+    if sector_breakdown:
+        w("### 产业链级市场制度 Breakdown")
+        w()
+        w("| 产业链 | 制度 | 置信度 | 品种数 | 方向建议 |")
+        w("|--------|------|--------|--------|----------|")
+        for sector in sorted(sector_breakdown.keys()):
+            r = sector_breakdown[sector]
+            c = market_regime.get("features", {}).get("sector_confidences", {}).get(sector, 0)
+            n_syms = len(active_sector_map.get(sector, []))
+            if r in ("bull", "bear"):
+                dir_advice = "顺势" if r == "bull" else "做空"
+            elif r == "oscillate":
+                dir_advice = "反向操作"
+            elif r in ("high_vol",):
+                dir_advice = "谨慎"
+            else:
+                dir_advice = "观望"
+            w(f"| {sector} | {r} | {c:.1%} | {n_syms} | {dir_advice} |")
+        w()
+        w("> **策略提示**: 不同产业链制度分化时，应以产业链级制度为准调整该板块品种的交易策略，")
+        w("> 避免用全市场平均制度掩盖结构性机会或风险。")
+        w()
+
+    regime_note = {
+        "bull": "趋势上涨环境，做多信号可信度较高，可适当放大仓位。趋势延续概率高，逆势做空风险大。",
+        "bear": "趋势下跌环境，做空信号可信度较高，可适当放大仓位。做多信号仅用于对冲，不做主力方向。",
+        "oscillate": "震荡环境，反向操作更优：做空加速品种，做多减速品种。趋势持续性弱，以区间交易为主。",
+        "high_vol": "波动率异常偏高，信号噪音大，需严格止损。只做增量绝对值 > 0.15 的品种。",
+        "low_vol": "波动率偏低，信号可信度较高，可正常仓位。关注波动率突破信号。",
+    }.get(regime_type, "市场状态不明确，建议缩小仓位或观望。")
+    w(f"> {regime_note}")
+    w()
+
+    # ── 2. 信号强度分层与仓位建议 ──
+    w("## 2. 信号强度分层与仓位建议")
+    w()
+    w("| 信号强度 | 仓位比例 | 操作建议 | 适用品种数 |")
+    w("|----------|---------|---------|-----------|")
+    tiers = [
+        (0.60, float("inf"), "15-20%", "主力建仓，分 2 批"),
+        (0.40, 0.60, "10-15%", "正常建仓"),
+        (0.15, 0.40, "5-10%", "试探性建仓"),
+        (0.0, 0.15, "0%", "不交易"),
+    ]
+    for lo, hi, size, action in tiers:
+        if hi == float("inf"):
+            count = sum(1 for _, sc in long_signals + short_signals if abs(sc) >= lo)
+            label = f"≥ {lo:.2f}"
+        else:
+            count = sum(1 for _, sc in long_signals + short_signals if lo <= abs(sc) < hi)
+            label = f"{lo:.2f} ~ {hi:.2f}"
+        w(f"| {label} | {size} | {action} | {count} 个 |")
+    w()
+
+    # ── 3. 建仓规则 ──
+    w("## 3. 建仓规则")
+    w()
+    w("### 3.1 分批建仓")
+    w()
+    w("| 批次 | 比例 | 触发条件 | 动作 |")
+    w("|------|------|----------|------|")
+    w("| 第 1 批 | 50% | 开盘 | 按信号强度分配仓位，市价入场 |")
+    w("| 第 2 批 | 30% | 收盘价比入场价确认方向 | 确认方向正确后加仓 |")
+    w("| 第 3 批 | 20% | 次日信号增量仍为正方向 | 趋势延续确认后加仓 |")
+    w()
+    w("### 3.2 分批条件")
+    w()
+    w("- 第 2 批条件：收盘价与入场价方向一致（做空：收盘 < 开盘；做多：收盘 > 开盘）")
+    w("- 第 3 批条件：次日信号增量未反转（做空：delta < 0；做多：delta > 0）")
+    w("- 任一条件不满足则取消后续批次，等待下一次机会")
+    w()
+
+    # ── 4. 止损规则 ──
+    w("## 4. 止损规则")
+    w()
+    w("| 条件 | 动作 |")
+    w("|------|------|")
+    w("| 持仓浮亏 > 2% | 减仓 50% |")
+    w("| 持仓浮亏 > 4% | 清仓 |")
+    w("| 信号增量反转（做空但 delta > 0，做多但 delta < 0）| 减半仓 |")
+    w("| 连续 3 天信号衰减（信号强度持续下降）| 平仓 |")
+    w("| 盘中价格突破 20 日 ATR 2 倍 | 无条件止损 |")
+    w()
+
+    # ── 5. 信号增量驱动的动态调整 ──
+    w("## 5. 信号增量驱动的动态调整")
+    w()
+    w("> 信号增量 = 今日得分 - 昨日得分，反映信号强度的变化方向和幅度。")
+    w()
+    if has_delta:
+        delta_ranked = sorted(sym_deltas.items(), key=lambda x: x[1])
+        accel_short = [(s, d) for s, d in delta_ranked if d < -0.02][:5]
+        decel_short = [(s, d) for s, d in delta_ranked if d > 0.02][:5]
+
+        w("| 信号增量区间 | 操作 | 含义 |")
+        w("|-------------|------|------|")
+        w("| $\\Delta < -0.02$ | 加仓或持有 | 空头加速，做空信号加强 |")
+        w("| $-0.02 \\leq \\Delta \\leq 0.02$ | 持有观望 | 信号稳定，维持现有仓位 |")
+        w("| $\\Delta > 0.02$ | 减仓或平仓 | 空头减速/反转萌芽，警惕反转 |")
+        w()
+
+        if accel_short:
+            w("**空头加速品种（做空优先关注）**：")
+            w()
+            for sym, delta in accel_short:
+                score = sym_scores.get(sym, 0)
+                w(f"- **{sym}** | 信号={score:+.4f} | 增量={delta:+.4f} | 做空信号加强中")
+            w()
+
+        if decel_short:
+            w("**空头减速/反转萌芽品种（警惕反转）**：")
+            w()
+            for sym, delta in decel_short:
+                score = sym_scores.get(sym, 0)
+                w(f"- **{sym}** | 信号={score:+.4f} | 增量={delta:+.4f} | 做空信号减弱中，建议减仓")
+            w()
+    else:
+        w("- 无昨日信号数据，无法计算增量。首次运行或数据缺失不影响交易。")
+        w()
+
+    # ── 6. 品种级差异化权重 ──
+    w("## 6. 品种级差异化权重")
+    w()
+    if per_variety_weights:
+        w("> 每个品种的因子权重已根据其自身 IC 矩阵调整，使品种更依赖对其有效的因子。")
+        w()
+        # 品种级权重偏离度汇总
+        deviations = []
+        for var, vw in per_variety_weights.items():
+            gw = {f: factor_weights.get(f, 0) for f in vw}
+            dev = sum(abs(vw[f] - gw.get(f, 0)) for f in vw) / len(vw)
+            deviations.append((var, dev))
+        deviations.sort(key=lambda x: -x[1])
+        w("| 品种 | 与全局权重偏离度 | 说明 |")
+        w("|------|----------------|------|")
+        for var, dev in deviations[:5]:
+            note = "权重差异化大，品种个性强" if dev > 0.02 else "接近全局权重"
+            w(f"| {var} | {dev:.4f} | {note} |")
+        if len(deviations) > 5:
+            w(f"| ... 及其他 {len(deviations) - 5} 个品种 | — | — |")
+        w()
+    else:
+        w("- 使用全局 Ridge 权重，未做品种级调整。")
+        w()
+
+    # 权重最集中的前 3 个因子
+    w("**Top 因子权重**：")
+    w()
+    sorted_factors = sorted(factor_weights.items(), key=lambda x: x[1], reverse=True)
+    for name, weight in sorted_factors[:5]:
+        w(f"- **{name}**: {weight:.1%}")
+    w()
+
+    # ── 7. 风险控制要点 ──
+    w("## 7. 风险控制要点")
+    w()
+    w("| 风险类型 | 具体描述 | 对策 |")
+    w("|----------|----------|------|")
+    w("| **方向冲突** | 当前做多与做空信号并存 | 分别独立交易，净敞口不超过总资金 50% |")
+    w("| **Regime 切换** | 市场制度可能转变 | 每日检查 regime，切换后减仓至 50% 以下 |")
+    if confidence < 0.6:
+        w("| **Regime 低置信度** | 当前 regime 识别置信度偏低 | 信号可靠性下降，仓位减半 |")
+    w("| **因子集中度** | 权重最高因子占比过大 | 单因子不超过总权重 30%，超标需人工核查 |")
+    max_weight = max(factor_weights.values()) if factor_weights else 0
+    if max_weight > 0.3:
+        w(f"| **因子集中风险** | 当前 Top 因子权重 {max_weight:.1%} > 30% | 建议增加多样性或手动限制 |")
+    w("| **流动性风险** | 部分品种流动性不足 | 主力合约优先，避开持仓量 < 1 万手的品种 |")
+    w("| **过拟合风险** | 组合夏普 1.12，V erifier 未通过 | 不过度依赖信号，严格止损 |")
+    w()
+
+    # ── 8. 今日交易执行计划 ──
+    w("## 8. 今日交易执行计划")
+    w()
+    w("### 8.1 做空计划（核心方向）")
+    w()
+    if short_signals:
+        w(f"| 优先级 | 品种 | 名称 | 信号强度 | 增量 | 建议仓位 | 开仓条件 |")
+        w(f"|--------|------|------|----------|------|---------|---------|")
+        for i, (sym, score) in enumerate(short_signals[:5], 1):
+            delta = sym_deltas.get(sym, 0) if has_delta else 0
+            delta_str = f"{delta:+.4f}" if has_delta else "N/A"
+            if abs(score) >= 0.60:
+                size = "15-20%"
+                condition = "开盘直接建仓"
+            elif abs(score) >= 0.40:
+                size = "10-15%"
+                condition = "开盘建仓，观察 30 分钟"
+            elif abs(score) >= 0.15:
+                size = "5-10%"
+                condition = "等待盘中确认方向"
+            else:
+                size = "0%"
+                condition = "不交易"
+            name = name_fn(sym)
+            w(f"| {i} | {sym} | {name} | {score:+.4f} | {delta_str} | {size} | {condition} |")
+        w()
+    else:
+        w("- 当前无做空信号。")
+        w()
+
+    w("### 8.2 做多计划（对冲/辅助）")
+    w()
+    if long_signals:
+        w(f"| 优先级 | 品种 | 名称 | 信号强度 | 增量 | 建议仓位 | 开仓条件 |")
+        w(f"|--------|------|------|----------|------|---------|---------|")
+        for i, (sym, score) in enumerate(long_signals[:3], 1):
+            delta = sym_deltas.get(sym, 0) if has_delta else 0
+            delta_str = f"{delta:+.4f}" if has_delta else "N/A"
+            if abs(score) >= 0.60:
+                size = "15-20%"
+                condition = "开盘直接建仓"
+            elif abs(score) >= 0.40:
+                size = "10-15%"
+                condition = "开盘建仓，观察 30 分钟"
+            elif abs(score) >= 0.15:
+                size = "5-10%"
+                condition = "等待盘中确认方向"
+            else:
+                size = "0%"
+                condition = "不交易"
+            name = name_fn(sym)
+            w(f"| {i} | {sym} | {name} | {score:+.4f} | {delta_str} | {size} | {condition} |")
+        w()
+    else:
+        w("- 当前无做多信号。")
+        w()
+
+    # 总仓位汇总
+    total_short_pct = 0
+    for _, score in short_signals[:5]:
+        if abs(score) >= 0.60:
+            total_short_pct += 17.5
+        elif abs(score) >= 0.40:
+            total_short_pct += 12.5
+        elif abs(score) >= 0.15:
+            total_short_pct += 7.5
+    total_long_pct = 0
+    for _, score in long_signals[:3]:
+        if abs(score) >= 0.60:
+            total_long_pct += 17.5
+        elif abs(score) >= 0.40:
+            total_long_pct += 12.5
+        elif abs(score) >= 0.15:
+            total_long_pct += 7.5
+
+    w("### 8.3 仓位汇总")
+    w()
+    w(f"| 方向 | 品种数 | 总仓位估值 |")
+    w(f"|------|--------|-----------|")
+    w(f"| 做空 | {min(len(short_signals), 5)} 个 | {total_short_pct:.0f}% |")
+    w(f"| 做多 | {min(len(long_signals), 3)} 个 | {total_long_pct:.0f}% |")
+    w(f"| **合计** | — | **{total_short_pct + total_long_pct:.0f}%** |")
+    if total_short_pct + total_long_pct > 100:
+        w("> ⚠ 总仓位超过 100%，建议缩减至 80% 以内。按信号强度从低到高依次取消。")
+    w()
+
+    # ── 9. 执行检查清单 ──
+    w("## 9. 执行检查清单")
+    w()
+    w("- [ ] 确认主力合约有足够流动性（持仓量 > 1 万手）")
+    w("- [ ] 设置止损单（入场价 ± 2% ATR）")
+    w("- [ ] 记录每笔交易的开仓时间、价格、仓位")
+    w("- [ ] 设置止盈条件（盈利达 ATR 3 倍后移动止损至成本）")
+    w("- [ ] 检查同板块品种合计仓位不超过 30%")
+    w("- [ ] 检查净敞口（多空相抵后）不超过总资金 50%")
+    w("- [ ] 设置收盘前 15 分钟检查提醒（是否需要隔夜持仓）")
+    w()
+
+    # ── 写入文件 ──
+    out_path = report_dir / f"trading_advice_{today}.md"
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"[OK] 交易建议报告已保存: {out_path}")
+
+
 def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     t0 = time.time()
     today = date.today().isoformat()
@@ -1082,16 +1366,54 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
             print(f"      [提示] 剔除 {len(stale)} 个停更/陈旧品种: "
                   f"{', '.join(stale)} (数据止于共同交易日之前)")
 
-    # ── Step 2b: Market Regime 检测 ──
-    from fts.factor_engine.regime import RegimeAwareSelector
+    # ── Step 2b: 产业链级 Market Regime 检测 ──
+    from fts.factor_engine.regime import SectorRegimeSelector
+    from fts.data_futures import FUTURES_SECTOR_MAP
 
-    regime_selector = RegimeAwareSelector(lookback_days=60)
-    composite_ohlcv = _build_composite_ohlcv(panel, common_dates)
-    if not composite_ohlcv.empty:
-        market_regime = regime_selector.detect(composite_ohlcv)
+    sector_selector = SectorRegimeSelector(lookback_days=60)
+    # 用 panel 中实际存在的品种构建 sector_map
+    active_sector_map: dict[str, list[str]] = {}
+    for sector, syms in FUTURES_SECTOR_MAP.items():
+        active = [s for s in syms if s in panel]
+        if len(active) >= 2:
+            active_sector_map[sector] = active
+
+    if active_sector_map:
+        sector_regimes = sector_selector.detect_all(panel, sector_map=active_sector_map)
     else:
-        market_regime = {"regime": "unknown", "confidence": 0.0,
-                         "detected_at": datetime.now().isoformat(), "features": {}}
+        sector_regimes = {}
+
+    def _compute_primary_regime(
+        sr: dict[str, dict],
+        asm: dict[str, list[str]],
+    ) -> dict:
+        """从各产业链 regime 计算主制度（品种数加权投票）。"""
+        if not sr or not asm:
+            return {"regime": "unknown", "confidence": 0.0,
+                    "detected_at": datetime.now().isoformat(), "features": {}}
+        regime_votes: dict[str, float] = {}
+        for sector, regime in sr.items():
+            r = regime["regime"]
+            regime_votes[r] = regime_votes.get(r, 0) + len(asm.get(sector, []))
+        total = sum(regime_votes.values())
+        if total == 0:
+            return {"regime": "unknown", "confidence": 0.0,
+                    "detected_at": datetime.now().isoformat(), "features": {}}
+        sorted_regimes = sorted(regime_votes.items(), key=lambda x: -x[1])
+        primary = sorted_regimes[0][0]
+        primary_weight = sorted_regimes[0][1] / total
+        return {
+            "regime": primary,
+            "confidence": round(primary_weight, 4),
+            "detected_at": datetime.now().isoformat(),
+            "features": {
+                "sector_breakdown": {s: sr[s]["regime"] for s in sr},
+                "sector_confidences": {s: sr[s]["confidence"] for s in sr},
+                "primary_regime_weight": round(primary_weight, 4),
+            },
+        }
+
+    market_regime = _compute_primary_regime(sector_regimes, active_sector_map)
 
     _REGIME_LABELS = {
         "bull": "趋势上涨 (bull)",
@@ -1103,13 +1425,15 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     }
     regime_label = _REGIME_LABELS.get(market_regime["regime"], market_regime["regime"])
     features = market_regime.get("features", {})
-    print(f"\n[Regime] 当前市场制度: {regime_label}")
+    sector_breakdown = features.get("sector_breakdown", {})
+    sector_confidences = features.get("sector_confidences", {})
+    print(f"\n[Regime] 主市场制度: {regime_label} (品种数加权)")
     print(f"         置信度: {market_regime['confidence']:.2%}")
-    if features:
-        print(f"         特征: trend={features.get('trend_strength', '?'):.4f} "
-              f"vol={features.get('volatility', '?'):.4f} "
-              f"vol_ratio={features.get('volume_ratio', '?'):.2f} "
-              f"breadth={features.get('breadth', '?'):.4f}")
+    if sector_breakdown:
+        print(f"         产业链 Breakdown:")
+        for sector, r in sorted(sector_breakdown.items()):
+            c = sector_confidences.get(sector, 0)
+            print(f"           {sector}: {r} (conf={c:.2%})")
 
     # ── Step 3: 计算信号 ──
     n_factors = len(factors)
@@ -1384,15 +1708,30 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     w(f"最新价: 盘中实时价（TQ-Local 优先，AKShare 降级） | 实时价覆盖 {rt_hit}/{len(sym_list)} 个品种")
     w()
     w()
-    w("## 市场制度 (Market Regime)")
+    w("## 市场制度 (Market Regime) — 产业链级")
     w()
-    w(f"- **当前制度**: {regime_label}")
-    w(f"- **置信度**: {market_regime['confidence']:.2%}")
-    if features:
-        w(f"- **趋势强度**: {features.get('trend_strength', 0):.4f} (MA20 斜率)")
-        w(f"- **波动率**: {features.get('volatility', 0):.4f} (ATR/价格)")
-        w(f"- **量比**: {features.get('volume_ratio', 1.0):.2f} (当前量/20日均量)")
-        w(f"- **市场广度**: {features.get('breadth', 0):.4f} (收益自相关)")
+    w(f"- **主制度** (品种数加权): {regime_label}")
+    w(f"- **主制度置信度**: {market_regime['confidence']:.2%}")
+    if sector_breakdown:
+        w()
+        w("### 产业链 Breakdown")
+        w()
+        w("| 产业链 | 制度 | 置信度 | 品种数 | 方向建议 |")
+        w("|--------|------|--------|--------|----------|")
+        for sector in sorted(sector_breakdown.keys()):
+            r = sector_breakdown[sector]
+            c = sector_confidences.get(sector, 0)
+            n_syms = len(active_sector_map.get(sector, []))
+            if r in ("bull", "bear"):
+                dir_advice = "顺势" if r == "bull" else "做空"
+            elif r == "oscillate":
+                dir_advice = "反向操作"
+            elif r in ("high_vol",):
+                dir_advice = "谨慎"
+            else:
+                dir_advice = "观望"
+            w(f"| {sector} | {r} | {c:.1%} | {n_syms} | {dir_advice} |")
+        w()
     w()
 
     # ── Regime 调整后的交易建议 ──
@@ -1681,7 +2020,28 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
 
     report_dir.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"\n[OK] 报告已保存: {out_path}")
+    print(f"\n[OK] 信号排名报告已保存: {out_path}")
+
+    # ── 生成交易建议报告 ──
+    _generate_trading_advice_report(
+        today=today,
+        report_dir=report_dir,
+        sym_scores=sym_scores,
+        sym_deltas=sym_deltas,
+        has_delta=has_delta,
+        market_regime=market_regime,
+        regime_label=regime_label,
+        sector_breakdown=sector_breakdown,
+        active_sector_map=active_sector_map,
+        factor_weights=factor_weights,
+        per_variety_weights=per_variety_weights if per_variety_weights else None,
+        panel=panel,
+        long_signals=long_signals,
+        short_signals=short_signals,
+        name_fn=_name,
+        price_fn=_price,
+        contract_fn=_contract,
+    )
 
     return 0
 

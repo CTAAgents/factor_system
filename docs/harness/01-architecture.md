@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.17.0
+> 版本: v2.18.0
 > 最后更新: 2026-08-07
 
 ---
@@ -113,7 +113,7 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  - 多父代交叉提升种群多样性, 避免局部最优                                │
 │                                                                         │
 │  职责: 夜间批量演化 → 父因子选择 → 演化模式分派(code/hybrid/operator) →  │
-│        optuna 参数优化 → 评估 → 审计 → 4 重审查门禁 → elite 因子 →       │
+│        optuna 参数优化 → 评估 → 审计 → 4 重审查门禁 → 家族多样性约束(max_per_family=3) → elite 因子 →       │
 │        传递相关性预检结果给 L3                                           │
 └─────────────────────────────┬────────────────────────────────────────────┘
                               │ elite 因子
@@ -199,7 +199,7 @@ fts/
 │   ├── program.py              # L0 人类设定（Program.md）
 │   ├── walk_forward.py         # 走航验证
 │   ├── cost_model.py           # 交易成本模型
-│   ├── regime.py               # 市场制度检测（RegimeAwareSelector）
+│   ├── regime.py               # 市场制度检测（RegimeAwareSelector + SectorRegimeSelector 产业链级）
 │   ├── stress_test.py          # 压力测试
 │   ├── ablation.py             # 输入敏感性消融实验（Phase A 逻辑审查）
 │   ├── shap_analyzer.py        # SHAP 局部可解释性分析（Phase B 逻辑审查）
@@ -364,13 +364,15 @@ reports/{date}/futures_signals_{date}.md
 - 这替代了 v1.7.2 的 IC>0.3 硬过滤 + 等权合成。
 - 实现：`_compute_ridge_weights()` 在 `scripts/futures_signal_pipeline.py`。
 
-**Market Regime 检测（v1.8.1）**：
-- 信号管道在数据加载后、信号计算前，调用 `RegimeAwareSelector.detect()` 检测当前市场制度。
-- 检测方法：从品种面板构建市场综合 OHLCV（取所有品种 close 截面均值），计算 MA20 斜率、ATR/价格、量比、收益自相关，分层判定制度类型。
+**Market Regime 检测（v1.8.1 / v2.20.0 产业链级）**：
+- 信号管道在数据加载后、信号计算前，调用 `SectorRegimeSelector.detect_all()` 按产业链独立检测市场制度。
+- 检测方法：对每个产业链，从品种面板构建合成 OHLCV（取所有品种 close 截面均值作为产业链综合价格序列），计算 MA20 斜率、ATR/价格、量比、收益自相关，分层判定制度类型。
 - 制度类型：bull（趋势上涨）/ bear（趋势下跌）/ high_vol（高波动）/ low_vol（低波动）/ oscillate（震荡）。
-- 报告输出：制度名称 + 置信度 + 特征值（趋势强度/波动率/量比/市场广度）+ Regime 调整后的交易建议。
+- 主制度计算：品种数加权投票（各产业链按其品种数决定权重，消除全市场单一制度对不同产业链结构性机会的掩盖）。
+- 报告输出：主制度名称 + 置信度 + 产业链 Breakdown（各产业链制度/置信度/品种数/方向建议）+ Regime 调整后的交易建议。
 - 趋势友好（bull/bear）→ 优先做空/做多增量最强的品种，可放大仓位；震荡（oscillate）→ 反向操作；高波动（high_vol）→ 缩小仓位，只做增量绝对值 > 0.15 的品种。
-- 实现：`_build_composite_ohlcv()` 构建市场综合 OHLCV，`RegimeAwareSelector` 在 `fts/factor_engine/regime.py`。
+- 实现：`SectorRegimeSelector` 在 `fts/factor_engine/regime.py`，每个产业链使用独立的 `RegimeAwareSelector` 实例保持状态隔离。
+- 产业链分类：`FUTURES_SECTOR_MAP` 定义 7 个产业链（黑色系/有色金属/能源化工/农产品/软商品/贵金属/金融期货），每产业链品种不足 2 个或数据不足 20 行时跳过。
 
 ### FTS 内部数据流
 
@@ -533,6 +535,6 @@ class FactorKind(str, Enum):
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `seed_pool.py` → 双种子池（股票 482 因子：9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面；期货 81 因子：14 家族，见 seed_data_futures_full.py）；种子因子相关性预检（compute_seed_correlations，仅股票时序模式，≥0.95 标记高相关对）；`data_fundamental.py` → FundamentalProvider 基本面数据层；`data_futures.py` → FuturesDataProvider 期货数据层（82 品种 FUTURES_SUBSET + 59 个品种 DuckDB 缓存 + AKShare 降级，`get_futures_panel()` common_dates 多数对齐 ≥ 品种数//2，FUTURES_SYMBOL_NAMES 名称映射，get_dominant_contracts() 主力合约判定）；`data_futures_fundamental.py` → FuturesFundamentalProvider 期货基本面数据（库存/仓单/基差）；`scheduler/` → 调度层（5 个 APScheduler 定时任务：L1:08:30 / L2:23:00 / L3:20:00 / 信号管道:20:30 / 健康检查:每10m）；`scripts/futures_signal_pipeline.py` → 横截面信号管道（方向校正 = 截面 IC 法，因子加权 = Ridge 回归 L2 正则化，Market Regime 检测 = RegimeAwareSelector 分层判定，`_build_composite_ohlcv()` 构建市场综合 OHLCV，按日期定位，`--universe all` 全量商品池，输出品种名称/主力合约 + Regime 调整交易建议）；`fts/factor_engine/regime.py` → RegimeAwareSelector 市场制度感知（5 种制度：bull/bear/high_vol/low_vol/oscillate，MA20 斜率 + ATR/价格 + 量比 + 收益自相关）；`strategies/strategy_evolution.py` → 策略进化（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion） |
+| 代码→文档映射 | `seed_pool.py` → 双种子池（股票 482 因子：9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面；期货 81 因子：14 家族，见 seed_data_futures_full.py）；种子因子相关性预检（compute_seed_correlations，仅股票时序模式，≥0.95 标记高相关对）；`data_fundamental.py` → FundamentalProvider 基本面数据层；`data_futures.py` → FuturesDataProvider 期货数据层（82 品种 FUTURES_SUBSET + 59 个品种 DuckDB 缓存 + AKShare 降级，`get_futures_panel()` common_dates 多数对齐 ≥ 品种数//2，FUTURES_SYMBOL_NAMES 名称映射，get_dominant_contracts() 主力合约判定；`FUTURES_SECTOR_MAP` 7 产业链分类）；`data_futures_fundamental.py` → FuturesFundamentalProvider 期货基本面数据（库存/仓单/基差）；`scheduler/` → 调度层（5 个 APScheduler 定时任务：L1:08:30 / L2:23:00 / L3:20:00 / 信号管道:20:30 / 健康检查:每10m）；`scripts/futures_signal_pipeline.py` → 横截面信号管道（方向校正 = 截面 IC 法，因子加权 = Ridge 回归 L2 正则化，Market Regime 检测 = SectorRegimeSelector 产业链级分层判定，按日期定位，`--universe all` 全量商品池，输出品种名称/主力合约 + 产业链 Breakdown + Regime 调整交易建议）；`fts/factor_engine/regime.py` → RegimeAwareSelector 市场制度感知（5 种制度：bull/bear/high_vol/low_vol/oscillate，MA20 斜率 + ATR/价格 + 量比 + 收益自相关）+ SectorRegimeSelector 产业链级制度检测（每个产业链独立构建合成 OHLCV，品种数加权投票计算主制度）；`strategies/strategy_evolution.py` → 策略进化（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion） |
 | 可验证断言 | 股票种子池总数 = 482；期货种子池总数 = 81（14 家族）；期货数据层支持 82 个连续合约品种，数据源优先级 3 级（DuckDB → AKShare → 合成）；common_dates 多数对齐（WH0 等停更品种不清空交集）；方向校正按日期定位；信号管道因子加权 = Ridge 回归（全量因子，L2 正则化）；主力合约判定 = contract_kline 最新交易日最大成交量；调度器注册 8 个任务（L1/L2/L3 + 健康检查 + 月度衰减 + 数据质量 + 逻辑监控 + 因子巡检）；信号管道集成 Market Regime 检测（5 种制度分层判定，输出 Regime 调整交易建议）；策略进化模块包含 3 种策略（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion）；股票 L2 启用种子因子相关性预检（≥0.95 标记），期货 L2 跳过；L3 组合支持粘性约束（StickyConfig ±30% / 新因子首日封顶）+ 漂移监控（DriftMonitor → drift_history/YYYY-MM-DD.json）；L2 新晋升因子进影子池（shadow_pool 观察 5 交易日，种子因子 shadow_observe=False 直接进正式组合）；SchedulerEngine 支持 `start_watchdog()` 进程看门狗 |
 | 检验方式 | `python -c "from fts.scheduler.tasks import list_tasks; assert len(list_tasks()) == 8"` |

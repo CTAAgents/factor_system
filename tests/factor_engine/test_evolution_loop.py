@@ -230,7 +230,7 @@ def _mock_seed_evaluation_pass(loop: EvolutionLoop) -> None:
             "turnover_monthly": 0.3,
         },
         "economic_score": {"dimensions_passed": 4},
-        "multiple_test": {"passed": True},
+        "level_3_multiple": {"passed": True},
         "total_ic": 0.05,
         "oos_results": [{"passed": True, "ic_consistency": 0.8}],
         "p_values": [0.01, 0.02],
@@ -1167,6 +1167,7 @@ class TestEvolutionLoopCoverage:
             trace_id="test_trace",
             passed=True,
             failure_reasons=[],
+            level_3_multiple={"passed": True},
             evaluated_at="2026-07-18T00:00:00",
         )
         fp = loop._promote_to_elite(factor, evaluation)
@@ -1255,6 +1256,7 @@ class TestEvolutionLoopCoverage:
             passed=True,
             failure_reasons=[],
             level_1_backtest={"ic": 0.05, "sharpe": 1.6},
+            level_3_multiple={"passed": True},
             evaluated_at="2026-07-18T00:00:00",
         )
         fp = loop._promote_to_elite(factor, evaluation)
@@ -1286,6 +1288,7 @@ class TestEvolutionLoopCoverage:
             passed=True,
             failure_reasons=[],
             level_1_backtest={"ic": 0.05, "sharpe": 1.6},
+            level_3_multiple={"passed": True},
             evaluated_at="2026-07-18T00:00:00",
         )
         fp = loop._promote_to_elite(factor, evaluation)
@@ -2307,6 +2310,7 @@ class TestFactorAuditorIntegration:
             passed=True,
             failure_reasons=[],
             level_1_backtest={"ic": 0.05, "sharpe": 1.5},
+            level_3_multiple={"passed": True},
             evaluated_at="2026-07-18T00:00:00",
         )
 
@@ -2330,7 +2334,7 @@ class TestFactorAuditorIntegration:
     def test_promote_to_elite_audit_fails_blocks_promotion(
         self, minimal_loop, sample_seed
     ):
-        """验证审计未通过时阻止晋级。"""
+        """验证审计未通过时审计报告写入记录（阻塞在 run() 中执行）。"""
         from fts.factor_engine.audit import FactorAuditReport, AuditItemResult
 
         mock_report = FactorAuditReport(
@@ -2357,7 +2361,6 @@ class TestFactorAuditorIntegration:
             pass_rate=0.3,
             summary={"total": 2, "passed": 0},
         )
-        minimal_loop.auditor.audit = MagicMock(return_value=mock_report)
 
         evaluation = FactorEvaluation(
             factor_id=sample_seed["factor_id"],
@@ -2365,6 +2368,7 @@ class TestFactorAuditorIntegration:
             passed=True,
             failure_reasons=[],
             level_1_backtest={"ic": 0.05, "sharpe": 1.5},
+            level_3_multiple={"passed": True},
             evaluated_at="2026-07-18T00:00:00",
         )
 
@@ -2373,8 +2377,12 @@ class TestFactorAuditorIntegration:
             evaluation,
             seed_correlations={},
             quality_score=45.0,
+            audit_report=mock_report,
         )
-        assert path is None
+        assert path is not None
+        record = json.loads(path.read_text(encoding="utf-8"))
+        assert "audit_report" in record
+        assert record["audit_report"]["passed"] is False
 
 
 class TestBacktestPipelineIntegration:

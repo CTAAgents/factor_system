@@ -52,7 +52,106 @@ _HIGH_VOL_THRESHOLD = 0.03    # ATR/价格 > 3% → 高波
 _LOW_VOL_THRESHOLD = 0.01     # ATR/价格 < 1% → 低波
 
 
-# ─── RegimeAwareSelector ─────────────────────────────────
+# ─── SectorRegimeSelector ─────────────────────────────────
+
+class SectorRegimeSelector:
+    """产业链级市场制度检测器。
+
+    对每个产业链独立检测市场制度，避免信号抵消。
+
+    参数:
+        lookback_days: 趋势斜率计算的回看天数（默认 60）。
+    """
+
+    def __init__(self, lookback_days: int = 60) -> None:
+        self._selectors: dict[str, RegimeAwareSelector] = {}
+        self.lookback_days = lookback_days
+
+    def detect_all(
+        self,
+        panel: dict[str, pd.DataFrame],
+        sector_map: dict[str, list[str]] | None = None,
+    ) -> dict[str, MarketRegime]:
+        """对每个产业链独立检测市场制度。
+
+        参数:
+            panel:      品种行情面板 (symbol → OHLCV DataFrame)。
+            sector_map: 产业链映射 {产业链名 → [品种代码列表]}。
+                        默认使用 FUTURES_SECTOR_MAP。
+
+        返回:
+            dict[产业链名, MarketRegime] — 每个产业链的检测结果。
+            无足够数据的产业链不在结果中。
+        """
+        if sector_map is None:
+            # 延迟导入避免循环依赖
+            from fts.data_futures import FUTURES_SECTOR_MAP as _FSM
+            sector_map = _FSM
+        if not panel:
+            return {}
+
+        result: dict[str, MarketRegime] = {}
+        for sector, symbols in sector_map.items():
+            sector_ohlcv = self._build_sector_ohlcv(panel, symbols)
+            if sector_ohlcv.empty:
+                continue
+            # 每个产业链使用独立的 RegimeAwareSelector 实例（保持状态隔离）
+            if sector not in self._selectors:
+                self._selectors[sector] = RegimeAwareSelector(self.lookback_days)
+            result[sector] = self._selectors[sector].detect(sector_ohlcv)
+        return result
+
+    @staticmethod
+    def _build_sector_ohlcv(
+        panel: dict[str, pd.DataFrame],
+        symbols: list[str],
+    ) -> pd.DataFrame:
+        """从产业链内品种构建合成 OHLCV。
+
+        方法：取所有品种 close 的截面均值作为产业链综合价格序列，
+        构建合成 OHLCV（open/high/low 用 close 近似，volume 取截面和）。
+
+        参数:
+            panel:   品种行情面板 (symbol → DataFrame)。
+            symbols: 产业链内的品种代码列表。
+
+        返回:
+            合成 OHLCV DataFrame；品种不足 2 个或数据不足 20 行时返回空 DataFrame。
+        """
+        # 收集所有品种的 close 序列
+        close_matrix: dict[str, pd.Series] = {}
+        for sym in symbols:
+            df = panel.get(sym)
+            if df is None or df.empty or "close" not in df.columns:
+                continue
+            close_matrix[sym] = df["close"]
+
+        if len(close_matrix) < 2:
+            return pd.DataFrame()
+
+        # 截面均值作为产业链综合 close
+        close_df = pd.DataFrame(close_matrix)
+        composite_close = close_df.mean(axis=1).dropna()
+
+        if len(composite_close) < 20:
+            return pd.DataFrame()
+
+        # 合成 OHLCV
+        volume_df = pd.DataFrame({
+            sym: df["volume"].reindex(composite_close.index)
+            for sym, df in panel.items()
+            if sym in symbols and "volume" in df.columns
+        })
+        composite_volume = volume_df.sum(axis=1).fillna(0)
+
+        return pd.DataFrame({
+            "open": composite_close.shift(1).fillna(composite_close),
+            "high": composite_close,
+            "low": composite_close,
+            "close": composite_close,
+            "volume": composite_volume,
+        }, index=composite_close.index)
+
 
 class RegimeAwareSelector:
     """市场制度感知的选择器。

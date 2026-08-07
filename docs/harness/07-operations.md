@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.19.0
+> 版本: v2.20.1
 > 最后更新: 2026-08-07
 
 ---
@@ -9,6 +9,8 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.20.1** | 2026-08-07 | 修复测试：`_mock_seed_evaluation_pass` mock key 从 `"multiple_test"` 更正为 `"level_3_multiple"`；`test_promote_to_elite` 系列测试补全 `level_3_multiple={"passed": True}` 避免假阴性；`test_promote_to_elite_audit_fails_blocks_promotion` 修正为验证审计报告写入而非 `path is None`（审计阻塞在 `run()` 中执行）；218 测试全绿 |
+| **v2.20.0** | 2026-08-07 | 产业链级市场制度检测：新增 `SectorRegimeSelector` 类对每个产业链独立检测市场制度（bull/bear/oscillate/high_vol/low_vol），从品种面板构建合成 OHLCV（close 截面均值 + volume 截面和），每个产业链使用独立 `RegimeAwareSelector` 实例保持状态隔离；`futures_signal_pipeline.py` 集成 `SectorRegimeSelector`，Step 2b 替换为产业链级检测 + 品种数加权主制度计算；报告新增产业链 Breakdown（各产业链制度/置信度/品种数/方向建议）；新增 `test_sector_regime.py` 9 测试用例全绿；文档同步（01-architecture 产业链级检测章节 + 06-testing 测试条目） |
 | **v2.19.0** | 2026-08-07 | P0/P1 过拟合修复：A. 组合夏普改为 diversity-adjusted 加权（HHI 权重集中度折扣）；B. 因子 Sharpe 上限截断 3.0（原始值保留 `_sharpe_raw`）；C. 评价窗口从 120d 扩展至 500d（`MIN_EVAL_DAYS=500`）；D. L3Verifier 新增 `max_sharpe=3.5` 过拟合保护检查；E. 随机化测试改为 Dirichlet 权重重采样；F. 质量卡 Sharpe>10 线性惩罚（Sharpe=20 归零）；修复 `build_combo` 中 `n_ret` 引用前赋值 bug；修复 `EvolutionLoop` 引用的已删除 `pipeline.FactorQualityInspection` 回归错误（`_QualityInspectionCompat` 兼容包装）；`test_portfolio_loop.py` 新增 6 测试用例，90 全绿；`test_factor_quality_card.py` 105 全绿 |
 | **v2.18.0** | 2026-08-07 | 因子家族多样性约束：`_promote_to_elite` 新增家族数量检查（`max_per_family=3`），限制单一家族因子过度繁殖；`BudgetConfig` 新增 `max_per_family` 字段；配置文档同步更新 |
 | **v2.17.0** | 2026-08-07 | 因子淘汰主流程集成：`FactorRepository.retire_factor()` 方法实现 DuckDB 状态更新 + JSON 文件迁移至 `_retired/` + 状态变迁记录；`monthly_decay_eval_job` 调用 `retire_factor()` 将 AutoRetireManager 标记的淘汰因子同步到主存储；修复 `update_factor`/`update_factor_status` DuckDB ART 索引 bug（DROP → UPDATE → 重建索引）；因子淘汰正式成为主流程环节 |

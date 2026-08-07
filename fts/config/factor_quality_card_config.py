@@ -35,9 +35,9 @@ class DimensionWeights:
     stability_score: float = 0.8   # 稳定性: WalkForward 结果
     robustness_score: float = 0.8   # 鲁棒性: 衰减率
     capacity_score: float = 0.6     # 容量: 容量估算
-    tradability_score: float = 0.6  # 交易性: 换手率
+    tradability_score: float = 0.8  # 交易性: 换手率 — ↑ 从 0.6 提升，期货高频交易性更重要
     diversity_score: float = 0.5   # 多样性: 最大相关性
-    logic_score: float = 0.5       # 逻辑性: 经济逻辑分
+    logic_score: float = 0.8       # 逻辑性: 经济逻辑分 — ↑ 从 0.5 提升，LLM 生成因子逻辑更关键
     timeliness_score: float = 0.4   # 实时性: 数据频率
     compatibility_score: float = 0.4  # 兼容性: 跨品种覆盖率
 

@@ -24,6 +24,9 @@ Verifier 阈值:
     - 因子间最大相关性 < 0.3
     - 组合换手率 < 50%/月
 
+Sharpe 截断:
+    - SHARPE_CAP = 2.0（因子 Sharpe > 2.0 截断，使用 _sharpe_raw 计算权重防均匀化）
+
 版本: v1.2.0（与 FTS 同步）
 """
 # pylint: disable=broad-exception-caught,too-few-public-methods,too-many-instance-attributes,too-many-locals
@@ -548,7 +551,7 @@ def synthesize_signals(
             f["_ic_raw"] = raw_ic
             f["ic"] = IC_CAP * (1 if raw_ic > 0 else -1)
 
-    # Sharpe 上限截断（P0 过拟合修复）：Sharpe > 3.0 的因子按 3.0 计算权重，
+    # Sharpe 上限截断（P0 过拟合修复）：Sharpe > 2.0 的因子按 2.0 计算权重，
     # 防止过拟合因子主导组合权重分配。Sharpe 原始值保留在 _sharpe_raw 字段中供审计。
     for f in factors:
         raw_sharpe = f.get("sharpe", 0.0)
@@ -594,10 +597,17 @@ def synthesize_signals(
                 retained=True,
             ))
     elif mode == "sharpe_weight":
-        total_sharpe = sum(max(f.get("sharpe", 0), 0.01) for f in factors)
+        # 使用截断前的原始 Sharpe 计算权重（_sharpe_raw 优先），
+        # 保留截断后的 sharpe 字段用于 Verifier 校验和显示。
+        # 避免所有因子因 Sharpe 上限截断而获得相同权重。
+        weight_sharpes = [
+            max(f.get("_sharpe_raw", f.get("sharpe", 0)), 0.01)
+            for f in factors
+        ]
+        total_sharpe = sum(weight_sharpes)
         signals = []
-        for f in factors:
-            w = max(f.get("sharpe", 0), 0.01) / total_sharpe if total_sharpe > 0 else 1.0 / n
+        for i, f in enumerate(factors):
+            w = weight_sharpes[i] / total_sharpe if total_sharpe > 0 else 1.0 / n
             signal = PortfolioSignal(
                 factor_id=f["factor_id"],
                 name=f["name"],
@@ -1092,8 +1102,8 @@ def _apply_sticky_constraints(
 SHARPE_WARNING_THRESHOLD: float = 3.5
 """组合夏普警戒线：> 3.5 自动标记并触发独立验证。"""
 
-SHARPE_CAP: float = 3.0
-"""因子 Sharpe 上限截断：> 3.0 的因子按 3.0 计算权重，防止过拟合因子主导组合。"""
+SHARPE_CAP: float = 2.0
+"""因子 Sharpe 上限截断：> 2.0 的因子按 2.0 计算权重，防止过拟合因子主导组合。"""
 
 MIN_EVAL_DAYS: int = 500
 """最小评价窗口（交易日数）：面板数据回溯天数，确保评价窗口足够长避免短窗口虚高。"""

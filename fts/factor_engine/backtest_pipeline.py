@@ -551,7 +551,7 @@ class BacktestPipeline:
                 "np": np,
             }
             try:
-                exec(code_str, {}, local_vars)
+                exec(code_str, {"np": np}, local_vars)
             except Exception as e:
                 # 捕获广播错误/形状不匹配等顶层运行时异常（传统约定代码），
                 # 与 factor_program 约定行为一致，返回零值数组而非向上抛出

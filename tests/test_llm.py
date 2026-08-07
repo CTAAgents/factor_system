@@ -109,10 +109,10 @@ class TestGenerateJson:
             client.generate_json("test")
 
     def test_code_block_with_invalid_content_raises(self):
-        """代码块内包含非 JSON 内容时抛出 JSONDecodeError（代码未包装该路径）。"""
+        """代码块内包含非 JSON 内容时抛出 LLMError（_parse_json 包装该路径）。"""
         text = "```\nnot valid json at all\n```"
         client = _make_mock_client(text)
-        with pytest.raises(json.JSONDecodeError):
+        with pytest.raises(LLMError, match="不是合法 JSON"):
             client.generate_json("test")
 
 
@@ -579,9 +579,9 @@ class TestOpenAIBootstrapFactors:
     """测试 OpenAIClient.bootstrap_factors 的各分支。"""
 
     def _make_openai_mock(self, response_text: str) -> OpenAIClient:
-        """创建带 Mock generate_json 的 OpenAIClient。"""
+        """创建带 Mock complete 的 OpenAIClient（bootstrap_factors 内部调用 complete + _parse_json）。"""
         client = OpenAIClient(api_key="sk-test", max_retries=0)
-        client.generate_json = MagicMock(return_value=json.loads(response_text))
+        client.complete = MagicMock(return_value=(response_text, 0))
         return client
 
     def test_valid_response_returns_candidates(self):

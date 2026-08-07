@@ -22,10 +22,10 @@
 
 | 层级 | 测试文件数 | 用例数 | 说明 |
 |:-----|:----------|:-------|:-----|
-| 单元测试 | 90+ | ~2600 | 各模块独立测试（含基本面数据层 + 信号管道 + 消融实验 + 风险标签 + 场景测试 + SHAP分析 + 鲁棒性 + 因果验证 + 逻辑监控 + 种子因子相关性预检 + DuckDB因子仓库 + 因子相关性矩阵 + 因子血缘审计 + 失败模式分类 + 因子巡检 + 生命周期E2E闭环 + 回测流水线 + 后代因子运行时校验 + FTS-Expr DSL 算子因子 + GP 多父代交叉 + 快速预筛选 + 评分卡配置 + **算子演化引擎（C.4，13 用例）** + **L1→L2 候选合并（GAP-031，8 用例）** + **L2 晋升双写原子化（GAP-032，4 用例）** + **factor_db_path 测试隔离注入（GAP-030，2 用例）**） |
+| 单元测试 | 90+ | ~2600 | 各模块独立测试（含基本面数据层 + 信号管道 + 消融实验 + 风险标签 + 场景测试 + SHAP分析 + 鲁棒性 + 因果验证 + 逻辑监控 + 种子因子相关性预检 + DuckDB因子仓库 + 因子相关性矩阵 + 因子血缘审计 + 失败模式分类 + 因子巡检 + 生命周期E2E闭环 + 回测流水线 + 后代因子运行时校验 + FTS-Expr DSL 算子因子 + GP 多父代交叉 + 快速预筛选 + 评分卡配置 + **算子演化引擎（C.4，13 用例）** + **L1→L2 候选合并（GAP-031，8 用例）** + **L2 晋升双写原子化（GAP-032，4 用例）** + **factor_db_path 测试隔离注入（GAP-030，2 用例）** + **SectorRegimeSelector 产业链级制度检测（9 用例）**） |
 | 集成测试 | 5 | ~200 | strategies 策略层 + 演化循环集成 + 数据源聚合 + 期货同步 |
 | E2E | 2 | 24 | test_e2e.py(10) + test_factor_lifecycle.py(14) |
-| 合计 | 100+ | 2200 | 2043+ passed（Phase 1 清理后） |
+|│ 合计 | 100+ | 2200 | 2043+ passed（432 passed in latest run, 9 sector regime tests all green） |
 
 ---
 
@@ -63,6 +63,8 @@ tests/
 │   ├── test_monitor.py              # factor_engine monitor 测试
 │   ├── test_portfolio_loop.py       # L3 组合循环测试
 │   ├── test_program.py              # Program.md 测试
+│   ├── test_regime.py               # 市场制度检测（RegimeAwareSelector）
+│   ├── test_sector_regime.py        # 产业链级制度检测（SectorRegimeSelector，9 用例）
 │   ├── test_seed_pool.py            # 种子池测试
 │   ├── test_uct_selection.py        # UCT 树搜索父因子选择测试
 │   ├── test_factor_inspector.py     # FactorInspector 定时巡检测试

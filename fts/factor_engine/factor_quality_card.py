@@ -87,9 +87,9 @@ _DIMENSION_WEIGHTS: tuple[float, ...] = (
     0.8,   # stability_score
     0.8,   # robustness_score
     0.6,   # capacity_score
-    0.6,   # tradability_score
+    0.8,   # tradability_score  ↑ 从 0.6 提升 (交易性对期货高频更重要)
     0.5,   # diversity_score
-    0.5,   # logic_score
+    0.8,   # logic_score       ↑ 从 0.5 提升 (经济逻辑对 LLM 生成因子更关键)
     0.4,   # timeliness_score
     0.4,   # compatibility_score
 )

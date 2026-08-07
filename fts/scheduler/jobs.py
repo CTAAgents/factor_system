@@ -94,7 +94,7 @@ def l2_evolution_loop_job() -> None:
                 __import__("numpy").maximum(closes[:-5], 1e-10)
 
         llm = get_default_llm_client()
-        seed_pool = SeedPool(market="futures")
+        seed_pool = SeedPool(market=cfg.default_market)
         verifier = FactorVerifier()
 
         loop = EvolutionLoop(
@@ -156,7 +156,7 @@ def l3_portfolio_loop_job() -> None:
 
 # ── 期货信号管道 — 每日 20:00（L3 完成后执行）────────────
 
-def _run_futures_signals_pipeline() -> None:
+def _run_futures_signal_pipeline() -> None:
     """生成期货信号报告（L3 组合构建后自动触发）。
 
     使用全量商品期货池（--universe all）：

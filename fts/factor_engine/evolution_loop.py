@@ -223,13 +223,16 @@ class EvolutionLoop:
         cross_section_dates: Optional[pd.DatetimeIndex] = None,
         quality_card_config: Optional[Any] = None,
         quality_min_grade: str = "B",
-        market: str = "stock",
+        market: Optional[str] = None,
         factor_db_path: Optional[str | Path] = None,
     ):
         self.data = data
         self.forward_returns = forward_returns
         self.cross_section_data = cross_section_data
         self.cross_section_dates = cross_section_dates
+        if market is None:
+            from fts.config.settings import get_config
+            market = get_config().default_market
         self.market = market
         self.factor_db_path = factor_db_path
         self._is_cross_section = cross_section_data is not None
