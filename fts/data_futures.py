@@ -86,12 +86,50 @@ class FuturesDataProvider:
         panel, dates = provider.get_futures_panel(["RB0", "CU0", "AU0"], days=500)
     """
 
-    def __init__(self, use_akshare_fallback: bool = True):
+    def __init__(self, use_akshare_fallback: bool = True,
+                 aggregator: Optional[Any] = None):
         """
         Args:
             use_akshare_fallback: 是否在 DuckDB 无数据时尝试 AKShare 即时获取。
+            aggregator: FuturesDataAggregator 实例；None 时惰性初始化默认聚合器。
         """
         self._use_akshare = use_akshare_fallback
+        self._aggregator = aggregator
+        if self._aggregator is None:
+            self._init_default_aggregator()
+
+    def _init_default_aggregator(self) -> None:
+        """惰性初始化默认 FuturesDataAggregator（按需导入 + 探活）。"""
+        try:
+            from fts.data_sources.aggregator import FuturesDataAggregator
+            from fts.data_sources.tq_source import TQLocalSource
+
+            sources: list = []
+            try:
+                tq = TQLocalSource()
+                # 不在这探活 — 让 aggregator 的熔断器管理失败状态
+                sources.append(tq)
+            except Exception:
+                logger.debug("TQLocalSource 实例化失败，跳过")
+
+            db_path = _DUCKDB_PATH if _DUCKDB_PATH.exists() else None
+            self._aggregator = FuturesDataAggregator(
+                sources=sources, enhancers=[],
+                db_path=db_path,
+            )
+            logger.info("FuturesDataAggregator 初始化完成（源数=%d）", len(sources))
+        except Exception as e:
+            logger.warning("FuturesDataAggregator 初始化失败: %s（降级到直接路径）", e)
+            self._aggregator = None
+
+    @staticmethod
+    def _from_aggregator_df(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+        """将 FuturesDataAggregator（17 列）输出转换为 FuturesDataProvider 格式。"""
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["date"])
+        df.set_index("date", inplace=True)
+        df.sort_index(inplace=True)
+        return df[["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]]
 
     # ── 单标的 OHLCV ──
 
@@ -115,6 +153,21 @@ class FuturesDataProvider:
         Raises:
             FuturesDataError: 所有数据源不可用
         """
+        # 0. 尝试 FuturesDataAggregator（统一路由引擎，含熔断器 + 缓存 + 降级）
+        if self._aggregator is not None:
+            try:
+                agg_df = self._aggregator.get_ohlcv(symbol, days, trace_id)
+                if agg_df is not None and not agg_df.empty:
+                    source = agg_df.get("source", "").iloc[0] if "source" in agg_df.columns else "?"
+                    # 合成数据降级 → 继续尝试 AKShare
+                    if source == "SYNTHETIC":
+                        logger.debug("Aggregator 返回合成数据 [%s]，尝试 AKShare 直连", symbol)
+                    else:
+                        logger.info("Aggregator 命中 [%s][%s] %d 行", symbol, source, len(agg_df))
+                        return self._from_aggregator_df(agg_df, symbol)
+            except Exception as e:
+                logger.warning("Aggregator 获取失败 [%s]: %s，降级到直接路径", symbol, e)
+
         # 1. DuckDB kline_cache
         try:
             df = self._from_kline_cache(symbol, days)
@@ -264,7 +317,7 @@ class FuturesDataProvider:
             from fts.data_sources.tq_source import TQLocalSource
             source = TQLocalSource()
             if not source.is_available():
-                logger.debug("TQ-Local 服务不可达 (127.0.0.1:7721)")
+                logger.warning("TQ-Local 服务不可达 (127.0.0.1:7721)，降级到 AKShare")
                 return None
             df = source.fetch_ohlcv(symbol, days)
             if df is None or df.empty:
@@ -277,10 +330,10 @@ class FuturesDataProvider:
                 return None
             return df[["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]]
         except ImportError:
-            logger.debug("TQLocalSource 不可用（依赖缺失）")
+            logger.warning("TQLocalSource 不可用（依赖缺失），降级到 AKShare")
             return None
         except Exception:
-            logger.debug("TQ-Local 获取异常", exc_info=True)
+            logger.warning("TQ-Local 获取异常，降级到 AKShare", exc_info=True)
             return None
 
     # ── AKShare 即时获取 ──

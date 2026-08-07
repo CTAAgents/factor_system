@@ -47,7 +47,7 @@
 | GAP-010 | `docs/harness/09-advancement-plan.md` | 晋级计划文档未同步至 v1.1.0，里程碑记录停留在 v0.3.0 | 历史里程碑缺失，项目状态不透明 | 1 月内 | ✅ 已关闭 |
 | GAP-011 | `docs/execution_modes_flowchart.md`, `docs/business_flow.md` | 流程文档缺失，执行模式流程图和业务流程图未创建 | 系统执行流程不透明，新成员难以理解系统运行方式 | 3 月内 | ✅ 已关闭 |
 | GAP-012 | `agents/*.md` | 角色职责文档缺失，未定义各 Agent 的职责边界和能力范围 | 多 Agent 协作时职责不清，可能导致越界操作 | 3 月内 | ✅ 已关闭 |
-| GAP-013 | `docs/production_plan.md` | 生产就绪计划缺失，生产部署、监控告警、容器化等方案未文档化 | 生产环境部署缺乏标准化流程，运维风险高 | 3 月内 | ✅ 已关闭 |
+| GAP-013 | `plans/production_plan.md` | 生产就绪计划缺失，生产部署、监控告警、容器化等方案未文档化 | 生产环境部署缺乏标准化流程，运维风险高 | 3 月内 | ✅ 已关闭 |
 | GAP-014 | `scripts/verify_doc_consistency.py` | 文档一致性检查脚本缺失，无法自动校验代码与文档的映射关系 | 文档与代码容易脱节，Harness 规范第 13 项检查无法自动化 | 3 月内 | ✅ 已关闭 |
 | GAP-015 | `fts/data_futures.py`, `fts/data.py`, `fts/cli.py` | 期货数据接入缺失，FTS 仅支持 A 股/ETF 因子演化，无法覆盖期货横截面因子 | 策略覆盖范围受限，无法实现跨品种因子（跨商品动量、品种间强弱） | 3 月内 | ✅ 已关闭 |
 
@@ -123,9 +123,9 @@
 
 ### GAP-011: 流程文档缺失（已关闭）
 
-- **问题描述**: `docs/execution_modes_flowchart.md`（执行模式流程图）和 `docs/business_flow.md`（业务流程图）均未创建
+- **问题描述**: `../execution_modes_flowchart.md`（执行模式流程图）和 `../business_flow.md`（业务流程图）均未创建
 - **影响范围**: 新成员无法快速理解系统执行流程，跨模块调试时缺乏全局视图
-- **解决方式**: 已创建 `docs/execution_modes_flowchart.md`（CLI/Scheduler/Monitor 三种执行模式）和 `docs/business_flow.md`（L0→L1→L2→L3→交易信号全景业务流）
+- **解决方式**: 已创建 `../execution_modes_flowchart.md`（CLI/Scheduler/Monitor 三种执行模式）和 `../business_flow.md`（L0→L1→L2→L3→交易信号全景业务流）
 - **验证结果**: 文档结构完整，包含 ASCII 流程图和模块映射，与 `01-architecture.md` 架构定义一致
 
 ### GAP-012: 角色职责文档缺失（已关闭）
@@ -137,9 +137,9 @@
 
 ### GAP-013: 生产就绪计划缺失（已关闭）
 
-- **问题描述**: `docs/production_plan.md` 未创建，生产部署、监控告警、容器化、CI/CD 等方案未文档化
+- **问题描述**: `plans/production_plan.md` 未创建，生产部署、监控告警、容器化、CI/CD 等方案未文档化
 - **影响范围**: 生产环境部署缺乏标准化流程，运维风险高
-- **解决方式**: 已创建 `docs/production_plan.md`，包含生产就绪检查清单（基础设施/监控告警/稳定性/测试/回滚/安全 6 大类 30 项）、容器化方案（Dockerfile + docker-compose）、CI/CD 流水线、监控告警配置（健康检查/Elite 因子追踪/磁盘监控/进程守护）、生产回滚方案和 FTS 生产运营 SLO
+- **解决方式**: 已创建 `plans/production_plan.md`，包含生产就绪检查清单（基础设施/监控告警/稳定性/测试/回滚/安全 6 大类 30 项）、容器化方案（Dockerfile + docker-compose）、CI/CD 流水线、监控告警配置（健康检查/Elite 因子追踪/磁盘监控/进程守护）、生产回滚方案和 FTS 生产运营 SLO
 - **验证结果**: 检查清单完整，容器化方案可执行，SLO 指标已量化，与 `07-operations.md` 运维策略一致
 
 ### GAP-014: 文档一致性检查脚本缺失（已关闭）
@@ -216,7 +216,7 @@
 - **影响范围**: 文件膨胀严重、修改风险高、非开发者无法贡献、测试困难、与代码版本耦合
 - **解决方式**: Phase 1 — 将种子因子迁移到 19 个 YAML 数据文件，实现数据驱动加载（`fts/seed_data/`）
 - **验证结果**: 563 种子因子全部通过 YAML 加载，原有 Python 加载路径保持向后兼容
-- **关联**: `docs/factor-management-optimization-plan.md` Phase 1
+- **关联**: `plans/factor-management-optimization-plan.md` Phase 1
 
 ### GAP-021: Elite 因子 JSON 存储无法支持大规模因子管理（已关闭）
 
@@ -224,7 +224,7 @@
 - **影响范围**: 查询性能差（O(n) 全量遍历）、去重逻辑弱、无法追溯因子演化、扩展规模受限
 - **解决方式**: Phase 2 — 实现 FactorRepository（`fts/factor_db/repository.py`），迁移 680 因子到 DuckDB 4 张表（factor_metadata/factor_versions/factor_correlations/factor_evaluations），支持 SQL 查询、代码哈希去重、版本历史追踪
 - **验证结果**: 680 因子迁移完成，回测引擎兼容性验证通过（加载/执行/筛选/搜索 100% 通过）
-- **关联**: `docs/factor-management-optimization-plan.md` Phase 2
+- **关联**: `plans/factor-management-optimization-plan.md` Phase 2
 
 ### GAP-022: 因子演化无版本历史与谱系追踪（已关闭）
 
@@ -232,7 +232,7 @@
 - **影响范围**: 演化过程不可审计，无法理解因子谱系和迭代逻辑
 - **解决方式**: Phase 2 — 新增 `factor_versions` 表，记录每次因子变更的 generation/change_type/parent_id，版本管理 API 已实现
 - **验证结果**: 版本表创建成功，版本追踪 API 通过测试
-- **关联**: `docs/factor-management-optimization-plan.md` Phase 2
+- **关联**: `plans/factor-management-optimization-plan.md` Phase 2
 
 ### GAP-023: 因子管理无数据血缘审计能力（已关闭）
 
@@ -240,7 +240,7 @@
 - **影响范围**: 因子质量退化无法追溯，组合决策缺乏历史依据
 - **解决方式**: Phase 3 — 通过 DuckDB 事务日志 + 版本历史实现因子数据血缘
 - **验证结果**: 实现 `FactorLineage`（演化谱系查询/评估趋势分析/质量退化检测/批量血缘审计）+ `FailureClassifier`（10 种失败模式自动识别 + 改善建议生成）；新增 57 个测试用例全部通过
-- **关联**: `docs/factor-management-optimization-plan.md` Phase 3
+- **关联**: `plans/factor-management-optimization-plan.md` Phase 3
 
 ### GAP-024: 因子相关性无法系统性评估（已关闭）
 
@@ -362,6 +362,6 @@
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | 本文件登记全部 33 个差距（GAP-001~033），覆盖 `fts/factor_engine/`、`fts/data_sources/`、`fts/data.py`、`fts/cli.py`、`fts/core/`、`fts/monitor/`、`fts/scheduler/`、`fts/risk/`、`fts/factor_db/`、`pipeline/`、`strategies/`、`scripts/`、`docs/`、`agents/` 等模块。GAP-020~024 关联 `docs/factor-management-optimization-plan.md` |
+| 代码→文档映射 | 本文件登记全部 33 个差距（GAP-001~033），覆盖 `fts/factor_engine/`、`fts/data_sources/`、`fts/data.py`、`fts/cli.py`、`fts/core/`、`fts/monitor/`、`fts/scheduler/`、`fts/risk/`、`fts/factor_db/`、`pipeline/`、`strategies/`、`scripts/`、`docs/`、`agents/` 等模块。GAP-020~024 关联 `plans/factor-management-optimization-plan.md` |
 | 可验证断言 | 33 个差距全部已关闭（P0=4, P1=2, P2=27）。GAP-025 孤立模块集成修正 v2.10.0 关闭；GAP-026 算子命名对齐 v2.10.0 关闭；GAP-027 `code: Optional[str]` 可选化审计 v2.14.0 关闭；GAP-028 既有失败测试修复 v2.14.0 关闭；GAP-029 L3 漂移治理 v2.11.0 关闭；GAP-030 集成测试污染 catalog v2.14.0 关闭；GAP-031 L1-L2 注入接入 v2.14.0 关闭；GAP-032 演化产物同步 catalog v2.13.0 关闭；GAP-033 数据泄露+IC 衰减 v2.15.0 关闭 |
-| 检验方式 | 检查本文件差距登记表确认所有差距状态为 ✅ 已关闭；关联文档 `docs/factor-management-optimization-plan.md` |
+| 检验方式 | 检查本文件差距登记表确认所有差距状态为 ✅ 已关闭；关联文档 `plans/factor-management-optimization-plan.md` |

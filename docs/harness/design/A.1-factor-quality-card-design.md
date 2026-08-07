@@ -1,7 +1,7 @@
 # A.1 因子质量评分卡 — 详细技术设计
 
 > 版本: v1.0.0
-> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase A.1
+> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase A.1
 > 状态: **已实现**（`fts/factor_engine/factor_quality_card.py` v1.0.0）
 > 实现说明: 核心类 `FactorQualityCard` 与 10 维度评分体系已实现并接入演化循环；`factor_quality_scores` 表与 `FactorQualityCardRepository` **未实现**（评分卡当前由 `EliteFactorTracker` 以 JSON 快照方式持久化，见 A.2）。
 
@@ -356,7 +356,7 @@ flowchart TD
 
 | 字段 | 值 |
 |:-----|:----|
-| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase A.1 |
+| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase A.1 |
 | 依赖模块 | `evaluation_chain.py`（评估指标）、`walk_forward.py`（稳定性）、`factor_db/`（存储） |
 | 前置条件 | L3 评估链能输出 IC/Sharpe/WalkForward 结果（已满足） |
 | 后置影响 | 因子准入流程从 pass/fail 改为 A/B/C 三级准入 |

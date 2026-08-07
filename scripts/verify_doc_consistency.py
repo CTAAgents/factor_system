@@ -3,10 +3,12 @@
 FTS 文档一致性检查脚本 — Layer 2 自动校验
 
 检查 docs/harness/ 目录下各文档的一致性元数据，验证代码→文档映射关系。
+包含版本号一致性检查（§版本号纪律）。
 
 用法:
     python scripts/verify_doc_consistency.py          # 检查全部文档
     python scripts/verify_doc_consistency.py --file   # 检查指定文件
+    python scripts/verify_doc_consistency.py --fix-versions  # 自动修复版本号不一致
     python scripts/verify_doc_consistency.py --help   # 帮助
 """
 
@@ -123,6 +125,48 @@ def check_flow_docs_exist() -> list[str]:
     return issues
 
 
+def check_version_consistency() -> list[dict[str, str]]:
+    """检查所有文档版本号是否与 pyproject.toml 一致。"""
+    issues: list[dict[str, str]] = []
+    try:
+        import tomllib as _toml
+    except ImportError:
+        try:
+            import tomli as _toml
+        except ImportError:
+            return [{"file": "system", "message": "缺少 tomllib/tomli 模块，无法检查版本号"}]
+
+    pyproject = PROJECT_ROOT / "pyproject.toml"
+    with open(pyproject, "rb") as f:
+        target_version = "v" + _toml.load(f)["project"]["version"]
+
+    # 核心文档 + 计划文档 + 设计文档（排除历史验收文档）
+    doc_patterns = [
+        "docs/harness/0*.md",            # 01-09
+        "docs/harness/business_flow.md",
+        "docs/harness/execution_modes_flowchart.md",
+        "docs/harness/plans/*.md",
+        "docs/harness/design/*.md",
+    ]
+
+    checked: set[Path] = set()
+    for pattern in doc_patterns:
+        for doc in sorted(PROJECT_ROOT.glob(pattern)):
+            if doc in checked:
+                continue
+            checked.add(doc)
+            content = doc.read_text(encoding="utf-8")
+            match = re.search(r"> 版本: (v[\d.]+)", content)
+            if match and match.group(1) != target_version:
+                issues.append({
+                    "file": doc.name,
+                    "expected": target_version,
+                    "actual": match.group(1),
+                })
+
+    return issues
+
+
 def run_all_checks() -> dict[str, Any]:
     """运行全部一致性检查。"""
     results: dict[str, Any] = {
@@ -173,7 +217,27 @@ def run_all_checks() -> dict[str, Any]:
             })
             results["passed"] += 1
 
-    # 3. 检查流程文档存在性
+    # 3. 检查版本号一致性
+    version_issues = check_version_consistency()
+    for v in version_issues:
+        results["checks"].append({
+            "file": v["file"],
+            "type": "版本号",
+            "status": "FAIL",
+            "message": f"期望 {v['expected']}，实际 {v['actual']}",
+        })
+        results["failed"] += 1
+
+    if not version_issues:
+        results["checks"].append({
+            "file": "全部文档",
+            "type": "版本号",
+            "status": "PASS",
+            "message": "所有文档版本号一致",
+        })
+        results["passed"] += 1
+
+    # 4. 检查流程文档存在性
     flow_issues = check_flow_docs_exist()
     for issue in flow_issues:
         results["checks"].append({
@@ -231,8 +295,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="FTS 文档一致性检查脚本")
     parser.add_argument("--file", type=str, help="指定检查单个文件")
     parser.add_argument("--json", action="store_true", help="JSON 格式输出")
-    parser.add_argument("--fix", action="store_true", help="自动修复简单问题（暂未实现）")
+    parser.add_argument("--fix-versions", action="store_true", help="自动修复版本号不一致（委托 update_doc_versions.py）")
     args = parser.parse_args()
+
+    if args.fix_versions:
+        update_script = SCRIPTS_DIR / "update_doc_versions.py"
+        if not update_script.exists():
+            print(f"❌ 修复脚本不存在: {update_script}")
+            return 1
+        os.system(f"{sys.executable} {update_script} --apply")
+        print("\n✅ 版本号修复完成，继续检查一致性...\n")
 
     if args.file:
         doc_path = HARNESS_DIR / args.file

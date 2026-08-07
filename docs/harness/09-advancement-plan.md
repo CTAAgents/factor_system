@@ -21,7 +21,7 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
                                                      └ 99% 覆盖  └ 99% 覆盖  子因子
 ```
 
-**详细路线图见 [docs/production_plan.md](../production_plan.md)**，本文档仅记录已完成的里程碑。
+**详细路线图见 [plans/production_plan.md](plans/production_plan.md)**，本文档仅记录已完成的里程碑。
 
 ---
 
@@ -329,7 +329,7 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 
 ## 3. 下阶段目标（v2.0.0）
 
-参见 [docs/production_plan.md](../production_plan.md) 完整路线图。
+参见 [plans/production_plan.md](plans/production_plan.md) 完整路线图。
 
 | 版本 | 主题 | 核心产出 |
 |:-----|:-----|:---------|

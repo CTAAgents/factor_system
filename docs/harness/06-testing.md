@@ -1,7 +1,7 @@
 # FTS 测试策略
 
-> 版本: v2.14.0
-> 最后更新: 2026-08-06
+> 版本: v2.22.0
+> 最后更新: 2026-08-07
 
 ---
 
@@ -22,7 +22,7 @@
 
 | 层级 | 测试文件数 | 用例数 | 说明 |
 |:-----|:----------|:-------|:-----|
-| 单元测试 | 90+ | ~2600 | 各模块独立测试（含基本面数据层 + 信号管道 + 消融实验 + 风险标签 + 场景测试 + SHAP分析 + 鲁棒性 + 因果验证 + 逻辑监控 + 种子因子相关性预检 + DuckDB因子仓库 + 因子相关性矩阵 + 因子血缘审计 + 失败模式分类 + 因子巡检 + 生命周期E2E闭环 + 回测流水线 + 后代因子运行时校验 + FTS-Expr DSL 算子因子 + GP 多父代交叉 + 快速预筛选 + 评分卡配置 + **算子演化引擎（C.4，13 用例）** + **L1→L2 候选合并（GAP-031，8 用例）** + **L2 晋升双写原子化（GAP-032，4 用例）** + **factor_db_path 测试隔离注入（GAP-030，2 用例）** + **SectorRegimeSelector 产业链级制度检测（9 用例）**） |
+| 单元测试 | 90+ | ~2600 | 各模块独立测试（含基本面数据层 + 信号管道 + 消融实验 + 风险标签 + 场景测试 + SHAP分析 + 鲁棒性 + 因果验证 + 逻辑监控 + 种子因子相关性预检 + DuckDB因子仓库 + 因子相关性矩阵 + 因子血缘审计 + 失败模式分类 + 因子巡检 + 生命周期E2E闭环 + 回测流水线 + 后代因子运行时校验 + FTS-Expr DSL 算子因子 + GP 多父代交叉 + 快速预筛选 + 评分卡配置 + **算子演化引擎（C.4，13 用例）** + **L1→L2 候选合并（GAP-031，8 用例）** + **L2 晋升双写原子化（GAP-032，4 用例）** + **factor_db_path 测试隔离注入（GAP-030，2 用例）** + **SectorRegimeSelector 产业链级制度检测（9 用例）** + **L1 候选因子评分缺陷修复（150 测试全绿）**） |
 | 集成测试 | 5 | ~200 | strategies 策略层 + 演化循环集成 + 数据源聚合 + 期货同步 |
 | E2E | 2 | 24 | test_e2e.py(10) + test_factor_lifecycle.py(14) |
 |│ 合计 | 100+ | 2200 | 2043+ passed（432 passed in latest run, 9 sector regime tests all green） |
@@ -313,6 +313,7 @@ TOTAL                                       6229    533    91%
 | `tests/scenarios/test_natural_experiments.py` | ~10 | 自然实验事件定义 |
 | `tests/factor_engine/test_contracts.py` | ~16 | 契约定义 |
 | `tests/factor_engine/test_evaluation_chain.py` | ~50 | 三级评估链 |
+| `tests/factor_engine/test_factor_quality_card.py` | ~100 | 因子质量评分卡（10 维评分，A/B/C 分级，可配置映射阈值） |
 | `tests/factor_engine/test_evolution_loop.py` | ~111 | L2 主循环（含孤立模块集成审查门禁测试：消融/因果/鲁棒/SHAP/特征重要性/逻辑监控 + 端到端流水线） |
 | `tests/factor_engine/test_experience_chain.py` | ~19 | 经验链 |
 | `tests/factor_engine/test_factor_program.py` | ~32 | 因子程序 |

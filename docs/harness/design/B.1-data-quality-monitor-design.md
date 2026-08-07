@@ -1,7 +1,7 @@
 # B.1 数据质量实时监控 — 详细技术设计
 
 > 版本: v1.0.0
-> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase B.1
+> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase B.1
 > 状态: **已实现**（实现方向与原设计不同）
 > 实现说明: 实际实现为 `fts/monitor/data_quality_monitor.py`（v0.1.0），监控对象从"数据源三维指标（完整性/准确性/及时性）"调整为**因子级质量监控**：IC 漂移（IC Z-Score 阈值告警）+ 容量突变（容量变化率阈值告警）+ `validate_market_data()` 市场数据完整性校验。HTTP 端点: `GET /metrics`、`GET /metrics/data-sources`（`fts/monitor/http_server.py`）。原设计的 `register_source`/`evaluate_all`/多源交叉偏差/跳点检测/PSI 漂移等均未实现。
 
@@ -483,7 +483,7 @@ class PrometheusMetrics:
 
 | 字段 | 值 |
 |:-----|:----|
-| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase B.1 |
+| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase B.1 |
 | 依赖模块 | `data_sources/aggregator.py`（数据采集）、`monitor/prometheus_metrics.py`（指标暴露）、`scheduler/`（定时触发） |
 | 前置条件 | 数据源适配器已实现，Prometheus 监控基础设施可用 |
 | 后置影响 | 数据采集路径增加异步质量埋点，监控体系扩展 |

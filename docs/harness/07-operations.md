@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.20.2
+> 版本: v2.21.0
 > 最后更新: 2026-08-07
 
 ---
@@ -9,6 +9,8 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.22.0** | 2026-08-07 | L1 候选因子评分缺陷修复 4 项：P1 经济逻辑评分默认值统一为 3（evaluation_chain.py evaluate_economic_logic 默认值 0→3，evolution_loop.py _merge_l1_candidates 预填默认值）；P2 换手率缺失保护（L1 候选因子 turnover=0 时默认 0.5）；P3 种子因子 WalkForward 缺失补全（轻量 2 窗口验证）；P4 评分映射函数可配置化（factor_quality_card.py 从 config 读取阈值，factor_quality_card_config.py 扩展 to_factor_quality_card_config 输出）；150 测试全绿 |
+| **v2.21.0** | 2026-08-07 | 存储方案优化 4 项：P1 _promote_to_elite 去重仅依赖 DuckDB 权威数据源，移除冗余 JSON 文件 glob 扫描；P2 新增 oversub-type 参数；P3 晋升/淘汰操作自动写 catalog_consistency.jsonl 一致性日志；P4 ART 索引 workaround 添加 DROP/CREATE 计数器日志；新增 `fts catalog stats/verify/backup` CLI 命令组；11 测试全绿 |
 | **v2.20.2** | 2026-08-07 | 修复 Step 7.5 质量报告 DuckDB 失败：`_generate_quality_report` 新增 DuckDB C 扩展加载失败时 combo 文件回退机制（双路径 A→B），增加异常堆栈 debug 日志和报告 source 字段标记数据来源；90 测试全绿 |
 | **v2.20.1** | 2026-08-07 | 修复测试：`_mock_seed_evaluation_pass` mock key 从 `"multiple_test"` 更正为 `"level_3_multiple"`；`test_promote_to_elite` 系列测试补全 `level_3_multiple={"passed": True}` 避免假阴性；`test_promote_to_elite_audit_fails_blocks_promotion` 修正为验证审计报告写入而非 `path is None`（审计阻塞在 `run()` 中执行）；218 测试全绿 |
 | **v2.20.0** | 2026-08-07 | 产业链级市场制度检测：新增 `SectorRegimeSelector` 类对每个产业链独立检测市场制度（bull/bear/oscillate/high_vol/low_vol），从品种面板构建合成 OHLCV（close 截面均值 + volume 截面和），每个产业链使用独立 `RegimeAwareSelector` 实例保持状态隔离；`futures_signal_pipeline.py` 集成 `SectorRegimeSelector`，Step 2b 替换为产业链级检测 + 品种数加权主制度计算；报告新增产业链 Breakdown（各产业链制度/置信度/品种数/方向建议）；新增 `test_sector_regime.py` 9 测试用例全绿；文档同步（01-architecture 产业链级检测章节 + 06-testing 测试条目） |
@@ -63,8 +65,8 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 
 | 文件 | 字段 |
 |:-----|:-----|
-| `fts/__init__.py` | `__version__ = "2.17.0"` |
-| `pyproject.toml` | `version = "2.17.0"` |
+| `fts/__init__.py` | `__version__ = "2.22.0"` |
+| `pyproject.toml` | `version = "2.22.0"` |
 
 异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v1.1.0），与 FTS 项目版本同步。
 

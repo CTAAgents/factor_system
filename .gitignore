@@ -38,7 +38,7 @@ logs/
 docs/*
 !docs/harness/
 !docs/FTS_manual.md
-!docs/business_flow.md
+# business_flow.md 已移至 docs/harness/business_flow.md，由 !docs/harness/ 覆盖
 
 # Research / experimental
 brain_field_test.py

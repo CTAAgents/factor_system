@@ -60,8 +60,8 @@ OPENAI_MODEL=deepseek-chat
 fts version
 
 # 看到类似输出就对了:
-# FTS version: 2.5.0
-# Factor engine version: 2.5.0
+# FTS version: 2.22.0
+# Factor engine version: 2.22.0
 ```
 
 > 如果提示 `fts` 命令找不到，请使用模块模式：
@@ -526,12 +526,12 @@ fts ui
 | 资源 | 位置 |
 |------|------|
 | 代码 Wiki | `CODE_WIKI.md` |
-| 执行模式流程图 | `docs/execution_modes_flowchart.md` |
-| 业务流程图 | `docs/business_flow.md` |
-| 生产部署 | `docs/production_plan.md` |
+| 执行模式流程图 | `harness/execution_modes_flowchart.md` |
+| 业务流程图 | `harness/business_flow.md` |
+| 生产部署 | `docs/harness/plans/production_plan.md` |
 | 工程规范 | `docs/harness/` |
 | 角色职责 | `agents/fts-agent.md` |
-| 策略手册 | `docs/strategy_manual.md` |
+| 策略手册 | `docs/harness/reports/strategy_manual.md` |
 | README | `README.md` |
 
 ### 工程指标

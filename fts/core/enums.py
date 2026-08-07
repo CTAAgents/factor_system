@@ -35,4 +35,30 @@ class FactorStatus(str, Enum):
     REJECTED = "rejected"      # 已拒绝
 
 
-__all__ = ["EvolutionStage", "FactorPriority", "FactorStatus"]
+class DataSource(str, Enum):
+    """FTS 数据源枚举 — 7 个成员。
+
+    对应多源数据融合策略中的源标识符。
+    """
+    DUCKDB_CACHE = "DUCKDB_CACHE"    # DuckDB 本地缓存（主路径 Top1）
+    TQ_LOCAL = "TQ_LOCAL"            # 通达信本地 HTTP 7721
+    TQ_PYTHON = "TQ_PYTHON"          # 通达信 TQ-Python SDK
+    AKSHARE = "AKSHARE"              # AKShare 即时获取（降级）
+    SYNTHETIC = "SYNTHETIC"          # 合成数据降级（保证系统可运行）
+    WIND = "WIND"                    # 万得金融终端（字段增强层）
+    IFIND = "IFIND"                  # 同花顺 iFinD（字段增强层）
+
+
+class FusionStrategy(str, Enum):
+    """多源数据融合策略 — 5 种算法。
+
+    对应 OHLCVFusion 融合器中的策略选择。
+    """
+    MEDIAN = "median"                # 中位数（默认，抗异常值）
+    MEAN = "mean"                    # 算术平均
+    WEIGHTED = "weighted"            # 按源权重加权平均
+    HIERARCHICAL = "hierarchical"    # 优先级优先，与中位数分歧时降级
+    TRIMMED_MEAN = "trimmed_mean"    # 去掉最高/最低后取均值
+
+
+__all__ = ["EvolutionStage", "FactorPriority", "FactorStatus", "DataSource", "FusionStrategy"]

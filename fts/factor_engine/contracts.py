@@ -619,6 +619,33 @@ DEFAULT_STICKY_CONFIG: StickyConfig = StickyConfig(
 """v2.11.0 锁定的 L3 粘性约束默认配置。"""
 
 
+# ─── 多源数据交叉验证契约 ──────────────────────────────────
+
+class MultiSourceDisagreement(TypedDict, total=False):
+    """多源数据交叉验证分歧记录 — 用于数据质量监控。
+
+    字段:
+        symbol: 品种代码（如 "RB0"）
+        date: ISO 日期 "2026-08-04"
+        prices: dict[源名称, close 价格]
+        median: 各源 close 中位数
+        outliers: 偏离中位数超过阈值的源名称列表
+        max_diff_pct: 最大偏离百分比
+        threshold: 偏离阈值
+        trace_id: 链路追踪 ID（HARNESS §5.5）
+        detected_at: 检测时间 ISO 8601
+    """
+    symbol: str
+    date: str
+    prices: dict[str, float]
+    median: float
+    outliers: list[str]
+    max_diff_pct: float
+    threshold: float
+    trace_id: str
+    detected_at: str
+
+
 # ─── L3 组合漂移监控 ──────────────────────────────────────
 
 class DriftMetrics(TypedDict, total=False):
@@ -697,6 +724,8 @@ __all__ = [
     "StickyConfig",
     "DEFAULT_STICKY_CONFIG",
     "DriftMetrics",
+    # 多源数据交叉验证
+    "MultiSourceDisagreement",
     # 规范化工具
     "normalize_factor_program",
     "normalize_factor_signature",

@@ -26,7 +26,7 @@ A.1 模块: 10 维度定量评分体系 (0-50 分)，替代 pass/fail 判定。
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal, TypedDict
+from typing import Literal, Optional, TypedDict
 
 from .walk_forward import WalkForwardResult
 
@@ -112,76 +112,93 @@ _DIMENSION_NAMES: tuple[str, ...] = (
 # ─── 评分映射函数 ──────────────────────────────────────────
 
 
-def _map_ic_to_score(ic: float) -> float:
+def _map_ic_to_score(ic: float, config: Optional[dict] = None) -> float:
     """IC → 有效性分 (0-5)。
 
     阈值: IC=0.08→5分, 0.03→3分, 0.01→1分, 0→0分
+    可通过 config 参数覆盖阈值（如 {"ic_high": 0.06, "ic_mid": 0.02, "ic_low": 0.008}）。
     """
+    cfg = config or {}
+    ic_high = cfg.get("ic_high", 0.08)
+    ic_mid = cfg.get("ic_mid", 0.03)
+    ic_low = cfg.get("ic_low", 0.01)
     if ic <= 0:
         return 0.0
-    if ic >= 0.08:
+    if ic >= ic_high:
         return 5.0
-    if ic >= 0.03:
+    if ic >= ic_mid:
         return 3.0
-    if ic >= 0.01:
+    if ic >= ic_low:
         return 1.0
-    return (ic / 0.01) * 1.0
+    return (ic / ic_low) * 1.0
 
 
-def _map_icir_to_score(icir: float) -> float:
+def _map_icir_to_score(icir: float, config: Optional[dict] = None) -> float:
     """ICIR → 有效性补充分 (0-5)。
 
-    ICIR = IC 均值 / IC 标准差。ICIR 越高，因子越稳定。
     阈值: ICIR=3→5分, 2→3分, 1→1分
+    可通过 config 参数覆盖阈值。
     """
+    cfg = config or {}
+    icir_high = cfg.get("icir_high", 3.0)
+    icir_mid = cfg.get("icir_mid", 2.0)
+    icir_low = cfg.get("icir_low", 1.0)
     if icir <= 0:
         return 0.0
-    if icir >= 3:
+    if icir >= icir_high:
         return 5.0
-    if icir >= 2:
+    if icir >= icir_mid:
         return 3.0
-    if icir >= 1:
+    if icir >= icir_low:
         return 1.0
-    return (icir / 1.0) * 1.0
+    return (icir / icir_low) * 1.0
 
 
-def _map_sharpe_to_score(sharpe: float) -> float:
+def _map_sharpe_to_score(sharpe: float, config: Optional[dict] = None) -> float:
     """Sharpe → 收益性分 (0-5)。
 
     阈值: Sharpe=3→5分, 1.5→3分, 0.5→1分
     过拟合惩罚: Sharpe>10 时逐步减分，Sharpe=20 时归零（P1 过拟合保护）
+    可通过 config 参数覆盖阈值（如 {"sharpe_high": 2.0, "sharpe_mid": 1.0, "sharpe_low": 0.3}）。
     """
+    cfg = config or {}
+    sharpe_high = cfg.get("sharpe_high", 3.0)
+    sharpe_mid = cfg.get("sharpe_mid", 1.5)
+    sharpe_low = cfg.get("sharpe_low", 0.5)
     if sharpe <= 0:
         return 0.0
-    if sharpe >= 3:
+    if sharpe >= sharpe_high:
         if sharpe <= 10:
             return 5.0
         # Sharpe > 10: 过拟合惩罚，逐步减分
-        # Sharpe=10→5.0, Sharpe=12→4.0, Sharpe=15→2.5, Sharpe=20→0.0
         penalty = min(5.0, (sharpe - 10) * 0.5)
         return max(0.0, 5.0 - penalty)
-    if sharpe >= 1.5:
+    if sharpe >= sharpe_mid:
         return 3.0
-    if sharpe >= 0.5:
+    if sharpe >= sharpe_low:
         return 1.0
-    return (sharpe / 0.5) * 1.0
+    return (sharpe / sharpe_low) * 1.0
 
 
-def _map_calmar_to_score(calmar: float) -> float:
+def _map_calmar_to_score(calmar: float, config: Optional[dict] = None) -> float:
     """Calmar → 收益性补充分 (0-5)。
 
-    Calmar = 年化收益 / 最大回撤。
     阈值: Calmar=2→5分, 1→3分, 0.5→1分
+    可通过 config 参数覆盖阈值。
     """
+    cfg = config or {}
+    calmar_high = cfg.get("calmar_high", 2.0)
+    calmar_mid = cfg.get("calmar_mid", 1.0)
+    calmar_low = cfg.get("calmar_low", 0.5)
     if calmar <= 0:
         return 0.0
-    if calmar >= 2:
+    if calmar >= calmar_high:
         return 5.0
-    if calmar >= 1:
+    if calmar >= calmar_mid:
         return 3.0
-    if calmar >= 0.5:
+    if calmar >= calmar_low:
         return 1.0
-    return (calmar / 0.5) * 1.0
+    return (calmar / calmar_low) * 1.0
 
 
 def _map_stability_to_score(wf_result: WalkForwardResult) -> float:
@@ -211,82 +228,88 @@ def _map_stability_to_score(wf_result: WalkForwardResult) -> float:
     return round(consistency_score + volatility_score + benchmark_score + window_score, 2)
 
 
-def _map_decay_to_score(decay_rate: float) -> float:
+def _map_decay_to_score(decay_rate: float, config: Optional[dict] = None) -> float:
     """衰减率 → 鲁棒性分 (0-5)。
 
     decay_rate: 月环比 IC 下降幅度 (正值表示衰减)。
     阈值: 0.1→5分, 0.3→3分, 0.5→1分
+    可通过 config 参数覆盖阈值。
     """
-    if decay_rate <= 0.1:
+    cfg = config or {}
+    decay_good = cfg.get("decay_good", 0.1)
+    decay_mid = cfg.get("decay_mid", 0.3)
+    decay_bad = cfg.get("decay_bad", 0.5)
+    if decay_rate <= decay_good:
         return 5.0
-    if decay_rate <= 0.3:
+    if decay_rate <= decay_mid:
         return 3.0
-    if decay_rate <= 0.5:
+    if decay_rate <= decay_bad:
         return 1.0
     return 0.0
 
 
-def _map_capacity_to_score(capacity_estimate: float) -> float:
+def _map_capacity_to_score(capacity_estimate: float, config: Optional[dict] = None) -> float:
     """容量估算 → 容量分 (0-5)。
 
-    针对期货因子优化后的阈值:
-    1亿+ → 5分, 5000万+ → 4分, 1000万+ → 3分, 100万+ → 2分, <100万 → 1分
+    可通过 config 参数覆盖阈值。
     """
+    cfg = config or {}
+    cap_high = cfg.get("capacity_high", 100_000_000)
+    cap_mid_high = cfg.get("capacity_mid_high", 50_000_000)
+    cap_mid = cfg.get("capacity_mid", 10_000_000)
+    cap_low = cfg.get("capacity_low", 1_000_000)
     if capacity_estimate <= 0:
         return 0.0
-    if capacity_estimate >= 100_000_000:
+    if capacity_estimate >= cap_high:
         return 5.0
-    if capacity_estimate >= 50_000_000:
+    if capacity_estimate >= cap_mid_high:
         return 4.0
-    if capacity_estimate >= 10_000_000:
+    if capacity_estimate >= cap_mid:
         return 3.0
-    if capacity_estimate >= 1_000_000:
+    if capacity_estimate >= cap_low:
         return 2.0
     return 1.0
 
 
-def _map_turnover_to_score(turnover: float) -> float:
+def _map_turnover_to_score(turnover: float, config: Optional[dict] = None) -> float:
     """换手率 → 交易性分 (0-5)。
 
-    自动检测格式:
-    - 小数格式 (0-10): 5.72 表示 572%
-    - 百分比格式 (>10): 572.34 表示 572.34%
-
-    期货高频因子优化后阈值 (转换为百分比后):
-    - 最优: 50%-500% → 5分
-    - 可接受: 10%-1000% → 3分
-    - 其他: 1分
+    可通过 config 参数覆盖阈值（如 {"turnover_opt_low": 30, "turnover_opt_high": 800}）。
     """
+    cfg = config or {}
+    turnover_opt_low = cfg.get("turnover_opt_low", 50.0)
+    turnover_opt_high = cfg.get("turnover_opt_high", 500.0)
+    turnover_mid_low = cfg.get("turnover_mid_low", 10.0)
+    turnover_mid_high = cfg.get("turnover_mid_high", 1000.0)
     if turnover <= 0:
         return 1.0
-
     # 自动检测格式: <= 10 视为小数, > 10 视为百分比
     if turnover <= 10:
-        # 小数格式: 5.72 → 572%
         turnover_pct = turnover * 100
     else:
-        # 百分比格式: 572.34 → 572.34%
         turnover_pct = turnover
-
-    # 期货优化后的阈值 (百分比)
-    if 50 <= turnover_pct <= 500:
+    if turnover_opt_low <= turnover_pct <= turnover_opt_high:
         return 5.0
-    if 10 <= turnover_pct <= 1000:
+    if turnover_mid_low <= turnover_pct <= turnover_mid_high:
         return 3.0
     return 1.0
 
 
-def _map_correlation_to_score(correlation_max: float) -> float:
+def _map_correlation_to_score(correlation_max: float, config: Optional[dict] = None) -> float:
     """最大相关性 → 多样性分 (0-5)。
 
     与已有因子相关性越低，多样性越好。
-    阈值: 0.3→5分, 0.5→3分, 0.7→1分
+    可通过 config 参数覆盖阈值。
     """
-    if correlation_max <= 0.3:
+    cfg = config or {}
+    corr_low = cfg.get("corr_low", 0.3)
+    corr_mid = cfg.get("corr_mid", 0.5)
+    corr_high = cfg.get("corr_high", 0.7)
+    if correlation_max <= corr_low:
         return 5.0
-    if correlation_max <= 0.5:
+    if correlation_max <= corr_mid:
         return 3.0
-    if correlation_max <= 0.7:
+    if correlation_max <= corr_high:
         return 1.0
     return 0.0
 
@@ -316,17 +339,20 @@ def _map_frequency_to_score(
     return freq_map.get(data_frequency, 2.0)
 
 
-def _map_coverage_to_score(cross_symbol_coverage: float) -> float:
+def _map_coverage_to_score(cross_symbol_coverage: float, config: Optional[dict] = None) -> float:
     """跨品种覆盖率 → 兼容性分 (0-5)。
 
-    期货因子优化: 单一品种覆盖也给基础分。
-    阈值: 0.9→5分, 0.7→4分, 0.5→3分, 0.3→2分, <0.3→1分
+    可通过 config 参数覆盖阈值。
     """
-    if cross_symbol_coverage >= 0.9:
+    cfg = config or {}
+    cov_high = cfg.get("coverage_high", 0.9)
+    cov_mid = cfg.get("coverage_mid", 0.7)
+    cov_low = cfg.get("coverage_low", 0.5)
+    if cross_symbol_coverage >= cov_high:
         return 5.0
-    if cross_symbol_coverage >= 0.7:
+    if cross_symbol_coverage >= cov_mid:
         return 4.0
-    if cross_symbol_coverage >= 0.5:
+    if cross_symbol_coverage >= cov_low:
         return 3.0
     if cross_symbol_coverage >= 0.3:
         return 2.0
@@ -449,9 +475,20 @@ class FactorQualityCard:
         """计算所有 10 个维度的评分。"""
         scores: list[DimensionScore] = []
 
+        # 从配置提取各维度映射阈值
+        ic_cfg = self._config.get("ic_mapping", {})
+        icir_cfg = self._config.get("icir_mapping", {})
+        sharpe_cfg = self._config.get("sharpe_mapping", {})
+        calmar_cfg = self._config.get("calmar_mapping", {})
+        decay_cfg = self._config.get("decay_mapping", {})
+        capacity_cfg = self._config.get("capacity_mapping", {})
+        turnover_cfg = self._config.get("turnover_mapping", {})
+        correlation_cfg = self._config.get("correlation_mapping", {})
+        coverage_cfg = self._config.get("coverage_mapping", {})
+
         # 1. 有效性: IC/ICIR
-        ic_score = _map_ic_to_score(ic)
-        icir_score = _map_icir_to_score(icir)
+        ic_score = _map_ic_to_score(ic, ic_cfg)
+        icir_score = _map_icir_to_score(icir, icir_cfg)
         validity_score = round((ic_score + icir_score) / 2, 2)
         scores.append({
             "name": "ic_score",
@@ -461,8 +498,8 @@ class FactorQualityCard:
         })
 
         # 2. 收益性: Sharpe/Calmar
-        sharpe_score = _map_sharpe_to_score(sharpe)
-        calmar_score = _map_calmar_to_score(calmar)
+        sharpe_score = _map_sharpe_to_score(sharpe, sharpe_cfg)
+        calmar_score = _map_calmar_to_score(calmar, calmar_cfg)
         return_score = round((sharpe_score + calmar_score) / 2, 2)
         scores.append({
             "name": "sharpe_score",
@@ -486,7 +523,7 @@ class FactorQualityCard:
         })
 
         # 4. 鲁棒性: 衰减率
-        robustness_score = _map_decay_to_score(decay_rate)
+        robustness_score = _map_decay_to_score(decay_rate, decay_cfg)
         scores.append({
             "name": "robustness_score",
             "raw_value": decay_rate,
@@ -495,7 +532,7 @@ class FactorQualityCard:
         })
 
         # 5. 容量: 容量估算
-        capacity_score = _map_capacity_to_score(capacity_estimate)
+        capacity_score = _map_capacity_to_score(capacity_estimate, capacity_cfg)
         scores.append({
             "name": "capacity_score",
             "raw_value": capacity_estimate,
@@ -504,7 +541,7 @@ class FactorQualityCard:
         })
 
         # 6. 交易性: 换手率
-        tradability_score = _map_turnover_to_score(turnover)
+        tradability_score = _map_turnover_to_score(turnover, turnover_cfg)
         scores.append({
             "name": "tradability_score",
             "raw_value": turnover,
@@ -513,7 +550,7 @@ class FactorQualityCard:
         })
 
         # 7. 多样性: 最大相关性
-        diversity_score = _map_correlation_to_score(correlation_max)
+        diversity_score = _map_correlation_to_score(correlation_max, correlation_cfg)
         scores.append({
             "name": "diversity_score",
             "raw_value": correlation_max,
@@ -540,7 +577,7 @@ class FactorQualityCard:
         })
 
         # 10. 兼容性: 跨品种覆盖率
-        compatibility_score = _map_coverage_to_score(cross_symbol_coverage)
+        compatibility_score = _map_coverage_to_score(cross_symbol_coverage, coverage_cfg)
         scores.append({
             "name": "compatibility_score",
             "raw_value": cross_symbol_coverage,
@@ -553,7 +590,23 @@ class FactorQualityCard:
     def _compute_total(self, dims: list[DimensionScore]) -> float:
         """计算加权总分 (归一化到 0-50)。"""
         total_max = self._config.get("total_max", 50)
-        weights = _DIMENSION_WEIGHTS
+        # 尝试从配置读取权重，否则使用硬编码权重
+        weights_cfg = self._config.get("weights", {})
+        if weights_cfg:
+            weights = (
+                weights_cfg.get("ic_score", 1.0),
+                weights_cfg.get("sharpe_score", 1.0),
+                weights_cfg.get("stability_score", 0.8),
+                weights_cfg.get("robustness_score", 0.8),
+                weights_cfg.get("capacity_score", 0.6),
+                weights_cfg.get("tradability_score", 0.8),
+                weights_cfg.get("diversity_score", 0.5),
+                weights_cfg.get("logic_score", 0.8),
+                weights_cfg.get("timeliness_score", 0.4),
+                weights_cfg.get("compatibility_score", 0.4),
+            )
+        else:
+            weights = _DIMENSION_WEIGHTS
 
         # 加权求和
         raw_total = sum(

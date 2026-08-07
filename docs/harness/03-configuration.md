@@ -1,7 +1,7 @@
 # FTS 配置管理
 
-> 版本: v2.12.0
-> 最后更新: 2026-08-05
+> 版本: v2.22.0
+> 最后更新: 2026-08-07
 
 ---
 
@@ -68,7 +68,50 @@ L2 Verifier 默认配置（定义在 `contracts.py` 中，初始化后锁定）�
 | `min_oos_ratio` | 0.30 | 最小样本外比例 |
 | `max_turnover_monthly` | 0.50 | 最大月度换手率 |
 
-## 5. Budget 配置
+## 5. 因子质量评分卡配置
+
+因子质量评分卡配置定义在 `fts/config/factor_quality_card_config.py` 中，通过 `FactorQualityCardConfig` 数据类管理。支持市场专用调整，通过 `get_futures_config()` 获取期货专用配置。
+
+### 5.1 评分维度权重
+
+| 维度 | 默认权重 | 说明 |
+|:-----|:---------|:-----|
+| IC 有效性 (ic_score) | 1.0 | 信息系数 |
+| 收益性 (sharpe_score) | 1.0 | Sharpe Ratio |
+| 稳定性 (stability_score) | 0.8 | WalkForward 验证 |
+| 鲁棒性 (robustness_score) | 0.8 | 跨品种/压力测试 |
+| 容量 (capacity_score) | 0.6 | 市场容量 |
+| 交易性 (tradability_score) | 0.8 | 换手率评估 |
+| 多样性 (diversity_score) | 0.5 | 因子相关性 |
+| 逻辑性 (logic_score) | 0.8 | 经济逻辑评分 |
+| 实时性 (timeliness_score) | 0.4 | 衰减程度 |
+| 兼容性 (compatibility_score) | 0.4 | 组合兼容性 |
+
+### 5.2 评分映射阈值（可配置）
+
+评分映射函数（`_map_ic_to_score`、`_map_sharpe_to_score` 等）支持从配置读取阈值，默认值如下。可通过 `factor_quality_card_config.py` 的 `to_factor_quality_card_config()` 方法输出完整配置字典。
+
+| 映射函数 | 阈值参数 | 默认值 |
+|:---------|:---------|:-------|
+| IC 映射 | `ic_high/mid/low` | 0.08/0.03/0.01 |
+| ICIR 映射 | `icir_high/mid/low` | 1.0/0.5/0.1 |
+| Sharpe 映射 | `sharpe_high/mid/low` | 2.0/1.0/0.0 |
+| Calmar 映射 | `calmar_high/mid/low` | 2.0/1.0/0.0 |
+| 衰减映射 | `decay_mid` | 0.3 |
+| 容量映射 | `capacity_high/mid/low` | 50M/10M/1M |
+| 换手率映射 | `turnover_high/mid/low` | 0.3/0.5/0.8 |
+| 相关性映射 | `corr_high/mid/low` | 0.3/0.5/0.7 |
+| 覆盖度映射 | `coverage_high/mid/low` | 0.8/0.5/0.2 |
+
+### 5.3 分级阈值
+
+| 等级 | 总分阈值 | 说明 |
+|:-----|:---------|:-----|
+| A 级 | ≥ 35 | 精英因子，直接晋升 |
+| B 级 | [25, 35) | 合格因子，可晋升 |
+| C 级 | < 25 | 淘汰因子 |
+
+## 6. Budget 配置
 
 | 配置 | L1 默认值 | L2 默认值 | L3 默认值 |
 |:-----|:----------|:----------|:----------|

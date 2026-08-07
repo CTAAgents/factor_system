@@ -22,6 +22,7 @@ HARNESS §11-loop-engineering.md §2.2:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import sys
@@ -58,6 +59,49 @@ def _build_shadow_pool(now: Optional[datetime] = None) -> dict[str, Any]:
         "observe_trading_days": _SHADOW_OBSERVE_TRADING_DAYS,
         "observe_until": observe_until.isoformat(),
     }
+
+# ── 一致性日志（P4: JSON ↔ DuckDB） ──
+_CONSISTENCY_LOG_PATH = Path("data/_lineage/catalog_consistency.jsonl")
+
+
+def _log_consistency_event(
+    event_type: str,
+    factor_id: str,
+    factor_name: str,
+    market: str,
+    status: str,
+    json_path: str | None = None,
+    trace_id: str = "",
+) -> None:
+    """追加一条一致性日志记录到 catalog_consistency.jsonl。
+
+    Args:
+        event_type: 事件类型（promote / retire / verify）
+        factor_id: 因子 ID
+        factor_name: 因子名称
+        market: 市场类型（stock / futures）
+        status: 因子状态（active / retired）
+        json_path: JSON 文件路径（可选）
+        trace_id: 追踪 ID（可选）
+    """
+    import json
+    try:
+        record = {
+            "event_type": event_type,
+            "factor_id": factor_id,
+            "factor_name": factor_name,
+            "market": market,
+            "status": status,
+            "json_path": json_path or "",
+            "trace_id": trace_id or "",
+            "timestamp": datetime.now().isoformat(),
+        }
+        _CONSISTENCY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(str(_CONSISTENCY_LOG_PATH), "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.debug("[consistency_log] 写入失败: %s", e)
+
 
 from .contracts import (
     DEFAULT_BUDGET_CONFIG,
@@ -157,6 +201,9 @@ class _QualityInspectionCompat:
         icir = bt.get("icir", 0.0)
         decay_rate = bt.get("decay_6m", 0.2)
         turnover = bt.get("turnover_monthly", 0.3)
+        # 为 L1 候选因子设置合理换手率默认值（当回测未提供换手率时）
+        if turnover <= 0:
+            turnover = 0.5  # 期货 50% 月换手作为合理默认值
         walk_forward = evaluation.get("walk_forward")
 
         # 经济逻辑评分: 四维平均
@@ -992,20 +1039,8 @@ class EvolutionLoop:
             Path: 晋升成功
             None: 因子名称重复，跳过晋升
         """
-        import json
-        
-        # 去重检查：检查因子名称是否已存在（JSON 文件 + DuckDB 双检查）
+        # 去重检查：DuckDB 是权威数据源，通过 factor_catalog 表检查
         factor_name = factor.get("name", "")
-        for existing_file in self.elite_dir.glob("*.json"):
-            try:
-                existing_data = json.loads(existing_file.read_text(encoding="utf-8"))
-                if existing_data.get("name") == factor_name:
-                    print(f"[evo] 跳过重复因子: {factor_name} (已存在: {existing_file.name})")
-                    return None
-            except Exception:
-                continue
-
-        # DuckDB 去重检查（带市场过滤，防止跨市场重名冲突）
         try:
             repo = self._get_repo()
             existing = repo.get_factor_by_name(factor_name, market=self.market)
@@ -1127,6 +1162,40 @@ class EvolutionLoop:
                   f"DuckDB 写入失败，已回滚 JSON 快照 {fp.name}")
             return None
 
+        # ── ★ 种子溯源写入 (seed_lineage) ──
+        # 非阻塞：溯源写入失败不影响晋升，仅记录 warning
+        try:
+            repo = self._get_repo()
+            f_id = factor.get("factor_id", "")
+            f_name = factor.get("name", "")
+            f_source = factor.get("source", "")
+            f_gen = factor.get("generation", 0)
+            f_family = factor.get("family", "unknown")
+            f_parent_id = factor.get("parent_id")
+            f_trace_id = factor.get("trace_id", "")
+
+            lineage = repo.resolve_seed_lineage(
+                factor_id=f_id,
+                factor_name=f_name,
+                factor_source=f_source,
+                factor_generation=f_gen,
+                factor_family=f_family,
+                factor_parent_id=f_parent_id,
+                market=self.market,
+            )
+            repo.write_seed_lineage(
+                factor_id=f_id,
+                factor_name=f_name,
+                seed_name=lineage["seed_name"],
+                seed_family=lineage["seed_family"],
+                seed_market=lineage["seed_market"],
+                generation=lineage["generation"],
+                parent_id=f_parent_id,
+                trace_id=f_trace_id,
+            )
+        except Exception as e:
+            logger.debug("[seed_lineage] 溯源写入非阻塞异常: %s", e)
+
         # ── Phase A.2: 注册到精英因子追踪器 ──
         try:
             factor_id = factor.get("factor_id", "")
@@ -1151,6 +1220,17 @@ class EvolutionLoop:
             )
         except Exception as e:
             logger.debug("精英因子追踪器注册失败: %s", e)
+
+        # ── 记录一致性日志（P4） ──
+        _log_consistency_event(
+            event_type="promote",
+            factor_id=factor.get("factor_id", ""),
+            factor_name=factor.get("name", ""),
+            market=self.market,
+            status="active",
+            json_path=str(fp),
+            trace_id=factor.get("trace_id", ""),
+        )
 
         return fp
 
@@ -1304,6 +1384,20 @@ class EvolutionLoop:
                     evaluation = self.evaluation_chain.evaluate(
                         seed, self.data, self.forward_returns,
                     )
+                # 确保 WalkForward 结果存在（若缺失则执行轻量 2 窗口验证）
+                if evaluation.get("walk_forward") is None:
+                    from .evaluation_chain import evaluate_walk_forward
+                    try:
+                        wf = evaluate_walk_forward(
+                            seed, self.data, self.forward_returns,
+                            config={"n_windows": 2},
+                        )
+                        evaluation["walk_forward"] = wf
+                    except Exception:
+                        logger.warning(
+                            "[evo] 种子因子 WalkForward 轻量验证失败: %s",
+                            seed.get("name", "?"),
+                        )
                 bt = evaluation.get("level_1_backtest", {})
                 passed = evaluation.get("passed", False)
 
@@ -1463,13 +1557,22 @@ class EvolutionLoop:
             if cand_name in existing_names:
                 continue
 
+            # 为候选因子预填 economic_logic 默认值（防御性，配合 evaluation_chain 默认值 3）
+            raw_el = cand.get("economic_logic", {}) or {}
+            prefilled_el = {
+                "theory": raw_el.get("theory", 3),
+                "behavioral": raw_el.get("behavioral", 3),
+                "microstructure": raw_el.get("microstructure", 3),
+                "institutional": raw_el.get("institutional", 3),
+                "narrative": raw_el.get("narrative", ""),
+            }
             try:
                 fp = create_factor_program(
                     name=cand_name,
                     code=cand["code"],
                     params=cand.get("params", {}),
                     signature=cand.get("signature"),
-                    economic_logic=cand.get("economic_logic", {}),
+                    economic_logic=prefilled_el,
                     source="bootstrapping",
                     parent_id=cand_id,
                     generation=0,

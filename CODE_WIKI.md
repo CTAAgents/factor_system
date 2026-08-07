@@ -1829,8 +1829,8 @@ pytest -k "test_evolution" -v
 | 文档 | 位置 | 说明 |
 |------|------|------|
 | FTS 手册 | `docs/FTS_manual.md` | 完整用户手册 |
-| 业务流程图 | `docs/business_flow.md` | 业务流程说明 |
-| 生产计划 | `docs/production_plan.md` | 生产就绪计划 |
+| 业务流程图 | `harness/business_flow.md` | 业务流程说明 |
+| 生产计划 | `harness/plans/production_plan.md` | 生产就绪计划 |
 | 架构文档 | `docs/harness/01-architecture.md` | Harness 架构规范 |
 | 生命周期 | `docs/harness/02-lifecycle.md` | 阶段生命周期定义 |
 | 配置文档 | `docs/harness/03-configuration.md` | 配置系统规范 |

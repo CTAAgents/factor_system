@@ -131,7 +131,7 @@ class AblationExperiment:
 - `docs/harness/07-operations.md` — 追加版本历史 v1.10.0
 - `docs/harness/08-gap-analysis.md` — 登记新差距（如有）
 - `docs/harness/09-advancement-plan.md` — 追加 v1.10.0 里程碑
-- `docs/harness/11-logic-review-plan.md` — 更新本文件状态为"执行中"
+- `docs/harness/plans/11-logic-review-plan.md` — 更新本文件状态为"执行中"
 - `pyproject.toml` — 版本号 bump 至 1.10.0
 - `README.md` — 同步测试数和版本号
 

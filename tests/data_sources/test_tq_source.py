@@ -97,7 +97,7 @@ def _ok_response(body: dict | list) -> MagicMock:
 # ─── 探活测试 ──────────────────────────────────────────
 
 
-def test_is_available_returns_true_when_200(mock_get):
+def test_is_available_returns_true_when_200(mock_post):
     """健康检查返回 200 → is_available() = True。"""
     from fts.data_sources.tq_source import TQLocalSource
     assert TQLocalSource().is_available() is True
@@ -107,7 +107,7 @@ def test_is_available_returns_false_on_connection_error():
     """连接失败 → is_available() = False（不抛异常）。"""
     from fts.data_sources.tq_source import TQLocalSource
 
-    with patch("fts.data_sources.tq_source.requests.get",
+    with patch("fts.data_sources.tq_source.requests.post",
                side_effect=ConnectionError("7721 refused")):
         assert TQLocalSource().is_available() is False
 
@@ -116,7 +116,7 @@ def test_is_available_returns_false_on_timeout():
     """超时 → is_available() = False。"""
     from fts.data_sources.tq_source import TQLocalSource
 
-    with patch("fts.data_sources.tq_source.requests.get",
+    with patch("fts.data_sources.tq_source.requests.post",
                side_effect=Timeout("read timeout")):
         assert TQLocalSource().is_available() is False
 

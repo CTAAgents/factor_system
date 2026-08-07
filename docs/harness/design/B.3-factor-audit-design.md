@@ -1,7 +1,7 @@
 # B.3 因子审计流程标准化 — 详细技术设计
 
 > 版本: v1.0.0
-> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase B.3
+> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase B.3
 > 状态: **已实现**（实现文件与接口与原设计不同）
 > 实现说明: 实际实现为 `fts/factor_engine/audit.py`（v0.1.0）的 `FactorAuditor`，6 项审计（`causal_validity`/`oos_consistency`/`cross_symbol`/`stress_resilience`/`multiple_testing`/`snooping_check`）采用**渐进式**接口（每项独立传入数据，缺失时标记 `skipped`，非 skipped 项须全部通过），并新增 `FailureClassifier` 失败模式分类与改善建议。`factor_audit_reports` 表未实现（审计报告以 `FactorAuditReport.to_dict()` 结构化输出）；原设计的 `factor_auditor.py` 文件名、`run_check`/`get_audit_history` 等接口均未实现。
 
@@ -495,7 +495,7 @@ CREATE INDEX IF NOT EXISTS idx_far_audited_at ON factor_audit_reports(audited_at
 
 | 字段 | 值 |
 |:-----|:----|
-| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase B.3 |
+| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase B.3 |
 | 依赖模块 | `causal_validator.py`（因果）、`walk_forward.py`（OOS）、`stress_test.py`（压力）、`factor_program.py`（代码分析）、`evaluation_chain.py`（多重检验） |
 | 前置条件 | A.1 质量评分卡、A.2 衰减追踪已实施 |
 | 后置影响 | 因子准入增加审计 Gate，审计数据可追溯 |

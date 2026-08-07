@@ -1,7 +1,7 @@
 # B.2 端到端回测流水线 — 详细技术设计
 
 > 版本: v1.0.0
-> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase B.2
+> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase B.2
 > 状态: **已实现**（4 阶段流水线 + 6 阶段类 + Builder + CLI）
 > 实现说明: 实际实现为 `fts/factor_engine/backtest_pipeline.py`（v0.1.0）**4 阶段**流水线（DataLoadStage/FactorComputeStage/PerformanceStage/ReportStage），单因子入口 `BacktestPipeline.run(factor, data, benchmark, ...)`，含 `_execute_factor_code()`（被演化循环 `_check_factor_runtime` 复用）。**v2.9.0 增强**：新增 7 个独立阶段类（`FactorScreener`/`SignalGenerator`/`PortfolioConstructor`/`CostSimulator`/`RiskAttributor`/`ReportGenerator`/`CapitalAllocator`）、`BacktestPipeline.run_batch()` 批量对比排名、`BacktestPipelineBuilder` 构建器、CLI `fts backtest run/batch/compare` 子命令。
 
@@ -628,7 +628,7 @@ fts backtest compare \
 
 | 字段 | 值 |
 |:-----|:----|
-| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase B.2 |
+| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase B.2 |
 | 依赖模块 | `evaluation_chain.py`（L1 评估）、`portfolio_loop.py`（组合构建）、`A.1`（质量评分）、`A.3`（自适应权重） |
 | 前置条件 | A.1 因子质量评分卡、A.3 自适应权重已实施 |
 | 后置影响 | 回测流程标准化，支持批量对比和可视化报告 |

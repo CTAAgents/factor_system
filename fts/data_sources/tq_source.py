@@ -113,9 +113,19 @@ class TQLocalSource(BaseFuturesSource):
     # ─── 探活（不抛异常）──
 
     def is_available(self) -> bool:
-        """探活：健康检查端点。连接失败/超时 → False。"""
+        """探活：轻量 RPC 调用。连接失败/超时 → False。
+
+        使用 tq_get_quote 方法查询一个已知品种，而非 GET 根路径。
+        TQ-Local 是 JSON-RPC 服务，仅接受 POST 请求至 /rpc 端点。
+        """
         try:
-            r = requests.get(self.base_url, timeout=1.0)
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tq_get_quote",
+                "params": {"symbol": "RB0.SHFE"},
+            }
+            r = requests.post(self.rpc_url, json=payload, timeout=2.0)
             return r.status_code == 200
         except (ConnectionError, Timeout, RequestException):
             return False

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -70,18 +71,33 @@ class LLMClient(ABC):
 
     @staticmethod
     def _parse_json(text: str) -> dict:
-        """尝试解析 JSON 文本，含修复逻辑。"""
+        """尝试解析 JSON 文本，含修复逻辑。
+
+        处理策略:
+          0. 用正则去除 markdown 代码块标记（```json ... ```）
+          1. 直接 json.loads
+          2. 从 markdown 代码块按标记提取
+          3. 修复式解析（截断修复）
+          4. 抛出 LLMError
+        """
+        # 0. 用正则去除 markdown 代码块标记，避免 code 字段内含特殊字符干扰
+        cleaned = text.strip()
+        # 匹配 ```json 或 ``` 开头的代码块，非贪婪提取内容
+        m = re.search(r'^```(?:json)?\s*\n?(.*?)\n?```\s*$', cleaned, re.DOTALL)
+        if m:
+            cleaned = m.group(1).strip()
+
         # 1. 直接解析
         try:
-            return json.loads(text)
+            return json.loads(cleaned)
         except json.JSONDecodeError:
             pass
 
-        # 2. 从 markdown 代码块提取
+        # 2. 从 markdown 代码块按标记提取（兜底）
         for marker in ["```json", "```"]:
             if marker in text:
                 try:
-                    block = text.split(marker)[1].split("```")[0].strip()
+                    block = text.split(marker, 1)[1].split("```", 1)[0].strip()
                     return json.loads(block)
                 except (json.JSONDecodeError, IndexError):
                     pass
@@ -98,16 +114,46 @@ class LLMClient(ABC):
         """尝试修复常见 JSON 格式错误并解析。
 
         处理策略:
-          1. 提取最外层 {} 区域
-          2. 逐段截断修复（去掉末尾不完整字段）
-          3. 最多尝试 20 轮截断
+          1. 用栈找到最外层匹配的 {}（跳过字符串内的 {/}）
+          2. 尝试直接解析
+          3. 逐段截断修复（去掉末尾不完整字段）
         """
-        # 提取最外层 {} 区域
         first_brace = text.find("{")
-        last_brace = text.rfind("}")
-        if first_brace == -1 or last_brace == -1 or last_brace <= first_brace:
+        if first_brace == -1:
             return None
-        candidate = text[first_brace : last_brace + 1]
+
+        # 用栈找到最外层匹配的 }，跳过字符串内的 {/}
+        depth = 0
+        in_string = False
+        escape = False
+        match_end = -1
+        for i in range(first_brace, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == '\\':
+                escape = True
+                continue
+            if ch == '"' and not in_string:
+                in_string = True
+                continue
+            if ch == '"' and in_string:
+                in_string = False
+                continue
+            if not in_string:
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        match_end = i
+                        break
+
+        if match_end == -1:
+            return None
+
+        candidate = text[first_brace : match_end + 1]
 
         # 尝试直接解析
         try:
@@ -115,9 +161,10 @@ class LLMClient(ABC):
         except json.JSONDecodeError:
             pass
 
-        # 逐段截断: 去掉末尾不完整字段（最多 100 轮，10 候选约有 100-200 个逗号）
+        # 逐段截断: 去掉末尾不完整字段
         for _ in range(100):
-            last_comma = candidate.rfind(",")
+            # 只截断字符串外的逗号，避免截断 code 字段内的逗号
+            last_comma = LLMClient._last_top_level_comma(candidate)
             if last_comma == -1:
                 break
             candidate = candidate[:last_comma].rstrip() + "}"
@@ -127,6 +174,31 @@ class LLMClient(ABC):
                 continue
 
         return None
+
+    @staticmethod
+    def _last_top_level_comma(text: str) -> int:
+        """找到最外层（非字符串内）的最后一个逗号位置。"""
+        in_string = False
+        escape = False
+        last_comma = -1
+        for i in range(len(text) - 1, -1, -1):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == '\\':
+                escape = True
+                continue
+            if ch == '"' and not in_string:
+                in_string = True
+                continue
+            if ch == '"' and in_string:
+                in_string = False
+                continue
+            if not in_string and ch == ',':
+                last_comma = i
+                break
+        return last_comma
 
     def bootstrap_factors(
         self,
@@ -329,7 +401,12 @@ class OpenAIClient(LLMClient):
 ❌ 未保持输出长度
 ❌ 输出值超出 [-1, 1] 范围
 
-【输出 JSON 格式】
+【输出格式 — 必须严格遵守】
+- 输出必须是 **纯 JSON 格式**，不包含任何 markdown 代码块标记（```json）
+- 不要添加任何额外的文字说明或注释
+- 只输出 JSON 对象本身
+
+【JSON 结构】
 {{
     "candidates": [
         {{

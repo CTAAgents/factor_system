@@ -1,6 +1,6 @@
 # FTS 开发生命周期
 
-> 版本: v2.18.0
+> 版本: v2.22.0
 > 最后更新: 2026-08-07
 
 ---
@@ -68,7 +68,7 @@ tests/
 | **MINOR** | 功能新增或阶段完成 | v0.1.0 → v0.2.0 |
 | **PATCH** | bug 修复或文档更新 | v0.1.0 → v0.1.1 |
 
-当前版本：**v2.10.1**
+当前版本：**v2.22.0**
 
 ### 版本号同步规则
 
@@ -76,10 +76,10 @@ FTS 包含两个版本号，修改时必须同步：
 
 | 位置 | 用途 | 当前值 |
 |:-----|:-----|:-------|
-| `fts/__init__.py` | FTS 项目版本 | `"2.12.0"` |
-| `pyproject.toml` | 包版本 | `"2.12.0"` |
+| `fts/__init__.py` | FTS 项目版本 | `"2.22.0"` |
+| `pyproject.toml` | 包版本 | `"2.22.0"` |
 
-`fts/factor_engine/contracts.py` 中的 `EVOLUTION_VERSION` 动态同步 `fts.__init__.__version__`（当前 v2.12.0），随 FTS 项目版本自动更新。
+`fts/factor_engine/contracts.py` 中的 `EVOLUTION_VERSION` 动态同步 `fts.__init__.__version__`（当前 v2.22.0），随 FTS 项目版本自动更新。
 
 ### 状态 schema 版本与冷启动规则
 
@@ -168,7 +168,7 @@ session_id 用于区分 CLI 每次执行：
 FTS 项目整体状态：
 
 ```
-[初始] → Phase 1 → Phase 2 → ... → Phase 16 → [v2.12.0（当前版本）]
+[初始] → Phase 1 → Phase 2 → ... → Phase 16 → [v2.22.0（当前版本）]
 ```
 
 各循环的状态：

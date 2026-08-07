@@ -1,7 +1,7 @@
 # C.2 实盘对接与实时监控 — 详细技术设计
 
 > 版本: v1.0.0
-> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase C.2
+> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase C.2
 > 状态: **已实现**（信号契约/风控/模拟适配/Live 监控已落地）
 > 实现说明: FTS 定位为**因子智能系统**，输出 `ScoredSignal`（定义于 `fts/strategies/base_v2.py`，含 symbol/direction/grade/total/weight 及指标字段）供下游交易系统（FDT）消费。本设计的 JSON Schema 信号契约（`FactorSignal`/`SignalDetail` 定义于 `fts/factor_engine/signal_contract.py`）、`SignalValidator`、`fts/risk/` 交易适配层（`RiskManager` 五项风控规则 + `TradeAdapter` 抽象基类 + `SimulatedTradeAdapter`）、`LiveFactorMonitor`（30% 偏离阈值）、HTTP 端点（`POST /api/v1/signal/submit` 等）均已实现。交易执行严格由下游系统负责（角色边界原则）。
 
@@ -683,7 +683,7 @@ Response: AccountStatus
 
 | 字段 | 值 |
 |:-----|:----|
-| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase C.2 |
+| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase C.2 |
 | 依赖模块 | `portfolio_loop.py`（信号生成）、`monitor/`（指标和 HTTP）、`C.3`（反馈闭环） |
 | 前置条件 | A.1-A.3 和 B.1-B.3 已实施 |
 | 后置影响 | FTS 具备实盘信号输出能力和基础风控 |

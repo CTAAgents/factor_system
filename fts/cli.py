@@ -458,6 +458,220 @@ def _load_factor_repo():
     return FactorRepository()
 
 
+def _get_catalog_db_path() -> Path:
+    """获取因子目录数据库路径。"""
+    from .factor_engine.factor_db.schema import DATABASE_PATH
+    return Path(DATABASE_PATH)
+
+
+def _cmd_catalog_stats(args: argparse.Namespace) -> int:
+    """查看因子存储统计（DuckDB + JSON 文件）。"""
+    cfg = get_config()
+    db_path = _get_catalog_db_path()
+
+    # DuckDB 统计
+    stats: dict[str, Any] = {"database_path": str(db_path), "database_exists": db_path.exists()}
+    if db_path.exists():
+        try:
+            repo = _load_factor_repo()
+            duck_stats = repo.get_stats()
+            stats.update(duck_stats)
+            stats["database_size_mb"] = round(db_path.stat().st_size / (1024 * 1024), 2)
+        except Exception as e:
+            print(f"[catalog stats] DuckDB 读取失败: {e}", file=sys.stderr)
+            stats["duckdb_error"] = str(e)
+
+    # JSON 文件统计
+    for market in ("stock", "futures"):
+        elite_dir = Path(cfg.get_elite_dir(market))
+        json_files = []
+        json_size = 0
+        if elite_dir.exists():
+            for fp in sorted(elite_dir.glob("*.json")):
+                if fp.name.startswith("_"):
+                    continue
+                json_files.append(fp.name)
+                json_size += fp.stat().st_size
+            retired_dir = elite_dir / "_retired"
+            retired_count = len(list(retired_dir.glob("*.json"))) if retired_dir.exists() else 0
+        else:
+            retired_count = 0
+        stats[f"{market}_json_dir"] = str(elite_dir)
+        stats[f"{market}_json_files"] = len(json_files)
+        stats[f"{market}_json_size_mb"] = round(json_size / (1024 * 1024), 2) if json_size else 0.0
+        stats[f"{market}_retired_files"] = retired_count
+
+    if getattr(args, "json", False):
+        print(json.dumps(stats, indent=2, ensure_ascii=False, default=str))
+        return 0
+
+    print("=== 因子存储统计 ===")
+    print(f"数据库: {db_path}")
+    print(f"  存在: {stats.get('database_exists', '?')}  "
+          f"大小: {stats.get('database_size_mb', '?'):.1f} MB" if db_path.exists() else "  (不存在)")
+    if db_path.exists():
+        print(f"  总因子: {stats.get('total_factors', '?')}  "
+              f"活跃: {stats.get('active_factors', '?')}  "
+              f"精英: {stats.get('elite_factors', '?')}")
+        print(f"  平均 Sharpe: {stats.get('avg_sharpe', '?')}  "
+              f"平均 IC: {stats.get('avg_ic', '?')}")
+    for market in ("stock", "futures"):
+        print(f"\n{market.upper()} JSON 文件:")
+        print(f"  目录: {stats.get(f'{market}_json_dir', '?')}")
+        print(f"  文件数: {stats.get(f'{market}_json_files', '?')}  "
+              f"大小: {stats.get(f'{market}_json_size_mb', '?'):.2f} MB  "
+              f"已淘汰: {stats.get(f'{market}_retired_files', '?')}")
+    return 0
+
+
+def _cmd_catalog_verify(args: argparse.Namespace) -> int:
+    """验证 JSON ↔ DuckDB 一致性。"""
+    cfg = get_config()
+    db_path = _get_catalog_db_path()
+
+    if not db_path.exists():
+        print("[catalog verify] ❌ DuckDB 数据库不存在", file=sys.stderr)
+        return 1
+
+    try:
+        repo = _load_factor_repo()
+    except Exception as e:
+        print(f"[catalog verify] ❌ DuckDB 连接失败: {e}", file=sys.stderr)
+        return 1
+
+    # 收集 DuckDB 中的 factor_id 集合
+    duck_ids: set[str] = set()
+    try:
+        conn = repo._get_conn()
+        rows = conn.execute("SELECT factor_id, name, market, is_elite, status FROM factor_catalog").fetchall()
+        for r in rows:
+            duck_ids.add(str(r[0]))
+    except Exception as e:
+        print(f"[catalog verify] ❌ DuckDB 查询失败: {e}", file=sys.stderr)
+        return 1
+
+    # 收集 JSON 文件中的 factor_id 集合
+    json_ids: dict[str, dict[str, str]] = {}  # factor_id -> {market, status}
+    for market in ("stock", "futures"):
+        elite_dir = Path(cfg.get_elite_dir(market))
+        if not elite_dir.exists():
+            continue
+        for fp in sorted(elite_dir.glob("*.json")):
+            if fp.name.startswith("_"):
+                continue
+            try:
+                data = json.loads(fp.read_text(encoding="utf-8"))
+                fid = data.get("factor_id", fp.stem)
+                json_ids[fid] = {
+                    "market": data.get("market", market),
+                    "status": data.get("status", "active"),
+                    "file": str(fp),
+                }
+            except Exception:
+                pass
+
+    # 比对
+    only_in_duckdb = duck_ids - json_ids.keys()
+    only_in_json = json_ids.keys() - duck_ids
+    common = duck_ids & json_ids.keys()
+
+    result = {
+        "duckdb_total": len(duck_ids),
+        "json_total": len(json_ids),
+        "common": len(common),
+        "only_in_duckdb": len(only_in_duckdb),
+        "only_in_json": len(only_in_json),
+        "consistent": len(only_in_duckdb) == 0 and len(only_in_json) == 0,
+        "duckdb_only_samples": sorted(only_in_duckdb)[:10] if only_in_duckdb else [],
+        "json_only_samples": sorted(only_in_json)[:10] if only_in_json else [],
+    }
+
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+        return 0
+
+    print("=== JSON ↔ DuckDB 一致性校验 ===")
+    print(f"  DuckDB 因子数: {result['duckdb_total']}")
+    print(f"  JSON 文件数:   {result['json_total']}")
+    print(f"  交集:          {result['common']}")
+    print(f"  仅 DuckDB 有:  {result['only_in_duckdb']}")
+    print(f"  仅 JSON 有:    {result['only_in_json']}")
+    if result["consistent"]:
+        print("  ✅ 一致")
+    else:
+        print("  ⚠️ 不一致")
+        if result["duckdb_only_samples"]:
+            print(f"  DuckDB 独有 (前10): {', '.join(result['duckdb_only_samples'])}")
+        if result["json_only_samples"]:
+            for fid in result["json_only_samples"]:
+                info = json_ids.get(fid, {})
+                print(f"  JSON 独有: {fid} ({info.get('file', '?')})")
+    return 0 if result["consistent"] else 1
+
+
+def _cmd_catalog_backup(args: argparse.Namespace) -> int:
+    """备份因子存储（DuckDB + JSON 文件）。"""
+    from datetime import datetime
+    import shutil
+
+    cfg = get_config()
+    db_path = _get_catalog_db_path()
+    backup_dir = Path("data/backups")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    results: dict[str, Any] = {"timestamp": timestamp, "backup_dir": str(backup_dir)}
+
+    # 1. 备份 DuckDB
+    if db_path.exists():
+        db_backup = backup_dir / f"factor_catalog.duckdb.{timestamp}"
+        try:
+            shutil.copy2(str(db_path), str(db_backup))
+            db_size_mb = round(db_path.stat().st_size / (1024 * 1024), 2)
+            results["duckdb_backup"] = str(db_backup)
+            results["duckdb_size_mb"] = db_size_mb
+            print(f"  ✅ DuckDB: {db_backup.name} ({db_size_mb:.1f} MB)")
+        except Exception as e:
+            print(f"  ❌ DuckDB 备份失败: {e}", file=sys.stderr)
+            results["duckdb_error"] = str(e)
+    else:
+        print("  ⚠️ DuckDB 数据库不存在，跳过备份")
+
+    # 2. 备份 JSON 文件
+    for market in ("stock", "futures"):
+        elite_dir = Path(cfg.get_elite_dir(market))
+        if not elite_dir.exists():
+            continue
+        json_backup_dir = backup_dir / f"{market}_elite_{timestamp}"
+        try:
+            # 复制 elite JSON 文件（排除 _retired 目录）
+            json_backup_dir.mkdir(parents=True, exist_ok=True)
+            copied = 0
+            for fp in sorted(elite_dir.glob("*.json")):
+                if fp.name.startswith("_"):
+                    continue
+                shutil.copy2(str(fp), str(json_backup_dir / fp.name))
+                copied += 1
+            # 复制 _retired 目录
+            retired_src = elite_dir / "_retired"
+            if retired_src.exists():
+                retired_dst = json_backup_dir / "_retired"
+                retired_dst.mkdir(parents=True, exist_ok=True)
+                for fp in sorted(retired_src.glob("*.json")):
+                    shutil.copy2(str(fp), str(retired_dst / fp.name))
+            results[f"{market}_json_backup"] = str(json_backup_dir)
+            results[f"{market}_json_count"] = copied
+            print(f"  ✅ {market.upper()} JSON: {json_backup_dir.name} ({copied} 文件)")
+        except Exception as e:
+            print(f"  ❌ {market} JSON 备份失败: {e}", file=sys.stderr)
+            results[f"{market}_json_error"] = str(e)
+
+    if getattr(args, "json", False):
+        print(json.dumps(results, indent=2, ensure_ascii=False, default=str))
+
+    return 0
+
+
 def _cmd_factor_list(args: argparse.Namespace) -> int:
     """列出 elite 因子（支持目录直读 + DuckDB 查询两种模式）。"""
     cfg = get_config()
@@ -1088,6 +1302,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_sched_run.set_defaults(func=_cmd_scheduler_run)
     p_sched_list = sched_sub.add_parser("list", help="列出所有已注册任务")
     p_sched_list.set_defaults(func=_cmd_scheduler_list)
+
+    # catalog（因子目录管理）
+    p_catalog = sub.add_parser("catalog", help="因子目录管理（存储统计/一致性校验/备份）")
+    cat_sub = p_catalog.add_subparsers(dest="subcommand", required=False)
+
+    p_cat_stats = cat_sub.add_parser("stats", help="查看因子存储统计")
+    p_cat_stats.add_argument("--json", action="store_true", help="JSON 格式输出")
+    p_cat_stats.set_defaults(func=_cmd_catalog_stats)
+
+    p_cat_verify = cat_sub.add_parser("verify", help="验证 JSON ↔ DuckDB 一致性")
+    p_cat_verify.add_argument("--json", action="store_true", help="JSON 格式输出")
+    p_cat_verify.set_defaults(func=_cmd_catalog_verify)
+
+    p_cat_backup = cat_sub.add_parser("backup", help="备份因子存储（DuckDB + JSON）")
+    p_cat_backup.add_argument("--json", action="store_true", help="JSON 格式输出")
+    p_cat_backup.set_defaults(func=_cmd_catalog_backup)
 
     # factor
     p_factor = sub.add_parser("factor", help="因子管理")

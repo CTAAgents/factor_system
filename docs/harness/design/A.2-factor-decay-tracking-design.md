@@ -1,7 +1,7 @@
 # A.2 因子衰减追踪与自动淘汰 — 详细技术设计
 
 > 版本: v1.0.0
-> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase A.2
+> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase A.2
 > 状态: **部分实现**（`fts/monitor/elite_tracker.py`）
 > 实现说明: 生命周期管理以 `EliteFactorTracker` + `AutoRetireManager`（`fts/monitor/elite_tracker.py`）实现，持久化为 JSON 快照（`memory/tracking/{factor_id}.json`），**未**采用原设计的 DuckDB `factor_status_history` 表与 `FactorDecayTracker` 类；`factor_catalog` 状态字段扩展未实现。
 
@@ -482,7 +482,7 @@ scheduler/  (每月 1 日)
 
 | 字段 | 值 |
 |:-----|:----|
-| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase A.2 |
+| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase A.2 |
 | 依赖模块 | `factor_db/repository.py`（数据持久化）、`evaluation_chain.py`（L1 回测）、`scheduler/`（定时触发） |
 | 前置条件 | `factor_catalog` 表存在，`evaluation_chain.run_l1_only()` 可用 |
 | 后置影响 | 因子准入从静态 pass/fail 变为动态生命周期管理 |

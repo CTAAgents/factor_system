@@ -283,13 +283,27 @@ class FactorQualityCardFullConfig:
         }
 
     def to_factor_quality_card_config(self) -> dict:
-        """转换为 FactorQualityCard 兼容的配置字典。"""
+        """转换为 FactorQualityCard 兼容的配置字典（含各维度映射阈值）。"""
         return {
             "max_per_dimension": self.grades.max_per_dimension,
             "total_max": self.grades.total_max,
             "grade_A_threshold": self.grades.grade_A_threshold,
             "grade_B_min": self.grades.grade_B_min,
             "decay_discount_rate": self.decay_mapping.decay_mid,
+            # 权重
+            "weights": self.weights.__dict__,
+            # 各维度映射阈值
+            "ic_mapping": self.ic_mapping.__dict__,
+            "icir_mapping": self.icir_mapping.__dict__,
+            "sharpe_mapping": self.sharpe_mapping.__dict__,
+            "calmar_mapping": self.calmar_mapping.__dict__,
+            "decay_mapping": self.decay_mapping.__dict__,
+            "capacity_mapping": self.capacity_mapping.__dict__,
+            "turnover_mapping": self.turnover_mapping.__dict__,
+            "correlation_mapping": self.correlation_mapping.__dict__,
+            "coverage_mapping": self.coverage_mapping.__dict__,
+            # 默认值
+            "defaults": self.defaults.__dict__,
         }
 
 

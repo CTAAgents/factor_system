@@ -10,6 +10,8 @@ HARNESS §契约优先：所有模块必须基于本文件的 TypedDict/常量�
 
 from __future__ import annotations
 
+from typing import Any, Optional, TypedDict
+
 # Re-export factor_engine 契约（从 loop_engine/contracts.py 迁移）
 from fts.factor_engine.contracts import (
     # 版本号
@@ -56,7 +58,37 @@ from fts.factor_engine.contracts import (
     L3MetaLoopState,
     DEFAULT_L3_VERIFIER_CONFIG,
     DEFAULT_L3_BUDGET,
+    # 多源数据交叉验证
+    MultiSourceDisagreement,
 )
+
+# ─── 数据融合契约 ──────────────────────────────────────────
+
+class FusedOHLCV(TypedDict, total=False):
+    """多源融合 OHLCV 数据契约。
+
+    必填字段:
+        symbol, date, open, high, low, close, volume,
+        trace_id, contributing_sources, fusion_strategy, source
+
+    可选字段:
+        amount, settle, disagreement_pct
+    """
+    symbol: str
+    date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    amount: Optional[float]
+    settle: Optional[float]
+    trace_id: str
+    contributing_sources: list[str]
+    fusion_strategy: str
+    source: str
+    disagreement_pct: Optional[float]
+
 
 __all__ = [
     "EVOLUTION_VERSION",
@@ -93,4 +125,7 @@ __all__ = [
     "L3MetaLoopState",
     "DEFAULT_L3_VERIFIER_CONFIG",
     "DEFAULT_L3_BUDGET",
+    "MultiSourceDisagreement",
+    # 数据融合契约
+    "FusedOHLCV",
 ]

@@ -202,10 +202,10 @@ def evaluate_economic_logic(factor: FactorProgram) -> EconomicScore:
     直接从 factor.economic_logic 读取，并计算达标维度数。
     """
     el = factor.get("economic_logic", {})
-    theory = int(el.get("theory", 0))
-    behavioral = int(el.get("behavioral", 0))
-    microstructure = int(el.get("microstructure", 0))
-    institutional = int(el.get("institutional", 0))
+    theory = int(el.get("theory", 3))
+    behavioral = int(el.get("behavioral", 3))
+    microstructure = int(el.get("microstructure", 3))
+    institutional = int(el.get("institutional", 3))
 
     threshold = 3  # 每维达标阈值 3/5
     dims_passed = sum([

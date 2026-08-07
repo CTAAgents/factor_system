@@ -32,6 +32,10 @@ class FactorRepository:
     支持连接复用和事务管理。
     """
 
+    # ART 索引 workaround 计数器（P4: 可观测性）
+    _art_index_drop_count: int = 0
+    _art_index_rebuild_count: int = 0
+
     def __init__(self, db_path: str | Path | None = None):
         from .schema import DATABASE_PATH, get_connection
 
@@ -210,14 +214,20 @@ class FactorRepository:
         }
         for idx_name in idx_map:
             conn.execute(f"DROP INDEX IF EXISTS {idx_name}")
+        FactorRepository._art_index_drop_count += len(idx_map)
         try:
             conn.execute(sql, params)
         finally:
             for idx_name, idx_col in idx_map.items():
                 conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON factor_catalog({idx_col})")
+            FactorRepository._art_index_rebuild_count += len(idx_map)
         conn.execute("CHECKPOINT")
 
-        logger.info("[FactorRepo] 更新因子: %s", factor_id)
+        logger.info(
+            "[FactorRepo] 更新因子: %s (ART workaround: drop=%d, rebuild=%d)",
+            factor_id, FactorRepository._art_index_drop_count,
+            FactorRepository._art_index_rebuild_count,
+        )
         return True
 
     def delete_factor(self, factor_id: str) -> bool:
@@ -268,6 +278,7 @@ class FactorRepository:
         )
 
         # 3. 移动 JSON 文件到 _retired/ 目录
+        json_moved_path: str | None = None
         if elite_dir:
             import shutil
             elite_path = Path(elite_dir)
@@ -275,16 +286,183 @@ class FactorRepository:
             retired_dir.mkdir(parents=True, exist_ok=True)
             json_path = elite_path / f"{factor_id}.json"
             if json_path.exists():
-                shutil.move(str(json_path), str(retired_dir / json_path.name))
+                dst = retired_dir / json_path.name
+                shutil.move(str(json_path), str(dst))
+                json_moved_path = str(dst)
                 logger.info("[FactorRepo] JSON 已移至 _retired/: %s", factor_id)
             else:
                 # 可能已在 _retired/ 中
                 already_retired = retired_dir / f"{factor_id}.json"
-                if not already_retired.exists():
+                if already_retired.exists():
+                    json_moved_path = str(already_retired)
+                else:
                     logger.warning("[FactorRepo] JSON 文件不存在: %s", json_path)
+
+        # 4. 记录一致性日志（P4）
+        self._log_retire_consistency(factor_id, factor.get("name", ""), json_moved_path)
 
         logger.info("[FactorRepo] 淘汰因子: %s (%s)", factor_id, factor.get("name", ""))
         return True
+
+    # ─=== 种子溯源 (seed_lineage) ────────────────────────
+
+    def write_seed_lineage(
+        self,
+        factor_id: str,
+        factor_name: str,
+        seed_name: str,
+        seed_family: str,
+        seed_market: str,
+        generation: int = 0,
+        parent_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> bool:
+        """写入种子溯源记录到 seed_lineage 表（幂等）。
+
+        Args:
+            factor_id: L2 精英因子 ID
+            factor_name: L2 精英因子名称
+            seed_name: L0 种子因子名称
+            seed_family: L0 种子家族
+            seed_market: 市场 (futures/stock)
+            generation: 从种子到精英的演化代数
+            parent_id: 直接父因子 ID
+            trace_id: 全链路追踪 ID
+
+        Returns:
+            True 写入成功，False 写入失败
+        """
+        try:
+            lineage_id = f"sl_{uuid.uuid4().hex[:8]}"
+            conn = self._get_conn()
+            conn.execute(
+                """INSERT INTO seed_lineage
+                   (lineage_id, seed_name, seed_family, seed_market,
+                    evolved_factor_id, evolved_factor_name, generation,
+                    parent_id, trace_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    lineage_id,
+                    seed_name,
+                    seed_family,
+                    seed_market,
+                    factor_id,
+                    factor_name,
+                    generation,
+                    parent_id,
+                    trace_id,
+                ],
+            )
+            logger.debug(
+                "[seed_lineage] 写入: %s ← %s (family=%s, gen=%d)",
+                factor_name, seed_name, seed_family, generation,
+            )
+            return True
+        except Exception as e:
+            logger.warning("[seed_lineage] 写入失败 [%s]: %s", factor_name, e)
+            return False
+
+    def resolve_seed_lineage(
+        self,
+        factor_id: str,
+        factor_name: str,
+        factor_source: str,
+        factor_generation: int,
+        factor_family: str,
+        factor_parent_id: str | None = None,
+        market: str = "futures",
+    ) -> dict[str, Any]:
+        """通过 parent_id 链式回溯，解析因子所属的 L0 种子信息。
+
+        从当前因子开始，沿 parent_id 链向上追溯，找到源头种子因子
+        （source='seed' 或 generation=0）。最多回溯 10 层防止死循环。
+
+        Args:
+            factor_id: 当前因子 ID
+            factor_name: 当前因子名称
+            factor_source: 当前因子来源
+            factor_generation: 当前因子代数
+            factor_family: 当前因子家族
+            factor_parent_id: 当前因子父 ID
+            market: 市场
+
+        Returns:
+            {"seed_name": str, "seed_family": str, "seed_market": str, "generation": int}
+        """
+        # 自身就是种子 → 直接返回
+        if factor_source == "seed" or factor_generation == 0:
+            return {
+                "seed_name": factor_name,
+                "seed_family": factor_family,
+                "seed_market": market,
+                "generation": factor_generation,
+            }
+
+        # 沿 parent_id 链回溯
+        visited: set[str] = {factor_id}
+        current_id = factor_parent_id
+        total_gen = factor_generation
+        max_depth = 10
+        depth = 0
+
+        while current_id and current_id not in visited and depth < max_depth:
+            visited.add(current_id)
+            depth += 1
+            try:
+                parent = self.get_factor(current_id)
+                if not parent:
+                    break
+
+                parent_source = parent.get("source", "")
+                parent_gen = parent.get("generation", 0)
+                total_gen += parent_gen
+
+                if parent_source == "seed" or parent_gen == 0:
+                    return {
+                        "seed_name": parent.get("name", ""),
+                        "seed_family": parent.get("family", factor_family),
+                        "seed_market": parent.get("market", market),
+                        "generation": total_gen,
+                    }
+
+                current_id = parent.get("parent_id")
+            except Exception:
+                break
+
+        # 回溯失败 → 使用自身信息 fallback
+        logger.debug(
+            "[seed_lineage] 回溯失败 [%s]，使用自身 fallback (depth=%d)",
+            factor_name, depth,
+        )
+        return {
+            "seed_name": factor_name,
+            "seed_family": factor_family,
+            "seed_market": market,
+            "generation": factor_generation,
+        }
+
+    def _log_retire_consistency(
+        self, factor_id: str, factor_name: str, json_path: str | None = None,
+    ) -> None:
+        """记录淘汰操作的一致性日志（P4）。"""
+        import json
+        from datetime import datetime, timezone
+        try:
+            log_path = Path("data/_lineage/catalog_consistency.jsonl")
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "event_type": "retire",
+                "factor_id": factor_id,
+                "factor_name": factor_name,
+                "market": factor.get("market", ""),
+                "status": "retired",
+                "json_path": json_path or "",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            with open(str(log_path), "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.debug("[consistency_log] 淘汰一致性日志写入失败: %s", e)
 
     # ─=== 批量查询 ──────────────────────────────────────
 
@@ -1074,6 +1252,10 @@ class FactorStatusRepository:
     提供 ``factor_status_history`` 表读写与 ``factor_catalog`` 状态字段更新。
     """
 
+    # ART 索引 workaround 计数器（P4: 可观测性）
+    _art_index_drop_count: int = 0
+    _art_index_rebuild_count: int = 0
+
     def __init__(self, db_path: str | Path | None = None):
         from .schema import DATABASE_PATH
 
@@ -1188,6 +1370,7 @@ class FactorStatusRepository:
         }
         for idx_name in idx_map:
             conn.execute(f"DROP INDEX IF EXISTS {idx_name}")
+        FactorStatusRepository._art_index_drop_count += len(idx_map)
         try:
             conn.execute(
                 f"UPDATE factor_catalog SET {', '.join(set_clauses)} WHERE factor_id = ?",
@@ -1196,6 +1379,7 @@ class FactorStatusRepository:
         finally:
             for idx_name, idx_col in idx_map.items():
                 conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON factor_catalog({idx_col})")
+            FactorStatusRepository._art_index_rebuild_count += len(idx_map)
         conn.execute("CHECKPOINT")
         return True
 

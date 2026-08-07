@@ -18,7 +18,16 @@ FTS — Factor Trading System
 
 from pathlib import Path
 
-__version__ = "2.20.1"
+# ── 版本号：从 pyproject.toml 动态读取（单一真实源）─────────────────
+__version__: str = "0.0.0"
+try:
+    import tomllib as _toml
+except ImportError:
+    import tomli as _toml  # type: ignore[no-redef]
+_pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+if _pyproject.exists():
+    with open(_pyproject, "rb") as _f:
+        __version__ = _toml.load(_f)["project"]["version"]
 
 # ── 自动加载 .env ────────────────────────────────────────
 _env_loaded = False

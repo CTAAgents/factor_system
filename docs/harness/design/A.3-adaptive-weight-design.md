@@ -1,7 +1,7 @@
 # A.3 自适应动态权重调整 — 详细技术设计
 
 > 版本: v1.0.0
-> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase A.3
+> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase A.3
 > 状态: **已实现**（实现方式与原设计不同）
 > 实现说明: 自适应权重已实现于 `fts/factor_engine/portfolio_loop.py`：`REGIME_FAMILY_MULTIPLIERS` 映射表 + `regime_adaptive_weight_adjustment()` 函数 + `PortfolioLoop` 集成 `enable_regime_adaptation`（Step 2.5），Regime 检测用 `fts/factor_engine/regime.py` 的 `RegimeAwareSelector`。**未实现**原设计的 `AdaptiveWeightManager`/`FactorStyleClassifier`/`RegimeSmoother` 类与 `factor_catalog.style_tags` 字段；权重映射基于 **FactorFamily（因子家族）** 而非 FactorStyle（风格标签）。
 
@@ -584,7 +584,7 @@ flowchart TD
 
 | 字段 | 值 |
 |:-----|:----|
-| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase A.3 |
+| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase A.3 |
 | 依赖模块 | `regime.py`（市场状态检测）、`portfolio_loop.py`（组合构建）、`factor_db/`（因子数据） |
 | 前置条件 | `MarketRegimeDetector` 可用，因子质量评分卡（A.1）已实施 |
 | 后置影响 | 组合权重从静态变为动态，因子池随 Regime 变化 |

@@ -12,6 +12,7 @@
 9. attribution_reports   — 归因分析报告（C.3）
 10. feedback_processing_results — 反馈处理结果（C.3）
 11. feedback_reports     — 迭代效果月度报告（C.3）
+12. seed_lineage          — L0→L2 种子溯源链路（L0/L1/L2 统一管理辅助）
 
 设计原则:
 - 因子主表存储当前最优版本的完整信息
@@ -20,8 +21,9 @@
 - 相关性表支持组合构建时的去冗余
 - 质量评分/状态历史/审计报告支持分级准入与生命周期管理
 - 反馈系列表支撑"因子表现→归因→演化方向调整"闭环
+- seed_lineage 表打通 L0→L2 全链路，记录种子因子到精英因子的演化路径
 
-版本: v1.1
+版本: v1.2
 """
 
 from __future__ import annotations
@@ -322,6 +324,29 @@ CREATE INDEX IF NOT EXISTS idx_fr_period ON feedback_reports(period);
 """
 
 
+# ─── D.1: 种子溯源链路（L0→L2） ─────────────────────────────
+
+_CREATE_SEED_LINEAGE = """
+CREATE TABLE IF NOT EXISTS seed_lineage (
+    lineage_id          VARCHAR PRIMARY KEY,
+    seed_name           VARCHAR NOT NULL,        -- L0 种子因子名称
+    seed_family         VARCHAR NOT NULL,        -- L0 种子家族
+    seed_market         VARCHAR NOT NULL,        -- 市场 (futures/stock)
+    evolved_factor_id   VARCHAR NOT NULL,        -- L2 精英因子 ID
+    evolved_factor_name VARCHAR NOT NULL,        -- L2 精英因子名称
+    generation          INTEGER DEFAULT 0,       -- 从种子到精英的演化代数
+    parent_id           VARCHAR,                 -- 直接父因子 ID
+    trace_id            VARCHAR,                 -- 全链路追踪 ID
+    promoted_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_sl_seed_name ON seed_lineage(seed_name);
+CREATE INDEX IF NOT EXISTS idx_sl_seed_family ON seed_lineage(seed_family);
+CREATE INDEX IF NOT EXISTS idx_sl_evolved_factor_id ON seed_lineage(evolved_factor_id);
+CREATE INDEX IF NOT EXISTS idx_sl_promoted_at ON seed_lineage(promoted_at DESC);
+"""
+
+
 # ─── 初始化函数 ──────────────────────────────────────────
 
 def init_database(db_path: Optional[Path] = None) -> Path:
@@ -356,6 +381,8 @@ def init_database(db_path: Optional[Path] = None) -> Path:
         conn.execute(_CREATE_ATTRIBUTION_REPORTS)
         conn.execute(_CREATE_FEEDBACK_PROCESSING_RESULTS)
         conn.execute(_CREATE_FEEDBACK_REPORTS)
+        # D.1 种子溯源链路
+        conn.execute(_CREATE_SEED_LINEAGE)
 
         conn.execute("CHECKPOINT")
         logger.info("[FactorDB] ✅ 数据库初始化完成")
@@ -429,6 +456,22 @@ def verify_database(db_path: Optional[Path] = None) -> dict:
             stats["elite_count"] = elite_count
             stats["active_count"] = active_count
             stats["avg_sharpe"] = round(avg_sharpe, 3) if avg_sharpe else 0.0
+
+        # 种子溯源统计
+        if "seed_lineage" in stats["tables"]:
+            lineage_count = conn.execute(
+                "SELECT COUNT(*) FROM seed_lineage"
+            ).fetchone()[0]
+            family_dist = conn.execute("""
+                SELECT seed_family, COUNT(*) as cnt
+                FROM seed_lineage
+                GROUP BY seed_family
+                ORDER BY cnt DESC
+            """).fetchall()
+            stats["seed_lineage_count"] = int(lineage_count)
+            stats["seed_lineage_families"] = {
+                str(r[0]): int(r[1]) for r in family_dist
+            }
 
         return stats
 

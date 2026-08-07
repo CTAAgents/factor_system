@@ -1,7 +1,7 @@
 # C.1 特征工程中台 — 详细技术设计
 
 > 版本: v1.0.0
-> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase C.1
+> 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase C.1
 > 状态: **已实现**（文件结构与算子类别与原设计不同；v2.9.0 补齐 CLI）
 > 实现说明: 特征工程中台由 `fts/factor_engine/feature_ops.py`（单文件，7 类算子: TimeSeriesOps/PriceOps/RollingOps/**TechnicalOps**/CrossSectionOps/CrossSymbolOps/CompositeOps + `OperatorRegistry` + `FeatureOpsEngine`）、`fts/factor_engine/gp_evolver.py`（`GPEvolver`/`ExpressionTree`/`tree_to_factor_program`）、`fts/factor_engine/feature_importance.py` 承担。另新增 **`fts/factor_engine/expr_dsl/`**（FTS-Expr 算子表达式 DSL + `OperatorRegistry` 58 算子 L0-L5 分层，2026-08 算子演化基础层）。**v2.9.0 补齐 CLI**：`fts feature list`（列算子）、`fts feature analyze`（置换重要性）、`fts gp evolve`（GP 遗传规划演化）。原设计 `feature_ops/` 包目录结构未实现。
 
@@ -649,8 +649,8 @@ fts feature analyze \
 
 | 字段 | 值 |
 |:-----|:----|
-| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/11-factor-mining-optimization-plan.md) → Phase C.1 |
-| 关联计划 | [10-evolution-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/10-evolution-optimization-plan.md) → Phase C.1 (GP/gplearn 补充搜索) |
+| 关联文档 | [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase C.1 |
+| 关联计划 | [10-evolution-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/10-evolution-optimization-plan.md) → Phase C.1 (GP/gplearn 补充搜索) |
 | 依赖模块 | `factor_program.py`（因子代码转换）、`evaluation_chain.py`（适应度评估）、`evolution_loop.py`（集成） |
 | 前置条件 | L2 Evolution Loop 可用，`FactorProgram` 沙箱执行器可用 |
 | 后置影响 | 因子搜索空间扩大，LLM + GP 双路径并行 |
