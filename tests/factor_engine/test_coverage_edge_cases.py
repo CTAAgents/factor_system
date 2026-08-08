@@ -229,10 +229,21 @@ class TestEvolutionLoopResetLowIC:
             FactorEvaluation,
             FactorProgram,
         )
-        from fts.factor_engine.evolution_loop import EvolutionLoop
+        from fts.factor_engine.evolution_loop import (
+            EvolutionLoop,
+            _QualityInspectionResult,
+        )
 
-        # 创建最小化实例
-        data = pd.DataFrame({"close": np.ones(100)}, index=pd.date_range("2020-01-01", periods=100))
+        # 创建最小化实例（含 DataQualityMonitor 所需的 OHLCV 字段，且价格有波动以通过质检）
+        np.random.seed(42)
+        base_close = 100 + np.cumsum(np.random.randn(100) * 0.5)
+        data = pd.DataFrame({
+            "open": base_close * (1 + np.random.randn(100) * 0.001),
+            "high": base_close * (1 + np.abs(np.random.randn(100)) * 0.002),
+            "low": base_close * (1 - np.abs(np.random.randn(100)) * 0.002),
+            "close": base_close,
+            "volume": np.ones(100) * 1000,
+        }, index=pd.date_range("2020-01-01", periods=100))
         ret = np.zeros(100)
         budget = BudgetConfig(
             nightly_token_limit=100000,
@@ -273,11 +284,12 @@ class TestEvolutionLoopResetLowIC:
         evolved_seed = FactorProgram(
             factor_id="fct_evolved_test",
             name="evolved_test",
-            code="def factor_program(data, params):\n    import numpy as np\n    return np.ones(len(data['close'])) * 0.5",
+            code="def factor_program(data, params):\n    import numpy as np\n    return np.random.randn(len(data['close'])) * 0.5",
             params={},
             signature={"input_fields": ["close"], "output_type": "signal", "frequency": "daily", "lookback": 1},
             economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3, "narrative": "test"},
             source="manual",
+            trace_id="mock_trace",
         )
 
         # --- 创建 mock 评估结果 ---
@@ -294,48 +306,92 @@ class TestEvolutionLoopResetLowIC:
             evaluated_at="2024-01-01T00:00:00",
         )
 
+        # 创建 mock quality inspection 结果（通过质检）
+        mock_inspection_result = _QualityInspectionResult(
+            score={"grade": "A", "total_score": 40.0},
+            filtered=False,
+        )
+
         # --- 使用 patch.object 模拟所有外部依赖（避免污染全局单例） ---
-        with (
-            patch("fts.factor_engine.evolution_loop.evolve_micro") as mock_evolve_micro,
-            patch.object(loop.state_manager, "save") as mock_save,
-            patch.object(loop.state_manager, "mark_running") as mock_mark_running,
-            patch.object(loop.state_manager, "load_or_init") as mock_load_or_init,
-            patch.object(loop.state_manager, "increment_evaluated") as mock_inc_eval,
-            patch.object(loop.state_manager, "increment_promoted") as mock_inc_prom,
-            patch.object(loop.state_manager, "add_tokens") as mock_add_tokens,
-            # 以下 patch.object 确保方法在 with 块退出后恢复原值
-            patch.object(loop.seed_pool, "load_all_seeds", return_value=[seed]),
-            patch.object(loop.macro_evolver, "evolve", return_value=(evolved_seed, "mock evolution", 100)),
-            patch.object(loop.evaluation_chain, "evaluate", return_value=mock_evaluation),
-            patch.object(loop.verifier, "check", return_value={"passed": True, "failure_reasons": []}),
-            patch.object(loop, "_promote_to_elite", return_value=None),
-            patch.object(loop, "_record_success_trace", return_value=None),
-            patch.object(loop, "_record_failure_trace", return_value=None),
-        ):
-            mock_evolve_micro.return_value = (evolved_seed, {"window": 10})
-            mock_save.return_value = None
-            mock_mark_running.return_value = {
+        # 注意：Python 3.10 限制 single with 最多 20 个上下文管理器，
+        # 因此使用嵌套 with 块 + patch.multiple 合并相关 patches
+        mock_evolve_micro = patch("fts.factor_engine.evolution_loop.evolve_micro")
+        mock_sm = patch.multiple(loop.state_manager,
+            save=MagicMock(return_value=None),
+            mark_running=MagicMock(return_value={
                 "run_id": "mock_run", "generation": 0,
                 "total_factors_evaluated": 0, "total_factors_promoted": 0,
                 "tokens_consumed": 0, "last_generation": 0,
                 "version": "1.1.0",
-            }
-            mock_load_or_init.return_value = {
+            }),
+            load_or_init=MagicMock(return_value={
                 "run_id": "mock_run", "generation": 0,
                 "total_factors_evaluated": 0, "total_factors_promoted": 0,
                 "tokens_consumed": 0, "last_generation": 0,
                 "version": "1.1.0",
-            }
-            mock_inc_eval.return_value = None
-            mock_inc_prom.return_value = None
-            mock_add_tokens.return_value = None
+            }),
+            increment_evaluated=MagicMock(return_value=None),
+            increment_promoted=MagicMock(return_value=None),
+            add_tokens=MagicMock(return_value=None),
+        )
+        mock_loop_methods = patch.multiple(loop,
+            _check_factor_runtime=MagicMock(return_value=(True, "")),
+            _quick_prefilter=MagicMock(return_value=(True, "")),
+            _run_backtest_pipeline=MagicMock(return_value=None),
+            _register_factor_baseline=MagicMock(return_value=None),
+            _check_factor_data_quality=MagicMock(return_value=[]),
+            _run_ablation_check=MagicMock(return_value={"passed": True}),
+            _run_causal_validation=MagicMock(return_value={"passed": True}),
+            _run_robustness_check=MagicMock(return_value={"passed": True}),
+            _run_shap_analysis=MagicMock(return_value={}),
+            _run_factor_audit=MagicMock(return_value=MagicMock(
+                passed=True, pass_rate=1.0, failed_items=[],
+                factor_id="fct_evolved_test", factor_name="evolved_test",
+                audited_at="2024-01-01T00:00:00", items=[],
+                summary={"total": 6, "passed": 6, "failed": 0, "skipped": 0, "pass_rate": 1.0},
+            )),
+            _promote_to_elite=MagicMock(return_value=Path("elite/test_factor.json")),
+            _record_success_trace=MagicMock(return_value=None),
+            _record_failure_trace=MagicMock(return_value=None),
+            _evaluate_and_promote_seeds=MagicMock(side_effect=lambda seeds, tid, state, eids, **kw: (
+                eids.append("fct_seed_test"), 1
+            )[-1]),
+            _load_elite_parent_factors=MagicMock(return_value=[{"factor_id": "fct_seed_test"}]),
+            _merge_l1_candidates=MagicMock(side_effect=lambda seeds, tid: seeds),
+            _run_seed_correlation_check=MagicMock(return_value=[]),
+            _select_parent_uct=MagicMock(side_effect=lambda parents: parents[0]),
+        )
 
-            # 执行 run() — 会经过 line 272 的 _consecutive_low_ic = 0
-            result = loop.run(max_generation=1)
+        with mock_evolve_micro as m_em, mock_sm, mock_loop_methods:
+            with patch.object(loop.seed_pool, "load_all_seeds", return_value=[seed]):
+                with patch.object(loop.macro_evolver, "evolve", return_value=(evolved_seed, "mock evolution", 100)):
+                    # 验证 mock 是否生效：直接调用 evaluate 应返回 mock_evaluation
+                    _test_eval = loop.evaluation_chain.evaluate(evolved_seed, data, ret)
+                    assert _test_eval["factor_id"] == "fct_evolved_test", f"evaluate mock 未生效! got={_test_eval}"
+                    _test_ver = loop.verifier.check(mock_evaluation)
+                    assert _test_ver["passed"] == True, f"verifier mock 未生效! got={_test_ver}"
+                    print("[DEBUG] mock 验证通过: evaluate 和 verifier mocks 已生效")
+                    with patch.object(loop.evaluation_chain, "evaluate", return_value=mock_evaluation):
+                        with patch.object(loop.verifier, "check", return_value={"passed": True, "failure_reasons": []}):
+                            with patch.object(loop.quality_inspector, "inspect", return_value=mock_inspection_result):
+                                m_em.return_value = (evolved_seed, {"window": 10})
 
-            # 验证 _consecutive_low_ic 被重置为 0
-            assert loop._consecutive_low_ic == 0, f"期望 0 但实际 {loop._consecutive_low_ic}"
-            assert result.status == "completed", f"期望 completed 但实际 {result.status}"
+                                # 执行 run() — 必须在所有 patch 块内，确保 mock 生效
+                                # 注意：patch.multiple 已在构造时设置了 return_value，
+                                # 此处 mock_save/mock_mark_running 等变量由 patch.multiple 内部管理，无需额外赋值
+                                print(f"[DEBUG] BEFORE run: _consecutive_low_ic={loop._consecutive_low_ic}")
+                                result = loop.run(max_generation=1)
+                                print(f"[DEBUG] AFTER run: _consecutive_low_ic={loop._consecutive_low_ic}")
+                                print(f"[DEBUG] result.status={result.status}")
+
+                                # 先检查 status 再检查 _consecutive_low_ic（status 能揭示 run() 是否执行到演化循环）
+                                assert result.status == "completed", (
+                                    f"期望 completed 但实际 {result.status}, "
+                                    f"circuit_breaker_reason={getattr(result, 'circuit_breaker_reason', 'N/A')}, "
+                                    f"error={getattr(result, 'error', 'N/A')}"
+                                )
+                                # 验证 _consecutive_low_ic 被重置为 0
+                                assert loop._consecutive_low_ic == 0, f"期望 0 但实际 {loop._consecutive_low_ic}"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -575,11 +631,15 @@ class TestPortfolioLoopDirNotExist:
         assert proposals == []
 
     def test_load_elite_factors_dir_not_exist(self, tmp_path):
-        """elite 目录不存在时返回空列表（line 521）。"""
+        """elite 目录不存在时返回空列表（line 521）。
+
+        注意：必须传入 use_duckdb=False 以强制走 JSON 文件回退路径，
+        否则 DuckDB 会直接返回数据库中的 elite 因子而不检查目录。
+        """
         from fts.factor_engine.portfolio_loop import load_elite_factors
 
         nonexistent_dir = tmp_path / "nonexistent_elite"
-        factors = load_elite_factors(str(nonexistent_dir))
+        factors = load_elite_factors(str(nonexistent_dir), use_duckdb=False)
         assert factors == []
 
 

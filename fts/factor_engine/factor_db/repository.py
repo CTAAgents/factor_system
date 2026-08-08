@@ -145,10 +145,13 @@ class FactorRepository:
         Returns:
             因子数据字典，不存在返回 None
         """
+        # 用 fetchall 完整消费 result，避免未消费的流式结果在连接上残留读事务，
+        # 阻塞其他连接对该表的 DDL/CHECKPOINT（DuckDB 客户端惰性流式语义）。
         result = self._execute("SELECT * FROM factor_catalog WHERE factor_id = ?", [factor_id])
-        row = result.fetchone()
-        if not row:
+        rows = result.fetchall()
+        if not rows:
             return None
+        row = rows[0]
 
         return self._row_to_dict(row)
 
@@ -887,7 +890,7 @@ class FactorRepository:
         self,
         market: str = "stock",
         total_count: int = 10,
-        max_per_family: int = 3,
+        max_per_family: int = 15,
         min_ic: float = 0.02,
         min_sharpe: float = 0.5,
     ) -> list[dict[str, Any]]:
@@ -1341,6 +1344,13 @@ class FactorStatusRepository:
         from datetime import datetime, timezone
 
         conn = self._get_conn()
+        # 旧库幂等补列（A.2 生命周期扩展字段，兼容未跑 init_database 的库）
+        has_col = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name='factor_catalog' AND column_name='status_updated_at'"
+        ).fetchone()
+        if not has_col:
+            conn.execute("ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS status_updated_at TIMESTAMP")
         allowed = {
             "status", "status_updated_at", "consecutive_ic_negative_months",
             "consecutive_sharpe_drop_months", "last_incremental_eval_at",

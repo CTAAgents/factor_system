@@ -13,14 +13,18 @@ HARNESS §契约优先: 本子包对外接口由 BaseFuturesSource 抽象类定�
 from __future__ import annotations
 
 from fts.data_sources.aggregator import FuturesDataAggregator
+from fts.data_sources.tdx_minute_source import TDXMinuteSource
 from fts.data_sources.base import BaseFuturesSource, SourceUnavailable
 from fts.data_sources.ifind_source import IFindSource
 from fts.data_sources.migrate import migrate_schema
 from fts.data_sources.tq_source import TQLocalSource
+from fts.data_sources.tqsdk_source import TQSDKSource
+from fts.data_sources.tqsdk_tick_source import TQSDKTickSource
 from fts.data_sources.wind_source import WindSource
 
 __all__ = [
     "BaseFuturesSource", "SourceUnavailable",
-    "migrate_schema", "TQLocalSource", "WindSource", "IFindSource",
-    "FuturesDataAggregator",
+    "migrate_schema", "TQLocalSource", "TQSDKSource", "TQSDKTickSource",
+    "WindSource", "IFindSource",
+    "FuturesDataAggregator", "TDXMinuteSource",
 ]

@@ -1,7 +1,7 @@
 # FTS 开发生命周期
 
-> 版本: v2.22.0
-> 最后更新: 2026-08-07
+> 版本: v2.39.0
+> 最后更新: 2026-08-08
 
 ---
 
@@ -29,7 +29,13 @@ FTS 从 FDT 剥离共经历 16 个 Phase，目前全部完成：
 | **Phase 16** | 组合漂移治理（v2.11.0）：L3 组合漂移监控（DriftMonitor 成员重合率 + 权重 L1 变化率 → drift_history/YYYY-MM-DD.json）+ PortfolioManager combo_history 归档 + build_combo 粘性约束（±30% 变动 / 新因子首日封顶）+ L2 影子池（新晋升因子观察 5 个交易日，种子因子直接进正式组合）；新增 20 测试用例 | ✅ 完成 | 82 个 portfolio_loop 测试全绿，漂移数据持久化 memory/portfolio/drift_history/ |
 | **Phase 17** | 孤立模块集成 Phase 2（v2.16.0）：`LogicMonitor`/`FactorInspector` 注册为定时任务（每日 22:00/03:00）；`ProcessWatchdog` 集成到 `SchedulerEngine`（`start_watchdog()` 方法）；任务注册表增至 8 个任务 | ✅ 完成 | 2043 回归测试通过，8 个定时任务（L1/L2/L3 + 健康检查 + 月度衰减 + 数据质量 + 逻辑监控 + 因子巡检） |
 | **Phase 18** | 因子淘汰主流程集成（v2.17.0）：`FactorRepository.retire_factor()` 实现 DuckDB 状态更新 + JSON 文件迁移至 `_retired/` + 状态变迁记录；`monthly_decay_eval_job` 调用 `retire_factor()` 同步淘汰到主存储；修复 `update_factor`/`update_factor_status` DuckDB ART 索引 bug（DROP → UPDATE → 重建索引） | ✅ 完成 | 因子淘汰正式成为主流程环节，退化因子自动从活跃池移除 |
+| **Phase 22** | Elastic Net 信号合成 + ACTIVE_FACTOR_CAP（v2.35.0）：L3 组合构建默认信号合成模式从 equal_weight 切换为 elastic_net（Elastic Net 截面回归，L1+L2 自动变量选择，防止冗余因子稀释组合夏普）；新增 ACTIVE_FACTOR_CAP=20 活跃因子数量上限，因子数超过上限时按 Sharpe 排名保留 Top N，自动过滤低质量因子；期货 CLI 默认 synthesis_mode 同步切换为 elastic_net；109 相关测试全绿，无回归 | ✅ 完成 | 2102+ 回归测试通过，portfolio_loop 90 测试全绿，Elastic Net 自动变量选择 + ACTIVE_FACTOR_CAP=20 因子筛选 |
+| **Phase 23** | P1 因子聚类 + P2 PCA 降维（v2.36.0）：新增 `fts/factor_engine/factor_clustering.py` 模块，`FactorClusteringEngine` 实现信号相关性层次聚类 + 代表因子选择（Pearson 相关系数 → 层次聚类 → Sharpe 最高代表），`PCASignalCompressor` 实现 PCA 信号降维压缩（z-score 标准化 → PCA 保留 95% 方差 → 载荷矩阵映射因子权重）；集成到 L3 PortfolioLoop 的 Step 1.8（P1 聚类）和 Step 1.9（P2 PCA，可选）；关闭 GAP-034 和 GAP-035 | ✅ 完成 | 因子聚类模块全量测试通过，portfolio_loop 集成测试通过，P1/P2 可独立控制 |
+| **Phase 24** | ML 模型集成层（v2.38.0）：新增 `fts/ml/` 包，封装 LightGBM/XGBoost/Ensemble 三种模型，支持横截面回归/时序预测/集成融合三种训练模式；L3 信号合成新增 `ml_ensemble` 模式，通过可选依赖 [`ml`] extra 控制；新增 [ml] 可选依赖声明 | ✅ 完成 | fts/ml/ 包全量测试通过，L3 ml_ensemble 模式集成测试通过 |
+| **Phase 25** | VNPY 信号桥接层（v2.38.0）：新增 `fts/bridge/` 包，SignalBridge 实现 JSON/Redis/REST 三种协议的交易信号格式转换；`fts bridge` CLI 子命令支持 serve/status 操作；新增 [bridge] 可选依赖声明 | ✅ 完成 | fts/bridge/ 包全量测试通过，CLI bridge 子命令集成测试通过 |
 | **Phase 19** | 因子家族多样性约束（v2.18.0）：`_promote_to_elite` 新增家族数量检查（`max_per_family=3`），限制单一家族因子过度繁殖；`BudgetConfig` 新增 `max_per_family` 字段；配置文档同步更新 | ✅ 完成 | L2 演化晋升受家族多样性约束，fut_bias 等家族从 8+ 个降至 ≤3 个 |
+| **Phase 20** | 分钟级回测 Phase 1（v2.30.0）：三源分钟数据源适配（通达信 TDX HTTP + TQ-Local + 天勤 TQSDK），DuckDB minute_cache 缓存，聚合器扩展支持分钟级数据路径，回测引擎增加 frequency 参数（年化因子/窗口/成本自适应），CLI 增加 --frequency 参数 | ✅ 完成 | 分钟级回测可运行，支持 1m/5m/15m/30m/60m/daily 频率切换 |
+| **Phase 21** | 宏观字段增强层（v2.32.0）：`IFindSource.get_macro_series()` 实现 edb_cache 缓存读写（查 → miss 拉取 → 幂等写回）；新增 `fts/data_sources/macro_aligner.py`（`MacroFieldAligner.align()` 月度→交易日 ffill + 发布滞后防未来函数 + `inject_macro_fields()` 批量注入）；`BacktestPipeline._compute_factor()` 因子执行前注入宏观列（export/import_data/cpi/rate/us_bond），宏观因子不再走 close 代理降级 | ⏳ 进行中 | 宏观因子可读取真实 EDB 数据，缓存 + 对齐 + 注入全链路可用 |
 
 ---
 
@@ -68,7 +74,7 @@ tests/
 | **MINOR** | 功能新增或阶段完成 | v0.1.0 → v0.2.0 |
 | **PATCH** | bug 修复或文档更新 | v0.1.0 → v0.1.1 |
 
-当前版本：**v2.22.0**
+当前版本：**v2.30.0**
 
 ### 版本号同步规则
 
@@ -76,10 +82,10 @@ FTS 包含两个版本号，修改时必须同步：
 
 | 位置 | 用途 | 当前值 |
 |:-----|:-----|:-------|
-| `fts/__init__.py` | FTS 项目版本 | `"2.22.0"` |
-| `pyproject.toml` | 包版本 | `"2.22.0"` |
+| `fts/__init__.py` | FTS 项目版本 | `"2.30.0"` |
+| `pyproject.toml` | 包版本 | `"2.30.0"` |
 
-`fts/factor_engine/contracts.py` 中的 `EVOLUTION_VERSION` 动态同步 `fts.__init__.__version__`（当前 v2.22.0），随 FTS 项目版本自动更新。
+`fts/factor_engine/contracts.py` 中的 `EVOLUTION_VERSION` 动态同步 `fts.__init__.__version__`（当前 v2.30.0），随 FTS 项目版本自动更新。
 
 ### 状态 schema 版本与冷启动规则
 
@@ -168,7 +174,7 @@ session_id 用于区分 CLI 每次执行：
 FTS 项目整体状态：
 
 ```
-[初始] → Phase 1 → Phase 2 → ... → Phase 16 → [v2.22.0（当前版本）]
+[初始] → Phase 1 → Phase 2 → ... → Phase 16 → ... → Phase 19 → Phase 20 → [v2.30.0（当前版本）]
 ```
 
 各循环的状态：
@@ -176,6 +182,17 @@ FTS 项目整体状态：
 ```
 [stopped] → [running] → [paused/completed] → [circuit_broken] → [recovered/stopped]
 ```
+
+### 未实现功能记录（v2.38.0）
+
+本次升级（Phase 24 + Phase 25）未实现的深度学习模型与强化学习模块：
+
+| 模型 | 说明 | 计划 |
+|:-----|:------|:-----|
+| **深度学习时序模型** | LSTM/GRU/Transformer 等端到端深度学习时序预测模型 | 未纳入本次计划，需引入 PyTorch/TensorFlow 依赖，存在训练成本高、可解释性低的权衡 |
+| **强化学习（RL）** | 基于 RL 的交易策略优化（如 DQN/PPO/SAC），通过环境交互学习最优持仓决策 | 未纳入本次计划，需引入 gym 式环境 + RL 算法库，与 FTS 因子驱动的信号产出范式差异较大 |
+
+以上功能登记为 **GAP-037**，优先级 P2，在 `docs/harness/08-gap-analysis.md` 中跟踪。
 
 ---
 

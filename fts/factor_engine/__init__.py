@@ -217,6 +217,12 @@ from .backtest_pipeline import (
     FactorOutput,
     PipelineConfig,
 )
+from .factor_clustering import (
+    FactorClusteringEngine,
+    PCASignalCompressor,
+    compute_cluster_summary,
+    compute_pca_summary,
+)
 from .factor_screener import FactorScreener
 from .signal_generator import SignalGenerator
 from .portfolio_constructor import PortfolioConstructor, PortfolioResult
@@ -399,6 +405,11 @@ __all__ = [
     "tree_to_factor_program",
     "FeatureImportanceResult",
     "FeatureImportanceAnalyzer",
+    # ─── P1 因子聚类 + P2 PCA 降维（v2.36.0）────────────────
+    "FactorClusteringEngine",
+    "PCASignalCompressor",
+    "compute_cluster_summary",
+    "compute_pca_summary",
     # ─── B.2 回测流水线（v2.9.0 增强）────────────────
     "BacktestPipeline",
     "BacktestInput",

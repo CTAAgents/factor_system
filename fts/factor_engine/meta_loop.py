@@ -50,6 +50,7 @@ from .contracts import (
 from .factor_program import (
     validate_factor_code,
 )
+from .extractors import FuturesExtractorPipeline, StockExtractorPipeline
 from .seed_pool import SeedPool
 from .state import generate_run_id, generate_trace_id
 
@@ -581,6 +582,7 @@ def factor_program(data, params):
         self,
         llm_client: Optional[Any] = None,
         web_collector: Optional[Callable[..., dict]] = None,
+        extractor_pipeline: Optional[Any] = None,
     ):
         """
         Args:
@@ -588,9 +590,12 @@ def factor_program(data, params):
                         None 时使用内置模板回退。
             web_collector: f10/web_collector 的 collect_fundamental_web 函数。
                         None 时跳过感知步骤。
+            extractor_pipeline: 三源提取器管道（如 FuturesExtractorPipeline /
+                        StockExtractorPipeline），在 LLM 候选后自动调用来补充候选。
         """
         self.llm_client = llm_client
         self.web_collector = web_collector
+        self.extractor_pipeline = extractor_pipeline
 
     def bootstrap(
         self,
@@ -602,6 +607,10 @@ def factor_program(data, params):
         extra_existing_names: Optional[set[str]] = None,
     ) -> list[SeedCandidate]:
         """执行 Bootstrapping，返回候选因子列表。
+
+        优先级顺序: 提取器 → LLM → 内置模板。
+        三源提取器（broker_reports/academic_papers/tinysoft）优先填充候选池，
+        未满配额由 LLM 补充，最后以内置模板兜底。
 
         Args:
             market_snapshot: f10/web_collector 拉取的市场快照
@@ -629,18 +638,57 @@ def factor_program(data, params):
             trace_id, max_candidates, len(existing_names), len(extra_existing_names or set()),
         )
 
-        # 1. 如果有 LLM 客户端，调用 LLM 生成候选
-        if self.llm_client is not None:
+        # 1. 提取器优先: 先调用三源提取器生成候选，过滤掉与种子池重复的
+        extractor_count = 0
+        if self.extractor_pipeline is not None:
+            try:
+                raw_extractor_candidates = self.extractor_pipeline.extract(trace_id)
+                if raw_extractor_candidates:
+                    # 过滤掉与现有种子重复的提取器候选
+                    non_dup_extractor: list[SeedCandidate] = []
+                    for cand in raw_extractor_candidates:
+                        cand_name = cand.get("name", "")
+                        if cand_name.lower() in existing_names:
+                            logger.info(
+                                "[bootstrap] 提取器候选跳过(重复): name=%s, source=%s",
+                                cand_name, cand.get("source", "unknown"),
+                            )
+                            continue
+                        non_dup_extractor.append(cand)
+                    candidates.extend(non_dup_extractor)
+                    extractor_count = len(non_dup_extractor)
+                    logger.info(
+                        "[bootstrap] 提取器管道候选已加入, trace_id=%s, raw=%d, filtered=%d, total=%d",
+                        trace_id, len(raw_extractor_candidates), extractor_count, len(candidates),
+                    )
+                else:
+                    logger.info(
+                        "[bootstrap] 提取器管道返回空, trace_id=%s", trace_id,
+                    )
+            except Exception as e:
+                logger.error(
+                    "[bootstrap] 提取器管道异常: %s, trace_id=%s, 跳过",
+                    e, trace_id, exc_info=True,
+                )
+
+        # 2. LLM 补足剩余配额（提取器未填满的部分）
+        llm_needed = max_candidates - len(candidates)
+        if self.llm_client is not None and llm_needed > 0:
             llm_candidates = self._bootstrap_with_llm(
-                market_snapshot, debate_gaps, max_candidates, trace_id
+                market_snapshot, debate_gaps, llm_needed, trace_id
             )
             candidates.extend(llm_candidates)
             logger.info(
                 "[bootstrap] LLM 候选已加入, trace_id=%s, llm_count=%d, total=%d",
                 trace_id, len(llm_candidates), len(candidates),
             )
+        else:
+            logger.info(
+                "[bootstrap] LLM 跳过, trace_id=%s, llm_needed=%d, llm_client=%s",
+                trace_id, llm_needed, bool(self.llm_client),
+            )
 
-        # 2. 如果候选数不足，从内置模板补充
+        # 3. 如果候选数仍不足，从内置模板补充
         if len(candidates) < max_candidates:
             needed = max_candidates - len(candidates)
             template_candidates = self._bootstrap_from_templates(
@@ -658,10 +706,10 @@ def factor_program(data, params):
                 trace_id, len(candidates), max_candidates,
             )
 
-        # 3. 限制数量
+        # 4. 限制数量
         candidates = candidates[:max_candidates]
 
-        # 4. 编译验证 + 去重标记
+        # 5. 编译验证 + 去重标记
         validated: list[SeedCandidate] = []
         dup_count = 0
         fail_count = 0
@@ -972,16 +1020,39 @@ class MetaLoop:
         self.sample_symbols = sample_symbols or [
             "rb", "i", "j", "hc",        # 黑色系
             "au", "ag", "cu",            # 有色金属
-            "sc", "ta", "ma",            # 能源化工
+            "sc", "ta", "ma",            # 化工（原能源化工拆分）
             "m", "a", "y",               # 农产品
         ]  # 默认抽样 13 个期货品种，覆盖五大板块
 
         self.state_manager = MetaStateManager(self.memory_dir)
         self.factor_pool_manager = FactorPoolManager(self.factor_pool_path)
         self.debate_analyzer = DebateQualityAnalyzer(self.debates_dir)
+
+        # ── 根据市场类型创建对应的三源提取器管道 ──
+        if market == "futures":
+            self._extractor_pipeline = FuturesExtractorPipeline(
+                llm_client=self.llm_client,
+            )
+            logger.info(
+                "[L1.init] 期货三源提取器管道已就绪: 天软/券商研报(动态)/学术论文(动态)"
+            )
+        elif market == "stock":
+            self._extractor_pipeline = StockExtractorPipeline(
+                llm_client=self.llm_client,
+            )
+            logger.info(
+                "[L1.init] 股票三源提取器管道已就绪: 聚宽因子/券商研报(动态)/学术论文(动态)"
+            )
+        else:
+            self._extractor_pipeline = None
+            logger.warning(
+                "[L1.init] 未知市场类型 %s，跳过提取器管道", market,
+            )
+
         self.bootstrap_chain = BootstrappingChain(
             llm_client=self.llm_client,
             web_collector=self.web_collector,
+            extractor_pipeline=self._extractor_pipeline,
         )
 
         # 熔断计数器
@@ -1002,6 +1073,8 @@ class MetaLoop:
 
         # 加载/初始化状态
         state = self.state_manager.load_or_init(budget_limit)
+        # 重置 token 消耗（每日预算，新运行应从零开始）
+        state["tokens_consumed"] = 0
         state = self.state_manager.mark_running(state)
         run_id = state["run_id"]
 
@@ -1465,7 +1538,7 @@ def _make_web_collector(provider: Any | None = None) -> Callable[..., dict]:
 # ─── CLI 入口 ───────────────────────────────────────────
 
 def main():
-    """CLI 入口: python -m loop_engine.meta_loop --once"""
+    """CLI 入口: python -m fts.factor_engine.meta_loop --once [--market stock]"""
     parser = argparse.ArgumentParser(description="L1 Meta-Loop 知识补给循环")
     parser.add_argument("--once", action="store_true", help="运行一次完整 L1 循环")
     parser.add_argument(
@@ -1483,6 +1556,10 @@ def main():
     parser.add_argument(
         "--inject-dir", default="memory/knowledge/factors/l1_injected",
         help="L1 注入因子存储目录",
+    )
+    parser.add_argument(
+        "--market", default="futures", choices=["futures", "stock"],
+        help="市场类型: futures（期货，默认）或 stock（股票）",
     )
     args = parser.parse_args()
 
@@ -1513,6 +1590,7 @@ def main():
         inject_dir=args.inject_dir,
         web_collector=web_collector,
         llm_client=get_llm_client(),
+        market=args.market,
     )
     result = loop.run(max_bootstraps=args.max_bootstraps)
     print(f"L1 Meta-Loop 完成: {result.to_dict()}")

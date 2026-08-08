@@ -5,8 +5,10 @@ fts.factor_engine.regime — 市场制度感知与因子选择性激活。
 记录因子在各 regime 下的历史表现，
 仅选择在当前制度下有效的因子参与组合构建。
 
-检测方法（v2.0 — 机构级增强版）:
-  - 主检测: HMM（隐马尔可夫模型），4状态概率化制度识别
+检测方法（v2.2 — 机构级增强版 + HMM 集成 + 扩展特征）:
+  - 主检测: MultiHorizonHMMDetector（多周期 HMM 集成，P1.2）
+  - 次检测: HMMRegimeDetector（单周期 HMM，状态映射稳定 P1.3 + 扩展特征 P2.1）
+  - 第三检测: MSMRegimeDetector（马尔可夫切换模型，P3.1）
   - 回退检测: 多周期加权趋势投票 + 分位数/绝对波动率 + 软投票判定
   - 制度平滑: 转移概率矩阵（HMM）或指数衰减（规则）
 
@@ -15,13 +17,13 @@ fts.factor_engine.regime — 市场制度感知与因子选择性激活。
     regime = selector.detect(ohlcv_df)
     active_factors = selector.select_factors(regime, elite_factors)
 
-版本: v2.0.0
+版本: v2.3.0
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -34,6 +36,24 @@ try:
     _HMM_AVAILABLE = True
 except ImportError:
     pass
+
+# MSM 可选依赖
+_MSM_AVAILABLE: bool = False
+try:
+    from statsmodels.tsa.regime_switching.markov_regression import MarkovRegression
+    _MSM_AVAILABLE = True
+except ImportError:
+    pass
+
+# 导入 HMM 增强模块（STEP3 P1.2/P1.3/P3.1）
+from fts.factor_engine.regime_hmm import (
+    MultiHorizonHMMDetector,
+    MSMRegimeDetector,
+    StateMapStabilizer,
+)
+
+# 导入扩展特征模块（STEP3 P2.1）
+from fts.factor_engine.regime_features import compute_hmm_feature_vector
 
 
 # ─── 契约 ─────────────────────────────────────────────────
@@ -167,6 +187,7 @@ class HMMRegimeDetector:
         refit_interval: int = _HMM_REFIT_INTERVAL,
         min_data: int = _HMM_MIN_DATA,
         random_seed: int = _HMM_RANDOM_SEED,
+        use_stabilizer: bool = True,
     ) -> None:
         self.n_states = n_states
         self.lookback = lookback
@@ -180,10 +201,14 @@ class HMMRegimeDetector:
         self._last_fit_data_len = 0
         self._is_fitted = False
 
+        # P1.3: 状态映射稳定性增强
+        self._stabilizer = StateMapStabilizer() if use_stabilizer else None
+        self._last_confidence = 0.0  # 上次预测的置信度，用于 stabilizer
+
     # ── 训练 ──────────────────────────────────────────────
 
     def fit(self, ohlcv: pd.DataFrame) -> bool:
-        """在历史数据上训练 HMM 模型。
+        """在历史数据上训练 HMM 模型（v2.1 — 使用扩展特征）。
 
         参数:
             ohlcv: OHLCV DataFrame。
@@ -198,14 +223,19 @@ class HMMRegimeDetector:
         if len(close) < self.min_data:
             return False
 
-        rets = close.pct_change().dropna().values.reshape(-1, 1)
+        rets = close.pct_change().dropna()
         if len(rets) < self.min_data:
             return False
 
-        # 构建特征: [收益率, 20d 已实现波动率]
-        rets_series = pd.Series(close.pct_change().dropna())
-        vol = rets_series.rolling(20).std().fillna(0).values.reshape(-1, 1)
-        features = np.column_stack([rets, vol])
+        # v2.1: 使用扩展特征模块构建增强特征向量
+        # 基础特征 [收益率, 20d 已实现波动率] + 扩展特征
+        base_features = np.column_stack([
+            rets.values.reshape(-1, 1),
+            rets.rolling(20).std().fillna(0).values.reshape(-1, 1),
+        ])
+        features = compute_hmm_feature_vector(ohlcv, base_features=base_features)
+        if features.size == 0:
+            features = base_features
 
         # 取最近 lookback 窗口
         train_features = features[-min(self.lookback, len(features)):]
@@ -230,7 +260,7 @@ class HMMRegimeDetector:
             return False
 
     def _infer_state_map(self, features: np.ndarray) -> None:
-        """根据状态的统计特征推断制度映射。
+        """根据状态的统计特征推断制度映射（v2.1 — 集成 StateMapStabilizer）。
 
         方法:
             - 按均值收益率排序
@@ -238,6 +268,7 @@ class HMMRegimeDetector:
             - 最低收益 → "bear"
             - 最高波动（剩余中）→ "high_vol"
             - 剩余 → "oscillate"
+            - 通过 StateMapStabilizer 防止状态标签翻转（P1.3）
         """
         if self._model is None:
             return
@@ -246,7 +277,7 @@ class HMMRegimeDetector:
         means = self._model.means_  # shape (n_states, n_features)
 
         # 计算每个状态的统计量
-        state_stats: list[dict] = []
+        state_stats: list[dict[str, Any]] = []
         for s in range(self.n_states):
             mask = states == s
             if mask.sum() == 0:
@@ -280,12 +311,20 @@ class HMMRegimeDetector:
                 assignment.append((s["state"], "oscillate"))
                 used.add(s["state"])
 
-        self._state_map = dict(assignment)
+        raw_map = dict(assignment)
+
+        # P1.3: 通过 StateMapStabilizer 防止状态标签翻转
+        if self._stabilizer is not None:
+            raw_map = self._stabilizer.stabilize(
+                raw_map, state_stats, self._last_confidence
+            )
+
+        self._state_map = raw_map
 
     # ── 预测 ──────────────────────────────────────────────
 
     def predict(self, ohlcv: pd.DataFrame) -> tuple[str, float, dict]:
-        """预测当前市场制度。
+        """预测当前市场制度（v2.1 — 使用扩展特征）。
 
         参数:
             ohlcv: OHLCV DataFrame。
@@ -304,13 +343,18 @@ class HMMRegimeDetector:
         rets = close.pct_change().dropna()
         rets_vals = rets.values.reshape(-1, 1)
         vol = rets.rolling(20).std().fillna(0).values.reshape(-1, 1)
-        features = np.column_stack([rets_vals, vol])
+        base_features = np.column_stack([rets_vals, vol])
+        features = compute_hmm_feature_vector(ohlcv, base_features=base_features)
+        if features.size == 0:
+            features = base_features
 
         try:
             state = int(self._model.predict(features)[-1])
             probs = self._model.predict_proba(features)[-1]
             regime = self._state_map.get(state, "oscillate")
             confidence = float(min(1.0, max(0.0, probs[state])))
+            # 存储置信度，供 stabilizer 在下一次 _infer_state_map 使用
+            self._last_confidence = confidence
             return regime, confidence, {"hmm_state": state, "hmm_probs": probs.tolist()}
         except Exception:
             return "unknown", 0.0, {}
@@ -568,6 +612,7 @@ class SectorRegimeSelector:
 
     def __init__(self, lookback_days: int = 60, use_hmm: bool = True) -> None:
         self._selectors: dict[str, RegimeAwareSelector] = {}
+        self._variety_selectors: dict[str, RegimeAwareSelector] = {}
         self.lookback_days = lookback_days
         self._use_hmm = use_hmm
 
@@ -599,9 +644,82 @@ class SectorRegimeSelector:
             if sector_ohlcv.empty:
                 continue
             if sector not in self._selectors:
-                self._selectors[sector] = RegimeAwareSelector(self.lookback_days, use_hmm=self._use_hmm)
+                # use_hmm=False 时同时禁用 multi_hmm 和 msm，只保留规则方法
+                self._selectors[sector] = RegimeAwareSelector(
+                    self.lookback_days,
+                    use_hmm=self._use_hmm,
+                    use_multi_hmm=self._use_hmm,
+                    use_msm=False,
+                )
             result[sector] = self._selectors[sector].detect(sector_ohlcv)
         return result
+
+    def compute_alignment(
+        self,
+        panel: dict[str, pd.DataFrame],
+        sector_regimes: dict[str, MarketRegime],
+        sector_map: dict[str, list[str]] | None = None,
+    ) -> dict[str, float]:
+        """计算品种与所属产业链制度的对齐度。
+
+        对每个品种独立检测其市场制度，与所属产业链的综合制度比较，
+        计算对齐度评分（0~1）。对齐度高的品种 => 与产业链趋势一致，
+        信号权重应上调；对齐度低的品种 => 偏差于产业链趋势，信号权重应下调。
+
+        参数:
+            panel:          品种行情面板 (symbol → OHLCV DataFrame)。
+            sector_regimes: detect_all() 返回的产业链制度检测结果。
+            sector_map:     产业链映射 {产业链名 → [品种代码列表]}。
+                           默认使用 FUTURES_SECTOR_MAP。
+
+        返回:
+            dict[品种代码, 对齐度 (0~1)]。
+            数据不足时默认返回 0.5。
+        """
+        if sector_map is None:
+            from fts.data_futures import FUTURES_SECTOR_MAP as _FSM
+            sector_map = _FSM
+
+        alignment: dict[str, float] = {}
+
+        for sector, symbols in sector_map.items():
+            sector_regime = sector_regimes.get(sector)
+            if not sector_regime:
+                continue
+            sector_r = sector_regime["regime"]
+
+            for sym in symbols:
+                ohlcv = panel.get(sym)
+                if ohlcv is None or len(ohlcv) < 20:
+                    alignment[sym] = 0.5  # 数据不足，默认中等对齐度
+                    continue
+
+                # 复用 RegimeAwareSelector 检测单品种制度
+                if sym not in self._variety_selectors:
+                    self._variety_selectors[sym] = RegimeAwareSelector(
+                        lookback_days=self.lookback_days,
+                        use_hmm=self._use_hmm,
+                        use_multi_hmm=self._use_hmm,
+                        use_msm=False,
+                    )
+                variety_regime = self._variety_selectors[sym].detect(ohlcv)
+                variety_r = variety_regime["regime"]
+
+                # 计算对齐度
+                if variety_r == sector_r:
+                    # 制度相同，对齐度 = 两者置信度的乘积
+                    alignment[sym] = round(
+                        variety_regime["confidence"] * sector_regime["confidence"],
+                        4,
+                    )
+                else:
+                    # 制度不同，对齐度 = (1 - |置信度差|) * 0.5
+                    conf_diff = abs(
+                        variety_regime["confidence"] - sector_regime["confidence"]
+                    )
+                    alignment[sym] = round((1 - conf_diff) * 0.5, 4)
+
+        return alignment
 
     @staticmethod
     def _build_sector_ohlcv(
@@ -655,32 +773,67 @@ class SectorRegimeSelector:
 class RegimeAwareSelector:
     """市场制度感知的选择器。
 
-    检测策略（v2.0）:
-        - 主检测: HMM（隐马尔可夫模型），概率化制度识别
+    检测策略（v2.1）:
+        - 主检测: MultiHorizonHMMDetector（多周期 HMM 集成，P1.2）
+        - 次检测: HMMRegimeDetector（单周期 HMM，状态映射稳定 P1.3）
+        - 第三检测: MSMRegimeDetector（马尔可夫切换模型，P3.1，默认关闭）
         - 回退: 规则方法（多周期加权趋势投票 + 分位数/绝对波动率）
-        - 两者均失败时返回 oscillate/0.5
+        - 最后兜底: oscillate/0.5
 
     参数:
         lookback_days: 趋势斜率计算的回看天数（默认 60）。
-        use_hmm:       是否启用 HMM 检测（默认 True）。
+        use_hmm:       是否启用单周期 HMM 检测（默认 True）。
+        use_multi_hmm: 是否启用多周期 HMM 集成检测（默认 True）。
+        use_msm:       是否启用 MSM 检测（默认 False，P3.1 原型）。
     """
 
-    def __init__(self, lookback_days: int = 60, use_hmm: bool = True) -> None:
+    def __init__(
+        self,
+        lookback_days: int = 60,
+        use_hmm: bool = True,
+        use_multi_hmm: bool = True,
+        use_msm: bool = False,
+    ) -> None:
         self.lookback_days = lookback_days
         self._profiles: dict[str, RegimeFactorProfile] = {}
         self._prev_regime: MarketRegime | None = None
+
+        # 单周期 HMM 检测器
         self._hmm_detector = HMMRegimeDetector() if use_hmm and _HMM_AVAILABLE else None
         self._use_hmm = use_hmm and _HMM_AVAILABLE
+
+        # P1.2: 多周期 HMM 集成检测器（主检测）
+        self._multi_hmm: MultiHorizonHMMDetector | None = None
+        self._use_multi_hmm = False
+        if use_multi_hmm and _HMM_AVAILABLE:
+            try:
+                self._multi_hmm = MultiHorizonHMMDetector()
+                self._use_multi_hmm = True
+            except Exception:
+                self._multi_hmm = None
+
+        # P3.1: MSM 马尔可夫切换模型（默认关闭，原型）
+        self._msm: MSMRegimeDetector | None = None
+        self._use_msm = False
+        if use_msm and _MSM_AVAILABLE:
+            try:
+                self._msm = MSMRegimeDetector()
+                self._use_msm = True
+            except Exception:
+                self._msm = None
+        self._msm_fitted = False
 
     # ── 检测 ──────────────────────────────────────────────
 
     def detect(self, ohlcv: pd.DataFrame) -> MarketRegime:
-        """从 OHLCV 数据检测当前市场制度（v2.0 机构级增强版）。
+        """从 OHLCV 数据检测当前市场制度（v2.1 — 多检测器集成）。
 
-        检测流程:
-            1. 尝试 HMM 检测（需 hmmlearn 可用 + 数据充足）
-            2. 若 HMM 不可用或失败，回退到规则方法
-            3. 若规则方法也失败，返回 oscillate/0.5
+        检测流程（按优先级）:
+            1. MultiHorizonHMMDetector（多周期 HMM 集成，P1.2）
+            2. MSMRegimeDetector（马尔可夫切换模型，P3.1，仅 use_msm=True 时）
+            3. HMMRegimeDetector（单周期 HMM + 状态映射稳定 P1.3）
+            4. 规则方法（多周期加权趋势投票 + 分位数/绝对波动率）
+            5. 均失败时返回 oscillate/0.5
 
         参数:
             ohlcv: 含 open/high/low/close/volume 列的 DataFrame，DatetimeIndex。
@@ -712,9 +865,42 @@ class RegimeAwareSelector:
             self._prev_regime = result
             return result
 
-        # ── 主检测: HMM ─────────────────────────────────
+        # ── 1. 主检测: MultiHorizonHMMDetector（P1.2） ──
         result: MarketRegime | None = None
-        if self._use_hmm and self._hmm_detector is not None:
+        if self._use_multi_hmm and self._multi_hmm is not None:
+            try:
+                regime, conf, feats = self._multi_hmm.predict(ohlcv)
+                if regime != "unknown" and conf >= 0.3:
+                    result = MarketRegime(
+                        regime=regime,
+                        confidence=round(conf, 4),
+                        detected_at=datetime.now().isoformat(),
+                        features=feats,
+                        method="multi_hmm",
+                    )
+            except Exception:
+                pass  # 多周期 HMM 失败，尝试下一个
+
+        # ── 2. MSMRegimeDetector（P3.1，仅 use_msm=True） ──
+        if result is None and self._use_msm and self._msm is not None:
+            try:
+                if not self._msm_fitted:
+                    self._msm_fitted = self._msm.fit(ohlcv)
+                if self._msm_fitted:
+                    regime, conf, feats = self._msm.predict(ohlcv)
+                    if regime != "unknown" and conf >= 0.3:
+                        result = MarketRegime(
+                            regime=regime,
+                            confidence=round(conf, 4),
+                            detected_at=datetime.now().isoformat(),
+                            features=feats,
+                            method="msm",
+                        )
+            except Exception:
+                pass  # MSM 失败，尝试下一个
+
+        # ── 3. 单周期 HMM 检测 + 状态映射稳定（P1.3） ──
+        if result is None and self._use_hmm and self._hmm_detector is not None:
             try:
                 self._hmm_detector.maybe_refit(ohlcv)
                 hmm_regime, hmm_conf, hmm_features = self._hmm_detector.predict(ohlcv)
@@ -729,7 +915,7 @@ class RegimeAwareSelector:
             except Exception:
                 pass  # HMM 失败，回退到规则方法
 
-        # ── 回退: 规则方法 ──────────────────────────────
+        # ── 4. 回退: 规则方法 ──────────────────────────
         if result is None:
             result = _detect_by_rule(ohlcv, self._prev_regime)
 
@@ -824,3 +1010,341 @@ class RegimeAwareSelector:
             lines.append("  （无因子表现数据）")
 
         return "\n".join(lines)
+
+
+# ─── P4.2: 制度迁移预警 ──────────────────────────────────
+
+
+class RegimeTransitionWarner:
+    """制度迁移预警系统（P4.2）。
+
+    在上次制度的基础上，监控以下信号：
+      1. 后验概率熵: H = -sum(p * log(p))，熵 > 0.8 时触发预警
+      2. 转移概率突变: 转移矩阵对角元下降 > 20% 时预警
+      3. 特征分布偏移: 新特征分布与参考分布的 KL 散度 > 阈值
+
+    预警等级:
+      - 黄色: 仅记录日志，不改变策略
+      - 橙色: 降低置信度，缩小仓位
+      - 红色: 强行切换回规则方法，人工介入
+
+    用法:
+        warner = RegimeTransitionWarner()
+        level = warner.evaluate(probs, current_regime, transition_matrix, features)
+    """
+
+    # 预警阈值
+    ENTROPY_YELLOW: float = 0.6
+    ENTROPY_ORANGE: float = 0.8
+    ENTROPY_RED: float = 0.95
+
+    TRANSITION_DROP_YELLOW: float = 0.10   # 对角元下降 10%
+    TRANSITION_DROP_ORANGE: float = 0.20   # 对角元下降 20%
+    TRANSITION_DROP_RED: float = 0.35      # 对角元下降 35%
+
+    KL_DIVERGENCE_YELLOW: float = 0.5
+    KL_DIVERGENCE_ORANGE: float = 1.0
+    KL_DIVERGENCE_RED: float = 2.0
+
+    def __init__(self, n_features: int = 2) -> None:
+        self._prev_transition: np.ndarray | None = None
+        self._ref_feature_mean: np.ndarray | None = None
+        self._ref_feature_std: np.ndarray | None = None
+        self._n_features = n_features
+        self._call_count = 0
+        self._last_alert: str | None = None  # yellow/orange/red
+
+    def evaluate(
+        self,
+        probs: np.ndarray | list[float],
+        current_regime: str,
+        transition_matrix: np.ndarray | None = None,
+        features: np.ndarray | None = None,
+    ) -> str:
+        """评估当前制度迁移风险，返回预警等级。
+
+        参数:
+            probs:             后验概率数组（每个状态的概率）。
+            current_regime:    当前制度名称。
+            transition_matrix: 当前 HMM 转移矩阵（可选）。
+            features:          当前特征向量（可选，用于分布偏移检测）。
+
+        返回:
+            "none" / "yellow" / "orange" / "red"
+        """
+        self._call_count += 1
+        probs_arr = np.asarray(probs, dtype=np.float64)
+        probs_arr = np.clip(probs_arr, 1e-12, 1.0)
+        probs_arr /= probs_arr.sum()
+
+        # ── 信号1: 后验概率熵 ──
+        entropy = -np.sum(probs_arr * np.log(probs_arr))
+        # 归一化: 对 N 个状态，最大熵为 log(N)
+        n_states = len(probs_arr)
+        max_entropy = np.log(max(n_states, 2))
+        norm_entropy = entropy / max_entropy if max_entropy > 0 else 0.0
+
+        # ── 信号2: 转移概率突变 ──
+        trans_drop = 0.0
+        if transition_matrix is not None and self._prev_transition is not None:
+            # 检查对角元下降
+            if transition_matrix.shape[0] == self._prev_transition.shape[0]:
+                curr_diag = np.diag(transition_matrix)
+                prev_diag = np.diag(self._prev_transition)
+                # 避免除以零
+                denom = np.maximum(prev_diag, 1e-6)
+                drop = (prev_diag - curr_diag) / denom
+                trans_drop = float(np.max(np.clip(drop, 0, 1)))
+        if transition_matrix is not None:
+            self._prev_transition = transition_matrix.copy()
+
+        # ── 信号3: 特征分布偏移 ──
+        kl_div = 0.0
+        if features is not None and self._ref_feature_mean is not None:
+            # 简化的 KL 散度估计（假设高斯分布）
+            feat = np.asarray(features, dtype=np.float64).flatten()
+            min_len = min(len(feat), len(self._ref_feature_mean))
+            if min_len > 0:
+                diff = feat[:min_len] - self._ref_feature_mean[:min_len]
+                var = np.maximum(self._ref_feature_std[:min_len] ** 2, 1e-10)
+                kl_div = float(np.mean(diff ** 2 / var) / 2.0)
+
+        # 更新参考分布
+        if features is not None and self._ref_feature_mean is None:
+            feat = np.asarray(features, dtype=np.float64).flatten()
+            self._ref_feature_mean = feat.copy()
+            self._ref_feature_std = np.ones_like(feat) * 0.1
+        elif features is not None and self._ref_feature_mean is not None:
+            # 指数衰减更新参考分布
+            alpha = 0.05
+            feat = np.asarray(features, dtype=np.float64).flatten()
+            min_len = min(len(feat), len(self._ref_feature_mean))
+            if min_len > 0:
+                self._ref_feature_mean[:min_len] = (
+                    (1 - alpha) * self._ref_feature_mean[:min_len]
+                    + alpha * feat[:min_len]
+                )
+
+        # ── 综合判定 ──
+        red = (
+            (norm_entropy >= self.ENTROPY_RED)
+            or (trans_drop >= self.TRANSITION_DROP_RED)
+            or (kl_div >= self.KL_DIVERGENCE_RED)
+        )
+        orange = (
+            (norm_entropy >= self.ENTROPY_ORANGE)
+            or (trans_drop >= self.TRANSITION_DROP_ORANGE)
+            or (kl_div >= self.KL_DIVERGENCE_ORANGE)
+        )
+        yellow = (
+            (norm_entropy >= self.ENTROPY_YELLOW)
+            or (trans_drop >= self.TRANSITION_DROP_YELLOW)
+            or (kl_div >= self.KL_DIVERGENCE_YELLOW)
+        )
+
+        if red:
+            self._last_alert = "red"
+            logger.warning("制度迁移预警: RED (entropy=%.4f, trans_drop=%.4f, kl=%.4f)",
+                          norm_entropy, trans_drop, kl_div)
+            return "red"
+        if orange:
+            self._last_alert = "orange"
+            logger.info("制度迁移预警: ORANGE (entropy=%.4f, trans_drop=%.4f, kl=%.4f)",
+                       norm_entropy, trans_drop, kl_div)
+            return "orange"
+        if yellow:
+            self._last_alert = "yellow"
+            logger.debug("制度迁移预警: YELLOW (entropy=%.4f, trans_drop=%.4f, kl=%.4f)",
+                        norm_entropy, trans_drop, kl_div)
+            return "yellow"
+
+        self._last_alert = None
+        return "none"
+
+    @property
+    def last_alert(self) -> str | None:
+        return self._last_alert
+
+    def reset(self) -> None:
+        """重置状态（用于测试）。"""
+        self._prev_transition = None
+        self._ref_feature_mean = None
+        self._ref_feature_std = None
+        self._call_count = 0
+        self._last_alert = None
+
+
+# ─── P4.3: 自适应参数调整 ────────────────────────────────
+
+
+class AdaptiveRegimeConfig:
+    """自适应参数调整模块（P4.3）。
+
+    根据历史表现动态调整制度检测阈值参数，
+    每 20 个交易日重新评估一次。
+
+    用法:
+        config = AdaptiveRegimeConfig()
+        config.record(regime, confidence, forward_return)
+        thresholds = config.get_thresholds()  # 获取当前最优阈值
+    """
+
+    DEFAULT_THRESHOLDS: dict[str, float] = {
+        "trend_slope_bull": 0.0001,       # 看涨趋势斜率阈值
+        "trend_slope_bear": -0.0001,      # 看跌趋势斜率阈值
+        "volatility_high": 0.02,           # 高波动阈值
+        "volatility_low": 0.005,           # 低波动阈值
+        "confidence_min": 0.3,             # 最低置信度
+        "entropy_yellow": 0.6,             # 迁移预警黄色阈值
+        "entropy_orange": 0.8,             # 迁移预警橙色阈值
+    }
+
+    # 可调参数搜索空间
+    PARAM_GRID: dict[str, list[float]] = {
+        "trend_slope_bull": [0.00005, 0.0001, 0.0002, 0.0005],
+        "trend_slope_bear": [-0.0005, -0.0002, -0.0001, -0.00005],
+        "volatility_high": [0.015, 0.02, 0.025, 0.03],
+        "volatility_low": [0.003, 0.005, 0.008, 0.01],
+        "confidence_min": [0.2, 0.3, 0.4, 0.5],
+    }
+
+    def __init__(
+        self,
+        eval_interval: int = 20,
+        lookback_windows: int = 10,
+    ) -> None:
+        self.eval_interval = eval_interval
+        self.lookback_windows = lookback_windows
+        self._thresholds: dict[str, float] = dict(self.DEFAULT_THRESHOLDS)
+        self._history: list[dict[str, Any]] = []
+        self._eval_count = 0
+
+    def record(
+        self,
+        regime: str,
+        confidence: float,
+        forward_return: float,
+    ) -> None:
+        """记录一次制度检测结果和后续收益。
+
+        参数:
+            regime:         检测到的制度。
+            confidence:     检测置信度。
+            forward_return: 后续收益率（如次日收益）。
+        """
+        self._history.append({
+            "regime": regime,
+            "confidence": confidence,
+            "forward_return": forward_return,
+            "timestamp": pd.Timestamp.now(),
+        })
+        self._eval_count += 1
+
+        # 每 eval_interval 次重新优化
+        if self._eval_count % self.eval_interval == 0:
+            self._reoptimize()
+
+    def get_thresholds(self) -> dict[str, float]:
+        """获取当前最优阈值。"""
+        return dict(self._thresholds)
+
+    def _reoptimize(self) -> None:
+        """基于历史表现重新优化阈值参数。
+
+        使用网格搜索找到使制度-收益匹配度最高的阈值组合。
+        """
+        if len(self._history) < self.eval_interval:
+            return
+
+        recent = self._history[-self.eval_interval:]
+
+        best_score = -float("inf")
+        best_params: dict[str, float] = dict(self.DEFAULT_THRESHOLDS)
+
+        # 只对部分关键参数进行网格搜索（避免组合爆炸）
+        param_keys = list(self.PARAM_GRID.keys())
+        param_values = list(self.PARAM_GRID.values())
+
+        from itertools import product
+        total = 1
+        for v in param_values:
+            total *= len(v)
+        if total > 500:
+            # 采样搜索
+            param_values = [v[::max(1, len(v) // 3)] for v in param_values]
+
+        for combo in product(*param_values):
+            params = dict(zip(param_keys, combo))
+            score = self._score_params(params, recent)
+            if score > best_score:
+                best_score = score
+                best_params = params
+
+        # 更新阈值（仅更新搜索过的参数）
+        for k, v in best_params.items():
+            self._thresholds[k] = v
+
+        logger.info(
+            "AdaptiveRegimeConfig 已更新阈值 (score=%.4f): %s",
+            best_score,
+            {k: f"{v:.5f}" for k, v in best_params.items()},
+        )
+
+    def _score_params(
+        self,
+        params: dict[str, float],
+        history: list[dict[str, Any]],
+    ) -> float:
+        """评估一组阈值参数的表现。
+
+        策略: 预测为 bull 时做多，bear 时做空，其他空仓。
+        评分: 夏普比率。
+        """
+        if not history:
+            return 0.0
+
+        from collections import Counter
+        regime_counts = Counter(h["regime"] for h in history)
+        n_entries = len(history)
+
+        # 使用置信度加权
+        weighted_returns = 0.0
+        total_weight = 0.0
+
+        for h in history:
+            regime = h["regime"]
+            confidence = h["confidence"]
+            ret = h["forward_return"]
+
+            if regime == "bull" and confidence >= params["confidence_min"]:
+                weight = confidence
+                weighted_returns += weight * ret
+                total_weight += weight
+            elif regime == "bear" and confidence >= params["confidence_min"]:
+                weight = confidence
+                weighted_returns += weight * (-ret)  # 做空
+                total_weight += weight
+            # oscillate/high_vol → 空仓
+
+        if total_weight == 0:
+            return 0.0
+
+        # 评分 = 制度分布均匀度 × 平均收益
+        # 均匀度用归一化熵
+        n_regimes = len(regime_counts)
+        if n_regimes <= 1:
+            diversity = 0.0
+        else:
+            probs = np.array([c / n_entries for c in regime_counts.values()])
+            entropy = -np.sum(probs * np.log(np.clip(probs, 1e-10, 1.0)))
+            diversity = entropy / np.log(n_regimes)
+
+        avg_return = weighted_returns / total_weight
+        score = avg_return * 100 + diversity * 0.5
+        return float(score)
+
+    def reset(self) -> None:
+        """重置历史数据（用于测试）。"""
+        self._history.clear()
+        self._eval_count = 0
+        self._thresholds = dict(self.DEFAULT_THRESHOLDS)

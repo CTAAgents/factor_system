@@ -99,3 +99,27 @@ def test_pipeline_missing_ohlcv_columns_fails():
     result = BacktestPipeline().run(BacktestInput(factor=factor, data=data))
     assert result.failed
     assert "缺少必要列" in (result.error or "")
+
+
+def test_performance_metrics_include_payoff_and_profit_factor():
+    """回测结果的绩效指标应包含盈亏比和盈亏因子。"""
+    data = _make_ohlcv()
+    factor = _make_factor(
+        "def factor_program(data, params):\n"
+        "    import numpy as np\n"
+        "    close = data['close']\n"
+        "    n = len(close)\n"
+        "    ret = np.zeros(n)\n"
+        "    if n > 5:\n"
+        "        ret[5:] = (close[5:] - close[:-5]) / np.maximum(close[:-5], 1e-10)\n"
+        "    return np.tanh(ret * 10)\n",
+        "test_payoff",
+    )
+    result = BacktestPipeline().run(BacktestInput(factor=factor, data=data))
+    assert result.success, f"回测失败: {result.error}"
+    assert result.output is not None
+    m = result.output.metrics
+    assert hasattr(m, "payoff_ratio"), "缺少 payoff_ratio 字段"
+    assert hasattr(m, "profit_factor"), "缺少 profit_factor 字段"
+    assert m.payoff_ratio >= 0.0, f"盈亏比不应为负: {m.payoff_ratio}"
+    assert m.profit_factor >= 0.0, f"盈亏因子不应为负: {m.profit_factor}"

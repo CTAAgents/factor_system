@@ -41,6 +41,9 @@ _FUTURES_FAMILY_FILE_MAP: dict[str, tuple[int, str]] = {
     "market_regime.yaml":     (12, "市场环境因子家族"),
     "cta_registry.yaml":      (13, "CTA注册表补充因子 V2.0"),
     "operator_dict.yaml":     (14, "算子字典种子因子"),
+    "vnpy_cta.yaml":          (15, "vnpy CTA技术指标因子家族"),
+    "wind_cta.yaml":          (16, "Wind平台特色因子家族"),
+    "mc_cta.yaml":            (17, "MultiCharts平台特色因子家族"),
 }
 
 # ─── 路径配置 ─────────────────────────────────────────────────
@@ -405,6 +408,9 @@ def _infer_family_from_filename(filename: str) -> Optional[str]:
         ("crowding", "behavioral"),
         ("market_regime", "macro"),
         ("operator_dict", "technical"),
+        ("vnpy_cta", "technical"),
+        ("wind_cta", "technical"),
+        ("mc_cta", "technical"),
     ]
     for keyword, family in keyword_map:
         if keyword in name_lower:
@@ -501,7 +507,7 @@ def load_all_yaml_seeds(
     if market in (None, "futures"):
         futures_dir = seeds_dir / "futures"
         logger.info(
-            "[yaml_seed] 开始加载期货 YAML 种子 (14 家族), trace_id=%s", trace_id,
+            "[yaml_seed] 开始加载期货 YAML 种子 (17 家族), trace_id=%s", trace_id,
         )
         futures_files = list_yaml_files(futures_dir)
         futures_family_loaded: dict[int, tuple[str, int]] = {}
@@ -524,7 +530,7 @@ def load_all_yaml_seeds(
         # ── 期货家族汇总验证 ──
         total_futures = sum(c for _, c in futures_family_loaded.values())
         loaded_fids = sorted(futures_family_loaded.keys())
-        missing_fids = [f for f in range(1, 15) if f not in futures_family_loaded]
+        missing_fids = [f for f in range(1, 17) if f not in futures_family_loaded]
 
         if missing_fids:
             logger.error(

@@ -76,6 +76,7 @@ class LLMClient(ABC):
         处理策略:
           0. 用正则去除 markdown 代码块标记（```json ... ```）
           1. 直接 json.loads
+          1.5 修复字符串内未转义换行符后再解析
           2. 从 markdown 代码块按标记提取
           3. 修复式解析（截断修复）
           4. 抛出 LLMError
@@ -90,6 +91,28 @@ class LLMClient(ABC):
         # 1. 直接解析
         try:
             return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        # 1.25 非严格模式（允许字符串内换行符）
+        # DeepSeek 等模型常返回包含实际换行符的 JSON，json.loads 默认拒绝
+        try:
+            return json.loads(cleaned, strict=False)
+        except json.JSONDecodeError:
+            pass
+
+        # 1.5 修复字符串内未转义换行符后再解析
+        # LLM 生成的 code 字段常包含实际换行符而非 \\n，导致 json.loads 失败
+        try:
+            escaped = LLMClient._escape_newlines_in_json(cleaned)
+            return json.loads(escaped)
+        except json.JSONDecodeError:
+            pass
+
+        # 1.75 修复换行符 + 非严格模式（双重兜底）
+        try:
+            escaped = LLMClient._escape_newlines_in_json(cleaned)
+            return json.loads(escaped, strict=False)
         except json.JSONDecodeError:
             pass
 
@@ -116,17 +139,19 @@ class LLMClient(ABC):
         处理策略:
           1. 用栈找到最外层匹配的 {}（跳过字符串内的 {/}）
           2. 尝试直接解析
-          3. 逐段截断修复（去掉末尾不完整字段）
+          3. 截断修复: 用栈跟踪已打开的括号，生成正确的关闭序列
+          4. 逐段截断: 去掉末尾不完整字段
         """
         first_brace = text.find("{")
         if first_brace == -1:
             return None
 
-        # 用栈找到最外层匹配的 }，跳过字符串内的 {/}
-        depth = 0
+        # 用栈跟踪括号打开顺序，处理截断时按逆序生成关闭序列
+        stack: list[str] = []  # 打开的括号栈（"{" 或 "["）
         in_string = False
         escape = False
         match_end = -1
+        last_brace_pos = -1  # 最后一个 } 的位置（截断备选）
         for i in range(first_brace, len(text)):
             ch = text[i]
             if escape:
@@ -143,17 +168,30 @@ class LLMClient(ABC):
                 continue
             if not in_string:
                 if ch == '{':
-                    depth += 1
+                    stack.append('{')
                 elif ch == '}':
-                    depth -= 1
-                    if depth == 0:
+                    if stack and stack[-1] == '{':
+                        stack.pop()
+                    last_brace_pos = i
+                    if not stack:
                         match_end = i
                         break
+                elif ch == '[':
+                    stack.append('[')
+                elif ch == ']':
+                    if stack and stack[-1] == '[':
+                        stack.pop()
 
-        if match_end == -1:
-            return None
-
-        candidate = text[first_brace : match_end + 1]
+        if match_end == -1 and last_brace_pos != -1:
+            # 截断 JSON: 用栈中剩余括号按逆序生成关闭序列
+            closing_map = {'{': '}', '[': ']'}
+            closing = ''.join(closing_map[b] for b in reversed(stack))
+            candidate = text[first_brace : last_brace_pos + 1] + closing
+        elif match_end == -1:
+            # 完全无括号: 用文本末尾 + 单一 }
+            candidate = text[first_brace:] + "}"
+        else:
+            candidate = text[first_brace : match_end + 1]
 
         # 尝试直接解析
         try:
@@ -199,6 +237,36 @@ class LLMClient(ABC):
                 last_comma = i
                 break
         return last_comma
+
+    @staticmethod
+    def _escape_newlines_in_json(text: str) -> str:
+        """将 JSON 字符串值内的原始换行符替换为 \\n。
+
+        LLM 生成的 JSON 中，code 字段的 Python 代码常包含实际换行符
+        （而非 \\n 转义序列），导致 json.loads 失败。此方法跟踪字符串
+        上下文，仅替换字符串内的换行符。
+        """
+        result: list[str] = []
+        in_string = False
+        escape = False
+        for ch in text:
+            if escape:
+                result.append(ch)
+                escape = False
+                continue
+            if ch == '\\' and in_string:
+                result.append(ch)
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                result.append(ch)
+                continue
+            if in_string and ch in '\n\r':
+                result.append('\\n')
+                continue
+            result.append(ch)
+        return ''.join(result)
 
     def bootstrap_factors(
         self,
@@ -303,7 +371,7 @@ class OpenAIClient(LLMClient):
         for attempt in range(max_attempts):
             # 第 1 步: 调用 complete()
             try:
-                raw_text, _ = self.complete(prompt, max_tokens=4000)
+                raw_text, _ = self.complete(prompt, max_tokens=16000)
             except Exception as e:
                 elapsed = (time.time() - t0) * 1000
                 if attempt == max_attempts - 1:
@@ -317,6 +385,15 @@ class OpenAIClient(LLMClient):
                     attempt + 1, trace_id, elapsed, e,
                 )
                 continue
+
+            # 调试: 保存原始响应用于分析
+            debug_path = f"debug_llm_response_{trace_id}_{attempt}.txt"
+            try:
+                with open(debug_path, "w", encoding="utf-8") as f:
+                    f.write(raw_text)
+                logger.info("[bootstrap_factors] 原始响应已保存: %s, len=%d", debug_path, len(raw_text))
+            except Exception as de:
+                logger.warning("[bootstrap_factors] 保存调试文件失败: %s", de)
 
             # 第 2 步: 解析 JSON
             try:
@@ -400,11 +477,15 @@ class OpenAIClient(LLMClient):
 ❌ 忘记 import numpy as np
 ❌ 未保持输出长度
 ❌ 输出值超出 [-1, 1] 范围
+❌ code 字段包含实际换行符！必须使用 \\n 转义序列替代实际换行符
 
 【输出格式 — 必须严格遵守】
 - 输出必须是 **纯 JSON 格式**，不包含任何 markdown 代码块标记（```json）
 - 不要添加任何额外的文字说明或注释
 - 只输出 JSON 对象本身
+- **code 字段必须使用 \\n 转义实际换行符**（即整个 code 值占一行）
+  - 错误: "code": "def f():\n    return 1"
+  - 正确: "code": "def f():\\n    return 1"
 
 【JSON 结构】
 {{

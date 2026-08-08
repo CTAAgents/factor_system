@@ -27,6 +27,7 @@ HARNESS §5.3 契约优先: 实现 BaseFuturesSource 抽象方法。
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
@@ -413,6 +414,137 @@ class IFindSource(BaseFuturesSource):
                 "fetched_at": pd.Timestamp.now().isoformat(),
             })
         return result
+
+    # ─── EDB 宏观时序（edb_cache 缓存 → miss 拉取 → 幂等写回）──
+
+    def get_macro_series(
+        self,
+        indicator: str,
+        start_date: str = "",
+        end_date: str = "",
+        db_path: Optional[Path] = None,
+        trace_id: str = "",
+    ) -> Optional[pd.Series]:
+        """获取 EDB 宏观指标时序（优先读 edb_cache 缓存，miss 拉取并写回）。
+
+        Args:
+            indicator: 指标中文名（如 "中国出口金额当月值"）
+            start_date: 起始日期 YYYY-MM-DD（可选）
+            end_date: 截止日期 YYYY-MM-DD（可选）
+            db_path: DuckDB 路径（默认 data/fts_history.duckdb）
+            trace_id: 链路追踪 ID
+
+        Returns:
+            DatetimeIndex Series（date → value），缓存与拉取均失败返回 None。
+        """
+        if db_path is None:
+            db_path = Path(__file__).resolve().parent.parent / "data" / "fts_history.duckdb"
+        db_path = Path(db_path)
+
+        # 1) 查 edb_cache 缓存
+        cached = self._read_edb_cache(db_path, indicator, start_date, end_date)
+        if cached is not None and not cached.empty:
+            logger.debug("[%s] edb_cache 命中 [%s]: %d 点",
+                         self.source_name, indicator, len(cached))
+            return cached
+
+        # 2) miss → 拉取 EDB
+        rows = self.fetch_edb(indicator, start_date, end_date, trace_id=trace_id)
+        if not rows:
+            return None
+
+        # 3) 幂等写回缓存
+        self._write_edb_cache(db_path, rows)
+
+        # 4) 构造 Series
+        series = self._rows_to_series(rows)
+        logger.info("[%s] EDB 拉取 [%s]: %d 点，已写 edb_cache",
+                    self.source_name, indicator, len(series))
+        return series
+
+    @staticmethod
+    def _read_edb_cache(
+        db_path: Path,
+        indicator: str,
+        start_date: str = "",
+        end_date: str = "",
+    ) -> Optional[pd.Series]:
+        """从 edb_cache 读取指标时序。表不存在/无数据 → None。"""
+        if not db_path.exists():
+            return None
+        try:
+            import duckdb  # type: ignore[import-untyped]
+
+            con = duckdb.connect(str(db_path), read_only=True)
+            try:
+                sql = """
+                    SELECT date, value FROM edb_cache
+                    WHERE indicator = ? AND value IS NOT NULL
+                """
+                params: list[Any] = [indicator]
+                if start_date:
+                    sql += " AND date >= CAST(? AS DATE)"
+                    params.append(start_date)
+                if end_date:
+                    sql += " AND date <= CAST(? AS DATE)"
+                    params.append(end_date)
+                sql += " ORDER BY date"
+                df = con.execute(sql, params).df()
+            finally:
+                con.close()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[IFIND] edb_cache 读取失败 [%s]: %s", indicator, e)
+            return None
+        if df.empty:
+            return None
+        return pd.Series(df["value"].values, index=pd.to_datetime(df["date"]))
+
+    @staticmethod
+    def _write_edb_cache(db_path: Path, rows: list[dict[str, Any]]) -> None:
+        """将 EDB 数据点幂等写入 edb_cache（INSERT OR REPLACE）。失败不抛异常。"""
+        if not rows:
+            return
+        try:
+            import duckdb  # type: ignore[import-untyped]
+            from fts.data_sources.migrate import migrate_schema
+
+            # migrate_schema 接收 db_path（非连接），先建表
+            migrate_schema(str(db_path))
+            con = duckdb.connect(str(db_path))
+            try:
+                for row in rows:
+                    con.execute(
+                        """
+                        INSERT OR REPLACE INTO edb_cache
+                            (indicator, date, value, unit, source, fetched_at, trace_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            row.get("indicator", ""),
+                            str(row.get("date", ""))[:10],
+                            row.get("value"),
+                            row.get("unit", ""),
+                            row.get("source", "IFIND"),
+                            pd.Timestamp.now().isoformat(),
+                            row.get("trace_id", ""),
+                        ],
+                    )
+            finally:
+                con.close()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[IFIND] edb_cache 写入失败: %s", e)
+
+    @staticmethod
+    def _rows_to_series(rows: list[dict[str, Any]]) -> pd.Series:
+        """将 EDB 数据点列表转换为 DatetimeIndex Series（按日期升序）。"""
+        valid = [r for r in rows if r.get("date") and r.get("value") is not None]
+        valid.sort(key=lambda r: str(r["date"]))
+        if not valid:
+            return pd.Series(dtype=float)
+        return pd.Series(
+            [float(r["value"]) for r in valid],
+            index=pd.to_datetime([str(r["date"])[:10] for r in valid]),
+        )
 
     # ─── 内部辅助 ──
 

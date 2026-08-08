@@ -61,3 +61,11 @@ reports/
 .coverage
 htmlcov/
 coverage.xml
+
+# Debug LLM responses (may contain request/response content)
+debug_llm_response_*.txt
+
+# Run artifacts
+output/
+signals/
+test_full_run.log

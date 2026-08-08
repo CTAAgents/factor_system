@@ -261,6 +261,7 @@ class EvolutionLoop:
         forward_returns: np.ndarray,
         elite_dir: str | Path | None = None,
         memory_dir: str | Path = "memory/evolution",
+        inject_dir: str | Path = "memory/knowledge/factors/l1_injected",
         budget: Optional[BudgetConfig] = None,
         verifier: Optional[FactorVerifier] = None,
         llm_client: Optional[Any] = None,
@@ -292,6 +293,7 @@ class EvolutionLoop:
                 elite_dir = "memory/knowledge/factors/elite"
         self.elite_dir = Path(elite_dir)
         self.elite_dir.mkdir(parents=True, exist_ok=True)
+        self.inject_dir = Path(inject_dir)
         self.memory_dir = Path(memory_dir)
         self.budget: BudgetConfig = budget or DEFAULT_BUDGET_CONFIG
         self.verifier = verifier or get_global_verifier()
@@ -451,10 +453,15 @@ class EvolutionLoop:
 
         try:
             # ── Step 0: 种子因子相关性预检（轻量扫描，仅标记不删除） ──
+            print("[DEBUG-evo] 开始加载种子因子...")
             seeds = self.seed_pool.load_all_seeds()
+            print(f"[DEBUG-evo] 种子因子加载完成: {len(seeds)} 个")
             # GAP-031: 合并 L1 注入候选（pending 门控 + market 过滤 + 去重），
             # 与种子同等参与相关性预检与种子评估晋升
+            print("[DEBUG-evo] 开始合并 L1 候选...")
             seeds = self._merge_l1_candidates(seeds, trace_id)
+            print(f"[DEBUG-evo] 合并 L1 候选完成, 种子总数: {len(seeds)}")
+            print("[DEBUG-evo] 开始种子相关性预检...")
             seed_correlations = self._run_seed_correlation_check(seeds, trace_id)
             if seed_correlations:
                 high_corr_count = len(seed_correlations)
@@ -466,6 +473,8 @@ class EvolutionLoop:
                     print(f"  ... 还有 {high_corr_count - 5} 对")
 
             # ── Step 1: 评估种子因子，合格直接晋升 elite ──
+            print(f"[DEBUG-evo] 种子相关性预检完成: {len(seed_correlations)} 对高相关因子")
+            print("[DEBUG-evo] 开始评估种子因子 (184 个, 横截面模式)... 这可能需要较长时间")
             promoted_seeds = self._evaluate_and_promote_seeds(
                 seeds, trace_id, state, elite_ids,
                 seed_correlations=seed_correlations,
@@ -473,6 +482,7 @@ class EvolutionLoop:
             if promoted_seeds > 0:
                 print(f"[evo] 种子因子晋升: {promoted_seeds} 个")
 
+            print(f"[DEBUG-evo] 种子评估完成, 晋升: {promoted_seeds} 个, elite_ids: {len(elite_ids)}")
             # 使用已晋升的种子作为父因子（只有高IC种子才值得演化）
             parent_seeds = [s for s in seeds if s["factor_id"] in elite_ids]
             # 种子因子全部已存在 elite 快照（重复跳过、无新晋升）时，
@@ -499,6 +509,7 @@ class EvolutionLoop:
 
             for generation in range(start_gen, start_gen + max_gen):
                 # 熔断检查
+                print(f"[DEBUG-evo] gen={generation} _consecutive_low_ic={self._consecutive_low_ic}")
                 cb_reason = self._check_circuit_breaker(state)
                 if cb_reason:
                     self.state_manager.mark_circuit_broken(state, cb_reason)
@@ -674,6 +685,8 @@ class EvolutionLoop:
 
                 # ── Step 4: Verifier 判定 ──
                 verifier_result = self.verifier.check(evaluation)
+                print(f"[DEBUG-evo] verifier_result={verifier_result}")
+                print(f"[DEBUG-evo] evaluation.get('level_1_backtest')={evaluation.get('level_1_backtest')}")
 
                 # ── Step 4.5: 因子质量评分卡 (Phase A.1) ──
                 inspection: _QualityInspectionResult = self.quality_inspector.inspect(
@@ -711,7 +724,9 @@ class EvolutionLoop:
                 )
 
                 # ── Step 5: 经验链记录 + 分级准入 ──
+                print(f"[DEBUG-evo] verifier_result['passed']={verifier_result.get('passed')}")
                 if verifier_result["passed"]:
+                    print(f"[DEBUG-evo] PROMOTION PATH")
                     # 质检过滤: 仅 A/B 级晋升，C 级淘汰
                     if inspection.filtered:
                         self._log_inspection_detail(
@@ -815,6 +830,7 @@ class EvolutionLoop:
                         trace_id,
                     )
                     self._consecutive_low_ic = 0
+                    print(f"[DEBUG-evo] promotion path: _consecutive_low_ic reset to 0")
                 else:
                     # 失败轨迹
                     self._record_failure_trace(
@@ -827,8 +843,10 @@ class EvolutionLoop:
                     bt = evaluation.get("level_1_backtest", {})
                     if abs(bt.get("ic", 0)) < self.budget["circuit_breaker_low_ic_threshold"]:
                         self._consecutive_low_ic += 1
+                        print(f"[DEBUG-evo] failure path, low IC: _consecutive_low_ic incremented to {self._consecutive_low_ic}")
                     else:
                         self._consecutive_low_ic = 0
+                        print(f"[DEBUG-evo] failure path, not low IC: _consecutive_low_ic reset to 0")
 
                 # ── Step 6: 状态持久化 ──
                 state["last_generation"] = generation
@@ -838,6 +856,7 @@ class EvolutionLoop:
                 self.experience_chain.cleanup_if_needed()
 
             # 正常完成
+            print(f"[DEBUG-evo] before mark_completed: _consecutive_low_ic={self._consecutive_low_ic}")
             self.state_manager.mark_completed(state)
             return EvolutionRunResult(
                 run_id=run_id, trace_id=trace_id,
@@ -851,6 +870,8 @@ class EvolutionLoop:
             )
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self.state_manager.mark_paused(state, str(e))
             return EvolutionRunResult(
                 run_id=run_id, trace_id=trace_id,
@@ -1052,7 +1073,7 @@ class EvolutionLoop:
 
         # ── 家族多样性检查：限制单一家族因子数量，避免演化收敛过度集中 ──
         factor_family = factor.get("family", "unknown")
-        max_per_family = self.budget.get("max_per_family", 3)
+        max_per_family = self.budget.get("max_per_family", 15)
         try:
             repo = self._get_repo()
             existing_family = repo.get_by_family(
@@ -1161,6 +1182,22 @@ class EvolutionLoop:
             print(f"[evo] ❌ 晋升失败 [{factor.get('name', '?')}]: "
                   f"DuckDB 写入失败，已回滚 JSON 快照 {fp.name}")
             return None
+
+        # ── ★ GAP-036: 激进清理 — L1 注入候选晋升精英后删除 l1_injected 文件 ──
+        # 非阻塞：删除失败不影响晋升，仅记录 warning
+        f_source = factor.get("source", "")
+        f_parent_id = factor.get("parent_id")
+        if f_source == "bootstrapping" and f_parent_id and self.inject_dir.exists():
+            cand_file = self.inject_dir / f"{f_parent_id}.json"
+            try:
+                if cand_file.exists():
+                    cand_file.unlink()
+                    logger.info(
+                        "[GAP-036] 已删除 L1 注入候选文件: %s (factor=%s, source=%s)",
+                        cand_file.name, factor.get("name", "?"), f_source,
+                    )
+            except OSError as e:
+                logger.warning("[GAP-036] 删除 L1 候选文件失败: %s, err=%s", cand_file.name, e)
 
         # ── ★ 种子溯源写入 (seed_lineage) ──
         # 非阻塞：溯源写入失败不影响晋升，仅记录 warning
@@ -1505,7 +1542,7 @@ class EvolutionLoop:
         """
         import json
 
-        inject_dir = Path("memory/knowledge/factors/l1_injected")
+        inject_dir = self.inject_dir
         pool_path = Path("memory/knowledge/factors/factor_pool.json")
         if not inject_dir.exists():
             return seeds
@@ -1514,16 +1551,40 @@ class EvolutionLoop:
         pending_ids: set[str] = set()
         pool_loaded = False
         pool_data: Optional[dict[str, Any]] = None
+        # 已消费 ID 集合（用于历史遗留文件清理）
+        consumed_ids_set: set[str] = set()
         if pool_path.exists():
             try:
                 pool_data = json.loads(pool_path.read_text(encoding="utf-8"))
-                pending_ids = {
-                    f.get("factor_id") for f in pool_data.get("factors", [])
-                    if f.get("status") == "pending" and f.get("factor_id")
-                }
+                for f in pool_data.get("factors", []):
+                    fid = f.get("factor_id")
+                    if not fid:
+                        continue
+                    if f.get("status") == "pending":
+                        pending_ids.add(fid)
+                    else:
+                        consumed_ids_set.add(fid)
                 pool_loaded = True
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("[L1.merge] factor_pool.json 读取失败，退化为扫描全部候选: %s", e)
+
+        # GAP-036: 历史遗留清理 — 删除已消费（非 pending）的 l1_injected 文件
+        # 这些文件由旧版 L1 产生，消费后未删除，现一次性清理
+        if consumed_ids_set:
+            cleaned_count = 0
+            for cand_file in list(inject_dir.glob("cand_*.json")):
+                try:
+                    cand_id = cand_file.stem  # 如 "cand_d6bd0140"
+                    if cand_id in consumed_ids_set:
+                        cand_file.unlink()
+                        cleaned_count += 1
+                except (OSError, json.JSONDecodeError):
+                    pass
+            if cleaned_count:
+                logger.info(
+                    "[GAP-036] 历史遗留清理: 删除 %d 个已消费的 L1 候选文件",
+                    cleaned_count,
+                )
 
         # 2. 已有种子名称集（去重基准）
         from .factor_program import create_factor_program
@@ -1593,6 +1654,17 @@ class EvolutionLoop:
                 cand_name, cand_id, cand_market,
             )
 
+            # GAP-036: 消费后立即删除 l1_injected 文件（激进清理，非阻塞）
+            try:
+                if cand_file.exists():
+                    cand_file.unlink()
+                    logger.info(
+                        "[GAP-036] 消费后删除 L1 候选文件: %s (name=%s)",
+                        cand_file.name, cand_name,
+                    )
+            except OSError as e:
+                logger.warning("[GAP-036] 删除 L1 候选文件失败: %s, err=%s", cand_file.name, e)
+
         # 4. 幂等: factor_pool.json pending → injected
         if consumed_ids and pool_data is not None:
             for entry in pool_data.get("factors", []):
@@ -1625,6 +1697,7 @@ class EvolutionLoop:
         设计原则:
         - 不过早删除：因子相关性是市场状态依赖的，当前相关≠永久相关
         - 仅做标记：高相关对记录到 metadata，L3 决策时再处理
+        - 添加超时保护：5 分钟超时自动跳过，防止卡死演化流程
 
         Args:
             seeds: 种子因子列表
@@ -1633,6 +1706,13 @@ class EvolutionLoop:
         Returns:
             list[FactorCorrelation] — 超过阈值的高相关因子对
         """
+        # 期货横截面模式: 184 种子 × 25 品种 × 500 日 = 超大规模计算，跳过
+        # 原因：compute_cross_section_correlations 在 184 种子 × 25 品种下耗时 > 10 分钟
+        # 且 ThreadPoolExecutor timeout 无法中断卡在 numpy/scipy C 扩展中的线程
+        # 仅做标记不删除，L3 组合时通过 ACTIVE_FACTOR_CAP 和 Elastic Net 控制冗余
+        if self._is_cross_section and len(seeds) > 50:
+            print(f"[evo] 种子因子相关性预检跳过: {len(seeds)} 种子，横截面模式计算量过大")
+            return []
         try:
             if self._is_cross_section:
                 # 期货横截面模式: 截面排名 Spearman 相关

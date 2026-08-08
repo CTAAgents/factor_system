@@ -1,7 +1,7 @@
 # FTS 测试策略
 
-> 版本: v2.22.0
-> 最后更新: 2026-08-07
+> 版本: v2.39.0
+> 最后更新: 2026-08-08
 
 ---
 
@@ -22,10 +22,10 @@
 
 | 层级 | 测试文件数 | 用例数 | 说明 |
 |:-----|:----------|:-------|:-----|
-| 单元测试 | 90+ | ~2600 | 各模块独立测试（含基本面数据层 + 信号管道 + 消融实验 + 风险标签 + 场景测试 + SHAP分析 + 鲁棒性 + 因果验证 + 逻辑监控 + 种子因子相关性预检 + DuckDB因子仓库 + 因子相关性矩阵 + 因子血缘审计 + 失败模式分类 + 因子巡检 + 生命周期E2E闭环 + 回测流水线 + 后代因子运行时校验 + FTS-Expr DSL 算子因子 + GP 多父代交叉 + 快速预筛选 + 评分卡配置 + **算子演化引擎（C.4，13 用例）** + **L1→L2 候选合并（GAP-031，8 用例）** + **L2 晋升双写原子化（GAP-032，4 用例）** + **factor_db_path 测试隔离注入（GAP-030，2 用例）** + **SectorRegimeSelector 产业链级制度检测（9 用例）** + **L1 候选因子评分缺陷修复（150 测试全绿）**） |
+| 单元测试 | 90+ | ~2600 | 各模块独立测试（含基本面数据层 + 信号管道 + 消融实验 + 风险标签 + 场景测试 + SHAP分析 + 鲁棒性 + 因果验证 + 逻辑监控 + 种子因子相关性预检 + DuckDB因子仓库 + 因子相关性矩阵 + 因子血缘审计 + 失败模式分类 + 因子巡检 + 生命周期E2E闭环 + 回测流水线 + 后代因子运行时校验 + FTS-Expr DSL 算子因子 + GP 多父代交叉 + 快速预筛选 + 评分卡配置 + **算子演化引擎（C.4，13 用例）** + **L1→L2 候选合并（GAP-031，8 用例）** + **L2 晋升双写原子化（GAP-032，4 用例）** + **factor_db_path 测试隔离注入（GAP-030，2 用例）** + **SectorRegimeSelector 产业链级制度检测（9 用例）** + **L1 候选因子评分缺陷修复（150 测试全绿）** + **分钟级回测频率自适应（3 用例）** + **ML 模型层（v2.38.0，~30 用例）** + **SignalBridge 信号桥接（v2.38.0，~25 用例）**） |
 | 集成测试 | 5 | ~200 | strategies 策略层 + 演化循环集成 + 数据源聚合 + 期货同步 |
 | E2E | 2 | 24 | test_e2e.py(10) + test_factor_lifecycle.py(14) |
-|│ 合计 | 100+ | 2200 | 2043+ passed（432 passed in latest run, 9 sector regime tests all green） |
+|│ 合计 | 100+ | 2220 | 2359+ passed（20 cross-market tests all green，v2.33.0 新增 bincount 边界 12 用例 + g 因子 NaN 防护 12 用例 + repository 事务修复 3 用例，v2.34.0 批量防护 232 用例，v2.38.0 新增 ML 模型层 ~30 用例 + SignalBridge ~25 用例） |
 
 ---
 
@@ -110,6 +110,7 @@ tests/
 ├── test_data.py                     # 数据层测试
 ├── test_data_futures_panel.py       # 期货面板 common_dates 多数对齐 + 方向校正日期定位测试
 ├── test_futures_signal_pipeline.py  # 期货信号管道 Ridge 回归加权 + 方向校正 + 组合合成测试
+├── test_cross_market.py             # 跨市场泛化验证测试（20 用例，含数据适配/分类/报告/集成）
 ├── test_llm.py                      # LLM 客户端测试
 └── test_monitor.py                  # 项目级 monitor 测试
 ```
@@ -149,10 +150,10 @@ python -m pytest tests/factor_engine/test_verifier.py -v
 |:-----|:---|
 | Total statements | 6200+ |
 | Overall coverage | 92%+ |
-| 测试用例数 | 2020+ passed, 0 failed, 0 skipped |
-| 测试文件数 | 51+ |
+| 测试用例数 | 2102+ passed, 0 failed, 0 skipped |
+| 测试文件数 | 52+ |
 | 种子因子数 | 563（YAML 化管理，19 个文件） |
-| 精英因子数 | 680（DuckDB 存储） |
+| 精英因子数 | 674（DuckDB 存储，v2.33.0 淘汰 fut_macro_export 家族 6 个） |
 | 期货专用种子 | 12 大因子家族 50+ 子因子 |
 | 因子相关性记录 | 4950 条（100 因子 × 两两组合） |
 
@@ -301,6 +302,11 @@ TOTAL                                       6229    533    91%
 
 | 测试文件 | 用例数 | 覆盖模块 |
 |:---------|:-------|:---------|
+| `tests/data_sources/test_tqsdk_tick_source.py` | 10 | TQSDK tick 数据源（品种映射/tick 解析/tick_cache 迁移/降级链/Provider 接口） |
+| `tests/data_sources/test_tdx_minute_source.py` | 29 | 通达信分钟适配器（主力连续代码映射/列字典解析/周期映射） |
+| `tests/data_sources/test_macro_aligner.py` | ~8 | 宏观字段增强层（EDB 缓存读写/时序对齐/发布滞后/缺数据降级/批量注入） |
+| `tests/factor_engine/test_bincount_boundary.py` | 253 | np.bincount 输入边界 + 同族因子 NaN 防护（3 bincount 因子 × 3 + 4 g 因子 × 3 + v2.34.0 批量防护 77 因子 × 3 动态扫描 + 1 扫描断言） |
+| `tests/factor_engine/test_backtest_frequency.py` | 26 | 分钟级回测频率自适应（年化因子/z-score 窗口/成本模型/绩效年化） |
 | `tests/core/test_atomic.py` | ~32 | 原子操作 |
 | `tests/core/test_contracts.py` | ~39 | core contracts |
 | `tests/core/test_enums.py` | ~17 | enums |
@@ -347,6 +353,7 @@ TOTAL                                       6229    533    91%
 | `tests/test_e2e.py` | ~10 | 端到端集成 |
 | `tests/test_elite_tracker.py` | ~72 | Elite 因子跟踪 |
 | `tests/test_http_server.py` | ~31 | Web UI 仪表盘 |
+| `tests/test_cross_market.py` | ~20 | 跨市场泛化验证（数据适配/分类/报告/集成/边缘情况） |
 | `tests/test_futures_signal_pipeline.py` | ~21 | 信号管道 Ridge 回归加权 + 方向校正 + 组合合成 |
 | `tests/test_llm.py` | ~36 | LLM 客户端 |
 | `tests/test_monitor.py` | ~46 | 项目级监控 |
@@ -362,7 +369,10 @@ TOTAL                                       6229    533    91%
 | `tests/factor_engine/test_feedback_loop.py` | ~20 | C.3 反馈闭环（Trigger/归因/方向调整/幂等/月度报告/CLI/指标/schema）（v2.9.0） |
 | `tests/test_cli_feature_gp.py` | ~5 | C.1 CLI（feature list/gp evolve/feature analyze 解析）（v2.9.0） |
 | `tests/test_stage5_risk_live.py` | ~27 | C.2 实盘对接（信号契约/风控/模拟适配/Live 偏离/指标/HTTP 端点）（v2.9.0） |
-| **合计** | **2066+** | |
+| `tests/test_ml_models.py` | ~30 | ML 模型层（LightGBM/XGBoost 模型封装/训练管线/导入防护/降级回退）（v2.38.0） |
+| `tests/test_bridge.py` | ~25 | SignalBridge 信号桥接（JSON/Redis/REST 协议/格式转换/CLI 桥接命令/Redis 降级）（v2.38.0） |
+| **合计** | **2157+** | |
+|
 
 ---
 
@@ -380,6 +390,6 @@ TOTAL                                       6229    533    91%
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `test_futures_signal_pipeline.py` → 21 个信号管道测试用例（Ridge 回归加权 + 方向校正 + 组合合成）；`test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面）；`test_seed_pool.py` → 种子池测试（含期货种子）；`factor_db/test_*` → 54 个 DuckDB 因子仓库测试用例；`test_gp_evolver.py::TestGpFactorExecutable` → 5 个 GP 因子代码可执行性测试用例（v2.8.4）；`test_expr_*.py` → FTS-Expr DSL 算子因子测试（v2.8.5）；`test_backtest_stage3.py` → 27 个 B.2 回测增强用例（v2.9.0）；`test_feedback_loop.py` → 20 个 C.3 反馈闭环用例（v2.9.0）；`test_cli_feature_gp.py` → 5 个 C.1 CLI 用例（v2.9.0）；`test_stage5_risk_live.py` → 27 个 C.2 实盘对接用例（v2.9.0）；`test_portfolio_loop.py` → 20 个漂移治理用例（粘性约束 7 + 漂移监控 7 + 影子池 6，v2.11.0）；`test_evolution_loop.py` → 4 个 L2 晋升双写原子化用例（DuckDB 失败回滚 JSON，v2.13.0）+ 2 个 factor_db_path 注入用例（GAP-030 测试隔离，v2.14.0） |
-| 可验证断言 | 总测试数 = 2043+ passed |
+| 代码→文档映射 | `test_futures_signal_pipeline.py` → 21 个信号管道测试用例（Ridge 回归加权 + 方向校正 + 组合合成）；`test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面）；`test_seed_pool.py` → 种子池测试（含期货种子）；`factor_db/test_*` → 54 个 DuckDB 因子仓库测试用例；`test_gp_evolver.py::TestGpFactorExecutable` → 5 个 GP 因子代码可执行性测试用例（v2.8.4）；`test_expr_*.py` → FTS-Expr DSL 算子因子测试（v2.8.5）；`test_backtest_stage3.py` → 27 个 B.2 回测增强用例（v2.9.0）；`test_feedback_loop.py` → 20 个 C.3 反馈闭环用例（v2.9.0）；`test_cli_feature_gp.py` → 5 个 C.1 CLI 用例（v2.9.0）；`test_stage5_risk_live.py` → 27 个 C.2 实盘对接用例（v2.9.0）；`test_portfolio_loop.py` → 20 个漂移治理用例（粘性约束 7 + 漂移监控 7 + 影子池 6，v2.11.0）；`test_evolution_loop.py` → 4 个 L2 晋升双写原子化用例（DuckDB 失败回滚 JSON，v2.13.0）+ 2 个 factor_db_path 注入用例（GAP-030 测试隔离，v2.14.0）；`test_cross_market.py` → 20 个跨市场泛化验证用例（数据适配/分类/报告/加载/边缘情况/集成，v2.27.0）；`test_tdx_minute_source.py` → 29 个通达信分钟适配器用例（主力连续代码映射/列字典解析/周期映射，v2.30.0）；`test_tqsdk_tick_source.py` → 10 个 TQSDK tick 数据源用例（品种映射/tick 解析/tick_cache 迁移/降级链/Provider 接口，v2.31.0） |
+| 可验证断言 | 总测试数 = 2102+ passed（portfolio_loop 90 测试全绿，scheduler tasks 验证通过，Elastic Net + ACTIVE_FACTOR_CAP 无回归）；v2.38.0 新增 ML 模型层 + SignalBridge 测试后总测试数 ≥ 2157+ |
 | 检验方式 | `python -m pytest tests/ --no-cov -q 2>&1 | Select-String "passed"` |

@@ -85,6 +85,8 @@ class FuturesDataAggregator:
         self,
         sources: list[BaseFuturesSource] | None = None,
         enhancers: list[BaseFuturesSource] | None = None,
+        minute_sources: list[BaseFuturesSource] | None = None,  # v2.30.0: 分钟数据源
+        tick_sources: list[BaseFuturesSource] | None = None,    # v2.31.0: tick 数据源
         db_path: Path | str | None = None,
         circuit_breaker_threshold: int = 5,
         circuit_breaker_cooldown_seconds: float = 6 * 3600,
@@ -98,6 +100,8 @@ class FuturesDataAggregator:
         Args:
             sources: K 线主路径数据源列表（按优先级）
             enhancers: 字段增强层数据源列表（并行）
+            minute_sources: 分钟数据源列表（v2.30.0，按优先级：TDX → TQ-Local → TQSDK）
+            tick_sources: tick 逐笔数据源列表（v2.31.0，按优先级）
             db_path: DuckDB 缓存路径（None 时禁用缓存）
             circuit_breaker_threshold: 连续失败次数阈值（默认 5）
             circuit_breaker_cooldown_seconds: 熔断冷却秒数（默认 6 小时）
@@ -109,6 +113,8 @@ class FuturesDataAggregator:
         """
         self.sources = sources or []
         self.enhancers = enhancers or []
+        self.minute_sources = minute_sources or []  # v2.30.0: 分钟数据源
+        self.tick_sources = tick_sources or []      # v2.31.0: tick 数据源
         self.db_path = Path(db_path) if db_path else None
         self.circuit_breaker_threshold = circuit_breaker_threshold
         self.circuit_breaker_cooldown = circuit_breaker_cooldown_seconds
@@ -189,6 +195,313 @@ class FuturesDataAggregator:
         self._write_cache(synth_df)
         return synth_df
 
+    # ─── 分钟级 K 线（v2.30.0）───────────────────────────
+
+    def get_minute_ohlcv(
+        self,
+        symbol: str,
+        days: int = 500,
+        frequency: str = "5m",
+        trace_id: str = "",
+    ) -> pd.DataFrame:
+        """获取分钟级 K 线数据（minute_cache 缓存 → 分钟级数据源降级）。
+
+        分钟数据路径（按优先级）:
+            1. minute_cache（DuckDB 缓存，命中且新鲜）
+            2. TDXMinuteSource（通达信 HTTP 17709）
+            3. TQLocalSource（通达信 HTTP 7721，带 period 参数）
+            4. TQSDKSource（天勤 TQSDK，带 period 参数）
+
+        Args:
+            symbol: 品种代码（如 "RB0"）
+            days: 回溯 K 线根数
+            frequency: 分钟频率，支持 "1m" / "5m" / "15m" / "30m" / "60m"
+            trace_id: 链路追踪 ID
+
+        Returns:
+            含分钟级 schema 的 DataFrame（11 列），所有源失败时返回空 DataFrame。
+        """
+        # 1) 尝试 minute_cache
+        df = self._try_minute_cache(symbol, days, frequency)
+        if df is not None and not df.empty:
+            return df
+
+        # 2) 依次尝试分钟数据源（按请求频率匹配源，不匹配时动态重建）
+        for src in self.minute_sources:
+            # 源支持动态周期时，按请求频率重建（TDX/TQ-Local/TQSDK 均支持）
+            try:
+                if getattr(src, "period", None) is not None and src.period != frequency:
+                    src = type(src)(period=frequency)
+            except Exception:  # noqa: BLE001
+                logger.debug("[%s] 无法按频率 %s 重建源，跳过", src.source_name, frequency)
+                continue
+
+            source = src
+            if self._is_circuit_open(source.source_name):
+                logger.debug("[%s] 熔断器 OPEN，跳过分钟源", source.source_name)
+                continue
+
+            try:
+                df = source.fetch_ohlcv(symbol, days, trace_id=trace_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[%s] 分钟级 fetch_ohlcv 异常 [%s]: %s",
+                               source.source_name, symbol, e)
+                self._record_failure(source.source_name, str(e))
+                continue
+
+            if df is not None and not df.empty:
+                self._record_success(source.source_name)
+                # 截取最近 days 行
+                if len(df) > days:
+                    df = df.tail(days).reset_index(drop=True)
+                # 写入 minute_cache
+                self._write_minute_cache(df, frequency)
+                return df
+
+            logger.debug("[%s] 分钟数据返回空", source.source_name)
+
+        # 3) 所有分钟源失败 → 返回空 DataFrame（minute_cache schema）
+        logger.warning("[%s] 所有分钟数据源失败，frequency=%s", symbol, frequency)
+        return pd.DataFrame(
+            columns=["symbol", "period", "datetime", "open", "high", "low",
+                     "close", "volume", "source", "fetched_at", "trace_id"]
+        )
+
+    def _try_minute_cache(
+        self,
+        symbol: str,
+        days: int,
+        frequency: str,
+    ) -> Optional[pd.DataFrame]:
+        """尝试从 minute_cache 读取分钟数据。
+
+        两步检查:
+          1. 新鲜度: 缓存中最新的 datetime >= now - cache_max_age_days
+          2. 大小: 返回足够的数据行（≥ days 的 80%）
+        """
+        if self.db_path is None or not self.db_path.exists():
+            return None
+
+        con = self._get_cache_conn()
+        if con is None:
+            return None
+
+        try:
+            # 品种匹配兼容
+            sym_variants = [symbol, f"{symbol}.SHFE", f"{symbol}.DCE",
+                            f"{symbol}.CZCE", f"{symbol}.CFFEX"]
+            placeholders = ",".join(["?"] * len(sym_variants))
+
+            # 新鲜度检查
+            cutoff = (pd.Timestamp.now() - pd.Timedelta(days=self.cache_max_age_days))
+            latest = con.execute(
+                f"""
+                SELECT MAX(datetime) FROM minute_cache
+                WHERE symbol IN ({placeholders}) AND period = ?
+                """,
+                [*sym_variants, frequency],
+            ).fetchone()
+            if latest is None or latest[0] is None:
+                return None
+            if pd.Timestamp(latest[0]) < cutoff:
+                logger.debug("[minute_cache] 过期: symbol=%s, latest=%s, cutoff=%s",
+                             symbol, latest[0], cutoff)
+                return None
+
+            # 返回最近 days 行
+            df = con.execute(
+                f"""
+                SELECT symbol, period, datetime, open, high, low, close,
+                       volume, source, fetched_at, trace_id
+                FROM minute_cache
+                WHERE symbol IN ({placeholders}) AND period = ?
+                ORDER BY datetime DESC
+                LIMIT ?
+                """,
+                [*sym_variants, frequency, days],
+            ).df()
+            if df.empty:
+                return None
+            # 统一 symbol + 按时间升序
+            df["symbol"] = symbol
+            df = df.sort_values("datetime").reset_index(drop=True)
+            return df
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[minute_cache] 读取失败: %s", e)
+            return None
+
+    def _write_minute_cache(self, df: pd.DataFrame, frequency: str) -> None:
+        """将分钟数据写入 minute_cache。失败不抛异常。"""
+        if self.db_path is None or df.empty:
+            return
+        # 确保 schema 已迁移
+        try:
+            from fts.data_sources.migrate import migrate_schema
+            migrate_schema(self.db_path)
+        except Exception as e:
+            logger.warning("[minute_cache] migrate_schema 失败: %s", e)
+
+        con = self._get_cache_conn()
+        if con is None:
+            return
+        try:
+            con.register("df_new", df)
+            con.execute(
+                """
+                INSERT INTO minute_cache (
+                    symbol, period, datetime, open, high, low, close,
+                    volume, source, fetched_at, trace_id
+                )
+                SELECT
+                    symbol, period, datetime, open, high, low, close,
+                    volume, source, fetched_at, trace_id
+                FROM df_new
+                """
+            )
+            con.unregister("df_new")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[minute_cache] 写入失败: %s", e)
+
+    # ─── tick 逐笔数据路径（v2.31.0）──
+
+    def get_ticks(
+        self,
+        symbol: str,
+        count: int = 5000,
+        trace_id: str = "",
+    ) -> pd.DataFrame:
+        """获取 tick 逐笔数据（tick_cache → tick_sources 降级）。
+
+        Args:
+            symbol: 品种代码（如 "RB0"）
+            count: tick 行数
+            trace_id: 链路追踪 ID
+
+        Returns:
+            含 tick schema 的 DataFrame，所有源失败时返回空 DataFrame。
+        """
+        # 1) 尝试 tick_cache
+        df = self._try_tick_cache(symbol, count)
+        if df is not None and not df.empty:
+            return df
+
+        # 2) 依次尝试 tick 数据源
+        for source in self.tick_sources:
+            if self._is_circuit_open(source.source_name):
+                logger.debug("[%s] 熔断器 OPEN，跳过 tick 源", source.source_name)
+                continue
+
+            try:
+                df = source.fetch_ticks(symbol, count=count, trace_id=trace_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[%s] tick fetch 异常 [%s]: %s",
+                               source.source_name, symbol, e)
+                self._record_failure(source.source_name, str(e))
+                continue
+
+            if df is not None and not df.empty:
+                self._record_success(source.source_name)
+                if len(df) > count:
+                    df = df.tail(count).reset_index(drop=True)
+                self._write_tick_cache(df)
+                return df
+
+            logger.debug("[%s] tick 数据返回空", source.source_name)
+
+        # 3) 所有 tick 源失败 → 返回空 DataFrame
+        logger.warning("[%s] 所有 tick 数据源失败", symbol)
+        return pd.DataFrame()
+
+    def _try_tick_cache(
+        self,
+        symbol: str,
+        count: int,
+    ) -> Optional[pd.DataFrame]:
+        """尝试从 tick_cache 读取 tick 数据（按最新日期读取最近 count 行）。"""
+        if self.db_path is None or not self.db_path.exists():
+            return None
+
+        con = self._get_cache_conn()
+        if con is None:
+            return None
+
+        try:
+            # 表不存在（未迁移）时静默返回 None，避免警告噪音
+            exists = con.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'tick_cache'"
+            ).fetchone()[0]
+            if not exists:
+                return None
+
+            df = con.execute(
+                """
+                SELECT symbol, datetime, last_price, average, highest, lowest,
+                       volume, amount, open_interest,
+                       bid_price1, bid_volume1, ask_price1, ask_volume1,
+                       bid_price2, bid_volume2, ask_price2, ask_volume2,
+                       bid_price3, bid_volume3, ask_price3, ask_volume3,
+                       bid_price4, bid_volume4, ask_price4, ask_volume4,
+                       bid_price5, bid_volume5, ask_price5, ask_volume5,
+                       source, fetched_at, trace_id
+                FROM tick_cache
+                WHERE symbol = ?
+                ORDER BY datetime DESC
+                LIMIT ?
+                """,
+                [symbol, count],
+            ).df()
+            if df.empty:
+                return None
+            df["symbol"] = symbol
+            df = df.sort_values("datetime").reset_index(drop=True)
+            return df
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[tick_cache] 读取失败: %s", e)
+            return None
+
+    def _write_tick_cache(self, df: pd.DataFrame) -> None:
+        """将 tick 数据写入 tick_cache。失败不抛异常。"""
+        if self.db_path is None or df.empty:
+            return
+        try:
+            from fts.data_sources.migrate import migrate_schema
+            migrate_schema(self.db_path)
+        except Exception as e:
+            logger.warning("[tick_cache] migrate_schema 失败: %s", e)
+
+        con = self._get_cache_conn()
+        if con is None:
+            return
+        try:
+            con.register("df_new", df)
+            con.execute(
+                """
+                INSERT INTO tick_cache (
+                    symbol, datetime, last_price, average, highest, lowest,
+                    volume, amount, open_interest,
+                    bid_price1, bid_volume1, ask_price1, ask_volume1,
+                    bid_price2, bid_volume2, ask_price2, ask_volume2,
+                    bid_price3, bid_volume3, ask_price3, ask_volume3,
+                    bid_price4, bid_volume4, ask_price4, ask_volume4,
+                    bid_price5, bid_volume5, ask_price5, ask_volume5,
+                    source, fetched_at, trace_id
+                )
+                SELECT
+                    symbol, datetime, last_price, average, highest, lowest,
+                    volume, amount, open_interest,
+                    bid_price1, bid_volume1, ask_price1, ask_volume1,
+                    bid_price2, bid_volume2, ask_price2, ask_volume2,
+                    bid_price3, bid_volume3, ask_price3, ask_volume3,
+                    bid_price4, bid_volume4, ask_price4, ask_volume4,
+                    bid_price5, bid_volume5, ask_price5, ask_volume5,
+                    source, fetched_at, trace_id
+                FROM df_new
+                """
+            )
+            con.unregister("df_new")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[tick_cache] 写入失败: %s", e)
+
     # ─── 字段增强层 ──
 
     def _enhance_fields(
@@ -249,7 +562,12 @@ class FuturesDataAggregator:
         symbol: str,
         days: int,
     ) -> Optional[pd.DataFrame]:
-        """尝试从 DuckDB 缓存读取 K 线。"""
+        """尝试从 DuckDB 缓存读取 K 线。
+
+        两步检查:
+          1. 新鲜度检查: 缓存中最新的日期 >= today - cache_max_age_days
+          2. 数据返回: 跳过日期过滤，只按 LIMIT days 返回最近数据
+        """
         if self.db_path is None or not self.db_path.exists():
             return None
 
@@ -258,21 +576,38 @@ class FuturesDataAggregator:
             return None
 
         try:
-            # 缓存新鲜度：最新日期 >= today - cache_max_age_days
-            cutoff = (pd.Timestamp.now() - pd.Timedelta(days=self.cache_max_age_days)).date()
             # 品种匹配兼容：缓存中可能是 RB0.SHFE 也可能是 RB0
             sym_variants = [symbol, f"{symbol}.SHFE", f"{symbol}.DCE",
                             f"{symbol}.CZCE", f"{symbol}.CFFEX"]
             placeholders = ",".join(["?"] * len(sym_variants))
+
+            # 1) 新鲜度检查：缓存中最新的日期 >= today - cache_max_age_days
+            cutoff = (pd.Timestamp.now() - pd.Timedelta(days=self.cache_max_age_days)).date()
+            latest = con.execute(
+                f"""
+                SELECT MAX(CAST(date AS DATE)) FROM kline_cache
+                WHERE symbol IN ({placeholders})
+                """,
+                [*sym_variants],
+            ).fetchone()
+            if latest is None or latest[0] is None:
+                return None  # 缓存中无数据，走上游源
+            if latest[0] < cutoff:
+                logger.debug(
+                    "[cache] 缓存过期: symbol=%s, latest=%s, cutoff=%s",
+                    symbol, latest[0], cutoff,
+                )
+                return None  # 缓存过期，走上游源
+
+            # 2) 返回最近 days 行数据（不限制日期范围）
             df = con.execute(
                 f"""
                 SELECT * FROM kline_cache
                 WHERE symbol IN ({placeholders})
-                  AND CAST(date AS VARCHAR) >= CAST(? AS VARCHAR)
                 ORDER BY date DESC
                 LIMIT ?
                 """,
-                [*sym_variants, cutoff, days],
+                [*sym_variants, days],
             ).df()
             if df.empty:
                 return None

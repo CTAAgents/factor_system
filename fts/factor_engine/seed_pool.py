@@ -815,6 +815,9 @@ def compute_cross_section_correlations(
     factor_signals: dict[int, np.ndarray] = {}
 
     for i, seed in enumerate(seeds):
+        seed_name = seed.get("name", "?")
+        if i % 10 == 0:
+            print(f"[corr] 种子 {i}/{len(seeds)}: {seed_name}", flush=True)
         try:
             executor = FactorExecutor(seed)
             params = seed.get("params", {})

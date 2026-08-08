@@ -87,12 +87,25 @@ class TQLocalSource(BaseFuturesSource):
     协议: JSON-RPC 2.0 over HTTP POST。
     端点: http://127.0.0.1:7721/rpc。
     方法: tq_get_kline / tq_get_quote。
+
+    支持周期: "day"（日线，默认）/ "1m" / "5m" / "15m" / "30m" / "60m"
+    注意: TQ-Local 返回分钟数据为**倒序**（新→旧），聚合器统一反转。
     """
 
     source_name: str = "TQ_LOCAL"
     base_url: str = "http://127.0.0.1:7721"
     rpc_url: str = "http://127.0.0.1:7721/rpc"
     timeout: float = 5.0
+
+    # 支持周期
+    TQ_PERIOD_MAP: dict[str, str] = {
+        "day": "day",
+        "1m": "1m",
+        "5m": "5m",
+        "15m": "15m",
+        "30m": "30m",
+        "60m": "60m",
+    }
 
     # ─── 代码转换（公开静态方法，供聚合器复用）──
 
@@ -109,6 +122,24 @@ class TQLocalSource(BaseFuturesSource):
             "volume", "amount", "hold", "settle", "pre_settle", "oi_change",
             "vwap", "source", "fetched_at", "trace_id",
         ]
+
+    # ─── 构造 ──
+
+    def __init__(self, period: str = "day") -> None:
+        """初始化。
+
+        Args:
+            period: 周期，支持 "day"（默认）/ "1m" / "5m" / "15m" / "30m" / "60m"
+        """
+        if period not in self.TQ_PERIOD_MAP:
+            raise ValueError(
+                f"不支持的周期: {period}，可选: {list(self.TQ_PERIOD_MAP.keys())}"
+            )
+        self._period = period
+
+    @property
+    def period(self) -> str:
+        return self._period
 
     # ─── 探活（不抛异常）──
 
@@ -140,13 +171,18 @@ class TQLocalSource(BaseFuturesSource):
         days: int,
         trace_id: str = "",
     ) -> Optional[pd.DataFrame]:
-        """拉取 K 线数据，返回含 17 字段的 DataFrame。"""
+        """拉取 K 线数据。
+
+        日线返回含 17 字段的 DataFrame（kline_cache schema）。
+        分钟线返回含 11 字段的 DataFrame（minute_cache schema，datetime 列）。
+        """
         tq_sym = self._symbol_to_tq(symbol)
+        tq_period = self.TQ_PERIOD_MAP[self._period]
         payload = {
             "jsonrpc": "2.0",
             "id": int(time.time() * 1000),
             "method": "tq_get_kline",
-            "params": {"symbol": tq_sym, "days": days, "period": "day"},
+            "params": {"symbol": tq_sym, "days": days, "period": tq_period},
         }
 
         # HTTP 调用
@@ -165,10 +201,27 @@ class TQLocalSource(BaseFuturesSource):
 
         if not rows:
             # 空数据 — 返回带 schema 的空 DataFrame
-            return pd.DataFrame(columns=self._expected_columns())
+            expected = self._expected_columns()
+            return pd.DataFrame(columns=expected) if self._period == "day" else pd.DataFrame(
+                columns=["symbol", "period", "datetime", "open", "high", "low",
+                         "close", "volume", "source", "fetched_at", "trace_id"]
+            )
 
         df = pd.DataFrame(rows)
 
+        # 根据 period 判断是日线还是分钟线
+        if self._period == "day":
+            return self._process_daily(df, tq_sym, trace_id)
+        else:
+            return self._process_minute(df, tq_sym, symbol, trace_id)
+
+    def _process_daily(
+        self,
+        df: pd.DataFrame,
+        tq_sym: str,
+        trace_id: str,
+    ) -> pd.DataFrame:
+        """处理日线返回数据（17 列 kline_cache schema）。"""
         # 必填字段校验
         required = ("date", "open", "high", "low", "close", "volume")
         missing = [c for c in required if c not in df.columns]
@@ -203,6 +256,50 @@ class TQLocalSource(BaseFuturesSource):
         df["trace_id"] = trace_id
 
         return df[self._expected_columns()]
+
+    def _process_minute(
+        self,
+        df: pd.DataFrame,
+        tq_sym: str,
+        original_symbol: str,
+        trace_id: str,
+    ) -> pd.DataFrame:
+        """处理分钟线返回数据（11 列 minute_cache schema）。
+
+        注意: TQ-Local 分钟数据为**倒序**（新→旧），需反转。
+        """
+        # 必填字段校验
+        required = ("datetime", "open", "high", "low", "close", "volume")
+        # TQ-Local 分钟数据可能使用 "date" 列而非 "datetime"
+        if "datetime" not in df.columns and "date" in df.columns:
+            df["datetime"] = df["date"]
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            logger.warning("[%s] 分钟数据缺必填字段: %s", self.source_name, missing)
+            return None
+
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df = df.dropna(subset=["datetime"])
+
+        # 反转（TQ-Local 分钟数据倒序返回）
+        df = df.sort_values("datetime").reset_index(drop=True)
+
+        # 统一数据类型
+        df = df.copy()
+        for col in ("open", "high", "low", "close", "volume"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        # 元数据
+        df["symbol"] = original_symbol
+        df["period"] = self._period
+        df["source"] = self.source_name
+        df["fetched_at"] = pd.Timestamp.now()
+        df["trace_id"] = trace_id
+
+        # 返回分钟级 schema 列
+        cols = ["symbol", "period", "datetime", "open", "high", "low",
+                "close", "volume", "source", "fetched_at", "trace_id"]
+        return df[[c for c in cols if c in df.columns]]
 
     # ─── 实时快照 ──
 

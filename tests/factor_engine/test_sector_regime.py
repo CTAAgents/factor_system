@@ -328,3 +328,138 @@ def test_detect_all_deterministic(
     assert result1["板块A"]["regime"] == result2["板块A"]["regime"]
     assert result1["板块A"]["confidence"] == result2["板块A"]["confidence"]
     assert result1["板块A"]["features"] == result2["板块A"]["features"]
+
+
+# ─── 10. compute_alignment — 对齐度计算 ──────────────────
+
+def test_compute_alignment_basic(
+    sector_selector: SectorRegimeSelector,
+    sector_map: dict[str, list[str]],
+) -> None:
+    """品种制度与产业链制度相同时计算对齐度，结果在 [0,1] 范围内。"""
+    np.random.seed(42)
+    n = 200
+    dates = pd.date_range("2024-01-01", periods=n, freq="D")
+
+    # 强上涨板块
+    up_close = 100 + np.cumsum(np.random.randn(n) * 0.05 + 0.2)
+    panel = {
+        "SYM1": _make_sym_ohlcv(up_close, dates, vol_scale=0.002),
+        "SYM2": _make_sym_ohlcv(up_close + np.random.randn(n) * 0.5, dates),
+    }
+    smap = {"向上板块": ["SYM1", "SYM2"]}
+    sector_regimes = sector_selector.detect_all(panel, sector_map=smap)
+
+    # 计算对齐度
+    alignment = sector_selector.compute_alignment(panel, sector_regimes, smap)
+
+    assert "SYM1" in alignment, "SYM1 应在对齐度结果中"
+    assert "SYM2" in alignment, "SYM2 应在对齐度结果中"
+    assert 0 <= alignment["SYM1"] <= 1, f"SYM1 对齐度 {alignment['SYM1']} 超出 [0,1]"
+    assert 0 <= alignment["SYM2"] <= 1, f"SYM2 对齐度 {alignment['SYM2']} 超出 [0,1]"
+
+
+def test_compute_alignment_divergent(
+    sector_selector: SectorRegimeSelector,
+) -> None:
+    """品种制度与产业链制度不同时，对齐度按公式计算。"""
+    np.random.seed(42)
+    n = 200
+    dates = pd.date_range("2024-01-01", periods=n, freq="D")
+
+    # 板块有 2 个品种，一个上涨一个下跌
+    # 上涨品种可能被检测为 bull，下跌品种可能为 bear
+    # 板块整体（均值）可能为 oscillate 或 bull
+    up_close = 100 + np.cumsum(np.random.randn(n) * 0.05 + 0.2)
+    down_close = 100 + np.cumsum(np.random.randn(n) * 0.05 - 0.15)
+    panel = {
+        "UP": _make_sym_ohlcv(up_close, dates, vol_scale=0.002),
+        "DOWN": _make_sym_ohlcv(down_close, dates, vol_scale=0.002),
+    }
+    smap = {"混合板块": ["UP", "DOWN"]}
+    sector_regimes = sector_selector.detect_all(panel, sector_map=smap)
+
+    # 计算对齐度
+    alignment = sector_selector.compute_alignment(panel, sector_regimes, smap)
+
+    # 验证返回格式
+    assert isinstance(alignment, dict)
+    for sym, score in alignment.items():
+        assert 0 <= score <= 1, f"{sym} 对齐度 {score} 超出 [0,1]"
+
+
+def test_compute_alignment_result_range(
+    sector_selector: SectorRegimeSelector,
+) -> None:
+    """对齐度结果应在 [0, 1] 范围内。"""
+    np.random.seed(42)
+    n = 200
+    dates = pd.date_range("2024-01-01", periods=n, freq="D")
+
+    up_close = 100 + np.cumsum(np.random.randn(n) * 0.05 + 0.2)
+    panel = {
+        "SYM1": _make_sym_ohlcv(up_close, dates),
+        "SYM2": _make_sym_ohlcv(up_close + np.random.randn(n) * 0.5, dates),
+    }
+    smap = {"板块A": ["SYM1", "SYM2"]}
+    sector_regimes = sector_selector.detect_all(panel, sector_map=smap)
+    alignment = sector_selector.compute_alignment(panel, sector_regimes, smap)
+
+    for sym, score in alignment.items():
+        assert 0 <= score <= 1, f"{sym} 对齐度 {score} 超出 [0,1]"
+
+
+def test_compute_alignment_insufficient_data(
+    sector_selector: SectorRegimeSelector,
+) -> None:
+    """数据不足 20 行的品种 → 默认对齐度 0.5。"""
+    np.random.seed(42)
+    n = 10
+    dates = pd.date_range("2024-01-01", periods=n, freq="D")
+    close = 100 + np.cumsum(np.random.randn(n) * 0.3 + 0.5)
+
+    panel = {"SYM1": _make_sym_ohlcv(close, dates)}
+    smap = {"板块A": ["SYM1"]}
+    # 构建一个空 sector_regimes（板块本身也需要 20 行数据）
+    sector_regimes: dict[str, MarketRegime] = {}
+    alignment = sector_selector.compute_alignment(panel, sector_regimes, smap)
+
+    # 无 sector_regimes → 品种不在结果中
+    assert "SYM1" not in alignment
+
+
+def test_compute_alignment_empty_panel(
+    sector_selector: SectorRegimeSelector,
+    sector_map: dict[str, list[str]],
+) -> None:
+    """空 panel → 返回空 dict。"""
+    sector_regimes: dict[str, MarketRegime] = {}
+    alignment = sector_selector.compute_alignment({}, sector_regimes, sector_map)
+    assert alignment == {}
+
+
+def test_compute_alignment_partial_sector_map(
+    sector_selector: SectorRegimeSelector,
+) -> None:
+    """品种在 sector_map 中但不在 panel 中 → 默认对齐度 0.5。"""
+    np.random.seed(42)
+    n = 200
+    dates = pd.date_range("2024-01-01", periods=n, freq="D")
+    up_close = 100 + np.cumsum(np.random.randn(n) * 0.05 + 0.2)
+
+    # 需要至少 2 个品种让 detect_all 能检测板块
+    panel = {
+        "SYM1": _make_sym_ohlcv(up_close, dates),
+        "SYM3": _make_sym_ohlcv(up_close + np.random.randn(n) * 0.5, dates),
+    }
+    # sector_map 包含 3 个品种，但只有 2 个在 panel 中
+    smap = {"板块A": ["SYM1", "SYM2", "SYM3"]}
+    sector_regimes = sector_selector.detect_all(panel, sector_map={"板块A": ["SYM1", "SYM3"]})
+    alignment = sector_selector.compute_alignment(panel, sector_regimes, smap)
+
+    # SYM1 和 SYM3 在 panel 中 → 应有对齐度
+    # SYM2 不在 panel 中 → 默认 0.5
+    assert "SYM1" in alignment, "SYM1 应在 panel 中，应计算对齐度"
+    assert "SYM2" in alignment, "SYM2 不在 panel 中，应默认 0.5"
+    assert "SYM3" in alignment, "SYM3 应在 panel 中，应计算对齐度"
+    assert alignment["SYM2"] == 0.5, "SYM2 不在 panel 中，应默认 0.5"

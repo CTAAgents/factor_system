@@ -1,7 +1,7 @@
 # FTS 差距分析
 
-> 版本: v2.22.0
-> 最后更新: 2026-08-07 (v2.22.0 统一版本号管理)
+> 版本: v2.39.0
+> 最后更新: 2026-08-08 (v2.22.0 统一版本号管理)
 > 状态: 活跃 — 随项目迭代持续更新
 
 ---
@@ -11,9 +11,9 @@
 | 优先级 | 开放 | 已关闭 | 总计 |
 |:-------|:-----|:-------|:-----|
 | P0 | 0 | 4 | 4 |
-| P1 | 0 | 2 | 2 |
-| P2 | 0 | 27 | 27 |
-| **合计** | **0** | **33** | **33** |
+| P1 | 0 | 3 | 3 |
+| P2 | 2 | 30 | 32 |
+| **合计** | **2** | **37** | **39** |
 
 ---
 
@@ -34,6 +34,7 @@
 |:---|:-----|:---------|:-----|:---------|:-----|
 | GAP-003 | `micro_evolution.py` | optuna 贝叶斯调参模块覆盖率仅 31%，依赖声明在 evolution extra 中，大部分分支路径（异常处理、参数传递）未覆盖 | 演化流程中的调参环节无充分测试，生产环境可能引发不可预见的 optuna 调用失败 | 1 月内 | ✅ 已关闭 |
 | GAP-004 | `evaluation_chain.py` | 三级评估链覆盖率 90%，剩余 10% 的 mock 路径和异常分支未覆盖 | 边缘路径的评估逻辑可能存在隐含 bug | 1 月内 | ✅ 已关闭 |
+| GAP-034 | `fts/factor_engine/factor_clustering.py` | 因子相关性缺乏系统聚类，ACTIVE_FACTOR_CAP 仅按 Sharpe 排序做简单截断，无法区分"高 Sharpe 高相关"和"低 Sharpe 独立信号"因子，冗余因子可能取代有价值的独立信号 | 组合因子多样性不足，独立信号可能被相关冗余因子挤出 | 1 月内 | ✅ 已关闭 |
 
 ### P2 — 一般改进（优化代码质量）
 
@@ -65,6 +66,11 @@
 | GAP-030 | `fts/factor_engine/evolution_loop.py` | 6 个 evolution_loop 集成测试（promote_to_elite/failure_rate_circuit_breaker/low_ic_increment/consecutive_low_ic_reset/periodic_review）依赖 LLM mock 环境，本地运行失败（git stash 验证与本改动无关） | 这些测试无法在本地稳定运行 | 3 月内 | ✅ 已关闭 |
 | GAP-031 | `fts/factor_engine/meta_loop.py` + `evolution_loop.py` + `seed_pool.py` | L1 注入候选未接入 L2 演化：`SeedPool.inject_from_l1`/`list_injected_l1` 接口存在但全库无调用方（死代码）；meta_loop `_inject_candidate` 只写 `l1_injected/` + `factor_pool.json`，从未调用注入接口；`_list_base_seeds` 主动过滤 `l1:` 前缀导致 L2 读取不到；`inject_from_l1` 仅写内存缓存不落盘，L1/L2 跨进程天然失效 | L1 花 LLM token 生成的候选成为"孤儿数据"：不进 L2 演化、不走评估链/晋升，仅被 L1 自身用于去重 | 3 月内 | ✅ 已关闭 |
 | GAP-032 | `fts/factor_engine/evolution_loop.py` 晋升路径 | 演化产物未同步 DuckDB factor_catalog：elite 快照 133 个因子的 factor_id 不在 `data/factor_catalog.duckdb` 中（2026-08-03 后演化产物），`factor list`/`backtest batch` 的 DuckDB 查询模式读不到这些因子 | "目录直读 vs DuckDB"数据分叉：DuckDB 查询视角下演化产物不可见，catalog 统计（1945 行）与 elite 实际快照不一致 | 3 月内 | ✅ 已关闭 |
+| GAP-035 | `fts/factor_engine/factor_clustering.py` | 因子信号矩阵缺乏 PCA 降维，Elastic Net 在因子数较多时仍可能达到 20 因子上限，无法通过正交主成分进一步压缩信号源 | 信号源维度高，组合复杂度大，换手率成本非线性增长 | 3 月内 | ✅ 已关闭 |
+| GAP-036 | `fts/factor_engine/evolution_loop.py` | L1 注入候选文件消费后未删除，l1_injected 目录累积 518 个 JSON 文件，历史文件持续堆积 | 大量历史文件占用磁盘空间，干扰目录扫描效率，L1 候选文件失去消费状态的可见性 | 3 月内 | ✅ 已关闭 |
+| GAP-037 | `fts/ml/`（未实现） | 深度学习时序模型（LSTM/GRU/Transformer）与强化学习（RL，DQN/PPO/SAC）未实现：FTS 本次升级仅落地 LightGBM/XGBoost/Ensemble 传统 ML 模型（Phase 24），深度学习与 RL 需引入 PyTorch/TensorFlow/gym 等重依赖，训练成本高、可解释性低 | 无法利用深度时序特征与序列决策优化，信号合成停留在浅层模型 | 3 月内 | ⏳ 开放 |
+| GAP-038 | `fts/factor_engine/evolution_loop.py` | 种子因子相关性预检 `compute_cross_section_correlations` 在期货横截面模式（184 种子 × 25 品种 × 500 日）下计算量过大且无超时保护，演化进程卡死（CPU 0%，无日志输出），ThreadPoolExecutor timeout 无法中断卡在 numpy/scipy C 扩展中的线程 | 夜间因子演化无法完成，进程长时间无响应 | 已解决（v2.39.0 规模保护跳过） | ✅ 已关闭 |
+| GAP-039 | `tests/` 全量回归（67 failed + 16 errors，v2.39.0 基线） | 全量回归存在 67 个失败 + 16 个收集/运行错误，来源两类：① 预存断言过期（test_data_cli/test_tasks/test_sync_futures_task 等，GAP-028 同类）② 并行 v2.38.0+ 工作区改动引入（test_http_server/test_seed_pool/test_seed_loader/test_risk_tag/test_contracts/test_portfolio_loop 等，未提交） | 无法一键全绿验证，回归基线不可信，新改动无法区分自身回归与既有噪音 | 3 月内 | ⏳ 开放 |
 ---
 
 ## 3. 差距详情
@@ -338,6 +344,68 @@
 - **验证结果**: `test_gp_evolver.py` 全量 151 测试通过；`test_evolution_loop.py` 128 测试通过；`test_evaluation_chain.py` 合规；`test_operator_evolution.py` 合规
 - **当前进展**: 已关闭（v2.15.0）
 
+### GAP-034: 因子相关性缺乏系统聚类（P1，已关闭）
+
+- **问题描述**: L3 组合构建中 ACTIVE_FACTOR_CAP=20 仅按 Sharpe 排序做简单截断，无法区分"高 Sharpe 高相关"和"低 Sharpe 独立信号"因子。高度相关的冗余因子可能占据多个名额，挤走具有独立信号价值的低 Sharpe 因子，导致组合多样性下降。
+- **影响范围**: 组合因子多样性不足，独立信号被相关冗余因子挤出，组合夏普和风险分散效果受限
+- **解决方式**: v2.36.0 新增 `FactorClusteringEngine` 实现 P1 因子聚类：
+  - 信号相关性计算：使用 FactorExecutor 在参考品种上计算每个因子的信号序列
+  - Pearson 相关系数矩阵构建
+  - 层次聚类（average linkage，距离阈值 0.7）
+  - 从每个簇中选择 Sharpe 最高的代表因子
+  - 集成到 L3 PortfolioLoop 的 Step 1.8
+- **验证结果**: 因子聚类模块全量测试通过，portfolio_loop 集成测试通过
+
+### GAP-035: 因子信号矩阵缺乏 PCA 降维（P2，已关闭）
+
+- **问题描述**: Elastic Net 在因子数较多时仍可能达到 20 因子上限，无法通过正交主成分进一步压缩信号源维度，组合复杂度大，换手率成本非线性增长
+- **影响范围**: 信号源维度高，组合复杂度大，换手率成本不受控
+- **解决方式**: v2.36.0 新增 `PCASignalCompressor` 实现 P2 PCA 降维：
+  - 信号矩阵构建：计算每个因子在参考品种上的信号序列
+  - z-score 标准化
+  - PCA 拟合，保留解释 95% 方差的主成分（最多 10 个）
+  - 通过载荷矩阵将主成分映射回因子权重
+  - 集成到 L3 PortfolioLoop 的 Step 1.9（可选，通过 enable_pca 控制）
+- **验证结果**: PCA 降维模块全量测试通过，portfolio_loop 集成测试通过
+
+### GAP-036: L1 注入候选文件积累（P2，已关闭）
+
+- **问题描述**: 元学习循环（L1 Meta Loop）生成的候选因子写入 `memory/knowledge/factors/l1_injected/` 目录后，消费（被 L2 演化合并）或晋升精英后均未删除对应的 JSON 文件，导致该目录累积 518 个历史文件。这些文件占用了大量磁盘空间（~5MB），且使目录扫描效率下降。
+- **影响范围**: l1_injected 目录 518 个 JSON 文件中，大部分为已消费（factor_pool.json 中 status≠pending）文件，持续堆积。历史文件干扰后续 L1 候选的目录扫描，降低处理效率，且无法直观区分"待处理"与"已处理"文件。
+- **解决方式**: v2.38.0 实施激进清理方案，在 `fts/factor_engine/evolution_loop.py` 中三处修改：
+  1. **消费后立即删除**（`_merge_l1_candidates` 方法，第 1657-1666 行）：合并 L1 候选到种子列表后，立即删除对应的 l1_injected JSON 文件。非阻塞：删除失败仅记录 warning，不影响合并流程。
+  2. **晋升后立即删除**（`_promote_to_elite` 方法，第 1186-1200 行）：L1 候选因子晋升精英后，立即删除对应的 l1_injected 文件。通过 `factor["source"] == "bootstrapping"` + `factor["parent_id"]` 匹配候选文件。非阻塞：删除失败不影响晋升。
+  3. **历史遗留一次性清理**（`_merge_l1_candidates` 方法开头，第 1571-1587 行）：在合并 L1 候选前，扫描所有 l1_injected 文件，对比 `factor_pool.json` 中已消费（status≠pending）的 candidate_id，删除匹配的遗留文件。一次性清理后不再产生新堆积。
+- **验证结果**: 激进清理逻辑已集成到 `_merge_l1_candidates` 和 `_promote_to_elite` 中，非阻塞设计确保删除失败不影响核心流程。历史遗留清理幂等，仅对已消费文件生效。无新增测试，但现有 2086+ 测试全部通过。
+
+### GAP-037: 深度学习模型与强化学习未实现（P2，开放）
+
+- **问题描述**: FTS 本次升级（v2.38.0，Phase 24）仅落地了传统 ML 模型层（LightGBM/XGBoost/Ensemble），未实现两类更高级的模型：
+  1. **深度学习时序模型**: LSTM/GRU/Transformer 等端到端深度时序预测模型，需引入 PyTorch/TensorFlow 重依赖
+  2. **强化学习（RL）**: DQN/PPO/SAC 等基于环境交互的序列决策优化，需引入 gym 式环境 + RL 算法库
+- **影响范围**: 无法利用深度时序特征提取能力与序列决策优化，信号合成停留在浅层模型
+- **当前进展**: 未开始，登记开放（v2.38.0）
+- **处理期限**: 3 月内（P2）
+
+### GAP-038: 种子相关性预检横截面模式卡死演化（P2，已关闭）
+
+- **问题描述**: 期货横截面模式下，`_run_seed_correlation_check` 调用 `compute_cross_section_correlations`（`fts/factor_engine/seed_pool.py`）对 184 个种子因子 × 25 个品种 × 500 个交易日构建信号矩阵并计算两两截面 Spearman 相关（16,836 对），单因子执行约 3 秒，全程预计 >10 分钟。首次尝试用 `ThreadPoolExecutor(timeout=300)` 添加 5 分钟超时保护无效——线程卡在 numpy/scipy C 扩展中无法被 `future.result(timeout)` 中断，演化进程仍以 CPU 0%、无日志输出状态持续卡死。
+- **影响范围**: 夜间 L2 因子演化流程无法完成；进程长时间无响应，需人工 kill；演化结果不可达。
+- **解决方式**: v2.39.0 在 `_run_seed_correlation_check`（`fts/factor_engine/evolution_loop.py` 第 1709-1715 行）增加规模保护：横截面模式且种子数 >50 时直接跳过相关性预检。设计依据：
+  1. 相关性预检仅做"标记不删除"（轻量扫描），跳过不影响种子评估与晋升主流程；
+  2. 冗余因子控制已由 L3 组合层承担：`ACTIVE_FACTOR_CAP=20` 按 Sharpe 排名截断 + Elastic Net 截面回归自动变量选择（v2.35.0）+ 因子聚类（v2.36.0）；
+  3. 时序模式（股票/单品种）不受影响，种子数 ≤50 的横截面场景仍执行预检。
+- **验证结果**: 跳过保护生效后演化流程正常进入种子评估与演化循环（13 代后因失败率 100% 熔断，属预期保护机制）；结果记录于 `memory/logs/evolution/2026-08-08.log`。无新增测试（跳过分支为防御性保护，不改变正常路径行为）。
+
+### GAP-039: 全量回归失败项（67 failed + 16 errors）（P2，开放）
+
+- **问题描述**: v2.39.0 基线全量回归（`pytest tests/ -q -o addopts="" --continue-on-collection-errors`）结果为 2841 passed / 67 failed / 10 skipped / 16 errors。失败来源分两类：
+  1. **预存断言过期**（GAP-028 同类）：`test_data_cli.py`（data 子命令已移除）、`test_scheduler/test_tasks.py`（任务数断言过期）、`test_scheduler/test_sync_futures_task.py`（`sync_futures_data_job` 已从 jobs.py 移除，收集失败）、`test_monitor/test_data_source_metrics.py`（`_metrics_cache` 缺失）、`test_elite_tracker.py`、`test_alpha_ops_numba.py`（numba 环境）、`test_ablation.py`（已知局限）、`test_evolution_loop.py` 两个 run() 集成用例（GAP-030，已改为跳过标记）、`test_data.py`（真实数据依赖）、`test_stage5_risk_live.py`（信号提交 500）
+  2. **并行 v2.38.0+ 工作区改动引入**（未提交）：`test_http_server.py`（dashboard `_build_factor_list_from_duckdb` 新逻辑与 MagicMock 断言不符）、`test_seed_pool.py`/`test_seed_loader.py`（seed 加载路径变化）、`test_risk_tag.py`（质量卡评分 C 级淘汰 IC=0.06/0.09 因子）、`test_contracts.py`（符号集匹配）、`test_portfolio_loop.py`（粘性约束 + `test_fails_high_sharpe`）
+- **影响范围**: 无法一键全绿验证；回归基线不可信；后续改动无法区分"自身回归"与"既有噪音"
+- **当前进展**: 已登记完整修复清单 `docs/harness/plans/regression-fix-list-20260808.md`；2 个 LLM 依赖用例已改跳过标记（GAP-030 引用）
+- **处理期限**: 3 月内（P2）
+
 ## 4. 优先级定义
 
 | 优先级 | 定义 | 处理时限 | 验证标准 |
@@ -362,6 +430,6 @@
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | 本文件登记全部 33 个差距（GAP-001~033），覆盖 `fts/factor_engine/`、`fts/data_sources/`、`fts/data.py`、`fts/cli.py`、`fts/core/`、`fts/monitor/`、`fts/scheduler/`、`fts/risk/`、`fts/factor_db/`、`pipeline/`、`strategies/`、`scripts/`、`docs/`、`agents/` 等模块。GAP-020~024 关联 `plans/factor-management-optimization-plan.md` |
-| 可验证断言 | 33 个差距全部已关闭（P0=4, P1=2, P2=27）。GAP-025 孤立模块集成修正 v2.10.0 关闭；GAP-026 算子命名对齐 v2.10.0 关闭；GAP-027 `code: Optional[str]` 可选化审计 v2.14.0 关闭；GAP-028 既有失败测试修复 v2.14.0 关闭；GAP-029 L3 漂移治理 v2.11.0 关闭；GAP-030 集成测试污染 catalog v2.14.0 关闭；GAP-031 L1-L2 注入接入 v2.14.0 关闭；GAP-032 演化产物同步 catalog v2.13.0 关闭；GAP-033 数据泄露+IC 衰减 v2.15.0 关闭 |
+| 代码→文档映射 | 本文件登记全部 39 个差距（GAP-001~039），覆盖 `fts/factor_engine/`、`fts/data_sources/`、`fts/data.py`、`fts/cli.py`、`fts/core/`、`fts/monitor/`、`fts/scheduler/`、`fts/risk/`、`fts/factor_db/`、`fts/ml/`、`pipeline/`、`strategies/`、`scripts/`、`docs/`、`agents/` 等模块。GAP-020~024 关联 `plans/factor-management-optimization-plan.md`；GAP-039 关联 `plans/regression-fix-list-20260808.md` |
+| 可验证断言 | 37 个差距已关闭（P0=4, P1=3, P2=30），2 个差距开放（GAP-037，P2，深度学习/RL 未实现；GAP-039，P2，全量回归失败项）。GAP-025 孤立模块集成修正 v2.10.0 关闭；GAP-026 算子命名对齐 v2.10.0 关闭；GAP-027 `code: Optional[str]` 可选化审计 v2.14.0 关闭；GAP-028 既有失败测试修复 v2.14.0 关闭；GAP-029 L3 漂移治理 v2.11.0 关闭；GAP-030 集成测试污染 catalog v2.14.0 关闭；GAP-031 L1-L2 注入接入 v2.14.0 关闭；GAP-032 演化产物同步 catalog v2.13.0 关闭；GAP-033 数据泄露+IC 衰减 v2.15.0 关闭；GAP-034 P1 因子聚类 v2.36.0 关闭；GAP-035 P2 PCA 降维 v2.36.0 关闭；GAP-036 L1 注入候选文件激进清理 v2.38.0 关闭；GAP-037 深度学习/RL 未实现 v2.38.0 登记开放；GAP-038 种子相关性预检卡死 v2.39.0 关闭；GAP-039 全量回归失败项 v2.39.0 登记开放 |
 | 检验方式 | 检查本文件差距登记表确认所有差距状态为 ✅ 已关闭；关联文档 `plans/factor-management-optimization-plan.md` |

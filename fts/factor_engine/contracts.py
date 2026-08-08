@@ -310,7 +310,7 @@ DEFAULT_BUDGET_CONFIG: BudgetConfig = BudgetConfig(
     circuit_breaker_consecutive_low_ic=5,
     circuit_breaker_low_ic_threshold=0.005,
     circuit_breaker_failure_rate=0.95,
-    max_per_family=3,
+    max_per_family=15,
 )
 """v1.1.0 默认预算配置 — 熔断触发后必须人类介入恢复。"""
 
@@ -327,10 +327,11 @@ EvolutionStatus = Literal["running", "paused", "completed", "circuit_broken"]
 # ══════════════════════════════════════════════════════════
 
 L1BootstrappingSource = Literal[
-    "l1_bootstrapping",     # factorengine Bootstrapping Agent 链产出
-    "l1_web_discovery",     # f10/web_collector 感知模块直接发现
-    "l1_debate_gap",        # debate_round 薄弱维度反向生成
-    "l1_manual",            # 人类手动注入
+    "l1_bootstrapping",       # factorengine Bootstrapping Agent 链产出
+    "l1_web_discovery",       # f10/web_collector 感知模块直接发现
+    "l1_debate_gap",          # debate_round 薄弱维度反向生成
+    "l1_manual",              # 人类手动注入
+    "l1_extractor_pipeline",  # 三源提取器管道（研报/论文/天软文档）
 ]
 """L1 种子候选来源标签。"""
 
@@ -475,7 +476,7 @@ DEFAULT_L1_VERIFIER_CONFIG: L1VerifierConfig = L1VerifierConfig(
 DEFAULT_L1_BUDGET_CONFIG: L1BudgetConfig = L1BudgetConfig(
     daily_token_limit=50_000,
     monthly_token_limit=1_500_000,
-    max_bootstraps_per_run=10,
+    max_bootstraps_per_run=20,  # 增加至 20: 容纳三源提取器(13) + LLM(7) 候选
     max_tokens_per_candidate=5_000,
     circuit_breaker_token_ratio=2.0,
     circuit_breaker_failure_rate=0.95,

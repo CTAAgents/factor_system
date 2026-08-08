@@ -47,6 +47,9 @@ class DataSource(str, Enum):
     SYNTHETIC = "SYNTHETIC"          # 合成数据降级（保证系统可运行）
     WIND = "WIND"                    # 万得金融终端（字段增强层）
     IFIND = "IFIND"                  # 同花顺 iFinD（字段增强层）
+    TQSDK = "TQSDK"                  # 天勤 TQSDK（分钟/日线数据源）
+    TQSDK_TICK = "TQSDK_TICK"        # 天勤 TQSDK tick 逐笔数据源（v2.31.0）
+    TDX_MINUTE = "TDX_MINUTE"        # 通达信 TQ-Local 分钟数据（端口 17709）
 
 
 class FusionStrategy(str, Enum):

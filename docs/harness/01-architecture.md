@@ -1,7 +1,7 @@
 # FTS 系统架构文档
 
-> 版本: v2.22.0
-> 最后更新: 2026-08-07
+> 版本: v2.39.0
+> 最后更新: 2026-08-08
 
 ---
 
@@ -14,7 +14,7 @@ FTS（Factor Intelligence System，因子智能系统）是一个独立的因子
 | 职责 | 归属 |
 |:-----|:-----|
 | 行情数据获取（A 股/ETF OHLCV） | **FTS（通过 MCP/akshare 接入腾讯/东方财富 API）** |
-| 行情数据获取（期货 OHLCV） | **FTS（通过 DuckDB kline_cache + AKShare futures_zh_daily_sina）** |
+| 行情数据获取（期货 OHLCV） | **FTS（通过 DuckDB kline_cache/分钟 + AKShare futures_zh_daily_sina + 通达信/TQSDK 分钟数据）** |
 | 因子推演（挖掘/演化/评估） | **FTS 核心能力** |
 | 多因子策略组建 | **FTS 核心能力** |
 | 交易信号产出 | **FTS 核心能力** |
@@ -123,17 +123,35 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │                                                                         │
 │  portfolio_loop.py                                                     │
 │  - PortfolioManager（组合管理器，含 combo_history 归档）                │
+│  - factor_clustering.py（P1 因子聚类模块）                              │
+│    - FactorClusteringEngine（信号相关性层次聚类 + 代表因子选择）         │
+│    - PCASignalCompressor（PCA 信号降维压缩）                            │
 │  - orthogonalize_factors（因子正交化）                                  │
 │  - decay_test（衰减检验）                                              │
 │  - build_combo（构建组合，支持粘性约束）                                │
-│  - synthesize_signals（信号合成）                                      │
+│  - synthesize_signals（信号合成，支持四种模式：equal_weight/sharpe_weight/elastic_net/ml_ensemble）│
+│  - ACTIVE_FACTOR_CAP=20（活跃因子数量上限，超出时按 Sharpe 排名保留 Top N）│
 │  - generate_agent_proposals（Agent 提案生成）                          │
 │  - load_elite_factors（加载 elite 因子，过滤影子池观察期因子）          │
 │  - L3Verifier（L3 锁定协议）                                           │
 │  - DriftMonitor（组合漂移监控：成员重合率 + 权重 L1 变化率）            │
 │  - _apply_sticky_constraints（粘性约束：±30% 变动 / 新因子首日封顶）    │
 │                                                                         │
-│  职责: 组合构建 → 正交化 → 衰减检验 → 粘性约束 → 漂移监控 → 信号合成    │
+│  P1 因子聚类流程:                                                       │
+│    Step 1.8: FactorClusteringEngine.run()                               │
+│      → 使用 FactorExecutor 在参考品种上计算每个因子的信号序列           │
+│      → 计算 Pearson 相关系数矩阵                                        │
+│      → 层次聚类（average linkage，距离阈值默认 0.7）                    │
+│      → 从每个簇中选择 Sharpe 最高的代表因子                             │
+│                                                                         │
+│  P2 PCA 降维流程:                                                       │
+│    Step 1.9: PCASignalCompressor.run() (可选，通过 enable_pca 控制)      │
+│      → 构建因子信号矩阵 (n_dates × n_factors)                          │
+│      → 标准化 (z-score)                                                 │
+│      → PCA 拟合，保留解释 95% 方差的主成分（最多 10 个）                │
+│      → 通过载荷矩阵将主成分映射回因子权重                               │
+│                                                                         │
+│  职责: 组合构建 → 因子聚类(P1) → PCA压缩(P2) → 信号合成 → 衰减检验 → 粘性约束 → 漂移监控 │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -142,7 +160,7 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 - **L0 → L1**: Program.md 设定 L1 的搜索空间、预算、市场偏好
 - **L1 → L2**: 注入种子因子 + 演化方向指引（通过 seed_pool.inject()）
   - 股票 L2: 482 股票因子种子池（时序模式）
-  - 期货 L2: 81 期货因子种子池（14 家族，横截面模式）
+  - 期货 L2: 184 期货因子种子池（17 家族，横截面模式）
 - **L2 → L3**: 
   - 股票 L2: elite 因子（写入 memory/knowledge/factors/elite/）+ 种子因子相关性预检结果（`seed_correlations` 通过 EvolutionRunResult 传递给 L3 组合阶段参考）
   - 期货 L2: elite 因子 + 横截面评估指标 + 因子加权权重（Ridge 回归）
@@ -177,7 +195,10 @@ fts/
 │   ├── fusion.py               # 数据融合引擎
 │   ├── ifind_source.py         # iFinD 数据源
 │   ├── wind_source.py          # Wind 数据源
-│   ├── tq_source.py            # 通达信数据源
+│   ├── tq_source.py            # 通达信 TQ-Local 数据源（支持分钟级）
+│   ├── tqsdk_source.py         # 天勤 TQSDK 数据源（分钟/日线）
+│   ├── tdx_minute_source.py    # 通达信 TDX HTTP 分钟数据源（端口 17709）
+│   ├── macro_aligner.py        # 宏观字段增强层（EDB 时序对齐 + 注入，v2.32.0）
 │   └── migrate.py              # 数据迁移工具
 ├── factor_engine/              # 因子引擎（核心模块）
 │   ├── __init__.py             # 模块入口 + 版本号 v1.1.0
@@ -251,6 +272,13 @@ fts/
 │   ├── logic_monitor.py        # 逻辑监控仪表盘（Phase C）
 │   ├── k8s_deploy.py          # K8s 部署配置
 │   └── prometheus_setup.py     # Prometheus 指标配置
+├── ml/                         # ML 模型层（v2.38.0）
+│   ├── __init__.py             # 包入口
+│   ├── models.py               # ML 模型封装（LightGBM/XGBoost/Ensemble，可选依赖）
+│   └── trainer.py              # 训练管线（横截面回归/时序预测/集成融合三种模式）
+├── bridge/                     # 信号桥接层（v2.38.0）
+│   ├── __init__.py             # 包入口
+│   └── signal_bridge.py        # SignalBridge 信号格式转换（JSON/Redis/REST 协议）
 ├── risk/                       # 风控层（C.2）
 │   ├── __init__.py             # 导出 RiskManager/TradeAdapter/SimulatedTradeAdapter
 │   ├── risk_manager.py         # RiskManager 五项风控规则（仓位/回撤/亏损/杠杆/集中度）
@@ -312,36 +340,89 @@ MCP/akshare (腾讯自选股/东方财富 API)     DuckDB kline_cache (期货)
     ▼                                          ▼
 FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
     │
-    │ 因子引擎 → 策略组建 → 交易信号
+    ├── 因子引擎 → 策略组建 → 信号合成
+    │       │
+    │       ├── elastic_net（默认，Elastic Net 截面回归）
+    │       ├── sharpe_weight（按 Sharpe 归一化加权）
+    │       ├── equal_weight（等权 1/N）
+    │       └── ml_ensemble（ML 模型集成融合，通过 fts/ml/ 可选依赖）
+    │
+    ├── SignalBridge (fts/bridge/) → 交易信号输出
+    │       │
+    │       ├── JSON 文件协议（默认，无外部依赖）
+    │       ├── Redis 协议（需 redis-py）
+    │       └── REST 协议（HTTP POST/GET）
+    │
     ▼
-下游系统（信号消费方）
+下游系统（VNPY/FDT/其他信号消费方）
 ```
 
 ### 期货数据流
 
 ```
-AKShare futures_zh_daily_sina
-    │
-    │ scripts/download_futures.py（断点续传）
-    ▼
-DuckDB kline_cache (data/fts_history.duckdb)
-    │
-    │ FuturesDataProvider._from_kline_cache()     ← 优先级1
-    │ AKShare 即时获取（降级）                       ← 优先级2
-    │ 合成数据（降级）                                ← 优先级3
-    ▼
-FTSDataProvider.get_futures_ohlcv() / get_futures_panel()
-    │
-    │ --universe futures
-    ▼
-EvolutionLoop（期货横截面因子演化，跨品种因子计算）
-    │
-    ▼
-scripts/futures_signal_pipeline.py（横截面信号管道，方向校正 = 截面 IC 法，因子加权 = Ridge 回归 L2 正则化，Market Regime 检测 = RegimeAwareSelector）
-    │
-    ▼
-reports/{date}/futures_signals_{date}.md
+┌─ 日线数据路径 ───────────────────────────────────────────────────┐
+│ AKShare futures_zh_daily_sina                                      │
+│    │                                                                │
+│    │ scripts/download_futures.py（断点续传）                        │
+│    ▼                                                                │
+│ DuckDB kline_cache (data/fts_history.duckdb)                        │
+│    │                                                                │
+│    │ FuturesDataProvider._from_kline_cache()     ← 优先级1          │
+│    │ AKShare 即时获取（降级）                       ← 优先级2        │
+│    │ 合成数据（降级）                                ← 优先级3        │
+│    ▼                                                                │
+│ FTSDataProvider.get_futures_ohlcv() / get_futures_panel()            │
+│    │                                                                │
+│    │ --universe futures                                              │
+│    ▼                                                                │
+│ EvolutionLoop（期货横截面因子演化，跨品种因子计算）                  │
+│    │                                                                │
+│    ▼                                                                │
+│ scripts/futures_signal_pipeline.py（横截面信号管道，方向校正 = 截面 IC │
+│ 法，因子加权 = Ridge 回归 L2 正则化，Market Regime 检测 =           │
+│ RegimeAwareSelector，品种-链对齐度修正 = compute_alignment）         │
+│    │                                                                │
+│    ▼                                                                │
+│ reports/{date}/futures_signals_{date}.md                            │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─ 分钟级数据路径（v2.30.0+） ──────────────────────────────────────────┐
+│ 三源分钟数据获取:                                                      │
+│   通达信 TDX HTTP (17709) — 正序，1m/5m/15m/30m/60m                  │
+│   通达信 TQ-Local (7721) — 倒序（统一反转），1m/5m/15m/30m/60m       │
+│   天勤 TQSDK (tqsdk 包) — 正序，1m/5m/15m/30m/60m                    │
+│    │                                                                  │
+│    ▼ 时间对齐（统一 datetime 升序排序）                                │
+│ DuckDB minute_cache (data/fts_history.duckdb)                         │
+│    │                                                                  │
+│    │ BacktestPipeline (frequency='1m'/'5m'/'daily')                   │
+│    │   → 年化因子自适应                                              │
+│    │   → z-score 窗口自适应                                           │
+│    │   → 成本模型自适应                                               │
+│    ▼                                                                  │
+│ 分钟级回测报告                                                        │
+└───────────────────────────────────────────────────────────────────────┘
+
+┌─ 宏观字段增强层（v2.32.0+） ──────────────────────────────────────────┐
+│ iFinD EDB (get_edb_data MCP) → edb_cache (indicator/date/value)      │
+│    │                                                                  │
+│    │ IFindSource.get_macro_series()（缓存查 → miss 拉取 → 幂等写回）   │
+│    ▼                                                                  │
+│ MacroFieldAligner.align()（月度→交易日 ffill + 发布滞后防未来函数）    │
+│    │                                                                  │
+│    ▼ 注入为 K 线 DataFrame 列（export/import_data/cpi/rate/us_bond）  │
+│ BacktestPipeline._compute_factor() → _execute_factor_code()           │
+│   → 宏观因子 data.get('export') 读取真实宏观数据（不再走 close 代理）  │
+└───────────────────────────────────────────────────────────────────────┘
 ```
+
+**宏观因子角色边界（v2.33.0）**：
+- 宏观因子**禁止**进入单品种时序回测/信号管道。真实 EDB 数据对比证实
+  fut_macro_export 家族在单品种（RB0）时序上 IC≈0（历史 Sharpe 7.68 为
+  close 代理假象），v2.33.0 已全部 retire。
+- 宏观数据注入层保留，仅作为**跨品种/板块层面**数据供给：
+  ① SectorRegimeSelector 产业链 regime 选择；② 组合风险预算归因；
+  ③ 跨市场泛化验证（futures→ETF 方向）。
 
 **common_dates 语义（v1.7.1）**：
 - `get_futures_panel()` 返回的 `common_dates` 由「全品种日期交集」改为「多数对齐」：
@@ -372,7 +453,20 @@ reports/{date}/futures_signals_{date}.md
 - 报告输出：主制度名称 + 置信度 + 产业链 Breakdown（各产业链制度/置信度/品种数/方向建议）+ Regime 调整后的交易建议。
 - 趋势友好（bull/bear）→ 优先做空/做多增量最强的品种，可放大仓位；震荡（oscillate）→ 反向操作；高波动（high_vol）→ 缩小仓位，只做增量绝对值 > 0.15 的品种。
 - 实现：`SectorRegimeSelector` 在 `fts/factor_engine/regime.py`，每个产业链使用独立的 `RegimeAwareSelector` 实例保持状态隔离。
-- 产业链分类：`FUTURES_SECTOR_MAP` 定义 7 个产业链（黑色系/有色金属/能源化工/农产品/软商品/贵金属/金融期货），每产业链品种不足 2 个或数据不足 20 行时跳过。
+- 产业链分类：`FUTURES_SECTOR_MAP` 定义 12 个产业链（黑色系/有色金属/能源/聚酯链/油化工/煤化工/橡胶/纸浆集运/农产品/贵金属/新能源新材料/金融期货），每产业链品种不足 2 个或数据不足 20 行时跳过。
+
+**品种-链对齐度增强（v2.22.0）**：
+- 品种-链对齐度计算：在 `SectorRegimeSelector.detect_all()` 检测产业链制度后，调用 `compute_alignment()` 方法计算每个品种与其所属产业链的制度对齐度（0~1）。
+- 对齐度计算逻辑：为每个品种独立创建 `RegimeAwareSelector` 实例检测其市场制度，与产业链综合制度对比：
+  - 制度相同：对齐度 = 品种置信度 × 产业链置信度（置信度乘积，反映两者同时确定性强）
+  - 制度不同：对齐度 = (1 - |置信度差|) × 0.5（差异越大对齐度越低，上限 0.5）
+  - 数据不足（<20 行）：对齐度 = 0.5（默认中等对齐度，不修正信号权重）
+- 对齐度修正信号权重：在信号管道中，品种信号权重按对齐度调整：
+  - 修正公式：`weight' = weight × (1 + _ALIGNMENT_BLEND × (align - 0.5))`
+  - 默认 `_ALIGNMENT_BLEND = 0.20`（修正强度，0.0=关闭，0.3=最大）
+  - 高对齐度（≥0.7）品种信号权重上调，低对齐度（<0.5）品种信号权重下调
+- 报告输出：信号报告中按对齐度等级（高/中/低）分组展示品种列表，标注对齐度修正强度与受影响品种数。
+- 实现：`SectorRegimeSelector.compute_alignment()` 在 `fts/factor_engine/regime.py`，信号管道集成在 `scripts/futures_signal_pipeline.py`。
 
 ### FTS 内部数据流
 
@@ -410,7 +504,8 @@ L1 Meta-Loop ──→ 知识补给 + 种子注入 ──→ seed_pool.py
                               ├── 正交化
                               ├── 衰减检验
                               ├── 组合构建
-                              └── 信号合成
+                              ├── 品种-链对齐度计算
+                              └── 信号合成（含对齐度权重修正）
 
 ### 因子淘汰流（v2.17.0）
 
@@ -511,7 +606,7 @@ class FactorKind(str, Enum):
 |:-----|:---------|:-----|:-----|
 | L1 Meta-Loop | 08:30 | 每日 | 知识补给 + 种子注入 |
 | L2 Evolution Loop | 23:00 | 每日 | 夜间因子演化 |
-| L3 Portfolio Loop | 20:00 | 每日 | 组合构建 + 正交化 + 信号合成 |
+| L3 Portfolio Loop | 20:00 | 每日 | 因子筛选(ACTIVE_FACTOR_CAP=20) + 信号合成(默认elastic_net) + Verifier 校验 |
 | 期货信号管道 | 20:30 | 每日 | 横截面信号报告（全量因子 Ridge 回归加权） |
 | 因子巡检 (FactorInspector) | 21:00 | 每日 | 基于 batch_audit 自动检测退化因子并降级 |
 | Health Check | 每 10 分钟 | 高频 | 状态监控 |
@@ -526,6 +621,8 @@ class FactorKind(str, Enum):
 - **LLM 依赖（可选）**: openai, anthropic (llm extra)
 - **数据依赖（可选）**: akshare >= 1.18.64 (mcp extra)
 - **期货数据（可选）**: duckdb >= 0.8.0, akshare >= 1.18.64
+- **ML 依赖（可选）**: lightgbm >= 4.0, xgboost >= 2.0 (ml extra)
+- **桥接依赖（可选）**: redis-py >= 5.0 (bridge extra)
 - **测试**: pytest 7.4+, pytest-cov 4.1+
 - **打包**: setuptools, pyproject.toml
 
@@ -535,6 +632,7 @@ class FactorKind(str, Enum):
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `seed_pool.py` → 双种子池（股票 482 因子：9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面；期货 81 因子：14 家族，见 seed_data_futures_full.py）；种子因子相关性预检（compute_seed_correlations，仅股票时序模式，≥0.95 标记高相关对）；`data_fundamental.py` → FundamentalProvider 基本面数据层；`data_futures.py` → FuturesDataProvider 期货数据层（82 品种 FUTURES_SUBSET + 59 个品种 DuckDB 缓存 + AKShare 降级，`get_futures_panel()` common_dates 多数对齐 ≥ 品种数//2，FUTURES_SYMBOL_NAMES 名称映射，get_dominant_contracts() 主力合约判定；`FUTURES_SECTOR_MAP` 7 产业链分类）；`data_futures_fundamental.py` → FuturesFundamentalProvider 期货基本面数据（库存/仓单/基差）；`scheduler/` → 调度层（5 个 APScheduler 定时任务：L1:08:30 / L2:23:00 / L3:20:00 / 信号管道:20:30 / 健康检查:每10m）；`scripts/futures_signal_pipeline.py` → 横截面信号管道（方向校正 = 截面 IC 法，因子加权 = Ridge 回归 L2 正则化，Market Regime 检测 = SectorRegimeSelector 产业链级分层判定，按日期定位，`--universe all` 全量商品池，输出品种名称/主力合约 + 产业链 Breakdown + Regime 调整交易建议）；`fts/factor_engine/regime.py` → RegimeAwareSelector 市场制度感知（5 种制度：bull/bear/high_vol/low_vol/oscillate，MA20 斜率 + ATR/价格 + 量比 + 收益自相关）+ SectorRegimeSelector 产业链级制度检测（每个产业链独立构建合成 OHLCV，品种数加权投票计算主制度）；`strategies/strategy_evolution.py` → 策略进化（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion） |
-| 可验证断言 | 股票种子池总数 = 482；期货种子池总数 = 81（14 家族）；期货数据层支持 82 个连续合约品种，数据源优先级 3 级（DuckDB → AKShare → 合成）；common_dates 多数对齐（WH0 等停更品种不清空交集）；方向校正按日期定位；信号管道因子加权 = Ridge 回归（全量因子，L2 正则化）；主力合约判定 = contract_kline 最新交易日最大成交量；调度器注册 8 个任务（L1/L2/L3 + 健康检查 + 月度衰减 + 数据质量 + 逻辑监控 + 因子巡检）；信号管道集成 Market Regime 检测（5 种制度分层判定，输出 Regime 调整交易建议）；策略进化模块包含 3 种策略（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion）；股票 L2 启用种子因子相关性预检（≥0.95 标记），期货 L2 跳过；L3 组合支持粘性约束（StickyConfig ±30% / 新因子首日封顶）+ 漂移监控（DriftMonitor → drift_history/YYYY-MM-DD.json）；L2 新晋升因子进影子池（shadow_pool 观察 5 交易日，种子因子 shadow_observe=False 直接进正式组合）；SchedulerEngine 支持 `start_watchdog()` 进程看门狗 |
+| 代码→文档映射 | `seed_pool.py` → 双种子池（股票 482 因子：9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面；期货 81 因子：14 家族，见 seed_data_futures_full.py）；种子因子相关性预检（compute_seed_correlations，仅股票时序模式，≥0.95 标记高相关对）；`data_fundamental.py` → FundamentalProvider 基本面数据层；`data_futures.py` → FuturesDataProvider 期货数据层（82 品种 FUTURES_SUBSET + 59 个品种 DuckDB 缓存 + AKShare 降级，`get_futures_panel()` common_dates 多数对齐 ≥ 品种数//2，FUTURES_SYMBOL_NAMES 名称映射，get_dominant_contracts() 主力合约判定；`FUTURES_SECTOR_MAP` 7 产业链分类）；`data_futures_fundamental.py` → FuturesFundamentalProvider 期货基本面数据（库存/仓单/基差）；`scheduler/` → 调度层（5 个 APScheduler 定时任务：L1:08:30 / L2:23:00 / L3:20:00 / 信号管道:20:30 / 健康检查:每10m）；`scripts/futures_signal_pipeline.py` → 横截面信号管道（方向校正 = 截面 IC 法，因子加权 = Ridge 回归 L2 正则化，Market Regime 检测 = SectorRegimeSelector 产业链级分层判定，品种-链对齐度修正 = compute_alignment + _ALIGNMENT_BLEND=0.20，按日期定位，`--universe all` 全量商品池，输出品种名称/主力合约 + 产业链 Breakdown + Regime 调整交易建议 + 对齐度等级分组）；`fts/factor_engine/regime.py` → RegimeAwareSelector 市场制度感知（5 种制度：bull/bear/high_vol/low_vol/oscillate，MA20 斜率 + ATR/价格 + 量比 + 收益自相关）+ SectorRegimeSelector 产业链级制度检测（每个产业链独立构建合成 OHLCV，品种数加权投票计算主制度）+ `compute_alignment()` 品种-链对齐度计算（单品种独立检测与产业链对比，制度相同=置信度乘积，不同=上限0.5）；`strategies/strategy_evolution.py` → 策略进化（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion） |
+| 可验证断言 | 股票种子池总数 = 482；期货种子池总数 = 81（14 家族）；期货数据层支持 82 个连续合约品种，数据源优先级 3 级（DuckDB → AKShare → 合成）；common_dates 多数对齐（WH0 等停更品种不清空交集）；方向校正按日期定位；信号管道因子加权 = Ridge 回归（全量因子，L2 正则化）；主力合约判定 = contract_kline 最新交易日最大成交量；调度器注册 8 个任务（L1/L2/L3 + 健康检查 + 月度衰减 + 数据质量 + 逻辑监控 + 因子巡检）；信号管道集成 Market Regime 检测（5 种制度分层判定，输出 Regime 调整交易建议）；品种-链对齐度计算支持 3 种对齐度等级（高≥0.7/中0.5~0.7/低<0.5），默认 _ALIGNMENT_BLEND=0.20；策略进化模块包含 3 种策略（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion）；股票 L2 启用种子因子相关性预检（≥0.95 标记），期货 L2 跳过；L3 组合支持粘性约束（StickyConfig ±30% / 新因子首日封顶）+ 漂移监控（DriftMonitor → drift_history/YYYY-MM-DD.json）；L2 新晋升因子进影子池（shadow_pool 观察 5 交易日，种子因子 shadow_observe=False 直接进正式组合）；SchedulerEngine 支持 `start_watchdog()` 进程看门狗；L3 信号合成默认 elastic_net 模式（Elastic Net 截面回归，L1+L2 自动变量选择）；ACTIVE_FACTOR_CAP=20，超出上限时按 Sharpe 排名保留 Top 20 |
 | 检验方式 | `python -c "from fts.scheduler.tasks import list_tasks; assert len(list_tasks()) == 8"` |
+| 分钟级数据流 | `fts/data_sources/aggregator.py` 新增 `get_minute_ohlcv()` 方法；`fts/data_sources/tq_source.py` 支持 `period` 参数；`fts/data_sources/tqsdk_source.py` TQSDK 分钟数据源；`fts/data_sources/tdx_minute_source.py` 通达信分钟数据源；`fts/factor_engine/backtest_pipeline.py` `BacktestInput.frequency` 字段；`fts/cli.py` `--frequency` 参数 | `minute_cache` 表结构存在 (symbol/period/datetime/open/high/low/close/volume/source)；`BacktestInput.frequency` 支持 "daily"/"1m"/"5m"/"15m"/"30m"/"60m"；年化因子自适应 252(daily)→98280(1m) | `pytest tests/test_backtest_frequency.py` |

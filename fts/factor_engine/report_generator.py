@@ -104,6 +104,8 @@ class ReportGenerator:
             ("最大回撤", f"{_num(metrics.get('max_drawdown')):.2%}"),
             ("Calmar", f"{_num(metrics.get('calmar_ratio')):.3f}"),
             ("胜率", f"{_num(metrics.get('win_rate')):.2%}"),
+            ("盈亏比", f"{_num(metrics.get('payoff_ratio')):.2f}"),
+            ("盈亏因子", f"{_num(metrics.get('profit_factor')):.2f}"),
             ("年化波动", f"{_num(metrics.get('volatility')):.2%}"),
             ("IC 均值", f"{_num(metrics.get('ic_mean')):.4f}"),
             ("IC 波动", f"{_num(metrics.get('ic_std')):.4f}"),

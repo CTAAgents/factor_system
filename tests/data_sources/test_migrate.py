@@ -202,9 +202,9 @@ def test_migrate_returns_dict_with_change_counts(fresh_db):
     assert "tables_created" in result
     assert "indexes_created" in result
     # 全新 DB：kline_cache 全新创建（不算 columns_added），扩 8 列
-    # tables_created: edb_cache + option_chain_cache = 2
+    # tables_created: edb_cache + option_chain_cache + minute_cache + tick_cache = 4（v2.31.0）
     # indexes_created: 1
-    assert result["tables_created"] == 2
+    assert result["tables_created"] == 4
     assert result["indexes_created"] == 1
 
 

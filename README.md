@@ -2,8 +2,8 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-218%2B%20passing-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.21.0-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-2359%2B%20passing-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.38.0-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -104,7 +104,7 @@ L3 参数：
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--universe` | `stock` | 组合市场（`stock` / `futures`） |
-| `--synthesis-mode` | 自动 | 信号合成模式（`sharpe_weight` / `elastic_net` / `equal_weight`） |
+| `--synthesis-mode` | 自动 | 信号合成模式（`sharpe_weight` / `elastic_net` / `equal_weight` / `ml_ensemble`） |
 
 ### 因子管理
 
@@ -153,6 +153,14 @@ L3 参数：
 | 命令 | 说明 |
 |------|------|
 | `fts ui [--host] [--port]` | 启动 Web UI 仪表盘（默认 `127.0.0.1:9100`） |
+
+### 信号桥接（Phase 25，v2.38.0）
+
+| 命令 | 说明 |
+|------|------|
+| `fts bridge serve [--host] [--port]` | 启动 REST 信号服务（默认 `127.0.0.1:8765`，POST /signal 接收 FactorSignal） |
+| `fts bridge publish [--protocol] [--input]` | 发布信号到目标协议（`json` / `redis` / `rest`） |
+| `fts bridge status [--protocol]` | 查看信号桥接状态（最近信号 / 可用性） |
 
 ---
 
@@ -296,6 +304,8 @@ fts/                          # 核心源码（84 个 Python 文件）
 ├── strategies/               # 策略层
 ├── scheduler/                # APScheduler 定时调度
 ├── monitor/                  # 健康监控 + HTTP 端点 + Web UI
+├── ml/                       # ML 模型层（LightGBM/XGBoost/Ensemble，v2.38.0）
+├── bridge/                   # VNPY 信号桥接层（JSON/Redis/REST，v2.38.0）
 ├── data.py                   # 数据层统一入口
 ├── data_futures.py           # 期货数据（DuckDB + AKShare）
 ├── data_mcp.py               # MCP 数据适配层
@@ -318,8 +328,10 @@ memory/                       # 运行时持久化（自动创建）
 | `llm` | LLM 客户端 | `pip install -e ".[llm]"` |
 | `mcp` | MCP 数据源（AKShare） | `pip install -e ".[mcp]"` |
 | `portfolio` | 组合构建（scikit-learn） | `pip install -e ".[portfolio]"` |
+| `ml` | ML 模型层（LightGBM/XGBoost） | `pip install -e ".[ml]"` |
+| `bridge` | 信号桥接（redis-py） | `pip install -e ".[bridge]"` |
 | `dev` | 开发工具 | `pip install -e ".[dev]"` |
-| 全部 | 安装所有可选依赖 | `pip install -e ".[evolution,llm,mcp,portfolio,dev]"` |
+| 全部 | 安装所有可选依赖 | `pip install -e ".[evolution,llm,mcp,portfolio,ml,bridge,dev]"` |
 
 ---
 

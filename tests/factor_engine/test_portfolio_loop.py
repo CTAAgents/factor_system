@@ -694,6 +694,67 @@ class TestPortfolioLoop:
         assert result.error is not None
         assert "模拟致命错误" in result.error
 
+    # ── P1/P2 集成测试 ──
+
+    def test_enable_clustering_no_crash(self, tmp_portfolio_dir, tmp_elite_dir):
+        """P1 因子聚类开启时 L3 不崩溃（引擎懒加载，无面板数据时聚类跳过）。"""
+        factor_file = tmp_elite_dir / "factor_test.json"
+        factor_file.write_text(json.dumps({
+            "factor_id": "fct_mock", "name": "mock_momentum",
+            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+        }), encoding="utf-8")
+
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            enable_clustering=True,
+        )
+        result = loop.run()
+        # 无面板数据时聚类跳过，但 L3 应正常完成
+        assert result.status in ("passed", "verifier_warning", "completed")
+        assert result.n_factors_input >= 1
+        # enable_clustering=True 时，即使聚类未触发（无面板数据），L3 正常完成
+        # 引擎为懒加载，仅在条件满足时初始化
+
+    def test_enable_pca_no_crash(self, tmp_portfolio_dir, tmp_elite_dir):
+        """P2 PCA 降维开启时 L3 不崩溃（引擎懒加载，无面板数据时 PCA 跳过）。"""
+        factor_file = tmp_elite_dir / "factor_test.json"
+        factor_file.write_text(json.dumps({
+            "factor_id": "fct_mock", "name": "mock_momentum",
+            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+        }), encoding="utf-8")
+
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            enable_pca=True,
+        )
+        result = loop.run()
+        assert result.status in ("passed", "verifier_warning", "completed")
+        assert result.n_factors_input >= 1
+        # enable_pca=True 时，即使 PCA 未触发（无面板数据），L3 正常完成
+
+    def test_enable_both_no_crash(self, tmp_portfolio_dir, tmp_elite_dir):
+        """P1 + P2 同时开启时 L3 不崩溃。"""
+        factor_file = tmp_elite_dir / "factor_test.json"
+        factor_file.write_text(json.dumps({
+            "factor_id": "fct_mock", "name": "mock_momentum",
+            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+        }), encoding="utf-8")
+
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            enable_clustering=True,
+            enable_pca=True,
+        )
+        result = loop.run()
+        assert result.status in ("passed", "verifier_warning", "completed")
+        assert result.n_factors_input >= 1
+
 
 # ════════════════════════════════════════════════════════════
 # 10. GenerateAgentProposals 测试

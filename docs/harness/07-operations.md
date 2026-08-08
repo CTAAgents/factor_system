@@ -1,7 +1,7 @@
 # FTS 运维与版本管理
 
-> 版本: v2.23.0
-> 最后更新: 2026-08-07
+> 版本: v2.39.0
+> 最后更新: 2026-08-08
 
 ---
 
@@ -9,7 +9,21 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
-| **v2.23.0** | 2026-08-07 | 新增 seed_lineage 种子溯源表（L0→L2 全链路）：schema.py 新增第 12 张表 seed_lineage（lineage_id/seed_name/seed_family/seed_market/evolved_factor_id/evolved_factor_name/generation/parent_id/trace_id/promoted_at + 4 索引）；verify_database 新增 seed_lineage 统计（行数/家族分布）；迁移脚本 scripts/migrate_add_seed_lineage.py（幂等，支持 --dry-run）；01-architecture 文档同步表数 11→12 |
+| **v2.39.0** | **2026-08-08** | **GAP-038 种子相关性预检卡死修复：`_run_seed_correlation_check` 横截面模式增加规模保护（种子数 >50 时跳过相关性预检）。根因：184 种子 × 25 品种 × 500 日横截面 Spearman 相关计算量过大（>10 分钟），ThreadPoolExecutor timeout 无法中断卡在 numpy/scipy C 扩展的线程；跳过仅放弃"标记不删除"的轻量预检，冗余控制由 L3 组合层承担（ACTIVE_FACTOR_CAP=20 + Elastic Net + 因子聚类）。演化流程恢复正常（13 代后失败率熔断属预期保护）；登记并关闭 GAP-038；无新增测试 |**
+| **v2.38.0** | **2026-08-08** | **ML 模型集成层 + VNPY 信号桥接层：① Phase 24 新增 `fts/ml/` 包（`MLSignalModel` 封装 LightGBM/XGBoost/Ensemble 三种模型，`SignalModelTrainer` 支持横截面回归/时序预测/集成融合三种训练模式，可选依赖 [`ml`] extra，缺依赖时优雅降级回退）；L3 信号合成新增 `ml_ensemble` 模式；② Phase 25 新增 `fts/bridge/` 包（`SignalBridge` 实现 JSON/Redis/REST 三种协议的交易信号格式转换，`fts bridge` CLI 子命令支持 serve/status 操作，可选依赖 [`bridge`] extra）；③ 记录未实现功能：深度学习时序模型（LSTM/GRU/Transformer）与强化学习（RL，DQN/PPO/SAC）登记为 GAP-037；新增 ~55 测试用例 |**
+| **v2.37.0** | **2026-08-08** | **GAP-036 L1 注入候选文件激进清理：`_merge_l1_candidates` 消费后立即删除 + `_promote_to_elite` 晋升后立即删除 + 历史遗留一次性清理（对比 factor_pool.json 已消费状态），非阻塞设计，删除失败仅记录 warning；无新增测试 |**
+| **v2.36.0** | **2026-08-08** | **P1 因子聚类 + P2 PCA 降维：新增 `fts/factor_engine/factor_clustering.py` 模块，`FactorClusteringEngine` 实现信号相关性层次聚类 + 代表因子选择（Pearson 相关系数 → 层次聚类 → Sharpe 最高代表），`PCASignalCompressor` 实现 PCA 信号降维压缩（z-score 标准化 → PCA 保留 95% 方差 → 载荷矩阵映射因子权重）；集成到 L3 PortfolioLoop 的 Step 1.8（P1 聚类，默认启用）和 Step 1.9（P2 PCA，可选关闭）；关闭 GAP-034 和 GAP-035；新增 34 测试用例 |**
+| **v2.35.0** | **2026-08-08** | **Elastic Net 信号合成 + ACTIVE_FACTOR_CAP：L3 组合构建默认信号合成模式从 equal_weight 切换为 elastic_net（Elastic Net 截面回归，L1+L2 自动变量选择，防止冗余因子稀释组合夏普）；新增 ACTIVE_FACTOR_CAP=20 活跃因子数量上限，因子数超过上限时按 Sharpe 排名保留 Top N，自动过滤低质量因子；期货 CLI 默认 synthesis_mode 同步切换为 elastic_net（原 sharpe_weight）；109 相关测试全绿，无回归** |
+| **v2.34.0** | 2026-08-08 | 全活跃因子入口 NaN 防护批量同步 + 回测无效代码显式失败：① 基于 v2.33.0 修复结果，将 g10/g11/g13 同族因子的边界处理逻辑推广至全部 77 个缺防护活跃因子（76 A 型原始赋值 + 1 B 型 np.asarray 入口），统一插入 `np.asarray(float64)` + 首个有限值 NaN 填充；逐因子验证语法合法、正常输入输出与修复前逐位一致（0 mismatch）、前部/尾部/周期 NaN 输入不崩溃且输出全有限（231 场景全绿）；② 修复 `BacktestPipeline._execute_factor_code()` 静默失败——因子代码顶层 exec 异常不再降级返回零值数组，改为上抛由外层包装为 FactorComputeError 使回测显式失败（无效代码 `raise RuntimeError` 场景，消除静默失败掩盖真实错误）；新增 232 测试用例（test_bincount_boundary.py 21→253，动态扫描 77 因子 × 3），回测流水线 6 测试全绿 |
+| **v2.33.0** | 2026-08-08 | 宏观因子降级 + 适用场景重设计 + np.bincount 边界审计：① fut_macro_export 家族 6 因子（fct_01f132dc/fct_5d783863/fct_e10560e2/fct_0591e8e3/fct_1fad8dfc/fct_2bcd330b）全部 retire——真实 EDB 数据对比证实代理模式 Sharpe 7.68 为假象，真实数据 IC≈0（单品种时序无预测力）；② 角色边界重设计：宏观因子限定跨品种/板块层面（SectorRegimeSelector / 组合风险预算 / 跨市场泛化），禁止进入单品种时序信号管道；③ 修复 `FactorRepository.get_factor()` 残留读事务阻塞其他连接 DDL（fetchone→fetchall 完整消费），`update_factor_status()` 旧库缺列幂等补列；④ 审计 3 个含 np.bincount 精英因子（fct_70d783d1/fct_71372ef2/fct_7b251afa）输入边界：入口 NaN 清理 + bincount 输入 nan_to_num/clip 防御，实测 NaN 输入不再传播非有限输出；⑤ 同步入口 NaN 防护到活跃池同族因子（fut_hf_trade_imbalance_g10/fut_bias_g11/fut_option_pcr_g10/fut_gp_alpha1_g13）；新增 24 测试用例（repository 3 + bincount 9 + g 因子 NaN 防护 12），全绿 |
+| **v2.32.0** | 2026-08-08 | 宏观字段增强层：① `IFindSource.get_macro_series()` 实现 edb_cache 缓存读写（查 → miss 调 fetch_edb → 幂等写回）；② 新增 `fts/data_sources/macro_aligner.py`（`MacroFieldAligner.align()` 月度→交易日 ffill + 发布滞后防未来函数 + `inject_macro_fields()` 批量注入 + `MACRO_FIELD_QUERIES` 映射表）；③ `BacktestPipeline._compute_factor()` 因子执行前注入宏观列（export/import_data/cpi/rate/us_bond），宏观因子不再走 close 代理降级；④ `FTSConfig` 新增 `macro_field_injection` / `macro_lag_days` 配置；新增 ~8 个测试用例 |
+| **v2.31.0** | 2026-08-08 | 分钟级回测 Phase 2 完成（分钟级微观结构特征分析）+ 数据源修复 + tick 数据源接入：① 修复 TDXMinuteSource 主力连续代码映射（RB0→RBL8.SHF/IF0→IFL0.CFF）与列字典解析、60m 周期参数（1h）、聚合器分钟源按请求频率动态重建；② 新增 `scripts/minute_microstructure_analysis.py`（多频率对比/日内波动/IC 衰减/信号自相关/换手率分析）；③ 新增 TQSDK tick 逐笔数据源（`TQSDKTickSource` 通过 `get_tick_serial` 获取 5 档盘口，tick_cache 表缓存，`FuturesDataAggregator.get_ticks()` + `FuturesDataProvider.get_tick_data()` 接口，DataSource 新增 TQSDK_TICK 枚举）；新增 29 个 TDX 适配器测试 + 10 个 tick 数据源测试；实测通达信 17709 提供 5m 10000 根（≈7.5 个月），TQSDK tick 5000 行（≈42 分钟）；同步更新文档 |
+| **v2.30.0** | 2026-08-08 | 分钟级回测 Phase 1: 三源分钟数据源适配（通达信 TDX HTTP 17709 + TQ-Local 7721 + 天勤 TQSDK），DuckDB minute_cache 缓存，聚合器扩展支持分钟级数据路径，回测引擎增加 frequency 参数（年化因子/窗口/成本自适应），CLI 增加 --frequency 参数；同步更新 28 文档版本至 v2.30.0 |
+| **v2.29.0** | 2026-08-08 | P2 已知问题修复三连：① `business_flow.md` / `execution_modes_flowchart.md` 补全一致性元数据章节；② 回测信号统一为 20 日滚动窗口 z-score（`_compute_strategy_returns` 新增 `zscore_window` 参数，默认 20，与 `signal_generator` 实盘信号一致）；③ forward_returns 末尾 period 天零值截断（`_compute_factor` 中 truncate 逻辑，确保 IC/策略收益/绩效指标不引入零值偏差）；同步更新 28 文档版本至 v2.29.0 |
+| **v2.28.0** | 2026-08-08 | 回测流水线计算错误修复：P0 换手率指标修正（`_calculate_metrics` 从 `positions` 而非 `returns` 计算 turnover，修复 15x 低估）；P1 成本时序对齐修正（`_compute_strategy_returns` 使用 `positions[i-1] * forward_returns[i-1]` 正确对齐）；P1 IC 计算方法统一（`_compute_ic_series` 从 Pearson 改为 Spearman 秩相关系数，与系统其他模块一致）；同步更新 docs/harness/06-testing.md 和 07-operations.md 版本号至 v2.28.0 |
+| **v2.27.0** | 2026-08-07 | 跨市场泛化验证 Phase A（P0，期货→股票/ETF 泛化验证引擎 + 数据适配层 + 报告输出 + CLI 集成）：新增 `fts/cross_market/` 模块（`CrossMarketDataAdapter` 统一数据格式 + `CrossMarketEngine` 跨市场 IC 计算与因子分类）、`scripts/cross_market_revalidation.py` 独立脚本、`fts factor cross-market` CLI 子命令（三个方向：futures-to-stock/futures-to-etf/stock-to-futures）、20 测试全绿 |
+| **v2.25.0** | 2026-08-07 | 自动化因子提取管道 P0-P4 全部完成：P0 天软因子提取器（27 个新因子，tinysoft.yaml）；P1 券商研报因子提取器（7 个新因子，broker_reports.yaml）；P2 学术论文因子提取器（6 个新因子，academic_papers.yaml）；P3 统一转换器 + 验证器（unified_factor_converter.py，支持跨文件去重/语法验证/格式一致性/统计报告生成）；P4 集成到 CLI（`fts seed validate/report/dedup` 子命令组，支持 `--market futures/stock`）；期货种子因子 121 个（17 文件），股票种子因子 645 个（6 文件），总计 766 个种子因子，无跨文件重复 |
+| **v2.24.0** | 2026-08-07 | 新增 seed_lineage 种子溯源表（L0→L2 全链路）：schema.py 新增第 12 张表 seed_lineage（lineage_id/seed_name/seed_family/seed_market/evolved_factor_id/evolved_factor_name/generation/parent_id/trace_id/promoted_at + 4 索引）；verify_database 新增 seed_lineage 统计（行数/家族分布）；迁移脚本 scripts/migrate_add_seed_lineage.py（幂等，支持 --dry-run）；01-architecture 文档同步表数 11→12 |
 | **v2.22.0** | 2026-08-07 | L1 候选因子评分缺陷修复 4 项：P1 经济逻辑评分默认值统一为 3（evaluation_chain.py evaluate_economic_logic 默认值 0→3，evolution_loop.py _merge_l1_candidates 预填默认值）；P2 换手率缺失保护（L1 候选因子 turnover=0 时默认 0.5）；P3 种子因子 WalkForward 缺失补全（轻量 2 窗口验证）；P4 评分映射函数可配置化（factor_quality_card.py 从 config 读取阈值，factor_quality_card_config.py 扩展 to_factor_quality_card_config 输出）；150 测试全绿 |
 | **v2.21.0** | 2026-08-07 | 存储方案优化 4 项：P1 _promote_to_elite 去重仅依赖 DuckDB 权威数据源，移除冗余 JSON 文件 glob 扫描；P2 新增 oversub-type 参数；P3 晋升/淘汰操作自动写 catalog_consistency.jsonl 一致性日志；P4 ART 索引 workaround 添加 DROP/CREATE 计数器日志；新增 `fts catalog stats/verify/backup` CLI 命令组；11 测试全绿 |
 | **v2.20.2** | 2026-08-07 | 修复 Step 7.5 质量报告 DuckDB 失败：`_generate_quality_report` 新增 DuckDB C 扩展加载失败时 combo 文件回退机制（双路径 A→B），增加异常堆栈 debug 日志和报告 source 字段标记数据来源；90 测试全绿 |
@@ -66,8 +80,8 @@ FTS 项目版本号定义在两个位置，变更时必须同步更新：
 
 | 文件 | 字段 |
 |:-----|:-----|
-| `fts/__init__.py` | `__version__ = "2.22.0"` |
-| `pyproject.toml` | `version = "2.22.0"` |
+| `fts/__init__.py` | `__version__ = "2.30.0"`（从 pyproject.toml 动态读取） |
+| `pyproject.toml` | `version = "2.30.0"` |
 
 异常引擎内部版本号位于 `fts/factor_engine/__init__.py` 的 `EVOLUTION_VERSION`（当前 v1.1.0），与 FTS 项目版本同步。
 
@@ -222,7 +236,7 @@ python -m fts.cli scheduler list
 |:-------|:------------|:-----|:-----|
 | `l1_meta_loop` | `30 8 * * *` | 每日 08:30 | L1 Meta-Loop：知识补给 + Bootstrapping + 种子注入 |
 | `l2_evolution_loop` | `0 23 * * *` | 每日 23:00 | L2 Evolution Loop：夜间因子演化（LLM + optuna + 横截面） |
-| `l3_portfolio_loop` | `0 20 * * *` | 每日 20:00 | L3 Portfolio Loop：组合构建 + 正交化 + 衰减检验 + 信号合成 |
+| `l3_portfolio_loop` | `0 20 * * *` | 每日 20:00 | L3 Portfolio Loop：因子筛选(ACTIVE_FACTOR_CAP=20) + 信号合成(默认elastic_net) + Verifier 校验 |
 | `futures_signal_pipeline` | `30 20 * * *` | 每日 20:30 | 期货信号管道：独立生成横截面信号报告 |
 | `health_check` | `*/10 * * * *` | 每 10 分钟 | 健康检查：监控所有循环状态 |
 

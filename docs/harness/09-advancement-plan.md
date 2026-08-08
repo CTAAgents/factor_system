@@ -1,7 +1,7 @@
 # FTS 晋级计划
 
-> 版本: v2.22.0
-> 最后更新: 2026-08-07
+> 版本: v2.39.0
+> 最后更新: 2026-08-08
 > 状态: 活跃 — 随项目迭代持续更新
 
 ---
@@ -334,6 +334,8 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 | 版本 | 主题 | 核心产出 |
 |:-----|:-----|:---------|
 | **算子演化引擎（Phase 3+ / C.4）** | ✅ 已实现（v2.10.0） | 基于 Phase C.2 基础层（FTS-Expr DSL / 算子注册表 / kind 分派 / evolution_mode），实现算子级因子创新与演化（`OperatorEvolutionEngine`，见第 2 节 v2.10.0 里程碑） |
+| **v2.33.0** | 宏观因子降级 + 适用场景重设计 | ✅ 已实现（v2.33.0） | fut_macro_export 家族 6 因子全部 retire（真实 EDB 数据 IC≈0 证实代理假象）；角色边界重设计（宏观因子限定跨品种/板块层面）；np.bincount 输入边界审计修复（3 因子入口 NaN 清理 + bincount 防御）+ FactorRepository 事务修复 |
+| **v2.30.0** | 分钟级回测 Phase 1 | ✅ 已实现（v2.30.0） | 三源分钟数据源适配 + DuckDB minute_cache + 聚合器扩展 + 回测引擎 frequency 参数 + CLI --frequency 参数 |
 | **v2.0.0** | 生产部署 | 监控告警完善、容器化、CI/CD 流水线、期货全链路 E2E 测试 |
 
 ---
@@ -341,7 +343,10 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 ## 4. 版本历史
 
 | 版本 | 日期 | 说明 |
-|:-----|:-----|:-----|| **v2.19.0** | 2026-08-07 | P0/P1 过拟合修复：A. combosharp  diversity-adjusted 加权；B. 因子 Sharpe 上限截断 3.0；C. 评价窗口 120d→500d；D. L3Verifier max_sharpe=3.5；E. Dirichlet 随机化测试；F. 质量卡 Sharpe>10 惩罚；修复 `build_combo` `n_ret` 赋值顺序 bug；修复 `EvolutionLoop` pipeline 引用回归；`test_portfolio_loop.py` 90 全绿 |
+|:-----|:-----|:-----|
+| **v2.33.0** | 2026-08-08 | 宏观因子降级 + 适用场景重设计 + np.bincount 边界审计：fut_macro_export 家族 6 因子 retire（真实 EDB 数据证实代理 Sharpe 7.68 为假象，IC≈0）；角色边界重设计（宏观因子限定跨品种/板块层面，禁止单品种时序信号）；FactorRepository 事务修复（get_factor fetchall + status 补列）；3 个 bincount 因子边界修复（NaN 清理 + 输入防御）；同步入口 NaN 防护到 4 个活跃 g 因子；新增 24 测试用例 |
+| **v2.30.0** | 2026-08-08 | 分钟级回测 Phase 1：三源分钟数据源适配 + DuckDB minute_cache + 聚合器扩展 + 回测引擎 frequency 参数 + CLI --frequency 参数 |
+| **v2.19.0** | 2026-08-07 | P0/P1 过拟合修复：A. combosharp  diversity-adjusted 加权；B. 因子 Sharpe 上限截断 3.0；C. 评价窗口 120d→500d；D. L3Verifier max_sharpe=3.5；E. Dirichlet 随机化测试；F. 质量卡 Sharpe>10 惩罚；修复 `build_combo` `n_ret` 赋值顺序 bug；修复 `EvolutionLoop` pipeline 引用回归；`test_portfolio_loop.py` 90 全绿 |
 | **v2.18.0** | 2026-08-07 | 因子家族多样性约束：`_promote_to_elite` 新增家族数量检查（`max_per_family=3`），限制单一家族因子过度繁殖；`BudgetConfig` 新增 `max_per_family` 字段；配置文档同步更新 |
 | **v2.17.0** | 2026-08-07 | 因子淘汰主流程集成：`FactorRepository.retire_factor()` DuckDB 状态更新 + JSON 迁移 _retired/ + 状态变迁记录；`monthly_decay_eval_job` 调用 `retire_factor()`；修复 DuckDB ART 索引 bug |
 | **v2.16.0** | 2026-08-06 | 孤立模块集成 Phase 2：`LogicMonitor`/`FactorInspector` 注册为定时任务（每日 22:00/03:00）；`ProcessWatchdog` 集成到 `SchedulerEngine`；任务注册表增至 8 个任务 |

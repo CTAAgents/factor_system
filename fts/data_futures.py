@@ -31,10 +31,15 @@ HARNESS §契约优先: 数据接口通过本模块定义。
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
+import time
+from collections import deque
 from datetime import datetime, timedelta
+from functools import wraps
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -52,21 +57,283 @@ class FuturesDataError(RuntimeError):
     """期货数据获取失败。"""
 
 
-# ─── DuckDB 连接管理 ───────────────────────────────────────
+# ─── 重试装饰器 ───────────────────────────────────────────
 
-_CONN: Optional[Any] = None
+def retry_on_conflict(
+    max_retries: int = 3,
+    delay: float = 0.1,
+    backoff: float = 2.0,
+) -> Callable:
+    """DuckDB 写冲突自动重试装饰器。
+
+    Args:
+        max_retries: 最大重试次数
+        delay: 初始重试间隔（秒）
+        backoff: 退避倍数
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            import duckdb  # type: ignore[import-untyped]
+            last_exc: Exception | None = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except duckdb.ConcurrentTransactionException as e:
+                    last_exc = e
+                    if attempt == max_retries - 1:
+                        raise
+                    wait = delay * (backoff ** attempt)
+                    logger.debug(
+                        "DuckDB 写冲突 (第 %d/%d 次)，等待 %.1fs 重试",
+                        attempt + 1, max_retries, wait,
+                    )
+                    time.sleep(wait)
+            raise last_exc  # type: ignore[misc]
+        return wrapper
+    return decorator
+
+
+# ─── 异步写入队列 ─────────────────────────────────────────
+
+class AsyncWriteQueue:
+    """DuckDB 异步写入队列 — 将写入请求串行化。
+
+    所有写入操作排队由单个 worker 协程顺序执行，
+    避免多协程同时写入导致的 ConcurrentTransactionException。
+
+    用法:
+        queue = AsyncWriteQueue(conn)
+        queue.start()
+        await queue.execute("INSERT INTO kline_cache VALUES (?, ?)", [val1, val2])
+        await queue.flush()
+        await queue.stop()
+    """
+
+    def __init__(self, conn: Any, max_queue_size: int = 1000):
+        """
+        Args:
+            conn: DuckDB 数据库连接
+            max_queue_size: 队列最大长度（超过时阻塞）
+        """
+        self._conn = conn
+        self._queue: asyncio.Queue[tuple[str, Optional[list], asyncio.Future]] = (
+            asyncio.Queue(maxsize=max_queue_size)
+        )
+        self._worker_task: Optional[asyncio.Task[None]] = None
+        self._running = False
+
+    def start(self) -> None:
+        """启动后台 worker。"""
+        if self._running:
+            return
+        self._running = True
+        self._worker_task = asyncio.create_task(self._worker())
+
+    async def stop(self) -> None:
+        """停止后台 worker（等待队列清空后退出）。"""
+        self._running = False
+        if self._worker_task:
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+            self._worker_task = None
+
+    async def execute(self, sql: str, params: Optional[list] = None) -> Any:
+        """异步执行 SQL 写入（排队等待）。
+
+        Args:
+            sql: SQL 语句
+            params: 参数列表（可选）
+
+        Returns:
+            执行结果
+        """
+        future: asyncio.Future[Any] = asyncio.Future()
+        await self._queue.put((sql, params, future))
+        return await future
+
+    async def _worker(self) -> None:
+        """后台 worker — 串行执行队列中的写入请求。"""
+        while self._running:
+            try:
+                sql, params, future = await asyncio.wait_for(
+                    self._queue.get(), timeout=1.0,
+                )
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+
+            try:
+                if params:
+                    result = self._conn.execute(sql, params)
+                else:
+                    result = self._conn.execute(sql)
+                future.set_result(result)
+            except Exception as e:
+                future.set_exception(e)
+            finally:
+                self._queue.task_done()
+
+    @property
+    def queue_size(self) -> int:
+        """当前队列中的待处理请求数。"""
+        return self._queue.qsize()
+
+    async def flush(self) -> None:
+        """等待队列清空。"""
+        await self._queue.join()
+
+
+# ─── DuckDB 连接管理器 ──────────────────────────────────
+
+class DuckDBConnection:
+    """DuckDB 连接管理器 — 单连接 + 重试保护 + 可选异步写入队列。
+
+    封装 DuckDB 连接，自动配置并发重试，并提供可选的异步写入队列
+    用于高并发场景下的写入串行化。
+
+    用法:
+        db = DuckDBConnection(path)
+        db.execute("SELECT * FROM kline_cache WHERE symbol = ?", ["RB"])
+
+        # 异步写入（需启用 enable_async_queue=True）
+        await db.async_execute("INSERT INTO kline_cache VALUES (?, ?)", [v1, v2])
+        await db.stop_async()
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        concurrency_retries: int = 3,
+        enable_async_queue: bool = False,
+        max_async_queue_size: int = 1000,
+    ):
+        """
+        Args:
+            path: DuckDB 数据库文件路径
+            concurrency_retries: 写冲突自动重试次数（0 表示禁用）
+            enable_async_queue: 是否启用异步写入队列
+            max_async_queue_size: 异步队列最大长度
+        """
+        self._path = path
+        self._concurrency_retries = concurrency_retries
+        self._conn: Any = None
+        self._lock = threading.Lock()
+        self._async_queue: Optional[AsyncWriteQueue] = None
+        self._enable_async = enable_async_queue
+        self._max_async_queue = max_async_queue_size
+
+    def connect(self) -> Any:
+        """获取或创建 DuckDB 连接。
+
+        线程安全：首次调用时创建连接，后续复用。
+        创建时自动尝试设置 lock_configuration，失败静默降级。
+
+        Returns:
+            DuckDB 连接对象
+        """
+        if self._conn is not None:
+            return self._conn
+
+        with self._lock:
+            if self._conn is not None:
+                return self._conn
+            import duckdb  # type: ignore[import-untyped]
+            self._conn = duckdb.connect(str(self._path))
+            # 尝试设置锁配置避免死锁（旧版 DuckDB 不支持时静默降级）
+            try:
+                if self._concurrency_retries > 0:
+                    self._conn.execute("SET lock_configuration = true")
+            except Exception:
+                logger.debug("DuckDB lock_configuration 不可用，使用应用层重试")
+            logger.info(
+                "DuckDB 连接已建立: %s (lock_configuration=true, "
+                "app_retry=%d)",
+                self._path, self._concurrency_retries,
+            )
+            if self._enable_async:
+                self._async_queue = AsyncWriteQueue(
+                    self._conn, max_queue_size=self._max_async_queue,
+                )
+                self._async_queue.start()
+                logger.info("DuckDB 异步写入队列已启动")
+        return self._conn
+
+    @retry_on_conflict()
+    def execute(self, sql: str, params: Optional[list] = None) -> Any:
+        """同步执行 SQL（带写冲突自动重试）。
+
+        Args:
+            sql: SQL 语句
+            params: 参数列表（可选）
+
+        Returns:
+            执行结果
+        """
+        conn = self.connect()
+        if params:
+            return conn.execute(sql, params)
+        return conn.execute(sql)
+
+    async def async_execute(self, sql: str, params: Optional[list] = None) -> Any:
+        """异步执行 SQL（通过写入队列串行化，避免并发冲突）。
+
+        需要启用 enable_async_queue=True。
+
+        Args:
+            sql: SQL 语句
+            params: 参数列表（可选）
+
+        Returns:
+            执行结果
+        """
+        if not self._enable_async:
+            raise RuntimeError(
+                "异步写入队列未启用（构造时设置 enable_async_queue=True）"
+            )
+        self.connect()  # 确保连接已建立
+        assert self._async_queue is not None
+        return await self._async_queue.execute(sql, params)
+
+    def close(self) -> None:
+        """关闭数据库连接。"""
+        with self._lock:
+            if self._conn:
+                self._conn.close()
+                self._conn = None
+                logger.info("DuckDB 连接已关闭")
+
+    async def stop_async(self) -> None:
+        """停止异步写入队列（等待队列清空后关闭 worker）。"""
+        if self._async_queue:
+            await self._async_queue.flush()
+            await self._async_queue.stop()
+            self._async_queue = None
+            logger.info("DuckDB 异步写入队列已停止")
+
+
+# ─── 模块级 DuckDB 连接（兼容现有 _get_db() 调用方）───────
+
+_DB: Optional[DuckDBConnection] = None
 
 
 def _get_db() -> Any:
-    """延迟获取 DuckDB 连接。"""
-    global _CONN  # pylint: disable=global-statement
-    if _CONN is None:
+    """延迟获取 DuckDB 连接（兼容现有调用方）。
+
+    返回 DuckDB 原生连接对象（.execute() 可用），
+    但底层使用 DuckDBConnection 管理重试和生命周期。
+    """
+    global _DB  # pylint: disable=global-statement
+    if _DB is None:
         try:
-            import duckdb  # type: ignore[import-untyped]
-            _CONN = duckdb.connect(str(_DUCKDB_PATH))
+            _DB = DuckDBConnection(_DUCKDB_PATH, concurrency_retries=3)
         except Exception as e:
-            raise FuturesDataError(f"DuckDB 连接失败: {e}") from e
-    return _CONN
+            raise FuturesDataError(f"DuckDB 连接初始化失败: {e}") from e
+    return _DB.connect()
 
 
 # ─── 期货数据提供者 ───────────────────────────────────────
@@ -99,7 +366,10 @@ class FuturesDataProvider:
             self._init_default_aggregator()
 
     def _init_default_aggregator(self) -> None:
-        """惰性初始化默认 FuturesDataAggregator（按需导入 + 探活）。"""
+        """惰性初始化默认 FuturesDataAggregator（按需导入 + 探活）。
+
+        v2.30.0: 分钟数据源也在此初始化（TDXMinuteSource → TQLocalSource → TQSDKSource）。
+        """
         try:
             from fts.data_sources.aggregator import FuturesDataAggregator
             from fts.data_sources.tq_source import TQLocalSource
@@ -112,13 +382,43 @@ class FuturesDataProvider:
             except Exception:
                 logger.debug("TQLocalSource 实例化失败，跳过")
 
+            # ── 分钟数据源（v2.30.0）──
+            minute_sources: list = []
+            try:
+                from fts.data_sources.tdx_minute_source import TDXMinuteSource
+                minute_sources.append(TDXMinuteSource())
+            except Exception:
+                logger.debug("TDXMinuteSource 初始化失败，跳过分钟源")
+
+            try:
+                minute_sources.append(TQLocalSource(period="5m"))
+            except Exception:
+                logger.debug("TQLocalSource(5m) 初始化失败，跳过")
+
+            try:
+                from fts.data_sources.tqsdk_source import TQSDKSource
+                minute_sources.append(TQSDKSource(period="5m"))
+            except Exception:
+                logger.debug("TQSDKSource 初始化失败，跳过")
+
+            # ── tick 逐笔数据源（v2.31.0）──
+            tick_sources: list = []
+            try:
+                from fts.data_sources.tqsdk_tick_source import TQSDKTickSource
+                tick_sources.append(TQSDKTickSource())
+            except Exception:
+                logger.debug("TQSDKTickSource 初始化失败，跳过 tick 源")
+
             db_path = _DUCKDB_PATH if _DUCKDB_PATH.exists() else None
             self._aggregator = FuturesDataAggregator(
                 sources=sources, enhancers=[],
+                minute_sources=minute_sources,
+                tick_sources=tick_sources,
                 db_path=db_path,
                 cache_max_age_days=30,
             )
-            logger.info("FuturesDataAggregator 初始化完成（源数=%d）", len(sources))
+            logger.info("FuturesDataAggregator 初始化完成（源数=%d, 分钟源数=%d, tick 源数=%d）",
+                        len(sources), len(minute_sources), len(tick_sources))
         except Exception as e:
             logger.warning("FuturesDataAggregator 初始化失败: %s（降级到直接路径）", e)
             self._aggregator = None
@@ -197,6 +497,92 @@ class FuturesDataProvider:
         # 4. 合成数据降级
         logger.warning(f"使用合成数据回退 [期货 {symbol}]")
         return self.synthesize_ohlcv(n_days=days, base_price=3000.0, seed=42)
+
+    # ── 分钟级 OHLCV（v2.30.0）──
+
+    def get_minute_ohlcv(
+        self,
+        symbol: str,
+        days: int = 500,
+        frequency: str = "5m",
+        trace_id: str = "",
+    ) -> pd.DataFrame:
+        """获取期货分钟级 K 线数据。
+
+        通过 FuturesDataAggregator.get_minute_ohlcv() 获取，
+        经 4 级降级链（minute_cache → TDX 17709 → TQ-Local 7721 → TQSDK）。
+
+        Args:
+            symbol: 期货连续合约代码（如 "RB0"）。
+            days: 回溯 K 线根数。
+            frequency: 分钟频率，支持 "1m" / "5m" / "15m" / "30m" / "60m"。
+            trace_id: HARNESS trace_id。
+
+        Returns:
+            pd.DataFrame with columns: open, high, low, close, volume
+            Index: DatetimeIndex（从 datetime 列设置）
+            所有源失败时返回空 DataFrame。
+        """
+        if self._aggregator is not None:
+            try:
+                agg_df = self._aggregator.get_minute_ohlcv(
+                    symbol, days, frequency, trace_id,
+                )
+                if agg_df is not None and not agg_df.empty:
+                    df = agg_df.copy()
+                    df["datetime"] = pd.to_datetime(df["datetime"])
+                    df.set_index("datetime", inplace=True)
+                    df.sort_index(inplace=True)
+                    logger.info(
+                        "分钟数据命中 [%s][%s] 频率=%s %d 行",
+                        symbol, agg_df.get("source", "").iloc[0]
+                        if "source" in agg_df.columns else "?", frequency, len(df),
+                    )
+                    return df[["open", "high", "low", "close", "volume"]]
+            except Exception as e:
+                logger.warning("分钟数据聚合器获取失败 [%s]: %s", symbol, e)
+
+        logger.warning("分钟数据所有源失败 [%s] frequency=%s", symbol, frequency)
+        return pd.DataFrame()
+
+    # ── tick 逐笔数据（v2.31.0）──
+
+    def get_tick_data(
+        self,
+        symbol: str,
+        count: int = 5000,
+        trace_id: str = "",
+    ) -> pd.DataFrame:
+        """获取期货 tick 逐笔数据（含 5 档盘口）。
+
+        通过 FuturesDataAggregator.get_ticks() 获取，
+        降级链: tick_cache → TQSDKTickSource。
+
+        Args:
+            symbol: 期货连续合约代码（如 "RB0"）。
+            count: tick 行数（TQSDK 免费账号上限 5000）。
+            trace_id: HARNESS trace_id。
+
+        Returns:
+            含 tick schema 的 DataFrame（datetime 为索引，last_price/盘口等列），
+            所有源失败时返回空 DataFrame。
+        """
+        if self._aggregator is not None:
+            try:
+                agg_df = self._aggregator.get_ticks(symbol, count, trace_id)
+                if agg_df is not None and not agg_df.empty:
+                    df = agg_df.copy()
+                    df["datetime"] = pd.to_datetime(df["datetime"])
+                    df.set_index("datetime", inplace=True)
+                    df.sort_index(inplace=True)
+                    src = agg_df.get("source", "").iloc[0] if "source" in agg_df.columns else "?"
+                    logger.info("tick 数据命中 [%s][%s] %d 行", symbol, src, len(df))
+                    return df
+            except Exception as e:
+                logger.warning("tick 数据聚合器获取失败 [%s]: %s", symbol, e)
+
+        logger.warning("tick 数据所有源失败 [%s]", symbol)
+        return pd.DataFrame()
 
     # ── 批量面板数据 ──
 
@@ -525,15 +911,24 @@ FUTURES_SECTOR_MAP: dict[str, list[str]] = {
         "CU0", "ZN0", "PB0", "SN0", "NI0",  # 基本金属
         "BC0", "AO0", "AD0", "OP0",          # 铜/铝衍生
     ],
-    "能源化工": [
-        "SC0", "FU0", "LU0", "BU0",          # 原油/燃料/沥青
-        "RU0", "NR0", "BR0",                  # 橡胶
-        "TA0", "MA0", "EG0", "EB0",           # 化工中间体
-        "L0", "PP0", "V0", "PG0",             # 塑料/液化气
-        "SA0", "UR0", "PF0", "SH0",           # 纯碱/尿素/化纤
-        "PX0", "PR0", "PL0", "BZ0",           # 芳烃/聚酯/丙烯
-        "SP0", "EC0",                          # 纸浆/集运
-        "FG0",                                 # 建材
+    "能源": [
+        "SC0", "FU0", "LU0", "BU0",           # 原油/燃料油/沥青
+    ],
+    "聚酯链": [
+        "PX0", "TA0", "PF0", "PR0", "EG0",   # 对二甲苯→PTA→聚酯(短纤/瓶片), 乙二醇
+    ],
+    "油化工": [
+        "L0", "PP0", "V0", "PG0",            # 聚乙烯/聚丙烯/聚氯乙烯/液化气
+        "EB0", "BZ0", "PL0",                 # 苯乙烯/苯/丙烯
+    ],
+    "煤化工": [
+        "MA0", "SA0", "UR0", "FG0", "SH0",   # 甲醇/纯碱/尿素/玻璃/烧碱
+    ],
+    "橡胶": [
+        "RU0", "NR0", "BR0",                  # 天然橡胶/20号胶/丁二烯橡胶
+    ],
+    "纸浆集运": [
+        "SP0", "EC0",                          # 纸浆/集运欧线
     ],
     "农产品": [
         "C0", "A0", "B0", "M0", "Y0", "P0",   # 大豆/玉米/油脂
@@ -562,7 +957,12 @@ FUTURES_STRATIFIED_SUBSET: list[str] = [
     "RB0", "I0", "J0",
     # 有色金属
     "CU0", "ZN0", "NI0",
-    # 能源化工
+    # 能源 → 原油/燃料油/沥青
+    # 聚酯链 → PX→PTA→聚酯
+    # 油化工 → 石脑油裂解下游
+    # 煤化工 → 煤基化工品
+    # 橡胶 → 天然/合成橡胶
+    # 纸浆集运 → 造纸/航运
     "TA0", "MA0", "SC0",
     # 农产品
     "M0", "C0", "SR0",
@@ -867,6 +1267,9 @@ def get_futures_provider() -> FuturesDataProvider:
 
 
 __all__ = [
+    "DuckDBConnection",
+    "AsyncWriteQueue",
+    "retry_on_conflict",
     "FuturesDataProvider",
     "FuturesDataError",
     "get_futures_provider",

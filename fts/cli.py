@@ -11,6 +11,9 @@ fts.cli — FTS 统一命令行入口。
     python -m fts.cli factor stats           : 因子家族分布统计
     python -m fts.cli factor lineage <id>    : 因子演化血缘查询
     python -m fts.cli factor seeds           : 列出种子因子
+    python -m fts.cli seed validate          : 验证所有种子因子
+    python -m fts.cli seed report            : 生成种子因子统计报告
+    python -m fts.cli seed dedup             : 检查跨文件因子重复
     python -m fts.cli version                : 打印版本号
 
 HARNESS §trace_id 全链路: 所有子命令启动时生成 trace_id 并贯穿整个执行流程。
@@ -369,7 +372,7 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
     if universe == "futures":
         elite_dir = cfg.get_elite_dir("futures")
         if synthesis_mode is None:
-            synthesis_mode = "sharpe_weight"
+            synthesis_mode = "elastic_net"
     else:
         elite_dir = cfg.get_elite_dir("stock")
         if synthesis_mode is None:
@@ -692,7 +695,7 @@ def _cmd_factor_list(args: argparse.Namespace) -> int:
                 factors = repo.get_diverse_factors(
                     market=market,
                     total_count=total_count,
-                    max_per_family=getattr(args, "max_per_family", 3),
+                    max_per_family=getattr(args, "max_per_family", 15),
                     min_ic=min_ic if min_ic is not None else 0.02,
                     min_sharpe=min_sharpe if min_sharpe is not None else 0.5,
                 )
@@ -823,6 +826,59 @@ def _cmd_factor_lineage(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_factor_cross_market(args: argparse.Namespace) -> int:
+    """跨市场泛化验证。"""
+    from fts.cross_market import CrossMarketDataAdapter, CrossMarketEngine
+
+    try:
+        adapter = CrossMarketDataAdapter()
+        engine = CrossMarketEngine(adapter)
+
+        direction = args.direction
+        direction_map = {
+            "futures-to-stock": engine.run_futures_to_stock,
+            "futures-to-etf": engine.run_futures_to_etf,
+            "stock-to-futures": engine.run_stock_to_futures,
+        }
+        market_label = {"futures-to-stock": "期货→A股", "futures-to-etf": "期货→ETF",
+                        "stock-to-futures": "股票→期货"}
+
+        print(f"=== 跨市场泛化验证: {market_label.get(direction, direction)} ===")
+        print(f"方向: {direction} | 回溯: {args.days}天")
+
+        kwargs = {"days": args.days, "max_factors": args.max_factors}
+        if direction == "futures-to-stock":
+            kwargs["max_stocks"] = args.max_stocks
+            print(f"最大成分股: {args.max_stocks if args.max_stocks > 0 else '全量'}")
+
+        run_fn = direction_map[direction]
+        report = run_fn(**kwargs)
+
+        # 生成报告
+        output_path = None
+        if args.output_dir:
+            from datetime import date
+            output_path = Path(args.output_dir) / f"cross_market_revalidation_{date.today().isoformat()}.md"
+        report_path = engine.generate_report(report, output_path=output_path)
+
+        print(f"\n结果汇总:")
+        print(f"  🌍 通用因子: {report.n_universal}")
+        print(f"  🔄 市场特异: {report.n_market_specific}")
+        print(f"  ❌ 失效: {report.n_failed}")
+        print(f"  ⬇️ 已降级: {report.n_deprecated}")
+        print(f"  📄 报告: {report_path}")
+
+        return 0
+
+    except ImportError as e:
+        print(f"[cross-market] 导入失败: {e}", file=sys.stderr)
+        print(f"[cross-market] 请确保 fts.cross_market 模块已安装", file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001
+        print(f"[cross-market] 执行失败: {e}", file=sys.stderr)
+        return 1
+
+
 def _cmd_factor_seeds(args: argparse.Namespace) -> int:
     """列出种子因子。"""
     market = args.market
@@ -873,6 +929,63 @@ def _cmd_factor_show(args: argparse.Namespace) -> int:
         return 2
 
 
+# ─── fts seed（种子因子管理 — P4 统一转换器 + 验证器） ─────────
+
+
+def _cmd_seed_validate(args: argparse.Namespace) -> int:
+    """验证所有种子因子（完整性/语法/跨文件重复）。"""
+    from scripts.unified_factor_converter import (
+        load_all_factors, validate_all, check_duplicates,
+    )
+    market = getattr(args, "market", "futures")
+    all_factors = load_all_factors(market)
+    print(f"📂 共加载 {len(all_factors)} 个种子文件（{market}）")
+    print()
+
+    errors = validate_all(all_factors)
+    if errors:
+        print(f"❌ 发现 {len(errors)} 个因子存在问题:")
+        for key, errs in sorted(errors.items()):
+            print(f"  {key}:")
+            for e in errs:
+                print(f"    - {e}")
+    else:
+        print("✅ 所有因子验证通过")
+
+    print()
+    dup_errors = check_duplicates(all_factors)
+    if dup_errors:
+        for e in dup_errors:
+            print(f"  {e}")
+        return 1
+    print("✅ 无跨文件重复")
+    return 0 if not errors else 1
+
+
+def _cmd_seed_report(args: argparse.Namespace) -> int:
+    """生成种子因子统计报告。"""
+    from scripts.unified_factor_converter import load_all_factors, generate_report
+    market = getattr(args, "market", "futures")
+    all_factors = load_all_factors(market)
+    print(generate_report(all_factors, market))
+    return 0
+
+
+def _cmd_seed_dedup(args: argparse.Namespace) -> int:
+    """检查跨文件因子重复。"""
+    from scripts.unified_factor_converter import load_all_factors, check_duplicates
+    market = getattr(args, "market", "futures")
+    all_factors = load_all_factors(market)
+    errors = check_duplicates(all_factors)
+    if errors:
+        print("❌ 发现重复:")
+        for e in errors:
+            print(f"  {e}")
+        return 1
+    print("✅ 无跨文件重复")
+    return 0
+
+
 # ─── fts backtest（B.2 回测流水线 CLI） ─────────────────
 
 
@@ -902,10 +1015,25 @@ def _cmd_backtest_run(args: argparse.Namespace) -> int:
         print(f"[backtest] 未找到因子: {args.factor_id}")
         return 1
 
-    data, _ = _prepare_data(getattr(args, "symbol", "000001"), days=args.days)
+    freq = getattr(args, "frequency", "daily")
     date_range = None
     if args.start and args.end:
         date_range = (args.start, args.end)
+
+    # 分钟级数据路径（v2.30.0）
+    if freq != "daily":
+        from .data_futures import FuturesDataProvider
+        provider = FuturesDataProvider()
+        data = provider.get_minute_ohlcv(
+            getattr(args, "symbol", "000001"),
+            days=args.days,
+            frequency=freq,
+        )
+        if data.empty:
+            print(f"[backtest] 分钟数据获取失败 [freq={freq}]")
+            return 1
+    else:
+        data, _ = _prepare_data(getattr(args, "symbol", "000001"), days=args.days)
 
     from .factor_engine.backtest_pipeline import (
         BacktestInput, BacktestPipeline,
@@ -917,6 +1045,7 @@ def _cmd_backtest_run(args: argparse.Namespace) -> int:
         data=data,
         date_range=date_range,
         initialization_capital=args.capital,
+        frequency=freq,
     ))
     if not result.success:
         print(f"[backtest] 回测失败: {result.error}", file=sys.stderr)
@@ -924,12 +1053,13 @@ def _cmd_backtest_run(args: argparse.Namespace) -> int:
 
     report = result.output
     m = report.metrics
-    print(f"=== 回测结果: {report.factor_id} ===")
+    freq_label = getattr(args, "frequency", "daily")
+    print(f"=== 回测结果: {report.factor_id} (频率: {freq_label}) ===")
     print(f"期间: {report.start_date} ~ {report.end_date}")
     print(f"总收益: {m.total_return:.2%} | 年化: {m.annual_return:.2%} | "
           f"Sharpe: {m.sharpe_ratio:.3f}")
     print(f"最大回撤: {m.max_drawdown:.2%} | Calmar: {m.calmar_ratio:.3f} | "
-          f"胜率: {m.win_rate:.2%}")
+          f"胜率: {m.win_rate:.2%} | 盈亏比: {m.payoff_ratio:.2f} | 盈亏因子: {m.profit_factor:.2f}")
     print(f"IC 均值: {m.ic_mean:.4f} | IC IR: {m.ic_ir:.3f} | 换手: {m.turnover:.3f}")
 
     if args.output:
@@ -1233,6 +1363,129 @@ def _cmd_feedback_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_bridge_publish(args: argparse.Namespace) -> int:
+    """发布信号到目标协议（Phase 25）。"""
+    from datetime import datetime
+
+    from .bridge import SignalBridge, BridgeError
+    from .factor_engine.state import generate_trace_id
+
+    # 读取输入信号（缺省生成演示信号）
+    if args.input:
+        try:
+            with open(args.input, encoding="utf-8") as f:
+                signal = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"[bridge] 读取信号文件失败: {e}")
+            return 1
+    else:
+        signal = {
+            "signal_id": generate_trace_id(),
+            "portfolio_id": "demo",
+            "timestamp": datetime.now().isoformat(),
+            "frequency": "1d",
+            "universe": [],
+            "signals": [],
+            "meta": {"trace_id": generate_trace_id(), "factor_count": 0},
+        }
+
+    bridge = SignalBridge(
+        protocol=args.protocol,
+        output_dir=args.output_dir,
+        redis_url=args.redis_url,
+        redis_key=args.redis_key,
+        rest_url=args.rest_url,
+    )
+    try:
+        sid = bridge.publish(signal)
+    except BridgeError as e:
+        print(f"[bridge] 发布失败: {e}")
+        return 1
+    print(f"[bridge] {args.protocol} 协议发布成功: signal_id={sid}")
+    return 0
+
+
+def _cmd_bridge_status(args: argparse.Namespace) -> int:
+    """查看信号桥接状态（Phase 25）。"""
+    from .bridge import SignalBridge, BridgeError
+
+    bridge = SignalBridge(
+        protocol=args.protocol,
+        output_dir=args.output_dir,
+        redis_url=args.redis_url,
+        redis_key=args.redis_key,
+    )
+    try:
+        status = bridge.status()
+    except BridgeError as e:
+        print(f"[bridge] 状态查询失败: {e}")
+        return 1
+    print("=== 信号桥接状态 ===")
+    print(f"协议: {status.protocol}")
+    print(f"可用: {'YES' if status.available else 'NO'}")
+    print(f"详情: {status.detail}")
+    if status.latest_signal_id:
+        print(f"最近信号: {status.latest_signal_id} @ {status.latest_timestamp}")
+    return 0 if status.available else 1
+
+
+def _cmd_bridge_serve(args: argparse.Namespace) -> int:
+    """启动 REST 信号服务（Phase 25）。
+
+    使用标准库 http.server 实现一个极简信号接收端点：
+        POST /signal  → 接收 FactorSignal JSON，写入 signals/latest_signal.json
+        GET  /signal  → 返回最近一次信号
+    """
+    import http.server
+
+    from .bridge import SignalBridge
+
+    bridge = SignalBridge(protocol="json", output_dir="signals")
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def _send_json(self, code: int, payload: dict) -> None:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):  # noqa: N802 - http.server 命名约定
+            if self.path != "/signal":
+                self._send_json(404, {"error": "not found"})
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            try:
+                signal = json.loads(raw)
+                bridge.publish(signal)
+            except Exception as e:  # noqa: BLE001
+                self._send_json(400, {"error": str(e)})
+                return
+            self._send_json(200, {"ok": True, "signal_id": signal.get("signal_id", "")})
+
+        def do_GET(self):  # noqa: N802
+            if self.path == "/health":
+                self._send_json(200, {"status": "ok"})
+                return
+            latest = bridge.latest() or {}
+            self._send_json(200, latest)
+
+        def log_message(self, fmt: str, *fmt_args: Any) -> None:  # noqa: A003
+            print(f"[bridge] {self.address_string()} {fmt % fmt_args}")
+
+    server = http.server.ThreadingHTTPServer((args.host, args.port), _Handler)
+    print(f"[bridge] REST 信号服务启动: http://{args.host}:{args.port}/signal")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[bridge] 服务已停止")
+    finally:
+        server.server_close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建 CLI parser。"""
     parser = argparse.ArgumentParser(
@@ -1360,6 +1613,37 @@ def build_parser() -> argparse.ArgumentParser:
     p_factor_lineage.add_argument("factor_id", help="因子 ID")
     p_factor_lineage.set_defaults(func=_cmd_factor_lineage)
 
+    # factor cross-market（跨市场泛化验证）
+    p_factor_xm = factor_sub.add_parser("cross-market", help="跨市场泛化验证")
+    p_factor_xm.add_argument("--direction", default="futures-to-stock",
+                             choices=["futures-to-stock", "futures-to-etf", "stock-to-futures"],
+                             help="验证方向（默认: futures-to-stock）")
+    p_factor_xm.add_argument("--days", type=int, default=120, help="回溯天数")
+    p_factor_xm.add_argument("--max-factors", type=int, default=0, help="最大因子数，0=全量")
+    p_factor_xm.add_argument("--max-stocks", type=int, default=0,
+                             help="最大成分股数，0=全量（仅 futures-to-stock 方向）")
+    p_factor_xm.add_argument("--output-dir", default=None, help="报告输出目录")
+    p_factor_xm.set_defaults(func=_cmd_factor_cross_market)
+
+    # seed（种子因子管理）
+    p_seed = sub.add_parser("seed", help="种子因子管理（验证/报告/去重）")
+    seed_sub = p_seed.add_subparsers(dest="subcommand", required=False)
+
+    p_seed_validate = seed_sub.add_parser("validate", help="验证所有种子因子（完整性/语法/跨文件重复）")
+    p_seed_validate.add_argument("--market", default="futures", choices=["futures", "stock"],
+                                 help="市场类型（默认：futures）")
+    p_seed_validate.set_defaults(func=_cmd_seed_validate)
+
+    p_seed_report = seed_sub.add_parser("report", help="生成种子因子统计报告")
+    p_seed_report.add_argument("--market", default="futures", choices=["futures", "stock"],
+                               help="市场类型（默认：futures）")
+    p_seed_report.set_defaults(func=_cmd_seed_report)
+
+    p_seed_dedup = seed_sub.add_parser("dedup", help="检查跨文件因子重复")
+    p_seed_dedup.add_argument("--market", default="futures", choices=["futures", "stock"],
+                              help="市场类型（默认：futures）")
+    p_seed_dedup.set_defaults(func=_cmd_seed_dedup)
+
     # backtest（B.2 回测流水线）
     p_backtest = sub.add_parser("backtest", help="回测流水线（B.2）")
     bt_sub = p_backtest.add_subparsers(dest="subcommand", required=False)
@@ -1374,6 +1658,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt_run.add_argument("--end", default=None, help="结束日期 YYYY-MM-DD")
     p_bt_run.add_argument("--days", type=int, default=500, help="回溯天数（默认 500）")
     p_bt_run.add_argument("--capital", type=float, default=1_000_000.0, help="初始资金")
+    p_bt_run.add_argument("--frequency", default="daily",
+                          choices=["daily", "1m", "5m", "15m", "30m", "60m"],
+                          help="数据频率（默认 daily，v2.30.0 分钟级支持）")
     p_bt_run.add_argument("--output", default=None, help="报告输出目录")
     p_bt_run.set_defaults(func=_cmd_backtest_run)
 
@@ -1451,6 +1738,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_fb_stats = fb_sub.add_parser("stats", help="查看反馈闭环统计")
     p_fb_stats.set_defaults(func=_cmd_feedback_stats)
+
+    # bridge（VNPY 信号桥接，Phase 25）
+    p_bridge = sub.add_parser("bridge", help="VNPY 信号桥接（Phase 25）")
+    bridge_sub = p_bridge.add_subparsers(dest="subcommand", required=False)
+
+    p_bridge_serve = bridge_sub.add_parser("serve", help="启动 REST 信号服务（接收下游信号推送）")
+    p_bridge_serve.add_argument("--host", default="127.0.0.1", help="监听地址")
+    p_bridge_serve.add_argument("--port", type=int, default=8765, help="监听端口")
+    p_bridge_serve.set_defaults(func=_cmd_bridge_serve)
+
+    p_bridge_publish = bridge_sub.add_parser("publish", help="发布信号到目标协议")
+    p_bridge_publish.add_argument("--protocol", default="json", choices=["json", "redis", "rest"], help="传输协议")
+    p_bridge_publish.add_argument("--input", default="", help="信号 JSON 文件路径（缺省生成演示信号）")
+    p_bridge_publish.add_argument("--output-dir", default="signals", help="JSON 协议输出目录")
+    p_bridge_publish.add_argument("--redis-url", default="redis://localhost:6379/0", help="Redis 连接 URL")
+    p_bridge_publish.add_argument("--redis-key", default="fts:signals:latest", help="Redis 信号 key")
+    p_bridge_publish.add_argument("--rest-url", default="", help="REST 目标 URL")
+    p_bridge_publish.set_defaults(func=_cmd_bridge_publish)
+
+    p_bridge_status = bridge_sub.add_parser("status", help="查看信号桥接状态")
+    p_bridge_status.add_argument("--protocol", default="json", choices=["json", "redis", "rest"], help="传输协议")
+    p_bridge_status.add_argument("--output-dir", default="signals", help="JSON 协议输出目录")
+    p_bridge_status.add_argument("--redis-url", default="redis://localhost:6379/0", help="Redis 连接 URL")
+    p_bridge_status.add_argument("--redis-key", default="fts:signals:latest", help="Redis 信号 key")
+    p_bridge_status.set_defaults(func=_cmd_bridge_status)
 
     return parser
 

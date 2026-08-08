@@ -64,6 +64,18 @@ KLINE_CACHE_NEW_COLUMNS: list[tuple[str, str]] = [
     ("trace_id", "VARCHAR"),
 ]
 
+# v2.31.0 Phase 5: tick_cache 5 档盘口扩展列（旧表仅 1 档盘口时 ALTER 补齐）
+TICK_CACHE_DEPTH_COLUMNS: list[tuple[str, str]] = [
+    ("bid_price2", "DOUBLE"), ("bid_volume2", "DOUBLE"),
+    ("ask_price2", "DOUBLE"), ("ask_volume2", "DOUBLE"),
+    ("bid_price3", "DOUBLE"), ("bid_volume3", "DOUBLE"),
+    ("ask_price3", "DOUBLE"), ("ask_volume3", "DOUBLE"),
+    ("bid_price4", "DOUBLE"), ("bid_volume4", "DOUBLE"),
+    ("ask_price4", "DOUBLE"), ("ask_volume4", "DOUBLE"),
+    ("bid_price5", "DOUBLE"), ("bid_volume5", "DOUBLE"),
+    ("ask_price5", "DOUBLE"), ("ask_volume5", "DOUBLE"),
+]
+
 
 # ─── DDL 模板 ──────────────────────────────────────────────
 
@@ -101,6 +113,59 @@ CREATE TABLE IF NOT EXISTS edb_cache (
     fetched_at  TIMESTAMP,
     trace_id    VARCHAR,
     PRIMARY KEY (indicator, date, source)
+)
+"""
+
+MINUTE_CACHE_CREATE_DDL: str = """
+CREATE TABLE IF NOT EXISTS minute_cache (
+    symbol      VARCHAR,
+    period      VARCHAR,
+    datetime    TIMESTAMP,
+    open        DOUBLE,
+    high        DOUBLE,
+    low         DOUBLE,
+    close       DOUBLE,
+    volume      DOUBLE,
+    source      VARCHAR,
+    fetched_at  TIMESTAMP,
+    trace_id    VARCHAR
+)
+"""
+
+TICK_CACHE_CREATE_DDL: str = """
+CREATE TABLE IF NOT EXISTS tick_cache (
+    symbol          VARCHAR,
+    datetime        TIMESTAMP,
+    last_price      DOUBLE,
+    average         DOUBLE,
+    highest         DOUBLE,
+    lowest          DOUBLE,
+    volume          DOUBLE,
+    amount          DOUBLE,
+    open_interest   DOUBLE,
+    bid_price1      DOUBLE,
+    bid_volume1     DOUBLE,
+    ask_price1      DOUBLE,
+    ask_volume1     DOUBLE,
+    bid_price2      DOUBLE,
+    bid_volume2     DOUBLE,
+    ask_price2      DOUBLE,
+    ask_volume2     DOUBLE,
+    bid_price3      DOUBLE,
+    bid_volume3     DOUBLE,
+    ask_price3      DOUBLE,
+    ask_volume3     DOUBLE,
+    bid_price4      DOUBLE,
+    bid_volume4     DOUBLE,
+    ask_price4      DOUBLE,
+    ask_volume4     DOUBLE,
+    bid_price5      DOUBLE,
+    bid_volume5     DOUBLE,
+    ask_price5      DOUBLE,
+    ask_volume5     DOUBLE,
+    source          VARCHAR,
+    fetched_at      TIMESTAMP,
+    trace_id        VARCHAR
 )
 """
 
@@ -235,11 +300,24 @@ def migrate_schema(db_path: str | Path) -> dict[str, int]:
         else:
             con.execute(KLINE_CACHE_CREATE_DDL)
 
-        # 2) edb_cache / option_chain_cache：IF NOT EXISTS
+        # 2) minute_cache（分钟级 K 线缓存）
+        if _create_table_if_absent(con, "minute_cache", MINUTE_CACHE_CREATE_DDL):
+            tables_created += 1
+
+        # 3) edb_cache / option_chain_cache：IF NOT EXISTS
         if _create_table_if_absent(con, "edb_cache", EDB_CACHE_DDL):
             tables_created += 1
         if _create_table_if_absent(con, "option_chain_cache", OPTION_CHAIN_CACHE_DDL):
             tables_created += 1
+
+        # 4) tick_cache（TQSDK tick 逐笔数据缓存，v2.31.0）
+        if _create_table_if_absent(con, "tick_cache", TICK_CACHE_CREATE_DDL):
+            tables_created += 1
+        else:
+            # 旧表补列：仅 1 档盘口的表 ALTER 补齐 5 档（Phase 5）
+            columns_added += _add_missing_columns(
+                con, "tick_cache", TICK_CACHE_DEPTH_COLUMNS
+            )
 
         # 3) 索引：IF NOT EXISTS
         index_ddl = (
@@ -273,6 +351,7 @@ __all__ = [
     "KLINE_CACHE_LEGACY_COLUMNS",
     "KLINE_CACHE_NEW_COLUMNS",
     "KLINE_CACHE_CREATE_DDL",
+    "MINUTE_CACHE_CREATE_DDL",
     "EDB_CACHE_DDL",
     "OPTION_CHAIN_CACHE_DDL",
 ]

@@ -125,9 +125,9 @@ def l3_portfolio_loop_job() -> None:
     """执行 L3 Portfolio Loop（因子筛选 + 信号合成 + Verifier 校验）。
 
     权重计算模式（portfolio_loop.py）:
+        - elastic_net: Elastic Net 截面回归（CSI300 面板，L1+L2，默认）
         - equal_weight: 等权 1/N
-        - sharpe_weight: 按 Sharpe 比率归一化加权（期货默认）
-        - elastic_net: Elastic Net 截面回归（CSI300 面板，L1+L2）
+        - sharpe_weight: 按 Sharpe 比率归一化加权
 
     完成后自动触发期货信号管道（Ridge 回归加权）。
     """

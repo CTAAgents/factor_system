@@ -33,6 +33,7 @@ from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+from scipy import stats as sp_stats
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class BacktestInput:
     slippage: float = 0.0001  # 滑点率
     initialization_capital: float = 1_000_000.0  # 初始资金
     date_range: Optional[tuple[str, str]] = None  # 回测日期范围
+    frequency: str = "daily"  # v2.30.0: 数据频率（"daily"/"1m"/"5m"/"15m"/"30m"/"60m"）
     extra_params: dict[str, Any] = field(default_factory=dict)
 
 
@@ -97,6 +99,8 @@ class PerformanceMetrics:
     ic_ir: float = 0.0  # IC Information Ratio
     turnover: float = 0.0
     exposure: float = 0.0
+    payoff_ratio: float = 0.0  # 盈亏比 = 平均盈利 / 平均亏损
+    profit_factor: float = 0.0  # 盈亏因子 = 总盈利 / 总亏损绝对值
 
 
 @dataclass
@@ -131,6 +135,52 @@ class BacktestReport:
             "max_dd": round(self.metrics.max_drawdown, 4),
             "summary": self.summary,
         }
+
+
+# ─── 频率自适应（v2.30.0）────────────────────────────────
+
+
+FREQUENCY_ANNUAL_FACTOR: dict[str, int] = {
+    "daily": 252,
+    "60m": 1638,
+    "30m": 3276,
+    "15m": 6552,
+    "5m": 19656,
+    "1m": 98280,
+}
+
+
+def get_annualization_factor(frequency: str) -> int:
+    """获取频率对应的年化因子。
+
+    Args:
+        frequency: 频率标识（"daily" / "1m" / "5m" / "15m" / "30m" / "60m"）
+
+    Returns:
+        年化因子（每个 K 线对应的年化倍数）
+    """
+    return FREQUENCY_ANNUAL_FACTOR.get(frequency, 252)
+
+
+def get_default_zscore_window(frequency: str) -> int:
+    """获取频率对应的默认 z-score 滚动窗口。
+
+    对应约 20 个交易日的等效窗口:
+        daily: 20
+        60m:   20 * 1638 / 252 ≈ 130
+        30m:   20 * 3276 / 252 ≈ 260
+        15m:   20 * 6552 / 252 ≈ 520
+        5m:    20 * 19656 / 252 ≈ 1560
+        1m:    20 * 98280 / 252 ≈ 7800
+
+    Args:
+        frequency: 频率标识
+
+    Returns:
+        z-score 窗口大小
+    """
+    annual = get_annualization_factor(frequency)
+    return max(20, int(20 * annual / 252.0))
 
 
 @dataclass
@@ -407,17 +457,21 @@ class BacktestPipeline:
                     {"n_rows": len(data)},
                 )
 
-            # 日期过滤
+            # 日期过滤（分钟级使用 datetime 列，日线使用 date 列）
             if input_data.date_range:
                 start, end = input_data.date_range
-                if "date" in data.columns:
+                if input_data.frequency != "daily" and "datetime" in data.columns:
+                    mask = (data["datetime"] >= start) & (data["datetime"] <= end)
+                    data = data[mask]
+                elif "date" in data.columns:
                     mask = (data["date"] >= start) & (data["date"] <= end)
                     data = data[mask]
 
             factor_code = input_data.factor
             logger.info(
-                "数据加载完成 [rows=%d, factor=%s]",
+                "数据加载完成 [rows=%d, factor=%s, frequency=%s]",
                 len(data), factor_code.get("factor_id", "unknown"),
+                input_data.frequency,
             )
             return factor_code, data
 
@@ -430,6 +484,28 @@ class BacktestPipeline:
             ) from e
 
     # ─── Stage 2: Factor Compute ────────────────────────
+
+    def _inject_macro_fields(self, data: pd.DataFrame) -> pd.DataFrame:
+        """宏观字段增强层注入（v2.32.0）。
+
+        因子执行前将 EDB 宏观序列（export/import_data/cpi/rate/us_bond）
+        对齐到 K 线 index 注入为列。配置关闭/数据源不可用/无缓存时
+        静默返回原数据（宏观因子走 close 代理），不阻断主路径。
+        """
+        try:
+            from fts.config.settings import get_config
+            from fts.data_sources.macro_aligner import MacroFieldAligner
+
+            cfg = get_config()
+            if not getattr(cfg, "macro_field_injection", True):
+                return data
+            if data is None or data.empty or not isinstance(data.index, pd.DatetimeIndex):
+                return data
+            aligner = MacroFieldAligner(lag_days=getattr(cfg, "macro_lag_days", 30))
+            return aligner.inject(data, trace_id="backtest_macro")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("[macro] 宏观字段注入跳过: %s", e)
+            return data
 
     def _compute_factor(
         self,
@@ -448,6 +524,7 @@ class BacktestPipeline:
 
             # 执行因子代码
             params = factor_code.get("params") or {}
+            data = self._inject_macro_fields(data)
             factor_values = self._execute_factor_code(code_str, data, params)
 
             if factor_values is None or len(factor_values) == 0:
@@ -470,6 +547,14 @@ class BacktestPipeline:
             forward_returns = self._compute_forward_returns(
                 data["close"].values, input_data.forward_period
             )
+
+            # 截断末尾 period 天（forward_returns 为 0，无未来数据可用）
+            # 确保 IC 计算、策略收益和绩效指标不引入零值偏差
+            truncate = input_data.forward_period
+            if truncate > 0 and truncate < len(factor_values):
+                factor_values = factor_values[:-truncate]
+                forward_returns = forward_returns[:-truncate]
+                data = data.iloc[:-truncate]
 
             # 计算滚动 IC（无 date 列时回退到 index，兼容期货面板 DatetimeIndex 数据）
             date_values = data["date"].values if "date" in data.columns else data.index.values
@@ -553,13 +638,10 @@ class BacktestPipeline:
             try:
                 exec(code_str, {"np": np}, local_vars)
             except Exception as e:
-                # 捕获广播错误/形状不匹配等顶层运行时异常（传统约定代码），
-                # 与 factor_program 约定行为一致，返回零值数组而非向上抛出
-                logger.warning(
-                    "因子代码顶层执行异常 (shape/broadcast): %s, 返回零值",
-                    e,
-                )
-                return np.zeros(n)
+                # 无效/异常因子代码应使回测失败（v2.34.0），
+                # 而非静默返回零值掩盖问题——由外层包装为 FactorComputeError
+                logger.warning("因子代码顶层执行异常: %s", e)
+                raise
 
         # 约定 1 (标准): def factor_program(data, params) -> np.ndarray
         factor_fn = local_vars.get("factor_program")
@@ -621,9 +703,13 @@ class BacktestPipeline:
             fwd_returns = factor_output.forward_returns
             dates = factor_output.dates
 
+            # 频率自适应 z-score 窗口（v2.30.0）
+            zscore_window = get_default_zscore_window(input_data.frequency)
+
             # 计算策略收益
-            strategy_returns = self._compute_strategy_returns(
-                values, fwd_returns, input_data.cost_rate, input_data.slippage
+            strategy_returns, positions = self._compute_strategy_returns(
+                values, fwd_returns, input_data.cost_rate, input_data.slippage,
+                zscore_window=zscore_window,
             )
 
             # 计算净值曲线 (转为 pandas Series)
@@ -632,12 +718,13 @@ class BacktestPipeline:
                 index=dates,
             )
 
-            # 计算交易记录
-            trades = self._extract_trades(strategy_returns, dates, values)
+            # 计算交易记录（使用实际持仓，而非原始因子值）
+            trades = self._extract_trades(strategy_returns, dates, positions)
 
-            # 计算绩效指标
+            # 计算绩效指标（频率自适应年化，v2.30.0）
             metrics = self._calculate_metrics(
-                strategy_returns, equity_curve, factor_output.ic_series
+                strategy_returns, equity_curve, factor_output.ic_series, positions,
+                frequency=input_data.frequency,
             )
 
             logger.info(
@@ -744,7 +831,8 @@ class BacktestPipeline:
             f = factor_values[i - window:i]
             r = forward_returns[i - window:i]
             if np.std(f) > 1e-8 and np.std(r) > 1e-8:
-                ics[i] = np.corrcoef(f, r)[0, 1]
+                ic, _ = sp_stats.spearmanr(f, r)
+                ics[i] = ic
             else:
                 ics[i] = 0.0
 
@@ -756,15 +844,27 @@ class BacktestPipeline:
         forward_returns: np.ndarray,
         cost_rate: float,
         slippage: float,
-    ) -> np.ndarray:
-        """计算策略收益率。"""
-        # 因子作为持仓信号 (简化: 分位数持仓)
+        zscore_window: int = 20,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """计算策略收益率。
+
+        使用滚动窗口 z-score 生成持仓信号，与实盘信号生成器一致。
+
+        Args:
+            zscore_window: 滚动 z-score 窗口（默认 20 日，与实盘 signal_generator 一致）
+
+        Returns:
+            (strategy_returns, positions) 元组
+        """
+        # 因子作为持仓信号 (滚动窗口 z-score)
         positions = np.zeros_like(factor_values)
         n = len(factor_values)
 
         for i in range(1, n):
-            if np.std(factor_values[:i]) > 1e-8:
-                z = (factor_values[i] - np.mean(factor_values[:i])) / max(np.std(factor_values[:i]), 1e-8)
+            start = max(0, i - zscore_window)
+            window = factor_values[start:i]
+            if np.std(window) > 1e-8:
+                z = (factor_values[i] - np.mean(window)) / max(np.std(window), 1e-8)
                 positions[i] = np.clip(z, -2, 2) * 0.5  # 限制在 [-1, 1]
 
         # 计算换手
@@ -772,8 +872,13 @@ class BacktestPipeline:
         costs = turnover * (cost_rate + slippage)
 
         # 策略收益 = 持仓收益 - 成本
-        strategy_returns = positions * forward_returns - costs
-        return strategy_returns
+        # 正确时序对齐: 第 i 天的收益使用第 i-1 天的持仓 × 第 i-1 天的前向收益
+        # 第 0 天: 仅付建仓成本
+        strategy_returns = np.zeros(n)
+        strategy_returns[0] = -costs[0]
+        strategy_returns[1:] = positions[:-1] * forward_returns[:-1] - costs[1:]
+
+        return strategy_returns, positions
 
     @staticmethod
     def _extract_trades(
@@ -811,13 +916,21 @@ class BacktestPipeline:
         returns: np.ndarray,
         equity_curve: pd.Series,
         ic_series: pd.Series,
+        positions: np.ndarray,
+        frequency: str = "daily",  # v2.30.0: 频率自适应年化
     ) -> PerformanceMetrics:
-        """计算绩效指标。"""
-        total_return = float(equity_curve.iloc[-1] / equity_curve.iloc[0] - 1)
-        n_days = len(returns)
-        annual_return = (1 + total_return) ** (252 / max(n_days, 1)) - 1
+        """计算绩效指标。
 
-        volatility = float(np.std(returns) * np.sqrt(252))
+        Args:
+            frequency: 数据频率（v2.30.0），用于年化因子自适应
+        """
+        annual_factor = get_annualization_factor(frequency)
+
+        total_return = float(equity_curve.iloc[-1] / equity_curve.iloc[0] - 1)
+        n_periods = len(returns)
+        annual_return = (1 + total_return) ** (annual_factor / max(n_periods, 1)) - 1
+
+        volatility = float(np.std(returns) * np.sqrt(annual_factor))
         sharpe = annual_return / volatility if volatility > 1e-8 else 0.0
 
         cummax = equity_curve.cummax()
@@ -827,10 +940,10 @@ class BacktestPipeline:
         calmar = annual_return / abs(max_dd) if max_dd < -1e-8 else 0.0
 
         positive_days = (returns > 0).sum()
-        win_rate = float(positive_days / max(n_days, 1))
+        win_rate = float(positive_days / max(n_periods, 1))
 
         downside = returns[returns < 0]
-        downside_vol = float(np.std(downside) * np.sqrt(252)) if len(downside) > 0 else 0.0
+        downside_vol = float(np.std(downside) * np.sqrt(annual_factor)) if len(downside) > 0 else 0.0
 
         best_day = float(np.max(returns)) if len(returns) > 0 else 0.0
         worst_day = float(np.min(returns)) if len(returns) > 0 else 0.0
@@ -839,8 +952,18 @@ class BacktestPipeline:
         ic_std = float(ic_series.std()) if len(ic_series) > 0 else 0.0
         ic_ir = ic_mean / ic_std if ic_std > 1e-8 else 0.0
 
-        # 计算换手率
-        turnover = float(np.mean(np.abs(np.diff(returns, prepend=returns[0])))) if len(returns) > 1 else 0.0
+        # 计算换手率（基于持仓变化，而非收益率变化）
+        turnover = float(np.mean(np.abs(np.diff(positions, prepend=0)))) if len(positions) > 1 else 0.0
+
+        # 计算盈亏比和盈亏因子
+        positive_returns = returns[returns > 0]
+        negative_returns = returns[returns < 0]
+        avg_win = float(positive_returns.mean()) if len(positive_returns) > 0 else 0.0
+        avg_loss = float(abs(negative_returns.mean())) if len(negative_returns) > 0 else 0.0
+        payoff_ratio = avg_win / avg_loss if avg_loss > 1e-8 else 0.0
+        total_win = float(positive_returns.sum()) if len(positive_returns) > 0 else 0.0
+        total_loss = float(abs(negative_returns.sum())) if len(negative_returns) > 0 else 0.0
+        profit_factor = total_win / total_loss if total_loss > 1e-8 else 0.0
 
         return PerformanceMetrics(
             total_return=total_return,
@@ -858,6 +981,8 @@ class BacktestPipeline:
             ic_ir=ic_ir,
             turnover=turnover,
             exposure=float(np.mean(np.abs(returns))),
+            payoff_ratio=payoff_ratio,
+            profit_factor=profit_factor,
         )
 
 
@@ -1008,4 +1133,7 @@ __all__ = [
     "FactorComputeError",
     "PerformanceError",
     "ReportError",
+    "get_annualization_factor",
+    "get_default_zscore_window",
+    "FREQUENCY_ANNUAL_FACTOR",
 ]

@@ -56,6 +56,14 @@ class FTSConfig:
         default_factory=lambda: os.getenv("FTS_DEFAULT_MARKET", "futures")
     )
 
+    # ── 宏观字段增强层（v2.32.0）──
+    macro_field_injection: bool = field(
+        default_factory=lambda: os.getenv("FTS_MACRO_FIELD_INJECTION", "1") == "1"
+    )
+    macro_lag_days: int = field(
+        default_factory=lambda: int(os.getenv("FTS_MACRO_LAG_DAYS", "30"))
+    )
+
     # ── LLM 配置 ──
     llm_backend: str = field(
         default_factory=lambda: os.getenv("FTS_LLM_BACKEND", "")

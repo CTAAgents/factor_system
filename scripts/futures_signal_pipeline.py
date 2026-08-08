@@ -1383,6 +1383,14 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     else:
         sector_regimes = {}
 
+    # ── 品种-链对齐度计算 ──
+    alignment_scores = sector_selector.compute_alignment(panel, sector_regimes, sector_map=active_sector_map)
+    n_aligned = sum(1 for v in alignment_scores.values() if v >= 0.7)
+    n_misaligned = sum(1 for v in alignment_scores.values() if v < 0.5)
+    if alignment_scores:
+        print(f"\n[对齐度] 品种-链对齐度: {len(alignment_scores)} 个品种, "
+              f"高对齐(≥0.7): {n_aligned}, 低对齐(<0.5): {n_misaligned}")
+
     def _compute_primary_regime(
         sr: dict[str, dict],
         asm: dict[str, list[str]],
@@ -1493,6 +1501,20 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         signal_matrix, factor_sign_flips, factors, factor_weights,
         per_variety_weights=per_variety_weights if per_variety_weights else None,
     )
+
+    # ── 品种-链对齐度修正信号权重 ──
+    _ALIGNMENT_BLEND = 0.20  # 对齐度修正强度 (0.0=关闭, 0.3=最大)
+    n_adjusted_align = 0
+    if _ALIGNMENT_BLEND > 0 and alignment_scores:
+        n_adjusted_align = 0
+        for sym in list(sym_scores.keys()):
+            align = alignment_scores.get(sym, 0.5)
+            # 对齐度偏离 0.5 越大，修正越强
+            alignment_factor = 1.0 + _ALIGNMENT_BLEND * (align - 0.5)
+            sym_scores[sym] *= alignment_factor
+            n_adjusted_align += 1
+        print(f"      [对齐度] 应用品种-链对齐度修正: {n_adjusted_align} 个品种, "
+              f"blend={_ALIGNMENT_BLEND}")
 
     # 3g: 对比全局权重 vs 品种级权重的合成结果
     if per_variety_weights:
@@ -1733,6 +1755,30 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
             w(f"| {sector} | {r} | {c:.1%} | {n_syms} | {dir_advice} |")
         w()
     w()
+    w()
+
+    # ── 品种-链对齐度 ──
+    if alignment_scores:
+        w("## 品种-链对齐度")
+        w()
+        w("> 对齐度 = 品种独立检测的制度与产业链综合制度的一致性评分。")
+        w("> 高对齐度(≥0.7)的品种与产业链趋势一致，信号更可靠；")
+        w("> 低对齐度(<0.5)的品种偏离产业链趋势，信号需降权处理。")
+        w()
+        w("| 对齐度等级 | 品种数 | 品种列表 |")
+        w("|----------|--------|----------|")
+        high_align = [(s, v) for s, v in alignment_scores.items() if v >= 0.7]
+        mid_align = [(s, v) for s, v in alignment_scores.items() if 0.5 <= v < 0.7]
+        low_align = [(s, v) for s, v in alignment_scores.items() if v < 0.5]
+        if high_align:
+            w(f"| 高对齐 (≥0.7) | {len(high_align)} | {', '.join(s for s, _ in high_align[:10])} |")
+        if mid_align:
+            w(f"| 中等对齐 (0.5~0.7) | {len(mid_align)} | {', '.join(s for s, _ in mid_align[:10])} |")
+        if low_align:
+            w(f"| 低对齐 (<0.5) | {len(low_align)} | {', '.join(s for s, _ in low_align[:10])} |")
+        w()
+        w(f"> 对齐度修正强度: {_ALIGNMENT_BLEND:.0%}，{n_adjusted_align} 个品种的权重已调整。")
+        w()
 
     # ── Regime 调整后的交易建议 ──
     regime_type = market_regime["regime"]

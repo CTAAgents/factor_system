@@ -63,7 +63,7 @@ DEFAULT_TASKS = {
     "l3_portfolio_loop": {
         "cron": "0 20 * * *",
         "callable": "fts.scheduler.jobs.l3_portfolio_loop_job",
-        "desc": "L3 Portfolio Loop：组合构建 + 正交化 + 衰减检验 + 信号合成 + 期货信号管道",
+        "desc": "L3 Portfolio Loop：因子筛选 + 信号合成（equal/sharpe/elastic_net）+ Verifier 校验 + 期货信号管道",
         "prefix": "fts.l3",
     },
     "futures_signal_pipeline": {

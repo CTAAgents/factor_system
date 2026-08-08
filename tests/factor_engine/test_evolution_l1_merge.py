@@ -7,6 +7,7 @@
 - 名称去重
 - 幂等（消费后 factor_pool.json pending → injected）
 - 已消费标记（injected_to_l2）跳过
+- GAP-036 激进清理（消费后删除 / 历史遗留清理 / 晋升后删除）
 """
 
 from __future__ import annotations
@@ -210,3 +211,104 @@ def test_consumed_marker_skipped(chdir_tmp):
     loop = _make_loop(chdir_tmp)
     merged = loop._merge_l1_candidates([], "trace-test")  # noqa: SLF001
     assert merged == []
+
+
+# ─── GAP-036: 激进清理 ───────────────────────────────────
+
+def test_consumed_file_deleted_after_merge(chdir_tmp):
+    """GAP-036: pending 候选被合并消费后，对应 l1_injected 文件被删除。"""
+    cand = _make_candidate()
+    _write_candidate(chdir_tmp, cand)
+    _write_pool(chdir_tmp, [{
+        "factor_id": cand["candidate_id"], "name": cand["name"],
+        "source": "l1_bootstrapping", "status": "pending",
+    }])
+    inject_dir = chdir_tmp / "memory" / "knowledge" / "factors" / "l1_injected"
+    cand_file = inject_dir / f"{cand['candidate_id']}.json"
+    assert cand_file.exists()
+
+    loop = _make_loop(chdir_tmp)
+    merged = loop._merge_l1_candidates([], "trace-test")  # noqa: SLF001
+    assert len(merged) == 1
+    # 消费后文件已删除（激进清理）
+    assert not cand_file.exists()
+
+
+def test_historical_cleanup_deletes_consumed_keeps_pending(chdir_tmp):
+    """GAP-036: 历史遗留清理 — 已消费（非 pending）文件删除，pending 文件保留待消费。"""
+    consumed = _make_candidate(cand_id="cand_old00001", name="l1_old_factor")
+    pending = _make_candidate(cand_id="cand_pend0001", name="l1_pending_factor")
+    _write_candidate(chdir_tmp, consumed)
+    _write_candidate(chdir_tmp, pending)
+    _write_pool(chdir_tmp, [
+        {"factor_id": consumed["candidate_id"], "name": consumed["name"],
+         "source": "l1_bootstrapping", "status": "injected"},
+        {"factor_id": pending["candidate_id"], "name": pending["name"],
+         "source": "l1_bootstrapping", "status": "pending"},
+    ])
+    inject_dir = chdir_tmp / "memory" / "knowledge" / "factors" / "l1_injected"
+    consumed_file = inject_dir / f"{consumed['candidate_id']}.json"
+    pending_file = inject_dir / f"{pending['candidate_id']}.json"
+
+    loop = _make_loop(chdir_tmp)
+    merged = loop._merge_l1_candidates([], "trace-test")  # noqa: SLF001
+    # 历史遗留的已消费文件被一次性清理
+    assert not consumed_file.exists()
+    # pending 文件被合并消费后同样被删除，且其候选进入合并结果
+    assert not pending_file.exists()
+    assert any(fp.get("parent_id") == pending["candidate_id"] for fp in merged)
+    assert all(fp.get("parent_id") != consumed["candidate_id"] for fp in merged)
+
+
+def test_promote_to_elite_deletes_l1_candidate_file(chdir_tmp):
+    """GAP-036: bootstrapping 因子晋升精英后，删除对应 l1_injected 文件。"""
+    from unittest.mock import MagicMock
+
+    from fts.factor_engine.contracts import (
+        EconomicLogic,
+        FactorEvaluation,
+        FactorProgram,
+        FactorSignature,
+    )
+
+    cand = _make_candidate()
+    _write_candidate(chdir_tmp, cand)
+    inject_dir = chdir_tmp / "memory" / "knowledge" / "factors" / "l1_injected"
+    cand_file = inject_dir / f"{cand['candidate_id']}.json"
+    assert cand_file.exists()
+
+    loop = _make_loop(chdir_tmp)
+    # Mock DuckDB repo，避免共享状态
+    mock_repo = MagicMock()
+    mock_repo.get_factor_by_name = MagicMock(return_value=None)
+    loop._get_repo = MagicMock(return_value=mock_repo)  # noqa: SLF001
+
+    factor = FactorProgram(
+        factor_id="fct_boot_00001",
+        name="l1_promote_factor",
+        code="close - close.shift(5)",
+        params={},
+        signature=FactorSignature(
+            input_fields=["close"], output_type="signal", frequency="daily", lookback=1,
+        ),
+        economic_logic=EconomicLogic(
+            theory=3, behavioral=3, microstructure=3, institutional=3, narrative="测试",
+        ),
+        source="bootstrapping",
+        parent_id=cand["candidate_id"],
+        generation=0,
+        created_at="2026-08-08T00:00:00",
+        trace_id="trace-test",
+    )
+    evaluation = FactorEvaluation(
+        factor_id="fct_boot_00001",
+        trace_id="trace-test",
+        passed=True,
+        failure_reasons=[],
+        level_3_multiple={"passed": True},
+        evaluated_at="2026-08-08T00:00:00",
+    )
+    fp = loop._promote_to_elite(factor, evaluation, shadow_observe=False)  # noqa: SLF001
+    assert fp is not None
+    # 晋升成功后 l1_injected 文件被删除
+    assert not cand_file.exists()

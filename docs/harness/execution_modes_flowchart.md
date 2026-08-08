@@ -1,6 +1,6 @@
 # FTS 执行模式流程图
 
-> 版本: v2.22.0
+> 版本: v2.39.0
 > 最后更新: 2026-08-05
 
 ## 三种执行模式
@@ -147,3 +147,11 @@
 - A 级: ≥ 40 分 → 精英池（附加质量分）
 - B 级: ≥ 30 分 → 精英池
 - C 级: < 30 分 → 质检淘汰
+
+## 一致性元数据
+
+| 字段 | 值 |
+|:-----|:----|
+| 代码→文档映射 | 本文件描述 FTS 三种执行模式（CLI 命令行、Scheduler 定时调度、Monitor 监控），对应 `fts/cli.py`、`fts/scheduler/engine.py`、`fts/monitor/` 模块 |
+| 可验证断言 | CLI 支持 `fts evolution run` / `fts portfolio run` / `fts meta-loop run` 等子命令；Scheduler 注册 8 个任务（L1:08:30 / L2:23:00 / L3:20:00 / 信号管道:20:30 / 健康检查:每10m / 月度衰减 / 数据质量 / 逻辑监控 + 因子巡检）；Monitor 提供 HTTP 健康检查端点 GET /health、Elite 因子追踪、熔断保护 |
+| 检验方式 | 运行 `python -m fts.cli --help` 验证 CLI 命令；`python -c "from fts.scheduler.tasks import list_tasks; assert len(list_tasks()) == 8"` 验证调度任务数 |

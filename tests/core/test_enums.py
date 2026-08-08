@@ -121,8 +121,10 @@ def test_no_duplicate_values_across_enums():
 
 
 def test_all_exports():
-    """__all__ 正确导出 3 个枚举类。"""
+    """__all__ 正确导出 5 个枚举类。"""
     assert "EvolutionStage" in enums_all
     assert "FactorPriority" in enums_all
     assert "FactorStatus" in enums_all
-    assert len(enums_all) == 3
+    assert "DataSource" in enums_all
+    assert "FusionStrategy" in enums_all
+    assert len(enums_all) == 5

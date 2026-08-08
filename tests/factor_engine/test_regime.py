@@ -35,8 +35,8 @@ from fts.factor_engine.regime import (
 
 @pytest.fixture
 def selector() -> RegimeAwareSelector:
-    # 规则方法测试使用 use_hmm=False，避免 HMM 对短数据产生不稳定结果
-    return RegimeAwareSelector(lookback_days=60, use_hmm=False)
+    # 规则方法测试禁用 HMM 和 MultiHMM，避免概率模型对短数据产生不稳定结果
+    return RegimeAwareSelector(lookback_days=60, use_hmm=False, use_multi_hmm=False)
 
 
 @pytest.fixture

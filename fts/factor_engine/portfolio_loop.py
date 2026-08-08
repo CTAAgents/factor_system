@@ -6,10 +6,11 @@ HARNESS §11-loop-engineering.md §16:
 
 流程:
     Step 1: 加载 elite 因子 → 从 futures_elite 目录读取因子 JSON
+    Step 1.7: 活跃因子数量上限（ACTIVE_FACTOR_CAP=20）
     Step 2: 信号合成 → 三种权重模式:
+        - elastic_net: Elastic Net 截面回归（默认，L1+L2 自动变量选择）
         - equal_weight: 等权 1/N
-        - sharpe_weight: 按 Sharpe 比率归一化加权（期货默认）
-        - elastic_net: Elastic Net 截面回归（CSI300 面板，L1+L2）
+        - sharpe_weight: 按 Sharpe 比率归一化加权
     Step 3: Verifier 校验 → 组合夏普、因子相关性、换手率
     Step 4: 输出 PortfolioCombo → 期货场景自动触发信号管道
 
@@ -531,8 +532,8 @@ def synthesize_signals(
 
     Args:
         factors: 每个 dict 必须含 factor_id, name, sharpe, ic, turnover, decay_6m
-        mode: "equal_weight" | "sharpe_weight" | "elastic_net"
-        elite_dir: 精英因子目录（elastic_net 模式需要，用于加载因子代码）
+        mode: "equal_weight" | "sharpe_weight" | "elastic_net" | "ml_ensemble"
+        elite_dir: 精英因子目录（elastic_net/ml_ensemble 模式需要，用于加载因子代码）
 
     Returns:
         (signals, max_correlation, combo_turnover)
@@ -580,6 +581,28 @@ def synthesize_signals(
                 retained=w > 0.0,
             ))
         logger.info("[L3] Elastic Net 完成: %d/%d 因子获得非零权重",
+                    sum(1 for s in signals if s["retained"]), len(signals))
+    elif mode == "ml_ensemble" and elite_dir is not None:
+        ml_weights = _compute_ml_ensemble_weights(factors, Path(elite_dir))
+        if not ml_weights:
+            logger.warning("[L3] ML Ensemble 权重计算失败，回退到 sharpe_weight")
+            return synthesize_signals(factors, "sharpe_weight")
+
+        signals = []
+        for f in factors:
+            w = ml_weights.get(f["factor_id"], 0.0)
+            signals.append(PortfolioSignal(
+                factor_id=f["factor_id"],
+                name=f["name"],
+                weight=w,
+                sharpe=f.get("sharpe", 0.0),
+                ic=f.get("ic", 0.0),
+                turnover=f.get("turnover", 0.0),
+                decay_6m=f.get("decay_6m", 0.0),
+                orthogonalized=True,   # ML 特征重要性已做变量选择
+                retained=w > 0.0,
+            ))
+        logger.info("[L3] ML Ensemble 完成: %d/%d 因子获得非零权重",
                     sum(1 for s in signals if s["retained"]), len(signals))
     elif mode == "equal_weight":
         w = 1.0 / n
@@ -810,6 +833,143 @@ def _compute_elastic_net_weights(
     n_nonzero = sum(1 for w in result.values() if w > 0.001)
     logger.info("[L3] Elastic Net 权重: %d 个因子获非零权重（共 %d 个）", n_nonzero, len(result))
     return result
+
+
+def _compute_ml_ensemble_weights(
+    factors: list[dict[str, Any]],
+    elite_dir: Path,
+    days: int = 120,
+    max_stocks: int = 50,
+    model_kind: str = "lightgbm",
+) -> dict[str, float]:
+    """ML 集成融合确定因子权重（Phase 24，v2.38.0）。
+
+    步骤:
+        1. 加载 CSI300 面板数据 + 基本面字段
+        2. 对每个因子，逐股票执行因子代码获取信号序列
+        3. 训练横截面回归模型: 因子信号矩阵 → 5 日前向收益
+        4. 特征重要性归一化 → 权重（ML 自动变量选择）
+
+    Args:
+        factors: 因子列表
+        elite_dir: 精英因子目录（含因子代码 JSON）
+        days: 回溯天数
+        max_stocks: 最大股票数
+        model_kind: 模型类型（lightgbm / xgboost / ensemble）
+
+    Returns:
+        {factor_id: weight} 映射（权重和为 1.0）
+    """
+    from ..ml import SignalModelTrainer, TrainMode
+
+    try:
+        from sklearn.linear_model import ElasticNetCV  # noqa: F401 - 探活面板可用
+    except ImportError:
+        logger.warning("[L3] scikit-learn 未安装，无法使用 ML Ensemble")
+        return {}
+
+    import numpy as np
+    from ..data import FTSDataProvider
+    from .factor_program import FactorExecutor
+
+    # ── 1. 加载 CSI300 面板数据 ──
+    provider = FTSDataProvider()
+    panel, common_dates = provider.get_csi300_panel(
+        days=days, max_stocks=max_stocks, fundamental=True,
+    )
+    if not panel or len(common_dates) < 20:
+        logger.warning("[L3] ML Ensemble 面板数据不足（需 ≥20 个交易日），回退")
+        return {}
+
+    n_dates = len(common_dates)
+    stocks = sorted(panel.keys())
+    n_stocks = len(stocks)
+    logger.info("[L3] ML Ensemble 数据: %d 只股票 × %d 个交易日", n_stocks, n_dates)
+
+    # ── 2. 加载因子代码 ──
+    factor_codes: dict[str, dict[str, Any]] = {}
+    for fp in sorted(elite_dir.glob("*.json")):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            fid = data.get("factor_id", "")
+            if fid and data.get("code"):
+                factor_codes[fid] = data
+        except Exception:
+            continue
+
+    valid_factors = [f for f in factors if f["factor_id"] in factor_codes]
+    if len(valid_factors) < 2:
+        logger.warning("[L3] ML Ensemble 有效因子不足（需 ≥2），回退")
+        return {}
+
+    n_factors = len(valid_factors)
+
+    # ── 3. 计算因子信号矩阵: [n_dates, n_stocks, n_factors] ──
+    signal_matrix = np.full((n_dates, n_stocks, n_factors), np.nan)
+    for j, f in enumerate(valid_factors):
+        fid = f["factor_id"]
+        fdata = factor_codes[fid]
+        try:
+            executor = FactorExecutor(fdata)
+        except Exception:
+            continue
+        for i, sym in enumerate(stocks):
+            df = panel[sym]
+            try:
+                sig = executor.execute(df, fdata.get("params", {}))
+                aligned = np.full(n_dates, np.nan)
+                for t, d in enumerate(common_dates):
+                    if d in df.index:
+                        idx = list(df.index).index(d)
+                        aligned[t] = float(sig[idx]) if idx < len(sig) else np.nan
+                signal_matrix[:, i, j] = aligned
+            except Exception:
+                continue
+
+    # ── 4. 计算 5 日前向收益 ──
+    forward_returns = np.full((n_dates, n_stocks), np.nan)
+    horizon = 5
+    for i, sym in enumerate(stocks):
+        df = panel[sym]
+        closes = df["close"].values
+        fwd = np.full(len(closes), np.nan)
+        fwd[:-horizon] = (closes[horizon:] - closes[:-horizon]) / np.maximum(closes[:-horizon], 1e-10)
+        for t, d in enumerate(common_dates):
+            if d in df.index:
+                idx = list(df.index).index(d)
+                forward_returns[t, i] = fwd[idx] if idx < len(fwd) else np.nan
+
+    # ── 5. 展平为样本矩阵训练 ML 模型 ──
+    X_flat = signal_matrix.reshape(-1, n_factors)
+    y_flat = forward_returns.reshape(-1)
+    valid = ~np.isnan(X_flat).any(axis=1) & ~np.isnan(y_flat)
+    if valid.sum() < 30:
+        logger.warning("[L3] ML Ensemble 有效样本不足（%d < 30），回退", int(valid.sum()))
+        return {}
+
+    feature_names = [f["factor_id"] for f in valid_factors]
+    trainer = SignalModelTrainer(kind=model_kind, mode=TrainMode.CROSS_SECTIONAL)
+    result = trainer.train(X_flat[valid], y_flat[valid], feature_names=feature_names)
+    if result.model is None:
+        logger.warning("[L3] ML Ensemble 训练降级: %s", result.message)
+        return {}
+
+    # ── 6. 特征重要性归一化 → 权重 ──
+    importance = result.feature_importance
+    if not importance:
+        logger.warning("[L3] ML Ensemble 无特征重要性，回退")
+        return {}
+
+    abs_imp = {k: abs(v) for k, v in importance.items()}
+    total = sum(abs_imp.values())
+    if total <= 0:
+        return {}
+
+    weights = {k: v / total for k, v in abs_imp.items()}
+    n_nonzero = sum(1 for w in weights.values() if w > 0.001)
+    logger.info("[L3] ML Ensemble(%s) 权重: %d 个因子获非零权重（共 %d 个），R²=%.4f",
+                model_kind, n_nonzero, len(weights), result.score)
+    return weights
 
 
 def orthogonalize_factors(
@@ -1108,6 +1268,10 @@ SHARPE_WARNING_THRESHOLD: float = 3.5
 
 SHARPE_CAP: float = 2.0
 """因子 Sharpe 上限截断：> 2.0 的因子按 2.0 计算权重，防止过拟合因子主导组合。"""
+
+ACTIVE_FACTOR_CAP: int = 20
+"""活跃因子数量上限：Elastic Net 信号合成前，按 Sharpe 排序保留前 N 个因子。
+超过此数量的因子自动过滤，防止冗余因子稀释组合夏普。"""
 
 MIN_EVAL_DAYS: int = 500
 """最小评价窗口（交易日数）：面板数据回溯天数，确保评价窗口足够长避免短窗口虚高。"""
@@ -2260,9 +2424,12 @@ class PortfolioLoop:
 
     流程:
         Step 1: 加载 elite 因子
-        Step 2: 信号合成
+        Step 1.7: 活跃因子数量上限（ACTIVE_FACTOR_CAP=20）
+        Step 1.8: P1 因子聚类（可选，enable_clustering=True）
+        Step 1.9: P2 PCA 降维（可选，enable_pca=True）
+        Step 2: 信号合成（默认 elastic_net）
         Step 2.5: Regime 自适应权重调整 (可选)
-        Step 3: 因子正交化
+        Step 3: 因子正交化（elastic_net 模式跳过，L1 已做变量选择）
         Step 4: 衰减检验
         Step 5: 组合构建
         Step 6: Verifier 判定
@@ -2271,6 +2438,14 @@ class PortfolioLoop:
     Regime 自适应:
         当传入 market_ohlcv 时，自动检测市场制度并调整因子权重。
         支持 bull/bear/oscillate/high_vol/low_vol 五种制度的差异化权重。
+
+    P1 因子聚类:
+        当 enable_clustering=True 时，在 Step 1.8 对因子进行信号相关性层次聚类，
+        从每个簇中选择 Sharpe 最高的代表因子，系统性降低冗余。
+
+    P2 PCA 降维:
+        当 enable_pca=True 时，在 Step 1.9 对因子信号矩阵进行 PCA 降维，
+        保留解释 95% 方差的主成分，通过载荷矩阵映射回因子权重。
     """
 
     def __init__(
@@ -2278,11 +2453,13 @@ class PortfolioLoop:
         memory_dir: str | Path = "memory/portfolio",
         elite_dir: str | Path = "memory/knowledge/factors/elite",
         verifier_config: Optional[L3VerifierConfig] = None,
-        synthesis_mode: str = "equal_weight",
+        synthesis_mode: str = "elastic_net",
         use_duckdb: bool = True,
         enable_regime_adaptation: bool = True,
         market: str = "stock",
         sticky_config: Optional[StickyConfig] = None,
+        enable_clustering: bool = True,
+        enable_pca: bool = False,
     ):
         self.memory_dir = Path(memory_dir)
         self.elite_dir = Path(elite_dir)
@@ -2297,6 +2474,11 @@ class PortfolioLoop:
         self.portfolio_manager = PortfolioManager(memory_dir)
         self.drift_monitor = DriftMonitor(memory_dir)
         self._regime_selector: Optional[Any] = None
+        # P1/P2 控制开关
+        self.enable_clustering = enable_clustering
+        self.enable_pca = enable_pca
+        self._clustering_engine: Optional[Any] = None
+        self._pca_compressor: Optional[Any] = None
 
     def _generate_quality_report(self) -> None:
         """从 DuckDB 或 combo 回退，生成精英因子最终质量报告 JSON。
@@ -2513,6 +2695,118 @@ class PortfolioLoop:
                 else:
                     logger.info("[L3] Step 1.5: 纯外推验证完成, 无因子需要降级")
 
+            # Step 1.7: 活跃因子数量上限（ACTIVE_FACTOR_CAP）
+            # 超过上限时按 Sharpe 排序保留前 N 个，防止冗余因子稀释组合夏普
+            if len(factors) > ACTIVE_FACTOR_CAP:
+                sorted_factors = sorted(factors, key=lambda f: -abs(f.get("sharpe", 0.0)))
+                removed = sorted_factors[ACTIVE_FACTOR_CAP:]
+                factors = sorted_factors[:ACTIVE_FACTOR_CAP]
+                logger.info(
+                    "[L3] Step 1.7: ACTIVE_FACTOR_CAP=%d 触发, 过滤 %d 个因子 (sharpe 排序)",
+                    ACTIVE_FACTOR_CAP, len(removed),
+                )
+                for r in removed:
+                    logger.info(
+                        "[L3] Step 1.7:   过滤因子 %s | sharpe=%.2f | ic=%.4f",
+                        r.get("name", "?"), r.get("sharpe", 0), r.get("ic", 0),
+                    )
+            else:
+                logger.info(
+                    "[L3] Step 1.7: 因子数 %d ≤ ACTIVE_FACTOR_CAP=%d, 无需过滤",
+                    len(factors), ACTIVE_FACTOR_CAP,
+                )
+
+            # Step 1.8: P1 因子聚类（可选，系统性降低冗余）
+            if self.enable_clustering and len(factors) >= 3:
+                logger.info("[L3] Step 1.8: 开始 P1 因子聚类 (factors=%d, threshold=%s)",
+                            len(factors), "0.7")
+                try:
+                    if self._clustering_engine is None:
+                        from .factor_clustering import FactorClusteringEngine
+                        self._clustering_engine = FactorClusteringEngine(
+                            cluster_threshold=0.7,
+                            linkage_method="average",
+                        )
+                    n_before = len(factors)
+                    factors = self._clustering_engine.run(factors, panel_data)
+                    n_after = len(factors)
+                    reduced = n_before - n_after
+                    if reduced > 0:
+                        logger.info(
+                            "[L3] Step 1.8: P1 聚类完成, 移除 %d 个冗余因子 (%d → %d)",
+                            reduced, n_before, n_after,
+                        )
+                    else:
+                        logger.info(
+                            "[L3] Step 1.8: P1 聚类完成, 无冗余因子移除 (保留 %d 个)",
+                            n_after,
+                        )
+                except Exception as e:
+                    logger.warning("[L3] Step 1.8: P1 聚类失败 (非致命): %s", e)
+            else:
+                logger.info(
+                    "[L3] Step 1.8: P1 聚类跳过 (enable_clustering=%s, n_factors=%d)",
+                    self.enable_clustering, len(factors),
+                )
+
+            # Step 1.9: P2 PCA 降维（可选，信号源压缩）
+            if self.enable_pca and len(factors) >= 3 and panel_data:
+                logger.info("[L3] Step 1.9: 开始 P2 PCA 降维 (factors=%d)", len(factors))
+                try:
+                    if self._pca_compressor is None:
+                        from .factor_clustering import PCASignalCompressor
+                        self._pca_compressor = PCASignalCompressor(
+                            variance_ratio=0.95,
+                            max_components=10,
+                        )
+                    pca_result = self._pca_compressor.run(factors, panel_data)
+                    if pca_result.get("pca_applied", False):
+                        # PCA 降维后，使用 PCA 信号替换原有因子信号
+                        pca_signals = pca_result.get("pca_signals", [])
+                        n_components = pca_result.get("n_components", 0)
+                        explained = pca_result.get("explained_variance_ratio", 0.0)
+                        logger.info(
+                            "[L3] Step 1.9: PCA 降维完成: %d 因子 → %d 主成分 (解释方差=%.1f%%)",
+                            len(factors), n_components, explained * 100,
+                        )
+                        if pca_signals:
+                            # 更新因子权重
+                            sig_map = {s["factor_id"]: s for s in pca_signals}
+                            for f in factors:
+                                fid = f.get("factor_id", f.get("name", "?"))
+                                if fid in sig_map:
+                                    f["pca_weight"] = sig_map[fid].get("weight", 0.0)
+                                    f["pca_orthogonalized"] = True
+                            # PCA 权重对比日志：原始 Sharpe 权重 vs PCA 权重
+                            pca_weight_log = []
+                            for f in factors:
+                                fid = f.get("factor_id", f.get("name", "?"))
+                                pca_w = f.get("pca_weight", 0.0)
+                                sharpe_w = f.get("sharpe", 0.0)
+                                if pca_w > 0.001:
+                                    pca_weight_log.append(
+                                        f"{f.get('name', fid)}: sharpe_w={sharpe_w:.2f} → pca_w={pca_w:.4f}"
+                                    )
+                            if pca_weight_log:
+                                logger.info(
+                                    "[L3] Step 1.9: PCA 权重对比 (原始 Sharpe → PCA 权重):\n  %s",
+                                    "\n  ".join(pca_weight_log[:10]),
+                                )
+                                if len(pca_weight_log) > 10:
+                                    logger.info(
+                                        "[L3] Step 1.9: ... 还有 %d 个因子",
+                                        len(pca_weight_log) - 10,
+                                    )
+                    else:
+                        logger.info("[L3] Step 1.9: PCA 降维跳过 (信号矩阵不足)")
+                except Exception as e:
+                    logger.warning("[L3] Step 1.9: PCA 降维失败 (非致命): %s", e)
+            else:
+                logger.info(
+                    "[L3] Step 1.9: PCA 降维跳过 (enable_pca=%s, n_factors=%d, panel_data=%s)",
+                    self.enable_pca, len(factors), panel_data is not None,
+                )
+
             # Step 2: 信号合成
             signals, _max_corr, _combo_turn = synthesize_signals(
                 factors, self.synthesis_mode, elite_dir=self.elite_dir,
@@ -2663,7 +2957,7 @@ class PortfolioLoop:
 # ─── CLI ──────────────────────────────────────────────────
 
 def main() -> None:
-    """CLI 入口: python -m loop_engine.portfolio_loop [--once] [--mode equal_weight|sharpe_weight]"""
+    """CLI 入口: python -m loop_engine.portfolio_loop [--once] [--mode elastic_net|equal_weight|sharpe_weight]"""
     parser = argparse.ArgumentParser(description="L3 Portfolio Loop")
     parser.add_argument("--once", action="store_true", help="单次运行模式")
     parser.add_argument("--mode", default="equal_weight",
