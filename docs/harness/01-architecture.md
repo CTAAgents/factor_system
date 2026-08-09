@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.39.0
+> 版本: v2.54.0
 > 最后更新: 2026-08-08
 
 ---
@@ -113,7 +113,7 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  - 多父代交叉提升种群多样性, 避免局部最优                                │
 │                                                                         │
 │  职责: 夜间批量演化 → 父因子选择 → 演化模式分派(code/hybrid/operator) →  │
-│        optuna 参数优化 → 评估 → 审计 → 4 重审查门禁 → 家族多样性约束(max_per_family=3) → elite 因子 →       │
+│        optuna 参数优化 → 评估 → 审计 → 高IC筛查(B.4) → 4 重审查门禁 → 家族多样性约束(max_per_family=3) → elite 因子 →       │
 │        传递相关性预检结果给 L3                                           │
 └─────────────────────────────┬────────────────────────────────────────────┘
                               │ elite 因子
@@ -161,6 +161,7 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 - **L1 → L2**: 注入种子因子 + 演化方向指引（通过 seed_pool.inject()）
   - 股票 L2: 482 股票因子种子池（时序模式）
   - 期货 L2: 184 期货因子种子池（17 家族，横截面模式）
+  - 种子晋升 elite 质检链与演化因子完全对齐（v2.50.0）：Verifier 判定 + 质量评分卡 + 端到端回测 + 数据质量监控 + FactorAuditor 6 项强制审计 + 消融实验 + 因果结构审查 + 鲁棒性审查 + SHAP 可解释性分析，任一关卡失败即拒绝晋升（种子 L1 注入候选与人工精选种子一视同仁）
 - **L2 → L3**: 
   - 股票 L2: elite 因子（写入 memory/knowledge/factors/elite/）+ 种子因子相关性预检结果（`seed_correlations` 通过 EvolutionRunResult 传递给 L3 组合阶段参考）
   - 期货 L2: elite 因子 + 横截面评估指标 + 因子加权权重（Ridge 回归）
@@ -222,11 +223,12 @@ fts/
 │   ├── cost_model.py           # 交易成本模型
 │   ├── regime.py               # 市场制度检测（RegimeAwareSelector + SectorRegimeSelector 产业链级）
 │   ├── stress_test.py          # 压力测试
-│   ├── ablation.py             # 输入敏感性消融实验（Phase A 逻辑审查）
+│   ├── ablation.py             # 输入敏感性消融实验（Phase A 逻辑审查；v2.50.0 判定语义：shuffle_dates/成交量/VWAP 消融与核心价格列置零为信息型不拦截，仅非价格列置零 IC 降幅>50% 判伪相关）
 │   ├── shap_analyzer.py        # SHAP 局部可解释性分析（Phase B 逻辑审查）
 │   ├── robustness.py           # 鲁棒性审查（Phase B 逻辑审查）
 │   ├── causal_validator.py     # 因果结构审查（Phase C 逻辑审查）
 │   ├── audit.py                # 因子审计（FactorAuditor + FailureClassifier 集成）
+│   ├── high_ic_screener.py     # 高IC筛查剔除（B.4）：16项检查×6模块，5项一票否决，A/B/C/PASS评级
 │   ├── failure_classifier.py   # 失败模式分类器（10 种失败模式 + 改善建议）
 │   ├── factor_lineage.py       # 因子血缘追踪（谱系/趋势/退化检测/批量审计）
 │   ├── factor_inspector.py     # 定时巡检（自动检测退化因子并降级）
@@ -453,7 +455,7 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
 - 报告输出：主制度名称 + 置信度 + 产业链 Breakdown（各产业链制度/置信度/品种数/方向建议）+ Regime 调整后的交易建议。
 - 趋势友好（bull/bear）→ 优先做空/做多增量最强的品种，可放大仓位；震荡（oscillate）→ 反向操作；高波动（high_vol）→ 缩小仓位，只做增量绝对值 > 0.15 的品种。
 - 实现：`SectorRegimeSelector` 在 `fts/factor_engine/regime.py`，每个产业链使用独立的 `RegimeAwareSelector` 实例保持状态隔离。
-- 产业链分类：`FUTURES_SECTOR_MAP` 定义 12 个产业链（黑色系/有色金属/能源/聚酯链/油化工/煤化工/橡胶/纸浆集运/农产品/贵金属/新能源新材料/金融期货），每产业链品种不足 2 个或数据不足 20 行时跳过。
+- 产业链分类：`FUTURES_SECTOR_MAP` 定义 13 个产业链（黑色系/有色金属/能源/聚酯链/油化工/煤化工/橡胶/造纸林浆纸/航运/农产品/贵金属/新能源新材料/金融期货），每产业链品种不足 2 个或数据不足 20 行时跳过。造纸林浆纸链包含纸浆(SP0)/原木(LG0)/纤维板(FB0)/双胶纸(OP0)，航运链单列集运欧线(EC0)（v2.40.0 拆分，原"纸浆集运"链按产业链逻辑拆分为两链）。贵金属链包含黄金(AU0)/白银(AG0)/铂(PT0)/钯(PD0)，铂钯自"新能源/新材料"链归入贵金属板块（v2.45.0，铂族金属 PGM 与黄金白银同属贵金属）。
 
 **品种-链对齐度增强（v2.22.0）**：
 - 品种-链对齐度计算：在 `SectorRegimeSelector.detect_all()` 检测产业链制度后，调用 `compute_alignment()` 方法计算每个品种与其所属产业链的制度对齐度（0~1）。

@@ -608,15 +608,15 @@ class TestAutoRetire:
         # consecutive=10 >= 4 满足 OR 条件
         assert "fct_decay_low" in retired
 
-    def test_auto_retire_skips_retired_and_decayed(self, tmp_path: Path) -> None:
-        """跳过已 retired 和 decayed 的因子。"""
+    def test_auto_retire_skips_retired_and_deprecated(self, tmp_path: Path) -> None:
+        """跳过已 retired 和 deprecated 的因子。"""
         tracker = EliteFactorTracker(str(tmp_path))
         self._make_eligible_factor(tracker, "fct_retired", status="retired")
-        self._make_eligible_factor(tracker, "fct_decayed", status="decayed")
+        self._make_eligible_factor(tracker, "fct_deprecated", status="deprecated")
 
         retired = tracker.auto_retire()
         assert "fct_retired" not in retired
-        assert "fct_decayed" not in retired
+        assert "fct_deprecated" not in retired
 
     def test_auto_retire_custom_params(self, tmp_path: Path) -> None:
         """自定义参数。"""
@@ -693,7 +693,10 @@ class TestReport:
         """空目录报告全 0。"""
         tracker = EliteFactorTracker(str(tmp_path))
         r = tracker.report()
-        assert r == {"active": 0, "decaying": 0, "decayed": 0, "retired": 0, "total": 0}
+        sc = r["status_counts"]
+        assert sc == {"active": 0, "observing": 0, "decaying": 0,
+                      "critical_decay": 0, "retired": 0, "deprecated": 0,
+                      "rejected": 0, "total": 0}
 
     def test_report_mixed(self, tmp_path: Path) -> None:
         """混合状态的正确计数。"""
@@ -704,14 +707,14 @@ class TestReport:
         _seed_tracker(tracker, "fct_c")
         for _ in range(5):
             tracker.update("fct_c", -0.01)
-        # decayed (直接写)
+        # critical_decay (直接写)
         _write_raw_snapshot(tracker, "fct_d", {
             "factor_id": "fct_d", "name": "D",
             "entry_ic": 0.05, "entry_sharpe": 1.2,
             "entry_at": _utc_iso(0), "weekly_ic": [], "monthly_ic": [],
             "current_ic": 0.05, "current_sharpe": 1.2,
             "consecutive_zero_ic": 10, "decay_6m": 0.5,
-            "status": "decayed", "last_updated": _utc_iso(0),
+            "status": "critical_decay", "last_updated": _utc_iso(0),
         })
         # retired (直接写)
         _write_raw_snapshot(tracker, "fct_e", {
@@ -724,11 +727,12 @@ class TestReport:
         })
 
         r = tracker.report()
-        assert r["active"] == 2
-        assert r["decaying"] == 1
-        assert r["decayed"] == 1
-        assert r["retired"] == 1
-        assert r["total"] == 5
+        sc = r["status_counts"]
+        assert sc["active"] == 2
+        assert sc["decaying"] == 1
+        assert sc["critical_decay"] == 1
+        assert sc["retired"] == 1
+        assert sc["total"] == 5
 
     def test_report_with_unknown_status(self, tmp_path: Path) -> None:
         """未知状态不进入已知分类计数但计入 total。"""
@@ -743,9 +747,10 @@ class TestReport:
         })
 
         r = tracker.report()
+        sc = r["status_counts"]
         # report 使用 counts[status] 直接赋值，不会归入 active
-        assert r["active"] == 0
-        assert r["total"] == 1
+        assert sc["active"] == 0
+        assert sc["total"] == 1
 
 
 # ════════════════════════════════════════════════════════════
@@ -832,8 +837,9 @@ class TestIntegration:
         assert tracker.get("fct_bad") is None
         # report 应忽略损坏文件
         r = tracker.report()
-        assert r["active"] == 1
-        assert r["total"] == 1
+        sc = r["status_counts"]
+        assert sc["active"] == 1
+        assert sc["total"] == 1
 
     def test_full_lifecycle_active_to_retired(self, tmp_path: Path) -> None:
         """完整生命周期: init → update → auto_retire → retired。"""
@@ -1051,12 +1057,12 @@ class TestAutoRetireManager:
             manager = AutoRetireManager(tracker)
             assert manager.can_reevaluate("fct_exact") is True
 
-    def test_can_reevaluate_decayed_status(self, tmp_path: Path) -> None:
-        """decayed 状态的因子也可被 reevaluate。"""
+    def test_can_reevaluate_deprecated_status(self, tmp_path: Path) -> None:
+        """deprecated 状态的因子也可被 reevaluate。"""
         tracker = EliteFactorTracker(str(tmp_path))
         raw = {
-            "factor_id": "fct_decayed",
-            "name": "Decayed",
+            "factor_id": "fct_deprecated",
+            "name": "Deprecated",
             "entry_ic": 0.05,
             "entry_sharpe": 1.2,
             "entry_at": _utc_iso(60),
@@ -1066,10 +1072,10 @@ class TestAutoRetireManager:
             "current_sharpe": 0.3,
             "consecutive_zero_ic": 10,
             "decay_6m": 0.5,
-            "status": "decayed",
+            "status": "deprecated",
             "last_updated": _utc_iso(8),
         }
-        _write_raw_snapshot(tracker, "fct_decayed", raw)
+        _write_raw_snapshot(tracker, "fct_deprecated", raw)
 
         now = datetime.now(timezone.utc)
         with patch("fts.monitor.elite_tracker.datetime") as mock_dt:
@@ -1078,7 +1084,7 @@ class TestAutoRetireManager:
             mock_dt.timezone = timezone
 
             manager = AutoRetireManager(tracker)
-            assert manager.can_reevaluate("fct_decayed") is True
+            assert manager.can_reevaluate("fct_deprecated") is True
 
     def test_constructor_stores_references(self, tmp_path: Path) -> None:
         """构造函数正确存储引用。"""

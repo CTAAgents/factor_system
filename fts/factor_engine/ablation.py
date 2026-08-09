@@ -46,6 +46,7 @@ class SingleAblation(dict):
         sharpe_change: float,
         ic_decay_ratio: float = 0.0,
         p_value: float = 1.0,
+        feature: Optional[str] = None,
     ) -> None:
         super().__init__()
         self["mode"] = mode
@@ -56,6 +57,7 @@ class SingleAblation(dict):
         self["sharpe_change"] = sharpe_change
         self["ic_decay_ratio"] = ic_decay_ratio  # IC 衰减比例（相对于基线）
         self["p_value"] = p_value  # 消融前后 IC 差异的显著性
+        self["feature"] = feature  # zero_one_feature 模式: 被置零的特征列（v2.50.0）
 
 
 class AblationResult(dict):
@@ -289,6 +291,7 @@ class AblationExperiment:
                 sharpe=0.0,
                 ic_change=worst_ic - baseline_ic,
                 sharpe_change=0.0,
+                feature=worst_feature,
             ))
         else:
             ablations.append(SingleAblation(
@@ -298,6 +301,7 @@ class AblationExperiment:
                 sharpe=baseline_sharpe,
                 ic_change=0.0,
                 sharpe_change=0.0,
+                feature=None,
             ))
 
         return AblationResult(

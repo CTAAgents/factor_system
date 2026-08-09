@@ -376,6 +376,7 @@ class TestLoadFuturesEliteFactors:
             data = {
                 "name": f"factor_{i}",
                 "factor_id": f"fid_{i}",
+                "code": f"def factor_program_{i}(data, params):\n    return data['close'] * {i}",
                 "evaluation": {
                     "level_1_backtest": {"ic": 0.1 + i * 0.2},
                 },
@@ -398,6 +399,7 @@ class TestLoadFuturesEliteFactors:
             data = {
                 "name": f"factor_{i}",
                 "factor_id": f"fid_{i}",
+                "code": f"def factor_program_{i}(data, params):\n    return data['close'] * {ic}",
                 "evaluation": {
                     "level_1_backtest": {"ic": ic},
                 },
@@ -416,7 +418,8 @@ class TestLoadFuturesEliteFactors:
         elite_dir.mkdir()
         (elite_dir / "bad.json").write_text("not json")
         (elite_dir / "good.json").write_text(
-            '{"name":"f1","factor_id":"fid","evaluation":{"level_1_backtest":{"ic":0.5}}}',
+            '{"name":"f1","factor_id":"fid","code":"def f(): return 1",'
+            '"evaluation":{"level_1_backtest":{"ic":0.5}}}',
         )
 
         monkeypatch.setattr(

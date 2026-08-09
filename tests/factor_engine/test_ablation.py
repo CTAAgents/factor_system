@@ -181,6 +181,38 @@ class TestAblationExperiment:
         r2 = experiment.run(vwap_factor, sample_data, forward_returns)
         assert abs(r1["baseline_ic"] - r2["baseline_ic"]) < 1e-10
 
+    def test_zero_one_feature_records_column(self, sample_data, forward_returns, vwap_factor):
+        """zero_one_feature 消融记录被置零的特征列（v2.50.0 feature 契约）。
+
+        SingleAblation.feature 字段应指向影响最大的非 date/vwap 列；
+        其他信息型消融模式的 feature 为 None。
+        """
+        experiment = AblationExperiment(random_seed=42)
+        result = experiment.run(vwap_factor, sample_data, forward_returns)
+
+        zero_one = [ab for ab in result["ablations"] if ab["mode"] == "zero_one_feature"]
+        assert len(zero_one) == 1
+        # feature 应指向影响最大的非 date/vwap 列（vwap_factor 中 vwap 由 close×volume
+        # 计算，置零 close 或 volume 均致 IC 崩塌；具体列以实算为准）
+        assert zero_one[0]["feature"] in {"open", "high", "low", "close", "volume"}
+        assert zero_one[0]["feature"] not in {"date", "vwap"}
+
+        for mode in ("volume_zero", "vwap_to_close", "vwap_to_settle", "shuffle_dates"):
+            entries = [ab for ab in result["ablations"] if ab["mode"] == mode]
+            for ab in entries:
+                assert ab["feature"] is None, f"{mode} 不应有 feature 字段"
+
+    def test_single_ablation_feature_roundtrip(self):
+        """SingleAblation 构造可显式传入 feature 字段。"""
+        ab = SingleAblation(
+            mode="zero_one_feature", description="单特征归零（影响最大: volume）",
+            ic=0.01, sharpe=0.3,
+            ic_change=-0.04, sharpe_change=-1.2,
+            feature="volume",
+        )
+        assert ab["feature"] == "volume"
+        assert "feature" in ab  # 序列化兼容（dict 子类）
+
     def test_run_batch_returns_list(self, sample_data, forward_returns, vwap_factor):
         """run_batch 返回正确长度的列表。"""
         experiment = AblationExperiment(random_seed=42)

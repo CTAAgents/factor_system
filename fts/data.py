@@ -57,6 +57,8 @@ class FTSDataProvider:
         self._mcp = mcp_provider or MCPDataProvider()
         self._fundamental = fundamental_provider or FundamentalProvider(mcp_available=False)
         self._futures = futures_provider or FuturesDataProvider()
+        # 期货基本面 provider（库存/基差/仓单），当前无实现，注入点为 None
+        self._futures_fundamental = None
 
     # ── 基本面注入 ──
 
@@ -249,28 +251,31 @@ class FTSDataProvider:
         Returns:
             DataFrame — 新增基本面列（无数据时用 NaN 填充）。
         """
-        # 注入库存
-        try:
-            inv_df = self._futures_fundamental.get_inventory(symbol)
-            if not inv_df.empty and "inventory" in inv_df.columns:
-                df = df.join(inv_df[["inventory", "change"]].rename(
-                    columns={"inventory": "fut_inventory", "change": "fut_inventory_chg"}
-                ), how="left")
-        except Exception:  # noqa: BLE001
-            pass
+        # 缺失列用 NaN 填充（无 provider 时也执行，保证列结构一致）
+        provider = self._futures_fundamental
+        if provider is not None:
+            # 注入库存
+            try:
+                inv_df = provider.get_inventory(symbol)
+                if not inv_df.empty and "inventory" in inv_df.columns:
+                    df = df.join(inv_df[["inventory", "change"]].rename(
+                        columns={"inventory": "fut_inventory", "change": "fut_inventory_chg"}
+                    ), how="left")
+            except Exception:  # noqa: BLE001
+                pass
 
-        # 注入基差
-        try:
-            basis_df = self._futures_fundamental.get_basis(symbol, days=60)
-            if not basis_df.empty:
-                basis_cols = ["spot_price", "near_basis", "dom_basis",
-                              "near_basis_rate", "dom_basis_rate"]
-                available = [c for c in basis_cols if c in basis_df.columns]
-                if available:
-                    rename = {c: f"fut_{c}" for c in available}
-                    df = df.join(basis_df[available].rename(columns=rename), how="left")
-        except Exception:  # noqa: BLE001
-            pass
+            # 注入基差
+            try:
+                basis_df = provider.get_basis(symbol, days=60)
+                if not basis_df.empty:
+                    basis_cols = ["spot_price", "near_basis", "dom_basis",
+                                  "near_basis_rate", "dom_basis_rate"]
+                    available = [c for c in basis_cols if c in basis_df.columns]
+                    if available:
+                        rename = {c: f"fut_{c}" for c in available}
+                        df = df.join(basis_df[available].rename(columns=rename), how="left")
+            except Exception:  # noqa: BLE001
+                pass
 
         # 缺失列用 NaN 填充
         for col in ["fut_inventory", "fut_inventory_chg", "fut_spot_price",

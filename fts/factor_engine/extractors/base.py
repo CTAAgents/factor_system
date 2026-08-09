@@ -131,7 +131,13 @@ class BaseExtractor(ABC):
 3. 代码必须使用 numpy，输入为 data dict{extra_fields}
 4. 输出范围 [-1, 1]，shape 与输入一致
 5. 每个因子提供四维经济逻辑评分（theory/behavioral/microstructure/institutional, 0-5）
+   评分量规: 3-5 分=该维度有明确机制支撑（理论/行为偏差/微观结构/机构制度）并在 narrative 中论证;
+   2 分=仅直觉逻辑无机制论证; 0-1 分=与本维度无关。narrative 必须逐维度说明评分依据，
+   禁止对不明确定义的维度一律打 2 分；institutional 维度参考机构参与度/持仓结构/期限结构制度/资金流向等口径。
 6. 返回 JSON 数组，不要 markdown 代码块标记
+7. 代码必须通过沙箱校验: 仅允许 import numpy/pandas/scipy/math/statistics 等白名单模块，
+   禁止 import os/sys/sklearn/torch/requests 等任何外部或 ML 框架模块；
+   论文中的 LSTM/机器学习方法须降级为纯 numpy 量价近似实现，或仅输出因子思想而不生成代码
 
 输出格式:
 [
@@ -159,6 +165,13 @@ class BaseExtractor(ABC):
                 result = self.llm_client.generate_json(prompt, max_tokens=4000)
             else:
                 text, _ = self.llm_client.complete(prompt, max_tokens=4000)
+                # P1b: 保存 LLM 原始响应，便于沙箱编译失败等问题的定位分析
+                debug_path = f"debug_llm_response_{trace_id}_{self.name}.txt"
+                try:
+                    with open(debug_path, "w", encoding="utf-8") as f:
+                        f.write(text)
+                except Exception as de:  # noqa: BLE001
+                    logger.warning("[_llm_extract_factors] 保存调试文件失败: %s", de)
                 import json
                 result = json.loads(text)
 

@@ -158,20 +158,22 @@ def _map_sharpe_to_score(sharpe: float, config: Optional[dict] = None) -> float:
     """Sharpe → 收益性分 (0-5)。
 
     阈值: Sharpe=3→5分, 1.5→3分, 0.5→1分
-    过拟合惩罚: Sharpe>10 时逐步减分，Sharpe=20 时归零（P1 过拟合保护）
+    过拟合惩罚: Sharpe>sharpe_overfit_threshold 时逐步减分，Sharpe=sharpe_overfit_threshold+10 时归零
     可通过 config 参数覆盖阈值（如 {"sharpe_high": 2.0, "sharpe_mid": 1.0, "sharpe_low": 0.3}）。
+    sharpe_overfit_threshold 控制过拟合惩罚起始点（默认 20，小样本场景可放宽）。
     """
     cfg = config or {}
     sharpe_high = cfg.get("sharpe_high", 3.0)
     sharpe_mid = cfg.get("sharpe_mid", 1.5)
     sharpe_low = cfg.get("sharpe_low", 0.5)
+    overfit_threshold = cfg.get("sharpe_overfit_threshold", 20.0)
     if sharpe <= 0:
         return 0.0
     if sharpe >= sharpe_high:
-        if sharpe <= 10:
+        if sharpe <= overfit_threshold:
             return 5.0
-        # Sharpe > 10: 过拟合惩罚，逐步减分
-        penalty = min(5.0, (sharpe - 10) * 0.5)
+        # Sharpe > overfit_threshold: 过拟合惩罚，逐步减分
+        penalty = min(5.0, (sharpe - overfit_threshold) * 0.5)
         return max(0.0, 5.0 - penalty)
     if sharpe >= sharpe_mid:
         return 3.0

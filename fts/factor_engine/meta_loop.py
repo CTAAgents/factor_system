@@ -48,6 +48,7 @@ from .contracts import (
     SeedCandidate,
 )
 from .factor_program import (
+    fix_factor_code,
     validate_factor_code,
 )
 from .extractors import FuturesExtractorPipeline, StockExtractorPipeline
@@ -325,6 +326,8 @@ class FactorPoolManager:
         """添加一条因子记录。"""
         pool = self._cache or self.load_or_init()
         factors = pool.setdefault("factors", [])
+        # 候选因子入池时未评估（无 IC/Sharpe），显式标注 evaluation_status
+        entry.setdefault("evaluation_status", "pending")
         # 去重（按 factor_id）
         for i, f in enumerate(factors):
             if f.get("factor_id") == entry["factor_id"]:
@@ -709,10 +712,11 @@ def factor_program(data, params):
         # 4. 限制数量
         candidates = candidates[:max_candidates]
 
-        # 5. 编译验证 + 去重标记
+        # 5. 编译验证 + 自动修复 + 去重标记
         validated: list[SeedCandidate] = []
         dup_count = 0
         fail_count = 0
+        auto_fix_count = 0
         for cand in candidates:
             cand_name = cand.get("name", "unknown")
             cand_id = cand.get("candidate_id", "unknown")
@@ -722,10 +726,32 @@ def factor_program(data, params):
                 if ok:
                     cand["is_executable"] = True
                 else:
-                    cand["is_executable"] = False
-                    cand.setdefault("failure_reasons", []).append(
-                        f"编译失败: {'; '.join(reasons)}"
-                    )
+                    # 尝试自动修复
+                    error_reason = "; ".join(reasons)
+                    fixed, fixed_code = fix_factor_code(cand["code"], error_reason)
+                    if fixed:
+                        ok2, reasons2 = validate_factor_code(fixed_code)
+                        if ok2:
+                            cand["is_executable"] = True
+                            cand["code"] = fixed_code
+                            auto_fix_count += 1
+                            cand.setdefault("failure_reasons", []).append(
+                                f"自动修复成功: 原错误={error_reason}"
+                            )
+                            logger.info(
+                                "[bootstrap] 自动修复成功, name=%s, candidate_id=%s, error=%s",
+                                cand_name, cand_id, error_reason,
+                            )
+                        else:
+                            cand["is_executable"] = False
+                            cand.setdefault("failure_reasons", []).append(
+                                f"编译失败: {error_reason}"
+                            )
+                    else:
+                        cand["is_executable"] = False
+                        cand.setdefault("failure_reasons", []).append(
+                            f"编译失败: {error_reason}"
+                        )
             except Exception as e:
                 cand["is_executable"] = False
                 cand.setdefault("failure_reasons", []).append(f"编译异常: {e}")
@@ -743,8 +769,8 @@ def factor_program(data, params):
             validated.append(cand)
 
         logger.info(
-            "[bootstrap] 完成, trace_id=%s, total=%d, validated=%d, duplicates=%d, failed_compile=%d",
-            trace_id, len(candidates), len(validated), dup_count, fail_count,
+            "[bootstrap] 完成, trace_id=%s, total=%d, validated=%d, duplicates=%d, failed_compile=%d, auto_fixed=%d",
+            trace_id, len(candidates), len(validated), dup_count, fail_count, auto_fix_count,
         )
         return validated
 
@@ -1276,16 +1302,25 @@ class MetaLoop:
                 return cb_reason
 
             verdict = self.verifier.check(cand, self.seed_pool)
+            # P1c: 暂存 bootstrap 阶段的具体错误（如编译失败详细原因），
+            # 因 verifier.check 会覆盖 cand["failure_reasons"] 为笼统原因
+            bootstrap_detail = list(cand.get("failure_reasons", []))
             cand["passed_l1_verifier"] = verdict["passed"]
             cand["failure_reasons"] = verdict["failure_reasons"]
 
             if not verdict["passed"]:
                 rejected_count += 1
+                # P1a: 硬失败（编译失败/重复）计入连续低质量熔断计数；
+                # 软失败（经济逻辑评分/narrative 不达标）不计入，避免 LLM 评分波动误触熔断
+                if self._is_hard_failure(verdict["failure_reasons"]):
+                    self._consecutive_low_quality += 1
+                detail = bootstrap_detail or cand.get("failure_reasons")
                 logger.warning(
-                    "[L1.verify] 候选[%d/%d] 未通过: name=%s, candidate_id=%s, reasons=%s",
-                    i + 1, len(candidates), cand_name, cand_id, verdict["failure_reasons"],
+                    "[L1.verify] 候选[%d/%d] 未通过: name=%s, candidate_id=%s, reasons=%s%s",
+                    i + 1, len(candidates), cand_name, cand_id,
+                    verdict["failure_reasons"],
+                    f", detail={detail}" if detail else "",
                 )
-                self._consecutive_low_quality += 1
                 continue
 
             passed_count += 1
@@ -1417,6 +1452,20 @@ class MetaLoop:
         if total_score >= 12:
             return "medium"
         return "low"
+
+    @staticmethod
+    def _is_hard_failure(reasons: list[str]) -> bool:
+        """判断验证失败是否为硬失败（结构性不可修复）。
+
+        硬失败（计入连续低质量熔断计数）:
+            - 沙箱编译失败（代码不可执行）
+            - 与现有种子因子重复
+        软失败（不计入熔断计数，LLM 输出波动可通过 Prompt 调优）:
+            - 经济逻辑评分不达标
+            - narrative 长度不足
+        """
+        text = " ".join(reasons)
+        return ("编译" in text) or ("重复" in text)
 
     def _check_circuit_breaker(
         self, state: L1MetaLoopState, candidates_generated: int

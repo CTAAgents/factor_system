@@ -23,6 +23,10 @@ from fts.data import (
     FTSDataProvider,
     get_data_provider,
 )
+from fts.data_futures import (
+    FUTURES_CORE_SUBSET,
+    FuturesDataProvider,
+)
 from fts.data_mcp import (
     MCPDataError,
     MCPDataProvider,
@@ -54,16 +58,28 @@ class TestInit:
 # ═══════════════════════════════════════════════════════════
 
 class TestGetOhlcv:
-    def test_returns_real_data(self):
-        """应返回真实的 OHLCV 数据（腾讯 API）。"""
-        p = FTSDataProvider()
+    def test_returns_real_data(self, mocker):
+        """应返回真实的 OHLCV 数据（mock provider 数据不被替换）。"""
+        mock_mcp = mocker.MagicMock(spec=MCPDataProvider)
+        idx = pd.date_range("2025-01-01", periods=250, freq="B")
+        mock_df = pd.DataFrame({
+            "open": np.linspace(4.0, 4.5, 250),
+            "high": np.linspace(4.05, 4.55, 250),
+            "low": np.linspace(3.95, 4.45, 250),
+            "close": np.linspace(4.0, 4.5, 250),
+            "volume": np.full(250, 1e6),
+        }, index=idx)
+        mock_mcp.get_ohlcv.return_value = mock_df
+
+        p = FTSDataProvider(mcp_provider=mock_mcp)
         df = p.get_ohlcv("510300", days=250)
         assert isinstance(df, pd.DataFrame)
         assert list(df.columns) == ["open", "high", "low", "close", "volume"]
         assert len(df) > 0
         assert isinstance(df.index, pd.DatetimeIndex)
-        # 真实价格应在合理范围（510300 约 3~6 元）
+        # mock provider 数据被直接传递，价格区间保持 4~4.5 元
         assert 3.0 < df["close"].mean() < 6.0
+        mock_mcp.get_ohlcv.assert_called_once()
 
     def test_etf_ohlcv(self):
         p = FTSDataProvider()
@@ -621,3 +637,79 @@ class TestFTSFundamentalIntegration:
         panel, dates = p.get_csi300_panel(days=100, max_stocks=2, fundamental=True)
         assert "SYNTHETIC" in panel
         assert "pe_ttm" in panel["SYNTHETIC"].columns
+
+
+# ═══════════════════════════════════════════════════════════
+# 18. FTSDataProvider 期货接口集成
+# ═══════════════════════════════════════════════════════════
+
+class TestFTSFuturesIntegration:
+    """覆盖 data.FTSDataProvider 的期货数据接口（委托给 FuturesDataProvider）。"""
+
+    def test_get_futures_ohlcv(self, mocker):
+        """get_futures_ohlcv 委托给期货 provider。"""
+        mock_fut = mocker.MagicMock(spec=FuturesDataProvider)
+        df = pd.DataFrame({"close": [1.0, 2.0]})
+        mock_fut.get_ohlcv.return_value = df
+        p = FTSDataProvider(
+            mcp_provider=mocker.MagicMock(),
+            futures_provider=mock_fut,
+        )
+        result = p.get_futures_ohlcv("RB0", days=100, trace_id="t1")
+        mock_fut.get_ohlcv.assert_called_once_with("RB0", days=100, trace_id="t1")
+        assert result is df
+
+    def test_get_futures_panel_with_symbols(self, mocker):
+        """get_futures_panel 显式传 symbols 时透传。"""
+        mock_fut = mocker.MagicMock(spec=FuturesDataProvider)
+        panel = {"RB0": pd.DataFrame({"close": [1.0]})}
+        dates = pd.DatetimeIndex(["2026-01-01"])
+        mock_fut.get_futures_panel.return_value = (panel, dates)
+        p = FTSDataProvider(
+            mcp_provider=mocker.MagicMock(),
+            futures_provider=mock_fut,
+        )
+        result = p.get_futures_panel(["RB0"], days=100, trace_id="t1")
+        assert result == (panel, dates)
+        mock_fut.get_futures_panel.assert_called_once_with(["RB0"], days=100, trace_id="t1")
+
+    def test_get_futures_panel_default_symbols(self, mocker):
+        """get_futures_panel 不传 symbols 时使用 FUTURES_CORE_SUBSET。"""
+        mock_fut = mocker.MagicMock(spec=FuturesDataProvider)
+        mock_fut.get_futures_panel.return_value = ({}, pd.DatetimeIndex([]))
+        p = FTSDataProvider(
+            mcp_provider=mocker.MagicMock(),
+            futures_provider=mock_fut,
+        )
+        p.get_futures_panel(days=100)
+        args, kwargs = mock_fut.get_futures_panel.call_args
+        assert args[0] == FUTURES_CORE_SUBSET
+        assert kwargs == {"days": 100, "trace_id": ""}
+
+    def test_enrich_futures_fundamental_fills_nan(self, mocker):
+        """enrich_futures_fundamental 返回原 df 并补齐 fut_ 前缀 NaN 列。
+
+        注: FTSDataProvider.__init__ 未初始化 _futures_fundamental 属性（产品 bug #2），
+        enrich_futures_fundamental 内部的 AttributeError 被 except 吞掉，
+        此处固化其兜底行为：不抛异常、7 个期货基本面列全部补齐（NaN）。
+        """
+        p = FTSDataProvider(
+            mcp_provider=mocker.MagicMock(),
+            futures_provider=mocker.MagicMock(spec=FuturesDataProvider),
+        )
+        base_df = pd.DataFrame(
+            {"close": [1.0, 2.0], "open": [0.9, 1.8], "high": [1.1, 2.2],
+             "low": [0.8, 1.7], "volume": [1000.0, 2000.0]},
+            index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
+        )
+        result = p.enrich_futures_fundamental(base_df, "RB0", trace_id="t1")
+        expected_cols = [
+            "fut_inventory", "fut_inventory_chg", "fut_spot_price",
+            "fut_near_basis", "fut_dom_basis",
+            "fut_near_basis_rate", "fut_dom_basis_rate",
+        ]
+        for col in expected_cols:
+            assert col in result.columns
+            assert result[col].isna().all()
+        # 原 OHLCV 列不受影响
+        assert list(result.columns[:5]) == ["close", "open", "high", "low", "volume"]

@@ -100,19 +100,58 @@ class TestEvolutionLoopRiskTag:
         return ret
 
     def _make_mock_evaluation(self, ic: float, passed: bool = True) -> dict:
-        """构造 mock FactorEvaluation。"""
+        """构造 mock FactorEvaluation（含质检评分卡所需字段）。
+
+        注意: _evaluate_and_promote_seeds 会经 FactorQualityCard 质检（min_grade=B），
+        mock 需提供 icir/sharpe/walk_forward/经济四维等字段，否则总分不足被 C 级淘汰。
+        v2.50.0 起种子路径新增 Verifier 判定，mock 需补齐
+        max_drawdown/monotonicity/oos_ratio/adjusted_t/fdr_q 字段使真实 Verifier 通过。
+        """
         return {
             "factor_id": "fct_test",
             "trace_id": "test",
-            "level_1_backtest": {"ic": ic, "sharpe": 2.0, "t_stat": 3.0},
-            "level_2_economic": {"dimensions_passed": 3},
-            "level_3_multiple": {"adjusted_t": 3.0, "passed": True},
+            "level_1_backtest": {
+                "ic": ic,
+                "sharpe": 3.0,
+                "t_stat": 3.0,
+                "icir": 3.0,
+                "decay_6m": 0.1,
+                "turnover_monthly": 0.3,
+                "max_drawdown": 0.2,
+                "monotonicity": True,
+                "oos_ratio": 0.35,
+            },
+            "level_2_economic": {
+                "theory": 4, "behavioral": 4,
+                "microstructure": 4, "institutional": 4,
+                "dimensions_passed": 3,
+            },
+            "level_3_multiple": {"adjusted_t": 3.5, "fdr_q": 0.01, "passed": True},
+            "walk_forward": {
+                "ic_consistency": 0.9,
+                "ic_volatility": 0.1,
+                "consistency_score": 0.9,
+                "window_score": 1.0,
+            },
             "passed": passed,
             "failure_reasons": [],
             "evaluated_at": "2026-01-01T00:00:00",
         }
 
-    def test_vwap_approx_ic_006_skipped(self, sample_data, forward_returns):
+    @staticmethod
+    def _mock_quality_gates_pass(loop) -> None:
+        """mock v2.50.0 种子路径新增的 Verifier/消融/因果/鲁棒/SHAP 审查通过。
+
+        用于聚焦验证既有晋升链路（vwap 门槛、质量卡、审计等）的测试，
+        避免真实审查模块（依赖数据/随机性）导致结果不稳定。
+        """
+        loop.verifier.check = MagicMock(return_value={"passed": True, "failure_reasons": []})
+        loop._run_ablation_check = MagicMock(return_value={"passed": True})
+        loop._run_causal_validation = MagicMock(return_value={"passed": True})
+        loop._run_robustness_check = MagicMock(return_value={"passed": True})
+        loop._run_shap_analysis = MagicMock(return_value={})
+
+    def test_vwap_approx_ic_006_skipped(self, sample_data, forward_returns, tmp_path):
         """vwap_approx 因子 IC=0.06 应被跳过（阈值 0.08）。"""
         from fts.factor_engine.evolution_loop import EvolutionLoop
 
@@ -139,6 +178,7 @@ def factor_program(data, params):
             data=sample_data,
             forward_returns=forward_returns,
             elite_dir="memory/evolution/test_elite",
+            factor_db_path=tmp_path / "test_catalog.duckdb",
         )
 
         # Mock evaluation_chain.evaluate 返回 IC=0.06, passed=True
@@ -159,7 +199,7 @@ def factor_program(data, params):
             assert promoted == 0, "vwap_approx 因子 IC=0.06 不应晋升"
             assert len(elite_ids) == 0
 
-    def test_vwap_approx_ic_009_promoted(self, sample_data, forward_returns):
+    def test_vwap_approx_ic_009_promoted(self, sample_data, forward_returns, tmp_path):
         """vwap_approx 因子 IC=0.09 应晋升（≥ 0.08）。"""
         from fts.factor_engine.evolution_loop import EvolutionLoop
 
@@ -185,11 +225,14 @@ def factor_program(data, params):
             data=sample_data,
             forward_returns=forward_returns,
             elite_dir="memory/evolution/test_elite",
+            factor_db_path=tmp_path / "test_catalog.duckdb",
         )
 
         # Mock evaluation_chain.evaluate 返回 IC=0.09, passed=True
         with patch.object(loop.evaluation_chain, 'evaluate',
                           return_value=self._make_mock_evaluation(ic=0.09, passed=True)):
+            # v2.50.0 新增全链审查 mock 通过（聚焦 vwap 门槛验证）
+            self._mock_quality_gates_pass(loop)
             elite_ids: list[str] = []
             promoted = loop._evaluate_and_promote_seeds(
                 seeds=[seed], trace_id="test", state={
@@ -204,7 +247,7 @@ def factor_program(data, params):
             assert promoted == 1, "vwap_approx 因子 IC=0.09 应晋升"
             assert len(elite_ids) == 1
 
-    def test_no_risk_tag_ic_006_promoted(self, sample_data, forward_returns):
+    def test_no_risk_tag_ic_006_promoted(self, sample_data, forward_returns, tmp_path):
         """无 risk_tag 的因子 IC=0.06 应正常晋升（默认阈值 0.03）。"""
         from fts.factor_engine.evolution_loop import EvolutionLoop
 
@@ -230,11 +273,14 @@ def factor_program(data, params):
             data=sample_data,
             forward_returns=forward_returns,
             elite_dir="memory/evolution/test_elite",
+            factor_db_path=tmp_path / "test_catalog.duckdb",
         )
 
         # Mock evaluation_chain.evaluate 返回 IC=0.06, passed=True
         with patch.object(loop.evaluation_chain, 'evaluate',
                           return_value=self._make_mock_evaluation(ic=0.06, passed=True)):
+            # v2.50.0 新增全链审查 mock 通过（聚焦默认 IC 门槛验证）
+            self._mock_quality_gates_pass(loop)
             elite_ids: list[str] = []
             promoted = loop._evaluate_and_promote_seeds(
                 seeds=[seed], trace_id="test", state={
@@ -248,3 +294,111 @@ def factor_program(data, params):
             )
             assert promoted == 1, "无 risk_tag 因子 IC=0.06 应晋升"
             assert len(elite_ids) == 1
+
+    # ─── v2.50.0: 种子因子质检全链对齐（Verifier/消融/因果/鲁棒/SHAP） ──
+
+    def _make_seed(self, name: str) -> FactorProgram:
+        """构造无 risk_tag 的普通种子因子。"""
+        return create_factor_program(
+            name=name,
+            code='''
+def factor_program(data, params):
+    import numpy as np
+    close = data['close'].values if hasattr(data, 'close') else data['close']
+    score = np.diff(close, prepend=close[0]) / np.maximum(close, 1e-10)
+    return np.clip(np.nan_to_num(score, nan=0.0), -1.0, 1.0)
+''',
+            params={},
+            signature={"input_fields": ["close"], "output_type": "signal",
+                       "frequency": "daily", "lookback": 2},
+            economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3,
+                            "institutional": 3, "narrative": "测试"},
+            source="seed",
+            risk_tag=None,
+        )
+
+    @staticmethod
+    def _seed_state() -> dict[str, Any]:
+        return {
+            "run_id": "test", "started_at": "", "last_generation": 0,
+            "total_factors_evaluated": 0, "total_factors_promoted": 0,
+            "tokens_consumed": 0, "budget_limit": 200000,
+            "status": "running", "last_error": None,
+            "experience_chain_ref": [], "last_updated": "",
+            "version": "1.0.0",
+        }
+
+    def _run_seed_promotion(self, loop, seed) -> int:
+        elite_ids: list[str] = []
+        promoted = loop._evaluate_and_promote_seeds(
+            seeds=[seed], trace_id="test", state=self._seed_state(),
+            elite_ids=elite_ids,
+        )
+        return promoted
+
+    def _make_loop(self, sample_data, forward_returns, tmp_path):
+        from fts.factor_engine.evolution_loop import EvolutionLoop
+
+        return EvolutionLoop(
+            data=sample_data,
+            forward_returns=forward_returns,
+            elite_dir="memory/evolution/test_elite",
+            factor_db_path=tmp_path / "test_catalog.duckdb",
+        )
+
+    def test_seed_verifier_fail_not_promoted(self, sample_data, forward_returns, tmp_path):
+        """v2.50.0: Verifier 判定失败 → 种子不晋升。"""
+        seed = self._make_seed("seed_verifier_fail")
+        loop = self._make_loop(sample_data, forward_returns, tmp_path)
+        with patch.object(loop.evaluation_chain, 'evaluate',
+                          return_value=self._make_mock_evaluation(ic=0.09, passed=True)):
+            loop.verifier.check = MagicMock(
+                return_value={"passed": False, "failure_reasons": ["mock verifier fail"]})
+            loop._run_ablation_check = MagicMock(return_value={"passed": True})
+            loop._run_causal_validation = MagicMock(return_value={"passed": True})
+            loop._run_robustness_check = MagicMock(return_value={"passed": True})
+            loop._run_shap_analysis = MagicMock(return_value={})
+            promoted = self._run_seed_promotion(loop, seed)
+        assert promoted == 0, "Verifier 失败种子不应晋升"
+
+    def test_seed_ablation_fail_not_promoted(self, sample_data, forward_returns, tmp_path):
+        """v2.50.0: 消融实验失败（疑似伪相关）→ 种子不晋升。"""
+        seed = self._make_seed("seed_ablation_fail")
+        loop = self._make_loop(sample_data, forward_returns, tmp_path)
+        with patch.object(loop.evaluation_chain, 'evaluate',
+                          return_value=self._make_mock_evaluation(ic=0.09, passed=True)):
+            loop.verifier.check = MagicMock(return_value={"passed": True, "failure_reasons": []})
+            loop._run_ablation_check = MagicMock(return_value={"passed": False, "ablations": []})
+            loop._run_causal_validation = MagicMock(return_value={"passed": True})
+            loop._run_robustness_check = MagicMock(return_value={"passed": True})
+            loop._run_shap_analysis = MagicMock(return_value={})
+            promoted = self._run_seed_promotion(loop, seed)
+        assert promoted == 0, "消融失败种子不应晋升"
+
+    def test_seed_causal_fail_not_promoted(self, sample_data, forward_returns, tmp_path):
+        """v2.50.0: 因果结构审查失败（事件敏感）→ 种子不晋升。"""
+        seed = self._make_seed("seed_causal_fail")
+        loop = self._make_loop(sample_data, forward_returns, tmp_path)
+        with patch.object(loop.evaluation_chain, 'evaluate',
+                          return_value=self._make_mock_evaluation(ic=0.09, passed=True)):
+            loop.verifier.check = MagicMock(return_value={"passed": True, "failure_reasons": []})
+            loop._run_ablation_check = MagicMock(return_value={"passed": True})
+            loop._run_causal_validation = MagicMock(return_value={"passed": False})
+            loop._run_robustness_check = MagicMock(return_value={"passed": True})
+            loop._run_shap_analysis = MagicMock(return_value={})
+            promoted = self._run_seed_promotion(loop, seed)
+        assert promoted == 0, "因果审查失败种子不应晋升"
+
+    def test_seed_robustness_fail_not_promoted(self, sample_data, forward_returns, tmp_path):
+        """v2.50.0: 鲁棒性审查失败 → 种子不晋升。"""
+        seed = self._make_seed("seed_robustness_fail")
+        loop = self._make_loop(sample_data, forward_returns, tmp_path)
+        with patch.object(loop.evaluation_chain, 'evaluate',
+                          return_value=self._make_mock_evaluation(ic=0.09, passed=True)):
+            loop.verifier.check = MagicMock(return_value={"passed": True, "failure_reasons": []})
+            loop._run_ablation_check = MagicMock(return_value={"passed": True})
+            loop._run_causal_validation = MagicMock(return_value={"passed": True})
+            loop._run_robustness_check = MagicMock(return_value={"passed": False})
+            loop._run_shap_analysis = MagicMock(return_value={})
+            promoted = self._run_seed_promotion(loop, seed)
+        assert promoted == 0, "鲁棒性失败种子不应晋升"

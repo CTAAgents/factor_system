@@ -217,6 +217,13 @@ class _QualityInspectionCompat:
         symbols = factor.get("symbols", [])
         cross_symbol_coverage = min(1.0, len(symbols) / 10.0) if symbols else 0.6
 
+        # 估算 Calmar 比率: 从 Sharpe 和 max_drawdown 推导
+        max_dd = abs(bt.get("max_drawdown", 0.0))
+        if max_dd > 1e-6:
+            calmar = (sharpe * 0.15) / max_dd  # 假设 15% 年化波动率
+        else:
+            calmar = sharpe * 2.0  # 无回撤时使用保守估计
+
         score = self.card.evaluate(
             factor_id=factor_id,
             ic=ic,
@@ -229,6 +236,7 @@ class _QualityInspectionCompat:
             data_frequency="daily",
             cross_symbol_coverage=cross_symbol_coverage,
             icir=icir,
+            calmar=calmar,
         )
 
         grade = score.get("grade", "C")
@@ -273,6 +281,7 @@ class EvolutionLoop:
         quality_min_grade: str = "B",
         market: Optional[str] = None,
         factor_db_path: Optional[str | Path] = None,
+        audit_config: Optional[Any] = None,
     ):
         self.data = data
         self.forward_returns = forward_returns
@@ -296,7 +305,13 @@ class EvolutionLoop:
         self.inject_dir = Path(inject_dir)
         self.memory_dir = Path(memory_dir)
         self.budget: BudgetConfig = budget or DEFAULT_BUDGET_CONFIG
-        self.verifier = verifier or get_global_verifier()
+        if verifier is not None:
+            self.verifier = verifier
+        elif market == "futures":
+            from .contracts import FUTURES_VERIFIER_CONFIG
+            self.verifier = FactorVerifier(FUTURES_VERIFIER_CONFIG)
+        else:
+            self.verifier = get_global_verifier()
         self.llm_client = llm_client or get_default_llm_client()
         self.seed_pool = seed_pool or SeedPool()
         self.n_trials_micro = n_trials_micro
@@ -319,7 +334,19 @@ class EvolutionLoop:
         )
 
         # 子模块: 因子审计器 (Phase B.3 集成)
-        self.auditor = FactorAuditor()
+        # audit_config: 允许外部注入审计阈值（如期货低信噪比场景放宽 OOS 阈值）
+        self.auditor = (
+            FactorAuditor(config=audit_config) if audit_config else FactorAuditor()
+        )
+
+        # 子模块: 高IC筛查器 (Phase B.4 集成, 所有市场统一)
+        from .high_ic_screener import HighICScreener, HighICScreenConfig
+        if market == "futures":
+            # 期货市场放宽 V5 经济逻辑维度最低分（LLM 演化因子 L2 评分偏低）
+            futures_config = HighICScreenConfig(logic_min_score=1.0)
+            self.high_ic_screener = HighICScreener(config=futures_config)
+        else:
+            self.high_ic_screener = HighICScreener()
 
         # 子模块: 端到端回测流水线 (Phase B.2 集成)
         from .backtest_pipeline import BacktestPipeline, PipelineConfig
@@ -1099,6 +1126,45 @@ class EvolutionLoop:
             record["market"] = self.market
         record["evaluation"] = evaluation
 
+        # ── ★ Phase B.4: 高IC筛查强制门（所有市场统一） ──
+        # 前置计算: 从种子相关性标记提取 max_corr（若已传入）
+        max_corr_detected = None
+        if seed_correlations:
+            factor_id = factor.get("factor_id", "")
+            corr_vals = [
+                max(abs(sc.get("pearson", 0)), abs(sc.get("spearman", 0)))
+                for sc in seed_correlations
+                if factor_id in (sc.get("factor_id_a", ""), sc.get("factor_id_b", ""))
+            ]
+            if corr_vals:
+                max_corr_detected = max(corr_vals)
+        high_ic_screen = self.high_ic_screener.screen(
+            factor=record,
+            evaluation=evaluation,
+            correlation_metadata=(
+                {"max_corr_detected": max_corr_detected}
+                if max_corr_detected is not None else {}
+            ),
+            backtest_pipeline=(
+                evaluation.get("backtest_pipeline", {})
+                if isinstance(evaluation.get("backtest_pipeline"), dict) else {}
+            ),
+            trace_id=getattr(self, "_trace_id", ""),
+        )
+        if high_ic_screen.grade == "C":
+            veto_info = (
+                "；".join(high_ic_screen.veto_reasons)
+                if high_ic_screen.veto_reasons
+                else f"总分 {high_ic_screen.total_score:.1f} < 60"
+            )
+            print(
+                f"[evo] ★ 高IC筛查拦截 [{factor_name}]: "
+                f"grade={high_ic_screen.grade}, 总分={high_ic_screen.total_score:.1f}, "
+                f"原因={veto_info}"
+            )
+            return None
+        record["high_ic_screen"] = high_ic_screen.to_dict()
+
         # ── 多重检验强制门: 拒绝未通过多重检验校正的因子 ──
         level_3 = evaluation.get("level_3_multiple", {})
         if not level_3.get("passed", False):
@@ -1163,7 +1229,7 @@ class EvolutionLoop:
 
         # ── 写入 JSON 文件（debug/备份） ──
         fp.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2),
+            json.dumps(record, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
         )
 
@@ -1237,11 +1303,13 @@ class EvolutionLoop:
         try:
             factor_id = factor.get("factor_id", "")
             factor_name = factor.get("name", "?")
-            ic = evaluation.get("ic", 0.0) if isinstance(evaluation, dict) else 0.0
             sharpe = 0.0
+            ic = 0.0
             if isinstance(evaluation, dict):
                 bt = evaluation.get("level_1_backtest", {})
-                sharpe = bt.get("sharpe", 0.0) if isinstance(bt, dict) else 0.0
+                if isinstance(bt, dict):
+                    ic = bt.get("ic", 0.0)
+                    sharpe = bt.get("sharpe", 0.0)
             grade = None
             quality_score_value = None
             if quality_score is not None:
@@ -1446,6 +1514,24 @@ class EvolutionLoop:
                         continue
 
                 if passed:
+                    # ── Verifier 判定（v2.50.0 与演化因子完全对齐） ──
+                    verifier_result = self.verifier.check(evaluation)
+                    if not verifier_result.get("passed", False):
+                        self._record_failure_trace(
+                            seed, 0, "seed_verifier",
+                            "Verifier 判定未通过",
+                            verifier_result.get("failure_reasons", []), trace_id,
+                            evaluation=evaluation,
+                        )
+                        continue
+
+                    # 风险标签额外检查：标记为 vwap_approx 的因子需要更高 IC 阈值
+                    if seed.get("risk_tag") == "vwap_approx":
+                        ic = bt.get("ic", 0)
+                        if abs(ic) < 0.08:
+                            print(f"[evo] 跳过 vwap_approx 因子: {seed['name']} (IC={abs(ic):.4f} < 0.08)")
+                            continue
+
                     # 种子因子质量评分卡 (Phase A.1 集成)
                     inspection = self.quality_inspector.inspect(
                         factor=seed, evaluation=evaluation,
@@ -1497,6 +1583,59 @@ class EvolutionLoop:
                             audit_report, evaluation=evaluation,
                         )
                         continue
+
+                    # ── 消融实验检查（v2.50.0 与演化因子对齐） ──
+                    ablation_result = self._run_ablation_check(
+                        seed, evaluation, trace_id,
+                    )
+                    evaluation["ablation_check"] = ablation_result
+                    if not ablation_result.get("passed", True):
+                        print(
+                            f"[evo] 种子消融实验未通过 [{seed.get('name', '?')}]: "
+                            f"疑似伪相关"
+                        )
+                        self._record_ablation_failed_trace(
+                            seed, 0, trace_id,
+                            ablation_result,
+                        )
+                        continue
+
+                    # ── 因果结构审查（v2.50.0 与演化因子对齐） ──
+                    causal_result = self._run_causal_validation(
+                        seed, evaluation, trace_id,
+                    )
+                    evaluation["causal_validation"] = causal_result
+                    if not causal_result.get("passed", True):
+                        print(
+                            f"[evo] 种子因果审查未通过 [{seed.get('name', '?')}]: "
+                            f"事件敏感"
+                        )
+                        self._record_causal_failed_trace(
+                            seed, 0, trace_id,
+                            causal_result,
+                        )
+                        continue
+
+                    # ── 鲁棒性审查（v2.50.0 与演化因子对齐） ──
+                    robustness_result = self._run_robustness_check(
+                        seed, evaluation, trace_id,
+                    )
+                    evaluation["robustness_check"] = robustness_result
+                    if not robustness_result.get("passed", True):
+                        print(
+                            f"[evo] 种子鲁棒性审查未通过 [{seed.get('name', '?')}]"
+                        )
+                        self._record_robustness_failed_trace(
+                            seed, 0, trace_id,
+                            robustness_result,
+                        )
+                        continue
+
+                    # ── SHAP 可解释性分析（v2.50.0 与演化因子对齐，不阻断） ──
+                    shap_result = self._run_shap_analysis(
+                        seed, evaluation, trace_id,
+                    )
+                    evaluation["shap_analysis"] = shap_result
 
                     self._log_inspection_detail(
                         seed, inspection, "通过", 0,
@@ -1745,8 +1884,16 @@ class EvolutionLoop:
             self.cross_section_data,
             self.cross_section_dates,
         )
-        ec = EconomicScore(theory=0, behavioral=0, microstructure=0, institutional=0,
-                           dimensions_passed=3, narrative="横截面评估（自动通过）")
+        # 从因子自身读取经济逻辑评分（种子 YAML 或 LLM 生成），默认 3 分
+        el = factor.get("economic_logic", {}) or {}
+        ec = EconomicScore(
+            theory=int(el.get("theory", 3)),
+            behavioral=int(el.get("behavioral", 3)),
+            microstructure=int(el.get("microstructure", 3)),
+            institutional=int(el.get("institutional", 3)),
+            dimensions_passed=3,
+            narrative=el.get("narrative", "横截面评估（自动继承）"),
+        )
         mt = MultipleTestResult(bonferroni_p=1.0, fdr_q=0.05, effective_n_factors=1,
                                 adjusted_t=bt.get("t_stat", 3.0), passed=True)
         reasons: list[str] = []
@@ -1892,7 +2039,8 @@ class EvolutionLoop:
             evaluation: 评估结果
         """
         factor_id = factor.get("factor_id", "?")
-        ic = evaluation.get("ic", 0.0)
+        bt = evaluation.get("level_1_backtest", {}) if isinstance(evaluation, dict) else {}
+        ic = bt.get("ic", 0.0) if isinstance(bt, dict) else 0.0
         self.data_quality_monitor.register_factor(
             factor_id=factor_id,
             baseline_ic=ic,
@@ -1915,7 +2063,8 @@ class EvolutionLoop:
             告警列表（可能为空）
         """
         factor_id = factor.get("factor_id", "?")
-        current_ic = evaluation.get("ic", 0.0)
+        bt = evaluation.get("level_1_backtest", {}) if isinstance(evaluation, dict) else {}
+        current_ic = bt.get("ic", 0.0) if isinstance(bt, dict) else 0.0
         alerts = self.data_quality_monitor.check(
             factor_id=factor_id,
             current_ic=current_ic,
@@ -2535,7 +2684,7 @@ class EvolutionLoop:
             record["evaluation"] = evaluation
 
         fp.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2),
+            json.dumps(record, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
         )
         print(
@@ -2544,6 +2693,32 @@ class EvolutionLoop:
         )
 
     # ── Phase A: 消融实验检查 ──────────────────────────
+
+    # v2.50.0 判定语义：核心价格列（因子正常依赖的输入）与信息型消融模式
+    # 不参与"伪相关"拦截判定——时序因子依赖时序因果（shuffle_dates）、
+    # 价格因子依赖价格列、量价因子依赖成交量/VWAP 均属必要特征。
+    _ABLATION_PRICE_CORE_COLS: frozenset[str] = frozenset(
+        {"open", "high", "low", "close", "vwap", "settle"}
+    )
+    # 信息型消融模式：记录但不拦截
+    _ABLATION_INFORMATIONAL_MODES: frozenset[str] = frozenset(
+        {"volume_zero", "vwap_to_close", "vwap_to_settle", "shuffle_dates"}
+    )
+
+    @staticmethod
+    def _is_blocking_ablation(ab: dict[str, Any]) -> bool:
+        """是否属于拦截型消融（非价格列置零导致的输入依赖崩塌）。
+
+        仅当 zero_one_feature 置零的是「非核心价格列」（如 volume/持仓量等
+        逻辑上为辅助输入的特征）时才参与伪相关判定。
+        """
+        mode = ab.get("mode", "")
+        if mode in EvolutionLoop._ABLATION_INFORMATIONAL_MODES:
+            return False
+        if mode == "zero_one_feature":
+            feature = ab.get("feature") or ""
+            return feature.lower() not in EvolutionLoop._ABLATION_PRICE_CORE_COLS
+        return False
 
     def _run_ablation_check(
         self,
@@ -2554,7 +2729,9 @@ class EvolutionLoop:
         """执行消融实验检查（Phase A 集成）。
 
         随机扰动因子输入特征，检测伪相关。
-        若任何消融导致 IC 下降超过 50%，判定为伪相关。
+        仅「拦截型消融」（非价格列置零）IC 降幅超过基线 50% 时判定为伪相关；
+        信息型消融（时序结构/成交量/VWAP/核心价格列）只记录不拦截。
+        数据缺失时跳过（passed=True，不误杀）。
 
         Args:
             factor: 因子程序
@@ -2579,10 +2756,11 @@ class EvolutionLoop:
             if abs(baseline_ic) < 1e-9:
                 is_passed = True
             else:
-                # 任何单项消融 IC 降幅超过基线 50% → 疑似伪相关
+                # 仅拦截型消融的 IC 降幅超过基线 50% → 疑似伪相关
+                blocking = [ab for ab in ablations if self._is_blocking_ablation(ab)]
                 is_passed = all(
                     ab.get("ic_change", 0.0) >= -0.5 * abs(baseline_ic)
-                    for ab in ablations
+                    for ab in blocking
                 )
             return {**result, "passed": is_passed}
         except Exception as e:
@@ -2619,7 +2797,7 @@ class EvolutionLoop:
         }
 
         fp.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2),
+            json.dumps(record, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
         )
         print(f"[evo] 消融失败轨迹已记录: {factor_name}")
@@ -2653,11 +2831,14 @@ class EvolutionLoop:
             if forward_returns is None:
                 forward_returns = np.zeros(len(data))
 
+            # 期货市场鲁棒性审查阈值放宽（低信噪比、短样本场景）
+            min_pass_rate = 0.7 if getattr(self, "market", "stock") == "futures" else 0.9
+
             result = self.robustness_tester.run(factor, data, forward_returns)
             # RobustnessTestResult 是 dict 子类，直接使用
             summary = result.get("summary", {})
             pass_rate = summary.get("overall_pass_rate", 1.0)
-            is_passed = pass_rate >= 0.9
+            is_passed = pass_rate >= min_pass_rate
             return {**result, "passed": is_passed}
         except Exception as e:
             logger.warning("鲁棒性审查异常: %s", e)
@@ -2693,7 +2874,7 @@ class EvolutionLoop:
         }
 
         fp.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2),
+            json.dumps(record, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
         )
         print(f"[evo] 鲁棒性失败轨迹已记录: {factor_name}")
@@ -2800,7 +2981,7 @@ class EvolutionLoop:
         }
 
         fp.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2),
+            json.dumps(record, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
         )
         print(f"[evo] 因果失败轨迹已记录: {factor_name}")

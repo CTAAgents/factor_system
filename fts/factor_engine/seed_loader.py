@@ -102,9 +102,14 @@ def _code_factor_from_yaml(defn: dict[str, Any], market: str, family_hint: Optio
         institutional=defn.get("economic_logic", {}).get("institutional", 0),
         narrative=defn.get("economic_logic", {}).get("narrative", ""),
     )
+    # YAML `code: |2` 块会保留额外缩进，统一 dedent + strip
+    # 避免 `def` 前残留前导空白导致编译失败（如 fut_tsmom_vol_scaled）
+    import textwrap
+
+    code = textwrap.dedent(defn["code"]).strip()
     return create_factor_program(
         name=defn["name"],
-        code=defn["code"],
+        code=code,
         params=defn.get("params", {}),
         signature=signature,
         economic_logic=logic,
@@ -375,9 +380,9 @@ def _infer_family_from_filename(filename: str) -> Optional[str]:
     name_lower = filename.lower().replace(".yaml", "").replace(".yml", "")
     # 精确文件名映射（数据源文件名 → 标准家族）
     exact_map = {
-        "qlib158": "trend",
-        "gtja191": "trend",
-        "wq101": "trend",
+        "qlib158": "qlib",
+        "gtja191": "gtja",
+        "wq101": "wq101",
         "builtin": "technical",
     }
     if name_lower in exact_map:
@@ -387,9 +392,9 @@ def _infer_family_from_filename(filename: str) -> Optional[str]:
         ("momentum", "trend"),
         ("trend", "trend"),
         ("cta_registry", "trend"),
-        ("qlib", "trend"),
-        ("wq", "trend"),
-        ("gtja", "trend"),
+        ("qlib", "qlib"),
+        ("wq", "wq101"),
+        ("gtja", "gtja"),
         ("reversion", "mean_reversion"),
         ("mean_reversion", "mean_reversion"),
         ("carry", "carry"),

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
+import types
 from typing import Any
 
 import numpy as np
@@ -27,6 +29,32 @@ from fts.factor_engine.shap_analyzer import (
 
 
 # ─── Fixtures ─────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def fake_shap(monkeypatch):
+    """注入 fake shap 模块（shap 为可选依赖，未安装时测试仍可运行）。
+
+    ShapAnalyzer.analyze 延迟导入 `import shap`，此处用确定性 fake
+    替代 KernelExplainer.shap_values，保证离线/无依赖环境可测试。
+    """
+    import numpy as np
+
+    class _FakeExplainer:
+        def __init__(self, predict_fn, X_background):
+            self._bg = X_background
+
+        def shap_values(self, X_sample, nsamples=100):
+            # 返回与输入同形的确定性 SHAP 值（正负交替），供排序/统计使用
+            arr = np.arange(X_sample.shape[0] * X_sample.shape[1], dtype=np.float64).reshape(
+                X_sample.shape
+            ) % 3 - 1.0
+            return arr
+
+    fake = types.ModuleType("shap")
+    fake.KernelExplainer = _FakeExplainer
+    monkeypatch.setitem(sys.modules, "shap", fake)
+    return fake
 
 
 @pytest.fixture

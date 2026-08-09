@@ -1,0 +1,12 @@
+# FTS 统一依赖入口
+# ============================================================
+# 唯一版本真源: pyproject.toml（dependencies + optional-dependencies）
+# 本文件仅做一键安装聚合，不重复维护版本号。
+#
+# 安装方式:
+#   pip install -r requirements.txt          # 全量开发环境（all extra）
+#   pip install -e ".[dev]"                  # 仅开发/测试
+#   pip install -e ".[llm,evolution]"        # 按需 extra
+# ============================================================
+
+-e .[all,dev]

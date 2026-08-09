@@ -66,17 +66,41 @@ DEFAULT_TASKS = {
         "desc": "L3 Portfolio Loop：因子筛选 + 信号合成（equal/sharpe/elastic_net）+ Verifier 校验 + 期货信号管道",
         "prefix": "fts.l3",
     },
-    "futures_signal_pipeline": {
-        "cron": "30 20 * * *",
-        "callable": "fts.scheduler.jobs.futures_signal_pipeline_job",
-        "desc": "期货信号管道：独立生成期货横截面信号报告",
-        "prefix": "fts.signal",
+    "sync_futures_data": {
+        "cron": "30 17 * * 1-5",
+        "callable": "fts.scheduler.jobs.sync_futures_data_job",
+        "desc": "Phase 14.5 期货多源数据同步（DUCKDB 缓存 + TQ 源 → DuckDB）",
+        "prefix": "fts.sync",
     },
     "health_check": {
         "cron": "*/10 * * * *",
         "callable": "fts.scheduler.jobs.health_check_job",
         "desc": "健康检查：监控所有循环状态",
         "prefix": "fts.health",
+    },
+    "monthly_decay_eval": {
+        "cron": "0 2 1 * *",
+        "callable": "fts.scheduler.jobs.monthly_decay_eval_job",
+        "desc": "月度因子衰减评估（A.2）：精英池增量评估 + 状态机 + 自动淘汰",
+        "prefix": "fts.decay",
+    },
+    "data_quality_eval": {
+        "cron": "*/5 * * * *",
+        "callable": "fts.scheduler.jobs.data_quality_eval_job",
+        "desc": "数据质量周期评估（B.1）：质量快照 + 告警检查",
+        "prefix": "fts.dq",
+    },
+    "logic_monitor": {
+        "cron": "0 22 * * *",
+        "callable": "fts.scheduler.jobs.logic_monitor_job",
+        "desc": "逻辑监控（B.2）：因子行为漂移 + 极端预测 + 换月日异常检测",
+        "prefix": "fts.logic",
+    },
+    "factor_inspector": {
+        "cron": "0 3 * * *",
+        "callable": "fts.scheduler.jobs.factor_inspector_job",
+        "desc": "因子巡检与自动降级（B.2）：扫描精英因子，检测退化并降级",
+        "prefix": "fts.inspector",
     },
 }
 
@@ -188,9 +212,9 @@ def test_registry_is_taskregistry():
 
 
 def test_register_default_tasks_registers_five():
-    """register_default_tasks 注册 5 个默认任务。"""
+    """register_default_tasks 注册 9 个默认任务。"""
     register_default_tasks()
-    assert len(REGISTRY) == 5
+    assert len(REGISTRY) == 9
 
 
 @pytest.mark.parametrize("name,expected", DEFAULT_TASKS.items())
@@ -221,10 +245,14 @@ def test_register_default_tasks_idempotent():
 def test_list_tasks_returns_sorted():
     """list_tasks 返回按 name 排序的列表，自动注册默认任务。"""
     tasks = list_tasks()
-    assert len(tasks) == 5
+    assert len(tasks) == 9
     names = [t.name for t in tasks]
     assert names == sorted(names)
-    assert names == ["futures_signal_pipeline", "health_check", "l1_meta_loop", "l2_evolution_loop", "l3_portfolio_loop"]
+    assert names == [
+        "data_quality_eval", "factor_inspector", "health_check",
+        "l1_meta_loop", "l2_evolution_loop", "l3_portfolio_loop",
+        "logic_monitor", "monthly_decay_eval", "sync_futures_data",
+    ]
 
 
 def test_list_tasks_after_manual_register():
@@ -232,7 +260,7 @@ def test_list_tasks_after_manual_register():
     register_default_tasks()
     REGISTRY.register(TaskSpec("custom_job", "0 12 * * *", "mod.custom"))
     tasks = list_tasks()
-    assert len(tasks) == 6
+    assert len(tasks) == 10
     names = [t.name for t in tasks]
     assert "custom_job" in names
 

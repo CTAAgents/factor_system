@@ -1,7 +1,7 @@
 # FTS 差距分析
 
-> 版本: v2.39.0
-> 最后更新: 2026-08-08 (v2.22.0 统一版本号管理)
+> 版本: v2.54.0
+> 最后更新: 2026-08-09
 > 状态: 活跃 — 随项目迭代持续更新
 
 ---
@@ -12,8 +12,8 @@
 |:-------|:-----|:-------|:-----|
 | P0 | 0 | 4 | 4 |
 | P1 | 0 | 3 | 3 |
-| P2 | 2 | 30 | 32 |
-| **合计** | **2** | **37** | **39** |
+| P2 | 2 | 31 | 33 |
+| **合计** | **2** | **38** | **40** |
 
 ---
 
@@ -70,7 +70,11 @@
 | GAP-036 | `fts/factor_engine/evolution_loop.py` | L1 注入候选文件消费后未删除，l1_injected 目录累积 518 个 JSON 文件，历史文件持续堆积 | 大量历史文件占用磁盘空间，干扰目录扫描效率，L1 候选文件失去消费状态的可见性 | 3 月内 | ✅ 已关闭 |
 | GAP-037 | `fts/ml/`（未实现） | 深度学习时序模型（LSTM/GRU/Transformer）与强化学习（RL，DQN/PPO/SAC）未实现：FTS 本次升级仅落地 LightGBM/XGBoost/Ensemble 传统 ML 模型（Phase 24），深度学习与 RL 需引入 PyTorch/TensorFlow/gym 等重依赖，训练成本高、可解释性低 | 无法利用深度时序特征与序列决策优化，信号合成停留在浅层模型 | 3 月内 | ⏳ 开放 |
 | GAP-038 | `fts/factor_engine/evolution_loop.py` | 种子因子相关性预检 `compute_cross_section_correlations` 在期货横截面模式（184 种子 × 25 品种 × 500 日）下计算量过大且无超时保护，演化进程卡死（CPU 0%，无日志输出），ThreadPoolExecutor timeout 无法中断卡在 numpy/scipy C 扩展中的线程 | 夜间因子演化无法完成，进程长时间无响应 | 已解决（v2.39.0 规模保护跳过） | ✅ 已关闭 |
-| GAP-039 | `tests/` 全量回归（67 failed + 16 errors，v2.39.0 基线） | 全量回归存在 67 个失败 + 16 个收集/运行错误，来源两类：① 预存断言过期（test_data_cli/test_tasks/test_sync_futures_task 等，GAP-028 同类）② 并行 v2.38.0+ 工作区改动引入（test_http_server/test_seed_pool/test_seed_loader/test_risk_tag/test_contracts/test_portfolio_loop 等，未提交） | 无法一键全绿验证，回归基线不可信，新改动无法区分自身回归与既有噪音 | 3 月内 | ⏳ 开放 |
+| GAP-039 | `tests/` 全量回归（67 failed + 16 errors，v2.39.0 基线） | 全量回归存在 67 个失败 + 16 个收集/运行错误，来源两类：① 预存断言过期（test_data_cli/test_tasks/test_sync_futures_task 等，GAP-028 同类）② 并行 v2.38.0+ 工作区改动引入（test_http_server/test_seed_pool/test_seed_loader/test_risk_tag/test_contracts/test_portfolio_loop 等，未提交） | 无法一键全绿验证，回归基线不可信，新改动无法区分自身回归与既有噪音 | 3 月内 | ✅ 已关闭（v2.47.0 回归清零 3836 passed） |
+| GAP-041 | 16 个覆盖率 <90% 模块 | v2.47.0 全量回归后 16 个模块覆盖率 <90%：`cross_market/data_adapter(55%)` `factor_clustering(64%)` `tdx_minute_source(67%)` `tqsdk_tick_source(73%)` `factor_db/migrate_from_json(73%)` `evolution_loop(80%)` `tq_source(81%)` `data_quality_monitor(82%)` `ifind_source(84%)` `data(85%)` `factor_db/repository(85%)` `ml/models(86%)` `wind_source(87%)` `factor_screener(87%)` `causal_validator(89%)` `contracts(89%)`，缺口语句集中在外部数据源网络/鉴权路径与异常兜底分支 | 关键路径异常分支未验证，外部数据源降级逻辑存在隐性 bug 风险 | 3 月内 | ⏳ 开放 |
+| GAP-042 | `fts/factor_engine/high_ic_screener.py` | 高IC筛查的「极值样本扰动测试（V2/检查项 5）」依赖外部传入 `extreme_perturbation.ic_drop`，当前 `_promote_to_elite` 未计算该数据 → 该项实际恒为 skipped，极值扰动一票否决（>25% 降幅）在 L2 入库质检中未真正生效 | 高IC因子可能仅依赖少数极端样本支撑，筛查存在盲区 | 3 月内 | ⏳ 开放（需在回测流水线增加极值剔除重算 IC 能力） |
+| GAP-043 | `fts/factor_engine/evolution_loop.py` + `evaluation_chain.py` + `ablation.py` | 质检拦截器判定缺陷：① 消融实验 `shuffle_dates`（时间戳打乱）对时序因子必然摧毁 IC（时序依赖是必要特征）、`zero_one_feature` 置零核心价格列（open/high/low/close/vwap/settle）对价格因子必然摧毁 IC，被统一判定为"伪相关"误杀高IC候选；② 鲁棒性缺失值测试 `_inject_missing` 注入 NaN 后 `_compute_ic` 的 spearmanr/pearsonr 无 NaN 掩码返回 0.0，缺失值测试 3/3 恒失败（保持率 0%） | L2 期货演化 15 代中 5 个通过 Verifier 的候选（IC 0.31~0.52）全部被误杀 → 失败率 100% 熔断，演化停滞 | 已解决（v2.50.0 信息型/拦截型判定 + IC NaN 掩码） | ✅ 已关闭 |
+| GAP-044 | `fts/factor_engine/robustness.py` | 鲁棒性缺失值测试阈值过高（0.80）：`_inject_missing` 随机单元格级 NaN 注入比真实数据质量问题激进得多（5% 随机 NaN 即使高质量种子 IC=0.49 的保持率也降至 0.56），导致 12 个种子因子全部被拦截，父因子池为空，后续 GP 演化全退化（11 个常数信号因子），总失败率 100% 熔断 | L2 期货演化持续 100% 失败率熔断，无法产生新精英因子 | 已解决（v2.52.0 `missing_retention_threshold` 0.80→0.50） | ✅ 已关闭 |
 ---
 
 ## 3. 差距详情
@@ -397,7 +401,7 @@
   3. 时序模式（股票/单品种）不受影响，种子数 ≤50 的横截面场景仍执行预检。
 - **验证结果**: 跳过保护生效后演化流程正常进入种子评估与演化循环（13 代后因失败率 100% 熔断，属预期保护机制）；结果记录于 `memory/logs/evolution/2026-08-08.log`。无新增测试（跳过分支为防御性保护，不改变正常路径行为）。
 
-### GAP-039: 全量回归失败项（67 failed + 16 errors）（P2，开放）
+### GAP-039: 全量回归失败项（67 failed + 16 errors）（P2，已关闭）
 
 - **问题描述**: v2.39.0 基线全量回归（`pytest tests/ -q -o addopts="" --continue-on-collection-errors`）结果为 2841 passed / 67 failed / 10 skipped / 16 errors。失败来源分两类：
   1. **预存断言过期**（GAP-028 同类）：`test_data_cli.py`（data 子命令已移除）、`test_scheduler/test_tasks.py`（任务数断言过期）、`test_scheduler/test_sync_futures_task.py`（`sync_futures_data_job` 已从 jobs.py 移除，收集失败）、`test_monitor/test_data_source_metrics.py`（`_metrics_cache` 缺失）、`test_elite_tracker.py`、`test_alpha_ops_numba.py`（numba 环境）、`test_ablation.py`（已知局限）、`test_evolution_loop.py` 两个 run() 集成用例（GAP-030，已改为跳过标记）、`test_data.py`（真实数据依赖）、`test_stage5_risk_live.py`（信号提交 500）
@@ -405,6 +409,37 @@
 - **影响范围**: 无法一键全绿验证；回归基线不可信；后续改动无法区分"自身回归"与"既有噪音"
 - **当前进展**: 已登记完整修复清单 `docs/harness/plans/regression-fix-list-20260808.md`；2 个 LLM 依赖用例已改跳过标记（GAP-030 引用）
 - **处理期限**: 3 月内（P2）
+- **验证结果**: ✅ 已关闭（v2.47.0）— 92 个基线失败全部修复清零，覆盖测试冲刺期间新增测试后全量回归 **3836 passed / 0 failed / 3 skipped**，覆盖统计与测试文件清单同步更新至 06-testing.md；后续 v2.51.0 解除 2 个 GAP-030 引用 skip 并修复（promote_to_elite/failure_rate_circuit_breaker），全量回归 **4021 passed / 0 failed / 0 skipped**
+
+### GAP-040: cross_section 家族因子库来源未细分（P2，已关闭）
+
+- **问题描述**: 8/2-8/5 L2 种子晋升将 qlib/gtja/wq101 三大外部因子库共 111 条记录统一归入 `cross_section` 家族（qlib_* 43 / gtja_* 36 / alpha_* 30 / fut_gp_* 2），丧失因子库来源维度，L3 组合按家族分组管理时无法区分库来源；根因是 `FactorFamily` 无 qlib/gtja/wq101 标准值，`_infer_factor_family` 将 `qlib_/gtja_/wq_` 前缀统一映射为 trend、`_infer_family_from_filename` 将 qlib158/gtja191/wq101 文件名统一映射为 trend
+- **影响范围**: 因子家族维度信息失真；按来源家族做多样性/相关性控制时粒度过粗
+- **解决方案**: ① `FactorFamily` 新增 qlib/gtja/wq101 三个标准家族（14→17 大类）；② `_infer_factor_family` 按名称前缀精确映射（`qlib_`→qlib、`gtja_`→gtja、`alpha_`/`wq_`→wq101、`fut_` 保持 trend）；③ `_infer_family_from_filename` 与 YAML 种子 family 字段对齐（qlib158/gtja191 → qlib/gtja，wq101 保持）；④ DuckDB 一次性数据迁移 111 条记录（qlib 43 / gtja 36 / wq101 30 / fut_gp_*→behavioral 2），迁移前已备份 `factor_catalog.duckdb.bak_family_split_20260808`
+- **验证结果**: 迁移后 cross_section 剩余 0 条；新增 12 测试用例（test_contracts_kind.py 8 个 family 推断 + test_seed_loader.py 4 个文件名映射），全绿
+
+### GAP-041: 16 个覆盖率 <90% 模块（P2，开放）
+
+- **问题描述**: v2.47.0 全量回归（3836 passed，覆盖率 94%）后仍有 16 个模块覆盖率 <90%，缺口语句集中在：① 外部数据源网络/鉴权路径（`ifind_source` 84% / `wind_source` 87% / `tq_source` 81% / `tdx_minute_source` 67% / `tqsdk_tick_source` 73%，需模拟网络异常/鉴权失败/超时）；② 近期新增模块参数校验与降级分支（`cross_market/data_adapter` 55% / `factor_clustering` 64% / `factor_db/migrate_from_json` 73%）；③ 核心引擎异常兜底（`evolution_loop` 80% / `data` 85% / `factor_db/repository` 85% / `ml/models` 86% / `causal_validator` 89% / `contracts` 89% / `factor_screener` 87% / `data_quality_monitor` 82%）
+- **影响范围**: 关键路径异常分支未验证，外部数据源降级逻辑存在隐性 bug 风险；P0 级 bug（如 regime.py 模块 logger 缺失、http_server.py DuckDB 列名获取）即由低覆盖模块引入
+- **处理方案**: 按优先级分批补充（P1：`cross_market/data_adapter`、`factor_clustering`、`factor_db/repository`；P2：外部数据源异常路径 mock 测试；P3：`evolution_loop` 兜底分支）
+- **处理期限**: 3 月内（P2）
+
+### GAP-043: 质检拦截器判定缺陷（P0，已关闭）
+
+- **问题描述**: L2 期货演化 15 代中 5 个通过 Verifier 的候选（IC 0.31~0.52）全部被两个拦截器误杀，失败率 100% 触发熔断：① 消融实验（`evolution_loop._run_ablation_check`）将 `shuffle_dates`（时间戳打乱）与 `zero_one_feature`（置零核心价格列 open/high/low/close/vwap/settle）导致的 IC 崩塌统一判定为"伪相关"——但时序因子依赖时序因果、价格因子依赖价格列属必要特征，判定语义反了（g1/g15 被拦）；② 鲁棒性缺失值测试（`robustness._inject_missing` 注入 NaN 后 `evaluation_chain._compute_ic` 的 spearmanr/pearsonr 无 NaN 掩码返回 0.0）→ 缺失值测试 3/3 恒失败，保持率 0%，g6/g9/g13 被拦（对抗样本 4/4、分布外 3~4/4 均通过，因子本身鲁棒）
+- **影响范围**: 高IC演化候选被系统性误杀 → 演化停滞、无新增精英因子；种子/演化质检链同源缺陷
+- **处理方案**: v2.50.0 ① 消融判定改为「信息型/拦截型」——shuffle_dates/成交量/VWAP 消融与核心价格列置零为信息型（记录不拦截），仅非价格列置零 IC 降幅 >50% 判伪相关；② `_compute_ic` 增加 NaN 掩码（计算前剔除 NaN 对）；③ `SingleAblation` 新增 `feature` 字段记录置零列
+- **验证结果**: 新增/更新 ~18 测试用例全绿；tests/factor_engine/ 回归无新增失败；L2 演化重跑解除 100% 熔断
+- **处理期限**: 已关闭（v2.50.0）
+
+### GAP-044: 鲁棒性缺失值测试阈值过高（P1，已关闭）
+
+- **问题描述**: v2.50.0 修复消融判定语义和 IC NaN 掩码后，L2 期货演化 12 个种子因子全部被鲁棒性缺失值测试拦截，仍为 100% 失败率熔断。种子因子本身质量高（如 `fut_macro_export` IC=0.49、对抗样本 4/4 通过、分布外 3/4 通过），但 `_inject_missing` 随机单元格级 NaN 注入极其激进——5% 随机 NaN 即导致 IC 保持率降至 0.56、10% 降至 0.48、20% 降至 0.0（滚动窗口计算被 NaN 完全破坏）。`missing_retention_threshold=0.80` 下 3 个缺失值测试全部失败，保持率远低于 80%。
+- **影响范围**: 父因子池为空 → 后续 GP 演化 11 个常数信号退化因子 + Macro 演化 8 个弱 IC 因子 → 0 晋升 → 总失败率 100% 熔断 → 演化停滞
+- **处理方案**: v2.52.0 将 `RobustnessTester` 默认 `missing_retention_threshold` 从 0.80 降至 0.50（与 OOD 测试对齐）。设计依据：① 真实数据缺失通常是整列缺失（如某日某品种停牌），而非随机单元格级缺失；② 随机单元格级缺失对滚动窗口因子杀伤力远大于真实数据质量问题；③ OOD 测试已用 0.50 阈值，同一模块应用相同标准
+- **验证结果**: 无新增测试（阈值参数调整，ROB-102/103 缺失值测试通过条件更新）；影响所有市场（股票/期货统一），L2 期货演化预期解除熔断
+- **处理期限**: 已关闭（v2.52.0）
 
 ## 4. 优先级定义
 
@@ -430,6 +465,5 @@
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | 本文件登记全部 39 个差距（GAP-001~039），覆盖 `fts/factor_engine/`、`fts/data_sources/`、`fts/data.py`、`fts/cli.py`、`fts/core/`、`fts/monitor/`、`fts/scheduler/`、`fts/risk/`、`fts/factor_db/`、`fts/ml/`、`pipeline/`、`strategies/`、`scripts/`、`docs/`、`agents/` 等模块。GAP-020~024 关联 `plans/factor-management-optimization-plan.md`；GAP-039 关联 `plans/regression-fix-list-20260808.md` |
-| 可验证断言 | 37 个差距已关闭（P0=4, P1=3, P2=30），2 个差距开放（GAP-037，P2，深度学习/RL 未实现；GAP-039，P2，全量回归失败项）。GAP-025 孤立模块集成修正 v2.10.0 关闭；GAP-026 算子命名对齐 v2.10.0 关闭；GAP-027 `code: Optional[str]` 可选化审计 v2.14.0 关闭；GAP-028 既有失败测试修复 v2.14.0 关闭；GAP-029 L3 漂移治理 v2.11.0 关闭；GAP-030 集成测试污染 catalog v2.14.0 关闭；GAP-031 L1-L2 注入接入 v2.14.0 关闭；GAP-032 演化产物同步 catalog v2.13.0 关闭；GAP-033 数据泄露+IC 衰减 v2.15.0 关闭；GAP-034 P1 因子聚类 v2.36.0 关闭；GAP-035 P2 PCA 降维 v2.36.0 关闭；GAP-036 L1 注入候选文件激进清理 v2.38.0 关闭；GAP-037 深度学习/RL 未实现 v2.38.0 登记开放；GAP-038 种子相关性预检卡死 v2.39.0 关闭；GAP-039 全量回归失败项 v2.39.0 登记开放 |
+| 代码→文档映射| 可验证断言 | 本文件登记全部 42 个差距（GAP-001~044），覆盖 `fts/factor_engine/`、`fts/data_sources/`、`fts/data.py`、`fts/cli.py`、`fts/core/`、`fts/monitor/`、`fts/scheduler/`、`fts/risk/`、`fts/factor_db/`、`fts/ml/`、`pipeline/`、`strategies/`、`scripts/`、`docs/`、`agents/` 等模块。GAP-020~024 关联 `plans/factor-management-optimization-plan.md`；GAP-039 关联 `plans/regression-fix-list-20260808.md`；v2.54.0 新增精英因子全员质量巡检脚本 `scripts/elite_quality_inspection.py`，修复种子因子 V5 经济逻辑 fallback 数据质量问题 | | 39 个差距已关闭（P0=5, P1=3, P2=31），3 个差距开放（GAP-037，P2，深度学习/RL 未实现；GAP-039，P2，全量回归失败项；GAP-042，P2，高IC极值扰动数据源缺口）。GAP-025 孤立模块集成修正 v2.10.0 关闭；GAP-026 算子命名对齐 v2.10.0 关闭；GAP-027 `code: Optional[str]` 可选化审计 v2.14.0 关闭；GAP-028 既有失败测试修复 v2.14.0 关闭；GAP-029 L3 漂移治理 v2.11.0 关闭；GAP-030 集成测试污染 catalog v2.14.0 关闭；GAP-031 L1-L2 注入接入 v2.14.0 关闭；GAP-032 演化产物同步 catalog v2.13.0 关闭；GAP-033 数据泄露+IC 衰减 v2.15.0 关闭；GAP-034 P1 因子聚类 v2.36.0 关闭；GAP-035 P2 PCA 降维 v2.36.0 关闭；GAP-036 L1 注入候选文件激进清理 v2.38.0 关闭；GAP-037 深度学习/RL 未实现 v2.38.0 登记开放；GAP-038 种子相关性预检卡死 v2.39.0 关闭；GAP-039 全量回归失败项 v2.39.0 登记开放；GAP-040 cross_section 家族来源未细分 v2.40.0 关闭；GAP-042 高IC极值扰动数据源缺口 v2.49.0 登记开放；GAP-043 质检拦截器判定缺陷 v2.50.0 关闭 |
 | 检验方式 | 检查本文件差距登记表确认所有差距状态为 ✅ 已关闭；关联文档 `plans/factor-management-optimization-plan.md` |

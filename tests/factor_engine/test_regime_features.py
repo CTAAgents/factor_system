@@ -389,3 +389,51 @@ class TestComputeHMMFeatureVector:
         }, index=dates)
         result = compute_hmm_feature_vector(df)
         assert isinstance(result, np.ndarray)
+
+
+# ═══════════════════════════════════════════════════════════
+# 9. 补充边界分支
+# ═══════════════════════════════════════════════════════════
+
+class TestVolumeShockMore:
+    """成交量冲击补充边界。"""
+
+    def test_zero_volume(self) -> None:
+        """成交量全 0 → 均值为 0 → 返回 0.0。"""
+        dates = pd.date_range("2024-01-01", periods=50, freq="D")
+        df = pd.DataFrame({
+            "close": 100 + np.arange(50).astype(float),
+            "volume": np.zeros(50),
+        }, index=dates)
+        assert volume_shock(df) == 0.0
+
+
+class TestIntradayRangeRatioMore:
+    """日内波幅比补充边界。"""
+
+    def test_zero_close(self) -> None:
+        """收盘价末值为 0 → 返回 0.0。"""
+        dates = pd.date_range("2024-01-01", periods=30, freq="D")
+        df = pd.DataFrame({
+            "high": np.full(30, 1.0),
+            "low": np.full(30, 0.5),
+            "close": np.concatenate([np.full(29, 10.0), [0.0]]),
+        }, index=dates)
+        assert intraday_range_ratio(df) == 0.0
+
+
+class TestCrossSymbolCorrelationMore:
+    """跨品种相关系数补充边界。"""
+
+    def test_constant_symbol(self) -> None:
+        """品种为常量价格 → 相关系数为 NaN → 返回 0.0。"""
+        np.random.seed(42)
+        n = 100
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        panel = {
+            "A": pd.DataFrame(
+                {"close": 100 + np.cumsum(np.random.randn(n) * 0.3)}, index=dates,
+            ),
+            "B": pd.DataFrame({"close": np.full(n, 100.0)}, index=dates),
+        }
+        assert cross_symbol_correlation(panel, ["A", "B"]) == 0.0

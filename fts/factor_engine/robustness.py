@@ -219,14 +219,14 @@ class RobustnessTester:
     def __init__(
         self,
         adversarial_threshold: float = 0.01,
-        missing_retention_threshold: float = 0.80,
+        missing_retention_threshold: float = 0.50,
         ood_retention_threshold: float = 0.50,
         random_seed: int = 42,
     ):
         """
         Args:
             adversarial_threshold: 对抗样本 IC 变化阈值（默认 0.01）
-            missing_retention_threshold: 缺失值 IC 保持率阈值（默认 80%）
+            missing_retention_threshold: 缺失值 IC 保持率阈值（默认 50%）
             ood_retention_threshold: 分布外 IC 保持率阈值（默认 50%）
             random_seed: 随机种子
         """

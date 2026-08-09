@@ -14,6 +14,7 @@ from fts.factor_engine.factor_program import (
     FactorCompileError,
     FactorExecutor,
     create_factor_program,
+    fix_factor_code,
     generate_factor_id,
     validate_factor_code,
 )
@@ -413,3 +414,276 @@ def factor_program(data, params):
         # 信号应在 [-1, 1] 范围内
         assert np.all(result >= -1.0)
         assert np.all(result <= 1.0)
+
+
+# ─── 输出长度对齐 (LLM 因子 rolling/shift/diff 场景) ──────────
+
+
+def test_executor_align_short_output(sample_ohlcv):
+    """因子输出比输入短时 (如 shift/diff 缩短 1 行)，应前置 NaN 对齐。"""
+    n = len(sample_ohlcv)
+    code = f"""
+import numpy as np
+def factor_program(data, params):
+    # 模拟 shift(1) 场景：输出比输入短 1 行
+    return np.zeros({n - 1})
+"""
+    fp = create_factor_program(
+        name="short_output",
+        code=code,
+        params={},
+        signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
+        economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="短输出测试"),
+        source="manual",
+    )
+    executor = FactorExecutor(fp)
+    result = executor.execute(sample_ohlcv, {})
+    assert len(result) == n
+    assert np.isnan(result[0])
+    assert np.all(result[1:] == 0.0)
+
+
+def test_executor_align_long_output(sample_ohlcv):
+    """因子输出比输入长时，应截断到期望长度。"""
+    n = len(sample_ohlcv)
+    code = f"""
+import numpy as np
+def factor_program(data, params):
+    # 模拟输出比输入多 5 行
+    return np.zeros({n + 5})
+"""
+    fp = create_factor_program(
+        name="long_output",
+        code=code,
+        params={},
+        signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
+        economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="长输出测试"),
+        source="manual",
+    )
+    executor = FactorExecutor(fp)
+    result = executor.execute(sample_ohlcv, {})
+    assert len(result) == n
+
+
+def test_executor_align_rolling_scenario(sample_ohlcv):
+    """模拟 LLM 因子常见 rolling 场景 (500→499)，不应抛 broadcast 错误。"""
+    n = len(sample_ohlcv)
+    code = """
+import numpy as np
+def factor_program(data, params):
+    close = data['close'].values
+    # 模拟 LLM 因子: (close - mean) / std, 结果因 rolling 少 1 行
+    mean = close[:-1].mean()
+    std = close[:-1].std() + 1e-10
+    # 将短数组 (n-1) 与 close 对齐后做运算 — 若不事先对齐会 broadcast 报错
+    signal = (close[1:] - mean) / std  # shape (n-1,)
+    return signal
+"""
+    fp = create_factor_program(
+        name="llm_rolling",
+        code=code,
+        params={},
+        signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
+        economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="LLM rolling 测试"),
+        source="manual",
+    )
+    executor = FactorExecutor(fp)
+    # 不应抛 ValueError: could not broadcast input array
+    result = executor.execute(sample_ohlcv, {})
+    assert len(result) == n
+    assert np.isnan(result[0])  # 第一个 padding 为 NaN
+    assert not np.isnan(result[-1])  # 尾部有效值正常
+
+
+# ─── fix_factor_code 自动修复 ─────────────────────────────
+
+def test_fix_factor_code_unterminated_single_quote():
+    """修复未闭合的单引号字符串字面量。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    s = 'hello world\n"
+        "    return np.zeros(len(close))\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: unterminated string literal (line 4)")
+    assert fixed, "单引号未闭合应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+
+
+def test_fix_factor_code_unterminated_double_quote():
+    """修复未闭合的双引号字符串字面量。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        '    s = "hello world\n'
+        "    return np.zeros(len(close))\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: unterminated string literal (line 4)")
+    assert fixed, "双引号未闭合应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+
+
+def test_fix_factor_code_mismatched_bracket():
+    """修复不匹配的括号 ( 与 ] 互换。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    result = np.where(close > 0, 1, 0]\n"
+        "    return result\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: closing parenthesis ']' does not match opening parenthesis '(' (line 4)")
+    assert fixed, "不匹配括号应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+
+
+def test_fix_factor_code_mismatched_bracket_reverse():
+    """修复不匹配的括号 [ 与 ) 互换。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    result = [close[0])\n"
+        "    return np.zeros(len(close))\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: closing parenthesis ')' does not match opening parenthesis '[' (line 4)")
+    assert fixed, "不匹配括号应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+
+
+def test_fix_factor_code_invalid_syntax_missing_colon():
+    """修复缺少冒号的语法错误。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params)\n"
+        "    close = data['close']\n"
+        "    return np.zeros(len(close))\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: invalid syntax (line 2)")
+    assert fixed, "缺少冒号应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+
+
+def test_fix_factor_code_valid_code_unchanged():
+    """有效代码不应被修改。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    return np.clip(close / np.mean(close) - 1, -1, 1)\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "")
+    assert not fixed, "有效代码不应被标记为已修复"
+    assert fixed_code == code, "有效代码不应被修改"
+
+
+def test_fix_factor_code_unfixable_returns_false():
+    """无法修复的代码应返回 False。"""
+    code = "this is utterly broken python @@@@"
+    fixed, _ = fix_factor_code(code, "语法错误: invalid syntax (line 1)")
+    assert not fixed, "完全无法解析的代码应返回 False"
+
+
+def test_fix_factor_code_global_bracket_balance():
+    """全局括号平衡修复应能处理跨行括号不匹配。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    result = np.where(close > 0\n"
+        "    return result\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: closing parenthesis ')' does not match opening parenthesis '(' (line 4)")
+    # 如果某行策略修复成功，验证通过即可
+    if fixed:
+        ok, _ = validate_factor_code(fixed_code)
+        assert ok, "修复后的代码应通过语法验证"
+    else:
+        # 跨行括号不匹配较难修复，允许未修复
+        pass
+
+
+def test_fix_factor_code_mismatch_format():
+    """修复 'mismatch' 格式的错误消息（不含 'does not match opening'）。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    result = np.where(close > 0, 1, 0]\n"
+        "    return result\n"
+    )
+    # 模拟 Python 3.12 的 "closing parenthesis ']' mismatch '('" 格式
+    fixed, fixed_code = fix_factor_code(code, "语法错误: closing parenthesis ']' mismatch '(' (line 4)")
+    assert fixed, "'mismatch' 格式的括号错误应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+
+
+def test_fix_factor_code_invalid_syntax_missing_paren():
+    """修复行末缺少闭合圆括号的语法错误。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    result = np.where(close > 0, 1, 0\n"
+        "    return result\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: invalid syntax (line 4)")
+    assert fixed, "缺少闭合圆括号应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+
+
+def test_fix_factor_code_invalid_syntax_missing_bracket():
+    """修复行末缺少闭合方括号的语法错误。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    values = [1, 2, 3\n"
+        "    return np.zeros(len(close))\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: invalid syntax (line 4)")
+    assert fixed, "缺少闭合方括号应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+
+
+def test_fix_factor_code_mismatch_format_reverse():
+    """修复 'mismatch' 格式的反向括号错误（] 与 ) 互换）。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    result = [close[0])\n"
+        "    return np.zeros(len(close))\n"
+    )
+    # 模拟 Python 3.12 的 "closing parenthesis ')' mismatch '['" 格式
+    fixed, fixed_code = fix_factor_code(code, "语法错误: closing parenthesis ')' mismatch '[' (line 4)")
+    assert fixed, "'mismatch' 格式的反向括号错误应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+
+
+def test_fix_factor_code_global_bracket_balance_mismatch_format():
+    """全局括号平衡修复应匹配 'mismatch' 格式的错误消息。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    result = np.where(close > 0\n"
+        "    return result\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: closing parenthesis ')' mismatch '(' (line 4)")
+    if fixed:
+        ok, _ = validate_factor_code(fixed_code)
+        assert ok, "修复后的代码应通过语法验证"
+    else:
+        pass

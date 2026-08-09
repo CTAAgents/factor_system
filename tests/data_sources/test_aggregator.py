@@ -996,3 +996,1082 @@ def test_synthesize_path_writes_to_cache_when_all_sources_fail(tmp_db: Path):
         )
     finally:
         con.close()
+
+
+# ═══════════════════════════════════════════════════════════
+# 分钟级 K 线路径（v2.30.0）— get_minute_ohlcv / minute_cache
+# ═══════════════════════════════════════════════════════════
+
+
+def _make_minute_df(symbol: str, source: str, rows: int = 10,
+                    period: str = "5m", base_time=None) -> pd.DataFrame:
+    """构造一个分钟级 K 线 DataFrame（11 列 minute schema）。"""
+    if base_time is None:
+        base_time = datetime.now() - timedelta(minutes=rows)
+    data = []
+    for i in range(rows):
+        data.append({
+            "symbol": symbol, "period": period,
+            "datetime": base_time + timedelta(minutes=i),
+            "open": 3500.0 + i, "high": 3550.0 + i, "low": 3490.0 + i,
+            "close": 3540.0 + i, "volume": 100,
+            "source": source, "fetched_at": datetime.now(), "trace_id": "",
+        })
+    return pd.DataFrame(data)
+
+
+@pytest.fixture
+def minute_cache_db(tmp_path: Path) -> Path:
+    """预先写入分钟数据的 DB（minute_cache 表已迁移）。"""
+    from fts.data_sources.migrate import migrate_schema
+    db = tmp_path / "fts_minute.duckdb"
+    migrate_schema(db)
+
+    import duckdb
+    con = duckdb.connect(str(db))
+    try:
+        df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=10)
+        con.register("df_min", df)
+        con.execute("INSERT INTO minute_cache SELECT * FROM df_min")
+        con.unregister("df_min")
+    finally:
+        con.close()
+    return db
+
+
+def test_get_minute_ohlcv_from_minute_cache(minute_cache_db: Path):
+    """分钟缓存命中时直接返回，不调数据源。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    src = MagicMock()
+    src.source_name = DataSource.TDX_MINUTE.value
+    src.fetch_ohlcv = MagicMock(side_effect=AssertionError("不应调用分钟源"))
+
+    agg = FuturesDataAggregator(
+        minute_sources=[src], db_path=minute_cache_db, cache_max_age_days=30,
+    )
+    df = agg.get_minute_ohlcv("RB0", days=10, frequency="5m", trace_id="t-min-1")
+
+    assert len(df) == 10
+    assert (df["symbol"] == "RB0").all()
+    src.fetch_ohlcv.assert_not_called()
+
+
+def test_get_minute_ohlcv_from_source(tmp_db: Path):
+    """无缓存时从分钟源拉取并写入 minute_cache。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    min_df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=5)
+    src = MagicMock()
+    src.source_name = DataSource.TQ_LOCAL.value
+    src.period = None
+    src.fetch_ohlcv = MagicMock(return_value=min_df)
+
+    agg = FuturesDataAggregator(minute_sources=[src], db_path=tmp_db)
+    df = agg.get_minute_ohlcv("RB0", days=5, frequency="5m", trace_id="t-min-2")
+
+    assert len(df) == 5
+    assert df["close"].iloc[-1] == 3540.0 + 4
+    src.fetch_ohlcv.assert_called_once()
+    # 已写入 minute_cache
+    import duckdb
+    con = duckdb.connect(str(tmp_db))
+    try:
+        count = con.execute(
+            "SELECT COUNT(*) FROM minute_cache WHERE symbol='RB0'"
+        ).fetchone()[0]
+        assert count == 5
+    finally:
+        con.close()
+
+
+def test_get_minute_ohlcv_source_rebuilt_by_frequency(tmp_db: Path):
+    """源 period 与请求频率不一致时按 type(src)(period=frequency) 重建。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    class PeriodSource:
+        def __init__(self, period: str = "5m", source_name: str = "TDX_MINUTE",
+                     df=None):
+            self.period = period
+            self.source_name = source_name
+            # 重建（type(src)(period=...)）时不传 df → 回退到闭包默认数据
+            self._df = df if df is not None else min_df
+            self.fetch_count = 0
+
+        def fetch_ohlcv(self, symbol, days, trace_id=""):
+            self.fetch_count += 1
+            return self._df.copy() if self._df is not None else None
+
+    min_df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3, period="1m")
+    src = PeriodSource(period="5m", df=min_df)
+
+    agg = FuturesDataAggregator(minute_sources=[src], db_path=tmp_db)
+    df = agg.get_minute_ohlcv("RB0", days=3, frequency="1m", trace_id="t-min-3")
+
+    # 重建后的新实例被调用（原始实例未被直接调用）
+    assert len(df) == 3
+    assert src.fetch_count == 0
+
+    # 第二次调用：minute_cache 已由重建实例写入 → 命中缓存
+    df2 = agg.get_minute_ohlcv("RB0", days=3, frequency="1m", trace_id="t-min-4")
+    assert len(df2) == 3
+
+
+def test_get_minute_ohlcv_rebuild_exception_skips(tmp_db: Path):
+    """周期重建抛异常时跳过该源，不中断调度。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    class BrokenInitSource:
+        def __init__(self, period: str = "5m", source_name: str = "TDX_MINUTE"):
+            self.period = period
+            self.source_name = source_name
+
+        def __call__(self, *args, **kwargs):  # 不实际使用
+            return self
+
+        def fetch_ohlcv(self, symbol, days, trace_id=""):
+            raise AssertionError("不应被调用（初始化即失败）")
+
+    class BadInit(BrokenInitSource):
+        def __init__(self, period: str = "5m", source_name: str = "TDX_MINUTE"):
+            # 重建（period 变化）时抛异常，模拟源初始化失败
+            if period != "5m":
+                raise RuntimeError("init failed")
+            self.period = period
+            self.source_name = source_name
+
+    bad = BadInit()
+    good_df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
+
+    class GoodSource:
+        """可重建的分钟源：重建后仍能返回数据（df 闭包兜底）。"""
+
+        def __init__(self, period: str = "5m", source_name: str = "TQ_LOCAL",
+                     df=None):
+            self.period = period
+            self.source_name = source_name
+            self._df = df if df is not None else good_df
+
+        def fetch_ohlcv(self, symbol, days, trace_id=""):
+            return self._df
+
+    good = GoodSource(period="5m")
+    agg = FuturesDataAggregator(minute_sources=[bad, good], db_path=tmp_db)
+    # 请求 1m → bad 重建抛异常 → 跳过 → good 被调用
+    df = agg.get_minute_ohlcv("RB0", days=3, frequency="1m", trace_id="t-min-5")
+
+    assert len(df) == 3
+    assert df["close"].iloc[-1] == 3540.0 + 2
+
+
+def test_get_minute_ohlcv_source_exception_records_failure(tmp_db: Path):
+    """分钟源 fetch 抛异常时记录熔断失败并继续降级。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    bad = MagicMock()
+    bad.source_name = DataSource.TD_MINUTE if hasattr(DataSource, "TD_MINUTE") else DataSource.TDX_MINUTE
+    bad.period = None
+    bad.fetch_ohlcv = MagicMock(side_effect=ConnectionError("down"))
+
+    good_df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
+    good = MagicMock()
+    good.source_name = DataSource.TQ_LOCAL.value
+    good.period = None
+    good.fetch_ohlcv = MagicMock(return_value=good_df)
+
+    agg = FuturesDataAggregator(minute_sources=[bad, good], db_path=tmp_db)
+    df = agg.get_minute_ohlcv("RB0", days=3, frequency="5m", trace_id="t-min-6")
+
+    assert len(df) == 3
+    status = agg.get_source_status()
+    assert status[bad.source_name]["total_failure"] == 1
+
+
+def test_get_minute_ohlcv_all_fail_returns_empty_schema(tmp_db: Path):
+    """所有分钟源失败时返回空 DataFrame（保留 minute schema 列）。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    src = MagicMock()
+    src.source_name = DataSource.TQ_LOCAL.value
+    src.period = None
+    src.fetch_ohlcv = MagicMock(side_effect=ConnectionError("down"))
+
+    agg = FuturesDataAggregator(minute_sources=[src], db_path=tmp_db)
+    df = agg.get_minute_ohlcv("RB0", days=3, frequency="5m", trace_id="t-min-7")
+
+    assert df.empty
+    assert "symbol" in df.columns and "period" in df.columns
+    assert "datetime" in df.columns and "close" in df.columns
+
+
+def test_get_minute_ohlcv_truncates_long_df(tmp_db: Path):
+    """分钟源返回超过 days 行时截断到最近 days 行。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    min_df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=10)
+    src = MagicMock()
+    src.source_name = DataSource.TQ_LOCAL.value
+    src.period = None
+    src.fetch_ohlcv = MagicMock(return_value=min_df)
+
+    agg = FuturesDataAggregator(minute_sources=[src], db_path=tmp_db)
+    df = agg.get_minute_ohlcv("RB0", days=3, frequency="5m", trace_id="t-min-8")
+
+    assert len(df) == 3
+
+
+def test_try_minute_cache_stale_returns_none(tmp_path: Path):
+    """minute_cache 数据过期时返回 None。"""
+    from fts.data_sources.migrate import migrate_schema
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    db = tmp_path / "stale_minute.duckdb"
+    migrate_schema(db)
+    old_time = datetime.now() - timedelta(days=5)
+    df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3, base_time=old_time)
+    import duckdb
+    con = duckdb.connect(str(db))
+    try:
+        con.register("df_min", df)
+        con.execute("INSERT INTO minute_cache SELECT * FROM df_min")
+        con.unregister("df_min")
+    finally:
+        con.close()
+
+    agg = FuturesDataAggregator(db_path=db, cache_max_age_days=1)
+    assert agg._try_minute_cache("RB0", 100, "5m") is None
+
+
+def test_try_minute_cache_no_db_returns_none():
+    """db_path=None 时 _try_minute_cache 返回 None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=None)
+    assert agg._try_minute_cache("RB0", 100, "5m") is None
+
+
+def test_try_minute_cache_no_latest_returns_none(minute_cache_db: Path):
+    """缓存表中无该品种数据时返回 None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=minute_cache_db)
+    assert agg._try_minute_cache("CU0", 100, "5m") is None
+
+
+def test_try_minute_cache_read_exception_returns_none(minute_cache_db: Path):
+    """minute_cache 读取抛异常时静默返回 None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=minute_cache_db)
+    # duckdb 连接 execute 是只读属性，用 MagicMock 替换连接
+    mock_con = MagicMock()
+    mock_con.execute.side_effect = RuntimeError("boom")
+    agg._cache_conn = mock_con
+    assert agg._try_minute_cache("RB0", 100, "5m") is None
+
+
+def test_write_minute_cache_skips_when_empty(tmp_db: Path):
+    """空 DataFrame 不写 minute_cache（静默返回）。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    agg._write_minute_cache(pd.DataFrame(), "5m")  # 不应抛异常
+
+
+def test_write_minute_cache_migrate_failure_does_not_break(tmp_db: Path):
+    """migrate_schema 失败不中断写入（缓存为次要路径）。"""
+    from fts.data_sources.migrate import migrate_schema
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    migrate_schema(tmp_db)  # 先建表，patch 只模拟 migrate 阶段失败
+    df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    with patch("fts.data_sources.migrate.migrate_schema", side_effect=RuntimeError("migrate fail")):
+        agg._write_minute_cache(df, "5m")  # 不应抛异常
+
+
+def test_write_minute_cache_insert_failure_silent(tmp_db: Path):
+    """minute_cache INSERT 失败被静默吞掉。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+    from fts.data_sources.migrate import migrate_schema
+
+    migrate_schema(tmp_db)
+    df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    mock_con = MagicMock()
+    mock_con.execute.side_effect = RuntimeError("insert fail")
+    agg._cache_conn = mock_con
+    agg._write_minute_cache(df, "5m")  # 不应抛异常
+
+
+def test_write_minute_cache_persists_data(tmp_db: Path):
+    """分钟数据成功写入 minute_cache。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    agg._write_minute_cache(df, "5m")
+
+    import duckdb
+    con = duckdb.connect(str(tmp_db))
+    try:
+        count = con.execute(
+            "SELECT COUNT(*) FROM minute_cache WHERE symbol='RB0'"
+        ).fetchone()[0]
+        assert count == 3
+    finally:
+        con.close()
+
+
+# ═══════════════════════════════════════════════════════════
+# tick 逐笔数据路径（v2.31.0）— get_ticks / tick_cache
+# ═══════════════════════════════════════════════════════════
+
+
+def _make_tick_df(symbol: str, source: str, rows: int = 5,
+                  base_time=None) -> pd.DataFrame:
+    """构造一个 tick 级 DataFrame（31 列，列序与 tick_cache 表一致）。"""
+    if base_time is None:
+        base_time = datetime.now() - timedelta(seconds=rows)
+    data = []
+    for i in range(rows):
+        row = {
+            "symbol": symbol, "datetime": base_time + timedelta(seconds=i),
+            "last_price": 3540.0 + i, "average": 3540.0, "highest": 3550.0,
+            "lowest": 3530.0, "volume": 100, "amount": 354000.0,
+            "open_interest": 80000,
+        }
+        # 5 档盘口列（列序在 source 之前，与表定义一致）
+        for depth in range(1, 6):
+            row[f"bid_price{depth}"] = 3539.0
+            row[f"bid_volume{depth}"] = 10
+            row[f"ask_price{depth}"] = 3541.0
+            row[f"ask_volume{depth}"] = 10
+        row["source"] = source
+        row["fetched_at"] = datetime.now()
+        row["trace_id"] = ""
+        data.append(row)
+    return pd.DataFrame(data)
+
+
+class _TickMockSource:
+    """可配置的 mock tick 数据源。"""
+
+    def __init__(self, source_name: str, df: pd.DataFrame | None = None,
+                 raise_exc: Exception | None = None,
+                 return_none: bool = False):
+        self.source_name = source_name
+        self._df = df
+        self._raise = raise_exc
+        self._return_none = return_none
+        self.fetch_count = 0
+
+    def fetch_ticks(self, symbol: str, count: int = 5000,
+                    trace_id: str = "") -> pd.DataFrame | None:
+        self.fetch_count += 1
+        if self._raise is not None:
+            raise self._raise
+        if self._return_none:
+            return None
+        return self._df.copy() if self._df is not None else None
+
+
+@pytest.fixture
+def tick_cache_db(tmp_path: Path) -> Path:
+    """预先写入 tick 数据的 DB（tick_cache 表已迁移）。"""
+    from fts.data_sources.migrate import migrate_schema
+    db = tmp_path / "fts_tick.duckdb"
+    migrate_schema(db)
+
+    import duckdb
+    con = duckdb.connect(str(db))
+    try:
+        df = _make_tick_df("RB0", DataSource.TQSDK_TICK.value, rows=5)
+        con.register("df_tick", df)
+        con.execute("INSERT INTO tick_cache SELECT * FROM df_tick")
+        con.unregister("df_tick")
+    finally:
+        con.close()
+    return db
+
+
+def test_get_ticks_from_tick_cache(tick_cache_db: Path):
+    """tick 缓存命中时直接返回，不调 tick 数据源。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    src = MagicMock()
+    src.source_name = DataSource.TQSDK_TICK.value
+    src.fetch_ticks = MagicMock(side_effect=AssertionError("不应调用 tick 源"))
+
+    agg = FuturesDataAggregator(tick_sources=[src], db_path=tick_cache_db)
+    df = agg.get_ticks("RB0", count=5, trace_id="t-tick-1")
+
+    assert len(df) == 5
+    src.fetch_ticks.assert_not_called()
+
+
+def test_get_ticks_from_source(tmp_db: Path):
+    """无 tick 缓存时从 tick 源拉取并写入 tick_cache。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    tick_df = _make_tick_df("RB0", DataSource.TQSDK_TICK.value, rows=3)
+    src = _TickMockSource(DataSource.TQSDK_TICK.value, df=tick_df)
+
+    agg = FuturesDataAggregator(tick_sources=[src], db_path=tmp_db)
+    df = agg.get_ticks("RB0", count=3, trace_id="t-tick-2")
+
+    assert len(df) == 3
+    assert src.fetch_count == 1
+    # 写入 tick_cache
+    import duckdb
+    con = duckdb.connect(str(tmp_db))
+    try:
+        count = con.execute(
+            "SELECT COUNT(*) FROM tick_cache WHERE symbol='RB0'"
+        ).fetchone()[0]
+        assert count == 3
+    finally:
+        con.close()
+
+
+def test_get_ticks_source_exception_records_failure(tmp_db: Path):
+    """tick 源 fetch 抛异常时记录失败并继续降级。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    bad = _TickMockSource(DataSource.TQSDK_TICK.value, raise_exc=ConnectionError("down"))
+    good_df = _make_tick_df("RB0", "TICK2", rows=3)
+    good = _TickMockSource("TICK2", df=good_df)
+
+    agg = FuturesDataAggregator(tick_sources=[bad, good], db_path=tmp_db)
+    df = agg.get_ticks("RB0", count=3, trace_id="t-tick-3")
+
+    assert len(df) == 3
+    status = agg.get_source_status()
+    assert status[DataSource.TQSDK_TICK.value]["total_failure"] == 1
+    assert status["TICK2"]["total_success"] == 1
+
+
+def test_get_ticks_all_fail_returns_empty(tmp_db: Path):
+    """所有 tick 源失败时返回空 DataFrame。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    src = _TickMockSource(DataSource.TQSDK_TICK.value, raise_exc=ConnectionError("down"))
+    agg = FuturesDataAggregator(tick_sources=[src], db_path=tmp_db)
+    df = agg.get_ticks("RB0", count=3, trace_id="t-tick-4")
+
+    assert df.empty
+
+
+def test_get_ticks_truncates_long_df(tmp_db: Path):
+    """tick 源返回超过 count 行时截断到最近 count 行。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    tick_df = _make_tick_df("RB0", DataSource.TQSDK_TICK.value, rows=10)
+    src = _TickMockSource(DataSource.TQSDK_TICK.value, df=tick_df)
+
+    agg = FuturesDataAggregator(tick_sources=[src], db_path=tmp_db)
+    df = agg.get_ticks("RB0", count=3, trace_id="t-tick-5")
+
+    assert len(df) == 3
+
+
+def test_get_ticks_circuit_open_skips_source(tmp_db: Path):
+    """tick 源熔断开启时被跳过（不调用）。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    src = _TickMockSource(DataSource.TQSDK_TICK.value, raise_exc=ConnectionError("down"))
+    agg = FuturesDataAggregator(tick_sources=[src], db_path=tmp_db,
+                                circuit_breaker_threshold=3)
+    for _ in range(3):
+        agg.get_ticks("RB0", count=3, trace_id="t-tick-cb")
+
+    before = src.fetch_count
+    agg.get_ticks("RB0", count=3, trace_id="t-tick-cb-4")
+    assert src.fetch_count == before, "熔断后 tick 源仍被调用"
+
+
+def test_try_tick_cache_table_missing(tmp_db: Path):
+    """tick_cache 表不存在（未迁移）时返回 None，不产生告警噪音。"""
+    import duckdb
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    # 创建 kline_cache 表但无 tick_cache
+    con = duckdb.connect(str(tmp_db))
+    try:
+        con.execute("CREATE TABLE kline_cache (symbol VARCHAR)")
+    finally:
+        con.close()
+
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    assert agg._try_tick_cache("RB0", 100) is None
+
+
+def test_try_tick_cache_read_exception_returns_none(tick_cache_db: Path):
+    """tick_cache 读取抛异常时静默返回 None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=tick_cache_db)
+    # duckdb 连接 execute 是只读属性，用 MagicMock 替换连接
+    mock_con = MagicMock()
+    mock_con.execute.side_effect = RuntimeError("boom")
+    agg._cache_conn = mock_con
+    assert agg._try_tick_cache("RB0", 100) is None
+
+
+def test_write_tick_cache_persists_data(tmp_db: Path):
+    """tick 数据成功写入 tick_cache。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    df = _make_tick_df("RB0", DataSource.TQSDK_TICK.value, rows=3)
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    agg._write_tick_cache(df)
+
+    import duckdb
+    con = duckdb.connect(str(tmp_db))
+    try:
+        count = con.execute(
+            "SELECT COUNT(*) FROM tick_cache WHERE symbol='RB0'"
+        ).fetchone()[0]
+        assert count == 3
+    finally:
+        con.close()
+
+
+def test_write_tick_cache_migrate_failure_silent(tmp_db: Path):
+    """tick_cache migrate_schema 失败被静默吞掉。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    df = _make_tick_df("RB0", DataSource.TQSDK_TICK.value, rows=3)
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    with patch("fts.data_sources.migrate.migrate_schema", side_effect=RuntimeError("migrate fail")):
+        agg._write_tick_cache(df)  # 不应抛异常
+
+
+def test_write_tick_cache_insert_failure_silent(tmp_db: Path):
+    """tick_cache INSERT 失败被静默吞掉。"""
+    from fts.data_sources.migrate import migrate_schema
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    migrate_schema(tmp_db)
+    df = _make_tick_df("RB0", DataSource.TQSDK_TICK.value, rows=3)
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    mock_con = MagicMock()
+    mock_con.execute.side_effect = RuntimeError("insert fail")
+    agg._cache_conn = mock_con
+    agg._write_tick_cache(df)  # 不应抛异常
+
+
+# ═══════════════════════════════════════════════════════════
+# K 线主路径 edge：截断 / 字段增强 / 缓存连接
+# ═══════════════════════════════════════════════════════════
+
+
+def test_get_ohlcv_truncates_over_long_source(tmp_db: Path):
+    """源返回超过 days 行时截断到最近 days 行。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    tq_df = _make_kline_df("RB0.SHFE", DataSource.TQ_LOCAL.value, rows=10)
+    tq = _MockSource(DataSource.TQ_LOCAL.value, df=tq_df)
+
+    agg = FuturesDataAggregator(sources=[tq], db_path=tmp_db,
+                                enable_cross_check=False)
+    df = agg.get_ohlcv("RB0", days=3, trace_id="t-truncate")
+
+    assert len(df) == 3
+
+
+def test_enhance_fields_skips_circuit_open_enhancer(tmp_db: Path):
+    """熔断的 enhancer 被跳过（不调用 fetch）。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    tq_df = _make_kline_df("RB0.SHFE", DataSource.TQ_LOCAL.value, rows=3)
+    tq = _MockSource(DataSource.TQ_LOCAL.value, df=tq_df)
+    wind = MagicMock()
+    wind.source_name = DataSource.WIND.value
+    wind.fetch_ohlcv_or_none = MagicMock(side_effect=AssertionError("熔断后不应调用"))
+
+    agg = FuturesDataAggregator(sources=[tq], enhancers=[wind], db_path=tmp_db,
+                                enable_cross_check=False,
+                                circuit_breaker_threshold=2)
+    # 打开 wind 的熔断
+    agg._record_failure(DataSource.WIND.value, "x")
+    agg._record_failure(DataSource.WIND.value, "y")
+
+    df = agg.get_ohlcv("RB0", days=3, trace_id="t-enh-open")
+    assert len(df) == 3
+    wind.fetch_ohlcv_or_none.assert_not_called()
+
+
+def test_enhance_fields_enrich_exception_records_failure(tmp_db: Path):
+    """enhancer.fetch 抛异常时记录失败，不破坏主路径。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    tq_df = _make_kline_df("RB0.SHFE", DataSource.TQ_LOCAL.value, rows=3)
+    tq = _MockSource(DataSource.TQ_LOCAL.value, df=tq_df)
+    wind = MagicMock()
+    wind.source_name = DataSource.WIND.value
+    wind.fetch_ohlcv_or_none = MagicMock(side_effect=RuntimeError("wind api error"))
+
+    agg = FuturesDataAggregator(sources=[tq], enhancers=[wind], db_path=tmp_db,
+                                enable_cross_check=False)
+    df = agg.get_ohlcv("RB0", days=3, trace_id="t-enh-err")
+
+    assert len(df) == 3
+    status = agg.get_source_status()
+    assert status[DataSource.WIND.value]["total_failure"] == 1
+
+
+def test_get_cache_conn_none_db_returns_none():
+    """db_path=None 时 _get_cache_conn 返回 None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=None)
+    assert agg._get_cache_conn() is None
+
+
+def test_get_cache_conn_connect_failure_returns_none(tmp_path: Path):
+    """duckdb.connect 抛异常时 _get_cache_conn 返回 None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=tmp_path / "fts.duckdb")
+    with patch("duckdb.connect", side_effect=RuntimeError("cannot open db")):
+        assert agg._get_cache_conn() is None
+
+
+def test_try_cache_conn_none_returns_none(tmp_path: Path):
+    """_get_cache_conn 返回 None 时 _try_cache 返回 None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    db = tmp_path / "fts.duckdb"
+    db.write_bytes(b"")  # 文件存在
+    agg = FuturesDataAggregator(db_path=db)
+    with patch.object(agg, "_get_cache_conn", return_value=None):
+        assert agg._try_cache("RB0", days=10) is None
+
+
+def test_try_cache_unknown_symbol_returns_none(cache_with_data: Path):
+    """缓存表中无该品种数据时返回 None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=cache_with_data)
+    assert agg._try_cache("CU0", days=10) is None
+
+
+def test_try_cache_stale_returns_none(tmp_path: Path):
+    """kline_cache 数据过期时返回 None。"""
+    from fts.data_sources.migrate import migrate_schema
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    db = tmp_path / "stale.duckdb"
+    migrate_schema(db)
+    old_df = _make_kline_df(
+        "RB0", DataSource.DUCKDB_CACHE.value, rows=5,
+        base_date=(datetime.now() - timedelta(days=10)).date(),
+    )
+    import duckdb
+    con = duckdb.connect(str(db))
+    try:
+        con.register("df_cache", old_df)
+        con.execute("INSERT INTO kline_cache SELECT * FROM df_cache")
+        con.unregister("df_cache")
+    finally:
+        con.close()
+
+    agg = FuturesDataAggregator(db_path=db, cache_max_age_days=1)
+    assert agg._try_cache("RB0", days=10) is None
+
+
+def test_try_cache_zero_days_returns_none(cache_with_data: Path):
+    """days=0 时 LIMIT 0 返回空 df → None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=cache_with_data)
+    assert agg._try_cache("RB0", days=0) is None
+
+
+def test_try_cache_query_exception_returns_none(cache_with_data: Path):
+    """kline_cache 读取抛异常时静默返回 None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=cache_with_data)
+    # duckdb 连接 execute 是只读属性，用 MagicMock 替换连接
+    mock_con = MagicMock()
+    mock_con.execute.side_effect = RuntimeError("boom")
+    agg._cache_conn = mock_con
+    assert agg._try_cache("RB0", days=10) is None
+
+
+def test_write_cache_migrate_failure_silent(tmp_db: Path):
+    """kline_cache migrate_schema 失败被静默吞掉，继续写入。"""
+    from fts.data_sources.migrate import migrate_schema
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    migrate_schema(tmp_db)  # 先建表（避免 patch 后无表可写）
+    df = _make_kline_df("RB0", DataSource.SYNTHETIC.value, rows=3)
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    with patch("fts.data_sources.migrate.migrate_schema", side_effect=RuntimeError("migrate fail")):
+        agg._write_cache(df)  # 不应抛异常
+
+    import duckdb
+    con = duckdb.connect(str(tmp_db))
+    try:
+        count = con.execute(
+            "SELECT COUNT(*) FROM kline_cache WHERE symbol='RB0'"
+        ).fetchone()[0]
+        assert count == 3
+    finally:
+        con.close()
+
+
+def test_write_cache_conn_none_returns(tmp_db: Path):
+    """_get_cache_conn 返回 None 时 _write_cache 静默返回。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    df = _make_kline_df("RB0", DataSource.SYNTHETIC.value, rows=3)
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    with patch.object(agg, "_get_cache_conn", return_value=None):
+        agg._write_cache(df)  # 不应抛异常
+
+
+def test_write_cache_insert_failure_silent(tmp_db: Path):
+    """kline_cache INSERT 失败被静默吞掉。"""
+    from fts.data_sources.migrate import migrate_schema
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    migrate_schema(tmp_db)
+    df = _make_kline_df("RB0", DataSource.SYNTHETIC.value, rows=3)
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    mock_con = MagicMock()
+    mock_con.execute.side_effect = RuntimeError("insert fail")
+    agg._cache_conn = mock_con
+    agg._write_cache(df)  # 不应抛异常
+
+
+# ═══════════════════════════════════════════════════════════
+# 交叉验证 edge：源数量 / 熔断 / 日期不匹配 / 异常
+# ═══════════════════════════════════════════════════════════
+
+
+def test_cross_check_single_source_skipped(tmp_path: Path):
+    """少于 2 个源时跳过交叉验证。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    src = _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0)
+    agg = FuturesDataAggregator(sources=[src])
+    assert agg.cross_check("RB0", "2026-08-04", sources=[src]) == []
+
+
+def test_cross_check_circuit_open_source_skipped(tmp_path: Path):
+    """熔断开启的源在交叉验证中被跳过。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator, BreakerState
+
+    src1 = _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0)
+    src2 = _make_close_only_source(DataSource.WIND.value, 3600.0)
+    agg = FuturesDataAggregator(sources=[src1, src2])
+    # 打开 src2 熔断（opened_at=now，冷却未到期）
+    import time as _time
+    agg._breakers[DataSource.WIND.value] = BreakerState(
+        consecutive_failures=5, circuit_open=True, opened_at=_time.time(),
+    )
+
+    # 只有 1 个源参与 → 无告警（也不写日志）
+    disagreements = agg.cross_check("RB0", "2026-08-04",
+                                    sources=[src1, src2], trace_id="t-cc-open")
+    assert disagreements == []
+
+
+def test_cross_check_date_not_matched_returns_empty(tmp_path: Path):
+    """源 df 中无匹配日期时跳过该源。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    df1 = _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0,
+                                  date_str="2026-08-01")
+    df2 = _make_close_only_source(DataSource.WIND.value, 3600.0,
+                                  date_str="2026-08-02")
+    agg = FuturesDataAggregator(sources=[df1, df2])
+    # 请求 2026-08-04 → 两源都不匹配 → prices 空 → []
+    disagreements = agg.cross_check("RB0", "2026-08-04",
+                                    sources=[df1, df2], trace_id="t-cc-date")
+    assert disagreements == []
+
+
+def test_cross_check_source_exception_silently_skipped(tmp_path: Path):
+    """交叉验证中单源 fetch 抛异常被吞掉，不影响其他源。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    good = _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0)
+    bad = MagicMock()
+    bad.source_name = DataSource.WIND.value
+    bad.fetch_ohlcv_or_none = MagicMock(side_effect=RuntimeError("boom"))
+
+    agg = FuturesDataAggregator(sources=[good, bad])
+    # 不抛异常
+    disagreements = agg.cross_check("RB0", "2026-08-04",
+                                    sources=[good, bad], trace_id="t-cc-exc")
+    assert disagreements == []
+
+
+def test_cross_check_single_price_skipped(tmp_path: Path):
+    """只有 1 个源有价格时返回空（不足 2 个价格）。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    src1 = _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0)
+    src2 = _make_close_only_source(DataSource.WIND.value, 3600.0,
+                                   date_str="2026-08-02")  # 日期不匹配
+    agg = FuturesDataAggregator(sources=[src1, src2])
+    disagreements = agg.cross_check("RB0", "2026-08-04",
+                                    sources=[src1, src2], trace_id="t-cc-1p")
+    assert disagreements == []
+
+
+def test_write_disagreement_log_failure_silent(tmp_path: Path):
+    """JSONL 日志写入失败被静默吞掉，告警仍返回。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    sources = [
+        _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0),
+        _make_close_only_source(DataSource.WIND.value, 3600.0),
+    ]
+    agg = FuturesDataAggregator(
+        sources=sources,
+        disagreement_log_path=tmp_path / "disagreements.jsonl",
+        cross_check_threshold=0.005,
+    )
+    with patch("pathlib.Path.open", side_effect=OSError("denied")):
+        disagreements = agg.cross_check(
+            "RB0", "2026-08-04", sources=sources, trace_id="t-cc-logfail"
+        )
+    # 告警仍然返回
+    assert len(disagreements) == 1
+
+
+# ═══════════════════════════════════════════════════════════
+# 主路径尾部自动交叉验证 _maybe_cross_check
+# ═══════════════════════════════════════════════════════════
+
+
+def test_maybe_cross_check_disabled_returns_empty(tmp_path: Path):
+    """enable_cross_check=False 时 _maybe_cross_check 返回空。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    df = _make_kline_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
+    agg = FuturesDataAggregator(enable_cross_check=False)
+    assert agg._maybe_cross_check(df, "RB0", "t") == []
+
+
+def test_maybe_cross_check_few_enhancers_returns_empty(tmp_path: Path):
+    """enhancers 少于 2 个时不触发交叉验证。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    df = _make_kline_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
+    wind = _make_close_only_source(DataSource.WIND.value, 3540.0)
+    agg = FuturesDataAggregator(enhancers=[wind])
+    assert agg._maybe_cross_check(df, "RB0", "t") == []
+
+
+def test_maybe_cross_check_missing_columns_returns_empty(tmp_path: Path):
+    """df 缺少 date/close 列时不触发交叉验证。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    df = pd.DataFrame({"symbol": ["RB0"], "open": [1.0]})
+    wind = _make_close_only_source(DataSource.WIND.value, 3540.0)
+    ifind = _make_close_only_source(DataSource.IFIND.value, 3541.0)
+    agg = FuturesDataAggregator(enhancers=[wind, ifind])
+    assert agg._maybe_cross_check(df, "RB0", "t") == []
+
+
+def test_maybe_cross_check_sort_exception_returns_empty(tmp_path: Path):
+    """date 去重排序抛异常时返回空（不中断主路径）。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    df = _make_kline_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
+    wind = _make_close_only_source(DataSource.WIND.value, 3540.0)
+    ifind = _make_close_only_source(DataSource.IFIND.value, 3541.0)
+    agg = FuturesDataAggregator(enhancers=[wind, ifind])
+    with patch.object(df["date"], "astype", side_effect=RuntimeError("boom")):
+        assert agg._maybe_cross_check(df, "RB0", "t") == []
+
+
+def test_maybe_cross_check_triggers_alerts(tmp_path: Path):
+    """多源分歧触发自动交叉验证并返回告警。
+
+    注: 2 源时"偏离中位数百分比"数学上对称（|a-b|/(a+b) 恒等），
+    因此使用 3 源（2 近 1 远）构造非对称告警。
+    """
+    from datetime import date as _date
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    # 主路径 df：最近 5 天含 2026-08-04
+    base = _date(2026, 8, 1)
+    tq_df = _make_kline_df("RB0", DataSource.TQ_LOCAL.value, rows=5, base_date=base)
+    # 3 源：AKSHARE=4000, WIND=4000（近 median），IFIND=4040（偏离 0.66%）
+    akshare = _make_close_only_source(DataSource.AKSHARE.value, 4000.0)
+    wind = _make_close_only_source(DataSource.WIND.value, 4000.0)
+    ifind = _make_close_only_source(DataSource.IFIND.value, 4040.0)
+
+    agg = FuturesDataAggregator(
+        enhancers=[akshare, wind, ifind],
+        cross_check_threshold=0.005,
+        disagreement_log_path=tmp_path / "disagreements.jsonl",
+    )
+    alerts = agg._maybe_cross_check(tq_df, "RB0", "t-cc-auto")
+
+    assert len(alerts) == 1
+    assert alerts[0]["outliers"] == [DataSource.IFIND.value]
+    # 日志文件已写入
+    assert (tmp_path / "disagreements.jsonl").exists()
+
+
+# ═══════════════════════════════════════════════════════════
+# 资源清理
+# ═══════════════════════════════════════════════════════════
+
+
+def test_close_releases_connection(cache_with_data: Path):
+    """close() 关闭持久连接并清空引用。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=cache_with_data)
+    con = agg._get_cache_conn()
+    assert con is not None
+
+    agg.close()
+    assert agg._cache_conn is None
+    # 再次 close 不抛异常
+    agg.close()
+
+
+# ═══════════════════════════════════════════════════════════
+# 剩余小分支：熔断跳过分钟源 / 空数据 / con None / close 异常
+# ═══════════════════════════════════════════════════════════
+
+
+def test_get_minute_ohlcv_circuit_open_skips_source(tmp_db: Path):
+    """分钟源熔断开启时被跳过。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    src = MagicMock()
+    src.source_name = DataSource.TDX_MINUTE.value
+    src.period = None
+    src.fetch_ohlcv = MagicMock(side_effect=AssertionError("熔断后不应调用"))
+
+    agg = FuturesDataAggregator(minute_sources=[src], db_path=tmp_db,
+                                circuit_breaker_threshold=2)
+    agg._record_failure(DataSource.TDX_MINUTE.value, "x")
+    agg._record_failure(DataSource.TDX_MINUTE.value, "y")
+
+    df = agg.get_minute_ohlcv("RB0", days=3, frequency="5m", trace_id="t-min-open")
+    assert df.empty  # 唯一源被熔断 → 空 DataFrame
+    src.fetch_ohlcv.assert_not_called()
+
+
+def test_get_minute_ohlcv_source_returns_none(tmp_db: Path):
+    """分钟源返回 None（空数据）时继续降级。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    empty = MagicMock()
+    empty.source_name = DataSource.TDX_MINUTE.value
+    empty.period = None
+    empty.fetch_ohlcv = MagicMock(return_value=None)
+
+    good_df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
+    good = MagicMock()
+    good.source_name = DataSource.TQ_LOCAL.value
+    good.period = None
+    good.fetch_ohlcv = MagicMock(return_value=good_df)
+
+    agg = FuturesDataAggregator(minute_sources=[empty, good], db_path=tmp_db)
+    df = agg.get_minute_ohlcv("RB0", days=3, frequency="5m", trace_id="t-min-none")
+
+    assert len(df) == 3
+    good.fetch_ohlcv.assert_called_once()
+
+
+def test_try_minute_cache_conn_none_returns_none(minute_cache_db: Path):
+    """_get_cache_conn 返回 None 时 _try_minute_cache 返回 None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=minute_cache_db)
+    with patch.object(agg, "_get_cache_conn", return_value=None):
+        assert agg._try_minute_cache("RB0", 100, "5m") is None
+
+
+def test_try_minute_cache_zero_rows_returns_none(minute_cache_db: Path):
+    """days=0 → LIMIT 0 → 空 df → None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=minute_cache_db)
+    assert agg._try_minute_cache("RB0", days=0, frequency="5m") is None
+
+
+def test_write_minute_cache_conn_none_returns(tmp_db: Path):
+    """_get_cache_conn 返回 None 时 _write_minute_cache 静默返回。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    with patch.object(agg, "_get_cache_conn", return_value=None):
+        agg._write_minute_cache(df, "5m")  # 不应抛异常
+
+
+def test_get_ticks_source_returns_none(tmp_db: Path):
+    """tick 源返回 None（空数据）时继续降级。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    empty = _TickMockSource(DataSource.TQSDK_TICK.value, return_none=True)
+    good_df = _make_tick_df("RB0", "TICK2", rows=3)
+    good = _TickMockSource("TICK2", df=good_df)
+
+    agg = FuturesDataAggregator(tick_sources=[empty, good], db_path=tmp_db)
+    df = agg.get_ticks("RB0", count=3, trace_id="t-tick-none")
+
+    assert len(df) == 3
+    assert good.fetch_count == 1
+
+
+def test_try_tick_cache_conn_none_returns_none(tick_cache_db: Path):
+    """_get_cache_conn 返回 None 时 _try_tick_cache 返回 None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=tick_cache_db)
+    with patch.object(agg, "_get_cache_conn", return_value=None):
+        assert agg._try_tick_cache("RB0", 100) is None
+
+
+def test_try_tick_cache_zero_rows_returns_none(tick_cache_db: Path):
+    """count=0 → LIMIT 0 → 空 df → None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=tick_cache_db)
+    assert agg._try_tick_cache("RB0", count=0) is None
+
+
+def test_write_tick_cache_skips_empty(tmp_db: Path):
+    """空 DataFrame 不写 tick_cache。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    agg._write_tick_cache(pd.DataFrame())  # 不应抛异常
+
+
+def test_write_tick_cache_conn_none_returns(tmp_db: Path):
+    """_get_cache_conn 返回 None 时 _write_tick_cache 静默返回。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    df = _make_tick_df("RB0", DataSource.TQSDK_TICK.value, rows=3)
+    agg = FuturesDataAggregator(db_path=tmp_db)
+    with patch.object(agg, "_get_cache_conn", return_value=None):
+        agg._write_tick_cache(df)  # 不应抛异常
+
+
+def test_close_ignores_conn_close_exception(cache_with_data: Path):
+    """close() 中 conn.close 抛异常被吞掉，引用仍清空。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    agg = FuturesDataAggregator(db_path=cache_with_data)
+    mock_con = MagicMock()
+    mock_con.close.side_effect = RuntimeError("close failed")
+    agg._cache_conn = mock_con
+
+    agg.close()  # 不应抛异常
+    assert agg._cache_conn is None

@@ -442,6 +442,24 @@ class TestFactorPoolManager:
         mgr.add_entry(entry)
         assert mgr.count() == 1
         assert len(mgr.list_pending()) == 1
+        # 候选因子入池时默认标注"未评估"
+        pool = mgr.load_or_init()
+        assert pool["factors"][0]["evaluation_status"] == "pending"
+
+    def test_add_entry_preserves_explicit_evaluation_status(self, tmp_factor_pool_path):
+        """显式传入 evaluation_status 时不被覆盖。"""
+        mgr = FactorPoolManager(tmp_factor_pool_path)
+        mgr.load_or_init()
+        from fts.factor_engine.contracts import FactorPoolEntry
+        entry = FactorPoolEntry(
+            factor_id="cand_eval", name="f1", source="l1_bootstrapping",
+            priority="high", status="injected", trace_id="t1",
+            created_at="2026-07-18", updated_at="2026-07-18",
+            evaluation_status="evaluated",
+        )
+        mgr.add_entry(entry)
+        pool = mgr.load_or_init()
+        assert pool["factors"][0]["evaluation_status"] == "evaluated"
 
     def test_add_entry_dedup(self, tmp_factor_pool_path):
         """同 factor_id 添加两次只算一条。"""
@@ -1147,6 +1165,118 @@ class TestMetaLoop:
         reason = loop._check_circuit_breaker(state, 0)
         assert reason is not None
         assert "连续低质量" in reason
+
+    def test_is_hard_failure_classification(self):
+        """硬失败/软失败分类（P1a）。"""
+        loop = MetaLoop()
+        assert loop._is_hard_failure(["候选因子代码不可执行（沙箱编译失败）"]) is True
+        assert loop._is_hard_failure(["候选因子与现有种子重复"]) is True
+        assert loop._is_hard_failure(["候选因子名称与现有种子重复: fut_x"]) is True
+        assert loop._is_hard_failure(["经济逻辑达标维度 1/4 < 2"]) is False
+        assert loop._is_hard_failure(["narrative 长度 5 < 20"]) is False
+        assert loop._is_hard_failure(["经济逻辑达标维度 1/4 < 2", "narrative 长度 5 < 20"]) is False
+        assert loop._is_hard_failure([]) is False
+
+    def test_soft_failures_do_not_trigger_circuit_breaker(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
+    ):
+        """连续软失败（经济逻辑评分不达标）不应触发熔断（P1a）。"""
+        from fts.factor_engine.meta_loop import BootstrappingChain as BC
+
+        class SoftFailChain(BC):
+            def bootstrap(self, *args, **kwargs):
+                # 6 个候选: 代码可编译(is_executable=True)、不重复，仅经济逻辑不达标（软失败）
+                return [
+                    SeedCandidate(
+                        candidate_id=f"cand_soft_{i}",
+                        name=f"soft_{i}",
+                        code="def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))\n",
+                        params={},
+                        signature=FactorSignature(
+                            input_fields=["close"], output_type="signal",
+                            frequency="daily", lookback=1,
+                        ),
+                        economic_logic=EconomicLogic(
+                            theory=2, behavioral=2, microstructure=2, institutional=2,
+                            narrative="该因子缺乏足够的机制论证支撑，经济逻辑不足。",
+                        ),
+                        source="l1_bootstrapping",
+                        parent_topic="软失败测试",
+                        is_executable=True,
+                        is_duplicate=False,
+                        passed_l1_verifier=False,
+                        failure_reasons=[],
+                        trace_id="t",
+                        created_at="2026-07-18",
+                    )
+                    for i in range(6)
+                ]
+
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+            budget=L1BudgetConfig(
+                daily_token_limit=50000,
+                monthly_token_limit=1500000,
+                max_bootstraps_per_run=6,
+                max_tokens_per_candidate=5000,
+                circuit_breaker_token_ratio=2.0,
+                circuit_breaker_failure_rate=0.95,
+                circuit_breaker_consecutive_low_quality=5,
+            ),
+        )
+        loop.bootstrap_chain = SoftFailChain()
+        result = loop.run(max_bootstraps=6)
+        # 6 个软失败不应触发连续低质量熔断
+        assert result.status == "completed"
+        assert result.circuit_breaker_reason is None
+
+    def test_hard_failure_verify_log_includes_compile_detail(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir, caplog
+    ):
+        """verify 拒绝日志输出具体编译错误（P1c）。"""
+        import logging
+        from fts.factor_engine.meta_loop import BootstrappingChain as BC
+
+        class HardFailChain(BC):
+            def bootstrap(self, *args, **kwargs):
+                cand = SeedCandidate(
+                    candidate_id="cand_hard_1",
+                    name="hard_1",
+                    code="import os\nimport sys\n",
+                    params={},
+                    signature=FactorSignature(
+                        input_fields=["close"], output_type="signal",
+                        frequency="daily", lookback=1,
+                    ),
+                    economic_logic=EconomicLogic(
+                        theory=3, behavioral=3, microstructure=3, institutional=3,
+                        narrative="该因子具备充分的经济逻辑论证。",
+                    ),
+                    source="l1_bootstrapping",
+                    parent_topic="硬失败测试",
+                    is_executable=False,
+                    is_duplicate=False,
+                    passed_l1_verifier=False,
+                    failure_reasons=["编译失败: 禁止 import 黑名单模块: os; 禁止 import 黑名单模块: sys"],
+                    trace_id="t",
+                    created_at="2026-07-18",
+                )
+                return [cand]
+
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+        )
+        loop.bootstrap_chain = HardFailChain()
+        with caplog.at_level(logging.WARNING, logger="fts.factor_engine.meta_loop"):
+            loop.run(max_bootstraps=1)
+        # 日志应包含具体编译错误 detail
+        assert any("禁止 import 黑名单模块" in r.message for r in caplog.records)
 
     def test_perceive_market_collector_error(
         self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir

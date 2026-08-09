@@ -259,7 +259,9 @@ class MultiHorizonHMMDetector:
                 horizon_details[h] = {"regime": "error", "confidence": 0.0, "weight": w}
 
         if not votes:
-            return "unknown", 0.0, {"horizon_details": horizon_details}
+            return "unknown", 0.0, {
+                "horizon_details": {str(h): v for h, v in horizon_details.items()}
+            }
 
         # 加权投票决定 regime
         total_weight = sum(self.weights.values())
@@ -431,6 +433,7 @@ class MSMRegimeDetector:
         self.k_regimes = k_regimes
         self.min_data = min_data
         self._model: Any = None
+        self._result: Any = None
         self._is_fitted = False
         self._state_map: dict[int, str] = {}
 
@@ -452,6 +455,7 @@ class MSMRegimeDetector:
                 switching_variance=True,
             )
             result = self._model.fit(disp=False)
+            self._result = result  # 保存拟合结果，供 predict 推断状态
             # 推断状态
             smoothed = result.smoothed_marginal_probabilities
             states = smoothed.idxmax(axis=1).values
@@ -501,7 +505,7 @@ class MSMRegimeDetector:
 
     def predict(self, ohlcv: pd.DataFrame) -> tuple[str, float, dict]:
         """预测当前市场制度。"""
-        if not self._is_fitted or self._model is None:
+        if not self._is_fitted or self._result is None:
             return "unknown", 0.0, {}
         close = ohlcv["close"].dropna()
         if len(close) < 20:
@@ -510,12 +514,14 @@ class MSMRegimeDetector:
         if len(rets) < 20:
             return "unknown", 0.0, {}
         try:
-            # 使用最后 20 个数据点预测
-            test_data = rets.iloc[-20:]
-            # 用模型预测最后一个点的状态
-            pred = self._model.predict(test_data)
-            # 过滤 NaN
-            pred_clean = pred.dropna()
+            # 使用平滑边际概率推断最后一个点的状态
+            # （MarkovRegression.predict 第一参数为 params，不能直接传新数据，
+            #   原实现将 Series 误当 params 传入必然抛异常导致 MSM 检测失效）
+            result = self._result
+            if result is None:
+                return "unknown", 0.0, {}
+            probs = result.smoothed_marginal_probabilities
+            pred_clean = probs.iloc[-20:].dropna()
             if pred_clean.empty:
                 return "unknown", 0.0, {}
             last_state = int(pred_clean.idxmax(axis=1).iloc[-1])

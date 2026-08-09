@@ -327,7 +327,7 @@ class ExperienceChain:
         safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in trace_id)
         fp = target_dir / f"{safe_id}.json"
         fp.write_text(
-            json.dumps(trace, ensure_ascii=False, indent=2),
+            json.dumps(trace, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
         )
         return fp

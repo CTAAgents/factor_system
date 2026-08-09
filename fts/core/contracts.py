@@ -12,6 +12,11 @@ from __future__ import annotations
 
 from typing import Any, Optional, TypedDict
 
+try:
+    from typing import NotRequired  # Python 3.11+
+except ImportError:  # pragma: no cover - Python 3.10
+    from typing_extensions import NotRequired
+
 # Re-export factor_engine 契约（从 loop_engine/contracts.py 迁移）
 from fts.factor_engine.contracts import (
     # 版本号
@@ -90,6 +95,70 @@ class FusedOHLCV(TypedDict, total=False):
     disagreement_pct: Optional[float]
 
 
+# ─── 期货 K 线契约（Phase 14.4，v2.3.0 起）──────────────────
+
+class FuturesOHLCV(TypedDict, total=False):
+    """期货单条 K 线数据契约。
+
+    必填字段(8): symbol/date/open/high/low/close/volume/trace_id
+    可选字段(8): amount/hold/settle/pre_settle/oi_change/vwap/source/fetched_at
+
+    HARNESS §契约优先: 字段集合锁定，禁止任意加减。
+    """
+    symbol: str
+    date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    trace_id: str
+    amount: NotRequired[float]
+    hold: NotRequired[float]
+    settle: NotRequired[float]
+    pre_settle: NotRequired[float]
+    oi_change: NotRequired[float]
+    vwap: NotRequired[float]
+    source: NotRequired[str]
+    fetched_at: NotRequired[str]
+
+
+class FuturesDataLineage(TypedDict, total=False):
+    """期货数据同步血缘追踪契约（Phase 14.4）。
+
+    必填字段(5): trace_id/started_at/finished_at/symbols/rows_written
+    可选字段(3): sources_used/sources_failed/disagreements
+    """
+    trace_id: str
+    started_at: str
+    finished_at: str
+    symbols: list[str]
+    rows_written: int
+    sources_used: NotRequired[dict[str, int]]
+    sources_failed: NotRequired[dict[str, int]]
+    disagreements: NotRequired[int]
+
+
+class FusionReport(TypedDict, total=False):
+    """多源融合报告契约（Phase 14.4，v2.3.0+）。
+
+    必填字段(6): trace_id/symbol/strategy/rows/sources_used/rows_count
+    可选字段(4): started_at/finished_at/disagreements/avg_disagreement_pct
+
+    CLI `fts data fuse` 的 JSON 输出、联调脚本报告落盘均使用本契约。
+    """
+    trace_id: str
+    symbol: str
+    strategy: str
+    rows: list[FusedOHLCV]
+    sources_used: list[str]
+    rows_count: int
+    started_at: NotRequired[str]
+    finished_at: NotRequired[str]
+    disagreements: NotRequired[list[MultiSourceDisagreement]]
+    avg_disagreement_pct: NotRequired[float]
+
+
 __all__ = [
     "EVOLUTION_VERSION",
     "FactorProgram",
@@ -128,4 +197,8 @@ __all__ = [
     "MultiSourceDisagreement",
     # 数据融合契约
     "FusedOHLCV",
+    # 期货 K 线 / 血缘 / 融合报告契约（Phase 14.4）
+    "FuturesOHLCV",
+    "FuturesDataLineage",
+    "FusionReport",
 ]

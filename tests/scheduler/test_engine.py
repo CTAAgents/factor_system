@@ -191,8 +191,8 @@ class TestSchedulerEngineStart:
         assert engine._scheduler is apscheduler_available
         assert engine.running is True
         apscheduler_available.start.assert_called_once()
-        # 6 = 5 个默认任务 + 1 个 sample_task
-        assert apscheduler_available.add_job.call_count == 6
+        # 10 = 9 个默认任务 + 1 个 sample_task
+        assert apscheduler_available.add_job.call_count == 10
         # 验证 sample_task 的 job 被加入
         job_calls = apscheduler_available.add_job.call_args_list
         test_job_call = next(
@@ -203,7 +203,7 @@ class TestSchedulerEngineStart:
         assert test_job_call.kwargs["minute"] == "0"
         assert test_job_call.kwargs["hour"] == "9"
         assert "已启动" in caplog.text
-        assert "6 个任务" in caplog.text
+        assert "10 个任务" in caplog.text
 
 
 # ─── stop ───────────────────────────────────────────────
@@ -291,42 +291,40 @@ class TestSchedulerEngineCreateScheduler:
     def test_create_scheduler_available(self):
         """APScheduler 可用时返回 BackgroundScheduler 实例。"""
         mock_scheduler_class = MagicMock(return_value=MagicMock())
+        # 直接对 sys.modules 中的模块对象设置 BackgroundScheduler，
+        # 与 engine._create_scheduler 内 `from ... import` 的解析路径一致
+        bg_module = MagicMock()
+        bg_module.BackgroundScheduler = mock_scheduler_class
         with patch.dict(
             "sys.modules",
             {
                 "apscheduler": MagicMock(),
                 "apscheduler.schedulers": MagicMock(),
-                "apscheduler.schedulers.background": MagicMock(),
+                "apscheduler.schedulers.background": bg_module,
             },
         ):
-            with patch(
-                "apscheduler.schedulers.background.BackgroundScheduler",
-                mock_scheduler_class,
-            ):
-                engine = SchedulerEngine()
-                scheduler = engine._create_scheduler(daemon=True)
-                assert scheduler is mock_scheduler_class.return_value
-                mock_scheduler_class.assert_called_once_with(daemon=True)
+            engine = SchedulerEngine()
+            scheduler = engine._create_scheduler(daemon=True)
+            assert scheduler is mock_scheduler_class.return_value
+            mock_scheduler_class.assert_called_once_with(daemon=True)
 
     def test_create_scheduler_daemon_false(self):
         """daemon=False 传递给 BackgroundScheduler。"""
         mock_scheduler_class = MagicMock(return_value=MagicMock())
+        bg_module = MagicMock()
+        bg_module.BackgroundScheduler = mock_scheduler_class
         with patch.dict(
             "sys.modules",
             {
                 "apscheduler": MagicMock(),
                 "apscheduler.schedulers": MagicMock(),
-                "apscheduler.schedulers.background": MagicMock(),
+                "apscheduler.schedulers.background": bg_module,
             },
         ):
-            with patch(
-                "apscheduler.schedulers.background.BackgroundScheduler",
-                mock_scheduler_class,
-            ):
-                engine = SchedulerEngine()
-                scheduler = engine._create_scheduler(daemon=False)
-                assert scheduler is mock_scheduler_class.return_value
-                mock_scheduler_class.assert_called_once_with(daemon=False)
+            engine = SchedulerEngine()
+            scheduler = engine._create_scheduler(daemon=False)
+            assert scheduler is mock_scheduler_class.return_value
+            mock_scheduler_class.assert_called_once_with(daemon=False)
 
 
 # ─── _cron_field ────────────────────────────────────────
@@ -703,3 +701,67 @@ class TestSchedulerEngineIntegration:
         assert engine.running is False
         # shutdown 仍然只被调用一次
         mock_sched.shutdown.assert_called_once_with(wait=False)
+
+
+# ─── start_watchdog ─────────────────────────────────────
+
+
+class TestSchedulerEngineStartWatchdog:
+    """SchedulerEngine.start_watchdog() 测试。
+
+    覆盖:
+        - 成功启动看门狗线程
+        - 看门狗构造失败返回 None
+    """
+
+    def test_start_watchdog_success(self, caplog):
+        """成功路径：启动看门狗线程并返回。"""
+        mock_watchdog = MagicMock()
+        mock_thread = MagicMock()
+
+        with (
+            patch("fts.scheduler.watchdog.ProcessWatchdog", return_value=mock_watchdog),
+            patch("fts.scheduler.engine.threading.Thread", return_value=mock_thread),
+        ):
+            caplog.set_level(logging.INFO)
+            engine = SchedulerEngine()
+            result = engine.start_watchdog(name="test-wd")
+
+        assert result is mock_thread
+        mock_thread.start.assert_called_once()
+        assert "看门狗线程已启动: test-wd" in caplog.text
+
+    def test_start_watchdog_success_cmd(self):
+        """成功路径：验证传递给 ProcessWatchdog 的命令与线程参数。"""
+        mock_watchdog = MagicMock()
+        mock_thread = MagicMock()
+
+        with (
+            patch("fts.scheduler.watchdog.ProcessWatchdog", return_value=mock_watchdog) as mock_cls,
+            patch("fts.scheduler.engine.threading.Thread", return_value=mock_thread) as mock_thread_cls,
+        ):
+            engine = SchedulerEngine()
+            engine.start_watchdog(name="test-wd")
+
+        # cmd = [sys.executable, "-m", "fts.cli", "scheduler", "run"]
+        cmd = mock_cls.call_args.args[0]
+        assert cmd[1:] == ["-m", "fts.cli", "scheduler", "run"]
+        assert mock_cls.call_args.kwargs == {"name": "test-wd"}
+        # 线程参数
+        thread_kwargs = mock_thread_cls.call_args.kwargs
+        assert thread_kwargs["target"] is mock_watchdog.run
+        assert thread_kwargs["daemon"] is True
+        assert thread_kwargs["name"] == "test-wd-watchdog"
+
+    def test_start_watchdog_failure(self, caplog):
+        """ProcessWatchdog 构造失败时返回 None。"""
+        with patch(
+            "fts.scheduler.watchdog.ProcessWatchdog",
+            side_effect=RuntimeError("cannot spawn"),
+        ):
+            caplog.set_level(logging.WARNING)
+            engine = SchedulerEngine()
+            result = engine.start_watchdog()
+
+        assert result is None
+        assert "看门狗启动失败: cannot spawn" in caplog.text

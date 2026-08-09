@@ -9,6 +9,7 @@ import builtins
 import json
 import os
 import types
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -22,6 +23,48 @@ from fts.llm import (
     OpenAIClient,
     get_llm_client,
 )
+
+
+# ═══════════════════════════════════════════════════════════
+# 环境变量清理 helper
+#
+# 说明: 不使用 patch.dict(os.environ, {}, clear=True)，因为 WorkBuddy
+# 会注入超大环境变量（如 ACC_PRODUCT_CONFIG_V3 > 32767 字符），
+# clear=True 在恢复时触发 Windows 环境块长度限制（ValueError）。
+# 这里只定向清理 LLM 相关变量，不动其它环境变量。
+# ═══════════════════════════════════════════════════════════
+
+_LLM_ENV_KEYS = (
+    "FTS_LLM_BACKEND",
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL",
+    "OPENAI_BASE_URL",
+    "OPENAI_TEMPERATURE",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_TEMPERATURE",
+)
+
+
+@contextmanager
+def _llm_env(**overrides: str):
+    """临时移除 LLM 相关环境变量（可按需覆盖）。
+
+    退出时恢复原值；对未设置的变量保持未设置状态。
+    """
+    saved = {k: os.environ.get(k) for k in _LLM_ENV_KEYS}
+    for k in _LLM_ENV_KEYS:
+        os.environ.pop(k, None)
+    os.environ.update(overrides)
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
 
 
 # ═══════════════════════════════════════════════════════════
@@ -192,52 +235,49 @@ class TestGetLLMClient:
 
     def test_no_backend_no_key_returns_mock(self):
         """空 backend 且无任何 API Key 时返回 MockLLMClient。"""
-        with patch.dict(os.environ, {}, clear=True):
+        with _llm_env():
             client = get_llm_client()
             assert isinstance(client, MockLLMClient)
 
     def test_backend_mock_returns_mock(self):
         """backend='mock' 显式指定时返回 MockLLMClient。"""
-        with patch.dict(os.environ, {}, clear=True):
+        with _llm_env():
             client = get_llm_client(backend="mock")
             assert isinstance(client, MockLLMClient)
 
     def test_openai_api_key_returns_openai_client(self):
         """OPENAI_API_KEY 存在时返回 OpenAIClient。"""
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-key"}, clear=True):
+        with _llm_env(OPENAI_API_KEY="sk-test-key"):
             client = get_llm_client()
             assert isinstance(client, OpenAIClient)
 
     def test_anthropic_api_key_returns_anthropic_client(self):
         """ANTHROPIC_API_KEY 存在时返回 AnthropicClient。"""
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
+        with _llm_env(ANTHROPIC_API_KEY="sk-ant-test"):
             client = get_llm_client()
             assert isinstance(client, AnthropicClient)
 
     def test_openai_key_preferred_over_anthropic(self):
         """两者都存在时优先返回 OpenAIClient。"""
-        with patch.dict(os.environ, {
-            "OPENAI_API_KEY": "sk-test-key",
-            "ANTHROPIC_API_KEY": "sk-ant-test",
-        }, clear=True):
+        with _llm_env(OPENAI_API_KEY="sk-test-key", ANTHROPIC_API_KEY="sk-ant-test"):
             client = get_llm_client()
             assert isinstance(client, OpenAIClient)
 
     def test_backend_openai_without_key_returns_openai(self):
         """backend='openai' 且无 API Key 时仍返回 OpenAIClient。"""
-        with patch.dict(os.environ, {}, clear=True):
+        with _llm_env():
             client = get_llm_client(backend="openai")
             assert isinstance(client, OpenAIClient)
 
     def test_backend_anthropic_without_key_returns_anthropic(self):
         """backend='anthropic' 且无 API Key 时仍返回 AnthropicClient。"""
-        with patch.dict(os.environ, {}, clear=True):
+        with _llm_env():
             client = get_llm_client(backend="anthropic")
             assert isinstance(client, AnthropicClient)
 
     def test_fts_llm_backend_env_var(self):
         """FTS_LLM_BACKEND 环境变量生效。"""
-        with patch.dict(os.environ, {"FTS_LLM_BACKEND": "mock"}, clear=True):
+        with _llm_env(FTS_LLM_BACKEND="mock"):
             client = get_llm_client()
             assert isinstance(client, MockLLMClient)
 
@@ -729,3 +769,304 @@ class TestBuildBootstrapPrompt:
         )
         assert isinstance(prompt, str)
         assert len(prompt) > 0
+
+
+# ═══════════════════════════════════════════════════════════
+# _parse_json / _repair_json — 修复式解析（含截断 JSON）
+# ═══════════════════════════════════════════════════════════
+
+class TestParseJsonRepair:
+    """测试 _parse_json 修复式解析与 _repair_json 各分支。"""
+
+    def test_parse_json_repairs_truncated_brace(self):
+        """单层截断 JSON（缺闭合 }）经 _repair_json 修复成功（line 131）。"""
+        client = _make_mock_client('{"a": 1, "b": 2')
+        result = client.generate_json("test")
+        assert result == {"a": 1, "b": 2}
+
+    def test_repair_json_nested_truncation_current_behavior(self):
+        """嵌套未闭合对象按栈深度补全，不再丢字段（产品 bug 已修复）。
+
+        修复前：`elif match_end == -1` 分支只追加单个 "}"（未按栈深度补全），
+        导致 JSONDecodeError 后走逐段截断，静默丢弃嵌套字段；
+        修复后：按栈逆序补全闭合序列，嵌套字段完整保留。
+        """
+        client = _make_mock_client('{"a": 1, "b": {"c": 2')
+        result = client.generate_json("test")
+        assert result == {"a": 1, "b": {"c": 2}}
+
+    def test_parse_json_repairs_trailing_comma(self):
+        """末尾残留逗号经逐段截断修复。"""
+        client = _make_mock_client('{"a": 1, "b": 2, ')
+        result = client.generate_json("test")
+        assert result == {"a": 1, "b": 2}
+
+    def test_repair_json_no_brace_returns_none(self):
+        """无 {} 时 _repair_json 返回 None（line 146-147）。"""
+        assert LLMClient._repair_json("hello world") is None
+
+    def test_last_top_level_comma_ignores_string_comma(self):
+        """_last_top_level_comma 忽略字符串内的逗号（line 219-239）。"""
+        text = '{"a": ",", "b": 2}'
+        pos = LLMClient._last_top_level_comma(text)
+        # 顶层逗号位于字符串字面量 "," 之后（index 9）
+        assert pos == text.index('"b"') - 2
+        assert pos == 9
+
+    def test_last_top_level_comma_no_comma_returns_minus_one(self):
+        """无顶层逗号返回 -1。"""
+        assert LLMClient._last_top_level_comma('{"a": 1}') == -1
+
+    def test_escape_newlines_in_json_values(self):
+        """字符串值内的实际换行符被替换为 \\n（line 254-256）。"""
+        text = '{"code": "line1\nline2"}'
+        escaped = LLMClient._escape_newlines_in_json(text)
+        assert "\\n" in escaped
+        assert "\n" not in escaped
+
+    def test_escape_newlines_keeps_existing_escapes(self):
+        """已转义的 \\n 序列保持不变（line 258-260）。"""
+        text = '{"code": "a\\\\nb"}'
+        escaped = LLMClient._escape_newlines_in_json(text)
+        assert 'a\\\\nb' in escaped
+
+    def test_parse_json_with_raw_newlines_in_string(self):
+        """含实际换行符的 JSON 字符串经修复后解析成功（line 266-267）。"""
+        text = '{"code": "def f():\n    return 1", "name": "x"}'
+        client = _make_mock_client(text)
+        result = client.generate_json("test")
+        assert result["name"] == "x"
+        assert "return 1" in result["code"]
+
+    def test_repair_json_ignores_trailing_garbage(self):
+        """完整 JSON + 尾部垃圾 → 提取完整对象（line 194）。"""
+        assert LLMClient._repair_json('{"a": 1} trailing') == {"a": 1}
+
+    def test_repair_json_closes_nested_with_brace_seen(self):
+        """出现部分 } 后按栈补全剩余闭合（line 185-189）。"""
+        assert LLMClient._repair_json('{"a": {"b": 1}, "c": 2') == {"a": {"b": 1}}
+
+    def test_repair_json_handles_escape_sequences(self):
+        """含转义引号（\\"）的文本扫描正确（line 158-162）。"""
+        assert LLMClient._repair_json('{"a": "b\\"c"') == {"a": 'b"c'}
+
+    def test_repair_json_unmatched_brace_in_bracket(self):
+        """'[' 内遇到 '}' 时 last_brace_pos 仍更新且不匹配弹出（line 173-178）。"""
+        assert LLMClient._repair_json('{"a": [}') is None
+
+    def test_last_top_level_comma_skips_escaped_commas(self):
+        """_last_top_level_comma 跳过转义字符后的逗号（line 225-229）。"""
+        text = '{"a": "b\\,c", "d": 1}'
+        pos = LLMClient._last_top_level_comma(text)
+        # 顶层逗号是 "d" 前的逗号，而非 "b\,c" 内的逗号
+        assert pos == text.index('"d"') - 2
+
+    def test_repair_json_closes_complete_array(self):
+        """完整闭合数组时 ']' 正常弹出栈（line 182-183）。"""
+        assert LLMClient._repair_json('{"a": [1]}') == {"a": [1]}
+
+    def test_repair_json_multi_step_truncation(self):
+        """逐段截断多次仍失败时 continue 继续截断（line 211-212）。"""
+        # 非法字段值 "c": , 导致首次截断结果仍非法 → continue 二次截断
+        assert LLMClient._repair_json('{"a": 1, "b": 2, "c": ,') == {"a": 1, "b": 2}
+
+    def test_last_top_level_comma_handles_trailing_escape(self):
+        """尾部含转义符时 escape 状态正确处理（line 225-226, 228-229）。"""
+        # 从后往前扫描时先遇到 \\ 再遇到字符串边界
+        assert LLMClient._last_top_level_comma('{"a": "b\\\\c"}') == -1
+
+
+# ═══════════════════════════════════════════════════════════
+# OpenAIClient.complete — temperature 透传
+# ═══════════════════════════════════════════════════════════
+
+class TestOpenAIClientTemperature:
+    """测试 OpenAIClient.complete 的 temperature 分支（line 345）。"""
+
+    def test_complete_passes_explicit_temperature(self):
+        """显式 temperature 传入请求 kwargs。"""
+        mock_client = MagicMock()
+        choice = MagicMock()
+        choice.message.content = "ok"
+        resp = MagicMock()
+        resp.choices = [choice]
+        resp.usage = None
+        mock_client.chat.completions.create.return_value = resp
+
+        mock_openai_mod = types.ModuleType("openai")
+        mock_openai_mod.OpenAI = MagicMock(return_value=mock_client)
+        with patch.dict("sys.modules", {"openai": mock_openai_mod}):
+            client = OpenAIClient(api_key="sk-test", max_retries=0, temperature=0.7)
+            text, _ = client.complete("test")
+            assert text == "ok"
+            kwargs = mock_client.chat.completions.create.call_args.kwargs
+            assert kwargs["temperature"] == 0.7
+            # model 默认取环境变量（OPENAI_MODEL），未设置时才是 gpt-4o
+            assert kwargs["model"] == client._model
+
+    def test_complete_temperature_from_env(self):
+        """OPENAI_TEMPERATURE 环境变量生效。"""
+        mock_client = MagicMock()
+        choice = MagicMock()
+        choice.message.content = "ok"
+        resp = MagicMock()
+        resp.choices = [choice]
+        resp.usage = None
+        mock_client.chat.completions.create.return_value = resp
+
+        mock_openai_mod = types.ModuleType("openai")
+        mock_openai_mod.OpenAI = MagicMock(return_value=mock_client)
+        with _llm_env(OPENAI_TEMPERATURE="0.3"):
+            with patch.dict("sys.modules", {"openai": mock_openai_mod}):
+                client = OpenAIClient(api_key="sk-test", max_retries=0)
+                assert client._temperature == 0.3
+                client.complete("test")
+                kwargs = mock_client.chat.completions.create.call_args.kwargs
+                assert kwargs["temperature"] == 0.3
+
+    def test_complete_no_temperature_kwarg_when_none(self):
+        """temperature 为 None 时不传 temperature 参数。"""
+        mock_client = MagicMock()
+        choice = MagicMock()
+        choice.message.content = "ok"
+        resp = MagicMock()
+        resp.choices = [choice]
+        resp.usage = None
+        mock_client.chat.completions.create.return_value = resp
+
+        mock_openai_mod = types.ModuleType("openai")
+        mock_openai_mod.OpenAI = MagicMock(return_value=mock_client)
+        with _llm_env():
+            with patch.dict("sys.modules", {"openai": mock_openai_mod}):
+                client = OpenAIClient(api_key="sk-test", max_retries=0)
+                client.complete("test")
+                kwargs = mock_client.chat.completions.create.call_args.kwargs
+                assert "temperature" not in kwargs
+
+
+# ═══════════════════════════════════════════════════════════
+# OpenAIClient.bootstrap_factors — JSON 修复重试 / 调试文件
+# ═══════════════════════════════════════════════════════════
+
+class TestOpenAIBootstrapFactorsRepair:
+    """测试 bootstrap_factors 的 JSON 解析失败重试与调试文件写失败。"""
+
+    def test_first_json_invalid_then_repair_succeeds(self):
+        """首次 JSON 非法 → 构造修复 prompt 重试 → 成功（line 412-426）。"""
+        import os as _os
+        good = json.dumps({
+            "candidates": [
+                {"name": "f1", "code": "def factor_program(data, params): pass"}
+            ]
+        })
+        bad = '{"candidates": [{"name": "f1", "code": "broken'
+        client = OpenAIClient(api_key="sk-test", max_retries=0)
+        # complete 返回 (text, tokens) 元组
+        client.complete = MagicMock(side_effect=[(bad, 0), (good, 0)])
+
+        result = client.bootstrap_factors({"close": [1]}, [], 5, "trace_repair_001")
+
+        assert len(result) == 1
+        assert result[0]["name"] == "f1"
+        assert client.complete.call_count == 2
+        # 第二次调用的 prompt 是修复 prompt
+        second_prompt = client.complete.call_args_list[1].args[0]
+        assert "重新生成" in second_prompt
+        assert "broken" in second_prompt
+        # 清理产品代码写入的调试文件（删除失败可忽略：钩子/权限等环境因素）
+        for f in ("debug_llm_response_trace_repair_001_0.txt",
+                  "debug_llm_response_trace_repair_001_1.txt"):
+            if _os.path.exists(f):
+                try:
+                    _os.remove(f)
+                except OSError:
+                    pass
+
+    def test_json_always_invalid_returns_empty_after_retry(self):
+        """两次都非法 → 返回空列表（重试耗尽）。"""
+        import os as _os
+        bad = '{"candidates": broken'
+        client = OpenAIClient(api_key="sk-test", max_retries=0)
+        client.complete = MagicMock(return_value=(bad, 0))
+
+        result = client.bootstrap_factors({}, [], 5, "trace_repair_002")
+        assert result == []
+        assert client.complete.call_count == 2
+        # 清理产品代码写入的调试文件（删除失败可忽略：钩子/权限等环境因素）
+        for f in ("debug_llm_response_trace_repair_002_0.txt",
+                  "debug_llm_response_trace_repair_002_1.txt"):
+            if _os.path.exists(f):
+                try:
+                    _os.remove(f)
+                except OSError:
+                    pass
+
+    def test_debug_file_write_failure_does_not_break(self):
+        """调试文件写入失败被吞掉，不中断流程（line 405-406）。"""
+        good = json.dumps({
+            "candidates": [
+                {"name": "f2", "code": "def factor_program(data, params): pass"}
+            ]
+        })
+        client = OpenAIClient(api_key="sk-test", max_retries=0)
+        client.complete = MagicMock(return_value=(good, 0))
+        with patch("builtins.open", side_effect=OSError("denied")):
+            result = client.bootstrap_factors({}, [], 5, "trace_repair_003")
+        assert len(result) == 1
+        assert result[0]["name"] == "f2"
+
+    def test_build_repair_prompt_contains_snippet(self):
+        """_build_repair_prompt 包含失败片段与候选数（line 533-534）。"""
+        prompt = OpenAIClient._build_repair_prompt('{"candidates": [broken', 3)
+        assert "broken" in prompt
+        assert "3" in prompt
+        assert "重新生成" in prompt
+
+
+# ═══════════════════════════════════════════════════════════
+# AnthropicClient.complete — temperature 透传
+# ═══════════════════════════════════════════════════════════
+
+class TestAnthropicClientTemperature:
+    """测试 AnthropicClient.complete 的 temperature 分支（line 604）。"""
+
+    def test_complete_passes_explicit_temperature(self):
+        """显式 temperature 传入请求 kwargs。"""
+        mock_client = MagicMock()
+        text_content = MagicMock()
+        text_content.text = "claude_ok"
+        resp = MagicMock()
+        resp.content = [text_content]
+        resp.usage = None
+        mock_client.messages.create.return_value = resp
+
+        mock_anthropic_mod = types.ModuleType("anthropic")
+        mock_anthropic_mod.Anthropic = MagicMock(return_value=mock_client)
+        with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
+            client = AnthropicClient(api_key="sk-ant-test", max_retries=0,
+                                     temperature=0.5)
+            text, _ = client.complete("test")
+            assert text == "claude_ok"
+            kwargs = mock_client.messages.create.call_args.kwargs
+            assert kwargs["temperature"] == 0.5
+            assert kwargs["model"] == "claude-sonnet-4-20250514"
+
+
+# ═══════════════════════════════════════════════════════════
+# get_llm_client — config 读取异常回退
+# ═══════════════════════════════════════════════════════════
+
+class TestGetLLMClientConfigError:
+    """测试 get_llm_client 的 config 读取异常分支（line 725-726）。"""
+
+    def test_config_error_falls_back_to_none_temperature(self):
+        """get_config 抛异常时 temperature 回退为 None，仍返回 Mock 客户端。"""
+        with _llm_env():
+            with patch(
+                "fts.config.settings.get_config",
+                side_effect=RuntimeError("config broken"),
+            ):
+                client = get_llm_client()
+        assert isinstance(client, MockLLMClient)
+        # 未设置 _temperature（Mock 客户端无此属性）
+        assert hasattr(client, "_responses")

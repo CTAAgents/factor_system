@@ -96,16 +96,16 @@ def factor_program(data, params):
     import numpy as np
     close = data['close'].values if hasattr(data, 'close') else data['close']
     n = len(close)
-    j = int(params.get('lookback', 243))
-    k = int(params.get('holding', 10))
+    j = int(params.get('lookback', 60))
+    k = int(params.get('holding', 5))
     if n < j + k + 1:
         return np.zeros(n)
     # XSMOM 成分
     ret = np.zeros(n)
     ret[j:] = (close[j:] - close[:-j]) / np.maximum(close[:-j], 1e-10)
     xs = np.tanh(ret / 0.05)
-    # TSMOM 成分
-    ts = np.sign(ret) * 0.5
+    # TSMOM 成分：用平滑后的符号（0.5 强度）保留方向
+    ts = np.tanh(ret * 10) * 0.4
     # 复合动量
     sig = xs * 0.6 + ts * 0.4
     return np.clip(sig, -1.0, 1.0)
@@ -140,15 +140,16 @@ def factor_program(data, params):
     import numpy as np
     close = data['close'].values if hasattr(data, 'close') else data['close']
     n = len(close)
-    window = int(params.get('lookback', 5))
+    window = int(params.get('lookback', 20))  # 修复：原 5 改为 20，与 5日 MA 区分
     hold = int(params.get('holding', 15))
     if n < window + 5 + hold:
         return np.zeros(n)
-    # 用多周期 MA 斜率近似展期收益率
+    # 用多周期 MA 斜率近似展期收益率：5日(近月) vs 20日(远月)
     ma_short = np.convolve(close, np.ones(5)/5, mode='same')
     ma_long = np.convolve(close, np.ones(window)/window, mode='same')
     roll_yield = (ma_short - ma_long) / np.maximum(ma_long, 1e-10)
-    sig = np.clip(roll_yield / 0.1, -1.0, 1.0)
+    # 缩放：roll_yield 数值通常较小（千分之几），原 0.1 过大导致信号饱和
+    sig = np.tanh(roll_yield * 200)
     return np.clip(sig, -1.0, 1.0)
 """
 
@@ -571,8 +572,14 @@ def factor_program(data, params):
     hist_vol = np.array([np.std(returns[max(0, i-20+1):i+1]) for i in range(window)])
     p90 = np.percentile(hist_vol, 90) if len(hist_vol) > 0 else 1e10
     recent_vol = np.array([np.std(returns[max(0, i-20+1):i+1]) for i in range(n)])
-    ratio = recent_vol / max(p90, 1)
-    sig = -np.tanh((ratio - 1) * 5)
+    ratio = recent_vol / max(p90, 1e-10)
+    # 修复：原 (ratio-1)*5 导致 tanh 100% 饱和，改用 z-score 标准化
+    ratio_mean = np.mean(ratio[window:])
+    ratio_std = np.std(ratio[window:])
+    if ratio_std < 1e-10:
+        return np.zeros(n)
+    z = (ratio - ratio_mean) / ratio_std
+    sig = -np.tanh(z)
     return np.clip(sig, -1.0, 1.0)
 """
 
@@ -670,8 +677,8 @@ def factor_program(data, params):
     import numpy as np
     close = data['close'].values if hasattr(data, 'close') else data['close']
     n = len(close)
-    j = int(params.get('lookback', 243))
-    k = int(params.get('holding', 10))
+    j = int(params.get('lookback', 60))  # 修复：原 243 改为 60，适配 250日 数据
+    k = int(params.get('holding', 5))
     if n < j + k + 1:
         return np.zeros(n)
     # 时序回归：close ~ time 的 OLS 斜率，综合趋势强度和流畅性
@@ -685,7 +692,11 @@ def factor_program(data, params):
             r2[i] = np.corrcoef(x, y)[0, 1]**2
     # R² 高的趋势更可靠
     quality = r2 * slope
-    sig = np.tanh(quality * 100)
+    # 修复：原 *100 过大导致 tanh 饱和，改用 z-score
+    valid = quality[j+k:]
+    if len(valid) < 2 or np.std(valid) < 1e-10:
+        return np.zeros(n)
+    sig = np.tanh((quality - np.mean(valid)) / np.std(valid))
     return np.clip(sig, -1.0, 1.0)
 """
 
@@ -1011,10 +1022,13 @@ def factor_program(data, params):
         sig = -np.tanh((us_arr - np.mean(us_arr)) / np.maximum(np.std(us_arr), 1e-10))
     else:
         n = len(close)
-        if n < 20:
+        if n < 60:
             return np.zeros(n)
-        # 美债收益率上升 => 商品承压的近似
-        sig = np.zeros(n) * 0.2
+        # 修复：原 np.zeros(n)*0.2 始终为 0，改为 close 长期趋势近似
+        # 美债收益率上升=美元走强=商品承压（trend ↑ => 商品 ↓）
+        trend = np.zeros(n)
+        trend[60:] = (close[60:] - close[:-60]) / np.maximum(close[:-60], 1e-10)
+        sig = -np.tanh(trend * 5) * 0.3
     return np.clip(sig, -1.0, 1.0)
 """
 
@@ -1351,12 +1365,18 @@ def factor_program(data, params):
     n = len(close)
     if n < 6:
         return np.zeros(n)
-    # VWAP替代版：rank(close - settle) * rank(settle / delay(settle, 5))
+    # VWAP替代版：close-settle 偏离 × settle 短期动量
     # ⚠️ 低置信度，用结算价替代VWAP
     close_settle_diff = close - settle
-    settle_ratio = settle / np.maximum(np.roll(settle, 5), 1e-10)
-    # 简化版rank：用符号代替
-    sig = np.sign(close_settle_diff) * np.sign(settle_ratio - 1.0)
+    settle_ratio = settle / np.maximum(np.roll(settle, 5), 1e-10) - 1.0
+    # 修复：原 sign*sign 导致 97.7% 饱和，改用 z-score 标准化
+    valid_diff = close_settle_diff[5:]
+    valid_ratio = settle_ratio[5:]
+    if np.std(valid_diff) < 1e-10 or np.std(valid_ratio) < 1e-10:
+        return np.zeros(n)
+    z_diff = (close_settle_diff - np.mean(valid_diff)) / np.std(valid_diff)
+    z_ratio = (settle_ratio - np.mean(valid_ratio)) / np.std(valid_ratio)
+    sig = z_diff * z_ratio * 0.25
     return np.clip(sig, -1.0, 1.0)
 """
 
@@ -1369,11 +1389,15 @@ def factor_program(data, params):
     n = len(close)
     if n < 2:
         return np.zeros(n)
-    # 1日反转：rank(-delta(close, 1))
+    # 1日反转：rank(-delta(close, 1)) 改为连续 z-score
     delta_1d = np.zeros(n)
     delta_1d[1:] = close[1:] - close[:-1]
-    # 简化版rank：用符号代替
-    sig = -np.sign(delta_1d)
+    # 修复：原 -np.sign(delta_1d) 导致 97.9% 饱和，改用 z-score 标准化
+    valid = delta_1d[1:]
+    if np.std(valid) < 1e-10:
+        return np.zeros(n)
+    z = (delta_1d - np.mean(valid)) / np.std(valid)
+    sig = -z * 0.5
     return np.clip(sig, -1.0, 1.0)
 """
 
@@ -1559,12 +1583,17 @@ def factor_program(data, params):
     n = len(close)
     if n < 2:
         return np.zeros(n)
-    # 持仓确认：sign(close - delay(close,1)) * sign(oi - delay(oi,1))
+    # 持仓确认：close 变化方向 × oi 变化方向 的确认强度
     close_delta = np.zeros(n)
     close_delta[1:] = close[1:] - close[:-1]
     hold_delta = np.zeros(n)
     hold_delta[1:] = hold[1:] - hold[:-1]
-    sig = np.sign(close_delta) * np.sign(hold_delta)
+    # 修复：原 sign*sign 导致 97.7% 饱和，改用相对变化率连续化
+    close_pct = np.zeros(n)
+    hold_pct = np.zeros(n)
+    close_pct[1:] = close_delta[1:] / np.maximum(np.abs(close[:-1]), 1e-10)
+    hold_pct[1:] = hold_delta[1:] / np.maximum(np.abs(hold[:-1]), 1e-10)
+    sig = close_pct * hold_pct * 50  # 缩放使信号分布合理
     return np.clip(sig, -1.0, 1.0)
 """
 
@@ -1635,8 +1664,8 @@ _FUTURES_FULL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "fut_composite_momentum",
         "code": _FUT_COMPOSITE_MOMENTUM_CODE,
-        "params": {"lookback": 243, "holding": 10},
-        "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=250),
+        "params": {"lookback": 60, "holding": 5},
+        "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=70),
         "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4,
             narrative="复合动量：XSMOM+TSMOM 结合，同时考虑截面排序和方向。中信最优参数(J=243,K=10)年化9.61%夏普0.95。"),
     },
@@ -1653,8 +1682,8 @@ _FUTURES_FULL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "fut_roll_yield_carry",
         "code": _FUT_ROLL_YIELD_FULL_CODE,
-        "params": {"lookback": 5, "holding": 15},
-        "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
+        "params": {"lookback": 20, "holding": 15},
+        "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=40),
         "economic_logic": EconomicLogic(theory=5, behavioral=3, microstructure=4, institutional=5,
             narrative="展期收益(Roll Yield/Carry)：Back结构做多获得展期收益，Contango做空。华泰年化9.63%夏普1.94。"),
     },
@@ -1859,8 +1888,8 @@ _FUTURES_FULL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "fut_time_series_regression",
         "code": _FUT_TIME_SERIES_REGRESSION_CODE,
-        "params": {"lookback": 243, "holding": 10},
-        "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=250),
+        "params": {"lookback": 60, "holding": 5},
+        "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=70),
         "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4,
             narrative="时序回归因子：close~time OLS 斜率，综合考虑趋势强度和流畅性(R²加权)。中信年化8.90%夏普1.34。"),
     },

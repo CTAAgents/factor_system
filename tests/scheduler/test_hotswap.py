@@ -14,6 +14,35 @@ import pytest
 from fts.scheduler.hotswap import HotSwapWatcher, _reload_module
 
 
+@pytest.fixture
+def fake_watchdog_modules():
+    """注入 fake watchdog 模块到 sys.modules（环境未安装 watchdog 时可用）。
+
+    hotswap.py 在 start() 内 `from watchdog.observers import Observer`，
+    测试通过 `patch("watchdog.observers.Observer")` 拦截；若 watchdog 未安装，
+    patch 解析目标路径时会抛 ModuleNotFoundError。本 fixture 先注入空模块，
+    使 patch 路径可解析。
+    """
+    import sys
+    import types
+
+    watchdog = types.ModuleType("watchdog")
+    observers = types.ModuleType("watchdog.observers")
+    events = types.ModuleType("watchdog.events")
+    # 使 watchdog 成为可包含子模块的包（patch("watchdog.observers.Observer") 需要 import 子模块）
+    watchdog.__path__ = []
+    watchdog.observers = observers
+    watchdog.events = events
+    observers.Observer = MagicMock()
+    events.FileSystemEventHandler = type("FileSystemEventHandler", (), {})
+    with patch.dict(sys.modules, {
+        "watchdog": watchdog,
+        "watchdog.observers": observers,
+        "watchdog.events": events,
+    }, clear=False):
+        yield {"watchdog": watchdog, "observers": observers, "events": events}
+
+
 # ─── HotSwapWatcher ─────────────────────────────────────
 
 
@@ -212,7 +241,7 @@ class TestHotSwapWatcherImportError:
 class TestHotSwapWatcherStartSuccess:
     """start() 成功时调度行为测试。"""
 
-    def test_start_schedules_existing_dirs(self):
+    def test_start_schedules_existing_dirs(self, fake_watchdog_modules):
         """start 成功时应为每个存在的目录调度 observer。"""
         watcher = HotSwapWatcher(watch_dirs=["fts/factor_engine", "fts/scheduler"])
 
@@ -234,7 +263,7 @@ class TestHotSwapWatcherStartSuccess:
             args, kwargs = call
             assert kwargs.get("recursive") is True
 
-    def test_start_skips_nonexistent_dirs(self):
+    def test_start_skips_nonexistent_dirs(self, fake_watchdog_modules):
         """start 时跳过不存在的目录。"""
         watcher = HotSwapWatcher(watch_dirs=["/nonexistent/path"])
 
@@ -251,7 +280,7 @@ class TestHotSwapWatcherStartSuccess:
         mock_observer.schedule.assert_not_called()
         mock_logger.warning.assert_any_call("[hotswap] watch dir not found: %s", Path("/nonexistent/path"))
 
-    def test_on_modified_calls_reload_for_py_files(self):
+    def test_on_modified_calls_reload_for_py_files(self, fake_watchdog_modules):
         """on_modified 中 .py 文件应调用 _reload_module。"""
         watcher = HotSwapWatcher(watch_dirs=["fts/factor_engine"])
 
@@ -281,7 +310,7 @@ class TestHotSwapWatcherStartSuccess:
             handler.on_modified(mock_event_py)
             mock_reload.assert_called_once_with("/path/to/module.py")
 
-    def test_on_modified_ignores_non_py_files(self):
+    def test_on_modified_ignores_non_py_files(self, fake_watchdog_modules):
         """on_modified 中非 .py 文件不调用 _reload_module。"""
         watcher = HotSwapWatcher(watch_dirs=["fts/factor_engine"])
 

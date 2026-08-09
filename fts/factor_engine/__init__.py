@@ -179,6 +179,12 @@ from .audit import (
     AuditItemResult,
     AuditItemStatus,
 )
+from .high_ic_screener import (
+    HighICScreener,
+    HighICScreenConfig,
+    HighICScreenReport,
+    HighICCheckItem,
+)
 from .feature_ops import (
     OperatorInfo,
     OperatorRegistry,
@@ -384,6 +390,11 @@ __all__ = [
     "FactorAuditReport",
     "AuditItemResult",
     "AuditItemStatus",
+    # ─── 高IC筛查剔除 (Phase B.4 v1.0.0)────────────────
+    "HighICScreener",
+    "HighICScreenConfig",
+    "HighICScreenReport",
+    "HighICCheckItem",
     # ─── 特征工程中台 (Phase C.1 v0.1.0)────────────────
     "OperatorInfo",
     "OperatorRegistry",

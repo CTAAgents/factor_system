@@ -68,6 +68,10 @@ class FTSConfig:
     llm_backend: str = field(
         default_factory=lambda: os.getenv("FTS_LLM_BACKEND", "")
     )
+    # LLM 采样温度；提高可增加因子多样性（默认 1.2 > provider 默认 1.0）
+    llm_temperature: float = field(
+        default_factory=lambda: float(os.getenv("FTS_LLM_TEMPERATURE", "1.2"))
+    )
 
     # ── 演化配置 ──
     # ── 演化模式 (Phase C.2): operator(算子主干) / code(代码创新) / hybrid(混合) ──

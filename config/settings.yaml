@@ -9,6 +9,8 @@ llm_backend: "openai"
 # API Key 通过环境变量 OPENAI_API_KEY 设置
 # API 端点通过环境变量 OPENAI_BASE_URL=https://api.deepseek.com/v1 设置
 # 模型通过环境变量 OPENAI_MODEL=deepseek-chat 设置
+# LLM 采样温度（0.0-2.0），调高可增加因子生成多样性；默认 1.2
+llm_temperature: 1.2
 
 # ── 演化配置 ──
 max_generations: 10

@@ -4,6 +4,7 @@ fts.monitor — FTS 健康监控 + 精英因子跟踪。
 提供:
     - check_loop_status(): 检查单个循环状态
     - check_all_status():  检查所有循环状态
+    - check_data_sources_status():  检查所有数据源状态（14.5）
     - format_status_report(): 格式化状态报告（人类可读）
     - EliteFactorTracker: 精英因子样本外跟踪
     - AutoRetireManager: 自动淘汰管理
@@ -13,7 +14,7 @@ HARNESS §可观测性: 监控数据应包含 trace_id、运行时间、状态�
 底层调用 factor_engine.monitor（从 FDT loop_engine/monitor.py 迁移），
 本模块提供 FTS 项目级的封装接口。
 
-版本: v0.1.0
+版本: v0.2.0
 """
 # pylint: disable=too-many-instance-attributes
 
@@ -99,6 +100,33 @@ def _loop_status_to_report(status: LoopStatus) -> LoopStatusReport:
         tokens_consumed=status.tokens_consumed,
         age_hours=float(status.age_hours),
     )
+
+
+def check_data_sources_status(project_root: Optional[Path] = None) -> dict:
+    """检查所有多源期货数据源健康度（Phase 14.5）。
+
+    Returns:
+        dict: 包含 healthy / source_count / any_circuit_open / sources / error 等字段
+    """
+    try:
+        from ..cli import _build_default_aggregator
+        agg = _build_default_aggregator()
+        status = agg.get_source_status()
+    except Exception as e:  # noqa: BLE001
+        return {
+            "healthy": False,
+            "source_count": 0,
+            "any_circuit_open": False,
+            "sources": {},
+            "error": str(e),
+        }
+    any_open = any(s.get("circuit_open", False) for s in status.values())
+    return {
+        "healthy": not any_open,
+        "source_count": len(status),
+        "any_circuit_open": any_open,
+        "sources": status,
+    }
 
 
 def check_loop_status(loop_name: str,
@@ -218,6 +246,7 @@ __all__ = [
     "SystemStatusReport",
     "check_loop_status",
     "check_all_status",
+    "check_data_sources_status",  # 14.5
     "format_status_report",
     "status_report_to_json",
     # Web UI

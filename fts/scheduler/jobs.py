@@ -393,6 +393,86 @@ def data_quality_eval_job() -> None:
         logger.error("[数据质量] 评估失败: %s (trace_id=%s)", e, trace_id)
 
 
+# ── 期货多源数据同步 — 工作日 17:30（Phase 14.5）───────────
+
+def sync_futures_data_job(symbols: list[str] | None = None, days: int = 120) -> None:
+    """执行期货多源数据同步（Phase 14.5，工作日 17:30 调度）。
+
+    对每个品种通过默认聚合器拉取 K 线并写缓存；单个品种失败不中断，
+    完成后将同步摘要（gzip JSON）落盘 data/_lineage/sync_summary_*.json.gz。
+
+    Args:
+        symbols: 品种代码列表；None 时使用 FUTURES_CORE_SUBSET。
+        days: 回溯天数。
+    """
+    trace_id = f"fts.sync.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[Sync] 期货多源数据同步启动 trace_id=%s", trace_id)
+
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.cli import _build_default_aggregator
+        agg = _build_default_aggregator()
+    except Exception as e:
+        logger.error("[Sync] 聚合器初始化失败: %s (trace_id=%s)", e, trace_id, exc_info=True)
+        return
+
+    if symbols is None:
+        from fts.data_futures import FUTURES_CORE_SUBSET
+        symbols = list(FUTURES_CORE_SUBSET)
+
+    import gzip
+    import json
+
+    started_at = datetime.now().isoformat()
+    success = 0
+    failure = 0
+    total_rows = 0
+    failures: list[dict] = []
+
+    for sym in symbols:
+        try:
+            df = agg.get_ohlcv(sym, days, trace_id)
+            if df is None or len(df) == 0:
+                failure += 1
+                failures.append({"symbol": sym, "error": "empty data"})
+            else:
+                success += 1
+                total_rows += int(len(df))
+        except Exception as e:  # noqa: BLE001
+            failure += 1
+            failures.append({"symbol": sym, "error": str(e)})
+
+    try:
+        source_status = agg.get_source_status()
+    except Exception:  # noqa: BLE001
+        source_status = {}
+
+    finished_at = datetime.now().isoformat()
+    summary = {
+        "trace_id": trace_id,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "elapsed_seconds": round((datetime.now() - datetime.fromisoformat(started_at)).total_seconds(), 3),
+        "symbols_total": len(symbols),
+        "success": success,
+        "failure": failure,
+        "failures": failures,
+        "total_rows": total_rows,
+        "source_status": source_status,
+    }
+
+    lineage_dir = Path("data") / "_lineage"
+    lineage_dir.mkdir(parents=True, exist_ok=True)
+    out_path = lineage_dir / f"sync_summary_{datetime.now().strftime('%Y%m%d%H%M%S')}.json.gz"
+    with gzip.open(out_path, "wt", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False)
+
+    logger.info("[Sync] 完成: total=%d success=%d failure=%d rows=%d -> %s (trace_id=%s)",
+                len(symbols), success, failure, total_rows, out_path.name, trace_id)
+
+
+
+
 __all__ = [
     "l1_meta_loop_job",
     "l2_evolution_loop_job",
@@ -403,4 +483,5 @@ __all__ = [
     "data_quality_eval_job",
     "logic_monitor_job",
     "factor_inspector_job",
+    "sync_futures_data_job",
 ]

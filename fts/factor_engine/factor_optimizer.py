@@ -23,6 +23,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
+from pickle import UnpicklingError
 from typing import Any, Callable, Optional
 
 import numpy as np
@@ -196,7 +197,7 @@ class CorrelationCache:
                 self._matrices[mid] = result
                 self._stats["hits"] += 1
                 return result
-            except (IOError, ValueError):
+            except (IOError, ValueError, EOFError, UnpicklingError):
                 pass
 
         self._stats["misses"] += 1
@@ -979,11 +980,9 @@ class FactorOptimizer:
                 if arr is not None and len(arr) > 0:
                     all_signals[fname].append(arr)
 
-        # 对齐长度
-        min_len = min(
-            min(len(a) for a in all_signals.values()) if all_signals else 0,
-            5000,  # 限制最大长度
-        )
+        # 对齐长度: 取所有信号数组的最小长度（非列表长度，单品种时不退化）
+        lengths = [len(a) for sigs in all_signals.values() for a in sigs]
+        min_len = min(min(lengths) if lengths else 0, 5000, max_samples)
 
         if min_len == 0:
             return np.zeros((n_factors, n_factors)), factor_names

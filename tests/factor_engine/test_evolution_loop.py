@@ -228,9 +228,10 @@ def _mock_seed_evaluation_pass(loop: EvolutionLoop) -> None:
             "ic": 0.05, "icir": 1.5, "sharpe": 2.0,
             "monotonicity": True, "max_drawdown": 0.05,
             "turnover_monthly": 0.3,
+            "oos_ratio": 0.35,  # v2.50.0 种子路径新增 Verifier 判定所需字段
         },
         "economic_score": {"dimensions_passed": 4},
-        "level_3_multiple": {"passed": True},
+        "level_3_multiple": {"passed": True, "adjusted_t": 3.5, "fdr_q": 0.01},
         "total_ic": 0.05,
         "oos_results": [{"passed": True, "ic_consistency": 0.8}],
         "p_values": [0.01, 0.02],
@@ -245,6 +246,12 @@ def _mock_seed_evaluation_pass(loop: EvolutionLoop) -> None:
     mock_repo = MagicMock()
     mock_repo.get_factor_by_name = MagicMock(return_value=None)
     loop._get_repo = MagicMock(return_value=mock_repo)
+    # v2.50.0 种子路径新增的 Verifier/消融/因果/鲁棒/SHAP 审查 mock 通过
+    loop.verifier.check = MagicMock(return_value={"passed": True, "failure_reasons": []})
+    loop._run_ablation_check = MagicMock(return_value={"passed": True})
+    loop._run_causal_validation = MagicMock(return_value={"passed": True})
+    loop._run_robustness_check = MagicMock(return_value={"passed": True})
+    loop._run_shap_analysis = MagicMock(return_value={})
 
 
 def _mock_review_pass(loop: EvolutionLoop) -> None:
@@ -364,14 +371,17 @@ def test_evolution_loop_record_experience_traces(
         llm_client=mock_llm_client,
         n_trials_micro=3,
     )
+    # 种子评估 + 审查模块 mock 通过，确保主流程产生评估轨迹（消除 MockLLM 合成数据随机性导致的 skip）
+    _mock_seed_evaluation_pass(loop)
+    _mock_review_pass(loop)
+    loop.verifier = MagicMock()
+    loop.verifier.check.return_value = {"passed": True, "failure_reasons": []}
     loop.run(max_generation=2)
 
     success_dir = tmp_memory_dir / "success"
     failure_dir = tmp_memory_dir / "failure"
-    # 至少有一个目录有轨迹（合成数据下大概率失败）
+    # 至少有一个目录有轨迹
     total = len(list(success_dir.glob("*.json"))) + len(list(failure_dir.glob("*.json")))
-    if total == 0:
-        pytest.skip("MockLLM 未生成有效因子（合成数据下正常现象）")
     assert total > 0
 
 
@@ -1038,10 +1048,6 @@ class TestEvolutionLoopCoverage:
 
     # ─── Verifier → 晋级精英池（line 213-221）─────────────
 
-    # GAP-030: 依赖 LLM mock 环境，本地无法稳定运行（run() 集成测试），跳过
-    @pytest.mark.skip(
-        reason="GAP-030: 依赖 LLM mock 环境，本地无法稳定运行（total_factors_promoted 断言环境相关）"
-    )
     def test_evolution_loop_promote_to_elite(
         self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
     ):
@@ -1109,10 +1115,6 @@ class TestEvolutionLoopCoverage:
 
     # ─── 失败率熔断（line 293-295）───────────────────────
 
-    # GAP-030: 依赖 LLM mock 环境，本地无法稳定运行（run() 集成测试），跳过
-    @pytest.mark.skip(
-        reason="GAP-030: 依赖 LLM mock 环境，本地无法稳定运行（circuit_breaker 断言环境相关）"
-    )
     def test_evolution_loop_failure_rate_circuit_breaker(
         self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
     ):
@@ -1142,12 +1144,24 @@ class TestEvolutionLoopCoverage:
         # 运行时校验和快速预筛选 mock 通过（算子因子需 mock 绕过实时执行）
         loop._check_factor_runtime = MagicMock(return_value=(True, ""))
         loop._quick_prefilter = MagicMock(return_value=(True, ""))
-        # 让 Verifier 拒绝所有因子（主循环中评估通过但 Verifier 判定失败）
-        # 这样种子因子能通过评估（IC>=0.03 的种子晋升），
-        # 但主循环中所有因子都失败 → 失败率熔断
-        loop.verifier.check = MagicMock(
-            return_value={"passed": False, "failure_reasons": ["模拟失败"]}
-        )
+        # 回测管线 mock 跳过真实回测，仅聚焦熔断链路
+        loop._run_backtest_pipeline = MagicMock(return_value=None)
+        # v2.50.0 种子路径与演化因子共用 Verifier：种子阶段判定通过（晋升提供父因子），
+        # 演化因子阶段判定拒绝 → 主循环全失败 → 失败率熔断
+        seeds = loop.seed_pool.load_all_seeds()
+        seed_count = len(seeds)
+        verifier_calls = {"n": 0}
+
+        def _verifier_side_effect(evaluation):
+            verifier_calls["n"] += 1
+            if verifier_calls["n"] <= seed_count:
+                return {"passed": True, "failure_reasons": []}
+            return {"passed": False, "failure_reasons": ["模拟失败"]}
+
+        # 让 Verifier 拒绝演化因子（种子阶段通过、主循环中评估通过但 Verifier 判定失败）
+        # 这样种子因子能通过评估晋升提供父因子，
+        # 但主循环中所有演化因子都失败 → 失败率熔断
+        loop.verifier.check = MagicMock(side_effect=_verifier_side_effect)
         result = loop.run(max_generation=15)
         assert result.status == "circuit_broken"
         assert "失败率" in (result.circuit_breaker_reason or "")
@@ -2541,7 +2555,7 @@ class TestAblationIntegration:
     def test_ablation_spurious_detection_blocks_promotion(
         self, minimal_loop, sample_dataframe, sample_seed
     ):
-        """验证严重消融退化（>50% IC 下降）阻止晋升。"""
+        """验证严重消融退化（>50% IC 下降，非价格列置零）阻止晋升。"""
         from fts.factor_engine.ablation import AblationResult, SingleAblation
 
         mock_result = AblationResult(
@@ -2551,9 +2565,10 @@ class TestAblationIntegration:
             baseline_sharpe=1.5,
             ablations=[
                 SingleAblation(
-                    mode="shuffle_dates", description="时间戳打乱",
+                    mode="zero_one_feature", description="单特征归零（影响最大: volume）",
                     ic=0.01, sharpe=0.3,
                     ic_change=-0.04, sharpe_change=-1.2,
+                    feature="volume",
                 )
             ],
         )
@@ -2573,6 +2588,101 @@ class TestAblationIntegration:
             sample_seed, evaluation, "test_trace",
         )
         assert result["passed"] is False
+
+    def test_ablation_informational_modes_do_not_block(
+        self, minimal_loop, sample_dataframe, sample_seed
+    ):
+        """验证信息型消融（shuffle_dates/成交量/VWAP）不拦截晋升（v2.50.0）。
+
+        时序因子依赖时序因果、价格因子依赖价格列属必要特征，IC 崩塌不判伪相关。
+        """
+        from fts.factor_engine.ablation import AblationResult, SingleAblation
+
+        mock_result = AblationResult(
+            factor_id=sample_seed["factor_id"],
+            factor_name=sample_seed["name"],
+            baseline_ic=0.05,
+            baseline_sharpe=1.5,
+            ablations=[
+                SingleAblation(
+                    mode="shuffle_dates", description="时间戳打乱",
+                    ic=0.001, sharpe=0.05,
+                    ic_change=-0.049, sharpe_change=-1.45,
+                ),
+                SingleAblation(
+                    mode="volume_zero", description="成交量置零",
+                    ic=0.001, sharpe=0.05,
+                    ic_change=-0.049, sharpe_change=-1.45,
+                ),
+                SingleAblation(
+                    mode="vwap_to_close", description="VWAP 替换为 close",
+                    ic=0.001, sharpe=0.05,
+                    ic_change=-0.049, sharpe_change=-1.45,
+                ),
+            ],
+        )
+        minimal_loop.data = sample_dataframe
+        minimal_loop.ablation_experiment.run = MagicMock(return_value=mock_result)
+
+        evaluation = FactorEvaluation(
+            factor_id=sample_seed["factor_id"],
+            trace_id="test_trace",
+            passed=True,
+            failure_reasons=[],
+            level_1_backtest={"ic": 0.05, "sharpe": 1.5},
+            evaluated_at="2026-08-05T00:00:00",
+        )
+
+        result = minimal_loop._run_ablation_check(
+            sample_seed, evaluation, "test_trace",
+        )
+        assert result["passed"] is True
+
+    def test_ablation_price_core_col_zeroing_does_not_block(
+        self, minimal_loop, sample_dataframe, sample_seed
+    ):
+        """验证核心价格列置零不拦截晋升（v2.50.0）。
+
+        价格因子依赖 open/high/low/close/vwap/settle 属正常输入依赖。
+        """
+        from fts.factor_engine.ablation import AblationResult, SingleAblation
+
+        mock_result = AblationResult(
+            factor_id=sample_seed["factor_id"],
+            factor_name=sample_seed["name"],
+            baseline_ic=0.05,
+            baseline_sharpe=1.5,
+            ablations=[
+                SingleAblation(
+                    mode="zero_one_feature", description="单特征归零（影响最大: low）",
+                    ic=0.001, sharpe=0.0,
+                    ic_change=-0.049, sharpe_change=-1.5,
+                    feature="low",
+                ),
+                SingleAblation(
+                    mode="zero_one_feature", description="单特征归零（影响最大: settle）",
+                    ic=0.001, sharpe=0.0,
+                    ic_change=-0.049, sharpe_change=-1.5,
+                    feature="settle",
+                ),
+            ],
+        )
+        minimal_loop.data = sample_dataframe
+        minimal_loop.ablation_experiment.run = MagicMock(return_value=mock_result)
+
+        evaluation = FactorEvaluation(
+            factor_id=sample_seed["factor_id"],
+            trace_id="test_trace",
+            passed=True,
+            failure_reasons=[],
+            level_1_backtest={"ic": 0.05, "sharpe": 1.5},
+            evaluated_at="2026-08-05T00:00:00",
+        )
+
+        result = minimal_loop._run_ablation_check(
+            sample_seed, evaluation, "test_trace",
+        )
+        assert result["passed"] is True
 
 
 # ─── Task 3: CausalValidator 集成测试 ────────────────────
@@ -2976,9 +3086,10 @@ class TestFullIntegrationPipeline:
                 factor_name=sample_seed["name"],
                 baseline_ic=0.05, baseline_sharpe=1.5,
                 ablations=[SingleAblation(
-                    mode="shuffle_dates", description="时间戳打乱",
+                    mode="zero_one_feature", description="单特征归零（影响最大: volume）",
                     ic=0.01, sharpe=0.3,
                     ic_change=-0.04, sharpe_change=-1.2,
+                    feature="volume",
                 )],
             )
         )

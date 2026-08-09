@@ -7,8 +7,8 @@ import pytest
 from fts.factor_engine.contracts import FactorProgram
 from fts.factor_engine.seed_pool import SeedPool, get_default_seed_pool
 
-# 内置 9 个 + 外部 WQ101 101 个 + Qlib158 158 个 + GTJA191 191 个 + 基本面 23 个 = 482
-_TOTAL_SEEDS = 9 + 101 + 158 + 191 + 23
+# 内置 9 个 + 外部 WQ101 101 个 + Qlib158 158 个 + GTJA191 191 个 + 基本面 23 个 + JQ 163 个 = 645
+_TOTAL_SEEDS = 9 + 101 + 158 + 191 + 23 + 163
 _INTERNAL_NAMES = {
     "momentum", "volatility_reversion", "volume_flow",
     "macro_regime", "rate_proxy", "pmi_proxy",
@@ -223,24 +223,24 @@ _FUTURES_SEED_NAMES = {
 
 
 def test_futures_seed_pool_loads_all_seeds():
-    """期货模式加载 81 个期货专用种子因子（14大因子家族）。"""
+    """期货模式加载 184 个期货专用种子因子（17 大因子家族，YAML 主路径）。"""
     pool = SeedPool(market="futures")
     seeds = pool.load_all_seeds()
-    assert len(seeds) == 81
+    assert len(seeds) == 184
 
 
 def test_futures_seed_pool_count():
-    """期货模式 count() 返回 81。"""
+    """期货模式 count() 返回 184。"""
     pool = SeedPool(market="futures")
-    assert pool.count() == 81
+    assert pool.count() == 184
 
 
 def test_futures_seed_pool_list_names():
-    """期货模式必须包含所有 81 个期货专用因子名称。"""
+    """期货模式必须包含所有期货专用因子名称。"""
     pool = SeedPool(market="futures")
     names = pool.list_names()
     assert _FUTURES_SEED_NAMES.issubset(set(names))
-    assert len(names) == 81
+    assert len(names) == 184
 
 
 def test_futures_seed_pool_no_stock_seeds():
@@ -314,7 +314,7 @@ def test_futures_seed_inject_from_l1():
     pool = SeedPool(market="futures")
     # 先加载种子，再注入 L1
     pool.load_all_seeds()
-    assert pool.count() == 81
+    assert pool.count() == 184
     candidate = {
         "name": "fut_test_candidate",
         "code": "def factor_program(data, params):\n    import numpy as np\n    return np.clip(data['close'], -1, 1)",
@@ -327,7 +327,7 @@ def test_futures_seed_inject_from_l1():
     assert injected is not None
     assert injected["source"] == "bootstrapping"
     # 注入后种子数不变（L1 注入不计入 base seeds）
-    assert pool.count() == 81
+    assert pool.count() == 184
     injected_list = pool.list_injected_l1()
     assert len(injected_list) == 1
 
@@ -550,13 +550,20 @@ def test_compute_seed_correlations_threshold_effect():
 # ─── 横截面相关性预检测试 ─────────────────────────────────────
 
 def _make_panel_data(n_varieties: int = 10, n_dates: int = 60) -> tuple[dict, pd.DatetimeIndex]:
-    """创建模拟横截面面板数据。"""
+    """创建模拟横截面面板数据。
+
+    注意: FactorExecutor 后置 np.clip(信号, -10, 10)，
+    因此 close 需保持在 [-10, 10] 内且品种间有差异，
+    否则所有品种信号被压到 10 → 常数 → 无截面方差。
+    """
     import pandas as pd
     import numpy as np
     rng = np.random.default_rng(42)
+    t = np.linspace(0, 2 * np.pi, n_dates)
     panel = {}
     for i in range(n_varieties):
-        closes = 100 + np.cumsum(rng.standard_normal(n_dates) * 0.5)
+        # 每品种不同相位/幅度的正弦波，范围 [-8, 8]（clip 后保留差异）
+        closes = 6 * np.sin(t + i * 0.5) + rng.normal(0, 0.2, n_dates)
         noise_1 = np.abs(rng.normal(0, 0.5, n_dates))
         noise_2 = np.abs(rng.normal(0, 1.0, n_dates))
         panel[f"V{i}"] = pd.DataFrame({

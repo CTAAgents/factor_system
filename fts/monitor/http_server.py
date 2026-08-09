@@ -3,10 +3,11 @@ fts.monitor.http_server — FTS Web UI 仪表盘服务器。
 
 纯标准库实现，零额外依赖。
 端点:
-    GET /           → 现代仪表盘 HTML
-    GET /api/status → 系统状态 JSON
-    GET /api/factors → elite 因子列表 JSON
-    GET /health     → 健康检查 JSON
+    GET /                → 现代仪表盘 HTML
+    GET /api/status      → 系统状态 JSON
+    GET /api/factors     → elite 因子列表 JSON
+    GET /health          → 健康检查 JSON（含数据源状态，14.5）
+    GET /metrics/data-sources → 多源数据源指标 JSON（14.5）
 
 用法:
     fts ui                    # 启动仪表盘（默认 9100 端口）
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -26,6 +28,9 @@ from threading import Thread
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# 数据源指标缓存（模块级别，GAP-14.5-001）
+_metrics_cache: dict = {"data": None, "ts": 0.0}
 
 
 # ─── 仪表盘 HTML（内嵌式单页应用）─────────────────────
@@ -225,6 +230,21 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     </table>
   </div>
 
+  <div class="section-title">候选因子（L1 池 · 未评估） <span style="font-size:12px;color:var(--muted)" id="candidateSummary"></span></div>
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;overflow-x:auto;max-height:480px;overflow-y:auto">
+    <table class="factor-table">
+      <thead><tr>
+        <th>名称</th>
+        <th style="width:80px">状态</th>
+        <th style="width:90px">评估状态</th>
+        <th style="width:130px">来源</th>
+        <th style="width:70px">优先级</th>
+        <th>父主题</th>
+      </tr></thead>
+      <tbody id="candidateBody"><tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px">正在加载...</td></tr></tbody>
+    </table>
+  </div>
+
   <footer>FTS v<span id="footerVersion">--</span> · 每 10 秒自动刷新</footer>
 </div>
 
@@ -345,6 +365,7 @@ function buildDetailHtml(f) {
     + '<div class="detail-item"><span class="dl">家族</span><span class="dv" style="color:'+getFamilyColor(f.family)+'">'+sanitize(f.family)+'</span></div>'
     + '<div class="detail-item"><span class="dl">状态</span><span class="dv"><span class="status-tag '+statusClass+'">'+status+'</span></span></div>'
     + '<div class="detail-section-title">评估指标</div>'
+    + '<div class="detail-item"><span class="dl">评估状态</span><span class="dv">'+(f.evaluation_status === 'pending' ? '<span class="status-tag observing">未评估</span>' : '<span class="status-tag active">已评估</span>')+'</span></div>'
     + '<div class="detail-item"><span class="dl">ICIR</span><span class="dv">'+sanitize(f.icir)+'</span></div>'
     + '<div class="detail-item"><span class="dl">T 统计量</span><span class="dv">'+sanitize(f.t_stat)+'</span></div>'
     + '<div class="detail-item"><span class="dl">OOS 比率</span><span class="dv">'+sanitize(f.oos_ratio)+'</span></div>'
@@ -388,24 +409,64 @@ function renderFactorTable(factors) {
         + '<span class="fam-color" style="background:'+color+'"></span>'+currentFamily
         + '<span class="fam-count">'+famCount+' 个因子</span></td></tr>';
     }
-    var sharpeVal = parseFloat(f.sharpe);
+    var notEvaluated = f.evaluation_status === 'pending';
+    var sharpeVal = notEvaluated ? 0 : parseFloat(f.sharpe);
     var sharpeClass = sharpeVal >= 3 ? 'green' : (sharpeVal >= 1 ? '' : 'yellow');
-    var icVal = parseFloat(f.ic);
+    var icVal = notEvaluated ? 0 : parseFloat(f.ic);
     var icClass = icVal >= 0.05 ? 'green' : (icVal >= 0.03 ? '' : 'yellow');
     var ddVal = parseFloat(f.max_drawdown);
     var ddClass = ddVal < 0.1 ? 'green' : (ddVal < 0.2 ? '' : 'red');
+    var evalTag = notEvaluated ? '<span class="status-tag observing">未评估</span>' : sanitize(f.ic);
+    var evalSharpe = notEvaluated ? '' : sanitize(f.sharpe);
     html += '<tr class="clickable" onclick="toggleDetail(\''+f.factor_id+'\')">'
       + '<td><span class="expand-icon" data-expand="'+f.factor_id+'">▶</span></td>'
       + '<td style="font-weight:500">'+sanitize(f.name)+'</td>'
       + '<td>'+sanitize(f.generation)+'</td>'
-      + '<td class="dv '+icClass+'">'+sanitize(f.ic)+'</td>'
-      + '<td class="dv '+sharpeClass+'">'+sanitize(f.sharpe)+'</td>'
+      + '<td class="dv '+icClass+'">'+evalTag+'</td>'
+      + '<td class="dv '+sharpeClass+'">'+evalSharpe+'</td>'
       + '<td class="dv '+ddClass+'">'+sanitize(f.max_drawdown)+'</td>'
       + '<td>'+sanitize(f.turnover)+'</td>'
       + '<td>'+sanitize(f.source)+'</td></tr>';
     detailHtml += '<tr class="detail-row" id="detail-'+f.factor_id+'"><td colspan="8" class="detail-cell">'+buildDetailHtml(f)+'</td></tr>';
   }
   fBody.innerHTML = html + detailHtml;
+}
+
+function renderCandidateTable(candidates) {
+  var cBody = document.getElementById('candidateBody');
+  if (!candidates || candidates.length === 0) {
+    cBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px">暂无候选因子</td></tr>';
+    document.getElementById('candidateSummary').textContent = '0 个';
+    return;
+  }
+  var pendingCnt = candidates.filter(function(c) { return c.status === 'pending'; }).length;
+  document.getElementById('candidateSummary').textContent = '共 '+candidates.length+' 个 · 待注入 '+pendingCnt;
+  var html = '';
+  var lastSrc = '';
+  for (var i = 0; i < candidates.length; i++) {
+    var c = candidates[i];
+    if (c.source !== lastSrc) {
+      lastSrc = c.source;
+      var srcCnt = candidates.filter(function(x) { return x.source === c.source; }).length;
+      html += '<tr class="family-header"><td colspan="6">'
+        + '<span class="fam-color" style="background:'+getFamilyColor('other')+'"></span>'+sanitize(c.source)
+        + '<span class="fam-count">'+srcCnt+' 个</span></td></tr>';
+    }
+    var stTag;
+    if (c.status === 'pending') stTag = '<span class="status-tag observing">待注入</span>';
+    else if (c.status === 'elite') stTag = '<span class="status-tag active">已精英</span>';
+    else if (c.status === 'injected') stTag = '<span class="status-tag active">已注入</span>';
+    else stTag = '<span class="status-tag warn">'+sanitize(c.status)+'</span>';
+    var evTag = c.evaluation_status === 'pending' ? '<span class="status-tag observing">未评估</span>' : '<span class="status-tag active">已评估</span>';
+    html += '<tr>'
+      + '<td style="font-weight:500">'+sanitize(c.name)+'</td>'
+      + '<td>'+stTag+'</td>'
+      + '<td>'+evTag+'</td>'
+      + '<td>'+sanitize(c.source)+'</td>'
+      + '<td>'+sanitize(c.priority)+'</td>'
+      + '<td style="font-size:12px;color:var(--muted)">'+sanitize(c.parent_topic)+'</td></tr>';
+  }
+  cBody.innerHTML = html;
 }
 
 async function refresh() {
@@ -464,6 +525,14 @@ async function refresh() {
       fBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px">加载失败</td></tr>';
     }
 
+    try {
+      var candResp = await fetchJSON('/api/candidates');
+      renderCandidateTable(candResp.factors || []);
+    } catch (e) {
+      var cBody = document.getElementById('candidateBody');
+      cBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px">加载失败</td></tr>';
+    }
+
     document.getElementById('footerVersion').textContent = sanitize(data.fts_version);
   } catch (e) {
     document.getElementById('healthDot').className = 'dot red';
@@ -501,6 +570,12 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(html.encode("utf-8"))
 
+    def _respond_text(self, text: str, content_type: str = "text/plain; charset=utf-8"):
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.end_headers()
+        self.wfile.write(text.encode("utf-8"))
+
     def _build_status(self) -> dict:
         """构建 /api/status 响应。"""
         from . import check_all_status, SystemStatusReport
@@ -519,6 +594,30 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         overload_count = 0
         retired_count = 0
         family_dist_map: dict[str, int] = {}
+
+        def _fallback_json_stats() -> None:
+            """DuckDB 不可用时降级到 JSON 文件统计。"""
+            nonlocal elite_count, overload_count, retired_count, family_dist_map
+            elite_dir = root / "memory" / "knowledge" / "factors" / "futures_elite"
+            if elite_dir.exists():
+                elite_count = len(list(elite_dir.glob("*.json")))
+            overload_dir = root / "memory" / "knowledge" / "factors" / "overloaded"
+            if overload_dir.exists():
+                overload_count = len(list(overload_dir.glob("*.json")))
+            retired_dir = root / "memory" / "knowledge" / "factors" / "retired"
+            if retired_dir.exists():
+                retired_count = len(list(retired_dir.glob("*.json")))
+            if elite_dir.exists():
+                for fp in elite_dir.glob("*.json"):
+                    if fp.stem.startswith("_"):
+                        continue
+                    try:
+                        raw = json.loads(fp.read_text(encoding="utf-8"))
+                        fam = raw.get("family") or "other"
+                        family_dist_map[str(fam)] = family_dist_map.get(str(fam), 0) + 1
+                    except Exception:  # noqa: BLE001
+                        continue
+
         try:
             from ..factor_engine.factor_db.schema import DATABASE_PATH as _db_path
             import duckdb as _duckdb
@@ -556,28 +655,13 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                         family_dist_map[fam] = int(fam_row[1])
                 finally:
                     _conn.close()
+            else:
+                # DuckDB 不存在：直接走 JSON 文件统计
+                logger.warning("[ui] DuckDB 不存在，回退到 JSON 文件统计")
+                _fallback_json_stats()
         except Exception:  # noqa: BLE001
             logger.warning("[ui] DuckDB 查询失败，回退到 JSON 文件统计")
-            # 降级到 JSON 文件
-            elite_dir = root / "memory" / "knowledge" / "factors" / "futures_elite"
-            if elite_dir.exists():
-                elite_count = len(list(elite_dir.glob("*.json")))
-            overload_dir = root / "memory" / "knowledge" / "factors" / "overloaded"
-            if overload_dir.exists():
-                overload_count = len(list(overload_dir.glob("*.json")))
-            retired_dir = root / "memory" / "knowledge" / "factors" / "retired"
-            if retired_dir.exists():
-                retired_count = len(list(retired_dir.glob("*.json")))
-            if elite_dir.exists():
-                for fp in elite_dir.glob("*.json"):
-                    if fp.stem.startswith("_"):
-                        continue
-                    try:
-                        raw = json.loads(fp.read_text(encoding="utf-8"))
-                        fam = raw.get("family") or "other"
-                        family_dist_map[str(fam)] = family_dist_map.get(str(fam), 0) + 1
-                    except Exception:  # noqa: BLE001
-                        continue
+            _fallback_json_stats()
 
         data = {
             "healthy": report.healthy,
@@ -703,9 +787,9 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 WHERE fc.is_elite = TRUE AND fc.status != 'deleted'
                 ORDER BY fc.family, fc.sharpe DESC
             """
-            result = conn.execute(sql).fetchall()
-
-            cols = [desc[0] for desc in result.description]
+            rel = conn.execute(sql)
+            cols = [desc[0] for desc in rel.description]  # fetchall 前取列名
+            result = rel.fetchall()
 
             factors: list[dict] = []
             family_dist: dict[str, int] = {}
@@ -792,6 +876,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                     },
                     "quality_score": qs,
                     "status": str(row_dict.get("status", "active")),
+                    "evaluation_status": "evaluated" if (ic_val > 0 and sharpe_val > 0) else "pending",
                 })
 
             # 按家族因子数排序，组内按 Sharpe 降序
@@ -881,6 +966,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                             "dimension_scores": qs.get("dimension_scores", {}),
                         } if qs and qs.get("total_score") else None,
                         "status": str(raw.get("status", "active")),
+                        "evaluation_status": "evaluated" if (bt.get("ic", 0) > 0 and bt.get("sharpe", 0) > 0) else "pending",
                     })
                 except Exception:  # noqa: BLE001
                     continue
@@ -908,6 +994,42 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             "family_distribution": dict(sorted(family_dist.items(), key=lambda x: -x[1])),
             "family_summary": family_summary_list,
             "source": "json_fallback",
+        }
+
+    def _build_candidate_list(self) -> dict:
+        """构建 /api/candidates 响应 — L1 候选因子池（factor_pool.json）。
+
+        候选因子由 L1 Meta Loop / 提取管道产出，尚未经 L2 评估，
+        evaluation_status=pending（未评估），无 IC/Sharpe 指标。
+        """
+        import json as _json
+
+        pool_path = Path.cwd() / "memory" / "knowledge" / "factors" / "factor_pool.json"
+        if not pool_path.exists():
+            return {"count": 0, "pending_count": 0, "factors": []}
+        try:
+            pool = _json.loads(pool_path.read_text(encoding="utf-8"))
+        except (_json.JSONDecodeError, OSError):
+            return {"count": 0, "pending_count": 0, "factors": []}
+
+        factors = pool.get("factors", [])
+        items = []
+        for f in factors:
+            items.append({
+                "factor_id": str(f.get("factor_id", "")),
+                "name": str(f.get("name", "")),
+                "source": str(f.get("source", "?")),
+                "status": str(f.get("status", "?")),
+                "evaluation_status": str(f.get("evaluation_status", "pending")),
+                "priority": str(f.get("priority", "-")),
+                "parent_topic": str(f.get("parent_topic", "-") or "-"),
+            })
+        # 待注入(pending)优先，组内按来源排序
+        items.sort(key=lambda x: (0 if x["status"] == "pending" else 1, x["source"], x["name"]))
+        return {
+            "count": len(items),
+            "pending_count": sum(1 for x in items if x["status"] == "pending"),
+            "factors": items,
         }
 
     def _respond_metrics(self, text: str):
@@ -1001,27 +1123,174 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 
         return "\n".join(lines)
 
-    def _build_data_source_metrics(self) -> str:
-        """构建数据源特定指标。"""
-        lines = [
-            "# HELP fts_circuit_open 数据源熔断器是否开启",
-            "# TYPE fts_circuit_open gauge",
-            "fts_circuit_open 0",
-            "",
-            "# HELP fts_data_source_success_rate 数据源成功率",
-            "# TYPE fts_data_source_success_rate gauge",
-            "fts_data_source_success_rate 1.0",
-            "",
-        ]
-        dq_monitor = get_data_quality_monitor()
-        if dq_monitor is not None:
-            try:
-                snapshot = dq_monitor.get_metrics_snapshot()
-                valid = 1.0 if snapshot.get("market_data_valid", True) else 0.0
-                lines.append(f"fts_data_source_success_rate {valid}")
-            except Exception:  # noqa: BLE001
-                pass
-        return "\n".join(lines)
+    def _build_data_source_metrics(self) -> dict:
+        """构建 /metrics/data-sources 响应（Phase 14.5），带 5s 内存缓存。
+
+        返回结构:
+            fts_version, checked_at, healthy, summary, sources, latest_sync
+        """
+        ttl = int(os.environ.get("FTS_METRICS_CACHE_TTL", "5"))
+        now = time.time()
+        if (
+            _metrics_cache["data"] is not None
+            and now - _metrics_cache["ts"] < ttl
+        ):
+            return _metrics_cache["data"]
+
+        try:
+            from fts.cli import _build_default_aggregator
+            agg = _build_default_aggregator()
+            status = agg.get_source_status()
+        except Exception:  # noqa: BLE001
+            status = {}
+
+        any_open = any(s.get("circuit_open", False) for s in status.values())
+        total_success = sum(s.get("total_success", 0) for s in status.values())
+        total_failure = sum(s.get("total_failure", 0) for s in status.values())
+        total_attempts = total_success + total_failure
+        success_rate = (total_success / total_attempts) if total_attempts else 0.0
+
+        # 嵌入最近一次同步摘要（支持 .json 和 .json.gz）
+        latest_sync: Optional[dict] = None
+        try:
+            lineage_dir = Path.cwd() / "data" / "_lineage"
+            if lineage_dir.exists():
+                candidates = sorted(
+                    list(lineage_dir.glob("sync_summary_*.json"))
+                    + list(lineage_dir.glob("sync_summary_*.json.gz")),
+                    reverse=True,
+                )
+                if candidates:
+                    latest = candidates[0]
+                    raw_bytes = latest.read_bytes()
+                    if latest.suffix == ".gz":
+                        import gzip
+                        raw_bytes = gzip.decompress(raw_bytes)
+                    raw = json.loads(raw_bytes.decode("utf-8"))
+                    # 截断 failures 列表到 10 个，避免响应过大
+                    if "failures" in raw and isinstance(raw["failures"], list):
+                        raw["failures"] = raw["failures"][:10]
+                    latest_sync = raw
+        except Exception:  # noqa: BLE001
+            latest_sync = None
+
+        result = {
+            "fts_version": _safe_version(),
+            "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "healthy": not any_open and success_rate >= 0.5,
+            "summary": {
+                "any_circuit_open": any_open,
+                "total_success": total_success,
+                "total_failure": total_failure,
+                "success_rate": round(success_rate, 4),
+                "source_count": len(status),
+            },
+            "sources": status,
+            "latest_sync": latest_sync,
+        }
+        _metrics_cache["ts"] = now
+        _metrics_cache["data"] = result
+        return result
+
+    def _build_prometheus_metrics(self) -> str:
+        """构建 /metrics 响应（Prometheus 文本格式，Phase 15.0）。"""
+        lines: list[str] = []
+        _add = lines.append
+
+        try:
+            from fts.cli import _build_default_aggregator
+            agg = _build_default_aggregator()
+            status = agg.get_source_status()
+        except Exception:  # noqa: BLE001
+            status = {}
+
+        any_open = any(s.get("circuit_open", False) for s in status.values())
+        total_success = sum(s.get("total_success", 0) for s in status.values())
+        total_failure = sum(s.get("total_failure", 0) for s in status.values())
+        total_attempts = total_success + total_failure
+        success_rate = (total_success / total_attempts) if total_attempts else 0.0
+
+        version = _safe_version()
+
+        # 版本信息
+        _add(f'# HELP fts_version FTS version info')
+        _add('# TYPE fts_version gauge')
+        _add(f'fts_version{{version="{version}"}} 1')
+        _add('')
+
+        # 数据源健康度
+        _add('# HELP fts_data_source_success_rate Data source overall success rate')
+        _add('# TYPE fts_data_source_success_rate gauge')
+        _add(f'fts_data_source_success_rate {success_rate:.4f}')
+        _add('')
+        _add('# HELP fts_circuit_open Whether any data source circuit is open (1=open)')
+        _add('# TYPE fts_circuit_open gauge')
+        _add(f'fts_circuit_open {"1" if any_open else "0"}')
+        _add('')
+        _add('# HELP fts_data_source_count Number of registered data sources')
+        _add('# TYPE fts_data_source_count gauge')
+        _add(f'fts_data_source_count {len(status)}')
+        _add('')
+        _add('# HELP fts_data_source_total_requests Total data source requests')
+        _add('# TYPE fts_data_source_total_requests counter')
+        _add(f'fts_data_source_total_requests_total {total_attempts}')
+        _add('')
+        _add('# HELP fts_data_source_failures_total Total data source failures')
+        _add('# TYPE fts_data_source_failures_total counter')
+        _add(f'fts_data_source_failures_total {total_failure}')
+        _add('')
+
+        # 各个源的详细指标
+        _add('# HELP fts_source_info Data source individual status')
+        _add('# TYPE fts_source_info gauge')
+        for name, s in status.items():
+            circuit = "1" if s.get("circuit_open", False) else "0"
+            consec = s.get("consecutive_failures", 0)
+            _add(f'fts_source_info{{source="{name}",circuit_open="{circuit}",consecutive_failures="{consec}"}} 1')
+        _add('')
+
+        # elite 因子计数
+        try:
+            root = Path.cwd()
+            elite_dir = root / "memory" / "knowledge" / "factors" / "futures_elite"
+            elite_count = len(list(elite_dir.glob("*.json"))) if elite_dir.exists() else 0
+        except Exception:  # noqa: BLE001
+            elite_count = 0
+        _add('# HELP fts_elite_factor_count Number of elite factors')
+        _add('# TYPE fts_elite_factor_count gauge')
+        _add(f'fts_elite_factor_count {elite_count}')
+
+        return "\n".join(lines) + "\n"
+
+    def _build_health(self) -> dict:
+        """构建 /health 响应（Phase 14.5 集成数据源状态）。"""
+        data = {
+            "status": "ok",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        try:
+            from fts.cli import _build_default_aggregator
+            agg = _build_default_aggregator()
+            status = agg.get_source_status()
+            any_open = any(s.get("circuit_open", False) for s in status.values())
+            data["data_sources"] = {
+                "any_circuit_open": any_open,
+                "source_count": len(status),
+                "sources": {
+                    name: {
+                        "circuit_open": s.get("circuit_open", False),
+                        "consecutive_failures": s.get("consecutive_failures", 0),
+                        "total_success": s.get("total_success", 0),
+                        "total_failure": s.get("total_failure", 0),
+                    }
+                    for name, s in status.items()
+                },
+            }
+            if any_open:
+                data["status"] = "degraded"
+        except Exception as e:  # noqa: BLE001
+            data["data_sources_error"] = str(e)
+        return data
 
     def do_GET(self):  # noqa: N802
         path = self.path.rstrip("/")
@@ -1035,17 +1304,17 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         elif path == "/api/factors":
             self._respond_json(self._build_factor_list())
 
+        elif path == "/api/candidates":
+            self._respond_json(self._build_candidate_list())
+
         elif path == "/metrics":
             self._respond_metrics(self._build_metrics())
 
         elif path == "/metrics/data-sources":
-            self._respond_metrics(self._build_data_source_metrics())
+            self._respond_json(self._build_data_source_metrics())
 
         elif path == "/health":
-            self._respond_json({
-                "status": "ok",
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            })
+            self._respond_json(self._build_health())
 
         elif path == "/api/v1/risk/status":
             self._respond_json(_build_risk_status())
@@ -1335,3 +1604,12 @@ __all__ = [
     "set_data_quality_monitor",
     "get_data_quality_monitor",
 ]
+
+
+def _safe_version() -> str:
+    """安全获取 FTS 版本号（避免导入循环）。"""
+    try:
+        from fts import __version__ as v
+        return v
+    except Exception:  # noqa: BLE001
+        return "?"

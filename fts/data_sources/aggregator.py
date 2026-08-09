@@ -819,12 +819,10 @@ class FuturesDataAggregator:
         values = list(prices.values())
         median = float(np.median(values))
 
-        # 3) 找出偏离 > 阈值的源
+        # 3) 找出偏离 > 阈值的源（prices 仅含正价，median 恒为正）
         outliers: list[str] = []
         max_diff = 0.0
         for src_name, price in prices.items():
-            if median <= 0:
-                continue
             diff_pct = abs(price - median) / median
             if diff_pct > max_diff:
                 max_diff = diff_pct

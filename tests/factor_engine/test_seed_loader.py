@@ -257,7 +257,7 @@ class TestDirectoryLoading:
 
         futures_dir = seeds_dir / "futures"
         factors = load_factors_from_dir(futures_dir)
-        assert len(factors) == 81
+        assert len(factors) == 184
 
     def test_load_stock_directory(self, seeds_dir: Path):
         """股票目录可正确加载所有 YAML 文件。"""
@@ -265,7 +265,7 @@ class TestDirectoryLoading:
 
         stock_dir = seeds_dir / "stock"
         factors = load_factors_from_dir(stock_dir)
-        assert len(factors) == 482
+        assert len(factors) == 645
 
     def test_load_nonexistent_directory(self, tmp_path: Path):
         """不存在的目录返回空列表。"""
@@ -279,7 +279,7 @@ class TestDirectoryLoading:
         from fts.factor_engine.seed_loader import list_yaml_files
 
         files = list_yaml_files(seeds_dir / "futures")
-        assert len(files) == 14
+        assert len(files) == 20
         assert all(f.suffix == ".yaml" for f in files)
 
 
@@ -290,25 +290,25 @@ class TestLoadAllYamlSeeds:
     """测试全量加载 API。"""
 
     def test_load_all_seeds(self):
-        """加载所有市场种子（563 个）。"""
+        """加载所有市场种子（829 个）。"""
         from fts.factor_engine.seed_loader import load_all_yaml_seeds
 
         seeds = load_all_yaml_seeds()
-        assert len(seeds) == 563
+        assert len(seeds) == 829
 
     def test_load_futures_only(self):
-        """仅加载期货种子（81 个）。"""
+        """仅加载期货种子（184 个）。"""
         from fts.factor_engine.seed_loader import load_all_yaml_seeds
 
         seeds = load_all_yaml_seeds(market="futures")
-        assert len(seeds) == 81
+        assert len(seeds) == 184
 
     def test_load_stock_only(self):
-        """仅加载股票种子（482 个）。"""
+        """仅加载股票种子（645 个）。"""
         from fts.factor_engine.seed_loader import load_all_yaml_seeds
 
         seeds = load_all_yaml_seeds(market="stock")
-        assert len(seeds) == 482
+        assert len(seeds) == 645
 
     def test_load_stock_builtin_only(self):
         """仅加载股票内置种子（9 个）。"""
@@ -325,31 +325,36 @@ class TestDualPathConsistency:
     """测试 YAML 与硬编码路径的一致性。"""
 
     def test_futures_names_match(self):
-        """期货因子名称 YAML 与硬编码一致。"""
+        """YAML 期货因子名称覆盖硬编码兜底（YAML 为主路径，硬编码为子集）。"""
         from fts.factor_engine.seed_loader import load_all_yaml_seeds
         from fts.factor_engine.seed_pool import SeedPool
 
         yaml_names = {f["name"] for f in load_all_yaml_seeds(market="futures")}
         hc_names = {f["name"] for f in SeedPool(market="futures", use_yaml=False).load_all_seeds()}
-        assert yaml_names == hc_names
+        assert hc_names.issubset(yaml_names), (
+            f"硬编码兜底包含 YAML 主路径未覆盖的因子: {hc_names - yaml_names}"
+        )
 
     def test_futures_count_match(self):
-        """期货因子数量一致。"""
+        """YAML 主路径 184 个期货因子，硬编码兜底 81 个。"""
         from fts.factor_engine.seed_loader import load_all_yaml_seeds
         from fts.factor_engine.seed_pool import SeedPool
 
         yaml_count = len(load_all_yaml_seeds(market="futures"))
         hc_count = len(SeedPool(market="futures", use_yaml=False).load_all_seeds())
-        assert yaml_count == hc_count == 81
+        assert yaml_count == 184
+        assert yaml_count >= hc_count
 
     def test_stock_names_match(self):
-        """股票因子名称 YAML 与硬编码一致。"""
+        """YAML 股票因子名称覆盖硬编码兜底（YAML 为主路径，硬编码为子集）。"""
         from fts.factor_engine.seed_loader import load_all_yaml_seeds
         from fts.factor_engine.seed_pool import SeedPool
 
         yaml_names = {f["name"] for f in load_all_yaml_seeds(market="stock")}
         hc_names = {f["name"] for f in SeedPool(market="stock", use_yaml=False).load_all_seeds()}
-        assert yaml_names == hc_names
+        assert hc_names.issubset(yaml_names), (
+            f"硬编码兜底包含 YAML 主路径未覆盖的股票因子: {hc_names - yaml_names}"
+        )
 
     def test_seedpool_yaml_default(self):
         """SeedPool 默认使用 YAML 路径。"""
@@ -357,7 +362,7 @@ class TestDualPathConsistency:
 
         pool = SeedPool(market="futures")
         seeds = pool.load_all_seeds()
-        assert len(seeds) == 81
+        assert len(seeds) == 184
 
     def test_seedpool_use_yaml_false(self):
         """SeedPool use_yaml=False 走硬编码路径。"""
@@ -456,8 +461,8 @@ class TestIntegrityVerification:
 
         report = verify_yaml_integrity()
         assert report["valid"] is True
-        assert report["total_files"] == 19
-        assert report["total_factors"] == 563
+        assert report["total_files"] == 26
+        assert report["total_factors"] == 829
         assert len(report["errors"]) == 0
 
     def test_verify_report_structure(self):
@@ -568,3 +573,30 @@ class TestInputFieldEstimation:
 
         lb = _estimate_lookback("rank(close)")
         assert lb == 10
+
+
+# ─── 文件名家族推断（qlib / gtja / wq101）──────────────────
+
+
+class TestFamilyInferenceFromFilename:
+    """测试 YAML 文件名到标准家族的推断映射。"""
+
+    def test_qlib158_maps_to_qlib(self):
+        from fts.factor_engine.seed_loader import _infer_family_from_filename
+
+        assert _infer_family_from_filename("qlib158.yaml") == "qlib"
+
+    def test_gtja191_maps_to_gtja(self):
+        from fts.factor_engine.seed_loader import _infer_family_from_filename
+
+        assert _infer_family_from_filename("gtja191.yaml") == "gtja"
+
+    def test_wq101_maps_to_wq101(self):
+        from fts.factor_engine.seed_loader import _infer_family_from_filename
+
+        assert _infer_family_from_filename("wq101.yaml") == "wq101"
+
+    def test_unknown_filename_returns_none(self):
+        from fts.factor_engine.seed_loader import _infer_family_from_filename
+
+        assert _infer_family_from_filename("random_name.yaml") is None

@@ -2,8 +2,8 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-2359%2B%20passing-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.38.0-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-4020%2B%20passing-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.54.0-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -154,7 +154,7 @@ L3 参数：
 |------|------|
 | `fts ui [--host] [--port]` | 启动 Web UI 仪表盘（默认 `127.0.0.1:9100`） |
 
-### 信号桥接（Phase 25，v2.38.0）
+### 信号桥接（Phase 25，v2.39.0）
 
 | 命令 | 说明 |
 |------|------|
@@ -312,7 +312,7 @@ fts/                          # 核心源码（84 个 Python 文件）
 ├── llm.py                    # LLM 客户端（OpenAI/Anthropic/Mock）
 └── cli.py                    # CLI 统一入口
 
-tests/                        # 100+ 个测试文件，2893+ 个测试用例
+tests/                        # 116+ 个测试文件，3985+ 个测试用例（含高IC筛查 25 用例）
 scripts/                      # 工具脚本
 config/                       # 项目配置
 memory/                       # 运行时持久化（自动创建）
@@ -330,8 +330,11 @@ memory/                       # 运行时持久化（自动创建）
 | `portfolio` | 组合构建（scikit-learn） | `pip install -e ".[portfolio]"` |
 | `ml` | ML 模型层（LightGBM/XGBoost） | `pip install -e ".[ml]"` |
 | `bridge` | 信号桥接（redis-py） | `pip install -e ".[bridge]"` |
+| `regime` | 市场制度检测（hmmlearn/statsmodels） | `pip install -e ".[regime]"` |
+| `monitor` | 监控服务（FastAPI/uvicorn） | `pip install -e ".[monitor]"` |
+| `data` | 数据层工具（requests/tqdm/pyarrow） | `pip install -e ".[data]"` |
 | `dev` | 开发工具 | `pip install -e ".[dev]"` |
-| 全部 | 安装所有可选依赖 | `pip install -e ".[evolution,llm,mcp,portfolio,ml,bridge,dev]"` |
+| 全部 | 安装所有可选依赖 | `pip install -e ".[all,dev]"` 或 `pip install -r requirements.txt` |
 
 ---
 

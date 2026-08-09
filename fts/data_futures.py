@@ -75,11 +75,18 @@ def retry_on_conflict(
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             import duckdb  # type: ignore[import-untyped]
+            # duckdb 不同版本写冲突异常类名不一致（1.1.x 为 TransactionException），
+            # 统一兼容获取，避免 AttributeError 掩盖原始异常导致重试失效。
+            conflict_exc = (
+                getattr(duckdb, "ConcurrentTransactionException", None)
+                or getattr(duckdb, "TransactionException", None)
+                or Exception
+            )
             last_exc: Exception | None = None
             for attempt in range(max_retries):
                 try:
                     return func(*args, **kwargs)
-                except duckdb.ConcurrentTransactionException as e:
+                except conflict_exc as e:
                     last_exc = e
                     if attempt == max_retries - 1:
                         raise
@@ -678,9 +685,11 @@ class FuturesDataProvider:
         df.set_index("date", inplace=True)
         df.sort_index(inplace=True)
 
-        # 添加期货特有字段（DuckDB 无持仓量/结算价，设为 NaN）
-        df["hold"] = np.nan
-        df["settle"] = np.nan
+        # 添加期货特有字段（kline_cache 无 hold/settle 字段，使用代理值）
+        # settle 代理：(H+L+C)/3 —— 与 vwap 回退公式保持一致，业内典型做法
+        # hold 代理：20 日滚动均量（反映资金关注度持续性，因子代码中需注意此为代理）
+        df["settle"] = (df["high"] + df["low"] + df["close"]) / 3.0
+        df["hold"] = df["volume"].rolling(window=20, min_periods=1).mean()
 
         # 标准列顺序
         return df[["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]]
@@ -908,8 +917,8 @@ FUTURES_SECTOR_MAP: dict[str, list[str]] = {
         "SF0", "SM0",                  # 铁合金
     ],
     "有色金属": [
-        "CU0", "ZN0", "PB0", "SN0", "NI0",  # 基本金属
-        "BC0", "AO0", "AD0", "OP0",          # 铜/铝衍生
+        "CU0", "AL0", "ZN0", "PB0", "SN0", "NI0",  # 基本金属（含铝 AL0）
+        "BC0", "AO0", "AD0",                       # 铜/铝衍生
     ],
     "能源": [
         "SC0", "FU0", "LU0", "BU0",           # 原油/燃料油/沥青
@@ -927,22 +936,25 @@ FUTURES_SECTOR_MAP: dict[str, list[str]] = {
     "橡胶": [
         "RU0", "NR0", "BR0",                  # 天然橡胶/20号胶/丁二烯橡胶
     ],
-    "纸浆集运": [
-        "SP0", "EC0",                          # 纸浆/集运欧线
+    "造纸/林浆纸": [
+        "SP0", "LG0", "FB0", "OP0",          # 纸浆/原木/纤维板/双胶纸（林浆纸一体化：木材→纸浆→纸品）
+    ],
+    "航运": [
+        "EC0",                                # 集运欧线（航运运价，独立于商品产业链）
     ],
     "农产品": [
         "C0", "A0", "B0", "M0", "Y0", "P0",   # 大豆/玉米/油脂
-        "CS0", "RR0", "LH0", "LG0", "FB0",     # 淀粉/生猪/原木
+        "CS0", "RR0", "LH0",                  # 淀粉/生猪
         "OI0", "RS0", "RM0",                    # 菜籽/菜粕
         "SR0", "CF0", "CY0",                    # 白糖/棉花/棉纱
         "WH0", "JR0", "RI0", "LR0",             # 谷物
         "JD0", "AP0", "CJ0", "PK0",             # 软商品/果蔬
     ],
     "贵金属": [
-        "AU0", "AG0",
+        "AU0", "AG0", "PT0", "PD0",        # 黄金/白银/铂/钯（铂族金属同属贵金属板块）
     ],
     "新能源/新材料": [
-        "LC0", "SI0", "PS0", "PT0", "PD0",
+        "LC0", "SI0", "PS0",
     ],
     "金融期货": [
         "IF0", "IC0", "IH0", "IM0", "TF0", "TS0",
@@ -962,7 +974,8 @@ FUTURES_STRATIFIED_SUBSET: list[str] = [
     # 油化工 → 石脑油裂解下游
     # 煤化工 → 煤基化工品
     # 橡胶 → 天然/合成橡胶
-    # 纸浆集运 → 造纸/航运
+    # 造纸/林浆纸 → 林浆纸一体化（纸浆/原木/纤维板）
+    # 航运 → 集运欧线
     "TA0", "MA0", "SC0",
     # 农产品
     "M0", "C0", "SR0",
@@ -998,7 +1011,7 @@ FUTURES_SYMBOL_NAMES: dict[str, str] = {
     "CU0": "铜", "AU0": "黄金", "RB0": "螺纹钢", "PB0": "铅",
     "AG0": "白银", "BU0": "沥青", "HC0": "热轧卷板", "SN0": "锡",
     "NI0": "镍", "SP0": "纸浆", "SS0": "不锈钢", "AO0": "氧化铝",
-    "BR0": "丁二烯橡胶", "AD0": "铸造铝合金", "OP0": "钨",
+    "BR0": "丁二烯橡胶", "AD0": "铸造铝合金", "OP0": "胶版印刷纸",
     # 能源中心 (ine)
     "SC0": "原油", "NR0": "20号胶", "LU0": "低硫燃料油",
     "BC0": "国际铜", "EC0": "集运欧线",

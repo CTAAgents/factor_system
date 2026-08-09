@@ -44,9 +44,18 @@ class FactorRepository:
         self._last_columns: list[str] = []
 
     def _get_conn(self):
-        """获取或创建数据库连接。"""
+        """获取或创建数据库连接。
+
+        首次连接时若目标库尚不存在（如注入的隔离测试库），
+        先调用 init_database 幂等建表，避免后续写入报
+        "Table with name factor_catalog does not exist"。
+        """
         if self._conn is None:
             import duckdb
+            from .schema import init_database
+
+            if not Path(self._db_path).exists():
+                init_database(Path(self._db_path))
             self._conn = duckdb.connect(str(self._db_path))
         return self._conn
 

@@ -227,6 +227,46 @@ class TestEvaluationChainCoverage:
         assert ic == 0.0
         assert icir == 0.0
 
+    def test_compute_ic_nan_mask_spearman(self):
+        """NaN 样本对被剔除后 IC 正常计算（v2.50.0 NaN 掩码兜底）。
+
+        修复前 spearmanr 对含 NaN 输入返回 NaN → IC 恒 0；
+        修复后有效样本对参与计算，IC 与无 NaN 场景一致。
+        """
+        from fts.factor_engine.evaluation_chain import _compute_ic
+        signal = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        returns = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+        ic_clean, _ = _compute_ic(signal, returns)
+        # 注入 NaN（等价于鲁棒性缺失值测试 _inject_missing 的效果）
+        signal_nan = signal.copy()
+        returns_nan = returns.copy()
+        signal_nan[1] = np.nan
+        returns_nan[4] = np.nan
+        ic_nan, _ = _compute_ic(signal_nan, returns_nan)
+        assert ic_nan != 0.0  # 不再恒为 0
+        assert abs(ic_nan - ic_clean) < 1e-9  # 有效对完全一致
+        assert abs(ic_nan) > 0.9  # 仍为强相关
+
+    def test_compute_ic_nan_mask_pearson(self):
+        """pearson 方法同样剔除 NaN 样本对。"""
+        from fts.factor_engine.evaluation_chain import _compute_ic
+        signal = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        returns = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+        ic_clean, _ = _compute_ic(signal, returns, method="pearson")
+        signal[2] = np.nan
+        ic_nan, _ = _compute_ic(signal, returns, method="pearson")
+        assert ic_nan != 0.0
+        assert abs(ic_nan - ic_clean) < 1e-9
+
+    def test_compute_ic_nan_mask_too_few_valid(self):
+        """有效样本对不足 2 个时应返回 (0,0)（不崩溃）。"""
+        from fts.factor_engine.evaluation_chain import _compute_ic
+        signal = np.array([1.0, np.nan, np.nan, np.nan])
+        returns = np.array([0.1, np.nan, np.nan, np.nan])
+        ic, icir = _compute_ic(signal, returns)
+        assert ic == 0.0
+        assert icir == 0.0
+
     # ── _compute_sharpe 边缘 ──
 
     def test_compute_sharpe_short_returns(self):
@@ -827,3 +867,87 @@ class TestCrossSectionEvaluateBacktest:
         with mock.patch("fts.factor_engine.evaluation_chain.np.std", return_value=0.0):
             bt = cross_section_evaluate_backtest(fp, panel, dates)
         assert bt["t_stat"] == 0.0
+
+
+# ─── vwap 近似因子通用 IC 门槛（v2.50.0 审计层统一） ─────
+
+class TestVwapICGate:
+    """vwap 近似因子通用 IC 门槛：code 含 vwap 且 abs(IC)<0.08 判失败。
+
+    审计层统一（v2.50.0）：不再依赖种子 loader 的 risk_tag 打标，
+    evaluation_chain 对任何含 vwap 代码的因子（种子/演化）统一施加更高 IC 门槛。
+    """
+
+    @staticmethod
+    def _make_bt(ic: float) -> dict:
+        """构造通过其余检查的回测指标（仅 ic 受控）。"""
+        return {
+            "ic": ic,
+            "sharpe": 3.0,
+            "t_stat": 3.0,
+            "icir": 3.0,
+            "monotonicity": True,
+            "max_drawdown": 0.2,
+            "oos_ratio": 0.35,
+            "turnover_monthly": 0.3,
+            "decay_6m": 0.1,
+        }
+
+    @staticmethod
+    def _run_eval(factor, data, fwd, ic: float):
+        """受控执行 evaluate()：mock 各评估子模块，仅 bt.ic 可变。"""
+        from unittest import mock
+
+        with mock.patch(
+            "fts.factor_engine.evaluation_chain.evaluate_backtest",
+            return_value=TestVwapICGate._make_bt(ic),
+        ), mock.patch(
+            "fts.factor_engine.evaluation_chain.evaluate_economic_logic",
+            return_value={"theory": 4, "behavioral": 4, "microstructure": 4,
+                          "institutional": 4, "dimensions_passed": 3},
+        ), mock.patch(
+            "fts.factor_engine.evaluation_chain.evaluate_multiple_tests",
+            return_value={"passed": True, "adjusted_t": 3.5, "fdr_q": 0.01},
+        ), mock.patch(
+            "fts.factor_engine.evaluation_chain.evaluate_walk_forward",
+            return_value=None,
+        ):
+            return EvaluationChain().evaluate(factor, data, fwd)
+
+    @staticmethod
+    def _vwap_factor(simple_factor: FactorProgram) -> FactorProgram:
+        """code 含 vwap 的演化型因子（无 risk_tag 打标，模拟 LLM/GP 生成）。"""
+        fp = dict(simple_factor)
+        fp["code"] = (
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    vwap = data['close'] * 1.001\n"
+            "    return np.clip((data['close'] - vwap), -1.0, 1.0)"
+        )
+        return fp
+
+    def test_vwap_low_ic_fails(self, simple_factor, sample_ohlcv, forward_returns):
+        """code 含 vwap 且 IC=0.05（<0.08）→ 判失败且 reason 含 vwap。"""
+        factor = self._vwap_factor(simple_factor)
+        result = self._run_eval(factor, sample_ohlcv, forward_returns, ic=0.05)
+        assert result["passed"] is False
+        assert any("vwap" in r for r in result["failure_reasons"])
+
+    def test_vwap_high_ic_passes(self, simple_factor, sample_ohlcv, forward_returns):
+        """code 含 vwap 且 IC=0.09（≥0.08）→ 不受 vwap 门槛阻断，正常通过。"""
+        factor = self._vwap_factor(simple_factor)
+        result = self._run_eval(factor, sample_ohlcv, forward_returns, ic=0.09)
+        assert result["passed"] is True
+        assert not any("vwap" in r for r in result["failure_reasons"])
+
+    def test_non_vwap_low_ic_passes(self, simple_factor, sample_ohlcv, forward_returns):
+        """code 不含 vwap 且 IC=0.05（≥默认 0.03）→ 不触发 vwap 门槛，正常通过。"""
+        factor = dict(simple_factor)
+        factor["code"] = (
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    return np.clip((data['close'] * 0.001), -1.0, 1.0)"
+        )
+        result = self._run_eval(factor, sample_ohlcv, forward_returns, ic=0.05)
+        assert result["passed"] is True
+        assert not any("vwap" in r for r in result["failure_reasons"])

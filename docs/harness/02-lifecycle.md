@@ -1,6 +1,6 @@
 # FTS 开发生命周期
 
-> 版本: v2.39.0
+> 版本: v2.54.0
 > 最后更新: 2026-08-08
 
 ---
@@ -33,6 +33,11 @@ FTS 从 FDT 剥离共经历 16 个 Phase，目前全部完成：
 | **Phase 23** | P1 因子聚类 + P2 PCA 降维（v2.36.0）：新增 `fts/factor_engine/factor_clustering.py` 模块，`FactorClusteringEngine` 实现信号相关性层次聚类 + 代表因子选择（Pearson 相关系数 → 层次聚类 → Sharpe 最高代表），`PCASignalCompressor` 实现 PCA 信号降维压缩（z-score 标准化 → PCA 保留 95% 方差 → 载荷矩阵映射因子权重）；集成到 L3 PortfolioLoop 的 Step 1.8（P1 聚类）和 Step 1.9（P2 PCA，可选）；关闭 GAP-034 和 GAP-035 | ✅ 完成 | 因子聚类模块全量测试通过，portfolio_loop 集成测试通过，P1/P2 可独立控制 |
 | **Phase 24** | ML 模型集成层（v2.38.0）：新增 `fts/ml/` 包，封装 LightGBM/XGBoost/Ensemble 三种模型，支持横截面回归/时序预测/集成融合三种训练模式；L3 信号合成新增 `ml_ensemble` 模式，通过可选依赖 [`ml`] extra 控制；新增 [ml] 可选依赖声明 | ✅ 完成 | fts/ml/ 包全量测试通过，L3 ml_ensemble 模式集成测试通过 |
 | **Phase 25** | VNPY 信号桥接层（v2.38.0）：新增 `fts/bridge/` 包，SignalBridge 实现 JSON/Redis/REST 三种协议的交易信号格式转换；`fts bridge` CLI 子命令支持 serve/status 操作；新增 [bridge] 可选依赖声明 | ✅ 完成 | fts/bridge/ 包全量测试通过，CLI bridge 子命令集成测试通过 |
+| **Phase 26** | 因子库来源子家族拆分（v2.40.0）：`FactorFamily` 新增 qlib/gtja/wq101 三个标准家族（14→17 大类）；`_infer_factor_family` / `_infer_family_from_filename` 按名称前缀/文件名映射；qlib158/gtja191 YAML family 字段对齐；DuckDB 一次性迁移 111 条 cross_section 记录（qlib 43 / gtja 36 / wq101 30 / fut_gp→behavioral 2） | ✅ 完成 | cross_section 家族拆分为 qlib/gtja/wq101，新增 12 测试用例全绿 |
+| **Phase 27** | 高IC因子筛查剔除（v2.49.0，Phase B.4）：新增 `fts/factor_engine/high_ic_screener.py`，将「高IC因子筛选打分表」（docs/Knowledge/高IC因子筛选打分表.xlsx）固化为自动筛查流程——16 项检查 × 6 大模块（基础指标/过拟合/冗余风格/落地性/尾部风险/综合稳定性）总分归一化 100 分 + 5 项一票否决（外样本衰减>30%/极值扰动>25%/存量相关>0.7/成本后超额≤0/无业务逻辑）任意触发直接 C 级剔除 + A/B/C/PASS 四级评级（A≥85 入库、B 60~84 暂缓优化、C<60 剔除、PASS 数据不足放行）；集成到 `_promote_to_elite` 入库质检强制 Gate，**所有市场（股票/期货）统一启用**，筛查报告写入 elite 快照 `high_ic_screen` 字段 | ✅ 完成 | 25 个高IC筛查测试全绿，promote/elite 集成测试 16 通过无回归，详见 docs/harness/design/B.4-high-ic-screening-design.md |
+| **Phase 28** | 种子因子质检全链对齐 + vwap 通用 IC 门槛（v2.50.0）：① `_evaluate_and_promote_seeds` 补齐与演化因子完全同强度的质检链——新增 Verifier 判定、消融实验、因果结构审查、鲁棒性审查、SHAP 可解释性分析（原种子路径仅质量卡+回测+数据质量+6项审计），L1 注入候选与人工精选种子一视同仁，任一关卡失败即拒绝晋升；② `evaluation_chain.evaluate()` 失败原因汇总新增 vwap 近似因子通用 IC 门槛（code 含 `vwap` 且 abs(IC)<0.08 判失败），审计层统一覆盖种子+演化全路径（原仅种子 loader 打标 `risk_tag` 生效、演化生成器不打标漏检）；③ 种子全链质检测试补强（4 用例） | ✅ 完成 | 新增 7 测试（evaluation_chain vwap 门槛 3 + 种子全链质检 4），相关测试全绿无回归 |
+| **Phase 29** | 质检拦截器判定缺陷修复（v2.50.0）：① 消融实验判定语义修正——`shuffle_dates`（时间戳打乱）/成交量置零/VWAP 替换与核心价格列（open/high/low/close/vwap/settle）置零改为「信息型」判定（时序因子依赖时序因果、价格因子依赖价格列属必要特征，不再误判伪相关），仅「非价格列」置零导致 IC 降幅 >50% 才拦截；根因：L2 期货演化 15 代中 5 个通过 Verifier 的候选（IC 0.31~0.52）全部被消融实验（2 次）与鲁棒性缺失值测试（3 次）误杀，失败率 100% 熔断；② `_compute_ic` NaN 掩码兜底——spearmanr/pearsonr 计算前剔除 NaN 对，缺失值鲁棒性测试注入 NaN 后 IC 不再恒为 0；③ `SingleAblation` 新增 `feature` 字段记录置零列；关闭 GAP-043 | ✅ 完成 | 新增/更新 ~18 测试用例，tests/factor_engine/ 回归无新增失败，L2 演化重跑解除熔断 |
+| **Phase 30** | **鲁棒性缺失值测试阈值放宽（v2.52.0）：** `robustness.RobustnessTester` 默认 `missing_retention_threshold` 从 0.80 降至 0.50（与 OOD 测试对齐）。根因：L2 期货演化 12 个种子因子全部被鲁棒性缺失值测试拦截——随机单元格级 NaN 注入比真实数据质量问题激进得多（5% 随机 NaN 即使高质量种子 IC=0.49 的保持率也降至 0.56），父因子池为空导致后续 GP 演化全部退化（11 个常数信号因子）、总失败率 100% 熔断。0.50 阈值合理：OOD 测试已用 0.50 阈值，真实数据缺失通常是整列缺失而非单元格随机。关闭 GAP-044 | ✅ 完成 | 鲁棒性缺失值保持率阈值 0.80→0.50，无新增测试，L2 期货演化预期解除熔断 |
 | **Phase 19** | 因子家族多样性约束（v2.18.0）：`_promote_to_elite` 新增家族数量检查（`max_per_family=3`），限制单一家族因子过度繁殖；`BudgetConfig` 新增 `max_per_family` 字段；配置文档同步更新 | ✅ 完成 | L2 演化晋升受家族多样性约束，fut_bias 等家族从 8+ 个降至 ≤3 个 |
 | **Phase 20** | 分钟级回测 Phase 1（v2.30.0）：三源分钟数据源适配（通达信 TDX HTTP + TQ-Local + 天勤 TQSDK），DuckDB minute_cache 缓存，聚合器扩展支持分钟级数据路径，回测引擎增加 frequency 参数（年化因子/窗口/成本自适应），CLI 增加 --frequency 参数 | ✅ 完成 | 分钟级回测可运行，支持 1m/5m/15m/30m/60m/daily 频率切换 |
 | **Phase 21** | 宏观字段增强层（v2.32.0）：`IFindSource.get_macro_series()` 实现 edb_cache 缓存读写（查 → miss 拉取 → 幂等写回）；新增 `fts/data_sources/macro_aligner.py`（`MacroFieldAligner.align()` 月度→交易日 ffill + 发布滞后防未来函数 + `inject_macro_fields()` 批量注入）；`BacktestPipeline._compute_factor()` 因子执行前注入宏观列（export/import_data/cpi/rate/us_bond），宏观因子不再走 close 代理降级 | ⏳ 进行中 | 宏观因子可读取真实 EDB 数据，缓存 + 对齐 + 注入全链路可用 |

@@ -48,13 +48,22 @@ def _compute_ic(
     """
     if len(signal) != len(forward_returns) or len(signal) < 2:
         return 0.0, 0.0
+    # NaN 掩码兜底（v2.50.0）：剔除含 NaN 的样本对后再计算相关系数，
+    # 避免数据缺失（如鲁棒性缺失值测试注入 NaN）时 spearmanr/pearsonr 返回 NaN 致 IC 恒为 0
+    sig_arr = np.asarray(signal, dtype=float)
+    ret_arr = np.asarray(forward_returns, dtype=float)
+    valid = ~(np.isnan(sig_arr) | np.isnan(ret_arr))
+    sig_v = sig_arr[valid]
+    ret_v = ret_arr[valid]
+    if len(sig_v) < 2 or len(sig_v) != len(ret_v):
+        return 0.0, 0.0
     # 常数输入检查：若任一输入为常数，相关系数无定义，返回 0.0
-    if np.std(signal) < 1e-12 or np.std(forward_returns) < 1e-12:
+    if np.std(sig_v) < 1e-12 or np.std(ret_v) < 1e-12:
         return 0.0, 0.0
     if method == "spearman":
-        ic, _ = sp_stats.spearmanr(signal, forward_returns)
+        ic, _ = sp_stats.spearmanr(sig_v, ret_v)
     else:
-        ic, _ = sp_stats.pearsonr(signal, forward_returns)
+        ic, _ = sp_stats.pearsonr(sig_v, ret_v)
     if np.isnan(ic):
         return 0.0, 0.0
     # ICIR = IC 均值 / IC 标准差（这里简化为单期）
@@ -383,6 +392,10 @@ class EvaluationChain:
         reasons: list[str] = []
         if bt.get("ic", 0) < 0.03:
             reasons.append(f"Level 1: IC={bt.get('ic', 0):.4f} < 0.03")
+        # vwap 近似因子通用 IC 门槛（v2.50.0 审计层统一，覆盖种子+演化全路径）
+        factor_code = factor.get("code") or ""
+        if "vwap" in str(factor_code).lower() and abs(bt.get("ic", 0)) < 0.08:
+            reasons.append(f"Level 1: vwap 近似因子 IC={bt.get('ic', 0):.4f} < 0.08")
         if bt.get("sharpe", 0) < 1.5:
             reasons.append(f"Level 1: 夏普={bt.get('sharpe', 0):.4f} < 1.5")
         if not bt.get("monotonicity", False):

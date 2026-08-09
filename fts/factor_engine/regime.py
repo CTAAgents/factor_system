@@ -22,11 +22,14 @@ fts.factor_engine.regime — 市场制度感知与因子选择性激活。
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, TypedDict
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # hmmlearn 是可选依赖，HMM 检测失败时自动回退到规则方法
 _HMM_AVAILABLE: bool = False
@@ -274,7 +277,6 @@ class HMMRegimeDetector:
             return
 
         states = self._model.predict(features)
-        means = self._model.means_  # shape (n_states, n_features)
 
         # 计算每个状态的统计量
         state_stats: list[dict[str, Any]] = []

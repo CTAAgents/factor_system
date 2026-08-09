@@ -107,6 +107,13 @@ def register_default_tasks() -> None:
             trace_id_prefix="fts.l3",
         ),
         TaskSpec(
+            name="sync_futures_data",
+            cron_expression="30 17 * * 1-5",      # 工作日 17:30
+            callable_path="fts.scheduler.jobs.sync_futures_data_job",
+            description="Phase 14.5 期货多源数据同步（DUCKDB 缓存 + TQ 源 → DuckDB）",
+            trace_id_prefix="fts.sync",
+        ),
+        TaskSpec(
             name="health_check",
             cron_expression="*/10 * * * *",       # 每 10 分钟
             callable_path="fts.scheduler.jobs.health_check_job",

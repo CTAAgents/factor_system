@@ -380,16 +380,48 @@ class TestCmdFactorList:
         })
         mock_file = MagicMock(spec=Path)
         mock_file.stem = "RB_001"
+        mock_file.name = "RB_001.json"
         mock_file.read_text.return_value = factor_data
         mock_glob.return_value = [mock_file]
 
-        args = MagicMock(spec=[])
+        args = MagicMock()
         args.elite_dir = "/tmp/elite"
+        args.market = "futures"
+        # 显式关闭筛选参数，确保走目录直读模式（而非 DuckDB）
+        args.family = None
+        args.min_ic = None
+        args.min_sharpe = None
+        args.diverse = False
+        args.total_count = 10
+        args.json = False
         rc = _cmd_factor_list(args)
         assert rc == 0
         captured = capsys.readouterr()
         assert "RB_001" in captured.out
         assert "Reversal Beta" in captured.out
+
+    def test_unevaluated_factor_shows_not_evaluated(self, capsys, tmp_path):
+        """无评估指标的因子显示'未评估'而非空白。"""
+        from argparse import Namespace
+
+        elite_dir = tmp_path / "elite"
+        elite_dir.mkdir()
+        (elite_dir / "CAND_001.json").write_text(json.dumps({
+            "factor_id": "CAND_001",
+            "name": "candidate_factor",
+            "generation": 0,
+        }), encoding="utf-8")
+
+        args = Namespace(
+            elite_dir=str(elite_dir), market="futures",
+            family=None, min_ic=None, min_sharpe=None, diverse=False,
+            total_count=10, max_per_family=None, limit=50, json=False,
+        )
+        rc = _cmd_factor_list(args)
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "未评估" in captured.out
+        assert "CAND_001" in captured.out
 
     @patch("pathlib.Path.exists", return_value=True)
     @patch("pathlib.Path.glob")
@@ -397,11 +429,20 @@ class TestCmdFactorList:
         """因子文件读取失败时优雅处理。"""
         mock_file = MagicMock(spec=Path)
         mock_file.stem = "BROKEN"
+        mock_file.name = "BROKEN.json"
         mock_file.read_text.side_effect = ValueError("corrupt")
         mock_glob.return_value = [mock_file]
 
-        args = MagicMock(spec=[])
+        args = MagicMock()
         args.elite_dir = "/tmp/elite"
+        args.market = "futures"
+        # 显式关闭筛选参数，确保走目录直读模式（而非 DuckDB）
+        args.family = None
+        args.min_ic = None
+        args.min_sharpe = None
+        args.diverse = False
+        args.total_count = 10
+        args.json = False
         rc = _cmd_factor_list(args)
         assert rc == 0
         captured = capsys.readouterr()
@@ -413,8 +454,9 @@ class TestCmdFactorList:
         from unittest.mock import patch
         fake_elite = tmp_path / "elite"
         fake_elite.mkdir(parents=True)
-        args = MagicMock(spec=[])
+        args = MagicMock()
         args.elite_dir = None
+        args.market = "futures"
         with patch("fts.cli.Path", return_value=fake_elite):
             rc = _cmd_factor_list(args)
         assert rc == 0
@@ -622,9 +664,9 @@ class TestCmdEvolutionRunErrors:
 
     @patch("fts.cli._prepare_data", side_effect=RuntimeError("prepare_data failed"))
     def test_prepare_data_raises(self, mock_prep, capsys):
-        """_prepare_data 失败时传播异常（未在 try 内）。"""
+        """_prepare_data 失败时传播异常（未在 try 内，单标分支走此路径）。"""
         with pytest.raises(RuntimeError, match="prepare_data failed"):
-            main(["evolution", "run"])
+            main(["evolution", "run", "--universe", "single"])
 
 
 # ═══════════════════════════════════════════════════════════

@@ -188,8 +188,10 @@ class LLMClient(ABC):
             closing = ''.join(closing_map[b] for b in reversed(stack))
             candidate = text[first_brace : last_brace_pos + 1] + closing
         elif match_end == -1:
-            # 完全无括号: 用文本末尾 + 单一 }
-            candidate = text[first_brace:] + "}"
+            # 完全无闭合括号: 用栈中剩余括号按逆序补全（嵌套缺失时不会丢字段）
+            closing_map = {'{': '}', '[': ']'}
+            closing = ''.join(closing_map[b] for b in reversed(stack)) or "}"
+            candidate = text[first_brace:] + closing
         else:
             candidate = text[first_brace : match_end + 1]
 
@@ -299,15 +301,22 @@ class OpenAIClient(LLMClient):
     """OpenAI API 客户端。
 
     需要环境变量: OPENAI_API_KEY
-    可选: OPENAI_BASE_URL, OPENAI_MODEL (默认 gpt-4o)
+    可选: OPENAI_BASE_URL, OPENAI_MODEL (默认 gpt-4o), OPENAI_TEMPERATURE
     """
 
     def __init__(self, model: str = "", api_key: str = "",
-                 base_url: str = "", max_retries: int = 2):
+                 base_url: str = "", max_retries: int = 2,
+                 temperature: Optional[float] = None):
         self._model = model or os.getenv("OPENAI_MODEL", "gpt-4o")
         self._api_key = api_key or os.getenv("OPENAI_API_KEY", "")
         self._base_url = base_url or os.getenv("OPENAI_BASE_URL", "")
         self._max_retries = max_retries
+        # temperature 优先级：显式参数 > OPENAI_TEMPERATURE 环境变量 > None（使用 provider 默认）
+        if temperature is not None:
+            self._temperature: Optional[float] = float(temperature)
+        else:
+            env_t = os.getenv("OPENAI_TEMPERATURE")
+            self._temperature = float(env_t) if env_t else None
         self._client: Any = None
 
     def _ensure_client(self) -> Any:
@@ -329,11 +338,14 @@ class OpenAIClient(LLMClient):
         client = self._ensure_client()
         for attempt in range(self._max_retries + 1):
             try:
-                resp = client.chat.completions.create(
-                    model=self._model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=max_tokens,
-                )
+                kwargs: dict[str, Any] = {
+                    "model": self._model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": max_tokens,
+                }
+                if self._temperature is not None:
+                    kwargs["temperature"] = self._temperature
+                resp = client.chat.completions.create(**kwargs)
                 text = resp.choices[0].message.content or ""
                 tokens = resp.usage.total_tokens if resp.usage else 0
                 return text, tokens
@@ -471,6 +483,14 @@ class OpenAIClient(LLMClient):
 8. 因子逻辑应体现创新性，避免与常见因子重复
 9. 代码必须简洁，不超过 50 行
 
+【经济逻辑评分量规 — 必须遵守】
+economic_logic 四维（theory/behavioral/microstructure/institutional）各按 0-5 评分，评分必须与 narrative 论证一致，禁止对不明确定义的维度一律打 2 分：
+- 3-5 分: 该维度有明确机制支撑（经济学理论、行为金融学偏差、市场微观结构、机构/制度特征），并在 narrative 中具体论证传导路径
+- 2 分: 仅有直觉或经验规律，缺少机制论证
+- 0-1 分: 该因子与本维度无关或证据不足
+- institutional 维度对期货因子的评分口径: 机构参与度、持仓结构（COT/持仓集中度）、期限结构制度、资金流向、交割与套保制度等；若因子不涉及机构/制度层面，可给 0-2 分
+- narrative 必须逐维度说明评分依据，且长度 >= 20 字
+
 【常见错误 — 必须避免】
 ❌ 使用未定义变量
 ❌ 长度不匹配: np.diff 输出 n-1，必须填充
@@ -553,13 +573,20 @@ class AnthropicClient(LLMClient):
     """Anthropic Claude API 客户端。
 
     需要环境变量: ANTHROPIC_API_KEY
-    可选: ANTHROPIC_MODEL (默认 claude-sonnet-4-20250514)
+    可选: ANTHROPIC_MODEL (默认 claude-sonnet-4-20250514), ANTHROPIC_TEMPERATURE
     """
 
-    def __init__(self, model: str = "", api_key: str = "", max_retries: int = 2):
+    def __init__(self, model: str = "", api_key: str = "", max_retries: int = 2,
+                 temperature: Optional[float] = None):
         self._model = model or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
         self._api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
         self._max_retries = max_retries
+        # temperature 优先级：显式参数 > ANTHROPIC_TEMPERATURE 环境变量 > None（使用 provider 默认）
+        if temperature is not None:
+            self._temperature: Optional[float] = float(temperature)
+        else:
+            env_t = os.getenv("ANTHROPIC_TEMPERATURE")
+            self._temperature = float(env_t) if env_t else None
         self._client: Any = None
 
     def _ensure_client(self) -> Any:
@@ -578,11 +605,14 @@ class AnthropicClient(LLMClient):
         client = self._ensure_client()
         for attempt in range(self._max_retries + 1):
             try:
-                resp = client.messages.create(
-                    model=self._model,
-                    max_tokens=max_tokens,
-                    messages=[{"role": "user", "content": prompt}],
-                )
+                kwargs: dict[str, Any] = {
+                    "model": self._model,
+                    "max_tokens": max_tokens,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+                if self._temperature is not None:
+                    kwargs["temperature"] = self._temperature
+                resp = client.messages.create(**kwargs)
                 text = resp.content[0].text if resp.content else ""
                 tokens = (resp.usage.input_tokens + resp.usage.output_tokens) if resp.usage else 0
                 return text, tokens
@@ -683,11 +713,12 @@ class MockLLMClient(LLMClient):
 
 # ─── 工厂函数 ─────────────────────────────────────────────
 
-def get_llm_client(backend: str = "") -> LLMClient:
+def get_llm_client(backend: str = "", temperature: Optional[float] = None) -> LLMClient:
     """获取 LLM 客户端实例。
 
     Args:
         backend: "openai" / "anthropic" / "mock"（空=自动检测）
+        temperature: 采样温度（None=从 FTSConfig.llm_temperature 读取）
 
     自动检测顺序:
         1. OPENAI_API_KEY → OpenAI
@@ -696,9 +727,17 @@ def get_llm_client(backend: str = "") -> LLMClient:
     """
     backend = backend or os.getenv("FTS_LLM_BACKEND", "")
 
+    # temperature 优先级：显式参数 > FTSConfig.llm_temperature > 客户端内部环境变量
+    if temperature is None:
+        try:
+            from fts.config.settings import get_config
+            temperature = get_config().llm_temperature
+        except Exception:
+            temperature = None
+
     if backend == "openai" or (not backend and os.getenv("OPENAI_API_KEY")):
-        return OpenAIClient()
+        return OpenAIClient(temperature=temperature)
     if backend == "anthropic" or (not backend and os.getenv("ANTHROPIC_API_KEY")):
-        return AnthropicClient()
+        return AnthropicClient(temperature=temperature)
     logger.info("未检测到 LLM API Key，使用 MockLLMClient")
     return MockLLMClient()

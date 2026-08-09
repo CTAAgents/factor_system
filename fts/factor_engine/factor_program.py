@@ -83,6 +83,201 @@ def generate_factor_id(name: str, code: str) -> str:
     return f"fct_{h}"
 
 
+# ─── 代码自动修复 ─────────────────────────────────────────
+
+def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
+    """尝试自动修复因子代码中的常见语法错误。
+
+    支持的修复策略:
+    1. 补全未闭合的字符串字面量（unterminated string literal）
+    2. 修复不匹配的括号（closing parenthesis does not match opening）
+    3. 通用语法修复（invalid syntax）— 行末补冒号
+    4. 全局括号平衡修复
+
+    Args:
+        code: 原始因子代码
+        error_reason: 原始错误信息（如 "语法错误: unterminated string literal (line 16)"）
+
+    Returns:
+        (fixed, fixed_code) — 修复成功返回 (True, 修复后的代码)，否则 (False, 原始代码)
+    """
+    import re
+
+    error_msg = error_reason.lower()
+
+    # 提取行号
+    line_no: Optional[int] = None
+    m = re.search(r"line\s+(\d+)", error_reason)
+    if m:
+        line_no = int(m.group(1))
+
+    lines = code.split("\n")
+    candidate_codes: list[str] = []  # 待试的修复候选
+
+    # ── Strategy 1: 修复未闭合的字符串字面量 ──
+    if "unterminated string" in error_msg and line_no is not None:
+        idx = line_no - 1
+        if 0 <= idx < len(lines):
+            line = lines[idx]
+            # 1a: 行末补单引号
+            if line.count("'") % 2 != 0:
+                fixed = lines.copy()
+                fixed[idx] = line + "'"
+                candidate_codes.append("\n".join(fixed))
+            # 1b: 行末补双引号
+            if line.count('"') % 2 != 0:
+                fixed = lines.copy()
+                fixed[idx] = line + '"'
+                candidate_codes.append("\n".join(fixed))
+            # 1c: 尝试将整行字符串包裹为三引号
+            stripped = line.strip()
+            if stripped.startswith("'") and not stripped.endswith("'"):
+                fixed = lines.copy()
+                fixed[idx] = line.replace("'", '"""', 1)
+                fixed[idx] = fixed[idx][::-1].replace("'", '"""', 1)[::-1]
+                candidate_codes.append("\n".join(fixed))
+
+    # ── Strategy 2: 修复不匹配的括号 ──
+    # Python 错误消息格式示例:
+    #   "closing parenthesis ']' does not match opening parenthesis '('"
+    #   "closing parenthesis ']' mismatch '('"
+    _BRACKET_ERR_KEYWORDS = ("does not match opening", "mismatch")
+    if any(kw in error_msg for kw in _BRACKET_ERR_KEYWORDS) and line_no is not None:
+        idx = line_no - 1
+        if 0 <= idx < len(lines):
+            line = lines[idx]
+            # 从错误信息中提取具体括号类型
+            close_paren = ")"
+            open_paren = "("
+            cm = re.search(r"closing parenthesis\s*['\"]?([\)\]])['\"]?", error_reason)
+            # 提取 opening paren — 支持两种格式:
+            #   "does not match opening parenthesis '('"  → 直接匹配 opening parenthesis
+            #   "mismatch '('"                            → 从 mismatch 后的括号提取
+            om = re.search(r"opening parenthesis\s*['\"]?([\(\[])['\"]?", error_reason)
+            if om:
+                open_paren = om.group(1)
+            else:
+                # 尝试从 mismatch 后面提取括号字符
+                mm = re.search(r"mismatch\s*['\"]?([\(\[])['\"]?", error_reason)
+                if mm:
+                    open_paren = mm.group(1)
+            # 尝试各种括号交换组合
+            swap_pairs = [
+                (")", "]"),    # 错用 ) 实际应为 ]
+                ("]", ")"),    # 错用 ] 实际应为 )
+                ("(]", "()"),  # 错用 (] 实际应为 ()
+                ("[)", "[]"),  # 错用 [) 实际应为 []
+            ]
+            for old, new in swap_pairs:
+                if old in line:
+                    fixed = lines.copy()
+                    fixed[idx] = line.replace(old, new)
+                    if fixed[idx] != line:
+                        candidate_codes.append("\n".join(fixed))
+
+    # ── Strategy 3: 通用 invalid syntax 修复 ──
+    if "invalid syntax" in error_msg and line_no is not None:
+        idx = line_no - 1
+        if 0 <= idx < len(lines):
+            line = lines[idx]
+            stripped = line.rstrip()
+            # 3a: 行末补冒号 — 适用于 def/if/for/while/with/class/try/except/elif/else/finally
+            _STMT_KEYWORDS = (
+                "def ", "if ", "for ", "while ", "with ", "class ",
+                "try:", "except", "elif ", "else:", "finally:",
+            )
+            if stripped and not stripped.endswith(":"):
+                leading = stripped[: len(stripped) - len(stripped.lstrip())]
+                content = stripped[len(leading) :]
+                if any(content.startswith(kw) for kw in _STMT_KEYWORDS):
+                    fixed = lines.copy()
+                    fixed[idx] = line + ":"  # noqa: E701 — deliberate
+                    candidate_codes.append("\n".join(fixed))
+            # 3b: 行末补圆括号 — 适用于函数调用/表达式未闭合
+            if stripped and not stripped.endswith(")"):
+                # 检查当前行左括号数 > 右括号数
+                open_count = stripped.count("(")
+                close_count = stripped.count(")")
+                if open_count > close_count:
+                    fixed = lines.copy()
+                    fixed[idx] = line + ")" * (open_count - close_count)
+                    candidate_codes.append("\n".join(fixed))
+            # 3c: 行末补方括号 — 适用于列表/索引表达式未闭合
+            if stripped:
+                open_sq = stripped.count("[")
+                close_sq = stripped.count("]")
+                if open_sq > close_sq:
+                    fixed = lines.copy()
+                    fixed[idx] = line + "]" * (open_sq - close_sq)
+                    candidate_codes.append("\n".join(fixed))
+            # 3d: 检查行内是否有明显语法错误 — 修复双运算符
+            # 如 "return 1 ++ 2" → "return 1 + 2"
+            _DOUBLE_OPS = [
+                ("++", "+"),
+                ("--", "-"),
+                ("**", "**"),  # 合法的，不处理
+            ]
+            for old, new in _DOUBLE_OPS:
+                if old == new:
+                    continue
+                if old in stripped:
+                    # 只在特定上下文中修复（如不在字符串内）
+                    fixed = lines.copy()
+                    fixed[idx] = line.replace(old, new)
+                    if fixed[idx] != line:
+                        candidate_codes.append("\n".join(fixed))
+
+    # ── Strategy 4: 全局括号平衡修复 ──
+    # 当上面所有策略都无效时，尝试对整个代码做括号对齐
+    # 仅在明确检测到括号不匹配的情况下尝试
+    def _balance_brackets(s: str) -> str:
+        """尝试修复括号不匹配问题。"""
+        # 统计各类括号数量
+        opens = {"(": 0, "[": 0, "{": 0}
+        closes = {")": 0, "]": 0, "}": 0}
+        for ch in s:
+            if ch in opens:
+                opens[ch] += 1
+            elif ch in closes:
+                closes[ch] += 1
+        # 如果某类括号数量不匹配，尝试在末尾补充
+        for op, cl in [("(", ")"), ("[", "]"), ("{", "}")]:
+            diff = opens[op] - closes[cl]
+            if diff > 0:
+                s += cl * diff
+        return s
+
+    # 尝试每个修复候选
+    for fixed_code in candidate_codes:
+        try:
+            ast.parse(fixed_code)
+            if fixed_code != code:
+                logger.info(
+                    "[fix_factor_code] 修复成功, error=%s, original_len=%d, fixed_len=%d",
+                    error_reason, len(code), len(fixed_code),
+                )
+                return True, fixed_code
+        except SyntaxError:
+            continue
+
+    # ── Strategy 5: 全局括号平衡（兜底） ──
+    _BRACKET_ERR_KEYWORDS_S5 = ("does not match opening", "mismatch")
+    if any(kw in error_msg for kw in _BRACKET_ERR_KEYWORDS_S5):
+        balanced = _balance_brackets(code)
+        if balanced != code:
+            try:
+                ast.parse(balanced)
+                logger.info(
+                    "[fix_factor_code] 全局括号平衡修复成功, error=%s, original_len=%d, fixed_len=%d",
+                    error_reason, len(code), len(balanced),
+                )
+                return True, balanced
+            except SyntaxError:
+                pass
+
+    return False, code
+
+
 # ─── 安全沙箱验证 ─────────────────────────────────────────
 
 def validate_factor_code(code: str) -> tuple[bool, list[str]]:
@@ -195,6 +390,17 @@ class _ArrayDataWrapper:
         if key not in self._df.columns:
             raise KeyError(f"列 '{key}' 不存在，可用列: {self._columns}")
         return self._df[key].values.astype(np.float64)
+
+    def __getattr__(self, name: str) -> np.ndarray:
+        """属性访问列（兼容 `hasattr(data, 'volume')` + `data.volume` 写法）。
+
+        pandas DataFrame 支持 df.volume 属性访问列；本 wrapper 保持该语义，
+        否则因子代码中 `hasattr(data, 'volume')` 恒为 False，导致
+        volume 等列被替换为常量（如 volume_zero 消融失效）。
+        """
+        if name in self._df.columns:
+            return self._df[name].values.astype(np.float64)
+        raise AttributeError(f"'data' 没有属性 '{name}'")
 
     def __contains__(self, key: str) -> bool:
         return key in self._df.columns
@@ -358,12 +564,13 @@ class FactorExecutor:
                 f"因子输出必须为 np.ndarray，实际为 {type(result).__name__}"
             )
 
-        if len(result) != expected_len:
-            result = self._align_output(result, expected_len)
-
-        # 数值稳定性处理: 裁剪 inf 和 NaN，限制输出范围
+        # 数值稳定性处理: 裁剪 inf 和 NaN，限制输出范围（先清洗，再对齐，
+        # 避免前导 NaN 填充被 nan_to_num 清零，破坏"尾部有效值对齐日期"语义）
         result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
         result = np.clip(result, -10.0, 10.0)
+
+        if len(result) != expected_len:
+            result = self._align_output(result, expected_len)
 
         return result
 
@@ -382,10 +589,10 @@ class FactorExecutor:
         result = series.values.astype(np.float64)
 
         expected_len = len(data)
-        if len(result) != expected_len:
-            result = self._align_output(result, expected_len)
         result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
         result = np.clip(result, -10.0, 10.0)
+        if len(result) != expected_len:
+            result = self._align_output(result, expected_len)
         return result
 
     @staticmethod
@@ -400,7 +607,7 @@ class FactorExecutor:
         if len(result) == expected_len:
             return result
         if len(result) < expected_len:
-            pad = np.zeros(expected_len - len(result), dtype=result.dtype)
+            pad = np.full(expected_len - len(result), np.nan, dtype=np.float64)
             return np.concatenate([pad, result])
         return result[:expected_len]
 

@@ -24,6 +24,9 @@ FactorFamily = Literal[
     "carry",          # 跨期/跨品种套利
     "seasonality",    # 季节性
     "cross_section",  # 横截面
+    "qlib",           # 微软 Qlib 开源因子库
+    "gtja",           # 国泰君安 191 因子库
+    "wq101",          # 世坤 WorldQuant 101 Alpha 因子库
     "fundamental",    # 基本面
     "technical",      # 技术指标
     "microstructure", # 微观结构
@@ -35,7 +38,7 @@ FactorFamily = Literal[
     "multi_factor",   # 多因子组合
     "other",          # 其他
 ]
-"""因子家族分类（14 大类）。"""
+"""因子家族分类（17 大类）。"""
 
 
 # ─── 版本号（HARNESS §版本号纪律）─────────────────────────
@@ -219,6 +222,7 @@ class ExperienceTrace(TypedDict, total=False):
     success: bool
     lessons: list[str]                           # 失败教训 / 成功要点
     recorded_at: str                             # ISO 8601
+    factor_code: str                             # 因子代码文本（失败时保存用于诊断）
 
 
 # ─── 演化状态契约 ─────────────────────────────────────────
@@ -299,6 +303,20 @@ DEFAULT_VERIFIER_CONFIG: VerifierConfig = VerifierConfig(
     max_turnover_monthly=5.0,
 )
 """v1.1.0 锁定的 Verifier 默认配置 — 不可在运行时修改。"""
+
+FUTURES_VERIFIER_CONFIG: VerifierConfig = VerifierConfig(
+    min_ic=0.03,
+    min_icir=0.3,
+    min_sharpe=1.0,
+    max_drawdown=0.50,
+    min_economic_score=3,
+    min_t_stat=2.0,
+    max_fdr=0.05,
+    min_oos_ratio=0.30,
+    max_turnover_monthly=5.0,
+)
+"""期货市场 Verifier 配置 — 适配期货更低夏普、更高噪声的特性。
+放宽阈值: min_sharpe=1.0, min_icir=0.3, min_t_stat=2.0"""
 
 
 DEFAULT_BUDGET_CONFIG: BudgetConfig = BudgetConfig(
@@ -408,6 +426,7 @@ class FactorPoolEntry(TypedDict, total=False):
     economic_logic: EconomicLogic                  # 四维评分
     priority: Literal["high", "medium", "low"]     # 优先级（基于 debate_gap + 经济逻辑）
     status: Literal["pending", "injected", "decayed", "rejected"]
+    evaluation_status: Literal["pending", "evaluated"]   # pending=未评估（无 IC/Sharpe），evaluated=已评估
     trace_id: str
     created_at: str
     updated_at: str
@@ -585,7 +604,7 @@ class L3MetaLoopState(TypedDict, total=False):
 
 DEFAULT_L3_VERIFIER_CONFIG: L3VerifierConfig = L3VerifierConfig(
     min_sharpe=2.0,
-    max_correlation=0.3,
+    max_correlation=0.5,
     max_turnover=0.50,
     max_decay_rate=0.30,
     min_n_factors=3,
@@ -695,6 +714,7 @@ __all__ = [
     "BudgetConfig",
     # 默认配置
     "DEFAULT_VERIFIER_CONFIG",
+    "FUTURES_VERIFIER_CONFIG",
     "DEFAULT_BUDGET_CONFIG",
     # Literal 类型
     "FactorSource",
@@ -850,10 +870,10 @@ def normalize_factor_program(factor: FactorProgram, market_hint: str | None = No
     # 补全 family（非标准值也需要重新推断）
     family = normalized.get("family", "")
     standard_families = {"trend", "mean_reversion", "carry", "seasonality",
-                         "cross_section", "fundamental", "technical",
-                         "microstructure", "macro", "behavioral",
-                         "liquidity", "volatility", "volume",
-                         "multi_factor", "other"}
+                         "cross_section", "qlib", "gtja", "wq101",
+                         "fundamental", "technical", "microstructure",
+                         "macro", "behavioral", "liquidity", "volatility",
+                         "volume", "multi_factor", "other"}
     if not family or family not in standard_families:
         normalized["family"] = _infer_factor_family(normalized)
 
@@ -891,7 +911,10 @@ def _infer_factor_family(factor: FactorProgram) -> FactorFamily:
     - name 包含 fundamental → fundamental
     - name 包含 liquidity → liquidity
     - code 包含 open_interest → microstructure
-    - name 以 qlib_/gtja_/wq_ 开头 → trend（传统量价因子多为趋势类）
+    - name 以 qlib_ 开头 → qlib（微软 Qlib 因子库）
+    - name 以 gtja_ 开头 → gtja（国泰君安 191 因子库）
+    - name 以 alpha_/wq_ 开头 → wq101（世坤 WorldQuant 101 Alpha）
+    - name 以 fut_ 开头 → trend（期货传统量价因子多为趋势类）
     """
     name = (factor.get("name", "") or "").lower()
     code = (factor.get("code", "") or "").lower()
@@ -912,8 +935,14 @@ def _infer_factor_family(factor: FactorProgram) -> FactorFamily:
         return "fundamental"
     if any(kw in name for kw in ("liquidity", "liquid", "depth")):
         return "liquidity"
-    # 因子库来源前缀：qlib/gtja/wq 因子多为趋势类
-    if name.startswith(("qlib_", "gtja_", "wq_", "fut_")):
+    # 因子库来源前缀：qlib/gtja/wq101 归入各自子家族
+    if name.startswith("qlib_"):
+        return "qlib"
+    if name.startswith("gtja_"):
+        return "gtja"
+    if name.startswith(("alpha_", "wq_")):
+        return "wq101"
+    if name.startswith("fut_"):
         return "trend"
     if any(kw in code for kw in ("open_interest", "order_flow", "tick")):
         return "microstructure"

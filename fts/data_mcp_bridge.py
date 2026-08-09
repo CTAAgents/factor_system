@@ -311,7 +311,8 @@ def _parse_number(s: str) -> float | None:
     """
     if not s or s in ("--", "-", ""):
         return None
-    s = s.replace("元", "").replace("港元", "").replace("美元", "").strip()
+    # 先替换长单位再替换"元"，避免 "3.5港元" 先被删"元"变成 "3.5港"
+    s = s.replace("港元", "").replace("美元", "").replace("元", "").strip()
     try:
         return float(s)
     except (ValueError, TypeError):
