@@ -121,11 +121,16 @@ class TestSharpeMapping:
         assert _map_sharpe_to_score(10.0) == 5.0
 
     def test_sharpe_above_10_penalty(self) -> None:
-        """Sharpe>10 时线性减分（P1 过拟合保护）。"""
-        assert _map_sharpe_to_score(12) == 4.0    # (12-10)*0.5=1.0 penalty → 5-1=4
-        assert _map_sharpe_to_score(15) == 2.5    # (15-10)*0.5=2.5 penalty → 5-2.5=2.5
-        assert _map_sharpe_to_score(20) == 0.0    # (20-10)*0.5=5.0 penalty → 5-5=0
-        assert _map_sharpe_to_score(25) == 0.0    # 惩罚上限 5.0
+        """Sharpe>overfit_threshold(默认20) 时线性减分（P1 过拟合保护）。"""
+        assert _map_sharpe_to_score(12) == 5.0    # 12<=20 无惩罚
+        assert _map_sharpe_to_score(20) == 5.0    # 20 为惩罚边界
+        assert _map_sharpe_to_score(25) == 2.5    # (25-20)*0.5=2.5 penalty → 5-2.5=2.5
+        assert _map_sharpe_to_score(30) == 0.0    # (30-20)*0.5=5.0 penalty → 0
+        assert _map_sharpe_to_score(40) == 0.0    # 惩罚上限 5.0
+
+    def test_sharpe_penalty_threshold_override(self) -> None:
+        """config 可覆盖 overfit 阈值（小样本场景放宽到 10）。"""
+        assert _map_sharpe_to_score(12, {"sharpe_overfit_threshold": 10.0}) == 4.0
 
     def test_sharpe_between_05_and_15(self) -> None:
         score = _map_sharpe_to_score(1.0)

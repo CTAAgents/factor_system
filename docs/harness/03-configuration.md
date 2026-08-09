@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.54.0
+> 版本: v2.62.0
 > 最后更新: 2026-08-07
 
 ---
@@ -36,6 +36,19 @@ FTS 配置采用三级优先级（高→低）：
 | `portfolio_decay_days` | int | 90 | — | L3 衰减检验窗口 |
 | `log_level` | str | `"INFO"` | `FTS_LOG_LEVEL` | 日志级别 |
 | `log_file` | str | `""` | `FTS_LOG_FILE` | 日志文件路径 |
+| `stock_neutralization` | bool | `true` | `FTS_STOCK_NEUTRALIZATION` | 股票因子横截面评估是否做行业/市值中性化（v2.57.0） |
+| `industry_map_path` | str | `"data/industry_map.json"` | `FTS_INDUSTRY_MAP_PATH` | 行业映射文件路径（JSON，`{symbol: industry_name}`，v2.57.0） |
+| `cap_map_path` | str | `""` | `FTS_CAP_MAP_PATH` | 市值映射文件路径（JSON，`{symbol: market_cap}`，可选，v2.57.0） |
+| `futures_adjusted` | bool | `true` | `FTS_FUTURES_ADJUSTED` | 期货连续合约 K 线是否默认返回换月复权序列（因子计算用，v2.58.0） |
+| `roll_cost_bps` | float | `2.0` | `FTS_ROLL_COST_BPS` | 展期成本系数（基点/次，回测持仓穿越换月日扣除，v2.58.0） |
+| `futures_neutralization` | bool | `true` | `FTS_FUTURES_NEUTRALIZATION` | 期货横截面因子评估是否做板块/产业链中性化（GAP-F03，v2.59.0） |
+| `backtest_trade_filter` | bool | `true` | `FTS_BACKTEST_TRADE_FILTER` | 回测是否启用涨跌停拦截 + 停牌过滤（GAP-F02，v2.59.0） |
+| `futures_limit_pct` | float | `0.08` | `FTS_FUTURES_LIMIT_PCT` | 期货涨跌停判定阈值（单日涨跌幅 ≥ 该值视为涨跌停，GAP-F02，v2.59.0） |
+| `force_walkforward` | bool | `true` | `FTS_FORCE_WALKFORWARD` | 因子晋升路径是否强制 WalkForward 冷启动样本外验证（GAP-F08，v2.60.0） |
+| `margin_rate_map` | dict | 见默认表 | —（YAML） | 品种保证金率表（{symbol: 保证金率}，未配置品种用默认 0.10，GAP-F09，v2.60.0） |
+| `max_margin_usage` | float | `0.80` | `FTS_MAX_MARGIN_USAGE` | 最大保证金占用率（保证金占用/总权益，超过触发强平风险告警，GAP-F09，v2.60.0） |
+| `mcp_enabled` | bool | `false` | `FTS_MCP_ENABLED` | 是否启用 Wind/iFinD MCP 增强字段（启用时若未注入 MCP 客户端抛 RuntimeError 显式报错，未启用则明确降级跳过增强字段，GAP-F04，v2.60.0） |
+| `mcp_enabled` | bool | `false` | `FTS_MCP_ENABLED` | 是否启用 Wind/iFinD MCP 增强字段（启用时若未注入 MCP 客户端抛 RuntimeError 显式报错，未启用则明确降级跳过增强字段，GAP-F04，v2.60.0） |
 
 ## 3. YAML 配置文件
 
@@ -130,5 +143,6 @@ L2 Verifier 默认配置（定义在 `contracts.py` 中，初始化后锁定）�
 | 代码→文档映射 | 可验证断言 | 检验方式 |
 |:-------------|:-----------|:---------|
 | `fts/config/settings.py:FTSConfig` | 所有字段有默认值 | `python -c "from fts.config.settings import FTSConfig; assert hasattr(FTSConfig, 'memory_dir')"` |
+| `fts/config/settings.py:load_industry_map` | 行业映射 JSON 可被加载（非 dict 根/文件缺失返回空 dict，空白键过滤） | `python -c "from fts.config.settings import load_industry_map; m = load_industry_map('data/industry_map.json'); assert len(m) > 0"` |
 | `config/settings.yaml` | YAML 可被 `load_config()` 解析 | `python -c "from fts.config.settings import load_config; cfg = load_config('config/settings.yaml')"` |
 | `contracts.py:VerifierConfig` | 默认值与本文档一致 | 手动比对 |

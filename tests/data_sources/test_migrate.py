@@ -105,8 +105,8 @@ def test_migrate_creates_option_chain_cache(fresh_db):
 # ─── 旧版 DB 上的迁移（不破坏既有数据） ──────────────────
 
 
-def test_migrate_adds_8_columns_to_legacy_kline_cache(legacy_db):
-    """旧版 kline_cache（8 列）应扩到 16 列（新增 hold/settle/pre_settle/oi_change/vwap/source/fetched_at/trace_id）。"""
+def test_migrate_adds_9_columns_to_legacy_kline_cache(legacy_db):
+    """旧版 kline_cache（8 列）应扩到 17 列（新增 hold/settle/pre_settle/oi_change/vwap/source/fetched_at/trace_id + adj_factor）。"""
     from fts.data_sources.migrate import migrate_schema
 
     migrate_schema(legacy_db)
@@ -119,8 +119,8 @@ def test_migrate_adds_8_columns_to_legacy_kline_cache(legacy_db):
         # 旧字段仍在
         for old in ("symbol", "period", "date", "open", "high", "low", "close", "volume", "amount"):
             assert old in col_names, f"旧字段 {old} 丢失"
-        # 新字段已加
-        for new in ("hold", "settle", "pre_settle", "oi_change", "vwap", "source", "fetched_at", "trace_id"):
+        # 新字段已加（v2.3.0 的 8 列 + v2.58.0 的 adj_factor）
+        for new in ("hold", "settle", "pre_settle", "oi_change", "vwap", "source", "fetched_at", "trace_id", "adj_factor"):
             assert new in col_names, f"新字段 {new} 缺失"
     finally:
         con.close()
@@ -201,20 +201,20 @@ def test_migrate_returns_dict_with_change_counts(fresh_db):
     assert "columns_added" in result
     assert "tables_created" in result
     assert "indexes_created" in result
-    # 全新 DB：kline_cache 全新创建（不算 columns_added），扩 8 列
-    # tables_created: edb_cache + option_chain_cache + minute_cache + tick_cache = 4（v2.31.0）
+    # 全新 DB：kline_cache 全新创建（不算 columns_added）
+    # tables_created: kline_cache + contract_kline + minute_cache + edb_cache + option_chain_cache + tick_cache = 6（v2.58.0）
     # indexes_created: 1
-    assert result["tables_created"] == 4
+    assert result["tables_created"] == 6
     assert result["indexes_created"] == 1
 
 
-def test_migrate_legacy_db_returns_8_columns_added(legacy_db):
-    """旧版 DB 迁移应返回 columns_added=8（新增 8 列）。"""
+def test_migrate_legacy_db_returns_9_columns_added(legacy_db):
+    """旧版 DB 迁移应返回 columns_added=9（v2.3.0 新增 8 列 + v2.58.0 adj_factor 列）。"""
     from fts.data_sources.migrate import migrate_schema
 
     result = migrate_schema(legacy_db)
 
-    assert result["columns_added"] == 8
+    assert result["columns_added"] == 9
 
 
 # ─── 路径处理 ───────────────────────────────────────────

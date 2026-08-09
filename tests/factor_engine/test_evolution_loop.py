@@ -1865,6 +1865,377 @@ class TestCoverageGaps:
                  {"__name__": "__main__"})
 
 
+# ─── v2.59.0 (GAP-F03) 期货横截面板块中性化 ──────────────
+
+
+class TestGapF03SectorNeutralization:
+    """GAP-F03: market=futures + 横截面模式自动注入板块映射（产业链中性化）。"""
+
+    @staticmethod
+    def _budget():
+        from fts.factor_engine.contracts import BudgetConfig
+
+        return BudgetConfig(
+            nightly_token_limit=1_000_000,
+            monthly_token_limit=10_000_000,
+            max_generation=3,
+            max_tokens_per_factor=10_000,
+            circuit_breaker_token_ratio=10.0,
+            circuit_breaker_consecutive_low_ic=100,
+            circuit_breaker_low_ic_threshold=0.01,
+            circuit_breaker_failure_rate=0.99,
+        )
+
+    def _make_loop(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, **kwargs
+    ):
+        cross_data = {"RB0": sample_ohlcv, "I0": sample_ohlcv, "SC0": sample_ohlcv}
+        cross_dates = pd.DatetimeIndex(sample_ohlcv.index)
+        base = dict(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            budget=self._budget(),
+            n_trials_micro=2,
+            cross_section_data=cross_data,
+            cross_section_dates=cross_dates,
+            market="futures",
+        )
+        base.update(kwargs)
+        return EvolutionLoop(**base)
+
+    def test_futures_cross_section_auto_injects_sector_map(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch
+    ):
+        """GAP-F03: futures_neutralization=true 时自动从 FUTURES_SECTOR_MAP 构建板块映射。"""
+        from fts.config.settings import FTSConfig
+
+        monkeypatch.setattr(
+            "fts.data_futures.FUTURES_SECTOR_MAP",
+            {"黑色系": ["RB0", "I0"], "能源": ["SC0"]},
+        )
+        monkeypatch.setattr(
+            "fts.config.settings.get_config",
+            lambda: FTSConfig(futures_neutralization=True),
+        )
+        loop = self._make_loop(
+            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir
+        )
+        assert loop.industry_map is not None
+        assert loop.industry_map["RB0"] == "黑色系"
+        assert loop.industry_map["I0"] == "黑色系"
+        assert loop.industry_map["SC0"] == "能源"
+
+    def test_futures_neutralization_disabled_skips_injection(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch
+    ):
+        """futures_neutralization=false 时不应注入板块映射。"""
+        from fts.config.settings import FTSConfig
+
+        monkeypatch.setattr(
+            "fts.data_futures.FUTURES_SECTOR_MAP",
+            {"黑色系": ["RB0", "I0"], "能源": ["SC0"]},
+        )
+        monkeypatch.setattr(
+            "fts.config.settings.get_config",
+            lambda: FTSConfig(futures_neutralization=False),
+        )
+        loop = self._make_loop(
+            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir
+        )
+        assert loop.industry_map is None
+
+    def test_explicit_industry_map_not_overridden(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch
+    ):
+        """显式传入 industry_map 时不应被自动注入覆盖。"""
+        from fts.config.settings import FTSConfig
+
+        monkeypatch.setattr(
+            "fts.data_futures.FUTURES_SECTOR_MAP",
+            {"黑色系": ["RB0", "I0"], "能源": ["SC0"]},
+        )
+        monkeypatch.setattr(
+            "fts.config.settings.get_config",
+            lambda: FTSConfig(futures_neutralization=True),
+        )
+        explicit = {"RB0": "自定义板块"}
+        loop = self._make_loop(
+            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+            industry_map=explicit,
+        )
+        assert loop.industry_map == explicit
+
+
+# ─── v2.61.0 (GAP-S01) 股票横截面行业/市值中性化 ──────────
+
+
+class TestGapS01StockNeutralization:
+    """GAP-S01: market=stock + 横截面模式自动注入行业/市值映射（行业/市值中性化）。"""
+
+    @staticmethod
+    def _budget():
+        from fts.factor_engine.contracts import BudgetConfig
+
+        return BudgetConfig(
+            nightly_token_limit=1_000_000,
+            monthly_token_limit=10_000_000,
+            max_generation=3,
+            max_tokens_per_factor=10_000,
+            circuit_breaker_token_ratio=10.0,
+            circuit_breaker_consecutive_low_ic=100,
+            circuit_breaker_low_ic_threshold=0.01,
+            circuit_breaker_failure_rate=0.99,
+        )
+
+    def _make_loop(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, **kwargs
+    ):
+        cross_data = {"600519": sample_ohlcv, "000858": sample_ohlcv, "601318": sample_ohlcv}
+        cross_dates = pd.DatetimeIndex(sample_ohlcv.index)
+        base = dict(
+            data=sample_ohlcv,
+            forward_returns=forward_returns,
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            budget=self._budget(),
+            n_trials_micro=2,
+            cross_section_data=cross_data,
+            cross_section_dates=cross_dates,
+            market="stock",
+        )
+        base.update(kwargs)
+        return EvolutionLoop(**base)
+
+    def test_stock_cross_section_auto_injects_industry_map(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch
+    ):
+        """GAP-S01: stock_neutralization=true 时自动加载行业映射并键归一化。"""
+        from fts.config.settings import FTSConfig
+
+        raw_map = {"600519.SH": "食品饮料", "000858.SZ": "食品饮料", "601318.SH": "非银金融"}
+        monkeypatch.setattr(
+            "fts.config.settings.load_industry_map", lambda: raw_map,
+        )
+        monkeypatch.setattr(
+            "fts.config.settings.get_config",
+            lambda: FTSConfig(stock_neutralization=True, industry_map_path="", cap_map_path=""),
+        )
+        loop = self._make_loop(
+            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir
+        )
+        assert loop.industry_map is not None
+        # 键归一化：裸代码键（面板 symbol）可命中
+        assert loop.industry_map["600519"] == "食品饮料"
+        assert loop.industry_map["000858"] == "食品饮料"
+        assert loop.industry_map["601318"] == "非银金融"
+        # 原始带后缀键保留（兼容其他调用方）
+        assert loop.industry_map["600519.SH"] == "食品饮料"
+
+    def test_stock_cap_map_injected(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch
+    ):
+        """cap_map_path 配置时自动加载市值映射。"""
+        from fts.config.settings import FTSConfig
+
+        raw_map = {"600519.SH": "食品饮料", "000858.SZ": "食品饮料"}
+        cap_map = {"600519.SH": 2.1e12, "000858.SZ": 6.0e11}
+        monkeypatch.setattr(
+            "fts.config.settings.load_industry_map", lambda: raw_map,
+        )
+        monkeypatch.setattr(
+            "fts.config.settings.load_cap_map", lambda: cap_map,
+        )
+        monkeypatch.setattr(
+            "fts.config.settings.get_config",
+            lambda: FTSConfig(stock_neutralization=True, industry_map_path="", cap_map_path="x"),
+        )
+        loop = self._make_loop(
+            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir
+        )
+        assert loop.cap_map is not None
+        assert loop.cap_map["600519"] == pytest.approx(2.1e12)
+
+    def test_stock_neutralization_disabled_skips_injection(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch
+    ):
+        """stock_neutralization=false 时不应注入行业/市值映射。"""
+        from fts.config.settings import FTSConfig
+
+        monkeypatch.setattr(
+            "fts.config.settings.load_industry_map",
+            lambda: {"600519.SH": "食品饮料"},
+        )
+        monkeypatch.setattr(
+            "fts.config.settings.get_config",
+            lambda: FTSConfig(stock_neutralization=False, industry_map_path="", cap_map_path=""),
+        )
+        loop = self._make_loop(
+            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir
+        )
+        assert loop.industry_map is None
+
+    def test_stock_explicit_industry_map_not_overridden(
+        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch
+    ):
+        """显式传入 industry_map 时不应被自动注入覆盖。"""
+        from fts.config.settings import FTSConfig
+
+        monkeypatch.setattr(
+            "fts.config.settings.load_industry_map",
+            lambda: {"600519.SH": "食品饮料"},
+        )
+        monkeypatch.setattr(
+            "fts.config.settings.get_config",
+            lambda: FTSConfig(stock_neutralization=True, industry_map_path="", cap_map_path=""),
+        )
+        explicit = {"600519": "自定义行业"}
+        loop = self._make_loop(
+            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+            industry_map=explicit,
+        )
+        assert loop.industry_map == explicit
+
+
+# ─── v2.60.0 (GAP-F08) 样本外强制：冷启动 WalkForward ──────────
+
+
+class TestGapF08WalkForwardEnforcement:
+    """GAP-F08: 晋升路径强制 WalkForward 冷启动样本外验证。"""
+
+    @staticmethod
+    def _factor_code() -> str:
+        return (
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    close = data['close']\n"
+            "    n = len(close)\n"
+            "    ret = np.zeros(n)\n"
+            "    if n > 5:\n"
+            "        ret[5:] = (close[5:] - close[:-5]) / np.maximum(close[:-5], 1e-10)\n"
+            "    return np.tanh(ret * 10)\n"
+        )
+
+    def _make_factor(self) -> dict:
+        return {
+            "factor_id": "fct_wf_test",
+            "name": "wf_test",
+            "code": self._factor_code(),
+            "params": {},
+        }
+
+    def _make_evaluation(self) -> FactorEvaluation:
+        return FactorEvaluation(
+            factor_id="fct_wf_test",
+            trace_id="trace_wf",
+            passed=True,
+            failure_reasons=[],
+            level_1_backtest={"ic": 0.05, "sharpe": 1.5, "oos_ratio": 0.3, "icir": 1.2},
+            evaluated_at="2026-08-09T00:00:00",
+        )
+
+    def test_build_wf_config_long_data_uses_default(
+        self, minimal_loop
+    ):
+        """数据 ≥3 年时使用默认 WalkForward 配置。"""
+        import pandas as pd
+
+        long_data = pd.DataFrame(
+            {"close": np.linspace(3000.0, 4000.0, 900), "volume": np.ones(900) * 1e5},
+            index=pd.date_range("2022-01-01", periods=900, freq="D"),
+        )  # ~3.6 年
+        cfg = minimal_loop._build_wf_config(long_data)
+        assert cfg["window_years"] == 3
+        assert cfg["step_months"] == 6
+
+    def test_build_wf_config_short_data_adapted(self, sample_ohlcv, minimal_loop):
+        """1-2 年数据应缩短窗口保证多窗口验证。"""
+        med_data = sample_ohlcv.iloc[:400]  # ~1.6 年
+        cfg = minimal_loop._build_wf_config(med_data)
+        assert cfg["window_years"] == 1
+        assert cfg["step_months"] == 2
+
+    def test_walkforward_oos_disabled_returns_none(
+        self, sample_ohlcv, minimal_loop, monkeypatch
+    ):
+        """force_walkforward=false 时跳过并返回 None。"""
+        from fts.config.settings import FTSConfig
+
+        monkeypatch.setattr(
+            "fts.config.settings.get_config",
+            lambda: FTSConfig(force_walkforward=False),
+        )
+        minimal_loop.data = sample_ohlcv
+        assert minimal_loop._run_walkforward_oos(self._make_factor()) is None
+
+    def test_walkforward_oos_insufficient_data_returns_none(
+        self, minimal_loop
+    ):
+        """数据 <125 行时跳过并返回 None。"""
+        import pandas as pd
+
+        short = pd.DataFrame(
+            {"close": np.arange(50.0) + 100.0, "volume": np.ones(50) * 1000},
+            index=pd.date_range("2024-01-01", periods=50, freq="D"),
+        )
+        minimal_loop.data = short
+        assert minimal_loop._run_walkforward_oos(self._make_factor()) is None
+
+    def test_walkforward_oos_runs_on_sufficient_data(
+        self, sample_ohlcv, minimal_loop
+    ):
+        """数据充分时冷启动验证应返回多窗口结果。"""
+        minimal_loop.data = sample_ohlcv
+        result = minimal_loop._run_walkforward_oos(self._make_factor())
+        assert result is not None
+        assert result["n_windows_completed"] >= 1
+        assert "ic_consistency" in result
+        assert "passed" in result
+
+    def test_factor_audit_prefers_walkforward_result(
+        self, minimal_loop, sample_dataframe, monkeypatch
+    ):
+        """强制 WalkForward 结果应覆盖 L1 单段 ICIR 近似（失败则审计不通过）。"""
+        from unittest.mock import MagicMock
+
+        from fts.factor_engine.audit import FactorAuditReport
+
+        minimal_loop.data = sample_dataframe
+        # 冷启动验证返回失败（ic_consistency=0.2 < 0.5）
+        minimal_loop._run_walkforward_oos = MagicMock(return_value={
+            "ic_consistency": 0.2,
+            "passed": False,
+            "windows": [],
+            "n_windows_completed": 2,
+        })
+        report = minimal_loop._run_factor_audit(
+            self._make_factor(), self._make_evaluation(), "trace_wf",
+        )
+        assert isinstance(report, FactorAuditReport)
+        oos_item = [it for it in report.items if it.name == "oos_consistency"][0]
+        assert oos_item.status == "failed"
+        assert "0.20" in oos_item.evidence
+
+    def test_factor_audit_walkforward_disabled_keeps_l1(
+        self, minimal_loop, sample_dataframe, monkeypatch
+    ):
+        """关闭强制验证时审计 oos_consistency 回退 L1 近似（通过）。"""
+        from unittest.mock import MagicMock
+
+        from fts.factor_engine.audit import FactorAuditReport
+
+        minimal_loop.data = sample_dataframe
+        minimal_loop._run_walkforward_oos = MagicMock(return_value=None)
+        report = minimal_loop._run_factor_audit(
+            self._make_factor(), self._make_evaluation(), "trace_wf",
+        )
+        assert isinstance(report, FactorAuditReport)
+        oos_item = [it for it in report.items if it.name == "oos_consistency"][0]
+        # L1 icir=1.2 → ic_consistency=1.0 ≥ 0.5 → 通过
+        assert oos_item.status == "passed"
+
+
 # ─── Phase B.2: BacktestPipeline 集成测试 ────────────────
 
 
@@ -2832,6 +3203,9 @@ class TestRobustnessIntegration:
         )
         minimal_loop.data = sample_dataframe
         minimal_loop.robustness_tester.run = MagicMock(return_value=mock_result)
+        # 显式锁定 stock 语境（min_pass_rate=0.9）：配置 default_market=futures 时
+        # 阈值放宽为 0.7，会导致 0.8 pass_rate 被误判为通过，与"失败阻止晋升"语义冲突。
+        minimal_loop.market = "stock"
 
         evaluation = FactorEvaluation(
             factor_id=sample_seed["factor_id"],
@@ -3112,6 +3486,8 @@ class TestRunFactorAuditOosSemantics:
         self, minimal_loop, sample_seed
     ):
         """OOS 切分比例 0.3 + OOS ICIR 达标时，传递给审计器的 OOS 结果应通过。"""
+        from unittest.mock import MagicMock
+
         captured: dict = {}
 
         def fake_audit(**kwargs):
@@ -3119,6 +3495,9 @@ class TestRunFactorAuditOosSemantics:
             return _make_passing_audit_report()
 
         minimal_loop.auditor.audit = fake_audit
+        # v2.60.0 (GAP-F08): 冷启动 WalkForward 优先覆盖 L1 近似，
+        # 此处禁用以单独验证 L1 ICIR 派生 OOS 结果路径本身。
+        minimal_loop._run_walkforward_oos = MagicMock(return_value=None)
 
         evaluation = {
             "passed": True,
@@ -3139,6 +3518,8 @@ class TestRunFactorAuditOosSemantics:
 
     def test_oos_result_weak_icir_fails(self, minimal_loop, sample_seed):
         """OOS ICIR 很弱时 oos_consistency 应失败。"""
+        from unittest.mock import MagicMock
+
         captured: dict = {}
 
         def fake_audit(**kwargs):
@@ -3146,6 +3527,8 @@ class TestRunFactorAuditOosSemantics:
             return _make_passing_audit_report()
 
         minimal_loop.auditor.audit = fake_audit
+        # 同上：禁用冷启动 WalkForward，锁定 L1 ICIR 派生路径
+        minimal_loop._run_walkforward_oos = MagicMock(return_value=None)
 
         evaluation = {
             "passed": True,

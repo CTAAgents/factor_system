@@ -46,6 +46,8 @@ def _make_kline_df(symbol: str, source: str, rows: int = 5,
             "oi_change": 2000,
             "vwap": 3500.0, "source": source,
             "fetched_at": datetime.now(), "trace_id": "",
+            # v2.58.0 (GAP-046): kline_cache 新增 adj_factor 复权因子列
+            "adj_factor": 1.0,
         })
     return pd.DataFrame(data)
 

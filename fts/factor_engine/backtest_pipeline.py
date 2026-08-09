@@ -67,6 +67,12 @@ class BacktestInput:
     date_range: Optional[tuple[str, str]] = None  # 回测日期范围
     frequency: str = "daily"  # v2.30.0: 数据频率（"daily"/"1m"/"5m"/"15m"/"30m"/"60m"）
     extra_params: dict[str, Any] = field(default_factory=dict)
+    # v2.58.0 (GAP-046): 期货展期成本仿真
+    roll_dates: Optional[set[str]] = None  # 换月日期集合（ISO 字符串，持仓穿越时扣展期成本）
+    roll_cost_bps: Optional[float] = None  # 展期成本（基点/次，None=读取配置 roll_cost_bps）
+    # v2.59.0 (GAP-F02): 回测真实性仿真（涨跌停拦截 + 停牌过滤）
+    trade_filter: Optional[bool] = None  # 是否启用可交易掩码（None=读取配置 backtest_trade_filter）
+    limit_pct: Optional[float] = None  # 涨跌停判定阈值（单日涨跌幅 ≥ 该值视为涨跌停，None=读取配置 futures_limit_pct）
 
 
 @dataclass
@@ -706,11 +712,30 @@ class BacktestPipeline:
             # 频率自适应 z-score 窗口（v2.30.0）
             zscore_window = get_default_zscore_window(input_data.frequency)
 
+            # v2.58.0 (GAP-046): 展期成本配置（None=读取全局配置 roll_cost_bps）
+            roll_cost_bps = input_data.roll_cost_bps
+            if roll_cost_bps is None:
+                try:
+                    from fts.config.settings import get_config
+                    roll_cost_bps = get_config().roll_cost_bps
+                except Exception:  # noqa: BLE001
+                    roll_cost_bps = 0.0
+
+            # v2.59.0 (GAP-F02): 可交易掩码（涨跌停/停牌拦截），(None, 全 0) 表示不启用
+            tradeable_mask, blocked_stats = self._build_tradeable_mask(input_data)
+
             # 计算策略收益
-            strategy_returns, positions = self._compute_strategy_returns(
+            strategy_returns, positions, _ = self._compute_strategy_returns(
                 values, fwd_returns, input_data.cost_rate, input_data.slippage,
                 zscore_window=zscore_window,
+                dates=dates,
+                roll_dates=input_data.roll_dates,
+                roll_cost_bps=float(roll_cost_bps),
+                tradeable_mask=tradeable_mask,
             )
+
+            # v2.59.0 (GAP-F02): 将被拦截成交统计挂到元数据（报告用）
+            factor_output.metadata["blocked_stats"] = blocked_stats
 
             # 计算净值曲线 (转为 pandas Series)
             equity_curve = pd.Series(
@@ -773,6 +798,20 @@ class BacktestPipeline:
                 benchmark_curve = input_data.initialization_capital * (1 + benchmark).cumprod()
                 benchmark_excess = equity_curve / benchmark_curve - 1
 
+            # v2.58.0 (GAP-046): 展期成本统计（实际使用的 roll_cost_bps）
+            eff_roll_cost_bps = input_data.roll_cost_bps
+            if eff_roll_cost_bps is None:
+                try:
+                    from fts.config.settings import get_config
+                    eff_roll_cost_bps = get_config().roll_cost_bps
+                except Exception:  # noqa: BLE001
+                    eff_roll_cost_bps = 0.0
+
+            # v2.59.0 (GAP-F02): 被拦截成交统计（涨跌停/停牌，缺省为 0）
+            blocked_stats = factor_output.metadata.get("blocked_stats")
+            if blocked_stats is None:
+                blocked_stats = {"limit_up": 0, "limit_down": 0, "halt": 0}
+
             report = BacktestReport(
                 factor_id=factor_id,
                 factor_name=factor_name,
@@ -790,6 +829,9 @@ class BacktestPipeline:
                         "forward_period": input_data.forward_period,
                         "cost_rate": input_data.cost_rate,
                         "initial_capital": input_data.initialization_capital,
+                        "roll_dates_count": len(input_data.roll_dates or []),
+                        "roll_cost_bps": float(eff_roll_cost_bps),
+                        "blocked_trades": blocked_stats,  # v2.59.0 (GAP-F02)
                     },
                     "generated_at": datetime.now().isoformat(),
                 },
@@ -839,28 +881,119 @@ class BacktestPipeline:
         return pd.Series(ics, index=pd.DatetimeIndex(dates))
 
     @staticmethod
+    def _build_tradeable_mask(
+        input_data: "BacktestInput",
+    ) -> tuple[Optional[np.ndarray], dict[str, int]]:
+        """构建可交易掩码（v2.59.0，GAP-F02）。
+
+        返回 (mask, stats)：
+          - mask：布尔数组（True=可交易），False 的日期为涨跌停/停牌（无法成交）
+          - stats：被拦截成交统计 {"limit_up": int, "limit_down": int, "halt": int}
+            - limit_up：close 单日涨幅 ≥ limit_pct（涨停，无法买入）
+            - limit_down：close 单日跌幅 ≥ limit_pct（跌停，无法卖出）
+            - halt：volume == 0 或行情缺失（停牌）
+
+        配置/输入关闭（trade_filter=False）或无相关列时返回 (None, stats=全 0)（回归兼容）。
+
+        Args:
+            input_data: 回测输入（data 含 close/volume 列；trade_filter/limit_pct 可覆盖配置）
+
+        Returns:
+            (可交易掩码, 被拦截成交统计)
+        """
+        empty_stats = {"limit_up": 0, "limit_down": 0, "halt": 0}
+        try:
+            from fts.config.settings import get_config
+
+            trade_filter = input_data.trade_filter
+            if trade_filter is None:
+                trade_filter = get_config().backtest_trade_filter
+            if not trade_filter:
+                return None, empty_stats
+
+            df = input_data.data
+            if df is None or df.empty or "close" not in df.columns:
+                return None, empty_stats
+
+            n = len(df)
+            mask = np.ones(n, dtype=bool)
+            stats = {"limit_up": 0, "limit_down": 0, "halt": 0}
+
+            close = df["close"].to_numpy(dtype=float)
+            finite_close = np.isfinite(close)
+            mask &= finite_close
+
+            # 停牌过滤：volume==0 或 close 缺失
+            if "volume" in df.columns:
+                volume = df["volume"].to_numpy(dtype=float)
+                halt_mask = (~np.isfinite(volume)) | (volume <= 0)
+            else:
+                halt_mask = ~finite_close
+            stats["halt"] = int(np.sum(halt_mask))
+            mask &= ~halt_mask
+
+            # 涨跌停拦截：close 单日涨跌幅 ≥ limit_pct（按方向细分）
+            limit_pct = input_data.limit_pct
+            if limit_pct is None:
+                limit_pct = get_config().futures_limit_pct
+            if limit_pct and limit_pct > 0:
+                prev_close = np.roll(close, 1)
+                prev_close[0] = np.nan
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    daily_chg = (close - prev_close) / prev_close
+                up_mask = (daily_chg >= limit_pct) & np.isfinite(daily_chg)
+                down_mask = (daily_chg <= -limit_pct) & np.isfinite(daily_chg)
+                up_mask[0] = False
+                down_mask[0] = False
+                stats["limit_up"] = int(np.sum(up_mask))
+                stats["limit_down"] = int(np.sum(down_mask))
+                mask &= ~(up_mask | down_mask)
+
+            return mask, stats
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[Backtest] 可交易掩码构建失败，跳过拦截: %s", e)
+            return None, empty_stats
+
+    @staticmethod
     def _compute_strategy_returns(
         factor_values: np.ndarray,
         forward_returns: np.ndarray,
         cost_rate: float,
         slippage: float,
         zscore_window: int = 20,
-    ) -> tuple[np.ndarray, np.ndarray]:
+        dates: Optional[pd.DatetimeIndex] = None,
+        roll_dates: Optional[set[str]] = None,
+        roll_cost_bps: float = 0.0,
+        tradeable_mask: Optional[np.ndarray] = None,
+    ) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
         """计算策略收益率。
 
         使用滚动窗口 z-score 生成持仓信号，与实盘信号生成器一致。
 
         Args:
             zscore_window: 滚动 z-score 窗口（默认 20 日，与实盘 signal_generator 一致）
+            dates: 日期索引（用于匹配换月日，展期成本扣除）
+            roll_dates: 换月日期集合（ISO 字符串）；持仓穿越换月日时扣除展期成本
+            roll_cost_bps: 展期成本（基点/次）
+            tradeable_mask: 可交易掩码（v2.59.0 GAP-F02，None=全部可交易）。
+                False 的日期（涨跌停/停牌）持仓保持上一交易日，不执行调仓；
+                该日不产生换手成本，同时计入被拦截成交统计。
 
         Returns:
-            (strategy_returns, positions) 元组
+            (strategy_returns, positions, blocked_stats) 元组；
+            blocked_stats = {"limit_up": int, "limit_down": int, "halt": int}（v2.59.0）
         """
         # 因子作为持仓信号 (滚动窗口 z-score)
         positions = np.zeros_like(factor_values)
         n = len(factor_values)
+        blocked_stats = {"limit_up": 0, "limit_down": 0, "halt": 0}
 
         for i in range(1, n):
+            # v2.59.0 (GAP-F02): 涨跌停/停牌日持仓保持上一交易日（无法成交）
+            if tradeable_mask is not None and not tradeable_mask[i]:
+                positions[i] = positions[i - 1]
+                blocked_stats["halt"] += 1  # 归入"不可交易"类别（细分见 _build_tradeable_mask）
+                continue
             start = max(0, i - zscore_window)
             window = factor_values[start:i]
             if np.std(window) > 1e-8:
@@ -878,7 +1011,14 @@ class BacktestPipeline:
         strategy_returns[0] = -costs[0]
         strategy_returns[1:] = positions[:-1] * forward_returns[:-1] - costs[1:]
 
-        return strategy_returns, positions
+        # v2.58.0 (GAP-046): 展期成本 — 持仓穿越换月日扣除 |position| × 展期成本
+        roll_cost_decimal = roll_cost_bps / 10000.0
+        if roll_dates and roll_cost_decimal > 0 and dates is not None:
+            for t in range(n):
+                if abs(positions[t]) > 1e-8 and str(dates[t].date()) in roll_dates:
+                    strategy_returns[t] -= abs(positions[t]) * roll_cost_decimal
+
+        return strategy_returns, positions, blocked_stats
 
     @staticmethod
     def _extract_trades(

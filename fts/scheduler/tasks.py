@@ -135,6 +135,13 @@ def register_default_tasks() -> None:
             trace_id_prefix="fts.dq",
         ),
         TaskSpec(
+            name="data_level_monitor",
+            cron_expression="0 4 * * *",          # 每日 04:00
+            callable_path="fts.scheduler.jobs.data_level_monitor_job",
+            description="数据级质量监控（GAP-F06）：缺失率/异常值/多源分歧检查",
+            trace_id_prefix="fts.dlm",
+        ),
+        TaskSpec(
             name="logic_monitor",
             cron_expression="0 22 * * *",         # 每日 22:00
             callable_path="fts.scheduler.jobs.logic_monitor_job",

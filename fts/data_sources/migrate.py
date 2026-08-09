@@ -64,6 +64,11 @@ KLINE_CACHE_NEW_COLUMNS: list[tuple[str, str]] = [
     ("trace_id", "VARCHAR"),
 ]
 
+# v2.58.0 (GAP-046): kline_cache 新增换月复权因子列（比率法后复权）。
+KLINE_CACHE_ADJ_COLUMNS: list[tuple[str, str]] = [
+    ("adj_factor", "DOUBLE"),
+]
+
 # v2.31.0 Phase 5: tick_cache 5 档盘口扩展列（旧表仅 1 档盘口时 ALTER 补齐）
 TICK_CACHE_DEPTH_COLUMNS: list[tuple[str, str]] = [
     ("bid_price2", "DOUBLE"), ("bid_volume2", "DOUBLE"),
@@ -97,6 +102,29 @@ CREATE TABLE IF NOT EXISTS kline_cache (
     pre_settle  DOUBLE,
     oi_change   DOUBLE,
     vwap        DOUBLE,
+    source      VARCHAR,
+    fetched_at  TIMESTAMP,
+    trace_id    VARCHAR,
+    adj_factor  DOUBLE
+)
+"""
+
+# v2.58.0 (GAP-046): contract_kline 具体合约日线表（换月日历构建基础）。
+# 此前该表仅由外部管道写入，FTS 无建表/写入逻辑；此处补建表与写入路径。
+CONTRACT_KLINE_CREATE_DDL: str = """
+CREATE TABLE IF NOT EXISTS contract_kline (
+    symbol      VARCHAR,
+    contract    VARCHAR,
+    period      VARCHAR,
+    date        DATE,
+    open        DOUBLE,
+    high        DOUBLE,
+    low         DOUBLE,
+    close       DOUBLE,
+    volume      DOUBLE,
+    amount      DOUBLE,
+    hold        DOUBLE,
+    settle      DOUBLE,
     source      VARCHAR,
     fetched_at  TIMESTAMP,
     trace_id    VARCHAR
@@ -297,8 +325,17 @@ def migrate_schema(db_path: str | Path) -> dict[str, int]:
             columns_added = _add_missing_columns(
                 con, "kline_cache", KLINE_CACHE_NEW_COLUMNS
             )
+            # v2.58.0 (GAP-046): 幂等补 adj_factor 复权因子列
+            columns_added += _add_missing_columns(
+                con, "kline_cache", KLINE_CACHE_ADJ_COLUMNS
+            )
         else:
             con.execute(KLINE_CACHE_CREATE_DDL)
+            tables_created += 1
+
+        # 1.5) contract_kline（具体合约日线，换月日历基础，v2.58.0）
+        if _create_table_if_absent(con, "contract_kline", CONTRACT_KLINE_CREATE_DDL):
+            tables_created += 1
 
         # 2) minute_cache（分钟级 K 线缓存）
         if _create_table_if_absent(con, "minute_cache", MINUTE_CACHE_CREATE_DDL):

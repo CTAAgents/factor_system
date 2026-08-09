@@ -9,10 +9,13 @@ fts/config/settings.py — FTS 全局配置。
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 # ─── 默认路径 ────────────────────────────────────────────
 
@@ -95,6 +98,63 @@ class FTSConfig:
     portfolio_max_factors: int = 20
     portfolio_top_n: int = 5
     portfolio_decay_days: int = 90
+
+    # ── 股票因子中性化（v2.54.0+）──
+    # 股票因子横截面评估时是否做行业/市值中性化预处理
+    stock_neutralization: bool = field(
+        default_factory=lambda: os.getenv("FTS_STOCK_NEUTRALIZATION", "true").lower() == "true"
+    )
+    # 行业映射文件路径（JSON 格式，{symbol: industry_name}）
+    industry_map_path: str = field(
+        default_factory=lambda: os.getenv("FTS_INDUSTRY_MAP_PATH", "data/industry_map.json")
+    )
+    # 市值映射文件路径（JSON 格式，{symbol: market_cap}，可选）
+    cap_map_path: str = field(
+        default_factory=lambda: os.getenv("FTS_CAP_MAP_PATH", "")
+    )
+
+    # ── 期货换月复权与展期成本（v2.58.0，GAP-046）──
+    # 期货连续合约 K 线是否默认返回换月后复权序列（因子计算用）
+    futures_adjusted: bool = field(
+        default_factory=lambda: os.getenv("FTS_FUTURES_ADJUSTED", "true").lower() == "true"
+    )
+    # 展期成本系数（基点/次，回测持仓穿越换月日扣除）
+    roll_cost_bps: float = field(
+        default_factory=lambda: float(os.getenv("FTS_ROLL_COST_BPS", "2.0"))
+    )
+
+    # ── 期货截面中性化 + 回测真实性仿真（v2.59.0，GAP-F03/F02）──
+    # 期货横截面因子评估是否做板块/产业链中性化（剥离产业链系统性偏差）
+    futures_neutralization: bool = field(
+        default_factory=lambda: os.getenv("FTS_FUTURES_NEUTRALIZATION", "true").lower() == "true"
+    )
+    # 回测是否启用涨跌停拦截 + 停牌过滤（真实成交仿真）
+    backtest_trade_filter: bool = field(
+        default_factory=lambda: os.getenv("FTS_BACKTEST_TRADE_FILTER", "true").lower() == "true"
+    )
+    # 期货涨跌停判定阈值（单日涨跌幅 ≥ 该值视为涨跌停，无法成交）
+    futures_limit_pct: float = field(
+        default_factory=lambda: float(os.getenv("FTS_FUTURES_LIMIT_PCT", "0.08"))
+    )
+
+    # ── 样本外强制 + 保证金建模（v2.60.0，GAP-F08/F09）──
+    # 因子晋升路径是否强制 WalkForward 冷启动样本外验证（数据不足时跳过并记录原因）
+    force_walkforward: bool = field(
+        default_factory=lambda: os.getenv("FTS_FORCE_WALKFORWARD", "true").lower() == "true"
+    )
+    # 品种保证金率表（{symbol: 保证金率}，未配置品种用默认 0.10）
+    margin_rate_map: dict = field(default_factory=dict)
+    # 最大保证金占用率（保证金占用/总权益，超过触发强平风险告警）
+    max_margin_usage: float = field(
+        default_factory=lambda: float(os.getenv("FTS_MAX_MARGIN_USAGE", "0.80"))
+    )
+
+    # ── 数据源降级加固（v2.60.0，GAP-F04）──
+    # WIND/IFIND MCP 客户端是否启用（false=未启用，明确降级跳过增强字段；
+    # true=启用，但未注入客户端时显式抛错提示初始化）
+    mcp_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_MCP_ENABLED", "false").lower() == "true"
+    )
 
     # ── L3 Verifier ──
     verifier: dict = field(default_factory=lambda: {
@@ -214,10 +274,85 @@ def validate_evolution_mode(mode: str) -> str:
     return mode
 
 
+def load_industry_map(path: Optional[str] = None) -> dict[str, str]:
+    """加载行业映射文件。
+
+    Args:
+        path: 行业映射 JSON 文件路径，None=使用配置中的默认路径
+
+    Returns:
+        {symbol: industry_name} 字典
+
+    Raises:
+        FileNotFoundError: 文件不存在时抛出
+        json.JSONDecodeError: JSON 格式错误时抛出
+    """
+    import json
+
+    if path is None:
+        path = get_config().industry_map_path
+    p = Path(path)
+    if not p.exists():
+        logger.warning("行业映射文件不存在: %s", path)
+        return {}
+    text = p.read_text(encoding="utf-8")
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        logger.warning("行业映射文件格式错误: 期望 JSON 对象，实际 %s", type(data).__name__)
+        return {}
+    # 过滤非字符串键（如注释等）
+    result: dict[str, str] = {}
+    for k, v in data.items():
+        if isinstance(k, str) and isinstance(v, str) and k.strip():
+            result[k.strip()] = v.strip()
+    logger.info("加载行业映射: %d 条记录", len(result))
+    return result
+
+
+def load_cap_map(path: Optional[str] = None) -> dict[str, float]:
+    """加载市值映射文件。
+
+    Args:
+        path: 市值映射 JSON 文件路径，None=使用配置中的默认路径
+
+    Returns:
+        {symbol: market_cap} 字典（值为 float，非数值条目过滤）
+
+    Raises:
+        json.JSONDecodeError: JSON 格式错误时抛出
+    """
+    import json
+
+    if path is None:
+        path = get_config().cap_map_path
+    if not path:
+        return {}
+    p = Path(path)
+    if not p.exists():
+        logger.warning("市值映射文件不存在: %s", path)
+        return {}
+    text = p.read_text(encoding="utf-8")
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        logger.warning("市值映射文件格式错误: 期望 JSON 对象，实际 %s", type(data).__name__)
+        return {}
+    result: dict[str, float] = {}
+    for k, v in data.items():
+        if isinstance(k, str) and k.strip():
+            try:
+                result[k.strip()] = float(v)
+            except (TypeError, ValueError):
+                continue
+    logger.info("加载市值映射: %d 条记录", len(result))
+    return result
+
+
 __all__ = [
     "FTSConfig",
     "get_config",
     "load_config",
+    "load_industry_map",
+    "load_cap_map",
     "DEFAULT_MEMORY_DIR",
     "DEFAULT_ELITE_DIR",
     "EVOLUTION_MODES",

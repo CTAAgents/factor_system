@@ -395,6 +395,79 @@ def data_quality_eval_job() -> None:
 
 # ── 期货多源数据同步 — 工作日 17:30（Phase 14.5）───────────
 
+# ── 数据级质量监控 ─ 每日 04:00（GAP-F06）─────────────
+
+def _read_kline_cache(db_path: Path, symbol: str, limit: int = 120) -> "object | None":
+    """从 DuckDB kline_cache 读取单个品种最近 K 线（尽力而为）。
+
+    Args:
+        db_path: DuckDB 缓存库路径
+        symbol: 品种代码（兼容 RB / RB0 / RB0.SHFE 等变体）
+        limit: 最近行数
+
+    Returns:
+        pandas DataFrame；库/表/数据缺失时返回 None。
+    """
+    try:
+        import duckdb
+        con = duckdb.connect(str(db_path), read_only=True)
+        try:
+            variants = [symbol, f"{symbol}0", f"{symbol}.SHFE", f"{symbol}.DCE",
+                        f"{symbol}.CZCE", f"{symbol}.CFFEX"]
+            placeholders = ",".join(["?"] * len(variants))
+            return con.execute(
+                f"SELECT * FROM kline_cache WHERE symbol IN ({placeholders}) "
+                f"ORDER BY date DESC LIMIT ?",
+                [*variants, int(limit)],
+            ).df()
+        finally:
+            con.close()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("数据级监控 读取缓存失败 symbol=%s: %s", symbol, e)
+        return None
+
+
+def data_level_monitor_job() -> None:
+    """数据级质量监控（GAP-F06）：缺失率/异常值/复权一致性/多源分歧。
+
+    读取核心期货品种 DuckDB 缓存执行四维检查（复权一致性需第二复权源，
+    暂以多源分歧覆盖；复权一致性检查由监控器接口保留，供对账流程调用）。
+    尽力而为：缓存缺失/读取失败仅记录日志，不中断其他调度任务。
+    """
+    trace_id = f"fts.dlm.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.monitor.data_level_monitor import create_data_level_monitor
+        from fts.data_futures import FUTURES_CORE_SUBSET
+
+        db_path = PROJECT_ROOT / "data" / "fts_history.duckdb"
+        if not db_path.exists():
+            logger.info("数据级监控 无缓存库 %s，跳过 (trace_id=%s)", db_path, trace_id)
+            return
+
+        monitor = create_data_level_monitor()
+        total_alerts = 0
+        critical = 0
+        checked_symbols = 0
+
+        for sym in list(FUTURES_CORE_SUBSET)[:10]:
+            df = _read_kline_cache(db_path, sym, limit=120)
+            if df is None or len(df) == 0:
+                continue
+            checked_symbols += 1
+            alerts = monitor.run_all(df=df, scope=sym)
+            total_alerts += len(alerts)
+            critical += sum(1 for a in alerts if a.severity == "critical")
+
+        logger.info(
+            "数据级监控 完成: symbols=%d alerts=%d critical=%d (trace_id=%s)",
+            checked_symbols, total_alerts, critical, trace_id,
+        )
+    except Exception as e:
+        logger.error("数据级监控 运行失败: %s (trace_id=%s)", e, trace_id)
+
+
+
 def sync_futures_data_job(symbols: list[str] | None = None, days: int = 120) -> None:
     """执行期货多源数据同步（Phase 14.5，工作日 17:30 调度）。
 

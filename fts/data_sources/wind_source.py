@@ -32,26 +32,46 @@ logger = logging.getLogger(__name__)
 # ─── MCP 调用入口（可被外部注入/mock）─────────────────────
 
 
+# 注入的 MCP 客户端（生产环境通过 fts.bootstrap 调用 set_mcp_handler 注入）
+_mcp_handler: Optional[Any] = None
+
+
+def set_mcp_handler(handler: Any) -> None:
+    """注入 Wind MCP 客户端（v2.60.0，GAP-F04）。
+
+    Args:
+        handler: 可调用对象，签名 ``handler(query: str) -> Any``（返回 MCP JSON dict）
+    """
+    global _mcp_handler
+    _mcp_handler = handler
+    logger.info("[WIND] MCP 客户端已注入")
+
+
 def _call_mcp(query: str) -> Any:
     """调用 Wind MCP 工具（mx_ashare_finance_data / mx_comprehensive_finance_data）。
 
-    本实现使用 mx_comprehensive_finance_data（自然语言查询）。
-    生产环境需通过 FTS 启动钩子注入真实 MCP 客户端。
-    当前默认抛 RuntimeError,迫使 is_available() 返回 False（生产部署前需注入）。
+    行为分级（v2.60.0，GAP-F04）:
+        - 已注入客户端（set_mcp_handler）→ 直接调用
+        - 配置 mcp_enabled=true 但未注入 → 抛 RuntimeError（显式初始化报错提示）
+        - 未启用（mcp_enabled=false）→ 返回 None（明确降级，跳过增强字段）
 
     Args:
         query: 自然语言查询字符串
 
     Returns:
-        MCP 工具返回的 JSON dict（结构由 mx 工具决定）
-
-    Raises:
-        RuntimeError: MCP 客户端未注入
+        MCP 工具返回的 JSON dict（结构由 mx 工具决定）；未启用时返回 None
     """
-    # 默认实现：未注入时显式抛错，避免静默失败
-    raise RuntimeError(
-        "Wind MCP 客户端未注入。请在生产环境通过 fts.bootstrap 注入 run_mcp 客户端。"
-    )
+    if _mcp_handler is not None:
+        return _mcp_handler(query)
+    from fts.config.settings import get_config
+
+    if get_config().mcp_enabled:
+        raise RuntimeError(
+            "Wind MCP 已启用但客户端未注入。请调用 "
+            "fts.data_sources.wind_source.set_mcp_handler(handler) 初始化。"
+        )
+    logger.debug("[WIND] MCP 未启用，跳过增强字段查询: %s", query[:50])
+    return None
 
 
 # ─── 字段映射辅助 ────────────────────────────────────────
@@ -91,10 +111,10 @@ class WindSource(BaseFuturesSource):
     # ─── 探活（不抛异常）──
 
     def is_available(self) -> bool:
-        """探活：通过 _call_mcp 发送轻量查询。失败/超时 → False。"""
+        """探活：通过 _call_mcp 发送轻量查询。失败/超时/未启用 → False。"""
         try:
-            _call_mcp("Wind 健康检查")
-            return True
+            raw = _call_mcp("Wind 健康检查")
+            return raw is not None
         except Exception:  # noqa: BLE001
             return False
 
@@ -296,4 +316,4 @@ class WindSource(BaseFuturesSource):
         ]
 
 
-__all__ = ["WindSource", "_call_mcp"]
+__all__ = ["WindSource", "_call_mcp", "set_mcp_handler"]

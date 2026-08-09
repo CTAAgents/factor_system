@@ -1745,8 +1745,8 @@ def build_parser() -> argparse.ArgumentParser:
                             choices=["stock", "futures"],
                             help="因子池类型: stock（股票）/ futures（期货）")
     p_port_run.add_argument("--synthesis-mode", type=str, default=None,
-                            choices=["equal_weight", "sharpe_weight", "elastic_net"],
-                            help="信号合成模式: elastic_net（股票默认）/ sharpe_weight（期货默认）/ equal_weight")
+                            choices=["equal_weight", "sharpe_weight", "elastic_net", "adaptive"],
+                            help="信号合成模式: elastic_net（默认）/ adaptive（Regime 自适应双维度）/ sharpe_weight / equal_weight")
     p_port_run.set_defaults(func=_cmd_portfolio_run)
 
     # ui

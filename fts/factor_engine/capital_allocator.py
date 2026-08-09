@@ -63,6 +63,8 @@ class CapitalAllocator:
         max_drawdown: float = 0.20,
         win_rate: Optional[float] = None,
         payoff_ratio: Optional[float] = None,
+        margin_rates: Optional[dict[str, float]] = None,
+        max_margin_usage: float = 0.80,
     ) -> AllocationResult:
         """分配资金。
 
@@ -74,26 +76,98 @@ class CapitalAllocator:
             max_drawdown: 最大回撤约束（vol_target 模式）
             win_rate: 胜率（kelly 模式）
             payoff_ratio: 盈亏比（kelly 模式）
+            margin_rates: 品种保证金率表（GAP-F09，v2.60.0，缺省读取配置 margin_rate_map）
+            max_margin_usage: 最大保证金占用率（超过触发强平风险告警并按上限缩放）
 
         Returns:
             AllocationResult。
         """
         if mode == "fixed":
-            return self._fixed_allocation(total_capital)
-        if mode == "vol_target":
-            return self._vol_target_allocation(
+            result = self._fixed_allocation(total_capital)
+        elif mode == "vol_target":
+            result = self._vol_target_allocation(
                 portfolio_returns, total_capital, target_volatility, max_drawdown
             )
-        if mode == "risk_parity":
-            return self._risk_parity_allocation(portfolio_returns, total_capital)
-        if mode == "kelly":
-            return self._kelly_criterion_allocation(
+        elif mode == "risk_parity":
+            result = self._risk_parity_allocation(portfolio_returns, total_capital)
+        elif mode == "kelly":
+            result = self._kelly_criterion_allocation(
                 total_capital, win_rate, payoff_ratio
             )
-        logger.warning("[CapitalAllocator] 未知模式 %s，回退 vol_target", mode)
-        return self._vol_target_allocation(
-            portfolio_returns, total_capital, target_volatility, max_drawdown
+        else:
+            logger.warning("[CapitalAllocator] 未知模式 %s，回退 vol_target", mode)
+            result = self._vol_target_allocation(
+                portfolio_returns, total_capital, target_volatility, max_drawdown
+            )
+
+        # v2.60.0 (GAP-F09): 保证金占用约束（强平风险告警 + 上限截断）
+        result = self._apply_margin_constraint(
+            result, total_capital, margin_rates, max_margin_usage
         )
+        return result
+
+    # ─── 保证金占用约束（GAP-F09，v2.60.0）────────────────
+
+    @staticmethod
+    def _apply_margin_constraint(
+        result: AllocationResult,
+        total_capital: float,
+        margin_rates: Optional[dict[str, float]] = None,
+        max_margin_usage: float = 0.80,
+    ) -> AllocationResult:
+        """保证金占用约束：保证金占用 / 总权益 ≤ max_margin_usage。
+
+        保证金占用 = Σ(weight_i × total_capital × margin_i)，
+        未配置保证金率的品种用默认 0.10。超限时等比缩放权重至上限，
+        并触发强平风险告警（AGENTS.md 4.3：禁止无止损/超限额重仓）。
+
+        Args:
+            result: 分配结果（原地更新 weights/allocated_capital/details）
+            total_capital: 总资金
+            margin_rates: {symbol: 保证金率}
+            max_margin_usage: 最大保证金占用率
+
+        Returns:
+            应用约束后的 AllocationResult
+        """
+        if margin_rates is None:
+            try:
+                from fts.config.settings import get_config
+                margin_rates = get_config().margin_rate_map or {}
+            except Exception:  # noqa: BLE001
+                margin_rates = {}
+        if not margin_rates:
+            return result
+
+        weights = dict(result.weights)
+        margin_usage = 0.0
+        for sym, w in weights.items():
+            margin = float(margin_rates.get(sym, 0.10))
+            margin_usage += w * margin
+
+        details = dict(result.details)
+        details["margin_usage"] = round(margin_usage, 6)
+        details["margin_scaled"] = False
+
+        if margin_usage > max_margin_usage > 0:
+            scale = max_margin_usage / margin_usage
+            weights = {sym: w * scale for sym, w in weights.items()}
+            margin_usage *= scale
+            details["margin_usage"] = round(margin_usage, 6)  # 缩放后占用回落至上限
+            details["margin_scaled"] = True
+            details["margin_scale_factor"] = round(scale, 6)
+            logger.warning(
+                "[CapitalAllocator] 保证金占用 %.2f%% 超上限 %.0f%%，"
+                "权重等比缩放至 %.4f（强平风险告警）",
+                margin_usage * 100, max_margin_usage * 100, scale,
+            )
+
+        result.weights = weights
+        result.allocated_capital = {
+            sym: total_capital * w for sym, w in weights.items()
+        }
+        result.details = details
+        return result
 
     # ─── 各模式实现 ──────────────────────────────────────
 

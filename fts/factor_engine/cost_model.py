@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import TypedDict
 
 import numpy as np
+import pandas as pd
 
 from .contracts import BacktestMetrics
 
@@ -25,6 +26,7 @@ class CostConfig(TypedDict, total=False):
     commission_bps: float     # 手续费（基点，默认 0.3）
     impact_bps_per_pct: float # 冲击成本（每 1% 日成交量占比，默认 2.0）
     min_cost_bps: float       # 最低成本（基点，默认 0.5）
+    roll_cost_bps: float      # 展期成本（基点/次，期货主力换月穿越时扣除，v2.58.0 GAP-046）
     market: str               # "futures" / "stock" / "etf"
 
 
@@ -34,6 +36,7 @@ class AdjustedMetrics(TypedDict, total=False):
     total_cost_bps: float     # 总成本（基点）
     turnover: float           # 月度换手率
     cost_adjusted_ic: float   # 成本调整后 IC（近似）
+    roll_cost_bps: float      # 展期成本合计（基点，持仓穿越换月日）
 
 
 # ─── 默认市场成本配置 ─────────────────────────────────────
@@ -43,6 +46,7 @@ _DEFAULT_FUTURES: CostConfig = CostConfig(
     commission_bps=0.2,
     impact_bps_per_pct=1.0,
     min_cost_bps=0.5,
+    roll_cost_bps=2.0,  # v2.58.0 GAP-046: 期货主力换月展期成本（与 FTSConfig.roll_cost_bps 默认一致）
     market="futures",
 )
 
@@ -51,6 +55,7 @@ _DEFAULT_STOCK: CostConfig = CostConfig(
     commission_bps=0.8,
     impact_bps_per_pct=2.0,
     min_cost_bps=0.5,
+    roll_cost_bps=0.0,  # 股票/ETF 无主力换月
     market="stock",
 )
 
@@ -59,6 +64,7 @@ _DEFAULT_ETF: CostConfig = CostConfig(
     commission_bps=0.3,
     impact_bps_per_pct=1.0,
     min_cost_bps=0.5,
+    roll_cost_bps=0.0,  # 股票/ETF 无主力换月
     market="etf",
 )
 
@@ -133,13 +139,15 @@ class TransactionCostModel:
         volume: np.ndarray | None = None,
         avg_price: float = 100.0,
         market: str = "futures",
+        dates: np.ndarray | None = None,
+        roll_dates: set[str] | None = None,
     ) -> AdjustedMetrics:
         """对回测指标执行交易成本调整。
 
         步骤:
             1. 从信号变化估算月度换手率
             2. 查询市场成本参数
-            3. 计算总成本（滑点 + 手续费 + 冲击）
+            3. 计算总成本（滑点 + 手续费 + 冲击 + 展期）
             4. 应用最低成本下限
             5. 计算成本调整后夏普
 
@@ -149,9 +157,12 @@ class TransactionCostModel:
             volume: 日成交量数组（用于冲击成本估算）。
             avg_price: 平均价格（用于冲击成本缩放）。
             market: 市场类型。
+            dates: 日期索引数组（与 signal 对齐，用于匹配换月日；v2.58.0 GAP-046）。
+            roll_dates: 换月日期集合（ISO 字符串）；持仓穿越换月日时扣除展期成本
+                = |position| × roll_cost_bps（v2.58.0 GAP-046）。
 
         Returns:
-            AdjustedMetrics。
+            AdjustedMetrics（含展期成本统计）。
         """
         gross_sharpe = metrics.get("sharpe", 0.0)
         config = self.get_cost_bps(market)
@@ -171,15 +182,21 @@ class TransactionCostModel:
                 signal, config.get("impact_bps_per_pct", 2.0),
             )
 
+        # 2.5 展期成本（v2.58.0 GAP-046）：持仓穿越换月日扣 |position| × roll_cost_bps
+        roll_cost_bps = config.get("roll_cost_bps", 0.0)
+        roll_cost_total = self._estimate_roll_cost(
+            signal, dates, roll_dates, roll_cost_bps,
+        )
+
         # 3. 总成本估算（基点）
         slippage = config.get("slippage_bps", 0.5)
         commission = config.get("commission_bps", 0.3)
         impact = config.get("impact_bps_per_pct", 2.0)
         min_cost = config.get("min_cost_bps", 0.5)
 
-        # total_cost_bps = 换手率 * 每笔成本 + 额外冲击
+        # total_cost_bps = 换手率 * 每笔成本 + 额外冲击 + 展期成本
         raw_cost = turnover * (slippage + commission + impact) + impact_extra
-        total_cost_bps = max(raw_cost, min_cost)
+        total_cost_bps = max(raw_cost, min_cost) + roll_cost_total
 
         # 4. 成本调整后夏普
         #    cost_decimal = total_cost_bps / 10000（基点转小数）
@@ -202,7 +219,40 @@ class TransactionCostModel:
             total_cost_bps=total_cost_bps,
             turnover=turnover,
             cost_adjusted_ic=cost_adjusted_ic,
+            roll_cost_bps=roll_cost_total,
         )
+
+    @staticmethod
+    def _estimate_roll_cost(
+        signal: np.ndarray,
+        dates: np.ndarray | None,
+        roll_dates: set[str] | None,
+        roll_cost_bps: float,
+    ) -> float:
+        """估算展期成本（基点）。
+
+        持仓穿越换月日时，扣除 |position| × roll_cost_bps。
+        dates / roll_dates 缺失或 roll_cost_bps=0 时返回 0（不产生展期成本）。
+
+        Args:
+            signal: 持仓信号数组（-1~+1）。
+            dates: 日期索引数组（与 signal 对齐）。
+            roll_dates: 换月日期集合（ISO 字符串）。
+            roll_cost_bps: 展期成本（基点/次）。
+
+        Returns:
+            展期成本合计（基点）。
+        """
+        if (
+            not roll_dates or dates is None or roll_cost_bps <= 0
+            or len(signal) == 0 or len(dates) != len(signal)
+        ):
+            return 0.0
+        total = 0.0
+        for t in range(len(signal)):
+            if abs(signal[t]) > 1e-8 and str(pd.Timestamp(dates[t]).date()) in roll_dates:
+                total += abs(signal[t]) * roll_cost_bps
+        return float(total)
 
     @staticmethod
     def _estimate_impact(

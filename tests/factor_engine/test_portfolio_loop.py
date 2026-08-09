@@ -648,6 +648,61 @@ class TestBuildCombo:
         assert combo["combo_sharpe"] == 0.0
         assert combo["status"] == "pending"
 
+    # ── GAP-L301 实测化（v2.61.0）───────────────────────
+
+    def test_measured_metrics_with_factor_returns(self, sample_signals):
+        """传入因子收益矩阵 → 组合夏普/相关性由 w×R 实测（metrics_source=measured）。"""
+        rng = np.random.default_rng(11)
+        n = 60
+        fr = pd.DataFrame({
+            "fct_001": rng.normal(0.001, 0.01, size=n),
+            "fct_002": rng.normal(0.0005, 0.01, size=n),
+            "fct_003": rng.normal(0.0002, 0.01, size=n),
+        })
+        combo = build_combo(
+            sample_signals, mode="equal_weight", factor_returns=fr,
+        )
+        assert combo["metrics_source"] == "measured"
+        # 实测夏普 = mean/std × sqrt(252)，与手动计算一致
+        weights = np.array([0.5, 0.3, 0.2])
+        pf = fr.values @ weights
+        manual = pf.mean() / pf.std(ddof=1) * np.sqrt(252.0)
+        assert combo["combo_sharpe"] == pytest.approx(manual, abs=1e-6)
+
+    def test_estimated_fallback_without_returns(self, sample_signals):
+        """无因子收益矩阵 → 回退估算（metrics_source=estimated）。"""
+        combo = build_combo(sample_signals, mode="equal_weight")
+        assert combo["metrics_source"] == "estimated"
+
+    def test_estimated_fallback_insufficient_dates(self, sample_signals):
+        """因子收益矩阵样本不足（<20 行）→ 回退估算。"""
+        rng = np.random.default_rng(12)
+        fr = pd.DataFrame({
+            "fct_001": rng.normal(size=10),
+            "fct_002": rng.normal(size=10),
+            "fct_003": rng.normal(size=10),
+        })
+        combo = build_combo(
+            sample_signals, mode="equal_weight", factor_returns=fr,
+        )
+        assert combo["metrics_source"] == "estimated"
+
+    def test_measured_correlation_from_matrix(self, sample_signals):
+        """实测模式最大相关性来自收益矩阵。"""
+        rng = np.random.default_rng(13)
+        n = 60
+        x = rng.normal(size=n)
+        fr = pd.DataFrame({
+            "fct_001": x,
+            "fct_002": x + 0.01 * rng.normal(size=n),  # 高相关
+            "fct_003": rng.normal(size=n),
+        })
+        combo = build_combo(
+            sample_signals, mode="equal_weight", factor_returns=fr,
+        )
+        assert combo["metrics_source"] == "measured"
+        assert combo["max_correlation"] > 0.9
+
 
 # ════════════════════════════════════════════════════════════
 # 8. LoadEliteFactors 测试
@@ -844,6 +899,71 @@ class TestPortfolioLoop:
         result = loop.run()
         assert result.status in ("passed", "verifier_warning", "completed")
         assert result.n_factors_input >= 1
+
+    # ── GAP-L303/L304: optimizer 接线 ──────────────────
+
+    def _write_mock_elites(self, tmp_elite_dir: Path) -> list[str]:
+        """写入 3 个 mock elite 因子 JSON，返回 factor_id 列表。"""
+        ids = ["fct_opt1", "fct_opt2", "fct_opt3"]
+        for i, fid in enumerate(ids):
+            (tmp_elite_dir / f"factor_{i}.json").write_text(json.dumps({
+                "factor_id": fid, "name": f"mock_{fid}",
+                "sharpe": 2.0 + 0.1 * i, "ic": 0.04 + 0.01 * i,
+                "turnover": 0.3, "decay_6m": 0.1,
+            }), encoding="utf-8")
+        return ids
+
+    def test_run_optimizer_mode_end_to_end(
+        self, tmp_portfolio_dir, tmp_elite_dir,
+    ):
+        """optimizer 模式端到端：factor_returns 透传 → 组合实测指标 + 正常完成。"""
+        ids = self._write_mock_elites(tmp_elite_dir)
+        rng = np.random.default_rng(21)
+        n = 60
+        fr = pd.DataFrame({
+            ids[0]: rng.normal(0.001, 0.01, size=n),
+            ids[1]: rng.normal(0.0005, 0.01, size=n),
+            ids[2]: rng.normal(0.0002, 0.01, size=n),
+        })
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            synthesis_mode="optimizer",
+            optimizer_mode="mvo",
+        )
+        result = loop.run(factor_returns=fr)
+        assert result.status in ("passed", "verifier_warning", "completed")
+        assert result.n_factors_input == 3
+        # 组合已实测化（A 阶段联动）
+        combo = json.loads((tmp_portfolio_dir / "current_combo.json").read_text(encoding="utf-8"))
+        assert combo.get("metrics_source") == "measured"
+
+    def test_run_optimizer_with_exposure(
+        self, tmp_portfolio_dir, tmp_elite_dir,
+    ):
+        """optimizer + 暴露矩阵（GAP-L304）：组合正常完成。"""
+        ids = self._write_mock_elites(tmp_elite_dir)
+        rng = np.random.default_rng(22)
+        n = 60
+        fr = pd.DataFrame({
+            ids[0]: rng.normal(size=n),
+            ids[1]: rng.normal(size=n),
+            ids[2]: rng.normal(size=n),
+        })
+        # 暴露矩阵: 3 因子 × 2 维度
+        exposure = np.array([[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]])
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            synthesis_mode="optimizer",
+            optimizer_mode="mvo",
+            optimizer_config={"neutralization": "industry", "exposure_tolerance": 0.1},
+        )
+        result = loop.run(factor_returns=fr, exposure_matrix=exposure)
+        assert result.status in ("passed", "verifier_warning", "completed")
+        assert result.n_factors_input == 3
 
 
 # ════════════════════════════════════════════════════════════

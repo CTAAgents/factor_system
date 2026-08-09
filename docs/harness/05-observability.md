@@ -1,6 +1,6 @@
 # FTS 可观测性
 
-> 版本: v2.54.0
+> 版本: v2.62.0
 > 最后更新: 2026-08-05
 
 ---
@@ -70,6 +70,11 @@ CLI 入口 (cli.py)
 | `GET /api/v1/risk/status` | JSON | 风控规则状态 |
 | `GET /api/v1/live/factors` | JSON | Live 因子偏离监控列表 |
 | `GET /api/v1/live/factors/{id}/deviation` | JSON | 单因子偏离详情 |
+| `data_level_monitor_job`（每日 04:00） | 日志 | 数据级质量监控（GAP-F06）：缺失率/异常值/复权一致性/多源分歧四维检查结果与告警计数（scheduler 任务 `fts.dlm`） |
+
+### 数据级质量监控任务（GAP-F06）
+
+scheduler 任务 `data_level_monitor_job`（每日 04:00）执行数据级质量监控：缺失率/异常值/复权一致性/多源分歧四维检查，输出告警计数与结果日志（trace_id 前缀 `fts.dlm`）。
 
 ### 指标字段
 

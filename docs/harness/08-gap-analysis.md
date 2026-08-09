@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v2.54.0
+> 版本: v2.62.0
 > 最后更新: 2026-08-09
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -10,10 +10,10 @@
 
 | 优先级 | 开放 | 已关闭 | 总计 |
 |:-------|:-----|:-------|:-----|
-| P0 | 0 | 4 | 4 |
-| P1 | 0 | 3 | 3 |
-| P2 | 2 | 31 | 33 |
-| **合计** | **2** | **38** | **40** |
+| P0 | 13 | 4 | 17 |
+| P1 | 16 | 3 | 19 |
+| P2 | 10 | 31 | 41 |
+| **合计** | **39** | **38** | **77** |
 
 ---
 
@@ -27,6 +27,10 @@
 | GAP-002 | `cli.py`, `monitor.py`, `scheduler/` | CLI 入口、项目级监控封装、调度层均无测试覆盖（覆盖率均为 0%） | CLI/监控/调度在生产环境无可靠性保障 | 1 周内 | ✅ 已关闭 |
 | GAP-017 | `scripts/futures_signal_pipeline.py` | 因子泛化无法验证：盲测品种池缺失、单品种 IC 追踪缺失、品种级权重分配缺失 | 因子在未见过的品种上有效性未知，Ridge 聚合权重无法区分每个品种的因子有效性 | 1 周内 | ✅ 已关闭 |
 | GAP-033 | `fts/factor_engine/gp_evolver.py`, `operator_evolution.py`, `evaluation_chain.py` | GP 演化/算子演化使用全量数据搜索适应度导致数据泄露（OOS 不独立），IC 衰减字段硬编码未基于实际回测计算 | 高估 IC（0.5+ 虚假 IC），IC 衰减无实际监控，因子实际表现远低于回测 | 1 周内 | ✅ 已关闭 |
+| GAP-046 | `fts/data_futures.py` + `fts/data_sources/migrate.py` + `fts/factor_engine/backtest_pipeline.py` + `cost_model.py` | 期货主力连续合约（`{symbol}0`）为 akshare 直接拼接，未做换月复权调整（换月跳空污染因子值/IC）；回测无展期成本仿真（持仓穿越换月日不扣展期价差）；`contract_kline` 具体合约表无建表/写入逻辑，无法构建真实换月日历 | 因子在换月日产生伪信号、IC 系统性偏差；回测高估收益（漏计展期成本）；无法真实模拟主力切换 | 本阶段（v2.58.0） | ⏳ 处理中（阶段 A 已完成，见 plans/20-futures-roll-adjustment-plan.md；阶段 B P1 缺陷改进进行中） |
+| GAP-047 | `fts/factor_engine/evaluation_chain.py` + 期货演化路径 | 期货截面因子无中性化主流程：行业/市值中性化仅存在于 `cross_section_evaluate_backtest` 可选参数（industry_map/cap_map 为 None 即跳过），期货演化路径未传板块映射 | 截面因子 IC 含板块/风格暴露污染，跨品种可比性失真（机构级缺陷，见 plans/21-futures-maturity-optimization-plan.md GAP-F03） | 本阶段 | ⏳ 处理中（v2.59.0：EvolutionLoop futures 自动注入板块映射） |
+| GAP-048 | `fts/factor_engine/backtest_pipeline.py` | 回测无涨跌停拦截、停牌过滤、部分成交建模：Grep 涨跌停/停牌零命中，信号直接按收盘/结算成交 | 回测结果偏乐观（涨跌停日无法成交被当作可成交），违反回测-实盘强对齐红线（机构级缺陷，见 plans/21 GAP-F02） | 本阶段 | ⏳ 处理中（v2.59.0：涨跌停拦截 + 停牌过滤 + 被拦截成交统计） |
+| GAP-049 | `fts/live_trade/`（缺失） | 实盘执行链路缺失：无真实网关、订单生命周期状态机、人工干预通道（紧急暂停/一键平仓）、实盘参数独立隔离、灰度发布 | 无法实盘落地，违反 AGENTS.md 4.3 实盘红线（机构级缺陷，见 plans/21 GAP-F01；角色边界：FTS 只产信号，真实网关由下游 FDT 负责） | 1 月内 | ⏳ 处理中（v2.60.0：live_trade 骨架 + OrderState 状态机 + 持仓级止损止盈单 + 人工干预接口 + 网关抽象/模拟 + 重试超时兜底） |
 
 ### P1 — 重要改进（提升效率或稳定性）
 
@@ -35,6 +39,9 @@
 | GAP-003 | `micro_evolution.py` | optuna 贝叶斯调参模块覆盖率仅 31%，依赖声明在 evolution extra 中，大部分分支路径（异常处理、参数传递）未覆盖 | 演化流程中的调参环节无充分测试，生产环境可能引发不可预见的 optuna 调用失败 | 1 月内 | ✅ 已关闭 |
 | GAP-004 | `evaluation_chain.py` | 三级评估链覆盖率 90%，剩余 10% 的 mock 路径和异常分支未覆盖 | 边缘路径的评估逻辑可能存在隐含 bug | 1 月内 | ✅ 已关闭 |
 | GAP-034 | `fts/factor_engine/factor_clustering.py` | 因子相关性缺乏系统聚类，ACTIVE_FACTOR_CAP 仅按 Sharpe 排序做简单截断，无法区分"高 Sharpe 高相关"和"低 Sharpe 独立信号"因子，冗余因子可能取代有价值的独立信号 | 组合因子多样性不足，独立信号可能被相关冗余因子挤出 | 1 月内 | ✅ 已关闭 |
+| GAP-045 | `fts/factor_engine/portfolio_loop.py` + `adaptive_weight.py` + `portfolio_constructor.py` | adaptive 权重能力未完整接入 L3：`AdaptiveWeightManager`/`RegimeSmoother`/`PortfolioConstructor(weight_method="adaptive")` 仅测试引用，L3 生产路径仅用裸 `regime_adaptive_weight_adjustment`（回测/生产两套入口不同步）；Regime 切换权重无应用层平滑；原设计 A.3 的 FactorStyle/style_tags 维度未实现 | 回测与实盘路径不一致（违反强对齐红线）；Regime 切换时权重瞬时跳变；权重调整维度缺失风格维度 | 1 月内 | ⏳ 开放（v2.56.0，见 plans/19-adaptive-weight-l3-integration.md） |
+| GAP-050 | `fts/data_sources/wind_source.py` + `ifind_source.py` + `data_quality_monitor.py` + `capital_allocator.py` | 数据源生产可用性脆弱（WIND/IFIND MCP 默认抛异常、tick 历史仅 42 分钟）+ 数据质量监控错位（仅因子级非数据级）+ 组合优化层薄（无均值方差/风险平价，无保证金建模） | 生产环境增强字段缺失、数据缺失未被及时发现、组合风险调整能力弱（机构级缺陷，见 plans/21 GAP-F04/F06/F07/F09） | 1 月内 | ⏳ 处理中（v2.60.0：GAP-F04 MCP 可配置注入 + 无 MCP 明确降级 已完成；GAP-F06 数据级监控器 已完成；GAP-F07 PortfolioOptimizer 已完成；GAP-F09 保证金建模已落地；剩余 GAP-F04 tick 缓存回放 后续批） |
+| GAP-051 | `fts/factor_engine/evolution_loop.py` + `walk_forward.py` + `audit.py` | 样本外纪律执行不彻底：walk_forward 为审计可选环节（audit.py 中调用），调度主流程 `l2_evolution_loop_job`（jobs.py L54-119）未强制冷启动验证；`_run_audit` 的 OOS 结果用 L1 单段 ICIR 近似，非多窗口 WalkForward | 晋升因子可能依赖参数优化段过拟合（机构级缺陷，见 plans/21 GAP-F08） | 本阶段 | ⏳ 处理中（v2.60.0：晋升路径强制 WalkForward 冷启动验证 + 配置开关 + OOS 报告） |
 
 ### P2 — 一般改进（优化代码质量）
 
@@ -68,13 +75,83 @@
 | GAP-032 | `fts/factor_engine/evolution_loop.py` 晋升路径 | 演化产物未同步 DuckDB factor_catalog：elite 快照 133 个因子的 factor_id 不在 `data/factor_catalog.duckdb` 中（2026-08-03 后演化产物），`factor list`/`backtest batch` 的 DuckDB 查询模式读不到这些因子 | "目录直读 vs DuckDB"数据分叉：DuckDB 查询视角下演化产物不可见，catalog 统计（1945 行）与 elite 实际快照不一致 | 3 月内 | ✅ 已关闭 |
 | GAP-035 | `fts/factor_engine/factor_clustering.py` | 因子信号矩阵缺乏 PCA 降维，Elastic Net 在因子数较多时仍可能达到 20 因子上限，无法通过正交主成分进一步压缩信号源 | 信号源维度高，组合复杂度大，换手率成本非线性增长 | 3 月内 | ✅ 已关闭 |
 | GAP-036 | `fts/factor_engine/evolution_loop.py` | L1 注入候选文件消费后未删除，l1_injected 目录累积 518 个 JSON 文件，历史文件持续堆积 | 大量历史文件占用磁盘空间，干扰目录扫描效率，L1 候选文件失去消费状态的可见性 | 3 月内 | ✅ 已关闭 |
-| GAP-037 | `fts/ml/`（未实现） | 深度学习时序模型（LSTM/GRU/Transformer）与强化学习（RL，DQN/PPO/SAC）未实现：FTS 本次升级仅落地 LightGBM/XGBoost/Ensemble 传统 ML 模型（Phase 24），深度学习与 RL 需引入 PyTorch/TensorFlow/gym 等重依赖，训练成本高、可解释性低 | 无法利用深度时序特征与序列决策优化，信号合成停留在浅层模型 | 3 月内 | ⏳ 开放 |
+| GAP-037 | `fts/ml/`（未实现） | 深度学习时序模型（LSTM/GRU/Transformer）与强化学习（RL，DQN/PPO/SAC）未实现：FTS 本次升级仅落地 LightGBM/XGBoost/Ensemble 传统 ML 模型（Phase 24），深度学习与 RL 需引入 PyTorch/TensorFlow/gym 等重依赖，训练成本高、可解释性低 | 无法利用深度时序特征与序列决策优化，信号合成停留在浅层模型 | 3 月内 | ⏳ 处理中（v2.60.0 GAP-F05：轻量纯 numpy MLP 因子模型已落地，LSTM/RL 远期） |
 | GAP-038 | `fts/factor_engine/evolution_loop.py` | 种子因子相关性预检 `compute_cross_section_correlations` 在期货横截面模式（184 种子 × 25 品种 × 500 日）下计算量过大且无超时保护，演化进程卡死（CPU 0%，无日志输出），ThreadPoolExecutor timeout 无法中断卡在 numpy/scipy C 扩展中的线程 | 夜间因子演化无法完成，进程长时间无响应 | 已解决（v2.39.0 规模保护跳过） | ✅ 已关闭 |
 | GAP-039 | `tests/` 全量回归（67 failed + 16 errors，v2.39.0 基线） | 全量回归存在 67 个失败 + 16 个收集/运行错误，来源两类：① 预存断言过期（test_data_cli/test_tasks/test_sync_futures_task 等，GAP-028 同类）② 并行 v2.38.0+ 工作区改动引入（test_http_server/test_seed_pool/test_seed_loader/test_risk_tag/test_contracts/test_portfolio_loop 等，未提交） | 无法一键全绿验证，回归基线不可信，新改动无法区分自身回归与既有噪音 | 3 月内 | ✅ 已关闭（v2.47.0 回归清零 3836 passed） |
-| GAP-041 | 16 个覆盖率 <90% 模块 | v2.47.0 全量回归后 16 个模块覆盖率 <90%：`cross_market/data_adapter(55%)` `factor_clustering(64%)` `tdx_minute_source(67%)` `tqsdk_tick_source(73%)` `factor_db/migrate_from_json(73%)` `evolution_loop(80%)` `tq_source(81%)` `data_quality_monitor(82%)` `ifind_source(84%)` `data(85%)` `factor_db/repository(85%)` `ml/models(86%)` `wind_source(87%)` `factor_screener(87%)` `causal_validator(89%)` `contracts(89%)`，缺口语句集中在外部数据源网络/鉴权路径与异常兜底分支 | 关键路径异常分支未验证，外部数据源降级逻辑存在隐性 bug 风险 | 3 月内 | ⏳ 开放 |
-| GAP-042 | `fts/factor_engine/high_ic_screener.py` | 高IC筛查的「极值样本扰动测试（V2/检查项 5）」依赖外部传入 `extreme_perturbation.ic_drop`，当前 `_promote_to_elite` 未计算该数据 → 该项实际恒为 skipped，极值扰动一票否决（>25% 降幅）在 L2 入库质检中未真正生效 | 高IC因子可能仅依赖少数极端样本支撑，筛查存在盲区 | 3 月内 | ⏳ 开放（需在回测流水线增加极值剔除重算 IC 能力） |
+| GAP-041 | 16 个覆盖率 <90% 模块 | v2.47.0 全量回归后 16 个模块覆盖率 <90%：`cross_market/data_adapter(55%)` `factor_clustering(64%)` `tdx_minute_source(67%)` `tqsdk_tick_source(73%)` `factor_db/migrate_from_json(73%)` `evolution_loop(80%)` `tq_source(81%)` `data_quality_monitor(82%)` `ifind_source(84%)` `data(85%)` `factor_db/repository(85%)` `ml/models(86%)` `wind_source(87%)` `factor_screener(87%)` `causal_validator(89%)` `contracts(89%)`，缺口语句集中在外部数据源网络/鉴权路径与异常兜底分支 | 关键路径异常分支未验证，外部数据源降级逻辑存在隐性 bug 风险 | 3 月内 | ⏳ 开放（= plans/21-futures-maturity-optimization-plan.md GAP-F16） |
+| GAP-042 | `fts/factor_engine/high_ic_screener.py` | 高IC筛查的「极值样本扰动测试（V2/检查项 5）」依赖外部传入 `extreme_perturbation.ic_drop`，当前 `_promote_to_elite` 未计算该数据 → 该项实际恒为 skipped，极值扰动一票否决（>25% 降幅）在 L2 入库质检中未真正生效 | 高IC因子可能仅依赖少数极端样本支撑，筛查存在盲区 | 3 月内 | ⏳ 开放（= plans/21-futures-maturity-optimization-plan.md GAP-F15，回测流水线极值剔除重算 IC） |
 | GAP-043 | `fts/factor_engine/evolution_loop.py` + `evaluation_chain.py` + `ablation.py` | 质检拦截器判定缺陷：① 消融实验 `shuffle_dates`（时间戳打乱）对时序因子必然摧毁 IC（时序依赖是必要特征）、`zero_one_feature` 置零核心价格列（open/high/low/close/vwap/settle）对价格因子必然摧毁 IC，被统一判定为"伪相关"误杀高IC候选；② 鲁棒性缺失值测试 `_inject_missing` 注入 NaN 后 `_compute_ic` 的 spearmanr/pearsonr 无 NaN 掩码返回 0.0，缺失值测试 3/3 恒失败（保持率 0%） | L2 期货演化 15 代中 5 个通过 Verifier 的候选（IC 0.31~0.52）全部被误杀 → 失败率 100% 熔断，演化停滞 | 已解决（v2.50.0 信息型/拦截型判定 + IC NaN 掩码） | ✅ 已关闭 |
 | GAP-044 | `fts/factor_engine/robustness.py` | 鲁棒性缺失值测试阈值过高（0.80）：`_inject_missing` 随机单元格级 NaN 注入比真实数据质量问题激进得多（5% 随机 NaN 即使高质量种子 IC=0.49 的保持率也降至 0.56），导致 12 个种子因子全部被拦截，父因子池为空，后续 GP 演化全退化（11 个常数信号因子），总失败率 100% 熔断 | L2 期货演化持续 100% 失败率熔断，无法产生新精英因子 | 已解决（v2.52.0 `missing_retention_threshold` 0.80→0.50） | ✅ 已关闭 |
+
+### GAP-I 系列 — 机构级对标（总纲：plans/23-institutional-transformation-plan.md）
+
+> 全链路机构级差距登记（L1→L4 × 三档机构 T1/T2/T3），按「先单机后扩展」分三阶段追赶（Stage 1 对标中小团队 v2.65.0~v2.72.0 / Stage 2 对标国内头部 v2.73.0~v2.80.0 / Stage 3 对标海外顶级 v2.81.0+）。GAP-I207/I304 引用 plans/22 GAP-S01/S02 为 Stage 门槛，不重复登记详情。
+
+#### P0 — 机构级阻塞性差距
+
+| ID | 模块 | 差距描述 | 影响 | 处理期限 | 状态 |
+|:---|:-----|:---------|:-----|:---------|:-----|
+| GAP-I201 | `fts/factor_engine/evolution_loop.py` | 挖掘吞吐不足：主循环每代仅生成 1 个后代因子（串行），批量粗筛/多进程并行评估缺失，候选量级差机构 2~3 个数量级 | 同等窗口内命中精英因子期望差 2~3 个数量级（与机构差距核心根因） | Stage 1（v2.65.0 首期，吞吐 ≥10×） | ⏳ 开放 |
+| GAP-I207 | `fts/factor_engine/evaluation_chain.py` + `cli.py` | 股票因子行业/市值中性化未接入主流程（`_neutralize_signal_matrix` 已实现但 industry_map/cap_map 默认 None 跳过，settings `stock_neutralization` 死配置） | 股票因子 IC 含行业/市值偏好污染，污染 L2/L3 全链路结论（= plans/22 GAP-S01） | Stage 1 门槛（v2.60.0 阶段 A） | ✅ 已处理（v2.61.0 GAP-S01：EvolutionLoop stock 分支自动加载映射 + 键归一化 + 中性化前后 IC 对比） |
+| GAP-I301 | `scripts/daily_signal_pipeline.py` + `portfolio_constructor.py` | 股票流水线缺 L3 组合层：仅等权求和取信号排名，无权重学习/组合优化/Regime/成本约束（期货 L3 完整未复用） | 股票 alpha 无法形成有效组合，信号管道粗糙、实盘落地风险高 | Stage 1（v2.67.0） | ⏳ 开放 |
+| GAP-I501 | `fts/factor_engine/cost_model.py` + `backtest_pipeline.py` | 回测成本/容量保真不足：已建手续费/滑点/涨跌停/停牌/展期，但无冲击成本模型（按成交量占比）、无容量限制建模 | 大权重信号高估收益、策略容量不可知，违反回测-实盘强对齐红线 | Stage 1（v2.66.0） | ⏳ 开放 |
+| GAP-I401 | `fts/factor_engine/feedback_loop.py` + `bridge/signal_bridge.py` | 实盘反馈闭环缺失：信号输出给 FDT 后无实盘成交/净值回流通道，因子状态仅基于历史回测 | 无法感知实盘漂移，衰减退役无实盘依据 | Stage 1（v2.71.0） | ⏳ 开放 |
+
+#### P1 — 机构级重要差距
+
+| ID | 模块 | 差距描述 | 影响 | 处理期限 | 状态 |
+|:---|:-----|:---------|:-----|:---------|:-----|
+| GAP-I101 | `fts/factor_engine/meta_loop.py` | L1 知识补给吞吐与知识源单一：每日 1 次 BootstrappingChain，仅券商研报/arXiv | L1 注入 L2 候选量小、维度单一 | Stage 1（v2.72.0 首期） | ⏳ 开放 |
+| GAP-I102 | `fts/factor_engine/factor_inspector.py` | 无 Alpha 审查/人机协同工作台：晋升全自动（Verifier+质量卡+审计），无人工审查环节 | 高 IC 但经济逻辑存疑因子可能通过自动审查 | Stage 1（v2.72.0 骨架） | ⏳ 开放 |
+| GAP-I202 | `fts/factor_engine/expr_dsl/registry.py` + `feature_ops.py` | 算子库规模与语义体系：~50 算子且双轨并存（GAP-S10），无组合/跨标的/A 股特有算子 | 搜索空间小、演化产出多样性不足 | Stage 2（v2.75.0） | ⏳ 开放 |
+| GAP-I203 | `fts/ml/models.py` | 深度因子学习缺失：仅 LightGBM/XGBoost/Ensemble + 轻量 MLP，无 LSTM/GRU/Transformer 时序深度模型、无 GAN/VAE 因子合成（= GAP-037） | 候选因子缺深度非线性特征维度 | Stage 2（v2.73.0 轻量 LSTM/GRU） | ⏳ 开放（引用 GAP-037） |
+| GAP-I204 | `fts/factor_engine/gp_evolver.py` | 搜索方法单一：GP 适应度单一（ic/sharpe/combo），无 Pareto 多目标（IC×换手×衰减×容量）、无符号回归 | 产出高 IC 高换手因子，实盘成本侵蚀收益 | Stage 1（v2.70.0 多目标首期） | ⏳ 开放 |
+| GAP-I205 | `fts/factor_engine/micro_evolution.py` | 微观演化效率：optuna 100 trials 固定串行，随机搜索无早停，低潜力候选浪费算力 | 每候选固定 100 trials 评估成本高 | Stage 1（v2.68.0） | ⏳ 开放 |
+| GAP-I206 | `fts/factor_engine/evolution_loop.py` + `factor_db/repository.py` | L2 准入去冗余/正交化闭环缺失：晋升仅相关性预检（标记不删除）+ 家族上限，正交化仅 L3 使用 | elite 池相关性膨胀 → 组合夏普稀释、换手成本非线性增长 | Stage 1（v2.69.0） | ⏳ 开放 |
+| GAP-I302 | `fts/factor_engine/portfolio_optimizer.py` | 组合优化器机构化：无 Ledoit-Wolf 协方差收缩、无风险平价/均值方差（Elastic Net + Regime 为主） | 组合权重对协方差噪声敏感、无风险预算视角 | Stage 2（v2.74.0） | ⏳ 开放 |
+| GAP-I305 | `fts/factor_engine/elite_tracker.py` + `feedback_loop.py` | 因子衰减自动退役闭环：退役阈值与重校准为人工配置，未接实盘反馈自动闭环 | 衰减因子滞留组合拖累绩效 | Stage 2（v2.76.0） | ⏳ 开放 |
+| GAP-I402 | `fts/monitor/live_factor_monitor.py` | 在线因子性能监控：框架存在但无实盘因子表现数据源（依赖 GAP-I401） | 因子实盘漂移不可见 | Stage 2（v2.77.0） | ⏳ 开放 |
+
+#### P2 — 机构级一般差距（扩展期）
+
+| ID | 模块 | 差距描述 | 影响 | 处理期限 | 状态 |
+|:---|:-----|:---------|:-----|:---------|:-----|
+| GAP-I103 | `fts/factor_engine/meta_loop.py` | 知识源扩展（公告/舆情/宏观事件）：L1 仅研报/arXiv（与 I101 联动） | 候选维度单一 | Stage 2（v2.80.0） | ⏳ 开放 |
+| GAP-I303 | `fts/factor_engine/portfolio_loop.py` | 组合层成本/换手约束显式化：有粘性约束但无显式换手成本目标项 | 高频调仓换手成本未被组合层显式优化 | Stage 3（v2.83.0） | ⏳ 开放 |
+| GAP-I304 | `fts/factor_engine/style_classifier.py` | 风格暴露控制（Barra 风格体系）：无 10 风格回归中性化（= plans/22 GAP-S02） | 无法回答"因子赚风格钱还是 alpha 钱" | Stage 2 门槛（引用 GAP-S02） | ✅ 已处理（v2.62.0，GAP-S02） |
+| GAP-I502 | `fts/factor_engine/evolution_loop.py` + `evaluation_chain.py` | 分布式扩展预留：全部单进程，无 ExecutorBackend 抽象（process/dask/ray） | Stage 3 吞吐再扩容无架构预留 | Stage 3（v2.81.0） | ⏳ 开放 |
+| GAP-I503 | `fts/data_sources/tqsdk_tick_source.py` | 数据深度：tick 历史仅 ~42 分钟（GAP-050），无 Level2 订单簿、无另类数据 | 微观结构 alpha 缺失 | Stage 3（v2.82.0 首期） | ⏳ 开放 |
+
+### GAP-L 系列 — L3/L4 机构级追赶专项（细则：plans/24-l3-l4-institutional-plan.md）
+
+> 承接总纲 GAP-I301~I305 / I401~I402 的 L3/L4 执行细则（GAP-L3xx 组合层 / GAP-L4xx 执行反馈与表达式算子层），登记 11 项执行级缺陷（P0×4 / P1×4 / P2×3）。A 阶段（GAP-L301/L302/L305）随 v2.61.0 启动，与总纲 Stage 1（v2.65.0~v2.72.0）排期对齐。
+
+#### P0 — L3 组合层阻塞性差距
+
+| ID | 模块 | 差距描述 | 影响 | 处理期限 | 状态 |
+|:---|:-----|:---------|:-----|:---------|:-----|
+| GAP-L301 | `fts/factor_engine/portfolio_loop.py` | 因子收益序列缺失：组合夏普=Σ(w·Sharpe)×多样性折扣、相关性=(1-diversity)×0.35+avg_sharpe×0.015 为经验公式，非因子收益矩阵 w×R 实测 | Verifier 校验估算值而非实测值；无 Σ 地基，机构化优化无从谈起 | A 阶段（v2.61.0，本批启动） | ⏳ 处理中 |
+| GAP-L302 | `fts/factor_engine/portfolio_optimizer.py` | 风险模型与协方差收缩估计缺失：无 Ledoit-Wolf/结构化收缩，奇异协方差仅 εI jitter | 组合风险度量缺失，风险平价/最小方差无法落地 | A 阶段（v2.61.0，本批启动） | ⏳ 处理中 |
+| GAP-L303 | `fts/factor_engine/portfolio_loop.py` + `portfolio_optimizer.py` | PortfolioOptimizer 未接入 L3 主流程：`run()` 不传 returns_matrix，optimizer 模式恒回退 sharpe_weight（死代码） | 已实现的机构化优化器不可用 | B 阶段（v2.67.0） | ⏳ 开放 |
+| GAP-L304 | `fts/factor_engine/portfolio_optimizer.py` | 组合层无行业/市值中性化约束：约束仅杠杆/集中度/换手/VaR，无暴露矩阵输入 | 组合隐含行业/市值风格赌注（联动 GAP-S01） | B 阶段（v2.68.0） | ⏳ 开放 |
+
+#### P1 — L3/L4 重要差距
+
+| ID | 模块 | 差距描述 | 影响 | 处理期限 | 状态 |
+|:---|:-----|:---------|:-----|:---------|:-----|
+| GAP-L305 | `fts/factor_engine/cost_model.py` + `portfolio_optimizer.py` | 组合目标无成本/换手项：cost_model 无冲击成本函数，优化目标无 -cost(w) | 高换手/集中组合成本被忽视，回测收益虚高（承接 GAP-I501/I303） | A 阶段（v2.66.0） | ⏳ 处理中 |
+| GAP-L306 | `fts/factor_engine/walk_forward.py` + `portfolio_loop.py` | 组合层 Walk-Forward 缺失：walk_forward 仅因子级，组合权重无滚动样本外验证 | 组合权重可能对单段历史过拟合 | C 阶段（v2.70.0） | ⏳ 开放 |
+| GAP-L307 | `fts/factor_engine/risk_attributor.py` + `portfolio_loop.py` | 归因体系未接入 L3：RiskAttributor 为孤立模块，无因子/风格/行业归因输出 | 无法回答"组合赚的什么钱" | C 阶段（v2.69.0） | ⏳ 开放 |
+| GAP-L401 | `fts/factor_engine/expr_dsl/registry.py` + `operator_evolution.py` | L4 表达式组合算子层薄弱：仅 15 个基础算子，无双序列/横截面/条件算子 | 因子表达式复合能力弱、演化搜索空间受限 | D 阶段（v2.72.0） | ⏳ 开放 |
+
+#### P2 — L3/L4 一般差距
+
+| ID | 模块 | 差距描述 | 影响 | 处理期限 | 状态 |
+|:---|:-----|:---------|:-----|:---------|:-----|
+| GAP-L308 | `fts/factor_engine/portfolio_loop.py` | Regime 权重数据化缺失：REGIME_FAMILY/STYLE_MULTIPLIERS 为人工硬编码查表，无数据支撑 | 制度调权缺实证依据 | D 阶段（v2.72.0） | ⏳ 开放 |
+| GAP-L402 | `fts/factor_engine/feedback_loop.py` + `bridge/signal_bridge.py` | L4 实盘反馈闭环缺失：无 LiveFeedbackRecord 契约与回流通道（承接总纲 GAP-I401） | 因子状态仅基于历史回测 | D 阶段（v2.71.0） | ⏳ 开放 |
+| GAP-L309 | `fts/factor_engine/portfolio_loop.py` | 组合层数据规模扩展：ElasticNet 硬编码 50 只×120 天，统计功效有限 | 截面回归功效不足、与 MIN_EVAL_DAYS=500 不一致 | 扩展期 | ⏳ 开放 |
+
 ---
 
 ## 3. 差距详情
@@ -441,6 +518,20 @@
 - **验证结果**: 无新增测试（阈值参数调整，ROB-102/103 缺失值测试通过条件更新）；影响所有市场（股票/期货统一），L2 期货演化预期解除熔断
 - **处理期限**: 已关闭（v2.52.0）
 
+### GAP-045: adaptive 权重未完整接入 L3（P1，开放）
+
+- **问题描述**: FTS 存在三处 adaptive 相关实现但 L3 生产路径仅接入最简形态：
+  1. **入口不一致**：L3 主循环 `PortfolioLoop.run()` Step 2.5 直接调用 `regime_adaptive_weight_adjustment()`，而回测管线 `PortfolioConstructor(weight_method="adaptive")` 走 `AdaptiveWeightManager` 封装——两套入口逻辑不同步，违反"回测与实盘强对齐"红线（GAP 家族同源问题）。
+  2. **无应用层平滑**：Regime 切换时权重瞬时跳变。`RegimeSmoother`（`adaptive_weight.py`）已实现但未接线；平滑仅存在于 regime 检测层（`_REGIME_PERSISTENCE_FACTOR=0.7`），属检测侧而非权重应用侧。
+  3. **style 维度缺失**：原设计 `A.3-adaptive-weight-design.md` 声明的 FactorStyle / style_tags 维度从未实现，`REGIME_FAMILY_MULTIPLIERS` 仅覆盖 FactorFamily（17 家族）。
+- **影响范围**: 回测与生产权重路径不一致 → 组合行为可复现性差；Regime 切换权重跳变 → 换手成本与策略漂移风险；调整维度缺乏风格粒度 → 防御/价值/情绪等风格信号无法制度化调节
+- **处理方案**: v2.56.0 按 `plans/19-adaptive-weight-l3-integration.md` 实施——
+  1. `synthesis_mode` 扩展 `adaptive`，Step 2 委托 `PortfolioConstructor`（统一回测/生产入口）
+  2. `RegimeSmoother(alpha=0.5, min_days=2)` 接入 Step 2.5，参数走 `AdaptiveWeightConfig`
+  3. 实现 FactorStyle 枚举 + `style_tags` 列（DuckDB 兼容补列）+ `REGIME_STYLE_MULTIPLIERS` 双维度调整
+- **验证结果**: 待实施（P2 起逐步验证：契约测试 → 统一入口集成测试 → 平滑用例 → 全量回归 + 一致性 13/13）
+- **处理期限**: 1 月内（P1）
+
 ## 4. 优先级定义
 
 | 优先级 | 定义 | 处理时限 | 验证标准 |
@@ -465,5 +556,5 @@
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射| 可验证断言 | 本文件登记全部 42 个差距（GAP-001~044），覆盖 `fts/factor_engine/`、`fts/data_sources/`、`fts/data.py`、`fts/cli.py`、`fts/core/`、`fts/monitor/`、`fts/scheduler/`、`fts/risk/`、`fts/factor_db/`、`fts/ml/`、`pipeline/`、`strategies/`、`scripts/`、`docs/`、`agents/` 等模块。GAP-020~024 关联 `plans/factor-management-optimization-plan.md`；GAP-039 关联 `plans/regression-fix-list-20260808.md`；v2.54.0 新增精英因子全员质量巡检脚本 `scripts/elite_quality_inspection.py`，修复种子因子 V5 经济逻辑 fallback 数据质量问题 | | 39 个差距已关闭（P0=5, P1=3, P2=31），3 个差距开放（GAP-037，P2，深度学习/RL 未实现；GAP-039，P2，全量回归失败项；GAP-042，P2，高IC极值扰动数据源缺口）。GAP-025 孤立模块集成修正 v2.10.0 关闭；GAP-026 算子命名对齐 v2.10.0 关闭；GAP-027 `code: Optional[str]` 可选化审计 v2.14.0 关闭；GAP-028 既有失败测试修复 v2.14.0 关闭；GAP-029 L3 漂移治理 v2.11.0 关闭；GAP-030 集成测试污染 catalog v2.14.0 关闭；GAP-031 L1-L2 注入接入 v2.14.0 关闭；GAP-032 演化产物同步 catalog v2.13.0 关闭；GAP-033 数据泄露+IC 衰减 v2.15.0 关闭；GAP-034 P1 因子聚类 v2.36.0 关闭；GAP-035 P2 PCA 降维 v2.36.0 关闭；GAP-036 L1 注入候选文件激进清理 v2.38.0 关闭；GAP-037 深度学习/RL 未实现 v2.38.0 登记开放；GAP-038 种子相关性预检卡死 v2.39.0 关闭；GAP-039 全量回归失败项 v2.39.0 登记开放；GAP-040 cross_section 家族来源未细分 v2.40.0 关闭；GAP-042 高IC极值扰动数据源缺口 v2.49.0 登记开放；GAP-043 质检拦截器判定缺陷 v2.50.0 关闭 |
+| 代码→文档映射| 可验证断言 | 本文件登记全部 45 个差距（GAP-001~045），覆盖 `fts/factor_engine/`、`fts/data_sources/`、`fts/data.py`、`fts/cli.py`、`fts/core/`、`fts/monitor/`、`fts/scheduler/`、`fts/risk/`、`fts/factor_db/`、`fts/ml/`、`pipeline/`、`strategies/`、`scripts/`、`docs/`、`agents/` 等模块。GAP-020~024 关联 `plans/factor-management-optimization-plan.md`；GAP-039 关联 `plans/regression-fix-list-20260808.md`；GAP-045 关联 `plans/19-adaptive-weight-l3-integration.md`；v2.54.0 新增精英因子全员质量巡检脚本 `scripts/elite_quality_inspection.py`，修复种子因子 V5 经济逻辑 fallback 数据质量问题；v2.55.0 VPER 因子 institutional 评分修正（1→4）后重新质检通过 V5 归库；v2.56.0 登记 GAP-045（adaptive 权重接入 L3） | | 39 个差距已关闭（P0=5, P1=3, P2=31），4 个差距开放（GAP-037，P2，深度学习/RL 未实现；GAP-039，P2，全量回归失败项；GAP-042，P2，高IC极值扰动数据源缺口；GAP-045，P1，adaptive 权重未完整接入 L3）。GAP-025 孤立模块集成修正 v2.10.0 关闭；GAP-026 算子命名对齐 v2.10.0 关闭；GAP-027 `code: Optional[str]` 可选化审计 v2.14.0 关闭；GAP-028 既有失败测试修复 v2.14.0 关闭；GAP-029 L3 漂移治理 v2.11.0 关闭；GAP-030 集成测试污染 catalog v2.14.0 关闭；GAP-031 L1-L2 注入接入 v2.14.0 关闭；GAP-032 演化产物同步 catalog v2.13.0 关闭；GAP-033 数据泄露+IC 衰减 v2.15.0 关闭；GAP-034 P1 因子聚类 v2.36.0 关闭；GAP-035 P2 PCA 降维 v2.36.0 关闭；GAP-036 L1 注入候选文件激进清理 v2.38.0 关闭；GAP-037 深度学习/RL 未实现 v2.38.0 登记开放；GAP-038 种子相关性预检卡死 v2.39.0 关闭；GAP-039 全量回归失败项 v2.39.0 登记开放；GAP-040 cross_section 家族来源未细分 v2.40.0 关闭；GAP-042 高IC极值扰动数据源缺口 v2.49.0 登记开放；GAP-043 质检拦截器判定缺陷 v2.50.0 关闭；GAP-044 鲁棒性缺失值阈值 v2.52.0 关闭；GAP-045 adaptive 权重接入 L3 v2.56.0 登记开放；v2.60.0 登记 GAP-I 系列 20 项（机构级总纲 plans/23）+ GAP-L 系列 12 项（L3/L4 机构级专项 plans/24，P0×4/L301~L304、P1×4/L305~L307+L401、P2×4/L308+L309+L402+L310，其中 L310 pytest 9.x fixture 修正已关闭） |
 | 检验方式 | 检查本文件差距登记表确认所有差距状态为 ✅ 已关闭；关联文档 `plans/factor-management-optimization-plan.md` |

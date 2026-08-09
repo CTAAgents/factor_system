@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.54.0
+> 版本: v2.62.0
 > 最后更新: 2026-08-08
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -157,6 +157,75 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ 集成到 `_promote_to_elite` 入库质检强制 Gate（**所有市场股票/期货统一启用**），筛查报告写入 elite 快照 `high_ic_screen` 字段
 - ✅ 25 个筛查单元测试全绿（打分/一票否决/评级边界/市场统一性/B级建议）+ promote/elite 集成测试 16 通过无回归
 - ✅ 设计文档 `docs/harness/design/B.4-high-ic-screening-design.md` 落地；登记 GAP-042（极值扰动数据源缺口）
+
+### v2.60.0 期货流水线机构级缺陷修复（阶段 C，处理中）
+
+**计划时间**: 2026-08-09
+
+**核心产出（推进中）**:
+- 🔄 GAP-F01（GAP-049）实盘执行链路：`fts/live_trade/` 骨架（订单生命周期状态机 `OrderState` + 持仓级止损止盈单 + 人工干预接口 + 网关抽象/模拟 + 重试超时兜底）；信号侧完备性（角色边界：真实网关由 FDT 负责）
+- 🔄 GAP-F08（GAP-051）样本外强制：演化晋升路径强制 WalkForward 冷启动验证（配置开关 `force_walkforward` 默认 true）+ OOS 报告
+- 🔄 GAP-F09（GAP-050 部分）保证金建模：品种保证金率表 + `CapitalAllocator` 保证金占用约束 + 强平风险告警
+- ✅ 修复预存失败 `test_robustness_failure_blocks_promotion`（显式锁定 stock 语境，解除 default_market=futures 阈值放宽干扰）
+- ✅ GAP-F04（GAP-050 部分）数据源降级加固：`FTSConfig.mcp_enabled` + Wind/iFinD `set_mcp_handler` 注入 + `_call_mcp` 三级行为（注入调用/启用未注入显式报错/未启用明确降级）
+- ✅ GAP-F05（GAP-037 部分）深度时序模型：`MLPFactorModel` 轻量纯 numpy MLP 因子（无 torch 重依赖，缺样本/非法输入抛 `ModelNotAvailableError` 降级）
+- ✅ GAP-F06（GAP-050 部分）数据质量监控：`DataLevelMonitor` 数据级监控器（缺失率/异常值/复权一致性/多源分歧）+ scheduler 每日 04:00 任务接入
+- ✅ GAP-F07（GAP-050 部分）组合优化器：`PortfolioOptimizer` 风险平价/均值方差 + 换手/集中度/杠杆/VaR 约束 + scipy 降级，接入 `synthesize_signals` optimizer 模式
+- ✅ GAP-F04（GAP-050 部分）数据源降级加固：`FTSConfig.mcp_enabled` + Wind/iFinD `set_mcp_handler` 注入 + `_call_mcp` 三级行为（注入调用/启用未注入显式报错/未启用明确降级）
+- ✅ GAP-F05（GAP-037 部分）深度时序模型：`MLPFactorModel` 轻量纯 numpy MLP 因子（无 torch 重依赖，缺样本/非法输入抛 `ModelNotAvailableError` 降级）
+- ✅ GAP-F06（GAP-050 部分）数据质量监控：`DataLevelMonitor` 数据级监控器（缺失率/异常值/复权一致性/多源分歧）+ scheduler 每日 04:00 任务接入
+- ✅ GAP-F07（GAP-050 部分）组合优化器：`PortfolioOptimizer` 风险平价/均值方差 + 换手/集中度/杠杆/VaR 约束 + scipy 降级，接入 `synthesize_signals` optimizer 模式
+
+### v2.61.0 股票流水线 GAP-S01（行业/市值中性化主流程，已完成）
+
+**完成时间**: 2026-08-09
+
+**核心产出**:
+- ✅ GAP-S01（GAP-I207）股票截面因子行业/市值中性化主流程：`EvolutionLoop(market="stock")` 自动加载 `industry_map.json` + `cap_map`（`stock_neutralization` 默认 true，接通死配置），键归一化（`.SH/.SZ` 后缀 → 裸代码兼容面板 symbol），透传 `cross_section_evaluate_backtest` 做行业去均值 + 市值加权去均值，报告输出中性化前后 IC 对比
+- ✅ 配套测试：股票自动注入启用/关闭/键归一化/空映射降级 + 中性化前后 IC 对比
+- ✅ 文档同步：01/06/07/08/09 + pyproject bump v2.60.0 → v2.61.0
+
+### v2.62.0 股票流水线 GAP-S02（Barra 风格因子体系，已完成）
+
+**完成时间**: 2026-08-09
+
+**核心产出**:
+- ✅ GAP-S02（GAP-I304）Barra 风格暴露计算引擎：`fts/factor_engine/barra/barra_style.py` 实现 10 大风格（size/beta/momentum/residual_vol/nonlinear_size/book_to_price/liquidity/earnings_yield/growth/leverage），逐日截面 rank→z-score 标准化；nonlinear_size 基于 size 暴露矩阵逐日 z³ 对 z 回归残差（截面依赖因子引擎层二次计算）；字段缺失全 NaN 降级
+- ✅ Barra 截面中性化器：`fts/factor_engine/barra/barra_neutralizer.py` 逐日 OLS（`np.linalg.lstsq`）风格暴露 + 行业虚拟变量回归取残差，样本不足降级去均值、常数列剔除、正交性保证
+- ✅ 评估链集成：`cross_section_evaluate_backtest` 新增 `style_exposures` 参数 + Step 2.6 Barra 风格回归残差（行业去均值后叠加风格剥离，两级中性化链 GAP-S01/S02）
+- ✅ 配套测试：`tests/factor_engine/test_barra.py` 13 用例（10 风格齐全/形状/size 单调/残差与风格正交/行业+风格叠加/小样本降级等）
+- ✅ 文档同步：01/06/07/08/09 + pyproject bump v2.61.0 → v2.62.0
+
+### v2.61.0 L3/L4 机构级追赶 A 阶段（因子收益序列 + 风险模型，规划中）
+
+**计划时间**: 2026-08-09 起
+
+**核心产出（规划，细则见 [plans/24-l3-l4-institutional-plan.md](plans/24-l3-l4-institutional-plan.md)）**:
+- 📋 GAP-L301 因子收益序列层：`FactorReturnsBuilder`（因子多空组合收益序列）→ 组合夏普/相关性实测化（w×R 替代经验公式）
+- 📋 GAP-L302 风险模型估计器：Ledoit-Wolf 收缩协方差 Σ（正定性保证）
+- 📋 GAP-L305 冲击成本函数 + 换手惩罚入优化目标（net 指标输出）
+- 📋 配套测试（test_factor_returns / test_risk_model_estimator）+ 文档同步
+
+### v2.59.0 期货流水线机构级缺陷修复（阶段 B，已完成）
+
+**完成时间**: 2026-08-09
+
+**核心产出**:
+- ✅ GAP-F03（GAP-047）期货截面因子板块中性化主流程：`EvolutionLoop(market="futures")` 自动从 `FUTURES_SECTOR_MAP` 反向构建 `{symbol: sector}` 板块映射注入 `cross_section_evaluate_backtest`（industry_map），截面信号按板块去均值剥离产业链/板块系统性偏差，消除"伪预测力"；新增 `FTSConfig.futures_neutralization`（默认 true）
+- ✅ GAP-F02（GAP-048）回测真实性仿真：`_compute_strategy_returns` 新增可交易掩码——涨跌停拦截（close 单日涨跌幅 ≥ `futures_limit_pct` 默认 8% 持仓保持）+ 停牌过滤（volume==0 持仓保持）；报告 summary 新增「被拦截成交统计」；新增 `FTSConfig.backtest_trade_filter`（默认 true）/ `futures_limit_pct`；`BacktestInput.trade_filter`/`limit_pct` 可选参数；配置关闭时跳过拦截回归兼容
+- ✅ 登记并处理 GAP-047/048（机构级对标 plans/21-futures-maturity-optimization-plan.md）；新增 ~12 测试用例
+- ✅ 文档同步：01/03/04/06/07/08/09 + pyproject bump v2.58.0 → v2.59.0
+
+### v2.58.0 期货连续合约复权 + 展期仿真（阶段 A，已完成）
+
+**完成时间**: 2026-08-09
+
+**核心产出**:
+- ✅ GAP-046 处理：期货主力连续合约换月复权（比率法后复权）——新增 `RollCalendar` 换月日历模块（`fts/data_sources/roll_calendar.py`），从 `contract_kline` 每日最大成交量判定主力、构建换月事件序列、计算复权因子；`migrate_schema` 幂等补 `kline_cache.adj_factor` 列 + 建 `contract_kline` 表（补写入逻辑到 `sync_futures_data_job`）
+- ✅ 消费端启用：`FuturesDataProvider.get_ohlcv(adjusted=True)` 默认返回复权序列（因子计算消除换月跳空伪信号）；`contract_kline` 缺失时降级返回原始拼接序列（不阻断）
+- ✅ 展期成本仿真：`TransactionCostModel` 新增展期成本项（`CostConfig.roll_cost_bps` 期货默认 2.0；`adjust(dates/roll_dates)` 持仓穿越换月日扣 `|position| × roll_cost_bps`；`AdjustedMetrics.roll_cost_bps` 统计字段），`BacktestPipeline` 持仓穿越换月日扣除展期价差（交易仿真用，与因子计算的复权序列分离）；报告新增「展期成本统计」
+- ✅ 配置：`futures_adjusted`（默认 true）/ `roll_cost_bps`（默认 2.0）；新增 ~22 测试用例
+- ✅ 文档同步：01/02/03/04/06/07/08/09 + pyproject bump v2.57.0 → v2.58.0；阶段规划落盘 `plans/20-futures-roll-adjustment-plan.md`（阶段 B P1 缺陷改进候选清单）
 
 ### v2.50.0 种子质检全链对齐 + 质检拦截器判定缺陷修复（已完成）
 
@@ -360,6 +429,8 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 | **v2.33.0** | 宏观因子降级 + 适用场景重设计 | ✅ 已实现（v2.33.0） | fut_macro_export 家族 6 因子全部 retire（真实 EDB 数据 IC≈0 证实代理假象）；角色边界重设计（宏观因子限定跨品种/板块层面）；np.bincount 输入边界审计修复（3 因子入口 NaN 清理 + bincount 防御）+ FactorRepository 事务修复 |
 | **v2.30.0** | 分钟级回测 Phase 1 | ✅ 已实现（v2.30.0） | 三源分钟数据源适配 + DuckDB minute_cache + 聚合器扩展 + 回测引擎 frequency 参数 + CLI --frequency 参数 |
 | **v2.0.0** | 生产部署 | 监控告警完善、容器化、CI/CD 流水线、期货全链路 E2E 测试 |
+| **v2.65.0+ 三阶段（plans/23）** | 追赶机构水平全面改造（规划中） | 全链路机构级对标（GAP-I 系列 20 项）：Stage 1 对标中小团队 v2.65.0~v2.72.0（吞吐 ≥10×、股票 L3、冲击成本/容量、实盘反馈闭环、中性化门槛）→ Stage 2 对标国内头部 v2.73.0~v2.80.0（深度因子学习、组合优化器机构化、衰减自动退役、Barra 风格暴露）→ Stage 3 对标海外顶级 v2.81.0+（分布式/GPU、Level2/另类数据）；详见 [plans/23-institutional-transformation-plan.md](plans/23-institutional-transformation-plan.md) |
+| **v2.61.0~v2.72.0 L3/L4 专项（plans/24）** | L3/L4 机构级追赶（规划中，A 阶段随 v2.61.0 启动） | L3 因子收益序列层 + 风险模型（Ledoit-Wolf 收缩 Σ）+ 组合指标实测化 + optimizer 接入主流程 + 中性化/成本约束 + 归因/组合层走航 + L4 实盘反馈闭环 + 表达式组合算子扩充（GAP-L 系列 11 项）；详见 [plans/24-l3-l4-institutional-plan.md](plans/24-l3-l4-institutional-plan.md) |
 
 ---
 
@@ -367,6 +438,8 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.62.0** | 2026-08-09 | 股票流水线 GAP-S02：Barra 风格因子体系——`fts/factor_engine/barra/` 三文件（barra_style.py 10 风格暴露引擎 + barra_neutralizer.py 逐日 OLS 回归残差 + __init__ 导出）；`cross_section_evaluate_backtest` 新增 `style_exposures` 参数 + Step 2.6 风格回归残差（GAP-S01 行业去均值后叠加风格剥离，两级中性化链）；nonlinear_size 引擎层截面二次计算；新增 test_barra.py 13 用例 |
+| **v2.61.0** | 2026-08-09 | 股票流水线 GAP-S01：行业/市值中性化主流程——`EvolutionLoop(market="stock")` 自动加载行业/市值映射（接通 `stock_neutralization` 死配置），键归一化兼容面板 symbol，透传评估链做行业去均值 + 市值加权去均值，报告输出中性化前后 IC 对比（`ic_pre_neutral`） |
 | **v2.33.0** | 2026-08-08 | 宏观因子降级 + 适用场景重设计 + np.bincount 边界审计：fut_macro_export 家族 6 因子 retire（真实 EDB 数据证实代理 Sharpe 7.68 为假象，IC≈0）；角色边界重设计（宏观因子限定跨品种/板块层面，禁止单品种时序信号）；FactorRepository 事务修复（get_factor fetchall + status 补列）；3 个 bincount 因子边界修复（NaN 清理 + 输入防御）；同步入口 NaN 防护到 4 个活跃 g 因子；新增 24 测试用例 |
 | **v2.30.0** | 2026-08-08 | 分钟级回测 Phase 1：三源分钟数据源适配 + DuckDB minute_cache + 聚合器扩展 + 回测引擎 frequency 参数 + CLI --frequency 参数 |
 | **v2.19.0** | 2026-08-07 | P0/P1 过拟合修复：A. combosharp  diversity-adjusted 加权；B. 因子 Sharpe 上限截断 3.0；C. 评价窗口 120d→500d；D. L3Verifier max_sharpe=3.5；E. Dirichlet 随机化测试；F. 质量卡 Sharpe>10 惩罚；修复 `build_combo` `n_ret` 赋值顺序 bug；修复 `EvolutionLoop` pipeline 引用回归；`test_portfolio_loop.py` 90 全绿 |
@@ -409,5 +482,5 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | 本文件定义 FTS 版本路线图（v2.10.0 算子演化引擎 + v2.8.5 演化质量修复 + OPERATOR 演化模式基础层），里程碑记录引用 `docs/harness/07-operations.md` 版本历史 |
-| 可验证断言 | 当前版本 v2.16.0 里程碑已登记，v2.0.0 按路线图推进 |
+| 可验证断言 | 当前版本 v2.16.0 里程碑已登记，v2.0.0 按路线图推进；v2.60.0 登记 GAP-I 系列总纲（plans/23）+ v2.61.0 登记 L3/L4 专项 A 阶段（plans/24，GAP-L301/L302/L305 处理中） |
 | 检验方式 | 检查本文件下阶段目标表和版本历史确认当前版本和路线图 |

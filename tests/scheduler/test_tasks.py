@@ -212,9 +212,9 @@ def test_registry_is_taskregistry():
 
 
 def test_register_default_tasks_registers_five():
-    """register_default_tasks 注册 9 个默认任务。"""
+    """register_default_tasks 注册 10 个默认任务。"""
     register_default_tasks()
-    assert len(REGISTRY) == 9
+    assert len(REGISTRY) == 10
 
 
 @pytest.mark.parametrize("name,expected", DEFAULT_TASKS.items())
@@ -245,13 +245,20 @@ def test_register_default_tasks_idempotent():
 def test_list_tasks_returns_sorted():
     """list_tasks 返回按 name 排序的列表，自动注册默认任务。"""
     tasks = list_tasks()
-    assert len(tasks) == 9
+    assert len(tasks) == 10
     names = [t.name for t in tasks]
     assert names == sorted(names)
     assert names == [
-        "data_quality_eval", "factor_inspector", "health_check",
-        "l1_meta_loop", "l2_evolution_loop", "l3_portfolio_loop",
-        "logic_monitor", "monthly_decay_eval", "sync_futures_data",
+        "data_level_monitor",
+        "data_quality_eval",
+        "factor_inspector",
+        "health_check",
+        "l1_meta_loop",
+        "l2_evolution_loop",
+        "l3_portfolio_loop",
+        "logic_monitor",
+        "monthly_decay_eval",
+        "sync_futures_data",
     ]
 
 
@@ -260,7 +267,7 @@ def test_list_tasks_after_manual_register():
     register_default_tasks()
     REGISTRY.register(TaskSpec("custom_job", "0 12 * * *", "mod.custom"))
     tasks = list_tasks()
-    assert len(tasks) == 10
+    assert len(tasks) == 11
     names = [t.name for t in tasks]
     assert "custom_job" in names
 
@@ -316,7 +323,10 @@ def test_make_trace_id_different_calls():
     assert t1 != t2
 
 
-@patch("fts.scheduler.tasks.generate_trace_id", return_value="mocked_id_123456_20260718T120000")
+@patch(
+    "fts.scheduler.tasks.generate_trace_id",
+    return_value="mocked_id_123456_20260718T120000",
+)
 def test_make_trace_id_with_mock(mock_gen):
     """使用 mock 验证 make_trace_id 的逻辑组合。"""
     register_default_tasks()

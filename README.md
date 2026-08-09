@@ -3,7 +3,7 @@
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
 [![Tests](https://img.shields.io/badge/tests-4020%2B%20passing-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.54.0-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.56.0-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -104,7 +104,7 @@ L3 参数：
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--universe` | `stock` | 组合市场（`stock` / `futures`） |
-| `--synthesis-mode` | 自动 | 信号合成模式（`sharpe_weight` / `elastic_net` / `equal_weight` / `ml_ensemble`） |
+| `--synthesis-mode` | 自动 | 信号合成模式（`elastic_net` / `adaptive` / `sharpe_weight` / `equal_weight` / `ml_ensemble`） |
 
 ### 因子管理
 
@@ -267,12 +267,18 @@ print(status_report_to_json(report))
 | `sharpe_weight` | 期货（默认） | 因子夏普比率加权 |
 | `elastic_net` | 股票（默认） | L1+L2 正则化学习权重 |
 | `equal_weight` | 通用 | 等权合成 |
+| `adaptive` | 通用（v2.56.0） | Sharpe 基权重 + Regime 自适应双维度（FactorFamily × FactorStyle）+ RegimeSmoother 平滑 |
 
 ### Market Regime 自适应
 
 系统实时检测 5 种市场状态并自动调整策略参数：
 
 `bull` / `bear` / `high_vol` / `low_vol` / `oscillate`
+
+- **FactorFamily 维度**：`REGIME_FAMILY_MULTIPLIERS`（17 家族 × 5 制度倍率表）
+- **FactorStyle 维度**（v2.56.0）：`REGIME_STYLE_MULTIPLIERS`（momentum/value/defensive 等 15 风格 × 5 制度）
+- **双维度调整**：`dimension="both"` 时 family×style 乘积，clamp 到 [0.5, 1.5]×base
+- **RegimeSmoother**：Regime 切换时权重指数平滑（默认 alpha=0.5, min_days=2）
 
 ### 断路器保护
 
@@ -312,7 +318,7 @@ fts/                          # 核心源码（84 个 Python 文件）
 ├── llm.py                    # LLM 客户端（OpenAI/Anthropic/Mock）
 └── cli.py                    # CLI 统一入口
 
-tests/                        # 116+ 个测试文件，3985+ 个测试用例（含高IC筛查 25 用例）
+tests/                        # 116+ 个测试文件，4256+ 个测试用例（含高IC筛查 25 用例）
 scripts/                      # 工具脚本
 config/                       # 项目配置
 memory/                       # 运行时持久化（自动创建）

@@ -105,8 +105,8 @@ class FactorRepository:
                 factor_id, name, code, code_hash, params, signature,
                 economic_logic, source, parent_id, generation, trace_id,
                 sharpe, ic, icir, max_drawdown, turnover_monthly,
-                decay_6m, status, market, family, is_elite, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                decay_6m, status, market, family, is_elite, metadata, style_tags
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
             factor_id,
             factor.get("name", factor_id),
@@ -130,6 +130,7 @@ class FactorRepository:
             factor.get("family") or "other",
             factor.get("is_elite", False),
             json.dumps(factor.get("metadata", {})),
+            json.dumps(factor.get("style_tags") or []),
         ])
 
         # 记录版本
@@ -1069,14 +1070,14 @@ class FactorRepository:
             if i >= len(cols):
                 break
             col = cols[i]
-            if col in ("params", "signature", "economic_logic", "metadata"):
+            if col in ("params", "signature", "economic_logic", "metadata", "style_tags"):
                 if val:
                     try:
                         result[col] = json.loads(val)
                     except (json.JSONDecodeError, TypeError):
                         result[col] = val
                 else:
-                    result[col] = {}
+                    result[col] = {} if col != "style_tags" else []
             elif col.endswith("_at") or col in ("created_at", "updated_at", "evaluated_at"):
                 result[col] = str(val) if val else None
             elif col == "failure_reasons" and val:

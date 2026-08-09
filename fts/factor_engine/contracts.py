@@ -41,6 +41,28 @@ FactorFamily = Literal[
 """因子家族分类（17 大类）。"""
 
 
+# ─── 因子风格枚举（A.3 原设计落地，v2.56.0）─────────────────
+
+FactorStyle = Literal[
+    "momentum",          # 趋势/动量
+    "mean_reversion",    # 均值回归
+    "carry",             # Carry 收益
+    "value",             # 价值
+    "low_vol",           # 低波动
+    "high_beta",         # 高 beta
+    "defensive",         # 防御
+    "growth",            # 成长
+    "quality",           # 质量
+    "sentiment",         # 情绪
+    "volatility",        # 波动率
+    "open_interest",     # 持仓量
+    "cross_section",     # 横截面
+    "intraday",          # 日内
+    "other",             # 其他
+]
+"""因子风格标签（15 类，A.3 自适应权重 style 维度）。"""
+
+
 # ─── 版本号（HARNESS §版本号纪律）─────────────────────────
 
 def _get_evolution_version() -> str:
@@ -143,6 +165,7 @@ class FactorProgram(TypedDict, total=False):
     risk_tag: Optional[str]                     # 风险标签，如 "vwap_approx"
     market: FactorMarket                        # 适用市场: futures/stock/etf/multi
     family: FactorFamily                        # 因子家族分类
+    style_tags: Optional[list[FactorStyle]]     # 风格标签（A.3，v2.56.0；缺省由分类器推断）
     symbols: list[str]                          # 适用品种列表（空=全品种适用）
     factor_version: str                          # 因子定义版本 (e.g., "v2")
     is_multi_symbol: bool                       # 是否为多品种因子
@@ -159,6 +182,7 @@ class BacktestMetrics(TypedDict, total=False):
     """Level 1 — 回测验证指标（agentic-factor-investing 定义）。"""
     ic: float                                    # Spearman rank IC，截面均值
     icir: float                                  # IC 均值 / IC 标准差
+    ic_pre_neutral: float                        # 中性化前 IC（仅行业/市值中性化启用时存在，GAP-S01）
     sharpe: float                                # 年化夏普比率
     max_drawdown: float                          # 最大回撤（0~1）
     monotonicity: bool                           # 十分位组合收益率严格单调
@@ -548,6 +572,7 @@ class PortfolioCombo(TypedDict, total=False):
     created_at: str
     sharpe_warning: Optional[str] # 夏普警戒提示（None=正常, str=警戒原因）
     sharpe_randomization_passed: Optional[bool]  # 随机化测试是否通过
+    metrics_source: Optional[str] # 组合指标来源（"measured"=因子收益矩阵 w×R 实测, "estimated"=估算回退，GAP-L301）
 
 
 class AgentOptimizationProposal(TypedDict, total=False):
@@ -637,6 +662,35 @@ DEFAULT_STICKY_CONFIG: StickyConfig = StickyConfig(
     new_factor_cap=0.10,
 )
 """v2.11.0 锁定的 L3 粘性约束默认配置。"""
+
+
+# ─── L3 自适应权重配置（A.3 / v2.56.0）──────────────────────
+
+class AdaptiveWeightConfig(TypedDict, total=False):
+    """L3 自适应权重配置 — Regime 倍率维度与平滑参数。
+
+    调整维度（dimension）:
+        - "family": 仅按 FactorFamily 倍率（既有 REGIME_FAMILY_MULTIPLIERS）
+        - "style":  仅按 FactorStyle 倍率（REGIME_STYLE_MULTIPLIERS，v2.56.0）
+        - "both":   family × style 双倍率乘积（默认，乘积后 clamp 到 ±50%）
+    """
+    enabled: bool                       # 是否启用（默认 True）
+    dimension: str                      # "family" | "style" | "both"（默认 "both"）
+    smoother: dict[str, float]          # RegimeSmoother 参数 {alpha, min_days}
+    min_weight: float                   # 调整后权重下限比例（默认 0.01）
+    min_clamp: float                    # 双维度乘积下限 clamp 倍率（默认 0.5）
+    max_clamp: float                    # 双维度乘积上限 clamp 倍率（默认 1.5）
+
+
+DEFAULT_ADAPTIVE_CONFIG: AdaptiveWeightConfig = AdaptiveWeightConfig(
+    enabled=True,
+    dimension="both",
+    smoother={"alpha": 0.5, "min_days": 2},
+    min_weight=0.01,
+    min_clamp=0.5,
+    max_clamp=1.5,
+)
+"""v2.56.0 锁定的 L3 自适应权重默认配置（更灵敏平滑档）。"""
 
 
 # ─── 多源数据交叉验证契约 ──────────────────────────────────
@@ -745,6 +799,9 @@ __all__ = [
     "StickyConfig",
     "DEFAULT_STICKY_CONFIG",
     "DriftMetrics",
+    # ─── L3 自适应权重（A.3 / v2.56.0）────────────────
+    "AdaptiveWeightConfig",
+    "DEFAULT_ADAPTIVE_CONFIG",
     # 多源数据交叉验证
     "MultiSourceDisagreement",
     # 规范化工具

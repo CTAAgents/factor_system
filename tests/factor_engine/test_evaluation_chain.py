@@ -13,6 +13,7 @@ from fts.factor_engine.contracts import (
 )
 from fts.factor_engine.evaluation_chain import (
     EvaluationChain,
+    _neutralize_signal_matrix,
     evaluate_backtest,
     evaluate_economic_logic,
     evaluate_multiple_tests,
@@ -867,6 +868,164 @@ class TestCrossSectionEvaluateBacktest:
         with mock.patch("fts.factor_engine.evaluation_chain.np.std", return_value=0.0):
             bt = cross_section_evaluate_backtest(fp, panel, dates)
         assert bt["t_stat"] == 0.0
+
+    def test_industry_neutralized(self):
+        """传入 industry_map 时应做行业中性化并返回有效指标。"""
+        from fts.factor_engine.contracts import EconomicLogic, FactorSignature
+        from fts.factor_engine.evaluation_chain import cross_section_evaluate_backtest
+        from fts.factor_engine.factor_program import create_factor_program
+
+        fp = create_factor_program(
+            name="cross_neutral",
+            code=(
+                "import numpy as np\n"
+                "def factor_program(data, params):\n"
+                "    close = data['close'].values\n"
+                "    n = len(close)\n"
+                "    sig = np.zeros(n)\n"
+                "    for i in range(5, n):\n"
+                "        sig[i] = (close[i] - close[i-5]) / max(close[i-5], 1e-10)\n"
+                "    return np.clip(sig * 10, -1.0, 1.0)\n"
+            ),
+            params={},
+            signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
+            economic_logic=EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4, narrative="行业中性化测试"),
+            source="manual",
+        )
+        panel, dates = self._make_panel(10)
+        # 前 5 只归入行业 A，后 5 只归入行业 B
+        industry_map = {f"STK_{i}": ("A" if i < 5 else "B") for i in range(10)}
+        bt = cross_section_evaluate_backtest(fp, panel, dates, industry_map=industry_map)
+        assert "ic" in bt
+        assert "sharpe" in bt
+        assert "max_drawdown" in bt
+
+    def test_industry_neutral_ic_pre_recorded(self):
+        """中性化启用时应记录中性化前 IC（ic_pre_neutral）供对比（GAP-S01）。"""
+        from fts.factor_engine.contracts import EconomicLogic, FactorSignature
+        from fts.factor_engine.evaluation_chain import cross_section_evaluate_backtest
+        from fts.factor_engine.factor_program import create_factor_program
+
+        fp = create_factor_program(
+            name="cross_neutral_ic_pre",
+            code=(
+                "import numpy as np\n"
+                "def factor_program(data, params):\n"
+                "    close = data['close'].values\n"
+                "    n = len(close)\n"
+                "    sig = np.zeros(n)\n"
+                "    for i in range(5, n):\n"
+                "        sig[i] = (close[i] - close[i-5]) / max(close[i-5], 1e-10)\n"
+                "    return np.clip(sig * 10, -1.0, 1.0)\n"
+            ),
+            params={},
+            signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
+            economic_logic=EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4, narrative="中性化前后IC对比"),
+            source="manual",
+        )
+        panel, dates = self._make_panel(10)
+        industry_map = {f"STK_{i}": ("A" if i < 5 else "B") for i in range(10)}
+        # 带中性化：应输出 ic_pre_neutral 字段
+        bt_neutral = cross_section_evaluate_backtest(
+            fp, panel, dates, industry_map=industry_map,
+        )
+        assert "ic_pre_neutral" in bt_neutral
+        assert isinstance(bt_neutral["ic_pre_neutral"], float)
+        # 不带中性化：不应输出 ic_pre_neutral 字段（回归兼容）
+        bt_raw = cross_section_evaluate_backtest(fp, panel, dates)
+        assert "ic_pre_neutral" not in bt_raw
+
+    def test_industry_cap_neutralized(self):
+        """同时传入 industry_map + cap_map 时做双重中性化。"""
+        from fts.factor_engine.contracts import EconomicLogic, FactorSignature
+        from fts.factor_engine.evaluation_chain import cross_section_evaluate_backtest
+        from fts.factor_engine.factor_program import create_factor_program
+
+        fp = create_factor_program(
+            name="cross_double_neutral",
+            code=(
+                "import numpy as np\n"
+                "def factor_program(data, params):\n"
+                "    close = data['close'].values\n"
+                "    n = len(close)\n"
+                "    sig = np.zeros(n)\n"
+                "    for i in range(5, n):\n"
+                "        sig[i] = (close[i] - close[i-5]) / max(close[i-5], 1e-10)\n"
+                "    return np.clip(sig * 10, -1.0, 1.0)\n"
+            ),
+            params={},
+            signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
+            economic_logic=EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4, narrative="双重中性化测试"),
+            source="manual",
+        )
+        panel, dates = self._make_panel(10)
+        industry_map = {f"STK_{i}": ("A" if i < 5 else "B") for i in range(10)}
+        cap_map = {f"STK_{i}": float(100 * (i + 1)) for i in range(10)}
+        bt = cross_section_evaluate_backtest(
+            fp, panel, dates, industry_map=industry_map, cap_map=cap_map,
+        )
+        assert "ic" in bt
+        assert "sharpe" in bt
+
+
+# ─── _neutralize_signal_matrix ─────────────────────────
+
+class TestNeutralizeSignalMatrix:
+    """覆盖 _neutralize_signal_matrix 全分支。"""
+
+    def test_industry_demean(self):
+        """按行业去均值后同行业残差和应接近 0。"""
+        matrix = np.array([
+            [1.0, 2.0, 3.0, 4.0],   # 行业 A,A,B,B
+            [5.0, 6.0, 7.0, 8.0],
+        ])
+        symbols = ["s1", "s2", "s3", "s4"]
+        industry_map = {"s1": "A", "s2": "A", "s3": "B", "s4": "B"}
+        result = _neutralize_signal_matrix(matrix, symbols, industry_map)
+        assert result.shape == matrix.shape
+        for t in range(matrix.shape[0]):
+            # 行业 A 残差和 ≈ 0
+            assert abs(result[t, 0] + result[t, 1]) < 1e-8
+            # 行业 B 残差和 ≈ 0
+            assert abs(result[t, 2] + result[t, 3]) < 1e-8
+
+    def test_industry_cap_demean(self):
+        """行业去均值 + 市值加权去均值后全截面加权残差和≈0。"""
+        matrix = np.array([
+            [1.0, 2.0, 3.0, 4.0],
+            [5.0, 6.0, 7.0, 8.0],
+        ])
+        symbols = ["s1", "s2", "s3", "s4"]
+        industry_map = {"s1": "A", "s2": "A", "s3": "B", "s4": "B"}
+        cap_map = {"s1": 1.0, "s2": 1.0, "s3": 1.0, "s4": 1.0}
+        result = _neutralize_signal_matrix(matrix, symbols, industry_map, cap_map)
+        for t in range(matrix.shape[0]):
+            assert abs(np.sum(result[t, :])) < 1e-8
+
+    def test_nan_handling(self):
+        """NaN 值应被排除在中性化计算外，且不抛异常。"""
+        matrix = np.array([
+            [1.0, np.nan, 3.0, 4.0],
+            [5.0, 6.0, np.nan, 8.0],
+        ])
+        symbols = ["s1", "s2", "s3", "s4"]
+        industry_map = {"s1": "A", "s2": "A", "s3": "B", "s4": "B"}
+        result = _neutralize_signal_matrix(matrix, symbols, industry_map)
+        assert result.shape == matrix.shape
+
+    def test_empty_symbols(self):
+        """空标的列表应原样返回。"""
+        matrix = np.zeros((5, 0))
+        result = _neutralize_signal_matrix(matrix, [], {})
+        assert result.shape == matrix.shape
+
+    def test_unknown_industry(self):
+        """未映射行业归入 UNKNOWN 组，不抛异常。"""
+        matrix = np.array([[1.0, 2.0, 3.0]])
+        symbols = ["s1", "s2", "s3"]
+        industry_map = {"s1": "A"}  # s2/s3 无映射
+        result = _neutralize_signal_matrix(matrix, symbols, industry_map)
+        assert result.shape == matrix.shape
 
 
 # ─── vwap 近似因子通用 IC 门槛（v2.50.0 审计层统一） ─────

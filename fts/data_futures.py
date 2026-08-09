@@ -446,8 +446,56 @@ class FuturesDataProvider:
         symbol: str,
         days: int = 500,
         trace_id: str = "",
+        adjusted: Optional[bool] = None,
     ) -> pd.DataFrame:
-        """获取期货连续合约 OHLCV 日 K 线数据。
+        """获取期货连续合约 OHLCV 日 K 线数据（v2.58.0 支持换月复权）。
+
+        Args:
+            symbol: 期货连续合约代码（如 "RB0" / "CU0" / "IF0"）。
+            days: 回溯天数。
+            trace_id: HARNESS trace_id。
+            adjusted: 是否返回换月后复权序列（None=读取配置 futures_adjusted，
+                      默认 true）。复权消除换月跳空对因子值的污染；
+                      contract_kline 缺失时降级返回原始拼接序列。
+
+        Returns:
+            pd.DataFrame with columns: open, high, low, close, volume, hold, settle
+            复权路径（adjusted=True 且 symbol 以 0 结尾）额外含 adj_factor 列
+            Index: DatetimeIndex
+
+        Raises:
+            FuturesDataError: 所有数据源不可用
+        """
+        df = self._get_ohlcv_raw(symbol, days, trace_id)
+
+        # v2.58.0 (GAP-046): 换月后复权（仅日线连续合约）
+        if df is None or df.empty:
+            return df
+        if adjusted is None:
+            try:
+                from fts.config.settings import get_config
+                adjusted = get_config().futures_adjusted
+            except Exception:  # noqa: BLE001
+                adjusted = True
+        if adjusted and symbol.endswith("0"):
+            try:
+                from fts.data_sources.roll_calendar import RollCalendar
+                df, rolls = RollCalendar().apply_adjustment(df, symbol)
+                if rolls:
+                    logger.info(
+                        "[复权] [%s] 应用 %d 次换月复权（因子计算用）", symbol, len(rolls),
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[复权] [%s] 复权失败，返回原始序列: %s", symbol, e)
+        return df
+
+    def _get_ohlcv_raw(
+        self,
+        symbol: str,
+        days: int = 500,
+        trace_id: str = "",
+    ) -> pd.DataFrame:
+        """获取期货连续合约原始（未复权）OHLCV 日 K 线数据。
 
         Args:
             symbol: 期货连续合约代码（如 "RB0" / "CU0" / "IF0"）。
@@ -1148,6 +1196,130 @@ def get_dominant_contracts(symbols: list[str] | None = None) -> dict[str, str]:
     return result
 
 
+def sync_contract_kline(
+    symbols: list[str] | None = None,
+    days: int = 500,
+    trace_id: str = "",
+) -> dict[str, int]:
+    """补拉具体合约日线写入 contract_kline（v2.58.0，GAP-046 换月日历基础）。
+
+    通过 AKShare `futures_display_main_sina` 获取各品种活跃具体合约列表，
+    逐个拉取具体合约日线（`futures_zh_daily_sina(symbol="RB2610")`）写入
+    `contract_kline` 表（按品种全量重写，幂等）。失败不抛异常——contract_kline
+    缺失时 RollCalendar 自动降级返回原始拼接序列（见 04-resilience.md）。
+
+    Args:
+        symbols: 连续合约代码列表（如 ["RB0", "CU0"]），默认 FUTURES_CORE_SUBSET
+        days: 每个合约回溯天数
+        trace_id: HARNESS trace_id
+
+    Returns:
+        {"written": 写入行数, "failed": 失败品种数}
+    """
+    if symbols is None:
+        symbols = list(FUTURES_CORE_SUBSET)
+
+    try:
+        import akshare as ak  # type: ignore[import-untyped]
+    except ImportError:
+        logger.warning("[contract_kline] akshare 未安装，跳过具体合约同步")
+        return {"written": 0, "failed": len(symbols)}
+
+    # 品种 → 活跃具体合约列表（akshare 主连品种代码为 "RB0" 格式）
+    contract_map: dict[str, list[str]] = {}
+    try:
+        display_df = ak.futures_display_main_sina()
+        if display_df is not None and not display_df.empty:
+            for _, row in display_df.iterrows():
+                sym_code = str(row.get("symbol", "")).upper()
+                if not sym_code:
+                    continue
+                base = sym_code[:-1] if sym_code.endswith("0") else sym_code
+                contract = str(row.get("contract", "")).upper()
+                if base and contract:
+                    contract_map.setdefault(base, []).append(contract)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[contract_kline] 活跃合约列表获取失败: %s", e)
+
+    if not contract_map:
+        logger.warning("[contract_kline] 未获取到活跃合约列表，跳过")
+        return {"written": 0, "failed": len(symbols)}
+
+    written = 0
+    failed = 0
+    for sym in symbols:
+        base = sym[:-1] if sym.endswith("0") else sym
+        contracts = contract_map.get(base, [])
+        if not contracts:
+            failed += 1
+            continue
+        rows: list[tuple] = []
+        for contract in contracts:
+            try:
+                df = ak.futures_zh_daily_sina(symbol=contract)
+                if df is None or df.empty:
+                    continue
+                df = df.tail(days)
+                for _, r in df.iterrows():
+                    rows.append((
+                        base, contract, "daily",
+                        pd.Timestamp(r["date"]).date(),
+                        float(r.get("open", 0.0)), float(r.get("high", 0.0)),
+                        float(r.get("low", 0.0)), float(r.get("close", 0.0)),
+                        float(r.get("volume", 0.0)), float(r.get("amount", 0.0)),
+                        float(r.get("hold", 0.0)), float(r.get("settle", 0.0)),
+                        "AKSHARE", datetime.now().isoformat(), trace_id,
+                    ))
+            except Exception as e:  # noqa: BLE001
+                logger.debug("[contract_kline] 合约 %s 拉取失败: %s", contract, e)
+        if not rows:
+            failed += 1
+            continue
+        try:
+            _write_contract_kline(base, rows)
+            written += len(rows)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[contract_kline] 写入失败 [%s]: %s", base, e)
+            failed += 1
+
+    logger.info("[contract_kline] 同步完成: %d 行写入, %d 品种失败 (trace_id=%s)",
+                written, failed, trace_id)
+    return {"written": written, "failed": failed}
+
+
+def _write_contract_kline(base: str, rows: list[tuple]) -> None:
+    """将具体合约日线写入 contract_kline（按品种全量重写，幂等）。
+
+    Args:
+        base: 品种基础代码（如 "RB"，无 "0" 后缀）
+        rows: (symbol, contract, period, date, open, high, low, close,
+              volume, amount, hold, settle, source, fetched_at, trace_id) 元组列表
+    """
+    from fts.data_sources.migrate import migrate_schema
+
+    db = _get_db()
+    try:
+        migrate_schema(str(_get_db_path()))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[contract_kline] migrate_schema 失败: %s", e)
+    # 按品种全量重写（保证与最新活跃合约集一致）
+    db.execute("DELETE FROM contract_kline WHERE symbol = ?", [base])
+    db.executemany(
+        """
+        INSERT INTO contract_kline (
+            symbol, contract, period, date, open, high, low, close,
+            volume, amount, hold, settle, source, fetched_at, trace_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+
+
+def _get_db_path() -> str:
+    """返回 DuckDB 文件路径（data/fts_history.duckdb）。"""
+    return "data/fts_history.duckdb"
+
+
 def _try_tq_realtime(symbols: list[str]) -> tuple[dict[str, float], set[str]]:
     """通过 TQ-Local HTTP 获取实时快照（主路径）。
 
@@ -1294,6 +1466,7 @@ __all__ = [
     "FUTURES_SYMBOL_NAMES",
     "get_dominant_contracts",
     "get_realtime_prices",
+    "sync_contract_kline",
     "_try_tq_realtime",
     "_try_akshare_realtime",
     "_extract_quote_price",

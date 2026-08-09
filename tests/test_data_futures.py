@@ -448,12 +448,17 @@ class TestGetOhlcvFallbackChain:
         )
 
     def test_aggregator_hit(self, mocker):
-        """Aggregator 返回非合成数据 → 直接采用。"""
+        """Aggregator 返回非合成数据 → 直接采用。
+
+        v2.58.0 (GAP-046): 复权路径额外返回 adj_factor 列（供落库使用）。
+        """
         mock_agg = mocker.MagicMock()
         mock_agg.get_ohlcv.return_value = _make_agg_df(["2026-01-01", "2026-01-02"])
         provider = self._provider(mocker, aggregator=mock_agg)
         df = provider.get_ohlcv("RB0", days=30)
-        assert list(df.columns) == ["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]
+        assert list(df.columns) == [
+            "open", "high", "low", "close", "volume", "vwap", "hold", "settle", "adj_factor",
+        ]
         mock_agg.get_ohlcv.assert_called_once_with("RB0", 30, "")
 
     def test_aggregator_synthetic_falls_through_to_duckdb(self, mocker):

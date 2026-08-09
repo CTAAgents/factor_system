@@ -1,7 +1,7 @@
 # FTS 开发生命周期
 
-> 版本: v2.54.0
-> 最后更新: 2026-08-08
+> 版本: v2.62.0
+> 最后更新: 2026-08-09
 
 ---
 
@@ -41,6 +41,9 @@ FTS 从 FDT 剥离共经历 16 个 Phase，目前全部完成：
 | **Phase 19** | 因子家族多样性约束（v2.18.0）：`_promote_to_elite` 新增家族数量检查（`max_per_family=3`），限制单一家族因子过度繁殖；`BudgetConfig` 新增 `max_per_family` 字段；配置文档同步更新 | ✅ 完成 | L2 演化晋升受家族多样性约束，fut_bias 等家族从 8+ 个降至 ≤3 个 |
 | **Phase 20** | 分钟级回测 Phase 1（v2.30.0）：三源分钟数据源适配（通达信 TDX HTTP + TQ-Local + 天勤 TQSDK），DuckDB minute_cache 缓存，聚合器扩展支持分钟级数据路径，回测引擎增加 frequency 参数（年化因子/窗口/成本自适应），CLI 增加 --frequency 参数 | ✅ 完成 | 分钟级回测可运行，支持 1m/5m/15m/30m/60m/daily 频率切换 |
 | **Phase 21** | 宏观字段增强层（v2.32.0）：`IFindSource.get_macro_series()` 实现 edb_cache 缓存读写（查 → miss 拉取 → 幂等写回）；新增 `fts/data_sources/macro_aligner.py`（`MacroFieldAligner.align()` 月度→交易日 ffill + 发布滞后防未来函数 + `inject_macro_fields()` 批量注入）；`BacktestPipeline._compute_factor()` 因子执行前注入宏观列（export/import_data/cpi/rate/us_bond），宏观因子不再走 close 代理降级 | ⏳ 进行中 | 宏观因子可读取真实 EDB 数据，缓存 + 对齐 + 注入全链路可用 |
+| **Phase 34** | 股票因子行业/市值中性化主流程（v2.61.0，GAP-S01）：`EvolutionLoop(market="stock")` 自动加载 `industry_map.json` + `cap_map`（`stock_neutralization` 默认 true，接通死配置），键归一化（`.SH/.SZ` 后缀 → 裸代码兼容面板 symbol），透传 `cross_section_evaluate_backtest` 做行业去均值 + 市值加权去均值，报告输出中性化前后 IC 对比 | ✅ 完成 | 股票截面因子评估剥离行业/市值系统性偏差，消除伪预测力 |
+| **Phase 33** | Adaptive 权重完整接入 L3（v2.56.0，Phase 33 / GAP-045）：① `synthesis_mode` 扩展 `adaptive`，Step 2 委托 `PortfolioConstructor`（回测/生产统一入口）；② `RegimeSmoother(alpha=0.5, min_days=2)` 接入 Step 2.5（Regime 切换权重指数平滑，参数走 `AdaptiveWeightConfig`）；③ 实现原设计 A.3 未落地的 FactorStyle/style_tags 维度——`FactorStyle` 枚举（contracts.py）+ `factor_catalog.style_tags` 列（DuckDB 兼容补列）+ `REGIME_STYLE_MULTIPLIERS` 双维度调整（family×style 乘积 clamp [0.5,1.5]×base） | ⏳ 进行中 | 详见 plans/19-adaptive-weight-l3-integration.md |
+| **Phase 35** | Barra 风格因子体系（v2.62.0，GAP-S02）：`fts/factor_engine/barra/` 新包三文件——`barra_style.py`（`BarraStyleEngine` 10 风格暴露计算引擎：size/beta/momentum/residual_vol/nonlinear_size/book_to_price/liquidity/earnings_yield/growth/leverage，逐日截面 rank→z-score 标准化，nonlinear_size 基于 size 暴露矩阵逐日 z³ 对 z 回归残差，字段缺失全 NaN 降级）+ `barra_neutralizer.py`（`barra_neutralize_matrix` 逐日 OLS 风格暴露 + 行业虚拟变量回归取残差，样本不足降级去均值、常数列剔除、正交性保证）；`cross_section_evaluate_backtest` 新增 `style_exposures` 参数 + Step 2.6 Barra 风格中性化（行业去均值后叠加风格回归残差，两级中性化链 GAP-S01/S02） | ✅ 完成 | 13 测试用例全绿（test_barra.py），股票因子评估剥离 10 大风格系统性偏差，回答"因子赚风格钱还是 alpha 钱" |
 
 ---
 
@@ -205,6 +208,6 @@ FTS 项目整体状态：
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | Phase 11 → `data_futures.py` + `data_futures_fundamental.py` + `seed_data_futures_full.py` + `scheduler/jobs.py` + `scripts/` |
-| 可验证断言 | Phase 11 产出物：482 种子因子（9+101+158+191+23），期货 12 家族 50+ 子因子，8 个定时任务 |
+| 代码→文档映射 | Phase 11 → `data_futures.py` + `data_futures_fundamental.py` + `seed_data_futures_full.py` + `scheduler/jobs.py` + `scripts/`；v2.58.0 → `data_sources/migrate.py`（kline_cache.adj_factor 列 + contract_kline 建表）+ `data_sources/roll_calendar.py`（RollCalendar 换月日历/复权）+ `factor_engine/backtest_pipeline.py`（展期成本）+ `cost_model.py`；v2.62.0 → `factor_engine/barra/barra_style.py`（BarraStyleEngine 10 风格暴露）+ `factor_engine/barra/barra_neutralizer.py`（barra_neutralize_matrix 逐日 OLS 回归残差）+ `factor_engine/evaluation_chain.py`（style_exposures 参数 + Step 2.6 风格中性化） |
+| 可验证断言 | Phase 11 产出物：482 种子因子（9+101+158+191+23），期货 12 家族 50+ 子因子，8 个定时任务；v2.58.0 GAP-046：kline_cache 含 adj_factor 列、contract_kline 可建表写入、BacktestPipeline 支持展期成本；v2.62.0 GAP-S02：barra 包 10 风格暴露 + 逐日 OLS 回归残差，`cross_section_evaluate_backtest` Step 2.6 两级中性化链，test_barra.py 13 用例全绿 |
 | 检验方式 | `python -m pytest tests/factor_engine/test_seed_pool.py --no-cov -q 2>&1 | findstr "passed"` |

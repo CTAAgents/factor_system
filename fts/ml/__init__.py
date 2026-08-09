@@ -21,9 +21,11 @@ fts.ml — ML 模型集成层（Phase 24，v2.38.0）。
 """
 
 from .models import (
+    MLPFactorModel,
     MLSignalModel,
     ModelKind,
     ModelNotAvailableError,
+    create_mlp_model,
     create_signal_model,
 )
 from .trainer import (
@@ -33,9 +35,11 @@ from .trainer import (
 )
 
 __all__ = [
+    "MLPFactorModel",
     "MLSignalModel",
     "ModelKind",
     "ModelNotAvailableError",
+    "create_mlp_model",
     "create_signal_model",
     "TrainMode",
     "SignalModelTrainer",

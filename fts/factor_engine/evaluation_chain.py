@@ -494,6 +494,9 @@ def cross_section_evaluate_backtest(
     panel_data: dict[str, pd.DataFrame],
     common_dates: pd.DatetimeIndex,
     oos_ratio: float = 0.3,
+    industry_map: Optional[dict[str, str]] = None,
+    cap_map: Optional[dict[str, float]] = None,
+    style_exposures: Optional[dict[str, Any]] = None,
 ) -> BacktestMetrics:
     """横截面回测评估 — 单因子在多个标的上跨 section IC。
 
@@ -507,6 +510,16 @@ def cross_section_evaluate_backtest(
     自动检测信号方向:
         - 如果多空组合收益均值为负，自动翻转信号并重新计算指标
         - 确保因子方向与预测目标一致
+
+    Args:
+        factor: 因子程序
+        panel_data: {symbol: OHLCV DataFrame} 字典
+        common_dates: 共同日期索引
+        oos_ratio: 样本外比例
+        industry_map: {symbol: industry_name} 行业映射字典（可选，启用后做行业中性化）
+        cap_map: {symbol: market_cap} 市值映射字典（可选，配合 industry_map 做双重中性化）
+        style_exposures: {style_name: DataFrame} Barra 风格暴露（可选，GAP-S02）。
+            启用后在行业中性化基础上叠加风格回归残差（剥离风格暴露）。
 
     Returns:
         BacktestMetrics
@@ -522,6 +535,30 @@ def cross_section_evaluate_backtest(
     # Step 2: 对齐到共同日期，构建矩阵 + OOS 切片
     oos_n = max(int(len(common_dates) * oos_ratio), 5)
     oos_signal, oos_ret = _cs_build_matrices(signal_dict, ret_dict, common_dates, oos_n)
+
+    # Step 2.5: 行业中性化（可选）— GAP-S01: 记录中性化前 IC 供对比
+    ic_pre_neutral: Optional[float] = None
+    if industry_map is not None:
+        symbols_list = list(signal_dict.keys())
+        # 中性化前 IC（方向检测前，供报告对比剥离效果）
+        pre_ics = _cs_compute_ics(oos_signal, oos_ret)
+        if pre_ics:
+            ic_pre_neutral = float(np.mean(pre_ics))
+        oos_signal = _neutralize_signal_matrix(
+            oos_signal, symbols_list, industry_map, cap_map,
+        )
+
+    # Step 2.6: Barra 风格中性化（可选）— GAP-S02: 行业去均值后叠加风格回归残差
+    if style_exposures is not None:
+        symbols_list = list(signal_dict.keys())
+        from .barra.barra_neutralizer import barra_neutralize_matrix
+
+        oos_signal = barra_neutralize_matrix(
+            oos_signal,
+            symbols_list,
+            style_exposures,
+            industry_map=None,  # 行业已在 Step 2.5 处理，此处仅风格
+        )
 
     # Step 3: 每期截面 IC
     ics = _cs_compute_ics(oos_signal, oos_ret)
@@ -545,16 +582,22 @@ def cross_section_evaluate_backtest(
         ic_mean = -ic_mean  # Spearman 相关取反
         icir = -icir
         ics = ics_flipped
+        # 中性化前 IC 同步翻转（保持同一方向语义）
+        if ic_pre_neutral is not None:
+            ic_pre_neutral = -ic_pre_neutral
 
     sharpe = _compute_sharpe(ls_returns)
     cumulative = np.cumsum(ls_returns)
     max_dd = _compute_max_drawdown(cumulative)
     t_stat = _cs_t_stat(ls_returns)
 
-    return BacktestMetrics(
+    metrics = BacktestMetrics(
         ic=ic_mean, icir=icir, sharpe=sharpe, max_drawdown=max_dd,
         monotonicity=True, oos_ratio=oos_ratio, t_stat=t_stat, turnover_monthly=0.0,
     )
+    if ic_pre_neutral is not None:
+        metrics["ic_pre_neutral"] = ic_pre_neutral
+    return metrics
 
 
 def _cs_execute_factors(
@@ -650,6 +693,83 @@ def _cs_empty_metrics(oos_ratio: float) -> BacktestMetrics:
     )
 
 
+def _neutralize_signal_matrix(
+    signal_matrix: np.ndarray,
+    symbols_list: list[str],
+    industry_map: dict[str, str],
+    cap_map: Optional[dict[str, float]] = None,
+) -> np.ndarray:
+    """横截面信号矩阵行业中性化。
+
+    对每期（每行）信号，按行业分组去均值，消除行业系统性偏差。
+    cap_map 提供时额外做市值加权去均值（双重中性化）。
+
+    Args:
+        signal_matrix: (n_dates, n_stocks) 信号矩阵
+        symbols_list: 标的列表，与 signal_matrix 列顺序一致
+        industry_map: {symbol: industry_name} 行业映射
+        cap_map: {symbol: market_cap} 市值映射（可选）
+
+    Returns:
+        中性化后的信号矩阵，保持原形状
+    """
+    from collections import defaultdict
+
+    n_stocks = len(symbols_list)
+    if n_stocks == 0:
+        return signal_matrix
+
+    # 构建行业标签数组 (n_stocks,)
+    industry_labels: list[str] = []
+    for sym in symbols_list:
+        ind = industry_map.get(sym, "UNKNOWN")
+        industry_labels.append(ind)
+
+    # 构建市值权重数组 (n_stocks,)，可选
+    cap_weights: Optional[np.ndarray] = None
+    if cap_map is not None:
+        caps = np.array([cap_map.get(sym, 0.0) for sym in symbols_list], dtype=float)
+        total_cap = np.sum(caps)
+        if total_cap > 0:
+            cap_weights = caps / total_cap
+
+    result = signal_matrix.copy()
+
+    for t in range(result.shape[0]):
+        sig_t = result[t, :]
+        valid = ~np.isnan(sig_t)
+
+        if np.sum(valid) < 3:
+            continue
+
+        # 按行业分组计算均值并去均值
+        industry_vals: dict[str, list[float]] = defaultdict(list)
+        for j in range(n_stocks):
+            if valid[j]:
+                industry_vals[industry_labels[j]].append(sig_t[j])
+
+        industry_means = {
+            ind: np.mean(vals) for ind, vals in industry_vals.items()
+        }
+
+        # 行业去均值
+        for j in range(n_stocks):
+            if valid[j]:
+                result[t, j] = sig_t[j] - industry_means.get(industry_labels[j], 0.0)
+
+        # 市值加权去均值（双重中性化）
+        if cap_weights is not None:
+            residual = result[t, :].copy()
+            valid_residual = residual[valid]
+            valid_weights = cap_weights[valid]
+            w_sum = np.sum(valid_weights)
+            if w_sum > 0:
+                weighted_mean = np.sum(valid_residual * valid_weights) / w_sum
+                result[t, valid] = residual[valid] - weighted_mean
+
+    return result
+
+
 __all__ = [
     "evaluate_backtest",
     "evaluate_economic_logic",
@@ -657,4 +777,5 @@ __all__ = [
     "evaluate_walk_forward",
     "cross_section_evaluate_backtest",
     "EvaluationChain",
+    "_neutralize_signal_matrix",
 ]

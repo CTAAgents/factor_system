@@ -334,6 +334,36 @@ class TestCrossSymbolOps:
         assert "region_mean" in result.columns
         assert len(result) == 4
 
+    def test_industry_cap_neutral(self):
+        """行业+市值双重中性化应返回 neutralized 列。"""
+        panel = pd.DataFrame({
+            "date": ["2024-01-01"] * 6 + ["2024-01-02"] * 6,
+            "industry": ["A", "A", "A", "B", "B", "B"] * 2,
+            "market_cap": [100.0, 200.0, 300.0, 100.0, 200.0, 300.0] * 2,
+            "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0] * 2,
+        })
+        result = CrossSymbolOps.industry_cap_neutral(panel)
+        assert "neutralized" in result.columns
+        assert "industry_mean" in result.columns
+        assert "cap_weight" in result.columns
+        assert len(result) == 12
+        # 双重中性化后：每期市值加权残差均值应接近 0
+        for date, sub in result.groupby("date"):
+            weighted_mean = (sub["neutralized"] * sub["cap_weight"]).sum()
+            assert abs(weighted_mean) < 1e-8
+
+    def test_industry_cap_neutral_no_industry_match(self):
+        """行业列缺失时应优雅处理（所有标的归入 UNKNOWN 组）。"""
+        panel = pd.DataFrame({
+            "date": ["2024-01-01"] * 4,
+            "industry": [None, None, None, None],
+            "market_cap": [100.0, 200.0, 300.0, 400.0],
+            "value": [10.0, 20.0, 30.0, 40.0],
+        })
+        result = CrossSymbolOps.industry_cap_neutral(panel)
+        assert "neutralized" in result.columns
+        assert result["neutralized"].notna().all()
+
 
 # ─── FeatureOpsEngine ──────────────────────────────────────
 

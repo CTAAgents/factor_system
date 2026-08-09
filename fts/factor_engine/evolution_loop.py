@@ -103,6 +103,28 @@ def _log_consistency_event(
         logger.debug("[consistency_log] 写入失败: %s", e)
 
 
+def _normalize_industry_keys(mapping: dict[str, Any]) -> dict[str, Any]:
+    """键归一化：映射键剥离交易所后缀（.SH/.SZ）生成裸代码键，同时保留原始键。
+
+    行业/市值映射文件（data/industry_map.json）键为 "600519.SH" 格式，
+    而 CSI300 面板 symbol 为裸代码 "600519"。归一化后两种格式均可命中。
+
+    Args:
+        mapping: {symbol: value} 原始映射
+
+    Returns:
+        归一化后的映射（原始键 + 裸代码键均保留）
+    """
+    result: dict[str, Any] = {}
+    for sym, value in mapping.items():
+        result[sym] = value
+        # 剥离 "600519.SH" → "600519"（面板 symbol 为裸代码）
+        base = sym.split(".")[0].strip()
+        if base and base != sym:
+            result[base] = value
+    return result
+
+
 from .contracts import (
     DEFAULT_BUDGET_CONFIG,
     BudgetConfig,
@@ -282,17 +304,75 @@ class EvolutionLoop:
         market: Optional[str] = None,
         factor_db_path: Optional[str | Path] = None,
         audit_config: Optional[Any] = None,
+        industry_map: Optional[dict[str, str]] = None,
+        cap_map: Optional[dict[str, float]] = None,
     ):
         self.data = data
         self.forward_returns = forward_returns
         self.cross_section_data = cross_section_data
         self.cross_section_dates = cross_section_dates
+        self.industry_map = industry_map
+        self.cap_map = cap_map
         if market is None:
             from fts.config.settings import get_config
             market = get_config().default_market
         self.market = market
         self.factor_db_path = factor_db_path
         self._is_cross_section = cross_section_data is not None
+
+        # v2.59.0 (GAP-F03): 期货横截面模式自动注入板块映射（板块/产业链中性化）
+        # 从 FUTURES_SECTOR_MAP 反向构建 {symbol: sector}；futures_neutralization=false
+        # 或已显式传入 industry_map 时跳过。
+        if (
+            self._is_cross_section
+            and market == "futures"
+            and self.industry_map is None
+        ):
+            try:
+                from fts.config.settings import get_config
+                if get_config().futures_neutralization:
+                    from fts.data_futures import FUTURES_SECTOR_MAP
+                    self.industry_map = {
+                        sym: sector
+                        for sector, symbols in FUTURES_SECTOR_MAP.items()
+                        for sym in symbols
+                    }
+                    logger.info(
+                        "[EvolutionLoop] 期货板块中性化已启用: %d 品种映射到 %d 个产业链",
+                        len(self.industry_map), len(FUTURES_SECTOR_MAP),
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[EvolutionLoop] 期货板块映射注入失败，跳过中性化: %s", e)
+
+        # v2.61.0 (GAP-S01): 股票横截面模式自动注入行业/市值映射（行业/市值中性化）
+        # 读取 FTSConfig.stock_neutralization（默认 true，v2.57.0 遗留死配置，本版本接通）；
+        # industry_map 已显式传入时跳过；键归一化：映射键 "600519.SH"/"600519.SZ" 剥离后缀
+        # 生成裸代码键（面板 symbol 为裸代码 "600519"），同时保留原始键兼容两种格式。
+        if (
+            self._is_cross_section
+            and market == "stock"
+            and self.industry_map is None
+        ):
+            try:
+                from fts.config.settings import get_config, load_cap_map, load_industry_map
+                if get_config().stock_neutralization:
+                    raw_industry = load_industry_map()
+                    if raw_industry:
+                        self.industry_map = _normalize_industry_keys(raw_industry)
+                        logger.info(
+                            "[EvolutionLoop] 股票行业中性化已启用: %d 条映射（归一化后 %d 键）",
+                            len(raw_industry), len(self.industry_map),
+                        )
+                    # 市值映射（cap_map_path 配置，缺失/为空返回空 dict → 仅行业去均值）
+                    raw_cap = load_cap_map()
+                    if raw_cap:
+                        self.cap_map = _normalize_industry_keys(raw_cap)
+                        logger.info(
+                            "[EvolutionLoop] 股票市值中性化已启用: %d 条映射",
+                            len(self.cap_map),
+                        )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[EvolutionLoop] 股票行业/市值映射注入失败，跳过中性化: %s", e)
 
         # ── 市场隔离: 自动按 market 选择 elite 目录 ──
         if elite_dir is None:
@@ -1883,6 +1963,8 @@ class EvolutionLoop:
             factor,
             self.cross_section_data,
             self.cross_section_dates,
+            industry_map=self.industry_map,
+            cap_map=self.cap_map,
         )
         # 从因子自身读取经济逻辑评分（种子 YAML 或 LLM 生成），默认 3 分
         el = factor.get("economic_logic", {}) or {}
@@ -2564,6 +2646,115 @@ class EvolutionLoop:
 
     # ── Phase B.3: 因子强制审计 ──────────────────────────
 
+    @staticmethod
+    def _build_wf_config(data: pd.DataFrame) -> dict[str, Any]:
+        """按数据长度适配 WalkForward 窗口配置（GAP-F08，v2.60.0）。
+
+        数据不足 3 年时缩短窗口，保证短样本也能构建多窗口冷启动验证；
+        数据 < 半年（约 125 交易日）无法构建，由调用方跳过并记录原因。
+
+        Args:
+            data: 主时间序列数据
+
+        Returns:
+            WalkForwardConfig 字典
+        """
+        from .walk_forward import DEFAULT_WALK_FORWARD_CONFIG
+
+        cfg = dict(DEFAULT_WALK_FORWARD_CONFIG)
+        n = len(data)
+        years = n / 250.0
+        if years >= 3.0:
+            return cfg
+        if years >= 2.0:
+            cfg.update(window_years=1, step_months=3, min_oos_months=2, n_windows=4)
+        elif years >= 1.0:
+            cfg.update(window_years=1, step_months=2, min_oos_months=1, n_windows=3)
+        elif years >= 0.5:
+            cfg.update(window_years=0, step_months=1, min_oos_months=0, n_windows=2)
+        else:
+            cfg.update(window_years=0, step_months=0, min_oos_months=0, n_windows=1)
+        return cfg
+
+    def _run_walkforward_oos(
+        self,
+        factor: FactorProgram,
+    ) -> Optional[dict[str, Any]]:
+        """冷启动 WalkForward 样本外验证（GAP-F08，v2.60.0）。
+
+        用多窗口滚动样本外评估替代 L1 单段 ICIR 近似，验证因子时间维度稳定性。
+        数据不足或 force_walkforward=false 时返回 None（跳过并记录原因），
+        审计 oos_consistency 项回退原逻辑。
+
+        Args:
+            factor: 因子程序
+
+        Returns:
+            WalkForwardResult 字典；跳过时返回 None
+        """
+        from fts.config.settings import get_config
+
+        if not get_config().force_walkforward:
+            logger.info("[Evo] force_walkforward=false，跳过冷启动样本外验证")
+            return None
+
+        data = self.data
+        if data is None or len(data) < 125:
+            logger.info(
+                "[Evo] 数据长度不足（%d 行 < 125），跳过冷启动样本外验证",
+                len(data) if data is not None else 0,
+            )
+            return None
+
+        try:
+            from scipy import stats as sp_stats  # type: ignore[import-untyped]
+
+            from .backtest_pipeline import BacktestPipeline
+            from .walk_forward import WalkForwardOptimizer
+
+            code = factor.get("code", "") if isinstance(factor, dict) else getattr(factor, "code", "")
+            params = factor.get("params", {}) if isinstance(factor, dict) else getattr(factor, "params", {})
+
+            def _eval_fn(
+                train_df: pd.DataFrame, oos_df: pd.DataFrame,
+            ) -> dict[str, float]:
+                """评估函数：在 oos 段计算因子 IC/夏普/换手。"""
+                try:
+                    signal = BacktestPipeline._execute_factor_code(code, oos_df, params)
+                except Exception:  # noqa: BLE001
+                    return {"ic": 0.0, "sharpe": 0.0, "turnover": 0.0}
+                signal = np.asarray(signal, dtype=float)
+                close = oos_df["close"].to_numpy(dtype=float)
+                fwd = np.zeros(len(close))
+                if len(close) > 1:
+                    fwd[:-1] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+                mask = np.isfinite(signal) & np.isfinite(fwd)
+                if int(np.sum(mask)) < 10:
+                    return {"ic": 0.0, "sharpe": 0.0, "turnover": 0.0}
+                ic, _ = sp_stats.spearmanr(signal[mask], fwd[mask])
+                if not np.isfinite(ic):
+                    ic = 0.0
+                rets = fwd[mask]
+                sharpe = float(np.mean(rets) / max(np.std(rets), 1e-9) * np.sqrt(252))
+                turnover = float(np.mean(np.abs(np.diff(signal))))
+                return {"ic": float(ic), "sharpe": sharpe, "turnover": turnover}
+
+            optimizer = WalkForwardOptimizer(self._build_wf_config(data))
+            result = optimizer.evaluate(data, _eval_fn)
+            if result.get("n_windows_completed", 0) == 0:
+                logger.info("[Evo] WalkForward 无可用窗口，跳过冷启动样本外验证")
+                return None
+            logger.info(
+                "[Evo] 冷启动样本外验证完成 [ic_consistency=%.2f, windows=%d, passed=%s]",
+                result.get("ic_consistency", 0.0),
+                result.get("n_windows_completed", 0),
+                result.get("passed", False),
+            )
+            return dict(result)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[Evo] WalkForward 冷启动验证异常，跳过: %s", e)
+            return None
+
     def _run_factor_audit(
         self,
         factor: FactorProgram,
@@ -2608,6 +2799,18 @@ class EvolutionLoop:
                 "ic_consistency": min(1.0, abs(oos_icir)),
                 "oos_ic": oos_ic,
                 "passed": abs(oos_icir) >= 1.0,
+            }
+
+        # v2.60.0 (GAP-F08): 冷启动 WalkForward 样本外验证优先。
+        # 用真实多窗口 OOS 结果覆盖 L1 单段 ICIR 近似（数据不足/关闭时保持原逻辑）。
+        wf_result = self._run_walkforward_oos(factor)
+        if wf_result is not None:
+            oos_result = {
+                "ic_consistency": wf_result.get("ic_consistency", 0.0),
+                "oos_ic": 0.0,  # 一致性已含多窗口均值信息
+                "passed": wf_result.get("passed", False),
+                "windows": wf_result.get("windows", []),
+                "n_windows_completed": wf_result.get("n_windows_completed", 0),
             }
 
         # 构造 p-values（从 L3 提取，仅当非默认值时传递）

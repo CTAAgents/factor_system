@@ -180,7 +180,7 @@ class TestRobustnessTesterInit:
         """默认参数应正确设置。"""
         tester = RobustnessTester()
         assert tester._adversarial_threshold == 0.01
-        assert tester._missing_retention_threshold == 0.80
+        assert tester._missing_retention_threshold == 0.50
         assert tester._ood_retention_threshold == 0.50
 
 

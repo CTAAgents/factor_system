@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS factor_catalog (
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_elite        BOOLEAN DEFAULT FALSE,
-    metadata        JSON
+    metadata        JSON,
+    style_tags      JSON
 );
 
 CREATE INDEX IF NOT EXISTS idx_factor_catalog_name 
@@ -250,6 +251,7 @@ ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS consecutive_sharpe_drop_mont
 ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS last_incremental_eval_at TIMESTAMP;
 ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS decay_rate_3m DOUBLE DEFAULT 0.0;
 ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS decay_rate_6m DOUBLE DEFAULT 0.0;
+ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS style_tags JSON;
 """
 
 

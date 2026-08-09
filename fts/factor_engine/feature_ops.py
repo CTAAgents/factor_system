@@ -307,6 +307,51 @@ class CrossSymbolOps:
         return result
 
     @staticmethod
+    def industry_cap_neutral(
+        panel: pd.DataFrame,
+        group_col: str = "date",
+        industry_col: str = "industry",
+        cap_col: str = "market_cap",
+        value_col: str = "value",
+    ) -> pd.DataFrame:
+        """行业+市值双重中性化。
+
+        先按行业去均值消除行业系统性偏差，再按市值加权去均值消除市值偏差。
+        适用于股票因子横截面评估中的中性化预处理。
+
+        Args:
+            panel: 数据面板，须包含 group_col, industry_col, cap_col, value_col
+            group_col: 时间分组列名
+            industry_col: 行业分类列名
+            cap_col: 市值列名
+            value_col: 待中性化的因子值列名
+
+        Returns:
+            包含 neutralized 列的数据框
+        """
+        result = panel.copy()
+
+        # 行业列为 NaN 时归入 UNKNOWN 组（避免 groupby 丢弃 NaN 分组导致残差全 NaN）
+        result[industry_col] = result[industry_col].fillna("UNKNOWN").astype(str)
+
+        # 先按行业分组去均值
+        industry_mean = result.groupby([group_col, industry_col])[value_col].transform("mean")
+        industry_residual = result[value_col] - industry_mean
+
+        # 再按时间分组去均值（市值加权版本）
+        # 使用市值加权均值而非简单均值，以消除大盘/小盘风格影响
+        total_cap = result.groupby(group_col)[cap_col].transform("sum")
+        cap_weight = result[cap_col] / total_cap.replace(0, float("nan"))
+        weighted_mean = (industry_residual * cap_weight).groupby(
+            result[group_col]
+        ).transform("sum")
+
+        result["neutralized"] = industry_residual - weighted_mean
+        result["industry_mean"] = industry_mean
+        result["cap_weight"] = cap_weight
+        return result
+
+    @staticmethod
     def region_demean(
         panel: pd.DataFrame,
         group_col: str = "date",
@@ -516,6 +561,7 @@ class OperatorRegistry:
         csymbol_ops = [
             ("industry_demean", CrossSymbolOps.industry_demean, ["panel", "group_col", "industry_col", "value_col"]),
             ("cap_demean", CrossSymbolOps.cap_demean, ["panel", "group_col", "cap_col", "value_col"]),
+            ("industry_cap_neutral", CrossSymbolOps.industry_cap_neutral, ["panel", "group_col", "industry_col", "cap_col", "value_col"]),
             ("region_demean", CrossSymbolOps.region_demean, ["panel", "group_col", "region_col", "value_col"]),
         ]
         for name, func, params in csymbol_ops:

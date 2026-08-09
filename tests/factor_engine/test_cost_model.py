@@ -211,6 +211,120 @@ class TestAdjust:
         assert "cost_adjusted_ic" in result
 
 
+# ─── 展期成本测试（v2.58.0 GAP-046） ─────────────────────
+
+class TestRollCost:
+    """展期成本项（持仓穿越换月日扣 |position| × roll_cost_bps）。"""
+
+    def test_futures_default_roll_cost_bps(self) -> None:
+        """期货默认配置应含 roll_cost_bps=2.0；股票/ETF 为 0。"""
+        model = TransactionCostModel()
+        assert model.get_cost_bps("futures")["roll_cost_bps"] == 2.0
+        assert model.get_cost_bps("stock")["roll_cost_bps"] == 0.0
+        assert model.get_cost_bps("etf")["roll_cost_bps"] == 0.0
+
+    def test_roll_cost_added_to_total(self) -> None:
+        """持仓穿越换月日时，总成本应包含展期成本。"""
+        import pandas as pd
+
+        model = TransactionCostModel()
+        metrics = _make_metrics(sharpe=2.0)
+        n = 30
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        signal = np.ones(n) * 0.5  # 满仓 0.5 持仓
+        roll_dates = {str(dates[10].date()), str(dates[20].date())}
+
+        result = model.adjust(
+            metrics, signal, market="futures",
+            dates=dates.to_numpy(), roll_dates=roll_dates,
+        )
+        # 展期成本 = |0.5| × 2.0 × 2 次 = 2.0 bps
+        assert result["roll_cost_bps"] == pytest.approx(2.0, abs=1e-9)
+        # 总成本 = min_cost(0.5) + 展期(2.0)
+        assert result["total_cost_bps"] == pytest.approx(2.5, abs=1e-9)
+
+    def test_no_roll_dates_no_roll_cost(self) -> None:
+        """无换月日期时，展期成本为 0。"""
+        import pandas as pd
+
+        model = TransactionCostModel()
+        metrics = _make_metrics(sharpe=2.0)
+        n = 30
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        signal = np.ones(n) * 0.5
+
+        result = model.adjust(
+            metrics, signal, market="futures",
+            dates=dates.to_numpy(), roll_dates=None,
+        )
+        assert result["roll_cost_bps"] == 0.0
+        assert result["total_cost_bps"] == pytest.approx(0.5, abs=1e-9)
+
+    def test_zero_position_no_roll_cost(self) -> None:
+        """换月日无持仓时，不扣展期成本。"""
+        import pandas as pd
+
+        model = TransactionCostModel()
+        metrics = _make_metrics(sharpe=2.0)
+        n = 30
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        signal = np.zeros(n)  # 空仓
+        roll_dates = {str(dates[10].date())}
+
+        result = model.adjust(
+            metrics, signal, market="futures",
+            dates=dates.to_numpy(), roll_dates=roll_dates,
+        )
+        assert result["roll_cost_bps"] == 0.0
+
+    def test_dates_length_mismatch_returns_zero(self) -> None:
+        """dates 与 signal 长度不一致时，展期成本为 0（防越界）。"""
+        import pandas as pd
+
+        model = TransactionCostModel()
+        metrics = _make_metrics(sharpe=2.0)
+        dates = pd.date_range("2024-01-01", periods=10, freq="D")
+        signal = np.ones(30) * 0.5
+
+        result = model.adjust(
+            metrics, signal, market="futures",
+            dates=dates.to_numpy(), roll_dates={str(dates[5].date())},
+        )
+        assert result["roll_cost_bps"] == 0.0
+
+    def test_roll_cost_reduces_net_sharpe(self) -> None:
+        """展期成本应降低 net_sharpe（成本惩罚计入）。"""
+        import pandas as pd
+
+        model = TransactionCostModel()
+        metrics = _make_metrics(sharpe=2.0)
+        n = 30
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        signal = np.ones(n) * 0.5
+        roll_dates = {str(dates[10].date())}
+
+        result = model.adjust(
+            metrics, signal, market="futures",
+            dates=dates.to_numpy(), roll_dates=roll_dates,
+        )
+        assert result["net_sharpe"] < metrics["sharpe"]
+
+    def test_roll_cost_in_adjusted_metrics_fields(self) -> None:
+        """AdjustedMetrics 应包含 roll_cost_bps 字段。"""
+        import pandas as pd
+
+        model = TransactionCostModel()
+        metrics = _make_metrics(sharpe=2.0)
+        n = 30
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        signal = np.ones(n) * 0.5
+        result = model.adjust(
+            metrics, signal, market="futures",
+            dates=dates.to_numpy(), roll_dates={str(dates[10].date())},
+        )
+        assert "roll_cost_bps" in result
+
+
 # ─── 自定义配置测试 ───────────────────────────────────────
 
 class TestCustomConfig:

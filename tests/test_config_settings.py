@@ -96,6 +96,165 @@ class TestFTSConfigDefaults:
         assert cfg.log_file == ""
         assert cfg.llm_backend == ""
 
+    def test_stock_neutralization_defaults(self):
+        """股票中性化配置默认值（v2.54.0+）。"""
+        cfg = FTSConfig()
+        assert cfg.stock_neutralization is True
+        assert cfg.industry_map_path == "data/industry_map.json"
+        assert cfg.cap_map_path == ""
+
+    def test_stock_neutralization_env_override(self, monkeypatch):
+        """FTS_STOCK_NEUTRALIZATION 环境变量覆盖。"""
+        monkeypatch.setenv("FTS_STOCK_NEUTRALIZATION", "false")
+        cfg = load_config(config_path=None)
+        assert cfg.stock_neutralization is False
+
+    def test_industry_map_path_env_override(self, monkeypatch):
+        """FTS_INDUSTRY_MAP_PATH 环境变量覆盖。"""
+        monkeypatch.setenv("FTS_INDUSTRY_MAP_PATH", "data/custom_map.json")
+        cfg = load_config(config_path=None)
+        assert cfg.industry_map_path == "data/custom_map.json"
+
+    # ── v2.59.0 (GAP-F03/F02) 期货中性化 + 回测真实性仿真 ──
+    def test_futures_neutralization_defaults(self):
+        """期货板块中性化配置默认值（v2.59.0）。"""
+        cfg = FTSConfig()
+        assert cfg.futures_neutralization is True
+        assert cfg.backtest_trade_filter is True
+        assert cfg.futures_limit_pct == pytest.approx(0.08)
+
+    def test_futures_neutralization_env_override(self, monkeypatch):
+        """FTS_FUTURES_NEUTRALIZATION 环境变量覆盖。"""
+        monkeypatch.setenv("FTS_FUTURES_NEUTRALIZATION", "false")
+        cfg = load_config(config_path=None)
+        assert cfg.futures_neutralization is False
+
+    def test_backtest_trade_filter_env_override(self, monkeypatch):
+        """FTS_BACKTEST_TRADE_FILTER 环境变量覆盖。"""
+        monkeypatch.setenv("FTS_BACKTEST_TRADE_FILTER", "false")
+        cfg = load_config(config_path=None)
+        assert cfg.backtest_trade_filter is False
+
+    def test_futures_limit_pct_env_override(self, monkeypatch):
+        """FTS_FUTURES_LIMIT_PCT 环境变量覆盖。"""
+        monkeypatch.setenv("FTS_FUTURES_LIMIT_PCT", "0.10")
+        cfg = load_config(config_path=None)
+        assert cfg.futures_limit_pct == pytest.approx(0.10)
+
+    # ── v2.60.0 (GAP-F08/F09) 样本外强制 + 保证金建模 ──
+    def test_walkforward_margin_defaults(self):
+        """样本外强制与保证金建模配置默认值（v2.60.0）。"""
+        cfg = FTSConfig()
+        assert cfg.force_walkforward is True
+        assert cfg.margin_rate_map == {}
+        assert cfg.max_margin_usage == pytest.approx(0.80)
+
+    def test_force_walkforward_env_override(self, monkeypatch):
+        """FTS_FORCE_WALKFORWARD 环境变量覆盖。"""
+        monkeypatch.setenv("FTS_FORCE_WALKFORWARD", "false")
+        cfg = load_config(config_path=None)
+        assert cfg.force_walkforward is False
+
+    def test_max_margin_usage_env_override(self, monkeypatch):
+        """FTS_MAX_MARGIN_USAGE 环境变量覆盖。"""
+        monkeypatch.setenv("FTS_MAX_MARGIN_USAGE", "0.60")
+        cfg = load_config(config_path=None)
+        assert cfg.max_margin_usage == pytest.approx(0.60)
+
+
+# ═══════════════════════════════════════════════════════════
+# load_industry_map()
+# ═══════════════════════════════════════════════════════════
+
+class TestLoadIndustryMap:
+    """load_industry_map() 行业映射加载。"""
+
+    def test_load_valid_file(self, tmp_path):
+        """有效 JSON 文件应正确加载为 dict。"""
+        from fts.config.settings import load_industry_map
+        p = tmp_path / "industry_map.json"
+        p.write_text(json.dumps({"600519.SH": "食品饮料", "000858.SZ": "食品饮料"}), encoding="utf-8")
+        result = load_industry_map(str(p))
+        assert result == {"600519.SH": "食品饮料", "000858.SZ": "食品饮料"}
+
+    def test_file_not_found(self):
+        """文件不存在 → 返回空字典。"""
+        from fts.config.settings import load_industry_map
+        result = load_industry_map("/nonexistent/industry_map.json")
+        assert result == {}
+
+    def test_invalid_json_format(self, tmp_path):
+        """JSON 格式错误 → 抛 JSONDecodeError。"""
+        import json
+        from fts.config.settings import load_industry_map
+        p = tmp_path / "bad_map.json"
+        p.write_text("{invalid json}", encoding="utf-8")
+        with pytest.raises(json.JSONDecodeError):
+            load_industry_map(str(p))
+
+    def test_non_dict_root(self, tmp_path):
+        """JSON 根节点非对象 → 返回空字典。"""
+        from fts.config.settings import load_industry_map
+        p = tmp_path / "list_map.json"
+        p.write_text(json.dumps(["a", "b"]), encoding="utf-8")
+        result = load_industry_map(str(p))
+        assert result == {}
+
+    def test_whitespace_keys_filtered(self, tmp_path):
+        """空白键和注释类键被过滤。"""
+        from fts.config.settings import load_industry_map
+        p = tmp_path / "dirty_map.json"
+        p.write_text(json.dumps({"": "", "  600519.SH  ": " 食品饮料 "}), encoding="utf-8")
+        result = load_industry_map(str(p))
+        assert result == {"600519.SH": "食品饮料"}
+
+    def test_uses_config_default_path(self, tmp_path, monkeypatch):
+        """path=None 时使用配置默认路径。"""
+        from fts.config.settings import load_industry_map
+        # 指向临时文件
+        p = tmp_path / "industry_map.json"
+        p.write_text(json.dumps({"000001.SZ": "银行"}), encoding="utf-8")
+        monkeypatch.setenv("FTS_INDUSTRY_MAP_PATH", str(p))
+        result = load_industry_map()
+        assert result == {"000001.SZ": "银行"}
+
+
+# ═══════════════════════════════════════════════════════════
+# load_cap_map()（v2.61.0 GAP-S01）
+# ═══════════════════════════════════════════════════════════
+
+class TestLoadCapMap:
+    """load_cap_map() 市值映射加载（GAP-S01）。"""
+
+    def test_load_valid_file(self, tmp_path):
+        """有效 JSON 文件应加载为 {symbol: float}。"""
+        from fts.config.settings import load_cap_map
+        p = tmp_path / "cap_map.json"
+        p.write_text(json.dumps({"600519.SH": 2.1e12, "000858.SZ": 6.0e11}), encoding="utf-8")
+        result = load_cap_map(str(p))
+        assert result == {"600519.SH": 2.1e12, "000858.SZ": 6.0e11}
+        assert all(isinstance(v, float) for v in result.values())
+
+    def test_path_empty_returns_empty(self):
+        """cap_map_path 为空 → 返回空 dict（不尝试读取）。"""
+        from fts.config.settings import load_cap_map
+        result = load_cap_map("")
+        assert result == {}
+
+    def test_file_not_found_returns_empty(self, tmp_path):
+        """文件不存在 → 返回空 dict。"""
+        from fts.config.settings import load_cap_map
+        result = load_cap_map(str(tmp_path / "missing_cap_map.json"))
+        assert result == {}
+
+    def test_non_numeric_values_filtered(self, tmp_path):
+        """非数值市值条目被过滤。"""
+        from fts.config.settings import load_cap_map
+        p = tmp_path / "dirty_cap.json"
+        p.write_text(json.dumps({"600519.SH": 2.1e12, "000001.SZ": "N/A"}), encoding="utf-8")
+        result = load_cap_map(str(p))
+        assert result == {"600519.SH": 2.1e12}
+
 
 # ═══════════════════════════════════════════════════════════
 # load_config()
