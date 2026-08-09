@@ -61,6 +61,7 @@ reports/
 .coverage
 htmlcov/
 coverage.xml
+.pytest_full_regression.xml
 
 # Debug LLM responses (may contain request/response content)
 debug_llm_response_*.txt

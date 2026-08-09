@@ -27,7 +27,9 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, TypedDict
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -567,6 +569,330 @@ class FeedbackLoop:
         }
 
 
+# ─── GAP-L402 实盘反馈闭环 ────────────────────────────────
+#
+# 承接总纲 GAP-I401（P0）：实盘表现回流 → 实盘 IC vs 回测 IC 对比 → 衰减修正。
+# 角色边界：FTS 只产信号、接收下游回传的成交/净值数据并分析，不做交易决策。
+
+
+class LiveFeedbackRecord(TypedDict, total=False):
+    """实盘反馈记录契约（GAP-L402）。
+
+    由下游 FDT 或人工导入，一条记录 = 单因子单信号日的实盘表现。
+
+    Attributes:
+        factor_id: 因子 ID
+        signal_date: 信号日期（YYYY-MM-DD）
+        signal_value: 信号值（-1 ~ +1，方向）
+        position_return: 持仓收益（该信号日的实际收益率，小数）
+        turnover: 换手率（0~1）
+        slippage: 实际滑点（基点，可选）
+        market: 市场（"futures"/"stock"/"etf"）
+        backtest_ic: 回测 IC（用于对比，可选）
+        weight: 组合权重（可选）
+    """
+    factor_id: str
+    signal_date: str
+    signal_value: float
+    position_return: float
+    turnover: float
+    slippage: Optional[float]
+    market: Optional[str]
+    backtest_ic: Optional[float]
+    weight: Optional[float]
+
+
+def validate_live_feedback_record(
+    record: dict[str, Any],
+) -> tuple[bool, str]:
+    """校验单条实盘反馈记录契约（GAP-L402）。
+
+    Args:
+        record: 待校验记录
+
+    Returns:
+        (是否有效, 错误信息)；有效时错误信息为空串。
+    """
+    if not isinstance(record, dict):
+        return False, "记录必须为 dict"
+    factor_id = record.get("factor_id")
+    if not factor_id or not isinstance(factor_id, str):
+        return False, "factor_id 缺失或非字符串"
+    signal_date = record.get("signal_date")
+    if not signal_date or not isinstance(signal_date, str):
+        return False, "signal_date 缺失或非字符串"
+    for key, label in (("signal_value", "信号值"), ("position_return", "持仓收益"),
+                       ("turnover", "换手率")):
+        val = record.get(key)
+        if val is None:
+            continue
+        try:
+            float(val)
+        except (TypeError, ValueError):
+            return False, f"{label} ({key}) 非数值"
+    return True, ""
+
+
+class LiveFeedbackImporter:
+    """实盘反馈数据导入器（GAP-L402）。
+
+    负责：
+        - 批量导入实盘反馈记录（CSV / dict 列表）
+        - 落盘到 DuckDB（feedback_live 表，追加式）或 JSONL（无 DuckDB 时）
+        - 计算实盘 IC（信号值 × 实际收益的截面秩相关）
+    """
+
+    def __init__(self, db_path: Optional[str] = None) -> None:
+        """初始化导入器。
+
+        Args:
+            db_path: DuckDB 文件路径；None 时仅用 JSONL 落盘。
+        """
+        self._db_path = db_path
+        self._records: list[LiveFeedbackRecord] = []
+
+    # ─── 导入 ──────────────────────────────────────────
+
+    def import_records(self, records: list[dict[str, Any]]) -> dict[str, Any]:
+        """导入多条记录（逐条校验 + 落盘）。
+
+        Args:
+            records: 记录列表
+
+        Returns:
+            导入统计 {total, valid, invalid, invalid_messages}
+        """
+        valid: list[LiveFeedbackRecord] = []
+        invalid_msgs: list[str] = []
+        for r in records:
+            ok, msg = validate_live_feedback_record(r)
+            if ok:
+                valid.append(LiveFeedbackRecord(**{k: v for k, v in r.items()
+                                                   if v is not None}))
+            else:
+                invalid_msgs.append(msg)
+        self._records.extend(valid)
+        self._persist(valid)
+        return {
+            "total": len(records),
+            "valid": len(valid),
+            "invalid": len(records) - len(valid),
+            "invalid_messages": invalid_msgs[:20],
+        }
+
+    def import_csv(self, path: str) -> dict[str, Any]:
+        """从 CSV 导入（列名需与 LiveFeedbackRecord 字段一致）。"""
+        import csv
+
+        records: list[dict[str, Any]] = []
+        with open(path, "r", encoding="utf-8-sig", newline="") as fh:
+            for row in csv.DictReader(fh):
+                rec = {k: v for k, v in row.items() if v != ""}
+                if "factor_id" not in rec or "signal_date" not in rec:
+                    continue
+                records.append(rec)
+        return self.import_records(records)
+
+    # ─── 实盘 IC ───────────────────────────────────────
+
+    def compute_live_ic(
+        self, records: Optional[list[LiveFeedbackRecord]] = None,
+    ) -> dict[str, Any]:
+        """计算实盘 IC。
+
+        对每个因子：信号值 × 实际收益的截面 Spearman 相关（按信号日聚合，
+        多标的时取当日截面相关均值）。
+
+        Args:
+            records: 记录列表；None 用已导入记录
+
+        Returns:
+            {factor_id: {ic, n_days, mean_return}} 汇总 + 全局统计
+        """
+        recs = records if records is not None else self._records
+        if not recs:
+            return {"factors": {}, "overall_ic": 0.0, "n_records": 0}
+
+        from collections import defaultdict
+
+        by_factor: dict[str, list[LiveFeedbackRecord]] = defaultdict(list)
+        for r in recs:
+            by_factor[r["factor_id"]].append(r)
+
+        factor_stats: dict[str, dict[str, float]] = {}
+        ics: list[float] = []
+        for fid, items in by_factor.items():
+            # 当日聚合：同一信号日取平均（多标的情况）
+            by_date: dict[str, list[tuple[float, float]]] = defaultdict(list)
+            for it in items:
+                by_date[it["signal_date"]].append(
+                    (float(it.get("signal_value", 0.0)),
+                     float(it.get("position_return", 0.0)))
+                )
+            day_ics = []
+            cross_section_days = 0
+            for pairs in by_date.values():
+                if len(pairs) < 2:
+                    continue
+                cross_section_days += 1
+                signals = np.array([p[0] for p in pairs])
+                returns = np.array([p[1] for p in pairs])
+                if np.std(signals) < 1e-12 or np.std(returns) < 1e-12:
+                    continue
+                r = np.corrcoef(signals, returns)[0, 1]
+                if np.isfinite(r):
+                    day_ics.append(r)
+            # 时间序列回退：无任何截面日（单标的时序数据）时，
+            # 用全期信号 vs 实际收益的秩相关作为时间序列 IC。
+            if not day_ics:
+                sig_all = np.array([float(it.get("signal_value", 0.0))
+                                    for it in items])
+                ret_all = np.array([float(it.get("position_return", 0.0))
+                                    for it in items])
+                if (len(sig_all) >= 5 and np.std(sig_all) > 1e-12
+                        and np.std(ret_all) > 1e-12):
+                    r = np.corrcoef(sig_all, ret_all)[0, 1]
+                    if np.isfinite(r):
+                        day_ics.append(r)
+            mean_ic = float(np.mean(day_ics)) if day_ics else 0.0
+            factor_stats[fid] = {
+                "ic": mean_ic,
+                "n_days": max(cross_section_days, len(day_ics)),
+                "mean_return": float(np.mean([it.get("position_return", 0.0)
+                                              for it in items])),
+            }
+            if day_ics:
+                ics.append(mean_ic)
+        overall = float(np.mean(ics)) if ics else 0.0
+        return {"factors": factor_stats, "overall_ic": overall,
+                "n_records": len(recs)}
+
+    # ─── 落盘 ──────────────────────────────────────────
+
+    def _persist(self, records: list[LiveFeedbackRecord]) -> None:
+        """落盘：优先 DuckDB，回退 JSONL。"""
+        if not records:
+            return
+        if self._db_path:
+            try:
+                self._persist_duckdb(records)
+                return
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[GAP-L402] DuckDB 落盘失败 (%s)，回退 JSONL", e)
+        self._persist_jsonl(records)
+
+    def _persist_jsonl(self, records: list[LiveFeedbackRecord]) -> None:
+        """JSONL 追加落盘（memory/portfolio/live_feedback.jsonl）。"""
+        import json as _json
+        from pathlib import Path
+
+        out = Path("memory/portfolio/live_feedback.jsonl")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "a", encoding="utf-8") as fh:
+            for r in records:
+                fh.write(_json.dumps(r, ensure_ascii=False) + "\n")
+
+    def _persist_duckdb(self, records: list[LiveFeedbackRecord]) -> None:
+        """DuckDB 表 feedback_live 追加（不存在则建表）。"""
+        import duckdb  # type: ignore
+
+        con = duckdb.connect(self._db_path)
+        try:
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS feedback_live (
+                    factor_id VARCHAR,
+                    signal_date VARCHAR,
+                    signal_value DOUBLE,
+                    position_return DOUBLE,
+                    turnover DOUBLE,
+                    slippage DOUBLE,
+                    market VARCHAR,
+                    backtest_ic DOUBLE,
+                    weight DOUBLE
+                )
+            """)
+            for r in records:
+                con.execute(
+                    "INSERT INTO feedback_live VALUES (?,?,?,?,?,?,?,?,?)",
+                    [r.get("factor_id"), r.get("signal_date"),
+                     r.get("signal_value"), r.get("position_return"),
+                     r.get("turnover"), r.get("slippage"),
+                     r.get("market"), r.get("backtest_ic"), r.get("weight")],
+                )
+        finally:
+            con.close()
+
+
+class LiveVsBacktestICReport:
+    """实盘 IC vs 回测 IC 对比报告（GAP-L402）。
+
+    输入实盘 IC（LiveFeedbackImporter 输出）与回测 IC（因子目录），
+    输出对比报告：衰减判定（|实盘 − 回测| 阈值）、退役建议。
+    """
+
+    def __init__(self, live_decay_threshold: float = 0.02) -> None:
+        """初始化。
+
+        Args:
+            live_decay_threshold: 实盘 IC 显著低于回测 IC 的绝对阈值（默认 0.02）
+        """
+        self._threshold = live_decay_threshold
+
+    def generate(
+        self,
+        live_ic_result: dict[str, Any],
+        backtest_ic_map: Optional[dict[str, float]] = None,
+    ) -> dict[str, Any]:
+        """生成对比报告。
+
+        Args:
+            live_ic_result: compute_live_ic 的输出
+            backtest_ic_map: factor_id → 回测 IC（可选）
+
+        Returns:
+            对比报告 {factors: [...], summary: {...}}
+        """
+        factors = live_ic_result.get("factors", {})
+        rows = []
+        decayed = 0
+        for fid, stats in factors.items():
+            live_ic = stats["ic"]
+            bt_ic = (backtest_ic_map or {}).get(fid)
+            status = "ok"
+            if bt_ic is not None:
+                # 衰减判定（GAP-L402）：
+                #   1) 实盘符号反转（bt>0 而 live<=0）→ decayed
+                #   2) 同向但 |live| 显著低于 |bt|（阈值差）→ decayed
+                if bt_ic > 0 and live_ic <= 0:
+                    status = "decayed"
+                    decayed += 1
+                elif abs(live_ic) < abs(bt_ic) - self._threshold:
+                    status = "decayed"
+                    decayed += 1
+                elif live_ic > 0:
+                    status = "ok"
+                else:
+                    status = "weak"
+            rows.append({
+                "factor_id": fid,
+                "live_ic": round(live_ic, 4),
+                "backtest_ic": round(bt_ic, 4) if bt_ic is not None else None,
+                "status": status,
+                "n_days": stats.get("n_days", 0),
+                "mean_return": round(stats.get("mean_return", 0.0), 6),
+            })
+        return {
+            "factors": sorted(rows, key=lambda r: r["live_ic"]),
+            "summary": {
+                "n_factors": len(rows),
+                "n_decayed": decayed,
+                "overall_live_ic": round(live_ic_result.get("overall_ic", 0.0), 4),
+                "n_records": live_ic_result.get("n_records", 0),
+            },
+            "generated_at": _now_iso(),
+        }
+
+
 __all__ = [
     "FeedbackEventType",
     "RootCause",
@@ -575,4 +901,8 @@ __all__ = [
     "EvolutionDirectionAdjuster",
     "EvolutionEffectiveness",
     "FeedbackLoop",
+    "LiveFeedbackRecord",
+    "validate_live_feedback_record",
+    "LiveFeedbackImporter",
+    "LiveVsBacktestICReport",
 ]

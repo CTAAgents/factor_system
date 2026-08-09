@@ -269,11 +269,12 @@ class TestMain:
         assert "run_ef567890_20260718T000000" in captured.out
         assert "meta-loop" in captured.out
 
+    @patch("scripts.daily_signal_pipeline.main", return_value=0)
     @patch("fts.cli.PortfolioLoop")
     @patch("fts.cli.generate_trace_id", return_value="l3_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
     def test_portfolio_run(
-        self, mock_run_id, mock_trace_id, mock_port, capsys,
+        self, mock_run_id, mock_trace_id, mock_port, mock_signal, capsys,
     ):
         """portfolio run 打印 trace_id 和 run_id。"""
         mock_loop = mock_port.return_value

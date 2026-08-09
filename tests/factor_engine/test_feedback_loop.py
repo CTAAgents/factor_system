@@ -287,3 +287,119 @@ def test_schema_feedback_tables(tmp_path):
     for t in ["feedback_events", "attribution_reports",
               "feedback_processing_results", "feedback_reports"]:
         assert t in tables
+
+
+# ─── 9. GAP-L402 实盘反馈闭环 ────────────────────────────
+
+
+def test_live_feedback_record_validation():
+    """契约校验：有效记录通过，缺失必填字段失败。"""
+    from fts.factor_engine.feedback_loop import validate_live_feedback_record
+
+    ok, msg = validate_live_feedback_record({
+        "factor_id": "fct_1", "signal_date": "2026-08-01",
+        "signal_value": 0.5, "position_return": 0.01, "turnover": 0.2,
+    })
+    assert ok
+    assert msg == ""
+    ok2, _ = validate_live_feedback_record({"signal_value": 0.5})
+    assert not ok2
+    ok3, _ = validate_live_feedback_record({
+        "factor_id": "fct_1", "signal_date": "2026-08-01",
+        "signal_value": "bad", "position_return": 0.01, "turnover": 0.2,
+    })
+    assert not ok3
+
+
+def test_live_feedback_import_jsonl(tmp_path, monkeypatch):
+    """导入记录 → JSONL 落盘（无 DuckDB 时回退）。"""
+    from fts.factor_engine.feedback_loop import LiveFeedbackImporter
+
+    monkeypatch.chdir(tmp_path)  # 落盘路径为相对 memory/portfolio/
+    importer = LiveFeedbackImporter(db_path=None)
+    result = importer.import_records([
+        {"factor_id": "fct_1", "signal_date": "2026-08-01",
+         "signal_value": 0.5, "position_return": 0.01, "turnover": 0.2},
+        {"factor_id": "fct_1", "signal_date": "2026-08-02",
+         "signal_value": -0.3, "position_return": -0.005, "turnover": 0.1},
+        {"signal_value": 0.5},  # 无效
+    ])
+    assert result["total"] == 3
+    assert result["valid"] == 2
+    assert result["invalid"] == 1
+    jl = tmp_path / "memory" / "portfolio" / "live_feedback.jsonl"
+    assert jl.exists()
+    assert jl.read_text(encoding="utf-8").count("\n") == 2
+
+
+def test_live_feedback_ic_positive_correlation():
+    """实盘 IC：信号与收益正相关时 IC 为正。"""
+    from fts.factor_engine.feedback_loop import LiveFeedbackImporter
+
+    importer = LiveFeedbackImporter(db_path=None)
+    records = [
+        {"factor_id": "fct_a", "signal_date": f"2026-08-{d:02d}",
+         "signal_value": v, "position_return": v * 0.01 + 0.0001,
+         "turnover": 0.1}
+        for d, v in [(1, 0.8), (2, 0.5), (3, 0.2), (4, -0.1),
+                     (5, -0.4), (6, -0.7), (7, 0.9), (8, -0.9),
+                     (9, 0.3), (10, -0.2)]
+    ]
+    importer.import_records(records)
+    stats = importer.compute_live_ic()
+    assert stats["n_records"] == 10
+    assert stats["factors"]["fct_a"]["ic"] > 0
+    assert stats["overall_ic"] > 0
+
+
+def test_live_vs_backtest_ic_report():
+    """对比报告：实盘 IC 显著低于回测 IC → 标记 decayed。"""
+    from fts.factor_engine.feedback_loop import (
+        LiveFeedbackImporter,
+        LiveVsBacktestICReport,
+    )
+
+    importer = LiveFeedbackImporter(db_path=None)
+    importer.import_records([
+        # fct_ok: 信号与收益强正相关 → 实盘 IC 高，status=ok
+        {"factor_id": "fct_ok", "signal_date": f"2026-08-{d:02d}",
+         "signal_value": v, "position_return": v * 0.02 + 0.0005 * d,
+         "turnover": 0.1}
+        for d, v in enumerate([0.8, 0.6, 0.4, 0.2, -0.1, -0.3, -0.5, -0.8], 1)
+    ] + [
+        # fct_decay: 信号与收益几乎无关（微弱正相关）→ 实盘 IC≈0，status=decayed
+        {"factor_id": "fct_decay", "signal_date": f"2026-08-{d:02d}",
+         "signal_value": v, "position_return": v * 0.0005 + 0.0005 * d,
+         "turnover": 0.1}
+        for d, v in enumerate([0.8, 0.6, 0.4, 0.2, -0.1, -0.3, -0.5, -0.8], 1)
+    ])
+    stats = importer.compute_live_ic()
+    report = LiveVsBacktestICReport().generate(
+        stats, backtest_ic_map={"fct_ok": 0.04, "fct_decay": 0.04},
+    )
+    by_id = {r["factor_id"]: r for r in report["factors"]}
+    assert by_id["fct_ok"]["status"] == "ok"
+    assert by_id["fct_decay"]["status"] == "decayed"
+    assert report["summary"]["n_decayed"] == 1
+
+
+def test_live_feedback_duckdb_persist(tmp_path):
+    """DuckDB 落盘：feedback_live 表创建并插入。"""
+    from fts.factor_engine.feedback_loop import LiveFeedbackImporter
+
+    db_path = str(tmp_path / "live_feedback.duckdb")
+    importer = LiveFeedbackImporter(db_path=db_path)
+    importer.import_records([
+        {"factor_id": "fct_1", "signal_date": "2026-08-01",
+         "signal_value": 0.5, "position_return": 0.01, "turnover": 0.2,
+         "market": "futures"},
+    ])
+    import duckdb
+
+    conn = duckdb.connect(db_path)
+    try:
+        rows = conn.execute("SELECT factor_id, signal_value FROM feedback_live").fetchall()
+    finally:
+        conn.close()
+    assert len(rows) == 1
+    assert rows[0] == ("fct_1", 0.5)

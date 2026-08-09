@@ -2,8 +2,8 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-4020%2B%20passing-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.56.0-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-4464%2B%20passing-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.71.0-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -104,7 +104,9 @@ L3 参数：
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--universe` | `stock` | 组合市场（`stock` / `futures`） |
-| `--synthesis-mode` | 自动 | 信号合成模式（`elastic_net` / `adaptive` / `sharpe_weight` / `equal_weight` / `ml_ensemble`） |
+| `--synthesis-mode` | 自动 | 信号合成模式（`elastic_net` / `adaptive` / `sharpe_weight` / `equal_weight` / `ml_ensemble` / `optimizer`） |
+| `--optimizer-mode` | `risk_parity` | optimizer 目标（`risk_parity` / `mvo`，GAP-L303） |
+| `--returns-matrix` | 无 | 因子收益矩阵 CSV 路径（optimizer 模式与组合实测化需要，可选） |
 
 ### 因子管理
 
@@ -300,7 +302,8 @@ fts/                          # 核心源码（84 个 Python 文件）
 ├── factor_engine/            # 因子引擎（L1/L2/L3 + 审计 + 评分卡）
 │   ├── audit.py              # 6 类因子强制审计
 │   ├── factor_quality_card.py# 50 分制质量评分卡
-│   ├── evolution_loop.py     # L2 演化主循环
+│   ├── evolution_loop.py     # L2 演化主循环（operator/code/hybrid/batch 四模式）
+│   ├── batch_mining.py       # 批量挖掘漏斗（GAP-I201：批量生成 + 并行粗筛，v2.65.0）
 │   ├── portfolio_loop.py     # L3 组合构建
 │   ├── meta_loop.py          # L1 Meta-Loop
 │   ├── factor_db/            # 因子数据库（DuckDB）
@@ -318,7 +321,7 @@ fts/                          # 核心源码（84 个 Python 文件）
 ├── llm.py                    # LLM 客户端（OpenAI/Anthropic/Mock）
 └── cli.py                    # CLI 统一入口
 
-tests/                        # 116+ 个测试文件，4256+ 个测试用例（含高IC筛查 25 用例）
+tests/                        # 119+ 个测试文件，4474+ 个测试用例（含批量挖掘漏斗 21 用例 + GAP-X01/X02/X03 修复 6 用例 + GAP-L308/L309 收尾 26 用例 + GAP-S09~S12 收尾 27 用例 + GAP-I301/I205 收尾 14 用例 + GAP-I206 收尾 10 用例）
 scripts/                      # 工具脚本
 config/                       # 项目配置
 memory/                       # 运行时持久化（自动创建）

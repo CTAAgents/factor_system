@@ -497,6 +497,7 @@ def cross_section_evaluate_backtest(
     industry_map: Optional[dict[str, str]] = None,
     cap_map: Optional[dict[str, float]] = None,
     style_exposures: Optional[dict[str, Any]] = None,
+    long_only: bool = False,
 ) -> BacktestMetrics:
     """横截面回测评估 — 单因子在多个标的上跨 section IC。
 
@@ -517,9 +518,10 @@ def cross_section_evaluate_backtest(
         common_dates: 共同日期索引
         oos_ratio: 样本外比例
         industry_map: {symbol: industry_name} 行业映射字典（可选，启用后做行业中性化）
-        cap_map: {symbol: market_cap} 市值映射字典（可选，配合 industry_map 做双重中性化）
+        cap_map: {symbol: market_cap} 市值映射字典（可选，配合 industry_map 做双重中性化，GAP-S06 启用分层 IC）
         style_exposures: {style_name: DataFrame} Barra 风格暴露（可选，GAP-S02）。
             启用后在行业中性化基础上叠加风格回归残差（剥离风格暴露）。
+        long_only: 仅做多口径（GAP-S07），股票/ETF 路径默认 True
 
     Returns:
         BacktestMetrics
@@ -569,6 +571,13 @@ def cross_section_evaluate_backtest(
     ic_std = float(np.std(ics, ddof=1)) if len(ics) > 1 else 0.0
     icir = float(ic_mean / max(ic_std, 1e-10))
 
+    # Step 3.5: 分层 IC（GAP-S06）— 按市值三分位计算各层 IC
+    layer_ic: dict[str, float] = {}
+    if cap_map is not None:
+        symbols_list = list(signal_dict.keys())
+        cap_values = np.array([cap_map.get(sym, np.nan) for sym in symbols_list], dtype=float)
+        layer_ic = _cs_compute_layer_ics(oos_signal, oos_ret, cap_values)
+
     # Step 4: 多空组合收益 + 方向检测
     ls_returns = _cs_long_short_returns(oos_signal, oos_ret)
     ls_mean = float(np.mean(ls_returns))
@@ -591,12 +600,22 @@ def cross_section_evaluate_backtest(
     max_dd = _compute_max_drawdown(cumulative)
     t_stat = _cs_t_stat(ls_returns)
 
+    # Step 4b: 仅做多夏普（GAP-S07）— 独立于方向检测，反映真实多头收益
+    lo_sharpe: Optional[float] = None
+    if long_only:
+        lo_returns = _cs_long_short_returns(oos_signal, oos_ret, long_only=True)
+        lo_sharpe = _compute_sharpe(lo_returns)
+
     metrics = BacktestMetrics(
         ic=ic_mean, icir=icir, sharpe=sharpe, max_drawdown=max_dd,
         monotonicity=True, oos_ratio=oos_ratio, t_stat=t_stat, turnover_monthly=0.0,
     )
     if ic_pre_neutral is not None:
         metrics["ic_pre_neutral"] = ic_pre_neutral
+    if layer_ic:
+        metrics["layer_ic"] = layer_ic
+    if lo_sharpe is not None:
+        metrics["long_only_sharpe"] = lo_sharpe
     return metrics
 
 
@@ -657,8 +676,68 @@ def _cs_compute_ics(oos_signal: np.ndarray, oos_ret: np.ndarray) -> list[float]:
     return ics
 
 
-def _cs_long_short_returns(oos_signal: np.ndarray, oos_ret: np.ndarray) -> np.ndarray:
-    """横截面: 多空组合收益（每期 top 20% - bottom 20%）。"""
+def _cs_compute_layer_ics(
+    oos_signal: np.ndarray,
+    oos_ret: np.ndarray,
+    cap_values: np.ndarray,
+) -> dict[str, float]:
+    """横截面分层 IC（GAP-S06）：按市值三分位计算各层 IC。
+
+    Args:
+        oos_signal: (n_dates, n_stocks) 信号矩阵
+        oos_ret: (n_dates, n_stocks) 收益矩阵
+        cap_values: (n_stocks,) 市值数组（列对应标的）
+
+    Returns:
+        {layer_name: ic_mean}，如 {"large": 0.03, "mid": 0.02, "small": 0.01}
+    """
+    n_dates = oos_signal.shape[0]
+    n_stocks = len(cap_values)
+    if n_stocks < 6:
+        return {}
+    # 按市值三分位分组
+    valid_cap = np.where(np.isfinite(cap_values), cap_values, np.nanmedian(cap_values))
+    terciles = np.percentile(valid_cap, [33.3, 66.7])
+    large_mask = valid_cap >= terciles[1]
+    mid_mask = (valid_cap >= terciles[0]) & (valid_cap < terciles[1])
+    small_mask = valid_cap < terciles[0]
+    layers: dict[str, np.ndarray] = {
+        "large": large_mask, "mid": mid_mask, "small": small_mask,
+    }
+    result: dict[str, float] = {}
+    for layer_name, mask in layers.items():
+        layer_ics: list[float] = []
+        for t in range(n_dates):
+            sig_t = oos_signal[t, mask]
+            ret_t = oos_ret[t, mask]
+            valid = ~(np.isnan(sig_t) | np.isnan(ret_t))
+            if np.sum(valid) < 5:
+                continue
+            sig_v = sig_t[valid]
+            ret_v = ret_t[valid]
+            if np.std(sig_v) < 1e-10 or np.std(ret_v) < 1e-10:
+                continue
+            ic_val, _ = sp_stats.spearmanr(sig_v, ret_v)
+            if not np.isnan(ic_val):
+                layer_ics.append(ic_val)
+        if layer_ics:
+            result[layer_name] = float(np.mean(layer_ics))
+    return result
+
+
+def _cs_long_short_returns(
+    oos_signal: np.ndarray, oos_ret: np.ndarray, long_only: bool = False,
+) -> np.ndarray:
+    """横截面: 多空组合收益（每期 top 20% - bottom 20%）。
+
+    Args:
+        oos_signal: (n_dates, n_stocks) 信号矩阵
+        oos_ret: (n_dates, n_stocks) 收益矩阵
+        long_only: 仅做多模式（GAP-S07），仅取 top 20% 多头收益
+
+    Returns:
+        每期组合收益数组
+    """
     oos_n = oos_signal.shape[0]
     ls_returns = np.zeros(oos_n)
     for t in range(oos_n):
@@ -673,8 +752,11 @@ def _cs_long_short_returns(oos_signal: np.ndarray, oos_ret: np.ndarray) -> np.nd
         sorted_idx = np.argsort(sig_v)
         top_n = max(1, len(sorted_idx) // 5)
         long_ret = np.mean(ret_v[sorted_idx[-top_n:]])
-        short_ret = np.mean(ret_v[sorted_idx[:top_n]])
-        ls_returns[t] = long_ret - short_ret
+        if long_only:
+            ls_returns[t] = long_ret
+        else:
+            short_ret = np.mean(ret_v[sorted_idx[:top_n]])
+            ls_returns[t] = long_ret - short_ret
     return ls_returns
 
 

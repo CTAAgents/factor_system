@@ -506,6 +506,56 @@ class TestCmdPortfolioRunFutures:
 
 
 # ═══════════════════════════════════════════════════════════
+# portfolio run — stock 分支 + 股票信号管道（GAP-I301）
+# ═══════════════════════════════════════════════════════════
+
+class TestCmdPortfolioRunStock:
+    """测试 _cmd_portfolio_run stock 分支及股票信号管道触发（GAP-I301）。"""
+
+    def _setup(self, mock_cfg, mock_port, status: str = "passed"):
+        cfg = mock_cfg.return_value
+        cfg.get_elite_dir.return_value = "/tmp/elite_stock"
+        cfg.memory_dir = "/tmp/memory"
+        cfg.verifier = {"max_correlation": 0.4}
+        mock_loop = mock_port.return_value
+        mock_loop.run.return_value = MagicMock(
+            status=status, n_factors_retained=3, combo_sharpe=1.2,
+        )
+
+    @patch("scripts.daily_signal_pipeline.main", return_value=0)
+    @patch("fts.cli.PortfolioLoop")
+    @patch("fts.cli.get_config")
+    def test_stock_triggers_signal_pipeline(self, mock_cfg, mock_port, mock_signal, capsys):
+        """stock + passed 触发股票信号管道。"""
+        self._setup(mock_cfg, mock_port)
+        rc = main(["portfolio", "run", "--universe", "stock"])
+        assert rc == 0
+        mock_signal.assert_called_once_with(max_stocks=50, days=120)
+        assert "触发股票信号生成管道" in capsys.readouterr().out
+
+    @patch("scripts.daily_signal_pipeline.main", return_value=3)
+    @patch("fts.cli.PortfolioLoop")
+    @patch("fts.cli.get_config")
+    def test_stock_signal_pipeline_nonzero_rc(self, mock_cfg, mock_port, mock_signal, capsys):
+        """股票信号管道非零退出时打印告警但仍返回 0。"""
+        self._setup(mock_cfg, mock_port)
+        rc = main(["portfolio", "run", "--universe", "stock"])
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "信号管道异常退出: rc=3" in captured.err
+
+    @patch("scripts.daily_signal_pipeline.main")
+    @patch("fts.cli.PortfolioLoop")
+    @patch("fts.cli.get_config")
+    def test_stock_status_not_triggering(self, mock_cfg, mock_port, mock_signal, capsys):
+        """状态不在触发集时不调用股票信号管道。"""
+        self._setup(mock_cfg, mock_port, status="failed")
+        rc = main(["portfolio", "run", "--universe", "stock"])
+        assert rc == 0
+        mock_signal.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════════
 # fts catalog 子命令组
 # ═══════════════════════════════════════════════════════════
 

@@ -703,6 +703,42 @@ class TestBuildCombo:
         assert combo["metrics_source"] == "measured"
         assert combo["max_correlation"] > 0.9
 
+    # ── GAP-L305 net 指标（v2.66.0）─────────────────────
+
+    def test_net_sharpe_with_cost_config(self, sample_signals):
+        """传入 cost_config → net_combo_sharpe < combo_sharpe。"""
+        combo = build_combo(
+            sample_signals, mode="equal_weight",
+            cost_config={"market": "futures", "slippage_bps": 0.5},
+        )
+        assert combo["net_combo_sharpe"] is not None
+        assert combo["net_combo_sharpe"] < combo["combo_sharpe"]
+
+    def test_net_sharpe_none_without_cost_config(self, sample_signals):
+        """无 cost_config → net_combo_sharpe 为 None（不启用成本模型）。"""
+        combo = build_combo(sample_signals, mode="equal_weight")
+        assert combo["net_combo_sharpe"] is None
+
+    def test_net_sharpe_calculation_math(self, sample_signals):
+        """net 夏普 = gross − (turnover×(slippage+commission+impact)/10000×12/0.15)。"""
+        combo = build_combo(
+            sample_signals, mode="equal_weight",
+            cost_config={"market": "futures", "slippage_bps": 0.5,
+                         "commission_bps": 0.2, "impact_bps_per_pct": 1.0,
+                         "min_cost_bps": 0.5},
+        )
+        turnover = combo["combo_turnover"]
+        raw = turnover * (0.5 + 0.2 + 1.0)
+        total_cost_bps = max(raw, 0.5)
+        expected_net = combo["combo_sharpe"] - (total_cost_bps / 10000.0) * 12.0 / 0.15
+        assert combo["net_combo_sharpe"] == pytest.approx(expected_net, abs=1e-9)
+
+    def test_empty_combo_net_none(self):
+        """空组合 net_combo_sharpe 为 None。"""
+        combo = build_combo([], mode="equal_weight",
+                            cost_config={"market": "futures"})
+        assert combo["net_combo_sharpe"] is None
+
 
 # ════════════════════════════════════════════════════════════
 # 8. LoadEliteFactors 测试
@@ -964,6 +1000,124 @@ class TestPortfolioLoop:
         result = loop.run(factor_returns=fr, exposure_matrix=exposure)
         assert result.status in ("passed", "verifier_warning", "completed")
         assert result.n_factors_input == 3
+
+    # ── GAP-L305 net 指标 ─────────────────────────────
+
+    def test_run_with_cost_config(
+        self, tmp_portfolio_dir, tmp_elite_dir,
+    ):
+        """cost_config 传入 → 组合带 net_combo_sharpe。"""
+        ids = self._write_mock_elites(tmp_elite_dir)
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            synthesis_mode="sharpe_weight",
+            cost_config={"market": "futures", "slippage_bps": 0.5},
+        )
+        result = loop.run()
+        assert result.status in ("passed", "verifier_warning", "completed")
+        combo = json.loads((tmp_portfolio_dir / "current_combo.json").read_text(encoding="utf-8"))
+        assert combo.get("net_combo_sharpe") is not None
+
+    # ── GAP-L307 归因报告 ─────────────────────────────
+
+    def test_attribution_report_generated(
+        self, tmp_portfolio_dir, tmp_elite_dir,
+    ):
+        """factor_returns 传入 + 组合有效 → 生成归因报告文件。"""
+        ids = self._write_mock_elites(tmp_elite_dir)
+        rng = np.random.default_rng(23)
+        n = 60
+        fr = pd.DataFrame({
+            ids[0]: rng.normal(0.001, 0.01, size=n),
+            ids[1]: rng.normal(0.0005, 0.01, size=n),
+            ids[2]: rng.normal(0.0002, 0.01, size=n),
+        })
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            synthesis_mode="sharpe_weight",
+        )
+        result = loop.run(factor_returns=fr)
+        assert result.status in ("passed", "verifier_warning", "completed")
+        # 归因报告写入 reports/{date}/
+        import datetime as _dt
+        ts = _dt.date.today().isoformat()
+        reports_dir = Path("reports") / ts
+        assert reports_dir.exists()
+        md_files = list(reports_dir.glob("portfolio_attribution_*.md"))
+        assert len(md_files) >= 1
+        content = md_files[-1].read_text(encoding="utf-8")
+        assert "因子贡献度" in content
+        assert "VaR 95" in content
+        # 清理测试产物（仅删除本测试生成的归因文件，不删除 reports 其他内容）
+        for f in md_files:
+            f.unlink(missing_ok=True)
+
+    def test_attribution_skipped_without_returns(self, tmp_portfolio_dir, tmp_elite_dir):
+        """无 factor_returns → 不生成归因报告（不崩溃）。"""
+        ids = self._write_mock_elites(tmp_elite_dir)
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            synthesis_mode="sharpe_weight",
+        )
+        result = loop.run()
+        assert result.status in ("passed", "verifier_warning", "completed")
+
+    # ── GAP-L306 组合层走航 ─────────────────────────────
+
+    def test_walk_forward_report_generated(
+        self, tmp_portfolio_dir, tmp_elite_dir,
+    ):
+        """factor_returns 足够长 → 生成走航报告文件。"""
+        ids = self._write_mock_elites(tmp_elite_dir)
+        rng = np.random.default_rng(24)
+        n = 400  # 走航需 ≥120 天
+        fr = pd.DataFrame({
+            ids[0]: rng.normal(0.001, 0.01, size=n),
+            ids[1]: rng.normal(0.0005, 0.01, size=n),
+            ids[2]: rng.normal(0.0002, 0.01, size=n),
+        })
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            synthesis_mode="sharpe_weight",
+        )
+        result = loop.run(factor_returns=fr)
+        assert result.status in ("passed", "verifier_warning", "completed")
+        import datetime as _dt
+        ts = _dt.date.today().isoformat()
+        reports_dir = Path("reports") / ts
+        wf_files = list(reports_dir.glob("portfolio_wf_*.md"))
+        assert len(wf_files) >= 1
+        content = wf_files[-1].read_text(encoding="utf-8")
+        assert "一致性得分" in content
+        # 清理测试产物
+        for f in wf_files:
+            f.unlink(missing_ok=True)
+
+    def test_walk_forward_skipped_short_returns(self, tmp_portfolio_dir, tmp_elite_dir):
+        """因子收益矩阵过短（<120）→ 不生成走航报告（不崩溃）。"""
+        ids = self._write_mock_elites(tmp_elite_dir)
+        rng = np.random.default_rng(25)
+        fr = pd.DataFrame({
+            ids[0]: rng.normal(size=60),
+            ids[1]: rng.normal(size=60),
+            ids[2]: rng.normal(size=60),
+        })
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            synthesis_mode="sharpe_weight",
+        )
+        result = loop.run(factor_returns=fr)
+        assert result.status in ("passed", "verifier_warning", "completed")
 
 
 # ════════════════════════════════════════════════════════════
@@ -3242,3 +3396,127 @@ class TestCoveragePolish:
             m_exec.side_effect = [RuntimeError("ctor fail"), exec_ok]
             result = _compute_ml_ensemble_weights(factors, elite)
         assert set(result.keys()) <= {"f0", "f1"}  # 权重由剩余有效样本训练得出
+
+
+# ════════════════════════════════════════════════════════════
+# 26. 股票 L3 组合层测试 (GAP-I301, v2.68.0)
+# ════════════════════════════════════════════════════════════
+
+class TestStockL3PortfolioLayer:
+    """股票 L3 组合层：复用期货组件 + TopN 组合回测 + 成本模型。
+
+    GAP-I301 测试方案:
+        - 股票 L3 与期货 L3 组件复用性断言（synthesize_signals/build_combo/
+          load_elite_factors 以 market 区分，同一实现）
+        - TopN 组合回测 Sharpe/回撤
+        - 成本模型开启后 net_combo_sharpe 仍为正
+    """
+
+    def _stock_factors(self, n: int = 3) -> list[dict]:
+        """构造股票因子列表（含 market="stock"）。"""
+        return [
+            {"factor_id": f"fct_s{i}", "name": f"stock_f{i}",
+             "sharpe": 2.2, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+             "market": "stock", "code": "close"}
+            for i in range(n)
+        ]
+
+    # ── 组件复用性断言 ──
+
+    def test_load_elite_factors_stock_market_filter(self, tmp_path):
+        """股票 L3 从 elite 目录按 market="stock" 过滤，期货因子被排除。"""
+        elite = tmp_path / "elite"
+        elite.mkdir(parents=True, exist_ok=True)
+        (elite / "s.json").write_text(json.dumps({
+            "factor_id": "fct_s1", "name": "stock_f1", "sharpe": 2.2, "ic": 0.05,
+            "turnover": 0.3, "decay_6m": 0.1, "market": "stock", "code": "close",
+        }), encoding="utf-8")
+        (elite / "f.json").write_text(json.dumps({
+            "factor_id": "fct_f1", "name": "fut_f1", "sharpe": 2.2, "ic": 0.05,
+            "turnover": 0.3, "decay_6m": 0.1, "market": "futures", "code": "close",
+        }), encoding="utf-8")
+        factors = load_elite_factors(elite, use_duckdb=False, market="stock")
+        assert {f["factor_id"] for f in factors} == {"fct_s1"}
+
+    def test_synthesize_signals_shared_for_stock(self):
+        """synthesize_signals 同一实现服务股票/期货（组件复用）。"""
+        signals, max_corr, turnover = synthesize_signals(
+            self._stock_factors(3), mode="equal_weight",
+        )
+        assert len(signals) == 3
+        assert all(s["factor_id"].startswith("fct_s") for s in signals)
+        assert max_corr == 0.0
+        assert turnover >= 0.0
+
+    def test_build_combo_stock_with_cost(self):
+        """股票组合成本模型开启后 net_combo_sharpe 存在且为正。"""
+        signals = [
+            PortfolioSignal(factor_id=f"fct_s{i}", name=f"stock_f{i}",
+                            weight=1.0 / 3, sharpe=2.5, ic=0.05,
+                            turnover=0.1, decay_6m=0.05,
+                            orthogonalized=False, retained=True)
+            for i in range(3)
+        ]
+        combo = build_combo(
+            signals, mode="equal_weight", trace_id="l3_stock_test",
+            market="stock",
+            cost_config={"market": "stock", "slippage_bps": 0.5,
+                         "commission_bps": 0.3, "impact_bps_per_pct": 2.0},
+        )
+        assert combo["combo_sharpe"] > 0
+        assert combo["net_combo_sharpe"] is not None
+        assert combo["net_combo_sharpe"] > 0  # 低换手下成本扣除后 alpha 仍为正
+
+    def test_build_combo_stock_no_cost(self):
+        """股票组合未开启成本模型时 net_combo_sharpe 为 None。"""
+        signals = [
+            PortfolioSignal(factor_id="fct_s1", name="stock_f1",
+                            weight=1.0, sharpe=2.5, ic=0.05,
+                            turnover=0.1, decay_6m=0.05,
+                            orthogonalized=False, retained=True),
+        ]
+        combo = build_combo(signals, mode="equal_weight", market="stock")
+        assert combo["net_combo_sharpe"] is None
+
+    def test_portfolio_loop_stock_run(self, tmp_path):
+        """PortfolioLoop market="stock" 端到端 run（复用期货组件路径）。"""
+        memory_dir = tmp_path / "mem_stock"
+        elite_dir = tmp_path / "elite_stock"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        elite_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(3):
+            (elite_dir / f"fct_s{i}.json").write_text(json.dumps({
+                "factor_id": f"fct_s{i}", "name": f"stock_f{i}",
+                "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+                "market": "stock", "code": "close",
+            }), encoding="utf-8")
+        loop = PortfolioLoop(
+            memory_dir=memory_dir, elite_dir=elite_dir,
+            use_duckdb=False, synthesis_mode="equal_weight",
+            enable_regime_adaptation=False, enable_clustering=False,
+            market="stock",
+        )
+        result = loop.run()
+        assert result.n_factors_input == 3
+        assert result.status in ("passed", "verifier_warning", "completed")
+
+    def test_portfolio_loop_stock_stock_regime(self, tmp_path):
+        """股票 L3 传入 stock_regime 驱动风格自适应（GAP-S03 联动）。"""
+        memory_dir = tmp_path / "mem_stock_r"
+        elite_dir = tmp_path / "elite_stock_r"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        elite_dir.mkdir(parents=True, exist_ok=True)
+        (elite_dir / "fct_s1.json").write_text(json.dumps({
+            "factor_id": "fct_s1", "name": "stock_f1",
+            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
+            "market": "stock", "code": "close",
+        }), encoding="utf-8")
+        stock_regime = {"regime": "large_cap", "confidence": 0.8}
+        loop = PortfolioLoop(
+            memory_dir=memory_dir, elite_dir=elite_dir,
+            use_duckdb=False, synthesis_mode="sharpe_weight",
+            enable_regime_adaptation=True, enable_clustering=False,
+            market="stock",
+        )
+        result = loop.run(stock_regime=stock_regime)
+        assert result.status in ("passed", "verifier_warning", "completed")

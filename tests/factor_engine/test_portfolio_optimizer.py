@@ -20,6 +20,7 @@ from fts.factor_engine.portfolio_optimizer import (
     OptimizerConfig,
     PortfolioOptimizer,
 )
+from fts.factor_engine.risk_model import RiskModelEstimator
 from fts.factor_engine.portfolio_loop import synthesize_signals
 
 
@@ -313,3 +314,98 @@ class TestNeutralization:
         )
         exposure_actual = exposure.T @ w
         assert np.all(np.abs(exposure_actual - target) <= cfg.exposure_tolerance + 1e-6)
+
+
+class TestCostAndCapacity:
+    """GAP-L305 换手惩罚 / 成本项 / 容量约束。"""
+
+    def _make_cov(self, n: int = 3) -> np.ndarray:
+        rng = np.random.default_rng(11)
+        x = rng.normal(size=(300, n))
+        return np.cov(x.T)
+
+    def test_turnover_penalty_shrinks_change(self) -> None:
+        """换手惩罚生效：设 penalty>0 时权重变化应小于 penalty=0。"""
+        prev = np.array([0.5, 0.3, 0.2])
+        rng = np.random.default_rng(12)
+        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)),
+                               columns=["f1", "f2", "f3"])
+        cov = RiskModelEstimator().estimate(returns).cov
+        mu = np.array([0.08, 0.04, 0.02])
+
+        cfg_plain = OptimizerConfig(mode="mean_variance", max_weight=1.0)
+        cfg_penalty = OptimizerConfig(mode="mean_variance", max_weight=1.0,
+                                      turnover_penalty=0.01)
+        w_plain = PortfolioOptimizer(cfg_plain).optimize(
+            cov=cov, expected_returns=mu, prev_weights=prev)
+        w_penalty = PortfolioOptimizer(cfg_penalty).optimize(
+            cov=cov, expected_returns=mu, prev_weights=prev)
+        t_plain = float(np.sum(np.abs(w_plain - prev)))
+        t_penalty = float(np.sum(np.abs(w_penalty - prev)))
+        assert t_penalty <= t_plain + 1e-6
+
+    def test_cost_bps_penalty_reduces_mvo_move(self) -> None:
+        """成本项（cost_bps_per_turnover）入目标：权重变化被抑制。"""
+        prev = np.array([0.5, 0.3, 0.2])
+        rng = np.random.default_rng(13)
+        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)),
+                               columns=["f1", "f2", "f3"])
+        cov = RiskModelEstimator().estimate(returns).cov
+        mu = np.array([0.08, 0.04, 0.02])
+
+        cfg_plain = OptimizerConfig(mode="mean_variance", max_weight=1.0)
+        cfg_cost = OptimizerConfig(mode="mean_variance", max_weight=1.0,
+                                   cost_bps_per_turnover=500.0)
+        w_plain = PortfolioOptimizer(cfg_plain).optimize(
+            cov=cov, expected_returns=mu, prev_weights=prev)
+        w_cost = PortfolioOptimizer(cfg_cost).optimize(
+            cov=cov, expected_returns=mu, prev_weights=prev)
+        assert float(np.sum(np.abs(w_cost - prev))) <= \
+            float(np.sum(np.abs(w_plain - prev))) + 1e-6
+
+    def test_capacity_limits_respected(self) -> None:
+        """容量上限生效：w_i <= capacity_limits_i。"""
+        cfg = OptimizerConfig(mode="mean_variance", max_weight=0.8, max_leverage=1.0)
+        opt = PortfolioOptimizer(cfg)
+        cov = self._make_cov()
+        mu = np.array([0.09, 0.02, 0.01])
+        cap = np.array([0.2, 0.4, 0.6])
+        w = opt.optimize(cov=cov, expected_returns=mu, capacity_limits=cap)
+        assert np.all(w <= cap + 1e-9)
+
+    def test_capacity_limits_dim_mismatch(self) -> None:
+        """容量上限长度 ≠ 资产数 → ValueError。"""
+        opt = PortfolioOptimizer(OptimizerConfig(mode="mean_variance"))
+        with pytest.raises(ValueError, match="容量"):
+            opt.optimize(self._make_cov(), expected_returns=np.ones(3),
+                         capacity_limits=np.array([0.5, 0.5]))
+
+    def test_capacity_limits_risk_parity(self) -> None:
+        """风险平价路径容量约束同样生效。"""
+        cfg = OptimizerConfig(mode="risk_parity", max_weight=0.8, max_leverage=1.0)
+        opt = PortfolioOptimizer(cfg)
+        cov = self._make_cov()
+        cap = np.array([0.15, 0.5, 0.6])
+        w = opt.optimize(cov=cov, capacity_limits=cap)
+        assert np.all(w <= cap + 1e-9)
+
+    def test_capacity_limits_in_optimizer_mode(self) -> None:
+        """synthesize_signals optimizer 模式透传 capacity_limits。"""
+        rng = np.random.default_rng(14)
+        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)),
+                               columns=["f1", "f2", "f3"])
+        factors = [
+            {"factor_id": "f1", "name": "mom", "sharpe": 1.8, "ic": 0.05,
+             "turnover": 0.3, "decay_6m": 0.9},
+            {"factor_id": "f2", "name": "carry", "sharpe": 1.5, "ic": 0.04,
+             "turnover": 0.2, "decay_6m": 0.7},
+            {"factor_id": "f3", "name": "value", "sharpe": 1.2, "ic": 0.03,
+             "turnover": 0.4, "decay_6m": 0.8},
+        ]
+        cap = [0.2, 0.4, 0.6]
+        signals, _, _ = synthesize_signals(
+            factors, "optimizer", returns_matrix=returns,
+            optimizer_config={"max_weight": 0.8, "capacity_limits": cap},
+        )
+        for s, c in zip(signals, cap):
+            assert s["weight"] <= c + 1e-6

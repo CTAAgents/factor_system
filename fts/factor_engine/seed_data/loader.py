@@ -171,16 +171,6 @@ def _estimate_input_fields(expression: str) -> list[str]:
     return sorted(fields)
 
 
-def _estimate_lookback(expression: str) -> int:
-    """从表达式中的 d 参数估算最大回看窗口。"""
-    import re
-    lookbacks = re.findall(r'\b(\d{1,3})\b', expression)
-    ints = [int(x) for x in lookbacks if 2 <= int(x) <= 252]
-    if not ints:
-        return 20
-    return max(ints) + 5
-
-
 def make_factor_program(
     name: str,
     expression: str,
@@ -211,7 +201,9 @@ def make_factor_program(
     """
     params = params or {}
     if lookback is None:
-        lookback = _estimate_lookback(expression)
+        # GAP-S09 (v2.67.0): 静态 PIT 审计——仅统计窗口算子的常量参数
+        from ..expr_dsl.seed_analyzer import estimate_lookback_static
+        lookback = estimate_lookback_static(expression)
     if input_fields is None:
         input_fields = _estimate_input_fields(expression)
 

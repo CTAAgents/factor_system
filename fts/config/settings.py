@@ -77,13 +77,59 @@ class FTSConfig:
     )
 
     # ── 演化配置 ──
-    # ── 演化模式 (Phase C.2): operator(算子主干) / code(代码创新) / hybrid(混合) ──
+    # ── 演化模式 (Phase C.2): operator(算子主干) / code(代码创新) / hybrid(混合) / batch(批量挖掘 GAP-I201) ──
     evolution_mode: str = field(
         default_factory=lambda: os.getenv("FTS_EVOLUTION_MODE", "hybrid")
     )
     max_generations: int = 10
     population_size: int = 20
     micro_trials_per_generation: int = 50
+
+    # ── 微观演化两阶段漏斗 (GAP-I205, v2.68.0) ──
+    # 粗筛（低 trials 随机搜索快速打分，低于阈值淘汰）→ 精筛（trials 按粗筛得分自适应 + TPE 早停）
+    micro_staged_evolution: bool = field(
+        default_factory=lambda: os.getenv("FTS_MICRO_STAGED", "1") == "1"
+    )
+    # 粗筛试验次数（低 trials 快速打分）
+    micro_coarse_trials: int = field(
+        default_factory=lambda: int(os.getenv("FTS_MICRO_COARSE_TRIALS", "20"))
+    )
+    # 粗筛淘汰阈值：粗筛 IC 低于该值直接淘汰，不进入精筛
+    micro_coarse_ic_floor: float = field(
+        default_factory=lambda: float(os.getenv("FTS_MICRO_COARSE_IC_FLOOR", "0.02"))
+    )
+
+    # ── L2 准入去冗余 (GAP-I206, v2.71.0) ──
+    # 演化因子晋升 elite 前与既有 elite 做信号相关性检查，超过阈值拒绝晋升（防 elite 池相关性膨胀）
+    l2_elite_corr_threshold: float = field(
+        default_factory=lambda: float(os.getenv("FTS_L2_ELITE_CORR_THRESHOLD", "0.9"))
+    )
+    # 既有 elite 相关性检查的最大扫描数（容量护栏，避免晋升时全量重算）
+    l2_elite_corr_max_scan: int = field(
+        default_factory=lambda: int(os.getenv("FTS_L2_ELITE_CORR_MAX_SCAN", "50"))
+    )
+    # L2 准入去冗余调试日志（无既有 elite 放行时输出 debug）
+    l2_elite_corr_debug: bool = field(
+        default_factory=lambda: os.getenv("FTS_L2_ELITE_CORR_DEBUG", "0") == "1"
+    )
+
+    # ── 批量挖掘漏斗 (GAP-I201, v2.65.0, evolution_mode="batch" 时生效) ──
+    # 每代批量候选生成数
+    batch_size: int = field(
+        default_factory=lambda: int(os.getenv("FTS_BATCH_SIZE", "20"))
+    )
+    # 通过粗筛后进入细评估的最大候选数（预算护栏）
+    batch_max_candidates: int = field(
+        default_factory=lambda: int(os.getenv("FTS_BATCH_MAX_CANDIDATES", "5"))
+    )
+    # 粗筛并行线程数
+    batch_max_workers: int = field(
+        default_factory=lambda: int(os.getenv("FTS_BATCH_MAX_WORKERS", "4"))
+    )
+    # 批量生成随机种子（同父多后代可复现）
+    batch_random_seed: int = field(
+        default_factory=lambda: int(os.getenv("FTS_BATCH_RANDOM_SEED", "42"))
+    )
 
     # ── 并行 ──
     max_workers: int = field(
@@ -135,6 +181,16 @@ class FTSConfig:
     # 期货涨跌停判定阈值（单日涨跌幅 ≥ 该值视为涨跌停，无法成交）
     futures_limit_pct: float = field(
         default_factory=lambda: float(os.getenv("FTS_FUTURES_LIMIT_PCT", "0.08"))
+    )
+
+    # ── 回测容量约束（v2.67.0，GAP-I501）──
+    # 回测是否启用容量限制（持仓市值 ≤ 品种日均成交额 × 比例，超限截断）
+    backtest_capacity_cap: bool = field(
+        default_factory=lambda: os.getenv("FTS_BACKTEST_CAPACITY_CAP", "true").lower() == "true"
+    )
+    # 持仓市值 / 品种日均成交额 上限比例（默认 1% 日均成交额，机构立项前置容量分析）
+    capacity_cap_ratio: float = field(
+        default_factory=lambda: float(os.getenv("FTS_CAPACITY_CAP_RATIO", "0.01"))
     )
 
     # ── 样本外强制 + 保证金建模（v2.60.0，GAP-F08/F09）──
@@ -262,7 +318,7 @@ def _apply_env_overrides(cfg: FTSConfig) -> None:
                 setattr(cfg, key, env_val)
 
 
-EVOLUTION_MODES: tuple[str, ...] = ("operator", "code", "hybrid")
+EVOLUTION_MODES: tuple[str, ...] = ("operator", "operator_first", "code", "hybrid", "batch")
 
 
 def validate_evolution_mode(mode: str) -> str:

@@ -147,11 +147,11 @@ class OperatorEvolutionEngine:
             set(L0_FIELDS) & set(data_panel.columns)
         ) or ["close"]
 
-        # 内部算子池: L1 单序列时序算子 + L4 组合算子（排除双序列，规避布尔条件复杂度）
+        # 内部算子池: L1 单序列时序算子 + L4 组合/双序列/条件算子（GAP-L401:
+        # 放开双序列约束，条件算子 if_else/regression_residual 经参数边界护栏控制复杂度）
         self._internal_ops = [
             name for name, meta in self._registry.items()
-            if meta.category in ("L1", "L4") and "y" not in meta.params
-            and "cond" not in meta.params
+            if meta.category in ("L1", "L4") and "cond" not in meta.params
         ]
         # 顶层封装池: L2 单参截面算子
         self._wrap_ops = [

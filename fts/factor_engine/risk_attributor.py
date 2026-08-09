@@ -50,6 +50,7 @@ class RiskAttributor:
         portfolio_returns: pd.Series,
         factor_returns: Optional[pd.DataFrame] = None,
         holdings: Optional[pd.DataFrame] = None,
+        weights: Optional[pd.Series | dict[str, float]] = None,
     ) -> RiskAttributionReport:
         """执行风险归因。
 
@@ -57,6 +58,8 @@ class RiskAttributor:
             portfolio_returns: 组合收益率序列
             factor_returns: 各因子收益率宽表（可选，用于贡献度）
             holdings: 持仓权重表（可选，用于暴露分析）
+            weights: 因子权重（factor_id → weight，可选；GAP-L307 方差分解需要
+                权重以得到 Σ贡献 = 1 的归一化贡献度；缺省时使用 cov/var 近似）
 
         Returns:
             RiskAttributionReport。
@@ -71,7 +74,7 @@ class RiskAttributor:
         # 1. 因子贡献度
         contributions: dict[str, float] = {}
         if factor_returns is not None and len(factor_returns.columns) > 0:
-            contributions = self._factor_contribution(returns, factor_returns)
+            contributions = self._factor_contribution(returns, factor_returns, weights)
 
         # 2. 暴露分析
         exposures: dict[str, float] = {}
@@ -99,20 +102,31 @@ class RiskAttributor:
 
     @staticmethod
     def _factor_contribution(
-        portfolio_returns: pd.Series, factor_returns: pd.DataFrame
+        portfolio_returns: pd.Series,
+        factor_returns: pd.DataFrame,
+        weights: Optional[pd.Series | dict[str, float]] = None,
     ) -> dict[str, float]:
-        """各因子贡献度：协方差分解（因子与组合的协方差 / 组合方差）。"""
+        """各因子贡献度：协方差分解（因子与组合的协方差 / 组合方差）。
+
+        有 weights 时按方差分解：contribution_i = w_i × cov(f_i, p) / var(p)，
+        满足 Σ contribution = 1（权重归一化且组合收益 = Σw·f 时）。
+        无 weights 时回退 cov/var 近似。
+        """
         aligned = factor_returns.reindex(portfolio_returns.index).dropna()
         if len(aligned) < 20 or len(aligned.columns) == 0:
             return {}
         p = portfolio_returns.reindex(aligned.index).fillna(0.0)
-        var_p = float(np.var(p))
+        var_p = float(np.var(p, ddof=1))  # ddof=1 与 np.cov 一致
         if var_p < 1e-12:
             return {}
         contributions: dict[str, float] = {}
         for fid in aligned.columns:
             cov = float(np.cov(aligned[fid].fillna(0.0), p)[0, 1])
-            contributions[fid] = cov / var_p
+            raw = cov / var_p
+            if weights is not None:
+                w = float(weights.get(fid, 0.0))
+                raw *= w
+            contributions[fid] = raw
         return contributions
 
     @staticmethod

@@ -262,6 +262,29 @@ class TestRunScenario:
         assert isinstance(result["recovery_days"], int)
         assert result["recovery_days"] >= 0
 
+    def test_string_index_supported(self) -> None:
+        """非 DatetimeIndex（字符串日期索引）应正常运行，不抛索引类型比较异常。
+
+        回归修复: stress_test.py 切片日期范围时 `df.index >= Timestamp`
+        在字符串/Range 索引上抛出 `'>=' not supported`。
+        """
+        tester = StressTester()
+        scenario = StressScenario(
+            name="字符串索引",
+            symbols=["TEST"],
+            date_range=("2020-01-01", "2020-04-30"),
+            price_shock=-20.0,
+            vol_multiplier=2.0,
+        )
+        df = _make_ohlcv(120, "2020-01-01").copy()
+        df.index = df.index.astype(str)  # 字符串日期索引
+        ohlcv = {"TEST": df}
+        signals = {"TEST": _make_aligned_signal(120)}
+
+        result = tester.run_scenario(scenario, signals, ohlcv)
+        assert isinstance(result["passed"], bool)
+        assert result["max_drawdown"] >= 0
+
 
 # ─── run_all 测试 ─────────────────────────────────────────
 

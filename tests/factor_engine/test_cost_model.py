@@ -325,6 +325,135 @@ class TestRollCost:
         assert "roll_cost_bps" in result
 
 
+# ─── GAP-F11 展期成本联动换月日历（v2.67.0） ──────────────
+
+class TestRollCostWithRollEvents:
+    """展期成本联动换月日历 — 基于 RollEvent 实际价差。"""
+
+    @staticmethod
+    def _make_roll_event(date_str: str, old_close: float, new_close: float) -> Any:
+        """构造一个简化的 RollEvent 模拟对象。"""
+        from datetime import date
+        from types import SimpleNamespace
+
+        year, month, day = [int(x) for x in date_str.split("-")]
+        return SimpleNamespace(
+            date=date(year, month, day),
+            old_close=old_close,
+            new_close=new_close,
+        )
+
+    def test_roll_events_to_spread_map(self) -> None:
+        """_roll_events_to_spread_map 应正确转换价差为 bps。"""
+        events = [
+            self._make_roll_event("2024-06-10", 3000.0, 3050.0),  # +1.67% → 166.7 bps
+            self._make_roll_event("2024-09-10", 3100.0, 3080.0),  # -0.65% → 64.5 bps
+        ]
+        result = TransactionCostModel._roll_events_to_spread_map(events)
+        assert "2024-06-10" in result
+        assert "2024-09-10" in result
+        # 166.7 bps ≈ 1.67%
+        assert result["2024-06-10"] == pytest.approx(166.6667, abs=0.1)
+        # 64.5 bps ≈ 0.65%
+        assert result["2024-09-10"] == pytest.approx(64.5161, abs=0.1)
+
+    def test_roll_events_to_spread_map_skip_bad_close(self) -> None:
+        """old_close=0 或缺失时应跳过该事件。"""
+        events = [
+            self._make_roll_event("2024-06-10", 0.0, 3050.0),   # old_close=0
+            self._make_roll_event("2024-09-10", 3100.0, 3080.0),  # 正常
+        ]
+        from types import SimpleNamespace
+        from datetime import date
+        events.append(SimpleNamespace(date=date(2024, 12, 10), old_close=3000.0))  # 缺 new_close
+        result = TransactionCostModel._roll_events_to_spread_map(events)
+        assert "2024-06-10" not in result  # 跳过
+        assert "2024-09-10" in result       # 正常
+
+    def test_adjust_roll_events_uses_actual_spread(self) -> None:
+        """roll_events 提供时，实际价差 > 固定 bps 则用价差。"""
+        import pandas as pd
+
+        model = TransactionCostModel()
+        metrics = _make_metrics(sharpe=2.0)
+        n = 30
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        signal = np.ones(n) * 0.5  # 满仓 0.5
+        # 价差 166.7 bps > 固定 2.0 bps → 用实际价差
+        roll_events = [self._make_roll_event("2024-01-10", 3000.0, 3050.0)]
+        result = model.adjust(
+            metrics, signal, market="futures",
+            dates=dates.to_numpy(), roll_events=roll_events,
+        )
+        # 展期成本 = |0.5| × 166.7 = 83.35 bps（远高于固定 2.0）
+        assert result["roll_cost_bps"] > 80.0
+        assert result["roll_cost_bps"] > 2.0 * 10  # 远大于固定 bps 路径
+
+    def test_adjust_roll_events_fallback_when_spread_low(self) -> None:
+        """实际价差 < 固定 bps 时，仍用固定 bps（不高于固定）。"""
+        import pandas as pd
+
+        model = TransactionCostModel()
+        metrics = _make_metrics(sharpe=2.0)
+        n = 30
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        signal = np.ones(n) * 0.5
+        # 价差 0.5 bps 远小于固定 2.0 bps → 用固定 2.0 bps
+        roll_events = [self._make_roll_event("2024-01-10", 3000.0, 3000.15)]
+        result = model.adjust(
+            metrics, signal, market="futures",
+            dates=dates.to_numpy(), roll_events=roll_events,
+        )
+        # 展期成本 = |0.5| × 2.0 = 1.0 bps（固定 bps 兜底）
+        assert result["roll_cost_bps"] == pytest.approx(1.0, abs=0.01)
+
+    def test_adjust_roll_events_fallback_to_roll_dates(self) -> None:
+        """roll_events 为空时，回退到 roll_dates + 固定 bps。"""
+        import pandas as pd
+
+        model = TransactionCostModel()
+        metrics = _make_metrics(sharpe=2.0)
+        n = 30
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        signal = np.ones(n) * 0.5
+        # 空列表
+        result = model.adjust(
+            metrics, signal, market="futures",
+            dates=dates.to_numpy(), roll_events=[],
+            roll_dates={"2024-01-10"},
+        )
+        # 应回退到 roll_dates + 固定 bps
+        assert result["roll_cost_bps"] == pytest.approx(1.0, abs=0.01)
+
+    def test_adjust_roll_events_empty_events_no_roll_dates(self) -> None:
+        """roll_events 为空且无 roll_dates 时，展期成本为 0。"""
+        model = TransactionCostModel()
+        metrics = _make_metrics(sharpe=2.0)
+        signal = np.ones(30) * 0.5
+        result = model.adjust(
+            metrics, signal, market="futures",
+            roll_events=[], dates=None,
+        )
+        assert result["roll_cost_bps"] == 0.0
+
+    def test_adjust_roll_events_no_roll_cost_bps(self) -> None:
+        """roll_cost_bps=0 时，即使有 roll_events 也不扣展期成本。"""
+        custom = CostConfig(
+            slippage_bps=0.5, commission_bps=0.2,
+            impact_bps_per_pct=1.0, min_cost_bps=0.5,
+            roll_cost_bps=0.0, market="futures",
+        )
+        model = TransactionCostModel(config=custom)
+        metrics = _make_metrics(sharpe=2.0)
+        signal = np.ones(30) * 0.5
+        roll_events = [self._make_roll_event("2024-01-10", 3000.0, 3050.0)]
+        result = model.adjust(
+            metrics, signal, market="futures",
+            roll_events=roll_events,
+        )
+        assert result["roll_cost_bps"] == 0.0
+
+
 # ─── 自定义配置测试 ───────────────────────────────────────
 
 class TestCustomConfig:
@@ -411,3 +540,38 @@ class TestEdgeCases:
         signal = np.tile([1.0, -1.0], 126)
         result = model.adjust(metrics, signal, market="futures")
         assert result["cost_adjusted_ic"] == pytest.approx(0.0, abs=1e-6)
+
+
+# ─── 冲击成本 square-root 模型（GAP-L305） ───────────────
+
+class TestImpactCost:
+    """square-root 冲击成本函数（GAP-L305，衔接 GAP-I501/I303）。"""
+
+    def test_zero_volume_zero_cost(self) -> None:
+        """零成交量占比 → 冲击成本为 0。"""
+        assert TransactionCostModel.impact_cost(0.0, 2.0) == 0.0
+
+    def test_reference_pct_returns_coeff(self) -> None:
+        """占比 = 参考占比（1%）时，成本 = impact_bps_per_pct。"""
+        assert TransactionCostModel.impact_cost(0.01, 2.0) == pytest.approx(2.0)
+
+    def test_monotonic_increasing(self) -> None:
+        """冲击成本随成交量占比单调递增（square-root 模型）。"""
+        costs = [TransactionCostModel.impact_cost(p, 2.0) for p in (0.001, 0.01, 0.05, 0.10, 0.20)]
+        assert all(costs[i] < costs[i + 1] for i in range(len(costs) - 1))
+
+    def test_square_root_sublinear(self) -> None:
+        """square-root 特性：4 倍占比 → 2 倍成本（亚线性）。"""
+        c1 = TransactionCostModel.impact_cost(0.01, 2.0)
+        c4 = TransactionCostModel.impact_cost(0.04, 2.0)
+        assert c4 == pytest.approx(2.0 * c1)
+
+    def test_negative_coeff_zero(self) -> None:
+        """impact_bps_per_pct<=0 → 成本为 0。"""
+        assert TransactionCostModel.impact_cost(0.05, 0.0) == 0.0
+        assert TransactionCostModel.impact_cost(0.05, -1.0) == 0.0
+
+    def test_custom_reference_pct(self) -> None:
+        """自定义参考占比生效。"""
+        # ref_pct=0.05 时，占比 5% 对应成本 = impact_bps_per_pct
+        assert TransactionCostModel.impact_cost(0.05, 3.0, ref_pct=0.05) == pytest.approx(3.0)

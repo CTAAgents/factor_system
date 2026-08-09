@@ -161,6 +161,68 @@ class RollingOps:
         """滚动累计最大值。"""
         return series.rolling(window=window).apply(lambda x: x.cummax().iloc[-1])
 
+    @staticmethod
+    def ts_regression_residual(
+        series: pd.Series, other: pd.Series, window: int = 20,
+    ) -> pd.Series:
+        """滚动线性回归残差（GAP-L401）。
+
+        在滚动窗口内对 `series`（y）关于 `other`（x）做一元线性回归，
+        返回当前点的残差 y − (a + b·x)，用于去 beta 的 alpha 提取。
+        窗口内存在 NaN / 样本不足 / 方差过小时返回 NaN（安全降级）。
+
+        Args:
+            series: 因变量（y）
+            other: 自变量（x）
+            window: 滚动窗口长度
+
+        Returns:
+            残差序列（NaN 安全）。
+        """
+        y_vals = series.to_numpy(dtype=float)
+        x_vals = other.reindex(series.index).to_numpy(dtype=float)
+        n = len(y_vals)
+        result = pd.Series(np.nan, index=series.index, dtype=float)
+        if n < window:
+            return result
+        for i in range(window - 1, n):
+            lo = i - window + 1
+            yy = y_vals[lo:i + 1]
+            xx = x_vals[lo:i + 1]
+            if not (np.isfinite(yy).all() and np.isfinite(xx).all()):
+                continue
+            if len(yy) < 3 or np.std(xx) < 1e-12:
+                continue
+            b = float(np.cov(xx, yy)[0, 1] / np.var(xx))
+            a = float(np.mean(yy) - b * np.mean(xx))
+            result.iloc[i] = float(yy[-1] - (a + b * xx[-1]))
+        return result
+
+    @staticmethod
+    def ts_quantile_bucket(series: pd.Series, n_buckets: int = 5) -> pd.Series:
+        """分位桶（GAP-L401）。
+
+        按序列值分位划分为 0~n_buckets-1 桶（qcut），
+        用于将连续信号离散为排序分组。
+
+        Args:
+            series: 输入序列
+            n_buckets: 桶数（≥2）
+
+        Returns:
+            桶编号序列（0~n_buckets-1）；样本不足时 NaN。
+        """
+        if n_buckets < 2:
+            raise ValueError("n_buckets 必须 ≥ 2")
+        valid = series.dropna()
+        if len(valid) < n_buckets:
+            return pd.Series(np.nan, index=series.index, dtype=float)
+        try:
+            buckets = pd.qcut(valid, q=n_buckets, labels=False, duplicates="drop")
+        except ValueError:
+            return pd.Series(np.nan, index=series.index, dtype=float)
+        return buckets.reindex(series.index)
+
 
 # ─── 技术指标算子 ──────────────────────────────────────────
 

@@ -56,8 +56,10 @@ from .contracts import (
     DEFAULT_VERIFIER_CONFIG,
     DEFAULT_STICKY_CONFIG,
     DEFAULT_ADAPTIVE_CONFIG,
+    DEFAULT_DRIFT_ALERT_CONFIG,
     AdaptiveWeightConfig,
     AgentOptimizationProposal,
+    DriftAlertConfig,
     DriftMetrics,
     FactorCorrelation,
     L3MetaLoopState,
@@ -463,6 +465,67 @@ REGIME_STYLE_MULTIPLIERS: dict[str, dict[str, float]] = {
         "high_beta": 1.2,         # 高 beta +20%（低波下风险偏好回升）
         "mean_reversion": 1.0,    # 均值回归中性
     },
+    # ── 股票风格 regime（GAP-S03，v2.63.0，StockRegimeSelector 驱动）──
+    # 大小盘风格：large_cap 质量/价值占优，small_cap 动量/情绪占优
+    "large_cap": {
+        "quality": 1.2,           # 大盘 → 质量 +20%
+        "value": 1.1,             # 价值 +10%
+        "low_vol": 1.1,           # 低波 +10%
+        "defensive": 1.1,         # 防御 +10%
+        "momentum": 0.9,          # 动量 -10%（大盘趋势弱于小盘）
+        "sentiment": 0.9,         # 情绪 -10%
+        "high_beta": 0.8,         # 高 beta -20%
+        "cross_section": 0.9,     # 横截面 -10%
+    },
+    "small_cap": {
+        "momentum": 1.2,          # 小盘 → 动量 +20%
+        "sentiment": 1.2,         # 情绪 +20%
+        "cross_section": 1.1,     # 横截面 +10%
+        "high_beta": 1.1,         # 高 beta +10%
+        "quality": 0.9,           # 质量 -10%
+        "value": 0.9,             # 价值 -10%
+        "low_vol": 0.9,           # 低波 -10%
+        "defensive": 0.8,         # 防御 -20%
+    },
+    # 成长价值风格：growth 动量占优，value 价值/质量占优
+    "growth": {
+        "momentum": 1.3,          # 成长 → 动量 +30%
+        "cross_section": 1.1,     # 横截面 +10%
+        "sentiment": 1.1,         # 情绪 +10%
+        "high_beta": 1.1,         # 高 beta +10%
+        "value": 0.8,             # 价值 -20%
+        "quality": 0.9,           # 质量 -10%
+        "low_vol": 0.8,           # 低波 -20%
+        "mean_reversion": 0.9,    # 均值回归 -10%
+    },
+    "value": {
+        "value": 1.3,             # 价值 → 价值 +30%
+        "quality": 1.2,           # 质量 +20%
+        "low_vol": 1.1,           # 低波 +10%
+        "defensive": 1.1,         # 防御 +10%
+        "momentum": 0.8,          # 动量 -20%
+        "high_beta": 0.7,         # 高 beta -30%
+        "sentiment": 0.8,         # 情绪 -20%
+        "mean_reversion": 1.1,    # 均值回归 +10%
+    },
+    # 行业轮动状态（StockRegimeSelector.detect_industry 输出）
+    "sector_concentrated": {
+        "cross_section": 1.2,     # 主线集中 → 横截面 +20%（跟随主线）
+        "momentum": 1.2,          # 动量 +20%
+        "carry": 1.1,             # Carry +10%
+        "mean_reversion": 0.8,    # 均值回归 -20%
+        "value": 0.9,             # 价值 -10%
+        "quality": 0.9,           # 质量 -10%
+    },
+    "sector_rotating": {
+        "mean_reversion": 1.2,    # 行业轮动 → 均值回归 +20%
+        "cross_section": 1.0,     # 横截面中性
+        "momentum": 0.8,          # 动量 -20%（追涨易接盘）
+        "sentiment": 0.8,         # 情绪 -20%
+        "value": 1.1,             # 价值 +10%
+        "low_vol": 1.1,           # 低波 +10%
+        "defensive": 1.1,         # 防御 +10%
+    },
 }
 
 
@@ -498,6 +561,49 @@ def _infer_factor_family_from_name(name: str) -> str:
     return "other"
 
 
+# GAP-L308: 数据驱动 Regime 倍率表（进程级缓存，由 load_data_driven_multipliers 加载）
+_DATA_DRIVEN_FAMILY_MULTIPLIERS: dict[str, dict[str, float]] = {}
+_DEFAULT_REGIME_MULTIPLIERS_PATH = "docs/harness/_data/l3_regime_multipliers.yaml"
+
+
+def load_data_driven_multipliers(path: Optional[str] = None) -> dict[str, dict[str, float]]:
+    """加载数据驱动 Regime 倍率表（GAP-L308）。
+
+    从 `docs/harness/_data/l3_regime_multipliers.yaml` 加载
+    RegimeMultiplierEstimator.export_yaml 产出的倍率表并缓存到进程级全局。
+    文件缺失/损坏时保留空表（回退硬编码）。
+
+    Args:
+        path: YAML 路径（None 用默认路径）
+
+    Returns:
+        倍率表 dict（regime → family → multiplier）；未加载时为空 dict。
+    """
+    global _DATA_DRIVEN_FAMILY_MULTIPLIERS
+    p = Path(path) if path else Path(_DEFAULT_REGIME_MULTIPLIERS_PATH)
+    if not p.exists():
+        logger.info("[L3-Regime] 数据驱动倍率表不存在 (%s)，使用硬编码表", p)
+        return {}
+    try:
+        import yaml
+
+        doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        mult = doc.get("multipliers") or {}
+        _DATA_DRIVEN_FAMILY_MULTIPLIERS = {
+            regime: {fam: float(v) for fam, v in fam_map.items()}
+            for regime, fam_map in mult.items() if isinstance(fam_map, dict)
+        }
+        logger.info(
+            "[L3-Regime] 数据驱动倍率表加载成功 [%s]: %d regimes",
+            p, len(_DATA_DRIVEN_FAMILY_MULTIPLIERS),
+        )
+        return _DATA_DRIVEN_FAMILY_MULTIPLIERS
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[L3-Regime] 数据驱动倍率表加载失败 (%s)，使用硬编码表", e)
+        _DATA_DRIVEN_FAMILY_MULTIPLIERS = {}
+        return {}
+
+
 def regime_adaptive_weight_adjustment(
     signals: list[PortfolioSignal],
     regime: dict[str, Any],
@@ -513,7 +619,8 @@ def regime_adaptive_weight_adjustment(
     1. 从 MarketRegime 获取当前制度名（bull/bear/oscillate/high_vol/low_vol）
     2. 遍历每个 signal，根据其 factor_id 在 factors 中查找 family / style_tags
     3. 按维度查表获取倍率:
-       - dimension="family": REGIME_FAMILY_MULTIPLIERS（FactorFamily 维度）
+       - dimension="family": REGIME_FAMILY_MULTIPLIERS（FactorFamily 维度；
+         GAP-L308 数据驱动表 DATA_DRIVEN_FAMILY_MULTIPLIERS 存在时优先）
        - dimension="style":  REGIME_STYLE_MULTIPLIERS（FactorStyle 维度，v2.56.0）
        - dimension="both":   family × style 双倍率乘积，乘积 clamp 到 [min_clamp, max_clamp]×base
     4. 将原始权重 × 倍率 → 调整后权重（不低于 min_weight 比例）
@@ -535,7 +642,11 @@ def regime_adaptive_weight_adjustment(
         return signals
 
     regime_name = regime.get("regime", "oscillate")
-    family_multipliers = REGIME_FAMILY_MULTIPLIERS.get(regime_name, {})
+    # GAP-L308: 数据驱动倍率优先（由 RegimeMultiplierEstimator 加载），缺失回退硬编码表
+    family_multipliers = (
+        _DATA_DRIVEN_FAMILY_MULTIPLIERS.get(regime_name, {})
+        if _DATA_DRIVEN_FAMILY_MULTIPLIERS else REGIME_FAMILY_MULTIPLIERS.get(regime_name, {})
+    )
     style_multipliers = REGIME_STYLE_MULTIPLIERS.get(regime_name, {})
 
     if not family_multipliers and not style_multipliers:
@@ -680,7 +791,8 @@ def synthesize_signals(
             optimizer 模式需要，列将自动对齐 factors 顺序）
         optimizer_mode: optimizer 模式目标 "risk_parity" | "mvo"（GAP-L303）
         optimizer_config: PortfolioOptimizer 配置透传（OptimizerConfig 字段 dict，
-            含 neutralization/exposure_tolerance，GAP-L304；可含 "exposure_matrix"/"target_exposure"）
+            含 neutralization/exposure_tolerance，GAP-L304；可含 "exposure_matrix"/"target_exposure"/
+            "capacity_limits"（GAP-L305））
 
     Returns:
         (signals, max_correlation, combo_turnover)
@@ -852,13 +964,14 @@ def synthesize_signals(
         )
         from fts.factor_engine.risk_model import RiskModelEstimator
 
-        # 构造优化配置（GAP-L303/L304）：exposure_matrix/target_exposure 透传，不入 OptimizerConfig
+        # 构造优化配置（GAP-L303/L304/L305）：exposure_matrix/target_exposure/capacity_limits 透传，不入 OptimizerConfig
         cfg_dict = dict(optimizer_config or {})
         # "mvo" 为 "mean_variance" 的 CLI 别名（GAP-L303）
         mode_internal = "mean_variance" if optimizer_mode == "mvo" else optimizer_mode
         cfg_dict.setdefault("mode", mode_internal)
         exposure_matrix = cfg_dict.pop("exposure_matrix", None)
         target_exposure = cfg_dict.pop("target_exposure", None)
+        capacity_limits = cfg_dict.pop("capacity_limits", None)
         opt_cfg = OptimizerConfig(**cfg_dict)
         opt = PortfolioOptimizer(opt_cfg)
 
@@ -875,6 +988,7 @@ def synthesize_signals(
             expected_returns=mu,
             exposure_matrix=exposure_matrix,
             target_exposure=target_exposure,
+            capacity_limits=capacity_limits,
         )
         signals = []
         for i, f in enumerate(factors):
@@ -915,11 +1029,126 @@ def synthesize_signals(
     return signals, max_corr, total_turnover
 
 
+# ─── GAP-L309: 面板数据规模参数化配置 ──────────────────────
+
+@dataclass
+class PanelLoadingConfig:
+    """组合层面板加载配置（GAP-L309，替代硬编码 days=120 / max_stocks=50）。
+
+    默认提升至全 CSI300 子集 × MIN_EVAL_DAYS（500 天），与因子级评价窗口对齐，
+    提升截面回归统计功效；`max_stocks` 用于在数据规模过大时按流动性分层抽样。
+    """
+    days: int = 500                 # 回溯交易日数（默认对齐 MIN_EVAL_DAYS=500）
+    max_stocks: int = 0             # 0 = 全量（默认）；>0 = 流动性分层抽样上限
+    liquidity_layers: int = 4       # 流动性分层数（抽样时）
+    min_common_dates: int = 20      # 最小共同交易日阈值（不足回退）
+
+
+def _liquidity_stratified_sample(
+    panel: dict[str, pd.DataFrame],
+    max_stocks: int,
+    n_layers: int = 4,
+) -> dict[str, pd.DataFrame]:
+    """按流动性分层抽样（GAP-L309）。
+
+    以平均成交额（volume × close）为流动性代理排序，均匀分桶后从每桶
+    按流动性从高到低抽取，保证高低流动性股票均有覆盖（替代随机/顺序截断）。
+
+    Args:
+        panel: symbol → OHLCV DataFrame
+        max_stocks: 目标股票数
+        n_layers: 分桶数
+
+    Returns:
+        抽样后的 panel（保留输入顺序的排序子集）；无 volume 数据时退化等权均分。
+    """
+    import math
+
+    symbols = list(panel.keys())
+    if len(symbols) <= max_stocks:
+        return panel
+
+    # 1. 流动性代理：平均成交额（volume × close），缺失列退 0.0
+    liq: dict[str, float] = {}
+    for sym, df in panel.items():
+        if "volume" in df.columns and "close" in df.columns:
+            try:
+                vol = df["volume"].replace(0, np.nan).mean()
+                px = float(df["close"].mean())
+                if vol == vol and px == px and vol > 0:
+                    liq[sym] = float(vol) * px
+                    continue
+            except Exception:  # noqa: BLE001
+                pass
+        liq[sym] = 0.0
+
+    # 2. 按流动性降序
+    ordered = sorted(symbols, key=lambda s: -liq[s])
+    # 3. 均匀分桶
+    per = max(1, math.ceil(len(ordered) / max(1, n_layers)))
+    buckets = [ordered[i:i + per] for i in range(0, len(ordered), per)]
+    # 4. 桶间轮询抽取，直到达到 max_stocks（保证每层都有覆盖）
+    picked: list[str] = []
+    cursor = [0] * len(buckets)
+    while len(picked) < max_stocks and any(
+        cursor[b] < len(buckets[b]) for b in range(len(buckets))
+    ):
+        for b in range(len(buckets)):
+            if len(picked) >= max_stocks:
+                break
+            if cursor[b] < len(buckets[b]):
+                picked.append(buckets[b][cursor[b]])
+                cursor[b] += 1
+
+    return {sym: panel[sym] for sym in ordered if sym in set(picked)}
+
+
+def _load_panel_with_liquidity_sampling(
+    provider: Any,
+    config: PanelLoadingConfig,
+    fundamental: bool = True,
+    trace_id: str = "",
+) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+    """GAP-L309: 面板加载 + 流动性分层抽样 + 覆盖日志。
+
+    Args:
+        provider: FTSDataProvider 实例
+        config: 面板加载配置
+        fundamental: 是否注入基本面字段
+        trace_id: HARNESS trace_id
+
+    Returns:
+        (panel, common_dates)；面板为空或共同交易日不足时返回 (panel, dates) 原样，
+        由调用方按 min_common_dates 阈值回退。
+    """
+    panel, common_dates = provider.get_csi300_panel(
+        days=config.days, max_stocks=0, fundamental=fundamental, trace_id=trace_id,
+    )
+    if not panel:
+        logger.warning("[GAP-L309] 面板加载为空，回退")
+        return panel, common_dates
+
+    n_loaded = len(panel)
+    if config.max_stocks > 0 and n_loaded > config.max_stocks:
+        panel = _liquidity_stratified_sample(panel, config.max_stocks, config.liquidity_layers)
+        logger.info(
+            "[GAP-L309] 流动性分层抽样: %d → %d 只（%d 层）",
+            n_loaded, len(panel), config.liquidity_layers,
+        )
+    # 覆盖日志 + 幸存者偏差提示（CSI300_SUBSET 为当前成分股快照，非 Point-in-time）
+    logger.info(
+        "[GAP-L309] 面板覆盖: %d 只 × %d 交易日（days=%d）; "
+        "注意 CSI300_SUBSET 为当前成分快照，存在幸存者偏差",
+        len(panel), len(common_dates), config.days,
+    )
+    return panel, common_dates
+
+
 def _compute_elastic_net_weights(
     factors: list[dict[str, Any]],
     elite_dir: Path,
-    days: int = 120,
-    max_stocks: int = 50,
+    days: int = 500,
+    max_stocks: int = 0,
     l1_ratio: float = 0.5,
     cv_folds: int = 5,
 ) -> dict[str, float]:
@@ -934,8 +1163,8 @@ def _compute_elastic_net_weights(
     Args:
         factors: 因子列表
         elite_dir: 精英因子目录（含因子代码 JSON）
-        days: 回溯天数
-        max_stocks: 最大股票数
+        days: 回溯天数（默认 500，对齐 MIN_EVAL_DAYS）
+        max_stocks: 最大股票数（0 = 全量；>0 = 流动性分层抽样上限）
         l1_ratio: ElasticNet L1 比例（0=Ridge, 1=Lasso）
         cv_folds: 交叉验证折数
 
@@ -952,13 +1181,12 @@ def _compute_elastic_net_weights(
     from ..data import FTSDataProvider
     from .factor_program import FactorExecutor
 
-    # ── 1. 加载 CSI300 面板数据 ──
+    # ── 1. 加载 CSI300 面板数据（GAP-L309: 参数化 + 流动性分层抽样）──
     provider = FTSDataProvider()
-    panel, common_dates = provider.get_csi300_panel(
-        days=days, max_stocks=max_stocks, fundamental=True,
-    )
-    if not panel or len(common_dates) < 20:
-        logger.warning("[L3] 面板数据不足（需 ≥20 个交易日），回退")
+    cfg = PanelLoadingConfig(days=days, max_stocks=max_stocks)
+    panel, common_dates = _load_panel_with_liquidity_sampling(provider, cfg)
+    if not panel or len(common_dates) < cfg.min_common_dates:
+        logger.warning("[L3] 面板数据不足（需 ≥%d 个交易日），回退", cfg.min_common_dates)
         return {}
 
     n_dates = len(common_dates)
@@ -1077,8 +1305,8 @@ def _compute_elastic_net_weights(
 def _compute_ml_ensemble_weights(
     factors: list[dict[str, Any]],
     elite_dir: Path,
-    days: int = 120,
-    max_stocks: int = 50,
+    days: int = 500,
+    max_stocks: int = 0,
     model_kind: str = "lightgbm",
 ) -> dict[str, float]:
     """ML 集成融合确定因子权重（Phase 24，v2.38.0）。
@@ -1092,8 +1320,8 @@ def _compute_ml_ensemble_weights(
     Args:
         factors: 因子列表
         elite_dir: 精英因子目录（含因子代码 JSON）
-        days: 回溯天数
-        max_stocks: 最大股票数
+        days: 回溯天数（默认 500，对齐 MIN_EVAL_DAYS）
+        max_stocks: 最大股票数（0 = 全量；>0 = 流动性分层抽样上限）
         model_kind: 模型类型（lightgbm / xgboost / ensemble）
 
     Returns:
@@ -1111,13 +1339,12 @@ def _compute_ml_ensemble_weights(
     from ..data import FTSDataProvider
     from .factor_program import FactorExecutor
 
-    # ── 1. 加载 CSI300 面板数据 ──
+    # ── 1. 加载 CSI300 面板数据（GAP-L309: 参数化 + 流动性分层抽样）──
     provider = FTSDataProvider()
-    panel, common_dates = provider.get_csi300_panel(
-        days=days, max_stocks=max_stocks, fundamental=True,
-    )
-    if not panel or len(common_dates) < 20:
-        logger.warning("[L3] ML Ensemble 面板数据不足（需 ≥20 个交易日），回退")
+    cfg = PanelLoadingConfig(days=days, max_stocks=max_stocks)
+    panel, common_dates = _load_panel_with_liquidity_sampling(provider, cfg)
+    if not panel or len(common_dates) < cfg.min_common_dates:
+        logger.warning("[L3] ML Ensemble 面板数据不足（需 ≥%d 个交易日），回退", cfg.min_common_dates)
         return {}
 
     n_dates = len(common_dates)
@@ -1606,6 +1833,8 @@ def build_combo(
     sticky_config: Optional[StickyConfig] = None,
     factor_returns: Optional[pd.DataFrame] = None,
     annualize_factor: float = 252.0,
+    market: str = "futures",
+    cost_config: Optional[dict[str, Any]] = None,
 ) -> PortfolioCombo:
     """构建组合 — 归一化权重 + 计算组合指标。
 
@@ -1618,6 +1847,9 @@ def build_combo(
         factor_returns: 因子收益矩阵（T×N，GAP-L301 实测化输入，可选）。
             提供且可对齐时，组合夏普/相关性由 w×R 实测；否则回退 diversity-adjusted 估算。
         annualize_factor: 年化因子（夏普年化，默认 252）
+        market: 市场类型（"futures"/"stock"/"etf"，GAP-L305 net 指标成本参数）
+        cost_config: 成本配置（CostConfig 字段 dict，GAP-L305；None=不启用成本模型，
+            net_combo_sharpe 为 None）
 
     Returns:
         PortfolioCombo
@@ -1632,6 +1864,7 @@ def build_combo(
             synthesis_mode=mode,
             signals=signals,
             combo_sharpe=0.0,
+            net_combo_sharpe=None,
             combo_turnover=0.0,
             max_correlation=0.0,
             n_factors=0,
@@ -1733,6 +1966,28 @@ def build_combo(
             "打乱因子信号后仍能获得高夏普，夏普可能虚高"
         )
 
+    # net 指标（GAP-L305）：扣除交易成本后的净夏普。
+    # 复用 cost_model 的成本换算：cost_penalty = total_cost_bps/10000 × 12 / 0.15。
+    net_combo_sharpe: Optional[float] = None
+    if cost_config is not None:
+        try:
+            from .cost_model import TransactionCostModel
+
+            cost_model = TransactionCostModel(config=cost_config)
+            cfg = cost_model.get_cost_bps(market)
+            slippage = cfg.get("slippage_bps", 0.5)
+            commission = cfg.get("commission_bps", 0.3)
+            impact = cfg.get("impact_bps_per_pct", 2.0)
+            min_cost = cfg.get("min_cost_bps", 0.5)
+            raw_cost = combo_turnover * (slippage + commission + impact)
+            total_cost_bps = max(raw_cost, min_cost)
+            cost_penalty = (total_cost_bps / 10000.0) * 12.0 / 0.15
+            net_combo_sharpe = combo_sharpe - cost_penalty
+            logger.info("[L3-NET] net_combo_sharpe=%.3f (gross=%.3f, cost=%.1f bps/mo)",
+                        net_combo_sharpe, combo_sharpe, total_cost_bps)
+        except Exception as e:
+            logger.warning("[L3-NET] net 指标计算失败（非致命）: %s", e)
+
     return PortfolioCombo(
         version=EVOLUTION_VERSION,
         updated_at=datetime.now().isoformat(),
@@ -1741,6 +1996,7 @@ def build_combo(
         synthesis_mode=mode,
         signals=signals,
         combo_sharpe=combo_sharpe,
+        net_combo_sharpe=net_combo_sharpe,
         combo_turnover=combo_turnover,
         max_correlation=max_corr,
         n_factors=len(retained),
@@ -1759,12 +2015,18 @@ class DriftMonitor:
 
     每次组合构建后对比上次组合（combo_history 归档），
     指标持久化到 memory/portfolio/drift_history/YYYY-MM-DD.json。
+    GAP-F13 (v2.67.0): 新增阈值告警 + 可选自动粘性重平衡。
     """
 
-    def __init__(self, portfolio_dir: str | Path = "memory/portfolio"):
+    def __init__(
+        self,
+        portfolio_dir: str | Path = "memory/portfolio",
+        alert_config: Optional[DriftAlertConfig] = None,
+    ):
         self.portfolio_dir = Path(portfolio_dir)
         self.drift_history_dir = self.portfolio_dir / DRIFT_HISTORY_DIR
         self.drift_history_dir.mkdir(parents=True, exist_ok=True)
+        self.alert_config = alert_config or DEFAULT_DRIFT_ALERT_CONFIG
 
     def compute(
         self,
@@ -1883,6 +2145,93 @@ class DriftMonitor:
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
         return []
+
+    def check_and_alert(
+        self,
+        metrics: DriftMetrics,
+        trace_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """检查漂移指标是否超阈值，触发告警并返回告警详情。
+
+        Args:
+            metrics: 本次漂移指标
+            trace_id: 追踪 ID
+
+        Returns:
+            alert_info: {
+                "alerted": bool,       # 是否触发告警
+                "overlap_alert": bool, # 成员重合率是否超阈值
+                "weight_alert": bool,  # 权重 L1 变化率是否超阈值
+                "overlap_rate": float, # 实际重合率
+                "weight_l1": float,    # 实际权重 L1 变化率
+                "overlap_threshold": float,  # 重合率阈值
+                "weight_l1_threshold": float, # 权重变化率阈值
+                "trigger_rebalance": bool,    # 是否触发重平衡
+            }
+        """
+        cfg = self.alert_config
+        overlap_rate = metrics.get("member_overlap_rate", 1.0)
+        weight_l1 = metrics.get("weight_l1_change", 0.0)
+        o_th = cfg.get("overlap_threshold", 0.50)
+        w_th = cfg.get("weight_l1_threshold", 0.40)
+
+        overlap_alert = overlap_rate < o_th
+        weight_alert = weight_l1 > w_th
+        triggered = overlap_alert or weight_alert
+
+        if triggered:
+            reasons: list[str] = []
+            if overlap_alert:
+                reasons.append(f"成员重合率 {overlap_rate:.2%} < {o_th:.0%}")
+            if weight_alert:
+                reasons.append(f"权重变化率 {weight_l1:.2%} > {w_th:.0%}")
+            alert_msg = (
+                f"[L3] 组合漂移告警 (trace={trace_id or '?'}): "
+                f"{'; '.join(reasons)}"
+            )
+            logger.warning(alert_msg)
+            # 写入 Prometheus 兼容日志（可被监控采集解析）
+            logger.info(
+                "METRIC drift_alert{overlap=%.2f,weight=%.2f,o_th=%.2f,w_th=%.2f} 1",
+                overlap_rate, weight_l1, o_th, w_th,
+            )
+        else:
+            logger.info(
+                "[L3] 组合漂移正常: 重合率=%.2f%% (>=%.0f%%), "
+                "权重变化率=%.2f%% (<=%.0f%%)",
+                overlap_rate * 100, o_th * 100,
+                weight_l1 * 100, w_th * 100,
+            )
+
+        return {
+            "alerted": triggered,
+            "overlap_alert": overlap_alert,
+            "weight_alert": weight_alert,
+            "overlap_rate": overlap_rate,
+            "weight_l1": weight_l1,
+            "overlap_threshold": o_th,
+            "weight_l1_threshold": w_th,
+            "trigger_rebalance": triggered and cfg.get("trigger_rebalance", False),
+        }
+
+    @staticmethod
+    def generate_rebalance_proposal(
+        metrics: DriftMetrics,
+        alert_info: dict[str, Any],
+    ) -> Optional[AgentOptimizationProposal]:
+        """生成重平衡建议（供 Agent 消费）。"""
+        if not alert_info.get("trigger_rebalance"):
+            return None
+        return AgentOptimizationProposal(
+            proposal_id=generate_trace_id("rebalance"),
+            description=(
+                f"组合漂移告警: 重合率={metrics.get('member_overlap_rate', 0):.2%}, "
+                f"权重L1变化={metrics.get('weight_l1_change', 0):.2%} — "
+                "建议启用粘性约束限制单边更换率≤30%"
+            ),
+            confidence=0.7,
+            source="drift_monitor",
+        )
 
 
 # ─── Agent 优化建议生成 ──────────────────────────────────
@@ -2746,6 +3095,7 @@ class PortfolioLoop:
         adaptive_config: Optional[AdaptiveWeightConfig] = None,
         optimizer_mode: str = "risk_parity",
         optimizer_config: Optional[dict[str, Any]] = None,
+        cost_config: Optional[dict[str, Any]] = None,
     ):
         self.memory_dir = Path(memory_dir)
         self.elite_dir = Path(elite_dir)
@@ -2771,6 +3121,8 @@ class PortfolioLoop:
         # GAP-L303: optimizer 模式与配置（synthesis_mode="optimizer" 时生效）
         self.optimizer_mode = optimizer_mode
         self.optimizer_config = dict(optimizer_config or {})
+        # GAP-L305: 交易成本配置（None=不启用 net 指标）
+        self.cost_config = dict(cost_config) if cost_config else None
 
     def _generate_quality_report(self) -> None:
         """从 DuckDB 或 combo 回退，生成精英因子最终质量报告 JSON。
@@ -2879,17 +3231,205 @@ class PortfolioLoop:
             _RUNTIME_MIN_SHARPE, sum(1 for s in sharpes if s < _RUNTIME_MIN_SHARPE) if sharpes else 0,
         )
 
+    def _generate_attribution_report(
+        self,
+        factor_returns: pd.DataFrame,
+        combo: PortfolioCombo,
+        trace_id: str,
+    ) -> Optional[Path]:
+        """生成组合归因报告（GAP-L307，C 阶段）。
+
+        输入组合权重 + 因子收益矩阵 R，输出:
+            - 因子贡献度（协方差分解，contributions）
+            - 暴露分析（组合对各因子的平均绝对暴露）
+            - VaR 95/99 与 ES 95（历史模拟法）
+            - 组合实际收益序列（w×R）
+
+        报告写入 `reports/{date}/portfolio_attribution_{combo_id}.md`。
+
+        Args:
+            factor_returns: 因子收益矩阵（T×N，列名=factor_id）
+            combo: 当前组合（含 signals 权重）
+            trace_id: 追踪 ID
+
+        Returns:
+            报告文件路径；失败/不可对齐时 None。
+        """
+        from .risk_attributor import RiskAttributor
+
+        retained = [s for s in combo.get("signals", []) if s.get("retained", True)]
+        retained_ids = [s.get("factor_id") for s in retained if s.get("factor_id")]
+        if not retained_ids:
+            return None
+
+        fr = FactorReturnsBuilder.align_to_factors(factor_returns, retained_ids)
+        if len(fr) < 20:
+            logger.info("[L3] Step 7.6: 归因矩阵样本不足 (%d < 20)，跳过归因", len(fr))
+            return None
+
+        w_arr = np.array([s.get("weight", 0.0) for s in retained], dtype=float)
+        total_w = float(np.sum(w_arr))
+        if total_w <= 0:
+            return None
+        w_arr = w_arr / total_w
+
+        pf = FactorReturnsBuilder.portfolio_returns(fr, w_arr)
+        weights_map = dict(zip(retained_ids, w_arr.tolist()))
+        report = RiskAttributor().attribute(
+            portfolio_returns=pf, factor_returns=fr, weights=weights_map,
+        )
+
+        ts = datetime.now().strftime("%Y-%m-%d")
+        combo_id = combo.get("combo_id", "unknown")
+        reports_dir = Path("reports") / ts
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        out_file = reports_dir / f"portfolio_attribution_{combo_id}.md"
+
+        contrib_lines = "\n".join(
+            f"| {fid} | {val:.6f} |" for fid, val in
+            sorted(report.factor_contributions.items(), key=lambda kv: -abs(kv[1]))
+        ) or "| (无因子收益) | - |"
+        exposure_lines = "\n".join(
+            f"| {fid} | {val:.4f} |" for fid, val in
+            sorted(report.exposures.items(), key=lambda kv: -kv[1])
+        ) or "| (无暴露数据) | - |"
+
+        md = f"""# 组合归因报告
+
+- **combo_id**: {combo_id}
+- **trace_id**: {trace_id}
+- **生成时间**: {datetime.now().isoformat()}
+- **组合夏普**: {combo.get('combo_sharpe', 0.0):.3f}
+- **净夏普（扣成本）**: {combo.get('net_combo_sharpe') if combo.get('net_combo_sharpe') is not None else 'N/A'}
+- **归因矩阵样本**: {len(fr)} 天 × {len(retained_ids)} 因子
+- **年化波动率**: {report.realized_vol:.4f}
+
+## 风险指标
+
+| 指标 | 值 |
+|:-----|:---|
+| VaR 95 | {report.var_95:.6f} |
+| VaR 99 | {report.var_99:.6f} |
+| ES 95 | {report.es_95:.6f} |
+| 年化波动率 | {report.realized_vol:.4f} |
+
+## 因子贡献度（协方差分解）
+
+| 因子 | 贡献度 |
+|:-----|:-------|
+{contrib_lines}
+
+## 组合暴露（平均绝对）
+
+| 因子 | 平均暴露 |
+|:-----|:---------|
+{exposure_lines}
+"""
+        out_file.write_text(md, encoding="utf-8")
+        logger.info(
+            "[L3] Step 7.6: 归因报告已生成 [%s]: %d 因子, var95=%.4f, vol=%.4f",
+            out_file.name, len(retained_ids), report.var_95, report.realized_vol,
+        )
+        return out_file
+
+    def _generate_walk_forward_report(
+        self,
+        factor_returns: pd.DataFrame,
+        combo: PortfolioCombo,
+        trace_id: str,
+    ) -> Optional[Path]:
+        """生成组合层走航报告（GAP-L306，C 阶段）。
+
+        滚动窗口验证组合权重稳定性：每窗口 train 段确定权重（Sharpe 加权），
+        test 段实测组合夏普/IC/相关性，输出跨窗口一致性得分。
+
+        报告写入 `reports/{date}/portfolio_wf_{combo_id}.md`。
+
+        Args:
+            factor_returns: 因子收益矩阵（T×N，列名=factor_id）
+            combo: 当前组合（含 signals 权重/Sharpe）
+            trace_id: 追踪 ID
+
+        Returns:
+            报告文件路径；数据不足/失败时 None。
+        """
+        from .portfolio_walk_forward import PortfolioWalkForward
+
+        retained = [s for s in combo.get("signals", []) if s.get("retained", True)]
+        retained_ids = [s.get("factor_id") for s in retained if s.get("factor_id")]
+        if not retained_ids:
+            return None
+        fr = FactorReturnsBuilder.align_to_factors(factor_returns, retained_ids)
+        if len(fr) < 120:
+            logger.info("[L3] Step 7.7: 走航矩阵样本不足 (%d < 120)，跳过走航", len(fr))
+            return None
+
+        # 权重函数：train 段 Sharpe 加权（与 L3 sharpe_weight 基线一致）
+        sharpe_map = {s.get("factor_id"): s.get("sharpe", 0.0) for s in retained}
+
+        def weight_fn(train_df: pd.DataFrame) -> np.ndarray:
+            w = np.array([max(sharpe_map.get(c, 0.0), 0.01) for c in train_df.columns],
+                         dtype=float)
+            total = float(np.sum(w))
+            return w / total if total > 0 else np.ones(len(w)) / len(w)
+
+        wf = PortfolioWalkForward()
+        result = wf.evaluate(fr, weight_fn)
+
+        ts = datetime.now().strftime("%Y-%m-%d")
+        combo_id = combo.get("combo_id", "unknown")
+        reports_dir = Path("reports") / ts
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        out_file = reports_dir / f"portfolio_wf_{combo_id}.md"
+
+        win_lines = "\n".join(
+            f"| {w.get('train_start')} → {w.get('test_end')} | "
+            f"{w.get('sharpe', 0.0):.3f} | {w.get('ic', 0.0):.4f} | "
+            f"{w.get('max_correlation', 0.0):.3f} | {w.get('turnover', 0.0):.3f} |"
+            for w in result.get("windows", [])
+        ) or "| (无窗口) | - | - | - | - |"
+
+        md = f"""# 组合层走航验证报告
+
+- **combo_id**: {combo_id}
+- **trace_id**: {trace_id}
+- **生成时间**: {datetime.now().isoformat()}
+- **窗口数**: {result.get('n_windows_completed', 0)}
+- **夏普一致性**: {result.get('sharpe_consistency', 0.0):.2f}
+- **跨窗口夏普波动**: {result.get('sharpe_volatility', 0.0):.3f}
+- **一致性得分**: {result.get('consistency_score', 0.0):.2f}
+- **通过**: {result.get('passed', False)}
+
+## 各窗口表现
+
+| 窗口区间 (train→test) | 夏普 | IC | 最大相关性 | 换手 |
+|:-----------------------|:-----|:---|:-----------|:-----|
+{win_lines}
+"""
+        out_file.write_text(md, encoding="utf-8")
+        logger.info(
+            "[L3] Step 7.7: 走航报告已生成 [%s]: %d 窗口, score=%.2f, passed=%s",
+            out_file.name, result.get("n_windows_completed", 0),
+            result.get("consistency_score", 0.0), result.get("passed", False),
+        )
+        return out_file
+
     def run(
         self,
         market_ohlcv: Optional[Any] = None,
         factor_returns: Optional[pd.DataFrame] = None,
         exposure_matrix: Optional[np.ndarray] = None,
+        stock_regime: Optional[dict[str, Any]] = None,
     ) -> PortfolioRunResult:
         """执行一次完整的 L3 Portfolio Loop。
 
         Args:
             market_ohlcv: 市场 OHLCV 数据（pd.DataFrame），用于 Regime 检测。
                          若为 None 或 enable_regime_adaptation=False，跳过自适应调整。
+            stock_regime: 股票风格 regime（GAP-S03，v2.63.0）— StockRegimeSelector
+                         的检测结果（含 regime 字段映射 REGIME_STYLE_MULTIPLIERS）。
+                         当 market="stock" 且传入时，Step 2.5 优先使用该结果驱动
+                         风格自适应权重（覆盖 market_ohlcv 的通用 RegimeAwareSelector）。
         """
         trace_id = generate_trace_id("l3")
         state = self.state_manager.mark_running()
@@ -3123,14 +3663,22 @@ class PortfolioLoop:
 
             # Step 2.5: Regime 自适应权重调整
             regime_info: dict[str, Any] = {}
-            if self.enable_regime_adaptation and market_ohlcv is not None:
+            if self.enable_regime_adaptation and (market_ohlcv is not None or stock_regime is not None):
                 try:
-                    if self._regime_selector is None:
-                        from .regime import RegimeAwareSelector
-                        self._regime_selector = RegimeAwareSelector()
+                    # 股票风格 regime 优先（GAP-S03，v2.63.0）：StockRegimeSelector 输出
+                    # 的 regime 字段直接映射 REGIME_STYLE_MULTIPLIERS 风格键
+                    if self.market == "stock" and stock_regime is not None and stock_regime.get("regime"):
+                        regime = stock_regime
+                        regime_info = regime
+                        logger.info("[L3] Step 2.5: 使用股票风格 regime [%s] (conf=%.2f)",
+                                    regime.get("regime"), regime.get("confidence", 0.0))
+                    else:
+                        if self._regime_selector is None:
+                            from .regime import RegimeAwareSelector
+                            self._regime_selector = RegimeAwareSelector()
 
-                    regime = self._regime_selector.detect(market_ohlcv)
-                    regime_info = regime
+                        regime = self._regime_selector.detect(market_ohlcv)  # type: ignore[arg-type]
+                        regime_info = regime
 
                     aconfig = self.adaptive_config or DEFAULT_ADAPTIVE_CONFIG
                     if aconfig.get("enabled", True):
@@ -3177,7 +3725,7 @@ class PortfolioLoop:
                     )
                 except Exception as e:
                     logger.warning("[L3] Step 2.5: Regime 检测失败，跳过自适应调整: %s", e)
-            elif self.enable_regime_adaptation and market_ohlcv is None:
+            elif self.enable_regime_adaptation and market_ohlcv is None and stock_regime is None:
                 logger.info("[L3] Step 2.5: 无市场数据，跳过 Regime 自适应调整")
 
             # Step 3: 因子正交化（elastic_net 模式跳过，L1 已做变量选择）
@@ -3216,9 +3764,14 @@ class PortfolioLoop:
                 prev_weights=prev_weights or None,
                 sticky_config=self.sticky_config,
                 factor_returns=factor_returns,
+                market=self.market,
+                cost_config=self.cost_config,
             )
             logger.info("[L3] Step 5: 组合构建完成, 夏普=%.2f, 换手率=%.2f",
                         combo.get("combo_sharpe", 0), combo.get("combo_turnover", 0))
+            if combo.get("net_combo_sharpe") is not None:
+                logger.info("[L3] Step 5: net 夏普=%.2f (gross=%.2f, 成本扣除)",
+                            combo.get("net_combo_sharpe"), combo.get("combo_sharpe"))
 
             # Step 5.5: 漂移监控 — 记录成员重合率 + 权重 L1 变化率
             try:
@@ -3248,6 +3801,28 @@ class PortfolioLoop:
                 self._generate_quality_report()
             except Exception as e:
                 logger.warning("[L3] Step 7.5: 质量报告生成失败 (非致命): %s", e)
+
+            # Step 7.6: 归因报告（GAP-L307）— 因子收益矩阵可用时输出贡献度/暴露/VaR/ES
+            try:
+                if factor_returns is not None and combo.get("signals"):
+                    attr_path = self._generate_attribution_report(
+                        factor_returns, combo, trace_id,
+                    )
+                    if attr_path:
+                        state["attribution_report"] = str(attr_path)
+            except Exception as e:
+                logger.warning("[L3] Step 7.6: 归因报告生成失败 (非致命): %s", e)
+
+            # Step 7.7: 组合层走航验证（GAP-L306）— 滚动窗口权重前段确定/后段实测
+            try:
+                if factor_returns is not None and combo.get("signals"):
+                    wf_path = self._generate_walk_forward_report(
+                        factor_returns, combo, trace_id,
+                    )
+                    if wf_path:
+                        state["walk_forward_report"] = str(wf_path)
+            except Exception as e:
+                logger.warning("[L3] Step 7.7: 走航报告生成失败 (非致命): %s", e)
 
             # 更新状态
             state["total_signals_retained"] = n_retained
@@ -3305,6 +3880,11 @@ def main() -> None:
                         help="因子收益矩阵 CSV 路径（optimizer 模式与实测化需要，可选）")
     parser.add_argument("--memory-dir", default="memory/portfolio", help="状态/组合存储目录")
     parser.add_argument("--elite-dir", default="memory/knowledge/factors/elite", help="精英因子目录")
+    parser.add_argument("--cost-config", default=None,
+                        help="交易成本配置 JSON 路径（GAP-L305 net 指标，可选；如 "
+                             '{"market": "futures", "slippage_bps": 0.5}）')
+    parser.add_argument("--capacity-limits", default=None,
+                        help="容量权重上限 CSV/JSON 数组（GAP-L305，可选）")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
@@ -3316,11 +3896,30 @@ def main() -> None:
         except Exception as e:
             logger.warning("[L3] 读取 returns-matrix 失败 (%s)，跳过实测化/optimizer 输入", e)
 
+    cost_config: Optional[dict[str, Any]] = None
+    if args.cost_config:
+        try:
+            import json as _json
+            cost_config = _json.loads(Path(args.cost_config).read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("[L3] 读取 cost-config 失败 (%s)，net 指标禁用", e)
+
+    optimizer_config: dict[str, Any] = {}
+    if args.capacity_limits:
+        try:
+            import json as _json
+            cap_vals = _json.loads(Path(args.capacity_limits).read_text(encoding="utf-8"))
+            optimizer_config["capacity_limits"] = cap_vals
+        except Exception as e:
+            logger.warning("[L3] 读取 capacity-limits 失败 (%s)，容量约束禁用", e)
+
     loop = PortfolioLoop(
         memory_dir=args.memory_dir,
         elite_dir=args.elite_dir,
         synthesis_mode=args.mode,
         optimizer_mode=args.optimizer_mode,
+        optimizer_config=optimizer_config,
+        cost_config=cost_config,
     )
     result = loop.run(factor_returns=factor_returns)
 

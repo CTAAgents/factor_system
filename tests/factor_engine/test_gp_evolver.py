@@ -678,3 +678,68 @@ class TestGpFactorExecutable:
         assert isinstance(signal, np.ndarray)
         assert len(signal) == len(data)
         assert np.std(signal) > 1e-9
+
+    def test_ts_product_template_works_on_pandas_2(self):
+        """GP 模板 ts_product 不再依赖 Rolling.prod（pandas≥2.1 已移除）。
+
+        回归: 此前模板用 x.rolling(window).prod() 抛 AttributeError，被
+        _execute_factor_code 降级为全零 → GP 含 ts_product 的因子全部被
+        「常数信号」拦截。现改用 apply(np.prod)（与 feature_ops 对齐）。
+        """
+        from fts.factor_engine.backtest_pipeline import BacktestPipeline
+
+        rng = np.random.default_rng(11)
+        n = 120
+        close = 1.0 + 0.05 * np.cumsum(rng.normal(0, 1, n))  # 量级 ~1，乘积不触发 clip
+        data = pd.DataFrame({
+            "open": close, "high": close + 0.01, "low": close - 0.01,
+            "close": close, "volume": rng.uniform(1e4, 1e6, n),
+        })
+        root = TreeNode(
+            op_name="ts_product",
+            children=[TreeNode(operand="close", is_terminal=True)],
+            is_terminal=False,
+        )
+        tree = ExpressionTree(
+            root=root, depth=1, size=2, expression="ts_product(close, 5)", fitness=0.5,
+        )
+        result = tree_to_factor_program(tree)
+        signal = BacktestPipeline._execute_factor_code(result["code"], data, {})
+        assert isinstance(signal, np.ndarray)
+        assert len(signal) == len(data)
+        assert np.std(signal) > 1e-9  # 非全零降级
+
+    def test_evaluate_fitness_clips_to_pipeline_range(self):
+        """GP 适应度与流水线后处理对齐（clip[-10,10] + nan_to_num）。
+
+        回归: mul(volume, volume) 量级被 _execute_factor_code 裁剪为常数，
+        但 _evaluate_fitness 未对齐 → GP 误选该表达式为最优，下游运行时校验
+        再以「常数信号」拦截，通道空转。对齐后该表达式应被罚分。
+        """
+        from fts.factor_engine.feature_ops import OperatorRegistry
+
+        data = self._make_data()
+        target = np.roll(np.diff(data["close"].values, prepend=data["close"].iloc[0]), -1)
+        gp_data = data.copy()
+        gp_data["forward_return"] = target
+        gp = GPEvolver(
+            operator_registry=OperatorRegistry(),
+            data_panel=gp_data,
+            target_col="forward_return",
+            config=GPEvolverConfig(),
+        )
+        tree = ExpressionTree(
+            root=TreeNode(
+                op_name="mul",
+                children=[
+                    TreeNode(operand="volume", is_terminal=True),
+                    TreeNode(operand="volume", is_terminal=True),
+                ],
+                is_terminal=False,
+            ),
+            depth=1, size=3, expression="mul(volume, volume)", fitness=0.0,
+        )
+        ft = gp._evaluate_fitness(tree)
+        assert ft.fitness < 0, (
+            f"裁剪后为常数的表达式应被罚分, fitness={ft.fitness}"
+        )

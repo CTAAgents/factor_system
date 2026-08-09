@@ -8,7 +8,8 @@ from fts.factor_engine.contracts import FactorProgram
 from fts.factor_engine.seed_pool import SeedPool, get_default_seed_pool
 
 # 内置 9 个 + 外部 WQ101 101 个 + Qlib158 158 个 + GTJA191 191 个 + 基本面 23 个 + JQ 163 个 = 645
-_TOTAL_SEEDS = 9 + 101 + 158 + 191 + 23 + 163
+# + v2.68.0 股票种子扩充 4 个 YAML（analyst_revision 18 + holder_count 15 + margin_trade 20 + northbound 16 = 69）= 714
+_TOTAL_SEEDS = 9 + 101 + 158 + 191 + 23 + 163 + 69
 _INTERNAL_NAMES = {
     "momentum", "volatility_reversion", "volume_flow",
     "macro_regime", "rate_proxy", "pmi_proxy",

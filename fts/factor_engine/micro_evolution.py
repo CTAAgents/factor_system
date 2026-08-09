@@ -37,6 +37,14 @@ DEFAULT_EARLY_STOPPING_FAILURES: int = 20
 RANDOM_SEARCH_TRIALS: int = 50
 """随机搜索的默认试验次数（比贝叶斯少，适用于参数空间简单时）。"""
 
+# ─── 两阶段漏斗常量 (GAP-I205, v2.68.0) ──────────────────
+COARSE_N_TRIALS: int = 20
+"""粗筛阶段 trials（低 trials 快速打分，淘汰低潜力候选）。"""
+COARSE_IC_FLOOR: float = 0.02
+"""粗筛淘汰阈值：粗筛得分低于该值时直接淘汰，不进入精筛。"""
+COARSE_REF_IC: float = 0.10
+"""精筛 trials 自适应的参考 IC：粗筛得分达该值时精筛跑满 trials。"""
+
 
 class MicroEvolutionError(Exception):
     """微观演化失败。"""
@@ -176,6 +184,67 @@ def optimize_params(
     return dict(study.best_params), float(study.best_value)
 
 
+# ─── 两阶段优化漏斗 (GAP-I205, v2.68.0) ──────────────────
+
+def optimize_params_staged(
+    factor: FactorProgram,
+    data: pd.DataFrame,
+    forward_returns: np.ndarray,
+    objective_fn: Optional[Callable[[np.ndarray, np.ndarray], float]] = None,
+    n_trials: int = DEFAULT_N_TRIALS,
+    early_stopping_failures: int = DEFAULT_EARLY_STOPPING_FAILURES,
+    coarse_trials: int = COARSE_N_TRIALS,
+    coarse_ic_floor: float = COARSE_IC_FLOOR,
+    coarse_ref_ic: float = COARSE_REF_IC,
+) -> tuple[dict[str, Any], float, bool]:
+    """两阶段参数优化：粗筛快速淘汰 + 精筛自适应 trials。
+
+    粗筛阶段用低 trials（默认 20）随机搜索快速打分；得分低于
+    coarse_ic_floor（默认 0.02）的候选直接淘汰（返回 passed=False），
+    避免低潜力候选浪费精筛算力。通过粗筛者进入精筛阶段，trials 数
+    按粗筛得分自适应（得分达 coarse_ref_ic 时跑满 n_trials），TPE 采样
+    配合早停（连续无提升跳出）。
+
+    Args:
+        factor: 因子程序
+        data: OHLCV 数据
+        forward_returns: 未来收益率
+        objective_fn: 目标函数（signal, returns）-> score，默认 IC
+        n_trials: 精筛最大试验次数
+        early_stopping_failures: 精筛连续无提升跳出阈值
+        coarse_trials: 粗筛试验次数
+        coarse_ic_floor: 粗筛淘汰阈值（得分低于该值淘汰）
+        coarse_ref_ic: 精筛 trials 自适应参考 IC
+
+    Returns:
+        (best_params, best_score, passed)
+        passed=False 表示粗筛淘汰，best_params 为粗筛结果。
+    """
+    if not _HAS_OPTUNA:
+        return factor.get("params", {}), 0.0, True
+
+    # ── 阶段 1: 粗筛（低 trials 随机搜索快速打分） ──
+    coarse_params, coarse_score = optimize_params(
+        factor, data, forward_returns, objective_fn=objective_fn,
+        n_trials=coarse_trials,
+        early_stopping_failures=early_stopping_failures,
+        use_random_search=True,
+    )
+    if coarse_score < coarse_ic_floor:
+        return coarse_params, coarse_score, False
+
+    # ── 阶段 2: 精筛（trials 按粗筛得分自适应 + TPE 早停） ──
+    # 粗筛得分越高，说明潜力越大，精筛投入越多 trials。
+    ratio = min(1.0, max(0.0, coarse_score / coarse_ref_ic))
+    adaptive_trials = max(coarse_trials, int(n_trials * ratio))
+    best_params, best_score = optimize_params(
+        factor, data, forward_returns, objective_fn=objective_fn,
+        n_trials=adaptive_trials,
+        early_stopping_failures=early_stopping_failures,
+    )
+    return best_params, best_score, True
+
+
 # ─── 微观演化主入口 ───────────────────────────────────────
 
 def evolve_micro(
@@ -184,6 +253,7 @@ def evolve_micro(
     forward_returns: np.ndarray,
     n_trials: int = DEFAULT_N_TRIALS,
     use_random_search: bool = False,
+    use_staged: bool = False,
 ) -> tuple[FactorProgram, float]:
     """微观演化主入口 — 优化因子参数。
 
@@ -195,14 +265,21 @@ def evolve_micro(
         forward_returns: 未来收益率
         n_trials: optuna 试验次数
         use_random_search: 使用随机搜索代替贝叶斯优化
+        use_staged: 使用两阶段漏斗（粗筛快速淘汰 + 精筛自适应 trials，
+            GAP-I205，v2.68.0）
 
     Returns:
         (optimized_factor, best_score)
     """
-    best_params, best_score = optimize_params(
-        factor, data, forward_returns, n_trials=n_trials,
-        use_random_search=use_random_search,
-    )
+    if use_staged:
+        best_params, best_score, _passed = optimize_params_staged(
+            factor, data, forward_returns, n_trials=n_trials,
+        )
+    else:
+        best_params, best_score = optimize_params(
+            factor, data, forward_returns, n_trials=n_trials,
+            use_random_search=use_random_search,
+        )
 
     # 返回新因子实例（不修改原因子）
     evolved = FactorProgram(**{**factor, "params": best_params})  # type: ignore[typeddict-item]
@@ -213,7 +290,11 @@ __all__ = [
     "DEFAULT_N_TRIALS",
     "DEFAULT_EARLY_STOPPING_FAILURES",
     "RANDOM_SEARCH_TRIALS",
+    "COARSE_N_TRIALS",
+    "COARSE_IC_FLOOR",
+    "COARSE_REF_IC",
     "MicroEvolutionError",
     "optimize_params",
+    "optimize_params_staged",
     "evolve_micro",
 ]

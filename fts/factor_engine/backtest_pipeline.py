@@ -641,8 +641,14 @@ class BacktestPipeline:
                 "n": n,
                 "np": np,
             }
+            # 模块级 globals 需保留引用：exec 中 `from ... import x` / `import x` 的
+            # 绑定落在 local_vars，而 factor_program.__globals__ 指向 globals dict；
+            # 执行后合并回 globals，函数内才能解析算子 runtime 桥接
+            # （如 operator 因子的 eval_fts_expr，与 FactorExecutor.compile 同模式）。
+            exec_globals = {"np": np}
             try:
-                exec(code_str, {"np": np}, local_vars)
+                exec(code_str, exec_globals, local_vars)
+                exec_globals.update(local_vars)
             except Exception as e:
                 # 无效/异常因子代码应使回测失败（v2.34.0），
                 # 而非静默返回零值掩盖问题——由外层包装为 FactorComputeError
@@ -724,14 +730,37 @@ class BacktestPipeline:
             # v2.59.0 (GAP-F02): 可交易掩码（涨跌停/停牌拦截），(None, 全 0) 表示不启用
             tradeable_mask, blocked_stats = self._build_tradeable_mask(input_data)
 
+            # v2.67.0 (GAP-I501): 容量约束数据准备（从 input_data 提取，对齐截断长度）
+            capacity_volume: Optional[np.ndarray] = None
+            capacity_close: Optional[np.ndarray] = None
+            capacity_cap_ratio = 0.0
+            try:
+                from fts.config.settings import get_config
+                cfg = get_config()
+                if cfg.backtest_capacity_cap:
+                    n_values = len(values)
+                    n_data = len(input_data.data)
+                    offset = n_data - n_values
+                    if offset >= 0 and "volume" in input_data.data.columns and "close" in input_data.data.columns:
+                        capacity_volume = input_data.data["volume"].values[offset:].astype(float)
+                        capacity_close = input_data.data["close"].values[offset:].astype(float)
+                    capacity_cap_ratio = cfg.capacity_cap_ratio
+            except Exception:  # noqa: BLE001
+                pass
+
             # 计算策略收益
-            strategy_returns, positions, _ = self._compute_strategy_returns(
+            strategy_returns, positions, blocked_stats = self._compute_strategy_returns(
                 values, fwd_returns, input_data.cost_rate, input_data.slippage,
                 zscore_window=zscore_window,
                 dates=dates,
                 roll_dates=input_data.roll_dates,
                 roll_cost_bps=float(roll_cost_bps),
                 tradeable_mask=tradeable_mask,
+                volume=capacity_volume,
+                close_price=capacity_close,
+                capacity_cap_ratio=capacity_cap_ratio,
+                initial_capital=input_data.initialization_capital,
+                precomputed_blocked_stats=blocked_stats,  # v2.59.0 (GAP-F02): 传入细分统计
             )
 
             # v2.59.0 (GAP-F02): 将被拦截成交统计挂到元数据（报告用）
@@ -810,7 +839,15 @@ class BacktestPipeline:
             # v2.59.0 (GAP-F02): 被拦截成交统计（涨跌停/停牌，缺省为 0）
             blocked_stats = factor_output.metadata.get("blocked_stats")
             if blocked_stats is None:
-                blocked_stats = {"limit_up": 0, "limit_down": 0, "halt": 0}
+                blocked_stats = {"limit_up": 0, "limit_down": 0, "halt": 0,
+                                 "capacity_violations": 0, "capacity_avg_reduction": 0.0, "capacity_max_reduction": 0.0}
+
+            # v2.67.0 (GAP-I501): 容量分析报告
+            capacity_analysis = {
+                "violations": int(blocked_stats.get("capacity_violations", 0)),
+                "avg_reduction_pct": round(float(blocked_stats.get("capacity_avg_reduction", 0.0)) * 100, 2),
+                "max_reduction_pct": round(float(blocked_stats.get("capacity_max_reduction", 0.0)) * 100, 2),
+            }
 
             report = BacktestReport(
                 factor_id=factor_id,
@@ -832,6 +869,7 @@ class BacktestPipeline:
                         "roll_dates_count": len(input_data.roll_dates or []),
                         "roll_cost_bps": float(eff_roll_cost_bps),
                         "blocked_trades": blocked_stats,  # v2.59.0 (GAP-F02)
+                        "capacity_analysis": capacity_analysis,  # v2.67.0 (GAP-I501)
                     },
                     "generated_at": datetime.now().isoformat(),
                 },
@@ -965,7 +1003,12 @@ class BacktestPipeline:
         roll_dates: Optional[set[str]] = None,
         roll_cost_bps: float = 0.0,
         tradeable_mask: Optional[np.ndarray] = None,
-    ) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+        volume: Optional[np.ndarray] = None,              # v2.67.0 (GAP-I501): 日成交量
+        close_price: Optional[np.ndarray] = None,          # v2.67.0 (GAP-I501): 收盘价（用于持仓市值计算）
+        capacity_cap_ratio: float = 0.0,                   # v2.67.0 (GAP-I501): 0.0=不启用容量限制
+        initial_capital: float = 1_000_000.0,              # v2.67.0 (GAP-I501): 初始资金
+        precomputed_blocked_stats: Optional[dict[str, Any]] = None,  # v2.59.0 (GAP-F02): _build_tradeable_mask 细分统计
+    ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
         """计算策略收益率。
 
         使用滚动窗口 z-score 生成持仓信号，与实盘信号生成器一致。
@@ -978,21 +1021,41 @@ class BacktestPipeline:
             tradeable_mask: 可交易掩码（v2.59.0 GAP-F02，None=全部可交易）。
                 False 的日期（涨跌停/停牌）持仓保持上一交易日，不执行调仓；
                 该日不产生换手成本，同时计入被拦截成交统计。
+            volume: 日成交量数组（v2.67.0 GAP-I501，用于容量约束）。
+            close_price: 收盘价数组（v2.67.0 GAP-I501，用于持仓市值计算）。
+            capacity_cap_ratio: 持仓市值/品种日均成交额上限比例（v2.67.0 GAP-I501，
+                0.0=不启用容量限制）。
+            initial_capital: 初始资金（v2.67.0 GAP-I501，用于持仓市值换算）。
+            precomputed_blocked_stats: _build_tradeable_mask 返回的细分统计（limit_up/limit_down/halt），
+                以此为基础追加容量约束统计（v2.59.0 GAP-F02 修复）。
 
         Returns:
-            (strategy_returns, positions, blocked_stats) 元组；
-            blocked_stats = {"limit_up": int, "limit_down": int, "halt": int}（v2.59.0）
+            (strategy_returns, positions, stats) 元组；
+            stats = {
+                "limit_up": int, "limit_down": int, "halt": int,    # v2.59.0
+                "capacity_violations": int,                          # v2.67.0
+                "capacity_avg_reduction": float,                     # v2.67.0
+                "capacity_max_reduction": float,                     # v2.67.0
+            }
         """
         # 因子作为持仓信号 (滚动窗口 z-score)
         positions = np.zeros_like(factor_values)
         n = len(factor_values)
-        blocked_stats = {"limit_up": 0, "limit_down": 0, "halt": 0}
+        # v2.59.0 (GAP-F02): 使用 _build_tradeable_mask 预计算的细分统计（含 limit_up/limit_down）
+        # halt 由循环内实际被拦截的交易次数决定（与预计算统计取 max，避免重复定义）
+        pre_limit_up = precomputed_blocked_stats.get("limit_up", 0) if precomputed_blocked_stats else 0
+        pre_limit_down = precomputed_blocked_stats.get("limit_down", 0) if precomputed_blocked_stats else 0
+        blocked_stats: dict[str, Any] = {
+            "limit_up": pre_limit_up,
+            "limit_down": pre_limit_down,
+            "halt": 0,
+        }
 
         for i in range(1, n):
             # v2.59.0 (GAP-F02): 涨跌停/停牌日持仓保持上一交易日（无法成交）
             if tradeable_mask is not None and not tradeable_mask[i]:
                 positions[i] = positions[i - 1]
-                blocked_stats["halt"] += 1  # 归入"不可交易"类别（细分见 _build_tradeable_mask）
+                blocked_stats["halt"] += 1
                 continue
             start = max(0, i - zscore_window)
             window = factor_values[start:i]
@@ -1017,6 +1080,34 @@ class BacktestPipeline:
             for t in range(n):
                 if abs(positions[t]) > 1e-8 and str(dates[t].date()) in roll_dates:
                     strategy_returns[t] -= abs(positions[t]) * roll_cost_decimal
+
+        # v2.67.0 (GAP-I501): 容量约束 — 持仓市值 ≤ 品种日均成交额 × capacity_cap_ratio
+        capacity_violations = 0
+        capacity_reductions: list[float] = []
+        if (
+            capacity_cap_ratio > 0
+            and volume is not None
+            and close_price is not None
+            and len(volume) == n
+            and len(close_price) == n
+        ):
+            rolling_window = min(20, n)
+            daily_trade_value = volume * close_price
+            for i in range(n):
+                if abs(positions[i]) > 1e-8:
+                    start = max(0, i - rolling_window + 1)
+                    avg_daily_value = float(np.mean(daily_trade_value[start:i + 1]))
+                    max_position_value = avg_daily_value * capacity_cap_ratio
+                    current_value = abs(positions[i]) * initial_capital
+                    if current_value > max_position_value > 0:
+                        scale = max_position_value / current_value
+                        positions[i] *= scale
+                        capacity_violations += 1
+                        capacity_reductions.append(1.0 - scale)
+
+        blocked_stats["capacity_violations"] = capacity_violations
+        blocked_stats["capacity_avg_reduction"] = float(np.mean(capacity_reductions)) if capacity_reductions else 0.0
+        blocked_stats["capacity_max_reduction"] = float(np.max(capacity_reductions)) if capacity_reductions else 0.0
 
         return strategy_returns, positions, blocked_stats
 

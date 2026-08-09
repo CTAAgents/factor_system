@@ -69,7 +69,7 @@ from .scheduler import (
 )
 
 
-def _prepare_data(symbol: str = "000001", days: int = 500) -> tuple[pd.DataFrame, np.ndarray]:
+def _prepare_data(symbol: str = "000001", days: int = 750) -> tuple[pd.DataFrame, np.ndarray]:
     """准备演化所需数据（腾讯 API 优先 → 合成数据降级）。
 
     Args:
@@ -91,14 +91,14 @@ def _prepare_data(symbol: str = "000001", days: int = 500) -> tuple[pd.DataFrame
 
 def _prepare_cross_section_data(
     universe: str = "csi300",
-    days: int = 500,
+    days: int = 750,
     max_stocks: int = 50,
 ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex, np.ndarray]:
     """准备横截面演化所需的沪深300成分股面板数据。
 
     Args:
         universe: "csi300"（沪深300成分股）
-        days: 回溯天数
+        days: 回溯天数（默认 750，GAP-S08 长窗口）
         max_stocks: 最大标的数量
 
     Returns:
@@ -127,7 +127,7 @@ def _prepare_cross_section_data(
 
 
 def _prepare_futures_data(
-    days: int = 500,
+    days: int = 750,
     max_symbols: int = 0,
 ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex, np.ndarray]:
     """准备期货横截面演化所需的面板数据。
@@ -225,7 +225,7 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
         # ── 横截面模式（沪深300成分股） ──
         print(f"[evolution] universe={args.universe} (max_stocks={args.max_stocks})")
         panel, common_dates, fwd_ret = _prepare_cross_section_data(
-            universe=args.universe, days=500, max_stocks=args.max_stocks,
+            universe=args.universe, days=args.days, max_stocks=args.max_stocks,
         )
         print(f"[evolution] panel symbols={len(panel)}, common_dates={len(common_dates)}")
 
@@ -600,13 +600,20 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
               f"factors={result.n_factors_retained} "
               f"sharpe={result.combo_sharpe:.4f}")
 
-        # L3 完成后自动触发期货信号管道
-        if universe == "futures" and result.status in ("passed", "verifier_warning", "completed"):
-            print("[portfolio] 触发期货信号生成管道...")
-            from scripts.futures_signal_pipeline import main as signal_main
-            rc = signal_main(max_symbols=82, days=120, universe="all")
-            if rc != 0:
-                print(f"[portfolio] 信号管道异常退出: rc={rc}", file=sys.stderr)
+        # L3 完成后自动触发信号管道（期货/股票对称，GAP-I301）
+        if result.status in ("passed", "verifier_warning", "completed"):
+            if universe == "futures":
+                print("[portfolio] 触发期货信号生成管道...")
+                from scripts.futures_signal_pipeline import main as signal_main
+                rc = signal_main(max_symbols=82, days=120, universe="all")
+                if rc != 0:
+                    print(f"[portfolio] 信号管道异常退出: rc={rc}", file=sys.stderr)
+            elif universe == "stock":
+                print("[portfolio] 触发股票信号生成管道...")
+                from scripts.daily_signal_pipeline import main as stock_signal_main
+                rc = stock_signal_main(max_stocks=50, days=120)
+                if rc != 0:
+                    print(f"[portfolio] 信号管道异常退出: rc={rc}", file=sys.stderr)
         return 0
     except Exception as e:  # noqa: BLE001
         print(f"[portfolio] 运行失败: {e}", file=sys.stderr)
@@ -979,8 +986,45 @@ def _cmd_factor_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _compute_expr_type_distribution(
+    market: str | None = None,
+    elite_dir: Path | None = None,
+) -> dict[str, Any]:
+    """从 elite 因子文件计算表达类型分布（GAP-S13）。
+
+    Returns:
+        { "operator": N, "code": N, "hybrid": N, "total": N, "operator_pct": float }
+    """
+    cfg = get_config()
+    if elite_dir is None:
+        elite_dir = Path(cfg.get_elite_dir(market or "futures"))
+
+    if not elite_dir.exists():
+        return {"operator": 0, "code": 0, "hybrid": 0, "total": 0, "operator_pct": 0.0}
+
+    counts: dict[str, int] = {"operator": 0, "code": 0, "hybrid": 0}
+    for p in elite_dir.glob("*.json"):
+        if p.name.startswith("_") or p.name.startswith("."):
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            kind = data.get("kind", "code")
+            if kind in counts:
+                counts[kind] += 1
+            else:
+                counts["code"] += 1
+        except Exception:  # noqa: BLE001
+            pass
+
+    total = sum(counts.values())
+    operator_pct = (counts["operator"] / total * 100) if total > 0 else 0.0
+    counts["total"] = total
+    counts["operator_pct"] = round(operator_pct, 1)
+    return counts
+
+
 def _cmd_factor_stats(args: argparse.Namespace) -> int:
-    """统计因子家族分布（DuckDB 模式）。"""
+    """统计因子家族分布 + 表达类型分布（GAP-S13）。"""
     market = getattr(args, "market", None)
     min_sharpe = getattr(args, "min_sharpe", 0.0)
     try:
@@ -995,7 +1039,12 @@ def _cmd_factor_stats(args: argparse.Namespace) -> int:
         return 0
 
     if getattr(args, "json", False):
-        print(json.dumps(dist, indent=2, ensure_ascii=False, default=str))
+        expr_dist = _compute_expr_type_distribution(market=market)
+        output = {
+            "family_distribution": dist,
+            "expr_type_distribution": expr_dist,
+        }
+        print(json.dumps(output, indent=2, ensure_ascii=False, default=str))
         return 0
 
     total = sum(row.get("count", 0) for row in dist)
@@ -1010,6 +1059,21 @@ def _cmd_factor_stats(args: argparse.Namespace) -> int:
         print(f"{fam:<24} {count:>6}  {pct:>7.1f}%")
     print("-" * 42)
     print(f"{'合计':<24} {total:>6}")
+
+    # GAP-S13: 表达类型分布
+    expr_dist = _compute_expr_type_distribution(market=market)
+    print(f"\n=== 表达类型分布 (GAP-S13) ===")
+    print(f"{'类型':<16} {'数量':>6}  {'占比':>8}")
+    print("-" * 34)
+    for kind in ("operator", "code", "hybrid"):
+        count = expr_dist.get(kind, 0)
+        et = expr_dist.get("total", 1)
+        pct = (count / et * 100) if et > 0 else 0
+        if count > 0:
+            print(f"{kind:<16} {count:>6}  {pct:>7.1f}%")
+    print("-" * 34)
+    print(f"{'合计':<16} {expr_dist.get('total', 0):>6}")
+    print(f"算子化率: {expr_dist.get('operator_pct', 0.0):.1f}%")
     return 0
 
 
@@ -1570,6 +1634,102 @@ def _cmd_feedback_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_feedback_import(args: argparse.Namespace) -> int:
+    """导入实盘反馈记录（GAP-L402）：CSV → 校验 → 落盘。"""
+    from pathlib import Path
+
+    from .factor_engine.feedback_loop import LiveFeedbackImporter
+
+    path = Path(args.csv_path)
+    if not path.exists():
+        print(f"[feedback] 文件不存在: {path}")
+        return 1
+    importer = LiveFeedbackImporter(db_path=args.db)
+    try:
+        result = importer.import_csv(str(path))
+    except Exception as e:  # noqa: BLE001
+        print(f"[feedback] 导入失败: {e}")
+        return 1
+    print(f"[feedback] 导入完成: total={result['total']} "
+          f"valid={result['valid']} invalid={result['invalid']}")
+    if result["invalid_messages"]:
+        print(f"[feedback] 无效记录示例: {result['invalid_messages'][:3]}")
+    return 0
+
+
+def _cmd_feedback_live_ic(args: argparse.Namespace) -> int:
+    """实盘 IC vs 回测 IC 对比报告（GAP-L402）。"""
+    import json as _json
+    from pathlib import Path
+
+    from .factor_engine.feedback_loop import (
+        LiveFeedbackImporter,
+        LiveVsBacktestICReport,
+    )
+
+    importer = LiveFeedbackImporter(db_path=args.db)
+    backtest_ic_map: dict[str, float] = {}
+    if args.backtest_ic:
+        try:
+            bt_path = Path(args.backtest_ic)
+            data = _json.loads(bt_path.read_text(encoding="utf-8"))
+            backtest_ic_map = {k: float(v) for k, v in data.items()}
+        except (OSError, ValueError) as e:
+            print(f"[feedback] 读取回测 IC 失败: {e}")
+            return 1
+
+    records = importer._records  # noqa: SLF001
+    if not records and args.db:
+        # 从 DuckDB feedback_live 表读取
+        try:
+            import duckdb  # type: ignore
+
+            con = duckdb.connect(args.db)
+            try:
+                rows = con.execute(
+                    "SELECT factor_id, signal_date, signal_value, position_return, "
+                    "turnover, slippage, market, backtest_ic, weight "
+                    "FROM feedback_live"
+                ).fetchall()
+            finally:
+                con.close()
+            for r in rows:
+                rec = {
+                    "factor_id": r[0], "signal_date": r[1],
+                    "signal_value": r[2], "position_return": r[3],
+                    "turnover": r[4],
+                }
+                if r[5] is not None:
+                    rec["slippage"] = r[5]
+                if r[6] is not None:
+                    rec["market"] = r[6]
+                if r[7] is not None:
+                    rec["backtest_ic"] = r[7]
+                if r[8] is not None:
+                    rec["weight"] = r[8]
+                records.append(rec)
+        except Exception as e:  # noqa: BLE001
+            print(f"[feedback] 读取 DuckDB 反馈表失败: {e}")
+            return 1
+
+    if not records:
+        print("[feedback] 无实盘反馈记录（请先运行 fts feedback import）")
+        return 1
+
+    live_ic = importer.compute_live_ic(records)
+    report = LiveVsBacktestICReport().generate(live_ic, backtest_ic_map)
+    print("=== 实盘 IC vs 回测 IC 对比 ===")
+    print(f"因子数: {report['summary']['n_factors']} | "
+          f"衰减: {report['summary']['n_decayed']} | "
+          f"整体实盘 IC: {report['summary']['overall_live_ic']:.4f} | "
+          f"记录数: {report['summary']['n_records']}")
+    for row in report["factors"]:
+        bt = f"{row['backtest_ic']:.4f}" if row["backtest_ic"] is not None else "N/A"
+        print(f"  {row['factor_id']}: live_ic={row['live_ic']:.4f} "
+              f"bt_ic={bt} status={row['status']}")
+    return 0
+
+
 def _cmd_bridge_publish(args: argparse.Namespace) -> int:
     """发布信号到目标协议（Phase 25）。"""
     from datetime import datetime
@@ -1724,6 +1884,8 @@ def build_parser() -> argparse.ArgumentParser:
                            help="演化品种池类型: futures（期货，默认）/ csi300（沪深300）/ single（单标）")
     p_evo_run.add_argument("--max-stocks", type=int, default=0,
                            help="横截面模式最大标的数（0 = 使用全部品种）")
+    p_evo_run.add_argument("--days", type=int, default=750,
+                           help="回溯天数（默认 750，GAP-S08 长窗口）")
     p_evo_run.set_defaults(func=_cmd_evolution_run)
 
     # meta-loop run
@@ -1863,7 +2025,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt_run.add_argument("--symbol", default="000001", help="回测标的代码（默认 000001）")
     p_bt_run.add_argument("--start", default=None, help="开始日期 YYYY-MM-DD")
     p_bt_run.add_argument("--end", default=None, help="结束日期 YYYY-MM-DD")
-    p_bt_run.add_argument("--days", type=int, default=500, help="回溯天数（默认 500）")
+    p_bt_run.add_argument("--days", type=int, default=750, help="回溯天数（默认 750，GAP-S08 长窗口）")
     p_bt_run.add_argument("--capital", type=float, default=1_000_000.0, help="初始资金")
     p_bt_run.add_argument("--frequency", default="daily",
                           choices=["daily", "1m", "5m", "15m", "30m", "60m"],
@@ -1879,7 +2041,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt_batch.add_argument("--min-score", type=float, default=None, help="最低质量总分")
     p_bt_batch.add_argument("--limit", type=int, default=20, help="最大回测因子数（默认 20）")
     p_bt_batch.add_argument("--symbol", default="000001", help="回测标的代码")
-    p_bt_batch.add_argument("--days", type=int, default=500, help="回溯天数")
+    p_bt_batch.add_argument("--days", type=int, default=750, help="回溯天数（默认 750，GAP-S08 长窗口）")
     p_bt_batch.add_argument("--capital", type=float, default=1_000_000.0, help="初始资金")
     p_bt_batch.set_defaults(func=_cmd_backtest_batch)
 
@@ -1889,7 +2051,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt_cmp.add_argument("--market", default="futures", choices=["futures", "stock"],
                           help="市场类型（默认：futures）")
     p_bt_cmp.add_argument("--symbol", default="000001", help="回测标的代码")
-    p_bt_cmp.add_argument("--days", type=int, default=500, help="回溯天数")
+    p_bt_cmp.add_argument("--days", type=int, default=750, help="回溯天数（GAP-S08 长窗口）")
     p_bt_cmp.add_argument("--capital", type=float, default=1_000_000.0, help="初始资金")
     p_bt_cmp.set_defaults(func=_cmd_backtest_compare)
 
@@ -1907,7 +2069,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_feat_analyze.add_argument("--factor-id", required=True, help="因子 ID")
     p_feat_analyze.add_argument("--market", default="futures", choices=["futures", "stock"],
                                 help="市场类型（默认：futures）")
-    p_feat_analyze.add_argument("--days", type=int, default=500, help="回溯天数")
+    p_feat_analyze.add_argument("--days", type=int, default=750, help="回溯天数（GAP-S08 长窗口）")
     p_feat_analyze.add_argument("--output", default=None, help="结果输出目录")
     p_feat_analyze.set_defaults(func=_cmd_feature_analyze)
 
@@ -1920,7 +2082,7 @@ def build_parser() -> argparse.ArgumentParser:
                              help="品种池类型（默认：futures）")
     p_gp_evolve.add_argument("--population", type=int, default=200, help="种群大小（默认 200）")
     p_gp_evolve.add_argument("--generations", type=int, default=50, help="最大代数（默认 50）")
-    p_gp_evolve.add_argument("--days", type=int, default=500, help="回溯天数")
+    p_gp_evolve.add_argument("--days", type=int, default=750, help="回溯天数（默认 750，GAP-S08 长窗口）")
     p_gp_evolve.add_argument("--max-stocks", type=int, default=30, help="横截面模式最大标的数")
     p_gp_evolve.add_argument("--max-symbols", type=int, default=0, help="期货模式最大品种数（0=全部）")
     p_gp_evolve.add_argument("--forward", type=int, default=20, help="预测周期（默认 20）")
@@ -1945,6 +2107,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_fb_stats = fb_sub.add_parser("stats", help="查看反馈闭环统计")
     p_fb_stats.set_defaults(func=_cmd_feedback_stats)
+
+    # GAP-L402: 实盘反馈回流（LiveFeedbackRecord 契约导入 + 实盘 IC 对比）
+    p_fb_import = fb_sub.add_parser("import", help="导入实盘反馈记录（CSV，GAP-L402）")
+    p_fb_import.add_argument("csv_path", help="CSV 路径（列名=LiveFeedbackRecord 字段）")
+    p_fb_import.add_argument("--db", default=None, help="DuckDB 文件路径（缺省 JSONL 落盘）")
+    p_fb_import.set_defaults(func=_cmd_feedback_import)
+
+    p_fb_live_ic = fb_sub.add_parser("live-ic", help="实盘 IC vs 回测 IC 对比报告（GAP-L402）")
+    p_fb_live_ic.add_argument("--backtest-ic", default=None,
+                              help="回测 IC JSON 路径 {factor_id: ic}")
+    p_fb_live_ic.add_argument("--db", default=None, help="DuckDB 文件路径（读取 feedback_live 表）")
+    p_fb_live_ic.set_defaults(func=_cmd_feedback_live_ic)
 
     # bridge（VNPY 信号桥接，Phase 25）
     p_bridge = sub.add_parser("bridge", help="VNPY 信号桥接（Phase 25）")

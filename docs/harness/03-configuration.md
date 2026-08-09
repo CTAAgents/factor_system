@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.62.0
+> 版本: v2.71.0
 > 最后更新: 2026-08-07
 
 ---
@@ -24,11 +24,21 @@ FTS 配置采用三级优先级（高→低）：
 | `elite_dir` | str | `"memory/knowledge/factors/elite"` | `FTS_ELITE_DIR` | elite 因子存储目录 |
 | `default_market` | str | `"futures"` | `FTS_DEFAULT_MARKET` | 默认市场类型 |
 | `llm_backend` | str | `""` | `FTS_LLM_BACKEND` | LLM 后端选择（空=自动检测）|
-| `evolution_mode` | str | `"hybrid"` | `FTS_EVOLUTION_MODE` | 演化模式: operator(算子主干) / code(代码创新) / hybrid(混合) |
+| `evolution_mode` | str | `"hybrid"` | `FTS_EVOLUTION_MODE` | 演化模式: operator(算子主干) / code(代码创新) / hybrid(混合) / batch(批量挖掘漏斗, GAP-I201, v2.65.0) |
 | `max_generations` | int | 10 | — | L2 最大演化代数 |
 | `population_size` | int | 20 | — | 种群大小 |
 | `micro_trials_per_generation` | int | 50 | — | 每代 optuna 试验数 |
+| `micro_staged_evolution` | bool | true | `FTS_MICRO_STAGED` | 微观演化两阶段漏斗开关：粗筛快速淘汰低潜力 + 精筛自适应 trials（GAP-I205，v2.70.0） |
+| `micro_coarse_trials` | int | 20 | `FTS_MICRO_COARSE_TRIALS` | 粗筛阶段 optuna 试验数（GAP-I205，v2.70.0） |
+| `micro_coarse_ic_floor` | float | 0.02 | `FTS_MICRO_COARSE_IC_FLOOR` | 粗筛淘汰阈值：粗筛得分低于该值直接淘汰，不进入精筛（GAP-I205，v2.70.0） |
+| `l2_elite_corr_threshold` | float | 0.9 | `FTS_L2_ELITE_CORR_THRESHOLD` | L2 准入去冗余相关性阈值：演化因子晋升前与既有 elite 信号相关绝对值 ≥ 该值拒绝晋升（GAP-I206，v2.71.0） |
+| `l2_elite_corr_max_scan` | int | 50 | `FTS_L2_ELITE_CORR_MAX_SCAN` | L2 准入去冗余扫描容量护栏：最多扫描的既有 elite 因子数（GAP-I206，v2.71.0） |
+| `l2_elite_corr_debug` | bool | false | `FTS_L2_ELITE_CORR_DEBUG` | L2 准入去冗余调试日志开关（放行时输出 debug 日志）（GAP-I206，v2.71.0） |
 | `max_workers` | int | 4 | `FTS_MAX_WORKERS` | 并行工作数 |
+| `batch_size` | int | 20 | `FTS_BATCH_SIZE` | 批量挖掘每代候选生成数（GAP-I201，v2.65.0） |
+| `batch_max_candidates` | int | 5 | `FTS_BATCH_MAX_CANDIDATES` | 通过粗筛后进入细评估的最大候选数（预算护栏，GAP-I201，v2.65.0） |
+| `batch_max_workers` | int | 4 | `FTS_BATCH_MAX_WORKERS` | 批量粗筛并行线程数（GAP-I201，v2.65.0） |
+| `batch_random_seed` | int | 42 | `FTS_BATCH_RANDOM_SEED` | 批量生成随机种子（同父多后代可复现，GAP-I201，v2.65.0） |
 | `meta_loop_interval_hours` | int | 24 | — | L1 Meta-Loop 间隔 |
 | `meta_loop_max_tokens` | int | 8000 | — | L1 单次运行 max token |
 | `portfolio_max_factors` | int | 20 | — | L3 组合最大因子数 |
@@ -60,10 +70,14 @@ llm_backend: "openai"
 max_generations: 10
 micro_trials_per_generation: 50
 portfolio_max_factors: 20
-evolution_mode: "hybrid"   # operator(算子主干) / code(代码创新) / hybrid(混合)
+evolution_mode: "hybrid"   # operator(算子主干) / code(代码创新) / hybrid(混合) / batch(批量挖掘漏斗, GAP-I201)
+batch_size: 20             # batch 模式每代候选生成数
+batch_max_candidates: 5    # batch 模式进入细评估的最大候选数
+batch_max_workers: 4       # batch 粗筛并行线程数
+batch_random_seed: 42      # batch 随机种子
 ```
 
-> **evolution_mode 说明（Phase C.2）**：取值 `operator`（算子主干）/ `code`（代码创新）/ `hybrid`（混合），默认 `hybrid`，支持环境变量 `FTS_EVOLUTION_MODE` 覆盖。本计划仅落地配置字段（`FTSConfig.evolution_mode` + `config/settings.yaml`），`EvolutionLoop` 对演化模式的分支消费在后续「算子演化引擎」计划中实现。
+> **evolution_mode 说明（Phase C.2 / GAP-I201）**：取值 `operator`（算子主干）/ `code`（代码创新）/ `hybrid`（混合）/ `batch`（批量挖掘漏斗），默认 `hybrid`，支持环境变量 `FTS_EVOLUTION_MODE` 覆盖。`batch` 模式（v2.65.0）每代对同一父因子批量生成 `batch_size` 个后代（macro 至多 1 次 + GP/operator 交替 + seed 递增），ThreadPoolExecutor 并行粗筛后按预筛 IC 排序截断 `batch_max_candidates` 个进入细评估准入链；token 护栏（每代至多 1 次 LLM）与既有熔断协同。
 
 ## 4. Verifier 配置（锁定不可修改）
 

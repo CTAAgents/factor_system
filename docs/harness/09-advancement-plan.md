@@ -1,7 +1,7 @@
 # FTS 晋级计划
 
-> 版本: v2.62.0
-> 最后更新: 2026-08-08
+> 版本: v2.71.0
+> 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
 ---
@@ -196,15 +196,96 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ 配套测试：`tests/factor_engine/test_barra.py` 13 用例（10 风格齐全/形状/size 单调/残差与风格正交/行业+风格叠加/小样本降级等）
 - ✅ 文档同步：01/06/07/08/09 + pyproject bump v2.61.0 → v2.62.0
 
-### v2.61.0 L3/L4 机构级追赶 A 阶段（因子收益序列 + 风险模型，规划中）
+### v2.65.0 GAP-I201 批量挖掘漏斗（Stage 1 首版，已完成）
 
-**计划时间**: 2026-08-09 起
+**完成时间**: 2026-08-09
 
-**核心产出（规划，细则见 [plans/24-l3-l4-institutional-plan.md](plans/24-l3-l4-institutional-plan.md)）**:
-- 📋 GAP-L301 因子收益序列层：`FactorReturnsBuilder`（因子多空组合收益序列）→ 组合夏普/相关性实测化（w×R 替代经验公式）
-- 📋 GAP-L302 风险模型估计器：Ledoit-Wolf 收缩协方差 Σ（正定性保证）
-- 📋 GAP-L305 冲击成本函数 + 换手惩罚入优化目标（net 指标输出）
-- 📋 配套测试（test_factor_returns / test_risk_model_estimator）+ 文档同步
+**核心产出（细则见 [design/D.1-batch-mining-design.md](design/D.1-batch-mining-design.md) + plans/23 GAP-I201）**:
+- ✅ 新增 `fts/factor_engine/batch_mining.py`：`BatchMiner` 批量漏斗（批量生成 → ThreadPoolExecutor 并行粗筛 → 按预筛 IC 排序截断 ≤ max_candidates）+ `BatchMiningConfig`（batch_size=20/max_candidates=5/max_workers=4/random_seed）+ `BatchedProposal`/`BatchGenerationResult` 契约，依赖注入回调（generate/runtime_check/prefilter）零业务耦合
+- ✅ `evolution_loop.py` 抽取公共方法 `_evolve_one`（演化分派，支持 method_hint + seed，原 run() Step 1 平移）与 `_process_candidate`（Step 2-6 准入链，batch 与单因子路径共用），新增 `_run_batch_generation`（同父多后代方法轮换：macro 至多 1 次 + GP/operator 交替 + seed 递增；token 护栏；全失败回退单因子路径）与 `_batch_generate_one`/`_batch_prefilter`；`_quick_prefilter` 返回 (ok, reason, ic) 三元组
+- ✅ `settings.py` evolution_mode 新增 batch + `batch_size`/`batch_max_candidates`/`batch_max_workers`/`batch_random_seed` 配置（`FTS_BATCH_*` 环境变量）
+- ✅ 设计文档 `design/D.1-batch-mining-design.md` + 新增 21 用例（test_batch_mining.py 11 + test_evolution_loop batch 集成 10），关键回归全绿
+- ✅ GAP-I201 关闭 + 文档同步 01/02/03/06/07/08/09 + pyproject bump v2.62.0 → v2.65.0
+
+### v2.65.0 股票流水线 GAP-S03（A 股行业轮动 + 风格轮动 Regime 检测，已完成）
+
+**完成时间**: 2026-08-09
+
+**核心产出**:
+- ✅ GAP-S03（GAP-I301 Regime 子项）新增 `fts/factor_engine/stock_regime.py`：`StockRegimeSelector` —— 行业轮动维度（申万行业动量横截面离散度 → rotation_strength + top-N 集中度 → concentrated/rotating/balanced 三态）；风格切换维度（大小盘比值 + 成长价值比值动量方向 → large_cap/small_cap + growth/value 双态），复用 `regime_hmm.MultiHorizonHMMDetector` 多周期集成（比值序列构造合成 OHLCV 送 HMM 校正置信度，规则动量方向主判定），空面板/样本不足优雅降级
+- ✅ L3 集成：`REGIME_STYLE_MULTIPLIERS` 新增 6 个股票风格键（large_cap/small_cap/growth/value/sector_concentrated/sector_rotating）；`PortfolioLoop.run()` 新增 `stock_regime` 可选参数，market="stock" 时 Step 2.5 优先使用 StockRegimeSelector 结果驱动风格自适应权重
+- ✅ 配套测试：`tests/factor_engine/test_stock_regime.py` 19 用例（行业三态/风格四方向/风格切换样本正确率 ≥80%/空面板降级/HMM 复用回退/multipliers 键与值域/PortfolioLoop 集成 2）
+- ✅ 文档同步：01/02/06/07/08/09 + pyproject bump v2.62.0 → v2.65.0
+
+### v2.68.0 L3/L4 专项收尾（GAP-L308 Regime 数据化 + GAP-L309 面板规模，已完成）
+
+**完成时间**: 2026-08-10
+
+**核心产出（细则见 [plans/24-l3-l4-institutional-plan.md](plans/24-l3-l4-institutional-plan.md)）**:
+- ✅ GAP-L308 Regime 权重数据化：新建 `regime_multipliers.py`（`RegimeMultiplierEstimator` 按 regime×family 聚合 IC 均值/胜率生成数据驱动倍率，钳制 [0.5,1.5] + 最小样本回退）；修复 family_global 跨 regime 桶被覆盖 bug；倍率表落盘 `docs/harness/_data/l3_regime_multipliers.yaml`（易变配置进 _data 原则）；`portfolio_loop.load_data_driven_multipliers` 优先接线（数据驱动表存在时优先、缺失回退硬编码）
+- ✅ GAP-L309 面板数据规模参数化：新建 `PanelLoadingConfig`（默认全 CSI300 子集 × 500 天，对齐 MIN_EVAL_DAYS）；`_liquidity_stratified_sample` 流动性分层抽样（桶间轮询保证高低流动性覆盖，无 volume 退化等权）；`_load_panel_with_liquidity_sampling` 覆盖日志 + 幸存者偏差提示；`_compute_elastic_net_weights`/`_compute_ml_ensemble_weights` 默认 days 120→500、max_stocks 50→0（全量）
+- ✅ GAP-L310 种子加载链修复：`seed_loader.py` 补 `FactorKind` 导入 + 多行 `field_defs` strip+统一缩进 + 测试引用迁移 `estimate_lookback_static` + 种子计数断言同步 714/898/30（全量回归 21 例失败清零）
+- ✅ 同步关闭 08 中 L305/L306/L307/L401/L402 已落地项状态（v2.66.0 完成）
+- 📋 新增测试 26 用例（test_regime_multipliers 14 + test_data_provider_panel 12）；受影响模块 230 测试回归全绿
+
+### v2.69.0 股票流水线成熟度收尾（GAP-S09/S10/S11/S12，13 项缺陷闭环，已完成）
+
+**完成时间**: 2026-08-10
+
+**核心产出（细则见 [plans/22-stock-pipeline-maturity-plan.md](plans/22-stock-pipeline-maturity-plan.md)）**:
+- ✅ GAP-S09 种子表达式静态 PIT 审计：新建 `fts/factor_engine/expr_dsl/seed_analyzer.py`（WQ 风格表达式递归下降解析器，静态提取 max_lookback/fields/operators/depth），`seed_loader` 与 `seed_data.loader` 改走 `estimate_lookback_static`（替换正则粗糙估计），705 表达式全量扫描仅 1 个 fundamental 切片语法需显式 lookback
+- ✅ GAP-S10 双注册表一致性：`verify_registry_consistency()` 重叠算子（20+）同输入断言输出一致（rtol 1e-6），`expr_dsl/__init__` 导出
+- ✅ GAP-S11 股票演化 operator-first：`evolution_mode` 新增 `operator_first`；`EvolutionLoop` 股票默认 operator_first（算子 → LLM → GP 三层兜底）；`record_evolution_method` 演化方法分布记账
+- ✅ GAP-S12 A 股特有算子：`A_SHARE_FIELDS` 10 字段（L0 访问器）+ L5b 4 领域算子（nb_momentum/margin_change/holder_concentration/analyst_revision_ratio）
+- 📋 新增测试 27 用例（test_seed_analyzer 14 + test_registry GAP-S10/S12 6 + TestGapS11OperatorFirst 7）；修正 test_seed_loader 股票种子计数 645→714
+- ✅ 文档同步：06/07/08/09 + 22 计划（13 项全部 ✅）+ pyproject bump v2.68.0 → v2.69.0
+
+### v2.70.0 股票 L3 组合层 + 微演化两阶段漏斗（GAP-I301 + GAP-I205，Stage 1B 收官，已完成）
+
+**完成时间**: 2026-08-10
+
+**核心产出（总纲 plans/23 GAP-I301 + GAP-I205）**:
+- ✅ GAP-I301 股票 L3 组合层：CLI `_cmd_portfolio_run` 股票分支对称触发——`portfolio run --universe stock` L3 完成后自动调用 `scripts.daily_signal_pipeline.main(max_stocks=50, days=120)`（此前仅期货分支触发 futures_signal_pipeline；状态集 passed/verifier_warning/completed 一致、非零 rc 打印告警降级）；组件复用性确认：`PortfolioLoop(market="stock")` + `load_elite_factors(market="stock")` market 过滤 + `synthesize_signals`（equal_weight/sharpe_weight/elastic_net/adaptive）+ Step 2.5 `stock_regime` 风格自适应（GAP-S03）+ `build_combo(market="stock", cost_config)` 多头组合 net 指标
+- ✅ GAP-I301 配套测试：`TestStockL3PortfolioLayer` 6 用例（load_elite_factors market 过滤/synthesize_signals 组件复用/build_combo 成本模型 net 为正/无成本 None/PortfolioLoop stock run/stock_regime 驱动）+ `TestCmdPortfolioRunStock` 3 用例（stock 触发信号管道/非零 rc 告警/状态不触发）
+- ✅ GAP-I205 微演化两阶段漏斗：`micro_evolution.py` 新增 `optimize_params_staged`——粗筛低 trials（默认 20）随机搜索快速打分，得分低于 `COARSE_IC_FLOOR`（0.02）直接淘汰（passed=False）；通过者进入精筛，trials 按粗筛得分自适应（得分达 `COARSE_REF_IC` 0.10 跑满 n_trials）+ TPE 早停（早停机制既有）；`evolve_micro` 新增 `use_staged` 参数，`EvolutionLoop` 接入并默认启用（`settings.py` 新增 `micro_staged_evolution`/`micro_coarse_trials`/`micro_coarse_ic_floor` 配置 + FTS_MICRO_* 环境变量）
+- ✅ GAP-I205 配套测试：`TestStagedFunnel` 5 用例（粗筛淘汰/精筛通过/no-optuna 回退/evolve_micro staged 与非 staged）
+- ✅ 修复预存 bug：`evolution_loop.py` L325 `get_config()` 仅在 `market is None` 分支内导入，显式传 market 时 UnboundLocalError（GAP-S11 引入）——提前模块级导入修复（TestShadowPool 6 用例恢复通过）
+- ✅ 文档同步：01/06/07/08/09 + 23 计划（GAP-I301/GAP-I205 ✅ 关闭，v2.70.0）+ pyproject bump v2.69.0 → v2.70.0
+
+### v2.71.0 L2 准入去冗余/正交化闭环（GAP-I206，Stage 1C，已完成）
+
+**完成时间**: 2026-08-10
+
+**核心产出（总纲 plans/23 GAP-I206）**:
+- ✅ `evolution_loop.py` 新增 `_check_elite_correlation`：演化因子晋升前扫描既有 elite 快照（排除 `_l2_seed_correlation_index.json`，容量护栏 `l2_elite_corr_max_scan` 默认 50），复用 `BacktestPipeline._execute_factor_code` 逐个计算信号与候选因子做 Pearson 相关，相关绝对值 ≥ `l2_elite_corr_threshold`（默认 0.9）记录高相关对（`factor_name_b`/`factor_id_b`/`pearson`/`abs_pearson` 按 abs 降序）并拒绝晋升（打拦截日志）；无既有 elite / 新因子执行失败 / 全低相关返回 None 静默放行（首次晋升场景不阻断）
+- ✅ `_promote_to_elite` 接入：`shadow_observe=True`（演化因子）命中高相关即返回 None 不落盘；种子因子（`shadow_observe=False` 首轮导入）跳过检查全量放行
+- ✅ `settings.py` 新增 `l2_elite_corr_threshold`/`l2_elite_corr_max_scan`/`l2_elite_corr_debug` 配置 + `FTS_L2_ELITE_CORR_*` 环境变量（异常回退默认值）
+- ✅ 配套测试：新增 `tests/factor_engine/test_l2_elite_redundancy.py` 10 用例——方法级 7（高相关命中/负高相关 abs 判断/低相关放行/空 elite 放行/索引文件跳过/容量护栏/执行失败容错）+ 集成 3（shadow 高相关拦截不落盘/种子跳过检查正常晋升/低相关正常晋升），11 passed 全绿
+- ✅ 文档同步：03/06/07/08/09 + 23 计划（GAP-I206 ✅ 关闭，v2.71.0 追加记录）+ pyproject（v2.71.0，与并发会话同版本追加）+ README
+
+### v2.66.0 GP/operator 通道修复三连 + 横截面预筛真实化（GAP-X01/X02/X03，已完成）
+
+**完成时间**: 2026-08-09
+
+**核心产出（处理中，登记 08-gap-analysis GAP-X01/X02/X03）**:
+- ✅ GAP-X03 `eval_fts_expr 未定义` 根因修复：`BacktestPipeline._execute_factor_code` exec 后 `exec_globals.update(local_vars)`（模块级 import 绑定并入 `factor_program.__globals__`，与 `FactorExecutor.compile` 同模式）；另修复 GP 模板 `ts_product` 改用 `rolling.apply(np.prod)`（pandas≥2.1 移除 `Rolling.prod`）+ `_evaluate_fitness` 后处理对齐流水线（`nan_to_num` + `clip[-10,10]` + std<1e-12 常数罚分）——operator/GP 因子不再全数降零被「常数信号」拦截，CPU 演化通道恢复
+- ✅ GAP-X02 operator 生成常数校验前移：`_generate_operator_factor` fallback 生成循环内 evaluate 表达式并过滤非常数信号（finite 为空或 nanstd<1e-8 拦截），10 次尝试全拦截抛 RuntimeError
+- ✅ GAP-X01 横截面预筛真实截面收益：`_quick_prefilter` 横截面模式走新增 `_cross_section_prefilter`（全面板信号矩阵 vs 截面 forward 收益，复用 `_cs_execute_factors`/`_cs_build_matrices`/`_cs_compute_ics`，与 `cross_section_evaluate_backtest` 同口径），替代原单标的时序 IC
+- ✅ 吞吐实测 `scripts/throughput_gp_channel.py`：operator 因子全链路通过率 0%→100%；GP 产物运行时校验通过率 1/3→3/3、单次耗时 6.15s→2.45s；batch 漏斗 0.4 候选/s
+- ✅ 新增测试 6 用例（test_compiler 1 + test_evolution_loop 3 + test_gp_evolver 2），受影响文件回归全绿
+- ✅ 文档同步：01/06/07/08/09 + pyproject bump v2.65.0 → v2.66.0
+
+### v2.61.0 L3/L4 机构级追赶 A+B 阶段（因子收益序列 + 风险模型 + optimizer 接线，已完成）
+
+**完成时间**: 2026-08-09
+
+**核心产出（细则见 [plans/24-l3-l4-institutional-plan.md](plans/24-l3-l4-institutional-plan.md)）**:
+- ✅ GAP-L301 因子收益序列层：`FactorReturnsBuilder`（因子多空组合收益序列）→ 组合夏普/相关性实测化（w×R 替代经验公式，metrics_source）
+- ✅ GAP-L302 风险模型估计器：Ledoit-Wolf 收缩协方差 Σ（纯 numpy，正定性保证）
+- ✅ GAP-L303 optimizer 接线：`PortfolioLoop.run()` 透传 factor_returns/exposure_matrix + `optimizer_mode`/`optimizer_config` + CLI `--mode optimizer`
+- ✅ GAP-L304 暴露中性化：`OptimizerConfig.neutralization/exposure_tolerance` + SLSQP 暴露约束（\|B'w − target\| ≤ tol）
+- ⏳ GAP-L305 冲击成本 + 换手惩罚（待后续批次，08 登记处理中）
+- 📋 配套测试 28 用例（A 阶段 21 + B 阶段 7）+ 文档同步
 
 ### v2.59.0 期货流水线机构级缺陷修复（阶段 B，已完成）
 
@@ -438,6 +519,8 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.69.0** | 2026-08-10 | 股票流水线成熟度收尾（plans/22 GAP-S09~S12 全部落地，13 项缺陷闭环）：seed_analyzer.py 种子表达式静态 PIT 审计 + estimate_lookback_static 替换正则；verify_registry_consistency 双注册表一致性；operator_first 模式（股票演化默认算子优先 + 方法分布记账）；A_SHARE_FIELDS 10 字段 + L5b 4 A 股领域算子；新增 27 测试用例 |
+| **v2.65.0** | 2026-08-09 | 股票流水线 GAP-S03：A 股行业轮动 + 风格轮动 Regime 检测——`fts/factor_engine/stock_regime.py`（`StockRegimeSelector`：行业动量离散度→集中/轮动/均衡三态；大小盘+成长价值比值动量→风格双态；复用 MultiHorizonHMMDetector 多周期集成校正置信度）；`REGIME_STYLE_MULTIPLIERS` 新增 6 股票风格键；`PortfolioLoop.run(stock_regime=...)` 驱动 L3 风格自适应权重；新增 test_stock_regime.py 19 用例 |
 | **v2.62.0** | 2026-08-09 | 股票流水线 GAP-S02：Barra 风格因子体系——`fts/factor_engine/barra/` 三文件（barra_style.py 10 风格暴露引擎 + barra_neutralizer.py 逐日 OLS 回归残差 + __init__ 导出）；`cross_section_evaluate_backtest` 新增 `style_exposures` 参数 + Step 2.6 风格回归残差（GAP-S01 行业去均值后叠加风格剥离，两级中性化链）；nonlinear_size 引擎层截面二次计算；新增 test_barra.py 13 用例 |
 | **v2.61.0** | 2026-08-09 | 股票流水线 GAP-S01：行业/市值中性化主流程——`EvolutionLoop(market="stock")` 自动加载行业/市值映射（接通 `stock_neutralization` 死配置），键归一化兼容面板 symbol，透传评估链做行业去均值 + 市值加权去均值，报告输出中性化前后 IC 对比（`ic_pre_neutral`） |
 | **v2.33.0** | 2026-08-08 | 宏观因子降级 + 适用场景重设计 + np.bincount 边界审计：fut_macro_export 家族 6 因子 retire（真实 EDB 数据证实代理 Sharpe 7.68 为假象，IC≈0）；角色边界重设计（宏观因子限定跨品种/板块层面，禁止单品种时序信号）；FactorRepository 事务修复（get_factor fetchall + status 补列）；3 个 bincount 因子边界修复（NaN 清理 + 输入防御）；同步入口 NaN 防护到 4 个活跃 g 因子；新增 24 测试用例 |

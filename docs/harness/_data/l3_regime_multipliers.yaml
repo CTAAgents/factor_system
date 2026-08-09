@@ -1,0 +1,50 @@
+# 数据驱动 Regime 倍率表（GAP-L308）— 初始校准基准
+#
+# 由 RegimeMultiplierEstimator.export_yaml 产出。当前为 v1 初始校准基准：
+# 与硬编码 REGIME_FAMILY_MULTIPLIERS（portfolio_loop.py L367-411）对齐，
+# 保证"数据驱动优先"接线后行为不回退；真实 regime×family IC 记录回流后
+# 由估计器重新生成并覆盖本文件（运行期自动校准）。
+#
+# 倍率语义：倍率 = 该 regime×family 因子 IC 均值 / 该家族全 regime IC 均值
+# （钳制 [0.5, 1.5]，样本不足回退 1.0）。
+generated_by: RegimeMultiplierEstimator (GAP-L308)
+note: 初始校准基准（与硬编码表对齐）；真实 IC 记录回流后由估计器覆盖
+multipliers:
+  bull:
+    trend: 1.3
+    momentum: 1.3
+    breakout: 1.2
+    carry: 1.1
+    cross_section: 1.1
+    fundamental: 1.0
+    mean_reversion: 0.7
+    volatility: 0.9
+  bear:
+    trend: 1.1
+    momentum: 0.8
+    breakout: 0.7
+    carry: 1.0
+    volatility: 1.3
+    mean_reversion: 1.2
+    liquidity: 1.2
+    fundamental: 1.1
+  oscillate:
+    mean_reversion: 1.3
+    reversal: 1.3
+    trend: 0.8
+    momentum: 0.8
+    volatility: 1.1
+    volume: 1.1
+  high_vol:
+    volatility: 1.3
+    mean_reversion: 1.1
+    trend: 0.7
+    momentum: 0.7
+    breakout: 0.5
+    carry: 1.0
+  low_vol:
+    trend: 1.2
+    momentum: 1.2
+    mean_reversion: 1.0
+    volatility: 0.7
+    fundamental: 1.1

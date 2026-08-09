@@ -233,3 +233,157 @@ class TestGapF02TradeFilter:
         blocked = result.output.summary["config"].get("blocked_trades", {})
         assert blocked.get("limit_up", 0) >= 1, f"报告应含 limit_up 拦截: {blocked}"
         assert blocked.get("halt", 0) >= 1, f"报告应含 halt 拦截: {blocked}"
+
+
+# ─── v2.67.0 (GAP-I501) 容量约束 ─────────────────────────────
+
+
+class TestGapI501CapacityConstraint:
+    """GAP-I501: 容量约束（持仓市值 ≤ 品种日均成交额 × 比例）。"""
+
+    def test_capacity_constraint_scales_down_large_position(self):
+        """大仓位（超过容量上限）应被截断。"""
+        n = 60
+        rng = np.random.default_rng(42)
+        # 阶梯信号：前 10 个 0 → 后 50 个 1，使 z-score 产生正持仓
+        factor_values = np.zeros(n)
+        factor_values[10:] = 1.0
+        forward_returns = rng.normal(0.005, 0.02, n)
+        dates = pd.date_range("2024-01-01", periods=n, freq="B")
+        volume = np.full(n, 1_000)  # 低成交量
+        close_price = np.full(n, 100.0)  # 低价位
+
+        _, positions, stats = BacktestPipeline._compute_strategy_returns(
+            factor_values, forward_returns,
+            cost_rate=0.001, slippage=0.0005,
+            zscore_window=10, dates=dates,
+            volume=volume, close_price=close_price,
+            capacity_cap_ratio=0.01,  # 持仓市值 ≤ 日均成交额 × 1%
+            initial_capital=10_000_000.0,  # 大资金 → 必然超限
+        )
+        # 日均成交额 ≈ 1000 * 100 = 100,000
+        # 上限 = 100,000 * 0.01 = 1,000
+        # 满仓市值 ≈ 1.0 * 10,000,000 = 10,000,000 >> 1,000
+        # 因此所有非零位置应被大幅截断
+        max_pos = float(np.max(np.abs(positions)))
+        assert max_pos < 0.01, f"大仓位应被容量截断, 但 max_pos={max_pos}"
+
+    def test_capacity_constraint_disabled_when_ratio_zero(self):
+        """capacity_cap_ratio=0 时应跳过容量约束，不截断持仓。"""
+        n = 60
+        rng = np.random.default_rng(42)
+        # 阶梯信号：前 10 个 0 → 后 50 个 1，使 z-score 产生正持仓
+        factor_values = np.zeros(n)
+        factor_values[10:] = 1.0
+        forward_returns = rng.normal(0.005, 0.02, n)
+        volume = np.full(n, 1_000)
+        close_price = np.full(n, 100.0)
+
+        _, positions_no_cap, stats = BacktestPipeline._compute_strategy_returns(
+            factor_values, forward_returns,
+            cost_rate=0.001, slippage=0.0005,
+            zscore_window=10,
+            volume=volume, close_price=close_price,
+            capacity_cap_ratio=0.0,  # 不启用
+            initial_capital=10_000_000.0,
+        )
+        assert stats["capacity_violations"] == 0
+        # 无容量约束时，阶梯信号 z-score 应产生正持仓
+        max_pos = float(np.max(np.abs(positions_no_cap)))
+        assert max_pos > 0.1, "无容量约束时持仓不应被截断"
+
+    def test_capacity_constraint_no_volume_skips(self):
+        """volume=close_price=None 时应跳过容量约束。"""
+        n = 30
+        rng = np.random.default_rng(42)
+        factor_values = rng.normal(0, 1, n)
+        forward_returns = rng.normal(0.005, 0.02, n)
+
+        _, positions, stats = BacktestPipeline._compute_strategy_returns(
+            factor_values, forward_returns,
+            cost_rate=0.001, slippage=0.0005,
+            zscore_window=10,
+            volume=None, close_price=None,
+            capacity_cap_ratio=0.01,
+            initial_capital=10_000_000.0,
+        )
+        assert stats["capacity_violations"] == 0, "无 volume 数据不应触发容量约束"
+        assert stats["capacity_avg_reduction"] == 0.0
+        assert stats["capacity_max_reduction"] == 0.0
+
+    def test_capacity_constraint_violations_tracked(self):
+        """容量超限次数和缩减比例应正确记录。"""
+        n = 60
+        rng = np.random.default_rng(42)
+        # 阶梯信号：前 10 个 0 → 后 50 个 1，使 z-score 产生正持仓
+        factor_values = np.zeros(n)
+        factor_values[10:] = 1.0
+        forward_returns = rng.normal(0.005, 0.02, n)
+        dates = pd.date_range("2024-01-01", periods=n, freq="B")
+        volume = np.full(n, 1_000)
+        close_price = np.full(n, 100.0)
+
+        _, positions, stats = BacktestPipeline._compute_strategy_returns(
+            factor_values, forward_returns,
+            cost_rate=0.001, slippage=0.0005,
+            zscore_window=10, dates=dates,
+            volume=volume, close_price=close_price,
+            capacity_cap_ratio=0.01,
+            initial_capital=10_000_000.0,
+        )
+        # 所有非零持仓都应被截断
+        assert stats["capacity_violations"] > 0, "应有容量超限记录"
+        assert stats["capacity_avg_reduction"] > 0.0, "应有平均缩减比例"
+        assert stats["capacity_max_reduction"] > 0.0, "应有最大缩减比例"
+        # 缩减小数 > 0 且 < 1
+        assert stats["capacity_avg_reduction"] < 1.0
+        assert stats["capacity_max_reduction"] < 1.0
+
+    def test_capacity_constraint_end_to_end(self):
+        """端到端回测报告应包含 capacity_analysis 字段。"""
+        data = _make_ohlcv(n=100)
+        factor = _make_factor(
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    close = data['close']\n"
+            "    n = len(close)\n"
+            "    ret = np.zeros(n)\n"
+            "    if n > 5:\n"
+            "        ret[5:] = (close[5:] - close[:-5]) / np.maximum(close[:-5], 1e-10)\n"
+            "    return np.tanh(ret * 10)\n",
+            "test_capacity_e2e",
+        )
+        # 修改 settings 配置以启用容量约束
+        import os
+        os.environ["FTS_BACKTEST_CAPACITY_CAP"] = "true"
+        os.environ["FTS_CAPACITY_CAP_RATIO"] = "0.001"  # 极低容量上限，确保触发
+        try:
+            from fts.config.settings import get_config, load_config
+            # 重新加载配置使环境变量生效
+            old = get_config()
+            # 强制重新加载
+            import fts.config.settings as settings_mod
+            settings_mod._default_config = None
+            cfg = load_config()
+            assert cfg.backtest_capacity_cap
+            assert cfg.capacity_cap_ratio == 0.001
+
+            result = BacktestPipeline().run(
+                BacktestInput(
+                    factor=factor, data=data,
+                    initialization_capital=10_000_000.0,
+                )
+            )
+            assert result.success, f"回测失败: {result.error}"
+            assert result.output is not None
+            cap_analysis = result.output.summary["config"].get("capacity_analysis", {})
+            assert "violations" in cap_analysis, f"报告应含容量分析: {cap_analysis}"
+            assert "avg_reduction_pct" in cap_analysis
+            assert "max_reduction_pct" in cap_analysis
+        finally:
+            # 恢复环境变量
+            os.environ.pop("FTS_BACKTEST_CAPACITY_CAP", None)
+            os.environ.pop("FTS_CAPACITY_CAP_RATIO", None)
+            # 恢复配置
+            settings_mod._default_config = None
+            load_config()

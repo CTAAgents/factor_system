@@ -14,13 +14,12 @@
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
 
-from .contracts import EconomicLogic, FactorProgram, FactorSignature
+from .contracts import EconomicLogic, FactorKind, FactorProgram, FactorSignature
 from .factor_program import create_factor_program
 
 logger = logging.getLogger(__name__)
@@ -118,6 +117,7 @@ def _code_factor_from_yaml(defn: dict[str, Any], market: str, family_hint: Optio
         market=defn.get("market") or market,
         family=defn.get("family") or family_hint,
         symbols=defn.get("symbols", []),
+        kind=FactorKind.CODE,
     )
 
 
@@ -236,17 +236,10 @@ def _estimate_input_fields(expression: str) -> list[str]:
     return sorted(fields)
 
 
-def _estimate_lookback(expression: str) -> int:
-    """从表达式估算最大回看窗口。"""
-    lookbacks = re.findall(r"\b(\d{1,3})\b", expression)
-    ints = [int(x) for x in lookbacks if 2 <= int(x) <= 252]
-    if not ints:
-        return 10
-    return max(ints)
-
-
 def _expression_factor_from_yaml(defn: dict[str, Any], market: str, family_hint: Optional[str] = None) -> FactorProgram:
     """从 YAML 定义创建表达式型因子。"""
+    from .expr_dsl.seed_analyzer import estimate_lookback_static
+
     expression = defn["expression"]
     code = _EXPRESSION_CODE_TEMPLATE.format(
         name=defn["name"],
@@ -255,7 +248,9 @@ def _expression_factor_from_yaml(defn: dict[str, Any], market: str, family_hint:
         expression=expression,
     )
     input_fields = defn.get("input_fields") or _estimate_input_fields(expression)
-    lookback = defn.get("lookback") or _estimate_lookback(expression)
+    # GAP-S09 (v2.67.0): 静态 PIT 审计对齐 DSL 编译链——lookback 仅统计
+    # 窗口算子（ts_*/delay/delta）的常量参数，避免正则把幂次/分支常量误计入
+    lookback = defn.get("lookback") or estimate_lookback_static(expression)
 
     signature = FactorSignature(
         input_fields=input_fields,
@@ -281,6 +276,7 @@ def _expression_factor_from_yaml(defn: dict[str, Any], market: str, family_hint:
         market=defn.get("market") or market,
         family=defn.get("family") or family_hint,
         symbols=defn.get("symbols", []),
+        kind=FactorKind.OPERATOR,
     )
 
 
@@ -308,10 +304,19 @@ _FUNDAMENTAL_CODE_TEMPLATE = (
 
 def _fundamental_factor_from_yaml(defn: dict[str, Any], market: str, family_hint: Optional[str] = None) -> FactorProgram:
     """从 YAML 定义创建基本面因子。"""
+    import textwrap
+
+    field_defs = defn.get("field_defs", "")
+    # 多行 field_defs 统一缩进：首行由模板前缀（4 空格）缩进，后续行补 4 空格。
+    # YAML `|-` 块剥离共同缩进后可能残留相对缩进，先 strip 各行再统一补缩进，
+    # 否则残余缩进叠加会 unexpected indent。
+    if field_defs:
+        lines = [ln.strip() for ln in textwrap.dedent(field_defs).strip().split("\n") if ln.strip()]
+        field_defs = lines[0] + "".join("\n    " + ln for ln in lines[1:])
     code = _FUNDAMENTAL_CODE_TEMPLATE.format(
         name=defn["name"],
         narrative=defn.get("description", ""),
-        field_defs=defn.get("field_defs", ""),
+        field_defs=field_defs,
         field_check=defn.get("field_check", "True"),
         expression=defn["expression"],
     )
@@ -339,6 +344,7 @@ def _fundamental_factor_from_yaml(defn: dict[str, Any], market: str, family_hint
         market=defn.get("market") or market,
         family=defn.get("family") or family_hint,
         symbols=defn.get("symbols", []),
+        kind=FactorKind.CODE,
     )
 
 

@@ -204,3 +204,116 @@ class TestCoverageGaps:
 
         params, score = mev.optimize_params(factor, data, rets, n_trials=2)
         assert params == {"window": 10}
+
+
+# ════════════════════════════════════════════════════════════
+# GAP-I205: 两阶段漏斗（粗筛淘汰 + 精筛自适应 trials）
+# ════════════════════════════════════════════════════════════
+
+class TestStagedFunnel:
+    """GAP-I205 两阶段参数优化漏斗测试。
+
+    测试方案:
+        - 早停路径（optimize_params 已有 early_stopping_failures 机制）
+        - 粗筛淘汰率与精筛结果一致性
+    """
+
+    def _mock_optuna_run(self, monkeypatch, coarse_score, fine_score=0.06):
+        """mock optuna：粗筛（随机搜索）返回 coarse_score，精筛（TPE）返回 fine_score。
+
+        通过 study.best_value 区分调用次序：第一次调用为粗筛，第二次为精筛。
+        """
+        import fts.factor_engine.micro_evolution as mev
+
+        monkeypatch.setattr(mev, "_HAS_OPTUNA", True)
+        monkeypatch.setattr(mev, "TPESampler", MagicMock())
+        monkeypatch.setattr(mev, "RandomSampler", MagicMock())
+
+        scores = iter([coarse_score, fine_score])
+        studies = []
+
+        def _create_study(**kwargs):
+            study = MagicMock()
+            study.best_value = next(scores)
+            study.best_params = {"window": 10}
+            study.trials = [MagicMock()]
+            studies.append(study)
+            return study
+
+        mock_optuna = MagicMock()
+        mock_optuna.create_study.side_effect = _create_study
+        monkeypatch.setattr(mev, "optuna", mock_optuna)
+        return studies
+
+    def test_staged_coarse_rejects_low_ic(self, monkeypatch):
+        """粗筛得分低于阈值时淘汰（passed=False），不再精筛。"""
+        from fts.factor_engine.micro_evolution import optimize_params_staged
+
+        factor = _make_factor("fct_staged_reject")
+        data = pd.DataFrame({"close": [1.0, 2.0, 3.0, 4.0]})
+        rets = np.array([0.01, -0.01, 0.02, 0.0])
+
+        studies = self._mock_optuna_run(monkeypatch, coarse_score=0.01)
+        params, score, passed = optimize_params_staged(
+            factor, data, rets, n_trials=50, coarse_ic_floor=0.02,
+        )
+        assert passed is False
+        assert score == 0.01
+        assert len(studies) == 1  # 仅粗筛一次，未进入精筛
+
+    def test_staged_coarse_passes_fine(self, monkeypatch):
+        """粗筛得分达标时进入精筛（passed=True），trials 自适应。"""
+        from fts.factor_engine.micro_evolution import optimize_params_staged
+
+        factor = _make_factor("fct_staged_pass")
+        data = pd.DataFrame({"close": [1.0, 2.0, 3.0, 4.0]})
+        rets = np.array([0.01, -0.01, 0.02, 0.0])
+
+        studies = self._mock_optuna_run(monkeypatch, coarse_score=0.08, fine_score=0.09)
+        params, score, passed = optimize_params_staged(
+            factor, data, rets, n_trials=100,
+            coarse_ic_floor=0.02, coarse_ref_ic=0.10,
+        )
+        assert passed is True
+        assert score == 0.09
+        assert len(studies) == 2  # 粗筛 + 精筛
+
+    def test_staged_no_optuna_fallback(self, monkeypatch):
+        """optuna 缺失时直接返回原参数，passed=True。"""
+        import fts.factor_engine.micro_evolution as mev
+        monkeypatch.setattr(mev, "_HAS_OPTUNA", False)
+        monkeypatch.setattr(mev, "optuna", None)
+
+        factor = _make_factor("fct_staged_noopt")
+        data = pd.DataFrame({"close": [1.0, 2.0, 3.0]})
+        rets = np.array([0.01, -0.01, 0.02])
+        params, score, passed = mev.optimize_params_staged(factor, data, rets)
+        assert passed is True
+        assert params == {"window": 10}
+
+    def test_evolve_micro_staged_mode(self, monkeypatch):
+        """evolve_micro use_staged=True 走两阶段漏斗。"""
+        from fts.factor_engine.micro_evolution import evolve_micro
+
+        factor = _make_factor("fct_staged_evolve")
+        data = pd.DataFrame({"close": [1.0, 2.0, 3.0, 4.0]})
+        rets = np.array([0.01, -0.01, 0.02, 0.0])
+
+        self._mock_optuna_run(monkeypatch, coarse_score=0.08, fine_score=0.09)
+        evolved, score = evolve_micro(factor, data, rets, n_trials=50, use_staged=True)
+        assert score == 0.09
+        assert evolved["params"] == {"window": 10}
+
+    def test_evolve_micro_non_staged_mode(self, monkeypatch):
+        """evolve_micro use_staged=False 保持单阶段行为。"""
+        from fts.factor_engine.micro_evolution import evolve_micro
+
+        factor = _make_factor("fct_nostaged_evolve")
+        data = pd.DataFrame({"close": [1.0, 2.0, 3.0, 4.0]})
+        rets = np.array([0.01, -0.01, 0.02, 0.0])
+
+        # 非 staged：仅一次 optimize_params 调用（best_value=0.09）
+        self._mock_optuna_run(monkeypatch, coarse_score=0.09)
+        evolved, score = evolve_micro(factor, data, rets, n_trials=50, use_staged=False)
+        assert score == 0.09
+        assert evolved["params"] == {"window": 10}

@@ -1,7 +1,7 @@
 # FTS 追赶机构水平全面改造计划（Institutional-Level Transformation Plan）
 
-> 版本: v2.62.0
-> 最后更新: 2026-08-09
+> 版本: v2.71.0
+> 最后更新: 2026-08-10
 > 状态: 规划中（文档先行，作为 FTS 全链路机构级改造总纲，子计划为执行细则）
 > 适用范围: FTS 全链路（L0 人类设定 / L1 元循环 / L2 演化 / L3 组合 / L4 信号与实盘反馈 / 基础设施）
 
@@ -13,7 +13,7 @@
 
 ### 0.1 现状（全链路快照，v2.60.0）
 
-FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（每日知识补给 + L1Verifier 锁定）→ L2 Evolution Loop（股票时序 / 期货横截面双模式，macro/GP/operator 三演化方式，UCT 父选择 + optuna 微调 + 三级评估链 + 6 项强制审计 + 消融/因果/鲁棒性/SHAP 四重审查 + 家族多样性约束）→ L3 Portfolio Loop（因子聚类 + PCA 压缩 + 正交化 + 信号合成五模式 + 粘性约束 + 漂移监控 + Regime 自适应权重）→ L4 信号产出（ScoredSignal 契约 → signal_bridge → 下游 FDT 执行）。
+FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（每日知识补给 + L1Verifier 锁定）→ L2 Evolution Loop（股票时序 / 期货横截面双模式，macro/GP/operator 三演化方式，UCT 父选择 + optuna 微调 + 三级评估链 + 6 项强制审计 + 消融/因果/鲁棒性/SHAP 四重审查 + 家族多样性约束）→ L3 Portfolio Loop（因子聚类 + PCA 压缩 + 正交化 + 信号合成六模式 + 粘性约束 + 漂移监控 + Regime 自适应权重）→ L4 信号产出（ScoredSignal 契约 → signal_bridge → 下游 FDT 执行）。
 
 关键现状参数：
 
@@ -23,8 +23,8 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | 算子库 | expr_dsl 注册表 ~50 算子（L0-L5 分层）；feature_ops 另一套注册表并存（GAP-S10 双轨） |
 | 挖掘吞吐 | 单机串行，每代 1 个后代因子，一次运行 50 代 → 候选量级几十个 |
 | 微观演化 | optuna 100 trials（micro_evolution.py `DEFAULT_N_TRIALS=100`） |
-| 评估口径 | 三级评估链 + 横截面多空回测；股票侧行业/市值中性化为可选参数（默认 None，GAP-S01） |
-| 组合层 | 期货有完整 L3（Elastic Net + Regime）；股票流水线缺 L3 组合层 |
+| 评估口径 | 三级评估链 + 横截面多空回测；行业/市值中性化 + Barra 风格中性化已接入评估链（GAP-S01/S02） |
+| 组合层 | 股票/期货统一 L3（PortfolioLoop 复用：Elastic Net + Regime + 优化器/风险平价） |
 | 数据深度 | 日线/分钟线为主（DUCKDB→TQ→AKSHARE→SYNTHETIC 多源），Wind/iFinD 增强，tick 源已接入但历史仅 ~42 分钟 |
 | 实盘边界 | FTS 只产信号（ScoredSignal），交易执行由下游 FDT 负责；实盘表现数据未回流 |
 
@@ -60,14 +60,14 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **L2** | 算子库 | ~50 算子 | 🟡 基本达标 | 🔴 差距 | 🔴 差距 |
 | **L2** | 搜索方法 | macro/GP/operator 三模式 | ✅ 达标 | 🟡 缺深度因子学习 | 🔴 缺深度/多目标/符号回归 |
 | **L2** | 过拟合控制 | walk-forward+多重检验+消融+因果+鲁棒性 | ✅ **局部领先** | 🟡 成本/容量保真不足 | 🟡 成本/容量保真不足 |
-| **L2** | 中性化 | 股票侧未接入（GAP-S01） | 🔴 差距 | 🔴 差距 | 🔴 差距 |
+| **L2** | 中性化 | 行业/市值中性化 + Barra 风格中性化 + 期货板块中性化已接入评估链（GAP-S01/S02/F03） | ✅ 达标 | ✅ 达标 | 🟡 缺全市场 Barra 暴露覆盖 |
 | **L2** | 去冗余 | 相关性预检+家族上限，无正交化闭环 | 🟡 差距 | 🔴 差距 | 🔴 差距 |
-| **L3** | 组合层 | 期货完整 / 股票缺失 | 🔴 股票差距 | 🔴 股票差距 | 🔴 股票差距 |
-| **L3** | 组合优化器 | Elastic Net + Regime（期货） | ✅ 达标 | 🟡 缺风险平价/协方差收缩 | 🔴 缺 ML 组合层 |
+| **L3** | 组合层 | 股票/期货统一 L3（PortfolioLoop 复用：聚类/PCA/正交化/六模式合成/Regime） | ✅ 达标 | ✅ 达标 | 🟡 差 ML 组合层 |
+| **L3** | 组合优化器 | Elastic Net + Regime + 风险平价/均值方差 + Ledoit-Wolf 收缩（optimizer 模式） | ✅ 达标 | ✅ 达标 | 🔴 缺 ML 组合层 |
 | **L3** | 衰减管理 | elite_tracker + 定期复审 | ✅ 达标 | 🟡 缺自动退役闭环 | 🟡 缺自动退役闭环 |
 | **L4** | 反馈闭环 | 信号→FDT，无实盘数据回流 | 🟡 差距 | 🔴 差距 | 🔴 差距 |
 | **L4** | 在线监控 | live_factor_monitor 框架 | ✅ 达标 | 🟡 缺实盘数据源 | 🟡 缺实盘数据源 |
-| **基础** | 回测保真 | 涨跌停/停牌/展期已建模，缺冲击成本/容量 | 🟡 差距 | 🔴 差距 | 🔴 差距 |
+| **基础** | 回测保真 | 涨跌停/停牌/展期/冲击成本/容量约束+容量分析报告已建模 | ✅ 达标 | 🟡 缺冲击成本实证标定 | 🟡 缺融资成本/实时成本监控 |
 | **基础** | 数据深度 | 日线/分钟线 + tick 初接 | ✅ 达标 | 🟡 缺 Level2/另类 | 🔴 缺 Level2/另类 |
 | **基础** | 计算资源 | 单机 | 🟡 需轻量并行 | 🔴 需并行工厂 | 🔴 需分布式/GPU |
 
@@ -107,6 +107,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **机构级标准** | 股票与期货共用同一组合层框架：权重学习（Ridge/ElasticNet）→ 因子正交化 → 组合优化（约束：多头、行业中性、换手上限）→ 信号输出 |
 | **影响** | 股票 alpha 无法形成有效组合；信号管道粗糙（方向翻转无校正、无成本约束），实盘落地风险高 |
 | **实施步骤** | ① 抽取期货 L3 组合层为公共组件（`portfolio_constructor` 复用）；② 股票演化接入 L3（Elastic Net 合成 + Regime 权重 + 多头约束）；③ 股票信号管道复用期货方向校正 + Ridge 权重学习（GAP-S04 联动） |
+| **完成记录** | ✅ v2.68.0：股票 L3 组合层复用期货组件——`PortfolioLoop(market="stock")` + CLI `portfolio run --universe stock` + `load_elite_factors` market 过滤 + `synthesize_signals` Elastic Net/Sharpe 权重 + Step 2.5 stock_regime 风格自适应 + `build_combo` 多头组合/成本模型 net 指标；CLI 股票分支 L3 完成后自动触发 `daily_signal_pipeline`（与期货对称）；`TestStockL3PortfolioLayer` 6 用例 + `TestCmdPortfolioRunStock` 3 用例 |
 | **测试方案** | 股票 L3 与期货 L3 组件复用性断言；TopN 组合回测 Sharpe/回撤；成本模型开启后 alpha 仍为正 |
 
 #### GAP-I501 回测成本/容量保真不足（冲击成本 + 容量限制未建模）（P0）
@@ -199,6 +200,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **机构级标准** | 因子入库即去冗余：新因子与既有 elite 计算相关矩阵，高相关（>0.9）→ 正交化残差入库或拒绝；维护因子正交基底 |
 | **影响** | elite 池相关性膨胀 → L3 组合夏普被稀释、换手成本非线性增长（已记录的教训） |
 | **实施步骤** | ① `_promote_to_elite` 增加与既有 elite 的相关性检查（>0.9 拒绝或正交化残差晋升）；② 晋升报告输出相关性明细；③ 正交化在 L2 与 L3 统一口径 |
+| **完成记录** | ✅ v2.71.0：L2 准入去冗余——`_check_elite_correlation`（`evolution_loop.py`）：演化因子晋升前扫描既有 elite 快照（排除 `_l2_seed_correlation_index.json`），复用 `BacktestPipeline._execute_factor_code` 逐个计算信号与候选因子做 Pearson 相关，相关绝对值 ≥ 阈值（默认 0.9）记录高相关对（`factor_name_b`/`factor_id_b`/`pearson`/`abs_pearson`，按 abs 降序）拒绝晋升并打日志；无既有 elite / 执行失败 / 全低相关返回 None 静默放行；容量护栏 `l2_elite_corr_max_scan`（默认 50）限制扫描数；种子因子（shadow_observe=False 首轮导入）跳过检查；`settings.py` 新增 `l2_elite_corr_threshold`/`l2_elite_corr_max_scan`/`l2_elite_corr_debug` 配置 + `FTS_L2_ELITE_CORR_*` 环境变量；新增 `tests/factor_engine/test_l2_elite_redundancy.py` 10 用例（高相关拦截/负高相关 abs/低相关放行/空 elite/索引跳过/容量护栏/执行失败容错 + 集成：shadow 拦截/种子跳过/低相关晋升） |
 | **测试方案** | 高相关因子晋升拦截；正交化残差与原始因子相关性≈0 |
 
 #### GAP-I302 组合优化器机构化（风险平价 / 协方差收缩 / 均值方差）（P1）
@@ -288,10 +290,10 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | 版本 | 阶段 | 缺陷项 | 核心内容 |
 |:-----|:-----|:-------|:---------|
 | v2.65.0 | 1A | GAP-I201 首期 | 批量候选生成 + 向量化批量粗筛（单机多进程），吞吐目标 ≥ 10× |
-| v2.66.0 | 1A | GAP-I501 | 冲击成本模型 + 容量限制接入回测流水线 |
-| v2.67.0 | 1B | GAP-I301 | 股票 L3 组合层（复用期货组件） |
-| v2.68.0 | 1B | GAP-I205 | 微演化自适应 trials + 早停 |
-| v2.69.0 | 1C | GAP-I206 | L2 准入去冗余/正交化闭环 |
+| v2.67.0 | 1A | GAP-I501 | 冲击成本模型 + 容量限制接入回测流水线 ✅ 已关闭 |
+| v2.68.0 | 1B | GAP-I301 | 股票 L3 组合层（复用期货组件）✅ 已关闭 |
+| v2.70.0 | 1B | GAP-I205 | 微演化自适应 trials + 早停 ✅ 已关闭 |
+| v2.71.0 | 1C | GAP-I206 | L2 准入去冗余/正交化闭环 ✅ 已关闭 |
 | v2.70.0 | 1C | GAP-I204 首期 | GP 多目标适应度（IC×换手×衰减） |
 | v2.71.0 | 1D | GAP-I401 | 实盘反馈契约 + 回流通道 + 对比报告 |
 | v2.72.0 | 1D | GAP-I101/I102 首期 | L1 批量候选 + 审查工作流骨架 + 全量回归 |
@@ -338,10 +340,10 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | plans/21-futures-maturity-optimization-plan.md | 期货流水线机构级缺陷（GAP-F01~F16）——Stage 1 前提，与本计划不重叠 |
 | plans/22-stock-pipeline-maturity-plan.md | 股票流水线成熟度（GAP-S01~S13）——本计划 GAP-I207/I301/I304 引用其 GAP-S01/S02/S04 |
 | plans/20-futures-roll-adjustment-plan.md | 期货展期（GAP-046）——回测保真基础，GAP-I501 前置 |
-| plans/19-adaptive-weight-l3-integration.md | L3 自适应权重（GAP-045）——GAP-I302 前置 |
+| plans/19-adaptive-weight-l3-integration.md | L3 自适应权重（GAP-045）——✅ 已关闭，GAP-I302 前置完成 |
 | GAP-037（深度学习未实现） | 本计划 GAP-I203 的既有登记 |
 | GAP-041（覆盖率 <90%） | Stage 1 回归门槛（16 模块补测） |
-| GAP-045（adaptive 未完整接入 L3） | 本计划 GAP-I302 的前置工作 |
+| GAP-045（adaptive 权重完整接入 L3） | ✅ 已关闭（v2.56.0，Phase 33：FactorStyle/style_tags 维度 + RegimeSmoother 平滑 + family×style 双维调整）——GAP-I302 前置完成 |
 | production_plan.md | 生产就绪路线——GAP-I401/I402 与生产监控联动 |
 
 > 去重原则：本计划只登记**机构级结构性差距**（吞吐/深度/中性化/组合器/反馈闭环等），单条执行细则由对应子计划承载；plans/21/22 已登记的 GAP-S/F 系列仅引用不重复登记。
@@ -376,5 +378,5 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | `fts/factor_engine/evolution_loop.py`（GAP-I201/I206）；`fts/factor_engine/evaluation_chain.py`（GAP-I207）；`fts/factor_engine/micro_evolution.py`（GAP-I205）；`fts/factor_engine/gp_evolver.py`（GAP-I204）；`fts/factor_engine/portfolio_loop.py` + `portfolio_optimizer.py` + `portfolio_constructor.py`（GAP-I301/I302/I303）；`fts/factor_engine/cost_model.py` + `backtest_pipeline.py`（GAP-I501）；`fts/factor_engine/meta_loop.py`（GAP-I101）；`fts/factor_engine/factor_inspector.py`（GAP-I102）；`fts/factor_engine/expr_dsl/registry.py`（GAP-I202）；`fts/ml/models.py`（GAP-I203）；`fts/factor_engine/elite_tracker.py` + `feedback_loop.py` + `signal_contract.py` + `bridge/signal_bridge.py`（GAP-I401/I305/I402）；`fts/factor_engine/factor_db/repository.py`（GAP-I305/I206）；`fts/monitor/live_factor_monitor.py`（GAP-I402） |
-| 可验证断言 | 20 项 GAP-I 全部登记（P0×5 / P1×10 / P2×5）；Stage 1 退出标准含吞吐 ≥10× 与 5 项 P0 关闭；GAP-I207/I304 引用 plans/22 GAP-S01/S02 不重复登记；GAP-I203 引用 GAP-037；路线图版本衔接 v2.65.0+ 与 plans/22 无冲突；实施按 §3 分阶段推进 |
+| 可验证断言 | 20 项 GAP-I 全部登记（P0×5 / P1×10 / P2×5）；Stage 1 退出标准含吞吐 ≥10× 与 5 项 P0 关闭；GAP-I207 已关闭（中性化接入主流程 v2.57.0）、GAP-I304 首期已落地（Barra 风格体系 v2.62.0）、GAP-I301/I501 已关闭（股票 L3 / 冲击成本+容量约束）；差距总览矩阵与 §0.1 现状参数表同步反映上述落地；GAP-I203 引用 GAP-037；路线图版本衔接 v2.65.0+ 与 plans/22 无冲突；实施按 §3 分阶段推进 |
 | 检验方式 | `python scripts/verify_doc_consistency.py`；各缺陷项落地时配套 `pytest tests/... -v` 回归；每个 Stage 退出时运行全量回归 + 一致性 13/13 |

@@ -265,7 +265,7 @@ class TestDirectoryLoading:
 
         stock_dir = seeds_dir / "stock"
         factors = load_factors_from_dir(stock_dir)
-        assert len(factors) == 645
+        assert len(factors) == 714
 
     def test_load_nonexistent_directory(self, tmp_path: Path):
         """不存在的目录返回空列表。"""
@@ -290,11 +290,11 @@ class TestLoadAllYamlSeeds:
     """测试全量加载 API。"""
 
     def test_load_all_seeds(self):
-        """加载所有市场种子（829 个）。"""
+        """加载所有市场种子（898 个）。"""
         from fts.factor_engine.seed_loader import load_all_yaml_seeds
 
         seeds = load_all_yaml_seeds()
-        assert len(seeds) == 829
+        assert len(seeds) == 898
 
     def test_load_futures_only(self):
         """仅加载期货种子（184 个）。"""
@@ -304,11 +304,11 @@ class TestLoadAllYamlSeeds:
         assert len(seeds) == 184
 
     def test_load_stock_only(self):
-        """仅加载股票种子（645 个）。"""
+        """仅加载股票种子（714 个，含 GAP-S05 A 股特有种子）。"""
         from fts.factor_engine.seed_loader import load_all_yaml_seeds
 
         seeds = load_all_yaml_seeds(market="stock")
-        assert len(seeds) == 645
+        assert len(seeds) == 714
 
     def test_load_stock_builtin_only(self):
         """仅加载股票内置种子（9 个）。"""
@@ -461,8 +461,8 @@ class TestIntegrityVerification:
 
         report = verify_yaml_integrity()
         assert report["valid"] is True
-        assert report["total_files"] == 26
-        assert report["total_factors"] == 829
+        assert report["total_files"] == 30
+        assert report["total_factors"] == 898
         assert len(report["errors"]) == 0
 
     def test_verify_report_structure(self):
@@ -563,15 +563,15 @@ class TestInputFieldEstimation:
         assert fields == ["close"]
 
     def test_estimate_lookback(self):
-        from fts.factor_engine.seed_loader import _estimate_lookback
+        from fts.factor_engine.expr_dsl.seed_analyzer import estimate_lookback_static
 
-        lb = _estimate_lookback("ts_sum(close, 20)")
+        lb = estimate_lookback_static("ts_sum(close, 20)")
         assert lb == 20
 
     def test_estimate_lookback_default(self):
-        from fts.factor_engine.seed_loader import _estimate_lookback
+        from fts.factor_engine.expr_dsl.seed_analyzer import estimate_lookback_static
 
-        lb = _estimate_lookback("rank(close)")
+        lb = estimate_lookback_static("rank(close)")
         assert lb == 10
 
 

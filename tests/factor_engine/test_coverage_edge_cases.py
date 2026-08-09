@@ -336,7 +336,7 @@ class TestEvolutionLoopResetLowIC:
         )
         mock_loop_methods = patch.multiple(loop,
             _check_factor_runtime=MagicMock(return_value=(True, "")),
-            _quick_prefilter=MagicMock(return_value=(True, "")),
+            _quick_prefilter=MagicMock(return_value=(True, "", 0.05)),
             _run_backtest_pipeline=MagicMock(return_value=None),
             _register_factor_baseline=MagicMock(return_value=None),
             _check_factor_data_quality=MagicMock(return_value=[]),

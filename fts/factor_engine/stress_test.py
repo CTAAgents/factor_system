@@ -162,10 +162,11 @@ class StressTester:
             if scenario["symbols"] != ["*"] and symbol not in scenario["symbols"]:
                 continue
 
-            # 切片日期范围
+            # 切片日期范围（索引统一转 datetime，兼容字符串/Range 索引）
             start_date = pd.Timestamp(scenario["date_range"][0])
             end_date = pd.Timestamp(scenario["date_range"][1])
-            mask = (df.index >= start_date) & (df.index <= end_date)
+            idx = pd.to_datetime(df.index, errors="coerce")
+            mask = (idx >= start_date) & (idx <= end_date)
             sliced = df.loc[mask]
 
             if len(sliced) < 2:

@@ -190,6 +190,13 @@ class EvolutionStateManager:
             state["experience_chain_ref"] = refs
             self.save(state)
 
+    def record_evolution_method(self, state: EvolutionState, method: str) -> None:
+        """记录演化方法分布计数（GAP-S11: operator/gp/macro 占比可观测）。"""
+        counts = state.get("evolution_method_counts", {})
+        counts[method] = counts.get(method, 0) + 1
+        state["evolution_method_counts"] = counts
+        self.save(state)
+
     # ─── 内部方法 ───
 
     def _try_load(self, fp: Path) -> Optional[EvolutionState]:

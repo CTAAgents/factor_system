@@ -40,6 +40,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
 
 from .contracts import (
     EconomicLogic,
+    FactorKind,
     FactorProgram,
     FactorSignature,
 )
@@ -629,6 +630,7 @@ def create_factor_program(
     family: Optional[str] = None,
     symbols: Optional[list[str]] = None,
     factor_version: str = "v2",
+    kind: FactorKind = FactorKind.CODE,
 ) -> FactorProgram:
     """创建一个新的因子程序实例。
 
@@ -665,6 +667,7 @@ def create_factor_program(
         symbols=normalized_symbols,
         factor_version=factor_version,
         is_multi_symbol=len(normalized_symbols) > 1,
+        kind=kind,
     )
 
 

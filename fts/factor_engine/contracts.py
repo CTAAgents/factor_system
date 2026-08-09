@@ -192,6 +192,8 @@ class BacktestMetrics(TypedDict, total=False):
     decay_6m: float                              # 6 个月 IC 衰减率（0~1, 越大衰减越快）
     ic_volatility: float                         # 跨窗口 IC 标准差（WalkForward, 0=单窗口）
     n_walk_windows: int                          # WalkForward 有效窗口数
+    layer_ic: dict                                # 分层 IC（GAP-S06）：{layer_name: ic_mean}
+    long_only_sharpe: float                      # 仅做多夏普（GAP-S07）
 
 
 class EconomicScore(TypedDict, total=False):
@@ -267,6 +269,7 @@ class EvolutionState(TypedDict, total=False):
     status: Literal["running", "paused", "completed", "circuit_broken"]
     last_error: Optional[str]
     experience_chain_ref: list[str]              # 经验链 trace_id 列表
+    evolution_method_counts: dict[str, int]      # GAP-S11: 演化方法分布（operator/gp/macro 计数）
     last_updated: str                            # ISO 8601
     schema_version: str                          # 状态 schema 版本（= STATE_SCHEMA_VERSION）
 
@@ -565,6 +568,7 @@ class PortfolioCombo(TypedDict, total=False):
     synthesis_mode: Literal["equal_weight", "sharpe_weight", "lightgbm"]
     signals: list[PortfolioSignal]
     combo_sharpe: float           # 组合整体夏普
+    net_combo_sharpe: Optional[float]  # 扣除交易成本后的净夏普（GAP-L305，None=未启用成本模型）
     combo_turnover: float         # 组合整体换手率
     max_correlation: float        # 组合内最大因子间相关性
     n_factors: int                # 最终保留因子数
@@ -722,6 +726,30 @@ class MultiSourceDisagreement(TypedDict, total=False):
 
 # ─── L3 组合漂移监控 ──────────────────────────────────────
 
+# ─── L3 组合漂移告警配置（GAP-F13，v2.67.0）──────────────────
+
+class DriftAlertConfig(TypedDict, total=False):
+    """L3 组合漂移告警配置 — 超阈值告警 + 可选自动重平衡。
+
+    阈值:
+        - overlap_threshold: 成员重合率下限（低于该值触发告警，默认 0.50）
+        - weight_l1_threshold: 权重 L1 变化率上限（高于该值触发告警，默认 0.40）
+    重平衡:
+        - trigger_rebalance: 超阈值时是否自动触发粘性约束重平衡（默认 False）
+    """
+    overlap_threshold: float        # 成员重合率下限（默认 0.50）
+    weight_l1_threshold: float      # 权重 L1 变化率上限（默认 0.40）
+    trigger_rebalance: bool         # 是否自动触发粘性约束重平衡（默认 False）
+
+
+DEFAULT_DRIFT_ALERT_CONFIG: DriftAlertConfig = DriftAlertConfig(
+    overlap_threshold=0.50,
+    weight_l1_threshold=0.40,
+    trigger_rebalance=False,
+)
+"""v2.67.0 锁定的 L3 漂移告警默认配置。"""
+
+
 class DriftMetrics(TypedDict, total=False):
     """L3 组合漂移监控指标 — 每次组合构建后记录。
 
@@ -795,10 +823,12 @@ __all__ = [
     "L3MetaLoopState",
     "DEFAULT_L3_VERIFIER_CONFIG",
     "DEFAULT_L3_BUDGET",
-    # ─── L3 粘性约束 + 漂移监控（v2.11.0）─────────────
+    # ─── L3 粘性约束 + 漂移监控（v2.11.0 / v2.67.0 GAP-F13）─────────────
     "StickyConfig",
     "DEFAULT_STICKY_CONFIG",
     "DriftMetrics",
+    "DriftAlertConfig",
+    "DEFAULT_DRIFT_ALERT_CONFIG",
     # ─── L3 自适应权重（A.3 / v2.56.0）────────────────
     "AdaptiveWeightConfig",
     "DEFAULT_ADAPTIVE_CONFIG",

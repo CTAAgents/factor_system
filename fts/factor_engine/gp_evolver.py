@@ -431,6 +431,23 @@ class GPEvolver:
         if factor_values is None or factor_values.isna().all():
             return FitnessResult(fitness=-10.0, evaluation_time_ms=0)
 
+        # 对齐流水线后处理（BacktestPipeline._execute_factor_code: nan_to_num + clip），
+        # 防止 GP 选中下游会被裁剪为常数/退化的表达式（如 mul(volume, volume)）。
+        factor_values = pd.Series(
+            np.clip(
+                np.nan_to_num(
+                    factor_values.to_numpy(dtype=float),
+                    nan=0.0, posinf=1.0, neginf=-1.0,
+                ),
+                -10.0, 10.0,
+            ),
+            index=factor_values.index,
+        )
+        # 与 _check_factor_runtime 同口径: 近常数信号直接罚分，
+        # 避免 GP 选中 low/close 这类浮点噪声级变化、下游必被「常数信号」拦截的表达式。
+        if float(factor_values.std(ddof=0)) < 1e-12:
+            return FitnessResult(fitness=-5.0, evaluation_time_ms=0)
+
         # 计算 IC（使用训练集，防止数据泄露）
         target = eval_data[self._target_col]
         aligned = pd.concat([factor_values, target], axis=1).dropna()
@@ -804,7 +821,8 @@ def factor_program(data, params):
         return x.rolling(window).sum()
 
     def ts_product(x, window=20):
-        return x.rolling(window).prod()
+        # pandas ≥ 2.1 移除 Rolling.prod，改用 apply(np.prod)（与 feature_ops 对齐）
+        return x.rolling(window).apply(np.prod, raw=True)
 
     def ts_rank(x, window=20):
         return x.rolling(window).rank(pct=True)

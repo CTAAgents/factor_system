@@ -8,12 +8,12 @@ fts.factor_engine.cost_model — 交易成本模型。
     model = TransactionCostModel()
     adjusted_metrics = model.adjust(backtest_metrics, signal, volume, market="futures")
 
-版本: v0.1.0
+版本: v0.2.0（GAP-F11: 展期成本联动换月日历实际价差）
 """
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Any, Optional, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -132,6 +132,36 @@ class TransactionCostModel:
             self._default_config,
         )
 
+    @staticmethod
+    def _roll_events_to_spread_map(
+        roll_events: list[Any],
+    ) -> dict[str, float]:
+        """将 RollEvent 列表转换为 {date_str: actual_spread_bps} 映射。
+
+        RollEvent 需包含 date（date 对象）、old_close、new_close 属性。
+        价差 = |new_close / old_close - 1| × 10000（基点）。
+        old_close 为 0 或缺失时跳过该事件。
+
+        Args:
+            roll_events: RollEvent 对象列表（来自 RollCalendar.build_roll_calendar）。
+
+        Returns:
+            {date_str: spread_bps} 字典，spread_bps 为正值。
+        """
+        spread_map: dict[str, float] = {}
+        for ev in roll_events:
+            old_close = getattr(ev, "old_close", None)
+            new_close = getattr(ev, "new_close", None)
+            ev_date = getattr(ev, "date", None)
+            if old_close is None or new_close is None or ev_date is None:
+                continue
+            old_close_f = float(old_close)
+            if old_close_f <= 0:
+                continue
+            spread_bps = abs(float(new_close) / old_close_f - 1.0) * 10000.0
+            spread_map[str(ev_date)] = spread_bps
+        return spread_map
+
     def adjust(
         self,
         metrics: BacktestMetrics,
@@ -141,6 +171,7 @@ class TransactionCostModel:
         market: str = "futures",
         dates: np.ndarray | None = None,
         roll_dates: set[str] | None = None,
+        roll_events: list[Any] | None = None,
     ) -> AdjustedMetrics:
         """对回测指标执行交易成本调整。
 
@@ -160,6 +191,8 @@ class TransactionCostModel:
             dates: 日期索引数组（与 signal 对齐，用于匹配换月日；v2.58.0 GAP-046）。
             roll_dates: 换月日期集合（ISO 字符串）；持仓穿越换月日时扣除展期成本
                 = |position| × roll_cost_bps（v2.58.0 GAP-046）。
+            roll_events: RollEvent 列表（GAP-F11，v2.67.0）。
+                提供时优先使用实际价差计算展期成本；未提供时回退到 roll_dates + 固定 bps。
 
         Returns:
             AdjustedMetrics（含展期成本统计）。
@@ -182,11 +215,19 @@ class TransactionCostModel:
                 signal, config.get("impact_bps_per_pct", 2.0),
             )
 
-        # 2.5 展期成本（v2.58.0 GAP-046）：持仓穿越换月日扣 |position| × roll_cost_bps
+        # 2.5 展期成本（v2.58.0 GAP-046 / v2.67.0 GAP-F11）
+        # 优先使用 roll_events 实际价差；未提供时回退 roll_dates + 固定 bps
         roll_cost_bps = config.get("roll_cost_bps", 0.0)
-        roll_cost_total = self._estimate_roll_cost(
-            signal, dates, roll_dates, roll_cost_bps,
-        )
+        if roll_events:
+            spread_map = self._roll_events_to_spread_map(roll_events)
+            roll_cost_total = self._estimate_roll_cost(
+                signal, dates, roll_dates, roll_cost_bps,
+                roll_events=roll_events, spread_map=spread_map,
+            )
+        else:
+            roll_cost_total = self._estimate_roll_cost(
+                signal, dates, roll_dates, roll_cost_bps,
+            )
 
         # 3. 总成本估算（基点）
         slippage = config.get("slippage_bps", 0.5)
@@ -228,31 +269,77 @@ class TransactionCostModel:
         dates: np.ndarray | None,
         roll_dates: set[str] | None,
         roll_cost_bps: float,
+        roll_events: list[Any] | None = None,
+        spread_map: dict[str, float] | None = None,
     ) -> float:
         """估算展期成本（基点）。
 
-        持仓穿越换月日时，扣除 |position| × roll_cost_bps。
-        dates / roll_dates 缺失或 roll_cost_bps=0 时返回 0（不产生展期成本）。
+        持仓穿越换月日时，扣除展期成本。
+        有 roll_events + spread_map 时优先使用实际价差（超出固定 bps 时用价差），
+        否则用 |position| × roll_cost_bps 固定 bps（v2.58.0 GAP-046 兼容）。
+        dates / roll_dates 缺失或 roll_cost_bps=0 时返回 0。
 
         Args:
             signal: 持仓信号数组（-1~+1）。
             dates: 日期索引数组（与 signal 对齐）。
-            roll_dates: 换月日期集合（ISO 字符串）。
-            roll_cost_bps: 展期成本（基点/次）。
+            roll_dates: 换月日期集合（ISO 字符串，回退用）。
+            roll_cost_bps: 固定展期成本（基点/次，回退用）。
+            roll_events: RollEvent 列表（GAP-F11，价差联动，可选）。
+            spread_map: {date_str: actual_spread_bps} 映射（GAP-F11，可选）。
 
         Returns:
             展期成本合计（基点）。
         """
-        if (
-            not roll_dates or dates is None or roll_cost_bps <= 0
-            or len(signal) == 0 or len(dates) != len(signal)
-        ):
+        if dates is None or roll_cost_bps <= 0 or len(signal) == 0 or len(dates) != len(signal):
             return 0.0
+        # 用 spread_map 确定每个换月日的 bps
+        # 当 roll_events 提供且对应日期有 spread_map 时，若实际价差 > 固定 bps 则用价差
+        effective_bps_map: dict[str, float] = {}
+        if roll_events and spread_map:
+            for ev_date_str, spread_bps in spread_map.items():
+                if spread_bps > roll_cost_bps:
+                    effective_bps_map[ev_date_str] = spread_bps
+                else:
+                    effective_bps_map[ev_date_str] = roll_cost_bps
+        # 无 roll_events 回退到 roll_dates（所有换月日都用固定 bps）
+        if not effective_bps_map:
+            if not roll_dates:
+                return 0.0
+            for d in roll_dates:
+                effective_bps_map[d] = roll_cost_bps
+
         total = 0.0
         for t in range(len(signal)):
-            if abs(signal[t]) > 1e-8 and str(pd.Timestamp(dates[t]).date()) in roll_dates:
-                total += abs(signal[t]) * roll_cost_bps
+            if abs(signal[t]) > 1e-8:
+                d_str = str(pd.Timestamp(dates[t]).date())
+                bps = effective_bps_map.get(d_str)
+                if bps is not None:
+                    total += abs(signal[t]) * bps
         return float(total)
+
+    @staticmethod
+    def impact_cost(
+        volume_pct: float,
+        impact_bps_per_pct: float,
+        ref_pct: float = 0.01,
+    ) -> float:
+        """square-root 冲击成本模型（GAP-L305，衔接总纲 GAP-I501/I303）。
+
+        冲击成本与成交量占比呈平方根关系：
+            cost_bps = impact_bps_per_pct * sqrt(volume_pct / ref_pct)
+
+        Args:
+            volume_pct: 持仓占日均成交额比例（0~1，如 0.05 = 占 5%）
+            impact_bps_per_pct: 参考成交量占比（ref_pct）对应的冲击成本（基点）
+            ref_pct: 参考成交量占比（默认 0.01 = 1%）
+
+        Returns:
+            冲击成本（基点，单调递增且非负）。
+        """
+        if volume_pct <= 0.0 or impact_bps_per_pct <= 0.0:
+            return 0.0
+        ratio = float(volume_pct) / float(ref_pct)
+        return float(impact_bps_per_pct) * np.sqrt(max(ratio, 1e-12))
 
     @staticmethod
     def _estimate_impact(

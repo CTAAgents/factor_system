@@ -1,8 +1,8 @@
 # L3/L4 机构级追赶专项实施计划（组合构建 + 优化执行 + 反馈闭环）
 
-> 版本: v2.62.0
-> 最后更新: 2026-08-09
-> 状态: 规划中（文档先行，作为 L3 组合层与 L4 优化执行反馈层的专项推进主线）
+> 版本: v2.71.0
+> 最后更新: 2026-08-10
+> 状态: 已收尾（GAP-L301~L310 + L401/L402 全部落地，v2.61.0~v2.69.0）
 > 适用范围: L3 Portfolio Loop（组合构建）/ L4 优化与执行反馈层（资金分配·成本·归因·实盘反馈）/ L4 表达式组合算子层
 
 > ⚠️ **计划定位说明**：本计划是 [23-institutional-transformation-plan.md](./23-institutional-transformation-plan.md)（机构级改造总纲，GAP-I001~I503）在 **L3/L4 两个层级**的执行细则。总纲只登记结构性差距；本计划把 L3/L4 相关差距展开到「代码级实施步骤 + 测试方案」粒度，缺陷编号沿用总纲 GAP-I 系列、新增执行级编号 GAP-L3xx / GAP-L4xx 承接，**不重复登记、只引用展开**。与 plans/21（期货）、plans/22（股票）的关系为「层内专项 ↔ 流水线专项」：GAP-S01/S02（股票中性化/风格）、GAP-F 系列（期货成熟度）为前置依赖。
@@ -116,25 +116,25 @@
 | **实施步骤** | ① `RiskModelEstimator`：输入因子收益矩阵 R → 输出收缩 Σ（scipy/sklearn `ledoit_wolf` 或 numpy 自实现，异常时回退对角+εI）；② 输出 `risk_model` 报告（特征值/条件数/特异风险）；③ `synthesize_signals` 增加 `optimizer` 模式数据接线（见 GAP-L303） |
 | **测试方案** | 收缩协方差正定性；高相关合成数据收缩后条件数改善；与样本协方差对比断言；`test_risk_model_estimator.py` |
 
-#### GAP-L303 PortfolioOptimizer 未接入 L3 主流程（P0）
+#### GAP-L303 PortfolioOptimizer 未接入 L3 主流程（P0）✅ 已处理（v2.61.0 B 阶段）
 
 | 维度 | 内容 |
 |---|---|
 | **代码现状** | `PortfolioLoop.run()`（portfolio_loop.py L2807-3206）Step 2 调用 `synthesize_signals(factors, self.synthesis_mode, elite_dir=...)`（L3028）**未传 returns_matrix**；`synthesize_signals` 的 `optimizer` 分支（L825-855）检测到 `returns_matrix is None` 即回退 sharpe_weight → **optimizer 模式实际从未生效**；`run()` 签名无 returns_matrix 参数 |
 | **机构级标准** | 组合优化器作为一等模式可切换：MVO（协方差收缩）/ 风险平价 / Elastic Net，约束含多头、行业中性、换手上限；调用链完整 |
 | **影响** | 已实现的机构化优化器是"死代码"；用户无法获得风险预算视角的权重 |
-| **实施步骤** | ① `run()` 增加 `returns_matrix: Optional[pd.DataFrame]=None` 参数，Step 0.5 加载期货/股票面板后经 GAP-L301 构建因子收益矩阵；② `synthesize_signals` optimizer 分支支持 `expected_returns`（来自 Alpha 预测，缺省用 Sharpe/IC 加权代理）与约束配置透传；③ `PortfolioLoop.__init__` 增加 `optimizer_mode`（mvo/risk_parity/elastic_net）与 `optimizer_config`（中性化开关/换手/成本参数）；④ CLI `--mode optimizer` 生效并输出权重报告 |
-| **测试方案** | optimizer 模式端到端跑通（含约束满足断言：Σw≤1、w_i≤max_weight、换手≤cap）；三模式（elastic_net/risk_parity/mvo）权重对比报告；回退路径（无 scipy/无矩阵）保持可用；`test_portfolio_loop.py` 全绿 |
+| **实施步骤** | ① `run()` 增加 `factor_returns` 参数（GAP-L301 因子收益矩阵），Step 2 透传；② `synthesize_signals` optimizer 分支列对齐 + `expected_returns`（Sharpe 代理）+ 约束配置透传 + Ledoit-Wolf 收缩协方差；③ `PortfolioLoop.__init__` 增加 `optimizer_mode`（risk_parity/mvo）/`optimizer_config`；④ CLI `--mode optimizer` + `--optimizer-mode` 生效；⑤ `build_combo` 透传 factor_returns 实测化联动 |
+| **测试方案** | optimizer 模式端到端跑通（约束满足断言）；三模式权重对比；回退路径保持可用；`test_portfolio_loop.py`/`test_portfolio_optimizer.py` 全绿 |
 
-#### GAP-L304 组合层无行业/市值中性化约束（P0）
+#### GAP-L304 组合层无行业/市值中性化约束（P0）✅ 已处理（v2.61.0 B 阶段）
 
 | 维度 | 内容 |
 |---|---|
 | **代码现状** | ① 股票评估侧已有 `_neutralize_signal_matrix`（evaluation_chain.py L670-750）但默认 None 跳过（GAP-S01 已登记）；② 组合优化器约束仅 max_weight/杠杆/换手/VaR（portfolio_optimizer.py L213-243），**无行业/市值中性约束**；③ `PortfolioOptimizer` 签名无行业暴露矩阵输入 |
 | **机构级标准** | 组合优化显式约束行业/市值暴露在基准范围内（|行业偏离| ≤ tol），权重在"中性化后再优化"或"优化中加暴露惩罚"二选一；剥离风格赌注 |
 | **影响** | 组合权重可能隐含行业/市值风格赌注，回测收益含风格贡献而非纯 alpha（与 GAP-S01 联动，组合层是 S01 的下游污染出口） |
-| **实施步骤** | ① `OptimizerConfig` 增加 `neutralization`（None / industry / both）与 `exposure_tolerance`；② `PortfolioOptimizer` 增加暴露约束：行业暴露矩阵 B（T 股票×行业）投影，|B'w − b_benchmark| ≤ tol；③ 期货侧（板块映射，`FUTURES_SECTOR_MAP`）同步适用；④ 组合报告输出中性化前后收益对比 |
-| **测试方案** | 注入行业偏离合成数据 → 约束生效断言；中性化前后 IC/收益对比；暴露矩阵缺失时降级警告；`test_portfolio_optimizer.py` |
+| **实施步骤** | ① `OptimizerConfig` 增加 `neutralization`（industry/style）与 `exposure_tolerance`；② `PortfolioOptimizer.optimize` 增加 `exposure_matrix`/`target_exposure` 参数 + SLSQP 暴露约束（\|B'w − target\| ≤ tol）；③ `synthesize_signals`/`PortfolioLoop.run` 透传（optimizer_config 含 exposure_matrix）；④ numpy 降级路径记录不校验警告 |
+| **测试方案** | 注入行业偏离合成数据 → 约束生效断言（\|B'w\| ≤ tol）；target_exposure 生效；维度不匹配 ValueError；未启用 neutralization 时忽略；`test_portfolio_optimizer.py` |
 
 ### 2.2 P1 — 重要差距（影响组合质量与可解释性）
 
@@ -180,8 +180,7 @@
 | **测试方案** | 新算子边界测试（空数据/全 NaN/零除）；沙箱编译通过；GP/算子演化回归（用新算子组合的表达式可正常评估）；`test_registry.py` |
 
 ### 2.3 P2 — 一般差距（增强项）
-
-#### GAP-L308 Regime 权重数据化（替代硬编码查表）（P2）
+#### GAP-L308 Regime 权重数据化（替代硬编码查表）（P2）✅ 已处理（v2.68.0）
 
 | 维度 | 内容 |
 |---|---|
@@ -189,8 +188,9 @@
 | **机构级标准** | 各制度下因子家族有效性由数据估计（样本内滚动回归/状态条件 IC），权重倍率带置信区间；制度切换平滑（RegimeSmoother 已有，衔接 A.3） |
 | **实施步骤** | ① 新增条件因子有效性估计：按 regime 分桶统计各家族历史 IC 均值/胜率 → 生成数据驱动倍率表（替代/校准硬编码表）；② 倍率表落盘 `_data/l3_regime_multipliers.yaml`（易变配置进 `docs/harness/_data/` 原则）；③ 输出硬编码 vs 数据驱动对比报告 |
 | **测试方案** | 数据驱动倍率与合成 regime 标签一致性；配置缺失回退硬编码表；`test_regime_adaptive_weight.py` |
+| **落地** | ✅ `regime_multipliers.py`（RegimeMultiplierEstimator，钳制+最小样本回退+对比报告）；倍率表落盘 `docs/harness/_data/l3_regime_multipliers.yaml`；`load_data_driven_multipliers` 优先接线（缺失回退硬编码）；修复 family_global 跨 regime 桶覆盖 bug；14 测试用例 |
 
-#### GAP-L402 L4 实盘反馈闭环（P2）
+#### GAP-L402 L4 实盘反馈闭环（P2）✅ 已处理（v2.66.0）
 
 > 承接总纲 GAP-I401（P0 登记）——本项为 L4 层执行细则，依赖下游 FDT 配合。
 
@@ -200,8 +200,9 @@
 | **机构级标准** | 实盘表现闭环：成交/净值回流 → 实盘 IC vs 回测 IC 对比 → 衰减修正 → 自动退役/重校准（联动 GAP-I305） |
 | **实施步骤** | ① 定义 `LiveFeedbackRecord` 契约（factor_id/信号日/信号值/持仓收益/换手/滑点）；② `feedback_loop.py` 增加导入 CLI + DuckDB 表 + 实盘 IC 计算；③ 实盘 IC vs 回测 IC 对比报告接入 L3 Step 1.5（OOS 外推验证数据源扩展）；④ 衰减退役逻辑（GAP-I305）接入实盘反馈 |
 | **测试方案** | 反馈记录契约校验；实盘 IC 对比报告；导入异常降级；`test_feedback_loop.py` |
+| **落地** | ✅ `LiveFeedbackRecord` 契约 + `validate_live_feedback_record` + `LiveFeedbackImporter`（DuckDB 优先/JSONL 回退）+ `LiveVsBacktestICReport` 衰减判定；CLI `fts feedback import/live-ic`；5 测试用例 |
 
-#### GAP-L309 组合层数据规模扩展（P2）
+#### GAP-L309 组合层数据规模扩展（P2）✅ 已处理（v2.68.0）
 
 | 维度 | 内容 |
 |---|---|
@@ -209,6 +210,14 @@
 | **机构级标准** | 全市场（3000+ 只）× 数年 Point-in-time 数据（去幸存者偏差）；分钟级因子在分钟数据上验证 |
 | **实施步骤** | ① 面板加载参数配置化（`max_stocks`/`days` 进配置，默认提升至全 CSI300 + 500 天）；② 数据缺失时按流动性分层抽样（替代随机 50 只）；③ 记录数据覆盖与幸存者偏差提示 |
 | **测试方案** | 参数化面板加载单测；抽样逻辑稳定性；`test_data_provider_panel.py` |
+| **落地** | ✅ `PanelLoadingConfig`（默认全 CSI300×500 天）；`_liquidity_stratified_sample` 桶间轮询分层抽样；`_load_panel_with_liquidity_sampling` 覆盖/幸存者偏差日志；两个权重函数默认 days 120→500、max_stocks 50→0；12 测试用例 |
+
+#### GAP-L310 种子加载链缺陷修复（v2.68.0 全量回归暴露）✅ 已处理（v2.68.0）
+
+| 维度 | 内容 |
+|---|---|
+| **代码现状** | 全量回归 21 例失败：① `seed_loader.py` L23 未导入 `FactorKind` 但 YAML 因子 `kind=FactorKind.*` 引用（NameError → 期货种子 81/184 加载失败）；② 多行 `field_defs` 拼接进函数体后续行无/残留缩进 → unexpected indent（analyst_revision/fundamental 等 38 处编译失败）；③ 测试断言引用已迁移函数 `_estimate_lookback` |
+| **落地** | ✅ L23 补 `FactorKind` 导入；`_fundamental_factor_from_yaml` 多行 field_defs strip+统一 4 空格缩进；test_seed_loader 改引 `seed_analyzer.estimate_lookback_static`；test_seed_pool/test_seed_loader 种子计数断言同步 714/898/30 |
 
 ---
 
@@ -219,19 +228,19 @@
 | 版本 | 阶段 | 缺陷项 | 核心交付 |
 |:-----|:-----|:-------|:---------|
 | v2.65.0 | A | GAP-L301 + L302 | 因子收益序列层（`factor_returns.py`）+ 风险模型估计器（收缩 Σ）→ **组合夏普/相关性实测化**，Verifier 校验实测指标 |
-| v2.66.0 | A | GAP-L305 | 冲击成本函数 + 换手惩罚入优化目标 + net 指标输出（衔接 GAP-I501/I303） |
-| v2.67.0 | B | GAP-L303 | `PortfolioOptimizer` 接入 L3 主流程（returns_matrix 接线 + optimizer_mode/optimizer_config + CLI） |
-| v2.68.0 | B | GAP-L304 | 组合层行业/市值中性化约束（期货板块映射 + 股票行业映射，联动 GAP-S01/S02） |
-| v2.69.0 | C | GAP-L307 | 归因体系接入 L3（RiskAttributor → 组合健康报告） |
-| v2.70.0 | C | GAP-L306 | 组合层 Walk-Forward（滚动权重验证 + 一致性得分） |
-| v2.71.0 | D | GAP-L402 | L4 实盘反馈契约 + 回流通道 + 实盘 IC 对比（衔接总纲 GAP-I401） |
-| v2.72.0 | D | GAP-L401 + L308 | L4 表达式组合算子扩充 + Regime 权重数据化 + 全量回归 |
+| v2.66.0 | A | GAP-L305 | 冲击成本函数 + 换手惩罚入优化目标 + net 指标输出（衔接 GAP-I501/I303）✅ **提前完成** |
+| v2.67.0 | B | GAP-L303 | `PortfolioOptimizer` 接入 L3 主流程（returns_matrix 接线 + optimizer_mode/optimizer_config + CLI）✅ **提前至 v2.61.0 完成** |
+| v2.68.0 | B | GAP-L304 | 组合层行业/市值中性化约束（期货板块映射 + 股票行业映射，联动 GAP-S01/S02）✅ **提前至 v2.61.0 完成** |
+| v2.69.0 | C | GAP-L307 | 归因体系接入 L3（RiskAttributor → 组合健康报告）✅ **提前至 v2.66.0 完成** |
+| v2.70.0 | C | GAP-L306 | 组合层 Walk-Forward（滚动权重验证 + 一致性得分）✅ **提前至 v2.66.0 完成** |
+| v2.71.0 | D | GAP-L402 | L4 实盘反馈契约 + 回流通道 + 实盘 IC 对比（衔接总纲 GAP-I401）✅ **提前至 v2.66.0 完成** |
+| v2.72.0 | D | GAP-L401 + L308 | L4 表达式组合算子扩充 + Regime 权重数据化 + 全量回归 ✅ **L401 提前至 v2.66.0 / L308 完成于 v2.68.0** |
 
 **阶段退出标准**：
-- **A 阶段（v2.66.0 后）**：`build_combo` 支持实测模式；收缩 Σ 正定性；net/gross 指标同窗输出；全部 L3 单测 + 回归全绿。
-- **B 阶段（v2.68.0 后）**：optimizer 三模式端到端跑通；行业/市值约束生效；股票/期货 L3 统一框架。
-- **C 阶段（v2.70.0 后）**：L3 每次运行输出归因 + Walk-Forward 报告；一致性得分纳入 Verifier 参考。
-- **D 阶段（v2.72.0 后）**：实盘反馈通道可用；组合算子库扩充完成；数据驱动倍率表落地；全量回归 + 一致性 13/13。
+- **A 阶段（v2.66.0 后）**：`build_combo` 支持实测模式；收缩 Σ 正定性；net/gross 指标同窗输出；全部 L3 单测 + 回归全绿。✅ 已达成
+- **B 阶段（v2.68.0 后）**：optimizer 三模式端到端跑通；行业/市值约束生效；股票/期货 L3 统一框架。✅ 已达成（v2.61.0）
+- **C 阶段（v2.70.0 后）**：L3 每次运行输出归因 + Walk-Forward 报告；一致性得分纳入 Verifier 参考。✅ 已达成（v2.66.0）
+- **D 阶段（v2.72.0 后）**：实盘反馈通道可用；组合算子库扩充完成；数据驱动倍率表落地；全量回归 + 一致性 13/13。✅ 已达成（v2.68.0 收尾，L308/L309 落地）
 
 ---
 
@@ -291,6 +300,6 @@
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `fts/factor_engine/portfolio_loop.py`（GAP-L301/L303/L304/L305/L307：synthesize_signals L662-876、build_combo L1562-1682、run L2807-3206、regime 表 L363-464）；`fts/factor_engine/portfolio_optimizer.py`（GAP-L302/L303/L304/L305：L84-125、L193-264）；`fts/factor_engine/portfolio_constructor.py`（L3 复用基线）；`fts/factor_engine/capital_allocator.py` + `cost_model.py` + `risk_attributor.py`（GAP-L305/L307/L402 孤立模块接线）；`fts/factor_engine/walk_forward.py`（GAP-L306 组合层扩展）；`fts/factor_engine/expr_dsl/registry.py` + `operator_evolution.py`（GAP-L401）；`fts/factor_engine/signal_contract.py` + `bridge/signal_bridge.py` + `feedback_loop.py`（GAP-L402）；`fts/factor_engine/evaluation_chain.py`（L670-750 `_neutralize_signal_matrix`，GAP-L304 前置） |
-| 可验证断言 | 11 项执行级缺陷全部登记（P0×4：L301~L304 / P1×4：L305~L307+L401 / P2×3：L308+L309+L402）；承接总纲 GAP-I301/I302/I303/I305/I401/I501 并引用不重复；阶段 A~D 退出标准可验证（实测指标/收缩正定性/三模式/净成本/归因误差/走航一致性/反馈契约/算子沙箱）；版本衔接 v2.65.0~v2.72.0 与总纲 Stage 1 对齐 |
-| 检验方式 | `python scripts/verify_doc_consistency.py`；每缺陷项落地配套 `pytest tests/... -v`；每阶段退出运行全量回归 + 一致性 13/13；同步登记 `08-gap-analysis.md` 与 `09-advancement-plan.md` |
+| 代码→文档映射 | `fts/factor_engine/portfolio_loop.py`（GAP-L301/L303/L304/L305/L307/L308/L309：synthesize_signals L662-876、build_combo L1562-1682、run L2807-3206、regime 表 L363-464、PanelLoadingConfig/抽样 L1030+）；`fts/factor_engine/portfolio_optimizer.py`（GAP-L302/L303/L304/L305：L84-125、L193-264）；`fts/factor_engine/portfolio_constructor.py`（L3 复用基线）；`fts/factor_engine/capital_allocator.py` + `cost_model.py` + `risk_attributor.py`（GAP-L305/L307/L402 孤立模块接线）；`fts/factor_engine/walk_forward.py`（GAP-L306 组合层扩展）+ `portfolio_walk_forward.py`（新增）；`fts/factor_engine/expr_dsl/registry.py` + `operator_evolution.py`（GAP-L401）；`fts/factor_engine/signal_contract.py` + `bridge/signal_bridge.py` + `feedback_loop.py`（GAP-L402）；`fts/factor_engine/regime_multipliers.py` + `docs/harness/_data/l3_regime_multipliers.yaml`（GAP-L308，新增）；`fts/factor_engine/seed_loader.py`（GAP-L310：L23 `FactorKind` 导入 + `_fundamental_factor_from_yaml` 多行 field_defs 缩进修复）；`fts/factor_engine/evaluation_chain.py`（L670-750 `_neutralize_signal_matrix`，GAP-L304 前置） |
+| 可验证断言 | 12 项执行级缺陷全部登记且 **12/12 已关闭**（P0×4：L301~L304 / P1×4：L305~L307+L401 / P2×4：L308+L309+L310+L402）；承接总纲 GAP-I301/I302/I303/I305/I401/I501 并引用不重复；阶段 A~D 退出标准全部达成（实测指标/收缩正定性/三模式/净成本/归因误差/走航一致性/反馈契约/算子沙箱）；版本衔接 v2.65.0~v2.72.0 与总纲 Stage 1 对齐 |
+| 检验方式 | `python scripts/verify_doc_consistency.py`；每缺陷项落地配套 `pytest tests/... -v`（L308: test_regime_multipliers.py 14 用例、L309: test_data_provider_panel.py 12 用例、L310: test_seed_pool+test_seed_loader 83 用例）；每阶段退出运行全量回归 + 一致性 13/13；同步登记 `08-gap-analysis.md` 与 `09-advancement-plan.md` |
