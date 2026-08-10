@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.88.0
+> 版本: v2.89.0
 > 最后更新: 2026-08-10
 
 ---
@@ -281,6 +281,8 @@ TOTAL                                      20326   1254    94%
 | **<90%（缺口）** | 0 | 无（v2.88.0 GAP-F16 补齐：`cross_market/data_adapter`/`factor_clustering`/`tqsdk_tick_source`/`factor_db/migrate_from_json`/`evolution_loop`/`data_quality_monitor`/`ifind_source`/`data`/`factor_db/repository`/`ml/models`/`wind_source`/`factor_screener`/`causal_validator`/`contracts` 14 个缺口模块全部 ≥90%） |
 
 > 注：v2.88.0（GAP-F16）三分组补齐 14 个 <90% 模块测试 +341 用例（外部数据源网络/鉴权/超时/降级兜底 mock + 核心引擎异常分支 + 参数校验降级路径），全量回归 5132 passed，TOTAL 覆盖率 94.31%，缺口清零。
+>
+> 注：v2.89.0（同步范围扩大）——`test_sync_futures_task.py` `test_default_symbols_is_core_subset` 更名为 `test_default_symbols_is_full_universe`（默认同步断言由 core 25 改为 FUTURES_SUBSET 全品种 82），用例总数不变（5132）。
 
 ---
 

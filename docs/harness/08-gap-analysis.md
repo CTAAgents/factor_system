@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v2.88.0
+> 版本: v2.89.0
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -91,7 +91,7 @@
 | GAP-055 | `fts/data_futures.py`（FUTURES_HOLDOUT） | 盲测池仅 6 个且以小品种为主（JD/AP/FG/UR 流动性弱），存在选择偏差，可能系统性低估因子跨品种泛化能力 | 盲测结论失真：因子泛化能力被低估，精英因子筛选标准失真 | v2.81.0 | ✅ 已关闭（v2.81.0：盲测池 6→15 按产业链分层抽样覆盖 10 条产业链，与核心动态池/分层训练集互不重叠，含大流动性代表 RU0/L0；新增 test_holdout_pool.py 9 用例全绿） |
 | GAP-056 | `fts/data_futures.py`（DuckDBConnection/AsyncWriteQueue/retry_on_conflict）+ `fts/scheduler/jobs.py` | DuckDB 并发模型治标不治本：① 跨进程并发写（scripts 与调度 job 并行）抢文件锁产生 ConcurrentTransactionException；② 写事务/checkpoint 期间只读查询被文件锁阻塞，回测/因子加载随机卡顿；③ 重试是概率规避而非结构消除，高负载下重试耗尽仍抛错 | 数据层并发冲突/读阻塞影响全链路稳定性，回测与实盘数据路径存在随机失败风险（架构级缺陷，见 design/E.1） | 1 月内 | ✅ 已关闭（v2.86.0：DuckDBWriter 单写者 + 进程内写锁 + executemany/copy_from_records 显式 BEGIN/COMMIT 整批原子 + DuckDBReader 读连接池读写解耦 + _get_db 拆分为 _get_writer/_get_reader + 4 配置项 + 15 用例，见 design/E.1-duckdb-concurrency-design.md） |
 | GAP-057 | `fts/data_sources/tq_source.py` + `fts/data_sources/tdx_minute_source.py` + `fts/core/enums.py` | 通达信数据源双源割裂且命名误导：① TQ_LOCAL 标注端口 7721 实际不存在（量化模拟客户端真实监听 17709），TQLocalSource 走 `tq_get_kline/tq_get_quote` 方法名返回 -32601 不可用；② TDXMinuteSource 仅支持分钟，命名暗示局限；③ 同一下游服务被拆成两个源，聚合器双源配置混淆，`TDX_MINUTE`/`TQ_LOCAL` 枚举语义不清 | 数据源路径含失效源，分钟/日线/快照能力碎片化，枚举与降级链语义误导维护与排障 | 2 周内 | ✅ 已关闭（v2.87.0：合并为 `TdxLocalSource` 单源统一承载日线（day→1d，17 列）+ 分钟（1m~60m，11 列）+ 快照（get_market_snapshot），`source_name="TDX_LOCAL"` 端口 17709；`DataSource.TDX_MINUTE`→`TDX_LOCAL`、TQ_LOCAL 标注已废弃；删除 tq_source.py/tdx_minute_source.py；aggregator/fusion/data_futures/cli 全链路替换；70 用例（51+19）迁移全绿，tdx_local_source 覆盖率 93%） |
-| GAP-058 | `tests/test_data_futures_panel.py::TestDominantContracts` + `fts/data_futures._get_reader` | 主力合约判定 2 用例（`test_missing_symbols_empty`/`test_db_error_returns_empty`）在全量回归中顺序依赖性失败：mock `_get_reader` 未拦截时泄漏真实 DuckDB 数据（RB2610/CU2609）；单文件/定向组合运行全部通过（325/363/424/261 用例组合多次验证），仅在特定全量顺序下复现（先前会话 `_regress_tl_fail`/`toplevel_all`/`blockA` 日志同失败、`_regress_tl_ok` 1041 passed 同配置通过）——疑与 v2.86.0 DuckDBReader 读连接池模块级 `_READER` 单例在全量序下连接状态相关 | 全量回归 2 红，回归基线无法一键全绿，新改动需人工排除此噪音 | 1 月内 | ⏳ 开放（v2.87.0 全量 5130 passed/2 failed；非本次 TDX_LOCAL 合并引入，定向回归 363 用例全绿） |
+| GAP-058 | `tests/test_data_futures_panel.py::TestDominantContracts` + `fts/data_futures._get_reader` | 主力合约判定 2 用例（`test_missing_symbols_empty`/`test_db_error_returns_empty`）在全量回归中间歇性失败：mock `_get_reader` 未拦截时泄漏真实 DuckDB 数据（RB2610/CU2609）。**根因确诊 = 并发会话竞态**：另一 TRAE 会话进程并发访问真实 `data/fts_history.duckdb`（外部进程占锁）且并发 bump pyproject 版本号——证据：① 本会话完整全量 5130 passed/2 failed（panel 2 失败）与 5106+1 版本竞态失败（`test_package_init` assert 2.88.0==2.89.0，另一会话运行中改 pyproject）交替出现；② v2.88.0 记录明确「全量回归 5 个竞态失败——DuckDB 外部进程占锁 ×4 + pyproject 版本并发 bump ×1——重跑验证后全绿」；③ 全部单文件/定向组合（1277/1548/1041/424/428/261 用例）在无并发进程时全绿。非确定性代码缺陷（真实 DB 有 RB2610/CU2609 数据，mock 失效即泄漏；单进程无竞态时 mock 恒拦截，已验证 globals 一致性） | 全量回归在并发会话场景下出现 2 红，回归基线受竞态干扰 | 1 月内 | ⏳ 开放（根因=并发会话竞态；规避：两会话避免并发跑全量测试/并发访问真实 DuckDB，无外部进程时重跑全绿） |
 
 
 

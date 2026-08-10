@@ -500,7 +500,7 @@ def sync_futures_data_job(symbols: list[str] | None = None, days: int = 120) -> 
     完成后将同步摘要（gzip JSON）落盘 data/_lineage/sync_summary_*.json.gz。
 
     Args:
-        symbols: 品种代码列表；None 时使用 FUTURES_CORE_SUBSET。
+        symbols: 品种代码列表；None 时使用 FUTURES_SUBSET（全品种 82 个）。
         days: 回溯天数。
     """
     trace_id = f"fts.sync.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -516,9 +516,9 @@ def sync_futures_data_job(symbols: list[str] | None = None, days: int = 120) -> 
         return
 
     if symbols is None:
-        from fts.data_futures import get_dynamic_core_subset
+        from fts.data_futures import FUTURES_SUBSET
 
-        symbols = get_dynamic_core_subset()
+        symbols = list(FUTURES_SUBSET)
 
     import gzip
     import json

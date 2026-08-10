@@ -4,10 +4,11 @@
 便于运维手动触发或调试。
 
 用法:
-    python scripts/sync_futures_data.py                    # 同步 25 核心品种
+    python scripts/sync_futures_data.py                    # 同步全品种（FUTURES_SUBSET 82 个）
     python scripts/sync_futures_data.py --symbol RB0 CU0    # 指定品种
     python scripts/sync_futures_data.py --days 30           # 短回溯
     python scripts/sync_futures_data.py --json              # JSON 输出
+    python scripts/sync_futures_data.py --universe core     # 仅同步 25 核心品种
 
 HARNESS §5.5 trace_id 全链路: 单次执行生成唯一 trace_id 贯穿整个同步流程。
 """
@@ -43,14 +44,14 @@ def main() -> int:
         "--symbol",
         action="append",
         default=None,
-        help="指定品种（可多次或逗号分隔），默认 FUTURES_CORE_SUBSET 25 个",
+        help="指定品种（可多次或逗号分隔），默认全品种 FUTURES_SUBSET 82 个",
     )
     parser.add_argument("--days", type=int, default=500, help="回溯天数（默认 500）")
     parser.add_argument(
         "--universe",
         choices=["core", "stratified", "holdout", "all"],
-        default="core",
-        help="品种池（默认 core，详见 fts.data_futures）",
+        default="all",
+        help="品种池（默认 all 全品种 82 个，详见 fts.data_futures）",
     )
     parser.add_argument("--json", action="store_true", help="JSON 格式输出")
     parser.add_argument("--verbose", "-v", action="store_true", help="DEBUG 日志")

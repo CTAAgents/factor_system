@@ -204,8 +204,8 @@ class TestSyncFuturesDataJob:
         files = list(lineage.glob("sync_summary_*.json.gz")) if lineage.exists() else []
         assert len(files) == 0
 
-    def test_default_symbols_is_core_subset(self, tmp_path, monkeypatch):
-        """默认 symbols 来自 FUTURES_CORE_SUBSET。"""
+    def test_default_symbols_is_full_universe(self, tmp_path, monkeypatch):
+        """默认 symbols 来自 FUTURES_SUBSET（全品种）。"""
         monkeypatch.chdir(tmp_path)
         (tmp_path / "data").mkdir()
 
@@ -222,11 +222,11 @@ class TestSyncFuturesDataJob:
         mock_agg.get_source_status.return_value = {}
 
         with patch("fts.cli._build_default_aggregator", return_value=mock_agg):
-            sync_futures_data_job(symbols=None, days=5)  # 默认 core
+            sync_futures_data_job(symbols=None, days=5)  # 默认全品种
 
-        # 验证 call 数量 == FUTURES_CORE_SUBSET 长度
-        from fts.data_futures import FUTURES_CORE_SUBSET
+        # 验证 call 数量 == FUTURES_SUBSET 长度
+        from fts.data_futures import FUTURES_SUBSET
 
-        assert mock_agg.get_ohlcv.call_count == len(FUTURES_CORE_SUBSET)
-        # 默认应为 25 个核心品种
-        assert len(FUTURES_CORE_SUBSET) >= 20
+        assert mock_agg.get_ohlcv.call_count == len(FUTURES_SUBSET)
+        # 默认应为 82 个全品种
+        assert len(FUTURES_SUBSET) >= 80
