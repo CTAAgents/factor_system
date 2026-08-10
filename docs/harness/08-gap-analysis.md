@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v2.85.0
+> 版本: v2.86.0
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -12,8 +12,8 @@
 |:-------|:-----|:-------|:-----|
 | P0 | 6 | 11 | 17 |
 | P1 | 17 | 7 | 22 |
-| P2 | 11 | 33 | 44 |
-| **合计** | **34** | **51** | **85** |
+| P2 | 10 | 34 | 44 |
+| **合计** | **33** | **52** | **85** |
 
 ---
 
@@ -89,7 +89,7 @@
 | GAP-053 | `fts/factor_engine/weight_learning.py` + `portfolio_loop.py` | elastic_net 权重为回归系数归一化：无风险调整（波动率/风险贡献）、一次性全样本学习无样本外验证、学习面板固定 CSI300 与期货目标市场错配 | 组合权重不反映"每单位风险的信号贡献"，权重稳定性/衰减不可观测，期货组合的权重学习样本与交易市场不一致 | v2.75.0 | ✅ 已关闭（v2.75.0：Ledoit-Wolf 风险调整 + 滚动样本外验证 + 面板按目标市场自动匹配 + 跨市场 IC 对比，28 用例；v2.78.1 起 cross_market_ic 默认关闭，避免无关股票面板下载） |
 | GAP-054 | `scripts/liquidity_snapshot.py` + `scripts/sync_liquidity_pool.py` + `fts/data_futures.py` + `fts/scheduler/jobs.py` | FUTURES_CORE_SUBSET 为静态硬编码 25 品种，无法随市场流动性变化动态调整；流动性评估口径缺陷（当前主力合约 60 日历史含换月窗口污染，AU/IM/IF 等刚换月品种成交额被低估 10-1000 倍；合约乘数表 AU0 带主连后缀匹配失败；月均价合约 L-F2610 误匹配） | 核心交易池与市场流动性脱节：流动性恶化品种无法退出、改善品种无法进入；因子横截面与实盘可交易性错配（机构级缺陷） | v2.80.0 | ✅ 已关闭（v2.80.0：TQ-Local 17709 真实主力合约最近 5 日主力窗口口径 + 乘数表修复 + 月均价合约排除 + 渐进式替换动态池 + get_dynamic_core_subset 运行期零风险降级 + 每周六 08:00 调度刷新 + 10 用例；2026-08-10 快照 25 核心品种全部达标） |
 | GAP-055 | `fts/data_futures.py`（FUTURES_HOLDOUT） | 盲测池仅 6 个且以小品种为主（JD/AP/FG/UR 流动性弱），存在选择偏差，可能系统性低估因子跨品种泛化能力 | 盲测结论失真：因子泛化能力被低估，精英因子筛选标准失真 | v2.81.0 | ✅ 已关闭（v2.81.0：盲测池 6→15 按产业链分层抽样覆盖 10 条产业链，与核心动态池/分层训练集互不重叠，含大流动性代表 RU0/L0；新增 test_holdout_pool.py 9 用例全绿） |
-| GAP-056 | `fts/data_futures.py`（DuckDBConnection/AsyncWriteQueue/retry_on_conflict）+ `fts/scheduler/jobs.py` | DuckDB 并发模型治标不治本：① 跨进程并发写（scripts 与调度 job 并行）抢文件锁产生 ConcurrentTransactionException；② 写事务/checkpoint 期间只读查询被文件锁阻塞，回测/因子加载随机卡顿；③ 重试是概率规避而非结构消除，高负载下重试耗尽仍抛错 | 数据层并发冲突/读阻塞影响全链路稳定性，回测与实盘数据路径存在随机失败风险（架构级缺陷，见 design/E.1） | 1 月内 | ⏳ 开放（设计完成待实施，见 design/E.1-duckdb-concurrency-design.md） |
+| GAP-056 | `fts/data_futures.py`（DuckDBConnection/AsyncWriteQueue/retry_on_conflict）+ `fts/scheduler/jobs.py` | DuckDB 并发模型治标不治本：① 跨进程并发写（scripts 与调度 job 并行）抢文件锁产生 ConcurrentTransactionException；② 写事务/checkpoint 期间只读查询被文件锁阻塞，回测/因子加载随机卡顿；③ 重试是概率规避而非结构消除，高负载下重试耗尽仍抛错 | 数据层并发冲突/读阻塞影响全链路稳定性，回测与实盘数据路径存在随机失败风险（架构级缺陷，见 design/E.1） | 1 月内 | ✅ 已关闭（v2.86.0：DuckDBWriter 单写者 + 进程内写锁 + executemany/copy_from_records 显式 BEGIN/COMMIT 整批原子 + DuckDBReader 读连接池读写解耦 + _get_db 拆分为 _get_writer/_get_reader + 4 配置项 + 15 用例，见 design/E.1-duckdb-concurrency-design.md） |
 
 
 

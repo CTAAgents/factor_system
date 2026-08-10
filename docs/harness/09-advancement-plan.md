@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.85.0
+> 版本: v2.86.0
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -227,6 +227,18 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ `build_combo`/`PortfolioLoop.__init__` 新增 `turnover_penalty` 参数透传；`FTSConfig` 新增 `l3_turnover_penalty`（env `FTS_L3_TURNOVER_PENALTY` 默认 0.0 关闭）
 - 📋 新增 `test_turnover_penalty.py` 12 用例（单元 4 + 换手惩罚生效断言 3——Σ\|Δw\| 严格更小且 λ 单调递减 + build_combo 集成 2 + 配置读取 3），portfolio_loop 213 + 12 合计 225 passed 全绿
 - ✅ 文档同步：01/03/06/07/08 + 23 计划（GAP-I303 ✅ 关闭）+ pyproject bump v2.84.0 → v2.85.0
+
+### v2.86.0 DuckDB 并发模型根治（GAP-056，数据基础设施，已完成）
+
+**完成时间**: 2026-08-10
+
+**核心产出（design/E.1 实施）**:
+- ✅ `fts/data_futures.py` 新增 `DuckDBWriter`——单写者（唯一可写连接 + 进程内写锁串行）；`executemany`/`copy_from_records` 显式 BEGIN/COMMIT 包裹（DuckDB executemany 为逐条执行非单事务），任一条失败整批 ROLLBACK 不留半写入；批量 COPY 降低 commit 频率减少 checkpoint 阻塞
+- ✅ 新增 `DuckDBReader`——读连接池（普通连接复用，池满关闭；MVCC 快照使写提交期间读侧不阻塞；DuckDB 不允许同文件并存可写 + read_only=True 连接，读语义由代码纪律保证）
+- ✅ `_get_db()` 拆分为 `_get_writer()`/`_get_reader()` + `_release_reader()`，迁移 3 个调用点（`_from_kline_cache`/`get_dominant_contracts` 读 → reader，`_write_contract_kline` 写 → writer），`_get_db` 保留兼容入口
+- ✅ `FTSConfig` 新增 4 配置项（`duckdb_single_writer`/`duckdb_read_pool_size`/`duckdb_batch_size`/`duckdb_commit_every`，`FTS_DUCKDB_*` 环境变量）
+- 📋 新增 test_duckdb_writer.py 10 用例（8 线程并发写零冲突/executemany 唯一约束冲突整批回滚/批量 COPY 与逐条一致/错误恢复）+ test_duckdb_reader.py 5 用例（池复用/池满关闭/写连接打开时读共存）+ test_config_settings 5 用例
+- ✅ 文档同步：01（并发模型架构块）/03（配置）/04（并发韧性）/06（用例）/07/08（GAP-056 ✅ 关闭）+ design/E.1 + pyproject bump v2.85.0 → v2.86.0
 
 ### v2.61.0 股票流水线 GAP-S01（行业/市值中性化主流程，已完成）
 

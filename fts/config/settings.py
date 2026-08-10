@@ -233,7 +233,7 @@ class FTSConfig:
     # true=启用，但未注入客户端时显式抛错提示初始化）
     mcp_enabled: bool = field(default_factory=lambda: os.getenv("FTS_MCP_ENABLED", "false").lower() == "true")
 
-    # ── DuckDB 并发模型（v2.83.0，GAP-056，design/E.1）──
+    # ── DuckDB 并发模型（v2.86.0，GAP-056，design/E.1）──
     # 单写者 + 读连接池：所有写收敛到唯一 writer，读走独立读池，读写互不阻塞
     duckdb_single_writer: bool = field(
         default_factory=lambda: os.getenv("FTS_DUCKDB_SINGLE_WRITER", "true").lower() == "true"

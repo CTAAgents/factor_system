@@ -1,8 +1,8 @@
 # FTS 追赶机构水平全面改造计划（Institutional-Level Transformation Plan）
 
-> 版本: v2.85.0
+> 版本: v2.86.0
 > 最后更新: 2026-08-10
-> 状态: 规划中（文档先行，作为 FTS 全链路机构级改造总纲，子计划为执行细则）
+> 状态: 执行中（已登记 GAP 缺陷项 I101~I503 全部关闭 ✅ v2.85.0；Stage 3C 远期项待推进：另类数据因子上线、多节点分布式部署、Level2 因子入 elite）
 > 适用范围: FTS 全链路（L0 人类设定 / L1 元循环 / L2 演化 / L3 组合 / L4 信号与实盘反馈 / 基础设施）
 
 > ⚠️ **计划定位说明**：本计划是**机构级对标总纲**，将 FTS 与三类机构基准（中小专业量化团队 / 国内头部量化私募 / 海外顶级量化机构）的全链路差距系统登记为 GAP-I001~I503 缺陷项，按 P0/P1/P2 优先级分三阶段追赶。与既有局部计划（plans/10 演化优化、plans/11 因子挖掘优化、plans/21 期货成熟度、plans/22 股票成熟度、plans/20 期货展期）的关系为「总纲 → 细则」，本计划只登记**机构级结构性差距**，单条缺陷的执行细则由对应子计划承载，不重复登记。
@@ -255,6 +255,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **影响** | 候选维度单一（与 GAP-I101 联动） |
 | **实施步骤** | iFinD 新闻/公告 API 接入 L1 知识补给；宏观事件注入 L2 演化方向 |
 | **测试方案** | 新知识源注入单测 |
+| **完成记录** | ✅ v2.82.0：另类知识源多路——新建 `fts/factor_engine/extractors/alternative_sources.py`：`AnnouncementNewsExtractor`（东方财富公告中心 API + LLM 提取 A 股事件/舆情因子）+ `MacroEventExtractor`（东方财富宏观日历 API + LLM 提取跨品种宏观方向因子）；对齐既有三源模式（继承 `BaseExtractor` 复用 `_llm_extract_factors`，失败/空数据优雅降级返回空不阻断 L1）；股票管道接入公告+宏观两源（5 源）、期货管道接入宏观源（4 源），`FTSConfig` 新增 `l1_announcement_extractor_enabled`/`l1_macro_extractor_enabled` 开关；`BaseExtractorPipeline.extract` 多源并行收集（ThreadPoolExecutor，GAP-I101 二期）；新增 `test_alternative_sources.py` 16 用例 |
 
 #### GAP-I303 组合层成本/换手约束显式化（P2）
 
@@ -265,10 +266,13 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **影响** | 高频调仓换手成本未被组合层显式优化 |
 | **实施步骤** | 组合目标函数增加换手惩罚（复用 cost_model）；参数走配置 |
 | **测试方案** | 换手惩罚生效断言 |
+| **完成记录** | ✅ v2.85.0：`portfolio_loop.py` 新增 `apply_turnover_penalty`——组合目标函数显式换手惩罚项 λ，粘性约束后、权重归一化前执行 `w_new' = w_old + (w_new − w_old)/(1+λ)` 收缩权重变动（λ=0 关闭、λ 越大换手越低、新因子不惩罚）；`build_combo`/`PortfolioLoop` 参数透传 + `FTSConfig.l3_turnover_penalty`（env `FTS_L3_TURNOVER_PENALTY` 默认 0.0）；新增 `test_turnover_penalty.py` 12 用例（含换手惩罚生效断言：Σ\|Δw\| 严格更小且 λ 单调递减） |
 
 #### GAP-I304 风格暴露控制（Barra 风格体系）（P2）
 
 > 关联 plans/22 GAP-S02（P0，v2.60.0 阶段 A 处理中）。本计划将其纳入 Stage 2 门槛，不重复登记。
+
+**完成记录**: ✅ v2.62.0（GAP-S02 落地 10 风格暴露 + 评估链 style_exposures 参数）；v2.79.0 补充全市场覆盖（evolution_loop `_build_barra_exposures` + L2 评估链 Barra 风格回归残差，`l2_barra_style_neutral` 配置默认 True）
 
 #### GAP-I502 分布式扩展预留（Dask/Ray 接口）（P2）
 
@@ -289,6 +293,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **影响** | 微观结构 alpha 缺失；高频因子无数据支撑 |
 | **实施步骤** | ① tick 历史缓存扩展（分钟 tick 落 DuckDB）；② 订单流不平衡/大单占比算子（进 GAP-I202 算子库）；③ 另类数据评估（舆情 NLP 因子）为远期方向 |
 | **测试方案** | tick 缓存回放；订单流因子有效性检验 |
+| **完成记录** | ✅ v2.84.0（首期）：① tick_cache 增量累积——`aggregator._write_tick_cache` 按 (symbol, datetime) 去重写入 + `tick_cache_retention_days` 保留清理（默认 7 天）+ `get_ticks`/`_try_tick_cache` 时间窗口查询（start_time/end_time）；② 新建 `fts/factor_engine/microstructure_factors.py`——`classify_tick_direction`（价差方向，持平沿用前向）/`order_flow_imbalance`（OFI 滚动主动买卖量差归一化）/`order_book_imbalance`（OBI 5 档深度）/`large_trade_ratio`（大单占比）+ `compute_microstructure_factors` 统一入口（FACTOR_COLUMNS 契约，缺列/不足 min_rows 降级空）；③ 新增 31 用例。二期（另类数据因子：舆情 NLP/卫星/供应链）按 Stage 3C 远期排期 |
 
 ---
 

@@ -1,6 +1,6 @@
 # FTS 韧性设计
 
-> 版本: v2.85.0
+> 版本: v2.86.0
 > 最后更新: 2026-08-05
 
 ---
@@ -128,7 +128,7 @@ state.json.bak.2    ← 上上上一次写入
 | `mcp_enabled=true` 且已注入 handler | 直接调用注入的 MCP 客户端（`set_mcp_handler`） |
 | `mcp_enabled=true` 但未注入 handler | 抛 RuntimeError 显式初始化报错，避免静默失败掩盖配置错误 |
 
-### DuckDB 并发模型（v2.83.0，GAP-056，design/E.1）
+### DuckDB 并发模型（v2.86.0，GAP-056，design/E.1）
 
 | 场景 | 机制 |
 |:-----|:-----|

@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.85.0
+> 版本: v2.86.0
 > 最后更新: 2026-08-07
 
 ---
@@ -76,10 +76,10 @@ FTS 配置采用三级优先级（高→低）：
 | `margin_rate_map` | dict | 见默认表 | —（YAML） | 品种保证金率表（{symbol: 保证金率}，未配置品种用默认 0.10，GAP-F09，v2.60.0） |
 | `max_margin_usage` | float | `0.80` | `FTS_MAX_MARGIN_USAGE` | 最大保证金占用率（保证金占用/总权益，超过触发强平风险告警，GAP-F09，v2.60.0） |
 | `mcp_enabled` | bool | `false` | `FTS_MCP_ENABLED` | 是否启用 Wind/iFinD MCP 增强字段（启用时若未注入 MCP 客户端抛 RuntimeError 显式报错，未启用则明确降级跳过增强字段，GAP-F04，v2.60.0） |
-| `duckdb_single_writer` | bool | `true` | `FTS_DUCKDB_SINGLE_WRITER` | 是否启用 DuckDB 单写者模式（所有写收敛唯一 writer，false 回退旧多路径，GAP-056，v2.83.0） |
-| `duckdb_read_pool_size` | int | `4` | `FTS_DUCKDB_READ_POOL_SIZE` | DuckDB 读连接池大小（读操作与单写者解耦，互不阻塞，GAP-056，v2.83.0） |
-| `duckdb_batch_size` | int | `1000` | `FTS_DUCKDB_BATCH_SIZE` | DuckDB 批量写入缓冲行数（批量 COPY 降低 commit 频率，GAP-056，v2.83.0） |
-| `duckdb_commit_every` | int | `100` | `FTS_DUCKDB_COMMIT_EVERY` | DuckDB 批量写入 commit 周期（秒，GAP-056，v2.83.0） |
+| `duckdb_single_writer` | bool | `true` | `FTS_DUCKDB_SINGLE_WRITER` | 是否启用 DuckDB 单写者模式（所有写收敛唯一 writer，false 回退旧多路径，GAP-056，v2.86.0） |
+| `duckdb_read_pool_size` | int | `4` | `FTS_DUCKDB_READ_POOL_SIZE` | DuckDB 读连接池大小（读操作与单写者解耦，互不阻塞，GAP-056，v2.86.0） |
+| `duckdb_batch_size` | int | `1000` | `FTS_DUCKDB_BATCH_SIZE` | DuckDB 批量写入缓冲行数（批量 COPY 降低 commit 频率，GAP-056，v2.86.0） |
+| `duckdb_commit_every` | int | `100` | `FTS_DUCKDB_COMMIT_EVERY` | DuckDB 批量写入 commit 周期（秒，GAP-056，v2.86.0） |
 
 ## 3. YAML 配置文件
 
