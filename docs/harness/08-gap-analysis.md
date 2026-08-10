@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v2.82.0
+> 版本: v2.83.0
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -12,8 +12,8 @@
 |:-------|:-----|:-------|:-----|
 | P0 | 6 | 11 | 17 |
 | P1 | 17 | 7 | 22 |
-| P2 | 10 | 33 | 43 |
-| **合计** | **33** | **51** | **84** |
+| P2 | 11 | 33 | 44 |
+| **合计** | **34** | **51** | **85** |
 
 ---
 
@@ -89,6 +89,7 @@
 | GAP-053 | `fts/factor_engine/weight_learning.py` + `portfolio_loop.py` | elastic_net 权重为回归系数归一化：无风险调整（波动率/风险贡献）、一次性全样本学习无样本外验证、学习面板固定 CSI300 与期货目标市场错配 | 组合权重不反映"每单位风险的信号贡献"，权重稳定性/衰减不可观测，期货组合的权重学习样本与交易市场不一致 | v2.75.0 | ✅ 已关闭（v2.75.0：Ledoit-Wolf 风险调整 + 滚动样本外验证 + 面板按目标市场自动匹配 + 跨市场 IC 对比，28 用例；v2.78.1 起 cross_market_ic 默认关闭，避免无关股票面板下载） |
 | GAP-054 | `scripts/liquidity_snapshot.py` + `scripts/sync_liquidity_pool.py` + `fts/data_futures.py` + `fts/scheduler/jobs.py` | FUTURES_CORE_SUBSET 为静态硬编码 25 品种，无法随市场流动性变化动态调整；流动性评估口径缺陷（当前主力合约 60 日历史含换月窗口污染，AU/IM/IF 等刚换月品种成交额被低估 10-1000 倍；合约乘数表 AU0 带主连后缀匹配失败；月均价合约 L-F2610 误匹配） | 核心交易池与市场流动性脱节：流动性恶化品种无法退出、改善品种无法进入；因子横截面与实盘可交易性错配（机构级缺陷） | v2.80.0 | ✅ 已关闭（v2.80.0：TQ-Local 17709 真实主力合约最近 5 日主力窗口口径 + 乘数表修复 + 月均价合约排除 + 渐进式替换动态池 + get_dynamic_core_subset 运行期零风险降级 + 每周六 08:00 调度刷新 + 10 用例；2026-08-10 快照 25 核心品种全部达标） |
 | GAP-055 | `fts/data_futures.py`（FUTURES_HOLDOUT） | 盲测池仅 6 个且以小品种为主（JD/AP/FG/UR 流动性弱），存在选择偏差，可能系统性低估因子跨品种泛化能力 | 盲测结论失真：因子泛化能力被低估，精英因子筛选标准失真 | v2.81.0 | ✅ 已关闭（v2.81.0：盲测池 6→15 按产业链分层抽样覆盖 10 条产业链，与核心动态池/分层训练集互不重叠，含大流动性代表 RU0/L0；新增 test_holdout_pool.py 9 用例全绿） |
+| GAP-056 | `fts/data_futures.py`（DuckDBConnection/AsyncWriteQueue/retry_on_conflict）+ `fts/scheduler/jobs.py` | DuckDB 并发模型治标不治本：① 跨进程并发写（scripts 与调度 job 并行）抢文件锁产生 ConcurrentTransactionException；② 写事务/checkpoint 期间只读查询被文件锁阻塞，回测/因子加载随机卡顿；③ 重试是概率规避而非结构消除，高负载下重试耗尽仍抛错 | 数据层并发冲突/读阻塞影响全链路稳定性，回测与实盘数据路径存在随机失败风险（架构级缺陷，见 design/E.1） | 1 月内 | ⏳ 开放（设计完成待实施，见 design/E.1-duckdb-concurrency-design.md） |
 
 
 
@@ -128,7 +129,7 @@
 | GAP-I103 | `fts/factor_engine/extractors/alternative_sources.py` | 知识源扩展（公告/舆情/宏观事件）：L1 仅研报/arXiv（与 I101 联动） | 候选维度单一 | Stage 2（v2.82.0） | ✅ 已关闭（v2.82.0：另类知识源多路——`AnnouncementNewsExtractor`（东方财富公告中心 API + LLM 提取股票事件/舆情因子）+ `MacroEventExtractor`（东方财富宏观日历 API + LLM 提取跨品种方向），股票管道接入公告+宏观两源、期货管道接入宏观源（`l1_announcement_extractor_enabled`/`l1_macro_extractor_enabled` 配置开关，默认 True，失败优雅降级返回空）；`BaseExtractorPipeline.extract` 多源并行收集（ThreadPoolExecutor，GAP-I101 二期）；新增 `test_alternative_sources.py` 16 用例） |
 | GAP-I303 | `fts/factor_engine/portfolio_loop.py` | 组合层成本/换手约束显式化：有粘性约束但无显式换手成本目标项 | 高频调仓换手成本未被组合层显式优化 | Stage 3（v2.83.0） | ⏳ 开放 |
 | GAP-I304 | `fts/factor_engine/style_classifier.py` | 风格暴露控制（Barra 风格体系）：无 10 风格回归中性化（= plans/22 GAP-S02） | 无法回答"因子赚风格钱还是 alpha 钱" | Stage 2 门槛（引用 GAP-S02） | ✅ 已处理（v2.62.0，GAP-S02 落地 10 风格暴露 + 评估链 style_exposures 参数）。**v2.79.0 补充全市场覆盖**：`evolution_loop.py` 新增 `_build_barra_exposures()` 自动构建 10 风格暴露（`BarraStyleEngine` + 结果缓存避免每因子重复计算，字段缺失风格自动跳过），`_evaluate_cross_section` 接入 `style_exposures`——L2 评估链行业中性化后自动叠加 Barra 风格回归残差（此前该能力仅存在于 `cross_section_evaluate_backtest` 参数层，L2 主流程未实际启用）；`settings.py` 新增 `l2_barra_style_neutral` 配置（默认 True，env `FTS_L2_BARRA_STYLE_NEUTRAL`）；新增 `tests/factor_engine/test_barra_l2_integration.py` 7 用例（非横截面降级/风格暴露构建/缓存复用/配置关闭/构建异常降级/仅 OHLCV 不崩溃/评估链接入 + spy 断言） |
-| GAP-I502 | `fts/factor_engine/evolution_loop.py` + `evaluation_chain.py` | 分布式扩展预留：全部单进程，无 ExecutorBackend 抽象（process/dask/ray） | Stage 3 吞吐再扩容无架构预留 | Stage 3（v2.81.0） | ⏳ 开放 |
+| GAP-I502 | `fts/factor_engine/executor_backend.py` + `batch_mining.py` | 分布式扩展预留：全部单进程，无 ExecutorBackend 抽象（process/dask/ray） | Stage 3 吞吐再扩容无架构预留 | Stage 3（v2.83.0） | ✅ 已关闭（v2.83.0：`executor_backend.py` 可插拔执行器抽象——`ExecutorBackend`（map/shutdown + 上下文管理）+ `ThreadBackend`（默认）/`ProcessBackend`（cloudpickle 序列化，lambda/bound method 跨进程序列化）/`DaskBackend`/`RayBackend`（缺依赖自动降级 ProcessBackend）+ `create_executor_backend` 工厂；`BatchMiner.filter_batch` 批量粗筛接入后端（`BatchMiningConfig.executor_backend`/`executor_max_workers`），`FTSConfig` 新增 `executor_backend`（默认 thread，保持现状）`/executor_max_workers`（`FTS_EXECUTOR_BACKEND`/`FTS_EXECUTOR_MAX_WORKERS`）；新增 `test_executor_backend.py` 14 用例（四后端行为一致性/进程内 bound method 与 lambda/降级路径/未知回退/BatchMiner 接入 + process 单任务异常隔离），executor_backend 14 + batch_mining 11 合计 25 passed 全绿） |
 | GAP-I503 | `fts/data_sources/tqsdk_tick_source.py` | 数据深度：tick 历史仅 ~42 分钟（GAP-050），无 Level2 订单簿、无另类数据 | 微观结构 alpha 缺失 | Stage 3（v2.82.0 首期） | ⏳ 开放 |
 
 ### GAP-L 系列 — L3/L4 机构级追赶专项（细则：plans/24-l3-l4-institutional-plan.md）

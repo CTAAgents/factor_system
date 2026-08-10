@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.82.0
+> 版本: v2.83.0
 > 最后更新: 2026-08-10
 
 ---
@@ -112,7 +112,8 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  batch_mining.py — 批量挖掘漏斗 (GAP-I201, v2.65.0, evolution_mode=batch):  │
 │    BatchMiner: 批量生成(同父多后代, macro 至多 1 次 + GP/deep/operator 三方法 │
 │    轮换, GAP-I203 v2.73.0 deep 并入 idx%3==2) →                           │
-│    ThreadPoolExecutor 并行粗筛 → 按预筛 IC 排序截断 → _process_candidate 准入链
+│    ExecutorBackend 可插拔粗筛 (thread 默认/process/dask/ray, GAP-I502) →  │
+│    按预筛 IC 排序截断 → _process_candidate 准入链
 │  预筛与通道修复 (v2.66.0, GAP-X01/X02/X03):                               │
 │    - _quick_prefilter 横截面模式走 _cross_section_prefilter: 全面板信号矩阵 │
 │      vs 截面 forward 收益 (与 cross_section_evaluate_backtest 同口径)      │
@@ -255,6 +256,7 @@ fts/
 │   ├── evolution_loop.py       # L2 主循环（股票时序/期货横截面双模式）
 │   ├── orthogonal_basis.py     # 多因子正交基底（GAP-I206 补充, v2.72.1）：Gram-Schmidt 迭代残差化 + 基底注册/持久化
 │   ├── batch_mining.py         # 批量挖掘漏斗（GAP-I201, v2.65.0）：BatchMiner 批量生成 + 并行粗筛 + 排序截断，evolution_mode="batch" 时每代批量候选
+│   ├── executor_backend.py     # 可插拔执行器抽象（GAP-I502, v2.83.0）：ExecutorBackend（thread/process/dask/ray，分布式扩展预留）+ create_executor_backend 工厂，BatchMiner.filter_batch 接入
 │   ├── meta_loop.py            # L1 元循环
 │   ├── portfolio_loop.py       # L3 组合循环
 │   ├── macro_evolution.py      # LLM 宏观演化

@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.82.0
+> 版本: v2.83.0
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -196,6 +196,17 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ GAP-I102 二期审查意见接入经验链——`FactorReviewWorkflow` 新增 `experience_chain` 可选注入 + `_record_rejection`：驳回且 comment 非空时构造 `ExperienceTrace`（success=False + `evaluation.failure_reasons` + lessons 含审查人）写入 `ExperienceChain.record_failure`；`FTS_REVIEW_EXPERIENCE_CHAIN` 开关默认 True，写入异常降级不阻断审查流程
 - 📋 新增测试 23 用例：`test_alternative_sources.py` 16（公告 API 成功/空/异常/暂停/LLM 提取/管道接入+开关）+ `test_review_experience_chain.py` 7（驳回写链/批准不写/空 comment 不写/开关关闭/异常降级/审查人入 lessons/幂等）；提取器+审查 122 passed + meta_loop/settings 149 passed 全绿
 - ✅ 文档同步：01/03/06/07/08/09 + 23 计划（GAP-I103/I101/I102 二期 ✅ 关闭）+ pyproject bump v2.81.0 → v2.82.0
+
+### v2.83.0 ExecutorBackend 可插拔执行器抽象（GAP-I502，Stage 3A，已完成）
+
+**完成时间**: 2026-08-10
+
+**核心产出（总纲 plans/23 GAP-I502）**:
+- ✅ 新建 `fts/factor_engine/executor_backend.py`——`ExecutorBackend` ABC（`map`/`shutdown` + 上下文管理）+ `ThreadBackend`（默认，ThreadPoolExecutor）+ `ProcessBackend`（ProcessPoolExecutor + cloudpickle 序列化目标函数，模块级 `_process_worker` 包装，支持 lambda/bound method 跨进程序列化）+ `DaskBackend`/`RayBackend`（缺依赖或创建失败自动降级 ProcessBackend）+ `create_executor_backend` 工厂（未知后端回退 thread）
+- ✅ `BatchMiner.filter_batch` 批量粗筛接入后端——`BatchMiningConfig` 新增 `executor_backend`/`executor_max_workers`，`backend.map(self._filter_one, proposals, repeat(trace_id))` 保序遍历 + 单任务异常隔离，修复 trace_id 漏传 bug
+- ✅ `FTSConfig` 新增 `executor_backend`（默认 thread 保持现状）/`executor_max_workers`（默认 4，`FTS_EXECUTOR_BACKEND`/`FTS_EXECUTOR_MAX_WORKERS`），evolution_loop 批量模式构造透传
+- 📋 新增 `test_executor_backend.py` 14 用例（四后端 map 行为一致性/process 支持 lambda 与 bound method/缺依赖降级/未知后端回退/并发性/BatchMiner 接入 + process 单任务异常隔离/filter_batch thread 与 process 结果一致），executor_backend 14 + batch_mining 11 合计 25 passed + evolution_loop batch 3 passed 全绿
+- ✅ 文档同步：01/03/06/07/08 + 23 计划（GAP-I502 ✅ 关闭）+ pyproject bump v2.82.0 → v2.83.0
 
 ### v2.61.0 股票流水线 GAP-S01（行业/市值中性化主流程，已完成）
 

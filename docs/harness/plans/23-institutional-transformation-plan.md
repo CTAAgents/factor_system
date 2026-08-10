@@ -1,6 +1,6 @@
 # FTS 追赶机构水平全面改造计划（Institutional-Level Transformation Plan）
 
-> 版本: v2.82.0
+> 版本: v2.83.0
 > 最后更新: 2026-08-10
 > 状态: 规划中（文档先行，作为 FTS 全链路机构级改造总纲，子计划为执行细则）
 > 适用范围: FTS 全链路（L0 人类设定 / L1 元循环 / L2 演化 / L3 组合 / L4 信号与实盘反馈 / 基础设施）
@@ -332,7 +332,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 
 | 版本 | 阶段 | 缺陷项 | 核心内容 |
 |:-----|:-----|:-------|:---------|
-| v2.81.0+ | 3A | GAP-I502 | ExecutorBackend 抽象（process→dask/ray），Dask 集群吞吐扩容 |
+| v2.81.0+ | 3A | GAP-I502 | ExecutorBackend 抽象（process→dask/ray）✅ 已关闭（v2.83.0：`fts/factor_engine/executor_backend.py`——`ExecutorBackend` 抽象（map/shutdown + 上下文管理）+ `ThreadBackend`/`ProcessBackend`（cloudpickle 序列化，lambda/bound method 跨进程）/`DaskBackend`/`RayBackend`（缺依赖自动降级 ProcessBackend）+ `create_executor_backend` 工厂；`BatchMiner.filter_batch` 批量粗筛接入（`BatchMiningConfig.executor_backend`/`executor_max_workers`），配置 `FTSConfig.executor_backend`（默认 thread 保持现状）+ `FTS_EXECUTOR_BACKEND`/`FTS_EXECUTOR_MAX_WORKERS`；新增 `test_executor_backend.py` 14 用例（四后端行为一致性/process lambda+bound method/降级/未知回退/BatchMiner 接入+异常隔离），executor_backend 14 + batch_mining 11 合计 25 passed） |
 | v2.82.0+ | 3A | GAP-I503 首期 | tick 历史缓存扩展 + Level2 订单流因子 |
 | v2.83.0+ | 3B | GAP-I303 | 组合目标换手惩罚项 |
 | 远期 | 3C | GAP-I503 二期 | 另类数据因子（舆情 NLP / 卫星 / 供应链）评估 |

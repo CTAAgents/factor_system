@@ -149,6 +149,10 @@ class FTSConfig:
     batch_max_workers: int = field(default_factory=lambda: int(os.getenv("FTS_BATCH_MAX_WORKERS", "4")))
     # 批量生成随机种子（同父多后代可复现）
     batch_random_seed: int = field(default_factory=lambda: int(os.getenv("FTS_BATCH_RANDOM_SEED", "42")))
+    # GAP-I502 (v2.83.0): 批量粗筛执行器后端（thread/process/dask/ray，可插拔分布式预留）
+    executor_backend: str = field(default_factory=lambda: os.getenv("FTS_EXECUTOR_BACKEND", "thread"))
+    # 执行器后端并行工作数
+    executor_max_workers: int = field(default_factory=lambda: int(os.getenv("FTS_EXECUTOR_MAX_WORKERS", "4")))
 
     # ── 并行 ──
     max_workers: int = field(default_factory=lambda: int(os.getenv("FTS_MAX_WORKERS", "4")))

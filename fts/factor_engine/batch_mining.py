@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from itertools import repeat
 from typing import Callable, Optional, TypedDict
 
 from .contracts import FactorProgram
+from .executor_backend import create_executor_backend
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +34,11 @@ class BatchMiningConfig:
     Attributes:
         batch_size: 每代批量候选生成数。
         max_candidates: 通过粗筛后进入细评估的最大候选数（预算护栏）。
-        max_workers: 粗筛并行线程数（numpy/scipy 纯计算，线程并行有效）。
+        max_workers: 粗筛并行工作数（numpy/scipy 纯计算，线程并行有效）。
         ic_threshold: 预筛 IC 阈值；None = 按市场自适应（复用 _quick_prefilter）。
         random_seed: 随机种子（可复现，batch 内按序号递增）。
+        executor_backend: 执行器后端（"thread"/"process"/"dask"/"ray"，GAP-I502）。
+        executor_max_workers: 后端并行数（None 时用 max_workers）。
     """
 
     batch_size: int = 20
@@ -43,6 +46,8 @@ class BatchMiningConfig:
     max_workers: int = 4
     ic_threshold: Optional[float] = None
     random_seed: int = 42
+    executor_backend: str = "thread"
+    executor_max_workers: Optional[int] = None
 
 
 # ─── 契约 ─────────────────────────────────────────────────
@@ -200,26 +205,34 @@ class BatchMiner:
         """
         start = time.perf_counter()
         n_workers = min(self.config.max_workers, max(len(proposals), 1))
+        # GAP-I502 (v2.83.0): 执行器后端可插拔（thread/process/dask/ray，调用方无感知）
         filtered: list[BatchedProposal] = []
         if len(proposals) == 1:
             filtered = [self._filter_one(proposals[0], trace_id)]
         elif len(proposals) > 1:
-            with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                futures = {ex.submit(self._filter_one, p, trace_id): p for p in proposals}
-                for fut in as_completed(futures):
+            backend = create_executor_backend(
+                self.config.executor_backend,
+                self.config.executor_max_workers or n_workers,
+            )
+            try:
+                it = backend.map(self._filter_one, proposals, repeat(trace_id))
+                for p in proposals:
                     try:
-                        filtered.append(fut.result())
-                    except Exception as e:  # pragma: no cover - 防御兜底
+                        filtered.append(next(it))
+                    except StopIteration:
+                        break
+                    except Exception as e:  # 单任务异常降级为 rejected（与其他任务隔离）
                         logger.debug("[batch] 粗筛任务异常: %s", e)
-                        src = futures[fut]
                         filtered.append(
                             {
-                                **src,
+                                **p,
                                 "prefilter_ok": False,
                                 "prefilter_reason": f"粗筛异常: {type(e).__name__}: {e}",
                                 "prefilter_ic": 0.0,
                             }
                         )
+            finally:
+                backend.shutdown()
 
         passed = [p for p in filtered if p.get("prefilter_ok")]
         rejected = [p for p in filtered if not p.get("prefilter_ok")]

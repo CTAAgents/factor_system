@@ -1214,6 +1214,7 @@ class EvolutionLoop:
             是否至少 1 个候选晋升 elite。
         """
         from .batch_mining import BatchMiner, BatchMiningConfig
+        from fts.config.settings import get_config as _batch_cfg
 
         miner = BatchMiner(
             config=BatchMiningConfig(
@@ -1221,6 +1222,9 @@ class EvolutionLoop:
                 max_candidates=self.batch_max_candidates,
                 max_workers=self.batch_max_workers,
                 random_seed=self.batch_random_seed,
+                # GAP-I502 (v2.83.0): 执行器后端可插拔（配置驱动，默认 thread 保持现状）
+                executor_backend=getattr(_batch_cfg(), "executor_backend", "thread"),
+                executor_max_workers=int(getattr(_batch_cfg(), "executor_max_workers", 0)) or None,
             ),
             generate_cb=self._batch_generate_one,
             runtime_check_cb=self._check_factor_runtime,
