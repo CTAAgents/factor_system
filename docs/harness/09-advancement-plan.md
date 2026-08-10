@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.84.0
+> 版本: v2.85.0
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -217,6 +217,16 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ 新建 `fts/factor_engine/microstructure_factors.py`——`MicrostructureConfig`（window/large_threshold_abs/large_threshold_mult/min_rows）+ `classify_tick_direction`（价差方向，持平沿用前向）+ `order_flow_imbalance`（滚动窗口主动买卖量差归一化 OFI）+ `order_book_imbalance`（5 档深度 OBI）+ `large_trade_ratio`（绝对/相对阈值大单占比）+ `compute_microstructure_factors` 统一入口（FACTOR_COLUMNS 契约，缺列/不足 min_rows 优雅降级空）
 - 📋 新增 `test_microstructure_factors.py` 20 用例 + `test_tick_cache_accumulate.py` 11 用例（31 passed），既有 tick/aggregator/migrate 125 passed 全绿
 - ✅ 文档同步：01/03/06/07/08 + 23 计划（GAP-I503 首期 ✅ 关闭）+ pyproject bump v2.83.0 → v2.84.0
+
+### v2.85.0 组合目标函数换手惩罚项显式化（GAP-I303，Stage 3B，已完成）
+
+**完成时间**: 2026-08-10
+
+**核心产出（总纲 plans/23 GAP-I303）**:
+- ✅ `portfolio_loop.py` 新增 `apply_turnover_penalty`——组合目标函数显式换手惩罚项 λ·换手率：粘性约束后、权重归一化前执行 `w_new' = w_old + (w_new − w_old)/(1+λ)` 收缩权重变动（λ=0 关闭保持原样、λ 越大换手越低、新因子不惩罚）
+- ✅ `build_combo`/`PortfolioLoop.__init__` 新增 `turnover_penalty` 参数透传；`FTSConfig` 新增 `l3_turnover_penalty`（env `FTS_L3_TURNOVER_PENALTY` 默认 0.0 关闭）
+- 📋 新增 `test_turnover_penalty.py` 12 用例（单元 4 + 换手惩罚生效断言 3——Σ\|Δw\| 严格更小且 λ 单调递减 + build_combo 集成 2 + 配置读取 3），portfolio_loop 213 + 12 合计 225 passed 全绿
+- ✅ 文档同步：01/03/06/07/08 + 23 计划（GAP-I303 ✅ 关闭）+ pyproject bump v2.84.0 → v2.85.0
 
 ### v2.61.0 股票流水线 GAP-S01（行业/市值中性化主流程，已完成）
 

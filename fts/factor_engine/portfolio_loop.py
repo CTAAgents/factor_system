@@ -1802,6 +1802,42 @@ def _apply_sticky_constraints(
     return signals
 
 
+def apply_turnover_penalty(
+    signals: list[PortfolioSignal],
+    prev_weights: dict[str, float],
+    turnover_penalty: float = 0.0,
+) -> list[PortfolioSignal]:
+    """组合目标函数换手惩罚项（GAP-I303，v2.85.0）。
+
+    机构级标准：组合优化目标含换手惩罚项 λ·换手率。本函数在粘性约束之后、
+    权重归一化之前执行，将"目标 = 原始目标 − λ·Σ|Δw|"的带惩罚优化近似为
+    权重变动收缩：
+
+        w_new' = w_old + (w_new − w_old) / (1 + λ)
+
+    - λ = 0：无惩罚，权重保持原样（默认关闭，向后兼容）
+    - λ > 0：变动幅度按 1/(1+λ) 收缩，λ 越大越接近上次组合（换手越低）
+    新因子（prev 无权重）不惩罚，保留原权重。
+
+    Args:
+        signals: 待构建信号（权重未归一化，就地修改 weight 字段）
+        prev_weights: {factor_id: weight} 上次组合权重
+        turnover_penalty: 换手惩罚系数 λ（>= 0，0 关闭）
+
+    Returns:
+        施加换手惩罚后的信号列表
+    """
+    if turnover_penalty is None or turnover_penalty <= 0 or not prev_weights:
+        return signals
+    shrink = 1.0 / (1.0 + turnover_penalty)
+    for s in signals:
+        prev_w = prev_weights.get(s.get("factor_id"))
+        if prev_w is not None and prev_w > 0:
+            w_new = s.get("weight", 0.0)
+            s["weight"] = prev_w + (w_new - prev_w) * shrink
+    return signals
+
+
 # ─── Sharpe 虚高验证 ──────────────────────────────────────
 
 SHARPE_WARNING_THRESHOLD: float = 3.5
@@ -1905,6 +1941,7 @@ def build_combo(
     annualize_factor: float = 252.0,
     market: str = "futures",
     cost_config: Optional[dict[str, Any]] = None,
+    turnover_penalty: float = 0.0,
 ) -> PortfolioCombo:
     """构建组合 — 归一化权重 + 计算组合指标。
 
@@ -1920,6 +1957,7 @@ def build_combo(
         market: 市场类型（"futures"/"stock"/"etf"，GAP-L305 net 指标成本参数）
         cost_config: 成本配置（CostConfig 字段 dict，GAP-L305；None=不启用成本模型，
             net_combo_sharpe 为 None）
+        turnover_penalty: 换手惩罚系数 λ（GAP-I303，0=关闭；粘性约束后收缩权重变动）
 
     Returns:
         PortfolioCombo
@@ -1951,6 +1989,14 @@ def build_combo(
             sticky_config.get("max_delta", 0.30),
             sticky_config.get("new_factor_cap", 0.10),
             len(prev_weights),
+        )
+
+    # 换手惩罚（GAP-I303，v2.85.0）：组合目标函数显式换手惩罚项 λ，粘性约束后收缩权重变动
+    if turnover_penalty and turnover_penalty > 0 and prev_weights:
+        apply_turnover_penalty(retained, prev_weights, turnover_penalty)
+        logger.info(
+            "[L3] Step 5: 换手惩罚已应用 (λ=%.2f, 权重变动按 1/(1+λ) 收缩)",
+            turnover_penalty,
         )
 
     # 权重归一化
@@ -3219,6 +3265,7 @@ class PortfolioLoop:
         optimizer_config: Optional[dict[str, Any]] = None,
         cost_config: Optional[dict[str, Any]] = None,
         weight_config: Optional[Any] = None,
+        turnover_penalty: Optional[float] = None,
     ):
         self.memory_dir = Path(memory_dir)
         self.elite_dir = Path(elite_dir)
@@ -3248,6 +3295,16 @@ class PortfolioLoop:
         self.cost_config = dict(cost_config) if cost_config else None
         # v2.74.0: 机构级权重学习配置（elastic_net 风险调整/滚动验证/面板自动匹配）
         self.weight_config = weight_config
+        # GAP-I303 (v2.85.0): 组合目标函数换手惩罚项 λ（None 从 FTSConfig 读取，默认 0 关闭）
+        if turnover_penalty is not None:
+            self.turnover_penalty = float(turnover_penalty)
+        else:
+            try:
+                from fts.config.settings import get_config as _l3_cfg
+
+                self.turnover_penalty = float(getattr(_l3_cfg(), "l3_turnover_penalty", 0.0))
+            except Exception:
+                self.turnover_penalty = 0.0
 
     def _generate_quality_report(self) -> None:
         """从 DuckDB 或 combo 回退，生成精英因子最终质量报告 JSON。
@@ -3980,6 +4037,7 @@ class PortfolioLoop:
                 factor_returns=factor_returns,
                 market=self.market,
                 cost_config=self.cost_config,
+                turnover_penalty=self.turnover_penalty,
             )
             logger.info(
                 "[L3] Step 5: 组合构建完成, 夏普=%.2f, 换手率=%.2f",

@@ -1,6 +1,6 @@
 # FTS 追赶机构水平全面改造计划（Institutional-Level Transformation Plan）
 
-> 版本: v2.84.0
+> 版本: v2.85.0
 > 最后更新: 2026-08-10
 > 状态: 规划中（文档先行，作为 FTS 全链路机构级改造总纲，子计划为执行细则）
 > 适用范围: FTS 全链路（L0 人类设定 / L1 元循环 / L2 演化 / L3 组合 / L4 信号与实盘反馈 / 基础设施）
@@ -334,7 +334,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 |:-----|:-----|:-------|:---------|
 | v2.81.0+ | 3A | GAP-I502 | ExecutorBackend 抽象（process→dask/ray）✅ 已关闭（v2.83.0：`fts/factor_engine/executor_backend.py`——`ExecutorBackend` 抽象（map/shutdown + 上下文管理）+ `ThreadBackend`/`ProcessBackend`（cloudpickle 序列化，lambda/bound method 跨进程）/`DaskBackend`/`RayBackend`（缺依赖自动降级 ProcessBackend）+ `create_executor_backend` 工厂；`BatchMiner.filter_batch` 批量粗筛接入（`BatchMiningConfig.executor_backend`/`executor_max_workers`），配置 `FTSConfig.executor_backend`（默认 thread 保持现状）+ `FTS_EXECUTOR_BACKEND`/`FTS_EXECUTOR_MAX_WORKERS`；新增 `test_executor_backend.py` 14 用例（四后端行为一致性/process lambda+bound method/降级/未知回退/BatchMiner 接入+异常隔离），executor_backend 14 + batch_mining 11 合计 25 passed） |
 | v2.82.0+ | 3A | GAP-I503 首期 | tick 历史缓存扩展 + Level2 订单流因子 ✅ 已关闭（v2.84.0：① tick_cache 增量累积——`aggregator._write_tick_cache` 按 (symbol, datetime) 去重写入 + `tick_cache_retention_days` 保留清理（默认 7 天），`get_ticks`/`_try_tick_cache` 支持 `start_time`/`end_time` 时间窗口查询，跨会话多次拉取累积成更长 tick 历史，无重复污染、不膨胀；② 新建 `fts/factor_engine/microstructure_factors.py`——`MicrostructureConfig`（window/large_threshold_abs/large_threshold_mult/min_rows）+ `classify_tick_direction`（价差方向，持平沿用前向）+ `order_flow_imbalance`（滚动窗口主动买卖量差归一化 OFI ∈[-1,1]）+ `order_book_imbalance`（5 档深度 OBI）+ `large_trade_ratio`（绝对/相对阈值大单成交量占比）+ `compute_microstructure_factors` 统一入口（FACTOR_COLUMNS 契约，缺列/不足 min_rows 优雅降级空）；③ 新增 `test_microstructure_factors.py` 20 用例 + `test_tick_cache_accumulate.py` 11 用例，31 passed + 既有 tick/aggregator/migrate 125 passed 全绿） |
-| v2.83.0+ | 3B | GAP-I303 | 组合目标换手惩罚项 |
+| v2.83.0+ | 3B | GAP-I303 | 组合目标换手惩罚项 ✅ 已关闭（v2.85.0：`portfolio_loop.py` 新增 `apply_turnover_penalty`——组合目标函数显式换手惩罚项 λ，在粘性约束后、权重归一化前执行 `w_new' = w_old + (w_new − w_old)/(1+λ)` 收缩权重变动（λ=0 关闭保持原样、λ 越大换手越低、新因子不惩罚）；`build_combo` 新增 `turnover_penalty` 参数透传，`PortfolioLoop` 新增构造参数（None 从 `FTSConfig.l3_turnover_penalty` 读取，env `FTS_L3_TURNOVER_PENALTY` 默认 0.0 关闭）；复用成本约束语义不新增成本模型；新增 `test_turnover_penalty.py` 12 用例（单元 4 + 换手惩罚生效断言 3——惩罚后 Σ\|Δw\| 严格更小且 λ 单调递减 + build_combo 集成 2 + 配置读取 3），portfolio_loop 213 + 新测试 12 合计 225 passed 全绿） |
 | 远期 | 3C | GAP-I503 二期 | 另类数据因子（舆情 NLP / 卫星 / 供应链）评估 |
 | 远期 | 3C | — | GPU 深度模型训练（Transformer 因子 + GAN 合成） |
 

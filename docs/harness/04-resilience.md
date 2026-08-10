@@ -1,6 +1,6 @@
 # FTS 韧性设计
 
-> 版本: v2.84.0
+> 版本: v2.85.0
 > 最后更新: 2026-08-05
 
 ---
@@ -127,6 +127,17 @@ state.json.bak.2    ← 上上上一次写入
 | `mcp_enabled=false`（默认） | Wind/iFinD MCP 未启用，`_call_mcp` 返回 None，明确跳过增强字段查询（is_available=False），主路径走 DUCKDB_CACHE/TQ/AKSHARE |
 | `mcp_enabled=true` 且已注入 handler | 直接调用注入的 MCP 客户端（`set_mcp_handler`） |
 | `mcp_enabled=true` 但未注入 handler | 抛 RuntimeError 显式初始化报错，避免静默失败掩盖配置错误 |
+
+### DuckDB 并发模型（v2.83.0，GAP-056，design/E.1）
+
+| 场景 | 机制 |
+|:-----|:-----|
+| 进程内并发写 | 单写者 `DuckDBWriter` + 进程内写锁，所有写操作串行，结构上消除 `ConcurrentTransactionException` |
+| 批量写原子性 | `executemany`/`copy_from_records` 显式 `BEGIN/COMMIT` 包裹（DuckDB executemany 为逐条执行非单事务），任一条失败整批 `ROLLBACK`，不留半写入 |
+| 读写互不阻塞 | 读走 `DuckDBReader` 连接池（普通连接，DuckDB 不允许同文件并存可写 + read_only=True 连接，读语义由代码纪律保证），MVCC 快照使写提交期间读侧不受阻塞 |
+| 跨进程写 | 写 job 单一化（模块级 `_get_writer` 单例）+ 脚本 `--readonly` 声明受限，同一 .duckdb 任意时刻至多一个可写连接 |
+| 兼容降级 | `duckdb_single_writer=false` 回退旧多路径；`retry_on_conflict`/`AsyncWriteQueue`/`lock_configuration` 保留为防御兜底（不依赖其解决并发） |
+| 锁配置降级 | 旧版 DuckDB 不支持 `lock_configuration` 时静默降级，由应用层写锁兜底 |
 
 ### 容错兜底
 

@@ -177,6 +177,10 @@ class FTSConfig:
     portfolio_optimizer_mode: str = field(
         default_factory=lambda: os.getenv("FTS_PORTFOLIO_OPTIMIZER_MODE", "risk_parity")
     )
+    # GAP-I303 (v2.85.0): 组合目标函数换手惩罚项 λ（0=关闭，λ 越大权重变动越收缩、换手越低）
+    l3_turnover_penalty: float = field(
+        default_factory=lambda: float(os.getenv("FTS_L3_TURNOVER_PENALTY", "0.0"))
+    )
 
     # ── 股票因子中性化（v2.54.0+）──
     # 股票因子横截面评估时是否做行业/市值中性化预处理
@@ -228,6 +232,15 @@ class FTSConfig:
     # WIND/IFIND MCP 客户端是否启用（false=未启用，明确降级跳过增强字段；
     # true=启用，但未注入客户端时显式抛错提示初始化）
     mcp_enabled: bool = field(default_factory=lambda: os.getenv("FTS_MCP_ENABLED", "false").lower() == "true")
+
+    # ── DuckDB 并发模型（v2.83.0，GAP-056，design/E.1）──
+    # 单写者 + 读连接池：所有写收敛到唯一 writer，读走独立读池，读写互不阻塞
+    duckdb_single_writer: bool = field(
+        default_factory=lambda: os.getenv("FTS_DUCKDB_SINGLE_WRITER", "true").lower() == "true"
+    )
+    duckdb_read_pool_size: int = field(default_factory=lambda: int(os.getenv("FTS_DUCKDB_READ_POOL_SIZE", "4")))
+    duckdb_batch_size: int = field(default_factory=lambda: int(os.getenv("FTS_DUCKDB_BATCH_SIZE", "1000")))
+    duckdb_commit_every: int = field(default_factory=lambda: int(os.getenv("FTS_DUCKDB_COMMIT_EVERY", "100")))
 
     # ── L3 Verifier ──
     verifier: dict = field(

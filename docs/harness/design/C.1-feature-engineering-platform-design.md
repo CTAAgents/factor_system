@@ -1,6 +1,6 @@
 # C.1 特征工程中台 — 详细技术设计
 
-> 版本: v2.84.0
+> 版本: v2.85.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase C.1
 > 状态: **已实现**（文件结构与算子类别与原设计不同；v2.9.0 补齐 CLI）
 > 实现说明: 特征工程中台由 `fts/factor_engine/feature_ops.py`（单文件，7 类算子: TimeSeriesOps/PriceOps/RollingOps/**TechnicalOps**/CrossSectionOps/CrossSymbolOps/CompositeOps + `OperatorRegistry` + `FeatureOpsEngine`）、`fts/factor_engine/gp_evolver.py`（`GPEvolver`/`ExpressionTree`/`tree_to_factor_program`）、`fts/factor_engine/feature_importance.py` 承担。另新增 **`fts/factor_engine/expr_dsl/`**（FTS-Expr 算子表达式 DSL + `OperatorRegistry` 58 算子 L0-L5 分层，2026-08 算子演化基础层）。**v2.9.0 补齐 CLI**：`fts feature list`（列算子）、`fts feature analyze`（置换重要性）、`fts gp evolve`（GP 遗传规划演化）。原设计 `feature_ops/` 包目录结构未实现。

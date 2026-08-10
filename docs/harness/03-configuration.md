@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.84.0
+> 版本: v2.85.0
 > 最后更新: 2026-08-07
 
 ---
@@ -57,6 +57,7 @@ FTS 配置采用三级优先级（高→低）：
 | `executor_backend` | str | `"thread"` | `FTS_EXECUTOR_BACKEND` | 批量粗筛执行器后端：`thread`/`process`/`dask`/`ray`，可插拔分布式扩展预留（GAP-I502，v2.83.0；默认 thread 保持现状，dask/ray 缺依赖自动降级 process） |
 | `executor_max_workers` | int | 4 | `FTS_EXECUTOR_MAX_WORKERS` | 执行器后端并行工作数（GAP-I502，v2.83.0） |
 | `tick_cache_retention_days` | int | 7 | —（FuturesDataAggregator 构造参数） | tick_cache 保留天数：超过该时长的过期 tick 写入时自动清理（GAP-I503 首期，v2.84.0） |
+| `l3_turnover_penalty` | float | 0.0 | `FTS_L3_TURNOVER_PENALTY` | 组合目标函数换手惩罚系数 λ：粘性约束后按 1/(1+λ) 收缩权重变动（0=关闭，λ 越大换手越低，GAP-I303，v2.85.0） |
 | `portfolio_max_factors` | int | 20 | — | L3 组合最大因子数 |
 | `portfolio_top_n` | int | 5 | — | L3 Top N 输出 |
 | `portfolio_decay_days` | int | 90 | — | L3 衰减检验窗口 |
@@ -75,7 +76,10 @@ FTS 配置采用三级优先级（高→低）：
 | `margin_rate_map` | dict | 见默认表 | —（YAML） | 品种保证金率表（{symbol: 保证金率}，未配置品种用默认 0.10，GAP-F09，v2.60.0） |
 | `max_margin_usage` | float | `0.80` | `FTS_MAX_MARGIN_USAGE` | 最大保证金占用率（保证金占用/总权益，超过触发强平风险告警，GAP-F09，v2.60.0） |
 | `mcp_enabled` | bool | `false` | `FTS_MCP_ENABLED` | 是否启用 Wind/iFinD MCP 增强字段（启用时若未注入 MCP 客户端抛 RuntimeError 显式报错，未启用则明确降级跳过增强字段，GAP-F04，v2.60.0） |
-| `mcp_enabled` | bool | `false` | `FTS_MCP_ENABLED` | 是否启用 Wind/iFinD MCP 增强字段（启用时若未注入 MCP 客户端抛 RuntimeError 显式报错，未启用则明确降级跳过增强字段，GAP-F04，v2.60.0） |
+| `duckdb_single_writer` | bool | `true` | `FTS_DUCKDB_SINGLE_WRITER` | 是否启用 DuckDB 单写者模式（所有写收敛唯一 writer，false 回退旧多路径，GAP-056，v2.83.0） |
+| `duckdb_read_pool_size` | int | `4` | `FTS_DUCKDB_READ_POOL_SIZE` | DuckDB 读连接池大小（读操作与单写者解耦，互不阻塞，GAP-056，v2.83.0） |
+| `duckdb_batch_size` | int | `1000` | `FTS_DUCKDB_BATCH_SIZE` | DuckDB 批量写入缓冲行数（批量 COPY 降低 commit 频率，GAP-056，v2.83.0） |
+| `duckdb_commit_every` | int | `100` | `FTS_DUCKDB_COMMIT_EVERY` | DuckDB 批量写入 commit 周期（秒，GAP-056，v2.83.0） |
 
 ## 3. YAML 配置文件
 
