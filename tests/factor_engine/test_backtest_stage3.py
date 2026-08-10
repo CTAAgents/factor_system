@@ -15,7 +15,6 @@
 
 import numpy as np
 import pandas as pd
-import pytest
 from pathlib import Path
 
 from fts.factor_engine import (
@@ -91,7 +90,9 @@ def test_screener_filters_by_total_score_and_status():
         _make_factor("x", "f3", grade="A", total_score=90.0, status="deprecated"),
     ]
     passed = FactorScreener().screen(
-        factors=factors, min_total_score=50.0, status=["active"],
+        factors=factors,
+        min_total_score=50.0,
+        status=["active"],
     )
     assert [f["factor_id"] for f in passed] == ["f1"]
 
@@ -177,12 +178,10 @@ def test_portfolio_adaptive_weight():
         "a": pd.Series(np.full(50, 0.1), index=idx),
         "b": pd.Series(np.full(50, 0.1), index=idx),
     }
-    metrics = {"a": {"sharpe": 2.0, "family": "momentum"},
-               "b": {"sharpe": 1.0, "family": "value"}}
+    metrics = {"a": {"sharpe": 2.0, "family": "momentum"}, "b": {"sharpe": 1.0, "family": "value"}}
     regime = {"regime": "bull"}
     pc = PortfolioConstructor()
-    result = pc.construct(signals, weight_method="adaptive",
-                          factor_metrics=metrics, regime=regime)
+    result = pc.construct(signals, weight_method="adaptive", factor_metrics=metrics, regime=regime)
     assert set(result.weights.keys()) == {"a", "b"}
 
 
@@ -223,10 +222,13 @@ def test_risk_attributor_basic():
     rng = np.random.default_rng(7)
     idx = pd.date_range("2024-01-01", periods=120, freq="B")
     returns = pd.Series(rng.normal(0.001, 0.02, 120), index=idx)
-    factor_returns = pd.DataFrame({
-        "f1": rng.normal(0.001, 0.02, 120),
-        "f2": rng.normal(0.0005, 0.01, 120),
-    }, index=idx)
+    factor_returns = pd.DataFrame(
+        {
+            "f1": rng.normal(0.001, 0.02, 120),
+            "f2": rng.normal(0.0005, 0.01, 120),
+        },
+        index=idx,
+    )
     attr = RiskAttributor()
     report = attr.attribute(returns, factor_returns=factor_returns)
     assert set(report.factor_contributions.keys()) == {"f1", "f2"}
@@ -282,19 +284,21 @@ def test_capital_vol_target():
     rng = np.random.default_rng(1)
     returns = pd.Series(rng.normal(0, 0.01, 252))
     alloc = CapitalAllocator()
-    result = alloc.allocate(returns, total_capital=1_000_000, mode="vol_target",
-                            target_volatility=0.15)
+    result = alloc.allocate(returns, total_capital=1_000_000, mode="vol_target", target_volatility=0.15)
     assert 0.0 < result.leverage <= 2.0
 
 
 def test_capital_risk_parity_multi_asset():
     rng = np.random.default_rng(3)
     idx = pd.date_range("2024-01-01", periods=100, freq="B")
-    df = pd.DataFrame({
-        "a": rng.normal(0.001, 0.02, 100),
-        "b": rng.normal(0.0005, 0.01, 100),
-        "c": rng.normal(0.0002, 0.008, 100),
-    }, index=idx)
+    df = pd.DataFrame(
+        {
+            "a": rng.normal(0.001, 0.02, 100),
+            "b": rng.normal(0.0005, 0.01, 100),
+            "c": rng.normal(0.0002, 0.008, 100),
+        },
+        index=idx,
+    )
     alloc = CapitalAllocator()
     result = alloc.allocate(df, total_capital=1_000_000, mode="risk_parity")
     assert set(result.weights.keys()) == {"a", "b", "c"}
@@ -303,8 +307,9 @@ def test_capital_risk_parity_multi_asset():
 
 def test_capital_kelly():
     alloc = CapitalAllocator()
-    result = alloc.allocate(pd.Series(dtype=float), total_capital=1_000_000,
-                            mode="kelly", win_rate=0.6, payoff_ratio=1.5)
+    result = alloc.allocate(
+        pd.Series(dtype=float), total_capital=1_000_000, mode="kelly", win_rate=0.6, payoff_ratio=1.5
+    )
     f = result.details["fraction"]
     assert 0.0 < f <= 2.0
     assert result.allocated_capital["portfolio"] == 1_000_000 * f
@@ -358,15 +363,17 @@ def test_backtest_result_to_dict():
 
 
 def test_builder_chain_config():
-    builder = (BacktestPipelineBuilder()
-               .set_period("2020-01-01", "2024-12-31")
-               .set_signal_type("cross_section")
-               .set_weight_method("adaptive")
-               .set_capital_mode("vol_target", target_vol=0.15)
-               .enable_cost_model(True)
-               .enable_risk_attribution(True)
-               .set_forward_period(5)
-               .set_initial_capital(2_000_000))
+    builder = (
+        BacktestPipelineBuilder()
+        .set_period("2020-01-01", "2024-12-31")
+        .set_signal_type("cross_section")
+        .set_weight_method("adaptive")
+        .set_capital_mode("vol_target", target_vol=0.15)
+        .enable_cost_model(True)
+        .enable_risk_attribution(True)
+        .set_forward_period(5)
+        .set_initial_capital(2_000_000)
+    )
     cfg = builder.get_config()
     assert cfg["start"] == "2020-01-01"
     assert cfg["end"] == "2024-12-31"

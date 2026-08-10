@@ -42,18 +42,21 @@ def _clean_registry():
 def _make_kline_df(n: int = 5, price: float = 3500.0) -> pd.DataFrame:
     """构造测试 K 线 DataFrame。"""
     from datetime import date, timedelta
-    return pd.DataFrame({
-        "symbol": "RB0",
-        "period": "daily",
-        "date": [date.today() - timedelta(days=i) for i in range(n)][::-1],
-        "open": [price] * n,
-        "high": [price + 1] * n,
-        "low": [price - 1] * n,
-        "close": [price] * n,
-        "volume": [100000] * n,
-        "source": "TQ_LOCAL",
-        "trace_id": "test-tid",
-    })
+
+    return pd.DataFrame(
+        {
+            "symbol": "RB0",
+            "period": "daily",
+            "date": [date.today() - timedelta(days=i) for i in range(n)][::-1],
+            "open": [price] * n,
+            "high": [price + 1] * n,
+            "low": [price - 1] * n,
+            "close": [price] * n,
+            "volume": [100000] * n,
+            "source": "TQ_LOCAL",
+            "trace_id": "test-tid",
+        }
+    )
 
 
 # ─── 调度任务注册测试 ──────────────────────────────────
@@ -63,6 +66,7 @@ class TestSyncFuturesDataTaskRegistration:
     def test_registered_in_default_tasks(self):
         """register_default_tasks() 注册 sync_futures_data。"""
         from fts.scheduler.tasks import register_default_tasks
+
         register_default_tasks()
         assert "sync_futures_data" in REGISTRY
         spec = REGISTRY.get("sync_futures_data")
@@ -101,8 +105,11 @@ class TestSyncFuturesDataJob:
         mock_agg.get_ohlcv.return_value = _make_kline_df(n=5)
         mock_agg.get_source_status.return_value = {
             "TQ_LOCAL": {
-                "consecutive_failures": 0, "circuit_open": False,
-                "total_success": 5, "total_failure": 0, "last_error": "",
+                "consecutive_failures": 0,
+                "circuit_open": False,
+                "total_success": 5,
+                "total_failure": 0,
+                "last_error": "",
             }
         }
 
@@ -182,6 +189,7 @@ class TestSyncFuturesDataJob:
     def test_aggregator_creation_failure(self, tmp_path, monkeypatch, caplog):
         """aggregator 创建失败时，job 不崩溃（仅记日志）。"""
         import logging
+
         monkeypatch.chdir(tmp_path)
         (tmp_path / "data").mkdir()
 
@@ -218,6 +226,7 @@ class TestSyncFuturesDataJob:
 
         # 验证 call 数量 == FUTURES_CORE_SUBSET 长度
         from fts.data_futures import FUTURES_CORE_SUBSET
+
         assert mock_agg.get_ohlcv.call_count == len(FUTURES_CORE_SUBSET)
         # 默认应为 25 个核心品种
         assert len(FUTURES_CORE_SUBSET) >= 20

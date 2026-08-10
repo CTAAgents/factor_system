@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Literal, Optional
 
 import numpy as np
 import pandas as pd
@@ -150,7 +150,9 @@ class DataQualityMonitor:
         )
         logger.info(
             "注册因子基准 [factor_id=%s, ic=%.4f, capacity=%.0f]",
-            factor_id, baseline_ic, baseline_capacity,
+            factor_id,
+            baseline_ic,
+            baseline_capacity,
         )
 
     def check(
@@ -199,9 +201,7 @@ class DataQualityMonitor:
 
         return alerts
 
-    def _check_ic_drift(
-        self, baseline: FactorBaseline, current_ic: float
-    ) -> Optional[QualityAlert]:
+    def _check_ic_drift(self, baseline: FactorBaseline, current_ic: float) -> Optional[QualityAlert]:
         """检测 IC 漂移。"""
         if baseline.ic_std <= 0:
             return None
@@ -232,9 +232,7 @@ class DataQualityMonitor:
             threshold=self._config.ic_zscore_critical if severity == "critical" else self._config.ic_zscore_warning,
         )
 
-    def _check_capacity_shock(
-        self, baseline: FactorBaseline, current_capacity: float
-    ) -> Optional[QualityAlert]:
+    def _check_capacity_shock(self, baseline: FactorBaseline, current_capacity: float) -> Optional[QualityAlert]:
         """检测容量突变。"""
         if baseline.baseline_capacity <= 0:
             return None
@@ -262,7 +260,9 @@ class DataQualityMonitor:
             metric_name="Capacity",
             metric_value=current_capacity,
             baseline_value=baseline.baseline_capacity,
-            threshold=self._config.capacity_change_critical if severity == "critical" else self._config.capacity_change_warning,
+            threshold=self._config.capacity_change_critical
+            if severity == "critical"
+            else self._config.capacity_change_warning,
         )
 
     def _handle_alert(self, alert: QualityAlert) -> None:
@@ -281,7 +281,8 @@ class DataQualityMonitor:
         if now - last_time < self._config.alert_cooldown:
             logger.debug(
                 "告警冷却中，跳过 [factor_id=%s, type=%s]",
-                alert.factor_id, alert.alert_type,
+                alert.factor_id,
+                alert.alert_type,
             )
             return
 
@@ -293,7 +294,10 @@ class DataQualityMonitor:
         logger.log(
             log_level,
             "数据质量告警 [factor_id=%s, type=%s, severity=%s]: %s",
-            alert.factor_id, alert.alert_type, alert.severity, alert.message,
+            alert.factor_id,
+            alert.alert_type,
+            alert.severity,
+            alert.message,
         )
 
         # 回调通知
@@ -341,16 +345,18 @@ class DataQualityMonitor:
         if data is None or data.empty:
             self._market_data_valid = False
             self._last_completeness_ratio = 0.0
-            alerts.append(QualityAlert(
-                factor_id="market_data",
-                alert_type="ic_drift",
-                severity="critical",
-                message="市场数据为空，无法执行演化",
-                metric_name="data_completeness",
-                metric_value=0.0,
-                baseline_value=1.0,
-                threshold=0.5,
-            ))
+            alerts.append(
+                QualityAlert(
+                    factor_id="market_data",
+                    alert_type="ic_drift",
+                    severity="critical",
+                    message="市场数据为空，无法执行演化",
+                    metric_name="data_completeness",
+                    metric_value=0.0,
+                    baseline_value=1.0,
+                    threshold=0.5,
+                )
+            )
             self._total_alerts += 1
             self._critical_alerts += 1
             self._total_checks += 1
@@ -363,16 +369,18 @@ class DataQualityMonitor:
 
         if missing_cols:
             self._market_data_valid = False
-            alerts.append(QualityAlert(
-                factor_id="market_data",
-                alert_type="ic_drift",
-                severity="critical",
-                message=f"缺少必要字段: {missing_cols}",
-                metric_name="field_completeness",
-                metric_value=0.0,
-                baseline_value=1.0,
-                threshold=0.8,
-            ))
+            alerts.append(
+                QualityAlert(
+                    factor_id="market_data",
+                    alert_type="ic_drift",
+                    severity="critical",
+                    message=f"缺少必要字段: {missing_cols}",
+                    metric_name="field_completeness",
+                    metric_value=0.0,
+                    baseline_value=1.0,
+                    threshold=0.8,
+                )
+            )
             self._total_alerts += 1
             self._critical_alerts += 1
 
@@ -384,16 +392,18 @@ class DataQualityMonitor:
             n_checked += 1
             if missing_ratio > 0.05:
                 sev = "critical" if missing_ratio > 0.2 else "warning"
-                alerts.append(QualityAlert(
-                    factor_id="market_data",
-                    alert_type="ic_drift",
-                    severity=sev,
-                    message=f"字段 {col} 缺失率 {missing_ratio:.1%}",
-                    metric_name="missing_ratio",
-                    metric_value=missing_ratio,
-                    baseline_value=0.0,
-                    threshold=0.05,
-                ))
+                alerts.append(
+                    QualityAlert(
+                        factor_id="market_data",
+                        alert_type="ic_drift",
+                        severity=sev,
+                        message=f"字段 {col} 缺失率 {missing_ratio:.1%}",
+                        metric_name="missing_ratio",
+                        metric_value=missing_ratio,
+                        baseline_value=0.0,
+                        threshold=0.05,
+                    )
+                )
                 self._total_alerts += 1
                 if sev == "critical":
                     self._critical_alerts += 1
@@ -410,16 +420,18 @@ class DataQualityMonitor:
             fr_missing = float(np.isnan(forward_returns).sum()) / len(forward_returns)
             if fr_missing > 0.05:
                 sev = "critical" if fr_missing > 0.2 else "warning"
-                alerts.append(QualityAlert(
-                    factor_id="market_data",
-                    alert_type="ic_drift",
-                    severity=sev,
-                    message=f"forward_returns 缺失率 {fr_missing:.1%}",
-                    metric_name="forward_returns_missing",
-                    metric_value=fr_missing,
-                    baseline_value=0.0,
-                    threshold=0.05,
-                ))
+                alerts.append(
+                    QualityAlert(
+                        factor_id="market_data",
+                        alert_type="ic_drift",
+                        severity=sev,
+                        message=f"forward_returns 缺失率 {fr_missing:.1%}",
+                        metric_name="forward_returns_missing",
+                        metric_value=fr_missing,
+                        baseline_value=0.0,
+                        threshold=0.05,
+                    )
+                )
                 self._total_alerts += 1
                 if sev == "critical":
                     self._critical_alerts += 1
@@ -533,7 +545,7 @@ def compute_timestamp_continuity(df: pd.DataFrame, freq: str = "D") -> float:
     timestamps = pd.to_datetime(df["timestamp"]).sort_values().unique()
     if len(timestamps) < 2:
         return 1.0
-    expected = pd.date_range(start=timestamps[0], end=timestamps[-1], freq=freq)
+    expected = pd.date_range(start=pd.Timestamp(timestamps[0]), end=pd.Timestamp(timestamps[-1]), freq=freq)
     if len(expected) == 0:
         return 0.0
     actual_set = set(timestamps)
@@ -584,8 +596,7 @@ def compute_jump_detection(df: pd.DataFrame, threshold: float = 0.15) -> int:
     return int((returns > threshold).sum())
 
 
-def compute_data_drift_rate(reference: pd.Series, current: pd.Series,
-                            bins: int = 10) -> float:
+def compute_data_drift_rate(reference: pd.Series, current: pd.Series, bins: int = 10) -> float:
     """准确性: PSI 数据漂移率（> 0.25 表示严重漂移）。"""
     if reference.dropna().empty or current.dropna().empty:
         return 0.0
@@ -621,10 +632,12 @@ def compute_freshness(df: pd.DataFrame, now=None) -> float:
     return float((now - latest).total_seconds())
 
 
-def evaluate_source_data(df: pd.DataFrame,
-                         expected_symbols: set[str] | None = None,
-                         freq: str = "D",
-                         reference_close: pd.Series | None = None) -> dict[str, Any]:
+def evaluate_source_data(
+    df: pd.DataFrame,
+    expected_symbols: set[str] | None = None,
+    freq: str = "D",
+    reference_close: pd.Series | None = None,
+) -> dict[str, Any]:
     """汇总评估单数据源的三维质量指标（B.1）。
 
     Args:
@@ -640,9 +653,7 @@ def evaluate_source_data(df: pd.DataFrame,
             "timeliness": {...},
         }
     """
-    expected = expected_symbols or (
-        set(df["symbol"].unique()) if "symbol" in df.columns else set()
-    )
+    expected = expected_symbols or (set(df["symbol"].unique()) if "symbol" in df.columns else set())
     completeness = {
         "coverage_ratio": compute_coverage_ratio(df, expected),
         "timestamp_continuity": compute_timestamp_continuity(df, freq),
@@ -656,18 +667,14 @@ def evaluate_source_data(df: pd.DataFrame,
         accuracy["outlier_ratio"] = compute_outlier_ratio(df["close"])
         accuracy["jump_detection_count"] = compute_jump_detection(df)
         if reference_close is not None and len(reference_close) > 0:
-            accuracy["data_drift_rate"] = compute_data_drift_rate(
-                reference_close, df["close"]
-            )
+            accuracy["data_drift_rate"] = compute_data_drift_rate(reference_close, df["close"])
 
     timeliness = {
         "freshness_seconds": compute_freshness(df),
         "cache_hit_ratio": 0.0,
     }
     if "timestamp" in df.columns and not df.empty:
-        timeliness["update_delay_seconds"] = compute_update_delay(
-            pd.to_datetime(df["timestamp"]).max()
-        )
+        timeliness["update_delay_seconds"] = compute_update_delay(pd.to_datetime(df["timestamp"]).max())
 
     return {
         "completeness": completeness,

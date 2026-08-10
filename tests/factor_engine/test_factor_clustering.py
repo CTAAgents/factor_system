@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
+import pandas as pd
 
 # 固定随机种子确保测试结果可复现
 np.random.seed(42)
@@ -19,6 +19,7 @@ from fts.factor_engine.factor_clustering import (
 
 
 # ─── 辅助函数 ──────────────────────────────────────────────
+
 
 def _make_factors(n: int, prefix: str = "fct") -> list[dict]:
     """生成测试用因子列表。"""
@@ -52,6 +53,7 @@ def _make_factors_without_code(n: int) -> list[dict]:
 def _make_panel_data(n_dates: int = 50, n_symbols: int = 1) -> dict[str, "pd.DataFrame"]:
     """生成测试用面板数据。"""
     import pandas as pd
+
     dates = pd.date_range("2026-01-01", periods=n_dates, freq="B")
     panel = {}
     for s in range(n_symbols):
@@ -71,6 +73,7 @@ def _make_panel_data(n_dates: int = 50, n_symbols: int = 1) -> dict[str, "pd.Dat
 # ═══════════════════════════════════════════════════════════
 # P1: FactorClusteringEngine
 # ═══════════════════════════════════════════════════════════
+
 
 class TestFactorClusteringEngineInit:
     """FactorClusteringEngine 初始化测试。"""
@@ -135,7 +138,8 @@ class TestFactorClusteringEngineClusterByCorrelation:
     def test_single_factor(self) -> None:
         engine = FactorClusteringEngine()
         clusters = engine.cluster_by_correlation(
-            np.array([[1.0]]), ["fct_0"],
+            np.array([[1.0]]),
+            ["fct_0"],
         )
         assert len(clusters) == 1
         assert clusters[0] == [0]
@@ -143,11 +147,13 @@ class TestFactorClusteringEngineClusterByCorrelation:
     def test_highly_correlated_factors(self) -> None:
         engine = FactorClusteringEngine(cluster_threshold=0.7)
         # 3 个因子，两两高相关 (>0.3)
-        corr = np.array([
-            [1.0, 0.9, 0.85],
-            [0.9, 1.0, 0.95],
-            [0.85, 0.95, 1.0],
-        ])
+        corr = np.array(
+            [
+                [1.0, 0.9, 0.85],
+                [0.9, 1.0, 0.95],
+                [0.85, 0.95, 1.0],
+            ]
+        )
         clusters = engine.cluster_by_correlation(corr, ["a", "b", "c"])
         # 应合并为 1 个簇
         assert len(clusters) == 1
@@ -156,11 +162,13 @@ class TestFactorClusteringEngineClusterByCorrelation:
     def test_lowly_correlated_factors(self) -> None:
         engine = FactorClusteringEngine(cluster_threshold=0.7)
         # 3 个因子，低相关 (<0.3)
-        corr = np.array([
-            [1.0, 0.05, 0.1],
-            [0.05, 1.0, 0.02],
-            [0.1, 0.02, 1.0],
-        ])
+        corr = np.array(
+            [
+                [1.0, 0.05, 0.1],
+                [0.05, 1.0, 0.02],
+                [0.1, 0.02, 1.0],
+            ]
+        )
         clusters = engine.cluster_by_correlation(corr, ["a", "b", "c"])
         # 应分为 3 个簇
         assert len(clusters) == 3
@@ -168,22 +176,26 @@ class TestFactorClusteringEngineClusterByCorrelation:
     def test_mixed_correlations(self) -> None:
         engine = FactorClusteringEngine(cluster_threshold=0.7)
         # 4 个因子：(a,b) 高相关, (c,d) 高相关, 两组间低相关
-        corr = np.array([
-            [1.0, 0.9, 0.1, 0.05],
-            [0.9, 1.0, 0.08, 0.03],
-            [0.1, 0.08, 1.0, 0.85],
-            [0.05, 0.03, 0.85, 1.0],
-        ])
+        corr = np.array(
+            [
+                [1.0, 0.9, 0.1, 0.05],
+                [0.9, 1.0, 0.08, 0.03],
+                [0.1, 0.08, 1.0, 0.85],
+                [0.05, 0.03, 0.85, 1.0],
+            ]
+        )
         clusters = engine.cluster_by_correlation(corr, ["a", "b", "c", "d"])
         # 应分为 2 个簇
         assert len(clusters) == 2
 
     def test_nan_correlation(self) -> None:
         engine = FactorClusteringEngine(cluster_threshold=0.7)
-        corr = np.array([
-            [1.0, np.nan],
-            [np.nan, 1.0],
-        ])
+        corr = np.array(
+            [
+                [1.0, np.nan],
+                [np.nan, 1.0],
+            ]
+        )
         clusters = engine.cluster_by_correlation(corr, ["a", "b"])
         # NaN 应处理为最大距离，不应当抛异常
         assert len(clusters) >= 1
@@ -259,8 +271,7 @@ class TestFactorClusteringEngineRun:
         engine = FactorClusteringEngine()
         code = "def run(df, params):\n    return df['close'].values"
         factors = [
-            {"factor_id": f"fct_{i}", "name": f"fct_{i}", "code": code, "sharpe": 1.0 + i * 0.1}
-            for i in range(5)
+            {"factor_id": f"fct_{i}", "name": f"fct_{i}", "code": code, "sharpe": 1.0 + i * 0.1} for i in range(5)
         ]
         panel = _make_panel_data()
         result = engine.run(factors, panel_data=panel)
@@ -272,6 +283,7 @@ class TestFactorClusteringEngineRun:
 # ═══════════════════════════════════════════════════════════
 # P2: PCASignalCompressor
 # ═══════════════════════════════════════════════════════════
+
 
 class TestPCASignalCompressorInit:
     """PCASignalCompressor 初始化测试。"""
@@ -359,6 +371,7 @@ class TestPCASignalCompressorRun:
 # ═══════════════════════════════════════════════════════════
 # 工具函数
 # ═══════════════════════════════════════════════════════════
+
 
 class TestComputeClusterSummary:
     """compute_cluster_summary 测试。"""

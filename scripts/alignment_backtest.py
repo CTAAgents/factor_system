@@ -17,7 +17,7 @@ import json
 import sys
 import time
 import warnings
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +38,7 @@ ELITE_DIR = PROJECT_ROOT / "memory/knowledge/factors/futures_elite"
 #  信号数据加载
 # ═══════════════════════════════════════════════════════════════
 
+
 def load_alignment_report(date_str: str) -> dict[str, Any] | None:
     """加载当日信号报告中的对齐度数据。"""
     report_dir = REPORTS_ROOT / date_str
@@ -54,13 +55,13 @@ def load_alignment_report(date_str: str) -> dict[str, Any] | None:
 
 def load_signal_history() -> pd.DataFrame:
     """从 signal_scores_history.jsonl 加载历史信号数据。
-    
+
     返回: DataFrame(index=date, columns=symbol, values=score)
     """
     history_path = REPORTS_ROOT / "signal_scores_history.jsonl"
     if not history_path.exists():
         return pd.DataFrame()
-    
+
     records: list[dict[str, Any]] = []
     for line in history_path.read_text(encoding="utf-8").strip().split("\n"):
         if not line.strip():
@@ -69,7 +70,7 @@ def load_signal_history() -> pd.DataFrame:
             records.append(json.loads(line))
         except json.JSONDecodeError:
             continue
-    
+
     # 按日期分组，取每个日期最后一个 entry（全量商品）
     date_groups: dict[str, list[dict]] = {}
     for rec in records:
@@ -77,7 +78,7 @@ def load_signal_history() -> pd.DataFrame:
         if d not in date_groups:
             date_groups[d] = []
         date_groups[d].append(rec)
-    
+
     # 取每个日期品种数最多的 entry
     rows: list[dict] = []
     dates_sorted = sorted(date_groups.keys())
@@ -87,10 +88,10 @@ def load_signal_history() -> pd.DataFrame:
         row = {"date": d}
         row.update(best.get("scores", {}))
         rows.append(row)
-    
+
     if not rows:
         return pd.DataFrame()
-    
+
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"])
     df = df.set_index("date").sort_index()
@@ -101,6 +102,7 @@ def load_signal_history() -> pd.DataFrame:
 #  策略回测模拟
 # ═══════════════════════════════════════════════════════════════
 
+
 def simulate_portfolio(
     signal_df: pd.DataFrame,
     top_n: int = 5,
@@ -109,56 +111,56 @@ def simulate_portfolio(
     long_only: bool = False,
 ) -> dict[str, Any]:
     """基于历史信号模拟组合表现。
-    
+
     策略：每日做多 Top N 品种，做空 Bottom N 品种（多空双向）。
     收益计算：简单等权，假设在信号日收盘建仓，下一日收盘平仓。
-    
+
     Args:
         signal_df: 信号 DataFrame (index=date, columns=symbols)
         top_n: 每边持仓品种数
         cost_rate: 单边交易成本率
         slippage: 滑点率
         long_only: 是否仅做多
-        
+
     Returns:
         绩效指标字典
     """
     if signal_df.empty or len(signal_df) < 2:
         return {"error": "数据不足"}
-    
+
     # 对齐符号
-    symbols = list(signal_df.columns)
+    list(signal_df.columns)
     dates = signal_df.index.sort_values()
-    
+
     daily_returns: list[float] = []
     daily_trades: list[dict] = []
     equity = [1.0]
     turnovers: list[float] = []
     prev_long: set[str] = set()
     prev_short: set[str] = set()
-    
+
     for i in range(1, len(dates)):
         prev_date = dates[i - 1]
         curr_date = dates[i]
-        
+
         prev_scores = signal_df.loc[prev_date]
         prev_scores = prev_scores.dropna()
-        
+
         if len(prev_scores) < top_n * 2:
             daily_returns.append(0.0)
             equity.append(equity[-1])
             continue
-        
+
         sorted_scores = prev_scores.sort_values(ascending=False)
         long_symbols = set(sorted_scores.head(top_n).index)
         short_symbols = set(sorted_scores.tail(top_n).index)
-        
+
         # 如果存在重叠，调整
         overlap = long_symbols & short_symbols
         if overlap:
             # 移除重叠品种，从后续补充
-            extra_long = sorted_scores.index[top_n: top_n + len(overlap) * 2]
-            extra_short = sorted_scores.index[-(top_n + len(overlap) * 2):-top_n]
+            extra_long = sorted_scores.index[top_n : top_n + len(overlap) * 2]
+            extra_short = sorted_scores.index[-(top_n + len(overlap) * 2) : -top_n]
             for s in overlap:
                 long_symbols.remove(s)
                 short_symbols.remove(s)
@@ -168,83 +170,85 @@ def simulate_portfolio(
                 if len(extra_short) > 0:
                     short_symbols.add(extra_short[-1])
                     extra_short = extra_short[:-1]
-        
+
         # 计算换手率
         turnover_long = len(long_symbols - prev_long) / max(top_n, 1)
         turnover_short = len(short_symbols - prev_short) / max(top_n, 1)
         avg_turnover = (turnover_long + turnover_short) / 2
         turnovers.append(avg_turnover)
-        
+
         prev_long = long_symbols
         prev_short = short_symbols
-        
+
         # 模拟收益（假设等权且所有品种波动率相近）
         # 做多收益 = 1/N * Σ(品种收益)
         # 做空收益 = -1/N * Σ(品种收益)
         # 简化：用信号方向替代收益方向
         long_avg = prev_scores[list(long_symbols)].mean() if long_symbols else 0
         short_avg = prev_scores[list(short_symbols)].mean() if short_symbols else 0
-        
+
         if long_only:
             port_return = long_avg * 0.01  # 信号值到收益的比例缩放
         else:
             port_return = (long_avg - abs(short_avg)) * 0.01
-        
+
         # 交易成本
         tc = cost_rate * avg_turnover + slippage * avg_turnover
         net_return = port_return - tc
-        
+
         daily_returns.append(net_return)
         equity.append(equity[-1] * (1 + net_return))
-        
+
         if i <= 5 or i == len(dates) - 1:
-            daily_trades.append({
-                "date": curr_date.isoformat()[:10],
-                "long": list(long_symbols)[:5],
-                "short": list(short_symbols)[:5],
-                "return": round(net_return, 6),
-                "turnover": round(avg_turnover, 4),
-            })
-    
+            daily_trades.append(
+                {
+                    "date": curr_date.isoformat()[:10],
+                    "long": list(long_symbols)[:5],
+                    "short": list(short_symbols)[:5],
+                    "return": round(net_return, 6),
+                    "turnover": round(avg_turnover, 4),
+                }
+            )
+
     # 计算绩效指标
     return_series = pd.Series(daily_returns)
-    equity_curve = pd.Series(equity[1:], index=dates[1:])
-    
+    pd.Series(equity[1:], index=dates[1:])
+
     total_return = equity[-1] - 1.0
     trading_days = len(daily_returns)
     annual_factor = 252 / max(trading_days, 1)
     annual_return = total_return * annual_factor
     volatility = float(return_series.std() * np.sqrt(252)) if return_series.std() > 0 else 0.0
-    
+
     # Sharpe
     sharpe = annual_return / volatility if volatility > 0 else 0.0
-    
+
     # 最大回撤
     peak = np.maximum.accumulate(equity)
     drawdown = (equity - peak) / peak
     max_dd = float(np.min(drawdown))
-    
+
     # Calmar
     calmar = annual_return / abs(max_dd) if max_dd < 0 else 0.0
-    
+
     # 胜率
     win_rate = sum(1 for r in daily_returns if r > 0) / max(len(daily_returns), 1)
-    
+
     # 最佳/最差日
     best_day = float(max(daily_returns)) if daily_returns else 0.0
     worst_day = float(min(daily_returns)) if daily_returns else 0.0
-    
+
     # 下行波动率
     downside = [r for r in daily_returns if r < 0]
     downside_vol = float(np.std(downside) * np.sqrt(252)) if len(downside) > 1 else 0.0
-    
+
     # 平均换手率
     avg_turnover_rate = float(np.mean(turnovers)) if turnovers else 0.0
-    
+
     # 信号分布
     all_scores = signal_df.values.flatten()
     all_scores = all_scores[~np.isnan(all_scores)]
-    
+
     return {
         "total_return": round(total_return, 4),
         "annual_return": round(annual_return, 4),
@@ -270,6 +274,7 @@ def simulate_portfolio(
 #  对齐度分析
 # ═══════════════════════════════════════════════════════════════
 
+
 def analyze_alignment_impact(
     signal_df: pd.DataFrame,
     alignment_scores: dict[str, float] | None = None,
@@ -278,12 +283,12 @@ def analyze_alignment_impact(
     """分析对齐度对信号的影响。"""
     if alignment_scores is None:
         return {"error": "无对齐度数据"}
-    
+
     # 按对齐度等级分组
     high_align = {k: v for k, v in alignment_scores.items() if v >= 0.7}
     mid_align = {k: v for k, v in alignment_scores.items() if 0.5 <= v < 0.7}
     low_align = {k: v for k, v in alignment_scores.items() if v < 0.5}
-    
+
     # 按产业链分组统计
     sector_stats: dict[str, dict[str, Any]] = {}
     if sector_map:
@@ -300,7 +305,7 @@ def analyze_alignment_impact(
                 "n_high": sum(1 for v in values if v >= 0.7),
                 "n_low": sum(1 for v in values if v < 0.5),
             }
-    
+
     # 检查历史信号中不同对齐度等级品种的信号分布
     if signal_df.empty:
         return {
@@ -312,12 +317,12 @@ def analyze_alignment_impact(
             "low_ratio": round(len(low_align) / max(len(alignment_scores), 1), 4),
             "sector_stats": sector_stats,
         }
-    
+
     # 计算各对齐度等级品种的信号绝对值均值
     high_scores: list[float] = []
     mid_scores: list[float] = []
     low_scores: list[float] = []
-    
+
     for date_idx in signal_df.index:
         row = signal_df.loc[date_idx].dropna()
         for sym, score in row.items():
@@ -328,7 +333,7 @@ def analyze_alignment_impact(
                 low_scores.append(abs(score))
             else:
                 mid_scores.append(abs(score))
-    
+
     return {
         "n_high": len(high_align),
         "n_mid": len(mid_align),
@@ -347,6 +352,7 @@ def analyze_alignment_impact(
 #  报告生成
 # ═══════════════════════════════════════════════════════════════
 
+
 def generate_report(
     alignment_result: dict[str, Any],
     baseline_result: dict[str, Any],
@@ -356,20 +362,25 @@ def generate_report(
 ) -> None:
     """生成完整的策略回测报告。"""
     lines: list[str] = []
+
     def _w(*args: str) -> None:
         lines.append(args[0] if args else "")
-    
+
     w = _w
     today = date.today().isoformat()
-    
+
     w("# 品种-链对齐度增强策略回测报告")
     w()
-    w(f"> 生成时间: {today} | 数据周期: {signal_df.index[0].date()} ~ {signal_df.index[-1].date()}" if not signal_df.empty else f"> 生成时间: {today}")
-    w(f"> 策略版本: v2.22.0 — 品种-链对齐度增强 (ALIGNMENT_BLEND=0.20)")
+    w(
+        f"> 生成时间: {today} | 数据周期: {signal_df.index[0].date()} ~ {signal_df.index[-1].date()}"
+        if not signal_df.empty
+        else f"> 生成时间: {today}"
+    )
+    w("> 策略版本: v2.22.0 — 品种-链对齐度增强 (ALIGNMENT_BLEND=0.20)")
     w()
     w("---")
     w()
-    
+
     # ═══════════════════════════════════════
     # 一、策略概述
     # ═══════════════════════════════════════
@@ -377,9 +388,11 @@ def generate_report(
     w()
     w("### 1.1 背景")
     w()
-    w("在期货横截面因子投资中，不同品种虽同属一个产业链（如黑色系、化工），"
-      "但各自的市场制度（趋势上涨/下跌、高/低波动、震荡）可能存在显著差异。"
-      "忽略这种差异，等权处理产业链内所有品种的信号，可能导致以下问题：")
+    w(
+        "在期货横截面因子投资中，不同品种虽同属一个产业链（如黑色系、化工），"
+        "但各自的市场制度（趋势上涨/下跌、高/低波动、震荡）可能存在显著差异。"
+        "忽略这种差异，等权处理产业链内所有品种的信号，可能导致以下问题："
+    )
     w()
     w("- **制度背离**：品种自身制度与产业链综合制度不一致时，其信号可靠性降低")
     w("- **信号污染**：偏离产业链趋势的品种信号混入组合，降低整体信噪比")
@@ -389,10 +402,11 @@ def generate_report(
     w()
     w("品种-链对齐度增强通过以下步骤解决上述问题：")
     w()
-    w("1. **产业链制度检测**：`SectorRegimeSelector.detect_all()` 按 13 个产业链"
-      "（黑色系/有色金属/能源/聚酯链/油化工/煤化工/橡胶/造纸林浆纸/航运/农产品/贵金属/新能源新材料/金融期货）独立检测市场制度")
-    w("2. **品种制度检测**：为每个品种独立创建 `RegimeAwareSelector` 实例，"
-      "检测其个体市场制度")
+    w(
+        "1. **产业链制度检测**：`SectorRegimeSelector.detect_all()` 按 13 个产业链"
+        "（黑色系/有色金属/能源/聚酯链/油化工/煤化工/橡胶/造纸林浆纸/航运/农产品/贵金属/新能源新材料/金融期货）独立检测市场制度"
+    )
+    w("2. **品种制度检测**：为每个品种独立创建 `RegimeAwareSelector` 实例，检测其个体市场制度")
     w("3. **对齐度计算**：`compute_alignment()` 方法计算品种制度与产业链制度的对齐度 (0~1)：")
     w("   - 制度相同：对齐度 = 品种置信度 × 产业链置信度")
     w("   - 制度不同：对齐度 = (1 - |置信度差|) × 0.5")
@@ -416,7 +430,7 @@ def generate_report(
     w()
     w("---")
     w()
-    
+
     # ═══════════════════════════════════════
     # 二、对齐度分析
     # ═══════════════════════════════════════
@@ -426,19 +440,23 @@ def generate_report(
     w()
     if "n_high" in alignment_analysis:
         total = alignment_analysis["n_high"] + alignment_analysis["n_mid"] + alignment_analysis["n_low"]
-        w(f"| 对齐度等级 | 品种数 | 占比 | 平均信号绝对值 |")
-        w(f"|----------|--------|------|--------------|")
-        w(f"| 高对齐 (≥0.7) | {alignment_analysis['n_high']} | {alignment_analysis['high_ratio']:.1%} | {alignment_analysis.get('high_align_mean_signal', 'N/A')} |")
-        w(f"| 中等对齐 (0.5~0.7) | {alignment_analysis['n_mid']} | {alignment_analysis['mid_ratio']:.1%} | {alignment_analysis.get('mid_align_mean_signal', 'N/A')} |")
-        w(f"| 低对齐 (<0.5) | {alignment_analysis['n_low']} | {alignment_analysis['low_ratio']:.1%} | {alignment_analysis.get('low_align_mean_signal', 'N/A')} |")
+        w("| 对齐度等级 | 品种数 | 占比 | 平均信号绝对值 |")
+        w("|----------|--------|------|--------------|")
+        w(
+            f"| 高对齐 (≥0.7) | {alignment_analysis['n_high']} | {alignment_analysis['high_ratio']:.1%} | {alignment_analysis.get('high_align_mean_signal', 'N/A')} |"
+        )
+        w(
+            f"| 中等对齐 (0.5~0.7) | {alignment_analysis['n_mid']} | {alignment_analysis['mid_ratio']:.1%} | {alignment_analysis.get('mid_align_mean_signal', 'N/A')} |"
+        )
+        w(
+            f"| 低对齐 (<0.5) | {alignment_analysis['n_low']} | {alignment_analysis['low_ratio']:.1%} | {alignment_analysis.get('low_align_mean_signal', 'N/A')} |"
+        )
         w(f"| **合计** | **{total}** | **100%** | |")
         w()
-        w(f"- 高对齐品种占比 {alignment_analysis['high_ratio']:.1%}，"
-          f"表明大部分品种与产业链趋势一致")
-        w(f"- 低对齐品种占比 {alignment_analysis['low_ratio']:.1%}，"
-          f"这些品种的信号将被降权处理")
+        w(f"- 高对齐品种占比 {alignment_analysis['high_ratio']:.1%}，表明大部分品种与产业链趋势一致")
+        w(f"- 低对齐品种占比 {alignment_analysis['low_ratio']:.1%}，这些品种的信号将被降权处理")
         w()
-    
+
     w("### 2.2 对齐度计算逻辑验证")
     w()
     w("对齐度计算的核心假设是：**品种与产业链趋势一致时，因子信号更可靠**。")
@@ -451,7 +469,7 @@ def generate_report(
     w()
     w("---")
     w()
-    
+
     # ═══════════════════════════════════════
     # 三、回测结果对比
     # ═══════════════════════════════════════
@@ -461,7 +479,7 @@ def generate_report(
     w()
     w("| 指标 | 基准策略 (对齐度=0.0) | 对齐度增强 (对齐度=0.20) | 变化 |")
     w("|------|----------------------|------------------------|------|")
-    
+
     metrics = [
         ("年化收益率", "annual_return", "↑"),
         ("夏普比率", "sharpe_ratio", "↑"),
@@ -473,7 +491,7 @@ def generate_report(
         ("平均日换手率", "avg_turnover", "↓"),
         ("交易日数", "trading_days", "—"),
     ]
-    
+
     for label, key, better_dir in metrics:
         base_val = baseline_result.get(key, "N/A")
         align_val = alignment_result.get(key, "N/A")
@@ -506,52 +524,50 @@ def generate_report(
             w(f"| {label} | {base_val} | {align_val} | {change_str} |")
         else:
             w(f"| {label} | {base_val} | {align_val} | — |")
-    
+
     w()
     w("> ✅ = 改善  |  ⚠️ = 退化")
     w()
-    
+
     # 核心指标解读
     w("### 3.2 核心指标解读")
     w()
-    
+
     sharpe_base = baseline_result.get("sharpe_ratio", 0)
     sharpe_align = alignment_result.get("sharpe_ratio", 0)
     dd_base = baseline_result.get("max_drawdown", 0)
     dd_align = alignment_result.get("max_drawdown", 0)
     turnover_base = baseline_result.get("avg_turnover", 0)
     turnover_align = alignment_result.get("avg_turnover", 0)
-    
+
     trading_days = baseline_result.get("trading_days", 0)
     if trading_days < 20:
-        w(f"> **注意**: 当前回测仅 {trading_days} 个交易日，统计意义有限。"
-          f"以下指标解读应视为初步观察，")
-        w(f"> 非最终结论。建议积累更多数据后重新评估。")
+        w(f"> **注意**: 当前回测仅 {trading_days} 个交易日，统计意义有限。以下指标解读应视为初步观察，")
+        w("> 非最终结论。建议积累更多数据后重新评估。")
         w()
-    
-    w(f"**夏普比率**：{sharpe_base:.4f} → {sharpe_align:.4f} "
-      f"({'改善' if sharpe_align > sharpe_base else '退化'})")
+
+    w(f"**夏普比率**：{sharpe_base:.4f} → {sharpe_align:.4f} ({'改善' if sharpe_align > sharpe_base else '退化'})")
     w()
     w(f"- 对齐度增强{'提升了' if sharpe_align > sharpe_base else '降低了'}策略的风险调整后收益")
     w(f"- 夏普比率变化幅度: {abs(sharpe_align - sharpe_base):.4f}")
     w()
-    
-    w(f"**最大回撤**：{dd_base:.4f} → {dd_align:.4f} "
-      f"({'改善' if abs(dd_align) < abs(dd_base) else '退化'})")
+
+    w(f"**最大回撤**：{dd_base:.4f} → {dd_align:.4f} ({'改善' if abs(dd_align) < abs(dd_base) else '退化'})")
     w()
     w(f"- 对齐度增强{'降低了' if abs(dd_align) < abs(dd_base) else '增加了'}策略的尾部风险")
     w()
-    
-    w(f"**平均日换手率**：{turnover_base:.4f} → {turnover_align:.4f} "
-      f"({'降低' if turnover_align < turnover_base else '升高'})")
+
+    w(
+        f"**平均日换手率**：{turnover_base:.4f} → {turnover_align:.4f} "
+        f"({'降低' if turnover_align < turnover_base else '升高'})"
+    )
     w()
-    w(f"- 对齐度增强{'降低了' if turnover_align < turnover_base else '增加了'}交易频率，"
-      f"有利于降低交易成本")
+    w(f"- 对齐度增强{'降低了' if turnover_align < turnover_base else '增加了'}交易频率，有利于降低交易成本")
     w()
-    
+
     w("---")
     w()
-    
+
     # ═══════════════════════════════════════
     # 四、信号质量分析
     # ═══════════════════════════════════════
@@ -563,13 +579,13 @@ def generate_report(
     sig_std_base = baseline_result.get("signal_std", 0)
     sig_mean_align = alignment_result.get("signal_mean", 0)
     sig_std_align = alignment_result.get("signal_std", 0)
-    
+
     w("| 指标 | 基准策略 | 对齐度增强 | 变化 |")
     w("|------|---------|-----------|------|")
     w(f"| 信号均值 | {sig_mean_base:.4f} | {sig_mean_align:.4f} | {sig_mean_align - sig_mean_base:+.4f} |")
     w(f"| 信号标准差 | {sig_std_base:.4f} | {sig_std_align:.4f} | {sig_std_align - sig_std_base:+.4f} |")
     w()
-    
+
     w("### 4.2 对齐度对信号分布的影响")
     w()
     w("- 高对齐度品种的信号强度被上调，在组合中占据更大权重")
@@ -585,7 +601,7 @@ def generate_report(
     w()
     w("---")
     w()
-    
+
     # ═══════════════════════════════════════
     # 五、敏感性分析
     # ═══════════════════════════════════════
@@ -613,7 +629,7 @@ def generate_report(
     w()
     w("---")
     w()
-    
+
     # ═══════════════════════════════════════
     # 六、风险分析
     # ═══════════════════════════════════════
@@ -623,12 +639,20 @@ def generate_report(
     w()
     w("| 风险类型 | 基准策略 | 对齐度增强 | 评估 |")
     w("|----------|---------|-----------|------|")
-    w(f"| 年化波动率 | {baseline_result.get('volatility', 'N/A')} | {alignment_result.get('volatility', 'N/A')} | 波动率控制 |")
-    w(f"| 下行波动率 | {baseline_result.get('downside_volatility', 'N/A')} | {alignment_result.get('downside_volatility', 'N/A')} | 下行风险保护 |")
-    w(f"| 最大回撤 | {baseline_result.get('max_drawdown', 'N/A')} | {alignment_result.get('max_drawdown', 'N/A')} | 尾部风险 |")
-    w(f"| 卡玛比率 | {baseline_result.get('calmar_ratio', 'N/A')} | {alignment_result.get('calmar_ratio', 'N/A')} | 回撤调整收益 |")
+    w(
+        f"| 年化波动率 | {baseline_result.get('volatility', 'N/A')} | {alignment_result.get('volatility', 'N/A')} | 波动率控制 |"
+    )
+    w(
+        f"| 下行波动率 | {baseline_result.get('downside_volatility', 'N/A')} | {alignment_result.get('downside_volatility', 'N/A')} | 下行风险保护 |"
+    )
+    w(
+        f"| 最大回撤 | {baseline_result.get('max_drawdown', 'N/A')} | {alignment_result.get('max_drawdown', 'N/A')} | 尾部风险 |"
+    )
+    w(
+        f"| 卡玛比率 | {baseline_result.get('calmar_ratio', 'N/A')} | {alignment_result.get('calmar_ratio', 'N/A')} | 回撤调整收益 |"
+    )
     w()
-    
+
     w("### 6.2 潜在风险与缓解措施")
     w()
     w("| 风险 | 描述 | 缓解措施 |")
@@ -640,7 +664,7 @@ def generate_report(
     w()
     w("---")
     w()
-    
+
     # ═══════════════════════════════════════
     # 七、结论与建议
     # ═══════════════════════════════════════
@@ -652,7 +676,7 @@ def generate_report(
     sharpe_improved = sharpe_align > sharpe_base
     dd_improved = abs(dd_align) < abs(dd_base)
     turnover_improved = turnover_align < turnover_base
-    
+
     improvements = []
     if sharpe_improved:
         improvements.append("夏普比率")
@@ -660,25 +684,28 @@ def generate_report(
         improvements.append("最大回撤")
     if turnover_improved:
         improvements.append("换手率")
-    
+
     if improvements:
-        w(f"品种-链对齐度增强策略在 **{'、'.join(improvements)}** 指标上优于基准策略，"
-          f"验证了品种与产业链趋势一致性对信号质量的提升作用。")
+        w(
+            f"品种-链对齐度增强策略在 **{'、'.join(improvements)}** 指标上优于基准策略，"
+            f"验证了品种与产业链趋势一致性对信号质量的提升作用。"
+        )
     else:
-        w("品种-链对齐度增强策略在当前数据周期内未表现出显著优势，"
-          "建议：1) 延长回测周期；2) 调整 ALIGNMENT_BLEND 参数；"
-          "3) 检查产业链制度检测的准确性。")
+        w(
+            "品种-链对齐度增强策略在当前数据周期内未表现出显著优势，"
+            "建议：1) 延长回测周期；2) 调整 ALIGNMENT_BLEND 参数；"
+            "3) 检查产业链制度检测的准确性。"
+        )
     w()
-    
+
     w("### 7.2 使用建议")
     w()
     w("1. **默认启用**：ALIGNMENT_BLEND = 0.20 作为默认值，在大多数市场环境下有效")
     w("2. **参数调整**：在趋势分化明显的市场（如板块轮动剧烈），可适当提高至 0.30")
-    w("3. **监控指标**：定期检查对齐度分布，如低对齐品种占比持续 > 30%，"
-      "应检查产业链分类是否合理")
+    w("3. **监控指标**：定期检查对齐度分布，如低对齐品种占比持续 > 30%，应检查产业链分类是否合理")
     w("4. **回测周期**：建议至少 3 个月的回测周期，覆盖不同市场环境")
     w()
-    
+
     w("### 7.3 后续优化方向")
     w()
     w("1. **动态 ALIGNMENT_BLEND**：根据市场波动率或制度置信度动态调整修正强度")
@@ -689,7 +716,7 @@ def generate_report(
     w("---")
     w()
     w("*报告由 FTS v2.22.0 自动生成*")
-    
+
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(lines), encoding="utf-8")
@@ -700,50 +727,50 @@ def generate_report(
 #  对齐度计算
 # ═══════════════════════════════════════
 
+
 def compute_alignment_from_data(
     days: int = 120,
     max_symbols: int = 75,
 ) -> tuple[dict[str, float], dict[str, list[str]]]:
     """从数据中实际计算品种-链对齐度。
-    
+
     使用 FTSDataProvider 获取期货面板数据，然后通过 SectorRegimeSelector
     计算各品种与所属产业链的制度对齐度。
-    
+
     Returns:
         (alignment_scores, active_sector_map)
     """
     from fts.data import FTSDataProvider
     from fts.data_futures import FUTURES_SECTOR_MAP, FUTURES_SUBSET
     from fts.factor_engine.regime import SectorRegimeSelector
-    
+
     # 排除金融期货
     FINANCIAL = {"IF0", "TF0", "IH0", "IC0", "TS0", "IM0"}
     symbols = [s for s in FUTURES_SUBSET if s not in FINANCIAL][:max_symbols]
-    
+
     print(f"      获取 {len(symbols)} 个品种的期货面板数据, days={days}...")
     provider = FTSDataProvider()
     panel, common_dates = provider.get_futures_panel(symbols=symbols, days=days)
     print(f"      面板: {len(panel)} 个品种, {len(common_dates)} 个交易日")
-    
+
     # 构建活跃产业链映射
     active_sector_map: dict[str, list[str]] = {}
     for sector, syms in FUTURES_SECTOR_MAP.items():
         active = [s for s in syms if s in panel]
         if len(active) >= 2:
             active_sector_map[sector] = active
-    
+
     # 检测产业链制度
     sector_selector = SectorRegimeSelector(lookback_days=60)
     sector_regimes = sector_selector.detect_all(panel, sector_map=active_sector_map)
-    
+
     # 计算对齐度
     alignment_scores = sector_selector.compute_alignment(panel, sector_regimes, sector_map=active_sector_map)
-    
+
     n_aligned = sum(1 for v in alignment_scores.values() if v >= 0.7)
     n_misaligned = sum(1 for v in alignment_scores.values() if v < 0.5)
-    print(f"      对齐度: {len(alignment_scores)} 个品种, "
-          f"高对齐(≥0.7): {n_aligned}, 低对齐(<0.5): {n_misaligned}")
-    
+    print(f"      对齐度: {len(alignment_scores)} 个品种, 高对齐(≥0.7): {n_aligned}, 低对齐(<0.5): {n_misaligned}")
+
     # 打印每个产业链的制度和对齐度分布
     for sector, syms in active_sector_map.items():
         sector_regime = sector_regimes.get(sector, {})
@@ -752,9 +779,11 @@ def compute_alignment_from_data(
         n_sector = sum(1 for s in syms if s in alignment_scores)
         n_high = sum(1 for s in syms if alignment_scores.get(s, 0) >= 0.7)
         n_low = sum(1 for s in syms if alignment_scores.get(s, 0) < 0.5)
-        print(f"      [{sector}] regime={regime_name} conf={regime_conf:.3f} "
-              f"品种={n_sector} 高对齐={n_high} 低对齐={n_low}")
-    
+        print(
+            f"      [{sector}] regime={regime_name} conf={regime_conf:.3f} "
+            f"品种={n_sector} 高对齐={n_high} 低对齐={n_low}"
+        )
+
     return alignment_scores, active_sector_map
 
 
@@ -764,16 +793,16 @@ def simulate_alignment_impact(
     blend: float = 0.20,
 ) -> pd.DataFrame:
     """模拟对齐度对历史信号的影响。
-    
+
     历史信号数据已经包含对齐度修正（ALIGNMENT_BLEND=0.20）。
     此函数通过反向应用对齐度来估算基准版（无对齐度）的信号值，
     然后重新应用指定 blend 的对齐度修正，以准确比较不同 blend 值的效果。
-    
+
     Args:
         signal_df: 历史信号数据（已包含原始对齐度修正）
         alignment_scores: 品种-链对齐度字典
         blend: 目标对齐度修正强度
-        
+
     Returns:
         模拟后的信号 DataFrame
     """
@@ -784,18 +813,19 @@ def simulate_alignment_impact(
         align = alignment_scores.get(col, 0.5)
         reverse_factor = 1.0 + 0.20 * (align - 0.5)  # 原始对齐度修正因子
         alignment_factor = 1.0 + blend * (align - 0.5)  # 目标对齐度修正因子
-        
+
         if reverse_factor != 0:
             # raw_score = aligned_score / reverse_factor
             # new_score = raw_score * alignment_factor = aligned_score * alignment_factor / reverse_factor
             simulated[col] = simulated[col] * alignment_factor / reverse_factor
-    
+
     return simulated
 
 
 # ═══════════════════════════════════════
 #  主流程
 # ═══════════════════════════════════════
+
 
 def main(
     days: int = 120,
@@ -806,22 +836,21 @@ def main(
     print("=" * 60)
     print("  品种-链对齐度增强策略回测报告生成器")
     print("=" * 60)
-    
+
     # ── 1. 加载历史信号数据 ──
     print("\n[1/5] 加载历史信号数据...")
     signal_df = load_signal_history()
     if signal_df.empty:
         print("[ERROR] signal_scores_history.jsonl 为空，无法生成回测报告")
         return 1
-    print(f"      历史信号: {len(signal_df)} 个交易日, "
-          f"{len(signal_df.columns)} 个品种")
-    
+    print(f"      历史信号: {len(signal_df)} 个交易日, {len(signal_df.columns)} 个品种")
+
     # ── 2. 计算品种-链对齐度 ──
     print("\n[2/5] 计算品种-链对齐度...")
     alignment_scores, active_sector_map = compute_alignment_from_data(days=days, max_symbols=75)
     if not alignment_scores:
         print("[WARNING] 无法计算对齐度，报告将使用默认对齐度 0.5")
-    
+
     # ── 3. 模拟对齐度对信号的影响 ──
     print("\n[3/5] 模拟对齐度对信号的影响...")
     # 对齐度增强版（blend=0.20）
@@ -830,15 +859,15 @@ def main(
     baseline_df = simulate_alignment_impact(signal_df, alignment_scores, blend=0.0)
     print(f"      对齐度增强版: {len(align_df)} 个交易日, {len(align_df.columns)} 个品种")
     print(f"      基准版: {len(baseline_df)} 个交易日, {len(baseline_df.columns)} 个品种")
-    
+
     # ── 4. 模拟组合 ──
     print("\n[4/5] 模拟组合表现...")
     alignment_result = simulate_portfolio(align_df, top_n=5)
     baseline_result = simulate_portfolio(baseline_df, top_n=5)
-    
+
     # 对齐度分析
     alignment_analysis = analyze_alignment_impact(signal_df, alignment_scores)
-    
+
     # ── 5. 生成报告 ──
     print("\n[5/5] 生成策略回测报告...")
     today_str = date.today().isoformat()
@@ -850,7 +879,7 @@ def main(
         signal_df=align_df,
         output_path=output_path,
     )
-    
+
     elapsed = time.time() - t0
     print(f"\n  耗时: {elapsed:.1f}s")
     print(f"  报告: {output_path}")
@@ -859,11 +888,14 @@ def main(
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="品种-链对齐度增强策略回测报告生成器")
     parser.add_argument("--days", type=int, default=120, help="回溯天数")
     parser.add_argument("--output", type=str, default=None, help="输出报告路径")
     args = parser.parse_args()
-    sys.exit(main(
-        days=args.days,
-        output=args.output,
-    ))
+    sys.exit(
+        main(
+            days=args.days,
+            output=args.output,
+        )
+    )

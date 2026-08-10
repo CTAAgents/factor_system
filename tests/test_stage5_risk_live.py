@@ -11,8 +11,6 @@
 
 import json
 
-import numpy as np
-import pandas as pd
 import pytest
 
 from fts.factor_engine.signal_contract import SignalValidator
@@ -88,7 +86,8 @@ def test_validator_negative_position():
 
 def _make_scored(symbol="RB0", direction="bull", total=2.0, grade="STRONG"):
     return type(
-        "_S", (),
+        "_S",
+        (),
         {
             "symbol": symbol,
             "direction": direction,
@@ -102,7 +101,9 @@ def _make_scored(symbol="RB0", direction="bull", total=2.0, grade="STRONG"):
 
 def test_to_factor_signal_mapping():
     fs = SignalValidator.to_factor_signal(
-        [_make_scored()], portfolio_id="p1", trace_id="t1",
+        [_make_scored()],
+        portfolio_id="p1",
+        trace_id="t1",
     )
     assert fs["portfolio_id"] == "p1"
     assert fs["meta"]["trace_id"] == "t1"
@@ -113,8 +114,7 @@ def test_to_factor_signal_mapping():
 
 def test_to_factor_signal_bear_neutral():
     fs = SignalValidator.to_factor_signal(
-        [_make_scored(direction="bear", grade="WEAK"),
-         _make_scored(symbol="CU0", direction="neutral", grade="NOISE")],
+        [_make_scored(direction="bear", grade="WEAK"), _make_scored(symbol="CU0", direction="neutral", grade="NOISE")],
         trace_id="t2",
     )
     dirs = {s["symbol"]: s["direction"] for s in fs["signals"]}
@@ -127,8 +127,10 @@ def test_to_factor_signal_bear_neutral():
 
 def _account(equity=1_000_000, peak=1_000_000, daily_pnl=0, position_value=0):
     return {
-        "total_equity": equity, "balance": equity,
-        "peak_equity": peak, "daily_pnl": daily_pnl,
+        "total_equity": equity,
+        "balance": equity,
+        "peak_equity": peak,
+        "daily_pnl": daily_pnl,
         "position_value": position_value,
     }
 
@@ -153,10 +155,15 @@ def test_risk_single_position_limit():
 def test_risk_leverage_limit():
     sig = _valid_signal()
     sig["signals"][0]["position"] = 500.0  # 500 × 3000 = 1.5M > 3M? no, 1.5M/1M = 1.5x
-    sig["signals"].append({
-        "symbol": "CU0", "direction": "long",
-        "position": 400.0, "confidence": 0.5, "price": 6000.0,  # 2.4M
-    })
+    sig["signals"].append(
+        {
+            "symbol": "CU0",
+            "direction": "long",
+            "position": 400.0,
+            "confidence": 0.5,
+            "price": 6000.0,  # 2.4M
+        }
+    )
     # 总市值 = 1.5M + 2.4M = 3.9M > 3x × 1M → 拦截
     result = RiskManager().check(sig, _account(), {})
     assert result["approved"] is False
@@ -185,8 +192,7 @@ def test_risk_daily_loss():
 def test_risk_concentration():
     sig = _valid_signal()
     sig["signals"] = [
-        {"symbol": f"s{i}", "direction": "long", "position": 1.0,
-         "confidence": 0.5, "price": 400_000.0}  # 每只 400k
+        {"symbol": f"s{i}", "direction": "long", "position": 1.0, "confidence": 0.5, "price": 400_000.0}  # 每只 400k
         for i in range(3)
     ]
     # 总 1.2M，前3大 = 全部 → 集中度 100% > 50%
@@ -194,9 +200,6 @@ def test_risk_concentration():
     assert result["approved"] is False
     names = [c["check_name"] for c in result["blocking_violations"]]
     assert "concentration_limit" in names
-
-
-
 
 
 # ─── 6. LiveFactorMonitor ───────────────────────────────
@@ -264,7 +267,7 @@ def server():
     from fts.monitor.http_server import FTSDashboardServer
     import socket
 
-    srv = FTSDashboardServer(port=0)
+    FTSDashboardServer(port=0)
     # 手动绑定随机端口
     import threading
     from http.server import HTTPServer
@@ -292,8 +295,10 @@ def _http_post(url: str, data: dict) -> tuple[int, dict]:
     import urllib.request
 
     req = urllib.request.Request(
-        url, data=json.dumps(data).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST",
+        url,
+        data=json.dumps(data).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as r:

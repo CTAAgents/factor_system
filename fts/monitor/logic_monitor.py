@@ -14,9 +14,9 @@ HARNESS §11-logic-review-plan.md §C.2:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -35,10 +35,7 @@ class _SimpleMomentum:
     def compute(close: np.ndarray, lookback: int = 20) -> np.ndarray:
         signal = np.full(len(close), np.nan)
         if len(close) > lookback:
-            signal[lookback:] = (
-                (close[lookback:] - close[:-lookback])
-                / np.maximum(close[:-lookback], 1e-10)
-            )
+            signal[lookback:] = (close[lookback:] - close[:-lookback]) / np.maximum(close[:-lookback], 1e-10)
         return signal
 
 
@@ -50,9 +47,7 @@ class _MeanReversion:
         signal = np.full(len(close), np.nan)
         if len(close) > lookback:
             rolling_mean = pd.Series(close).rolling(lookback).mean().values
-            signal[lookback:] = (
-                rolling_mean[lookback:] - close[lookback:]
-            ) / np.maximum(close[lookback:], 1e-10)
+            signal[lookback:] = (rolling_mean[lookback:] - close[lookback:]) / np.maximum(close[lookback:], 1e-10)
         return signal
 
 
@@ -71,6 +66,7 @@ class DriftCheckResult:
         drift_threshold: 漂移判断阈值
         n_samples: 有效样本数
     """
+
     factor_id: str
     momentum_correlation: float
     mean_reversion_correlation: float
@@ -92,6 +88,7 @@ class ExtremePredictionResult:
         threshold: 报警阈值
         is_alarmed: 是否触发报警
     """
+
     factor_id: str
     total_samples: int
     extreme_positive: int
@@ -118,6 +115,7 @@ class ContractSwitchResult:
         sigma_threshold: sigma 阈值
         n_switches: 换月次数
     """
+
     factor_id: str
     switch_dates: list[str]
     mean_before: float
@@ -143,6 +141,7 @@ class LogicMonitorResult:
         contract_switch: 换月日检测结果
         all_healthy: 所有检查项是否健康
     """
+
     factor_id: str
     checked_at: str
     drift: DriftCheckResult
@@ -217,13 +216,14 @@ class LogicMonitor:
 
         # 检查 3: 换月日信号异常
         contract = self._check_contract_switch(
-            factor_id, data, signals, switch_dates or [],
+            factor_id,
+            data,
+            signals,
+            switch_dates or [],
         )
 
         all_healthy = (
-            not drift.is_drifted
-            and not extreme.is_alarmed
-            and (contract is None or not contract.is_anomalous)
+            not drift.is_drifted and not extreme.is_alarmed and (contract is None or not contract.is_anomalous)
         )
 
         return LogicMonitorResult(
@@ -247,11 +247,7 @@ class LogicMonitor:
         mom_signal = _SimpleMomentum.compute(close)
         mrev_signal = _MeanReversion.compute(close)
 
-        valid = (
-            ~np.isnan(signals)
-            & ~np.isnan(mom_signal)
-            & ~np.isnan(mrev_signal)
-        )
+        valid = ~np.isnan(signals) & ~np.isnan(mom_signal) & ~np.isnan(mrev_signal)
 
         n_samples = int(np.sum(valid))
 
@@ -417,7 +413,7 @@ class LogicMonitor:
 
         # 1. 漂移检测
         d = result.drift
-        lines.append(f"\n1. 因子行为漂移检测")
+        lines.append("\n1. 因子行为漂移检测")
         lines.append(f"   与动量相关性:   {d.momentum_correlation:>8.4f}")
         lines.append(f"   与均值回归相关性: {d.mean_reversion_correlation:>8.4f}")
         lines.append(f"   是否漂移:        {'是' if d.is_drifted else '否'}")
@@ -426,7 +422,7 @@ class LogicMonitor:
 
         # 2. 极端预测
         e = result.extreme_prediction
-        lines.append(f"\n2. 极端预测占比检测")
+        lines.append("\n2. 极端预测占比检测")
         lines.append(f"   总样本数:        {e.total_samples}")
         lines.append(f"   极端正向:        {e.extreme_positive}")
         lines.append(f"   极端负向:        {e.extreme_negative}")
@@ -437,7 +433,7 @@ class LogicMonitor:
         # 3. 换月日
         c = result.contract_switch
         if c is not None:
-            lines.append(f"\n3. 换月日信号异常检测")
+            lines.append("\n3. 换月日信号异常检测")
             lines.append(f"   换月次数:        {c.n_switches}")
             lines.append(f"   换月前均值:      {c.mean_before:>8.4f}")
             lines.append(f"   换月后均值:      {c.mean_after:>8.4f}")
@@ -449,7 +445,7 @@ class LogicMonitor:
                 if len(c.switch_dates) > 5:
                     lines.append(f"                    ... 共 {len(c.switch_dates)} 个")
         else:
-            lines.append(f"\n3. 换月日信号异常检测: 未执行（无换月日数据）")
+            lines.append("\n3. 换月日信号异常检测: 未执行（无换月日数据）")
 
         lines.append("\n" + "=" * 70)
         return "\n".join(lines)

@@ -43,7 +43,12 @@ from fts.factor_engine.standardizer import (  # noqa: E402
 class TestConstantsAndConfig:
     def test_supported_methods_complete(self):
         assert set(SUPPORTED_METHODS) == {
-            "zscore", "rank", "quantile", "minmax", "winsorize_then_zscore", "none",
+            "zscore",
+            "rank",
+            "quantile",
+            "minmax",
+            "winsorize_then_zscore",
+            "none",
         }
 
     def test_config_defaults(self):

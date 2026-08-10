@@ -48,7 +48,7 @@ def check_metadata_table(doc_path: Path) -> list[str]:
 
     # 检查是否包含 "一致性元数据" 标题
     if "## 一致性元数据" not in content:
-        issues.append(f"缺少 '## 一致性元数据' 章节")
+        issues.append("缺少 '## 一致性元数据' 章节")
 
     # 检查是否包含各字段
     for field in METADATA_FIELDS:
@@ -142,7 +142,7 @@ def check_version_consistency() -> list[dict[str, str]]:
 
     # 核心文档 + 计划文档 + 设计文档（排除历史验收文档）
     doc_patterns = [
-        "docs/harness/0*.md",            # 01-09
+        "docs/harness/0*.md",  # 01-09
         "docs/harness/business_flow.md",
         "docs/harness/execution_modes_flowchart.md",
         "docs/harness/plans/*.md",
@@ -158,11 +158,13 @@ def check_version_consistency() -> list[dict[str, str]]:
             content = doc.read_text(encoding="utf-8")
             match = re.search(r"> 版本: (v[\d.]+)", content)
             if match and match.group(1) != target_version:
-                issues.append({
-                    "file": doc.name,
-                    "expected": target_version,
-                    "actual": match.group(1),
-                })
+                issues.append(
+                    {
+                        "file": doc.name,
+                        "expected": target_version,
+                        "actual": match.group(1),
+                    }
+                )
 
     return issues
 
@@ -188,73 +190,87 @@ def run_all_checks() -> dict[str, Any]:
         # 1. 检查元数据表
         meta_issues = check_metadata_table(doc)
         for issue in meta_issues:
-            results["checks"].append({
-                "file": doc_name,
-                "type": "元数据",
-                "status": "FAIL",
-                "message": issue,
-            })
+            results["checks"].append(
+                {
+                    "file": doc_name,
+                    "type": "元数据",
+                    "status": "FAIL",
+                    "message": issue,
+                }
+            )
             results["failed"] += 1
 
         # 2. 检查断言
         assertion_issues = check_doc_assertions(doc)
         for issue in assertion_issues:
-            results["checks"].append({
-                "file": doc_name,
-                "type": "断言",
-                "status": "FAIL",
-                "message": issue,
-            })
+            results["checks"].append(
+                {
+                    "file": doc_name,
+                    "type": "断言",
+                    "status": "FAIL",
+                    "message": issue,
+                }
+            )
             results["failed"] += 1
 
         # 如果没有问题，标记为通过
         if not meta_issues and not assertion_issues:
-            results["checks"].append({
-                "file": doc_name,
-                "type": "综合",
-                "status": "PASS",
-                "message": "一致性检查通过",
-            })
+            results["checks"].append(
+                {
+                    "file": doc_name,
+                    "type": "综合",
+                    "status": "PASS",
+                    "message": "一致性检查通过",
+                }
+            )
             results["passed"] += 1
 
     # 3. 检查版本号一致性
     version_issues = check_version_consistency()
     for v in version_issues:
-        results["checks"].append({
-            "file": v["file"],
-            "type": "版本号",
-            "status": "FAIL",
-            "message": f"期望 {v['expected']}，实际 {v['actual']}",
-        })
+        results["checks"].append(
+            {
+                "file": v["file"],
+                "type": "版本号",
+                "status": "FAIL",
+                "message": f"期望 {v['expected']}，实际 {v['actual']}",
+            }
+        )
         results["failed"] += 1
 
     if not version_issues:
-        results["checks"].append({
-            "file": "全部文档",
-            "type": "版本号",
-            "status": "PASS",
-            "message": "所有文档版本号一致",
-        })
+        results["checks"].append(
+            {
+                "file": "全部文档",
+                "type": "版本号",
+                "status": "PASS",
+                "message": "所有文档版本号一致",
+            }
+        )
         results["passed"] += 1
 
     # 4. 检查流程文档存在性
     flow_issues = check_flow_docs_exist()
     for issue in flow_issues:
-        results["checks"].append({
-            "file": "docs/",
-            "type": "存在性",
-            "status": "FAIL",
-            "message": issue,
-        })
+        results["checks"].append(
+            {
+                "file": "docs/",
+                "type": "存在性",
+                "status": "FAIL",
+                "message": issue,
+            }
+        )
         results["failed"] += 1
 
     if not flow_issues:
-        results["checks"].append({
-            "file": "docs/",
-            "type": "存在性",
-            "status": "PASS",
-            "message": "流程文档完整",
-        })
+        results["checks"].append(
+            {
+                "file": "docs/",
+                "type": "存在性",
+                "status": "PASS",
+                "message": "流程文档完整",
+            }
+        )
         results["passed"] += 1
 
     return results
@@ -263,29 +279,29 @@ def run_all_checks() -> dict[str, Any]:
 def print_report(results: dict[str, Any]) -> None:
     """打印检查报告。"""
     total = results["passed"] + results["failed"]
-    print(f"\n{'='*60}")
-    print(f"  FTS 文档一致性检查报告")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print("  FTS 文档一致性检查报告")
+    print(f"{'=' * 60}")
     print(f"  检查项: {total}  |  通过: {results['passed']}  |  失败: {results['failed']}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     for check in results["checks"]:
         status_icon = "✅" if check["status"] == "PASS" else "❌"
         print(f"  {status_icon} [{check['file']}] {check['type']}: {check['message']}")
 
     if results["errors"]:
-        print(f"\n  ⚠️ 错误:")
+        print("\n  ⚠️ 错误:")
         for err in results["errors"]:
             print(f"     - {err}")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
 
     if results["failed"] > 0:
         print(f"  ❌ {results['failed']} 项检查失败，请修复后再提交。")
     else:
-        print(f"  ✅ 全部通过！")
+        print("  ✅ 全部通过！")
 
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 def main() -> int:
@@ -295,7 +311,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="FTS 文档一致性检查脚本")
     parser.add_argument("--file", type=str, help="指定检查单个文件")
     parser.add_argument("--json", action="store_true", help="JSON 格式输出")
-    parser.add_argument("--fix-versions", action="store_true", help="自动修复版本号不一致（委托 update_doc_versions.py）")
+    parser.add_argument(
+        "--fix-versions", action="store_true", help="自动修复版本号不一致（委托 update_doc_versions.py）"
+    )
     args = parser.parse_args()
 
     if args.fix_versions:

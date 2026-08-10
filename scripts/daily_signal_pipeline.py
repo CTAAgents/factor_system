@@ -16,6 +16,7 @@ scripts/daily_signal_pipeline.py — 每日信号生成管道（v2 GAP-S04）
     - 控制台: 信号排名表（含方向校正/权重学习/成本信息）
     - 文件:     docs/daily_signals_{date}.md
 """
+
 from __future__ import annotations
 
 import json
@@ -34,6 +35,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
 warnings.filterwarnings("ignore", category=FutureWarning, module="numpy")
 try:
     from scipy.stats import ConstantInputWarning
+
     warnings.filterwarnings("ignore", category=ConstantInputWarning)
 except ImportError:
     pass
@@ -129,7 +131,9 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
     print(f"[2/5] 获取数据: CSI300, max_stocks={max_stocks}, days={days}")
 
     panel, common_dates = provider.get_csi300_panel(
-        days=days, max_stocks=max_stocks, fundamental=True,
+        days=days,
+        max_stocks=max_stocks,
+        fundamental=True,
     )
     print(f"      面板: {len(panel)} 只股票, {len(common_dates)} 个交易日")
 
@@ -153,9 +157,11 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
     n_steps = 0
 
     # 4a: 方向校正（截面 IC 法）
-    print(f"\n[4/5] 方向校正: 截面 IC 法...")
+    print("\n[4/5] 方向校正: 截面 IC 法...")
     factor_sign_flips = compute_factor_sign_flips(
-        signal_matrix, panel, common_dates,
+        signal_matrix,
+        panel,
+        common_dates,
     )
     n_flipped = sum(1 for v in factor_sign_flips.values() if v < 0)
     if n_flipped > 0:
@@ -163,21 +169,27 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
     n_steps += 1
 
     # 4b: Ridge 回归学习因子权重
-    print(f"      权重学习: Ridge 回归（L2 正则化，含相关性惩罚）...")
+    print("      权重学习: Ridge 回归（L2 正则化，含相关性惩罚）...")
     factor_weights = compute_ridge_weights(
-        signal_matrix, panel, common_dates, factor_sign_flips,
+        signal_matrix,
+        panel,
+        common_dates,
+        factor_sign_flips,
     )
     n_steps += 1
 
     # 4c: 加权合成（方向校正 + Ridge 权重）
-    print(f"      加权合成: 方向校正 + Ridge 权重...")
+    print("      加权合成: 方向校正 + Ridge 权重...")
     stock_scores, stock_details = compute_composite_scores(
-        signal_matrix, factor_sign_flips, all_factors, factor_weights,
+        signal_matrix,
+        factor_sign_flips,
+        all_factors,
+        factor_weights,
     )
     n_steps += 1
 
     # 4d: 成本约束（TransactionCostModel）
-    print(f"      成本约束: TransactionCostModel (stock)...")
+    print("      成本约束: TransactionCostModel (stock)...")
     from fts.factor_engine.cost_model import TransactionCostModel
 
     # 收集信号序列用于成本估算
@@ -195,17 +207,16 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
             adjusted_stock_scores[sym] = score
             continue
         # 用信号标准差近似估算信号波动
-        signal_std = np.std([details.get(f.get("name", ""), 0)
-                             for f in all_factors
-                             for details in [stock_details.get(sym, {})]])
+        signal_std = np.std(
+            [details.get(f.get("name", ""), 0) for f in all_factors for details in [stock_details.get(sym, {})]]
+        )
         if np.isnan(signal_std) or signal_std < 1e-10:
             signal_std = 0.01
         # 构造模拟信号序列
         mock_signal = np.random.default_rng(42).normal(0, signal_std, len(closes))
         # 计算成本调整
         adjusted = cost_model.adjust(
-            {"sharpe": score / max(signal_std, 0.01) * np.sqrt(252),
-             "ic": 0.0},
+            {"sharpe": score / max(signal_std, 0.01) * np.sqrt(252), "ic": 0.0},
             mock_signal,
             market="stock",
         )
@@ -222,8 +233,7 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
     stock_scores = adjusted_stock_scores
 
     elapsed = time.time() - t0
-    print(f"\n  耗时: {elapsed:.1f}s, 成功: {len(stock_scores)} 只, "
-          f"方向反转: {n_flipped}/{n_factors}")
+    print(f"\n  耗时: {elapsed:.1f}s, 成功: {len(stock_scores)} 只, 方向反转: {n_flipped}/{n_factors}")
 
     # ── Step 5: 输出信号排名（仅做多 TopN） ──
     if not stock_scores:
@@ -239,11 +249,12 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
         ranked = sorted(stock_scores.items(), key=lambda x: -abs(x[1]))
 
     print(f"\n{'=' * 60}")
-    print(f"  信号排名 Top 20（仅做多）")
+    print("  信号排名 Top 20（仅做多）")
     print(f"{'=' * 60}")
-    print(f"{'排名':>4s} {'代码':>8s} {'综合得分':>10s} {'最新价':>10s} "
-          f"{'涨跌幅':>8s} {'方向校正':>10s} {'Top因子':>28s}")
-    print(f"{'-'*4} {'-'*8} {'-'*10} {'-'*10} {'-'*8} {'-'*10} {'-'*28}")
+    print(
+        f"{'排名':>4s} {'代码':>8s} {'综合得分':>10s} {'最新价':>10s} {'涨跌幅':>8s} {'方向校正':>10s} {'Top因子':>28s}"
+    )
+    print(f"{'-' * 4} {'-' * 8} {'-' * 10} {'-' * 10} {'-' * 8} {'-' * 10} {'-' * 28}")
 
     for i, (sym, score) in enumerate(ranked[:20], 1):
         df = panel.get(sym)
@@ -255,12 +266,11 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
         # 检查该股票是否有因子被反转
         flipped = sum(1 for n in details if factor_sign_flips.get(n, 1.0) < 0)
         flip_str = f"{flipped}个反转" if flipped else "正常"
-        print(f"{i:>4d} {sym:>8s} {score:>+10.4f} {price:>10.2f} "
-              f"{chg_pct:>+7.2%} {flip_str:>10s} {top_str:<28s}")
+        print(f"{i:>4d} {sym:>8s} {score:>+10.4f} {price:>10.2f} {chg_pct:>+7.2%} {flip_str:>10s} {top_str:<28s}")
 
     # 底部信号
     print(f"\n{'─' * 60}")
-    print(f"  底部信号 Bottom 5（仅做多信号）")
+    print("  底部信号 Bottom 5（仅做多信号）")
     bottom = [s for s in ranked if len(ranked) - 5 < ranked.index(s) <= len(ranked)]
     for i, (sym, score) in enumerate(bottom, len(ranked) - 4):
         df = panel.get(sym)
@@ -270,6 +280,7 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
     # ── Step 6: 写入 Markdown 报告 ──
     out_path = OUTPUT_DIR / f"daily_signals_{today}.md"
     lines: list[str] = []
+
     def w(s=""):
         lines.append(s)
 
@@ -278,9 +289,9 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
     w(f"生成时间: {today} | 耗时: {elapsed:.1f}s")
     w(f"因子池: {len(all_factors)} 个 | 覆盖股票: {len(stock_scores)} 只")
     w(f"方向校正: 截面 IC 法 | 方向反转: {n_flipped} 个因子")
-    w(f"权重学习: Ridge 回归（L2 正则化，含相关性惩罚）")
+    w("权重学习: Ridge 回归（L2 正则化，含相关性惩罚）")
     w(f"成本约束: TransactionCostModel | 平均成本: {avg_cost_bps:.2f} bps")
-    w(f"评估口径: 仅做多（股票/ETF 仅做多，空头不可成交）")
+    w("评估口径: 仅做多（股票/ETF 仅做多，空头不可成交）")
     w()
 
     # 方向校正信息
@@ -389,6 +400,7 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="每日信号生成管道 v2")
     parser.add_argument("--max-stocks", type=int, default=50, help="最大股票数")
     parser.add_argument("--days", type=int, default=120, help="回溯天数")

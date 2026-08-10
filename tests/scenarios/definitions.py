@@ -19,7 +19,7 @@ HARNESS §11-logic-review-plan.md §A.2:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 import numpy as np
@@ -40,6 +40,7 @@ class ScenarioDefinition:
         check_fn: 自定义验证函数，接收 (signal, metadata) 返回 (passed, message)
         tolerance: 容差（用于数值比较）
     """
+
     name: str
     description: str
     category: str
@@ -62,10 +63,16 @@ def _gen_trend_up() -> tuple[pd.DataFrame, dict]:
     volume = np.random.randint(5000, 15000, n).astype(float)
     # 最后 5 天放量上涨
     volume[-5:] *= 2
-    data = pd.DataFrame({
-        "open": close - 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"lookback_5d_return": (close[-1] - close[-6]) / close[-6]}
 
 
@@ -78,10 +85,16 @@ def _gen_trend_down() -> tuple[pd.DataFrame, dict]:
     volume = np.random.randint(5000, 15000, n).astype(float)
     # 最后 5 天放量下跌
     volume[-5:] *= 1.5
-    data = pd.DataFrame({
-        "open": close + 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close + 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"lookback_5d_return": (close[-1] - close[-6]) / close[-6]}
 
 
@@ -95,13 +108,16 @@ def _gen_sudden_gap_down() -> tuple[pd.DataFrame, dict]:
     gap_day = 70
     open_gap = close[gap_day - 1] * 0.975
     close[gap_day] = open_gap + np.random.randn() * 0.2
-    data = pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.3,
-        "low": close - np.abs(np.random.randn(n)) * 0.3,
-        "close": close,
-        "volume": np.random.randint(3000, 12000, n).astype(float),
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.3,
+            "low": close - np.abs(np.random.randn(n)) * 0.3,
+            "close": close,
+            "volume": np.random.randint(3000, 12000, n).astype(float),
+        },
+        index=dates,
+    )
     data.iloc[gap_day, data.columns.get_loc("open")] = open_gap
     return data, {"gap_day": gap_day, "gap_pct": (open_gap - close[gap_day - 1]) / close[gap_day - 1]}
 
@@ -115,13 +131,16 @@ def _gen_sudden_gap_up() -> tuple[pd.DataFrame, dict]:
     gap_day = 65
     open_gap = close[gap_day - 1] * 1.025
     close[gap_day] = open_gap + np.random.randn() * 0.2
-    data = pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.3,
-        "low": close - np.abs(np.random.randn(n)) * 0.3,
-        "close": close,
-        "volume": np.random.randint(3000, 12000, n).astype(float),
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.3,
+            "low": close - np.abs(np.random.randn(n)) * 0.3,
+            "close": close,
+            "volume": np.random.randint(3000, 12000, n).astype(float),
+        },
+        index=dates,
+    )
     data.iloc[gap_day, data.columns.get_loc("open")] = open_gap
     return data, {"gap_day": gap_day, "gap_pct": (open_gap - close[gap_day - 1]) / close[gap_day - 1]}
 
@@ -133,12 +152,16 @@ def _gen_low_liquidity() -> tuple[pd.DataFrame, dict]:
     dates = pd.date_range("2024-06-01", periods=n, freq="D")
     close = 100 + np.random.randn(n) * 0.5
     volume = np.random.randint(50, 200, n).astype(float)  # 极低成交量
-    data = pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.2,
-        "low": close - np.abs(np.random.randn(n)) * 0.2,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.2,
+            "low": close - np.abs(np.random.randn(n)) * 0.2,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"volume_pct": np.percentile(volume, 10)}
 
 
@@ -152,12 +175,16 @@ def _gen_high_volume_spike() -> tuple[pd.DataFrame, dict]:
     # 某天成交量突然放大 4 倍
     spike_day = 80
     volume[spike_day] = np.mean(volume) * 4
-    data = pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.3,
-        "low": close - np.abs(np.random.randn(n)) * 0.3,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.3,
+            "low": close - np.abs(np.random.randn(n)) * 0.3,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"spike_day": spike_day, "volume_ratio": volume[spike_day] / np.mean(volume)}
 
 
@@ -168,12 +195,16 @@ def _gen_consolidation() -> tuple[pd.DataFrame, dict]:
     dates = pd.date_range("2024-06-01", periods=n, freq="D")
     close = 100 + np.random.randn(n) * 0.15  # 极窄波动
     volume = np.random.randint(3000, 8000, n).astype(float)
-    data = pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.05,
-        "high": close + np.abs(np.random.randn(n)) * 0.1,
-        "low": close - np.abs(np.random.randn(n)) * 0.1,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.05,
+            "high": close + np.abs(np.random.randn(n)) * 0.1,
+            "low": close - np.abs(np.random.randn(n)) * 0.1,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     vol_20 = np.std(close[-20:]) / np.mean(close[-20:])
     return data, {"volatility_20d": vol_20}
 
@@ -185,12 +216,16 @@ def _gen_high_volatility() -> tuple[pd.DataFrame, dict]:
     dates = pd.date_range("2024-06-01", periods=n, freq="D")
     close = 100 + np.cumsum(np.random.randn(n) * 1.5)  # 高波动
     volume = np.random.randint(5000, 20000, n).astype(float)
-    data = pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.5,
-        "high": close + np.abs(np.random.randn(n)) * 1.0,
-        "low": close - np.abs(np.random.randn(n)) * 1.0,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.5,
+            "high": close + np.abs(np.random.randn(n)) * 1.0,
+            "low": close - np.abs(np.random.randn(n)) * 1.0,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     vol_20 = np.std(close[-20:]) / np.mean(close[-20:])
     return data, {"volatility_20d": vol_20}
 
@@ -203,13 +238,16 @@ def _gen_rally_fade() -> tuple[pd.DataFrame, dict]:
     close = 100 + np.random.randn(n) * 0.5
     # 最后一天冲高回落
     close[-1] = close[-2] * 1.01  # 收盘微涨
-    data = pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.3,
-        "low": close - np.abs(np.random.randn(n)) * 0.3,
-        "close": close,
-        "volume": np.random.randint(3000, 12000, n).astype(float),
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.3,
+            "low": close - np.abs(np.random.randn(n)) * 0.3,
+            "close": close,
+            "volume": np.random.randint(3000, 12000, n).astype(float),
+        },
+        index=dates,
+    )
     # 最后一天 high 显著高于 close
     data.iloc[-1, data.columns.get_loc("high")] = close[-2] * 1.03
     return data, {"intraday_range_pct": (data["high"].iloc[-1] - close[-1]) / close[-1]}
@@ -225,10 +263,16 @@ def _gen_mean_reversion_overbought() -> tuple[pd.DataFrame, dict]:
     close[-5:] = close[-6] * np.cumprod(1 + np.array([0.015, 0.02, 0.018, 0.016, 0.012]))
     volume = np.random.randint(5000, 15000, n).astype(float)
     volume[-5:] *= 1.5
-    data = pd.DataFrame({
-        "open": close - 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"5d_return": (close[-1] - close[-6]) / close[-6]}
 
 
@@ -241,10 +285,16 @@ def _gen_mean_reversion_oversold() -> tuple[pd.DataFrame, dict]:
     close[-5:] = close[-6] * np.cumprod(1 - np.array([0.015, 0.025, 0.02, 0.018, 0.01]))
     volume = np.random.randint(5000, 15000, n).astype(float)
     volume[-5:] *= 1.3
-    data = pd.DataFrame({
-        "open": close - 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"5d_return": (close[-1] - close[-6]) / close[-6]}
 
 
@@ -256,10 +306,16 @@ def _gen_volume_divergence() -> tuple[pd.DataFrame, dict]:
     close = 100 + np.linspace(0, 5, n) + np.random.randn(n) * 0.3
     volume = np.linspace(10000, 2000, n).astype(float) + np.random.randn(n) * 500
     volume = np.clip(volume, 1000, 20000)
-    data = pd.DataFrame({
-        "open": close - 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"price_trend": "up", "volume_trend": "down"}
 
 
@@ -274,10 +330,16 @@ def _gen_breakout_with_volume() -> tuple[pd.DataFrame, dict]:
     close[80:] = 102 + np.linspace(0, 3, 20) + np.random.randn(20) * 0.2
     volume = np.random.randint(3000, 8000, n).astype(float)
     volume[80:] *= 2  # 突破放量
-    data = pd.DataFrame({
-        "open": close - 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"breakout_pct": (close[-1] - np.max(close[:80])) / np.max(close[:80])}
 
 
@@ -297,10 +359,16 @@ def _gen_head_and_shoulders() -> tuple[pd.DataFrame, dict]:
     close[70:80] = base + 4 - np.linspace(0, 2, 10) + np.random.randn(10) * 0.3  # 右肩回落
     close[80:] = base + 2 - np.linspace(0, 1, 20) + np.random.randn(20) * 0.3  # 破位
     volume = np.random.randint(4000, 10000, n).astype(float)
-    data = pd.DataFrame({
-        "open": close - 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"pattern": "head_and_shoulders"}
 
 
@@ -317,10 +385,16 @@ def _gen_double_bottom() -> tuple[pd.DataFrame, dict]:
     close[55:70] = base - 2 + np.linspace(0, 3, 15) + np.random.randn(15) * 0.3  # 突破
     close[70:] = base + 2 + np.linspace(0, 2, 30) + np.random.randn(30) * 0.3  # 上涨
     volume = np.random.randint(4000, 10000, n).astype(float)
-    data = pd.DataFrame({
-        "open": close - 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"pattern": "double_bottom"}
 
 
@@ -332,15 +406,19 @@ def _gen_futures_rollover() -> tuple[pd.DataFrame, dict]:
     close = 100 + np.cumsum(np.random.randn(n) * 0.3)
     # 换月日附近（第 50 天）
     roll_day = 50
-    close[roll_day - 5:roll_day + 5] += np.random.randn(10) * 0.5  # 换月波动
+    close[roll_day - 5 : roll_day + 5] += np.random.randn(10) * 0.5  # 换月波动
     volume = np.random.randint(5000, 15000, n).astype(float)
-    volume[roll_day - 3:roll_day + 3] *= 2  # 换月放量
-    data = pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.3,
-        "low": close - np.abs(np.random.randn(n)) * 0.3,
-        "close": close, "volume": volume,
-    }, index=dates)
+    volume[roll_day - 3 : roll_day + 3] *= 2  # 换月放量
+    data = pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.3,
+            "low": close - np.abs(np.random.randn(n)) * 0.3,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"roll_day": roll_day}
 
 
@@ -352,11 +430,18 @@ def _gen_basis_widening() -> tuple[pd.DataFrame, dict]:
     close = 100 + np.cumsum(np.random.randn(n) * 0.2)
     spot = close + np.random.randn(n) * 0.1
     basis = -np.linspace(0, 3, n) + np.random.randn(n) * 0.1  # 贴水持续扩大
-    data = pd.DataFrame({
-        "open": close - 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": np.random.randint(3000, 10000, n).astype(float),
-        "spot": spot, "basis": basis,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": np.random.randint(3000, 10000, n).astype(float),
+            "spot": spot,
+            "basis": basis,
+        },
+        index=dates,
+    )
     return data, {"basis_start": basis[0], "basis_end": basis[-1]}
 
 
@@ -373,11 +458,18 @@ def _gen_vwap_volume_manipulation() -> tuple[pd.DataFrame, dict]:
     # 用 amount 近似 VWAP
     amount = close * volume
     amount[manip_day] = close[manip_day] * volume[manip_day] * 1.02  # 成交价偏高
-    data = pd.DataFrame({
-        "open": close - 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": volume, "amount": amount,
-        "vwap": amount / np.maximum(volume, 1),
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": volume,
+            "amount": amount,
+            "vwap": amount / np.maximum(volume, 1),
+        },
+        index=dates,
+    )
     return data, {"manip_day": manip_day}
 
 
@@ -392,14 +484,17 @@ def _gen_gap_fill() -> tuple[pd.DataFrame, dict]:
     gap_up = close[gap_day - 1] * 1.03
     close[gap_day] = gap_up
     # 随后逐步回落回补缺口
-    close[gap_day + 1:gap_day + 10] = np.linspace(gap_up, close[gap_day - 1] * 1.005, 9)
-    data = pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.3,
-        "low": close - np.abs(np.random.randn(n)) * 0.3,
-        "close": close,
-        "volume": np.random.randint(3000, 10000, n).astype(float),
-    }, index=dates)
+    close[gap_day + 1 : gap_day + 10] = np.linspace(gap_up, close[gap_day - 1] * 1.005, 9)
+    data = pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.3,
+            "low": close - np.abs(np.random.randn(n)) * 0.3,
+            "close": close,
+            "volume": np.random.randint(3000, 10000, n).astype(float),
+        },
+        index=dates,
+    )
     return data, {"gap_day": gap_day, "gap_fill_days": 10}
 
 
@@ -411,11 +506,19 @@ def _gen_gradual_recovery() -> tuple[pd.DataFrame, dict]:
     close = 100 + np.cumsum(np.random.randn(n) * 0.3)
     crash_day = 40
     close[crash_day] = close[crash_day - 1] * 0.95  # 单日大跌 5%
-    close[crash_day + 1:] = close[crash_day] + np.linspace(0, 4, n - crash_day - 1) + np.random.randn(n - crash_day - 1) * 0.2
-    data = pd.DataFrame({
-        "open": close - 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": np.random.randint(4000, 12000, n).astype(float),
-    }, index=dates)
+    close[crash_day + 1 :] = (
+        close[crash_day] + np.linspace(0, 4, n - crash_day - 1) + np.random.randn(n - crash_day - 1) * 0.2
+    )
+    data = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": np.random.randint(4000, 12000, n).astype(float),
+        },
+        index=dates,
+    )
     return data, {"crash_day": crash_day, "recovery_pct": (close[-1] - close[crash_day]) / close[crash_day]}
 
 
@@ -428,10 +531,16 @@ def _gen_sideways_with_volume_surge() -> tuple[pd.DataFrame, dict]:
     volume = np.random.randint(3000, 6000, n).astype(float)
     # 中间一段放量
     volume[40:60] = np.random.randint(10000, 20000, 20).astype(float)
-    data = pd.DataFrame({
-        "open": close - 0.05, "high": close + 0.15, "low": close - 0.15,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.05,
+            "high": close + 0.15,
+            "low": close - 0.15,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"volume_surge_ratio": np.mean(volume[40:60]) / np.mean(volume[:40])}
 
 
@@ -445,10 +554,16 @@ def _gen_momentum_exhaustion() -> tuple[pd.DataFrame, dict]:
     close[50:] = 110 + np.linspace(0, 1, 50) + np.random.randn(50) * 0.2  # 涨速放缓
     volume = np.random.randint(5000, 15000, n).astype(float)
     volume[50:] *= 0.7  # 缩量
-    data = pd.DataFrame({
-        "open": close - 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"early_slope": (close[49] - close[0]) / 49, "late_slope": (close[-1] - close[50]) / 49}
 
 
@@ -465,10 +580,16 @@ def _gen_multi_peak_reversal() -> tuple[pd.DataFrame, dict]:
     close[65:80] = 98 + np.linspace(0, 2, 15) + np.random.randn(15) * 0.3  # 三次触顶
     close[80:] = 100 - np.linspace(0, 4, 20) + np.random.randn(20) * 0.3  # 破位下跌
     volume = np.random.randint(4000, 10000, n).astype(float)
-    data = pd.DataFrame({
-        "open": close - 0.1, "high": close + 0.3, "low": close - 0.2,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + 0.3,
+            "low": close - 0.2,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"pattern": "triple_top"}
 
 
@@ -480,10 +601,16 @@ def _gen_gradual_accumulation() -> tuple[pd.DataFrame, dict]:
     close = 100 + np.linspace(0, 3, n) + np.random.randn(n) * 0.2
     volume = np.linspace(3000, 12000, n).astype(float) + np.random.randn(n) * 500
     volume = np.clip(volume, 2000, 15000)
-    data = pd.DataFrame({
-        "open": close - 0.05, "high": close + 0.2, "low": close - 0.2,
-        "close": close, "volume": volume,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close - 0.05,
+            "high": close + 0.2,
+            "low": close - 0.2,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
     return data, {"price_change_pct": (close[-1] - close[0]) / close[0]}
 
 
@@ -514,7 +641,7 @@ def _check_breakout(signal: np.ndarray, metadata: dict) -> tuple[bool, str]:
 
 def _check_gap_down(signal: np.ndarray, metadata: dict) -> tuple[bool, str]:
     """跳空低开场景：信号应转负或降低。"""
-    last_signal = signal[-1] if len(signal) > 0 else 0
+    signal[-1] if len(signal) > 0 else 0
     gap_day = metadata.get("gap_day", 0)
     if gap_day > 0 and gap_day < len(signal):
         pre_gap_signal = signal[gap_day - 1] if gap_day > 0 else 0
@@ -527,7 +654,7 @@ def _check_gap_down(signal: np.ndarray, metadata: dict) -> tuple[bool, str]:
 
 def _check_gap_up(signal: np.ndarray, metadata: dict) -> tuple[bool, str]:
     """跳空高开场景：信号应转正或升高。"""
-    last_signal = signal[-1] if len(signal) > 0 else 0
+    signal[-1] if len(signal) > 0 else 0
     gap_day = metadata.get("gap_day", 0)
     if gap_day > 0 and gap_day < len(signal):
         pre_gap_signal = signal[gap_day - 1] if gap_day > 0 else 0

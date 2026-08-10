@@ -39,6 +39,7 @@ ELITE_DIRS: dict[str, Path] = {
 
 # ─── 核心逻辑 ──────────────────────────────────────────────────
 
+
 def _load_elite_factors(elite_dir: Path) -> list[dict]:
     """从 elite 目录加载所有精英因子 JSON。"""
     factors: list[dict] = []
@@ -154,12 +155,12 @@ def run_inspection(
             "details": [summary_dict, ...],
         }
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  [{market.upper()}] 精英因子质量巡检")
     print(f"  Elite 目录: {elite_dir}")
     print(f"  Dry-run: {dry_run}")
     print(f"  最低总分门槛: {min_score}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     factors = _load_elite_factors(elite_dir)
     print(f"\n  加载精英因子: {len(factors)} 个")
@@ -188,36 +189,40 @@ def run_inspection(
             )
         except Exception as e:
             print(f"  [{i}/{len(factors)}] ❌ {name} ({fid}) 质检异常: {e}")
-            failed.append({
-                "factor_id": fid,
-                "factor_name": name,
-                "market": market,
-                "total_score": 0.0,
-                "grade": "ERROR",
-                "disposition": "异常",
-                "veto_triggered": False,
-                "veto_reasons": [str(e)],
-                "n_items_skipped": 0,
-                "n_items_failed": 0,
-            })
+            failed.append(
+                {
+                    "factor_id": fid,
+                    "factor_name": name,
+                    "market": market,
+                    "total_score": 0.0,
+                    "grade": "ERROR",
+                    "disposition": "异常",
+                    "veto_triggered": False,
+                    "veto_reasons": [str(e)],
+                    "n_items_skipped": 0,
+                    "n_items_failed": 0,
+                }
+            )
             continue
 
         summary = _summarize_report(report)
 
         # 判定是否合格：总分 >= min_score 且无 veto
-        is_qualified = (
-            report.total_score >= min_score
-            and not report.veto_triggered
-            and report.grade != "C"
-        )
+        is_qualified = report.total_score >= min_score and not report.veto_triggered and report.grade != "C"
 
         if is_qualified:
             passed.append(summary)
             print(f"  [{i}/{len(factors)}] ✅ {name} ({fid}) 总分={report.total_score:.1f} 评级={report.grade}")
         else:
             failed.append(summary)
-            reason = "; ".join(report.veto_reasons) if report.veto_reasons else f"总分={report.total_score:.1f} < {min_score}"
-            print(f"  [{i}/{len(factors)}] ❌ {name} ({fid}) 总分={report.total_score:.1f} 评级={report.grade} 原因: {reason}")
+            reason = (
+                "; ".join(report.veto_reasons)
+                if report.veto_reasons
+                else f"总分={report.total_score:.1f} < {min_score}"
+            )
+            print(
+                f"  [{i}/{len(factors)}] ❌ {name} ({fid}) 总分={report.total_score:.1f} 评级={report.grade} 原因: {reason}"
+            )
 
             if not dry_run:
                 retire_reason = f"质量巡检不合格: 总分={report.total_score:.1f} 评级={report.grade}"
@@ -237,7 +242,7 @@ def run_inspection(
         "details": {"passed": passed, "failed": failed},
     }
 
-    print(f"\n  ─── 质检结果 ───")
+    print("\n  ─── 质检结果 ───")
     print(f"  总计: {result['total']}")
     print(f"  合格: {result['passed']}")
     print(f"  不合格: {result['failed']}")
@@ -252,18 +257,18 @@ def save_report(all_results: list[dict], output_dir: Path) -> Path:
     report_path = output_dir / f"elite_quality_inspection_{timestamp}.md"
 
     lines = [
-        f"# 精英因子全员质量巡检报告",
-        f"",
+        "# 精英因子全员质量巡检报告",
+        "",
         f"> 生成时间: {datetime.now(timezone.utc).isoformat()}",
-        f"> 质检工具: HighICScreener (v2.53.0)",
-        f"> 最低总分门槛: 60.0 (B 级下限)",
-        f"",
-        f"---",
-        f"",
-        f"## 综合统计",
-        f"",
-        f"| 市场 | 总计 | 合格 | 不合格 | 出库 |",
-        f"|:-----|:-----|:-----|:-------|:-----|",
+        "> 质检工具: HighICScreener (v2.53.0)",
+        "> 最低总分门槛: 60.0 (B 级下限)",
+        "",
+        "---",
+        "",
+        "## 综合统计",
+        "",
+        "| 市场 | 总计 | 合格 | 不合格 | 出库 |",
+        "|:-----|:-----|:-----|:-------|:-----|",
     ]
 
     total_all = total_pass = total_fail = total_retire = 0
@@ -286,7 +291,9 @@ def save_report(all_results: list[dict], output_dir: Path) -> Path:
         lines.append("|:-------|:-------|:-----|:-----|:-----|:----------|")
         for f in r["details"]["failed"]:
             veto = "; ".join(f["veto_reasons"]) if f["veto_reasons"] else "-"
-            lines.append(f"| {f['factor_id']} | {f['factor_name']} | {f['total_score']:.1f} | {f['grade']} | {f['disposition']} | {veto} |")
+            lines.append(
+                f"| {f['factor_id']} | {f['factor_name']} | {f['total_score']:.1f} | {f['grade']} | {f['disposition']} | {veto} |"
+            )
         lines.append("")
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
@@ -296,13 +303,12 @@ def save_report(all_results: list[dict], output_dir: Path) -> Path:
 
 # ─── 主入口 ──────────────────────────────────────────────────
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="精英因子全员质量巡检")
     parser.add_argument("--dry-run", action="store_true", help="仅展示结果，不执行出库")
-    parser.add_argument("--market", choices=["stock", "futures", "all"], default="all",
-                        help="质检市场（默认 all）")
-    parser.add_argument("--min-score", type=float, default=60.0,
-                        help="最低总分门槛（默认 60.0，即 B 级下限）")
+    parser.add_argument("--market", choices=["stock", "futures", "all"], default="all", help="质检市场（默认 all）")
+    parser.add_argument("--min-score", type=float, default=60.0, help="最低总分门槛（默认 60.0，即 B 级下限）")
     args = parser.parse_args()
 
     markets = ["stock", "futures"] if args.market == "all" else [args.market]
@@ -332,11 +338,11 @@ def main() -> None:
     total_fail = sum(r["failed"] for r in all_results)
     total_retire = sum(r["retired"] for r in all_results)
 
-    print(f"\n{'='*60}")
-    print(f"  精英因子全员质量巡检完成")
+    print(f"\n{'=' * 60}")
+    print("  精英因子全员质量巡检完成")
     print(f"  总计: {total_all} | 合格: {total_pass} | 不合格: {total_fail} | 出库: {total_retire}")
     print(f"  报告: {report_path}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 if __name__ == "__main__":

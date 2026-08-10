@@ -39,36 +39,81 @@ SUPPORTED_PERIODS: dict[str, int] = {
 # 品种代码小写
 _SYMBOL_MAP: dict[str, str] = {
     # 上期所 (shfe)
-    "CU0": "KQ.m@SHFE.cu", "AL0": "KQ.m@SHFE.al", "ZN0": "KQ.m@SHFE.zn",
-    "NI0": "KQ.m@SHFE.ni", "SN0": "KQ.m@SHFE.sn", "PB0": "KQ.m@SHFE.pb",
-    "AU0": "KQ.m@SHFE.au", "AG0": "KQ.m@SHFE.ag", "RB0": "KQ.m@SHFE.rb",
-    "HC0": "KQ.m@SHFE.hc", "SS0": "KQ.m@SHFE.ss", "RU0": "KQ.m@SHFE.ru",
-    "BU0": "KQ.m@SHFE.bu", "FU0": "KQ.m@SHFE.fu", "SP0": "KQ.m@SHFE.sp",
+    "CU0": "KQ.m@SHFE.cu",
+    "AL0": "KQ.m@SHFE.al",
+    "ZN0": "KQ.m@SHFE.zn",
+    "NI0": "KQ.m@SHFE.ni",
+    "SN0": "KQ.m@SHFE.sn",
+    "PB0": "KQ.m@SHFE.pb",
+    "AU0": "KQ.m@SHFE.au",
+    "AG0": "KQ.m@SHFE.ag",
+    "RB0": "KQ.m@SHFE.rb",
+    "HC0": "KQ.m@SHFE.hc",
+    "SS0": "KQ.m@SHFE.ss",
+    "RU0": "KQ.m@SHFE.ru",
+    "BU0": "KQ.m@SHFE.bu",
+    "FU0": "KQ.m@SHFE.fu",
+    "SP0": "KQ.m@SHFE.sp",
     "WR0": "KQ.m@SHFE.wr",
     # 大商所 (dce)
-    "V0": "KQ.m@DCE.v", "P0": "KQ.m@DCE.p", "B0": "KQ.m@DCE.b",
-    "M0": "KQ.m@DCE.m", "I0": "KQ.m@DCE.i", "JD0": "KQ.m@DCE.jd",
-    "L0": "KQ.m@DCE.l", "PP0": "KQ.m@DCE.pp", "FB0": "KQ.m@DCE.fb",
-    "BB0": "KQ.m@DCE.bb", "Y0": "KQ.m@DCE.y", "A0": "KQ.m@DCE.a",
-    "C0": "KQ.m@DCE.c", "CS0": "KQ.m@DCE.cs", "J0": "KQ.m@DCE.j",
-    "JM0": "KQ.m@DCE.jm", "EG0": "KQ.m@DCE.eg", "EB0": "KQ.m@DCE.eb",
-    "PG0": "KQ.m@DCE.pg", "LH0": "KQ.m@DCE.lh", "RR0": "KQ.m@DCE.rr",
+    "V0": "KQ.m@DCE.v",
+    "P0": "KQ.m@DCE.p",
+    "B0": "KQ.m@DCE.b",
+    "M0": "KQ.m@DCE.m",
+    "I0": "KQ.m@DCE.i",
+    "JD0": "KQ.m@DCE.jd",
+    "L0": "KQ.m@DCE.l",
+    "PP0": "KQ.m@DCE.pp",
+    "FB0": "KQ.m@DCE.fb",
+    "BB0": "KQ.m@DCE.bb",
+    "Y0": "KQ.m@DCE.y",
+    "A0": "KQ.m@DCE.a",
+    "C0": "KQ.m@DCE.c",
+    "CS0": "KQ.m@DCE.cs",
+    "J0": "KQ.m@DCE.j",
+    "JM0": "KQ.m@DCE.jm",
+    "EG0": "KQ.m@DCE.eg",
+    "EB0": "KQ.m@DCE.eb",
+    "PG0": "KQ.m@DCE.pg",
+    "LH0": "KQ.m@DCE.lh",
+    "RR0": "KQ.m@DCE.rr",
     "PK0": "KQ.m@DCE.pk",
     # 郑商所 (czce)
-    "TA0": "KQ.m@CZCE.TA", "MA0": "KQ.m@CZCE.MA", "CF0": "KQ.m@CZCE.CF",
-    "SR0": "KQ.m@CZCE.SR", "OI0": "KQ.m@CZCE.OI", "RM0": "KQ.m@CZCE.RM",
-    "ZC0": "KQ.m@CZCE.ZC", "AP0": "KQ.m@CZCE.AP", "SF0": "KQ.m@CZCE.SF",
-    "SM0": "KQ.m@CZCE.SM", "CY0": "KQ.m@CZCE.CY", "FG0": "KQ.m@CZCE.FG",
-    "JR0": "KQ.m@CZCE.JR", "LR0": "KQ.m@CZCE.LR", "RI0": "KQ.m@CZCE.RI",
-    "WH0": "KQ.m@CZCE.WH", "PM0": "KQ.m@CZCE.PM", "UR0": "KQ.m@CZCE.UR",
-    "SA0": "KQ.m@CZCE.SA", "PF0": "KQ.m@CZCE.PF", "CJ0": "KQ.m@CZCE.CJ",
-    "PX0": "KQ.m@CZCE.PX", "SH0": "KQ.m@CZCE.SH",
+    "TA0": "KQ.m@CZCE.TA",
+    "MA0": "KQ.m@CZCE.MA",
+    "CF0": "KQ.m@CZCE.CF",
+    "SR0": "KQ.m@CZCE.SR",
+    "OI0": "KQ.m@CZCE.OI",
+    "RM0": "KQ.m@CZCE.RM",
+    "ZC0": "KQ.m@CZCE.ZC",
+    "AP0": "KQ.m@CZCE.AP",
+    "SF0": "KQ.m@CZCE.SF",
+    "SM0": "KQ.m@CZCE.SM",
+    "CY0": "KQ.m@CZCE.CY",
+    "FG0": "KQ.m@CZCE.FG",
+    "JR0": "KQ.m@CZCE.JR",
+    "LR0": "KQ.m@CZCE.LR",
+    "RI0": "KQ.m@CZCE.RI",
+    "WH0": "KQ.m@CZCE.WH",
+    "PM0": "KQ.m@CZCE.PM",
+    "UR0": "KQ.m@CZCE.UR",
+    "SA0": "KQ.m@CZCE.SA",
+    "PF0": "KQ.m@CZCE.PF",
+    "CJ0": "KQ.m@CZCE.CJ",
+    "PX0": "KQ.m@CZCE.PX",
+    "SH0": "KQ.m@CZCE.SH",
     # 能源中心 (ine)
-    "SC0": "KQ.m@INE.sc", "LU0": "KQ.m@INE.lu", "NR0": "KQ.m@INE.nr",
+    "SC0": "KQ.m@INE.sc",
+    "LU0": "KQ.m@INE.lu",
+    "NR0": "KQ.m@INE.nr",
     "BC0": "KQ.m@INE.bc",
     # 中金所 (cffex)
-    "IF0": "KQ.m@CFFEX.IF", "IH0": "KQ.m@CFFEX.IH", "IC0": "KQ.m@CFFEX.IC",
-    "TF0": "KQ.m@CFFEX.TF", "T0": "KQ.m@CFFEX.T", "TS0": "KQ.m@CFFEX.TS",
+    "IF0": "KQ.m@CFFEX.IF",
+    "IH0": "KQ.m@CFFEX.IH",
+    "IC0": "KQ.m@CFFEX.IC",
+    "TF0": "KQ.m@CFFEX.TF",
+    "T0": "KQ.m@CFFEX.T",
+    "TS0": "KQ.m@CFFEX.TS",
     "TL0": "KQ.m@CFFEX.TL",
 }
 
@@ -90,9 +135,7 @@ class TQSDKSource(BaseFuturesSource):
             period: 周期，支持 "day" / "1m" / "5m" / "15m" / "30m" / "60m"
         """
         if period not in SUPPORTED_PERIODS:
-            raise ValueError(
-                f"不支持的周期: {period}，可选: {list(SUPPORTED_PERIODS.keys())}"
-            )
+            raise ValueError(f"不支持的周期: {period}，可选: {list(SUPPORTED_PERIODS.keys())}")
         self._period = period
         self._duration_seconds = SUPPORTED_PERIODS[period]
 
@@ -104,6 +147,7 @@ class TQSDKSource(BaseFuturesSource):
         """探活：检查 tqsdk 包是否已安装。"""
         try:
             import tqsdk  # noqa: F401
+
             return True
         except ImportError:
             return False
@@ -158,6 +202,7 @@ class TQSDKSource(BaseFuturesSource):
             tq_pass = os.environ.get("TQSDK_PASSWORD", "")
             if tq_user and tq_pass:
                 from tqsdk import TqAuth
+
                 auth = TqAuth(tq_user, tq_pass)
                 api = tqsdk.TqApi(auth=auth)
             else:
@@ -223,8 +268,19 @@ class TQSDKSource(BaseFuturesSource):
             df = df.tail(days).reset_index(drop=True)
 
         # 返回分钟级 schema 列
-        cols = ["symbol", "period", "datetime", "open", "high", "low",
-                "close", "volume", "source", "fetched_at", "trace_id"]
+        cols = [
+            "symbol",
+            "period",
+            "datetime",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "source",
+            "fetched_at",
+            "trace_id",
+        ]
         return df[[c for c in cols if c in df.columns]]
 
     def fetch_quote(

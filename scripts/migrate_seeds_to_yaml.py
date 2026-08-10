@@ -30,6 +30,7 @@
         ├── ... (14 个家族文件)
         └── operator_dict.yaml
 """
+
 from __future__ import annotations
 
 import argparse
@@ -170,6 +171,7 @@ FUTURES_FAMILY_NAMES = {
 
 # ─── 提取逻辑 ────────────────────────────────────────────────
 
+
 def _family_for_futures(name: str) -> str:
     """根据因子名称推断期货家族。"""
     if name in FUTURES_FAMILY_MAP:
@@ -215,24 +217,26 @@ def extract_builtin() -> list[dict[str, Any]]:
         sig = defn["signature"]
         eco = defn["economic_logic"]
         narrative = _get_attr(eco, "narrative", "")
-        result.append({
-            "name": defn["name"],
-            "description": narrative[:80] if narrative else "",
-            "market": "stock",
-            "params": defn.get("params", {}),
-            "input_fields": _get_attr(sig, "input_fields", []),
-            "lookback": _get_attr(sig, "lookback", 20),
-            "output_type": _get_attr(sig, "output_type", "signal"),
-            "frequency": _get_attr(sig, "frequency", "daily"),
-            "economic_logic": {
-                "theory": _get_attr(eco, "theory", 4),
-                "behavioral": _get_attr(eco, "behavioral", 3),
-                "microstructure": _get_attr(eco, "microstructure", 3),
-                "institutional": _get_attr(eco, "institutional", 3),
-                "narrative": narrative,
-            },
-            "code": defn["code"],
-        })
+        result.append(
+            {
+                "name": defn["name"],
+                "description": narrative[:80] if narrative else "",
+                "market": "stock",
+                "params": defn.get("params", {}),
+                "input_fields": _get_attr(sig, "input_fields", []),
+                "lookback": _get_attr(sig, "lookback", 20),
+                "output_type": _get_attr(sig, "output_type", "signal"),
+                "frequency": _get_attr(sig, "frequency", "daily"),
+                "economic_logic": {
+                    "theory": _get_attr(eco, "theory", 4),
+                    "behavioral": _get_attr(eco, "behavioral", 3),
+                    "microstructure": _get_attr(eco, "microstructure", 3),
+                    "institutional": _get_attr(eco, "institutional", 3),
+                    "narrative": narrative,
+                },
+                "code": defn["code"],
+            }
+        )
     logger.info("  builtin: %d 个因子", len(result))
     return result
 
@@ -249,24 +253,26 @@ def extract_futures() -> dict[str, list[dict[str, Any]]]:
         family = _family_for_futures(defn["name"])
         narrative = _get_attr(eco, "narrative", "")
 
-        families[family].append({
-            "name": defn["name"],
-            "description": narrative[:80] if narrative else "",
-            "market": "futures",
-            "params": defn.get("params", {}),
-            "input_fields": _get_attr(sig, "input_fields", []),
-            "lookback": _get_attr(sig, "lookback", 20),
-            "output_type": _get_attr(sig, "output_type", "signal"),
-            "frequency": _get_attr(sig, "frequency", "daily"),
-            "economic_logic": {
-                "theory": _get_attr(eco, "theory", 4),
-                "behavioral": _get_attr(eco, "behavioral", 3),
-                "microstructure": _get_attr(eco, "microstructure", 3),
-                "institutional": _get_attr(eco, "institutional", 3),
-                "narrative": narrative,
-            },
-            "code": defn["code"],
-        })
+        families[family].append(
+            {
+                "name": defn["name"],
+                "description": narrative[:80] if narrative else "",
+                "market": "futures",
+                "params": defn.get("params", {}),
+                "input_fields": _get_attr(sig, "input_fields", []),
+                "lookback": _get_attr(sig, "lookback", 20),
+                "output_type": _get_attr(sig, "output_type", "signal"),
+                "frequency": _get_attr(sig, "frequency", "daily"),
+                "economic_logic": {
+                    "theory": _get_attr(eco, "theory", 4),
+                    "behavioral": _get_attr(eco, "behavioral", 3),
+                    "microstructure": _get_attr(eco, "microstructure", 3),
+                    "institutional": _get_attr(eco, "institutional", 3),
+                    "narrative": narrative,
+                },
+                "code": defn["code"],
+            }
+        )
 
     total = sum(len(v) for v in families.values())
     logger.info("  futures: %d 个因子, 分布在 %d 个家族", total, len(families))
@@ -289,30 +295,32 @@ def extract_expression_seeds(
     for i, defn in enumerate(definitions):
         name = defn["name"]
         expression = defn["expression"]
-        narrative = defn.get("narrative", f"{source_label} #{i+1:03d}")
+        narrative = defn.get("narrative", f"{source_label} #{i + 1:03d}")
 
         from fts.factor_engine.seed_data.loader import _estimate_input_fields, _estimate_lookback
 
         input_fields = defn.get("input_fields") or _estimate_input_fields(expression)
         lookback = defn.get("lookback") or _estimate_lookback(expression)
 
-        result.append({
-            "name": name,
-            "description": narrative[:80],
-            "market": "stock",
-            "expression": expression,
-            "input_fields": input_fields,
-            "lookback": lookback,
-            "output_type": "signal",
-            "frequency": "daily",
-            "economic_logic": {
-                "theory": defn.get("theory", 4),
-                "behavioral": defn.get("behavioral", 3),
-                "microstructure": defn.get("microstructure", 3),
-                "institutional": defn.get("institutional", 3),
-                "narrative": narrative,
-            },
-        })
+        result.append(
+            {
+                "name": name,
+                "description": narrative[:80],
+                "market": "stock",
+                "expression": expression,
+                "input_fields": input_fields,
+                "lookback": lookback,
+                "output_type": "signal",
+                "frequency": "daily",
+                "economic_logic": {
+                    "theory": defn.get("theory", 4),
+                    "behavioral": defn.get("behavioral", 3),
+                    "microstructure": defn.get("microstructure", 3),
+                    "institutional": defn.get("institutional", 3),
+                    "narrative": narrative,
+                },
+            }
+        )
 
     logger.info("  %s: %d 个因子", source_label, len(result))
     return result
@@ -324,25 +332,27 @@ def extract_fundamental() -> list[dict[str, Any]]:
 
     result = []
     for defn in FUNDAMENTAL_DEFINITIONS:
-        result.append({
-            "name": defn["name"],
-            "description": defn.get("narrative", "")[:80],
-            "market": "stock",
-            "expression": defn["expression"],
-            "field_defs": defn.get("field_defs", ""),
-            "field_check": defn.get("field_check", ""),
-            "input_fields": defn.get("input_fields", ["close"]),
-            "lookback": defn.get("lookback", 1),
-            "output_type": "signal",
-            "frequency": "daily",
-            "economic_logic": {
-                "theory": defn.get("theory", 4),
-                "behavioral": defn.get("behavioral", 3),
-                "microstructure": defn.get("microstructure", 3),
-                "institutional": defn.get("institutional", 3),
-                "narrative": defn.get("narrative", ""),
-            },
-        })
+        result.append(
+            {
+                "name": defn["name"],
+                "description": defn.get("narrative", "")[:80],
+                "market": "stock",
+                "expression": defn["expression"],
+                "field_defs": defn.get("field_defs", ""),
+                "field_check": defn.get("field_check", ""),
+                "input_fields": defn.get("input_fields", ["close"]),
+                "lookback": defn.get("lookback", 1),
+                "output_type": "signal",
+                "frequency": "daily",
+                "economic_logic": {
+                    "theory": defn.get("theory", 4),
+                    "behavioral": defn.get("behavioral", 3),
+                    "microstructure": defn.get("microstructure", 3),
+                    "institutional": defn.get("institutional", 3),
+                    "narrative": defn.get("narrative", ""),
+                },
+            }
+        )
 
     logger.info("  fundamental: %d 个因子", len(result))
     return result
@@ -480,9 +490,7 @@ def migrate(force: bool = False, sources: set[str] | None = None) -> dict[str, A
     if not sources or "wq101" in sources:
         logger.info("\n📦 Task 3: WQ 101 Alpha (stock/wq101.yaml)")
         try:
-            factors = extract_expression_seeds(
-                "fts.factor_engine.seed_data.wq101", "WQ101_DEFINITIONS", "WQ101"
-            )
+            factors = extract_expression_seeds("fts.factor_engine.seed_data.wq101", "WQ101_DEFINITIONS", "WQ101")
             doc = generate_yaml_document("wq101", "stock", factors, "1.1")
             out_path = stock_dir / "wq101.yaml"
             if force or not out_path.exists():
@@ -501,9 +509,7 @@ def migrate(force: bool = False, sources: set[str] | None = None) -> dict[str, A
     if not sources or "qlib158" in sources:
         logger.info("\n📦 Task 4: Qlib 158 (stock/qlib158.yaml)")
         try:
-            factors = extract_expression_seeds(
-                "fts.factor_engine.seed_data.qlib158", "QLIB158_DEFINITIONS", "Qlib158"
-            )
+            factors = extract_expression_seeds("fts.factor_engine.seed_data.qlib158", "QLIB158_DEFINITIONS", "Qlib158")
             doc = generate_yaml_document("qlib158", "stock", factors, "1.1")
             out_path = stock_dir / "qlib158.yaml"
             if force or not out_path.exists():
@@ -522,9 +528,7 @@ def migrate(force: bool = False, sources: set[str] | None = None) -> dict[str, A
     if not sources or "gtja191" in sources:
         logger.info("\n📦 Task 5: 国泰君安 191 (stock/gtja191.yaml)")
         try:
-            factors = extract_expression_seeds(
-                "fts.factor_engine.seed_data.gtja191", "GTJA191_DEFINITIONS", "GTJA191"
-            )
+            factors = extract_expression_seeds("fts.factor_engine.seed_data.gtja191", "GTJA191_DEFINITIONS", "GTJA191")
             doc = generate_yaml_document("gtja191", "stock", factors, "1.0")
             out_path = stock_dir / "gtja191.yaml"
             if force or not out_path.exists():
@@ -669,23 +673,27 @@ def main():
         """,
     )
     parser.add_argument(
-        "--force", "-f",
+        "--force",
+        "-f",
         action="store_true",
         help="强制覆盖已存在的 YAML 文件",
     )
     parser.add_argument(
-        "--verify", "-v",
+        "--verify",
+        "-v",
         action="store_true",
         help="仅验证现有 YAML 文件完整性",
     )
     parser.add_argument(
-        "--source", "-s",
+        "--source",
+        "-s",
         nargs="+",
         choices=["builtin", "futures", "wq101", "qlib158", "gtja191", "fundamental"],
         help="仅迁移指定来源（可多选）",
     )
     parser.add_argument(
-        "--output-dir", "-o",
+        "--output-dir",
+        "-o",
         type=str,
         default=None,
         help="输出目录（默认 seeds/）",

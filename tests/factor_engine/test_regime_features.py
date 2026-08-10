@@ -42,6 +42,7 @@ from fts.factor_engine.regime_features import (
 
 # ─── Fixtures ─────────────────────────────────────────────
 
+
 @pytest.fixture
 def ohlcv() -> pd.DataFrame:
     """标准上涨趋势 OHLCV。"""
@@ -49,13 +50,16 @@ def ohlcv() -> pd.DataFrame:
     n = 200
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
     close = 100 + np.cumsum(np.random.randn(n) * 0.3 + 0.5)
-    return pd.DataFrame({
-        "open": close * (1 + np.random.randn(n) * 0.002),
-        "high": close * (1 + np.abs(np.random.randn(n)) * 0.005),
-        "low": close * (1 - np.abs(np.random.randn(n)) * 0.005),
-        "close": close,
-        "volume": np.random.randint(800, 1200, n).astype(float),
-    }, index=dates)
+    return pd.DataFrame(
+        {
+            "open": close * (1 + np.random.randn(n) * 0.002),
+            "high": close * (1 + np.abs(np.random.randn(n)) * 0.005),
+            "low": close * (1 - np.abs(np.random.randn(n)) * 0.005),
+            "close": close,
+            "volume": np.random.randint(800, 1200, n).astype(float),
+        },
+        index=dates,
+    )
 
 
 @pytest.fixture
@@ -65,18 +69,22 @@ def flat_ohlcv() -> pd.DataFrame:
     n = 200
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
     close = 100 + np.random.randn(n) * 2.0
-    return pd.DataFrame({
-        "open": close * (1 + np.random.randn(n) * 0.002),
-        "high": close * (1 + np.abs(np.random.randn(n)) * 0.005),
-        "low": close * (1 - np.abs(np.random.randn(n)) * 0.005),
-        "close": close,
-        "volume": np.random.randint(800, 1200, n).astype(float),
-    }, index=dates)
+    return pd.DataFrame(
+        {
+            "open": close * (1 + np.random.randn(n) * 0.002),
+            "high": close * (1 + np.abs(np.random.randn(n)) * 0.005),
+            "low": close * (1 - np.abs(np.random.randn(n)) * 0.005),
+            "close": close,
+            "volume": np.random.randint(800, 1200, n).astype(float),
+        },
+        index=dates,
+    )
 
 
 # ═══════════════════════════════════════════════════════════
 # 1. volume_shock
 # ═══════════════════════════════════════════════════════════
+
 
 class TestVolumeShock:
     """成交量冲击因子。"""
@@ -99,10 +107,13 @@ class TestVolumeShock:
     def test_constant_volume(self) -> None:
         """成交量恒定 → 冲击为 0。"""
         dates = pd.date_range("2024-01-01", periods=50, freq="D")
-        df = pd.DataFrame({
-            "close": 100 + np.arange(50).astype(float),
-            "volume": np.ones(50) * 1000,
-        }, index=dates)
+        df = pd.DataFrame(
+            {
+                "close": 100 + np.arange(50).astype(float),
+                "volume": np.ones(50) * 1000,
+            },
+            index=dates,
+        )
         result = volume_shock(df)
         assert abs(result) < 1e-10
 
@@ -110,6 +121,7 @@ class TestVolumeShock:
 # ═══════════════════════════════════════════════════════════
 # 2. return_skewness
 # ═══════════════════════════════════════════════════════════
+
 
 class TestReturnSkewness:
     """收益率偏度。"""
@@ -140,6 +152,7 @@ class TestReturnSkewness:
 # ═══════════════════════════════════════════════════════════
 # 3. return_kurtosis
 # ═══════════════════════════════════════════════════════════
+
 
 class TestReturnKurtosis:
     """收益率峰度。"""
@@ -182,6 +195,7 @@ class TestReturnKurtosis:
 # 4. return_autocorr
 # ═══════════════════════════════════════════════════════════
 
+
 class TestReturnAutocorr:
     """收益率自相关系数。"""
 
@@ -217,6 +231,7 @@ class TestReturnAutocorr:
 # 5. intraday_range_ratio
 # ═══════════════════════════════════════════════════════════
 
+
 class TestIntradayRangeRatio:
     """日内波幅比。"""
 
@@ -239,6 +254,7 @@ class TestIntradayRangeRatio:
 # ═══════════════════════════════════════════════════════════
 # 6. cross_symbol_correlation
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCrossSymbolCorrelation:
     """跨品种相关系数。"""
@@ -269,9 +285,7 @@ class TestCrossSymbolCorrelation:
         }
         # 使用不同种子
         np.random.seed(99)
-        panel["SYM3"] = pd.DataFrame(
-            {"close": 100 + np.cumsum(np.random.randn(n) * 0.3)}, index=dates
-        )
+        panel["SYM3"] = pd.DataFrame({"close": 100 + np.cumsum(np.random.randn(n) * 0.3)}, index=dates)
         result = cross_symbol_correlation(panel, ["SYM1", "SYM2", "SYM3"])
         # 应低于高度相关的情况
         assert result < 0.99
@@ -302,6 +316,7 @@ class TestCrossSymbolCorrelation:
 # 7. compute_extended_features
 # ═══════════════════════════════════════════════════════════
 
+
 class TestComputeExtendedFeatures:
     """综合特征提取。"""
 
@@ -309,13 +324,15 @@ class TestComputeExtendedFeatures:
         """所有特征键都存在。"""
         features = compute_extended_features(ohlcv)
         expected_keys = {
-            "volume_shock", "skewness", "kurtosis",
-            "autocorr_lag1", "autocorr_lag5",
-            "intraday_range_ratio", "cross_corr_mean",
+            "volume_shock",
+            "skewness",
+            "kurtosis",
+            "autocorr_lag1",
+            "autocorr_lag5",
+            "intraday_range_ratio",
+            "cross_corr_mean",
         }
-        assert expected_keys == set(features.keys()), (
-            f"缺失键: {expected_keys - set(features.keys())}"
-        )
+        assert expected_keys == set(features.keys()), f"缺失键: {expected_keys - set(features.keys())}"
 
     def test_no_panel_default(self, ohlcv: pd.DataFrame) -> None:
         """无 panel 时 cross_corr_mean 为 0.0。"""
@@ -340,6 +357,7 @@ class TestComputeExtendedFeatures:
 # ═══════════════════════════════════════════════════════════
 # 8. compute_hmm_feature_vector
 # ═══════════════════════════════════════════════════════════
+
 
 class TestComputeHMMFeatureVector:
     """HMM 特征向量构建。"""
@@ -382,11 +400,14 @@ class TestComputeHMMFeatureVector:
         """无 volume 列时仍能正常工作。"""
         dates = pd.date_range("2024-01-01", periods=50, freq="D")
         close = 100 + np.cumsum(np.random.randn(50) * 0.3)
-        df = pd.DataFrame({
-            "close": close,
-            "high": close * 1.01,
-            "low": close * 0.99,
-        }, index=dates)
+        df = pd.DataFrame(
+            {
+                "close": close,
+                "high": close * 1.01,
+                "low": close * 0.99,
+            },
+            index=dates,
+        )
         result = compute_hmm_feature_vector(df)
         assert isinstance(result, np.ndarray)
 
@@ -395,16 +416,20 @@ class TestComputeHMMFeatureVector:
 # 9. 补充边界分支
 # ═══════════════════════════════════════════════════════════
 
+
 class TestVolumeShockMore:
     """成交量冲击补充边界。"""
 
     def test_zero_volume(self) -> None:
         """成交量全 0 → 均值为 0 → 返回 0.0。"""
         dates = pd.date_range("2024-01-01", periods=50, freq="D")
-        df = pd.DataFrame({
-            "close": 100 + np.arange(50).astype(float),
-            "volume": np.zeros(50),
-        }, index=dates)
+        df = pd.DataFrame(
+            {
+                "close": 100 + np.arange(50).astype(float),
+                "volume": np.zeros(50),
+            },
+            index=dates,
+        )
         assert volume_shock(df) == 0.0
 
 
@@ -414,11 +439,14 @@ class TestIntradayRangeRatioMore:
     def test_zero_close(self) -> None:
         """收盘价末值为 0 → 返回 0.0。"""
         dates = pd.date_range("2024-01-01", periods=30, freq="D")
-        df = pd.DataFrame({
-            "high": np.full(30, 1.0),
-            "low": np.full(30, 0.5),
-            "close": np.concatenate([np.full(29, 10.0), [0.0]]),
-        }, index=dates)
+        df = pd.DataFrame(
+            {
+                "high": np.full(30, 1.0),
+                "low": np.full(30, 0.5),
+                "close": np.concatenate([np.full(29, 10.0), [0.0]]),
+            },
+            index=dates,
+        )
         assert intraday_range_ratio(df) == 0.0
 
 
@@ -432,7 +460,8 @@ class TestCrossSymbolCorrelationMore:
         dates = pd.date_range("2024-01-01", periods=n, freq="D")
         panel = {
             "A": pd.DataFrame(
-                {"close": 100 + np.cumsum(np.random.randn(n) * 0.3)}, index=dates,
+                {"close": 100 + np.cumsum(np.random.randn(n) * 0.3)},
+                index=dates,
             ),
             "B": pd.DataFrame({"close": np.full(n, 100.0)}, index=dates),
         }

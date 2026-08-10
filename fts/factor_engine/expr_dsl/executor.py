@@ -2,6 +2,7 @@
 
 性能优势: 不经沙箱编译/exec，算子间共享 Series，速度远超代码因子。
 """
+
 from __future__ import annotations
 
 import numpy as np

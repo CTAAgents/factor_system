@@ -9,18 +9,17 @@
 """
 
 import sys
+
 sys.path.insert(0, "d:\\Programs\\factor_system")
 
 import logging
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 from fts.factor_engine.seed_loader import (
     load_all_yaml_seeds,
-    load_factors_from_yaml,
-    verify_yaml_integrity,
     get_seeds_dir,
 )
-from pathlib import Path
 
 # ════════════════════════════════════════════════════════════
 # 1. YAML 文件完整性

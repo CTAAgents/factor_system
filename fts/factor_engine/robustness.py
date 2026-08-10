@@ -14,14 +14,13 @@ HARNESS §11-logic-review-plan.md §B.2:
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from .contracts import FactorProgram
 from .evaluation_chain import evaluate_backtest
-from .factor_program import FactorExecutor
 
 
 # ─── 鲁棒性测试结果契约 ──────────────────────────────────
@@ -29,6 +28,7 @@ from .factor_program import FactorExecutor
 
 class AdversarialTestResult(dict):
     """对抗样本测试结果。"""
+
     def __init__(
         self,
         perturbation: str,
@@ -49,6 +49,7 @@ class AdversarialTestResult(dict):
 
 class MissingValueTestResult(dict):
     """缺失值测试结果。"""
+
     def __init__(
         self,
         missing_pct: float,
@@ -67,6 +68,7 @@ class MissingValueTestResult(dict):
 
 class OODTestResult(dict):
     """分布外测试结果。"""
+
     def __init__(
         self,
         scenario: str,
@@ -85,6 +87,7 @@ class OODTestResult(dict):
 
 class RobustnessTestResult(dict):
     """完整鲁棒性测试结果。"""
+
     def __init__(
         self,
         factor_id: str,
@@ -162,9 +165,7 @@ def _generate_ood_data(
     modified = data.copy()
 
     price_cols = {"open", "high", "low", "close", "vwap", "settle"}
-    existing_price_cols = [
-        c for c in modified.columns if c.lower() in price_cols
-    ]
+    existing_price_cols = [c for c in modified.columns if c.lower() in price_cols]
 
     if scenario == "high_vol":
         for col in existing_price_cols:
@@ -266,14 +267,16 @@ class RobustnessTester:
             bt_p = evaluate_backtest(factor, perturbed_data, forward_returns, **eval_kwargs)
             perturbed_ic = bt_p.get("ic", 0.0)
             ic_change = abs(perturbed_ic - baseline_ic)
-            adversarial_results.append(AdversarialTestResult(
-                perturbation=name,
-                perturbation_factor=factor_val,
-                baseline_ic=baseline_ic,
-                perturbed_ic=perturbed_ic,
-                ic_change=ic_change,
-                passed=ic_change <= self._adversarial_threshold,
-            ))
+            adversarial_results.append(
+                AdversarialTestResult(
+                    perturbation=name,
+                    perturbation_factor=factor_val,
+                    baseline_ic=baseline_ic,
+                    perturbed_ic=perturbed_ic,
+                    ic_change=ic_change,
+                    passed=ic_change <= self._adversarial_threshold,
+                )
+            )
 
         # 2. 缺失值测试
         missing_value_results: list[MissingValueTestResult] = []
@@ -282,13 +285,15 @@ class RobustnessTester:
             bt_m = evaluate_backtest(factor, missing_data, forward_returns, **eval_kwargs)
             missing_ic = bt_m.get("ic", 0.0)
             ic_retention = abs(missing_ic / baseline_ic) if baseline_ic != 0 else 0.0
-            missing_value_results.append(MissingValueTestResult(
-                missing_pct=pct,
-                baseline_ic=baseline_ic,
-                missing_ic=missing_ic,
-                ic_retention=ic_retention,
-                passed=ic_retention >= self._missing_retention_threshold,
-            ))
+            missing_value_results.append(
+                MissingValueTestResult(
+                    missing_pct=pct,
+                    baseline_ic=baseline_ic,
+                    missing_ic=missing_ic,
+                    ic_retention=ic_retention,
+                    passed=ic_retention >= self._missing_retention_threshold,
+                )
+            )
 
         # 3. 分布外测试
         ood_results: list[OODTestResult] = []
@@ -297,23 +302,21 @@ class RobustnessTester:
             bt_o = evaluate_backtest(factor, ood_data, forward_returns, **eval_kwargs)
             ood_ic = bt_o.get("ic", 0.0)
             ic_retention = abs(ood_ic / baseline_ic) if baseline_ic != 0 else 0.0
-            ood_results.append(OODTestResult(
-                scenario=scenario,
-                baseline_ic=baseline_ic,
-                ood_ic=ood_ic,
-                ic_retention=ic_retention,
-                passed=ic_retention >= self._ood_retention_threshold,
-            ))
+            ood_results.append(
+                OODTestResult(
+                    scenario=scenario,
+                    baseline_ic=baseline_ic,
+                    ood_ic=ood_ic,
+                    ic_retention=ic_retention,
+                    passed=ic_retention >= self._ood_retention_threshold,
+                )
+            )
 
         # 汇总
         n_adversarial_pass = sum(1 for r in adversarial_results if r["passed"])
         n_missing_pass = sum(1 for r in missing_value_results if r["passed"])
         n_ood_pass = sum(1 for r in ood_results if r["passed"])
-        total_tests = (
-            len(adversarial_results)
-            + len(missing_value_results)
-            + len(ood_results)
-        )
+        total_tests = len(adversarial_results) + len(missing_value_results) + len(ood_results)
         total_passed = n_adversarial_pass + n_missing_pass + n_ood_pass
 
         summary = {
@@ -356,7 +359,9 @@ class RobustnessTester:
 
         # 1. 对抗样本
         lines.append("--- 1. 对抗样本测试 ---")
-        lines.append(f"  {'扰动方式':<20} {'扰动因子':>10} {'Baseline IC':>12} {'扰动后 IC':>12} {'IC 变化':>10} {'通过':>6}")
+        lines.append(
+            f"  {'扰动方式':<20} {'扰动因子':>10} {'Baseline IC':>12} {'扰动后 IC':>12} {'IC 变化':>10} {'通过':>6}"
+        )
         for r in result["adversarial_results"]:
             lines.append(
                 f"  {r['perturbation']:<20} {r['perturbation_factor']:>10.4f} "
@@ -369,7 +374,7 @@ class RobustnessTester:
         lines.append(f"  {'缺失比例':<10} {'Baseline IC':>12} {'缺失后 IC':>12} {'IC 保持率':>10} {'通过':>6}")
         for r in result["missing_value_results"]:
             lines.append(
-                f"  {r['missing_pct']*100:>6.0f}%    "
+                f"  {r['missing_pct'] * 100:>6.0f}%    "
                 f"{r['baseline_ic']:>12.4f} {r['missing_ic']:>12.4f} "
                 f"{r['ic_retention']:>10.2%} {'✅' if r['passed'] else '❌':>6}"
             )
@@ -393,7 +398,7 @@ class RobustnessTester:
 
         # 汇总
         s = result["summary"]
-        lines.append(f"\n--- 汇总 ---")
+        lines.append("\n--- 汇总 ---")
         lines.append(f"  对抗样本: {s['adversarial']['passed']}/{s['adversarial']['total']} 通过")
         lines.append(f"  缺失值:    {s['missing_value']['passed']}/{s['missing_value']['total']} 通过")
         lines.append(f"  分布外:    {s['ood']['passed']}/{s['ood']['total']} 通过")

@@ -36,25 +36,15 @@ def _make_code(
     field_assignments = []
     for f in input_fields:
         if f == "close":
-            field_assignments.append(
-                "close = data['close'].values if hasattr(data, 'close') else data['close']"
-            )
+            field_assignments.append("close = data['close'].values if hasattr(data, 'close') else data['close']")
         elif f == "high":
-            field_assignments.append(
-                "high = data['high'].values if hasattr(data, 'high') else data['high']"
-            )
+            field_assignments.append("high = data['high'].values if hasattr(data, 'high') else data['high']")
         elif f == "low":
-            field_assignments.append(
-                "low = data['low'].values if hasattr(data, 'low') else data['low']"
-            )
+            field_assignments.append("low = data['low'].values if hasattr(data, 'low') else data['low']")
         elif f == "open":
-            field_assignments.append(
-                "open_ = data['open'].values if hasattr(data, 'open') else data['open']"
-            )
+            field_assignments.append("open_ = data['open'].values if hasattr(data, 'open') else data['open']")
         elif f == "volume":
-            field_assignments.append(
-                "volume = data['volume'].values if hasattr(data, 'volume') else data['volume']"
-            )
+            field_assignments.append("volume = data['volume'].values if hasattr(data, 'volume') else data['volume']")
         elif f == "vwap":
             field_assignments.append(
                 "vwap = data.get('vwap', close).values if hasattr(data, 'vwap') else data.get('vwap', close)"
@@ -64,8 +54,8 @@ def _make_code(
     fields_str = f"\n    {fields_str}" if fields_str else ""
 
     code = (
-        'def factor_program(data, params):\n'
-        '    import numpy as np\n'
+        "def factor_program(data, params):\n"
+        "    import numpy as np\n"
         "    n = len(data['close'].values if hasattr(data, 'close') else data['close'])\n"
     )
     if fields_str:
@@ -103,8 +93,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     gk_norm = gk_vol / np.maximum(close, 1e-10)
     signal = -np.tanh(gk_norm * 100)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "Garman-Klass波动率因子：基于OHLC的日内波动率估计，比传统Close-to-Close波动率更高效。高波动偏空，低波动偏多。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "Garman-Klass波动率因子：基于OHLC的日内波动率估计，比传统Close-to-Close波动率更高效。高波动偏空，低波动偏多。",
+        },
     },
     # ── 2. Yang-Zhang 波动率 ──
     {
@@ -150,8 +145,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     yz_norm = yz_vol / np.maximum(close, 1e-10)
     signal = -np.tanh(yz_norm * 100)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 5, "institutional": 3,
-                           "narrative": "Yang-Zhang波动率因子：考虑跳空的最优波动率估计器，结合隔夜与日内波动。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 5,
+            "institutional": 3,
+            "narrative": "Yang-Zhang波动率因子：考虑跳空的最优波动率估计器，结合隔夜与日内波动。",
+        },
     },
     # ── 3. 波动率偏度因子 ──
     {
@@ -183,8 +183,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     # 正偏=下跌风险大偏空，负偏=反弹潜力偏多
     signal = -np.tanh(skew * 0.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 4, "microstructure": 3, "institutional": 3,
-                           "narrative": "波动率偏度因子：已实现波动率的偏度分布。正偏=波动率右尾长=下跌风险大偏空，负偏相反。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "波动率偏度因子：已实现波动率的偏度分布。正偏=波动率右尾长=下跌风险大偏空，负偏相反。",
+        },
     },
     # ── 4. 尾部风险因子 ──
     {
@@ -219,8 +224,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     # 尾部比 > 1 = 下尾风险更大偏空，< 1 = 上尾机会更大偏多
     signal = -np.tanh((tail_ratio - 1) * 3)
 """,
-        "economic_logic": {"theory": 5, "behavioral": 3, "microstructure": 3, "institutional": 4,
-                           "narrative": "尾部风险因子：基于极值收益率分布的尾部风险度量。尾部越厚=极端风险越大=偏空。"},
+        "economic_logic": {
+            "theory": 5,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 4,
+            "narrative": "尾部风险因子：基于极值收益率分布的尾部风险度量。尾部越厚=极端风险越大=偏空。",
+        },
     },
     # ── 5. 序列相关因子 ──
     {
@@ -250,8 +260,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     # 正自相关=趋势延续做动量，负自相关=均值回归做反转
     signal = np.tanh(autocorr * 2)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "序列相关因子：收益率自相关结构。正自相关=趋势延续做动量，负自相关=均值回归做反转。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "序列相关因子：收益率自相关结构。正自相关=趋势延续做动量，负自相关=均值回归做反转。",
+        },
     },
     # ── 6. 效率比因子（Kaufman） ──
     {
@@ -283,8 +298,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal = (er - 0.5) * 2
     signal = np.tanh(signal * 1.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "效率比因子：Kaufman效率比=方向变动/总变动。效率比高=强趋势做动量，低=震荡做反转。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "效率比因子：Kaufman效率比=方向变动/总变动。效率比高=强趋势做动量，低=震荡做反转。",
+        },
     },
     # ── 7. Hurst 指数因子 ──
     {
@@ -322,8 +342,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal = (hurst - 0.5) * 2
     signal = np.tanh(signal * 2)
 """,
-        "economic_logic": {"theory": 5, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                           "narrative": "Hurst指数因子：基于重标极差(R/S)分析的Hurst指数。H>0.5=趋势持续做动量，H<0.5=均值回归做反转。"},
+        "economic_logic": {
+            "theory": 5,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "Hurst指数因子：基于重标极差(R/S)分析的Hurst指数。H>0.5=趋势持续做动量，H<0.5=均值回归做反转。",
+        },
     },
     # ── 8. 买卖压力因子 ──
     {
@@ -351,8 +376,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal = (avg_pressure - 0.5) * 2
     signal = np.tanh(signal * 2)
 """,
-        "economic_logic": {"theory": 3, "behavioral": 3, "microstructure": 5, "institutional": 3,
-                           "narrative": "市场微观结构因子：基于HLC的买卖压力指标。买入压力大做多，卖出压力大做空。"},
+        "economic_logic": {
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 5,
+            "institutional": 3,
+            "narrative": "市场微观结构因子：基于HLC的买卖压力指标。买入压力大做多，卖出压力大做空。",
+        },
     },
     # ── 9. 流动性缺口因子 ──
     {
@@ -384,8 +414,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     log_illiq = np.log(np.maximum(avg_illiquidity, 1e-10))
     signal = -np.tanh(log_illiq * 0.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 5, "institutional": 3,
-                           "narrative": "流动性缺口因子：价格冲击的预期成本度量。流动性缺口大=冲击成本高=偏空。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 5,
+            "institutional": 3,
+            "narrative": "流动性缺口因子：价格冲击的预期成本度量。流动性缺口大=冲击成本高=偏空。",
+        },
     },
     # ── 10. 成交量质量因子 ──
     {
@@ -420,8 +455,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal = vp_corr * np.sign(price_chg)
     signal = np.tanh(signal * 2)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "成交量质量因子：成交量对价格变动的贡献度。量价配合好=趋势可靠做动量，量价背离=趋势可疑做反转。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "成交量质量因子：成交量对价格变动的贡献度。量价配合好=趋势可靠做动量，量价背离=趋势可疑做反转。",
+        },
     },
     # ── 11. 价格加速度因子 ──
     {
@@ -446,8 +486,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     # 加速度正=动量加速做多，加速度负=动量衰减做空
     signal = np.tanh(acceleration * 2)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                           "narrative": "价格加速度因子：动量的一阶差分（加速度）。加速度正则动量加速偏多，负则动量衰减偏空。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "价格加速度因子：动量的一阶差分（加速度）。加速度正则动量加速偏多，负则动量衰减偏空。",
+        },
     },
     # ── 12. 累积量因子 ──
     {
@@ -481,8 +526,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     accumulation = (pos - 0.5) * 2 * np.clip(vol_ratio, 0.5, 2.0)
     signal = np.tanh(accumulation * 1.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "累积量因子：基于成交量和价格位置的累积量指标。量价位置综合判断趋势强度。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "累积量因子：基于成交量和价格位置的累积量指标。量价位置综合判断趋势强度。",
+        },
     },
     # ── 13. 多周期动量因子 ──
     {
@@ -515,8 +565,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal = (short_sig * 0.5 + mid_sig * 0.3 + long_sig * 0.2) * consensus
     signal = np.tanh(signal * 1.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                           "narrative": "多周期动量因子：短中长三期动量加权组合。三周期共振=强趋势信号，分歧=震荡信号。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "多周期动量因子：短中长三期动量加权组合。三周期共振=强趋势信号，分歧=震荡信号。",
+        },
     },
     # ── 14. 波动率锥因子 ──
     {
@@ -549,8 +604,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     # 上翘(>1) = 短期风险加大偏空，下倾(<1) = 短期风险缓解偏多
     signal = np.tanh((1 - vol_cone) * 2)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 4,
-                           "narrative": "波动率锥因子：短期波动率与长期波动率的比值。波动率锥上翘=短期风险加大偏空，下倾相反。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 4,
+            "narrative": "波动率锥因子：短期波动率与长期波动率的比值。波动率锥上翘=短期风险加大偏空，下倾相反。",
+        },
     },
     # ── 15. 价格分形维度因子 ──
     {
@@ -598,8 +658,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     # 低分形维度(趋势强)偏多，高分形维度(噪音大)偏空
     signal = np.tanh((1.5 - fd) * 2)
 """,
-        "economic_logic": {"theory": 5, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                           "narrative": "价格分形维度因子：基于Higuchi算法的分形维度。D接近1=趋势强，D接近2=噪音大。"},
+        "economic_logic": {
+            "theory": 5,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "价格分形维度因子：基于Higuchi算法的分形维度。D接近1=趋势强，D接近2=噪音大。",
+        },
     },
     # ── 16. 量价相关性稳定性因子 ──
     {
@@ -643,8 +708,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal = stability * trend_dir
     signal = np.tanh(signal * 2)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "量价相关性稳定性因子：量价相关性的时间序列稳定性。稳定性高=量价关系可靠做趋势，低=关系紊乱做反转。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "量价相关性稳定性因子：量价相关性的时间序列稳定性。稳定性高=量价关系可靠做趋势，低=关系紊乱做反转。",
+        },
     },
     # ── 17. 跳跃风险因子 ──
     {
@@ -682,8 +752,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     jump_score = jump_count * jump_magnitude
     signal = -np.tanh(jump_score * 0.1)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 5, "institutional": 3,
-                           "narrative": "跳跃风险因子：收益率的非连续跳跃幅度和频率度量。跳跃频繁=微观结构风险大=偏空。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 5,
+            "institutional": 3,
+            "narrative": "跳跃风险因子：收益率的非连续跳跃幅度和频率度量。跳跃频繁=微观结构风险大=偏空。",
+        },
     },
     # ── 18. Rogers-Satchell 波动率 ──
     {
@@ -713,8 +788,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     rs_norm = rs_vol / np.maximum(close, 1e-10)
     signal = -np.tanh(rs_norm * 100)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "Rogers-Satchell波动率因子：允许漂移项的日内波动率估计器。比Garman-Klass更鲁棒。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "Rogers-Satchell波动率因子：允许漂移项的日内波动率估计器。比Garman-Klass更鲁棒。",
+        },
     },
     # ── 19. 波动率峰度因子 ──
     {
@@ -741,8 +821,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     excess_kurt = kurt - 3
     signal = -np.tanh(excess_kurt * 0.3)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 4, "microstructure": 3, "institutional": 3,
-                           "narrative": "波动率峰度因子：收益率的峰度。高峰度=厚尾=极端事件风险大偏空。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "波动率峰度因子：收益率的峰度。高峰度=厚尾=极端事件风险大偏空。",
+        },
     },
     # ── 20. 涨跌不对称因子 ──
     {
@@ -776,13 +861,19 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     # 上行/下行波动率比 < 1 = 下跌更剧烈 = 偏空
     signal = np.tanh((asym - 1) * 2)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 4, "microstructure": 3, "institutional": 3,
-                           "narrative": "涨跌不对称因子：上涨日和下跌日的收益率不对称性。上行/下行波动率比<1=下跌风险更大偏空。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "涨跌不对称因子：上涨日和下跌日的收益率不对称性。上行/下行波动率比<1=下跌风险更大偏空。",
+        },
     },
 ]
 
 
 # ─── 去重：检查与现有种子因子的重复 ──────────────────────────
+
 
 def load_existing_futures_names() -> set[str]:
     """加载现有期货种子因子的所有名称。"""
@@ -811,6 +902,7 @@ def check_duplicate(name: str, existing: set[str]) -> bool:
 
 
 # ─── 生成 YAML 文件 ──────────────────────────────────────────
+
 
 def generate_yaml(output_path: Path | str = OUTPUT_FILE) -> int:
     """生成 wind_cta.yaml 种子文件。

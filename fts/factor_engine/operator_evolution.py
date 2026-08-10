@@ -10,6 +10,7 @@
 
 设计文档: docs/harness/design/C.4-operator-evolution-engine-design.md
 """
+
 from __future__ import annotations
 
 import copy
@@ -40,16 +41,16 @@ _PENALTY_WEAK = -5.0
 class OperatorEvolutionConfig:
     """算子演化配置（契约见 C.4 设计 §3.1）。"""
 
-    population_size: int = 100        # 种群大小
-    max_generations: int = 20         # 最大代数
-    tournament_size: int = 3          # 锦标赛大小
-    crossover_rate: float = 0.7       # 交叉率
-    mutation_rate: float = 0.15       # 变异率
-    max_tree_depth: int = 5           # 表达式最大深度
-    elitism_size: int = 5             # 精英保留数
+    population_size: int = 100  # 种群大小
+    max_generations: int = 20  # 最大代数
+    tournament_size: int = 3  # 锦标赛大小
+    crossover_rate: float = 0.7  # 交叉率
+    mutation_rate: float = 0.15  # 变异率
+    max_tree_depth: int = 5  # 表达式最大深度
+    elitism_size: int = 5  # 精英保留数
     fitness_metric: Literal["ic", "sharpe", "ic_sharpe_combo"] = "ic_sharpe_combo"
-    max_attempts: int = 30            # 无效个体（校验失败）重试上限
-    random_seed: int = 42             # 随机种子（可复现）
+    max_attempts: int = 30  # 无效个体（校验失败）重试上限
+    random_seed: int = 42  # 随机种子（可复现）
 
 
 @dataclass
@@ -60,7 +61,7 @@ class OperatorGenerationSnapshot:
     best_fitness: float
     best_expression: str
     avg_fitness: float
-    population_diversity: float       # 唯一表达式占比
+    population_diversity: float  # 唯一表达式占比
 
 
 @dataclass
@@ -143,20 +144,16 @@ class OperatorEvolutionEngine:
         self._rng = random.Random(self._config.random_seed)
 
         # 面板可用 L0 字段（面板中存在且属于 DSL 基础字段）
-        self._available_fields = sorted(
-            set(L0_FIELDS) & set(data_panel.columns)
-        ) or ["close"]
+        self._available_fields = sorted(set(L0_FIELDS) & set(data_panel.columns)) or ["close"]
 
         # 内部算子池: L1 单序列时序算子 + L4 组合/双序列/条件算子（GAP-L401:
         # 放开双序列约束，条件算子 if_else/regression_residual 经参数边界护栏控制复杂度）
         self._internal_ops = [
-            name for name, meta in self._registry.items()
-            if meta.category in ("L1", "L4") and "cond" not in meta.params
+            name for name, meta in self._registry.items() if meta.category in ("L1", "L4") and "cond" not in meta.params
         ]
         # 顶层封装池: L2 单参截面算子
         self._wrap_ops = [
-            name for name, meta in self._registry.items()
-            if meta.category == "L2" and len(meta.params) == 1
+            name for name, meta in self._registry.items() if meta.category == "L2" and len(meta.params) == 1
         ]
 
         self._fitness_cache: dict[str, _FitnessScore] = {}
@@ -183,16 +180,20 @@ class OperatorEvolutionEngine:
         for pname in meta.params:
             if pname in meta.int_params:
                 lo, hi = meta.param_bounds.get(pname, (1, 250))
-                args.append(ExprNode(
-                    op=str(int(self._rng.randint(int(lo), int(hi)))),
-                    kind="const",
-                ))
+                args.append(
+                    ExprNode(
+                        op=str(int(self._rng.randint(int(lo), int(hi)))),
+                        kind="const",
+                    )
+                )
             elif pname in meta.float_params:
                 lo, hi = meta.param_bounds.get(pname, (0.0, 1.0))
-                args.append(ExprNode(
-                    op=str(round(self._rng.uniform(float(lo), float(hi)), 4)),
-                    kind="const",
-                ))
+                args.append(
+                    ExprNode(
+                        op=str(round(self._rng.uniform(float(lo), float(hi)), 4)),
+                        kind="const",
+                    )
+                )
             else:
                 args.append(self._gen_random_node(depth - 1))
         return ExprNode(op=name, args=args)
@@ -210,10 +211,7 @@ class OperatorEvolutionEngine:
 
     def _initialize_population(self, size: int) -> list[str]:
         """初始化种群（全部为合法表达式）。"""
-        return [
-            self._random_expression(self._config.max_tree_depth)
-            for _ in range(size)
-        ]
+        return [self._random_expression(self._config.max_tree_depth) for _ in range(size)]
 
     # ── 适应度评估 ───────────────────────────────────────────
 
@@ -230,6 +228,15 @@ class OperatorEvolutionEngine:
         self._total_evaluations += 1
         try:
             node = parse_expression(expr)
+            # GAP-I202 (v2.75.0): 纯字段/无算子表达式（lookback=0）罚分——
+            # 算子演化产物应包含实际算子变换，避免裸字段包装（如 rank(close)）
+            # 在单调合成数据上以虚假高 IC 占据最优；与常信号罚分同一档强度。
+            from .expr_dsl.validator import compute_max_lookback
+
+            if compute_max_lookback(node, self._registry) == 0:
+                score = _FitnessScore(fitness=_PENALTY_WEAK)
+                self._fitness_cache[expr] = score
+                return score
             # 使用训练掩码防止数据泄露
             eval_data = self._data[self._train_mask] if self._train_mask is not None else self._data
             values = evaluate(node, eval_data, self._registry)
@@ -293,6 +300,7 @@ class OperatorEvolutionEngine:
                     return p1
                 _, parent, idx = self._rng.choice(internal1)
                 donor = self._rng.choice(_collect_nodes(root2))[0]
+                assert parent is not None
                 parent.args[idx] = copy.deepcopy(donor)
                 if _node_depth(root1) > self._config.max_tree_depth:
                     continue
@@ -327,18 +335,16 @@ class OperatorEvolutionEngine:
                 if strategy == "subtree":
                     node, parent, idx = self._rng.choice(ops)
                     depth_budget = max(
-                        1, self._config.max_tree_depth - _node_depth(node) + 1,
+                        1,
+                        self._config.max_tree_depth - _node_depth(node) + 1,
                     )
+                    assert parent is not None
                     parent.args[idx] = self._gen_random_node(depth_budget)
                 elif strategy == "param":
                     const, _, _ = self._rng.choice(consts)
                     old = float(const.op)
                     new_val = old * self._rng.uniform(0.8, 1.2)
-                    const.op = (
-                        str(int(round(new_val)))
-                        if float(const.op).is_integer()
-                        else str(round(new_val, 4))
-                    )
+                    const.op = str(int(round(new_val))) if float(const.op).is_integer() else str(round(new_val, 4))
                     if abs(new_val) > 250 or abs(new_val) < 1e-6:
                         continue
                 else:  # field
@@ -394,9 +400,7 @@ class OperatorEvolutionEngine:
         history: list[OperatorGenerationSnapshot] = []
 
         for gen in range(self._config.max_generations):
-            evaluated: list[tuple[str, _FitnessScore]] = [
-                (expr, self._evaluate_fitness(expr)) for expr in population
-            ]
+            evaluated: list[tuple[str, _FitnessScore]] = [(expr, self._evaluate_fitness(expr)) for expr in population]
             evaluated.sort(key=lambda t: t[1].fitness, reverse=True)
 
             gen_best_expr, gen_best_score = evaluated[0]
@@ -406,19 +410,24 @@ class OperatorEvolutionEngine:
 
             avg_fitness = sum(s.fitness for _, s in evaluated) / len(evaluated)
             diversity = len({expr for expr, _ in evaluated}) / len(evaluated)
-            history.append(OperatorGenerationSnapshot(
-                generation=gen,
-                best_fitness=gen_best_score.fitness,
-                best_expression=gen_best_expr,
-                avg_fitness=avg_fitness,
-                population_diversity=diversity,
-            ))
+            history.append(
+                OperatorGenerationSnapshot(
+                    generation=gen,
+                    best_fitness=gen_best_score.fitness,
+                    best_expression=gen_best_expr,
+                    avg_fitness=avg_fitness,
+                    population_diversity=diversity,
+                )
+            )
 
             logger.info(
-                "算子演化 Gen %d: best=%.4f (IC=%.4f, Sharpe=%.4f), avg=%.4f, "
-                "多样性=%.0f%% | %s",
-                gen, gen_best_score.fitness, gen_best_score.ic,
-                gen_best_score.sharpe, avg_fitness, diversity * 100,
+                "算子演化 Gen %d: best=%.4f (IC=%.4f, Sharpe=%.4f), avg=%.4f, 多样性=%.0f%% | %s",
+                gen,
+                gen_best_score.fitness,
+                gen_best_score.ic,
+                gen_best_score.sharpe,
+                avg_fitness,
+                diversity * 100,
                 gen_best_expr[:60],
             )
 

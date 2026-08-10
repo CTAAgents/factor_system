@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from fts.data_futures import (
     FUTURES_SYMBOL_NAMES,
@@ -27,20 +26,23 @@ from scripts.futures_signal_pipeline import _compute_factor_sign_flips
 def _make_df(dates: list[str], base: float = 100.0) -> pd.DataFrame:
     idx = pd.DatetimeIndex(pd.to_datetime(dates))
     close = pd.Series(np.arange(len(idx)) * 0.1 + base, index=idx)
-    return pd.DataFrame({
-        "open": close,
-        "high": close + 1,
-        "low": close - 1,
-        "close": close,
-        "volume": 1000.0,
-        "hold": 5000.0,
-        "settle": close,
-    })
+    return pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 1,
+            "low": close - 1,
+            "close": close,
+            "volume": 1000.0,
+            "hold": 5000.0,
+            "settle": close,
+        }
+    )
 
 
 # ═══════════════════════════════════════════════════════════
 # 1. common_dates 多数对齐
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCommonDatesMajorityAlignment:
     def test_common_dates_not_empty_with_stale_symbol(self, mocker):
@@ -49,17 +51,17 @@ class TestCommonDatesMajorityAlignment:
         # 5 个品种：4 个日期较新，1 个数据止于 2022（WH0 场景）
         new_dates = [f"2026-{m:02d}-0{d}" for m in range(1, 6) for d in (1, 3)]
         stale_dates = [f"2022-{m:02d}-0{d}" for m in range(1, 5) for d in (1, 3)]
-        panel_input = {
-            f"S{i}": _make_df(new_dates, base=100 * i) for i in range(1, 5)
-        }
+        panel_input = {f"S{i}": _make_df(new_dates, base=100 * i) for i in range(1, 5)}
         panel_input["STALE"] = _make_df(stale_dates, base=999.0)
 
         mocker.patch.object(
-            provider, "get_ohlcv",
+            provider,
+            "get_ohlcv",
             side_effect=lambda sym, days=500, trace_id="": panel_input[sym],
         )
         panel, common_dates = provider.get_futures_panel(
-            list(panel_input.keys()), days=120,
+            list(panel_input.keys()),
+            days=120,
         )
         assert len(panel) == 5
         # 全交集为空（STALE 与新品零交集），但多数对齐应返回新品共有日期
@@ -77,11 +79,13 @@ class TestCommonDatesMajorityAlignment:
             "C": _make_df(dates_common + ["2025-12-31"], base=200.0),
         }
         mocker.patch.object(
-            provider, "get_ohlcv",
+            provider,
+            "get_ohlcv",
             side_effect=lambda sym, days=500, trace_id="": panel_input[sym],
         )
         panel, common_dates = provider.get_futures_panel(
-            list(panel_input.keys()), days=120,
+            list(panel_input.keys()),
+            days=120,
         )
         # 阈值 = max(2, 3//2) = 2 → 3 个共同日期全部保留
         assert len(common_dates) == 3
@@ -98,6 +102,7 @@ class TestCommonDatesMajorityAlignment:
 # ═══════════════════════════════════════════════════════════
 # 2. 方向校正按日期定位
 # ═══════════════════════════════════════════════════════════
+
 
 class TestSignFlipDateAlignment:
     def _signal_matrix(self):
@@ -129,6 +134,7 @@ class TestSignFlipDateAlignment:
 # 3. 品种名称映射
 # ═══════════════════════════════════════════════════════════
 
+
 class TestSymbolNames:
     def test_names_cover_all_subset(self):
         """FUTURES_SYMBOL_NAMES 覆盖 FUTURES_SUBSET 全部品种。"""
@@ -148,6 +154,7 @@ class TestSymbolNames:
 # 4. 主力合约判定
 # ═══════════════════════════════════════════════════════════
 
+
 class TestDominantContracts:
     def test_returns_mapping(self, mocker):
         """正常返回 {symbol: contract} 映射。"""
@@ -166,7 +173,8 @@ class TestDominantContracts:
         mock_db.execute.return_value.fetchall.return_value = [("RB", "RB2610")]
         mocker.patch("fts.data_futures._get_db", return_value=mock_db)
         mocker.patch(
-            "fts.data_futures._fetch_dominant_akshare", return_value={},
+            "fts.data_futures._fetch_dominant_akshare",
+            return_value={},
         )
         result = get_dominant_contracts(["RB0", "CU0"])
         assert result["RB0"] == "RB2610"
@@ -175,12 +183,14 @@ class TestDominantContracts:
     def test_db_error_returns_empty(self, mocker):
         """数据库不可用时返回全空映射（降级不抛异常）。"""
         from fts.data_futures import FuturesDataError
+
         mocker.patch(
             "fts.data_futures._get_db",
             side_effect=FuturesDataError("boom"),
         )
         mocker.patch(
-            "fts.data_futures._fetch_dominant_akshare", return_value={},
+            "fts.data_futures._fetch_dominant_akshare",
+            return_value={},
         )
         result = get_dominant_contracts(["RB0"])
         assert result == {"RB0": ""}
@@ -202,12 +212,16 @@ class TestFetchDominantAkshare:
     def test_picks_max_position_contract(self, mocker):
         """按持仓量排序取最大具体合约（排除连续合约）。"""
         import pandas as pd
-        df = pd.DataFrame({
-            "symbol": ["RU0", "RU2609", "RU2610", "RU2608"],
-            "position": [100, 500, 300, 200],
-        })
+
+        df = pd.DataFrame(
+            {
+                "symbol": ["RU0", "RU2609", "RU2610", "RU2608"],
+                "position": [100, 500, 300, 200],
+            }
+        )
         mocker.patch("akshare.futures_zh_realtime", return_value=df)
         from fts.data_futures import _fetch_dominant_akshare
+
         result = _fetch_dominant_akshare(["RU0"])
         assert result == {"RU0": "RU2609"}
 
@@ -218,5 +232,6 @@ class TestFetchDominantAkshare:
             side_effect=RuntimeError("boom"),
         )
         from fts.data_futures import _fetch_dominant_akshare
+
         result = _fetch_dominant_akshare(["RU0"])
         assert result == {}

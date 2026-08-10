@@ -16,9 +16,7 @@ import pytest
 from fts.ml import MLPFactorModel, ModelKind, ModelNotAvailableError, create_mlp_model
 
 
-def _make_data(
-    n: int = 300, n_features: int = 4, seed: int = 7
-) -> tuple[np.ndarray, np.ndarray]:
+def _make_data(n: int = 300, n_features: int = 4, seed: int = 7) -> tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
     X = rng.normal(size=(n, n_features))
     # 线性目标 y = 2x1 - 3x2 + 0.5x3 + 噪声
@@ -122,3 +120,25 @@ class TestCreateMLPModel:
     def test_model_kind_has_mlp(self) -> None:
         """ModelKind 枚举含 MLP 成员。"""
         assert ModelKind.MLP == "mlp"
+
+class TestMLPBoundary:
+    """GAP-F16 补充：1D 特征 / 零特征输入边界。"""
+
+    def test_fit_1d_features_raises(self) -> None:
+        """fit 时特征为 1D → ModelNotAvailableError。"""
+        X = np.linspace(0.0, 1.0, 50)
+        y = np.ones(50)
+        model = MLPFactorModel(epochs=1)
+        with pytest.raises(ModelNotAvailableError, match="2D"):
+            model.fit(X, y)
+
+    def test_fit_zero_features_succeeds(self) -> None:
+        """0 特征（n, 0）→ scale 兜底 1.0，训练与预测不崩溃。"""
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((64, 0))
+        y = rng.standard_normal(64)
+        model = MLPFactorModel(epochs=2, hidden=4, min_samples=16)
+        model.fit(X, y)
+        pred = model.predict(X)
+        assert pred.shape == (64,)
+        assert np.all(np.isfinite(pred))

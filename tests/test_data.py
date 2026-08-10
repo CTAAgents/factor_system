@@ -41,6 +41,7 @@ from fts.data_mcp import (
 # 1. __init__
 # ═══════════════════════════════════════════════════════════
 
+
 class TestInit:
     def test_with_mcp_provider(self, mocker):
         mock_mcp = mocker.MagicMock(spec=MCPDataProvider)
@@ -57,18 +58,22 @@ class TestInit:
 # 2. get_ohlcv（降级到合成数据）
 # ═══════════════════════════════════════════════════════════
 
+
 class TestGetOhlcv:
     def test_returns_real_data(self, mocker):
         """应返回真实的 OHLCV 数据（mock provider 数据不被替换）。"""
         mock_mcp = mocker.MagicMock(spec=MCPDataProvider)
         idx = pd.date_range("2025-01-01", periods=250, freq="B")
-        mock_df = pd.DataFrame({
-            "open": np.linspace(4.0, 4.5, 250),
-            "high": np.linspace(4.05, 4.55, 250),
-            "low": np.linspace(3.95, 4.45, 250),
-            "close": np.linspace(4.0, 4.5, 250),
-            "volume": np.full(250, 1e6),
-        }, index=idx)
+        mock_df = pd.DataFrame(
+            {
+                "open": np.linspace(4.0, 4.5, 250),
+                "high": np.linspace(4.05, 4.55, 250),
+                "low": np.linspace(3.95, 4.45, 250),
+                "close": np.linspace(4.0, 4.5, 250),
+                "volume": np.full(250, 1e6),
+            },
+            index=idx,
+        )
         mock_mcp.get_ohlcv.return_value = mock_df
 
         p = FTSDataProvider(mcp_provider=mock_mcp)
@@ -99,6 +104,7 @@ class TestGetOhlcv:
 # 3. get_csi300_panel
 # ═══════════════════════════════════════════════════════════
 
+
 class TestGetCsi300Panel:
     def test_returns_panel(self):
         """CSI300 面板数据应返回 (panel, common_dates) 结构。"""
@@ -114,6 +120,7 @@ class TestGetCsi300Panel:
 # ═══════════════════════════════════════════════════════════
 # 4. ETF / Stock panel
 # ═══════════════════════════════════════════════════════════
+
 
 class TestPanelMethods:
     def test_etf_panel_synthetic(self):
@@ -133,6 +140,7 @@ class TestPanelMethods:
 # 5. search_symbol
 # ═══════════════════════════════════════════════════════════
 
+
 class TestSearchSymbol:
     def test_search_returns_list(self):
         p = FTSDataProvider()
@@ -148,6 +156,7 @@ class TestSearchSymbol:
 # ═══════════════════════════════════════════════════════════
 # 6. synthesize_ohlcv
 # ═══════════════════════════════════════════════════════════
+
 
 class TestSynthesizeOhlcv:
     def test_output_shape_and_columns(self):
@@ -190,6 +199,7 @@ class TestSynthesizeOhlcv:
 # 7. get_data_provider（全局单例）
 # ═══════════════════════════════════════════════════════════
 
+
 class TestGetDataProvider:
     def test_returns_fts_data_provider(self):
         p = get_data_provider()
@@ -202,6 +212,7 @@ class TestGetDataProvider:
 
     def test_reset_between_tests(self):
         import fts.data as _data
+
         _data._default_provider = None
         p = get_data_provider()
         assert _data._default_provider is p
@@ -210,6 +221,7 @@ class TestGetDataProvider:
 # ═══════════════════════════════════════════════════════════
 # 8. _to_tencent_code 辅助函数
 # ═══════════════════════════════════════════════════════════
+
 
 class TestToTencentCode:
     """覆盖 data_mcp._to_tencent_code 的边缘/错误路径。"""
@@ -238,6 +250,7 @@ class TestToTencentCode:
 # ═══════════════════════════════════════════════════════════
 # 9. _is_etf_code 辅助函数
 # ═══════════════════════════════════════════════════════════
+
 
 class TestIsEtfCode:
     """覆盖 data_mcp._is_etf_code 的全部路径。"""
@@ -275,6 +288,7 @@ class TestIsEtfCode:
 # 10. _fetch_kline_json 错误处理
 # ═══════════════════════════════════════════════════════════
 
+
 class TestFetchKlineJson:
     """覆盖 data_mcp._fetch_kline_json 的 HTTP/数据异常路径。"""
 
@@ -311,7 +325,8 @@ class TestFetchKlineJson:
         mock_client = mocker.MagicMock()
         mock_resp = mocker.MagicMock()
         mock_resp.json.return_value = {
-            "code": 0, "data": {"sh510300": {"other_key": []}},
+            "code": 0,
+            "data": {"sh510300": {"other_key": []}},
         }
         mock_client.get.return_value = mock_resp
         mocker.patch("fts.data_mcp._get_http", return_value=mock_client)
@@ -322,6 +337,7 @@ class TestFetchKlineJson:
 # ═══════════════════════════════════════════════════════════
 # 11. _kline_to_df 边缘路径
 # ═══════════════════════════════════════════════════════════
+
 
 class TestKlineToDf:
     """覆盖 data_mcp._kline_to_df 的跳过/空结果路径。"""
@@ -358,6 +374,7 @@ class TestKlineToDf:
 # 12. MCPDataProvider.get_ohlcv 降级回退
 # ═══════════════════════════════════════════════════════════
 
+
 class TestMCPGetOhlcvFallback:
     """覆盖 data_mcp.MCPDataProvider.get_ohlcv 的异常→合成数据降级路径。"""
 
@@ -392,6 +409,7 @@ class TestMCPGetOhlcvFallback:
 # 13. MCPDataProvider.get_etf_ohlcv 委托
 # ═══════════════════════════════════════════════════════════
 
+
 class TestMCPGetEtfOhlcv:
     """覆盖 data_mcp.MCPDataProvider.get_etf_ohlcv (line 228)。"""
 
@@ -409,6 +427,7 @@ class TestMCPGetEtfOhlcv:
 # 14. MCPDataProvider.get_stock_panel 全部失败→合成数据
 # ═══════════════════════════════════════════════════════════
 
+
 class TestMCPGetStockPanelFallback:
     """覆盖 data_mcp.MCPDataProvider.get_stock_panel 的异常和空面板路径。"""
 
@@ -425,14 +444,21 @@ class TestMCPGetStockPanelFallback:
     def test_partial_failure_still_works(self, mocker):
         """部分成功仍返回有效面板。"""
         good_df = pd.DataFrame(
-            {"close": [1.0, 2.0], "open": [0.9, 1.8], "high": [1.1, 2.2],
-             "low": [0.8, 1.7], "volume": [1000.0, 2000.0]},
+            {
+                "close": [1.0, 2.0],
+                "open": [0.9, 1.8],
+                "high": [1.1, 2.2],
+                "low": [0.8, 1.7],
+                "volume": [1000.0, 2000.0],
+            },
             index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
         )
+
         def side_effect(sym, **kwargs):
             if sym == "000001":
                 return good_df
             raise MCPDataError("fail")
+
         mocker.patch.object(MCPDataProvider, "get_ohlcv", side_effect=side_effect)
         provider = MCPDataProvider()
         panel, dates = provider.get_stock_panel(["000001", "000002"], days=100)
@@ -444,6 +470,7 @@ class TestMCPGetStockPanelFallback:
 # ═══════════════════════════════════════════════════════════
 # 15. FTSDataProvider.get_ohlcv 降级回退
 # ═══════════════════════════════════════════════════════════
+
 
 class TestFTSGetOhlcvFallback:
     """覆盖 data.FTSDataProvider.get_ohlcv 的异常→合成数据降级路径 (lines 79-84)。"""
@@ -490,6 +517,7 @@ class TestFTSGetOhlcvFallback:
 # 16. FTSDataProvider.get_csi300_panel 全部失败→合成数据
 # ═══════════════════════════════════════════════════════════
 
+
 class TestFTSCsi300PanelFallback:
     """覆盖 data.FTSDataProvider.get_csi300_panel 的异常和空面板路径 (lines 130-136)。
 
@@ -510,16 +538,23 @@ class TestFTSCsi300PanelFallback:
     def test_some_symbols_fail_continue(self, mocker):
         """Lines 130-131: 部分失败 continue 继续处理后续。"""
         good_df = pd.DataFrame(
-            {"close": [1.0, 2.0], "open": [0.9, 1.8], "high": [1.1, 2.2],
-             "low": [0.8, 1.7], "volume": [1000.0, 2000.0]},
+            {
+                "close": [1.0, 2.0],
+                "open": [0.9, 1.8],
+                "high": [1.1, 2.2],
+                "low": [0.8, 1.7],
+                "volume": [1000.0, 2000.0],
+            },
             index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
         )
         call_count = [0]
+
         def side_effect(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
                 return good_df
             raise Exception("fail")
+
         mocker.patch.object(FTSDataProvider, "get_ohlcv", side_effect=side_effect)
         p = FTSDataProvider(mcp_provider=mocker.MagicMock())
         panel, dates = p.get_csi300_panel(days=100, max_stocks=3)
@@ -530,12 +565,14 @@ class TestFTSCsi300PanelFallback:
 # 17. FTSDataProvider 基本面注入接口
 # ═══════════════════════════════════════════════════════════
 
+
 class TestFTSFundamentalIntegration:
     """覆盖 data.FTSDataProvider 的基本面注入接口（enrich_with_fundamental / set_fundamental_provider / fundamental 参数）。"""
 
     def test_enrich_with_fundamental_delegates(self, mocker):
         """enrich_with_fundamental 委托给 FundamentalProvider.enrich_ohlcv。"""
         from fts.data_fundamental import FundamentalProvider
+
         mock_fund = mocker.MagicMock(spec=FundamentalProvider)
         mock_df = pd.DataFrame({"close": [1.0]})
         mock_fund.enrich_ohlcv.return_value = mock_df
@@ -547,6 +584,7 @@ class TestFTSFundamentalIntegration:
     def test_set_fundamental_provider(self, mocker):
         """set_fundamental_provider 替换内部 provider。"""
         from fts.data_fundamental import FundamentalProvider
+
         p = FTSDataProvider(mcp_provider=mocker.MagicMock())
         assert p._fundamental is not None
         new_provider = FundamentalProvider(mcp_available=False)
@@ -556,10 +594,16 @@ class TestFTSFundamentalIntegration:
     def test_get_ohlcv_with_fundamental_true(self, mocker):
         """fundamental=True 时 get_ohlcv 应注入基本面字段。"""
         from fts.data_fundamental import FundamentalProvider
+
         mock_fund = mocker.MagicMock(spec=FundamentalProvider)
         base_df = pd.DataFrame(
-            {"close": [1.0, 2.0], "open": [0.9, 1.8], "high": [1.1, 2.2],
-             "low": [0.8, 1.7], "volume": [1000.0, 2000.0]},
+            {
+                "close": [1.0, 2.0],
+                "open": [0.9, 1.8],
+                "high": [1.1, 2.2],
+                "low": [0.8, 1.7],
+                "volume": [1000.0, 2000.0],
+            },
             index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
         )
         enriched_df = base_df.copy()
@@ -575,10 +619,16 @@ class TestFTSFundamentalIntegration:
     def test_get_ohlcv_with_fundamental_false(self, mocker):
         """fundamental=False 时 get_ohlcv 不应注入基本面字段。"""
         from fts.data_fundamental import FundamentalProvider
+
         mock_fund = mocker.MagicMock(spec=FundamentalProvider)
         base_df = pd.DataFrame(
-            {"close": [1.0, 2.0], "open": [0.9, 1.8], "high": [1.1, 2.2],
-             "low": [0.8, 1.7], "volume": [1000.0, 2000.0]},
+            {
+                "close": [1.0, 2.0],
+                "open": [0.9, 1.8],
+                "high": [1.1, 2.2],
+                "low": [0.8, 1.7],
+                "volume": [1000.0, 2000.0],
+            },
             index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
         )
         mock_mcp = mocker.MagicMock()
@@ -591,6 +641,7 @@ class TestFTSFundamentalIntegration:
     def test_get_ohlcv_fallback_with_fundamental(self, mocker):
         """MCP 失败降级到合成数据时，fundamental=True 仍应注入基本面字段。"""
         from fts.data_fundamental import FundamentalProvider
+
         mock_fund = mocker.MagicMock(spec=FundamentalProvider)
         mock_mcp = mocker.MagicMock()
         mock_mcp.get_ohlcv.side_effect = Exception("fail")
@@ -606,11 +657,16 @@ class TestFTSFundamentalIntegration:
     def test_get_csi300_panel_with_fundamental(self, mocker):
         """fundamental=True 时 get_csi300_panel 应注入基本面字段。"""
         from fts.data_fundamental import FundamentalProvider
-        from fts.data_mcp import CSI300_SUBSET
+
         mock_fund = mocker.MagicMock(spec=FundamentalProvider)
         base_df = pd.DataFrame(
-            {"close": [1.0, 2.0], "open": [0.9, 1.8], "high": [1.1, 2.2],
-             "low": [0.8, 1.7], "volume": [1000.0, 2000.0]},
+            {
+                "close": [1.0, 2.0],
+                "open": [0.9, 1.8],
+                "high": [1.1, 2.2],
+                "low": [0.8, 1.7],
+                "volume": [1000.0, 2000.0],
+            },
             index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
         )
         enriched_df = base_df.copy()
@@ -627,6 +683,7 @@ class TestFTSFundamentalIntegration:
     def test_get_csi300_panel_synthetic_fallback_fundamental(self, mocker):
         """get_csi300_panel 全部失败时，合成数据应注入基本面字段。"""
         from fts.data_fundamental import FundamentalProvider
+
         mock_fund = mocker.MagicMock(spec=FundamentalProvider)
         synthetic_df = FTSDataProvider.synthesize_ohlcv(n_days=100, base_price=15.0, seed=42)
         enriched_synthetic = synthetic_df.copy()
@@ -642,6 +699,7 @@ class TestFTSFundamentalIntegration:
 # ═══════════════════════════════════════════════════════════
 # 18. FTSDataProvider 期货接口集成
 # ═══════════════════════════════════════════════════════════
+
 
 class TestFTSFuturesIntegration:
     """覆盖 data.FTSDataProvider 的期货数据接口（委托给 FuturesDataProvider）。"""
@@ -698,18 +756,224 @@ class TestFTSFuturesIntegration:
             futures_provider=mocker.MagicMock(spec=FuturesDataProvider),
         )
         base_df = pd.DataFrame(
-            {"close": [1.0, 2.0], "open": [0.9, 1.8], "high": [1.1, 2.2],
-             "low": [0.8, 1.7], "volume": [1000.0, 2000.0]},
+            {
+                "close": [1.0, 2.0],
+                "open": [0.9, 1.8],
+                "high": [1.1, 2.2],
+                "low": [0.8, 1.7],
+                "volume": [1000.0, 2000.0],
+            },
             index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
         )
         result = p.enrich_futures_fundamental(base_df, "RB0", trace_id="t1")
         expected_cols = [
-            "fut_inventory", "fut_inventory_chg", "fut_spot_price",
-            "fut_near_basis", "fut_dom_basis",
-            "fut_near_basis_rate", "fut_dom_basis_rate",
+            "fut_inventory",
+            "fut_inventory_chg",
+            "fut_spot_price",
+            "fut_near_basis",
+            "fut_dom_basis",
+            "fut_near_basis_rate",
+            "fut_dom_basis_rate",
         ]
         for col in expected_cols:
             assert col in result.columns
             assert result[col].isna().all()
         # 原 OHLCV 列不受影响
         assert list(result.columns[:5]) == ["close", "open", "high", "low", "volume"]
+
+# ═══════════════════════════════════════════════════════════
+# 19. FTSDataProvider.enrich_futures_fundamental provider 注入
+# ═══════════════════════════════════════════════════════════
+
+
+class TestEnrichFuturesFundamental:
+    """覆盖 data.FTSDataProvider.enrich_futures_fundamental 的 provider 注入路径。"""
+
+    @staticmethod
+    def _base_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "close": [1.0, 2.0],
+                "open": [0.9, 1.8],
+                "high": [1.1, 2.2],
+                "low": [0.8, 1.7],
+                "volume": [1000.0, 2000.0],
+            },
+            index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
+        )
+
+    def test_provider_injects_inventory_and_basis(self, mocker):
+        """provider 同时提供库存与基差 → fut_ 前缀列全部注入。"""
+        mock_provider = mocker.MagicMock()
+        inv_df = pd.DataFrame(
+            {"inventory": [100.0, 110.0], "change": [10.0, 5.0]},
+            index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
+        )
+        basis_df = pd.DataFrame(
+            {
+                "spot_price": [3000.0, 3010.0],
+                "near_basis": [20.0, 25.0],
+                "dom_basis": [15.0, 18.0],
+                "near_basis_rate": [0.006, 0.008],
+                "dom_basis_rate": [0.005, 0.006],
+            },
+            index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
+        )
+        mock_provider.get_inventory.return_value = inv_df
+        mock_provider.get_basis.return_value = basis_df
+        p = FTSDataProvider(mcp_provider=mocker.MagicMock())
+        p._futures_fundamental = mock_provider
+
+        result = p.enrich_futures_fundamental(self._base_df(), "RB0", trace_id="t1")
+        assert result["fut_inventory"].iloc[0] == 100.0
+        assert result["fut_inventory_chg"].iloc[0] == 10.0
+        assert result["fut_spot_price"].iloc[0] == 3000.0
+        assert result["fut_near_basis"].iloc[0] == 20.0
+        assert result["fut_dom_basis"].iloc[0] == 15.0
+        assert result["fut_near_basis_rate"].iloc[0] == 0.006
+        assert result["fut_dom_basis_rate"].iloc[0] == 0.005
+        mock_provider.get_inventory.assert_called_once_with("RB0")
+        mock_provider.get_basis.assert_called_once_with("RB0", days=60)
+
+    def test_provider_inventory_exception_swallowed(self, mocker):
+        """get_inventory 抛异常 → 吞掉，仅注入基差。"""
+        mock_provider = mocker.MagicMock()
+        mock_provider.get_inventory.side_effect = Exception("boom")
+        basis_df = pd.DataFrame(
+            {"spot_price": [3000.0]},
+            index=pd.DatetimeIndex(["2024-01-01"]),
+        )
+        mock_provider.get_basis.return_value = basis_df
+        p = FTSDataProvider(mcp_provider=mocker.MagicMock())
+        p._futures_fundamental = mock_provider
+
+        result = p.enrich_futures_fundamental(self._base_df(), "RB0")
+        assert result["fut_inventory"].isna().all()
+        assert result["fut_spot_price"].iloc[0] == 3000.0
+
+    def test_provider_inventory_empty_skipped(self, mocker):
+        """get_inventory 返回空 df → 跳过注入。"""
+        mock_provider = mocker.MagicMock()
+        mock_provider.get_inventory.return_value = pd.DataFrame()
+        mock_provider.get_basis.return_value = pd.DataFrame()
+        p = FTSDataProvider(mcp_provider=mocker.MagicMock())
+        p._futures_fundamental = mock_provider
+
+        result = p.enrich_futures_fundamental(self._base_df(), "RB0")
+        assert result["fut_inventory"].isna().all()
+        assert "fut_spot_price" in result.columns
+
+    def test_provider_basis_exception_swallowed(self, mocker):
+        """get_basis 抛异常 → 吞掉，仅注入库存。"""
+        mock_provider = mocker.MagicMock()
+        inv_df = pd.DataFrame(
+            {"inventory": [100.0], "change": [10.0]},
+            index=pd.DatetimeIndex(["2024-01-01"]),
+        )
+        mock_provider.get_inventory.return_value = inv_df
+        mock_provider.get_basis.side_effect = Exception("boom")
+        p = FTSDataProvider(mcp_provider=mocker.MagicMock())
+        p._futures_fundamental = mock_provider
+
+        result = p.enrich_futures_fundamental(self._base_df(), "RB0")
+        assert result["fut_inventory"].iloc[0] == 100.0
+        assert result["fut_spot_price"].isna().all()
+
+
+# ═══════════════════════════════════════════════════════════
+# 20. FTSDataProvider.get_csi300_panel max_stocks=0 / 交集
+# ═══════════════════════════════════════════════════════════
+
+
+class TestCsi300PanelFull:
+    """覆盖 get_csi300_panel 的 max_stocks=0 与正常交集路径。"""
+
+    def test_max_stocks_zero_uses_all(self, mocker):
+        """max_stocks=0 → 使用全部成分股。"""
+        good_df = pd.DataFrame(
+            {
+                "close": [1.0, 2.0],
+                "open": [0.9, 1.8],
+                "high": [1.1, 2.2],
+                "low": [0.8, 1.7],
+                "volume": [1.0, 2.0],
+            },
+            index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
+        )
+        mocker.patch.object(FTSDataProvider, "get_ohlcv", return_value=good_df)
+        from unittest.mock import patch
+
+        with patch("fts.data_mcp.CSI300_SUBSET", ["AAA", "BBB", "CCC"]):
+            p = FTSDataProvider(mcp_provider=mocker.MagicMock())
+            panel, _ = p.get_csi300_panel(days=10, max_stocks=0)
+        assert set(panel.keys()) == {"AAA", "BBB", "CCC"}
+
+    def test_common_dates_intersection(self, mocker):
+        """正常路径应返回所有股票共有日期。"""
+        df1 = pd.DataFrame(
+            {"close": [1.0, 2.0]},
+            index=pd.DatetimeIndex(["2024-01-01", "2024-01-02"]),
+        )
+        df2 = pd.DataFrame(
+            {"close": [2.0, 3.0]},
+            index=pd.DatetimeIndex(["2024-01-02", "2024-01-03"]),
+        )
+
+        def side_effect(sym, **kwargs):
+            return df1 if sym == "AAA" else df2
+
+        mocker.patch.object(FTSDataProvider, "get_ohlcv", side_effect=side_effect)
+        from unittest.mock import patch
+
+        with patch("fts.data_mcp.CSI300_SUBSET", ["AAA", "BBB"]):
+            p = FTSDataProvider(mcp_provider=mocker.MagicMock())
+            panel, dates = p.get_csi300_panel(days=10, max_stocks=2)
+        assert set(panel.keys()) == {"AAA", "BBB"}
+        assert list(dates) == [pd.Timestamp("2024-01-02")]
+
+
+# ═══════════════════════════════════════════════════════════
+# 21. get_etf_panel / get_stock_panel 委托
+# ═══════════════════════════════════════════════════════════
+
+
+class TestPanelDelegation:
+    """覆盖 get_etf_panel / get_stock_panel 对 _mcp.get_stock_panel 的委托。"""
+
+    def test_get_etf_panel_delegates(self, mocker):
+        from fts.data_mcp import ETF_SUBSET
+
+        mock_mcp = mocker.MagicMock()
+        panel = {"510300": pd.DataFrame({"close": [1.0]})}
+        dates = pd.DatetimeIndex(["2024-01-01"])
+        mock_mcp.get_stock_panel.return_value = (panel, dates)
+        p = FTSDataProvider(mcp_provider=mock_mcp)
+        result = p.get_etf_panel(days=100, trace_id="t")
+        assert result == (panel, dates)
+        mock_mcp.get_stock_panel.assert_called_once_with(ETF_SUBSET, days=100, adjust="qfq", trace_id="t")
+
+    def test_get_stock_panel_delegates(self, mocker):
+        mock_mcp = mocker.MagicMock()
+        panel = {"000001": pd.DataFrame({"close": [1.0]})}
+        dates = pd.DatetimeIndex(["2024-01-01"])
+        mock_mcp.get_stock_panel.return_value = (panel, dates)
+        p = FTSDataProvider(mcp_provider=mock_mcp)
+        result = p.get_stock_panel(["000001"], days=100, trace_id="t")
+        assert result == (panel, dates)
+        mock_mcp.get_stock_panel.assert_called_once_with(["000001"], days=100, adjust="qfq", trace_id="t")
+
+
+# ═══════════════════════════════════════════════════════════
+# 22. DataUnavailableError
+# ═══════════════════════════════════════════════════════════
+
+
+class TestDataUnavailableError:
+    """DataUnavailableError 应为 RuntimeError 子类。"""
+
+    def test_is_runtime_error(self):
+        from fts.data import DataUnavailableError
+
+        err = DataUnavailableError("boom")
+        assert isinstance(err, RuntimeError)
+        assert str(err) == "boom"

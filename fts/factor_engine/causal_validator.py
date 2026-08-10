@@ -14,14 +14,13 @@ HARNESS §11-logic-review-plan.md §C.1:
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
 
 from .contracts import FactorProgram
-from .evaluation_chain import evaluate_backtest
 from .factor_program import FactorExecutor
 
 
@@ -30,6 +29,7 @@ from .factor_program import FactorExecutor
 
 class EventPredictionError(dict):
     """单个事件周围的预测误差分析。"""
+
     def __init__(
         self,
         event_id: str,
@@ -68,6 +68,7 @@ class EventPredictionError(dict):
 
 class CausalValidationResult(dict):
     """完整因果结构审查结果。"""
+
     def __init__(
         self,
         factor_id: str,
@@ -95,7 +96,6 @@ class CausalValidationResult(dict):
 
 def _import_default_events() -> list[Any]:
     """延迟导入自然实验事件定义，避免循环依赖。"""
-    import sys
     import importlib
 
     try:
@@ -209,7 +209,7 @@ class CausalValidator:
             pre_mean = float(np.mean(pre_valid)) if len(pre_valid) > 0 else 0.0
 
             # 事件后误差
-            post_errors = error[event_idx + 1:post_end]
+            post_errors = error[event_idx + 1 : post_end]
             post_valid = post_errors[~np.isnan(post_errors)]
             post_mean = float(np.mean(post_valid)) if len(post_valid) > 0 else 0.0
 
@@ -222,9 +222,8 @@ class CausalValidator:
             if is_anomalous:
                 # 检查方向一致性
                 if event.expected_direction != "unknown":
-                    direction_matches = (
-                        (event.expected_direction == "positive" and error_change > 0)
-                        or (event.expected_direction == "negative" and error_change < 0)
+                    direction_matches = (event.expected_direction == "positive" and error_change > 0) or (
+                        event.expected_direction == "negative" and error_change < 0
                     )
                     if not direction_matches:
                         anomaly_direction = f"unexpected_{anomaly_direction}"
@@ -254,10 +253,7 @@ class CausalValidator:
         # 汇总
         n_events = len(all_event_results)
         n_anomalous = len(anomalous_events)
-        n_anomalous_consistent = sum(
-            1 for e in anomalous_events
-            if "unexpected" not in e["anomaly_direction"]
-        )
+        n_anomalous_consistent = sum(1 for e in anomalous_events if "unexpected" not in e["anomaly_direction"])
 
         summary = {
             "n_events_in_data": n_events,
@@ -266,13 +262,11 @@ class CausalValidator:
             "anomaly_rate": n_anomalous / n_events if n_events > 0 else 0.0,
             "sigma_threshold": self._sigma_threshold,
             "global_error_std": float(error_std_global),
-            "event_types_covered": list(set(
-                e["event_type"] for e in all_event_results
-            )),
+            "event_types_covered": list(set(e["event_type"] for e in all_event_results)),
         }
 
         # 将 event 对象转为可序列化 dict
-        event_dicts = [_event_to_dict(e) for e in self._events]
+        [_event_to_dict(e) for e in self._events]
         summary["event_ids"] = [e["event_id"] for e in all_event_results]
 
         return CausalValidationResult(
@@ -291,14 +285,12 @@ class CausalValidator:
         """生成可读的因果结构审查报告。"""
         lines: list[str] = []
         lines.append("=" * 70)
-        lines.append(
-            f"因果结构审查报告 — {result['factor_name']} ({result['factor_id']})"
-        )
+        lines.append(f"因果结构审查报告 — {result['factor_name']} ({result['factor_id']})")
         lines.append(f"分析日期: {result['analysis_date']}")
         lines.append("=" * 70)
 
         s = result["summary"]
-        lines.append(f"\n总览:")
+        lines.append("\n总览:")
         lines.append(f"  数据中事件数: {s['n_events_in_data']}")
         lines.append(f"  异常事件数:   {s['n_anomalous']}")
         lines.append(f"  方向一致异常: {s['n_anomalous_consistent']}")
@@ -307,14 +299,11 @@ class CausalValidator:
         lines.append(f"  全局误差 STD: {s['global_error_std']:.4f}")
 
         if result["anomalous_events"]:
-            lines.append(f"\n\n异常事件详情:")
+            lines.append("\n\n异常事件详情:")
             for e in result["anomalous_events"]:
                 consistency = "✅" if "unexpected" not in e["anomaly_direction"] else "❌"
                 lines.append(f"  [{consistency}] {e['event_name']} ({e['event_id']})")
-                lines.append(
-                    f"      类型: {e['event_type']:20s} | "
-                    f"预期方向: {e['expected_direction']:>8s}"
-                )
+                lines.append(f"      类型: {e['event_type']:20s} | 预期方向: {e['expected_direction']:>8s}")
                 lines.append(
                     f"      事件前误差: {e['pre_mean_error']:>8.4f} | "
                     f"事件后误差: {e['post_mean_error']:>8.4f} | "
@@ -326,7 +315,7 @@ class CausalValidator:
                 )
 
         if result["all_events"]:
-            lines.append(f"\n\n所有事件:")
+            lines.append("\n\n所有事件:")
             lines.append(f"  {'事件':<30} {'类型':<18} {'前误差':>8} {'后误差':>8} {'变化':>8} {'异常':>6}")
             for e in result["all_events"]:
                 flag = "⚠️" if e["is_anomalous"] else "  "

@@ -17,15 +17,14 @@ import logging
 import time
 import warnings
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
 
 from .data_adapter import CrossMarketDataAdapter, TARGET_MARKET_STOCK, TARGET_MARKET_ETF, TARGET_MARKET_FUTURES
-from .data_adapter import CORE_FIELDS
 
 logger = logging.getLogger(__name__)
 
@@ -46,33 +45,35 @@ FINANCIAL_FUTURES = {"IF0", "TF0", "IH0", "IC0", "TS0", "IM0"}
 
 # ─── 分类标准 ─────────────────────────────────────────────
 
-GENERALIZATION_THRESHOLD = 0.02       # 跨市场 IC 最低阈值（通用因子）
-FUTURES_SPECIFIC_THRESHOLD = 0.03     # 期货市场 IC 最低阈值（期货特异）
-FAILURE_THRESHOLD = 0.01              # 跨市场 IC 低于此视为失效
-RETENTION_RATIO = 0.50                # IC 保持率 >= 50% 视为通用
+GENERALIZATION_THRESHOLD = 0.02  # 跨市场 IC 最低阈值（通用因子）
+FUTURES_SPECIFIC_THRESHOLD = 0.03  # 期货市场 IC 最低阈值（期货特异）
+FAILURE_THRESHOLD = 0.01  # 跨市场 IC 低于此视为失效
+RETENTION_RATIO = 0.50  # IC 保持率 >= 50% 视为通用
 
 
 @dataclass
 class CrossMarketResult:
     """单因子跨市场验证结果。"""
+
     name: str
     factor_id: str
     source_market: str
     target_market: str
-    source_ic: float                # 源市场 IC（晋级时的历史 IC）
-    target_ic: float                # 目标市场 IC（计算的跨市场 IC）
-    target_ic_abs: float            # 目标市场 IC 绝对值
-    ic_retention: float             # IC 保持率
-    generalization: str             # 分类: universal/futures_specific/stock_specific/failed
-    n_target_symbols: int           # 目标市场有效品种数
-    n_dates: int                    # 交易日数
-    eval_time_sec: float            # 评估耗时
-    is_deprecated: bool             # 是否已降级
+    source_ic: float  # 源市场 IC（晋级时的历史 IC）
+    target_ic: float  # 目标市场 IC（计算的跨市场 IC）
+    target_ic_abs: float  # 目标市场 IC 绝对值
+    ic_retention: float  # IC 保持率
+    generalization: str  # 分类: universal/futures_specific/stock_specific/failed
+    n_target_symbols: int  # 目标市场有效品种数
+    n_dates: int  # 交易日数
+    eval_time_sec: float  # 评估耗时
+    is_deprecated: bool  # 是否已降级
 
 
 @dataclass
 class CrossMarketReport:
     """跨市场验证报告。"""
+
     generated_at: str
     source_market: str
     target_market: str
@@ -125,7 +126,10 @@ class CrossMarketEngine:
             target_market=TARGET_MARKET_STOCK,
             factor_loader=self._load_futures_factors,
             panel_getter=lambda: self._adapter.get_panel(
-                TARGET_MARKET_STOCK, days=days, max_stocks=max_stocks, trace_id=trace_id,
+                TARGET_MARKET_STOCK,
+                days=days,
+                max_stocks=max_stocks,
+                trace_id=trace_id,
             ),
             max_factors=max_factors,
         )
@@ -142,7 +146,9 @@ class CrossMarketEngine:
             target_market=TARGET_MARKET_ETF,
             factor_loader=self._load_futures_factors,
             panel_getter=lambda: self._adapter.get_panel(
-                TARGET_MARKET_ETF, days=days, trace_id=trace_id,
+                TARGET_MARKET_ETF,
+                days=days,
+                trace_id=trace_id,
             ),
             max_factors=max_factors,
         )
@@ -159,7 +165,9 @@ class CrossMarketEngine:
             target_market=TARGET_MARKET_FUTURES,
             factor_loader=self._load_stock_factors,
             panel_getter=lambda: self._adapter.get_panel(
-                TARGET_MARKET_FUTURES, days=days, trace_id=trace_id,
+                TARGET_MARKET_FUTURES,
+                days=days,
+                trace_id=trace_id,
             ),
             max_factors=max_factors,
         )
@@ -170,8 +178,8 @@ class CrossMarketEngine:
         self,
         source_market: str,
         target_market: str,
-        factor_loader: callable,
-        panel_getter: callable,
+        factor_loader: Callable[..., Any],
+        panel_getter: Callable[..., Any],
         max_factors: int = 0,
     ) -> CrossMarketReport:
         """执行跨市场泛化验证。
@@ -194,11 +202,18 @@ class CrossMarketEngine:
         if not factors:
             logger.warning("无源市场因子")
             return CrossMarketReport(
-                generated_at=today, source_market=source_market,
-                target_market=target_market, total_factors=0,
-                n_universal=0, n_market_specific=0, n_failed=0,
-                n_deprecated=0, n_dates=0, n_target_symbols=0,
-                elapsed_sec=0, results=[],
+                generated_at=today,
+                source_market=source_market,
+                target_market=target_market,
+                total_factors=0,
+                n_universal=0,
+                n_market_specific=0,
+                n_failed=0,
+                n_deprecated=0,
+                n_dates=0,
+                n_target_symbols=0,
+                elapsed_sec=0,
+                results=[],
             )
 
         if max_factors > 0:
@@ -213,11 +228,18 @@ class CrossMarketEngine:
         if not panel or len(common_dates) < 10:
             logger.warning("目标市场数据不足")
             return CrossMarketReport(
-                generated_at=today, source_market=source_market,
-                target_market=target_market, total_factors=len(factors),
-                n_universal=0, n_market_specific=0, n_failed=0,
-                n_deprecated=n_deprecated, n_dates=0, n_target_symbols=0,
-                elapsed_sec=time.time() - t0, results=[],
+                generated_at=today,
+                source_market=source_market,
+                target_market=target_market,
+                total_factors=len(factors),
+                n_universal=0,
+                n_market_specific=0,
+                n_failed=0,
+                n_deprecated=n_deprecated,
+                n_dates=0,
+                n_target_symbols=0,
+                elapsed_sec=time.time() - t0,
+                results=[],
             )
 
         n_dates = len(common_dates)
@@ -242,19 +264,19 @@ class CrossMarketEngine:
 
             # 计算目标市场 IC
             target_ic, n_valid = self._compute_cross_market_ic(
-                factor_data, panel, common_dates,
+                factor_data,
+                panel,
+                common_dates,
             )
 
             target_ic_abs = abs(target_ic) if np.isfinite(target_ic) else 0.0
-            ic_retention = (
-                target_ic_abs / max(abs(source_ic), 1e-10)
-                if abs(source_ic) > 1e-10
-                else 0.0
-            )
+            ic_retention = target_ic_abs / max(abs(source_ic), 1e-10) if abs(source_ic) > 1e-10 else 0.0
 
             # 分类
             generalization = self._classify(
-                source_ic, target_ic_abs, ic_retention,
+                source_ic,
+                target_ic_abs,
+                ic_retention,
             )
 
             result = CrossMarketResult(
@@ -277,17 +299,23 @@ class CrossMarketEngine:
 
             # 进度输出
             if i % 5 == 0 or i == len(factors) or generalization != "unknown":
-                gen_icon = {"universal": "🌍", "futures_specific": "🔄",
-                            "stock_specific": "📈", "failed": "❌", "unknown": "❓"}.get(generalization, "❓")
-                logger.info(f"  [{i}/{len(factors)}] {gen_icon} {name}: "
-                            f"目标 IC={target_ic_abs:.4f}, 源 IC={abs(source_ic):.4f}, "
-                            f"保持率={ic_retention:.1%}")
+                gen_icon = {
+                    "universal": "🌍",
+                    "futures_specific": "🔄",
+                    "stock_specific": "📈",
+                    "failed": "❌",
+                    "unknown": "❓",
+                }.get(generalization, "❓")
+                logger.info(
+                    f"  [{i}/{len(factors)}] {gen_icon} {name}: "
+                    f"目标 IC={target_ic_abs:.4f}, 源 IC={abs(source_ic):.4f}, "
+                    f"保持率={ic_retention:.1%}"
+                )
 
         # Step 4: 统计汇总
         elapsed = time.time() - t0
         n_universal = sum(1 for r in results if r.generalization == "universal")
-        n_market_specific = sum(1 for r in results if r.generalization in (
-            "futures_specific", "stock_specific"))
+        n_market_specific = sum(1 for r in results if r.generalization in ("futures_specific", "stock_specific"))
         n_failed = sum(1 for r in results if r.generalization == "failed")
 
         report = CrossMarketReport(
@@ -307,8 +335,10 @@ class CrossMarketEngine:
         )
 
         logger.info(f"[4] 验证完成: {len(factors)} 个因子, 耗时 {elapsed:.1f}s")
-        logger.info(f"     🌍 通用: {n_universal} | 🔄 市场特异: {n_market_specific} | "
-                    f"❌ 失效: {n_failed} | ⬇️ 已降级: {n_deprecated}")
+        logger.info(
+            f"     🌍 通用: {n_universal} | 🔄 市场特异: {n_market_specific} | "
+            f"❌ 失效: {n_failed} | ⬇️ 已降级: {n_deprecated}"
+        )
 
         return report
 
@@ -338,7 +368,9 @@ class CrossMarketEngine:
 
         # 执行因子
         sym_signals = self._adapter.execute_factor_on_market(
-            factor_data, panel, common_dates,
+            factor_data,
+            panel,
+            common_dates,
         )
         if len(sym_signals) < 5:
             return float("nan"), len(sym_signals)
@@ -413,7 +445,6 @@ class CrossMarketEngine:
 
     def _load_futures_factors(self) -> list[dict[str, Any]]:
         """加载所有期货精英因子（含已降级）。"""
-        from fts.cross_market.data_adapter import FUTURES_SPECIFIC_FIELDS
         return self._load_factors_from_dir(FUTURES_ELITE_DIR)
 
     def _load_stock_factors(self) -> list[dict[str, Any]]:
@@ -521,23 +552,22 @@ class CrossMarketEngine:
             w("| 因子名称 | 源市场 IC | 跨市场 IC | IC 保持率 | 有效品种数 |")
             w("|----------|-----------|-----------|-----------|------------|")
             for r in sorted(universal, key=lambda x: -x.target_ic_abs):
-                w(f"| {r.name} | {r.source_ic:.4f} | {r.target_ic_abs:.4f} | "
-                  f"{r.ic_retention:.1%} | {r.n_target_symbols} |")
+                w(
+                    f"| {r.name} | {r.source_ic:.4f} | {r.target_ic_abs:.4f} | "
+                    f"{r.ic_retention:.1%} | {r.n_target_symbols} |"
+                )
             w()
 
         # 市场特异因子
-        specific = [r for r in report.results if r.generalization in (
-            "futures_specific", "stock_specific")]
+        specific = [r for r in report.results if r.generalization in ("futures_specific", "stock_specific")]
         if specific:
-            spec_label = f"{src_label}特异" if report.source_market == "futures" else f"{src_label}特异"
             w(f"## 🔄 市场特异因子 (仅{src_label}有效)")
             w()
             w("| 因子名称 | 源市场 IC | 跨市场 IC | 降低幅度 | 有效品种数 |")
             w("|----------|-----------|-----------|----------|------------|")
             for r in sorted(specific, key=lambda x: -x.source_ic):
                 drop = 1 - r.ic_retention if r.ic_retention <= 1 else 0
-                w(f"| {r.name} | {r.source_ic:.4f} | {r.target_ic_abs:.4f} | "
-                  f"{drop:.1%} | {r.n_target_symbols} |")
+                w(f"| {r.name} | {r.source_ic:.4f} | {r.target_ic_abs:.4f} | {drop:.1%} | {r.n_target_symbols} |")
             w()
 
         # 失效因子
@@ -549,8 +579,7 @@ class CrossMarketEngine:
             w("|----------|-----------|-----------|----------|------------|")
             for r in sorted(failed, key=lambda x: -x.source_ic):
                 drop = 1 - r.ic_retention if r.ic_retention <= 1 else 0
-                w(f"| {r.name} | {r.source_ic:.4f} | {r.target_ic_abs:.4f} | "
-                  f"{drop:.1%} | {r.n_target_symbols} |")
+                w(f"| {r.name} | {r.source_ic:.4f} | {r.target_ic_abs:.4f} | {drop:.1%} | {r.n_target_symbols} |")
             w()
 
         # 全量因子 IC 对比
@@ -567,8 +596,7 @@ class CrossMarketEngine:
                 "unknown": "❓ 未知",
             }.get(r.generalization, "❓")
             status = "⬇️ 已降级" if r.is_deprecated else ""
-            w(f"| {r.name} {status} | {gen_label} | {r.source_ic:.4f} | "
-              f"{r.target_ic_abs:.4f} | {r.ic_retention:.1%} |")
+            w(f"| {r.name} {status} | {gen_label} | {r.source_ic:.4f} | {r.target_ic_abs:.4f} | {r.ic_retention:.1%} |")
         w()
 
         output_path.write_text("\n".join(lines), encoding="utf-8")

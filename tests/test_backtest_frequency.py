@@ -32,14 +32,17 @@ from fts.factor_engine.backtest_pipeline import (
 class TestGetAnnualizationFactor:
     """测试年化因子映射准确性。"""
 
-    @pytest.mark.parametrize("frequency, expected", [
-        ("daily", 252),
-        ("60m", 1638),
-        ("30m", 3276),
-        ("15m", 6552),
-        ("5m", 19656),
-        ("1m", 98280),
-    ])
+    @pytest.mark.parametrize(
+        "frequency, expected",
+        [
+            ("daily", 252),
+            ("60m", 1638),
+            ("30m", 3276),
+            ("15m", 6552),
+            ("5m", 19656),
+            ("1m", 98280),
+        ],
+    )
     def test_known_frequencies(self, frequency: str, expected: int) -> None:
         """已知频率应返回正确年化因子。"""
         assert get_annualization_factor(frequency) == expected
@@ -144,26 +147,30 @@ class TestMinuteDataLoading:
     def _make_minute_data(self, n_rows: int = 100) -> pd.DataFrame:
         """生成模拟分钟级数据。"""
         times = pd.date_range("2026-01-01", periods=n_rows, freq="5min")
-        return pd.DataFrame({
-            "datetime": times,
-            "open": np.random.randn(n_rows) * 10 + 3500,
-            "high": np.random.randn(n_rows) * 10 + 3510,
-            "low": np.random.randn(n_rows) * 10 + 3490,
-            "close": np.random.randn(n_rows) * 10 + 3500,
-            "volume": np.random.randint(100, 1000, n_rows),
-        })
+        return pd.DataFrame(
+            {
+                "datetime": times,
+                "open": np.random.randn(n_rows) * 10 + 3500,
+                "high": np.random.randn(n_rows) * 10 + 3510,
+                "low": np.random.randn(n_rows) * 10 + 3490,
+                "close": np.random.randn(n_rows) * 10 + 3500,
+                "volume": np.random.randint(100, 1000, n_rows),
+            }
+        )
 
     def _make_daily_data(self, n_rows: int = 100) -> pd.DataFrame:
         """生成模拟日线数据。"""
         dates = pd.date_range("2026-01-01", periods=n_rows, freq="D")
-        return pd.DataFrame({
-            "date": dates,
-            "open": np.random.randn(n_rows) * 10 + 3500,
-            "high": np.random.randn(n_rows) * 10 + 3510,
-            "low": np.random.randn(n_rows) * 10 + 3490,
-            "close": np.random.randn(n_rows) * 10 + 3500,
-            "volume": np.random.randint(50000, 200000, n_rows),
-        })
+        return pd.DataFrame(
+            {
+                "date": dates,
+                "open": np.random.randn(n_rows) * 10 + 3500,
+                "high": np.random.randn(n_rows) * 10 + 3510,
+                "low": np.random.randn(n_rows) * 10 + 3490,
+                "close": np.random.randn(n_rows) * 10 + 3500,
+                "volume": np.random.randint(50000, 200000, n_rows),
+            }
+        )
 
     def test_minute_data_loads(self) -> None:
         """分钟级数据应能正常加载（datetime 列）。"""
@@ -200,26 +207,29 @@ class TestMinuteDataLoading:
 class TestMetricsAnnualization:
     """测试绩效指标年化因子自适应。"""
 
-    @pytest.mark.parametrize("frequency, expected_annual_factor", [
-        ("daily", 252),
-        ("5m", 19656),
-    ])
-    def test_annual_return_daily_vs_5m(
-        self, frequency: str, expected_annual_factor: int
-    ) -> None:
+    @pytest.mark.parametrize(
+        "frequency, expected_annual_factor",
+        [
+            ("daily", 252),
+            ("5m", 19656),
+        ],
+    )
+    def test_annual_return_daily_vs_5m(self, frequency: str, expected_annual_factor: int) -> None:
         """年化收益率应使用正确的年化因子。"""
         n = 1000
         close = 3500 + np.cumsum(np.random.randn(n) * 2)
-        data = pd.DataFrame({
-            "datetime" if frequency != "daily" else "date": (
-                pd.date_range("2026-01-01", periods=n, freq="5min" if frequency != "daily" else "D")
-            ),
-            "open": close,
-            "high": close + 10,
-            "low": close - 10,
-            "close": close,
-            "volume": np.ones(n) * 1000,
-        })
+        data = pd.DataFrame(
+            {
+                "datetime" if frequency != "daily" else "date": (
+                    pd.date_range("2026-01-01", periods=n, freq="5min" if frequency != "daily" else "D")
+                ),
+                "open": close,
+                "high": close + 10,
+                "low": close - 10,
+                "close": close,
+                "volume": np.ones(n) * 1000,
+            }
+        )
 
         factor = {"factor_id": "test_ann", "code": "output = close", "name": "test"}
         inp = BacktestInput(factor=factor, data=data, frequency=frequency)
@@ -237,11 +247,16 @@ class TestMetricsAnnualization:
         """回测报告 summary 应包含频率信息。"""
         n = 100
         close = 3500 + np.cumsum(np.random.randn(n))
-        data = pd.DataFrame({
-            "date": pd.date_range("2026-01-01", periods=n, freq="D"),
-            "open": close, "high": close + 10, "low": close - 10,
-            "close": close, "volume": np.ones(n) * 1000,
-        })
+        data = pd.DataFrame(
+            {
+                "date": pd.date_range("2026-01-01", periods=n, freq="D"),
+                "open": close,
+                "high": close + 10,
+                "low": close - 10,
+                "close": close,
+                "volume": np.ones(n) * 1000,
+            }
+        )
         factor = {"factor_id": "test_freq", "code": "output = close", "name": "test"}
         inp = BacktestInput(factor=factor, data=data, frequency="daily")
         pipeline = BacktestPipeline()

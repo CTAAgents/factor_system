@@ -86,9 +86,7 @@ class RollCalendar:
 
         # 每日主力 = 成交量最大的合约（同日多行取 volume 最大）
         dominant = (
-            df.sort_values("volume", ascending=False)
-            .drop_duplicates(subset=["date"], keep="first")
-            .sort_values("date")
+            df.sort_values("volume", ascending=False).drop_duplicates(subset=["date"], keep="first").sort_values("date")
         )
         if len(dominant) < 2:
             return []
@@ -112,18 +110,23 @@ class RollCalendar:
             if old_close is None or new_close is None or old_close <= 0:
                 logger.warning(
                     "[RollCalendar] 切换日价格缺失，跳过换月事件 [%s] %s→%s @ %s",
-                    base, old_contract, new_contract, roll_date,
+                    base,
+                    old_contract,
+                    new_contract,
+                    roll_date,
                 )
                 continue
 
-            events.append(RollEvent(
-                date=roll_date,
-                old_contract=old_contract,
-                new_contract=new_contract,
-                old_close=old_close,
-                new_close=new_close,
-                adj_ratio=new_close / old_close,
-            ))
+            events.append(
+                RollEvent(
+                    date=roll_date,
+                    old_contract=old_contract,
+                    new_contract=new_contract,
+                    old_close=old_close,
+                    new_close=new_close,
+                    adj_ratio=new_close / old_close,
+                )
+            )
 
         logger.info("[RollCalendar] [%s] 构建换月日历: %d 次换月", base, len(events))
         return events
@@ -131,7 +134,9 @@ class RollCalendar:
     # ─── 复权因子 ────────────────────────────────────────
 
     def compute_adjust_factors(
-        self, dates: pd.DatetimeIndex, rolls: list[RollEvent],
+        self,
+        dates: pd.DatetimeIndex,
+        rolls: list[RollEvent],
     ) -> pd.Series:
         """计算后复权累积因子（保持最新价格不变，历史价格按比例调整）。
 
@@ -150,7 +155,9 @@ class RollCalendar:
         return factor
 
     def apply_adjustment(
-        self, df: pd.DataFrame, symbol: str,
+        self,
+        df: pd.DataFrame,
+        symbol: str,
     ) -> tuple[pd.DataFrame, list[RollEvent]]:
         """对连续合约面板应用后复权，返回 (复权后 df, 换月事件)。
 
@@ -189,6 +196,7 @@ class RollCalendar:
         """从 DuckDB contract_kline 加载指定品种全部具体合约日线。"""
         try:
             import duckdb
+
             con = duckdb.connect(self.db_path, read_only=True)
         except Exception as e:  # noqa: BLE001
             logger.warning("[RollCalendar] DuckDB 连接失败 [%s]: %s", base, e)

@@ -32,6 +32,7 @@ from fts.factor_engine.regime import (
 
 # ─── Fixtures ─────────────────────────────────────────────
 
+
 @pytest.fixture
 def sector_selector() -> SectorRegimeSelector:
     return SectorRegimeSelector(lookback_days=60, use_hmm=False)
@@ -54,13 +55,16 @@ def _make_sym_ohlcv(
 ) -> pd.DataFrame:
     """从收盘价序列构造单个品种的 OHLCV DataFrame。"""
     n = len(close_series)
-    return pd.DataFrame({
-        "open": close_series * (1 + np.random.randn(n) * vol_scale),
-        "high": close_series * (1 + np.abs(np.random.randn(n)) * vol_scale * 2),
-        "low": close_series * (1 - np.abs(np.random.randn(n)) * vol_scale * 2),
-        "close": close_series,
-        "volume": np.random.randint(800, 1200, n).astype(float),
-    }, index=dates)
+    return pd.DataFrame(
+        {
+            "open": close_series * (1 + np.random.randn(n) * vol_scale),
+            "high": close_series * (1 + np.abs(np.random.randn(n)) * vol_scale * 2),
+            "low": close_series * (1 - np.abs(np.random.randn(n)) * vol_scale * 2),
+            "close": close_series,
+            "volume": np.random.randint(800, 1200, n).astype(float),
+        },
+        index=dates,
+    )
 
 
 def _make_panel(
@@ -76,6 +80,7 @@ def _make_panel(
 
 
 # ─── 1. 不同产业链检测出不同 regime ──────────────────────
+
 
 def test_detect_all_divergent_regimes(
     sector_selector: SectorRegimeSelector,
@@ -113,18 +118,13 @@ def test_detect_all_divergent_regimes(
     assert "向下板块" in result
     assert "震荡板块" in result
 
-    assert result["向上板块"]["regime"] == "bull", (
-        f"向上板块预期 bull，实际 {result['向上板块']['regime']}"
-    )
-    assert result["向下板块"]["regime"] == "bear", (
-        f"向下板块预期 bear，实际 {result['向下板块']['regime']}"
-    )
-    assert result["震荡板块"]["regime"] == "oscillate", (
-        f"震荡板块预期 oscillate，实际 {result['震荡板块']['regime']}"
-    )
+    assert result["向上板块"]["regime"] == "bull", f"向上板块预期 bull，实际 {result['向上板块']['regime']}"
+    assert result["向下板块"]["regime"] == "bear", f"向下板块预期 bear，实际 {result['向下板块']['regime']}"
+    assert result["震荡板块"]["regime"] == "oscillate", f"震荡板块预期 oscillate，实际 {result['震荡板块']['regime']}"
 
 
 # ─── 2. 返回格式验证 ─────────────────────────────────────
+
 
 def test_detect_all_result_format(
     sector_selector: SectorRegimeSelector,
@@ -136,8 +136,7 @@ def test_detect_all_result_format(
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
     close = 100 + np.cumsum(np.random.randn(n) * 0.3 + 0.5)
 
-    prices = {sym: close + np.random.randn(n) * 0.5
-              for syms in sector_map.values() for sym in syms}
+    prices = {sym: close + np.random.randn(n) * 0.5 for syms in sector_map.values() for sym in syms}
     panel = _make_panel(sector_map, prices, dates)
 
     result = sector_selector.detect_all(panel, sector_map=sector_map)
@@ -147,12 +146,11 @@ def test_detect_all_result_format(
         assert "regime" in regime, f"{sector_name}: 缺少 regime"
         assert "confidence" in regime, f"{sector_name}: 缺少 confidence"
         assert "features" in regime, f"{sector_name}: 缺少 features"
-        assert 0 <= regime["confidence"] <= 1, (
-            f"{sector_name}: confidence={regime['confidence']} 超出 [0,1]"
-        )
+        assert 0 <= regime["confidence"] <= 1, f"{sector_name}: confidence={regime['confidence']} 超出 [0,1]"
 
 
 # ─── 3. 空 panel ─────────────────────────────────────────
+
 
 def test_detect_all_empty_panel(
     sector_selector: SectorRegimeSelector,
@@ -164,6 +162,7 @@ def test_detect_all_empty_panel(
 
 
 # ─── 4. 品种不足的产业链 ─────────────────────────────────
+
 
 def test_detect_all_sector_too_few_symbols(
     sector_selector: SectorRegimeSelector,
@@ -184,6 +183,7 @@ def test_detect_all_sector_too_few_symbols(
 
 
 # ─── 5. 部分品种在 panel 中缺失 ──────────────────────────
+
 
 def test_detect_all_partial_symbols_in_panel(
     sector_selector: SectorRegimeSelector,
@@ -210,6 +210,7 @@ def test_detect_all_partial_symbols_in_panel(
 
 # ─── 6. 数据不足 20 行 ───────────────────────────────────
 
+
 def test_detect_all_short_data(
     sector_selector: SectorRegimeSelector,
     sector_map: dict[str, list[str]],
@@ -220,8 +221,7 @@ def test_detect_all_short_data(
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
     close = 100 + np.cumsum(np.random.randn(n) * 0.3 + 0.5)
 
-    prices = {sym: close + np.random.randn(n) * 0.5
-              for syms in sector_map.values() for sym in syms}
+    prices = {sym: close + np.random.randn(n) * 0.5 for syms in sector_map.values() for sym in syms}
     panel = _make_panel(sector_map, prices, dates)
 
     result = sector_selector.detect_all(panel, sector_map=sector_map)
@@ -229,6 +229,7 @@ def test_detect_all_short_data(
 
 
 # ─── 7. 默认 sector_map=FUTURES_SECTOR_MAP ───────────────
+
 
 def test_detect_all_default_sector_map() -> None:
     """不传 sector_map 时使用默认的 FUTURES_SECTOR_MAP。"""
@@ -259,6 +260,7 @@ def test_detect_all_default_sector_map() -> None:
 
 # ─── 8. 置信度合理性 ─────────────────────────────────────
 
+
 def test_detect_all_confidence_sensible(
     sector_selector: SectorRegimeSelector,
     sector_map: dict[str, list[str]],
@@ -283,24 +285,28 @@ def test_detect_all_confidence_sensible(
     }
     panel = _make_panel(
         {"强趋势": ["SYM1", "SYM2", "SYM3"], "弱趋势": ["SYM4", "SYM5", "SYM6"]},
-        prices, dates,
+        prices,
+        dates,
     )
 
-    result = sector_selector.detect_all(panel, sector_map={
-        "强趋势": ["SYM1", "SYM2", "SYM3"],
-        "弱趋势": ["SYM4", "SYM5", "SYM6"],
-    })
+    result = sector_selector.detect_all(
+        panel,
+        sector_map={
+            "强趋势": ["SYM1", "SYM2", "SYM3"],
+            "弱趋势": ["SYM4", "SYM5", "SYM6"],
+        },
+    )
 
     assert "强趋势" in result
     assert "弱趋势" in result
     # 强趋势板块置信度应更高
     assert result["强趋势"]["confidence"] >= result["弱趋势"]["confidence"], (
-        f"强趋势({result['强趋势']['confidence']}) 置信度应 >= "
-        f"弱趋势({result['弱趋势']['confidence']})"
+        f"强趋势({result['强趋势']['confidence']}) 置信度应 >= 弱趋势({result['弱趋势']['confidence']})"
     )
 
 
 # ─── 9. 多次调用 detect_all 结果一致 ─────────────────────
+
 
 def test_detect_all_deterministic(
     sector_selector: SectorRegimeSelector,
@@ -331,6 +337,7 @@ def test_detect_all_deterministic(
 
 
 # ─── 10. compute_alignment — 对齐度计算 ──────────────────
+
 
 def test_compute_alignment_basic(
     sector_selector: SectorRegimeSelector,

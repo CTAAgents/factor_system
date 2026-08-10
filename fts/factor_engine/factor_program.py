@@ -32,13 +32,15 @@ logger = logging.getLogger(__name__)
 # 因子代码中使用 series[i] 进行位置索引，新版 Pandas 建议使用 iloc[i]
 # 在因子执行层面统一处理，避免修改 LLM 生成的因子代码
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*treating keys as positions is deprecated.*")
-warnings.filterwarnings("ignore", category=FutureWarning, message=".*Series.__setitem__ treating keys as positions is deprecated.*")
+warnings.filterwarnings(
+    "ignore", category=FutureWarning, message=".*Series.__setitem__ treating keys as positions is deprecated.*"
+)
 
 # 抑制 numpy RuntimeWarning: overflow encountered in exp / divide by zero 等
 # 因子代码中的 np.exp() 在极端数值下溢出，已通过后置 np.clip 处理
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
 
-from .contracts import (
+from .contracts import (  # noqa: E402 — 前置 warnings.filterwarnings 后导入
     EconomicLogic,
     FactorKind,
     FactorProgram,
@@ -48,24 +50,63 @@ from .contracts import (
 
 # ─── 安全沙箱约束 ─────────────────────────────────────────
 
-ALLOWED_IMPORTS: frozenset[str] = frozenset({
-    "numpy", "np", "pandas", "pd", "scipy", "statsmodels",
-    "talib", "math", "statistics",
-})
+ALLOWED_IMPORTS: frozenset[str] = frozenset(
+    {
+        "numpy",
+        "np",
+        "pandas",
+        "pd",
+        "scipy",
+        "statsmodels",
+        "talib",
+        "math",
+        "statistics",
+    }
+)
 
-FORBIDDEN_NAMES: frozenset[str] = frozenset({
-    "open", "exec", "eval", "compile", "globals", "locals",
-    "vars", "dir", "getattr", "setattr", "delattr",
-    "input", "breakpoint", "exit", "quit", "help",
-    "memoryview", "bytearray",
-})
+FORBIDDEN_NAMES: frozenset[str] = frozenset(
+    {
+        "open",
+        "exec",
+        "eval",
+        "compile",
+        "globals",
+        "locals",
+        "vars",
+        "dir",
+        "getattr",
+        "setattr",
+        "delattr",
+        "input",
+        "breakpoint",
+        "exit",
+        "quit",
+        "help",
+        "memoryview",
+        "bytearray",
+    }
+)
 
-FORBIDDEN_MODULES: frozenset[str] = frozenset({
-    "os", "sys", "subprocess", "shutil", "pathlib",
-    "socket", "http", "urllib", "requests",
-    "ctypes", "multiprocessing", "threading", "asyncio",
-    "pickle", "marshal", "importlib",
-})
+FORBIDDEN_MODULES: frozenset[str] = frozenset(
+    {
+        "os",
+        "sys",
+        "subprocess",
+        "shutil",
+        "pathlib",
+        "socket",
+        "http",
+        "urllib",
+        "requests",
+        "ctypes",
+        "multiprocessing",
+        "threading",
+        "asyncio",
+        "pickle",
+        "marshal",
+        "importlib",
+    }
+)
 
 
 class FactorCompileError(Exception):
@@ -73,6 +114,7 @@ class FactorCompileError(Exception):
 
 
 # ─── 因子 ID 生成 ─────────────────────────────────────────
+
 
 def generate_factor_id(name: str, code: str) -> str:
     """生成全局唯一的因子 ID: fct_<8hex>。
@@ -85,6 +127,7 @@ def generate_factor_id(name: str, code: str) -> str:
 
 
 # ─── 代码自动修复 ─────────────────────────────────────────
+
 
 def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
     """尝试自动修复因子代码中的常见语法错误。
@@ -147,25 +190,10 @@ def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
         idx = line_no - 1
         if 0 <= idx < len(lines):
             line = lines[idx]
-            # 从错误信息中提取具体括号类型
-            close_paren = ")"
-            open_paren = "("
-            cm = re.search(r"closing parenthesis\s*['\"]?([\)\]])['\"]?", error_reason)
-            # 提取 opening paren — 支持两种格式:
-            #   "does not match opening parenthesis '('"  → 直接匹配 opening parenthesis
-            #   "mismatch '('"                            → 从 mismatch 后的括号提取
-            om = re.search(r"opening parenthesis\s*['\"]?([\(\[])['\"]?", error_reason)
-            if om:
-                open_paren = om.group(1)
-            else:
-                # 尝试从 mismatch 后面提取括号字符
-                mm = re.search(r"mismatch\s*['\"]?([\(\[])['\"]?", error_reason)
-                if mm:
-                    open_paren = mm.group(1)
-            # 尝试各种括号交换组合
+            # 尝试各种括号交换组合（swap_pairs 为固定组合表）
             swap_pairs = [
-                (")", "]"),    # 错用 ) 实际应为 ]
-                ("]", ")"),    # 错用 ] 实际应为 )
+                (")", "]"),  # 错用 ) 实际应为 ]
+                ("]", ")"),  # 错用 ] 实际应为 )
                 ("(]", "()"),  # 错用 (] 实际应为 ()
                 ("[)", "[]"),  # 错用 [) 实际应为 []
             ]
@@ -184,8 +212,17 @@ def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
             stripped = line.rstrip()
             # 3a: 行末补冒号 — 适用于 def/if/for/while/with/class/try/except/elif/else/finally
             _STMT_KEYWORDS = (
-                "def ", "if ", "for ", "while ", "with ", "class ",
-                "try:", "except", "elif ", "else:", "finally:",
+                "def ",
+                "if ",
+                "for ",
+                "while ",
+                "with ",
+                "class ",
+                "try:",
+                "except",
+                "elif ",
+                "else:",
+                "finally:",
             )
             if stripped and not stripped.endswith(":"):
                 leading = stripped[: len(stripped) - len(stripped.lstrip())]
@@ -255,7 +292,9 @@ def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
             if fixed_code != code:
                 logger.info(
                     "[fix_factor_code] 修复成功, error=%s, original_len=%d, fixed_len=%d",
-                    error_reason, len(code), len(fixed_code),
+                    error_reason,
+                    len(code),
+                    len(fixed_code),
                 )
                 return True, fixed_code
         except SyntaxError:
@@ -270,7 +309,9 @@ def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
                 ast.parse(balanced)
                 logger.info(
                     "[fix_factor_code] 全局括号平衡修复成功, error=%s, original_len=%d, fixed_len=%d",
-                    error_reason, len(code), len(balanced),
+                    error_reason,
+                    len(code),
+                    len(balanced),
                 )
                 return True, balanced
             except SyntaxError:
@@ -280,6 +321,7 @@ def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
 
 
 # ─── 安全沙箱验证 ─────────────────────────────────────────
+
 
 def validate_factor_code(code: str) -> tuple[bool, list[str]]:
     """验证因子代码是否符合安全沙箱约束。
@@ -310,9 +352,7 @@ def validate_factor_code(code: str) -> tuple[bool, list[str]]:
             # 检查签名: (data, params)
             args = node.args
             if len(args.args) != 2:
-                reasons.append(
-                    f"factor_program 必须接受 2 个参数 (data, params)，实际 {len(args.args)}"
-                )
+                reasons.append(f"factor_program 必须接受 2 个参数 (data, params)，实际 {len(args.args)}")
             break
     if not has_factor_func:
         reasons.append("代码必须定义 `def factor_program(data, params):` 函数")
@@ -350,15 +390,24 @@ def validate_factor_code(code: str) -> tuple[bool, list[str]]:
 # ─── 因子程序执行 ─────────────────────────────────────────
 
 # 允许在沙箱内通过 import 语句加载的模块白名单
-_SANDBOX_ALLOWED_MODULES: frozenset[str] = frozenset({
-    "numpy", "pandas", "scipy", "statsmodels", "talib",
-    "math", "statistics",
-})
+_SANDBOX_ALLOWED_MODULES: frozenset[str] = frozenset(
+    {
+        "numpy",
+        "pandas",
+        "scipy",
+        "statsmodels",
+        "talib",
+        "math",
+        "statistics",
+    }
+)
 
 # 沙箱内精确放行的 FTS 模块（全名匹配，不放开 fts 顶层）
-_SANDBOX_ALLOWED_FTS_MODULES: frozenset[str] = frozenset({
-    "fts.factor_engine.expr_dsl.runtime",
-})
+_SANDBOX_ALLOWED_FTS_MODULES: frozenset[str] = frozenset(
+    {
+        "fts.factor_engine.expr_dsl.runtime",
+    }
+)
 
 
 def _safe_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
@@ -390,7 +439,7 @@ class _ArrayDataWrapper:
         """返回列数据为 ndarray（而非 Series）。"""
         if key not in self._df.columns:
             raise KeyError(f"列 '{key}' 不存在，可用列: {self._columns}")
-        return self._df[key].values.astype(np.float64)
+        return self._df[key].to_numpy().astype(np.float64)
 
     def __getattr__(self, name: str) -> np.ndarray:
         """属性访问列（兼容 `hasattr(data, 'volume')` + `data.volume` 写法）。
@@ -400,7 +449,7 @@ class _ArrayDataWrapper:
         volume 等列被替换为常量（如 volume_zero 消融失效）。
         """
         if name in self._df.columns:
-            return self._df[name].values.astype(np.float64)
+            return self._df[name].to_numpy().astype(np.float64)
         raise AttributeError(f"'data' 没有属性 '{name}'")
 
     def __contains__(self, key: str) -> bool:
@@ -434,6 +483,7 @@ def _get_operator_registry():
     global _operator_registry
     if _operator_registry is None:
         from .expr_dsl import build_registry
+
         _operator_registry = build_registry()
     return _operator_registry
 
@@ -459,9 +509,7 @@ class FactorExecutor:
             raise FactorCompileError("因子代码为空")
         ok, reasons = validate_factor_code(code)
         if not ok:
-            raise FactorCompileError(
-                f"因子 {self.program.get('factor_id', '?')} 编译失败: {'; '.join(reasons)}"
-            )
+            raise FactorCompileError(f"因子 {self.program.get('factor_id', '?')} 编译失败: {'; '.join(reasons)}")
 
     def compile(self) -> None:
         """编译因子代码到可执行函数。"""
@@ -470,27 +518,58 @@ class FactorExecutor:
         safe_globals: dict[str, Any] = {
             "__builtins__": {
                 # 白名单内置函数 — 数值/类型/迭代/查询
-                "abs": abs, "min": min, "max": max, "sum": sum,
-                "len": len, "range": range, "enumerate": enumerate,
-                "zip": zip, "sorted": sorted, "reversed": reversed,
-                "isinstance": isinstance, "type": type, "issubclass": issubclass,
-                "hasattr": hasattr, "callable": callable,
-                "round": round, "divmod": divmod, "pow": pow,
-                "int": int, "float": float, "str": str, "bool": bool,
-                "list": list, "dict": dict, "tuple": tuple, "set": set,
-                "frozenset": frozenset, "bytes": bytes,
-                "map": map, "filter": filter, "iter": iter, "next": next,
-                "any": any, "all": all,
-                "repr": repr, "format": format, "chr": chr, "ord": ord,
-                "print": print, "None": None, "True": True, "False": False,
+                "abs": abs,
+                "min": min,
+                "max": max,
+                "sum": sum,
+                "len": len,
+                "range": range,
+                "enumerate": enumerate,
+                "zip": zip,
+                "sorted": sorted,
+                "reversed": reversed,
+                "isinstance": isinstance,
+                "type": type,
+                "issubclass": issubclass,
+                "hasattr": hasattr,
+                "callable": callable,
+                "round": round,
+                "divmod": divmod,
+                "pow": pow,
+                "int": int,
+                "float": float,
+                "str": str,
+                "bool": bool,
+                "list": list,
+                "dict": dict,
+                "tuple": tuple,
+                "set": set,
+                "frozenset": frozenset,
+                "bytes": bytes,
+                "map": map,
+                "filter": filter,
+                "iter": iter,
+                "next": next,
+                "any": any,
+                "all": all,
+                "repr": repr,
+                "format": format,
+                "chr": chr,
+                "ord": ord,
+                "print": print,
+                "None": None,
+                "True": True,
+                "False": False,
                 # 安全的 __import__ — 仅允许白名单模块
                 "__import__": _safe_import,
                 "__name__": "__factor_sandbox__",
                 "__file__": None,
             },
             # 白名单模块
-            "numpy": np, "np": np,
-            "pandas": pd, "pd": pd,
+            "numpy": np,
+            "np": np,
+            "pandas": pd,
+            "pd": pd,
             "math": __import__("math"),
             "statistics": __import__("statistics"),
         }
@@ -527,7 +606,8 @@ class FactorExecutor:
             except Exception as e:
                 logger.warning(
                     "算子快速路径失败 (factor_id=%s), 回退沙箱: %s",
-                    self.program.get("factor_id", "?"), e,
+                    self.program.get("factor_id", "?"),
+                    e,
                 )
 
         if self._compiled is None:
@@ -551,9 +631,8 @@ class FactorExecutor:
                     result = self._compiled(data, params)  # type: ignore[misc]
                 except Exception:
                     # 最终回退: dict[str, np.ndarray] 格式
-                    data_dict = {
-                        col: data[col].values.astype(np.float64)
-                        for col in data.columns
+                    data_dict: dict[str, np.ndarray] = {
+                        col: data[col].to_numpy().astype(np.float64) for col in data.columns
                     }
                     try:
                         result = self._compiled(data_dict, params)  # type: ignore[misc]
@@ -561,9 +640,7 @@ class FactorExecutor:
                         raise FactorCompileError(f"执行失败: {type(e).__name__}: {e}") from e
 
         if not isinstance(result, np.ndarray):
-            raise FactorCompileError(
-                f"因子输出必须为 np.ndarray，实际为 {type(result).__name__}"
-            )
+            raise FactorCompileError(f"因子输出必须为 np.ndarray，实际为 {type(result).__name__}")
 
         # 数值稳定性处理: 裁剪 inf 和 NaN，限制输出范围（先清洗，再对齐，
         # 避免前导 NaN 填充被 nan_to_num 清零，破坏"尾部有效值对齐日期"语义）
@@ -581,13 +658,15 @@ class FactorExecutor:
             raise TypeError("算子快速路径需要 DataFrame 输入")
         from .expr_dsl import evaluate, parse_expression
 
-        expression = self.program["expression"]
+        expression = self.program.get("expression")
+        if not expression:
+            raise TypeError("算子因子缺少 expression")
         node = _OPERATOR_AST_CACHE.get(expression)
         if node is None:
             node = parse_expression(expression)
             _OPERATOR_AST_CACHE[expression] = node
         series = evaluate(node, data, _get_operator_registry())
-        result = series.values.astype(np.float64)
+        result: np.ndarray = np.asarray(series, dtype=np.float64)
 
         expected_len = len(data)
         result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
@@ -608,12 +687,13 @@ class FactorExecutor:
         if len(result) == expected_len:
             return result
         if len(result) < expected_len:
-            pad = np.full(expected_len - len(result), np.nan, dtype=np.float64)
+            pad: np.ndarray = np.full(expected_len - len(result), np.nan, dtype=np.float64)
             return np.concatenate([pad, result])
         return result[:expected_len]
 
 
 # ─── 因子程序工厂 ─────────────────────────────────────────
+
 
 def create_factor_program(
     name: str,

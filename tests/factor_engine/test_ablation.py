@@ -7,7 +7,6 @@ HARNESS §11-logic-review-plan.md §A.1:
 
 from __future__ import annotations
 
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -30,6 +29,7 @@ from fts.factor_engine.factor_program import create_factor_program
 
 # ─── Fixtures ─────────────────────────────────────────────
 
+
 @pytest.fixture
 def sample_data() -> pd.DataFrame:
     """生成 200 天的合成 OHLCV 数据（含 vwap）。"""
@@ -38,14 +38,17 @@ def sample_data() -> pd.DataFrame:
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
     volume = np.random.randint(1000, 10000, n).astype(float)
-    data = pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.3,
-        "low": close - np.abs(np.random.randn(n)) * 0.3,
-        "close": close,
-        "volume": volume,
-        "vwap": close + np.random.randn(n) * 0.05,
-    }, index=dates)
+    data = pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.3,
+            "low": close - np.abs(np.random.randn(n)) * 0.3,
+            "close": close,
+            "volume": volume,
+            "vwap": close + np.random.randn(n) * 0.05,
+        },
+        index=dates,
+    )
     return data
 
 
@@ -89,8 +92,11 @@ def factor_program(data, params):
             "lookback": 10,
         },
         economic_logic={
-            "theory": 4, "behavioral": 3, "microstructure": 3,
-            "institutional": 3, "narrative": "vwap 偏离度动量因子",
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "vwap 偏离度动量因子",
         },
         source="seed",
         trace_id="test_ablation",
@@ -98,6 +104,7 @@ def factor_program(data, params):
 
 
 # ─── 测试消融模式 ─────────────────────────────────────────
+
 
 class TestAblationModes:
     """测试每种消融模式的数据扰动函数。"""
@@ -149,6 +156,7 @@ class TestAblationModes:
 
 
 # ─── 测试 AblationExperiment ─────────────────────────────
+
 
 class TestAblationExperiment:
     """测试 AblationExperiment 主类。"""
@@ -205,9 +213,12 @@ class TestAblationExperiment:
     def test_single_ablation_feature_roundtrip(self):
         """SingleAblation 构造可显式传入 feature 字段。"""
         ab = SingleAblation(
-            mode="zero_one_feature", description="单特征归零（影响最大: volume）",
-            ic=0.01, sharpe=0.3,
-            ic_change=-0.04, sharpe_change=-1.2,
+            mode="zero_one_feature",
+            description="单特征归零（影响最大: volume）",
+            ic=0.01,
+            sharpe=0.3,
+            ic_change=-0.04,
+            sharpe_change=-1.2,
             feature="volume",
         )
         assert ab["feature"] == "volume"
@@ -216,9 +227,7 @@ class TestAblationExperiment:
     def test_run_batch_returns_list(self, sample_data, forward_returns, vwap_factor):
         """run_batch 返回正确长度的列表。"""
         experiment = AblationExperiment(random_seed=42)
-        results = experiment.run_batch(
-            [vwap_factor, vwap_factor], sample_data, forward_returns
-        )
+        results = experiment.run_batch([vwap_factor, vwap_factor], sample_data, forward_returns)
         assert len(results) == 2
         assert all(isinstance(r, AblationResult) for r in results)
 
@@ -247,6 +256,7 @@ class TestAblationExperiment:
         experiment = AblationExperiment(random_seed=42)
         result = experiment.run(vwap_factor, sample_data, forward_returns)
         import json
+
         json_str = json.dumps(result, ensure_ascii=False)
         assert isinstance(json_str, str)
         parsed = json.loads(json_str)
@@ -255,15 +265,18 @@ class TestAblationExperiment:
 
 # ─── 测试异常处理 ─────────────────────────────────────────
 
+
 class TestAblationEdgeCases:
     """测试消融实验的边界情况和异常处理。"""
 
     def test_no_volume_column(self, forward_returns, vwap_factor):
         """无 volume 列时成交量置零不报错。"""
-        data = pd.DataFrame({
-            "close": 100 + np.cumsum(np.random.randn(100) * 0.5),
-            "vwap": 100 + np.random.randn(100) * 0.05,
-        })
+        data = pd.DataFrame(
+            {
+                "close": 100 + np.cumsum(np.random.randn(100) * 0.5),
+                "vwap": 100 + np.random.randn(100) * 0.05,
+            }
+        )
         # 此时 volume 列不存在，改 ablate 函数应直接返回原数据
         result = _ablate_volume_zero(data)
         assert "volume" not in result.columns
@@ -279,29 +292,37 @@ class TestAblationEdgeCases:
     def test_no_vwap_column(self, forward_returns):
         """无 vwap 列时 VWAP 消融模式不报错。"""
         n = 100
-        data = pd.DataFrame({
-            "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
-            "volume": np.random.randint(1000, 10000, n).astype(float),
-        })
+        data = pd.DataFrame(
+            {
+                "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
+                "volume": np.random.randint(1000, 10000, n).astype(float),
+            }
+        )
         # 使用与数据等长的 forward_returns
         fwd = np.random.randn(n) * 0.01
         fwd[-1] = 0.0
         # 使用不含 vwap 的因子
-        code = '''
+        code = """
 def factor_program(data, params):
     import numpy as np
     close = data['close'].values if hasattr(data, 'close') else data['close']
     score = np.diff(close, prepend=close[0]) / np.maximum(close, 1e-10)
     return np.clip(np.nan_to_num(score, nan=0.0), -1.0, 1.0)
-'''
+"""
         factor = create_factor_program(
             name="simple_momentum",
-            code=code, params={},
-            signature={"input_fields": ["close"], "output_type": "signal",
-                       "frequency": "daily", "lookback": 2},
-            economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3,
-                            "institutional": 3, "narrative": "简单动量因子"},
-            source="seed", trace_id="test_no_vwap",
+            code=code,
+            params={},
+            signature={"input_fields": ["close"], "output_type": "signal", "frequency": "daily", "lookback": 2},
+            economic_logic={
+                "theory": 3,
+                "behavioral": 3,
+                "microstructure": 3,
+                "institutional": 3,
+                "narrative": "简单动量因子",
+            },
+            source="seed",
+            trace_id="test_no_vwap",
         )
         experiment = AblationExperiment(random_seed=42)
         result = experiment.run(factor, data, fwd)

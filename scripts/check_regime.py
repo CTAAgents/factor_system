@@ -1,7 +1,7 @@
 """检查当前市场制度状态。"""
+
 import sys
 import numpy as np
-import pandas as pd
 
 sys.path.insert(0, ".")
 
@@ -19,9 +19,9 @@ def main():
     rets = close.pct_change().dropna()
 
     # 多周期收益率
-    print(f"\n近5日收益率: {rets.tail(5).sum()*100:.2f}%")
-    print(f"近20日收益率: {rets.tail(20).sum()*100:.2f}%")
-    print(f"近60日收益率: {rets.tail(60).sum()*100:.2f}%")
+    print(f"\n近5日收益率: {rets.tail(5).sum() * 100:.2f}%")
+    print(f"近20日收益率: {rets.tail(20).sum() * 100:.2f}%")
+    print(f"近60日收益率: {rets.tail(60).sum() * 100:.2f}%")
 
     # 波动率
     vol_20 = rets.tail(20).std() * np.sqrt(252) * 100
@@ -35,13 +35,17 @@ def main():
     ma120 = close.rolling(120).mean()
     last = close.iloc[-1]
     print(f"\n价格 vs MA20: {'↑' if last > ma20.iloc[-1] else '↓'}  (价={last:.0f}, MA20={ma20.iloc[-1]:.0f})")
-    print(f"MA20 vs MA60: {'↑' if ma20.iloc[-1] > ma60.iloc[-1] else '↓'}  (MA20={ma20.iloc[-1]:.0f}, MA60={ma60.iloc[-1]:.0f})")
-    print(f"MA60 vs MA120: {'↑' if ma60.iloc[-1] > ma120.iloc[-1] else '↓'}  (MA60={ma60.iloc[-1]:.0f}, MA120={ma120.iloc[-1]:.0f})")
+    print(
+        f"MA20 vs MA60: {'↑' if ma20.iloc[-1] > ma60.iloc[-1] else '↓'}  (MA20={ma20.iloc[-1]:.0f}, MA60={ma60.iloc[-1]:.0f})"
+    )
+    print(
+        f"MA60 vs MA120: {'↑' if ma60.iloc[-1] > ma120.iloc[-1] else '↓'}  (MA60={ma60.iloc[-1]:.0f}, MA120={ma120.iloc[-1]:.0f})"
+    )
 
     # 最大回撤
     peak = close.expanding().max()
     dd = (close - peak) / peak
-    print(f"\n近60日最大回撤: {dd.tail(60).min()*100:.2f}%")
+    print(f"\n近60日最大回撤: {dd.tail(60).min() * 100:.2f}%")
 
     # 多周期趋势投票
     trend_up_count = 0
@@ -79,25 +83,27 @@ def main():
         regime_en = "oscillate"
         note = "方向不明确，谨慎交易"
 
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"  当前市场制度: {regime}")
     print(f"  趋势投票: {trend_up_count}/3 周期看多")
     print(f"  波动水平: {vol_level} ({vol_20:.1f}%)")
     print(f"  对 bias 因子建议: {note}")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
 
     # 对 fut_bias 因子的具体分析
-    print(f"\n--- bias 因子适配性分析 ---")
-    print(f"  当前价格 vs MA60: {last:.0f} vs {ma60.iloc[-1]:.0f} -> {'价格在上方' if last > ma60.iloc[-1] else '价格在下方'}")
-    print(f"  偏度: 乖离率 = {(last/ma20.iloc[-1]-1)*100:.2f}%")
+    print("\n--- bias 因子适配性分析 ---")
+    print(
+        f"  当前价格 vs MA60: {last:.0f} vs {ma60.iloc[-1]:.0f} -> {'价格在上方' if last > ma60.iloc[-1] else '价格在下方'}"
+    )
+    print(f"  偏度: 乖离率 = {(last / ma20.iloc[-1] - 1) * 100:.2f}%")
     if regime_en == "bull":
-        print(f"  ✅ 当前市场适合 bias 因子: 趋势向上，乖离率正常")
+        print("  ✅ 当前市场适合 bias 因子: 趋势向上，乖离率正常")
     elif regime_en == "oscillate":
-        print(f"  ❌ 当前市场不适合 bias 因子: 震荡市中 bias 频繁反转")
+        print("  ❌ 当前市场不适合 bias 因子: 震荡市中 bias 频繁反转")
     elif regime_en == "bear":
-        print(f"  ❌ 当前市场不适合 bias 因子: 下跌趋势，做多信号被压制")
+        print("  ❌ 当前市场不适合 bias 因子: 下跌趋势，做多信号被压制")
     else:
-        print(f"  ⚠️ 当前市场需谨慎: 高波动环境下 bias 信号可靠性下降")
+        print("  ⚠️ 当前市场需谨慎: 高波动环境下 bias 信号可靠性下降")
 
 
 if __name__ == "__main__":

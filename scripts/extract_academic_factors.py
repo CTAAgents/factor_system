@@ -18,8 +18,6 @@ scripts/extract_academic_factors.py — 学术论文因子提取器
 
 from __future__ import annotations
 
-import os
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -91,12 +89,7 @@ def _family(name: str, factors: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _make_code(body: str) -> str:
-    return (
-        "\n"
-        "    def factor_program(data, params):\n"
-        "        import numpy as np\n"
-        f"{body}\n"
-    )
+    return f"\n    def factor_program(data, params):\n        import numpy as np\n{body}\n"
 
 
 class LiteralBlock(str):
@@ -144,7 +137,10 @@ def _build_tsmom_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=5, behavioral=3, microstructure=3, institutional=4,
+                theory=5,
+                behavioral=3,
+                microstructure=3,
+                institutional=4,
                 narrative="波动率缩放时序动量：将原始TSMOM收益用滚动波动率缩放，使每个品种贡献相同风险。Moskowitz(2012)核心贡献。",
             ),
         ),
@@ -176,7 +172,10 @@ def _build_tsmom_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=5, behavioral=3, microstructure=3, institutional=4,
+                theory=5,
+                behavioral=3,
+                microstructure=3,
+                institutional=4,
                 narrative="多周期趋势信号：综合多个回看期的趋势信号（12/6/3个月），信号越强趋势越确定。",
             ),
         ),
@@ -213,7 +212,10 @@ def _build_carry_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=5, behavioral=3, microstructure=4, institutional=3,
+                theory=5,
+                behavioral=3,
+                microstructure=4,
+                institutional=3,
                 narrative="跨品种相对carry：基于展期收益的截面排序，做多高carry品种做空低carry品种。Koijen(2018)跨资产carry。",
             ),
         ),
@@ -244,7 +246,10 @@ def _build_carry_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=5, behavioral=3, microstructure=4, institutional=3,
+                theory=5,
+                behavioral=3,
+                microstructure=4,
+                institutional=3,
                 narrative="经波动率调整的carry：用波动率缩放carry信号，高波动时降低仓位。Koijen(2018)风险平价carry。",
             ),
         ),
@@ -279,7 +284,10 @@ def _build_fundamental_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=5, behavioral=2, microstructure=3, institutional=4,
+                theory=5,
+                behavioral=2,
+                microstructure=3,
+                institutional=4,
                 narrative="库存变化率：库存的月度变化率。库存下降=供应紧张=做多。Gorton(2013)证明库存是期货收益的核心预测变量。",
             ),
         ),
@@ -314,7 +322,10 @@ def _build_fundamental_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=5, behavioral=2, microstructure=3, institutional=4,
+                theory=5,
+                behavioral=2,
+                microstructure=3,
+                institutional=4,
                 narrative="基差-库存联合因子：结合基差和库存信号的联合因子。基差走强+库存下降=最强做多信号。",
             ),
         ),
@@ -330,9 +341,7 @@ def main():
     parser = argparse.ArgumentParser(description="学术论文因子提取器")
     parser.add_argument("--list-papers", action="store_true", help="列出支持的学术论文")
     parser.add_argument("--output", type=str, default=None, help="输出 YAML 文件路径")
-    parser.add_argument("--families", type=str, nargs="+",
-                        default=["tsmom", "carry", "fundamental"],
-                        help="因子家族")
+    parser.add_argument("--families", type=str, nargs="+", default=["tsmom", "carry", "fundamental"], help="因子家族")
     args = parser.parse_args()
 
     if args.list_papers:

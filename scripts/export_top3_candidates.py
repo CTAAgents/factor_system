@@ -17,12 +17,7 @@ from fts.factor_engine.extractors.futures_pipeline import (
 
 def calc_total_score(candidate):
     el = candidate.get("economic_logic", {})
-    return (
-        el.get("theory", 0)
-        + el.get("behavioral", 0)
-        + el.get("microstructure", 0)
-        + el.get("institutional", 0)
-    )
+    return el.get("theory", 0) + el.get("behavioral", 0) + el.get("microstructure", 0) + el.get("institutional", 0)
 
 
 def main():
@@ -57,10 +52,12 @@ def main():
         source = c.get("source", "?")
 
         print(f"\n{'─' * 70}")
-        print(f"第 {i+1} 名: {name}  (总分: {score})")
+        print(f"第 {i + 1} 名: {name}  (总分: {score})")
         print(f"  来源: {source}")
-        print(f"  评分: theory={el.get('theory')}, behavioral={el.get('behavioral')}, "
-              f"microstructure={el.get('microstructure')}, institutional={el.get('institutional')}")
+        print(
+            f"  评分: theory={el.get('theory')}, behavioral={el.get('behavioral')}, "
+            f"microstructure={el.get('microstructure')}, institutional={el.get('institutional')}"
+        )
         print(f"  narrative: {el.get('narrative', '')}")
         print(f"  params: {json.dumps(c.get('params', {}), ensure_ascii=False)}")
         sig = c.get("signature", {})
@@ -79,7 +76,7 @@ def main():
             "signature": sig,
             "code": c.get("code", ""),
         }
-        filepath = output_dir / f"{i+1:02d}_{name}.json"
+        filepath = output_dir / f"{i + 1:02d}_{name}.json"
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(export, f, ensure_ascii=False, indent=2)
         print(f"  → 已导出: {filepath}")

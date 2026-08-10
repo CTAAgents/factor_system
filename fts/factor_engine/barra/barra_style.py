@@ -80,7 +80,9 @@ STYLE_SPECS: dict[str, StyleFactorSpec] = {
     "beta": StyleFactorSpec("beta", ("close",), "市场贝塔（与市场等权收益的回归系数）"),
     "momentum": StyleFactorSpec("momentum", ("close",), "12-1 月动量（剔除最近 1 月）"),
     "residual_vol": StyleFactorSpec("residual_vol", ("close",), "残差波动率（日收益对市场回归的残差波动）"),
-    "nonlinear_size": StyleFactorSpec("nonlinear_size", ("total_market_cap",), "非线性市值（size 三次项对 size 回归残差）"),
+    "nonlinear_size": StyleFactorSpec(
+        "nonlinear_size", ("total_market_cap",), "非线性市值（size 三次项对 size 回归残差）"
+    ),
     "book_to_price": StyleFactorSpec("book_to_price", ("pb",), "账面市值比（1/PB）"),
     "liquidity": StyleFactorSpec("liquidity", ("turnover_rate",), "流动性（换手率对数）"),
     "earnings_yield": StyleFactorSpec("earnings_yield", ("pe_ttm", "roe"), "盈利收益率（1/PE 与 ROE 合成）"),
@@ -181,7 +183,7 @@ def _compute_book_to_price(df: pd.DataFrame) -> pd.Series:
     if "pb" not in df.columns:
         return pd.Series(np.nan, index=df.index)
     pb = pd.to_numeric(df["pb"], errors="coerce")
-    return (1.0 / pb.replace(0, np.nan))
+    return 1.0 / pb.replace(0, np.nan)
 
 
 def _compute_liquidity(df: pd.DataFrame) -> pd.Series:
@@ -247,6 +249,7 @@ _MARKET_DEPENDENT_STYLES: frozenset[str] = frozenset({"beta", "residual_vol"})
 
 # ─── 截面标准化 ───────────────────────────────────────────
 
+
 def _cross_section_zscore(
     exposure: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -287,7 +290,7 @@ def _nonlinear_size_from_size(size_df: pd.DataFrame) -> pd.DataFrame:
         if n_valid < 10:
             continue
         x = row[valid]
-        y = x ** 3.0
+        y = x**3.0
         try:
             coef = np.polyfit(x, y, 1)
             resid = y - np.polyval(coef, x)
@@ -298,6 +301,7 @@ def _nonlinear_size_from_size(size_df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ─── 引擎 ─────────────────────────────────────────────────
+
 
 class BarraStyleEngine:
     """Barra 风格暴露计算引擎。

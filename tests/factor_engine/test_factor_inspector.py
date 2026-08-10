@@ -45,16 +45,18 @@ def inspector(repo):
 
 def _create_elite_factor(repo, factor_id, sharpe=1.0):
     """创建一个精英因子。"""
-    return repo.create_factor({
-        "factor_id": factor_id,
-        "name": f"Factor {factor_id}",
-        "code": "close",
-        "family": "test",
-        "market": "stock",
-        "is_elite": True,
-        "status": "active",
-        "sharpe": sharpe,
-    })
+    return repo.create_factor(
+        {
+            "factor_id": factor_id,
+            "name": f"Factor {factor_id}",
+            "code": "close",
+            "family": "test",
+            "market": "stock",
+            "is_elite": True,
+            "status": "active",
+            "sharpe": sharpe,
+        }
+    )
 
 
 def _add_evaluations(repo, factor_id, sharpe_values, ic=0.05):
@@ -71,20 +73,23 @@ def _add_evaluations(repo, factor_id, sharpe_values, ic=0.05):
     for i, sharpe in enumerate(sharpe_values):
         # 最新值 (i=0) 使用最新日期，最旧值使用最早日期
         eval_date = base_date - timedelta(days=(n - 1 - i) * 30)
-        repo._get_conn().execute("""
+        repo._get_conn().execute(
+            """
             INSERT INTO factor_evaluations (
                 eval_id, factor_id,
                 level_1_sharpe, level_1_ic, level_1_icir,
                 evaluated_at
             ) VALUES (?, ?, ?, ?, ?, ?)
-        """, [
-            f"eval_{uuid.uuid4().hex[:8]}",
-            factor_id,
-            sharpe,
-            ic,
-            ic * 2 if ic > 0 else ic,
-            eval_date.strftime("%Y-%m-%d %H:%M:%S"),
-        ])
+        """,
+            [
+                f"eval_{uuid.uuid4().hex[:8]}",
+                factor_id,
+                sharpe,
+                ic,
+                ic * 2 if ic > 0 else ic,
+                eval_date.strftime("%Y-%m-%d %H:%M:%S"),
+            ],
+        )
 
 
 # ─── 初始化 ──────────────────────────────────────────────
@@ -148,7 +153,7 @@ class TestInspectionAndDowngrade:
         fid = _create_elite_factor(repo, "f_test", sharpe=0.5)
         _add_evaluations(repo, fid, sharpe_values=[0.5, 0.3])
 
-        result = inspector.inspect_and_downgrade(threshold=-0.1, commit=False)
+        inspector.inspect_and_downgrade(threshold=-0.1, commit=False)
 
         # 确认状态未变
         factor = repo.get_factor(fid)

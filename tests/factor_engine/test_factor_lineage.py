@@ -12,10 +12,6 @@
 
 from __future__ import annotations
 
-import json
-import uuid
-from datetime import datetime, timedelta
-from pathlib import Path
 
 import pytest
 
@@ -23,12 +19,12 @@ from fts.factor_engine.factor_db import (
     FactorLineage,
     FactorRepository,
     init_database,
-    verify_database,
 )
 from fts.factor_engine.factor_db.schema import get_connection
 
 
 # ─=== Fixtures ──────────────────────────────────────────
+
 
 @pytest.fixture
 def test_db_path(tmp_path):
@@ -52,32 +48,36 @@ def lineage(repo):
 @pytest.fixture
 def sample_factor(repo):
     """创建示例因子。"""
-    factor_id = repo.create_factor({
-        "name": "test_momentum_factor",
-        "code": "def factor_program(data, params):\\n    return data['close']",
-        "family": "momentum",
-        "market": "futures",
-        "source": "seed",
-        "sharpe": 1.5,
-        "ic": 0.05,
-    })
+    factor_id = repo.create_factor(
+        {
+            "name": "test_momentum_factor",
+            "code": "def factor_program(data, params):\\n    return data['close']",
+            "family": "momentum",
+            "market": "futures",
+            "source": "seed",
+            "sharpe": 1.5,
+            "ic": 0.05,
+        }
+    )
     return factor_id
 
 
 @pytest.fixture
 def evolved_factor(repo, sample_factor):
     """创建演化因子（含 parent_id）。"""
-    factor_id = repo.create_factor({
-        "name": "evolved_momentum_v1",
-        "code": "def factor_program(data, params):\\n    return data['close'] * 1.1",
-        "family": "momentum",
-        "market": "futures",
-        "source": "evolved",
-        "parent_id": sample_factor,
-        "generation": 1,
-        "sharpe": 2.0,
-        "ic": 0.06,
-    })
+    factor_id = repo.create_factor(
+        {
+            "name": "evolved_momentum_v1",
+            "code": "def factor_program(data, params):\\n    return data['close'] * 1.1",
+            "family": "momentum",
+            "market": "futures",
+            "source": "evolved",
+            "parent_id": sample_factor,
+            "generation": 1,
+            "sharpe": 2.0,
+            "ic": 0.06,
+        }
+    )
     return factor_id
 
 
@@ -85,45 +85,54 @@ def evolved_factor(repo, sample_factor):
 def with_evaluations(repo, sample_factor):
     """为因子添加评估记录。"""
     for i in range(5):
-        repo.add_evaluation(sample_factor, {
-            "sharpe": 1.0 + i * 0.1,
-            "ic": 0.04 + i * 0.005,
-            "icir": 1.2 + i * 0.1,
-            "max_drawdown": 0.05 + i * 0.01,
-            "turnover": 0.5,
-            "overall_passed": i >= 2,
-        })
+        repo.add_evaluation(
+            sample_factor,
+            {
+                "sharpe": 1.0 + i * 0.1,
+                "ic": 0.04 + i * 0.005,
+                "icir": 1.2 + i * 0.1,
+                "max_drawdown": 0.05 + i * 0.01,
+                "turnover": 0.5,
+                "overall_passed": i >= 2,
+            },
+        )
     return sample_factor
 
 
 @pytest.fixture
 def declining_factor(repo):
     """创建质量退化的因子。"""
-    factor_id = repo.create_factor({
-        "name": "declining_factor",
-        "code": "def factor_program(data, params):\\n    return data['open']",
-        "family": "mean_reversion",
-        "market": "futures",
-        "source": "evolved",
-        "sharpe": 1.0,
-        "ic": 0.04,
-        "is_elite": True,
-    })
+    factor_id = repo.create_factor(
+        {
+            "name": "declining_factor",
+            "code": "def factor_program(data, params):\\n    return data['open']",
+            "family": "mean_reversion",
+            "market": "futures",
+            "source": "evolved",
+            "sharpe": 1.0,
+            "ic": 0.04,
+            "is_elite": True,
+        }
+    )
     # 添加先好后差的评估
     for i in range(10):
         sharpe = 2.0 - i * 0.3
-        repo.add_evaluation(factor_id, {
-            "sharpe": sharpe,
-            "ic": 0.05 - i * 0.003,
-            "icir": 1.5 - i * 0.15,
-            "max_drawdown": 0.05 + i * 0.02,
-            "turnover": 0.5,
-            "overall_passed": sharpe > 0.5,
-        })
+        repo.add_evaluation(
+            factor_id,
+            {
+                "sharpe": sharpe,
+                "ic": 0.05 - i * 0.003,
+                "icir": 1.5 - i * 0.15,
+                "max_drawdown": 0.05 + i * 0.02,
+                "turnover": 0.5,
+                "overall_passed": sharpe > 0.5,
+            },
+        )
     return factor_id
 
 
 # ─=== 基础测试 ──────────────────────────────────────────
+
 
 class TestFactorLineageInit:
     """FactorLineage 初始化测试。"""
@@ -139,6 +148,7 @@ class TestFactorLineageInit:
 
 
 # ─=== 演化谱系测试 ──────────────────────────────────
+
 
 class TestEvolutionLineage:
     """演化谱系查询测试。"""
@@ -180,6 +190,7 @@ class TestEvolutionLineage:
 
 # ─=== 评估趋势测试 ──────────────────────────────────
 
+
 class TestEvaluationTrend:
     """评估历史追溯测试。"""
 
@@ -211,6 +222,7 @@ class TestEvaluationTrend:
 
 # ─=== 质量退化检测测试 ──────────────────────────────────
 
+
 class TestDegradationDetection:
     """质量退化检测测试。"""
 
@@ -236,6 +248,7 @@ class TestDegradationDetection:
 
 # ─=== 血缘报告测试 ──────────────────────────────────
 
+
 class TestLineageReport:
     """血缘报告生成测试。"""
 
@@ -247,15 +260,11 @@ class TestLineageReport:
         assert "recommendations" in report
 
     def test_report_includes_versions(self, lineage, with_evaluations):
-        report = lineage.generate_lineage_report(
-            with_evaluations, include_versions=True
-        )
+        report = lineage.generate_lineage_report(with_evaluations, include_versions=True)
         assert "version_history" in report
 
     def test_report_excludes_versions(self, lineage, with_evaluations):
-        report = lineage.generate_lineage_report(
-            with_evaluations, include_versions=False
-        )
+        report = lineage.generate_lineage_report(with_evaluations, include_versions=False)
         assert "version_history" not in report
 
     def test_report_recommendations(self, lineage, declining_factor):
@@ -266,30 +275,36 @@ class TestLineageReport:
 
 # ─=== 批量审计测试 ──────────────────────────────────
 
+
 class TestBatchAudit:
     """批量血缘审计测试。"""
 
     def test_batch_audit(self, lineage, repo):
         for i in range(5):
-            fid = repo.create_factor({
-                "name": f"batch_factor_{i}",
-                "code": f"def factor_program(data, params):\\n    return data['close'] * {i}",
-                "family": "momentum",
-                "market": "futures",
-                "source": "seed",
-                "sharpe": 1.0 + i * 0.2,
-                "ic": 0.04 + i * 0.005,
-                "is_elite": True,
-            })
+            fid = repo.create_factor(
+                {
+                    "name": f"batch_factor_{i}",
+                    "code": f"def factor_program(data, params):\\n    return data['close'] * {i}",
+                    "family": "momentum",
+                    "market": "futures",
+                    "source": "seed",
+                    "sharpe": 1.0 + i * 0.2,
+                    "ic": 0.04 + i * 0.005,
+                    "is_elite": True,
+                }
+            )
             for j in range(6):
-                repo.add_evaluation(fid, {
-                    "sharpe": 0.5 + j * 0.2,
-                    "ic": 0.03 + j * 0.005,
-                    "icir": 1.0,
-                    "max_drawdown": 0.05,
-                    "turnover": 0.5,
-                    "overall_passed": True,
-                })
+                repo.add_evaluation(
+                    fid,
+                    {
+                        "sharpe": 0.5 + j * 0.2,
+                        "ic": 0.03 + j * 0.005,
+                        "icir": 1.0,
+                        "max_drawdown": 0.05,
+                        "turnover": 0.5,
+                        "overall_passed": True,
+                    },
+                )
 
         result = lineage.batch_audit(market="futures", min_evals=5)
         assert result["audit_type"] == "batch_lineage_audit"
@@ -305,27 +320,33 @@ class TestBatchAudit:
         assert len(result["results"]) >= 1
 
     def test_batch_audit_summary(self, lineage, repo):
-        fid = repo.create_factor({
-            "name": "summary_test",
-            "code": "def factor_program(data, params):\\n    return data['close']",
-            "family": "test",
-            "market": "futures",
-            "sharpe": 1.0,
-            "ic": 0.04,
-            "is_elite": True,
-        })
-        for _ in range(6):
-            repo.add_evaluation(fid, {
+        fid = repo.create_factor(
+            {
+                "name": "summary_test",
+                "code": "def factor_program(data, params):\\n    return data['close']",
+                "family": "test",
+                "market": "futures",
                 "sharpe": 1.0,
                 "ic": 0.04,
-                "overall_passed": True,
-            })
+                "is_elite": True,
+            }
+        )
+        for _ in range(6):
+            repo.add_evaluation(
+                fid,
+                {
+                    "sharpe": 1.0,
+                    "ic": 0.04,
+                    "overall_passed": True,
+                },
+            )
 
         result = lineage.batch_audit(market="futures", min_evals=5)
         assert isinstance(result["degradation_rate"], float)
 
 
 # ─=== 边界条件测试 ──────────────────────────────────
+
 
 class TestEdgeCases:
     """边界条件测试。"""
@@ -338,21 +359,25 @@ class TestEdgeCases:
     def test_circular_lineage_protection(self, repo, test_db_path):
         init_database(test_db_path)
         r2 = FactorRepository(test_db_path)
-        fid1 = r2.create_factor({
-            "name": "circle_1",
-            "code": "def f(d, p): return d['x']",
-            "family": "test",
-            "market": "stock",
-            "source": "evolved",
-        })
-        fid2 = r2.create_factor({
-            "name": "circle_2",
-            "code": "def f(d, p): return d['x'] * 2",
-            "family": "test",
-            "market": "stock",
-            "source": "evolved",
-            "parent_id": fid1,
-        })
+        fid1 = r2.create_factor(
+            {
+                "name": "circle_1",
+                "code": "def f(d, p): return d['x']",
+                "family": "test",
+                "market": "stock",
+                "source": "evolved",
+            }
+        )
+        fid2 = r2.create_factor(
+            {
+                "name": "circle_2",
+                "code": "def f(d, p): return d['x'] * 2",
+                "family": "test",
+                "market": "stock",
+                "source": "evolved",
+                "parent_id": fid1,
+            }
+        )
         # Create circular reference manually
         conn = get_connection(test_db_path)
         conn.execute(

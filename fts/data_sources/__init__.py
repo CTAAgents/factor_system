@@ -23,8 +23,14 @@ from fts.data_sources.tqsdk_tick_source import TQSDKTickSource
 from fts.data_sources.wind_source import WindSource
 
 __all__ = [
-    "BaseFuturesSource", "SourceUnavailable",
-    "migrate_schema", "TQLocalSource", "TQSDKSource", "TQSDKTickSource",
-    "WindSource", "IFindSource",
-    "FuturesDataAggregator", "TDXMinuteSource",
+    "BaseFuturesSource",
+    "SourceUnavailable",
+    "migrate_schema",
+    "TQLocalSource",
+    "TQSDKSource",
+    "TQSDKTickSource",
+    "WindSource",
+    "IFindSource",
+    "FuturesDataAggregator",
+    "TDXMinuteSource",
 ]

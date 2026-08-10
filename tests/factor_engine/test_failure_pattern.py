@@ -9,8 +9,6 @@ tests/factor_engine/test_failure_pattern.py — 失败模式聚类测试
 
 from __future__ import annotations
 
-import json
-from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -25,6 +23,7 @@ from fts.factor_engine.contracts import ExperienceTrace, FactorEvaluation
 
 
 # ─── Fixtures ──────────────────────────────────────────────
+
 
 @pytest.fixture
 def temp_chain(tmp_path: Path) -> ExperienceChain:
@@ -64,6 +63,7 @@ def _create_failure_trace(
 
 
 # ─── 分类测试 ──────────────────────────────────────────────
+
 
 class TestClassifyReason:
     """失败原因分类测试。"""
@@ -134,6 +134,7 @@ class TestClassifyReason:
 
 # ─── 分析测试 ──────────────────────────────────────────────
 
+
 class TestAnalyze:
     """失败模式分析测试。"""
 
@@ -182,8 +183,9 @@ class TestAnalyze:
         """应限制分析最近 N 条轨迹。"""
         for i in range(30):
             trace = _create_failure_trace(
-                f"fct_{i:03d}", ["IC=0.01 过低"],
-                recorded_at=f"2024-01-{min(i+1, 31):02d}T00:00:00",
+                f"fct_{i:03d}",
+                ["IC=0.01 过低"],
+                recorded_at=f"2024-01-{min(i + 1, 31):02d}T00:00:00",
             )
             temp_chain.record_failure(trace)
 
@@ -193,6 +195,7 @@ class TestAnalyze:
 
 
 # ─── 格式化测试 ────────────────────────────────────────────
+
 
 class TestFormatForLLM:
     """LLM prompt 格式化测试。"""
@@ -227,6 +230,7 @@ class TestFormatForLLM:
 
 
 # ─── 关键词映射完整性测试 ──────────────────────────────────
+
 
 class TestKeywordMapping:
     """关键词映射完整性测试。"""

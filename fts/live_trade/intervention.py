@@ -26,10 +26,10 @@ logger = logging.getLogger(__name__)
 class InterventionState(str, Enum):
     """干预状态。"""
 
-    NORMAL = "NORMAL"            # 正常自动交易
-    PAUSED = "PAUSED"            # 紧急暂停（拦截新信号）
-    FLATTENING = "FLATTENING"    # 一键平仓执行中
-    FLATTENED = "FLATTENED"      # 已全仓平仓（等待人工恢复）
+    NORMAL = "NORMAL"  # 正常自动交易
+    PAUSED = "PAUSED"  # 紧急暂停（拦截新信号）
+    FLATTENING = "FLATTENING"  # 一键平仓执行中
+    FLATTENED = "FLATTENED"  # 已全仓平仓（等待人工恢复）
 
 
 @dataclass
@@ -39,9 +39,7 @@ class InterventionRecord:
     action: str  # pause | resume | all_close
     operator: str  # 操作人（人工）
     state: InterventionState
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     note: str = ""
 
 
@@ -49,14 +47,10 @@ class InterventionRecord:
 class AllCloseInstruction:
     """一键平仓指令（覆盖全部持仓）。"""
 
-    instruction_id: str = field(
-        default_factory=lambda: f"ac_{uuid.uuid4().hex[:12]}"
-    )
+    instruction_id: str = field(default_factory=lambda: f"ac_{uuid.uuid4().hex[:12]}")
     scope: str = "all"  # 全仓
     reason: str = "manual all-close intervention"
-    generated_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    generated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class InterventionController:
@@ -80,7 +74,10 @@ class InterventionController:
     def pause(self, operator: str = "manual", note: str = "") -> InterventionRecord:
         """紧急暂停：拦截一切新信号下单。"""
         record = InterventionRecord(
-            action="pause", operator=operator, state=InterventionState.PAUSED, note=note,
+            action="pause",
+            operator=operator,
+            state=InterventionState.PAUSED,
+            note=note,
         )
         self._state = InterventionState.PAUSED
         self._history.append(record)
@@ -90,7 +87,10 @@ class InterventionController:
     def resume(self, operator: str = "manual", note: str = "") -> InterventionRecord:
         """恢复自动交易。"""
         record = InterventionRecord(
-            action="resume", operator=operator, state=InterventionState.NORMAL, note=note,
+            action="resume",
+            operator=operator,
+            state=InterventionState.NORMAL,
+            note=note,
         )
         self._state = InterventionState.NORMAL
         self._history.append(record)
@@ -106,8 +106,10 @@ class InterventionController:
             (干预记录, 全仓平仓指令)
         """
         record = InterventionRecord(
-            action="all_close", operator=operator,
-            state=InterventionState.FLATTENING, note=note,
+            action="all_close",
+            operator=operator,
+            state=InterventionState.FLATTENING,
+            note=note,
         )
         self._state = InterventionState.FLATTENING
         self._history.append(record)
@@ -117,9 +119,13 @@ class InterventionController:
     def mark_flattened(self, operator: str = "manual") -> None:
         """标记全仓平仓完成（状态 → FLATTENED，仍拦截新信号直至人工恢复）。"""
         self._state = InterventionState.FLATTENED
-        self._history.append(InterventionRecord(
-            action="flattened", operator=operator, state=InterventionState.FLATTENED,
-        ))
+        self._history.append(
+            InterventionRecord(
+                action="flattened",
+                operator=operator,
+                state=InterventionState.FLATTENED,
+            )
+        )
         logger.warning("[Intervention] 全仓平仓完成，等待人工恢复 [operator=%s]", operator)
 
     def should_block(self) -> bool:

@@ -14,9 +14,8 @@ HARNESS §5.4: 测试随重构。覆盖 5 个端到端场景:
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -42,18 +41,20 @@ def _make_kline_df(
     """构造一个简单的 K 线 DataFrame。"""
     rows = []
     for i, c in enumerate(closes):
-        rows.append({
-            "symbol": "RB0",
-            "date": base_date + timedelta(days=i),
-            "open": c + open_off,
-            "high": c + high_off,
-            "low": c + low_off,
-            "close": c,
-            "volume": volume,
-            "amount": c * volume * 1.0,
-            "settle": c,
-            "source": source,
-        })
+        rows.append(
+            {
+                "symbol": "RB0",
+                "date": base_date + timedelta(days=i),
+                "open": c + open_off,
+                "high": c + high_off,
+                "low": c + low_off,
+                "close": c,
+                "volume": volume,
+                "amount": c * volume * 1.0,
+                "settle": c,
+                "source": source,
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -79,7 +80,7 @@ def scenario_1_passthrough() -> bool:
     if result.iloc[0]["contributing_sources"] != ["TQ_LOCAL"]:
         print(f"       ❌ 期望 sources=[TQ_LOCAL]，实际 {result.iloc[0]['contributing_sources']}")
         return False
-    print(f"       ✅ 单源透传 2 行，strategy=PASSTHROUGH，close=3500.0")
+    print("       ✅ 单源透传 2 行，strategy=PASSTHROUGH，close=3500.0")
     return True
 
 
@@ -120,9 +121,7 @@ def scenario_3_weighted_default() -> bool:
     df_tq = _make_kline_df([3500.0], base, "TQ_LOCAL")
     df_wind = _make_kline_df([3510.0], base, "WIND")
     fuser = OHLCVFusion(strategy=FusionStrategy.WEIGHTED)
-    result = fuser.fuse_dataframe(
-        "RB0", {"TQ_LOCAL": df_tq, "WIND": df_wind}, trace_id="v-3"
-    )
+    result = fuser.fuse_dataframe("RB0", {"TQ_LOCAL": df_tq, "WIND": df_wind}, trace_id="v-3")
     if len(result) != 1:
         print(f"       ❌ 期望 1 行，实际 {len(result)}")
         return False
@@ -147,26 +146,22 @@ def scenario_4_hierarchical() -> bool:
     df_akshare = _make_kline_df([3500.0], base, "AKSHARE")
     df_wind = _make_kline_df([3500.5], base, "WIND")
     fuser = OHLCVFusion(strategy=FusionStrategy.HIERARCHICAL)
-    result_aligned = fuser.fuse_dataframe(
-        "RB0", {"AKSHARE": df_akshare, "WIND": df_wind}, trace_id="v-4a"
-    )
+    result_aligned = fuser.fuse_dataframe("RB0", {"AKSHARE": df_akshare, "WIND": df_wind}, trace_id="v-4a")
     if abs(result_aligned.iloc[0]["close"] - 3500.0) > 0.01:
         print(f"       ❌ 对齐场景: 期望 close=3500.0，实际 {result_aligned.iloc[0]['close']}")
         return False
-    print(f"       ✅ 对齐场景: 保留主源 close=3500.0（偏离 < 阈值）")
+    print("       ✅ 对齐场景: 保留主源 close=3500.0（偏离 < 阈值）")
 
     # 主源异常场景: AKSHARE close=3000，WIND close=3500
     df_akshare_bad = _make_kline_df([3000.0], base, "AKSHARE")
     df_wind_good = _make_kline_df([3500.0], base, "WIND")
-    result_outlier = fuser.fuse_dataframe(
-        "RB0", {"AKSHARE": df_akshare_bad, "WIND": df_wind_good}, trace_id="v-4b"
-    )
+    result_outlier = fuser.fuse_dataframe("RB0", {"AKSHARE": df_akshare_bad, "WIND": df_wind_good}, trace_id="v-4b")
     fused_close = result_outlier.iloc[0]["close"]
     # 中位数 = 3250，主源 3000 偏离 7.7% > 0.5% → 降级到中位数
     if abs(fused_close - 3250.0) > 0.01:
         print(f"       ❌ 异常场景: 期望 close=3250.0（中位数），实际 {fused_close}")
         return False
-    print(f"       ✅ 异常场景: 降级到中位数 close=3250.0（主源偏离 > 阈值）")
+    print("       ✅ 异常场景: 降级到中位数 close=3250.0（主源偏离 > 阈值）")
     return True
 
 
@@ -183,8 +178,10 @@ def scenario_5_trimmed_mean() -> bool:
     result = fuser.fuse_dataframe(
         "RB0",
         {
-            "TQ_LOCAL": df_tq, "WIND": df_wind,
-            "IFIND": df_ifind, "AKSHARE": df_akshare,
+            "TQ_LOCAL": df_tq,
+            "WIND": df_wind,
+            "IFIND": df_ifind,
+            "AKSHARE": df_akshare,
         },
         trace_id="v-5",
     )
@@ -195,7 +192,7 @@ def scenario_5_trimmed_mean() -> bool:
     if abs(fused_close - 3502.0) > 0.01:
         print(f"       ❌ 期望 close=3502.0（去极值均值），实际 {fused_close}")
         return False
-    print(f"       ✅ 去极值均值 close=3502.0（去掉 3500 与 4000）")
+    print("       ✅ 去极值均值 close=3502.0（去掉 3500 与 4000）")
     return True
 
 

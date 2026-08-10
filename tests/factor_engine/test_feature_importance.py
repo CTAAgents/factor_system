@@ -17,13 +17,15 @@ def sample_data() -> pd.DataFrame:
     """合成测试数据。"""
     np.random.seed(42)
     n = 200
-    return pd.DataFrame({
-        "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
-        "high": 105 + np.cumsum(np.random.randn(n) * 0.5),
-        "low": 95 + np.cumsum(np.random.randn(n) * 0.5),
-        "volume": np.random.randint(1000, 10000, n).astype(float),
-        "forward_return_20d": np.random.randn(n) * 0.02,
-    })
+    return pd.DataFrame(
+        {
+            "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
+            "high": 105 + np.cumsum(np.random.randn(n) * 0.5),
+            "low": 95 + np.cumsum(np.random.randn(n) * 0.5),
+            "volume": np.random.randint(1000, 10000, n).astype(float),
+            "forward_return_20d": np.random.randn(n) * 0.02,
+        }
+    )
 
 
 @pytest.fixture
@@ -78,10 +80,12 @@ class TestFeatureImportanceAnalyzer:
 
     def test_analyze_small_data(self):
         """测试小数据集。"""
-        small_data = pd.DataFrame({
-            "close": [100.0, 101.0, 102.0, 103.0, 104.0],
-            "forward_return_20d": [0.01, -0.01, 0.02, -0.02, 0.01],
-        })
+        small_data = pd.DataFrame(
+            {
+                "close": [100.0, 101.0, 102.0, 103.0, 104.0],
+                "forward_return_20d": [0.01, -0.01, 0.02, -0.02, 0.01],
+            }
+        )
         factor = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0])
         analyzer = FeatureImportanceAnalyzer()
         result = analyzer.analyze(

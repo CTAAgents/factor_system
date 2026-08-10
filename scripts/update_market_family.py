@@ -30,6 +30,7 @@
   - size_*    → size
   - basis_*   → basis
 """
+
 from __future__ import annotations
 
 import logging
@@ -106,9 +107,7 @@ def main():
     conn = duckdb.connect(str(DB_PATH))
 
     # 获取所有因子
-    factors = conn.execute(
-        "SELECT factor_id, name, market, family FROM factor_catalog"
-    ).fetchall()
+    factors = conn.execute("SELECT factor_id, name, market, family FROM factor_catalog").fetchall()
 
     logger.info("共 %d 个因子待更新\n", len(factors))
 
@@ -140,9 +139,7 @@ def main():
             stats["family_changed"] += 1
 
         # family 统计
-        stats["family_counts"][new_family] = (
-            stats["family_counts"].get(new_family, 0) + 1
-        )
+        stats["family_counts"][new_family] = stats["family_counts"].get(new_family, 0) + 1
 
         updates.append((new_market, new_family, factor_id))
 

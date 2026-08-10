@@ -11,10 +11,6 @@
 8. schema 4 张反馈表
 """
 
-import json
-
-import pytest
-
 from fts.factor_engine.feedback_loop import (
     AttributionAnalyzer,
     EvolutionDirectionAdjuster,
@@ -41,8 +37,7 @@ def _live_monitor_with_deviation(ic_live=0.01, ic_bt=0.05) -> LiveFactorMonitor:
 def test_trigger_live_deviation():
     trigger = FeedbackTrigger(live_monitor=_live_monitor_with_deviation())
     events = trigger.check_triggers()
-    live_events = [e for e in events
-                   if e["event_type"] == FeedbackEventType.LIVE_DEVIATION.value]
+    live_events = [e for e in events if e["event_type"] == FeedbackEventType.LIVE_DEVIATION.value]
     assert len(live_events) >= 1
     assert live_events[0]["severity"] == "critical"
     assert live_events[0]["factor_id"] == "f1"
@@ -54,10 +49,7 @@ def test_trigger_no_deviation():
     monitor.update_live_performance("f1", {"ic": 0.05})
     trigger = FeedbackTrigger(live_monitor=monitor)
     events = trigger.check_triggers()
-    assert all(
-        e["event_type"] != FeedbackEventType.LIVE_DEVIATION.value
-        for e in events
-    )
+    assert all(e["event_type"] != FeedbackEventType.LIVE_DEVIATION.value for e in events)
 
 
 def test_trigger_cooldown():
@@ -65,10 +57,8 @@ def test_trigger_cooldown():
     events1 = trigger.check_triggers()
     events2 = trigger.check_triggers()
     # 冷却期 24h，第二次不应重复触发 live_deviation
-    live1 = [e for e in events1
-             if e["event_type"] == FeedbackEventType.LIVE_DEVIATION.value]
-    live2 = [e for e in events2
-             if e["event_type"] == FeedbackEventType.LIVE_DEVIATION.value]
+    live1 = [e for e in events1 if e["event_type"] == FeedbackEventType.LIVE_DEVIATION.value]
+    live2 = [e for e in events2 if e["event_type"] == FeedbackEventType.LIVE_DEVIATION.value]
     assert len(live1) >= 1
     assert len(live2) == 0
 
@@ -100,8 +90,7 @@ def test_analyzer_regime_mismatch():
 def test_analyzer_data_quality():
     analyzer = AttributionAnalyzer()
     report = analyzer.analyze(
-        {"event_id": "e3", "event_type": "data_anomaly",
-         "trigger_reason": "数据源异常"},
+        {"event_id": "e3", "event_type": "data_anomaly", "trigger_reason": "数据源异常"},
     )
     assert report["root_cause"] == RootCause.DATA_QUALITY.value
     assert report["recommendation"]["action"] == "fix_data_source"
@@ -180,7 +169,7 @@ def test_feedback_loop_idempotent():
     stats = loop.get_statistics()
     assert stats["events_handled"] == len(results1)
     # 立即再次处理（冷却期会阻止新触发）
-    results2 = loop.process_feedback(factors={"f1": {"decay_6m": 0.8}})
+    loop.process_feedback(factors={"f1": {"decay_6m": 0.8}})
     # 冷却期 24h 内不重复触发 → 不新增处理
     assert loop.get_statistics()["events_handled"] == stats["events_handled"]
 
@@ -197,13 +186,15 @@ def test_feedback_loop_manual_trigger():
 
 
 def test_effectiveness_monthly_report():
-    evaluator = EvolutionEffectiveness({
-        "new_factors": 10,
-        "total_generated": 100,
-        "feedback_handled": 15,
-        "recommendations_total": 10,
-        "recommendations_accepted": 7,
-    })
+    evaluator = EvolutionEffectiveness(
+        {
+            "new_factors": 10,
+            "total_generated": 100,
+            "feedback_handled": 15,
+            "recommendations_total": 10,
+            "recommendations_accepted": 7,
+        }
+    )
     report = evaluator.generate_monthly_report("2026-08")
     assert report["period"] == "2026-08"
     assert report["new_factors"] == 10
@@ -254,8 +245,7 @@ def test_metrics_feedback():
     reg.record_feedback_trigger("live_deviation")
     reg.record_feedback_processing("retire_factor", True)
     reg.update_feedback_pending({"live_deviation": 2})
-    reg.update_effectiveness(attribution_accuracy=0.8, new_factors=10,
-                             effective_rate=0.15)
+    reg.update_effectiveness(attribution_accuracy=0.8, new_factors=10, effective_rate=0.15)
 
     lines = "\n".join(reg.render())
     assert 'fts_feedback_triggers_total{event_type="live_deviation"} 2' in lines
@@ -278,14 +268,15 @@ def test_schema_feedback_tables(tmp_path):
 
     conn = duckdb.connect(str(db_path))
     try:
-        tables = [t[0] for t in conn.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema='main'"
-        ).fetchall()]
+        tables = [
+            t[0]
+            for t in conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+            ).fetchall()
+        ]
     finally:
         conn.close()
-    for t in ["feedback_events", "attribution_reports",
-              "feedback_processing_results", "feedback_reports"]:
+    for t in ["feedback_events", "attribution_reports", "feedback_processing_results", "feedback_reports"]:
         assert t in tables
 
 
@@ -296,18 +287,28 @@ def test_live_feedback_record_validation():
     """契约校验：有效记录通过，缺失必填字段失败。"""
     from fts.factor_engine.feedback_loop import validate_live_feedback_record
 
-    ok, msg = validate_live_feedback_record({
-        "factor_id": "fct_1", "signal_date": "2026-08-01",
-        "signal_value": 0.5, "position_return": 0.01, "turnover": 0.2,
-    })
+    ok, msg = validate_live_feedback_record(
+        {
+            "factor_id": "fct_1",
+            "signal_date": "2026-08-01",
+            "signal_value": 0.5,
+            "position_return": 0.01,
+            "turnover": 0.2,
+        }
+    )
     assert ok
     assert msg == ""
     ok2, _ = validate_live_feedback_record({"signal_value": 0.5})
     assert not ok2
-    ok3, _ = validate_live_feedback_record({
-        "factor_id": "fct_1", "signal_date": "2026-08-01",
-        "signal_value": "bad", "position_return": 0.01, "turnover": 0.2,
-    })
+    ok3, _ = validate_live_feedback_record(
+        {
+            "factor_id": "fct_1",
+            "signal_date": "2026-08-01",
+            "signal_value": "bad",
+            "position_return": 0.01,
+            "turnover": 0.2,
+        }
+    )
     assert not ok3
 
 
@@ -317,13 +318,25 @@ def test_live_feedback_import_jsonl(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)  # 落盘路径为相对 memory/portfolio/
     importer = LiveFeedbackImporter(db_path=None)
-    result = importer.import_records([
-        {"factor_id": "fct_1", "signal_date": "2026-08-01",
-         "signal_value": 0.5, "position_return": 0.01, "turnover": 0.2},
-        {"factor_id": "fct_1", "signal_date": "2026-08-02",
-         "signal_value": -0.3, "position_return": -0.005, "turnover": 0.1},
-        {"signal_value": 0.5},  # 无效
-    ])
+    result = importer.import_records(
+        [
+            {
+                "factor_id": "fct_1",
+                "signal_date": "2026-08-01",
+                "signal_value": 0.5,
+                "position_return": 0.01,
+                "turnover": 0.2,
+            },
+            {
+                "factor_id": "fct_1",
+                "signal_date": "2026-08-02",
+                "signal_value": -0.3,
+                "position_return": -0.005,
+                "turnover": 0.1,
+            },
+            {"signal_value": 0.5},  # 无效
+        ]
+    )
     assert result["total"] == 3
     assert result["valid"] == 2
     assert result["invalid"] == 1
@@ -338,12 +351,25 @@ def test_live_feedback_ic_positive_correlation():
 
     importer = LiveFeedbackImporter(db_path=None)
     records = [
-        {"factor_id": "fct_a", "signal_date": f"2026-08-{d:02d}",
-         "signal_value": v, "position_return": v * 0.01 + 0.0001,
-         "turnover": 0.1}
-        for d, v in [(1, 0.8), (2, 0.5), (3, 0.2), (4, -0.1),
-                     (5, -0.4), (6, -0.7), (7, 0.9), (8, -0.9),
-                     (9, 0.3), (10, -0.2)]
+        {
+            "factor_id": "fct_a",
+            "signal_date": f"2026-08-{d:02d}",
+            "signal_value": v,
+            "position_return": v * 0.01 + 0.0001,
+            "turnover": 0.1,
+        }
+        for d, v in [
+            (1, 0.8),
+            (2, 0.5),
+            (3, 0.2),
+            (4, -0.1),
+            (5, -0.4),
+            (6, -0.7),
+            (7, 0.9),
+            (8, -0.9),
+            (9, 0.3),
+            (10, -0.2),
+        ]
     ]
     importer.import_records(records)
     stats = importer.compute_live_ic()
@@ -360,27 +386,45 @@ def test_live_vs_backtest_ic_report():
     )
 
     importer = LiveFeedbackImporter(db_path=None)
-    importer.import_records([
-        # fct_ok: 信号与收益强正相关 → 实盘 IC 高，status=ok
-        {"factor_id": "fct_ok", "signal_date": f"2026-08-{d:02d}",
-         "signal_value": v, "position_return": v * 0.02 + 0.0005 * d,
-         "turnover": 0.1}
-        for d, v in enumerate([0.8, 0.6, 0.4, 0.2, -0.1, -0.3, -0.5, -0.8], 1)
-    ] + [
-        # fct_decay: 信号与收益几乎无关（微弱正相关）→ 实盘 IC≈0，status=decayed
-        {"factor_id": "fct_decay", "signal_date": f"2026-08-{d:02d}",
-         "signal_value": v, "position_return": v * 0.0005 + 0.0005 * d,
-         "turnover": 0.1}
-        for d, v in enumerate([0.8, 0.6, 0.4, 0.2, -0.1, -0.3, -0.5, -0.8], 1)
-    ])
+    importer.import_records(
+        [
+            # fct_ok: 信号与收益强正相关 → 实盘 IC 高，status=ok
+            {
+                "factor_id": "fct_ok",
+                "signal_date": f"2026-08-{d:02d}",
+                "signal_value": v,
+                "position_return": v * 0.02 + 0.0005 * d,
+                "turnover": 0.1,
+            }
+            for d, v in enumerate([0.8, 0.6, 0.4, 0.2, -0.1, -0.3, -0.5, -0.8], 1)
+        ]
+        + [
+            # fct_decay: 信号与收益几乎无关（微弱正相关）→ 实盘 IC≈0，status=decayed
+            {
+                "factor_id": "fct_decay",
+                "signal_date": f"2026-08-{d:02d}",
+                "signal_value": v,
+                "position_return": v * 0.0005 + 0.0005 * d,
+                "turnover": 0.1,
+            }
+            for d, v in enumerate([0.8, 0.6, 0.4, 0.2, -0.1, -0.3, -0.5, -0.8], 1)
+        ]
+    )
     stats = importer.compute_live_ic()
     report = LiveVsBacktestICReport().generate(
-        stats, backtest_ic_map={"fct_ok": 0.04, "fct_decay": 0.04},
+        stats,
+        backtest_ic_map={"fct_ok": 0.04, "fct_decay": 0.04},
     )
     by_id = {r["factor_id"]: r for r in report["factors"]}
     assert by_id["fct_ok"]["status"] == "ok"
     assert by_id["fct_decay"]["status"] == "decayed"
     assert report["summary"]["n_decayed"] == 1
+    # GAP-I401 (v2.71.0): 衰减因子输出退役建议（供 GAP-I305 闭环消费）
+    assert by_id["fct_decay"]["recommend_retire"] is True
+    # 符号反转场景（bt>0 而 live<0）：decay_gap 为负（|live|>|bt|），仅断言字段存在
+    assert by_id["fct_decay"]["decay_gap"] is not None
+    assert by_id["fct_ok"]["recommend_retire"] is False
+    assert report["summary"]["n_recommend_retire"] == 1
 
 
 def test_live_feedback_duckdb_persist(tmp_path):
@@ -389,11 +433,18 @@ def test_live_feedback_duckdb_persist(tmp_path):
 
     db_path = str(tmp_path / "live_feedback.duckdb")
     importer = LiveFeedbackImporter(db_path=db_path)
-    importer.import_records([
-        {"factor_id": "fct_1", "signal_date": "2026-08-01",
-         "signal_value": 0.5, "position_return": 0.01, "turnover": 0.2,
-         "market": "futures"},
-    ])
+    importer.import_records(
+        [
+            {
+                "factor_id": "fct_1",
+                "signal_date": "2026-08-01",
+                "signal_value": 0.5,
+                "position_return": 0.01,
+                "turnover": 0.2,
+                "market": "futures",
+            },
+        ]
+    )
     import duckdb
 
     conn = duckdb.connect(db_path)

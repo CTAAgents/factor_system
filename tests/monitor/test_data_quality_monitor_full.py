@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -47,9 +46,15 @@ from fts.monitor.data_quality_monitor import (  # noqa: E402
 class TestQualityAlert:
     def test_to_dict_fields(self):
         alert = QualityAlert(
-            factor_id="f1", alert_type="ic_drift", severity="warning",
-            message="msg", metric_name="IC", metric_value=0.1,
-            baseline_value=0.05, threshold=2.0, timestamp=123.0,
+            factor_id="f1",
+            alert_type="ic_drift",
+            severity="warning",
+            message="msg",
+            metric_name="IC",
+            metric_value=0.1,
+            baseline_value=0.05,
+            threshold=2.0,
+            timestamp=123.0,
         )
         d = alert.to_dict()
         assert d["factor_id"] == "f1"
@@ -58,9 +63,14 @@ class TestQualityAlert:
 
     def test_default_timestamp(self):
         alert = QualityAlert(
-            factor_id="f1", alert_type="ic_drift", severity="warning",
-            message="m", metric_name="IC", metric_value=0.1,
-            baseline_value=0.05, threshold=2.0,
+            factor_id="f1",
+            alert_type="ic_drift",
+            severity="warning",
+            message="m",
+            metric_name="IC",
+            metric_value=0.1,
+            baseline_value=0.05,
+            threshold=2.0,
         )
         assert alert.timestamp > 0
 
@@ -186,6 +196,7 @@ class TestAlertCallback:
     def test_callback_exception_swallowed(self):
         def bad_callback(alert):
             raise RuntimeError("cb fail")
+
         m = DataQualityMonitor(alert_callback=bad_callback)
         m.register_factor("f1", baseline_ic=0.05, baseline_capacity=1e7, ic_std=0.01)
         alerts = m.check("f1", current_ic=0.09)  # 不抛异常
@@ -196,13 +207,16 @@ class TestValidateMarketData:
     def _make_ohlcv(self, n: int = 100) -> pd.DataFrame:
         rng = np.random.default_rng(1)
         dates = pd.date_range("2026-01-01", periods=n, freq="D")
-        return pd.DataFrame({
-            "open": rng.normal(100, 1, n),
-            "high": rng.normal(101, 1, n),
-            "low": rng.normal(99, 1, n),
-            "close": rng.normal(100, 1, n),
-            "volume": rng.integers(1000, 9000, n).astype(float),
-        }, index=dates)
+        return pd.DataFrame(
+            {
+                "open": rng.normal(100, 1, n),
+                "high": rng.normal(101, 1, n),
+                "low": rng.normal(99, 1, n),
+                "close": rng.normal(100, 1, n),
+                "volume": rng.integers(1000, 9000, n).astype(float),
+            },
+            index=dates,
+        )
 
     def test_empty_data_critical(self):
         m = DataQualityMonitor()
@@ -329,6 +343,7 @@ class TestMetricFunctions:
 
     def test_update_delay(self):
         from datetime import datetime, timedelta
+
         now = datetime.now()
         delay = compute_update_delay(now - timedelta(seconds=120), now=now)
         assert delay == pytest.approx(120.0, abs=1.0)
@@ -339,6 +354,7 @@ class TestMetricFunctions:
 
     def test_freshness(self):
         from datetime import datetime, timedelta
+
         # 空/无 timestamp → inf
         assert compute_freshness(pd.DataFrame()) == float("inf")
         assert compute_freshness(pd.DataFrame({"x": [1]})) == float("inf")
@@ -352,15 +368,17 @@ class TestEvaluateSourceData:
         rng = np.random.default_rng(1)
         n = 50
         dates = pd.date_range("2026-01-01", periods=n, freq="D")
-        df = pd.DataFrame({
-            "symbol": ["RB0"] * n,
-            "timestamp": dates,
-            "close": 100 + np.cumsum(rng.normal(0, 0.5, n)),
-            "open": 100 + rng.normal(0, 1, n),
-            "high": 102 + rng.normal(0, 1, n),
-            "low": 98 + rng.normal(0, 1, n),
-            "volume": rng.integers(1000, 9000, n).astype(float),
-        })
+        df = pd.DataFrame(
+            {
+                "symbol": ["RB0"] * n,
+                "timestamp": dates,
+                "close": 100 + np.cumsum(rng.normal(0, 0.5, n)),
+                "open": 100 + rng.normal(0, 1, n),
+                "high": 102 + rng.normal(0, 1, n),
+                "low": 98 + rng.normal(0, 1, n),
+                "volume": rng.integers(1000, 9000, n).astype(float),
+            }
+        )
         result = evaluate_source_data(df, expected_symbols={"RB0"}, reference_close=df["close"])
         assert "completeness" in result and "accuracy" in result and "timeliness" in result
         assert result["completeness"]["coverage_ratio"] == 1.0

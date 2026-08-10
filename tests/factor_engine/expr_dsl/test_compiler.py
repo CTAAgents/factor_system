@@ -1,8 +1,11 @@
 """FTS-Expr 编译器与表达式分析测试。"""
+
 import pytest
 
 from fts.factor_engine.expr_dsl.compiler import (
-    ExprAnalysis, analyze_expression, compile_expr_to_code,
+    ExprAnalysis,
+    analyze_expression,
+    compile_expr_to_code,
 )
 from fts.factor_engine.expr_dsl.validator import DSLValidationError
 from fts.factor_engine.factor_program import validate_factor_code

@@ -19,13 +19,24 @@ from pathlib import Path
 import yaml
 
 REQUIRED_FIELDS = [
-    "name", "description", "market", "code", "params",
-    "input_fields", "lookback", "output_type", "frequency",
+    "name",
+    "description",
+    "market",
+    "code",
+    "params",
+    "input_fields",
+    "lookback",
+    "output_type",
+    "frequency",
     "economic_logic",
 ]
 
 REQUIRED_LOGIC_FIELDS = [
-    "theory", "behavioral", "microstructure", "institutional", "narrative",
+    "theory",
+    "behavioral",
+    "microstructure",
+    "institutional",
+    "narrative",
 ]
 
 
@@ -143,11 +154,11 @@ def main():
         sys.exit(1)
     else:
         print(f"✅ 验证通过: {path}")
-        print(f"   27 个因子全部通过必填字段检查")
-        print(f"   所有因子名称唯一")
-        print(f"   所有 code 语法正确")
-        print(f"   与现有种子因子无名称冲突")
-        print(f"   economic_logic 字段完整")
+        print("   27 个因子全部通过必填字段检查")
+        print("   所有因子名称唯一")
+        print("   所有 code 语法正确")
+        print("   与现有种子因子无名称冲突")
+        print("   economic_logic 字段完整")
 
 
 if __name__ == "__main__":

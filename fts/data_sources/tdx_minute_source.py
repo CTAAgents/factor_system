@@ -71,19 +71,87 @@ _CFFEX_PRODUCTS = ("IF", "IH", "IC", "IM", "TF", "TS", "TL", "T")
 # 优先 2 字母匹配
 _CFFEX_PREFIXES = ("IF", "IH", "IC", "TF", "TS", "TL")
 _CZCE_PREFIXES = (
-    "SR", "CF", "CJ", "CY", "AP", "ER", "LR", "LW", "MR", "ME",
-    "PM", "RI", "RM", "RS", "SF", "SM", "TA", "TM", "UR", "WH",
-    "WS", "WT", "ZC", "GN", "RO", "PF", "PK", "PX", "SA", "SH",
-    "TC", "JR", "OI", "MA", "FG",
+    "SR",
+    "CF",
+    "CJ",
+    "CY",
+    "AP",
+    "ER",
+    "LR",
+    "LW",
+    "MR",
+    "ME",
+    "PM",
+    "RI",
+    "RM",
+    "RS",
+    "SF",
+    "SM",
+    "TA",
+    "TM",
+    "UR",
+    "WH",
+    "WS",
+    "WT",
+    "ZC",
+    "GN",
+    "RO",
+    "PF",
+    "PK",
+    "PX",
+    "SA",
+    "SH",
+    "TC",
+    "JR",
+    "OI",
+    "MA",
+    "FG",
 )
 _SHFE_PREFIXES = (
-    "RB", "CU", "AL", "ZN", "AU", "AG", "PB", "NI", "SN", "SS",
-    "BU", "RU", "FU", "SP", "WR", "HC", "FB", "BB", "AO", "AD",
-    "BC", "EC",
+    "RB",
+    "CU",
+    "AL",
+    "ZN",
+    "AU",
+    "AG",
+    "PB",
+    "NI",
+    "SN",
+    "SS",
+    "BU",
+    "RU",
+    "FU",
+    "SP",
+    "WR",
+    "HC",
+    "FB",
+    "BB",
+    "AO",
+    "AD",
+    "BC",
+    "EC",
 )
 _DCE_PREFIXES = (
-    "A", "B", "C", "CS", "M", "Y", "P", "L", "JD", "JM",
-    "I", "J", "R", "RR", "V", "EG", "EB", "PG", "LH", "FB",
+    "A",
+    "B",
+    "C",
+    "CS",
+    "M",
+    "Y",
+    "P",
+    "L",
+    "JD",
+    "JM",
+    "I",
+    "J",
+    "R",
+    "RR",
+    "V",
+    "EG",
+    "EB",
+    "PG",
+    "LH",
+    "FB",
 )
 
 
@@ -138,9 +206,7 @@ class TDXMinuteSource(BaseFuturesSource):
             period: 分钟周期，支持 "1m" / "5m" / "15m" / "30m" / "60m"
         """
         if period not in SUPPORTED_PERIODS:
-            raise ValueError(
-                f"不支持的分钟周期: {period}，可选: {list(SUPPORTED_PERIODS.keys())}"
-            )
+            raise ValueError(f"不支持的分钟周期: {period}，可选: {list(SUPPORTED_PERIODS.keys())}")
         self._period = period
         self._tdx_period = SUPPORTED_PERIODS[period]
 
@@ -263,9 +329,7 @@ class TDXMinuteSource(BaseFuturesSource):
             )
         elif df["date_str"].notna().any():
             # 仅有 Date
-            df["datetime"] = pd.to_datetime(
-                df["date_str"], format="%Y%m%d", errors="coerce"
-            )
+            df["datetime"] = pd.to_datetime(df["date_str"], format="%Y%m%d", errors="coerce")
         else:
             logger.warning("[%s] 缺少日期/时间字段", self.source_name)
             return None
@@ -296,8 +360,19 @@ class TDXMinuteSource(BaseFuturesSource):
             df = df.tail(days).reset_index(drop=True)
 
         # 返回分钟级 schema 列
-        cols = ["symbol", "period", "datetime", "open", "high", "low",
-                "close", "volume", "source", "fetched_at", "trace_id"]
+        cols = [
+            "symbol",
+            "period",
+            "datetime",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "source",
+            "fetched_at",
+            "trace_id",
+        ]
         return df[[c for c in cols if c in df.columns]]
 
     def fetch_quote(

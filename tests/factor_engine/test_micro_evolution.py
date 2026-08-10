@@ -6,12 +6,10 @@
 from __future__ import annotations
 
 import importlib
-import sys
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from fts.factor_engine.contracts import (
     EconomicLogic,
@@ -30,16 +28,24 @@ def _make_factor(factor_id: str = "fct_test", code: str | None = None) -> Factor
         code=code,
         params={"window": 10},
         signature=FactorSignature(
-            input_fields=["close"], output_type="signal", frequency="daily", lookback=1,
+            input_fields=["close"],
+            output_type="signal",
+            frequency="daily",
+            lookback=1,
         ),
         economic_logic=EconomicLogic(
-            theory=3, behavioral=3, microstructure=3, institutional=3, narrative="test",
+            theory=3,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="test",
         ),
         source="manual",
     )
 
 
 # ─── 覆盖遗漏行 ───────────────────────────────────────────
+
 
 class TestCoverageGaps:
     """覆盖 micro_evolution.py 遗漏行 (28-30, 93, 95, 114-115)。"""
@@ -50,6 +56,7 @@ class TestCoverageGaps:
         验证 fallback 行为：设置 _HAS_OPTUNA=False 后 optimize_params 返回默认值。
         """
         import fts.factor_engine.micro_evolution as mev
+
         monkeypatch.setattr(mev, "_HAS_OPTUNA", False)
         monkeypatch.setattr(mev, "optuna", None)
 
@@ -68,17 +75,20 @@ class TestCoverageGaps:
 
         通过 patch optuna 的导入来触发 ImportError，然后重新加载模块。
         """
-        with patch.dict('sys.modules', {'optuna': None}):
-            with patch('builtins.__import__') as mock_import:
+        with patch.dict("sys.modules", {"optuna": None}):
+            with patch("builtins.__import__") as mock_import:
+
                 def side_effect(name, *args, **kwargs):
-                    if name == 'optuna' or name.startswith('optuna.'):
+                    if name == "optuna" or name.startswith("optuna."):
                         raise ImportError(f"No module named '{name}'")
                     # 恢复原始 __import__ 行为
                     return importlib.__import__(name, *args, **kwargs)
+
                 mock_import.side_effect = side_effect
 
                 # 重新加载模块以触发 ImportError
                 import fts.factor_engine.micro_evolution as mev
+
                 importlib.reload(mev)
 
                 assert mev._HAS_OPTUNA is False
@@ -91,8 +101,9 @@ class TestCoverageGaps:
         """
         import fts.factor_engine.micro_evolution as mev
 
-        factor = _make_factor("fct_short93",
-                              code="def factor_program(data, params):\n    import numpy as np\n    return np.array([])")
+        factor = _make_factor(
+            "fct_short93", code="def factor_program(data, params):\n    import numpy as np\n    return np.array([])"
+        )
 
         data = pd.DataFrame({"close": [1.0]})
         rets = np.array([0.01])
@@ -132,8 +143,10 @@ class TestCoverageGaps:
         """
         import fts.factor_engine.micro_evolution as mev
 
-        factor = _make_factor("fct_zero95",
-                              code="def factor_program(data, params):\n    import numpy as np\n    return np.ones(len(data['close'])) * 0.5")
+        factor = _make_factor(
+            "fct_zero95",
+            code="def factor_program(data, params):\n    import numpy as np\n    return np.ones(len(data['close'])) * 0.5",
+        )
 
         data = pd.DataFrame({"close": [1.0, 2.0, 3.0]})
         rets = np.array([0.01, -0.01, 0.02])
@@ -172,8 +185,9 @@ class TestCoverageGaps:
         """
         import fts.factor_engine.micro_evolution as mev
 
-        factor = _make_factor("fct_exc115",
-                              code="def factor_program(data, params):\n    raise ValueError('模拟执行异常')")
+        factor = _make_factor(
+            "fct_exc115", code="def factor_program(data, params):\n    raise ValueError('模拟执行异常')"
+        )
 
         data = pd.DataFrame({"close": [1.0, 2.0, 3.0]})
         rets = np.array([0.01, -0.01, 0.02])
@@ -209,6 +223,7 @@ class TestCoverageGaps:
 # ════════════════════════════════════════════════════════════
 # GAP-I205: 两阶段漏斗（粗筛淘汰 + 精筛自适应 trials）
 # ════════════════════════════════════════════════════════════
+
 
 class TestStagedFunnel:
     """GAP-I205 两阶段参数优化漏斗测试。
@@ -255,7 +270,11 @@ class TestStagedFunnel:
 
         studies = self._mock_optuna_run(monkeypatch, coarse_score=0.01)
         params, score, passed = optimize_params_staged(
-            factor, data, rets, n_trials=50, coarse_ic_floor=0.02,
+            factor,
+            data,
+            rets,
+            n_trials=50,
+            coarse_ic_floor=0.02,
         )
         assert passed is False
         assert score == 0.01
@@ -271,8 +290,12 @@ class TestStagedFunnel:
 
         studies = self._mock_optuna_run(monkeypatch, coarse_score=0.08, fine_score=0.09)
         params, score, passed = optimize_params_staged(
-            factor, data, rets, n_trials=100,
-            coarse_ic_floor=0.02, coarse_ref_ic=0.10,
+            factor,
+            data,
+            rets,
+            n_trials=100,
+            coarse_ic_floor=0.02,
+            coarse_ref_ic=0.10,
         )
         assert passed is True
         assert score == 0.09
@@ -281,6 +304,7 @@ class TestStagedFunnel:
     def test_staged_no_optuna_fallback(self, monkeypatch):
         """optuna 缺失时直接返回原参数，passed=True。"""
         import fts.factor_engine.micro_evolution as mev
+
         monkeypatch.setattr(mev, "_HAS_OPTUNA", False)
         monkeypatch.setattr(mev, "optuna", None)
 

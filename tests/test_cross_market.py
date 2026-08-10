@@ -12,19 +12,16 @@ from __future__ import annotations
 
 import json
 import tempfile
-from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from fts.cross_market.data_adapter import (
     CrossMarketDataAdapter,
     CORE_FIELDS,
     TARGET_MARKET_STOCK,
-    TARGET_MARKET_ETF,
     TARGET_MARKET_FUTURES,
 )
 from fts.cross_market.engine import (
@@ -50,13 +47,16 @@ class TestCrossMarketDataAdapter:
         """股票 DataFrame 适配应保留核心字段。"""
         adapter = CrossMarketDataAdapter()
         dates = pd.date_range("2024-01-01", periods=10, freq="D")
-        df = pd.DataFrame({
-            "open": np.random.randn(10) + 10,
-            "high": np.random.randn(10) + 11,
-            "low": np.random.randn(10) + 9,
-            "close": np.random.randn(10) + 10,
-            "volume": np.random.randint(1000, 10000, 10).astype(float),
-        }, index=dates)
+        df = pd.DataFrame(
+            {
+                "open": np.random.randn(10) + 10,
+                "high": np.random.randn(10) + 11,
+                "low": np.random.randn(10) + 9,
+                "close": np.random.randn(10) + 10,
+                "volume": np.random.randint(1000, 10000, 10).astype(float),
+            },
+            index=dates,
+        )
 
         result = adapter._adapt_dataframe(df, TARGET_MARKET_STOCK)
 
@@ -77,16 +77,19 @@ class TestCrossMarketDataAdapter:
         """期货 DataFrame 适配应保留核心字段和期货特有字段。"""
         adapter = CrossMarketDataAdapter()
         dates = pd.date_range("2024-01-01", periods=10, freq="D")
-        df = pd.DataFrame({
-            "open": np.random.randn(10) + 10,
-            "high": np.random.randn(10) + 11,
-            "low": np.random.randn(10) + 9,
-            "close": np.random.randn(10) + 10,
-            "volume": np.random.randint(1000, 10000, 10).astype(float),
-            "open_interest": np.random.randint(10000, 50000, 10).astype(float),
-            "hold": np.random.randint(100, 500, 10).astype(float),
-            "settle": np.random.randn(10) + 10,
-        }, index=dates)
+        df = pd.DataFrame(
+            {
+                "open": np.random.randn(10) + 10,
+                "high": np.random.randn(10) + 11,
+                "low": np.random.randn(10) + 9,
+                "close": np.random.randn(10) + 10,
+                "volume": np.random.randint(1000, 10000, 10).astype(float),
+                "open_interest": np.random.randint(10000, 50000, 10).astype(float),
+                "hold": np.random.randint(100, 500, 10).astype(float),
+                "settle": np.random.randn(10) + 10,
+            },
+            index=dates,
+        )
 
         result = adapter._adapt_dataframe(df, TARGET_MARKET_FUTURES)
 
@@ -104,9 +107,12 @@ class TestCrossMarketDataAdapter:
         adapter = CrossMarketDataAdapter()
         dates = pd.date_range("2024-01-01", periods=10, freq="D")
         # 只提供 close 字段
-        df = pd.DataFrame({
-            "close": np.random.randn(10) + 10,
-        }, index=dates)
+        df = pd.DataFrame(
+            {
+                "close": np.random.randn(10) + 10,
+            },
+            index=dates,
+        )
 
         result = adapter._adapt_dataframe(df, TARGET_MARKET_STOCK)
 
@@ -124,14 +130,20 @@ class TestCrossMarketDataAdapter:
         dates = pd.date_range("2024-01-01", periods=10, freq="D")
 
         panel = {
-            "000001": pd.DataFrame({
-                "close": np.random.randn(10) + 10,
-                "volume": np.random.randint(1000, 10000, 10).astype(float),
-            }, index=dates),
-            "000002": pd.DataFrame({
-                "close": np.random.randn(10) + 10,
-                "volume": np.random.randint(1000, 10000, 10).astype(float),
-            }, index=dates),
+            "000001": pd.DataFrame(
+                {
+                    "close": np.random.randn(10) + 10,
+                    "volume": np.random.randint(1000, 10000, 10).astype(float),
+                },
+                index=dates,
+            ),
+            "000002": pd.DataFrame(
+                {
+                    "close": np.random.randn(10) + 10,
+                    "volume": np.random.randint(1000, 10000, 10).astype(float),
+                },
+                index=dates,
+            ),
         }
 
         result = adapter._adapt_panel(panel, TARGET_MARKET_STOCK)
@@ -161,6 +173,7 @@ class TestCrossMarketDataAdapter:
                 if first_val == 2.0:
                     raise ValueError("B 适配失败")
             return df
+
         mock_adapt.side_effect = side_effect
 
         result = adapter._adapt_panel(panel, TARGET_MARKET_STOCK)
@@ -242,35 +255,63 @@ class TestCrossMarketEngineReport:
     def _make_sample_results(self) -> list[CrossMarketResult]:
         return [
             CrossMarketResult(
-                name="fut_momentum", factor_id="fct_001",
-                source_market="futures", target_market="stock",
-                source_ic=0.05, target_ic=0.03, target_ic_abs=0.03,
-                ic_retention=0.6, generalization="universal",
-                n_target_symbols=50, n_dates=100, eval_time_sec=0.5,
+                name="fut_momentum",
+                factor_id="fct_001",
+                source_market="futures",
+                target_market="stock",
+                source_ic=0.05,
+                target_ic=0.03,
+                target_ic_abs=0.03,
+                ic_retention=0.6,
+                generalization="universal",
+                n_target_symbols=50,
+                n_dates=100,
+                eval_time_sec=0.5,
                 is_deprecated=False,
             ),
             CrossMarketResult(
-                name="fut_basis", factor_id="fct_002",
-                source_market="futures", target_market="stock",
-                source_ic=0.06, target_ic=0.01, target_ic_abs=0.01,
-                ic_retention=0.17, generalization="futures_specific",
-                n_target_symbols=50, n_dates=100, eval_time_sec=0.5,
+                name="fut_basis",
+                factor_id="fct_002",
+                source_market="futures",
+                target_market="stock",
+                source_ic=0.06,
+                target_ic=0.01,
+                target_ic_abs=0.01,
+                ic_retention=0.17,
+                generalization="futures_specific",
+                n_target_symbols=50,
+                n_dates=100,
+                eval_time_sec=0.5,
                 is_deprecated=False,
             ),
             CrossMarketResult(
-                name="fut_volume", factor_id="fct_003",
-                source_market="futures", target_market="stock",
-                source_ic=0.04, target_ic=-0.005, target_ic_abs=0.005,
-                ic_retention=0.125, generalization="failed",
-                n_target_symbols=50, n_dates=100, eval_time_sec=0.5,
+                name="fut_volume",
+                factor_id="fct_003",
+                source_market="futures",
+                target_market="stock",
+                source_ic=0.04,
+                target_ic=-0.005,
+                target_ic_abs=0.005,
+                ic_retention=0.125,
+                generalization="failed",
+                n_target_symbols=50,
+                n_dates=100,
+                eval_time_sec=0.5,
                 is_deprecated=False,
             ),
             CrossMarketResult(
-                name="fut_carry_deprecated", factor_id="fct_004",
-                source_market="futures", target_market="stock",
-                source_ic=0.05, target_ic=0.0, target_ic_abs=0.0,
-                ic_retention=0.0, generalization="failed",
-                n_target_symbols=30, n_dates=100, eval_time_sec=0.5,
+                name="fut_carry_deprecated",
+                factor_id="fct_004",
+                source_market="futures",
+                target_market="stock",
+                source_ic=0.05,
+                target_ic=0.0,
+                target_ic_abs=0.0,
+                ic_retention=0.0,
+                generalization="failed",
+                n_target_symbols=30,
+                n_dates=100,
+                eval_time_sec=0.5,
                 is_deprecated=True,
             ),
         ]
@@ -455,9 +496,11 @@ class TestCrossMarketEdgeCases:
         adapter.get_panel.return_value = ({}, pd.DatetimeIndex([]))
         engine = CrossMarketEngine(adapter=adapter)
 
-        with patch.object(engine, "_load_futures_factors", return_value=[
-            {"factor_id": "fct_001", "name": "test", "evaluation": {"level_1_backtest": {"ic": 0.05}}}
-        ]):
+        with patch.object(
+            engine,
+            "_load_futures_factors",
+            return_value=[{"factor_id": "fct_001", "name": "test", "evaluation": {"level_1_backtest": {"ic": 0.05}}}],
+        ):
             report = engine.run_futures_to_stock(days=120)
             assert report.total_factors == 1
             assert report.n_dates == 0  # 无数据
@@ -465,11 +508,18 @@ class TestCrossMarketEdgeCases:
     def test_cross_market_result_dataclass(self):
         """CrossMarketResult dataclass 应正确初始化。"""
         result = CrossMarketResult(
-            name="test", factor_id="fct_001",
-            source_market="futures", target_market="stock",
-            source_ic=0.05, target_ic=0.02, target_ic_abs=0.02,
-            ic_retention=0.4, generalization="futures_specific",
-            n_target_symbols=30, n_dates=100, eval_time_sec=0.5,
+            name="test",
+            factor_id="fct_001",
+            source_market="futures",
+            target_market="stock",
+            source_ic=0.05,
+            target_ic=0.02,
+            target_ic_abs=0.02,
+            ic_retention=0.4,
+            generalization="futures_specific",
+            n_target_symbols=30,
+            n_dates=100,
+            eval_time_sec=0.5,
             is_deprecated=False,
         )
         assert result.name == "test"
@@ -507,13 +557,16 @@ class TestCrossMarketIntegration:
         panel = {}
         for i in range(n_symbols):
             sym = f"STOCK_{i:06d}"
-            panel[sym] = pd.DataFrame({
-                "open": np.random.randn(n_dates) + 10,
-                "high": np.random.randn(n_dates) + 11,
-                "low": np.random.randn(n_dates) + 9,
-                "close": np.cumsum(np.random.randn(n_dates) * 0.5) + 10,
-                "volume": np.random.randint(1000, 10000, n_dates).astype(float),
-            }, index=dates)
+            panel[sym] = pd.DataFrame(
+                {
+                    "open": np.random.randn(n_dates) + 10,
+                    "high": np.random.randn(n_dates) + 11,
+                    "low": np.random.randn(n_dates) + 9,
+                    "close": np.cumsum(np.random.randn(n_dates) * 0.5) + 10,
+                    "volume": np.random.randint(1000, 10000, n_dates).astype(float),
+                },
+                index=dates,
+            )
 
         common_dates = dates
 
@@ -528,7 +581,7 @@ class TestCrossMarketIntegration:
                 close = df["close"].values
                 ret = np.zeros(len(close))
                 ret[20:] = (close[20:] - close[:-20]) / np.maximum(close[:-20], 1e-10)
-                signals[sym] = ret[:len(cd)]
+                signals[sym] = ret[: len(cd)]
             return signals
 
         adapter.execute_factor_on_market.side_effect = mock_execute

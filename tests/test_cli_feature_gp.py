@@ -37,14 +37,22 @@ def test_gp_evolve_parser_defaults():
 
 def test_gp_evolve_parser_full():
     parser = build_parser()
-    args = parser.parse_args([
-        "gp", "evolve",
-        "--universe", "csi300",
-        "--population", "50",
-        "--generations", "10",
-        "--max-stocks", "10",
-        "--output", "tmp/out",
-    ])
+    args = parser.parse_args(
+        [
+            "gp",
+            "evolve",
+            "--universe",
+            "csi300",
+            "--population",
+            "50",
+            "--generations",
+            "10",
+            "--max-stocks",
+            "10",
+            "--output",
+            "tmp/out",
+        ]
+    )
     assert args.universe == "csi300"
     assert args.population == 50
     assert args.generations == 10

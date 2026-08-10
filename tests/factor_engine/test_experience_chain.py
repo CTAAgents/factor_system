@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,6 @@ from fts.factor_engine.contracts import (
     MultipleTestResult,
 )
 from fts.factor_engine.experience_chain import (
-    MAX_CHAIN_SIZE,
     ExperienceChain,
     ExperienceChainError,
     create_trace_from_evaluation,
@@ -24,21 +22,35 @@ from fts.factor_engine.experience_chain import (
 
 # ─── 工厂函数 ─────────────────────────────────────────────
 
+
 def make_evaluation(passed: bool = True, ic: float = 0.05) -> FactorEvaluation:
     return FactorEvaluation(
         factor_id="fct_test",
         trace_id="l2_t",
         level_1_backtest=BacktestMetrics(
-            ic=ic, icir=0.8, sharpe=2.0, max_drawdown=0.1,
-            monotonicity=True, oos_ratio=0.4, t_stat=3.5, turnover_monthly=0.3,
+            ic=ic,
+            icir=0.8,
+            sharpe=2.0,
+            max_drawdown=0.1,
+            monotonicity=True,
+            oos_ratio=0.4,
+            t_stat=3.5,
+            turnover_monthly=0.3,
         ),
         level_2_economic=EconomicScore(
-            theory=4, behavioral=3, microstructure=4, institutional=5,
-            dimensions_passed=4, narrative="测试",
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=5,
+            dimensions_passed=4,
+            narrative="测试",
         ),
         level_3_multiple=MultipleTestResult(
-            bonferroni_p=0.005, fdr_q=0.03, effective_n_factors=8,
-            adjusted_t=3.2, passed=True,
+            bonferroni_p=0.005,
+            fdr_q=0.03,
+            effective_n_factors=8,
+            adjusted_t=3.2,
+            passed=True,
         ),
         passed=passed,
         failure_reasons=[] if passed else ["测试失败原因"],
@@ -62,6 +74,7 @@ def make_trace(success: bool = True, trace_id: str = "exp_001") -> ExperienceTra
 
 
 # ─── 存储与读取 ───────────────────────────────────────────
+
 
 def test_record_success(tmp_memory_dir):
     chain = ExperienceChain(tmp_memory_dir)
@@ -173,6 +186,7 @@ def test_cleanup_when_over_limit(tmp_memory_dir):
     chain = ExperienceChain(tmp_memory_dir)
     # 写入 105 条
     import time
+
     for i in range(105):
         chain.record_success(make_trace(success=True, trace_id=f"s_{i:03d}"))
         time.sleep(0.001)  # 确保 mtime 不同
@@ -198,6 +212,7 @@ def test_update_summary(tmp_memory_dir):
 
 # ─── 覆盖遗漏行 ───────────────────────────────────────────
 
+
 class TestCoverageGaps:
     """覆盖遗漏行 (98, 102, 130-131, 138-139, 182, 223-224)。"""
 
@@ -220,6 +235,7 @@ class TestCoverageGaps:
     def test_cleanup_oserror_on_stat(self, tmp_memory_dir, monkeypatch):
         """lines 130-131: cleanup 时 stat 失败应静默跳过。"""
         import os
+
         chain = ExperienceChain(tmp_memory_dir)
         chain.record_success(make_trace(success=True, trace_id="s_oserr"))
         chain.record_success(make_trace(success=True, trace_id="s_oserr2"))

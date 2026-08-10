@@ -13,7 +13,6 @@ import pytest
 
 from fts.factor_engine.audit import FactorAuditReport
 from fts.factor_engine.contracts import (
-    EVOLUTION_VERSION,
     STATE_SCHEMA_VERSION,
     EconomicLogic,
     FactorEvaluation,
@@ -31,6 +30,7 @@ from fts.factor_engine.state import (
 
 # ─── trace_id 生成 ────────────────────────────────────────
 
+
 @pytest.fixture(autouse=True)
 def _isolate_factor_db(tmp_path, monkeypatch):
     """GAP-030: 本文件全部测试隔离 DuckDB factor_catalog，防污染真实库。
@@ -43,6 +43,7 @@ def _isolate_factor_db(tmp_path, monkeypatch):
     isolated_db = tmp_path / "factor_catalog.duckdb"
     schema.init_database(isolated_db)
     monkeypatch.setattr(schema, "DATABASE_PATH", isolated_db)
+
 
 def test_generate_trace_id_format():
     tid = generate_trace_id("l2")
@@ -71,6 +72,7 @@ def test_generate_trace_id_uniqueness():
 
 
 # ─── 状态管理 ─────────────────────────────────────────────
+
 
 def test_state_manager_init(tmp_memory_dir):
     """首次加载应初始化新状态。"""
@@ -170,21 +172,27 @@ def test_state_manager_add_tokens(tmp_memory_dir):
 
 # ─── EvolutionLoop 完整运行 ────────────────────────────────
 
+
 @pytest.fixture
 def mock_llm_client():
     """Mock LLM 客户端 — 返回固定响应。"""
     client = MagicMock()
     client.complete.return_value = (
-        json.dumps({
-            "mutation_type": "macro_logic",
-            "mutation_summary": "Mock: window+5",
-            "code_modification": "window_plus_5",
-            "economic_logic_modification": {
-                "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 4,
-                "narrative": "Mock LLM 经济逻辑"
-            },
-            "lessons_referenced": ["历史成功"],
-        }),
+        json.dumps(
+            {
+                "mutation_type": "macro_logic",
+                "mutation_summary": "Mock: window+5",
+                "code_modification": "window_plus_5",
+                "economic_logic_modification": {
+                    "theory": 4,
+                    "behavioral": 3,
+                    "microstructure": 3,
+                    "institutional": 4,
+                    "narrative": "Mock LLM 经济逻辑",
+                },
+                "lessons_referenced": ["历史成功"],
+            }
+        ),
         200,
     )
     return client
@@ -197,8 +205,12 @@ def _make_passing_audit_report() -> FactorAuditReport:
     items = [
         AuditItemResult(name=n, status="passed", evidence="mock")
         for n in (
-            "causal_validity", "oos_consistency", "cross_symbol",
-            "stress_resilience", "multiple_testing", "snooping_check",
+            "causal_validity",
+            "oos_consistency",
+            "cross_symbol",
+            "stress_resilience",
+            "multiple_testing",
+            "snooping_check",
         )
     ]
     return FactorAuditReport(
@@ -225,8 +237,11 @@ def _mock_seed_evaluation_pass(loop: EvolutionLoop) -> None:
     mock_eval.return_value = {
         "passed": True,
         "level_1_backtest": {
-            "ic": 0.05, "icir": 1.5, "sharpe": 2.0,
-            "monotonicity": True, "max_drawdown": 0.05,
+            "ic": 0.05,
+            "icir": 1.5,
+            "sharpe": 2.0,
+            "monotonicity": True,
+            "max_drawdown": 0.05,
             "turnover_monthly": 0.3,
             "oos_ratio": 0.35,  # v2.50.0 种子路径新增 Verifier 判定所需字段
         },
@@ -261,39 +276,62 @@ def _mock_review_pass(loop: EvolutionLoop) -> None:
     from fts.factor_engine.robustness import RobustnessTestResult
     from fts.factor_engine.shap_analyzer import ShapAnalysisResult
 
-    loop.ablation_experiment.run = MagicMock(return_value=AblationResult(
-        factor_id="review_pass", factor_name="review_pass",
-        baseline_ic=0.05, baseline_sharpe=1.5,
-        ablations=[SingleAblation(
-            mode="volume_zero", description="vol→0",
-            ic=0.049, sharpe=1.48,
-            ic_change=-0.001, sharpe_change=-0.02,
-        )],
-    ))
-    loop.causal_validator.validate = MagicMock(return_value=CausalValidationResult(
-        factor_id="review_pass", factor_name="review_pass",
-        analysis_date="2026-08-05",
-        n_events=5, n_anomalous=0,
-        anomalous_events=[], all_events=[],
-        summary={},
-    ))
-    loop.robustness_tester.run = MagicMock(return_value=RobustnessTestResult(
-        factor_id="review_pass", factor_name="review_pass",
-        adversarial_results=[], missing_value_results=[], ood_results=[],
-        summary={"overall_pass_rate": 1.0},
-    ))
-    loop.shap_analyzer.analyze = MagicMock(return_value=ShapAnalysisResult(
-        factor_id="review_pass", factor_name="review_pass",
-        analysis_date="2026-08-05",
-        num_extreme_samples=0, num_features=0,
-        top_samples=[], bottom_samples=[], global_top_features=[],
-        summary={},
-    ))
+    loop.ablation_experiment.run = MagicMock(
+        return_value=AblationResult(
+            factor_id="review_pass",
+            factor_name="review_pass",
+            baseline_ic=0.05,
+            baseline_sharpe=1.5,
+            ablations=[
+                SingleAblation(
+                    mode="volume_zero",
+                    description="vol→0",
+                    ic=0.049,
+                    sharpe=1.48,
+                    ic_change=-0.001,
+                    sharpe_change=-0.02,
+                )
+            ],
+        )
+    )
+    loop.causal_validator.validate = MagicMock(
+        return_value=CausalValidationResult(
+            factor_id="review_pass",
+            factor_name="review_pass",
+            analysis_date="2026-08-05",
+            n_events=5,
+            n_anomalous=0,
+            anomalous_events=[],
+            all_events=[],
+            summary={},
+        )
+    )
+    loop.robustness_tester.run = MagicMock(
+        return_value=RobustnessTestResult(
+            factor_id="review_pass",
+            factor_name="review_pass",
+            adversarial_results=[],
+            missing_value_results=[],
+            ood_results=[],
+            summary={"overall_pass_rate": 1.0},
+        )
+    )
+    loop.shap_analyzer.analyze = MagicMock(
+        return_value=ShapAnalysisResult(
+            factor_id="review_pass",
+            factor_name="review_pass",
+            analysis_date="2026-08-05",
+            num_extreme_samples=0,
+            num_features=0,
+            top_samples=[],
+            bottom_samples=[],
+            global_top_features=[],
+            summary={},
+        )
+    )
 
 
-def test_evolution_loop_runs_minimal(
-    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
-):
+def test_evolution_loop_runs_minimal(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client):
     """应能完整运行 1 代演化（状态检查）。"""
     loop = EvolutionLoop(
         data=sample_ohlcv,
@@ -308,9 +346,7 @@ def test_evolution_loop_runs_minimal(
     assert result.status in ("completed", "paused", "circuit_broken")
 
 
-def test_evolution_loop_produces_metrics(
-    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
-):
+def test_evolution_loop_produces_metrics(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client):
     """运行后指标应被正确填充。"""
     loop = EvolutionLoop(
         data=sample_ohlcv,
@@ -393,16 +429,21 @@ def test_evolution_loop_circuit_breaker_on_token(
 
     # 设置极小预算 + 极大 mock token
     mock_llm_client.complete.return_value = (
-        json.dumps({
-            "mutation_type": "macro_logic",
-            "mutation_summary": "Mock",
-            "code_modification": "window_plus_5",
-            "economic_logic_modification": {
-                "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 4,
-                "narrative": "Mock"
-            },
-            "lessons_referenced": [],
-        }),
+        json.dumps(
+            {
+                "mutation_type": "macro_logic",
+                "mutation_summary": "Mock",
+                "code_modification": "window_plus_5",
+                "economic_logic_modification": {
+                    "theory": 4,
+                    "behavioral": 3,
+                    "microstructure": 3,
+                    "institutional": 4,
+                    "narrative": "Mock",
+                },
+                "lessons_referenced": [],
+            }
+        ),
         500_000,  # 极大 token 数
     )
 
@@ -432,9 +473,7 @@ def test_evolution_loop_circuit_breaker_on_token(
     assert "Token" in (result.circuit_breaker_reason or "")
 
 
-def test_evolution_loop_to_dict(
-    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
-):
+def test_evolution_loop_to_dict(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client):
     """EvolutionRunResult.to_dict() 应返回完整字典。"""
     loop = EvolutionLoop(
         data=sample_ohlcv,
@@ -453,6 +492,7 @@ def test_evolution_loop_to_dict(
 
 
 # ─── StateManager 附加覆盖 ────────────────────────────────
+
 
 def test_state_manager_mark_paused(tmp_memory_dir):
     """mark_paused 应正确设置状态和错误原因。"""
@@ -504,6 +544,7 @@ def test_state_manager_save_version_mismatch(tmp_memory_dir):
     state = mgr.load_or_init()
     state["schema_version"] = "0"
     from fts.factor_engine.state import StateError
+
     with pytest.raises(StateError, match="版本不匹配"):
         mgr.save(state)
 
@@ -513,10 +554,13 @@ def test_state_manager_backup_failure(tmp_memory_dir, monkeypatch):
     mgr = EvolutionStateManager(tmp_memory_dir)
     state = mgr.load_or_init()
     import shutil
+
     def broken_copy(*args, **kwargs):
         raise OSError("模拟 backup 失败")
+
     monkeypatch.setattr(shutil, "copy2", broken_copy)
     from fts.factor_engine.state import StateError
+
     with pytest.raises(StateError, match="备份失败"):
         mgr.save(state)
 
@@ -539,19 +583,21 @@ def test_state_manager_try_load_empty_state(tmp_memory_dir):
 
 # ─── EvolutionLoop 熔断覆盖 ───────────────────────────────
 
+
 def test_evolution_loop_circuit_breaker_consecutive_low_ic(
     sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
 ):
     """连续低 IC 应触发熔断。"""
     from fts.factor_engine.contracts import BudgetConfig
+
     budget = BudgetConfig(
         nightly_token_limit=1_000_000,
         monthly_token_limit=10_000_000,
         max_generation=10,
         max_tokens_per_factor=10_000,
         circuit_breaker_token_ratio=10.0,
-        circuit_breaker_consecutive_low_ic=1,   # 触发条件：1 代低 IC
-        circuit_breaker_low_ic_threshold=0.99,   # 几乎所有 IC 都低于此值
+        circuit_breaker_consecutive_low_ic=1,  # 触发条件：1 代低 IC
+        circuit_breaker_low_ic_threshold=0.99,  # 几乎所有 IC 都低于此值
         circuit_breaker_failure_rate=0.99,
     )
     loop = EvolutionLoop(
@@ -572,6 +618,7 @@ def test_evolution_loop_circuit_breaker_high_failure_rate(
 ):
     """高失败率应触发熔断。"""
     from fts.factor_engine.contracts import BudgetConfig
+
     budget = BudgetConfig(
         nightly_token_limit=1_000_000,
         monthly_token_limit=10_000_000,
@@ -627,7 +674,7 @@ def test_evolution_run_result_contains_seed_correlations(
     )
     result = loop.run(max_generation=1)
     # seed_correlations 字段应存在
-    assert hasattr(result, 'seed_correlations')
+    assert hasattr(result, "seed_correlations")
     assert isinstance(result.seed_correlations, list)
     # to_dict 应包含 seed_correlations
     d = result.to_dict()
@@ -635,9 +682,7 @@ def test_evolution_run_result_contains_seed_correlations(
     assert isinstance(d["seed_correlations"], list)
 
 
-def test_seed_correlation_check_in_run(
-    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
-):
+def test_seed_correlation_check_in_run(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client):
     """run() 应在种子加载后执行相关性预检。"""
     loop = EvolutionLoop(
         data=sample_ohlcv,
@@ -661,23 +706,28 @@ def test_seed_correlation_check_in_run(
 
 # ─── micro_evolution coverage ──────────────────────────
 
+
 class TestMicroEvolutionCoverage:
     """补齐 micro_evolution.py 覆盖。"""
 
     def test_has_optuna_constant(self):
         from fts.factor_engine.micro_evolution import _HAS_OPTUNA
+
         # optuna 已安装，应为 True
         assert _HAS_OPTUNA is True
 
     def test_module_constants(self):
         from fts.factor_engine.micro_evolution import (
-            DEFAULT_N_TRIALS, DEFAULT_EARLY_STOPPING_FAILURES,
+            DEFAULT_N_TRIALS,
+            DEFAULT_EARLY_STOPPING_FAILURES,
         )
+
         assert DEFAULT_N_TRIALS == 100
         assert DEFAULT_EARLY_STOPPING_FAILURES == 20
 
 
 # ─── GAP-I201 batch 批量漏斗（v2.65.0） ──────────────────
+
 
 def test_quick_prefilter_returns_ic_three_tuple(
     sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
@@ -703,9 +753,7 @@ def test_quick_prefilter_returns_ic_three_tuple(
     assert isinstance(ic, float)
 
 
-def test_generate_operator_factor_constant_precheck_rejected(
-    tmp_memory_dir, tmp_elite_dir, mock_llm_client
-):
+def test_generate_operator_factor_constant_precheck_rejected(tmp_memory_dir, tmp_elite_dir, mock_llm_client):
     """GAP-X02: 常数信号校验前移 — 常数数据下生成阶段即拦截，不产出常量因子。
 
     回归: 此前常数表达式要到 _check_factor_runtime 阶段才被淘汰；
@@ -717,7 +765,9 @@ def test_generate_operator_factor_constant_precheck_rejected(
     const_close = pd.Series(100.0, index=dates)
     data = pd.DataFrame(
         {
-            "open": const_close, "high": const_close, "low": const_close,
+            "open": const_close,
+            "high": const_close,
+            "low": const_close,
             "close": const_close,
             "volume": pd.Series(1e6, index=dates),
         },
@@ -736,9 +786,7 @@ def test_generate_operator_factor_constant_precheck_rejected(
         loop._generate_operator_factor(parent, generation=0, trace_id="t")
 
 
-def test_cross_section_prefilter_uses_real_cross_section_returns(
-    tmp_memory_dir, tmp_elite_dir, mock_llm_client
-):
+def test_cross_section_prefilter_uses_real_cross_section_returns(tmp_memory_dir, tmp_elite_dir, mock_llm_client):
     """GAP-X01: 横截面预筛用真实截面收益（信号矩阵 vs 截面 forward 收益）。
 
     回归: 此前横截面模式在 _quick_prefilter 用单标的时序 IC（且 forward_returns
@@ -777,17 +825,19 @@ def test_cross_section_prefilter_uses_real_cross_section_returns(
         market="stock",
     )
     factor = create_operator_factor(
-        "close", "cs_repro", market="stock", family="op",
-        narrative="t", trace_id="t",
+        "close",
+        "cs_repro",
+        market="stock",
+        family="op",
+        narrative="t",
+        trace_id="t",
     )
     ok, reason, ic = loop._quick_prefilter(factor, "t")
     assert ok is True, reason
     assert ic >= 0.02  # 真实截面 IC 应超过 stock 阈值 0.02
 
 
-def test_cross_section_prefilter_rejects_constant_factor(
-    tmp_memory_dir, tmp_elite_dir, mock_llm_client
-):
+def test_cross_section_prefilter_rejects_constant_factor(tmp_memory_dir, tmp_elite_dir, mock_llm_client):
     """GAP-X01: 横截面预筛拦截无截面区分能力的因子（有效标的不足）。"""
     from fts.factor_engine.expr_dsl.factory import create_operator_factor
 
@@ -818,17 +868,19 @@ def test_cross_section_prefilter_rejects_constant_factor(
         market="stock",
     )
     factor = create_operator_factor(
-        "sub(close, close)", "cs_const", market="stock", family="op",
-        narrative="t", trace_id="t",
+        "sub(close, close)",
+        "cs_const",
+        market="stock",
+        family="op",
+        narrative="t",
+        trace_id="t",
     )
     ok, reason, ic = loop._quick_prefilter(factor, "t")
     assert ok is False
     assert ic == 0.0
 
 
-def test_evolve_one_method_hint_operator(
-    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
-):
+def test_evolve_one_method_hint_operator(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client):
     """method_hint='operator' 强制算子演化。"""
     loop = EvolutionLoop(
         data=sample_ohlcv,
@@ -838,12 +890,13 @@ def test_evolve_one_method_hint_operator(
         llm_client=mock_llm_client,
         n_trials_micro=2,
     )
-    loop._generate_operator_factor = MagicMock(
-        return_value=({"factor_id": "fct_op0001", "code": "x"}, "OpGen: ...")
-    )
+    loop._generate_operator_factor = MagicMock(return_value=({"factor_id": "fct_op0001", "code": "x"}, "OpGen: ..."))
     out = loop._evolve_one(
-        {"factor_id": "p1", "name": "parent"}, 1, "t",
-        method_hint="operator", seed=7,
+        {"factor_id": "p1", "name": "parent"},
+        1,
+        "t",
+        method_hint="operator",
+        seed=7,
     )
     assert out is not None
     factor, method, summary, tokens = out
@@ -864,11 +917,12 @@ def test_evolve_one_method_hint_macro_returns_tokens(
         llm_client=mock_llm_client,
         n_trials_micro=2,
     )
-    loop.macro_evolver.evolve = MagicMock(
-        return_value=({"factor_id": "fct_mac0001"}, "Macro", 150)
-    )
+    loop.macro_evolver.evolve = MagicMock(return_value=({"factor_id": "fct_mac0001"}, "Macro", 150))
     out = loop._evolve_one(
-        {"factor_id": "p1", "name": "parent"}, 1, "t", method_hint="macro",
+        {"factor_id": "p1", "name": "parent"},
+        1,
+        "t",
+        method_hint="macro",
     )
     assert out is not None
     _, method, _, tokens = out
@@ -890,17 +944,25 @@ def test_evolve_one_method_hint_gp_failure_returns_none(
     )
     loop._run_gp_evolution = MagicMock(side_effect=RuntimeError("gp down"))
     out = loop._evolve_one(
-        {"factor_id": "p1", "name": "parent"}, 1, "t", method_hint="gp",
+        {"factor_id": "p1", "name": "parent"},
+        1,
+        "t",
+        method_hint="gp",
     )
     assert out is None
 
 
 def test_evolve_one_config_dispatch_gp_fallback(
-    monkeypatch, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+    monkeypatch,
+    sample_ohlcv,
+    forward_returns,
+    tmp_memory_dir,
+    tmp_elite_dir,
     mock_llm_client,
 ):
     """配置分派（method_hint=None）：macro 失败回退 GP（原逻辑平移）。"""
     from fts.config.settings import get_config
+
     monkeypatch.setattr(get_config(), "evolution_mode", "hybrid")
     loop = EvolutionLoop(
         data=sample_ohlcv,
@@ -911,16 +973,18 @@ def test_evolve_one_config_dispatch_gp_fallback(
         n_trials_micro=2,
     )
     loop.macro_evolver.evolve = MagicMock(side_effect=Exception("llm down"))
-    loop._run_gp_evolution = MagicMock(
-        return_value=({"factor_id": "fct_gp0001", "code": "x"}, "GP")
-    )
+    loop._run_gp_evolution = MagicMock(return_value=({"factor_id": "fct_gp0001", "code": "x"}, "GP"))
     out = loop._evolve_one({"factor_id": "p1", "name": "parent"}, 1, "t")
     assert out is not None
     assert out[1] == "gp_evolution"
 
 
 def test_process_candidate_promotes(
-    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+    sample_ohlcv,
+    forward_returns,
+    tmp_memory_dir,
+    tmp_elite_dir,
+    mock_llm_client,
 ):
     """验收: _process_candidate 全链通过后晋升 elite 并持久化状态。"""
     from unittest.mock import patch
@@ -934,8 +998,10 @@ def test_process_candidate_promotes(
         n_trials_micro=2,
     )
     factor = {
-        "factor_id": "fct_cand0001", "name": "cand",
-        "code": "close - close.shift(1)", "params": {},
+        "factor_id": "fct_cand0001",
+        "name": "cand",
+        "code": "close - close.shift(1)",
+        "params": {},
     }
     # mock 微观演化（避免真实 optuna 依赖）
     with patch("fts.factor_engine.evolution_loop.evolve_micro") as m_micro:
@@ -949,13 +1015,22 @@ def test_process_candidate_promotes(
         loop._promote_to_elite = MagicMock(return_value="/tmp/elite/fct_cand0001.json")
         state = {
             "schema_version": "1",
-            "total_factors_evaluated": 0, "total_factors_promoted": 0,
-            "tokens_consumed": 0, "last_generation": 0,
+            "total_factors_evaluated": 0,
+            "total_factors_promoted": 0,
+            "tokens_consumed": 0,
+            "last_generation": 0,
         }
         elite_ids: list[str] = []
         promoted = loop._process_candidate(
-            factor, {"factor_id": "p1", "name": "p"}, 1, "gp_evolution",
-            "GP Gen=1", state, elite_ids, "trace", [],
+            factor,
+            {"factor_id": "p1", "name": "p"},
+            1,
+            "gp_evolution",
+            "GP Gen=1",
+            state,
+            elite_ids,
+            "trace",
+            [],
         )
     assert promoted is True
     assert "fct_cand0001" in elite_ids
@@ -963,7 +1038,11 @@ def test_process_candidate_promotes(
 
 
 def test_process_candidate_verifier_fail_returns_false(
-    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+    sample_ohlcv,
+    forward_returns,
+    tmp_memory_dir,
+    tmp_elite_dir,
+    mock_llm_client,
 ):
     """Verifier 未通过时返回 False 且不晋升。"""
     from unittest.mock import patch
@@ -977,33 +1056,50 @@ def test_process_candidate_verifier_fail_returns_false(
         n_trials_micro=2,
     )
     factor = {
-        "factor_id": "fct_cand0002", "name": "cand2",
-        "code": "close - close.shift(1)", "params": {},
+        "factor_id": "fct_cand0002",
+        "name": "cand2",
+        "code": "close - close.shift(1)",
+        "params": {},
     }
     with patch("fts.factor_engine.evolution_loop.evolve_micro") as m_micro:
         m_micro.return_value = (factor, None)
-        loop.evaluation_chain.evaluate = MagicMock(return_value={
-            "passed": False,
-            "level_1_backtest": {"ic": 0.001},
-            "failure_reasons": ["IC 过低"],
-        })
+        loop.evaluation_chain.evaluate = MagicMock(
+            return_value={
+                "passed": False,
+                "level_1_backtest": {"ic": 0.001},
+                "failure_reasons": ["IC 过低"],
+            }
+        )
         loop.verifier.check = MagicMock(return_value={"passed": False, "failure_reasons": ["IC"]})
         state = {
             "schema_version": "1",
-            "total_factors_evaluated": 0, "total_factors_promoted": 0,
-            "tokens_consumed": 0, "last_generation": 0,
+            "total_factors_evaluated": 0,
+            "total_factors_promoted": 0,
+            "tokens_consumed": 0,
+            "last_generation": 0,
         }
         elite_ids: list[str] = []
         promoted = loop._process_candidate(
-            factor, {"factor_id": "p1", "name": "p"}, 1, "gp_evolution",
-            "GP", state, elite_ids, "trace", [],
+            factor,
+            {"factor_id": "p1", "name": "p"},
+            1,
+            "gp_evolution",
+            "GP",
+            state,
+            elite_ids,
+            "trace",
+            [],
         )
     assert promoted is False
     assert elite_ids == []
 
 
 def test_run_batch_generation_promotes(
-    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+    sample_ohlcv,
+    forward_returns,
+    tmp_memory_dir,
+    tmp_elite_dir,
+    mock_llm_client,
 ):
     """验收: batch 一代漏斗通过者进入 _process_candidate 并晋升。"""
     loop = EvolutionLoop(
@@ -1015,31 +1111,50 @@ def test_run_batch_generation_promotes(
         n_trials_micro=2,
     )
     loop.batch_size = 3
-    loop._batch_generate_one = MagicMock(return_value={
-        "factor": {
-            "factor_id": "fct_b0001", "name": "b",
-            "code": "close - close.shift(1)", "params": {},
-        },
-        "parent_id": "p1", "method": "gp_evolution",
-        "summary": "GP", "tokens": 0,
-        "prefilter_ok": True, "prefilter_reason": "", "prefilter_ic": 0.05,
-    })
+    loop._batch_generate_one = MagicMock(
+        return_value={
+            "factor": {
+                "factor_id": "fct_b0001",
+                "name": "b",
+                "code": "close - close.shift(1)",
+                "params": {},
+            },
+            "parent_id": "p1",
+            "method": "gp_evolution",
+            "summary": "GP",
+            "tokens": 0,
+            "prefilter_ok": True,
+            "prefilter_reason": "",
+            "prefilter_ic": 0.05,
+        }
+    )
     loop._quick_prefilter = MagicMock(return_value=(True, "", 0.05))
     loop._check_factor_runtime = MagicMock(return_value=(True, ""))
     loop._process_candidate = MagicMock(return_value=True)
     state = {
-        "total_factors_evaluated": 0, "total_factors_promoted": 0,
-        "tokens_consumed": 0, "last_generation": 0,
+        "total_factors_evaluated": 0,
+        "total_factors_promoted": 0,
+        "tokens_consumed": 0,
+        "last_generation": 0,
     }
     ok = loop._run_batch_generation(
-        {"factor_id": "p1", "name": "p"}, 1, "trace", state, [], [],
+        {"factor_id": "p1", "name": "p"},
+        1,
+        "trace",
+        state,
+        [],
+        [],
     )
     assert ok is True
     assert loop._process_candidate.call_count == 3
 
 
 def test_run_batch_generation_all_rejected(
-    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+    sample_ohlcv,
+    forward_returns,
+    tmp_memory_dir,
+    tmp_elite_dir,
+    mock_llm_client,
 ):
     """全部候选被粗筛拦截时返回 False 且不进入细评估（全失败回退）。"""
     loop = EvolutionLoop(
@@ -1051,31 +1166,50 @@ def test_run_batch_generation_all_rejected(
         n_trials_micro=2,
     )
     loop.batch_size = 3
-    loop._batch_generate_one = MagicMock(return_value={
-        "factor": {"factor_id": "fct_b0002", "name": "b", "code": "x", "params": {}},
-        "parent_id": "p1", "method": "gp_evolution", "summary": "GP", "tokens": 0,
-        "prefilter_ok": False, "prefilter_reason": "", "prefilter_ic": 0.0,
-    })
+    loop._batch_generate_one = MagicMock(
+        return_value={
+            "factor": {"factor_id": "fct_b0002", "name": "b", "code": "x", "params": {}},
+            "parent_id": "p1",
+            "method": "gp_evolution",
+            "summary": "GP",
+            "tokens": 0,
+            "prefilter_ok": False,
+            "prefilter_reason": "",
+            "prefilter_ic": 0.0,
+        }
+    )
     loop._quick_prefilter = MagicMock(return_value=(False, "IC 过低", 0.0))
     loop._check_factor_runtime = MagicMock(return_value=(True, ""))
     loop._process_candidate = MagicMock(return_value=True)
     state = {
-        "total_factors_evaluated": 0, "total_factors_promoted": 0,
-        "tokens_consumed": 0, "last_generation": 0,
+        "total_factors_evaluated": 0,
+        "total_factors_promoted": 0,
+        "tokens_consumed": 0,
+        "last_generation": 0,
     }
     ok = loop._run_batch_generation(
-        {"factor_id": "p1", "name": "p"}, 1, "trace", state, [], [],
+        {"factor_id": "p1", "name": "p"},
+        1,
+        "trace",
+        state,
+        [],
+        [],
     )
     assert ok is False
     loop._process_candidate.assert_not_called()
 
 
 def test_run_batch_mode_calls_batch_generation(
-    monkeypatch, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+    monkeypatch,
+    sample_ohlcv,
+    forward_returns,
+    tmp_memory_dir,
+    tmp_elite_dir,
     mock_llm_client,
 ):
     """验收: evolution_mode=batch 时 run() 每代调用 _run_batch_generation。"""
     from fts.config.settings import get_config
+
     monkeypatch.setattr(get_config(), "evolution_mode", "batch")
     loop = EvolutionLoop(
         data=sample_ohlcv,
@@ -1085,10 +1219,15 @@ def test_run_batch_mode_calls_batch_generation(
         llm_client=mock_llm_client,
         n_trials_micro=2,
     )
-    seeds = [{
-        "factor_id": "seed_p1", "name": "p1",
-        "code": "close - close.shift(1)", "params": {}, "market": "stock",
-    }]
+    seeds = [
+        {
+            "factor_id": "seed_p1",
+            "name": "p1",
+            "code": "close - close.shift(1)",
+            "params": {},
+            "market": "stock",
+        }
+    ]
     loop.seed_pool.load_all_seeds = MagicMock(return_value=seeds)
     loop._merge_l1_candidates = MagicMock(side_effect=lambda s, t: s)
     loop._run_seed_correlation_check = MagicMock(return_value=[])
@@ -1109,18 +1248,21 @@ def test_run_batch_mode_calls_batch_generation(
 class TestMicroEvolutionCoverageExt:
     def test_micro_evolution_error_is_exception(self):
         from fts.factor_engine.micro_evolution import MicroEvolutionError
+
         assert issubclass(MicroEvolutionError, Exception)
 
     def test_micro_evolution_all_exports(self):
         from fts.factor_engine.micro_evolution import (
-            DEFAULT_N_TRIALS, DEFAULT_EARLY_STOPPING_FAILURES,
-            MicroEvolutionError, optimize_params, evolve_micro,
+            optimize_params,
+            evolve_micro,
         )
+
         assert callable(optimize_params)
         assert callable(evolve_micro)
 
     def test_suggest_param_bool(self, mock_trial):
         from fts.factor_engine.micro_evolution import _suggest_param
+
         mock_trial.suggest_categorical.return_value = True
         result = _suggest_param(mock_trial, "flag", True)
         assert result is True
@@ -1128,6 +1270,7 @@ class TestMicroEvolutionCoverageExt:
 
     def test_suggest_param_int(self, mock_trial):
         from fts.factor_engine.micro_evolution import _suggest_param
+
         mock_trial.suggest_int.return_value = 20
         result = _suggest_param(mock_trial, "window", 10)
         assert result == 20
@@ -1136,6 +1279,7 @@ class TestMicroEvolutionCoverageExt:
     def test_suggest_param_int_min_value(self, mock_trial):
         """int 参数最小值应为 max(1, value//2)。"""
         from fts.factor_engine.micro_evolution import _suggest_param
+
         mock_trial.suggest_int.return_value = 2
         result = _suggest_param(mock_trial, "small", 2)
         assert result == 2
@@ -1143,6 +1287,7 @@ class TestMicroEvolutionCoverageExt:
 
     def test_suggest_param_float(self, mock_trial):
         from fts.factor_engine.micro_evolution import _suggest_param
+
         mock_trial.suggest_float.return_value = 0.5
         result = _suggest_param(mock_trial, "decay", 0.5)
         assert result == 0.5
@@ -1151,6 +1296,7 @@ class TestMicroEvolutionCoverageExt:
     def test_suggest_param_other_type(self, mock_trial):
         """字符串等不可搜索类型应原值返回。"""
         from fts.factor_engine.micro_evolution import _suggest_param
+
         result = _suggest_param(mock_trial, "method", "spearman")
         assert result == "spearman"
         mock_trial.suggest_categorical.assert_not_called()
@@ -1158,11 +1304,15 @@ class TestMicroEvolutionCoverageExt:
         mock_trial.suggest_float.assert_not_called()
 
     def test_optimize_params_no_optuna_returns_defaults(
-        self, sample_ohlcv, forward_returns, monkeypatch,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        monkeypatch,
     ):
         """模拟无 optuna 时应返回原 params + score=0.0。"""
         import fts.factor_engine.micro_evolution as mev
-        monkeypatch.setattr(mev, '_HAS_OPTUNA', False)
+
+        monkeypatch.setattr(mev, "_HAS_OPTUNA", False)
         from fts.factor_engine.contracts import EconomicLogic, FactorProgram, FactorSignature
 
         factor = FactorProgram(
@@ -1171,7 +1321,9 @@ class TestMicroEvolutionCoverageExt:
             code="def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))",
             params={"window": 10, "threshold": 0.5},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="测试因子"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="测试因子"
+            ),
             source="manual",
         )
         params, score = mev.optimize_params(factor, sample_ohlcv, forward_returns)
@@ -1179,11 +1331,15 @@ class TestMicroEvolutionCoverageExt:
         assert score == 0.0
 
     def test_optimize_params_with_custom_objective_fn(
-        self, sample_ohlcv, forward_returns, monkeypatch,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        monkeypatch,
     ):
         """模拟无 optuna 时忽略 objective_fn。"""
         import fts.factor_engine.micro_evolution as mev
-        monkeypatch.setattr(mev, '_HAS_OPTUNA', False)
+
+        monkeypatch.setattr(mev, "_HAS_OPTUNA", False)
         from fts.factor_engine.contracts import EconomicLogic, FactorProgram, FactorSignature
 
         factor = FactorProgram(
@@ -1192,15 +1348,19 @@ class TestMicroEvolutionCoverageExt:
             code="def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))",
             params={"window": 10},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="测试因子"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="测试因子"
+            ),
             source="manual",
         )
-        params, score = mev.optimize_params(factor, sample_ohlcv, forward_returns,
-                                             objective_fn=lambda s, r: 0.99)
+        params, score = mev.optimize_params(factor, sample_ohlcv, forward_returns, objective_fn=lambda s, r: 0.99)
         assert score == 0.0  # optuna 不可用时忽略 objective_fn
 
     def test_optimize_params_with_mock_optuna(
-        self, sample_ohlcv, forward_returns, mock_optuna_study,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        mock_optuna_study,
     ):
         """mock optuna 路径应完整走通。"""
         mock_optuna, mock_study = mock_optuna_study
@@ -1212,7 +1372,9 @@ class TestMicroEvolutionCoverageExt:
             code="def factor_program(data, params):\n    import numpy as np\n    w = params.get('window', 10)\n    return np.zeros(len(data['close']))",
             params={"window": 10},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="optuna测试"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="optuna测试"
+            ),
             source="manual",
         )
         mock_study.best_params = {"window": 15}
@@ -1220,13 +1382,17 @@ class TestMicroEvolutionCoverageExt:
         mock_study.trials = [mock_study]  # 非空 trials
 
         import fts.factor_engine.micro_evolution as mev
+
         params, score = mev.optimize_params(factor, sample_ohlcv, forward_returns, n_trials=5)
         assert params == {"window": 15}
         assert score == 0.05
         mock_optuna.create_study.assert_called_once()
 
     def test_optimize_params_study_raises(
-        self, sample_ohlcv, forward_returns, mock_optuna_study,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        mock_optuna_study,
     ):
         """study.optimize 抛出异常时应转为 MicroEvolutionError。"""
         mock_optuna, mock_study = mock_optuna_study
@@ -1238,17 +1404,23 @@ class TestMicroEvolutionCoverageExt:
             code="def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))",
             params={"window": 10},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="error测试"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="error测试"
+            ),
             source="manual",
         )
         mock_study.optimize.side_effect = RuntimeError("optuna 崩溃")
 
         import fts.factor_engine.micro_evolution as mev
+
         with pytest.raises(mev.MicroEvolutionError, match="optuna 优化失败"):
             mev.optimize_params(factor, sample_ohlcv, forward_returns, n_trials=5)
 
     def test_optimize_params_no_best_params(
-        self, sample_ohlcv, forward_returns, mock_optuna_study,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        mock_optuna_study,
     ):
         """无 best_params 时返回原 params + 0.0。"""
         mock_optuna, mock_study = mock_optuna_study
@@ -1260,24 +1432,31 @@ class TestMicroEvolutionCoverageExt:
             code="def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))",
             params={"window": 10},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="empty测试"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="empty测试"
+            ),
             source="manual",
         )
-        mock_study.best_params = {}   # 空表示无最佳参数
+        mock_study.best_params = {}  # 空表示无最佳参数
         mock_study.best_value = 0.0
         mock_study.trials = []
 
         import fts.factor_engine.micro_evolution as mev
+
         params, score = mev.optimize_params(factor, sample_ohlcv, forward_returns, n_trials=5)
         assert params == {"window": 10}
         assert score == 0.0
 
     def test_evolve_micro_basic(
-        self, sample_ohlcv, forward_returns, monkeypatch,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        monkeypatch,
     ):
         """evolve_micro 基本路径（模拟无 optuna）。"""
         import fts.factor_engine.micro_evolution as mev
-        monkeypatch.setattr(mev, '_HAS_OPTUNA', False)
+
+        monkeypatch.setattr(mev, "_HAS_OPTUNA", False)
         from fts.factor_engine.contracts import EconomicLogic, FactorProgram, FactorSignature
 
         factor = FactorProgram(
@@ -1286,7 +1465,9 @@ class TestMicroEvolutionCoverageExt:
             code="def factor_program(data, params):\n    import numpy as np\n    w = params.get('window', 10)\n    return np.zeros(len(data['close']))",
             params={"window": 10},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="evolve测试"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="evolve测试"
+            ),
             source="manual",
         )
         evolved, score = mev.evolve_micro(factor, sample_ohlcv, forward_returns, n_trials=5)
@@ -1296,7 +1477,10 @@ class TestMicroEvolutionCoverageExt:
         assert score == 0.0
 
     def test_optimize_params_empty_params_uses_default_search_space(
-        self, sample_ohlcv, forward_returns, mock_optuna_study,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        mock_optuna_study,
     ):
         """params 为空时（GP/算子因子）应注入默认搜索空间，避免 optuna 退化。
 
@@ -1321,7 +1505,9 @@ class TestMicroEvolutionCoverageExt:
             ),
             params={},  # 空参数 → 应触发默认搜索空间
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="noparam测试"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="noparam测试"
+            ),
             source="manual",
         )
 
@@ -1344,6 +1530,7 @@ class TestMicroEvolutionCoverageExt:
         mock_study.trials = [MagicMock()]
 
         import fts.factor_engine.micro_evolution as mev
+
         params, score = mev.optimize_params(factor, sample_ohlcv, forward_returns, n_trials=3)
         # 默认搜索空间生效: 返回参数包含全部 4 个默认键
         assert set(params.keys()) == {"lookback", "holding", "window", "threshold"}
@@ -1352,6 +1539,7 @@ class TestMicroEvolutionCoverageExt:
 
 
 # ─── EvolutionLoop 未覆盖路径补齐 ─────────────────────────
+
 
 def _make_minimal_factor(factor_id: str = "fct_test1234") -> FactorProgram:
     """构造最小 FactorProgram fixture。"""
@@ -1371,10 +1559,17 @@ def _make_minimal_factor(factor_id: str = "fct_test1234") -> FactorProgram:
         ),
         params={"window": 10},
         signature=FactorSignature(
-            input_fields=["close"], output_type="signal", frequency="daily", lookback=1,
+            input_fields=["close"],
+            output_type="signal",
+            frequency="daily",
+            lookback=1,
         ),
         economic_logic=EconomicLogic(
-            theory=3, behavioral=3, microstructure=3, institutional=3, narrative="测试因子",
+            theory=3,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="测试因子",
         ),
         source="manual",
         parent_id=None,
@@ -1390,7 +1585,11 @@ class TestEvolutionLoopCoverage:
     # ─── 宏观演化失败（line 178-184）────────────────────
 
     def test_macro_evolution_failure(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
     ):
         """宏观演化抛出异常应跳过本代并继续，GP 作为 fallback。"""
         loop = EvolutionLoop(
@@ -1413,7 +1612,11 @@ class TestEvolutionLoopCoverage:
         assert result.tokens_consumed == 0
 
     def test_macro_evolution_failure_recorded(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
     ):
         """宏观演化和 GP 演化均失败时，应在 failure 目录生成轨迹文件。"""
         loop = EvolutionLoop(
@@ -1440,7 +1643,12 @@ class TestEvolutionLoopCoverage:
     # ─── 微观演化失败（line 192-197）────────────────────
 
     def test_micro_evolution_failure(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_evolve_micro,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_evolve_micro,
     ):
         """微观演化抛出异常应跳过本代并继续。"""
         loop = EvolutionLoop(
@@ -1459,7 +1667,12 @@ class TestEvolutionLoopCoverage:
         assert result.tokens_consumed > 0  # 宏观演化的 token 被消耗
 
     def test_micro_evolution_failure_recorded(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_evolve_micro,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_evolve_micro,
     ):
         """微观演化失败应在 failure 目录生成轨迹文件。"""
         # 先运行一次查看正常路径，确保 failure 目录有文件
@@ -1480,7 +1693,12 @@ class TestEvolutionLoopCoverage:
     # ─── Verifier → 晋级精英池（line 213-221）─────────────
 
     def test_evolution_loop_promote_to_elite(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_llm_client,
     ):
         """Verifier 通过应晋级精英池。"""
         from fts.factor_engine.contracts import BudgetConfig
@@ -1528,7 +1746,12 @@ class TestEvolutionLoopCoverage:
     # ─── 外层 except 块（line 256-258）───────────────────
 
     def test_evolution_loop_outer_exception(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        monkeypatch,
     ):
         """循环内未捕获异常应触发外层 except → 返回 paused。"""
         loop = EvolutionLoop(
@@ -1547,7 +1770,12 @@ class TestEvolutionLoopCoverage:
     # ─── 失败率熔断（line 293-295）───────────────────────
 
     def test_evolution_loop_failure_rate_circuit_breaker(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_llm_client,
     ):
         """运行内高失败率应触发熔断。"""
         from fts.factor_engine.contracts import BudgetConfig
@@ -1600,7 +1828,9 @@ class TestEvolutionLoopCoverage:
     # ─── 内部方法直接测试 ─────────────────────────────────
 
     def test_promote_to_elite(
-        self, tmp_elite_dir, tmp_memory_dir,
+        self,
+        tmp_elite_dir,
+        tmp_memory_dir,
     ):
         """_promote_to_elite 应写文件到 elite 目录。"""
         loop = EvolutionLoop(
@@ -1632,7 +1862,9 @@ class TestEvolutionLoopCoverage:
     # ─── GAP-032: 双写原子化（JSON 快照 + DuckDB catalog 严格一致）───
 
     def test_write_to_duckdb_returns_true_on_success(
-        self, tmp_elite_dir, tmp_memory_dir,
+        self,
+        tmp_elite_dir,
+        tmp_memory_dir,
     ):
         """_write_to_duckdb 成功时应返回 True。"""
         loop = EvolutionLoop(
@@ -1660,7 +1892,9 @@ class TestEvolutionLoopCoverage:
         mock_repo.create_factor.assert_called_once()
 
     def test_write_to_duckdb_returns_false_on_error(
-        self, tmp_elite_dir, tmp_memory_dir,
+        self,
+        tmp_elite_dir,
+        tmp_memory_dir,
     ):
         """_write_to_duckdb 失败时应返回 False（不吞异常）。"""
         loop = EvolutionLoop(
@@ -1687,7 +1921,9 @@ class TestEvolutionLoopCoverage:
         assert result is False
 
     def test_promote_to_elite_duckdb_failure_rolls_back_json(
-        self, tmp_elite_dir, tmp_memory_dir,
+        self,
+        tmp_elite_dir,
+        tmp_memory_dir,
     ):
         """DuckDB 写入失败时 _promote_to_elite 应回滚 JSON 快照并返回 None。"""
         loop = EvolutionLoop(
@@ -1719,7 +1955,9 @@ class TestEvolutionLoopCoverage:
         assert list(tmp_elite_dir.glob("*.json")) == []
 
     def test_promote_to_elite_duckdb_success_keeps_json(
-        self, tmp_elite_dir, tmp_memory_dir,
+        self,
+        tmp_elite_dir,
+        tmp_memory_dir,
     ):
         """DuckDB 写入成功时 _promote_to_elite 保留 JSON 快照并返回路径。"""
         loop = EvolutionLoop(
@@ -1869,9 +2107,7 @@ class TestEvolutionLoopCoverage:
             memory_dir=tmp_memory_dir,
         )
         # 让 record_failure 抛出异常
-        loop.experience_chain.record_failure = MagicMock(
-            side_effect=RuntimeError("磁盘已满")
-        )
+        loop.experience_chain.record_failure = MagicMock(side_effect=RuntimeError("磁盘已满"))
         factor = _make_minimal_factor("fct_fail_test3")
         # 应不抛异常
         loop._record_failure_trace(
@@ -1890,7 +2126,12 @@ class TestEvolutionLoopCoverage:
     # ─── low_ic 分支（line 232-235）───────────────────────
 
     def test_low_ic_increment(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_evolve_micro,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_evolve_micro,
     ):
         """低 IC 因子应递增 _consecutive_low_ic 计数器。"""
         from fts.factor_engine.contracts import BudgetConfig
@@ -1920,9 +2161,13 @@ class TestEvolutionLoopCoverage:
         loop._quick_prefilter = MagicMock(return_value=(True, "", 0.05))
         # mock macro_evolver.evolve 返回有效结果（含 trace_id）
         mock_factor = _make_minimal_factor("fct_lowic_test")
-        loop.macro_evolver.evolve = MagicMock(return_value=(
-            mock_factor, "mock summary", 100,
-        ))
+        loop.macro_evolver.evolve = MagicMock(
+            return_value=(
+                mock_factor,
+                "mock summary",
+                100,
+            )
+        )
         # mock evolve_micro 返回有效因子
         optimized = _make_minimal_factor("fct_optimized_test")
         mock_evolve_micro.return_value = (optimized, 0.01)
@@ -1935,6 +2180,7 @@ class TestEvolutionLoopCoverage:
 
 # ─── main() 函数测试（line 396-438）────────────────────────
 
+
 class TestMainFunction:
     """测试 CLI 入口 main()。"""
 
@@ -1942,6 +2188,7 @@ class TestMainFunction:
         """不带 --once 标志应打印帮助并退出。"""
         monkeypatch.setattr(sys, "argv", ["evolution_loop.py"])
         from fts.factor_engine.evolution_loop import main
+
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 1
@@ -1949,32 +2196,42 @@ class TestMainFunction:
     def test_main_with_once_flag(self, monkeypatch, tmp_path):
         """带 --once 标志应运行完整演化。"""
         monkeypatch.setattr(
-            sys, "argv",
+            sys,
+            "argv",
             [
                 "evolution_loop.py",
                 "--once",
-                "--max-generation", "1",
-                "--memory-dir", str(tmp_path / "evolution"),
-                "--elite-dir", str(tmp_path / "elite"),
+                "--max-generation",
+                "1",
+                "--memory-dir",
+                str(tmp_path / "evolution"),
+                "--elite-dir",
+                str(tmp_path / "elite"),
             ],
         )
         from fts.factor_engine.evolution_loop import main
+
         # 不应抛出异常
         main()
 
     def test_main_with_max_generation(self, monkeypatch, tmp_path):
         """带 --max-generation 参数应限定代数。"""
         monkeypatch.setattr(
-            sys, "argv",
+            sys,
+            "argv",
             [
                 "evolution_loop.py",
                 "--once",
-                "--max-generation", "2",
-                "--memory-dir", str(tmp_path / "evolution2"),
-                "--elite-dir", str(tmp_path / "elite2"),
+                "--max-generation",
+                "2",
+                "--memory-dir",
+                str(tmp_path / "evolution2"),
+                "--elite-dir",
+                str(tmp_path / "elite2"),
             ],
         )
         from fts.factor_engine.evolution_loop import main
+
         main()
 
     # ─── if __name__ == "__main__" 覆盖（line 442）────────
@@ -1982,6 +2239,7 @@ class TestMainFunction:
     def test_module_execution(self, monkeypatch, tmp_path):
         """模拟 python -m 执行进入 main()。"""
         import fts.factor_engine.evolution_loop as mod
+
         original_main = mod.main
         called = False
 
@@ -1991,22 +2249,26 @@ class TestMainFunction:
 
         mod.main = fake_main
         monkeypatch.setattr(
-            sys, "argv",
+            sys,
+            "argv",
             [
                 "evolution_loop.py",
                 "--once",
-                "--max-generation", "1",
-                "--memory-dir", str(tmp_path / "evolution_mod"),
-                "--elite-dir", str(tmp_path / "elite_mod"),
+                "--max-generation",
+                "1",
+                "--memory-dir",
+                str(tmp_path / "evolution_mod"),
+                "--elite-dir",
+                str(tmp_path / "elite_mod"),
             ],
         )
         # 模拟 __name__ == "__main__"
         from fts.factor_engine import evolution_loop as evolution_loop_mod
+
         with patch.object(evolution_loop_mod, "__name__", "__main__"):
             # 触发 if __name__ == "__main__": main()
             # 直接调用等同于 __main__ 的代码
-            exec("from fts.factor_engine.evolution_loop import main; main()",
-                 {"__name__": "__main__"})
+            exec("from fts.factor_engine.evolution_loop import main; main()", {"__name__": "__main__"})
         mod.main = original_main
 
     # ─── main() 中熔断行打印覆盖（line 436, 438）─────────
@@ -2026,19 +2288,23 @@ class TestMainFunction:
             circuit_breaker_reason="Token 熔断: 5000 > 200000 * 2.0",
             elite_factor_ids=[],
         )
-        with patch("fts.factor_engine.evolution_loop.EvolutionLoop.run",
-                   return_value=mock_result):
+        with patch("fts.factor_engine.evolution_loop.EvolutionLoop.run", return_value=mock_result):
             monkeypatch.setattr(
-                sys, "argv",
+                sys,
+                "argv",
                 [
                     "evolution_loop.py",
                     "--once",
-                    "--max-generation", "3",
-                    "--memory-dir", str(tmp_path / "evo_cb"),
-                    "--elite-dir", str(tmp_path / "elite_cb"),
+                    "--max-generation",
+                    "3",
+                    "--memory-dir",
+                    str(tmp_path / "evo_cb"),
+                    "--elite-dir",
+                    str(tmp_path / "elite_cb"),
                 ],
             )
             from fts.factor_engine.evolution_loop import main
+
             main()
 
     def test_main_with_elite_factor_ids(self, monkeypatch, tmp_path):
@@ -2056,19 +2322,23 @@ class TestMainFunction:
             circuit_breaker_reason=None,
             elite_factor_ids=["fct_abc12345", "fct_def67890"],
         )
-        with patch("fts.factor_engine.evolution_loop.EvolutionLoop.run",
-                   return_value=mock_result):
+        with patch("fts.factor_engine.evolution_loop.EvolutionLoop.run", return_value=mock_result):
             monkeypatch.setattr(
-                sys, "argv",
+                sys,
+                "argv",
                 [
                     "evolution_loop.py",
                     "--once",
-                    "--max-generation", "2",
-                    "--memory-dir", str(tmp_path / "evo_elite"),
-                    "--elite-dir", str(tmp_path / "elite_elite"),
+                    "--max-generation",
+                    "2",
+                    "--memory-dir",
+                    str(tmp_path / "evo_elite"),
+                    "--elite-dir",
+                    str(tmp_path / "elite_elite"),
                 ],
             )
             from fts.factor_engine.evolution_loop import main
+
             main()
 
     def test_main_with_both_cb_and_elite(self, monkeypatch, tmp_path):
@@ -2086,29 +2356,39 @@ class TestMainFunction:
             circuit_breaker_reason="Token 超限",
             elite_factor_ids=["fct_elite_test"],
         )
-        with patch("fts.factor_engine.evolution_loop.EvolutionLoop.run",
-                   return_value=mock_result):
+        with patch("fts.factor_engine.evolution_loop.EvolutionLoop.run", return_value=mock_result):
             monkeypatch.setattr(
-                sys, "argv",
+                sys,
+                "argv",
                 [
                     "evolution_loop.py",
                     "--once",
-                    "--max-generation", "5",
-                    "--memory-dir", str(tmp_path / "evo_both"),
-                    "--elite-dir", str(tmp_path / "elite_both"),
+                    "--max-generation",
+                    "5",
+                    "--memory-dir",
+                    str(tmp_path / "evo_both"),
+                    "--elite-dir",
+                    str(tmp_path / "elite_both"),
                 ],
             )
             from fts.factor_engine.evolution_loop import main
+
             main()
 
 
 # ─── 进一步覆盖 line 221 ──────────────────────────────────
 
+
 class TestLine221:
     """专门覆盖 evolution_loop.py line 221 (self._consecutive_low_ic = 0)。"""
 
     def test_consecutive_low_ic_reset_on_success(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_evolve_micro,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_evolve_micro,
     ):
         """Verifier 通过时应重置低 IC 计数器。"""
         loop = EvolutionLoop(
@@ -2122,14 +2402,21 @@ class TestLine221:
         _mock_seed_evaluation_pass(loop)
         # 审查模块 mock 通过，聚焦主流程晋升链路
         _mock_review_pass(loop)
+        # GAP-I206 (v2.71.0): 隔离 L2 准入去冗余相关性检查（mock 候选信号与
+        # 已晋升种子相关可达 -0.967，与低 IC 计数器重置断言无关）
+        loop._check_elite_correlation = MagicMock(return_value=None)
         # 运行时校验和快速预筛选 mock 通过（算子因子需 mock 绕过实时执行）
         loop._check_factor_runtime = MagicMock(return_value=(True, ""))
         loop._quick_prefilter = MagicMock(return_value=(True, "", 0.05))
         # Mock macro_evolver 返回有效因子（包含 trace_id）
         parent_factor = _make_minimal_factor("fct_line221_parent")
-        loop.macro_evolver.evolve = MagicMock(return_value=(
-            parent_factor, "Mock macro summary", 200,
-        ))
+        loop.macro_evolver.evolve = MagicMock(
+            return_value=(
+                parent_factor,
+                "Mock macro summary",
+                200,
+            )
+        )
         # Mock micro_evolution 返回优化后因子
         optimized = _make_minimal_factor("fct_line221_child")
         optimized["factor_id"] = "fct_line221_child"
@@ -2157,13 +2444,19 @@ class TestLine221:
 
 # ─── 覆盖遗漏行 (217-234, 266, 487) ─────────────────────
 
+
 class TestCoverageGaps:
     """覆盖 evolution_loop.py 遗漏行。"""
 
     # ── cross_section 路径 lines 217-234 ──
 
     def test_cross_section_evaluation_path(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_evolve_micro,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_evolve_micro,
     ):
         """lines 217-234: cross_section_data 为非 None 时应走横截面评估路径。"""
         from fts.factor_engine.contracts import BudgetConfig
@@ -2192,10 +2485,13 @@ class TestCoverageGaps:
             cross_section_data=cross_data,
             cross_section_dates=cross_dates,
         )
-        loop.macro_evolver.evolve = MagicMock(return_value=(
-            _make_minimal_factor("fct_cross_test"),
-            "mock cross macro", 200,
-        ))
+        loop.macro_evolver.evolve = MagicMock(
+            return_value=(
+                _make_minimal_factor("fct_cross_test"),
+                "mock cross macro",
+                200,
+            )
+        )
         optimized = _make_minimal_factor("fct_cross_opt")
         mock_evolve_micro.return_value = (optimized, 0.03)
         result = loop.run(max_generation=1)
@@ -2203,7 +2499,12 @@ class TestCoverageGaps:
         assert result.generations_completed >= 0
 
     def test_cross_section_failure_reasons_low_ic(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_evolve_micro,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_evolve_micro,
     ):
         """横截面路径中 IC < 0.03 应有失败原因。"""
         from fts.factor_engine.contracts import BudgetConfig
@@ -2235,10 +2536,13 @@ class TestCoverageGaps:
         # Mock 使得 cross_section_evaluate_backtest 返回低 IC
         with patch("fts.factor_engine.evolution_loop.cross_section_evaluate_backtest") as mock_cs:
             mock_cs.return_value = {"ic": 0.01, "sharpe": 1.0}
-            loop.macro_evolver.evolve = MagicMock(return_value=(
-                _make_minimal_factor("fct_cross_lowic"),
-                "mock", 200,
-            ))
+            loop.macro_evolver.evolve = MagicMock(
+                return_value=(
+                    _make_minimal_factor("fct_cross_lowic"),
+                    "mock",
+                    200,
+                )
+            )
             optimized = _make_minimal_factor("fct_cross_opt2")
             mock_evolve_micro.return_value = (optimized, 0.01)
             result = loop.run(max_generation=1)
@@ -2258,17 +2562,24 @@ class TestCoverageGaps:
         loop._consecutive_low_ic = 5
         # 构造一个通过的 evaluation
         from fts.factor_engine.contracts import FactorEvaluation
+
         eval_passed = FactorEvaluation(
-            factor_id="fct_test", trace_id="t",
-            passed=True, failure_reasons=[],
+            factor_id="fct_test",
+            trace_id="t",
+            passed=True,
+            failure_reasons=[],
             evaluated_at="now",
         )
         # 模拟 verifier 通过后的路径 — 使用成功轨迹记录
         factor = _make_minimal_factor("fct_reset")
         loop._record_success_trace(
-            factor=factor, generation=1, mutation_type="combined",
-            mutation_summary="测试重置", evaluation=eval_passed,
-            lessons=["test"], trace_id="l2_test",
+            factor=factor,
+            generation=1,
+            mutation_type="combined",
+            mutation_summary="测试重置",
+            evaluation=eval_passed,
+            lessons=["test"],
+            trace_id="l2_test",
         )
         # 验证 success 目录有文件
         success_dir = tmp_memory_dir / "success"
@@ -2282,18 +2593,21 @@ class TestCoverageGaps:
         from fts.factor_engine import evolution_loop as el_mod
 
         monkeypatch.setattr(
-            sys, "argv",
+            sys,
+            "argv",
             [
                 "evolution_loop.py",
                 "--once",
-                "--max-generation", "1",
-                "--memory-dir", str(tmp_path / "evo_mem"),
-                "--elite-dir", str(tmp_path / "evo_elite"),
+                "--max-generation",
+                "1",
+                "--memory-dir",
+                str(tmp_path / "evo_mem"),
+                "--elite-dir",
+                str(tmp_path / "evo_elite"),
             ],
         )
         with patch.object(el_mod, "__name__", "__main__"):
-            exec("from fts.factor_engine.evolution_loop import main; main()",
-                 {"__name__": "__main__"})
+            exec("from fts.factor_engine.evolution_loop import main; main()", {"__name__": "__main__"})
 
 
 # ─── v2.59.0 (GAP-F03) 期货横截面板块中性化 ──────────────
@@ -2317,9 +2631,7 @@ class TestGapF03SectorNeutralization:
             circuit_breaker_failure_rate=0.99,
         )
 
-    def _make_loop(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, **kwargs
-    ):
+    def _make_loop(self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, **kwargs):
         cross_data = {"RB0": sample_ohlcv, "I0": sample_ohlcv, "SC0": sample_ohlcv}
         cross_dates = pd.DatetimeIndex(sample_ohlcv.index)
         base = dict(
@@ -2350,9 +2662,7 @@ class TestGapF03SectorNeutralization:
             "fts.config.settings.get_config",
             lambda: FTSConfig(futures_neutralization=True),
         )
-        loop = self._make_loop(
-            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir
-        )
+        loop = self._make_loop(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir)
         assert loop.industry_map is not None
         assert loop.industry_map["RB0"] == "黑色系"
         assert loop.industry_map["I0"] == "黑色系"
@@ -2372,9 +2682,7 @@ class TestGapF03SectorNeutralization:
             "fts.config.settings.get_config",
             lambda: FTSConfig(futures_neutralization=False),
         )
-        loop = self._make_loop(
-            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir
-        )
+        loop = self._make_loop(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir)
         assert loop.industry_map is None
 
     def test_explicit_industry_map_not_overridden(
@@ -2393,7 +2701,10 @@ class TestGapF03SectorNeutralization:
         )
         explicit = {"RB0": "自定义板块"}
         loop = self._make_loop(
-            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+            sample_ohlcv,
+            forward_returns,
+            tmp_memory_dir,
+            tmp_elite_dir,
             industry_map=explicit,
         )
         assert loop.industry_map == explicit
@@ -2420,9 +2731,7 @@ class TestGapS01StockNeutralization:
             circuit_breaker_failure_rate=0.99,
         )
 
-    def _make_loop(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, **kwargs
-    ):
+    def _make_loop(self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, **kwargs):
         cross_data = {"600519": sample_ohlcv, "000858": sample_ohlcv, "601318": sample_ohlcv}
         cross_dates = pd.DatetimeIndex(sample_ohlcv.index)
         base = dict(
@@ -2447,15 +2756,14 @@ class TestGapS01StockNeutralization:
 
         raw_map = {"600519.SH": "食品饮料", "000858.SZ": "食品饮料", "601318.SH": "非银金融"}
         monkeypatch.setattr(
-            "fts.config.settings.load_industry_map", lambda: raw_map,
+            "fts.config.settings.load_industry_map",
+            lambda: raw_map,
         )
         monkeypatch.setattr(
             "fts.config.settings.get_config",
             lambda: FTSConfig(stock_neutralization=True, industry_map_path="", cap_map_path=""),
         )
-        loop = self._make_loop(
-            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir
-        )
+        loop = self._make_loop(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir)
         assert loop.industry_map is not None
         # 键归一化：裸代码键（面板 symbol）可命中
         assert loop.industry_map["600519"] == "食品饮料"
@@ -2464,27 +2772,25 @@ class TestGapS01StockNeutralization:
         # 原始带后缀键保留（兼容其他调用方）
         assert loop.industry_map["600519.SH"] == "食品饮料"
 
-    def test_stock_cap_map_injected(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch
-    ):
+    def test_stock_cap_map_injected(self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch):
         """cap_map_path 配置时自动加载市值映射。"""
         from fts.config.settings import FTSConfig
 
         raw_map = {"600519.SH": "食品饮料", "000858.SZ": "食品饮料"}
         cap_map = {"600519.SH": 2.1e12, "000858.SZ": 6.0e11}
         monkeypatch.setattr(
-            "fts.config.settings.load_industry_map", lambda: raw_map,
+            "fts.config.settings.load_industry_map",
+            lambda: raw_map,
         )
         monkeypatch.setattr(
-            "fts.config.settings.load_cap_map", lambda: cap_map,
+            "fts.config.settings.load_cap_map",
+            lambda: cap_map,
         )
         monkeypatch.setattr(
             "fts.config.settings.get_config",
             lambda: FTSConfig(stock_neutralization=True, industry_map_path="", cap_map_path="x"),
         )
-        loop = self._make_loop(
-            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir
-        )
+        loop = self._make_loop(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir)
         assert loop.cap_map is not None
         assert loop.cap_map["600519"] == pytest.approx(2.1e12)
 
@@ -2502,9 +2808,7 @@ class TestGapS01StockNeutralization:
             "fts.config.settings.get_config",
             lambda: FTSConfig(stock_neutralization=False, industry_map_path="", cap_map_path=""),
         )
-        loop = self._make_loop(
-            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir
-        )
+        loop = self._make_loop(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir)
         assert loop.industry_map is None
 
     def test_stock_explicit_industry_map_not_overridden(
@@ -2523,7 +2827,10 @@ class TestGapS01StockNeutralization:
         )
         explicit = {"600519": "自定义行业"}
         loop = self._make_loop(
-            sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
+            sample_ohlcv,
+            forward_returns,
+            tmp_memory_dir,
+            tmp_elite_dir,
             industry_map=explicit,
         )
         assert loop.industry_map == explicit
@@ -2566,9 +2873,7 @@ class TestGapF08WalkForwardEnforcement:
             evaluated_at="2026-08-09T00:00:00",
         )
 
-    def test_build_wf_config_long_data_uses_default(
-        self, minimal_loop
-    ):
+    def test_build_wf_config_long_data_uses_default(self, minimal_loop):
         """数据 ≥3 年时使用默认 WalkForward 配置。"""
         import pandas as pd
 
@@ -2587,9 +2892,7 @@ class TestGapF08WalkForwardEnforcement:
         assert cfg["window_years"] == 1
         assert cfg["step_months"] == 2
 
-    def test_walkforward_oos_disabled_returns_none(
-        self, sample_ohlcv, minimal_loop, monkeypatch
-    ):
+    def test_walkforward_oos_disabled_returns_none(self, sample_ohlcv, minimal_loop, monkeypatch):
         """force_walkforward=false 时跳过并返回 None。"""
         from fts.config.settings import FTSConfig
 
@@ -2600,9 +2903,7 @@ class TestGapF08WalkForwardEnforcement:
         minimal_loop.data = sample_ohlcv
         assert minimal_loop._run_walkforward_oos(self._make_factor()) is None
 
-    def test_walkforward_oos_insufficient_data_returns_none(
-        self, minimal_loop
-    ):
+    def test_walkforward_oos_insufficient_data_returns_none(self, minimal_loop):
         """数据 <125 行时跳过并返回 None。"""
         import pandas as pd
 
@@ -2613,9 +2914,7 @@ class TestGapF08WalkForwardEnforcement:
         minimal_loop.data = short
         assert minimal_loop._run_walkforward_oos(self._make_factor()) is None
 
-    def test_walkforward_oos_runs_on_sufficient_data(
-        self, sample_ohlcv, minimal_loop
-    ):
+    def test_walkforward_oos_runs_on_sufficient_data(self, sample_ohlcv, minimal_loop):
         """数据充分时冷启动验证应返回多窗口结果。"""
         minimal_loop.data = sample_ohlcv
         result = minimal_loop._run_walkforward_oos(self._make_factor())
@@ -2624,9 +2923,7 @@ class TestGapF08WalkForwardEnforcement:
         assert "ic_consistency" in result
         assert "passed" in result
 
-    def test_factor_audit_prefers_walkforward_result(
-        self, minimal_loop, sample_dataframe, monkeypatch
-    ):
+    def test_factor_audit_prefers_walkforward_result(self, minimal_loop, sample_dataframe, monkeypatch):
         """强制 WalkForward 结果应覆盖 L1 单段 ICIR 近似（失败则审计不通过）。"""
         from unittest.mock import MagicMock
 
@@ -2634,23 +2931,25 @@ class TestGapF08WalkForwardEnforcement:
 
         minimal_loop.data = sample_dataframe
         # 冷启动验证返回失败（ic_consistency=0.2 < 0.5）
-        minimal_loop._run_walkforward_oos = MagicMock(return_value={
-            "ic_consistency": 0.2,
-            "passed": False,
-            "windows": [],
-            "n_windows_completed": 2,
-        })
+        minimal_loop._run_walkforward_oos = MagicMock(
+            return_value={
+                "ic_consistency": 0.2,
+                "passed": False,
+                "windows": [],
+                "n_windows_completed": 2,
+            }
+        )
         report = minimal_loop._run_factor_audit(
-            self._make_factor(), self._make_evaluation(), "trace_wf",
+            self._make_factor(),
+            self._make_evaluation(),
+            "trace_wf",
         )
         assert isinstance(report, FactorAuditReport)
         oos_item = [it for it in report.items if it.name == "oos_consistency"][0]
         assert oos_item.status == "failed"
         assert "0.20" in oos_item.evidence
 
-    def test_factor_audit_walkforward_disabled_keeps_l1(
-        self, minimal_loop, sample_dataframe, monkeypatch
-    ):
+    def test_factor_audit_walkforward_disabled_keeps_l1(self, minimal_loop, sample_dataframe, monkeypatch):
         """关闭强制验证时审计 oos_consistency 回退 L1 近似（通过）。"""
         from unittest.mock import MagicMock
 
@@ -2659,7 +2958,9 @@ class TestGapF08WalkForwardEnforcement:
         minimal_loop.data = sample_dataframe
         minimal_loop._run_walkforward_oos = MagicMock(return_value=None)
         report = minimal_loop._run_factor_audit(
-            self._make_factor(), self._make_evaluation(), "trace_wf",
+            self._make_factor(),
+            self._make_evaluation(),
+            "trace_wf",
         )
         assert isinstance(report, FactorAuditReport)
         oos_item = [it for it in report.items if it.name == "oos_consistency"][0]
@@ -2677,9 +2978,7 @@ class TestBacktestPipelineIntegration:
         """验证 BacktestPipeline 在 EvolutionLoop 中初始化。"""
         assert minimal_loop.backtest_pipeline is not None
 
-    def test_run_backtest_pipeline_success(
-        self, minimal_loop, sample_seed, sample_evaluation
-    ):
+    def test_run_backtest_pipeline_success(self, minimal_loop, sample_seed, sample_evaluation):
         """验证 _run_backtest_pipeline 成功执行。"""
         from fts.factor_engine.backtest_pipeline import PipelineResult
 
@@ -2691,16 +2990,12 @@ class TestBacktestPipelineIntegration:
         )
         minimal_loop.backtest_pipeline.run = MagicMock(return_value=mock_result)
 
-        result = minimal_loop._run_backtest_pipeline(
-            sample_seed, sample_evaluation, "test_trace"
-        )
+        result = minimal_loop._run_backtest_pipeline(sample_seed, sample_evaluation, "test_trace")
         assert result is not None
         assert result["success"] is True
         assert result["duration_ms"] == 100.0
 
-    def test_run_backtest_pipeline_failure(
-        self, minimal_loop, sample_seed, sample_evaluation
-    ):
+    def test_run_backtest_pipeline_failure(self, minimal_loop, sample_seed, sample_evaluation):
         """验证 _run_backtest_pipeline 失败返回 None。"""
         from fts.factor_engine.backtest_pipeline import PipelineResult
 
@@ -2712,21 +3007,13 @@ class TestBacktestPipelineIntegration:
         )
         minimal_loop.backtest_pipeline.run = MagicMock(return_value=mock_result)
 
-        result = minimal_loop._run_backtest_pipeline(
-            sample_seed, sample_evaluation, "test_trace"
-        )
+        result = minimal_loop._run_backtest_pipeline(sample_seed, sample_evaluation, "test_trace")
         assert result is None
 
-    def test_run_backtest_pipeline_exception(
-        self, minimal_loop, sample_seed, sample_evaluation
-    ):
+    def test_run_backtest_pipeline_exception(self, minimal_loop, sample_seed, sample_evaluation):
         """验证 _run_backtest_pipeline 异常返回 None。"""
-        minimal_loop.backtest_pipeline.run = MagicMock(
-            side_effect=RuntimeError("boom")
-        )
-        result = minimal_loop._run_backtest_pipeline(
-            sample_seed, sample_evaluation, "test_trace"
-        )
+        minimal_loop.backtest_pipeline.run = MagicMock(side_effect=RuntimeError("boom"))
+        result = minimal_loop._run_backtest_pipeline(sample_seed, sample_evaluation, "test_trace")
         assert result is None
 
 
@@ -2740,9 +3027,7 @@ class TestDataQualityIntegration:
         """验证 DataQualityMonitor 在 EvolutionLoop 中初始化。"""
         assert minimal_loop.data_quality_monitor is not None
 
-    def test_register_factor_baseline(
-        self, minimal_loop, sample_seed, sample_evaluation
-    ):
+    def test_register_factor_baseline(self, minimal_loop, sample_seed, sample_evaluation):
         """验证注册因子基准数据。"""
         minimal_loop.data_quality_monitor.register_factor = MagicMock()
         minimal_loop._register_factor_baseline(sample_seed, sample_evaluation)
@@ -2751,19 +3036,13 @@ class TestDataQualityIntegration:
         call_kwargs = minimal_loop.data_quality_monitor.register_factor.call_args
         assert call_kwargs[1]["factor_id"] == sample_seed["factor_id"]
 
-    def test_check_factor_data_quality_no_alerts(
-        self, minimal_loop, sample_seed, sample_evaluation
-    ):
+    def test_check_factor_data_quality_no_alerts(self, minimal_loop, sample_seed, sample_evaluation):
         """验证数据质量检查无告警时返回空列表。"""
         minimal_loop.data_quality_monitor.check = MagicMock(return_value=[])
-        alerts = minimal_loop._check_factor_data_quality(
-            sample_seed, sample_evaluation
-        )
+        alerts = minimal_loop._check_factor_data_quality(sample_seed, sample_evaluation)
         assert alerts == []
 
-    def test_check_factor_data_quality_with_alerts(
-        self, minimal_loop, sample_seed, sample_evaluation
-    ):
+    def test_check_factor_data_quality_with_alerts(self, minimal_loop, sample_seed, sample_evaluation):
         """验证数据质量检查返回告警。"""
         from fts.monitor.data_quality_monitor import QualityAlert
 
@@ -2777,12 +3056,8 @@ class TestDataQualityIntegration:
             baseline_value=0.05,
             threshold=0.03,
         )
-        minimal_loop.data_quality_monitor.check = MagicMock(
-            return_value=[alert]
-        )
-        alerts = minimal_loop._check_factor_data_quality(
-            sample_seed, sample_evaluation
-        )
+        minimal_loop.data_quality_monitor.check = MagicMock(return_value=[alert])
+        alerts = minimal_loop._check_factor_data_quality(sample_seed, sample_evaluation)
         assert len(alerts) == 1
         assert alerts[0].alert_type == "ic_drift"
 
@@ -2800,14 +3075,10 @@ class TestEliteFactorTrackerIntegration:
     def test_run_periodic_factor_review_no_elite(self, minimal_loop):
         """验证无精英因子时定期重评估不报错。"""
         minimal_loop.elite_tracker.auto_retire = MagicMock(return_value=[])
-        minimal_loop.elite_tracker.report = MagicMock(
-            return_value={"status_counts": {}, "grade_counts": {}}
-        )
+        minimal_loop.elite_tracker.report = MagicMock(return_value={"status_counts": {}, "grade_counts": {}})
         minimal_loop._run_periodic_factor_review([], "test_trace")
 
-    def test_run_periodic_factor_review_with_elite(
-        self, minimal_loop, sample_seed
-    ):
+    def test_run_periodic_factor_review_with_elite(self, minimal_loop, sample_seed):
         """验证有精英因子时定期重评估正常执行。"""
         fid = sample_seed["factor_id"]
         minimal_loop.elite_tracker.auto_retire = MagicMock(return_value=[])
@@ -2831,14 +3102,10 @@ class TestEliteFactorTrackerIntegration:
         minimal_loop._run_periodic_factor_review([fid], "test_trace")
         minimal_loop.elite_tracker.update.assert_called_once()
 
-    def test_run_periodic_factor_review_with_retirement(
-        self, minimal_loop, sample_seed
-    ):
+    def test_run_periodic_factor_review_with_retirement(self, minimal_loop, sample_seed):
         """验证有因子被淘汰时定期重评估正常处理。"""
         fid = sample_seed["factor_id"]
-        minimal_loop.elite_tracker.auto_retire = MagicMock(
-            return_value=[fid]
-        )
+        minimal_loop.elite_tracker.auto_retire = MagicMock(return_value=[fid])
         minimal_loop.elite_tracker.report = MagicMock(
             return_value={
                 "status_counts": {"retired": 1, "total": 1},
@@ -2851,37 +3118,26 @@ class TestEliteFactorTrackerIntegration:
 
     def test_get_factor_data_for_review(self, minimal_loop, sample_seed):
         """验证 _get_factor_data_for_review 返回默认值。"""
-        result = minimal_loop._get_factor_data_for_review(
-            sample_seed["factor_id"]
-        )
+        result = minimal_loop._get_factor_data_for_review(sample_seed["factor_id"])
         assert result is not None
         assert "ic" in result
         assert "sharpe" in result
 
-    def test_periodic_review_in_run_finally(
-        self, minimal_loop, sample_dataframe, sample_forward_returns
-    ):
+    def test_periodic_review_in_run_finally(self, minimal_loop, sample_dataframe, sample_forward_returns):
         """验证定期重评估在 run() 的 finally 块中被调用。"""
         minimal_loop.elite_tracker.auto_retire = MagicMock(return_value=[])
-        minimal_loop.elite_tracker.report = MagicMock(
-            return_value={"status_counts": {}, "grade_counts": {}}
-        )
+        minimal_loop.elite_tracker.report = MagicMock(return_value={"status_counts": {}, "grade_counts": {}})
         minimal_loop.elite_tracker.update = MagicMock()
 
-        with patch.object(
-            minimal_loop, "_run_periodic_factor_review"
-        ) as mock_review:
-            with patch.object(
-                minimal_loop, "_evaluate_and_promote_seeds", return_value=0
-            ):
-                with patch.object(
-                    minimal_loop.seed_pool, "load_all_seeds", return_value=[]
-                ):
+        with patch.object(minimal_loop, "_run_periodic_factor_review") as mock_review:
+            with patch.object(minimal_loop, "_evaluate_and_promote_seeds", return_value=0):
+                with patch.object(minimal_loop.seed_pool, "load_all_seeds", return_value=[]):
                     minimal_loop.run(max_generation=1)
                     mock_review.assert_called_once()
 
 
 # ─── GP 演化集成测试 ──────────────────────────────────────
+
 
 class TestGPEvolutionIntegration:
     """测试 GP 演化作为宏观演化 fallback 的集成路径。"""
@@ -2890,9 +3146,7 @@ class TestGPEvolutionIntegration:
         """验证 FeatureOpsEngine 在 EvolutionLoop 中初始化。"""
         assert minimal_loop.feature_ops_engine is not None
 
-    def test_run_gp_evolution_returns_factor_program(
-        self, minimal_loop, sample_seed, sample_dataframe
-    ):
+    def test_run_gp_evolution_returns_factor_program(self, minimal_loop, sample_seed, sample_dataframe):
         """验证 _run_gp_evolution 返回 FactorProgram 格式。"""
         from fts.factor_engine.gp_evolver import (
             ExpressionTree,
@@ -2925,9 +3179,7 @@ class TestGPEvolutionIntegration:
         )
 
         minimal_loop.data = sample_dataframe
-        minimal_loop.feature_ops_engine.run_gp_search = MagicMock(
-            return_value=mock_result
-        )
+        minimal_loop.feature_ops_engine.run_gp_search = MagicMock(return_value=mock_result)
 
         factor_program, summary = minimal_loop._run_gp_evolution(
             parent=sample_seed,
@@ -2943,9 +3195,7 @@ class TestGPEvolutionIntegration:
         assert "GP Gen=" in summary
         assert "Fitness=0.0500" in summary
 
-    def test_run_gp_evolution_with_invalid_fitness(
-        self, minimal_loop, sample_seed, sample_dataframe
-    ):
+    def test_run_gp_evolution_with_invalid_fitness(self, minimal_loop, sample_seed, sample_dataframe):
         """验证适应度无效时抛出异常。"""
         from fts.factor_engine.gp_evolver import (
             ExpressionTree,
@@ -2978,9 +3228,7 @@ class TestGPEvolutionIntegration:
         )
 
         minimal_loop.data = sample_dataframe
-        minimal_loop.feature_ops_engine.run_gp_search = MagicMock(
-            return_value=mock_result
-        )
+        minimal_loop.feature_ops_engine.run_gp_search = MagicMock(return_value=mock_result)
 
         with pytest.raises(RuntimeError, match="GP 演化适应度无效"):
             minimal_loop._run_gp_evolution(
@@ -2989,9 +3237,7 @@ class TestGPEvolutionIntegration:
                 trace_id="test_trace_gp",
             )
 
-    def test_gp_fallback_in_evolution_loop(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir
-    ):
+    def test_gp_fallback_in_evolution_loop(self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir):
         """验证宏观演化失败时回退到 GP 演化。"""
         loop = EvolutionLoop(
             data=sample_ohlcv,
@@ -3004,16 +3250,12 @@ class TestGPEvolutionIntegration:
         # 宏观演化失败
         loop.macro_evolver.evolve = MagicMock(side_effect=ValueError("LLM 不可用"))
         # GP 演化也失败 → 应记录失败并继续
-        loop._run_gp_evolution = MagicMock(
-            side_effect=RuntimeError("GP 算子初始化失败")
-        )
+        loop._run_gp_evolution = MagicMock(side_effect=RuntimeError("GP 算子初始化失败"))
         result = loop.run(max_generation=3)
         assert result.generations_completed == 3
         assert result.status == "completed"
 
-    def test_gp_success_flow_integration(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir
-    ):
+    def test_gp_success_flow_integration(self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir):
         """验证 GP 成功后因子流入微观演化→评估→审计→回测全链路。"""
         loop = EvolutionLoop(
             data=sample_ohlcv,
@@ -3052,12 +3294,9 @@ class TestGPEvolutionIntegration:
             generations_completed=10,
             total_evaluations=200,
         )
-        loop.feature_ops_engine.run_gp_search = MagicMock(
-            return_value=mock_result
-        )
+        loop.feature_ops_engine.run_gp_search = MagicMock(return_value=mock_result)
 
         # Mock 微观演化返回有效因子
-        from fts.factor_engine.micro_evolution import evolve_micro
 
         gp_factor = {
             "factor_id": "gp_test_factor",
@@ -3097,9 +3336,7 @@ class TestFactorAuditorIntegration:
         """验证 FactorAuditor 在 EvolutionLoop 中初始化。"""
         assert minimal_loop.auditor is not None
 
-    def test_promote_to_elite_runs_audit(
-        self, minimal_loop, sample_dataframe
-    ):
+    def test_promote_to_elite_runs_audit(self, minimal_loop, sample_dataframe):
         """验证 _promote_to_elite 接收并写入审计报告。"""
         from fts.factor_engine.audit import FactorAuditReport, AuditItemResult
 
@@ -3155,9 +3392,7 @@ class TestFactorAuditorIntegration:
         record = json.loads(path.read_text(encoding="utf-8"))
         assert "audit_report" in record
 
-    def test_promote_to_elite_audit_fails_blocks_promotion(
-        self, minimal_loop, sample_seed
-    ):
+    def test_promote_to_elite_audit_fails_blocks_promotion(self, minimal_loop, sample_seed):
         """验证审计未通过时审计报告写入记录（阻塞在 run() 中执行）。"""
         from fts.factor_engine.audit import FactorAuditReport, AuditItemResult
 
@@ -3209,16 +3444,18 @@ class TestFactorAuditorIntegration:
         assert record["audit_report"]["passed"] is False
 
 
-class TestBacktestPipelineIntegration:
-    """测试 BacktestPipeline 接入评估链。"""
+class TestBacktestPipelineIntegrationExtended:
+    """测试 BacktestPipeline 接入评估链。
+
+    注：与上方 TestBacktestPipelineIntegration 为两组独立测试集合；
+    若同名则后定义覆盖前者导致前类测试丢失（GAP-F12 修复）。
+    """
 
     def test_backtest_pipeline_initialized(self, minimal_loop):
         """验证 BacktestPipeline 在 EvolutionLoop 中初始化。"""
         assert minimal_loop.backtest_pipeline is not None
 
-    def test_run_backtest_pipeline_success(
-        self, minimal_loop, sample_seed
-    ):
+    def test_run_backtest_pipeline_success(self, minimal_loop, sample_seed):
         """验证 _run_backtest_pipeline 成功执行。"""
         from fts.factor_engine.contracts import FactorEvaluation
 
@@ -3244,20 +3481,14 @@ class TestBacktestPipelineIntegration:
         mock_bt_result.duration_ms = 1500
         mock_bt_result.output = mock_report
 
-        minimal_loop.backtest_pipeline.run = MagicMock(
-            return_value=mock_bt_result
-        )
+        minimal_loop.backtest_pipeline.run = MagicMock(return_value=mock_bt_result)
 
-        result = minimal_loop._run_backtest_pipeline(
-            sample_seed, evaluation, "test_trace"
-        )
+        result = minimal_loop._run_backtest_pipeline(sample_seed, evaluation, "test_trace")
         assert result is not None
         assert result["success"] is True
         minimal_loop.backtest_pipeline.run.assert_called_once()
 
-    def test_run_backtest_pipeline_failure(
-        self, minimal_loop, sample_seed
-    ):
+    def test_run_backtest_pipeline_failure(self, minimal_loop, sample_seed):
         """验证 BacktestPipeline 失败时返回 None。"""
         from fts.factor_engine.contracts import FactorEvaluation
 
@@ -3270,17 +3501,14 @@ class TestBacktestPipelineIntegration:
             evaluated_at="2026-07-18T00:00:00",
         )
 
-        minimal_loop.backtest_pipeline.run = MagicMock(
-            side_effect=RuntimeError("数据加载失败")
-        )
+        minimal_loop.backtest_pipeline.run = MagicMock(side_effect=RuntimeError("数据加载失败"))
 
-        result = minimal_loop._run_backtest_pipeline(
-            sample_seed, evaluation, "test_trace"
-        )
+        result = minimal_loop._run_backtest_pipeline(sample_seed, evaluation, "test_trace")
         assert result is None
 
 
 # ─── Task 1: 孤立模块初始化测试 ──────────────────────────
+
 
 class TestIsolatedModuleInitialization:
     """验证孤立模块在 EvolutionLoop 中正确初始化。"""
@@ -3288,7 +3516,7 @@ class TestIsolatedModuleInitialization:
     def test_ablation_experiment_initialized(self, minimal_loop):
         """验证 AblationExperiment 在 EvolutionLoop 中初始化。"""
         assert minimal_loop.ablation_experiment is not None
-        assert hasattr(minimal_loop.ablation_experiment, 'run')
+        assert hasattr(minimal_loop.ablation_experiment, "run")
 
     def test_shap_analyzer_initialized(self, minimal_loop):
         """验证 ShapAnalyzer 在 EvolutionLoop 中初始化。"""
@@ -3313,12 +3541,11 @@ class TestIsolatedModuleInitialization:
 
 # ─── Task 2: AblationExperiment 集成测试 ─────────────────
 
+
 class TestAblationIntegration:
     """测试 AblationExperiment 在演化循环中的集成。"""
 
-    def test_ablation_runs_in_evolution_flow(
-        self, minimal_loop, sample_dataframe, sample_seed
-    ):
+    def test_ablation_runs_in_evolution_flow(self, minimal_loop, sample_dataframe, sample_seed):
         """验证消融实验在演化流程中被调用。"""
         from fts.factor_engine.ablation import AblationResult, SingleAblation
 
@@ -3329,9 +3556,12 @@ class TestAblationIntegration:
             baseline_sharpe=1.5,
             ablations=[
                 SingleAblation(
-                    mode="volume_zero", description="成交量置零",
-                    ic=0.049, sharpe=1.45,
-                    ic_change=-0.001, sharpe_change=-0.05,
+                    mode="volume_zero",
+                    description="成交量置零",
+                    ic=0.049,
+                    sharpe=1.45,
+                    ic_change=-0.001,
+                    sharpe_change=-0.05,
                 )
             ],
         )
@@ -3348,15 +3578,15 @@ class TestAblationIntegration:
         )
 
         result = minimal_loop._run_ablation_check(
-            sample_seed, evaluation, "test_trace",
+            sample_seed,
+            evaluation,
+            "test_trace",
         )
         assert result is not None
         assert result["factor_id"] == sample_seed["factor_id"]
         assert len(result["ablations"]) >= 1
 
-    def test_ablation_spurious_detection_blocks_promotion(
-        self, minimal_loop, sample_dataframe, sample_seed
-    ):
+    def test_ablation_spurious_detection_blocks_promotion(self, minimal_loop, sample_dataframe, sample_seed):
         """验证严重消融退化（>50% IC 下降，非价格列置零）阻止晋升。"""
         from fts.factor_engine.ablation import AblationResult, SingleAblation
 
@@ -3367,9 +3597,12 @@ class TestAblationIntegration:
             baseline_sharpe=1.5,
             ablations=[
                 SingleAblation(
-                    mode="zero_one_feature", description="单特征归零（影响最大: volume）",
-                    ic=0.01, sharpe=0.3,
-                    ic_change=-0.04, sharpe_change=-1.2,
+                    mode="zero_one_feature",
+                    description="单特征归零（影响最大: volume）",
+                    ic=0.01,
+                    sharpe=0.3,
+                    ic_change=-0.04,
+                    sharpe_change=-1.2,
                     feature="volume",
                 )
             ],
@@ -3387,13 +3620,13 @@ class TestAblationIntegration:
         )
 
         result = minimal_loop._run_ablation_check(
-            sample_seed, evaluation, "test_trace",
+            sample_seed,
+            evaluation,
+            "test_trace",
         )
         assert result["passed"] is False
 
-    def test_ablation_informational_modes_do_not_block(
-        self, minimal_loop, sample_dataframe, sample_seed
-    ):
+    def test_ablation_informational_modes_do_not_block(self, minimal_loop, sample_dataframe, sample_seed):
         """验证信息型消融（shuffle_dates/成交量/VWAP）不拦截晋升（v2.50.0）。
 
         时序因子依赖时序因果、价格因子依赖价格列属必要特征，IC 崩塌不判伪相关。
@@ -3407,19 +3640,28 @@ class TestAblationIntegration:
             baseline_sharpe=1.5,
             ablations=[
                 SingleAblation(
-                    mode="shuffle_dates", description="时间戳打乱",
-                    ic=0.001, sharpe=0.05,
-                    ic_change=-0.049, sharpe_change=-1.45,
+                    mode="shuffle_dates",
+                    description="时间戳打乱",
+                    ic=0.001,
+                    sharpe=0.05,
+                    ic_change=-0.049,
+                    sharpe_change=-1.45,
                 ),
                 SingleAblation(
-                    mode="volume_zero", description="成交量置零",
-                    ic=0.001, sharpe=0.05,
-                    ic_change=-0.049, sharpe_change=-1.45,
+                    mode="volume_zero",
+                    description="成交量置零",
+                    ic=0.001,
+                    sharpe=0.05,
+                    ic_change=-0.049,
+                    sharpe_change=-1.45,
                 ),
                 SingleAblation(
-                    mode="vwap_to_close", description="VWAP 替换为 close",
-                    ic=0.001, sharpe=0.05,
-                    ic_change=-0.049, sharpe_change=-1.45,
+                    mode="vwap_to_close",
+                    description="VWAP 替换为 close",
+                    ic=0.001,
+                    sharpe=0.05,
+                    ic_change=-0.049,
+                    sharpe_change=-1.45,
                 ),
             ],
         )
@@ -3436,13 +3678,13 @@ class TestAblationIntegration:
         )
 
         result = minimal_loop._run_ablation_check(
-            sample_seed, evaluation, "test_trace",
+            sample_seed,
+            evaluation,
+            "test_trace",
         )
         assert result["passed"] is True
 
-    def test_ablation_price_core_col_zeroing_does_not_block(
-        self, minimal_loop, sample_dataframe, sample_seed
-    ):
+    def test_ablation_price_core_col_zeroing_does_not_block(self, minimal_loop, sample_dataframe, sample_seed):
         """验证核心价格列置零不拦截晋升（v2.50.0）。
 
         价格因子依赖 open/high/low/close/vwap/settle 属正常输入依赖。
@@ -3456,15 +3698,21 @@ class TestAblationIntegration:
             baseline_sharpe=1.5,
             ablations=[
                 SingleAblation(
-                    mode="zero_one_feature", description="单特征归零（影响最大: low）",
-                    ic=0.001, sharpe=0.0,
-                    ic_change=-0.049, sharpe_change=-1.5,
+                    mode="zero_one_feature",
+                    description="单特征归零（影响最大: low）",
+                    ic=0.001,
+                    sharpe=0.0,
+                    ic_change=-0.049,
+                    sharpe_change=-1.5,
                     feature="low",
                 ),
                 SingleAblation(
-                    mode="zero_one_feature", description="单特征归零（影响最大: settle）",
-                    ic=0.001, sharpe=0.0,
-                    ic_change=-0.049, sharpe_change=-1.5,
+                    mode="zero_one_feature",
+                    description="单特征归零（影响最大: settle）",
+                    ic=0.001,
+                    sharpe=0.0,
+                    ic_change=-0.049,
+                    sharpe_change=-1.5,
                     feature="settle",
                 ),
             ],
@@ -3482,19 +3730,20 @@ class TestAblationIntegration:
         )
 
         result = minimal_loop._run_ablation_check(
-            sample_seed, evaluation, "test_trace",
+            sample_seed,
+            evaluation,
+            "test_trace",
         )
         assert result["passed"] is True
 
 
 # ─── Task 3: CausalValidator 集成测试 ────────────────────
 
+
 class TestCausalValidationIntegration:
     """测试 CausalValidator 在演化循环中的集成。"""
 
-    def test_causal_validation_runs_in_flow(
-        self, minimal_loop, sample_dataframe, sample_seed
-    ):
+    def test_causal_validation_runs_in_flow(self, minimal_loop, sample_dataframe, sample_seed):
         """验证因果验证在演化流程中被调用。"""
         from fts.factor_engine.causal_validator import CausalValidationResult
 
@@ -3521,17 +3770,18 @@ class TestCausalValidationIntegration:
         )
 
         result = minimal_loop._run_causal_validation(
-            sample_seed, evaluation, "test_trace",
+            sample_seed,
+            evaluation,
+            "test_trace",
         )
         assert result is not None
         assert result["passed"] is True
 
-    def test_causal_anomaly_blocks_promotion(
-        self, minimal_loop, sample_dataframe, sample_seed
-    ):
+    def test_causal_anomaly_blocks_promotion(self, minimal_loop, sample_dataframe, sample_seed):
         """验证因果异常（事件敏感）阻止晋升。"""
         from fts.factor_engine.causal_validator import (
-            CausalValidationResult, EventPredictionError,
+            CausalValidationResult,
+            EventPredictionError,
         )
 
         mock_result = CausalValidationResult(
@@ -3542,13 +3792,21 @@ class TestCausalValidationIntegration:
             n_anomalous=1,
             anomalous_events=[
                 EventPredictionError(
-                    event_id="evt_001", event_name="熔断",
-                    event_type="circuit_breaker", event_date="2026-01-15",
-                    expected_direction="down", pre_window=5, post_window=5,
-                    pre_mean_error=0.01, post_mean_error=0.05,
-                    error_change=0.04, error_std=0.01,
-                    is_anomalous=True, anomaly_direction="positive",
-                    n_pre_samples=5, n_post_samples=5,
+                    event_id="evt_001",
+                    event_name="熔断",
+                    event_type="circuit_breaker",
+                    event_date="2026-01-15",
+                    expected_direction="down",
+                    pre_window=5,
+                    post_window=5,
+                    pre_mean_error=0.01,
+                    post_mean_error=0.05,
+                    error_change=0.04,
+                    error_std=0.01,
+                    is_anomalous=True,
+                    anomaly_direction="positive",
+                    n_pre_samples=5,
+                    n_post_samples=5,
                 )
             ],
             all_events=[],
@@ -3567,7 +3825,9 @@ class TestCausalValidationIntegration:
         )
 
         result = minimal_loop._run_causal_validation(
-            sample_seed, evaluation, "test_trace",
+            sample_seed,
+            evaluation,
+            "test_trace",
         )
         assert result["passed"] is False
         assert len(result["anomalous_events"]) > 0
@@ -3575,12 +3835,11 @@ class TestCausalValidationIntegration:
 
 # ─── Task 4a: RobustnessTester 集成测试 ──────────────────
 
+
 class TestRobustnessIntegration:
     """测试 RobustnessTester 在演化循环中的集成。"""
 
-    def test_robustness_runs_in_flow(
-        self, minimal_loop, sample_dataframe, sample_seed
-    ):
+    def test_robustness_runs_in_flow(self, minimal_loop, sample_dataframe, sample_seed):
         """验证鲁棒性审查在演化流程中被调用。"""
         from fts.factor_engine.robustness import RobustnessTestResult
 
@@ -3605,17 +3864,18 @@ class TestRobustnessIntegration:
         )
 
         result = minimal_loop._run_robustness_check(
-            sample_seed, evaluation, "test_trace",
+            sample_seed,
+            evaluation,
+            "test_trace",
         )
         assert result is not None
         assert result["passed"] is True
 
-    def test_robustness_failure_blocks_promotion(
-        self, minimal_loop, sample_dataframe, sample_seed
-    ):
+    def test_robustness_failure_blocks_promotion(self, minimal_loop, sample_dataframe, sample_seed):
         """验证鲁棒性失败阻止晋升。"""
         from fts.factor_engine.robustness import (
-            RobustnessTestResult, AdversarialTestResult,
+            RobustnessTestResult,
+            AdversarialTestResult,
         )
 
         mock_result = RobustnessTestResult(
@@ -3623,9 +3883,12 @@ class TestRobustnessIntegration:
             factor_name=sample_seed["name"],
             adversarial_results=[
                 AdversarialTestResult(
-                    perturbation="price", perturbation_factor=1.0001,
-                    baseline_ic=0.05, perturbed_ic=0.03,
-                    ic_change=-0.02, passed=False,
+                    perturbation="price",
+                    perturbation_factor=1.0001,
+                    baseline_ic=0.05,
+                    perturbed_ic=0.03,
+                    ic_change=-0.02,
+                    passed=False,
                 )
             ],
             missing_value_results=[],
@@ -3648,22 +3911,25 @@ class TestRobustnessIntegration:
         )
 
         result = minimal_loop._run_robustness_check(
-            sample_seed, evaluation, "test_trace",
+            sample_seed,
+            evaluation,
+            "test_trace",
         )
         assert result["passed"] is False
 
 
 # ─── Task 4b: ShapAnalyzer 集成测试 ─────────────────────
 
+
 class TestShapAnalysisIntegration:
     """测试 ShapAnalyzer 在演化循环中的集成。"""
 
-    def test_shap_runs_in_flow(
-        self, minimal_loop, sample_dataframe, sample_seed
-    ):
+    def test_shap_runs_in_flow(self, minimal_loop, sample_dataframe, sample_seed):
         """验证 SHAP 分析在演化流程中被调用。"""
         from fts.factor_engine.shap_analyzer import (
-            ShapAnalysisResult, ShapSampleAnalysis, ShapFeatureImportance,
+            ShapAnalysisResult,
+            ShapSampleAnalysis,
+            ShapFeatureImportance,
         )
 
         mock_result = ShapAnalysisResult(
@@ -3674,7 +3940,8 @@ class TestShapAnalysisIntegration:
             num_features=2,
             top_samples=[
                 ShapSampleAnalysis(
-                    sample_index=0, date="2026-08-01",
+                    sample_index=0,
+                    date="2026-08-01",
                     signal_value=0.05,
                     top_features=[
                         ShapFeatureImportance(
@@ -3702,7 +3969,9 @@ class TestShapAnalysisIntegration:
         )
 
         result = minimal_loop._run_shap_analysis(
-            sample_seed, evaluation, "test_trace",
+            sample_seed,
+            evaluation,
+            "test_trace",
         )
         assert result is not None
         assert result["passed"] is True
@@ -3710,12 +3979,11 @@ class TestShapAnalysisIntegration:
 
 # ─── Task 5: FeatureImportanceAnalyzer 集成测试 ──────────
 
+
 class TestFeatureImportanceIntegration:
     """测试 FeatureImportanceAnalyzer 在 GP 管线中的集成。"""
 
-    def test_feature_importance_runs_in_gp_flow(
-        self, minimal_loop, sample_dataframe, sample_seed
-    ):
+    def test_feature_importance_runs_in_gp_flow(self, minimal_loop, sample_dataframe, sample_seed):
         """验证特征重要性分析在 GP 管线中被调用。"""
         from fts.factor_engine.feature_importance import (
             FeatureImportanceResult,
@@ -3729,12 +3997,11 @@ class TestFeatureImportanceIntegration:
             n_features_analyzed=2,
         )
         minimal_loop.data = sample_dataframe
-        minimal_loop.feature_importance_analyzer.analyze = MagicMock(
-            return_value=mock_result
-        )
+        minimal_loop.feature_importance_analyzer.analyze = MagicMock(return_value=mock_result)
 
         importance = minimal_loop.feature_importance_analyzer.analyze(
-            sample_seed, sample_dataframe,
+            sample_seed,
+            sample_dataframe,
         )
         assert importance is not None
         assert importance.factor_id == sample_seed["factor_id"]
@@ -3742,12 +4009,11 @@ class TestFeatureImportanceIntegration:
 
 # ─── Task 6: LogicMonitor 集成测试 ──────────────────────
 
+
 class TestLogicMonitorIntegration:
     """测试 LogicMonitor 在定期重评估中的集成。"""
 
-    def test_logic_monitor_runs_in_review(
-        self, minimal_loop, sample_dataframe
-    ):
+    def test_logic_monitor_runs_in_review(self, minimal_loop, sample_dataframe):
         """验证逻辑监控在定期重评估中被调用。"""
         from fts.monitor.logic_monitor import (
             DriftCheckResult,
@@ -3775,9 +4041,7 @@ class TestLogicMonitorIntegration:
             all_healthy=True,
         )
         minimal_loop.data = sample_dataframe
-        minimal_loop.logic_monitor.run = MagicMock(
-            return_value=mock_report
-        )
+        minimal_loop.logic_monitor.run = MagicMock(return_value=mock_report)
 
         minimal_loop._run_periodic_factor_review(
             elite_ids=[],
@@ -3790,12 +4054,11 @@ class TestLogicMonitorIntegration:
 
 # ─── Task 7: 端到端集成验证 ──────────────────────────────
 
+
 class TestFullIntegrationPipeline:
     """端到端集成测试：验证完整审查流水线。"""
 
-    def test_all_review_stages_execute_in_sequence(
-        self, minimal_loop, sample_dataframe, sample_seed
-    ):
+    def test_all_review_stages_execute_in_sequence(self, minimal_loop, sample_dataframe, sample_seed):
         """验证所有审查节点按顺序执行。"""
         from fts.factor_engine.ablation import AblationResult, SingleAblation
         from fts.factor_engine.causal_validator import CausalValidationResult
@@ -3816,12 +4079,18 @@ class TestFullIntegrationPipeline:
             return_value=AblationResult(
                 factor_id=sample_seed["factor_id"],
                 factor_name=sample_seed["name"],
-                baseline_ic=0.05, baseline_sharpe=1.5,
-                ablations=[SingleAblation(
-                    mode="volume_zero", description="vol→0",
-                    ic=0.048, sharpe=1.48,
-                    ic_change=-0.002, sharpe_change=-0.02,
-                )],
+                baseline_ic=0.05,
+                baseline_sharpe=1.5,
+                ablations=[
+                    SingleAblation(
+                        mode="volume_zero",
+                        description="vol→0",
+                        ic=0.048,
+                        sharpe=1.48,
+                        ic_change=-0.002,
+                        sharpe_change=-0.02,
+                    )
+                ],
             )
         )
         minimal_loop.causal_validator.validate = MagicMock(
@@ -3829,8 +4098,10 @@ class TestFullIntegrationPipeline:
                 factor_id=sample_seed["factor_id"],
                 factor_name=sample_seed["name"],
                 analysis_date="2026-08-05",
-                n_events=5, n_anomalous=0,
-                anomalous_events=[], all_events=[],
+                n_events=5,
+                n_anomalous=0,
+                anomalous_events=[],
+                all_events=[],
                 summary={"total": 5, "anomalous": 0},
             )
         )
@@ -3838,7 +4109,8 @@ class TestFullIntegrationPipeline:
             return_value=RobustnessTestResult(
                 factor_id=sample_seed["factor_id"],
                 factor_name=sample_seed["name"],
-                adversarial_results=[], missing_value_results=[],
+                adversarial_results=[],
+                missing_value_results=[],
                 ood_results=[],
                 summary={"overall_pass_rate": 1.0, "total": 11, "passed": 11},
             )
@@ -3848,9 +4120,12 @@ class TestFullIntegrationPipeline:
                 factor_id=sample_seed["factor_id"],
                 factor_name=sample_seed["name"],
                 analysis_date="2026-08-05",
-                num_extreme_samples=10, num_features=2,
-                top_samples=[], bottom_samples=[],
-                global_top_features=[], summary={"status": "ok"},
+                num_extreme_samples=10,
+                num_features=2,
+                top_samples=[],
+                bottom_samples=[],
+                global_top_features=[],
+                summary={"status": "ok"},
             )
         )
 
@@ -3869,9 +4144,7 @@ class TestFullIntegrationPipeline:
         minimal_loop.robustness_tester.run.assert_called_once()
         minimal_loop.shap_analyzer.analyze.assert_called_once()
 
-    def test_one_review_failure_blocks_promotion(
-        self, minimal_loop, sample_dataframe, sample_seed
-    ):
+    def test_one_review_failure_blocks_promotion(self, minimal_loop, sample_dataframe, sample_seed):
         """验证任一审查失败阻止晋升。"""
         from fts.factor_engine.ablation import AblationResult, SingleAblation
 
@@ -3889,13 +4162,19 @@ class TestFullIntegrationPipeline:
             return_value=AblationResult(
                 factor_id=sample_seed["factor_id"],
                 factor_name=sample_seed["name"],
-                baseline_ic=0.05, baseline_sharpe=1.5,
-                ablations=[SingleAblation(
-                    mode="zero_one_feature", description="单特征归零（影响最大: volume）",
-                    ic=0.01, sharpe=0.3,
-                    ic_change=-0.04, sharpe_change=-1.2,
-                    feature="volume",
-                )],
+                baseline_ic=0.05,
+                baseline_sharpe=1.5,
+                ablations=[
+                    SingleAblation(
+                        mode="zero_one_feature",
+                        description="单特征归零（影响最大: volume）",
+                        ic=0.01,
+                        sharpe=0.3,
+                        ic_change=-0.04,
+                        sharpe_change=-1.2,
+                        feature="volume",
+                    )
+                ],
             )
         )
 
@@ -3905,6 +4184,7 @@ class TestFullIntegrationPipeline:
 
 # ─── 审计 OOS 语义回归测试 ──────────────────────────────
 
+
 class TestRunFactorAuditOosSemantics:
     """回归: oos_ratio 是样本外数据切分比例，不应使 oos_consistency 恒失败。
 
@@ -3913,9 +4193,7 @@ class TestRunFactorAuditOosSemantics:
     的 oos_consistency 审计恒失败，夜间演化循环永远无法晋升父因子。
     """
 
-    def test_oos_result_derived_from_icir_not_split_ratio(
-        self, minimal_loop, sample_seed
-    ):
+    def test_oos_result_derived_from_icir_not_split_ratio(self, minimal_loop, sample_seed):
         """OOS 切分比例 0.3 + OOS ICIR 达标时，传递给审计器的 OOS 结果应通过。"""
         from unittest.mock import MagicMock
 
@@ -3933,14 +4211,16 @@ class TestRunFactorAuditOosSemantics:
         evaluation = {
             "passed": True,
             "level_1_backtest": {
-                "oos_ratio": 0.3,   # OOS 切片比例（非一致性率）
+                "oos_ratio": 0.3,  # OOS 切片比例（非一致性率）
                 "ic": 0.05,
                 "icir": 1.5,
             },
             "level_3_multiple": {},
         }
         minimal_loop._run_factor_audit(
-            sample_seed, evaluation, "test_trace",
+            sample_seed,
+            evaluation,
+            "test_trace",
         )
         oos = captured.get("oos_result")
         assert oos is not None, "oos_ratio>0 时应构造 OOS 结果"
@@ -3971,7 +4251,9 @@ class TestRunFactorAuditOosSemantics:
             "level_3_multiple": {},
         }
         minimal_loop._run_factor_audit(
-            sample_seed, evaluation, "test_trace",
+            sample_seed,
+            evaluation,
+            "test_trace",
         )
         oos = captured.get("oos_result")
         assert oos is not None
@@ -3980,6 +4262,7 @@ class TestRunFactorAuditOosSemantics:
 
 
 # ─── 因子运行时校验回归测试 ─────────────────────────────
+
 
 class TestFactorRuntimeValidation:
     """回归: LLM 生成后代因子的广播错误/常数信号应在源头被拦截。
@@ -4036,9 +4319,7 @@ class TestFactorRuntimeValidation:
         """常数信号（无信息量）应被拦截。"""
         minimal_loop.data = sample_dataframe
         code = (
-            "def factor_program(data, params):\n"
-            "    import numpy as np\n"
-            "    return np.full(len(data['close']), 0.5)\n"
+            "def factor_program(data, params):\n    import numpy as np\n    return np.full(len(data['close']), 0.5)\n"
         )
         ok, reason = minimal_loop._check_factor_runtime(self._make_factor(code))
         assert ok is False
@@ -4048,9 +4329,7 @@ class TestFactorRuntimeValidation:
         """输出长度不匹配应被拦截（降级为零值 → 常数信号）。"""
         minimal_loop.data = sample_dataframe
         code = (
-            "def factor_program(data, params):\n"
-            "    import numpy as np\n"
-            "    return np.diff(data['close'])  # 长度 n-1\n"
+            "def factor_program(data, params):\n    import numpy as np\n    return np.diff(data['close'])  # 长度 n-1\n"
         )
         ok, reason = minimal_loop._check_factor_runtime(self._make_factor(code))
         assert ok is False
@@ -4077,27 +4356,41 @@ class TestEliteParentFallback:
     @staticmethod
     def _write_elite_factor(elite_dir: Path, factor_id: str, name: str) -> None:
         elite_dir.mkdir(exist_ok=True)
-        (elite_dir / f"{factor_id}.json").write_text(json.dumps({
-            "factor_id": factor_id,
-            "name": name,
-            "code": (
-                "def factor_program(data, params):\n"
-                "    import numpy as np\n"
-                "    close = data['close']\n"
-                "    return np.tanh((close - close.mean()) / (close.std() + 1e-10))\n"
+        (elite_dir / f"{factor_id}.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": factor_id,
+                    "name": name,
+                    "code": (
+                        "def factor_program(data, params):\n"
+                        "    import numpy as np\n"
+                        "    close = data['close']\n"
+                        "    return np.tanh((close - close.mean()) / (close.std() + 1e-10))\n"
+                    ),
+                    "params": {},
+                    "economic_logic": {"narrative": "elite 快照因子"},
+                }
             ),
-            "params": {},
-            "economic_logic": {"narrative": "elite 快照因子"},
-        }), encoding="utf-8")
+            encoding="utf-8",
+        )
 
     def test_load_elite_parent_factors(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_llm_client,
     ):
         """应从 elite 目录加载因子快照（排除相关性索引文件）。"""
         self._write_elite_factor(tmp_elite_dir, "fct_aaa111", "elite_a")
         (tmp_elite_dir / "_l2_seed_correlation_index.json").write_text("{}", encoding="utf-8")
         loop = self._make_loop(
-            tmp_memory_dir, tmp_elite_dir, mock_llm_client, sample_ohlcv, forward_returns,
+            tmp_memory_dir,
+            tmp_elite_dir,
+            mock_llm_client,
+            sample_ohlcv,
+            forward_returns,
         )
         parents = loop._load_elite_parent_factors()
         assert len(parents) == 1
@@ -4105,13 +4398,22 @@ class TestEliteParentFallback:
         assert parents[0]["code"]
 
     def test_run_uses_elite_pool_when_seeds_duplicated(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_llm_client,
     ):
         """种子全部重复跳过（无晋升）时，应回退 elite 池进入演化循环而非 0 代跳过。"""
         # elite 目录预置与种子同名的因子 → 种子评估通过但晋升时重复跳过
         self._write_elite_factor(tmp_elite_dir, "fct_elite001", "test_seed_factor")
         loop = self._make_loop(
-            tmp_memory_dir, tmp_elite_dir, mock_llm_client, sample_ohlcv, forward_returns,
+            tmp_memory_dir,
+            tmp_elite_dir,
+            mock_llm_client,
+            sample_ohlcv,
+            forward_returns,
         )
 
         # mock 种子池：单个种子，与 elite 预置同名
@@ -4133,9 +4435,7 @@ class TestEliteParentFallback:
 
         result = loop.run(max_generation=2)
         assert result.status == "completed"
-        assert result.generations_completed >= 1, (
-            "种子重复跳过时应回退 elite 池继续演化，而非 0 代跳过"
-        )
+        assert result.generations_completed >= 1, "种子重复跳过时应回退 elite 池继续演化，而非 0 代跳过"
 
 
 # ─── 快速预筛选 IC 阈值市场自适应（v2.8.6） ──────────────
@@ -4178,7 +4478,10 @@ class TestQuickPrefilterThresholds:
         )
 
     def test_futures_ic_0_015_passes(
-        self, sample_ohlcv, forward_returns, tmp_path,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_path,
     ):
         """期货市场: IC=0.015 应通过预筛选（阈值放宽至 0.01）。"""
         loop = self._make_loop("futures", sample_ohlcv, forward_returns, tmp_path)
@@ -4187,7 +4490,10 @@ class TestQuickPrefilterThresholds:
         assert ok, reason
 
     def test_stock_ic_0_015_rejected(
-        self, sample_ohlcv, forward_returns, tmp_path,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_path,
     ):
         """股票市场: IC=0.015 应被拦截（阈值保持 0.02）。"""
         loop = self._make_loop("stock", sample_ohlcv, forward_returns, tmp_path)
@@ -4197,7 +4503,10 @@ class TestQuickPrefilterThresholds:
         assert "0.02" in reason
 
     def test_futures_ic_0_008_rejected(
-        self, sample_ohlcv, forward_returns, tmp_path,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_path,
     ):
         """期货市场: IC=0.008 仍应被拦截（低于 0.01 下限）。"""
         loop = self._make_loop("futures", sample_ohlcv, forward_returns, tmp_path)
@@ -4209,12 +4518,12 @@ class TestQuickPrefilterThresholds:
 
 # ─── GAP-S11: 股票演化 operator-first（v2.67.0） ────────────
 
+
 class TestGapS11OperatorFirst:
     """GAP-S11: 股票演化默认 operator-first（算子演化优先，LLM/GP 兜底）。"""
 
     @staticmethod
-    def _make_loop(market, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir,
-                   mock_llm_client, **kwargs):
+    def _make_loop(market, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client, **kwargs):
         return EvolutionLoop(
             data=sample_ohlcv,
             forward_returns=forward_returns,
@@ -4227,43 +4536,70 @@ class TestGapS11OperatorFirst:
         )
 
     def test_stock_default_resolves_to_operator_first(
-        self, monkeypatch, sample_ohlcv, forward_returns,
-        tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+        self,
+        monkeypatch,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_llm_client,
     ):
         """股票演化 + hybrid 配置 → 默认 operator_first。"""
         from fts.config.settings import get_config
+
         monkeypatch.setattr(get_config(), "evolution_mode", "hybrid")
         loop = self._make_loop(
-            "stock", sample_ohlcv, forward_returns,
-            tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+            "stock",
+            sample_ohlcv,
+            forward_returns,
+            tmp_memory_dir,
+            tmp_elite_dir,
+            mock_llm_client,
         )
         assert loop.evolution_mode == "operator_first"
 
     def test_futures_keeps_hybrid(
-        self, monkeypatch, sample_ohlcv, forward_returns,
-        tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+        self,
+        monkeypatch,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_llm_client,
     ):
         """期货演化保持原配置（hybrid），不受股票默认影响。"""
         from fts.config.settings import get_config
+
         monkeypatch.setattr(get_config(), "evolution_mode", "hybrid")
         loop = self._make_loop(
-            "futures", sample_ohlcv, forward_returns,
-            tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+            "futures",
+            sample_ohlcv,
+            forward_returns,
+            tmp_memory_dir,
+            tmp_elite_dir,
+            mock_llm_client,
         )
         assert loop.evolution_mode == "hybrid"
 
     def test_operator_first_prefers_operator(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_llm_client,
     ):
         """算子演化成功时不触发 LLM/GP 兜底。"""
         loop = self._make_loop(
-            "stock", sample_ohlcv, forward_returns,
-            tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+            "stock",
+            sample_ohlcv,
+            forward_returns,
+            tmp_memory_dir,
+            tmp_elite_dir,
+            mock_llm_client,
         )
         loop.evolution_mode = "operator_first"
-        loop._generate_operator_factor = MagicMock(
-            return_value=({"factor_id": "fct_of0001", "code": "x"}, "OpGen: ok")
-        )
+        loop._generate_operator_factor = MagicMock(return_value=({"factor_id": "fct_of0001", "code": "x"}, "OpGen: ok"))
         loop.macro_evolver.evolve = MagicMock()
         loop._run_gp_evolution = MagicMock()
         out = loop._evolve_one({"factor_id": "p1", "name": "parent"}, 1, "t")
@@ -4274,18 +4610,25 @@ class TestGapS11OperatorFirst:
         loop._run_gp_evolution.assert_not_called()
 
     def test_operator_first_falls_back_to_macro(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_llm_client,
     ):
         """算子演化失败 → LLM 宏观演化兜底。"""
         loop = self._make_loop(
-            "stock", sample_ohlcv, forward_returns,
-            tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+            "stock",
+            sample_ohlcv,
+            forward_returns,
+            tmp_memory_dir,
+            tmp_elite_dir,
+            mock_llm_client,
         )
         loop.evolution_mode = "operator_first"
         loop._generate_operator_factor = MagicMock(side_effect=RuntimeError("op down"))
-        loop.macro_evolver.evolve = MagicMock(
-            return_value=({"factor_id": "fct_of0002"}, "Macro fallback", 100)
-        )
+        loop.macro_evolver.evolve = MagicMock(return_value=({"factor_id": "fct_of0002"}, "Macro fallback", 100))
         loop._run_gp_evolution = MagicMock()
         out = loop._evolve_one({"factor_id": "p1", "name": "parent"}, 1, "t")
         assert out is not None
@@ -4294,30 +4637,46 @@ class TestGapS11OperatorFirst:
         loop._run_gp_evolution.assert_not_called()
 
     def test_operator_first_falls_back_to_gp(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_llm_client,
     ):
         """算子 + LLM 均失败 → GP 演化兜底。"""
         loop = self._make_loop(
-            "stock", sample_ohlcv, forward_returns,
-            tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+            "stock",
+            sample_ohlcv,
+            forward_returns,
+            tmp_memory_dir,
+            tmp_elite_dir,
+            mock_llm_client,
         )
         loop.evolution_mode = "operator_first"
         loop._generate_operator_factor = MagicMock(side_effect=RuntimeError("op down"))
         loop.macro_evolver.evolve = MagicMock(side_effect=RuntimeError("llm down"))
-        loop._run_gp_evolution = MagicMock(
-            return_value=({"factor_id": "fct_of0003", "code": "x"}, "GP fallback")
-        )
+        loop._run_gp_evolution = MagicMock(return_value=({"factor_id": "fct_of0003", "code": "x"}, "GP fallback"))
         out = loop._evolve_one({"factor_id": "p1", "name": "parent"}, 1, "t")
         assert out is not None
         assert out[1] == "gp_evolution"
 
     def test_operator_first_all_fail_returns_none(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_memory_dir,
+        tmp_elite_dir,
+        mock_llm_client,
     ):
         """算子/LLM/GP 全失败 → 返回 None 并记录失败轨迹。"""
         loop = self._make_loop(
-            "stock", sample_ohlcv, forward_returns,
-            tmp_memory_dir, tmp_elite_dir, mock_llm_client,
+            "stock",
+            sample_ohlcv,
+            forward_returns,
+            tmp_memory_dir,
+            tmp_elite_dir,
+            mock_llm_client,
         )
         loop.evolution_mode = "operator_first"
         loop._generate_operator_factor = MagicMock(side_effect=RuntimeError("op down"))

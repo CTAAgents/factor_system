@@ -22,6 +22,7 @@ from fts.factor_engine.barra.barra_style import (
 
 # ─── 测试面板构造 ─────────────────────────────────────────
 
+
 def _make_fundamental_panel(
     n_stocks: int = 20,
     n_dates: int = 300,
@@ -38,22 +39,25 @@ def _make_fundamental_panel(
     for i in range(n_stocks):
         base_cap = 1e10 + i * 1e9  # 单调市值（构造 size 差异）
         close = 50 + np.cumsum(np.random.randn(n_dates) * 0.3)
-        df = pd.DataFrame({
-            "open": close + np.random.randn(n_dates) * 0.1,
-            "high": close + np.abs(np.random.randn(n_dates)) * 0.3,
-            "low": close - np.abs(np.random.randn(n_dates)) * 0.3,
-            "close": close,
-            "volume": np.random.randint(1000, 10000, n_dates).astype(float),
-            # 基本面
-            "total_market_cap": np.full(n_dates, base_cap),
-            "pb": np.full(n_dates, 1.0 + (i % 5) * 0.5),
-            "turnover_rate": np.full(n_dates, 0.01 + (i % 7) * 0.005),
-            "pe_ttm": np.full(n_dates, 8.0 + (i % 10) * 3.0),
-            "roe": np.full(n_dates, 0.08 + (i % 6) * 0.02),
-            "revenue_growth": np.full(n_dates, 0.05 + (i % 8) * 0.03),
-            "profit_growth": np.full(n_dates, 0.03 + (i % 8) * 0.02),
-            "debt_to_equity": np.full(n_dates, 0.3 + (i % 9) * 0.1),
-        }, index=dates)
+        df = pd.DataFrame(
+            {
+                "open": close + np.random.randn(n_dates) * 0.1,
+                "high": close + np.abs(np.random.randn(n_dates)) * 0.3,
+                "low": close - np.abs(np.random.randn(n_dates)) * 0.3,
+                "close": close,
+                "volume": np.random.randint(1000, 10000, n_dates).astype(float),
+                # 基本面
+                "total_market_cap": np.full(n_dates, base_cap),
+                "pb": np.full(n_dates, 1.0 + (i % 5) * 0.5),
+                "turnover_rate": np.full(n_dates, 0.01 + (i % 7) * 0.005),
+                "pe_ttm": np.full(n_dates, 8.0 + (i % 10) * 3.0),
+                "roe": np.full(n_dates, 0.08 + (i % 6) * 0.02),
+                "revenue_growth": np.full(n_dates, 0.05 + (i % 8) * 0.03),
+                "profit_growth": np.full(n_dates, 0.03 + (i % 8) * 0.02),
+                "debt_to_equity": np.full(n_dates, 0.3 + (i % 9) * 0.1),
+            },
+            index=dates,
+        )
         panel[f"STK_{i}"] = df
     return panel, dates
 
@@ -75,6 +79,7 @@ def _make_signal_matrix(
 
 # ─── BarraStyleEngine ─────────────────────────────────────
 
+
 class TestBarraStyleEngine:
     """BarraStyleEngine 风格暴露计算。"""
 
@@ -82,8 +87,16 @@ class TestBarraStyleEngine:
         """应包含 Barra 10 大风格因子。"""
         assert len(STYLE_FACTOR_NAMES) == 10
         for expected in (
-            "size", "beta", "momentum", "residual_vol", "nonlinear_size",
-            "book_to_price", "liquidity", "earnings_yield", "growth", "leverage",
+            "size",
+            "beta",
+            "momentum",
+            "residual_vol",
+            "nonlinear_size",
+            "book_to_price",
+            "liquidity",
+            "earnings_yield",
+            "growth",
+            "leverage",
         ):
             assert expected in STYLE_FACTOR_NAMES
 
@@ -122,10 +135,7 @@ class TestBarraStyleEngine:
         """基本面字段缺失时对应风格应全 NaN 而非抛异常。"""
         panel, dates = _make_fundamental_panel()
         # 移除全部基本面列 → size/book_to_price 等应全 NaN
-        clean_panel = {
-            sym: df[["open", "high", "low", "close", "volume"]]
-            for sym, df in panel.items()
-        }
+        clean_panel = {sym: df[["open", "high", "low", "close", "volume"]] for sym, df in panel.items()}
         engine = BarraStyleEngine(style_names=["size", "momentum", "book_to_price"])
         exposures = engine.compute_exposures(clean_panel, dates)
         assert exposures["size"].isna().all().all()
@@ -135,6 +145,7 @@ class TestBarraStyleEngine:
 
 
 # ─── barra_neutralize_matrix ──────────────────────────────
+
 
 class TestBarraNeutralizeMatrix:
     """Barra 风格中性化（横截面回归残差）。"""
@@ -176,16 +187,12 @@ class TestBarraNeutralizeMatrix:
         size_vec = exposures["size"].iloc[30].values
         raw_sig = signal[30, :]
         valid = ~np.isnan(size_vec)
-        corr_before = abs(
-            sp_stats.spearmanr(raw_sig[valid], size_vec[valid]).statistic
-        )
+        corr_before = abs(sp_stats.spearmanr(raw_sig[valid], size_vec[valid]).statistic)
 
         residual = barra_neutralize_matrix(signal, symbols, exposures)
         res_t = residual[30, :]
         valid_r = ~(np.isnan(res_t) | np.isnan(size_vec))
-        corr_after = abs(
-            sp_stats.spearmanr(res_t[valid_r], size_vec[valid_r]).statistic
-        )
+        corr_after = abs(sp_stats.spearmanr(res_t[valid_r], size_vec[valid_r]).statistic)
 
         assert corr_before > 0.15, f"测试前置条件失败: corr_before={corr_before:.3f}"
         assert corr_after < corr_before / 2, f"size 暴露剥离不充分: {corr_before:.3f}→{corr_after:.3f}"
@@ -215,6 +222,7 @@ class TestBarraNeutralizeMatrix:
 
 # ─── cross_section_evaluate_backtest 集成 ─────────────────
 
+
 class TestCrossSectionBarraIntegration:
     """GAP-S02: cross_section_evaluate_backtest 集成 style_exposures。"""
 
@@ -237,7 +245,9 @@ class TestCrossSectionBarraIntegration:
             ),
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-            economic_logic=EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4, narrative="Barra集成"),
+            economic_logic=EconomicLogic(
+                theory=4, behavioral=3, microstructure=3, institutional=4, narrative="Barra集成"
+            ),
             source="manual",
         )
 
@@ -250,7 +260,10 @@ class TestCrossSectionBarraIntegration:
         exposures = engine.compute_exposures(panel, dates)
         fp = self._make_factor()
         bt = cross_section_evaluate_backtest(
-            fp, panel, dates, style_exposures=exposures,
+            fp,
+            panel,
+            dates,
+            style_exposures=exposures,
         )
         assert "ic" in bt
         assert "sharpe" in bt
@@ -267,7 +280,11 @@ class TestCrossSectionBarraIntegration:
         exposures = engine.compute_exposures(panel, dates)
         fp = self._make_factor()
         bt = cross_section_evaluate_backtest(
-            fp, panel, dates, industry_map=industry_map, style_exposures=exposures,
+            fp,
+            panel,
+            dates,
+            industry_map=industry_map,
+            style_exposures=exposures,
         )
         assert "ic" in bt
         assert "sharpe" in bt

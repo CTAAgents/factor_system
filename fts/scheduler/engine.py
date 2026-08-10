@@ -122,12 +122,10 @@ class SchedulerEngine:
         """
         try:
             from apscheduler.schedulers.background import BackgroundScheduler
+
             return BackgroundScheduler(daemon=daemon)
         except ImportError:
-            logger.warning(
-                "APScheduler 未安装。调度器不可用。"
-                "请执行: pip install fts[dev] 或 pip install apscheduler"
-            )
+            logger.warning("APScheduler 未安装。调度器不可用。请执行: pip install fts[dev] 或 pip install apscheduler")
             return None
 
     def _add_job(self, scheduler: Any, task: TaskSpec) -> None:
@@ -165,6 +163,7 @@ class SchedulerEngine:
             try:
                 module_path, _, func_name = task.callable_path.rpartition(".")
                 import importlib
+
                 module = importlib.import_module(module_path)
                 func = getattr(module, func_name)
                 func()
@@ -184,6 +183,7 @@ class SchedulerEngine:
 
 
 # ─── CLI 入口 ────────────────────────────────────────────
+
 
 def run_scheduler(daemon: bool = True) -> None:
     """启动调度器并阻塞（daemon=False 时）或后台运行（daemon=True 时）。"""

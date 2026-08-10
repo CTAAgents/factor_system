@@ -34,7 +34,6 @@ from scripts.run_factor_audit_real import (
     compute_forward_returns,
     compute_ic,
     compute_oos_metrics,
-    execute_factor_code,
     generate_stress_test_inputs,
 )
 
@@ -150,8 +149,14 @@ def audit_one(fid: str, name: str, panel: dict[str, pd.DataFrame]) -> dict:
     audit_dict["positive_ic_ratio"] = round(positive_ratio, 4)
     logger.info(
         "[%s] passed=%s pass_rate=%.0f%% mean_ic=%.4f 正IC占比=%.0f%% | 通过=%d 跳过=%d 失败=%s",
-        name, report.passed, report.pass_rate * 100, mean_ic, positive_ratio * 100,
-        report.summary["passed"], report.summary["skipped"], report.summary["failed_items"],
+        name,
+        report.passed,
+        report.pass_rate * 100,
+        mean_ic,
+        positive_ratio * 100,
+        report.summary["passed"],
+        report.summary["skipped"],
+        report.summary["failed_items"],
     )
     return audit_dict
 

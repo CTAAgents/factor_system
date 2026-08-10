@@ -37,24 +37,41 @@ IFIND_MCP_RAW = {
     "data": [
         {
             "date": "2026-08-01",
-            "open": 3500, "high": 3550, "low": 3490, "close": 3540,
-            "volume": 100000, "amount": 350000000,
-            "openInterest": 80000, "settle": 3540, "preSettle": 3520,
+            "open": 3500,
+            "high": 3550,
+            "low": 3490,
+            "close": 3540,
+            "volume": 100000,
+            "amount": 350000000,
+            "openInterest": 80000,
+            "settle": 3540,
+            "preSettle": 3520,
             "openInterestChg": 2000,
         },
         {
             "date": "2026-08-04",
-            "open": 3540, "high": 3600, "low": 3530, "close": 3580,
-            "volume": 120000, "amount": 420000000,
-            "openInterest": 82000, "settle": 3580, "preSettle": 3540,
+            "open": 3540,
+            "high": 3600,
+            "low": 3530,
+            "close": 3580,
+            "volume": 120000,
+            "amount": 420000000,
+            "openInterest": 82000,
+            "settle": 3580,
+            "preSettle": 3540,
             "openInterestChg": 2000,
         },
         {
             "date": "2026-08-05",
-            "open": 3580, "high": 3620, "low": 3570, "close": 3610,
-            "volume": 110000, "amount": 396000000,
+            "open": 3580,
+            "high": 3620,
+            "low": 3570,
+            "close": 3610,
+            "volume": 110000,
+            "amount": 396000000,
             "open_interest": 85000,  # 字段别名测试
-            "settle": 3610, "pre_settle": 3580,
+            "settle": 3610,
+            "pre_settle": 3580,
             "oi_chg": 3000,  # 字段别名测试
         },
     ],
@@ -112,8 +129,7 @@ def main() -> int:
             cols = con.execute("PRAGMA table_info('kline_cache')").fetchall()
             col_names = [r[1] for r in cols]
             print(f"[3/8] kline_cache 列数: {len(col_names)}")
-            for col in ("hold", "settle", "pre_settle", "oi_change", "vwap",
-                        "source", "trace_id"):
+            for col in ("hold", "settle", "pre_settle", "oi_change", "vwap", "source", "trace_id"):
                 assert col in col_names, f"缺列: {col}"
             print("       ✅ 全部 8 个新字段存在")
 
@@ -122,9 +138,7 @@ def main() -> int:
                 "fts.data_sources.ifind_source._call_mcp",
                 return_value=IFIND_MCP_RAW,
             ) as mock_mcp:
-                df = IFindSource().fetch_ohlcv(
-                    "RB2509", days=30, trace_id="verify-14.0.9"
-                )
+                df = IFindSource().fetch_ohlcv("RB2509", days=30, trace_id="verify-14.0.9")
             assert mock_mcp.called
             print(f"\n[4/8] IFindSource.fetch_ohlcv 返回 {len(df)} 行")
             print("       DataFrame 预览:")
@@ -135,7 +149,7 @@ def main() -> int:
             con.register("df_ifind", df)
             con.execute("INSERT INTO kline_cache SELECT * FROM df_ifind")
             con.unregister("df_ifind")
-            print(f"\n[5/8] INSERT kline_cache 完成")
+            print("\n[5/8] INSERT kline_cache 完成")
 
             # 6. SELECT 回查，验证落库正确
             rows = con.execute(
@@ -188,9 +202,11 @@ def main() -> int:
             assert mock_edb.called
             print(f"\n[7/8] IFindSource.fetch_edb 返回 {len(edb_data)} 个 EDB 数据点")
             for d in edb_data:
-                print(f"       {d['indicator']} | {d['date']} | "
-                      f"value={d['value']} | unit={d['unit']} | "
-                      f"source={d['source']} | trace_id={d['trace_id']}")
+                print(
+                    f"       {d['indicator']} | {d['date']} | "
+                    f"value={d['value']} | unit={d['unit']} | "
+                    f"source={d['source']} | trace_id={d['trace_id']}"
+                )
 
             # INSERT 到 edb_cache
             con.executemany(
@@ -212,7 +228,7 @@ def main() -> int:
                     for d in edb_data
                 ],
             )
-            print(f"       INSERT edb_cache 完成")
+            print("       INSERT edb_cache 完成")
 
             # 8. SELECT 回查 edb_cache
             edb_rows = con.execute(
@@ -227,10 +243,7 @@ def main() -> int:
             print("       indicator   | date       | value     | unit | source | trace_id")
             print("       " + "-" * 90)
             for row in edb_rows:
-                print(
-                    f"       {row[0]:12} | {str(row[1])} | {row[2]:8} | {row[3]:4} | "
-                    f"{row[4]:5} | {row[5]}"
-                )
+                print(f"       {row[0]:12} | {str(row[1])} | {row[2]:8} | {row[3]:4} | {row[4]:5} | {row[5]}")
 
             # 断言
             assert len(edb_rows) == 3, f"期望 3 行 EDB，实际 {len(edb_rows)}"
@@ -249,8 +262,7 @@ def main() -> int:
 
             # 验证三表齐全
             tables = con.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema='main'"
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
             ).fetchall()
             table_names = {r[0] for r in tables}
             print(f"\n       所有表: {sorted(table_names)}")
@@ -261,10 +273,10 @@ def main() -> int:
             print("\n" + "=" * 60)
             print("✅ 任务 14.0.9 端到端验证全部通过")
             print("=" * 60)
-            print(f"  - K 线 8 个新字段 (hold/settle/pre_settle/oi_change) 落 kline_cache")
-            print(f"  - 字段别名 (open_interest / oi_chg) 正确映射")
-            print(f"  - EDB 3 行宏观数据落 edb_cache")
-            print(f"  - source='IFIND' / trace_id 双链路贯通")
+            print("  - K 线 8 个新字段 (hold/settle/pre_settle/oi_change) 落 kline_cache")
+            print("  - 字段别名 (open_interest / oi_chg) 正确映射")
+            print("  - EDB 3 行宏观数据落 edb_cache")
+            print("  - source='IFIND' / trace_id 双链路贯通")
             return 0
         finally:
             con.close()

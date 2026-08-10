@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 # ─── 配置 ─────────────────────────────────────────────────
 
+
 @dataclass
 class BatchMiningConfig:
     """批量挖掘配置（D.1 §3.1）。
@@ -46,6 +47,7 @@ class BatchMiningConfig:
 
 # ─── 契约 ─────────────────────────────────────────────────
 
+
 class BatchedProposal(TypedDict, total=False):
     """批量候选（D.1 §3.2）。
 
@@ -58,6 +60,7 @@ class BatchedProposal(TypedDict, total=False):
     - prefilter_reason: 未通过原因
     - prefilter_ic: 预筛 IC（排序截断依据，未通过时为 0.0）
     """
+
     factor: FactorProgram
     parent_id: str
     method: str
@@ -202,22 +205,21 @@ class BatchMiner:
             filtered = [self._filter_one(proposals[0], trace_id)]
         elif len(proposals) > 1:
             with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                futures = {
-                    ex.submit(self._filter_one, p, trace_id): p
-                    for p in proposals
-                }
+                futures = {ex.submit(self._filter_one, p, trace_id): p for p in proposals}
                 for fut in as_completed(futures):
                     try:
                         filtered.append(fut.result())
                     except Exception as e:  # pragma: no cover - 防御兜底
                         logger.debug("[batch] 粗筛任务异常: %s", e)
                         src = futures[fut]
-                        filtered.append({
-                            **src,
-                            "prefilter_ok": False,
-                            "prefilter_reason": f"粗筛异常: {type(e).__name__}: {e}",
-                            "prefilter_ic": 0.0,
-                        })
+                        filtered.append(
+                            {
+                                **src,
+                                "prefilter_ok": False,
+                                "prefilter_reason": f"粗筛异常: {type(e).__name__}: {e}",
+                                "prefilter_ic": 0.0,
+                            }
+                        )
 
         passed = [p for p in filtered if p.get("prefilter_ok")]
         rejected = [p for p in filtered if not p.get("prefilter_ok")]
@@ -226,9 +228,7 @@ class BatchMiner:
         truncated = passed[: self.config.max_candidates]
         for overflow in passed[self.config.max_candidates :]:
             overflow["prefilter_ok"] = False
-            overflow["prefilter_reason"] = (
-                f"超过 max_candidates={self.config.max_candidates} 截断"
-            )
+            overflow["prefilter_reason"] = f"超过 max_candidates={self.config.max_candidates} 截断"
             rejected.append(overflow)
 
         duration_ms = (time.perf_counter() - start) * 1000.0

@@ -38,25 +38,15 @@ def _make_code(
     field_assignments = []
     for f in input_fields:
         if f == "close":
-            field_assignments.append(
-                "close = data['close'].values if hasattr(data, 'close') else data['close']"
-            )
+            field_assignments.append("close = data['close'].values if hasattr(data, 'close') else data['close']")
         elif f == "high":
-            field_assignments.append(
-                "high = data['high'].values if hasattr(data, 'high') else data['high']"
-            )
+            field_assignments.append("high = data['high'].values if hasattr(data, 'high') else data['high']")
         elif f == "low":
-            field_assignments.append(
-                "low = data['low'].values if hasattr(data, 'low') else data['low']"
-            )
+            field_assignments.append("low = data['low'].values if hasattr(data, 'low') else data['low']")
         elif f == "open":
-            field_assignments.append(
-                "open_ = data['open'].values if hasattr(data, 'open') else data['open']"
-            )
+            field_assignments.append("open_ = data['open'].values if hasattr(data, 'open') else data['open']")
         elif f == "volume":
-            field_assignments.append(
-                "volume = data['volume'].values if hasattr(data, 'volume') else data['volume']"
-            )
+            field_assignments.append("volume = data['volume'].values if hasattr(data, 'volume') else data['volume']")
         elif f == "vwap":
             field_assignments.append(
                 "vwap = data.get('vwap', close).values if hasattr(data, 'vwap') else data.get('vwap', close)"
@@ -72,8 +62,7 @@ def _make_code(
         "def factor_program(data, params):\n"
         "    import numpy as np\n"
         "    n = len(data['close'].values if hasattr(data, 'close') else data['close'])\n\n"
-        "    " + fields_str + "\n\n"
-        + indented_impl + "\n\n"
+        "    " + fields_str + "\n\n" + indented_impl + "\n\n"
         "    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
     )
 
@@ -123,8 +112,13 @@ t3 = c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3
 signal = (close - t3) / np.maximum(close, 1e-10)
 signal = np.tanh(signal * 50)
 """,
-        "economic_logic": {"theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                          "narrative": "T3移动平均因子：Tillson T3 MA，比传统EMA更平滑，减少滞后和噪声。T3<价格=偏多，T3>价格=偏空。"},
+        "economic_logic": {
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "T3移动平均因子：Tillson T3 MA，比传统EMA更平滑，减少滞后和噪声。T3<价格=偏多，T3>价格=偏空。",
+        },
     },
     {
         "name": "fut_fisher_transform",
@@ -160,8 +154,13 @@ for i in range(window, n):
 # Fisher > 2 偏空, < -2 偏多
 signal = -np.tanh(value * 0.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 4, "microstructure": 3, "institutional": 2,
-                          "narrative": "Fisher Transform因子：Ehlers Fisher Transform，将价格正态化。极端值>2偏空，<-2偏多。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 2,
+            "narrative": "Fisher Transform因子：Ehlers Fisher Transform，将价格正态化。极端值>2偏空，<-2偏多。",
+        },
     },
     {
         "name": "fut_mama",
@@ -197,8 +196,13 @@ for i in range(4, n):
 signal = (mama - fama) / np.maximum(close, 1e-10)
 signal = np.tanh(signal * 50)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 2,
-                          "narrative": "MAMA因子：MESA Adaptive Moving Average，自适应调整周期。MAMA上穿FAMA=偏多，下穿=偏空。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 2,
+            "narrative": "MAMA因子：MESA Adaptive Moving Average，自适应调整周期。MAMA上穿FAMA=偏多，下穿=偏空。",
+        },
     },
     {
         "name": "fut_ehlers_corr_cycle",
@@ -235,10 +239,14 @@ for i in range(window * 2, n):
 
 signal = np.tanh(cycle_quality * 5 - 2)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 2,
-                          "narrative": "Ehlers相关周期因子：自相关周期检测，周期短=趋势强偏多，周期长=震荡偏空。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 2,
+            "narrative": "Ehlers相关周期因子：自相关周期检测，周期短=趋势强偏多，周期长=震荡偏空。",
+        },
     },
-
     # ════════════════════════════════════════════════════════════
     # 类别 2: 趋势/震荡检测
     # ════════════════════════════════════════════════════════════
@@ -284,8 +292,13 @@ mid_mask = (ci >= 38.2) & (ci <= 61.8)
 signal[mid_mask] = (61.8 + 38.2 - 2 * ci[mid_mask]) / (61.8 - 38.2)
 signal = np.tanh(signal * 0.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 4, "microstructure": 3, "institutional": 3,
-                          "narrative": "混沌指数因子：CI<38.2=趋势偏多，CI>61.8=震荡偏空。MC经典市场状态滤波器。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "混沌指数因子：CI<38.2=趋势偏多，CI>61.8=震荡偏空。MC经典市场状态滤波器。",
+        },
     },
     {
         "name": "fut_vortex",
@@ -326,8 +339,13 @@ vi_minus = np.where(sum_tr > 1e-10, sum_vm / sum_tr, 0)
 signal = vi_plus - vi_minus
 signal = np.tanh(signal * 3)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                          "narrative": "Vortex Indicator因子：VI+上穿VI-偏多，VI-上穿VI+偏空。MC经典趋势检测。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "Vortex Indicator因子：VI+上穿VI-偏多，VI-上穿VI+偏空。MC经典趋势检测。",
+        },
     },
     {
         "name": "fut_kst",
@@ -364,8 +382,13 @@ for i in range(r4, n):
 kst = sma1 + 2 * sma2 + 3 * sma3 + 4 * sma4
 signal = np.tanh(kst * 50)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                          "narrative": "KST因子：Know Sure Thing，多周期ROC合成。上穿零轴偏多，下穿偏空。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "KST因子：Know Sure Thing，多周期ROC合成。上穿零轴偏多，下穿偏空。",
+        },
     },
     {
         "name": "fut_coppock",
@@ -400,10 +423,14 @@ for i in range(wma_window, n):
 # Coppock上穿零轴=偏多，下穿=偏空
 signal = np.tanh(coppock * 0.1)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 2, "institutional": 4,
-                          "narrative": "Coppock Curve因子：长期趋势变化检测，上穿零轴偏多，下穿零轴偏空。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 2,
+            "institutional": 4,
+            "narrative": "Coppock Curve因子：长期趋势变化检测，上穿零轴偏多，下穿零轴偏空。",
+        },
     },
-
     # ════════════════════════════════════════════════════════════
     # 类别 3: Bill Williams 分析
     # ════════════════════════════════════════════════════════════
@@ -442,8 +469,13 @@ for i in range(1, n):
 
 signal = np.tanh(signal_raw)
 """,
-        "economic_logic": {"theory": 3, "behavioral": 4, "microstructure": 4, "institutional": 3,
-                          "narrative": "市场促进指数因子：Bill Williams MFI，量价齐升偏多，量缩价升偏空。"},
+        "economic_logic": {
+            "theory": 3,
+            "behavioral": 4,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "市场促进指数因子：Bill Williams MFI，量价齐升偏多，量缩价升偏空。",
+        },
     },
     {
         "name": "fut_ease_of_movement",
@@ -472,10 +504,14 @@ for i in range(window, n):
 
 signal = np.tanh(eom_sma * 10)
 """,
-        "economic_logic": {"theory": 3, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                          "narrative": "Ease of Movement因子：量价关系效率，EOM上升偏多，下降偏空。"},
+        "economic_logic": {
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "Ease of Movement因子：量价关系效率，EOM上升偏多，下降偏空。",
+        },
     },
-
     # ════════════════════════════════════════════════════════════
     # 类别 4: 波动率/止损
     # ════════════════════════════════════════════════════════════
@@ -518,8 +554,13 @@ short_stop = lowest + mult * atr
 signal = np.where(close >= long_stop, 1.0, np.where(close <= short_stop, -1.0, 0.0))
 signal = np.tanh(signal * 0.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                          "narrative": "Chandelier Exit因子：波动率跟踪止损，价格突破上轨偏多，跌破下轨偏空。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "Chandelier Exit因子：波动率跟踪止损，价格突破上轨偏多，跌破下轨偏空。",
+        },
     },
     {
         "name": "fut_volatility_ratio",
@@ -550,8 +591,13 @@ vr = np.where(avg_tr > 1e-10, tr / avg_tr, 1.0)
 signal = np.where(vr > 1.5, 1.0, np.where(vr < 0.5, -0.5, 0.0))
 signal = np.tanh(signal)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                          "narrative": "Volatility Ratio因子：波动爆发偏多，波动萎缩偏空。MC经典选时因子。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "Volatility Ratio因子：波动爆发偏多，波动萎缩偏空。MC经典选时因子。",
+        },
     },
     {
         "name": "fut_kase_devstop",
@@ -595,8 +641,13 @@ dev_stop_short = lowest + mult * med_tr * vol_weight
 signal = np.where(close >= dev_stop_long, 1.0, np.where(close <= dev_stop_short, -1.0, 0.0))
 signal = np.tanh(signal * 0.5)
 """,
-        "economic_logic": {"theory": 3, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                          "narrative": "Kase DevStops因子：基于波动率的智能止损，突破上轨偏多，跌破下轨偏空。"},
+        "economic_logic": {
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "Kase DevStops因子：基于波动率的智能止损，突破上轨偏多，跌破下轨偏空。",
+        },
     },
     {
         "name": "fut_acceleration_bands",
@@ -632,8 +683,13 @@ inside = (close > lower) & (close < upper) & (upper > lower)
 signal[inside] = 2 * (close[inside] - lower[inside]) / (upper[inside] - lower[inside]) - 1
 signal = np.tanh(signal * 0.5)
 """,
-        "economic_logic": {"theory": 3, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                          "narrative": "Acceleration Bands因子：波动率自适应通道，突破上轨偏多，跌破下轨偏空。"},
+        "economic_logic": {
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "Acceleration Bands因子：波动率自适应通道，突破上轨偏多，跌破下轨偏空。",
+        },
     },
     {
         "name": "fut_rainbow_ma",
@@ -678,10 +734,14 @@ if len(mas) >= 2:
 else:
     signal = np.zeros(n)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                          "narrative": "Rainbow MA因子：多周期均线多头发散偏多，空头发散偏空，纠缠偏空。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "Rainbow MA因子：多周期均线多头发散偏多，空头发散偏空，纠缠偏空。",
+        },
     },
-
     # ════════════════════════════════════════════════════════════
     # 类别 5: 量价分析
     # ════════════════════════════════════════════════════════════
@@ -714,8 +774,13 @@ for i in range(window, n):
 
 signal = np.tanh(fi_signal * 0.5)
 """,
-        "economic_logic": {"theory": 3, "behavioral": 4, "microstructure": 4, "institutional": 3,
-                          "narrative": "Elder Force Index因子：量价动量，FI>0偏多，FI<0偏空。MC经典量价指标。"},
+        "economic_logic": {
+            "theory": 3,
+            "behavioral": 4,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "Elder Force Index因子：量价动量，FI>0偏多，FI<0偏空。MC经典量价指标。",
+        },
     },
     {
         "name": "fut_herrick_payoff",
@@ -756,10 +821,14 @@ for i in range(window, n):
 
 signal = np.tanh(hpi_smooth / np.maximum(np.abs(hpi_smooth).max() + 1e-10, 1e-10) * 2)
 """,
-        "economic_logic": {"theory": 3, "behavioral": 3, "microstructure": 4, "institutional": 4,
-                          "narrative": "Herrick Payoff Index因子：结合价格、成交量、持仓量，HPI>0偏多，HPI<0偏空。"},
+        "economic_logic": {
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 4,
+            "narrative": "Herrick Payoff Index因子：结合价格、成交量、持仓量，HPI>0偏多，HPI<0偏空。",
+        },
     },
-
     # ════════════════════════════════════════════════════════════
     # 类别 6: 模式识别
     # ════════════════════════════════════════════════════════════
@@ -796,8 +865,13 @@ for i in range(window, n):
 
 signal = np.tanh(signal)
 """,
-        "economic_logic": {"theory": 3, "behavioral": 4, "microstructure": 4, "institutional": 2,
-                          "narrative": "Inside Bar突破因子：内包线后突破上轨偏多，跌破下轨偏空。MC模式识别。"},
+        "economic_logic": {
+            "theory": 3,
+            "behavioral": 4,
+            "microstructure": 4,
+            "institutional": 2,
+            "narrative": "Inside Bar突破因子：内包线后突破上轨偏多，跌破下轨偏空。MC模式识别。",
+        },
     },
     {
         "name": "fut_outside_bar",
@@ -833,8 +907,13 @@ for i in range(window, n):
 
 signal = np.tanh(signal)
 """,
-        "economic_logic": {"theory": 3, "behavioral": 4, "microstructure": 4, "institutional": 2,
-                          "narrative": "Outside Bar反转因子：外包线收涨偏多，收跌偏空。MC经典反转形态。"},
+        "economic_logic": {
+            "theory": 3,
+            "behavioral": 4,
+            "microstructure": 4,
+            "institutional": 2,
+            "narrative": "Outside Bar反转因子：外包线收涨偏多，收跌偏空。MC经典反转形态。",
+        },
     },
     {
         "name": "fut_123_reversal",
@@ -877,8 +956,13 @@ for i in range(window * 2, n):
 
 signal = np.tanh(signal)
 """,
-        "economic_logic": {"theory": 3, "behavioral": 4, "microstructure": 3, "institutional": 2,
-                          "narrative": "123反转形态因子：上升123偏多，下降123偏空。MC经典形态识别。"},
+        "economic_logic": {
+            "theory": 3,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 2,
+            "narrative": "123反转形态因子：上升123偏多，下降123偏空。MC经典形态识别。",
+        },
     },
 ]
 

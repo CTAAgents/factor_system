@@ -1,4 +1,5 @@
 """FTS-Expr 编译器 — 表达式 → 确定性沙箱安全代码 + 静态分析 (Phase C.2)。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,7 +8,6 @@ from .parser import parse_expression
 from .registry import build_registry
 from .validator import (
     DSLValidationError,
-    compute_max_lookback,
     validate_expr,
 )
 

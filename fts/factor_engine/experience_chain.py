@@ -81,6 +81,7 @@ DEFAULT_PATTERN = "其他原因"
 
 # ─── 失败模式分析器 ────────────────────────────────────────
 
+
 class FailurePatternAnalyzer:
     """对失败轨迹的 failure_reasons 做关键词聚类，产出结构化失败模式统计。
 
@@ -93,9 +94,7 @@ class FailurePatternAnalyzer:
         self._chain = experience_chain
         self._pattern_map = FAILURE_PATTERN_KEYWORDS
 
-    def analyze(
-        self, max_traces: int = 20
-    ) -> dict[str, int]:
+    def analyze(self, max_traces: int = 20) -> dict[str, int]:
         """分析最近 N 条失败轨迹，返回模式计数。
 
         Returns:
@@ -105,9 +104,7 @@ class FailurePatternAnalyzer:
         if not failures:
             return {}
         # 按时间倒序取最近 max_traces 条
-        failures.sort(
-            key=lambda t: t.get("recorded_at", ""), reverse=True
-        )
+        failures.sort(key=lambda t: t.get("recorded_at", ""), reverse=True)
         failures = failures[:max_traces]
 
         pattern_counts: Counter = Counter()
@@ -176,6 +173,7 @@ class ExperienceChainError(Exception):
 
 # ─── 经验链管理器 ─────────────────────────────────────────
 
+
 class ExperienceChain:
     """经验链存储管理器。
 
@@ -232,8 +230,7 @@ class ExperienceChain:
         return {
             "success": len(list(self.success_dir.glob("*.json"))),
             "failure": len(list(self.failure_dir.glob("*.json"))),
-            "total": len(list(self.success_dir.glob("*.json")))
-                     + len(list(self.failure_dir.glob("*.json"))),
+            "total": len(list(self.success_dir.glob("*.json"))) + len(list(self.failure_dir.glob("*.json"))),
         }
 
     def cleanup_if_needed(self) -> int:
@@ -284,18 +281,18 @@ class ExperienceChain:
         for i, t in enumerate(recent["success"], 1):
             lines.extend(self._format_trace_for_llm(i, t))
 
-        lines.extend([
-            "",
-            "## 最近失败轨迹（最多 10 条）",
-            "",
-        ])
+        lines.extend(
+            [
+                "",
+                "## 最近失败轨迹（最多 10 条）",
+                "",
+            ]
+        )
         for i, t in enumerate(recent["failure"], 1):
             lines.extend(self._format_trace_for_llm(i, t))
 
         self.summary_file.parent.mkdir(parents=True, exist_ok=True)
-        self.summary_file.write_text(
-            "\n".join(lines), encoding="utf-8"
-        )
+        self.summary_file.write_text("\n".join(lines), encoding="utf-8")
         return self.summary_file
 
     # ─── 内部方法 ───
@@ -309,16 +306,12 @@ class ExperienceChain:
         if not trace.get("mutation_summary", "").strip():
             raise ExperienceChainError("mutation_summary 不能为空字符串")
         if trace.get("success") != expect_success:
-            raise ExperienceChainError(
-                f"轨迹 success={trace.get('success')} 与期望 {expect_success} 不一致"
-            )
+            raise ExperienceChainError(f"轨迹 success={trace.get('success')} 与期望 {expect_success} 不一致")
         if not expect_success:
             # 失败轨迹必须有 failure_reasons
             eval_ = trace.get("evaluation", {})
             if not eval_.get("failure_reasons"):
-                raise ExperienceChainError(
-                    "失败轨迹的 evaluation.failure_reasons 不能为空"
-                )
+                raise ExperienceChainError("失败轨迹的 evaluation.failure_reasons 不能为空")
 
     def _write_trace(self, trace: ExperienceTrace, target_dir: Path) -> Path:
         """写入轨迹 JSON 文件。"""
@@ -332,9 +325,7 @@ class ExperienceChain:
         )
         return fp
 
-    def _read_dir(
-        self, dir_path: Path, limit: Optional[int] = None
-    ) -> list[ExperienceTrace]:
+    def _read_dir(self, dir_path: Path, limit: Optional[int] = None) -> list[ExperienceTrace]:
         """按 mtime 倒序读取目录中的轨迹（最近优先）。"""
         files = list(dir_path.glob("*.json"))
         # 按 mtime 倒序（最新优先）
@@ -365,8 +356,8 @@ class ExperienceChain:
         lessons = trace.get("lessons", [])
         if lessons:
             lines.append("- 教训:")
-            for l in lessons:
-                lines.append(f"  - {l}")
+            for lesson in lessons:
+                lines.append(f"  - {lesson}")
         failure_reasons = eval_.get("failure_reasons", [])
         if failure_reasons:
             lines.append("- 失败原因:")

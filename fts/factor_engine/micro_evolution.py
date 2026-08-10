@@ -24,6 +24,7 @@ from .contracts import FactorProgram
 try:
     import optuna
     from optuna.samplers import TPESampler, RandomSampler
+
     _HAS_OPTUNA = True
 except ImportError:
     optuna = None  # type: ignore[assignment]
@@ -52,6 +53,7 @@ class MicroEvolutionError(Exception):
 
 # ─── 参数空间搜索 ─────────────────────────────────────────
 
+
 def _suggest_param(trial, key: str, value: Any) -> Any:
     """根据参数默认值推断参数空间。
 
@@ -65,9 +67,9 @@ def _suggest_param(trial, key: str, value: Any) -> Any:
         hi = max(value * 2, value + 1)
         return trial.suggest_int(key, lo, hi)
     if isinstance(value, float):
-        lo = value / 2
-        hi = value * 2
-        return trial.suggest_float(key, lo, hi)
+        lo_f = value / 2
+        hi_f = value * 2
+        return trial.suggest_float(key, lo_f, hi_f)
     # 字符串等不可搜索类型
     return value
 
@@ -100,6 +102,7 @@ def optimize_params(
 
     if objective_fn is None:
         from scipy import stats as sp_stats
+
         def objective_fn(sig, ret):
             # 处理不同长度的数据（截取共同部分）
             min_len = min(len(sig), len(ret))
@@ -113,6 +116,7 @@ def optimize_params(
             return 0.0 if np.isnan(ic) else float(ic)
 
     from .factor_program import FactorExecutor
+
     executor = FactorExecutor(factor)
     executor.compile()  # 预编译
 
@@ -129,9 +133,7 @@ def optimize_params(
 
     def optuna_objective(trial):
         # 构造本次试验的参数
-        trial_params = {
-            k: _suggest_param(trial, k, v) for k, v in base_params.items()
-        }
+        trial_params = {k: _suggest_param(trial, k, v) for k, v in base_params.items()}
         try:
             signal = executor.execute(data, trial_params)
             score = objective_fn(signal, forward_returns)
@@ -186,6 +188,7 @@ def optimize_params(
 
 # ─── 两阶段优化漏斗 (GAP-I205, v2.68.0) ──────────────────
 
+
 def optimize_params_staged(
     factor: FactorProgram,
     data: pd.DataFrame,
@@ -225,7 +228,10 @@ def optimize_params_staged(
 
     # ── 阶段 1: 粗筛（低 trials 随机搜索快速打分） ──
     coarse_params, coarse_score = optimize_params(
-        factor, data, forward_returns, objective_fn=objective_fn,
+        factor,
+        data,
+        forward_returns,
+        objective_fn=objective_fn,
         n_trials=coarse_trials,
         early_stopping_failures=early_stopping_failures,
         use_random_search=True,
@@ -238,7 +244,10 @@ def optimize_params_staged(
     ratio = min(1.0, max(0.0, coarse_score / coarse_ref_ic))
     adaptive_trials = max(coarse_trials, int(n_trials * ratio))
     best_params, best_score = optimize_params(
-        factor, data, forward_returns, objective_fn=objective_fn,
+        factor,
+        data,
+        forward_returns,
+        objective_fn=objective_fn,
         n_trials=adaptive_trials,
         early_stopping_failures=early_stopping_failures,
     )
@@ -246,6 +255,7 @@ def optimize_params_staged(
 
 
 # ─── 微观演化主入口 ───────────────────────────────────────
+
 
 def evolve_micro(
     factor: FactorProgram,
@@ -273,11 +283,17 @@ def evolve_micro(
     """
     if use_staged:
         best_params, best_score, _passed = optimize_params_staged(
-            factor, data, forward_returns, n_trials=n_trials,
+            factor,
+            data,
+            forward_returns,
+            n_trials=n_trials,
         )
     else:
         best_params, best_score = optimize_params(
-            factor, data, forward_returns, n_trials=n_trials,
+            factor,
+            data,
+            forward_returns,
+            n_trials=n_trials,
             use_random_search=use_random_search,
         )
 

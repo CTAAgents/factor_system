@@ -35,28 +35,33 @@ def _factor(name: str = "", code: str = "", **extra) -> dict:
 
 # ─── 名称关键词推断 ────────────────────────────────────────
 
-@pytest.mark.parametrize("name,expected", [
-    ("fut_momentum_g1", "momentum"),
-    ("mean_reversion_bias", "mean_reversion"),
-    ("fut_carry_roll", "carry"),
-    ("pe_value_factor", "value"),
-    ("low_vol_strategy", "low_vol"),
-    ("high_beta_exposure", "high_beta"),
-    ("defensive_quality", "defensive"),
-    ("earnings_growth", "growth"),
-    ("roe_quality", "quality"),
-    ("analyst_sentiment", "sentiment"),
-    ("fut_volatility_atr", "volatility"),
-    ("open_interest_change", "open_interest"),
-    ("cs_rank_cross", "cross_section"),
-    ("intraday_momentum", "intraday"),
-    ("unknown_factor_xyz", "other"),
-])
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("fut_momentum_g1", "momentum"),
+        ("mean_reversion_bias", "mean_reversion"),
+        ("fut_carry_roll", "carry"),
+        ("pe_value_factor", "value"),
+        ("low_vol_strategy", "low_vol"),
+        ("high_beta_exposure", "high_beta"),
+        ("defensive_quality", "defensive"),
+        ("earnings_growth", "growth"),
+        ("roe_quality", "quality"),
+        ("analyst_sentiment", "sentiment"),
+        ("fut_volatility_atr", "volatility"),
+        ("open_interest_change", "open_interest"),
+        ("cs_rank_cross", "cross_section"),
+        ("intraday_momentum", "intraday"),
+        ("unknown_factor_xyz", "other"),
+    ],
+)
 def test_infer_style_from_name(name: str, expected: str) -> None:
     assert _infer_factor_style_from_name(name) == expected
 
 
 # ─── FactorStyleClassifier 全流程 ─────────────────────────
+
 
 def test_classifier_explicit_style_tags_priority() -> None:
     """显式 style_tags 优先于名称推断。"""
@@ -112,13 +117,27 @@ def test_classifier_empty_factor() -> None:
 
 # ─── FactorStyle 契约 ─────────────────────────────────────
 
+
 def test_factor_style_enum_contains_expected() -> None:
     """FactorStyle 枚举包含 A.3 设计声明的核心风格。"""
     styles = set(FactorStyle.__args__)  # type: ignore[attr-defined]
-    for expected in ("momentum", "mean_reversion", "carry", "value",
-                     "low_vol", "high_beta", "defensive", "growth",
-                     "quality", "sentiment", "volatility", "open_interest",
-                     "cross_section", "intraday", "other"):
+    for expected in (
+        "momentum",
+        "mean_reversion",
+        "carry",
+        "value",
+        "low_vol",
+        "high_beta",
+        "defensive",
+        "growth",
+        "quality",
+        "sentiment",
+        "volatility",
+        "open_interest",
+        "cross_section",
+        "intraday",
+        "other",
+    ):
         assert expected in styles
 
 
@@ -138,10 +157,18 @@ def test_regime_style_multipliers_values_reasonable() -> None:
 
 # ─── regime_adaptive_weight_adjustment 双维度 ──────────────
 
+
 def _make_signal(fid: str, name: str, weight: float = 0.1) -> dict:
-    return {"factor_id": fid, "name": name, "weight": weight,
-            "sharpe": 1.8, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.05,
-            "retained": True}
+    return {
+        "factor_id": fid,
+        "name": name,
+        "weight": weight,
+        "sharpe": 1.8,
+        "ic": 0.05,
+        "turnover": 0.3,
+        "decay_6m": 0.05,
+        "retained": True,
+    }
 
 
 def test_adjustment_family_dimension_backward_compat() -> None:
@@ -149,7 +176,10 @@ def test_adjustment_family_dimension_backward_compat() -> None:
     signals = [_make_signal("f1", "fut_trend_alpha")]
     factors = [{"factor_id": "f1", "family": "trend", "name": "fut_trend_alpha"}]
     out = regime_adaptive_weight_adjustment(
-        signals, {"regime": "bull"}, factors, dimension="family",
+        signals,
+        {"regime": "bull"},
+        factors,
+        dimension="family",
     )
     assert abs(out[0]["weight"] - 0.13) < 1e-6
 
@@ -159,7 +189,10 @@ def test_adjustment_style_dimension() -> None:
     signals = [_make_signal("f1", "fut_carry")]
     factors = [{"factor_id": "f1", "name": "fut_carry"}]
     out = regime_adaptive_weight_adjustment(
-        signals, {"regime": "bull"}, factors, dimension="style",
+        signals,
+        {"regime": "bull"},
+        factors,
+        dimension="style",
     )
     assert abs(out[0]["weight"] - 0.11) < 1e-6
 
@@ -170,7 +203,10 @@ def test_adjustment_both_dimension_clamped() -> None:
     signals = [_make_signal("f1", "fut_trend_momentum", weight=0.1)]
     factors = [{"factor_id": "f1", "family": "trend", "name": "fut_trend_momentum"}]
     out = regime_adaptive_weight_adjustment(
-        signals, {"regime": "bull"}, factors, dimension="both",
+        signals,
+        {"regime": "bull"},
+        factors,
+        dimension="both",
     )
     assert abs(out[0]["weight"] - 0.15) < 1e-6
 
@@ -178,10 +214,12 @@ def test_adjustment_both_dimension_clamped() -> None:
 def test_adjustment_style_tags_precedence() -> None:
     """显式 style_tags 优先于名称推断。"""
     signals = [_make_signal("f1", "fut_trend_momentum")]
-    factors = [{"factor_id": "f1", "name": "fut_trend_momentum",
-                "style_tags": ["value"]}]
+    factors = [{"factor_id": "f1", "name": "fut_trend_momentum", "style_tags": ["value"]}]
     out = regime_adaptive_weight_adjustment(
-        signals, {"regime": "bear"}, factors, dimension="style",
+        signals,
+        {"regime": "bear"},
+        factors,
+        dimension="style",
     )
     # value 在 bear ×1.2
     assert abs(out[0]["weight"] - 0.12) < 1e-6
@@ -193,7 +231,10 @@ def test_adjustment_high_vol_decay_penalty() -> None:
     signals[0]["decay_6m"] = 0.30
     factors = [{"factor_id": "f1", "family": "trend", "name": "fut_trend"}]
     out = regime_adaptive_weight_adjustment(
-        signals, {"regime": "high_vol"}, factors, dimension="family",
+        signals,
+        {"regime": "high_vol"},
+        factors,
+        dimension="family",
     )
     # trend high_vol ×0.7，再衰减 ×0.8 → 0.056
     assert abs(out[0]["weight"] - 0.1 * 0.7 * 0.8) < 1e-6

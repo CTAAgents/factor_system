@@ -3,6 +3,7 @@
 关键价值: 通过算子注册表的 lookback_param 声明，静态计算表达式最大
 lookback，从根源上杜绝未来函数 (PIT 校验自动化)。
 """
+
 from __future__ import annotations
 
 from typing import Iterable
@@ -86,9 +87,7 @@ def _validate_node(
         errors.append(f"未知算子 '{node.op}'")
         return
     if len(node.args) != len(meta.params):
-        errors.append(
-            f"算子 '{node.op}' 期望 {len(meta.params)} 个参数, 实际 {len(node.args)}"
-        )
+        errors.append(f"算子 '{node.op}' 期望 {len(meta.params)} 个参数, 实际 {len(node.args)}")
     for arg in node.args:
         _validate_node(arg, registry, field_set, errors)
     if len(node.args) != len(meta.params):
@@ -102,6 +101,4 @@ def _validate_node(
             except ValueError:
                 continue
             if not (lo <= val <= hi):
-                errors.append(
-                    f"算子 '{node.op}' 参数 {pname}={val} 越界 [{lo}, {hi}]"
-                )
+                errors.append(f"算子 '{node.op}' 参数 {pname}={val} 越界 [{lo}, {hi}]")

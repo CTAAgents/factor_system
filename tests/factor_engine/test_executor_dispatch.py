@@ -1,4 +1,5 @@
 """FactorExecutor 按 kind 分派 + 快速路径/沙箱路径 parity 测试。"""
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -19,7 +20,10 @@ def data() -> pd.DataFrame:
 def test_operator_kind_routes_to_fast_path(data):
     factor = create_operator_factor(
         "rank(ts_zscore(close, 60))",
-        name="op_dispatch", market="futures", family="mean_reversion", narrative="测试",
+        name="op_dispatch",
+        market="futures",
+        family="mean_reversion",
+        narrative="测试",
     )
     executor = FactorExecutor(factor)
     out = executor.execute(data, {})
@@ -33,11 +37,17 @@ def test_code_kind_still_uses_sandbox(data):
         name="code_twin",
         code="import numpy as np\ndef factor_program(data, params):\n    return np.array(data['close'], dtype=float)",
         params={},
-        signature={"input_fields": ["close"], "output_type": "signal",
-                  "frequency": "daily", "lookback": 1},
-        economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3,
-                        "institutional": 3, "narrative": "代码因子沙箱路径"},
-        source="manual", market="futures", family="trend",
+        signature={"input_fields": ["close"], "output_type": "signal", "frequency": "daily", "lookback": 1},
+        economic_logic={
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "代码因子沙箱路径",
+        },
+        source="manual",
+        market="futures",
+        family="trend",
     )
     executor = FactorExecutor(factor)
     out = executor.execute(data, {})
@@ -49,7 +59,11 @@ def test_operator_and_code_paths_agree(data):
     """parity: 算子快速路径 == 生成的沙箱代码路径。"""
     expr = "rank(ts_zscore(close, 60))"
     op_factor = create_operator_factor(
-        expr, name="op_parity", market="futures", family="mean_reversion", narrative="测试",
+        expr,
+        name="op_parity",
+        market="futures",
+        family="mean_reversion",
+        narrative="测试",
     )
     fast = FactorExecutor(op_factor).execute(data, {})
     # 强制走沙箱路径: 复制为 CODE 类型, 代码由编译器生成

@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -37,13 +36,14 @@ from fts.factor_engine.factor_program import FactorExecutor, FactorCompileError 
 
 ELITE_DIR = PROJECT_ROOT / "memory" / "knowledge" / "factors" / "elite"
 COMBO_FILE = PROJECT_ROOT / "memory" / "portfolio" / "current_combo.json"
-N_BUCKETS = 5          # 五分位
-TOP_PCT = 0.2          # 多头比例
-OOS_RATIO = 0.3        # 样本外比例
+N_BUCKETS = 5  # 五分位
+TOP_PCT = 0.2  # 多头比例
+OOS_RATIO = 0.3  # 样本外比例
 PERIODS_PER_YEAR = 252
 
 
 # ─── 指标计算 ─────────────────────────────────────────────
+
 
 def compute_sharpe(returns: np.ndarray, periods: int = PERIODS_PER_YEAR) -> float:
     if len(returns) < 2:
@@ -81,6 +81,7 @@ def compute_profit_factor(returns: np.ndarray) -> float:
 
 # ─── 加载组合配置 ─────────────────────────────────────────
 
+
 def load_portfolio() -> dict:
     if not COMBO_FILE.exists():
         print(f"[ERROR] 组合文件不存在: {COMBO_FILE}")
@@ -106,6 +107,7 @@ def load_elite_factors() -> dict[str, dict]:
 
 # ─── 回测主逻辑 ──────────────────────────────────────────
 
+
 def run_backtest(
     combo: dict,
     elite_factors: dict[str, dict],
@@ -124,14 +126,14 @@ def run_backtest(
         回测结果 dict
     """
     signals_def = combo.get("signals", [])
-    print(f"\n{'='*60}")
-    print(f"组合回测启动")
+    print(f"\n{'=' * 60}")
+    print("组合回测启动")
     print(f"  组合 ID: {combo.get('combo_id', '?')}")
     print(f"  合成模式: {combo.get('synthesis_mode', '?')}")
     print(f"  信号数: {len(signals_def)}")
     print(f"  回溯天数: {days}")
     print(f"  最大标的: {max_stocks}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     # ── Step 1: 获取数据 ──
     print("[1/5] 获取沪深 300 面板数据...")
@@ -213,7 +215,7 @@ def run_backtest(
             factor_errors += 1
 
     # 构建 signals_by_id 查找
-    signals_by_id = {s["factor_id"]: s for s in signals_def}
+    {s["factor_id"]: s for s in signals_def}
 
     elapsed = time.time() - t0
     print(f"  完成: {len(signal_matrices)} 因子, 耗时: {elapsed:.1f}s, 错误: {factor_errors}")
@@ -250,7 +252,7 @@ def run_backtest(
         composite += w * mat
 
     # ── Step 5: 构建纯多头组合 ──
-    print(f"[5/5] 构建纯多头组合 (top {TOP_PCT*100:.0f}% long)...")
+    print(f"[5/5] 构建纯多头组合 (top {TOP_PCT * 100:.0f}% long)...")
 
     # 计算每只股票的 forward returns（1日收益，避免重叠窗口造成的伪高夏普）
     fwd_ret_matrix = np.zeros((n_dates, n_stocks))
@@ -301,6 +303,7 @@ def run_backtest(
 
         # 截面 IC
         from scipy import stats as sp_stats
+
         ic_val, _ = sp_stats.spearmanr(scores_v, rets_v)
         daily_ic[t] = ic_val if not np.isnan(ic_val) else 0.0
 
@@ -316,14 +319,16 @@ def run_backtest(
     icir = ic_mean / max(ic_std, 1e-10)
 
     # 按月统计
-    df_daily = pd.DataFrame({
-        "date": oos_dates,
-        "daily_return": daily_returns,
-        "long_return": long_returns,
-        "benchmark_return": benchmark_returns,
-        "cumulative": cumulative,
-        "ic": daily_ic,
-    })
+    df_daily = pd.DataFrame(
+        {
+            "date": oos_dates,
+            "daily_return": daily_returns,
+            "long_return": long_returns,
+            "benchmark_return": benchmark_returns,
+            "cumulative": cumulative,
+            "ic": daily_ic,
+        }
+    )
     df_daily["month"] = df_daily["date"].dt.to_period("M")
     monthly = df_daily.groupby("month")["daily_return"].sum()
 
@@ -341,7 +346,6 @@ def run_backtest(
         "oos_dates": oos_n,
         "date_range": f"{oos_dates[0].date()} ~ {oos_dates[-1].date()}",
         "is_synthetic": is_synthetic,
-
         # 绩效指标
         "total_return": float(cumulative[-1]),
         "annualized_return": float((1 + cumulative[-1]) ** (PERIODS_PER_YEAR / oos_n) - 1) if oos_n > 0 else 0.0,
@@ -358,7 +362,6 @@ def run_backtest(
         "long_avg_return": float(np.mean(long_returns)),
         "benchmark_avg_return": float(np.mean(benchmark_returns)),
         "excess_avg_return": float(np.mean(long_returns - benchmark_returns)),
-
         # 原始数据
         "daily_returns": daily_returns.tolist(),
         "cumulative_returns": cumulative.tolist(),
@@ -369,15 +372,16 @@ def run_backtest(
 
 # ─── 报告输出 ──────────────────────────────────────────────
 
+
 def print_report(result: dict) -> None:
     """打印格式化回测报告。"""
     if result["status"] != "completed":
         print(f"\n[回测失败] {result.get('reason', '未知错误')}")
         return
 
-    print(f"\n{'='*60}")
-    print(f"  组合回测报告")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print("  组合回测报告")
+    print(f"{'=' * 60}")
     print(f"  组合 ID:     {result['combo_id']}")
     print(f"  合成模式:    {result['synthesis_mode']}")
     print(f"  有效因子数:  {result['n_factors_effective']} / {result['n_factors_input']}")
@@ -385,52 +389,54 @@ def print_report(result: dict) -> None:
     print(f"  回测区间:    {result['date_range']}")
     print(f"  样本外天数:  {result['oos_dates']}")
     if result["is_synthetic"]:
-        print(f"  [WARN] 使用合成数据")
-    print(f"{'─'*60}")
+        print("  [WARN] 使用合成数据")
+    print(f"{'─' * 60}")
 
-    print(f"  ┌─ 绩效指标{'─'*40}┐")
-    print(f"  │ 累计收益率:    {result['total_return']*100:+7.2f}%")
-    print(f"  │ 年化收益率:    {result['annualized_return']*100:+7.2f}%")
-    print(f"  │ 年化波动率:    {result['annualized_vol']*100:7.2f}%")
+    print(f"  ┌─ 绩效指标{'─' * 40}┐")
+    print(f"  │ 累计收益率:    {result['total_return'] * 100:+7.2f}%")
+    print(f"  │ 年化收益率:    {result['annualized_return'] * 100:+7.2f}%")
+    print(f"  │ 年化波动率:    {result['annualized_vol'] * 100:7.2f}%")
     print(f"  │ 夏普比率:      {result['sharpe']:7.2f}")
-    print(f"  │ 最大回撤:      {result['max_drawdown']*100:7.2f}%")
+    print(f"  │ 最大回撤:      {result['max_drawdown'] * 100:7.2f}%")
     print(f"  │ 卡玛比率:      {result['calmar_ratio']:7.2f}")
-    print(f"  │ 胜率:          {result['win_rate']*100:7.2f}%")
+    print(f"  │ 胜率:          {result['win_rate'] * 100:7.2f}%")
     print(f"  │ 盈亏比:        {result['profit_factor']:7.2f}")
-    print(f"  │ 正月份比例:    {result['positive_month_ratio']*100:7.2f}%")
-    print(f"  └{'─'*55}┘")
+    print(f"  │ 正月份比例:    {result['positive_month_ratio'] * 100:7.2f}%")
+    print(f"  └{'─' * 55}┘")
 
-    print(f"\n  ┌─ IC 指标{'─'*44}┐")
+    print(f"\n  ┌─ IC 指标{'─' * 44}┐")
     print(f"  │ 截面 IC 均值:  {result['ic_mean']:7.4f}")
     print(f"  │ 截面 IC 标准差: {result['ic_std']:7.4f}")
     print(f"  │ ICIR:          {result['icir']:7.2f}")
-    print(f"  └{'─'*55}┘")
+    print(f"  └{'─' * 55}┘")
 
-    print(f"\n  ┌─ 收益分析{'─'*42}┐")
-    print(f"  │ 多头平均日收益:  {result['long_avg_return']*10000:+7.2f} bp")
-    print(f"  │ 基准平均日收益:  {result['benchmark_avg_return']*10000:+7.2f} bp")
-    print(f"  │ 超额平均日收益:  {result['excess_avg_return']*10000:+7.2f} bp")
-    print(f"  └{'─'*55}┘")
+    print(f"\n  ┌─ 收益分析{'─' * 42}┐")
+    print(f"  │ 多头平均日收益:  {result['long_avg_return'] * 10000:+7.2f} bp")
+    print(f"  │ 基准平均日收益:  {result['benchmark_avg_return'] * 10000:+7.2f} bp")
+    print(f"  │ 超额平均日收益:  {result['excess_avg_return'] * 10000:+7.2f} bp")
+    print(f"  └{'─' * 55}┘")
 
     # 月度收益
     monthly = result.get("monthly_returns", {})
     if monthly:
-        print(f"\n  ┌─ 月度收益{'─'*42}┐")
+        print(f"\n  ┌─ 月度收益{'─' * 42}┐")
         for m, r in sorted(monthly.items()):
             marker = "■" if r > 0 else "□"
             bar = "█" * max(1, int(abs(r) * 500))
-            print(f"  │ {m} {marker} {r*100:+6.2f}% {bar}")
-        print(f"  └{'─'*55}┘")
+            print(f"  │ {m} {marker} {r * 100:+6.2f}% {bar}")
+        print(f"  └{'─' * 55}┘")
 
-    print(f"\n{'='*60}")
-    print(f"  回测完成")
-    print(f"{'='*60}\n")
+    print(f"\n{'=' * 60}")
+    print("  回测完成")
+    print(f"{'=' * 60}\n")
 
 
 # ─── 主入口 ────────────────────────────────────────────────
 
+
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="L3 组合策略历史回测")
     parser.add_argument("--max-stocks", type=int, default=50, help="最大标的数")
     parser.add_argument("--days", type=int, default=500, help="回溯天数")
@@ -447,8 +453,11 @@ def main():
     if args.save and result["status"] == "completed":
         out_path = PROJECT_ROOT / "memory" / "portfolio" / "backtest_result.json"
         # 移除原始数据（太大）
-        report = {k: v for k, v in result.items()
-                  if k not in ("daily_returns", "cumulative_returns", "dates", "monthly_returns")}
+        report = {
+            k: v
+            for k, v in result.items()
+            if k not in ("daily_returns", "cumulative_returns", "dates", "monthly_returns")
+        }
         out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"回测结果已保存到: {out_path}")
 

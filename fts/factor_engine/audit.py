@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -202,9 +202,7 @@ class FactorAuditor:
         items.append(self._check_causal_validity(factor, data, forward_returns))
         items.append(self._check_oos_consistency(oos_result))
         items.append(self._check_cross_symbol(symbol_ic_map))
-        items.append(
-            self._check_stress_resilience(signals_by_symbol, ohlcv_by_symbol)
-        )
+        items.append(self._check_stress_resilience(signals_by_symbol, ohlcv_by_symbol))
         items.append(self._check_multiple_testing(p_values))
         items.append(self._check_snooping(data, forward_returns))
 
@@ -245,7 +243,7 @@ class FactorAuditor:
                 factor_metrics["ic"] = kwargs["ic"]
             if "sharpe" not in factor_metrics and "sharpe" in kwargs:
                 factor_metrics["sharpe"] = kwargs["sharpe"]
-            
+
             classification = self._failure_classifier.classify(
                 audit_report=report,
                 factor_metrics=factor_metrics,
@@ -271,7 +269,9 @@ class FactorAuditor:
         logger.log(
             level,
             "因子审计 [factor_id=%s, passed=%s, pass_rate=%.0f%%, failed=%s]",
-            factor_id, passed, pass_rate * 100,
+            factor_id,
+            passed,
+            pass_rate * 100,
             [it.name for it in failed_items],
         )
         return report
@@ -298,7 +298,7 @@ class FactorAuditor:
             # 使用 CausalValidator 做快速反事实检验
             from .contracts import FactorProgram
 
-            prog = FactorProgram(factor)
+            prog = cast(FactorProgram, dict(factor))
             result = self._causal_validator.validate(prog, data, forward_returns)
             anomaly_rate = result.get("summary", {}).get("anomaly_rate", 0.0)
             # 异常率 > 0 视为有因果结构（因子对事件有反应）
@@ -343,10 +343,7 @@ class FactorAuditor:
         return AuditItemResult(
             name=name,
             status="passed" if passed else "failed",
-            evidence=(
-                f"ic_consistency={ic_consistency:.2f}, "
-                f"passed_flag={passed_flag}"
-            ),
+            evidence=(f"ic_consistency={ic_consistency:.2f}, passed_flag={passed_flag}"),
             score=min(1.0, ic_consistency),
             details={
                 "ic_consistency": ic_consistency,
@@ -439,8 +436,7 @@ class FactorAuditor:
                 name=name,
                 status="passed" if all_passed else "failed",
                 evidence=(
-                    f"pass_count={pass_count}/{len(results)}, "
-                    f"max_drawdown={max_dd:.2%}, threshold={threshold:.0%}"
+                    f"pass_count={pass_count}/{len(results)}, max_drawdown={max_dd:.2%}, threshold={threshold:.0%}"
                 ),
                 score=pass_ratio,
                 details={
@@ -487,20 +483,14 @@ class FactorAuditor:
         significant_bonferroni = int(np.sum(p_arr < bonferroni_threshold))
 
         # FDR (Benjamini-Hochberg)
-        fdr_threshold, significant_fdr = _bh_fdr_correction(
-            p_arr, self._config.fdr_alpha
-        )
+        fdr_threshold, significant_fdr = _bh_fdr_correction(p_arr, self._config.fdr_alpha)
 
         passed = significant_bonferroni >= 1 or significant_fdr >= 1
 
         return AuditItemResult(
             name=name,
             status="passed" if passed else "failed",
-            evidence=(
-                f"n_tests={n_tests}, "
-                f"bonferroni_sig={significant_bonferroni}, "
-                f"fdr_sig={significant_fdr}"
-            ),
+            evidence=(f"n_tests={n_tests}, bonferroni_sig={significant_bonferroni}, fdr_sig={significant_fdr}"),
             score=min(1.0, (significant_bonferroni + significant_fdr) / max(2, min(n_tests, 2))),
             details={
                 "n_tests": n_tests,
@@ -574,20 +564,13 @@ class FactorAuditor:
             # 窥探判定：滞后相关系数绝对值的 z-score 超过阈值
             mean_abs = float(np.mean(abs_corrs))
             std_abs = float(np.std(abs_corrs)) if len(abs_corrs) > 1 else 0.0
-            suspicious = any(
-                abs_c > mean_abs + 2 * max(std_abs, 1e-6)
-                for abs_c in abs_corrs
-            )
+            suspicious = any(abs_c > mean_abs + 2 * max(std_abs, 1e-6) for abs_c in abs_corrs)
             passed = not suspicious
 
             return AuditItemResult(
                 name=name,
                 status="passed" if passed else "failed",
-                evidence=(
-                    f"max_abs_corr={max(abs_corrs):.4f}, "
-                    f"mean_abs={mean_abs:.4f}, "
-                    f"suspicious={suspicious}"
-                ),
+                evidence=(f"max_abs_corr={max(abs_corrs):.4f}, mean_abs={mean_abs:.4f}, suspicious={suspicious}"),
                 score=max(0.0, 1.0 - float(max(abs_corrs)) * 2),
                 details={
                     "lag_correlations": abs_corrs,
@@ -634,9 +617,7 @@ def _bh_fdr_correction(
         if i == n - 1:
             adjusted[i] = sorted_p[i]
         else:
-            adjusted[i] = min(
-                adjusted[i + 1], sorted_p[i] * n / rank
-            )
+            adjusted[i] = min(adjusted[i + 1], sorted_p[i] * n / rank)
 
     fdr_threshold = alpha
     n_significant = int(np.sum(adjusted < alpha))
@@ -907,68 +888,44 @@ class FailureClassifier:
             failed_names = {it.name for it in audit_report.failed_items}
 
             if "multiple_testing" in failed_names:
-                detected_patterns.append(
-                    self._build_pattern("multiple_testing", "high")
-                )
+                detected_patterns.append(self._build_pattern("multiple_testing", "high"))
             if "snooping_check" in failed_names:
-                detected_patterns.append(
-                    self._build_pattern("snooping_suspected", "high")
-                )
+                detected_patterns.append(self._build_pattern("snooping_suspected", "high"))
             if "stress_resilience" in failed_names:
-                detected_patterns.append(
-                    self._build_pattern("stress_vulnerable", "high")
-                )
+                detected_patterns.append(self._build_pattern("stress_vulnerable", "high"))
             if "cross_symbol" in failed_names:
-                detected_patterns.append(
-                    self._build_pattern("cross_symbol_failure", "high")
-                )
+                detected_patterns.append(self._build_pattern("cross_symbol_failure", "high"))
             if "oos_consistency" in failed_names:
-                detected_patterns.append(
-                    self._build_pattern("oos_instability", "high")
-                )
+                detected_patterns.append(self._build_pattern("oos_instability", "high"))
             if "causal_validity" in failed_names:
-                detected_patterns.append(
-                    self._build_pattern("causal_weak", "medium")
-                )
+                detected_patterns.append(self._build_pattern("causal_weak", "medium"))
 
         # 基于指标的量化识别
         ic = metrics.get("ic")
         if ic is not None and ic < 0:
-            detected_patterns.append(
-                self._build_pattern("negative_ic", "high")
-            )
+            detected_patterns.append(self._build_pattern("negative_ic", "high"))
 
         sharpe = metrics.get("sharpe")
         if sharpe is not None and sharpe < 0.5:
-            detected_patterns.append(
-                self._build_pattern("sharpe_low", "medium")
-            )
+            detected_patterns.append(self._build_pattern("sharpe_low", "medium"))
 
         turnover = metrics.get("turnover")
         if turnover is not None and turnover > 1.0:
-            detected_patterns.append(
-                self._build_pattern("high_turnover", "medium")
-            )
+            detected_patterns.append(self._build_pattern("high_turnover", "medium"))
 
         oos_ratio = metrics.get("oos_pass_ratio") or metrics.get("walkforward_consistency")
         if oos_ratio is not None and oos_ratio < 0.5:
             if not any(p["pattern"] == "oos_instability" for p in detected_patterns):
-                detected_patterns.append(
-                    self._build_pattern("oos_instability", "high")
-                )
+                detected_patterns.append(self._build_pattern("oos_instability", "high"))
 
         cross_ratio = metrics.get("cross_symbol_ratio")
         if cross_ratio is not None and cross_ratio < 0.8:
             if not any(p["pattern"] == "cross_symbol_failure" for p in detected_patterns):
-                detected_patterns.append(
-                    self._build_pattern("cross_symbol_failure", "high")
-                )
+                detected_patterns.append(self._build_pattern("cross_symbol_failure", "high"))
 
         ic_trend = metrics.get("ic_trend")
         if ic_trend == "declining":
-            detected_patterns.append(
-                self._build_pattern("ic_decay", "high")
-            )
+            detected_patterns.append(self._build_pattern("ic_decay", "high"))
 
         # 去重
         seen = set()
@@ -982,10 +939,7 @@ class FailureClassifier:
         suggestions = self._generate_suggestions(unique_patterns)
 
         return {
-            "factor_id": (
-                audit_report.factor_id if audit_report
-                else metrics.get("factor_id", "unknown")
-            ),
+            "factor_id": (audit_report.factor_id if audit_report else metrics.get("factor_id", "unknown")),
             "detected_patterns": unique_patterns,
             "num_patterns": len(unique_patterns),
             "suggestions": suggestions,
@@ -1019,13 +973,15 @@ class FailureClassifier:
                 action = template["action"]
                 if action not in seen_actions:
                     seen_actions.add(action)
-                    suggestions.append(ImprovementSuggestion(
-                        pattern=pattern_name,
-                        priority=template["priority"],
-                        action=action,
-                        rationale=template["rationale"],
-                        expected_improvement=template["expected_improvement"],
-                    ))
+                    suggestions.append(
+                        ImprovementSuggestion(
+                            pattern=pattern_name,
+                            priority=template["priority"],
+                            action=action,
+                            rationale=template["rationale"],
+                            expected_improvement=template["expected_improvement"],
+                        )
+                    )
 
         return suggestions
 

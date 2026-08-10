@@ -10,7 +10,7 @@ tests/test_futures_signal_pipeline.py — 期货信号管道测试（_compute_ri
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -24,12 +24,12 @@ from futures_signal_pipeline import (
     _compute_composite_scores,
     _compute_factor_sign_flips,
     _compute_ridge_weights,
-    _compute_signal_matrix,
     load_futures_elite_factors,
 )
 
 
 # ─── Fixtures ────────────────────────────────────────────────────────────
+
 
 def _make_panel(
     n_symbols: int = 5,
@@ -46,13 +46,16 @@ def _make_panel(
         sym = f"RB{i}"
         close = 3000 + rng.normal(0, 50, n_days).cumsum()
         close = np.maximum(close, 500)
-        df = pd.DataFrame({
-            "open": close + rng.normal(0, 10, n_days),
-            "high": close + abs(rng.normal(0, 15, n_days)),
-            "low": close - abs(rng.normal(0, 15, n_days)),
-            "close": close,
-            "volume": rng.integers(1000, 10000, n_days).astype(float),
-        }, index=dates)
+        df = pd.DataFrame(
+            {
+                "open": close + rng.normal(0, 10, n_days),
+                "high": close + abs(rng.normal(0, 15, n_days)),
+                "low": close - abs(rng.normal(0, 15, n_days)),
+                "close": close,
+                "volume": rng.integers(1000, 10000, n_days).astype(float),
+            },
+            index=dates,
+        )
         panel[sym] = df
 
     return panel, date_strs
@@ -103,6 +106,7 @@ def _make_factor_sign_flips(
 
 # ─── _compute_ridge_weights ──────────────────────────────────────────────
 
+
 class TestComputeRidgeWeights:
     """_compute_ridge_weights 全覆盖测试。"""
 
@@ -116,7 +120,11 @@ class TestComputeRidgeWeights:
         with patch.dict(sys.modules, {"sklearn.linear_model": None}):
             with patch("futures_signal_pipeline.RidgeCV", create=True):
                 weights = _compute_ridge_weights(
-                    signal_matrix, panel, dates, flips, lookback=60,
+                    signal_matrix,
+                    panel,
+                    dates,
+                    flips,
+                    lookback=60,
                 )
 
         assert len(weights) == 3
@@ -130,7 +138,11 @@ class TestComputeRidgeWeights:
         flips = _make_factor_sign_flips(factor_names)
 
         weights = _compute_ridge_weights(
-            signal_matrix, panel, dates, flips, lookback=30,
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=30,
         )
 
         assert weights == {"f1": 1.0}
@@ -157,7 +169,11 @@ class TestComputeRidgeWeights:
         flips = _make_factor_sign_flips(factor_names)
 
         weights = _compute_ridge_weights(
-            signal_matrix, panel, dates, flips, lookback=40,
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=40,
         )
 
         assert weights == {"f1": 1.0}
@@ -172,12 +188,17 @@ class TestComputeRidgeWeights:
         # 让 f_bad 全部为 NaN
         for sym in signal_matrix:
             signal_matrix[sym]["f_bad"] = np.full(
-                len(signal_matrix[sym]["f_bad"]), np.nan,
+                len(signal_matrix[sym]["f_bad"]),
+                np.nan,
             )
 
         # 只剩 f_good 1 个因子 → 等权
         weights = _compute_ridge_weights(
-            signal_matrix, panel, dates, flips, lookback=40,
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=40,
         )
 
         assert "f_bad" not in weights
@@ -191,7 +212,11 @@ class TestComputeRidgeWeights:
         flips = _make_factor_sign_flips(factor_names)
 
         weights = _compute_ridge_weights(
-            signal_matrix, panel, dates, flips, lookback=5,
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=5,
         )
 
         assert len(weights) == 3
@@ -205,7 +230,11 @@ class TestComputeRidgeWeights:
         flips = _make_factor_sign_flips(factor_names)
 
         weights = _compute_ridge_weights(
-            signal_matrix, panel, dates, flips, lookback=60,
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=60,
         )
 
         assert len(weights) == 4
@@ -220,7 +249,12 @@ class TestComputeRidgeWeights:
         flips = _make_factor_sign_flips(factor_names)
 
         weights = _compute_ridge_weights(
-            signal_matrix, panel, dates, flips, lookback=60, alpha=10.0,
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=60,
+            alpha=10.0,
         )
 
         assert len(weights) == 3
@@ -234,7 +268,11 @@ class TestComputeRidgeWeights:
         flips = _make_factor_sign_flips(factor_names)
 
         weights = _compute_ridge_weights(
-            signal_matrix, panel, dates, flips, lookback=80,
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=80,
         )
 
         assert abs(sum(weights.values()) - 1.0) < 0.001
@@ -248,13 +286,21 @@ class TestComputeRidgeWeights:
         # 正常权重
         flips_normal = _make_factor_sign_flips(factor_names)
         weights_normal = _compute_ridge_weights(
-            signal_matrix, panel, dates, flips_normal, lookback=60,
+            signal_matrix,
+            panel,
+            dates,
+            flips_normal,
+            lookback=60,
         )
 
         # 全部反转
         flips_reversed = {f: -1.0 for f in factor_names}
         weights_reversed = _compute_ridge_weights(
-            signal_matrix, panel, dates, flips_reversed, lookback=60,
+            signal_matrix,
+            panel,
+            dates,
+            flips_reversed,
+            lookback=60,
         )
 
         # 权重可能不同（因为 Ridge 取 abs(coef)，方向反转改变特征空间，
@@ -263,6 +309,7 @@ class TestComputeRidgeWeights:
 
 
 # ─── _compute_factor_sign_flips ──────────────────────────────────────────
+
 
 class TestComputeFactorSignFlips:
     """_compute_factor_sign_flips 测试。"""
@@ -288,13 +335,17 @@ class TestComputeFactorSignFlips:
         factor_names = ["f1"]
         signal_matrix = _make_signal_matrix(panel, factor_names)
         flips = _compute_factor_sign_flips(
-            signal_matrix, panel, dates, ic_lookback=10,
+            signal_matrix,
+            panel,
+            dates,
+            ic_lookback=10,
         )
 
         assert flips["f1"] == 1.0  # 样本不足，默认不反转
 
 
 # ─── _compute_composite_scores ───────────────────────────────────────────
+
 
 class TestComputeCompositeScores:
     """_compute_composite_scores 测试。"""
@@ -311,7 +362,10 @@ class TestComputeCompositeScores:
             {"name": "f2", "params": {}},
         ]
         scores, details = _compute_composite_scores(
-            signal_matrix, flips, factors, factor_weights=None,
+            signal_matrix,
+            flips,
+            factors,
+            factor_weights=None,
         )
 
         assert len(scores) == 3
@@ -330,7 +384,10 @@ class TestComputeCompositeScores:
         ]
         custom_weights = {"f1": 0.8, "f2": 0.2}
         scores, details = _compute_composite_scores(
-            signal_matrix, flips, factors, factor_weights=custom_weights,
+            signal_matrix,
+            flips,
+            factors,
+            factor_weights=custom_weights,
         )
 
         assert len(scores) == 3
@@ -344,7 +401,9 @@ class TestComputeCompositeScores:
 
         factors = [{"name": "f1", "params": {}}]
         scores, details = _compute_composite_scores(
-            signal_matrix, flips, factors,
+            signal_matrix,
+            flips,
+            factors,
         )
 
         # 验证信号被反转
@@ -362,6 +421,7 @@ class TestComputeCompositeScores:
 
 
 # ─── load_futures_elite_factors ──────────────────────────────────────────
+
 
 class TestLoadFuturesEliteFactors:
     """load_futures_elite_factors 测试。"""
@@ -384,7 +444,8 @@ class TestLoadFuturesEliteFactors:
             (elite_dir / f"factor_{i}.json").write_text(json.dumps(data))
 
         monkeypatch.setattr(
-            "futures_signal_pipeline.ELITE_DIR", elite_dir,
+            "futures_signal_pipeline.ELITE_DIR",
+            elite_dir,
         )
         factors = load_futures_elite_factors(ic_threshold=0)
         assert len(factors) == 3
@@ -407,7 +468,8 @@ class TestLoadFuturesEliteFactors:
             (elite_dir / f"factor_{i}.json").write_text(json.dumps(data))
 
         monkeypatch.setattr(
-            "futures_signal_pipeline.ELITE_DIR", elite_dir,
+            "futures_signal_pipeline.ELITE_DIR",
+            elite_dir,
         )
         factors = load_futures_elite_factors(ic_threshold=0.3)
         assert len(factors) == 2  # 0.3 和 0.5
@@ -418,12 +480,12 @@ class TestLoadFuturesEliteFactors:
         elite_dir.mkdir()
         (elite_dir / "bad.json").write_text("not json")
         (elite_dir / "good.json").write_text(
-            '{"name":"f1","factor_id":"fid","code":"def f(): return 1",'
-            '"evaluation":{"level_1_backtest":{"ic":0.5}}}',
+            '{"name":"f1","factor_id":"fid","code":"def f(): return 1","evaluation":{"level_1_backtest":{"ic":0.5}}}',
         )
 
         monkeypatch.setattr(
-            "futures_signal_pipeline.ELITE_DIR", elite_dir,
+            "futures_signal_pipeline.ELITE_DIR",
+            elite_dir,
         )
         factors = load_futures_elite_factors(ic_threshold=0)
         assert len(factors) == 1
@@ -434,7 +496,8 @@ class TestLoadFuturesEliteFactors:
         elite_dir.mkdir()
 
         monkeypatch.setattr(
-            "futures_signal_pipeline.ELITE_DIR", elite_dir,
+            "futures_signal_pipeline.ELITE_DIR",
+            elite_dir,
         )
         factors = load_futures_elite_factors(ic_threshold=0)
         assert factors == []

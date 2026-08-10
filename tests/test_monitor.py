@@ -7,9 +7,8 @@ HARNESS §测试随重构: 测试全绿才能进入下一阶段。
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -28,6 +27,7 @@ from fts.factor_engine.monitor import LoopStatus, AllStatus
 # ═══════════════════════════════════════════════════════════
 # LoopStatusReport dataclass
 # ═══════════════════════════════════════════════════════════
+
 
 class TestLoopStatusReport:
     """测试 LoopStatusReport dataclass。"""
@@ -78,6 +78,7 @@ class TestLoopStatusReport:
 # SystemStatusReport dataclass
 # ═══════════════════════════════════════════════════════════
 
+
 class TestSystemStatusReport:
     """测试 SystemStatusReport dataclass。"""
 
@@ -125,6 +126,7 @@ class TestSystemStatusReport:
 # ═══════════════════════════════════════════════════════════
 # _loop_status_to_report()
 # ═══════════════════════════════════════════════════════════
+
 
 class TestLoopStatusToReport:
     """测试 _loop_status_to_report 转换函数。"""
@@ -202,6 +204,7 @@ class TestLoopStatusToReport:
 # check_loop_status()
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCheckLoopStatus:
     """测试 check_loop_status。"""
 
@@ -268,8 +271,13 @@ class TestCheckLoopStatus:
     def test_with_project_root(self, mock_check_loop):
         """传入 project_root 参数。"""
         mock_check_loop.return_value = LoopStatus(
-            name="L3", state_file="/tmp/state.json", exists=True,
-            healthy=True, tokens_consumed=0, budget_limit=0, age_hours=0.0,
+            name="L3",
+            state_file="/tmp/state.json",
+            exists=True,
+            healthy=True,
+            tokens_consumed=0,
+            budget_limit=0,
+            age_hours=0.0,
         )
         r = check_loop_status("L3", project_root=Path("/custom/root"))
         assert r.loop_name == "L3"
@@ -281,8 +289,13 @@ class TestCheckLoopStatus:
     def test_all_valid_loop_names(self, mock_check_loop, loop_name):
         """L1/L2/L3 都是有效循环名。"""
         mock_check_loop.return_value = LoopStatus(
-            name=loop_name, state_file="/tmp/state.json", exists=True,
-            healthy=True, tokens_consumed=0, budget_limit=0, age_hours=0.0,
+            name=loop_name,
+            state_file="/tmp/state.json",
+            exists=True,
+            healthy=True,
+            tokens_consumed=0,
+            budget_limit=0,
+            age_hours=0.0,
         )
         r = check_loop_status(loop_name)
         assert r.loop_name == loop_name
@@ -293,8 +306,13 @@ class TestCheckLoopStatus:
     def test_aliases(self, mock_check_loop, alias):
         """别名映射有效。"""
         mock_check_loop.return_value = LoopStatus(
-            name=alias, state_file="/tmp/state.json", exists=True,
-            healthy=True, tokens_consumed=0, budget_limit=0, age_hours=0.0,
+            name=alias,
+            state_file="/tmp/state.json",
+            exists=True,
+            healthy=True,
+            tokens_consumed=0,
+            budget_limit=0,
+            age_hours=0.0,
         )
         r = check_loop_status(alias)
         assert r.loop_name == alias
@@ -305,6 +323,7 @@ class TestCheckLoopStatus:
 # check_all_status()
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCheckAllStatus:
     """测试 check_all_status。"""
 
@@ -313,12 +332,33 @@ class TestCheckAllStatus:
         """所有循环健康时返回 healthy=True。"""
         mock_check_all.return_value = AllStatus(
             loops=[
-                LoopStatus(name="L1", state_file="/s1.json", exists=True,
-                           healthy=True, tokens_consumed=0, budget_limit=0, age_hours=1.0),
-                LoopStatus(name="L2", state_file="/s2.json", exists=True,
-                           healthy=True, tokens_consumed=0, budget_limit=0, age_hours=1.0),
-                LoopStatus(name="L3", state_file="/s3.json", exists=True,
-                           healthy=True, tokens_consumed=0, budget_limit=0, age_hours=1.0),
+                LoopStatus(
+                    name="L1",
+                    state_file="/s1.json",
+                    exists=True,
+                    healthy=True,
+                    tokens_consumed=0,
+                    budget_limit=0,
+                    age_hours=1.0,
+                ),
+                LoopStatus(
+                    name="L2",
+                    state_file="/s2.json",
+                    exists=True,
+                    healthy=True,
+                    tokens_consumed=0,
+                    budget_limit=0,
+                    age_hours=1.0,
+                ),
+                LoopStatus(
+                    name="L3",
+                    state_file="/s3.json",
+                    exists=True,
+                    healthy=True,
+                    tokens_consumed=0,
+                    budget_limit=0,
+                    age_hours=1.0,
+                ),
             ],
             any_circuit_broken=False,
             any_stale=False,
@@ -338,14 +378,35 @@ class TestCheckAllStatus:
         """任一循环不健康时 healthy=False。"""
         mock_check_all.return_value = AllStatus(
             loops=[
-                LoopStatus(name="L1", state_file="/s1.json", exists=True,
-                           healthy=True, tokens_consumed=0, budget_limit=0, age_hours=1.0),
-                LoopStatus(name="L2", state_file="/s2.json", exists=True,
-                           healthy=False, status="circuit_broken",
-                           tokens_consumed=0, budget_limit=0, age_hours=1.0,
-                           last_error="OOM"),
-                LoopStatus(name="L3", state_file="/s3.json", exists=True,
-                           healthy=True, tokens_consumed=0, budget_limit=0, age_hours=1.0),
+                LoopStatus(
+                    name="L1",
+                    state_file="/s1.json",
+                    exists=True,
+                    healthy=True,
+                    tokens_consumed=0,
+                    budget_limit=0,
+                    age_hours=1.0,
+                ),
+                LoopStatus(
+                    name="L2",
+                    state_file="/s2.json",
+                    exists=True,
+                    healthy=False,
+                    status="circuit_broken",
+                    tokens_consumed=0,
+                    budget_limit=0,
+                    age_hours=1.0,
+                    last_error="OOM",
+                ),
+                LoopStatus(
+                    name="L3",
+                    state_file="/s3.json",
+                    exists=True,
+                    healthy=True,
+                    tokens_consumed=0,
+                    budget_limit=0,
+                    age_hours=1.0,
+                ),
             ],
             any_circuit_broken=True,
             any_stale=False,
@@ -383,10 +444,24 @@ class TestCheckAllStatus:
         """所有循环超时。"""
         mock_check_all.return_value = AllStatus(
             loops=[
-                LoopStatus(name="L1", state_file="/s1.json", exists=True,
-                           healthy=False, tokens_consumed=0, budget_limit=0, age_hours=48.0),
-                LoopStatus(name="L2", state_file="/s2.json", exists=True,
-                           healthy=False, tokens_consumed=0, budget_limit=0, age_hours=49.0),
+                LoopStatus(
+                    name="L1",
+                    state_file="/s1.json",
+                    exists=True,
+                    healthy=False,
+                    tokens_consumed=0,
+                    budget_limit=0,
+                    age_hours=48.0,
+                ),
+                LoopStatus(
+                    name="L2",
+                    state_file="/s2.json",
+                    exists=True,
+                    healthy=False,
+                    tokens_consumed=0,
+                    budget_limit=0,
+                    age_hours=49.0,
+                ),
             ],
             any_circuit_broken=False,
             any_stale=True,
@@ -401,8 +476,11 @@ class TestCheckAllStatus:
     def test_with_project_root(self, mock_check_all):
         """传入 project_root 参数。"""
         mock_check_all.return_value = AllStatus(
-            loops=[], any_circuit_broken=False, any_stale=False,
-            total_tokens_today=0, checked_at="",
+            loops=[],
+            any_circuit_broken=False,
+            any_stale=False,
+            total_tokens_today=0,
+            checked_at="",
         )
         r = check_all_status(project_root=Path("/custom/root"))
         assert not r.healthy
@@ -413,8 +491,15 @@ class TestCheckAllStatus:
         """熔断和过期标志正确传递。"""
         mock_check_all.return_value = AllStatus(
             loops=[
-                LoopStatus(name="L1", state_file="/s1.json", exists=True,
-                           healthy=True, tokens_consumed=0, budget_limit=0, age_hours=1.0),
+                LoopStatus(
+                    name="L1",
+                    state_file="/s1.json",
+                    exists=True,
+                    healthy=True,
+                    tokens_consumed=0,
+                    budget_limit=0,
+                    age_hours=1.0,
+                ),
             ],
             any_circuit_broken=True,
             any_stale=True,
@@ -429,6 +514,7 @@ class TestCheckAllStatus:
 # ═══════════════════════════════════════════════════════════
 # format_status_report()
 # ═══════════════════════════════════════════════════════════
+
 
 class TestFormatStatusReport:
     """测试 format_status_report。"""
@@ -478,7 +564,8 @@ class TestFormatStatusReport:
             healthy=False,
             loops=[
                 LoopStatusReport(
-                    loop_name="L2", healthy=False,
+                    loop_name="L2",
+                    healthy=False,
                     last_error="Budget exhausted",
                 ),
             ],
@@ -545,8 +632,8 @@ class TestFormatStatusReport:
         ]
         r = SystemStatusReport(healthy=False, loops=loops)
         output = format_status_report(r)
-        for l in loops:
-            assert l.loop_name in output
+        for lp in loops:
+            assert lp.loop_name in output
 
     def test_report_structure(self):
         """报告包含所有节标题。"""
@@ -562,6 +649,7 @@ class TestFormatStatusReport:
 # ═══════════════════════════════════════════════════════════
 # status_report_to_json()
 # ═══════════════════════════════════════════════════════════
+
 
 class TestStatusReportToJson:
     """测试 status_report_to_json。"""
@@ -631,8 +719,15 @@ class TestStatusReportToJson:
             loops=[LoopStatusReport(loop_name="L1", healthy=True, tokens_consumed=100)],
             total_tokens_today=100,
         )
-        expected_keys = {"healthy", "loops", "checked_at", "fts_version",
-                         "any_circuit_broken", "any_stale", "total_tokens_today"}
+        expected_keys = {
+            "healthy",
+            "loops",
+            "checked_at",
+            "fts_version",
+            "any_circuit_broken",
+            "any_stale",
+            "total_tokens_today",
+        }
         output = json.loads(status_report_to_json(r))
         assert set(output.keys()) == expected_keys
 
@@ -641,6 +736,7 @@ class TestStatusReportToJson:
 # 集成场景：format 与 json 保持一致
 # ═══════════════════════════════════════════════════════════
 
+
 class TestIntegration:
     """集成测试：确保各部分配合正确。"""
 
@@ -648,11 +744,17 @@ class TestIntegration:
     def test_check_loop_status_then_report(self, mock_check_loop):
         """check_loop_status 的结果可以被 format 函数处理。"""
         mock_check_loop.return_value = LoopStatus(
-            name="L1", state_file="/tmp/s.json", exists=True,
-            run_id="run_abc", status="running",
+            name="L1",
+            state_file="/tmp/s.json",
+            exists=True,
+            run_id="run_abc",
+            status="running",
             last_updated="2026-07-18T00:00:00",
-            tokens_consumed=100, budget_limit=500,
-            last_error=None, age_hours=0.5, healthy=True,
+            tokens_consumed=100,
+            budget_limit=500,
+            last_error=None,
+            age_hours=0.5,
+            healthy=True,
         )
         report = check_loop_status("L1")
         # 手动构建 SystemStatusReport
@@ -672,8 +774,15 @@ class TestIntegration:
         """check_all_status 的结果可序列化为 JSON。"""
         mock_check_all.return_value = AllStatus(
             loops=[
-                LoopStatus(name="L1", state_file="/s1.json", exists=True,
-                           healthy=True, tokens_consumed=0, budget_limit=0, age_hours=1.0),
+                LoopStatus(
+                    name="L1",
+                    state_file="/s1.json",
+                    exists=True,
+                    healthy=True,
+                    tokens_consumed=0,
+                    budget_limit=0,
+                    age_hours=1.0,
+                ),
             ],
             any_circuit_broken=False,
             any_stale=False,

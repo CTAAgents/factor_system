@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.71.0
+> 版本: v2.81.0
 > 最后更新: 2026-08-07
 
 ---
@@ -34,6 +34,16 @@ FTS 配置采用三级优先级（高→低）：
 | `l2_elite_corr_threshold` | float | 0.9 | `FTS_L2_ELITE_CORR_THRESHOLD` | L2 准入去冗余相关性阈值：演化因子晋升前与既有 elite 信号相关绝对值 ≥ 该值拒绝晋升（GAP-I206，v2.71.0） |
 | `l2_elite_corr_max_scan` | int | 50 | `FTS_L2_ELITE_CORR_MAX_SCAN` | L2 准入去冗余扫描容量护栏：最多扫描的既有 elite 因子数（GAP-I206，v2.71.0） |
 | `l2_elite_corr_debug` | bool | false | `FTS_L2_ELITE_CORR_DEBUG` | L2 准入去冗余调试日志开关（放行时输出 debug 日志）（GAP-I206，v2.71.0） |
+| `l2_elite_orthogonalize` | bool | true | `FTS_L2_ELITE_ORTHOGONALIZE` | L2 正交化闭环开关：高相关因子 OLS 残差质量合格则以正交化版本入库，不合格拒绝兜底（GAP-I206 补充，v2.71.0） |
+| `l2_orthogonal_residual_corr_max` | float | 0.3 | `FTS_L2_ORTHOGONAL_RESIDUAL_CORR_MAX` | 正交化残差与参照 elite 信号的最大相关性，低于该值视为已正交（GAP-I206 补充，v2.71.0） |
+| `l2_orthogonal_min_retained_ratio` | float | 0.3 | `FTS_L2_ORTHOGONAL_MIN_RETAINED_RATIO` | 正交化残差最小保留比（残差 std / 原信号 std），低于该值视为独立信息不足拒绝（GAP-I206 补充，v2.71.0） |
+| `l2_orthogonal_basis_enabled` | bool | true | `FTS_L2_ORTHOGONAL_BASIS_ENABLED` | 多因子正交基底开关：L2 准入优先对 Gram-Schmidt 基底迭代残差化（GAP-I206 补充，v2.72.1） |
+| `l2_orthogonal_basis_max_size` | int | 10 | `FTS_L2_ORTHOGONAL_BASIS_MAX_SIZE` | 正交基底最大成员数（超出时按 Sharpe 降序淘汰最弱成员）（GAP-I206 补充，v2.72.1） |
+| `l2_orthogonal_basis_min_sharpe` | float | 1.0 | `FTS_L2_ORTHOGONAL_BASIS_MIN_SHARPE` | 基底成员最小 Sharpe（低于该值不再入选基底）（GAP-I206 补充，v2.72.1） |
+| `decay_observe_slope` | float | 0.10 | `FTS_DECAY_OBSERVE_SLOPE` | 衰减分级观察斜率阈值：滚动 6M IC 斜率 \|slope\| ≥ 该值进入观察（GAP-I305，v2.72.1） |
+| `decay_retire_slope` | float | 0.20 | `FTS_DECAY_RETIRE_SLOPE` | 衰减分级退役斜率阈值：\|slope\| ≥ 该值触发退役（GAP-I305，v2.72.1） |
+| `decay_slope_min_points` | int | 6 | `FTS_DECAY_SLOPE_MIN_POINTS` | 衰减分级最小 IC 序列长度（不足视为 normal）（GAP-I305，v2.72.1） |
+| `decay_auto_retire_enabled` | bool | true | `FTS_DECAY_AUTO_RETIRE_ENABLED` | 自动退役开关（关闭时仅打日志不实际退役）（GAP-I305，v2.72.1） |
 | `max_workers` | int | 4 | `FTS_MAX_WORKERS` | 并行工作数 |
 | `batch_size` | int | 20 | `FTS_BATCH_SIZE` | 批量挖掘每代候选生成数（GAP-I201，v2.65.0） |
 | `batch_max_candidates` | int | 5 | `FTS_BATCH_MAX_CANDIDATES` | 通过粗筛后进入细评估的最大候选数（预算护栏，GAP-I201，v2.65.0） |
@@ -44,6 +54,7 @@ FTS 配置采用三级优先级（高→低）：
 | `portfolio_max_factors` | int | 20 | — | L3 组合最大因子数 |
 | `portfolio_top_n` | int | 5 | — | L3 Top N 输出 |
 | `portfolio_decay_days` | int | 90 | — | L3 衰减检验窗口 |
+| `portfolio_optimizer_mode` | str | `"risk_parity"` | `FTS_PORTFOLIO_OPTIMIZER_MODE` | L3 optimizer 模式目标（`risk_parity`/`mvo`，GAP-I302，v2.74.0） |
 | `log_level` | str | `"INFO"` | `FTS_LOG_LEVEL` | 日志级别 |
 | `log_file` | str | `""` | `FTS_LOG_FILE` | 日志文件路径 |
 | `stock_neutralization` | bool | `true` | `FTS_STOCK_NEUTRALIZATION` | 股票因子横截面评估是否做行业/市值中性化（v2.57.0） |

@@ -10,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
@@ -102,10 +101,12 @@ class TestInject:
     def test_inject_batch(self) -> None:
         """批量注入 export / cpi 两列。"""
         df = _make_ohlcv(days=30, start="2026-01-05")
-        src = _FakeSource({
-            "export": _make_macro(["2025-12-31", "2026-01-31"], [100.0, 110.0]),
-            "cpi": _make_macro(["2025-12-31"], [2.5]),
-        })
+        src = _FakeSource(
+            {
+                "export": _make_macro(["2025-12-31", "2026-01-31"], [100.0, 110.0]),
+                "cpi": _make_macro(["2025-12-31"], [2.5]),
+            }
+        )
         aligner = MacroFieldAligner(source=src)
         out = aligner.inject(df, fields=["export", "cpi"])
         assert "export" in out.columns
@@ -115,9 +116,11 @@ class TestInject:
     def test_inject_partial_failure(self) -> None:
         """某字段数据缺失 → 该列不注入，其余字段正常，不阻断。"""
         df = _make_ohlcv(days=30, start="2026-01-05")
-        src = _FakeSource({
-            "export": _make_macro(["2025-12-31"], [100.0]),
-        })
+        src = _FakeSource(
+            {
+                "export": _make_macro(["2025-12-31"], [100.0]),
+            }
+        )
         aligner = MacroFieldAligner(source=src)
         out = aligner.inject(df, fields=["export", "us_bond"])
         assert "export" in out.columns
@@ -126,9 +129,11 @@ class TestInject:
     def test_inject_macro_fields_entrypoint(self) -> None:
         """模块级便捷入口等价于 aligner.inject。"""
         df = _make_ohlcv(days=30, start="2026-01-05")
-        src = _FakeSource({
-            "export": _make_macro(["2025-12-31"], [100.0]),
-        })
+        src = _FakeSource(
+            {
+                "export": _make_macro(["2025-12-31"], [100.0]),
+            }
+        )
         aligner = MacroFieldAligner(source=src)
         out = inject_macro_fields(df, aligner, fields=["export"])
         assert "export" in out.columns
@@ -177,12 +182,14 @@ class TestGetMacroSeries:
         src = ifind_source.IFindSource()
 
         def fake_fetch(indicator, start_date="", end_date="", trace_id=""):
-            return [{
-                "indicator": indicator,
-                "date": "2026-01-31",
-                "value": 100.0,
-                "unit": "亿美元",
-            }]
+            return [
+                {
+                    "indicator": indicator,
+                    "date": "2026-01-31",
+                    "value": 100.0,
+                    "unit": "亿美元",
+                }
+            ]
 
         monkeypatch.setattr(src, "fetch_edb", fake_fetch)
         series = src.get_macro_series("中国出口金额当月值", db_path=db)

@@ -349,7 +349,23 @@ CREATE INDEX IF NOT EXISTS idx_sl_promoted_at ON seed_lineage(promoted_at DESC);
 """
 
 
+# ─── E.1: Alpha 审查工作流（GAP-I102 首期） ─────────────────
+
+_CREATE_FACTOR_REVIEWS = """
+CREATE TABLE IF NOT EXISTS factor_reviews (
+    factor_id   VARCHAR PRIMARY KEY,
+    decision    VARCHAR NOT NULL,       -- approved / rejected
+    comment     VARCHAR DEFAULT '',
+    reviewer    VARCHAR DEFAULT 'cli',
+    reviewed_at TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_frv_decision ON factor_reviews(decision);
+"""
+
+
 # ─── 初始化函数 ──────────────────────────────────────────
+
 
 def init_database(db_path: Optional[Path] = None) -> Path:
     """初始化因子目录数据库，创建所有表和索引。
@@ -385,14 +401,14 @@ def init_database(db_path: Optional[Path] = None) -> Path:
         conn.execute(_CREATE_FEEDBACK_REPORTS)
         # D.1 种子溯源链路
         conn.execute(_CREATE_SEED_LINEAGE)
+        # E.1 Alpha 审查工作流
+        conn.execute(_CREATE_FACTOR_REVIEWS)
 
         conn.execute("CHECKPOINT")
         logger.info("[FactorDB] ✅ 数据库初始化完成")
 
         # 验证表结构
-        tables = conn.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
-        ).fetchall()
+        tables = conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='main'").fetchall()
         logger.info("[FactorDB] 已创建表: %s", [t[0] for t in tables])
 
     finally:
@@ -435,35 +451,26 @@ def verify_database(db_path: Optional[Path] = None) -> dict:
     try:
         stats = {"exists": True, "path": str(path)}
 
-        tables = conn.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
-        ).fetchall()
-        stats["tables"] = [t[0] for t in tables]
+        tables = conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='main'").fetchall()
+        table_names = [t[0] for t in tables]
+        stats["tables"] = table_names
 
-        for table in stats["tables"]:
+        for table in table_names:
             count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             stats[f"{table}_count"] = count
 
         # 因子质量统计
         if "factor_catalog" in stats["tables"]:
-            elite_count = conn.execute(
-                "SELECT COUNT(*) FROM factor_catalog WHERE is_elite = TRUE"
-            ).fetchone()[0]
-            active_count = conn.execute(
-                "SELECT COUNT(*) FROM factor_catalog WHERE status = 'active'"
-            ).fetchone()[0]
-            avg_sharpe = conn.execute(
-                "SELECT AVG(sharpe) FROM factor_catalog WHERE sharpe > 0"
-            ).fetchone()[0]
+            elite_count = conn.execute("SELECT COUNT(*) FROM factor_catalog WHERE is_elite = TRUE").fetchone()[0]
+            active_count = conn.execute("SELECT COUNT(*) FROM factor_catalog WHERE status = 'active'").fetchone()[0]
+            avg_sharpe = conn.execute("SELECT AVG(sharpe) FROM factor_catalog WHERE sharpe > 0").fetchone()[0]
             stats["elite_count"] = elite_count
             stats["active_count"] = active_count
             stats["avg_sharpe"] = round(avg_sharpe, 3) if avg_sharpe else 0.0
 
         # 种子溯源统计
         if "seed_lineage" in stats["tables"]:
-            lineage_count = conn.execute(
-                "SELECT COUNT(*) FROM seed_lineage"
-            ).fetchone()[0]
+            lineage_count = conn.execute("SELECT COUNT(*) FROM seed_lineage").fetchone()[0]
             family_dist = conn.execute("""
                 SELECT seed_family, COUNT(*) as cnt
                 FROM seed_lineage
@@ -471,9 +478,7 @@ def verify_database(db_path: Optional[Path] = None) -> dict:
                 ORDER BY cnt DESC
             """).fetchall()
             stats["seed_lineage_count"] = int(lineage_count)
-            stats["seed_lineage_families"] = {
-                str(r[0]): int(r[1]) for r in family_dist
-            }
+            stats["seed_lineage_families"] = {str(r[0]): int(r[1]) for r in family_dist}
 
         return stats
 

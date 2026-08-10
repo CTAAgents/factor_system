@@ -63,7 +63,7 @@ DEFAULT_TASKS = {
     "l3_portfolio_loop": {
         "cron": "0 20 * * *",
         "callable": "fts.scheduler.jobs.l3_portfolio_loop_job",
-        "desc": "L3 Portfolio Loop：因子筛选 + 信号合成（equal/sharpe/elastic_net）+ Verifier 校验 + 期货信号管道",
+        "desc": "L3 Portfolio Loop（期货路径：futures_elite + market=futures）：因子筛选 + 信号合成（equal/sharpe/elastic_net）+ Verifier 校验 + 期货信号管道",
         "prefix": "fts.l3",
     },
     "sync_futures_data": {
@@ -101,6 +101,12 @@ DEFAULT_TASKS = {
         "callable": "fts.scheduler.jobs.factor_inspector_job",
         "desc": "因子巡检与自动降级（B.2）：扫描精英因子，检测退化并降级",
         "prefix": "fts.inspector",
+    },
+    "sync_liquidity_pool": {
+        "cron": "0 8 * * 6",
+        "callable": "fts.scheduler.jobs.sync_liquidity_pool_job",
+        "desc": "数据驱动动态池刷新（GAP-054）：TqSdk 流动性快照 → 渐进式替换 → 落盘动态池缓存",
+        "prefix": "fts.lpool",
     },
 }
 
@@ -214,7 +220,7 @@ def test_registry_is_taskregistry():
 def test_register_default_tasks_registers_five():
     """register_default_tasks 注册 10 个默认任务。"""
     register_default_tasks()
-    assert len(REGISTRY) == 10
+    assert len(REGISTRY) == 11
 
 
 @pytest.mark.parametrize("name,expected", DEFAULT_TASKS.items())
@@ -245,7 +251,7 @@ def test_register_default_tasks_idempotent():
 def test_list_tasks_returns_sorted():
     """list_tasks 返回按 name 排序的列表，自动注册默认任务。"""
     tasks = list_tasks()
-    assert len(tasks) == 10
+    assert len(tasks) == 11
     names = [t.name for t in tasks]
     assert names == sorted(names)
     assert names == [
@@ -259,6 +265,7 @@ def test_list_tasks_returns_sorted():
         "logic_monitor",
         "monthly_decay_eval",
         "sync_futures_data",
+        "sync_liquidity_pool",
     ]
 
 
@@ -267,7 +274,7 @@ def test_list_tasks_after_manual_register():
     register_default_tasks()
     REGISTRY.register(TaskSpec("custom_job", "0 12 * * *", "mod.custom"))
     tasks = list_tasks()
-    assert len(tasks) == 11
+    assert len(tasks) == 12
     names = [t.name for t in tasks]
     assert "custom_job" in names
 

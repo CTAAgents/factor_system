@@ -16,7 +16,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 
 # 确保能导入 scripts._signal_common
 _FTS_ROOT = Path(__file__).resolve().parents[2]
@@ -98,8 +97,7 @@ class TestComputeFactorSignFlips:
         rng = np.random.default_rng(42)
         n_dates = 80
         n_symbols = 10
-        dates = [d.strftime("%Y-%m-%d") for d in
-                 pd.date_range("2025-01-01", periods=n_dates, freq="B")]
+        dates = [d.strftime("%Y-%m-%d") for d in pd.date_range("2025-01-01", periods=n_dates, freq="B")]
 
         # 构造未来收益与信号强相关的面板
         panel: dict[str, pd.DataFrame] = {}
@@ -117,7 +115,9 @@ class TestComputeFactorSignFlips:
             # 使用未来收益率本身作为信号基底
             future_rets = np.zeros(n)
             for t in range(n - 5):
-                future_rets[t] = (panel[sym]["close"].iloc[t + 5] - panel[sym]["close"].iloc[t]) / panel[sym]["close"].iloc[t]
+                future_rets[t] = (panel[sym]["close"].iloc[t + 5] - panel[sym]["close"].iloc[t]) / panel[sym][
+                    "close"
+                ].iloc[t]
 
             # factor_0 = future_rets + 噪声 → 强正相关
             sig0 = future_rets + rng.normal(0, 0.01, n)
@@ -130,7 +130,10 @@ class TestComputeFactorSignFlips:
             }
 
         flips = compute_factor_sign_flips(
-            signal_matrix, panel, dates, ic_lookback=20,
+            signal_matrix,
+            panel,
+            dates,
+            ic_lookback=20,
         )
 
         # factor_0: 正相关 → 预期 +1.0
@@ -144,7 +147,10 @@ class TestComputeFactorSignFlips:
         signal_matrix = _make_signal_matrix(panel, n_factors=2, n_dates=20)
 
         flips = compute_factor_sign_flips(
-            signal_matrix, panel, dates, ic_lookback=20,
+            signal_matrix,
+            panel,
+            dates,
+            ic_lookback=20,
         )
 
         for fname, flip in flips.items():
@@ -170,7 +176,10 @@ class TestComputeFactorSignFlips:
             }
 
         flips = compute_factor_sign_flips(
-            signal_matrix, panel, dates, ic_lookback=20,
+            signal_matrix,
+            panel,
+            dates,
+            ic_lookback=20,
         )
         for v in flips.values():
             assert v == 1.0
@@ -189,7 +198,11 @@ class TestComputeRidgeWeights:
         flips = {"factor_0": 1.0, "factor_1": 1.0, "factor_2": 1.0}
 
         weights = compute_ridge_weights(
-            signal_matrix, panel, dates, flips, lookback=30,
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=30,
         )
 
         assert len(weights) == 3
@@ -205,7 +218,11 @@ class TestComputeRidgeWeights:
         flips = {"factor_0": 1.0}
 
         weights = compute_ridge_weights(
-            signal_matrix, panel, dates, flips, lookback=20,
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=20,
         )
 
         assert abs(weights.get("factor_0", 0) - 1.0) < 1e-6
@@ -217,7 +234,11 @@ class TestComputeRidgeWeights:
         flips = {"factor_0": 1.0, "factor_1": 1.0}
 
         weights = compute_ridge_weights(
-            signal_matrix, panel, dates, flips, lookback=5,
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=5,
         )
 
         # 应回到等权
@@ -251,8 +272,13 @@ class TestComputeRidgeWeights:
         flips = {"factor_a": 1.0, "factor_b": 1.0, "factor_c": 1.0}
 
         weights = compute_ridge_weights(
-            signal_matrix, panel, dates, flips, lookback=20,
-            corr_penalty_lambda=0.5, extreme_threshold=0.90,
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=20,
+            corr_penalty_lambda=0.5,
+            extreme_threshold=0.90,
         )
 
         # 极端相关因子 factor_b 被硬删除，保留 2 个因子
@@ -275,7 +301,10 @@ class TestComputeCompositeScores:
         factors = _make_factors(2)
 
         scores, details = compute_composite_scores(
-            signal_matrix, flips, factors, factor_weights=None,
+            signal_matrix,
+            flips,
+            factors,
+            factor_weights=None,
         )
 
         assert len(scores) == 2
@@ -292,7 +321,10 @@ class TestComputeCompositeScores:
         weights = {"factor_0": 0.7, "factor_1": 0.3}
 
         scores, details = compute_composite_scores(
-            signal_matrix, flips, factors, factor_weights=weights,
+            signal_matrix,
+            flips,
+            factors,
+            factor_weights=weights,
         )
 
         assert len(scores) == 2
@@ -311,7 +343,10 @@ class TestComputeCompositeScores:
         factors = [{"name": "factor_a"}]
 
         scores, details = compute_composite_scores(
-            signal_matrix, flips, factors, factor_weights=None,
+            signal_matrix,
+            flips,
+            factors,
+            factor_weights=None,
         )
 
         # factor_a 被反转，信号值应为负
@@ -339,19 +374,29 @@ class TestSignalPipelineIntegration:
 
         # Step 1: 方向校正
         flips = compute_factor_sign_flips(
-            signal_matrix, panel, dates, ic_lookback=20,
+            signal_matrix,
+            panel,
+            dates,
+            ic_lookback=20,
         )
         assert len(flips) == 3
 
         # Step 2: Ridge 权重
         weights = compute_ridge_weights(
-            signal_matrix, panel, dates, flips, lookback=30,
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=30,
         )
         assert abs(sum(weights.values()) - 1.0) < 1e-6
 
         # Step 3: 合成
         scores, details = compute_composite_scores(
-            signal_matrix, flips, factors, weights,
+            signal_matrix,
+            flips,
+            factors,
+            weights,
         )
         assert len(scores) == 5
         assert len(details) == 5

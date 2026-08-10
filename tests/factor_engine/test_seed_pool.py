@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
+
+import pandas as pd
 
 from fts.factor_engine.contracts import FactorProgram
 from fts.factor_engine.seed_pool import SeedPool, get_default_seed_pool
@@ -11,9 +12,15 @@ from fts.factor_engine.seed_pool import SeedPool, get_default_seed_pool
 # + v2.68.0 股票种子扩充 4 个 YAML（analyst_revision 18 + holder_count 15 + margin_trade 20 + northbound 16 = 69）= 714
 _TOTAL_SEEDS = 9 + 101 + 158 + 191 + 23 + 163 + 69
 _INTERNAL_NAMES = {
-    "momentum", "volatility_reversion", "volume_flow",
-    "macro_regime", "rate_proxy", "pmi_proxy",
-    "value_factor", "quality_factor", "size_factor",
+    "momentum",
+    "volatility_reversion",
+    "volume_flow",
+    "macro_regime",
+    "rate_proxy",
+    "pmi_proxy",
+    "value_factor",
+    "quality_factor",
+    "size_factor",
 }
 
 
@@ -105,6 +112,7 @@ def test_seed_factor_has_valid_structure():
 def test_seed_factor_code_is_compilable():
     """每个种子因子的代码必须能通过安全沙箱验证。"""
     from fts.factor_engine.factor_program import validate_factor_code
+
     pool = SeedPool(market="stock")
     for seed in pool.load_all_seeds():
         ok, reasons = validate_factor_code(seed["code"])
@@ -178,48 +186,100 @@ def test_gtja191_all_present():
 
 _FUTURES_SEED_NAMES = {
     # 家族 1: 动量因子家族 (5)
-    "fut_xsmom", "fut_tsmom", "fut_short_reversal",
-    "fut_composite_momentum", "fut_basis_momentum",
+    "fut_xsmom",
+    "fut_tsmom",
+    "fut_short_reversal",
+    "fut_composite_momentum",
+    "fut_basis_momentum",
     # 家族 2: 期限结构因子家族 (3)
-    "fut_roll_yield_carry", "fut_stable_term_structure", "fut_basis_factor",
+    "fut_roll_yield_carry",
+    "fut_stable_term_structure",
+    "fut_basis_factor",
     # 家族 3: 持仓/资金流因子家族 (3)
-    "fut_open_interest_full", "fut_warehouse_receipt", "fut_hedge_pressure",
+    "fut_open_interest_full",
+    "fut_warehouse_receipt",
+    "fut_hedge_pressure",
     # 家族 4: 流动性因子家族 (3)
-    "fut_turnover", "fut_bid_ask_spread", "fut_amihud_full",
+    "fut_turnover",
+    "fut_bid_ask_spread",
+    "fut_amihud_full",
     # 家族 5: 偏度/峰度/高阶矩因子家族 (3)
-    "fut_skewness_full", "fut_upside_skewness", "fut_kurtosis",
+    "fut_skewness_full",
+    "fut_upside_skewness",
+    "fut_kurtosis",
     # 家族 6: 波动率因子家族 (2)
-    "fut_cv", "fut_downside_volatility",
+    "fut_cv",
+    "fut_downside_volatility",
     # 家族 7: 基本面因子家族 (4)
-    "fut_volume_price_corr_full", "fut_trend_strength", "fut_amplitude",
+    "fut_volume_price_corr_full",
+    "fut_trend_strength",
+    "fut_amplitude",
     "fut_mobile_big_data",
     # 家族 8: 拥挤度因子家族 (6)
-    "fut_crowd_volume", "fut_crowd_volatility", "fut_crowd_turnover",
-    "fut_crowd_bias_volume", "fut_crowd_bias_amount", "fut_crowd_composite",
+    "fut_crowd_volume",
+    "fut_crowd_volatility",
+    "fut_crowd_turnover",
+    "fut_crowd_bias_volume",
+    "fut_crowd_bias_amount",
+    "fut_crowd_composite",
     # 家族 9: Alpha/量价行为因子家族 (4)
-    "fut_time_series_regression", "fut_bias", "fut_gp_alpha1", "fut_ht_alpha",
+    "fut_time_series_regression",
+    "fut_bias",
+    "fut_gp_alpha1",
+    "fut_ht_alpha",
     # 家族 10: 高频因子家族 (6)
-    "fut_hf_quote_imbalance", "fut_hf_trade_imbalance",
-    "fut_hf_historical_return", "fut_hf_turnover", "fut_hf_spread",
+    "fut_hf_quote_imbalance",
+    "fut_hf_trade_imbalance",
+    "fut_hf_historical_return",
+    "fut_hf_turnover",
+    "fut_hf_spread",
     "fut_hf_down_vol",
     # 家族 11: 期权隐含信息因子家族 (3)
-    "fut_option_vol_term", "fut_option_skew", "fut_option_pcr",
+    "fut_option_vol_term",
+    "fut_option_skew",
+    "fut_option_pcr",
     # 家族 12: 市场环境因子家族 (8)
-    "fut_macro_cpi", "fut_macro_interest_rate", "fut_macro_export",
-    "fut_macro_us_bond", "fut_mkt_trend", "fut_mkt_speculation",
-    "fut_mkt_rotation", "fut_mkt_concentration",
+    "fut_macro_cpi",
+    "fut_macro_interest_rate",
+    "fut_macro_export",
+    "fut_macro_us_bond",
+    "fut_mkt_trend",
+    "fut_mkt_speculation",
+    "fut_mkt_rotation",
+    "fut_mkt_concentration",
     # 家族 13: CTA注册表补充因子 (7)
-    "tsmom_5d", "tsmom_22d", "basis_level", "volatility_annual",
-    "liquidity_ratio", "long_term_reversal", "oi_change_rate",
+    "tsmom_5d",
+    "tsmom_22d",
+    "basis_level",
+    "volatility_annual",
+    "liquidity_ratio",
+    "long_term_reversal",
+    "oi_change_rate",
     # 家族 14: 算子字典种子因子 (24)
-    "seed_kbar_mid", "seed_kbar_upper", "seed_kbar_lower", "seed_kbar_shift",
-    "seed_bull_bear", "seed_argmax_close", "seed_argmin_close",
-    "seed_vol_chg", "seed_vwap_proxy_1", "seed_vwap_proxy_2",
-    "seed_reversal_1d", "seed_mom_5d", "seed_mom_20d",
-    "seed_vol_5d", "seed_vol_20d", "seed_vol_ratio",
-    "seed_trend_slope", "seed_trend_rsqr",
-    "seed_vp_corr", "seed_vol_ratio_volume",
-    "seed_oi_chg", "seed_oi_ret_confirm", "seed_spread", "seed_settle_bias",
+    "seed_kbar_mid",
+    "seed_kbar_upper",
+    "seed_kbar_lower",
+    "seed_kbar_shift",
+    "seed_bull_bear",
+    "seed_argmax_close",
+    "seed_argmin_close",
+    "seed_vol_chg",
+    "seed_vwap_proxy_1",
+    "seed_vwap_proxy_2",
+    "seed_reversal_1d",
+    "seed_mom_5d",
+    "seed_mom_20d",
+    "seed_vol_5d",
+    "seed_vol_20d",
+    "seed_vol_ratio",
+    "seed_trend_slope",
+    "seed_trend_rsqr",
+    "seed_vp_corr",
+    "seed_vol_ratio_volume",
+    "seed_oi_chg",
+    "seed_oi_ret_confirm",
+    "seed_spread",
+    "seed_settle_bias",
 }
 
 
@@ -248,9 +308,17 @@ def test_futures_seed_pool_no_stock_seeds():
     """期货模式不应包含任何股票种子因子。"""
     pool = SeedPool(market="futures")
     names = pool.list_names()
-    stock_names = {"momentum", "volatility_reversion", "volume_flow",
-                   "macro_regime", "rate_proxy", "pmi_proxy",
-                   "value_factor", "quality_factor", "size_factor"}
+    stock_names = {
+        "momentum",
+        "volatility_reversion",
+        "volume_flow",
+        "macro_regime",
+        "rate_proxy",
+        "pmi_proxy",
+        "value_factor",
+        "quality_factor",
+        "size_factor",
+    }
     assert stock_names.isdisjoint(set(names)), "期货模式不应包含股票种子"
     # 不应包含外部量价因子
     assert "alpha_001" not in names
@@ -286,6 +354,7 @@ def test_futures_seed_has_valid_structure():
 def test_futures_seed_code_is_compilable():
     """每个期货种子因子的代码必须能通过安全沙箱验证。"""
     from fts.factor_engine.factor_program import validate_factor_code
+
     pool = SeedPool(market="futures")
     for seed in pool.load_all_seeds():
         ok, reasons = validate_factor_code(seed["code"])
@@ -335,6 +404,7 @@ def test_futures_seed_inject_from_l1():
 
 # ─── 种子因子相关性预检测试 ─────────────────────────────────
 
+
 def test_compute_seed_correlations_identical_signals():
     """两个完全相同信号的因子应被标记为高相关。"""
     from fts.factor_engine.contracts import EconomicLogic, FactorProgram, FactorSignature
@@ -351,18 +421,28 @@ def test_compute_seed_correlations_identical_signals():
     # 构造两个完全相同的因子（都用 close 信号）
     code = "def factor_program(data, params):\n    import numpy as np\n    return np.array(data['close'])"
     f1 = FactorProgram(
-        factor_id="fct_aaaa1111", name="factor_a", code=code,
+        factor_id="fct_aaaa1111",
+        name="factor_a",
+        code=code,
         params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
         economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="A"),
-        source="seed", generation=0, created_at="2026-08-01T00:00:00", trace_id="test",
+        source="seed",
+        generation=0,
+        created_at="2026-08-01T00:00:00",
+        trace_id="test",
     )
     f2 = FactorProgram(
-        factor_id="fct_bbbb2222", name="factor_b", code=code,
+        factor_id="fct_bbbb2222",
+        name="factor_b",
+        code=code,
         params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
         economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="B"),
-        source="seed", generation=0, created_at="2026-08-01T00:00:00", trace_id="test",
+        source="seed",
+        generation=0,
+        created_at="2026-08-01T00:00:00",
+        trace_id="test",
     )
 
     result = compute_seed_correlations([f1, f2], df, threshold=0.95)
@@ -390,18 +470,28 @@ def test_compute_seed_correlations_low_correlation():
     f2_code = "def factor_program(data, params):\n    import numpy as np\n    return np.array(data['volume'])"
 
     f1 = FactorProgram(
-        factor_id="fct_ortho1", name="ortho1", code=f1_code,
+        factor_id="fct_ortho1",
+        name="ortho1",
+        code=f1_code,
         params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
         economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="A"),
-        source="seed", generation=0, created_at="2026-08-01T00:00:00", trace_id="test",
+        source="seed",
+        generation=0,
+        created_at="2026-08-01T00:00:00",
+        trace_id="test",
     )
     f2 = FactorProgram(
-        factor_id="fct_ortho2", name="ortho2", code=f2_code,
+        factor_id="fct_ortho2",
+        name="ortho2",
+        code=f2_code,
         params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
         economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="B"),
-        source="seed", generation=0, created_at="2026-08-01T00:00:00", trace_id="test",
+        source="seed",
+        generation=0,
+        created_at="2026-08-01T00:00:00",
+        trace_id="test",
     )
 
     result = compute_seed_correlations([f1, f2], df, threshold=0.95)
@@ -423,12 +513,16 @@ def test_compute_seed_correlations_single_factor():
     df = pd.DataFrame({"close": close, "volume": np.ones(n)})
 
     f1 = FactorProgram(
-        factor_id="fct_single", name="single",
+        factor_id="fct_single",
+        name="single",
         code="def factor_program(data, params):\n    import numpy as np\n    return np.array(data['close'])",
         params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
         economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="S"),
-        source="seed", generation=0, created_at="2026-08-01T00:00:00", trace_id="test",
+        source="seed",
+        generation=0,
+        created_at="2026-08-01T00:00:00",
+        trace_id="test",
     )
 
     result = compute_seed_correlations([f1], df)
@@ -440,6 +534,7 @@ def test_compute_seed_correlations_empty_list():
     from fts.factor_engine.seed_pool import compute_seed_correlations
     import pandas as pd
     import numpy as np
+
     df = pd.DataFrame({"close": np.sin(np.linspace(0, 2 * np.pi, 10))})
     result = compute_seed_correlations([], df)
     assert result == []
@@ -460,28 +555,43 @@ def test_compute_seed_correlations_mixed_validity():
     # 两个有效因子（相同信号）
     valid_code = "def factor_program(data, params):\n    import numpy as np\n    return np.array(data['close'])"
     f1 = FactorProgram(
-        factor_id="fct_valid1", name="valid1", code=valid_code,
+        factor_id="fct_valid1",
+        name="valid1",
+        code=valid_code,
         params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
         economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="V1"),
-        source="seed", generation=0, created_at="2026-08-01T00:00:00", trace_id="test",
+        source="seed",
+        generation=0,
+        created_at="2026-08-01T00:00:00",
+        trace_id="test",
     )
     f2 = FactorProgram(
-        factor_id="fct_valid2", name="valid2", code=valid_code,
+        factor_id="fct_valid2",
+        name="valid2",
+        code=valid_code,
         params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
         economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="V2"),
-        source="seed", generation=0, created_at="2026-08-01T00:00:00", trace_id="test",
+        source="seed",
+        generation=0,
+        created_at="2026-08-01T00:00:00",
+        trace_id="test",
     )
 
     # 一个无效因子（会抛异常）
     invalid_code = "def factor_program(data, params):\n    raise RuntimeError('bad')"
     f3 = FactorProgram(
-        factor_id="fct_invalid", name="invalid", code=invalid_code,
+        factor_id="fct_invalid",
+        name="invalid",
+        code=invalid_code,
         params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
         economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="I"),
-        source="seed", generation=0, created_at="2026-08-01T00:00:00", trace_id="test",
+        source="seed",
+        generation=0,
+        created_at="2026-08-01T00:00:00",
+        trace_id="test",
     )
 
     result = compute_seed_correlations([f1, f2, f3], df, threshold=0.95)
@@ -528,16 +638,28 @@ def test_compute_seed_correlations_threshold_effect():
     # 两个完全相同的因子
     code = "def factor_program(data, params):\n    import numpy as np\n    return np.array(data['close'])"
     f1 = FactorProgram(
-        factor_id="fct_th1", name="th1", code=code, params={},
+        factor_id="fct_th1",
+        name="th1",
+        code=code,
+        params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
         economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="T1"),
-        source="seed", generation=0, created_at="2026-08-01T00:00:00", trace_id="test",
+        source="seed",
+        generation=0,
+        created_at="2026-08-01T00:00:00",
+        trace_id="test",
     )
     f2 = FactorProgram(
-        factor_id="fct_th2", name="th2", code=code, params={},
+        factor_id="fct_th2",
+        name="th2",
+        code=code,
+        params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
         economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="T2"),
-        source="seed", generation=0, created_at="2026-08-01T00:00:00", trace_id="test",
+        source="seed",
+        generation=0,
+        created_at="2026-08-01T00:00:00",
+        trace_id="test",
     )
 
     # 高阈值 → 可能没有（随机 close 不完全相关）
@@ -550,6 +672,7 @@ def test_compute_seed_correlations_threshold_effect():
 
 # ─── 横截面相关性预检测试 ─────────────────────────────────────
 
+
 def _make_panel_data(n_varieties: int = 10, n_dates: int = 60) -> tuple[dict, pd.DatetimeIndex]:
     """创建模拟横截面面板数据。
 
@@ -559,6 +682,7 @@ def _make_panel_data(n_varieties: int = 10, n_dates: int = 60) -> tuple[dict, pd
     """
     import pandas as pd
     import numpy as np
+
     rng = np.random.default_rng(42)
     t = np.linspace(0, 2 * np.pi, n_dates)
     panel = {}
@@ -567,13 +691,15 @@ def _make_panel_data(n_varieties: int = 10, n_dates: int = 60) -> tuple[dict, pd
         closes = 6 * np.sin(t + i * 0.5) + rng.normal(0, 0.2, n_dates)
         noise_1 = np.abs(rng.normal(0, 0.5, n_dates))
         noise_2 = np.abs(rng.normal(0, 1.0, n_dates))
-        panel[f"V{i}"] = pd.DataFrame({
-            "open": closes - noise_1,
-            "high": closes + noise_2,
-            "low": closes - noise_2,
-            "close": closes,
-            "volume": rng.integers(1000, 10000, n_dates),
-        })
+        panel[f"V{i}"] = pd.DataFrame(
+            {
+                "open": closes - noise_1,
+                "high": closes + noise_2,
+                "low": closes - noise_2,
+                "close": closes,
+                "volume": rng.integers(1000, 10000, n_dates),
+            }
+        )
     dates = pd.DatetimeIndex(pd.date_range("2024-01-01", periods=n_dates, freq="B"))
     return panel, dates
 
@@ -581,13 +707,19 @@ def _make_panel_data(n_varieties: int = 10, n_dates: int = 60) -> tuple[dict, pd
 def _make_test_factor(factor_id: str, name: str = "test", expr: str = "close") -> FactorProgram:
     """创建测试用因子程序。"""
     from fts.factor_engine.contracts import EconomicLogic, FactorSignature
+
     code = f"def factor_program(data, params):\n    import numpy as np\n    return np.array(data['{expr}'])"
     return FactorProgram(
-        factor_id=factor_id, name=name, code=code,
+        factor_id=factor_id,
+        name=name,
+        code=code,
         params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
         economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative=name),
-        source="seed", generation=0, created_at="2026-08-01T00:00:00", trace_id="test",
+        source="seed",
+        generation=0,
+        created_at="2026-08-01T00:00:00",
+        trace_id="test",
     )
 
 
@@ -619,12 +751,16 @@ def test_cross_section_correlations_opposite_signal():
     f1 = _make_test_factor("id_1", "test_a", "close")
     # -close 在 code 中是取负
     f2 = FactorProgram(
-        factor_id="id_2", name="test_b",
+        factor_id="id_2",
+        name="test_b",
         code="def factor_program(data, params):\n    import numpy as np\n    return -np.array(data['close'])",
         params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
         economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="B"),
-        source="seed", generation=0, created_at="2026-08-01T00:00:00", trace_id="test",
+        source="seed",
+        generation=0,
+        created_at="2026-08-01T00:00:00",
+        trace_id="test",
     )
 
     result = compute_cross_section_correlations([f1, f2], panel, dates, threshold=0.95)
@@ -696,18 +832,21 @@ def test_seed_pool_compute_correlations_cross_section():
     pool = SeedPool(market="futures")
 
     # 横截面模式 (dict + common_dates)
-    seeds = pool.load_all_seeds()[:5]
+    pool.load_all_seeds()[:5]
     result_cs = pool.compute_correlations(panel, common_dates=dates, threshold=0.95)
     assert isinstance(result_cs, list)
 
     # 时序模式 (DataFrame)
-    df_stock = pd.DataFrame({
-        "open": np.ones(100) * 100,
-        "high": np.ones(100) * 101,
-        "low": np.ones(100) * 99,
-        "close": np.linspace(100, 110, 100),
-        "volume": np.ones(100, dtype=int) * 1000,
-    }, index=pd.date_range("2024-01-01", periods=100, freq="B"))
+    df_stock = pd.DataFrame(
+        {
+            "open": np.ones(100) * 100,
+            "high": np.ones(100) * 101,
+            "low": np.ones(100) * 99,
+            "close": np.linspace(100, 110, 100),
+            "volume": np.ones(100, dtype=int) * 1000,
+        },
+        index=pd.date_range("2024-01-01", periods=100, freq="B"),
+    )
     result_ts = pool.compute_correlations(df_stock, threshold=0.95)
     assert isinstance(result_ts, list)
 

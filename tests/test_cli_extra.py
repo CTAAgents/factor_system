@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import io
 import json
-import sys
 from argparse import Namespace
 from email.message import Message
 from pathlib import Path
@@ -80,6 +79,7 @@ def _parse_json(out: str) -> dict | list:
 # 数据准备辅助函数
 # ═══════════════════════════════════════════════════════════
 
+
 class TestPrepareData:
     """测试 _prepare_data（单标数据准备）。"""
 
@@ -91,7 +91,7 @@ class TestPrepareData:
         assert len(df) == 10
         assert len(fwd) == 10
         assert fwd[-5] == 0  # 末尾 5 个为 0
-        assert fwd[0] > 0    # (close[5]-close[0])/close[0] > 0
+        assert fwd[0] > 0  # (close[5]-close[0])/close[0] > 0
 
     def test_prepare_data_short_sample(self):
         """样本过短（≤5）时 forward_returns 全零。"""
@@ -113,8 +113,10 @@ class TestPrepareCrossSectionData:
 
     def test_fundamental_inject_success(self, capsys):
         """基本面注入成功分支打印提示。"""
-        with patch("fts.cli.FTSDataProvider") as m_provider, \
-                patch("fts.data_fundamental.get_fundamental_provider") as m_fp:
+        with (
+            patch("fts.cli.FTSDataProvider") as m_provider,
+            patch("fts.data_fundamental.get_fundamental_provider") as m_fp,
+        ):
             panel = self._setup(m_provider, m_fp)
             m_fp.return_value.enrich_panel.return_value = panel
             result_panel, dates, fwd = _prepare_cross_section_data()
@@ -124,9 +126,11 @@ class TestPrepareCrossSectionData:
 
     def test_fundamental_inject_fails(self, capsys):
         """基本面注入失败时降级为合成数据。"""
-        with patch("fts.cli.FTSDataProvider") as m_provider, \
-                patch("fts.data_fundamental.get_fundamental_provider") as m_fp:
-            panel = self._setup(m_provider, m_fp)
+        with (
+            patch("fts.cli.FTSDataProvider") as m_provider,
+            patch("fts.data_fundamental.get_fundamental_provider") as m_fp,
+        ):
+            self._setup(m_provider, m_fp)
             m_fp.return_value.enrich_panel.side_effect = RuntimeError("mcp down")
             result_panel, dates, fwd = _prepare_cross_section_data()
         assert "000001" in result_panel
@@ -136,6 +140,7 @@ class TestPrepareCrossSectionData:
 # ═══════════════════════════════════════════════════════════
 # evolution run — 单标模式
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCmdEvolutionRunSingle:
     """测试 _cmd_evolution_run 单标模式成功路径。"""
@@ -148,15 +153,24 @@ class TestCmdEvolutionRunSingle:
     @patch("fts.cli.generate_trace_id", return_value="l2_s_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_s_20260718T000000")
     def test_single_mode_success(
-        self, mock_run_id, mock_trace_id, mock_prep,
-        mock_llm, mock_seed, mock_verifier, mock_evoloop, capsys,
+        self,
+        mock_run_id,
+        mock_trace_id,
+        mock_prep,
+        mock_llm,
+        mock_seed,
+        mock_verifier,
+        mock_evoloop,
+        capsys,
     ):
         """--universe single 走单标分支并成功完成。"""
         mock_prep.return_value = (_close_df(10), np.zeros(10))
         mock_loop = mock_evoloop.return_value
         mock_loop.run.return_value = MagicMock(
-            status="completed", generations_completed=1,
-            elite_factor_ids=[], circuit_breaker_reason="",
+            status="completed",
+            generations_completed=1,
+            elite_factor_ids=[],
+            circuit_breaker_reason="",
         )
         rc = main(["evolution", "run", "--universe", "single", "--symbol", "600000"])
         assert rc == 0
@@ -169,6 +183,7 @@ class TestCmdEvolutionRunSingle:
 # meta-loop run — 自定义 symbols
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCmdMetaLoopSymbols:
     """测试 _cmd_meta_loop_run --symbols 解析分支。"""
 
@@ -178,13 +193,19 @@ class TestCmdMetaLoopSymbols:
     @patch("fts.cli.generate_trace_id", return_value="l1_sym_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_sym_20260718T000000")
     def test_custom_symbols_parsed(
-        self, mock_run_id, mock_trace_id, mock_llm,
-        mock_collector, mock_metal, capsys,
+        self,
+        mock_run_id,
+        mock_trace_id,
+        mock_llm,
+        mock_collector,
+        mock_metal,
+        capsys,
     ):
         """逗号分隔 symbols 被解析并传入 MetaLoop。"""
         mock_loop = mock_metal.return_value
         mock_loop.run.return_value = MagicMock(
-            status="completed", injected_candidate_ids=["c1"],
+            status="completed",
+            injected_candidate_ids=["c1"],
         )
         rc = main(["meta-loop", "run", "--symbols", "rb,i,au, ,sc"])
         assert rc == 0
@@ -199,6 +220,7 @@ class TestCmdMetaLoopSymbols:
 # _build_default_aggregator
 # ═══════════════════════════════════════════════════════════
 
+
 class TestBuildDefaultAggregator:
     """测试 _build_default_aggregator（TQ 源 + DuckDB 路径探测）。"""
 
@@ -206,10 +228,12 @@ class TestBuildDefaultAggregator:
         """TQ 源可用 + DuckDB 存在时聚合器携带 db_path。"""
         duck = tmp_path / "f.duckdb"
         duck.write_bytes(b"")
-        with patch("fts.data_futures._DUCKDB_PATH", duck), \
-                patch("fts.data_sources.tq_source.TQLocalSource") as m_tq, \
-                patch("fts.data_sources.aggregator.FuturesDataAggregator") as m_agg:
-            agg = _build_default_aggregator()
+        with (
+            patch("fts.data_futures._DUCKDB_PATH", duck),
+            patch("fts.data_sources.tq_source.TQLocalSource"),
+            patch("fts.data_sources.aggregator.FuturesDataAggregator") as m_agg,
+        ):
+            _build_default_aggregator()
         m_agg.assert_called_once()
         kwargs = m_agg.call_args.kwargs
         assert kwargs["db_path"] == duck
@@ -218,10 +242,11 @@ class TestBuildDefaultAggregator:
 
     def test_tq_source_init_fails(self, tmp_path):
         """TQ 源初始化失败时静默跳过（sources 为空）。"""
-        with patch("fts.data_futures._DUCKDB_PATH", tmp_path / "none.duckdb"), \
-                patch("fts.data_sources.tq_source.TQLocalSource",
-                      side_effect=RuntimeError("tq unavailable")), \
-                patch("fts.data_sources.aggregator.FuturesDataAggregator") as m_agg:
+        with (
+            patch("fts.data_futures._DUCKDB_PATH", tmp_path / "none.duckdb"),
+            patch("fts.data_sources.tq_source.TQLocalSource", side_effect=RuntimeError("tq unavailable")),
+            patch("fts.data_sources.aggregator.FuturesDataAggregator") as m_agg,
+        ):
             _build_default_aggregator()
         assert m_agg.call_args.kwargs["sources"] == []
         assert m_agg.call_args.kwargs["db_path"] is None
@@ -231,9 +256,9 @@ class TestBuildDefaultAggregator:
 # fts data 子命令组
 # ═══════════════════════════════════════════════════════════
 
+
 def _status_dict() -> dict:
-    return {"tq": {"total_success": 5, "total_failure": 1,
-                   "consecutive_failures": 2, "circuit_open": False}}
+    return {"tq": {"total_success": 5, "total_failure": 1, "consecutive_failures": 2, "circuit_open": False}}
 
 
 class TestCmdDataStatus:
@@ -270,8 +295,7 @@ class TestCmdDataStatus:
 
     def test_aggregator_error(self, capsys):
         """聚合器异常返回 1。"""
-        with patch("fts.cli._build_default_aggregator",
-                   side_effect=RuntimeError("boom")):
+        with patch("fts.cli._build_default_aggregator", side_effect=RuntimeError("boom")):
             rc = _cmd_data_status(Namespace(json=False))
         assert rc == 1
         assert "获取状态失败" in capsys.readouterr().err
@@ -299,8 +323,7 @@ class TestCmdDataCrossCheck:
     """测试 _cmd_data_cross_check 各分支。"""
 
     def _disagreements(self) -> list:
-        return [{"symbol": "RB0", "date": "2026-08-04",
-                 "max_diff_pct": 0.0123, "outliers": [1, 2]}]
+        return [{"symbol": "RB0", "date": "2026-08-04", "max_diff_pct": 0.0123, "outliers": [1, 2]}]
 
     def test_error_returns_2(self, capsys):
         """交叉验证异常返回 2。"""
@@ -377,10 +400,8 @@ class TestCmdDataFuse:
 
     def test_aggregator_init_fails(self, capsys):
         """聚合器初始化失败返回 2。"""
-        with patch("fts.cli._build_default_aggregator",
-                   side_effect=RuntimeError("no aggregator")):
-            rc = _cmd_data_fuse(Namespace(symbol="RB0", strategy="MEDIAN",
-                                          days=30, json=False, output=None))
+        with patch("fts.cli._build_default_aggregator", side_effect=RuntimeError("no aggregator")):
+            rc = _cmd_data_fuse(Namespace(symbol="RB0", strategy="MEDIAN", days=30, json=False, output=None))
         assert rc == 2
         assert "聚合器初始化失败" in capsys.readouterr().err
 
@@ -388,8 +409,7 @@ class TestCmdDataFuse:
         """所有源无数据（熔断跳过 + 拉取失败）返回 1。"""
         agg = self._agg(n_sources=2, fail_fetch=True)
         with patch("fts.cli._build_default_aggregator", return_value=agg):
-            rc = _cmd_data_fuse(Namespace(symbol="RB0", strategy="MEDIAN",
-                                          days=30, json=False, output=None))
+            rc = _cmd_data_fuse(Namespace(symbol="RB0", strategy="MEDIAN", days=30, json=False, output=None))
         assert rc == 1
         assert "没有任何源提供数据" in capsys.readouterr().err
         agg._record_failure.assert_called()
@@ -399,8 +419,7 @@ class TestCmdDataFuse:
         agg = self._agg(n_sources=1)
         agg._is_circuit_open.return_value = True
         with patch("fts.cli._build_default_aggregator", return_value=agg):
-            rc = _cmd_data_fuse(Namespace(symbol="RB0", strategy="MEDIAN",
-                                          days=30, json=False, output=None))
+            rc = _cmd_data_fuse(Namespace(symbol="RB0", strategy="MEDIAN", days=30, json=False, output=None))
         assert rc == 1
 
     def test_success_json_with_output(self, tmp_path, capsys):
@@ -411,10 +430,11 @@ class TestCmdDataFuse:
             {"date": ["2026-08-04"], "close": [1.0]},
         )
         out_file = tmp_path / "fuse_report.json"
-        with patch("fts.cli._build_default_aggregator", return_value=agg), \
-                patch("fts.data_sources.fusion.OHLCVFusion", return_value=mock_fuser):
-            rc = _cmd_data_fuse(Namespace(symbol="RB0", strategy="MEDIAN",
-                                          days=30, json=True, output=str(out_file)))
+        with (
+            patch("fts.cli._build_default_aggregator", return_value=agg),
+            patch("fts.data_sources.fusion.OHLCVFusion", return_value=mock_fuser),
+        ):
+            rc = _cmd_data_fuse(Namespace(symbol="RB0", strategy="MEDIAN", days=30, json=True, output=str(out_file)))
         assert rc == 0
         assert out_file.exists()
         payload = _parse_json(capsys.readouterr().out)
@@ -430,10 +450,11 @@ class TestCmdDataFuse:
         mock_fuser.fuse_dataframe.return_value = pd.DataFrame(
             {"date": ["2026-08-04"], "close": [1.0]},
         )
-        with patch("fts.cli._build_default_aggregator", return_value=agg), \
-                patch("fts.data_sources.fusion.OHLCVFusion", return_value=mock_fuser):
-            rc = _cmd_data_fuse(Namespace(symbol="RB0", strategy="MEAN",
-                                          days=30, json=False, output=None))
+        with (
+            patch("fts.cli._build_default_aggregator", return_value=agg),
+            patch("fts.data_sources.fusion.OHLCVFusion", return_value=mock_fuser),
+        ):
+            rc = _cmd_data_fuse(Namespace(symbol="RB0", strategy="MEAN", days=30, json=False, output=None))
         assert rc == 0
         out = capsys.readouterr().out
         assert "strategy=MEAN" in out
@@ -446,10 +467,11 @@ class TestCmdDataFuse:
         mock_fuser.fuse_dataframe.return_value = pd.DataFrame(
             {"date": ["2026-08-04"], "close": [1.0]},
         )
-        with patch("fts.cli._build_default_aggregator", return_value=agg), \
-                patch("fts.data_sources.fusion.OHLCVFusion", return_value=mock_fuser):
-            rc = _cmd_data_fuse(Namespace(symbol="RB0", strategy="WEIGHTED",
-                                          days=30, json=True, output=None))
+        with (
+            patch("fts.cli._build_default_aggregator", return_value=agg),
+            patch("fts.data_sources.fusion.OHLCVFusion", return_value=mock_fuser),
+        ):
+            rc = _cmd_data_fuse(Namespace(symbol="RB0", strategy="WEIGHTED", days=30, json=True, output=None))
         assert rc == 0
         payload = _parse_json(capsys.readouterr().out)
         assert payload["disagreements"] == []
@@ -459,6 +481,7 @@ class TestCmdDataFuse:
 # portfolio run — futures 分支 + 信号管道
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCmdPortfolioRunFutures:
     """测试 _cmd_portfolio_run futures 分支及信号管道触发。"""
 
@@ -467,9 +490,12 @@ class TestCmdPortfolioRunFutures:
         cfg.get_elite_dir.return_value = "/tmp/elite"
         cfg.memory_dir = "/tmp/memory"
         cfg.verifier = {"max_correlation": 0.4}
+        cfg.portfolio_optimizer_mode = "risk_parity"
         mock_loop = mock_port.return_value
         mock_loop.run.return_value = MagicMock(
-            status=status, n_factors_retained=3, combo_sharpe=1.2,
+            status=status,
+            n_factors_retained=3,
+            combo_sharpe=1.2,
         )
 
     @patch("scripts.futures_signal_pipeline.main", return_value=0)
@@ -509,6 +535,7 @@ class TestCmdPortfolioRunFutures:
 # portfolio run — stock 分支 + 股票信号管道（GAP-I301）
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCmdPortfolioRunStock:
     """测试 _cmd_portfolio_run stock 分支及股票信号管道触发（GAP-I301）。"""
 
@@ -517,9 +544,12 @@ class TestCmdPortfolioRunStock:
         cfg.get_elite_dir.return_value = "/tmp/elite_stock"
         cfg.memory_dir = "/tmp/memory"
         cfg.verifier = {"max_correlation": 0.4}
+        cfg.portfolio_optimizer_mode = "risk_parity"
         mock_loop = mock_port.return_value
         mock_loop.run.return_value = MagicMock(
-            status=status, n_factors_retained=3, combo_sharpe=1.2,
+            status=status,
+            n_factors_retained=3,
+            combo_sharpe=1.2,
         )
 
     @patch("scripts.daily_signal_pipeline.main", return_value=0)
@@ -554,27 +584,103 @@ class TestCmdPortfolioRunStock:
         assert rc == 0
         mock_signal.assert_not_called()
 
+    @patch("scripts.daily_signal_pipeline.main")
+    @patch("fts.cli.PortfolioLoop")
+    @patch("fts.cli.get_config")
+    def test_stock_optimizer_mode_passthrough(self, mock_cfg, mock_port, mock_signal, capsys):
+        """GAP-I302: --synthesis-mode optimizer + --optimizer-mode 透传到 PortfolioLoop。"""
+        self._setup(mock_cfg, mock_port)
+        rc = main(
+            [
+                "portfolio",
+                "run",
+                "--universe",
+                "stock",
+                "--synthesis-mode",
+                "optimizer",
+                "--optimizer-mode",
+                "mvo",
+            ]
+        )
+        assert rc == 0
+        _, kwargs = mock_port.call_args
+        assert kwargs["synthesis_mode"] == "optimizer"
+        assert kwargs["optimizer_mode"] == "mvo"
+        # 无 returns-matrix 时 run() 仍可调用（实测化输入缺省）
+        mock_port.return_value.run.assert_called_once_with(factor_returns=None)
+
+    @patch("scripts.daily_signal_pipeline.main")
+    @patch("fts.cli.PortfolioLoop")
+    @patch("fts.cli.get_config")
+    def test_optimizer_mode_default_from_config(self, mock_cfg, mock_port, mock_signal, capsys):
+        """GAP-I302: 未传 --optimizer-mode 时取 settings 配置默认值。"""
+        cfg = mock_cfg.return_value
+        cfg.get_elite_dir.return_value = "/tmp/elite_stock"
+        cfg.memory_dir = "/tmp/memory"
+        cfg.verifier = {"max_correlation": 0.4}
+        cfg.portfolio_optimizer_mode = "mvo"
+        mock_loop = mock_port.return_value
+        mock_loop.run.return_value = MagicMock(
+            status="passed",
+            n_factors_retained=3,
+            combo_sharpe=1.2,
+        )
+        rc = main(["portfolio", "run", "--universe", "stock"])
+        assert rc == 0
+        _, kwargs = mock_port.call_args
+        assert kwargs["optimizer_mode"] == "mvo"
+
+    @patch("scripts.daily_signal_pipeline.main")
+    @patch("fts.cli.PortfolioLoop")
+    @patch("fts.cli.get_config")
+    def test_returns_matrix_loaded(self, mock_cfg, mock_port, mock_signal, tmp_path, capsys):
+        """GAP-I302: --returns-matrix CSV 加载并传入 run(factor_returns=...)。"""
+        self._setup(mock_cfg, mock_port)
+        import pandas as pd
+
+        csv_path = tmp_path / "returns.csv"
+        pd.DataFrame(
+            {"fct_a": [0.01, 0.02, 0.03], "fct_b": [-0.01, 0.0, 0.01]},
+            index=pd.date_range("2026-01-01", periods=3),
+        ).to_csv(csv_path)
+        rc = main(
+            [
+                "portfolio",
+                "run",
+                "--universe",
+                "stock",
+                "--synthesis-mode",
+                "optimizer",
+                "--returns-matrix",
+                str(csv_path),
+            ]
+        )
+        assert rc == 0
+        call_kwargs = mock_port.return_value.run.call_args
+        fr = call_kwargs.kwargs["factor_returns"]
+        assert fr is not None and list(fr.columns) == ["fct_a", "fct_b"]
+
 
 # ═══════════════════════════════════════════════════════════
 # fts catalog 子命令组
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCmdCatalogStats:
     """测试 _cmd_catalog_stats 各分支。"""
 
     def _cfg(self, elite_stock: str, elite_futures: str) -> MagicMock:
         cfg = MagicMock()
-        cfg.get_elite_dir.side_effect = lambda m: (
-            elite_futures if m == "futures" else elite_stock
-        )
+        cfg.get_elite_dir.side_effect = lambda m: elite_futures if m == "futures" else elite_stock
         return cfg
 
     def test_db_missing_text(self, tmp_path, capsys):
         """DuckDB 不存在 + JSON 目录不存在（文本模式）。"""
         cfg = self._cfg(str(tmp_path / "s"), str(tmp_path / "f"))
-        with patch("fts.cli._get_catalog_db_path",
-                   return_value=tmp_path / "none.duckdb"), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=tmp_path / "none.duckdb"),
+            patch("fts.cli.get_config", return_value=cfg),
+        ):
             rc = _cmd_catalog_stats(Namespace(json=False))
         assert rc == 0
         out = capsys.readouterr().out
@@ -587,13 +693,18 @@ class TestCmdCatalogStats:
         db.write_bytes(b"x" * 1024)
         repo = MagicMock()
         repo.get_stats.return_value = {
-            "total_factors": 10, "active_factors": 8, "elite_factors": 3,
-            "avg_sharpe": 0.8, "avg_ic": 0.05,
+            "total_factors": 10,
+            "active_factors": 8,
+            "elite_factors": 3,
+            "avg_sharpe": 0.8,
+            "avg_ic": 0.05,
         }
         cfg = self._cfg(str(tmp_path / "s"), str(tmp_path / "f"))
-        with patch("fts.cli._get_catalog_db_path", return_value=db), \
-                patch("fts.cli._load_factor_repo", return_value=repo), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=db),
+            patch("fts.cli._load_factor_repo", return_value=repo),
+            patch("fts.cli.get_config", return_value=cfg),
+        ):
             rc = _cmd_catalog_stats(Namespace(json=False))
         assert rc == 0
         out = capsys.readouterr().out
@@ -606,9 +717,11 @@ class TestCmdCatalogStats:
         repo = MagicMock()
         repo.get_stats.side_effect = RuntimeError("conn broken")
         cfg = self._cfg(str(tmp_path / "s"), str(tmp_path / "f"))
-        with patch("fts.cli._get_catalog_db_path", return_value=db), \
-                patch("fts.cli._load_factor_repo", return_value=repo), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=db),
+            patch("fts.cli._load_factor_repo", return_value=repo),
+            patch("fts.cli.get_config", return_value=cfg),
+        ):
             rc = _cmd_catalog_stats(Namespace(json=True))
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
@@ -625,9 +738,11 @@ class TestCmdCatalogStats:
         repo = MagicMock()
         repo.get_stats.side_effect = RuntimeError("conn broken")
         cfg = self._cfg(str(tmp_path / "s"), str(tmp_path / "f"))
-        with patch("fts.cli._get_catalog_db_path", return_value=db), \
-                patch("fts.cli._load_factor_repo", return_value=repo), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=db),
+            patch("fts.cli._load_factor_repo", return_value=repo),
+            patch("fts.cli.get_config", return_value=cfg),
+        ):
             rc = _cmd_catalog_stats(Namespace(json=False))
         assert rc == 0
         out = capsys.readouterr().out
@@ -643,9 +758,10 @@ class TestCmdCatalogStats:
         retired.mkdir()
         (retired / "R1.json").write_text("{}", encoding="utf-8")
         cfg = self._cfg(str(tmp_path / "elite_stock"), str(futures_dir))
-        with patch("fts.cli._get_catalog_db_path",
-                   return_value=tmp_path / "none.duckdb"), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=tmp_path / "none.duckdb"),
+            patch("fts.cli.get_config", return_value=cfg),
+        ):
             rc = _cmd_catalog_stats(Namespace(json=True))
         assert rc == 0
         payload = _parse_json(capsys.readouterr().out)
@@ -685,9 +801,10 @@ class TestCmdCatalogVerify:
     def test_db_missing(self, tmp_path, capsys):
         """DuckDB 不存在返回 1。"""
         cfg = self._cfg(tmp_path / "elite")
-        with patch("fts.cli._get_catalog_db_path",
-                   return_value=tmp_path / "none.duckdb"), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=tmp_path / "none.duckdb"),
+            patch("fts.cli.get_config", return_value=cfg),
+        ):
             rc = _cmd_catalog_verify(Namespace(json=False))
         assert rc == 1
         assert "数据库不存在" in capsys.readouterr().err
@@ -697,9 +814,11 @@ class TestCmdCatalogVerify:
         db = tmp_path / "f.duckdb"
         db.write_bytes(b"x")
         cfg = self._cfg(tmp_path / "elite")
-        with patch("fts.cli._get_catalog_db_path", return_value=db), \
-                patch("fts.cli._load_factor_repo", side_effect=RuntimeError("conn")), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=db),
+            patch("fts.cli._load_factor_repo", side_effect=RuntimeError("conn")),
+            patch("fts.cli.get_config", return_value=cfg),
+        ):
             rc = _cmd_catalog_verify(Namespace(json=False))
         assert rc == 1
         assert "DuckDB 连接失败" in capsys.readouterr().err
@@ -709,9 +828,11 @@ class TestCmdCatalogVerify:
         db = tmp_path / "f.duckdb"
         db.write_bytes(b"x")
         cfg = self._cfg(tmp_path / "elite")
-        with patch("fts.cli._get_catalog_db_path", return_value=db), \
-                patch("fts.cli._load_factor_repo", return_value=self._repo([], query_fail=True)), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=db),
+            patch("fts.cli._load_factor_repo", return_value=self._repo([], query_fail=True)),
+            patch("fts.cli.get_config", return_value=cfg),
+        ):
             rc = _cmd_catalog_verify(Namespace(json=False))
         assert rc == 1
         assert "DuckDB 查询失败" in capsys.readouterr().err
@@ -731,9 +852,11 @@ class TestCmdCatalogVerify:
         self._write_json_factor(elite_dir, "F1")
         repo = self._repo([("F1", "n", "futures", 1, "active")])
         cfg = self._cfg(elite_dir)
-        with patch("fts.cli._get_catalog_db_path", return_value=db), \
-                patch("fts.cli._load_factor_repo", return_value=repo), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=db),
+            patch("fts.cli._load_factor_repo", return_value=repo),
+            patch("fts.cli.get_config", return_value=cfg),
+        ):
             rc = _cmd_catalog_verify(Namespace(json=True))
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
@@ -751,13 +874,14 @@ class TestCmdCatalogVerify:
         self._write_json_factor(elite_dir, "F1")
         self._write_json_factor(elite_dir, "BAD", content="not-json{{{")
         (elite_dir / "_index.json").write_text("{}", encoding="utf-8")
-        (elite_dir / "NOID.json").write_text(json.dumps({"market": "futures"}),
-                                             encoding="utf-8")
+        (elite_dir / "NOID.json").write_text(json.dumps({"market": "futures"}), encoding="utf-8")
         repo = self._repo([("D1", "n", "futures", 1, "active")])
         cfg = self._cfg(elite_dir)
-        with patch("fts.cli._get_catalog_db_path", return_value=db), \
-                patch("fts.cli._load_factor_repo", return_value=repo), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=db),
+            patch("fts.cli._load_factor_repo", return_value=repo),
+            patch("fts.cli.get_config", return_value=cfg),
+        ):
             rc = _cmd_catalog_verify(Namespace(json=False))
         assert rc == 1
         out = capsys.readouterr().out
@@ -774,9 +898,11 @@ class TestCmdCatalogVerify:
         self._write_json_factor(elite_dir, "F1")
         repo = self._repo([("F1", "n", "futures", 1, "active")])
         cfg = self._cfg(elite_dir)
-        with patch("fts.cli._get_catalog_db_path", return_value=db), \
-                patch("fts.cli._load_factor_repo", return_value=repo), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=db),
+            patch("fts.cli._load_factor_repo", return_value=repo),
+            patch("fts.cli.get_config", return_value=cfg),
+        ):
             rc = _cmd_catalog_verify(Namespace(json=False))
         assert rc == 0
         out = capsys.readouterr().out
@@ -788,18 +914,17 @@ class TestCmdCatalogBackup:
 
     def _cfg(self, elite_futures: Path, elite_stock: Path) -> MagicMock:
         cfg = MagicMock()
-        cfg.get_elite_dir.side_effect = lambda m: (
-            str(elite_futures) if m == "futures" else str(elite_stock)
-        )
+        cfg.get_elite_dir.side_effect = lambda m: str(elite_futures) if m == "futures" else str(elite_stock)
         return cfg
 
     def test_no_db_no_json(self, tmp_path, monkeypatch, capsys):
         """无 DuckDB + 无 JSON 目录（json 模式）。"""
         monkeypatch.chdir(tmp_path)
         cfg = self._cfg(tmp_path / "ef", tmp_path / "es")
-        with patch("fts.cli._get_catalog_db_path",
-                   return_value=tmp_path / "none.duckdb"), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=tmp_path / "none.duckdb"),
+            patch("fts.cli.get_config", return_value=cfg),
+        ):
             rc = _cmd_catalog_backup(Namespace(json=True))
         assert rc == 0
         payload = _parse_json(capsys.readouterr().out)
@@ -819,8 +944,7 @@ class TestCmdCatalogBackup:
         retired.mkdir()
         (retired / "R1.json").write_text("{}", encoding="utf-8")
         cfg = self._cfg(futures_dir, tmp_path / "es")
-        with patch("fts.cli._get_catalog_db_path", return_value=db), \
-                patch("fts.cli.get_config", return_value=cfg):
+        with patch("fts.cli._get_catalog_db_path", return_value=db), patch("fts.cli.get_config", return_value=cfg):
             rc = _cmd_catalog_backup(Namespace(json=False))
         assert rc == 0
         out = capsys.readouterr().out
@@ -839,9 +963,11 @@ class TestCmdCatalogBackup:
         futures_dir.mkdir()
         (futures_dir / "F1.json").write_text("{}", encoding="utf-8")
         cfg = self._cfg(futures_dir, tmp_path / "es")
-        with patch("fts.cli._get_catalog_db_path", return_value=db), \
-                patch("fts.cli.get_config", return_value=cfg), \
-                patch("shutil.copy2", side_effect=OSError("disk full")):
+        with (
+            patch("fts.cli._get_catalog_db_path", return_value=db),
+            patch("fts.cli.get_config", return_value=cfg),
+            patch("shutil.copy2", side_effect=OSError("disk full")),
+        ):
             rc = _cmd_catalog_backup(Namespace(json=True))
         assert rc == 0
         payload = _parse_json(capsys.readouterr().out)
@@ -853,6 +979,7 @@ class TestCmdCatalogBackup:
 # factor list — get_eligible / JSON 模式
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCmdFactorListExtra:
     """测试 _cmd_factor_list 的 get_eligible 与 JSON 分支。"""
 
@@ -862,9 +989,18 @@ class TestCmdFactorListExtra:
         repo.get_eligible.return_value = [
             {"factor_id": "F1", "name": "trend_a", "family": "trend", "market": "futures"},
         ]
-        args = Namespace(elite_dir=None, market="futures", family=None, min_ic=0.1,
-                         min_sharpe=None, diverse=False, total_count=10,
-                         max_per_family=3, limit=50, json=False)
+        args = Namespace(
+            elite_dir=None,
+            market="futures",
+            family=None,
+            min_ic=0.1,
+            min_sharpe=None,
+            diverse=False,
+            total_count=10,
+            max_per_family=3,
+            limit=50,
+            json=False,
+        )
         with patch("fts.cli._load_factor_repo", return_value=repo):
             rc = _cmd_factor_list(args)
         assert rc == 0
@@ -875,12 +1011,27 @@ class TestCmdFactorListExtra:
         """目录模式 + --json 输出 JSON 数组。"""
         elite_dir = tmp_path / "elite"
         elite_dir.mkdir()
-        (elite_dir / "F1.json").write_text(json.dumps({
-            "factor_id": "F1", "name": "trend_a",
-        }), encoding="utf-8")
-        args = Namespace(elite_dir=str(elite_dir), market="futures", family=None,
-                         min_ic=None, min_sharpe=None, diverse=False, total_count=10,
-                         max_per_family=3, limit=50, json=True)
+        (elite_dir / "F1.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "F1",
+                    "name": "trend_a",
+                }
+            ),
+            encoding="utf-8",
+        )
+        args = Namespace(
+            elite_dir=str(elite_dir),
+            market="futures",
+            family=None,
+            min_ic=None,
+            min_sharpe=None,
+            diverse=False,
+            total_count=10,
+            max_per_family=3,
+            limit=50,
+            json=True,
+        )
         rc = _cmd_factor_list(args)
         assert rc == 0
         payload = _parse_json(capsys.readouterr().out)
@@ -890,6 +1041,7 @@ class TestCmdFactorListExtra:
 # ═══════════════════════════════════════════════════════════
 # factor seeds / cross-market
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCmdFactorSeeds:
     """测试 _cmd_factor_seeds 期货/股票两条路径。
@@ -914,11 +1066,14 @@ class TestCmdFactorSeeds:
         """股票种子因子列表（WQ101/Qlib158/GTJA191 外部种子）。"""
         from fts.factor_engine import seed_data as seed_data_mod
 
-        monkeypatch.setattr(seed_data_mod, "load_all_external_seeds",
-                            lambda trace_id: [
-                                {"name": "reversal", "signature": {"input_fields": ["close"]},
-                                 "params": {}},
-                            ], raising=False)
+        monkeypatch.setattr(
+            seed_data_mod,
+            "load_all_external_seeds",
+            lambda trace_id: [
+                {"name": "reversal", "signature": {"input_fields": ["close"]}, "params": {}},
+            ],
+            raising=False,
+        )
         rc = _cmd_factor_seeds(Namespace(market="stock"))
         assert rc == 0
         out = capsys.readouterr().out
@@ -943,12 +1098,19 @@ class TestCmdFactorCrossMarket:
     def test_futures_to_stock_with_max_stocks(self, capsys):
         """futures-to-stock + max_stocks>0 打印成分股信息。"""
         engine = self._engine(self._report())
-        with patch("fts.cross_market.CrossMarketDataAdapter"), \
-                patch("fts.cross_market.CrossMarketEngine", return_value=engine):
-            rc = _cmd_factor_cross_market(Namespace(
-                direction="futures-to-stock", days=120, max_factors=10,
-                max_stocks=50, output_dir=None,
-            ))
+        with (
+            patch("fts.cross_market.CrossMarketDataAdapter"),
+            patch("fts.cross_market.CrossMarketEngine", return_value=engine),
+        ):
+            rc = _cmd_factor_cross_market(
+                Namespace(
+                    direction="futures-to-stock",
+                    days=120,
+                    max_factors=10,
+                    max_stocks=50,
+                    output_dir=None,
+                )
+            )
         assert rc == 0
         out = capsys.readouterr().out
         assert "期货→A股" in out
@@ -958,40 +1120,64 @@ class TestCmdFactorCrossMarket:
     def test_futures_to_stock_zero_stocks(self, capsys):
         """max_stocks=0 显示'全量'。"""
         engine = self._engine(self._report())
-        with patch("fts.cross_market.CrossMarketDataAdapter"), \
-                patch("fts.cross_market.CrossMarketEngine", return_value=engine):
-            rc = _cmd_factor_cross_market(Namespace(
-                direction="futures-to-stock", days=120, max_factors=0,
-                max_stocks=0, output_dir=None,
-            ))
+        with (
+            patch("fts.cross_market.CrossMarketDataAdapter"),
+            patch("fts.cross_market.CrossMarketEngine", return_value=engine),
+        ):
+            rc = _cmd_factor_cross_market(
+                Namespace(
+                    direction="futures-to-stock",
+                    days=120,
+                    max_factors=0,
+                    max_stocks=0,
+                    output_dir=None,
+                )
+            )
         assert rc == 0
         assert "最大成分股: 全量" in capsys.readouterr().out
 
-    @pytest.mark.parametrize("direction,attr", [
-        ("futures-to-etf", "run_futures_to_etf"),
-        ("stock-to-futures", "run_stock_to_futures"),
-    ])
+    @pytest.mark.parametrize(
+        "direction,attr",
+        [
+            ("futures-to-etf", "run_futures_to_etf"),
+            ("stock-to-futures", "run_stock_to_futures"),
+        ],
+    )
     def test_other_directions(self, direction, attr, capsys):
         """另外两个方向正常执行。"""
         engine = self._engine(self._report())
-        with patch("fts.cross_market.CrossMarketDataAdapter"), \
-                patch("fts.cross_market.CrossMarketEngine", return_value=engine):
-            rc = _cmd_factor_cross_market(Namespace(
-                direction=direction, days=120, max_factors=5,
-                max_stocks=0, output_dir=None,
-            ))
+        with (
+            patch("fts.cross_market.CrossMarketDataAdapter"),
+            patch("fts.cross_market.CrossMarketEngine", return_value=engine),
+        ):
+            rc = _cmd_factor_cross_market(
+                Namespace(
+                    direction=direction,
+                    days=120,
+                    max_factors=5,
+                    max_stocks=0,
+                    output_dir=None,
+                )
+            )
         assert rc == 0
         getattr(engine, attr).assert_called_once()
 
     def test_output_dir(self, tmp_path, capsys):
         """指定 output_dir 时生成带日期的报告路径。"""
         engine = self._engine(self._report())
-        with patch("fts.cross_market.CrossMarketDataAdapter"), \
-                patch("fts.cross_market.CrossMarketEngine", return_value=engine):
-            rc = _cmd_factor_cross_market(Namespace(
-                direction="futures-to-stock", days=120, max_factors=5,
-                max_stocks=0, output_dir=str(tmp_path),
-            ))
+        with (
+            patch("fts.cross_market.CrossMarketDataAdapter"),
+            patch("fts.cross_market.CrossMarketEngine", return_value=engine),
+        ):
+            rc = _cmd_factor_cross_market(
+                Namespace(
+                    direction="futures-to-stock",
+                    days=120,
+                    max_factors=5,
+                    max_stocks=0,
+                    output_dir=str(tmp_path),
+                )
+            )
         assert rc == 0
         out_path = engine.generate_report.call_args.kwargs["output_path"]
         assert str(out_path).endswith(".md")
@@ -1002,12 +1188,16 @@ class TestCmdFactorCrossMarket:
         注: `from fts.cross_market import ...` 在函数 try 块之外执行，
         模块整体缺失时 ModuleNotFoundError 无法被 except ImportError 捕获（真实 bug）。
         """
-        with patch("fts.cross_market.CrossMarketDataAdapter",
-                   side_effect=ImportError("missing dep")):
-            rc = _cmd_factor_cross_market(Namespace(
-                direction="futures-to-stock", days=120, max_factors=5,
-                max_stocks=0, output_dir=None,
-            ))
+        with patch("fts.cross_market.CrossMarketDataAdapter", side_effect=ImportError("missing dep")):
+            rc = _cmd_factor_cross_market(
+                Namespace(
+                    direction="futures-to-stock",
+                    days=120,
+                    max_factors=5,
+                    max_stocks=0,
+                    output_dir=None,
+                )
+            )
         assert rc == 1
         assert "导入失败" in capsys.readouterr().err
 
@@ -1015,12 +1205,19 @@ class TestCmdFactorCrossMarket:
         """执行异常返回 1。"""
         engine = self._engine()
         engine.run_futures_to_stock.side_effect = RuntimeError("boom")
-        with patch("fts.cross_market.CrossMarketDataAdapter"), \
-                patch("fts.cross_market.CrossMarketEngine", return_value=engine):
-            rc = _cmd_factor_cross_market(Namespace(
-                direction="futures-to-stock", days=120, max_factors=5,
-                max_stocks=0, output_dir=None,
-            ))
+        with (
+            patch("fts.cross_market.CrossMarketDataAdapter"),
+            patch("fts.cross_market.CrossMarketEngine", return_value=engine),
+        ):
+            rc = _cmd_factor_cross_market(
+                Namespace(
+                    direction="futures-to-stock",
+                    days=120,
+                    max_factors=5,
+                    max_stocks=0,
+                    output_dir=None,
+                )
+            )
         assert rc == 1
         assert "执行失败" in capsys.readouterr().err
 
@@ -1028,6 +1225,7 @@ class TestCmdFactorCrossMarket:
 # ═══════════════════════════════════════════════════════════
 # fts seed 子命令组
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCmdSeedValidate:
     """测试 _cmd_seed_validate 校验/去重组合。"""
@@ -1115,6 +1313,7 @@ class TestCmdSeedDedup:
 # backtest 子命令组
 # ═══════════════════════════════════════════════════════════
 
+
 class TestLoadFactorById:
     """测试 _load_factor_by_id（JSON 目录 + DuckDB 回退）。"""
 
@@ -1122,8 +1321,7 @@ class TestLoadFactorById:
         """优先从 elite 目录 JSON 读取。"""
         elite_dir = tmp_path / "elite"
         elite_dir.mkdir()
-        (elite_dir / "F1.json").write_text(json.dumps({"factor_id": "F1", "name": "n"}),
-                                          encoding="utf-8")
+        (elite_dir / "F1.json").write_text(json.dumps({"factor_id": "F1", "name": "n"}), encoding="utf-8")
         cfg = MagicMock()
         cfg.get_elite_dir.return_value = str(elite_dir)
         with patch("fts.cli.get_config", return_value=cfg):
@@ -1139,8 +1337,7 @@ class TestLoadFactorById:
         repo.get_by_id.return_value = {"factor_id": "F1", "source": "db"}
         cfg = MagicMock()
         cfg.get_elite_dir.return_value = str(elite_dir)
-        with patch("fts.cli.get_config", return_value=cfg), \
-                patch("fts.cli._load_factor_repo", return_value=repo):
+        with patch("fts.cli.get_config", return_value=cfg), patch("fts.cli._load_factor_repo", return_value=repo):
             f = _load_factor_by_id("F1", "futures")
         assert f["source"] == "db"
 
@@ -1150,8 +1347,7 @@ class TestLoadFactorById:
         repo.get_by_id.side_effect = RuntimeError("db down")
         cfg = MagicMock()
         cfg.get_elite_dir.return_value = str(tmp_path / "none")
-        with patch("fts.cli.get_config", return_value=cfg), \
-                patch("fts.cli._load_factor_repo", return_value=repo):
+        with patch("fts.cli.get_config", return_value=cfg), patch("fts.cli._load_factor_repo", return_value=repo):
             f = _load_factor_by_id("F1", "futures")
         assert f is None
         assert "因子加载失败" in capsys.readouterr().err
@@ -1160,12 +1356,23 @@ class TestLoadFactorById:
 def _backtest_report() -> SimpleNamespace:
     """构造带完整指标的回测报告。"""
     m = SimpleNamespace(
-        total_return=0.1, annual_return=0.2, sharpe_ratio=1.5, max_drawdown=0.05,
-        calmar_ratio=2.0, win_rate=0.55, payoff_ratio=1.3, profit_factor=1.8,
-        ic_mean=0.04, ic_ir=0.9, turnover=0.3,
+        total_return=0.1,
+        annual_return=0.2,
+        sharpe_ratio=1.5,
+        max_drawdown=0.05,
+        calmar_ratio=2.0,
+        win_rate=0.55,
+        payoff_ratio=1.3,
+        profit_factor=1.8,
+        ic_mean=0.04,
+        ic_ir=0.9,
+        turnover=0.3,
     )
     return SimpleNamespace(
-        factor_id="F1", start_date="2026-01-01", end_date="2026-08-01", metrics=m,
+        factor_id="F1",
+        start_date="2026-01-01",
+        end_date="2026-08-01",
+        metrics=m,
     )
 
 
@@ -1178,25 +1385,48 @@ class TestCmdBacktestRun:
     def test_factor_not_found(self, capsys):
         """因子不存在返回 1。"""
         with patch("fts.cli._load_factor_by_id", return_value=None):
-            rc = _cmd_backtest_run(Namespace(factor_id="NOPE", market="futures",
-                                             frequency="daily", start=None, end=None,
-                                             symbol="RB0", days=500, capital=1e6, output=None))
+            rc = _cmd_backtest_run(
+                Namespace(
+                    factor_id="NOPE",
+                    market="futures",
+                    frequency="daily",
+                    start=None,
+                    end=None,
+                    symbol="RB0",
+                    days=500,
+                    capital=1e6,
+                    output=None,
+                )
+            )
         assert rc == 1
         assert "未找到因子" in capsys.readouterr().out
 
     def test_daily_success(self, capsys):
         """日频回测成功打印指标。"""
         report = _backtest_report()
-        with patch("fts.cli._load_factor_by_id", return_value=self._factor()), \
-                patch("fts.cli._prepare_data", return_value=(_close_df(10), np.zeros(10))), \
-                patch("fts.factor_engine.backtest_pipeline.BacktestPipeline") as m_pipe:
+        with (
+            patch("fts.cli._load_factor_by_id", return_value=self._factor()),
+            patch("fts.cli._prepare_data", return_value=(_close_df(10), np.zeros(10))),
+            patch("fts.factor_engine.backtest_pipeline.BacktestPipeline") as m_pipe,
+        ):
             m_pipe.return_value.run.return_value = SimpleNamespace(
-                success=True, error="", output=report,
+                success=True,
+                error="",
+                output=report,
             )
-            rc = _cmd_backtest_run(Namespace(factor_id="F1", market="futures",
-                                             frequency="daily", start="2026-01-01",
-                                             end="2026-02-01", symbol="RB0", days=500,
-                                             capital=1e6, output=None))
+            rc = _cmd_backtest_run(
+                Namespace(
+                    factor_id="F1",
+                    market="futures",
+                    frequency="daily",
+                    start="2026-01-01",
+                    end="2026-02-01",
+                    symbol="RB0",
+                    days=500,
+                    capital=1e6,
+                    output=None,
+                )
+            )
         assert rc == 0
         out = capsys.readouterr().out
         assert "回测结果: F1" in out
@@ -1207,26 +1437,52 @@ class TestCmdBacktestRun:
 
     def test_daily_failure(self, capsys):
         """回测失败返回 1。"""
-        with patch("fts.cli._load_factor_by_id", return_value=self._factor()), \
-                patch("fts.cli._prepare_data", return_value=(_close_df(10), np.zeros(10))), \
-                patch("fts.factor_engine.backtest_pipeline.BacktestPipeline") as m_pipe:
+        with (
+            patch("fts.cli._load_factor_by_id", return_value=self._factor()),
+            patch("fts.cli._prepare_data", return_value=(_close_df(10), np.zeros(10))),
+            patch("fts.factor_engine.backtest_pipeline.BacktestPipeline") as m_pipe,
+        ):
             m_pipe.return_value.run.return_value = SimpleNamespace(
-                success=False, error="backtest crashed", output=None,
+                success=False,
+                error="backtest crashed",
+                output=None,
             )
-            rc = _cmd_backtest_run(Namespace(factor_id="F1", market="futures",
-                                             frequency="daily", start=None, end=None,
-                                             symbol="RB0", days=500, capital=1e6, output=None))
+            rc = _cmd_backtest_run(
+                Namespace(
+                    factor_id="F1",
+                    market="futures",
+                    frequency="daily",
+                    start=None,
+                    end=None,
+                    symbol="RB0",
+                    days=500,
+                    capital=1e6,
+                    output=None,
+                )
+            )
         assert rc == 1
         assert "回测失败" in capsys.readouterr().err
 
     def test_minute_freq_empty_data(self, capsys):
         """分钟级数据获取失败返回 1。"""
-        with patch("fts.cli._load_factor_by_id", return_value=self._factor()), \
-                patch("fts.data_futures.FuturesDataProvider") as m_provider:
+        with (
+            patch("fts.cli._load_factor_by_id", return_value=self._factor()),
+            patch("fts.data_futures.FuturesDataProvider") as m_provider,
+        ):
             m_provider.return_value.get_minute_ohlcv.return_value = pd.DataFrame()
-            rc = _cmd_backtest_run(Namespace(factor_id="F1", market="futures",
-                                             frequency="5m", start=None, end=None,
-                                             symbol="RB0", days=500, capital=1e6, output=None))
+            rc = _cmd_backtest_run(
+                Namespace(
+                    factor_id="F1",
+                    market="futures",
+                    frequency="5m",
+                    start=None,
+                    end=None,
+                    symbol="RB0",
+                    days=500,
+                    capital=1e6,
+                    output=None,
+                )
+            )
         assert rc == 1
         assert "分钟数据获取失败" in capsys.readouterr().out
 
@@ -1234,19 +1490,32 @@ class TestCmdBacktestRun:
         """分钟级回测成功 + 生成报告。"""
         report = _backtest_report()
         minute_df = pd.DataFrame({"close": np.arange(10, dtype=float)})
-        with patch("fts.cli._load_factor_by_id", return_value=self._factor()), \
-                patch("fts.data_futures.FuturesDataProvider") as m_provider, \
-                patch("fts.factor_engine.backtest_pipeline.BacktestPipeline") as m_pipe, \
-                patch("fts.factor_engine.report_generator.ReportGenerator") as m_gen:
+        with (
+            patch("fts.cli._load_factor_by_id", return_value=self._factor()),
+            patch("fts.data_futures.FuturesDataProvider") as m_provider,
+            patch("fts.factor_engine.backtest_pipeline.BacktestPipeline") as m_pipe,
+            patch("fts.factor_engine.report_generator.ReportGenerator") as m_gen,
+        ):
             m_provider.return_value.get_minute_ohlcv.return_value = minute_df
             m_pipe.return_value.run.return_value = SimpleNamespace(
-                success=True, error="", output=report,
+                success=True,
+                error="",
+                output=report,
             )
             m_gen.return_value.generate.return_value = "/tmp/out/report.html"
-            rc = _cmd_backtest_run(Namespace(factor_id="F1", market="futures",
-                                             frequency="1m", start=None, end=None,
-                                             symbol="RB0", days=500, capital=1e6,
-                                             output=str(tmp_path / "out")))
+            rc = _cmd_backtest_run(
+                Namespace(
+                    factor_id="F1",
+                    market="futures",
+                    frequency="1m",
+                    start=None,
+                    end=None,
+                    symbol="RB0",
+                    days=500,
+                    capital=1e6,
+                    output=str(tmp_path / "out"),
+                )
+            )
         assert rc == 0
         out = capsys.readouterr().out
         assert "频率: 1m" in out
@@ -1263,9 +1532,9 @@ class TestCmdBacktestBatchEdge:
         cfg = MagicMock()
         cfg.get_elite_dir.return_value = str(tmp_path / "none")
         with patch("fts.cli.get_config", return_value=cfg):
-            rc = _cmd_backtest_batch(Namespace(market="futures", grade="B",
-                                               min_score=None, limit=20,
-                                               symbol="RB0", days=300, capital=1e6))
+            rc = _cmd_backtest_batch(
+                Namespace(market="futures", grade="B", min_score=None, limit=20, symbol="RB0", days=300, capital=1e6)
+            )
         assert rc == 1
         assert "elite 目录不存在" in capsys.readouterr().err
 
@@ -1276,12 +1545,14 @@ class TestCmdBacktestBatchEdge:
         (elite_dir / "BROKEN.json").write_text("not-json", encoding="utf-8")
         cfg = MagicMock()
         cfg.get_elite_dir.return_value = str(elite_dir)
-        with patch("fts.cli.get_config", return_value=cfg), \
-                patch("fts.factor_engine.factor_screener.FactorScreener") as m_screen:
+        with (
+            patch("fts.cli.get_config", return_value=cfg),
+            patch("fts.factor_engine.factor_screener.FactorScreener") as m_screen,
+        ):
             m_screen.return_value.screen.return_value = []
-            rc = _cmd_backtest_batch(Namespace(market="futures", grade="B",
-                                               min_score=None, limit=20,
-                                               symbol="RB0", days=300, capital=1e6))
+            rc = _cmd_backtest_batch(
+                Namespace(market="futures", grade="B", min_score=None, limit=20, symbol="RB0", days=300, capital=1e6)
+            )
         assert rc == 0
         assert "无符合条件的因子" in capsys.readouterr().out
 
@@ -1290,19 +1561,20 @@ class TestCmdBacktestBatchEdge:
         elite_dir = tmp_path / "elite"
         elite_dir.mkdir()
         (elite_dir / "BROKEN.json").write_text("not-json", encoding="utf-8")
-        (elite_dir / "F1.json").write_text(json.dumps({"factor_id": "F1"}),
-                                           encoding="utf-8")
+        (elite_dir / "F1.json").write_text(json.dumps({"factor_id": "F1"}), encoding="utf-8")
         cfg = MagicMock()
         cfg.get_elite_dir.return_value = str(elite_dir)
-        with patch("fts.cli.get_config", return_value=cfg), \
-                patch("fts.factor_engine.factor_screener.FactorScreener") as m_screen, \
-                patch("fts.cli._prepare_data", return_value=(_close_df(10), np.zeros(10))), \
-                patch("fts.factor_engine.backtest_pipeline.BacktestPipeline") as m_pipe:
+        with (
+            patch("fts.cli.get_config", return_value=cfg),
+            patch("fts.factor_engine.factor_screener.FactorScreener") as m_screen,
+            patch("fts.cli._prepare_data", return_value=(_close_df(10), np.zeros(10))),
+            patch("fts.factor_engine.backtest_pipeline.BacktestPipeline") as m_pipe,
+        ):
             m_screen.return_value.screen.return_value = [{"factor_id": "F1"}]
             m_pipe.return_value.run_batch.return_value = []
-            rc = _cmd_backtest_batch(Namespace(market="futures", grade="B",
-                                               min_score=None, limit=20,
-                                               symbol="RB0", days=300, capital=1e6))
+            rc = _cmd_backtest_batch(
+                Namespace(market="futures", grade="B", min_score=None, limit=20, symbol="RB0", days=300, capital=1e6)
+            )
         assert rc == 0
         assert "回测对比排名" in capsys.readouterr().out
 
@@ -1312,28 +1584,30 @@ class TestCmdBacktestCompare:
 
     def test_empty_factor_ids(self, capsys):
         """factor_ids 为空返回 1。"""
-        rc = _cmd_backtest_compare(Namespace(factor_ids=" , ", market="futures",
-                                             symbol="RB0", days=300, capital=1e6))
+        rc = _cmd_backtest_compare(Namespace(factor_ids=" , ", market="futures", symbol="RB0", days=300, capital=1e6))
         assert rc == 1
         assert "请提供 --factor-ids" in capsys.readouterr().out
 
     def test_all_factors_fail_to_load(self, capsys):
         """全部因子加载失败返回 1。"""
         with patch("fts.cli._load_factor_by_id", return_value=None):
-            rc = _cmd_backtest_compare(Namespace(factor_ids="A,B", market="futures",
-                                                 symbol="RB0", days=300, capital=1e6))
+            rc = _cmd_backtest_compare(
+                Namespace(factor_ids="A,B", market="futures", symbol="RB0", days=300, capital=1e6)
+            )
         assert rc == 1
         assert "所有因子加载失败" in capsys.readouterr().out
 
     def test_success(self, capsys):
         """部分因子成功加载并回测排名。"""
-        with patch("fts.cli._load_factor_by_id",
-                   side_effect=lambda fid, market: {"factor_id": fid}), \
-                patch("fts.cli._prepare_data", return_value=(_close_df(10), np.zeros(10))), \
-                patch("fts.factor_engine.backtest_pipeline.BacktestPipeline") as m_pipe:
+        with (
+            patch("fts.cli._load_factor_by_id", side_effect=lambda fid, market: {"factor_id": fid}),
+            patch("fts.cli._prepare_data", return_value=(_close_df(10), np.zeros(10))),
+            patch("fts.factor_engine.backtest_pipeline.BacktestPipeline") as m_pipe,
+        ):
             m_pipe.return_value.run_batch.return_value = []
-            rc = _cmd_backtest_compare(Namespace(factor_ids="A,B", market="futures",
-                                                 symbol="RB0", days=300, capital=1e6))
+            rc = _cmd_backtest_compare(
+                Namespace(factor_ids="A,B", market="futures", symbol="RB0", days=300, capital=1e6)
+            )
         assert rc == 0
         assert "回测对比排名 (0 因子)" in capsys.readouterr().out
 
@@ -1344,10 +1618,16 @@ class TestPrintBacktestRanking:
     def test_with_and_without_report(self, capsys):
         """有 report 打印指标，无 report 打印失败原因。"""
         r1 = SimpleNamespace(
-            rank=1, factor_id="F1",
-            report=SimpleNamespace(metrics=SimpleNamespace(
-                sharpe_ratio=1.5, ic_mean=0.04, max_drawdown=0.05, total_return=0.2,
-            )),
+            rank=1,
+            factor_id="F1",
+            report=SimpleNamespace(
+                metrics=SimpleNamespace(
+                    sharpe_ratio=1.5,
+                    ic_mean=0.04,
+                    max_drawdown=0.05,
+                    total_return=0.2,
+                )
+            ),
             error=None,
         )
         r2 = SimpleNamespace(rank=2, factor_id="F2", report=None, error="boom")
@@ -1361,6 +1641,7 @@ class TestPrintBacktestRanking:
 # ═══════════════════════════════════════════════════════════
 # feature / gp 子命令组
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCmdFeatureList:
     """测试 _cmd_feature_list 各分支。"""
@@ -1406,48 +1687,50 @@ class TestCmdFeatureAnalyze:
     def test_factor_not_found(self, capsys):
         """因子不存在返回 1。"""
         with patch("fts.cli._load_factor_by_id", return_value=None):
-            rc = _cmd_feature_analyze(Namespace(factor_id="NOPE", market="futures",
-                                                days=500, output=None))
+            rc = _cmd_feature_analyze(Namespace(factor_id="NOPE", market="futures", days=500, output=None))
         assert rc == 1
         assert "未找到因子" in capsys.readouterr().out
 
     def test_panel_empty(self, capsys):
         """面板数据为空返回 1。"""
-        with patch("fts.cli._load_factor_by_id", return_value={"factor_id": "F1"}), \
-                patch("fts.cli._prepare_futures_data", return_value=({}, None, np.array([]))):
-            rc = _cmd_feature_analyze(Namespace(factor_id="F1", market="futures",
-                                                days=500, output=None))
+        with (
+            patch("fts.cli._load_factor_by_id", return_value={"factor_id": "F1"}),
+            patch("fts.cli._prepare_futures_data", return_value=({}, None, np.array([]))),
+        ):
+            rc = _cmd_feature_analyze(Namespace(factor_id="F1", market="futures", days=500, output=None))
         assert rc == 1
         assert "数据准备失败" in capsys.readouterr().err
 
     def test_values_none(self, capsys):
         """因子计算失败返回 1。"""
-        with patch("fts.cli._load_factor_by_id", return_value={"factor_id": "F1"}), \
-                patch("fts.cli._prepare_futures_data",
-                      return_value=(self._panel(), pd.DatetimeIndex([]), np.zeros(30))), \
-                patch("fts.factor_engine.signal_generator.SignalGenerator._compute_factor_values",
-                      return_value=None):
-            rc = _cmd_feature_analyze(Namespace(factor_id="F1", market="futures",
-                                                days=500, output=None))
+        with (
+            patch("fts.cli._load_factor_by_id", return_value={"factor_id": "F1"}),
+            patch("fts.cli._prepare_futures_data", return_value=(self._panel(), pd.DatetimeIndex([]), np.zeros(30))),
+            patch("fts.factor_engine.signal_generator.SignalGenerator._compute_factor_values", return_value=None),
+        ):
+            rc = _cmd_feature_analyze(Namespace(factor_id="F1", market="futures", days=500, output=None))
         assert rc == 1
         assert "因子计算失败" in capsys.readouterr().err
 
     def test_success_with_output(self, tmp_path, capsys):
         """成功路径 + 输出文件。"""
         result = SimpleNamespace(
-            factor_id="F1", analysis_method="shap", baseline_ic=0.05,
+            factor_id="F1",
+            analysis_method="shap",
+            baseline_ic=0.05,
             feature_importance={"close": 0.8, "volume": 0.2},
         )
-        with patch("fts.cli._load_factor_by_id", return_value={"factor_id": "F1"}), \
-                patch("fts.cli._prepare_futures_data",
-                      return_value=(self._panel(), pd.DatetimeIndex([]), np.zeros(30))), \
-                patch("fts.factor_engine.signal_generator.SignalGenerator._compute_factor_values",
-                      return_value=np.ones(30)), \
-                patch("fts.factor_engine.feature_importance.FeatureImportanceAnalyzer") as m_ana:
+        with (
+            patch("fts.cli._load_factor_by_id", return_value={"factor_id": "F1"}),
+            patch("fts.cli._prepare_futures_data", return_value=(self._panel(), pd.DatetimeIndex([]), np.zeros(30))),
+            patch(
+                "fts.factor_engine.signal_generator.SignalGenerator._compute_factor_values", return_value=np.ones(30)
+            ),
+            patch("fts.factor_engine.feature_importance.FeatureImportanceAnalyzer") as m_ana,
+        ):
             m_ana.return_value.analyze.return_value = result
             out_dir = tmp_path / "out"
-            rc = _cmd_feature_analyze(Namespace(factor_id="F1", market="futures",
-                                                days=500, output=str(out_dir)))
+            rc = _cmd_feature_analyze(Namespace(factor_id="F1", market="futures", days=500, output=str(out_dir)))
         assert rc == 0
         out = capsys.readouterr().out
         assert "特征重要性: F1" in out
@@ -1457,18 +1740,21 @@ class TestCmdFeatureAnalyze:
     def test_success_no_output(self, capsys):
         """成功路径不落盘。"""
         result = SimpleNamespace(
-            factor_id=None, analysis_method="permutation", baseline_ic=0.03,
+            factor_id=None,
+            analysis_method="permutation",
+            baseline_ic=0.03,
             feature_importance={"close": 1.0},
         )
-        with patch("fts.cli._load_factor_by_id", return_value={"factor_id": "F1"}), \
-                patch("fts.cli._prepare_futures_data",
-                      return_value=(self._panel(), pd.DatetimeIndex([]), np.zeros(30))), \
-                patch("fts.factor_engine.signal_generator.SignalGenerator._compute_factor_values",
-                      return_value=np.ones(30)), \
-                patch("fts.factor_engine.feature_importance.FeatureImportanceAnalyzer") as m_ana:
+        with (
+            patch("fts.cli._load_factor_by_id", return_value={"factor_id": "F1"}),
+            patch("fts.cli._prepare_futures_data", return_value=(self._panel(), pd.DatetimeIndex([]), np.zeros(30))),
+            patch(
+                "fts.factor_engine.signal_generator.SignalGenerator._compute_factor_values", return_value=np.ones(30)
+            ),
+            patch("fts.factor_engine.feature_importance.FeatureImportanceAnalyzer") as m_ana,
+        ):
             m_ana.return_value.analyze.return_value = result
-            rc = _cmd_feature_analyze(Namespace(factor_id="F1", market="futures",
-                                                days=500, output=None))
+            rc = _cmd_feature_analyze(Namespace(factor_id="F1", market="futures", days=500, output=None))
         assert rc == 0
         assert "特征重要性: F1" in capsys.readouterr().out
 
@@ -1479,16 +1765,28 @@ class TestCmdGpEvolve:
     def _result(self) -> SimpleNamespace:
         return SimpleNamespace(
             best_expression="close > sma(close,5)",
-            best_fitness=0.5, best_ic=0.1, best_sharpe=1.5,
-            generations_completed=3, total_evaluations=100,
+            best_fitness=0.5,
+            best_ic=0.1,
+            best_sharpe=1.5,
+            generations_completed=3,
+            total_evaluations=100,
         )
 
     def test_panel_empty(self, capsys):
         """面板为空返回 1。"""
         with patch("fts.cli._prepare_futures_data", return_value=({}, None, np.array([]))):
-            rc = _cmd_gp_evolve(Namespace(universe="futures", population=50, generations=5,
-                                          days=500, max_stocks=30, max_symbols=0,
-                                          forward=20, output=None))
+            rc = _cmd_gp_evolve(
+                Namespace(
+                    universe="futures",
+                    population=50,
+                    generations=5,
+                    days=500,
+                    max_stocks=30,
+                    max_symbols=0,
+                    forward=20,
+                    output=None,
+                )
+            )
         assert rc == 1
         assert "数据准备失败" in capsys.readouterr().err
 
@@ -1496,12 +1794,25 @@ class TestCmdGpEvolve:
         """期货 universe 成功演化。"""
         gp = MagicMock()
         gp.evolve.return_value = self._result()
-        with patch("fts.cli._prepare_futures_data",
-                   return_value=({"RB0": _close_df(30)}, pd.DatetimeIndex([]), np.zeros(30))), \
-                patch("fts.factor_engine.gp_evolver.GPEvolver", return_value=gp):
-            rc = _cmd_gp_evolve(Namespace(universe="futures", population=50, generations=5,
-                                          days=500, max_stocks=30, max_symbols=0,
-                                          forward=20, output=None))
+        with (
+            patch(
+                "fts.cli._prepare_futures_data",
+                return_value=({"RB0": _close_df(30)}, pd.DatetimeIndex([]), np.zeros(30)),
+            ),
+            patch("fts.factor_engine.gp_evolver.GPEvolver", return_value=gp),
+        ):
+            rc = _cmd_gp_evolve(
+                Namespace(
+                    universe="futures",
+                    population=50,
+                    generations=5,
+                    days=500,
+                    max_stocks=30,
+                    max_symbols=0,
+                    forward=20,
+                    output=None,
+                )
+            )
         assert rc == 0
         out = capsys.readouterr().out
         assert "GP 演化结果" in out
@@ -1511,13 +1822,26 @@ class TestCmdGpEvolve:
         """csi300 universe + 输出落盘。"""
         gp = MagicMock()
         gp.evolve.return_value = self._result()
-        with patch("fts.cli._prepare_cross_section_data",
-                   return_value=({"000001": _close_df(30)}, pd.DatetimeIndex([]), np.zeros(30))), \
-                patch("fts.factor_engine.gp_evolver.GPEvolver", return_value=gp):
+        with (
+            patch(
+                "fts.cli._prepare_cross_section_data",
+                return_value=({"000001": _close_df(30)}, pd.DatetimeIndex([]), np.zeros(30)),
+            ),
+            patch("fts.factor_engine.gp_evolver.GPEvolver", return_value=gp),
+        ):
             out_dir = tmp_path / "gp_out"
-            rc = _cmd_gp_evolve(Namespace(universe="csi300", population=50, generations=5,
-                                          days=500, max_stocks=30, max_symbols=0,
-                                          forward=20, output=str(out_dir)))
+            rc = _cmd_gp_evolve(
+                Namespace(
+                    universe="csi300",
+                    population=50,
+                    generations=5,
+                    days=500,
+                    max_stocks=30,
+                    max_symbols=0,
+                    forward=20,
+                    output=str(out_dir),
+                )
+            )
         assert rc == 0
         out = capsys.readouterr().out
         assert "最优因子已保存" in out
@@ -1528,6 +1852,7 @@ class TestCmdGpEvolve:
 # feedback 子命令组
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCmdFeedback:
     """测试 feedback 各子命令。"""
 
@@ -1535,7 +1860,8 @@ class TestCmdFeedback:
     def test_trigger(self, mock_loop, capsys):
         """手动触发反馈事件。"""
         mock_loop.return_value.trigger_manual_feedback.return_value = {
-            "event_id": "e1", "factor_id": "F1",
+            "event_id": "e1",
+            "factor_id": "F1",
         }
         rc = _cmd_feedback_trigger(Namespace(factor_id="F1", reason="manual review"))
         assert rc == 0
@@ -1555,8 +1881,7 @@ class TestCmdFeedback:
     def test_process_with_results(self, mock_loop, capsys):
         """处理结果列表打印。"""
         mock_loop.return_value.process_feedback.return_value = [
-            {"event_id": "e1", "root_cause": "overfit",
-             "action_taken": "demote", "success": True},
+            {"event_id": "e1", "root_cause": "overfit", "action_taken": "demote", "success": True},
         ]
         rc = _cmd_feedback_process(Namespace())
         assert rc == 0
@@ -1568,9 +1893,13 @@ class TestCmdFeedback:
     def test_report(self, mock_loop, capsys):
         """月度报告输出。"""
         mock_loop.return_value.generate_monthly_report.return_value = {
-            "period": "2026-07", "new_factors": 5, "effective_rate": 0.4,
-            "feedback_events_handled": 8, "recommendations_accepted": 3,
-            "recommendations_total": 6, "summary_text": "本月小结",
+            "period": "2026-07",
+            "new_factors": 5,
+            "effective_rate": 0.4,
+            "feedback_events_handled": 8,
+            "recommendations_accepted": 3,
+            "recommendations_total": 6,
+            "summary_text": "本月小结",
         }
         rc = _cmd_feedback_report(Namespace(month="2026-07"))
         assert rc == 0
@@ -1582,7 +1911,8 @@ class TestCmdFeedback:
     def test_stats(self, mock_loop, capsys):
         """统计输出。"""
         mock_loop.return_value.get_statistics.return_value = {
-            "total_events": 10, "effective_rate": 0.5,
+            "total_events": 10,
+            "effective_rate": 0.5,
         }
         rc = _cmd_feedback_stats(Namespace())
         assert rc == 0
@@ -1593,10 +1923,15 @@ class TestCmdFeedback:
 # bridge 子命令组
 # ═══════════════════════════════════════════════════════════
 
+
 def _bridge_args(**overrides) -> Namespace:
-    defaults = dict(protocol="json", output_dir="signals",
-                    redis_url="redis://localhost:6379/0",
-                    redis_key="fts:signals:latest", rest_url="")
+    defaults = dict(
+        protocol="json",
+        output_dir="signals",
+        redis_url="redis://localhost:6379/0",
+        redis_key="fts:signals:latest",
+        rest_url="",
+    )
     defaults.update(overrides)
     return Namespace(**defaults)
 
@@ -1628,8 +1963,7 @@ class TestCmdBridgePublish:
     def test_input_read_success(self, mock_bridge, tmp_path, capsys):
         """读取 JSON 信号文件并发布。"""
         sig_file = tmp_path / "sig.json"
-        sig_file.write_text(json.dumps({"signal_id": "s9", "signals": []}),
-                            encoding="utf-8")
+        sig_file.write_text(json.dumps({"signal_id": "s9", "signals": []}), encoding="utf-8")
         mock_bridge.return_value.publish.return_value = "s9"
         rc = _cmd_bridge_publish(_bridge_args(input=str(sig_file)))
         assert rc == 0
@@ -1652,8 +1986,11 @@ class TestCmdBridgeStatus:
     def test_available_with_latest(self, mock_bridge, capsys):
         """可用且有最近信号。"""
         mock_bridge.return_value.status.return_value = SimpleNamespace(
-            protocol="json", available=True, detail="ok",
-            latest_signal_id="s1", latest_timestamp="2026-08-04T00:00:00",
+            protocol="json",
+            available=True,
+            detail="ok",
+            latest_signal_id="s1",
+            latest_timestamp="2026-08-04T00:00:00",
         )
         rc = _cmd_bridge_status(_bridge_args())
         assert rc == 0
@@ -1665,8 +2002,11 @@ class TestCmdBridgeStatus:
     def test_not_available(self, mock_bridge, capsys):
         """不可用返回 1。"""
         mock_bridge.return_value.status.return_value = SimpleNamespace(
-            protocol="json", available=False, detail="no backend",
-            latest_signal_id="", latest_timestamp="",
+            protocol="json",
+            available=False,
+            detail="no backend",
+            latest_signal_id="",
+            latest_timestamp="",
         )
         rc = _cmd_bridge_status(_bridge_args())
         assert rc == 1
@@ -1729,7 +2069,7 @@ class TestCmdBridgeServe:
         # 路径不匹配 → 404
         inst = self._make_handler(handler_cls, body=body, path="/other")
         inst.do_POST()
-        assert b'not found' in inst.wfile.getvalue()
+        assert b"not found" in inst.wfile.getvalue()
 
         # 非法 JSON → 400
         inst = self._make_handler(handler_cls, body=b"not-json", path="/signal")

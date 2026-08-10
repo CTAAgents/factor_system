@@ -32,6 +32,7 @@ from fts.ml import (
 
 # ─── Fixtures ─────────────────────────────────────────────
 
+
 class _FakeRegressor:
     """模拟 sklearn 风格回归器（fit 时用最小二乘自动解算系数）。"""
 
@@ -76,10 +77,12 @@ def make_panel_data():
         coefs = np.linspace(1.0, -0.5, n_feat)
         y = X @ coefs + rng.standard_normal(n) * 0.1
         return X, y, coefs
+
     return _make
 
 
 # ─── 枚举 ─────────────────────────────────────────────────
+
 
 class TestEnums:
     def test_model_kind_values(self):
@@ -94,6 +97,7 @@ class TestEnums:
 
 
 # ─── create_signal_model ─────────────────────────────────
+
 
 class TestCreateSignalModel:
     def test_returns_none_when_lightgbm_missing(self, monkeypatch):
@@ -125,6 +129,7 @@ class TestCreateSignalModel:
 
 
 # ─── MLSignalModel ────────────────────────────────────────
+
 
 class TestMLSignalModel:
     def test_predict_before_fit_raises(self):
@@ -161,6 +166,7 @@ class TestMLSignalModel:
 
 
 # ─── SignalModelTrainer ──────────────────────────────────
+
 
 class TestSignalModelTrainer:
     def test_cross_sectional_training(self, fake_lightgbm, make_panel_data):
@@ -231,3 +237,112 @@ class TestSignalModelTrainer:
         y = np.array([1.0, 1.0, 1.0])
         pred = np.array([1.0, 1.0, 1.0])
         assert SignalModelTrainer._r2_score(y, pred) == 0.0  # 零方差目标
+
+# ─── GAP-F16: XGBoost / Ensemble 双子模型 / 边界分支 ────────
+
+
+@pytest.fixture
+def fake_xgboost(monkeypatch):
+    """注入假 xgboost 模块。"""
+    mod = types.ModuleType("xgboost")
+
+    def _xgb_regressor(**kwargs):
+        return _FakeRegressor()
+
+    mod.XGBRegressor = _xgb_regressor
+    monkeypatch.setitem(sys.modules, "xgboost", mod)
+    monkeypatch.setattr("fts.ml.models._has_xgboost", True)
+    return mod
+
+
+class TestXGBoostModel:
+    def test_fit_and_predict_with_fake_model(self, fake_xgboost, make_panel_data):
+        X, y, _ = make_panel_data(n_feat=2)
+        model = MLSignalModel(kind="xgboost")
+        assert model.is_available is True
+        model.fit(X, y)
+        pred = model.predict(X[:5])
+        assert pred.shape == (5,)
+        assert np.all(np.isfinite(pred))
+        assert model.model is not None
+
+    def test_fit_missing_dependency_raises(self, monkeypatch):
+        monkeypatch.setattr("fts.ml.models._has_xgboost", False)
+        model = MLSignalModel(kind="xgboost")
+        with pytest.raises(ModelNotAvailableError, match="xgboost 未安装"):
+            model.fit(np.zeros((5, 2)), np.zeros(5))
+
+    def test_is_available_reflects_dependency(self, monkeypatch):
+        monkeypatch.setattr("fts.ml.models._has_xgboost", False)
+        assert MLSignalModel("xgboost").is_available is False
+        monkeypatch.setattr("fts.ml.models._has_xgboost", True)
+        assert MLSignalModel("xgboost").is_available is True
+
+
+class TestEnsembleModel:
+    def test_fit_predict_with_both_sub_models(self, fake_lightgbm, fake_xgboost, make_panel_data):
+        """双子模型等权集成：predict 为两个子模型预测均值。"""
+        X, y, _ = make_panel_data(n_feat=2)
+        model = MLSignalModel(kind="ensemble")
+        assert model.is_available is True
+        model.fit(X, y)
+        assert len(model._sub_models) == 2
+        pred = model.predict(X[:5])
+        assert pred.shape == (5,)
+        assert np.all(np.isfinite(pred))
+        # 等权均值：等于两个子模型预测的平均
+        p1 = model._sub_models[0].predict(X[:5])
+        p2 = model._sub_models[1].predict(X[:5])
+        np.testing.assert_allclose(pred, (p1 + p2) / 2.0)
+
+    def test_build_ensemble_missing_all_deps_raises(self, monkeypatch):
+        """直接调用 _build（ensemble 分支）且依赖全缺 → ModelNotAvailableError。"""
+        monkeypatch.setattr("fts.ml.models._has_lightgbm", False)
+        monkeypatch.setattr("fts.ml.models._has_xgboost", False)
+        model = MLSignalModel(kind="ensemble")
+        with pytest.raises(ModelNotAvailableError, match="ensemble 需要至少安装"):
+            model._build()
+
+    def test_build_ensemble_returns_none_when_deps_ok(self, fake_lightgbm):
+        """依赖可用时 ensemble 无单一底层模型 → _build 返回 None。"""
+        model = MLSignalModel(kind="ensemble")
+        assert model._build() is None
+
+    def test_fit_ensemble_missing_all_deps_then_predict_raises(self, monkeypatch):
+        """依赖全缺时 fit 静默构建空集成（真实行为），predict 才抛"无子模型"。"""
+        monkeypatch.setattr("fts.ml.models._has_lightgbm", False)
+        monkeypatch.setattr("fts.ml.models._has_xgboost", False)
+        model = MLSignalModel(kind="ensemble")
+        model.fit(np.zeros((5, 2)), np.zeros(5))
+        assert model._sub_models == []
+        with pytest.raises(ModelNotAvailableError, match="无子模型"):
+            model.predict(np.zeros((3, 2)))
+
+    def test_predict_ensemble_empty_sub_models_raises(self):
+        """哨兵 _model 已设但无子模型 → 抛 ModelNotAvailableError。"""
+        model = MLSignalModel(kind="ensemble")
+        model._model = "ensemble"  # 模拟已训练哨兵
+        model._sub_models = []
+        with pytest.raises(ModelNotAvailableError, match="无子模型"):
+            model.predict(np.zeros((3, 2)))
+
+    def test_ensemble_fit_with_single_sub_model(self, fake_lightgbm, monkeypatch, make_panel_data):
+        """仅 lightgbm 可用 → 集成只有一个子模型。"""
+        monkeypatch.setattr("fts.ml.models._has_xgboost", False)
+        X, y, _ = make_panel_data(n_feat=2)
+        model = MLSignalModel(kind="ensemble")
+        model.fit(X, y)
+        assert len(model._sub_models) == 1
+        assert model.predict(X[:5]).shape == (5,)
+
+
+class TestCreateSignalModelExtra:
+    def test_invalid_kind_raises_value_error(self):
+        with pytest.raises(ValueError):
+            create_signal_model("bogus_kind")
+
+    def test_params_are_copied(self):
+        params = {"n_estimators": 50}
+        model = MLSignalModel(kind="lightgbm", params=params)
+        params["n_estimators"] = 999  # 外部修改不影响模型
+        assert model.params == {"n_estimators": 50}

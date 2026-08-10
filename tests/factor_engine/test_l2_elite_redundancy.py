@@ -14,7 +14,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from fts.factor_engine.contracts import FactorEvaluation
@@ -69,12 +68,17 @@ def _make_factor(factor_id: str, code: str, name: str | None = None) -> dict:
         "code": code,
         "params": {"window": 10},
         "signature": {
-            "input_fields": ["close"], "output_type": "signal",
-            "frequency": "daily", "lookback": 1,
+            "input_fields": ["close"],
+            "output_type": "signal",
+            "frequency": "daily",
+            "lookback": 1,
         },
         "economic_logic": {
-            "theory": 3, "behavioral": 3, "microstructure": 3,
-            "institutional": 3, "narrative": "测试因子",
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "测试因子",
         },
         "source": "evolved",
         "generation": 1,
@@ -91,7 +95,8 @@ def _write_elite(tmp_elite_dir: Path, factor_id: str, code: str, name: str) -> N
         "params": {"window": 10},
     }
     (tmp_elite_dir / f"{factor_id}.json").write_text(
-        json.dumps(record, ensure_ascii=False), encoding="utf-8",
+        json.dumps(record, ensure_ascii=False),
+        encoding="utf-8",
     )
 
 
@@ -133,7 +138,11 @@ class TestCheckEliteCorrelation:
     """GAP-I206: _check_elite_correlation 相关性检查方法。"""
 
     def test_high_corr_returns_pairs(
-        self, sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_elite_dir,
+        tmp_memory_dir,
         patched_execute,
     ):
         """既有 elite 与新因子信号 r=1 → 返回高相关对（含 factor_name_b/pearson）。"""
@@ -151,7 +160,11 @@ class TestCheckEliteCorrelation:
         assert abs(pairs[0]["pearson"]) >= loop._l2_elite_corr_threshold
 
     def test_negative_high_corr_blocks_by_abs(
-        self, sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_elite_dir,
+        tmp_memory_dir,
         patched_execute,
     ):
         """负高相关（r=-1）同样拦截（按绝对值判断）。"""
@@ -167,7 +180,11 @@ class TestCheckEliteCorrelation:
         assert abs(result["correlations"][0]["pearson"]) >= 0.9
 
     def test_low_corr_returns_none(
-        self, sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_elite_dir,
+        tmp_memory_dir,
         patched_execute,
     ):
         """既有 elite 信号为噪声 → 低相关 → None（放行）。"""
@@ -180,7 +197,11 @@ class TestCheckEliteCorrelation:
         assert result is None
 
     def test_no_elite_returns_none(
-        self, sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_elite_dir,
+        tmp_memory_dir,
         patched_execute,
     ):
         """elite 目录为空/不存在 → None（首次晋升场景放行）。"""
@@ -190,14 +211,19 @@ class TestCheckEliteCorrelation:
         assert loop._check_elite_correlation(factor) is None
 
     def test_skips_seed_correlation_index(
-        self, sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_elite_dir,
+        tmp_memory_dir,
         patched_execute,
     ):
         """_l2_seed_correlation_index.json 索引文件被跳过，不影响真实 elite 检查。"""
         _write_elite(tmp_elite_dir, "fct_elite_b", _CODE_P100, "elite_b")
         # 写入索引文件（无 code，若未跳过会因缺 code 被忽略，此处验证跳过逻辑）
         (tmp_elite_dir / "_l2_seed_correlation_index.json").write_text(
-            json.dumps({"entries": []}), encoding="utf-8",
+            json.dumps({"entries": []}),
+            encoding="utf-8",
         )
         loop = _make_loop(sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir)
         factor = _make_factor("fct_new_b", _CODE_P100)
@@ -208,7 +234,11 @@ class TestCheckEliteCorrelation:
         assert result["correlations"][0]["factor_name_b"] == "elite_b"
 
     def test_capacity_cap_limits_scan(
-        self, sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_elite_dir,
+        tmp_memory_dir,
         patched_execute,
     ):
         """容量护栏: max_scan=2 时最多扫描 2 个既有 elite。"""
@@ -225,7 +255,11 @@ class TestCheckEliteCorrelation:
         assert len(result["correlations"]) <= 2
 
     def test_exec_failure_skipped(
-        self, sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_elite_dir,
+        tmp_memory_dir,
         patched_execute,
     ):
         """既有 elite 执行抛异常被跳过，其余命中仍返回。"""
@@ -241,7 +275,11 @@ class TestCheckEliteCorrelation:
         assert names == ["elite_ok"]  # boom 因子被跳过
 
     def test_new_factor_exec_failure_returns_none(
-        self, sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_elite_dir,
+        tmp_memory_dir,
         patched_execute,
     ):
         """新因子信号执行失败 → None（静默放行，不阻断晋升主流程）。"""
@@ -259,7 +297,11 @@ class TestPromoteToEliteRedundancy:
     """GAP-I206: _promote_to_elite 中 L2 准入去冗余闭环。"""
 
     def test_shadow_high_corr_blocks_promotion(
-        self, sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_elite_dir,
+        tmp_memory_dir,
         patched_execute,
     ):
         """演化因子（shadow_observe=True）高相关 → 拒绝晋升且无 JSON 落盘。"""
@@ -275,7 +317,11 @@ class TestPromoteToEliteRedundancy:
         assert not (tmp_elite_dir / "fct_new_blocked.json").exists()
 
     def test_seed_skips_correlation_check(
-        self, sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_elite_dir,
+        tmp_memory_dir,
         patched_execute,
     ):
         """种子因子（shadow_observe=False）跳过相关性检查 → 即使高相关也正常晋升。"""
@@ -293,7 +339,11 @@ class TestPromoteToEliteRedundancy:
         assert data["factor_id"] == "fct_seed_import"
 
     def test_shadow_low_corr_promotes(
-        self, sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir,
+        self,
+        sample_ohlcv,
+        forward_returns,
+        tmp_elite_dir,
+        tmp_memory_dir,
         patched_execute,
     ):
         """演化因子低相关 → 相关性放行，正常晋升。"""

@@ -11,17 +11,19 @@ scripts/futures_factor_revalidation.py — 期货精英因子全量重验证
     - 控制台: 验证结果摘要
     - 文件:     reports/{date}/futures_factor_revalidation_{date}.md
 """
+
 from __future__ import annotations
 
 import json
 import sys
 import time
 import warnings
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 # 抑制 numpy/scipy 运行时警告
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
@@ -97,8 +99,7 @@ def _compute_current_ic(
             arr = np.where(np.isfinite(arr), arr, np.nan)
             pair = df.reindex(common_dates)
             if len(arr) < len(pair):
-                arr = np.pad(arr, (0, len(pair) - len(arr)),
-                             constant_values=np.nan)[:len(pair)]
+                arr = np.pad(arr, (0, len(pair) - len(arr)), constant_values=np.nan)[: len(pair)]
             closes = pair["close"].values
             fwd_ret = np.zeros(len(closes))
             fwd_ret[:-5] = (closes[5:] - closes[:-5]) / np.maximum(closes[:-5], 1e-10)
@@ -173,12 +174,13 @@ def main(
     if not factors:
         print("[ERROR] 无精英因子")
         return 1
-    print(f"\n[1/4] 加载精英因子: {len(factors)} 个 "
-          f"({sum(1 for f in factors if not f.get('_deprecated', False))} 活跃, "
-          f"{sum(1 for f in factors if f.get('_deprecated', False))} 已降级)")
+    print(
+        f"\n[1/4] 加载精英因子: {len(factors)} 个 "
+        f"({sum(1 for f in factors if not f.get('_deprecated', False))} 活跃, "
+        f"{sum(1 for f in factors if f.get('_deprecated', False))} 已降级)"
+    )
 
     # ── Step 2: 获取全量期货数据 ──
-    import pandas as pd  # noqa: F811
     from fts.data import FTSDataProvider
     from fts.data_futures import FUTURES_SUBSET
 
@@ -189,7 +191,8 @@ def main(
 
     provider = FTSDataProvider()
     panel, common_dates = provider.get_futures_panel(
-        symbols=symbols, days=days,
+        symbols=symbols,
+        days=days,
     )
     print(f"[2/4] 获取数据: {len(panel)} 个品种, {len(common_dates)} 个交易日")
 
@@ -248,30 +251,37 @@ def main(
             DEPRECATED_DIR.mkdir(parents=True, exist_ok=True)
             dest = DEPRECATED_DIR / fp.name
             import shutil
+
             shutil.move(str(fp), str(dest))
-            print(f"      ⬇️ 自动降级: {name} ({fid}) — 当前 IC={curr_ic_abs:.4f}, "
-                  f"历史 IC={hist_ic:.4f}, 降幅={ic_drop:.1%}")
+            print(
+                f"      ⬇️ 自动降级: {name} ({fid}) — 当前 IC={curr_ic_abs:.4f}, "
+                f"历史 IC={hist_ic:.4f}, 降幅={ic_drop:.1%}"
+            )
             is_deprecated = True
             status = "DEPRECATED"
 
-        results.append({
-            "name": name,
-            "factor_id": fid,
-            "status": status,
-            "hist_ic": hist_ic,
-            "curr_ic": curr_ic_abs,
-            "ic_drop": ic_drop,
-            "is_weak": is_weak,
-            "is_dropped": is_dropped,
-            "is_deprecated": is_deprecated,
-        })
+        results.append(
+            {
+                "name": name,
+                "factor_id": fid,
+                "status": status,
+                "hist_ic": hist_ic,
+                "curr_ic": curr_ic_abs,
+                "ic_drop": ic_drop,
+                "is_weak": is_weak,
+                "is_dropped": is_dropped,
+                "is_deprecated": is_deprecated,
+            }
+        )
 
         # 控制台输出（每 5 个一组）
         if i % 5 == 0 or i == len(factors) or status != "OK":
             status_icon = {"OK": "✅", "WARN": "⚠️", "CRITICAL": "🔴", "DEPRECATED": "⬇️"}.get(status, "❓")
-            print(f"      [{i}/{len(factors)}] {status_icon} {name}: "
-                  f"当前 IC={curr_ic_abs:.4f}, 历史 IC={hist_ic:.4f}, "
-                  f"降幅={ic_drop:.1%}")
+            print(
+                f"      [{i}/{len(factors)}] {status_icon} {name}: "
+                f"当前 IC={curr_ic_abs:.4f}, 历史 IC={hist_ic:.4f}, "
+                f"降幅={ic_drop:.1%}"
+            )
 
     # ── Step 4: 输出报告 ──
     elapsed = time.time() - t0
@@ -287,6 +297,7 @@ def main(
     out_path = report_dir / f"futures_factor_revalidation_{today}.md"
 
     lines: list[str] = []
+
     def w(s=""):
         lines.append(s)
 
@@ -313,14 +324,18 @@ def main(
         w("| 因子名称 | 状态 | 历史 IC | 当前 IC | 降幅 | 说明 |")
         w("|----------|------|---------|---------|------|------|")
         for r in abnormal:
-            status_label = {"OK": "正常", "WARN": "警告", "CRITICAL": "降级", "DEPRECATED": "已降级"}.get(r["status"], "?")
+            status_label = {"OK": "正常", "WARN": "警告", "CRITICAL": "降级", "DEPRECATED": "已降级"}.get(
+                r["status"], "?"
+            )
             reasons = []
             if r["is_weak"]:
                 reasons.append(f"IC<{ic_threshold}")
             if r["is_dropped"]:
                 reasons.append(f"降幅>{drop_threshold:.0%}")
             reason_str = "+".join(reasons) if reasons else "—"
-            w(f"| {r['name']} | {status_label} | {r['hist_ic']:.4f} | {r['curr_ic']:.4f} | {r['ic_drop']:.1%} | {reason_str} |")
+            w(
+                f"| {r['name']} | {status_label} | {r['hist_ic']:.4f} | {r['curr_ic']:.4f} | {r['ic_drop']:.1%} | {reason_str} |"
+            )
         w()
 
     # 全部因子 IC 分布
@@ -356,18 +371,18 @@ def main(
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="期货精英因子全量重验证")
-    parser.add_argument("--ic-threshold", type=float, default=0.02,
-                        help="IC 绝对值低于此值视为失效 (default: 0.02)")
-    parser.add_argument("--drop-threshold", type=float, default=0.3,
-                        help="IC 降幅超过此比例标记警告 (default: 0.3)")
+    parser.add_argument("--ic-threshold", type=float, default=0.02, help="IC 绝对值低于此值视为失效 (default: 0.02)")
+    parser.add_argument("--drop-threshold", type=float, default=0.3, help="IC 降幅超过此比例标记警告 (default: 0.3)")
     parser.add_argument("--days", type=int, default=120, help="回看天数")
-    parser.add_argument("--max-symbols", type=int, default=0,
-                        help="最大品种数，0=全量")
+    parser.add_argument("--max-symbols", type=int, default=0, help="最大品种数，0=全量")
     args = parser.parse_args()
-    sys.exit(main(
-        ic_threshold=args.ic_threshold,
-        drop_threshold=args.drop_threshold,
-        days=args.days,
-        max_symbols=args.max_symbols,
-    ))
+    sys.exit(
+        main(
+            ic_threshold=args.ic_threshold,
+            drop_threshold=args.drop_threshold,
+            days=args.days,
+            max_symbols=args.max_symbols,
+        )
+    )

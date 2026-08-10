@@ -30,8 +30,7 @@ from fts.factor_engine.factor_db.schema import DATABASE_PATH, _CREATE_SEED_LINEA
 def check_table_exists(conn: duckdb.DuckDBPyConnection, table_name: str) -> bool:
     """检查表是否存在。"""
     rows = conn.execute(
-        "SELECT 1 FROM information_schema.tables "
-        "WHERE table_schema='main' AND table_name=?",
+        "SELECT 1 FROM information_schema.tables WHERE table_schema='main' AND table_name=?",
         [table_name],
     ).fetchall()
     return len(rows) > 0
@@ -75,29 +74,28 @@ def run_migration(db_path: Path, dry_run: bool = False) -> dict:
                 ).fetchall()
             }
             expected_cols = {
-                "lineage_id", "seed_name", "seed_family", "seed_market",
-                "evolved_factor_id", "evolved_factor_name", "generation",
-                "parent_id", "trace_id", "promoted_at",
+                "lineage_id",
+                "seed_name",
+                "seed_family",
+                "seed_market",
+                "evolved_factor_id",
+                "evolved_factor_name",
+                "generation",
+                "parent_id",
+                "trace_id",
+                "promoted_at",
             }
             missing = expected_cols - cols
             if missing:
-                result["error"] = (
-                    f"seed_lineage 表已存在但缺少字段: {missing}"
-                )
+                result["error"] = f"seed_lineage 表已存在但缺少字段: {missing}"
             else:
-                row_count = conn.execute(
-                    "SELECT COUNT(*) FROM seed_lineage"
-                ).fetchone()[0]
+                row_count = conn.execute("SELECT COUNT(*) FROM seed_lineage").fetchone()[0]
                 result["row_count"] = int(row_count)
                 result["migration_applied"] = False
-                result["message"] = (
-                    f"seed_lineage 表已存在，无需迁移 (行数: {row_count})"
-                )
+                result["message"] = f"seed_lineage 表已存在，无需迁移 (行数: {row_count})"
         else:
             if dry_run:
-                result["message"] = (
-                    "[dry-run] seed_lineage 表不存在，将执行建表 DDL"
-                )
+                result["message"] = "[dry-run] seed_lineage 表不存在，将执行建表 DDL"
                 result["migration_applied"] = False
             else:
                 conn.execute(_CREATE_SEED_LINEAGE)

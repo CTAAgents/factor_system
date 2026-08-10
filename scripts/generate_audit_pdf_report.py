@@ -18,7 +18,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from fpdf import FPDF
 
@@ -205,7 +204,9 @@ def main():
 
     pdf.set_font("msyh", "", 12)
     pdf.set_text_color(51, 51, 51)
-    pdf.cell(0, 8, f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(
+        0, 8, f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", align="C", new_x="LMARGIN", new_y="NEXT"
+    )
     pdf.cell(0, 8, f"审计因子数: {len(df)}", align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(30)
 
@@ -215,7 +216,7 @@ def main():
     pdf.cell(0, 10, "审计概览", align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(10)
 
-    passed = (df["audit_passed"] == True).sum()
+    passed = int(df["audit_passed"].sum())
     failed = len(df) - passed
     oos_passed = df["oos_passed"].sum()
     avg_ic = df["mean_ic"].mean()
@@ -225,7 +226,7 @@ def main():
         ("总因子数", str(len(df))),
         ("通过审计", str(passed)),
         ("未通过审计", str(failed)),
-        ("OOS 通过", f"{oos_passed} ({oos_passed/len(df)*100:.1f}%)"),
+        ("OOS 通过", f"{oos_passed} ({oos_passed / len(df) * 100:.1f}%)"),
         ("平均 IC", f"{avg_ic:.4f}"),
         ("平均跨品种比例", f"{avg_cross:.1%}"),
     ]
@@ -277,10 +278,15 @@ def main():
 
     headers = ["指标", "通过", "未通过", "通过率"]
     data = [
-        ["OOS 样本外验证", str(int(oos_passed)), str(len(df) - int(oos_passed)), f"{oos_passed/len(df)*100:.1f}%"],
-        ["跨品种 IC ≥ 80%", str((df['cross_symbol_ratio'] >= 0.8).sum()), str((df['cross_symbol_ratio'] < 0.8).sum()), f"{(df['cross_symbol_ratio'] >= 0.8).mean()*100:.1f}%"],
+        ["OOS 样本外验证", str(int(oos_passed)), str(len(df) - int(oos_passed)), f"{oos_passed / len(df) * 100:.1f}%"],
+        [
+            "跨品种 IC ≥ 80%",
+            str((df["cross_symbol_ratio"] >= 0.8).sum()),
+            str((df["cross_symbol_ratio"] < 0.8).sum()),
+            f"{(df['cross_symbol_ratio'] >= 0.8).mean() * 100:.1f}%",
+        ],
         ["多重检验校正", str(0), str(len(df)), "0.0%"],
-        ["综合审计", str(passed), str(failed), f"{passed/len(df)*100:.1f}%"],
+        ["综合审计", str(passed), str(failed), f"{passed / len(df) * 100:.1f}%"],
     ]
     pdf.add_table(headers, data)
 
@@ -316,12 +322,16 @@ def main():
     # 家族统计表
     if "family" in df.columns:
         valid = df[df["status"].isin(["passed", "failed"])]
-        family_stats = valid.groupby("family").agg(
-            total=("factor_name", "count"),
-            mean_ic=("mean_ic", lambda x: f"{x.mean():.4f}"),
-            mean_cross=("cross_symbol_ratio", lambda x: f"{x.mean():.1%}"),
-            oos_rate=("oos_passed", lambda x: f"{x.mean():.1%}"),
-        ).reset_index()
+        family_stats = (
+            valid.groupby("family")
+            .agg(
+                total=("factor_name", "count"),
+                mean_ic=("mean_ic", lambda x: f"{x.mean():.4f}"),
+                mean_cross=("cross_symbol_ratio", lambda x: f"{x.mean():.1%}"),
+                oos_rate=("oos_passed", lambda x: f"{x.mean():.1%}"),
+            )
+            .reset_index()
+        )
 
         pdf.chapter_title("3.3 家族指标详情", level=2)
         headers = ["家族", "因子数", "平均 IC", "跨品种比例", "OOS 通过率"]
@@ -338,6 +348,7 @@ def main():
 
     # 统计失败模式
     from collections import Counter
+
     all_failures = []
     for items in df["failed_items"].dropna():
         if pd.notna(items) and str(items).strip():
@@ -349,7 +360,7 @@ def main():
     failure_data = []
     for item, count in failure_counts.most_common():
         severity = "高" if count / len(df) > 0.5 else "中" if count / len(df) > 0.2 else "低"
-        failure_data.append([item, str(count), f"{count/len(df)*100:.1f}%", severity])
+        failure_data.append([item, str(count), f"{count / len(df) * 100:.1f}%", severity])
     pdf.add_table(headers, failure_data)
 
     pdf.chapter_title("4.2 失败模式热力图", level=2)
@@ -391,7 +402,9 @@ def main():
 
         pdf.chapter_title("5.3 结论", level=2)
         pdf.body_text("修复结果表明：")
-        pdf.bullet_point("fut_xsmom、fut_tsmom、fut_composite_momentum、fut_basis_momentum 四个因子反转后 IC 由负转正，改善幅度显著（+0.42 ~ +0.69）")
+        pdf.bullet_point(
+            "fut_xsmom、fut_tsmom、fut_composite_momentum、fut_basis_momentum 四个因子反转后 IC 由负转正，改善幅度显著（+0.42 ~ +0.69）"
+        )
         pdf.bullet_point("fut_short_reversal 原本 IC 为正 (+0.2532)，反转后变差，应保持原版本")
         pdf.bullet_point("结论：Momentum 家族因子的方向设定存在系统性偏差，建议采用反转版本入库")
 
@@ -401,7 +414,9 @@ def main():
         pdf.chapter_title("6. 高潜力因子 WalkForward 优化")
 
         pdf.chapter_title("6.1 优化概述", level=2)
-        pdf.body_text("对 Top 5 高潜力因子进行 WalkForward 走航验证优化，使用自适应配置（500 天数据，1 年训练窗口，3 月步长）。")
+        pdf.body_text(
+            "对 Top 5 高潜力因子进行 WalkForward 走航验证优化，使用自适应配置（500 天数据，1 年训练窗口，3 月步长）。"
+        )
 
         pdf.chapter_title("6.2 WalkForward 结果", level=2)
         headers = ["因子", "家族", "评分", "IC 一致性", "窗口数", "通过"]
@@ -412,16 +427,18 @@ def main():
             consistency = wf.get("ic_consistency", 0) * 100
             n_win = wf.get("n_windows_completed", 0)
             passed = "✅" if wf.get("passed", False) else "❌"
-            wf_data.append([item["factor_name"], item.get("family", ""), f"{score:.1f}", f"{consistency:.0f}%", str(n_win), passed])
+            wf_data.append(
+                [item["factor_name"], item.get("family", ""), f"{score:.1f}", f"{consistency:.0f}%", str(n_win), passed]
+            )
         pdf.add_table(headers, wf_data)
 
         pdf.chapter_title("6.3 OOS 稳定性对比", level=2)
-        wf_chart = charts_dir / "walkforward_oos_comparison_*.png"
+        charts_dir / "walkforward_oos_comparison_*.png"
         wf_charts = sorted(charts_dir.glob("walkforward_oos_comparison_*.png"))
         if wf_charts:
             pdf.add_chart(str(wf_charts[-1]), caption="图 10: WalkForward 综合评分与 IC 一致性对比")
 
-        ic_timeline = charts_dir / "walkforward_ic_timeline_*.png"
+        charts_dir / "walkforward_ic_timeline_*.png"
         ic_timelines = sorted(charts_dir.glob("walkforward_ic_timeline_*.png"))
         if ic_timelines:
             pdf.add_chart(str(ic_timelines[-1]), caption="图 11: 各因子 WalkForward 窗口 IC 时序变化")
@@ -440,13 +457,15 @@ def main():
             if sens and "results" in sens:
                 current_params = item.get("recommended_params", {})
                 best = max(sens["results"], key=lambda x: x["mean_ic"])
-                sens_data.append([
-                    factor_name,
-                    str(current_params),
-                    f"{sens['param_name']}={best['param_value']}",
-                    f"{best['mean_ic']:.4f}",
-                    f"→ 最优" if best["mean_ic"] > 0 else "无改善"
-                ])
+                sens_data.append(
+                    [
+                        factor_name,
+                        str(current_params),
+                        f"{sens['param_name']}={best['param_value']}",
+                        f"{best['mean_ic']:.4f}",
+                        "→ 最优" if best["mean_ic"] > 0 else "无改善",
+                    ]
+                )
         if sens_data:
             pdf.add_table(headers, sens_data)
 
@@ -457,7 +476,9 @@ def main():
     pdf.chapter_title("7.1 短期优化 (1-2 周)", level=2)
     pdf.body_text("优先级最高的行动项：")
     pdf.bullet_point("【紧急】修复 Momentum 家族 4 个因子的方向反转问题，重新入库")
-    pdf.bullet_point("【高优】对 fut_bias、fut_hf_trade_imbalance、fut_option_pcr 三个通过 WalkForward 的因子进行参数锁定")
+    pdf.bullet_point(
+        "【高优】对 fut_bias、fut_hf_trade_imbalance、fut_option_pcr 三个通过 WalkForward 的因子进行参数锁定"
+    )
     pdf.bullet_point("【高优】为 long_term_reversal、fut_short_reversal 添加市场状态过滤器（趋势/震荡识别）")
     pdf.bullet_point("【中优】提升因子 IC 阈值要求（从 0.02 提升到 0.05+），降低多重检验惩罚")
 
@@ -493,15 +514,17 @@ def main():
     top_data = []
     for i, (_, row) in enumerate(top20.iterrows(), 1):
         status = "✅" if row["audit_passed"] else "⚠️" if row["mean_ic"] > 0.05 else "❌"
-        top_data.append([
-            str(i),
-            row["factor_name"],
-            row.get("family", ""),
-            f"{row['mean_ic']:.4f}",
-            f"{row['cross_symbol_ratio']:.1%}",
-            "通过" if row["oos_passed"] else "未通过",
-            status,
-        ])
+        top_data.append(
+            [
+                str(i),
+                row["factor_name"],
+                row.get("family", ""),
+                f"{row['mean_ic']:.4f}",
+                f"{row['cross_symbol_ratio']:.1%}",
+                "通过" if row["oos_passed"] else "未通过",
+                status,
+            ]
+        )
     pdf.add_table(headers, top_data)
 
     # ─── 版权 ──────────────────────────────────────
@@ -511,7 +534,9 @@ def main():
     pdf.ln(5)
     pdf.set_font("msyh", "", 9)
     pdf.set_text_color(128, 128, 128)
-    pdf.cell(0, 5, f"Factor System Audit Report | Generated by FTS v1.0 | {datetime.now().strftime('%Y-%m-%d')}", align="C")
+    pdf.cell(
+        0, 5, f"Factor System Audit Report | Generated by FTS v1.0 | {datetime.now().strftime('%Y-%m-%d')}", align="C"
+    )
 
     # 3. 保存 PDF
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

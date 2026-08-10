@@ -21,6 +21,7 @@ scripts/futures_strategy.py — 期货因子组合策略信号生成
     - 文件:     reports/{date}/futures_strategy_{date}.md
     - 文件:     reports/{date}/futures_strategy_{date}.json
 """
+
 from __future__ import annotations
 
 import json
@@ -46,6 +47,7 @@ DB_PATH = PROJECT_ROOT / "data/fts_history.duckdb"
 
 
 # ─── 1. 加载 Elite 因子（去重）────────────────────────────
+
 
 def load_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]]:
     """加载期货顶级 Elite 因子，按 name 去重，保留 IC>threshold 的顶级因子。"""
@@ -74,14 +76,16 @@ def load_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]]:
     factors = []
     for name, rec in records.items():
         if abs(rec["ic"]) >= ic_threshold:
-            factors.append({
-                "name": name,
-                "ic": rec["ic"],
-                "sharpe": rec["sharpe"],
-                "t_stat": rec["t_stat"],
-                "max_dd": rec["max_dd"],
-                "data": rec["data"],
-            })
+            factors.append(
+                {
+                    "name": name,
+                    "ic": rec["ic"],
+                    "sharpe": rec["sharpe"],
+                    "t_stat": rec["t_stat"],
+                    "max_dd": rec["max_dd"],
+                    "data": rec["data"],
+                }
+            )
 
     # 按 IC 降序排列
     factors.sort(key=lambda f: -abs(f["ic"]))
@@ -89,6 +93,7 @@ def load_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]]:
 
 
 # ─── 2. 加载期货数据 ──────────────────────────────────────
+
 
 def load_futures_data(
     min_periods: int = 252,
@@ -105,7 +110,8 @@ def load_futures_data(
     con = duckdb.connect(str(DB_PATH))
 
     symbols = [
-        r[0] for r in con.execute(
+        r[0]
+        for r in con.execute(
             "SELECT DISTINCT symbol FROM kline_cache WHERE symbol NOT IN ('IC','IF','IH') ORDER BY symbol"
         ).fetchall()
     ]
@@ -149,6 +155,7 @@ def load_futures_data(
 
 
 # ─── 3. 信号计算 ──────────────────────────────────────────
+
 
 def compute_signal_matrix(
     panel: dict[str, pd.DataFrame],
@@ -244,6 +251,7 @@ def compute_direction_correction(
 
 # ─── 4. 策略合成 ──────────────────────────────────────────
 
+
 def compute_composite_scores(
     signal_matrix: dict[str, dict[str, np.ndarray]],
     factor_sign_flips: dict[str, float],
@@ -302,6 +310,7 @@ def compute_composite_scores(
 
 # ─── 5. 主函数 ────────────────────────────────────────────
 
+
 def main(mode: str = "ic_weight", top_n: int = 10) -> int:
     t0 = time.time()
     today = date.today().isoformat()
@@ -322,7 +331,7 @@ def main(mode: str = "ic_weight", top_n: int = 10) -> int:
         return 1
 
     # ── Step 2: 加载期货数据 ──
-    print(f"\n[2/5] 加载期货数据...")
+    print("\n[2/5] 加载期货数据...")
     panel, common_dates = load_futures_data()
     print(f"      品种: {len(panel)} 个, 交易日: {len(common_dates)} 天")
     print(f"      日期范围: {common_dates[0]} ~ {common_dates[-1]}")
@@ -334,7 +343,7 @@ def main(mode: str = "ic_weight", top_n: int = 10) -> int:
     print(f"      有效品种: {n_valid_symbols} 个")
 
     # ── Step 4: 方向校正 + 合成 ──
-    print(f"\n[4/5] 方向校正 (截面 IC 法)...")
+    print("\n[4/5] 方向校正 (截面 IC 法)...")
     common_dates_str = [d.strftime("%Y-%m-%d") for d in common_dates]
     factor_sign_flips = compute_direction_correction(signal_matrix, panel, common_dates_str)
     n_flipped = sum(1 for v in factor_sign_flips.values() if v < 0)
@@ -342,7 +351,10 @@ def main(mode: str = "ic_weight", top_n: int = 10) -> int:
 
     print(f"\n[5/5] 合成综合得分 (mode={mode})...")
     sym_scores, sym_details = compute_composite_scores(
-        signal_matrix, factor_sign_flips, factors, mode=mode,
+        signal_matrix,
+        factor_sign_flips,
+        factors,
+        mode=mode,
     )
 
     elapsed = time.time() - t0
@@ -353,10 +365,10 @@ def main(mode: str = "ic_weight", top_n: int = 10) -> int:
 
     # === 策略信号 ===
     print(f"\n{'=' * 60}")
-    print(f"  📊 期货多空信号排名")
+    print("  📊 期货多空信号排名")
     print(f"{'=' * 60}")
     print(f"{'排名':>4s} {'品种':>8s} {'综合得分':>10s} {'方向':>6s} {'最新价':>10s} {'Top 因子':>32s}")
-    print(f"{'-'*4} {'-'*8} {'-'*10} {'-'*6} {'-'*10} {'-'*32}")
+    print(f"{'-' * 4} {'-' * 8} {'-' * 10} {'-' * 6} {'-' * 10} {'-' * 32}")
 
     long_count = 0
     short_count = 0
@@ -381,7 +393,7 @@ def main(mode: str = "ic_weight", top_n: int = 10) -> int:
 
     # 底部信号
     print(f"\n{'─' * 60}")
-    print(f"  底部信号 Bottom 5（最强空头信号）")
+    print("  底部信号 Bottom 5（最强空头信号）")
     print(f"{'─' * 60}")
     print(f"{'排名':>4s} {'品种':>8s} {'综合得分':>10s} {'方向':>6s} {'最新价':>10s}")
     for i, (sym, score) in enumerate(ranked[-5:], len(ranked) - 4):
@@ -393,7 +405,7 @@ def main(mode: str = "ic_weight", top_n: int = 10) -> int:
 
     # ── 策略统计 ──
     print(f"\n{'=' * 60}")
-    print(f"  策略统计")
+    print("  策略统计")
     print(f"{'=' * 60}")
     print(f"  因子池:     {len(factors)} 个")
     print(f"  覆盖品种:   {len(sym_scores)} 个")
@@ -426,6 +438,7 @@ def main(mode: str = "ic_weight", top_n: int = 10) -> int:
     out_md = report_dir / f"futures_strategy_{today}.md"
 
     lines: list[str] = []
+
     def w(s=""):
         lines.append(s)
 
@@ -513,7 +526,7 @@ def main(mode: str = "ic_weight", top_n: int = 10) -> int:
     w()
 
     w("---")
-    w(f"*报告由 FTS 期货因子组合策略自动生成 | FTS v1.6.0*")
+    w("*报告由 FTS 期货因子组合策略自动生成 | FTS v1.6.0*")
 
     out_md.write_text("\n".join(lines), encoding="utf-8")
     print(f"\n[OK] 报告已保存: {out_md}")
@@ -527,14 +540,16 @@ def main(mode: str = "ic_weight", top_n: int = 10) -> int:
         direction = "long" if score > 0 else "short"
         details = sym_details.get(sym, {})
         top3 = sorted(details.items(), key=lambda x: -abs(x[1]))[:3]
-        signals_out.append({
-            "rank": i,
-            "symbol": sym,
-            "composite_score": round(score, 4),
-            "direction": direction,
-            "price": round(price, 2),
-            "top_factors": [{"name": n, "value": round(v, 4)} for n, v in top3],
-        })
+        signals_out.append(
+            {
+                "rank": i,
+                "symbol": sym,
+                "composite_score": round(score, 4),
+                "direction": direction,
+                "price": round(price, 2),
+                "top_factors": [{"name": n, "value": round(v, 4)} for n, v in top3],
+            }
+        )
 
     json_output = {
         "date": today,
@@ -561,10 +576,11 @@ def main(mode: str = "ic_weight", top_n: int = 10) -> int:
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="期货因子组合策略信号生成")
-    parser.add_argument("--mode", default="ic_weight",
-                        choices=["ic_weight", "sharpe_weight", "equal_weight"],
-                        help="合成模式")
+    parser.add_argument(
+        "--mode", default="ic_weight", choices=["ic_weight", "sharpe_weight", "equal_weight"], help="合成模式"
+    )
     parser.add_argument("--top-n", type=int, default=10, help="高亮 Top N 品种")
     args = parser.parse_args()
     sys.exit(main(mode=args.mode, top_n=args.top_n))

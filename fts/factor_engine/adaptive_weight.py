@@ -22,7 +22,7 @@ fts.factor_engine.adaptive_weight — 自适应动态权重（A.3）
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -64,15 +64,17 @@ class AdaptiveWeightManager:
         """
         from .portfolio_loop import regime_adaptive_weight_adjustment
 
-        return regime_adaptive_weight_adjustment(
-            signals, regime, factors or [], min_weight=min_weight
+        return cast(
+            list[dict[str, Any]],
+            regime_adaptive_weight_adjustment(signals, regime, factors or [], min_weight=min_weight),
         )
 
-    def compute_weights(self,
-                        factors: list[dict[str, Any]],
-                        regime: dict[str, Any],
-                        base_weights: dict[str, float] | None = None,
-                        ) -> dict[str, float]:
+    def compute_weights(
+        self,
+        factors: list[dict[str, Any]],
+        regime: dict[str, Any],
+        base_weights: dict[str, float] | None = None,
+    ) -> dict[str, float]:
         """按 Regime 计算因子权重（设计风格接口）。
 
         将因子信号构造为默认等权，调用 adjust 后提取权重。
@@ -91,9 +93,11 @@ class AdaptiveWeightManager:
         if base_weights is None:
             base_weights = {fid: 1.0 / len(fids) for fid in fids}
         signals = [
-            {"factor_id": fid, "weight": base_weights.get(fid, 0.0),
-             "decay_6m": next((f.get("decay_6m", 0.0) for f in factors
-                               if f.get("factor_id") == fid), 0.0)}
+            {
+                "factor_id": fid,
+                "weight": base_weights.get(fid, 0.0),
+                "decay_6m": next((f.get("decay_6m", 0.0) for f in factors if f.get("factor_id") == fid), 0.0),
+            }
             for fid in fids
         ]
         adjusted = self.adjust(signals, regime, factors)
@@ -131,9 +135,9 @@ class RegimeSmoother:
         self._current_regime: Optional[str] = None
         self._regime_since: Optional[Any] = None  # datetime
 
-    def should_apply(self, detected_regime: str,
-                     current_weights: dict[str, float],
-                     new_weights: dict[str, float]) -> dict[str, float]:
+    def should_apply(
+        self, detected_regime: str, current_weights: dict[str, float], new_weights: dict[str, float]
+    ) -> dict[str, float]:
         """计算平滑后的权重。
 
         Args:

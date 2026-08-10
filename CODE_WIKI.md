@@ -694,7 +694,7 @@ L3 中默认启用聚类（`enable_clustering=True`），PCA 默认关闭（`ena
 | `get_dominant_contracts(symbols)` | 主力合约查询（contract_kline ROW_NUMBER 按 date/volume） |
 | `get_realtime_prices(symbols)` | 实时价（TQ-Local 主路径 + AKShare 降级） |
 
-品种清单：`FUTURES_SUBSET`（82）、`FUTURES_CORE_SUBSET`（25）、`FUTURES_HOLDOUT`（6 盲测）、`FUTURES_SECTOR_MAP`（12 产业链）、`FUTURES_STRATIFIED_SUBSET`（分层训练集）。
+品种清单：`FUTURES_SUBSET`（82）、`FUTURES_CORE_SUBSET`（25）、`FUTURES_HOLDOUT`（15 盲测，GAP-055 按产业链分层）、`FUTURES_SECTOR_MAP`（12 产业链）、`FUTURES_STRATIFIED_SUBSET`（分层训练集）。
 
 **VWAP 逻辑**: 有成交额 `amount/volume`；AKShare 有 settle `(H+L+C+settle)/4`；DuckDB 无 settle `(H+L+C)/3`。
 

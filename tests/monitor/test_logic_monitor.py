@@ -14,7 +14,6 @@ import pytest
 from fts.factor_engine.contracts import FactorProgram
 from fts.factor_engine.factor_program import create_factor_program
 from fts.monitor.logic_monitor import (
-    ContractSwitchResult,
     DriftCheckResult,
     ExtremePredictionResult,
     LogicMonitor,
@@ -35,14 +34,16 @@ def sample_data() -> pd.DataFrame:
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
     volume = np.random.randint(1000, 10000, n).astype(float)
-    return pd.DataFrame({
-        "date": dates,
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.3,
-        "low": close - np.abs(np.random.randn(n)) * 0.3,
-        "close": close,
-        "volume": volume,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.3,
+            "low": close - np.abs(np.random.randn(n)) * 0.3,
+            "close": close,
+            "volume": volume,
+        }
+    )
 
 
 @pytest.fixture
@@ -70,7 +71,13 @@ def factor_program(data, params):
             "frequency": "daily",
         },
         source="seed",
-        economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3, "narrative": "momentum test"},
+        economic_logic={
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "momentum test",
+        },
     )
 
 
@@ -94,7 +101,13 @@ def factor_program(data, params):
             "frequency": "daily",
         },
         source="seed",
-        economic_logic={"theory": 1, "behavioral": 1, "microstructure": 1, "institutional": 1, "narrative": "random noise test"},
+        economic_logic={
+            "theory": 1,
+            "behavioral": 1,
+            "microstructure": 1,
+            "institutional": 1,
+            "narrative": "random noise test",
+        },
     )
 
 
@@ -224,12 +237,12 @@ class TestExtremePrediction:
 
     def test_extreme_factor_triggers_alarm(self):
         """极端信号比重高的因子应触发报警。"""
-        code = '''
+        code = """
 def factor_program(data, params):
     import numpy as np
     np.random.seed(42)
     return np.random.randn(len(data["close"])) * 10.0
-'''
+"""
         factor = create_factor_program(
             name="extreme",
             code=code,
@@ -240,12 +253,20 @@ def factor_program(data, params):
                 "frequency": "daily",
             },
             source="seed",
-            economic_logic={"theory": 1, "behavioral": 1, "microstructure": 1, "institutional": 1, "narrative": "extreme"},
+            economic_logic={
+                "theory": 1,
+                "behavioral": 1,
+                "microstructure": 1,
+                "institutional": 1,
+                "narrative": "extreme",
+            },
         )
-        data = pd.DataFrame({
-            "date": pd.date_range("2024-01-01", periods=100, freq="D"),
-            "close": np.ones(100),
-        })
+        data = pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-01", periods=100, freq="D"),
+                "close": np.ones(100),
+            }
+        )
 
         monitor = LogicMonitor(extreme_ratio_threshold=0.01)
         result = monitor.run(factor, data)
@@ -271,26 +292,37 @@ class TestContractSwitch:
         close = 100 + np.arange(n) * 0.1
         dates = pd.date_range("2024-01-01", periods=n, freq="D")
 
-        factor = FactorProgram(
+        FactorProgram(
             factor_id="fct_switch_test",
             name="switch_test",
             code="",
             params={},
             source="seed",
-            economic_logic={"theory": 1, "behavioral": 1, "microstructure": 1, "institutional": 1, "narrative": "switch test"},
+            economic_logic={
+                "theory": 1,
+                "behavioral": 1,
+                "microstructure": 1,
+                "institutional": 1,
+                "narrative": "switch test",
+            },
         )
 
         # 直接测试 _check_contract_switch 方法
-        data = pd.DataFrame({
-            "date": dates,
-            "close": close,
-        })
+        data = pd.DataFrame(
+            {
+                "date": dates,
+                "close": close,
+            }
+        )
 
         switch_date = dates[mid].strftime("%Y-%m-%d")
 
         monitor = LogicMonitor(contract_switch_sigma=2.0)
         result = monitor._check_contract_switch(
-            "test", data, signals, [switch_date],
+            "test",
+            data,
+            signals,
+            [switch_date],
         )
 
         assert result is not None

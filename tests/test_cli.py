@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, PropertyMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
@@ -21,18 +21,16 @@ from fts.cli import (
     _cmd_factor_show,
     _cmd_factor_stats,
     _cmd_factor_lineage,
-    _cmd_evolution_run,
-    _cmd_meta_loop_run,
-    _cmd_portfolio_run,
     build_parser,
     main,
 )
-from fts.monitor import LoopStatusReport, SystemStatusReport
+from fts.monitor import SystemStatusReport
 
 
 # ═══════════════════════════════════════════════════════════
 # build_parser()
 # ═══════════════════════════════════════════════════════════
+
 
 class TestBuildParser:
     """测试 CLI parser 构建。"""
@@ -43,9 +41,18 @@ class TestBuildParser:
         assert parser is not None
         assert parser.prog == "fts"
 
-    @pytest.mark.parametrize("subcmd", [
-        "version", "monitor", "evolution", "meta-loop", "portfolio", "factor", "scheduler",
-    ])
+    @pytest.mark.parametrize(
+        "subcmd",
+        [
+            "version",
+            "monitor",
+            "evolution",
+            "meta-loop",
+            "portfolio",
+            "factor",
+            "scheduler",
+        ],
+    )
     def test_subcommands_exist(self, subcmd):
         """所有子命令都存在。"""
         parser = build_parser()
@@ -112,6 +119,7 @@ class TestBuildParser:
 # ═══════════════════════════════════════════════════════════
 # main()
 # ═══════════════════════════════════════════════════════════
+
 
 class TestMain:
     """测试 CLI 主入口。"""
@@ -200,13 +208,19 @@ class TestMain:
     @patch("fts.cli.generate_trace_id", return_value="l2_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
     def test_evolution_run_default_max_gen(
-        self, mock_run_id, mock_trace_id, mock_evoloop, capsys,
+        self,
+        mock_run_id,
+        mock_trace_id,
+        mock_evoloop,
+        capsys,
     ):
         """evolution run 默认 max_generations=10。"""
         mock_loop = mock_evoloop.return_value
         mock_loop.run.return_value = MagicMock(
-            status="completed", generations_completed=1,
-            elite_factor_ids=[], circuit_breaker_reason="",
+            status="completed",
+            generations_completed=1,
+            elite_factor_ids=[],
+            circuit_breaker_reason="",
         )
         rc = main(["evolution", "run"])
         assert rc == 0
@@ -221,13 +235,20 @@ class TestMain:
     @patch("fts.cli.generate_trace_id", return_value="l2_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
     def test_evolution_run_prints_session_id(
-        self, mock_run_id, mock_trace_id, mock_session, mock_evoloop, capsys,
+        self,
+        mock_run_id,
+        mock_trace_id,
+        mock_session,
+        mock_evoloop,
+        capsys,
     ):
         """evolution run 启动日志输出 session_id。"""
         mock_loop = mock_evoloop.return_value
         mock_loop.run.return_value = MagicMock(
-            status="completed", generations_completed=1,
-            elite_factor_ids=[], circuit_breaker_reason="",
+            status="completed",
+            generations_completed=1,
+            elite_factor_ids=[],
+            circuit_breaker_reason="",
         )
         rc = main(["evolution", "run"])
         assert rc == 0
@@ -238,13 +259,19 @@ class TestMain:
     @patch("fts.cli.generate_trace_id", return_value="l2_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
     def test_evolution_run_custom_max_gen(
-        self, mock_run_id, mock_trace_id, mock_evoloop, capsys,
+        self,
+        mock_run_id,
+        mock_trace_id,
+        mock_evoloop,
+        capsys,
     ):
         """evolution run --max-generations 20 使用自定义值。"""
         mock_loop = mock_evoloop.return_value
         mock_loop.run.return_value = MagicMock(
-            status="completed", generations_completed=1,
-            elite_factor_ids=[], circuit_breaker_reason="",
+            status="completed",
+            generations_completed=1,
+            elite_factor_ids=[],
+            circuit_breaker_reason="",
         )
         rc = main(["evolution", "run", "--max-generations", "20"])
         assert rc == 0
@@ -255,12 +282,17 @@ class TestMain:
     @patch("fts.cli.generate_trace_id", return_value="l1_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
     def test_meta_loop_run(
-        self, mock_run_id, mock_trace_id, mock_metal, capsys,
+        self,
+        mock_run_id,
+        mock_trace_id,
+        mock_metal,
+        capsys,
     ):
         """meta-loop run 打印 trace_id 和 run_id。"""
         mock_loop = mock_metal.return_value
         mock_loop.run.return_value = MagicMock(
-            status="completed", injected_candidate_ids=[],
+            status="completed",
+            injected_candidate_ids=[],
         )
         rc = main(["meta-loop", "run"])
         assert rc == 0
@@ -274,12 +306,18 @@ class TestMain:
     @patch("fts.cli.generate_trace_id", return_value="l3_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
     def test_portfolio_run(
-        self, mock_run_id, mock_trace_id, mock_port, mock_signal, capsys,
+        self,
+        mock_run_id,
+        mock_trace_id,
+        mock_port,
+        mock_signal,
+        capsys,
     ):
         """portfolio run 打印 trace_id 和 run_id。"""
         mock_loop = mock_port.return_value
         mock_loop.run.return_value = MagicMock(
-            status="completed", n_factors_retained=0,
+            status="completed",
+            n_factors_retained=0,
             combo_sharpe=0.0,
         )
         rc = main(["portfolio", "run"])
@@ -346,6 +384,7 @@ class TestMain:
 # _cmd_factor_list()
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCmdFactorList:
     """测试 _cmd_factor_list。"""
 
@@ -374,11 +413,13 @@ class TestCmdFactorList:
     def test_with_factors(self, mock_glob, mock_exists, capsys):
         """elite 目录有因子文件时正确列出。"""
         # 创建模拟的 Path 对象
-        factor_data = json.dumps({
-            "factor_id": "RB_001",
-            "name": "Reversal Beta",
-            "generation": 5,
-        })
+        factor_data = json.dumps(
+            {
+                "factor_id": "RB_001",
+                "name": "Reversal Beta",
+                "generation": 5,
+            }
+        )
         mock_file = MagicMock(spec=Path)
         mock_file.stem = "RB_001"
         mock_file.name = "RB_001.json"
@@ -407,16 +448,28 @@ class TestCmdFactorList:
 
         elite_dir = tmp_path / "elite"
         elite_dir.mkdir()
-        (elite_dir / "CAND_001.json").write_text(json.dumps({
-            "factor_id": "CAND_001",
-            "name": "candidate_factor",
-            "generation": 0,
-        }), encoding="utf-8")
+        (elite_dir / "CAND_001.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "CAND_001",
+                    "name": "candidate_factor",
+                    "generation": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
 
         args = Namespace(
-            elite_dir=str(elite_dir), market="futures",
-            family=None, min_ic=None, min_sharpe=None, diverse=False,
-            total_count=10, max_per_family=None, limit=50, json=False,
+            elite_dir=str(elite_dir),
+            market="futures",
+            family=None,
+            min_ic=None,
+            min_sharpe=None,
+            diverse=False,
+            total_count=10,
+            max_per_family=None,
+            limit=50,
+            json=False,
         )
         rc = _cmd_factor_list(args)
         assert rc == 0
@@ -453,6 +506,7 @@ class TestCmdFactorList:
     def test_default_elite_dir_none(self, capsys, tmp_path):
         """elite_dir 为 None 时使用默认路径。"""
         from unittest.mock import patch
+
         fake_elite = tmp_path / "elite"
         fake_elite.mkdir(parents=True)
         args = MagicMock()
@@ -469,6 +523,7 @@ class TestCmdFactorList:
 # ═══════════════════════════════════════════════════════════
 # _cmd_factor_show()
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCmdFactorShow:
     """测试 _cmd_factor_show。"""
@@ -533,6 +588,7 @@ class TestCmdFactorShow:
 # _cmd_version 间接测试（通过 main）
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCmdVersion:
     """测试版本命令（通过 main）。"""
 
@@ -545,7 +601,6 @@ class TestCmdVersion:
         captured = capsys.readouterr()
         assert "FTS version: 0.1.0" in captured.out
         assert "Factor engine version: 8.10.0" in captured.out
-
 
     @patch("fts.cli.FTS_VERSION", "0.1.0")
     @patch("fts.cli.EVOLUTION_VERSION", "8.10.0")
@@ -563,10 +618,12 @@ class TestMainGuard:
 
     def test_main_guard_via_subprocess(self):
         """通过子进程执行 python -m fts.cli --version 触发 __main__ 守护线。"""
-        import subprocess, sys
+        import subprocess
+
         result = subprocess.run(
             [sys.executable, "-m", "fts.cli", "--version"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
             cwd="d:\\Programs\\factor_system",
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
@@ -576,6 +633,7 @@ class TestMainGuard:
 # ═══════════════════════════════════════════════════════════
 # _cmd_evolution_run — 横截面(csi300)模式
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCmdEvolutionRunCrossSection:
     """测试 _cmd_evolution_run 横截面(csi300)模式（lines 142-158）。"""
@@ -588,8 +646,15 @@ class TestCmdEvolutionRunCrossSection:
     @patch("fts.cli.generate_trace_id", return_value="l2_cs_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_cs_20260718T000000")
     def test_csi300_mode(
-        self, mock_run_id, mock_trace_id, mock_prep_cs,
-        mock_llm, mock_seed, mock_verifier, mock_evoloop, capsys,
+        self,
+        mock_run_id,
+        mock_trace_id,
+        mock_prep_cs,
+        mock_llm,
+        mock_seed,
+        mock_verifier,
+        mock_evoloop,
+        capsys,
     ):
         """--universe csi300 走横截面代码路径。"""
         panel = {"000001": pd.DataFrame({"close": range(10)})}
@@ -599,8 +664,10 @@ class TestCmdEvolutionRunCrossSection:
 
         mock_loop = mock_evoloop.return_value
         mock_loop.run.return_value = MagicMock(
-            status="completed", generations_completed=1,
-            elite_factor_ids=[], circuit_breaker_reason="",
+            status="completed",
+            generations_completed=1,
+            elite_factor_ids=[],
+            circuit_breaker_reason="",
         )
 
         rc = main(["evolution", "run", "--universe", "csi300"])
@@ -621,7 +688,10 @@ class TestCmdEvolutionRunCrossSection:
     @patch("fts.cli.FTSDataProvider")
     @patch("fts.cli.EvolutionLoop")
     def test_csi300_real_prepare_path(
-        self, mock_evoloop, mock_provider, capsys,
+        self,
+        mock_evoloop,
+        mock_provider,
+        capsys,
     ):
         """不 mock _prepare_cross_section_data，验证其实际执行路径覆盖 lines 99-106。"""
         # 模拟数据提供者返回合理的面板数据
@@ -634,8 +704,10 @@ class TestCmdEvolutionRunCrossSection:
 
         mock_loop = mock_evoloop.return_value
         mock_loop.run.return_value = MagicMock(
-            status="completed", generations_completed=1,
-            elite_factor_ids=[], circuit_breaker_reason="",
+            status="completed",
+            generations_completed=1,
+            elite_factor_ids=[],
+            circuit_breaker_reason="",
         )
 
         rc = main(["evolution", "run", "--universe", "csi300"])
@@ -647,6 +719,7 @@ class TestCmdEvolutionRunCrossSection:
 # ═══════════════════════════════════════════════════════════
 # _cmd_evolution_run — 错误处理
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCmdEvolutionRunErrors:
     """测试 _cmd_evolution_run 异常处理路径（lines 205/207-209）。"""
@@ -674,26 +747,39 @@ class TestCmdEvolutionRunErrors:
 # _cmd_factor_list / _cmd_backtest_batch — 目录直读修复
 # ═══════════════════════════════════════════════════════════
 
+
 def _write_factor_snapshot(elite_dir: Path, factor_id: str, name: str, ic: float = 0.1234, sharpe: float = 2.5) -> None:
     """写入一份完整因子快照（含嵌套 evaluation）。"""
     elite_dir.mkdir(parents=True, exist_ok=True)
-    (elite_dir / f"{factor_id}.json").write_text(json.dumps({
-        "factor_id": factor_id,
-        "name": name,
-        "code": "close - close.shift(5)",
-        "params": {},
-        "signature": {"input_fields": ["close"], "output_type": "signal"},
-        "economic_logic": {"narrative": "test", "theory": 4, "behavioral": 3, "microstructure": 2, "institutional": 1},
-        "source": "seed",
-        "parent_id": None,
-        "generation": 0,
-        "trace_id": "trace-test",
-        "market": "futures",
-        "family": "momentum",
-        "evaluation": {
-            "level_1_backtest": {"ic": ic, "sharpe": sharpe, "max_drawdown": 0.05},
-        },
-    }, ensure_ascii=False), encoding="utf-8")
+    (elite_dir / f"{factor_id}.json").write_text(
+        json.dumps(
+            {
+                "factor_id": factor_id,
+                "name": name,
+                "code": "close - close.shift(5)",
+                "params": {},
+                "signature": {"input_fields": ["close"], "output_type": "signal"},
+                "economic_logic": {
+                    "narrative": "test",
+                    "theory": 4,
+                    "behavioral": 3,
+                    "microstructure": 2,
+                    "institutional": 1,
+                },
+                "source": "seed",
+                "parent_id": None,
+                "generation": 0,
+                "trace_id": "trace-test",
+                "market": "futures",
+                "family": "momentum",
+                "evaluation": {
+                    "level_1_backtest": {"ic": ic, "sharpe": sharpe, "max_drawdown": 0.05},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 class TestFactorListDirectoryRead:
@@ -704,13 +790,23 @@ class TestFactorListDirectoryRead:
         elite_dir = tmp_path / "elite"
         elite_dir.mkdir(parents=True, exist_ok=True)
         (elite_dir / "_l2_seed_correlation_index.json").write_text(
-            json.dumps({"pairs": []}), encoding="utf-8",
+            json.dumps({"pairs": []}),
+            encoding="utf-8",
         )
         _write_factor_snapshot(elite_dir, "fct_abc12345", "test_factor")
         from argparse import Namespace
-        args = Namespace(elite_dir=str(elite_dir), market="futures", family=None,
-                         min_ic=None, min_sharpe=None, diverse=False, total_count=10,
-                         limit=50, json=False)
+
+        args = Namespace(
+            elite_dir=str(elite_dir),
+            market="futures",
+            family=None,
+            min_ic=None,
+            min_sharpe=None,
+            diverse=False,
+            total_count=10,
+            limit=50,
+            json=False,
+        )
         rc = _cmd_factor_list(args)
         assert rc == 0
         out = capsys.readouterr().out
@@ -723,9 +819,18 @@ class TestFactorListDirectoryRead:
         elite_dir = tmp_path / "elite"
         _write_factor_snapshot(elite_dir, "fct_abc12345", "test_factor", ic=0.1234, sharpe=2.5)
         from argparse import Namespace
-        args = Namespace(elite_dir=str(elite_dir), market="futures", family=None,
-                         min_ic=None, min_sharpe=None, diverse=False, total_count=10,
-                         limit=50, json=False)
+
+        args = Namespace(
+            elite_dir=str(elite_dir),
+            market="futures",
+            family=None,
+            min_ic=None,
+            min_sharpe=None,
+            diverse=False,
+            total_count=10,
+            limit=50,
+            json=False,
+        )
         rc = _cmd_factor_list(args)
         assert rc == 0
         out = capsys.readouterr().out
@@ -740,13 +845,17 @@ class TestBacktestBatchDirectoryRead:
     @patch("fts.cli.get_config")
     @patch("fts.cli._prepare_data", return_value=(pd.DataFrame(), None))
     @patch("fts.factor_engine.backtest_pipeline.BacktestPipeline")
-    def test_backtest_batch_skips_underscore_index_file(self, mock_pipeline_cls, mock_prep, mock_config, tmp_path, capsys):
+    def test_backtest_batch_skips_underscore_index_file(
+        self, mock_pipeline_cls, mock_prep, mock_config, tmp_path, capsys
+    ):
         """_l2_seed_correlation_index.json 不进入 screener。"""
         from argparse import Namespace
+
         elite_dir = tmp_path / "elite"
         elite_dir.mkdir(parents=True, exist_ok=True)
         (elite_dir / "_l2_seed_correlation_index.json").write_text(
-            json.dumps({"pairs": []}), encoding="utf-8",
+            json.dumps({"pairs": []}),
+            encoding="utf-8",
         )
         _write_factor_snapshot(elite_dir, "fct_abc12345", "test_factor")
         mock_cfg = mock_config.return_value
@@ -755,10 +864,12 @@ class TestBacktestBatchDirectoryRead:
         mock_pipeline = mock_pipeline_cls.return_value
         mock_pipeline.run_batch.return_value = []
         from fts.factor_engine.factor_screener import FactorScreener
+
         with patch.object(FactorScreener, "screen", wraps=None) as mock_screen:
             mock_screen.return_value = [{"factor_id": "fct_abc12345", "name": "test_factor"}]
-            args = Namespace(market="futures", grade="C", min_score=None, limit=20,
-                             symbol="RB0", days=300, capital=1_000_000.0)
+            args = Namespace(
+                market="futures", grade="C", min_score=None, limit=20, symbol="RB0", days=300, capital=1_000_000.0
+            )
             rc = _cmd_backtest_batch(args)
         assert rc == 0
         # screener 收到的 factors 只含正常因子（内部索引文件被跳过）
@@ -772,6 +883,7 @@ class TestBacktestBatchDirectoryRead:
 # ═══════════════════════════════════════════════════════════
 # _cmd_meta_loop_run — 错误处理
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCmdMetaLoopRunErrors:
     """测试 _cmd_meta_loop_run 异常处理路径（lines 231-233）。"""
@@ -793,6 +905,7 @@ class TestCmdMetaLoopRunErrors:
 # _cmd_portfolio_run — 错误处理
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCmdPortfolioRunErrors:
     """测试 _cmd_portfolio_run 异常处理路径（lines 253-255）。"""
 
@@ -812,6 +925,7 @@ class TestCmdPortfolioRunErrors:
 # ═══════════════════════════════════════════════════════════
 # _cmd_ui — Web UI 仪表盘
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCmdUI:
     """测试 _cmd_ui 的启动/关闭/错误路径（lines 260-274）。"""
@@ -843,6 +957,7 @@ class TestCmdUI:
 # _cmd_scheduler_run — 调度器运行
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCmdSchedulerRun:
     """测试 _cmd_scheduler_run 成功/失败路径（lines 279-285）。"""
 
@@ -872,6 +987,7 @@ class TestCmdSchedulerRun:
 # ═══════════════════════════════════════════════════════════
 # _cmd_scheduler_list — 有任务
 # ═══════════════════════════════════════════════════════════
+
 
 class TestCmdSchedulerListWithTasks:
     """测试 _cmd_scheduler_list 有任务时（lines 294-298）。"""
@@ -905,6 +1021,7 @@ class TestCmdSchedulerListWithTasks:
 # evolution run — 熔断器原因输出
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCmdEvolutionRunCircuitBreaker:
     """测试 evolution run 熔断器输出路径（line 205）。"""
 
@@ -912,13 +1029,19 @@ class TestCmdEvolutionRunCircuitBreaker:
     @patch("fts.cli.generate_trace_id", return_value="l2_cb_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_cb_20260718T000000")
     def test_circuit_breaker_reason_printed(
-        self, mock_run_id, mock_trace_id, mock_evoloop, capsys,
+        self,
+        mock_run_id,
+        mock_trace_id,
+        mock_evoloop,
+        capsys,
     ):
         """有 circuit_breaker_reason 时打印原因。"""
         mock_loop = mock_evoloop.return_value
         mock_loop.run.return_value = MagicMock(
-            status="completed", generations_completed=1,
-            elite_factor_ids=[], circuit_breaker_reason="token budget exceeded",
+            status="completed",
+            generations_completed=1,
+            elite_factor_ids=[],
+            circuit_breaker_reason="token budget exceeded",
         )
         rc = main(["evolution", "run"])
         assert rc == 0
@@ -929,6 +1052,7 @@ class TestCmdEvolutionRunCircuitBreaker:
 # ═══════════════════════════════════════════════════════════
 # factor stats / lineage 子命令
 # ═══════════════════════════════════════════════════════════
+
 
 class TestFactorStatsParser:
     """factor stats / lineage 能被 parser 正确解析。"""
@@ -950,9 +1074,7 @@ class TestFactorStatsParser:
 
     def test_factor_list_diverse_parser(self):
         parser = build_parser()
-        args = parser.parse_args([
-            "factor", "list", "--diverse", "--total-count", "8", "--max-per-family", "2"
-        ])
+        args = parser.parse_args(["factor", "list", "--diverse", "--total-count", "8", "--max-per-family", "2"])
         assert args.diverse is True
         assert args.total_count == 8
         assert args.max_per_family == 2
@@ -1136,5 +1258,3 @@ class TestCmdFactorListDuckDB:
         assert rc == 0
         captured = capsys.readouterr()
         assert "回退目录模式" in captured.err or "回退目录模式" in captured.out
-
-

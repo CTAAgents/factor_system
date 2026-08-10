@@ -66,10 +66,10 @@ def _llm_env(**overrides: str):
                 os.environ[k] = v
 
 
-
 # ═══════════════════════════════════════════════════════════
 # MockLLMClient — 预设响应与默认行为
 # ═══════════════════════════════════════════════════════════
+
 
 class TestMockLLMClient:
     """测试 MockLLMClient。"""
@@ -115,6 +115,7 @@ class TestMockLLMClient:
 # LLMClient.generate_json()
 # ═══════════════════════════════════════════════════════════
 
+
 class TestGenerateJson:
     """测试 LLMClient.generate_json JSON 提取逻辑。"""
 
@@ -126,21 +127,21 @@ class TestGenerateJson:
 
     def test_json_code_block(self):
         """```json 标记的代码块被正确提取和解析。"""
-        text = "前置文字\n```json\n{\"key\": \"value\"}\n```\n后置文字"
+        text = '前置文字\n```json\n{"key": "value"}\n```\n后置文字'
         client = _make_mock_client(text)
         result = client.generate_json("test")
         assert result == {"key": "value"}
 
     def test_plain_code_block(self):
         """普通 ``` 代码块被正确提取和解析。"""
-        text = "输出：\n```\n{\"key\": \"value\"}\n```\n结束。"
+        text = '输出：\n```\n{"key": "value"}\n```\n结束。'
         client = _make_mock_client(text)
         result = client.generate_json("test")
         assert result == {"key": "value"}
 
     def test_json_code_block_preferred_over_plain(self):
         """同时存在 ```json 和普通 ``` 时优先尝试 ```json。"""
-        text = "```json\n{\"json_only\": true}\n```\n```\n{\"plain\": true}\n```"
+        text = '```json\n{"json_only": true}\n```\n```\n{"plain": true}\n```'
         client = _make_mock_client(text)
         result = client.generate_json("test")
         assert result == {"json_only": True}
@@ -167,6 +168,7 @@ def _make_mock_client(response: str) -> LLMClient:
 # ═══════════════════════════════════════════════════════════
 # OpenAIClient — ImportError 处理
 # ═══════════════════════════════════════════════════════════
+
 
 class TestOpenAIClientInit:
     """测试 OpenAIClient 初始化与 ImportError 处理。"""
@@ -199,6 +201,7 @@ class TestOpenAIClientInit:
 # AnthropicClient — ImportError 处理
 # ═══════════════════════════════════════════════════════════
 
+
 class TestAnthropicClientInit:
     """测试 AnthropicClient 初始化与 ImportError 处理。"""
 
@@ -229,6 +232,7 @@ class TestAnthropicClientInit:
 # ═══════════════════════════════════════════════════════════
 # get_llm_client() 工厂函数
 # ═══════════════════════════════════════════════════════════
+
 
 class TestGetLLMClient:
     """测试 get_llm_client 工厂函数的分支逻辑。"""
@@ -286,6 +290,7 @@ class TestGetLLMClient:
 # LLMCallRecord — total_tokens 属性
 # ═══════════════════════════════════════════════════════════
 
+
 class TestLLMCallRecord:
     """测试 LLMCallRecord.total_tokens 属性（line 45）。"""
 
@@ -310,6 +315,7 @@ class TestLLMCallRecord:
 # ═══════════════════════════════════════════════════════════
 # OpenAIClient.complete — 错误处理与重试
 # ═══════════════════════════════════════════════════════════
+
 
 class TestOpenAIClientComplete:
     """测试 OpenAIClient.complete 的 API 错误路径（lines 118-132）。"""
@@ -350,7 +356,7 @@ class TestOpenAIClientComplete:
 
         mock_client.chat.completions.create.side_effect = [
             Exception("timeout"),  # 第一次失败
-            first_resp,           # 第二次成功
+            first_resp,  # 第二次成功
         ]
 
         mock_openai_mod = types.ModuleType("openai")
@@ -399,7 +405,8 @@ class TestOpenAIClientComplete:
             client = OpenAIClient(api_key="sk-test", base_url="https://custom.api.com/v1")
             client._ensure_client()
             mock_openai_mod.OpenAI.assert_called_once_with(
-                api_key="sk-test", base_url="https://custom.api.com/v1",
+                api_key="sk-test",
+                base_url="https://custom.api.com/v1",
             )
 
     def test_complete_no_usage_info(self):
@@ -424,6 +431,7 @@ class TestOpenAIClientComplete:
 # ═══════════════════════════════════════════════════════════
 # AnthropicClient.complete — 错误处理与重试
 # ═══════════════════════════════════════════════════════════
+
 
 class TestAnthropicClientComplete:
     """测试 AnthropicClient.complete 的 API 错误路径（lines 164-178）。"""
@@ -523,6 +531,7 @@ class TestAnthropicClientComplete:
 # LLMClient.bootstrap_factors — 基类默认行为
 # ═══════════════════════════════════════════════════════════
 
+
 class TestBootstrapFactorsBase:
     """测试 LLMClient.bootstrap_factors 基类默认实现。"""
 
@@ -530,9 +539,7 @@ class TestBootstrapFactorsBase:
         """基类默认实现返回空列表。"""
         client = MockLLMClient()
         # 绕过 MockLLMClient 的重写，直接调用基类方法
-        result = LLMClient.bootstrap_factors(
-            client, {}, [], 5, "trace_001"
-        )
+        result = LLMClient.bootstrap_factors(client, {}, [], 5, "trace_001")
         assert result == []
 
     def test_base_accepts_params(self):
@@ -540,9 +547,7 @@ class TestBootstrapFactorsBase:
         client = MockLLMClient()
         snapshot = {"key": "value"}
         gaps = [{"gap": "weak_momentum"}]
-        result = LLMClient.bootstrap_factors(
-            client, snapshot, gaps, 3, "trace_002"
-        )
+        result = LLMClient.bootstrap_factors(client, snapshot, gaps, 3, "trace_002")
         assert isinstance(result, list)
         assert len(result) == 0
 
@@ -551,15 +556,14 @@ class TestBootstrapFactorsBase:
 # MockLLMClient.bootstrap_factors — 预设候选返回
 # ═══════════════════════════════════════════════════════════
 
+
 class TestMockBootstrapFactors:
     """测试 MockLLMClient.bootstrap_factors。"""
 
     def test_returns_candidate_with_correct_structure(self):
         """返回的候选因子结构完整。"""
         client = MockLLMClient()
-        result = client.bootstrap_factors(
-            {"close": [1, 2, 3]}, [], 5, "trace_mock_001"
-        )
+        result = client.bootstrap_factors({"close": [1, 2, 3]}, [], 5, "trace_mock_001")
         assert len(result) == 1
         cand = result[0]
         assert cand["name"] == "mock_volume_price_divergence"
@@ -615,6 +619,7 @@ class TestMockBootstrapFactors:
 # OpenAIClient.bootstrap_factors — LLM 交互分支
 # ═══════════════════════════════════════════════════════════
 
+
 class TestOpenAIBootstrapFactors:
     """测试 OpenAIClient.bootstrap_factors 的各分支。"""
 
@@ -626,31 +631,26 @@ class TestOpenAIBootstrapFactors:
 
     def test_valid_response_returns_candidates(self):
         """LLM 返回合法 candidates 时正确解析。"""
-        payload = json.dumps({
-            "candidates": [
-                {"name": "factor_a", "code": "def factor_program(data, params): pass"},
-                {"name": "factor_b", "code": "def factor_program(data, params): pass"},
-            ]
-        })
-        client = self._make_openai_mock(payload)
-        result = client.bootstrap_factors(
-            {"close": [1]}, [], 5, "trace_ai_001"
+        payload = json.dumps(
+            {
+                "candidates": [
+                    {"name": "factor_a", "code": "def factor_program(data, params): pass"},
+                    {"name": "factor_b", "code": "def factor_program(data, params): pass"},
+                ]
+            }
         )
+        client = self._make_openai_mock(payload)
+        result = client.bootstrap_factors({"close": [1]}, [], 5, "trace_ai_001")
         assert len(result) == 2
         assert result[0]["name"] == "factor_a"
         assert result[1]["name"] == "factor_b"
 
     def test_truncates_to_max_candidates(self):
         """候选数超过 max_candidates 时截断。"""
-        candidates = [
-            {"name": f"factor_{i}", "code": "def f(data, params): pass"}
-            for i in range(10)
-        ]
+        candidates = [{"name": f"factor_{i}", "code": "def f(data, params): pass"} for i in range(10)]
         payload = json.dumps({"candidates": candidates})
         client = self._make_openai_mock(payload)
-        result = client.bootstrap_factors(
-            {"close": [1]}, [], 3, "trace_ai_002"
-        )
+        result = client.bootstrap_factors({"close": [1]}, [], 3, "trace_ai_002")
         assert len(result) == 3
         assert result[0]["name"] == "factor_0"
         assert result[2]["name"] == "factor_2"
@@ -659,45 +659,35 @@ class TestOpenAIBootstrapFactors:
         """LLM 返回非法 JSON 时返回空列表。"""
         client = OpenAIClient(api_key="sk-test", max_retries=0)
         client.generate_json = MagicMock(side_effect=LLMError("非法 JSON"))
-        result = client.bootstrap_factors(
-            {"close": [1]}, [], 5, "trace_ai_003"
-        )
+        result = client.bootstrap_factors({"close": [1]}, [], 5, "trace_ai_003")
         assert result == []
 
     def test_non_list_candidates_returns_empty(self):
         """candidates 字段非列表时返回空。"""
         payload = json.dumps({"candidates": "not_a_list"})
         client = self._make_openai_mock(payload)
-        result = client.bootstrap_factors(
-            {"close": [1]}, [], 5, "trace_ai_004"
-        )
+        result = client.bootstrap_factors({"close": [1]}, [], 5, "trace_ai_004")
         assert result == []
 
     def test_missing_candidates_key_returns_empty(self):
         """缺少 candidates 键时返回空列表。"""
         payload = json.dumps({"other_key": "value"})
         client = self._make_openai_mock(payload)
-        result = client.bootstrap_factors(
-            {"close": [1]}, [], 5, "trace_ai_005"
-        )
+        result = client.bootstrap_factors({"close": [1]}, [], 5, "trace_ai_005")
         assert result == []
 
     def test_empty_candidates_returns_empty(self):
         """candidates 为空列表时返回空。"""
         payload = json.dumps({"candidates": []})
         client = self._make_openai_mock(payload)
-        result = client.bootstrap_factors(
-            {"close": [1]}, [], 5, "trace_ai_006"
-        )
+        result = client.bootstrap_factors({"close": [1]}, [], 5, "trace_ai_006")
         assert result == []
 
     def test_generic_exception_returns_empty(self):
         """LLM 调用抛出非 LLMError 异常时返回空。"""
         client = OpenAIClient(api_key="sk-test", max_retries=0)
         client.generate_json = MagicMock(side_effect=RuntimeError("network"))
-        result = client.bootstrap_factors(
-            {"close": [1]}, [], 5, "trace_ai_007"
-        )
+        result = client.bootstrap_factors({"close": [1]}, [], 5, "trace_ai_007")
         assert result == []
 
 
@@ -705,68 +695,57 @@ class TestOpenAIBootstrapFactors:
 # _build_bootstrap_prompt — Prompt 构造
 # ═══════════════════════════════════════════════════════════
 
+
 class TestBuildBootstrapPrompt:
     """测试 _build_bootstrap_prompt 静态方法。"""
 
     def test_prompt_contains_trace_id(self):
         """Prompt 中包含 trace_id。"""
-        prompt = OpenAIClient._build_bootstrap_prompt(
-            {"close": [1, 2]}, [], 5, "trace_prompt_001"
-        )
+        prompt = OpenAIClient._build_bootstrap_prompt({"close": [1, 2]}, [], 5, "trace_prompt_001")
         assert "trace_prompt_001" in prompt
 
     def test_prompt_contains_max_candidates(self):
         """Prompt 中包含候选数量要求。"""
-        prompt = OpenAIClient._build_bootstrap_prompt(
-            {"close": [1]}, [], 3, "trace_prompt_002"
-        )
+        prompt = OpenAIClient._build_bootstrap_prompt({"close": [1]}, [], 3, "trace_prompt_002")
         assert "3" in prompt
 
     def test_prompt_contains_snapshot_data(self):
         """Prompt 中包含市场快照摘要。"""
         prompt = OpenAIClient._build_bootstrap_prompt(
             {"close": [1, 2, 3], "volume": [100, 200, 300]},
-            [], 5, "trace_prompt_003",
+            [],
+            5,
+            "trace_prompt_003",
         )
         assert "close" in prompt
 
     def test_prompt_contains_code_rules(self):
         """Prompt 中包含代码规则。"""
-        prompt = OpenAIClient._build_bootstrap_prompt(
-            {}, [], 5, "trace_prompt_004"
-        )
+        prompt = OpenAIClient._build_bootstrap_prompt({}, [], 5, "trace_prompt_004")
         assert "factor_program" in prompt
         assert "numpy" in prompt
 
     def test_prompt_contains_json_format(self):
         """Prompt 中包含输出 JSON 格式说明。"""
-        prompt = OpenAIClient._build_bootstrap_prompt(
-            {}, [], 5, "trace_prompt_005"
-        )
+        prompt = OpenAIClient._build_bootstrap_prompt({}, [], 5, "trace_prompt_005")
         assert "candidates" in prompt
         assert "economic_logic" in prompt
 
     def test_prompt_contains_common_errors(self):
         """Prompt 中包含常见错误提醒。"""
-        prompt = OpenAIClient._build_bootstrap_prompt(
-            {}, [], 5, "trace_prompt_006"
-        )
+        prompt = OpenAIClient._build_bootstrap_prompt({}, [], 5, "trace_prompt_006")
         assert "未定义变量" in prompt or "❌" in prompt
 
     def test_prompt_handles_empty_gaps(self):
         """空辩论缺口不报错。"""
-        prompt = OpenAIClient._build_bootstrap_prompt(
-            {"close": [1]}, [], 5, "trace_prompt_007"
-        )
+        prompt = OpenAIClient._build_bootstrap_prompt({"close": [1]}, [], 5, "trace_prompt_007")
         assert isinstance(prompt, str)
         assert len(prompt) > 100
 
     def test_prompt_truncates_long_snapshot(self):
         """过长的市场快照被截断。"""
         long_snapshot = {f"key_{i}": "x" * 100 for i in range(50)}
-        prompt = OpenAIClient._build_bootstrap_prompt(
-            long_snapshot, [], 5, "trace_prompt_008"
-        )
+        prompt = OpenAIClient._build_bootstrap_prompt(long_snapshot, [], 5, "trace_prompt_008")
         assert isinstance(prompt, str)
         assert len(prompt) > 0
 
@@ -774,6 +753,7 @@ class TestBuildBootstrapPrompt:
 # ═══════════════════════════════════════════════════════════
 # _parse_json / _repair_json — 修复式解析（含截断 JSON）
 # ═══════════════════════════════════════════════════════════
+
 
 class TestParseJsonRepair:
     """测试 _parse_json 修复式解析与 _repair_json 各分支。"""
@@ -828,7 +808,7 @@ class TestParseJsonRepair:
         """已转义的 \\n 序列保持不变（line 258-260）。"""
         text = '{"code": "a\\\\nb"}'
         escaped = LLMClient._escape_newlines_in_json(text)
-        assert 'a\\\\nb' in escaped
+        assert "a\\\\nb" in escaped
 
     def test_parse_json_with_raw_newlines_in_string(self):
         """含实际换行符的 JSON 字符串经修复后解析成功（line 266-267）。"""
@@ -879,6 +859,7 @@ class TestParseJsonRepair:
 # ═══════════════════════════════════════════════════════════
 # OpenAIClient.complete — temperature 透传
 # ═══════════════════════════════════════════════════════════
+
 
 class TestOpenAIClientTemperature:
     """测试 OpenAIClient.complete 的 temperature 分支（line 345）。"""
@@ -948,17 +929,15 @@ class TestOpenAIClientTemperature:
 # OpenAIClient.bootstrap_factors — JSON 修复重试 / 调试文件
 # ═══════════════════════════════════════════════════════════
 
+
 class TestOpenAIBootstrapFactorsRepair:
     """测试 bootstrap_factors 的 JSON 解析失败重试与调试文件写失败。"""
 
     def test_first_json_invalid_then_repair_succeeds(self):
         """首次 JSON 非法 → 构造修复 prompt 重试 → 成功（line 412-426）。"""
         import os as _os
-        good = json.dumps({
-            "candidates": [
-                {"name": "f1", "code": "def factor_program(data, params): pass"}
-            ]
-        })
+
+        good = json.dumps({"candidates": [{"name": "f1", "code": "def factor_program(data, params): pass"}]})
         bad = '{"candidates": [{"name": "f1", "code": "broken'
         client = OpenAIClient(api_key="sk-test", max_retries=0)
         # complete 返回 (text, tokens) 元组
@@ -974,8 +953,7 @@ class TestOpenAIBootstrapFactorsRepair:
         assert "重新生成" in second_prompt
         assert "broken" in second_prompt
         # 清理产品代码写入的调试文件（删除失败可忽略：钩子/权限等环境因素）
-        for f in ("debug_llm_response_trace_repair_001_0.txt",
-                  "debug_llm_response_trace_repair_001_1.txt"):
+        for f in ("debug_llm_response_trace_repair_001_0.txt", "debug_llm_response_trace_repair_001_1.txt"):
             if _os.path.exists(f):
                 try:
                     _os.remove(f)
@@ -985,6 +963,7 @@ class TestOpenAIBootstrapFactorsRepair:
     def test_json_always_invalid_returns_empty_after_retry(self):
         """两次都非法 → 返回空列表（重试耗尽）。"""
         import os as _os
+
         bad = '{"candidates": broken'
         client = OpenAIClient(api_key="sk-test", max_retries=0)
         client.complete = MagicMock(return_value=(bad, 0))
@@ -993,8 +972,7 @@ class TestOpenAIBootstrapFactorsRepair:
         assert result == []
         assert client.complete.call_count == 2
         # 清理产品代码写入的调试文件（删除失败可忽略：钩子/权限等环境因素）
-        for f in ("debug_llm_response_trace_repair_002_0.txt",
-                  "debug_llm_response_trace_repair_002_1.txt"):
+        for f in ("debug_llm_response_trace_repair_002_0.txt", "debug_llm_response_trace_repair_002_1.txt"):
             if _os.path.exists(f):
                 try:
                     _os.remove(f)
@@ -1003,11 +981,7 @@ class TestOpenAIBootstrapFactorsRepair:
 
     def test_debug_file_write_failure_does_not_break(self):
         """调试文件写入失败被吞掉，不中断流程（line 405-406）。"""
-        good = json.dumps({
-            "candidates": [
-                {"name": "f2", "code": "def factor_program(data, params): pass"}
-            ]
-        })
+        good = json.dumps({"candidates": [{"name": "f2", "code": "def factor_program(data, params): pass"}]})
         client = OpenAIClient(api_key="sk-test", max_retries=0)
         client.complete = MagicMock(return_value=(good, 0))
         with patch("builtins.open", side_effect=OSError("denied")):
@@ -1027,6 +1001,7 @@ class TestOpenAIBootstrapFactorsRepair:
 # AnthropicClient.complete — temperature 透传
 # ═══════════════════════════════════════════════════════════
 
+
 class TestAnthropicClientTemperature:
     """测试 AnthropicClient.complete 的 temperature 分支（line 604）。"""
 
@@ -1043,8 +1018,7 @@ class TestAnthropicClientTemperature:
         mock_anthropic_mod = types.ModuleType("anthropic")
         mock_anthropic_mod.Anthropic = MagicMock(return_value=mock_client)
         with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-            client = AnthropicClient(api_key="sk-ant-test", max_retries=0,
-                                     temperature=0.5)
+            client = AnthropicClient(api_key="sk-ant-test", max_retries=0, temperature=0.5)
             text, _ = client.complete("test")
             assert text == "claude_ok"
             kwargs = mock_client.messages.create.call_args.kwargs
@@ -1055,6 +1029,7 @@ class TestAnthropicClientTemperature:
 # ═══════════════════════════════════════════════════════════
 # get_llm_client — config 读取异常回退
 # ═══════════════════════════════════════════════════════════
+
 
 class TestGetLLMClientConfigError:
     """测试 get_llm_client 的 config 读取异常分支（line 725-726）。"""

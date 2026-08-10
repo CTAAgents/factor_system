@@ -20,18 +20,18 @@ DUCKDB_PATH = "data/factor_catalog.duckdb"
 # 12 个待淘汰因子
 RETIRE_LIST = [
     # ── 立即淘汰（极端异常, MDD>50%）──
-    ("fct_e7c086cb", "fut_mkt_trend",         "极端异常: 最大回撤 122.68%"),
-    ("fct_e69955ae", "fut_crowd_volatility",   "极端异常: 最大回撤 91.18%"),
+    ("fct_e7c086cb", "fut_mkt_trend", "极端异常: 最大回撤 122.68%"),
+    ("fct_e69955ae", "fut_crowd_volatility", "极端异常: 最大回撤 91.18%"),
     # ── 下轮重点淘汰（高风险）──
-    ("fct_0dc7eea2", "fut_mkt_speculation",    "高风险: IC=0.0345, ICIR=0.13, MDD=30.99%"),
-    ("fct_586ecd54", "fut_mobile_big_data",    "高风险: IC=0.0376, ICIR=0.14, MDD=32.53%"),
-    ("fct_a84d8412", "fut_crowd_composite",    "高风险: IC=0.0357, ICIR=0.15, MDD=32.61%"),
-    ("fct_fdc54826", "fut_turnover",           "高风险: IC=0.0345, ICIR=0.13, MDD=30.99%"),
-    ("fct_04be6601", "fut_crowd_volume",       "高风险: IC=0.0861, ICIR=0.35, MDD=14.42%"),
-    ("fct_2f361bf7", "fut_mkt_concentration",  "高风险: IC=0.1030, ICIR=0.39, MDD=22.78%"),
-    ("fct_71ab1898", "fut_crowd_bias_amount",  "高风险: IC=0.0737, ICIR=0.25, MDD=34.63%"),
-    ("fct_b6a6fc04", "fut_turnover_g3",        "高风险: IC=0.1712, ICIR=0.55, MDD=34.74%"),
-    ("fct_d3c6c33d", "fut_crowd_turnover",     "高风险: IC=0.0794, ICIR=0.31, MDD=18.44%"),
+    ("fct_0dc7eea2", "fut_mkt_speculation", "高风险: IC=0.0345, ICIR=0.13, MDD=30.99%"),
+    ("fct_586ecd54", "fut_mobile_big_data", "高风险: IC=0.0376, ICIR=0.14, MDD=32.53%"),
+    ("fct_a84d8412", "fut_crowd_composite", "高风险: IC=0.0357, ICIR=0.15, MDD=32.61%"),
+    ("fct_fdc54826", "fut_turnover", "高风险: IC=0.0345, ICIR=0.13, MDD=30.99%"),
+    ("fct_04be6601", "fut_crowd_volume", "高风险: IC=0.0861, ICIR=0.35, MDD=14.42%"),
+    ("fct_2f361bf7", "fut_mkt_concentration", "高风险: IC=0.1030, ICIR=0.39, MDD=22.78%"),
+    ("fct_71ab1898", "fut_crowd_bias_amount", "高风险: IC=0.0737, ICIR=0.25, MDD=34.63%"),
+    ("fct_b6a6fc04", "fut_turnover_g3", "高风险: IC=0.1712, ICIR=0.55, MDD=34.74%"),
+    ("fct_d3c6c33d", "fut_crowd_turnover", "高风险: IC=0.0794, ICIR=0.31, MDD=18.44%"),
     ("fct_0958dd32", "fut_basis_momentum_g19", "高风险: IC=0.3091, ICIR=2.36, MDD=28.39%"),
 ]
 
@@ -40,7 +40,7 @@ def main():
     print("=" * 60)
     print("期货精英因子提前淘汰")
     print(f"批次: {len(RETIRE_LIST)} 个因子")
-    print(f"  立即淘汰 (极端异常): 2 个")
+    print("  立即淘汰 (极端异常): 2 个")
     print(f"  下轮重点淘汰 (高风险): {len(RETIRE_LIST) - 2} 个")
     print("=" * 60)
 
@@ -65,9 +65,9 @@ def main():
         retired_path = RETIRED_DIR / json_path.name
         if json_path.exists():
             shutil.move(str(json_path), str(retired_path))
-            print(f"     [✓] JSON 已移至 _retired/")
+            print("     [✓] JSON 已移至 _retired/")
         elif retired_path.exists():
-            print(f"     [✓] JSON 已在 _retired/（跳过移动）")
+            print("     [✓] JSON 已在 _retired/（跳过移动）")
         else:
             print(f"     [⚠] JSON 文件不存在: {json_path}")
 
@@ -80,7 +80,7 @@ def main():
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_factor_catalog_status ON factor_catalog(status)")
             conn.execute("CHECKPOINT")
-            print(f"     [✓] DuckDB status → retired")
+            print("     [✓] DuckDB status → retired")
         except Exception as e:
             print(f"     [✗] DuckDB 更新失败: {e}")
             failed_count += 1
@@ -89,19 +89,24 @@ def main():
         # 2c. 插入状态变迁记录
         try:
             history_id = f"fsh_{factor_id[:8]}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
-            snapshot = json.dumps({
-                "retired_at": now,
-                "retired_by": "proactive_retirement_script",
-                "batch": "high_risk_decay_20260806",
-            })
-            conn.execute("""
+            snapshot = json.dumps(
+                {
+                    "retired_at": now,
+                    "retired_by": "proactive_retirement_script",
+                    "batch": "high_risk_decay_20260806",
+                }
+            )
+            conn.execute(
+                """
                 INSERT INTO factor_status_history (
                     history_id, factor_id, from_status, to_status,
                     reason, changed_at, snapshot
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, [history_id, factor_id, "active", "retired", reason, now, snapshot])
+            """,
+                [history_id, factor_id, "active", "retired", reason, now, snapshot],
+            )
             conn.execute("CHECKPOINT")
-            print(f"     [✓] 状态变迁已记录")
+            print("     [✓] 状态变迁已记录")
         except Exception as e:
             print(f"     [⚠] 状态变迁记录失败: {e}")
 

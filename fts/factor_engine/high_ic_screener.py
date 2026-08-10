@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 
 # ─── 配置 ───────────────────────────────────────────────────
@@ -32,37 +32,37 @@ class HighICScreenConfig:
     """
 
     # 一、基础指标校验（20 分）
-    ic_min: float = 0.02              # IC 均值合理下限
-    ic_max: float = 0.06              # IC 均值合理上限
-    ic_alert: float = 0.07            # IC 极端偏高警戒线（过拟合嫌疑）
-    icir_pass: float = 0.5            # ICIR 合格线
-    icir_warn: float = 0.3            # ICIR 伪强因子线
-    win_rate_pass: float = 0.55       # IC 正向胜率合格线
+    ic_min: float = 0.02  # IC 均值合理下限
+    ic_max: float = 0.06  # IC 均值合理上限
+    ic_alert: float = 0.07  # IC 极端偏高警戒线（过拟合嫌疑）
+    icir_pass: float = 0.5  # ICIR 合格线
+    icir_warn: float = 0.3  # ICIR 伪强因子线
+    win_rate_pass: float = 0.55  # IC 正向胜率合格线
 
     # 二、过拟合排查（25 分）
-    oos_decay_max: float = 0.30       # 外样本 IC 衰减上限（一票否决 V1）
-    extreme_drop_max: float = 0.25    # 极值扰动 IC 降幅上限（一票否决 V2）
+    oos_decay_max: float = 0.30  # 外样本 IC 衰减上限（一票否决 V1）
+    extreme_drop_max: float = 0.25  # 极值扰动 IC 降幅上限（一票否决 V2）
     param_sensitivity_vol_max: float = 0.5  # 参数敏感性 IC 波动上限
 
     # 三、冗余&风格（20 分）
-    corr_max: float = 0.70            # 存量因子相关上限（一票否决 V3）
-    corr_alert: float = 0.90          # 高度冗余警戒线
+    corr_max: float = 0.70  # 存量因子相关上限（一票否决 V3）
+    corr_alert: float = 0.90  # 高度冗余警戒线
     industry_min_ratio: float = 0.80  # 全行业普适性合格线
 
     # 四、落地性（20 分）
-    net_excess_min: float = 0.0       # 扣成本后超额下限（一票否决 V4）
+    net_excess_min: float = 0.0  # 扣成本后超额下限（一票否决 V4）
     turnover_weekly_max: float = 0.80  # 周度换手率上限
-    half_life_min_days: float = 3.0   # 信号半衰期下限（交易日）
+    half_life_min_days: float = 3.0  # 信号半衰期下限（交易日）
 
     # 五、尾部风险（10 分）
-    logic_min_score: float = 2.0      # 经济逻辑维度最低分（一票否决 V5 用 <2）
+    logic_min_score: float = 2.0  # 经济逻辑维度最低分（一票否决 V5 用 <2）
 
     # 六、综合稳定性（5 分）
     oos_positive_ratio_min: float = 0.5  # WalkForward 正 IC 窗口占比下限
 
     # 评级阈值
-    grade_A_min: float = 85.0         # A 级入库下限
-    grade_B_min: float = 60.0         # B 级暂缓下限
+    grade_A_min: float = 85.0  # A 级入库下限
+    grade_B_min: float = 60.0  # B 级暂缓下限
 
 
 # ─── 报告契约 ──────────────────────────────────────────────
@@ -72,14 +72,14 @@ class HighICScreenConfig:
 class HighICCheckItem:
     """单项检查结果。"""
 
-    name: str                       # 检查项名（英文 snake_case）
-    label: str                      # 检查项中文名
-    module: str                     # 所属模块
-    full_score: float               # 该项满分
-    score: float                    # 实际得分
-    raw_value: Optional[float]      # 原始指标值（None=缺失）
-    passed: Optional[bool]          # None=skipped
-    evidence: str = ""              # 判定依据文本
+    name: str  # 检查项名（英文 snake_case）
+    label: str  # 检查项中文名
+    module: str  # 所属模块
+    full_score: float  # 该项满分
+    score: float  # 实际得分
+    raw_value: Optional[float]  # 原始指标值（None=缺失）
+    passed: Optional[bool]  # None=skipped
+    evidence: str = ""  # 判定依据文本
 
 
 @dataclass
@@ -264,8 +264,11 @@ class HighICScreener:
 
         # ── Step 1: 一票否决检查 V1~V5 ──
         self._run_veto_checks(
-            items, veto_reasons, evaluation,
-            correlation_metadata, backtest_pipeline,
+            items,
+            veto_reasons,
+            evaluation,
+            correlation_metadata,
+            backtest_pipeline,
         )
 
         # ── Step 2: 16 项打分 ──
@@ -335,124 +338,171 @@ class HighICScreener:
         backtest_pipeline: dict,
     ) -> None:
         """执行 5 项一票否决检查。数据缺失时 skipped，不误杀。"""
-        l1 = _level1(evaluation)
+        _level1(evaluation)
 
         # V1: 外样本 IC 衰减 > 30%
         oos_decay = self._estimate_oos_decay(evaluation)
         if oos_decay is not None:
             if oos_decay > self._config.oos_decay_max:
-                veto_reasons.append(
-                    f"V1 外样本IC衰减 {oos_decay:.1%} > {self._config.oos_decay_max:.0%}"
+                veto_reasons.append(f"V1 外样本IC衰减 {oos_decay:.1%} > {self._config.oos_decay_max:.0%}")
+            items.append(
+                HighICCheckItem(
+                    name="veto_oos_decay",
+                    label="一票否决:外样本IC衰减",
+                    module="一票否决",
+                    full_score=0.0,
+                    score=0.0,
+                    raw_value=oos_decay,
+                    passed=oos_decay <= self._config.oos_decay_max,
+                    evidence=f"oos_decay={oos_decay:.1%}",
                 )
-            items.append(HighICCheckItem(
-                name="veto_oos_decay", label="一票否决:外样本IC衰减",
-                module="一票否决", full_score=0.0,
-                score=0.0, raw_value=oos_decay,
-                passed=oos_decay <= self._config.oos_decay_max,
-                evidence=f"oos_decay={oos_decay:.1%}",
-            ))
+            )
         else:
-            items.append(HighICCheckItem(
-                name="veto_oos_decay", label="一票否决:外样本IC衰减",
-                module="一票否决", full_score=0.0,
-                score=0.0, raw_value=None, passed=None,
-                evidence="数据缺失, 跳过",
-            ))
+            items.append(
+                HighICCheckItem(
+                    name="veto_oos_decay",
+                    label="一票否决:外样本IC衰减",
+                    module="一票否决",
+                    full_score=0.0,
+                    score=0.0,
+                    raw_value=None,
+                    passed=None,
+                    evidence="数据缺失, 跳过",
+                )
+            )
 
         # V2: 极值扰动 IC 降幅 > 25%（无扰动重算数据时跳过）
         perturb = evaluation.get("extreme_perturbation")
         if isinstance(perturb, dict) and isinstance(perturb.get("ic_drop"), (int, float)):
             drop = float(perturb["ic_drop"])
             if drop > self._config.extreme_drop_max:
-                veto_reasons.append(
-                    f"V2 极值扰动IC降幅 {drop:.1%} > {self._config.extreme_drop_max:.0%}"
+                veto_reasons.append(f"V2 极值扰动IC降幅 {drop:.1%} > {self._config.extreme_drop_max:.0%}")
+            items.append(
+                HighICCheckItem(
+                    name="veto_extreme_perturb",
+                    label="一票否决:极值扰动",
+                    module="一票否决",
+                    full_score=0.0,
+                    score=0.0,
+                    raw_value=drop,
+                    passed=drop <= self._config.extreme_drop_max,
+                    evidence=f"ic_drop={drop:.1%}",
                 )
-            items.append(HighICCheckItem(
-                name="veto_extreme_perturb", label="一票否决:极值扰动",
-                module="一票否决", full_score=0.0,
-                score=0.0, raw_value=drop,
-                passed=drop <= self._config.extreme_drop_max,
-                evidence=f"ic_drop={drop:.1%}",
-            ))
+            )
         else:
-            items.append(HighICCheckItem(
-                name="veto_extreme_perturb", label="一票否决:极值扰动",
-                module="一票否决", full_score=0.0,
-                score=0.0, raw_value=None, passed=None,
-                evidence="数据缺失, 跳过",
-            ))
+            items.append(
+                HighICCheckItem(
+                    name="veto_extreme_perturb",
+                    label="一票否决:极值扰动",
+                    module="一票否决",
+                    full_score=0.0,
+                    score=0.0,
+                    raw_value=None,
+                    passed=None,
+                    evidence="数据缺失, 跳过",
+                )
+            )
 
         # V3: 与存量因子相关 > 0.7 无增量
         max_corr = correlation_metadata.get("max_corr_detected")
         if isinstance(max_corr, (int, float)):
             if max_corr > self._config.corr_max:
-                veto_reasons.append(
-                    f"V3 存量因子相关 {max_corr:.2f} > {self._config.corr_max}"
+                veto_reasons.append(f"V3 存量因子相关 {max_corr:.2f} > {self._config.corr_max}")
+            items.append(
+                HighICCheckItem(
+                    name="veto_existing_corr",
+                    label="一票否决:存量相关",
+                    module="一票否决",
+                    full_score=0.0,
+                    score=0.0,
+                    raw_value=max_corr,
+                    passed=max_corr <= self._config.corr_max,
+                    evidence=f"max_corr={max_corr:.2f}",
                 )
-            items.append(HighICCheckItem(
-                name="veto_existing_corr", label="一票否决:存量相关",
-                module="一票否决", full_score=0.0,
-                score=0.0, raw_value=max_corr,
-                passed=max_corr <= self._config.corr_max,
-                evidence=f"max_corr={max_corr:.2f}",
-            ))
+            )
         else:
-            items.append(HighICCheckItem(
-                name="veto_existing_corr", label="一票否决:存量相关",
-                module="一票否决", full_score=0.0,
-                score=0.0, raw_value=None, passed=None,
-                evidence="数据缺失, 跳过",
-            ))
+            items.append(
+                HighICCheckItem(
+                    name="veto_existing_corr",
+                    label="一票否决:存量相关",
+                    module="一票否决",
+                    full_score=0.0,
+                    score=0.0,
+                    raw_value=None,
+                    passed=None,
+                    evidence="数据缺失, 跳过",
+                )
+            )
 
         # V4: 扣双边成本后超额为负
         net_excess = backtest_pipeline.get("net_excess_return")
         if isinstance(net_excess, (int, float)):
             if net_excess <= self._config.net_excess_min:
-                veto_reasons.append(
-                    f"V4 扣成本后超额 {net_excess:.4f} ≤ {self._config.net_excess_min}"
+                veto_reasons.append(f"V4 扣成本后超额 {net_excess:.4f} ≤ {self._config.net_excess_min}")
+            items.append(
+                HighICCheckItem(
+                    name="veto_net_excess",
+                    label="一票否决:成本后超额",
+                    module="一票否决",
+                    full_score=0.0,
+                    score=0.0,
+                    raw_value=net_excess,
+                    passed=net_excess > self._config.net_excess_min,
+                    evidence=f"net_excess_return={net_excess:.4f}",
                 )
-            items.append(HighICCheckItem(
-                name="veto_net_excess", label="一票否决:成本后超额",
-                module="一票否决", full_score=0.0,
-                score=0.0, raw_value=net_excess,
-                passed=net_excess > self._config.net_excess_min,
-                evidence=f"net_excess_return={net_excess:.4f}",
-            ))
+            )
         else:
-            items.append(HighICCheckItem(
-                name="veto_net_excess", label="一票否决:成本后超额",
-                module="一票否决", full_score=0.0,
-                score=0.0, raw_value=None, passed=None,
-                evidence="数据缺失, 跳过",
-            ))
+            items.append(
+                HighICCheckItem(
+                    name="veto_net_excess",
+                    label="一票否决:成本后超额",
+                    module="一票否决",
+                    full_score=0.0,
+                    score=0.0,
+                    raw_value=None,
+                    passed=None,
+                    evidence="数据缺失, 跳过",
+                )
+            )
 
         # V5: 纯统计高IC无业务逻辑
         l2 = _level2(evaluation)
         logic_dims = [
-            l2.get("theory"), l2.get("behavioral"),
-            l2.get("microstructure"), l2.get("institutional"),
+            l2.get("theory"),
+            l2.get("behavioral"),
+            l2.get("microstructure"),
+            l2.get("institutional"),
         ]
         logic_dims = [d for d in logic_dims if isinstance(d, (int, float))]
         if logic_dims:
-            min_logic = min(logic_dims)
+            min_logic = min(cast(list[float], logic_dims))
             if min_logic < self._config.logic_min_score:
-                veto_reasons.append(
-                    f"V5 经济逻辑维度最低 {min_logic} < {self._config.logic_min_score}"
+                veto_reasons.append(f"V5 经济逻辑维度最低 {min_logic} < {self._config.logic_min_score}")
+            items.append(
+                HighICCheckItem(
+                    name="veto_logic",
+                    label="一票否决:逻辑缺失",
+                    module="一票否决",
+                    full_score=0.0,
+                    score=0.0,
+                    raw_value=min_logic,
+                    passed=min_logic >= self._config.logic_min_score,
+                    evidence=f"min_logic={min_logic}",
                 )
-            items.append(HighICCheckItem(
-                name="veto_logic", label="一票否决:逻辑缺失",
-                module="一票否决", full_score=0.0,
-                score=0.0, raw_value=min_logic,
-                passed=min_logic >= self._config.logic_min_score,
-                evidence=f"min_logic={min_logic}",
-            ))
+            )
         else:
-            items.append(HighICCheckItem(
-                name="veto_logic", label="一票否决:逻辑缺失",
-                module="一票否决", full_score=0.0,
-                score=0.0, raw_value=None, passed=None,
-                evidence="数据缺失, 跳过",
-            ))
+            items.append(
+                HighICCheckItem(
+                    name="veto_logic",
+                    label="一票否决:逻辑缺失",
+                    module="一票否决",
+                    full_score=0.0,
+                    score=0.0,
+                    raw_value=None,
+                    passed=None,
+                    evidence="数据缺失, 跳过",
+                )
+            )
 
     # ─── 工具: 外样本 IC 衰减估计 ────────────────────────
 
@@ -488,8 +538,7 @@ class HighICScreener:
             score = 8.0
         else:
             score = 8.0 * max(0.0, 1.0 - (raw - cfg.ic_max) / (cfg.ic_alert * 2))
-        return HighICCheckItem("ic_mean", "", "", 8.0, round(score, 2), raw,
-                               raw <= cfg.ic_alert, f"|ic|={raw:.4f}")
+        return HighICCheckItem("ic_mean", "", "", 8.0, round(score, 2), raw, raw <= cfg.ic_alert, f"|ic|={raw:.4f}")
 
     def _check_icir(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         cfg = self._config
@@ -504,8 +553,7 @@ class HighICScreener:
             score = 8.0 * (raw - cfg.icir_warn) / (cfg.icir_pass - cfg.icir_warn)
         else:
             score = 8.0 * max(0.0, raw / cfg.icir_warn) * 0.5  # 伪强因子惩罚
-        return HighICCheckItem("icir", "", "", 8.0, round(score, 2), raw,
-                               raw >= cfg.icir_warn, f"|icir|={raw:.4f}")
+        return HighICCheckItem("icir", "", "", 8.0, round(score, 2), raw, raw >= cfg.icir_warn, f"|icir|={raw:.4f}")
 
     def _check_ic_win_rate(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         cfg = self._config
@@ -519,8 +567,9 @@ class HighICScreener:
             score = 4.0 * (win_rate - 0.5) / (cfg.win_rate_pass - 0.5)
         else:
             score = 0.0
-        return HighICCheckItem("ic_win_rate", "", "", 4.0, round(score, 2),
-                               win_rate, win_rate >= 0.5, f"win_rate={win_rate:.1%}")
+        return HighICCheckItem(
+            "ic_win_rate", "", "", 4.0, round(score, 2), win_rate, win_rate >= 0.5, f"win_rate={win_rate:.1%}"
+        )
 
     def _check_oos_decay(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         cfg = self._config
@@ -533,8 +582,9 @@ class HighICScreener:
             score = 10.0 * (0.5 - decay) / (0.5 - cfg.oos_decay_max)
         else:
             score = 10.0 * max(0.0, 1.0 - (decay - 0.5) / 0.5)
-        return HighICCheckItem("oos_decay", "", "", 10.0, round(score, 2),
-                               decay, decay <= cfg.oos_decay_max, f"decay={decay:.1%}")
+        return HighICCheckItem(
+            "oos_decay", "", "", 10.0, round(score, 2), decay, decay <= cfg.oos_decay_max, f"decay={decay:.1%}"
+        )
 
     def _check_extreme_perturb(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         cfg = self._config
@@ -549,8 +599,9 @@ class HighICScreener:
             score = 8.0
         else:
             score = 8.0 * max(0.0, 1.0 - (drop - cfg.extreme_drop_max))
-        return HighICCheckItem("extreme_perturb", "", "", 8.0, round(score, 2),
-                               drop, drop <= cfg.extreme_drop_max, f"ic_drop={drop:.1%}")
+        return HighICCheckItem(
+            "extreme_perturb", "", "", 8.0, round(score, 2), drop, drop <= cfg.extreme_drop_max, f"ic_drop={drop:.1%}"
+        )
 
     def _check_param_sensitivity(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         cfg = self._config
@@ -565,9 +616,16 @@ class HighICScreener:
             score = 7.0 * (cfg.param_sensitivity_vol_max - raw) / (cfg.param_sensitivity_vol_max - 0.2)
         else:
             score = 7.0 * max(0.0, 1.0 - (raw - cfg.param_sensitivity_vol_max))
-        return HighICCheckItem("param_sensitivity", "", "", 7.0, round(score, 2),
-                               raw, raw <= cfg.param_sensitivity_vol_max,
-                               f"ic_volatility={raw:.3f}")
+        return HighICCheckItem(
+            "param_sensitivity",
+            "",
+            "",
+            7.0,
+            round(score, 2),
+            raw,
+            raw <= cfg.param_sensitivity_vol_max,
+            f"ic_volatility={raw:.3f}",
+        )
 
     def _check_existing_corr(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         cfg = self._config
@@ -581,16 +639,17 @@ class HighICScreener:
             score = 8.0 * (cfg.corr_alert - raw) / (cfg.corr_alert - cfg.corr_max)
         else:
             score = 8.0 * max(0.0, 1.0 - (raw - cfg.corr_alert) / (1.0 - cfg.corr_alert))
-        return HighICCheckItem("existing_corr", "", "", 8.0, round(score, 2),
-                               raw, raw <= cfg.corr_max, f"max_corr={raw:.2f}")
+        return HighICCheckItem(
+            "existing_corr", "", "", 8.0, round(score, 2), raw, raw <= cfg.corr_max, f"max_corr={raw:.2f}"
+        )
 
     def _check_style_exposure(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
-        cfg = self._config
         # 风格敞口: 以 cross_symbol IC 分化度近似（数据缺失时 skipped）
         ics = _wf_ic_series(evaluation)
         if len(ics) < 3:
             return HighICCheckItem("style_exposure", "", "", 7.0, 0.0, None, None, "跨窗口数据不足")
         import numpy as np
+
         spread = float(np.std(ics))
         if spread <= 0.15:
             score = 7.0
@@ -598,8 +657,9 @@ class HighICScreener:
             score = 7.0 * (0.4 - spread) / (0.4 - 0.15)
         else:
             score = 0.0
-        return HighICCheckItem("style_exposure", "", "", 7.0, round(score, 2),
-                               spread, spread <= 0.4, f"ic_spread={spread:.3f}")
+        return HighICCheckItem(
+            "style_exposure", "", "", 7.0, round(score, 2), spread, spread <= 0.4, f"ic_spread={spread:.3f}"
+        )
 
     def _check_industry_coverage(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         cfg = self._config
@@ -611,9 +671,16 @@ class HighICScreener:
             score = 5.0
         else:
             score = 5.0 * max(0.0, raw / cfg.industry_min_ratio)
-        return HighICCheckItem("industry_coverage", "", "", 5.0, round(score, 2),
-                               raw, raw >= cfg.industry_min_ratio,
-                               f"positive_ratio={raw:.1%}")
+        return HighICCheckItem(
+            "industry_coverage",
+            "",
+            "",
+            5.0,
+            round(score, 2),
+            raw,
+            raw >= cfg.industry_min_ratio,
+            f"positive_ratio={raw:.1%}",
+        )
 
     def _check_net_excess(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         cfg = self._config
@@ -622,9 +689,9 @@ class HighICScreener:
             return HighICCheckItem("net_excess", "", "", 8.0, 0.0, None, None, "成本数据缺失")
         raw = float(net_excess)
         score = 8.0 if raw > cfg.net_excess_min else 0.0
-        return HighICCheckItem("net_excess", "", "", 8.0, score,
-                               raw, raw > cfg.net_excess_min,
-                               f"net_excess_return={raw:.4f}")
+        return HighICCheckItem(
+            "net_excess", "", "", 8.0, score, raw, raw > cfg.net_excess_min, f"net_excess_return={raw:.4f}"
+        )
 
     def _check_turnover(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         cfg = self._config
@@ -638,9 +705,16 @@ class HighICScreener:
             score = max(score, 1.0)  # 低换手保底 1 分
         else:
             score = 0.0
-        return HighICCheckItem("turnover", "", "", 6.0, round(score, 2),
-                               weekly, weekly <= cfg.turnover_weekly_max,
-                               f"weekly_turnover={weekly:.1%}")
+        return HighICCheckItem(
+            "turnover",
+            "",
+            "",
+            6.0,
+            round(score, 2),
+            weekly,
+            weekly <= cfg.turnover_weekly_max,
+            f"weekly_turnover={weekly:.1%}",
+        )
 
     def _check_signal_halflife(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         cfg = self._config
@@ -651,6 +725,7 @@ class HighICScreener:
         raw = abs(float(decay_6m))
         # 半年衰减率 → 半衰期天数近似: half_life ≈ ln(0.5)/ln(1-decay) * 126
         import math
+
         if raw >= 0.999:
             halflife = 1.0
         else:
@@ -659,16 +734,25 @@ class HighICScreener:
             score = 6.0
         else:
             score = 6.0 * max(0.0, halflife / cfg.half_life_min_days)
-        return HighICCheckItem("signal_halflife", "", "", 6.0, round(score, 2),
-                               halflife, halflife >= cfg.half_life_min_days,
-                               f"half_life={halflife:.1f}d")
+        return HighICCheckItem(
+            "signal_halflife",
+            "",
+            "",
+            6.0,
+            round(score, 2),
+            halflife,
+            halflife >= cfg.half_life_min_days,
+            f"half_life={halflife:.1f}d",
+        )
 
     def _check_logic_reason(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         cfg = self._config
         l2 = _level2(evaluation)
         dims = [
-            l2.get("theory"), l2.get("behavioral"),
-            l2.get("microstructure"), l2.get("institutional"),
+            l2.get("theory"),
+            l2.get("behavioral"),
+            l2.get("microstructure"),
+            l2.get("institutional"),
         ]
         dims = [d for d in dims if isinstance(d, (int, float))]
         if not dims:
@@ -680,8 +764,9 @@ class HighICScreener:
             score = 6.0 * (avg - cfg.logic_min_score) / (3.0 - cfg.logic_min_score)
         else:
             score = 0.0
-        return HighICCheckItem("logic_reason", "", "", 6.0, round(score, 2),
-                               avg, avg >= cfg.logic_min_score, f"avg_logic={avg:.2f}")
+        return HighICCheckItem(
+            "logic_reason", "", "", 6.0, round(score, 2), avg, avg >= cfg.logic_min_score, f"avg_logic={avg:.2f}"
+        )
 
     def _check_event_stability(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         l1 = _level1(evaluation)
@@ -695,8 +780,9 @@ class HighICScreener:
             score = 4.0 * (0.4 - raw) / (0.4 - 0.15)
         else:
             score = 0.0
-        return HighICCheckItem("event_stability", "", "", 4.0, round(score, 2),
-                               raw, raw <= 0.4, f"max_drawdown={raw:.1%}")
+        return HighICCheckItem(
+            "event_stability", "", "", 4.0, round(score, 2), raw, raw <= 0.4, f"max_drawdown={raw:.1%}"
+        )
 
     def _check_multi_regime(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         cfg = self._config
@@ -708,17 +794,25 @@ class HighICScreener:
             score = 5.0
         else:
             score = 5.0 * max(0.0, pos_ratio / cfg.oos_positive_ratio_min)
-        return HighICCheckItem("multi_regime", "", "", 5.0, round(score, 2),
-                               pos_ratio, pos_ratio >= cfg.oos_positive_ratio_min,
-                               f"pos_ratio={pos_ratio:.1%}")
+        return HighICCheckItem(
+            "multi_regime",
+            "",
+            "",
+            5.0,
+            round(score, 2),
+            pos_ratio,
+            pos_ratio >= cfg.oos_positive_ratio_min,
+            f"pos_ratio={pos_ratio:.1%}",
+        )
 
     def _check_monotonicity(self, evaluation, corr_meta, bt_pipeline) -> HighICCheckItem:
         l1 = _level1(evaluation)
         mono = l1.get("monotonicity")
         if not isinstance(mono, bool):
             return HighICCheckItem("monotonicity", "", "", 5.0, 0.0, None, None, "单调性数据缺失")
-        return HighICCheckItem("monotonicity", "", "", 5.0, 5.0 if mono else 0.0,
-                                float(mono), mono, f"monotonicity={mono}")
+        return HighICCheckItem(
+            "monotonicity", "", "", 5.0, 5.0 if mono else 0.0, float(mono), mono, f"monotonicity={mono}"
+        )
 
     # ─── 优化建议 ────────────────────────────────────────
 

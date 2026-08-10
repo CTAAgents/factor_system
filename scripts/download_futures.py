@@ -15,6 +15,7 @@ scripts/download_futures.py — 期货连续合约数据下载/刷新脚本
 DuckDB 路径: data/fts_history.duckdb
 kline_cache 表结构: symbol, period, open, high, low, close, volume, amount, date
 """
+
 from __future__ import annotations
 
 import logging
@@ -38,6 +39,7 @@ _DUCKDB_PATH = PROJECT_ROOT / "data" / "fts_history.duckdb"
 def _get_db():
     """获取 DuckDB 连接。"""
     import duckdb
+
     return duckdb.connect(str(_DUCKDB_PATH))
 
 
@@ -104,17 +106,19 @@ def _download_symbol(symbol: str, db) -> int:
     rows = []
     for _, row in df.iterrows():
         date_str = str(row["date"]) if hasattr(row["date"], "strftime") else str(row["date"])
-        rows.append((
-            sym,
-            "daily",
-            date_str,
-            float(row["open"]),
-            float(row["high"]),
-            float(row["low"]),
-            float(row["close"]),
-            float(row["volume"]),
-            float(row.get("amount", 0.0)),
-        ))
+        rows.append(
+            (
+                sym,
+                "daily",
+                date_str,
+                float(row["open"]),
+                float(row["high"]),
+                float(row["low"]),
+                float(row["close"]),
+                float(row["volume"]),
+                float(row.get("amount", 0.0)),
+            )
+        )
 
     # 批量插入（先删后插 = 刷新）
     db.execute("DELETE FROM kline_cache WHERE symbol = ? AND period = 'daily'", [sym])
@@ -129,6 +133,7 @@ def _download_symbol(symbol: str, db) -> int:
 def _get_symbols(subset_only: bool) -> list[str]:
     """获取待下载的品种列表。"""
     from fts.data_futures import FUTURES_SUBSET, FUTURES_CORE_SUBSET
+
     if subset_only:
         logger.info("使用核心子集 (%d 个品种)", len(FUTURES_CORE_SUBSET))
         return FUTURES_CORE_SUBSET
@@ -139,6 +144,7 @@ def _get_symbols(subset_only: bool) -> list[str]:
 def main() -> int:
     """主入口。"""
     import argparse
+
     parser = argparse.ArgumentParser(description="下载期货连续合约数据")
     parser.add_argument("--subset", action="store_true", help="仅下载核心品种")
     parser.add_argument("--force", action="store_true", help="强制刷新（忽略已有数据）")
@@ -173,8 +179,14 @@ def main() -> int:
 
     elapsed = time.time() - start
     logger.info("=" * 50)
-    logger.info("下载完成: 总品种=%d, 新增=%d, 跳过=%d, 失败=%d, 耗时=%.1fs",
-                len(symbols), total_inserted, skipped, failed, elapsed)
+    logger.info(
+        "下载完成: 总品种=%d, 新增=%d, 跳过=%d, 失败=%d, 耗时=%.1fs",
+        len(symbols),
+        total_inserted,
+        skipped,
+        failed,
+        elapsed,
+    )
 
     db.close()
     return 0 if failed == 0 else 1

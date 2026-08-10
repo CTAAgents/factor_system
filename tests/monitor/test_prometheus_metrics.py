@@ -23,7 +23,10 @@ class TestMetricsRegistryInit:
         """初始计数全部为 0 / 空。"""
         reg = MetricsRegistry()
         assert reg.get_decay_counts() == {
-            "active": 0, "decaying": 0, "critical_decay": 0, "deprecated": 0,
+            "active": 0,
+            "decaying": 0,
+            "critical_decay": 0,
+            "deprecated": 0,
         }
         assert reg.get_regime() == ""
         assert reg._decay_evaluations == {}
@@ -52,7 +55,10 @@ class TestDecayCounts:
         reg = MetricsRegistry()
         reg.update_decay_counts(active=12, decaying=2, critical=1, deprecated=3)
         assert reg.get_decay_counts() == {
-            "active": 12, "decaying": 2, "critical_decay": 1, "deprecated": 3,
+            "active": 12,
+            "decaying": 2,
+            "critical_decay": 1,
+            "deprecated": 3,
         }
 
     def test_update_partial(self):
@@ -141,7 +147,9 @@ class TestLiveFactor:
         reg = MetricsRegistry()
         reg.update_live_factor("f1", {"ic": 0.05, "sharpe": 1.2, "max_drawdown": -0.1})
         assert reg._live_factor_values["f1"] == {
-            "ic": 0.05, "sharpe": 1.2, "max_drawdown": -0.1,
+            "ic": 0.05,
+            "sharpe": 1.2,
+            "max_drawdown": -0.1,
         }
 
     def test_update_live_factor_filters_none(self):
@@ -303,14 +311,8 @@ class TestRender:
         reg.record_decay_evaluation("decaying", "deprecated")
         reg.record_decay_evaluation("active", "decaying")
         text = "\n".join(reg.render())
-        assert (
-            'fts_factor_decay_evaluations_total{status_before="active",'
-            'status_after="decaying"} 1' in text
-        )
-        assert (
-            'fts_factor_decay_evaluations_total{status_before="decaying",'
-            'status_after="deprecated"} 1' in text
-        )
+        assert 'fts_factor_decay_evaluations_total{status_before="active",status_after="decaying"} 1' in text
+        assert 'fts_factor_decay_evaluations_total{status_before="decaying",status_after="deprecated"} 1' in text
         # 空分支的 0 行不再输出
         assert "fts_factor_decay_evaluations_total 0" not in text
 
@@ -351,10 +353,7 @@ class TestRender:
         reg = MetricsRegistry()
         reg.record_live_deviation_alert("f1", "critical")
         text = "\n".join(reg.render())
-        assert (
-            'fts_live_factor_deviation_alerts_total{factor_id="f1",'
-            'severity="critical"} 1' in text
-        )
+        assert 'fts_live_factor_deviation_alerts_total{factor_id="f1",severity="critical"} 1' in text
 
     def test_render_risk_check_lines(self):
         """风控检查 / 拦截计数输出。"""
@@ -362,12 +361,8 @@ class TestRender:
         reg.record_risk_check("leverage_limit", "blocked")
         reg.record_risk_check("leverage_limit", "passed")
         text = "\n".join(reg.render())
-        assert (
-            'fts_risk_check_total{check_name="leverage_limit",result="blocked"} 1' in text
-        )
-        assert (
-            'fts_risk_check_total{check_name="leverage_limit",result="passed"} 1' in text
-        )
+        assert 'fts_risk_check_total{check_name="leverage_limit",result="blocked"} 1' in text
+        assert 'fts_risk_check_total{check_name="leverage_limit",result="passed"} 1' in text
         assert 'fts_risk_check_blocked_total{check_name="leverage_limit"} 1' in text
 
     def test_render_feedback_lines(self):
@@ -379,9 +374,7 @@ class TestRender:
         text = "\n".join(reg.render())
         assert 'fts_feedback_triggers_total{event_type="new_factor"} 1' in text
         assert 'fts_feedback_events_pending{event_type="review"} 2' in text
-        assert (
-            'fts_feedback_processing_total{action_taken="retire",success="ok"} 1' in text
-        )
+        assert 'fts_feedback_processing_total{action_taken="retire",success="ok"} 1' in text
 
     def test_render_effectiveness_values(self):
         """效果指标输出实际数值。"""

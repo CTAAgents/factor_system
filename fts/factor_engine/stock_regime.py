@@ -44,48 +44,53 @@ from fts.factor_engine.regime_hmm import MultiHorizonHMMDetector  # noqa: E402
 
 # ─── 默认参数 ─────────────────────────────────────────────
 
-_DEFAULT_MOMENTUM_DAYS = 20        # 行业/风格动量回看窗口（交易日）
-_DEFAULT_LOOKBACK_DAYS = 60        # 轮动强度回看窗口
-_DEFAULT_TOP_N = 5                 # 集中度计算取前 N 个行业
-_CONCENTRATION_THRESHOLD = 0.5     # top5 动量占比 > 阈值 → 行业集中
-_ROTATION_STD_THRESHOLD = 0.005    # 行业动量横截面 std > 阈值 → 强轮动/分化
-_MIN_SAMPLES = 30                  # 最少样本数，不足返回 fallback
+_DEFAULT_MOMENTUM_DAYS = 20  # 行业/风格动量回看窗口（交易日）
+_DEFAULT_LOOKBACK_DAYS = 60  # 轮动强度回看窗口
+_DEFAULT_TOP_N = 5  # 集中度计算取前 N 个行业
+_CONCENTRATION_THRESHOLD = 0.5  # top5 动量占比 > 阈值 → 行业集中
+_ROTATION_STD_THRESHOLD = 0.005  # 行业动量横截面 std > 阈值 → 强轮动/分化
+_MIN_SAMPLES = 30  # 最少样本数，不足返回 fallback
 
 
 # ─── 契约 ─────────────────────────────────────────────────
 
+
 class StockIndustryState(TypedDict, total=False):
     """行业轮动状态。"""
-    state: str                     # "concentrated" / "rotating" / "balanced"
-    rotation_strength: float       # 行业动量横截面离散度（std）
-    concentration: float           # top-N 行业动量占比（0~1）
-    top_industries: list[str]      # 动量最强的 N 个行业
+
+    state: str  # "concentrated" / "rotating" / "balanced"
+    rotation_strength: float  # 行业动量横截面离散度（std）
+    concentration: float  # top-N 行业动量占比（0~1）
+    top_industries: list[str]  # 动量最强的 N 个行业
     industry_momentum: dict[str, float]  # 各行业动量
     features: dict[str, Any]
 
 
 class StockStyleState(TypedDict, total=False):
     """风格切换状态。"""
-    size_state: str                # "large_cap" / "small_cap" / "unknown"
-    growth_state: str              # "growth" / "value" / "unknown"
-    size_ratio_momentum: float     # 大盘/小盘 比值动量（>0 大盘占优）
-    growth_ratio_momentum: float   # 成长/价值 比值动量（>0 成长占优）
-    confidence: float              # 风格置信度 0~1
+
+    size_state: str  # "large_cap" / "small_cap" / "unknown"
+    growth_state: str  # "growth" / "value" / "unknown"
+    size_ratio_momentum: float  # 大盘/小盘 比值动量（>0 大盘占优）
+    growth_ratio_momentum: float  # 成长/价值 比值动量（>0 成长占优）
+    confidence: float  # 风格置信度 0~1
     features: dict[str, Any]
 
 
 class StockRegime(TypedDict):
     """股票市场制度检测结果（兼容 MarketRegime + 扩展字段）。"""
-    regime: str                    # REGIME_STYLE_MULTIPLIERS 键（风格优先，行业兜底）
-    confidence: float              # 置信度 0~1
-    detected_at: str               # ISO 8601
-    features: dict[str, Any]       # 检测特征（含 industry/style 子状态）
-    method: str                    # "stock_hmm" / "stock_rule" / "fallback"
-    industry: StockIndustryState   # 行业轮动子状态
-    style: StockStyleState         # 风格切换子状态
+
+    regime: str  # REGIME_STYLE_MULTIPLIERS 键（风格优先，行业兜底）
+    confidence: float  # 置信度 0~1
+    detected_at: str  # ISO 8601
+    features: dict[str, Any]  # 检测特征（含 industry/style 子状态）
+    method: str  # "stock_hmm" / "stock_rule" / "fallback"
+    industry: StockIndustryState  # 行业轮动子状态
+    style: StockStyleState  # 风格切换子状态
 
 
 # ─── 检测器 ───────────────────────────────────────────────
+
 
 class StockRegimeSelector:
     """A 股行业轮动 + 风格轮动制度检测器。
@@ -187,8 +192,14 @@ class StockRegimeSelector:
             否则按离散度阈值区分 rotating / balanced。
         """
         if not industry_panel:
-            return StockIndustryState(state="unknown", rotation_strength=0.0, concentration=0.0,
-                                      top_industries=[], industry_momentum={}, features={})
+            return StockIndustryState(
+                state="unknown",
+                rotation_strength=0.0,
+                concentration=0.0,
+                top_industries=[],
+                industry_momentum={},
+                features={},
+            )
 
         momentum: dict[str, float] = {}
         for name, panel in industry_panel.items():
@@ -201,8 +212,14 @@ class StockRegimeSelector:
                 momentum[name] = m
 
         if len(momentum) < 2:
-            return StockIndustryState(state="unknown", rotation_strength=0.0, concentration=0.0,
-                                      top_industries=[], industry_momentum=momentum, features={})
+            return StockIndustryState(
+                state="unknown",
+                rotation_strength=0.0,
+                concentration=0.0,
+                top_industries=[],
+                industry_momentum=momentum,
+                features={},
+            )
 
         values = np.array(list(momentum.values()), dtype=float)
         rotation_strength = float(np.std(values))
@@ -211,11 +228,11 @@ class StockRegimeSelector:
         concentration = float(np.sum(np.abs(values[np.argsort(-np.abs(values))[: self.top_n]])) / total_abs)
 
         if rotation_strength > self.rotation_std_threshold and concentration > self.concentration_threshold:
-            state = "concentrated"      # 主线集中：少数行业强势
+            state = "concentrated"  # 主线集中：少数行业强势
         elif rotation_strength > self.rotation_std_threshold:
-            state = "rotating"          # 强分化但无绝对主线
+            state = "rotating"  # 强分化但无绝对主线
         else:
-            state = "balanced"          # 行业间动量均衡
+            state = "balanced"  # 行业间动量均衡
 
         return StockIndustryState(
             state=state,
@@ -243,9 +260,14 @@ class StockRegimeSelector:
             HMM 不可用/失败时回退规则动量判定，置信度 = min(0.7, 0.3 + |动量|)。
         """
         if not style_panel:
-            return StockStyleState(size_state="unknown", growth_state="unknown",
-                                   size_ratio_momentum=0.0, growth_ratio_momentum=0.0,
-                                   confidence=0.0, features={})
+            return StockStyleState(
+                size_state="unknown",
+                growth_state="unknown",
+                size_ratio_momentum=0.0,
+                growth_ratio_momentum=0.0,
+                confidence=0.0,
+                features={},
+            )
 
         large = self._extract_style_series(style_panel, ("large",))
         small = self._extract_style_series(style_panel, ("small",))
@@ -253,10 +275,18 @@ class StockRegimeSelector:
         value = self._extract_style_series(style_panel, ("value",))
 
         size_state, size_mom, size_conf, size_feats = self._detect_pair(
-            large, small, "large_cap", "small_cap", "size",
+            large,
+            small,
+            "large_cap",
+            "small_cap",
+            "size",
         )
         growth_state, growth_mom, growth_conf, growth_feats = self._detect_pair(
-            growth, value, "growth", "value", "growth_value",
+            growth,
+            value,
+            "growth",
+            "value",
+            "growth_value",
         )
 
         # 风格置信度 = 两维度中较高者（有数据维度）
@@ -306,13 +336,15 @@ class StockRegimeSelector:
             return "unknown", 0.0, 0.0, {"available": False, "samples": len(ratio)}
 
         # 规则动量：方向主判定（ratio 尾部 momentum_days 累计变化率）
-        mom = float(ratio.tail(self.momentum_days).iloc[-1] / ratio.tail(self.momentum_days).iloc[0] - 1.0) \
-            if len(ratio) > self.momentum_days + 1 else float(ratio.iloc[-1] / ratio.iloc[0] - 1.0)
+        mom = (
+            float(ratio.tail(self.momentum_days).iloc[-1] / ratio.tail(self.momentum_days).iloc[0] - 1.0)
+            if len(ratio) > self.momentum_days + 1
+            else float(ratio.iloc[-1] / ratio.iloc[0] - 1.0)
+        )
         rule_pos = mom >= 0
         state = pos_label if rule_pos else neg_label
 
-        features: dict[str, Any] = {"available": True, "ratio_momentum": round(mom, 6),
-                                    "n_samples": len(ratio)}
+        features: dict[str, Any] = {"available": True, "ratio_momentum": round(mom, 6), "n_samples": len(ratio)}
 
         # 多周期 HMM 集成（P1.2）：比值序列 → 合成 OHLCV → 趋势态
         # 用于校正置信度：HMM 与规则动量方向一致时置信度提升，冲突时折减
@@ -321,7 +353,7 @@ class StockRegimeSelector:
                 synth = self._build_synth_ohlcv(ratio)
                 regime, conf, hmm_feats = self._multi_hmm.predict(synth)
                 if regime in ("bull", "bear") and conf >= 0.3:
-                    hmm_pos = (regime == "bull")  # bull = 比值上升 = pos 占优
+                    hmm_pos = regime == "bull"  # bull = 比值上升 = pos 占优
                     consistency = 1.0 if (hmm_pos == rule_pos) else 0.5
                     confidence = float(conf * consistency)
                     features["hmm_regime"] = regime
@@ -384,13 +416,15 @@ class StockRegimeSelector:
     def _build_synth_ohlcv(series: pd.Series) -> pd.DataFrame:
         """将比值序列构造为合成 OHLCV（open/high/low 用 close 近似）。"""
         close = series
-        df = pd.DataFrame({
-            "open": close,
-            "high": close,
-            "low": close,
-            "close": close,
-            "volume": np.ones(len(close)),
-        })
+        df = pd.DataFrame(
+            {
+                "open": close,
+                "high": close,
+                "low": close,
+                "close": close,
+                "volume": np.ones(len(close)),
+            }
+        )
         df.index = pd.DatetimeIndex(df.index)
         return df
 

@@ -22,30 +22,30 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-
-
 @dataclass
 class LoopStatus:
     """单层循环的状态摘要。"""
-    name: str                              # L1 / L2 / L3
-    state_file: str                        # 状态文件路径
-    exists: bool                           # 状态文件是否存在
-    run_id: str = ""                       # 最后运行 ID
-    status: str = "unknown"                # running/paused/completed/circuit_broken
-    last_updated: str = ""                 # ISO 8601
+
+    name: str  # L1 / L2 / L3
+    state_file: str  # 状态文件路径
+    exists: bool  # 状态文件是否存在
+    run_id: str = ""  # 最后运行 ID
+    status: str = "unknown"  # running/paused/completed/circuit_broken
+    last_updated: str = ""  # ISO 8601
     tokens_consumed: int = 0
     budget_limit: int = 0
     last_error: Optional[str] = None
-    age_hours: float = 0.0                 # 距上次更新的小时数
+    age_hours: float = 0.0  # 距上次更新的小时数
     healthy: bool = True
 
 
 @dataclass
 class AllStatus:
     """全部三层循环的状态汇总。"""
+
     loops: list[LoopStatus] = field(default_factory=list)
     any_circuit_broken: bool = False
-    any_stale: bool = False                # 超过 24 小时未更新
+    any_stale: bool = False  # 超过 24 小时未更新
     total_tokens_today: int = 0
     checked_at: str = ""
 
@@ -80,10 +80,7 @@ def check_loop(
         except (ValueError, TypeError):
             pass
 
-    healthy = (
-        status not in ("circuit_broken",)
-        and age_hours < max_stale_hours
-    )
+    healthy = status not in ("circuit_broken",) and age_hours < max_stale_hours
 
     return LoopStatus(
         name=name,
@@ -119,9 +116,9 @@ def check_all(
         loop = check_loop(name, state_dir, max_stale_hours)
         loops.append(loop)
 
-    any_circuit_broken = any(l.status == "circuit_broken" for l in loops)
-    any_stale = any(l.age_hours > max_stale_hours for l in loops if l.exists)
-    total_tokens = sum(l.tokens_consumed for l in loops)
+    any_circuit_broken = any(lp.status == "circuit_broken" for lp in loops)
+    any_stale = any(lp.age_hours > max_stale_hours for lp in loops if lp.exists)
+    total_tokens = sum(lp.tokens_consumed for lp in loops)
 
     return AllStatus(
         loops=loops,
@@ -134,9 +131,9 @@ def check_all(
 
 def print_status_table(status: AllStatus) -> None:
     """打印格式化状态表。"""
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"  Loop Engineering — 状态总览 @ {status.checked_at[:19]}")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
     header = f"{'Loop':<5} {'状态':<16} {'运行ID':<28} {'Token':<10} {'已过(h)':<8} {'健康':<6}"
     print(header)
@@ -148,7 +145,7 @@ def print_status_table(status: AllStatus) -> None:
         tok = f"{loop.tokens_consumed}/{loop.budget_limit}" if loop.budget_limit else str(loop.tokens_consumed)
         age = f"{loop.age_hours:.1f}h"
         health = "OK" if loop.healthy else "WARN"
-        print(f"{loop.name:<5} {status_icon}{' '+loop.status:<15} {rid:<28} {tok:<10} {age:<8} {health:<6}")
+        print(f"{loop.name:<5} {status_icon}{' ' + loop.status:<15} {rid:<28} {tok:<10} {age:<8} {health:<6}")
 
     print("-" * 70)
 
@@ -166,7 +163,7 @@ def print_status_table(status: AllStatus) -> None:
             if loop.age_hours > 24 and loop.exists:
                 print(f"  🟡 {loop.name}: 最后更新 {loop.age_hours:.0f}h 前")
 
-    if not any(l.exists for l in status.loops):
+    if not any(lp.exists for lp in status.loops):
         print("\n 没有找到任何状态文件。系统尚未运行过。")
 
 

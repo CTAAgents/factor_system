@@ -29,6 +29,7 @@ scripts/futures_signal_pipeline.py — 期货每日信号生成管道
     强因子自动获得高权重，弱因子获得接近零的权重但不被丢弃。
     这替代了 v2 的 IC>0.3 硬过滤 + 等权合成。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -47,10 +48,13 @@ import pandas as pd
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
 warnings.filterwarnings("ignore", category=FutureWarning, module="numpy")
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*treating keys as positions is deprecated.*")
-warnings.filterwarnings("ignore", category=FutureWarning, message=".*Series.__setitem__ treating keys as positions is deprecated.*")
+warnings.filterwarnings(
+    "ignore", category=FutureWarning, message=".*Series.__setitem__ treating keys as positions is deprecated.*"
+)
 # 抑制 ConstantInputWarning: scipy 在计算相关性时常数输入导致的警告
 try:
     from scipy.stats import ConstantInputWarning
+
     warnings.filterwarnings("ignore", category=ConstantInputWarning)
 except ImportError:
     pass
@@ -65,12 +69,14 @@ REPORTS_ROOT = PROJECT_ROOT / "reports"
 # 优化器懒加载（可选依赖，失败时回退到原始实现）
 _OPTIMIZER = None
 
+
 def _get_optimizer():
     """获取或创建因子优化器（懒加载）。"""
     global _OPTIMIZER
     if _OPTIMIZER is None:
         try:
-            from fts.factor_engine.factor_optimizer import FactorOptimizer, set_panel_ref
+            from fts.factor_engine.factor_optimizer import FactorOptimizer
+
             _OPTIMIZER = FactorOptimizer()
         except ImportError:
             pass
@@ -80,6 +86,7 @@ def _get_optimizer():
 def _yesterday_str() -> str:
     """返回昨日日期字符串 (YYYY-MM-DD)。"""
     from datetime import timedelta
+
     return (date.today() - timedelta(days=1)).isoformat()
 
 
@@ -117,8 +124,7 @@ def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]
                 seen_codes.add(code_hash)
 
             # Layer 2: 回测结果去重（IC/sharpe/t_stat 完全相同 → 同一因子）
-            stat_key = (round(ic, 5), round(bt.get("sharpe", 0), 4),
-                        round(bt.get("t_stat", 0), 5))
+            stat_key = (round(ic, 5), round(bt.get("sharpe", 0), 4), round(bt.get("t_stat", 0), 5))
             if stat_key in seen_stats:
                 duplicate_count += 1
                 continue
@@ -155,8 +161,9 @@ def _compute_signal_matrix(
     if optimizer is not None and len(factors) >= 30:
         try:
             from fts.factor_engine.factor_optimizer import set_panel_ref
+
             set_panel_ref(panel)
-            print(f"      [优化器] 使用 Tier 1 并行计算...")
+            print("      [优化器] 使用 Tier 1 并行计算...")
             return optimizer.compute_signal_matrix_parallel(panel, factors)
         except Exception as e:
             print(f"      [警告] 优化器计算失败，回退到顺序计算: {e}")
@@ -244,20 +251,24 @@ def _generate_trading_advice(
     for sym, score in sorted_symbols:
         if score > 0 and len(long_candidates) < top_n:
             delta = signal_deltas.get(sym, 0) if signal_deltas else 0
-            long_candidates.append({
-                "symbol": sym,
-                "score": score,
-                "delta": delta,
-                "accelerating": delta < -0.01,  # 多头加速
-            })
+            long_candidates.append(
+                {
+                    "symbol": sym,
+                    "score": score,
+                    "delta": delta,
+                    "accelerating": delta < -0.01,  # 多头加速
+                }
+            )
         elif score < 0 and len(short_candidates) < top_n:
             delta = signal_deltas.get(sym, 0) if signal_deltas else 0
-            short_candidates.append({
-                "symbol": sym,
-                "score": score,
-                "delta": delta,
-                "accelerating": delta < -0.01,  # 空头加速
-            })
+            short_candidates.append(
+                {
+                    "symbol": sym,
+                    "score": score,
+                    "delta": delta,
+                    "accelerating": delta < -0.01,  # 空头加速
+                }
+            )
 
     # 3. 提取关键因子（权重最高的 5 个）
     sorted_factors = sorted(factor_weights.items(), key=lambda x: x[1], reverse=True)
@@ -361,6 +372,7 @@ def _compute_factor_sign_flips(
                     warnings.filterwarnings("ignore", category=RuntimeWarning)
                     try:
                         from scipy.stats import ConstantInputWarning
+
                         warnings.filterwarnings("ignore", category=ConstantInputWarning)
                     except ImportError:
                         pass
@@ -464,8 +476,7 @@ def _compute_ridge_weights(
     if valid_factor_names:
         dropped = set(factor_names) - set(valid_factor_names)
         if dropped:
-            print(f"      [Ridge] 排除 {len(dropped)} 个高 NaN 因子: "
-                  f"{', '.join(sorted(dropped))}")
+            print(f"      [Ridge] 排除 {len(dropped)} 个高 NaN 因子: {', '.join(sorted(dropped))}")
         factor_names = valid_factor_names
     n_factors = len(factor_names)
     if n_factors <= 1:
@@ -519,8 +530,7 @@ def _compute_ridge_weights(
 
     min_samples = max(n_factors * 3, 30)
     if len(X_list) < min_samples:
-        print(f"      [Ridge] 训练样本不足 ({len(X_list)} < {min_samples})，"
-              f"回退到等权")
+        print(f"      [Ridge] 训练样本不足 ({len(X_list)} < {min_samples})，回退到等权")
         return {f: 1.0 / n_factors for f in factor_names}
 
     X = np.array(X_list)
@@ -533,7 +543,7 @@ def _compute_ridge_weights(
     # ── 因子间相关性惩罚 (v6 新增) ──
     corr_matrix = np.corrcoef(X_scaled, rowvar=False)
     corr_matrix = np.nan_to_num(corr_matrix, nan=0.0, posinf=1.0, neginf=-1.0)
-    
+
     corr_threshold = 0.5
     penalty_matrix = np.zeros_like(corr_matrix)
     high_corr_pairs = []
@@ -544,7 +554,7 @@ def _compute_ridge_weights(
                 penalty_matrix[i, j] = c
                 penalty_matrix[j, i] = c
                 high_corr_pairs.append((factor_names[i], factor_names[j], c))
-    
+
     if high_corr_pairs:
         print(f"      [相关性惩罚] 检测到 {len(high_corr_pairs)} 个高相关因子对 (|corr|>{corr_threshold}):")
         for f1, f2, c in high_corr_pairs[:5]:
@@ -553,7 +563,7 @@ def _compute_ridge_weights(
             print(f"        ... 及其他 {len(high_corr_pairs) - 5} 对")
 
     lambda_corr = 0.5
-    
+
     penalty_features_list = []
     penalty_targets = []
     for i in range(n_factors):
@@ -565,16 +575,18 @@ def _compute_ridge_weights(
                 feat[j] = np.sqrt(lambda_corr) * c
                 penalty_features_list.append(feat)
                 penalty_targets.append(0.0)
-    
+
     if penalty_features_list:
         penalty_X = np.array(penalty_features_list)
         penalty_y = np.array(penalty_targets)
-        
+
         X_augmented = np.vstack([X_scaled, penalty_X])
         y_augmented = np.concatenate([y, penalty_y])
-        
-        print(f"      [相关性惩罚] 追加 {len(penalty_features_list)} 个惩罚样本，"
-              f"训练集从 {len(X_scaled)} 增至 {len(X_augmented)}")
+
+        print(
+            f"      [相关性惩罚] 追加 {len(penalty_features_list)} 个惩罚样本，"
+            f"训练集从 {len(X_scaled)} 增至 {len(X_augmented)}"
+        )
     else:
         X_augmented = X_scaled
         y_augmented = y
@@ -582,6 +594,7 @@ def _compute_ridge_weights(
     # Ridge 回归（自动选择 alpha）
     if alpha is not None:
         from sklearn.linear_model import Ridge
+
         ridge = Ridge(alpha=alpha, fit_intercept=True)
     else:
         ridge = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 5000.0, 10000.0], fit_intercept=True)
@@ -593,28 +606,27 @@ def _compute_ridge_weights(
     if total < 1e-10:
         return {f: 1.0 / n_factors for f in factor_names}
 
-    weights = {fname: float(coef) / float(total)
-               for fname, coef in zip(factor_names, coefs)}
+    weights = {fname: float(coef) / float(total) for fname, coef in zip(factor_names, coefs)}
 
     # ── 极端相关因子硬删除 (|corr| > 0.95) ──
     extreme_threshold = 0.90
     extreme_pairs = [(f1, f2, c) for f1, f2, c in high_corr_pairs if c > extreme_threshold]
     removed_factors: set[str] = set()
-    
+
     # 保存原始因子列表（用于后续相关性监控时索引 X_scaled）
     orig_factor_names = list(factor_names)
-    
+
     if extreme_pairs:
         print(f"      [硬删除] 检测到 {len(extreme_pairs)} 个极端相关因子对 (|corr|>{extreme_threshold}):")
         for f1, f2, c in extreme_pairs:
             print(f"        🔴 {f1} × {f2} = {c:.4f}")
-        
+
         # 按权重保留更高的因子
         extreme_factor_degree: dict[str, int] = {}
         for f1, f2, _ in extreme_pairs:
             extreme_factor_degree[f1] = extreme_factor_degree.get(f1, 0) + 1
             extreme_factor_degree[f2] = extreme_factor_degree.get(f2, 0) + 1
-        
+
         for f1, f2, c in extreme_pairs:
             w1 = weights.get(f1, 0)
             w2 = weights.get(f2, 0)
@@ -634,14 +646,14 @@ def _compute_ridge_weights(
                 weights[f1] += weights[f2]
                 removed_factors.add(f2)
                 print(f"        → 连锁: 剔除 {f2}, 保留 {f1}")
-        
+
         # 移除被删除因子
         weights = {k: v for k, v in weights.items() if k not in removed_factors}
         factor_names = [f for f in factor_names if f not in removed_factors]
         n_factors = len(factor_names)
         print(f"      [硬删除] 已剔除 {len(removed_factors)} 个冗余因子: {', '.join(sorted(removed_factors))}")
         print(f"      [硬删除] 剩余 {n_factors} 个因子")
-    
+
     # ── 高相关因子对权重调整 (0.7 < |corr| <= 0.95) ──
     corr_adjusted = 0
     for f1, f2, c in high_corr_pairs:
@@ -658,10 +670,10 @@ def _compute_ridge_weights(
                 weights[keep_factor] = weights.get(keep_factor, 0.0) + shift_amount
                 weights[drop_factor] = weights.get(drop_factor, 0.0) - shift_amount
                 corr_adjusted += 1
-    
+
     if corr_adjusted > 0:
         print(f"      [相关性调整] 对 {corr_adjusted} 个高相关因子对进行权重转移")
-    
+
     total_w = sum(w for w in weights.values() if w > 0)
     if total_w > 0:
         weights = {k: max(0.0, v) / total_w for k, v in weights.items()}
@@ -670,9 +682,8 @@ def _compute_ridge_weights(
     w_sorted = sorted(weights.items(), key=lambda x: -x[1])
     top3_str = ", ".join(f"{n}({w:.3f})" for n, w in w_sorted[:3])
     bottom3_str = ", ".join(f"{n}({w:.3f})" for n, w in w_sorted[-3:])
-    alpha_used = ridge.alpha_ if hasattr(ridge, 'alpha_') else alpha
-    print(f"      Ridge α={alpha_used:.2f} | 权重 Top3: {top3_str} | "
-          f"Bottom3: {bottom3_str}")
+    alpha_used = ridge.alpha_ if hasattr(ridge, "alpha_") else alpha
+    print(f"      Ridge α={alpha_used:.2f} | 权重 Top3: {top3_str} | Bottom3: {bottom3_str}")
 
     # 输出调整后的相关性监控（重新计算筛选后因子的相关矩阵）
     try:
@@ -690,16 +701,15 @@ def _compute_ridge_weights(
                 corr_matrix_filtered = corr_matrix
         else:
             corr_matrix_filtered = corr_matrix
-        
+
         w_vec = np.array([weights.get(f, 0) for f in factor_names])
         port_corr = float(w_vec @ corr_matrix_filtered @ w_vec)
         n_remaining = len(factor_names)
         upper_tri_idx = np.triu_indices(n_remaining, k=1)
         max_pair_corr = float(np.max(np.abs(corr_matrix_filtered[upper_tri_idx]))) if len(upper_tri_idx[0]) > 0 else 0.0
-        print(f"      [相关性监控] 组合相关性(w^T*C*w)={port_corr:.4f} | "
-              f"最大因子对相关性={max_pair_corr:.4f}")
+        print(f"      [相关性监控] 组合相关性(w^T*C*w)={port_corr:.4f} | 最大因子对相关性={max_pair_corr:.4f}")
     except (np.linalg.LinAlgError, ValueError):
-        print(f"      [相关性监控] 计算异常，跳过")
+        print("      [相关性监控] 计算异常，跳过")
 
     return weights
 
@@ -752,9 +762,7 @@ def _compute_per_variety_weights(
         # 归一化
         total = sum(raw_weights.values())
         if total > 1e-10:
-            per_variety_weights[var] = {
-                f: w / total for f, w in raw_weights.items()
-            }
+            per_variety_weights[var] = {f: w / total for f, w in raw_weights.items()}
 
     return per_variety_weights
 
@@ -851,8 +859,7 @@ def _compute_per_variety_ic_matrix(
             flip = factor_sign_flips.get(fname, 1.0)
             sig = np.array(arr, dtype=float)
             if len(sig) < len(closes):
-                sig = np.pad(sig, (0, len(closes) - len(sig)),
-                             constant_values=np.nan)[:len(closes)]
+                sig = np.pad(sig, (0, len(closes) - len(sig)), constant_values=np.nan)[: len(closes)]
             sig = np.where(np.isfinite(sig), sig, 0.0) * flip
 
             valid = np.isfinite(sig) & np.isfinite(fwd_ret)
@@ -860,10 +867,12 @@ def _compute_per_variety_ic_matrix(
                 continue
 
             from scipy.stats import spearmanr
+
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=RuntimeWarning)
                 try:
                     from scipy.stats import ConstantInputWarning
+
                     warnings.filterwarnings("ignore", category=ConstantInputWarning)
                 except ImportError:
                     pass
@@ -897,8 +906,7 @@ def _compute_holdout_validation(
     """
     n_dates = len(common_dates)
     if n_dates < 10:
-        return {"holdout_ic": 0, "train_ic": 0, "ic_retention": 0,
-                "warning": "交易日不足", "details": {}}
+        return {"holdout_ic": 0, "train_ic": 0, "ic_retention": 0, "warning": "交易日不足", "details": {}}
 
     holdout_ics: list[float] = []
     train_ics: list[float] = []
@@ -926,8 +934,7 @@ def _compute_holdout_validation(
             flip = factor_sign_flips.get(fname, 1.0)
             sig = np.array(arr, dtype=float)
             if len(sig) < len(closes):
-                sig = np.pad(sig, (0, len(closes) - len(sig)),
-                             constant_values=np.nan)[:len(closes)]
+                sig = np.pad(sig, (0, len(closes) - len(sig)), constant_values=np.nan)[: len(closes)]
             sig = np.where(np.isfinite(sig), sig, 0.0) * flip
             composite_signal += sig
             n_active += 1
@@ -941,10 +948,12 @@ def _compute_holdout_validation(
             continue
 
         from scipy.stats import spearmanr
+
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
             try:
                 from scipy.stats import ConstantInputWarning
+
                 warnings.filterwarnings("ignore", category=ConstantInputWarning)
             except ImportError:
                 pass
@@ -962,8 +971,7 @@ def _compute_holdout_validation(
 
     warning = ""
     if abs(avg_train) > 0.02 and retention < 0.5:
-        warning = (f"⚠️ 盲测 IC ({avg_holdout:.4f}) 不足训练 IC ({avg_train:.4f}) 的 50%"
-                   f"，因子泛化能力较弱")
+        warning = f"⚠️ 盲测 IC ({avg_holdout:.4f}) 不足训练 IC ({avg_train:.4f}) 的 50%，因子泛化能力较弱"
     elif len(holdout_ics) < 3:
         warning = f"盲测品种有效数据不足 ({len(holdout_ics)}/{len(holdout_set)})"
 
@@ -1005,6 +1013,7 @@ def _generate_trading_advice_report(
     confidence = market_regime.get("confidence", 0)
 
     lines: list[str] = []
+
     def w(s=""):
         lines.append(s)
 
@@ -1018,8 +1027,8 @@ def _generate_trading_advice_report(
     # ── 1. 市场制度与方向策略 ──
     w("## 1. 市场制度与方向策略")
     w()
-    w(f"| 维度 | 当前状态 |")
-    w(f"|------|----------|")
+    w("| 维度 | 当前状态 |")
+    w("|------|----------|")
     w(f"| 主制度 (品种数加权) | **{regime_label}** |")
     w(f"| 主制度置信度 | {confidence:.1%} |")
     if regime_type == "bull":
@@ -1216,8 +1225,8 @@ def _generate_trading_advice_report(
     w("### 8.1 做空计划（核心方向）")
     w()
     if short_signals:
-        w(f"| 优先级 | 品种 | 名称 | 信号强度 | 增量 | 建议仓位 | 开仓条件 |")
-        w(f"|--------|------|------|----------|------|---------|---------|")
+        w("| 优先级 | 品种 | 名称 | 信号强度 | 增量 | 建议仓位 | 开仓条件 |")
+        w("|--------|------|------|----------|------|---------|---------|")
         for i, (sym, score) in enumerate(short_signals[:5], 1):
             delta = sym_deltas.get(sym, 0) if has_delta else 0
             delta_str = f"{delta:+.4f}" if has_delta else "N/A"
@@ -1243,8 +1252,8 @@ def _generate_trading_advice_report(
     w("### 8.2 做多计划（对冲/辅助）")
     w()
     if long_signals:
-        w(f"| 优先级 | 品种 | 名称 | 信号强度 | 增量 | 建议仓位 | 开仓条件 |")
-        w(f"|--------|------|------|----------|------|---------|---------|")
+        w("| 优先级 | 品种 | 名称 | 信号强度 | 增量 | 建议仓位 | 开仓条件 |")
+        w("|--------|------|------|----------|------|---------|---------|")
         for i, (sym, score) in enumerate(long_signals[:3], 1):
             delta = sym_deltas.get(sym, 0) if has_delta else 0
             delta_str = f"{delta:+.4f}" if has_delta else "N/A"
@@ -1287,8 +1296,8 @@ def _generate_trading_advice_report(
 
     w("### 8.3 仓位汇总")
     w()
-    w(f"| 方向 | 品种数 | 总仓位估值 |")
-    w(f"|------|--------|-----------|")
+    w("| 方向 | 品种数 | 总仓位估值 |")
+    w("|------|--------|-----------|")
     w(f"| 做空 | {min(len(short_signals), 5)} 个 | {total_short_pct:.0f}% |")
     w(f"| 做多 | {min(len(long_signals), 3)} 个 | {total_long_pct:.0f}% |")
     w(f"| **合计** | — | **{total_short_pct + total_long_pct:.0f}%** |")
@@ -1345,7 +1354,8 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         print(f"[2/4] 获取期货数据: {len(symbols)} 个品种, days={days}")
 
     panel, common_dates = provider.get_futures_panel(
-        symbols=symbols, days=days,
+        symbols=symbols,
+        days=days,
     )
     print(f"      面板: {len(panel)} 个品种, {len(common_dates)} 个交易日")
 
@@ -1356,15 +1366,11 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     # 过滤数据陈旧的品种（最新交易日不在共同日期末端，如已停更品种）
     if len(common_dates) > 0:
         last_common = common_dates[-1]
-        stale = [
-            sym for sym, df in panel.items()
-            if df.index[-1] < last_common
-        ]
+        stale = [sym for sym, df in panel.items() if df.index[-1] < last_common]
         for sym in stale:
             panel.pop(sym)
         if stale:
-            print(f"      [提示] 剔除 {len(stale)} 个停更/陈旧品种: "
-                  f"{', '.join(stale)} (数据止于共同交易日之前)")
+            print(f"      [提示] 剔除 {len(stale)} 个停更/陈旧品种: {', '.join(stale)} (数据止于共同交易日之前)")
 
     # ── Step 2b: 产业链级 Market Regime 检测 ──
     from fts.factor_engine.regime import SectorRegimeSelector
@@ -1388,8 +1394,10 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     n_aligned = sum(1 for v in alignment_scores.values() if v >= 0.7)
     n_misaligned = sum(1 for v in alignment_scores.values() if v < 0.5)
     if alignment_scores:
-        print(f"\n[对齐度] 品种-链对齐度: {len(alignment_scores)} 个品种, "
-              f"高对齐(≥0.7): {n_aligned}, 低对齐(<0.5): {n_misaligned}")
+        print(
+            f"\n[对齐度] 品种-链对齐度: {len(alignment_scores)} 个品种, "
+            f"高对齐(≥0.7): {n_aligned}, 低对齐(<0.5): {n_misaligned}"
+        )
 
     def _compute_primary_regime(
         sr: dict[str, dict],
@@ -1397,16 +1405,14 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     ) -> dict:
         """从各产业链 regime 计算主制度（品种数加权投票）。"""
         if not sr or not asm:
-            return {"regime": "unknown", "confidence": 0.0,
-                    "detected_at": datetime.now().isoformat(), "features": {}}
+            return {"regime": "unknown", "confidence": 0.0, "detected_at": datetime.now().isoformat(), "features": {}}
         regime_votes: dict[str, float] = {}
         for sector, regime in sr.items():
             r = regime["regime"]
             regime_votes[r] = regime_votes.get(r, 0) + len(asm.get(sector, []))
         total = sum(regime_votes.values())
         if total == 0:
-            return {"regime": "unknown", "confidence": 0.0,
-                    "detected_at": datetime.now().isoformat(), "features": {}}
+            return {"regime": "unknown", "confidence": 0.0, "detected_at": datetime.now().isoformat(), "features": {}}
         sorted_regimes = sorted(regime_votes.items(), key=lambda x: -x[1])
         primary = sorted_regimes[0][0]
         primary_weight = sorted_regimes[0][1] / total
@@ -1438,7 +1444,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     print(f"\n[Regime] 主市场制度: {regime_label} (品种数加权)")
     print(f"         置信度: {market_regime['confidence']:.2%}")
     if sector_breakdown:
-        print(f"         产业链 Breakdown:")
+        print("         产业链 Breakdown:")
         for sector, r in sorted(sector_breakdown.items()):
             c = sector_confidences.get(sector, 0)
             print(f"           {sector}: {r} (conf={c:.2%})")
@@ -1462,23 +1468,28 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     # 3c: Ridge 回归学习因子权重（替代等权合成）
     print("      权重学习: Ridge 回归（L2 正则化，弱因子保留不丢弃）...")
     factor_weights = _compute_ridge_weights(
-        signal_matrix, panel, common_dates, factor_sign_flips,
+        signal_matrix,
+        panel,
+        common_dates,
+        factor_sign_flips,
     )
 
     # 3d: 品种-因子 IC 矩阵（每个因子 × 每个品种的时序 IC）
     print("      品种-因子 IC 矩阵计算...")
     per_variety_ic = _compute_per_variety_ic_matrix(
-        signal_matrix, panel, common_dates, factor_sign_flips,
+        signal_matrix,
+        panel,
+        common_dates,
+        factor_sign_flips,
     )
     n_factor_ic = len(per_variety_ic)
-    n_variety_ic = len(set(
-        v for vics in per_variety_ic.values() for v in vics
-    )) if per_variety_ic else 0
+    n_variety_ic = len(set(v for vics in per_variety_ic.values() for v in vics)) if per_variety_ic else 0
     print(f"      IC 矩阵: {n_factor_ic} 因子 × {n_variety_ic} 品种")
 
     # 3e: 品种级 Ridge 权重分配（结合全局 Ridge 权重 + 品种级 IC）
     per_variety_weights = _compute_per_variety_weights(
-        factor_weights, per_variety_ic,
+        factor_weights,
+        per_variety_ic,
     )
     if per_variety_weights:
         # 统计品种级权重相对于全局权重的平均偏离度
@@ -1491,14 +1502,16 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
                     total_dev += abs(w - gw)
                     count += 1
         avg_dev = total_dev / count if count > 0 else 0
-        print(f"      品种级权重: {len(per_variety_weights)} 个品种, "
-              f"平均偏离度: {avg_dev:.4f}")
+        print(f"      品种级权重: {len(per_variety_weights)} 个品种, 平均偏离度: {avg_dev:.4f}")
     else:
         print("      品种级权重: 无数据，回退到全局 Ridge 权重")
 
     # 3f: 加权合成（方向校正 + 品种级权重 / 全局 Ridge 权重）
     sym_scores, sym_details = _compute_composite_scores(
-        signal_matrix, factor_sign_flips, factors, factor_weights,
+        signal_matrix,
+        factor_sign_flips,
+        factors,
+        factor_weights,
         per_variety_weights=per_variety_weights if per_variety_weights else None,
     )
 
@@ -1513,25 +1526,29 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
             alignment_factor = 1.0 + _ALIGNMENT_BLEND * (align - 0.5)
             sym_scores[sym] *= alignment_factor
             n_adjusted_align += 1
-        print(f"      [对齐度] 应用品种-链对齐度修正: {n_adjusted_align} 个品种, "
-              f"blend={_ALIGNMENT_BLEND}")
+        print(f"      [对齐度] 应用品种-链对齐度修正: {n_adjusted_align} 个品种, blend={_ALIGNMENT_BLEND}")
 
     # 3g: 对比全局权重 vs 品种级权重的合成结果
     if per_variety_weights:
         sym_scores_global, _ = _compute_composite_scores(
-            signal_matrix, factor_sign_flips, factors, factor_weights,
+            signal_matrix,
+            factor_sign_flips,
+            factors,
+            factor_weights,
         )
         # 计算两种合成结果的排名差异
         sorted_var = sorted(sym_scores.keys())
         var_global = [(s, sym_scores_global.get(s, 0)) for s in sorted_var]
         var_variety = [(s, sym_scores.get(s, 0)) for s in sorted_var]
         from scipy.stats import spearmanr
+
         g_scores = [v for _, v in var_global]
         v_scores = [v for _, v in var_variety]
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
             try:
                 from scipy.stats import ConstantInputWarning
+
                 warnings.filterwarnings("ignore", category=ConstantInputWarning)
             except ImportError:
                 pass
@@ -1547,7 +1564,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     # 导致信号对盘中大幅波动不敏感（如黄金今日大涨但信号几乎不变）。
     # 此处用实时价计算盘中涨跌幅，叠加到综合信号上。
     _PRICE_MOMENTUM_BLEND = 0.15  # 动量权重 (0.0=关闭, 0.3=最大)
-    _PRICE_MOMENTUM_CLIP = 3.0    # 标准化回报的截断边界
+    _PRICE_MOMENTUM_CLIP = 3.0  # 标准化回报的截断边界
     if _PRICE_MOMENTUM_BLEND > 0:
         # 1) 计算各品种的典型波动率
         typical_vols: dict[str, float] = {}
@@ -1560,6 +1577,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         # 2) 获取实时价
         try:
             from fts.data_futures import get_realtime_prices
+
             rt_prices = get_realtime_prices(list(sym_scores.keys()))
         except Exception:
             rt_prices = {}
@@ -1587,19 +1605,26 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
             sym_scores[sym] += adjustment
             n_adjusted += 1
         if n_adjusted > 0:
-            print(f"      [价格动量] 调整 {n_adjusted} 个品种的信号 "
-                  f"(blend={_PRICE_MOMENTUM_BLEND}, skip={n_skipped})")
+            print(f"      [价格动量] 调整 {n_adjusted} 个品种的信号 (blend={_PRICE_MOMENTUM_BLEND}, skip={n_skipped})")
 
     # ── Step 3e: 盲测品种验证（泛化能力检查） ──
     holdout_set = set(FUTURES_HOLDOUT) & set(panel.keys())
     holdout_result = _compute_holdout_validation(
-        signal_matrix, panel, common_dates, factor_sign_flips, holdout_set,
+        signal_matrix,
+        panel,
+        common_dates,
+        factor_sign_flips,
+        holdout_set,
     )
-    print(f"\n[盲测验证] 盲测品种: {len(holdout_set)} 个, "
-          f"有效: {holdout_result['n_holdout_valid']}/{holdout_result['n_train_valid']} (盲测/训练)")
-    print(f"          盲测平均 IC: {holdout_result['holdout_ic']:.4f}, "
-          f"训练平均 IC: {holdout_result['train_ic']:.4f}, "
-          f"保持率: {holdout_result['ic_retention']:.1%}")
+    print(
+        f"\n[盲测验证] 盲测品种: {len(holdout_set)} 个, "
+        f"有效: {holdout_result['n_holdout_valid']}/{holdout_result['n_train_valid']} (盲测/训练)"
+    )
+    print(
+        f"          盲测平均 IC: {holdout_result['holdout_ic']:.4f}, "
+        f"训练平均 IC: {holdout_result['train_ic']:.4f}, "
+        f"保持率: {holdout_result['ic_retention']:.1%}"
+    )
     if holdout_result["warning"]:
         print(f"          {holdout_result['warning']}")
 
@@ -1658,6 +1683,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         get_dominant_contracts,
         get_realtime_prices,
     )
+
     sym_list = [s for s, _ in ranked]
     dominant = get_dominant_contracts(sym_list)
     print("      获取盘中实时价（TQ-Local 优先 → AKShare 降级）...")
@@ -1679,7 +1705,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
 
     # 控制台输出 — 多空双向
     header = f"{'排名':>4s} {'品种':>6s} {'名称':>8s} {'主力合约':>9s} {'得分':>10s} {'实时价':>10s} {'Top因子':>28s}"
-    sep = f"{'-'*4} {'-'*6} {'-'*8} {'-'*9} {'-'*10} {'-'*10} {'-'*28}"
+    sep = f"{'-' * 4} {'-' * 6} {'-' * 8} {'-' * 9} {'-' * 10} {'-' * 10} {'-' * 28}"
 
     def _print_signal_rows(signals, label, show_n=20):
         if not signals:
@@ -1696,8 +1722,9 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
             details = sym_details.get(sym, {})
             top_factors = sorted(details.items(), key=lambda x: -abs(x[1]))[:3]
             top_str = ", ".join(f"{n}({v:+.3f})" for n, v in top_factors)
-            print(f"{i:>4d} {sym:>6s} {_name(sym):>8s} {_contract(sym):>9s} "
-                  f"{score:>+10.4f} {price:>10.2f} {top_str:<28s}")
+            print(
+                f"{i:>4d} {sym:>6s} {_name(sym):>8s} {_contract(sym):>9s} {score:>+10.4f} {price:>10.2f} {top_str:<28s}"
+            )
 
     _print_signal_rows(long_signals, "多头信号 (做多)")
     _print_signal_rows(short_signals, "空头信号 (做空)")
@@ -1714,6 +1741,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     suffix = "_all_commodities" if universe == "all" else ""
     out_path = report_dir / f"futures_signals{suffix}_{today}.md"
     lines: list[str] = []
+
     def w(s=""):
         lines.append(s)
 
@@ -1722,9 +1750,9 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     w(f"生成时间: {today} | 耗时: {elapsed:.1f}s")
     w(f"因子池: {len(factors)} 个（全部精英因子） | 覆盖品种: {len(sym_scores)} 个")
     if per_variety_weights:
-        w(f"合成方法: 品种级 Ridge 权重（全局 Ridge 权重 × 品种 IC 自适应调整）")
+        w("合成方法: 品种级 Ridge 权重（全局 Ridge 权重 × 品种 IC 自适应调整）")
     else:
-        w(f"合成方法: Ridge 回归加权（L2 正则化） | 方向校正: 截面 IC 法")
+        w("合成方法: Ridge 回归加权（L2 正则化） | 方向校正: 截面 IC 法")
     flips_info = f" | 方向反转: {n_flipped} 个因子 (截面 IC<0)"
     w(f"方向校正: 截面 IC 法（因子信号 vs 未来 5 日收益的 Spearman 秩相关）{flips_info}")
     w(f"最新价: 盘中实时价（TQ-Local 优先，AKShare 降级） | 实时价覆盖 {rt_hit}/{len(sym_list)} 个品种")
@@ -1808,7 +1836,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     if regime_type in ("bull", "bear"):
         direction = "做多" if regime_type == "bull" else "做空"
         w(f"- 当前处于 **{regime_label}** regime，建议 **顺势{direction}**")
-        w(f"- 优先选择信号强度 > 0.60 的品种作为核心标的")
+        w("- 优先选择信号强度 > 0.60 的品种作为核心标的")
         if short_signals and regime_type == "bear":
             top_shorts = [f"{_name(s)}({s})" for s, _ in short_signals[:5]]
             w(f"- 空头核心标的: {', '.join(top_shorts)}")
@@ -1857,8 +1885,10 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     w()
     w(f"盲测品种: {len(holdout_set)} 个 ({', '.join(sorted(holdout_set))})")
     w()
-    w(f"盲测 IC: {holdout_result['holdout_ic']:.4f} | 训练 IC: {holdout_result['train_ic']:.4f} | "
-      f"保持率: {holdout_result['ic_retention']:.1%}")
+    w(
+        f"盲测 IC: {holdout_result['holdout_ic']:.4f} | 训练 IC: {holdout_result['train_ic']:.4f} | "
+        f"保持率: {holdout_result['ic_retention']:.1%}"
+    )
     if holdout_result["warning"]:
         w(f"\n> {holdout_result['warning']}")
     # 盲测品种 IC 详情
@@ -1868,7 +1898,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         w()
         w("| 盲测品种 | IC | 判断 |")
         w("|----------|----|------|")
-        train_ic = holdout_result["train_ic"]
+        holdout_result["train_ic"]
         for sym, ic in sorted(holdout_sym_ics.items(), key=lambda x: -abs(x[1])):
             verdict = "✔ 有效" if abs(ic) > 0.02 else "⚠ 偏弱" if abs(ic) > 0.01 else "❌ 失效"
             w(f"| {sym} | {ic:.4f} | {verdict} |")
@@ -1896,8 +1926,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         w("|------|-----------|----|-----------|----|-----------|----|")
         for var in sorted(variety_factor_ic.keys()):
             # 过滤掉 NaN IC 值
-            valid_ics = [(f, ic) for f, ic in variety_factor_ic[var].items()
-                         if np.isfinite(ic)]
+            valid_ics = [(f, ic) for f, ic in variety_factor_ic[var].items() if np.isfinite(ic)]
             top3 = sorted(valid_ics, key=lambda x: -abs(x[1]))[:3]
             # 构建表格行: 1 (品种) + 3 (因子名+IC 对) = 4 个字符串段
             row = [f"| {var} "]
@@ -1921,9 +1950,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         if factor_avg_ic:
             w("| 排名 | 因子名称 | 平均 |IC| | 覆盖品种数 |")
             w("|------|----------|----------|----------|")
-            for i, (fname, avg_ic) in enumerate(
-                sorted(factor_avg_ic.items(), key=lambda x: -x[1])[:10], 1
-            ):
+            for i, (fname, avg_ic) in enumerate(sorted(factor_avg_ic.items(), key=lambda x: -x[1])[:10], 1):
                 n_vars = len(per_variety_ic.get(fname, {}))
                 w(f"| {i} | {fname} | {avg_ic:.4f} | {n_vars} |")
             w()
@@ -2094,15 +2121,22 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="期货信号生成管道")
     parser.add_argument("--max-symbols", type=int, default=25, help="最大品种数")
     parser.add_argument("--days", type=int, default=120, help="回溯天数")
     parser.add_argument(
-        "--universe", type=str, default="core",
+        "--universe",
+        type=str,
+        default="core",
         choices=["core", "all"],
         help="品种池: core=25 核心品种 / all=全量商品期货（FUTURES_SUBSET 剔除金融期货）",
     )
     args = parser.parse_args()
-    sys.exit(main(
-        max_symbols=args.max_symbols, days=args.days, universe=args.universe,
-    ))
+    sys.exit(
+        main(
+            max_symbols=args.max_symbols,
+            days=args.days,
+            universe=args.universe,
+        )
+    )

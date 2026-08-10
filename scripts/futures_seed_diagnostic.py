@@ -13,6 +13,7 @@ scripts/futures_seed_diagnostic.py — 期货种子因子批量诊断
   - 控制台: 诊断结果摘要
   - reports/{date}/futures_seed_diagnostic_{date}.md
 """
+
 from __future__ import annotations
 
 import json
@@ -37,12 +38,12 @@ REPORTS_ROOT = PROJECT_ROOT / "reports"
 def _load_all_seeds() -> list[dict[str, Any]]:
     """加载所有期货种子因子。"""
     from fts.factor_engine.seed_data_futures_full import load_futures_seeds_full
+
     return load_futures_seeds_full()
 
 
 def _load_panel(days: int = 250, max_symbols: int = 0):
     """加载全品种期货面板数据。"""
-    import pandas as pd
     from fts.data import FTSDataProvider
     from fts.data_futures import FUTURES_SUBSET
 
@@ -71,6 +72,7 @@ def _execute_factor(factor_data: dict, df) -> np.ndarray | None:
     """在指定数据上执行因子。"""
     try:
         from fts.factor_engine.factor_program import FactorExecutor
+
         executor = FactorExecutor(factor_data)
         sig = executor.execute(df, factor_data.get("params", {}))
         arr = np.array(sig, dtype=float)
@@ -320,6 +322,7 @@ def _build_correlation_report(results: list[dict], panel: dict, common_dates: li
         # 重新执行获取信号
         try:
             from fts.factor_engine.seed_data_futures_full import load_futures_seeds_full
+
             seeds = load_futures_seeds_full()
             factor_data = next((s for s in seeds if s.get("factor_id") == r["factor_id"]), None)
             if factor_data is None:
@@ -333,7 +336,7 @@ def _build_correlation_report(results: list[dict], panel: dict, common_dates: li
                     sig = executor.execute(df, factor_data.get("params", {}))
                     arr = np.array(sig, dtype=float)
                     arr = np.where(np.isfinite(arr), arr, np.nan)
-                    arr = arr[-min(len(arr), 60):]  # 取最近60日
+                    arr = arr[-min(len(arr), 60) :]  # 取最近60日
                     if len(arr) >= 30:
                         sym_sigs.append(np.nanmean(arr))
                 except Exception:
@@ -358,11 +361,13 @@ def _build_correlation_report(results: list[dict], panel: dict, common_dates: li
             try:
                 rho, _ = spearmanr(a[:n], b[:n])
                 if not np.isnan(rho) and abs(rho) > 0.85:
-                    corr_pairs.append({
-                        "f1": names[i],
-                        "f2": names[j],
-                        "correlation": float(rho),
-                    })
+                    corr_pairs.append(
+                        {
+                            "f1": names[i],
+                            "f2": names[j],
+                            "correlation": float(rho),
+                        }
+                    )
             except Exception:
                 continue
 
@@ -447,7 +452,7 @@ def _generate_report(results: list[dict], corr_pairs: list[dict], today: str) ->
     lines.append("")
     lines.append("---")
     lines.append("")
-    lines.append(f"详细诊断数据保存在 `factor_details/` 目录")
+    lines.append("详细诊断数据保存在 `factor_details/` 目录")
 
     return "\n".join(lines)
 
@@ -470,7 +475,7 @@ def main(
     print(f"\n[1/4] 加载种子因子: {len(seeds)} 个")
 
     # ── Step 2: 加载数据 ──
-    print(f"[2/4] 加载期货数据...")
+    print("[2/4] 加载期货数据...")
     panel, common_dates, symbols = _load_panel(days=days, max_symbols=max_symbols)
     print(f"       品种数: {len(panel)}, 交易日: {len(common_dates)}")
 
@@ -490,7 +495,7 @@ def main(
     # ── Step 4: 相关性分析 ──
     corr_pairs = []
     if not skip_correlation:
-        print(f"\n[4/4] 因子相关性分析...")
+        print("\n[4/4] 因子相关性分析...")
         corr_pairs = _build_correlation_report(results, panel, common_dates)
 
     # ── 汇总 ──
@@ -498,11 +503,11 @@ def main(
     n_warn = sum(1 for r in results if r["status"] == "WARN")
     n_ok = sum(1 for r in results if r["status"] == "OK")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  诊断结果: ✅ {n_ok} | ⚠️ {n_warn} | 🔴 {n_broken}")
     print(f"  高度相关因子对: {len(corr_pairs)}")
-    print(f"  耗时: {time.time()-t0:.1f}s")
-    print(f"{'='*60}")
+    print(f"  耗时: {time.time() - t0:.1f}s")
+    print(f"{'=' * 60}")
 
     # ── 保存报告 ──
     report_dir = REPORTS_ROOT / today

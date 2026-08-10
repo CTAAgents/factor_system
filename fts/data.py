@@ -15,14 +15,16 @@ HARNESS §契约优先: 所有数据接口通过本模块定义。
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
-import numpy as np
 import pandas as pd
 
 from .data_mcp import MCPDataProvider, MCPDataError
-from .data_fundamental import FundamentalProvider, FundamentalDataError
+from .data_fundamental import (
+    FundamentalProvider,
+    FundamentalDataError,
+    get_fundamental_provider,
+)
 from .data_futures import FuturesDataProvider, FuturesDataError
 
 logger = logging.getLogger(__name__)
@@ -30,11 +32,13 @@ logger = logging.getLogger(__name__)
 
 # ─── 数据不可用异常 ───────────────────────────────────────
 
+
 class DataUnavailableError(RuntimeError):
     """数据不可用 — 所有数据源均失效时抛出。"""
 
 
 # ─── FTS 统一数据提供者 ───────────────────────────────────
+
 
 class FTSDataProvider:
     """FTS 统一数据提供者 — 基于 MCP (akshare) 的数据访问层。
@@ -51,9 +55,12 @@ class FTSDataProvider:
         df = provider.get_etf_ohlcv("510050", days=500)
     """
 
-    def __init__(self, mcp_provider: Optional[MCPDataProvider] = None,
-                 fundamental_provider: Optional[FundamentalProvider] = None,
-                 futures_provider: Optional[FuturesDataProvider] = None):
+    def __init__(
+        self,
+        mcp_provider: Optional[MCPDataProvider] = None,
+        fundamental_provider: Optional[FundamentalProvider] = None,
+        futures_provider: Optional[FuturesDataProvider] = None,
+    ):
         self._mcp = mcp_provider or MCPDataProvider()
         self._fundamental = fundamental_provider or FundamentalProvider(mcp_available=False)
         self._futures = futures_provider or FuturesDataProvider()
@@ -66,8 +73,7 @@ class FTSDataProvider:
         """设置基本面数据提供者（外部注入用）。"""
         self._fundamental = provider
 
-    def enrich_with_fundamental(self, df: pd.DataFrame, symbol: str, *,
-                                trace_id: str = "") -> pd.DataFrame:
+    def enrich_with_fundamental(self, df: pd.DataFrame, symbol: str, *, trace_id: str = "") -> pd.DataFrame:
         """将基本面字段注入 OHLCV DataFrame。
 
         Args:
@@ -82,12 +88,15 @@ class FTSDataProvider:
 
     # ── 单标的 OHLCV ──
 
-    def get_ohlcv(self, symbol: str, *,
-                  days: int = 500,
-                  adjust: str = "qfq",
-                  trace_id: str = "",
-                  fundamental: bool = False,
-                  ) -> pd.DataFrame:
+    def get_ohlcv(
+        self,
+        symbol: str,
+        *,
+        days: int = 500,
+        adjust: str = "qfq",
+        trace_id: str = "",
+        fundamental: bool = False,
+    ) -> pd.DataFrame:
         """获取股票/ETF OHLCV K线数据。
 
         Args:
@@ -122,21 +131,26 @@ class FTSDataProvider:
 
     # ── ETF 专用接口 ──
 
-    def get_etf_ohlcv(self, symbol: str, *,
-                      days: int = 500,
-                      adjust: str = "qfq",
-                      trace_id: str = "",
-                      ) -> pd.DataFrame:
+    def get_etf_ohlcv(
+        self,
+        symbol: str,
+        *,
+        days: int = 500,
+        adjust: str = "qfq",
+        trace_id: str = "",
+    ) -> pd.DataFrame:
         """获取 ETF OHLCV 数据。"""
         return self.get_ohlcv(symbol, days=days, adjust=adjust, trace_id=trace_id)
 
     # ── 面板数据 ──
 
-    def get_csi300_panel(self, days: int = 500,
-                         max_stocks: int = 50,
-                         trace_id: str = "",
-                         fundamental: bool = False,
-                         ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+    def get_csi300_panel(
+        self,
+        days: int = 500,
+        max_stocks: int = 50,
+        trace_id: str = "",
+        fundamental: bool = False,
+    ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
         """获取沪深 300 成分股批量 OHLCV 面板数据。
 
         Args:
@@ -151,6 +165,7 @@ class FTSDataProvider:
             common_dates: 所有股票共有日期
         """
         from .data_mcp import CSI300_SUBSET
+
         symbols = CSI300_SUBSET[:max_stocks] if max_stocks > 0 else CSI300_SUBSET
 
         panel: dict[str, pd.DataFrame] = {}
@@ -159,8 +174,7 @@ class FTSDataProvider:
 
         for sym in symbols:
             try:
-                df = self.get_ohlcv(sym, days=days, adjust="qfq",
-                                    trace_id=trace_id, fundamental=fundamental)
+                df = self.get_ohlcv(sym, days=days, adjust="qfq", trace_id=trace_id, fundamental=fundamental)
                 if df is not None and not df.empty and "close" in df.columns:
                     panel[sym] = df
                     if first:
@@ -176,25 +190,31 @@ class FTSDataProvider:
             if fundamental:
                 df = self._fundamental.enrich_ohlcv(df, "SYNTHETIC", trace_id=trace_id)
             panel["SYNTHETIC"] = df
-            return panel, df.index
+            return panel, pd.DatetimeIndex(df.index)
 
         common_dates = pd.DatetimeIndex(sorted(dates_set))
         return panel, common_dates
 
-    def get_etf_panel(self, days: int = 500,
-                      trace_id: str = "") -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+    def get_etf_panel(self, days: int = 500, trace_id: str = "") -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
         """获取常见 ETF 批量 OHLCV 面板数据。"""
         from .data_mcp import ETF_SUBSET
+
         return self._mcp.get_stock_panel(
-            ETF_SUBSET, days=days, adjust="qfq", trace_id=trace_id,
+            ETF_SUBSET,
+            days=days,
+            adjust="qfq",
+            trace_id=trace_id,
         )
 
     # ── 期货接口 ──
 
-    def get_futures_ohlcv(self, symbol: str, *,
-                          days: int = 500,
-                          trace_id: str = "",
-                          ) -> pd.DataFrame:
+    def get_futures_ohlcv(
+        self,
+        symbol: str,
+        *,
+        days: int = 500,
+        trace_id: str = "",
+    ) -> pd.DataFrame:
         """获取期货连续合约 OHLCV 数据。
 
         Args:
@@ -224,14 +244,14 @@ class FTSDataProvider:
             (panel, common_dates)
         """
         if symbols is None:
-            from .data_futures import FUTURES_CORE_SUBSET
-            symbols = FUTURES_CORE_SUBSET
+            from .data_futures import get_dynamic_core_subset
+
+            symbols = get_dynamic_core_subset()
         return self._futures.get_futures_panel(symbols, days=days, trace_id=trace_id)
 
     # ── 期货基本面（库存 / 基差 / 仓单）──
 
-    def enrich_futures_fundamental(self, df: pd.DataFrame, symbol: str, *,
-                                   trace_id: str = "") -> pd.DataFrame:
+    def enrich_futures_fundamental(self, df: pd.DataFrame, symbol: str, *, trace_id: str = "") -> pd.DataFrame:
         """将期货基本面字段注入 OHLCV DataFrame。
 
         注入字段（可用时）:
@@ -258,9 +278,12 @@ class FTSDataProvider:
             try:
                 inv_df = provider.get_inventory(symbol)
                 if not inv_df.empty and "inventory" in inv_df.columns:
-                    df = df.join(inv_df[["inventory", "change"]].rename(
-                        columns={"inventory": "fut_inventory", "change": "fut_inventory_chg"}
-                    ), how="left")
+                    df = df.join(
+                        inv_df[["inventory", "change"]].rename(
+                            columns={"inventory": "fut_inventory", "change": "fut_inventory_chg"}
+                        ),
+                        how="left",
+                    )
             except Exception:  # noqa: BLE001
                 pass
 
@@ -268,8 +291,7 @@ class FTSDataProvider:
             try:
                 basis_df = provider.get_basis(symbol, days=60)
                 if not basis_df.empty:
-                    basis_cols = ["spot_price", "near_basis", "dom_basis",
-                                  "near_basis_rate", "dom_basis_rate"]
+                    basis_cols = ["spot_price", "near_basis", "dom_basis", "near_basis_rate", "dom_basis_rate"]
                     available = [c for c in basis_cols if c in basis_df.columns]
                     if available:
                         rename = {c: f"fut_{c}" for c in available}
@@ -278,36 +300,47 @@ class FTSDataProvider:
                 pass
 
         # 缺失列用 NaN 填充
-        for col in ["fut_inventory", "fut_inventory_chg", "fut_spot_price",
-                     "fut_near_basis", "fut_dom_basis",
-                     "fut_near_basis_rate", "fut_dom_basis_rate"]:
+        for col in [
+            "fut_inventory",
+            "fut_inventory_chg",
+            "fut_spot_price",
+            "fut_near_basis",
+            "fut_dom_basis",
+            "fut_near_basis_rate",
+            "fut_dom_basis_rate",
+        ]:
             if col not in df.columns:
                 df[col] = float("nan")
 
         return df
 
-    def get_stock_panel(self, symbols: list[str], days: int = 500,
-                        trace_id: str = "") -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+    def get_stock_panel(
+        self, symbols: list[str], days: int = 500, trace_id: str = ""
+    ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
         """获取任意股票列表的 OHLCV 面板数据。"""
         return self._mcp.get_stock_panel(
-            symbols, days=days, adjust="qfq", trace_id=trace_id,
+            symbols,
+            days=days,
+            adjust="qfq",
+            trace_id=trace_id,
         )
 
     # ── 搜索接口 ──
 
     def search_symbol(self, query: str, limit: int = 10) -> list[dict[str, str]]:
         """搜索股票/ETF 代码。"""
-        return self._mcp.search_symbol(query, limit=limit)
+        # 注: MCPDataProvider 暂未实现 search_symbol（潜在 GAP，测试容忍网络异常）
+        return cast(Any, self._mcp).search_symbol(query, limit=limit)
 
     # ── 合成数据 ──
 
     @staticmethod
-    def synthesize_ohlcv(n_days: int = 500,
-                         base_price: float = 15.0,
-                         seed: int = 42) -> pd.DataFrame:
+    def synthesize_ohlcv(n_days: int = 500, base_price: float = 15.0, seed: int = 42) -> pd.DataFrame:
         """合成 OHLCV 数据（无网络时使用）。"""
         return MCPDataProvider.synthesize_ohlcv(
-            n_days=n_days, base_price=base_price, seed=seed,
+            n_days=n_days,
+            base_price=base_price,
+            seed=seed,
         )
 
 

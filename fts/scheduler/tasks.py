@@ -34,6 +34,7 @@ class TaskSpec:
         enabled: 是否启用（默认 True）
         trace_id_prefix: trace_id 前缀（用于日志聚合）
     """
+
     name: str
     cron_expression: str
     callable_path: str
@@ -87,73 +88,80 @@ def register_default_tasks() -> None:
     defaults = [
         TaskSpec(
             name="l1_meta_loop",
-            cron_expression="30 8 * * *",          # 每日 08:30
+            cron_expression="30 8 * * *",  # 每日 08:30
             callable_path="fts.scheduler.jobs.l1_meta_loop_job",
             description="L1 Meta-Loop：每日知识补给 + Bootstrapping + 种子注入",
             trace_id_prefix="fts.l1",
         ),
         TaskSpec(
             name="l2_evolution_loop",
-            cron_expression="0 23 * * *",         # 每日 23:00
+            cron_expression="0 23 * * *",  # 每日 23:00
             callable_path="fts.scheduler.jobs.l2_evolution_loop_job",
             description="L2 Evolution Loop：夜间因子演化（LLM 改逻辑 + optuna 调参 + 横截面评估）",
             trace_id_prefix="fts.l2",
         ),
         TaskSpec(
             name="l3_portfolio_loop",
-            cron_expression="0 20 * * *",         # 每日 20:00
+            cron_expression="0 20 * * *",  # 每日 20:00
             callable_path="fts.scheduler.jobs.l3_portfolio_loop_job",
-            description="L3 Portfolio Loop：因子筛选 + 信号合成（equal/sharpe/elastic_net）+ Verifier 校验 + 期货信号管道",
+            description="L3 Portfolio Loop（期货路径：futures_elite + market=futures）：因子筛选 + 信号合成（equal/sharpe/elastic_net）+ Verifier 校验 + 期货信号管道",
             trace_id_prefix="fts.l3",
         ),
         TaskSpec(
             name="sync_futures_data",
-            cron_expression="30 17 * * 1-5",      # 工作日 17:30
+            cron_expression="30 17 * * 1-5",  # 工作日 17:30
             callable_path="fts.scheduler.jobs.sync_futures_data_job",
             description="Phase 14.5 期货多源数据同步（DUCKDB 缓存 + TQ 源 → DuckDB）",
             trace_id_prefix="fts.sync",
         ),
         TaskSpec(
             name="health_check",
-            cron_expression="*/10 * * * *",       # 每 10 分钟
+            cron_expression="*/10 * * * *",  # 每 10 分钟
             callable_path="fts.scheduler.jobs.health_check_job",
             description="健康检查：监控所有循环状态",
             trace_id_prefix="fts.health",
         ),
         TaskSpec(
             name="monthly_decay_eval",
-            cron_expression="0 2 1 * *",          # 每月 1 日 02:00
+            cron_expression="0 2 1 * *",  # 每月 1 日 02:00
             callable_path="fts.scheduler.jobs.monthly_decay_eval_job",
             description="月度因子衰减评估（A.2）：精英池增量评估 + 状态机 + 自动淘汰",
             trace_id_prefix="fts.decay",
         ),
         TaskSpec(
             name="data_quality_eval",
-            cron_expression="*/5 * * * *",        # 每 5 分钟
+            cron_expression="*/5 * * * *",  # 每 5 分钟
             callable_path="fts.scheduler.jobs.data_quality_eval_job",
             description="数据质量周期评估（B.1）：质量快照 + 告警检查",
             trace_id_prefix="fts.dq",
         ),
         TaskSpec(
             name="data_level_monitor",
-            cron_expression="0 4 * * *",          # 每日 04:00
+            cron_expression="0 4 * * *",  # 每日 04:00
             callable_path="fts.scheduler.jobs.data_level_monitor_job",
             description="数据级质量监控（GAP-F06）：缺失率/异常值/多源分歧检查",
             trace_id_prefix="fts.dlm",
         ),
         TaskSpec(
             name="logic_monitor",
-            cron_expression="0 22 * * *",         # 每日 22:00
+            cron_expression="0 22 * * *",  # 每日 22:00
             callable_path="fts.scheduler.jobs.logic_monitor_job",
             description="逻辑监控（B.2）：因子行为漂移 + 极端预测 + 换月日异常检测",
             trace_id_prefix="fts.logic",
         ),
         TaskSpec(
             name="factor_inspector",
-            cron_expression="0 3 * * *",          # 每日 03:00
+            cron_expression="0 3 * * *",  # 每日 03:00
             callable_path="fts.scheduler.jobs.factor_inspector_job",
             description="因子巡检与自动降级（B.2）：扫描精英因子，检测退化并降级",
             trace_id_prefix="fts.inspector",
+        ),
+        TaskSpec(
+            name="sync_liquidity_pool",
+            cron_expression="0 8 * * 6",  # 每周六 08:00
+            callable_path="fts.scheduler.jobs.sync_liquidity_pool_job",
+            description="数据驱动动态池刷新（GAP-054）：TqSdk 流动性快照 → 渐进式替换 → 落盘动态池缓存",
+            trace_id_prefix="fts.lpool",
         ),
     ]
     for spec in defaults:

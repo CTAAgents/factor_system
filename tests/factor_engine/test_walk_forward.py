@@ -20,8 +20,6 @@ from fts.factor_engine.walk_forward import (
     DEFAULT_WALK_FORWARD_CONFIG,
     WalkForwardConfig,
     WalkForwardOptimizer,
-    WalkForwardResult,
-    WalkForwardWindowResult,
     _safe_stdev,
     _to_date_str,
 )
@@ -32,13 +30,13 @@ from fts.factor_engine.walk_forward import (
 
 # 小配置：用少量数据即可生成多个窗口
 _MINI_CONFIG: WalkForwardConfig = {
-    "window_years": 0,      # window_days=0 导致按日期索引行数，而非按天数
+    "window_years": 0,  # window_days=0 导致按日期索引行数，而非按天数
 }
 
 # 使用精确的行索引模式：用小数值让窗口按索引切割
 # window_years=0.1 → 36 天, step_months=1 → 30 天
 _SMALL_CONFIG: WalkForwardConfig = {
-    "window_years": 0,      # 0 → window_days=0，这样窗口根据行索引切割
+    "window_years": 0,  # 0 → window_days=0，这样窗口根据行索引切割
 }
 
 
@@ -46,10 +44,13 @@ def make_data(n_rows: int, seed: int = 42) -> pd.DataFrame:
     """生成 n_rows 行的合成 DataFrame（带 DatetimeIndex）。"""
     np.random.seed(seed)
     dates = pd.date_range("2024-01-01", periods=n_rows, freq="D")
-    return pd.DataFrame({
-        "close": 100 + np.cumsum(np.random.randn(n_rows) * 0.5),
-        "volume": np.random.randint(1_000, 10_000, n_rows).astype(float),
-    }, index=dates)
+    return pd.DataFrame(
+        {
+            "close": 100 + np.cumsum(np.random.randn(n_rows) * 0.5),
+            "volume": np.random.randint(1_000, 10_000, n_rows).astype(float),
+        },
+        index=dates,
+    )
 
 
 def make_evaluate_fn(
@@ -100,9 +101,9 @@ def _with_config(**overrides: Any) -> WalkForwardConfig:
     使用小窗口参数以便快速生成多窗口。
     """
     base: WalkForwardConfig = {
-        "window_years": 0,      # window_days=0，直接用索引
-        "step_months": 0,       # step_days=0
-        "min_oos_months": 0,    # min_oos_days=0
+        "window_years": 0,  # window_days=0，直接用索引
+        "step_months": 0,  # step_days=0
+        "min_oos_months": 0,  # min_oos_days=0
         "n_windows": 3,
     }
     base.update(overrides)
@@ -147,7 +148,9 @@ class TestComputeConsistencyScore:
         """完美指标应得 100 分。"""
         opt = WalkForwardOptimizer()
         score = opt._compute_consistency_score(
-            ic_consistency=1.0, ic_volatility=0.0, ic_mean=0.10,
+            ic_consistency=1.0,
+            ic_volatility=0.0,
+            ic_mean=0.10,
         )
         # 40 + 30 + 30 = 100
         assert score == 100.0
@@ -156,7 +159,9 @@ class TestComputeConsistencyScore:
         """最差指标应得 0 分。"""
         opt = WalkForwardOptimizer()
         score = opt._compute_consistency_score(
-            ic_consistency=0.0, ic_volatility=0.3, ic_mean=0.0,
+            ic_consistency=0.0,
+            ic_volatility=0.3,
+            ic_mean=0.0,
         )
         # 0 + 0 + 0 = 0
         assert score == 0.0
@@ -165,7 +170,9 @@ class TestComputeConsistencyScore:
         """中间值应正确计算。"""
         opt = WalkForwardOptimizer()
         score = opt._compute_consistency_score(
-            ic_consistency=0.5, ic_volatility=0.15, ic_mean=0.05,
+            ic_consistency=0.5,
+            ic_volatility=0.15,
+            ic_mean=0.05,
         )
         # consistency: 0.5 * 100 * 0.4 = 20
         # volatility: max(0, 1-0.15/0.3) * 100 * 0.3 = 0.5 * 30 = 15
@@ -177,7 +184,9 @@ class TestComputeConsistencyScore:
         """ic_mean 超过 0.1 应被 min 截断。"""
         opt = WalkForwardOptimizer()
         score = opt._compute_consistency_score(
-            ic_consistency=1.0, ic_volatility=0.0, ic_mean=0.50,
+            ic_consistency=1.0,
+            ic_volatility=0.0,
+            ic_mean=0.50,
         )
         # strength: min(1, 0.5/0.1) * 30 = 1 * 30 = 30
         assert score == 100.0
@@ -186,7 +195,9 @@ class TestComputeConsistencyScore:
         """ic_volatility 超过 max_ic_volatility 应被 max(0) 截断。"""
         opt = WalkForwardOptimizer()
         score = opt._compute_consistency_score(
-            ic_consistency=1.0, ic_volatility=0.6, ic_mean=0.10,
+            ic_consistency=1.0,
+            ic_volatility=0.6,
+            ic_mean=0.10,
         )
         # volatility: max(0, 1-0.6/0.3) * 30 = max(0, -1) * 30 = 0
         # 40 + 0 + 30 = 70
@@ -196,7 +207,9 @@ class TestComputeConsistencyScore:
         """结果应四舍五入到 2 位小数。"""
         opt = WalkForwardOptimizer()
         score = opt._compute_consistency_score(
-            ic_consistency=1.0 / 3.0, ic_volatility=0.1, ic_mean=0.033,
+            ic_consistency=1.0 / 3.0,
+            ic_volatility=0.1,
+            ic_mean=0.033,
         )
         # consistency: 0.3333 * 40 = 13.333...
         # volatility: (1-0.1/0.3)*30 = (1-0.3333)*30 = 20
@@ -208,7 +221,9 @@ class TestComputeConsistencyScore:
         """自定义 max_ic_volatility 应影响波动率部分计算。"""
         opt = WalkForwardOptimizer({"max_ic_volatility": 0.1})
         score = opt._compute_consistency_score(
-            ic_consistency=1.0, ic_volatility=0.05, ic_mean=0.10,
+            ic_consistency=1.0,
+            ic_volatility=0.05,
+            ic_mean=0.10,
         )
         # volatility: max(0, 1-0.05/0.1) * 30 = 0.5 * 30 = 15
         # 40 + 15 + 30 = 85
@@ -308,9 +323,7 @@ class TestCreateWindows:
         oos_starts = [w[1].index[0] for w in windows]
         oos_ends = [w[1].index[-1] for w in windows]
         for i in range(1, len(windows)):
-            assert oos_ends[i - 1] < oos_starts[i], (
-                f"OOS overlap between window {i-1} and window {i}"
-            )
+            assert oos_ends[i - 1] < oos_starts[i], f"OOS overlap between window {i - 1} and window {i}"
 
     def test_with_datetime_index(self) -> None:
         """应正确处理 DatetimeIndex。"""
@@ -346,8 +359,7 @@ class TestCreateWindows:
             prev_train_len = len(windows[i - 1][0])
             curr_train_len = len(windows[i][0])
             assert curr_train_len > prev_train_len, (
-                f"window {i} train len ({curr_train_len}) should be > "
-                f"window {i-1} train len ({prev_train_len})"
+                f"window {i} train len ({curr_train_len}) should be > window {i - 1} train len ({prev_train_len})"
             )
 
     def test_stops_when_train_exceeds_data(self) -> None:
@@ -402,8 +414,13 @@ class TestEvaluateStructure:
         result = opt.evaluate(data, fn)
 
         expected_keys = {
-            "train_start", "train_end", "oos_start", "oos_end",
-            "ic", "sharpe", "turnover",
+            "train_start",
+            "train_end",
+            "oos_start",
+            "oos_end",
+            "ic",
+            "sharpe",
+            "turnover",
         }
         for wr in result["windows"]:
             assert set(wr.keys()) == expected_keys, f"missing keys: {expected_keys - set(wr.keys())}"
@@ -449,8 +466,7 @@ class TestEvaluateStructure:
               此测试验证 evaluate 能正确处理此异常，返回空结果。
         """
         opt = self._make_opt(window_years=1, step_months=3, min_oos_months=3)
-        data = pd.DataFrame({"close": [], "volume": []},
-                            index=pd.DatetimeIndex([]))
+        data = pd.DataFrame({"close": [], "volume": []}, index=pd.DatetimeIndex([]))
         fn = make_evaluate_fn(ic=0.05, sharpe=1.5, turnover=0.1)
         result = opt.evaluate(data, fn)
         assert result["n_windows_completed"] == 0
@@ -490,12 +506,14 @@ class TestEvaluateConsistency:
         """一半窗口 IC > 0 时 ic_consistency 应为 0.5。"""
         opt = self._make_opt(window_years=1, step_months=3, min_oos_months=3, n_windows=4)
         data = make_data(1200)
-        fn = make_varied_evaluate_fn([
-            {"ic": 0.05, "sharpe": 1.5, "turnover": 0.1},
-            {"ic": 0.03, "sharpe": 1.2, "turnover": 0.1},
-            {"ic": -0.02, "sharpe": 0.8, "turnover": 0.2},
-            {"ic": -0.01, "sharpe": 0.5, "turnover": 0.2},
-        ])
+        fn = make_varied_evaluate_fn(
+            [
+                {"ic": 0.05, "sharpe": 1.5, "turnover": 0.1},
+                {"ic": 0.03, "sharpe": 1.2, "turnover": 0.1},
+                {"ic": -0.02, "sharpe": 0.8, "turnover": 0.2},
+                {"ic": -0.01, "sharpe": 0.5, "turnover": 0.2},
+            ]
+        )
         result = opt.evaluate(data, fn)
         assert result["ic_consistency"] == 0.5
 
@@ -519,12 +537,14 @@ class TestEvaluateConsistency:
         """ic_volatility 应为跨窗口 IC 的标准差。"""
         opt = self._make_opt(window_years=1, step_months=3, min_oos_months=3, n_windows=4)
         data = make_data(1200)
-        fn = make_varied_evaluate_fn([
-            {"ic": 0.1, "sharpe": 1.0, "turnover": 0.1},
-            {"ic": 0.2, "sharpe": 1.0, "turnover": 0.1},
-            {"ic": 0.3, "sharpe": 1.0, "turnover": 0.1},
-            {"ic": 0.4, "sharpe": 1.0, "turnover": 0.1},
-        ])
+        fn = make_varied_evaluate_fn(
+            [
+                {"ic": 0.1, "sharpe": 1.0, "turnover": 0.1},
+                {"ic": 0.2, "sharpe": 1.0, "turnover": 0.1},
+                {"ic": 0.3, "sharpe": 1.0, "turnover": 0.1},
+                {"ic": 0.4, "sharpe": 1.0, "turnover": 0.1},
+            ]
+        )
         result = opt.evaluate(data, fn)
         expected_std = np.std([0.1, 0.2, 0.3, 0.4], ddof=1)
         assert result["ic_volatility"] == pytest.approx(expected_std)
@@ -549,11 +569,13 @@ class TestEvaluateConsistency:
         """sharpe_volatility 应为跨窗口 Sharpe 的标准差。"""
         opt = self._make_opt(window_years=1, step_months=3, min_oos_months=3, n_windows=3)
         data = make_data(1000)
-        fn = make_varied_evaluate_fn([
-            {"ic": 0.05, "sharpe": 1.0, "turnover": 0.1},
-            {"ic": 0.05, "sharpe": 2.0, "turnover": 0.1},
-            {"ic": 0.05, "sharpe": 3.0, "turnover": 0.1},
-        ])
+        fn = make_varied_evaluate_fn(
+            [
+                {"ic": 0.05, "sharpe": 1.0, "turnover": 0.1},
+                {"ic": 0.05, "sharpe": 2.0, "turnover": 0.1},
+                {"ic": 0.05, "sharpe": 3.0, "turnover": 0.1},
+            ]
+        )
         result = opt.evaluate(data, fn)
         expected_std = np.std([1.0, 2.0, 3.0], ddof=1)
         assert result["sharpe_volatility"] == pytest.approx(expected_std)
@@ -595,11 +617,13 @@ class TestEvaluatePassed:
         """ic_consistency < min 时 passed=False。"""
         opt = self._make_opt({"min_ic_consistency": 0.8, "max_ic_volatility": 0.3})
         data = make_data(1000)
-        fn = make_varied_evaluate_fn([
-            {"ic": 0.05, "sharpe": 1.5, "turnover": 0.1},
-            {"ic": -0.02, "sharpe": 1.0, "turnover": 0.2},
-            {"ic": 0.03, "sharpe": 1.2, "turnover": 0.1},
-        ])
+        fn = make_varied_evaluate_fn(
+            [
+                {"ic": 0.05, "sharpe": 1.5, "turnover": 0.1},
+                {"ic": -0.02, "sharpe": 1.0, "turnover": 0.2},
+                {"ic": 0.03, "sharpe": 1.2, "turnover": 0.1},
+            ]
+        )
         result = opt.evaluate(data, fn)
         # 2/3 = 0.667 < 0.8 → fail
         assert result["passed"] is False
@@ -608,11 +632,13 @@ class TestEvaluatePassed:
         """ic_volatility > max 时 passed=False。"""
         opt = self._make_opt({"min_ic_consistency": 0.3, "max_ic_volatility": 0.05})
         data = make_data(1000)
-        fn = make_varied_evaluate_fn([
-            {"ic": 0.1, "sharpe": 1.5, "turnover": 0.1},
-            {"ic": -0.1, "sharpe": 1.0, "turnover": 0.2},
-            {"ic": 0.2, "sharpe": 1.2, "turnover": 0.1},
-        ])
+        fn = make_varied_evaluate_fn(
+            [
+                {"ic": 0.1, "sharpe": 1.5, "turnover": 0.1},
+                {"ic": -0.1, "sharpe": 1.0, "turnover": 0.2},
+                {"ic": 0.2, "sharpe": 1.2, "turnover": 0.1},
+            ]
+        )
         result = opt.evaluate(data, fn)
         # consistency = 2/3 ≈ 0.667 >= 0.3 ✓
         # volatility = std([0.1, -0.1, 0.2]) ≈ 0.153 > 0.05 → fail
@@ -622,11 +648,13 @@ class TestEvaluatePassed:
         """两个条件均不满足时 passed=False。"""
         opt = self._make_opt({"min_ic_consistency": 0.9, "max_ic_volatility": 0.05})
         data = make_data(1000)
-        fn = make_varied_evaluate_fn([
-            {"ic": 0.1, "sharpe": 1.5, "turnover": 0.1},
-            {"ic": -0.2, "sharpe": 1.0, "turnover": 0.2},
-            {"ic": -0.1, "sharpe": 1.2, "turnover": 0.1},
-        ])
+        fn = make_varied_evaluate_fn(
+            [
+                {"ic": 0.1, "sharpe": 1.5, "turnover": 0.1},
+                {"ic": -0.2, "sharpe": 1.0, "turnover": 0.2},
+                {"ic": -0.1, "sharpe": 1.2, "turnover": 0.1},
+            ]
+        )
         result = opt.evaluate(data, fn)
         # consistency = 1/3 ≈ 0.333 < 0.9
         # volatility = std([0.1, -0.2, -0.1]) ≈ 0.153 > 0.05
@@ -634,10 +662,15 @@ class TestEvaluatePassed:
 
     def test_custom_thresholds(self) -> None:
         """自定义阈值应影响 passed 判定。"""
-        opt = WalkForwardOptimizer(_with_config(
-            window_years=1, step_months=3, min_oos_months=3,
-            n_windows=3, min_ic_consistency=0.9,
-        ))
+        opt = WalkForwardOptimizer(
+            _with_config(
+                window_years=1,
+                step_months=3,
+                min_oos_months=3,
+                n_windows=3,
+                min_ic_consistency=0.9,
+            )
+        )
         data = make_data(1000)
         fn = make_evaluate_fn(ic=0.05, sharpe=1.5, turnover=0.1)
         result = opt.evaluate(data, fn)
@@ -670,8 +703,11 @@ class TestEvaluateEdgeCases:
         opt = self._make_opt(window_years=1, step_months=3, min_oos_months=3, n_windows=3)
         data = make_data(1000)
         fn = make_evaluate_fn(
-            ic=0.05, sharpe=1.5, turnover=0.1,
-            fail_on_windows={0, 1, 2}, raise_exc=True,
+            ic=0.05,
+            sharpe=1.5,
+            turnover=0.1,
+            fail_on_windows={0, 1, 2},
+            raise_exc=True,
         )
         result = opt.evaluate(data, fn)
         assert result["n_windows_completed"] == 0
@@ -682,11 +718,13 @@ class TestEvaluateEdgeCases:
         """负 IC 值应正确计算一致性和波动率。"""
         opt = self._make_opt(window_years=1, step_months=3, min_oos_months=3, n_windows=3)
         data = make_data(1000)
-        fn = make_varied_evaluate_fn([
-            {"ic": -0.05, "sharpe": 0.5, "turnover": 0.2},
-            {"ic": -0.03, "sharpe": 0.8, "turnover": 0.2},
-            {"ic": -0.10, "sharpe": 0.3, "turnover": 0.3},
-        ])
+        fn = make_varied_evaluate_fn(
+            [
+                {"ic": -0.05, "sharpe": 0.5, "turnover": 0.2},
+                {"ic": -0.03, "sharpe": 0.8, "turnover": 0.2},
+                {"ic": -0.10, "sharpe": 0.3, "turnover": 0.3},
+            ]
+        )
         result = opt.evaluate(data, fn)
         # 全部 ic < 0 → consistency = 0.0
         assert result["ic_consistency"] == 0.0
@@ -699,12 +737,14 @@ class TestEvaluateEdgeCases:
         """混合正负 IC 应正确计算一致性比率。"""
         opt = self._make_opt(window_years=1, step_months=3, min_oos_months=3, n_windows=4)
         data = make_data(1200)
-        fn = make_varied_evaluate_fn([
-            {"ic": 0.05, "sharpe": 1.5, "turnover": 0.1},
-            {"ic": -0.02, "sharpe": 0.8, "turnover": 0.2},
-            {"ic": 0.03, "sharpe": 1.2, "turnover": 0.1},
-            {"ic": -0.01, "sharpe": 0.5, "turnover": 0.3},
-        ])
+        fn = make_varied_evaluate_fn(
+            [
+                {"ic": 0.05, "sharpe": 1.5, "turnover": 0.1},
+                {"ic": -0.02, "sharpe": 0.8, "turnover": 0.2},
+                {"ic": 0.03, "sharpe": 1.2, "turnover": 0.1},
+                {"ic": -0.01, "sharpe": 0.5, "turnover": 0.3},
+            ]
+        )
         result = opt.evaluate(data, fn)
         # 2/4 = 0.5
         assert result["ic_consistency"] == 0.5
@@ -723,11 +763,13 @@ class TestEvaluateEdgeCases:
         """极大 IC 值应不影响标准差计算。"""
         opt = self._make_opt(window_years=1, step_months=3, min_oos_months=3, n_windows=3)
         data = make_data(1000)
-        fn = make_varied_evaluate_fn([
-            {"ic": 0.5, "sharpe": 10.0, "turnover": 0.1},
-            {"ic": 1.0, "sharpe": 20.0, "turnover": 0.1},
-            {"ic": 1.5, "sharpe": 30.0, "turnover": 0.1},
-        ])
+        fn = make_varied_evaluate_fn(
+            [
+                {"ic": 0.5, "sharpe": 10.0, "turnover": 0.1},
+                {"ic": 1.0, "sharpe": 20.0, "turnover": 0.1},
+                {"ic": 1.5, "sharpe": 30.0, "turnover": 0.1},
+            ]
+        )
         result = opt.evaluate(data, fn)
         expected_ic_std = np.std([0.5, 1.0, 1.5], ddof=1)
         expected_sharpe_std = np.std([10.0, 20.0, 30.0], ddof=1)
@@ -766,8 +808,12 @@ class TestIntegration:
     def test_full_flow_all_pass(self) -> None:
         """所有窗口 IC 为正且低波动时应通过验证。"""
         opt = self._make_opt(
-            window_years=1, step_months=3, min_oos_months=3,
-            n_windows=3, min_ic_consistency=0.5, max_ic_volatility=0.3,
+            window_years=1,
+            step_months=3,
+            min_oos_months=3,
+            n_windows=3,
+            min_ic_consistency=0.5,
+            max_ic_volatility=0.3,
         )
         data = make_data(1000)
         fn = make_evaluate_fn(ic=0.05, sharpe=1.5, turnover=0.1)
@@ -782,8 +828,12 @@ class TestIntegration:
     def test_full_flow_all_fail(self) -> None:
         """IC 负值时应不通过验证。"""
         opt = self._make_opt(
-            window_years=1, step_months=3, min_oos_months=3,
-            n_windows=3, min_ic_consistency=0.5, max_ic_volatility=0.3,
+            window_years=1,
+            step_months=3,
+            min_oos_months=3,
+            n_windows=3,
+            min_ic_consistency=0.5,
+            max_ic_volatility=0.3,
         )
         data = make_data(1000)
         fn = make_evaluate_fn(ic=-0.05, sharpe=0.5, turnover=0.3)
@@ -811,8 +861,12 @@ class TestIntegration:
     def test_varying_consistency_scores(self) -> None:
         """不同 IC 信号应产生不同一致性分数。"""
         opt = self._make_opt(
-            window_years=1, step_months=3, min_oos_months=3,
-            n_windows=3, min_ic_consistency=0.5, max_ic_volatility=0.3,
+            window_years=1,
+            step_months=3,
+            min_oos_months=3,
+            n_windows=3,
+            min_ic_consistency=0.5,
+            max_ic_volatility=0.3,
         )
         data = make_data(1000)
 
@@ -821,11 +875,13 @@ class TestIntegration:
         result_high = opt.evaluate(data, fn_high)
 
         # 低质量：不一致
-        fn_low = make_varied_evaluate_fn([
-            {"ic": 0.08, "sharpe": 2.0, "turnover": 0.05},
-            {"ic": -0.05, "sharpe": 0.5, "turnover": 0.30},
-            {"ic": 0.02, "sharpe": 0.8, "turnover": 0.20},
-        ])
+        fn_low = make_varied_evaluate_fn(
+            [
+                {"ic": 0.08, "sharpe": 2.0, "turnover": 0.05},
+                {"ic": -0.05, "sharpe": 0.5, "turnover": 0.30},
+                {"ic": 0.02, "sharpe": 0.8, "turnover": 0.20},
+            ]
+        )
         result_low = opt.evaluate(data, fn_low)
 
         assert result_high["consistency_score"] > result_low["consistency_score"]

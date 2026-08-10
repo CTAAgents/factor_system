@@ -6,9 +6,8 @@ HARNESS §测试随重构: 覆盖 watchdog.py 核心路径。
 from __future__ import annotations
 
 import time
-from unittest.mock import ANY, MagicMock, PropertyMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
-import pytest
 
 from fts.scheduler.watchdog import (
     CIRCUIT_BREAK_DURATION,
@@ -291,9 +290,7 @@ class TestProcessWatchdogErrorHandling:
         ):
             wd.run()
 
-        mock_logger.error.assert_any_call(
-            "[watchdog] command not found: %s", "nonexistent_cmd"
-        )
+        mock_logger.error.assert_any_call("[watchdog] command not found: %s", "nonexistent_cmd")
         mock_sleep.assert_any_call(60)
 
     @patch("fts.scheduler.watchdog.time.sleep")

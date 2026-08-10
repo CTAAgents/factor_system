@@ -14,7 +14,6 @@ import pytest
 
 from fts.monitor.http_server import (
     FTSDashboardServer,
-    _metrics,
     _DashboardHandler,
     DASHBOARD_HTML,
     get_metric,
@@ -188,13 +187,21 @@ class MockRequestHandler:
         handler._respond_html = _DashboardHandler._respond_html.__get__(handler, _DashboardHandler)
         handler._respond_metrics = _DashboardHandler._respond_metrics.__get__(handler, _DashboardHandler)
         handler._build_metrics = _DashboardHandler._build_metrics.__get__(handler, _DashboardHandler)
-        handler._build_data_source_metrics = _DashboardHandler._build_data_source_metrics.__get__(handler, _DashboardHandler)
-        handler._build_prometheus_metrics = _DashboardHandler._build_prometheus_metrics.__get__(handler, _DashboardHandler)
+        handler._build_data_source_metrics = _DashboardHandler._build_data_source_metrics.__get__(
+            handler, _DashboardHandler
+        )
+        handler._build_prometheus_metrics = _DashboardHandler._build_prometheus_metrics.__get__(
+            handler, _DashboardHandler
+        )
         handler._build_health = _DashboardHandler._build_health.__get__(handler, _DashboardHandler)
         handler._build_status = _DashboardHandler._build_status.__get__(handler, _DashboardHandler)
         handler._build_factor_list = _DashboardHandler._build_factor_list.__get__(handler, _DashboardHandler)
-        handler._build_factor_list_from_duckdb = _DashboardHandler._build_factor_list_from_duckdb.__get__(handler, _DashboardHandler)
-        handler._build_factor_list_json_fallback = _DashboardHandler._build_factor_list_json_fallback.__get__(handler, _DashboardHandler)
+        handler._build_factor_list_from_duckdb = _DashboardHandler._build_factor_list_from_duckdb.__get__(
+            handler, _DashboardHandler
+        )
+        handler._build_factor_list_json_fallback = _DashboardHandler._build_factor_list_json_fallback.__get__(
+            handler, _DashboardHandler
+        )
         handler._build_candidate_list = _DashboardHandler._build_candidate_list.__get__(handler, _DashboardHandler)
         handler.do_GET = _DashboardHandler.do_GET.__get__(handler, _DashboardHandler)
         return handler
@@ -284,6 +291,7 @@ class TestDashboardHandlerBuildStatus:
     def _make_loop_report(self, **kwargs):
         """创建 LoopStatusReport mock。"""
         from fts.monitor import LoopStatusReport
+
         return LoopStatusReport(
             loop_name=kwargs.get("loop_name", "L1"),
             healthy=kwargs.get("healthy", True),
@@ -349,7 +357,6 @@ class TestDashboardHandlerBuildStatus:
     def test_build_status_counts_factor_files(self):
         """_build_status 正确统计 elite/overloaded/retired 因子文件数。"""
         import tempfile
-        import os
 
         handler = MockRequestHandler.make_handler()
         mock_report = MagicMock(spec=object)
@@ -433,12 +440,20 @@ class TestDashboardHandlerBuildFactorList:
 
         handler = MockRequestHandler.make_handler()
 
-        factor1 = {"factor_id": "F001", "name": "测试因子1", "generation": 5,
-                    "source": "evolution",
-                    "evaluation": {"level_1_backtest": {"ic": 0.0523, "sharpe": 1.25}}}
-        factor2 = {"factor_id": "F002", "name": "测试因子2", "generation": 3,
-                    "source": "seed",
-                    "evaluation": {"level_1_backtest": {"ic": 0.0310, "sharpe": 0.95}}}
+        factor1 = {
+            "factor_id": "F001",
+            "name": "测试因子1",
+            "generation": 5,
+            "source": "evolution",
+            "evaluation": {"level_1_backtest": {"ic": 0.0523, "sharpe": 1.25}},
+        }
+        factor2 = {
+            "factor_id": "F002",
+            "name": "测试因子2",
+            "generation": 3,
+            "source": "seed",
+            "evaluation": {"level_1_backtest": {"ic": 0.0310, "sharpe": 0.95}},
+        }
 
         with tempfile.TemporaryDirectory() as tmpdir:
             elite_dir = Path(tmpdir) / "memory" / "knowledge" / "factors" / "futures_elite"
@@ -470,9 +485,13 @@ class TestDashboardHandlerBuildFactorList:
 
         handler = MockRequestHandler.make_handler()
 
-        good_factor = {"factor_id": "G001", "name": "good", "generation": 1,
-                        "source": "seed",
-                        "evaluation": {"level_1_backtest": {"ic": 0.01, "sharpe": 0.5}}}
+        good_factor = {
+            "factor_id": "G001",
+            "name": "good",
+            "generation": 1,
+            "source": "seed",
+            "evaluation": {"level_1_backtest": {"ic": 0.01, "sharpe": 0.5}},
+        }
 
         with tempfile.TemporaryDirectory() as tmpdir:
             elite_dir = Path(tmpdir) / "memory" / "knowledge" / "factors" / "futures_elite"
@@ -501,9 +520,13 @@ class TestDashboardHandlerBuildFactorList:
             elite_dir = Path(tmpdir) / "memory" / "knowledge" / "factors" / "futures_elite"
             elite_dir.mkdir(parents=True)
             for i in range(210):
-                factor = {"factor_id": f"F{i:03d}", "name": f"f{i}", "generation": 1,
-                          "source": "seed",
-                          "evaluation": {"level_1_backtest": {"ic": 0.01, "sharpe": 0.5}}}
+                factor = {
+                    "factor_id": f"F{i:03d}",
+                    "name": f"f{i}",
+                    "generation": 1,
+                    "source": "seed",
+                    "evaluation": {"level_1_backtest": {"ic": 0.01, "sharpe": 0.5}},
+                }
                 (elite_dir / f"F{i:03d}.json").write_text(json.dumps(factor), encoding="utf-8")
 
             with patch("pathlib.Path.cwd", return_value=Path(tmpdir)):
@@ -523,11 +546,15 @@ class TestDashboardHandlerBuildFactorList:
 
         handler = MockRequestHandler.make_handler()
 
-        evaluated = {"factor_id": "E001", "name": "已评估因子", "generation": 1,
-                     "source": "seed", "family": "trend",
-                     "evaluation": {"level_1_backtest": {"ic": 0.05, "sharpe": 1.5}}}
-        unevaluated = {"factor_id": "P001", "name": "未评估因子", "generation": 0,
-                       "source": "seed", "family": "trend"}
+        evaluated = {
+            "factor_id": "E001",
+            "name": "已评估因子",
+            "generation": 1,
+            "source": "seed",
+            "family": "trend",
+            "evaluation": {"level_1_backtest": {"ic": 0.05, "sharpe": 1.5}},
+        }
+        unevaluated = {"factor_id": "P001", "name": "未评估因子", "generation": 0, "source": "seed", "family": "trend"}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             elite_dir = Path(tmpdir) / "memory" / "knowledge" / "factors" / "futures_elite"
@@ -552,13 +579,19 @@ class TestDashboardHandlerBuildCandidates:
     def _write_pool(self, tmpdir: str, factors: list[dict]) -> Path:
         pool_path = Path(tmpdir) / "memory" / "knowledge" / "factors" / "factor_pool.json"
         pool_path.parent.mkdir(parents=True, exist_ok=True)
-        pool_path.write_text(json.dumps({
-            "version": "8.10.0",
-            "updated_at": "2026-08-08T00:00:00",
-            "factors": factors,
-            "total_count": len(factors),
-            "pending_count": sum(1 for f in factors if f.get("status") == "pending"),
-        }, ensure_ascii=False), encoding="utf-8")
+        pool_path.write_text(
+            json.dumps(
+                {
+                    "version": "8.10.0",
+                    "updated_at": "2026-08-08T00:00:00",
+                    "factors": factors,
+                    "total_count": len(factors),
+                    "pending_count": sum(1 for f in factors if f.get("status") == "pending"),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
         return pool_path
 
     def test_candidates_empty_when_no_pool(self):
@@ -580,14 +613,30 @@ class TestDashboardHandlerBuildCandidates:
 
         handler = MockRequestHandler.make_handler()
         factors = [
-            {"factor_id": "cand_001", "name": "候选A", "source": "l2_evolution",
-             "status": "pending", "evaluation_status": "pending", "priority": "high",
-             "parent_topic": "螺纹钢", "trace_id": "t1",
-             "created_at": "2026-08-08", "updated_at": "2026-08-08"},
-            {"factor_id": "cand_002", "name": "候选B", "source": "l1_bootstrapping",
-             "status": "injected", "evaluation_status": "pending", "priority": "medium",
-             "parent_topic": "铁矿", "trace_id": "t2",
-             "created_at": "2026-08-08", "updated_at": "2026-08-08"},
+            {
+                "factor_id": "cand_001",
+                "name": "候选A",
+                "source": "l2_evolution",
+                "status": "pending",
+                "evaluation_status": "pending",
+                "priority": "high",
+                "parent_topic": "螺纹钢",
+                "trace_id": "t1",
+                "created_at": "2026-08-08",
+                "updated_at": "2026-08-08",
+            },
+            {
+                "factor_id": "cand_002",
+                "name": "候选B",
+                "source": "l1_bootstrapping",
+                "status": "injected",
+                "evaluation_status": "pending",
+                "priority": "medium",
+                "parent_topic": "铁矿",
+                "trace_id": "t2",
+                "created_at": "2026-08-08",
+                "updated_at": "2026-08-08",
+            },
         ]
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_pool(tmpdir, factors)
@@ -606,9 +655,19 @@ class TestDashboardHandlerBuildCandidates:
         import tempfile
 
         handler = MockRequestHandler.make_handler()
-        factors = [{"factor_id": "cand_003", "name": "旧候选", "source": "l1_extractor_pipeline",
-                    "status": "pending", "priority": "low", "parent_topic": None,
-                    "trace_id": "t3", "created_at": "2026-08-01", "updated_at": "2026-08-01"}]
+        factors = [
+            {
+                "factor_id": "cand_003",
+                "name": "旧候选",
+                "source": "l1_extractor_pipeline",
+                "status": "pending",
+                "priority": "low",
+                "parent_topic": None,
+                "trace_id": "t3",
+                "created_at": "2026-08-01",
+                "updated_at": "2026-08-01",
+            }
+        ]
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_pool(tmpdir, factors)
             with patch("pathlib.Path.cwd", return_value=Path(tmpdir)):
@@ -630,9 +689,7 @@ class TestDashboardHandlerMetrics:
         handler.do_GET()
 
         handler.send_response.assert_called_once_with(200)
-        handler.send_header.assert_any_call(
-            "Content-Type", "text/plain; version=0.0.4; charset=utf-8"
-        )
+        handler.send_header.assert_any_call("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
         body = handler.wfile.getvalue().decode()
         assert "# HELP" in body
         assert "# TYPE" in body
@@ -662,6 +719,7 @@ class TestDashboardHandlerMetrics:
 
         monitor = DataQualityMonitor()
         from tests.monitor.test_data_quality_monitor import _make_good_data
+
         monitor.validate_market_data(_make_good_data())
         set_data_quality_monitor(monitor)
 
@@ -708,6 +766,7 @@ class TestDashboardHandlerMetrics:
 # 补充端点 / 路由：_respond_text、/api/candidates、/api/v1/*
 # ═══════════════════════════════════════════════════════════
 
+
 class TestDashboardHandlerExtendedRoutes:
     """_DashboardHandler 补充端点与 do_GET 路由测试。"""
 
@@ -722,8 +781,9 @@ class TestDashboardHandlerExtendedRoutes:
     def test_api_candidates_route(self):
         """GET /api/candidates 路由调用 _build_candidate_list（line 1330）。"""
         handler = MockRequestHandler.make_handler(path="/api/candidates")
-        with patch.object(handler, "_build_candidate_list",
-                          return_value={"count": 0, "pending_count": 0, "factors": []}):
+        with patch.object(
+            handler, "_build_candidate_list", return_value={"count": 0, "pending_count": 0, "factors": []}
+        ):
             handler.do_GET()
         handler.send_response.assert_called_once_with(200)
         body = json.loads(handler.wfile.getvalue().decode())
@@ -732,8 +792,7 @@ class TestDashboardHandlerExtendedRoutes:
     def test_api_v1_risk_status_route(self):
         """GET /api/v1/risk/status 路由（line 1342）。"""
         handler = MockRequestHandler.make_handler(path="/api/v1/risk/status")
-        with patch("fts.monitor.http_server._build_risk_status",
-                   return_value={"risk_level": "normal"}):
+        with patch("fts.monitor.http_server._build_risk_status", return_value={"risk_level": "normal"}):
             handler.do_GET()
         body = json.loads(handler.wfile.getvalue().decode())
         assert body["risk_level"] == "normal"
@@ -741,8 +800,7 @@ class TestDashboardHandlerExtendedRoutes:
     def test_api_v1_live_factors_route(self):
         """GET /api/v1/live/factors 路由（line 1345）。"""
         handler = MockRequestHandler.make_handler(path="/api/v1/live/factors")
-        with patch("fts.monitor.http_server._build_live_factors",
-                   return_value={"factors": [], "alerts": []}):
+        with patch("fts.monitor.http_server._build_live_factors", return_value={"factors": [], "alerts": []}):
             handler.do_GET()
         body = json.loads(handler.wfile.getvalue().decode())
         assert body["factors"] == []
@@ -750,8 +808,9 @@ class TestDashboardHandlerExtendedRoutes:
     def test_api_v1_live_deviation_route(self):
         """GET /api/v1/live/factors/{id}/deviation 路由（line 1348-1349）。"""
         handler = MockRequestHandler.make_handler(path="/api/v1/live/factors/F001/deviation")
-        with patch("fts.monitor.http_server._build_live_deviation",
-                   return_value={"factor_id": "F001", "deviation": 0.1}) as m:
+        with patch(
+            "fts.monitor.http_server._build_live_deviation", return_value={"factor_id": "F001", "deviation": 0.1}
+        ) as m:
             handler.do_GET()
         m.assert_called_once_with("F001")
         body = json.loads(handler.wfile.getvalue().decode())
@@ -762,19 +821,26 @@ class TestDashboardHandlerExtendedRoutes:
 # _build_status — JSON fallback 细节 + DuckDB 查询失败
 # ═══════════════════════════════════════════════════════════
 
+
 class TestBuildStatusExtended:
     """_build_status 的 fallback 边界分支测试。"""
 
     def _mock_report(self):
         from fts.monitor import SystemStatusReport
+
         return SystemStatusReport(
-            healthy=True, loops=[], fts_version="v1.1.0",
-            any_circuit_broken=False, any_stale=False, total_tokens_today=0,
+            healthy=True,
+            loops=[],
+            fts_version="v1.1.0",
+            any_circuit_broken=False,
+            any_stale=False,
+            total_tokens_today=0,
         )
 
     def test_build_status_fallback_skips_underscore_and_bad_json(self):
         """JSON fallback 跳过 _ 前缀文件 + 容忍坏 JSON（line 613, 618-619）。"""
         import tempfile
+
         handler = MockRequestHandler.make_handler()
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -782,8 +848,7 @@ class TestBuildStatusExtended:
             elite_dir.mkdir(parents=True)
             (elite_dir / "_private.json").write_text("{}", encoding="utf-8")
             (elite_dir / "bad.json").write_text("{invalid", encoding="utf-8")
-            (elite_dir / "F001.json").write_text(
-                json.dumps({"family": "trend"}), encoding="utf-8")
+            (elite_dir / "F001.json").write_text(json.dumps({"family": "trend"}), encoding="utf-8")
 
             with patch("fts.monitor.check_all_status", return_value=self._mock_report()):
                 with patch("pathlib.Path.cwd", return_value=root):
@@ -801,6 +866,7 @@ class TestBuildStatusExtended:
     def test_build_status_duckdb_query_failure_falls_back(self):
         """DuckDB 连接失败时回退 JSON 统计（line 662-664）。"""
         import tempfile
+
         handler = MockRequestHandler.make_handler()
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -808,13 +874,13 @@ class TestBuildStatusExtended:
             db_file.write_bytes(b"dummy")
             elite_dir = root / "memory" / "knowledge" / "factors" / "futures_elite"
             elite_dir.mkdir(parents=True)
-            (elite_dir / "F001.json").write_text(
-                json.dumps({"family": "carry"}), encoding="utf-8")
+            (elite_dir / "F001.json").write_text(json.dumps({"family": "carry"}), encoding="utf-8")
 
             with patch("fts.monitor.check_all_status", return_value=self._mock_report()):
                 with patch("pathlib.Path.cwd", return_value=root):
                     with patch(
-                        "fts.factor_engine.factor_db.schema.DATABASE_PATH", db_file,
+                        "fts.factor_engine.factor_db.schema.DATABASE_PATH",
+                        db_file,
                     ):
                         with patch("duckdb.connect", side_effect=RuntimeError("db broken")):
                             result = _DashboardHandler._build_status(handler)
@@ -826,6 +892,7 @@ class TestBuildStatusExtended:
 # ═══════════════════════════════════════════════════════════
 # _build_factor_list_from_duckdb — mock DuckDB 完整路径
 # ═══════════════════════════════════════════════════════════
+
 
 class TestBuildFactorListFromDuckDB:
     """_build_factor_list_from_duckdb 的完整路径（含 792 行列名获取修复）。
@@ -843,7 +910,9 @@ class TestBuildFactorListFromDuckDB:
         mock_conn = MagicMock()
         tables_resp = MagicMock()
         tables_resp.fetchall.return_value = [
-            ("factor_catalog",), ("factor_evaluations",), ("factor_quality_scores",),
+            ("factor_catalog",),
+            ("factor_evaluations",),
+            ("factor_quality_scores",),
         ]
         main_resp = MagicMock()
         main_resp.description = [(f"c{i}",) for i in range(24)]
@@ -852,8 +921,7 @@ class TestBuildFactorListFromDuckDB:
 
         handler = MockRequestHandler.make_handler()
         with patch("duckdb.connect", return_value=mock_conn):
-            result = _DashboardHandler._build_factor_list_from_duckdb(
-                handler, Path("/tmp/x.duckdb"))
+            result = _DashboardHandler._build_factor_list_from_duckdb(handler, Path("/tmp/x.duckdb"))
         assert isinstance(result, dict)
         assert result["count"] >= 1
         assert result["factors"][0]["factor_id"] == ""  # 列名未对齐时走默认值而非崩溃
@@ -870,8 +938,7 @@ class TestBuildFactorListFromDuckDB:
 
         handler = MockRequestHandler.make_handler()
         with patch("duckdb.connect", return_value=mock_conn):
-            result = _DashboardHandler._build_factor_list_from_duckdb(
-                handler, Path("/tmp/x.duckdb"))
+            result = _DashboardHandler._build_factor_list_from_duckdb(handler, Path("/tmp/x.duckdb"))
         assert isinstance(result, dict)
         assert result["factors"][0]["quality_score"] is None  # 无 quality 表 → NULL 分支
 
@@ -880,12 +947,14 @@ class TestBuildFactorListFromDuckDB:
 # _build_factor_list — DuckDB 失败降级 + _ 前缀文件
 # ═══════════════════════════════════════════════════════════
 
+
 class TestBuildFactorListExtended:
     """_build_factor_list 的降级与边界分支。"""
 
     def test_duckdb_connect_failure_falls_back(self):
         """DuckDB 连接失败时降级 JSON 文件（line 704-706）。"""
         import tempfile
+
         handler = MockRequestHandler.make_handler()
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -893,15 +962,23 @@ class TestBuildFactorListExtended:
             db_file.write_bytes(b"dummy")
             elite_dir = root / "memory" / "knowledge" / "factors" / "futures_elite"
             elite_dir.mkdir(parents=True)
-            (elite_dir / "F001.json").write_text(json.dumps({
-                "factor_id": "F001", "name": "f1", "generation": 1,
-                "source": "seed",
-                "evaluation": {"level_1_backtest": {"ic": 0.01, "sharpe": 0.5}},
-            }), encoding="utf-8")
+            (elite_dir / "F001.json").write_text(
+                json.dumps(
+                    {
+                        "factor_id": "F001",
+                        "name": "f1",
+                        "generation": 1,
+                        "source": "seed",
+                        "evaluation": {"level_1_backtest": {"ic": 0.01, "sharpe": 0.5}},
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             with patch("pathlib.Path.cwd", return_value=root):
                 with patch(
-                    "fts.factor_engine.factor_db.schema.DATABASE_PATH", db_file,
+                    "fts.factor_engine.factor_db.schema.DATABASE_PATH",
+                    db_file,
                 ):
                     with patch("duckdb.connect", side_effect=RuntimeError("db broken")):
                         result = _DashboardHandler._build_factor_list(handler)
@@ -912,17 +989,25 @@ class TestBuildFactorListExtended:
     def test_json_fallback_skips_underscore_files(self):
         """JSON fallback 跳过 _ 前缀文件（line 923）。"""
         import tempfile
+
         handler = MockRequestHandler.make_handler()
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             elite_dir = root / "memory" / "knowledge" / "factors" / "futures_elite"
             elite_dir.mkdir(parents=True)
             (elite_dir / "_hidden.json").write_text("{}", encoding="utf-8")
-            (elite_dir / "F001.json").write_text(json.dumps({
-                "factor_id": "F001", "name": "f1", "generation": 1,
-                "source": "seed",
-                "evaluation": {"level_1_backtest": {"ic": 0.01, "sharpe": 0.5}},
-            }), encoding="utf-8")
+            (elite_dir / "F001.json").write_text(
+                json.dumps(
+                    {
+                        "factor_id": "F001",
+                        "name": "f1",
+                        "generation": 1,
+                        "source": "seed",
+                        "evaluation": {"level_1_backtest": {"ic": 0.01, "sharpe": 0.5}},
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             with patch("pathlib.Path.cwd", return_value=root):
                 result = _DashboardHandler._build_factor_list_json_fallback(handler)
@@ -935,12 +1020,14 @@ class TestBuildFactorListExtended:
 # _build_candidate_list — 损坏 pool 文件
 # ═══════════════════════════════════════════════════════════
 
+
 class TestBuildCandidatesExtended:
     """_build_candidate_list 的异常分支。"""
 
     def test_corrupt_pool_returns_empty(self):
         """factor_pool.json 内容损坏时返回空（line 1012-1013）。"""
         import tempfile
+
         handler = MockRequestHandler.make_handler()
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -959,6 +1046,7 @@ class TestBuildCandidatesExtended:
 # _build_metrics / 数据源指标 — 异常与缓存分支
 # ═══════════════════════════════════════════════════════════
 
+
 class TestBuildMetricsExtended:
     """_build_metrics 与 _build_data_source_metrics 的异常/缓存分支。"""
 
@@ -966,6 +1054,7 @@ class TestBuildMetricsExtended:
     def _reset_metrics_cache(self):
         """重置模块级 _metrics_cache（避免测试间缓存污染）。"""
         from fts.monitor import http_server
+
         http_server._metrics_cache["data"] = None
         http_server._metrics_cache["ts"] = 0.0
         yield
@@ -984,6 +1073,7 @@ class TestBuildMetricsExtended:
     def test_metrics_dq_monitor_error_emits_error_line(self):
         """DataQualityMonitor 指标读取失败时输出 ERROR 行（line 1092-1094）。"""
         from fts.monitor import set_data_quality_monitor
+
         monitor = MagicMock()
         monitor.get_prometheus_metrics.side_effect = RuntimeError("monitor broken")
         set_data_quality_monitor(monitor)
@@ -998,6 +1088,7 @@ class TestBuildMetricsExtended:
         """_metrics_cache 缓存命中直接返回（line 1160）。"""
         import time as _time
         from fts.monitor import http_server
+
         handler = MockRequestHandler.make_handler()
         http_server._metrics_cache["data"] = {"healthy": True, "sources": {}}
         http_server._metrics_cache["ts"] = _time.time()
@@ -1011,8 +1102,7 @@ class TestBuildMetricsExtended:
     def test_data_source_metrics_aggregator_failure(self):
         """聚合器构建失败时降级为空状态（line 1166-1167）。"""
         handler = MockRequestHandler.make_handler()
-        with patch("fts.cli._build_default_aggregator",
-                   side_effect=RuntimeError("agg broken")):
+        with patch("fts.cli._build_default_aggregator", side_effect=RuntimeError("agg broken")):
             result = _DashboardHandler._build_data_source_metrics(handler)
         assert result["healthy"] is False
         assert result["summary"]["success_rate"] == 0.0
@@ -1021,13 +1111,13 @@ class TestBuildMetricsExtended:
     def test_data_source_metrics_sync_read_failure(self):
         """sync_summary 损坏时 latest_sync 为 None（line 1196-1197）。"""
         import tempfile
+
         handler = MockRequestHandler.make_handler()
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             lineage = root / "data" / "_lineage"
             lineage.mkdir(parents=True)
-            (lineage / "sync_summary_20260809.json").write_text(
-                "{corrupt", encoding="utf-8")
+            (lineage / "sync_summary_20260809.json").write_text("{corrupt", encoding="utf-8")
             mock_agg = MagicMock()
             mock_agg.get_source_status.return_value = {}
             with patch("pathlib.Path.cwd", return_value=root):
@@ -1039,6 +1129,7 @@ class TestBuildMetricsExtended:
         """sync_summary .json 与 .json.gz 均被解析（line 1185-1195）。"""
         import gzip
         import tempfile
+
         handler = MockRequestHandler.make_handler()
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1046,8 +1137,7 @@ class TestBuildMetricsExtended:
             lineage.mkdir(parents=True)
             payload = json.dumps({"symbol": "RB0", "failures": list(range(20))})
             # .gz 文件更新时间更新 → 被优先选中
-            (lineage / "sync_summary_20260809.json.gz").write_bytes(
-                gzip.compress(payload.encode("utf-8")))
+            (lineage / "sync_summary_20260809.json.gz").write_bytes(gzip.compress(payload.encode("utf-8")))
             mock_agg = MagicMock()
             mock_agg.get_source_status.return_value = {}
             with patch("pathlib.Path.cwd", return_value=root):
@@ -1062,6 +1152,7 @@ class TestBuildMetricsExtended:
 # _build_prometheus_metrics — Prometheus 文本指标
 # ═══════════════════════════════════════════════════════════
 
+
 class TestBuildPrometheusMetrics:
     """_build_prometheus_metrics 直接调用测试（line 1219-1285）。"""
 
@@ -1073,8 +1164,7 @@ class TestBuildPrometheusMetrics:
     def test_returns_prometheus_text(self):
         """返回 Prometheus 文本格式，包含版本与数据源指标。"""
         handler = MockRequestHandler.make_handler()
-        with patch("fts.cli._build_default_aggregator",
-                   return_value=self._make_agg()):
+        with patch("fts.cli._build_default_aggregator", return_value=self._make_agg()):
             text = _DashboardHandler._build_prometheus_metrics(handler)
         assert "# HELP fts_version" in text
         assert "fts_version{" in text
@@ -1085,8 +1175,7 @@ class TestBuildPrometheusMetrics:
     def test_aggregator_failure_uses_empty_status(self):
         """聚合器构建失败时指标降级为空状态。"""
         handler = MockRequestHandler.make_handler()
-        with patch("fts.cli._build_default_aggregator",
-                   side_effect=RuntimeError("agg broken")):
+        with patch("fts.cli._build_default_aggregator", side_effect=RuntimeError("agg broken")):
             text = _DashboardHandler._build_prometheus_metrics(handler)
         assert "fts_data_source_success_rate 0.0000" in text
         assert "fts_circuit_open 0" in text
@@ -1098,8 +1187,7 @@ class TestBuildPrometheusMetrics:
             "TQ_LOCAL": {"circuit_open": True, "consecutive_failures": 5},
             "AKSHARE": {"circuit_open": False, "consecutive_failures": 0},
         }
-        with patch("fts.cli._build_default_aggregator",
-                   return_value=self._make_agg(status)):
+        with patch("fts.cli._build_default_aggregator", return_value=self._make_agg(status)):
             text = _DashboardHandler._build_prometheus_metrics(handler)
         assert 'fts_source_info{source="TQ_LOCAL",circuit_open="1",consecutive_failures="5"}' in text
         assert 'fts_source_info{source="AKSHARE",circuit_open="0",consecutive_failures="0"}' in text
@@ -1108,10 +1196,8 @@ class TestBuildPrometheusMetrics:
     def test_elite_dir_glob_failure_defaults_zero(self):
         """elite 目录统计抛异常时 elite_count 默认 0（line 1279-1280）。"""
         handler = MockRequestHandler.make_handler()
-        with patch("fts.cli._build_default_aggregator",
-                   return_value=self._make_agg()):
-            with patch("pathlib.Path.cwd",
-                       side_effect=RuntimeError("cwd broken")):
+        with patch("fts.cli._build_default_aggregator", return_value=self._make_agg()):
+            with patch("pathlib.Path.cwd", side_effect=RuntimeError("cwd broken")):
                 text = _DashboardHandler._build_prometheus_metrics(handler)
         assert "fts_elite_factor_count 0" in text
 
@@ -1120,16 +1206,15 @@ class TestBuildPrometheusMetrics:
 # _build_health — 聚合器异常
 # ═══════════════════════════════════════════════════════════
 
+
 class TestBuildHealthExtended:
     """_build_health 的聚合器异常与降级分支（line 1312-1314）。"""
 
     def test_aggregator_failure_sets_error(self):
         """聚合器构建失败时写入 data_sources_error。"""
         handler = MockRequestHandler.make_handler()
-        with patch("fts.monitor.http_server.time.strftime",
-                   return_value="2026-07-19T12:00:00"):
-            with patch("fts.cli._build_default_aggregator",
-                       side_effect=RuntimeError("agg down")):
+        with patch("fts.monitor.http_server.time.strftime", return_value="2026-07-19T12:00:00"):
+            with patch("fts.cli._build_default_aggregator", side_effect=RuntimeError("agg down")):
                 data = _DashboardHandler._build_health(handler)
         assert data["status"] == "ok"
         assert "data_sources_error" in data
@@ -1139,8 +1224,7 @@ class TestBuildHealthExtended:
         handler = MockRequestHandler.make_handler()
         mock_agg = MagicMock()
         mock_agg.get_source_status.return_value = {
-            "TQ_LOCAL": {"circuit_open": True, "consecutive_failures": 5,
-                         "total_success": 1, "total_failure": 5},
+            "TQ_LOCAL": {"circuit_open": True, "consecutive_failures": 5, "total_success": 1, "total_failure": 5},
         }
         with patch("fts.cli._build_default_aggregator", return_value=mock_agg):
             data = _DashboardHandler._build_health(handler)
@@ -1152,6 +1236,7 @@ class TestBuildHealthExtended:
 # ═══════════════════════════════════════════════════════════
 # do_POST — 信号提交全链路
 # ═══════════════════════════════════════════════════════════
+
 
 def _make_post_handler(path="/api/v1/signal/submit", body: bytes | None = None):
     """构造 POST 请求 handler。"""
@@ -1205,15 +1290,14 @@ class TestDoPost:
         handler = _make_post_handler()
         mock_risk = MagicMock()
         mock_risk.check.return_value = {
-            "approved": False, "blocking_violations": ["position_limit"],
+            "approved": False,
+            "blocking_violations": ["position_limit"],
         }
         with patch("fts.factor_engine.signal_contract.SignalValidator") as mock_cls:
             mock_cls.return_value.validate.return_value = []
             with patch("fts.monitor.http_server._get_risk_manager", return_value=mock_risk):
-                with patch("fts.monitor.http_server._sim_account_status",
-                           return_value={"equity": 1}):
-                    with patch("fts.monitor.http_server._sim_positions",
-                               return_value={}):
+                with patch("fts.monitor.http_server._sim_account_status", return_value={"equity": 1}):
+                    with patch("fts.monitor.http_server._sim_positions", return_value={}):
                         with patch("fts.monitor.http_server._record_risk_metrics") as rm:
                             handler.do_POST()
         handler.send_response.assert_called_once_with(403)
@@ -1227,7 +1311,9 @@ class TestDoPost:
         handler = _make_post_handler()
         mock_risk = MagicMock()
         mock_risk.check.return_value = {
-            "approved": True, "blocking_violations": [], "checks": [],
+            "approved": True,
+            "blocking_violations": [],
+            "checks": [],
         }
         mock_adapter = MagicMock()
         mock_adapter.is_connected.return_value = False
@@ -1235,13 +1321,12 @@ class TestDoPost:
         with patch("fts.factor_engine.signal_contract.SignalValidator") as mock_cls:
             mock_cls.return_value.validate.return_value = []
             with patch("fts.monitor.http_server._get_risk_manager", return_value=mock_risk):
-                with patch("fts.monitor.http_server._sim_account_status",
-                           return_value={"equity": 1}):
-                    with patch("fts.monitor.http_server._sim_positions",
-                               return_value={}):
+                with patch("fts.monitor.http_server._sim_account_status", return_value={"equity": 1}):
+                    with patch("fts.monitor.http_server._sim_positions", return_value={}):
                         with patch("fts.monitor.http_server._record_risk_metrics"):
-                            with patch("fts.monitor.http_server._get_sim_adapter",
-                                       return_value=mock_adapter) as get_adapter:
+                            with patch(
+                                "fts.monitor.http_server._get_sim_adapter", return_value=mock_adapter
+                            ) as get_adapter:
                                 handler.do_POST()
         get_adapter.assert_called_once()
         handler.send_response.assert_called_once_with(200)
@@ -1254,7 +1339,9 @@ class TestDoPost:
         handler = _make_post_handler()
         mock_risk = MagicMock()
         mock_risk.check.return_value = {
-            "approved": True, "blocking_violations": [], "checks": [],
+            "approved": True,
+            "blocking_violations": [],
+            "checks": [],
         }
         mock_adapter = MagicMock()
         mock_adapter.is_connected.return_value = True
@@ -1262,13 +1349,10 @@ class TestDoPost:
         with patch("fts.factor_engine.signal_contract.SignalValidator") as mock_cls:
             mock_cls.return_value.validate.return_value = []
             with patch("fts.monitor.http_server._get_risk_manager", return_value=mock_risk):
-                with patch("fts.monitor.http_server._sim_account_status",
-                           return_value={"equity": 1}):
-                    with patch("fts.monitor.http_server._sim_positions",
-                               return_value={}):
+                with patch("fts.monitor.http_server._sim_account_status", return_value={"equity": 1}):
+                    with patch("fts.monitor.http_server._sim_positions", return_value={}):
                         with patch("fts.monitor.http_server._record_risk_metrics"):
-                            with patch("fts.monitor.http_server._get_sim_adapter",
-                                       return_value=mock_adapter):
+                            with patch("fts.monitor.http_server._get_sim_adapter", return_value=mock_adapter):
                                 handler.do_POST()
         handler.send_response.assert_called_once_with(500)
         body = json.loads(handler.wfile.getvalue().decode())
@@ -1279,12 +1363,14 @@ class TestDoPost:
 # 风控 / Live 因子构建函数（模块级辅助）
 # ═══════════════════════════════════════════════════════════
 
+
 class TestRiskAndLiveBuilders:
     """模块级辅助函数测试（line 1449-1561）。"""
 
     def test_get_risk_manager_lazy_init(self):
         """_get_risk_manager 首次调用初始化全局实例。"""
         from fts.monitor import http_server
+
         with patch("fts.monitor.http_server._risk_manager", None):
             with patch("fts.risk.RiskManager", return_value="RM") as mock_cls:
                 assert http_server._get_risk_manager() == "RM"
@@ -1293,6 +1379,7 @@ class TestRiskAndLiveBuilders:
     def test_get_sim_adapter_lazy_init(self):
         """_get_sim_adapter 首次调用初始化全局实例。"""
         from fts.monitor import http_server
+
         with patch("fts.monitor.http_server._sim_adapter", None):
             with patch("fts.risk.SimulatedTradeAdapter", return_value="ADAPTER") as mock_cls:
                 assert http_server._get_sim_adapter() == "ADAPTER"
@@ -1301,17 +1388,17 @@ class TestRiskAndLiveBuilders:
     def test_get_live_monitor_lazy_init(self):
         """_get_live_monitor 首次调用初始化全局实例。"""
         from fts.monitor import http_server
+
         with patch("fts.monitor.http_server._live_monitor", None):
-            with patch("fts.monitor.live_factor_monitor.LiveFactorMonitor",
-                       return_value="LFM") as mock_cls:
+            with patch("fts.monitor.live_factor_monitor.LiveFactorMonitor", return_value="LFM") as mock_cls:
                 assert http_server._get_live_monitor() == "LFM"
                 mock_cls.assert_called_once_with()
 
     def test_sim_account_status_fallback(self):
         """适配器异常时返回默认模拟账户（line 1478-1481）。"""
         from fts.monitor import http_server
-        with patch("fts.monitor.http_server._get_sim_adapter",
-                   side_effect=RuntimeError("no adapter")):
+
+        with patch("fts.monitor.http_server._get_sim_adapter", side_effect=RuntimeError("no adapter")):
             status = http_server._sim_account_status()
         assert status["total_equity"] == 1_000_000.0
         assert status["position_value"] == 0.0
@@ -1319,6 +1406,7 @@ class TestRiskAndLiveBuilders:
     def test_sim_positions_reads_nonzero(self):
         """仅持仓非零的品种被保留（line 1488-1497）。"""
         from fts.monitor import http_server
+
         mock_adapter = MagicMock()
         mock_adapter.get_position.side_effect = lambda sym: {
             "market_value": 100 if sym == "RB0" else 0,
@@ -1331,18 +1419,23 @@ class TestRiskAndLiveBuilders:
     def test_sim_positions_failure_returns_empty(self):
         """适配器异常时返回空持仓。"""
         from fts.monitor import http_server
-        with patch("fts.monitor.http_server._get_sim_adapter",
-                   side_effect=RuntimeError("down")):
+
+        with patch("fts.monitor.http_server._get_sim_adapter", side_effect=RuntimeError("down")):
             assert http_server._sim_positions() == {}
 
     def test_record_risk_metrics(self):
         """风控检查结果写入指标注册表（line 1502-1507）。"""
         from fts.monitor import http_server
+
         with patch("fts.monitor.prometheus_metrics.metrics_registry") as mock_reg:
-            http_server._record_risk_metrics({"checks": [
-                {"check_name": "c1", "passed": True},
-                {"check_name": "c2", "passed": False},
-            ]})
+            http_server._record_risk_metrics(
+                {
+                    "checks": [
+                        {"check_name": "c1", "passed": True},
+                        {"check_name": "c2", "passed": False},
+                    ]
+                }
+            )
         assert mock_reg.record_risk_check.call_count == 2
         mock_reg.record_risk_check.assert_any_call("c1", "passed")
         mock_reg.record_risk_check.assert_any_call("c2", "blocked")
@@ -1350,11 +1443,11 @@ class TestRiskAndLiveBuilders:
     def test_build_risk_status_normal(self):
         """全部检查通过 → risk_level=normal。"""
         from fts.monitor import http_server
+
         mock_risk = MagicMock()
         mock_risk.check.return_value = {"checks": [{"check_name": "x", "passed": True}]}
         with patch("fts.monitor.http_server._get_risk_manager", return_value=mock_risk):
-            with patch("fts.monitor.http_server._sim_account_status",
-                       return_value={"equity": 1}):
+            with patch("fts.monitor.http_server._sim_account_status", return_value={"equity": 1}):
                 with patch("fts.monitor.http_server._sim_positions", return_value={}):
                     data = http_server._build_risk_status()
         assert data["risk_level"] == "normal"
@@ -1363,13 +1456,13 @@ class TestRiskAndLiveBuilders:
     def test_build_risk_status_violations_critical(self):
         """存在违规检查 → risk_level=critical。"""
         from fts.monitor import http_server
+
         mock_risk = MagicMock()
         mock_risk.check.return_value = {
             "checks": [{"check_name": "pos", "passed": False}],
         }
         with patch("fts.monitor.http_server._get_risk_manager", return_value=mock_risk):
-            with patch("fts.monitor.http_server._sim_account_status",
-                       return_value={"equity": 1}):
+            with patch("fts.monitor.http_server._sim_account_status", return_value={"equity": 1}):
                 with patch("fts.monitor.http_server._sim_positions", return_value={}):
                     data = http_server._build_risk_status()
         assert data["risk_level"] == "critical"
@@ -1378,8 +1471,8 @@ class TestRiskAndLiveBuilders:
     def test_build_risk_status_failure_unknown(self):
         """风控管理器异常 → risk_level=unknown。"""
         from fts.monitor import http_server
-        with patch("fts.monitor.http_server._get_risk_manager",
-                   side_effect=RuntimeError("risk down")):
+
+        with patch("fts.monitor.http_server._get_risk_manager", side_effect=RuntimeError("risk down")):
             data = http_server._build_risk_status()
         assert data["risk_level"] == "unknown"
         assert "error" in data
@@ -1387,6 +1480,7 @@ class TestRiskAndLiveBuilders:
     def test_build_live_factors(self):
         """返回实时因子列表与告警（line 1538-1551）。"""
         from fts.monitor import http_server
+
         monitor = MagicMock()
         monitor.check_deviation.return_value = [{"factor_id": "F1", "dev": 0.2}]
         monitor.get_factor_ids.return_value = ["F1"]
@@ -1400,8 +1494,8 @@ class TestRiskAndLiveBuilders:
     def test_build_live_factors_failure(self):
         """LiveFactorMonitor 异常 → 空结果 + error。"""
         from fts.monitor import http_server
-        with patch("fts.monitor.http_server._get_live_monitor",
-                   side_effect=RuntimeError("monitor down")):
+
+        with patch("fts.monitor.http_server._get_live_monitor", side_effect=RuntimeError("monitor down")):
             data = http_server._build_live_factors()
         assert data["factors"] == []
         assert data["alerts"] == []
@@ -1410,6 +1504,7 @@ class TestRiskAndLiveBuilders:
     def test_build_live_deviation(self):
         """返回单个因子偏离（line 1556-1561）。"""
         from fts.monitor import http_server
+
         monitor = MagicMock()
         monitor.get_factor_deviation.return_value = {"factor_id": "F1", "deviation": 0.2}
         with patch("fts.monitor.http_server._get_live_monitor", return_value=monitor):
@@ -1420,8 +1515,8 @@ class TestRiskAndLiveBuilders:
     def test_build_live_deviation_failure(self):
         """偏离查询异常 → 错误响应。"""
         from fts.monitor import http_server
-        with patch("fts.monitor.http_server._get_live_monitor",
-                   side_effect=RuntimeError("down")):
+
+        with patch("fts.monitor.http_server._get_live_monitor", side_effect=RuntimeError("down")):
             data = http_server._build_live_deviation("F1")
         assert data["factor_id"] == "F1"
         assert "error" in data
@@ -1430,6 +1525,7 @@ class TestRiskAndLiveBuilders:
 # ═══════════════════════════════════════════════════════════
 # _safe_version — 版本号获取异常回退
 # ═══════════════════════════════════════════════════════════
+
 
 class TestSafeVersion:
     """_safe_version 的异常回退分支（line 1636-1637）。"""

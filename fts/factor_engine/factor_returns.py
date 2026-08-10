@@ -41,19 +41,19 @@ logger = logging.getLogger(__name__)
 class FactorReturnsConfig:
     """因子收益序列构建配置。"""
 
-    quantile: float = 0.2            # 多空分位比例（top/bottom 各取 20%）
-    min_stocks: int = 10             # 每日最少有效股票数（不足该日该因子置 NaN）
-    min_dates: int = 20              # 有效日期数下限（不足抛 ValueError）
+    quantile: float = 0.2  # 多空分位比例（top/bottom 各取 20%）
+    min_stocks: int = 10  # 每日最少有效股票数（不足该日该因子置 NaN）
+    min_dates: int = 20  # 有效日期数下限（不足抛 ValueError）
     annualize_factor: float = 252.0  # 年化因子（夏普/波动率年化）
-    directional: bool = False        # 是否按全样本平均收益符号校准因子方向（False=保持原始多空方向）
+    directional: bool = False  # 是否按全样本平均收益符号校准因子方向（False=保持原始多空方向）
 
 
 @dataclass
 class FactorReturnsResult:
     """因子收益序列构建结果。"""
 
-    returns: pd.DataFrame            # 因子收益矩阵 (T × N)，index=dates, columns=factor_ids
-    coverage: dict[str, float]       # {factor_id: 有效日期占比}
+    returns: pd.DataFrame  # 因子收益矩阵 (T × N)，index=dates, columns=factor_ids
+    coverage: dict[str, float]  # {factor_id: 有效日期占比}
     config: FactorReturnsConfig = field(default_factory=FactorReturnsConfig)
 
     def to_dict(self) -> dict[str, Any]:
@@ -108,8 +108,7 @@ class FactorReturnsBuilder:
         n_dates, n_stocks, n_factors = sig.shape
         if fwd.shape != (n_dates, n_stocks):
             raise ValueError(
-                f"forward_returns 维度 {fwd.shape} 与 signal_matrix 股票维度不一致 "
-                f"({n_dates}, {n_stocks})"
+                f"forward_returns 维度 {fwd.shape} 与 signal_matrix 股票维度不一致 ({n_dates}, {n_stocks})"
             )
         if len(dates) != n_dates:
             raise ValueError(f"dates 长度 {len(dates)} != n_dates {n_dates}")
@@ -149,19 +148,17 @@ class FactorReturnsBuilder:
         df = pd.DataFrame(ret, index=list(dates), columns=list(factor_ids))
 
         # 覆盖率
-        coverage = {
-            fid: float(np.isfinite(df[fid]).mean()) for fid in factor_ids
-        }
+        coverage = {fid: float(np.isfinite(df[fid]).mean()) for fid in factor_ids}
         n_valid_dates = int(np.isfinite(df.values).sum(axis=0).max()) if n_factors else 0
         if n_valid_dates < cfg.min_dates:
-            raise ValueError(
-                f"有效日期不足（{n_valid_dates} < {cfg.min_dates}），"
-                f"请检查 panel 数据或降低 min_dates"
-            )
+            raise ValueError(f"有效日期不足（{n_valid_dates} < {cfg.min_dates}），请检查 panel 数据或降低 min_dates")
 
         logger.info(
             "[FactorReturns] 构建完成: %d 因子 × %d 交易日 (quantile=%.2f, min_stocks=%d)",
-            n_factors, n_dates, q, cfg.min_stocks,
+            n_factors,
+            n_dates,
+            q,
+            cfg.min_stocks,
         )
         return FactorReturnsResult(returns=df, coverage=coverage, config=cfg)
 

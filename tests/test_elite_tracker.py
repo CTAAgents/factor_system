@@ -152,7 +152,10 @@ class TestInitTracker:
         tracker = EliteFactorTracker(str(tmp_path))
         custom_time = "2026-06-15T10:30:00"
         snapshot = tracker.init_tracker(
-            "fct_002", "Momentum", entry_ic=0.03, entry_sharpe=1.0,
+            "fct_002",
+            "Momentum",
+            entry_ic=0.03,
+            entry_sharpe=1.0,
             entry_at=custom_time,
         )
         assert snapshot["entry_at"] == custom_time
@@ -392,7 +395,10 @@ class TestGetDecaying:
     """get_decaying 单元测试。"""
 
     def _create_active_with_consecutive(
-        self, tracker: EliteFactorTracker, factor_id: str, n: int,
+        self,
+        tracker: EliteFactorTracker,
+        factor_id: str,
+        n: int,
     ) -> None:
         """创建连续 n 次负 IC 的因子（保持 active 状态）。"""
         _seed_tracker(tracker, factor_id)
@@ -623,7 +629,11 @@ class TestAutoRetire:
         tracker = EliteFactorTracker(str(tmp_path))
         entry = _utc_iso(20)  # 20 天前
         self._make_eligible_factor(
-            tracker, "fct_custom", entry_at=entry, consecutive_zero_ic=2, decay_6m=0.2,
+            tracker,
+            "fct_custom",
+            entry_at=entry,
+            consecutive_zero_ic=2,
+            decay_6m=0.2,
         )
 
         # 默认 (max_consecutive=4, max_decay_6m=0.30, min_active_days=30) → 不满足
@@ -694,9 +704,16 @@ class TestReport:
         tracker = EliteFactorTracker(str(tmp_path))
         r = tracker.report()
         sc = r["status_counts"]
-        assert sc == {"active": 0, "observing": 0, "decaying": 0,
-                      "critical_decay": 0, "retired": 0, "deprecated": 0,
-                      "rejected": 0, "total": 0}
+        assert sc == {
+            "active": 0,
+            "observing": 0,
+            "decaying": 0,
+            "critical_decay": 0,
+            "retired": 0,
+            "deprecated": 0,
+            "rejected": 0,
+            "total": 0,
+        }
 
     def test_report_mixed(self, tmp_path: Path) -> None:
         """混合状态的正确计数。"""
@@ -708,23 +725,45 @@ class TestReport:
         for _ in range(5):
             tracker.update("fct_c", -0.01)
         # critical_decay (直接写)
-        _write_raw_snapshot(tracker, "fct_d", {
-            "factor_id": "fct_d", "name": "D",
-            "entry_ic": 0.05, "entry_sharpe": 1.2,
-            "entry_at": _utc_iso(0), "weekly_ic": [], "monthly_ic": [],
-            "current_ic": 0.05, "current_sharpe": 1.2,
-            "consecutive_zero_ic": 10, "decay_6m": 0.5,
-            "status": "critical_decay", "last_updated": _utc_iso(0),
-        })
+        _write_raw_snapshot(
+            tracker,
+            "fct_d",
+            {
+                "factor_id": "fct_d",
+                "name": "D",
+                "entry_ic": 0.05,
+                "entry_sharpe": 1.2,
+                "entry_at": _utc_iso(0),
+                "weekly_ic": [],
+                "monthly_ic": [],
+                "current_ic": 0.05,
+                "current_sharpe": 1.2,
+                "consecutive_zero_ic": 10,
+                "decay_6m": 0.5,
+                "status": "critical_decay",
+                "last_updated": _utc_iso(0),
+            },
+        )
         # retired (直接写)
-        _write_raw_snapshot(tracker, "fct_e", {
-            "factor_id": "fct_e", "name": "E",
-            "entry_ic": 0.05, "entry_sharpe": 1.2,
-            "entry_at": _utc_iso(0), "weekly_ic": [], "monthly_ic": [],
-            "current_ic": 0.05, "current_sharpe": 1.2,
-            "consecutive_zero_ic": 10, "decay_6m": 0.5,
-            "status": "retired", "last_updated": _utc_iso(0),
-        })
+        _write_raw_snapshot(
+            tracker,
+            "fct_e",
+            {
+                "factor_id": "fct_e",
+                "name": "E",
+                "entry_ic": 0.05,
+                "entry_sharpe": 1.2,
+                "entry_at": _utc_iso(0),
+                "weekly_ic": [],
+                "monthly_ic": [],
+                "current_ic": 0.05,
+                "current_sharpe": 1.2,
+                "consecutive_zero_ic": 10,
+                "decay_6m": 0.5,
+                "status": "retired",
+                "last_updated": _utc_iso(0),
+            },
+        )
 
         r = tracker.report()
         sc = r["status_counts"]
@@ -737,14 +776,25 @@ class TestReport:
     def test_report_with_unknown_status(self, tmp_path: Path) -> None:
         """未知状态不进入已知分类计数但计入 total。"""
         tracker = EliteFactorTracker(str(tmp_path))
-        _write_raw_snapshot(tracker, "fct_unknown", {
-            "factor_id": "fct_unknown", "name": "Unknown",
-            "entry_ic": 0.05, "entry_sharpe": 1.2,
-            "entry_at": _utc_iso(0), "weekly_ic": [], "monthly_ic": [],
-            "current_ic": 0.05, "current_sharpe": 1.2,
-            "consecutive_zero_ic": 0, "decay_6m": 0.0,
-            "status": "garbage", "last_updated": _utc_iso(0),
-        })
+        _write_raw_snapshot(
+            tracker,
+            "fct_unknown",
+            {
+                "factor_id": "fct_unknown",
+                "name": "Unknown",
+                "entry_ic": 0.05,
+                "entry_sharpe": 1.2,
+                "entry_at": _utc_iso(0),
+                "weekly_ic": [],
+                "monthly_ic": [],
+                "current_ic": 0.05,
+                "current_sharpe": 1.2,
+                "consecutive_zero_ic": 0,
+                "decay_6m": 0.0,
+                "status": "garbage",
+                "last_updated": _utc_iso(0),
+            },
+        )
 
         r = tracker.report()
         sc = r["status_counts"]

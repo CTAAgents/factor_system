@@ -7,7 +7,7 @@ Phase A.2: 增加分级准入（A/B/C级）、增强衰减判定、观察期机�
 用法:
     tracker = EliteFactorTracker(tracking_dir="memory/tracking")
     # 分级准入 (A 级直接 active, B 级进入观察期, C 级淘汰)
-    tracker.init_tracker(factor_id="f_001", name="momentum", entry_ic=0.05, 
+    tracker.init_tracker(factor_id="f_001", name="momentum", entry_ic=0.05,
                          entry_sharpe=1.2, grade="A", quality_score=42.0)
     tracker.update("f_001", 0.03)
     decaying = tracker.get_decaying(max_consecutive=4)
@@ -23,7 +23,9 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
+
+import numpy as np
 
 from fts.core.atomic import atomic_read, atomic_write
 
@@ -36,15 +38,19 @@ FactorGrade = Literal["A", "B", "C"]
 """因子质量等级。A(优秀)/B(合格)/C(不合格)"""
 
 FactorStatus = Literal[
-    "active",           # 活跃
-    "observing",        # 观察期 (B级因子)
-    "decaying",         # 衰减中
-    "critical_decay",   # 严重衰减
-    "retired",          # 已淘汰
-    "deprecated",       # 已废弃 (保留历史)
-    "rejected",         # 被拒绝准入
+    "active",  # 活跃
+    "observing",  # 观察期 (B级因子)
+    "decaying",  # 衰减中
+    "critical_decay",  # 严重衰减
+    "retired",  # 已淘汰
+    "deprecated",  # 已废弃 (保留历史)
+    "rejected",  # 被拒绝准入
 ]
 """因子生命周期状态。"""
+
+# 衰减分级（GAP-I305，v2.72.0）：基于滚动 6M IC 线性回归斜率划分
+DecayGrade = Literal["normal", "observe", "retired"]
+"""衰减分级：normal(正常) / observe(观察) / retired(退役)。"""
 
 
 class TrackingSnapshot(dict):
@@ -58,6 +64,7 @@ class TrackingSnapshot(dict):
     - C级 (score<30): rejected
     - active: 连续3月IC<0 → decaying → 连续6月Sharpe降>50% → critical_decay → retired
     """
+
     pass  # 使用 dict 保持向后兼容
 
 
@@ -67,10 +74,11 @@ class TrackingSnapshot(dict):
 @dataclass
 class GradeThreshold:
     """分级准入阈值配置。"""
-    a_threshold: float = 40.0       # A级下限 (总分)
-    b_threshold: float = 30.0       # B级下限 (总分)
-    observation_months: int = 3     # B级观察期 (月)
-    ic_decay_months: int = 3        # 连续IC<0 衰减判定
+
+    a_threshold: float = 40.0  # A级下限 (总分)
+    b_threshold: float = 30.0  # B级下限 (总分)
+    observation_months: int = 3  # B级观察期 (月)
+    ic_decay_months: int = 3  # 连续IC<0 衰减判定
     sharpe_decline_months: int = 6  # 连续Sharpe下降 严重衰减判定
     sharpe_decline_ratio: float = 0.5  # Sharpe下降比例阈值
 
@@ -78,11 +86,19 @@ class GradeThreshold:
 @dataclass
 class AutoRetireConfig:
     """自动淘汰配置。"""
-    max_consecutive_zero_ic: int = 4         # 周度连续零值 IC 阈值
-    max_decay_6m: float = 0.30              # 衰减率阈值
-    min_active_days: int = 30               # 最小活跃天数
-    cooldown_days: int = 7                  # 冷却期（淘汰后多久可重新评估）
+
+    max_consecutive_zero_ic: int = 4  # 周度连续零值 IC 阈值
+    max_decay_6m: float = 0.30  # 衰减率阈值
+    min_active_days: int = 30  # 最小活跃天数
+    cooldown_days: int = 7  # 冷却期（淘汰后多久可重新评估）
     grade_threshold: GradeThreshold = field(default_factory=GradeThreshold)
+    # ── GAP-I305 衰减分级（v2.72.0）──
+    # 滚动 6M IC 线性回归斜率（负值=衰减）。slope <= -observe_slope 进入观察；
+    # slope <= -retire_slope 进入退役。归一化区间 [-1.0, 1.0]。
+    observe_slope: float = 0.10  # 观察斜率阈值（|slope| >= 0.10 → observe）
+    retire_slope: float = 0.20  # 退役斜率阈值（|slope| >= 0.20 → retired）
+    # 衰减分级最小 IC 序列长度（不足则视为 normal）
+    slope_min_points: int = 6
 
 
 # ─── EliteFactorTracker ─────────────────────────────────────
@@ -103,15 +119,26 @@ class EliteFactorTracker:
         self,
         tracking_dir: str = "memory/tracking",
         grade_threshold: Optional[GradeThreshold] = None,
+        retire_config: Optional[AutoRetireConfig] = None,
     ) -> None:
         self._tracking_dir = Path(tracking_dir)
         self._tracking_dir.mkdir(parents=True, exist_ok=True)
         self._threshold = grade_threshold or GradeThreshold()
+        self._retire = retire_config or AutoRetireConfig()
 
     # ─── 路径辅助 ────────────────────────────────────────
 
     def _path(self, factor_id: str) -> Path:
         return self._tracking_dir / f"{factor_id}.json"
+
+    def _write_snapshot(self, factor_id: str, snapshot: dict) -> None:
+        """将快照原子写盘（供外部回调持久化反馈等补充字段）。
+
+        Args:
+            factor_id: 因子唯一标识
+            snapshot: 完整快照 dict
+        """
+        atomic_write(str(self._path(factor_id)), snapshot)
 
     # ─── 分级判定 ─────────────────────────────────────────
 
@@ -179,9 +206,7 @@ class EliteFactorTracker:
         # 计算观察期结束时间
         observation_end = None
         if grade == "B":
-            obs_end_dt = datetime.fromisoformat(now) + timedelta(
-                days=self._threshold.observation_months * 30
-            )
+            obs_end_dt = datetime.fromisoformat(now) + timedelta(days=self._threshold.observation_months * 30)
             observation_end = obs_end_dt.isoformat()
 
         snapshot: dict = {
@@ -199,6 +224,8 @@ class EliteFactorTracker:
             "consecutive_zero_months": 0,
             "consecutive_sharpe_decline_months": 0,
             "decay_6m": 0.0,
+            "decay_grade": "normal",
+            "ic_slope_6m": 0.0,
             "status": status,
             "grade": grade,
             "quality_score": quality_score,
@@ -210,19 +237,69 @@ class EliteFactorTracker:
         if status == "rejected":
             logger.warning(
                 "因子被拒绝准入 [factor_id=%s, name=%s, grade=C, score=%.2f]",
-                factor_id, name, quality_score or 0,
+                factor_id,
+                name,
+                quality_score or 0,
             )
         elif status == "observing":
             logger.info(
                 "因子进入观察期 [factor_id=%s, name=%s, grade=B, obs_end=%s]",
-                factor_id, name, observation_end,
+                factor_id,
+                name,
+                observation_end,
             )
         else:
             logger.info(
                 "因子准入 [factor_id=%s, name=%s, grade=%s, entry_ic=%.4f]",
-                factor_id, name, grade, entry_ic,
+                factor_id,
+                name,
+                grade,
+                entry_ic,
             )
         return snapshot
+
+    # ─── 衰减分级 (GAP-I305, v2.72.0) ───────────────────
+
+    def decay_grade(self, ic_series: list[float]) -> DecayGrade:
+        """基于滚动 IC 线性回归斜率判定衰减分级。
+
+        使用最近 ``slope_min_points`` 个 IC 点做线性回归，斜率归一化到
+        [-1.0, 1.0]（负值=衰减）。分级：
+        - normal:   |slope| < ``observe_slope``
+        - observe:  observe_slope <= |slope| < ``retire_slope``
+        - retired:  |slope| >= ``retire_slope``
+
+        Args:
+            ic_series: 周度 IC 序列（按时间先后）
+
+        Returns:
+            DecayGrade: normal / observe / retired
+        """
+        slope = _calc_ic_slope_6m(ic_series, min_points=self._retire.slope_min_points)
+        abs_slope = abs(slope)
+        if abs_slope >= self._retire.retire_slope:
+            return "retired"
+        if abs_slope >= self._retire.observe_slope:
+            return "observe"
+        return "normal"
+
+    def _apply_decay_grade(self, snapshot: dict, ic_series: list[float]) -> str:
+        """将衰减分级写入快照并返回分级结果。
+
+        Args:
+            snapshot: 跟踪快照（可变）
+            ic_series: 周度 IC 序列
+
+        Returns:
+            DecayGrade: 本次判定的分级
+        """
+        grade = self.decay_grade(ic_series)
+        snapshot["decay_grade"] = grade
+        snapshot["ic_slope_6m"] = _calc_ic_slope_6m(
+            ic_series,
+            min_points=self._retire.slope_min_points,
+        )
+        return grade
 
     # ─── 更新 (增强版) ────────────────────────────────────
 
@@ -305,9 +382,7 @@ class EliteFactorTracker:
 
         # 月度 IC 衰减计数
         if new_ic <= 0:
-            snapshot["consecutive_zero_months"] = (
-                snapshot.get("consecutive_zero_months", 0) + 1
-            )
+            snapshot["consecutive_zero_months"] = snapshot.get("consecutive_zero_months", 0) + 1
         else:
             snapshot["consecutive_zero_months"] = 0
 
@@ -370,7 +445,8 @@ class EliteFactorTracker:
                 snapshot["status"] = "critical_decay"
                 logger.warning(
                     "因子进入严重衰减状态 [factor_id=%s, decline_months=%d]",
-                    snapshot["factor_id"], sharpe_decline,
+                    snapshot["factor_id"],
+                    sharpe_decline,
                 )
 
         # active → decaying (周度快速衰减)
@@ -500,6 +576,8 @@ class EliteFactorTracker:
             decay_6m = snapshot.get("decay_6m", 0.0)
             zero_months = snapshot.get("consecutive_zero_months", 0)
             sharpe_decline = snapshot.get("consecutive_sharpe_decline_months", 0)
+            # GAP-I305: 衰减分级 retired（滚动 IC 斜率触发）
+            decay_grade = snapshot.get("decay_grade", "normal")
 
             should_retire = (
                 consecutive_zero >= max_consecutive
@@ -507,6 +585,7 @@ class EliteFactorTracker:
                 or status == "critical_decay"
                 or zero_months >= 12
                 or sharpe_decline >= 12
+                or decay_grade == "retired"
             )
 
             if should_retire:
@@ -516,9 +595,15 @@ class EliteFactorTracker:
                 retired_ids.append(snapshot["factor_id"])
                 logger.info(
                     "自动淘汰因子 [factor_id=%s, name=%s, status=%s, consec_zero=%d, "
-                    "decay_6m=%.4f, zero_months=%d, sharpe_decline=%d]",
-                    snapshot["factor_id"], snapshot.get("name"), status,
-                    consecutive_zero, decay_6m, zero_months, sharpe_decline,
+                    "decay_6m=%.4f, zero_months=%d, sharpe_decline=%d, decay_grade=%s]",
+                    snapshot["factor_id"],
+                    snapshot.get("name"),
+                    status,
+                    consecutive_zero,
+                    decay_6m,
+                    zero_months,
+                    sharpe_decline,
+                    decay_grade,
                 )
 
         return retired_ids
@@ -532,7 +617,7 @@ class EliteFactorTracker:
             月度评估报告摘要
         """
         all_snapshots = self.list_all()
-        report = {
+        report: dict[str, Any] = {
             "total": len(all_snapshots),
             "status_changes": [],
             "grade_distribution": {"A": 0, "B": 0, "C": 0, "unknown": 0},
@@ -553,12 +638,14 @@ class EliteFactorTracker:
             new_status = snap.get("status", old_status)
 
             if old_status != new_status:
-                report["status_changes"].append({
-                    "factor_id": snap["factor_id"],
-                    "name": snap.get("name", ""),
-                    "from": old_status,
-                    "to": new_status,
-                })
+                report["status_changes"].append(
+                    {
+                        "factor_id": snap["factor_id"],
+                        "name": snap.get("name", ""),
+                        "from": old_status,
+                        "to": new_status,
+                    }
+                )
                 snap["last_updated"] = datetime.now(timezone.utc).isoformat()
                 atomic_write(str(self._path(snap["factor_id"])), snap)
 
@@ -567,7 +654,9 @@ class EliteFactorTracker:
 
         logger.info(
             "月度评估完成 [total=%d, changes=%d, retired=%d]",
-            report["total"], len(report["status_changes"]), len(report["retired"]),
+            report["total"],
+            len(report["status_changes"]),
+            len(report["retired"]),
         )
         return report
 
@@ -628,6 +717,10 @@ class AutoRetireManager:
     ) -> None:
         self._tracker = tracker
         self._config = config or AutoRetireConfig()
+        # GAP-I305: 若 tracker 未显式配置分级阈值，将本管理器配置同步过去，
+        # 保证 decay_grade 判定与 auto_retire 使用同一套阈值。
+        if tracker._retire is None or tracker._retire == AutoRetireConfig():
+            tracker._retire = self._config
 
     def run(self) -> list[str]:
         """执行自动淘汰。
@@ -701,6 +794,37 @@ def _calc_decay_6m(weekly_ic: list[float]) -> float:
     return max(decay, 0.0)
 
 
+def _calc_ic_slope_6m(weekly_ic: list[float], min_points: int = 6) -> float:
+    """计算滚动 6M IC 线性回归斜率（GAP-I305）。
+
+    对最近 ``min_points`` 个 IC 点做 OLS 线性回归（x=时间序号, y=IC），
+    斜率归一化到 [-1.0, 1.0]（负值=IC 衰减）。归一化尺度取 IC 序列的
+    极差，避免 IC 绝对量级影响。
+
+    Args:
+        weekly_ic: 周度 IC 序列（按时间先后）
+        min_points: 参与回归的最小点数（不足视为 0.0）
+
+    Returns:
+        归一化斜率（负值表示衰减，范围 [-1.0, 1.0]）
+    """
+    ic = list(weekly_ic)
+    if len(ic) < max(min_points, 2):
+        return 0.0
+    y = np.asarray(ic[-min_points:], dtype=float)
+    x: np.ndarray = np.arange(len(y), dtype=float)
+    denom = float(np.sum((x - x.mean()) ** 2))
+    if denom < 1e-12:
+        return 0.0
+    slope = float(np.sum((x - x.mean()) * (y - y.mean())) / denom)
+    # 归一化到 [-1, 1]
+    span = float(np.max(y) - np.min(y))
+    if span < 1e-12:
+        return 0.0
+    norm = slope / span
+    return float(max(-1.0, min(1.0, norm)))
+
+
 def _is_past(iso_datetime: str) -> bool:
     """检查 ISO 时间戳是否已过。
 
@@ -723,8 +847,11 @@ __all__ = [
     "TrackingSnapshot",
     "FactorGrade",
     "FactorStatus",
+    "DecayGrade",
     "GradeThreshold",
     "AutoRetireConfig",
     "EliteFactorTracker",
     "AutoRetireManager",
+    "_calc_decay_6m",
+    "_calc_ic_slope_6m",
 ]

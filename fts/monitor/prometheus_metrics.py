@@ -29,7 +29,6 @@ HARNESS §trace_id: 本模块无 trace_id，仅聚合计数。
 from __future__ import annotations
 
 import threading
-from typing import Any
 
 
 class MetricsRegistry:
@@ -42,7 +41,10 @@ class MetricsRegistry:
         self._lock = threading.Lock()
         # 衰减计数
         self._decay_counts: dict[str, int] = {
-            "active": 0, "decaying": 0, "critical_decay": 0, "deprecated": 0,
+            "active": 0,
+            "decaying": 0,
+            "critical_decay": 0,
+            "deprecated": 0,
         }
         # 状态变更计数器: (status_before, status_after) -> 次数
         self._decay_evaluations: dict[tuple[str, str], int] = {}
@@ -72,10 +74,14 @@ class MetricsRegistry:
 
     # ─── 衰减追踪指标 (A.2) ────────────────────────────────
 
-    def update_decay_counts(self, *, active: int | None = None,
-                            decaying: int | None = None,
-                            critical: int | None = None,
-                            deprecated: int | None = None) -> None:
+    def update_decay_counts(
+        self,
+        *,
+        active: int | None = None,
+        decaying: int | None = None,
+        critical: int | None = None,
+        deprecated: int | None = None,
+    ) -> None:
         """更新各状态因子计数（None 表示不修改）。"""
         with self._lock:
             if active is not None:
@@ -111,9 +117,7 @@ class MetricsRegistry:
     def record_rebalance(self, regime: str) -> None:
         """记录一次权重再平衡。"""
         with self._lock:
-            self._rebalance_total[regime or "unknown"] = (
-                self._rebalance_total.get(regime or "unknown", 0) + 1
-            )
+            self._rebalance_total[regime or "unknown"] = self._rebalance_total.get(regime or "unknown", 0) + 1
 
     # ─── Live 因子指标 (C.2) ─────────────────────────────
 
@@ -128,22 +132,16 @@ class MetricsRegistry:
         """记录一次 Live 偏离告警。"""
         with self._lock:
             key = (factor_id, severity)
-            self._live_deviation_alerts[key] = (
-                self._live_deviation_alerts.get(key, 0) + 1
-            )
+            self._live_deviation_alerts[key] = self._live_deviation_alerts.get(key, 0) + 1
 
     # ─── 风控指标 (C.2) ─────────────────────────────────
 
     def record_risk_check(self, check_name: str, result: str) -> None:
         """记录一次风控检查（result: passed/blocked）。"""
         with self._lock:
-            self._risk_check_total[(check_name, result)] = (
-                self._risk_check_total.get((check_name, result), 0) + 1
-            )
+            self._risk_check_total[(check_name, result)] = self._risk_check_total.get((check_name, result), 0) + 1
             if result == "blocked":
-                self._risk_check_blocked[check_name] = (
-                    self._risk_check_blocked.get(check_name, 0) + 1
-                )
+                self._risk_check_blocked[check_name] = self._risk_check_blocked.get(check_name, 0) + 1
 
     # ─── 反馈闭环指标 (C.3) ─────────────────────────────
 
@@ -157,22 +155,22 @@ class MetricsRegistry:
     def update_feedback_pending(self, pending: dict[str, int]) -> None:
         """更新待处理事件数。"""
         with self._lock:
-            self._feedback_pending = {
-                k: max(0, int(v)) for k, v in (pending or {}).items()
-            }
+            self._feedback_pending = {k: max(0, int(v)) for k, v in (pending or {}).items()}
 
     def record_feedback_processing(self, action: str, success: bool) -> None:
         """记录一次反馈处理。"""
         with self._lock:
             key = (action or "unknown", "ok" if success else "fail")
-            self._feedback_processing[key] = (
-                self._feedback_processing.get(key, 0) + 1
-            )
+            self._feedback_processing[key] = self._feedback_processing.get(key, 0) + 1
 
-    def update_effectiveness(self, *, attribution_accuracy: float | None = None,
-                             recommendations_accepted: float | None = None,
-                             new_factors: int | None = None,
-                             effective_rate: float | None = None) -> None:
+    def update_effectiveness(
+        self,
+        *,
+        attribution_accuracy: float | None = None,
+        recommendations_accepted: float | None = None,
+        new_factors: int | None = None,
+        effective_rate: float | None = None,
+    ) -> None:
         """更新迭代效果指标。"""
         with self._lock:
             if attribution_accuracy is not None:
@@ -209,10 +207,7 @@ class MetricsRegistry:
         lines.append("# HELP fts_factor_decay_evaluations_total 因子状态变更次数")
         lines.append("# TYPE fts_factor_decay_evaluations_total counter")
         for (before, after), n in sorted(evaluations.items()):
-            lines.append(
-                f'fts_factor_decay_evaluations_total{{status_before="{before}",'
-                f'status_after="{after}"}} {n}'
-            )
+            lines.append(f'fts_factor_decay_evaluations_total{{status_before="{before}",status_after="{after}"}} {n}')
         if not evaluations:
             lines.append("fts_factor_decay_evaluations_total 0")
         lines.append("")
@@ -253,10 +248,7 @@ class MetricsRegistry:
         lines.append("# TYPE fts_live_factor_deviation_alerts_total counter")
         if alerts:
             for (fid, sev), n in sorted(alerts.items()):
-                lines.append(
-                    f'fts_live_factor_deviation_alerts_total{{factor_id="{fid}",'
-                    f'severity="{sev}"}} {n}'
-                )
+                lines.append(f'fts_live_factor_deviation_alerts_total{{factor_id="{fid}",severity="{sev}"}} {n}')
         else:
             lines.append("fts_live_factor_deviation_alerts_total 0")
         lines.append("")
@@ -267,9 +259,7 @@ class MetricsRegistry:
         lines.append("# TYPE fts_risk_check_total counter")
         if risk_total:
             for (check, result), n in sorted(risk_total.items()):
-                lines.append(
-                    f'fts_risk_check_total{{check_name="{check}",result="{result}"}} {n}'
-                )
+                lines.append(f'fts_risk_check_total{{check_name="{check}",result="{result}"}} {n}')
         else:
             lines.append("fts_risk_check_total 0")
         lines.append("")
@@ -310,10 +300,7 @@ class MetricsRegistry:
         lines.append("# TYPE fts_feedback_processing_total counter")
         if processing:
             for (action, success), n in sorted(processing.items()):
-                lines.append(
-                    f'fts_feedback_processing_total{{action_taken="{action}",'
-                    f'success="{success}"}} {n}'
-                )
+                lines.append(f'fts_feedback_processing_total{{action_taken="{action}",success="{success}"}} {n}')
         else:
             lines.append("fts_feedback_processing_total 0")
         lines.append("")
@@ -325,9 +312,7 @@ class MetricsRegistry:
 
         lines.append("# HELP fts_feedback_recommendations_accepted 建议采纳率")
         lines.append("# TYPE fts_feedback_recommendations_accepted gauge")
-        lines.append(
-            f"fts_feedback_recommendations_accepted {self._recommendations_accepted}"
-        )
+        lines.append(f"fts_feedback_recommendations_accepted {self._recommendations_accepted}")
         lines.append("")
 
         lines.append("# HELP fts_evolution_new_factors 新因子数")

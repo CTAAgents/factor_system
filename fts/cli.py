@@ -28,7 +28,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -50,13 +50,9 @@ from .factor_engine import (
     generate_run_id,
     generate_trace_id,
     generate_session_id,
-    MacroEvolver,
     MetaLoop,
-    MetaRunResult,
     PortfolioLoop,
-    PortfolioRunResult,
 )
-from .llm import MockLLMClient
 from .monitor import (
     FTSDashboardServer,
     check_all_status,
@@ -110,6 +106,7 @@ def _prepare_cross_section_data(
     # 注入基本面数据（MCP 缓存 → 合成数据降级）
     try:
         from .data_fundamental import get_fundamental_provider
+
         fp = get_fundamental_provider(mcp_available=True)
         panel = fp.enrich_panel(panel, trace_id="cli_prepare")
         print(f"[prepare] 基本面数据注入完成: {len(panel)} 只股票")
@@ -139,8 +136,10 @@ def _prepare_futures_data(
     Returns:
         (panel, common_dates, forward_returns — 使用第一个品种作为微参参考)
     """
-    from .data_futures import FUTURES_CORE_SUBSET
-    symbols = FUTURES_CORE_SUBSET[:max_symbols] if max_symbols > 0 else FUTURES_CORE_SUBSET
+    from .data_futures import get_dynamic_core_subset
+
+    dyn = get_dynamic_core_subset()
+    symbols = dyn[:max_symbols] if max_symbols > 0 else dyn
 
     provider = FTSDataProvider()
     panel, common_dates = provider.get_futures_panel(symbols, days=days, trace_id="cli_prepare")
@@ -225,7 +224,9 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
         # ── 横截面模式（沪深300成分股） ──
         print(f"[evolution] universe={args.universe} (max_stocks={args.max_stocks})")
         panel, common_dates, fwd_ret = _prepare_cross_section_data(
-            universe=args.universe, days=args.days, max_stocks=args.max_stocks,
+            universe=args.universe,
+            days=args.days,
+            max_stocks=args.max_stocks,
         )
         print(f"[evolution] panel symbols={len(panel)}, common_dates={len(common_dates)}")
 
@@ -256,7 +257,8 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
         # ── 期货横截面模式（使用期货专用种子因子） ──
         print(f"[evolution] universe=futures (max_symbols={args.max_stocks})")
         panel, common_dates, fwd_ret = _prepare_futures_data(
-            days=500, max_symbols=args.max_stocks,
+            days=500,
+            max_symbols=args.max_stocks,
         )
         print(f"[evolution] 期货 panel symbols={len(panel)}, common_dates={len(common_dates)}")
 
@@ -322,9 +324,11 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
     # 执行演化
     try:
         result = loop.run(max_generation=args.max_generations)
-        print(f"[evolution] 完成: status={result.status} "
-              f"generations={result.generations_completed} "
-              f"elite_count={len(result.elite_factor_ids)}")
+        print(
+            f"[evolution] 完成: status={result.status} "
+            f"generations={result.generations_completed} "
+            f"elite_count={len(result.elite_factor_ids)}"
+        )
         if result.circuit_breaker_reason:
             print(f"[evolution] 熔断原因: {result.circuit_breaker_reason}")
         return 0 if result.status == "completed" else 1
@@ -355,6 +359,7 @@ def _cmd_meta_loop_run(args: argparse.Namespace) -> int:
     try:
         # 创建 web_collector — 基于 FTSDataProvider 的市场快照采集
         from .factor_engine.meta_loop import _make_web_collector
+
         web_collector = _make_web_collector(FTSDataProvider())
         print("[meta-loop] web_collector 已就绪 — 市场快照感知已启用")
 
@@ -391,6 +396,7 @@ def _build_default_aggregator():
 
     db_path = None
     from fts.data_futures import _DUCKDB_PATH
+
     if _DUCKDB_PATH.exists():
         db_path = _DUCKDB_PATH
 
@@ -424,8 +430,10 @@ def _cmd_data_status(args: argparse.Namespace) -> int:
         print("暂无源活动记录")
         return 0
     for name, st in status.items():
-        print(f"  {name}: success={st['total_success']} failure={st['total_failure']} "
-              f"consecutive={st['consecutive_failures']} circuit_open={st['circuit_open']}")
+        print(
+            f"  {name}: success={st['total_success']} failure={st['total_failure']} "
+            f"consecutive={st['consecutive_failures']} circuit_open={st['circuit_open']}"
+        )
     return 0
 
 
@@ -457,20 +465,28 @@ def _cmd_data_cross_check(args: argparse.Namespace) -> int:
         return 2
 
     if getattr(args, "json", False):
-        print(json.dumps({
-            "trace_id": trace_id,
-            "symbol": args.symbol,
-            "date": args.date,
-            "disagreements": disagreements,
-        }, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "trace_id": trace_id,
+                    "symbol": args.symbol,
+                    "date": args.date,
+                    "disagreements": disagreements,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 1 if disagreements else 0
 
     if not disagreements:
         print("无分歧")
         return 0
     for d in disagreements:
-        print(f"⚠️ {d.get('symbol', '')} @ {d.get('date', '')} "
-              f"max_diff_pct={d.get('max_diff_pct', 0):.4f} outliers={d.get('outliers', [])}")
+        print(
+            f"⚠️ {d.get('symbol', '')} @ {d.get('date', '')} "
+            f"max_diff_pct={d.get('max_diff_pct', 0):.4f} outliers={d.get('outliers', [])}"
+        )
     return 1
 
 
@@ -523,7 +539,7 @@ def _cmd_data_fuse(args: argparse.Namespace) -> int:
 
     fuser = OHLCVFusion(strategy=strategy)
     fused_df = fuser.fuse_dataframe(args.symbol, source_dfs, trace_id=trace_id)
-    rows: list[FusedOHLCV] = fused_df.to_dict("records") if not fused_df.empty else []
+    rows: list[FusedOHLCV] = cast(list[FusedOHLCV], fused_df.to_dict("records")) if not fused_df.empty else []
 
     try:
         disagreements = agg.cross_check(args.symbol, str(rows[0]["date"]), trace_id=trace_id)
@@ -554,8 +570,10 @@ def _cmd_data_fuse(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     else:
-        print(f"[data fuse] symbol={args.symbol} strategy={strategy.name} rows={len(rows)} "
-              f"sources={sorted(source_dfs.keys())}")
+        print(
+            f"[data fuse] symbol={args.symbol} strategy={strategy.name} rows={len(rows)} "
+            f"sources={sorted(source_dfs.keys())}"
+        )
     return 0
 
 
@@ -570,6 +588,7 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
     # 根据 universe 选择 elite 目录和合成模式
     universe = getattr(args, "universe", "stock")
     synthesis_mode = getattr(args, "synthesis_mode", None)
+    optimizer_mode = getattr(args, "optimizer_mode", None) or getattr(cfg, "portfolio_optimizer_mode", "risk_parity")
     if universe == "futures":
         elite_dir = cfg.get_elite_dir("futures")
         if synthesis_mode is None:
@@ -578,13 +597,13 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
         elite_dir = cfg.get_elite_dir("stock")
         if synthesis_mode is None:
             synthesis_mode = "elastic_net"
-    print(f"[portfolio] universe={universe} elite_dir={elite_dir} mode={synthesis_mode}")
+    print(f"[portfolio] universe={universe} elite_dir={elite_dir} mode={synthesis_mode} optimizer={optimizer_mode}")
 
     # 从配置加载 Verifier 配置
-    verifier_cfg = L3VerifierConfig(DEFAULT_L3_VERIFIER_CONFIG)
-    if hasattr(cfg, 'verifier') and isinstance(cfg.verifier, dict):
+    verifier_cfg: L3VerifierConfig = cast(L3VerifierConfig, dict(DEFAULT_L3_VERIFIER_CONFIG))
+    if hasattr(cfg, "verifier") and isinstance(cfg.verifier, dict):
         merged = {**DEFAULT_L3_VERIFIER_CONFIG, **cfg.verifier}
-        verifier_cfg = L3VerifierConfig(merged)
+        verifier_cfg = cast(L3VerifierConfig, merged)
         print(f"[portfolio] Verifier 配置已加载: max_correlation={verifier_cfg.get('max_correlation', 0.5)}")
 
     try:
@@ -593,24 +612,40 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
             memory_dir=cfg.memory_dir + "/portfolio",
             verifier_config=verifier_cfg,
             synthesis_mode=synthesis_mode,
+            optimizer_mode=optimizer_mode,
             market=universe,
         )
-        result = loop.run()
-        print(f"[portfolio] 完成: status={result.status} "
-              f"factors={result.n_factors_retained} "
-              f"sharpe={result.combo_sharpe:.4f}")
+        # GAP-I302: optimizer 模式与实测化输入（returns-matrix CSV）
+        factor_returns = None
+        returns_matrix = getattr(args, "returns_matrix", None)
+        if returns_matrix:
+            import pandas as pd
+
+            try:
+                factor_returns = pd.read_csv(returns_matrix, index_col=0, parse_dates=True)
+                print(f"[portfolio] 加载 returns-matrix: {factor_returns.shape}")
+            except Exception as e:
+                print(f"[portfolio] returns-matrix 读取失败（跳过 optimizer/实测化输入）: {e}", file=sys.stderr)
+        result = loop.run(factor_returns=factor_returns)
+        print(
+            f"[portfolio] 完成: status={result.status} "
+            f"factors={result.n_factors_retained} "
+            f"sharpe={result.combo_sharpe:.4f}"
+        )
 
         # L3 完成后自动触发信号管道（期货/股票对称，GAP-I301）
         if result.status in ("passed", "verifier_warning", "completed"):
             if universe == "futures":
                 print("[portfolio] 触发期货信号生成管道...")
                 from scripts.futures_signal_pipeline import main as signal_main
+
                 rc = signal_main(max_symbols=82, days=120, universe="all")
                 if rc != 0:
                     print(f"[portfolio] 信号管道异常退出: rc={rc}", file=sys.stderr)
             elif universe == "stock":
                 print("[portfolio] 触发股票信号生成管道...")
                 from scripts.daily_signal_pipeline import main as stock_signal_main
+
                 rc = stock_signal_main(max_stocks=50, days=120)
                 if rc != 0:
                     print(f"[portfolio] 信号管道异常退出: rc={rc}", file=sys.stderr)
@@ -627,6 +662,7 @@ def _cmd_ui(args: argparse.Namespace) -> int:
         server.start()
         # 保持主线程运行
         import time as _time
+
         try:
             while True:
                 _time.sleep(1)
@@ -666,12 +702,14 @@ def _cmd_scheduler_list(_args: argparse.Namespace) -> int:
 def _load_factor_repo():
     """延迟加载 FactorRepository（避免 CLI 启动依赖 DuckDB）。"""
     from .factor_engine.factor_db.repository import FactorRepository
+
     return FactorRepository()
 
 
 def _get_catalog_db_path() -> Path:
     """获取因子目录数据库路径。"""
     from .factor_engine.factor_db.schema import DATABASE_PATH
+
     return Path(DATABASE_PATH)
 
 
@@ -719,20 +757,22 @@ def _cmd_catalog_stats(args: argparse.Namespace) -> int:
     print("=== 因子存储统计 ===")
     print(f"数据库: {db_path}")
     size_mb = float(stats.get("database_size_mb", 0) or 0)
-    print(f"  存在: {stats.get('database_exists', '?')}  "
-          f"大小: {size_mb:.1f} MB" if db_path.exists() else "  (不存在)")
+    print(f"  存在: {stats.get('database_exists', '?')}  大小: {size_mb:.1f} MB" if db_path.exists() else "  (不存在)")
     if db_path.exists():
-        print(f"  总因子: {stats.get('total_factors', '?')}  "
-              f"活跃: {stats.get('active_factors', '?')}  "
-              f"精英: {stats.get('elite_factors', '?')}")
-        print(f"  平均 Sharpe: {stats.get('avg_sharpe', '?')}  "
-              f"平均 IC: {stats.get('avg_ic', '?')}")
+        print(
+            f"  总因子: {stats.get('total_factors', '?')}  "
+            f"活跃: {stats.get('active_factors', '?')}  "
+            f"精英: {stats.get('elite_factors', '?')}"
+        )
+        print(f"  平均 Sharpe: {stats.get('avg_sharpe', '?')}  平均 IC: {stats.get('avg_ic', '?')}")
     for market in ("stock", "futures"):
         print(f"\n{market.upper()} JSON 文件:")
         print(f"  目录: {stats.get(f'{market}_json_dir', '?')}")
-        print(f"  文件数: {stats.get(f'{market}_json_files', '?')}  "
-              f"大小: {stats.get(f'{market}_json_size_mb', '?'):.2f} MB  "
-              f"已淘汰: {stats.get(f'{market}_retired_files', '?')}")
+        print(
+            f"  文件数: {stats.get(f'{market}_json_files', '?')}  "
+            f"大小: {stats.get(f'{market}_json_size_mb', '?'):.2f} MB  "
+            f"已淘汰: {stats.get(f'{market}_retired_files', '?')}"
+        )
     return 0
 
 
@@ -787,7 +827,7 @@ def _cmd_catalog_verify(args: argparse.Namespace) -> int:
     only_in_json = json_ids.keys() - duck_ids
     common = duck_ids & json_ids.keys()
 
-    result = {
+    result: dict[str, Any] = {
         "duckdb_total": len(duck_ids),
         "json_total": len(json_ids),
         "common": len(common),
@@ -949,7 +989,7 @@ def _cmd_factor_list(args: argparse.Namespace) -> int:
                 print(f"  - {p.stem} [读取失败: {e}]")
 
     if not factors:
-        print(f"[factor list] 无符合条件的因子")
+        print("[factor list] 无符合条件的因子")
         return 0
 
     market_label = "期货" if market == "futures" else "股票"
@@ -1002,7 +1042,7 @@ def _compute_expr_type_distribution(
     if not elite_dir.exists():
         return {"operator": 0, "code": 0, "hybrid": 0, "total": 0, "operator_pct": 0.0}
 
-    counts: dict[str, int] = {"operator": 0, "code": 0, "hybrid": 0}
+    counts: dict[str, Any] = {"operator": 0, "code": 0, "hybrid": 0}
     for p in elite_dir.glob("*.json"):
         if p.name.startswith("_") or p.name.startswith("."):
             continue
@@ -1062,7 +1102,7 @@ def _cmd_factor_stats(args: argparse.Namespace) -> int:
 
     # GAP-S13: 表达类型分布
     expr_dist = _compute_expr_type_distribution(market=market)
-    print(f"\n=== 表达类型分布 (GAP-S13) ===")
+    print("\n=== 表达类型分布 (GAP-S13) ===")
     print(f"{'类型':<16} {'数量':>6}  {'占比':>8}")
     print("-" * 34)
     for kind in ("operator", "code", "hybrid"):
@@ -1110,8 +1150,7 @@ def _cmd_factor_cross_market(args: argparse.Namespace) -> int:
             "futures-to-etf": engine.run_futures_to_etf,
             "stock-to-futures": engine.run_stock_to_futures,
         }
-        market_label = {"futures-to-stock": "期货→A股", "futures-to-etf": "期货→ETF",
-                        "stock-to-futures": "股票→期货"}
+        market_label = {"futures-to-stock": "期货→A股", "futures-to-etf": "期货→ETF", "stock-to-futures": "股票→期货"}
 
         print(f"=== 跨市场泛化验证: {market_label.get(direction, direction)} ===")
         print(f"方向: {direction} | 回溯: {args.days}天")
@@ -1128,10 +1167,11 @@ def _cmd_factor_cross_market(args: argparse.Namespace) -> int:
         output_path = None
         if args.output_dir:
             from datetime import date
+
             output_path = Path(args.output_dir) / f"cross_market_revalidation_{date.today().isoformat()}.md"
         report_path = engine.generate_report(report, output_path=output_path)
 
-        print(f"\n结果汇总:")
+        print("\n结果汇总:")
         print(f"  🌍 通用因子: {report.n_universal}")
         print(f"  🔄 市场特异: {report.n_market_specific}")
         print(f"  ❌ 失效: {report.n_failed}")
@@ -1142,19 +1182,62 @@ def _cmd_factor_cross_market(args: argparse.Namespace) -> int:
 
     except ImportError as e:
         print(f"[cross-market] 导入失败: {e}", file=sys.stderr)
-        print(f"[cross-market] 请确保 fts.cross_market 模块已安装", file=sys.stderr)
+        print("[cross-market] 请确保 fts.cross_market 模块已安装", file=sys.stderr)
         return 1
     except Exception as e:  # noqa: BLE001
         print(f"[cross-market] 执行失败: {e}", file=sys.stderr)
         return 1
 
 
+def _cmd_factor_review_list(args: argparse.Namespace) -> int:
+    """列出待审查因子队列（GAP-I102 Alpha 审查工作流）。"""
+    from .factor_engine.factor_inspector import FactorReviewWorkflow
+
+    workflow = FactorReviewWorkflow(db_path=args.db)
+    try:
+        queue = workflow.list_pending(market=args.market, limit=args.limit)
+    except Exception as e:  # noqa: BLE001
+        print(f"[review] 读取审查队列失败: {e}", file=sys.stderr)
+        return 1
+    if not queue:
+        print("[review] 审查队列为空（所有因子均已审查）")
+        return 0
+    print(f"=== 待审查因子队列 ({len(queue)}) ===")
+    for f in queue:
+        print(
+            f"  - {f['factor_id']} | {f['name']} | market={f['market']} "
+            f"| source={f['source']} | ic={f['ic']:.4f} | sharpe={f['sharpe']:.2f}"
+        )
+    return 0
+
+
+def _cmd_factor_review_approve(args: argparse.Namespace) -> int:
+    """批准因子（pending→approved，意见回写 DuckDB）。"""
+    from .factor_engine.factor_inspector import FactorReviewWorkflow
+
+    workflow = FactorReviewWorkflow(db_path=args.db)
+    result = workflow.approve(args.factor_id, comment=args.comment)
+    print(f"[review] ✅ 已批准 {result['factor_id']}: decision={result['decision']} (comment={args.comment or '-'})")
+    return 0
+
+
+def _cmd_factor_review_reject(args: argparse.Namespace) -> int:
+    """驳回因子（pending→rejected，意见回写 DuckDB）。"""
+    from .factor_engine.factor_inspector import FactorReviewWorkflow
+
+    workflow = FactorReviewWorkflow(db_path=args.db)
+    result = workflow.reject(args.factor_id, comment=args.comment)
+    print(f"[review] ❌ 已驳回 {result['factor_id']}: decision={result['decision']} (comment={args.comment or '-'})")
+    return 0
+
+
 def _cmd_factor_seeds(args: argparse.Namespace) -> int:
     """列出种子因子。"""
     market = args.market
-    
+
     if market == "futures":
         from fts.factor_engine.seed_data_futures_full import load_futures_seeds_full
+
         seeds = load_futures_seeds_full(trace_id="cli_seed_list")
         print(f"=== 期货种子因子 ({len(seeds)}) ===")
         for s in seeds:
@@ -1166,6 +1249,7 @@ def _cmd_factor_seeds(args: argparse.Namespace) -> int:
     else:
         # 股票种子因子：WQ101 + Qlib158 + 国泰君安191（经典 A 股因子库）
         from fts.factor_engine.seed_data import load_all_external_seeds
+
         seeds = load_all_external_seeds(trace_id="cli_seed_list")
         print(f"=== 股票种子因子 ({len(seeds)}) ===")
         for s in seeds:
@@ -1174,7 +1258,7 @@ def _cmd_factor_seeds(args: argparse.Namespace) -> int:
             print(f"  - {s.get('name', '?')}")
             print(f"      输入: {sig.get('input_fields', [])}")
             print(f"      参数: {params}")
-    
+
     return 0
 
 
@@ -1206,8 +1290,11 @@ def _cmd_factor_show(args: argparse.Namespace) -> int:
 def _cmd_seed_validate(args: argparse.Namespace) -> int:
     """验证所有种子因子（完整性/语法/跨文件重复）。"""
     from scripts.unified_factor_converter import (
-        load_all_factors, validate_all, check_duplicates,
+        load_all_factors,
+        validate_all,
+        check_duplicates,
     )
+
     market = getattr(args, "market", "futures")
     all_factors = load_all_factors(market)
     print(f"📂 共加载 {len(all_factors)} 个种子文件（{market}）")
@@ -1236,6 +1323,7 @@ def _cmd_seed_validate(args: argparse.Namespace) -> int:
 def _cmd_seed_report(args: argparse.Namespace) -> int:
     """生成种子因子统计报告。"""
     from scripts.unified_factor_converter import load_all_factors, generate_report
+
     market = getattr(args, "market", "futures")
     all_factors = load_all_factors(market)
     print(generate_report(all_factors, market))
@@ -1245,6 +1333,7 @@ def _cmd_seed_report(args: argparse.Namespace) -> int:
 def _cmd_seed_dedup(args: argparse.Namespace) -> int:
     """检查跨文件因子重复。"""
     from scripts.unified_factor_converter import load_all_factors, check_duplicates
+
     market = getattr(args, "market", "futures")
     all_factors = load_all_factors(market)
     errors = check_duplicates(all_factors)
@@ -1294,6 +1383,7 @@ def _cmd_backtest_run(args: argparse.Namespace) -> int:
     # 分钟级数据路径（v2.30.0）
     if freq != "daily":
         from .data_futures import FuturesDataProvider
+
         provider = FuturesDataProvider()
         data = provider.get_minute_ohlcv(
             getattr(args, "symbol", "000001"),
@@ -1307,30 +1397,37 @@ def _cmd_backtest_run(args: argparse.Namespace) -> int:
         data, _ = _prepare_data(getattr(args, "symbol", "000001"), days=args.days)
 
     from .factor_engine.backtest_pipeline import (
-        BacktestInput, BacktestPipeline,
+        BacktestInput,
+        BacktestPipeline,
     )
     from .factor_engine.report_generator import ReportGenerator
 
-    result = BacktestPipeline().run(BacktestInput(
-        factor=factor,
-        data=data,
-        date_range=date_range,
-        initialization_capital=args.capital,
-        frequency=freq,
-    ))
+    result = BacktestPipeline().run(
+        BacktestInput(
+            factor=factor,
+            data=data,
+            date_range=date_range,
+            initialization_capital=args.capital,
+            frequency=freq,
+        )
+    )
     if not result.success:
         print(f"[backtest] 回测失败: {result.error}", file=sys.stderr)
         return 1
 
     report = result.output
+    if report is None:
+        print("[backtest] 回测报告为空", file=sys.stderr)
+        return 1
     m = report.metrics
     freq_label = getattr(args, "frequency", "daily")
     print(f"=== 回测结果: {report.factor_id} (频率: {freq_label}) ===")
     print(f"期间: {report.start_date} ~ {report.end_date}")
-    print(f"总收益: {m.total_return:.2%} | 年化: {m.annual_return:.2%} | "
-          f"Sharpe: {m.sharpe_ratio:.3f}")
-    print(f"最大回撤: {m.max_drawdown:.2%} | Calmar: {m.calmar_ratio:.3f} | "
-          f"胜率: {m.win_rate:.2%} | 盈亏比: {m.payoff_ratio:.2f} | 盈亏因子: {m.profit_factor:.2f}")
+    print(f"总收益: {m.total_return:.2%} | 年化: {m.annual_return:.2%} | Sharpe: {m.sharpe_ratio:.3f}")
+    print(
+        f"最大回撤: {m.max_drawdown:.2%} | Calmar: {m.calmar_ratio:.3f} | "
+        f"胜率: {m.win_rate:.2%} | 盈亏比: {m.payoff_ratio:.2f} | 盈亏因子: {m.profit_factor:.2f}"
+    )
     print(f"IC 均值: {m.ic_mean:.4f} | IC IR: {m.ic_ir:.3f} | 换手: {m.turnover:.3f}")
 
     if args.output:
@@ -1373,7 +1470,9 @@ def _cmd_backtest_batch(args: argparse.Namespace) -> int:
 
     data, _ = _prepare_data(getattr(args, "symbol", "000001"), days=args.days)
     results = BacktestPipeline().run_batch(
-        screened, data, initialization_capital=args.capital,
+        screened,
+        data,
+        initialization_capital=args.capital,
     )
     _print_backtest_ranking(results)
     return 0
@@ -1401,7 +1500,9 @@ def _cmd_backtest_compare(args: argparse.Namespace) -> int:
 
     data, _ = _prepare_data(getattr(args, "symbol", "000001"), days=args.days)
     results = BacktestPipeline().run_batch(
-        factors, data, initialization_capital=args.capital,
+        factors,
+        data,
+        initialization_capital=args.capital,
     )
     _print_backtest_ranking(results)
     return 0
@@ -1415,8 +1516,10 @@ def _print_backtest_ranking(results: list) -> int:
     for r in sorted(results, key=lambda x: x.rank):
         if r.report is not None:
             m = r.report.metrics
-            print(f"{r.rank:<5}{r.factor_id:<40}{m.sharpe_ratio:<10.3f}"
-                  f"{m.ic_mean:<10.4f}{m.max_drawdown:<10.2%}{m.total_return:<10.2%}")
+            print(
+                f"{r.rank:<5}{r.factor_id:<40}{m.sharpe_ratio:<10.3f}"
+                f"{m.ic_mean:<10.4f}{m.max_drawdown:<10.2%}{m.total_return:<10.2%}"
+            )
         else:
             print(f"{r.rank:<5}{r.factor_id:<40}失败: {r.error}")
     return 0
@@ -1439,9 +1542,13 @@ def _cmd_feature_list(args: argparse.Namespace) -> int:
 
     print(f"=== 特征算子 ({len(ops)} 个) ===")
     if getattr(args, "json", False):
-        print(json.dumps(
-            [op.__dict__ for op in ops], indent=2, ensure_ascii=False,
-        ))
+        print(
+            json.dumps(
+                [op.__dict__ for op in ops],
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
         return 0
 
     print(f"{'算子':<24}{'类别':<16}{'签名'}")
@@ -1501,11 +1608,15 @@ def _cmd_feature_analyze(args: argparse.Namespace) -> int:
         Path(args.output).mkdir(parents=True, exist_ok=True)
         out = Path(args.output) / f"feature_importance_{args.factor_id}.json"
         out.write_text(
-            json.dumps({
-                "factor_id": args.factor_id,
-                "baseline_ic": result.baseline_ic,
-                "importance": result.feature_importance,
-            }, indent=2, ensure_ascii=False),
+            json.dumps(
+                {
+                    "factor_id": args.factor_id,
+                    "baseline_ic": result.baseline_ic,
+                    "importance": result.feature_importance,
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
         print(f"结果已保存: {out}")
@@ -1520,11 +1631,13 @@ def _cmd_gp_evolve(args: argparse.Namespace) -> int:
     # 准备面板数据
     if getattr(args, "universe", "futures") == "csi300":
         panel, common_dates, _ = _prepare_cross_section_data(
-            days=args.days, max_stocks=args.max_stocks,
+            days=args.days,
+            max_stocks=args.max_stocks,
         )
     else:
         panel, common_dates, _ = _prepare_futures_data(
-            days=args.days, max_symbols=args.max_symbols,
+            days=args.days,
+            max_symbols=args.max_symbols,
         )
     if not panel:
         print("[gp] 数据准备失败", file=sys.stderr)
@@ -1536,9 +1649,9 @@ def _cmd_gp_evolve(args: argparse.Namespace) -> int:
     closes = df["close"].values
     fwd = np.zeros(len(closes))
     if len(closes) > args.forward:
-        fwd[:-args.forward] = (
-            closes[args.forward:] - closes[:-args.forward]
-        ) / np.maximum(closes[:-args.forward], 1e-10)
+        fwd[: -args.forward] = (closes[args.forward :] - closes[: -args.forward]) / np.maximum(
+            closes[: -args.forward], 1e-10
+        )
     df["forward_return_20d"] = fwd
 
     engine = FeatureOpsEngine()
@@ -1564,12 +1677,16 @@ def _cmd_gp_evolve(args: argparse.Namespace) -> int:
         Path(args.output).mkdir(parents=True, exist_ok=True)
         out = Path(args.output) / "gp_best_factor.json"
         out.write_text(
-            json.dumps({
-                "expression": result.best_expression,
-                "fitness": result.best_fitness,
-                "ic": result.best_ic,
-                "sharpe": result.best_sharpe,
-            }, indent=2, ensure_ascii=False),
+            json.dumps(
+                {
+                    "expression": result.best_expression,
+                    "fitness": result.best_fitness,
+                    "ic": result.best_ic,
+                    "sharpe": result.best_sharpe,
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
         print(f"最优因子已保存: {out}")
@@ -1588,7 +1705,7 @@ def _cmd_feedback_trigger(args: argparse.Namespace) -> int:
         factor_id=getattr(args, "factor_id", "") or "",
         reason=args.reason,
     )
-    print(f"=== 反馈事件已触发 ===")
+    print("=== 反馈事件已触发 ===")
     print(json.dumps(event, indent=2, ensure_ascii=False))
     return 0
 
@@ -1604,8 +1721,7 @@ def _cmd_feedback_process(args: argparse.Namespace) -> int:
         return 0
     print(f"=== 反馈处理结果 ({len(results)}) ===")
     for r in results:
-        print(f"  - {r['event_id']}: root_cause={r['root_cause']}, "
-              f"action={r['action_taken']}, success={r['success']}")
+        print(f"  - {r['event_id']}: root_cause={r['root_cause']}, action={r['action_taken']}, success={r['success']}")
     return 0
 
 
@@ -1617,8 +1733,10 @@ def _cmd_feedback_report(args: argparse.Namespace) -> int:
     report = loop.generate_monthly_report(period=getattr(args, "month", None))
     print(f"=== 迭代效果月报 ({report['period']}) ===")
     print(f"新因子: {report['new_factors']} | 有效率: {report['effective_rate']:.1%}")
-    print(f"反馈处理: {report['feedback_events_handled']} | "
-          f"建议采纳: {report['recommendations_accepted']}/{report['recommendations_total']}")
+    print(
+        f"反馈处理: {report['feedback_events_handled']} | "
+        f"建议采纳: {report['recommendations_accepted']}/{report['recommendations_total']}"
+    )
     print(report["summary_text"])
     return 0
 
@@ -1650,8 +1768,7 @@ def _cmd_feedback_import(args: argparse.Namespace) -> int:
     except Exception as e:  # noqa: BLE001
         print(f"[feedback] 导入失败: {e}")
         return 1
-    print(f"[feedback] 导入完成: total={result['total']} "
-          f"valid={result['valid']} invalid={result['invalid']}")
+    print(f"[feedback] 导入完成: total={result['total']} valid={result['valid']} invalid={result['invalid']}")
     if result["invalid_messages"]:
         print(f"[feedback] 无效记录示例: {result['invalid_messages'][:3]}")
     return 0
@@ -1695,8 +1812,10 @@ def _cmd_feedback_live_ic(args: argparse.Namespace) -> int:
                 con.close()
             for r in rows:
                 rec = {
-                    "factor_id": r[0], "signal_date": r[1],
-                    "signal_value": r[2], "position_return": r[3],
+                    "factor_id": r[0],
+                    "signal_date": r[1],
+                    "signal_value": r[2],
+                    "position_return": r[3],
                     "turnover": r[4],
                 }
                 if r[5] is not None:
@@ -1719,14 +1838,15 @@ def _cmd_feedback_live_ic(args: argparse.Namespace) -> int:
     live_ic = importer.compute_live_ic(records)
     report = LiveVsBacktestICReport().generate(live_ic, backtest_ic_map)
     print("=== 实盘 IC vs 回测 IC 对比 ===")
-    print(f"因子数: {report['summary']['n_factors']} | "
-          f"衰减: {report['summary']['n_decayed']} | "
-          f"整体实盘 IC: {report['summary']['overall_live_ic']:.4f} | "
-          f"记录数: {report['summary']['n_records']}")
+    print(
+        f"因子数: {report['summary']['n_factors']} | "
+        f"衰减: {report['summary']['n_decayed']} | "
+        f"整体实盘 IC: {report['summary']['overall_live_ic']:.4f} | "
+        f"记录数: {report['summary']['n_records']}"
+    )
     for row in report["factors"]:
         bt = f"{row['backtest_ic']:.4f}" if row["backtest_ic"] is not None else "N/A"
-        print(f"  {row['factor_id']}: live_ic={row['live_ic']:.4f} "
-              f"bt_ic={bt} status={row['status']}")
+        print(f"  {row['factor_id']}: live_ic={row['live_ic']:.4f} bt_ic={bt} status={row['status']}")
     return 0
 
 
@@ -1875,40 +1995,66 @@ def build_parser() -> argparse.ArgumentParser:
     p_evo = sub.add_parser("evolution", help="L2 因子演化主循环")
     evo_sub = p_evo.add_subparsers(dest="subcommand", required=False)
     p_evo_run = evo_sub.add_parser("run", help="启动 L2 演化")
-    p_evo_run.add_argument("--max-generations", type=int, default=10,
-                           help="最大演化代数（默认 10）")
-    p_evo_run.add_argument("--symbol", type=str, default="000001",
-                           help="演化目标品种代码（默认 000001 平安银行）")
-    p_evo_run.add_argument("--universe", type=str, default="futures",
-                           choices=["single", "csi300", "futures"],
-                           help="演化品种池类型: futures（期货，默认）/ csi300（沪深300）/ single（单标）")
-    p_evo_run.add_argument("--max-stocks", type=int, default=0,
-                           help="横截面模式最大标的数（0 = 使用全部品种）")
-    p_evo_run.add_argument("--days", type=int, default=750,
-                           help="回溯天数（默认 750，GAP-S08 长窗口）")
+    p_evo_run.add_argument("--max-generations", type=int, default=10, help="最大演化代数（默认 10）")
+    p_evo_run.add_argument("--symbol", type=str, default="000001", help="演化目标品种代码（默认 000001 平安银行）")
+    p_evo_run.add_argument(
+        "--universe",
+        type=str,
+        default="futures",
+        choices=["single", "csi300", "futures"],
+        help="演化品种池类型: futures（期货，默认）/ csi300（沪深300）/ single（单标）",
+    )
+    p_evo_run.add_argument("--max-stocks", type=int, default=0, help="横截面模式最大标的数（0 = 使用全部品种）")
+    p_evo_run.add_argument("--days", type=int, default=750, help="回溯天数（默认 750，GAP-S08 长窗口）")
     p_evo_run.set_defaults(func=_cmd_evolution_run)
 
     # meta-loop run
     p_meta = sub.add_parser("meta-loop", help="L1 Meta-Loop")
     meta_sub = p_meta.add_subparsers(dest="subcommand", required=False)
     p_meta_run = meta_sub.add_parser("run", help="启动 L1 Meta-Loop")
-    p_meta_run.add_argument("--market", type=str, default=None,
-                            choices=["stock", "futures"],
-                            help="市场类型: stock（股票）/ futures（期货），默认使用 config default_market")
-    p_meta_run.add_argument("--symbols", type=str, default=None,
-                            help="感知层抽样品种，逗号分隔（如 rb,i,au,sc），默认覆盖五大板块共 13 个品种")
+    p_meta_run.add_argument(
+        "--market",
+        type=str,
+        default=None,
+        choices=["stock", "futures"],
+        help="市场类型: stock（股票）/ futures（期货），默认使用 config default_market",
+    )
+    p_meta_run.add_argument(
+        "--symbols",
+        type=str,
+        default=None,
+        help="感知层抽样品种，逗号分隔（如 rb,i,au,sc），默认覆盖五大板块共 13 个品种",
+    )
     p_meta_run.set_defaults(func=_cmd_meta_loop_run)
 
     # portfolio run
     p_port = sub.add_parser("portfolio", help="L3 组合构建")
     port_sub = p_port.add_subparsers(dest="subcommand", required=False)
     p_port_run = port_sub.add_parser("run", help="启动 L3 组合构建")
-    p_port_run.add_argument("--universe", type=str, default="stock",
-                            choices=["stock", "futures"],
-                            help="因子池类型: stock（股票）/ futures（期货）")
-    p_port_run.add_argument("--synthesis-mode", type=str, default=None,
-                            choices=["equal_weight", "sharpe_weight", "elastic_net", "adaptive"],
-                            help="信号合成模式: elastic_net（默认）/ adaptive（Regime 自适应双维度）/ sharpe_weight / equal_weight")
+    p_port_run.add_argument(
+        "--universe",
+        type=str,
+        default="stock",
+        choices=["stock", "futures"],
+        help="因子池类型: stock（股票）/ futures（期货）",
+    )
+    p_port_run.add_argument(
+        "--synthesis-mode",
+        type=str,
+        default=None,
+        choices=["equal_weight", "sharpe_weight", "elastic_net", "adaptive", "optimizer"],
+        help="信号合成模式: elastic_net（默认）/ adaptive（Regime 自适应双维度）/ sharpe_weight / equal_weight / optimizer（GAP-I302，需 returns-matrix）",
+    )
+    p_port_run.add_argument(
+        "--optimizer-mode",
+        type=str,
+        default=None,
+        choices=["risk_parity", "mvo"],
+        help="optimizer 目标模式（GAP-I302，默认 risk_parity；mvo=均值方差）",
+    )
+    p_port_run.add_argument(
+        "--returns-matrix", type=str, default=None, help="因子收益矩阵 CSV 路径（optimizer 模式与实测化输入，可选）"
+    )
     p_port_run.set_defaults(func=_cmd_portfolio_run)
 
     # ui
@@ -1948,7 +2094,9 @@ def build_parser() -> argparse.ArgumentParser:
     # factor list (增强：支持 DuckDB 查询与筛选)
     p_factor_list = factor_sub.add_parser("list", help="列出 elite 因子")
     p_factor_list.add_argument("--elite-dir", default=None, help="elite 因子目录（仅目录模式使用）")
-    p_factor_list.add_argument("--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）")
+    p_factor_list.add_argument(
+        "--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）"
+    )
     p_factor_list.add_argument("--family", default=None, help="按家族筛选（DuckDB 模式）")
     p_factor_list.add_argument("--min-ic", type=float, default=None, help="最低 IC 阈值")
     p_factor_list.add_argument("--min-sharpe", type=float, default=None, help="最低 Sharpe 阈值")
@@ -1967,7 +2115,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # factor seeds
     p_factor_seeds = factor_sub.add_parser("seeds", help="列出种子因子")
-    p_factor_seeds.add_argument("--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）")
+    p_factor_seeds.add_argument(
+        "--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）"
+    )
     p_factor_seeds.set_defaults(func=_cmd_factor_seeds)
 
     # factor stats
@@ -1984,33 +2134,62 @@ def build_parser() -> argparse.ArgumentParser:
 
     # factor cross-market（跨市场泛化验证）
     p_factor_xm = factor_sub.add_parser("cross-market", help="跨市场泛化验证")
-    p_factor_xm.add_argument("--direction", default="futures-to-stock",
-                             choices=["futures-to-stock", "futures-to-etf", "stock-to-futures"],
-                             help="验证方向（默认: futures-to-stock）")
+    p_factor_xm.add_argument(
+        "--direction",
+        default="futures-to-stock",
+        choices=["futures-to-stock", "futures-to-etf", "stock-to-futures"],
+        help="验证方向（默认: futures-to-stock）",
+    )
     p_factor_xm.add_argument("--days", type=int, default=120, help="回溯天数")
     p_factor_xm.add_argument("--max-factors", type=int, default=0, help="最大因子数，0=全量")
-    p_factor_xm.add_argument("--max-stocks", type=int, default=0,
-                             help="最大成分股数，0=全量（仅 futures-to-stock 方向）")
+    p_factor_xm.add_argument(
+        "--max-stocks", type=int, default=0, help="最大成分股数，0=全量（仅 futures-to-stock 方向）"
+    )
     p_factor_xm.add_argument("--output-dir", default=None, help="报告输出目录")
     p_factor_xm.set_defaults(func=_cmd_factor_cross_market)
+
+    # factor review（GAP-I102 Alpha 审查工作流）
+    p_factor_review = factor_sub.add_parser("review", help="Alpha 审查工作流（GAP-I102）")
+    review_sub = p_factor_review.add_subparsers(dest="subcommand", required=True)
+
+    p_rev_list = review_sub.add_parser("list", help="列出待审查因子队列")
+    p_rev_list.add_argument("--market", default=None, choices=["futures", "stock"], help="市场类型")
+    p_rev_list.add_argument("--limit", type=int, default=50, help="队列上限（默认 50）")
+    p_rev_list.add_argument("--db", default=None, help="DuckDB 文件路径")
+    p_rev_list.set_defaults(func=_cmd_factor_review_list)
+
+    p_rev_approve = review_sub.add_parser("approve", help="批准因子（pending→approved）")
+    p_rev_approve.add_argument("factor_id", help="因子 ID")
+    p_rev_approve.add_argument("--comment", default="", help="审查意见")
+    p_rev_approve.add_argument("--db", default=None, help="DuckDB 文件路径")
+    p_rev_approve.set_defaults(func=_cmd_factor_review_approve)
+
+    p_rev_reject = review_sub.add_parser("reject", help="驳回因子（pending→rejected）")
+    p_rev_reject.add_argument("factor_id", help="因子 ID")
+    p_rev_reject.add_argument("--comment", default="", help="审查意见")
+    p_rev_reject.add_argument("--db", default=None, help="DuckDB 文件路径")
+    p_rev_reject.set_defaults(func=_cmd_factor_review_reject)
 
     # seed（种子因子管理）
     p_seed = sub.add_parser("seed", help="种子因子管理（验证/报告/去重）")
     seed_sub = p_seed.add_subparsers(dest="subcommand", required=False)
 
     p_seed_validate = seed_sub.add_parser("validate", help="验证所有种子因子（完整性/语法/跨文件重复）")
-    p_seed_validate.add_argument("--market", default="futures", choices=["futures", "stock"],
-                                 help="市场类型（默认：futures）")
+    p_seed_validate.add_argument(
+        "--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）"
+    )
     p_seed_validate.set_defaults(func=_cmd_seed_validate)
 
     p_seed_report = seed_sub.add_parser("report", help="生成种子因子统计报告")
-    p_seed_report.add_argument("--market", default="futures", choices=["futures", "stock"],
-                               help="市场类型（默认：futures）")
+    p_seed_report.add_argument(
+        "--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）"
+    )
     p_seed_report.set_defaults(func=_cmd_seed_report)
 
     p_seed_dedup = seed_sub.add_parser("dedup", help="检查跨文件因子重复")
-    p_seed_dedup.add_argument("--market", default="futures", choices=["futures", "stock"],
-                              help="市场类型（默认：futures）")
+    p_seed_dedup.add_argument(
+        "--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）"
+    )
     p_seed_dedup.set_defaults(func=_cmd_seed_dedup)
 
     # backtest（B.2 回测流水线）
@@ -2020,23 +2199,26 @@ def build_parser() -> argparse.ArgumentParser:
     # backtest run
     p_bt_run = bt_sub.add_parser("run", help="单个因子回测")
     p_bt_run.add_argument("--factor-id", required=True, help="因子 ID")
-    p_bt_run.add_argument("--market", default="futures", choices=["futures", "stock"],
-                          help="市场类型（默认：futures）")
+    p_bt_run.add_argument("--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）")
     p_bt_run.add_argument("--symbol", default="000001", help="回测标的代码（默认 000001）")
     p_bt_run.add_argument("--start", default=None, help="开始日期 YYYY-MM-DD")
     p_bt_run.add_argument("--end", default=None, help="结束日期 YYYY-MM-DD")
     p_bt_run.add_argument("--days", type=int, default=750, help="回溯天数（默认 750，GAP-S08 长窗口）")
     p_bt_run.add_argument("--capital", type=float, default=1_000_000.0, help="初始资金")
-    p_bt_run.add_argument("--frequency", default="daily",
-                          choices=["daily", "1m", "5m", "15m", "30m", "60m"],
-                          help="数据频率（默认 daily，v2.30.0 分钟级支持）")
+    p_bt_run.add_argument(
+        "--frequency",
+        default="daily",
+        choices=["daily", "1m", "5m", "15m", "30m", "60m"],
+        help="数据频率（默认 daily，v2.30.0 分钟级支持）",
+    )
     p_bt_run.add_argument("--output", default=None, help="报告输出目录")
     p_bt_run.set_defaults(func=_cmd_backtest_run)
 
     # backtest batch
     p_bt_batch = bt_sub.add_parser("batch", help="批量回测 + 对比排名")
-    p_bt_batch.add_argument("--market", default="futures", choices=["futures", "stock"],
-                            help="市场类型（默认：futures）")
+    p_bt_batch.add_argument(
+        "--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）"
+    )
     p_bt_batch.add_argument("--grade", default="B", help="最低等级 A/B/C（默认 B）")
     p_bt_batch.add_argument("--min-score", type=float, default=None, help="最低质量总分")
     p_bt_batch.add_argument("--limit", type=int, default=20, help="最大回测因子数（默认 20）")
@@ -2048,8 +2230,7 @@ def build_parser() -> argparse.ArgumentParser:
     # backtest compare
     p_bt_cmp = bt_sub.add_parser("compare", help="对比回测多个因子")
     p_bt_cmp.add_argument("--factor-ids", required=True, help="逗号分隔的因子 ID 列表")
-    p_bt_cmp.add_argument("--market", default="futures", choices=["futures", "stock"],
-                          help="市场类型（默认：futures）")
+    p_bt_cmp.add_argument("--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）")
     p_bt_cmp.add_argument("--symbol", default="000001", help="回测标的代码")
     p_bt_cmp.add_argument("--days", type=int, default=750, help="回溯天数（GAP-S08 长窗口）")
     p_bt_cmp.add_argument("--capital", type=float, default=1_000_000.0, help="初始资金")
@@ -2060,15 +2241,19 @@ def build_parser() -> argparse.ArgumentParser:
     feat_sub = p_feature.add_subparsers(dest="subcommand", required=False)
 
     p_feat_list = feat_sub.add_parser("list", help="列出特征算子")
-    p_feat_list.add_argument("--category", default=None,
-                             help="算子类别（time_series/price/rolling/technical/cross_section/cross_symbol/composite）")
+    p_feat_list.add_argument(
+        "--category",
+        default=None,
+        help="算子类别（time_series/price/rolling/technical/cross_section/cross_symbol/composite）",
+    )
     p_feat_list.add_argument("--json", action="store_true", help="JSON 格式输出")
     p_feat_list.set_defaults(func=_cmd_feature_list)
 
     p_feat_analyze = feat_sub.add_parser("analyze", help="特征重要性分析")
     p_feat_analyze.add_argument("--factor-id", required=True, help="因子 ID")
-    p_feat_analyze.add_argument("--market", default="futures", choices=["futures", "stock"],
-                                help="市场类型（默认：futures）")
+    p_feat_analyze.add_argument(
+        "--market", default="futures", choices=["futures", "stock"], help="市场类型（默认：futures）"
+    )
     p_feat_analyze.add_argument("--days", type=int, default=750, help="回溯天数（GAP-S08 长窗口）")
     p_feat_analyze.add_argument("--output", default=None, help="结果输出目录")
     p_feat_analyze.set_defaults(func=_cmd_feature_analyze)
@@ -2078,8 +2263,9 @@ def build_parser() -> argparse.ArgumentParser:
     gp_sub = p_gp.add_subparsers(dest="subcommand", required=False)
 
     p_gp_evolve = gp_sub.add_parser("evolve", help="运行 GP 演化")
-    p_gp_evolve.add_argument("--universe", default="futures", choices=["futures", "csi300"],
-                             help="品种池类型（默认：futures）")
+    p_gp_evolve.add_argument(
+        "--universe", default="futures", choices=["futures", "csi300"], help="品种池类型（默认：futures）"
+    )
     p_gp_evolve.add_argument("--population", type=int, default=200, help="种群大小（默认 200）")
     p_gp_evolve.add_argument("--generations", type=int, default=50, help="最大代数（默认 50）")
     p_gp_evolve.add_argument("--days", type=int, default=750, help="回溯天数（默认 750，GAP-S08 长窗口）")
@@ -2115,8 +2301,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_fb_import.set_defaults(func=_cmd_feedback_import)
 
     p_fb_live_ic = fb_sub.add_parser("live-ic", help="实盘 IC vs 回测 IC 对比报告（GAP-L402）")
-    p_fb_live_ic.add_argument("--backtest-ic", default=None,
-                              help="回测 IC JSON 路径 {factor_id: ic}")
+    p_fb_live_ic.add_argument("--backtest-ic", default=None, help="回测 IC JSON 路径 {factor_id: ic}")
     p_fb_live_ic.add_argument("--db", default=None, help="DuckDB 文件路径（读取 feedback_live 表）")
     p_fb_live_ic.set_defaults(func=_cmd_feedback_live_ic)
 
@@ -2167,9 +2352,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_data_fuse = data_sub.add_parser("fuse", help="多源 K 线融合（MEDIAN/MEAN/WEIGHTED/HIERARCHICAL/TRIMMED_MEAN）")
     p_data_fuse.add_argument("--symbol", type=str, required=True, help="品种代码（如 RB0）")
-    p_data_fuse.add_argument("--strategy", type=str, default="MEDIAN",
-                             choices=["MEDIAN", "MEAN", "WEIGHTED", "HIERARCHICAL", "TRIMMED_MEAN"],
-                             help="融合策略（默认 MEDIAN）")
+    p_data_fuse.add_argument(
+        "--strategy",
+        type=str,
+        default="MEDIAN",
+        choices=["MEDIAN", "MEAN", "WEIGHTED", "HIERARCHICAL", "TRIMMED_MEAN"],
+        help="融合策略（默认 MEDIAN）",
+    )
     p_data_fuse.add_argument("--days", type=int, default=30, help="回溯天数（默认 30）")
     p_data_fuse.add_argument("--json", action="store_true", help="JSON 格式输出")
     p_data_fuse.add_argument("--output", type=str, default=None, help="FusionReport 落盘路径")
@@ -2181,6 +2370,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI 入口。"""
     import logging
+
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     parser = build_parser()

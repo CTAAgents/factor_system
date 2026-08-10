@@ -48,6 +48,7 @@ from .live_factor_monitor import LiveFactorMonitor
 
 # ─── 监控数据契约 ─────────────────────────────────────────
 
+
 @dataclass
 class LoopStatusReport:
     """单个循环状态报告（FTS 项目级封装）。
@@ -63,6 +64,7 @@ class LoopStatusReport:
         tokens_consumed: 本次运行消耗的 token 数
         age_hours: 距上次更新的小时数
     """
+
     loop_name: str
     healthy: bool
     last_run_at: str = ""
@@ -77,6 +79,7 @@ class LoopStatusReport:
 @dataclass
 class SystemStatusReport:
     """系统级状态报告。"""
+
     healthy: bool
     loops: list[LoopStatusReport] = field(default_factory=list)
     checked_at: str = ""
@@ -87,6 +90,7 @@ class SystemStatusReport:
 
 
 # ─── 监控接口 ─────────────────────────────────────────────
+
 
 def _loop_status_to_report(status: LoopStatus) -> LoopStatusReport:
     """LoopStatus → LoopStatusReport。"""
@@ -110,6 +114,7 @@ def check_data_sources_status(project_root: Optional[Path] = None) -> dict:
     """
     try:
         from ..cli import _build_default_aggregator
+
         agg = _build_default_aggregator()
         status = agg.get_source_status()
     except Exception as e:  # noqa: BLE001
@@ -129,9 +134,10 @@ def check_data_sources_status(project_root: Optional[Path] = None) -> dict:
     }
 
 
-def check_loop_status(loop_name: str,
-                      project_root: Optional[Path] = None,
-                      ) -> LoopStatusReport:
+def check_loop_status(
+    loop_name: str,
+    project_root: Optional[Path] = None,
+) -> LoopStatusReport:
     """检查单个循环状态。
 
     Args:
@@ -171,8 +177,9 @@ def check_loop_status(loop_name: str,
         )
 
 
-def check_all_status(project_root: Optional[Path] = None,
-                     ) -> SystemStatusReport:
+def check_all_status(
+    project_root: Optional[Path] = None,
+) -> SystemStatusReport:
     """检查所有循环状态。
 
     Args:
@@ -184,9 +191,9 @@ def check_all_status(project_root: Optional[Path] = None,
     root = Path(project_root) if project_root else Path.cwd()
     try:
         all_status: AllStatus = check_all(root)
-        loops = [_loop_status_to_report(l) for l in all_status.loops]
+        loops = [_loop_status_to_report(lp) for lp in all_status.loops]
         return SystemStatusReport(
-            healthy=all_status.loops and all(l.healthy for l in all_status.loops),
+            healthy=all_status.loops and all(lp.healthy for lp in all_status.loops),
             loops=loops,
             checked_at=all_status.checked_at,
             fts_version=FTS_VERSION,

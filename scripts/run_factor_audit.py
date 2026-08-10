@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 import time
 from datetime import datetime
@@ -108,14 +107,16 @@ def generate_synthetic_data(n_days: int = 252) -> tuple[pd.DataFrame, np.ndarray
     low = np.minimum(close, open_price) * (1 - np.abs(rng.randn(n_days) * 0.005))
     volume = np.abs(rng.randn(n_days) * 1000000) + 500000
 
-    df = pd.DataFrame({
-        "date": dates,
-        "open": open_price,
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": volume,
-    })
+    df = pd.DataFrame(
+        {
+            "date": dates,
+            "open": open_price,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+        }
+    )
 
     # 生成未来收益率 (向前 5 日)
     forward_period = 5
@@ -126,9 +127,7 @@ def generate_synthetic_data(n_days: int = 252) -> tuple[pd.DataFrame, np.ndarray
     return df, forward_returns
 
 
-def generate_cross_symbol_ic(
-    n_symbols: int = 10, base_ic: float = 0.03
-) -> dict[str, float]:
+def generate_cross_symbol_ic(n_symbols: int = 10, base_ic: float = 0.03) -> dict[str, float]:
     """生成跨品种 IC 数据。
 
     Args:
@@ -170,9 +169,11 @@ def generate_stress_test_data(
     for i in range(n_symbols):
         sym = f"SYMBOL_{i}"
         signals[sym] = rng.randn(n_days) * 0.5
-        ohlcv[sym] = pd.DataFrame({
-            "close": 100 + np.cumsum(rng.randn(n_days) * 2),
-        })
+        ohlcv[sym] = pd.DataFrame(
+            {
+                "close": 100 + np.cumsum(rng.randn(n_days) * 2),
+            }
+        )
 
     return signals, ohlcv
 
@@ -200,7 +201,7 @@ def run_audit_for_factor(
     Returns:
         FactorAuditReport
     """
-    factor_id = factor.get("factor_id", "unknown")
+    factor.get("factor_id", "unknown")
 
     # 准备各审计项所需的独立数据
     # 注意：实际使用时应替换为真实回测数据
@@ -274,14 +275,14 @@ def batch_audit(
         factor_id = factor_meta.get("factor_id", f"unknown_{idx}")
         logger.info(
             "[%d/%d] 审计因子 [factor_id=%s, name=%s]",
-            idx, total,
-            factor_id, factor_meta.get("name", "unknown"),
+            idx,
+            total,
+            factor_id,
+            factor_meta.get("name", "unknown"),
         )
 
         try:
-            report = run_audit_for_factor(
-                auditor, factor_meta, synthetic_data, synthetic_fwd_returns
-            )
+            report = run_audit_for_factor(auditor, factor_meta, synthetic_data, synthetic_fwd_returns)
             reports.append(report)
 
             if report.passed:
@@ -290,23 +291,24 @@ def batch_audit(
                 failed += 1
                 logger.warning(
                     "因子未通过审计 [factor_id=%s, failed_items=%s]",
-                    factor_id, report.summary.get("failed_items", []),
+                    factor_id,
+                    report.summary.get("failed_items", []),
                 )
 
         except Exception as e:
-            logger.error(
-                "审计异常 [factor_id=%s]: %s", factor_id, e, exc_info=True
-            )
+            logger.error("审计异常 [factor_id=%s]: %s", factor_id, e, exc_info=True)
             # 创建一个失败的报告
-            reports.append(FactorAuditReport(
-                factor_id=factor_id,
-                factor_name=factor_meta.get("name", factor_id),
-                audited_at=datetime.now().isoformat(),
-                items=[],
-                passed=False,
-                pass_rate=0.0,
-                summary={"error": str(e)},
-            ))
+            reports.append(
+                FactorAuditReport(
+                    factor_id=factor_id,
+                    factor_name=factor_meta.get("name", factor_id),
+                    audited_at=datetime.now().isoformat(),
+                    items=[],
+                    passed=False,
+                    pass_rate=0.0,
+                    summary={"error": str(e)},
+                )
+            )
             failed += 1
 
         # 进度汇报
@@ -316,7 +318,11 @@ def batch_audit(
             eta = (total - idx) / rate if rate > 0 else 0
             logger.info(
                 "进度 [%.0f%%] 通过=%d 失败=%d 速率=%.1f/s ETA=%.0fs",
-                idx / total * 100, passed, failed, rate, eta,
+                idx / total * 100,
+                passed,
+                failed,
+                rate,
+                eta,
             )
 
     # 保存结果

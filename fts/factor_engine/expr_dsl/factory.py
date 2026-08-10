@@ -3,6 +3,7 @@
 FactorProgram 契约不变原则: 算子因子同样携带 code（确定性生成），
 对评估链/Verifier/组合构建完全透明。
 """
+
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -47,6 +48,7 @@ def create_operator_factor(
     analysis = analyze_expression(expression)
     code = compile_expr_to_code(expression, name)
     from .parser import parse_expression
+
     fields = sorted(collect_fields(parse_expression(expression)))
     signature = FactorSignature(
         input_fields=fields or ["close"],
@@ -60,7 +62,10 @@ def create_operator_factor(
         params=params or {},
         signature=signature,
         economic_logic=EconomicLogic(
-            theory=3, behavioral=3, microstructure=3, institutional=3,
+            theory=3,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
             narrative=narrative,
         ),
         source=source,  # type: ignore[typeddict-item]

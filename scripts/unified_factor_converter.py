@@ -17,26 +17,37 @@ scripts/unified_factor_converter.py — 统一因子转换器 + 验证器
 from __future__ import annotations
 
 import ast
-import os
-import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+
 def _seeds_dir(market: str = "futures") -> Path:
     """获取指定市场的种子因子目录。"""
     return Path(__file__).resolve().parent.parent / "seeds" / market
 
+
 REQUIRED_FIELDS = [
-    "name", "description", "market", "code", "params",
-    "input_fields", "lookback", "output_type", "frequency",
+    "name",
+    "description",
+    "market",
+    "code",
+    "params",
+    "input_fields",
+    "lookback",
+    "output_type",
+    "frequency",
     "economic_logic",
 ]
 
 REQUIRED_LOGIC_FIELDS = [
-    "theory", "behavioral", "microstructure", "institutional", "narrative",
+    "theory",
+    "behavioral",
+    "microstructure",
+    "institutional",
+    "narrative",
 ]
 
 VALID_OUTPUT_TYPES = {"signal", "rank", "raw"}
@@ -206,8 +217,9 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="统一因子转换器 + 验证器")
-    parser.add_argument("--market", type=str, default="futures", choices=["futures", "stock"],
-                        help="市场类型（默认: futures）")
+    parser.add_argument(
+        "--market", type=str, default="futures", choices=["futures", "stock"], help="市场类型（默认: futures）"
+    )
     parser.add_argument("--check-all", action="store_true", help="检查所有种子文件")
     parser.add_argument("--verify", type=str, default=None, help="验证单个种子文件")
     parser.add_argument("--report", action="store_true", help="生成种子因子统计报告")

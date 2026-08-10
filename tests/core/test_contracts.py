@@ -46,9 +46,7 @@ def test_all_symbols_match_factor_engine():
         core_val = getattr(core_contracts, name)
         fe_val = getattr(fe_contracts, name, None)
         assert fe_val is not None, f"符号 {name} 在 factor_engine.contracts 中不存在"
-        assert core_val is fe_val, (
-            f"符号 {name} 引用不一致: core={id(core_val)}, fe={id(fe_val)}"
-        )
+        assert core_val is fe_val, f"符号 {name} 引用不一致: core={id(core_val)}, fe={id(fe_val)}"
 
 
 def test_core_contracts_exports_subset_of_fe():
@@ -63,9 +61,7 @@ def test_core_contracts_exports_subset_of_fe():
         # 只检查在 factor_engine 中也声明的符号
         re_exported = {name for name in core_all if name in fe_set}
         # re-export 的符号必须是 fe 的子集（实际上是 fe 的一部分）
-        assert re_exported.issubset(fe_set), (
-            f"core 有 re-export 符号不在 factor_engine 中: {re_exported - fe_set}"
-        )
+        assert re_exported.issubset(fe_set), f"core 有 re-export 符号不在 factor_engine 中: {re_exported - fe_set}"
 
 
 # ─── 具体符号验证（≥10 个目标） ────────────────────────
@@ -119,9 +115,7 @@ def test_core_contracts_exports_subset_of_fe():
 def test_specific_import(name: str, expected_type):
     """每个具体符号类型正确。"""
     obj = getattr(core_contracts, name)
-    assert isinstance(obj, expected_type), (
-        f"{name} 期望类型 {expected_type}，实际 {type(obj)}"
-    )
+    assert isinstance(obj, expected_type), f"{name} 期望类型 {expected_type}，实际 {type(obj)}"
 
 
 # ─── 动态导入 ───────────────────────────────────────────
@@ -152,11 +146,24 @@ def test_import_via_fts():
 # ─── FuturesOHLCV 字段定义（与实现解耦，作为单一事实源） ──────────
 
 FUTURES_OHLCV_REQUIRED = [
-    "symbol", "date", "open", "high", "low", "close", "volume", "trace_id",
+    "symbol",
+    "date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "trace_id",
 ]
 FUTURES_OHLCV_OPTIONAL = [
-    "amount", "hold", "settle", "pre_settle", "oi_change", "vwap",
-    "source", "fetched_at",
+    "amount",
+    "hold",
+    "settle",
+    "pre_settle",
+    "oi_change",
+    "vwap",
+    "source",
+    "fetched_at",
 ]
 FUTURES_OHLCV_ALL = FUTURES_OHLCV_REQUIRED + FUTURES_OHLCV_OPTIONAL
 
@@ -200,24 +207,27 @@ def test_futures_ohlcv_total_field_count():
     )
 
 
-@pytest.mark.parametrize("field,expected_type", [
-    ("symbol", str),
-    ("date", str),
-    ("open", float),
-    ("high", float),
-    ("low", float),
-    ("close", float),
-    ("volume", float),
-    ("trace_id", str),
-    ("amount", float),
-    ("hold", float),
-    ("settle", float),
-    ("pre_settle", float),
-    ("oi_change", float),
-    ("vwap", float),
-    ("source", str),
-    ("fetched_at", str),
-])
+@pytest.mark.parametrize(
+    "field,expected_type",
+    [
+        ("symbol", str),
+        ("date", str),
+        ("open", float),
+        ("high", float),
+        ("low", float),
+        ("close", float),
+        ("volume", float),
+        ("trace_id", str),
+        ("amount", float),
+        ("hold", float),
+        ("settle", float),
+        ("pre_settle", float),
+        ("oi_change", float),
+        ("vwap", float),
+        ("source", str),
+        ("fetched_at", str),
+    ],
+)
 def test_futures_ohlcv_field_types(field, expected_type):
     """FuturesOHLCV 每个字段类型契约（防止 stringly-typed）。
 
@@ -238,9 +248,7 @@ def test_futures_ohlcv_field_types(field, expected_type):
         from typing_extensions import NotRequired as not_required
     if get_origin(hint) is not_required:
         hint = get_args(hint)[0]
-    assert hint is expected_type, (
-        f"{field} 期望 {expected_type}, 实际 {hints[field]}"
-    )
+    assert hint is expected_type, f"{field} 期望 {expected_type}, 实际 {hints[field]}"
 
 
 def test_futures_ohlcv_constructable_as_dict():
@@ -265,7 +273,11 @@ def test_futures_ohlcv_constructable_as_dict():
 # ─── FuturesDataLineage ────────────────────────────────────
 
 LINEAGE_REQUIRED = [
-    "trace_id", "started_at", "finished_at", "symbols", "rows_written",
+    "trace_id",
+    "started_at",
+    "finished_at",
+    "symbols",
+    "rows_written",
 ]
 LINEAGE_OPTIONAL = ["sources_used", "sources_failed", "disagreements"]
 

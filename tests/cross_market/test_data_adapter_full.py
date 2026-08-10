@@ -33,13 +33,16 @@ def _make_df(n: int = 60, with_oi: bool = False) -> pd.DataFrame:
     rng = np.random.default_rng(3)
     dates = pd.date_range("2026-01-01", periods=n, freq="D")
     close = 100 + np.cumsum(rng.normal(0, 0.5, n))
-    df = pd.DataFrame({
-        "open": close + rng.normal(0, 0.1, n),
-        "high": close + np.abs(rng.normal(0, 0.3, n)),
-        "low": close - np.abs(rng.normal(0, 0.3, n)),
-        "close": close,
-        "volume": rng.integers(1000, 9000, n).astype(float),
-    }, index=dates)
+    df = pd.DataFrame(
+        {
+            "open": close + rng.normal(0, 0.1, n),
+            "high": close + np.abs(rng.normal(0, 0.3, n)),
+            "low": close - np.abs(rng.normal(0, 0.3, n)),
+            "close": close,
+            "volume": rng.integers(1000, 9000, n).astype(float),
+        },
+        index=dates,
+    )
     if with_oi:
         df["open_interest"] = rng.integers(10000, 90000, n).astype(float)
         df["settle"] = close

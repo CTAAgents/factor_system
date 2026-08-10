@@ -46,6 +46,7 @@ def _mcp_enabled(monkeypatch):
 
 # ─── 未启用（默认）→ 明确降级 ────────────────────────────
 
+
 def test_call_mcp_disabled_returns_none(_mcp_disabled):
     """未启用 MCP 时 _call_mcp 应返回 None（明确降级，不抛异常）。"""
     assert ifind_source._call_mcp("查询") is None
@@ -66,6 +67,7 @@ def test_fetch_ohlcv_disabled_degrades(_mcp_disabled):
 
 # ─── 启用但未注入 → 显式报错 ─────────────────────────────
 
+
 def test_call_mcp_enabled_without_handler_raises(_mcp_enabled):
     """mcp_enabled=true 但未注入时应抛 RuntimeError（提示初始化）。"""
     with pytest.raises(RuntimeError, match="未注入"):
@@ -81,6 +83,7 @@ def test_is_available_enabled_without_handler_false(_mcp_enabled):
 
 
 # ─── 注入 handler → 正常调用 ─────────────────────────────
+
 
 def test_call_mcp_after_handler_injected(_mcp_disabled):
     """注入 handler 后 _call_mcp 应调用 handler（即使 mcp_enabled=false）。"""
@@ -100,11 +103,21 @@ def test_is_available_after_handler_injected(_mcp_disabled):
 
 def test_fetch_ohlcv_with_handler_parses(_mcp_disabled):
     """注入 handler 后 fetch_ohlcv 应正常解析 MCP 响应。"""
-    raw = {"data": [{
-        "date": "2026-01-02", "open": 3000.0, "high": 3010.0, "low": 2990.0,
-        "close": 3005.0, "volume": 1000, "amount": 3_000_000.0,
-        "openInterest": 100, "settle": 3004.0,
-    }]}
+    raw = {
+        "data": [
+            {
+                "date": "2026-01-02",
+                "open": 3000.0,
+                "high": 3010.0,
+                "low": 2990.0,
+                "close": 3005.0,
+                "volume": 1000,
+                "amount": 3_000_000.0,
+                "openInterest": 100,
+                "settle": 3004.0,
+            }
+        ]
+    }
     ifind_source.set_mcp_handler(MagicMock(return_value=raw))
     df = IFindSource().fetch_ohlcv("RB2509", 10)
     assert df is not None

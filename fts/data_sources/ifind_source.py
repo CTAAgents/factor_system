@@ -75,8 +75,7 @@ def _call_mcp(query: str) -> Any:
 
     if get_config().mcp_enabled:
         raise RuntimeError(
-            "iFinD MCP 已启用但客户端未注入。请调用 "
-            "fts.data_sources.ifind_source.set_mcp_handler(handler) 初始化。"
+            "iFinD MCP 已启用但客户端未注入。请调用 fts.data_sources.ifind_source.set_mcp_handler(handler) 初始化。"
         )
     logger.debug("[IFIND] MCP 未启用，跳过增强字段查询: %s", query[:50])
     return None
@@ -90,15 +89,75 @@ _IFIND_EXCHANGE_MAP: list[tuple[tuple[str, ...], str]] = [
     # CFFEX 2 字母 (优先，避免与 T 误判)
     (("IF", "IH", "IC", "TF", "TS", "TL"), "CFX"),
     # CZCE 2 字母
-    (("SR", "CF", "CJ", "CY", "AP", "LR", "LW", "MR", "ME", "PM", "RI", "RM",
-      "RS", "SF", "SM", "TA", "TM", "UR", "WH", "WS", "WT", "ZC", "GN", "RO",
-      "PF", "PK", "PX", "SA", "SH", "TC", "JR", "OI", "MA", "FG"), "CZC"),
+    (
+        (
+            "SR",
+            "CF",
+            "CJ",
+            "CY",
+            "AP",
+            "LR",
+            "LW",
+            "MR",
+            "ME",
+            "PM",
+            "RI",
+            "RM",
+            "RS",
+            "SF",
+            "SM",
+            "TA",
+            "TM",
+            "UR",
+            "WH",
+            "WS",
+            "WT",
+            "ZC",
+            "GN",
+            "RO",
+            "PF",
+            "PK",
+            "PX",
+            "SA",
+            "SH",
+            "TC",
+            "JR",
+            "OI",
+            "MA",
+            "FG",
+        ),
+        "CZC",
+    ),
     # SHFE 2 字母
-    (("RB", "CU", "AL", "ZN", "AU", "AG", "PB", "NI", "SN", "SS", "BU", "RU",
-      "FU", "SP", "WR", "HC", "FB", "BB", "AO", "AD", "BC", "EC"), "SHF"),
+    (
+        (
+            "RB",
+            "CU",
+            "AL",
+            "ZN",
+            "AU",
+            "AG",
+            "PB",
+            "NI",
+            "SN",
+            "SS",
+            "BU",
+            "RU",
+            "FU",
+            "SP",
+            "WR",
+            "HC",
+            "FB",
+            "BB",
+            "AO",
+            "AD",
+            "BC",
+            "EC",
+        ),
+        "SHF",
+    ),
     # DCE 1 字母
-    (("A", "B", "C", "CS", "M", "Y", "P", "L", "JD", "JM", "I", "J", "R", "RR",
-      "V", "EG", "EB", "PG", "LH"), "DCE"),
+    (("A", "B", "C", "CS", "M", "Y", "P", "L", "JD", "JM", "I", "J", "R", "RR", "V", "EG", "EB", "PG", "LH"), "DCE"),
 ]
 
 
@@ -131,8 +190,7 @@ _FIELD_ALIASES: dict[str, list[str]] = {
     "hold": ["openInterest", "open_interest", "OI", "hold"],
     "settle": ["settle", "settlement"],
     "pre_settle": ["preSettle", "pre_settle", "prev_settle", "preSettlement"],
-    "oi_change": ["openInterestChg", "oi_chg", "oi_change",
-                  "open_interest_change", "openInterestChange"],
+    "oi_change": ["openInterestChg", "oi_chg", "oi_change", "open_interest_change", "openInterestChange"],
     "amount": ["amount", "amt", "turnover"],
     "volume": ["volume", "vol"],
 }
@@ -227,8 +285,7 @@ class IFindSource(BaseFuturesSource):
         try:
             return self.parse_ohlcv(raw, symbol, trace_id=trace_id)
         except Exception as e:  # noqa: BLE001
-            logger.warning("[%s] parse_ohlcv 异常 [%s]: %s",
-                           self.source_name, symbol, e)
+            logger.warning("[%s] parse_ohlcv 异常 [%s]: %s", self.source_name, symbol, e)
             return None
 
     def fetch_ohlcv_or_none(
@@ -245,12 +302,10 @@ class IFindSource(BaseFuturesSource):
         try:
             return self.fetch_ohlcv(symbol, days, trace_id=trace_id)
         except SourceUnavailable as e:
-            logger.warning("[%s] MCP 不可用，字段增强降级 [%s]: %s",
-                           self.source_name, symbol, e)
+            logger.warning("[%s] MCP 不可用，字段增强降级 [%s]: %s", self.source_name, symbol, e)
             return None
         except Exception as e:  # noqa: BLE001
-            logger.warning("[%s] fetch_ohlcv 异常 [%s]: %s",
-                           self.source_name, symbol, e)
+            logger.warning("[%s] fetch_ohlcv 异常 [%s]: %s", self.source_name, symbol, e)
             return None
 
     def parse_ohlcv(
@@ -403,12 +458,10 @@ class IFindSource(BaseFuturesSource):
         try:
             raw = _call_mcp(query)
         except (ConnectionError, TimeoutError) as e:
-            logger.warning("[%s] EDB MCP 不可用 [%s]: %s",
-                           self.source_name, indicator, e)
+            logger.warning("[%s] EDB MCP 不可用 [%s]: %s", self.source_name, indicator, e)
             return None
         except Exception as e:  # noqa: BLE001
-            logger.warning("[%s] EDB MCP 异常 [%s]: %s",
-                           self.source_name, indicator, e)
+            logger.warning("[%s] EDB MCP 异常 [%s]: %s", self.source_name, indicator, e)
             return None
 
         if not isinstance(raw, dict):
@@ -422,17 +475,19 @@ class IFindSource(BaseFuturesSource):
         for row in data:
             if not isinstance(row, dict):
                 continue
-            result.append({
-                "indicator": row.get("indicator", indicator),
-                "indicator_name": row.get("indicator_name", ""),
-                "date": row.get("date", ""),
-                "value": row.get("value"),
-                "unit": row.get("unit", ""),
-                "yoy": row.get("yoy"),
-                "source": self.source_name,
-                "trace_id": trace_id,
-                "fetched_at": pd.Timestamp.now().isoformat(),
-            })
+            result.append(
+                {
+                    "indicator": row.get("indicator", indicator),
+                    "indicator_name": row.get("indicator_name", ""),
+                    "date": row.get("date", ""),
+                    "value": row.get("value"),
+                    "unit": row.get("unit", ""),
+                    "yoy": row.get("yoy"),
+                    "source": self.source_name,
+                    "trace_id": trace_id,
+                    "fetched_at": pd.Timestamp.now().isoformat(),
+                }
+            )
         return result
 
     # ─── EDB 宏观时序（edb_cache 缓存 → miss 拉取 → 幂等写回）──
@@ -464,8 +519,7 @@ class IFindSource(BaseFuturesSource):
         # 1) 查 edb_cache 缓存
         cached = self._read_edb_cache(db_path, indicator, start_date, end_date)
         if cached is not None and not cached.empty:
-            logger.debug("[%s] edb_cache 命中 [%s]: %d 点",
-                         self.source_name, indicator, len(cached))
+            logger.debug("[%s] edb_cache 命中 [%s]: %d 点", self.source_name, indicator, len(cached))
             return cached
 
         # 2) miss → 拉取 EDB
@@ -478,8 +532,7 @@ class IFindSource(BaseFuturesSource):
 
         # 4) 构造 Series
         series = self._rows_to_series(rows)
-        logger.info("[%s] EDB 拉取 [%s]: %d 点，已写 edb_cache",
-                    self.source_name, indicator, len(series))
+        logger.info("[%s] EDB 拉取 [%s]: %d 点，已写 edb_cache", self.source_name, indicator, len(series))
         return series
 
     @staticmethod
@@ -572,9 +625,23 @@ class IFindSource(BaseFuturesSource):
     def _expected_columns() -> list[str]:
         """FTS kline_cache 完整 17 列。"""
         return [
-            "symbol", "period", "date", "open", "high", "low", "close",
-            "volume", "amount", "hold", "settle", "pre_settle", "oi_change",
-            "vwap", "source", "fetched_at", "trace_id",
+            "symbol",
+            "period",
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "hold",
+            "settle",
+            "pre_settle",
+            "oi_change",
+            "vwap",
+            "source",
+            "fetched_at",
+            "trace_id",
         ]
 
 

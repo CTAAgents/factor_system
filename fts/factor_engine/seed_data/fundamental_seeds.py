@@ -49,7 +49,6 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
     # ══════════════════════════════════════════════════════
     # 估值因子 (Value Factors) — 低估值 = 正信号
     # ══════════════════════════════════════════════════════
-
     # ── fund_val_pe: 低 PE 价值因子 ──
     {
         "name": "fund_val_pe",
@@ -58,7 +57,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "pe_ttm is not None and len(pe_ttm) > 0 and np.any(pe_ttm > 0)",
         "expression": "np.tanh(1.0 / (np.maximum(pe_ttm, 0.1) / 15.0))",
         "input_fields": ["pe_ttm"],
-        "theory": 5, "behavioral": 3, "microstructure": 3, "institutional": 5,
+        "theory": 5,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 5,
         "lookback": 1,
     },
     # ── fund_val_pb: 低 PB 价值因子 ──
@@ -69,7 +71,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "pb is not None and len(pb) > 0 and np.any(pb > 0)",
         "expression": "np.tanh(1.0 / (np.maximum(pb, 0.1) / 2.0))",
         "input_fields": ["pb"],
-        "theory": 5, "behavioral": 3, "microstructure": 3, "institutional": 5,
+        "theory": 5,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 5,
         "lookback": 1,
     },
     # ── fund_val_ps: 低 PS 价值因子 ──
@@ -80,7 +85,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "ps_ttm is not None and len(ps_ttm) > 0 and np.any(ps_ttm > 0)",
         "expression": "np.tanh(1.0 / (np.maximum(ps_ttm, 0.1) / 3.0))",
         "input_fields": ["ps_ttm"],
-        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 4,
+        "theory": 4,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 4,
         "lookback": 1,
     },
     # ── fund_val_composite: 综合估值因子 ──
@@ -93,8 +101,7 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
             "    ps_ttm = data['ps_ttm'].values if hasattr(data, 'ps_ttm') else data.get('ps_ttm')"
         ),
         "field_check": (
-            "pe_ttm is not None and pb is not None and ps_ttm is not None "
-            "and len(pe_ttm) > 0 and np.any(pe_ttm > 0)"
+            "pe_ttm is not None and pb is not None and ps_ttm is not None and len(pe_ttm) > 0 and np.any(pe_ttm > 0)"
         ),
         "expression": (
             "0.4 * np.tanh(1.0 / (np.maximum(pe_ttm, 0.1) / 15.0)) + "
@@ -102,14 +109,15 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
             "0.3 * np.tanh(1.0 / (np.maximum(ps_ttm, 0.1) / 3.0))"
         ),
         "input_fields": ["pe_ttm", "pb", "ps_ttm"],
-        "theory": 5, "behavioral": 3, "microstructure": 3, "institutional": 5,
+        "theory": 5,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 5,
         "lookback": 1,
     },
-
     # ══════════════════════════════════════════════════════
     # 质量因子 (Quality Factors) — 高盈利/高质量 = 正信号
     # ══════════════════════════════════════════════════════
-
     # ── fund_quality_roe: ROE 质量因子 ──
     {
         "name": "fund_quality_roe",
@@ -118,7 +126,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "roe is not None and len(roe) > 0",
         "expression": "np.tanh((roe - 0.08) / 0.05)",
         "input_fields": ["roe"],
-        "theory": 5, "behavioral": 3, "microstructure": 3, "institutional": 5,
+        "theory": 5,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 5,
         "lookback": 1,
     },
     # ── fund_quality_roa: ROA 质量因子 ──
@@ -129,7 +140,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "roa is not None and len(roa) > 0",
         "expression": "np.tanh((roa - 0.04) / 0.03)",
         "input_fields": ["roa"],
-        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 4,
+        "theory": 4,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 4,
         "lookback": 1,
     },
     # ── fund_quality_margin: 毛利率质量因子 ──
@@ -140,7 +154,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "gross_margin is not None and len(gross_margin) > 0",
         "expression": "np.tanh((gross_margin - 0.3) / 0.15)",
         "input_fields": ["gross_margin"],
-        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 4,
+        "theory": 4,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 4,
         "lookback": 1,
     },
     # ── fund_quality_eps: EPS 质量因子 ──
@@ -151,7 +168,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "eps is not None and len(eps) > 0",
         "expression": "np.tanh(eps / 2.0)",
         "input_fields": ["eps"],
-        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 4,
+        "theory": 4,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 4,
         "lookback": 1,
     },
     # ── fund_quality_composite: 综合质量因子 ──
@@ -170,14 +190,15 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
             "0.3 * np.tanh((gross_margin - 0.3) / 0.15)"
         ),
         "input_fields": ["roe", "roa", "gross_margin"],
-        "theory": 5, "behavioral": 3, "microstructure": 3, "institutional": 5,
+        "theory": 5,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 5,
         "lookback": 1,
     },
-
     # ══════════════════════════════════════════════════════
     # 成长因子 (Growth Factors) — 高增长 = 正信号
     # ══════════════════════════════════════════════════════
-
     # ── fund_growth_revenue: 营收增长因子 ──
     {
         "name": "fund_growth_revenue",
@@ -188,7 +209,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "revenue_growth is not None and len(revenue_growth) > 0",
         "expression": "np.tanh(revenue_growth / 0.2)",
         "input_fields": ["revenue_growth"],
-        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 4,
+        "theory": 4,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 4,
         "lookback": 1,
     },
     # ── fund_growth_profit: 利润增长因子 ──
@@ -201,7 +225,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "profit_growth is not None and len(profit_growth) > 0",
         "expression": "np.tanh(profit_growth / 0.3)",
         "input_fields": ["profit_growth"],
-        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 4,
+        "theory": 4,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 4,
         "lookback": 1,
     },
     # ── fund_growth_composite: 综合成长因子 ──
@@ -215,14 +242,15 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "revenue_growth is not None and profit_growth is not None and len(revenue_growth) > 0",
         "expression": "0.5 * np.tanh(revenue_growth / 0.2) + 0.5 * np.tanh(profit_growth / 0.3)",
         "input_fields": ["revenue_growth", "profit_growth"],
-        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 4,
+        "theory": 4,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 4,
         "lookback": 1,
     },
-
     # ══════════════════════════════════════════════════════
     # 市值因子 (Size Factors) — 小市值 = 正信号（小市值效应）
     # ══════════════════════════════════════════════════════
-
     # ── fund_size_mcap: 小市值因子 ──
     {
         "name": "fund_size_mcap",
@@ -233,7 +261,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "total_market_cap is not None and len(total_market_cap) > 0 and np.any(total_market_cap > 0)",
         "expression": "np.tanh(1e11 / np.maximum(total_market_cap, 1e7))",
         "input_fields": ["total_market_cap"],
-        "theory": 5, "behavioral": 4, "microstructure": 3, "institutional": 3,
+        "theory": 5,
+        "behavioral": 4,
+        "microstructure": 3,
+        "institutional": 3,
         "lookback": 1,
     },
     # ── fund_size_log: 对数市值因子 ──
@@ -246,14 +277,15 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "total_market_cap is not None and len(total_market_cap) > 0 and np.any(total_market_cap > 0)",
         "expression": "-np.tanh(np.log(np.maximum(total_market_cap, 1e7)) / 5.0)",
         "input_fields": ["total_market_cap"],
-        "theory": 5, "behavioral": 4, "microstructure": 3, "institutional": 3,
+        "theory": 5,
+        "behavioral": 4,
+        "microstructure": 3,
+        "institutional": 3,
         "lookback": 1,
     },
-
     # ══════════════════════════════════════════════════════
     # 换手率因子 (Trading Factors) — 另类数据
     # ══════════════════════════════════════════════════════
-
     # ── fund_turnover: 换手率因子 ──
     {
         "name": "fund_turnover",
@@ -264,7 +296,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "turnover_rate is not None and len(turnover_rate) > 0",
         "expression": "-np.tanh((turnover_rate - 0.03) / 0.02)",
         "input_fields": ["turnover_rate"],
-        "theory": 3, "behavioral": 4, "microstructure": 5, "institutional": 4,
+        "theory": 3,
+        "behavioral": 4,
+        "microstructure": 5,
+        "institutional": 4,
         "lookback": 1,
     },
     # ── fund_turnover_change: 换手率变化因子 ──
@@ -277,14 +312,15 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "turnover_rate is not None and len(turnover_rate) > 5",
         "expression": "np.tanh((turnover_rate - np.mean(turnover_rate[:5])) / 0.01)",
         "input_fields": ["turnover_rate"],
-        "theory": 3, "behavioral": 4, "microstructure": 5, "institutional": 3,
+        "theory": 3,
+        "behavioral": 4,
+        "microstructure": 5,
+        "institutional": 3,
         "lookback": 10,
     },
-
     # ══════════════════════════════════════════════════════
     # 宏观因子 (Macro Factors) — 宏观环境代理
     # ══════════════════════════════════════════════════════
-
     # ── fund_macro_pmi: PMI 景气因子 ──
     {
         "name": "fund_macro_pmi",
@@ -293,7 +329,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "pmi is not None and len(pmi) > 0",
         "expression": "np.tanh((pmi - 50.0) / 3.0)",
         "input_fields": ["pmi"],
-        "theory": 5, "behavioral": 3, "microstructure": 3, "institutional": 5,
+        "theory": 5,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 5,
         "lookback": 1,
     },
     # ── fund_macro_cpi: CPI 通胀因子 ──
@@ -304,7 +343,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
         "field_check": "cpi is not None and len(cpi) > 0",
         "expression": "np.where(cpi < 3.0, np.tanh((3.0 - cpi) / 2.0), -np.tanh((cpi - 3.0) / 2.0))",
         "input_fields": ["cpi"],
-        "theory": 5, "behavioral": 3, "microstructure": 3, "institutional": 5,
+        "theory": 5,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 5,
         "lookback": 1,
     },
     # ── fund_macro_pmi_cpi: PMI+CPI 综合宏观因子 ──
@@ -321,14 +363,15 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
             "0.4 * np.where(cpi < 3.0, np.tanh((3.0 - cpi) / 2.0), -np.tanh((cpi - 3.0) / 2.0))"
         ),
         "input_fields": ["pmi", "cpi"],
-        "theory": 5, "behavioral": 3, "microstructure": 3, "institutional": 5,
+        "theory": 5,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 5,
         "lookback": 1,
     },
-
     # ══════════════════════════════════════════════════════
     # 另类数据因子 (Alternative Data Factors)
     # ══════════════════════════════════════════════════════
-
     # ── fund_alt_val_quality: 估值+质量复合因子（价值质量策略）─
     {
         "name": "fund_alt_val_quality",
@@ -338,12 +381,12 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
             "    roe = data['roe'].values if hasattr(data, 'roe') else data.get('roe')"
         ),
         "field_check": "pe_ttm is not None and roe is not None and len(pe_ttm) > 0 and np.any(pe_ttm > 0)",
-        "expression": (
-            "0.5 * np.tanh(1.0 / (np.maximum(pe_ttm, 0.1) / 15.0)) + "
-            "0.5 * np.tanh((roe - 0.08) / 0.05)"
-        ),
+        "expression": ("0.5 * np.tanh(1.0 / (np.maximum(pe_ttm, 0.1) / 15.0)) + 0.5 * np.tanh((roe - 0.08) / 0.05)"),
         "input_fields": ["pe_ttm", "roe"],
-        "theory": 5, "behavioral": 3, "microstructure": 3, "institutional": 5,
+        "theory": 5,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 5,
         "lookback": 1,
     },
     # ── fund_alt_value_momentum: 价值+动量复合因子 ──
@@ -360,7 +403,10 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
             "0.5 * np.tanh((close - np.roll(close, 20)) / np.maximum(np.roll(close, 20), 1e-10) / 0.05)"
         ),
         "input_fields": ["pe_ttm", "close"],
-        "theory": 4, "behavioral": 4, "microstructure": 4, "institutional": 4,
+        "theory": 4,
+        "behavioral": 4,
+        "microstructure": 4,
+        "institutional": 4,
         "lookback": 25,
     },
     # ── fund_alt_quality_growth: 质量+成长复合因子 ──
@@ -372,12 +418,12 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
             "    revenue_growth = data['revenue_growth'].values if hasattr(data, 'revenue_growth') else data.get('revenue_growth')"
         ),
         "field_check": "roe is not None and revenue_growth is not None and len(roe) > 0",
-        "expression": (
-            "0.5 * np.tanh((roe - 0.08) / 0.05) + "
-            "0.5 * np.tanh(revenue_growth / 0.2)"
-        ),
+        "expression": ("0.5 * np.tanh((roe - 0.08) / 0.05) + 0.5 * np.tanh(revenue_growth / 0.2)"),
         "input_fields": ["roe", "revenue_growth"],
-        "theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 4,
+        "theory": 4,
+        "behavioral": 3,
+        "microstructure": 3,
+        "institutional": 4,
         "lookback": 1,
     },
     # ── fund_alt_small_value: 小盘价值复合因子 ──
@@ -394,13 +440,17 @@ FUNDAMENTAL_DEFINITIONS: list[dict[str, Any]] = [
             "0.5 * np.tanh(1.0 / (np.maximum(pe_ttm, 0.1) / 15.0))"
         ),
         "input_fields": ["total_market_cap", "pe_ttm"],
-        "theory": 5, "behavioral": 4, "microstructure": 3, "institutional": 3,
+        "theory": 5,
+        "behavioral": 4,
+        "microstructure": 3,
+        "institutional": 3,
         "lookback": 1,
     },
 ]
 
 
 # ─── 因子计数 ─────────────────────────────────────────────
+
 
 def get_fundamental_seed_count() -> int:
     """返回基本面种子因子总数。"""

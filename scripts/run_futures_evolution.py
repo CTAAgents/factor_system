@@ -11,11 +11,11 @@ Usage:
     - 字段: symbol, date, open, high, low, close, volume, amount
     - 注意: 无 hold(持仓量) 字段，依赖 hold 的因子会自动降级
 """
+
 from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import duckdb
@@ -48,9 +48,8 @@ def load_futures_panel(
 
     # 获取所有期货品种（数据库中存储的是不带0后缀的品种代码）
     symbols = [
-        r[0] for r in con.execute(
-            "SELECT DISTINCT symbol FROM kline_cache WHERE period='daily' ORDER BY symbol"
-        ).fetchall()
+        r[0]
+        for r in con.execute("SELECT DISTINCT symbol FROM kline_cache WHERE period='daily' ORDER BY symbol").fetchall()
     ]
     print(f"[data] 共 {len(symbols)} 个可用品种")
 
@@ -82,6 +81,7 @@ def load_futures_panel(
 
     # 找到至少有 min_symbols 个品种共有的日期（而非要求全部品种）
     from collections import Counter
+
     date_counts = Counter()
     for sym, df in panel.items():
         for d in df.index:

@@ -21,19 +21,23 @@ from fts.factor_engine.evolution_loop import EvolutionLoop, UCT_EXPLORATION_C
 
 # ─── Fixtures ──────────────────────────────────────────────
 
+
 @pytest.fixture
 def sample_data() -> pd.DataFrame:
     """生成合成 OHLCV 数据。"""
     np.random.seed(42)
     dates = pd.date_range("2024-01-01", periods=100, freq="D")
     close = 100 + np.cumsum(np.random.randn(100) * 0.5)
-    return pd.DataFrame({
-        "open": close + np.random.randn(100) * 0.1,
-        "high": close + np.abs(np.random.randn(100)) * 0.3,
-        "low": close - np.abs(np.random.randn(100)) * 0.3,
-        "close": close,
-        "volume": np.random.randint(1000, 10000, 100).astype(float),
-    }, index=dates)
+    return pd.DataFrame(
+        {
+            "open": close + np.random.randn(100) * 0.1,
+            "high": close + np.abs(np.random.randn(100)) * 0.3,
+            "low": close - np.abs(np.random.randn(100)) * 0.3,
+            "close": close,
+            "volume": np.random.randint(1000, 10000, 100).astype(float),
+        },
+        index=dates,
+    )
 
 
 @pytest.fixture
@@ -102,20 +106,17 @@ def loop(sample_data: pd.DataFrame, sample_returns: np.ndarray) -> EvolutionLoop
 
 # ─── UCT 选择测试 ──────────────────────────────────────────
 
+
 class TestUCTSelection:
     """UCT 父因子选择逻辑测试。"""
 
-    def test_uct_selects_unvisited_first(
-        self, loop: EvolutionLoop, parent_factors: list[FactorProgram]
-    ):
+    def test_uct_selects_unvisited_first(self, loop: EvolutionLoop, parent_factors: list[FactorProgram]):
         """UCT 应优先选择未访问的父因子。"""
         # 所有父因子都未访问 → 应返回第一个未访问的
         selected = loop._select_parent_uct(parent_factors)
         assert selected["factor_id"] == "fct_aaaaaaaa"
 
-    def test_uct_selects_higher_reward(
-        self, loop: EvolutionLoop, parent_factors: list[FactorProgram]
-    ):
+    def test_uct_selects_higher_reward(self, loop: EvolutionLoop, parent_factors: list[FactorProgram]):
         """UCT 应更倾向选择高奖励的父因子。"""
         # 先给每个父因子一些访问记录
         # parent_a: IC=0.5 (高奖励)
@@ -135,9 +136,7 @@ class TestUCTSelection:
         assert counts.get("fct_aaaaaaaa", 0) > counts.get("fct_bbbbbbbb", 0)
         assert counts.get("fct_aaaaaaaa", 0) > counts.get("fct_cccccccc", 0)
 
-    def test_uct_explores_with_high_c(
-        self, loop: EvolutionLoop, parent_factors: list[FactorProgram]
-    ):
+    def test_uct_explores_with_high_c(self, loop: EvolutionLoop, parent_factors: list[FactorProgram]):
         """高探索常数 c 下，访问少的父因子获得更多机会。"""
         # parent_a: 访问 10 次，IC=0.5
         # parent_b: 访问 1 次，IC=0.1
@@ -157,9 +156,7 @@ class TestUCTSelection:
         # parent_b 的 UCB 应该更高（探索奖励）
         assert ucb_b > ucb_a, f"UCB: parent_a={ucb_a:.4f}, parent_b={ucb_b:.4f}"
 
-    def test_uct_with_single_parent(
-        self, loop: EvolutionLoop, parent_factors: list[FactorProgram]
-    ):
+    def test_uct_with_single_parent(self, loop: EvolutionLoop, parent_factors: list[FactorProgram]):
         """单个父因子时，UCT 始终返回该因子。"""
         single = [parent_factors[0]]
         for _ in range(10):
@@ -169,12 +166,11 @@ class TestUCTSelection:
 
 # ─── UCT 统计更新测试 ──────────────────────────────────────
 
+
 class TestUCTStatsUpdate:
     """UCT 统计更新逻辑测试。"""
 
-    def test_update_uct_stats_success(
-        self, loop: EvolutionLoop, parent_factors: list[FactorProgram]
-    ):
+    def test_update_uct_stats_success(self, loop: EvolutionLoop, parent_factors: list[FactorProgram]):
         """通过的因子应更新 UCT 统计，奖励 = abs(IC)。"""
         parent = parent_factors[0]
         evaluation = FactorEvaluation(
@@ -190,9 +186,7 @@ class TestUCTStatsUpdate:
         assert stats["visits"] == 1
         assert stats["total_reward"] == 0.45
 
-    def test_update_uct_stats_failure(
-        self, loop: EvolutionLoop, parent_factors: list[FactorProgram]
-    ):
+    def test_update_uct_stats_failure(self, loop: EvolutionLoop, parent_factors: list[FactorProgram]):
         """失败的因子应更新 UCT 统计，奖励 = 0。"""
         parent = parent_factors[0]
         evaluation = FactorEvaluation(
@@ -208,9 +202,7 @@ class TestUCTStatsUpdate:
         assert stats["visits"] == 1
         assert stats["total_reward"] == 0.0
 
-    def test_update_uct_stats_accumulates(
-        self, loop: EvolutionLoop, parent_factors: list[FactorProgram]
-    ):
+    def test_update_uct_stats_accumulates(self, loop: EvolutionLoop, parent_factors: list[FactorProgram]):
         """多次更新应累加 visits 和 total_reward。"""
         parent = parent_factors[0]
         for ic in [0.3, 0.4, 0.5]:
@@ -227,9 +219,7 @@ class TestUCTStatsUpdate:
         assert stats["visits"] == 3
         assert stats["total_reward"] == pytest.approx(1.2)
 
-    def test_update_uct_stats_negative_ic(
-        self, loop: EvolutionLoop, parent_factors: list[FactorProgram]
-    ):
+    def test_update_uct_stats_negative_ic(self, loop: EvolutionLoop, parent_factors: list[FactorProgram]):
         """负 IC 的通过因子，奖励 = abs(IC)。"""
         parent = parent_factors[0]
         evaluation = FactorEvaluation(
@@ -246,6 +236,7 @@ class TestUCTStatsUpdate:
 
 
 # ─── UCT 数学正确性测试 ────────────────────────────────────
+
 
 class TestUCTMath:
     """UCT 公式数学正确性测试。"""
@@ -264,10 +255,7 @@ class TestUCTMath:
         ucb_b = 0.3 + c * math.sqrt(math.log(total_visits) / 5)
 
         # parent_b 访问少，探索项更大
-        assert ucb_b > ucb_a, (
-            f"访问少的父因子应获得更高探索奖励: "
-            f"UCB_a={ucb_a:.4f}, UCB_b={ucb_b:.4f}"
-        )
+        assert ucb_b > ucb_a, f"访问少的父因子应获得更高探索奖励: UCB_a={ucb_a:.4f}, UCB_b={ucb_b:.4f}"
 
     def test_uct_exploration_term_zero_visits(self):
         """visits=0 时探索项应为无穷大（优先探索）。"""

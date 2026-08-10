@@ -28,12 +28,13 @@ HARNESS §契约优先: 每个因子符合 FactorProgram 接口。
 
 版本: v2.0.0
 """
+
 from __future__ import annotations
 
 import logging
 from typing import Any, Optional
 
-from .contracts import EconomicLogic, FactorSignature
+from .contracts import EconomicLogic, FactorProgram, FactorSignature
 from .factor_program import create_factor_program
 
 
@@ -1635,569 +1636,956 @@ def factor_program(data, params):
 # 总计: 57 个子因子（13 大因子家族）
 
 _FUTURES_FULL_DEFINITIONS: list[dict[str, Any]] = [
-
     # ─── 家族 1: 动量因子家族 (5 个) ────────────────────
     {
         "name": "fut_xsmom",
         "code": _FUT_XSMOM_CODE,
         "params": {"lookback": 20, "holding": 1},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4,
-            narrative="截面动量(XSMOM)：做多过去收益高的品种，做空过去收益低的品种。期货月频动量效应显著。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=4,
+            narrative="截面动量(XSMOM)：做多过去收益高的品种，做空过去收益低的品种。期货月频动量效应显著。",
+        ),
     },
     {
         "name": "fut_tsmom",
         "code": _FUT_TSMOM_CODE,
         "params": {"lookback_months": 3, "skip_days": 20},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=85),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4,
-            narrative="时序动量(TSMOM)：资产自身历史收益为正则做多，为负则做空。AQR 跨资产58种资产25年数据验证。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=4,
+            narrative="时序动量(TSMOM)：资产自身历史收益为正则做多，为负则做空。AQR 跨资产58种资产25年数据验证。",
+        ),
     },
     {
         "name": "fut_short_reversal",
         "code": _FUT_SHORT_REVERSAL_CODE,
         "params": {"window": 5},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-        "economic_logic": EconomicLogic(theory=4, behavioral=4, microstructure=3, institutional=3,
-            narrative="短期反转：3-5日价格反转效应，做多跌多的做空涨多的。与月频动量共存。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=4,
+            microstructure=3,
+            institutional=3,
+            narrative="短期反转：3-5日价格反转效应，做多跌多的做空涨多的。与月频动量共存。",
+        ),
     },
     {
         "name": "fut_composite_momentum",
         "code": _FUT_COMPOSITE_MOMENTUM_CODE,
         "params": {"lookback": 60, "holding": 5},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=70),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4,
-            narrative="复合动量：XSMOM+TSMOM 结合，同时考虑截面排序和方向。中信最优参数(J=243,K=10)年化9.61%夏普0.95。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=4,
+            narrative="复合动量：XSMOM+TSMOM 结合，同时考虑截面排序和方向。中信最优参数(J=243,K=10)年化9.61%夏普0.95。",
+        ),
     },
     {
         "name": "fut_basis_momentum",
         "code": _FUT_BASIS_MOMENTUM_CODE,
         "params": {"lookback": 243, "holding": 3},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=250),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=4,
-            narrative="基差动量：期限结构同比变化率，剔除季节性影响。中信最优(J=243,K=3)年化6.89%夏普0.81。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=4,
+            narrative="基差动量：期限结构同比变化率，剔除季节性影响。中信最优(J=243,K=3)年化6.89%夏普0.81。",
+        ),
     },
-
     # ─── 家族 2: 期限结构因子家族 (3 个) ────────────────
     {
         "name": "fut_roll_yield_carry",
         "code": _FUT_ROLL_YIELD_FULL_CODE,
         "params": {"lookback": 20, "holding": 15},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=40),
-        "economic_logic": EconomicLogic(theory=5, behavioral=3, microstructure=4, institutional=5,
-            narrative="展期收益(Roll Yield/Carry)：Back结构做多获得展期收益，Contango做空。华泰年化9.63%夏普1.94。"),
+        "economic_logic": EconomicLogic(
+            theory=5,
+            behavioral=3,
+            microstructure=4,
+            institutional=5,
+            narrative="展期收益(Roll Yield/Carry)：Back结构做多获得展期收益，Contango做空。华泰年化9.63%夏普1.94。",
+        ),
     },
     {
         "name": "fut_stable_term_structure",
         "code": _FUT_STABLE_TERM_STRUCTURE_CODE,
         "params": {"lookback": 5, "holding": 15},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=4,
-            narrative="稳定样本期限结构：OLS回归判断期限结构稳定性。稳定样本回看5日调仓15日年化12.61%夏普1.19。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=4,
+            narrative="稳定样本期限结构：OLS回归判断期限结构稳定性。稳定样本回看5日调仓15日年化12.61%夏普1.19。",
+        ),
     },
     {
         "name": "fut_basis_factor",
         "code": _FUT_BASIS_FACTOR_CODE,
         "params": {"window": 10},
-        "signature": FactorSignature(input_fields=["close", "settle"], output_type="signal", frequency="daily", lookback=15),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=4,
-            narrative="基差因子：用 close/settle 偏离近似基差，无结算价时用 MA 比替代。"),
+        "signature": FactorSignature(
+            input_fields=["close", "settle"], output_type="signal", frequency="daily", lookback=15
+        ),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=4,
+            narrative="基差因子：用 close/settle 偏离近似基差，无结算价时用 MA 比替代。",
+        ),
     },
-
     # ─── 家族 3: 持仓/资金流因子家族 (3 个) ─────────────
     {
         "name": "fut_open_interest_full",
         "code": _FUT_OPEN_INTEREST_FULL_CODE,
         "params": {"lookback": 5},
-        "signature": FactorSignature(input_fields=["close", "hold"], output_type="signal", frequency="daily", lookback=10),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=5, institutional=4,
-            narrative="持仓量因子：持仓增加+价格上涨=多头主导，持仓增加+价格下跌=空头主导。期货特有持仓量因子。"),
+        "signature": FactorSignature(
+            input_fields=["close", "hold"], output_type="signal", frequency="daily", lookback=10
+        ),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=5,
+            institutional=4,
+            narrative="持仓量因子：持仓增加+价格上涨=多头主导，持仓增加+价格下跌=空头主导。期货特有持仓量因子。",
+        ),
     },
     {
         "name": "fut_warehouse_receipt",
         "code": _FUT_WAREHOUSE_RECEIPT_CODE,
         "params": {"lookback": 3, "holding": 1},
-        "signature": FactorSignature(input_fields=["close", "hold"], output_type="signal", frequency="daily", lookback=8),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=4,
-            narrative="仓单因子：仓单增加=现货供应增加=利空。中信最优(J=3,K=1)年化10.10%夏普1.48。需AKShare仓单数据注入。"),
+        "signature": FactorSignature(
+            input_fields=["close", "hold"], output_type="signal", frequency="daily", lookback=8
+        ),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=4,
+            narrative="仓单因子：仓单增加=现货供应增加=利空。中信最优(J=3,K=1)年化10.10%夏普1.48。需AKShare仓单数据注入。",
+        ),
     },
     {
         "name": "fut_hedge_pressure",
         "code": _FUT_HEDGE_PRESSURE_CODE,
         "params": {"lookback": 243},
-        "signature": FactorSignature(input_fields=["close", "hold"], output_type="signal", frequency="daily", lookback=248),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=4,
-            narrative="对冲压力因子：套保者增加空头(持仓增+价格跌)=对冲压力增大。中信年化6.0%夏普0.90。"),
+        "signature": FactorSignature(
+            input_fields=["close", "hold"], output_type="signal", frequency="daily", lookback=248
+        ),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=4,
+            narrative="对冲压力因子：套保者增加空头(持仓增+价格跌)=对冲压力增大。中信年化6.0%夏普0.90。",
+        ),
     },
-
     # ─── 家族 4: 流动性因子家族 (3 个) ──────────────────
     {
         "name": "fut_turnover",
         "code": _FUT_TURNOVER_CODE,
         "params": {"window": 20},
-        "signature": FactorSignature(input_fields=["close", "volume", "hold"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=3,
-            narrative="换手率因子：成交量/持仓量。2022年后流动性因子表现较好。"),
+        "signature": FactorSignature(
+            input_fields=["close", "volume", "hold"], output_type="signal", frequency="daily", lookback=25
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=3,
+            narrative="换手率因子：成交量/持仓量。2022年后流动性因子表现较好。",
+        ),
     },
     {
         "name": "fut_bid_ask_spread",
         "code": _FUT_BID_ASK_SPREAD_CODE,
         "params": {"window": 20},
-        "signature": FactorSignature(input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=4, institutional=3,
-            narrative="买卖价差因子：用(high-low)/close近似价差。价差扩大=流动性恶化=做空。"),
+        "signature": FactorSignature(
+            input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=25
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=4,
+            institutional=3,
+            narrative="买卖价差因子：用(high-low)/close近似价差。价差扩大=流动性恶化=做空。",
+        ),
     },
     {
         "name": "fut_amihud_full",
         "code": _FUT_AMIHUD_FULL_CODE,
         "params": {"window": 20},
-        "signature": FactorSignature(input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=4, institutional=3,
-            narrative="Amihud非流动性因子：|收益率|/成交额。非流动性高=难交易=流动性溢价做空。"),
+        "signature": FactorSignature(
+            input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=25
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=4,
+            institutional=3,
+            narrative="Amihud非流动性因子：|收益率|/成交额。非流动性高=难交易=流动性溢价做空。",
+        ),
     },
-
     # ─── 家族 5: 偏度/峰度/高阶矩因子家族 (3 个) ───────
     {
         "name": "fut_skewness_full",
         "code": _FUT_SKEWNESS_FULL_CODE,
         "params": {"window": 20},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=3,
-            narrative="偏度因子：负偏度品种存在风险溢价。期货尾部风险大，负偏度需风险溢价补偿。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=3,
+            narrative="偏度因子：负偏度品种存在风险溢价。期货尾部风险大，负偏度需风险溢价补偿。",
+        ),
     },
     {
         "name": "fut_upside_skewness",
         "code": _FUT_UP_SKEWNESS_CODE,
         "params": {"window": 20},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=3,
-            narrative="上行偏度因子：仅计算正收益的偏度。中信回看20日持仓4日年化5.5%夏普0.90。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="上行偏度因子：仅计算正收益的偏度。中信回看20日持仓4日年化5.5%夏普0.90。",
+        ),
     },
     {
         "name": "fut_kurtosis",
         "code": _FUT_KURTOSIS_CODE,
         "params": {"window": 14},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=20),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=3,
-            narrative="峰度因子：高峰度=极端风险=做空。高阶矩因子中表现最优，中信回看14日持仓2日年化6.0%夏普0.95。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=3,
+            narrative="峰度因子：高峰度=极端风险=做空。高阶矩因子中表现最优，中信回看14日持仓2日年化6.0%夏普0.95。",
+        ),
     },
-
     # ─── 家族 6: 波动率因子家族 (2 个) ──────────────────
     {
         "name": "fut_cv",
         "code": _FUT_CV_CODE,
         "params": {"window": 5},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=4,
-            narrative="变异系数因子(CV)：标准差/均值。中信回看5日年化7.5%夏普0.98。CV高=波动大=均值回归做空。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=4,
+            narrative="变异系数因子(CV)：标准差/均值。中信回看5日年化7.5%夏普0.98。CV高=波动大=均值回归做空。",
+        ),
     },
     {
         "name": "fut_downside_volatility",
         "code": _FUT_DOWN_VOL_CODE,
         "params": {"window": 20},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=4,
-            narrative="实际下行波动率因子：仅计算负收益部分的波动率。华泰期货，回归系数<0。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=4,
+            narrative="实际下行波动率因子：仅计算负收益部分的波动率。华泰期货，回归系数<0。",
+        ),
     },
-
     # ─── 家族 7: 基本面因子家族 (4 个) ──────────────────
     {
         "name": "fut_volume_price_corr_full",
         "code": _FUT_VOLUME_PRICE_CORR_FULL_CODE,
         "params": {"window": 63},
-        "signature": FactorSignature(input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=68),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=4,
-            narrative="量价相关性因子：筛选上涨放量下跌缩量的品种。中信回看63日年化7%夏普1.1。"),
+        "signature": FactorSignature(
+            input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=68
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=4,
+            narrative="量价相关性因子：筛选上涨放量下跌缩量的品种。中信回看63日年化7%夏普1.1。",
+        ),
     },
     {
         "name": "fut_trend_strength",
         "code": _FUT_TREND_STRENGTH_CODE,
         "params": {"window": 243},
-        "signature": FactorSignature(input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=248),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4,
-            narrative="趋势强度因子：位移/路程比，衡量价格趋势流畅性。中信回看243日年化7%夏普0.9。"),
+        "signature": FactorSignature(
+            input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=248
+        ),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=4,
+            narrative="趋势强度因子：位移/路程比，衡量价格趋势流畅性。中信回看243日年化7%夏普0.9。",
+        ),
     },
     {
         "name": "fut_amplitude",
         "code": _FUT_AMPLITUDE_CODE,
         "params": {"window": 63},
-        "signature": FactorSignature(input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=68),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=4,
-            narrative="振幅因子：(high-low)/close 滚动均值。振幅收缩=突破前兆做多，振幅扩大=见顶做空。中信年化9.7%夏普1.3。"),
+        "signature": FactorSignature(
+            input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=68
+        ),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=4,
+            narrative="振幅因子：(high-low)/close 滚动均值。振幅收缩=突破前兆做多，振幅扩大=见顶做空。中信年化9.7%夏普1.3。",
+        ),
     },
     {
         "name": "fut_mobile_big_data",
         "code": _FUT_MOBILE_BIG_DATA_CODE,
         "params": {"window": 20},
-        "signature": FactorSignature(input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=3, institutional=3,
-            narrative="移动大数据因子(近似版)：用量价加速度替代人流/物流数据。东证原版样本外夏普3.19。"),
+        "signature": FactorSignature(
+            input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=25
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=3,
+            institutional=3,
+            narrative="移动大数据因子(近似版)：用量价加速度替代人流/物流数据。东证原版样本外夏普3.19。",
+        ),
     },
-
     # ─── 家族 8: 拥挤度因子家族 (6 个) ──────────────────
     {
         "name": "fut_crowd_volume",
         "code": _FUT_CROWD_VOLUME_CODE,
         "params": {"window": 60},
         "signature": FactorSignature(input_fields=["volume"], output_type="signal", frequency="daily", lookback=65),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=4,
-            narrative="成交额拥挤度：成交量 vs 3年90%分位数。成交拥挤=过热=做空。广发6维度拥挤度之一。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=4,
+            narrative="成交额拥挤度：成交量 vs 3年90%分位数。成交拥挤=过热=做空。广发6维度拥挤度之一。",
+        ),
     },
     {
         "name": "fut_crowd_volatility",
         "code": _FUT_CROWD_VOLATILITY_CODE,
         "params": {"window": 60},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=65),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=4,
-            narrative="波动拥挤度：Beta 拥挤度，波动率 vs 历史90%分位数。广发6维度拥挤度之二。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=4,
+            narrative="波动拥挤度：Beta 拥挤度，波动率 vs 历史90%分位数。广发6维度拥挤度之二。",
+        ),
     },
     {
         "name": "fut_crowd_turnover",
         "code": _FUT_CROWD_TURNOVER_CODE,
         "params": {"window": 60},
-        "signature": FactorSignature(input_fields=["volume", "hold"], output_type="signal", frequency="daily", lookback=65),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=4,
-            narrative="换手率拥挤度：换手率 vs 历史90%分位数。广发行业拥挤度6信号之一。"),
+        "signature": FactorSignature(
+            input_fields=["volume", "hold"], output_type="signal", frequency="daily", lookback=65
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=4,
+            narrative="换手率拥挤度：换手率 vs 历史90%分位数。广发行业拥挤度6信号之一。",
+        ),
     },
     {
         "name": "fut_crowd_bias_volume",
         "code": _FUT_CROWD_BIAS_VOLUME_CODE,
         "params": {"window": 60},
         "signature": FactorSignature(input_fields=["volume"], output_type="signal", frequency="daily", lookback=65),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=4,
-            narrative="成交量乖离率拥挤度：成交量乖离率 vs 历史90%分位数。广发行业拥挤度6信号之一。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=4,
+            narrative="成交量乖离率拥挤度：成交量乖离率 vs 历史90%分位数。广发行业拥挤度6信号之一。",
+        ),
     },
     {
         "name": "fut_crowd_bias_amount",
         "code": _FUT_CROWD_BIAS_AMOUNT_CODE,
         "params": {"window": 60},
-        "signature": FactorSignature(input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=65),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=4,
-            narrative="成交额乖离率拥挤度：成交额乖离率 vs 历史90%分位数。广发行业拥挤度6信号之一。"),
+        "signature": FactorSignature(
+            input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=65
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=4,
+            narrative="成交额乖离率拥挤度：成交额乖离率 vs 历史90%分位数。广发行业拥挤度6信号之一。",
+        ),
     },
     {
         "name": "fut_crowd_composite",
         "code": _FUT_CROWD_COMPOSITE_CODE,
         "params": {"window": 60},
-        "signature": FactorSignature(input_fields=["close", "volume", "hold"], output_type="signal", frequency="daily", lookback=65),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=4,
-            narrative="复合拥挤度因子：3维度(成交量/换手率/成交额)中≥2个拥挤=综合拥挤。广发行业最优参数。"),
+        "signature": FactorSignature(
+            input_fields=["close", "volume", "hold"], output_type="signal", frequency="daily", lookback=65
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=4,
+            narrative="复合拥挤度因子：3维度(成交量/换手率/成交额)中≥2个拥挤=综合拥挤。广发行业最优参数。",
+        ),
     },
-
     # ─── 家族 9: Alpha/量价行为因子家族 (4 个) ──────────
     {
         "name": "fut_time_series_regression",
         "code": _FUT_TIME_SERIES_REGRESSION_CODE,
         "params": {"lookback": 60, "holding": 5},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=70),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4,
-            narrative="时序回归因子：close~time OLS 斜率，综合考虑趋势强度和流畅性(R²加权)。中信年化8.90%夏普1.34。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=4,
+            narrative="时序回归因子：close~time OLS 斜率，综合考虑趋势强度和流畅性(R²加权)。中信年化8.90%夏普1.34。",
+        ),
     },
     {
         "name": "fut_bias",
         "code": _FUT_BIAS_CODE,
         "params": {"window": 20},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=4, microstructure=3, institutional=3,
-            narrative="乖离率因子(BIAS)：价格偏离均线的程度。正乖离=超买做空，负乖离=超卖做多。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=4,
+            microstructure=3,
+            institutional=3,
+            narrative="乖离率因子(BIAS)：价格偏离均线的程度。正乖离=超买做空，负乖离=超卖做多。",
+        ),
     },
     {
         "name": "fut_gp_alpha1",
         "code": _FUT_GP_ALPHA1_CODE,
         "params": {},
-        "signature": FactorSignature(input_fields=["close", "high", "low", "volume"], output_type="signal", frequency="daily", lookback=30),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=3,
-            narrative="GP Alpha 1：遗传规划挖掘的截面alpha。近似(close-vwap)*volume/(high-low)。夏普1.72年化9.32%。"),
+        "signature": FactorSignature(
+            input_fields=["close", "high", "low", "volume"], output_type="signal", frequency="daily", lookback=30
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=3,
+            narrative="GP Alpha 1：遗传规划挖掘的截面alpha。近似(close-vwap)*volume/(high-low)。夏普1.72年化9.32%。",
+        ),
     },
     {
         "name": "fut_ht_alpha",
         "code": _FUT_HT_ALPHA_CODE,
         "params": {"window": 20},
-        "signature": FactorSignature(input_fields=["close", "high", "low", "volume"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=3,
-            narrative="华泰Alpha因子量价行为：日内强度+量价趋势+动量加速度三维组合。华泰期货Alpha因子。"),
+        "signature": FactorSignature(
+            input_fields=["close", "high", "low", "volume"], output_type="signal", frequency="daily", lookback=25
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=3,
+            narrative="华泰Alpha因子量价行为：日内强度+量价趋势+动量加速度三维组合。华泰期货Alpha因子。",
+        ),
     },
-
     # ─── 家族 10: 高频因子家族 — 日频近似 (6 个) ───────
     {
         "name": "fut_hf_quote_imbalance",
         "code": _FUT_HF_QUOTE_IMBALANCE_CODE,
         "params": {"window": 10},
-        "signature": FactorSignature(input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=15),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=5, institutional=2,
-            narrative="高频报价不平衡因子(日频近似)：(high-close)/(close-low)近似报价不平衡。华泰最强高频因子之一。"),
+        "signature": FactorSignature(
+            input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=15
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=5,
+            institutional=2,
+            narrative="高频报价不平衡因子(日频近似)：(high-close)/(close-low)近似报价不平衡。华泰最强高频因子之一。",
+        ),
     },
     {
         "name": "fut_hf_trade_imbalance",
         "code": _FUT_HF_TRADE_IMBALANCE_CODE,
         "params": {"window": 10},
-        "signature": FactorSignature(input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=15),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=5, institutional=2,
-            narrative="高频成交不平衡因子(日频近似)：价格方向×成交量近似成交不平衡。华泰可复现基础高频因子。"),
+        "signature": FactorSignature(
+            input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=15
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=5,
+            institutional=2,
+            narrative="高频成交不平衡因子(日频近似)：价格方向×成交量近似成交不平衡。华泰可复现基础高频因子。",
+        ),
     },
     {
         "name": "fut_hf_historical_return",
         "code": _FUT_HF_HISTORICAL_RETURN_CODE,
         "params": {"window": 5},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=2,
-            narrative="高频历史收益因子(日频近似)：短周期收益率滚动均值。华泰可复现基础高频因子。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=2,
+            narrative="高频历史收益因子(日频近似)：短周期收益率滚动均值。华泰可复现基础高频因子。",
+        ),
     },
     {
         "name": "fut_hf_turnover",
         "code": _FUT_HF_TURNOVER_CODE,
         "params": {"window": 5},
-        "signature": FactorSignature(input_fields=["volume", "hold"], output_type="signal", frequency="daily", lookback=10),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=2,
-            narrative="高频换手率因子(日频近似)：volume/hold 短周期滚动。华泰可复现基础高频因子。"),
+        "signature": FactorSignature(
+            input_fields=["volume", "hold"], output_type="signal", frequency="daily", lookback=10
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=2,
+            narrative="高频换手率因子(日频近似)：volume/hold 短周期滚动。华泰可复现基础高频因子。",
+        ),
     },
     {
         "name": "fut_hf_spread",
         "code": _FUT_HF_SPREAD_CODE,
         "params": {"window": 5},
-        "signature": FactorSignature(input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=10),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=4, institutional=2,
-            narrative="高频报价价差因子(日频近似)：(high-low)/close 短周期滚动。华泰可复现基础高频因子。"),
+        "signature": FactorSignature(
+            input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=10
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=4,
+            institutional=2,
+            narrative="高频报价价差因子(日频近似)：(high-low)/close 短周期滚动。华泰可复现基础高频因子。",
+        ),
     },
     {
         "name": "fut_hf_down_vol",
         "code": _FUT_HF_DOWN_VOL_CODE,
         "params": {"window": 5},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=4, institutional=2,
-            narrative="高频实际下行波动率因子(日频近似)：仅负收益部分波动率。华泰自研130+最强因子之一。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=4,
+            institutional=2,
+            narrative="高频实际下行波动率因子(日频近似)：仅负收益部分波动率。华泰自研130+最强因子之一。",
+        ),
     },
-
     # ─── 家族 11: 期权隐含信息因子家族 — 日频近似 (3 个) ─
     {
         "name": "fut_option_vol_term",
         "code": _FUT_OPTION_VOL_TERM_CODE,
         "params": {"window": 20},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=3,
-            narrative="波动率期限结构因子(日频近似)：短波动率-长波动率。华泰当月IV-次月IV年化23.1%。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=3,
+            narrative="波动率期限结构因子(日频近似)：短波动率-长波动率。华泰当月IV-次月IV年化23.1%。",
+        ),
     },
     {
         "name": "fut_option_skew",
         "code": _FUT_OPTION_SKEW_CODE,
         "params": {"window": 20},
-        "signature": FactorSignature(input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=3,
-            narrative="IV偏斜因子(日频近似)：上行波动率/下行波动率比。东证47个期权指标中SKEW效果较好。"),
+        "signature": FactorSignature(
+            input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=25
+        ),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=3,
+            narrative="IV偏斜因子(日频近似)：上行波动率/下行波动率比。东证47个期权指标中SKEW效果较好。",
+        ),
     },
     {
         "name": "fut_option_pcr",
         "code": _FUT_OPTION_PCR_CODE,
         "params": {"window": 10},
-        "signature": FactorSignature(input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=15),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=3,
-            narrative="PCR类因子(日频近似)：下跌日成交量/上涨日成交量比。东证PCR近月优于远月。"),
+        "signature": FactorSignature(
+            input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=15
+        ),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=3,
+            narrative="PCR类因子(日频近似)：下跌日成交量/上涨日成交量比。东证PCR近月优于远月。",
+        ),
     },
-
     # ─── 家族 12: 市场环境因子家族 (8 个) ──────────────
     {
         "name": "fut_macro_cpi",
         "code": _FUT_MACRO_CPI_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-        "economic_logic": EconomicLogic(theory=5, behavioral=3, microstructure=2, institutional=5,
-            narrative="CPI宏观环境因子：CPI上升=通胀压力=商品承压做空。需外部注入cpi数据或降级为趋势近似。"),
+        "economic_logic": EconomicLogic(
+            theory=5,
+            behavioral=3,
+            microstructure=2,
+            institutional=5,
+            narrative="CPI宏观环境因子：CPI上升=通胀压力=商品承压做空。需外部注入cpi数据或降级为趋势近似。",
+        ),
     },
     {
         "name": "fut_macro_interest_rate",
         "code": _FUT_MACRO_INTEREST_RATE_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-        "economic_logic": EconomicLogic(theory=5, behavioral=3, microstructure=2, institutional=5,
-            narrative="利率宏观环境因子：利率上升=融资成本增加=商品承压做空。需外部注入rate数据。"),
+        "economic_logic": EconomicLogic(
+            theory=5,
+            behavioral=3,
+            microstructure=2,
+            institutional=5,
+            narrative="利率宏观环境因子：利率上升=融资成本增加=商品承压做空。需外部注入rate数据。",
+        ),
     },
     {
         "name": "fut_macro_export",
         "code": _FUT_MACRO_EXPORT_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-        "economic_logic": EconomicLogic(theory=5, behavioral=3, microstructure=2, institutional=5,
-            narrative="出口总值宏观因子：出口增长=外需强劲=商品利好做多。需外部注入export数据。"),
+        "economic_logic": EconomicLogic(
+            theory=5,
+            behavioral=3,
+            microstructure=2,
+            institutional=5,
+            narrative="出口总值宏观因子：出口增长=外需强劲=商品利好做多。需外部注入export数据。",
+        ),
     },
     {
         "name": "fut_macro_us_bond",
         "code": _FUT_MACRO_US_BOND_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-        "economic_logic": EconomicLogic(theory=5, behavioral=3, microstructure=2, institutional=5,
-            narrative="美债收益率宏观因子：美债收益率上升=美元走强=商品承压做空。需外部注入us_bond数据。"),
+        "economic_logic": EconomicLogic(
+            theory=5,
+            behavioral=3,
+            microstructure=2,
+            institutional=5,
+            narrative="美债收益率宏观因子：美债收益率上升=美元走强=商品承压做空。需外部注入us_bond数据。",
+        ),
     },
     {
         "name": "fut_mkt_trend",
         "code": _FUT_MKT_TREND_CODE,
         "params": {"window": 60},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=65),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=3, institutional=3,
-            narrative="市场趋势强度：R²衡量趋势强度。中信商品市场4因子之一。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=3,
+            institutional=3,
+            narrative="市场趋势强度：R²衡量趋势强度。中信商品市场4因子之一。",
+        ),
     },
     {
         "name": "fut_mkt_speculation",
         "code": _FUT_MKT_SPECULATION_CODE,
         "params": {"window": 20},
-        "signature": FactorSignature(input_fields=["close", "volume", "hold"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=3,
-            narrative="市场投机度：成交量/持仓量。投机度高=情绪过热=做空。中信商品市场4因子之一。"),
+        "signature": FactorSignature(
+            input_fields=["close", "volume", "hold"], output_type="signal", frequency="daily", lookback=25
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=3,
+            narrative="市场投机度：成交量/持仓量。投机度高=情绪过热=做空。中信商品市场4因子之一。",
+        ),
     },
     {
         "name": "fut_mkt_rotation",
         "code": _FUT_MKT_ROTATION_CODE,
         "params": {"window": 20},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=3, institutional=3,
-            narrative="市场轮动速度：高频波动/低频波动比。轮动快=风格切换频繁。中信商品市场4因子之一。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=3,
+            institutional=3,
+            narrative="市场轮动速度：高频波动/低频波动比。轮动快=风格切换频繁。中信商品市场4因子之一。",
+        ),
     },
     {
         "name": "fut_mkt_concentration",
         "code": _FUT_MKT_CONCENTRATION_CODE,
         "params": {"window": 20},
-        "signature": FactorSignature(input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=3,
-            narrative="成交集中度：成交额偏离度。成交集中=资金集中=趋势延续。中信商品市场4因子之一。"),
+        "signature": FactorSignature(
+            input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=25
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=3,
+            narrative="成交集中度：成交额偏离度。成交集中=资金集中=趋势延续。中信商品市场4因子之一。",
+        ),
     },
-
     # ─── 家族 13: CTA注册表补充因子 V2.0 (7 个) ──────────
     {
         "name": "tsmom_5d",
         "code": _FUT_TSMOM_5D_CODE,
         "params": {"window": 5},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=3,
-            narrative="5日时序动量：短期价格趋势跟踪。CTA注册表核心因子。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="5日时序动量：短期价格趋势跟踪。CTA注册表核心因子。",
+        ),
     },
     {
         "name": "tsmom_22d",
         "code": _FUT_TSMOM_22D_CODE,
         "params": {"window": 22},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=30),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=3,
-            narrative="22日时序动量：月度价格趋势跟踪。CTA注册表核心因子。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="22日时序动量：月度价格趋势跟踪。CTA注册表核心因子。",
+        ),
     },
     {
         "name": "basis_level",
         "code": _FUT_BASIS_LEVEL_CODE,
         "params": {"window": 10},
-        "signature": FactorSignature(input_fields=["close", "settle"], output_type="signal", frequency="daily", lookback=15),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=4,
-            narrative="基差水平因子：(close-settle)/settle 滚动均值。CTA注册表核心因子。"),
+        "signature": FactorSignature(
+            input_fields=["close", "settle"], output_type="signal", frequency="daily", lookback=15
+        ),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=4,
+            narrative="基差水平因子：(close-settle)/settle 滚动均值。CTA注册表核心因子。",
+        ),
     },
     {
         "name": "volatility_annual",
         "code": _FUT_VOLATILITY_ANNUAL_CODE,
         "params": {"window": 20},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=3,
-            narrative="年化波动率因子：20日滚动波动率年化。高波动做空（波动率溢价）。CTA注册表核心因子。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="年化波动率因子：20日滚动波动率年化。高波动做空（波动率溢价）。CTA注册表核心因子。",
+        ),
     },
     {
         "name": "liquidity_ratio",
         "code": _FUT_LIQUIDITY_RATIO_CODE,
         "params": {"window": 20},
-        "signature": FactorSignature(input_fields=["close", "volume", "hold"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=3,
-            narrative="成交持仓比因子：volume/hold 偏离度。流动性异常信号。CTA注册表核心因子。"),
+        "signature": FactorSignature(
+            input_fields=["close", "volume", "hold"], output_type="signal", frequency="daily", lookback=25
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=3,
+            narrative="成交持仓比因子：volume/hold 偏离度。流动性异常信号。CTA注册表核心因子。",
+        ),
     },
     {
         "name": "long_term_reversal",
         "code": _FUT_LONG_TERM_REVERSAL_CODE,
         "params": {"window": 120},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=130),
-        "economic_logic": EconomicLogic(theory=4, behavioral=4, microstructure=3, institutional=3,
-            narrative="长期反转因子：120日收益率反转。做多跌多的做空涨多的。CTA注册表核心因子。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=4,
+            microstructure=3,
+            institutional=3,
+            narrative="长期反转因子：120日收益率反转。做多跌多的做空涨多的。CTA注册表核心因子。",
+        ),
     },
     {
         "name": "oi_change_rate",
         "code": _FUT_OI_CHANGE_RATE_CODE,
         "params": {"window": 5},
         "signature": FactorSignature(input_fields=["hold"], output_type="signal", frequency="daily", lookback=10),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=4,
-            narrative="持仓量变化率因子：5日持仓量变化率。资金流入/流出信号。CTA注册表核心因子。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=4,
+            narrative="持仓量变化率因子：5日持仓量变化率。资金流入/流出信号。CTA注册表核心因子。",
+        ),
     },
-
     # ─── 家族 14: 算子字典种子因子 (10 个) — 来自 factor_operator_dictionary.xlsx ──
     {
         "name": "seed_kbar_mid",
         "code": _SEED_KBAR_MID_CODE,
         "params": {},
-        "signature": FactorSignature(input_fields=["close", "open"], output_type="signal", frequency="daily", lookback=1),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=4, institutional=3,
-            narrative="K线中点：(close - open)/open。直接使用，期货K线更连续。来源：Qlib-KMID / GTJA#2。"),
+        "signature": FactorSignature(
+            input_fields=["close", "open"], output_type="signal", frequency="daily", lookback=1
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=4,
+            institutional=3,
+            narrative="K线中点：(close - open)/open。直接使用，期货K线更连续。来源：Qlib-KMID / GTJA#2。",
+        ),
     },
     {
         "name": "seed_kbar_upper",
         "code": _SEED_KBAR_UPPER_CODE,
         "params": {},
-        "signature": FactorSignature(input_fields=["high", "open", "close"], output_type="signal", frequency="daily", lookback=1),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=4, institutional=3,
-            narrative="上影线：(high - max(open, close)) / open。来源：Qlib-KUP / GTJA系列。"),
+        "signature": FactorSignature(
+            input_fields=["high", "open", "close"], output_type="signal", frequency="daily", lookback=1
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=4,
+            institutional=3,
+            narrative="上影线：(high - max(open, close)) / open。来源：Qlib-KUP / GTJA系列。",
+        ),
     },
     {
         "name": "seed_kbar_lower",
         "code": _SEED_KBAR_LOWER_CODE,
         "params": {},
-        "signature": FactorSignature(input_fields=["open", "close", "low"], output_type="signal", frequency="daily", lookback=1),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=4, institutional=3,
-            narrative="下影线：(min(open, close) - low) / open。来源：Qlib-KLOW / GTJA系列。"),
+        "signature": FactorSignature(
+            input_fields=["open", "close", "low"], output_type="signal", frequency="daily", lookback=1
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=4,
+            institutional=3,
+            narrative="下影线：(min(open, close) - low) / open。来源：Qlib-KLOW / GTJA系列。",
+        ),
     },
     {
         "name": "seed_kbar_shift",
         "code": _SEED_KBAR_SHIFT_CODE,
         "params": {},
-        "signature": FactorSignature(input_fields=["close", "open", "high", "low"], output_type="signal", frequency="daily", lookback=1),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=4, institutional=3,
-            narrative="K线偏移：(2*close - high - low) / open。收盘在K线中的位置。来源：Qlib-KSFT / GTJA系列。"),
+        "signature": FactorSignature(
+            input_fields=["close", "open", "high", "low"], output_type="signal", frequency="daily", lookback=1
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=4,
+            institutional=3,
+            narrative="K线偏移：(2*close - high - low) / open。收盘在K线中的位置。来源：Qlib-KSFT / GTJA系列。",
+        ),
     },
     {
         "name": "seed_bull_bear",
         "code": _SEED_BULL_BEAR_CODE,
         "params": {},
-        "signature": FactorSignature(input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=1),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=3,
-            narrative="多空力量不平衡度：((close - low) - (high - close)) / (high - low)。来源：GTJA#2 / Alpha#2。"),
+        "signature": FactorSignature(
+            input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=1
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=3,
+            narrative="多空力量不平衡度：((close - low) - (high - close)) / (high - low)。来源：GTJA#2 / Alpha#2。",
+        ),
     },
     {
         "name": "seed_argmax_close",
         "code": _SEED_ARGMAX_CLOSE_CODE,
         "params": {"window": 20},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3,
-            narrative="20日最高价新鲜度：argmax(close, 20) / 20。来源：WQ#1 / Qlib-IMAX20。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="20日最高价新鲜度：argmax(close, 20) / 20。来源：WQ#1 / Qlib-IMAX20。",
+        ),
     },
     {
         "name": "seed_argmin_close",
         "code": _SEED_ARGMIN_CLOSE_CODE,
         "params": {"window": 20},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3,
-            narrative="20日最低价新鲜度：argmin(close, 20) / 20。来源：Qlib-IMIN20。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="20日最低价新鲜度：argmin(close, 20) / 20。来源：Qlib-IMIN20。",
+        ),
     },
     {
         "name": "seed_vol_chg",
         "code": _SEED_VOL_CHG_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["volume"], output_type="signal", frequency="daily", lookback=5),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=3,
-            narrative="成交量变化率：log(volume) - log(delay(volume, 1))。来源：WQ#2 / GTJA#1。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=3,
+            narrative="成交量变化率：log(volume) - log(delay(volume, 1))。来源：WQ#2 / GTJA#1。",
+        ),
     },
     {
         "name": "seed_vwap_proxy_1",
         "code": _SEED_VWAP_PROXY_1_CODE,
         "params": {},
-        "signature": FactorSignature(input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=5),
-        "economic_logic": EconomicLogic(theory=2, behavioral=3, microstructure=3, institutional=2,
-            narrative="VWAP粗糙近似：(close - (H+L+C)/3) / ((H+L+C)/3)。⚠️ 低置信度，VWAP的粗糙近似。来源：WQ#5改造。"),
+        "signature": FactorSignature(
+            input_fields=["close", "high", "low"], output_type="signal", frequency="daily", lookback=5
+        ),
+        "economic_logic": EconomicLogic(
+            theory=2,
+            behavioral=3,
+            microstructure=3,
+            institutional=2,
+            narrative="VWAP粗糙近似：(close - (H+L+C)/3) / ((H+L+C)/3)。⚠️ 低置信度，VWAP的粗糙近似。来源：WQ#5改造。",
+        ),
     },
     {
         "name": "seed_vwap_proxy_2",
         "code": _SEED_VWAP_PROXY_2_CODE,
         "params": {},
-        "signature": FactorSignature(input_fields=["close", "settle"], output_type="signal", frequency="daily", lookback=10),
-        "economic_logic": EconomicLogic(theory=2, behavioral=3, microstructure=3, institutional=2,
-            narrative="VWAP替代版：sign(close-settle) * sign(settle/delay(settle,5)-1)。⚠️ 低置信度，用结算价替代VWAP。来源：WQ#11改造。"),
+        "signature": FactorSignature(
+            input_fields=["close", "settle"], output_type="signal", frequency="daily", lookback=10
+        ),
+        "economic_logic": EconomicLogic(
+            theory=2,
+            behavioral=3,
+            microstructure=3,
+            institutional=2,
+            narrative="VWAP替代版：sign(close-settle) * sign(settle/delay(settle,5)-1)。⚠️ 低置信度，用结算价替代VWAP。来源：WQ#11改造。",
+        ),
     },
     # ─── 家族 14 新增因子 (14 个) — 来自 factor_operator_dictionary.xlsx 补充 ──
     {
@@ -2205,112 +2593,188 @@ _FUTURES_FULL_DEFINITIONS: list[dict[str, Any]] = [
         "code": _SEED_REVERSAL_1D_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=5),
-        "economic_logic": EconomicLogic(theory=4, behavioral=4, microstructure=3, institutional=3,
-            narrative="1日反转：rank(-delta(close, 1))。来源：WQ#4 / WQ#38简化。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=4,
+            microstructure=3,
+            institutional=3,
+            narrative="1日反转：rank(-delta(close, 1))。来源：WQ#4 / WQ#38简化。",
+        ),
     },
     {
         "name": "seed_mom_5d",
         "code": _SEED_MOM_5D_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=3,
-            narrative="5日动量：(close - delay(close, 5)) / delay(close, 5)。来源：Qlib-ROC5 / WQ#24简化。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="5日动量：(close - delay(close, 5)) / delay(close, 5)。来源：Qlib-ROC5 / WQ#24简化。",
+        ),
     },
     {
         "name": "seed_mom_20d",
         "code": _SEED_MOM_20D_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=3,
-            narrative="20日动量：(close - delay(close, 20)) / delay(close, 20)。来源：Qlib-ROC20。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="20日动量：(close - delay(close, 20)) / delay(close, 20)。来源：Qlib-ROC20。",
+        ),
     },
     {
         "name": "seed_vol_5d",
         "code": _SEED_VOL_5D_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3,
-            narrative="5日波动率：std(returns, 5)。来源：Qlib-STD5 / WQ#34。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="5日波动率：std(returns, 5)。来源：Qlib-STD5 / WQ#34。",
+        ),
     },
     {
         "name": "seed_vol_20d",
         "code": _SEED_VOL_20D_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3,
-            narrative="20日波动率：std(returns, 20)。来源：Qlib-STD20 / WQ#22。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="20日波动率：std(returns, 20)。来源：Qlib-STD20 / WQ#22。",
+        ),
     },
     {
         "name": "seed_vol_ratio",
         "code": _SEED_VOL_RATIO_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3,
-            narrative="波动率比：std(returns, 5) / (std(returns, 20) + 1e-12)。来源：WQ#34 / GTJA#55。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="波动率比：std(returns, 5) / (std(returns, 20) + 1e-12)。来源：WQ#34 / GTJA#55。",
+        ),
     },
     {
         "name": "seed_trend_slope",
         "code": _SEED_TREND_SLOPE_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=3,
-            narrative="趋势斜率：slope(close, 20) / close。来源：Qlib-BETA20。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="趋势斜率：slope(close, 20) / close。来源：Qlib-BETA20。",
+        ),
     },
     {
         "name": "seed_trend_rsqr",
         "code": _SEED_TREND_RSQR_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=3,
-            narrative="趋势拟合优度：rsquare(close, 20)。来源：Qlib-RSQR20。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="趋势拟合优度：rsquare(close, 20)。来源：Qlib-RSQR20。",
+        ),
     },
     {
         "name": "seed_vp_corr",
         "code": _SEED_VP_CORR_CODE,
         "params": {"window": 10},
-        "signature": FactorSignature(input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=15),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=3,
-            narrative="量价相关性：corr(rank(volume), rank(close), 10)。来源：WQ#3 / WQ#6 / GTJA#14。"),
+        "signature": FactorSignature(
+            input_fields=["close", "volume"], output_type="signal", frequency="daily", lookback=15
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=3,
+            narrative="量价相关性：corr(rank(volume), rank(close), 10)。来源：WQ#3 / WQ#6 / GTJA#14。",
+        ),
     },
     {
         "name": "seed_vol_ratio_volume",
         "code": _SEED_VOL_RATIO_VOLUME_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["volume"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=3,
-            narrative="成交量比：volume / mean(volume, 20)。来源：Qlib-VMA20 / WQ#21。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=3,
+            narrative="成交量比：volume / mean(volume, 20)。来源：Qlib-VMA20 / WQ#21。",
+        ),
     },
     {
         "name": "seed_oi_chg",
         "code": _SEED_OI_CHG_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["hold"], output_type="signal", frequency="daily", lookback=5),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=4,
-            narrative="持仓量变化率：(oi - delay(oi, 1)) / (delay(oi, 1) + 1e-12)。期货特有。"),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=4,
+            narrative="持仓量变化率：(oi - delay(oi, 1)) / (delay(oi, 1) + 1e-12)。期货特有。",
+        ),
     },
     {
         "name": "seed_oi_ret_confirm",
         "code": _SEED_OI_RET_CONFIRM_CODE,
         "params": {},
-        "signature": FactorSignature(input_fields=["close", "hold"], output_type="signal", frequency="daily", lookback=5),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=4,
-            narrative="持仓确认：sign(close - delay(close,1)) * sign(oi - delay(oi,1))。期货特有。"),
+        "signature": FactorSignature(
+            input_fields=["close", "hold"], output_type="signal", frequency="daily", lookback=5
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=4,
+            narrative="持仓确认：sign(close - delay(close,1)) * sign(oi - delay(oi,1))。期货特有。",
+        ),
     },
     {
         "name": "seed_spread",
         "code": _SEED_SPREAD_CODE,
         "params": {},
         "signature": FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=25),
-        "economic_logic": EconomicLogic(theory=4, behavioral=3, microstructure=4, institutional=4,
-            narrative="期限结构/展期收益：(close_near - close_far) / close_near。期货特有。"),
+        "economic_logic": EconomicLogic(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=4,
+            narrative="期限结构/展期收益：(close_near - close_far) / close_near。期货特有。",
+        ),
     },
     {
         "name": "seed_settle_bias",
         "code": _SEED_SETTLE_BIAS_CODE,
         "params": {},
-        "signature": FactorSignature(input_fields=["close", "settle"], output_type="signal", frequency="daily", lookback=5),
-        "economic_logic": EconomicLogic(theory=3, behavioral=4, microstructure=4, institutional=3,
-            narrative="结算价偏离：(close - settle) / (settle + 1e-12)。期货特有。"),
+        "signature": FactorSignature(
+            input_fields=["close", "settle"], output_type="signal", frequency="daily", lookback=5
+        ),
+        "economic_logic": EconomicLogic(
+            theory=3,
+            behavioral=4,
+            microstructure=4,
+            institutional=3,
+            narrative="结算价偏离：(close - settle) / (settle + 1e-12)。期货特有。",
+        ),
     },
 ]
 
@@ -2324,20 +2788,94 @@ logger = logging.getLogger(__name__)
 _FACTOR_FAMILY_MAP: dict[str, tuple[int, str]] = {}
 
 _FAMILY_SUMMARY: dict[int, tuple[str, list[str]]] = {
-    1: ("动量因子家族", ["fut_xsmom", "fut_tsmom", "fut_short_reversal", "fut_composite_momentum", "fut_basis_momentum"]),
+    1: (
+        "动量因子家族",
+        ["fut_xsmom", "fut_tsmom", "fut_short_reversal", "fut_composite_momentum", "fut_basis_momentum"],
+    ),
     2: ("期限结构因子家族", ["fut_roll_yield_carry", "fut_stable_term_structure", "fut_basis_factor"]),
     3: ("持仓/资金流因子家族", ["fut_open_interest_full", "fut_warehouse_receipt", "fut_hedge_pressure"]),
     4: ("流动性因子家族", ["fut_turnover", "fut_bid_ask_spread", "fut_amihud_full"]),
     5: ("偏度/峰度/高阶矩因子家族", ["fut_skewness_full", "fut_upside_skewness", "fut_kurtosis"]),
     6: ("波动率因子家族", ["fut_cv", "fut_downside_volatility"]),
     7: ("基本面因子家族", ["fut_volume_price_corr_full", "fut_trend_strength", "fut_amplitude", "fut_mobile_big_data"]),
-    8: ("拥挤度因子家族", ["fut_crowd_volume", "fut_crowd_volatility", "fut_crowd_turnover", "fut_crowd_bias_volume", "fut_crowd_bias_amount", "fut_crowd_composite"]),
+    8: (
+        "拥挤度因子家族",
+        [
+            "fut_crowd_volume",
+            "fut_crowd_volatility",
+            "fut_crowd_turnover",
+            "fut_crowd_bias_volume",
+            "fut_crowd_bias_amount",
+            "fut_crowd_composite",
+        ],
+    ),
     9: ("Alpha/量价行为因子家族", ["fut_time_series_regression", "fut_bias", "fut_gp_alpha1", "fut_ht_alpha"]),
-    10: ("高频因子家族", ["fut_hf_quote_imbalance", "fut_hf_trade_imbalance", "fut_hf_historical_return", "fut_hf_turnover", "fut_hf_spread", "fut_hf_down_vol"]),
+    10: (
+        "高频因子家族",
+        [
+            "fut_hf_quote_imbalance",
+            "fut_hf_trade_imbalance",
+            "fut_hf_historical_return",
+            "fut_hf_turnover",
+            "fut_hf_spread",
+            "fut_hf_down_vol",
+        ],
+    ),
     11: ("期权隐含信息因子家族", ["fut_option_vol_term", "fut_option_skew", "fut_option_pcr"]),
-    12: ("市场环境因子家族", ["fut_macro_cpi", "fut_macro_interest_rate", "fut_macro_export", "fut_macro_us_bond", "fut_mkt_trend", "fut_mkt_speculation", "fut_mkt_rotation", "fut_mkt_concentration"]),
-    13: ("CTA注册表补充因子 V2.0", ["tsmom_5d", "tsmom_22d", "basis_level", "volatility_annual", "liquidity_ratio", "long_term_reversal", "oi_change_rate"]),
-    14: ("算子字典种子因子", ["seed_kbar_mid", "seed_kbar_upper", "seed_kbar_lower", "seed_kbar_shift", "seed_bull_bear", "seed_argmax_close", "seed_argmin_close", "seed_vol_chg", "seed_vwap_proxy_1", "seed_vwap_proxy_2", "seed_reversal_1d", "seed_mom_5d", "seed_mom_20d", "seed_vol_5d", "seed_vol_20d", "seed_vol_ratio", "seed_trend_slope", "seed_trend_rsqr", "seed_vp_corr", "seed_vol_ratio_volume", "seed_oi_chg", "seed_oi_ret_confirm", "seed_spread", "seed_settle_bias"]),
+    12: (
+        "市场环境因子家族",
+        [
+            "fut_macro_cpi",
+            "fut_macro_interest_rate",
+            "fut_macro_export",
+            "fut_macro_us_bond",
+            "fut_mkt_trend",
+            "fut_mkt_speculation",
+            "fut_mkt_rotation",
+            "fut_mkt_concentration",
+        ],
+    ),
+    13: (
+        "CTA注册表补充因子 V2.0",
+        [
+            "tsmom_5d",
+            "tsmom_22d",
+            "basis_level",
+            "volatility_annual",
+            "liquidity_ratio",
+            "long_term_reversal",
+            "oi_change_rate",
+        ],
+    ),
+    14: (
+        "算子字典种子因子",
+        [
+            "seed_kbar_mid",
+            "seed_kbar_upper",
+            "seed_kbar_lower",
+            "seed_kbar_shift",
+            "seed_bull_bear",
+            "seed_argmax_close",
+            "seed_argmin_close",
+            "seed_vol_chg",
+            "seed_vwap_proxy_1",
+            "seed_vwap_proxy_2",
+            "seed_reversal_1d",
+            "seed_mom_5d",
+            "seed_mom_20d",
+            "seed_vol_5d",
+            "seed_vol_20d",
+            "seed_vol_ratio",
+            "seed_trend_slope",
+            "seed_trend_rsqr",
+            "seed_vp_corr",
+            "seed_vol_ratio_volume",
+            "seed_oi_chg",
+            "seed_oi_ret_confirm",
+            "seed_spread",
+            "seed_settle_bias",
+        ],
+    ),
 }
 
 for _fid, (_fname, _factors) in _FAMILY_SUMMARY.items():
@@ -2346,6 +2884,7 @@ for _fid, (_fname, _factors) in _FAMILY_SUMMARY.items():
 
 
 # ─── 加载器 ───────────────────────────────────────────────
+
 
 def load_futures_seeds_full(
     trace_id: Optional[str] = None,
@@ -2358,10 +2897,10 @@ def load_futures_seeds_full(
     Returns:
         list[FactorProgram] — 81 个期货专用种子因子。
     """
-    from .factor_program import create_factor_program
 
     logger.info(
-        "[futures_seed] 开始加载 14 大因子家族 (总计 81 个因子), trace_id=%s", trace_id,
+        "[futures_seed] 开始加载 14 大因子家族 (总计 81 个因子), trace_id=%s",
+        trace_id,
     )
 
     result: list[FactorProgram] = []
@@ -2390,25 +2929,35 @@ def load_futures_seeds_full(
             if family_loaded[fid] == expected_count:
                 logger.info(
                     "[futures_seed] ★ 家族 %2d 加载完成: %s (%d/%d 个因子), trace_id=%s",
-                    fid, fname, expected_count, expected_count, trace_id,
+                    fid,
+                    fname,
+                    expected_count,
+                    expected_count,
+                    trace_id,
                 )
 
     # ── 最终汇总验证 ──
     total = len(result)
     logger.info(
         "[futures_seed] ✅ 全部加载完成: 总计 %d 个因子, 涉及 %d 个家族, trace_id=%s",
-        total, len(family_loaded), trace_id,
+        total,
+        len(family_loaded),
+        trace_id,
     )
 
     # 校验: 确保所有 14 个家族都已加载
     missing_families = [fid for fid in range(1, 15) if fid not in family_loaded]
     if missing_families:
         logger.error(
-            "[futures_seed] ❌ 缺少家族: %s, trace_id=%s", missing_families, trace_id,
+            "[futures_seed] ❌ 缺少家族: %s, trace_id=%s",
+            missing_families,
+            trace_id,
         )
     elif total != 81:
         logger.warning(
-            "[futures_seed] ⚠ 因子总数异常: 期望 81, 实际 %d, trace_id=%s", total, trace_id,
+            "[futures_seed] ⚠ 因子总数异常: 期望 81, 实际 %d, trace_id=%s",
+            total,
+            trace_id,
         )
 
     return result

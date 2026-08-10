@@ -145,6 +145,7 @@ def factor_program(data, params):
 
 # ─── 因子定义 → FactorProgram 转换 ────────────────────────
 
+
 def _tier_from_i(i: int) -> int:
     """根据 alpha 序号分配经济逻辑理论评分（WQ 早期公式更经典）。"""
     if i < 20:
@@ -203,6 +204,7 @@ def make_factor_program(
     if lookback is None:
         # GAP-S09 (v2.67.0): 静态 PIT 审计——仅统计窗口算子的常量参数
         from ..expr_dsl.seed_analyzer import estimate_lookback_static
+
         lookback = estimate_lookback_static(expression)
     if input_fields is None:
         input_fields = _estimate_input_fields(expression)
@@ -245,6 +247,7 @@ def make_factor_program(
 
 # ─── 批量加载器 ───────────────────────────────────────────
 
+
 def _load_definitions(
     definitions: list[dict[str, Any]],
     trace_id: str | None = None,
@@ -272,18 +275,21 @@ def _load_definitions(
 def load_wq101_seeds(trace_id: str | None = None) -> list[FactorProgram]:
     """加载 WQ 101 Alpha 因子种子。"""
     from .wq101 import WQ101_DEFINITIONS
+
     return _load_definitions(WQ101_DEFINITIONS, trace_id)
 
 
 def load_qlib158_seeds(trace_id: str | None = None) -> list[FactorProgram]:
     """加载 Qlib 158 因子种子。"""
     from .qlib158 import QLIB158_DEFINITIONS
+
     return _load_definitions(QLIB158_DEFINITIONS, trace_id)
 
 
 def load_gtja191_seeds(trace_id: str | None = None) -> list[FactorProgram]:
     """加载国泰君安 191 Alpha 因子种子。"""
     from .gtja191 import GTJA191_DEFINITIONS
+
     return _load_definitions(GTJA191_DEFINITIONS, trace_id)
 
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -98,10 +98,7 @@ class SimulatedTradeAdapter:
             "balance": self._balance,
             "available": self._balance,
             "margin_used": 0.0,
-            "position_value": sum(
-                p.get("quantity", 0) * p.get("avg_price", 0)
-                for p in self._positions.values()
-            ),
+            "position_value": sum(p.get("quantity", 0) * p.get("avg_price", 0) for p in self._positions.values()),
             "total_equity": self._balance,
         }
 

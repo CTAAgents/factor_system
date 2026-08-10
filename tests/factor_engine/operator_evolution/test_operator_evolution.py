@@ -3,6 +3,7 @@
 覆盖: 种群初始化合法性 / 进化收敛 / 交叉变异产物校验 /
       产物为 OPERATOR 因子 / 常信号罚分 / 评估缓存。
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -118,11 +119,13 @@ def test_evolve_best_not_worse_than_first_gen(engine: OperatorEvolutionEngine):
 
 def test_evolve_reproducible_with_seed(panel: pd.DataFrame):
     e1 = OperatorEvolutionEngine(
-        panel, "forward_return",
+        panel,
+        "forward_return",
         config=OperatorEvolutionConfig(population_size=12, max_generations=3, random_seed=11),
     )
     e2 = OperatorEvolutionEngine(
-        panel, "forward_return",
+        panel,
+        "forward_return",
         config=OperatorEvolutionConfig(population_size=12, max_generations=3, random_seed=11),
     )
     assert e1.evolve().best_expression == e2.evolve().best_expression
@@ -190,7 +193,8 @@ def test_constant_signal_penalized():
         index=dates,
     )
     eng = OperatorEvolutionEngine(
-        df, "forward_return",
+        df,
+        "forward_return",
         config=OperatorEvolutionConfig(population_size=8, max_generations=2, random_seed=3),
     )
     # 常数表达式（close 恒为 100 → 全 0 信号 → 罚分）
@@ -238,7 +242,9 @@ def test_evolution_loop_operator_mode_calls_engine(monkeypatch, panel):
 
     parent = {"factor_id": "fct_parent_1", "name": "parent", "family": "trend"}
     factor, summary = loop._generate_operator_factor(
-        parent, generation=0, trace_id="it-001",
+        parent,
+        generation=0,
+        trace_id="it-001",
     )
     assert calls == [1], "operator 模式应调用算子演化引擎"
     assert factor["kind"] == FactorKind.OPERATOR
@@ -264,7 +270,9 @@ def test_operator_engine_skipped_without_forward_returns(monkeypatch, panel):
 
     parent = {"factor_id": "fct_parent_1", "name": "parent", "family": "trend"}
     factor, summary = loop._generate_operator_factor(
-        parent, generation=0, trace_id="it-002",
+        parent,
+        generation=0,
+        trace_id="it-002",
     )
     assert calls == [], "无 forward_returns 时不应调用引擎，回退随机生成"
     assert factor["kind"] == FactorKind.OPERATOR

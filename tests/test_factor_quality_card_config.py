@@ -146,9 +146,18 @@ class TestFactorQualityCardFullConfig:
         cfg = FactorQualityCardFullConfig()
         d = cfg.to_dict()
         assert set(d) == {
-            "weights", "grades", "ic_mapping", "icir_mapping", "sharpe_mapping",
-            "calmar_mapping", "decay_mapping", "capacity_mapping", "turnover_mapping",
-            "correlation_mapping", "coverage_mapping", "defaults",
+            "weights",
+            "grades",
+            "ic_mapping",
+            "icir_mapping",
+            "sharpe_mapping",
+            "calmar_mapping",
+            "decay_mapping",
+            "capacity_mapping",
+            "turnover_mapping",
+            "correlation_mapping",
+            "coverage_mapping",
+            "defaults",
         }
         assert d["weights"]["ic_score"] == 1.0
         assert d["grades"]["grade_A_threshold"] == 40.0

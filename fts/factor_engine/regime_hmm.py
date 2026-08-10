@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 _HMM_AVAILABLE: bool = False
 try:
     from hmmlearn import hmm
+
     _HMM_AVAILABLE = True
 except ImportError:
     pass
@@ -36,6 +37,7 @@ except ImportError:
 _MSM_AVAILABLE: bool = False
 try:
     from statsmodels.tsa.regime_switching.markov_regression import MarkovRegression
+
     _MSM_AVAILABLE = True
 except ImportError:
     pass
@@ -43,19 +45,20 @@ except ImportError:
 
 # ─── 默认参数 ──────────────────────────────────────────────
 
-_DEFAULT_HORIZONS = [63, 126, 252]          # 短/中/长 周期
+_DEFAULT_HORIZONS = [63, 126, 252]  # 短/中/长 周期
 _DEFAULT_WEIGHTS = {63: 0.2, 126: 0.5, 252: 0.3}
 _DEFAULT_N_STATES = 4
 _DEFAULT_MIN_DATA = 126
 _DEFAULT_RANDOM_SEED = 42
 
 # 状态映射稳定性
-_STATE_HISTORY_MAXLEN = 5                    # 保存最近 5 次映射
-_STATE_FREEZE_CONFIDENCE = 0.8              # 置信度 > 此值冻结映射
-_STATE_FUSION_ALPHA = 0.7                   # 历史映射融合权重
+_STATE_HISTORY_MAXLEN = 5  # 保存最近 5 次映射
+_STATE_FREEZE_CONFIDENCE = 0.8  # 置信度 > 此值冻结映射
+_STATE_FUSION_ALPHA = 0.7  # 历史映射融合权重
 
 
 # ─── 状态映射稳定器 ────────────────────────────────────────
+
 
 class StateMapStabilizer:
     """HMM 状态映射稳定性增强。
@@ -180,6 +183,7 @@ class StateMapStabilizer:
 
 # ─── 多周期 HMM 集成检测器 ────────────────────────────────
 
+
 class MultiHorizonHMMDetector:
     """多周期 HMM 集成检测器（P1.2）。
 
@@ -259,9 +263,7 @@ class MultiHorizonHMMDetector:
                 horizon_details[h] = {"regime": "error", "confidence": 0.0, "weight": w}
 
         if not votes:
-            return "unknown", 0.0, {
-                "horizon_details": {str(h): v for h, v in horizon_details.items()}
-            }
+            return "unknown", 0.0, {"horizon_details": {str(h): v for h, v in horizon_details.items()}}
 
         # 加权投票决定 regime
         total_weight = sum(self.weights.values())
@@ -277,9 +279,7 @@ class MultiHorizonHMMDetector:
             "multi_hmm_votes": {k: round(v, 2) for k, v in votes.items()},
             "multi_hmm_vote_share": round(vote_share, 4),
             "multi_hmm_avg_confidence": round(avg_conf, 4),
-            "horizon_details": {
-                str(h): v for h, v in horizon_details.items()
-            },
+            "horizon_details": {str(h): v for h, v in horizon_details.items()},
         }
 
         return best_regime, confidence, features
@@ -322,14 +322,14 @@ class _LightHMM:
         if len(close) < self.min_data:
             return False
 
-        rets = close.pct_change().dropna().values.reshape(-1, 1)
+        rets = close.pct_change().dropna().to_numpy().reshape(-1, 1)
         if len(rets) < self.min_data:
             return False
 
         rets_series = pd.Series(close.pct_change().dropna())
-        vol = rets_series.rolling(20).std().fillna(0).values.reshape(-1, 1)
+        vol = rets_series.rolling(20).std().fillna(0).to_numpy().reshape(-1, 1)
         features = np.column_stack([rets, vol])
-        train_features = features[-min(self.lookback, len(features)):]
+        train_features = features[-min(self.lookback, len(features)) :]
 
         try:
             self._model = hmm.GaussianHMM(
@@ -358,11 +358,13 @@ class _LightHMM:
             if mask.sum() == 0:
                 state_stats.append({"state": s, "mean_ret": 0.0, "mean_vol": 0.0})
                 continue
-            state_stats.append({
-                "state": s,
-                "mean_ret": float(features[mask, 0].mean()),
-                "mean_vol": float(features[mask, 1].mean()),
-            })
+            state_stats.append(
+                {
+                    "state": s,
+                    "mean_ret": float(features[mask, 0].mean()),
+                    "mean_vol": float(features[mask, 1].mean()),
+                }
+            )
 
         sorted_by_ret = sorted(state_stats, key=lambda x: x["mean_ret"], reverse=True)
         assignment: list[tuple[int, str]] = []
@@ -380,9 +382,9 @@ class _LightHMM:
             remaining.sort(key=lambda x: x["mean_vol"], reverse=True)
             assignment.append((remaining[0]["state"], "high_vol"))
             used.add(remaining[0]["state"])
-            for s in remaining[1:]:
-                assignment.append((s["state"], "oscillate"))
-                used.add(s["state"])
+            for st in remaining[1:]:
+                assignment.append((st["state"], "oscillate"))
+                used.add(st["state"])
 
         self._state_map = dict(assignment)
 
@@ -393,8 +395,8 @@ class _LightHMM:
         if len(close) < 20:
             return "unknown", 0.0, {}
         rets = close.pct_change().dropna()
-        rets_vals = rets.values.reshape(-1, 1)
-        vol = rets.rolling(20).std().fillna(0).values.reshape(-1, 1)
+        rets_vals = rets.to_numpy().reshape(-1, 1)
+        vol = rets.rolling(20).std().fillna(0).to_numpy().reshape(-1, 1)
         features = np.column_stack([rets_vals, vol])
         try:
             state = int(self._model.predict(features)[-1])
@@ -407,6 +409,7 @@ class _LightHMM:
 
 
 # ─── MSM 马尔可夫切换模型（P3.1） ─────────────────────────
+
 
 class MSMRegimeDetector:
     """马尔可夫切换模型检测器（P3.1）。
@@ -476,11 +479,13 @@ class MSMRegimeDetector:
                 state_stats.append({"state": s, "mean_ret": 0.0, "mean_vol": 0.0})
                 continue
             s_rets = rets[mask]
-            state_stats.append({
-                "state": s,
-                "mean_ret": float(s_rets.mean()),
-                "mean_vol": float(s_rets.std()),
-            })
+            state_stats.append(
+                {
+                    "state": s,
+                    "mean_ret": float(s_rets.mean()),
+                    "mean_vol": float(s_rets.std()),
+                }
+            )
 
         sorted_by_ret = sorted(state_stats, key=lambda x: x["mean_ret"], reverse=True)
         assignment: list[tuple[int, str]] = []
@@ -498,8 +503,8 @@ class MSMRegimeDetector:
             remaining.sort(key=lambda x: x["mean_vol"], reverse=True)
             assignment.append((remaining[0]["state"], "high_vol"))
             used.add(remaining[0]["state"])
-            for s in remaining[1:]:
-                assignment.append((s["state"], "oscillate"))
+            for st in remaining[1:]:
+                assignment.append((st["state"], "oscillate"))
 
         self._state_map = dict(assignment)
 
@@ -542,6 +547,7 @@ class MSMRegimeDetector:
 
 
 # ─── 集成到 RegimeAwareSelector 的辅助函数 ─────────────────
+
 
 def create_multi_hmm_selector(
     base_lookback: int = 60,

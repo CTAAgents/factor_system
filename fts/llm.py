@@ -14,7 +14,7 @@ import logging
 import os
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -22,16 +22,20 @@ logger = logging.getLogger(__name__)
 
 # ─── LLM 错误 ─────────────────────────────────────────────
 
+
 class LLMError(RuntimeError):
     """LLM 调用失败。"""
+
     pass
 
 
 # ─── 调用记录 ─────────────────────────────────────────────
 
+
 @dataclass
 class LLMCallRecord:
     """单次 LLM 调用的记录（用于审计和 token 统计）。"""
+
     prompt: str = ""
     response: str = ""
     model: str = ""
@@ -47,6 +51,7 @@ class LLMCallRecord:
 
 
 # ─── 抽象 LLM 客户端 ──────────────────────────────────────
+
 
 class LLMClient(ABC):
     """LLM 客户端抽象基类。"""
@@ -84,7 +89,7 @@ class LLMClient(ABC):
         # 0. 用正则去除 markdown 代码块标记，避免 code 字段内含特殊字符干扰
         cleaned = text.strip()
         # 匹配 ```json 或 ``` 开头的代码块，非贪婪提取内容
-        m = re.search(r'^```(?:json)?\s*\n?(.*?)\n?```\s*$', cleaned, re.DOTALL)
+        m = re.search(r"^```(?:json)?\s*\n?(.*?)\n?```\s*$", cleaned, re.DOTALL)
         if m:
             cleaned = m.group(1).strip()
 
@@ -157,7 +162,7 @@ class LLMClient(ABC):
             if escape:
                 escape = False
                 continue
-            if ch == '\\':
+            if ch == "\\":
                 escape = True
                 continue
             if ch == '"' and not in_string:
@@ -167,30 +172,30 @@ class LLMClient(ABC):
                 in_string = False
                 continue
             if not in_string:
-                if ch == '{':
-                    stack.append('{')
-                elif ch == '}':
-                    if stack and stack[-1] == '{':
+                if ch == "{":
+                    stack.append("{")
+                elif ch == "}":
+                    if stack and stack[-1] == "{":
                         stack.pop()
                     last_brace_pos = i
                     if not stack:
                         match_end = i
                         break
-                elif ch == '[':
-                    stack.append('[')
-                elif ch == ']':
-                    if stack and stack[-1] == '[':
+                elif ch == "[":
+                    stack.append("[")
+                elif ch == "]":
+                    if stack and stack[-1] == "[":
                         stack.pop()
 
         if match_end == -1 and last_brace_pos != -1:
             # 截断 JSON: 用栈中剩余括号按逆序生成关闭序列
-            closing_map = {'{': '}', '[': ']'}
-            closing = ''.join(closing_map[b] for b in reversed(stack))
+            closing_map = {"{": "}", "[": "]"}
+            closing = "".join(closing_map[b] for b in reversed(stack))
             candidate = text[first_brace : last_brace_pos + 1] + closing
         elif match_end == -1:
             # 完全无闭合括号: 用栈中剩余括号按逆序补全（嵌套缺失时不会丢字段）
-            closing_map = {'{': '}', '[': ']'}
-            closing = ''.join(closing_map[b] for b in reversed(stack)) or "}"
+            closing_map = {"{": "}", "[": "]"}
+            closing = "".join(closing_map[b] for b in reversed(stack)) or "}"
             candidate = text[first_brace:] + closing
         else:
             candidate = text[first_brace : match_end + 1]
@@ -226,7 +231,7 @@ class LLMClient(ABC):
             if escape:
                 escape = False
                 continue
-            if ch == '\\':
+            if ch == "\\":
                 escape = True
                 continue
             if ch == '"' and not in_string:
@@ -235,7 +240,7 @@ class LLMClient(ABC):
             if ch == '"' and in_string:
                 in_string = False
                 continue
-            if not in_string and ch == ',':
+            if not in_string and ch == ",":
                 last_comma = i
                 break
         return last_comma
@@ -256,7 +261,7 @@ class LLMClient(ABC):
                 result.append(ch)
                 escape = False
                 continue
-            if ch == '\\' and in_string:
+            if ch == "\\" and in_string:
                 result.append(ch)
                 escape = True
                 continue
@@ -264,11 +269,11 @@ class LLMClient(ABC):
                 in_string = not in_string
                 result.append(ch)
                 continue
-            if in_string and ch in '\n\r':
-                result.append('\\n')
+            if in_string and ch in "\n\r":
+                result.append("\\n")
                 continue
             result.append(ch)
-        return ''.join(result)
+        return "".join(result)
 
     def bootstrap_factors(
         self,
@@ -290,12 +295,16 @@ class LLMClient(ABC):
         """
         logger.info(
             "[bootstrap_factors] 基类默认实现, trace_id=%s, max_candidates=%d, debate_gaps=%d, snapshot_keys=%d",
-            trace_id, max_candidates, len(debate_gaps), len(market_snapshot),
+            trace_id,
+            max_candidates,
+            len(debate_gaps),
+            len(market_snapshot),
         )
         return []
 
 
 # ─── OpenAI 客户端 ────────────────────────────────────────
+
 
 class OpenAIClient(LLMClient):
     """OpenAI API 客户端。
@@ -304,9 +313,14 @@ class OpenAIClient(LLMClient):
     可选: OPENAI_BASE_URL, OPENAI_MODEL (默认 gpt-4o), OPENAI_TEMPERATURE
     """
 
-    def __init__(self, model: str = "", api_key: str = "",
-                 base_url: str = "", max_retries: int = 2,
-                 temperature: Optional[float] = None):
+    def __init__(
+        self,
+        model: str = "",
+        api_key: str = "",
+        base_url: str = "",
+        max_retries: int = 2,
+        temperature: Optional[float] = None,
+    ):
         self._model = model or os.getenv("OPENAI_MODEL", "gpt-4o")
         self._api_key = api_key or os.getenv("OPENAI_API_KEY", "")
         self._base_url = base_url or os.getenv("OPENAI_BASE_URL", "")
@@ -324,6 +338,7 @@ class OpenAIClient(LLMClient):
             return self._client
         try:
             from openai import OpenAI
+
             kwargs = {}
             if self._base_url:
                 kwargs["base_url"] = self._base_url
@@ -351,9 +366,10 @@ class OpenAIClient(LLMClient):
                 return text, tokens
             except Exception as e:
                 if attempt < self._max_retries:
-                    logger.warning(f"OpenAI 调用失败 (重试 {attempt+1}): {e}")
+                    logger.warning(f"OpenAI 调用失败 (重试 {attempt + 1}): {e}")
                     continue
                 raise LLMError(f"OpenAI 调用失败: {e}")
+        raise LLMError("OpenAI 调用失败")
 
     def bootstrap_factors(
         self,
@@ -364,17 +380,20 @@ class OpenAIClient(LLMClient):
     ) -> list[dict[str, Any]]:
         """L1 Bootstrapping — 通过 LLM 生成种子候选因子。"""
         import time
+
         t0 = time.time()
         logger.info(
             "[bootstrap_factors] OpenAI 开始, trace_id=%s, max_candidates=%d, debate_gaps=%d, snapshot_keys=%d",
-            trace_id, max_candidates, len(debate_gaps), len(market_snapshot),
+            trace_id,
+            max_candidates,
+            len(debate_gaps),
+            len(market_snapshot),
         )
-        prompt = self._build_bootstrap_prompt(
-            market_snapshot, debate_gaps, max_candidates, trace_id
-        )
+        prompt = self._build_bootstrap_prompt(market_snapshot, debate_gaps, max_candidates, trace_id)
         logger.info(
             "[bootstrap_factors] Prompt 构造完成, trace_id=%s, prompt_len=%d",
-            trace_id, len(prompt),
+            trace_id,
+            len(prompt),
         )
 
         # 最多 2 次尝试: 首次 + 1 次 JSON 修复重试
@@ -389,12 +408,18 @@ class OpenAIClient(LLMClient):
                 if attempt == max_attempts - 1:
                     logger.error(
                         "[bootstrap_factors] LLM 调用失败 (重试耗尽), trace_id=%s, elapsed_ms=%.1f, error=%s",
-                        trace_id, elapsed, e, exc_info=True,
+                        trace_id,
+                        elapsed,
+                        e,
+                        exc_info=True,
                     )
                     return []
                 logger.warning(
                     "[bootstrap_factors] LLM 调用失败 (重试 %d), trace_id=%s, elapsed_ms=%.1f, error=%s",
-                    attempt + 1, trace_id, elapsed, e,
+                    attempt + 1,
+                    trace_id,
+                    elapsed,
+                    e,
                 )
                 continue
 
@@ -416,12 +441,17 @@ class OpenAIClient(LLMClient):
                 if attempt == max_attempts - 1:
                     logger.warning(
                         "[bootstrap_factors] JSON 解析失败 (重试耗尽), trace_id=%s, elapsed_ms=%.1f, error=%s",
-                        trace_id, elapsed, e,
+                        trace_id,
+                        elapsed,
+                        e,
                     )
                     return []
                 logger.warning(
                     "[bootstrap_factors] JSON 解析失败 (重试 %d), trace_id=%s, elapsed_ms=%.1f, error=%s",
-                    attempt + 1, trace_id, elapsed, e,
+                    attempt + 1,
+                    trace_id,
+                    elapsed,
+                    e,
                 )
                 # 构造修复 prompt: 告知 LLM 其 JSON 不合法，要求重输出
                 prompt = self._build_repair_prompt(raw_text, max_candidates)
@@ -432,14 +462,19 @@ class OpenAIClient(LLMClient):
             elapsed = (time.time() - t0) * 1000
             logger.warning(
                 "[bootstrap_factors] candidates 字段非列表, trace_id=%s, elapsed_ms=%.1f, type=%s",
-                trace_id, elapsed, type(candidates).__name__,
+                trace_id,
+                elapsed,
+                type(candidates).__name__,
             )
             return []
         truncated = candidates[:max_candidates]
         elapsed = (time.time() - t0) * 1000
         logger.info(
             "[bootstrap_factors] OpenAI 完成, trace_id=%s, elapsed_ms=%.1f, raw_count=%d, returned=%d, names=%s",
-            trace_id, elapsed, len(candidates), len(truncated),
+            trace_id,
+            elapsed,
+            len(candidates),
+            len(truncated),
             [c.get("name", "?") for c in truncated],
         )
         return truncated
@@ -454,11 +489,10 @@ class OpenAIClient(LLMClient):
         """构造 L1 Bootstrapping Prompt。"""
         snapshot_summary = json.dumps(
             {k: v for k, v in market_snapshot.items() if k != "trace_id"},
-            ensure_ascii=False, default=str,
+            ensure_ascii=False,
+            default=str,
         )[:2000]
-        gaps_summary = json.dumps(
-            debate_gaps[:5], ensure_ascii=False, default=str
-        )[:1000]
+        gaps_summary = json.dumps(debate_gaps[:5], ensure_ascii=False, default=str)[:1000]
         return f"""你是因子工程专家（FTS L1 Bootstrapping Agent）。基于市场快照和辩论薄弱维度，生成 {max_candidates} 个期货因子候选。
 
 【市场快照】
@@ -569,6 +603,7 @@ economic_logic 四维（theory/behavioral/microstructure/institutional）各按 
 
 # ─── Anthropic 客户端 ─────────────────────────────────────
 
+
 class AnthropicClient(LLMClient):
     """Anthropic Claude API 客户端。
 
@@ -576,8 +611,7 @@ class AnthropicClient(LLMClient):
     可选: ANTHROPIC_MODEL (默认 claude-sonnet-4-20250514), ANTHROPIC_TEMPERATURE
     """
 
-    def __init__(self, model: str = "", api_key: str = "", max_retries: int = 2,
-                 temperature: Optional[float] = None):
+    def __init__(self, model: str = "", api_key: str = "", max_retries: int = 2, temperature: Optional[float] = None):
         self._model = model or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
         self._api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
         self._max_retries = max_retries
@@ -594,6 +628,7 @@ class AnthropicClient(LLMClient):
             return self._client
         try:
             from anthropic import Anthropic
+
             self._client = Anthropic(api_key=self._api_key)
             return self._client
         except ImportError:
@@ -618,12 +653,14 @@ class AnthropicClient(LLMClient):
                 return text, tokens
             except Exception as e:
                 if attempt < self._max_retries:
-                    logger.warning(f"Anthropic 调用失败 (重试 {attempt+1}): {e}")
+                    logger.warning(f"Anthropic 调用失败 (重试 {attempt + 1}): {e}")
                     continue
                 raise LLMError(f"Anthropic 调用失败: {e}")
+        raise LLMError("Anthropic 调用失败")
 
 
 # ─── 模拟客户端（开发/测试用）────────────────────────────────
+
 
 class MockLLMClient(LLMClient):
     """模拟 LLM 客户端 — 用于开发和测试。
@@ -641,19 +678,21 @@ class MockLLMClient(LLMClient):
         if idx < len(self._responses):
             return self._responses[idx], 0
         # 默认响应：返回 JSON 格式的模拟因子演化结果
-        default_response = json.dumps({
-            "mutation_type": "macro_logic",
-            "mutation_summary": f"代 {1} mock 演化",
-            "code_modification": "window_plus_5",
-            "economic_logic_modification": {
-                "theory": 4,
-                "behavioral": 3,
-                "microstructure": 3,
-                "institutional": 5,
-                "narrative": "模拟演化（测试用）",
-            },
-            "lessons_referenced": [],
-        })
+        default_response = json.dumps(
+            {
+                "mutation_type": "macro_logic",
+                "mutation_summary": f"代 {1} mock 演化",
+                "code_modification": "window_plus_5",
+                "economic_logic_modification": {
+                    "theory": 4,
+                    "behavioral": 3,
+                    "microstructure": 3,
+                    "institutional": 5,
+                    "narrative": "模拟演化（测试用）",
+                },
+                "lessons_referenced": [],
+            }
+        )
         return default_response, 200
 
     def bootstrap_factors(
@@ -666,7 +705,10 @@ class MockLLMClient(LLMClient):
         """Mock Bootstrapping — 返回预设因子候选。"""
         logger.info(
             "[bootstrap_factors] Mock 开始, trace_id=%s, max_candidates=%d, debate_gaps=%d, snapshot_keys=%d",
-            trace_id, max_candidates, len(debate_gaps), len(market_snapshot),
+            trace_id,
+            max_candidates,
+            len(debate_gaps),
+            len(market_snapshot),
         )
         candidates = [
             {
@@ -697,7 +739,10 @@ class MockLLMClient(LLMClient):
                     "lookback": 20,
                 },
                 "economic_logic": {
-                    "theory": 4, "behavioral": 4, "microstructure": 3, "institutional": 4,
+                    "theory": 4,
+                    "behavioral": 4,
+                    "microstructure": 3,
+                    "institutional": 4,
                     "narrative": "量价背离因子: 放量下跌反映空头主导，缩量上涨反映空头回补，捕捉短期反转机会。",
                 },
                 "parent_topic": "mock_bootstrapping_test",
@@ -706,12 +751,15 @@ class MockLLMClient(LLMClient):
         ]
         logger.info(
             "[bootstrap_factors] Mock 完成, trace_id=%s, returned=%d, names=%s",
-            trace_id, len(candidates), [c["name"] for c in candidates],
+            trace_id,
+            len(candidates),
+            [c["name"] for c in candidates],
         )
         return candidates
 
 
 # ─── 工厂函数 ─────────────────────────────────────────────
+
 
 def get_llm_client(backend: str = "", temperature: Optional[float] = None) -> LLMClient:
     """获取 LLM 客户端实例。
@@ -731,6 +779,7 @@ def get_llm_client(backend: str = "", temperature: Optional[float] = None) -> LL
     if temperature is None:
         try:
             from fts.config.settings import get_config
+
             temperature = get_config().llm_temperature
         except Exception:
             temperature = None

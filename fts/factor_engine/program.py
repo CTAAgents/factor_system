@@ -98,6 +98,7 @@ risk_constraints:
 @dataclass
 class ProgramConfig:
     """解析 program.md 后得到的结构化配置。"""
+
     market_regime: str = "震荡偏多"
     factor_priority: list[str] = field(default_factory=lambda: ["动量因子", "质量因子"])
     factor_avoid: list[str] = field(default_factory=lambda: ["反转因子"])

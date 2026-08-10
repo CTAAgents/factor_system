@@ -3,11 +3,45 @@ name: FTS CI
 on:
   push:
     branches: [main, develop]
+    tags: ["v*"]
   pull_request:
     branches: [main]
 
 jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: python -m pip install ruff>=0.4
+      - name: ruff check
+        run: ruff check fts/ tests/ scripts/
+      - name: ruff format --check
+        run: ruff format --check fts/ tests/ scripts/
+
+  type-check:
+    name: Type-check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .[dev]
+      - name: mypy fts/
+        run: mypy fts/
+
   test:
+    name: Test (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -31,3 +65,42 @@ jobs:
         with:
           file: ./coverage.xml
           fail_ci_if_error: false
+
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    if: hashFiles('tests/benchmarks/**') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .[dev,evolution]
+      - name: Run benchmarks
+        run: python -m pytest tests/benchmarks/ --benchmark-only -q
+
+  release:
+    name: Release (sdist + wheel)
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, type-check, test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build package
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+          python -m build
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

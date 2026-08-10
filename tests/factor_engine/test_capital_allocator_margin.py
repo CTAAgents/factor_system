@@ -17,9 +17,7 @@ from fts.factor_engine.capital_allocator import CapitalAllocator
 def _make_returns(n: int = 300, n_assets: int = 4, seed: int = 7) -> pd.DataFrame:
     """构造多资产收益率面板（确定性种子）。"""
     rng = np.random.default_rng(seed)
-    return pd.DataFrame(
-        {f"A{i}": rng.normal(0.0005, 0.01, n) for i in range(n_assets)}
-    )
+    return pd.DataFrame({f"A{i}": rng.normal(0.0005, 0.01, n) for i in range(n_assets)})
 
 
 class TestGapF09MarginModeling:
@@ -39,7 +37,9 @@ class TestGapF09MarginModeling:
         alloc = CapitalAllocator()
         margin_rates = {"A0": 0.10, "A1": 0.10, "A2": 0.10, "A3": 0.10}
         result = alloc.allocate(
-            returns, total_capital=1_000_000, mode="risk_parity",
+            returns,
+            total_capital=1_000_000,
+            mode="risk_parity",
             margin_rates=margin_rates,
         )
         # risk_parity 权重和为 1.0，保证金占用 = Σ w_i × 0.10 = 0.10
@@ -51,7 +51,9 @@ class TestGapF09MarginModeling:
         returns = _make_returns()
         alloc = CapitalAllocator()
         result = alloc.allocate(
-            returns, total_capital=1_000_000, mode="fixed",
+            returns,
+            total_capital=1_000_000,
+            mode="fixed",
             margin_rates={"A0": 0.05},  # 表中无 portfolio → 默认 0.10
         )
         # fixed 模式权重 1.0 × 默认 0.10 = 0.10
@@ -64,8 +66,11 @@ class TestGapF09MarginModeling:
         # 高保证金品种：margin=0.20，fixed 模式权重 1.0 → 占用 0.20 > 0.10 上限
         margin_rates = {"portfolio": 0.20}
         result = alloc.allocate(
-            returns, total_capital=1_000_000, mode="fixed",
-            margin_rates=margin_rates, max_margin_usage=0.10,
+            returns,
+            total_capital=1_000_000,
+            mode="fixed",
+            margin_rates=margin_rates,
+            max_margin_usage=0.10,
         )
         assert result.details["margin_scaled"] is True
         assert result.details["margin_usage"] == pytest.approx(0.10, abs=1e-6)
@@ -79,8 +84,11 @@ class TestGapF09MarginModeling:
         alloc = CapitalAllocator()
         margin_rates = {"portfolio": 0.05}
         result = alloc.allocate(
-            returns, total_capital=1_000_000, mode="fixed",
-            margin_rates=margin_rates, max_margin_usage=0.10,
+            returns,
+            total_capital=1_000_000,
+            mode="fixed",
+            margin_rates=margin_rates,
+            max_margin_usage=0.10,
         )
         assert result.details["margin_scaled"] is False
         assert result.weights["portfolio"] == pytest.approx(1.0)
@@ -96,7 +104,10 @@ class TestGapF09MarginModeling:
         returns = _make_returns()
         alloc = CapitalAllocator()
         result = alloc.allocate(
-            returns, total_capital=1_000_000, mode="fixed", max_margin_usage=0.10,
+            returns,
+            total_capital=1_000_000,
+            mode="fixed",
+            max_margin_usage=0.10,
         )
         assert result.details["margin_scaled"] is True
         assert result.weights["portfolio"] == pytest.approx(0.50)

@@ -3,6 +3,7 @@
 安全说明: 本模块是沙箱白名单中唯一放行的 FTS 模块
 (_SANDBOX_ALLOWED_FTS_MODULES 精确匹配)，仅暴露 eval_fts_expr。
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -27,4 +28,4 @@ def eval_fts_expr(expression: str, data, params: dict) -> np.ndarray:
     """
     node = parse_expression(expression)
     series = evaluate(node, data, _REGISTRY)
-    return series.values.astype(np.float64)
+    return np.asarray(series, dtype=np.float64)

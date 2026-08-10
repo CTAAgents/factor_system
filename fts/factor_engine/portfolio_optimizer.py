@@ -131,14 +131,10 @@ class PortfolioOptimizer:
         elif _HAS_SCIPY:
             w = self._optimize_scipy(cov, mu, prev, returns, exposure, capacity)
         else:
-            logger.warning(
-                "[L3-Opt] scipy 未安装，使用 numpy 降级优化（无约束精确解 + 投影）"
-            )
+            logger.warning("[L3-Opt] scipy 未安装，使用 numpy 降级优化（无约束精确解 + 投影）")
             w = self._optimize_numpy(cov, mu, prev, capacity)
             if exposure is not None:
-                logger.warning(
-                    "[L3-Opt] numpy 降级路径不校验暴露约束（GAP-L304 需 scipy）"
-                )
+                logger.warning("[L3-Opt] numpy 降级路径不校验暴露约束（GAP-L304 需 scipy）")
 
         # 数值兜底：非有限值置 0
         w = np.nan_to_num(w, nan=0.0, posinf=0.0, neginf=0.0)
@@ -200,11 +196,7 @@ class PortfolioOptimizer:
             alpha = (lo + hi) / 2.0
             trial = alpha * w + (1.0 - alpha) * w_eq
             pr = np.asarray(returns, dtype=float) @ trial
-            var = (
-                -float(np.mean(pr)) - z * float(np.std(pr, ddof=1))
-                if len(pr) > 1
-                else 0.0
-            )
+            var = -float(np.mean(pr)) - z * float(np.std(pr, ddof=1)) if len(pr) > 1 else 0.0
             if var <= ceiling:
                 lo = alpha
             else:
@@ -259,10 +251,7 @@ class PortfolioOptimizer:
         # 容量约束（GAP-L305）: w_i <= capacity_i（收紧集中度上界）
         eff_max = capacity if capacity is not None else None
         if eff_max is not None:
-            bounds = [
-                (0.0, min(self._config.max_weight, float(lim)))
-                for lim in eff_max
-            ]
+            bounds = [(0.0, min(self._config.max_weight, float(lim))) for lim in eff_max]
         else:
             bounds = [(0.0, self._config.max_weight)] * n
 
@@ -305,7 +294,9 @@ class PortfolioOptimizer:
             constraints.append({"type": "ineq", "fun": exposure_lo})
             logger.info(
                 "[L3-Opt] 暴露中性化约束生效 [dim=%d, tol=%.4f, neutralization=%s]",
-                b_mat.shape[1], tol, self._config.neutralization,
+                b_mat.shape[1],
+                tol,
+                self._config.neutralization,
             )
 
         try:
@@ -415,9 +406,7 @@ class PortfolioOptimizer:
         if exposure_matrix is None:
             return None
         if self._config.neutralization is None:
-            logger.warning(
-                "[L3-Opt] 传入 exposure_matrix 但 neutralization=None，忽略暴露约束"
-            )
+            logger.warning("[L3-Opt] 传入 exposure_matrix 但 neutralization=None，忽略暴露约束")
             return None
         b = np.asarray(exposure_matrix, dtype=float)
         if b.ndim != 2 or b.shape[0] != n:
@@ -427,9 +416,7 @@ class PortfolioOptimizer:
         else:
             target = np.asarray(target_exposure, dtype=float).ravel()
             if target.shape[0] != b.shape[1]:
-                raise ValueError(
-                    f"目标暴露长度 {target.shape[0]} != 暴露维度 {b.shape[1]}"
-                )
+                raise ValueError(f"目标暴露长度 {target.shape[0]} != 暴露维度 {b.shape[1]}")
         return b, target
 
     def _prepare_capacity(
@@ -465,10 +452,7 @@ class PortfolioOptimizer:
         t = sqrt(-2.0 * np.log(max(1.0 - p, 1e-12)))
         c0, c1, c2 = 2.515517, 0.802853, 0.010328
         d1, d2, d3 = 1.432788, 0.189269, 0.001308
-        return float(
-            t
-            - (c0 + c1 * t + c2 * t * t) / (1.0 + d1 * t + d2 * t * t + d3 * t * t * t)
-        )
+        return float(t - (c0 + c1 * t + c2 * t * t) / (1.0 + d1 * t + d2 * t * t + d3 * t * t * t))
 
 
 __all__ = [

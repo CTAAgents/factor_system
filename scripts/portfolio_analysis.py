@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import sys
-import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -37,51 +36,89 @@ PERIODS_PER_YEAR = 252
 
 STOCK_SECTOR_MAP: dict[str, str] = {
     # 银行
-    "600000": "银行", "601166": "银行", "601288": "银行",
-    "601328": "银行", "601398": "银行", "600036": "银行",
+    "600000": "银行",
+    "601166": "银行",
+    "601288": "银行",
+    "601328": "银行",
+    "601398": "银行",
+    "600036": "银行",
     # 非银金融
-    "601318": "保险", "601628": "保险", "600030": "券商",
+    "601318": "保险",
+    "601628": "保险",
+    "600030": "券商",
     # 白酒
-    "600519": "白酒", "000858": "白酒", "002304": "白酒",
-    "600809": "白酒", "603288": "白酒",
+    "600519": "白酒",
+    "000858": "白酒",
+    "002304": "白酒",
+    "600809": "白酒",
+    "603288": "白酒",
     # 医药
-    "300015": "医药", "300760": "医药", "600276": "医药",
-    "600085": "医药", "300124": "医药",
+    "300015": "医药",
+    "300760": "医药",
+    "600276": "医药",
+    "600085": "医药",
     # 科技/电子
-    "002371": "半导体", "300433": "电子", "300450": "电子",
-    "300502": "通信", "603501": "半导体", "002475": "消费电子",
-    "688008": "半导体", "688036": "电子", "688111": "科技",
-    "688122": "军工", "688256": "科技", "688396": "电子",
+    "002371": "半导体",
+    "300433": "电子",
+    "300450": "电子",
+    "300502": "通信",
+    "603501": "半导体",
+    "002475": "消费电子",
+    "688008": "半导体",
+    "688036": "电子",
+    "688111": "科技",
+    "688122": "军工",
+    "688256": "科技",
+    "688396": "电子",
     # 新能源
-    "300274": "新能源", "300750": "新能源", "300438": "新能源",
-    "002594": "新能源车", "601012": "光伏", "603659": "新能源",
+    "300274": "新能源",
+    "300750": "新能源",
+    "300438": "新能源",
+    "002594": "新能源车",
+    "601012": "光伏",
+    "603659": "新能源",
     "600438": "光伏",
     # 家电
-    "000651": "家电", "000333": "家电", "600690": "家电",
+    "000651": "家电",
+    "000333": "家电",
+    "600690": "家电",
     # 地产
-    "000002": "地产", "600048": "地产",
+    "000002": "地产",
+    "600048": "地产",
     # 汽车
-    "600104": "汽车", "601127": "汽车",
+    "600104": "汽车",
+    "601127": "汽车",
     # 有色/资源
-    "601899": "有色", "600547": "黄金", "600585": "建材",
+    "601899": "有色",
+    "600547": "黄金",
+    "600585": "建材",
     # 食品饮料
-    "600887": "乳业", "002714": "养殖",
+    "600887": "乳业",
+    "002714": "养殖",
     # 医药器械
     "300413": "医药",
     # 互联网/传媒
-    "002027": "广告传媒", "300059": "金融科技",
+    "002027": "广告传媒",
+    "300059": "金融科技",
     # 通信/运营商
-    "600941": "通信", "601728": "通信",
+    "600941": "通信",
+    "601728": "通信",
     # 电力/公用
-    "600900": "电力", "601985": "电力", "600028": "石化",
+    "600900": "电力",
+    "601985": "电力",
+    "600028": "石化",
     # 煤炭
     "601088": "煤炭",
     # 机械
-    "600031": "机械", "601766": "轨交",
+    "600031": "机械",
+    "601766": "轨交",
     # 计算机
-    "002230": "人工智能", "002415": "安防",
-    "300124": "工控", "300308": "通信",
-    "600406": "软件", "600436": "医药",
+    "002230": "人工智能",
+    "002415": "安防",
+    "300124": "工控",
+    "300308": "通信",
+    "600406": "软件",
+    "600436": "医药",
     "601857": "石化",
     "601888": "免税",
     "603259": "医药",
@@ -116,6 +153,7 @@ def classify_factor(name: str) -> str:
 
 # ─── 加载数据 ──────────────────────────────────────────────
 
+
 def load_portfolio() -> dict:
     return json.loads(COMBO_FILE.read_text(encoding="utf-8"))
 
@@ -134,6 +172,7 @@ def load_elite_factors() -> dict[str, dict]:
 # ══════════════════════════════════════════════════════════
 # 1. 行业暴露分析
 # ══════════════════════════════════════════════════════════
+
 
 def analyze_sector_exposure(
     panel: dict[str, pd.DataFrame],
@@ -155,8 +194,8 @@ def analyze_sector_exposure(
     oos_fwd_ret = fwd_ret_matrix[oos_slice, :]
 
     # 累计各行业暴露
-    sector_long_days: dict[str, int] = defaultdict(int)      # 被选中的天数
-    sector_total_days: dict[str, int] = defaultdict(int)     # 总出现天数
+    sector_long_days: dict[str, int] = defaultdict(int)  # 被选中的天数
+    sector_total_days: dict[str, int] = defaultdict(int)  # 总出现天数
     sector_long_return: dict[str, float] = defaultdict(float)
 
     for t in range(oos_n):
@@ -168,7 +207,7 @@ def analyze_sector_exposure(
 
         valid_idx = np.where(valid)[0]
         scores_v = scores[valid_idx]
-        rets_v = rets[valid_idx]
+        rets[valid_idx]
         sorted_idx = np.argsort(scores_v)
         top_n = max(1, int(len(sorted_idx) * TOP_PCT))
 
@@ -210,18 +249,20 @@ def analyze_sector_exposure(
             sector_total_days[sector] += 1
 
     # 构建报告
-    total_trades = sum(sector_long_days.values())
+    sum(sector_long_days.values())
     sector_report = []
     for sector in sorted(sector_total_days.keys()):
         select_pct = sector_long_days.get(sector, 0) / max(sector_total_days[sector], 1) * 100
         avg_ret = sector_long_return.get(sector, 0) / max(sector_long_days.get(sector, 1), 1) * 10000  # bp
-        sector_report.append({
-            "sector": sector,
-            "selection_pct": round(select_pct, 2),
-            "avg_daily_return_bp": round(avg_ret, 2),
-            "selected_days": sector_long_days.get(sector, 0),
-            "total_days": sector_total_days[sector],
-        })
+        sector_report.append(
+            {
+                "sector": sector,
+                "selection_pct": round(select_pct, 2),
+                "avg_daily_return_bp": round(avg_ret, 2),
+                "selected_days": sector_long_days.get(sector, 0),
+                "total_days": sector_total_days[sector],
+            }
+        )
 
     sector_report.sort(key=lambda x: abs(x["avg_daily_return_bp"]), reverse=True)
     return {"sectors": sector_report}
@@ -230,6 +271,7 @@ def analyze_sector_exposure(
 # ══════════════════════════════════════════════════════════
 # 2. 因子归因分析
 # ══════════════════════════════════════════════════════════
+
 
 def analyze_factor_attribution(
     combo: dict,
@@ -327,7 +369,7 @@ def analyze_factor_attribution(
     oos_fwd_ret = fwd_ret_matrix[oos_slice, :]
 
     type_performance = {}
-    full_composite_oos = composite[oos_slice, :]
+    composite[oos_slice, :]
 
     for ftype, mat in type_matrices.items():
         mat_oos = mat[oos_slice, :]
@@ -358,6 +400,7 @@ def analyze_factor_attribution(
             if np.sum(valid) < 5:
                 continue
             from scipy import stats as sp_stats
+
             ic_val, _ = sp_stats.spearmanr(scores[valid], rets[valid])
             if not np.isnan(ic_val):
                 ic_mean += ic_val
@@ -451,6 +494,7 @@ def composite_backtest(
 # 3. 市场环境表现分析
 # ══════════════════════════════════════════════════════════
 
+
 def analyze_market_regime_performance(
     panel: dict[str, pd.DataFrame],
     common_dates: pd.DatetimeIndex,
@@ -484,17 +528,19 @@ def analyze_market_regime_performance(
         hist_idx = ohlcv.index.get_loc(current_date) if current_date in ohlcv.index else -1
         if hist_idx < 10:
             continue
-        hist_data = ohlcv.iloc[:hist_idx + 1]
+        hist_data = ohlcv.iloc[: hist_idx + 1]
         try:
             regime = selector.detect(hist_data)
             regime_labels.append(regime["regime"])
-            regime_list.append({
-                "date": str(current_date.date()),
-                "regime": regime["regime"],
-                "confidence": regime["confidence"],
-                "trend_strength": regime["features"].get("trend_strength", 0),
-                "volatility": regime["features"].get("volatility", 0),
-            })
+            regime_list.append(
+                {
+                    "date": str(current_date.date()),
+                    "regime": regime["regime"],
+                    "confidence": regime["confidence"],
+                    "trend_strength": regime["features"].get("trend_strength", 0),
+                    "volatility": regime["features"].get("volatility", 0),
+                }
+            )
         except Exception:
             continue
 
@@ -502,10 +548,12 @@ def analyze_market_regime_performance(
     if not regime_labels:
         return {"regime_performance": {}, "regime_timeline": []}
 
-    df_regime = pd.DataFrame({
-        "regime": regime_labels[:oos_n],
-        "daily_return": daily_ret[:len(regime_labels)],
-    })
+    df_regime = pd.DataFrame(
+        {
+            "regime": regime_labels[:oos_n],
+            "daily_return": daily_ret[: len(regime_labels)],
+        }
+    )
 
     regime_perf = {}
     for regime_name, group in df_regime.groupby("regime"):
@@ -536,6 +584,7 @@ def analyze_market_regime_performance(
 
 # ─── 辅助指标 ──────────────────────────────────────────────
 
+
 def _compute_sharpe(returns: np.ndarray, periods: int = PERIODS_PER_YEAR) -> float:
     if len(returns) < 2:
         return 0.0
@@ -554,56 +603,65 @@ def _compute_max_drawdown(cumulative: np.ndarray) -> float:
 
 # ─── 报告输出 ──────────────────────────────────────────────
 
+
 def print_sector_report(sector_data: dict) -> None:
-    print(f"\n  ┌─ 行业暴露分析{'─'*38}┐")
+    print(f"\n  ┌─ 行业暴露分析{'─' * 38}┐")
     sectors = sector_data.get("sectors", [])
     print(f"  │ {'行业':<12} {'选中率':>8} {'日均收益':>9} {'选中天数':>8} {'总天数':>6} │")
-    print(f"  │ {'─'*12} {'─'*8} {'─'*9} {'─'*8} {'─'*6} │")
+    print(f"  │ {'─' * 12} {'─' * 8} {'─' * 9} {'─' * 8} {'─' * 6} │")
     for s in sectors[:15]:
-        print(f"  │ {s['sector']:<12} {s['selection_pct']:>6.1f}% {s['avg_daily_return_bp']:>+7.1f}bp "
-              f"{s['selected_days']:>6} {s['total_days']:>6} │")
+        print(
+            f"  │ {s['sector']:<12} {s['selection_pct']:>6.1f}% {s['avg_daily_return_bp']:>+7.1f}bp "
+            f"{s['selected_days']:>6} {s['total_days']:>6} │"
+        )
     if len(sectors) > 15:
         print(f"  │ ... 还有 {len(sectors) - 15} 个行业 ...")
-    print(f"  └{'─'*55}┘")
+    print(f"  └{'─' * 55}┘")
 
 
 def print_factor_attribution_report(attr_data: dict) -> None:
-    print(f"\n  ┌─ 因子归因分析{'─'*38}┐")
+    print(f"\n  ┌─ 因子归因分析{'─' * 38}┐")
     type_perf = attr_data.get("type_performance", {})
     print(f"  │ {'因子类型':<14} {'因子数':>6} {'权重':>7} {'夏普':>6} {'累计收益':>10} {'最大回撤':>9} {'胜率':>7} │")
-    print(f"  │ {'─'*14} {'─'*6} {'─'*7} {'─'*6} {'─'*10} {'─'*9} {'─'*7} │")
+    print(f"  │ {'─' * 14} {'─' * 6} {'─' * 7} {'─' * 6} {'─' * 10} {'─' * 9} {'─' * 7} │")
     for ftype, perf in sorted(type_perf.items(), key=lambda x: x[1].get("sharpe", 0), reverse=True):
-        print(f"  │ {ftype:<14} {perf['n_factors']:>6} {perf['weight']:>6}% "
-              f"{perf['sharpe']:>5.1f} {perf['total_return_pct']:>+8.1f}% "
-              f"{perf['max_drawdown_pct']:>7.1f}% {perf['win_rate']:>5.1f}% │")
-    print(f"  └{'─'*55}┘")
+        print(
+            f"  │ {ftype:<14} {perf['n_factors']:>6} {perf['weight']:>6}% "
+            f"{perf['sharpe']:>5.1f} {perf['total_return_pct']:>+8.1f}% "
+            f"{perf['max_drawdown_pct']:>7.1f}% {perf['win_rate']:>5.1f}% │"
+        )
+    print(f"  └{'─' * 55}┘")
 
 
 def print_regime_report(regime_data: dict) -> None:
-    print(f"\n  ┌─ 市场环境表现{'─'*38}┐")
+    print(f"\n  ┌─ 市场环境表现{'─' * 38}┐")
     regime_perf = regime_data.get("regime_performance", {})
     timeline = regime_data.get("regime_timeline", [])
 
     if not regime_perf:
-        print(f"  │ （无市场制度数据）")
-        print(f"  └{'─'*55}┘")
+        print("  │ （无市场制度数据）")
+        print(f"  └{'─' * 55}┘")
         return
 
     print(f"  │ {'制度':<12} {'天数':>6} {'占比':>7} {'夏普':>6} {'累计收益':>10} {'最大回撤':>9} {'胜率':>7} │")
-    print(f"  │ {'─'*12} {'─'*6} {'─'*7} {'─'*6} {'─'*10} {'─'*9} {'─'*7} │")
+    print(f"  │ {'─' * 12} {'─' * 6} {'─' * 7} {'─' * 6} {'─' * 10} {'─' * 9} {'─' * 7} │")
     for regime_name, perf in sorted(regime_perf.items(), key=lambda x: x[1].get("n_days", 0), reverse=True):
-        label = {"bull": "牛市", "bear": "熊市", "oscillate": "震荡", "high_vol": "高波", "low_vol": "低波"}.get(regime_name, regime_name)
-        print(f"  │ {label:<12} {perf['n_days']:>6} {perf['pct_of_total']:>6}% "
-              f"{perf['sharpe']:>5.1f} {perf['total_return_pct']:>+8.1f}% "
-              f"{perf['max_drawdown_pct']:>7.1f}% {perf['win_rate']:>5.1f}% │")
-    print(f"  └{'─'*55}┘")
+        label = {"bull": "牛市", "bear": "熊市", "oscillate": "震荡", "high_vol": "高波", "low_vol": "低波"}.get(
+            regime_name, regime_name
+        )
+        print(
+            f"  │ {label:<12} {perf['n_days']:>6} {perf['pct_of_total']:>6}% "
+            f"{perf['sharpe']:>5.1f} {perf['total_return_pct']:>+8.1f}% "
+            f"{perf['max_drawdown_pct']:>7.1f}% {perf['win_rate']:>5.1f}% │"
+        )
+    print(f"  └{'─' * 55}┘")
 
     # 制度时间线摘要
     if timeline:
         regime_counts = defaultdict(int)
         for r in timeline:
             regime_counts[r["regime"]] += 1
-        total = len(timeline)
+        len(timeline)
         # 简化时间线：取主要的制度切换点
         last_regime = None
         switches = []
@@ -612,18 +670,26 @@ def print_regime_report(regime_data: dict) -> None:
                 switches.append((r["date"], r["regime"], r.get("trend_strength", 0)))
                 last_regime = r["regime"]
         if len(switches) > 1:
-            print(f"\n  ┌─ 制度切换时间线{'─'*37}┐")
+            print(f"\n  ┌─ 制度切换时间线{'─' * 37}┐")
             for date, regime, trend in switches[-8:]:
-                label = {"bull": "牛市", "bear": "熊市", "oscillate": "震荡", "high_vol": "高波", "low_vol": "低波"}.get(regime, regime)
+                label = {
+                    "bull": "牛市",
+                    "bear": "熊市",
+                    "oscillate": "震荡",
+                    "high_vol": "高波",
+                    "low_vol": "低波",
+                }.get(regime, regime)
                 arrow = "↑" if trend > 0.02 else ("↓" if trend < -0.02 else "→")
                 print(f"  │ {date} → {label} {arrow} (trend={trend:+.4f})")
-            print(f"  └{'─'*55}┘")
+            print(f"  └{'─' * 55}┘")
 
 
 # ─── 主入口 ────────────────────────────────────────────────
 
+
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="L3 组合策略深度分析")
     parser.add_argument("--max-stocks", type=int, default=30, help="最大标的数")
     parser.add_argument("--days", type=int, default=800, help="回溯天数")
@@ -632,9 +698,9 @@ def main():
     parser.add_argument("--regime", action="store_true", default=True, help="市场环境分析")
     args = parser.parse_args()
 
-    print(f"\n{'='*60}")
-    print(f"  组合策略深度分析")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print("  组合策略深度分析")
+    print(f"{'=' * 60}")
 
     # ── 加载数据 ──
     print("\n[1/4] 加载组合配置和精英因子...")
@@ -756,8 +822,14 @@ def main():
     if args.attribution:
         print("\n  → 因子归因分析...")
         attr_data = analyze_factor_attribution(
-            combo, elite_factors, panel, common_dates, symbols,
-            composite, oos_slice, fwd_ret_matrix,
+            combo,
+            elite_factors,
+            panel,
+            common_dates,
+            symbols,
+            composite,
+            oos_slice,
+            fwd_ret_matrix,
         )
         results["attribution"] = attr_data
         print_factor_attribution_report(attr_data)
@@ -765,7 +837,11 @@ def main():
     if args.regime:
         print("\n  → 市场环境分析...")
         regime_data = analyze_market_regime_performance(
-            panel, common_dates, composite, oos_slice, fwd_ret_matrix,
+            panel,
+            common_dates,
+            composite,
+            oos_slice,
+            fwd_ret_matrix,
         )
         results["regime"] = regime_data
         print_regime_report(regime_data)
@@ -780,9 +856,9 @@ def main():
     out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\n分析结果已保存到: {out_path}")
 
-    print(f"\n{'='*60}")
-    print(f"  分析完成")
-    print(f"{'='*60}\n")
+    print(f"\n{'=' * 60}")
+    print("  分析完成")
+    print(f"{'=' * 60}\n")
     return 0
 
 

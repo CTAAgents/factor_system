@@ -107,7 +107,9 @@ class SignalModelTrainer:
         n_features = X_np.shape[1]
         if n_samples < 2 or n_features < 1:
             return TrainResult(
-                mode=self.mode, kind=self.kind, message="样本数或特征数不足",
+                mode=self.mode,
+                kind=self.kind,
+                message="样本数或特征数不足",
             )
 
         # 模式预处理
@@ -125,14 +127,19 @@ class SignalModelTrainer:
         y_clean = y_np[mask]
         if len(y_clean) < 2:
             return TrainResult(
-                mode=self.mode, kind=self.kind, message="清理 NaN 后样本数不足",
+                mode=self.mode,
+                kind=self.kind,
+                message="清理 NaN 后样本数不足",
             )
 
         model = create_signal_model(self.kind, self.params, self.seed)
         if model is None:
             return TrainResult(
-                mode=self.mode, kind=self.kind, model=None,
-                n_samples=len(y_clean), n_features=n_features,
+                mode=self.mode,
+                kind=self.kind,
+                model=None,
+                n_samples=len(y_clean),
+                n_features=n_features,
                 message="模型依赖未安装，跳过训练（降级）",
             )
 
@@ -142,9 +149,12 @@ class SignalModelTrainer:
         importance = self._extract_importance(model, names, n_features)
 
         return TrainResult(
-            mode=self.mode, kind=self.kind, model=model,
+            mode=self.mode,
+            kind=self.kind,
+            model=model,
             score=float(score),
-            n_samples=int(len(y_clean)), n_features=n_features,
+            n_samples=int(len(y_clean)),
+            n_features=n_features,
             feature_importance=importance,
             message="ok",
         )
@@ -168,7 +178,7 @@ class SignalModelTrainer:
         """提取特征重要性（可用时）。"""
         if model.kind == ModelKind.ENSEMBLE:
             # Ensemble 无统一重要性，聚合子模型均值
-            imp = {}
+            imp: dict[str, float] = {}
             for sub in getattr(model, "_sub_models", []) or []:
                 try:
                     fi = sub.feature_importances_
@@ -192,10 +202,7 @@ class SignalModelTrainer:
         if arr.size != n_features:
             return {}
         total = float(arr.sum()) or 1.0
-        return {
-            (names[i] if i < len(names) else f"f{i}"): float(arr[i]) / total
-            for i in range(n_features)
-        }
+        return {(names[i] if i < len(names) else f"f{i}"): float(arr[i]) / total for i in range(n_features)}
 
 
 __all__ = [

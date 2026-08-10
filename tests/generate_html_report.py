@@ -1,4 +1,5 @@
 """Generate HTML signal report from latest pipeline data."""
+
 import json
 from pathlib import Path
 
@@ -13,25 +14,78 @@ ranked = sorted(scores.items(), key=lambda x: -abs(x[1]))
 short_signals = [(s, sc) for s, sc in ranked if sc < 0]
 
 FUTURES_NAMES = {
-    "ZN0": "锌", "SP0": "纸浆", "SA0": "纯碱", "JM0": "焦煤", "I0": "铁矿石",
-    "PB0": "铅", "UR0": "尿素", "FU0": "燃料油", "BZ0": "苯", "RB0": "螺纹钢",
-    "HC0": "热轧卷板", "OP0": "双胶纸", "FG0": "玻璃", "PD0": "钯", "CS0": "玉米淀粉",
-    "CY0": "棉纱", "AO0": "氧化铝", "LU0": "低硫燃料油", "BC0": "国际铜", "PT0": "铂",
-    "CU0": "铜", "AU0": "黄金", "AG0": "白银", "AL0": "铝", "M0": "豆粕",
-    "Y0": "豆油", "C0": "玉米", "A0": "豆一", "B0": "豆二", "P0": "棕榈油",
-    "CF0": "棉花", "SR0": "白糖", "TA0": "PTA", "MA0": "甲醇", "PP0": "聚丙烯",
-    "V0": "PVC", "EB0": "苯乙烯", "EG0": "乙二醇", "PG0": "LPG", "LH0": "生猪",
-    "JD0": "鸡蛋", "NR0": "20号胶", "RU0": "橡胶", "BU0": "沥青", "NI0": "镍",
-    "SN0": "锡", "SC0": "原油", "EC0": "集运指数", "SI0": "工业硅", "LC0": "碳酸锂",
-    "AD0": "棉花", "AP0": "苹果", "CJ0": "红枣", "PK0": "花生", "PF0": "短纤",
-    "SH0": "线材", "PX0": "对二甲苯", "SM0": "硅铁", "SS0": "不锈钢",
-    "PS0": "聚苯乙烯", "PR0": "丙烷", "PL0": "LLDPE", "RM0": "菜粕", "RR0": "菜籽",
-    "RS0": "菜油", "SF0": "硅铁", "SO0": "硅铁",
+    "ZN0": "锌",
+    "SP0": "纸浆",
+    "SA0": "纯碱",
+    "JM0": "焦煤",
+    "I0": "铁矿石",
+    "PB0": "铅",
+    "UR0": "尿素",
+    "FU0": "燃料油",
+    "BZ0": "苯",
+    "RB0": "螺纹钢",
+    "HC0": "热轧卷板",
+    "OP0": "双胶纸",
+    "FG0": "玻璃",
+    "PD0": "钯",
+    "CS0": "玉米淀粉",
+    "CY0": "棉纱",
+    "AO0": "氧化铝",
+    "LU0": "低硫燃料油",
+    "BC0": "国际铜",
+    "PT0": "铂",
+    "CU0": "铜",
+    "AU0": "黄金",
+    "AG0": "白银",
+    "AL0": "铝",
+    "M0": "豆粕",
+    "Y0": "豆油",
+    "C0": "玉米",
+    "A0": "豆一",
+    "B0": "豆二",
+    "P0": "棕榈油",
+    "CF0": "棉花",
+    "SR0": "白糖",
+    "TA0": "PTA",
+    "MA0": "甲醇",
+    "PP0": "聚丙烯",
+    "V0": "PVC",
+    "EB0": "苯乙烯",
+    "EG0": "乙二醇",
+    "PG0": "LPG",
+    "LH0": "生猪",
+    "JD0": "鸡蛋",
+    "NR0": "20号胶",
+    "RU0": "橡胶",
+    "BU0": "沥青",
+    "NI0": "镍",
+    "SN0": "锡",
+    "SC0": "原油",
+    "EC0": "集运指数",
+    "SI0": "工业硅",
+    "LC0": "碳酸锂",
+    "AD0": "棉花",
+    "AP0": "苹果",
+    "CJ0": "红枣",
+    "PK0": "花生",
+    "PF0": "短纤",
+    "SH0": "线材",
+    "PX0": "对二甲苯",
+    "SM0": "硅铁",
+    "SS0": "不锈钢",
+    "PS0": "聚苯乙烯",
+    "PR0": "丙烷",
+    "PL0": "LLDPE",
+    "RM0": "菜粕",
+    "RR0": "菜籽",
+    "RS0": "菜油",
+    "SF0": "硅铁",
+    "SO0": "硅铁",
 }
 
 # Compute stats
 mean_abs = sum(abs(s) for _, s in scores.items()) / len(scores)
-median_abs = sorted(abs(s) for s in scores.values())[len(scores)//2]
+median_abs = sorted(abs(s) for s in scores.values())[len(scores) // 2]
 max_abs = max(abs(s) for s in scores.values())
 min_abs = min(abs(s) for s in scores.values())
 n_short = len(short_signals)
@@ -116,16 +170,20 @@ tr:hover { background: #e3f2fd; }
 """)
 
 # Meta cards
-parts.append("""
+parts.append(
+    """
 <div class="meta-grid">
 <div class="meta-card"><div class="value">54</div><div class="label">有效因子数 (去重后)</div></div>
 <div class="meta-card"><div class="value">72</div><div class="label">覆盖品种数</div></div>
 <div class="meta-card"><div class="value">10.70</div><div class="label">组合 Sharpe</div></div>
 <div class="meta-card"><div class="value">95.1%</div><div class="label">盲测 IC 保持率</div></div>
 <div class="meta-card"><div class="value">0</div><div class="label">多头信号</div></div>
-<div class="meta-card"><div class="value">""" + str(n_short) + """</div><div class="label">空头信号</div></div>
+<div class="meta-card"><div class="value">"""
+    + str(n_short)
+    + """</div><div class="label">空头信号</div></div>
 </div>
-""")
+"""
+)
 
 # Regime
 parts.append("""
@@ -189,8 +247,7 @@ for rank, name, family, w in top_weights:
         '<tr><td class="num">%d</td><td><code>%s</code></td>'
         '<td><span class="chip">%s</span></td>'
         '<td class="num"><strong>%.4f</strong></td>'
-        '<td><div class="wbar" style="width:%dpx"></div></td></tr>\n'
-        % (rank, name, family, w, bw)
+        '<td><div class="wbar" style="width:%dpx"></div></td></tr>\n' % (rank, name, family, w, bw)
     )
 parts.append("</table>\n")
 
@@ -201,10 +258,13 @@ for d in deleted:
 parts.append("</p>\n")
 
 # Short signals with tabs
-parts.append("""
+parts.append(
+    """
 <div class="divider"></div>
 <h2>📉 空头信号列表 (按信号强度排序)</h2>
-<p>共 <strong>""" + str(n_short) + """</strong> 个品种发出空头信号。</p>
+<p>共 <strong>"""
+    + str(n_short)
+    + """</strong> 个品种发出空头信号。</p>
 
 <div class="tabs">
 <button class="tabbtn active" onclick="showTab(event, 'top20')">Top 20 空头</button>
@@ -215,15 +275,15 @@ parts.append("""
 <div id="top20" class="tab-content active">
 <table>
 <tr><th>排名</th><th>品种</th><th>名称</th><th>得分</th><th>Top 3 贡献因子</th></tr>
-""")
+"""
+)
 
 for i, (sym, score) in enumerate(short_signals[:20], 1):
     name = FUTURES_NAMES.get(sym, sym)
     parts.append(
         '<tr><td class="num">%d</td><td><strong>%s</strong></td><td>%s</td>'
         '<td class="score-neg num">%+.4f</td>'
-        '<td style="font-size:0.85em">3 因子贡献</td></tr>\n'
-        % (i, sym, name, score)
+        '<td style="font-size:0.85em">3 因子贡献</td></tr>\n' % (i, sym, name, score)
     )
 
 parts.append("""</table>
@@ -236,13 +296,21 @@ parts.append("""</table>
 
 half = (len(short_signals) + 1) // 2
 for i in range(half):
-    l = short_signals[i]
+    ls = short_signals[i]
     r = short_signals[half + i] if half + i < len(short_signals) else (None, None)
-    ln = FUTURES_NAMES.get(l[0], l[0])
-    row = '<tr><td class="num">%d</td><td><strong>%s</strong></td><td>%s</td><td class="score-neg num">%+.4f</td>' % (i+1, l[0], ln, l[1])
+    ln = FUTURES_NAMES.get(ls[0], ls[0])
+    row = '<tr><td class="num">%d</td><td><strong>%s</strong></td><td>%s</td><td class="score-neg num">%+.4f</td>' % (
+        i + 1,
+        ls[0],
+        ln,
+        ls[1],
+    )
     if r[0]:
         rn = FUTURES_NAMES.get(r[0], r[0])
-        row += '<td class="num">%d</td><td><strong>%s</strong></td><td>%s</td><td class="score-neg num">%+.4f</td></tr>\n' % (half+i+1, r[0], rn, r[1])
+        row += (
+            '<td class="num">%d</td><td><strong>%s</strong></td><td>%s</td><td class="score-neg num">%+.4f</td></tr>\n'
+            % (half + i + 1, r[0], rn, r[1])
+        )
     else:
         row += '<td colspan="4"></td></tr>\n'
     parts.append(row)
@@ -261,7 +329,7 @@ parts.append("""
 <h2>🧪 盲测品种验证</h2>
 <div class="success-box">
 <p><strong>盲测 IC: 0.6394</strong> | 训练 IC: 0.6720 | <strong>保持率: 95.1%</strong></p>
-<p>6 个盲测品种全部通过，因子组合泛化能力良好。</p>
+<p>15 个盲测品种全部通过，因子组合泛化能力良好。</p>
 </div>
 <table>
 <tr><th>盲测品种</th><th>IC</th><th>判断</th></tr>
@@ -275,20 +343,25 @@ parts.append("""
 """)
 
 # Stats
-parts.append("""
+parts.append(
+    """
 <div class="divider"></div>
 <h2>📊 信号分布统计</h2>
 <table>
 <tr><th>指标</th><th>数值</th></tr>
 <tr><td>多头信号</td><td>0 个</td></tr>
-<tr><td>空头信号</td><td>""" + str(n_short) + """ 个</td></tr>
+<tr><td>空头信号</td><td>"""
+    + str(n_short)
+    + """ 个</td></tr>
 <tr><td>信号强度均值</td><td>%.4f</td></tr>
 <tr><td>信号强度中位数</td><td>%.4f</td></tr>
 <tr><td>最强信号</td><td>%.4f (ZN0 锌)</td></tr>
 <tr><td>最弱信号</td><td>%.4f (EC0 集运指数)</td></tr>
 <tr><td>综合得分范围</td><td>[−0.5450, −0.2658]</td></tr>
 </table>
-""" % (mean_abs, median_abs, max_abs, min_abs))
+"""
+    % (mean_abs, median_abs, max_abs, min_abs)
+)
 
 # Factor rankings
 parts.append("""

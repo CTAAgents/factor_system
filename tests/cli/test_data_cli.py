@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -34,18 +33,20 @@ def _make_kline_df(prices: list, base_date: str = "2026-08-04", source: str = "T
 
     n = len(prices)
     dates = [date.fromisoformat(base_date) - timedelta(days=n - 1 - i) for i in range(n)]
-    return pd.DataFrame({
-        "symbol": "RB0",
-        "period": "daily",
-        "date": dates,
-        "open": [p - 1 for p in prices],
-        "high": [p + 2 for p in prices],
-        "low": [p - 2 for p in prices],
-        "close": prices,
-        "volume": [100000] * n,
-        "source": source,
-        "trace_id": "test-tid",
-    })
+    return pd.DataFrame(
+        {
+            "symbol": "RB0",
+            "period": "daily",
+            "date": dates,
+            "open": [p - 1 for p in prices],
+            "high": [p + 2 for p in prices],
+            "low": [p - 2 for p in prices],
+            "close": prices,
+            "volume": [100000] * n,
+            "source": source,
+            "trace_id": "test-tid",
+        }
+    )
 
 
 class _StubSource:
@@ -144,12 +145,18 @@ class TestDataStatus:
         mock_agg = MagicMock()
         mock_agg.get_source_status.return_value = {
             "TQ_LOCAL": {
-                "consecutive_failures": 0, "circuit_open": False,
-                "total_success": 100, "total_failure": 2, "last_error": "",
+                "consecutive_failures": 0,
+                "circuit_open": False,
+                "total_success": 100,
+                "total_failure": 2,
+                "last_error": "",
             },
             "WIND": {
-                "consecutive_failures": 3, "circuit_open": False,
-                "total_success": 50, "total_failure": 5, "last_error": "timeout",
+                "consecutive_failures": 3,
+                "circuit_open": False,
+                "total_success": 50,
+                "total_failure": 5,
+                "last_error": "timeout",
             },
         }
         with patch("fts.cli._build_default_aggregator", return_value=mock_agg):
@@ -166,8 +173,13 @@ class TestDataStatus:
 
         mock_agg = MagicMock()
         mock_agg.get_source_status.return_value = {
-            "TQ_LOCAL": {"consecutive_failures": 0, "circuit_open": False,
-                         "total_success": 5, "total_failure": 0, "last_error": ""},
+            "TQ_LOCAL": {
+                "consecutive_failures": 0,
+                "circuit_open": False,
+                "total_success": 5,
+                "total_failure": 0,
+                "last_error": "",
+            },
         }
         with patch("fts.cli._build_default_aggregator", return_value=mock_agg):
             args = MagicMock(json=True)
@@ -205,13 +217,19 @@ class TestDataCrossCheck:
         from fts.cli import _cmd_data_cross_check
 
         mock_agg = MagicMock()
-        mock_agg.cross_check.return_value = [{
-            "symbol": "RB0", "date": "2026-08-04",
-            "prices": {"TQ_LOCAL": 3500.0, "WIND": 3800.0},
-            "median": 3650.0, "outliers": ["WIND"],
-            "max_diff_pct": 0.041, "threshold": 0.005, "trace_id": "tid",
-            "detected_at": "2026-08-04T17:00:00",
-        }]
+        mock_agg.cross_check.return_value = [
+            {
+                "symbol": "RB0",
+                "date": "2026-08-04",
+                "prices": {"TQ_LOCAL": 3500.0, "WIND": 3800.0},
+                "median": 3650.0,
+                "outliers": ["WIND"],
+                "max_diff_pct": 0.041,
+                "threshold": 0.005,
+                "trace_id": "tid",
+                "detected_at": "2026-08-04T17:00:00",
+            }
+        ]
         with patch("fts.cli._build_default_aggregator", return_value=mock_agg):
             args = MagicMock(symbol="RB0", date="2026-08-04", json=False)
             rc = _cmd_data_cross_check(args)
@@ -238,8 +256,11 @@ class TestDataFuse:
 
         with patch("fts.cli._build_default_aggregator", return_value=mock_agg):
             args = MagicMock(
-                symbol="RB0", strategy="MEDIAN", days=30,
-                json=False, output=None,
+                symbol="RB0",
+                strategy="MEDIAN",
+                days=30,
+                json=False,
+                output=None,
             )
             rc = _cmd_data_fuse(args)
         assert rc == 1
@@ -269,8 +290,11 @@ class TestDataFuse:
         out_path = tmp_path / "report.json"
         with patch("fts.cli._build_default_aggregator", return_value=mock_agg):
             args = MagicMock(
-                symbol="RB0", strategy="MEDIAN", days=3,
-                json=True, output=str(out_path),
+                symbol="RB0",
+                strategy="MEDIAN",
+                days=3,
+                json=True,
+                output=str(out_path),
             )
             rc = _cmd_data_fuse(args)
         assert rc == 0
@@ -303,10 +327,15 @@ class TestFusionReportContract:
         """FusionReport 必填字段。"""
         from fts.core.contracts import FusionReport
         import typing
+
         hints = typing.get_type_hints(FusionReport)
         required = {
-            "trace_id", "symbol", "strategy",
-            "rows", "sources_used", "rows_count",
+            "trace_id",
+            "symbol",
+            "strategy",
+            "rows",
+            "sources_used",
+            "rows_count",
         }
         for field in required:
             assert field in hints, f"FusionReport missing required field: {field}"
@@ -315,11 +344,11 @@ class TestFusionReportContract:
         """FusionReport 可选字段。"""
         from fts.core.contracts import FusionReport
         import typing
+
         try:
             hints = typing.get_type_hints(FusionReport, include_extras=True)
         except TypeError:
             hints = typing.get_type_hints(FusionReport)
-        optional = {"started_at", "finished_at", "disagreements", "avg_disagreement_pct"}
         # 至少部分可选字段存在（可能 type-hints 看不到 NotRequired）
         assert "disagreements" in FusionReport.__annotations__ or "disagreements" in hints
 
@@ -331,6 +360,7 @@ class TestDataCliE2E:
     def test_data_status_help(self, capsys):
         """`fts data status --help` 通过 main() 调用。"""
         from fts.cli import main
+
         with pytest.raises(SystemExit) as exc_info:
             main(["data", "status", "--help"])
         # argparse 退出码 0 表示 help 成功
@@ -339,6 +369,7 @@ class TestDataCliE2E:
     def test_data_fuse_help(self, capsys):
         """`fts data fuse --help` 显示所有参数。"""
         from fts.cli import main
+
         with pytest.raises(SystemExit) as exc_info:
             main(["data", "fuse", "--help"])
         assert exc_info.value.code == 0

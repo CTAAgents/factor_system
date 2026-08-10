@@ -15,7 +15,7 @@ from pathlib import Path
 # 添加项目根目录
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fts.data_mcp_bridge import _parse_mx_response, save_cache
+from fts.data_mcp_bridge import _parse_mx_response
 
 
 def parse_mx_response_text(text: str) -> dict:
@@ -47,6 +47,8 @@ if __name__ == "__main__":
     print("  3. 运行: python scripts/build_fundamental_cache.py <input.json>")
     print()
     print("示例 run_mcp 查询:")
-    print('  query: "平安银行(000001)的市盈率TTM、市净率PB、总市值、ROE、EPS、营收增长率、净利润增长率、毛利率、每股净资产"')
+    print(
+        '  query: "平安银行(000001)的市盈率TTM、市净率PB、总市值、ROE、EPS、营收增长率、净利润增长率、毛利率、每股净资产"'
+    )
     print()
     print("支持批量查询最多500只股票")

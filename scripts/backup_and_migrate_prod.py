@@ -54,9 +54,12 @@ def main() -> int:
     con_bak = duckdb.connect(str(backup_path), read_only=True)
     try:
         bak_count = con_bak.execute("SELECT count(*) FROM kline_cache").fetchone()[0]
-        bak_cols = {r[0] for r in con_bak.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_name='kline_cache'"
-        ).fetchall()}
+        bak_cols = {
+            r[0]
+            for r in con_bak.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='kline_cache'"
+            ).fetchall()
+        }
         print(f"  kline_cache 条数: {bak_count:,}")
         print(f"  kline_cache 列数: {len(bak_cols)}  → {sorted(bak_cols)}")
     finally:
@@ -71,7 +74,7 @@ def main() -> int:
     result = migrate_schema(PROD_DB)
     elapsed = time.perf_counter() - t0
     print(f"  返回: {json.dumps(result, ensure_ascii=False)}")
-    print(f"  耗时: {elapsed*1000:.1f} ms")
+    print(f"  耗时: {elapsed * 1000:.1f} ms")
 
     # ─── Step 4: 迁移后验证 ───
     print()
@@ -81,20 +84,25 @@ def main() -> int:
     con = duckdb.connect(str(PROD_DB), read_only=True)
     try:
         # 表清单
-        tables = {r[0] for r in con.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
-        ).fetchall()}
+        tables = {
+            r[0]
+            for r in con.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+            ).fetchall()
+        }
         print(f"  表清单: {sorted(tables)}")
         for t in ("edb_cache", "option_chain_cache"):
             assert t in tables, f"缺表: {t}"
-        print(f"  ✓ edb_cache + option_chain_cache 已建")
+        print("  ✓ edb_cache + option_chain_cache 已建")
 
         # kline_cache 字段
-        cols = {r[0] for r in con.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_name='kline_cache'"
-        ).fetchall()}
-        new_cols = {"hold", "settle", "pre_settle", "oi_change",
-                    "vwap", "source", "fetched_at", "trace_id"}
+        cols = {
+            r[0]
+            for r in con.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='kline_cache'"
+            ).fetchall()
+        }
+        new_cols = {"hold", "settle", "pre_settle", "oi_change", "vwap", "source", "fetched_at", "trace_id"}
         assert new_cols <= cols, f"缺新字段: {new_cols - cols}"
         print(f"  ✓ kline_cache 字段: {len(cols)} 列  ({sorted(cols)})")
 
@@ -113,22 +121,23 @@ def main() -> int:
             "sum(CASE WHEN trace_id IS NULL THEN 1 ELSE 0 END) "
             "FROM kline_cache"
         ).fetchone()
-        print(f"  新字段 NULL 计数: hold={nulls[0]:,}, settle={nulls[1]:,}, "
-              f"vwap={nulls[2]:,}, source={nulls[3]:,}, trace_id={nulls[4]:,}")
-        print(f"  (旧数据的新字段默认 NULL — 等适配器写入新数据时填充)")
+        print(
+            f"  新字段 NULL 计数: hold={nulls[0]:,}, settle={nulls[1]:,}, "
+            f"vwap={nulls[2]:,}, source={nulls[3]:,}, trace_id={nulls[4]:,}"
+        )
+        print("  (旧数据的新字段默认 NULL — 等适配器写入新数据时填充)")
 
         # 索引
-        idx = {r[0] for r in con.execute(
-            "SELECT index_name FROM duckdb_indexes() WHERE table_name='kline_cache'"
-        ).fetchall()}
+        idx = {
+            r[0]
+            for r in con.execute("SELECT index_name FROM duckdb_indexes() WHERE table_name='kline_cache'").fetchall()
+        }
         assert "idx_kline_symbol_date_source" in idx
         print(f"  ✓ 索引: {sorted(idx)}")
 
         # 旧字段仍可查
-        sample = con.execute(
-            "SELECT symbol, date, close FROM kline_cache ORDER BY date DESC LIMIT 3"
-        ).fetchall()
-        print(f"  最新 3 条样本（验证旧字段仍可读）:")
+        sample = con.execute("SELECT symbol, date, close FROM kline_cache ORDER BY date DESC LIMIT 3").fetchall()
+        print("  最新 3 条样本（验证旧字段仍可读）:")
         for s, d, c in sample:
             print(f"    {s:<10} {str(d):<12} close={c}")
     finally:
@@ -141,6 +150,7 @@ def main() -> int:
     print("=" * 70)
     try:
         import os
+
         os.chmod(str(backup_path), 0o444)
         print(f"  ✓ 备份已设为只读: {backup_path}")
     except Exception as e:

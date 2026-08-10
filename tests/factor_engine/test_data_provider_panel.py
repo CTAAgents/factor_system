@@ -14,7 +14,6 @@ from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from fts.factor_engine.portfolio_loop import (
     PanelLoadingConfig,
@@ -25,8 +24,9 @@ from fts.factor_engine.portfolio_loop import (
 )
 
 
-def _make_panel(n_stocks: int = 10, n_rows: int = 40, with_volume: bool = False,
-                liquidity_spread: bool = False) -> dict[str, pd.DataFrame]:
+def _make_panel(
+    n_stocks: int = 10, n_rows: int = 40, with_volume: bool = False, liquidity_spread: bool = False
+) -> dict[str, pd.DataFrame]:
     """构造面板。liquidity_spread=True 时 volume 随 index 递增（流动性有区分度）。"""
     idx = pd.date_range("2023-12-20", periods=n_rows, freq="D")
     panel: dict[str, pd.DataFrame] = {}
@@ -75,7 +75,7 @@ class TestLiquidityStratifiedSample:
         # 16 只分 4 层（每层 4 只）取 6 只 → 每层至少 1 只
         out = _liquidity_stratified_sample(panel, max_stocks=6, n_layers=4)
         picked = set(out)
-        assert "SYM15" in picked or "SYM14" in picked    # 最高流动性层覆盖
+        assert "SYM15" in picked or "SYM14" in picked  # 最高流动性层覆盖
         # 最低层桶 = [SYM3, SYM2, SYM1, SYM0]（桶内流动性降序），任一本层成员被选即覆盖
         assert any(s in picked for s in ("SYM3", "SYM2", "SYM1", "SYM0"))
 
@@ -107,7 +107,8 @@ class TestLoadPanelWithLiquiditySampling:
         with patch("fts.data.FTSDataProvider") as m_prov:
             m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
             out, out_dates = _load_panel_with_liquidity_sampling(
-                m_prov.return_value, PanelLoadingConfig(),
+                m_prov.return_value,
+                PanelLoadingConfig(),
             )
         assert set(out) == set(panel)
         # 全量加载 → 请求 max_stocks=0
@@ -121,7 +122,8 @@ class TestLoadPanelWithLiquiditySampling:
         with patch("fts.data.FTSDataProvider") as m_prov:
             m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
             out, _ = _load_panel_with_liquidity_sampling(
-                m_prov.return_value, PanelLoadingConfig(max_stocks=6),
+                m_prov.return_value,
+                PanelLoadingConfig(max_stocks=6),
             )
         assert len(out) == 6
 
@@ -130,7 +132,8 @@ class TestLoadPanelWithLiquiditySampling:
         with patch("fts.data.FTSDataProvider") as m_prov:
             m_prov.return_value.get_csi300_panel.return_value = ({}, [])
             out, dates = _load_panel_with_liquidity_sampling(
-                m_prov.return_value, PanelLoadingConfig(),
+                m_prov.return_value,
+                PanelLoadingConfig(),
             )
         assert out == {}
         assert dates == []

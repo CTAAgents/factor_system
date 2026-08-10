@@ -67,8 +67,12 @@ class RiskAttributor:
         returns = portfolio_returns.dropna()
         if len(returns) == 0:
             return RiskAttributionReport(
-                factor_contributions={}, exposures={},
-                var_95=0.0, var_99=0.0, es_95=0.0, realized_vol=0.0,
+                factor_contributions={},
+                exposures={},
+                var_95=0.0,
+                var_99=0.0,
+                es_95=0.0,
+                realized_vol=0.0,
             )
 
         # 1. 因子贡献度
@@ -87,7 +91,10 @@ class RiskAttributor:
 
         logger.info(
             "[RiskAttributor] 归因完成 [var_95=%.4f, es_95=%.4f, vol=%.4f, n_contrib=%d]",
-            var_95, es_95, realized_vol, len(contributions),
+            var_95,
+            es_95,
+            realized_vol,
+            len(contributions),
         )
         return RiskAttributionReport(
             factor_contributions=contributions,
@@ -134,10 +141,7 @@ class RiskAttributor:
         """暴露分析：各列的绝对平均暴露。"""
         if len(holdings) == 0:
             return {}
-        return {
-            col: float(np.mean(np.abs(holdings[col].fillna(0.0))))
-            for col in holdings.columns
-        }
+        return {col: float(np.mean(np.abs(holdings[col].fillna(0.0)))) for col in holdings.columns}
 
     @staticmethod
     def _var_analysis(

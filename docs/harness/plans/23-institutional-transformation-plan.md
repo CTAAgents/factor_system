@@ -1,6 +1,6 @@
 # FTS 追赶机构水平全面改造计划（Institutional-Level Transformation Plan）
 
-> 版本: v2.71.0
+> 版本: v2.81.0
 > 最后更新: 2026-08-10
 > 状态: 规划中（文档先行，作为 FTS 全链路机构级改造总纲，子计划为执行细则）
 > 适用范围: FTS 全链路（L0 人类设定 / L1 元循环 / L2 演化 / L3 组合 / L4 信号与实盘反馈 / 基础设施）
@@ -54,17 +54,17 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 
 | 层 | 维度 | FTS 现状 | T1 中小团队 | T2 国内头部 | T3 海外顶级 |
 |:---|:-----|:---------|:-----------|:-----------|:-----------|
-| **L1** | 知识补给吞吐 | 每日 1 次 LLM 知识补给 | ✅ 达标 | 🟡 差距（候选源单一） | 🔴 差距（缺另类知识源） |
-| **L1** | Alpha 审查 | 自动 L1Verifier（无人工环节） | 🟡 缺人审工作台 | 🔴 缺人审工作台 | 🔴 缺人审工作台 |
+| **L1** | 知识补给吞吐 | 每日 1 次 LLM 知识补给 + 批量候选契约校验 + 吞吐指标监控（GAP-I101，v2.72.0） | ✅ 达标 | 🟡 差距（候选源单一，二期 v2.80.0 多路知识源） | 🔴 差距（缺另类知识源） |
+| **L1** | Alpha 审查 | 自动 L1Verifier + FactorReviewWorkflow 人审骨架（状态机+意见回写+CLI 队列，GAP-I102，v2.72.0） | ✅ 达标（骨架） | 🟡 人审工作台二期 v2.80.0 | 🔴 缺人审工作台 |
 | **L2** | 挖掘吞吐 | 单机串行，几十候选/夜 | 🟡 差 1~2 数量级 | 🔴 差 2~3 数量级 | 🔴 差 3+ 数量级 |
 | **L2** | 算子库 | ~50 算子 | 🟡 基本达标 | 🔴 差距 | 🔴 差距 |
 | **L2** | 搜索方法 | macro/GP/operator 三模式 | ✅ 达标 | 🟡 缺深度因子学习 | 🔴 缺深度/多目标/符号回归 |
 | **L2** | 过拟合控制 | walk-forward+多重检验+消融+因果+鲁棒性 | ✅ **局部领先** | 🟡 成本/容量保真不足 | 🟡 成本/容量保真不足 |
 | **L2** | 中性化 | 行业/市值中性化 + Barra 风格中性化 + 期货板块中性化已接入评估链（GAP-S01/S02/F03） | ✅ 达标 | ✅ 达标 | 🟡 缺全市场 Barra 暴露覆盖 |
-| **L2** | 去冗余 | 相关性预检+家族上限，无正交化闭环 | 🟡 差距 | 🔴 差距 | 🔴 差距 |
+| **L2** | 去冗余 | 相关性预检+家族上限+正交化闭环+正交基底（L2 高相关 OLS 残差入库，Gram-Schmidt 多因子基底迭代残差化，L3 不重复剔除） | ✅ 达标 | ✅ 达标 | ✅ 达标 |
 | **L3** | 组合层 | 股票/期货统一 L3（PortfolioLoop 复用：聚类/PCA/正交化/六模式合成/Regime） | ✅ 达标 | ✅ 达标 | 🟡 差 ML 组合层 |
 | **L3** | 组合优化器 | Elastic Net + Regime + 风险平价/均值方差 + Ledoit-Wolf 收缩（optimizer 模式） | ✅ 达标 | ✅ 达标 | 🔴 缺 ML 组合层 |
-| **L3** | 衰减管理 | elite_tracker + 定期复审 | ✅ 达标 | 🟡 缺自动退役闭环 | 🟡 缺自动退役闭环 |
+| **L3** | 衰减管理 | elite_tracker + 定期复审 + 自动退役闭环（滚动 6M IC 斜率分级 + FACTOR_DECAY 反馈联动，v2.72.1 GAP-I305） | ✅ 达标 | ✅ 达标 | ✅ 达标 |
 | **L4** | 反馈闭环 | 信号→FDT，无实盘数据回流 | 🟡 差距 | 🔴 差距 | 🔴 差距 |
 | **L4** | 在线监控 | live_factor_monitor 框架 | ✅ 达标 | 🟡 缺实盘数据源 | 🟡 缺实盘数据源 |
 | **基础** | 回测保真 | 涨跌停/停牌/展期/冲击成本/容量约束+容量分析报告已建模 | ✅ 达标 | 🟡 缺冲击成本实证标定 | 🟡 缺融资成本/实时成本监控 |
@@ -128,6 +128,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **机构级标准** | 因子表现闭环：实盘成交 → 归因（信号 vs 执行差异）→ 因子 IC 衰减修正 → 自动退役/重校准 |
 | **影响** | L2/L3 因子状态基于历史回测，无法感知实盘漂移；衰减退役无实盘依据 |
 | **实施步骤** | ① 定义实盘反馈契约（`LiveFeedbackRecord`：factor_id/信号日/信号值/持仓收益/换手/滑点），提供 CLI 导入与 DuckDB 表；② `feedback_loop.py` 增加实盘 IC 计算与回测 IC 对比报告；③ 衰减退役逻辑（GAP-I305）接入实盘反馈 |
+| **完成记录** | ✅ v2.71.0（①②由 GAP-L402 v2.66.0 落地：`LiveFeedbackRecord` 契约 + `validate_live_feedback_record` + `LiveFeedbackImporter`（CSV/dict 批量导入 + DuckDB `feedback_live` 表追加落盘 + 截面 Spearman 实盘 IC）+ `LiveVsBacktestICReport`（实盘 vs 回测 IC 对比 + 衰减判定 decayed/weak/ok）+ CLI `fts feedback import`/`fts feedback live-ic`；③ v2.71.0 补强：`LiveVsBacktestICReport.generate` 输出 `recommend_retire`（decayed→True）/`decay_gap` 字段与 summary `n_recommend_retire`——衰减因子携带退役建议，供 GAP-I305 自动退役闭环消费；test_feedback_loop 25 passed） |
 | **测试方案** | 反馈记录契约校验；实盘 IC vs 回测 IC 对比报告；导入异常降级 |
 
 ### 2.2 P1 — 重要差距（单机 + 轻量并行可达）
@@ -140,6 +141,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **机构级标准** | L1 层多路知识源并行（研报/论文/公告/舆情/宏观日历），每日批量注入候选，人审前置 |
 | **影响** | L1 注入 L2 的候选量小、维度单一，种子库增长慢 |
 | **实施步骤** | ① 知识源扩展（公告/舆情接入 iFinD 新闻，宏观日历接入 EDB）；② 单次补给批量产出 N 个候选（复用 GAP-I201 批量漏斗）；③ L1 候选吞吐指标监控 |
+| **完成记录** | ✅ v2.72.0（首期，①② 中批量候选契约校验 + ③ 吞吐指标）：`meta_loop.py` 新增 `validate_batch_candidates` 批量候选契约校验（candidate_id/name/code/economic_logic.narrative 逐条校验 + total/valid/invalid/invalid_samples 统计，invalid_samples 截断 5）接入 `_run_bootstrap` 前置质量门（契约不合规仅告警不熔断）；`MetaRunResult` 新增 `candidates_per_minute` 吞吐指标（候选数 / 运行分钟，`_make_result` 计算，elapsed=0 防除零）；知识源多路扩展留二期 v2.80.0；新增 `TestValidateBatchCandidates` 8 用例（全合法/空列表/缺必填字段 ×3/非 dict/样本截断/吞吐计算/零耗时） |
 | **测试方案** | 多知识源注入单测；批量候选契约校验 |
 
 #### GAP-I102 无 Alpha 审查 / 人机协同工作台（P1）
@@ -150,6 +152,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **机构级标准** | WorldQuant 模式：自动 pipeline + Alpha 审查委员会（人审经济逻辑/数据依据/风险），人审结论回写因子库 |
 | **影响** | 高 IC 但经济逻辑存疑的因子可能通过自动审查；缺少人工兜底与知识沉淀 |
 | **实施步骤** | ① `factor_inspector.py` 升级为审查工作流（审查状态机：pending→approved/rejected，意见回写 DuckDB）；② CLI 增加 `factor review` 子命令 + 审查队列；③ 审查意见接入经验链 |
+| **完成记录** | ✅ v2.72.0（骨架）：`factor_inspector.py` 新增 `FactorReviewWorkflow` 审查工作流——`ReviewDecision` 状态机（pending→approved/rejected），`approve`/`reject` 意见回写 DuckDB `factor_reviews` 表（幂等 UPSERT，重复审查覆盖旧决定），`list_pending` 待审查队列（NOT EXISTS 排除已审查 + market 过滤 + limit 上限 + created_at 倒序），`get_status` 状态查询；CLI `fts factor review list/approve/reject` 子命令（--market/--limit/--db/--comment）；schema E.1 `_CREATE_FACTOR_REVIEWS`（factor_id 主键/decision/comment/reviewer/reviewed_at + decision 索引）；审查意见接入经验链留二期 v2.80.0；新增 `TestReviewCliCommands` 4 用例（list 队列/market 过滤/approve 回写/reject 回写）补强 test_review_workflow 7 用例（状态机/回写/队列/幂等/意见落盘） |
 | **测试方案** | 审查状态机单测；审查意见回写断言 |
 
 #### GAP-I202 算子库规模与语义体系（P1）
@@ -160,6 +163,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **机构级标准** | 数百算子，含组合/条件/时序/截面/跨标的/另类数据算子；单一事实源 |
 | **影响** | 搜索空间小 → 演化产出多样性不足；双轨漂移（GAP-S10） |
 | **实施步骤** | ① 按 plans/22 GAP-S10 合并注册表（单一事实源）；② 算子扩充：组合数学（corr/regression residual/quantile bucketing）、跨标的（cross-section rank/demean）、A 股特有（GAP-S12）；③ 每个算子配套经济语义 + 参数边界 + 单元测试 |
+| **完成记录** | ✅ v2.75.0（组合/跨标的算子单一事实源）：① `feature_ops.py` `RollingOps` 新增 `ts_slope`（滚动线性回归斜率，局部趋势强度/方向，NaN 安全降级）与 `ts_quantile`（滚动分位数，q∈[0,1] 越界抛 ValueError）原语；② `feature_ops.OperatorRegistry`（GP 演化侧）注册 8 个组合/跨标的算子（combo 类目）：ts_slope/ts_quantile + GAP-L401 的 regression_residual/quantile_bucket/cross_section_demean/if_else/corr/cross_section_rank——与 expr_dsl 共用 RollingOps/PriceOps 底层原语，双轨漂移消除（此前 L4 组合算子仅 expr_dsl 侧，GP 侧不可用 = 搜索空间未共享）；③ `expr_dsl/registry.py` 注册 ts_slope/ts_quantile（L1，参数边界 + PIT lookback + 经济语义）；`verify_registry_consistency` 新增 `required_shared` 硬约束（8 个组合/跨标的算子必须双注册表共享，仅存在于单侧即判不一致，输出 `unshared_required`）；④ `operator_evolution.py` `_evaluate_fitness` 新增 lookback=0 罚分（`compute_max_lookback==0` 纯字段/无算子表达式如 `rank(close)`，与常信号罚分同档 _PENALTY_WEAK）——算子演化产物必须包含实际算子变换，避免裸字段包装在单调合成数据上以虚假高 IC 占据最优；⑤ 每个新算子配套经济语义 + 参数边界 + 单元测试（新增 7 用例：ts_slope/ts_quantile 元数据/功能/边界 + GP 注册表含组合算子/可调用 + required_shared 一致性 + DSL 执行），315 定向回归全绿（expr_dsl + operator_evolution + evolution_loop + gp_evolver） |
 | **测试方案** | 注册表一致性断言；新算子边界测试；GP 与算子演化共用注册表回归 |
 
 #### GAP-I203 深度因子学习缺失（P1）
@@ -170,6 +174,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **机构级标准** | 深度时序特征提取（LSTM/Transformer 端到端收益预测）作为候选因子来源之一；生成式模型合成因子/合成行情做数据增强 |
 | **影响** | 候选因子缺少深度非线性特征维度；信号合成停留在浅层模型 |
 | **实施步骤** | ① 轻量 LSTM/GRU 因子模型（纯 numpy 或 PyTorch CPU 路径，可解释性约束：输出映射为因子信号 + SHAP 归因）；② 深度因子作为候选源接入 L2 批量漏斗（GAP-I201），过全套审计链；③ 远期：GAN 合成因子 |
+| **完成记录** | ✅ v2.73.0（首期，深度时序模型 + L2 接线）：① `fts/ml/models.py` 新增 `GRUFactorModel` 轻量纯 numpy 单层 GRU（update/reset gate + candidate hidden，BPTT + 动量 SGD + L2 正则；输入 (n, seq, f) 滚动窗口序列，训练前 z-score 标准化；样本不足/非数值/维度不匹配/未训练抛 `ModelNotAvailableError` 降级；`get_params` 导出 11 组权重供因子 code 内嵌；`create_gru_model` 工厂 + `__all__` 导出；修复 numpy 2.x 标量转换 `float()`→`.item()`）；② `fts/ml/deep_factor.py` 新增 `DeepFactorGenerator`/`create_deep_factor`（`DeepFactorConfig` lookback/horizon/hidden/epochs/lr/train_ratio/min_samples/seed）——OHLCV 特征（日收益率+量变化率）→ 滚动窗口样本 → 前 train_ratio 训练 GRU → 权重序列化内嵌 `def factor_program(data, params)` code（零未来函数：特征窗口 [t-lookback+1, t] 逐 t 滚动推理 + tanh 压缩输出 ∈ [-1,1]；样本不足/训练失败返回 None 降级；factor 契约完整：factor_id/name/code/signature/economic_logic/source=deep_evolution/family=deep/market/deep_model 元数据含 val_ic）；③ `evolution_loop.py` `_evolve_one` 新增 method_hint="deep" 分派——`_run_deep_evolution`（数据/样本校验 → create_deep_factor → parent_id/generation/trace_id 血缘回填，失败抛 RuntimeError 由调用方降级回退）；`_batch_generate_one` 批次轮换并入 deep（idx%3==2，macro/gp/deep/operator 循环）——深度因子作为候选源接入 L2 批量漏斗（GAP-I201）过全套审计链；④ 新增 `tests/test_gru_factor.py` 28 用例（GRU 模型级 11 + DeepFactor 生成器集成 9 + EvolutionLoop 接线 8，含零未来函数截断一致性验证与生成 code 经 `_execute_factor_code` 可执行验证）；⑤ 远期：GAN 合成因子（GAP-I503 二期/远期 3C） |
 | **测试方案** | 深度模型输出信号与标签相关性；过拟合控制（OOS 窗口）；SHAP 归因断言 |
 
 #### GAP-I204 搜索方法单一（缺符号回归 / 多目标优化 / 贝叶斯搜索）（P1）
@@ -180,6 +185,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **机构级标准** | 多目标进化（NSGA-II 类 Pareto 前沿）+ 换手/衰减惩罚项 + 容量感知适应度 |
 | **影响** | 单一适应度导致产出高 IC 高换手因子，实盘成本侵蚀收益；无容量感知 |
 | **实施步骤** | ① GP 适应度扩展为多目标（IC、换手惩罚、衰减半衰期）；② 增加换手率与成本纳入适应度（复用 GAP-I501 成本模型）；③ 输出 Pareto 前沿供人审 |
+| **完成记录** | ✅ v2.71.0（首期，IC×换手×衰减）：`gp_evolver.py` 新增 `multi_objective` 适应度模式——`FitnessResult` 扩展 `turnover`/`decay` 字段（换手=信号逐日绝对变化均值/信号标准差无量纲归一；衰减=训练集按时间等分两半的 \|IC\| 前段相对后段衰减比例）；`GPEvolverConfig` 新增 `turnover_penalty`（默认 0.3）/`decay_penalty`（默认 0.3）系数；合成适应度 `fitness = \|ic\|×0.6 + max(sharpe,0)×0.2 − turnover_penalty×min(turnover,5) − decay_penalty×decay`；`GPEvolveResult` 新增 `best_turnover`/`best_decay`；默认 `ic_sharpe_combo` 模式保持原逻辑不变但同样填充 turnover/decay 指标；新增 `TestGapI204MultiObjective` 7 用例（字段填充/换手度量/换手惩罚/系数放大 ×2/衰减惩罚/端到端 evolve）。**补充（二期，v2.78.0）**：`pareto.py` 新增 `ParetoItem`/`fast_non_dominated_sort`/`compute_pareto_front`（NSGA-II 快速非支配排序，多目标 \|IC\|/Sharpe/−turnover/−decay 统一「越大越好」口径，前沿按 fitness 降序供人审）；`symbolic_regression.py` 新增 `SymbolicRegressionSearcher` 确定性 beam-search 层级搜索（单字段出发逐层一元包装 + 二元组合，复用 `GPEvolver._evaluate_fitness` 同口径多目标评估，每层保留 top-K，固定种子可复现，`SymbolicRegressionConfig` max_depth/beam_width/max_candidates/min_fitness 配置化）；`GPEvolver.evolve()` multi_objective 模式跟踪全部已评估个体提取 Pareto 前沿，`GPEvolveResult` 新增 `pareto_front` 字段（含 source=gp/symbolic 标识），`GPEvolverConfig` 新增 `symbolic_regression_enabled`/`symbolic_max_depth`/`symbolic_beam_width`/`symbolic_max_candidates`（默认关闭，不改变默认行为）；新增 `test_pareto.py` 12 用例 + `test_symbolic_regression.py` 15 用例（含 GP 集成：symbolic 前沿合并、multi_objective 前沿输出） |
 | **测试方案** | 多目标适应度单测；换手惩罚生效断言；Pareto 前沿输出 |
 
 #### GAP-I205 微观演化效率（optuna 100 trials 串行）（P1）
@@ -201,6 +207,8 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **影响** | elite 池相关性膨胀 → L3 组合夏普被稀释、换手成本非线性增长（已记录的教训） |
 | **实施步骤** | ① `_promote_to_elite` 增加与既有 elite 的相关性检查（>0.9 拒绝或正交化残差晋升）；② 晋升报告输出相关性明细；③ 正交化在 L2 与 L3 统一口径 |
 | **完成记录** | ✅ v2.71.0：L2 准入去冗余——`_check_elite_correlation`（`evolution_loop.py`）：演化因子晋升前扫描既有 elite 快照（排除 `_l2_seed_correlation_index.json`），复用 `BacktestPipeline._execute_factor_code` 逐个计算信号与候选因子做 Pearson 相关，相关绝对值 ≥ 阈值（默认 0.9）记录高相关对（`factor_name_b`/`factor_id_b`/`pearson`/`abs_pearson`，按 abs 降序）拒绝晋升并打日志；无既有 elite / 执行失败 / 全低相关返回 None 静默放行；容量护栏 `l2_elite_corr_max_scan`（默认 50）限制扫描数；种子因子（shadow_observe=False 首轮导入）跳过检查；`settings.py` 新增 `l2_elite_corr_threshold`/`l2_elite_corr_max_scan`/`l2_elite_corr_debug` 配置 + `FTS_L2_ELITE_CORR_*` 环境变量；新增 `tests/factor_engine/test_l2_elite_redundancy.py` 10 用例（高相关拦截/负高相关 abs/低相关放行/空 elite/索引跳过/容量护栏/执行失败容错 + 集成：shadow 拦截/种子跳过/低相关晋升） |
+| **补充记录（正交化闭环）** | ✅ v2.71.0：高相关因子不再一刀切拒绝——`_orthogonalize_candidate`（`evolution_loop.py`）：对候选信号关于参照 elite 信号做 OLS 回归取残差，残差与参照因子相关 < `l2_orthogonal_residual_corr_max`（默认 0.3）且保留比 > `l2_orthogonal_min_retained_ratio`（默认 0.3）时，以正交化版本入库（factor JSON 含 `orthogonalized`/`orthogonalized_against`/`orthogonalized_pearson`/`orthogonal_signal` 残差快照，DuckDB metadata 同步持久化）；残差不合格拒绝兜底；`settings.py` 新增 `l2_elite_orthogonalize`/`l2_orthogonal_residual_corr_max`/`l2_orthogonal_min_retained_ratio` 配置 + `FTS_L2_ELITE_ORTHOGONALIZE`/`FTS_L2_ORTHOGONAL_*` 环境变量；L3 消费——`orthogonalize_factors` 对已正交化因子不重复剔除（避免双重去冗余），`load_elite_factors` DuckDB/JSON 双路径透传正交化元数据；新增 `tests/factor_engine/test_l2_orthogonalize.py` 10 用例（残差生成/正交性/保留比不足拒绝/参照缺失降级 + 集成：正交化入库/拒绝兜底/开关关闭 + L3 放行） |
+| **补充记录（多因子正交基底）** | ✅ v2.72.1：`orthogonal_basis.py` 新增 `OrthogonalBasisManager`——Gram-Schmidt 多因子正交基底：基底 = 按 Sharpe 降序保留上限（默认 10）的两两近似正交精英因子；L2 准入 `_orthogonalize_via_basis`（`evolution_loop.py`）对候选信号关于基底逐因子 OLS 残差化（迭代投影），残差与基底最大相关 < `l2_orthogonal_residual_corr_max` 且保留比 > `l2_orthogonal_min_retained_ratio` 时以正交化版本入库并注册为新基底成员（`orthogonalized_basis` 基底成员名列表），基底索引持久化 `{memory_dir}/orthogonal_basis.json`；基底不可用/失败回退单参照 OLS；DuckDB metadata 与 L3 `load_elite_factors` 透传 `orthogonalized_basis`；`settings.py` 新增 `l2_orthogonal_basis_enabled`/`l2_orthogonal_basis_max_size`/`l2_orthogonal_basis_min_sharpe` 配置 + `FTS_L2_ORTHOGONAL_BASIS_*` 环境变量；新增 `tests/factor_engine/test_orthogonal_basis.py` 19 用例（IC 斜率/衰减分级/基底读写/注册上限/Gram-Schmidt 正交/弱候选拒绝/L2 集成降级） |
 | **测试方案** | 高相关因子晋升拦截；正交化残差与原始因子相关性≈0 |
 
 #### GAP-I302 组合优化器机构化（风险平价 / 协方差收缩 / 均值方差）（P1）
@@ -211,6 +219,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **机构级标准** | 组合层提供可选优化器：均值方差（协方差收缩）/ 风险平价 / Elastic Net，约束：多头、行业中性、换手上限；因子协方差矩阵估计稳健化 |
 | **影响** | 组合权重对协方差噪声敏感；无风险预算视角的权重分配 |
 | **实施步骤** | ① `portfolio_optimizer.py` 增加 Ledoit-Wolf 收缩估计 + 风险平价求解；② 股票 L3（GAP-I301）接入优化器；③ 优化器参数走配置 |
+| **完成记录** | ✅ ①② v2.61.0（GAP-L302/L303/L304/L305）：Ledoit-Wolf 收缩协方差（`risk_model.RiskModelEstimator` 纯 numpy，对角结构化目标 + 收缩强度估计，正定性保证）+ 风险平价/均值方差（`PortfolioOptimizer`：risk_parity 迭代等风险贡献 / mean_variance scipy SLSQP，含杠杆/集中度/换手/VaR/暴露中性化/容量约束，无 scipy 降级 numpy 解析解+投影）；L3 接线——`synthesize_signals` optimizer 模式 + `PortfolioLoop.optimizer_mode`（CLI `--optimizer-mode`，mvo 别名）+ Ledoit-Wolf cov 注入 + factor_returns 实测化输入；✅ ③ v2.74.0 补齐：`FTSConfig.portfolio_optimizer_mode`（默认 risk_parity，FTS_PORTFOLIO_OPTIMIZER_MODE env）接入 `fts portfolio run`——CLI `--synthesis-mode` choices 增加 optimizer + `--optimizer-mode`（risk_parity/mvo）+ `--returns-matrix` CSV 加载并透传 `run(factor_returns=...)`（股票/期货对称）；新增 `TestCmdPortfolioRunStock` 3 用例（模式/参数透传、配置默认值、returns-matrix 加载）+ test_config_settings 2 用例（默认值/env 覆盖） |
 | **测试方案** | 收缩协方差正定性；风险平价权重与目标风险一致；与 Elastic Net 对比报告 |
 
 #### GAP-I305 因子衰减自动退役闭环（P1）
@@ -221,6 +230,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **机构级标准** | 自动化 IC 衰减监控（滚动 6M IC 斜率）→ 衰减分级（正常/观察/退役）→ 自动退役 + 报告；与 GAP-I401 实盘反馈联动 |
 | **影响** | 衰减因子滞留组合拖累绩效；退役决策滞后 |
 | **实施步骤** | ① 衰减状态机（active/observe/retired）接入 elite 池；② 月度任务按滚动 IC 斜率自动迁移状态；③ 退役记录回写 DuckDB + 报告 |
+| **完成记录** | ✅ v2.72.1：因子衰减自动退役闭环——`elite_tracker.py` 新增滚动 6M IC 线性回归斜率 `_calc_ic_slope_6m`（归一化 [-1,1]，负值=衰减）+ 衰减分级 `decay_grade`（normal/observe/retired，`observe_slope` 默认 0.10 / `retire_slope` 默认 0.20），`update()` 写入 `decay_grade`/`ic_slope_6m` 快照字段，`auto_retire()` 将 `decay_grade=="retired"` 纳入退役条件；`AutoRetireConfig` 新增 `observe_slope`/`retire_slope`/`slope_min_points`，`AutoRetireManager` 同步配置到 tracker 保证阈值一致；`evolution_loop.py` 定期复审（`_run_periodic_factor_review`）接入 FeedbackLoop FACTOR_DECAY 事件（observe/retired 触发归因分析，`last_feedback` 写回快照），退役受 `decay_auto_retire_enabled` 开关控制；`settings.py` 新增 `decay_observe_slope`/`decay_retire_slope`/`decay_slope_min_points`/`decay_auto_retire_enabled` 配置 + `FTS_DECAY_*` 环境变量；月度任务（`scheduler/jobs.py` `monthly_decay_eval_job`）按斜率自动迁移状态并回写 DuckDB（`retire_factor`）+ 报告；新增 `tests/factor_engine/test_orthogonal_basis.py` 19 用例含衰减分级/斜率/自动退役断言 |
 | **测试方案** | 衰减状态迁移单测；自动退役触发条件断言 |
 
 #### GAP-I402 在线因子性能监控（P1）
@@ -231,6 +241,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **机构级标准** | 因子在线 IC/衰减/暴露实时仪表盘，异常告警 |
 | **影响** | 因子实盘漂移不可见 |
 | **实施步骤** | 随 GAP-I401 一并落地：实盘反馈 → 在线指标 → 告警（复用 alertmanager） |
+| **完成记录** | ✅ v2.77.0：`fts/monitor/live_factor_monitor.py` 新增 `ingest_live_ic(live_ic_result, backtest_ic_map, decay_status_map)`——消费 GAP-I401 实盘反馈数据源（`LiveFeedbackImporter.compute_live_ic` 输出 + `LiveVsBacktestICReport.generate` 的 status 字段），自动构建因子回测基线/实盘 IC 并触发偏离检查；衰减监控——`_decay` 状态存储（ok/weak/decayed）+ `set_decay_status`/`get_decay_status` + `_check_decay_alerts`（decayed → critical「衰减退役建议（GAP-I305 闭环）」/ weak → warning「持续观察」，`decay_alert_enabled` 可关）；Prometheus 兼容指标日志 `METRIC live_factor_ic{factor_id=..}` / `METRIC live_factor_decay{factor_id=..,status=..} 1`；新增 `tests/monitor/test_live_factor_monitor.py` 12 用例（偏离检查 5 + ingest_live_ic 6 + GAP-I401 端到端对接 1），monitor+feedback 253 定向回归全绿 |
 | **测试方案** | 指标注册与告警规则断言 |
 
 ### 2.3 P2 — 一般差距（扩展期落地）
@@ -294,9 +305,11 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | v2.68.0 | 1B | GAP-I301 | 股票 L3 组合层（复用期货组件）✅ 已关闭 |
 | v2.70.0 | 1B | GAP-I205 | 微演化自适应 trials + 早停 ✅ 已关闭 |
 | v2.71.0 | 1C | GAP-I206 | L2 准入去冗余/正交化闭环 ✅ 已关闭 |
-| v2.70.0 | 1C | GAP-I204 首期 | GP 多目标适应度（IC×换手×衰减） |
-| v2.71.0 | 1D | GAP-I401 | 实盘反馈契约 + 回流通道 + 对比报告 |
-| v2.72.0 | 1D | GAP-I101/I102 首期 | L1 批量候选 + 审查工作流骨架 + 全量回归 |
+| v2.71.0 | 1C | GAP-I204 首期 | GP 多目标适应度（IC×换手×衰减）✅ 已关闭 |
+| v2.71.0 | 1D | GAP-I401 | 实盘反馈契约 + 回流通道 + 对比报告 ✅ 已关闭 |
+| v2.72.0 | 1D | GAP-I101/I102 首期 | L1 批量候选 + 审查工作流骨架 + 全量回归 ✅ 已关闭 |
+| v2.72.1 | 1C | GAP-I206 补充 | 多因子正交基底维护（Gram-Schmidt 迭代残差化 + 基底注册/持久化）✅ 已关闭 |
+| v2.72.1 | 2B | GAP-I305 提前 | 因子衰减自动退役闭环（滚动 6M IC 斜率分级 + FACTOR_DECAY 反馈联动）✅ 已关闭 |
 
 **Stage 1 退出标准**：① 吞吐 ≥ 10×（基准：每夜 ≥ 500 候选粗筛、≥ 50 细评估）；② 股票 L3 上线且回测 Sharpe/回撤达标；③ 回测含冲击成本与容量约束；④ 全量回归通过 + 一致性 13/13；⑤ 全部 P0（GAP-I201/I207/I301/I501/I401）关闭。
 
@@ -304,13 +317,13 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 
 | 版本 | 阶段 | 缺陷项 | 核心内容 |
 |:-----|:-----|:-------|:---------|
-| v2.73.0 | 2A | GAP-I203 | 轻量 LSTM/GRU 深度因子模型（接入 L2 漏斗 + 全套审计） |
-| v2.74.0 | 2A | GAP-I302 | 组合优化器机构化（Ledoit-Wolf 收缩 + 风险平价） |
-| v2.75.0 | 2B | GAP-I202 | 算子库扩充（组合/跨标的/A 股特有算子，单一事实源） |
-| v2.76.0 | 2B | GAP-I305 | 因子衰减自动退役状态机（接实盘反馈） |
-| v2.77.0 | 2C | GAP-I402 | 在线因子性能监控 + 告警（随 I401 数据源） |
-| v2.78.0 | 2C | GAP-I204 二期 | 符号回归补充搜索 + Pareto 前沿输出 |
-| v2.79.0 | 2D | GAP-I304 | Barra 风格暴露控制落地（联动 GAP-S02） |
+| v2.73.0 | 2A | GAP-I203 | 轻量 LSTM/GRU 深度因子模型（接入 L2 漏斗 + 全套审计）✅ 已关闭（v2.73.0：`GRUFactorModel` 纯 numpy GRU + `DeepFactorGenerator` 权重内嵌 code + `_evolve_one` deep 分派/批次轮换接入 L2） |
+| v2.74.0 | 2A | GAP-I302 | 组合优化器机构化（Ledoit-Wolf 收缩 + 风险平价）✅ 已关闭（① ② v2.61.0 GAP-L302/L303/L304/L305 + ③ v2.74.0 参数走配置） |
+| v2.75.0 | 2B | GAP-I202 | 算子库扩充（组合/跨标的/A 股特有算子，单一事实源）✅ 已关闭（v2.75.0：ts_slope/ts_quantile + 8 组合/跨标的算子双注册表共享 + required_shared 硬约束 + lookback=0 罚分；A 股特有算子已随 GAP-S12 v2.69.0 落地） |
+| v2.76.0 | 2B | GAP-I305 | 因子衰减自动退役状态机（接实盘反馈）→ **提前至 v2.72.1 完成** ✅ |
+| v2.77.0 | 2C | GAP-I402 | 在线因子性能监控 + 告警（随 I401 数据源）✅ 已关闭（v2.77.0：`ingest_live_ic` 接入 GAP-I401 + 衰减告警 + Prometheus 指标） |
+| v2.78.0 | 2C | GAP-I204 二期 | 符号回归补充搜索 + Pareto 前沿输出 ✅ 已关闭（v2.78.0） |
+| v2.79.0 | 2D | GAP-I304 | Barra 风格暴露控制落地（联动 GAP-S02）✅ 已关闭（v2.62.0 GAP-S02 落地 10 风格暴露 + 评估链 style_exposures 参数；v2.79.0 补充全市场覆盖：`evolution_loop._build_barra_exposures` 自动构建 10 风格暴露接入 L2 `_evaluate_cross_section`（行业中性化后叠加 Barra 风格回归残差），`l2_barra_style_neutral` 配置默认 True + `test_barra_l2_integration.py` 7 用例） |
 | v2.80.0 | 2D | GAP-I101/I102 二期 | 知识源多路扩展 + 人审工作台正式启用 + 全量回归 |
 
 **Stage 2 退出标准**：① 深度因子在 L2 出过 ≥ 1 个通过全套审计的精英因子；② 组合层支持均值方差/风险平价；③ 衰减自动退役运行 ≥ 1 个月且决策与人工复核一致率 ≥ 90%；④ 覆盖 11 项 P1 差距中的 9 项；⑤ 全量回归 + 覆盖率达标。
@@ -341,7 +354,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | plans/22-stock-pipeline-maturity-plan.md | 股票流水线成熟度（GAP-S01~S13）——本计划 GAP-I207/I301/I304 引用其 GAP-S01/S02/S04 |
 | plans/20-futures-roll-adjustment-plan.md | 期货展期（GAP-046）——回测保真基础，GAP-I501 前置 |
 | plans/19-adaptive-weight-l3-integration.md | L3 自适应权重（GAP-045）——✅ 已关闭，GAP-I302 前置完成 |
-| GAP-037（深度学习未实现） | 本计划 GAP-I203 的既有登记 |
+| GAP-037（深度学习未实现） | 本计划 GAP-I203 的既有登记——首期（GRU 深度因子）✅ v2.73.0 关闭；GAN 合成/Transformer 远期（GAP-I503 二期） |
 | GAP-041（覆盖率 <90%） | Stage 1 回归门槛（16 模块补测） |
 | GAP-045（adaptive 权重完整接入 L3） | ✅ 已关闭（v2.56.0，Phase 33：FactorStyle/style_tags 维度 + RegimeSmoother 平滑 + family×style 双维调整）——GAP-I302 前置完成 |
 | production_plan.md | 生产就绪路线——GAP-I401/I402 与生产监控联动 |

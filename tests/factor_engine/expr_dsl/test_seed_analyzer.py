@@ -23,9 +23,12 @@ class TestEstimateLookbackStatic:
 
     def test_window_op_lookback(self) -> None:
         """ts_stddev(returns, 20) → lookback 20。"""
-        assert estimate_lookback_static(
-            "rank(ts_argmax(signed_power(ifelse(returns<0, ts_stddev(returns,20), close), 2), 5)) - 0.5"
-        ) == 20
+        assert (
+            estimate_lookback_static(
+                "rank(ts_argmax(signed_power(ifelse(returns<0, ts_stddev(returns,20), close), 2), 5)) - 0.5"
+            )
+            == 20
+        )
 
     def test_delay_lookback(self) -> None:
         """delay(x, 10) → lookback 10。"""
@@ -89,7 +92,5 @@ class TestAnalyzeSeedExpression:
 
     def test_gtja_style_window_extraction(self) -> None:
         """gtja 常用形态（含 & 连接）的 lookback 提取。"""
-        lb = estimate_lookback_static(
-            "ts_rank(close, 10) & ts_stddev(returns, 20)"
-        )
+        lb = estimate_lookback_static("ts_rank(close, 10) & ts_stddev(returns, 20)")
         assert lb == 20

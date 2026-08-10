@@ -76,9 +76,7 @@ def main() -> int:
     # ── 3. Update pool metadata ──
     pool["updated_at"] = datetime.now().isoformat()
     pool["total_count"] = len(pool.get("factors", []))
-    pool["pending_count"] = sum(
-        1 for f in pool.get("factors", []) if f.get("status") == "pending"
-    )
+    pool["pending_count"] = sum(1 for f in pool.get("factors", []) if f.get("status") == "pending")
     pool_path.write_text(json.dumps(pool, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # ── 4. Generate _elite_index.json ──
@@ -97,20 +95,22 @@ def main() -> int:
             continue
         bt = data.get("evaluation", {}).get("level_1_backtest", {})
         mtime = datetime.fromtimestamp(fp.stat().st_mtime).isoformat()
-        index["factors"].append({
-            "factor_id": data.get("factor_id"),
-            "name": data.get("name"),
-            "source": data.get("source"),
-            "generation": data.get("generation"),
-            "ic": bt.get("ic"),
-            "sharpe": bt.get("sharpe"),
-            "max_drawdown": bt.get("max_drawdown"),
-            "t_stat": bt.get("t_stat"),
-            "parent_id": data.get("parent_id"),
-            "trace_id": data.get("trace_id"),
-            "file": fp.name,
-            "modified_at": mtime,
-        })
+        index["factors"].append(
+            {
+                "factor_id": data.get("factor_id"),
+                "name": data.get("name"),
+                "source": data.get("source"),
+                "generation": data.get("generation"),
+                "ic": bt.get("ic"),
+                "sharpe": bt.get("sharpe"),
+                "max_drawdown": bt.get("max_drawdown"),
+                "t_stat": bt.get("t_stat"),
+                "parent_id": data.get("parent_id"),
+                "trace_id": data.get("trace_id"),
+                "file": fp.name,
+                "modified_at": mtime,
+            }
+        )
     index["total_elite"] = len(index["factors"])
     index_path = elite_dir / "_elite_index.json"
     index_path.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -16,10 +16,7 @@ import json
 import logging
 import sys
 import types
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 def _fake_module(**attrs: object) -> types.ModuleType:
@@ -32,17 +29,24 @@ def _fake_module(**attrs: object) -> types.ModuleType:
 
 def _fake_cfg(**attrs: object) -> MagicMock:
     """构造带指定字段的配置对象。"""
-    return MagicMock(memory_dir="/tmp/mem", elite_dir="/tmp/elite", **attrs)
+    return MagicMock(
+        memory_dir="/tmp/mem",
+        elite_dir="/tmp/elite",
+        futures_elite_dir="/tmp/futures_elite",
+        **attrs,
+    )
 
 
 def _make_kline_df(n: int = 5, price: float = 3500.0):
     """构造测试 K 线 DataFrame。"""
     import pandas as pd
 
-    return pd.DataFrame({
-        "close": [price] * n,
-        "volume": [100_000] * n,
-    })
+    return pd.DataFrame(
+        {
+            "close": [price] * n,
+            "volume": [100_000] * n,
+        }
+    )
 
 
 def _make_cfg_module() -> types.ModuleType:
@@ -72,11 +76,14 @@ class TestL1MetaLoopJob:
         fake_llm = _fake_module(get_llm_client=MagicMock(return_value=MagicMock()))
         fake_cfg = _make_cfg_module()
 
-        with patch.dict(sys.modules, {
-            "fts.factor_engine.meta_loop": fake_meta,
-            "fts.llm": fake_llm,
-            "fts.config": fake_cfg,
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.factor_engine.meta_loop": fake_meta,
+                "fts.llm": fake_llm,
+                "fts.config": fake_cfg,
+            },
+        ):
             caplog.set_level(logging.INFO)
             jobs.l1_meta_loop_job()
 
@@ -88,11 +95,14 @@ class TestL1MetaLoopJob:
         """启动日志包含 trace_id。"""
         fake_meta = _fake_module(MetaLoop=MagicMock())
         fake_llm = _fake_module(get_llm_client=MagicMock())
-        with patch.dict(sys.modules, {
-            "fts.factor_engine.meta_loop": fake_meta,
-            "fts.llm": fake_llm,
-            "fts.config": _make_cfg_module(),
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.factor_engine.meta_loop": fake_meta,
+                "fts.llm": fake_llm,
+                "fts.config": _make_cfg_module(),
+            },
+        ):
             caplog.set_level(logging.INFO)
             jobs.l1_meta_loop_job()
 
@@ -100,14 +110,15 @@ class TestL1MetaLoopJob:
 
     def test_failure_caught(self, caplog):
         """MetaLoop 构造失败时捕获并记录错误，不抛出。"""
-        fake_meta = _fake_module(
-            MetaLoop=MagicMock(side_effect=RuntimeError("llm unavailable"))
-        )
-        with patch.dict(sys.modules, {
-            "fts.factor_engine.meta_loop": fake_meta,
-            "fts.llm": _fake_module(get_llm_client=MagicMock()),
-            "fts.config": _make_cfg_module(),
-        }):
+        fake_meta = _fake_module(MetaLoop=MagicMock(side_effect=RuntimeError("llm unavailable")))
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.factor_engine.meta_loop": fake_meta,
+                "fts.llm": _fake_module(get_llm_client=MagicMock()),
+                "fts.config": _make_cfg_module(),
+            },
+        ):
             caplog.set_level(logging.ERROR)
             jobs.l1_meta_loop_job()  # 不应抛出
 
@@ -131,9 +142,7 @@ class TestL2EvolutionLoopJob:
         loop = fake_evolution.EvolutionLoop.return_value
         loop.run.return_value = MagicMock(status="ok", elite_factor_ids=["f1", "f2"])
         if loop_error:
-            fake_evolution = _fake_module(
-                EvolutionLoop=MagicMock(side_effect=loop_error)
-            )
+            fake_evolution = _fake_module(EvolutionLoop=MagicMock(side_effect=loop_error))
 
         fake_verifier = _fake_module(FactorVerifier=MagicMock())
         fake_seed = _fake_module(SeedPool=MagicMock())
@@ -141,20 +150,20 @@ class TestL2EvolutionLoopJob:
 
         fake_data = _fake_module(FTSDataProvider=MagicMock())
         fake_data.FTSDataProvider.return_value.get_futures_panel.return_value = (
-            panel, ["2024-01-01"],
+            panel,
+            ["2024-01-01"],
         )
 
         fake_data_futures = _fake_module(
             FUTURES_STRATIFIED_SUBSET=(
-                subset if subset is not None
-                else ["RB", "HC", "I", "J", "JM", "FG", "MA", "TA", "RU", "NR", "FU", "SC"]
+                subset if subset is not None else ["RB", "HC", "I", "J", "JM", "FG", "MA", "TA", "RU", "NR", "FU", "SC"]
             ),
             FUTURES_HOLDOUT=(holdout if holdout is not None else ["SC", "NR"]),
         )
 
         fake_llm = _fake_module(
             MockLLMClient=MagicMock(),
-            get_default_llm_client=MagicMock(return_value=MagicMock()),
+            get_llm_client=MagicMock(return_value=MagicMock()),
         )
 
         return fake_evolution, fake_verifier, fake_seed, fake_contracts, fake_data, fake_data_futures, fake_llm
@@ -164,16 +173,19 @@ class TestL2EvolutionLoopJob:
         fake_evolution, fake_verifier, fake_seed, fake_contracts, fake_data, fake_data_futures, fake_llm = (
             self._build_mocks()
         )
-        with patch.dict(sys.modules, {
-            "fts.factor_engine.evolution_loop": fake_evolution,
-            "fts.factor_engine.factor_verifier": fake_verifier,
-            "fts.factor_engine.seed_pool": fake_seed,
-            "fts.factor_engine.contracts": fake_contracts,
-            "fts.data": fake_data,
-            "fts.data_futures": fake_data_futures,
-            "fts.llm": fake_llm,
-            "fts.config": _make_cfg_module(),
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.factor_engine.evolution_loop": fake_evolution,
+                "fts.factor_engine.factor_verifier": fake_verifier,
+                "fts.factor_engine.seed_pool": fake_seed,
+                "fts.factor_engine.contracts": fake_contracts,
+                "fts.data": fake_data,
+                "fts.data_futures": fake_data_futures,
+                "fts.llm": fake_llm,
+                "fts.config": _make_cfg_module(),
+            },
+        ):
             caplog.set_level(logging.INFO)
             jobs.l2_evolution_loop_job()
 
@@ -185,16 +197,19 @@ class TestL2EvolutionLoopJob:
         fake_evolution, fake_verifier, fake_seed, fake_contracts, fake_data, fake_data_futures, fake_llm = (
             self._build_mocks(subset=["RB"], holdout=[])
         )
-        with patch.dict(sys.modules, {
-            "fts.factor_engine.evolution_loop": fake_evolution,
-            "fts.factor_engine.factor_verifier": fake_verifier,
-            "fts.factor_engine.seed_pool": fake_seed,
-            "fts.factor_engine.contracts": fake_contracts,
-            "fts.data": fake_data,
-            "fts.data_futures": fake_data_futures,
-            "fts.llm": fake_llm,
-            "fts.config": _make_cfg_module(),
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.factor_engine.evolution_loop": fake_evolution,
+                "fts.factor_engine.factor_verifier": fake_verifier,
+                "fts.factor_engine.seed_pool": fake_seed,
+                "fts.factor_engine.contracts": fake_contracts,
+                "fts.data": fake_data,
+                "fts.data_futures": fake_data_futures,
+                "fts.llm": fake_llm,
+                "fts.config": _make_cfg_module(),
+            },
+        ):
             caplog.set_level(logging.INFO)
             jobs.l2_evolution_loop_job()
 
@@ -207,16 +222,19 @@ class TestL2EvolutionLoopJob:
         fake_evolution, fake_verifier, fake_seed, fake_contracts, fake_data, fake_data_futures, fake_llm = (
             self._build_mocks(panel={})
         )
-        with patch.dict(sys.modules, {
-            "fts.factor_engine.evolution_loop": fake_evolution,
-            "fts.factor_engine.factor_verifier": fake_verifier,
-            "fts.factor_engine.seed_pool": fake_seed,
-            "fts.factor_engine.contracts": fake_contracts,
-            "fts.data": fake_data,
-            "fts.data_futures": fake_data_futures,
-            "fts.llm": fake_llm,
-            "fts.config": _make_cfg_module(),
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.factor_engine.evolution_loop": fake_evolution,
+                "fts.factor_engine.factor_verifier": fake_verifier,
+                "fts.factor_engine.seed_pool": fake_seed,
+                "fts.factor_engine.contracts": fake_contracts,
+                "fts.data": fake_data,
+                "fts.data_futures": fake_data_futures,
+                "fts.llm": fake_llm,
+                "fts.config": _make_cfg_module(),
+            },
+        ):
             caplog.set_level(logging.INFO)
             jobs.l2_evolution_loop_job()
 
@@ -227,16 +245,19 @@ class TestL2EvolutionLoopJob:
         fake_evolution, fake_verifier, fake_seed, fake_contracts, fake_data, fake_data_futures, fake_llm = (
             self._build_mocks(loop_error=RuntimeError("evolution crash"))
         )
-        with patch.dict(sys.modules, {
-            "fts.factor_engine.evolution_loop": fake_evolution,
-            "fts.factor_engine.factor_verifier": fake_verifier,
-            "fts.factor_engine.seed_pool": fake_seed,
-            "fts.factor_engine.contracts": fake_contracts,
-            "fts.data": fake_data,
-            "fts.data_futures": fake_data_futures,
-            "fts.llm": fake_llm,
-            "fts.config": _make_cfg_module(),
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.factor_engine.evolution_loop": fake_evolution,
+                "fts.factor_engine.factor_verifier": fake_verifier,
+                "fts.factor_engine.seed_pool": fake_seed,
+                "fts.factor_engine.contracts": fake_contracts,
+                "fts.data": fake_data,
+                "fts.data_futures": fake_data_futures,
+                "fts.llm": fake_llm,
+                "fts.config": _make_cfg_module(),
+            },
+        ):
             caplog.set_level(logging.ERROR)
             jobs.l2_evolution_loop_job()  # 不应抛出
 
@@ -250,16 +271,19 @@ class TestL3PortfolioLoopJob:
     """l3_portfolio_loop_job 测试。"""
 
     def test_success(self, caplog):
-        """成功路径：组合构建后触发期货信号管道。"""
+        """成功路径：期货组合构建（futures_elite + market=futures）后触发期货信号管道。"""
         result = MagicMock(status="ok", n_factors_retained=5, combo_sharpe=1.2345)
         fake_portfolio = _fake_module(PortfolioLoop=MagicMock())
         fake_portfolio.PortfolioLoop.return_value.run.return_value = result
 
         with (
-            patch.dict(sys.modules, {
-                "fts.factor_engine.portfolio_loop": fake_portfolio,
-                "fts.config": _make_cfg_module(),
-            }),
+            patch.dict(
+                sys.modules,
+                {
+                    "fts.factor_engine.portfolio_loop": fake_portfolio,
+                    "fts.config": _make_cfg_module(),
+                },
+            ),
             patch("fts.scheduler.jobs._run_futures_signal_pipeline") as mock_pipeline,
         ):
             caplog.set_level(logging.INFO)
@@ -268,16 +292,40 @@ class TestL3PortfolioLoopJob:
         assert "[L3] 完成: status=ok retained=5 sharpe=1.2345" in caplog.text
         mock_pipeline.assert_called_once()
 
+    def test_uses_futures_path(self, caplog):
+        """显式期货路径：elite_dir=futures_elite_dir + market="futures"（v2.73.0）。"""
+        result = MagicMock(status="ok", n_factors_retained=5, combo_sharpe=1.2345)
+        fake_portfolio = _fake_module(PortfolioLoop=MagicMock())
+        fake_portfolio.PortfolioLoop.return_value.run.return_value = result
+
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "fts.factor_engine.portfolio_loop": fake_portfolio,
+                    "fts.config": _make_cfg_module(),
+                },
+            ),
+            patch("fts.scheduler.jobs._run_futures_signal_pipeline"),
+        ):
+            jobs.l3_portfolio_loop_job()
+
+        _, kwargs = fake_portfolio.PortfolioLoop.call_args
+        assert kwargs["market"] == "futures"
+        assert kwargs["elite_dir"] == "/tmp/futures_elite"
+        assert kwargs["elite_dir"] != "/tmp/elite"  # 不再误用股票 elite 目录
+
     def test_failure_caught(self, caplog):
         """组合构建失败时捕获并记录错误。"""
-        fake_portfolio = _fake_module(
-            PortfolioLoop=MagicMock(side_effect=RuntimeError("portfolio crash"))
-        )
+        fake_portfolio = _fake_module(PortfolioLoop=MagicMock(side_effect=RuntimeError("portfolio crash")))
         with (
-            patch.dict(sys.modules, {
-                "fts.factor_engine.portfolio_loop": fake_portfolio,
-                "fts.config": _make_cfg_module(),
-            }),
+            patch.dict(
+                sys.modules,
+                {
+                    "fts.factor_engine.portfolio_loop": fake_portfolio,
+                    "fts.config": _make_cfg_module(),
+                },
+            ),
             patch("fts.scheduler.jobs._run_futures_signal_pipeline"),
         ):
             caplog.set_level(logging.ERROR)
@@ -298,30 +346,32 @@ class TestFuturesSignalPipeline:
         scripts_pkg.__path__ = []
         fake_pipeline = _fake_module(main=MagicMock(return_value=0))
 
-        with patch.dict(sys.modules, {
-            "scripts": scripts_pkg,
-            "scripts.futures_signal_pipeline": fake_pipeline,
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "scripts": scripts_pkg,
+                "scripts.futures_signal_pipeline": fake_pipeline,
+            },
+        ):
             caplog.set_level(logging.INFO)
             jobs._run_futures_signal_pipeline()
 
-        fake_pipeline.main.assert_called_once_with(
-            max_symbols=82, days=120, universe="all"
-        )
+        fake_pipeline.main.assert_called_once_with(max_symbols=82, days=120, universe="all")
         assert "[信号管道] 完成: exit_code=0" in caplog.text
 
     def test_pipeline_failure_caught(self, caplog):
         """管道主函数抛异常时捕获并记录错误。"""
         scripts_pkg = types.ModuleType("scripts")
         scripts_pkg.__path__ = []
-        fake_pipeline = _fake_module(
-            main=MagicMock(side_effect=RuntimeError("pipeline crash"))
-        )
+        fake_pipeline = _fake_module(main=MagicMock(side_effect=RuntimeError("pipeline crash")))
 
-        with patch.dict(sys.modules, {
-            "scripts": scripts_pkg,
-            "scripts.futures_signal_pipeline": fake_pipeline,
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "scripts": scripts_pkg,
+                "scripts.futures_signal_pipeline": fake_pipeline,
+            },
+        ):
             caplog.set_level(logging.ERROR)
             jobs._run_futures_signal_pipeline()  # 不应抛出
 
@@ -345,9 +395,7 @@ class TestHealthCheckJob:
 
     def test_healthy(self, caplog):
         """全部健康时输出正常日志。"""
-        fake_monitor = _fake_module(
-            check_all_status=MagicMock(return_value=MagicMock(healthy=True))
-        )
+        fake_monitor = _fake_module(check_all_status=MagicMock(return_value=MagicMock(healthy=True)))
         with patch.dict(sys.modules, {"fts.monitor": fake_monitor}):
             caplog.set_level(logging.INFO)
             jobs.health_check_job()
@@ -356,9 +404,7 @@ class TestHealthCheckJob:
 
     def test_unhealthy(self, caplog):
         """存在不健康状态时输出警告。"""
-        fake_monitor = _fake_module(
-            check_all_status=MagicMock(return_value=MagicMock(healthy=False))
-        )
+        fake_monitor = _fake_module(check_all_status=MagicMock(return_value=MagicMock(healthy=False)))
         with patch.dict(sys.modules, {"fts.monitor": fake_monitor}):
             caplog.set_level(logging.WARNING)
             jobs.health_check_job()
@@ -394,9 +440,7 @@ class TestMonthlyDecayEvalJob:
             {"status": "critical_decay"},
             {"status": "deprecated"},
         ]
-        fake_tracker_mod.AutoRetireManager.return_value.run.return_value = (
-            retired if retired is not None else []
-        )
+        fake_tracker_mod.AutoRetireManager.return_value.run.return_value = retired if retired is not None else []
 
         fake_db = _fake_module(FactorRepository=MagicMock())
         repo = fake_db.FactorRepository.return_value
@@ -411,11 +455,14 @@ class TestMonthlyDecayEvalJob:
         """无淘汰因子时仅完成评估。"""
         fake_tracker_mod, fake_db, fake_registry = self._build_mocks(retired=[])
         with (
-            patch.dict(sys.modules, {
-                "fts.monitor.elite_tracker": fake_tracker_mod,
-                "fts.config": _make_cfg_module(),
-                "fts.factor_engine.factor_db": fake_db,
-            }),
+            patch.dict(
+                sys.modules,
+                {
+                    "fts.monitor.elite_tracker": fake_tracker_mod,
+                    "fts.config": _make_cfg_module(),
+                    "fts.factor_engine.factor_db": fake_db,
+                },
+            ),
             patch("fts.monitor.prometheus_metrics.metrics_registry", fake_registry),
         ):
             caplog.set_level(logging.INFO)
@@ -423,7 +470,10 @@ class TestMonthlyDecayEvalJob:
 
         assert "[衰减评估] 完成:" in caplog.text
         fake_registry.update_decay_counts.assert_called_once_with(
-            active=1, decaying=1, critical=1, deprecated=1,
+            active=1,
+            decaying=1,
+            critical=1,
+            deprecated=1,
         )
         # retired 为空时不会进入淘汰同步分支，仓库不应被构造
         fake_db.FactorRepository.assert_not_called()
@@ -436,11 +486,14 @@ class TestMonthlyDecayEvalJob:
             factor_results=[{"market": "futures"}, None],  # 第二个因子不存在
         )
         with (
-            patch.dict(sys.modules, {
-                "fts.monitor.elite_tracker": fake_tracker_mod,
-                "fts.config": _make_cfg_module(),
-                "fts.factor_engine.factor_db": fake_db,
-            }),
+            patch.dict(
+                sys.modules,
+                {
+                    "fts.monitor.elite_tracker": fake_tracker_mod,
+                    "fts.config": _make_cfg_module(),
+                    "fts.factor_engine.factor_db": fake_db,
+                },
+            ),
             patch("fts.monitor.prometheus_metrics.metrics_registry", fake_registry),
         ):
             caplog.set_level(logging.WARNING)
@@ -464,11 +517,14 @@ class TestMonthlyDecayEvalJob:
         fake_db = _fake_module(FactorRepository=MagicMock())
 
         with (
-            patch.dict(sys.modules, {
-                "fts.monitor.elite_tracker": fake_tracker_mod,
-                "fts.config": _make_cfg_module(),
-                "fts.factor_engine.factor_db": fake_db,
-            }),
+            patch.dict(
+                sys.modules,
+                {
+                    "fts.monitor.elite_tracker": fake_tracker_mod,
+                    "fts.config": _make_cfg_module(),
+                    "fts.factor_engine.factor_db": fake_db,
+                },
+            ),
             patch("fts.monitor.prometheus_metrics.metrics_registry", MagicMock()),
         ):
             caplog.set_level(logging.INFO)
@@ -484,11 +540,14 @@ class TestMonthlyDecayEvalJob:
             AutoRetireManager=MagicMock(),
         )
         with (
-            patch.dict(sys.modules, {
-                "fts.monitor.elite_tracker": fake_tracker_mod,
-                "fts.config": _make_cfg_module(),
-                "fts.factor_engine.factor_db": _fake_module(FactorRepository=MagicMock()),
-            }),
+            patch.dict(
+                sys.modules,
+                {
+                    "fts.monitor.elite_tracker": fake_tracker_mod,
+                    "fts.config": _make_cfg_module(),
+                    "fts.factor_engine.factor_db": _fake_module(FactorRepository=MagicMock()),
+                },
+            ),
             patch("fts.monitor.prometheus_metrics.metrics_registry", MagicMock()),
         ):
             caplog.set_level(logging.ERROR)
@@ -517,7 +576,9 @@ class TestLogicMonitorJob:
             conn = MagicMock()
             conn.description = [("factor_id",), ("name",), ("code",)]
             conn.execute.return_value.fetchall.return_value = (
-                rows if rows is not None else [
+                rows
+                if rows is not None
+                else [
                     ("f1", "F1", "code1"),
                     ("f2", "F2", "code2"),
                 ]
@@ -538,12 +599,15 @@ class TestLogicMonitorJob:
     def test_success(self, caplog):
         """成功路径：遍历精英因子执行行为漂移与极端预测检查。"""
         fake_logic, fake_db, fake_repo_mod, fake_contracts = self._build_mocks()
-        with patch.dict(sys.modules, {
-            "fts.monitor.logic_monitor": fake_logic,
-            "fts.factor_engine.factor_db": fake_db,
-            "fts.factor_engine.factor_db.repository": fake_repo_mod,
-            "fts.factor_engine.contracts": fake_contracts,
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.monitor.logic_monitor": fake_logic,
+                "fts.factor_engine.factor_db": fake_db,
+                "fts.factor_engine.factor_db.repository": fake_repo_mod,
+                "fts.factor_engine.contracts": fake_contracts,
+            },
+        ):
             caplog.set_level(logging.INFO)
             jobs.logic_monitor_job()
 
@@ -553,12 +617,15 @@ class TestLogicMonitorJob:
     def test_no_active_factors(self, caplog):
         """无活跃精英因子时跳过。"""
         fake_logic, fake_db, fake_repo_mod, fake_contracts = self._build_mocks(rows=[])
-        with patch.dict(sys.modules, {
-            "fts.monitor.logic_monitor": fake_logic,
-            "fts.factor_engine.factor_db": fake_db,
-            "fts.factor_engine.factor_db.repository": fake_repo_mod,
-            "fts.factor_engine.contracts": fake_contracts,
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.monitor.logic_monitor": fake_logic,
+                "fts.factor_engine.factor_db": fake_db,
+                "fts.factor_engine.factor_db.repository": fake_repo_mod,
+                "fts.factor_engine.contracts": fake_contracts,
+            },
+        ):
             caplog.set_level(logging.INFO)
             jobs.logic_monitor_job()
 
@@ -570,12 +637,15 @@ class TestLogicMonitorJob:
         fake_logic, fake_db, fake_repo_mod, fake_contracts = self._build_mocks(
             run_side_effect=RuntimeError("factor check crash")
         )
-        with patch.dict(sys.modules, {
-            "fts.monitor.logic_monitor": fake_logic,
-            "fts.factor_engine.factor_db": fake_db,
-            "fts.factor_engine.factor_db.repository": fake_repo_mod,
-            "fts.factor_engine.contracts": fake_contracts,
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.monitor.logic_monitor": fake_logic,
+                "fts.factor_engine.factor_db": fake_db,
+                "fts.factor_engine.factor_db.repository": fake_repo_mod,
+                "fts.factor_engine.contracts": fake_contracts,
+            },
+        ):
             caplog.set_level(logging.INFO)
             jobs.logic_monitor_job()
 
@@ -585,15 +655,16 @@ class TestLogicMonitorJob:
 
     def test_failure_caught(self, caplog):
         """数据库加载失败时捕获并记录错误。"""
-        fake_logic, fake_db, fake_repo_mod, fake_contracts = self._build_mocks(
-            repo_error=RuntimeError("db crash")
-        )
-        with patch.dict(sys.modules, {
-            "fts.monitor.logic_monitor": fake_logic,
-            "fts.factor_engine.factor_db": fake_db,
-            "fts.factor_engine.factor_db.repository": fake_repo_mod,
-            "fts.factor_engine.contracts": fake_contracts,
-        }):
+        fake_logic, fake_db, fake_repo_mod, fake_contracts = self._build_mocks(repo_error=RuntimeError("db crash"))
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.monitor.logic_monitor": fake_logic,
+                "fts.factor_engine.factor_db": fake_db,
+                "fts.factor_engine.factor_db.repository": fake_repo_mod,
+                "fts.factor_engine.contracts": fake_contracts,
+            },
+        ):
             caplog.set_level(logging.ERROR)
             jobs.logic_monitor_job()  # 不应抛出
 
@@ -618,28 +689,30 @@ class TestFactorInspectorJob:
                 "errors": 0,
             }
         }
-        with patch.dict(sys.modules, {
-            "fts.factor_engine.factor_inspector": fake_inspector,
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.factor_engine.factor_inspector": fake_inspector,
+            },
+        ):
             caplog.set_level(logging.INFO)
             jobs.factor_inspector_job()
 
         fake_inspector.FactorInspector.return_value.inspect_and_downgrade.assert_called_once_with(
-            threshold=-0.2, commit=True,
+            threshold=-0.2,
+            commit=True,
         )
-        assert (
-            "[因子巡检] 完成: audited=5 degraded=1 downgraded=1 skipped=0 errors=0"
-            in caplog.text
-        )
+        assert "[因子巡检] 完成: audited=5 degraded=1 downgraded=1 skipped=0 errors=0" in caplog.text
 
     def test_failure_caught(self, caplog):
         """巡检失败时捕获并记录错误。"""
-        fake_inspector = _fake_module(
-            FactorInspector=MagicMock(side_effect=RuntimeError("inspector crash"))
-        )
-        with patch.dict(sys.modules, {
-            "fts.factor_engine.factor_inspector": fake_inspector,
-        }):
+        fake_inspector = _fake_module(FactorInspector=MagicMock(side_effect=RuntimeError("inspector crash")))
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.factor_engine.factor_inspector": fake_inspector,
+            },
+        ):
             caplog.set_level(logging.ERROR)
             jobs.factor_inspector_job()  # 不应抛出
 
@@ -665,9 +738,7 @@ class TestDataQualityEvalJob:
         """有监控器时输出评估快照。"""
         monitor = MagicMock()
         monitor.get_metrics_snapshot.return_value = {"sources_ok": 3}
-        fake_http = _fake_module(
-            get_data_quality_monitor=MagicMock(return_value=monitor)
-        )
+        fake_http = _fake_module(get_data_quality_monitor=MagicMock(return_value=monitor))
         with patch.dict(sys.modules, {"fts.monitor.http_server": fake_http}):
             caplog.set_level(logging.INFO)
             jobs.data_quality_eval_job()
@@ -677,9 +748,7 @@ class TestDataQualityEvalJob:
 
     def test_failure_caught(self, caplog):
         """获取监控器失败时捕获并记录错误。"""
-        fake_http = _fake_module(
-            get_data_quality_monitor=MagicMock(side_effect=RuntimeError("http crash"))
-        )
+        fake_http = _fake_module(get_data_quality_monitor=MagicMock(side_effect=RuntimeError("http crash")))
         with patch.dict(sys.modules, {"fts.monitor.http_server": fake_http}):
             caplog.set_level(logging.ERROR)
             jobs.data_quality_eval_job()  # 不应抛出

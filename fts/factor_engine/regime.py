@@ -43,35 +43,39 @@ except ImportError:
 # MSM 可选依赖
 _MSM_AVAILABLE: bool = False
 try:
-    from statsmodels.tsa.regime_switching.markov_regression import MarkovRegression
+    from statsmodels.tsa.regime_switching.markov_regression import MarkovRegression  # noqa: F401
+
     _MSM_AVAILABLE = True
 except ImportError:
     pass
 
 # 导入 HMM 增强模块（STEP3 P1.2/P1.3/P3.1）
-from fts.factor_engine.regime_hmm import (
+from fts.factor_engine.regime_hmm import (  # noqa: E402 — MSM 可选依赖探测后导入
     MultiHorizonHMMDetector,
     MSMRegimeDetector,
     StateMapStabilizer,
 )
 
 # 导入扩展特征模块（STEP3 P2.1）
-from fts.factor_engine.regime_features import compute_hmm_feature_vector
+from fts.factor_engine.regime_features import compute_hmm_feature_vector  # noqa: E402
 
 
 # ─── 契约 ─────────────────────────────────────────────────
 
+
 class MarketRegime(TypedDict):
     """市场制度检测结果。"""
-    regime: str                # bull / bear / oscillate / high_vol / low_vol
-    confidence: float          # 置信度 0~1
-    detected_at: str           # ISO 8601
-    features: dict             # 检测特征
-    method: str                # 检测方法: "hmm" / "rule" / "fallback"
+
+    regime: str  # bull / bear / oscillate / high_vol / low_vol
+    confidence: float  # 置信度 0~1
+    detected_at: str  # ISO 8601
+    features: dict  # 检测特征
+    method: str  # 检测方法: "hmm" / "rule" / "fallback"
 
 
 class RegimePerformance(TypedDict, total=False):
     """因子在某 regime 下的历史表现。"""
+
     ic_mean: float
     sharpe: float
     n_windows: int
@@ -79,6 +83,7 @@ class RegimePerformance(TypedDict, total=False):
 
 class RegimeFactorProfile(TypedDict, total=False):
     """因子在各 regime 下的表现记录。"""
+
     factor_id: str
     regime_performance: dict[str, RegimePerformance]  # regime -> performance
 
@@ -86,35 +91,36 @@ class RegimeFactorProfile(TypedDict, total=False):
 # ─── 默认阈值 ─────────────────────────────────────────────
 
 # 趋势检测（多周期收益率）
-_TREND_SHORT_DAYS = 20         # 短期趋势窗口
-_TREND_MEDIUM_DAYS = 60        # 中期趋势窗口
-_TREND_LONG_DAYS = 200         # 长期趋势窗口
-_TREND_THRESHOLD = 0.02        # 基准确率阈值（将被波动率自适应调整）
+_TREND_SHORT_DAYS = 20  # 短期趋势窗口
+_TREND_MEDIUM_DAYS = 60  # 中期趋势窗口
+_TREND_LONG_DAYS = 200  # 长期趋势窗口
+_TREND_THRESHOLD = 0.02  # 基准确率阈值（将被波动率自适应调整）
 _TREND_WEIGHTS = {"short": 1, "medium": 2, "long": 3}  # 加权投票权重
 
 # 波动率检测
-_VOL_HISTORY_DAYS = 252        # 波动率历史窗口（约 1 年交易日）
-_VOL_HIGH_PERCENTILE = 0.80    # 高波动阈值：历史 80% 分位数以上
-_VOL_LOW_PERCENTILE = 0.20     # 低波动阈值：历史 20% 分位数以下
-_VOL_ABSOLUTE_LOW = 0.10       # 绝对值低波阈值（年化 10%）
-_VOL_ABSOLUTE_HIGH = 0.40      # 绝对值高波阈值（年化 40%）
+_VOL_HISTORY_DAYS = 252  # 波动率历史窗口（约 1 年交易日）
+_VOL_HIGH_PERCENTILE = 0.80  # 高波动阈值：历史 80% 分位数以上
+_VOL_LOW_PERCENTILE = 0.20  # 低波动阈值：历史 20% 分位数以下
+_VOL_ABSOLUTE_LOW = 0.10  # 绝对值低波阈值（年化 10%）
+_VOL_ABSOLUTE_HIGH = 0.40  # 绝对值高波阈值（年化 40%）
 
 # ADX 指标
-_ADX_PERIOD = 14               # ADX 计算周期
-_ADX_TREND_THRESHOLD = 25      # ADX > 25 表示有趋势
+_ADX_PERIOD = 14  # ADX 计算周期
+_ADX_TREND_THRESHOLD = 25  # ADX > 25 表示有趋势
 
 # 制度平滑（规则方法）
 _REGIME_PERSISTENCE_FACTOR = 0.7  # 上次制度置信度保留比例 0~1，越大越平滑
 
 # HMM 参数
-_HMM_N_STATES = 4              # 状态数: bull / bear / high_vol / oscillate
-_HMM_LOOKBACK = 252            # 训练窗口
-_HMM_REFIT_INTERVAL = 20       # 每 N 次调用 refit 一次
-_HMM_MIN_DATA = 126            # 最少数据要求（半年交易日）
-_HMM_RANDOM_SEED = 42          # 确定性种子
+_HMM_N_STATES = 4  # 状态数: bull / bear / high_vol / oscillate
+_HMM_LOOKBACK = 252  # 训练窗口
+_HMM_REFIT_INTERVAL = 20  # 每 N 次调用 refit 一次
+_HMM_MIN_DATA = 126  # 最少数据要求（半年交易日）
+_HMM_RANDOM_SEED = 42  # 确定性种子
 
 
 # ─── 辅助函数 ─────────────────────────────────────────────
+
 
 def _compute_adx(
     high: pd.Series,
@@ -127,11 +133,14 @@ def _compute_adx(
     返回:
         (adx, plus_di, minus_di) — 均为 Series。
     """
-    tr = pd.concat([
-        (high - low).abs(),
-        (high - close.shift(1)).abs(),
-        (low - close.shift(1)).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            (high - low).abs(),
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
 
     up_move = high - high.shift(1)
     down_move = low.shift(1) - low
@@ -169,6 +178,7 @@ def _ewma_volatility(rets: pd.Series, span: int = 30) -> pd.Series:
 
 # ─── HMMRegimeDetector ────────────────────────────────────
 
+
 class HMMRegimeDetector:
     """HMM-based 市场制度检测器。
 
@@ -199,7 +209,7 @@ class HMMRegimeDetector:
         self.random_seed = random_seed
 
         self._model: hmm.GaussianHMM | None = None
-        self._state_map: dict[int, str] = {}   # HMM state index → regime name
+        self._state_map: dict[int, str] = {}  # HMM state index → regime name
         self._call_count = 0
         self._last_fit_data_len = 0
         self._is_fitted = False
@@ -232,16 +242,18 @@ class HMMRegimeDetector:
 
         # v2.1: 使用扩展特征模块构建增强特征向量
         # 基础特征 [收益率, 20d 已实现波动率] + 扩展特征
-        base_features = np.column_stack([
-            rets.values.reshape(-1, 1),
-            rets.rolling(20).std().fillna(0).values.reshape(-1, 1),
-        ])
+        base_features = np.column_stack(
+            [
+                rets.to_numpy().reshape(-1, 1),
+                rets.rolling(20).std().fillna(0).to_numpy().reshape(-1, 1),
+            ]
+        )
         features = compute_hmm_feature_vector(ohlcv, base_features=base_features)
         if features.size == 0:
             features = base_features
 
         # 取最近 lookback 窗口
-        train_features = features[-min(self.lookback, len(features)):]
+        train_features = features[-min(self.lookback, len(features)) :]
 
         try:
             self._model = hmm.GaussianHMM(
@@ -309,17 +321,15 @@ class HMMRegimeDetector:
             remaining.sort(key=lambda x: x["mean_vol"], reverse=True)
             assignment.append((remaining[0]["state"], "high_vol"))
             used.add(remaining[0]["state"])
-            for s in remaining[1:]:
-                assignment.append((s["state"], "oscillate"))
-                used.add(s["state"])
+            for rs in remaining[1:]:
+                assignment.append((rs["state"], "oscillate"))
+                used.add(rs["state"])
 
         raw_map = dict(assignment)
 
         # P1.3: 通过 StateMapStabilizer 防止状态标签翻转
         if self._stabilizer is not None:
-            raw_map = self._stabilizer.stabilize(
-                raw_map, state_stats, self._last_confidence
-            )
+            raw_map = self._stabilizer.stabilize(raw_map, state_stats, self._last_confidence)
 
         self._state_map = raw_map
 
@@ -343,8 +353,8 @@ class HMMRegimeDetector:
             return "unknown", 0.0, {}
 
         rets = close.pct_change().dropna()
-        rets_vals = rets.values.reshape(-1, 1)
-        vol = rets.rolling(20).std().fillna(0).values.reshape(-1, 1)
+        rets_vals = rets.to_numpy().reshape(-1, 1)
+        vol = rets.rolling(20).std().fillna(0).to_numpy().reshape(-1, 1)
         base_features = np.column_stack([rets_vals, vol])
         features = compute_hmm_feature_vector(ohlcv, base_features=base_features)
         if features.size == 0:
@@ -387,6 +397,7 @@ class HMMRegimeDetector:
 
 
 # ─── 规则方法 ─────────────────────────────────────────────
+
 
 def _detect_by_rule(ohlcv: pd.DataFrame, prev_regime: MarketRegime | None) -> MarketRegime:
     """基于规则的市场制度检测（Step 1 增强版）。
@@ -603,6 +614,7 @@ def _compute_current_vol_estimate(rets: pd.Series) -> float:
 
 # ─── SectorRegimeSelector ─────────────────────────────────
 
+
 class SectorRegimeSelector:
     """产业链级市场制度检测器。
 
@@ -636,6 +648,7 @@ class SectorRegimeSelector:
         """
         if sector_map is None:
             from fts.data_futures import FUTURES_SECTOR_MAP as _FSM
+
             sector_map = _FSM
         if not panel:
             return {}
@@ -680,6 +693,7 @@ class SectorRegimeSelector:
         """
         if sector_map is None:
             from fts.data_futures import FUTURES_SECTOR_MAP as _FSM
+
             sector_map = _FSM
 
         alignment: dict[str, float] = {}
@@ -716,9 +730,7 @@ class SectorRegimeSelector:
                     )
                 else:
                     # 制度不同，对齐度 = (1 - |置信度差|) * 0.5
-                    conf_diff = abs(
-                        variety_regime["confidence"] - sector_regime["confidence"]
-                    )
+                    conf_diff = abs(variety_regime["confidence"] - sector_regime["confidence"])
                     alignment[sym] = round((1 - conf_diff) * 0.5, 4)
 
         return alignment
@@ -756,20 +768,25 @@ class SectorRegimeSelector:
         if len(composite_close) < 20:
             return pd.DataFrame()
 
-        volume_df = pd.DataFrame({
-            sym: df["volume"].reindex(composite_close.index)
-            for sym, df in panel.items()
-            if sym in symbols and "volume" in df.columns
-        })
+        volume_df = pd.DataFrame(
+            {
+                sym: df["volume"].reindex(composite_close.index)
+                for sym, df in panel.items()
+                if sym in symbols and "volume" in df.columns
+            }
+        )
         composite_volume = volume_df.sum(axis=1).fillna(0)
 
-        return pd.DataFrame({
-            "open": composite_close.shift(1).fillna(composite_close),
-            "high": composite_close,
-            "low": composite_close,
-            "close": composite_close,
-            "volume": composite_volume,
-        }, index=composite_close.index)
+        return pd.DataFrame(
+            {
+                "open": composite_close.shift(1).fillna(composite_close),
+                "high": composite_close,
+                "low": composite_close,
+                "close": composite_close,
+                "volume": composite_volume,
+            },
+            index=composite_close.index,
+        )
 
 
 class RegimeAwareSelector:
@@ -845,7 +862,7 @@ class RegimeAwareSelector:
         """
         # ── 空/不足 20 行 → 兜底 ─────────────────────────
         if ohlcv is None or ohlcv.empty or len(ohlcv) < 20:
-            result = MarketRegime(
+            result: MarketRegime | None = MarketRegime(
                 regime="oscillate",
                 confidence=0.5,
                 detected_at=datetime.now().isoformat(),
@@ -853,6 +870,7 @@ class RegimeAwareSelector:
                 method="fallback",
             )
             self._prev_regime = result
+            assert result is not None
             return result
 
         close = ohlcv["close"].dropna()
@@ -865,10 +883,11 @@ class RegimeAwareSelector:
                 method="fallback",
             )
             self._prev_regime = result
+            assert result is not None
             return result
 
         # ── 1. 主检测: MultiHorizonHMMDetector（P1.2） ──
-        result: MarketRegime | None = None
+        result = None
         if self._use_multi_hmm and self._multi_hmm is not None:
             try:
                 regime, conf, feats = self._multi_hmm.predict(ohlcv)
@@ -1004,9 +1023,7 @@ class RegimeAwareSelector:
                 ic = perf.get("ic_mean", float("nan"))
                 sp = perf.get("sharpe", float("nan"))
                 nw = perf.get("n_windows", 0)
-                lines.append(
-                    f"    {regime_name}: IC={ic:.4f}, Sharpe={sp:.4f}, windows={nw}"
-                )
+                lines.append(f"    {regime_name}: IC={ic:.4f}, Sharpe={sp:.4f}, windows={nw}")
 
         if not self._profiles:
             lines.append("  （无因子表现数据）")
@@ -1040,9 +1057,9 @@ class RegimeTransitionWarner:
     ENTROPY_ORANGE: float = 0.8
     ENTROPY_RED: float = 0.95
 
-    TRANSITION_DROP_YELLOW: float = 0.10   # 对角元下降 10%
-    TRANSITION_DROP_ORANGE: float = 0.20   # 对角元下降 20%
-    TRANSITION_DROP_RED: float = 0.35      # 对角元下降 35%
+    TRANSITION_DROP_YELLOW: float = 0.10  # 对角元下降 10%
+    TRANSITION_DROP_ORANGE: float = 0.20  # 对角元下降 20%
+    TRANSITION_DROP_RED: float = 0.35  # 对角元下降 35%
 
     KL_DIVERGENCE_YELLOW: float = 0.5
     KL_DIVERGENCE_ORANGE: float = 1.0
@@ -1080,7 +1097,7 @@ class RegimeTransitionWarner:
         probs_arr /= probs_arr.sum()
 
         # ── 信号1: 后验概率熵 ──
-        entropy = -np.sum(probs_arr * np.log(probs_arr))
+        entropy: float = float(-np.sum(probs_arr * np.log(probs_arr)))
         # 归一化: 对 N 个状态，最大熵为 log(N)
         n_states = len(probs_arr)
         max_entropy = np.log(max(n_states, 2))
@@ -1102,14 +1119,14 @@ class RegimeTransitionWarner:
 
         # ── 信号3: 特征分布偏移 ──
         kl_div = 0.0
-        if features is not None and self._ref_feature_mean is not None:
+        if features is not None and self._ref_feature_mean is not None and self._ref_feature_std is not None:
             # 简化的 KL 散度估计（假设高斯分布）
             feat = np.asarray(features, dtype=np.float64).flatten()
             min_len = min(len(feat), len(self._ref_feature_mean))
             if min_len > 0:
                 diff = feat[:min_len] - self._ref_feature_mean[:min_len]
                 var = np.maximum(self._ref_feature_std[:min_len] ** 2, 1e-10)
-                kl_div = float(np.mean(diff ** 2 / var) / 2.0)
+                kl_div = float(np.mean(diff**2 / var) / 2.0)
 
         # 更新参考分布
         if features is not None and self._ref_feature_mean is None:
@@ -1122,10 +1139,9 @@ class RegimeTransitionWarner:
             feat = np.asarray(features, dtype=np.float64).flatten()
             min_len = min(len(feat), len(self._ref_feature_mean))
             if min_len > 0:
-                self._ref_feature_mean[:min_len] = (
-                    (1 - alpha) * self._ref_feature_mean[:min_len]
-                    + alpha * feat[:min_len]
-                )
+                self._ref_feature_mean[:min_len] = (1 - alpha) * self._ref_feature_mean[:min_len] + alpha * feat[
+                    :min_len
+                ]
 
         # ── 综合判定 ──
         red = (
@@ -1146,18 +1162,21 @@ class RegimeTransitionWarner:
 
         if red:
             self._last_alert = "red"
-            logger.warning("制度迁移预警: RED (entropy=%.4f, trans_drop=%.4f, kl=%.4f)",
-                          norm_entropy, trans_drop, kl_div)
+            logger.warning(
+                "制度迁移预警: RED (entropy=%.4f, trans_drop=%.4f, kl=%.4f)", norm_entropy, trans_drop, kl_div
+            )
             return "red"
         if orange:
             self._last_alert = "orange"
-            logger.info("制度迁移预警: ORANGE (entropy=%.4f, trans_drop=%.4f, kl=%.4f)",
-                       norm_entropy, trans_drop, kl_div)
+            logger.info(
+                "制度迁移预警: ORANGE (entropy=%.4f, trans_drop=%.4f, kl=%.4f)", norm_entropy, trans_drop, kl_div
+            )
             return "orange"
         if yellow:
             self._last_alert = "yellow"
-            logger.debug("制度迁移预警: YELLOW (entropy=%.4f, trans_drop=%.4f, kl=%.4f)",
-                        norm_entropy, trans_drop, kl_div)
+            logger.debug(
+                "制度迁移预警: YELLOW (entropy=%.4f, trans_drop=%.4f, kl=%.4f)", norm_entropy, trans_drop, kl_div
+            )
             return "yellow"
 
         self._last_alert = None
@@ -1192,13 +1211,13 @@ class AdaptiveRegimeConfig:
     """
 
     DEFAULT_THRESHOLDS: dict[str, float] = {
-        "trend_slope_bull": 0.0001,       # 看涨趋势斜率阈值
-        "trend_slope_bear": -0.0001,      # 看跌趋势斜率阈值
-        "volatility_high": 0.02,           # 高波动阈值
-        "volatility_low": 0.005,           # 低波动阈值
-        "confidence_min": 0.3,             # 最低置信度
-        "entropy_yellow": 0.6,             # 迁移预警黄色阈值
-        "entropy_orange": 0.8,             # 迁移预警橙色阈值
+        "trend_slope_bull": 0.0001,  # 看涨趋势斜率阈值
+        "trend_slope_bear": -0.0001,  # 看跌趋势斜率阈值
+        "volatility_high": 0.02,  # 高波动阈值
+        "volatility_low": 0.005,  # 低波动阈值
+        "confidence_min": 0.3,  # 最低置信度
+        "entropy_yellow": 0.6,  # 迁移预警黄色阈值
+        "entropy_orange": 0.8,  # 迁移预警橙色阈值
     }
 
     # 可调参数搜索空间
@@ -1234,12 +1253,14 @@ class AdaptiveRegimeConfig:
             confidence:     检测置信度。
             forward_return: 后续收益率（如次日收益）。
         """
-        self._history.append({
-            "regime": regime,
-            "confidence": confidence,
-            "forward_return": forward_return,
-            "timestamp": pd.Timestamp.now(),
-        })
+        self._history.append(
+            {
+                "regime": regime,
+                "confidence": confidence,
+                "forward_return": forward_return,
+                "timestamp": pd.Timestamp.now(),
+            }
+        )
         self._eval_count += 1
 
         # 每 eval_interval 次重新优化
@@ -1258,7 +1279,7 @@ class AdaptiveRegimeConfig:
         if len(self._history) < self.eval_interval:
             return
 
-        recent = self._history[-self.eval_interval:]
+        recent = self._history[-self.eval_interval :]
 
         best_score = -float("inf")
         best_params: dict[str, float] = dict(self.DEFAULT_THRESHOLDS)
@@ -1268,28 +1289,29 @@ class AdaptiveRegimeConfig:
         param_values = list(self.PARAM_GRID.values())
 
         from itertools import product
+
         total = 1
         for v in param_values:
             total *= len(v)
         if total > 500:
             # 采样搜索
-            param_values = [v[::max(1, len(v) // 3)] for v in param_values]
+            param_values = [v[:: max(1, len(v) // 3)] for v in param_values]
 
         for combo in product(*param_values):
             params = dict(zip(param_keys, combo))
             score = self._score_params(params, recent)
             if score > best_score:
                 best_score = score
-                best_params = params
+                best_params = {k: float(v) for k, v in params.items()}
 
         # 更新阈值（仅更新搜索过的参数）
-        for k, v in best_params.items():
-            self._thresholds[k] = v
+        for k, val in best_params.items():
+            self._thresholds[k] = float(val)
 
         logger.info(
             "AdaptiveRegimeConfig 已更新阈值 (score=%.4f): %s",
             best_score,
-            {k: f"{v:.5f}" for k, v in best_params.items()},
+            {k: f"{val:.5f}" for k, val in best_params.items()},
         )
 
     def _score_params(
@@ -1306,6 +1328,7 @@ class AdaptiveRegimeConfig:
             return 0.0
 
         from collections import Counter
+
         regime_counts = Counter(h["regime"] for h in history)
         n_entries = len(history)
 
@@ -1338,7 +1361,7 @@ class AdaptiveRegimeConfig:
             diversity = 0.0
         else:
             probs = np.array([c / n_entries for c in regime_counts.values()])
-            entropy = -np.sum(probs * np.log(np.clip(probs, 1e-10, 1.0)))
+            entropy: float = float(-np.sum(probs * np.log(np.clip(probs, 1e-10, 1.0))))
             diversity = entropy / np.log(n_regimes)
 
         avg_return = weighted_returns / total_weight

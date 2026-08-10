@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
 
 from fts.factor_engine.batch_mining import (
     BatchGenerationResult,
@@ -41,6 +40,7 @@ def _always_pass_runtime(factor) -> tuple[bool, str]:
 
 # ── generate_batch ────────────────────────────────────────
 
+
 def test_generate_batch_returns_batch_size():
     """验收 1: generate_batch 返回 ≤ batch_size 个合法后代。"""
     cfg = BatchMiningConfig(batch_size=10)
@@ -67,6 +67,7 @@ def test_generate_batch_skips_none():
 
 
 # ── filter_batch ──────────────────────────────────────────
+
 
 def test_filter_batch_all_pass():
     """并行过滤：全部通过时 passed 与输入一致。"""
@@ -149,9 +150,7 @@ def test_filter_batch_single_proposal():
 def test_filter_batch_tokens_accumulated():
     """tokens 消耗按全部候选求和（含被拦截者）。"""
     cfg = BatchMiningConfig(max_candidates=10)
-    props = [
-        {**_make_proposal(f"f{i}"), "tokens": 10} for i in range(4)
-    ]
+    props = [{**_make_proposal(f"f{i}"), "tokens": 10} for i in range(4)]
     miner = BatchMiner(
         config=cfg,
         runtime_check_cb=_always_pass_runtime,
@@ -163,12 +162,18 @@ def test_filter_batch_tokens_accumulated():
 
 # ── run_iteration ─────────────────────────────────────────
 
+
 def test_run_iteration_end_to_end():
     """验收: 一代完整漏斗（生成→过滤）并标记 generation。"""
     cfg = BatchMiningConfig(batch_size=4, max_candidates=2)
-    gen = MagicMock(side_effect=[
-        _make_proposal("f0"), None, _make_proposal("f2"), _make_proposal("f3"),
-    ])
+    gen = MagicMock(
+        side_effect=[
+            _make_proposal("f0"),
+            None,
+            _make_proposal("f2"),
+            _make_proposal("f3"),
+        ]
+    )
     miner = BatchMiner(
         config=cfg,
         generate_cb=gen,

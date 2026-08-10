@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
 import duckdb
 
@@ -49,7 +48,15 @@ KLINE_CACHE_FULL_COLUMNS: list[tuple[str, str]] = [
 
 # 旧版（v2.2.1）的 9 列（兼容检测用）。
 KLINE_CACHE_LEGACY_COLUMNS: set[str] = {
-    "symbol", "period", "date", "open", "high", "low", "close", "volume", "amount",
+    "symbol",
+    "period",
+    "date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
 }
 
 # v2.3.0 增量新增的 8 列。
@@ -71,14 +78,22 @@ KLINE_CACHE_ADJ_COLUMNS: list[tuple[str, str]] = [
 
 # v2.31.0 Phase 5: tick_cache 5 档盘口扩展列（旧表仅 1 档盘口时 ALTER 补齐）
 TICK_CACHE_DEPTH_COLUMNS: list[tuple[str, str]] = [
-    ("bid_price2", "DOUBLE"), ("bid_volume2", "DOUBLE"),
-    ("ask_price2", "DOUBLE"), ("ask_volume2", "DOUBLE"),
-    ("bid_price3", "DOUBLE"), ("bid_volume3", "DOUBLE"),
-    ("ask_price3", "DOUBLE"), ("ask_volume3", "DOUBLE"),
-    ("bid_price4", "DOUBLE"), ("bid_volume4", "DOUBLE"),
-    ("ask_price4", "DOUBLE"), ("ask_volume4", "DOUBLE"),
-    ("bid_price5", "DOUBLE"), ("bid_volume5", "DOUBLE"),
-    ("ask_price5", "DOUBLE"), ("ask_volume5", "DOUBLE"),
+    ("bid_price2", "DOUBLE"),
+    ("bid_volume2", "DOUBLE"),
+    ("ask_price2", "DOUBLE"),
+    ("ask_volume2", "DOUBLE"),
+    ("bid_price3", "DOUBLE"),
+    ("bid_volume3", "DOUBLE"),
+    ("ask_price3", "DOUBLE"),
+    ("ask_volume3", "DOUBLE"),
+    ("bid_price4", "DOUBLE"),
+    ("bid_volume4", "DOUBLE"),
+    ("ask_price4", "DOUBLE"),
+    ("ask_volume4", "DOUBLE"),
+    ("bid_price5", "DOUBLE"),
+    ("bid_volume5", "DOUBLE"),
+    ("ask_price5", "DOUBLE"),
+    ("ask_volume5", "DOUBLE"),
 ]
 
 
@@ -224,8 +239,7 @@ CREATE TABLE IF NOT EXISTS option_chain_cache (
 def _table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
     """检查表是否存在。"""
     row = con.execute(
-        "SELECT count(*) FROM information_schema.tables "
-        "WHERE table_schema='main' AND table_name=?",
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='main' AND table_name=?",
         [table_name],
     ).fetchone()
     return bool(row and row[0] > 0)
@@ -240,18 +254,14 @@ def _index_exists(con: duckdb.DuckDBPyConnection, table_name: str, index_name: s
     return any(r[0] == index_name for r in rows)
 
 
-def _get_existing_columns(
-    con: duckdb.DuckDBPyConnection, table_name: str
-) -> set[str]:
+def _get_existing_columns(con: duckdb.DuckDBPyConnection, table_name: str) -> set[str]:
     """获取表的现有列名集合。"""
     rows = con.execute(f"PRAGMA table_info('{table_name}')").fetchall()
     # PRAGMA table_info 返回: (cid, name, type, notnull, dflt_value, pk)
     return {r[1] for r in rows}
 
 
-def _add_missing_columns(
-    con: duckdb.DuckDBPyConnection, table_name: str, new_columns: list[tuple[str, str]]
-) -> int:
+def _add_missing_columns(con: duckdb.DuckDBPyConnection, table_name: str, new_columns: list[tuple[str, str]]) -> int:
     """向已存在表添加缺失列，返回实际新增的列数。"""
     existing = _get_existing_columns(con, table_name)
     added = 0
@@ -263,9 +273,7 @@ def _add_missing_columns(
     return added
 
 
-def _create_table_if_absent(
-    con: duckdb.DuckDBPyConnection, table_name: str, ddl: str
-) -> bool:
+def _create_table_if_absent(con: duckdb.DuckDBPyConnection, table_name: str, ddl: str) -> bool:
     """如果表不存在则按给定 DDL 创建，返回是否新建。"""
     if _table_exists(con, table_name):
         return False
@@ -322,13 +330,9 @@ def migrate_schema(db_path: str | Path) -> dict[str, int]:
     try:
         # 1) kline_cache 处理：旧版扩列 / 不存在则创建
         if _table_exists(con, "kline_cache"):
-            columns_added = _add_missing_columns(
-                con, "kline_cache", KLINE_CACHE_NEW_COLUMNS
-            )
+            columns_added = _add_missing_columns(con, "kline_cache", KLINE_CACHE_NEW_COLUMNS)
             # v2.58.0 (GAP-046): 幂等补 adj_factor 复权因子列
-            columns_added += _add_missing_columns(
-                con, "kline_cache", KLINE_CACHE_ADJ_COLUMNS
-            )
+            columns_added += _add_missing_columns(con, "kline_cache", KLINE_CACHE_ADJ_COLUMNS)
         else:
             con.execute(KLINE_CACHE_CREATE_DDL)
             tables_created += 1
@@ -352,18 +356,11 @@ def migrate_schema(db_path: str | Path) -> dict[str, int]:
             tables_created += 1
         else:
             # 旧表补列：仅 1 档盘口的表 ALTER 补齐 5 档（Phase 5）
-            columns_added += _add_missing_columns(
-                con, "tick_cache", TICK_CACHE_DEPTH_COLUMNS
-            )
+            columns_added += _add_missing_columns(con, "tick_cache", TICK_CACHE_DEPTH_COLUMNS)
 
         # 3) 索引：IF NOT EXISTS
-        index_ddl = (
-            "CREATE INDEX IF NOT EXISTS idx_kline_symbol_date_source "
-            "ON kline_cache(symbol, date, source)"
-        )
-        if _create_index_if_absent(
-            con, "kline_cache", "idx_kline_symbol_date_source", index_ddl
-        ):
+        index_ddl = "CREATE INDEX IF NOT EXISTS idx_kline_symbol_date_source ON kline_cache(symbol, date, source)"
+        if _create_index_if_absent(con, "kline_cache", "idx_kline_symbol_date_source", index_ddl):
             indexes_created += 1
     finally:
         con.close()

@@ -19,8 +19,6 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-import numpy as np
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -121,15 +119,8 @@ class ReportGenerator:
         if equity is None or len(equity) == 0:
             return "## 净值曲线\n\n（无净值数据）\n"
         sample = equity.iloc[:: max(1, len(equity) // 20)][:20]
-        rows = "\n".join(
-            f"| {idx.date() if hasattr(idx, 'date') else idx} | {v:.4f} |"
-            for idx, v in sample.items()
-        )
-        return (
-            "## 净值曲线\n\n| 日期 | 净值 |\n|------|------|\n"
-            f"{rows}\n"
-            f"\n期末净值: {equity.iloc[-1]:.4f}\n"
-        )
+        rows = "\n".join(f"| {idx.date() if hasattr(idx, 'date') else idx} | {v:.4f} |" for idx, v in sample.items())
+        return f"## 净值曲线\n\n| 日期 | 净值 |\n|------|------|\n{rows}\n\n期末净值: {equity.iloc[-1]:.4f}\n"
 
     def _generate_drawdown_curve(self, report: Any) -> str:
         """生成回撤曲线（最深回撤窗口信息）。"""
@@ -166,9 +157,7 @@ class ReportGenerator:
         monthly = equity.resample("ME").last().pct_change().dropna()
         if len(monthly) == 0:
             return "## 月度收益\n\n（无月度数据）\n"
-        rows = "\n".join(
-            f"| {idx.strftime('%Y-%m')} | {v:+.2%} |" for idx, v in monthly.items()
-        )
+        rows = "\n".join(f"| {idx.strftime('%Y-%m')} | {v:+.2%} |" for idx, v in monthly.items())
         return f"## 月度收益\n\n| 月份 | 收益 |\n|------|------|\n{rows}\n"
 
 

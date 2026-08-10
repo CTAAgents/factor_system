@@ -33,9 +33,8 @@ from .walk_forward import WalkForwardOptimizer, WalkForwardConfig, WalkForwardRe
 
 # ─── Level 1: 回测验证 ────────────────────────────────────
 
-def _compute_ic(
-    signal: np.ndarray, forward_returns: np.ndarray, method: str = "spearman"
-) -> tuple[float, float]:
+
+def _compute_ic(signal: np.ndarray, forward_returns: np.ndarray, method: str = "spearman") -> tuple[float, float]:
     """计算 IC（信息系数）和 ICIR。
 
     Args:
@@ -68,6 +67,54 @@ def _compute_ic(
         return 0.0, 0.0
     # ICIR = IC 均值 / IC 标准差（这里简化为单期）
     return float(ic), float(ic)  # 多期时 icir = mean/std
+
+
+def _compute_extreme_perturbation_ic(
+    signal: np.ndarray,
+    forward_returns: np.ndarray,
+    pct: float = 0.01,
+) -> Optional[dict[str, Any]]:
+    """极值样本扰动 IC 重算（GAP-F15，v2.73.0）。
+
+    剔除信号上下 pct 百分位极端样本后重算 IC，评估高 IC 是否仅由少数极端样本支撑。
+
+    Args:
+        signal: 因子信号数组
+        forward_returns: 未来收益率数组
+        pct: 上下剔除百分位（默认 0.01 = 上下各 1%）
+
+    Returns:
+        dict{ic_before, ic_after, ic_drop, n_total, n_removed}：
+            ic_drop = (|ic_before| - |ic_after|) / |ic_before|，clip 到 [0, 1]。
+            数据不足 / 常数输入 / IC 近零时返回 None（screener 按"扰动数据缺失"处理）。
+    """
+    if len(signal) != len(forward_returns) or len(signal) < 20:
+        return None
+    sig_arr = np.asarray(signal, dtype=float)
+    ret_arr = np.asarray(forward_returns, dtype=float)
+    valid = ~(np.isnan(sig_arr) | np.isnan(ret_arr))
+    sig_v = sig_arr[valid]
+    ret_v = ret_arr[valid]
+    if len(sig_v) < 20 or np.std(sig_v) < 1e-12 or np.std(ret_v) < 1e-12:
+        return None
+    ic_before, _ = _compute_ic(sig_v, ret_v)
+    if not np.isfinite(ic_before) or abs(ic_before) < 1e-6:
+        return None
+    lo, hi = np.percentile(sig_v, [pct * 100, (1 - pct) * 100])
+    mask = (sig_v >= lo) & (sig_v <= hi)
+    if int(mask.sum()) < 20:
+        return None
+    ic_after, _ = _compute_ic(sig_v[mask], ret_v[mask])
+    if not np.isfinite(ic_after):
+        return None
+    ic_drop = (abs(ic_before) - abs(ic_after)) / abs(ic_before)
+    return {
+        "ic_before": float(ic_before),
+        "ic_after": float(ic_after),
+        "ic_drop": float(np.clip(ic_drop, 0.0, 1.0)),
+        "n_total": int(len(sig_v)),
+        "n_removed": int(len(sig_v) - int(mask.sum())),
+    }
 
 
 def _compute_sharpe(returns: np.ndarray, periods_per_year: int = 252) -> float:
@@ -205,6 +252,7 @@ def evaluate_backtest(
 
 # ─── Level 2: 经济逻辑评分 ────────────────────────────────
 
+
 def evaluate_economic_logic(factor: FactorProgram) -> EconomicScore:
     """Level 2 — 经济逻辑评分（四维）。
 
@@ -217,12 +265,14 @@ def evaluate_economic_logic(factor: FactorProgram) -> EconomicScore:
     institutional = int(el.get("institutional", 3))
 
     threshold = 3  # 每维达标阈值 3/5
-    dims_passed = sum([
-        1 if theory >= threshold else 0,
-        1 if behavioral >= threshold else 0,
-        1 if microstructure >= threshold else 0,
-        1 if institutional >= threshold else 0,
-    ])
+    dims_passed = sum(
+        [
+            1 if theory >= threshold else 0,
+            1 if behavioral >= threshold else 0,
+            1 if microstructure >= threshold else 0,
+            1 if institutional >= threshold else 0,
+        ]
+    )
 
     return EconomicScore(
         theory=theory,
@@ -235,6 +285,7 @@ def evaluate_economic_logic(factor: FactorProgram) -> EconomicScore:
 
 
 # ─── Level 3: 多重检验校正 ────────────────────────────────
+
 
 def evaluate_multiple_tests(
     factors_evaluations: list[FactorEvaluation],
@@ -307,6 +358,7 @@ def evaluate_multiple_tests(
 
 # ─── 三级评估链 ───────────────────────────────────────────
 
+
 class EvaluationChain:
     """agentic 三级评估链。
 
@@ -320,10 +372,13 @@ class EvaluationChain:
         oos_ratio: float = 0.3,
         periods_per_year: int = 252,
         walk_forward_config: Optional[WalkForwardConfig] = None,
+        extreme_perturb_pct: float = 0.01,
     ):
         self.oos_ratio = oos_ratio
         self.periods_per_year = periods_per_year
         self._walk_forward_config = walk_forward_config or dict(DEFAULT_WALK_FORWARD_CONFIG)
+        # GAP-F15 (v2.73.0): 极值扰动剔除百分位（默认上下各 1%）
+        self.extreme_perturb_pct = extreme_perturb_pct
 
     def evaluate(
         self,
@@ -348,9 +403,17 @@ class EvaluationChain:
             FactorEvaluation
         """
         # Level 1
-        bt = evaluate_backtest(
-            factor, data, forward_returns, self.oos_ratio, self.periods_per_year
-        )
+        bt = evaluate_backtest(factor, data, forward_returns, self.oos_ratio, self.periods_per_year)
+        # GAP-F15 (v2.73.0): 极值扰动 IC 重算——剔除信号上下 pct 百分位极端样本后重算 IC，
+        # 供 HighICScreener 的 V2 极值扰动一票否决消费（ic_drop > 25% 拦截）。
+        try:
+            _executor = FactorExecutor(factor)
+            _signal = _executor.execute(data, factor.get("params", {}))
+            extreme_perturbation = _compute_extreme_perturbation_ic(
+                _signal, forward_returns, pct=self.extreme_perturb_pct
+            )
+        except Exception:
+            extreme_perturbation = None
         # Level 2
         ec = evaluate_economic_logic(factor)
         # Level 3
@@ -372,7 +435,9 @@ class EvaluationChain:
         # 强制走航验证（多窗口 OOS 评估，替代单窗口切片）
         wf_config = walk_forward_config or self._walk_forward_config
         walk_forward_result = evaluate_walk_forward(
-            factor, data, forward_returns,
+            factor,
+            data,
+            forward_returns,
             config=wf_config,
         )
 
@@ -381,6 +446,7 @@ class EvaluationChain:
             wf_ic_values = [w["ic"] for w in walk_forward_result.get("windows", [])]
             if wf_ic_values:
                 import statistics as _stat
+
                 bt["ic"] = _stat.mean(wf_ic_values)
                 bt["ic_volatility"] = _stat.stdev(wf_ic_values) if len(wf_ic_values) > 1 else 0.0
                 bt["n_walk_windows"] = walk_forward_result.get("n_windows_completed", 0)
@@ -416,6 +482,7 @@ class EvaluationChain:
             level_2_economic=ec,
             level_3_multiple=mt,
             walk_forward=walk_forward_result,
+            extreme_perturbation=extreme_perturbation,
             passed=passed,
             failure_reasons=reasons,
             evaluated_at=datetime.now().isoformat(),
@@ -444,8 +511,7 @@ def evaluate_walk_forward(
     """
     optimizer = WalkForwardOptimizer(config=config)
 
-    def _evaluate_window(train_data: pd.DataFrame,
-                         oos_data: pd.DataFrame) -> dict[str, float]:
+    def _evaluate_window(train_data: pd.DataFrame, oos_data: pd.DataFrame) -> dict[str, float]:
         """单窗口评估函数（注入到 WalkForwardOptimizer）。"""
         executor = FactorExecutor(factor)
         params = factor.get("params", {})
@@ -547,7 +613,10 @@ def cross_section_evaluate_backtest(
         if pre_ics:
             ic_pre_neutral = float(np.mean(pre_ics))
         oos_signal = _neutralize_signal_matrix(
-            oos_signal, symbols_list, industry_map, cap_map,
+            oos_signal,
+            symbols_list,
+            industry_map,
+            cap_map,
         )
 
     # Step 2.6: Barra 风格中性化（可选）— GAP-S02: 行业去均值后叠加风格回归残差
@@ -607,8 +676,14 @@ def cross_section_evaluate_backtest(
         lo_sharpe = _compute_sharpe(lo_returns)
 
     metrics = BacktestMetrics(
-        ic=ic_mean, icir=icir, sharpe=sharpe, max_drawdown=max_dd,
-        monotonicity=True, oos_ratio=oos_ratio, t_stat=t_stat, turnover_monthly=0.0,
+        ic=ic_mean,
+        icir=icir,
+        sharpe=sharpe,
+        max_drawdown=max_dd,
+        monotonicity=True,
+        oos_ratio=oos_ratio,
+        t_stat=t_stat,
+        turnover_monthly=0.0,
     )
     if ic_pre_neutral is not None:
         metrics["ic_pre_neutral"] = ic_pre_neutral
@@ -620,7 +695,9 @@ def cross_section_evaluate_backtest(
 
 
 def _cs_execute_factors(
-    executor: FactorExecutor, params: dict, panel_data: dict[str, pd.DataFrame],
+    executor: FactorExecutor,
+    params: dict,
+    panel_data: dict[str, pd.DataFrame],
 ) -> tuple[dict[str, pd.Series], dict[str, pd.Series]]:
     """横截面 Step 1: 对每只股票运行因子 + forward_return。"""
     signal_dict: dict[str, pd.Series] = {}
@@ -702,7 +779,9 @@ def _cs_compute_layer_ics(
     mid_mask = (valid_cap >= terciles[0]) & (valid_cap < terciles[1])
     small_mask = valid_cap < terciles[0]
     layers: dict[str, np.ndarray] = {
-        "large": large_mask, "mid": mid_mask, "small": small_mask,
+        "large": large_mask,
+        "mid": mid_mask,
+        "small": small_mask,
     }
     result: dict[str, float] = {}
     for layer_name, mask in layers.items():
@@ -726,7 +805,9 @@ def _cs_compute_layer_ics(
 
 
 def _cs_long_short_returns(
-    oos_signal: np.ndarray, oos_ret: np.ndarray, long_only: bool = False,
+    oos_signal: np.ndarray,
+    oos_ret: np.ndarray,
+    long_only: bool = False,
 ) -> np.ndarray:
     """横截面: 多空组合收益（每期 top 20% - bottom 20%）。
 
@@ -744,7 +825,7 @@ def _cs_long_short_returns(
         sig_t = oos_signal[t, :]
         ret_t = oos_ret[t, :]
         valid = ~(np.isnan(sig_t) | np.isnan(ret_t))
-        valid_count = np.sum(valid)
+        valid_count = int(np.sum(valid))
         if valid_count < 3:
             continue
         sig_v = sig_t[valid]
@@ -770,8 +851,14 @@ def _cs_t_stat(ls_returns: np.ndarray) -> float:
 def _cs_empty_metrics(oos_ratio: float) -> BacktestMetrics:
     """横截面: 数据不足时的空指标。"""
     return BacktestMetrics(
-        ic=0.0, icir=0.0, sharpe=0.0, max_drawdown=0.0,
-        monotonicity=False, oos_ratio=oos_ratio, t_stat=0.0, turnover_monthly=0.0,
+        ic=0.0,
+        icir=0.0,
+        sharpe=0.0,
+        max_drawdown=0.0,
+        monotonicity=False,
+        oos_ratio=oos_ratio,
+        t_stat=0.0,
+        turnover_monthly=0.0,
     )
 
 
@@ -811,7 +898,7 @@ def _neutralize_signal_matrix(
     cap_weights: Optional[np.ndarray] = None
     if cap_map is not None:
         caps = np.array([cap_map.get(sym, 0.0) for sym in symbols_list], dtype=float)
-        total_cap = np.sum(caps)
+        total_cap = float(np.sum(caps))
         if total_cap > 0:
             cap_weights = caps / total_cap
 
@@ -830,9 +917,7 @@ def _neutralize_signal_matrix(
             if valid[j]:
                 industry_vals[industry_labels[j]].append(sig_t[j])
 
-        industry_means = {
-            ind: np.mean(vals) for ind, vals in industry_vals.items()
-        }
+        industry_means = {ind: np.mean(vals) for ind, vals in industry_vals.items()}
 
         # 行业去均值
         for j in range(n_stocks):
@@ -844,7 +929,7 @@ def _neutralize_signal_matrix(
             residual = result[t, :].copy()
             valid_residual = residual[valid]
             valid_weights = cap_weights[valid]
-            w_sum = np.sum(valid_weights)
+            w_sum = float(np.sum(valid_weights))
             if w_sum > 0:
                 weighted_mean = np.sum(valid_residual * valid_weights) / w_sum
                 result[t, valid] = residual[valid] - weighted_mean

@@ -35,7 +35,6 @@ import asyncio
 import logging
 import threading
 import time
-from collections import deque
 from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
@@ -53,11 +52,13 @@ _DUCKDB_PATH = Path(__file__).resolve().parent.parent / "data" / "fts_history.du
 
 # ─── 异常 ──────────────────────────────────────────────────
 
+
 class FuturesDataError(RuntimeError):
     """期货数据获取失败。"""
 
 
 # ─── 重试装饰器 ───────────────────────────────────────────
+
 
 def retry_on_conflict(
     max_retries: int = 3,
@@ -71,10 +72,12 @@ def retry_on_conflict(
         delay: 初始重试间隔（秒）
         backoff: 退避倍数
     """
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             import duckdb  # type: ignore[import-untyped]
+
             # duckdb 不同版本写冲突异常类名不一致（1.1.x 为 TransactionException），
             # 统一兼容获取，避免 AttributeError 掩盖原始异常导致重试失效。
             conflict_exc = (
@@ -90,18 +93,23 @@ def retry_on_conflict(
                     last_exc = e
                     if attempt == max_retries - 1:
                         raise
-                    wait = delay * (backoff ** attempt)
+                    wait = delay * (backoff**attempt)
                     logger.debug(
                         "DuckDB 写冲突 (第 %d/%d 次)，等待 %.1fs 重试",
-                        attempt + 1, max_retries, wait,
+                        attempt + 1,
+                        max_retries,
+                        wait,
                     )
                     time.sleep(wait)
             raise last_exc  # type: ignore[misc]
+
         return wrapper
+
     return decorator
 
 
 # ─── 异步写入队列 ─────────────────────────────────────────
+
 
 class AsyncWriteQueue:
     """DuckDB 异步写入队列 — 将写入请求串行化。
@@ -124,9 +132,7 @@ class AsyncWriteQueue:
             max_queue_size: 队列最大长度（超过时阻塞）
         """
         self._conn = conn
-        self._queue: asyncio.Queue[tuple[str, Optional[list], asyncio.Future]] = (
-            asyncio.Queue(maxsize=max_queue_size)
-        )
+        self._queue: asyncio.Queue[tuple[str, Optional[list], asyncio.Future]] = asyncio.Queue(maxsize=max_queue_size)
         self._worker_task: Optional[asyncio.Task[None]] = None
         self._running = False
 
@@ -167,7 +173,8 @@ class AsyncWriteQueue:
         while self._running:
             try:
                 sql, params, future = await asyncio.wait_for(
-                    self._queue.get(), timeout=1.0,
+                    self._queue.get(),
+                    timeout=1.0,
                 )
             except asyncio.TimeoutError:
                 continue
@@ -196,6 +203,7 @@ class AsyncWriteQueue:
 
 
 # ─── DuckDB 连接管理器 ──────────────────────────────────
+
 
 class DuckDBConnection:
     """DuckDB 连接管理器 — 单连接 + 重试保护 + 可选异步写入队列。
@@ -250,6 +258,7 @@ class DuckDBConnection:
             if self._conn is not None:
                 return self._conn
             import duckdb  # type: ignore[import-untyped]
+
             self._conn = duckdb.connect(str(self._path))
             # 尝试设置锁配置避免死锁（旧版 DuckDB 不支持时静默降级）
             try:
@@ -258,13 +267,14 @@ class DuckDBConnection:
             except Exception:
                 logger.debug("DuckDB lock_configuration 不可用，使用应用层重试")
             logger.info(
-                "DuckDB 连接已建立: %s (lock_configuration=true, "
-                "app_retry=%d)",
-                self._path, self._concurrency_retries,
+                "DuckDB 连接已建立: %s (lock_configuration=true, app_retry=%d)",
+                self._path,
+                self._concurrency_retries,
             )
             if self._enable_async:
                 self._async_queue = AsyncWriteQueue(
-                    self._conn, max_queue_size=self._max_async_queue,
+                    self._conn,
+                    max_queue_size=self._max_async_queue,
                 )
                 self._async_queue.start()
                 logger.info("DuckDB 异步写入队列已启动")
@@ -299,9 +309,7 @@ class DuckDBConnection:
             执行结果
         """
         if not self._enable_async:
-            raise RuntimeError(
-                "异步写入队列未启用（构造时设置 enable_async_queue=True）"
-            )
+            raise RuntimeError("异步写入队列未启用（构造时设置 enable_async_queue=True）")
         self.connect()  # 确保连接已建立
         assert self._async_queue is not None
         return await self._async_queue.execute(sql, params)
@@ -345,6 +353,7 @@ def _get_db() -> Any:
 
 # ─── 期货数据提供者 ───────────────────────────────────────
 
+
 class FuturesDataProvider:
     """期货数据提供者 — 基于 DuckDB kline_cache 表。
 
@@ -360,8 +369,7 @@ class FuturesDataProvider:
         panel, dates = provider.get_futures_panel(["RB0", "CU0", "AU0"], days=500)
     """
 
-    def __init__(self, use_akshare_fallback: bool = True,
-                 aggregator: Optional[Any] = None):
+    def __init__(self, use_akshare_fallback: bool = True, aggregator: Optional[Any] = None):
         """
         Args:
             use_akshare_fallback: 是否在 DuckDB 无数据时尝试 AKShare 即时获取。
@@ -393,6 +401,7 @@ class FuturesDataProvider:
             minute_sources: list = []
             try:
                 from fts.data_sources.tdx_minute_source import TDXMinuteSource
+
                 minute_sources.append(TDXMinuteSource())
             except Exception:
                 logger.debug("TDXMinuteSource 初始化失败，跳过分钟源")
@@ -404,6 +413,7 @@ class FuturesDataProvider:
 
             try:
                 from fts.data_sources.tqsdk_source import TQSDKSource
+
                 minute_sources.append(TQSDKSource(period="5m"))
             except Exception:
                 logger.debug("TQSDKSource 初始化失败，跳过")
@@ -412,20 +422,26 @@ class FuturesDataProvider:
             tick_sources: list = []
             try:
                 from fts.data_sources.tqsdk_tick_source import TQSDKTickSource
+
                 tick_sources.append(TQSDKTickSource())
             except Exception:
                 logger.debug("TQSDKTickSource 初始化失败，跳过 tick 源")
 
             db_path = _DUCKDB_PATH if _DUCKDB_PATH.exists() else None
             self._aggregator = FuturesDataAggregator(
-                sources=sources, enhancers=[],
+                sources=sources,
+                enhancers=[],
                 minute_sources=minute_sources,
                 tick_sources=tick_sources,
                 db_path=db_path,
                 cache_max_age_days=30,
             )
-            logger.info("FuturesDataAggregator 初始化完成（源数=%d, 分钟源数=%d, tick 源数=%d）",
-                        len(sources), len(minute_sources), len(tick_sources))
+            logger.info(
+                "FuturesDataAggregator 初始化完成（源数=%d, 分钟源数=%d, tick 源数=%d）",
+                len(sources),
+                len(minute_sources),
+                len(tick_sources),
+            )
         except Exception as e:
             logger.warning("FuturesDataAggregator 初始化失败: %s（降级到直接路径）", e)
             self._aggregator = None
@@ -474,16 +490,20 @@ class FuturesDataProvider:
         if adjusted is None:
             try:
                 from fts.config.settings import get_config
+
                 adjusted = get_config().futures_adjusted
             except Exception:  # noqa: BLE001
                 adjusted = True
         if adjusted and symbol.endswith("0"):
             try:
                 from fts.data_sources.roll_calendar import RollCalendar
+
                 df, rolls = RollCalendar().apply_adjustment(df, symbol)
                 if rolls:
                     logger.info(
-                        "[复权] [%s] 应用 %d 次换月复权（因子计算用）", symbol, len(rolls),
+                        "[复权] [%s] 应用 %d 次换月复权（因子计算用）",
+                        symbol,
+                        len(rolls),
                     )
             except Exception as e:  # noqa: BLE001
                 logger.warning("[复权] [%s] 复权失败，返回原始序列: %s", symbol, e)
@@ -581,7 +601,10 @@ class FuturesDataProvider:
         if self._aggregator is not None:
             try:
                 agg_df = self._aggregator.get_minute_ohlcv(
-                    symbol, days, frequency, trace_id,
+                    symbol,
+                    days,
+                    frequency,
+                    trace_id,
                 )
                 if agg_df is not None and not agg_df.empty:
                     df = agg_df.copy()
@@ -590,8 +613,10 @@ class FuturesDataProvider:
                     df.sort_index(inplace=True)
                     logger.info(
                         "分钟数据命中 [%s][%s] 频率=%s %d 行",
-                        symbol, agg_df.get("source", "").iloc[0]
-                        if "source" in agg_df.columns else "?", frequency, len(df),
+                        symbol,
+                        agg_df.get("source", "").iloc[0] if "source" in agg_df.columns else "?",
+                        frequency,
+                        len(df),
                     )
                     return df[["open", "high", "low", "close", "volume"]]
             except Exception as e:
@@ -678,13 +703,11 @@ class FuturesDataProvider:
             logger.warning("所有期货品种数据获取失败，使用合成数据")
             df = self.synthesize_ohlcv(n_days=days, base_price=3000.0, seed=42)
             panel["SYNTHETIC"] = df
-            return panel, df.index
+            return panel, pd.DatetimeIndex(df.index)
 
         # 多数对齐：至少 max(2, 品种数//2) 个品种共有的日期
         min_syms = max(2, len(panel) // 2)
-        common_dates = pd.DatetimeIndex(sorted(
-            d for d, c in date_counts.items() if c >= min_syms
-        ))
+        common_dates = pd.DatetimeIndex(sorted(d for d, c in date_counts.items() if c >= min_syms))
         return panel, common_dates
 
     # ── DuckDB 读取 ──
@@ -759,6 +782,7 @@ class FuturesDataProvider:
         """
         try:
             from fts.data_sources.tq_source import TQLocalSource
+
             source = TQLocalSource()
             if not source.is_available():
                 logger.warning("TQ-Local 服务不可达 (127.0.0.1:7721)，降级到 AKShare")
@@ -816,10 +840,6 @@ class FuturesDataProvider:
 
         # 重命名列: AKShare 返回的列名是中文或英文
         # 实际返回: date, open, high, low, close, volume, hold, settle
-        col_map = {
-            "hold": "hold",
-            "settle": "settle",
-        }
         # 确保必要列存在
         required = ["date", "open", "high", "low", "close", "volume"]
         for col in required:
@@ -871,23 +891,27 @@ class FuturesDataProvider:
         np.random.seed(seed)
         dates = pd.date_range(
             datetime.now() - timedelta(days=n_days),
-            periods=n_days, freq="D",
+            periods=n_days,
+            freq="D",
         )
         close = base_price + np.cumsum(np.random.randn(n_days) * 30)
         close = np.maximum(close, base_price * 0.5)  # 防止负价格
         hold = np.random.randint(100000, 1000000, n_days).astype(float)
         high = close + np.abs(np.random.randn(n_days)) * 30
         low = close - np.abs(np.random.randn(n_days)) * 30
-        return pd.DataFrame({
-            "open": close + np.random.randn(n_days) * 10,
-            "high": high,
-            "low": low,
-            "close": close,
-            "volume": np.random.randint(10000, 500000, n_days).astype(float),
-            "hold": hold,
-            "settle": close + np.random.randn(n_days) * 5,
-            "vwap": (high + low + close + (close + np.random.randn(n_days) * 5)) / 4.0,
-        }, index=dates)
+        return pd.DataFrame(
+            {
+                "open": close + np.random.randn(n_days) * 10,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": np.random.randint(10000, 500000, n_days).astype(float),
+                "hold": hold,
+                "settle": close + np.random.randn(n_days) * 5,
+                "vwap": (high + low + close + (close + np.random.randn(n_days) * 5)) / 4.0,
+            },
+            index=dates,
+        )
 
 
 # ─── 期货品种子集（82 个连续合约）───────────────────────────
@@ -895,23 +919,93 @@ class FuturesDataProvider:
 # 来自 AKShare futures_display_main_sina() 的完整列表
 FUTURES_SUBSET: list[str] = [
     # 大商所 (dce) — 22 个
-    "V0", "P0", "B0", "M0", "I0", "JD0", "L0", "PP0", "FB0",
-    "Y0", "C0", "A0", "J0", "JM0", "CS0", "EG0", "RR0", "EB0",
-    "PG0", "LH0", "LG0", "BZ0",
+    "V0",
+    "P0",
+    "B0",
+    "M0",
+    "I0",
+    "JD0",
+    "L0",
+    "PP0",
+    "FB0",
+    "Y0",
+    "C0",
+    "A0",
+    "J0",
+    "JM0",
+    "CS0",
+    "EG0",
+    "RR0",
+    "EB0",
+    "PG0",
+    "LH0",
+    "LG0",
+    "BZ0",
     # 郑商所 (czce) — 25 个
-    "TA0", "OI0", "RS0", "RM0", "WH0", "JR0", "SR0", "CF0",
-    "RI0", "MA0", "FG0", "LR0", "SF0", "SM0", "CY0", "AP0",
-    "CJ0", "UR0", "SA0", "PF0", "PK0", "SH0", "PX0", "PR0", "PL0",
+    "TA0",
+    "OI0",
+    "RS0",
+    "RM0",
+    "WH0",
+    "JR0",
+    "SR0",
+    "CF0",
+    "RI0",
+    "MA0",
+    "FG0",
+    "LR0",
+    "SF0",
+    "SM0",
+    "CY0",
+    "AP0",
+    "CJ0",
+    "UR0",
+    "SA0",
+    "PF0",
+    "PK0",
+    "SH0",
+    "PX0",
+    "PR0",
+    "PL0",
     # 上期所 (shfe) — 19 个
-    "FU0", "AL0", "RU0", "ZN0", "CU0", "AU0", "RB0", "PB0",
-    "AG0", "BU0", "HC0", "SN0", "NI0", "SP0", "SS0", "AO0",
-    "BR0", "AD0", "OP0",
+    "FU0",
+    "AL0",
+    "RU0",
+    "ZN0",
+    "CU0",
+    "AU0",
+    "RB0",
+    "PB0",
+    "AG0",
+    "BU0",
+    "HC0",
+    "SN0",
+    "NI0",
+    "SP0",
+    "SS0",
+    "AO0",
+    "BR0",
+    "AD0",
+    "OP0",
     # 能源中心 (ine) — 5 个
-    "SC0", "NR0", "LU0", "BC0", "EC0",
+    "SC0",
+    "NR0",
+    "LU0",
+    "BC0",
+    "EC0",
     # 中金所 (cffex) — 6 个
-    "IF0", "TF0", "IH0", "IC0", "TS0", "IM0",
+    "IF0",
+    "TF0",
+    "IH0",
+    "IC0",
+    "TS0",
+    "IM0",
     # 广期所 (gfex) — 5 个
-    "SI0", "LC0", "PS0", "PT0", "PD0",
+    "SI0",
+    "LC0",
+    "PS0",
+    "PT0",
+    "PD0",
 ]
 
 # 常用期货品种子集（流动性好的品种，用于快速测试）
@@ -920,18 +1014,18 @@ FUTURES_CORE_SUBSET: list[str] = [
     "CU0",  # 铜
     "AU0",  # 黄金
     "AG0",  # 白银
-    "I0",   # 铁矿石
-    "M0",   # 豆粕
+    "I0",  # 铁矿石
+    "M0",  # 豆粕
     "TA0",  # PTA
     "MA0",  # 甲醇
     "SC0",  # 原油
     "HC0",  # 热卷
     "NI0",  # 镍
     "SN0",  # 锡
-    "P0",   # 棕榈油
-    "Y0",   # 豆油
-    "C0",   # 玉米
-    "A0",   # 豆一
+    "P0",  # 棕榈油
+    "Y0",  # 豆油
+    "C0",  # 玉米
+    "A0",  # 豆一
     "CF0",  # 棉花
     "SR0",  # 白糖
     "SA0",  # 纯碱
@@ -945,14 +1039,35 @@ FUTURES_CORE_SUBSET: list[str] = [
 
 
 # 盲测品种池（不参与演化训练，用于验证因子泛化能力）
-# 从 FUTURES_SUBSET 中选取，覆盖不同产业链类别
+# 机构标准（GAP-055，v2.81.0）：固定锁死（保代际可比 + 防数据窥探）、按产业链分层抽样、
+# 与核心交易池（动态池）和分层训练集（FUTURES_STRATIFIED_SUBSET）互不重叠、
+# 覆盖大中小流动性品种。v2.81.0 由 6 个扩大至 15 个，覆盖 10 条产业链。
 FUTURES_HOLDOUT: list[str] = [
-    "JD0",  # 鸡蛋 — 大商所，农产品
-    "AP0",  # 苹果 — 郑商所，农产品
-    "FG0",  # 玻璃 — 郑商所，建材
-    "AL0",  # 铝 — 上期所，有色金属
-    "UR0",  # 尿素 — 郑商所，化工
-    "NR0",  # 20号胶 — 能源中心，能源化工
+    # 黑色系
+    "JM0",  # 焦煤 — 大商所，黑色系（与训练集焦炭 J0 互补）
+    # 有色金属
+    "AL0",  # 铝 — 上期所，有色金属（大流动性）
+    "PB0",  # 铅 — 上期所，有色金属（中流动性）
+    # 能源
+    "BU0",  # 沥青 — 上期所，能源（炼化下游）
+    # 聚酯链
+    "EG0",  # 乙二醇 — 大商所，聚酯链
+    # 油化工
+    "L0",  # 聚乙烯 — 大商所，油化工（塑料，大流动性）
+    # 煤化工
+    "FG0",  # 玻璃 — 郑商所，煤化工/建材
+    "UR0",  # 尿素 — 郑商所，煤化工
+    # 橡胶
+    "NR0",  # 20号胶 — 能源中心，橡胶（能源化工）
+    "RU0",  # 天然橡胶 — 上期所，橡胶（大流动性）
+    # 造纸/林浆纸
+    "SP0",  # 纸浆 — 上期所，造纸
+    # 航运
+    "EC0",  # 集运欧线 — 能源中心，航运（独立产业链，高波动尾部）
+    # 农产品
+    "JD0",  # 鸡蛋 — 大商所，农产品（禽蛋）
+    "AP0",  # 苹果 — 郑商所，农产品（果蔬）
+    "LH0",  # 生猪 — 大商所，农产品（畜产品，波动大）
 ]
 
 
@@ -960,52 +1075,112 @@ FUTURES_HOLDOUT: list[str] = [
 
 FUTURES_SECTOR_MAP: dict[str, list[str]] = {
     "黑色系": [
-        "I0", "RB0", "HC0", "SS0",   # 钢铁产业链
-        "J0", "JM0",                   # 焦煤焦炭
-        "SF0", "SM0",                  # 铁合金
+        "I0",
+        "RB0",
+        "HC0",
+        "SS0",  # 钢铁产业链
+        "J0",
+        "JM0",  # 焦煤焦炭
+        "SF0",
+        "SM0",  # 铁合金
     ],
     "有色金属": [
-        "CU0", "AL0", "ZN0", "PB0", "SN0", "NI0",  # 基本金属（含铝 AL0）
-        "BC0", "AO0", "AD0",                       # 铜/铝衍生
+        "CU0",
+        "AL0",
+        "ZN0",
+        "PB0",
+        "SN0",
+        "NI0",  # 基本金属（含铝 AL0）
+        "BC0",
+        "AO0",
+        "AD0",  # 铜/铝衍生
     ],
     "能源": [
-        "SC0", "FU0", "LU0", "BU0",           # 原油/燃料油/沥青
+        "SC0",
+        "FU0",
+        "LU0",
+        "BU0",  # 原油/燃料油/沥青
     ],
     "聚酯链": [
-        "PX0", "TA0", "PF0", "PR0", "EG0",   # 对二甲苯→PTA→聚酯(短纤/瓶片), 乙二醇
+        "PX0",
+        "TA0",
+        "PF0",
+        "PR0",
+        "EG0",  # 对二甲苯→PTA→聚酯(短纤/瓶片), 乙二醇
     ],
     "油化工": [
-        "L0", "PP0", "V0", "PG0",            # 聚乙烯/聚丙烯/聚氯乙烯/液化气
-        "EB0", "BZ0", "PL0",                 # 苯乙烯/苯/丙烯
+        "L0",
+        "PP0",
+        "V0",
+        "PG0",  # 聚乙烯/聚丙烯/聚氯乙烯/液化气
+        "EB0",
+        "BZ0",
+        "PL0",  # 苯乙烯/苯/丙烯
     ],
     "煤化工": [
-        "MA0", "SA0", "UR0", "FG0", "SH0",   # 甲醇/纯碱/尿素/玻璃/烧碱
+        "MA0",
+        "SA0",
+        "UR0",
+        "FG0",
+        "SH0",  # 甲醇/纯碱/尿素/玻璃/烧碱
     ],
     "橡胶": [
-        "RU0", "NR0", "BR0",                  # 天然橡胶/20号胶/丁二烯橡胶
+        "RU0",
+        "NR0",
+        "BR0",  # 天然橡胶/20号胶/丁二烯橡胶
     ],
     "造纸/林浆纸": [
-        "SP0", "LG0", "FB0", "OP0",          # 纸浆/原木/纤维板/双胶纸（林浆纸一体化：木材→纸浆→纸品）
+        "SP0",
+        "LG0",
+        "FB0",
+        "OP0",  # 纸浆/原木/纤维板/双胶纸（林浆纸一体化：木材→纸浆→纸品）
     ],
     "航运": [
-        "EC0",                                # 集运欧线（航运运价，独立于商品产业链）
+        "EC0",  # 集运欧线（航运运价，独立于商品产业链）
     ],
     "农产品": [
-        "C0", "A0", "B0", "M0", "Y0", "P0",   # 大豆/玉米/油脂
-        "CS0", "RR0", "LH0",                  # 淀粉/生猪
-        "OI0", "RS0", "RM0",                    # 菜籽/菜粕
-        "SR0", "CF0", "CY0",                    # 白糖/棉花/棉纱
-        "WH0", "JR0", "RI0", "LR0",             # 谷物
-        "JD0", "AP0", "CJ0", "PK0",             # 软商品/果蔬
+        "C0",
+        "A0",
+        "B0",
+        "M0",
+        "Y0",
+        "P0",  # 大豆/玉米/油脂
+        "CS0",
+        "RR0",
+        "LH0",  # 淀粉/生猪
+        "OI0",
+        "RS0",
+        "RM0",  # 菜籽/菜粕
+        "SR0",
+        "CF0",
+        "CY0",  # 白糖/棉花/棉纱
+        "WH0",
+        "JR0",
+        "RI0",
+        "LR0",  # 谷物
+        "JD0",
+        "AP0",
+        "CJ0",
+        "PK0",  # 软商品/果蔬
     ],
     "贵金属": [
-        "AU0", "AG0", "PT0", "PD0",        # 黄金/白银/铂/钯（铂族金属同属贵金属板块）
+        "AU0",
+        "AG0",
+        "PT0",
+        "PD0",  # 黄金/白银/铂/钯（铂族金属同属贵金属板块）
     ],
     "新能源/新材料": [
-        "LC0", "SI0", "PS0",
+        "LC0",
+        "SI0",
+        "PS0",
     ],
     "金融期货": [
-        "IF0", "IC0", "IH0", "IM0", "TF0", "TS0",
+        "IF0",
+        "IC0",
+        "IH0",
+        "IM0",
+        "TF0",
+        "TS0",
     ],
 }
 
@@ -1014,9 +1189,13 @@ FUTURES_SECTOR_MAP: dict[str, list[str]] = {
 # 确保训练集覆盖所有产业链类别，排除盲测品种池）
 FUTURES_STRATIFIED_SUBSET: list[str] = [
     # 黑色系
-    "RB0", "I0", "J0",
+    "RB0",
+    "I0",
+    "J0",
     # 有色金属
-    "CU0", "ZN0", "NI0",
+    "CU0",
+    "ZN0",
+    "NI0",
     # 能源 → 原油/燃料油/沥青
     # 聚酯链 → PX→PTA→聚酯
     # 油化工 → 石脑油裂解下游
@@ -1024,15 +1203,23 @@ FUTURES_STRATIFIED_SUBSET: list[str] = [
     # 橡胶 → 天然/合成橡胶
     # 造纸/林浆纸 → 林浆纸一体化（纸浆/原木/纤维板）
     # 航运 → 集运欧线
-    "TA0", "MA0", "SC0",
+    "TA0",
+    "MA0",
+    "SC0",
     # 农产品
-    "M0", "C0", "SR0",
+    "M0",
+    "C0",
+    "SR0",
     # 贵金属
-    "AU0", "AG0",
+    "AU0",
+    "AG0",
     # 新能源/新材料
-    "LC0", "SI0",
+    "LC0",
+    "SI0",
     # 金融期货
-    "IF0", "IC0", "IH0",
+    "IF0",
+    "IC0",
+    "IH0",
 ]
 
 
@@ -1040,68 +1227,186 @@ FUTURES_STRATIFIED_SUBSET: list[str] = [
 
 FUTURES_SYMBOL_NAMES: dict[str, str] = {
     # 大商所 (dce)
-    "V0": "聚氯乙烯", "P0": "棕榈油", "B0": "豆二", "M0": "豆粕",
-    "I0": "铁矿石", "JD0": "鸡蛋", "L0": "聚乙烯", "PP0": "聚丙烯",
-    "FB0": "纤维板", "Y0": "豆油", "C0": "玉米", "A0": "豆一",
-    "J0": "焦炭", "JM0": "焦煤", "CS0": "玉米淀粉", "EG0": "乙二醇",
-    "RR0": "粳米", "EB0": "苯乙烯", "PG0": "液化石油气", "LH0": "生猪",
-    "LG0": "原木", "BZ0": "苯",
+    "V0": "聚氯乙烯",
+    "P0": "棕榈油",
+    "B0": "豆二",
+    "M0": "豆粕",
+    "I0": "铁矿石",
+    "JD0": "鸡蛋",
+    "L0": "聚乙烯",
+    "PP0": "聚丙烯",
+    "FB0": "纤维板",
+    "Y0": "豆油",
+    "C0": "玉米",
+    "A0": "豆一",
+    "J0": "焦炭",
+    "JM0": "焦煤",
+    "CS0": "玉米淀粉",
+    "EG0": "乙二醇",
+    "RR0": "粳米",
+    "EB0": "苯乙烯",
+    "PG0": "液化石油气",
+    "LH0": "生猪",
+    "LG0": "原木",
+    "BZ0": "苯",
     # 郑商所 (czce)
-    "TA0": "PTA", "OI0": "菜籽油", "RS0": "菜籽", "RM0": "菜粕",
-    "WH0": "强麦", "JR0": "粳稻", "SR0": "白糖", "CF0": "棉花",
-    "RI0": "早籼稻", "MA0": "甲醇", "FG0": "玻璃", "LR0": "晚籼稻",
-    "SF0": "硅铁", "SM0": "锰硅", "CY0": "棉纱", "AP0": "苹果",
-    "CJ0": "红枣", "UR0": "尿素", "SA0": "纯碱", "PF0": "短纤",
-    "PK0": "花生", "SH0": "烧碱", "PX0": "对二甲苯", "PR0": "瓶片",
+    "TA0": "PTA",
+    "OI0": "菜籽油",
+    "RS0": "菜籽",
+    "RM0": "菜粕",
+    "WH0": "强麦",
+    "JR0": "粳稻",
+    "SR0": "白糖",
+    "CF0": "棉花",
+    "RI0": "早籼稻",
+    "MA0": "甲醇",
+    "FG0": "玻璃",
+    "LR0": "晚籼稻",
+    "SF0": "硅铁",
+    "SM0": "锰硅",
+    "CY0": "棉纱",
+    "AP0": "苹果",
+    "CJ0": "红枣",
+    "UR0": "尿素",
+    "SA0": "纯碱",
+    "PF0": "短纤",
+    "PK0": "花生",
+    "SH0": "烧碱",
+    "PX0": "对二甲苯",
+    "PR0": "瓶片",
     "PL0": "丙烯",
     # 上期所 (shfe)
-    "FU0": "燃料油", "AL0": "铝", "RU0": "橡胶", "ZN0": "锌",
-    "CU0": "铜", "AU0": "黄金", "RB0": "螺纹钢", "PB0": "铅",
-    "AG0": "白银", "BU0": "沥青", "HC0": "热轧卷板", "SN0": "锡",
-    "NI0": "镍", "SP0": "纸浆", "SS0": "不锈钢", "AO0": "氧化铝",
-    "BR0": "丁二烯橡胶", "AD0": "铸造铝合金", "OP0": "胶版印刷纸",
+    "FU0": "燃料油",
+    "AL0": "铝",
+    "RU0": "橡胶",
+    "ZN0": "锌",
+    "CU0": "铜",
+    "AU0": "黄金",
+    "RB0": "螺纹钢",
+    "PB0": "铅",
+    "AG0": "白银",
+    "BU0": "沥青",
+    "HC0": "热轧卷板",
+    "SN0": "锡",
+    "NI0": "镍",
+    "SP0": "纸浆",
+    "SS0": "不锈钢",
+    "AO0": "氧化铝",
+    "BR0": "丁二烯橡胶",
+    "AD0": "铸造铝合金",
+    "OP0": "胶版印刷纸",
     # 能源中心 (ine)
-    "SC0": "原油", "NR0": "20号胶", "LU0": "低硫燃料油",
-    "BC0": "国际铜", "EC0": "集运欧线",
+    "SC0": "原油",
+    "NR0": "20号胶",
+    "LU0": "低硫燃料油",
+    "BC0": "国际铜",
+    "EC0": "集运欧线",
     # 中金所 (cffex)
-    "IF0": "沪深300", "TF0": "5年期国债", "IH0": "上证50",
-    "IC0": "中证500", "TS0": "2年期国债", "IM0": "中证1000",
+    "IF0": "沪深300",
+    "TF0": "5年期国债",
+    "IH0": "上证50",
+    "IC0": "中证500",
+    "TS0": "2年期国债",
+    "IM0": "中证1000",
     # 广期所 (gfex)
-    "SI0": "工业硅", "LC0": "碳酸锂", "PS0": "多晶硅",
-    "PT0": "铂", "PD0": "钯",
+    "SI0": "工业硅",
+    "LC0": "碳酸锂",
+    "PS0": "多晶硅",
+    "PT0": "铂",
+    "PD0": "钯",
 }
 
 
 # FTS 连续合约代码 → AKShare futures_symbol_mark 中文名（用于实时行情查询）
 _SYMBOL_MARK_NAMES: dict[str, str] = {
     # 大商所
-    "V0": "PVC", "P0": "棕榈", "B0": "豆二", "M0": "豆粕", "I0": "铁矿石",
-    "JD0": "鸡蛋", "L0": "塑料", "PP0": "PP", "FB0": "纤维板", "Y0": "豆油",
-    "C0": "玉米", "A0": "豆一", "J0": "焦炭", "JM0": "焦煤", "CS0": "玉米淀粉",
-    "EG0": "乙二醇", "RR0": "粳米", "EB0": "苯乙烯", "PG0": "液化石油气",
-    "LH0": "生猪", "LG0": "原木", "BZ0": "纯苯",
+    "V0": "PVC",
+    "P0": "棕榈",
+    "B0": "豆二",
+    "M0": "豆粕",
+    "I0": "铁矿石",
+    "JD0": "鸡蛋",
+    "L0": "塑料",
+    "PP0": "PP",
+    "FB0": "纤维板",
+    "Y0": "豆油",
+    "C0": "玉米",
+    "A0": "豆一",
+    "J0": "焦炭",
+    "JM0": "焦煤",
+    "CS0": "玉米淀粉",
+    "EG0": "乙二醇",
+    "RR0": "粳米",
+    "EB0": "苯乙烯",
+    "PG0": "液化石油气",
+    "LH0": "生猪",
+    "LG0": "原木",
+    "BZ0": "纯苯",
     # 郑商所
-    "TA0": "PTA", "OI0": "菜油", "RS0": "菜籽", "RM0": "菜粕", "WH0": "强麦",
-    "JR0": "粳稻", "SR0": "白糖", "CF0": "棉花", "RI0": "早籼稻", "MA0": "郑醇",
-    "FG0": "玻璃", "LR0": "晚籼稻", "SF0": "硅铁", "SM0": "锰硅", "CY0": "棉纱",
-    "AP0": "鲜苹果", "CJ0": "红枣", "UR0": "尿素", "SA0": "纯碱", "PF0": "短纤",
-    "PK0": "花生", "SH0": "烧碱", "PX0": "二甲苯", "PR0": "瓶级聚酯切片",
+    "TA0": "PTA",
+    "OI0": "菜油",
+    "RS0": "菜籽",
+    "RM0": "菜粕",
+    "WH0": "强麦",
+    "JR0": "粳稻",
+    "SR0": "白糖",
+    "CF0": "棉花",
+    "RI0": "早籼稻",
+    "MA0": "郑醇",
+    "FG0": "玻璃",
+    "LR0": "晚籼稻",
+    "SF0": "硅铁",
+    "SM0": "锰硅",
+    "CY0": "棉纱",
+    "AP0": "鲜苹果",
+    "CJ0": "红枣",
+    "UR0": "尿素",
+    "SA0": "纯碱",
+    "PF0": "短纤",
+    "PK0": "花生",
+    "SH0": "烧碱",
+    "PX0": "二甲苯",
+    "PR0": "瓶级聚酯切片",
     "PL0": "丙烯",
     # 上期所
-    "FU0": "燃油", "AL0": "沪铝", "RU0": "橡胶", "ZN0": "沪锌", "CU0": "沪铜",
-    "AU0": "黄金", "RB0": "螺纹钢", "PB0": "沪铅", "AG0": "白银", "BU0": "沥青",
-    "HC0": "热轧卷板", "SN0": "沪锡", "NI0": "沪镍", "SP0": "纸浆",
-    "SS0": "不锈钢", "AO0": "氧化铝", "BR0": "丁二烯橡胶",
-    "AD0": "铸造铝合金期货", "OP0": "胶版印刷纸期货",
+    "FU0": "燃油",
+    "AL0": "沪铝",
+    "RU0": "橡胶",
+    "ZN0": "沪锌",
+    "CU0": "沪铜",
+    "AU0": "黄金",
+    "RB0": "螺纹钢",
+    "PB0": "沪铅",
+    "AG0": "白银",
+    "BU0": "沥青",
+    "HC0": "热轧卷板",
+    "SN0": "沪锡",
+    "NI0": "沪镍",
+    "SP0": "纸浆",
+    "SS0": "不锈钢",
+    "AO0": "氧化铝",
+    "BR0": "丁二烯橡胶",
+    "AD0": "铸造铝合金期货",
+    "OP0": "胶版印刷纸期货",
     # 能源中心
-    "SC0": "原油", "NR0": "20号胶", "LU0": "低硫燃料油", "BC0": "国际铜",
+    "SC0": "原油",
+    "NR0": "20号胶",
+    "LU0": "低硫燃料油",
+    "BC0": "国际铜",
     "EC0": "集运指数(欧线)期货",
     # 中金所
-    "IF0": "沪深300指数期货", "TF0": "5年期国债期货", "IH0": "上证50指数期货",
-    "IC0": "中证500指数期货", "TS0": "2年期国债期货",
+    "IF0": "沪深300指数期货",
+    "TF0": "5年期国债期货",
+    "IH0": "上证50指数期货",
+    "IC0": "中证500指数期货",
+    "TS0": "2年期国债期货",
     "IM0": "中证1000股指期货",
     # 广期所
-    "SI0": "工业硅", "LC0": "碳酸锂", "PS0": "多晶硅", "PT0": "铂", "PD0": "钯",
+    "SI0": "工业硅",
+    "LC0": "碳酸锂",
+    "PS0": "多晶硅",
+    "PT0": "铂",
+    "PD0": "钯",
 }
 
 
@@ -1131,9 +1436,7 @@ def _fetch_dominant_akshare(symbols: list[str]) -> dict[str, str]:
             prefix = sym[:-1] if sym.endswith("0") else sym
             # 排除连续合约（如 RU0），取持仓量最大的具体合约（如 RU2609）
             concrete = df[
-                df["symbol"].str.startswith(prefix)
-                & (df["symbol"] != sym)
-                & (df["symbol"].str.len() > len(prefix))
+                df["symbol"].str.startswith(prefix) & (df["symbol"] != sym) & (df["symbol"].str.len() > len(prefix))
             ]
             if concrete.empty:
                 continue
@@ -1217,7 +1520,7 @@ def sync_contract_kline(
         {"written": 写入行数, "failed": 失败品种数}
     """
     if symbols is None:
-        symbols = list(FUTURES_CORE_SUBSET)
+        symbols = get_dynamic_core_subset()
 
     try:
         import akshare as ak  # type: ignore[import-untyped]
@@ -1261,15 +1564,25 @@ def sync_contract_kline(
                     continue
                 df = df.tail(days)
                 for _, r in df.iterrows():
-                    rows.append((
-                        base, contract, "daily",
-                        pd.Timestamp(r["date"]).date(),
-                        float(r.get("open", 0.0)), float(r.get("high", 0.0)),
-                        float(r.get("low", 0.0)), float(r.get("close", 0.0)),
-                        float(r.get("volume", 0.0)), float(r.get("amount", 0.0)),
-                        float(r.get("hold", 0.0)), float(r.get("settle", 0.0)),
-                        "AKSHARE", datetime.now().isoformat(), trace_id,
-                    ))
+                    rows.append(
+                        (
+                            base,
+                            contract,
+                            "daily",
+                            pd.Timestamp(r["date"]).date(),
+                            float(r.get("open", 0.0)),
+                            float(r.get("high", 0.0)),
+                            float(r.get("low", 0.0)),
+                            float(r.get("close", 0.0)),
+                            float(r.get("volume", 0.0)),
+                            float(r.get("amount", 0.0)),
+                            float(r.get("hold", 0.0)),
+                            float(r.get("settle", 0.0)),
+                            "AKSHARE",
+                            datetime.now().isoformat(),
+                            trace_id,
+                        )
+                    )
             except Exception as e:  # noqa: BLE001
                 logger.debug("[contract_kline] 合约 %s 拉取失败: %s", contract, e)
         if not rows:
@@ -1282,8 +1595,7 @@ def sync_contract_kline(
             logger.warning("[contract_kline] 写入失败 [%s]: %s", base, e)
             failed += 1
 
-    logger.info("[contract_kline] 同步完成: %d 行写入, %d 品种失败 (trace_id=%s)",
-                written, failed, trace_id)
+    logger.info("[contract_kline] 同步完成: %d 行写入, %d 品种失败 (trace_id=%s)", written, failed, trace_id)
     return {"written": written, "failed": failed}
 
 
@@ -1427,13 +1739,11 @@ def get_realtime_prices(symbols: list[str] | None = None) -> dict[str, float]:
         ak_prices = _try_akshare_realtime(list(tq_failed))
         prices.update(ak_prices)
         if ak_prices:
-            logger.info(
-                f"[realtime] AKShare 降级补全 {len(ak_prices)} 个品种"
-            )
+            logger.info(f"[realtime] AKShare 降级补全 {len(ak_prices)} 个品种")
 
     logger.info(
         f"[realtime] 最终覆盖 {len(prices)}/{len(symbols)} 品种 "
-        f"(TQ:{len(tq_prices)} + AKShare:{len(prices)-len(tq_prices)})"
+        f"(TQ:{len(tq_prices)} + AKShare:{len(prices) - len(tq_prices)})"
     )
     return prices
 
@@ -1451,6 +1761,37 @@ def get_futures_provider() -> FuturesDataProvider:
     return _default_futures_provider
 
 
+# ─── 数据驱动动态池（GAP-054）────────────────────────────
+
+DYNAMIC_POOL_CACHE: str = str(
+    Path(__file__).resolve().parent.parent / "memory" / "portfolio" / "futures_dynamic_pool.json"
+)
+
+
+def get_dynamic_core_subset() -> list[str]:
+    """读取数据驱动动态核心池；缓存缺失/损坏时回退静态 FUTURES_CORE_SUBSET。
+
+    动态池由 scripts/sync_liquidity_pool.py 定期刷新落盘（渐进式替换 +
+    产业覆盖约束，见 GAP-054）。本函数纯读取、不抛异常，运行期零风险降级：
+    - 缓存文件不存在 / 格式非法 / pool 为空 → 回退静态清单
+    - 任意异常 → 回退静态清单（降级优先）
+    """
+    import json
+
+    try:
+        path = Path(DYNAMIC_POOL_CACHE)
+        if not path.exists():
+            return list(FUTURES_CORE_SUBSET)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        pool = data.get("pool")
+        if not isinstance(pool, list) or not pool:
+            return list(FUTURES_CORE_SUBSET)
+        valid = [s for s in pool if isinstance(s, str) and s.strip()]
+        return valid or list(FUTURES_CORE_SUBSET)
+    except Exception:  # noqa: BLE001 — 降级优先，绝不阻断运行期
+        return list(FUTURES_CORE_SUBSET)
+
+
 __all__ = [
     "DuckDBConnection",
     "AsyncWriteQueue",
@@ -1464,6 +1805,8 @@ __all__ = [
     "FUTURES_SECTOR_MAP",
     "FUTURES_STRATIFIED_SUBSET",
     "FUTURES_SYMBOL_NAMES",
+    "DYNAMIC_POOL_CACHE",
+    "get_dynamic_core_subset",
     "get_dominant_contracts",
     "get_realtime_prices",
     "sync_contract_kline",

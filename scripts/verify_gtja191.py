@@ -1,4 +1,5 @@
 """验证 gtja191.py 的完整性和正确性。"""
+
 import ast
 import sys
 from pathlib import Path
@@ -33,9 +34,9 @@ missing_fields = []
 for i, f in enumerate(GTJA191_DEFINITIONS):
     for key in ["name", "expression", "narrative"]:
         if key not in f:
-            missing_fields.append(f"  ✗ 因子 {i+1}: 缺少字段 {key}")
+            missing_fields.append(f"  ✗ 因子 {i + 1}: 缺少字段 {key}")
     if not f.get("name", "").startswith("gtja_"):
-        missing_fields.append(f'  ✗ 因子 {i+1}: name 格式错误: {f.get("name")}')
+        missing_fields.append(f"  ✗ 因子 {i + 1}: name 格式错误: {f.get('name')}")
 
 if missing_fields:
     for m in missing_fields:
@@ -63,15 +64,31 @@ else:
 print("\n" + "=" * 60)
 print("4. 未翻译函数检查")
 print("=" * 60)
-dolphindb_fns = ["mfirst", "mavg", "msum", "mstd", "mcorr", "mmax", "mmin",
-                 "mrank", "mcovar", "mbeta", "mimax", "mimin", "mcount",
-                 "rowRank", "ewmMean", "linearTimeTrend", "mfirst"]
+dolphindb_fns = [
+    "mfirst",
+    "mavg",
+    "msum",
+    "mstd",
+    "mcorr",
+    "mmax",
+    "mmin",
+    "mrank",
+    "mcovar",
+    "mbeta",
+    "mimax",
+    "mimin",
+    "mcount",
+    "rowRank",
+    "ewmMean",
+    "linearTimeTrend",
+    "mfirst",
+]
 issues = []
 for f in GTJA191_DEFINITIONS:
     expr = f["expression"]
     for fn in dolphindb_fns:
         if fn in expr:
-            issues.append(f'  ✗ {f["name"]}: 包含未翻译的 {fn}')
+            issues.append(f"  ✗ {f['name']}: 包含未翻译的 {fn}")
 
 if not issues:
     print("  ✓ 所有表达式已从 DolphinDB 翻译为 Python")
@@ -79,7 +96,7 @@ else:
     for issue in issues[:10]:
         print(issue)
     if len(issues) > 10:
-        print(f"  ... 还有 {len(issues)-10} 个问题")
+        print(f"  ... 还有 {len(issues) - 10} 个问题")
 
 # 5. Summary
 print("\n" + "=" * 60)

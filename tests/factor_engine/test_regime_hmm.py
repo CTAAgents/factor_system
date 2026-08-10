@@ -37,6 +37,7 @@ from fts.factor_engine.regime_hmm import (
 
 # ─── Fixtures ─────────────────────────────────────────────
 
+
 @pytest.fixture
 def stabilizer() -> StateMapStabilizer:
     return StateMapStabilizer(history_maxlen=3, fusion_alpha=0.7, freeze_confidence=0.8)
@@ -47,18 +48,22 @@ def _make_ohlcv(close_series: np.ndarray, n: int | None = None) -> pd.DataFrame:
     if n is None:
         n = len(close_series)
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
-    return pd.DataFrame({
-        "open": close_series * (1 + np.random.randn(n) * 0.002),
-        "high": close_series * (1 + np.abs(np.random.randn(n)) * 0.005),
-        "low": close_series * (1 - np.abs(np.random.randn(n)) * 0.005),
-        "close": close_series,
-        "volume": np.random.randint(800, 1200, n).astype(float),
-    }, index=dates)
+    return pd.DataFrame(
+        {
+            "open": close_series * (1 + np.random.randn(n) * 0.002),
+            "high": close_series * (1 + np.abs(np.random.randn(n)) * 0.005),
+            "low": close_series * (1 - np.abs(np.random.randn(n)) * 0.005),
+            "close": close_series,
+            "volume": np.random.randint(800, 1200, n).astype(float),
+        },
+        index=dates,
+    )
 
 
 # ═══════════════════════════════════════════════════════════
 # 1. StateMapStabilizer
 # ═══════════════════════════════════════════════════════════
+
 
 class TestStateMapStabilizer:
     """StateMapStabilizer: 状态映射稳定性增强。"""
@@ -162,6 +167,7 @@ class TestStateMapStabilizer:
 # 2. MultiHorizonHMMDetector
 # ═══════════════════════════════════════════════════════════
 
+
 @pytest.mark.skipif(not _HMM_AVAILABLE, reason="需要 hmmlearn")
 class TestMultiHorizonHMMDetector:
     """MultiHorizonHMMDetector: 多周期 HMM 集成。"""
@@ -263,6 +269,7 @@ class TestMultiHorizonHMMDetector:
 # 3. MSMRegimeDetector
 # ═══════════════════════════════════════════════════════════
 
+
 @pytest.mark.skipif(not _MSM_AVAILABLE, reason="需要 statsmodels")
 class TestMSMRegimeDetector:
     """MSMRegimeDetector: 马尔可夫切换模型。"""
@@ -320,6 +327,7 @@ class TestMSMRegimeDetector:
 # 4. create_multi_hmm_selector
 # ═══════════════════════════════════════════════════════════
 
+
 class TestCreateMultiHMMSelector:
     """create_multi_hmm_selector 辅助函数。"""
 
@@ -357,6 +365,7 @@ class TestCreateMultiHMMSelector:
 # ═══════════════════════════════════════════════════════════
 # 5. StateMapStabilizer 边界分支
 # ═══════════════════════════════════════════════════════════
+
 
 class TestStateMapStabilizerMore:
     """StateMapStabilizer 边界分支补充。"""
@@ -417,8 +426,8 @@ class TestStateMapStabilizerMore:
             {"state": 2, "mean_ret": 0.0, "mean_vol": 0.05},
         ]
         result = s.stabilize({0: "bear", 1: "bull", 2: "high_vol"}, flipped_stats, 0.5)
-        assert result[0] == "bull"        # 偏向历史映射
-        assert result[2] == "high_vol"    # 新 state 直接保留
+        assert result[0] == "bull"  # 偏向历史映射
+        assert result[2] == "high_vol"  # 新 state 直接保留
 
     def test_freeze_third_call(self) -> None:
         """高置信度持续 → 第三次调用返回冻结映射。"""
@@ -441,6 +450,7 @@ class TestStateMapStabilizerMore:
 # ═══════════════════════════════════════════════════════════
 # 6. _LightHMM 轻量 HMM 检测器
 # ═══════════════════════════════════════════════════════════
+
 
 @pytest.mark.skipif(not _HMM_AVAILABLE, reason="需要 hmmlearn")
 class TestLightHMM:
@@ -563,6 +573,7 @@ class TestLightHMM:
 # 7. MultiHorizonHMMDetector 异常分支
 # ═══════════════════════════════════════════════════════════
 
+
 @pytest.mark.skipif(not _HMM_AVAILABLE, reason="需要 hmmlearn")
 class TestMultiHorizonHMMDetectorMore:
     """MultiHorizonHMMDetector 预测异常分支。"""
@@ -589,6 +600,7 @@ class TestMultiHorizonHMMDetectorMore:
 # ═══════════════════════════════════════════════════════════
 # 8. MSMRegimeDetector 边界分支
 # ═══════════════════════════════════════════════════════════
+
 
 @pytest.mark.skipif(not _MSM_AVAILABLE, reason="需要 statsmodels")
 class TestMSMRegimeDetectorMore:
@@ -619,7 +631,8 @@ class TestMSMRegimeDetectorMore:
                 raise RuntimeError("boom")
 
         monkeypatch.setattr(
-            "fts.factor_engine.regime_hmm.MarkovRegression", _FailingMR,
+            "fts.factor_engine.regime_hmm.MarkovRegression",
+            _FailingMR,
         )
         det = MSMRegimeDetector(k_regimes=2, min_data=50)
         assert det.fit(ohlcv) is False

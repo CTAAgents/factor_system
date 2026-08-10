@@ -35,6 +35,7 @@ class LiteralBlock(str):
 def _literal_block_representer(dumper: yaml.Dumper, data: LiteralBlock) -> yaml.Node:
     return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
 
+
 # ─── 辅助函数 ─────────────────────────────────────────────
 
 
@@ -45,12 +46,7 @@ def _factor(**kwargs: Any) -> dict[str, Any]:
 
 def _make_code(body: str) -> str:
     """包装 factor_program 函数体，生成完整的 code 字符串。"""
-    return (
-        "\n"
-        "    def factor_program(data, params):\n"
-        "        import numpy as np\n"
-        f"{body}\n"
-    )
+    return f"\n    def factor_program(data, params):\n        import numpy as np\n{body}\n"
 
 
 def _family(name: str, factors: list[dict[str, Any]]) -> dict[str, Any]:
@@ -89,7 +85,10 @@ def _build_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=3, institutional=4,
+                theory=4,
+                behavioral=3,
+                microstructure=3,
+                institutional=4,
                 narrative="主力涨幅：主力合约过去 N 日价格涨幅，衡量趋势动量强度。",
             ),
         ),
@@ -117,7 +116,10 @@ def _build_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=2, institutional=3,
+                theory=3,
+                behavioral=3,
+                microstructure=2,
+                institutional=3,
                 narrative="上涨次数占比：过去 N 日内上涨天数占比，判断趋势持续性。",
             ),
         ),
@@ -148,7 +150,10 @@ def _build_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=2, institutional=3,
+                theory=3,
+                behavioral=3,
+                microstructure=2,
+                institutional=3,
                 narrative="涨幅占比：过去 N 日内上涨收益占全部收益的比例，衡量上涨动能强度。",
             ),
         ),
@@ -174,7 +179,10 @@ def _build_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=4, microstructure=3, institutional=3,
+                theory=3,
+                behavioral=4,
+                microstructure=3,
+                institutional=3,
                 narrative="均线偏离比值：价格与均线的比值，衡量价格偏离程度。价格远高于均线=超买。",
             ),
         ),
@@ -202,7 +210,10 @@ def _build_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=3, institutional=3,
+                theory=4,
+                behavioral=3,
+                microstructure=3,
+                institutional=3,
                 narrative="快慢均线偏离率：(快均线-慢均线)/慢均线，MACD 核心思想。快线上穿慢线=做多。",
             ),
         ),
@@ -230,7 +241,10 @@ def _build_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=4, microstructure=4, institutional=3,
+                theory=3,
+                behavioral=4,
+                microstructure=4,
+                institutional=3,
                 narrative="隔夜趋势因子：(开盘-前收盘)/前收盘，隔夜跳空方向。隔夜上涨=利多延续。",
             ),
         ),
@@ -259,7 +273,10 @@ def _build_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=4, institutional=3,
+                theory=3,
+                behavioral=3,
+                microstructure=4,
+                institutional=3,
                 narrative="日内动量因子：(收盘-开盘)/开盘，衡量日内趋势强度。日内强势=短期动量。",
             ),
         ),
@@ -289,7 +306,10 @@ def _build_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=4, institutional=3,
+                theory=3,
+                behavioral=3,
+                microstructure=4,
+                institutional=3,
                 narrative="日内累计振幅因子：日内振幅的滚动平均，衡量价格活跃度。振幅扩大=趋势启动。",
             ),
         ),
@@ -325,7 +345,10 @@ def _build_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=4, institutional=3,
+                theory=4,
+                behavioral=3,
+                microstructure=4,
+                institutional=3,
                 narrative="日内GK波动趋势因子：Garman-Klass 波动率估计的趋势方向。GK波动率上升=波动加剧=趋势延续。",
             ),
         ),
@@ -362,7 +385,10 @@ def _build_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=4, institutional=3,
+                theory=4,
+                behavioral=3,
+                microstructure=4,
+                institutional=3,
                 narrative="日内RS波动趋势因子：Rogers-Satchell 波动率估计的趋势方向。RS对漂移项更稳健。",
             ),
         ),
@@ -394,7 +420,10 @@ def _build_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=4, institutional=3,
+                theory=4,
+                behavioral=3,
+                microstructure=4,
+                institutional=3,
                 narrative="日内PK波动趋势因子：Parkinson 波动率估计的趋势方向。仅用高低价，计算简单。",
             ),
         ),
@@ -443,7 +472,10 @@ def _build_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=4, institutional=3,
+                theory=4,
+                behavioral=3,
+                microstructure=4,
+                institutional=3,
                 narrative="日内YZ波动趋势因子：Yang-Zhang 波动率估计的趋势方向。YZ综合了隔夜和日内波动，最全面。",
             ),
         ),
@@ -481,7 +513,10 @@ def _build_volume_price_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=4, institutional=3,
+                theory=3,
+                behavioral=3,
+                microstructure=4,
+                institutional=3,
                 narrative="均价突破因子：价格突破 VWAP 的程度。价格>VWAP=多头强势，突破幅度越大信号越强。",
             ),
         ),
@@ -519,7 +554,10 @@ def _build_volume_price_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=4, institutional=3,
+                theory=3,
+                behavioral=3,
+                microstructure=4,
+                institutional=3,
                 narrative="标准化均价突破因子：用波动率标准化的 VWAP 偏离，避免不同品种量级差异。",
             ),
         ),
@@ -555,7 +593,10 @@ def _build_value_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=4, microstructure=2, institutional=4,
+                theory=4,
+                behavioral=4,
+                microstructure=2,
+                institutional=4,
                 narrative="主力对数价格差：合约价格的对数差分，衡量价格水平变化。价格越低=价值越高=做多。",
             ),
         ),
@@ -590,7 +631,10 @@ def _build_position_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=4, institutional=4,
+                theory=3,
+                behavioral=3,
+                microstructure=4,
+                institutional=4,
                 narrative="持仓量涨幅：持仓量的 N 日增长率。持仓快速增长=资金流入=趋势确认。",
             ),
         ),
@@ -618,7 +662,10 @@ def _build_position_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=4, institutional=4,
+                theory=3,
+                behavioral=3,
+                microstructure=4,
+                institutional=4,
                 narrative="持仓金额变化比值：持仓金额(持仓量×价格)的变化率，结合价格和持仓量双重信息。",
             ),
         ),
@@ -646,7 +693,10 @@ def _build_position_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=4, institutional=4,
+                theory=3,
+                behavioral=3,
+                microstructure=4,
+                institutional=4,
                 narrative="持仓金额涨幅：持仓金额的 N 日增长率（绝对值）。衡量资金流入流出规模。",
             ),
         ),
@@ -685,7 +735,10 @@ def _build_inventory_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=2, microstructure=3, institutional=4,
+                theory=3,
+                behavioral=2,
+                microstructure=3,
+                institutional=4,
                 narrative="仓单水平：仓单数量的原始水平值。仓单高=现货供应充足=利空。",
             ),
         ),
@@ -713,7 +766,10 @@ def _build_inventory_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=2, microstructure=3, institutional=4,
+                theory=3,
+                behavioral=2,
+                microstructure=3,
+                institutional=4,
                 narrative="仓单涨幅：仓单数量的 N 日增长率。仓单增长加快=供应过剩=利空。",
             ),
         ),
@@ -753,7 +809,10 @@ def _build_volatility_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=3, institutional=3,
+                theory=3,
+                behavioral=3,
+                microstructure=3,
+                institutional=3,
                 narrative="变异系数因子2：标准差/均值，用滚动窗口末端的波动率替代均值，强调尾部波动。",
             ),
         ),
@@ -785,7 +844,10 @@ def _build_volatility_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=3, institutional=4,
+                theory=4,
+                behavioral=3,
+                microstructure=3,
+                institutional=4,
                 narrative="特质波动率：回归残差的波动率，剥离市场因子后的特质波动。特质波动率高=高估=做空。",
             ),
         ),
@@ -821,7 +883,10 @@ def _build_volatility_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=3, institutional=3,
+                theory=4,
+                behavioral=3,
+                microstructure=3,
+                institutional=3,
                 narrative="RS波动率因子：Rogers-Satchell 波动率估计，对漂移项稳健。高RS波动率=风险加大=做空。",
             ),
         ),
@@ -855,7 +920,10 @@ def _build_volatility_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=3, institutional=3,
+                theory=4,
+                behavioral=3,
+                microstructure=3,
+                institutional=3,
                 narrative="GK波动率因子：Garman-Klass 波动率估计，利用OHLC四价信息。高GK波动率=做空。",
             ),
         ),
@@ -886,7 +954,10 @@ def _build_volatility_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=3, institutional=3,
+                theory=4,
+                behavioral=3,
+                microstructure=3,
+                institutional=3,
                 narrative="PK波动率因子：Parkinson 波动率估计，仅用高低价。高PK波动率=做空。",
             ),
         ),
@@ -931,7 +1002,10 @@ def _build_volatility_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=3, institutional=3,
+                theory=4,
+                behavioral=3,
+                microstructure=3,
+                institutional=3,
                 narrative="YZ波动率因子：Yang-Zhang 波动率估计，综合隔夜和日内波动。最全面的OHLC波动率估计。",
             ),
         ),
@@ -962,7 +1036,10 @@ def _build_volatility_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=3, institutional=3,
+                theory=4,
+                behavioral=3,
+                microstructure=3,
+                institutional=3,
                 narrative="波动率因子：滚动波动率的变化方向。波动率上升=风险加大=做空，波动率下降=风险消化=做多。",
             ),
         ),
@@ -1011,7 +1088,7 @@ def main():
         "库存因子": len(_build_inventory_factors()),
         "波动率因子": len(_build_volatility_factors()),
     }
-    print(f"\n📊 分类统计:")
+    print("\n📊 分类统计:")
     for cat, cnt in category_counts.items():
         print(f"   {cat}: {cnt} 个")
     print(f"   {'合计':>12}: {len(factors)} 个")

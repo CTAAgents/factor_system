@@ -170,9 +170,7 @@ class TestSchedulerEngineStart:
                 assert engine.running is False
                 assert "APScheduler 未安装" in caplog.text
 
-    def test_start_already_running_warns(
-        self, engine_with_mock_scheduler: SchedulerEngine, caplog
-    ):
+    def test_start_already_running_warns(self, engine_with_mock_scheduler: SchedulerEngine, caplog):
         """已运行时 start 发出警告并返回 True。"""
         caplog.set_level(logging.WARNING)
         result = engine_with_mock_scheduler.start()
@@ -180,9 +178,7 @@ class TestSchedulerEngineStart:
         assert engine_with_mock_scheduler.running is True
         assert "已在运行" in caplog.text
 
-    def test_start_happy_path(
-        self, apscheduler_available: MagicMock, sample_task: TaskSpec, caplog
-    ):
+    def test_start_happy_path(self, apscheduler_available: MagicMock, sample_task: TaskSpec, caplog):
         """正常启动流程：注册默认任务、添加 job、启动 scheduler。"""
         # 先注册任务到全局 REGISTRY（start() 内部还会注册 5 个默认任务）
         REGISTRY.register(sample_task)
@@ -226,9 +222,7 @@ class TestSchedulerEngineStop:
         # 应输出"已停止"日志
         assert "已停止" in caplog.text
 
-    def test_stop_when_running(
-        self, engine_with_mock_scheduler: SchedulerEngine, caplog
-    ):
+    def test_stop_when_running(self, engine_with_mock_scheduler: SchedulerEngine, caplog):
         """运行时 stop 调用 scheduler.shutdown 并重置状态。"""
         mock_sched = engine_with_mock_scheduler._scheduler
         caplog.set_level(logging.INFO)
@@ -625,9 +619,7 @@ class TestRunScheduler:
             "fts.scheduler.engine.time.sleep",
             side_effect=KeyboardInterrupt,
         ):
-            with patch(
-                "fts.scheduler.engine.SchedulerEngine._create_scheduler"
-            ) as mock_create:
+            with patch("fts.scheduler.engine.SchedulerEngine._create_scheduler") as mock_create:
                 mock_sched = MagicMock()
                 mock_create.return_value = mock_sched
 
@@ -656,9 +648,7 @@ class TestRunScheduler:
 class TestSchedulerEngineIntegration:
     """SchedulerEngine 集成场景测试。"""
 
-    def test_start_then_stop_cycle(
-        self, apscheduler_available: MagicMock, sample_task: TaskSpec
-    ):
+    def test_start_then_stop_cycle(self, apscheduler_available: MagicMock, sample_task: TaskSpec):
         """完整的 start → 运行 → stop 生命周期。"""
         REGISTRY.register(sample_task)
 
@@ -677,9 +667,7 @@ class TestSchedulerEngineIntegration:
         assert engine.running is False
         apscheduler_available.shutdown.assert_called_once_with(wait=False)
 
-    def test_double_start(
-        self, apscheduler_available: MagicMock, sample_task: TaskSpec, caplog
-    ):
+    def test_double_start(self, apscheduler_available: MagicMock, sample_task: TaskSpec, caplog):
         """两次调用 start 第二次是 no-op。"""
         REGISTRY.register(sample_task)
 
@@ -752,12 +740,8 @@ class TestSchedulerEngineStartWatchdog:
         mock_thread = MagicMock()
 
         with (
-            patch(
-                "fts.scheduler.watchdog.ProcessWatchdog", return_value=mock_watchdog
-            ) as mock_cls,
-            patch(
-                "fts.scheduler.engine.threading.Thread", return_value=mock_thread
-            ) as mock_thread_cls,
+            patch("fts.scheduler.watchdog.ProcessWatchdog", return_value=mock_watchdog) as mock_cls,
+            patch("fts.scheduler.engine.threading.Thread", return_value=mock_thread) as mock_thread_cls,
         ):
             engine = SchedulerEngine()
             engine.start_watchdog(name="test-wd")

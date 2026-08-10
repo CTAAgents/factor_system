@@ -14,7 +14,7 @@ HARNESS §契约优先: 输出格式统一为 open/high/low/close/volume 5 个�
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -46,6 +46,7 @@ class CrossMarketDataAdapter:
 
     def __init__(self):
         from fts.data import FTSDataProvider
+
         self._provider = FTSDataProvider()
 
     # ── 数据获取 ──────────────────────────────────────────
@@ -86,9 +87,12 @@ class CrossMarketDataAdapter:
     ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
         """获取沪深300成分股面板数据。"""
         from fts.data_mcp import CSI300_SUBSET
+
         symbols = CSI300_SUBSET[:max_stocks] if max_stocks > 0 else CSI300_SUBSET
         panel, dates = self._provider.get_stock_panel(
-            symbols, days=days, trace_id=trace_id,
+            symbols,
+            days=days,
+            trace_id=trace_id,
         )
         return self._adapt_panel(panel, TARGET_MARKET_STOCK), dates
 
@@ -199,8 +203,7 @@ class CrossMarketDataAdapter:
 
                 # 对齐到 common_dates
                 if len(arr) < n_dates:
-                    arr = np.pad(arr, (0, n_dates - len(arr)),
-                                 constant_values=np.nan)[:n_dates]
+                    arr = np.pad(arr, (0, n_dates - len(arr)), constant_values=np.nan)[:n_dates]
 
                 sym_signals[sym] = arr[:n_dates]
             except Exception as e:

@@ -1,10 +1,13 @@
 """FTS-Expr 校验器与 PIT 静态分析测试。"""
+
 import pytest
 
 from fts.factor_engine.expr_dsl.parser import parse_expression
 from fts.factor_engine.expr_dsl.registry import build_registry
 from fts.factor_engine.expr_dsl.validator import (
-    DSLValidationError, collect_fields, compute_max_lookback, validate_expr,
+    DSLValidationError,
+    collect_fields,
+    validate_expr,
 )
 
 REG = build_registry()
@@ -63,6 +66,7 @@ def test_collect_fields():
 
 def test_validate_raises_utility():
     from fts.factor_engine.expr_dsl.parser import FTSExprError
+
     with pytest.raises(DSLValidationError):
         raise DSLValidationError("x")
     assert issubclass(DSLValidationError, FTSExprError)

@@ -1,4 +1,5 @@
 """验证 loader 模块能正确生成 FactorProgram。"""
+
 import sys
 from pathlib import Path
 
@@ -22,10 +23,10 @@ print(f"  First: {wq_seeds[0]['factor_id']} - {wq_seeds[0]['name']}")
 print(f"  Last: {wq_seeds[-1]['factor_id']} - {wq_seeds[-1]['name']}")
 
 # 验证 code 格式
-first_code = wq_seeds[0]['code']
-assert 'def factor_program' in first_code, "Missing factor_program function"
-assert 'rank' in first_code, "Missing rank function"
-assert 'close' in first_code, "Missing close variable"
+first_code = wq_seeds[0]["code"]
+assert "def factor_program" in first_code, "Missing factor_program function"
+assert "rank" in first_code, "Missing rank function"
+assert "close" in first_code, "Missing close variable"
 print(f"  Code template OK: factor_program() present, {len(first_code)} chars")
 
 # 加载 Qlib 158
@@ -39,11 +40,13 @@ all_seeds = load_all_external_seeds()
 print(f"Total external seeds: {len(all_seeds)}")
 
 # 验证 FactorProgram 字段完整性
-required_fields = ['factor_id', 'name', 'code', 'params', 'signature', 'economic_logic', 'source']
+required_fields = ["factor_id", "name", "code", "params", "signature", "economic_logic", "source"]
 for fp in all_seeds[:3]:
     for field in required_fields:
         assert field in fp, f"Missing field {field} in {fp.get('name', '?')}"
-    print(f"  {fp['name']}: source={fp['source']}, gen={fp['generation']}, "
-          f"fields={fp['signature']['input_fields']}, lookback={fp['signature']['lookback']}")
+    print(
+        f"  {fp['name']}: source={fp['source']}, gen={fp['generation']}, "
+        f"fields={fp['signature']['input_fields']}, lookback={fp['signature']['lookback']}"
+    )
 
 print("\nAll loader verifications passed!")

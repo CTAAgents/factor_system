@@ -75,9 +75,7 @@ class DataLevelConfig:
 class DataLevelAlert:
     """数据级质量告警。"""
 
-    alert_type: (
-        str  # missing_ratio / outlier_ratio / adjust_consistency / source_disagreement
-    )
+    alert_type: str  # missing_ratio / outlier_ratio / adjust_consistency / source_disagreement
     scope: str  # "market_data" 或 symbol
     severity: str  # warning / critical
     message: str
@@ -127,9 +125,7 @@ class DataLevelMonitor:
 
     # ─── 单一检查 ─────────────────────────────────────────
 
-    def check_missing(
-        self, df: pd.DataFrame, scope: str = "market_data"
-    ) -> list[DataLevelAlert]:
+    def check_missing(self, df: pd.DataFrame, scope: str = "market_data") -> list[DataLevelAlert]:
         """完整性：全表缺失率 + 关键字段缺失率。"""
         alerts: list[DataLevelAlert] = []
         if df is None or df.empty:
@@ -192,9 +188,7 @@ class DataLevelMonitor:
                 )
         return alerts
 
-    def check_outliers(
-        self, df: pd.DataFrame, scope: str = "market_data"
-    ) -> list[DataLevelAlert]:
+    def check_outliers(self, df: pd.DataFrame, scope: str = "market_data") -> list[DataLevelAlert]:
         """准确性：关键字段 3σ 异常值比例。"""
         alerts: list[DataLevelAlert] = []
         if df is None or df.empty:
@@ -208,9 +202,7 @@ class DataLevelMonitor:
             mean, std = float(series.mean()), float(series.std())
             if std == 0:
                 continue
-            ratio = float(
-                ((series - mean).abs() > self._config.outlier_zscore * std).sum()
-            ) / len(series)
+            ratio = float(((series - mean).abs() > self._config.outlier_zscore * std).sum()) / len(series)
             if ratio > self._config.outlier_ratio_critical:
                 alerts.append(
                     self._make_alert(
@@ -249,9 +241,7 @@ class DataLevelMonitor:
         merged = pd.concat([adj.rename("a"), reference.rename("r")], axis=1).dropna()
         if merged.empty:
             return []
-        rel_dev = (merged["a"] - merged["r"]).abs() / merged["r"].abs().clip(
-            lower=1e-12
-        )
+        rel_dev = (merged["a"] - merged["r"]).abs() / merged["r"].abs().clip(lower=1e-12)
         over_tol = float((rel_dev > self._config.adj_consistency_tol).mean())
         if over_tol > self._config.adj_consistency_critical:
             alerts = [
@@ -290,14 +280,10 @@ class DataLevelMonitor:
         """多源分歧：主源/次源 close 相对偏差中位数。"""
         if primary is None or secondary is None:
             return []
-        merged = pd.concat(
-            [primary.rename("p"), secondary.rename("s")], axis=1
-        ).dropna()
+        merged = pd.concat([primary.rename("p"), secondary.rename("s")], axis=1).dropna()
         if merged.empty:
             return []
-        deviation = (merged["p"] - merged["s"]).abs() / merged["s"].abs().clip(
-            lower=1e-9
-        )
+        deviation = (merged["p"] - merged["s"]).abs() / merged["s"].abs().clip(lower=1e-9)
         median_dev = float(deviation.median())
         if median_dev > self._config.source_disagreement_critical:
             alerts = [
@@ -344,9 +330,7 @@ class DataLevelMonitor:
         alerts.extend(self.check_missing(df, scope))
         alerts.extend(self.check_outliers(df, scope))
         alerts.extend(self.check_adjustment_consistency(adj, reference, scope))
-        alerts.extend(
-            self.check_source_disagreement(primary_close, secondary_close, scope)
-        )
+        alerts.extend(self.check_source_disagreement(primary_close, secondary_close, scope))
 
         for alert in alerts:
             self._handle_alert(alert)

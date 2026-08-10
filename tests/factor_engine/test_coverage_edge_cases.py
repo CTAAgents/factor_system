@@ -18,7 +18,6 @@ tests/factor_engine/test_coverage_edge_cases.py — 补齐各模块未覆盖的�
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -44,30 +43,35 @@ class TestFactorProgramSafeImport:
     def test_safe_import_forbidden_module_os(self):
         """导入 os 模块应抛 ImportError（line 155）。"""
         from fts.factor_engine.factor_program import _safe_import
+
         with pytest.raises(ImportError, match="禁止导入模块"):
             _safe_import("os")
 
     def test_safe_import_forbidden_module_sys(self):
         """导入 sys 模块应抛 ImportError。"""
         from fts.factor_engine.factor_program import _safe_import
+
         with pytest.raises(ImportError, match="禁止导入模块"):
             _safe_import("sys")
 
     def test_safe_import_forbidden_module_subprocess(self):
         """导入 subprocess 模块应抛 ImportError。"""
         from fts.factor_engine.factor_program import _safe_import
+
         with pytest.raises(ImportError, match="禁止导入模块"):
             _safe_import("subprocess")
 
     def test_safe_import_forbidden_module_shutil(self):
         """导入 shutil 模块应抛 ImportError。"""
         from fts.factor_engine.factor_program import _safe_import
+
         with pytest.raises(ImportError, match="禁止导入模块"):
             _safe_import("shutil")
 
     def test_safe_import_non_allowed_module(self):
         """导入非白名单且非禁止模块（如 'json'）应抛 ImportError（line 157）。"""
         from fts.factor_engine.factor_program import _safe_import
+
         with pytest.raises(ImportError, match="模块不在沙箱白名单"):
             _safe_import("json")
 
@@ -144,6 +148,7 @@ class TestCostModelEmptyVolume:
     def test_estimate_impact_empty_array(self):
         """空 volume_signal 应返回 0.0（line 222）。"""
         from fts.factor_engine.cost_model import TransactionCostModel
+
         result = TransactionCostModel._estimate_impact(np.array([]), 2.0)
         assert result == 0.0
 
@@ -196,13 +201,16 @@ def factor_program(data, params):
             growth = 1.0 + i * 0.01
             t_vals = np.arange(n_periods, dtype=float)
             closes = base + t_vals * growth
-            panel_data[f"S{i}"] = pd.DataFrame({
-                "open": closes * 0.99,
-                "high": closes * 1.02,
-                "low": closes * 0.98,
-                "close": closes,
-                "volume": np.ones(n_periods) * 1000,
-            }, index=dates)
+            panel_data[f"S{i}"] = pd.DataFrame(
+                {
+                    "open": closes * 0.99,
+                    "high": closes * 1.02,
+                    "low": closes * 0.98,
+                    "close": closes,
+                    "volume": np.ones(n_periods) * 1000,
+                },
+                index=dates,
+            )
 
         bt = cross_section_evaluate_backtest(fp, panel_data, dates, oos_ratio=0.3)
         assert bt["t_stat"] == 0.0
@@ -237,13 +245,16 @@ class TestEvolutionLoopResetLowIC:
         # 创建最小化实例（含 DataQualityMonitor 所需的 OHLCV 字段，且价格有波动以通过质检）
         np.random.seed(42)
         base_close = 100 + np.cumsum(np.random.randn(100) * 0.5)
-        data = pd.DataFrame({
-            "open": base_close * (1 + np.random.randn(100) * 0.001),
-            "high": base_close * (1 + np.abs(np.random.randn(100)) * 0.002),
-            "low": base_close * (1 - np.abs(np.random.randn(100)) * 0.002),
-            "close": base_close,
-            "volume": np.ones(100) * 1000,
-        }, index=pd.date_range("2020-01-01", periods=100))
+        data = pd.DataFrame(
+            {
+                "open": base_close * (1 + np.random.randn(100) * 0.001),
+                "high": base_close * (1 + np.abs(np.random.randn(100)) * 0.002),
+                "low": base_close * (1 - np.abs(np.random.randn(100)) * 0.002),
+                "close": base_close,
+                "volume": np.ones(100) * 1000,
+            },
+            index=pd.date_range("2020-01-01", periods=100),
+        )
         ret = np.zeros(100)
         budget = BudgetConfig(
             nightly_token_limit=100000,
@@ -257,6 +268,7 @@ class TestEvolutionLoopResetLowIC:
 
         # 创建临时 elite 目录
         import tempfile
+
         elite_dir = tempfile.mkdtemp()
 
         loop = EvolutionLoop(
@@ -294,8 +306,14 @@ class TestEvolutionLoopResetLowIC:
 
         # --- 创建 mock 评估结果 ---
         bt = BacktestMetrics(
-            ic=0.05, icir=2.0, sharpe=2.0, max_drawdown=0.1,
-            monotonicity=True, oos_ratio=0.3, t_stat=3.0, turnover_monthly=0.2,
+            ic=0.05,
+            icir=2.0,
+            sharpe=2.0,
+            max_drawdown=0.1,
+            monotonicity=True,
+            oos_ratio=0.3,
+            t_stat=3.0,
+            turnover_monthly=0.2,
         )
         mock_evaluation = FactorEvaluation(
             factor_id="fct_evolved_test",
@@ -316,25 +334,37 @@ class TestEvolutionLoopResetLowIC:
         # 注意：Python 3.10 限制 single with 最多 20 个上下文管理器，
         # 因此使用嵌套 with 块 + patch.multiple 合并相关 patches
         mock_evolve_micro = patch("fts.factor_engine.evolution_loop.evolve_micro")
-        mock_sm = patch.multiple(loop.state_manager,
+        mock_sm = patch.multiple(
+            loop.state_manager,
             save=MagicMock(return_value=None),
-            mark_running=MagicMock(return_value={
-                "run_id": "mock_run", "generation": 0,
-                "total_factors_evaluated": 0, "total_factors_promoted": 0,
-                "tokens_consumed": 0, "last_generation": 0,
-                "version": "1.1.0",
-            }),
-            load_or_init=MagicMock(return_value={
-                "run_id": "mock_run", "generation": 0,
-                "total_factors_evaluated": 0, "total_factors_promoted": 0,
-                "tokens_consumed": 0, "last_generation": 0,
-                "version": "1.1.0",
-            }),
+            mark_running=MagicMock(
+                return_value={
+                    "run_id": "mock_run",
+                    "generation": 0,
+                    "total_factors_evaluated": 0,
+                    "total_factors_promoted": 0,
+                    "tokens_consumed": 0,
+                    "last_generation": 0,
+                    "version": "1.1.0",
+                }
+            ),
+            load_or_init=MagicMock(
+                return_value={
+                    "run_id": "mock_run",
+                    "generation": 0,
+                    "total_factors_evaluated": 0,
+                    "total_factors_promoted": 0,
+                    "tokens_consumed": 0,
+                    "last_generation": 0,
+                    "version": "1.1.0",
+                }
+            ),
             increment_evaluated=MagicMock(return_value=None),
             increment_promoted=MagicMock(return_value=None),
             add_tokens=MagicMock(return_value=None),
         )
-        mock_loop_methods = patch.multiple(loop,
+        mock_loop_methods = patch.multiple(
+            loop,
             _check_factor_runtime=MagicMock(return_value=(True, "")),
             _quick_prefilter=MagicMock(return_value=(True, "", 0.05)),
             _run_backtest_pipeline=MagicMock(return_value=None),
@@ -344,18 +374,24 @@ class TestEvolutionLoopResetLowIC:
             _run_causal_validation=MagicMock(return_value={"passed": True}),
             _run_robustness_check=MagicMock(return_value={"passed": True}),
             _run_shap_analysis=MagicMock(return_value={}),
-            _run_factor_audit=MagicMock(return_value=MagicMock(
-                passed=True, pass_rate=1.0, failed_items=[],
-                factor_id="fct_evolved_test", factor_name="evolved_test",
-                audited_at="2024-01-01T00:00:00", items=[],
-                summary={"total": 6, "passed": 6, "failed": 0, "skipped": 0, "pass_rate": 1.0},
-            )),
+            _run_factor_audit=MagicMock(
+                return_value=MagicMock(
+                    passed=True,
+                    pass_rate=1.0,
+                    failed_items=[],
+                    factor_id="fct_evolved_test",
+                    factor_name="evolved_test",
+                    audited_at="2024-01-01T00:00:00",
+                    items=[],
+                    summary={"total": 6, "passed": 6, "failed": 0, "skipped": 0, "pass_rate": 1.0},
+                )
+            ),
             _promote_to_elite=MagicMock(return_value=Path("elite/test_factor.json")),
             _record_success_trace=MagicMock(return_value=None),
             _record_failure_trace=MagicMock(return_value=None),
-            _evaluate_and_promote_seeds=MagicMock(side_effect=lambda seeds, tid, state, eids, **kw: (
-                eids.append("fct_seed_test"), 1
-            )[-1]),
+            _evaluate_and_promote_seeds=MagicMock(
+                side_effect=lambda seeds, tid, state, eids, **kw: (eids.append("fct_seed_test"), 1)[-1]
+            ),
             _load_elite_parent_factors=MagicMock(return_value=[{"factor_id": "fct_seed_test"}]),
             _merge_l1_candidates=MagicMock(side_effect=lambda seeds, tid: seeds),
             _run_seed_correlation_check=MagicMock(return_value=[]),
@@ -369,7 +405,7 @@ class TestEvolutionLoopResetLowIC:
                     _test_eval = loop.evaluation_chain.evaluate(evolved_seed, data, ret)
                     assert _test_eval["factor_id"] == "fct_evolved_test", f"evaluate mock 未生效! got={_test_eval}"
                     _test_ver = loop.verifier.check(mock_evaluation)
-                    assert _test_ver["passed"] == True, f"verifier mock 未生效! got={_test_ver}"
+                    assert _test_ver["passed"], f"verifier mock 未生效! got={_test_ver}"
                     print("[DEBUG] mock 验证通过: evaluate 和 verifier mocks 已生效")
                     with patch.object(loop.evaluation_chain, "evaluate", return_value=mock_evaluation):
                         with patch.object(loop.verifier, "check", return_value={"passed": True, "failure_reasons": []}):
@@ -420,6 +456,7 @@ class TestExperienceChainCleanup:
 
         # 模拟 stat 触发 OSError
         original_stat = Path.stat
+
         def mock_stat(self):
             if "bad" in str(self):
                 raise OSError("模拟 stat 失败")
@@ -467,14 +504,14 @@ class TestMicroEvolutionNoOptuna:
 
     def test_import_error_path(self):
         """模拟 optuna 导入失败时 _HAS_OPTUNA 为 False（lines 28-30）。"""
-        import importlib
         # 强制 micro_evolution 模块重新加载，模拟 optuna 不可用
-        with patch.dict('sys.modules', {'optuna': None}):
+        with patch.dict("sys.modules", {"optuna": None}):
             # 重新导入模块会触发 ImportError，但模块已被缓存
             # 直接测试模块级别的 try/except 逻辑
             from fts.factor_engine import micro_evolution
+
             # 验证模块的 _HAS_OPTUNA 属性存在
-            assert hasattr(micro_evolution, '_HAS_OPTUNA')
+            assert hasattr(micro_evolution, "_HAS_OPTUNA")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -488,16 +525,19 @@ class TestRegimeEdgeCases:
     def test_close_less_than_20(self):
         """close 数据少于 20 个时应返回兜底 regime（line 95）。"""
         from fts.factor_engine.regime import RegimeAwareSelector
+
         selector = RegimeAwareSelector()
 
         # 创建 15 行数据
-        df = pd.DataFrame({
-            "open": np.ones(15),
-            "high": np.ones(15) * 1.01,
-            "low": np.ones(15) * 0.99,
-            "close": np.ones(15),
-            "volume": np.ones(15) * 1000,
-        })
+        df = pd.DataFrame(
+            {
+                "open": np.ones(15),
+                "high": np.ones(15) * 1.01,
+                "low": np.ones(15) * 0.99,
+                "close": np.ones(15),
+                "volume": np.ones(15) * 1000,
+            }
+        )
         regime = selector.detect(df)
         assert regime["regime"] == "oscillate"
         assert regime["confidence"] == 0.5
@@ -505,23 +545,26 @@ class TestRegimeEdgeCases:
     def test_close_insufficient_after_dropna(self):
         """dropna 后 close 少于 20 个应返回兜底 regime（confidence=0.5）。"""
         from fts.factor_engine.regime import RegimeAwareSelector
+
         selector = RegimeAwareSelector()
 
         # 创建 25 行数据，但 close 有大量 NaN
-        df = pd.DataFrame({
-            "open": np.ones(25),
-            "high": np.ones(25) * 1.01,
-            "low": np.ones(25) * 0.99,
-            "close": np.concatenate([np.ones(5), np.full(20, np.nan)]),
-            "volume": np.ones(25) * 1000,
-        })
+        df = pd.DataFrame(
+            {
+                "open": np.ones(25),
+                "high": np.ones(25) * 1.01,
+                "low": np.ones(25) * 0.99,
+                "close": np.concatenate([np.ones(5), np.full(20, np.nan)]),
+                "volume": np.ones(25) * 1000,
+            }
+        )
         regime = selector.detect(df)
         assert regime["regime"] == "oscillate"
         assert regime["confidence"] == 0.5
 
     def test_regime_no_performance_record(self):
         """regime 无表现记录时应保留因子（line 225）。"""
-        from fts.factor_engine.regime import RegimeAwareSelector, RegimeFactorProfile
+        from fts.factor_engine.regime import RegimeAwareSelector
 
         selector = RegimeAwareSelector()
 
@@ -551,6 +594,7 @@ class TestStressTestRecoveryDays:
     def test_recovery_high_autocorr(self):
         """autocorr > 0.8 返回 60 天（line 304）。"""
         from fts.factor_engine.stress_test import StressTester
+
         # 几乎线性递增 → 高自相关
         sig = np.linspace(0, 1, 100)
         days = StressTester._estimate_recovery_days(sig)
@@ -559,6 +603,7 @@ class TestStressTestRecoveryDays:
     def test_recovery_medium_autocorr(self):
         """0.5 < autocorr <= 0.8 返回 30 天（line 306）。"""
         from fts.factor_engine.stress_test import StressTester
+
         # 创建中等自相关的信号
         np.random.seed(42)
         sig = np.zeros(100)
@@ -571,6 +616,7 @@ class TestStressTestRecoveryDays:
     def test_recovery_low_autocorr(self):
         """0.2 < autocorr <= 0.5 返回 15 天（line 308）。"""
         from fts.factor_engine.stress_test import StressTester
+
         # 创建 AR(1) 系数 0.35 的信号 → 自相关约 0.35
         np.random.seed(42)
         sig = np.zeros(100)
@@ -583,6 +629,7 @@ class TestStressTestRecoveryDays:
     def test_recovery_very_low_autocorr(self):
         """autocorr <= 0.2 返回 7 天（line 310）。"""
         from fts.factor_engine.stress_test import StressTester
+
         # 完全随机信号 → 极低自相关
         np.random.seed(42)
         sig = np.random.randn(100) * 2.0
@@ -592,11 +639,13 @@ class TestStressTestRecoveryDays:
     def test_recovery_short_signal(self):
         """信号长度不足 3 返回 0。"""
         from fts.factor_engine.stress_test import StressTester
+
         assert StressTester._estimate_recovery_days(np.array([1.0, 2.0])) == 0
 
     def test_recovery_all_nan(self):
         """全部为 NaN 返回 0（len < 3）。"""
         from fts.factor_engine.stress_test import StressTester
+
         sig = np.array([np.nan, np.nan, np.nan])
         days = StressTester._estimate_recovery_days(sig)
         assert days == 0
@@ -604,6 +653,7 @@ class TestStressTestRecoveryDays:
     def test_recovery_low_vol_boosts_min(self):
         """信号波动 < 0.1 时 recovery 提升到至少 10。"""
         from fts.factor_engine.stress_test import StressTester
+
         # 极低波动信号
         sig = np.ones(100) * 0.5 + np.random.randn(100) * 0.01
         days = StressTester._estimate_recovery_days(sig)
@@ -626,6 +676,7 @@ class TestPortfolioLoopDirNotExist:
         manager = PortfolioManager(str(tmp_path / "portfolio"))
         # __init__ 创建了目录，删除它以测试不存在路径
         import shutil
+
         shutil.rmtree(str(manager.proposals_dir))
         proposals = manager.list_active_proposals()
         assert proposals == []
@@ -641,8 +692,3 @@ class TestPortfolioLoopDirNotExist:
         nonexistent_dir = tmp_path / "nonexistent_elite"
         factors = load_elite_factors(str(nonexistent_dir), use_duckdb=False)
         assert factors == []
-
-
-
-
-

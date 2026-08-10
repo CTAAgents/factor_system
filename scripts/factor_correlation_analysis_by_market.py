@@ -11,6 +11,7 @@
     python factor_correlation_analysis_by_market.py stock    # 仅分析股票
     python factor_correlation_analysis_by_market.py futures  # 仅分析期货
 """
+
 from __future__ import annotations
 
 import json
@@ -66,7 +67,7 @@ def greedy_diversification(
     target_count: int = 20,
     corr_threshold: float = 0.5,
 ) -> list[dict]:
-    n = len(factor_ids)
+    len(factor_ids)
     selected_indices = []
     selected_info = []
     sorted_indices = np.argsort(factor_scores)[::-1]
@@ -85,20 +86,22 @@ def greedy_diversification(
 
         if max_corr < corr_threshold:
             selected_indices.append(idx)
-            selected_info.append({
-                "rank": len(selected_indices),
-                "factor_id": factor_id,
-                "factor_name": factor_name,
-                "sharpe": round(sharpe, 4),
-                "max_corr_with_selected": round(max_corr, 4),
-                "index": idx,
-            })
+            selected_info.append(
+                {
+                    "rank": len(selected_indices),
+                    "factor_id": factor_id,
+                    "factor_name": factor_name,
+                    "sharpe": round(sharpe, 4),
+                    "max_corr_with_selected": round(max_corr, 4),
+                    "index": idx,
+                }
+            )
     return selected_info
 
 
 def generate_factor_returns(factors: list[dict], n_periods: int = 252) -> np.ndarray:
     """基于因子特征生成具有合理相关性结构的收益序列矩阵。"""
-    n_factors = len(factors)
+    len(factors)
     np.random.seed(42)
 
     n_common_factors = 5
@@ -173,12 +176,12 @@ def analyze_market(
     print(f"    • Sharpe 范围: {min(factor_sharpes):.3f} ~ {max(factor_sharpes):.3f}")
 
     # ─── Step 2: 生成收益序列 ───
-    print(f"\n  📊 Step 2: 生成因子收益序列...")
+    print("\n  📊 Step 2: 生成因子收益序列...")
     returns_matrix = generate_factor_returns(top_factors)
     print(f"    • 收益矩阵形状: {returns_matrix.shape}")
 
     # ─── Step 3: 计算相关性 ───
-    print(f"\n  🔢 Step 3: 计算相关性矩阵...")
+    print("\n  🔢 Step 3: 计算相关性矩阵...")
     start_time = time.time()
 
     pearson_corr = np.corrcoef(returns_matrix, rowvar=False)
@@ -199,7 +202,7 @@ def analyze_market(
     print(f"    • 最大绝对 Pearson: {pearson_max_abs:.4f}")
 
     # ─── Step 4: 生成热力图 ───
-    print(f"\n  🎨 Step 4: 生成热力图...")
+    print("\n  🎨 Step 4: 生成热力图...")
     short_labels = [name[:14] + "..." if len(name) > 14 else name for name in factor_names]
     mask = np.triu(np.ones_like(pearson_corr, dtype=bool), k=1)
 
@@ -211,7 +214,8 @@ def analyze_market(
         annot=False,
         cmap=f"{color_map}_r",
         center=0,
-        vmin=-1, vmax=1,
+        vmin=-1,
+        vmax=1,
         square=True,
         xticklabels=short_labels,
         yticklabels=short_labels,
@@ -237,7 +241,8 @@ def analyze_market(
         annot=False,
         cmap=f"{color_map}_r",
         center=0,
-        vmin=-1, vmax=1,
+        vmin=-1,
+        vmax=1,
         square=True,
         xticklabels=short_labels,
         yticklabels=short_labels,
@@ -256,7 +261,7 @@ def analyze_market(
     print(f"    • Spearman 热力图: {spearman_path}")
 
     # ─── Step 5: 去冗余筛选 ───
-    print(f"\n  🔍 Step 5: 去冗余筛选...")
+    print("\n  🔍 Step 5: 去冗余筛选...")
     thresholds = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3]
 
     best_selection = None
@@ -264,8 +269,12 @@ def analyze_market(
 
     for threshold in thresholds:
         selection = greedy_diversification(
-            pearson_corr, factor_ids, factor_names, factor_sharpes,
-            target_count=target_count, corr_threshold=threshold,
+            pearson_corr,
+            factor_ids,
+            factor_names,
+            factor_sharpes,
+            target_count=target_count,
+            corr_threshold=threshold,
         )
         print(f"    阈值 {threshold}: 选出 {len(selection)} 个因子")
         if len(selection) >= target_count:
@@ -278,14 +287,16 @@ def analyze_market(
         sorted_by_sharpe = np.argsort(factor_sharpes)[::-1]
         best_selection = []
         for rank, idx in enumerate(sorted_by_sharpe[:target_count], 1):
-            best_selection.append({
-                "rank": rank,
-                "factor_id": factor_ids[idx],
-                "factor_name": factor_names[idx],
-                "sharpe": round(factor_sharpes[idx], 4),
-                "max_corr_with_selected": 0.0,
-                "index": idx,
-            })
+            best_selection.append(
+                {
+                    "rank": rank,
+                    "factor_id": factor_ids[idx],
+                    "factor_name": factor_names[idx],
+                    "sharpe": round(factor_sharpes[idx], 4),
+                    "max_corr_with_selected": 0.0,
+                    "index": idx,
+                }
+            )
         best_threshold = "top_sharpe_only"
 
     if best_threshold == "top_sharpe_only":
@@ -293,10 +304,7 @@ def analyze_market(
         for item in best_selection:
             idx = item["index"]
             if selected_indices_temp:
-                max_corr = max(
-                    abs(pearson_corr[idx, sel_idx])
-                    for sel_idx in selected_indices_temp if sel_idx != idx
-                )
+                max_corr = max(abs(pearson_corr[idx, sel_idx]) for sel_idx in selected_indices_temp if sel_idx != idx)
                 item["max_corr_with_selected"] = round(max_corr, 4)
 
     selected_indices = [item["index"] for item in best_selection]
@@ -318,7 +326,7 @@ def analyze_market(
     print(f"    • 组合内平均绝对相关性: {mean_inner_corr:.4f}")
 
     # ─── Step 6: 筛选结果可视化 ───
-    print(f"\n  📈 Step 6: 生成筛选结果可视化...")
+    print("\n  📈 Step 6: 生成筛选结果可视化...")
 
     # Sharpe 柱状图
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -331,8 +339,7 @@ def analyze_market(
     ax.set_title(f"{market_label} 去冗余因子 Sharpe 分布 (n={len(best_selection)})", fontsize=14)
     ax.set_xticks(range(len(best_selection)))
     ax.set_xticklabels(names_short, rotation=45, ha="right", fontsize=8)
-    ax.axhline(y=avg_sharpe, color="red", linestyle="--", alpha=0.7,
-               label=f"平均={avg_sharpe:.3f}")
+    ax.axhline(y=avg_sharpe, color="red", linestyle="--", alpha=0.7, label=f"平均={avg_sharpe:.3f}")
     ax.legend()
     plt.tight_layout()
     sharpe_chart_path = output_dir / "selected_sharpe.png"
@@ -346,10 +353,20 @@ def analyze_market(
     sel_corr = pearson_corr[np.ix_(selected_indices, selected_indices)]
     mask_sel = np.triu(np.ones_like(sel_corr, dtype=bool), k=1)
     sns.heatmap(
-        sel_corr, mask=mask_sel, annot=True, fmt=".2f",
-        cmap=f"{color_map}_r", center=0, vmin=-1, vmax=1,
-        square=True, xticklabels=sel_names, yticklabels=sel_names,
-        ax=ax, cbar_kws={"shrink": 0.8}, annot_kws={"fontsize": 7},
+        sel_corr,
+        mask=mask_sel,
+        annot=True,
+        fmt=".2f",
+        cmap=f"{color_map}_r",
+        center=0,
+        vmin=-1,
+        vmax=1,
+        square=True,
+        xticklabels=sel_names,
+        yticklabels=sel_names,
+        ax=ax,
+        cbar_kws={"shrink": 0.8},
+        annot_kws={"fontsize": 7},
     )
     ax.set_title(f"{market_label} 入选 {len(best_selection)} 因子组合内相关性", fontsize=14)
     plt.xticks(rotation=90, fontsize=7)
@@ -361,7 +378,7 @@ def analyze_market(
     print(f"    • 组合内相关性热力图: {sel_heatmap_path}")
 
     # ─── Step 7: 导出 CSV ───
-    print(f"\n  💾 Step 7: 导出 CSV...")
+    print("\n  💾 Step 7: 导出 CSV...")
 
     # Pearson 矩阵
     corr_df = pd.DataFrame(pearson_corr, index=factor_names, columns=factor_names)
@@ -381,20 +398,21 @@ def analyze_market(
     factors_meta = []
     selected_ids = {s["factor_id"] for s in best_selection}
     for i, f in enumerate(top_factors):
-        factors_meta.append({
-            "factor_id": f["factor_id"],
-            "factor_name": f.get("name", ""),
-            "family": f.get("family", ""),
-            "sharpe": f.get("sharpe", 0),
-            "ic": f.get("ic", 0),
-            "market": market,
-            "is_selected": f["factor_id"] in selected_ids,
-            "selection_rank": next(
-                (s["rank"] for s in best_selection if s["factor_id"] == f["factor_id"]), None),
-            "max_corr_in_selection": next(
-                (s["max_corr_with_selected"] for s in best_selection
-                 if s["factor_id"] == f["factor_id"]), None),
-        })
+        factors_meta.append(
+            {
+                "factor_id": f["factor_id"],
+                "factor_name": f.get("name", ""),
+                "family": f.get("family", ""),
+                "sharpe": f.get("sharpe", 0),
+                "ic": f.get("ic", 0),
+                "market": market,
+                "is_selected": f["factor_id"] in selected_ids,
+                "selection_rank": next((s["rank"] for s in best_selection if s["factor_id"] == f["factor_id"]), None),
+                "max_corr_in_selection": next(
+                    (s["max_corr_with_selected"] for s in best_selection if s["factor_id"] == f["factor_id"]), None
+                ),
+            }
+        )
     meta_df = pd.DataFrame(factors_meta)
     meta_csv_path = output_dir / "factors_metadata.csv"
     meta_df.to_csv(meta_csv_path, index=False, encoding="utf-8-sig")
@@ -407,17 +425,19 @@ def analyze_market(
             pv = pearson_corr[i, j]
             sv = spearman_corr[i, j]
             if abs(pv) > 0.3:
-                high_corr_pairs.append({
-                    "factor_a": factor_names[i],
-                    "factor_b": factor_names[j],
-                    "factor_id_a": factor_ids[i],
-                    "factor_id_b": factor_ids[j],
-                    "family_a": factor_families[i],
-                    "family_b": factor_families[j],
-                    "pearson_corr": round(float(pv), 4),
-                    "spearman_corr": round(float(sv), 4),
-                    "abs_pearson": round(float(abs(pv)), 4),
-                })
+                high_corr_pairs.append(
+                    {
+                        "factor_a": factor_names[i],
+                        "factor_b": factor_names[j],
+                        "factor_id_a": factor_ids[i],
+                        "factor_id_b": factor_ids[j],
+                        "family_a": factor_families[i],
+                        "family_b": factor_families[j],
+                        "pearson_corr": round(float(pv), 4),
+                        "spearman_corr": round(float(sv), 4),
+                        "abs_pearson": round(float(abs(pv)), 4),
+                    }
+                )
     high_corr_df = pd.DataFrame(high_corr_pairs)
     high_corr_csv_path = output_dir / "high_correlation_pairs.csv"
     high_corr_df.to_csv(high_corr_csv_path, index=False, encoding="utf-8-sig")

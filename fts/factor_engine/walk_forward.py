@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import statistics
 from collections.abc import Callable
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import pandas as pd
 
@@ -28,34 +28,37 @@ logger = logging.getLogger(__name__)
 
 class WalkForwardConfig(TypedDict, total=False):
     """走航验证配置。"""
-    window_years: int                   # 训练窗口长度（默认 3）
-    step_months: int                    # 滚动步长（默认 6）
-    min_oos_months: int                 # 最小样本外长度（默认 3）
-    n_windows: int                      # 一次运行评估几个窗口（默认 4）
-    min_ic_consistency: float           # 至少 % 窗口 IC > 0（默认 0.5）
-    max_ic_volatility: float            # IC 跨窗口波动率上限（默认 0.3）
+
+    window_years: int  # 训练窗口长度（默认 3）
+    step_months: int  # 滚动步长（默认 6）
+    min_oos_months: int  # 最小样本外长度（默认 3）
+    n_windows: int  # 一次运行评估几个窗口（默认 4）
+    min_ic_consistency: float  # 至少 % 窗口 IC > 0（默认 0.5）
+    max_ic_volatility: float  # IC 跨窗口波动率上限（默认 0.3）
 
 
 class WalkForwardWindowResult(TypedDict, total=False):
     """单个窗口的走航验证结果。"""
-    train_start: str                    # 训练起始日期
-    train_end: str                      # 训练结束日期
-    oos_start: str                      # 样本外起始日期
-    oos_end: str                        # 样本外结束日期
-    ic: float                           # 样本外 IC
-    sharpe: float                       # 样本外夏普
-    turnover: float                     # 样本外换手率
+
+    train_start: str  # 训练起始日期
+    train_end: str  # 训练结束日期
+    oos_start: str  # 样本外起始日期
+    oos_end: str  # 样本外结束日期
+    ic: float  # 样本外 IC
+    sharpe: float  # 样本外夏普
+    turnover: float  # 样本外换手率
 
 
 class WalkForwardResult(TypedDict, total=False):
     """走航验证整体结果。"""
-    windows: list[WalkForwardWindowResult]   # 各窗口详细结果
-    ic_consistency: float                    # IC > 0 的窗口占比
-    ic_volatility: float                     # 跨窗口 IC 标准差
-    sharpe_volatility: float                 # 跨窗口夏普标准差
-    consistency_score: float                 # 综合评分（0-100）
-    passed: bool                             # 是否通过验证
-    n_windows_completed: int                 # 实际完成的窗口数
+
+    windows: list[WalkForwardWindowResult]  # 各窗口详细结果
+    ic_consistency: float  # IC > 0 的窗口占比
+    ic_volatility: float  # 跨窗口 IC 标准差
+    sharpe_volatility: float  # 跨窗口夏普标准差
+    consistency_score: float  # 综合评分（0-100）
+    passed: bool  # 是否通过验证
+    n_windows_completed: int  # 实际完成的窗口数
 
 
 # ─── 默认配置 ───────────────────────────────────────────────
@@ -85,7 +88,7 @@ class WalkForwardOptimizer:
     """
 
     def __init__(self, config: WalkForwardConfig | None = None) -> None:
-        merged = dict(DEFAULT_WALK_FORWARD_CONFIG)
+        merged: dict[str, Any] = dict(DEFAULT_WALK_FORWARD_CONFIG)
         if config:
             merged.update(config)
         self._config = merged
@@ -111,15 +114,25 @@ class WalkForwardOptimizer:
         for train_df, oos_df in windows:
             try:
                 metrics = evaluate_fn(train_df, oos_df)
-                window_results.append(WalkForwardWindowResult(
-                    train_start=_to_date_str(train_df.index[0] if hasattr(train_df.index, 'dtype') else train_df.iloc[0].name),
-                    train_end=_to_date_str(train_df.index[-1] if hasattr(train_df.index, 'dtype') else train_df.iloc[-1].name),
-                    oos_start=_to_date_str(oos_df.index[0] if hasattr(oos_df.index, 'dtype') else oos_df.iloc[0].name),
-                    oos_end=_to_date_str(oos_df.index[-1] if hasattr(oos_df.index, 'dtype') else oos_df.iloc[-1].name),
-                    ic=metrics.get("ic", 0.0),
-                    sharpe=metrics.get("sharpe", 0.0),
-                    turnover=metrics.get("turnover", 0.0),
-                ))
+                window_results.append(
+                    WalkForwardWindowResult(
+                        train_start=_to_date_str(
+                            train_df.index[0] if hasattr(train_df.index, "dtype") else train_df.iloc[0].name
+                        ),
+                        train_end=_to_date_str(
+                            train_df.index[-1] if hasattr(train_df.index, "dtype") else train_df.iloc[-1].name
+                        ),
+                        oos_start=_to_date_str(
+                            oos_df.index[0] if hasattr(oos_df.index, "dtype") else oos_df.iloc[0].name
+                        ),
+                        oos_end=_to_date_str(
+                            oos_df.index[-1] if hasattr(oos_df.index, "dtype") else oos_df.iloc[-1].name
+                        ),
+                        ic=metrics.get("ic", 0.0),
+                        sharpe=metrics.get("sharpe", 0.0),
+                        turnover=metrics.get("turnover", 0.0),
+                    )
+                )
             except Exception as e:
                 logger.warning("窗口评估失败: %s", e)
                 continue
@@ -187,7 +200,7 @@ class WalkForwardOptimizer:
             return []
 
         dates = df.index if isinstance(df.index, pd.DatetimeIndex) else pd.to_datetime(df["date"])
-        total_days = (dates[-1] - dates[0]).days
+        (dates[-1] - dates[0]).days
         window_days = int(self._config.get("window_years", 3) * 365.25)
         step_days = int(self._config.get("step_months", 6) * 30.44)
         min_oos_days = int(self._config.get("min_oos_months", 3) * 30.44)

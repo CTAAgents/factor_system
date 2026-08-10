@@ -13,7 +13,6 @@ FTS 环境变量管理修复脚本
 """
 
 import argparse
-import os
 import re
 import sys
 from pathlib import Path
@@ -45,7 +44,7 @@ RECOMMENDED_ENV_VARS: dict[str, str] = {
     "FTS_EVOLUTION_MODE": "hybrid",
 }
 
-DOTENV_DEP_SPEC = 'python-dotenv>=1.0'
+DOTENV_DEP_SPEC = "python-dotenv>=1.0"
 
 
 def check_pyproject_dotenv() -> tuple[bool, str]:
@@ -75,7 +74,7 @@ def fix_pyproject_dotenv() -> bool:
     content = pyproject.read_text(encoding="utf-8")
 
     # 找到 dependencies 列表的末尾
-    dep_end = content.rfind('"]', 0, content.find(']', content.find('[project.optional-dependencies]')))
+    dep_end = content.rfind('"]', 0, content.find("]", content.find("[project.optional-dependencies]")))
     if dep_end == -1:
         # fallback: 找第一个 ] 结束的 dependencies
         dep_start = content.find("dependencies = [")
@@ -91,7 +90,7 @@ def fix_pyproject_dotenv() -> bool:
     if insert_pos == -1:
         return False
 
-    new_content = content[:insert_pos + 1] + f',\n    "{DOTENV_DEP_SPEC}"' + content[insert_pos + 1:]
+    new_content = content[: insert_pos + 1] + f',\n    "{DOTENV_DEP_SPEC}"' + content[insert_pos + 1 :]
     pyproject.write_text(new_content, encoding="utf-8")
     print(f"✅ 已添加 {DOTENV_DEP_SPEC} 到 pyproject.toml dependencies")
     return True
@@ -111,8 +110,8 @@ def check_env_example() -> list[dict]:
     # 检查必需变量是否存在且未被注释
     for var, default_value in REQUIRED_ENV_VARS.items():
         # 查找非注释行中的变量
-        uncommented = re.search(rf'^{var}=', content, re.MULTILINE)
-        commented = re.search(rf'^#\s*{var}=', content, re.MULTILINE)
+        uncommented = re.search(rf"^{var}=", content, re.MULTILINE)
+        commented = re.search(rf"^#\s*{var}=", content, re.MULTILINE)
 
         if not uncommented and not commented:
             issues.append({"type": "missing", "var": var, "detail": f"❌ {var} 缺失"})
@@ -121,8 +120,8 @@ def check_env_example() -> list[dict]:
 
     # 检查推荐变量是否存在（注释或未注释均可）
     for var, default_value in RECOMMENDED_ENV_VARS.items():
-        uncommented = re.search(rf'^{var}=', content, re.MULTILINE)
-        commented = re.search(rf'^#\s*{var}=', content, re.MULTILINE)
+        uncommented = re.search(rf"^{var}=", content, re.MULTILINE)
+        commented = re.search(rf"^#\s*{var}=", content, re.MULTILINE)
         if not uncommented and not commented:
             issues.append({"type": "missing_optional", "var": var, "detail": f"ℹ️ {var} 缺失（可选，建议添加）"})
         elif not uncommented and commented:
@@ -145,22 +144,24 @@ def fix_env_example() -> bool:
     # 1. 取消注释必需变量
     for var in REQUIRED_ENV_VARS:
         for i, line in enumerate(lines):
-            if re.match(rf'^#\s*{var}=', line):
+            if re.match(rf"^#\s*{var}=", line):
                 lines[i] = line.lstrip("# ").strip()
                 modified = True
                 print(f"✅ 已取消注释 {var}")
 
     # 2. 添加缺失的推荐变量（在 FTS 配置段中）
-    fts_section_found = False
     for i, line in enumerate(lines):
         if "# ── FTS 配置（可选，以下为默认值） ──" in line:
-            fts_section_found = True
             existing_vars = set()
             # 收集 FTS 配置段已有的变量名
             for j in range(i + 1, len(lines)):
-                if lines[j].startswith("# ──") or lines[j].startswith("\n") or (j < len(lines) - 1 and lines[j].strip() == ""):
+                if (
+                    lines[j].startswith("# ──")
+                    or lines[j].startswith("\n")
+                    or (j < len(lines) - 1 and lines[j].strip() == "")
+                ):
                     break
-                m = re.match(r'^([A-Z_]+)=', lines[j])
+                m = re.match(r"^([A-Z_]+)=", lines[j])
                 if m:
                     existing_vars.add(m.group(1))
 
@@ -201,9 +202,9 @@ def main() -> int:
         if not dep_ok:
             exit_code = 1
     else:
-        print(f"\n{'='*60}")
-        print(f"【检查项 1】python-dotenv 依赖")
-        print(f"{'='*60}")
+        print(f"\n{'=' * 60}")
+        print("【检查项 1】python-dotenv 依赖")
+        print(f"{'=' * 60}")
         print(f"  {dep_msg}")
 
     if not dep_ok and args.fix:
@@ -220,9 +221,9 @@ def main() -> int:
         if any(i["type"] in ("missing", "commented") for i in env_issues):
             exit_code = 1
     else:
-        print(f"\n{'='*60}")
-        print(f"【检查项 2】.env.example 完整性")
-        print(f"{'='*60}")
+        print(f"\n{'=' * 60}")
+        print("【检查项 2】.env.example 完整性")
+        print(f"{'=' * 60}")
         for issue in env_issues:
             print(f"  {issue['detail']}")
 
@@ -238,12 +239,12 @@ def main() -> int:
         return exit_code
 
     all_ok = dep_ok and all(i["type"] == "ok" for i in env_issues)
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     if all_ok:
         print("🎉 环境变量管理全部通过检查")
     else:
         print("⚠️ 存在未修复的问题，请使用 --fix 参数自动修复或手动处理")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     return 0 if all_ok else 1
 

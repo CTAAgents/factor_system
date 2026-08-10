@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -82,17 +81,13 @@ class TestRegimeSmoother:
     def test_same_regime_returns_new_weights(self):
         smoother = RegimeSmoother(alpha=0.3, min_days=0)
         # min_days=0 → 稳定期 → 直接返回新权重
-        out = smoother.should_apply(
-            "bull", {"a": 0.5, "b": 0.5}, {"a": 0.8, "b": 0.2}
-        )
+        out = smoother.should_apply("bull", {"a": 0.5, "b": 0.5}, {"a": 0.8, "b": 0.2})
         assert out["a"] == pytest.approx(0.8)
 
     def test_regime_change_smooths_weights(self):
         smoother = RegimeSmoother(alpha=0.5, min_days=30)
         # 首次检测 Regime → 过渡期 → 平滑
-        out = smoother.should_apply(
-            "bear", {"a": 0.5, "b": 0.5}, {"a": 0.2, "b": 0.8}
-        )
+        out = smoother.should_apply("bear", {"a": 0.5, "b": 0.5}, {"a": 0.2, "b": 0.8})
         total = sum(out.values())
         assert total == pytest.approx(1.0, abs=1e-6)
         # 平滑后 a 在 0.2 与 0.5 之间
@@ -106,13 +101,15 @@ def _make_ohlcv(n: int = 50, missing: float = 0.0) -> pd.DataFrame:
     rng = np.random.default_rng(42)
     dates = pd.date_range("2026-01-01", periods=n, freq="D")
     close = 100 + np.cumsum(rng.normal(0, 0.5, n))
-    df = pd.DataFrame({
-        "symbol": ["RB"] * n,
-        "timestamp": dates,
-        "open": close * 0.99,
-        "close": close,
-        "volume": rng.integers(1000, 5000, n),
-    })
+    df = pd.DataFrame(
+        {
+            "symbol": ["RB"] * n,
+            "timestamp": dates,
+            "open": close * 0.99,
+            "close": close,
+            "volume": rng.integers(1000, 5000, n),
+        }
+    )
     if missing > 0:
         mask = rng.random(n) < missing
         df.loc[mask, "close"] = np.nan

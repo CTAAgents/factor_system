@@ -15,8 +15,7 @@ import pytest
 class _StubSource:
     """用于测试抽象基类的最小具体子类，行为可由 fixture 控制。"""
 
-    def __init__(self, *, ohlcv_result=None, quote_result=None, available=True,
-                 raise_on_fetch=None):
+    def __init__(self, *, ohlcv_result=None, quote_result=None, available=True, raise_on_fetch=None):
         self.source_name = "STUB"
         self._ohlcv_result = ohlcv_result
         self._quote_result = quote_result
@@ -41,6 +40,7 @@ class _StubSource:
 def test_source_unavailable_is_exception():
     """SourceUnavailable 继承自 Exception，可被 except Exception 捕获。"""
     from fts.data_sources.base import SourceUnavailable
+
     err = SourceUnavailable("TQ_LOCAL", "7721 端口不可达")
     assert isinstance(err, Exception)
     assert err.source == "TQ_LOCAL"
@@ -50,6 +50,7 @@ def test_source_unavailable_is_exception():
 def test_source_unavailable_message_format():
     """异常消息含源名 + 原因，便于日志排查。"""
     from fts.data_sources.base import SourceUnavailable
+
     err = SourceUnavailable("AKSHARE", "rate limit")
     msg = str(err)
     assert "AKSHARE" in msg
@@ -62,6 +63,7 @@ def test_source_unavailable_message_format():
 def test_base_futures_source_is_abstract():
     """BaseFuturesSource 不可直接实例化（含抽象方法）。"""
     from fts.data_sources.base import BaseFuturesSource
+
     with pytest.raises(TypeError):
         BaseFuturesSource()  # type: ignore[abstract]
 
@@ -187,6 +189,7 @@ def _valid_row() -> dict:
 def test_validate_ohlcv_row_valid():
     """合法 8 必填字段通过校验。"""
     from fts.data_sources.base import BaseFuturesSource
+
     ok, err = BaseFuturesSource.validate_ohlcv_row(_valid_row())
     assert ok is True
     assert err == ""
@@ -195,6 +198,7 @@ def test_validate_ohlcv_row_valid():
 def test_validate_ohlcv_row_negative_price_rejected():
     """open/high/low/close 任一 <= 0 即校验失败。"""
     from fts.data_sources.base import BaseFuturesSource
+
     for bad_field in ("open", "high", "low", "close"):
         row = _valid_row()
         row[bad_field] = -1.0
@@ -206,6 +210,7 @@ def test_validate_ohlcv_row_negative_price_rejected():
 def test_validate_ohlcv_row_negative_volume_rejected():
     """volume < 0 校验失败。"""
     from fts.data_sources.base import BaseFuturesSource
+
     row = _valid_row()
     row["volume"] = -100.0
     ok, err = BaseFuturesSource.validate_ohlcv_row(row)
@@ -216,6 +221,7 @@ def test_validate_ohlcv_row_negative_volume_rejected():
 def test_validate_ohlcv_row_invalid_date_rejected():
     """日期非 YYYY-MM-DD 格式即校验失败。"""
     from fts.data_sources.base import BaseFuturesSource
+
     row = _valid_row()
     row["date"] = "2026/08/04"  # 用了 /
     ok, err = BaseFuturesSource.validate_ohlcv_row(row)
@@ -226,6 +232,7 @@ def test_validate_ohlcv_row_invalid_date_rejected():
 def test_validate_ohlcv_row_missing_required_rejected():
     """缺必填字段（symbol/date/ohlc/volume）即校验失败。"""
     from fts.data_sources.base import BaseFuturesSource
+
     for missing in ("symbol", "date", "open", "high", "low", "close", "volume"):
         row = _valid_row()
         del row[missing]
@@ -237,6 +244,7 @@ def test_validate_ohlcv_row_missing_required_rejected():
 def test_validate_ohlcv_row_accepts_optional_missing():
     """可选字段（amount/hold/settle/oi_change/vwap/source/fetched_at）允许缺失。"""
     from fts.data_sources.base import BaseFuturesSource
+
     row = _valid_row()  # 只含必填
     ok, err = BaseFuturesSource.validate_ohlcv_row(row)
     assert ok is True

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -50,7 +51,6 @@ def _repair_numpy_no_value() -> None:
 
     try:
         import numpy._core._methods as _m
-        import numpy._core.umath as _um
     except Exception:
         return
 
@@ -58,6 +58,7 @@ def _repair_numpy_no_value() -> None:
     try:
         import numpy._globals as _gl
         import numpy._core._multiarray_umath as _mu
+
         c_no_value = getattr(_mu, "_NoValue", None)
         if c_no_value is not None and _gl._NoValue is not c_no_value:
             _gl._NoValue = c_no_value
@@ -76,17 +77,23 @@ def _repair_numpy_no_value() -> None:
         pass
 
     _REDUCE_FUNCS = (
-        "_sum", "_prod", "_amax", "_amin",
-        "_nanmax", "_nanmin", "_nansum", "_nanprod",
+        "_sum",
+        "_prod",
+        "_amax",
+        "_amin",
+        "_nanmax",
+        "_nanmin",
+        "_nansum",
+        "_nanprod",
     )
 
     def _make_safe(orig):
-        def _safe(a, axis=None, dtype=None, out=None, keepdims=False,
-                  initial=None, where=True):
+        def _safe(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True):
             if type(initial).__name__ == "_NoValueType" and where is True:
                 # 未显式指定 initial → 不传 initial/where，走 C 端默认 sentinel
                 return orig(a, axis, dtype, out, keepdims)
             return orig(a, axis, dtype, out, keepdims, initial, where)
+
         return _safe
 
     for _name in _REDUCE_FUNCS:
@@ -113,9 +120,8 @@ from fts.factor_engine.contracts import (
     DEFAULT_L3_VERIFIER_CONFIG,
     AgentOptimizationProposal,
     DriftMetrics,
+    DriftAlertConfig,
     FactorCorrelation,
-    L3MetaLoopState,
-    L3VerifierConfig,
     PortfolioCombo,
     PortfolioSignal,
     StickyConfig,
@@ -147,6 +153,7 @@ _PL_MOD.np = np
 
 # ─── 共享 fixtures ────────────────────────────────────────
 
+
 @pytest.fixture(autouse=True)
 def _repair_numpy_sentinel():
     """pytest-cov 会触发 numpy reload（Python 层与 C 扩展 sentinel 分裂），
@@ -175,19 +182,37 @@ def sample_signals() -> list[PortfolioSignal]:
     """3 个样本信号供组合构建测试。"""
     return [
         PortfolioSignal(
-            factor_id="fct_001", name="momentum", weight=0.5,
-            sharpe=2.5, ic=0.05, turnover=0.3, decay_6m=0.1,
-            orthogonalized=False, retained=True,
+            factor_id="fct_001",
+            name="momentum",
+            weight=0.5,
+            sharpe=2.5,
+            ic=0.05,
+            turnover=0.3,
+            decay_6m=0.1,
+            orthogonalized=False,
+            retained=True,
         ),
         PortfolioSignal(
-            factor_id="fct_002", name="reversion", weight=0.3,
-            sharpe=2.0, ic=0.04, turnover=0.4, decay_6m=0.2,
-            orthogonalized=False, retained=True,
+            factor_id="fct_002",
+            name="reversion",
+            weight=0.3,
+            sharpe=2.0,
+            ic=0.04,
+            turnover=0.4,
+            decay_6m=0.2,
+            orthogonalized=False,
+            retained=True,
         ),
         PortfolioSignal(
-            factor_id="fct_003", name="volatility", weight=0.2,
-            sharpe=1.8, ic=0.03, turnover=0.2, decay_6m=0.15,
-            orthogonalized=False, retained=True,
+            factor_id="fct_003",
+            name="volatility",
+            weight=0.2,
+            sharpe=1.8,
+            ic=0.03,
+            turnover=0.2,
+            decay_6m=0.15,
+            orthogonalized=False,
+            retained=True,
         ),
     ]
 
@@ -206,19 +231,31 @@ def sample_factors() -> list[dict]:
 # 1. L3Verifier 测试
 # ════════════════════════════════════════════════════════════
 
+
 class TestL3Verifier:
     """L3 Verifier — 5 维度判定 + 锁定机制。"""
 
-    def make_combo(self, sharpe: float = 2.5, corr: float = 0.2,
-                   turnover: float = 0.3, signals: list | None = None,
-                   n_factors: int = 3) -> PortfolioCombo:
+    def make_combo(
+        self,
+        sharpe: float = 2.5,
+        corr: float = 0.2,
+        turnover: float = 0.3,
+        signals: list | None = None,
+        n_factors: int = 3,
+    ) -> PortfolioCombo:
         """快速构建组合 fixture。"""
         if signals is None:
             signals = [
                 PortfolioSignal(
-                    factor_id=f"fct_{i}", name=f"f{i}", weight=1.0/n_factors,
-                    sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.1,
-                    orthogonalized=True, retained=True,
+                    factor_id=f"fct_{i}",
+                    name=f"f{i}",
+                    weight=1.0 / n_factors,
+                    sharpe=2.0,
+                    ic=0.04,
+                    turnover=0.3,
+                    decay_6m=0.1,
+                    orthogonalized=True,
+                    retained=True,
                 )
                 for i in range(n_factors)
             ]
@@ -294,6 +331,7 @@ class TestL3Verifier:
 # 2. PortfolioStateManager 测试
 # ════════════════════════════════════════════════════════════
 
+
 class TestPortfolioStateManager:
     """L3 状态管理器 — 持久化 + backup 恢复。"""
 
@@ -357,6 +395,7 @@ class TestPortfolioStateManager:
 # 3. PortfolioManager 测试
 # ════════════════════════════════════════════════════════════
 
+
 class TestPortfolioManager:
     """组合文件管理器 — current_combo.json + agent_proposals。"""
 
@@ -419,18 +458,30 @@ class TestPortfolioManager:
         pm = PortfolioManager(tmp_portfolio_dir)
         # 保存一个 draft
         draft = AgentOptimizationProposal(
-            proposal_id="prop_draft", trace_id="t", agent_name="闫判官",
-            created_at="2026-07-18T00:00:00", current_prompt_summary="p",
-            suggested_changes="c", debate_round_ref=None, rationale="r",
-            priority="medium", status="draft",
+            proposal_id="prop_draft",
+            trace_id="t",
+            agent_name="闫判官",
+            created_at="2026-07-18T00:00:00",
+            current_prompt_summary="p",
+            suggested_changes="c",
+            debate_round_ref=None,
+            rationale="r",
+            priority="medium",
+            status="draft",
         )
         pm.save_proposal(draft)
         # 保存一个已应用的
         applied = AgentOptimizationProposal(
-            proposal_id="prop_applied", trace_id="t", agent_name="闫判官",
-            created_at="2026-07-18T00:00:00", current_prompt_summary="p",
-            suggested_changes="c", debate_round_ref=None, rationale="r",
-            priority="medium", status="applied",
+            proposal_id="prop_applied",
+            trace_id="t",
+            agent_name="闫判官",
+            created_at="2026-07-18T00:00:00",
+            current_prompt_summary="p",
+            suggested_changes="c",
+            debate_round_ref=None,
+            rationale="r",
+            priority="medium",
+            status="applied",
         )
         pm.save_proposal(applied)
 
@@ -442,6 +493,7 @@ class TestPortfolioManager:
 # ════════════════════════════════════════════════════════════
 # 4. SynthesizeSignals 测试
 # ════════════════════════════════════════════════════════════
+
 
 class TestSynthesizeSignals:
     """信号合成 — 等权/夏普加权/lightgbm 回退。"""
@@ -498,6 +550,7 @@ class TestSynthesizeSignals:
 # 5. Orthogonalize 测试
 # ════════════════════════════════════════════════════════════
 
+
 class TestOrthogonalize:
     """因子正交化 — 高相关性剔除。"""
 
@@ -505,19 +558,37 @@ class TestOrthogonalize:
         """3 个信号，夏普依次递减。"""
         return [
             PortfolioSignal(
-                factor_id="fct_high", name="high_sharpe", weight=0.4,
-                sharpe=3.0, ic=0.06, turnover=0.2, decay_6m=0.1,
-                orthogonalized=False, retained=True,
+                factor_id="fct_high",
+                name="high_sharpe",
+                weight=0.4,
+                sharpe=3.0,
+                ic=0.06,
+                turnover=0.2,
+                decay_6m=0.1,
+                orthogonalized=False,
+                retained=True,
             ),
             PortfolioSignal(
-                factor_id="fct_mid", name="mid_sharpe", weight=0.3,
-                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.15,
-                orthogonalized=False, retained=True,
+                factor_id="fct_mid",
+                name="mid_sharpe",
+                weight=0.3,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.15,
+                orthogonalized=False,
+                retained=True,
             ),
             PortfolioSignal(
-                factor_id="fct_low", name="low_sharpe", weight=0.3,
-                sharpe=1.5, ic=0.03, turnover=0.4, decay_6m=0.2,
-                orthogonalized=False, retained=True,
+                factor_id="fct_low",
+                name="low_sharpe",
+                weight=0.3,
+                sharpe=1.5,
+                ic=0.03,
+                turnover=0.4,
+                decay_6m=0.2,
+                orthogonalized=False,
+                retained=True,
             ),
         ]
 
@@ -533,8 +604,10 @@ class TestOrthogonalize:
         signals = self.make_signals()
         matrix = [
             FactorCorrelation(
-                factor_id_a="fct_high", factor_id_b="fct_low",
-                pearson=0.85, spearman=0.80,
+                factor_id_a="fct_high",
+                factor_id_b="fct_low",
+                pearson=0.85,
+                spearman=0.80,
             ),
         ]
         result = orthogonalize_factors(signals, correlation_matrix=matrix, max_corr_threshold=0.7)
@@ -556,6 +629,7 @@ class TestOrthogonalize:
 # 6. DecayTest 测试
 # ════════════════════════════════════════════════════════════
 
+
 class TestDecayTest:
     """衰减检验 — 6 个月滚动衰减率检查。"""
 
@@ -563,9 +637,15 @@ class TestDecayTest:
         """衰减 > 0.3 的因子 retained=False。"""
         signals = [
             PortfolioSignal(
-                factor_id="fct_d1", name="decayed", weight=0.5,
-                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.5,
-                orthogonalized=True, retained=True,
+                factor_id="fct_d1",
+                name="decayed",
+                weight=0.5,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.5,
+                orthogonalized=True,
+                retained=True,
             ),
         ]
         result = decay_test(signals, max_decay_rate=0.30)
@@ -575,9 +655,15 @@ class TestDecayTest:
         """衰减 <= 0.3 的因子 retained=True。"""
         signals = [
             PortfolioSignal(
-                factor_id="fct_d2", name="stable", weight=0.5,
-                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.2,
-                orthogonalized=True, retained=True,
+                factor_id="fct_d2",
+                name="stable",
+                weight=0.5,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.2,
+                orthogonalized=True,
+                retained=True,
             ),
         ]
         result = decay_test(signals, max_decay_rate=0.30)
@@ -587,6 +673,7 @@ class TestDecayTest:
 # ════════════════════════════════════════════════════════════
 # 7. BuildCombo 测试
 # ════════════════════════════════════════════════════════════
+
 
 class TestBuildCombo:
     """组合构建 — 权重归一化 + 组合指标。"""
@@ -603,14 +690,26 @@ class TestBuildCombo:
         """权重归一化到 1。"""
         signals = [
             PortfolioSignal(
-                factor_id="f_a", name="a", weight=5.0,
-                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.1,
-                orthogonalized=True, retained=True,
+                factor_id="f_a",
+                name="a",
+                weight=5.0,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
             ),
             PortfolioSignal(
-                factor_id="f_b", name="b", weight=5.0,
-                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.1,
-                orthogonalized=True, retained=True,
+                factor_id="f_b",
+                name="b",
+                weight=5.0,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
             ),
         ]
         combo = build_combo(signals, mode="equal_weight")
@@ -622,14 +721,26 @@ class TestBuildCombo:
         # 高度集中的权重：一个因子占 90%，另一个占 10%
         signals = [
             PortfolioSignal(
-                factor_id="f_a", name="a", weight=0.9,
-                sharpe=3.0, ic=0.06, turnover=0.3, decay_6m=0.1,
-                orthogonalized=True, retained=True,
+                factor_id="f_a",
+                name="a",
+                weight=0.9,
+                sharpe=3.0,
+                ic=0.06,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
             ),
             PortfolioSignal(
-                factor_id="f_b", name="b", weight=0.1,
-                sharpe=1.0, ic=0.02, turnover=0.3, decay_6m=0.1,
-                orthogonalized=True, retained=True,
+                factor_id="f_b",
+                name="b",
+                weight=0.1,
+                sharpe=1.0,
+                ic=0.02,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
             ),
         ]
         combo = build_combo(signals, mode="sharpe_weight")
@@ -654,13 +765,17 @@ class TestBuildCombo:
         """传入因子收益矩阵 → 组合夏普/相关性由 w×R 实测（metrics_source=measured）。"""
         rng = np.random.default_rng(11)
         n = 60
-        fr = pd.DataFrame({
-            "fct_001": rng.normal(0.001, 0.01, size=n),
-            "fct_002": rng.normal(0.0005, 0.01, size=n),
-            "fct_003": rng.normal(0.0002, 0.01, size=n),
-        })
+        fr = pd.DataFrame(
+            {
+                "fct_001": rng.normal(0.001, 0.01, size=n),
+                "fct_002": rng.normal(0.0005, 0.01, size=n),
+                "fct_003": rng.normal(0.0002, 0.01, size=n),
+            }
+        )
         combo = build_combo(
-            sample_signals, mode="equal_weight", factor_returns=fr,
+            sample_signals,
+            mode="equal_weight",
+            factor_returns=fr,
         )
         assert combo["metrics_source"] == "measured"
         # 实测夏普 = mean/std × sqrt(252)，与手动计算一致
@@ -677,13 +792,17 @@ class TestBuildCombo:
     def test_estimated_fallback_insufficient_dates(self, sample_signals):
         """因子收益矩阵样本不足（<20 行）→ 回退估算。"""
         rng = np.random.default_rng(12)
-        fr = pd.DataFrame({
-            "fct_001": rng.normal(size=10),
-            "fct_002": rng.normal(size=10),
-            "fct_003": rng.normal(size=10),
-        })
+        fr = pd.DataFrame(
+            {
+                "fct_001": rng.normal(size=10),
+                "fct_002": rng.normal(size=10),
+                "fct_003": rng.normal(size=10),
+            }
+        )
         combo = build_combo(
-            sample_signals, mode="equal_weight", factor_returns=fr,
+            sample_signals,
+            mode="equal_weight",
+            factor_returns=fr,
         )
         assert combo["metrics_source"] == "estimated"
 
@@ -692,13 +811,17 @@ class TestBuildCombo:
         rng = np.random.default_rng(13)
         n = 60
         x = rng.normal(size=n)
-        fr = pd.DataFrame({
-            "fct_001": x,
-            "fct_002": x + 0.01 * rng.normal(size=n),  # 高相关
-            "fct_003": rng.normal(size=n),
-        })
+        fr = pd.DataFrame(
+            {
+                "fct_001": x,
+                "fct_002": x + 0.01 * rng.normal(size=n),  # 高相关
+                "fct_003": rng.normal(size=n),
+            }
+        )
         combo = build_combo(
-            sample_signals, mode="equal_weight", factor_returns=fr,
+            sample_signals,
+            mode="equal_weight",
+            factor_returns=fr,
         )
         assert combo["metrics_source"] == "measured"
         assert combo["max_correlation"] > 0.9
@@ -708,7 +831,8 @@ class TestBuildCombo:
     def test_net_sharpe_with_cost_config(self, sample_signals):
         """传入 cost_config → net_combo_sharpe < combo_sharpe。"""
         combo = build_combo(
-            sample_signals, mode="equal_weight",
+            sample_signals,
+            mode="equal_weight",
             cost_config={"market": "futures", "slippage_bps": 0.5},
         )
         assert combo["net_combo_sharpe"] is not None
@@ -722,10 +846,15 @@ class TestBuildCombo:
     def test_net_sharpe_calculation_math(self, sample_signals):
         """net 夏普 = gross − (turnover×(slippage+commission+impact)/10000×12/0.15)。"""
         combo = build_combo(
-            sample_signals, mode="equal_weight",
-            cost_config={"market": "futures", "slippage_bps": 0.5,
-                         "commission_bps": 0.2, "impact_bps_per_pct": 1.0,
-                         "min_cost_bps": 0.5},
+            sample_signals,
+            mode="equal_weight",
+            cost_config={
+                "market": "futures",
+                "slippage_bps": 0.5,
+                "commission_bps": 0.2,
+                "impact_bps_per_pct": 1.0,
+                "min_cost_bps": 0.5,
+            },
         )
         turnover = combo["combo_turnover"]
         raw = turnover * (0.5 + 0.2 + 1.0)
@@ -735,14 +864,14 @@ class TestBuildCombo:
 
     def test_empty_combo_net_none(self):
         """空组合 net_combo_sharpe 为 None。"""
-        combo = build_combo([], mode="equal_weight",
-                            cost_config={"market": "futures"})
+        combo = build_combo([], mode="equal_weight", cost_config={"market": "futures"})
         assert combo["net_combo_sharpe"] is None
 
 
 # ════════════════════════════════════════════════════════════
 # 8. LoadEliteFactors 测试
 # ════════════════════════════════════════════════════════════
+
 
 class TestLoadEliteFactors:
     """精英因子读取 — 从 elite 目录加载 JSON 文件。"""
@@ -755,34 +884,44 @@ class TestLoadEliteFactors:
     def test_load_from_files(self, tmp_elite_dir):
         """从 JSON 文件加载因子。"""
         f1 = tmp_elite_dir / "factor_alpha.json"
-        f1.write_text(json.dumps({
-            "factor_id": "fct_alpha",
-            "name": "alpha_001",
-            "code": "alpha_code_v1",
-            "evaluation": {
-                "level_1_backtest": {
-                    "sharpe": 2.5,
-                    "ic": 0.05,
-                    "turnover_monthly": 0.3,
+        f1.write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_alpha",
+                    "name": "alpha_001",
+                    "code": "alpha_code_v1",
+                    "evaluation": {
+                        "level_1_backtest": {
+                            "sharpe": 2.5,
+                            "ic": 0.05,
+                            "turnover_monthly": 0.3,
+                        }
+                    },
+                    "decay_6m": 0.1,
                 }
-            },
-            "decay_6m": 0.1,
-        }), encoding="utf-8")
+            ),
+            encoding="utf-8",
+        )
 
         f2 = tmp_elite_dir / "factor_beta.json"
-        f2.write_text(json.dumps({
-            "factor_id": "fct_beta",
-            "name": "beta_002",
-            "code": "beta_code_v1",
-            "evaluation": {
-                "level_1_backtest": {
-                    "sharpe": 1.8,
-                    "ic": 0.04,
-                    "turnover_monthly": 0.4,
+        f2.write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_beta",
+                    "name": "beta_002",
+                    "code": "beta_code_v1",
+                    "evaluation": {
+                        "level_1_backtest": {
+                            "sharpe": 1.8,
+                            "ic": 0.04,
+                            "turnover_monthly": 0.4,
+                        }
+                    },
+                    "decay_6m": 0.2,
                 }
-            },
-            "decay_6m": 0.2,
-        }), encoding="utf-8")
+            ),
+            encoding="utf-8",
+        )
 
         factors = load_elite_factors(tmp_elite_dir, use_duckdb=False)
         assert len(factors) == 2
@@ -793,6 +932,7 @@ class TestLoadEliteFactors:
 # ════════════════════════════════════════════════════════════
 # 9. PortfolioLoop 测试
 # ════════════════════════════════════════════════════════════
+
 
 class TestPortfolioLoop:
     """L3 Portfolio Loop 主循环。"""
@@ -814,14 +954,19 @@ class TestPortfolioLoop:
         """使用 mock elite 因子运行。"""
         # 写入一个 mock elite 因子
         factor_file = tmp_elite_dir / "factor_test.json"
-        factor_file.write_text(json.dumps({
-            "factor_id": "fct_mock",
-            "name": "mock_momentum",
-            "sharpe": 2.5,
-            "ic": 0.05,
-            "turnover": 0.3,
-            "decay_6m": 0.1,
-        }), encoding="utf-8")
+        factor_file.write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_mock",
+                    "name": "mock_momentum",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
 
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
@@ -837,10 +982,19 @@ class TestPortfolioLoop:
     def test_run_result_fields(self, tmp_portfolio_dir, tmp_elite_dir):
         """验证 PortfolioRunResult 字段完整性。"""
         factor_file = tmp_elite_dir / "factor_test.json"
-        factor_file.write_text(json.dumps({
-            "factor_id": "fct_mock", "name": "mock_momentum",
-            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-        }), encoding="utf-8")
+        factor_file.write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_mock",
+                    "name": "mock_momentum",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
 
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
@@ -880,10 +1034,19 @@ class TestPortfolioLoop:
     def test_enable_clustering_no_crash(self, tmp_portfolio_dir, tmp_elite_dir):
         """P1 因子聚类开启时 L3 不崩溃（引擎懒加载，无面板数据时聚类跳过）。"""
         factor_file = tmp_elite_dir / "factor_test.json"
-        factor_file.write_text(json.dumps({
-            "factor_id": "fct_mock", "name": "mock_momentum",
-            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-        }), encoding="utf-8")
+        factor_file.write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_mock",
+                    "name": "mock_momentum",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
 
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
@@ -901,10 +1064,19 @@ class TestPortfolioLoop:
     def test_enable_pca_no_crash(self, tmp_portfolio_dir, tmp_elite_dir):
         """P2 PCA 降维开启时 L3 不崩溃（引擎懒加载，无面板数据时 PCA 跳过）。"""
         factor_file = tmp_elite_dir / "factor_test.json"
-        factor_file.write_text(json.dumps({
-            "factor_id": "fct_mock", "name": "mock_momentum",
-            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-        }), encoding="utf-8")
+        factor_file.write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_mock",
+                    "name": "mock_momentum",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
 
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
@@ -920,10 +1092,19 @@ class TestPortfolioLoop:
     def test_enable_both_no_crash(self, tmp_portfolio_dir, tmp_elite_dir):
         """P1 + P2 同时开启时 L3 不崩溃。"""
         factor_file = tmp_elite_dir / "factor_test.json"
-        factor_file.write_text(json.dumps({
-            "factor_id": "fct_mock", "name": "mock_momentum",
-            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-        }), encoding="utf-8")
+        factor_file.write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_mock",
+                    "name": "mock_momentum",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
 
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
@@ -942,25 +1123,37 @@ class TestPortfolioLoop:
         """写入 3 个 mock elite 因子 JSON，返回 factor_id 列表。"""
         ids = ["fct_opt1", "fct_opt2", "fct_opt3"]
         for i, fid in enumerate(ids):
-            (tmp_elite_dir / f"factor_{i}.json").write_text(json.dumps({
-                "factor_id": fid, "name": f"mock_{fid}",
-                "sharpe": 2.0 + 0.1 * i, "ic": 0.04 + 0.01 * i,
-                "turnover": 0.3, "decay_6m": 0.1,
-            }), encoding="utf-8")
+            (tmp_elite_dir / f"factor_{i}.json").write_text(
+                json.dumps(
+                    {
+                        "factor_id": fid,
+                        "name": f"mock_{fid}",
+                        "sharpe": 2.0 + 0.1 * i,
+                        "ic": 0.04 + 0.01 * i,
+                        "turnover": 0.3,
+                        "decay_6m": 0.1,
+                    }
+                ),
+                encoding="utf-8",
+            )
         return ids
 
     def test_run_optimizer_mode_end_to_end(
-        self, tmp_portfolio_dir, tmp_elite_dir,
+        self,
+        tmp_portfolio_dir,
+        tmp_elite_dir,
     ):
         """optimizer 模式端到端：factor_returns 透传 → 组合实测指标 + 正常完成。"""
         ids = self._write_mock_elites(tmp_elite_dir)
         rng = np.random.default_rng(21)
         n = 60
-        fr = pd.DataFrame({
-            ids[0]: rng.normal(0.001, 0.01, size=n),
-            ids[1]: rng.normal(0.0005, 0.01, size=n),
-            ids[2]: rng.normal(0.0002, 0.01, size=n),
-        })
+        fr = pd.DataFrame(
+            {
+                ids[0]: rng.normal(0.001, 0.01, size=n),
+                ids[1]: rng.normal(0.0005, 0.01, size=n),
+                ids[2]: rng.normal(0.0002, 0.01, size=n),
+            }
+        )
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
             elite_dir=tmp_elite_dir,
@@ -976,17 +1169,21 @@ class TestPortfolioLoop:
         assert combo.get("metrics_source") == "measured"
 
     def test_run_optimizer_with_exposure(
-        self, tmp_portfolio_dir, tmp_elite_dir,
+        self,
+        tmp_portfolio_dir,
+        tmp_elite_dir,
     ):
         """optimizer + 暴露矩阵（GAP-L304）：组合正常完成。"""
         ids = self._write_mock_elites(tmp_elite_dir)
         rng = np.random.default_rng(22)
         n = 60
-        fr = pd.DataFrame({
-            ids[0]: rng.normal(size=n),
-            ids[1]: rng.normal(size=n),
-            ids[2]: rng.normal(size=n),
-        })
+        fr = pd.DataFrame(
+            {
+                ids[0]: rng.normal(size=n),
+                ids[1]: rng.normal(size=n),
+                ids[2]: rng.normal(size=n),
+            }
+        )
         # 暴露矩阵: 3 因子 × 2 维度
         exposure = np.array([[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]])
         loop = PortfolioLoop(
@@ -1004,10 +1201,12 @@ class TestPortfolioLoop:
     # ── GAP-L305 net 指标 ─────────────────────────────
 
     def test_run_with_cost_config(
-        self, tmp_portfolio_dir, tmp_elite_dir,
+        self,
+        tmp_portfolio_dir,
+        tmp_elite_dir,
     ):
         """cost_config 传入 → 组合带 net_combo_sharpe。"""
-        ids = self._write_mock_elites(tmp_elite_dir)
+        self._write_mock_elites(tmp_elite_dir)
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
             elite_dir=tmp_elite_dir,
@@ -1023,17 +1222,21 @@ class TestPortfolioLoop:
     # ── GAP-L307 归因报告 ─────────────────────────────
 
     def test_attribution_report_generated(
-        self, tmp_portfolio_dir, tmp_elite_dir,
+        self,
+        tmp_portfolio_dir,
+        tmp_elite_dir,
     ):
         """factor_returns 传入 + 组合有效 → 生成归因报告文件。"""
         ids = self._write_mock_elites(tmp_elite_dir)
         rng = np.random.default_rng(23)
         n = 60
-        fr = pd.DataFrame({
-            ids[0]: rng.normal(0.001, 0.01, size=n),
-            ids[1]: rng.normal(0.0005, 0.01, size=n),
-            ids[2]: rng.normal(0.0002, 0.01, size=n),
-        })
+        fr = pd.DataFrame(
+            {
+                ids[0]: rng.normal(0.001, 0.01, size=n),
+                ids[1]: rng.normal(0.0005, 0.01, size=n),
+                ids[2]: rng.normal(0.0002, 0.01, size=n),
+            }
+        )
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
             elite_dir=tmp_elite_dir,
@@ -1044,6 +1247,7 @@ class TestPortfolioLoop:
         assert result.status in ("passed", "verifier_warning", "completed")
         # 归因报告写入 reports/{date}/
         import datetime as _dt
+
         ts = _dt.date.today().isoformat()
         reports_dir = Path("reports") / ts
         assert reports_dir.exists()
@@ -1058,7 +1262,7 @@ class TestPortfolioLoop:
 
     def test_attribution_skipped_without_returns(self, tmp_portfolio_dir, tmp_elite_dir):
         """无 factor_returns → 不生成归因报告（不崩溃）。"""
-        ids = self._write_mock_elites(tmp_elite_dir)
+        self._write_mock_elites(tmp_elite_dir)
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
             elite_dir=tmp_elite_dir,
@@ -1071,17 +1275,21 @@ class TestPortfolioLoop:
     # ── GAP-L306 组合层走航 ─────────────────────────────
 
     def test_walk_forward_report_generated(
-        self, tmp_portfolio_dir, tmp_elite_dir,
+        self,
+        tmp_portfolio_dir,
+        tmp_elite_dir,
     ):
         """factor_returns 足够长 → 生成走航报告文件。"""
         ids = self._write_mock_elites(tmp_elite_dir)
         rng = np.random.default_rng(24)
         n = 400  # 走航需 ≥120 天
-        fr = pd.DataFrame({
-            ids[0]: rng.normal(0.001, 0.01, size=n),
-            ids[1]: rng.normal(0.0005, 0.01, size=n),
-            ids[2]: rng.normal(0.0002, 0.01, size=n),
-        })
+        fr = pd.DataFrame(
+            {
+                ids[0]: rng.normal(0.001, 0.01, size=n),
+                ids[1]: rng.normal(0.0005, 0.01, size=n),
+                ids[2]: rng.normal(0.0002, 0.01, size=n),
+            }
+        )
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
             elite_dir=tmp_elite_dir,
@@ -1091,6 +1299,7 @@ class TestPortfolioLoop:
         result = loop.run(factor_returns=fr)
         assert result.status in ("passed", "verifier_warning", "completed")
         import datetime as _dt
+
         ts = _dt.date.today().isoformat()
         reports_dir = Path("reports") / ts
         wf_files = list(reports_dir.glob("portfolio_wf_*.md"))
@@ -1105,11 +1314,13 @@ class TestPortfolioLoop:
         """因子收益矩阵过短（<120）→ 不生成走航报告（不崩溃）。"""
         ids = self._write_mock_elites(tmp_elite_dir)
         rng = np.random.default_rng(25)
-        fr = pd.DataFrame({
-            ids[0]: rng.normal(size=60),
-            ids[1]: rng.normal(size=60),
-            ids[2]: rng.normal(size=60),
-        })
+        fr = pd.DataFrame(
+            {
+                ids[0]: rng.normal(size=60),
+                ids[1]: rng.normal(size=60),
+                ids[2]: rng.normal(size=60),
+            }
+        )
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
             elite_dir=tmp_elite_dir,
@@ -1123,6 +1334,7 @@ class TestPortfolioLoop:
 # ════════════════════════════════════════════════════════════
 # 10. GenerateAgentProposals 测试
 # ════════════════════════════════════════════════════════════
+
 
 class TestGenerateAgentProposals:
     """Agent 优化建议生成。"""
@@ -1164,6 +1376,7 @@ class TestGenerateAgentProposals:
 
 # ─── 覆盖遗漏行 ───────────────────────────────────────────
 
+
 class TestCoverageGaps:
     """覆盖 portfolio_loop.py 遗漏行。"""
 
@@ -1174,17 +1387,30 @@ class TestCoverageGaps:
         v = L3Verifier(DEFAULT_L3_VERIFIER_CONFIG)
         signals = [
             PortfolioSignal(
-                factor_id="fct_d", name="decayed", weight=1.0,
-                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.5,
-                orthogonalized=True, retained=True,
+                factor_id="fct_d",
+                name="decayed",
+                weight=1.0,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.5,
+                orthogonalized=True,
+                retained=True,
             ),
         ]
         combo = PortfolioCombo(
-            version=EVOLUTION_VERSION, updated_at="now",
-            combo_id="cmb_test", trace_id="l3_test",
-            synthesis_mode="equal_weight", signals=signals,
-            combo_sharpe=2.5, combo_turnover=0.3, max_correlation=0.2,
-            n_factors=1, status="pending", created_at="now",
+            version=EVOLUTION_VERSION,
+            updated_at="now",
+            combo_id="cmb_test",
+            trace_id="l3_test",
+            synthesis_mode="equal_weight",
+            signals=signals,
+            combo_sharpe=2.5,
+            combo_turnover=0.3,
+            max_correlation=0.2,
+            n_factors=1,
+            status="pending",
+            created_at="now",
         )
         passed, reasons = v.check(combo)
         assert passed is False
@@ -1195,6 +1421,7 @@ class TestCoverageGaps:
     def test_state_manager_backup_oserror(self, tmp_portfolio_dir, monkeypatch):
         """lines 154-155: backup 备份失败应抛 L3Error。"""
         import shutil
+
         psm = PortfolioStateManager(tmp_portfolio_dir)
         state = psm.load_or_init()
 
@@ -1255,10 +1482,16 @@ class TestCoverageGaps:
         pm = PortfolioManager(tmp_portfolio_dir)
         # 写入一个正常 proposal
         good = AgentOptimizationProposal(
-            proposal_id="prop_good", trace_id="t", agent_name="闫判官",
-            created_at="now", current_prompt_summary="p",
-            suggested_changes="c", debate_round_ref=None, rationale="r",
-            priority="medium", status="draft",
+            proposal_id="prop_good",
+            trace_id="t",
+            agent_name="闫判官",
+            created_at="now",
+            current_prompt_summary="p",
+            suggested_changes="c",
+            debate_round_ref=None,
+            rationale="r",
+            priority="medium",
+            status="draft",
         )
         pm.save_proposal(good)
         # 写入一个损坏文件
@@ -1280,10 +1513,19 @@ class TestCoverageGaps:
         """lines 517-518: 损坏的 elite 文件应跳过。"""
         # 写入一个正常文件
         good = tmp_elite_dir / "good.json"
-        good.write_text(json.dumps({
-            "factor_id": "fct_good", "name": "good", "sharpe": 2.0,
-            "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-        }), encoding="utf-8")
+        good.write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_good",
+                    "name": "good",
+                    "sharpe": 2.0,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
         # 写入一个损坏文件
         bad = tmp_elite_dir / "bad.json"
         bad.write_text("not json", encoding="utf-8")
@@ -1298,6 +1540,7 @@ class TestCoverageGaps:
         """main() 不带参数应显示帮助。"""
         import sys
         from fts.factor_engine.portfolio_loop import main
+
         monkeypatch.setattr(sys, "argv", ["portfolio_loop.py"])
         with pytest.raises(SystemExit):
             main()
@@ -1305,26 +1548,42 @@ class TestCoverageGaps:
     def test_main_with_factors(self, monkeypatch, tmp_path):
         """main() 带 --once 和 elite 因子应运行。"""
         import sys
+
         # 创建 elite 因子
         elite_dir = tmp_path / "elite"
         elite_dir.mkdir(parents=True, exist_ok=True)
-        (elite_dir / "test.json").write_text(json.dumps({
-            "factor_id": "fct_main", "name": "main", "sharpe": 2.5,
-            "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-        }), encoding="utf-8")
+        (elite_dir / "test.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_main",
+                    "name": "main",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
         memory_dir = tmp_path / "portfolio"
         memory_dir.mkdir(parents=True, exist_ok=True)
 
         monkeypatch.setattr(
-            sys, "argv",
+            sys,
+            "argv",
             [
-                "portfolio_loop.py", "--once",
-                "--mode", "equal_weight",
-                "--memory-dir", str(memory_dir),
-                "--elite-dir", str(elite_dir),
+                "portfolio_loop.py",
+                "--once",
+                "--mode",
+                "equal_weight",
+                "--memory-dir",
+                str(memory_dir),
+                "--elite-dir",
+                str(elite_dir),
             ],
         )
         from fts.factor_engine.portfolio_loop import main
+
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 0
@@ -1332,25 +1591,40 @@ class TestCoverageGaps:
     def test_main_verifier_warning(self, monkeypatch, tmp_path):
         """main() verifier 未通过也正常退出。"""
         import sys
+
         elite_dir = tmp_path / "elite_warn"
         elite_dir.mkdir(parents=True, exist_ok=True)
         # 低 sharpe 因子触发 verifier warning
-        (elite_dir / "bad.json").write_text(json.dumps({
-            "factor_id": "fct_bad", "name": "bad", "sharpe": 1.0,
-            "ic": 0.01, "turnover": 0.8, "decay_6m": 0.5,
-        }), encoding="utf-8")
+        (elite_dir / "bad.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_bad",
+                    "name": "bad",
+                    "sharpe": 1.0,
+                    "ic": 0.01,
+                    "turnover": 0.8,
+                    "decay_6m": 0.5,
+                }
+            ),
+            encoding="utf-8",
+        )
         memory_dir = tmp_path / "portfolio_warn"
         memory_dir.mkdir(parents=True, exist_ok=True)
 
         monkeypatch.setattr(
-            sys, "argv",
+            sys,
+            "argv",
             [
-                "portfolio_loop.py", "--once",
-                "--memory-dir", str(memory_dir),
-                "--elite-dir", str(elite_dir),
+                "portfolio_loop.py",
+                "--once",
+                "--memory-dir",
+                str(memory_dir),
+                "--elite-dir",
+                str(elite_dir),
             ],
         )
         from fts.factor_engine.portfolio_loop import main
+
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 0
@@ -1368,23 +1642,27 @@ class TestCoverageGaps:
         memory_dir.mkdir(parents=True, exist_ok=True)
 
         monkeypatch.setattr(
-            sys, "argv",
+            sys,
+            "argv",
             [
-                "portfolio_loop.py", "--once",
-                "--memory-dir", str(memory_dir),
-                "--elite-dir", str(elite_dir),
+                "portfolio_loop.py",
+                "--once",
+                "--memory-dir",
+                str(memory_dir),
+                "--elite-dir",
+                str(elite_dir),
             ],
         )
         with patch.object(pl_mod, "__name__", "__main__"):
             with pytest.raises(SystemExit):
-                exec("from fts.factor_engine.portfolio_loop import main; main()",
-                     {"__name__": "__main__"})
+                exec("from fts.factor_engine.portfolio_loop import main; main()", {"__name__": "__main__"})
 
     # ── MIN_EVAL_DAYS 常量 ──
 
     def test_min_eval_days_constant(self):
         """MIN_EVAL_DAYS = 500（C 修复：扩展评价窗口）。"""
         from fts.factor_engine.portfolio_loop import MIN_EVAL_DAYS
+
         assert MIN_EVAL_DAYS == 500
 
 
@@ -1392,58 +1670,127 @@ class TestCoverageGaps:
 # 11. Sharpe 随机化测试 (E 修复)
 # ════════════════════════════════════════════════════════════
 
+
 class TestSharpeRandomization:
     """夏普随机化测试 — 基于 Dirichlet 权重验证高夏普是否来自真实预测能力。"""
 
     def test_low_sharpe_skips_test(self):
         """夏普 <= 2.5 时跳过随机化测试。"""
         from fts.factor_engine.portfolio_loop import _run_sharpe_randomization_test
+
         signals = [
-            PortfolioSignal(factor_id="f_a", name="a", weight=0.5, sharpe=2.0,
-                            ic=0.04, turnover=0.3, decay_6m=0.1,
-                            orthogonalized=True, retained=True),
-            PortfolioSignal(factor_id="f_b", name="b", weight=0.5, sharpe=1.5,
-                            ic=0.03, turnover=0.3, decay_6m=0.1,
-                            orthogonalized=True, retained=True),
+            PortfolioSignal(
+                factor_id="f_a",
+                name="a",
+                weight=0.5,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="f_b",
+                name="b",
+                weight=0.5,
+                sharpe=1.5,
+                ic=0.03,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
         ]
         assert _run_sharpe_randomization_test(signals, n_shuffle=10) is True
 
     def test_few_signals_skips_test(self):
         """因子数 < 3 时跳过随机化测试。"""
         from fts.factor_engine.portfolio_loop import _run_sharpe_randomization_test
+
         signals = [
-            PortfolioSignal(factor_id="f_a", name="a", weight=1.0, sharpe=3.0,
-                            ic=0.06, turnover=0.3, decay_6m=0.1,
-                            orthogonalized=True, retained=True),
+            PortfolioSignal(
+                factor_id="f_a",
+                name="a",
+                weight=1.0,
+                sharpe=3.0,
+                ic=0.06,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
         ]
         assert _run_sharpe_randomization_test(signals, n_shuffle=10) is True
 
     def test_zero_total_weight_skips(self):
         """总权重为 0 时跳过随机化测试。"""
         from fts.factor_engine.portfolio_loop import _run_sharpe_randomization_test
+
         signals = [
-            PortfolioSignal(factor_id="f_a", name="a", weight=0.0, sharpe=3.0,
-                            ic=0.06, turnover=0.3, decay_6m=0.1,
-                            orthogonalized=True, retained=True),
+            PortfolioSignal(
+                factor_id="f_a",
+                name="a",
+                weight=0.0,
+                sharpe=3.0,
+                ic=0.06,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
         ]
         assert _run_sharpe_randomization_test(signals, n_shuffle=10) is True
 
     def test_high_sharpe_with_retained_only(self):
         """只使用 retained=True 的信号计算随机化测试。"""
         from fts.factor_engine.portfolio_loop import _run_sharpe_randomization_test
+
         signals = [
-            PortfolioSignal(factor_id="f_a", name="a", weight=0.4, sharpe=3.5,
-                            ic=0.07, turnover=0.3, decay_6m=0.1,
-                            orthogonalized=True, retained=True),
-            PortfolioSignal(factor_id="f_b", name="b", weight=0.3, sharpe=3.0,
-                            ic=0.06, turnover=0.3, decay_6m=0.1,
-                            orthogonalized=True, retained=True),
-            PortfolioSignal(factor_id="f_c", name="c", weight=0.3, sharpe=2.8,
-                            ic=0.05, turnover=0.3, decay_6m=0.1,
-                            orthogonalized=True, retained=True),
-            PortfolioSignal(factor_id="f_d", name="d", weight=0.0, sharpe=0.5,
-                            ic=0.01, turnover=0.3, decay_6m=0.1,
-                            orthogonalized=True, retained=False),
+            PortfolioSignal(
+                factor_id="f_a",
+                name="a",
+                weight=0.4,
+                sharpe=3.5,
+                ic=0.07,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="f_b",
+                name="b",
+                weight=0.3,
+                sharpe=3.0,
+                ic=0.06,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="f_c",
+                name="c",
+                weight=0.3,
+                sharpe=2.8,
+                ic=0.05,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="f_d",
+                name="d",
+                weight=0.0,
+                sharpe=0.5,
+                ic=0.01,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=False,
+            ),
         ]
         # 不应报错，且返回 bool
         result = _run_sharpe_randomization_test(signals, n_shuffle=50)
@@ -1454,6 +1801,7 @@ class TestSharpeRandomization:
 # 12. Regime 自适应权重调整测试 (A.3)
 # ════════════════════════════════════════════════════════════
 
+
 class TestRegimeAdaptiveWeight:
     """A.3: Regime 自适应权重调整测试。"""
 
@@ -1461,28 +1809,88 @@ class TestRegimeAdaptiveWeight:
     def regime_fixtures(self):
         """构建带 family 字段的因子和对应 signals。"""
         factors = [
-            {"factor_id": "fct_trend", "name": "momentum_trend", "sharpe": 2.5,
-             "ic": 0.05, "turnover": 0.3, "decay_6m": 0.05, "family": "trend"},
-            {"factor_id": "fct_reversion", "name": "mean_reversion", "sharpe": 2.0,
-             "ic": 0.04, "turnover": 0.4, "decay_6m": 0.1, "family": "mean_reversion"},
-            {"factor_id": "fct_vol", "name": "volatility_screener", "sharpe": 1.8,
-             "ic": 0.03, "turnover": 0.2, "decay_6m": 0.08, "family": "volatility"},
-            {"factor_id": "fct_carry", "name": "carry_spread", "sharpe": 1.5,
-             "ic": 0.03, "turnover": 0.15, "decay_6m": 0.12, "family": "carry"},
+            {
+                "factor_id": "fct_trend",
+                "name": "momentum_trend",
+                "sharpe": 2.5,
+                "ic": 0.05,
+                "turnover": 0.3,
+                "decay_6m": 0.05,
+                "family": "trend",
+            },
+            {
+                "factor_id": "fct_reversion",
+                "name": "mean_reversion",
+                "sharpe": 2.0,
+                "ic": 0.04,
+                "turnover": 0.4,
+                "decay_6m": 0.1,
+                "family": "mean_reversion",
+            },
+            {
+                "factor_id": "fct_vol",
+                "name": "volatility_screener",
+                "sharpe": 1.8,
+                "ic": 0.03,
+                "turnover": 0.2,
+                "decay_6m": 0.08,
+                "family": "volatility",
+            },
+            {
+                "factor_id": "fct_carry",
+                "name": "carry_spread",
+                "sharpe": 1.5,
+                "ic": 0.03,
+                "turnover": 0.15,
+                "decay_6m": 0.12,
+                "family": "carry",
+            },
         ]
         signals = [
-            PortfolioSignal(factor_id="fct_trend", name="momentum_trend",
-                            weight=0.25, sharpe=2.5, ic=0.05, turnover=0.3,
-                            decay_6m=0.05, orthogonalized=False, retained=True),
-            PortfolioSignal(factor_id="fct_reversion", name="mean_reversion",
-                            weight=0.25, sharpe=2.0, ic=0.04, turnover=0.4,
-                            decay_6m=0.1, orthogonalized=False, retained=True),
-            PortfolioSignal(factor_id="fct_vol", name="volatility_screener",
-                            weight=0.25, sharpe=1.8, ic=0.03, turnover=0.2,
-                            decay_6m=0.08, orthogonalized=False, retained=True),
-            PortfolioSignal(factor_id="fct_carry", name="carry_spread",
-                            weight=0.25, sharpe=1.5, ic=0.03, turnover=0.15,
-                            decay_6m=0.12, orthogonalized=False, retained=True),
+            PortfolioSignal(
+                factor_id="fct_trend",
+                name="momentum_trend",
+                weight=0.25,
+                sharpe=2.5,
+                ic=0.05,
+                turnover=0.3,
+                decay_6m=0.05,
+                orthogonalized=False,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="fct_reversion",
+                name="mean_reversion",
+                weight=0.25,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.4,
+                decay_6m=0.1,
+                orthogonalized=False,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="fct_vol",
+                name="volatility_screener",
+                weight=0.25,
+                sharpe=1.8,
+                ic=0.03,
+                turnover=0.2,
+                decay_6m=0.08,
+                orthogonalized=False,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="fct_carry",
+                name="carry_spread",
+                weight=0.25,
+                sharpe=1.5,
+                ic=0.03,
+                turnover=0.15,
+                decay_6m=0.12,
+                orthogonalized=False,
+                retained=True,
+            ),
         ]
         return factors, signals
 
@@ -1553,13 +1961,28 @@ class TestRegimeAdaptiveWeight:
         from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
 
         factors = [
-            {"factor_id": "fct_decay", "name": "decaying_factor", "sharpe": 1.5,
-             "ic": 0.02, "turnover": 0.5, "decay_6m": 0.25, "family": "trend"},
+            {
+                "factor_id": "fct_decay",
+                "name": "decaying_factor",
+                "sharpe": 1.5,
+                "ic": 0.02,
+                "turnover": 0.5,
+                "decay_6m": 0.25,
+                "family": "trend",
+            },
         ]
         signals = [
-            PortfolioSignal(factor_id="fct_decay", name="decaying_factor",
-                            weight=0.3, sharpe=1.5, ic=0.02, turnover=0.5,
-                            decay_6m=0.25, orthogonalized=False, retained=True),
+            PortfolioSignal(
+                factor_id="fct_decay",
+                name="decaying_factor",
+                weight=0.3,
+                sharpe=1.5,
+                ic=0.02,
+                turnover=0.5,
+                decay_6m=0.25,
+                orthogonalized=False,
+                retained=True,
+            ),
         ]
         regime = {"regime": "high_vol", "confidence": 0.8, "detected_at": "now", "features": {}}
         result = regime_adaptive_weight_adjustment(signals, regime, factors)
@@ -1584,6 +2007,7 @@ class TestRegimeAdaptiveWeight:
     def test_empty_signals_returns_empty(self):
         """空信号列表直接返回空。"""
         from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
         result = regime_adaptive_weight_adjustment([], {"regime": "bull"}, [])
         assert result == []
 
@@ -1591,6 +2015,7 @@ class TestRegimeAdaptiveWeight:
         """regime 为 None 时跳过调整。"""
         factors, signals = regime_fixtures
         from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
         result = regime_adaptive_weight_adjustment(signals, {}, factors)
         # 权重保持不变
         for s in result:
@@ -1600,6 +2025,7 @@ class TestRegimeAdaptiveWeight:
         """未知制度 (如 crash) 时跳过调整。"""
         factors, signals = regime_fixtures
         from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
         regime = {"regime": "crash", "confidence": 0.0, "detected_at": "now", "features": {}}
         result = regime_adaptive_weight_adjustment(signals, regime, factors)
         # 权重保持不变
@@ -1629,13 +2055,27 @@ class TestRegimeAdaptiveWeight:
 
         # 因子只有 name 字段，无 family
         factors = [
-            {"factor_id": "fct_1", "name": "momentum_factor", "sharpe": 2.0,
-             "ic": 0.04, "turnover": 0.3, "decay_6m": 0.1},
+            {
+                "factor_id": "fct_1",
+                "name": "momentum_factor",
+                "sharpe": 2.0,
+                "ic": 0.04,
+                "turnover": 0.3,
+                "decay_6m": 0.1,
+            },
         ]
         signals = [
-            PortfolioSignal(factor_id="fct_1", name="momentum_factor",
-                            weight=0.5, sharpe=2.0, ic=0.04, turnover=0.3,
-                            decay_6m=0.1, orthogonalized=False, retained=True),
+            PortfolioSignal(
+                factor_id="fct_1",
+                name="momentum_factor",
+                weight=0.5,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=False,
+                retained=True,
+            ),
         ]
         regime = {"regime": "bull", "confidence": 0.9, "detected_at": "now", "features": {}}
         result = regime_adaptive_weight_adjustment(signals, regime, factors)
@@ -1651,22 +2091,34 @@ class TestRegimeAdaptiveWeight:
         from fts.factor_engine.portfolio_loop import PortfolioLoop
 
         # 创建 elite 因子
-        (tmp_elite_dir / "test.json").write_text(json.dumps({
-            "factor_id": "fct_test", "name": "test_factor", "sharpe": 2.5,
-            "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-        }), encoding="utf-8")
+        (tmp_elite_dir / "test.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_test",
+                    "name": "test_factor",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
 
         # 构造市场数据（牛市趋势）
         n = 200
         dates = pd.date_range("2024-01-01", periods=n, freq="D")
         close = 100 + np.cumsum(np.random.randn(n) * 0.3 + 0.5)
-        ohlcv = pd.DataFrame({
-            "open": close * 1.001,
-            "high": close * 1.005,
-            "low": close * 0.995,
-            "close": close,
-            "volume": np.random.randint(800, 1200, n).astype(float),
-        }, index=dates)
+        ohlcv = pd.DataFrame(
+            {
+                "open": close * 1.001,
+                "high": close * 1.005,
+                "low": close * 0.995,
+                "close": close,
+                "volume": np.random.randint(800, 1200, n).astype(float),
+            },
+            index=dates,
+        )
 
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
@@ -1685,18 +2137,33 @@ class TestRegimeAdaptiveWeight:
         import pandas as pd
         from fts.factor_engine.portfolio_loop import PortfolioLoop
 
-        (tmp_elite_dir / "test.json").write_text(json.dumps({
-            "factor_id": "fct_test", "name": "test_factor", "sharpe": 2.5,
-            "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-        }), encoding="utf-8")
+        (tmp_elite_dir / "test.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_test",
+                    "name": "test_factor",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
 
         n = 200
         dates = pd.date_range("2024-01-01", periods=n, freq="D")
         close = 100 + np.cumsum(np.random.randn(n) * 0.3 + 0.5)
-        ohlcv = pd.DataFrame({
-            "open": close * 1.001, "high": close * 1.005, "low": close * 0.995,
-            "close": close, "volume": np.random.randint(800, 1200, n).astype(float),
-        }, index=dates)
+        ohlcv = pd.DataFrame(
+            {
+                "open": close * 1.001,
+                "high": close * 1.005,
+                "low": close * 0.995,
+                "close": close,
+                "volume": np.random.randint(800, 1200, n).astype(float),
+            },
+            index=dates,
+        )
 
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
@@ -1712,10 +2179,19 @@ class TestRegimeAdaptiveWeight:
         """不传 market_ohlcv 时跳过 Regime 调整。"""
         from fts.factor_engine.portfolio_loop import PortfolioLoop
 
-        (tmp_elite_dir / "test.json").write_text(json.dumps({
-            "factor_id": "fct_test", "name": "test_factor", "sharpe": 2.5,
-            "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-        }), encoding="utf-8")
+        (tmp_elite_dir / "test.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_test",
+                    "name": "test_factor",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
 
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
@@ -1732,6 +2208,7 @@ class TestRegimeAdaptiveWeight:
 # 13. 组合粘性约束测试 (v2.11.0)
 # ════════════════════════════════════════════════════════════
 
+
 class TestStickyConstraints:
     """组合粘性约束 — 平滑换血，防止策略漂移。"""
 
@@ -1739,9 +2216,15 @@ class TestStickyConstraints:
         """根据 {factor_id: weight} 构造信号。"""
         return [
             PortfolioSignal(
-                factor_id=fid, name=fid, weight=w,
-                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.1,
-                orthogonalized=True, retained=True,
+                factor_id=fid,
+                name=fid,
+                weight=w,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
             )
             for fid, w in weights.items()
         ]
@@ -1820,20 +2303,33 @@ class TestStickyConstraints:
 
         signals = [
             PortfolioSignal(
-                factor_id="f_a", name="a", weight=0.30,
-                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.1,
-                orthogonalized=True, retained=True,
+                factor_id="f_a",
+                name="a",
+                weight=0.30,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
             ),
             PortfolioSignal(
-                factor_id="f_b", name="b", weight=0.70,
-                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.1,
-                orthogonalized=True, retained=True,
+                factor_id="f_b",
+                name="b",
+                weight=0.70,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
             ),
         ]
         prev_weights = {"f_a": 0.05, "f_b": 0.95}
         config = StickyConfig(enabled=True, max_delta=0.30, new_factor_cap=0.10)
-        combo = build_combo(signals, mode="equal_weight", trace_id="l3_sticky",
-                            prev_weights=prev_weights, sticky_config=config)
+        combo = build_combo(
+            signals, mode="equal_weight", trace_id="l3_sticky", prev_weights=prev_weights, sticky_config=config
+        )
         w_map = {s["factor_id"]: s["weight"] for s in combo["signals"]}
         # f_a: 0.30 → clamp 上限 0.05 * 1.3 = 0.065
         # f_b: 0.70 在 [0.665, 1.235] 内，不变
@@ -1875,25 +2371,38 @@ class TestStickyConstraints:
 # 14. 组合漂移监控测试 (v2.11.0)
 # ════════════════════════════════════════════════════════════
 
+
 class TestDriftMonitor:
     """L3 组合漂移监控 — 成员重合率 + 权重 L1 变化率。"""
 
-    def _make_combo(self, combo_id: str, weights: dict[str, float],
-                    trace_id: str = "l3_drift") -> PortfolioCombo:
+    def _make_combo(self, combo_id: str, weights: dict[str, float], trace_id: str = "l3_drift") -> PortfolioCombo:
         signals = [
             PortfolioSignal(
-                factor_id=fid, name=fid, weight=w,
-                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.1,
-                orthogonalized=True, retained=True,
+                factor_id=fid,
+                name=fid,
+                weight=w,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
             )
             for fid, w in weights.items()
         ]
         return PortfolioCombo(
-            version=EVOLUTION_VERSION, updated_at="now",
-            combo_id=combo_id, trace_id=trace_id,
-            synthesis_mode="equal_weight", signals=signals,
-            combo_sharpe=2.5, combo_turnover=0.3, max_correlation=0.2,
-            n_factors=len(weights), status="active", created_at="now",
+            version=EVOLUTION_VERSION,
+            updated_at="now",
+            combo_id=combo_id,
+            trace_id=trace_id,
+            synthesis_mode="equal_weight",
+            signals=signals,
+            combo_sharpe=2.5,
+            combo_turnover=0.3,
+            max_correlation=0.2,
+            n_factors=len(weights),
+            status="active",
+            created_at="now",
         )
 
     def test_identical_combo_zero_drift(self, tmp_portfolio_dir):
@@ -1975,9 +2484,135 @@ class TestDriftMonitor:
         assert mon.load_history("2099-01-01") == []
 
 
+class TestDriftMonitorAlert:
+    """GAP-F13: 漂移阈值告警 + 可选自动粘性重平衡。"""
+
+    def _make_combo(self, combo_id: str, weights: dict[str, float]) -> PortfolioCombo:
+        signals = [
+            PortfolioSignal(
+                factor_id=fid,
+                name=fid,
+                weight=w,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            )
+            for fid, w in weights.items()
+        ]
+        return PortfolioCombo(
+            version=EVOLUTION_VERSION,
+            updated_at="now",
+            combo_id=combo_id,
+            trace_id="l3_drift",
+            synthesis_mode="equal_weight",
+            signals=signals,
+            combo_sharpe=2.5,
+            combo_turnover=0.3,
+            max_correlation=0.2,
+            n_factors=len(weights),
+            status="active",
+            created_at="now",
+        )
+
+    def test_no_alert_within_threshold(self, tmp_portfolio_dir):
+        """重合率/权重变化均在阈值内 → 不告警。"""
+        mon = DriftMonitor(tmp_portfolio_dir)
+        prev = self._make_combo("cmb_prev", {"f_a": 0.5, "f_b": 0.5})
+        new = self._make_combo("cmb_new", {"f_a": 0.4, "f_b": 0.6})
+        metrics = mon.compute(prev, new)
+        info = mon.check_and_alert(metrics)
+        assert info["alerted"] is False
+        assert info["overlap_alert"] is False
+        assert info["weight_alert"] is False
+        assert info["trigger_rebalance"] is False
+
+    def test_overlap_alert_triggered(self, tmp_portfolio_dir):
+        """成员重合率低于阈值 → 重合率告警。"""
+        mon = DriftMonitor(tmp_portfolio_dir)
+        prev = self._make_combo("cmb_prev", {"f_a": 0.5, "f_b": 0.5})
+        new = self._make_combo("cmb_new", {"f_c": 0.5, "f_d": 0.5})
+        metrics = mon.compute(prev, new)
+        info = mon.check_and_alert(metrics)
+        assert info["alerted"] is True
+        assert info["overlap_alert"] is True
+        assert info["weight_alert"] is True  # L1=1.0 > 0.4
+        assert info["overlap_rate"] == 0.0
+
+    def test_weight_alert_only(self, tmp_portfolio_dir):
+        """仅权重变化超阈值（成员重合正常）→ 权重告警。"""
+        mon = DriftMonitor(tmp_portfolio_dir)
+        prev = self._make_combo("cmb_prev", {"f_a": 0.5, "f_b": 0.5})
+        new = self._make_combo("cmb_new", {"f_a": 0.05, "f_b": 0.95})
+        metrics = mon.compute(prev, new)
+        info = mon.check_and_alert(metrics)
+        # 重合率=1.0（成员未变）但 L1 = (|0.05-0.5|+|0.95-0.5|)/2 = 0.45 > 0.4
+        assert info["overlap_alert"] is False
+        assert info["weight_alert"] is True
+        assert info["alerted"] is True
+
+    def test_custom_threshold_config(self, tmp_portfolio_dir):
+        """自定义阈值配置生效。"""
+        cfg: DriftAlertConfig = {
+            "overlap_threshold": 0.90,  # 更严：要求 90% 重合
+            "weight_l1_threshold": 0.10,  # 更严：权重变化超 10% 告警
+            "trigger_rebalance": True,
+        }
+        mon = DriftMonitor(tmp_portfolio_dir, alert_config=cfg)
+        prev = self._make_combo("cmb_prev", {"f_a": 0.5, "f_b": 0.5})
+        new = self._make_combo("cmb_new", {"f_a": 0.5, "f_b": 0.5, "f_c": 0.0})
+        metrics = mon.compute(prev, new)
+        info = mon.check_and_alert(metrics)
+        assert info["alerted"] is True
+        assert info["overlap_threshold"] == 0.90
+        assert info["weight_l1_threshold"] == 0.10
+        assert info["trigger_rebalance"] is True
+
+    def test_default_config_no_rebalance(self, tmp_portfolio_dir):
+        """默认配置 trigger_rebalance=False → 不自动重平衡。"""
+        mon = DriftMonitor(tmp_portfolio_dir)
+        assert mon.alert_config.get("trigger_rebalance") is False
+        prev = self._make_combo("cmb_prev", {"f_a": 0.5})
+        new = self._make_combo("cmb_new", {"f_b": 1.0})
+        info = mon.check_and_alert(mon.compute(prev, new))
+        assert info["trigger_rebalance"] is False
+
+    def test_generate_rebalance_proposal_when_triggered(self, tmp_portfolio_dir):
+        """trigger_rebalance=True 且告警触发 → 生成重平衡建议。"""
+        cfg: DriftAlertConfig = {
+            "overlap_threshold": 0.50,
+            "weight_l1_threshold": 0.40,
+            "trigger_rebalance": True,
+        }
+        mon = DriftMonitor(tmp_portfolio_dir, alert_config=cfg)
+        prev = self._make_combo("cmb_prev", {"f_a": 0.5, "f_b": 0.5})
+        new = self._make_combo("cmb_new", {"f_c": 0.5, "f_d": 0.5})
+        metrics = mon.compute(prev, new)
+        info = mon.check_and_alert(metrics)
+        assert info["trigger_rebalance"] is True
+        proposal = mon.generate_rebalance_proposal(metrics, info)
+        assert proposal is not None
+        assert proposal["source"] == "drift_monitor"
+        assert proposal["confidence"] == pytest.approx(0.7)
+        assert "漂移" in proposal["description"]
+
+    def test_generate_rebalance_proposal_skipped(self, tmp_portfolio_dir):
+        """未触发重平衡 → 返回 None。"""
+        mon = DriftMonitor(tmp_portfolio_dir)
+        prev = self._make_combo("cmb_prev", {"f_a": 0.5})
+        new = self._make_combo("cmb_new", {"f_a": 0.5})
+        metrics = mon.compute(prev, new)
+        info = mon.check_and_alert(metrics)
+        assert info["trigger_rebalance"] is False
+        assert mon.generate_rebalance_proposal(metrics, info) is None
+
+
 # ════════════════════════════════════════════════════════════
 # 15. L2 影子池测试 (v2.11.0)
 # ════════════════════════════════════════════════════════════
+
 
 class TestShadowPool:
     """L2 影子池 — 新晋升因子观察 5 个交易日后才进正式组合。"""
@@ -2000,7 +2635,7 @@ class TestShadowPool:
     def test_is_shadow_pending_expired(self):
         """观察期已过（今日 >= observe_until）不标记 pending。"""
         from fts.factor_engine.portfolio_loop import _is_shadow_pending
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         today = datetime(2026, 8, 6)
         factor = {
@@ -2027,22 +2662,40 @@ class TestShadowPool:
 
         today = datetime(2026, 8, 6)
         # 正式因子（无标记）
-        (tmp_elite_dir / "f_normal.json").write_text(json.dumps({
-            "factor_id": "fct_normal", "name": "normal",
-            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-            "market": "stock",
-        }), encoding="utf-8")
+        (tmp_elite_dir / "f_normal.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_normal",
+                    "name": "normal",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                    "market": "stock",
+                }
+            ),
+            encoding="utf-8",
+        )
         # 影子因子（观察期内）
-        (tmp_elite_dir / "f_shadow.json").write_text(json.dumps({
-            "factor_id": "fct_shadow", "name": "shadowed",
-            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-            "market": "stock",
-            "shadow_pool": {
-                "promoted_at": today.isoformat(),
-                "observe_trading_days": 5,
-                "observe_until": (today + timedelta(days=5)).isoformat(),
-            },
-        }), encoding="utf-8")
+        (tmp_elite_dir / "f_shadow.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_shadow",
+                    "name": "shadowed",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                    "market": "stock",
+                    "shadow_pool": {
+                        "promoted_at": today.isoformat(),
+                        "observe_trading_days": 5,
+                        "observe_until": (today + timedelta(days=5)).isoformat(),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
         factors = load_elite_factors(tmp_elite_dir, use_duckdb=False, market="stock")
         ids = {f["factor_id"] for f in factors}
@@ -2059,8 +2712,7 @@ class TestShadowPool:
         memory_dir.mkdir(parents=True, exist_ok=True)
 
         loop = EvolutionLoop(
-            data=pd.DataFrame({"close": [1.0, 2.0, 3.0, 4.0, 5.0]},
-                              index=pd.date_range("2024-01-01", periods=5)),
+            data=pd.DataFrame({"close": [1.0, 2.0, 3.0, 4.0, 5.0]}, index=pd.date_range("2024-01-01", periods=5)),
             forward_returns=np.array([0.1, 0.1, 0.1, 0.1, 0.0]),
             elite_dir=str(elite_dir),
             memory_dir=str(memory_dir),
@@ -2079,10 +2731,17 @@ class TestShadowPool:
         loop, elite_dir = self._make_evolution_loop(tmp_path)
 
         factor = {
-            "factor_id": "fct_shadow1", "name": "shadow_factor",
-            "code": "code", "market": "futures", "family": "trend",
+            "factor_id": "fct_shadow1",
+            "name": "shadow_factor",
+            "code": "code",
+            "market": "futures",
+            "family": "trend",
         }
-        evaluation = {"level_1_backtest": {"sharpe": 2.0, "ic": 0.05}, "level_3_multiple": {"passed": True}, "passed": True}
+        evaluation = {
+            "level_1_backtest": {"sharpe": 2.0, "ic": 0.05},
+            "level_3_multiple": {"passed": True},
+            "passed": True,
+        }
         # 直接调用 _promote_to_elite（repo 已 mock）
         path = loop._promote_to_elite(factor, evaluation)
         assert path is not None
@@ -2096,10 +2755,17 @@ class TestShadowPool:
         loop, elite_dir = self._make_evolution_loop(tmp_path)
 
         factor = {
-            "factor_id": "fct_seed1", "name": "seed_factor",
-            "code": "code", "market": "futures", "family": "trend",
+            "factor_id": "fct_seed1",
+            "name": "seed_factor",
+            "code": "code",
+            "market": "futures",
+            "family": "trend",
         }
-        evaluation = {"level_1_backtest": {"sharpe": 2.0, "ic": 0.05}, "level_3_multiple": {"passed": True}, "passed": True}
+        evaluation = {
+            "level_1_backtest": {"sharpe": 2.0, "ic": 0.05},
+            "level_3_multiple": {"passed": True},
+            "passed": True,
+        }
         path = loop._promote_to_elite(factor, evaluation, shadow_observe=False)
         assert path is not None
         data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -2110,6 +2776,7 @@ class TestShadowPool:
 # 16. ElasticNet / ML Ensemble 权重计算测试 (覆盖率补强)
 # ════════════════════════════════════════════════════════════
 
+
 class TestSynthesisElasticNetMl:
     """elastic_net / ml_ensemble 合成成功路径 + 权重计算主流程。"""
 
@@ -2118,16 +2785,22 @@ class TestSynthesisElasticNetMl:
         elite = tmp_path / "elite"
         elite.mkdir(parents=True, exist_ok=True)
         for i in range(n):
-            (elite / f"f{i}.json").write_text(json.dumps({
-                "factor_id": f"f{i}", "name": f"n{i}", "code": "close",
-            }), encoding="utf-8")
+            (elite / f"f{i}.json").write_text(
+                json.dumps(
+                    {
+                        "factor_id": f"f{i}",
+                        "name": f"n{i}",
+                        "code": "close",
+                    }
+                ),
+                encoding="utf-8",
+            )
         return elite
 
     def _factors(self, n: int = 2) -> list[dict]:
         """n 个标准因子 dict。"""
         return [
-            {"factor_id": f"f{i}", "name": f"n{i}", "sharpe": 2.0, "ic": 0.05,
-             "turnover": 0.3, "decay_6m": 0.1}
+            {"factor_id": f"f{i}", "name": f"n{i}", "sharpe": 2.0, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1}
             for i in range(n)
         ]
 
@@ -2137,15 +2810,16 @@ class TestSynthesisElasticNetMl:
         idx = pd.date_range("2023-12-20", periods=n_rows, freq="D")
         panel = {}
         for i in range(n_stocks):
-            panel[f"SYM{i}"] = pd.DataFrame(
-                {"close": np.linspace(100 + i, 200 + i, n_rows)}, index=idx)
+            panel[f"SYM{i}"] = pd.DataFrame({"close": np.linspace(100 + i, 200 + i, n_rows)}, index=idx)
         return panel, dates
 
     def test_synthesize_elastic_net_success(self, tmp_path, sample_factors):
         """elastic_net 模式：权重计算成功时按返回权重分配信号。"""
         elite = self._elite_with_codes(tmp_path, n=3)
-        with patch("fts.factor_engine.portfolio_loop._compute_elastic_net_weights",
-                   return_value={"fct_a": 0.6, "fct_b": 0.4, "fct_c": 0.0}):
+        with patch(
+            "fts.factor_engine.portfolio_loop._compute_elastic_net_weights",
+            return_value={"fct_a": 0.6, "fct_b": 0.4, "fct_c": 0.0},
+        ):
             signals, _, _ = synthesize_signals(sample_factors, mode="elastic_net", elite_dir=elite)
         assert len(signals) == 3
         wmap = {s["factor_id"]: s["weight"] for s in signals}
@@ -2160,8 +2834,10 @@ class TestSynthesisElasticNetMl:
     def test_synthesize_ml_ensemble_success(self, tmp_path, sample_factors):
         """ml_ensemble 模式：权重计算成功路径。"""
         elite = self._elite_with_codes(tmp_path, n=3)
-        with patch("fts.factor_engine.portfolio_loop._compute_ml_ensemble_weights",
-                   return_value={"fct_a": 0.5, "fct_b": 0.5, "fct_c": 0.0}):
+        with patch(
+            "fts.factor_engine.portfolio_loop._compute_ml_ensemble_weights",
+            return_value={"fct_a": 0.5, "fct_b": 0.5, "fct_c": 0.0},
+        ):
             signals, _, _ = synthesize_signals(sample_factors, mode="ml_ensemble", elite_dir=elite)
         assert len(signals) == 3
         assert signals[0]["retained"] is True
@@ -2170,8 +2846,7 @@ class TestSynthesisElasticNetMl:
     def test_synthesize_elastic_net_fallback(self, tmp_path, sample_factors):
         """elastic_net 权重计算失败回退 sharpe_weight。"""
         elite = self._elite_with_codes(tmp_path, n=3)
-        with patch("fts.factor_engine.portfolio_loop._compute_elastic_net_weights",
-                   return_value={}):
+        with patch("fts.factor_engine.portfolio_loop._compute_elastic_net_weights", return_value={}):
             signals, _, _ = synthesize_signals(sample_factors, mode="elastic_net", elite_dir=elite)
         assert len(signals) == 3
         assert all(s["weight"] > 0 for s in signals)
@@ -2179,10 +2854,8 @@ class TestSynthesisElasticNetMl:
     def test_sharpe_weight_ic_raw_passthrough(self):
         """sharpe_weight 模式：IC 截断后 _ic_raw 透传到信号。"""
         factors = [
-            {"factor_id": "f1", "name": "n1", "sharpe": 1.5, "ic": 0.3,
-             "turnover": 0.3, "decay_6m": 0.1},
-            {"factor_id": "f2", "name": "n2", "sharpe": 1.5, "ic": -0.2,
-             "turnover": 0.3, "decay_6m": 0.1},
+            {"factor_id": "f1", "name": "n1", "sharpe": 1.5, "ic": 0.3, "turnover": 0.3, "decay_6m": 0.1},
+            {"factor_id": "f2", "name": "n2", "sharpe": 1.5, "ic": -0.2, "turnover": 0.3, "decay_6m": 0.1},
         ]
         signals, _, _ = synthesize_signals(factors, mode="sharpe_weight")
         assert signals[0]["_ic_raw"] == 0.3
@@ -2193,20 +2866,25 @@ class TestSynthesisElasticNetMl:
     def test_elastic_net_sklearn_missing(self, tmp_path, monkeypatch):
         """scikit-learn 未安装时 Elastic Net 返回空 dict。"""
         import sys as _sys
+
         monkeypatch.setitem(_sys.modules, "sklearn.linear_model", None)
         from fts.factor_engine.portfolio_loop import _compute_elastic_net_weights
+
         assert _compute_elastic_net_weights([], tmp_path) == {}
 
     def test_ml_ensemble_sklearn_missing(self, tmp_path, monkeypatch):
         """scikit-learn 未安装时 ML Ensemble 返回空 dict。"""
         import sys as _sys
+
         monkeypatch.setitem(_sys.modules, "sklearn.linear_model", None)
         from fts.factor_engine.portfolio_loop import _compute_ml_ensemble_weights
+
         assert _compute_ml_ensemble_weights([], tmp_path) == {}
 
     def test_elastic_net_panel_insufficient(self, tmp_path):
         """面板数据不足时 Elastic Net 回退。"""
         from fts.factor_engine.portfolio_loop import _compute_elastic_net_weights
+
         with patch("fts.data.FTSDataProvider") as m_prov:
             m_prov.return_value.get_csi300_panel.return_value = ({}, [])
             assert _compute_elastic_net_weights([], tmp_path) == {}
@@ -2214,6 +2892,7 @@ class TestSynthesisElasticNetMl:
     def test_ml_ensemble_panel_insufficient(self, tmp_path):
         """面板数据不足时 ML Ensemble 回退。"""
         from fts.factor_engine.portfolio_loop import _compute_ml_ensemble_weights
+
         with patch("fts.data.FTSDataProvider") as m_prov:
             m_prov.return_value.get_csi300_panel.return_value = ({}, [])
             assert _compute_ml_ensemble_weights([], tmp_path) == {}
@@ -2221,6 +2900,7 @@ class TestSynthesisElasticNetMl:
     def test_elastic_net_valid_factors_insufficient(self, tmp_path):
         """有效因子（含代码）不足 2 个时回退。"""
         from fts.factor_engine.portfolio_loop import _compute_elastic_net_weights
+
         panel, dates = self._make_panel()
         empty_elite = tmp_path / "no_codes"
         empty_elite.mkdir()
@@ -2231,6 +2911,7 @@ class TestSynthesisElasticNetMl:
     def test_ml_ensemble_valid_factors_insufficient(self, tmp_path):
         """ML Ensemble 有效因子不足 2 个时回退。"""
         from fts.factor_engine.portfolio_loop import _compute_ml_ensemble_weights
+
         panel, dates = self._make_panel()
         empty_elite = tmp_path / "no_codes_ml"
         empty_elite.mkdir()
@@ -2241,15 +2922,18 @@ class TestSynthesisElasticNetMl:
     def test_elastic_net_executor_failure_skips(self, tmp_path):
         """因子执行器构造失败跳过该因子，有效回归日不足回退。"""
         from fts.factor_engine.portfolio_loop import _compute_elastic_net_weights
+
         panel, dates = self._make_panel()
         elite = self._elite_with_codes(tmp_path, n=2)
         exec_ok = MagicMock()
         exec_ok.execute.return_value = np.linspace(-0.5, 0.5, 40)
         fake_model = MagicMock()
         fake_model.coef_ = np.array([1.0, 1.0])
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("sklearn.linear_model.ElasticNetCV", return_value=fake_model):
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("sklearn.linear_model.ElasticNetCV", return_value=fake_model),
+        ):
             m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
             # f0 构造失败 → 信号全 NaN → 无有效截面回归日
             m_exec.side_effect = [RuntimeError("exec fail"), exec_ok]
@@ -2258,13 +2942,16 @@ class TestSynthesisElasticNetMl:
     def test_elastic_net_full_flow(self, tmp_path):
         """Elastic Net 权重计算主流程（面板加载→因子执行→逐日回归）。"""
         from fts.factor_engine.portfolio_loop import _compute_elastic_net_weights
+
         panel, dates = self._make_panel()
         elite = self._elite_with_codes(tmp_path, n=2)
         fake_model = MagicMock()
         fake_model.coef_ = np.array([0.6, 0.4])
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("sklearn.linear_model.ElasticNetCV", return_value=fake_model):
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("sklearn.linear_model.ElasticNetCV", return_value=fake_model),
+        ):
             m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.linspace(-0.5, 0.5, 40)
             result = _compute_elastic_net_weights(self._factors(2), elite)
@@ -2274,13 +2961,16 @@ class TestSynthesisElasticNetMl:
     def test_elastic_net_zero_coefs(self, tmp_path):
         """回归系数全 0 时权重计算回退空 dict。"""
         from fts.factor_engine.portfolio_loop import _compute_elastic_net_weights
+
         panel, dates = self._make_panel()
         elite = self._elite_with_codes(tmp_path, n=2)
         fake_model = MagicMock()
         fake_model.coef_ = np.array([0.0, 0.0])
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("sklearn.linear_model.ElasticNetCV", return_value=fake_model):
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("sklearn.linear_model.ElasticNetCV", return_value=fake_model),
+        ):
             m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.linspace(-0.5, 0.5, 40)
             assert _compute_elastic_net_weights(self._factors(2), elite) == {}
@@ -2289,17 +2979,22 @@ class TestSynthesisElasticNetMl:
         """ML Ensemble 权重计算主流程（训练 + 特征重要性归一化）。"""
         from fts.factor_engine.portfolio_loop import _compute_ml_ensemble_weights
         from fts.ml import TrainResult, TrainMode, ModelKind
+
         panel, dates = self._make_panel()
         elite = self._elite_with_codes(tmp_path, n=2)
         fake_trainer = MagicMock()
         fake_trainer.train.return_value = TrainResult(
-            mode=TrainMode.CROSS_SECTIONAL, kind=ModelKind.LIGHTGBM,
-            model=object(), score=0.05,
+            mode=TrainMode.CROSS_SECTIONAL,
+            kind=ModelKind.LIGHTGBM,
+            model=object(),
+            score=0.05,
             feature_importance={"f0": 0.7, "f1": 0.3},
         )
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("fts.ml.SignalModelTrainer", return_value=fake_trainer):
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("fts.ml.SignalModelTrainer", return_value=fake_trainer),
+        ):
             m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.linspace(-0.5, 0.5, 40)
             result = _compute_ml_ensemble_weights(self._factors(2), elite)
@@ -2310,16 +3005,21 @@ class TestSynthesisElasticNetMl:
         """训练降级（model=None）时回退空 dict。"""
         from fts.factor_engine.portfolio_loop import _compute_ml_ensemble_weights
         from fts.ml import TrainResult, TrainMode, ModelKind
+
         panel, dates = self._make_panel()
         elite = self._elite_with_codes(tmp_path, n=2)
         fake_trainer = MagicMock()
         fake_trainer.train.return_value = TrainResult(
-            mode=TrainMode.CROSS_SECTIONAL, kind=ModelKind.LIGHTGBM,
-            model=None, message="模型依赖缺失",
+            mode=TrainMode.CROSS_SECTIONAL,
+            kind=ModelKind.LIGHTGBM,
+            model=None,
+            message="模型依赖缺失",
         )
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("fts.ml.SignalModelTrainer", return_value=fake_trainer):
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("fts.ml.SignalModelTrainer", return_value=fake_trainer),
+        ):
             m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.linspace(-0.5, 0.5, 40)
             assert _compute_ml_ensemble_weights(self._factors(2), elite) == {}
@@ -2328,16 +3028,22 @@ class TestSynthesisElasticNetMl:
         """无特征重要性时回退空 dict。"""
         from fts.factor_engine.portfolio_loop import _compute_ml_ensemble_weights
         from fts.ml import TrainResult, TrainMode, ModelKind
+
         panel, dates = self._make_panel()
         elite = self._elite_with_codes(tmp_path, n=2)
         fake_trainer = MagicMock()
         fake_trainer.train.return_value = TrainResult(
-            mode=TrainMode.CROSS_SECTIONAL, kind=ModelKind.LIGHTGBM,
-            model=object(), score=0.05, feature_importance={},
+            mode=TrainMode.CROSS_SECTIONAL,
+            kind=ModelKind.LIGHTGBM,
+            model=object(),
+            score=0.05,
+            feature_importance={},
         )
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("fts.ml.SignalModelTrainer", return_value=fake_trainer):
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("fts.ml.SignalModelTrainer", return_value=fake_trainer),
+        ):
             m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.linspace(-0.5, 0.5, 40)
             assert _compute_ml_ensemble_weights(self._factors(2), elite) == {}
@@ -2346,17 +3052,22 @@ class TestSynthesisElasticNetMl:
         """特征重要性全 0 时回退空 dict。"""
         from fts.factor_engine.portfolio_loop import _compute_ml_ensemble_weights
         from fts.ml import TrainResult, TrainMode, ModelKind
+
         panel, dates = self._make_panel()
         elite = self._elite_with_codes(tmp_path, n=2)
         fake_trainer = MagicMock()
         fake_trainer.train.return_value = TrainResult(
-            mode=TrainMode.CROSS_SECTIONAL, kind=ModelKind.LIGHTGBM,
-            model=object(), score=0.05,
+            mode=TrainMode.CROSS_SECTIONAL,
+            kind=ModelKind.LIGHTGBM,
+            model=object(),
+            score=0.05,
             feature_importance={"f0": 0.0, "f1": 0.0},
         )
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("fts.ml.SignalModelTrainer", return_value=fake_trainer):
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("fts.ml.SignalModelTrainer", return_value=fake_trainer),
+        ):
             m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.linspace(-0.5, 0.5, 40)
             assert _compute_ml_ensemble_weights(self._factors(2), elite) == {}
@@ -2364,10 +3075,13 @@ class TestSynthesisElasticNetMl:
     def test_ml_ensemble_insufficient_samples(self, tmp_path):
         """有效样本不足 30 个时回退空 dict。"""
         from fts.factor_engine.portfolio_loop import _compute_ml_ensemble_weights
+
         panel, dates = self._make_panel()
         elite = self._elite_with_codes(tmp_path, n=2)
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec:
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+        ):
             m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.full(40, np.nan)  # 信号全 NaN
             assert _compute_ml_ensemble_weights(self._factors(2), elite) == {}
@@ -2377,16 +3091,24 @@ class TestSynthesisElasticNetMl:
 # 17. 正交化分支测试 (覆盖率补强)
 # ════════════════════════════════════════════════════════════
 
+
 class TestOrthogonalizeBranches:
     """正交化 — L2 先验注入 / 分层模式 / 代码哈希去重分支。"""
 
     def _signals(self, n: int = 30) -> list[PortfolioSignal]:
         return [
             PortfolioSignal(
-                factor_id=f"f{i}", name=f"n{i}", weight=1.0 / n,
-                sharpe=2.0, ic=0.04, turnover=0.3, decay_6m=0.1,
-                orthogonalized=False, retained=True,
-            ) for i in range(n)
+                factor_id=f"f{i}",
+                name=f"n{i}",
+                weight=1.0 / n,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=False,
+                retained=True,
+            )
+            for i in range(n)
         ]
 
     def test_l2_prior_injection(self):
@@ -2406,33 +3128,40 @@ class TestOrthogonalizeBranches:
         result_factors = []
         for i in range(n):
             rf = {
-                "factor_id": f"f{i}", "name": f"n{i}",
+                "factor_id": f"f{i}",
+                "name": f"n{i}",
                 "correlation_flags": (
-                    [{"source": "phase2_full_correlation", "reason": "corr 0.9"},
-                     {"source": "l2_prior", "reason": "L2 种子相关 0.97"}]  # 覆盖 L2 flag 日志
-                    if i in (1, 2) else []
+                    [
+                        {"source": "phase2_full_correlation", "reason": "corr 0.9"},
+                        {"source": "l2_prior", "reason": "L2 种子相关 0.97"},
+                    ]  # 覆盖 L2 flag 日志
+                    if i in (1, 2)
+                    else []
                 ),
                 "exclude_from_portfolio": i == 1,
             }
             result_factors.append(rf)
         summary = {
-            "input_count": n, "output_count": n - 1,
-            "phase1_marked": 3, "phase2_marked": 2,
+            "input_count": n,
+            "output_count": n - 1,
+            "phase1_marked": 3,
+            "phase2_marked": 2,
             "phase1_details": [
                 {"type": "code_duplicate", "removed": "n2", "reason": "same code"},
                 {"type": "family_prune", "removed": "n3", "reason": "family prune"},
             ],
             "phase2_details": [{"type": "correlation", "removed": "n1", "reason": "corr 0.9"}],
-            "l2_prior_count": 1, "phase2_new_count": 1, "phase2_overlap_count": 1,
+            "l2_prior_count": 1,
+            "phase2_new_count": 1,
+            "phase2_overlap_count": 1,
             "elapsed_seconds": 0.01,
         }
         with patch("fts.factor_engine.factor_optimizer.FactorOptimizer") as m_opt:
             m_opt.return_value.tiered_orthogonalize.return_value = (result_factors, summary)
-            out = orthogonalize_factors(
-                signals, max_corr_threshold=0.7, factors=factors, use_tiered=True)
+            out = orthogonalize_factors(signals, max_corr_threshold=0.7, factors=factors, use_tiered=True)
         out_map = {s["factor_id"]: s for s in out}
-        assert out_map["f1"]["retained"] is False   # 硬排除
-        assert out_map["f0"]["retained"] is True    # 仅标记不排除
+        assert out_map["f1"]["retained"] is False  # 硬排除
+        assert out_map["f0"]["retained"] is True  # 仅标记不排除
         assert out_map["f1"]["orthogonalized"] is True
         assert out_map["f1"]["correlation_flags"]  # 诊断标记保留
 
@@ -2443,20 +3172,46 @@ class TestOrthogonalizeBranches:
         factors = [{"factor_id": f"f{i}", "name": f"n{i}", "code_hash": f"h{i % 2}"} for i in range(n)]
         with patch("fts.factor_engine.factor_optimizer.FactorOptimizer") as m_opt:
             m_opt.return_value.tiered_orthogonalize.side_effect = RuntimeError("opt fail")
-            out = orthogonalize_factors(
-                signals, max_corr_threshold=0.7, factors=factors, use_tiered=True)
+            out = orthogonalize_factors(signals, max_corr_threshold=0.7, factors=factors, use_tiered=True)
         retained = [s["factor_id"] for s in out if s["retained"]]
         assert set(retained) <= {"f0", "f1"}  # 每组 hash 只保留最高夏普
 
     def test_code_hash_dedup_removes_lower_sharpe(self):
         """相同代码哈希只保留夏普最高的因子。"""
         signals = [
-            PortfolioSignal(factor_id="f_a", name="a", weight=0.5, sharpe=3.0, ic=0.06,
-                            turnover=0.3, decay_6m=0.1, orthogonalized=False, retained=True),
-            PortfolioSignal(factor_id="f_b", name="b", weight=0.5, sharpe=2.0, ic=0.04,
-                            turnover=0.3, decay_6m=0.1, orthogonalized=False, retained=True),
-            PortfolioSignal(factor_id="f_c", name="c", weight=0.5, sharpe=1.5, ic=0.03,
-                            turnover=0.3, decay_6m=0.1, orthogonalized=False, retained=True),
+            PortfolioSignal(
+                factor_id="f_a",
+                name="a",
+                weight=0.5,
+                sharpe=3.0,
+                ic=0.06,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=False,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="f_b",
+                name="b",
+                weight=0.5,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=False,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="f_c",
+                name="c",
+                weight=0.5,
+                sharpe=1.5,
+                ic=0.03,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=False,
+                retained=True,
+            ),
         ]
         factors = [
             {"factor_id": "f_a", "code_hash": "h1"},
@@ -2481,17 +3236,37 @@ class TestOrthogonalizeBranches:
 # 18. 粘性 / Sharpe / build_combo 边界分支测试 (覆盖率补强)
 # ════════════════════════════════════════════════════════════
 
+
 class TestStickySharpeBuildComboBranches:
     """粘性约束跳过、夏普校验、build_combo 边界分支。"""
 
     def test_sticky_skips_not_retained(self):
         """粘性约束跳过 retained=False 的信号。"""
         from fts.factor_engine.portfolio_loop import _apply_sticky_constraints
+
         signals = [
-            PortfolioSignal(factor_id="f_a", name="a", weight=0.9, sharpe=2.0, ic=0.04,
-                            turnover=0.3, decay_6m=0.1, orthogonalized=True, retained=False),
-            PortfolioSignal(factor_id="f_b", name="b", weight=0.1, sharpe=2.0, ic=0.04,
-                            turnover=0.3, decay_6m=0.1, orthogonalized=True, retained=True),
+            PortfolioSignal(
+                factor_id="f_a",
+                name="a",
+                weight=0.9,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=False,
+            ),
+            PortfolioSignal(
+                factor_id="f_b",
+                name="b",
+                weight=0.1,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
         ]
         config = StickyConfig(enabled=True, max_delta=0.30, new_factor_cap=0.10)
         out = _apply_sticky_constraints(signals, {"f_a": 0.5}, config)
@@ -2503,6 +3278,7 @@ class TestStickySharpeBuildComboBranches:
     def test_validate_combo_sharpe_thresholds(self):
         """夏普警戒线：>3.5 与 2.5~3.5 均返回原因，正常返回 None。"""
         from fts.factor_engine.portfolio_loop import _validate_combo_sharpe
+
         assert "3.5" in _validate_combo_sharpe(4.0)
         assert "2.5" in _validate_combo_sharpe(3.0)
         assert _validate_combo_sharpe(2.0) is None
@@ -2510,23 +3286,69 @@ class TestStickySharpeBuildComboBranches:
     def test_randomization_zero_total_weight(self):
         """随机化测试：总权重为 0 时跳过。"""
         from fts.factor_engine.portfolio_loop import _run_sharpe_randomization_test
+
         signals = [
-            PortfolioSignal(factor_id="f_a", name="a", weight=0.0, sharpe=5.0, ic=0.06,
-                            turnover=0.3, decay_6m=0.1, orthogonalized=True, retained=True),
-            PortfolioSignal(factor_id="f_b", name="b", weight=0.0, sharpe=5.0, ic=0.06,
-                            turnover=0.3, decay_6m=0.1, orthogonalized=True, retained=True),
-            PortfolioSignal(factor_id="f_c", name="c", weight=0.0, sharpe=5.0, ic=0.06,
-                            turnover=0.3, decay_6m=0.1, orthogonalized=True, retained=True),
+            PortfolioSignal(
+                factor_id="f_a",
+                name="a",
+                weight=0.0,
+                sharpe=5.0,
+                ic=0.06,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="f_b",
+                name="b",
+                weight=0.0,
+                sharpe=5.0,
+                ic=0.06,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="f_c",
+                name="c",
+                weight=0.0,
+                sharpe=5.0,
+                ic=0.06,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
         ]
         assert _run_sharpe_randomization_test(signals, n_shuffle=10) is True
 
     def test_build_combo_negative_weights_zero_total(self):
         """正负权重抵消 total_w=0 → max_corr=0.15。"""
         signals = [
-            PortfolioSignal(factor_id="f_a", name="a", weight=1.0, sharpe=2.0, ic=0.04,
-                            turnover=0.3, decay_6m=0.1, orthogonalized=True, retained=True),
-            PortfolioSignal(factor_id="f_b", name="b", weight=-1.0, sharpe=2.0, ic=0.04,
-                            turnover=0.3, decay_6m=0.1, orthogonalized=True, retained=True),
+            PortfolioSignal(
+                factor_id="f_a",
+                name="a",
+                weight=1.0,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="f_b",
+                name="b",
+                weight=-1.0,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            ),
         ]
         combo = build_combo(signals, mode="equal_weight")
         assert combo["max_correlation"] == 0.15
@@ -2534,9 +3356,18 @@ class TestStickySharpeBuildComboBranches:
     def test_build_combo_high_sharpe_warning(self):
         """组合夏普 > 3.5 触发警戒标记。"""
         signals = [
-            PortfolioSignal(factor_id=f"f{i}", name=f"n{i}", weight=1 / 3, sharpe=5.0,
-                            ic=0.06, turnover=0.3, decay_6m=0.1,
-                            orthogonalized=True, retained=True) for i in range(3)
+            PortfolioSignal(
+                factor_id=f"f{i}",
+                name=f"n{i}",
+                weight=1 / 3,
+                sharpe=5.0,
+                ic=0.06,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            )
+            for i in range(3)
         ]
         combo = build_combo(signals, mode="equal_weight")
         assert combo["sharpe_warning"] is not None
@@ -2545,12 +3376,20 @@ class TestStickySharpeBuildComboBranches:
     def test_build_combo_randomization_failure_log(self, caplog):
         """随机化测试未通过触发警告日志。"""
         signals = [
-            PortfolioSignal(factor_id=f"f{i}", name=f"n{i}", weight=0.3, sharpe=3.0,
-                            ic=0.06, turnover=0.3, decay_6m=0.1,
-                            orthogonalized=True, retained=True) for i in range(3)
+            PortfolioSignal(
+                factor_id=f"f{i}",
+                name=f"n{i}",
+                weight=0.3,
+                sharpe=3.0,
+                ic=0.06,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            )
+            for i in range(3)
         ]
-        with patch("fts.factor_engine.portfolio_loop._run_sharpe_randomization_test",
-                   return_value=False):
+        with patch("fts.factor_engine.portfolio_loop._run_sharpe_randomization_test", return_value=False):
             with caplog.at_level("WARNING"):
                 combo = build_combo(signals, mode="equal_weight")
         assert combo["sharpe_randomization_passed"] is False
@@ -2561,6 +3400,7 @@ class TestStickySharpeBuildComboBranches:
 # 19. DriftMonitor 损坏容错 + 质量门槛测试 (覆盖率补强)
 # ════════════════════════════════════════════════════════════
 
+
 class TestDriftMonitorCorruptAndQualityGate:
     """DriftMonitor 损坏文件容错 + 运行时质量门槛过滤。"""
 
@@ -2570,10 +3410,17 @@ class TestDriftMonitorCorruptAndQualityGate:
         date = "2026-08-08"
         (mon.drift_history_dir / f"{date}.json").write_text("not json", encoding="utf-8")
         metrics = DriftMetrics(
-            date=date, combo_id="c", prev_combo_id="", trace_id="t",
-            member_overlap_rate=0.5, weight_l1_change=0.2,
-            n_prev_members=1, n_new_members=2, n_common_members=1,
-            added=["f2"], removed=["f1"],
+            date=date,
+            combo_id="c",
+            prev_combo_id="",
+            trace_id="t",
+            member_overlap_rate=0.5,
+            weight_l1_change=0.2,
+            n_prev_members=1,
+            n_new_members=2,
+            n_common_members=1,
+            added=["f2"],
+            removed=["f1"],
         )
         mon.record(metrics)
         records = mon.load_history(date)
@@ -2589,10 +3436,11 @@ class TestDriftMonitorCorruptAndQualityGate:
     def test_filter_by_quality_gate_removes_bad(self):
         """IC<0.03 或 Sharpe<1.5 的因子被剔除。"""
         from fts.factor_engine.portfolio_loop import _filter_by_quality_gate
+
         factors = [
-            {"factor_id": "f1", "name": "n1", "ic": 0.01, "sharpe": 2.0},   # IC 过低
-            {"factor_id": "f2", "name": "n2", "ic": 0.05, "sharpe": 1.0},   # Sharpe 过低
-            {"factor_id": "f3", "name": "n3", "ic": 0.05, "sharpe": 2.0},   # 通过
+            {"factor_id": "f1", "name": "n1", "ic": 0.01, "sharpe": 2.0},  # IC 过低
+            {"factor_id": "f2", "name": "n2", "ic": 0.05, "sharpe": 1.0},  # Sharpe 过低
+            {"factor_id": "f3", "name": "n3", "ic": 0.05, "sharpe": 2.0},  # 通过
         ]
         passed = _filter_by_quality_gate(factors, "test")
         assert [f["factor_id"] for f in passed] == ["f3"]
@@ -2600,11 +3448,13 @@ class TestDriftMonitorCorruptAndQualityGate:
     def test_filter_by_quality_gate_empty(self):
         """空输入直接返回。"""
         from fts.factor_engine.portfolio_loop import _filter_by_quality_gate
+
         assert _filter_by_quality_gate([], "test") == []
 
     def test_normalize_base_name(self):
         """世代后缀 '_gXX' 剥离。"""
         from fts.factor_engine.portfolio_loop import _normalize_base_name
+
         assert _normalize_base_name("fut_bias_g18") == "fut_bias"
         assert _normalize_base_name("fut_bias") == "fut_bias"
 
@@ -2612,6 +3462,7 @@ class TestDriftMonitorCorruptAndQualityGate:
 # ════════════════════════════════════════════════════════════
 # 20. 基础因子名去重（相关性模式）测试 (覆盖率补强)
 # ════════════════════════════════════════════════════════════
+
 
 class TestDedupCorrelationMode:
     """基础因子名去重 — 相关性模式 + IC-only 大组日志。"""
@@ -2622,14 +3473,15 @@ class TestDedupCorrelationMode:
     def test_correlation_mode_greedy(self):
         """相关性模式：同基础名高相关世代被剔除，低相关保留。"""
         from fts.factor_engine.portfolio_loop import _deduplicate_by_base_name
+
         factors = [
             self._mk_factor("f1", "fut_bias_g1", 0.06),
             self._mk_factor("f2", "fut_bias_g2", 0.05),
             self._mk_factor("f3", "fut_spread_g1", 0.04),
         ]
-        panel = {"RB": pd.DataFrame(
-            {"close": np.arange(20, dtype=float)},
-            index=pd.date_range("2024-01-01", periods=20))}
+        panel = {
+            "RB": pd.DataFrame({"close": np.arange(20, dtype=float)}, index=pd.date_range("2024-01-01", periods=20))
+        }
         with patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec:
             # 相同信号 → 相关性 1.0 → g2 被剔除
             m_exec.return_value.execute.return_value = np.linspace(-1, 1, 20)
@@ -2641,18 +3493,19 @@ class TestDedupCorrelationMode:
     def test_correlation_mode_no_corr_keeps_all(self):
         """相关性模式：世代间互不相关（正交信号）时全部保留。"""
         from fts.factor_engine.portfolio_loop import _deduplicate_by_base_name
+
         factors = [
             self._mk_factor("f1", "fut_bias_g1", 0.06),
             self._mk_factor("f2", "fut_bias_g2", 0.05),
         ]
-        panel = {"RB": pd.DataFrame(
-            {"close": np.arange(20, dtype=float)},
-            index=pd.date_range("2024-01-01", periods=20))}
+        panel = {
+            "RB": pd.DataFrame({"close": np.arange(20, dtype=float)}, index=pd.date_range("2024-01-01", periods=20))
+        }
         with patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec:
             # 正交信号（相关性 0）→ 互不冗余，全部保留
             m_exec.return_value.execute.side_effect = [
-                np.where(np.arange(20) % 2 == 0, 1.0, -1.0),          # 交替方波
-                np.where((np.arange(20) // 2) % 2 == 0, 1.0, -1.0),   # 周期 4 方波
+                np.where(np.arange(20) % 2 == 0, 1.0, -1.0),  # 交替方波
+                np.where((np.arange(20) // 2) % 2 == 0, 1.0, -1.0),  # 周期 4 方波
             ]
             out = _deduplicate_by_base_name(factors, "JSON", panel_data=panel)
         assert {f["factor_id"] for f in out} == {"f1", "f2"}
@@ -2660,6 +3513,7 @@ class TestDedupCorrelationMode:
     def test_ic_only_many_merges(self):
         """IC-only 模式：11 组以上合并触发截断日志。"""
         from fts.factor_engine.portfolio_loop import _deduplicate_by_base_name
+
         # 11 个不同 base 组，每组 2 个世代 → merges 11 条 → 截断日志分支
         factors = []
         for g in range(11):
@@ -2671,12 +3525,14 @@ class TestDedupCorrelationMode:
     def test_dedup_empty_input(self):
         """空输入直接返回。"""
         from fts.factor_engine.portfolio_loop import _deduplicate_by_base_name
+
         assert _deduplicate_by_base_name([], "JSON") == []
 
 
 # ════════════════════════════════════════════════════════════
 # 21. 交易日 / 影子池边界 + OOS 外推验证测试 (覆盖率补强)
 # ════════════════════════════════════════════════════════════
+
 
 class TestOosExtrapolationAndMisc:
     """_add_trading_days / _is_shadow_pending 边界 + OOS 外推验证。
@@ -2695,6 +3551,7 @@ class TestOosExtrapolationAndMisc:
         """交易日推进跳过周末。"""
         from datetime import datetime
         from fts.factor_engine.portfolio_loop import _add_trading_days
+
         start = datetime(2026, 8, 3)  # 周一
         end = _add_trading_days(start, 3)
         assert end > start
@@ -2703,12 +3560,14 @@ class TestOosExtrapolationAndMisc:
     def test_is_shadow_pending_invalid_date(self):
         """observe_until 非法日期返回 False。"""
         from fts.factor_engine.portfolio_loop import _is_shadow_pending
+
         factor = {"shadow_pool": {"observe_until": "not-a-date"}}
         assert _is_shadow_pending(factor) is False
 
     def test_oos_no_promoted_at_skips(self, inject_pd):
         """旧因子无 promoted_at 跳过验证。"""
         from fts.factor_engine.portfolio_loop import _validate_oos_extrapolation
+
         f = {"factor_id": "f1"}
         out = _validate_oos_extrapolation(f, {}, "2026-01-01T00:00:00")
         assert out is f
@@ -2716,54 +3575,80 @@ class TestOosExtrapolationAndMisc:
     def test_oos_too_early_skips(self, inject_pd):
         """晋升后不足 5 个交易日跳过验证。"""
         from fts.factor_engine.portfolio_loop import _validate_oos_extrapolation
-        f = {"factor_id": "f1", "promoted_at": "2026-01-30T00:00:00",
-             "evaluation": {"level_1_backtest": {"ic": 0.05}}, "code": "close"}
+
+        f = {
+            "factor_id": "f1",
+            "promoted_at": "2026-01-30T00:00:00",
+            "evaluation": {"level_1_backtest": {"ic": 0.05}},
+            "code": "close",
+        }
         out = _validate_oos_extrapolation(f, {}, "2026-01-31T00:00:00")
         assert "oos_extrapolation" not in out
 
     def test_oos_weak_ic_skips(self, inject_pd):
         """原始 IC 太弱跳过验证。"""
         from fts.factor_engine.portfolio_loop import _validate_oos_extrapolation
-        f = {"factor_id": "f1", "promoted_at": "2026-01-01T00:00:00",
-             "evaluation": {"level_1_backtest": {"ic": 0.0}}, "code": "close"}
-        out = _validate_oos_extrapolation(
-            f, {"s1": pd.DataFrame({"close": [1.0, 2.0, 3.0]})}, "2026-02-01T00:00:00")
+
+        f = {
+            "factor_id": "f1",
+            "promoted_at": "2026-01-01T00:00:00",
+            "evaluation": {"level_1_backtest": {"ic": 0.0}},
+            "code": "close",
+        }
+        out = _validate_oos_extrapolation(f, {"s1": pd.DataFrame({"close": [1.0, 2.0, 3.0]})}, "2026-02-01T00:00:00")
         assert "oos_extrapolation" not in out
 
     def test_oos_no_code_skips(self, inject_pd):
         """因子无代码跳过验证。"""
         from fts.factor_engine.portfolio_loop import _validate_oos_extrapolation
-        f = {"factor_id": "f1", "promoted_at": "2026-01-01T00:00:00",
-             "evaluation": {"level_1_backtest": {"ic": 0.05}}, "code": ""}
+
+        f = {
+            "factor_id": "f1",
+            "promoted_at": "2026-01-01T00:00:00",
+            "evaluation": {"level_1_backtest": {"ic": 0.05}},
+            "code": "",
+        }
         out = _validate_oos_extrapolation(f, {}, "2026-02-01T00:00:00")
         assert "oos_extrapolation" not in out
 
     def test_oos_insufficient_new_data(self, inject_pd):
         """新数据不足 3 只品种跳过验证。"""
         from fts.factor_engine.portfolio_loop import _validate_oos_extrapolation
-        f = {"factor_id": "f1", "promoted_at": "2026-01-01T00:00:00",
-             "evaluation": {"level_1_backtest": {"ic": 0.05}}, "code": "close"}
-        panel = {f"s{i}": pd.DataFrame(
-            {"close": np.arange(10, dtype=float)},
-            index=pd.date_range("2026-01-10", periods=10)) for i in range(2)}
+
+        f = {
+            "factor_id": "f1",
+            "promoted_at": "2026-01-01T00:00:00",
+            "evaluation": {"level_1_backtest": {"ic": 0.05}},
+            "code": "close",
+        }
+        panel = {
+            f"s{i}": pd.DataFrame({"close": np.arange(10, dtype=float)}, index=pd.date_range("2026-01-10", periods=10))
+            for i in range(2)
+        }
         out = _validate_oos_extrapolation(f, panel, "2026-02-01T00:00:00")
         assert "oos_extrapolation" not in out
 
     def test_oos_needs_demotion(self, inject_pd):
         """连续 3 次 IC 衰减 > 20% 标记待降级。"""
         from fts.factor_engine.portfolio_loop import _validate_oos_extrapolation
+
         factor = {
-            "factor_id": "f1", "name": "n1",
+            "factor_id": "f1",
+            "name": "n1",
             "promoted_at": "2026-01-01T00:00:00",
             "evaluation": {"level_1_backtest": {"ic": 0.05}},
-            "code": "close", "params": {},
+            "code": "close",
+            "params": {},
             "_oos_history": [{"ic_decay": 0.5}, {"ic_decay": 0.5}],
         }
-        panel = {f"s{i}": pd.DataFrame(
-            {"close": np.linspace(100, 120, 30)},
-            index=pd.date_range("2026-01-10", periods=30)) for i in range(3)}
-        with patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("scipy.stats.spearmanr", return_value=(0.01, 0.9)):
+        panel = {
+            f"s{i}": pd.DataFrame({"close": np.linspace(100, 120, 30)}, index=pd.date_range("2026-01-10", periods=30))
+            for i in range(3)
+        }
+        with (
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("scipy.stats.spearmanr", return_value=(0.01, 0.9)),
+        ):
             m_exec.return_value.execute.return_value = pd.Series(np.linspace(-1, 1, 30))
             out = _validate_oos_extrapolation(factor, panel, "2026-02-01T00:00:00")
         oos = out["oos_extrapolation"]
@@ -2774,17 +3659,23 @@ class TestOosExtrapolationAndMisc:
     def test_oos_no_decay_not_demoted(self):
         """IC 无明显衰减不触发降级。"""
         from fts.factor_engine.portfolio_loop import _validate_oos_extrapolation
+
         factor = {
-            "factor_id": "f1", "name": "n1",
+            "factor_id": "f1",
+            "name": "n1",
             "promoted_at": "2026-01-01T00:00:00",
             "evaluation": {"level_1_backtest": {"ic": 0.05}},
-            "code": "close", "params": {},
+            "code": "close",
+            "params": {},
         }
-        panel = {f"s{i}": pd.DataFrame(
-            {"close": np.linspace(100, 120, 30)},
-            index=pd.date_range("2026-01-10", periods=30)) for i in range(3)}
-        with patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("scipy.stats.spearmanr", return_value=(0.049, 0.9)):
+        panel = {
+            f"s{i}": pd.DataFrame({"close": np.linspace(100, 120, 30)}, index=pd.date_range("2026-01-10", periods=30))
+            for i in range(3)
+        }
+        with (
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("scipy.stats.spearmanr", return_value=(0.049, 0.9)),
+        ):
             m_exec.return_value.execute.return_value = pd.Series(np.linspace(-1, 1, 30))
             out = _validate_oos_extrapolation(factor, panel, "2026-02-01T00:00:00")
         assert out["oos_extrapolation"]["needs_demotion"] is False
@@ -2792,20 +3683,27 @@ class TestOosExtrapolationAndMisc:
     def test_oos_data_panel_with_date_column(self, inject_pd):
         """数据面板使用 date 字符串列时正常计算。"""
         from fts.factor_engine.portfolio_loop import _validate_oos_extrapolation
+
         factor = {
-            "factor_id": "f1", "name": "n1",
+            "factor_id": "f1",
+            "name": "n1",
             "promoted_at": "2026-01-01T00:00:00",
             "evaluation": {"level_1_backtest": {"ic": 0.05}},
-            "code": "close", "params": {},
+            "code": "close",
+            "params": {},
         }
         panel = {}
         for i in range(3):
-            panel[f"s{i}"] = pd.DataFrame({
-                "date": pd.date_range("2026-01-10", periods=30).astype(str),
-                "close": np.linspace(100, 120, 30),
-            })
-        with patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("scipy.stats.spearmanr", return_value=(0.01, 0.9)):
+            panel[f"s{i}"] = pd.DataFrame(
+                {
+                    "date": pd.date_range("2026-01-10", periods=30).astype(str),
+                    "close": np.linspace(100, 120, 30),
+                }
+            )
+        with (
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("scipy.stats.spearmanr", return_value=(0.01, 0.9)),
+        ):
             m_exec.return_value.execute.return_value = pd.Series(np.linspace(-1, 1, 30))
             out = _validate_oos_extrapolation(factor, panel, "2026-02-01T00:00:00")
         assert "oos_extrapolation" in out
@@ -2813,34 +3711,44 @@ class TestOosExtrapolationAndMisc:
     def test_oos_panel_without_dates(self, inject_pd):
         """数据面板无时间索引且无 date 列时数据不足跳过。"""
         from fts.factor_engine.portfolio_loop import _validate_oos_extrapolation
+
         factor = {
-            "factor_id": "f1", "name": "n1",
+            "factor_id": "f1",
+            "name": "n1",
             "promoted_at": "2026-01-01T00:00:00",
             "evaluation": {"level_1_backtest": {"ic": 0.05}},
-            "code": "close", "params": {},
+            "code": "close",
+            "params": {},
         }
         # RangeIndex（非 DatetimeIndex）且无 date 列 → continue
-        panel = {f"s{i}": pd.DataFrame(
-            {"close": np.linspace(100, 120, 30)}) for i in range(3)}
+        panel = {f"s{i}": pd.DataFrame({"close": np.linspace(100, 120, 30)}) for i in range(3)}
         out = _validate_oos_extrapolation(factor, panel, "2026-02-01T00:00:00")
         assert "oos_extrapolation" not in out
 
     def test_oos_close_underscore_column(self, inject_pd):
         """数据面板仅有 close_ 列时使用其计算收益。"""
         from fts.factor_engine.portfolio_loop import _validate_oos_extrapolation
+
         factor = {
-            "factor_id": "f1", "name": "n1",
+            "factor_id": "f1",
+            "name": "n1",
             "promoted_at": "2026-01-01T00:00:00",
             "evaluation": {"level_1_backtest": {"ic": 0.05}},
-            "code": "close", "params": {},
+            "code": "close",
+            "params": {},
         }
         panel = {}
         for i in range(3):
-            panel[f"s{i}"] = pd.DataFrame({
-                "close_": np.linspace(100, 120, 30),
-            }, index=pd.date_range("2026-01-10", periods=30))
-        with patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("scipy.stats.spearmanr", return_value=(0.01, 0.9)):
+            panel[f"s{i}"] = pd.DataFrame(
+                {
+                    "close_": np.linspace(100, 120, 30),
+                },
+                index=pd.date_range("2026-01-10", periods=30),
+            )
+        with (
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("scipy.stats.spearmanr", return_value=(0.01, 0.9)),
+        ):
             m_exec.return_value.execute.return_value = pd.Series(np.linspace(-1, 1, 30))
             out = _validate_oos_extrapolation(factor, panel, "2026-02-01T00:00:00")
         assert "oos_extrapolation" in out
@@ -2848,17 +3756,23 @@ class TestOosExtrapolationAndMisc:
     def test_oos_no_price_column(self, inject_pd):
         """数据面板无 close/close_ 列时跳过验证。"""
         from fts.factor_engine.portfolio_loop import _validate_oos_extrapolation
+
         factor = {
-            "factor_id": "f1", "name": "n1",
+            "factor_id": "f1",
+            "name": "n1",
             "promoted_at": "2026-01-01T00:00:00",
             "evaluation": {"level_1_backtest": {"ic": 0.05}},
-            "code": "close", "params": {},
+            "code": "close",
+            "params": {},
         }
         panel = {}
         for i in range(3):
-            panel[f"s{i}"] = pd.DataFrame({
-                "volume": np.arange(30, dtype=float),
-            }, index=pd.date_range("2026-01-10", periods=30))
+            panel[f"s{i}"] = pd.DataFrame(
+                {
+                    "volume": np.arange(30, dtype=float),
+                },
+                index=pd.date_range("2026-01-10", periods=30),
+            )
         with patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec:
             m_exec.return_value.execute.return_value = pd.Series(np.linspace(-1, 1, 30))
             out = _validate_oos_extrapolation(factor, panel, "2026-02-01T00:00:00")
@@ -2869,14 +3783,24 @@ class TestOosExtrapolationAndMisc:
 # 22. load_elite_factors DuckDB 路径 + L2 索引测试 (覆盖率补强)
 # ════════════════════════════════════════════════════════════
 
+
 class TestLoadEliteDuckdb:
     """load_elite_factors DuckDB 路径与 JSON 回退分支。"""
 
     def _db_factor(self, fid: str = "f1", code: str = "close") -> dict:
         return {
-            "factor_id": fid, "name": f"n_{fid}", "code": code, "code_hash": "",
-            "sharpe": 2.0, "ic": 0.05, "turnover_monthly": 0.3, "decay_6m": 0.1,
-            "metadata": {}, "params": {}, "economic_logic": {}, "market": "stock",
+            "factor_id": fid,
+            "name": f"n_{fid}",
+            "code": code,
+            "code_hash": "",
+            "sharpe": 2.0,
+            "ic": 0.05,
+            "turnover_monthly": 0.3,
+            "decay_6m": 0.1,
+            "metadata": {},
+            "params": {},
+            "economic_logic": {},
+            "market": "stock",
         }
 
     def test_duckdb_success_computes_hash(self, tmp_elite_dir):
@@ -2903,8 +3827,7 @@ class TestLoadEliteDuckdb:
         repo = MagicMock()
         repo._execute.return_value.fetchone.return_value = [3]
         repo.list_factors.return_value = []
-        repo._execute.return_value.fetchall.return_value = [
-            ("f1", "n1", "stock", True, "active")]
+        repo._execute.return_value.fetchall.return_value = [("f1", "n1", "stock", True, "active")]
         with patch("fts.factor_engine.factor_db.FactorRepository", return_value=repo):
             factors = load_elite_factors(tmp_elite_dir, use_duckdb=True, market="stock")
         assert factors == []
@@ -2914,17 +3837,20 @@ class TestLoadEliteDuckdb:
         repo = MagicMock()
         repo._execute.return_value.fetchone.return_value = [2]
         repo.list_factors.return_value = [self._db_factor("f1"), self._db_factor("f2")]
-        with patch("fts.factor_engine.factor_db.FactorRepository", return_value=repo), \
-             patch("fts.factor_engine.portfolio_loop._deduplicate_by_base_name",
-                   side_effect=[RuntimeError("dedup fail"), ["f1", "f2"]]) as m_dedup:
+        with (
+            patch("fts.factor_engine.factor_db.FactorRepository", return_value=repo),
+            patch(
+                "fts.factor_engine.portfolio_loop._deduplicate_by_base_name",
+                side_effect=[RuntimeError("dedup fail"), ["f1", "f2"]],
+            ) as m_dedup,
+        ):
             factors = load_elite_factors(tmp_elite_dir, use_duckdb=True, market="stock")
         assert len(factors) == 2
         assert m_dedup.call_count == 2
 
     def test_duckdb_repo_failure_fallback_json(self, tmp_elite_dir):
         """DuckDB 仓库初始化失败时回退 JSON。"""
-        with patch("fts.factor_engine.factor_db.FactorRepository",
-                   side_effect=RuntimeError("db down")):
+        with patch("fts.factor_engine.factor_db.FactorRepository", side_effect=RuntimeError("db down")):
             factors = load_elite_factors(tmp_elite_dir, use_duckdb=True, market="stock")
         assert factors == []
 
@@ -2935,28 +3861,41 @@ class TestLoadEliteDuckdb:
 
     def test_json_market_skip(self, tmp_elite_dir):
         """市场不匹配的 JSON 因子被跳过。"""
-        (tmp_elite_dir / "f1.json").write_text(json.dumps({
-            "factor_id": "f1", "name": "n1", "sharpe": 2.0, "ic": 0.05,
-            "turnover": 0.3, "decay_6m": 0.1, "market": "futures",
-        }), encoding="utf-8")
+        (tmp_elite_dir / "f1.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "f1",
+                    "name": "n1",
+                    "sharpe": 2.0,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                    "market": "futures",
+                }
+            ),
+            encoding="utf-8",
+        )
         factors = load_elite_factors(tmp_elite_dir, use_duckdb=False, market="stock")
         assert factors == []
 
     def test_load_l2_correlation_index_corrupt(self, tmp_elite_dir):
         """L2 相关性索引文件损坏返回空列表。"""
         from fts.factor_engine.portfolio_loop import load_l2_correlation_index
+
         (tmp_elite_dir / "_l2_seed_correlation_index.json").write_text("{bad", encoding="utf-8")
         assert load_l2_correlation_index(tmp_elite_dir) == []
 
     def test_load_l2_correlation_index_missing(self, tmp_elite_dir):
         """L2 相关性索引文件缺失返回空列表。"""
         from fts.factor_engine.portfolio_loop import load_l2_correlation_index
+
         assert load_l2_correlation_index(tmp_elite_dir) == []
 
 
 # ════════════════════════════════════════════════════════════
 # 23. 质量报告 + PortfolioLoop.run 分支测试 (覆盖率补强)
 # ════════════════════════════════════════════════════════════
+
 
 class TestQualityReportAndRunBranches:
     """_generate_quality_report 路径 A/B + PortfolioLoop.run 各场景分支。"""
@@ -2966,18 +3905,31 @@ class TestQualityReportAndRunBranches:
         elite_dir.mkdir(parents=True, exist_ok=True)
         for i in range(n):
             fid = f"fct_{i}"
-            (elite_dir / f"{fid}.json").write_text(json.dumps({
-                "factor_id": fid, "name": f"f{i}",
-                "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-                "market": market, "code": "close",
-            }), encoding="utf-8")
+            (elite_dir / f"{fid}.json").write_text(
+                json.dumps(
+                    {
+                        "factor_id": fid,
+                        "name": f"f{i}",
+                        "sharpe": 2.5,
+                        "ic": 0.05,
+                        "turnover": 0.3,
+                        "decay_6m": 0.1,
+                        "market": market,
+                        "code": "close",
+                    }
+                ),
+                encoding="utf-8",
+            )
 
     def _make_loop(self, tmp_portfolio_dir, tmp_elite_dir, **kw) -> PortfolioLoop:
         """构造最小 PortfolioLoop（mock 无关依赖关闭）。"""
         defaults = dict(
-            memory_dir=tmp_portfolio_dir, elite_dir=tmp_elite_dir,
-            use_duckdb=False, synthesis_mode="equal_weight",
-            enable_regime_adaptation=False, enable_clustering=False,
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            synthesis_mode="equal_weight",
+            enable_regime_adaptation=False,
+            enable_clustering=False,
         )
         defaults.update(kw)
         return PortfolioLoop(**defaults)
@@ -2987,32 +3939,40 @@ class TestQualityReportAndRunBranches:
     def test_quality_report_combo_fallback_success(self, tmp_portfolio_dir, tmp_elite_dir):
         """DuckDB 查询失败时 combo 回退生成质量报告。"""
         loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir)
-        (tmp_portfolio_dir / "current_combo.json").write_text(json.dumps({
-            "weights": {"f1": {"ic": 0.05, "sharpe": 2.0}},
-        }), encoding="utf-8")
-        with patch("fts.factor_engine.factor_db.FactorRepository",
-                   side_effect=RuntimeError("db down")):
+        (tmp_portfolio_dir / "current_combo.json").write_text(
+            json.dumps(
+                {
+                    "weights": {"f1": {"ic": 0.05, "sharpe": 2.0}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch("fts.factor_engine.factor_db.FactorRepository", side_effect=RuntimeError("db down")):
             loop._generate_quality_report()
         from datetime import datetime as _dt
+
         out = tmp_portfolio_dir / f"elite_final_quality_{_dt.now().strftime('%Y-%m-%d')}.json"
         assert out.exists()
 
     def test_quality_report_combo_missing(self, tmp_portfolio_dir, tmp_elite_dir):
         """combo 文件不存在时提前返回。"""
         loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir)
-        with patch("fts.factor_engine.factor_db.FactorRepository",
-                   side_effect=RuntimeError("db down")):
+        with patch("fts.factor_engine.factor_db.FactorRepository", side_effect=RuntimeError("db down")):
             loop._generate_quality_report()
         assert not list(tmp_portfolio_dir.glob("elite_final_quality_*.json"))
 
     def test_quality_report_no_factors(self, tmp_portfolio_dir, tmp_elite_dir):
         """combo 无 weights 时无因子数据跳过。"""
         loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir)
-        (tmp_portfolio_dir / "current_combo.json").write_text(json.dumps({
-            "weights": {},
-        }), encoding="utf-8")
-        with patch("fts.factor_engine.factor_db.FactorRepository",
-                   side_effect=RuntimeError("db down")):
+        (tmp_portfolio_dir / "current_combo.json").write_text(
+            json.dumps(
+                {
+                    "weights": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch("fts.factor_engine.factor_db.FactorRepository", side_effect=RuntimeError("db down")):
             loop._generate_quality_report()
         assert not list(tmp_portfolio_dir.glob("elite_final_quality_*.json"))
 
@@ -3020,8 +3980,7 @@ class TestQualityReportAndRunBranches:
         """combo 文件损坏时提前返回。"""
         loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir)
         (tmp_portfolio_dir / "current_combo.json").write_text("corrupt", encoding="utf-8")
-        with patch("fts.factor_engine.factor_db.FactorRepository",
-                   side_effect=RuntimeError("db down")):
+        with patch("fts.factor_engine.factor_db.FactorRepository", side_effect=RuntimeError("db down")):
             loop._generate_quality_report()
         assert not list(tmp_portfolio_dir.glob("elite_final_quality_*.json"))
 
@@ -3032,8 +3991,7 @@ class TestQualityReportAndRunBranches:
         self._write_factors(tmp_elite_dir, market="futures", n=1)
         with patch("fts.data.FTSDataProvider") as m_prov:
             m_prov.return_value.get_futures_panel.side_effect = RuntimeError("panel fail")
-            loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir,
-                                   market="futures")
+            loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir, market="futures")
             result = loop.run()
         assert result.status in ("passed", "verifier_warning", "completed")
         assert result.n_factors_input == 1
@@ -3043,16 +4001,23 @@ class TestQualityReportAndRunBranches:
         self._write_factors(tmp_elite_dir, market="futures", n=1)
 
         def _demote(factor, panel, combo_ts):
-            return {**factor, "oos_extrapolation": {
-                "needs_demotion": True, "ic_decay": 0.5,
-                "consecutive_decay_count": 3,
-            }}
+            return {
+                **factor,
+                "oos_extrapolation": {
+                    "needs_demotion": True,
+                    "ic_decay": 0.5,
+                    "consecutive_decay_count": 3,
+                },
+            }
 
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.portfolio_loop._validate_oos_extrapolation",
-                   side_effect=_demote):
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.portfolio_loop._validate_oos_extrapolation", side_effect=_demote),
+        ):
             m_prov.return_value.get_futures_panel.return_value = (
-                {"RB": pd.DataFrame({"close": [1.0, 2.0]})}, ["2024-01-01"])
+                {"RB": pd.DataFrame({"close": [1.0, 2.0]})},
+                ["2024-01-01"],
+            )
             loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir, market="futures")
             result = loop.run()
         assert result.n_factors_input == 1
@@ -3091,47 +4056,66 @@ class TestQualityReportAndRunBranches:
         """P2 PCA 降维应用并更新因子权重。"""
         self._write_factors(tmp_elite_dir, market="futures", n=3)
         pca_signals = [
-            PortfolioSignal(factor_id=f"fct_{i}", name=f"f{i}", weight=w, sharpe=2.5,
-                            ic=0.05, turnover=0.3, decay_6m=0.1,
-                            orthogonalized=True, retained=True)
+            PortfolioSignal(
+                factor_id=f"fct_{i}",
+                name=f"f{i}",
+                weight=w,
+                sharpe=2.5,
+                ic=0.05,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
+            )
             for i, w in enumerate([0.5, 0.3, 0.2])
         ]
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_clustering.PCASignalCompressor") as m_pca:
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_clustering.PCASignalCompressor") as m_pca,
+        ):
             m_prov.return_value.get_futures_panel.return_value = (
-                {"RB": pd.DataFrame({"close": [1.0, 2.0, 3.0]})}, ["2024-01-01"])
+                {"RB": pd.DataFrame({"close": [1.0, 2.0, 3.0]})},
+                ["2024-01-01"],
+            )
             m_pca.return_value.run.return_value = {
-                "pca_applied": True, "pca_signals": pca_signals,
-                "n_components": 3, "explained_variance_ratio": 0.95,
+                "pca_applied": True,
+                "pca_signals": pca_signals,
+                "n_components": 3,
+                "explained_variance_ratio": 0.95,
             }
-            loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir,
-                                   market="futures", enable_pca=True)
+            loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir, market="futures", enable_pca=True)
             result = loop.run()
         assert result.status in ("passed", "verifier_warning", "completed")
 
     def test_run_p2_pca_skipped(self, tmp_portfolio_dir, tmp_elite_dir):
         """P2 PCA 信号矩阵不足时跳过。"""
         self._write_factors(tmp_elite_dir, market="futures", n=3)
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_clustering.PCASignalCompressor") as m_pca:
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_clustering.PCASignalCompressor") as m_pca,
+        ):
             m_prov.return_value.get_futures_panel.return_value = (
-                {"RB": pd.DataFrame({"close": [1.0, 2.0, 3.0]})}, ["2024-01-01"])
+                {"RB": pd.DataFrame({"close": [1.0, 2.0, 3.0]})},
+                ["2024-01-01"],
+            )
             m_pca.return_value.run.return_value = {"pca_applied": False}
-            loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir,
-                                   market="futures", enable_pca=True)
+            loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir, market="futures", enable_pca=True)
             result = loop.run()
         assert result.status in ("passed", "verifier_warning", "completed")
 
     def test_run_p2_pca_failure(self, tmp_portfolio_dir, tmp_elite_dir):
         """P2 PCA 失败（非致命）继续执行。"""
         self._write_factors(tmp_elite_dir, market="futures", n=3)
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_clustering.PCASignalCompressor") as m_pca:
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_clustering.PCASignalCompressor") as m_pca,
+        ):
             m_prov.return_value.get_futures_panel.return_value = (
-                {"RB": pd.DataFrame({"close": [1.0, 2.0, 3.0]})}, ["2024-01-01"])
+                {"RB": pd.DataFrame({"close": [1.0, 2.0, 3.0]})},
+                ["2024-01-01"],
+            )
             m_pca.return_value.run.side_effect = RuntimeError("pca fail")
-            loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir,
-                                   market="futures", enable_pca=True)
+            loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir, market="futures", enable_pca=True)
             result = loop.run()
         assert result.status in ("passed", "verifier_warning", "completed")
 
@@ -3141,16 +4125,14 @@ class TestQualityReportAndRunBranches:
         ohlcv = pd.DataFrame({"close": [1.0, 2.0, 3.0]})
         with patch("fts.factor_engine.regime.RegimeAwareSelector") as m_reg:
             m_reg.return_value.detect.return_value = {"regime": "bull", "confidence": 0.9}
-            loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir,
-                                   enable_regime_adaptation=True)
+            loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir, enable_regime_adaptation=True)
             result = loop.run(market_ohlcv=ohlcv)
         assert result.status in ("passed", "verifier_warning", "completed")
 
     def test_run_orthogonalize_removed_log(self, tmp_portfolio_dir, tmp_elite_dir):
         """非 elastic_net 模式正交化移除因子时记录日志。"""
         self._write_factors(tmp_elite_dir, n=2)  # 两个因子代码相同 → 哈希去重
-        loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir,
-                               synthesis_mode="sharpe_weight")
+        loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir, synthesis_mode="sharpe_weight")
         result = loop.run()
         assert result.n_factors_input == 2
         assert result.status in ("passed", "verifier_warning", "completed")
@@ -3162,6 +4144,83 @@ class TestQualityReportAndRunBranches:
         loop.drift_monitor.compute = MagicMock(side_effect=RuntimeError("drift fail"))
         result = loop.run()
         assert result.status in ("passed", "verifier_warning", "completed")
+
+    def test_run_drift_alert_sets_state_and_proposal(self, tmp_portfolio_dir, tmp_elite_dir):
+        """GAP-F13: 漂移超阈值 + 开启自动重平衡 → state 标记告警 + 附加重平衡建议。"""
+        self._write_factors(tmp_elite_dir, n=3)
+        cfg: DriftAlertConfig = {
+            "overlap_threshold": 0.50,
+            "weight_l1_threshold": 0.40,
+            "trigger_rebalance": True,
+        }
+        loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir)
+        loop.drift_monitor.alert_config = cfg
+        # 注入触发告警的漂移指标（成员全换 + 权重全变）
+        loop.drift_monitor.compute = MagicMock(
+            return_value=DriftMetrics(
+                date="2026-08-10",
+                combo_id="cmb_new",
+                prev_combo_id="cmb_prev",
+                trace_id="l3_gapf13",
+                member_overlap_rate=0.0,
+                weight_l1_change=1.0,
+                n_prev_members=3,
+                n_new_members=3,
+                n_common_members=0,
+                added=["new_a"],
+                removed=["old_a"],
+            )
+        )
+        loop.drift_monitor.record = MagicMock()
+        captured: dict[str, Any] = {}
+        with patch(
+            "fts.factor_engine.portfolio_loop.inject_to_fdt",
+            side_effect=lambda combo, proposals, out: (
+                captured.update({"combo": combo, "proposals": proposals}),
+                {},
+            )[1],
+        ):
+            result = loop.run()
+        assert result.status in ("passed", "verifier_warning", "completed")
+        assert "drift_monitor" in {p.get("source") for p in captured["proposals"]}, "重平衡建议应附加到 proposals"
+        # state 标记告警（写入 memory/portfolio/state.json）
+        state_fp = tmp_portfolio_dir / "state.json"
+        assert state_fp.exists()
+        state_obj = json.loads(state_fp.read_text(encoding="utf-8"))
+        assert state_obj.get("drift_alerted") is True, "state 应标记 drift_alerted"
+
+    def test_run_drift_alert_disabled_no_proposal(self, tmp_portfolio_dir, tmp_elite_dir):
+        """GAP-F13: 默认配置（不自动重平衡）→ 仅告警不附加重平衡建议。"""
+        self._write_factors(tmp_elite_dir, n=3)
+        loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir)
+        # 默认 DEFAULT_DRIFT_ALERT_CONFIG trigger_rebalance=False
+        loop.drift_monitor.compute = MagicMock(
+            return_value=DriftMetrics(
+                date="2026-08-10",
+                combo_id="cmb_new",
+                prev_combo_id="cmb_prev",
+                trace_id="l3_gapf13",
+                member_overlap_rate=0.0,
+                weight_l1_change=1.0,
+                n_prev_members=3,
+                n_new_members=3,
+                n_common_members=0,
+                added=["new_a"],
+                removed=["old_a"],
+            )
+        )
+        loop.drift_monitor.record = MagicMock()
+        captured: dict[str, Any] = {}
+        with patch(
+            "fts.factor_engine.portfolio_loop.inject_to_fdt",
+            side_effect=lambda combo, proposals, out: (
+                captured.update({"combo": combo, "proposals": proposals}),
+                {},
+            )[1],
+        ):
+            result = loop.run()
+        assert result.status in ("passed", "verifier_warning", "completed")
+        assert "drift_monitor" not in {p.get("source") for p in captured["proposals"]}, "默认配置不应附加重平衡建议"
 
     def test_run_quality_report_failure(self, tmp_portfolio_dir, tmp_elite_dir):
         """质量报告生成失败（非致命）继续执行。"""
@@ -3175,17 +4234,30 @@ class TestQualityReportAndRunBranches:
         """main() 中 verifier 未通过时打印 error（exit 0）。"""
         import sys as _sys
         from fts.factor_engine.portfolio_loop import main as pl_main
+
         memory_dir = tmp_path / "mem_main_e"
         memory_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(_sys, "argv", [
-            "portfolio_loop.py", "--once", "--mode", "sharpe_weight",
-            "--memory-dir", str(memory_dir), "--elite-dir", str(tmp_path / "elite_main_e"),
-        ])
+        monkeypatch.setattr(
+            _sys,
+            "argv",
+            [
+                "portfolio_loop.py",
+                "--once",
+                "--mode",
+                "sharpe_weight",
+                "--memory-dir",
+                str(memory_dir),
+                "--elite-dir",
+                str(tmp_path / "elite_main_e"),
+            ],
+        )
         # 仅 1 个因子 → 通过质量门槛但 verifier 因子数不足 → error 非空
-        with patch("fts.factor_engine.portfolio_loop.load_elite_factors", return_value=[
-            {"factor_id": "f1", "name": "f1", "sharpe": 2.5, "ic": 0.05,
-             "turnover": 0.3, "decay_6m": 0.1},
-        ]):
+        with patch(
+            "fts.factor_engine.portfolio_loop.load_elite_factors",
+            return_value=[
+                {"factor_id": "f1", "name": "f1", "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1},
+            ],
+        ):
             with pytest.raises(SystemExit) as exc:
                 pl_main()
         assert exc.value.code == 0
@@ -3195,6 +4267,7 @@ class TestQualityReportAndRunBranches:
 # 24. PortfolioManager / Regime 杂项分支测试 (覆盖率补强)
 # ════════════════════════════════════════════════════════════
 
+
 class TestPortfolioManagerAndRegimeMisc:
     """PortfolioManager 归档/历史/目录缺失 + Regime 杂项分支。"""
 
@@ -3203,10 +4276,18 @@ class TestPortfolioManagerAndRegimeMisc:
         pm = PortfolioManager(tmp_portfolio_dir)
         pm.combo_file.write_text("corrupt", encoding="utf-8")
         combo = PortfolioCombo(
-            version=EVOLUTION_VERSION, updated_at="now",
-            combo_id="cmb_new", trace_id="t", synthesis_mode="equal_weight",
-            signals=[], combo_sharpe=0.0, combo_turnover=0.0,
-            max_correlation=0.0, n_factors=0, status="pending", created_at="now",
+            version=EVOLUTION_VERSION,
+            updated_at="now",
+            combo_id="cmb_new",
+            trace_id="t",
+            synthesis_mode="equal_weight",
+            signals=[],
+            combo_sharpe=0.0,
+            combo_turnover=0.0,
+            max_correlation=0.0,
+            n_factors=0,
+            status="pending",
+            created_at="now",
         )
         pm.save_combo(combo)
         assert pm.combo_file.exists()
@@ -3221,6 +4302,7 @@ class TestPortfolioManagerAndRegimeMisc:
     def test_list_active_proposals_missing_dir(self, tmp_portfolio_dir):
         """proposals 目录缺失时返回空列表。"""
         import shutil
+
         pm = PortfolioManager(tmp_portfolio_dir)
         shutil.rmtree(pm.proposals_dir)
         assert pm.list_active_proposals() == []
@@ -3228,15 +4310,26 @@ class TestPortfolioManagerAndRegimeMisc:
     def test_infer_family_cross_section(self):
         """从名称推断 cross_section 家族。"""
         from fts.factor_engine.portfolio_loop import _infer_factor_family_from_name
+
         assert _infer_factor_family_from_name("rank_based") == "cross_section"
         assert _infer_factor_family_from_name("cs_style") == "cross_section"
 
     def test_regime_no_adjustment_log(self):
         """regime 有配置但家族倍率=1.0 时无需调整。"""
         from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
         signals = [
-            PortfolioSignal(factor_id="f1", name="n1", weight=0.5, sharpe=2.0, ic=0.04,
-                            turnover=0.3, decay_6m=0.1, orthogonalized=False, retained=True),
+            PortfolioSignal(
+                factor_id="f1",
+                name="n1",
+                weight=0.5,
+                sharpe=2.0,
+                ic=0.04,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=False,
+                retained=True,
+            ),
         ]
         factors = [{"factor_id": "f1", "family": "cross_section"}]  # bear 下倍率 1.0
         out = regime_adaptive_weight_adjustment(signals, {"regime": "bear"}, factors)
@@ -3247,6 +4340,7 @@ class TestPortfolioManagerAndRegimeMisc:
 # 25. 覆盖率收尾测试 (v1.3.1) — 残余小分支
 # ════════════════════════════════════════════════════════════
 
+
 class TestCoveragePolish:
     """补齐剩余小分支：ml_ensemble 回退 / Regime 异常 / 相关性空回退等。"""
 
@@ -3254,8 +4348,7 @@ class TestCoveragePolish:
         """ml_ensemble 权重计算失败回退 sharpe_weight。"""
         elite = tmp_path / "elite"
         elite.mkdir(parents=True, exist_ok=True)
-        with patch("fts.factor_engine.portfolio_loop._compute_ml_ensemble_weights",
-                   return_value={}):
+        with patch("fts.factor_engine.portfolio_loop._compute_ml_ensemble_weights", return_value={}):
             signals, _, _ = synthesize_signals(sample_factors, mode="ml_ensemble", elite_dir=elite)
         assert len(signals) == 3
         assert all(s["weight"] > 0 for s in signals)
@@ -3263,26 +4356,27 @@ class TestCoveragePolish:
     def test_compute_signal_correlations_empty_panel(self):
         """_compute_signal_correlations 空面板返回空 dict。"""
         from fts.factor_engine.portfolio_loop import _compute_signal_correlations
+
         assert _compute_signal_correlations([], {}) == {}
 
     def test_compute_signal_correlations_error_paths(self):
         """_compute_signal_correlations 无代码因子错误日志 + 信号不足回退。"""
         from fts.factor_engine.portfolio_loop import _compute_signal_correlations
-        panel = {"RB": pd.DataFrame(
-            {"close": np.arange(20, dtype=float)},
-            index=pd.date_range("2024-01-01", periods=20))}
+
+        panel = {
+            "RB": pd.DataFrame({"close": np.arange(20, dtype=float)}, index=pd.date_range("2024-01-01", periods=20))
+        }
         # 6 个无 code 因子 → errors 6 条 → 截断日志 + 有效信号 < 2 回退
-        factors = [
-            {"factor_id": f"f{i}", "name": f"n{i}"} for i in range(6)
-        ]
+        factors = [{"factor_id": f"f{i}", "name": f"n{i}"} for i in range(6)]
         assert _compute_signal_correlations(factors, panel) == {}
 
     def test_compute_signal_correlations_nan_and_error(self):
         """_compute_signal_correlations 空信号与执行异常分支。"""
         from fts.factor_engine.portfolio_loop import _compute_signal_correlations
-        panel = {"RB": pd.DataFrame(
-            {"close": np.arange(20, dtype=float)},
-            index=pd.date_range("2024-01-01", periods=20))}
+
+        panel = {
+            "RB": pd.DataFrame({"close": np.arange(20, dtype=float)}, index=pd.date_range("2024-01-01", periods=20))
+        }
         factors = [
             {"factor_id": "f1", "name": "n1", "code": "x", "params": {}},
             {"factor_id": "f2", "name": "n2", "code": "y", "params": {}},
@@ -3290,20 +4384,22 @@ class TestCoveragePolish:
         with patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec:
             # f1 信号全 NaN → 空信号；f2 执行抛异常 → 跳过
             m_exec.return_value.execute.side_effect = [
-                np.full(20, np.nan), RuntimeError("boom"),
+                np.full(20, np.nan),
+                RuntimeError("boom"),
             ]
             assert _compute_signal_correlations(factors, panel) == {}
 
     def test_dedup_correlation_mode_no_corr_fallback(self):
         """相关性模式无法计算相关性时回退 IC-only。"""
         from fts.factor_engine.portfolio_loop import _deduplicate_by_base_name
+
         factors = [
             {"factor_id": "f1", "name": "fut_bias_g1", "ic": 0.06, "code": "x", "params": {}},
             {"factor_id": "f2", "name": "fut_bias_g2", "ic": 0.05, "code": "y", "params": {}},
         ]
-        panel = {"RB": pd.DataFrame(
-            {"close": np.arange(20, dtype=float)},
-            index=pd.date_range("2024-01-01", periods=20))}
+        panel = {
+            "RB": pd.DataFrame({"close": np.arange(20, dtype=float)}, index=pd.date_range("2024-01-01", periods=20))
+        }
         with patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec:
             # 信号全 NaN/空 → 无法计算相关性 → 回退保留 IC 最高
             m_exec.return_value.execute.return_value = np.full(20, np.nan)
@@ -3312,19 +4408,33 @@ class TestCoveragePolish:
 
     def test_run_regime_detection_failure(self, tmp_portfolio_dir, tmp_elite_dir):
         """Step 2.5 Regime 检测失败（非致命）跳过自适应调整。"""
-        self_ref = TestQualityReportAndRunBranches()
+        TestQualityReportAndRunBranches()
         elite_dir = tmp_elite_dir
         elite_dir.mkdir(parents=True, exist_ok=True)
-        (elite_dir / "f.json").write_text(json.dumps({
-            "factor_id": "fct_0", "name": "f0", "sharpe": 2.5, "ic": 0.05,
-            "turnover": 0.3, "decay_6m": 0.1, "market": "stock", "code": "close",
-        }), encoding="utf-8")
+        (elite_dir / "f.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_0",
+                    "name": "f0",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                    "market": "stock",
+                    "code": "close",
+                }
+            ),
+            encoding="utf-8",
+        )
         ohlcv = pd.DataFrame({"close": [1.0, 2.0, 3.0]})
         with patch("fts.factor_engine.regime.RegimeAwareSelector") as m_reg:
             m_reg.return_value.detect.side_effect = RuntimeError("regime fail")
             loop = PortfolioLoop(
-                memory_dir=tmp_portfolio_dir, elite_dir=elite_dir, use_duckdb=False,
-                synthesis_mode="equal_weight", enable_regime_adaptation=True,
+                memory_dir=tmp_portfolio_dir,
+                elite_dir=elite_dir,
+                use_duckdb=False,
+                synthesis_mode="equal_weight",
+                enable_regime_adaptation=True,
                 enable_clustering=False,
             )
             result = loop.run(market_ohlcv=ohlcv)
@@ -3333,29 +4443,36 @@ class TestCoveragePolish:
     def test_elastic_net_corrupt_and_exec_failure(self, tmp_path):
         """Elastic Net 损坏 JSON 跳过 + 单只股票执行失败跳过。"""
         from fts.factor_engine.portfolio_loop import _compute_elastic_net_weights
+
         panel, dates = TestSynthesisElasticNetMl()._make_panel()
         elite = tmp_path / "elite"
         elite.mkdir()
         (elite / "bad.json").write_text("not json", encoding="utf-8")  # 损坏文件 → 跳过
         for i in range(2):
-            (elite / f"f{i}.json").write_text(json.dumps({
-                "factor_id": f"f{i}", "name": f"n{i}", "code": "close",
-            }), encoding="utf-8")
+            (elite / f"f{i}.json").write_text(
+                json.dumps(
+                    {
+                        "factor_id": f"f{i}",
+                        "name": f"n{i}",
+                        "code": "close",
+                    }
+                ),
+                encoding="utf-8",
+            )
         factors = [
-            {"factor_id": "f0", "name": "n0", "sharpe": 2.0, "ic": 0.05,
-             "turnover": 0.3, "decay_6m": 0.1},
-            {"factor_id": "f1", "name": "n1", "sharpe": 2.0, "ic": 0.05,
-             "turnover": 0.3, "decay_6m": 0.1},
+            {"factor_id": "f0", "name": "n0", "sharpe": 2.0, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1},
+            {"factor_id": "f1", "name": "n1", "sharpe": 2.0, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1},
         ]
         exec_ok = MagicMock()
         # 第一次执行（第 1 只股票）失败 → 该股票信号 NaN → 有效回归日不足回退
-        exec_ok.execute.side_effect = [RuntimeError("exec fail")] + [
-            np.linspace(-0.5, 0.5, 40)] * 19
+        exec_ok.execute.side_effect = [RuntimeError("exec fail")] + [np.linspace(-0.5, 0.5, 40)] * 19
         fake_model = MagicMock()
         fake_model.coef_ = np.array([1.0, 1.0])
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("sklearn.linear_model.ElasticNetCV", return_value=fake_model):
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("sklearn.linear_model.ElasticNetCV", return_value=fake_model),
+        ):
             m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
             m_exec.return_value = exec_ok
             assert _compute_elastic_net_weights(factors, elite) == {}
@@ -3364,33 +4481,42 @@ class TestCoveragePolish:
         """ML Ensemble 损坏 JSON 跳过 + 执行器构造/执行失败跳过。"""
         from fts.factor_engine.portfolio_loop import _compute_ml_ensemble_weights
         from fts.ml import TrainResult, TrainMode, ModelKind
+
         panel, dates = TestSynthesisElasticNetMl()._make_panel()
         elite = tmp_path / "elite"
         elite.mkdir()
         (elite / "bad.json").write_text("not json", encoding="utf-8")  # 损坏文件 → 跳过
         for i in range(2):
-            (elite / f"f{i}.json").write_text(json.dumps({
-                "factor_id": f"f{i}", "name": f"n{i}", "code": "close",
-            }), encoding="utf-8")
+            (elite / f"f{i}.json").write_text(
+                json.dumps(
+                    {
+                        "factor_id": f"f{i}",
+                        "name": f"n{i}",
+                        "code": "close",
+                    }
+                ),
+                encoding="utf-8",
+            )
         factors = [
-            {"factor_id": "f0", "name": "n0", "sharpe": 2.0, "ic": 0.05,
-             "turnover": 0.3, "decay_6m": 0.1},
-            {"factor_id": "f1", "name": "n1", "sharpe": 2.0, "ic": 0.05,
-             "turnover": 0.3, "decay_6m": 0.1},
+            {"factor_id": "f0", "name": "n0", "sharpe": 2.0, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1},
+            {"factor_id": "f1", "name": "n1", "sharpe": 2.0, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1},
         ]
         exec_ok = MagicMock()
         # f1 首只股票执行失败 → 对应样本行被 valid 过滤，其余正常训练
-        exec_ok.execute.side_effect = [RuntimeError("exec fail")] + [
-            np.linspace(-0.5, 0.5, 40)] * 19
+        exec_ok.execute.side_effect = [RuntimeError("exec fail")] + [np.linspace(-0.5, 0.5, 40)] * 19
         fake_trainer = MagicMock()
         fake_trainer.train.return_value = TrainResult(
-            mode=TrainMode.CROSS_SECTIONAL, kind=ModelKind.LIGHTGBM,
-            model=object(), score=0.05,
+            mode=TrainMode.CROSS_SECTIONAL,
+            kind=ModelKind.LIGHTGBM,
+            model=object(),
+            score=0.05,
             feature_importance={"f0": 0.7, "f1": 0.3},
         )
-        with patch("fts.data.FTSDataProvider") as m_prov, \
-             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec, \
-             patch("fts.ml.SignalModelTrainer", return_value=fake_trainer):
+        with (
+            patch("fts.data.FTSDataProvider") as m_prov,
+            patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
+            patch("fts.ml.SignalModelTrainer", return_value=fake_trainer),
+        ):
             m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
             # f0 构造失败（914-915），f1 首只股票执行失败（926-927）
             m_exec.side_effect = [RuntimeError("ctor fail"), exec_ok]
@@ -3401,6 +4527,7 @@ class TestCoveragePolish:
 # ════════════════════════════════════════════════════════════
 # 26. 股票 L3 组合层测试 (GAP-I301, v2.68.0)
 # ════════════════════════════════════════════════════════════
+
 
 class TestStockL3PortfolioLayer:
     """股票 L3 组合层：复用期货组件 + TopN 组合回测 + 成本模型。
@@ -3415,9 +4542,16 @@ class TestStockL3PortfolioLayer:
     def _stock_factors(self, n: int = 3) -> list[dict]:
         """构造股票因子列表（含 market="stock"）。"""
         return [
-            {"factor_id": f"fct_s{i}", "name": f"stock_f{i}",
-             "sharpe": 2.2, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-             "market": "stock", "code": "close"}
+            {
+                "factor_id": f"fct_s{i}",
+                "name": f"stock_f{i}",
+                "sharpe": 2.2,
+                "ic": 0.05,
+                "turnover": 0.3,
+                "decay_6m": 0.1,
+                "market": "stock",
+                "code": "close",
+            }
             for i in range(n)
         ]
 
@@ -3427,21 +4561,44 @@ class TestStockL3PortfolioLayer:
         """股票 L3 从 elite 目录按 market="stock" 过滤，期货因子被排除。"""
         elite = tmp_path / "elite"
         elite.mkdir(parents=True, exist_ok=True)
-        (elite / "s.json").write_text(json.dumps({
-            "factor_id": "fct_s1", "name": "stock_f1", "sharpe": 2.2, "ic": 0.05,
-            "turnover": 0.3, "decay_6m": 0.1, "market": "stock", "code": "close",
-        }), encoding="utf-8")
-        (elite / "f.json").write_text(json.dumps({
-            "factor_id": "fct_f1", "name": "fut_f1", "sharpe": 2.2, "ic": 0.05,
-            "turnover": 0.3, "decay_6m": 0.1, "market": "futures", "code": "close",
-        }), encoding="utf-8")
+        (elite / "s.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_s1",
+                    "name": "stock_f1",
+                    "sharpe": 2.2,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                    "market": "stock",
+                    "code": "close",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (elite / "f.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_f1",
+                    "name": "fut_f1",
+                    "sharpe": 2.2,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                    "market": "futures",
+                    "code": "close",
+                }
+            ),
+            encoding="utf-8",
+        )
         factors = load_elite_factors(elite, use_duckdb=False, market="stock")
         assert {f["factor_id"] for f in factors} == {"fct_s1"}
 
     def test_synthesize_signals_shared_for_stock(self):
         """synthesize_signals 同一实现服务股票/期货（组件复用）。"""
         signals, max_corr, turnover = synthesize_signals(
-            self._stock_factors(3), mode="equal_weight",
+            self._stock_factors(3),
+            mode="equal_weight",
         )
         assert len(signals) == 3
         assert all(s["factor_id"].startswith("fct_s") for s in signals)
@@ -3451,17 +4608,25 @@ class TestStockL3PortfolioLayer:
     def test_build_combo_stock_with_cost(self):
         """股票组合成本模型开启后 net_combo_sharpe 存在且为正。"""
         signals = [
-            PortfolioSignal(factor_id=f"fct_s{i}", name=f"stock_f{i}",
-                            weight=1.0 / 3, sharpe=2.5, ic=0.05,
-                            turnover=0.1, decay_6m=0.05,
-                            orthogonalized=False, retained=True)
+            PortfolioSignal(
+                factor_id=f"fct_s{i}",
+                name=f"stock_f{i}",
+                weight=1.0 / 3,
+                sharpe=2.5,
+                ic=0.05,
+                turnover=0.1,
+                decay_6m=0.05,
+                orthogonalized=False,
+                retained=True,
+            )
             for i in range(3)
         ]
         combo = build_combo(
-            signals, mode="equal_weight", trace_id="l3_stock_test",
+            signals,
+            mode="equal_weight",
+            trace_id="l3_stock_test",
             market="stock",
-            cost_config={"market": "stock", "slippage_bps": 0.5,
-                         "commission_bps": 0.3, "impact_bps_per_pct": 2.0},
+            cost_config={"market": "stock", "slippage_bps": 0.5, "commission_bps": 0.3, "impact_bps_per_pct": 2.0},
         )
         assert combo["combo_sharpe"] > 0
         assert combo["net_combo_sharpe"] is not None
@@ -3470,10 +4635,17 @@ class TestStockL3PortfolioLayer:
     def test_build_combo_stock_no_cost(self):
         """股票组合未开启成本模型时 net_combo_sharpe 为 None。"""
         signals = [
-            PortfolioSignal(factor_id="fct_s1", name="stock_f1",
-                            weight=1.0, sharpe=2.5, ic=0.05,
-                            turnover=0.1, decay_6m=0.05,
-                            orthogonalized=False, retained=True),
+            PortfolioSignal(
+                factor_id="fct_s1",
+                name="stock_f1",
+                weight=1.0,
+                sharpe=2.5,
+                ic=0.05,
+                turnover=0.1,
+                decay_6m=0.05,
+                orthogonalized=False,
+                retained=True,
+            ),
         ]
         combo = build_combo(signals, mode="equal_weight", market="stock")
         assert combo["net_combo_sharpe"] is None
@@ -3485,15 +4657,28 @@ class TestStockL3PortfolioLayer:
         memory_dir.mkdir(parents=True, exist_ok=True)
         elite_dir.mkdir(parents=True, exist_ok=True)
         for i in range(3):
-            (elite_dir / f"fct_s{i}.json").write_text(json.dumps({
-                "factor_id": f"fct_s{i}", "name": f"stock_f{i}",
-                "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-                "market": "stock", "code": "close",
-            }), encoding="utf-8")
+            (elite_dir / f"fct_s{i}.json").write_text(
+                json.dumps(
+                    {
+                        "factor_id": f"fct_s{i}",
+                        "name": f"stock_f{i}",
+                        "sharpe": 2.5,
+                        "ic": 0.05,
+                        "turnover": 0.3,
+                        "decay_6m": 0.1,
+                        "market": "stock",
+                        "code": "close",
+                    }
+                ),
+                encoding="utf-8",
+            )
         loop = PortfolioLoop(
-            memory_dir=memory_dir, elite_dir=elite_dir,
-            use_duckdb=False, synthesis_mode="equal_weight",
-            enable_regime_adaptation=False, enable_clustering=False,
+            memory_dir=memory_dir,
+            elite_dir=elite_dir,
+            use_duckdb=False,
+            synthesis_mode="equal_weight",
+            enable_regime_adaptation=False,
+            enable_clustering=False,
             market="stock",
         )
         result = loop.run()
@@ -3506,16 +4691,29 @@ class TestStockL3PortfolioLayer:
         elite_dir = tmp_path / "elite_stock_r"
         memory_dir.mkdir(parents=True, exist_ok=True)
         elite_dir.mkdir(parents=True, exist_ok=True)
-        (elite_dir / "fct_s1.json").write_text(json.dumps({
-            "factor_id": "fct_s1", "name": "stock_f1",
-            "sharpe": 2.5, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1,
-            "market": "stock", "code": "close",
-        }), encoding="utf-8")
+        (elite_dir / "fct_s1.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_s1",
+                    "name": "stock_f1",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                    "market": "stock",
+                    "code": "close",
+                }
+            ),
+            encoding="utf-8",
+        )
         stock_regime = {"regime": "large_cap", "confidence": 0.8}
         loop = PortfolioLoop(
-            memory_dir=memory_dir, elite_dir=elite_dir,
-            use_duckdb=False, synthesis_mode="sharpe_weight",
-            enable_regime_adaptation=True, enable_clustering=False,
+            memory_dir=memory_dir,
+            elite_dir=elite_dir,
+            use_duckdb=False,
+            synthesis_mode="sharpe_weight",
+            enable_regime_adaptation=True,
+            enable_clustering=False,
             market="stock",
         )
         result = loop.run(stock_regime=stock_regime)

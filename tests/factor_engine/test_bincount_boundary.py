@@ -93,12 +93,15 @@ def _run_full(factor: dict, close: np.ndarray, volume: np.ndarray) -> np.ndarray
     """执行因子代码，提供 close/volume/high/low 完整字段。"""
     ns = {"np": np}
     exec(compile(factor["code"], "<factor>", "exec"), ns)  # noqa: S102
-    return ns["factor_program"]({
-        "close": close.copy(),
-        "volume": volume.copy(),
-        "high": close.copy() * 1.01,
-        "low": close.copy() * 0.99,
-    }, {})
+    return ns["factor_program"](
+        {
+            "close": close.copy(),
+            "volume": volume.copy(),
+            "high": close.copy() * 1.01,
+            "low": close.copy() * 0.99,
+        },
+        {},
+    )
 
 
 class TestNanGuard:
@@ -168,14 +171,17 @@ def _run_full_params(factor: dict) -> callable:
     params = dict(factor.get("params") or {})
 
     def runner(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
-        return ns["factor_program"]({
-            "close": close.copy(),
-            "volume": volume.copy(),
-            "high": close.copy() * 1.01,
-            "low": close.copy() * 0.99,
-            "open": close.copy() * 0.995,
-            "hold": volume.copy(),
-        }, params)
+        return ns["factor_program"](
+            {
+                "close": close.copy(),
+                "volume": volume.copy(),
+                "high": close.copy() * 1.01,
+                "low": close.copy() * 0.99,
+                "open": close.copy() * 0.995,
+                "hold": volume.copy(),
+            },
+            params,
+        )
 
     return runner
 

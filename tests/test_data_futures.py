@@ -53,16 +53,18 @@ def _make_provider_df(dates: list[str], base: float = 100.0) -> pd.DataFrame:
     """构造 FuturesDataProvider 输出格式（含 vwap/hold/settle）的 DataFrame。"""
     idx = pd.DatetimeIndex(pd.to_datetime(dates))
     close = pd.Series(np.arange(len(idx)) * 0.1 + base, index=idx)
-    return pd.DataFrame({
-        "open": close,
-        "high": close + 1,
-        "low": close - 1,
-        "close": close,
-        "volume": 1000.0,
-        "vwap": close + 0.5,
-        "hold": 5000.0,
-        "settle": close,
-    })
+    return pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 1,
+            "low": close - 1,
+            "close": close,
+            "volume": 1000.0,
+            "vwap": close + 0.5,
+            "hold": 5000.0,
+            "settle": close,
+        }
+    )
 
 
 def _make_agg_df(dates: list[str], base: float = 100.0, source: str = "DUCKDB") -> pd.DataFrame:
@@ -100,6 +102,7 @@ def _reset_module_globals():
 # 1. retry_on_conflict
 # ═══════════════════════════════════════════════════════════
 
+
 class TestRetryOnConflict:
     @pytest.fixture(autouse=True)
     def _inject_conflict_exception(self, monkeypatch):
@@ -108,11 +111,14 @@ class TestRetryOnConflict:
         注：duckdb 1.1.3 实际不存在该异常类（产品 bug #1，见
         TestRetryOnConflictRealEnvBug），此处仅用于隔离测试装饰器逻辑。
         """
+
         class _FakeConcurrent(Exception):
             pass
 
         monkeypatch.setattr(
-            "duckdb.ConcurrentTransactionException", _FakeConcurrent, raising=False,
+            "duckdb.ConcurrentTransactionException",
+            _FakeConcurrent,
+            raising=False,
         )
 
     def test_first_try_success(self):
@@ -130,6 +136,7 @@ class TestRetryOnConflict:
     def test_recovers_after_conflicts(self):
         """写冲突后按退避重试，最终成功。"""
         import duckdb
+
         calls: list[int] = []
 
         @retry_on_conflict(max_retries=3, delay=0.01)
@@ -155,6 +162,7 @@ class TestRetryOnConflict:
 
     def test_non_conflict_raises_immediately(self):
         """非并发冲突异常直接传播，不重试。"""
+
         @retry_on_conflict(max_retries=3, delay=0.01)
         def f():
             raise ValueError("other")
@@ -211,9 +219,11 @@ class TestRetryOnConflictRealEnvBug:
 # 2. AsyncWriteQueue
 # ═══════════════════════════════════════════════════════════
 
+
 class TestAsyncWriteQueue:
     def test_execute_success_with_and_without_params(self):
         """worker 串行执行带/不带参数的写入。"""
+
         async def scenario():
             conn = _FakeConn()
             q = AsyncWriteQueue(conn, max_queue_size=10)
@@ -235,6 +245,7 @@ class TestAsyncWriteQueue:
 
     def test_execute_propagates_error(self):
         """worker 执行异常 → future 抛出异常，不吞错。"""
+
         async def scenario():
             conn = _FakeConn(error=True)
             q = AsyncWriteQueue(conn)
@@ -247,6 +258,7 @@ class TestAsyncWriteQueue:
 
     def test_worker_timeout_keeps_running(self):
         """队列空时 worker 超时后继续循环（不退出）。"""
+
         async def scenario():
             q = AsyncWriteQueue(_FakeConn())
             q.start()
@@ -258,6 +270,7 @@ class TestAsyncWriteQueue:
 
     def test_start_idempotent(self):
         """重复 start 不重复创建 worker。"""
+
         async def scenario():
             q = AsyncWriteQueue(_FakeConn())
             q.start()
@@ -270,6 +283,7 @@ class TestAsyncWriteQueue:
 
     def test_flush_waits_queue_drain(self):
         """flush 等待队列清空。"""
+
         async def scenario():
             conn = _FakeConn()
             q = AsyncWriteQueue(conn)
@@ -286,6 +300,7 @@ class TestAsyncWriteQueue:
 # ═══════════════════════════════════════════════════════════
 # 3. DuckDBConnection
 # ═══════════════════════════════════════════════════════════
+
 
 class TestDuckDBConnection:
     def test_connect_and_execute_real(self, tmp_path):
@@ -356,6 +371,7 @@ class TestDuckDBConnection:
 # 4. _get_db 模块级连接
 # ═══════════════════════════════════════════════════════════
 
+
 class TestGetDb:
     def test_returns_connected_connection(self, mocker):
         """首次调用创建 DuckDBConnection 并返回原生连接。"""
@@ -378,6 +394,7 @@ class TestGetDb:
 # 5. FuturesDataProvider._init_default_aggregator
 # ═══════════════════════════════════════════════════════════
 
+
 class TestInitDefaultAggregator:
     def _patch_sources(self, mocker):
         """默认所有数据源可正常实例化（聚合器由各测试单独控制）。"""
@@ -390,7 +407,8 @@ class TestInitDefaultAggregator:
         """默认路径：所有源实例化成功，聚合器非空。"""
         mock_agg = mocker.MagicMock()
         patched_agg = mocker.patch(
-            "fts.data_sources.aggregator.FuturesDataAggregator", return_value=mock_agg,
+            "fts.data_sources.aggregator.FuturesDataAggregator",
+            return_value=mock_agg,
         )
         self._patch_sources(mocker)
         provider = FuturesDataProvider(use_akshare_fallback=False, aggregator=None)
@@ -426,6 +444,7 @@ class TestInitDefaultAggregator:
 # 6. _from_aggregator_df
 # ═══════════════════════════════════════════════════════════
 
+
 class TestFromAggregatorDf:
     def test_converts_columns_and_index(self):
         """17 列聚合器输出 → 8 列标准格式，date 索引升序。"""
@@ -439,6 +458,7 @@ class TestFromAggregatorDf:
 # ═══════════════════════════════════════════════════════════
 # 7. get_ohlcv 降级链
 # ═══════════════════════════════════════════════════════════
+
 
 class TestGetOhlcvFallbackChain:
     def _provider(self, mocker, use_akshare: bool = False, aggregator=None):
@@ -457,7 +477,15 @@ class TestGetOhlcvFallbackChain:
         provider = self._provider(mocker, aggregator=mock_agg)
         df = provider.get_ohlcv("RB0", days=30)
         assert list(df.columns) == [
-            "open", "high", "low", "close", "volume", "vwap", "hold", "settle", "adj_factor",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "vwap",
+            "hold",
+            "settle",
+            "adj_factor",
         ]
         mock_agg.get_ohlcv.assert_called_once_with("RB0", 30, "")
 
@@ -465,7 +493,8 @@ class TestGetOhlcvFallbackChain:
         """Aggregator 返回 SYNTHETIC → 继续尝试 DuckDB。"""
         mock_agg = mocker.MagicMock()
         mock_agg.get_ohlcv.return_value = _make_agg_df(
-            ["2026-01-01", "2026-01-02"], source="SYNTHETIC",
+            ["2026-01-01", "2026-01-02"],
+            source="SYNTHETIC",
         )
         provider = self._provider(mocker, aggregator=mock_agg)
         kline_df = _make_provider_df(["2026-01-01", "2026-01-02"])
@@ -565,14 +594,20 @@ class TestGetOhlcvFallbackChain:
 # 8. get_minute_ohlcv / get_tick_data
 # ═══════════════════════════════════════════════════════════
 
+
 class TestMinuteAndTick:
     def _minute_df(self):
-        return pd.DataFrame({
-            "datetime": pd.to_datetime(["2026-01-01 09:05:00", "2026-01-01 09:10:00"]),
-            "open": [1.0, 2.0], "high": [2.0, 3.0], "low": [0.5, 1.5],
-            "close": [1.5, 2.5], "volume": [100.0, 200.0],
-            "source": ["TDX", "TDX"],
-        })
+        return pd.DataFrame(
+            {
+                "datetime": pd.to_datetime(["2026-01-01 09:05:00", "2026-01-01 09:10:00"]),
+                "open": [1.0, 2.0],
+                "high": [2.0, 3.0],
+                "low": [0.5, 1.5],
+                "close": [1.5, 2.5],
+                "volume": [100.0, 200.0],
+                "source": ["TDX", "TDX"],
+            }
+        )
 
     def test_minute_hit(self, mocker):
         """分钟数据命中 → datetime 索引 + OHLCV 五列。"""
@@ -599,11 +634,13 @@ class TestMinuteAndTick:
         assert provider.get_minute_ohlcv("RB0", days=100).empty
 
     def _tick_df(self):
-        return pd.DataFrame({
-            "datetime": pd.to_datetime(["2026-01-01 09:00:00.5", "2026-01-01 09:00:01.0"]),
-            "last_price": [10.0, 10.5],
-            "source": ["TQSDK", "TQSDK"],
-        })
+        return pd.DataFrame(
+            {
+                "datetime": pd.to_datetime(["2026-01-01 09:00:00.5", "2026-01-01 09:00:01.0"]),
+                "last_price": [10.0, 10.5],
+                "source": ["TQSDK", "TQSDK"],
+            }
+        )
 
     def test_tick_hit(self, mocker):
         """tick 数据命中 → datetime 索引。"""
@@ -633,6 +670,7 @@ class TestMinuteAndTick:
 # ═══════════════════════════════════════════════════════════
 # 9. _from_kline_cache
 # ═══════════════════════════════════════════════════════════
+
 
 class TestFromKlineCache:
     def test_reads_and_enriches(self, mocker):
@@ -675,6 +713,7 @@ class TestFromKlineCache:
 # 10. _from_tq_local
 # ═══════════════════════════════════════════════════════════
 
+
 class TestFromTqLocal:
     def _provider(self, mocker):
         provider = FuturesDataProvider(use_akshare_fallback=False, aggregator=None)
@@ -692,9 +731,13 @@ class TestFromTqLocal:
         """TQ-Local 命中 → 标准 8 列输出。"""
         mock_source = mocker.MagicMock()
         mock_source.is_available.return_value = True
-        mock_source.fetch_ohlcv.return_value = _make_provider_df(
-            ["2026-01-02", "2026-01-01"],
-        ).reset_index().rename(columns={"index": "date"})
+        mock_source.fetch_ohlcv.return_value = (
+            _make_provider_df(
+                ["2026-01-02", "2026-01-01"],
+            )
+            .reset_index()
+            .rename(columns={"index": "date"})
+        )
         mocker.patch("fts.data_sources.tq_source.TQLocalSource", return_value=mock_source)
         df = self._provider(mocker)._from_tq_local("RB0", 10)
         assert list(df.columns) == ["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]
@@ -708,9 +751,12 @@ class TestFromTqLocal:
         mocker.patch("fts.data_sources.tq_source.TQLocalSource", return_value=mock_source)
         assert self._provider(mocker)._from_tq_local("RB0", 10) is None
 
-        mock_source.fetch_ohlcv.return_value = pd.DataFrame({
-            "date": ["2026-01-01"], "open": [1.0],  # 无 close
-        })
+        mock_source.fetch_ohlcv.return_value = pd.DataFrame(
+            {
+                "date": ["2026-01-01"],
+                "open": [1.0],  # 无 close
+            }
+        )
         assert self._provider(mocker)._from_tq_local("RB0", 10) is None
 
     def test_import_error_returns_none(self, mocker):
@@ -734,6 +780,7 @@ class TestFromTqLocal:
 # 11. _from_akshare
 # ═══════════════════════════════════════════════════════════
 
+
 class TestFromAkshare:
     def _provider(self, mocker):
         mocker.patch.object(FuturesDataProvider, "_init_default_aggregator")
@@ -746,12 +793,18 @@ class TestFromAkshare:
 
     def test_hit_with_full_columns(self, mocker):
         """AKShare 命中：列标准化 + vwap=(H+L+C+settle)/4。"""
-        df = pd.DataFrame({
-            "date": ["2026-01-01", "2026-01-02"],
-            "open": [10.0, 10.5], "high": [11.0, 11.5], "low": [9.0, 9.5],
-            "close": [10.5, 11.0], "volume": [1000.0, 2000.0],
-            "hold": [5000.0, 6000.0], "settle": [10.6, 11.1],
-        })
+        df = pd.DataFrame(
+            {
+                "date": ["2026-01-01", "2026-01-02"],
+                "open": [10.0, 10.5],
+                "high": [11.0, 11.5],
+                "low": [9.0, 9.5],
+                "close": [10.5, 11.0],
+                "volume": [1000.0, 2000.0],
+                "hold": [5000.0, 6000.0],
+                "settle": [10.6, 11.1],
+            }
+        )
         mocker.patch("akshare.futures_zh_daily_sina", return_value=df)
         result = self._provider(mocker)._from_akshare("RB", 10)
         assert list(result.columns) == ["open", "high", "low", "close", "volume", "hold", "settle", "vwap"]
@@ -759,20 +812,29 @@ class TestFromAkshare:
 
     def test_limit_days(self, mocker):
         """行数超过 days 时截断。"""
-        df = pd.DataFrame({
-            "date": [f"2026-01-{d:02d}" for d in range(1, 6)],
-            "open": [10.0] * 5, "high": [11.0] * 5, "low": [9.0] * 5,
-            "close": [10.5] * 5, "volume": [1000.0] * 5,
-        })
+        df = pd.DataFrame(
+            {
+                "date": [f"2026-01-{d:02d}" for d in range(1, 6)],
+                "open": [10.0] * 5,
+                "high": [11.0] * 5,
+                "low": [9.0] * 5,
+                "close": [10.5] * 5,
+                "volume": [1000.0] * 5,
+            }
+        )
         mocker.patch("akshare.futures_zh_daily_sina", return_value=df)
         result = self._provider(mocker)._from_akshare("RB0", 2)
         assert len(result) == 2
 
     def test_missing_required_column_returns_none(self, mocker):
         """缺必要列 → None。"""
-        df = pd.DataFrame({
-            "date": ["2026-01-01"], "open": [10.0], "high": [11.0],  # 无 close/volume
-        })
+        df = pd.DataFrame(
+            {
+                "date": ["2026-01-01"],
+                "open": [10.0],
+                "high": [11.0],  # 无 close/volume
+            }
+        )
         mocker.patch("akshare.futures_zh_daily_sina", return_value=df)
         assert self._provider(mocker)._from_akshare("RB0", 10) is None
 
@@ -791,6 +853,7 @@ class TestFromAkshare:
 # ═══════════════════════════════════════════════════════════
 # 12. 实时价路径
 # ═══════════════════════════════════════════════════════════
+
 
 class TestExtractQuotePrice:
     def test_all_field_precedence(self):
@@ -832,10 +895,10 @@ class TestTryTqRealtime:
         mock_source = mocker.MagicMock()
         mock_source.is_available.return_value = True
         mock_source.fetch_quote.side_effect = [
-            {"last_price": 3500.0},   # 成功
-            None,                      # None → failed
-            {"price": 0},              # 非正 → failed
-            {"now": 100.5},            # 成功
+            {"last_price": 3500.0},  # 成功
+            None,  # None → failed
+            {"price": 0},  # 非正 → failed
+            {"now": 100.5},  # 成功
         ]
         mocker.patch("fts.data_sources.tq_source.TQLocalSource", return_value=mock_source)
         prices, failed = _try_tq_realtime(["RB0", "CU0", "AU0", "AG0"])
@@ -909,6 +972,7 @@ class TestGetRealtimePrices:
 # 13. get_dominant_contracts / _fetch_dominant_akshare 补充
 # ═══════════════════════════════════════════════════════════
 
+
 class TestDominantContractsExtra:
     def test_empty_symbols(self):
         """空 symbols → 空 dict。"""
@@ -963,6 +1027,7 @@ class TestFetchDominantAkshareExtra:
 # ═══════════════════════════════════════════════════════════
 # 14. get_futures_provider 单例
 # ═══════════════════════════════════════════════════════════
+
 
 class TestGetFuturesProvider:
     def test_singleton_same_instance(self, mocker):

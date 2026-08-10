@@ -134,14 +134,19 @@ def submit_with_retry(
             gateway_id = gateway.submit_order(order)
             logger.info(
                 "[Gateway] 下单成功 [order_id=%s, gateway_id=%s, attempt=%d]",
-                order.order_id, gateway_id, attempts,
+                order.order_id,
+                gateway_id,
+                attempts,
             )
             return gateway_id
         except Exception as e:  # noqa: BLE001
             last_error = str(e)
             logger.warning(
                 "[Gateway] 下单失败，重试 [order_id=%s, attempt=%d/%d, error=%s]",
-                order.order_id, attempts, max_retries, last_error,
+                order.order_id,
+                attempts,
+                max_retries,
+                last_error,
             )
             if attempts <= max_retries:
                 time.sleep(retry_interval)

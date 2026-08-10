@@ -42,6 +42,7 @@ OUTPUT_FILE = SEEDS_DIR / "vnpy_cta.yaml"
 # 现有 125 个期货因子名前缀列表（用于去重检查）
 _EXISTING_NAMES: set[str] = set()
 
+
 # 辅助函数：生成标准因子代码模板
 def _make_code(
     impl: str,
@@ -58,25 +59,15 @@ def _make_code(
     field_assignments = []
     for f in input_fields:
         if f == "close":
-            field_assignments.append(
-                "close = data['close'].values if hasattr(data, 'close') else data['close']"
-            )
+            field_assignments.append("close = data['close'].values if hasattr(data, 'close') else data['close']")
         elif f == "high":
-            field_assignments.append(
-                "high = data['high'].values if hasattr(data, 'high') else data['high']"
-            )
+            field_assignments.append("high = data['high'].values if hasattr(data, 'high') else data['high']")
         elif f == "low":
-            field_assignments.append(
-                "low = data['low'].values if hasattr(data, 'low') else data['low']"
-            )
+            field_assignments.append("low = data['low'].values if hasattr(data, 'low') else data['low']")
         elif f == "open":
-            field_assignments.append(
-                "open_ = data['open'].values if hasattr(data, 'open') else data['open']"
-            )
+            field_assignments.append("open_ = data['open'].values if hasattr(data, 'open') else data['open']")
         elif f == "volume":
-            field_assignments.append(
-                "volume = data['volume'].values if hasattr(data, 'volume') else data['volume']"
-            )
+            field_assignments.append("volume = data['volume'].values if hasattr(data, 'volume') else data['volume']")
         elif f == "vwap":
             field_assignments.append(
                 "vwap = data.get('vwap', close).values if hasattr(data, 'vwap') else data.get('vwap', close)"
@@ -86,8 +77,8 @@ def _make_code(
     fields_str = f"\n    {fields_str}" if fields_str else ""
 
     code = (
-        'def factor_program(data, params):\n'
-        '    import numpy as np\n'
+        "def factor_program(data, params):\n"
+        "    import numpy as np\n"
         "    n = len(data['close'].values if hasattr(data, 'close') else data['close'])\n"
     )
     if fields_str:
@@ -147,8 +138,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal[mid_mask] = (oversold + overbought - 2 * rsi[mid_mask]) / (overbought - oversold)
     signal = np.tanh(signal * 0.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 4, "microstructure": 3, "institutional": 3,
-                           "narrative": "RSI因子：相对强弱指数。RSI<30超卖做多，RSI>70超买做空。CTA经典反转信号。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "RSI因子：相对强弱指数。RSI<30超卖做多，RSI>70超买做空。CTA经典反转信号。",
+        },
     },
     # ── 2. Bollinger Bands — 布林带突破 ──
     {
@@ -178,8 +174,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal = (close - sma) / (bandwidth / 2)
     signal = np.clip(signal, -1.0, 1.0)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "布林带因子：价格突破上下轨做趋势跟踪，带宽收缩做均值回归。CTA经典波动率通道策略。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "布林带因子：价格突破上下轨做趋势跟踪，带宽收缩做均值回归。CTA经典波动率通道策略。",
+        },
     },
     # ── 3. ATR — 平均真实波动范围 ──
     {
@@ -213,8 +214,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     norm_atr = atr / np.maximum(close, 1e-10)
     signal = -np.tanh(norm_atr * 50)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "ATR因子：平均真实波动范围。ATR高=波动大=降低仓位偏空，ATR低=波动小=趋势延续偏多。CTA波动率管理核心。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "ATR因子：平均真实波动范围。ATR高=波动大=降低仓位偏空，ATR低=波动小=趋势延续偏多。CTA波动率管理核心。",
+        },
     },
     # ── 4. Keltner Channel — 肯特纳通道突破 ──
     {
@@ -261,8 +267,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     half_width = np.maximum(upper - lower, 1e-10)
     signal[in_channel] = 2 * (close[in_channel] - ema[in_channel]) / half_width[in_channel]
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "肯特纳通道因子：基于EMA+ATR的通道突破系统。突破上轨做多，突破下轨做空。CTA经典突破策略。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "肯特纳通道因子：基于EMA+ATR的通道突破系统。突破上轨做多，突破下轨做空。CTA经典突破策略。",
+        },
     },
     # ── 5. Donchian Channel — 唐奇安通道（海龟交易法） ──
     {
@@ -290,8 +301,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     range_width = np.maximum(upper[in_channel] - lower[in_channel], 1e-10)
     signal[in_channel] = 2 * (close[in_channel] - mid[in_channel]) / range_width
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 4,
-                           "narrative": "唐奇安通道因子：N日最高价突破做多，N日最低价突破做空。海龟交易法则核心。CTA经典趋势跟踪系统。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 4,
+            "narrative": "唐奇安通道因子：N日最高价突破做多，N日最低价突破做空。海龟交易法则核心。CTA经典趋势跟踪系统。",
+        },
     },
     # ── 6. ADX — 平均趋向指数 ──
     {
@@ -358,8 +374,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     trend_bias = np.where(pdi > ndi, 1.0, -1.0)
     signal = np.where(adx > 25, trend_bias, np.where(adx < 20, -trend_bias * 0.5, 0.0))
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "ADX因子：平均趋向指数。ADX>25=强趋势做动量，ADX<20=弱趋势做反转。CTA趋势强度判断核心。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "ADX因子：平均趋向指数。ADX>25=强趋势做动量，ADX<20=弱趋势做反转。CTA趋势强度判断核心。",
+        },
     },
     # ── 7. CCI — 商品通道指数 ──
     {
@@ -394,8 +415,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal[mid] = -cci[mid] / 100.0
     signal = np.tanh(signal * 0.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 4, "microstructure": 3, "institutional": 3,
-                           "narrative": "CCI因子：商品通道指数。CCI>100超买做空，CCI<-100超卖做多。CTA经典摆动指标。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "CCI因子：商品通道指数。CCI>100超买做空，CCI<-100超卖做多。CTA经典摆动指标。",
+        },
     },
     # ── 8. KDJ (Stochastic) — 随机指标 ──
     {
@@ -431,8 +457,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     zero_mask = np.abs(signal) < 0.01
     signal[zero_mask] = crossover[zero_mask] * 0.5
 """,
-        "economic_logic": {"theory": 4, "behavioral": 4, "microstructure": 3, "institutional": 3,
-                           "narrative": "KDJ因子：随机指标。K线向上突破D线金叉做多，死叉做空。CTA经典短线反转信号。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "KDJ因子：随机指标。K线向上突破D线金叉做多，死叉做空。CTA经典短线反转信号。",
+        },
     },
     # ── 9. Williams %R — 威廉指标 ──
     {
@@ -461,8 +492,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal[mid] = (-wr[mid] - 50) / 30.0
     signal = np.tanh(signal * 0.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 4, "microstructure": 3, "institutional": 3,
-                           "narrative": "威廉%R因子：Williams %R。%R>-20超买做空，%R<-80超卖做多。CTA短线反转信号。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "威廉%R因子：Williams %R。%R>-20超买做空，%R<-80超卖做多。CTA短线反转信号。",
+        },
     },
     # ── 10. MFI — 资金流量指标 ──
     {
@@ -508,8 +544,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal[mid] = (20 + 80 - 2 * mfi[mid]) / 60.0
     signal = np.tanh(signal * 0.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 4, "microstructure": 4, "institutional": 3,
-                           "narrative": "MFI因子：资金流量指标。量价结合的RSI。MFI>80超买做空，MFI<20超卖做多。CTA量价分析核心。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "MFI因子：资金流量指标。量价结合的RSI。MFI>80超买做空，MFI<20超卖做多。CTA量价分析核心。",
+        },
     },
     # ── 11. OBV — 能量潮 ──
     {
@@ -544,8 +585,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     corr = obv_slope * price_slope
     signal = np.tanh(corr * 50)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "OBV因子：能量潮。OBV与价格背离做反转，OBV趋势确认做动量。CTA量价配合核心指标。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "OBV因子：能量潮。OBV与价格背离做反转，OBV趋势确认做动量。CTA量价配合核心指标。",
+        },
     },
     # ── 12. Parabolic SAR — 抛物线停损 ──
     {
@@ -606,8 +652,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal = np.where(close > sar, np.tanh((close - sar) / np.maximum(sar, 1e-10) * 10),
                       -np.tanh((sar - close) / np.maximum(sar, 1e-10) * 10))
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "SAR因子：抛物线停损转向。价格在SAR上方做多，下方做空。CTA经典趋势跟踪止损系统。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "SAR因子：抛物线停损转向。价格在SAR上方做多，下方做空。CTA经典趋势跟踪止损系统。",
+        },
     },
     # ── 13. Aroon — 阿隆指标 ──
     {
@@ -634,8 +685,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     diff = aroon_up - aroon_down
     signal = np.tanh(diff / 50)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "Aroon因子：阿隆指标。AroonUp>AroonDown做多，反之做空。CTA趋势方向判断。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "Aroon因子：阿隆指标。AroonUp>AroonDown做多，反之做空。CTA趋势方向判断。",
+        },
     },
     # ── 14. TRIX — 三重指数移动平均 ──
     {
@@ -671,8 +727,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     # TRIX > Signal 做多，< Signal 做空
     signal = np.tanh((trix - signal_line) * 2)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                           "narrative": "TRIX因子：三重指数移动平均。TRIX上穿Signal做多，下穿做空。CTA趋势跟踪指标。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "TRIX因子：三重指数移动平均。TRIX上穿Signal做多，下穿做空。CTA趋势跟踪指标。",
+        },
     },
     # ── 15. ROC — 价格变化率 ──
     {
@@ -691,8 +752,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     # ROC 正做多，负做空
     signal = np.tanh(roc / 10)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                           "narrative": "ROC因子：价格变化率。ROC上穿零轴做多，下穿零轴做空。CTA动量反转双用指标。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "ROC因子：价格变化率。ROC上穿零轴做多，下穿零轴做空。CTA动量反转双用指标。",
+        },
     },
     # ── 16. NATR — 归一化平均真实波动范围 ──
     {
@@ -726,8 +792,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     # NATR 高 = 波动占比大 = 偏回落
     signal = -np.tanh(natr / 5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "NATR因子：归一化ATR。ATR/Close，波动率占比信号。NATR高=波动率占比大=偏回落。CTA波动率管理。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "NATR因子：归一化ATR。ATR/Close，波动率占比信号。NATR高=波动率占比大=偏回落。CTA波动率管理。",
+        },
     },
     # ── 17. Linear Regression — 线性回归斜率 ──
     {
@@ -755,8 +826,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     norm_slope = slope / np.maximum(close, 1e-10)
     signal = np.tanh(norm_slope * 100)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                           "narrative": "线性回归因子：线性回归斜率。斜率正做多，负做空。CTA趋势方向与强度判断。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "线性回归因子：线性回归斜率。斜率正做多，负做空。CTA趋势方向与强度判断。",
+        },
     },
     # ── 18. APO — 绝对价格振荡器 ──
     {
@@ -787,8 +863,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     norm_apo = apo / np.maximum(close, 1e-10)
     signal = np.tanh(norm_apo * 50)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                           "narrative": "APO因子：绝对价格振荡器。快EMA-慢EMA。APO正则做多，负则做空。CTA趋势动能指标。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "APO因子：绝对价格振荡器。快EMA-慢EMA。APO正则做多，负则做空。CTA趋势动能指标。",
+        },
     },
     # ── 19. PPO — 百分比价格振荡器 ──
     {
@@ -819,8 +900,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
 
     signal = np.tanh(ppo / 2)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                           "narrative": "PPO因子：百分比价格振荡器。(快EMA-慢EMA)/慢EMA。PPO正则做多，负则做空。CTA趋势动能指标。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "PPO因子：百分比价格振荡器。(快EMA-慢EMA)/慢EMA。PPO正则做多，负则做空。CTA趋势动能指标。",
+        },
     },
     # ── 20. MACD Histogram — MACD 柱状线 ──
     {
@@ -858,8 +944,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     norm_hist = histogram / np.maximum(close, 1e-10)
     signal = np.tanh(norm_hist * 100)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                           "narrative": "MACD柱状线因子：MACD快线-信号线。柱状线正则做多，负则做空。CTA经典趋势跟踪指标。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "MACD柱状线因子：MACD快线-信号线。柱状线正则做多，负则做空。CTA经典趋势跟踪指标。",
+        },
     },
     # ── 21. WMA — 加权移动平均 ──
     {
@@ -884,8 +975,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     dist = (close - wma) / np.maximum(wma, 1e-10)
     signal = np.tanh(dist * 20)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 3, "institutional": 3,
-                           "narrative": "WMA交叉因子：加权移动平均价格位置。价格在WMA上方做多，下方做空。CTA趋势跟踪。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "WMA交叉因子：加权移动平均价格位置。价格在WMA上方做多，下方做空。CTA趋势跟踪。",
+        },
     },
     # ── 22. Ultimate Oscillator — 终极振荡器 ──
     {
@@ -929,8 +1025,13 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     signal[mid] = (30 + 70 - 2 * uo[mid]) / 40.0
     signal = np.tanh(signal * 0.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 4, "microstructure": 3, "institutional": 3,
-                           "narrative": "Ultimate Oscillator因子：终极振荡器。多周期加权超买超卖判断。UO>70超买做空，UO<30超卖做多。CTA综合摆动指标。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "Ultimate Oscillator因子：终极振荡器。多周期加权超买超卖判断。UO>70超买做空，UO<30超卖做多。CTA综合摆动指标。",
+        },
     },
     # ── 23. Bollinger Squeeze — 布林带收缩 ──
     {
@@ -964,13 +1065,19 @@ FACTOR_DEFINITIONS: list[dict[str, Any]] = [
     # 这里用带宽的负值：收缩蓄力偏正，扩张偏负
     signal = -np.tanh(bw_z * 0.5)
 """,
-        "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3,
-                           "narrative": "布林带收缩因子：带宽/价格比率。带宽收缩=蓄力突破，带宽扩张=趋势延续。CTA波动率周期判断。"},
+        "economic_logic": {
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 4,
+            "institutional": 3,
+            "narrative": "布林带收缩因子：带宽/价格比率。带宽收缩=蓄力突破，带宽扩张=趋势延续。CTA波动率周期判断。",
+        },
     },
 ]
 
 
 # ─── 去重：检查与现有种子因子的重复 ──────────────────────────
+
 
 def load_existing_futures_names() -> set[str]:
     """加载现有期货种子因子的所有名称。"""
@@ -999,6 +1106,7 @@ def check_duplicate(name: str, existing: set[str]) -> bool:
 
 
 # ─── 生成 YAML 文件 ──────────────────────────────────────────
+
 
 def generate_yaml(output_path: Path | str = OUTPUT_FILE) -> int:
     """生成 vnpy_cta.yaml 种子文件。

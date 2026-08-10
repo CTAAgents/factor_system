@@ -27,16 +27,16 @@ logger = logging.getLogger(__name__)
 class StopSide(str, Enum):
     """止损单方向。"""
 
-    STOP_LOSS = "stop_loss"      # 止损（价格跌破/涨破触发价 → 平仓）
+    STOP_LOSS = "stop_loss"  # 止损（价格跌破/涨破触发价 → 平仓）
     TAKE_PROFIT = "take_profit"  # 止盈（价格达到目标价 → 平仓）
 
 
 class StopStatus(str, Enum):
     """止损单状态。"""
 
-    ACTIVE = "ACTIVE"            # 监控中
-    TRIGGERED = "TRIGGERED"      # 已触发（生成平仓指令）
-    CANCELED = "CANCELED"        # 已撤销
+    ACTIVE = "ACTIVE"  # 监控中
+    TRIGGERED = "TRIGGERED"  # 已触发（生成平仓指令）
+    CANCELED = "CANCELED"  # 已撤销
 
 
 @dataclass
@@ -47,9 +47,7 @@ class StopOrder:
     side: StopSide
     trigger_price: float
     quantity: float
-    stop_id: str = field(
-        default_factory=lambda: f"stop_{uuid.uuid4().hex[:12]}"
-    )
+    stop_id: str = field(default_factory=lambda: f"stop_{uuid.uuid4().hex[:12]}")
     status: StopStatus = StopStatus.ACTIVE
     triggered_at: str = ""
     direction: str = "long"  # 持仓方向：long（跌破止损）/ short（涨破止损）
@@ -64,9 +62,7 @@ class CloseInstruction:
     quantity: float
     price: float
     reason: str
-    generated_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    generated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class StopOrderManager:
@@ -96,14 +92,19 @@ class StopOrderManager:
             已注册的 StopOrder
         """
         order = StopOrder(
-            symbol=symbol, side=side,
-            trigger_price=trigger_price, quantity=quantity,
+            symbol=symbol,
+            side=side,
+            trigger_price=trigger_price,
+            quantity=quantity,
             direction=direction,
         )
         self._orders[order.stop_id] = order
         logger.info(
             "[StopOrder] 注册 [stop_id=%s, symbol=%s, side=%s, trigger=%.4f]",
-            order.stop_id, symbol, side.value, trigger_price,
+            order.stop_id,
+            symbol,
+            side.value,
+            trigger_price,
         )
         return order
 
@@ -153,17 +154,20 @@ class StopOrderManager:
             if triggered:
                 stop.status = StopStatus.TRIGGERED
                 stop.triggered_at = datetime.now(timezone.utc).isoformat()
-                instructions.append(CloseInstruction(
-                    stop_id=stop.stop_id,
-                    symbol=stop.symbol,
-                    quantity=stop.quantity,
-                    price=price,
-                    reason=f"{stop.side.value} 触发: price={price:.4f} "
-                           f"trigger={stop.trigger_price:.4f}",
-                ))
+                instructions.append(
+                    CloseInstruction(
+                        stop_id=stop.stop_id,
+                        symbol=stop.symbol,
+                        quantity=stop.quantity,
+                        price=price,
+                        reason=f"{stop.side.value} 触发: price={price:.4f} trigger={stop.trigger_price:.4f}",
+                    )
+                )
                 logger.warning(
                     "[StopOrder] 触发平仓 [stop_id=%s, symbol=%s, reason=%s]",
-                    stop.stop_id, stop.symbol, instructions[-1].reason,
+                    stop.stop_id,
+                    stop.symbol,
+                    instructions[-1].reason,
                 )
         return instructions
 

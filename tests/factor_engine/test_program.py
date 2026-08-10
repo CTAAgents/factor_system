@@ -1,11 +1,10 @@
 """Test L0 program.md parser + L0 monitor."""
+
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
-import pytest
 
 from fts.factor_engine.program import (
     DEFAULT_PROGRAM_MD,
@@ -15,10 +14,11 @@ from fts.factor_engine.program import (
     init_program,
     get_llm_env_overrides,
 )
-from fts.factor_engine.monitor import check_loop, check_all, LoopStatus, AllStatus
+from fts.factor_engine.monitor import check_loop, check_all
 
 
 # ─── Program Tests ────────────────────────────────────────
+
 
 class TestParseProgramMd:
     """program.md 解析器测试。"""
@@ -124,6 +124,7 @@ class TestLoadProgram:
 
 # ─── Monitor Tests ────────────────────────────────────────
 
+
 class TestCheckLoop:
     """单层循环状态检查测试。"""
 
@@ -177,7 +178,7 @@ class TestCheckAll:
         """空 FDT 根目录应全部 unknown。"""
         status = check_all(str(tmp_path))
         assert len(status.loops) == 3
-        assert not any(l.exists for l in status.loops)
+        assert not any(lp.exists for lp in status.loops)
 
     def test_partial_state(self, tmp_path: Path):
         """部分循环有状态文件。"""
@@ -200,7 +201,14 @@ class TestCheckAll:
             d = tmp_path / "memory" / name
             d.mkdir(parents=True)
             (d / "state.json").write_text(
-                json.dumps({"status": "circuit_broken", "last_error": "测试", "version": "1.1.0", "last_updated": "2026-07-18T10:00:00"}),
+                json.dumps(
+                    {
+                        "status": "circuit_broken",
+                        "last_error": "测试",
+                        "version": "1.1.0",
+                        "last_updated": "2026-07-18T10:00:00",
+                    }
+                ),
                 encoding="utf-8",
             )
         # L2+L3 正常

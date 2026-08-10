@@ -21,25 +21,73 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 # ─── 已知算子集合（_EXPRESSION_OPS_SOURCE + np.* + 基本面 cs_*） ──
-_KNOWN_OPS: frozenset[str] = frozenset({
-    "rank", "scale", "ifelse", "signed_power", "decay_linear",
-    "delta", "delay", "log", "sign", "abs", "neg",
-    "highday", "lowday",
-    "ts_sum", "ts_mean", "ts_stddev", "ts_std_dev", "ts_corr", "ts_covariance",
-    "ts_argmax", "ts_argmin", "ts_rank", "ts_min", "ts_max", "ts_product",
-    "ts_median", "ts_delta", "ts_momentum", "ts_volatility",
-    "np.tanh", "np.maximum", "np.abs", "np.sign", "np.sqrt", "np.power",
-    "np.exp", "np.log", "np.where",
-    "cs_rank", "cs_zscore",
-})
+_KNOWN_OPS: frozenset[str] = frozenset(
+    {
+        "rank",
+        "scale",
+        "ifelse",
+        "signed_power",
+        "decay_linear",
+        "delta",
+        "delay",
+        "log",
+        "sign",
+        "abs",
+        "neg",
+        "highday",
+        "lowday",
+        "ts_sum",
+        "ts_mean",
+        "ts_stddev",
+        "ts_std_dev",
+        "ts_corr",
+        "ts_covariance",
+        "ts_argmax",
+        "ts_argmin",
+        "ts_rank",
+        "ts_min",
+        "ts_max",
+        "ts_product",
+        "ts_median",
+        "ts_delta",
+        "ts_momentum",
+        "ts_volatility",
+        "np.tanh",
+        "np.maximum",
+        "np.abs",
+        "np.sign",
+        "np.sqrt",
+        "np.power",
+        "np.exp",
+        "np.log",
+        "np.where",
+        "cs_rank",
+        "cs_zscore",
+    }
+)
 
 # 第 2 参数为窗口/滞后的算子
-_WINDOW_OP_2: frozenset[str] = frozenset({
-    "ts_sum", "ts_mean", "ts_stddev", "ts_std_dev", "ts_argmax", "ts_argmin",
-    "ts_rank", "ts_min", "ts_max", "ts_product", "ts_median",
-    "ts_delta", "ts_momentum", "ts_volatility", "decay_linear",
-    "delay", "delta",
-})
+_WINDOW_OP_2: frozenset[str] = frozenset(
+    {
+        "ts_sum",
+        "ts_mean",
+        "ts_stddev",
+        "ts_std_dev",
+        "ts_argmax",
+        "ts_argmin",
+        "ts_rank",
+        "ts_min",
+        "ts_max",
+        "ts_product",
+        "ts_median",
+        "ts_delta",
+        "ts_momentum",
+        "ts_volatility",
+        "decay_linear",
+        "delay",
+        "delta",
+    }
+)
 # 第 3 参数为窗口的算子
 _WINDOW_OP_3: frozenset[str] = frozenset({"ts_corr", "ts_covariance"})
 
@@ -103,7 +151,7 @@ def _tokenize(text: str) -> list[str]:
             i = j
             continue
         # 多字符运算符
-        two = text[i:i + 2]
+        two = text[i : i + 2]
         if two in ("**", "<=", ">=", "==", "!="):
             tokens.append(two)
             i += 2
@@ -138,9 +186,7 @@ class _SeedParser:
         """返回 (max_lookback, depth, fields, operators)。"""
         lookback, depth, fields, ops = self._parse_term(0)
         if self.pos != len(self.tokens):
-            raise SeedExprParseError(
-                f"解析失败: 位置 {self.pos} 存在多余内容 '{self.tokens[self.pos:]}'"
-            )
+            raise SeedExprParseError(f"解析失败: 位置 {self.pos} 存在多余内容 '{self.tokens[self.pos :]}'")
         return lookback, depth, fields, ops
 
     def _parse_term(self, depth: int) -> "tuple[int, int, set[str], set[str]]":
@@ -176,9 +222,7 @@ class _SeedParser:
         if _NUM_RE.match(tok):
             self.pos += 1
             return 0, depth, set(), set()
-        if _IDENT_RE.match(tok) or (
-            "." in tok and tok.split(".", 1)[0] in ("np", "cs")
-        ):
+        if _IDENT_RE.match(tok) or ("." in tok and tok.split(".", 1)[0] in ("np", "cs")):
             self.pos += 1
             if self._peek() == "(":
                 return self._parse_call(tok, depth)

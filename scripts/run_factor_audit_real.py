@@ -19,11 +19,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -443,6 +443,7 @@ def batch_audit_real(
     if not panel:
         logger.error("未能获取任何真实数据，回退到合成数据")
         from scripts.run_factor_audit import generate_synthetic_data
+
         synth_data, synth_fwd = generate_synthetic_data(252)
         panel = {"SYNTHETIC": synth_data}
 
@@ -475,14 +476,16 @@ def batch_audit_real(
 
             if not ic_results:
                 logger.warning("  因子 %s 无有效 IC 结果", factor_name)
-                summary_rows.append({
-                    "factor_name": factor_name,
-                    "n_symbols_ic": 0,
-                    "mean_ic": 0.0,
-                    "oos_passed": False,
-                    "cross_symbol_ratio": 0.0,
-                    "status": "no_data",
-                })
+                summary_rows.append(
+                    {
+                        "factor_name": factor_name,
+                        "n_symbols_ic": 0,
+                        "mean_ic": 0.0,
+                        "oos_passed": False,
+                        "cross_symbol_ratio": 0.0,
+                        "status": "no_data",
+                    }
+                )
                 continue
 
             # 构建跨品种 IC map
@@ -516,7 +519,7 @@ def batch_audit_real(
             # 多重检验 p 值（简化：基于 IC 的 t-stat）
             p_values: list[float] = []
             for sym, res in ic_results.items():
-                ic_val = res["ic"]
+                res["ic"]
                 ic_ir = res["ic_ir"]
                 # 近似 p-value（双侧）
                 t_stat = abs(ic_ir)
@@ -545,28 +548,32 @@ def batch_audit_real(
 
             # 汇总行
             status = "passed" if report.passed else "failed"
-            summary_rows.append({
-                "factor_name": factor_name,
-                "n_symbols_ic": len(ic_results),
-                "mean_ic": round(mean_ic, 4),
-                "mean_ic_ir": round(float(np.mean(ic_ir_values)), 4) if ic_ir_values else 0.0,
-                "oos_ic_consistency": round(oos_result.get("ic_consistency", 0.0), 4),
-                "oos_passed": oos_result.get("passed", False),
-                "cross_symbol_ratio": round(positive_ic_ratio, 4),
-                "audit_passed": report.passed,
-                "pass_rate": round(report.pass_rate, 4),
-                "failed_items": ",".join(report.summary.get("failed_items", [])),
-                "status": status,
-                "family": factor_meta.get("_family", "unknown"),
-            })
+            summary_rows.append(
+                {
+                    "factor_name": factor_name,
+                    "n_symbols_ic": len(ic_results),
+                    "mean_ic": round(mean_ic, 4),
+                    "mean_ic_ir": round(float(np.mean(ic_ir_values)), 4) if ic_ir_values else 0.0,
+                    "oos_ic_consistency": round(oos_result.get("ic_consistency", 0.0), 4),
+                    "oos_passed": oos_result.get("passed", False),
+                    "cross_symbol_ratio": round(positive_ic_ratio, 4),
+                    "audit_passed": report.passed,
+                    "pass_rate": round(report.pass_rate, 4),
+                    "failed_items": ",".join(report.summary.get("failed_items", [])),
+                    "status": status,
+                    "family": factor_meta.get("_family", "unknown"),
+                }
+            )
 
         except Exception as e:
             logger.error("  因子 %s 处理异常: %s", factor_name, e)
-            summary_rows.append({
-                "factor_name": factor_name,
-                "status": "error",
-                "error": str(e),
-            })
+            summary_rows.append(
+                {
+                    "factor_name": factor_name,
+                    "status": "error",
+                    "error": str(e),
+                }
+            )
 
         if idx % 5 == 0 or idx == total:
             elapsed = time.time() - start_time
@@ -575,7 +582,11 @@ def batch_audit_real(
             passed_count = sum(1 for r in reports if r.passed)
             logger.info(
                 "进度 [%d/%d] 通过=%d 速率=%.1f/s ETA=%.0fs",
-                idx, total, passed_count, rate, eta,
+                idx,
+                total,
+                passed_count,
+                rate,
+                eta,
             )
 
     # 5. 保存结果
@@ -630,8 +641,10 @@ def generate_visualizations(
     """
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+
         plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
         plt.rcParams["axes.unicode_minus"] = False
     except ImportError:
@@ -644,8 +657,8 @@ def generate_visualizations(
 
     # 1. 通过率饼图
     fig, ax = plt.subplots(figsize=(6, 6))
-    passed = (df_summary["audit_passed"] == True).sum()
-    failed = (df_summary["audit_passed"] != True).sum()
+    passed = int(df_summary["audit_passed"].fillna(False).sum())
+    failed = int((~df_summary["audit_passed"].fillna(False)).sum())
     labels = [f"通过 ({passed})", f"未通过 ({failed})"]
     sizes = [passed, failed]
     colors = ["#2ecc71", "#e74c3c"]
@@ -673,7 +686,7 @@ def generate_visualizations(
     # 跨品种通过率 - 连续分布直方图
     cross_vals = df_summary["cross_symbol_ratio"].dropna()
     bins = np.arange(0, 1.01, 0.1)
-    bars2 = ax2.hist(cross_vals, bins=bins, color="#3498db", edgecolor="white", alpha=0.8, rwidth=0.9)
+    ax2.hist(cross_vals, bins=bins, color="#3498db", edgecolor="white", alpha=0.8, rwidth=0.9)
     ax2.axvline(x=0.8, color="#e74c3c", linestyle="--", label="80% 基准线")
     ax2.axvline(x=0.5, color="#f39c12", linestyle="--", label="50% 基准线")
     ax2.set_title("跨品种 IC 正收益比例分布")
@@ -806,19 +819,23 @@ def generate_visualizations(
     if "family" in df_summary.columns:
         valid = df_summary[df_summary["status"].isin(["passed", "failed"])]
         if len(valid) > 0:
-            family_stats = valid.groupby("family").agg(
-                mean_ic=("mean_ic", "mean"),
-                mean_cross=("cross_symbol_ratio", "mean"),
-                oos_rate=("oos_passed", "mean"),
-                count=("factor_name", "count"),
-            ).reset_index()
+            family_stats = (
+                valid.groupby("family")
+                .agg(
+                    mean_ic=("mean_ic", "mean"),
+                    mean_cross=("cross_symbol_ratio", "mean"),
+                    oos_rate=("oos_passed", "mean"),
+                    count=("factor_name", "count"),
+                )
+                .reset_index()
+            )
 
             fig, ax = plt.subplots(figsize=(14, 7))
             x = np.arange(len(family_stats))
             width = 0.25
             bars1 = ax.bar(x - width, family_stats["mean_ic"], width, label="平均 IC", color="#3498db")
-            bars2 = ax.bar(x, family_stats["mean_cross"], width, label="跨品种正收益比例", color="#2ecc71")
-            bars3 = ax.bar(x + width, family_stats["oos_rate"], width, label="OOS 通过率", color="#f39c12")
+            ax.bar(x, family_stats["mean_cross"], width, label="跨品种正收益比例", color="#2ecc71")
+            ax.bar(x + width, family_stats["oos_rate"], width, label="OOS 通过率", color="#f39c12")
             ax.set_xticks(x)
             ax.set_xticklabels(family_stats["family"], rotation=45, ha="right", fontsize=8)
             ax.set_ylabel("比例 / 数值")
@@ -857,7 +874,7 @@ def generate_suggestions(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     suggestions_path = output_dir / f"factor_suggestions_{timestamp}.md"
 
-    failed = df_summary[df_summary["audit_passed"] != True].copy()
+    failed = df_summary[~df_summary["audit_passed"].fillna(False)].copy()
     if failed.empty:
         with open(suggestions_path, "w", encoding="utf-8") as f:
             f.write("# 因子优化建议清单\n\n✅ 所有因子均通过审计，无需优化！\n")
@@ -898,6 +915,7 @@ def generate_suggestions(
                 if pd.notna(items):
                     family_failures.extend(str(items).split(","))
             from collections import Counter
+
             failure_counts = Counter(f.strip() for f in family_failures)
 
             sections.append("**常见失败模式**:")
@@ -956,9 +974,7 @@ def generate_suggestions(
     sections.append("以下因子虽然未通过全部审计，但在部分指标上表现突出，值得重点优化：")
     sections.append("")
 
-    high_potential = failed[
-        (failed["cross_symbol_ratio"] >= 0.8) & (failed["mean_ic"] > 0)
-    ].copy()
+    high_potential = failed[(failed["cross_symbol_ratio"] >= 0.8) & (failed["mean_ic"] > 0)].copy()
 
     if high_potential.empty:
         # 如果没有高潜力因子，选取 IC 最高的
@@ -996,8 +1012,7 @@ def generate_suggestions(
 
         if "cross_symbol" in str(failed_items):
             steps.append(
-                "2. **跨品种优化**: 使用均值-方差归一化（MV-Norm）或"
-                "按品种波动率缩放因子值，使信号在各品种间可比。"
+                "2. **跨品种优化**: 使用均值-方差归一化（MV-Norm）或按品种波动率缩放因子值，使信号在各品种间可比。"
             )
 
         if "oos_consistency" in str(failed_items):
@@ -1094,14 +1109,11 @@ def generate_suggestions(
 
         if "stress_resilience" in str(failed_items):
             suggestions.append(
-                "**[低优先级] 压力测试不通过**: "
-                "建议增加市场状态过滤器，在极端行情下自动降低因子权重或暂停交易。"
+                "**[低优先级] 压力测试不通过**: 建议增加市场状态过滤器，在极端行情下自动降低因子权重或暂停交易。"
             )
 
         if not suggestions:
-            suggestions.append(
-                "该因子各项指标接近但未完全达标，建议进行精细化微调优化。"
-            )
+            suggestions.append("该因子各项指标接近但未完全达标，建议进行精细化微调优化。")
 
         for s in suggestions:
             sections.append(s)
@@ -1143,23 +1155,27 @@ def generate_suggestions(
 def main():
     parser = argparse.ArgumentParser(description="全量因子批量审计（真实数据版）")
     parser.add_argument(
-        "--seeds_dir", type=str,
+        "--seeds_dir",
+        type=str,
         default=str(PROJECT_ROOT / "seeds"),
         help="种子因子目录",
     )
     parser.add_argument(
-        "--output_dir", type=str,
+        "--output_dir",
+        type=str,
         default=str(PROJECT_ROOT / "reports"),
         help="输出目录",
     )
     parser.add_argument(
-        "--market", type=str,
+        "--market",
+        type=str,
         default="futures",
         choices=["futures", "stock"],
         help="市场类型",
     )
     parser.add_argument(
-        "--n_symbols", type=int,
+        "--n_symbols",
+        type=int,
         default=15,
         help="使用的期货品种数量",
     )
@@ -1179,9 +1195,7 @@ def main():
     logger.info("  市场: %s", args.market)
 
     try:
-        reports, df_summary = batch_audit_real(
-            seeds_dir, output_dir, args.market, args.n_symbols
-        )
+        reports, df_summary = batch_audit_real(seeds_dir, output_dir, args.market, args.n_symbols)
 
         if not reports:
             logger.error("未生成任何审计报告")

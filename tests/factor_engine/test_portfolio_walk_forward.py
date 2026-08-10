@@ -14,16 +14,16 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from fts.factor_engine.portfolio_walk_forward import (
     PortfolioWalkForward,
-    DEFAULT_PORTFOLIO_WF_CONFIG,
 )
 
 
 def _make_returns(
-    n_days: int = 500, n_factors: int = 3, seed: int = 1,
+    n_days: int = 500,
+    n_factors: int = 3,
+    seed: int = 1,
     drift: float = 0.0005,
 ) -> pd.DataFrame:
     """合成因子收益矩阵（带正向漂移 → 组合夏普为正）。"""
@@ -70,10 +70,14 @@ class TestBasicWalkForward:
     def test_passed_true_with_positive_drift(self) -> None:
         """正向漂移数据 → sharpe_consistency=1.0，passed=True。"""
         fr = _make_returns(drift=0.001, n_days=600)
-        wf = PortfolioWalkForward(config={
-            "n_windows": 3, "window_days": 200, "min_test_days": 40,
-            "max_sharpe_volatility": 2.0,  # 短 test 段夏普估计噪声较大，放宽容差
-        })
+        wf = PortfolioWalkForward(
+            config={
+                "n_windows": 3,
+                "window_days": 200,
+                "min_test_days": 40,
+                "max_sharpe_volatility": 2.0,  # 短 test 段夏普估计噪声较大，放宽容差
+            }
+        )
         result = wf.evaluate(fr, _sharpe_weight_fn)
         assert result["sharpe_consistency"] == 1.0
         assert result["passed"] is True
@@ -115,10 +119,14 @@ class TestDegradation:
     def test_custom_config(self) -> None:
         """自定义窗口参数生效。"""
         fr = _make_returns(n_days=600)
-        wf = PortfolioWalkForward(config={
-            "window_days": 200, "step_days": 100, "min_test_days": 30,
-            "n_windows": 2,
-        })
+        wf = PortfolioWalkForward(
+            config={
+                "window_days": 200,
+                "step_days": 100,
+                "min_test_days": 30,
+                "n_windows": 2,
+            }
+        )
         result = wf.evaluate(fr, _sharpe_weight_fn)
         assert result["n_windows_completed"] >= 1
 

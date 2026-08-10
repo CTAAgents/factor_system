@@ -16,19 +16,19 @@ HARNESS §11-logic-review-plan.md §C.1:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from typing import Literal, Optional
 
 
 # ─── 自然实验事件类型 ──────────────────────────────────────
 
 EventType = Literal[
-    "circuit_breaker",    # 熔断
-    "limit_move",         # 涨跌停板打开
-    "contract_switch",    # 主力合约切换
-    "policy_shock",       # 政策冲击
-    "gap_open",           # 跳空开盘
-    "volume_spike",       # 成交量异常放大
+    "circuit_breaker",  # 熔断
+    "limit_move",  # 涨跌停板打开
+    "contract_switch",  # 主力合约切换
+    "policy_shock",  # 政策冲击
+    "gap_open",  # 跳空开盘
+    "volume_spike",  # 成交量异常放大
 ]
 
 
@@ -47,6 +47,7 @@ class NaturalExperiment:
         pre_window: 事件前窗口（交易日数，默认 5）
         post_window: 事件后窗口（交易日数，默认 5）
     """
+
     event_id: str
     event_type: EventType
     event_date: date
@@ -139,6 +140,7 @@ DEFAULT_EVENTS: list[NaturalExperiment] = A_SHARE_EVENTS + FUTURES_EVENTS
 
 
 # ─── 事件查找工具 ──────────────────────────────────────────
+
 
 def get_events_by_type(
     events: list[NaturalExperiment],

@@ -18,7 +18,7 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
-from .contracts import BacktestMetrics, FactorProgram
+from .contracts import FactorProgram
 from .evaluation_chain import evaluate_backtest
 
 # ─── 消融模式 ─────────────────────────────────────────────
@@ -34,8 +34,10 @@ ABLATION_MODES: dict[str, str] = {
 
 # ─── 消融结果契约 ─────────────────────────────────────────
 
+
 class SingleAblation(dict):
     """单次消融实验结果。"""
+
     def __init__(
         self,
         mode: str,
@@ -62,6 +64,7 @@ class SingleAblation(dict):
 
 class AblationResult(dict):
     """完整消融实验结果。"""
+
     def __init__(
         self,
         factor_id: str,
@@ -79,6 +82,7 @@ class AblationResult(dict):
 
 
 # ─── 数据扰动函数 ─────────────────────────────────────────
+
 
 def _ablate_volume_zero(data: pd.DataFrame) -> pd.DataFrame:
     """将成交量字段置零。"""
@@ -136,6 +140,7 @@ def _ablate_zero_one_feature(data: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
 # ─── 消融实验执行器 ───────────────────────────────────────
 
+
 def _run_single_ablation(
     factor: FactorProgram,
     modified_data: pd.DataFrame,
@@ -190,6 +195,7 @@ def _run_single_ablation(
 
 # ─── 主类 ─────────────────────────────────────────────────
 
+
 class AblationExperiment:
     """输入敏感性消融实验。
 
@@ -235,39 +241,63 @@ class AblationExperiment:
 
         # 1. 成交量置零
         vol_zero_data = _ablate_volume_zero(data)
-        ablations.append(_run_single_ablation(
-            factor, vol_zero_data, forward_returns,
-            baseline_ic, baseline_sharpe,
-            "volume_zero", "成交量置零",
-            **eval_kwargs,
-        ))
+        ablations.append(
+            _run_single_ablation(
+                factor,
+                vol_zero_data,
+                forward_returns,
+                baseline_ic,
+                baseline_sharpe,
+                "volume_zero",
+                "成交量置零",
+                **eval_kwargs,
+            )
+        )
 
         # 2. VWAP → close
         vwap_close_data = _ablate_vwap_to_close(data)
-        ablations.append(_run_single_ablation(
-            factor, vwap_close_data, forward_returns,
-            baseline_ic, baseline_sharpe,
-            "vwap_to_close", "VWAP 替换为 close",
-            **eval_kwargs,
-        ))
+        ablations.append(
+            _run_single_ablation(
+                factor,
+                vwap_close_data,
+                forward_returns,
+                baseline_ic,
+                baseline_sharpe,
+                "vwap_to_close",
+                "VWAP 替换为 close",
+                **eval_kwargs,
+            )
+        )
 
         # 3. VWAP → settle
         vwap_settle_data = _ablate_vwap_to_settle(data)
-        ablations.append(_run_single_ablation(
-            factor, vwap_settle_data, forward_returns,
-            baseline_ic, baseline_sharpe,
-            "vwap_to_settle", "VWAP 替换为 settle",
-            **eval_kwargs,
-        ))
+        ablations.append(
+            _run_single_ablation(
+                factor,
+                vwap_settle_data,
+                forward_returns,
+                baseline_ic,
+                baseline_sharpe,
+                "vwap_to_settle",
+                "VWAP 替换为 settle",
+                **eval_kwargs,
+            )
+        )
 
         # 4. 时间戳打乱
         shuffled_data = _ablate_shuffle_dates(data)
-        ablations.append(_run_single_ablation(
-            factor, shuffled_data, forward_returns,
-            baseline_ic, baseline_sharpe,
-            "shuffle_dates", "时间戳打乱",
-            **eval_kwargs,
-        ))
+        ablations.append(
+            _run_single_ablation(
+                factor,
+                shuffled_data,
+                forward_returns,
+                baseline_ic,
+                baseline_sharpe,
+                "shuffle_dates",
+                "时间戳打乱",
+                **eval_kwargs,
+            )
+        )
 
         # 5. 单特征归零（逐个特征独立测试，取最大 IC 变化）
         zero_one_data = _ablate_zero_one_feature(data)
@@ -284,25 +314,29 @@ class AblationExperiment:
                 continue
 
         if worst_feature:
-            ablations.append(SingleAblation(
-                mode="zero_one_feature",
-                description=f"单特征归零（影响最大: {worst_feature}）",
-                ic=worst_ic,
-                sharpe=0.0,
-                ic_change=worst_ic - baseline_ic,
-                sharpe_change=0.0,
-                feature=worst_feature,
-            ))
+            ablations.append(
+                SingleAblation(
+                    mode="zero_one_feature",
+                    description=f"单特征归零（影响最大: {worst_feature}）",
+                    ic=worst_ic,
+                    sharpe=0.0,
+                    ic_change=worst_ic - baseline_ic,
+                    sharpe_change=0.0,
+                    feature=worst_feature,
+                )
+            )
         else:
-            ablations.append(SingleAblation(
-                mode="zero_one_feature",
-                description="单特征归零（无显著影响）",
-                ic=baseline_ic,
-                sharpe=baseline_sharpe,
-                ic_change=0.0,
-                sharpe_change=0.0,
-                feature=None,
-            ))
+            ablations.append(
+                SingleAblation(
+                    mode="zero_one_feature",
+                    description="单特征归零（无显著影响）",
+                    ic=baseline_ic,
+                    sharpe=baseline_sharpe,
+                    ic_change=0.0,
+                    sharpe_change=0.0,
+                    feature=None,
+                )
+            )
 
         return AblationResult(
             factor_id=factor.get("factor_id", "unknown"),
@@ -320,10 +354,7 @@ class AblationExperiment:
         **eval_kwargs: Any,
     ) -> list[AblationResult]:
         """批量执行消融实验。"""
-        return [
-            self.run(f, data, forward_returns, **eval_kwargs)
-            for f in factors
-        ]
+        return [self.run(f, data, forward_returns, **eval_kwargs) for f in factors]
 
     @staticmethod
     def report(results: list[AblationResult]) -> str:
@@ -337,7 +368,7 @@ class AblationExperiment:
             lines.append(f"\n因子: {result['factor_name']} ({result['factor_id']})")
             lines.append(f"  Baseline IC={result['baseline_ic']:.4f}, Sharpe={result['baseline_sharpe']:.4f}")
             lines.append(f"  {'消融模式':<25} {'IC':>8} {'IC变化':>10} {'IC衰减比':>10} {'p值':>8} {'Sharpe':>8}")
-            lines.append(f"  {'-'*25} {'-'*8} {'-'*10} {'-'*10} {'-'*8} {'-'*8}")
+            lines.append(f"  {'-' * 25} {'-' * 8} {'-' * 10} {'-' * 10} {'-' * 8} {'-' * 8}")
             for ab in result["ablations"]:
                 lines.append(
                     f"  {ab['description']:<25} {ab['ic']:>8.4f} "

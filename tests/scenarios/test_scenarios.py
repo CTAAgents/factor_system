@@ -7,7 +7,6 @@ HARNESS §11-logic-review-plan.md §A.2:
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -24,7 +23,7 @@ from .validator import ScenarioValidator, ScenarioResult, ScenarioSummary
 @pytest.fixture
 def simple_momentum_factor() -> FactorProgram:
     """一个简单的动量因子（用于场景测试验证）。"""
-    code = '''
+    code = """
 def factor_program(data, params):
     import numpy as np
     close = data['close'].values if hasattr(data, 'close') else data['close']
@@ -35,7 +34,7 @@ def factor_program(data, params):
     for i in range(n, len(ret)):
         mom[i] = np.mean(ret[i-n:i])
     return np.clip(np.nan_to_num(mom, nan=0.0), -1.0, 1.0)
-'''
+"""
     return create_factor_program(
         name="simple_momentum",
         code=code,
@@ -47,8 +46,11 @@ def factor_program(data, params):
             "lookback": 5,
         },
         economic_logic={
-            "theory": 3, "behavioral": 4, "microstructure": 3,
-            "institutional": 3, "narrative": "简单动量因子，捕捉短期趋势延续",
+            "theory": 3,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "简单动量因子，捕捉短期趋势延续",
         },
         source="seed",
         trace_id="test_scenarios",
@@ -58,7 +60,7 @@ def factor_program(data, params):
 @pytest.fixture
 def mean_reversion_factor() -> FactorProgram:
     """一个简单的均值回归因子（反转信号）。"""
-    code = '''
+    code = """
 def factor_program(data, params):
     import numpy as np
     close = data['close'].values if hasattr(data, 'close') else data['close']
@@ -68,7 +70,7 @@ def factor_program(data, params):
     ma = pd.Series(close).rolling(n, min_periods=1).mean().values
     deviation = (ma - close) / np.maximum(close, 1e-10)
     return np.clip(np.nan_to_num(deviation, nan=0.0), -1.0, 1.0)
-'''
+"""
     return create_factor_program(
         name="mean_reversion",
         code=code,
@@ -80,8 +82,11 @@ def factor_program(data, params):
             "lookback": 10,
         },
         economic_logic={
-            "theory": 4, "behavioral": 4, "microstructure": 3,
-            "institutional": 3, "narrative": "均值回归因子，捕捉超买超卖反转",
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "均值回归因子，捕捉超买超卖反转",
         },
         source="seed",
         trace_id="test_scenarios_mr",
@@ -114,16 +119,14 @@ class TestScenarioDefinitions:
         """场景分类有效。"""
         valid_categories = {"trend", "reversal", "liquidity", "event", "oscillation", "futures"}
         for scenario in ALL_SCENARIOS:
-            assert scenario.category in valid_categories, \
-                f"无效分类 '{scenario.category}' 在场景 {scenario.name}"
+            assert scenario.category in valid_categories, f"无效分类 '{scenario.category}' 在场景 {scenario.name}"
 
     def test_each_scenario_must_have_validation(self):
         """每个场景至少有一个验证方式（范围检查或自定义函数）。"""
         for scenario in ALL_SCENARIOS:
             has_range = scenario.expected_signal_range is not None
             has_check_fn = scenario.check_fn is not None
-            assert has_range or has_check_fn, \
-                f"场景 {scenario.name} 缺少验证方式（需至少一个）"
+            assert has_range or has_check_fn, f"场景 {scenario.name} 缺少验证方式（需至少一个）"
 
     def test_scenario_data_generates_valid_output(self):
         """场景数据生成函数返回有效数据。"""
@@ -181,18 +184,24 @@ class TestScenarioValidator:
 
     def test_invalid_factor_handled_gracefully(self):
         """因子程序为空时的异常处理。"""
-        code = '''
+        code = """
 def factor_program(data, params):
     raise ValueError("模拟异常")
-'''
+"""
         bad_factor = create_factor_program(
             name="bad_factor",
-            code=code, params={},
-            signature={"input_fields": ["close"], "output_type": "signal",
-                       "frequency": "daily", "lookback": 2},
-            economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3,
-                            "institutional": 3, "narrative": "测试异常处理"},
-            source="seed", trace_id="test_bad",
+            code=code,
+            params={},
+            signature={"input_fields": ["close"], "output_type": "signal", "frequency": "daily", "lookback": 2},
+            economic_logic={
+                "theory": 3,
+                "behavioral": 3,
+                "microstructure": 3,
+                "institutional": 3,
+                "narrative": "测试异常处理",
+            },
+            source="seed",
+            trace_id="test_bad",
         )
         validator = ScenarioValidator(scenarios=ALL_SCENARIOS[:1])
         result = validator.validate_scenario(bad_factor, ALL_SCENARIOS[0])
@@ -212,16 +221,14 @@ class TestEndToEndScenarios:
         validator = ScenarioValidator(scenarios=[scenario])
         result = validator.validate_scenario(simple_momentum_factor, scenario)
         # 动量因子在上涨趋势中至少信号应 > -0.3
-        assert result.signal_last > -0.3, \
-            f"上涨趋势中动量信号应偏正，实际={result.signal_last:.4f}"
+        assert result.signal_last > -0.3, f"上涨趋势中动量信号应偏正，实际={result.signal_last:.4f}"
 
     def test_momentum_in_trend_down(self, simple_momentum_factor):
         """动量因子在下跌趋势中应产生负信号。"""
         scenario = [s for s in ALL_SCENARIOS if s.name == "trend_down"][0]
         validator = ScenarioValidator(scenarios=[scenario])
         result = validator.validate_scenario(simple_momentum_factor, scenario)
-        assert result.signal_last < 0.3, \
-            f"下跌趋势中动量信号应偏负，实际={result.signal_last:.4f}"
+        assert result.signal_last < 0.3, f"下跌趋势中动量信号应偏负，实际={result.signal_last:.4f}"
 
     def test_mean_reversion_overbought(self, mean_reversion_factor):
         """均值回归因子在超买时应产生负信号（做空倾向）。"""
@@ -229,46 +236,41 @@ class TestEndToEndScenarios:
         validator = ScenarioValidator(scenarios=[scenario])
         result = validator.validate_scenario(mean_reversion_factor, scenario)
         # 均值回归因子在超买时信号应 ≤ 0.3
-        assert result.signal_last <= 0.3, \
-            f"超买时均值回归信号应≤0.3，实际={result.signal_last:.4f}"
+        assert result.signal_last <= 0.3, f"超买时均值回归信号应≤0.3，实际={result.signal_last:.4f}"
 
     def test_mean_reversion_oversold(self, mean_reversion_factor):
         """均值回归因子在超卖时应产生正信号（做多倾向）。"""
         scenario = [s for s in ALL_SCENARIOS if s.name == "oversold_reversal"][0]
         validator = ScenarioValidator(scenarios=[scenario])
         result = validator.validate_scenario(mean_reversion_factor, scenario)
-        assert result.signal_last >= -0.3, \
-            f"超卖时均值回归信号应≥-0.3，实际={result.signal_last:.4f}"
+        assert result.signal_last >= -0.3, f"超卖时均值回归信号应≥-0.3，实际={result.signal_last:.4f}"
 
     def test_low_liquidity_signal_muted(self, simple_momentum_factor):
         """低流动性场景下信号绝对值应偏低。"""
         scenario = [s for s in ALL_SCENARIOS if s.name == "low_liquidity"][0]
         validator = ScenarioValidator(scenarios=[scenario])
         result = validator.validate_scenario(simple_momentum_factor, scenario)
-        assert abs(result.signal_last) < 0.6, \
-            f"低流动性信号应|signal|<0.6，实际={result.signal_last:.4f}"
+        assert abs(result.signal_last) < 0.6, f"低流动性信号应|signal|<0.6，实际={result.signal_last:.4f}"
 
     def test_consolidation_signal_neutral(self, simple_momentum_factor):
         """横盘震荡场景下信号应接近 0。"""
         scenario = [s for s in ALL_SCENARIOS if s.name == "consolidation_sideways"][0]
         validator = ScenarioValidator(scenarios=[scenario])
         result = validator.validate_scenario(simple_momentum_factor, scenario)
-        assert abs(result.signal_last) < 0.4, \
-            f"横盘信号应|signal|<0.4，实际={result.signal_last:.4f}"
+        assert abs(result.signal_last) < 0.4, f"横盘信号应|signal|<0.4，实际={result.signal_last:.4f}"
 
     def test_breakout_positive_signal(self, simple_momentum_factor):
         """放量突破场景下动量信号应偏正。"""
         scenario = [s for s in ALL_SCENARIOS if s.name == "breakout_with_volume"][0]
         validator = ScenarioValidator(scenarios=[scenario])
         result = validator.validate_scenario(simple_momentum_factor, scenario)
-        assert result.signal_last > -0.5, \
-            f"突破信号应>-0.5，实际={result.signal_last:.4f}"
+        assert result.signal_last > -0.5, f"突破信号应>-0.5，实际={result.signal_last:.4f}"
 
     def test_rollover_no_signal_jump(self, simple_momentum_factor):
         """换月日附近信号不应剧烈突变。"""
         scenario = [s for s in ALL_SCENARIOS if s.name == "futures_rollover"][0]
         validator = ScenarioValidator(scenarios=[scenario])
-        result = validator.validate_scenario(simple_momentum_factor, scenario)
+        validator.validate_scenario(simple_momentum_factor, scenario)
         # 检查换月日前后信号差 < 0.5
         roll_day = 50
         data, _ = scenario.generate_data()
@@ -288,7 +290,7 @@ def test_quick_validation():
     """快速验证：对所有场景运行动量因子，统计通过率。"""
     from fts.factor_engine.factor_program import create_factor_program
 
-    code = '''
+    code = """
 def factor_program(data, params):
     import numpy as np
     close = data['close'].values if hasattr(data, 'close') else data['close']
@@ -298,15 +300,21 @@ def factor_program(data, params):
     for i in range(n, len(ret)):
         mom[i] = np.mean(ret[i-n:i])
     return np.clip(np.nan_to_num(mom, nan=0.0), -1.0, 1.0)
-'''
+"""
     factor = create_factor_program(
         name="quick_momentum",
-        code=code, params={},
-        signature={"input_fields": ["close"], "output_type": "signal",
-                   "frequency": "daily", "lookback": 5},
-        economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3,
-                        "institutional": 3, "narrative": "快速验证动量因子"},
-        source="seed", trace_id="test_quick",
+        code=code,
+        params={},
+        signature={"input_fields": ["close"], "output_type": "signal", "frequency": "daily", "lookback": 5},
+        economic_logic={
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "快速验证动量因子",
+        },
+        source="seed",
+        trace_id="test_quick",
     )
 
     validator = ScenarioValidator()

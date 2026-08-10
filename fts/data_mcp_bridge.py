@@ -60,6 +60,7 @@ def _ensure_cache_dir() -> None:
 
 # ─── MCP 桥接器 ─────────────────────────────────────────────
 
+
 class MCPBridge:
     """MCP 数据桥接器 — 从本地缓存读取基本面数据。
 
@@ -145,6 +146,7 @@ class MCPBridge:
 
 # ─── 辅助函数 ───────────────────────────────────────────────
 
+
 def _normalize_code(code: str) -> str:
     """标准化股票代码为缓存查询键。
 
@@ -155,11 +157,12 @@ def _normalize_code(code: str) -> str:
     raw = code.strip().upper()
     for prefix in ("SH", "SZ", "BJ", "HK"):
         if raw.startswith(prefix):
-            raw = raw[len(prefix):]
+            raw = raw[len(prefix) :]
     return raw
 
 
 # ─── 缓存更新辅助（供 Agent 调用） ─────────────────────────
+
 
 def _parse_mx_response(data: list[dict]) -> dict[str, dict[str, Any]]:
     """解析 mx_ashare_finance_data 的响应为结构化缓存。
@@ -360,8 +363,8 @@ def _parse_market_cap(s: str) -> float | None:
 
 # ─── 缓存保存（供 Agent 调用） ─────────────────────────────
 
-def save_cache(data: dict[str, dict[str, Any]], *,
-               source: str = "mx_api") -> None:
+
+def save_cache(data: dict[str, dict[str, Any]], *, source: str = "mx_api") -> None:
     """保存缓存数据到文件。
 
     Args:

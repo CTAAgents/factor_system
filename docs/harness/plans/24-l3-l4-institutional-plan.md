@@ -1,6 +1,6 @@
 # L3/L4 机构级追赶专项实施计划（组合构建 + 优化执行 + 反馈闭环）
 
-> 版本: v2.71.0
+> 版本: v2.81.0
 > 最后更新: 2026-08-10
 > 状态: 已收尾（GAP-L301~L310 + L401/L402 全部落地，v2.61.0~v2.69.0）
 > 适用范围: L3 Portfolio Loop（组合构建）/ L4 优化与执行反馈层（资金分配·成本·归因·实盘反馈）/ L4 表达式组合算子层
@@ -96,7 +96,7 @@
 
 ### 2.1 P0 — 阻塞性差距（直接影响组合信号真实性）
 
-#### GAP-L301 因子收益序列与协方差估计缺失（P0）
+#### GAP-L301 因子收益序列与协方差估计缺失（P0）✅ 已处理（v2.61.0 A 阶段）
 
 | 维度 | 内容 |
 |---|---|
@@ -105,8 +105,9 @@
 | **影响** | 组合夏普/相关性是"算出来的"而非"测出来的"→ Verifier 校验的是估算值；无 Σ 则无法做风险平价/最小方差/风险预算，机构化优化无从谈起（差距根因，对应总纲 GAP-I302 前置） |
 | **实施步骤** | ① 新建 `fts/factor_engine/factor_returns.py`：`FactorReturnsBuilder`——对每因子按信号分位（如 10%/90%）或回归法构建多空收益序列，输出 `factor_returns: pd.DataFrame`（T×N）与覆盖日志；② `build_combo` 重构：当传入 `factor_returns` 时，组合收益 = w·R 逐期加权，实测组合夏普/相关性/回撤/换手替代估算公式；③ 新增 `RiskModelEstimator`（见 GAP-L302）输出收缩协方差 Σ；④ 保持无收益矩阵时的估算回退路径（兼容冷启动） |
 | **测试方案** | 合成因子信号（已知相关性）→ 多空收益序列相关性 ≈ 已知值；组合夏普实测 vs 估算偏差边界断言；空数据/单因子降级；`pytest tests/factor_engine/test_factor_returns.py -v` |
+| **落地** | ✅ `factor_returns.py`（`FactorReturnsBuilder` 横截面多空序列 + `align_to_factors`/`portfolio_returns` w·R）；`_compute_combo_metrics` 实测化 `metrics_source="measured"`（矩阵缺失/不可对齐回退估算）；optimizer/归因/走航三处 w×R 消费；`test_factor_returns.py` 全绿 |
 
-#### GAP-L302 风险模型与协方差收缩估计缺失（P0）
+#### GAP-L302 风险模型与协方差收缩估计缺失（P0）✅ 已处理（v2.61.0 A 阶段）
 
 | 维度 | 内容 |
 |---|---|
@@ -115,6 +116,7 @@
 | **影响** | 无 Σ 使 GAP-L301 的优化与风险平价无法落地；组合风险度量（VaR/波动率）缺失 |
 | **实施步骤** | ① `RiskModelEstimator`：输入因子收益矩阵 R → 输出收缩 Σ（scipy/sklearn `ledoit_wolf` 或 numpy 自实现，异常时回退对角+εI）；② 输出 `risk_model` 报告（特征值/条件数/特异风险）；③ `synthesize_signals` 增加 `optimizer` 模式数据接线（见 GAP-L303） |
 | **测试方案** | 收缩协方差正定性；高相关合成数据收缩后条件数改善；与样本协方差对比断言；`test_risk_model_estimator.py` |
+| **落地** | ✅ `risk_model.py`（`RiskModelEstimator`：Ledoit-Wolf 收缩 + `_ensure_positive_definite` 正定性兜底 + 特征值/条件数/年化波动率报告）；`synthesize_signals` optimizer 分支 `RiskModelEstimator().estimate(rm).cov` 接线；Ledoit-Wolf 测试随 `test_portfolio_optimizer.py` |
 
 #### GAP-L303 PortfolioOptimizer 未接入 L3 主流程（P0）✅ 已处理（v2.61.0 B 阶段）
 
@@ -138,7 +140,7 @@
 
 ### 2.2 P1 — 重要差距（影响组合质量与可解释性）
 
-#### GAP-L305 组合目标函数无成本/换手项（P1）
+#### GAP-L305 组合目标函数无成本/换手项（P1）✅ 已处理（v2.66.0）
 
 > 承接总纲 GAP-I303（P2 登记）与 GAP-I501（P0 冲击成本）——本项为组合层执行细则。
 
@@ -149,8 +151,9 @@
 | **影响** | 高换手/高集中组合成本被忽视，回测收益虚高（违反"回测与实盘强对齐"红线） |
 | **实施步骤** | ① `cost_model.py` 增加冲击成本函数 `impact_cost(volume_pct)`（输入持仓占日均成交额比例 → bp，square-root 模型，参数走配置）；② `PortfolioOptimizer` 目标函数增加换手惩罚与成本项（复用 cost_model）；③ `build_combo` 输出 net 指标（扣除成本后的组合夏普/收益）；④ 容量约束：单因子持仓市值 ≤ 品种日均成交额 × 系数（超限截断并记录，衔接总纲 GAP-I501） |
 | **测试方案** | 冲击成本单调性测试；换手惩罚生效断言；net vs gross 夏普对比报告；容量超限截断单测 |
+| **落地** | ✅ `cost_model.py` 平方根冲击成本函数（按持仓占日均成交额比例）+ Optimizer 换手惩罚/成本项入目标；`build_combo` 输出 net 指标（扣除成本后夏普）；容量约束（持仓市值 ≤ 成交额 × capacity_cap_ratio，超限截断记录，衔接 GAP-I501）；net vs gross 对比报告随 L3 输出 |
 
-#### GAP-L306 组合层 Walk-Forward / 样本外验证缺失（P1）
+#### GAP-L306 组合层 Walk-Forward / 样本外验证缺失（P1）✅ 已处理（v2.66.0）
 
 | 维度 | 内容 |
 |---|---|
@@ -159,8 +162,9 @@
 | **影响** | 组合权重可能对单段历史过拟合，无组合级 OOS 证据 |
 | **实施步骤** | ① 新增 `fts/factor_engine/portfolio_walk_forward.py`：`PortfolioWalkForward`——滚动窗口（train 求权重 → test 实测），输出各窗口组合夏普/IC/相关性；② 报告一致性得分（跨窗口夏普波动 < 阈值）；③ 接入 L3 报告输出（`reports/{date}/portfolio_wf_*.md`） |
 | **测试方案** | 合成权重漂移数据 → 一致性得分正确捕获；窗口边界参数化测试；`test_portfolio_walk_forward.py` |
+| **落地** | ✅ `portfolio_walk_forward.py`（`PortfolioWalkForward` 滚动窗口：train 求权重 → test 实测，输出各窗口组合夏普/IC + 跨窗口一致性得分）；接入 L3 Step 7.7 报告输出 `reports/{date}/portfolio_wf_*.md` |
 
-#### GAP-L307 归因体系未接入 L3（P1）
+#### GAP-L307 归因体系未接入 L3（P1）✅ 已处理（v2.66.0）
 
 | 维度 | 内容 |
 |---|---|
@@ -168,8 +172,9 @@
 | **机构级标准** | 组合收益归因：因子贡献 / 风格暴露（Barra 风格）/ 行业暴露三维分解；风险预算（各因子风险贡献占比）；支撑"赚的什么钱"可解释性 |
 | **实施步骤** | ① `PortfolioLoop` Step 7.5 接入 `RiskAttributor`：输入组合收益 + 因子收益矩阵 R → 输出归因报告（因子贡献/暴露/VaR/ES）；② 归因报告入 `reports/{date}/portfolio_attribution_*.md`；③ 后续（衔接 GAP-S02 Barra 体系）扩展风格/行业归因维度 |
 | **测试方案** | 已知权重合成组合 → 归因贡献度与理论一致（误差 < 1e-6）；VaR/ES 数值断言；`test_risk_attributor.py` |
+| **落地** | ✅ `RiskAttributor` 接入 L3 Step 7.6：`portfolio_returns`（w×R）+ `factor_returns` + 权重 → 权重方差分解，输出因子贡献/暴露报告 `reports/{date}/portfolio_attribution_*.md`；贡献度误差 < 1e-6 断言全绿 |
 
-#### GAP-L401 L4 表达式组合算子层薄弱（P1）
+#### GAP-L401 L4 表达式组合算子层薄弱（P1）✅ 已处理（v2.66.0）
 
 | 维度 | 内容 |
 |---|---|
@@ -178,6 +183,7 @@
 | **影响** | 因子表达式复合能力弱，演化产出多样性不足；横截面/跨标的 alpha 无法表达 |
 | **实施步骤** | ① L4 新增双序列算子：`corr(win)`、`regression_residual`、`quantile_bucket`、`cross_section_rank`、`cross_section_demean`、`if_else`（条件保护：NaN 安全）；② 每个算子配套经济语义 + 参数边界 + 单元测试 + 沙箱编译验证；③ `operator_evolution.py` 放开双序列约束（在条件复杂度护栏内）；④ 注册表并入单一事实源（GAP-S10 落地后） |
 | **测试方案** | 新算子边界测试（空数据/全 NaN/零除）；沙箱编译通过；GP/算子演化回归（用新算子组合的表达式可正常评估）；`test_registry.py` |
+| **落地** | ✅ `registry.py` 新增 `regression_residual`/`quantile_bucket`/`cross_section_demean`/`if_else`/`corr`/`cross_section_rank` 6 算子（NaN 安全 + 经济语义 + 参数边界 + PIT lookback，对齐验收标准 ≥6 算子；corr 双序列滚动相关 / cross_section_rank 截面 0-1 排名）；`operator_evolution.py` 放开双序列约束（条件复杂度护栏内）；沙箱编译 + 边界测试全绿 |
 
 ### 2.3 P2 — 一般差距（增强项）
 #### GAP-L308 Regime 权重数据化（替代硬编码查表）（P2）✅ 已处理（v2.68.0）
@@ -227,7 +233,7 @@
 
 | 版本 | 阶段 | 缺陷项 | 核心交付 |
 |:-----|:-----|:-------|:---------|
-| v2.65.0 | A | GAP-L301 + L302 | 因子收益序列层（`factor_returns.py`）+ 风险模型估计器（收缩 Σ）→ **组合夏普/相关性实测化**，Verifier 校验实测指标 |
+| v2.65.0 | A | GAP-L301 + L302 | 因子收益序列层（`factor_returns.py`）+ 风险模型估计器（收缩 Σ）→ **组合夏普/相关性实测化**，Verifier 校验实测指标 ✅ **提前至 v2.61.0 完成** |
 | v2.66.0 | A | GAP-L305 | 冲击成本函数 + 换手惩罚入优化目标 + net 指标输出（衔接 GAP-I501/I303）✅ **提前完成** |
 | v2.67.0 | B | GAP-L303 | `PortfolioOptimizer` 接入 L3 主流程（returns_matrix 接线 + optimizer_mode/optimizer_config + CLI）✅ **提前至 v2.61.0 完成** |
 | v2.68.0 | B | GAP-L304 | 组合层行业/市值中性化约束（期货板块映射 + 股票行业映射，联动 GAP-S01/S02）✅ **提前至 v2.61.0 完成** |

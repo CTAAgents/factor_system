@@ -286,7 +286,7 @@ class MLPFactorModel:
         for _ in range(self.epochs):
             perm = rng.permutation(n_samples)
             for start in range(0, n_samples, self.batch_size):
-                idx = perm[start:start + self.batch_size]
+                idx = perm[start : start + self.batch_size]
                 Xb, yb = X_norm[idx], y_arr[idx]
 
                 # forward
@@ -315,7 +315,9 @@ class MLPFactorModel:
         self._fitted = True
         logger.info(
             "[ML] MLP 因子模型训练完成: samples=%d features=%d hidden=%d",
-            n_samples, n_features, self.hidden,
+            n_samples,
+            n_features,
+            self.hidden,
         )
         return self
 
@@ -348,13 +350,9 @@ class MLPFactorModel:
         if X_arr.ndim != 2:
             raise ModelNotAvailableError(f"特征需为 2D 矩阵，收到 {X_arr.ndim}D")
         if X_arr.shape[0] != y_arr.shape[0]:
-            raise ModelNotAvailableError(
-                f"特征与目标样本数不一致: {X_arr.shape[0]} vs {y_arr.shape[0]}"
-            )
+            raise ModelNotAvailableError(f"特征与目标样本数不一致: {X_arr.shape[0]} vs {y_arr.shape[0]}")
         if X_arr.shape[0] < self.min_samples:
-            raise ModelNotAvailableError(
-                f"样本数 {X_arr.shape[0]} 低于最小要求 {self.min_samples}，降级回退"
-            )
+            raise ModelNotAvailableError(f"样本数 {X_arr.shape[0]} 低于最小要求 {self.min_samples}，降级回退")
         self._x_mean = X_arr.mean(axis=0)
         self._x_std = X_arr.std(axis=0)
         self._x_std[self._x_std < 1e-12] = 1.0  # 常数列不缩放
@@ -373,6 +371,331 @@ def create_mlp_model(params: Optional[dict[str, Any]] = None) -> MLPFactorModel:
     return MLPFactorModel(**(params or {}))
 
 
+# ─── GRU 因子模型（GAP-I203，v2.73.0）──────────────────────
+
+
+class GRUFactorModel:
+    """轻量纯 numpy 单层 GRU 因子模型（GAP-I203 深度因子学习首期）。
+
+    不引入 torch/tensorflow 等重依赖，用 numpy 实现单层 GRU
+    （update gate / reset gate / candidate hidden），对滚动窗口序列
+    提取时序特征，输出层做横截面收益预测，预测映射为因子信号。
+
+    设计原则（与 MLPFactorModel 对齐）:
+        - 纯 numpy 实现，无可选依赖，``is_available`` 恒为 True
+        - 输入 X 形状 (n_samples, seq_len, n_features)——滚动窗口序列；
+          训练前按窗口内 z-score 标准化，预测用同一标准化
+        - 样本数不足 ``min_samples`` 时抛 ``ModelNotAvailableError``，
+          调用方据此降级回退
+        - 接口统一为 ``fit(X, y)`` / ``predict(X)``，与 sklearn 风格一致
+        - 参数可导出（``get_params``），供深度因子 code 序列化内嵌
+          （可解释性约束：输出映射为因子信号，权重固化可审计）
+
+    GRU 前向（t=1..T，h0=0）:
+        z_t = σ(Wz·x_t + Uz·h_{t-1} + bz)      # update gate
+        r_t = σ(Wr·x_t + Ur·h_{t-1} + br)      # reset gate
+        h̃_t = tanh(Wh·x_t + Uh·(r_t⊙h_{t-1}) + bh)
+        h_t = (1 - z_t)⊙h_{t-1} + z_t⊙h̃_t
+        pred = Wo·h_T + bo
+    """
+
+    def __init__(
+        self,
+        hidden: int = 8,
+        learning_rate: float = 0.01,
+        epochs: int = 120,
+        batch_size: int = 32,
+        l2: float = 1e-4,
+        seed: int = 42,
+        min_samples: int = 32,
+    ) -> None:
+        self.hidden = int(hidden)
+        self.learning_rate = float(learning_rate)
+        self.epochs = int(epochs)
+        self.batch_size = int(batch_size)
+        self.l2 = float(l2)
+        self.seed = int(seed)
+        self.min_samples = int(min_samples)
+
+        self._Wz: Optional[np.ndarray] = None
+        self._Uz: Optional[np.ndarray] = None
+        self._bz: Optional[np.ndarray] = None
+        self._Wr: Optional[np.ndarray] = None
+        self._Ur: Optional[np.ndarray] = None
+        self._br: Optional[np.ndarray] = None
+        self._Wh: Optional[np.ndarray] = None
+        self._Uh: Optional[np.ndarray] = None
+        self._bh: Optional[np.ndarray] = None
+        self._Wo: Optional[np.ndarray] = None
+        self._bo: Optional[np.ndarray] = None
+        self._x_mean: Optional[np.ndarray] = None
+        self._x_std: Optional[np.ndarray] = None
+        self._fitted = False
+
+    @property
+    def is_available(self) -> bool:
+        """纯 numpy 实现，无重依赖，恒可用。"""
+        return True
+
+    @property
+    def seq_len(self) -> int:
+        """输入序列长度（由 fit 时 X 推断）。"""
+        if not self._fitted:
+            raise ModelNotAvailableError("GRU 因子模型未训练，无法获取 seq_len")
+        assert self._x_mean is not None
+        return int(self._x_mean.shape[0])
+
+    @property
+    def n_features(self) -> int:
+        """单步特征数（由 fit 时 X 推断）。"""
+        if not self._fitted:
+            raise ModelNotAvailableError("GRU 因子模型未训练，无法获取 n_features")
+        assert self._x_mean is not None
+        return int(self._x_mean.shape[1])
+
+    # ─── 训练与预测 ──────────────────────────────────────
+
+    def fit(self, X: Any, y: Any, **kwargs: Any) -> "GRUFactorModel":
+        """训练 GRU 因子模型（BPTT + 动量 SGD）。
+
+        Args:
+            X: 特征序列 (n_samples, seq_len, n_features)
+            y: 目标向量 (n_samples,)
+
+        Returns:
+            self
+
+        Raises:
+            ModelNotAvailableError: 样本数不足 min_samples 或输入非数值
+        """
+        X_arr, y_arr = self._validate(X, y)
+        n_samples, seq_len, n_features = X_arr.shape
+
+        rng = np.random.default_rng(self.seed)
+        scale = 1.0 / np.sqrt(max(n_features, 1))
+        self._Wz = rng.normal(0.0, scale, (n_features, self.hidden))
+        self._Uz = rng.normal(0.0, scale, (self.hidden, self.hidden))
+        self._bz = np.zeros(self.hidden)
+        self._Wr = rng.normal(0.0, scale, (n_features, self.hidden))
+        self._Ur = rng.normal(0.0, scale, (self.hidden, self.hidden))
+        self._br = np.zeros(self.hidden)
+        self._Wh = rng.normal(0.0, scale, (n_features, self.hidden))
+        self._Uh = rng.normal(0.0, scale, (self.hidden, self.hidden))
+        self._bh = np.zeros(self.hidden)
+        self._Wo = rng.normal(0.0, scale, (self.hidden, 1))
+        self._bo = np.zeros(1)
+
+        X_norm = (X_arr - self._x_mean) / self._x_std
+        # 动量缓冲区
+        momentum = 0.9
+        vel: dict[str, np.ndarray] = {}
+        for name in ("Wz", "Uz", "bz", "Wr", "Ur", "br", "Wh", "Uh", "bh", "Wo", "bo"):
+            vel[name] = np.zeros_like(getattr(self, f"_{name}"))
+
+        for _ in range(self.epochs):
+            perm = rng.permutation(n_samples)
+            for start in range(0, n_samples, self.batch_size):
+                idx = perm[start : start + self.batch_size]
+                Xb, yb = X_norm[idx], y_arr[idx]
+                grads = self._backward(Xb, yb)
+                for name, g in grads.items():
+                    vel[name] = momentum * vel[name] - self.learning_rate * g
+                    param = getattr(self, f"_{name}")
+                    param += vel[name]
+
+        self._fitted = True
+        logger.info(
+            "[ML] GRU 因子模型训练完成: samples=%d seq=%d features=%d hidden=%d",
+            n_samples,
+            seq_len,
+            n_features,
+            self.hidden,
+        )
+        return self
+
+    def predict(self, X: Any) -> np.ndarray:
+        """预测。未训练时抛 ModelNotAvailableError。"""
+        if not self._fitted:
+            raise ModelNotAvailableError("GRU 因子模型未训练，无法预测")
+        X_arr = self._to_float_array(X)
+        if X_arr.ndim != 3:
+            raise ModelNotAvailableError(f"预测输入需为 3D 序列 (n, seq, f)，收到 {X_arr.ndim}D")
+        if X_arr.shape[1:] != (self.seq_len, self.n_features):
+            raise ModelNotAvailableError(
+                f"输入序列形状不匹配: 期望 (n,{self.seq_len},{self.n_features})，收到 {X_arr.shape}"
+            )
+        X_norm = (X_arr - self._x_mean) / self._x_std
+        preds = []
+        for x in X_norm:
+            preds.append(self._forward_single(x)[0])
+        return np.asarray(preds, dtype=float).ravel()
+
+    # ─── 内部实现 ────────────────────────────────────────
+
+    def _forward_single(self, x: np.ndarray) -> tuple[float, np.ndarray]:
+        """单样本前向，返回 (预测值, 末隐状态)。x 形状 (seq_len, n_features)。"""
+        h = np.zeros(self.hidden)
+        for t in range(x.shape[0]):
+            xt = x[t]
+            z = self._sigmoid(xt @ self._Wz + h @ self._Uz + self._bz)
+            r = self._sigmoid(xt @ self._Wr + h @ self._Ur + self._br)
+            h_tilde = np.tanh(xt @ self._Wh + (r * h) @ self._Uh + self._bh)
+            h = (1.0 - z) * h + z * h_tilde
+        pred = float((h @ self._Wo + self._bo).item())
+        return pred, h
+
+    def _backward(
+        self,
+        Xb: np.ndarray,
+        yb: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """小批量 BPTT 反向传播，返回各参数梯度（含 L2 正则）。
+
+        Args:
+            Xb: 标准化序列 (b, seq, f)
+            yb: 目标 (b,)
+        """
+        b, seq, f = Xb.shape
+        hdim = self.hidden
+
+        # 梯度累积
+        dWz = np.zeros_like(self._Wz)
+        dUz = np.zeros_like(self._Uz)
+        dbz = np.zeros_like(self._bz)
+        dWr = np.zeros_like(self._Wr)
+        dUr = np.zeros_like(self._Ur)
+        dbr = np.zeros_like(self._br)
+        dWh = np.zeros_like(self._Wh)
+        dUh = np.zeros_like(self._Uh)
+        dbh = np.zeros_like(self._bh)
+        dWo = np.zeros_like(self._Wo)
+        dbo = np.zeros_like(self._bo)
+
+        for s in range(b):
+            x = Xb[s]
+            target = yb[s]
+            # 前向缓存
+            hs = np.zeros((seq + 1, hdim))
+            zs = np.zeros((seq, hdim))
+            rs = np.zeros((seq, hdim))
+            hts = np.zeros((seq, hdim))
+            for t in range(seq):
+                xt = x[t]
+                z = self._sigmoid(xt @ self._Wz + hs[t] @ self._Uz + self._bz)
+                r = self._sigmoid(xt @ self._Wr + hs[t] @ self._Ur + self._br)
+                ht = np.tanh(xt @ self._Wh + (r * hs[t]) @ self._Uh + self._bh)
+                zs[t], rs[t], hts[t] = z, r, ht
+                hs[t + 1] = (1.0 - z) * hs[t] + z * ht
+
+            # 输出层梯度
+            pred = hs[seq] @ self._Wo + self._bo
+            d_pred = float((pred - target).item())
+            dWo += np.outer(hs[seq], np.asarray([d_pred]))
+            dbo += d_pred
+
+            # 末隐状态梯度反传
+            assert self._Wo is not None
+            dh = d_pred * self._Wo.ravel()
+            for t in range(seq - 1, -1, -1):
+                z = zs[t]
+                r = rs[t]
+                ht = hts[t]
+                h_prev = hs[t]
+                # dh 关于 z/ht/h_prev
+                dz = dh * (ht - h_prev)
+                dht = dh * z
+                dh_prev_direct = dh * (1.0 - z)
+                # z 门（sigmoid 导数）
+                dz_in = dz * z * (1.0 - z)
+                dWz += np.outer(x[t], dz_in)
+                dUz += np.outer(h_prev, dz_in)
+                dbz += dz_in
+                # candidate hidden（tanh 导数）
+                d_ht_in = dht * (1.0 - ht**2)
+                dWh += np.outer(x[t], d_ht_in)
+                dUh += np.outer(r * h_prev, d_ht_in)
+                dbh += d_ht_in
+                # r 门
+                d_r_inner = d_ht_in @ self._Uh * h_prev
+                dr_in = d_r_inner * r * (1.0 - r)
+                dWr += np.outer(x[t], dr_in)
+                dUr += np.outer(h_prev, dr_in)
+                dbr += dr_in
+                # h_{t-1} 全梯度
+                dh = dh_prev_direct + dz_in @ self._Uz + dr_in @ self._Ur + (d_ht_in @ self._Uh) * r
+
+        # 小批量平均 + L2 正则
+        n = max(b, 1)
+        reg = self.l2 / n
+        return {
+            "Wz": dWz / n + reg * self._Wz,
+            "Uz": dUz / n + reg * self._Uz,
+            "bz": dbz / n,
+            "Wr": dWr / n + reg * self._Wr,
+            "Ur": dUr / n + reg * self._Ur,
+            "br": dbr / n,
+            "Wh": dWh / n + reg * self._Wh,
+            "Uh": dUh / n + reg * self._Uh,
+            "bh": dbh / n,
+            "Wo": dWo / n + reg * self._Wo,
+            "bo": dbo / n,
+        }
+
+    @staticmethod
+    def _sigmoid(x: np.ndarray) -> np.ndarray:
+        """数值稳定 sigmoid。"""
+        return 1.0 / (1.0 + np.exp(-np.clip(x, -50.0, 50.0)))
+
+    @staticmethod
+    def _to_float_array(X: Any) -> np.ndarray:
+        """将输入转为 float64 numpy 数组，非数值抛 ModelNotAvailableError。"""
+        try:
+            arr = np.asarray(X, dtype=float)
+        except (TypeError, ValueError) as e:
+            raise ModelNotAvailableError(f"输入含非数值数据: {e}") from e
+        return arr
+
+    def _validate(self, X: Any, y: Any) -> tuple[np.ndarray, np.ndarray]:
+        """校验并标准化训练输入。"""
+        X_arr = self._to_float_array(X)
+        y_arr = self._to_float_array(y)
+        if X_arr.ndim != 3:
+            raise ModelNotAvailableError(f"特征需为 3D 序列 (n, seq, f)，收到 {X_arr.ndim}D")
+        if X_arr.shape[0] != y_arr.shape[0]:
+            raise ModelNotAvailableError(f"特征与目标样本数不一致: {X_arr.shape[0]} vs {y_arr.shape[0]}")
+        if X_arr.shape[0] < self.min_samples:
+            raise ModelNotAvailableError(f"样本数 {X_arr.shape[0]} 低于最小要求 {self.min_samples}，降级回退")
+        self._x_mean = X_arr.mean(axis=0)  # (seq, f)
+        self._x_std = X_arr.std(axis=0)
+        self._x_std[self._x_std < 1e-12] = 1.0
+        return X_arr, y_arr
+
+    def get_params(self) -> dict[str, np.ndarray]:
+        """导出训练参数（权重），供深度因子 code 序列化内嵌（GAP-I203）。
+
+        Returns:
+            dict: 权重名称 → numpy 数组（未训练时抛 ModelNotAvailableError）
+        """
+        if not self._fitted:
+            raise ModelNotAvailableError("GRU 因子模型未训练，无法导出参数")
+        return {
+            name: np.array(getattr(self, f"_{name}"), copy=True)
+            for name in ("Wz", "Uz", "bz", "Wr", "Ur", "br", "Wh", "Uh", "bh", "Wo", "bo")
+        }
+
+
+def create_gru_model(params: Optional[dict[str, Any]] = None) -> GRUFactorModel:
+    """创建 GRU 因子模型（GAP-I203 深度因子学习）。
+
+    Args:
+        params: 超参（hidden/learning_rate/epochs/batch_size/l2/seed/min_samples）
+
+    Returns:
+        GRUFactorModel 实例（纯 numpy 实现，恒可用）。
+    """
+    return GRUFactorModel(**(params or {}))
+
+
 __all__ = [
     "ModelKind",
     "ModelNotAvailableError",
@@ -380,4 +703,6 @@ __all__ = [
     "create_signal_model",
     "MLPFactorModel",
     "create_mlp_model",
+    "GRUFactorModel",
+    "create_gru_model",
 ]

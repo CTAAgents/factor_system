@@ -74,18 +74,20 @@ class _MockSource(BaseFuturesSource):
         high = np.maximum(close, open_) * (1 + abs(np.random.uniform(0, 0.002, days)))
         low = np.minimum(close, open_) * (1 - abs(np.random.uniform(0, 0.002, days)))
         volume = np.random.randint(50000, 200000, days)
-        return pd.DataFrame({
-            "symbol": symbol,
-            "period": "daily",
-            "date": dates,
-            "open": open_,
-            "high": high,
-            "low": low,
-            "close": close,
-            "volume": volume,
-            "source": self.source_name,
-            "trace_id": trace_id,
-        })
+        return pd.DataFrame(
+            {
+                "symbol": symbol,
+                "period": "daily",
+                "date": dates,
+                "open": open_,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": volume,
+                "source": self.source_name,
+                "trace_id": trace_id,
+            }
+        )
 
 
 def _build_real_aggregator() -> tuple[FuturesDataAggregator, list[str]]:
@@ -96,6 +98,7 @@ def _build_real_aggregator() -> tuple[FuturesDataAggregator, list[str]]:
 
     try:
         from fts.data_sources.tq_source import TQLocalSource
+
         src = TQLocalSource()
         if src.is_available():
             sources.append(src)
@@ -107,6 +110,7 @@ def _build_real_aggregator() -> tuple[FuturesDataAggregator, list[str]]:
 
     try:
         from fts.data_sources.wind_source import WindSource
+
         src = WindSource()
         if src.is_available():
             enhancers.append(src)
@@ -118,6 +122,7 @@ def _build_real_aggregator() -> tuple[FuturesDataAggregator, list[str]]:
 
     try:
         from fts.data_sources.ifind_source import IFindSource
+
         src = IFindSource()
         if src.is_available():
             enhancers.append(src)
@@ -348,13 +353,15 @@ def scenario_5_fusion_report(trace_id: str) -> dict:
 
     rows = []
     for _, r in fused_df.iterrows():
-        rows.append({
-            "symbol": str(r["symbol"]),
-            "date": str(r["date"]),
-            "close": float(r["close"]),
-            "fusion_strategy": str(r["fusion_strategy"]),
-            "contributing_sources": list(r["contributing_sources"]),
-        })
+        rows.append(
+            {
+                "symbol": str(r["symbol"]),
+                "date": str(r["date"]),
+                "close": float(r["close"]),
+                "fusion_strategy": str(r["fusion_strategy"]),
+                "contributing_sources": list(r["contributing_sources"]),
+            }
+        )
 
     report: FusionReport = {
         "trace_id": trace_id,
@@ -390,7 +397,8 @@ def main() -> int:
     parser.add_argument("--symbol", default="RB0", help="品种代码（默认 RB0）")
     parser.add_argument("--days", type=int, default=30, help="回溯天数（默认 30）")
     parser.add_argument(
-        "--strategy", default="MEDIAN",
+        "--strategy",
+        default="MEDIAN",
         choices=[s.value for s in FusionStrategy],
         help="融合策略（默认 MEDIAN）",
     )
@@ -417,12 +425,15 @@ def main() -> int:
     src_keys = s1["source_dfs_keys"]
     print(f"       sources={src_keys} strategies={len(s1['strategy_results'])}")
     for r in s1["strategy_results"]:
-        print(f"       {r['strategy']:<15} close={r.get('latest_close', 0):>10.2f} "
-              f"disagreement={r.get('disagreement_pct', 0):.6f}")
+        print(
+            f"       {r['strategy']:<15} close={r.get('latest_close', 0):>10.2f} "
+            f"disagreement={r.get('disagreement_pct', 0):.6f}"
+        )
     cc = s1["cross_check"]
     print(f"       cross_check @ {cc['date']} → {cc['disagreements_count']} disagreements")
-    assert s1["expected"]["sources"] == src_keys or set(src_keys) == set(s1["expected"]["sources"]), \
+    assert s1["expected"]["sources"] == src_keys or set(src_keys) == set(s1["expected"]["sources"]), (
         f"expected {s1['expected']['sources']}, got {src_keys}"
+    )
     results.append(s1)
 
     # 场景 2: 真实探活
@@ -438,10 +449,13 @@ def main() -> int:
     print("\n[3/5] 场景 3: 熔断器状态（连续失败累积）")
     s3 = scenario_3_breaker_state(trace_id)
     ifind = s3["status"].get("IFIND", {})
-    print(f"       IFIND consecutive_failures={ifind.get('consecutive_failures', 0)} "
-          f"circuit_open={ifind.get('circuit_open', False)}")
-    assert ifind.get("consecutive_failures", 0) >= 3, \
+    print(
+        f"       IFIND consecutive_failures={ifind.get('consecutive_failures', 0)} "
+        f"circuit_open={ifind.get('circuit_open', False)}"
+    )
+    assert ifind.get("consecutive_failures", 0) >= 3, (
         f"expected IFIND consecutive_failures >= 3, got {ifind.get('consecutive_failures', 0)}"
+    )
     results.append(s3)
 
     # 场景 4: 端到端串联
@@ -454,28 +468,36 @@ def main() -> int:
     # 场景 5: 完整 FusionReport
     print("\n[5/5] 场景 5: 完整 FusionReport 构造")
     s5 = scenario_5_fusion_report(trace_id)
-    print(f"       contract_ok={s5['contract_ok']} rows={s5['report']['rows_count']} "
-          f"sources={s5['report']['sources_used']}")
+    print(
+        f"       contract_ok={s5['contract_ok']} rows={s5['report']['rows_count']} "
+        f"sources={s5['report']['sources_used']}"
+    )
     assert s5["contract_ok"], f"contract missing fields: {s5['missing_required_fields']}"
     results.append(s5)
 
     # 落盘
-    output_path = Path(args.output) if args.output else (
-        Path("data") / "_lineage" / f"multi_source_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    output_path = (
+        Path(args.output)
+        if args.output
+        else (Path("data") / "_lineage" / f"multi_source_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        json.dumps({
-            "trace_id": trace_id,
-            "ts": datetime.now().isoformat(timespec="seconds"),
-            "args": vars(args),
-            "scenarios": results,
-        }, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                "trace_id": trace_id,
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "args": vars(args),
+                "scenarios": results,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
     print("\n" + "=" * 70)
-    print(f"  5/5 场景通过 ✅")
+    print("  5/5 场景通过 ✅")
     print(f"  报告落盘: {output_path}")
     print("=" * 70)
     return 0

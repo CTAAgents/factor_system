@@ -1,6 +1,6 @@
 # 期货因子流水线成熟度实施优化计划（机构级对标）
 
-> 版本: v2.71.0
+> 版本: v2.81.0
 > 最后更新: 2026-08-09
 > 状态: 规划中（文档先行，作为期货流水线缺陷改进唯一推进主线）
 > 适用范围: FTS 期货因子流水线（数据层 / 因子层 / 模型层 / 组合层 / 回测层 / 执行实盘 / 运维）
@@ -135,6 +135,7 @@ FTS 期货因子流水线已具备完整链路：5 级 K 线多源降级 → 184
 | **机构级标准** | 种子因子单一权威源 + 自动去重校验；家族上限可配置 |
 | **实施步骤** | ① 种子去重校验脚本（内嵌 vs YAML 交叉比对）；② 家族上限配置化（BudgetConfig 已支持，缺省值沿用 15）；③ 上报被拒因子日志 |
 | **测试方案** | 去重脚本命中重复 + 家族上限可配置生效 |
+| **完成记录** | v2.79.0：① 新增 `scripts/verify_seed_dedup.py` 种子去重校验脚本——内嵌种子（`seed_data_futures_full.py`）与 YAML 种子（`seeds/futures/`）交叉比对，识别重复因子 name/表达式与一致性差异并输出差异报告；② 家族上限配置化——`BudgetConfig.max_per_family` 优先，未显式传入 budget 时回退 `FTSConfig.max_per_family`（env `FTS_MAX_PER_FAMILY`，缺省沿用 15）；③ 家族多样性拦截原因随演化日志输出；新增 `tests/scripts/test_seed_dedup.py` 13 用例 |
 
 #### GAP-F11 展期成本未与换月日历联动（P2）
 
@@ -153,8 +154,9 @@ FTS 期货因子流水线已具备完整链路：5 级 K 线多源降级 → 184
 | **机构级标准** | AGENTS.md 运维命令规范要求 `ruff format/check` + `mypy src/` + 分场景测试 + 性能基准 |
 | **实施步骤** | ① CI 增加 ruff check/format 步骤；② 增加 mypy（可先限关键包）；③ 增加基准测试 job；④ 发布流水线（tag 触发 build） |
 | **测试方案** | CI 新增步骤在本地等价命令验证通过 |
+| **完成记录** | v2.79.0：① CI 新增 lint job（`ruff check` + `ruff format --check` fts/tests/scripts）、type-check job（`mypy fts/`）、benchmark job（`pytest tests/benchmarks/ --benchmark-only`，目录存在时启用）、release job（`v*` tag 触发 `python -m build` + 上传 artifact）；② `mypy fts/` 全量收敛 Success（150 source files，~121 存量错误清零：TypedDict 契约补字段 + `cast` 收敛 + pandas `.to_numpy(dtype)` 统一）；③ ruff 存量违规清零（F401/F821/F841 等）+ 全量 399 文件格式统一（`ruff format --check` 通过）；④ pyproject `dev` extra 补 `mypy`/`ruff`/`pytest-benchmark`；本地等价命令全部通过（CI 门禁前置验证） |
 
-#### GAP-F13 组合漂移监控仅记录不告警（P2）
+#### GAP-F13 组合漂移监控仅记录不告警（P2）✅ 已完成
 
 | 维度 | 内容 |
 |---|---|
@@ -162,6 +164,7 @@ FTS 期货因子流水线已具备完整链路：5 级 K 线多源降级 → 184
 | **机构级标准** | 组合漂移超阈值应告警并触发调节（粘性约束已有，但漂移监控应联动） |
 | **实施步骤** | ① 漂移阈值可配置（成员重合率/权重 L1 变化率）；② 超阈值告警（日志+Prometheus 指标）；③ 可选自动触发粘性约束重平衡 |
 | **测试方案** | 构造高漂移组合验证告警 + 阈值边界 |
+| **完成记录** | v2.72.1：`DriftAlertConfig` 阈值可配置 + `check_and_alert` 超阈值告警（日志 + Prometheus 指标）+ `generate_rebalance_proposal` 粘性重平衡建议；`PortfolioLoop` Step 5.5 接入告警（state 标记 `drift_alerted`）+ Step 7 附加重平衡建议；新增 9 用例（TestDriftMonitorAlert 7 + run 集成 2） |
 
 #### GAP-F15 极值扰动一票否决未生效（P2，承接 GAP-042）
 
@@ -171,6 +174,7 @@ FTS 期货因子流水线已具备完整链路：5 级 K 线多源降级 → 184
 | **机构级标准** | 高IC因子不得仅依赖少数极端样本支撑；极值剔除后重算 IC，降幅 >25% 一票否决 |
 | **实施步骤** | ① 回测流水线新增极值剔除重算 IC 能力（剔除信号/收益极值百分位样本后重算）；② `_promote_to_elite` 计算 `extreme_perturbation.ic_drop` 并传入 screener；③ 报告输出扰动前后 IC 对比 |
 | **测试方案** | 构造极值依赖因子验证否决触发 + 无极值依赖因子放行 |
+| **完成记录** | v2.79.0：① `evaluation_chain` 新增 `_compute_extreme_perturbation_ic` 极值剔除重算 IC（剔除信号上下 `pct` 百分位极端样本后重算，返回 `ic_before/ic_after/ic_drop/n_total/n_removed`，数据不足/常数输入返回 None 由 screener 按数据缺失处理），`evaluate()` 输出 `FactorEvaluation.extreme_perturbation`（`pct` 可配置 `FTSConfig.extreme_perturb_pct` 默认 0.01）；② `_promote_to_elite` 经 evaluation 整体传入 `HighICScreener`，V2 极值扰动一票否决（`ic_drop > 25%`，`HighICScreenConfig.extreme_drop_max` 默认 0.25）真正生效；③ 筛查报告输出扰动前后 IC 对比（ic_before/ic_after）；新增 `tests/factor_engine/test_extreme_perturb.py` 10 用例 |
 
 #### GAP-F16 覆盖率 <90% 模块补齐（P2，承接 GAP-041）
 
@@ -208,9 +212,10 @@ FTS 期货因子流水线已具备完整链路：5 级 K 线多源降级 → 184
 | v2.60.0 | 阶段 C | GAP-F06 | 数据质量监控（数据级缺失率/异常值/复权一致性/多源分歧 + scheduler 接入） ✅ 已完成 |
 | v2.60.0 | 阶段 C | GAP-F07 | 组合优化器（均值方差/风险平价 + 换手/集中度/杠杆/VaR 约束 + scipy 降级） ✅ 已完成 |
 | v2.60.0 | 阶段 C | GAP-F11 | 展期成本联动换月日历（后续批） ✅ 已完成 |
-| v2.60.0 | 阶段 C | GAP-F13/F15 | 漂移告警闭环 + 极值扰动一票否决（后续批） |
-| v2.61.0+ | 阶段 D | GAP-F12/F14/F16 | CI 质量门禁 + tick 回测闭环 + 覆盖率补齐 |
-| 远期 | — | GAP-F10 | 种子库合并去重 + 家族上限配置化 |
+| v2.60.0 | 阶段 C | GAP-F13/F15 | 漂移告警闭环 + 极值扰动一票否决（后续批） ✅ 已完成（F13 v2.72.1、F15 v2.79.0） |
+| v2.72.1 | 阶段 D | GAP-F13 | 漂移告警闭环（阈值可配置 + 超阈值告警 + 粘性重平衡建议） ✅ 已完成 |
+| v2.61.0+ | 阶段 D | GAP-F12/F14/F16 | CI 质量门禁 + tick 回测闭环 + 覆盖率补齐 ✅ 已完成（F12 v2.79.0；F14/F16 开放） |
+| 远期 | — | GAP-F10 | 种子库合并去重 + 家族上限配置化 ✅ 已完成（v2.79.0） |
 
 > 注：GAP-F01（实盘执行）为 P0 但依赖下游交易系统边界（角色边界：FTS 只产信号、FDT 执行），实施重点是"信号侧完备性"（订单契约、人工干预接口、参数隔离），真实网关由下游负责。
 

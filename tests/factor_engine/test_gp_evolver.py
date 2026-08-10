@@ -33,13 +33,15 @@ def sample_data() -> pd.DataFrame:
     """合成测试数据。"""
     np.random.seed(42)
     n = 200
-    return pd.DataFrame({
-        "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
-        "high": 105 + np.cumsum(np.random.randn(n) * 0.5),
-        "low": 95 + np.cumsum(np.random.randn(n) * 0.5),
-        "volume": np.random.randint(1000, 10000, n).astype(float),
-        "forward_return_20d": np.random.randn(n) * 0.02,
-    })
+    return pd.DataFrame(
+        {
+            "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
+            "high": 105 + np.cumsum(np.random.randn(n) * 0.5),
+            "low": 95 + np.cumsum(np.random.randn(n) * 0.5),
+            "volume": np.random.randint(1000, 10000, n).astype(float),
+            "forward_return_20d": np.random.randn(n) * 0.02,
+        }
+    )
 
 
 @pytest.fixture
@@ -430,10 +432,12 @@ class TestGPEvolver:
 class TestGPEvolverEdgeCases:
     def test_evolve_with_small_data(self, registry):
         """测试小数据集。"""
-        small_data = pd.DataFrame({
-            "close": [100.0, 101.0],
-            "forward_return_20d": [0.01, -0.01],
-        })
+        small_data = pd.DataFrame(
+            {
+                "close": [100.0, 101.0],
+                "forward_return_20d": [0.01, -0.01],
+            }
+        )
         config = GPEvolverConfig(
             population_size=5,
             max_generations=2,
@@ -585,13 +589,15 @@ class TestGpFactorExecutable:
         rng = np.random.default_rng(7)
         n = 200
         close = 100 + np.cumsum(rng.normal(0, 0.5, n))
-        return pd.DataFrame({
-            "open": close + rng.normal(0, 0.1, n),
-            "high": close + 1.0,
-            "low": close - 1.0,
-            "close": close,
-            "volume": rng.uniform(1e4, 1e6, n),
-        })
+        return pd.DataFrame(
+            {
+                "open": close + rng.normal(0, 0.1, n),
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "volume": rng.uniform(1e4, 1e6, n),
+            }
+        )
 
     @staticmethod
     def _make_tree(expression: str) -> ExpressionTree:
@@ -607,7 +613,11 @@ class TestGpFactorExecutable:
                 is_terminal=False,
             )
             return ExpressionTree(
-                root=root, depth=2, size=5, expression=expression, fitness=0.5,
+                root=root,
+                depth=2,
+                size=5,
+                expression=expression,
+                fitness=0.5,
             )
         root = TreeNode(
             op_name="add",
@@ -618,7 +628,11 @@ class TestGpFactorExecutable:
             is_terminal=False,
         )
         return ExpressionTree(
-            root=root, depth=1, size=3, expression=expression, fitness=0.8,
+            root=root,
+            depth=1,
+            size=3,
+            expression=expression,
+            fitness=0.8,
         )
 
     def test_code_uses_standard_convention(self):
@@ -691,17 +705,26 @@ class TestGpFactorExecutable:
         rng = np.random.default_rng(11)
         n = 120
         close = 1.0 + 0.05 * np.cumsum(rng.normal(0, 1, n))  # 量级 ~1，乘积不触发 clip
-        data = pd.DataFrame({
-            "open": close, "high": close + 0.01, "low": close - 0.01,
-            "close": close, "volume": rng.uniform(1e4, 1e6, n),
-        })
+        data = pd.DataFrame(
+            {
+                "open": close,
+                "high": close + 0.01,
+                "low": close - 0.01,
+                "close": close,
+                "volume": rng.uniform(1e4, 1e6, n),
+            }
+        )
         root = TreeNode(
             op_name="ts_product",
             children=[TreeNode(operand="close", is_terminal=True)],
             is_terminal=False,
         )
         tree = ExpressionTree(
-            root=root, depth=1, size=2, expression="ts_product(close, 5)", fitness=0.5,
+            root=root,
+            depth=1,
+            size=2,
+            expression="ts_product(close, 5)",
+            fitness=0.5,
         )
         result = tree_to_factor_program(tree)
         signal = BacktestPipeline._execute_factor_code(result["code"], data, {})
@@ -737,9 +760,204 @@ class TestGpFactorExecutable:
                 ],
                 is_terminal=False,
             ),
-            depth=1, size=3, expression="mul(volume, volume)", fitness=0.0,
+            depth=1,
+            size=3,
+            expression="mul(volume, volume)",
+            fitness=0.0,
         )
         ft = gp._evaluate_fitness(tree)
-        assert ft.fitness < 0, (
-            f"裁剪后为常数的表达式应被罚分, fitness={ft.fitness}"
+        assert ft.fitness < 0, f"裁剪后为常数的表达式应被罚分, fitness={ft.fitness}"
+
+
+# ─── GAP-I204: GP 多目标适应度（IC×换手×衰减）首期 ───────
+
+
+class TestGapI204MultiObjective:
+    """GAP-I204: multi_objective 适应度模式——IC×Sharpe 正向贡献 − 换手惩罚 − 衰减惩罚。"""
+
+    def _make_tree(self) -> ExpressionTree:
+        return ExpressionTree(
+            root=TreeNode(operand=1.0, is_terminal=True),
+            depth=1,
+            size=1,
+            expression="1.0",
+            fitness=0.0,
         )
+
+    def _make_gp(self, sample_data, **cfg_kw) -> GPEvolver:
+        config = GPEvolverConfig(
+            population_size=10,
+            max_generations=2,
+            fitness_metric="multi_objective",
+            **cfg_kw,
+        )
+        return GPEvolver(
+            operator_registry=OperatorRegistry(),
+            data_panel=sample_data,
+            target_col="forward_return_20d",
+            config=config,
+        )
+
+    def _sig(self, sample_data, values: np.ndarray) -> pd.Series:
+        return pd.Series(values, index=sample_data.index)
+
+    def test_fitness_result_carries_turnover_decay(
+        self,
+        sample_data,
+        monkeypatch,
+    ):
+        """FitnessResult 新增 turnover/decay 字段，默认 ic_sharpe_combo 模式也填充。"""
+        gp = GPEvolver(
+            operator_registry=OperatorRegistry(),
+            data_panel=sample_data,
+            target_col="forward_return_20d",
+        )  # 默认 ic_sharpe_combo
+        target = sample_data["forward_return_20d"].to_numpy()
+        monkeypatch.setattr(
+            "fts.factor_engine.gp_evolver._evaluate_tree",
+            lambda *a, **k: self._sig(sample_data, target),
+        )
+        res = gp._evaluate_fitness(self._make_tree())
+        assert res.turnover >= 0.0
+        assert 0.0 <= res.decay <= 1.0
+
+    def test_turnover_measures_signal_choppiness(
+        self,
+        sample_data,
+        monkeypatch,
+    ):
+        """换手度量：平滑信号 turnover 小，高频振荡信号 turnover 大。"""
+        gp = self._make_gp(sample_data)
+        n = len(sample_data)
+        t = np.arange(n)
+        smooth = np.sin(t / 50.0)
+        choppy = np.sin(t * 2.0)
+        monkeypatch.setattr(
+            "fts.factor_engine.gp_evolver._evaluate_tree",
+            lambda *a, **k: self._sig(sample_data, smooth),
+        )
+        r_smooth = gp._evaluate_fitness(self._make_tree())
+        monkeypatch.setattr(
+            "fts.factor_engine.gp_evolver._evaluate_tree",
+            lambda *a, **k: self._sig(sample_data, choppy),
+        )
+        r_choppy = gp._evaluate_fitness(self._make_tree())
+        assert r_choppy.turnover > r_smooth.turnover
+        assert r_choppy.fitness < r_smooth.fitness  # 换手惩罚拉低 multi_objective 适应度
+
+    def test_multi_objective_penalizes_turnover(
+        self,
+        sample_data,
+        monkeypatch,
+    ):
+        """同 IC 量级下，高换手信号在 multi_objective 模式被惩罚，fitness 更低。"""
+        gp = self._make_gp(sample_data)
+        target = sample_data["forward_return_20d"].to_numpy()
+        n = len(target)
+        t = np.arange(n)
+        # 两者都与 target 强相关（IC≈0.9+），仅噪声波动频率不同
+        low_turn = target + 0.01 * np.sin(t / 50.0)
+        high_turn = target + 0.05 * np.sin(t * 2.0)
+        monkeypatch.setattr(
+            "fts.factor_engine.gp_evolver._evaluate_tree",
+            lambda *a, **k: self._sig(sample_data, low_turn),
+        )
+        r_low = gp._evaluate_fitness(self._make_tree())
+        monkeypatch.setattr(
+            "fts.factor_engine.gp_evolver._evaluate_tree",
+            lambda *a, **k: self._sig(sample_data, high_turn),
+        )
+        r_high = gp._evaluate_fitness(self._make_tree())
+        assert r_high.turnover > r_low.turnover
+        assert r_high.fitness < r_low.fitness
+
+    def test_turnover_penalty_coefficient_scales(
+        self,
+        sample_data,
+        monkeypatch,
+    ):
+        """turnover_penalty 系数放大换手惩罚（大系数 → fitness 更低）。"""
+        target = sample_data["forward_return_20d"].to_numpy()
+        n = len(target)
+        t = np.arange(n)
+        choppy = target + 0.05 * np.sin(t * 3.0)
+
+        def _fitness(penalty: float) -> float:
+            gp = self._make_gp(sample_data, turnover_penalty=penalty)
+            monkeypatch.setattr(
+                "fts.factor_engine.gp_evolver._evaluate_tree",
+                lambda *a, **k: self._sig(sample_data, choppy),
+            )
+            return gp._evaluate_fitness(self._make_tree()).fitness
+
+        assert _fitness(1.0) < _fitness(0.0)
+
+    def test_multi_objective_penalizes_decay(
+        self,
+        sample_data,
+        monkeypatch,
+    ):
+        """衰减度量：后段 IC 塌陷的信号 decay≈1，前后段稳定信号 decay≈0。"""
+        gp = self._make_gp(sample_data)
+        target = sample_data["forward_return_20d"].to_numpy()
+        n = len(target)
+        half = n // 2
+        rng = np.random.default_rng(7)
+        decayed = np.copy(target)
+        decayed[half:] = rng.normal(size=n - half) * 0.001  # 后段≈噪声 → 后段 IC≈0
+        stable = np.copy(target)  # 前后段都与 target 相关 → decay≈0
+        monkeypatch.setattr(
+            "fts.factor_engine.gp_evolver._evaluate_tree",
+            lambda *a, **k: self._sig(sample_data, decayed),
+        )
+        r_decay = gp._evaluate_fitness(self._make_tree())
+        monkeypatch.setattr(
+            "fts.factor_engine.gp_evolver._evaluate_tree",
+            lambda *a, **k: self._sig(sample_data, stable),
+        )
+        r_stable = gp._evaluate_fitness(self._make_tree())
+        assert r_decay.decay > 0.5
+        assert r_stable.decay < 0.2
+        assert r_decay.fitness < r_stable.fitness  # 衰减惩罚拉低 fitness
+
+    def test_decay_penalty_coefficient_scales(
+        self,
+        sample_data,
+        monkeypatch,
+    ):
+        """decay_penalty 系数放大衰减惩罚（大系数 → fitness 更低）。"""
+        target = sample_data["forward_return_20d"].to_numpy()
+        n = len(target)
+        half = n // 2
+        rng = np.random.default_rng(3)
+        decayed = np.copy(target)
+        decayed[half:] = rng.normal(size=n - half) * 0.001
+
+        def _fitness(penalty: float) -> float:
+            gp = self._make_gp(sample_data, decay_penalty=penalty)
+            monkeypatch.setattr(
+                "fts.factor_engine.gp_evolver._evaluate_tree",
+                lambda *a, **k: self._sig(sample_data, decayed),
+            )
+            return gp._evaluate_fitness(self._make_tree()).fitness
+
+        assert _fitness(1.0) < _fitness(0.0)
+
+    def test_evolve_multi_objective_mode(self, registry, sample_data):
+        """端到端 evolve() 以 multi_objective 模式运行，输出最优因子换手/衰减指标。"""
+        gp = GPEvolver(
+            operator_registry=registry,
+            data_panel=sample_data,
+            target_col="forward_return_20d",
+            config=GPEvolverConfig(
+                population_size=10,
+                max_generations=2,
+                fitness_metric="multi_objective",
+                turnover_penalty=0.3,
+                decay_penalty=0.3,
+            ),
+        )
+        result = gp.evolve()
+        assert result.best_fitness >= -10.0
+        assert isinstance(result.best_turnover, float)
+        assert 0.0 <= result.best_decay <= 1.0

@@ -26,6 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # ── L1 Meta-Loop — 每日 08:30 知识补给 + 种子注入 ─────────
 
+
 def l1_meta_loop_job() -> None:
     """执行 L1 Meta-Loop（每日知识补给 + Bootstrapping + 种子注入）。"""
     trace_id = f"fts.l1.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -36,6 +37,7 @@ def l1_meta_loop_job() -> None:
         from fts.factor_engine.meta_loop import MetaLoop
         from fts.llm import get_llm_client
         from fts.config import get_config
+
         cfg = get_config()
 
         loop = MetaLoop(
@@ -43,13 +45,13 @@ def l1_meta_loop_job() -> None:
             llm_client=get_llm_client(),
         )
         result = loop.run()
-        logger.info("[L1] 完成: status=%s injected=%d",
-                    result.status, len(result.injected_candidate_ids))
+        logger.info("[L1] 完成: status=%s injected=%d", result.status, len(result.injected_candidate_ids))
     except Exception as e:
         logger.error("[L1] 运行失败: %s", e, exc_info=True)
 
 
 # ── L2 Evolution Loop — 每日 23:00 夜间因子演化 ──────────
+
 
 def l2_evolution_loop_job() -> None:
     """执行 L2 Evolution Loop（夜间因子演化 — 期货横截面）。"""
@@ -62,24 +64,24 @@ def l2_evolution_loop_job() -> None:
         from fts.factor_engine.factor_verifier import FactorVerifier
         from fts.factor_engine.seed_pool import SeedPool
         from fts.factor_engine.contracts import DEFAULT_BUDGET_CONFIG
-        from fts.llm import MockLLMClient, get_default_llm_client
+        from fts.llm import get_llm_client
         from fts.config import get_config
         from fts.data import FTSDataProvider
         from fts.data_futures import FUTURES_STRATIFIED_SUBSET, FUTURES_HOLDOUT
+
         cfg = get_config()
 
         # 准备期货横截面数据（分层训练集 + 排除盲测品种池）
-        train_symbols = [
-            s for s in FUTURES_STRATIFIED_SUBSET if s not in FUTURES_HOLDOUT
-        ]
+        train_symbols = [s for s in FUTURES_STRATIFIED_SUBSET if s not in FUTURES_HOLDOUT]
         if len(train_symbols) < 10:
             logger.error("[L2] 训练品种不足 (排除盲测后仅 %d 个)", len(train_symbols))
             return
-        logger.info("[L2] 分层训练品种: %d 个 (排除 %d 个盲测品种)",
-                    len(train_symbols), len(FUTURES_HOLDOUT))
+        logger.info("[L2] 分层训练品种: %d 个 (排除 %d 个盲测品种)", len(train_symbols), len(FUTURES_HOLDOUT))
         provider = FTSDataProvider()
         panel, common_dates = provider.get_futures_panel(
-            symbols=train_symbols, days=500, trace_id=trace_id,
+            symbols=train_symbols,
+            days=500,
+            trace_id=trace_id,
         )
         if not panel:
             logger.error("[L2] 无期货数据，跳过")
@@ -90,10 +92,9 @@ def l2_evolution_loop_job() -> None:
         closes = data_df["close"].values
         fwd_ret = __import__("numpy").zeros(len(closes))
         if len(closes) > 5:
-            fwd_ret[:-5] = (closes[5:] - closes[:-5]) / \
-                __import__("numpy").maximum(closes[:-5], 1e-10)
+            fwd_ret[:-5] = (closes[5:] - closes[:-5]) / __import__("numpy").maximum(closes[:-5], 1e-10)
 
-        llm = get_default_llm_client()
+        llm = get_llm_client()
         seed_pool = SeedPool(market=cfg.default_market)
         verifier = FactorVerifier()
 
@@ -113,16 +114,19 @@ def l2_evolution_loop_job() -> None:
         loop.budget["max_generation"] = 10
 
         result = loop.run(max_generation=10)
-        logger.info("[L2] 完成: status=%s elite=%d",
-                    result.status, len(result.elite_factor_ids))
+        logger.info("[L2] 完成: status=%s elite=%d", result.status, len(result.elite_factor_ids))
     except Exception as e:
         logger.error("[L2] 运行失败: %s", e, exc_info=True)
 
 
 # ── L3 Portfolio Loop — 每日 20:00 组合构建 + 信号合成 ───
 
+
 def l3_portfolio_loop_job() -> None:
-    """执行 L3 Portfolio Loop（因子筛选 + 信号合成 + Verifier 校验）。
+    """执行 L3 Portfolio Loop（期货因子筛选 + 信号合成 + Verifier 校验）。
+    显式走期货路径：elite_dir=futures_elite_dir + market="futures"，与
+    CLI `fts portfolio run --universe futures` 对齐（此前误用股票 elite 目录，
+    与下游期货信号管道不一致，v2.73.0 修复）。
 
     权重计算模式（portfolio_loop.py）:
         - elastic_net: Elastic Net 截面回归（CSI300 面板，L1+L2，默认）
@@ -138,15 +142,21 @@ def l3_portfolio_loop_job() -> None:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.factor_engine.portfolio_loop import PortfolioLoop
         from fts.config import get_config
+
         cfg = get_config()
 
         loop = PortfolioLoop(
-            elite_dir=cfg.elite_dir,
+            elite_dir=cfg.futures_elite_dir,
             memory_dir=cfg.memory_dir + "/portfolio",
+            market="futures",
         )
         result = loop.run()
-        logger.info("[L3] 完成: status=%s retained=%d sharpe=%.4f",
-                    result.status, result.n_factors_retained, result.combo_sharpe)
+        logger.info(
+            "[L3] 完成: status=%s retained=%d sharpe=%.4f",
+            result.status,
+            result.n_factors_retained,
+            result.combo_sharpe,
+        )
 
         # 组合构建完成后，生成期货信号报告
         _run_futures_signal_pipeline()
@@ -155,6 +165,7 @@ def l3_portfolio_loop_job() -> None:
 
 
 # ── 期货信号管道 — 每日 20:00（L3 完成后执行）────────────
+
 
 def _run_futures_signal_pipeline() -> None:
     """生成期货信号报告（L3 组合构建后自动触发）。
@@ -171,6 +182,7 @@ def _run_futures_signal_pipeline() -> None:
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from scripts.futures_signal_pipeline import main
+
         exit_code = main(max_symbols=82, days=120, universe="all")
         logger.info("[信号管道] 完成: exit_code=%d", exit_code)
     except Exception as e:
@@ -186,11 +198,13 @@ def futures_signal_pipeline_job() -> None:
 
 # ── 健康检查 — 每 10 分钟 ────────────────────────────────
 
+
 def health_check_job() -> None:
     """健康检查：监控所有循环状态。"""
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.monitor import check_all_status
+
         report = check_all_status()
         if not report.healthy:
             logger.warning("[健康检查] 不健康: %s", report)
@@ -201,6 +215,7 @@ def health_check_job() -> None:
 
 
 # ── 月度衰减评估 — 每月 1 日 02:00（A.2）───────────────────
+
 
 def monthly_decay_eval_job() -> None:
     """月度因子衰减评估：对精英池执行增量评估并触发状态机/自动淘汰。
@@ -222,6 +237,7 @@ def monthly_decay_eval_job() -> None:
         # 同步衰减计数到 Prometheus 指标
         try:
             from fts.monitor.prometheus_metrics import metrics_registry
+
             snapshots = tracker.list_all()
             counts = {"active": 0, "decaying": 0, "critical_decay": 0, "deprecated": 0}
             for snap in snapshots:
@@ -244,6 +260,7 @@ def monthly_decay_eval_job() -> None:
 
             # 同步淘汰到 DuckDB + JSON 文件（主流程中真正生效）
             from fts.factor_engine.factor_db import FactorRepository
+
             repo = FactorRepository()
             retired_count = 0
             for fid in retired:
@@ -255,13 +272,13 @@ def monthly_decay_eval_job() -> None:
                     elite_dir = cfg.get_elite_dir("stock")
                 if repo.retire_factor(fid, reason="月度衰减评估自动淘汰", elite_dir=elite_dir):
                     retired_count += 1
-            logger.warning("[衰减评估] 淘汰已同步至 DuckDB + JSON: %d/%d 个因子",
-                           retired_count, len(retired))
+            logger.warning("[衰减评估] 淘汰已同步至 DuckDB + JSON: %d/%d 个因子", retired_count, len(retired))
     except Exception as e:
         logger.error("[衰减评估] 失败: %s", e, exc_info=True)
 
 
 # ── 逻辑监控 — 每日 22:00（B.2 逻辑审查）───────────────────
+
 
 def logic_monitor_job() -> None:
     """逻辑监控：对精英因子执行行为漂移、极端预测、换月日异常检测。
@@ -275,16 +292,13 @@ def logic_monitor_job() -> None:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.monitor.logic_monitor import LogicMonitor
         from fts.factor_engine.factor_db import FactorRepository
-        from fts.factor_engine.factor_db.repository import DATABASE_PATH
 
         repo = FactorRepository()
         logic = LogicMonitor()
 
         # 加载活跃精英因子
         conn = repo._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM factor_catalog WHERE is_elite = 1 AND status = 'active'"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM factor_catalog WHERE is_elite = 1 AND status = 'active'").fetchall()
         columns = [desc[0] for desc in conn.description]
         elite_factors = [dict(zip(columns, row)) for row in rows]
 
@@ -304,6 +318,7 @@ def logic_monitor_job() -> None:
                 factor_id = factor.get("factor_id", "unknown")
                 # 构建简化的 FactorProgram 用于检查
                 from fts.factor_engine.contracts import FactorProgram
+
                 fp = FactorProgram(
                     factor_id=factor_id,
                     name=factor.get("name", "unknown"),
@@ -311,10 +326,12 @@ def logic_monitor_job() -> None:
                 )
                 # 用模拟数据做行为漂移检测
                 n = 500
-                mock_data = pd.DataFrame({
-                    "date": pd.date_range("2020-01-01", periods=n, freq="B"),
-                    "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
-                })
+                mock_data = pd.DataFrame(
+                    {
+                        "date": pd.date_range("2020-01-01", periods=n, freq="B"),
+                        "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
+                    }
+                )
                 result = logic.run(fp, mock_data, switch_dates=[])
                 if not result.all_healthy:
                     if result.drift.is_drifted:
@@ -323,7 +340,8 @@ def logic_monitor_job() -> None:
                         extreme_count += 1
                     logger.warning(
                         "[逻辑监控] 因子异常: %s drift=%s extreme=%s",
-                        factor_id, result.drift.is_drifted,
+                        factor_id,
+                        result.drift.is_drifted,
                         result.extreme_prediction.is_alarmed,
                     )
             except Exception as e:  # noqa: BLE001
@@ -331,13 +349,17 @@ def logic_monitor_job() -> None:
 
         logger.info(
             "[逻辑监控] 完成: total=%d drift=%d extreme=%d (trace_id=%s)",
-            total, drift_count, extreme_count, trace_id,
+            total,
+            drift_count,
+            extreme_count,
+            trace_id,
         )
     except Exception as e:
         logger.error("[逻辑监控] 运行失败: %s (trace_id=%s)", e, trace_id)
 
 
 # ── 因子巡检与降级 — 每日 03:00（B.2 因子退化检测）─────────
+
 
 def factor_inspector_job() -> None:
     """因子巡检与自动降级：扫描精英因子库，检测退化因子并自动降级。
@@ -372,6 +394,7 @@ def factor_inspector_job() -> None:
 
 # ── 数据质量评估 — 每 5 分钟（B.1）─────────────────────────
 
+
 def data_quality_eval_job() -> None:
     """数据质量周期评估（B.1）。
 
@@ -397,6 +420,7 @@ def data_quality_eval_job() -> None:
 
 # ── 数据级质量监控 ─ 每日 04:00（GAP-F06）─────────────
 
+
 def _read_kline_cache(db_path: Path, symbol: str, limit: int = 120) -> "object | None":
     """从 DuckDB kline_cache 读取单个品种最近 K 线（尽力而为）。
 
@@ -410,14 +434,13 @@ def _read_kline_cache(db_path: Path, symbol: str, limit: int = 120) -> "object |
     """
     try:
         import duckdb
+
         con = duckdb.connect(str(db_path), read_only=True)
         try:
-            variants = [symbol, f"{symbol}0", f"{symbol}.SHFE", f"{symbol}.DCE",
-                        f"{symbol}.CZCE", f"{symbol}.CFFEX"]
+            variants = [symbol, f"{symbol}0", f"{symbol}.SHFE", f"{symbol}.DCE", f"{symbol}.CZCE", f"{symbol}.CFFEX"]
             placeholders = ",".join(["?"] * len(variants))
             return con.execute(
-                f"SELECT * FROM kline_cache WHERE symbol IN ({placeholders}) "
-                f"ORDER BY date DESC LIMIT ?",
+                f"SELECT * FROM kline_cache WHERE symbol IN ({placeholders}) ORDER BY date DESC LIMIT ?",
                 [*variants, int(limit)],
             ).df()
         finally:
@@ -438,7 +461,7 @@ def data_level_monitor_job() -> None:
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.monitor.data_level_monitor import create_data_level_monitor
-        from fts.data_futures import FUTURES_CORE_SUBSET
+        from fts.data_futures import get_dynamic_core_subset
 
         db_path = PROJECT_ROOT / "data" / "fts_history.duckdb"
         if not db_path.exists():
@@ -450,7 +473,7 @@ def data_level_monitor_job() -> None:
         critical = 0
         checked_symbols = 0
 
-        for sym in list(FUTURES_CORE_SUBSET)[:10]:
+        for sym in list(get_dynamic_core_subset())[:10]:
             df = _read_kline_cache(db_path, sym, limit=120)
             if df is None or len(df) == 0:
                 continue
@@ -461,11 +484,13 @@ def data_level_monitor_job() -> None:
 
         logger.info(
             "数据级监控 完成: symbols=%d alerts=%d critical=%d (trace_id=%s)",
-            checked_symbols, total_alerts, critical, trace_id,
+            checked_symbols,
+            total_alerts,
+            critical,
+            trace_id,
         )
     except Exception as e:
         logger.error("数据级监控 运行失败: %s (trace_id=%s)", e, trace_id)
-
 
 
 def sync_futures_data_job(symbols: list[str] | None = None, days: int = 120) -> None:
@@ -484,14 +509,16 @@ def sync_futures_data_job(symbols: list[str] | None = None, days: int = 120) -> 
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.cli import _build_default_aggregator
+
         agg = _build_default_aggregator()
     except Exception as e:
         logger.error("[Sync] 聚合器初始化失败: %s (trace_id=%s)", e, trace_id, exc_info=True)
         return
 
     if symbols is None:
-        from fts.data_futures import FUTURES_CORE_SUBSET
-        symbols = list(FUTURES_CORE_SUBSET)
+        from fts.data_futures import get_dynamic_core_subset
+
+        symbols = get_dynamic_core_subset()
 
     import gzip
     import json
@@ -540,10 +567,15 @@ def sync_futures_data_job(symbols: list[str] | None = None, days: int = 120) -> 
     with gzip.open(out_path, "wt", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False)
 
-    logger.info("[Sync] 完成: total=%d success=%d failure=%d rows=%d -> %s (trace_id=%s)",
-                len(symbols), success, failure, total_rows, out_path.name, trace_id)
-
-
+    logger.info(
+        "[Sync] 完成: total=%d success=%d failure=%d rows=%d -> %s (trace_id=%s)",
+        len(symbols),
+        success,
+        failure,
+        total_rows,
+        out_path.name,
+        trace_id,
+    )
 
 
 __all__ = [

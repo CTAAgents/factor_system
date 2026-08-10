@@ -32,13 +32,16 @@ def _make_df(n: int = 100, seed: int = 1) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     dates = pd.date_range("2026-01-01", periods=n, freq="D")
     close = 100 + np.cumsum(rng.normal(0, 0.5, n))
-    return pd.DataFrame({
-        "open": close + rng.normal(0, 0.1, n),
-        "high": close + np.abs(rng.normal(0, 0.3, n)),
-        "low": close - np.abs(rng.normal(0, 0.3, n)),
-        "close": close,
-        "volume": rng.integers(1000, 10000, n).astype(float),
-    }, index=dates)
+    return pd.DataFrame(
+        {
+            "open": close + rng.normal(0, 0.1, n),
+            "high": close + np.abs(rng.normal(0, 0.3, n)),
+            "low": close - np.abs(rng.normal(0, 0.3, n)),
+            "close": close,
+            "volume": rng.integers(1000, 10000, n).astype(float),
+        },
+        index=dates,
+    )
 
 
 def _make_factor(fid: str, name: str, sharpe: float = 1.0, code: str | None = None) -> dict:
@@ -138,10 +141,7 @@ class TestClusteringSuccessPaths:
     def test_run_identical_code_factors_merge(self):
         e = FactorClusteringEngine()
         code = "def factor_program(data, params):\n    return data['close']"
-        factors = [
-            _make_factor(f"f{i}", f"n{i}", code=code, sharpe=float(i + 1))
-            for i in range(5)
-        ]
+        factors = [_make_factor(f"f{i}", f"n{i}", code=code, sharpe=float(i + 1)) for i in range(5)]
         panel = _make_panel(n=200)
         selected = e.run(factors, panel)
         assert 1 <= len(selected) <= 5  # 相同信号 → 应聚簇
@@ -168,6 +168,7 @@ class TestPCASuccessPaths:
     def test_run_sklearn_missing(self, monkeypatch):
         c = PCASignalCompressor()
         import builtins
+
         real_import = builtins.__import__
 
         def fake_import(name, *args, **kwargs):

@@ -47,9 +47,7 @@ class TestMissing:
         df = _make_ohlcv(n=100)
         df.loc[:20, "close"] = np.nan  # 21% 缺失
         alerts = monitor.check_missing(df)
-        assert any(
-            a.alert_type == "missing_ratio" and a.severity == "critical" for a in alerts
-        )
+        assert any(a.alert_type == "missing_ratio" and a.severity == "critical" for a in alerts)
 
     def test_field_missing_critical(self) -> None:
         """关键字段缺失率超严重阈值 → critical 告警。"""
@@ -78,9 +76,7 @@ class TestOutliers:
 
     def test_outlier_ratio_alert(self) -> None:
         """注入极端异常值 → 超警告阈值告警。"""
-        monitor = DataLevelMonitor(
-            config=DataLevelConfig(outlier_zscore=3.0, outlier_ratio_warning=0.01)
-        )
+        monitor = DataLevelMonitor(config=DataLevelConfig(outlier_zscore=3.0, outlier_ratio_warning=0.01))
         df = _make_ohlcv(n=100)
         df.loc[:1, "close"] = 1e6  # 2 个极端异常值 = 2% > 1% 警告阈值
         alerts = monitor.check_outliers(df)

@@ -37,23 +37,23 @@ logger = logging.getLogger(__name__)
 class RiskModelConfig:
     """风险模型估计配置。"""
 
-    shrinkage: str = "ledoit_wolf"   # "ledoit_wolf" | "none"
+    shrinkage: str = "ledoit_wolf"  # "ledoit_wolf" | "none"
     annualize_factor: float = 252.0  # 年化因子
-    min_obs: int = 10                # 最少观测行数（不足抛 ValueError）
+    min_obs: int = 10  # 最少观测行数（不足抛 ValueError）
 
 
 @dataclass
 class RiskModelResult:
     """风险模型估计结果。"""
 
-    cov: np.ndarray                  # 收缩协方差矩阵 (n, n)
-    sample_cov: np.ndarray           # 原始样本协方差 (n, n)
-    shrinkage: float                 # 收缩强度 (0~1，0=不收缩)
-    eigenvalues: np.ndarray          # 协方差特征值（升序）
-    condition_number: float          # 条件数（最大/最小特征值）
-    realized_vol: np.ndarray         # 年化波动率 (n,)
-    n_obs: int                       # 有效观测行数
-    n_factors: int                   # 因子数
+    cov: np.ndarray  # 收缩协方差矩阵 (n, n)
+    sample_cov: np.ndarray  # 原始样本协方差 (n, n)
+    shrinkage: float  # 收缩强度 (0~1，0=不收缩)
+    eigenvalues: np.ndarray  # 协方差特征值（升序）
+    condition_number: float  # 条件数（最大/最小特征值）
+    realized_vol: np.ndarray  # 年化波动率 (n,)
+    n_obs: int  # 有效观测行数
+    n_factors: int  # 因子数
 
     def to_dict(self) -> dict[str, float]:
         """序列化摘要（供报告/日志）。"""
@@ -96,10 +96,7 @@ class RiskModelEstimator:
         if n_factors < 2:
             raise ValueError(f"因子数 {n_factors} < 2，无法估计协方差")
         if n_obs < self._config.min_obs:
-            raise ValueError(
-                f"有效观测不足（{n_obs} < {self._config.min_obs}），"
-                f"无法估计协方差"
-            )
+            raise ValueError(f"有效观测不足（{n_obs} < {self._config.min_obs}），无法估计协方差")
 
         X = fr.to_numpy(dtype=float)
         sample_cov = np.cov(X, rowvar=False, ddof=1)
@@ -117,13 +114,14 @@ class RiskModelEstimator:
         eigenvals = np.linalg.eigvalsh(cov)
         eigenvals = np.maximum(eigenvals, 1e-12)
         cond = float(eigenvals.max() / max(eigenvals.min(), 1e-12))
-        vol = np.sqrt(np.maximum(np.diag(cov), 0.0)) * np.sqrt(
-            self._config.annualize_factor
-        )
+        vol = np.sqrt(np.maximum(np.diag(cov), 0.0)) * np.sqrt(self._config.annualize_factor)
 
         logger.info(
             "[RiskModel] 估计完成: %d 因子 × %d 观测, shrinkage=%.4f, 条件数=%.2f",
-            n_factors, n_obs, shrinkage, cond,
+            n_factors,
+            n_obs,
+            shrinkage,
+            cond,
         )
         return RiskModelResult(
             cov=cov,

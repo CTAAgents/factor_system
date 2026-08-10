@@ -26,9 +26,8 @@ fts.risk.risk_manager — 实时风控管理器（C.2 §4）。
 from __future__ import annotations
 
 import logging
-import uuid
 from datetime import datetime, timezone
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +35,12 @@ logger = logging.getLogger(__name__)
 class RiskConfig(TypedDict, total=False):
     """风控配置。"""
 
-    single_position_limit_pct: float      # 单品种仓位上限（默认 0.10）
-    max_portfolio_drawdown_pct: float     # 最大组合回撤（默认 0.20）
-    daily_loss_limit_pct: float           # 单日最大亏损（默认 0.05）
-    max_leverage: float                   # 最大杠杆（默认 3.0）
-    max_concentration_pct: float          # 最大集中度（默认 0.50）
-    max_open_positions: int               # 最大持仓品种数（默认 20）
+    single_position_limit_pct: float  # 单品种仓位上限（默认 0.10）
+    max_portfolio_drawdown_pct: float  # 最大组合回撤（默认 0.20）
+    daily_loss_limit_pct: float  # 单日最大亏损（默认 0.05）
+    max_leverage: float  # 最大杠杆（默认 3.0）
+    max_concentration_pct: float  # 最大集中度（默认 0.50）
+    max_open_positions: int  # 最大持仓品种数（默认 20）
 
 
 class RiskCheckItem(TypedDict, total=False):
@@ -84,10 +83,10 @@ class RiskManager:
         Args:
             config: 风控配置（缺省使用默认值）
         """
-        merged = dict(_DEFAULT_CONFIG)
+        merged: dict[str, Any] = dict(_DEFAULT_CONFIG)
         if config:
             merged.update({k: v for k, v in config.items() if v is not None})
-        self._config: RiskConfig = merged
+        self._config: RiskConfig = cast(RiskConfig, merged)
 
     # ─── 主入口 ──────────────────────────────────────────
 
@@ -119,7 +118,9 @@ class RiskManager:
 
         logger.info(
             "[RiskManager] 检查完成 [signal_id=%s, approved=%s, violations=%d]",
-            signal.get("signal_id", "?"), approved, len(blocking),
+            signal.get("signal_id", "?"),
+            approved,
+            len(blocking),
         )
         return RiskCheckResult(
             approved=approved,
@@ -145,9 +146,7 @@ class RiskManager:
         for sig in signal.get("signals", []):
             symbol = sig.get("symbol", "")
             cur = float(positions.get(symbol, {}).get("market_value", 0.0) or 0.0)
-            target_value = float(sig.get("position", 0.0) or 0.0) * float(
-                sig.get("price", 0.0) or 0.0
-            )
+            target_value = float(sig.get("position", 0.0) or 0.0) * float(sig.get("price", 0.0) or 0.0)
             ratio = (cur + target_value) / max(equity, 1e-9)
             if ratio > worst[1]:
                 worst = (symbol, ratio)
@@ -158,10 +157,7 @@ class RiskManager:
             passed=passed,
             current_value=worst[1],
             limit_value=limit,
-            message=(
-                f"单品种仓位 {worst[0] or '?'}: {worst[1]:.2%} "
-                f"(limit {limit:.0%})"
-            ),
+            message=(f"单品种仓位 {worst[0] or '?'}: {worst[1]:.2%} (limit {limit:.0%})"),
             severity="critical" if not passed else "warning",
         )
 
@@ -177,9 +173,12 @@ class RiskManager:
 
         if peak <= 0:
             return RiskCheckItem(
-                check_name="portfolio_drawdown", passed=True,
-                current_value=0.0, limit_value=limit,
-                message="无峰值权益数据，跳过", severity="warning",
+                check_name="portfolio_drawdown",
+                passed=True,
+                current_value=0.0,
+                limit_value=limit,
+                message="无峰值权益数据，跳过",
+                severity="warning",
             )
         drawdown = equity / peak - 1.0
         passed = drawdown >= -limit
@@ -226,9 +225,7 @@ class RiskManager:
         for pos in positions.values():
             position_value += float(pos.get("market_value", 0.0) or 0.0)
         for sig in signal.get("signals", []):
-            position_value += float(sig.get("position", 0.0) or 0.0) * float(
-                sig.get("price", 0.0) or 0.0
-            )
+            position_value += float(sig.get("position", 0.0) or 0.0) * float(sig.get("price", 0.0) or 0.0)
 
         leverage = position_value / max(equity, 1e-9)
         passed = leverage <= limit
@@ -256,15 +253,15 @@ class RiskManager:
         for pos in positions.values():
             values.append(float(pos.get("market_value", 0.0) or 0.0))
         for sig in signal.get("signals", []):
-            values.append(float(sig.get("position", 0.0) or 0.0) * float(
-                sig.get("price", 0.0) or 0.0
-            ))
+            values.append(float(sig.get("position", 0.0) or 0.0) * float(sig.get("price", 0.0) or 0.0))
 
         values = [v for v in values if v > 1e-9]
         if len(values) < 3:
             return RiskCheckItem(
-                check_name="concentration_limit", passed=True,
-                current_value=0.0, limit_value=limit,
+                check_name="concentration_limit",
+                passed=True,
+                current_value=0.0,
+                limit_value=limit,
                 message=f"持仓品种数 {len(values)} < 3，跳过集中度检查",
                 severity="warning",
             )

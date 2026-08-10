@@ -26,7 +26,7 @@ A.1 模块: 10 维度定量评分体系 (0-50 分)，替代 pass/fail 判定。
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal, Optional, TypedDict
+from typing import Any, Literal, Optional, TypedDict, cast
 
 from .walk_forward import WalkForwardResult
 
@@ -41,6 +41,7 @@ class DimensionScore(TypedDict, total=False):
         - score 范围 0-5
         - raw_value 为原始指标值
     """
+
     name: str
     raw_value: float
     score: float
@@ -54,6 +55,7 @@ class FactorQualityScore(TypedDict, total=False):
         - total_score 范围 0-50
         - grade 为 'A'/'B'/'C'
     """
+
     score_id: str
     factor_id: str
     total_score: float
@@ -72,6 +74,7 @@ class FactorQualityCardConfig(TypedDict, total=False):
         - grade_A_threshold 默认 40
         - grade_B_min 默认 30
     """
+
     max_per_dimension: int
     total_max: int
     grade_A_threshold: float
@@ -82,16 +85,16 @@ class FactorQualityCardConfig(TypedDict, total=False):
 # ─── 维度映射权重 ──────────────────────────────────────────
 
 _DIMENSION_WEIGHTS: tuple[float, ...] = (
-    1.0,   # ic_score
-    1.0,   # sharpe_score
-    0.8,   # stability_score
-    0.8,   # robustness_score
-    0.6,   # capacity_score
-    0.8,   # tradability_score  ↑ 从 0.6 提升 (交易性对期货高频更重要)
-    0.5,   # diversity_score
-    0.8,   # logic_score       ↑ 从 0.5 提升 (经济逻辑对 LLM 生成因子更关键)
-    0.4,   # timeliness_score
-    0.4,   # compatibility_score
+    1.0,  # ic_score
+    1.0,  # sharpe_score
+    0.8,  # stability_score
+    0.8,  # robustness_score
+    0.6,  # capacity_score
+    0.8,  # tradability_score  ↑ 从 0.6 提升 (交易性对期货高频更重要)
+    0.5,  # diversity_score
+    0.8,  # logic_score       ↑ 从 0.5 提升 (经济逻辑对 LLM 生成因子更关键)
+    0.4,  # timeliness_score
+    0.4,  # compatibility_score
 )
 """十维度权重，总和为 6.6。"""
 
@@ -492,23 +495,27 @@ class FactorQualityCard:
         ic_score = _map_ic_to_score(ic, ic_cfg)
         icir_score = _map_icir_to_score(icir, icir_cfg)
         validity_score = round((ic_score + icir_score) / 2, 2)
-        scores.append({
-            "name": "ic_score",
-            "raw_value": ic,
-            "score": validity_score,
-            "description": f"IC={ic:.4f}, ICIR={icir:.2f}",
-        })
+        scores.append(
+            {
+                "name": "ic_score",
+                "raw_value": ic,
+                "score": validity_score,
+                "description": f"IC={ic:.4f}, ICIR={icir:.2f}",
+            }
+        )
 
         # 2. 收益性: Sharpe/Calmar
         sharpe_score = _map_sharpe_to_score(sharpe, sharpe_cfg)
         calmar_score = _map_calmar_to_score(calmar, calmar_cfg)
         return_score = round((sharpe_score + calmar_score) / 2, 2)
-        scores.append({
-            "name": "sharpe_score",
-            "raw_value": sharpe,
-            "score": return_score,
-            "description": f"Sharpe={sharpe:.2f}, Calmar={calmar:.2f}",
-        })
+        scores.append(
+            {
+                "name": "sharpe_score",
+                "raw_value": sharpe,
+                "score": return_score,
+                "description": f"Sharpe={sharpe:.2f}, Calmar={calmar:.2f}",
+            }
+        )
 
         # 3. 稳定性: WalkForward 结果
         if walk_forward_result:
@@ -517,75 +524,91 @@ class FactorQualityCard:
         else:
             stability_score = 2.5  # 默认中等分
             wf_desc = "无 WalkForward 结果，默认中等分"
-        scores.append({
-            "name": "stability_score",
-            "raw_value": walk_forward_result.get("consistency_score", 0) if walk_forward_result else 0.0,
-            "score": stability_score,
-            "description": wf_desc,
-        })
+        scores.append(
+            {
+                "name": "stability_score",
+                "raw_value": walk_forward_result.get("consistency_score", 0) if walk_forward_result else 0.0,
+                "score": stability_score,
+                "description": wf_desc,
+            }
+        )
 
         # 4. 鲁棒性: 衰减率
         robustness_score = _map_decay_to_score(decay_rate, decay_cfg)
-        scores.append({
-            "name": "robustness_score",
-            "raw_value": decay_rate,
-            "score": robustness_score,
-            "description": f"衰减率={decay_rate:.2%}",
-        })
+        scores.append(
+            {
+                "name": "robustness_score",
+                "raw_value": decay_rate,
+                "score": robustness_score,
+                "description": f"衰减率={decay_rate:.2%}",
+            }
+        )
 
         # 5. 容量: 容量估算
         capacity_score = _map_capacity_to_score(capacity_estimate, capacity_cfg)
-        scores.append({
-            "name": "capacity_score",
-            "raw_value": capacity_estimate,
-            "score": capacity_score,
-            "description": f"容量={capacity_estimate:,.0f}",
-        })
+        scores.append(
+            {
+                "name": "capacity_score",
+                "raw_value": capacity_estimate,
+                "score": capacity_score,
+                "description": f"容量={capacity_estimate:,.0f}",
+            }
+        )
 
         # 6. 交易性: 换手率
         tradability_score = _map_turnover_to_score(turnover, turnover_cfg)
-        scores.append({
-            "name": "tradability_score",
-            "raw_value": turnover,
-            "score": tradability_score,
-            "description": f"换手率={turnover:.2%}",
-        })
+        scores.append(
+            {
+                "name": "tradability_score",
+                "raw_value": turnover,
+                "score": tradability_score,
+                "description": f"换手率={turnover:.2%}",
+            }
+        )
 
         # 7. 多样性: 最大相关性
         diversity_score = _map_correlation_to_score(correlation_max, correlation_cfg)
-        scores.append({
-            "name": "diversity_score",
-            "raw_value": correlation_max,
-            "score": diversity_score,
-            "description": f"最大相关性={correlation_max:.2f}",
-        })
+        scores.append(
+            {
+                "name": "diversity_score",
+                "raw_value": correlation_max,
+                "score": diversity_score,
+                "description": f"最大相关性={correlation_max:.2f}",
+            }
+        )
 
         # 8. 逻辑性: 经济逻辑分
         logic_dim_score = _map_logic_to_score(logic_score)
-        scores.append({
-            "name": "logic_score",
-            "raw_value": logic_score,
-            "score": logic_dim_score,
-            "description": f"L2 评分={logic_score}/5",
-        })
+        scores.append(
+            {
+                "name": "logic_score",
+                "raw_value": logic_score,
+                "score": logic_dim_score,
+                "description": f"L2 评分={logic_score}/5",
+            }
+        )
 
         # 9. 实时性: 数据频率
         timeliness_score = _map_frequency_to_score(data_frequency)
-        scores.append({
-            "name": "timeliness_score",
-            "raw_value": 0.0,
-            "score": timeliness_score,
-            "description": f"数据频率={data_frequency}",
-        })
+        scores.append(
+            {
+                "name": "timeliness_score",
+                "raw_value": 0.0,
+                "score": timeliness_score,
+                "description": f"数据频率={data_frequency}",
+            }
+        )
 
         # 10. 兼容性: 跨品种覆盖率
         compatibility_score = _map_coverage_to_score(cross_symbol_coverage, coverage_cfg)
-        scores.append({
-            "name": "compatibility_score",
-            "raw_value": cross_symbol_coverage,
-            "score": compatibility_score,
-            "description": f"覆盖率={cross_symbol_coverage:.1%}",
-        })
+        scores.append(
+            {
+                "name": "compatibility_score",
+                "raw_value": cross_symbol_coverage,
+                "score": compatibility_score,
+                "description": f"覆盖率={cross_symbol_coverage:.1%}",
+            }
+        )
 
         return scores
 
@@ -593,9 +616,9 @@ class FactorQualityCard:
         """计算加权总分 (归一化到 0-50)。"""
         total_max = self._config.get("total_max", 50)
         # 尝试从配置读取权重，否则使用硬编码权重
-        weights_cfg = self._config.get("weights", {})
+        weights_cfg = cast(dict[str, Any], self._config.get("weights", {}))
         if weights_cfg:
-            weights = (
+            weights: tuple[float, ...] = (
                 weights_cfg.get("ic_score", 1.0),
                 weights_cfg.get("sharpe_score", 1.0),
                 weights_cfg.get("stability_score", 0.8),
@@ -611,10 +634,7 @@ class FactorQualityCard:
             weights = _DIMENSION_WEIGHTS
 
         # 加权求和
-        raw_total = sum(
-            d.get("score", 0.0) * w
-            for d, w in zip(dims, weights)
-        )
+        raw_total = sum(d.get("score", 0.0) * w for d, w in zip(dims, weights))
         weight_sum = sum(weights)
 
         # 归一化到 0-total_max

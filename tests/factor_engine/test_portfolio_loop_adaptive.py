@@ -13,7 +13,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 
 from fts.factor_engine.contracts import (
     DEFAULT_ADAPTIVE_CONFIG,
@@ -27,9 +26,15 @@ from fts.factor_engine.portfolio_loop import (
 
 def _factor(fid: str, name: str, sharpe: float = 1.8) -> dict:
     return {
-        "factor_id": fid, "name": name, "sharpe": sharpe, "ic": 0.05,
-        "turnover": 0.3, "decay_6m": 0.05, "family": "trend",
-        "style_tags": ["momentum"], "code": "def f(data, params):\n    return data['close']",
+        "factor_id": fid,
+        "name": name,
+        "sharpe": sharpe,
+        "ic": 0.05,
+        "turnover": 0.3,
+        "decay_6m": 0.05,
+        "family": "trend",
+        "style_tags": ["momentum"],
+        "code": "def f(data, params):\n    return data['close']",
     }
 
 
@@ -38,6 +43,7 @@ def _factors() -> list[dict]:
 
 
 # ─── synthesize_signals adaptive 模式 ─────────────────────
+
 
 def test_synthesize_adaptive_base_is_sharpe_weight() -> None:
     """adaptive 模式基权重等于 sharpe_weight（f1 sharpe 2.0 / total 3.5）。"""
@@ -65,6 +71,7 @@ def test_synthesize_adaptive_empty() -> None:
 
 # ─── AdaptiveWeightConfig 契约 ────────────────────────────
 
+
 def test_default_adaptive_config() -> None:
     """默认配置: both 维度 + 灵敏平滑档 + clamp [0.5,1.5]。"""
     assert DEFAULT_ADAPTIVE_CONFIG["enabled"] is True
@@ -76,7 +83,8 @@ def test_default_adaptive_config() -> None:
 
 def test_custom_adaptive_config_override() -> None:
     cfg: AdaptiveWeightConfig = AdaptiveWeightConfig(
-        enabled=True, dimension="style",
+        enabled=True,
+        dimension="style",
         smoother={"alpha": 0.3, "min_days": 5},
     )
     assert cfg["dimension"] == "style"
@@ -85,13 +93,16 @@ def test_custom_adaptive_config_override() -> None:
 
 # ─── PortfolioLoop 端到端 ─────────────────────────────────
 
+
 def _mock_run_deps(loop: PortfolioLoop) -> None:
     """mock 数据面板与 regime 检测，避免真实数据依赖。"""
     loop._regime_selector = MagicMock()
     loop._regime_selector.detect.return_value = {
-        "regime": "bull", "confidence": 0.8,
+        "regime": "bull",
+        "confidence": 0.8,
         "detected_at": "2026-08-09T00:00:00",
-        "features": {}, "method": "mock",
+        "features": {},
+        "method": "mock",
     }
 
 
@@ -115,13 +126,18 @@ def test_portfolio_loop_adaptive_mode_end_to_end(tmp_path) -> None:
         "fts.factor_engine.portfolio_loop.load_elite_factors",
         return_value=_factors(),
     ):
-        result = loop.run(market_ohlcv=pd.DataFrame({
-            "close": [1.0 + i * 0.01 for i in range(100)],
-            "high": [1.0 + i * 0.01 for i in range(100)],
-            "low": [1.0 + i * 0.005 for i in range(100)],
-            "open": [1.0 + i * 0.01 for i in range(100)],
-            "volume": [1000] * 100,
-        }, index=pd.date_range("2026-01-01", periods=100)))
+        result = loop.run(
+            market_ohlcv=pd.DataFrame(
+                {
+                    "close": [1.0 + i * 0.01 for i in range(100)],
+                    "high": [1.0 + i * 0.01 for i in range(100)],
+                    "low": [1.0 + i * 0.005 for i in range(100)],
+                    "open": [1.0 + i * 0.01 for i in range(100)],
+                    "volume": [1000] * 100,
+                },
+                index=pd.date_range("2026-01-01", periods=100),
+            )
+        )
 
     assert result.status in ("passed", "verifier_warning")
     assert result.n_factors_input == 2
@@ -136,7 +152,9 @@ def test_portfolio_loop_adaptive_config_default_fallback() -> None:
 def test_portfolio_loop_custom_adaptive_config() -> None:
     """自定义 adaptive_config 生效。"""
     cfg: AdaptiveWeightConfig = AdaptiveWeightConfig(
-        enabled=True, dimension="family", smoother={"alpha": 0.2, "min_days": 5},
+        enabled=True,
+        dimension="family",
+        smoother={"alpha": 0.2, "min_days": 5},
     )
     loop = PortfolioLoop(synthesis_mode="adaptive", adaptive_config=cfg)
     assert loop.adaptive_config["dimension"] == "family"

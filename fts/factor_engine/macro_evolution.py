@@ -27,6 +27,7 @@ from ..llm import LLMClient, MockLLMClient, get_llm_client as _get_llm_client
 
 # ─── 宏观演化器 ───────────────────────────────────────────
 
+
 class MacroEvolutionError(Exception):
     """宏观演化失败。"""
 
@@ -47,10 +48,7 @@ class MacroEvolver:
     ):
         self.llm = llm_client or MockLLMClient()
         self.experience_chain = experience_chain
-        self._failure_analyzer = (
-            FailurePatternAnalyzer(experience_chain)
-            if experience_chain else None
-        )
+        self._failure_analyzer = FailurePatternAnalyzer(experience_chain) if experience_chain else None
         self.max_tokens_per_call = max_tokens_per_call
 
     def evolve(
@@ -84,9 +82,7 @@ class MacroEvolver:
         # 解析 LLM 响应（处理 markdown 代码块包裹的情况）
         parsed = self._parse_json_response(response_text)
         if parsed is None:
-            raise MacroEvolutionError(
-                f"LLM 响应非 JSON:\n{response_text[:300]}"
-            )
+            raise MacroEvolutionError(f"LLM 响应非 JSON:\n{response_text[:300]}")
         response = parsed
 
         # 构造新因子代码
@@ -124,9 +120,7 @@ class MacroEvolver:
             trace_id=trace_id,
         )
 
-        mutation_summary = response.get(
-            "mutation_summary", f"LLM 演化代 {generation}"
-        )
+        mutation_summary = response.get("mutation_summary", f"LLM 演化代 {generation}")
         return new_factor, mutation_summary, tokens
 
     def _read_experience_for_llm(self) -> dict[str, list[ExperienceTrace]]:
@@ -148,12 +142,12 @@ class MacroEvolver:
         prompt = f"""你是因子工程专家。基于以下父因子，生成新的因子变异。
 
 父因子:
-- name: {parent.get('name', '?')}
-- factor_id: {parent.get('factor_id', '?')}
-- generation: {parent.get('generation', 0)}
-- code: {parent.get('code', '')[:500]}
-- params: {parent.get('params', {})}
-- economic_logic: {parent.get('economic_logic', {})}
+- name: {parent.get("name", "?")}
+- factor_id: {parent.get("factor_id", "?")}
+- generation: {parent.get("generation", 0)}
+- code: {parent.get("code", "")[:500]}
+- params: {parent.get("params", {})}
+- economic_logic: {parent.get("economic_logic", {})}
 
 最近成功轨迹（参考）:
 {self._format_experience_for_prompt(recent_success)}

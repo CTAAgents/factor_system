@@ -6,6 +6,7 @@
 用法:
     python scripts/dedup_factor_db.py [--market futures|stock|all] [--dry-run]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,14 +42,17 @@ def dedup_factors(db_path: str, market: str = "all", dry_run: bool = False) -> d
             ORDER BY cnt DESC
         """).fetchall()
     else:
-        dup_groups = conn.execute("""
+        dup_groups = conn.execute(
+            """
             SELECT market, name, COUNT(*) as cnt
             FROM factor_catalog
             WHERE market = ?
             GROUP BY market, name
             HAVING cnt > 1
             ORDER BY cnt DESC
-        """, [market]).fetchall()
+        """,
+            [market],
+        ).fetchall()
 
     if not dup_groups:
         print("✅ 无重复因子，数据库已是干净状态")
@@ -63,23 +67,29 @@ def dedup_factors(db_path: str, market: str = "all", dry_run: bool = False) -> d
 
     for mkt, name, cnt in dup_groups:
         # 找出该组中 IC 最高的因子
-        best = conn.execute("""
+        best = conn.execute(
+            """
             SELECT factor_id, name, ic, sharpe, market, is_elite, status
             FROM factor_catalog
             WHERE market = ? AND name = ?
             ORDER BY ic DESC, sharpe DESC
             LIMIT 1
-        """, [mkt, name]).fetchone()
+        """,
+            [mkt, name],
+        ).fetchone()
 
         best_id = best[0]
         best_ic = best[2]
-        best_sharpe = best[3]
+        best[3]
 
         # 找出该组中需要删除的因子
-        to_delete = conn.execute("""
+        to_delete = conn.execute(
+            """
             SELECT factor_id FROM factor_catalog
             WHERE market = ? AND name = ? AND factor_id != ?
-        """, [mkt, name, best_id]).fetchall()
+        """,
+            [mkt, name, best_id],
+        ).fetchall()
 
         delete_ids = [r[0] for r in to_delete]
 
@@ -124,14 +134,12 @@ def dedup_factors(db_path: str, market: str = "all", dry_run: bool = False) -> d
 
     # 3. 统计结果
     final_count = conn.execute("SELECT COUNT(*) FROM factor_catalog").fetchone()[0]
-    unique_names = conn.execute(
-        "SELECT COUNT(DISTINCT name) FROM factor_catalog"
-    ).fetchone()[0]
+    unique_names = conn.execute("SELECT COUNT(DISTINCT name) FROM factor_catalog").fetchone()[0]
     active_elite = conn.execute("""
         SELECT COUNT(*) FROM factor_catalog WHERE status='active' AND is_elite=true
     """).fetchone()[0]
 
-    print(f"\n📈 清理结果:")
+    print("\n📈 清理结果:")
     print(f"   总记录数: {final_count} (去除 {total_removed})")
     print(f"   唯一因子名: {unique_names}")
     print(f"   活跃精英因子: {active_elite}")

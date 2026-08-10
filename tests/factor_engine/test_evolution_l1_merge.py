@@ -19,6 +19,7 @@ import pytest
 
 # ─── helpers ──────────────────────────────────────────────
 
+
 def _make_candidate(
     cand_id: str = "cand_abc12345",
     name: str = "l1_test_factor",
@@ -34,7 +35,10 @@ def _make_candidate(
         "signature": {"inputs": ["close"], "output": "signal"},
         "economic_logic": {
             "narrative": "测试候选：短期动量",
-            "theory": 4, "behavioral": 3, "microstructure": 2, "institutional": 1,
+            "theory": 4,
+            "behavioral": 3,
+            "microstructure": 2,
+            "institutional": 1,
         },
         "source": "l1_bootstrapping",
         "market": market,
@@ -68,7 +72,8 @@ def _write_candidate(tmp_path, cand: dict) -> None:
     inject_dir = tmp_path / "memory" / "knowledge" / "factors" / "l1_injected"
     inject_dir.mkdir(parents=True, exist_ok=True)
     (inject_dir / f"{cand['candidate_id']}.json").write_text(
-        json.dumps(cand, ensure_ascii=False), encoding="utf-8",
+        json.dumps(cand, ensure_ascii=False),
+        encoding="utf-8",
     )
 
 
@@ -81,10 +86,16 @@ def _make_loop(tmp_path, market: str = "futures"):
     np.random.seed(42)
     n = 120
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
-    data = pd.DataFrame({
-        "open": close, "high": close, "low": close, "close": close,
-        "volume": np.random.randint(1000, 10000, n).astype(float),
-    }, index=pd.date_range("2024-01-01", periods=n, freq="D"))
+    data = pd.DataFrame(
+        {
+            "open": close,
+            "high": close,
+            "low": close,
+            "close": close,
+            "volume": np.random.randint(1000, 10000, n).astype(float),
+        },
+        index=pd.date_range("2024-01-01", periods=n, freq="D"),
+    )
     rets = np.zeros(n)
     rets[:-1] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
     return EvolutionLoop(
@@ -106,6 +117,7 @@ def chdir_tmp(tmp_path, monkeypatch):
 
 # ─── tests ────────────────────────────────────────────────
 
+
 def test_no_inject_dir_returns_seeds(chdir_tmp):
     """无 l1_injected 目录时原样返回种子列表。"""
     loop = _make_loop(chdir_tmp)
@@ -118,10 +130,17 @@ def test_merge_pending_candidate(chdir_tmp):
     """pending 候选被合并，source=bootstrapping。"""
     cand = _make_candidate()
     _write_candidate(chdir_tmp, cand)
-    _write_pool(chdir_tmp, [{
-        "factor_id": cand["candidate_id"], "name": cand["name"],
-        "source": "l1_bootstrapping", "status": "pending",
-    }])
+    _write_pool(
+        chdir_tmp,
+        [
+            {
+                "factor_id": cand["candidate_id"],
+                "name": cand["name"],
+                "source": "l1_bootstrapping",
+                "status": "pending",
+            }
+        ],
+    )
     loop = _make_loop(chdir_tmp, market="futures")
     merged = loop._merge_l1_candidates([], "trace-test")  # noqa: SLF001
     assert len(merged) == 1
@@ -135,10 +154,17 @@ def test_pending_gate_skips_non_pending(chdir_tmp):
     """pool 中 status != pending 的候选不合并。"""
     cand = _make_candidate()
     _write_candidate(chdir_tmp, cand)
-    _write_pool(chdir_tmp, [{
-        "factor_id": cand["candidate_id"], "name": cand["name"],
-        "source": "l1_bootstrapping", "status": "injected",
-    }])
+    _write_pool(
+        chdir_tmp,
+        [
+            {
+                "factor_id": cand["candidate_id"],
+                "name": cand["name"],
+                "source": "l1_bootstrapping",
+                "status": "injected",
+            }
+        ],
+    )
     loop = _make_loop(chdir_tmp)
     merged = loop._merge_l1_candidates([], "trace-test")  # noqa: SLF001
     assert merged == []
@@ -148,10 +174,17 @@ def test_market_filter_excludes_other_market(chdir_tmp):
     """候选 market=futures 时，stock 演化循环排除它。"""
     cand = _make_candidate(market="futures")
     _write_candidate(chdir_tmp, cand)
-    _write_pool(chdir_tmp, [{
-        "factor_id": cand["candidate_id"], "name": cand["name"],
-        "source": "l1_bootstrapping", "status": "pending",
-    }])
+    _write_pool(
+        chdir_tmp,
+        [
+            {
+                "factor_id": cand["candidate_id"],
+                "name": cand["name"],
+                "source": "l1_bootstrapping",
+                "status": "pending",
+            }
+        ],
+    )
     loop = _make_loop(chdir_tmp, market="stock")
     merged = loop._merge_l1_candidates([], "trace-test")  # noqa: SLF001
     assert merged == []
@@ -162,10 +195,17 @@ def test_market_missing_legacy_allowed(chdir_tmp):
     cand = _make_candidate()
     del cand["market"]
     _write_candidate(chdir_tmp, cand)
-    _write_pool(chdir_tmp, [{
-        "factor_id": cand["candidate_id"], "name": cand["name"],
-        "source": "l1_bootstrapping", "status": "pending",
-    }])
+    _write_pool(
+        chdir_tmp,
+        [
+            {
+                "factor_id": cand["candidate_id"],
+                "name": cand["name"],
+                "source": "l1_bootstrapping",
+                "status": "pending",
+            }
+        ],
+    )
     loop = _make_loop(chdir_tmp, market="futures")
     merged = loop._merge_l1_candidates([], "trace-test")  # noqa: SLF001
     assert len(merged) == 1
@@ -175,10 +215,17 @@ def test_name_dedup_skips_existing_seed(chdir_tmp):
     """与现有种子重名的候选跳过。"""
     cand = _make_candidate(name="dup_factor")
     _write_candidate(chdir_tmp, cand)
-    _write_pool(chdir_tmp, [{
-        "factor_id": cand["candidate_id"], "name": cand["name"],
-        "source": "l1_bootstrapping", "status": "pending",
-    }])
+    _write_pool(
+        chdir_tmp,
+        [
+            {
+                "factor_id": cand["candidate_id"],
+                "name": cand["name"],
+                "source": "l1_bootstrapping",
+                "status": "pending",
+            }
+        ],
+    )
     loop = _make_loop(chdir_tmp)
     seeds = [{"name": "dup_factor", "factor_id": "fct_seed"}]
     merged = loop._merge_l1_candidates(seeds, "trace-test")  # noqa: SLF001
@@ -190,16 +237,16 @@ def test_idempotent_updates_pool_status(chdir_tmp):
     cand = _make_candidate()
     _write_candidate(chdir_tmp, cand)
     pool_entry = {
-        "factor_id": cand["candidate_id"], "name": cand["name"],
-        "source": "l1_bootstrapping", "status": "pending",
+        "factor_id": cand["candidate_id"],
+        "name": cand["name"],
+        "source": "l1_bootstrapping",
+        "status": "pending",
     }
     _write_pool(chdir_tmp, [pool_entry])
     loop = _make_loop(chdir_tmp)
     loop._merge_l1_candidates([], "trace-test")  # noqa: SLF001
 
-    pool = json.loads(
-        (chdir_tmp / "memory" / "knowledge" / "factors" / "factor_pool.json").read_text(encoding="utf-8")
-    )
+    pool = json.loads((chdir_tmp / "memory" / "knowledge" / "factors" / "factor_pool.json").read_text(encoding="utf-8"))
     entry = pool["factors"][0]
     assert entry["status"] == "injected"
 
@@ -215,14 +262,22 @@ def test_consumed_marker_skipped(chdir_tmp):
 
 # ─── GAP-036: 激进清理 ───────────────────────────────────
 
+
 def test_consumed_file_deleted_after_merge(chdir_tmp):
     """GAP-036: pending 候选被合并消费后，对应 l1_injected 文件被删除。"""
     cand = _make_candidate()
     _write_candidate(chdir_tmp, cand)
-    _write_pool(chdir_tmp, [{
-        "factor_id": cand["candidate_id"], "name": cand["name"],
-        "source": "l1_bootstrapping", "status": "pending",
-    }])
+    _write_pool(
+        chdir_tmp,
+        [
+            {
+                "factor_id": cand["candidate_id"],
+                "name": cand["name"],
+                "source": "l1_bootstrapping",
+                "status": "pending",
+            }
+        ],
+    )
     inject_dir = chdir_tmp / "memory" / "knowledge" / "factors" / "l1_injected"
     cand_file = inject_dir / f"{cand['candidate_id']}.json"
     assert cand_file.exists()
@@ -240,12 +295,23 @@ def test_historical_cleanup_deletes_consumed_keeps_pending(chdir_tmp):
     pending = _make_candidate(cand_id="cand_pend0001", name="l1_pending_factor")
     _write_candidate(chdir_tmp, consumed)
     _write_candidate(chdir_tmp, pending)
-    _write_pool(chdir_tmp, [
-        {"factor_id": consumed["candidate_id"], "name": consumed["name"],
-         "source": "l1_bootstrapping", "status": "injected"},
-        {"factor_id": pending["candidate_id"], "name": pending["name"],
-         "source": "l1_bootstrapping", "status": "pending"},
-    ])
+    _write_pool(
+        chdir_tmp,
+        [
+            {
+                "factor_id": consumed["candidate_id"],
+                "name": consumed["name"],
+                "source": "l1_bootstrapping",
+                "status": "injected",
+            },
+            {
+                "factor_id": pending["candidate_id"],
+                "name": pending["name"],
+                "source": "l1_bootstrapping",
+                "status": "pending",
+            },
+        ],
+    )
     inject_dir = chdir_tmp / "memory" / "knowledge" / "factors" / "l1_injected"
     consumed_file = inject_dir / f"{consumed['candidate_id']}.json"
     pending_file = inject_dir / f"{pending['candidate_id']}.json"
@@ -289,10 +355,17 @@ def test_promote_to_elite_deletes_l1_candidate_file(chdir_tmp):
         code="close - close.shift(5)",
         params={},
         signature=FactorSignature(
-            input_fields=["close"], output_type="signal", frequency="daily", lookback=1,
+            input_fields=["close"],
+            output_type="signal",
+            frequency="daily",
+            lookback=1,
         ),
         economic_logic=EconomicLogic(
-            theory=3, behavioral=3, microstructure=3, institutional=3, narrative="测试",
+            theory=3,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="测试",
         ),
         source="bootstrapping",
         parent_id=cand["candidate_id"],

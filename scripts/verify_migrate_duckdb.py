@@ -37,17 +37,14 @@ def show_table(con: duckdb.DuckDBPyConnection, table: str) -> None:
 
 def show_pks(con: duckdb.DuckDBPyConnection, table: str) -> None:
     rows = con.execute(
-        "SELECT column_name FROM information_schema.key_column_usage "
-        "WHERE table_name=? ORDER BY ordinal_position",
+        "SELECT column_name FROM information_schema.key_column_usage WHERE table_name=? ORDER BY ordinal_position",
         [table],
     ).fetchall()
     print(f"  [{table} 主键列] {[r[0] for r in rows]}")
 
 
 def show_indexes(con: duckdb.DuckDBPyConnection) -> None:
-    rows = con.execute(
-        "SELECT table_name, index_name FROM duckdb_indexes() ORDER BY table_name, index_name"
-    ).fetchall()
+    rows = con.execute("SELECT table_name, index_name FROM duckdb_indexes() ORDER BY table_name, index_name").fetchall()
     print(f"  [索引] {[(r[0], r[1]) for r in rows]}")
 
 
@@ -70,10 +67,12 @@ def main() -> int:
 
     con = duckdb.connect(str(fresh_db), read_only=True)
     try:
-        tables = [r[0] for r in con.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema='main' ORDER BY table_name"
-        ).fetchall()]
+        tables = [
+            r[0]
+            for r in con.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='main' ORDER BY table_name"
+            ).fetchall()
+        ]
         print(f"  [表清单] {tables}")
         for t in tables:
             show_table(con, t)
@@ -82,8 +81,7 @@ def main() -> int:
 
         # 验证 kline_cache 17 列（含 8 个新列）
         cols = {r[1] for r in describe_table(con, "kline_cache")}
-        expected_new = {"hold", "settle", "pre_settle", "oi_change",
-                        "vwap", "source", "fetched_at", "trace_id"}
+        expected_new = {"hold", "settle", "pre_settle", "oi_change", "vwap", "source", "fetched_at", "trace_id"}
         missing = expected_new - cols
         assert not missing, f"全新 DB 缺字段: {missing}"
         print("  ✓ kline_cache 17 列齐全（含 8 个新列）")
@@ -123,34 +121,33 @@ def main() -> int:
     try:
         # 验证旧字段仍在 + 新字段已加
         cols = {r[1] for r in describe_table(con, "kline_cache")}
-        old_cols = {"symbol", "period", "date", "open", "high", "low",
-                    "close", "volume", "amount"}
-        new_cols = {"hold", "settle", "pre_settle", "oi_change",
-                    "vwap", "source", "fetched_at", "trace_id"}
+        old_cols = {"symbol", "period", "date", "open", "high", "low", "close", "volume", "amount"}
+        new_cols = {"hold", "settle", "pre_settle", "oi_change", "vwap", "source", "fetched_at", "trace_id"}
         assert old_cols <= cols, f"旧字段丢失: {old_cols - cols}"
         assert new_cols <= cols, f"新字段缺失: {new_cols - cols}"
         print(f"  ✓ 旧字段 {len(old_cols)} 个全在 + 新字段 {len(new_cols)} 个已加")
 
         # 验证数据保留
-        rows = con.execute(
-            "SELECT symbol, close FROM kline_cache ORDER BY symbol"
-        ).fetchall()
+        rows = con.execute("SELECT symbol, close FROM kline_cache ORDER BY symbol").fetchall()
         print(f"  [数据保留] {rows}")
-        assert rows == [("AU0", 482.0), ("CU0", 70300.0), ("RB0", 3540.0)], \
-            f"数据被破坏: {rows}"
+        assert rows == [("AU0", 482.0), ("CU0", 70300.0), ("RB0", 3540.0)], f"数据被破坏: {rows}"
         print("  ✓ 3 条历史数据完整保留")
 
         # 验证表已新建
-        tables = {r[0] for r in con.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
-        ).fetchall()}
+        tables = {
+            r[0]
+            for r in con.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+            ).fetchall()
+        }
         assert {"edb_cache", "option_chain_cache"} <= tables
         print("  ✓ edb_cache + option_chain_cache 已在旧版 DB 上新建")
 
         # 验证索引已建
-        idx = {r[0] for r in con.execute(
-            "SELECT index_name FROM duckdb_indexes() WHERE table_name='kline_cache'"
-        ).fetchall()}
+        idx = {
+            r[0]
+            for r in con.execute("SELECT index_name FROM duckdb_indexes() WHERE table_name='kline_cache'").fetchall()
+        }
         assert "idx_kline_symbol_date_source" in idx
         print("  ✓ 联合索引 idx_kline_symbol_date_source 已建")
     finally:
@@ -209,10 +206,7 @@ def main() -> int:
         print(f"  [EDB 验证] CPI 记录: {cpi}")
         assert len(cpi) == 1
 
-        opt = con.execute(
-            "SELECT contract, type, strike FROM option_chain_cache "
-            "WHERE underlying='CU'"
-        ).fetchall()
+        opt = con.execute("SELECT contract, type, strike FROM option_chain_cache WHERE underlying='CU'").fetchall()
         print(f"  [期权验证] CU 期权: {opt}")
         assert len(opt) == 1
     finally:

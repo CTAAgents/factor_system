@@ -23,8 +23,7 @@ from fts.core.enums import DataSource
 # ─── Fixture: 通用 mock 数据源 ────────────────────────────
 
 
-def _make_kline_df(symbol: str, source: str, rows: int = 5,
-                   base_date: date | None = None) -> pd.DataFrame:
+def _make_kline_df(symbol: str, source: str, rows: int = 5, base_date: date | None = None) -> pd.DataFrame:
     """构造一个 K 线 DataFrame。
 
     Args:
@@ -37,27 +36,42 @@ def _make_kline_df(symbol: str, source: str, rows: int = 5,
         base_date = (datetime.now() - timedelta(days=rows - 1)).date()
     data = []
     for i in range(rows):
-        data.append({
-            "symbol": symbol, "period": "daily",
-            "date": base_date + timedelta(days=i),
-            "open": 3500 + i, "high": 3550 + i, "low": 3490 + i, "close": 3540 + i,
-            "volume": 100000, "amount": 350000000,
-            "hold": 80000 + i * 100, "settle": 3540 + i, "pre_settle": 3520 + i,
-            "oi_change": 2000,
-            "vwap": 3500.0, "source": source,
-            "fetched_at": datetime.now(), "trace_id": "",
-            # v2.58.0 (GAP-046): kline_cache 新增 adj_factor 复权因子列
-            "adj_factor": 1.0,
-        })
+        data.append(
+            {
+                "symbol": symbol,
+                "period": "daily",
+                "date": base_date + timedelta(days=i),
+                "open": 3500 + i,
+                "high": 3550 + i,
+                "low": 3490 + i,
+                "close": 3540 + i,
+                "volume": 100000,
+                "amount": 350000000,
+                "hold": 80000 + i * 100,
+                "settle": 3540 + i,
+                "pre_settle": 3520 + i,
+                "oi_change": 2000,
+                "vwap": 3500.0,
+                "source": source,
+                "fetched_at": datetime.now(),
+                "trace_id": "",
+                # v2.58.0 (GAP-046): kline_cache 新增 adj_factor 复权因子列
+                "adj_factor": 1.0,
+            }
+        )
     return pd.DataFrame(data)
 
 
 class _MockSource:
     """可配置的 mock 数据源。"""
 
-    def __init__(self, source_name: str, df: pd.DataFrame | None = None,
-                 raise_exc: Exception | None = None,
-                 return_none: bool = False):
+    def __init__(
+        self,
+        source_name: str,
+        df: pd.DataFrame | None = None,
+        raise_exc: Exception | None = None,
+        return_none: bool = False,
+    ):
         self.source_name = source_name
         self._df = df
         self._raise = raise_exc
@@ -95,9 +109,11 @@ def tmp_db(tmp_path: Path) -> Path:
 def cache_with_data(tmp_db: Path) -> Path:
     """预先写入缓存数据的临时 DB。"""
     from fts.data_sources.migrate import migrate_schema
+
     migrate_schema(tmp_db)
 
     import duckdb
+
     con = duckdb.connect(str(tmp_db))
     try:
         df = _make_kline_df("RB0", DataSource.DUCKDB_CACHE.value, rows=10)
@@ -160,8 +176,7 @@ def test_get_ohlcv_falls_back_to_tq_python_when_tq_local_fails(tmp_db: Path):
     """TQ_LOCAL 失败时回退到 TQ_PYTHON。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
-    tq_local = _MockSource(DataSource.TQ_LOCAL.value,
-                           raise_exc=ConnectionError("7721 refused"))
+    tq_local = _MockSource(DataSource.TQ_LOCAL.value, raise_exc=ConnectionError("7721 refused"))
     tq_python_df = _make_kline_df("RB0", DataSource.TQ_PYTHON.value, rows=5)
     tq_python = _MockSource(DataSource.TQ_PYTHON.value, df=tq_python_df)
 
@@ -181,16 +196,12 @@ def test_get_ohlcv_falls_back_to_akshare_when_all_tq_fail(tmp_db: Path):
     """TQ_LOCAL + TQ_PYTHON 失败时回退到 AKSHARE。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
-    tq_local = _MockSource(DataSource.TQ_LOCAL.value,
-                           raise_exc=ConnectionError("7721 down"))
-    tq_python = _MockSource(DataSource.TQ_PYTHON.value,
-                            raise_exc=ConnectionError("SDK fail"))
+    tq_local = _MockSource(DataSource.TQ_LOCAL.value, raise_exc=ConnectionError("7721 down"))
+    tq_python = _MockSource(DataSource.TQ_PYTHON.value, raise_exc=ConnectionError("SDK fail"))
     akshare_df = _make_kline_df("RB0", DataSource.AKSHARE.value, rows=3)
     akshare = _MockSource(DataSource.AKSHARE.value, df=akshare_df)
 
-    agg = FuturesDataAggregator(
-        sources=[tq_local, tq_python, akshare], db_path=tmp_db
-    )
+    agg = FuturesDataAggregator(sources=[tq_local, tq_python, akshare], db_path=tmp_db)
     df = agg.get_ohlcv("RB0", days=3, trace_id="t-004")
 
     assert len(df) == 3
@@ -208,12 +219,10 @@ def test_get_ohlcv_returns_synthetic_when_all_sources_fail(tmp_db: Path):
     """所有源失败时返回合成数据（保证系统可运行）。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
-    all_fail = [_MockSource(DataSource.TQ_LOCAL.value, raise_exc=ConnectionError("x"))
-                for _ in range(3)]
+    all_fail = [_MockSource(DataSource.TQ_LOCAL.value, raise_exc=ConnectionError("x")) for _ in range(3)]
     # 修改 source_name
     for i, s in enumerate(all_fail):
-        s.source_name = [DataSource.TQ_LOCAL.value, DataSource.TQ_PYTHON.value,
-                         DataSource.AKSHARE.value][i]
+        s.source_name = [DataSource.TQ_LOCAL.value, DataSource.TQ_PYTHON.value, DataSource.AKSHARE.value][i]
 
     agg = FuturesDataAggregator(sources=all_fail, db_path=tmp_db)
     df = agg.get_ohlcv("RB0", days=3, trace_id="t-005")
@@ -232,14 +241,14 @@ def test_circuit_breaker_opens_after_n_failures(tmp_db: Path):
     """连续 5 次失败后熔断器开启，跳过该源。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
-    tq_local = _MockSource(DataSource.TQ_LOCAL.value,
-                           raise_exc=ConnectionError("always down"))
+    tq_local = _MockSource(DataSource.TQ_LOCAL.value, raise_exc=ConnectionError("always down"))
     tq_python_df = _make_kline_df("RB0", DataSource.TQ_PYTHON.value, rows=3)
     tq_python = _MockSource(DataSource.TQ_PYTHON.value, df=tq_python_df)
 
     # 关键：db_path=None 禁用缓存，确保每次都触发 K 线源
     agg = FuturesDataAggregator(
-        sources=[tq_local, tq_python], db_path=None,
+        sources=[tq_local, tq_python],
+        db_path=None,
         circuit_breaker_threshold=5,
     )
 
@@ -289,7 +298,8 @@ def test_circuit_breaker_half_open_after_cooldown(tmp_db: Path):
 
     # 关键：db_path=None 禁用缓存，确保每次都触发 K 线源
     agg = FuturesDataAggregator(
-        sources=[toggle, fallback], db_path=None,
+        sources=[toggle, fallback],
+        db_path=None,
         circuit_breaker_threshold=3,
         circuit_breaker_cooldown_seconds=0.01,  # 10ms 冷却
     )
@@ -301,6 +311,7 @@ def test_circuit_breaker_half_open_after_cooldown(tmp_db: Path):
     before = toggle.fetch_count
     # 冷却 50ms 后源恢复
     import time
+
     time.sleep(0.05)
     toggle._should_fail = False
 
@@ -346,7 +357,8 @@ def test_circuit_breaker_resets_on_success(tmp_db: Path):
 
     # 关键：db_path=None 禁用缓存，确保每次都触发 K 线源
     agg = FuturesDataAggregator(
-        sources=[flakey, fallback], db_path=None,
+        sources=[flakey, fallback],
+        db_path=None,
         circuit_breaker_threshold=5,
     )
 
@@ -384,11 +396,13 @@ def test_enhance_fields_calls_wind_and_ifind(tmp_db: Path):
     ifind = _MockSource(DataSource.IFIND.value, df=tq_df)
 
     agg = FuturesDataAggregator(
-        sources=[tq], enhancers=[wind, ifind], db_path=tmp_db,
+        sources=[tq],
+        enhancers=[wind, ifind],
+        db_path=tmp_db,
         enable_cross_check=False,  # 14.2 关闭交叉验证以测字段增强层独立行为
     )
 
-    df = agg.get_ohlcv("RB0", days=3, trace_id="t-enh")
+    agg.get_ohlcv("RB0", days=3, trace_id="t-enh")
 
     # 字段增强层应被调用（每个 enhancer 恰好 1 次）
     assert wind.fetch_count == 1
@@ -405,7 +419,9 @@ def test_enhance_fields_failure_does_not_break_main_path(tmp_db: Path):
     ifind = _MockSource(DataSource.IFIND.value, raise_exc=ConnectionError("ifind down"))
 
     agg = FuturesDataAggregator(
-        sources=[tq], enhancers=[wind, ifind], db_path=tmp_db,
+        sources=[tq],
+        enhancers=[wind, ifind],
+        db_path=tmp_db,
         enable_cross_check=False,  # 14.2 关闭交叉验证
     )
 
@@ -448,7 +464,8 @@ def test_get_source_status_returns_breaker_state(tmp_db: Path):
 
     # 关键：db_path=None 禁用缓存
     agg = FuturesDataAggregator(
-        sources=[tq, fallback], db_path=None,
+        sources=[tq, fallback],
+        db_path=None,
         circuit_breaker_threshold=3,
     )
 
@@ -472,9 +489,7 @@ def test_cache_wins_over_sources(cache_with_data: Path):
     tq_df = _make_kline_df("RB0.SHFE", DataSource.TQ_LOCAL.value, rows=10)
     tq = _MockSource(DataSource.TQ_LOCAL.value, df=tq_df)
     # cache_max_age_days=30 确保缓存的 10 天数据全部命中
-    agg = FuturesDataAggregator(
-        sources=[tq], db_path=cache_with_data, cache_max_age_days=30
-    )
+    agg = FuturesDataAggregator(sources=[tq], db_path=cache_with_data, cache_max_age_days=30)
 
     df = agg.get_ohlcv("RB0", days=10, trace_id="t-cache-wins")
     # 缓存命中 → 不调 TQ
@@ -496,7 +511,9 @@ def test_kline_path_and_enhancement_are_independent(tmp_db: Path):
     wind = _MockSource(DataSource.WIND.value, df=wind_df)
 
     agg = FuturesDataAggregator(
-        sources=[tq_fail, akshare], enhancers=[wind], db_path=tmp_db,
+        sources=[tq_fail, akshare],
+        enhancers=[wind],
+        db_path=tmp_db,
     )
 
     df = agg.get_ohlcv("RB0", days=3, trace_id="t-indep")
@@ -509,21 +526,35 @@ def test_kline_path_and_enhancement_are_independent(tmp_db: Path):
 # ─── 多源交叉验证（Phase 14.2）───────────────────────────
 
 
-def _make_close_only_source(source_name: str, close_value: float,
-                            symbol: str = "RB0", date_str: str = "2026-08-04"
-                            ) -> _MockSource:
+def _make_close_only_source(
+    source_name: str, close_value: float, symbol: str = "RB0", date_str: str = "2026-08-04"
+) -> _MockSource:
     """构造一个仅返回单行 close 的 mock 源（用于 cross_check 单元测试）。"""
     from datetime import date
-    df = pd.DataFrame([{
-        "symbol": symbol, "period": "daily",
-        "date": date.fromisoformat(date_str),
-        "open": close_value, "high": close_value,
-        "low": close_value, "close": close_value,
-        "volume": 100000, "amount": 350000000,
-        "hold": 80000, "settle": close_value, "pre_settle": close_value,
-        "oi_change": 0, "vwap": close_value, "source": source_name,
-        "fetched_at": datetime.now(), "trace_id": "",
-    }])
+
+    df = pd.DataFrame(
+        [
+            {
+                "symbol": symbol,
+                "period": "daily",
+                "date": date.fromisoformat(date_str),
+                "open": close_value,
+                "high": close_value,
+                "low": close_value,
+                "close": close_value,
+                "volume": 100000,
+                "amount": 350000000,
+                "hold": 80000,
+                "settle": close_value,
+                "pre_settle": close_value,
+                "oi_change": 0,
+                "vwap": close_value,
+                "source": source_name,
+                "fetched_at": datetime.now(),
+                "trace_id": "",
+            }
+        ]
+    )
     return _MockSource(source_name, df=df)
 
 
@@ -533,8 +564,8 @@ def test_cross_check_no_alert_within_threshold(tmp_path: Path):
 
     sources = [
         _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0),
-        _make_close_only_source(DataSource.WIND.value, 3541.5),    # 差异 ≈ 0.04%
-        _make_close_only_source(DataSource.IFIND.value, 3542.0),   # 差异 ≈ 0.06%
+        _make_close_only_source(DataSource.WIND.value, 3541.5),  # 差异 ≈ 0.04%
+        _make_close_only_source(DataSource.IFIND.value, 3542.0),  # 差异 ≈ 0.06%
     ]
     log_path = tmp_path / "disagreements.jsonl"
     agg = FuturesDataAggregator(
@@ -543,9 +574,7 @@ def test_cross_check_no_alert_within_threshold(tmp_path: Path):
         cross_check_threshold=0.005,
     )
 
-    disagreements = agg.cross_check(
-        "RB0", "2026-08-04", sources=sources, trace_id="t-cc-1"
-    )
+    disagreements = agg.cross_check("RB0", "2026-08-04", sources=sources, trace_id="t-cc-1")
 
     assert disagreements == []
     # 日志文件未创建或为空
@@ -559,7 +588,7 @@ def test_cross_check_alert_outside_threshold(tmp_path: Path):
     sources = [
         _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0),
         _make_close_only_source(DataSource.WIND.value, 3540.0),
-        _make_close_only_source(DataSource.IFIND.value, 3580.0),   # 偏离 1.13%
+        _make_close_only_source(DataSource.IFIND.value, 3580.0),  # 偏离 1.13%
     ]
     log_path = tmp_path / "disagreements.jsonl"
     agg = FuturesDataAggregator(
@@ -568,9 +597,7 @@ def test_cross_check_alert_outside_threshold(tmp_path: Path):
         cross_check_threshold=0.005,
     )
 
-    disagreements = agg.cross_check(
-        "RB0", "2026-08-04", sources=sources, trace_id="t-cc-2"
-    )
+    disagreements = agg.cross_check("RB0", "2026-08-04", sources=sources, trace_id="t-cc-2")
 
     assert len(disagreements) == 1
     rec = disagreements[0]
@@ -603,9 +630,7 @@ def test_cross_check_one_source_failure_does_not_break(tmp_path: Path):
     )
 
     # 不应抛异常
-    disagreements = agg.cross_check(
-        "RB0", "2026-08-04", sources=[good, bad, ifind], trace_id="t-cc-3"
-    )
+    disagreements = agg.cross_check("RB0", "2026-08-04", sources=[good, bad, ifind], trace_id="t-cc-3")
 
     # 1 个成功 + 1 个失败 + 1 个成功 → 2 个 price 参与计算
     # 3540.0 / 3541.0 中位数 = 3540.5，差异均 < 0.5% → 无告警
@@ -624,7 +649,7 @@ def test_cross_check_writes_jsonl_log(tmp_path: Path):
     sources = [
         _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0),
         _make_close_only_source(DataSource.AKSHARE.value, 3540.0),
-        _make_close_only_source(DataSource.WIND.value, 3600.0),    # 偏离 1.69%
+        _make_close_only_source(DataSource.WIND.value, 3600.0),  # 偏离 1.69%
     ]
     log_path = tmp_path / "disagreements.jsonl"
     agg = FuturesDataAggregator(
@@ -633,9 +658,7 @@ def test_cross_check_writes_jsonl_log(tmp_path: Path):
         cross_check_threshold=0.005,
     )
 
-    disagreements = agg.cross_check(
-        "RB0", "2026-08-04", sources=sources, trace_id="t-cc-4"
-    )
+    disagreements = agg.cross_check("RB0", "2026-08-04", sources=sources, trace_id="t-cc-4")
     assert len(disagreements) == 1
     assert disagreements[0]["outliers"] == [DataSource.WIND.value]
 
@@ -669,16 +692,14 @@ def test_cross_check_disabled_returns_empty(tmp_path: Path):
     )
 
     # 即使差异巨大，因为禁用交叉验证，应返回空
-    disagreements = agg.cross_check(
-        "RB0", "2026-08-04", sources=sources, trace_id="t-cc-5"
-    )
+    disagreements = agg.cross_check("RB0", "2026-08-04", sources=sources, trace_id="t-cc-5")
     assert disagreements == []
     assert not log_path.exists()
 
 
 def test_get_ohlcv_triggers_cross_check_on_recent_days(tmp_path: Path):
     """get_ohlcv 主路径对最近交易日自动触发交叉验证。"""
-    from datetime import date, timedelta
+    from datetime import timedelta
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     # K 线主路径 TQ 返回 5 天
@@ -692,15 +713,27 @@ def test_get_ohlcv_triggers_cross_check_on_recent_days(tmp_path: Path):
     wind_data = []
     for i, d in enumerate(wind_dates):
         close_v = 3540.0 + i if i < 4 else 3600.0  # 最后一天偏离
-        wind_data.append({
-            "symbol": "RB0", "period": "daily",
-            "date": d, "open": close_v, "high": close_v,
-            "low": close_v, "close": close_v,
-            "volume": 100000, "amount": 350000000,
-            "hold": 80000, "settle": close_v, "pre_settle": close_v,
-            "oi_change": 0, "vwap": close_v, "source": DataSource.WIND.value,
-            "fetched_at": datetime.now(), "trace_id": "",
-        })
+        wind_data.append(
+            {
+                "symbol": "RB0",
+                "period": "daily",
+                "date": d,
+                "open": close_v,
+                "high": close_v,
+                "low": close_v,
+                "close": close_v,
+                "volume": 100000,
+                "amount": 350000000,
+                "hold": 80000,
+                "settle": close_v,
+                "pre_settle": close_v,
+                "oi_change": 0,
+                "vwap": close_v,
+                "source": DataSource.WIND.value,
+                "fetched_at": datetime.now(),
+                "trace_id": "",
+            }
+        )
     wind_df = pd.DataFrame(wind_data)
     wind = _MockSource(DataSource.WIND.value, df=wind_df)
 
@@ -732,13 +765,13 @@ def test_cross_check_uses_enhancers_when_sources_omitted(tmp_path: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     tq = _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0)
-    wind = _make_close_only_source(DataSource.WIND.value, 3600.0)    # 差异 1.69%
+    wind = _make_close_only_source(DataSource.WIND.value, 3600.0)  # 差异 1.69%
     ifind = _make_close_only_source(DataSource.IFIND.value, 3541.0)
 
     log_path = tmp_path / "disagreements.jsonl"
     agg = FuturesDataAggregator(
-        sources=[tq],            # K 线主路径
-        enhancers=[wind, ifind], # 字段增强层（cross_check 默认使用）
+        sources=[tq],  # K 线主路径
+        enhancers=[wind, ifind],  # 字段增强层（cross_check 默认使用）
         disagreement_log_path=log_path,
         cross_check_threshold=0.005,
     )
@@ -765,7 +798,7 @@ def test_cross_check_falls_back_to_sources_when_no_enhancers(tmp_path: Path):
     log_path = tmp_path / "disagreements.jsonl"
     agg = FuturesDataAggregator(
         sources=[tq, akshare],
-        enhancers=[],            # 无字段增强层
+        enhancers=[],  # 无字段增强层
         disagreement_log_path=log_path,
         cross_check_threshold=0.005,
     )
@@ -785,6 +818,7 @@ def test_cross_check_falls_back_to_sources_when_no_enhancers(tmp_path: Path):
 def legacy_varchar_db(tmp_db: Path) -> Path:
     """构造一个 date 为 VARCHAR 的 legacy schema DB（模拟生产存量 schema）。"""
     import duckdb
+
     con = duckdb.connect(str(tmp_db))
     try:
         con.execute("""
@@ -905,14 +939,10 @@ def test_write_cache_writes_to_legacy_varchar_schema(legacy_varchar_db: Path):
     # 使用默认连接模式（不传 read_only），避免与聚合器持久连接冲突
     con = duckdb.connect(str(legacy_varchar_db))
     try:
-        count = con.execute(
-            "SELECT COUNT(*) FROM kline_cache WHERE symbol='RB0'"
-        ).fetchone()[0]
+        count = con.execute("SELECT COUNT(*) FROM kline_cache WHERE symbol='RB0'").fetchone()[0]
         assert count == 5, f"GAP-023 修复后应写入 5 行，实际 {count}"
         # date 列在写入后保持 VARCHAR 类型
-        date_type = con.execute(
-            "SELECT typeof(date) FROM kline_cache LIMIT 1"
-        ).fetchone()[0]
+        date_type = con.execute("SELECT typeof(date) FROM kline_cache LIMIT 1").fetchone()[0]
         assert date_type == "VARCHAR", f"VARCHAR schema 不应变 DATE，实际 {date_type}"
         # 验证日期格式是 'YYYY-MM-DD' 字符串（10 字符）
         sample_date = con.execute(
@@ -941,12 +971,11 @@ def test_write_cache_writes_to_fresh_date_schema(tmp_db: Path):
     agg._write_cache(df)
 
     import duckdb
+
     # 使用默认连接模式，避免与聚合器持久连接冲突
     con = duckdb.connect(str(tmp_db))
     try:
-        count = con.execute(
-            "SELECT COUNT(*) FROM kline_cache WHERE symbol='RB0'"
-        ).fetchone()[0]
+        count = con.execute("SELECT COUNT(*) FROM kline_cache WHERE symbol='RB0'").fetchone()[0]
         assert count == 5
     finally:
         con.close()
@@ -983,19 +1012,11 @@ def test_synthesize_path_writes_to_cache_when_all_sources_fail(tmp_db: Path):
     # 使用默认连接模式，避免与聚合器持久连接冲突
     con = duckdb.connect(str(tmp_db))
     try:
-        count = con.execute(
-            "SELECT COUNT(*) FROM kline_cache WHERE symbol='RB0'"
-        ).fetchone()[0]
-        assert count == 10, (
-            f"GAP-024 修复后合成数据必须入库 10 行，实际 {count}"
-        )
+        count = con.execute("SELECT COUNT(*) FROM kline_cache WHERE symbol='RB0'").fetchone()[0]
+        assert count == 10, f"GAP-024 修复后合成数据必须入库 10 行，实际 {count}"
         # 验证缓存里也是 SYNTHETIC
-        sources = con.execute(
-            "SELECT DISTINCT source FROM kline_cache WHERE symbol='RB0'"
-        ).fetchall()
-        assert sources == [(DataSource.SYNTHETIC.value,)], (
-            f"缓存 source 应为 SYNTHETIC，实际 {sources}"
-        )
+        sources = con.execute("SELECT DISTINCT source FROM kline_cache WHERE symbol='RB0'").fetchall()
+        assert sources == [(DataSource.SYNTHETIC.value,)], f"缓存 source 应为 SYNTHETIC，实际 {sources}"
     finally:
         con.close()
 
@@ -1005,20 +1026,27 @@ def test_synthesize_path_writes_to_cache_when_all_sources_fail(tmp_db: Path):
 # ═══════════════════════════════════════════════════════════
 
 
-def _make_minute_df(symbol: str, source: str, rows: int = 10,
-                    period: str = "5m", base_time=None) -> pd.DataFrame:
+def _make_minute_df(symbol: str, source: str, rows: int = 10, period: str = "5m", base_time=None) -> pd.DataFrame:
     """构造一个分钟级 K 线 DataFrame（11 列 minute schema）。"""
     if base_time is None:
         base_time = datetime.now() - timedelta(minutes=rows)
     data = []
     for i in range(rows):
-        data.append({
-            "symbol": symbol, "period": period,
-            "datetime": base_time + timedelta(minutes=i),
-            "open": 3500.0 + i, "high": 3550.0 + i, "low": 3490.0 + i,
-            "close": 3540.0 + i, "volume": 100,
-            "source": source, "fetched_at": datetime.now(), "trace_id": "",
-        })
+        data.append(
+            {
+                "symbol": symbol,
+                "period": period,
+                "datetime": base_time + timedelta(minutes=i),
+                "open": 3500.0 + i,
+                "high": 3550.0 + i,
+                "low": 3490.0 + i,
+                "close": 3540.0 + i,
+                "volume": 100,
+                "source": source,
+                "fetched_at": datetime.now(),
+                "trace_id": "",
+            }
+        )
     return pd.DataFrame(data)
 
 
@@ -1026,10 +1054,12 @@ def _make_minute_df(symbol: str, source: str, rows: int = 10,
 def minute_cache_db(tmp_path: Path) -> Path:
     """预先写入分钟数据的 DB（minute_cache 表已迁移）。"""
     from fts.data_sources.migrate import migrate_schema
+
     db = tmp_path / "fts_minute.duckdb"
     migrate_schema(db)
 
     import duckdb
+
     con = duckdb.connect(str(db))
     try:
         df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=10)
@@ -1050,7 +1080,9 @@ def test_get_minute_ohlcv_from_minute_cache(minute_cache_db: Path):
     src.fetch_ohlcv = MagicMock(side_effect=AssertionError("不应调用分钟源"))
 
     agg = FuturesDataAggregator(
-        minute_sources=[src], db_path=minute_cache_db, cache_max_age_days=30,
+        minute_sources=[src],
+        db_path=minute_cache_db,
+        cache_max_age_days=30,
     )
     df = agg.get_minute_ohlcv("RB0", days=10, frequency="5m", trace_id="t-min-1")
 
@@ -1077,11 +1109,10 @@ def test_get_minute_ohlcv_from_source(tmp_db: Path):
     src.fetch_ohlcv.assert_called_once()
     # 已写入 minute_cache
     import duckdb
+
     con = duckdb.connect(str(tmp_db))
     try:
-        count = con.execute(
-            "SELECT COUNT(*) FROM minute_cache WHERE symbol='RB0'"
-        ).fetchone()[0]
+        count = con.execute("SELECT COUNT(*) FROM minute_cache WHERE symbol='RB0'").fetchone()[0]
         assert count == 5
     finally:
         con.close()
@@ -1092,8 +1123,7 @@ def test_get_minute_ohlcv_source_rebuilt_by_frequency(tmp_db: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     class PeriodSource:
-        def __init__(self, period: str = "5m", source_name: str = "TDX_MINUTE",
-                     df=None):
+        def __init__(self, period: str = "5m", source_name: str = "TDX_MINUTE", df=None):
             self.period = period
             self.source_name = source_name
             # 重建（type(src)(period=...)）时不传 df → 回退到闭包默认数据
@@ -1148,8 +1178,7 @@ def test_get_minute_ohlcv_rebuild_exception_skips(tmp_db: Path):
     class GoodSource:
         """可重建的分钟源：重建后仍能返回数据（df 闭包兜底）。"""
 
-        def __init__(self, period: str = "5m", source_name: str = "TQ_LOCAL",
-                     df=None):
+        def __init__(self, period: str = "5m", source_name: str = "TQ_LOCAL", df=None):
             self.period = period
             self.source_name = source_name
             self._df = df if df is not None else good_df
@@ -1232,6 +1261,7 @@ def test_try_minute_cache_stale_returns_none(tmp_path: Path):
     old_time = datetime.now() - timedelta(days=5)
     df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3, base_time=old_time)
     import duckdb
+
     con = duckdb.connect(str(db))
     try:
         con.register("df_min", df)
@@ -1315,11 +1345,10 @@ def test_write_minute_cache_persists_data(tmp_db: Path):
     agg._write_minute_cache(df, "5m")
 
     import duckdb
+
     con = duckdb.connect(str(tmp_db))
     try:
-        count = con.execute(
-            "SELECT COUNT(*) FROM minute_cache WHERE symbol='RB0'"
-        ).fetchone()[0]
+        count = con.execute("SELECT COUNT(*) FROM minute_cache WHERE symbol='RB0'").fetchone()[0]
         assert count == 3
     finally:
         con.close()
@@ -1330,17 +1359,21 @@ def test_write_minute_cache_persists_data(tmp_db: Path):
 # ═══════════════════════════════════════════════════════════
 
 
-def _make_tick_df(symbol: str, source: str, rows: int = 5,
-                  base_time=None) -> pd.DataFrame:
+def _make_tick_df(symbol: str, source: str, rows: int = 5, base_time=None) -> pd.DataFrame:
     """构造一个 tick 级 DataFrame（31 列，列序与 tick_cache 表一致）。"""
     if base_time is None:
         base_time = datetime.now() - timedelta(seconds=rows)
     data = []
     for i in range(rows):
         row = {
-            "symbol": symbol, "datetime": base_time + timedelta(seconds=i),
-            "last_price": 3540.0 + i, "average": 3540.0, "highest": 3550.0,
-            "lowest": 3530.0, "volume": 100, "amount": 354000.0,
+            "symbol": symbol,
+            "datetime": base_time + timedelta(seconds=i),
+            "last_price": 3540.0 + i,
+            "average": 3540.0,
+            "highest": 3550.0,
+            "lowest": 3530.0,
+            "volume": 100,
+            "amount": 354000.0,
             "open_interest": 80000,
         }
         # 5 档盘口列（列序在 source 之前，与表定义一致）
@@ -1359,17 +1392,20 @@ def _make_tick_df(symbol: str, source: str, rows: int = 5,
 class _TickMockSource:
     """可配置的 mock tick 数据源。"""
 
-    def __init__(self, source_name: str, df: pd.DataFrame | None = None,
-                 raise_exc: Exception | None = None,
-                 return_none: bool = False):
+    def __init__(
+        self,
+        source_name: str,
+        df: pd.DataFrame | None = None,
+        raise_exc: Exception | None = None,
+        return_none: bool = False,
+    ):
         self.source_name = source_name
         self._df = df
         self._raise = raise_exc
         self._return_none = return_none
         self.fetch_count = 0
 
-    def fetch_ticks(self, symbol: str, count: int = 5000,
-                    trace_id: str = "") -> pd.DataFrame | None:
+    def fetch_ticks(self, symbol: str, count: int = 5000, trace_id: str = "") -> pd.DataFrame | None:
         self.fetch_count += 1
         if self._raise is not None:
             raise self._raise
@@ -1382,10 +1418,12 @@ class _TickMockSource:
 def tick_cache_db(tmp_path: Path) -> Path:
     """预先写入 tick 数据的 DB（tick_cache 表已迁移）。"""
     from fts.data_sources.migrate import migrate_schema
+
     db = tmp_path / "fts_tick.duckdb"
     migrate_schema(db)
 
     import duckdb
+
     con = duckdb.connect(str(db))
     try:
         df = _make_tick_df("RB0", DataSource.TQSDK_TICK.value, rows=5)
@@ -1426,11 +1464,10 @@ def test_get_ticks_from_source(tmp_db: Path):
     assert src.fetch_count == 1
     # 写入 tick_cache
     import duckdb
+
     con = duckdb.connect(str(tmp_db))
     try:
-        count = con.execute(
-            "SELECT COUNT(*) FROM tick_cache WHERE symbol='RB0'"
-        ).fetchone()[0]
+        count = con.execute("SELECT COUNT(*) FROM tick_cache WHERE symbol='RB0'").fetchone()[0]
         assert count == 3
     finally:
         con.close()
@@ -1482,8 +1519,7 @@ def test_get_ticks_circuit_open_skips_source(tmp_db: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     src = _TickMockSource(DataSource.TQSDK_TICK.value, raise_exc=ConnectionError("down"))
-    agg = FuturesDataAggregator(tick_sources=[src], db_path=tmp_db,
-                                circuit_breaker_threshold=3)
+    agg = FuturesDataAggregator(tick_sources=[src], db_path=tmp_db, circuit_breaker_threshold=3)
     for _ in range(3):
         agg.get_ticks("RB0", count=3, trace_id="t-tick-cb")
 
@@ -1529,11 +1565,10 @@ def test_write_tick_cache_persists_data(tmp_db: Path):
     agg._write_tick_cache(df)
 
     import duckdb
+
     con = duckdb.connect(str(tmp_db))
     try:
-        count = con.execute(
-            "SELECT COUNT(*) FROM tick_cache WHERE symbol='RB0'"
-        ).fetchone()[0]
+        count = con.execute("SELECT COUNT(*) FROM tick_cache WHERE symbol='RB0'").fetchone()[0]
         assert count == 3
     finally:
         con.close()
@@ -1575,8 +1610,7 @@ def test_get_ohlcv_truncates_over_long_source(tmp_db: Path):
     tq_df = _make_kline_df("RB0.SHFE", DataSource.TQ_LOCAL.value, rows=10)
     tq = _MockSource(DataSource.TQ_LOCAL.value, df=tq_df)
 
-    agg = FuturesDataAggregator(sources=[tq], db_path=tmp_db,
-                                enable_cross_check=False)
+    agg = FuturesDataAggregator(sources=[tq], db_path=tmp_db, enable_cross_check=False)
     df = agg.get_ohlcv("RB0", days=3, trace_id="t-truncate")
 
     assert len(df) == 3
@@ -1592,9 +1626,9 @@ def test_enhance_fields_skips_circuit_open_enhancer(tmp_db: Path):
     wind.source_name = DataSource.WIND.value
     wind.fetch_ohlcv_or_none = MagicMock(side_effect=AssertionError("熔断后不应调用"))
 
-    agg = FuturesDataAggregator(sources=[tq], enhancers=[wind], db_path=tmp_db,
-                                enable_cross_check=False,
-                                circuit_breaker_threshold=2)
+    agg = FuturesDataAggregator(
+        sources=[tq], enhancers=[wind], db_path=tmp_db, enable_cross_check=False, circuit_breaker_threshold=2
+    )
     # 打开 wind 的熔断
     agg._record_failure(DataSource.WIND.value, "x")
     agg._record_failure(DataSource.WIND.value, "y")
@@ -1614,8 +1648,7 @@ def test_enhance_fields_enrich_exception_records_failure(tmp_db: Path):
     wind.source_name = DataSource.WIND.value
     wind.fetch_ohlcv_or_none = MagicMock(side_effect=RuntimeError("wind api error"))
 
-    agg = FuturesDataAggregator(sources=[tq], enhancers=[wind], db_path=tmp_db,
-                                enable_cross_check=False)
+    agg = FuturesDataAggregator(sources=[tq], enhancers=[wind], db_path=tmp_db, enable_cross_check=False)
     df = agg.get_ohlcv("RB0", days=3, trace_id="t-enh-err")
 
     assert len(df) == 3
@@ -1667,10 +1700,13 @@ def test_try_cache_stale_returns_none(tmp_path: Path):
     db = tmp_path / "stale.duckdb"
     migrate_schema(db)
     old_df = _make_kline_df(
-        "RB0", DataSource.DUCKDB_CACHE.value, rows=5,
+        "RB0",
+        DataSource.DUCKDB_CACHE.value,
+        rows=5,
         base_date=(datetime.now() - timedelta(days=10)).date(),
     )
     import duckdb
+
     con = duckdb.connect(str(db))
     try:
         con.register("df_cache", old_df)
@@ -1715,11 +1751,10 @@ def test_write_cache_migrate_failure_silent(tmp_db: Path):
         agg._write_cache(df)  # 不应抛异常
 
     import duckdb
+
     con = duckdb.connect(str(tmp_db))
     try:
-        count = con.execute(
-            "SELECT COUNT(*) FROM kline_cache WHERE symbol='RB0'"
-        ).fetchone()[0]
+        count = con.execute("SELECT COUNT(*) FROM kline_cache WHERE symbol='RB0'").fetchone()[0]
         assert count == 3
     finally:
         con.close()
@@ -1772,13 +1807,15 @@ def test_cross_check_circuit_open_source_skipped(tmp_path: Path):
     agg = FuturesDataAggregator(sources=[src1, src2])
     # 打开 src2 熔断（opened_at=now，冷却未到期）
     import time as _time
+
     agg._breakers[DataSource.WIND.value] = BreakerState(
-        consecutive_failures=5, circuit_open=True, opened_at=_time.time(),
+        consecutive_failures=5,
+        circuit_open=True,
+        opened_at=_time.time(),
     )
 
     # 只有 1 个源参与 → 无告警（也不写日志）
-    disagreements = agg.cross_check("RB0", "2026-08-04",
-                                    sources=[src1, src2], trace_id="t-cc-open")
+    disagreements = agg.cross_check("RB0", "2026-08-04", sources=[src1, src2], trace_id="t-cc-open")
     assert disagreements == []
 
 
@@ -1786,14 +1823,11 @@ def test_cross_check_date_not_matched_returns_empty(tmp_path: Path):
     """源 df 中无匹配日期时跳过该源。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
-    df1 = _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0,
-                                  date_str="2026-08-01")
-    df2 = _make_close_only_source(DataSource.WIND.value, 3600.0,
-                                  date_str="2026-08-02")
+    df1 = _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0, date_str="2026-08-01")
+    df2 = _make_close_only_source(DataSource.WIND.value, 3600.0, date_str="2026-08-02")
     agg = FuturesDataAggregator(sources=[df1, df2])
     # 请求 2026-08-04 → 两源都不匹配 → prices 空 → []
-    disagreements = agg.cross_check("RB0", "2026-08-04",
-                                    sources=[df1, df2], trace_id="t-cc-date")
+    disagreements = agg.cross_check("RB0", "2026-08-04", sources=[df1, df2], trace_id="t-cc-date")
     assert disagreements == []
 
 
@@ -1808,8 +1842,7 @@ def test_cross_check_source_exception_silently_skipped(tmp_path: Path):
 
     agg = FuturesDataAggregator(sources=[good, bad])
     # 不抛异常
-    disagreements = agg.cross_check("RB0", "2026-08-04",
-                                    sources=[good, bad], trace_id="t-cc-exc")
+    disagreements = agg.cross_check("RB0", "2026-08-04", sources=[good, bad], trace_id="t-cc-exc")
     assert disagreements == []
 
 
@@ -1818,11 +1851,9 @@ def test_cross_check_single_price_skipped(tmp_path: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     src1 = _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0)
-    src2 = _make_close_only_source(DataSource.WIND.value, 3600.0,
-                                   date_str="2026-08-02")  # 日期不匹配
+    src2 = _make_close_only_source(DataSource.WIND.value, 3600.0, date_str="2026-08-02")  # 日期不匹配
     agg = FuturesDataAggregator(sources=[src1, src2])
-    disagreements = agg.cross_check("RB0", "2026-08-04",
-                                    sources=[src1, src2], trace_id="t-cc-1p")
+    disagreements = agg.cross_check("RB0", "2026-08-04", sources=[src1, src2], trace_id="t-cc-1p")
     assert disagreements == []
 
 
@@ -1840,9 +1871,7 @@ def test_write_disagreement_log_failure_silent(tmp_path: Path):
         cross_check_threshold=0.005,
     )
     with patch("pathlib.Path.open", side_effect=OSError("denied")):
-        disagreements = agg.cross_check(
-            "RB0", "2026-08-04", sources=sources, trace_id="t-cc-logfail"
-        )
+        disagreements = agg.cross_check("RB0", "2026-08-04", sources=sources, trace_id="t-cc-logfail")
     # 告警仍然返回
     assert len(disagreements) == 1
 
@@ -1957,8 +1986,7 @@ def test_get_minute_ohlcv_circuit_open_skips_source(tmp_db: Path):
     src.period = None
     src.fetch_ohlcv = MagicMock(side_effect=AssertionError("熔断后不应调用"))
 
-    agg = FuturesDataAggregator(minute_sources=[src], db_path=tmp_db,
-                                circuit_breaker_threshold=2)
+    agg = FuturesDataAggregator(minute_sources=[src], db_path=tmp_db, circuit_breaker_threshold=2)
     agg._record_failure(DataSource.TDX_MINUTE.value, "x")
     agg._record_failure(DataSource.TDX_MINUTE.value, "y")
 

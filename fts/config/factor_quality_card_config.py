@@ -23,6 +23,7 @@ from typing import Literal, Tuple
 # 10 维度权重配置
 # ══════════════════════════════════════════════════════════
 
+
 @dataclass
 class DimensionWeights:
     """10 维度评分权重 (总和建议约 6.6)。
@@ -30,15 +31,15 @@ class DimensionWeights:
     权重越高，该维度对总分影响越大。
     """
 
-    ic_score: float = 1.0           # 有效性: IC/ICIR
-    sharpe_score: float = 1.0       # 收益性: Sharpe/Calmar
-    stability_score: float = 0.8   # 稳定性: WalkForward 结果
-    robustness_score: float = 0.8   # 鲁棒性: 衰减率
-    capacity_score: float = 0.6     # 容量: 容量估算
+    ic_score: float = 1.0  # 有效性: IC/ICIR
+    sharpe_score: float = 1.0  # 收益性: Sharpe/Calmar
+    stability_score: float = 0.8  # 稳定性: WalkForward 结果
+    robustness_score: float = 0.8  # 鲁棒性: 衰减率
+    capacity_score: float = 0.6  # 容量: 容量估算
     tradability_score: float = 0.8  # 交易性: 换手率 — ↑ 从 0.6 提升，期货高频交易性更重要
-    diversity_score: float = 0.5   # 多样性: 最大相关性
-    logic_score: float = 0.8       # 逻辑性: 经济逻辑分 — ↑ 从 0.5 提升，LLM 生成因子逻辑更关键
-    timeliness_score: float = 0.4   # 实时性: 数据频率
+    diversity_score: float = 0.5  # 多样性: 最大相关性
+    logic_score: float = 0.8  # 逻辑性: 经济逻辑分 — ↑ 从 0.5 提升，LLM 生成因子逻辑更关键
+    timeliness_score: float = 0.4  # 实时性: 数据频率
     compatibility_score: float = 0.4  # 兼容性: 跨品种覆盖率
 
     def to_tuple(self) -> Tuple[float, ...]:
@@ -65,6 +66,7 @@ class DimensionWeights:
 # 分级准入阈值
 # ══════════════════════════════════════════════════════════
 
+
 @dataclass
 class GradeThresholds:
     """分级准入阈值配置。
@@ -77,8 +79,8 @@ class GradeThresholds:
 
     total_max: int = 50
     max_per_dimension: int = 5
-    grade_A_threshold: float = 40.0   # A 级最低分
-    grade_B_min: float = 30.0         # B 级最低分
+    grade_A_threshold: float = 40.0  # A 级最低分
+    grade_B_min: float = 30.0  # B 级最低分
 
     # 准入最低等级 ("A" = 仅 A 级通过, "B" = A/B 级通过, "C" = 全通过)
     min_grade: Literal["A", "B", "C"] = "B"
@@ -88,6 +90,7 @@ class GradeThresholds:
 # 各维度评分映射参数
 # ══════════════════════════════════════════════════════════
 
+
 @dataclass
 class ICMappingConfig:
     """IC → 有效性分 (0-5) 映射参数。
@@ -95,9 +98,9 @@ class ICMappingConfig:
     阈值: IC=0.08→5分, 0.03→3分, 0.01→1分, 0→0分
     """
 
-    ic_high: float = 0.08      # IC >= 此值给 5 分
-    ic_mid: float = 0.03       # IC >= 此值给 3 分
-    ic_low: float = 0.01       # IC >= 此值给 1 分
+    ic_high: float = 0.08  # IC >= 此值给 5 分
+    ic_mid: float = 0.03  # IC >= 此值给 3 分
+    ic_low: float = 0.01  # IC >= 此值给 1 分
 
 
 @dataclass
@@ -108,9 +111,9 @@ class ICIRMappingConfig:
     阈值: ICIR=3→5分, 2→3分, 1→1分
     """
 
-    icir_high: float = 3.0    # ICIR >= 此值给 5 分
-    icir_mid: float = 2.0     # ICIR >= 此值给 3 分
-    icir_low: float = 1.0     # ICIR >= 此值给 1 分
+    icir_high: float = 3.0  # ICIR >= 此值给 5 分
+    icir_mid: float = 2.0  # ICIR >= 此值给 3 分
+    icir_low: float = 1.0  # ICIR >= 此值给 1 分
 
 
 @dataclass
@@ -120,9 +123,9 @@ class SharpeMappingConfig:
     阈值: Sharpe=3→5分, 1.5→3分, 0.5→1分
     """
 
-    sharpe_high: float = 3.0    # Sharpe >= 此值给 5 分
-    sharpe_mid: float = 1.5     # Sharpe >= 此值给 3 分
-    sharpe_low: float = 0.5      # Sharpe >= 此值给 1 分
+    sharpe_high: float = 3.0  # Sharpe >= 此值给 5 分
+    sharpe_mid: float = 1.5  # Sharpe >= 此值给 3 分
+    sharpe_low: float = 0.5  # Sharpe >= 此值给 1 分
 
 
 @dataclass
@@ -133,9 +136,9 @@ class CalmarMappingConfig:
     阈值: Calmar=2→5分, 1→3分, 0.5→1分
     """
 
-    calmar_high: float = 2.0    # Calmar >= 此值给 5 分
-    calmar_mid: float = 1.0     # Calmar >= 此值给 3 分
-    calmar_low: float = 0.5     # Calmar >= 此值给 1 分
+    calmar_high: float = 2.0  # Calmar >= 此值给 5 分
+    calmar_mid: float = 1.0  # Calmar >= 此值给 3 分
+    calmar_low: float = 0.5  # Calmar >= 此值给 1 分
 
 
 @dataclass
@@ -146,9 +149,9 @@ class DecayMappingConfig:
     阈值: 0.1→5分, 0.3→3分, 0.5→1分
     """
 
-    decay_good: float = 0.1    # 衰减率 <= 此值给 5 分
-    decay_mid: float = 0.3     # 衰减率 <= 此值给 3 分
-    decay_bad: float = 0.5     # 衰减率 <= 此值给 1 分
+    decay_good: float = 0.1  # 衰减率 <= 此值给 5 分
+    decay_mid: float = 0.3  # 衰减率 <= 此值给 3 分
+    decay_bad: float = 0.5  # 衰减率 <= 此值给 1 分
 
 
 @dataclass
@@ -159,11 +162,11 @@ class CapacityMappingConfig:
     阈值: 1亿→5分, 5000万→4分, 1000万→3分, 100万→2分, <100万→1分
     """
 
-    capacity_high: float = 100_000_000    # 容量 >= 此值给 5 分 (机构级)
+    capacity_high: float = 100_000_000  # 容量 >= 此值给 5 分 (机构级)
     capacity_mid_high: float = 50_000_000  # 容量 >= 此值给 4 分 (大型期货)
-    capacity_mid: float = 10_000_000       # 容量 >= 此值给 3 分 (中型期货)
-    capacity_low: float = 1_000_000        # 容量 >= 此值给 2 分 (小型期货)
-    capacity_min: float = 0.0               # 容量 > 此值给 1 分 (微型)
+    capacity_mid: float = 10_000_000  # 容量 >= 此值给 3 分 (中型期货)
+    capacity_low: float = 1_000_000  # 容量 >= 此值给 2 分 (小型期货)
+    capacity_min: float = 0.0  # 容量 > 此值给 1 分 (微型)
 
 
 @dataclass
@@ -181,11 +184,11 @@ class TurnoverMappingConfig:
     """
 
     # 最优区间 (百分比格式, 即 50-500 表示 50%-500%)
-    turnover_opt_low: float = 50.0       # 最优区间下限 (%)
-    turnover_opt_high: float = 500.0     # 最优区间上限 (%)
+    turnover_opt_low: float = 50.0  # 最优区间下限 (%)
+    turnover_opt_high: float = 500.0  # 最优区间上限 (%)
     # 可接受区间
-    turnover_mid_low: float = 10.0       # 中等区间下限 (%)
-    turnover_mid_high: float = 1000.0    # 中等区间上限 (%)
+    turnover_mid_low: float = 10.0  # 中等区间下限 (%)
+    turnover_mid_high: float = 1000.0  # 中等区间上限 (%)
     # 单位: 'percent' (百分比) 或 'decimal' (小数)
     turnover_unit: str = "percent"
 
@@ -198,9 +201,9 @@ class CorrelationMappingConfig:
     阈值: 0.3→5分, 0.5→3分, 0.7→1分
     """
 
-    corr_low: float = 0.3       # 相关性 <= 此值给 5 分
-    corr_mid: float = 0.5       # 相关性 <= 此值给 3 分
-    corr_high: float = 0.7       # 相关性 <= 此值给 1 分
+    corr_low: float = 0.3  # 相关性 <= 此值给 5 分
+    corr_mid: float = 0.5  # 相关性 <= 此值给 3 分
+    corr_high: float = 0.7  # 相关性 <= 此值给 1 分
 
 
 @dataclass
@@ -210,14 +213,15 @@ class CoverageMappingConfig:
     阈值: 0.9→5分, 0.7→3分, 0.5→1分
     """
 
-    coverage_high: float = 0.9   # 覆盖率 >= 此值给 5 分
-    coverage_mid: float = 0.7    # 覆盖率 >= 此值给 3 分
-    coverage_low: float = 0.5    # 覆盖率 >= 此值给 1 分
+    coverage_high: float = 0.9  # 覆盖率 >= 此值给 5 分
+    coverage_mid: float = 0.7  # 覆盖率 >= 此值给 3 分
+    coverage_low: float = 0.5  # 覆盖率 >= 此值给 1 分
 
 
 # ══════════════════════════════════════════════════════════
 # 默认值配置
 # ══════════════════════════════════════════════════════════
+
 
 @dataclass
 class DefaultValuesConfig:
@@ -237,6 +241,7 @@ class DefaultValuesConfig:
 # ══════════════════════════════════════════════════════════
 # 主配置类
 # ══════════════════════════════════════════════════════════
+
 
 @dataclass
 class FactorQualityCardFullConfig:
@@ -368,6 +373,7 @@ def create_config(
 
 
 # ─── 预设配置 ──────────────────────────────────────────
+
 
 def get_futures_config() -> FactorQualityCardFullConfig:
     """期货专用配置: 针对日频期货因子降低准入标准。

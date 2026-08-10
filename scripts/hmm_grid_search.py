@@ -41,6 +41,7 @@ logging.basicConfig(
 # 抑制 hmmlearn 的 noisy warnings（零转移矩阵行、不收敛）
 logging.getLogger("hmmlearn").setLevel(logging.ERROR)
 import warnings
+
 warnings.filterwarnings("ignore", message=".*zero sum.*")
 warnings.filterwarnings("ignore", message=".*not converging.*")
 logger = logging.getLogger("hmm_grid_search")
@@ -49,6 +50,7 @@ logger = logging.getLogger("hmm_grid_search")
 _HMM_AVAILABLE: bool = False
 try:
     from hmmlearn import hmm
+
     _HMM_AVAILABLE = True
 except ImportError:
     logger.warning("hmmlearn 未安装，无法执行网格搜索")
@@ -56,6 +58,7 @@ except ImportError:
 
 
 # ─── 数据生成 ──────────────────────────────────────────────
+
 
 def _generate_regime_data(
     n_days: int = 1000,
@@ -96,18 +99,22 @@ def _generate_regime_data(
         close[i] = close[i - 1] * (1 + ret)
 
     dates = pd.date_range("2020-01-01", periods=n, freq="B")
-    ohlcv = pd.DataFrame({
-        "open": close * (1 + rng.normal(0, 0.002, n)),
-        "high": close * (1 + np.abs(rng.normal(0, 0.005, n))),
-        "low": close * (1 - np.abs(rng.normal(0, 0.005, n))),
-        "close": close,
-        "volume": rng.integers(800, 1200, n).astype(float),
-    }, index=dates)
+    ohlcv = pd.DataFrame(
+        {
+            "open": close * (1 + rng.normal(0, 0.002, n)),
+            "high": close * (1 + np.abs(rng.normal(0, 0.005, n))),
+            "low": close * (1 - np.abs(rng.normal(0, 0.005, n))),
+            "close": close,
+            "volume": rng.integers(800, 1200, n).astype(float),
+        },
+        index=dates,
+    )
 
     return ohlcv, regimes_truth
 
 
 # ─── 评估指标 ──────────────────────────────────────────────
+
 
 @dataclass
 class EvalResult:
@@ -167,11 +174,13 @@ def _evaluate_config(
     n_splits: int = 5,
 ) -> EvalResult:
     """评估单个 HMM 配置。"""
-    result = EvalResult(params={
-        "n_components": n_components,
-        "covariance_type": covariance_type,
-        "lookback": lookback,
-    })
+    result = EvalResult(
+        params={
+            "n_components": n_components,
+            "covariance_type": covariance_type,
+            "lookback": lookback,
+        }
+    )
 
     close = ohlcv["close"].dropna()
     rets = close.pct_change().dropna()
@@ -224,8 +233,8 @@ def _evaluate_config(
             )
             model.fit(train_X)
             logL = model.score(train_X)
-            bic = _compute_bic(model, train_X, n_params)
-            aic = _compute_aic(model, train_X, n_params)
+            _compute_bic(model, train_X, n_params)
+            _compute_aic(model, train_X, n_params)
 
             # 预测验证集状态
             val_states = model.predict(val_X)
@@ -236,11 +245,13 @@ def _evaluate_config(
                 mask = val_states == s
                 if mask.sum() == 0:
                     continue
-                state_stats.append({
-                    "state": s,
-                    "mean_ret": float(val_X[mask, 0].mean()),
-                    "mean_vol": float(val_X[mask, 1].mean()),
-                })
+                state_stats.append(
+                    {
+                        "state": s,
+                        "mean_ret": float(val_X[mask, 0].mean()),
+                        "mean_vol": float(val_X[mask, 1].mean()),
+                    }
+                )
 
             if not state_stats:
                 continue
@@ -278,6 +289,7 @@ def _evaluate_config(
 
             # F1-score（macro）
             from sklearn.metrics import f1_score
+
             all_regimes = ["bull", "bear", "oscillate", "high_vol"]
             try:
                 f1 = f1_score(
@@ -292,7 +304,7 @@ def _evaluate_config(
                 pass
 
             # 稳定性：相邻预测的切换次数
-            switches = sum(1 for i in range(1, len(val_regimes)) if val_regimes[i] != val_regimes[i-1])
+            switches = sum(1 for i in range(1, len(val_regimes)) if val_regimes[i] != val_regimes[i - 1])
             stability = 1.0 - min(1.0, switches / max(1, len(val_regimes)))
             stability_scores.append(stability)
 
@@ -306,7 +318,7 @@ def _evaluate_config(
                 else:
                     signals.append(0.0)
             signals = np.array(signals)
-            truth_rets = rets.values[val_start:val_start + min_len]
+            truth_rets = rets.values[val_start : val_start + min_len]
             if len(signals) > 0 and len(truth_rets) > 0:
                 strategy_rets = signals * truth_rets
                 if len(strategy_rets) > 1 and np.std(strategy_rets) > 1e-10:
@@ -391,23 +403,27 @@ def run_grid_search(
 
 def print_results_table(results: list[EvalResult], top_n: int = 20) -> None:
     """打印排名表。"""
-    print(f"\n{'='*100}")
+    print(f"\n{'=' * 100}")
     print(f"  HMM 超参网格搜索结果排名（Top {min(top_n, len(results))}）")
-    print(f"{'='*100}")
-    print(f"{'排名':>4} {'n_comp':>6} {'cov_type':>12} {'lookback':>8} "
-          f"{'F1':>8} {'Acc':>8} {'Sharpe':>8} {'Stab':>8} {'Comp':>8} "
-          f"{'BIC':>10} {'AIC':>10} {'时间(秒)':>8}")
-    print(f"{'-'*100}")
+    print(f"{'=' * 100}")
+    print(
+        f"{'排名':>4} {'n_comp':>6} {'cov_type':>12} {'lookback':>8} "
+        f"{'F1':>8} {'Acc':>8} {'Sharpe':>8} {'Stab':>8} {'Comp':>8} "
+        f"{'BIC':>10} {'AIC':>10} {'时间(秒)':>8}"
+    )
+    print(f"{'-' * 100}")
 
     for rank, r in enumerate(results[:top_n], 1):
         p = r.params
-        print(f"{rank:>4} {p['n_components']:>6} {p['covariance_type']:>12} "
-              f"{p['lookback']:>8} {r.regime_f1:>8.4f} {r.regime_accuracy:>8.4f} "
-              f"{r.signal_sharpe:>8.4f} {r.stability_score:>8.4f} "
-              f"{r.composite_score:>8.4f} {r.bic:>10.2f} {r.aic:>10.2f} "
-              f"{r.fit_time:>8.1f}")
+        print(
+            f"{rank:>4} {p['n_components']:>6} {p['covariance_type']:>12} "
+            f"{p['lookback']:>8} {r.regime_f1:>8.4f} {r.regime_accuracy:>8.4f} "
+            f"{r.signal_sharpe:>8.4f} {r.stability_score:>8.4f} "
+            f"{r.composite_score:>8.4f} {r.bic:>10.2f} {r.aic:>10.2f} "
+            f"{r.fit_time:>8.1f}"
+        )
 
-    print(f"{'='*100}\n")
+    print(f"{'=' * 100}\n")
 
 
 def save_results(results: list[EvalResult], output_path: str) -> None:
@@ -438,12 +454,14 @@ def main() -> None:
     # 生成合成数据
     logger.info("生成 %d 天合成数据...", args.n_days)
     ohlcv, regimes_truth = _generate_regime_data(n_days=args.n_days, seed=42)
-    logger.info("数据生成完成: %d 行, 制度分布: bull=%d bear=%d osc=%d hv=%d",
-                len(ohlcv),
-                regimes_truth.count("bull"),
-                regimes_truth.count("bear"),
-                regimes_truth.count("oscillate"),
-                regimes_truth.count("high_vol"))
+    logger.info(
+        "数据生成完成: %d 行, 制度分布: bull=%d bear=%d osc=%d hv=%d",
+        len(ohlcv),
+        regimes_truth.count("bull"),
+        regimes_truth.count("bear"),
+        regimes_truth.count("oscillate"),
+        regimes_truth.count("high_vol"),
+    )
 
     # 定义网格
     if args.quick:
@@ -468,41 +486,52 @@ def main() -> None:
 
     # 最佳配置建议
     best = results[0]
-    print(f"\n最佳配置: n_components={best.params['n_components']}, "
-          f"covariance_type={best.params['covariance_type']}, "
-          f"lookback={best.params['lookback']}")
-    print(f"  F1={best.regime_f1:.4f}, Acc={best.regime_accuracy:.4f}, "
-          f"Sharpe={best.signal_sharpe:.4f}, Composite={best.composite_score:.4f}")
+    print(
+        f"\n最佳配置: n_components={best.params['n_components']}, "
+        f"covariance_type={best.params['covariance_type']}, "
+        f"lookback={best.params['lookback']}"
+    )
+    print(
+        f"  F1={best.regime_f1:.4f}, Acc={best.regime_accuracy:.4f}, "
+        f"Sharpe={best.signal_sharpe:.4f}, Composite={best.composite_score:.4f}"
+    )
 
     # 稳定性前 5 配置
     by_stability = sorted(results, key=lambda r: r.stability_score, reverse=True)
     top_stable = by_stability[0]
-    print(f"\n最稳定配置: n_components={top_stable.params['n_components']}, "
-          f"covariance_type={top_stable.params['covariance_type']}, "
-          f"lookback={top_stable.params['lookback']}")
+    print(
+        f"\n最稳定配置: n_components={top_stable.params['n_components']}, "
+        f"covariance_type={top_stable.params['covariance_type']}, "
+        f"lookback={top_stable.params['lookback']}"
+    )
     print(f"  Stability={top_stable.stability_score:.4f}, F1={top_stable.regime_f1:.4f}")
 
     # 按 lookback 汇总
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("  按 lookback 分组的最佳 F1")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     from itertools import groupby
+
     sorted_by_lb = sorted(results, key=lambda r: r.params["lookback"])
     for lb, group in groupby(sorted_by_lb, key=lambda r: r.params["lookback"]):
         best_in_group = max(group, key=lambda r: r.regime_f1)
-        print(f"  lookback={lb:>3d}: 最佳 F1={best_in_group.regime_f1:.4f} "
-              f"(n_comp={best_in_group.params['n_components']}, "
-              f"cov={best_in_group.params['covariance_type']})")
+        print(
+            f"  lookback={lb:>3d}: 最佳 F1={best_in_group.regime_f1:.4f} "
+            f"(n_comp={best_in_group.params['n_components']}, "
+            f"cov={best_in_group.params['covariance_type']})"
+        )
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("  按 covariance_type 分组的最佳 F1")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     sorted_by_cov = sorted(results, key=lambda r: r.params["covariance_type"])
     for cov, group in groupby(sorted_by_cov, key=lambda r: r.params["covariance_type"]):
         best_in_group = max(group, key=lambda r: r.regime_f1)
-        print(f"  cov={cov:>12s}: 最佳 F1={best_in_group.regime_f1:.4f} "
-              f"(n_comp={best_in_group.params['n_components']}, "
-              f"lb={best_in_group.params['lookback']})")
+        print(
+            f"  cov={cov:>12s}: 最佳 F1={best_in_group.regime_f1:.4f} "
+            f"(n_comp={best_in_group.params['n_components']}, "
+            f"lb={best_in_group.params['lookback']})"
+        )
 
 
 if __name__ == "__main__":

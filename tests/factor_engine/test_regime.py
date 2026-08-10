@@ -43,6 +43,7 @@ from fts.factor_engine import regime as _regime_mod
 
 # ─── Fixtures ─────────────────────────────────────────────
 
+
 @pytest.fixture
 def selector() -> RegimeAwareSelector:
     # 规则方法测试禁用 HMM 和 MultiHMM，避免概率模型对短数据产生不稳定结果
@@ -57,16 +58,20 @@ def n_days() -> int:
 def _make_ohlcv(close_series: np.ndarray, dates: pd.DatetimeIndex) -> pd.DataFrame:
     """从收盘价序列构造 OHLCV DataFrame。"""
     n = len(close_series)
-    return pd.DataFrame({
-        "open": close_series * (1 + np.random.randn(n) * 0.002),
-        "high": close_series * (1 + np.abs(np.random.randn(n)) * 0.005),
-        "low": close_series * (1 - np.abs(np.random.randn(n)) * 0.005),
-        "close": close_series,
-        "volume": np.random.randint(800, 1200, n).astype(float),
-    }, index=dates)
+    return pd.DataFrame(
+        {
+            "open": close_series * (1 + np.random.randn(n) * 0.002),
+            "high": close_series * (1 + np.abs(np.random.randn(n)) * 0.005),
+            "low": close_series * (1 - np.abs(np.random.randn(n)) * 0.005),
+            "close": close_series,
+            "volume": np.random.randint(800, 1200, n).astype(float),
+        },
+        index=dates,
+    )
 
 
 # ─── 1. detect: bull ─────────────────────────────────────
+
 
 def test_detect_bull_trend(selector: RegimeAwareSelector) -> None:
     """趋势明确向上 → regime='bull'。"""
@@ -81,6 +86,7 @@ def test_detect_bull_trend(selector: RegimeAwareSelector) -> None:
 
 
 # ─── 2. detect: bear ─────────────────────────────────────
+
 
 def test_detect_bear_trend(selector: RegimeAwareSelector) -> None:
     """趋势明确向下 → regime='bear'。"""
@@ -98,6 +104,7 @@ def test_detect_bear_trend(selector: RegimeAwareSelector) -> None:
 
 # ─── 3. detect: oscillate ────────────────────────────────
 
+
 def test_detect_oscillate(selector: RegimeAwareSelector) -> None:
     """水平震荡，波动适中 → regime='oscillate'。"""
     np.random.seed(42)
@@ -111,6 +118,7 @@ def test_detect_oscillate(selector: RegimeAwareSelector) -> None:
 
 
 # ─── 4. detect: high_vol ─────────────────────────────────
+
 
 def test_detect_high_vol(selector: RegimeAwareSelector) -> None:
     """大幅震荡、无明显趋势 → regime='high_vol'。
@@ -139,6 +147,7 @@ def test_detect_high_vol(selector: RegimeAwareSelector) -> None:
 
 # ─── 5. detect: low_vol ──────────────────────────────────
 
+
 def test_detect_low_vol(selector: RegimeAwareSelector) -> None:
     """价格近乎恒定 → regime='low_vol'。"""
     np.random.seed(42)
@@ -153,6 +162,7 @@ def test_detect_low_vol(selector: RegimeAwareSelector) -> None:
 
 # ─── 6. detect: empty DataFrame ──────────────────────────
 
+
 def test_detect_empty_df(selector: RegimeAwareSelector) -> None:
     """空 DataFrame → regime='oscillate', confidence=0.5。"""
     empty = pd.DataFrame()
@@ -162,6 +172,7 @@ def test_detect_empty_df(selector: RegimeAwareSelector) -> None:
 
 
 # ─── 7. detect: NaN 值 ───────────────────────────────────
+
 
 def test_detect_nan_values(selector: RegimeAwareSelector) -> None:
     """数据含 NaN → 正常检测，不抛异常。"""
@@ -182,6 +193,7 @@ def test_detect_nan_values(selector: RegimeAwareSelector) -> None:
 
 # ─── 8. detect: 常量价格 ─────────────────────────────────
 
+
 def test_detect_constant_prices(selector: RegimeAwareSelector) -> None:
     """收盘价恒定不变 → low_vol。"""
     n = 200
@@ -195,6 +207,7 @@ def test_detect_constant_prices(selector: RegimeAwareSelector) -> None:
 
 # ─── 9. confidence 范围 ──────────────────────────────────
 
+
 def test_confidence_range(selector: RegimeAwareSelector) -> None:
     """所有检测结果的 confidence 都在 0~1 之间。"""
     np.random.seed(42)
@@ -202,21 +215,20 @@ def test_confidence_range(selector: RegimeAwareSelector) -> None:
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
 
     scenarios = [
-        100 + np.cumsum(np.random.randn(n) * 0.3 + 0.5),   # bull
-        100 + np.cumsum(np.random.randn(n) * 0.3 - 0.5),   # bear
-        100 + np.random.randn(n) * 2.0,                     # oscillate
-        100 + np.sin(np.linspace(0, 8 * np.pi, n)) * 8,     # high_vol
-        100 + np.random.randn(n) * 0.2,                     # low_vol
+        100 + np.cumsum(np.random.randn(n) * 0.3 + 0.5),  # bull
+        100 + np.cumsum(np.random.randn(n) * 0.3 - 0.5),  # bear
+        100 + np.random.randn(n) * 2.0,  # oscillate
+        100 + np.sin(np.linspace(0, 8 * np.pi, n)) * 8,  # high_vol
+        100 + np.random.randn(n) * 0.2,  # low_vol
     ]
     for prices in scenarios:
         ohlcv = _make_ohlcv(prices, dates)
         result = selector.detect(ohlcv)
-        assert 0 <= result["confidence"] <= 1, (
-            f"confidence={result['confidence']} 超出 [0,1]"
-        )
+        assert 0 <= result["confidence"] <= 1, f"confidence={result['confidence']} 超出 [0,1]"
 
 
 # ─── 10. features 包含预期键 ─────────────────────────────
+
 
 def test_features_expected_keys(selector: RegimeAwareSelector) -> None:
     """features dict 包含所有预期字段。"""
@@ -227,14 +239,22 @@ def test_features_expected_keys(selector: RegimeAwareSelector) -> None:
     ohlcv = _make_ohlcv(close, dates)
 
     result = selector.detect(ohlcv)
-    expected_keys = {"trend_short", "trend_medium", "trend_long",
-                     "volatility_ewma", "volume_ratio", "breadth",
-                     "trend_score", "vol_score"}
+    expected_keys = {
+        "trend_short",
+        "trend_medium",
+        "trend_long",
+        "volatility_ewma",
+        "volume_ratio",
+        "breadth",
+        "trend_score",
+        "vol_score",
+    }
     missing = expected_keys - set(result["features"].keys())
     assert not missing, f"features 缺失键: {missing}"
 
 
 # ─── 11. profile_factor 存储与读取 ───────────────────────
+
 
 def test_profile_factor_store_retrieve(selector: RegimeAwareSelector) -> None:
     """存储后可通过内部 _profiles 读取。"""
@@ -250,17 +270,27 @@ def test_profile_factor_store_retrieve(selector: RegimeAwareSelector) -> None:
 
 # ─── 12. select_factors 按制度筛选 ───────────────────────
 
+
 def test_select_factors_filters_by_regime(selector: RegimeAwareSelector) -> None:
     """有 profile 的因子：IC>0 才保留，IC<=0 被过滤。"""
-    selector.profile_factor("fct_good", {
-        "bull": {"ic_mean": 0.05, "sharpe": 1.2, "n_windows": 10},
-    })
-    selector.profile_factor("fct_bad", {
-        "bull": {"ic_mean": -0.03, "sharpe": -0.5, "n_windows": 10},
-    })
+    selector.profile_factor(
+        "fct_good",
+        {
+            "bull": {"ic_mean": 0.05, "sharpe": 1.2, "n_windows": 10},
+        },
+    )
+    selector.profile_factor(
+        "fct_bad",
+        {
+            "bull": {"ic_mean": -0.03, "sharpe": -0.5, "n_windows": 10},
+        },
+    )
 
     regime = MarketRegime(
-        regime="bull", confidence=0.9, detected_at="now", features={},
+        regime="bull",
+        confidence=0.9,
+        detected_at="now",
+        features={},
     )
     pool = [
         {"factor_id": "fct_good", "name": "good"},
@@ -274,10 +304,14 @@ def test_select_factors_filters_by_regime(selector: RegimeAwareSelector) -> None
 
 # ─── 13. select_factors 无 profile 保留 ──────────────────
 
+
 def test_select_factors_no_profile_kept(selector: RegimeAwareSelector) -> None:
     """无 profile 数据的因子默认保留。"""
     regime = MarketRegime(
-        regime="bull", confidence=0.9, detected_at="now", features={},
+        regime="bull",
+        confidence=0.9,
+        detected_at="now",
+        features={},
     )
     pool = [{"factor_id": "fct_new", "name": "new"}]
     result = selector.select_factors(regime, pool)
@@ -287,10 +321,14 @@ def test_select_factors_no_profile_kept(selector: RegimeAwareSelector) -> None:
 
 # ─── 14. select_factors 空池 ─────────────────────────────
 
+
 def test_select_factors_empty_pool(selector: RegimeAwareSelector) -> None:
     """空 elite_pool → 返回空列表。"""
     regime = MarketRegime(
-        regime="bull", confidence=0.9, detected_at="now", features={},
+        regime="bull",
+        confidence=0.9,
+        detected_at="now",
+        features={},
     )
     result = selector.select_factors(regime, [])
     assert result == []
@@ -298,11 +336,15 @@ def test_select_factors_empty_pool(selector: RegimeAwareSelector) -> None:
 
 # ─── 15. regime_report 非空 ──────────────────────────────
 
+
 def test_regime_report_non_empty(selector: RegimeAwareSelector) -> None:
     """regime_report 返回包含制度信息的非空字符串。"""
-    selector.profile_factor("fct_001", {
-        "bull": {"ic_mean": 0.05, "sharpe": 1.2, "n_windows": 10},
-    })
+    selector.profile_factor(
+        "fct_001",
+        {
+            "bull": {"ic_mean": 0.05, "sharpe": 1.2, "n_windows": 10},
+        },
+    )
     report = selector.regime_report()
     assert isinstance(report, str)
     assert len(report) > 0
@@ -311,6 +353,7 @@ def test_regime_report_non_empty(selector: RegimeAwareSelector) -> None:
 
 
 # ─── 16. bull 高置信度 ───────────────────────────────────
+
 
 def test_detect_bull_high_confidence(selector: RegimeAwareSelector) -> None:
     """强上涨趋势 → 置信度高。"""
@@ -327,6 +370,7 @@ def test_detect_bull_high_confidence(selector: RegimeAwareSelector) -> None:
 
 # ─── 17. bear 带 features ────────────────────────────────
 
+
 def test_detect_bear_with_features(selector: RegimeAwareSelector) -> None:
     """下跌趋势的 features 包含正确字段。"""
     np.random.seed(42)
@@ -341,14 +385,21 @@ def test_detect_bear_with_features(selector: RegimeAwareSelector) -> None:
 
 # ─── 18. profile_factor 覆盖 ─────────────────────────────
 
+
 def test_profile_factor_overwrite(selector: RegimeAwareSelector) -> None:
     """对同一 factor_id 多次 profile，后覆盖前。"""
-    selector.profile_factor("fct_001", {
-        "bull": {"ic_mean": 0.05, "sharpe": 1.2, "n_windows": 10},
-    })
-    selector.profile_factor("fct_001", {
-        "bear": {"ic_mean": 0.03, "sharpe": 0.8, "n_windows": 8},
-    })
+    selector.profile_factor(
+        "fct_001",
+        {
+            "bull": {"ic_mean": 0.05, "sharpe": 1.2, "n_windows": 10},
+        },
+    )
+    selector.profile_factor(
+        "fct_001",
+        {
+            "bear": {"ic_mean": 0.03, "sharpe": 0.8, "n_windows": 8},
+        },
+    )
     stored = selector._profiles["fct_001"]
     # 覆盖后只有 bear 数据
     assert "bear" in stored["regime_performance"]
@@ -357,31 +408,45 @@ def test_profile_factor_overwrite(selector: RegimeAwareSelector) -> None:
 
 # ─── 19. 多制度 profile ──────────────────────────────────
 
+
 def test_profile_factor_multiple_regimes(selector: RegimeAwareSelector) -> None:
     """一个因子可在多个 regime 下有表现记录。"""
-    selector.profile_factor("fct_001", {
-        "bull": {"ic_mean": 0.05, "sharpe": 1.2, "n_windows": 10},
-        "bear": {"ic_mean": 0.02, "sharpe": 0.6, "n_windows": 6},
-        "oscillate": {"ic_mean": -0.01, "sharpe": -0.2, "n_windows": 4},
-    })
+    selector.profile_factor(
+        "fct_001",
+        {
+            "bull": {"ic_mean": 0.05, "sharpe": 1.2, "n_windows": 10},
+            "bear": {"ic_mean": 0.02, "sharpe": 0.6, "n_windows": 6},
+            "oscillate": {"ic_mean": -0.01, "sharpe": -0.2, "n_windows": 4},
+        },
+    )
     perfs = selector._profiles["fct_001"]["regime_performance"]
     assert set(perfs.keys()) == {"bull", "bear", "oscillate"}
 
 
 # ─── 20. select_factors 混合场景 ─────────────────────────
 
+
 def test_select_factors_mixed(selector: RegimeAwareSelector) -> None:
     """部分因子有 profile，部分无 → 有 profile 且 IC>0 的保留，无 profile 的保留。"""
-    selector.profile_factor("fct_profiled_good", {
-        "bull": {"ic_mean": 0.04, "sharpe": 1.0, "n_windows": 5},
-    })
-    selector.profile_factor("fct_profiled_bad", {
-        "bull": {"ic_mean": -0.02, "sharpe": -0.3, "n_windows": 5},
-    })
+    selector.profile_factor(
+        "fct_profiled_good",
+        {
+            "bull": {"ic_mean": 0.04, "sharpe": 1.0, "n_windows": 5},
+        },
+    )
+    selector.profile_factor(
+        "fct_profiled_bad",
+        {
+            "bull": {"ic_mean": -0.02, "sharpe": -0.3, "n_windows": 5},
+        },
+    )
     # fct_unprofiled 无 profile
 
     regime = MarketRegime(
-        regime="bull", confidence=0.9, detected_at="now", features={},
+        regime="bull",
+        confidence=0.9,
+        detected_at="now",
+        features={},
     )
     pool = [
         {"factor_id": "fct_profiled_good"},
@@ -397,6 +462,7 @@ def test_select_factors_mixed(selector: RegimeAwareSelector) -> None:
 
 # ─── 21. regime_report 空数据 ────────────────────────────
 
+
 def test_regime_report_empty(selector: RegimeAwareSelector) -> None:
     """无 profile 数据时报告包含提示信息。"""
     report = selector.regime_report()
@@ -404,6 +470,7 @@ def test_regime_report_empty(selector: RegimeAwareSelector) -> None:
 
 
 # ─── 22. 自定义 lookback ─────────────────────────────────
+
 
 def test_detect_custom_lookback() -> None:
     """自定义 lookback_days 不影响检测结果类型。"""
@@ -421,6 +488,7 @@ def test_detect_custom_lookback() -> None:
 
 # ─── 23. detect: 短数据 ──────────────────────────────────
 
+
 def test_detect_short_data(selector: RegimeAwareSelector) -> None:
     """不足 20 行数据 → regime='oscillate', confidence=0.5。"""
     dates = pd.date_range("2024-01-01", periods=10, freq="D")
@@ -435,20 +503,30 @@ def test_detect_short_data(selector: RegimeAwareSelector) -> None:
 
 # ─── 24. select_factors 跨制度差异 ───────────────────────
 
+
 def test_select_factors_different_regime(selector: RegimeAwareSelector) -> None:
     """因子在 regime_A 表现好、regime_B 表现差 → 在 regime_B 下被过滤。"""
-    selector.profile_factor("fct_001", {
-        "bull": {"ic_mean": 0.05, "sharpe": 1.2, "n_windows": 10},
-        "bear": {"ic_mean": -0.03, "sharpe": -0.5, "n_windows": 8},
-    })
+    selector.profile_factor(
+        "fct_001",
+        {
+            "bull": {"ic_mean": 0.05, "sharpe": 1.2, "n_windows": 10},
+            "bear": {"ic_mean": -0.03, "sharpe": -0.5, "n_windows": 8},
+        },
+    )
 
     pool = [{"factor_id": "fct_001"}]
 
     bull_regime = MarketRegime(
-        regime="bull", confidence=0.9, detected_at="now", features={},
+        regime="bull",
+        confidence=0.9,
+        detected_at="now",
+        features={},
     )
     bear_regime = MarketRegime(
-        regime="bear", confidence=0.8, detected_at="now", features={},
+        regime="bear",
+        confidence=0.8,
+        detected_at="now",
+        features={},
     )
 
     bull_result = selector.select_factors(bull_regime, pool)
@@ -460,17 +538,27 @@ def test_select_factors_different_regime(selector: RegimeAwareSelector) -> None:
 
 # ─── 25. select_factors 使用 sharpe 阈值 ─────────────────
 
+
 def test_select_factors_sharpe_threshold(selector: RegimeAwareSelector) -> None:
     """IC=0 但 sharpe>0 → 应保留。"""
-    selector.profile_factor("fct_sharpe_only", {
-        "bull": {"ic_mean": 0.0, "sharpe": 0.5, "n_windows": 5},
-    })
-    selector.profile_factor("fct_both_zero", {
-        "bull": {"ic_mean": 0.0, "sharpe": 0.0, "n_windows": 5},
-    })
+    selector.profile_factor(
+        "fct_sharpe_only",
+        {
+            "bull": {"ic_mean": 0.0, "sharpe": 0.5, "n_windows": 5},
+        },
+    )
+    selector.profile_factor(
+        "fct_both_zero",
+        {
+            "bull": {"ic_mean": 0.0, "sharpe": 0.0, "n_windows": 5},
+        },
+    )
 
     regime = MarketRegime(
-        regime="bull", confidence=0.9, detected_at="now", features={},
+        regime="bull",
+        confidence=0.9,
+        detected_at="now",
+        features={},
     )
     pool = [
         {"factor_id": "fct_sharpe_only"},
@@ -485,6 +573,7 @@ def test_select_factors_sharpe_threshold(selector: RegimeAwareSelector) -> None:
 # ═══════════════════════════════════════════════════════════
 # 26. HMMRegimeDetector
 # ═══════════════════════════════════════════════════════════
+
 
 @pytest.mark.skipif(not _HMM_AVAILABLE, reason="需要 hmmlearn")
 class TestHMMRegimeDetector:
@@ -557,7 +646,11 @@ class TestHMMRegimeDetector:
         ohlcv = _make_ohlcv(close, dates)
 
         det = HMMRegimeDetector(
-            n_states=3, lookback=100, refit_interval=2, min_data=50, random_seed=42,
+            n_states=3,
+            lookback=100,
+            refit_interval=2,
+            min_data=50,
+            random_seed=42,
         )
         assert det.maybe_refit(ohlcv) is True  # 初次训练
         assert det._call_count == 1
@@ -644,6 +737,7 @@ class TestHMMRegimeDetector:
 # 27. _detect_by_rule 直接调用（边界分支）
 # ═══════════════════════════════════════════════════════════
 
+
 class TestDetectByRule:
     """_detect_by_rule 规则检测边界分支。"""
 
@@ -696,6 +790,7 @@ class TestDetectByRule:
 # 28. SectorRegimeSelector
 # ═══════════════════════════════════════════════════════════
 
+
 class TestSectorRegimeSelector:
     """SectorRegimeSelector 产业链级制度检测。"""
 
@@ -742,7 +837,8 @@ class TestSectorRegimeSelector:
         assert "S1" not in res
 
     def test_compute_alignment_same_regime(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """品种与产业链制度相同 → 对齐度 = 置信度乘积。"""
         panel, smap = self._panel()
@@ -760,7 +856,8 @@ class TestSectorRegimeSelector:
         assert al["B"] == pytest.approx(0.4, abs=1e-4)
 
     def test_compute_alignment_diff_regime(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """品种与产业链制度不同 → 对齐度 = (1-|置信度差|) * 0.5。"""
         panel, smap = self._panel()
@@ -839,6 +936,7 @@ class TestSectorRegimeSelector:
 # 29. RegimeAwareSelector 集成路径与边界
 # ═══════════════════════════════════════════════════════════
 
+
 class TestRegimeAwareSelectorMore:
     """RegimeAwareSelector 集成检测路径。"""
 
@@ -855,7 +953,8 @@ class TestRegimeAwareSelectorMore:
 
     @pytest.mark.skipif(not _HMM_AVAILABLE, reason="需要 hmmlearn")
     def test_detect_multi_hmm_error_fallback(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """multi_hmm 预测抛异常 → 回退规则方法。"""
         np.random.seed(42)
@@ -885,7 +984,8 @@ class TestRegimeAwareSelectorMore:
 
         monkeypatch.setattr(MSMRegimeDetector, "fit", lambda self, o: True)
         monkeypatch.setattr(
-            MSMRegimeDetector, "predict",
+            MSMRegimeDetector,
+            "predict",
             lambda self, o: ("bull", 0.8, {"msm_state": 0}),
         )
         s = RegimeAwareSelector(use_hmm=False, use_multi_hmm=False, use_msm=True)
@@ -979,6 +1079,7 @@ class TestRegimeAwareSelectorMore:
     @pytest.mark.skipif(not _MSM_AVAILABLE, reason="需要 statsmodels")
     def test_msm_constructor_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """MSMRegimeDetector 构造失败 → 禁用 MSM。"""
+
         def _raiser(*a: object, **k: object) -> None:
             raise RuntimeError("ctor failed")
 
@@ -988,14 +1089,21 @@ class TestRegimeAwareSelectorMore:
         assert s._use_msm is False
 
     def test_select_factors_profile_missing_regime(
-        self, selector: RegimeAwareSelector,
+        self,
+        selector: RegimeAwareSelector,
     ) -> None:
         """有 profile 但当前 regime 无记录 → 保留。"""
-        selector.profile_factor("fct_001", {
-            "bull": {"ic_mean": 0.05, "sharpe": 1.0, "n_windows": 10},
-        })
+        selector.profile_factor(
+            "fct_001",
+            {
+                "bull": {"ic_mean": 0.05, "sharpe": 1.0, "n_windows": 10},
+            },
+        )
         regime = MarketRegime(
-            regime="bear", confidence=0.8, detected_at="now", features={},
+            regime="bear",
+            confidence=0.8,
+            detected_at="now",
+            features={},
         )
         result = selector.select_factors(regime, [{"factor_id": "fct_001"}])
         assert len(result) == 1
@@ -1004,6 +1112,7 @@ class TestRegimeAwareSelectorMore:
 # ═══════════════════════════════════════════════════════════
 # 30. RegimeTransitionWarner（P4.2）
 # ═══════════════════════════════════════════════════════════
+
 
 class _FakeLogger:
     """替换模块 logger（产品代码中 logger 未定义，详见报告），用于覆盖预警分支。"""
@@ -1110,6 +1219,7 @@ class TestRegimeTransitionWarner:
 # ═══════════════════════════════════════════════════════════
 # 31. AdaptiveRegimeConfig（P4.3）
 # ═══════════════════════════════════════════════════════════
+
 
 class TestAdaptiveRegimeConfig:
     """AdaptiveRegimeConfig 自适应阈值调整。"""

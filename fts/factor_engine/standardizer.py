@@ -28,7 +28,7 @@ HARNESS §契约优先: StandardizerConfig 定义标准化参数契约。
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal, Optional
 
 import numpy as np
@@ -56,6 +56,7 @@ SUPPORTED_METHODS: tuple[StandardizeMethod, ...] = (
 
 # ─── 配置 ─────────────────────────────────────────────────
 
+
 @dataclass
 class StandardizerConfig:
     """标准化器配置。
@@ -68,6 +69,7 @@ class StandardizerConfig:
         axis: 标准化轴 — 0=截面(列方向), 1=时序(行方向), None=展平
         skipna: 是否跳过 NaN（默认 True）
     """
+
     method: StandardizeMethod = "zscore"
     clip: Optional[float] = 3.0
     winsorize_lower: float = 0.01
@@ -77,6 +79,7 @@ class StandardizerConfig:
 
 
 # ─── 标准化器 ─────────────────────────────────────────────
+
 
 class Standardizer:
     """因子标准化器 — fit/transform 模式。
@@ -102,9 +105,7 @@ class Standardizer:
                 - skipna: 是否跳过 NaN
         """
         if method not in SUPPORTED_METHODS:
-            raise ValueError(
-                f"不支持的标准化方法: {method}，支持: {SUPPORTED_METHODS}"
-            )
+            raise ValueError(f"不支持的标准化方法: {method}，支持: {SUPPORTED_METHODS}")
         cfg_kwargs = {"method": method}
         for k in ("clip", "winsorize_lower", "winsorize_upper", "axis", "skipna"):
             if k in kwargs:
@@ -229,6 +230,7 @@ class Standardizer:
 
 # ─── 便捷函数 ─────────────────────────────────────────────
 
+
 def standardize(
     data: np.ndarray,
     method: StandardizeMethod = "zscore",
@@ -249,6 +251,7 @@ def standardize(
 
 
 # ─── 内部辅助函数 ─────────────────────────────────────────
+
 
 def _nanmean(data: np.ndarray, axis=None, skipna=True):
     """计算均值，支持 NaN 跳过。"""
@@ -287,7 +290,8 @@ def _nanpercentile(data: np.ndarray, q, axis=None, skipna=True):
 
 def _apply_zscore(
     data: np.ndarray,
-    mean, std,
+    mean,
+    std,
     clip: Optional[float] = None,
     axis=None,
     skipna=True,
@@ -390,7 +394,8 @@ def _apply_minmax(data: np.ndarray, dmin, dmax, axis=None, skipna=True) -> np.nd
 
 def _apply_winsorize_zscore(
     data: np.ndarray,
-    lower, upper,
+    lower,
+    upper,
     clip: Optional[float] = None,
     axis=None,
     skipna=True,

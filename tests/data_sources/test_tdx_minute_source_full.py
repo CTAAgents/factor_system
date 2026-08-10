@@ -198,5 +198,6 @@ class TestFetchQuoteAndProbe:
     def test_is_available_false(self, monkeypatch):
         def _raise(req, timeout):
             raise urllib.error.URLError("down")
+
         monkeypatch.setattr(urllib.request, "urlopen", _raise)
         assert TDXMinuteSource().is_available() is False

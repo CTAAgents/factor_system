@@ -35,15 +35,17 @@ Sharpe 截断:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import logging
+import re
 import secrets
 import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -70,11 +72,13 @@ from .contracts import (
 )
 from .factor_returns import FactorReturnsBuilder
 from .state import generate_run_id, generate_trace_id
+from .weight_learning import WeightLearningConfig
 
 logger = logging.getLogger(__name__)
 
 
 # ─── 异常 ──────────────────────────────────────────────────
+
 
 class L3Error(Exception):
     """L3 Portfolio Loop 操作失败。"""
@@ -94,6 +98,7 @@ SHADOW_OBSERVE_TRADING_DAYS: int = 5
 
 
 # ─── Verifier ──────────────────────────────────────────────
+
 
 class L3Verifier:
     """L3 组合构建 Verifier — 一旦初始化不可修改。
@@ -119,29 +124,22 @@ class L3Verifier:
 
         # 维度 1: 组合夏普（下限）
         if combo.get("combo_sharpe", 0) < self._config.get("min_sharpe", 2.0):
-            reasons.append(
-                f"组合夏普 {combo.get('combo_sharpe', 0):.2f} < {self._config['min_sharpe']}"
-            )
+            reasons.append(f"组合夏普 {combo.get('combo_sharpe', 0):.2f} < {self._config['min_sharpe']}")
 
         # 维度 6: 组合夏普（上限 — P1 过拟合保护）
         max_sharpe = self._config.get("max_sharpe", 3.5)
         if combo.get("combo_sharpe", 0) > max_sharpe:
             reasons.append(
-                f"组合夏普 {combo.get('combo_sharpe', 0):.2f} > {max_sharpe}（上限），"
-                f"强烈暗示过拟合，需人工复核"
+                f"组合夏普 {combo.get('combo_sharpe', 0):.2f} > {max_sharpe}（上限），强烈暗示过拟合，需人工复核"
             )
 
         # 维度 2: 最大相关性
         if combo.get("max_correlation", 1.0) > self._config.get("max_correlation", 0.3):
-            reasons.append(
-                f"最大相关性 {combo.get('max_correlation', 1.0):.2f} > {self._config['max_correlation']}"
-            )
+            reasons.append(f"最大相关性 {combo.get('max_correlation', 1.0):.2f} > {self._config['max_correlation']}")
 
         # 维度 3: 组合换手率
         if combo.get("combo_turnover", 1.0) > self._config.get("max_turnover", 0.5):
-            reasons.append(
-                f"组合换手率 {combo.get('combo_turnover', 1.0):.2f} > {self._config['max_turnover']}"
-            )
+            reasons.append(f"组合换手率 {combo.get('combo_turnover', 1.0):.2f} > {self._config['max_turnover']}")
 
         # 维度 4: 衰减率（各信号逐一检查）
         for sig in combo.get("signals", []):
@@ -159,6 +157,7 @@ class L3Verifier:
 
 
 # ─── 组合状态管理器 ───────────────────────────────────────
+
 
 class PortfolioStateManager:
     """L3 组合状态持久化 — 先写主文件再镜像 backup。"""
@@ -182,9 +181,7 @@ class PortfolioStateManager:
 
     def save(self, state: L3MetaLoopState) -> None:
         if state.get("schema_version") != STATE_SCHEMA_VERSION:
-            raise L3Error(
-                f"状态 schema 版本不匹配: {state.get('schema_version')} != {STATE_SCHEMA_VERSION}"
-            )
+            raise L3Error(f"状态 schema 版本不匹配: {state.get('schema_version')} != {STATE_SCHEMA_VERSION}")
         state["last_updated"] = datetime.now().isoformat()
         self._write(state)
         try:
@@ -223,7 +220,8 @@ class PortfolioStateManager:
 
     def _write(self, state: L3MetaLoopState) -> None:
         self.state_file.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8",
+            json.dumps(state, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
 
     @staticmethod
@@ -246,6 +244,7 @@ class PortfolioStateManager:
 
 
 # ─── 组合管理器 ───────────────────────────────────────────
+
 
 class PortfolioManager:
     """管理组合文件（memory/portfolio/current_combo.json + 历史归档）。"""
@@ -298,13 +297,15 @@ class PortfolioManager:
                 hist_fp = self.combo_history_dir / f"{old_id}.json"
                 if not hist_fp.exists():
                     hist_fp.write_text(
-                        json.dumps(old, ensure_ascii=False, indent=2), encoding="utf-8",
+                        json.dumps(old, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
                     )
             except (json.JSONDecodeError, TypeError, ValueError):
                 pass
         self._cache = combo
         self.combo_file.write_text(
-            json.dumps(combo, ensure_ascii=False, indent=2), encoding="utf-8",
+            json.dumps(combo, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
 
     def load_prev_combo(self) -> PortfolioCombo | None:
@@ -316,7 +317,8 @@ class PortfolioManager:
         # 优先读磁盘上当前 combo 覆盖前的最新归档（combo_history 中时间最新者）
         history_files = sorted(
             self.combo_history_dir.glob("*.json"),
-            key=lambda fp: fp.stat().st_mtime, reverse=True,
+            key=lambda fp: fp.stat().st_mtime,
+            reverse=True,
         )
         if not history_files:
             return None
@@ -330,18 +332,22 @@ class PortfolioManager:
         """从历史组合提取 {factor_id: weight}，供粘性约束使用。"""
         if not prev_combo:
             return {}
-        return {
-            s.get("factor_id"): s.get("weight", 0.0)
-            for s in prev_combo.get("signals", [])
-            if s.get("retained", True) and s.get("factor_id")
-        }
+        result: dict[str, float] = {}
+        for s in prev_combo.get("signals", []):
+            if not s.get("retained", True):
+                continue
+            fid = s.get("factor_id")
+            if fid:
+                result[fid] = s.get("weight", 0.0)
+        return result
 
     def save_proposal(self, proposal: AgentOptimizationProposal) -> str:
         """保存 Agent 优化建议，返回文件路径。"""
         pid = proposal.get("proposal_id", f"prop_{secrets.token_hex(4)}")
         fp = self.proposals_dir / f"{pid}.json"
         fp.write_text(
-            json.dumps(proposal, ensure_ascii=False, indent=2), encoding="utf-8",
+            json.dumps(proposal, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
         return str(fp)
 
@@ -366,47 +372,47 @@ class PortfolioManager:
 # 基于优化计划 A.3: 不同市场制度下因子家族的表现差异
 REGIME_FAMILY_MULTIPLIERS: dict[str, dict[str, float]] = {
     "bull": {
-        "trend": 1.3,           # 趋势因子 +30%
-        "momentum": 1.3,        # 动量因子 +30%
-        "breakout": 1.2,        # 突破因子 +20%
-        "carry": 1.1,           # 跨期套利 +10%
-        "cross_section": 1.1,   # 横截面因子 +10%
-        "fundamental": 1.0,     # 基本面不变
+        "trend": 1.3,  # 趋势因子 +30%
+        "momentum": 1.3,  # 动量因子 +30%
+        "breakout": 1.2,  # 突破因子 +20%
+        "carry": 1.1,  # 跨期套利 +10%
+        "cross_section": 1.1,  # 横截面因子 +10%
+        "fundamental": 1.0,  # 基本面不变
         "mean_reversion": 0.7,  # 均值回归 -30%
-        "volatility": 0.9,      # 波动率因子 -10%
+        "volatility": 0.9,  # 波动率因子 -10%
     },
     "bear": {
-        "trend": 1.1,           # 趋势因子 +10%（空头趋势仍有效）
-        "momentum": 0.8,        # 动量因子 -20%（反转风险）
-        "breakout": 0.7,        # 突破因子 -30%
-        "carry": 1.0,           # 跨期套利不变
-        "volatility": 1.3,      # 波动率因子 +30%（防御）
+        "trend": 1.1,  # 趋势因子 +10%（空头趋势仍有效）
+        "momentum": 0.8,  # 动量因子 -20%（反转风险）
+        "breakout": 0.7,  # 突破因子 -30%
+        "carry": 1.0,  # 跨期套利不变
+        "volatility": 1.3,  # 波动率因子 +30%（防御）
         "mean_reversion": 1.2,  # 均值回归 +20%
-        "liquidity": 1.2,       # 流动性因子 +20%
-        "fundamental": 1.1,     # 基本面 +10%
+        "liquidity": 1.2,  # 流动性因子 +20%
+        "fundamental": 1.1,  # 基本面 +10%
     },
     "oscillate": {
         "mean_reversion": 1.3,  # 均值回归 +30%（震荡市核心）
-        "reversal": 1.3,        # 反转因子 +30%
-        "trend": 0.8,           # 趋势因子 -20%
-        "momentum": 0.8,        # 动量因子 -20%
-        "volatility": 1.1,      # 波动率因子 +10%
-        "volume": 1.1,          # 成交量因子 +10%
+        "reversal": 1.3,  # 反转因子 +30%
+        "trend": 0.8,  # 趋势因子 -20%
+        "momentum": 0.8,  # 动量因子 -20%
+        "volatility": 1.1,  # 波动率因子 +10%
+        "volume": 1.1,  # 成交量因子 +10%
     },
     "high_vol": {
-        "volatility": 1.3,      # 波动率因子 +30%
+        "volatility": 1.3,  # 波动率因子 +30%
         "mean_reversion": 1.1,  # 均值回归 +10%
-        "trend": 0.7,           # 趋势因子 -30%
-        "momentum": 0.7,        # 动量因子 -30%
-        "breakout": 0.5,        # 突破因子 -50%（高波动假突破多）
-        "carry": 1.0,           # 跨期套利不变
+        "trend": 0.7,  # 趋势因子 -30%
+        "momentum": 0.7,  # 动量因子 -30%
+        "breakout": 0.5,  # 突破因子 -50%（高波动假突破多）
+        "carry": 1.0,  # 跨期套利不变
     },
     "low_vol": {
-        "trend": 1.2,           # 趋势因子 +20%
-        "momentum": 1.2,        # 动量因子 +20%
+        "trend": 1.2,  # 趋势因子 +20%
+        "momentum": 1.2,  # 动量因子 +20%
         "mean_reversion": 1.0,  # 均值回归不变
-        "volatility": 0.7,      # 波动率因子 -30%
-        "fundamental": 1.1,     # 基本面 +10%
+        "volatility": 0.7,  # 波动率因子 -30%
+        "fundamental": 1.1,  # 基本面 +10%
     },
 }
 
@@ -414,117 +420,117 @@ REGIME_FAMILY_MULTIPLIERS: dict[str, dict[str, float]] = {
 # 与 REGIME_FAMILY_MULTIPLIERS（family 维度）并行，未覆盖的 style 按 1.0 中性。
 REGIME_STYLE_MULTIPLIERS: dict[str, dict[str, float]] = {
     "bull": {
-        "momentum": 1.3,          # 趋势牛 → 动量 +30%
-        "cross_section": 1.1,     # 横截面 +10%
-        "carry": 1.1,             # Carry +10%
-        "quality": 1.1,           # 质量 +10%
-        "sentiment": 1.2,         # 情绪 +20%
-        "mean_reversion": 0.7,    # 均值回归 -30%
-        "value": 0.9,             # 价值 -10%
-        "volatility": 0.9,        # 波动率 -10%
-        "low_vol": 0.9,           # 低波 -10%
+        "momentum": 1.3,  # 趋势牛 → 动量 +30%
+        "cross_section": 1.1,  # 横截面 +10%
+        "carry": 1.1,  # Carry +10%
+        "quality": 1.1,  # 质量 +10%
+        "sentiment": 1.2,  # 情绪 +20%
+        "mean_reversion": 0.7,  # 均值回归 -30%
+        "value": 0.9,  # 价值 -10%
+        "volatility": 0.9,  # 波动率 -10%
+        "low_vol": 0.9,  # 低波 -10%
     },
     "bear": {
-        "volatility": 1.3,        # 下跌 → 波动率 +30%（防御）
-        "defensive": 1.3,         # 防御 +30%
-        "mean_reversion": 1.2,    # 均值回归 +20%（超跌反弹）
-        "value": 1.2,             # 价值 +20%
-        "low_vol": 1.1,           # 低波 +10%
-        "quality": 1.1,           # 质量 +10%
-        "momentum": 0.8,          # 动量 -20%（反转风险）
-        "sentiment": 0.8,         # 情绪 -20%
-        "high_beta": 0.6,         # 高 beta -40%
-        "cross_section": 0.9,     # 横截面 -10%
+        "volatility": 1.3,  # 下跌 → 波动率 +30%（防御）
+        "defensive": 1.3,  # 防御 +30%
+        "mean_reversion": 1.2,  # 均值回归 +20%（超跌反弹）
+        "value": 1.2,  # 价值 +20%
+        "low_vol": 1.1,  # 低波 +10%
+        "quality": 1.1,  # 质量 +10%
+        "momentum": 0.8,  # 动量 -20%（反转风险）
+        "sentiment": 0.8,  # 情绪 -20%
+        "high_beta": 0.6,  # 高 beta -40%
+        "cross_section": 0.9,  # 横截面 -10%
     },
     "oscillate": {
-        "mean_reversion": 1.3,    # 震荡 → 均值回归 +30%
-        "value": 1.2,             # 价值 +20%
-        "carry": 1.1,             # Carry +10%
-        "quality": 1.0,           # 质量中性
-        "momentum": 0.8,          # 动量 -20%
-        "high_beta": 0.7,         # 高 beta -30%
-        "volatility": 1.1,        # 波动率 +10%
-        "sentiment": 1.0,         # 情绪中性
+        "mean_reversion": 1.3,  # 震荡 → 均值回归 +30%
+        "value": 1.2,  # 价值 +20%
+        "carry": 1.1,  # Carry +10%
+        "quality": 1.0,  # 质量中性
+        "momentum": 0.8,  # 动量 -20%
+        "high_beta": 0.7,  # 高 beta -30%
+        "volatility": 1.1,  # 波动率 +10%
+        "sentiment": 1.0,  # 情绪中性
     },
     "high_vol": {
-        "volatility": 1.3,        # 高波 → 波动率 +30%
-        "low_vol": 1.2,           # 低波 +20%（避险）
-        "defensive": 1.3,         # 防御 +30%
-        "mean_reversion": 1.1,    # 均值回归 +10%
-        "momentum": 0.7,          # 动量 -30%
-        "high_beta": 0.5,         # 高 beta -50%（高波假突破多）
-        "sentiment": 0.8,         # 情绪 -20%
-        "cross_section": 0.8,     # 横截面 -20%
+        "volatility": 1.3,  # 高波 → 波动率 +30%
+        "low_vol": 1.2,  # 低波 +20%（避险）
+        "defensive": 1.3,  # 防御 +30%
+        "mean_reversion": 1.1,  # 均值回归 +10%
+        "momentum": 0.7,  # 动量 -30%
+        "high_beta": 0.5,  # 高 beta -50%（高波假突破多）
+        "sentiment": 0.8,  # 情绪 -20%
+        "cross_section": 0.8,  # 横截面 -20%
     },
     "low_vol": {
-        "momentum": 1.2,          # 低波 → 动量 +20%（趋势延续）
-        "carry": 1.1,             # Carry +10%
-        "quality": 1.1,           # 质量 +10%
-        "value": 1.1,             # 价值 +10%
-        "volatility": 0.7,        # 波动率 -30%
-        "high_beta": 1.2,         # 高 beta +20%（低波下风险偏好回升）
-        "mean_reversion": 1.0,    # 均值回归中性
+        "momentum": 1.2,  # 低波 → 动量 +20%（趋势延续）
+        "carry": 1.1,  # Carry +10%
+        "quality": 1.1,  # 质量 +10%
+        "value": 1.1,  # 价值 +10%
+        "volatility": 0.7,  # 波动率 -30%
+        "high_beta": 1.2,  # 高 beta +20%（低波下风险偏好回升）
+        "mean_reversion": 1.0,  # 均值回归中性
     },
     # ── 股票风格 regime（GAP-S03，v2.63.0，StockRegimeSelector 驱动）──
     # 大小盘风格：large_cap 质量/价值占优，small_cap 动量/情绪占优
     "large_cap": {
-        "quality": 1.2,           # 大盘 → 质量 +20%
-        "value": 1.1,             # 价值 +10%
-        "low_vol": 1.1,           # 低波 +10%
-        "defensive": 1.1,         # 防御 +10%
-        "momentum": 0.9,          # 动量 -10%（大盘趋势弱于小盘）
-        "sentiment": 0.9,         # 情绪 -10%
-        "high_beta": 0.8,         # 高 beta -20%
-        "cross_section": 0.9,     # 横截面 -10%
+        "quality": 1.2,  # 大盘 → 质量 +20%
+        "value": 1.1,  # 价值 +10%
+        "low_vol": 1.1,  # 低波 +10%
+        "defensive": 1.1,  # 防御 +10%
+        "momentum": 0.9,  # 动量 -10%（大盘趋势弱于小盘）
+        "sentiment": 0.9,  # 情绪 -10%
+        "high_beta": 0.8,  # 高 beta -20%
+        "cross_section": 0.9,  # 横截面 -10%
     },
     "small_cap": {
-        "momentum": 1.2,          # 小盘 → 动量 +20%
-        "sentiment": 1.2,         # 情绪 +20%
-        "cross_section": 1.1,     # 横截面 +10%
-        "high_beta": 1.1,         # 高 beta +10%
-        "quality": 0.9,           # 质量 -10%
-        "value": 0.9,             # 价值 -10%
-        "low_vol": 0.9,           # 低波 -10%
-        "defensive": 0.8,         # 防御 -20%
+        "momentum": 1.2,  # 小盘 → 动量 +20%
+        "sentiment": 1.2,  # 情绪 +20%
+        "cross_section": 1.1,  # 横截面 +10%
+        "high_beta": 1.1,  # 高 beta +10%
+        "quality": 0.9,  # 质量 -10%
+        "value": 0.9,  # 价值 -10%
+        "low_vol": 0.9,  # 低波 -10%
+        "defensive": 0.8,  # 防御 -20%
     },
     # 成长价值风格：growth 动量占优，value 价值/质量占优
     "growth": {
-        "momentum": 1.3,          # 成长 → 动量 +30%
-        "cross_section": 1.1,     # 横截面 +10%
-        "sentiment": 1.1,         # 情绪 +10%
-        "high_beta": 1.1,         # 高 beta +10%
-        "value": 0.8,             # 价值 -20%
-        "quality": 0.9,           # 质量 -10%
-        "low_vol": 0.8,           # 低波 -20%
-        "mean_reversion": 0.9,    # 均值回归 -10%
+        "momentum": 1.3,  # 成长 → 动量 +30%
+        "cross_section": 1.1,  # 横截面 +10%
+        "sentiment": 1.1,  # 情绪 +10%
+        "high_beta": 1.1,  # 高 beta +10%
+        "value": 0.8,  # 价值 -20%
+        "quality": 0.9,  # 质量 -10%
+        "low_vol": 0.8,  # 低波 -20%
+        "mean_reversion": 0.9,  # 均值回归 -10%
     },
     "value": {
-        "value": 1.3,             # 价值 → 价值 +30%
-        "quality": 1.2,           # 质量 +20%
-        "low_vol": 1.1,           # 低波 +10%
-        "defensive": 1.1,         # 防御 +10%
-        "momentum": 0.8,          # 动量 -20%
-        "high_beta": 0.7,         # 高 beta -30%
-        "sentiment": 0.8,         # 情绪 -20%
-        "mean_reversion": 1.1,    # 均值回归 +10%
+        "value": 1.3,  # 价值 → 价值 +30%
+        "quality": 1.2,  # 质量 +20%
+        "low_vol": 1.1,  # 低波 +10%
+        "defensive": 1.1,  # 防御 +10%
+        "momentum": 0.8,  # 动量 -20%
+        "high_beta": 0.7,  # 高 beta -30%
+        "sentiment": 0.8,  # 情绪 -20%
+        "mean_reversion": 1.1,  # 均值回归 +10%
     },
     # 行业轮动状态（StockRegimeSelector.detect_industry 输出）
     "sector_concentrated": {
-        "cross_section": 1.2,     # 主线集中 → 横截面 +20%（跟随主线）
-        "momentum": 1.2,          # 动量 +20%
-        "carry": 1.1,             # Carry +10%
-        "mean_reversion": 0.8,    # 均值回归 -20%
-        "value": 0.9,             # 价值 -10%
-        "quality": 0.9,           # 质量 -10%
+        "cross_section": 1.2,  # 主线集中 → 横截面 +20%（跟随主线）
+        "momentum": 1.2,  # 动量 +20%
+        "carry": 1.1,  # Carry +10%
+        "mean_reversion": 0.8,  # 均值回归 -20%
+        "value": 0.9,  # 价值 -10%
+        "quality": 0.9,  # 质量 -10%
     },
     "sector_rotating": {
-        "mean_reversion": 1.2,    # 行业轮动 → 均值回归 +20%
-        "cross_section": 1.0,     # 横截面中性
-        "momentum": 0.8,          # 动量 -20%（追涨易接盘）
-        "sentiment": 0.8,         # 情绪 -20%
-        "value": 1.1,             # 价值 +10%
-        "low_vol": 1.1,           # 低波 +10%
-        "defensive": 1.1,         # 防御 +10%
+        "mean_reversion": 1.2,  # 行业轮动 → 均值回归 +20%
+        "cross_section": 1.0,  # 横截面中性
+        "momentum": 0.8,  # 动量 -20%（追涨易接盘）
+        "sentiment": 0.8,  # 情绪 -20%
+        "value": 1.1,  # 价值 +10%
+        "low_vol": 1.1,  # 低波 +10%
+        "defensive": 1.1,  # 防御 +10%
     },
 }
 
@@ -591,11 +597,13 @@ def load_data_driven_multipliers(path: Optional[str] = None) -> dict[str, dict[s
         mult = doc.get("multipliers") or {}
         _DATA_DRIVEN_FAMILY_MULTIPLIERS = {
             regime: {fam: float(v) for fam, v in fam_map.items()}
-            for regime, fam_map in mult.items() if isinstance(fam_map, dict)
+            for regime, fam_map in mult.items()
+            if isinstance(fam_map, dict)
         }
         logger.info(
             "[L3-Regime] 数据驱动倍率表加载成功 [%s]: %d regimes",
-            p, len(_DATA_DRIVEN_FAMILY_MULTIPLIERS),
+            p,
+            len(_DATA_DRIVEN_FAMILY_MULTIPLIERS),
         )
         return _DATA_DRIVEN_FAMILY_MULTIPLIERS
     except Exception as e:  # noqa: BLE001
@@ -645,7 +653,8 @@ def regime_adaptive_weight_adjustment(
     # GAP-L308: 数据驱动倍率优先（由 RegimeMultiplierEstimator 加载），缺失回退硬编码表
     family_multipliers = (
         _DATA_DRIVEN_FAMILY_MULTIPLIERS.get(regime_name, {})
-        if _DATA_DRIVEN_FAMILY_MULTIPLIERS else REGIME_FAMILY_MULTIPLIERS.get(regime_name, {})
+        if _DATA_DRIVEN_FAMILY_MULTIPLIERS
+        else REGIME_FAMILY_MULTIPLIERS.get(regime_name, {})
     )
     style_multipliers = REGIME_STYLE_MULTIPLIERS.get(regime_name, {})
 
@@ -661,17 +670,13 @@ def regime_adaptive_weight_adjustment(
         if not fid:
             continue
         family = f.get("family", "")
-        factor_family_map[fid] = family or _infer_factor_family_from_name(
-            f.get("name", "")
-        )
+        factor_family_map[fid] = family or _infer_factor_family_from_name(f.get("name", ""))
         # style: 显式 style_tags 优先，其次名称推断
         style_tags = f.get("style_tags") or []
         if style_tags and isinstance(style_tags, list):
             factor_style_map[fid] = str(style_tags[0])
         else:
-            factor_style_map[fid] = _infer_factor_style_from_name(
-                f.get("name", "")
-            )
+            factor_style_map[fid] = _infer_factor_style_from_name(f.get("name", ""))
 
     # 应用倍率调整
     adjustment_log: list[str] = []
@@ -722,8 +727,7 @@ def regime_adaptive_weight_adjustment(
             "\n".join(adjustment_log),
         )
     else:
-        logger.info("[L3-Regime] 自适应权重调整完成 [regime=%s, dim=%s, 无需调整]",
-                    regime_name, dimension)
+        logger.info("[L3-Regime] 自适应权重调整完成 [regime=%s, dim=%s, 无需调整]", regime_name, dimension)
 
     return signals
 
@@ -779,6 +783,8 @@ def synthesize_signals(
     returns_matrix: Optional[pd.DataFrame] = None,
     optimizer_mode: str = "risk_parity",
     optimizer_config: Optional[dict[str, Any]] = None,
+    market: str = "stock",
+    weight_config: Optional[Any] = None,
 ) -> tuple[list[PortfolioSignal], float, float]:
     """信号合成。
 
@@ -793,6 +799,8 @@ def synthesize_signals(
         optimizer_config: PortfolioOptimizer 配置透传（OptimizerConfig 字段 dict，
             含 neutralization/exposure_tolerance，GAP-L304；可含 "exposure_matrix"/"target_exposure"/
             "capacity_limits"（GAP-L305））
+        market: 目标交易市场（elastic_net 权重学习面板自动匹配，v2.74.0）
+        weight_config: 机构级权重学习配置（WeightLearningConfig，None 用默认，v2.74.0）
 
     Returns:
         (signals, max_correlation, combo_turnover)
@@ -820,7 +828,7 @@ def synthesize_signals(
             f["sharpe"] = SHARPE_CAP
 
     if mode == "elastic_net" and elite_dir is not None:
-        elastic_weights = _compute_elastic_net_weights(factors, Path(elite_dir))
+        elastic_weights = _compute_elastic_net_weights(factors, Path(elite_dir), config=weight_config, market=market)
         if not elastic_weights:
             logger.warning("[L3] Elastic Net 权重计算失败，回退到 sharpe_weight")
             return synthesize_signals(factors, "sharpe_weight")
@@ -828,19 +836,22 @@ def synthesize_signals(
         signals: list[PortfolioSignal] = []
         for f in factors:
             w = elastic_weights.get(f["factor_id"], 0.0)
-            signals.append(PortfolioSignal(
-                factor_id=f["factor_id"],
-                name=f["name"],
-                weight=w,
-                sharpe=f.get("sharpe", 0.0),
-                ic=f.get("ic", 0.0),
-                turnover=f.get("turnover", 0.0),
-                decay_6m=f.get("decay_6m", 0.0),
-                orthogonalized=True,   # Elastic Net L1 已做变量选择
-                retained=w > 0.0,
-            ))
-        logger.info("[L3] Elastic Net 完成: %d/%d 因子获得非零权重",
-                    sum(1 for s in signals if s["retained"]), len(signals))
+            signals.append(
+                PortfolioSignal(
+                    factor_id=f["factor_id"],
+                    name=f["name"],
+                    weight=w,
+                    sharpe=f.get("sharpe", 0.0),
+                    ic=f.get("ic", 0.0),
+                    turnover=f.get("turnover", 0.0),
+                    decay_6m=f.get("decay_6m", 0.0),
+                    orthogonalized=True,  # Elastic Net L1 已做变量选择
+                    retained=w > 0.0,
+                )
+            )
+        logger.info(
+            "[L3] Elastic Net 完成: %d/%d 因子获得非零权重", sum(1 for s in signals if s["retained"]), len(signals)
+        )
     elif mode == "ml_ensemble" and elite_dir is not None:
         ml_weights = _compute_ml_ensemble_weights(factors, Path(elite_dir))
         if not ml_weights:
@@ -850,42 +861,44 @@ def synthesize_signals(
         signals = []
         for f in factors:
             w = ml_weights.get(f["factor_id"], 0.0)
-            signals.append(PortfolioSignal(
-                factor_id=f["factor_id"],
-                name=f["name"],
-                weight=w,
-                sharpe=f.get("sharpe", 0.0),
-                ic=f.get("ic", 0.0),
-                turnover=f.get("turnover", 0.0),
-                decay_6m=f.get("decay_6m", 0.0),
-                orthogonalized=True,   # ML 特征重要性已做变量选择
-                retained=w > 0.0,
-            ))
-        logger.info("[L3] ML Ensemble 完成: %d/%d 因子获得非零权重",
-                    sum(1 for s in signals if s["retained"]), len(signals))
+            signals.append(
+                PortfolioSignal(
+                    factor_id=f["factor_id"],
+                    name=f["name"],
+                    weight=w,
+                    sharpe=f.get("sharpe", 0.0),
+                    ic=f.get("ic", 0.0),
+                    turnover=f.get("turnover", 0.0),
+                    decay_6m=f.get("decay_6m", 0.0),
+                    orthogonalized=True,  # ML 特征重要性已做变量选择
+                    retained=w > 0.0,
+                )
+            )
+        logger.info(
+            "[L3] ML Ensemble 完成: %d/%d 因子获得非零权重", sum(1 for s in signals if s["retained"]), len(signals)
+        )
     elif mode == "equal_weight":
         w = 1.0 / n
         signals = []
         for f in factors:
-            signals.append(PortfolioSignal(
-                factor_id=f["factor_id"],
-                name=f["name"],
-                weight=w,
-                sharpe=f.get("sharpe", 0.0),
-                ic=f.get("ic", 0.0),
-                turnover=f.get("turnover", 0.0),
-                decay_6m=f.get("decay_6m", 0.0),
-                orthogonalized=False,
-                retained=True,
-            ))
+            signals.append(
+                PortfolioSignal(
+                    factor_id=f["factor_id"],
+                    name=f["name"],
+                    weight=w,
+                    sharpe=f.get("sharpe", 0.0),
+                    ic=f.get("ic", 0.0),
+                    turnover=f.get("turnover", 0.0),
+                    decay_6m=f.get("decay_6m", 0.0),
+                    orthogonalized=False,
+                    retained=True,
+                )
+            )
     elif mode == "sharpe_weight":
         # 使用截断前的原始 Sharpe 计算权重（_sharpe_raw 优先），
         # 保留截断后的 sharpe 字段用于 Verifier 校验和显示。
         # 避免所有因子因 Sharpe 上限截断而获得相同权重。
-        weight_sharpes = [
-            max(f.get("_sharpe_raw", f.get("sharpe", 0)), 0.01)
-            for f in factors
-        ]
+        weight_sharpes = [max(f.get("_sharpe_raw", f.get("sharpe", 0)), 0.01) for f in factors]
         total_sharpe = sum(weight_sharpes)
         signals = []
         for i, f in enumerate(factors):
@@ -910,16 +923,14 @@ def synthesize_signals(
         # [WEIGHT-LOG] 权重计算详情
         logger.info("[L3-WEIGHT] sharpe_weight 模式: total_sharpe=%.2f, n_factors=%d", total_sharpe, n)
         for idx, s in enumerate(sorted(signals, key=lambda x: -x["weight"])):
-            logger.info("[L3-WEIGHT]   [%d] %s | sharpe=%.2f | raw_weight=%.4f",
-                        idx + 1, s["name"], s["sharpe"], s["weight"])
+            logger.info(
+                "[L3-WEIGHT]   [%d] %s | sharpe=%.2f | raw_weight=%.4f", idx + 1, s["name"], s["sharpe"], s["weight"]
+            )
     elif mode == "adaptive":
         # 自适应模式（A.3 / v2.56.0）: 以 Sharpe 权重为基，
         # 后续由 Step 2.5 regime 双维度调整（family×style）+ RegimeSmoother 接管。
         # 回测路径 PortfolioConstructor(weight_method="adaptive") 语义与本分支一致。
-        weight_sharpes = [
-            max(f.get("_sharpe_raw", f.get("sharpe", 0)), 0.01)
-            for f in factors
-        ]
+        weight_sharpes = [max(f.get("_sharpe_raw", f.get("sharpe", 0)), 0.01) for f in factors]
         total_sharpe = sum(weight_sharpes)
         signals = []
         for i, f in enumerate(factors):
@@ -948,13 +959,13 @@ def synthesize_signals(
             return synthesize_signals(factors, "sharpe_weight")
 
         # 列对齐到 factors 顺序（GAP-L303）
-        rm = FactorReturnsBuilder.align_to_factors(
-            returns_matrix, [f["factor_id"] for f in factors]
-        )
+        rm = FactorReturnsBuilder.align_to_factors(returns_matrix, [f["factor_id"] for f in factors])
         if len(rm.columns) != n or len(rm) < 20:
             logger.warning(
                 "[L3] optimizer 模式矩阵不可对齐（因子 %d/%d, 观测 %d < 20），回退到 sharpe_weight",
-                len(rm.columns), n, len(rm),
+                len(rm.columns),
+                n,
+                len(rm),
             )
             return synthesize_signals(factors, "sharpe_weight")
 
@@ -993,34 +1004,42 @@ def synthesize_signals(
         signals = []
         for i, f in enumerate(factors):
             wi = float(weights[i])
-            signals.append(PortfolioSignal(
-                factor_id=f["factor_id"],
-                name=f["name"],
-                weight=wi,
-                sharpe=f.get("sharpe", 0.0),
-                ic=f.get("ic", 0.0),
-                turnover=f.get("turnover", 0.0),
-                decay_6m=f.get("decay_6m", 0.0),
-                orthogonalized=False,
-                retained=wi > 0.0,
-            ))
-        logger.info("[L3] PortfolioOptimizer(%s) 完成: %d/%d 因子获得非零权重",
-                    opt._config.mode, sum(1 for s in signals if s["retained"]), len(signals))
+            signals.append(
+                PortfolioSignal(
+                    factor_id=f["factor_id"],
+                    name=f["name"],
+                    weight=wi,
+                    sharpe=f.get("sharpe", 0.0),
+                    ic=f.get("ic", 0.0),
+                    turnover=f.get("turnover", 0.0),
+                    decay_6m=f.get("decay_6m", 0.0),
+                    orthogonalized=False,
+                    retained=wi > 0.0,
+                )
+            )
+        logger.info(
+            "[L3] PortfolioOptimizer(%s) 完成: %d/%d 因子获得非零权重",
+            opt._config.mode,
+            sum(1 for s in signals if s["retained"]),
+            len(signals),
+        )
     else:
         # lightgbm 等未实现模式暂回退等权
         signals = []
         for f in factors:
-            signals.append(PortfolioSignal(
-                factor_id=f["factor_id"],
-                name=f["name"],
-                weight=1.0 / n,
-                sharpe=f.get("sharpe", 0.0),
-                ic=f.get("ic", 0.0),
-                turnover=f.get("turnover", 0.0),
-                decay_6m=f.get("decay_6m", 0.0),
-                orthogonalized=False,
-                retained=True,
-            ))
+            signals.append(
+                PortfolioSignal(
+                    factor_id=f["factor_id"],
+                    name=f["name"],
+                    weight=1.0 / n,
+                    sharpe=f.get("sharpe", 0.0),
+                    ic=f.get("ic", 0.0),
+                    turnover=f.get("turnover", 0.0),
+                    decay_6m=f.get("decay_6m", 0.0),
+                    orthogonalized=False,
+                    retained=True,
+                )
+            )
 
     # 估算最大相关性和组合换手率
     max_corr = 0.0
@@ -1031,6 +1050,7 @@ def synthesize_signals(
 
 # ─── GAP-L309: 面板数据规模参数化配置 ──────────────────────
 
+
 @dataclass
 class PanelLoadingConfig:
     """组合层面板加载配置（GAP-L309，替代硬编码 days=120 / max_stocks=50）。
@@ -1038,10 +1058,11 @@ class PanelLoadingConfig:
     默认提升至全 CSI300 子集 × MIN_EVAL_DAYS（500 天），与因子级评价窗口对齐，
     提升截面回归统计功效；`max_stocks` 用于在数据规模过大时按流动性分层抽样。
     """
-    days: int = 500                 # 回溯交易日数（默认对齐 MIN_EVAL_DAYS=500）
-    max_stocks: int = 0             # 0 = 全量（默认）；>0 = 流动性分层抽样上限
-    liquidity_layers: int = 4       # 流动性分层数（抽样时）
-    min_common_dates: int = 20      # 最小共同交易日阈值（不足回退）
+
+    days: int = 500  # 回溯交易日数（默认对齐 MIN_EVAL_DAYS=500）
+    max_stocks: int = 0  # 0 = 全量（默认）；>0 = 流动性分层抽样上限
+    liquidity_layers: int = 4  # 流动性分层数（抽样时）
+    min_common_dates: int = 20  # 最小共同交易日阈值（不足回退）
 
 
 def _liquidity_stratified_sample(
@@ -1086,13 +1107,11 @@ def _liquidity_stratified_sample(
     ordered = sorted(symbols, key=lambda s: -liq[s])
     # 3. 均匀分桶
     per = max(1, math.ceil(len(ordered) / max(1, n_layers)))
-    buckets = [ordered[i:i + per] for i in range(0, len(ordered), per)]
+    buckets = [ordered[i : i + per] for i in range(0, len(ordered), per)]
     # 4. 桶间轮询抽取，直到达到 max_stocks（保证每层都有覆盖）
     picked: list[str] = []
     cursor = [0] * len(buckets)
-    while len(picked) < max_stocks and any(
-        cursor[b] < len(buckets[b]) for b in range(len(buckets))
-    ):
+    while len(picked) < max_stocks and any(cursor[b] < len(buckets[b]) for b in range(len(buckets))):
         for b in range(len(buckets)):
             if len(picked) >= max_stocks:
                 break
@@ -1122,7 +1141,10 @@ def _load_panel_with_liquidity_sampling(
         由调用方按 min_common_dates 阈值回退。
     """
     panel, common_dates = provider.get_csi300_panel(
-        days=config.days, max_stocks=0, fundamental=fundamental, trace_id=trace_id,
+        days=config.days,
+        max_stocks=0,
+        fundamental=fundamental,
+        trace_id=trace_id,
     )
     if not panel:
         logger.warning("[GAP-L309] 面板加载为空，回退")
@@ -1133,13 +1155,16 @@ def _load_panel_with_liquidity_sampling(
         panel = _liquidity_stratified_sample(panel, config.max_stocks, config.liquidity_layers)
         logger.info(
             "[GAP-L309] 流动性分层抽样: %d → %d 只（%d 层）",
-            n_loaded, len(panel), config.liquidity_layers,
+            n_loaded,
+            len(panel),
+            config.liquidity_layers,
         )
     # 覆盖日志 + 幸存者偏差提示（CSI300_SUBSET 为当前成分股快照，非 Point-in-time）
     logger.info(
-        "[GAP-L309] 面板覆盖: %d 只 × %d 交易日（days=%d）; "
-        "注意 CSI300_SUBSET 为当前成分快照，存在幸存者偏差",
-        len(panel), len(common_dates), config.days,
+        "[GAP-L309] 面板覆盖: %d 只 × %d 交易日（days=%d）; 注意 CSI300_SUBSET 为当前成分快照，存在幸存者偏差",
+        len(panel),
+        len(common_dates),
+        config.days,
     )
     return panel, common_dates
 
@@ -1151,14 +1176,19 @@ def _compute_elastic_net_weights(
     max_stocks: int = 0,
     l1_ratio: float = 0.5,
     cv_folds: int = 5,
+    config: Optional["WeightLearningConfig"] = None,
+    market: str = "stock",
 ) -> dict[str, float]:
-    """Elastic Net 截面回归确定因子权重。
+    """Elastic Net 截面回归确定因子权重（v2.74.0 机构级增强）。
 
     步骤:
-        1. 加载 CSI300 面板数据 + 基本面字段
+        1. 按目标交易市场自动匹配学习面板（futures→期货核心面板 / stock→CSI300）
         2. 对每个因子，逐股票执行因子代码获取信号序列
         3. 逐日截面回归: 因子信号[t] → 5 日前向收益
         4. 平均各日回归系数绝对值 → 归一化 → 权重
+        5. 风险调整: Ledoit-Wolf 收缩协方差 → 波动率缩放 / 风险平价
+        6. 滚动样本外验证: 权重稳定性 / OOS IC / 权重衰减
+        7. 跨市场迁移 IC 对比验证（学习面板 vs 对侧市场面板）
 
     Args:
         factors: 因子列表
@@ -1167,24 +1197,45 @@ def _compute_elastic_net_weights(
         max_stocks: 最大股票数（0 = 全量；>0 = 流动性分层抽样上限）
         l1_ratio: ElasticNet L1 比例（0=Ridge, 1=Lasso）
         cv_folds: 交叉验证折数
+        config: 机构级权重学习配置（None 用默认，panel_market="auto" 跟随 market）
+        market: 目标交易市场（决定学习面板，默认 stock）
 
     Returns:
         {factor_id: weight} 映射（权重和为 1.0）
     """
-    try:
-        from sklearn.linear_model import ElasticNetCV
-    except ImportError:
+    if importlib.util.find_spec("sklearn") is None:
         logger.warning("[L3] scikit-learn 未安装，无法使用 Elastic Net")
         return {}
 
     import numpy as np
     from ..data import FTSDataProvider
     from .factor_program import FactorExecutor
+    from .weight_learning import (
+        WeightLearningConfig,
+        _fit_elasticnet_coefs,
+        cross_market_ic_check,
+        resolve_panel_market,
+        risk_adjust_from_panel,
+        rolling_oos_validate,
+    )
 
-    # ── 1. 加载 CSI300 面板数据（GAP-L309: 参数化 + 流动性分层抽样）──
+    wl_config = config if config is not None else WeightLearningConfig()
+    panel_market = resolve_panel_market(wl_config.panel_market, market)
+
+    # ── 1. 加载学习面板（按目标交易市场自动匹配，v2.74.0）──
     provider = FTSDataProvider()
     cfg = PanelLoadingConfig(days=days, max_stocks=max_stocks)
-    panel, common_dates = _load_panel_with_liquidity_sampling(provider, cfg)
+    if panel_market == "futures":
+        from ..data_futures import get_dynamic_core_subset
+
+        panel, common_dates = provider.get_futures_panel(symbols=get_dynamic_core_subset(), days=days, trace_id="")
+        logger.info(
+            "[L3] 权重学习面板 [futures]: %d 品种 × %d 交易日（自动匹配目标市场）",
+            len(panel),
+            len(common_dates),
+        )
+    else:
+        panel, common_dates = _load_panel_with_liquidity_sampling(provider, cfg)
     if not panel or len(common_dates) < cfg.min_common_dates:
         logger.warning("[L3] 面板数据不足（需 ≥%d 个交易日），回退", cfg.min_common_dates)
         return {}
@@ -1249,45 +1300,15 @@ def _compute_elastic_net_weights(
                 forward_returns[t, i] = fwd[idx] if idx < len(fwd) else np.nan
 
     # ── 5. 逐日 Elastic Net 截面回归 ──
-    all_coefs = np.zeros((n_dates, n_factors))
-    valid_dates = 0
-
-    for t in range(n_dates):
-        X = signal_matrix[t]  # (n_stocks, n_factors)
-        y = forward_returns[t]  # (n_stocks,)
-
-        valid = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
-        n_valid = valid.sum()
-        if n_valid < 10:
-            continue
-
-        X_valid = X[valid]
-        y_valid = y[valid]
-
-        # 标准化
-        X_mean = X_valid.mean(axis=0)
-        X_std = X_valid.std(axis=0) + 1e-10
-        X_scaled = (X_valid - X_mean) / X_std
-
-        model = ElasticNetCV(
-            l1_ratio=[l1_ratio],
-            cv=min(cv_folds, n_valid),
-            max_iter=5000,
-            random_state=42,
-        )
-        model.fit(X_scaled, y_valid)
-        all_coefs[t] = model.coef_ / X_std  # 还原到原始尺度
-        valid_dates += 1
-
-    if valid_dates < 5:
-        logger.warning("[L3] 有效回归日不足（%d < 5），回退", valid_dates)
+    mean_coefs = _fit_elasticnet_coefs(signal_matrix, forward_returns, l1_ratio=l1_ratio, cv_folds=cv_folds)
+    if mean_coefs is None:
+        logger.warning("[L3] 有效回归日不足（<5），回退")
         return {}
 
-    logger.info("[L3] Elastic Net 完成: %d 个有效截面回归日", valid_dates)
+    logger.info("[L3] Elastic Net 完成: %d 个有效截面回归日", n_dates)
 
     # ── 6. 平均系数 → 取绝对值 → 归一化为权重 ──
-    mean_coefs = np.nanmean(all_coefs, axis=0)
-    mean_coefs = np.nan_to_num(mean_coefs, 0.0)
+    mean_coefs = np.nan_to_num(mean_coefs, nan=0.0)
 
     abs_coefs = np.abs(mean_coefs)
     total = abs_coefs.sum()
@@ -1295,8 +1316,45 @@ def _compute_elastic_net_weights(
         return {}
 
     weights = abs_coefs / total
-
     result = {valid_factors[j]["factor_id"]: float(weights[j]) for j in range(n_factors)}
+
+    # ── 6.5 风险调整权重（v2.74.0 机构级增强 ①）──
+    if wl_config.risk_adjust != "none":
+        adjusted, risk_meta = risk_adjust_from_panel(
+            result,
+            signal_matrix,
+            forward_returns,
+            list(common_dates),
+            [f["factor_id"] for f in valid_factors],
+            wl_config.risk_adjust,
+        )
+        if adjusted and risk_meta:
+            result = adjusted
+            logger.info("[L3-WEIGHT] 风险调整后权重分布: %s", {k: round(v, 4) for k, v in adjusted.items()})
+
+    # ── 6.6 滚动样本外验证（v2.74.0 机构级增强 ②）──
+    if wl_config.rolling_validation:
+        rolling_oos_validate(
+            signal_matrix,
+            forward_returns,
+            [f["factor_id"] for f in valid_factors],
+            wl_config,
+            l1_ratio=l1_ratio,
+            cv_folds=cv_folds,
+        )
+
+    # ── 6.7 跨市场迁移 IC 对比验证（v2.74.0 机构级增强 ③）──
+    if wl_config.cross_market_ic:
+        cross_market_ic_check(
+            provider,
+            factor_codes,
+            [f["factor_id"] for f in valid_factors],
+            signal_matrix,
+            forward_returns,
+            list(common_dates),
+            panel_market,
+        )
+
     n_nonzero = sum(1 for w in result.values() if w > 0.001)
     logger.info("[L3] Elastic Net 权重: %d 个因子获非零权重（共 %d 个）", n_nonzero, len(result))
     return result
@@ -1433,8 +1491,13 @@ def _compute_ml_ensemble_weights(
 
     weights = {k: v / total for k, v in abs_imp.items()}
     n_nonzero = sum(1 for w in weights.values() if w > 0.001)
-    logger.info("[L3] ML Ensemble(%s) 权重: %d 个因子获非零权重（共 %d 个），R²=%.4f",
-                model_kind, n_nonzero, len(weights), result.score)
+    logger.info(
+        "[L3] ML Ensemble(%s) 权重: %d 个因子获非零权重（共 %d 个），R²=%.4f",
+        model_kind,
+        n_nonzero,
+        len(weights),
+        result.score,
+    )
     return weights
 
 
@@ -1477,20 +1540,24 @@ def orthogonalize_factors(
                 for s in signals:
                     if s.get("factor_id") in (fid_a, fid_b):
                         flags = s.setdefault("correlation_flags", [])
-                        flags.append({
-                            "type": "l2_seed_correlation",
-                            "reason": f"L2 种子预检: 与 {fid_b if s.get('factor_id') == fid_a else fid_a} 相关 {max_abs:.3f}",
-                        })
+                        flags.append(
+                            {
+                                "type": "l2_seed_correlation",
+                                "reason": f"L2 种子预检: 与 {fid_b if s.get('factor_id') == fid_a else fid_a} 相关 {max_abs:.3f}",
+                            }
+                        )
 
     # ── 模式 0: 分层正交化（使用 FactorOptimizer — 标记模式）──
     if use_tiered and factors is not None and len(factors) >= 30:
         try:
             from .factor_optimizer import FactorOptimizer
-            logger.info("[L3] 触发分层正交化（标记模式）: 因子数=%d, 阈值=%.1f",
-                        len(factors), max_corr_threshold)
+
+            logger.info("[L3] 触发分层正交化（标记模式）: 因子数=%d, 阈值=%.1f", len(factors), max_corr_threshold)
             optimizer = FactorOptimizer()
             result_factors, summary = optimizer.tiered_orthogonalize(
-                factors, max_corr_threshold=max_corr_threshold, mode="remove",
+                factors,
+                max_corr_threshold=max_corr_threshold,
+                mode="remove",
                 l2_prior_correlations=l2_prior_correlations,
                 signal_matrix=signal_matrix,
             )
@@ -1501,7 +1568,7 @@ def orthogonalize_factors(
                 fid = rf.get("factor_id", "")
                 flags = rf.get("correlation_flags", [])
                 excluded = rf.get("exclude_from_portfolio", False)
-                
+
                 for s in signals:
                     if s.get("factor_id") == fid:
                         s["orthogonalized"] = True
@@ -1517,22 +1584,19 @@ def orthogonalize_factors(
             phase1_code_dup = [d for d in phase1_details if d["type"] == "code_duplicate"]
             phase1_family = [d for d in phase1_details if d["type"] == "family_prune"]
 
-            logger.info("[L3] Phase 1 标记完成: 标记 %d 个 (代码重复=%d, 家族标记=%d)",
-                        summary.get("phase1_marked", 0),
-                        len(phase1_code_dup), len(phase1_family))
+            logger.info(
+                "[L3] Phase 1 标记完成: 标记 %d 个 (代码重复=%d, 家族标记=%d)",
+                summary.get("phase1_marked", 0),
+                len(phase1_code_dup),
+                len(phase1_family),
+            )
 
             if phase1_code_dup:
-                dup_msg = "; ".join(
-                    f"{d['removed']} (因:{d['reason']})"
-                    for d in phase1_code_dup
-                )
+                dup_msg = "; ".join(f"{d['removed']} (因:{d['reason']})" for d in phase1_code_dup)
                 logger.info("[L3] Phase 1-代码重复标记: %s", dup_msg)
 
             if phase1_family:
-                fam_msg = "; ".join(
-                    f"{d['removed']} (因:{d['reason']})"
-                    for d in phase1_family
-                )
+                fam_msg = "; ".join(f"{d['removed']} (因:{d['reason']})" for d in phase1_family)
                 logger.info("[L3] Phase 1-家族标记: %s", fam_msg)
 
             # ── Phase 2 详细日志（含 L2 先验合并）──
@@ -1540,24 +1604,24 @@ def orthogonalize_factors(
             l2_prior_count = summary.get("l2_prior_count", 0)
             phase2_new = summary.get("phase2_new_count", 0)
             phase2_overlap = summary.get("phase2_overlap_count", 0)
-            
+
             logger.info(
-                "[L3] Phase 2 相关性标记完成: 标记 %d 个高相关因子 "
-                "(新增 %d 个, 与 L2 先验重叠 %d 个)",
+                "[L3] Phase 2 相关性标记完成: 标记 %d 个高相关因子 (新增 %d 个, 与 L2 先验重叠 %d 个)",
                 summary.get("phase2_marked", 0),
-                phase2_new, phase2_overlap,
+                phase2_new,
+                phase2_overlap,
             )
-            
+
             if l2_prior_count > 0:
-                logger.info("[L3] Phase 2 与 L2 先验合并: L2 先验标记 %d 个, "
-                            "Phase 2 新增 %d 个, 重叠 %d 个",
-                            l2_prior_count, phase2_new, phase2_overlap)
+                logger.info(
+                    "[L3] Phase 2 与 L2 先验合并: L2 先验标记 %d 个, Phase 2 新增 %d 个, 重叠 %d 个",
+                    l2_prior_count,
+                    phase2_new,
+                    phase2_overlap,
+                )
 
             if phase2_details:
-                corr_msg = "; ".join(
-                    f"{d['removed']} (因:{d['reason']})"
-                    for d in phase2_details
-                )
+                corr_msg = "; ".join(f"{d['removed']} (因:{d['reason']})" for d in phase2_details)
                 logger.info("[L3] Phase 2-高相关标记详情: %s", corr_msg)
 
             # ── L2 先验 × Phase 2 合并详情 ──
@@ -1569,7 +1633,8 @@ def orthogonalize_factors(
                     logger.info(
                         "[L3] 因子 %s 标记汇总: L2先验=%d, Phase2全量=%d",
                         s.get("name", s.get("factor_id", "?")),
-                        len(l2_flags), len(phase2_flags),
+                        len(l2_flags),
+                        len(phase2_flags),
                     )
                     for f in l2_flags:
                         logger.info("[L3]   L2: %s", f["reason"])
@@ -1587,7 +1652,8 @@ def orthogonalize_factors(
                 l2_prior_count,
                 summary.get("phase1_marked", 0),
                 summary.get("phase2_marked", 0),
-                phase2_new, phase2_overlap,
+                phase2_new,
+                phase2_overlap,
                 summary.get("elapsed_seconds", 0),
             )
             return signals
@@ -1610,6 +1676,10 @@ def orthogonalize_factors(
                 continue
             for neighbor in high_corr_pairs.get(fid, set()):
                 if neighbor not in removed and neighbor in factor_map:
+                    # 正交化闭环（GAP-I206 补充）：L2 已正交化入库的因子
+                    # 与参照因子的相关成分已在 L2 剥离，此处不再重复剔除。
+                    if factor_map[neighbor].get("orthogonalized"):
+                        continue
                     removed.add(neighbor)
 
         for s in signals:
@@ -1618,7 +1688,7 @@ def orthogonalize_factors(
                 s["retained"] = False
 
         return signals
-    
+
     # ── 模式 2: 基于代码哈希的去重（无相关性矩阵时的后备方案）──
     if factors is not None:
         # 构建 factor_id -> code_hash 映射
@@ -1628,7 +1698,7 @@ def orthogonalize_factors(
             code_hash = f.get("code_hash", "")
             if fid and code_hash:
                 factor_code_map[fid] = code_hash
-        
+
         # 按代码哈希分组，相同代码只保留夏普更高的
         hash_to_factors: dict[str, list[PortfolioSignal]] = {}
         for s in signals:
@@ -1636,29 +1706,30 @@ def orthogonalize_factors(
             code_hash = factor_code_map.get(fid, "")
             if code_hash:
                 hash_to_factors.setdefault(code_hash, []).append(s)
-        
-        removed: set[str] = set()
+
+        removed2: set[str] = set()
         for code_hash, group in hash_to_factors.items():
             if len(group) > 1:
                 # 按夏普排序，保留最高的
                 group_sorted = sorted(group, key=lambda x: x.get("sharpe", 0), reverse=True)
                 for s in group_sorted[1:]:
-                    removed.add(s["factor_id"])
-                    logger.info("[L3] 代码去重: 剔除 %s (与 %s 代码相同)", 
-                                s.get("name", "?"), group_sorted[0].get("name", "?"))
-        
+                    removed2.add(s["factor_id"])
+                    logger.info(
+                        "[L3] 代码去重: 剔除 %s (与 %s 代码相同)", s.get("name", "?"), group_sorted[0].get("name", "?")
+                    )
+
         for s in signals:
             s["orthogonalized"] = True
-            if s["factor_id"] in removed:
+            if s["factor_id"] in removed2:
                 s["retained"] = False
-        
-        if removed:
-            logger.info("[L3] 正交化完成: 基于代码去重剔除 %d 个因子", len(removed))
+
+        if removed2:
+            logger.info("[L3] 正交化完成: 基于代码去重剔除 %d 个因子", len(removed2))
         else:
             logger.info("[L3] 正交化完成: 无代码重复因子")
-        
+
         return signals
-    
+
     # ── 模式 3: 无任何去重依据，全部标记为已正交化 ──
     for s in signals:
         s["orthogonalized"] = True
@@ -1677,13 +1748,17 @@ def decay_test(
             s["retained"] = False
             removed.append((s["name"], decay))
     if removed:
-        logger.info("[L3-WEIGHT] 衰减检验移除 %d 个因子 (decay>%.2f): %s",
-                    len(removed), max_decay_rate,
-                    "; ".join(f"{n}(decay={d:.4f})" for n, d in removed))
+        logger.info(
+            "[L3-WEIGHT] 衰减检验移除 %d 个因子 (decay>%.2f): %s",
+            len(removed),
+            max_decay_rate,
+            "; ".join(f"{n}(decay={d:.4f})" for n, d in removed),
+        )
     return signals
 
 
 # ─── 组合构建 ─────────────────────────────────────────────
+
 
 def _apply_sticky_constraints(
     signals: list[PortfolioSignal],
@@ -1763,10 +1838,7 @@ def _validate_combo_sharpe(combo_sharpe: float) -> Optional[str]:
             f"超出行业合理范围（期货 CTA 1.0-2.5），强烈暗示过拟合或数据泄露"
         )
     if combo_sharpe > 2.5:
-        return (
-            f"Sharpe={combo_sharpe:.2f} > 2.5, "
-            f"偏高，建议检查因子独立性"
-        )
+        return f"Sharpe={combo_sharpe:.2f} > 2.5, 偏高，建议检查因子独立性"
     return None
 
 
@@ -1801,9 +1873,7 @@ def _run_sharpe_randomization_test(
     total_w = sum(s.get("weight", 0) for s in retained)
     if total_w <= 0:
         return True
-    actual_sharpe = sum(
-        s.get("weight", 0) * s.get("sharpe", 0) for s in retained
-    ) / total_w
+    actual_sharpe = sum(s.get("weight", 0) * s.get("sharpe", 0) for s in retained) / total_w
 
     # 夏普正常，跳过随机化测试
     if actual_sharpe <= 2.5:
@@ -1861,7 +1931,7 @@ def build_combo(
             updated_at=datetime.now().isoformat(),
             combo_id=f"cmb_{secrets.token_hex(4)}",
             trace_id=trace_id or generate_trace_id("l3"),
-            synthesis_mode=mode,
+            synthesis_mode=cast(Literal["equal_weight", "sharpe_weight", "lightgbm"], mode),
             signals=signals,
             combo_sharpe=0.0,
             net_combo_sharpe=None,
@@ -1892,12 +1962,21 @@ def build_combo(
     # [WEIGHT-LOG] 归一化后权重分布
     sorted_retained = sorted(retained, key=lambda x: -x["weight"])
     effective_n = 1.0 / sum((s["weight"] ** 2) for s in sorted_retained)
-    logger.info("[L3-WEIGHT] 最终权重分布: %d 因子, effective_n=%.2f, HHI=%.4f",
-                len(sorted_retained), effective_n,
-                sum(s["weight"] ** 2 for s in sorted_retained))
+    logger.info(
+        "[L3-WEIGHT] 最终权重分布: %d 因子, effective_n=%.2f, HHI=%.4f",
+        len(sorted_retained),
+        effective_n,
+        sum(s["weight"] ** 2 for s in sorted_retained),
+    )
     for idx, s in enumerate(sorted_retained):
-        logger.info("[L3-WEIGHT]   [%d] %s | weight=%.4f | sharpe=%.2f | ic=%.4f",
-                    idx + 1, s["name"], s["weight"], s["sharpe"], s.get("ic", 0))
+        logger.info(
+            "[L3-WEIGHT]   [%d] %s | weight=%.4f | sharpe=%.2f | ic=%.4f",
+            idx + 1,
+            s["name"],
+            s["weight"],
+            s["sharpe"],
+            s.get("ic", 0),
+        )
 
     n_ret = len(retained)
 
@@ -1911,15 +1990,11 @@ def build_combo(
             try:
                 fr = FactorReturnsBuilder.align_to_factors(factor_returns, retained_ids)
                 if len(fr) >= 20:
-                    w_arr = np.array(
-                        [s.get("weight", 0.0) for s in retained], dtype=float
-                    )
+                    w_arr = np.array([s.get("weight", 0.0) for s in retained], dtype=float)
                     if np.sum(w_arr) > 0:
                         w_arr = w_arr / float(np.sum(w_arr))
                     pf = FactorReturnsBuilder.portfolio_returns(fr, w_arr)
-                    combo_sharpe = FactorReturnsBuilder.annualized_sharpe(
-                        pf, annualize_factor
-                    )
+                    combo_sharpe = FactorReturnsBuilder.annualized_sharpe(pf, annualize_factor)
                     max_corr = FactorReturnsBuilder.max_abs_correlation(fr)
                     metrics_source = "measured"
             except Exception as e:
@@ -1939,17 +2014,11 @@ def build_combo(
         if n_ret > 1:
             total_w = sum(s.get("weight", 0) for s in retained)
             if total_w > 0:
-                weighted_concentration = sum(
-                    (s.get("weight", 0) / total_w) ** 2
-                    for s in retained
-                )
+                weighted_concentration = sum((s.get("weight", 0) / total_w) ** 2 for s in retained)
                 effective_n = 1.0 / weighted_concentration if weighted_concentration > 0 else float(n_ret)
                 diversity = min(1.0, effective_n / n_ret)
                 avg_sharpe = sum(s.get("sharpe", 0) for s in retained) / n_ret
-                max_corr = min(
-                    0.7,
-                    (1.0 - diversity) * 0.35 + avg_sharpe * 0.015
-                )
+                max_corr = min(0.7, (1.0 - diversity) * 0.35 + avg_sharpe * 0.015)
             else:
                 max_corr = 0.15
         else:
@@ -1961,10 +2030,7 @@ def build_combo(
     if sharpe_warning:
         logger.warning(f"[L3-SHARPE] {sharpe_warning}")
     if not sharpe_randomization_passed:
-        logger.warning(
-            "[L3-SHARPE] 随机化测试未通过: "
-            "打乱因子信号后仍能获得高夏普，夏普可能虚高"
-        )
+        logger.warning("[L3-SHARPE] 随机化测试未通过: 打乱因子信号后仍能获得高夏普，夏普可能虚高")
 
     # net 指标（GAP-L305）：扣除交易成本后的净夏普。
     # 复用 cost_model 的成本换算：cost_penalty = total_cost_bps/10000 × 12 / 0.15。
@@ -1983,8 +2049,12 @@ def build_combo(
             total_cost_bps = max(raw_cost, min_cost)
             cost_penalty = (total_cost_bps / 10000.0) * 12.0 / 0.15
             net_combo_sharpe = combo_sharpe - cost_penalty
-            logger.info("[L3-NET] net_combo_sharpe=%.3f (gross=%.3f, cost=%.1f bps/mo)",
-                        net_combo_sharpe, combo_sharpe, total_cost_bps)
+            logger.info(
+                "[L3-NET] net_combo_sharpe=%.3f (gross=%.3f, cost=%.1f bps/mo)",
+                net_combo_sharpe,
+                combo_sharpe,
+                total_cost_bps,
+            )
         except Exception as e:
             logger.warning("[L3-NET] net 指标计算失败（非致命）: %s", e)
 
@@ -1993,7 +2063,7 @@ def build_combo(
         updated_at=datetime.now().isoformat(),
         combo_id=f"cmb_{secrets.token_hex(4)}",
         trace_id=trace_id or generate_trace_id("l3"),
-        synthesis_mode=mode,
+        synthesis_mode=cast(Literal["equal_weight", "sharpe_weight", "lightgbm"], mode),
         signals=signals,
         combo_sharpe=combo_sharpe,
         net_combo_sharpe=net_combo_sharpe,
@@ -2009,6 +2079,7 @@ def build_combo(
 
 
 # ─── 组合漂移监控 ─────────────────────────────────────────
+
 
 class DriftMonitor:
     """L3 组合漂移监控 — 记录成员重合率 + 权重 L1 变化率。
@@ -2044,7 +2115,7 @@ class DriftMonitor:
         Returns:
             DriftMetrics 指标字典
         """
-        prev_members: dict[str, str] = {}   # factor_id -> name
+        prev_members: dict[str, str] = {}  # factor_id -> name
         prev_weights: dict[str, float] = {}
         if prev_combo:
             for s in prev_combo.get("signals", []):
@@ -2123,13 +2194,16 @@ class DriftMonitor:
 
         records.append(metrics)
         fp.write_text(
-            json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8",
+            json.dumps(records, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
         logger.info(
             "[L3] 漂移记录已写入 %s: 重合率=%.4f L1变化=%.4f (prev=%d→new=%d)",
-            fp.name, metrics.get("member_overlap_rate", 0),
+            fp.name,
+            metrics.get("member_overlap_rate", 0),
             metrics.get("weight_l1_change", 0),
-            metrics.get("n_prev_members", 0), metrics.get("n_new_members", 0),
+            metrics.get("n_prev_members", 0),
+            metrics.get("n_new_members", 0),
         )
         return fp
 
@@ -2185,22 +2259,23 @@ class DriftMonitor:
                 reasons.append(f"成员重合率 {overlap_rate:.2%} < {o_th:.0%}")
             if weight_alert:
                 reasons.append(f"权重变化率 {weight_l1:.2%} > {w_th:.0%}")
-            alert_msg = (
-                f"[L3] 组合漂移告警 (trace={trace_id or '?'}): "
-                f"{'; '.join(reasons)}"
-            )
+            alert_msg = f"[L3] 组合漂移告警 (trace={trace_id or '?'}): {'; '.join(reasons)}"
             logger.warning(alert_msg)
             # 写入 Prometheus 兼容日志（可被监控采集解析）
             logger.info(
                 "METRIC drift_alert{overlap=%.2f,weight=%.2f,o_th=%.2f,w_th=%.2f} 1",
-                overlap_rate, weight_l1, o_th, w_th,
+                overlap_rate,
+                weight_l1,
+                o_th,
+                w_th,
             )
         else:
             logger.info(
-                "[L3] 组合漂移正常: 重合率=%.2f%% (>=%.0f%%), "
-                "权重变化率=%.2f%% (<=%.0f%%)",
-                overlap_rate * 100, o_th * 100,
-                weight_l1 * 100, w_th * 100,
+                "[L3] 组合漂移正常: 重合率=%.2f%% (>=%.0f%%), 权重变化率=%.2f%% (<=%.0f%%)",
+                overlap_rate * 100,
+                o_th * 100,
+                weight_l1 * 100,
+                w_th * 100,
             )
 
         return {
@@ -2236,6 +2311,7 @@ class DriftMonitor:
 
 # ─── Agent 优化建议生成 ──────────────────────────────────
 
+
 def generate_agent_proposals(
     combo: PortfolioCombo,
     trace_id: Optional[str] = None,
@@ -2254,21 +2330,23 @@ def generate_agent_proposals(
         for s in sorted(retained, key=lambda x: x.get("weight", 0), reverse=True)[:5]
     ]
 
-    proposals.append(AgentOptimizationProposal(
-        proposal_id=f"prop_{secrets.token_hex(4)}",
-        trace_id=tid,
-        created_at=datetime.now().isoformat(),
-        agent_name="闫判官",
-        current_prompt_summary="基于扫描信号+辩论数据的裁决",
-        suggested_changes=(
-            f"考虑增加以下因子的权重分配：{'；'.join(weighted_signals)}。"
-            f"组合夏普{combo.get('combo_sharpe', 0):.2f}，换手率{combo.get('combo_turnover', 0):.2f}。"
-        ),
-        debate_round_ref=None,
-        rationale=f"L3 组合构建输出（{combo.get('synthesis_mode', 'equal_weight')}模式），{len(retained)}个保留因子。",
-        priority="medium",
-        status="draft",
-    ))
+    proposals.append(
+        AgentOptimizationProposal(
+            proposal_id=f"prop_{secrets.token_hex(4)}",
+            trace_id=tid,
+            created_at=datetime.now().isoformat(),
+            agent_name="闫判官",
+            current_prompt_summary="基于扫描信号+辩论数据的裁决",
+            suggested_changes=(
+                f"考虑增加以下因子的权重分配：{'；'.join(weighted_signals)}。"
+                f"组合夏普{combo.get('combo_sharpe', 0):.2f}，换手率{combo.get('combo_turnover', 0):.2f}。"
+            ),
+            debate_round_ref=None,
+            rationale=f"L3 组合构建输出（{combo.get('synthesis_mode', 'equal_weight')}模式），{len(retained)}个保留因子。",
+            priority="medium",
+            status="draft",
+        )
+    )
 
     return proposals
 
@@ -2277,7 +2355,7 @@ def generate_agent_proposals(
 
 # ── 运行时质量门槛（与 DEFAULT_VERIFIER_CONFIG 对齐） ──
 
-_RUNTIME_MIN_IC = DEFAULT_VERIFIER_CONFIG["min_ic"]       # 0.03
+_RUNTIME_MIN_IC = DEFAULT_VERIFIER_CONFIG["min_ic"]  # 0.03
 _RUNTIME_MIN_SHARPE = DEFAULT_VERIFIER_CONFIG["min_sharpe"]  # 1.5
 
 
@@ -2316,18 +2394,23 @@ def _filter_by_quality_gate(factors: list[dict[str, Any]], source: str) -> list[
     if failed:
         logger.warning(
             "[L3] 质量门槛过滤 [%s]: 剔除 %d 个低质量因子 (IC<%.2f 或 Sharpe<%.1f):\n  %s",
-            source, len(failed), _RUNTIME_MIN_IC, _RUNTIME_MIN_SHARPE,
+            source,
+            len(failed),
+            _RUNTIME_MIN_IC,
+            _RUNTIME_MIN_SHARPE,
             "\n  ".join(failed[:10]) + ("\n  ..." if len(failed) > 10 else ""),
         )
 
     logger.info(
         "[L3] 质量门槛通过 [%s]: %d/%d 因子 [min_ic=%.2f, min_sharpe=%.1f]",
-        source, len(passed), len(factors), _RUNTIME_MIN_IC, _RUNTIME_MIN_SHARPE,
+        source,
+        len(passed),
+        len(factors),
+        _RUNTIME_MIN_IC,
+        _RUNTIME_MIN_SHARPE,
     )
     return passed
 
-
-import re
 
 _GEN_SUFFIX_RE = re.compile(r"_g\d+$")
 
@@ -2383,8 +2466,8 @@ def _compute_signal_correlations(
                 signals[fid] = sig
             else:
                 errors.append(f"{fid}: 信号为空或全 NaN")
-        except (FactorCompileError, Exception) as e:
-            errors.append(f"{fid}: {type(e).__name__}: {str(e)[:80]}")
+        except (FactorCompileError, Exception) as exc:
+            errors.append(f"{fid}: {type(exc).__name__}: {str(exc)[:80]}")
 
     if errors:
         for e in errors[:5]:
@@ -2499,9 +2582,7 @@ def _deduplicate_by_base_name(
             best = max(group, key=lambda x: abs(x.get("ic", 0)))
             result.append(best)
             all_names = [f.get("name", "?") for f in group]
-            merges.append(
-                f"{base}: [{', '.join(all_names)}] → {best.get('name')} (IC={best.get('ic', 0):.4f})"
-            )
+            merges.append(f"{base}: [{', '.join(all_names)}] → {best.get('name')} (IC={best.get('ic', 0):.4f})")
         else:
             # 相关性模式：先计算相关性，再贪心选择
             corr = _compute_signal_correlations(group, panel_data)
@@ -2512,8 +2593,7 @@ def _deduplicate_by_base_name(
                 result.append(best)
                 all_names = [f.get("name", "?") for f in group]
                 merges.append(
-                    f"{base}: [{', '.join(all_names)}] → {best.get('name')} "
-                    f"(IC={best.get('ic', 0):.4f}, 无代码回退)"
+                    f"{base}: [{', '.join(all_names)}] → {best.get('name')} (IC={best.get('ic', 0):.4f}, 无代码回退)"
                 )
                 continue
 
@@ -2524,27 +2604,23 @@ def _deduplicate_by_base_name(
             removed_factors = [f for f in group if f not in selected]
             rem_info = []
             for f in removed_factors:
-                rem_info.append(
-                    f"{f.get('name')}(IC={f.get('ic', 0):.4f}, "
-                    f"reason={f.get('_removed_reason', '?')})"
-                )
+                rem_info.append(f"{f.get('name')}(IC={f.get('ic', 0):.4f}, reason={f.get('_removed_reason', '?')})")
 
             if len(sel_names) < len(group):
-                selections.append(
-                    f"{base}: 保留 [{', '.join(sel_names)}] "
-                    f"合并 [{', '.join(rem_info)}]"
-                )
+                selections.append(f"{base}: 保留 [{', '.join(sel_names)}] 合并 [{', '.join(rem_info)}]")
             else:
-                selections.append(
-                    f"{base}: 全部保留 [{', '.join(sel_names)}] (互相关<{corr_threshold})"
-                )
+                selections.append(f"{base}: 全部保留 [{', '.join(sel_names)}] (互相关<{corr_threshold})")
 
     mode = "相关性模式" if use_corr else "IC-only 模式"
     removed_count = len(factors) - len(result)
     logger.info(
-        "[L3] 基础因子名去重 [%s] (%s, threshold=%.2f): %d → %d 因子 "
-        "(移除 %d 个冗余世代)",
-        source, mode, corr_threshold, len(factors), len(result), removed_count,
+        "[L3] 基础因子名去重 [%s] (%s, threshold=%.2f): %d → %d 因子 (移除 %d 个冗余世代)",
+        source,
+        mode,
+        corr_threshold,
+        len(factors),
+        len(result),
+        removed_count,
     )
     if merges:
         for m in merges[:10]:
@@ -2607,12 +2683,15 @@ def _filter_shadow_pending(factors: list[dict[str, Any]], source: str) -> list[d
         names = [f.get("name", f.get("factor_id", "?")) for f in pending]
         logger.info(
             "[L3] 影子池过滤 [%s]: %d 个因子仍在观察期，暂不进组合: %s",
-            source, len(pending), ", ".join(names[:10]) + ("..." if len(names) > 10 else ""),
+            source,
+            len(pending),
+            ", ".join(names[:10]) + ("..." if len(names) > 10 else ""),
         )
     return [f for f in factors if not _is_shadow_pending(f)]
 
 
 # ─── 纯外推验证 ──────────────────────────────────────────
+
 
 def _validate_oos_extrapolation(
     factor: dict[str, Any],
@@ -2635,6 +2714,7 @@ def _validate_oos_extrapolation(
         更新后的 factor（含 oos_extrapolation 字段）
     """
     from datetime import datetime as _dt
+
     promoted_at = factor.get("promoted_at")
     if not promoted_at:
         return factor  # 旧因子无 promoted_at，跳过验证
@@ -2661,6 +2741,7 @@ def _validate_oos_extrapolation(
 
     try:
         from .factor_program import FactorExecutor
+
         executor = FactorExecutor(factor)
 
         # 收集所有新数据（晋升后的数据）
@@ -2686,17 +2767,18 @@ def _validate_oos_extrapolation(
         if isinstance(signal, pd.Series) and len(signal) > 10:
             # 使用 close 收益率作为代理
             if "close" in combined.columns:
-                returns = combined["close"].pct_change().shift(-1).values[:len(signal)]
+                returns = combined["close"].pct_change().shift(-1).values[: len(signal)]
             elif "close_" in combined.columns:
-                returns = combined["close_"].pct_change().shift(-1).values[:len(signal)]
+                returns = combined["close_"].pct_change().shift(-1).values[: len(signal)]
             else:
                 return factor
 
             from scipy import stats as _sp_stats
-            valid = ~(np.isnan(signal.values[:len(returns)]) | np.isnan(returns))
+
+            valid = ~(np.isnan(signal.values[: len(returns)]) | np.isnan(returns))
             if valid.sum() > 10:
                 new_ic, _ = _sp_stats.spearmanr(
-                    signal.values[:len(returns)][valid],
+                    signal.values[: len(returns)][valid],
                     returns[valid],
                 )
                 if not np.isnan(new_ic):
@@ -2706,12 +2788,14 @@ def _validate_oos_extrapolation(
 
                     # 记录衰减次数
                     oos_history = factor.get("_oos_history", [])
-                    oos_history.append({
-                        "checked_at": combo_updated_at,
-                        "new_ic": float(new_ic),
-                        "original_ic": float(original_ic),
-                        "ic_decay": float(ic_decay),
-                    })
+                    oos_history.append(
+                        {
+                            "checked_at": combo_updated_at,
+                            "new_ic": float(new_ic),
+                            "original_ic": float(original_ic),
+                            "ic_decay": float(ic_decay),
+                        }
+                    )
                     # 最多保留最近 10 次记录
                     oos_history = oos_history[-10:]
 
@@ -2734,7 +2818,8 @@ def _validate_oos_extrapolation(
                     if needs_demotion:
                         logger.warning(
                             "[L3-OOS] 因子 %s 连续 %d 次 IC 衰减 > %.0f%%, 建议降级",
-                            factor.get("name", "?"), consecutive_decay,
+                            factor.get("name", "?"),
+                            consecutive_decay,
                             decay_threshold * 100,
                         )
     except Exception as e:
@@ -2786,18 +2871,18 @@ def load_elite_factors(
         }
     """
     import hashlib
-    
+
     # ── 路径 1: 从 DuckDB 加载（优先） ──
     if use_duckdb:
         try:
             logger.info("[L3] DuckDB 查询: market=%s, status=active, is_elite=True", market)
             from .factor_db import FactorRepository
+
             repo = FactorRepository()
             try:
                 # 先统计总数
                 total_count = repo._execute(
-                    "SELECT count(*) FROM factor_catalog WHERE market=? AND status='active' AND is_elite=true",
-                    [market]
+                    "SELECT count(*) FROM factor_catalog WHERE market=? AND status='active' AND is_elite=true", [market]
                 ).fetchone()[0]
                 logger.info("[L3] DuckDB 匹配因子总数: %d [market=%s]", total_count, market)
 
@@ -2824,48 +2909,60 @@ def load_elite_factors(
                         style_tags = f.get("style_tags") or []
                         if not style_tags:
                             style_tags = [_infer_factor_style_from_name(f.get("name", ""))]
-                        factors.append({
-                            "factor_id": f.get("factor_id"),
-                            "name": f.get("name"),
-                            "sharpe": f.get("sharpe", 0.5),
-                            "ic": f.get("ic", 0.02),
-                            "turnover": f.get("turnover_monthly", 0.3),
-                            "decay_6m": f.get("decay_6m", 0.05),
-                            "code": code,
-                            "params": f.get("params", {}) or {},
-                            "economic_logic": f.get("economic_logic", {}) or {},
-                            "code_hash": code_hash,
-                            "correlation_metadata": corr_meta,
-                            "source_file": f.get("factor_id"),
-                            "market": f.get("market", market),
-                            "shadow_pool": metadata.get("shadow_pool"),
-                            "style_tags": style_tags,
-                            "family": f.get("family") or "other",
-                        })
+                        factors.append(
+                            {
+                                "factor_id": f.get("factor_id"),
+                                "name": f.get("name"),
+                                "sharpe": f.get("sharpe", 0.5),
+                                "ic": f.get("ic", 0.02),
+                                "turnover": f.get("turnover_monthly", 0.3),
+                                "decay_6m": f.get("decay_6m", 0.05),
+                                "code": code,
+                                "params": f.get("params", {}) or {},
+                                "economic_logic": f.get("economic_logic", {}) or {},
+                                "code_hash": code_hash,
+                                "correlation_metadata": corr_meta,
+                                "source_file": f.get("factor_id"),
+                                "market": f.get("market", market),
+                                "shadow_pool": metadata.get("shadow_pool"),
+                                "style_tags": style_tags,
+                                "family": f.get("family") or "other",
+                                # 正交化闭环（GAP-I206 补充，v2.71.0/v2.72.0 基底）
+                                "orthogonalized": metadata.get("orthogonalized", False),
+                                "orthogonalized_against": metadata.get("orthogonalized_against", ""),
+                                "orthogonalized_pearson": metadata.get("orthogonalized_pearson", 0.0),
+                                "orthogonalized_basis": metadata.get("orthogonalized_basis", []),
+                                "orthogonal_signal": metadata.get("orthogonal_signal", []),
+                            }
+                        )
                     logger.info("[L3] ✅ 从 DuckDB 加载 %d 个 elite 因子 [market=%s]", len(factors), market)
                     passed = _filter_by_quality_gate(factors, "DuckDB")
                     passed = _filter_shadow_pending(passed, "DuckDB")
                     try:
-                        result = _deduplicate_by_base_name(passed, "DuckDB", panel_data=panel_data, corr_threshold=corr_threshold)
+                        result = _deduplicate_by_base_name(
+                            passed, "DuckDB", panel_data=panel_data, corr_threshold=corr_threshold
+                        )
                         return result
                     except Exception as dedup_err:
                         logger.warning("[L3] DuckDB 相关性去重失败: %s，回退到 IC-only", dedup_err)
                         import traceback
+
                         logger.exception("[L3] 去重异常堆栈:")
                         # 回退: 不使用 panel_data
-                        return _deduplicate_by_base_name(passed, "DuckDB", panel_data=None, corr_threshold=corr_threshold)
+                        return _deduplicate_by_base_name(
+                            passed, "DuckDB", panel_data=None, corr_threshold=corr_threshold
+                        )
                 else:
                     logger.warning("[L3] ⚠️ DuckDB 查询返回 0 行 [market=%s]，回退到 JSON 加载", market)
                     # 额外诊断：检查该市场的所有因子（不限 is_elite）
                     all_count = repo._execute(
-                        "SELECT count(*) FROM factor_catalog WHERE market=?",
-                        [market]
+                        "SELECT count(*) FROM factor_catalog WHERE market=?", [market]
                     ).fetchone()[0]
                     logger.info("[L3] 诊断: market=%s 全部因子数=%d", market, all_count)
                     if all_count > 0:
                         sample = repo._execute(
                             "SELECT factor_id, name, market, is_elite, status FROM factor_catalog WHERE market=? LIMIT 3",
-                            [market]
+                            [market],
                         ).fetchall()
                         logger.info("[L3] 诊断样例: %s", sample)
             finally:
@@ -2873,19 +2970,25 @@ def load_elite_factors(
         except Exception as e:
             logger.warning("[L3] DuckDB 加载失败: %s，回退到 JSON 加载", e)
             import traceback
+
             logger.debug("[L3] DuckDB 错误详情:\n%s", traceback.format_exc())
 
     # ── 路径 2: 从 JSON 文件加载（兜底） ──
     elite_path = Path(elite_dir)
-    factors: list[dict[str, Any]] = []
+    factors = []
     if not elite_path.exists():
         logger.warning("[L3] JSON 兜底路径不存在: %s", elite_path)
         return factors
-    
+
     json_files = sorted(elite_path.glob("*.json"))
     valid_files = [f for f in json_files if not f.name.startswith("_")]
-    logger.info("[L3] JSON 兜底: 扫描 %d 个文件 (有效=%d) [路径=%s, market=%s]",
-                len(json_files), len(valid_files), elite_path, market)
+    logger.info(
+        "[L3] JSON 兜底: 扫描 %d 个文件 (有效=%d) [路径=%s, market=%s]",
+        len(json_files),
+        len(valid_files),
+        elite_path,
+        market,
+    )
 
     skipped_market = 0
     parse_errors = 0
@@ -2896,7 +2999,7 @@ def load_elite_factors(
             code = data.get("code", "")
             code_hash = hashlib.sha256(code.encode()).hexdigest() if code else ""
             corr_meta = data.get("correlation_metadata", {})
-            
+
             # 兼容新旧格式：优先使用 evaluation.level_1_backtest，缺失时回退到顶层字段
             sharpe = bt.get("sharpe")
             if sharpe is None:
@@ -2907,7 +3010,7 @@ def load_elite_factors(
             turnover = bt.get("turnover_monthly")
             if turnover is None:
                 turnover = data.get("turnover", 0.3)
-            
+
             # 根据 market 过滤 JSON 因子
             factor_market = data.get("market", "stock")
             if factor_market != market:
@@ -2919,30 +3022,37 @@ def load_elite_factors(
             if not style_tags:
                 style_tags = [_infer_factor_style_from_name(data.get("name", fp.stem))]
 
-            factors.append({
-                "factor_id": data.get("factor_id", fp.stem),
-                "name": data.get("name", fp.stem),
-                "sharpe": sharpe,
-                "ic": ic,
-                "turnover": turnover,
-                "decay_6m": data.get("decay_6m", 0.05),
-                "code": code,
-                "params": data.get("params", {}) or {},
-                "economic_logic": data.get("economic_logic", {}) or {},
-                "code_hash": code_hash,
-                "correlation_metadata": corr_meta,
-                "source_file": fp.name,
-                "market": factor_market,
-                "shadow_pool": data.get("shadow_pool"),
-                "style_tags": style_tags,
-                "family": data.get("family") or "other",
-            })
+            factors.append(
+                {
+                    "factor_id": data.get("factor_id", fp.stem),
+                    "name": data.get("name", fp.stem),
+                    "sharpe": sharpe,
+                    "ic": ic,
+                    "turnover": turnover,
+                    "decay_6m": data.get("decay_6m", 0.05),
+                    "code": code,
+                    "params": data.get("params", {}) or {},
+                    "economic_logic": data.get("economic_logic", {}) or {},
+                    "code_hash": code_hash,
+                    "correlation_metadata": corr_meta,
+                    "source_file": fp.name,
+                    "market": factor_market,
+                    "shadow_pool": data.get("shadow_pool"),
+                    "style_tags": style_tags,
+                    "family": data.get("family") or "other",
+                }
+            )
         except (json.JSONDecodeError, TypeError) as e:
             parse_errors += 1
             logger.debug("[L3] JSON 解析错误: %s - %s", fp.name, e)
             continue
-    logger.info("[L3] 从 JSON 文件加载 %d 个 elite 因子 [market=%s] (跳过市场不匹配=%d, 解析错误=%d)",
-                len(factors), market, skipped_market, parse_errors)
+    logger.info(
+        "[L3] 从 JSON 文件加载 %d 个 elite 因子 [market=%s] (跳过市场不匹配=%d, 解析错误=%d)",
+        len(factors),
+        market,
+        skipped_market,
+        parse_errors,
+    )
     passed = _filter_by_quality_gate(factors, "JSON")
     passed = _filter_shadow_pending(passed, "JSON")
     return _deduplicate_by_base_name(passed, "JSON", panel_data=panel_data, corr_threshold=corr_threshold)
@@ -2960,14 +3070,16 @@ def load_l2_correlation_index(elite_dir: str | Path) -> list[dict[str, Any]]:
     if not index_path.exists():
         logger.info("[L3] 未找到 L2 相关性索引文件，跳过先验加载")
         return []
-    
+
     try:
         data = json.loads(index_path.read_text(encoding="utf-8"))
         correlations = data.get("correlations", [])
-        logger.info("[L3] 加载 L2 相关性索引: %d 对高相关因子 (source=%s, created_at=%s)",
-                    len(correlations),
-                    data.get("source", "?"),
-                    data.get("created_at", "?"))
+        logger.info(
+            "[L3] 加载 L2 相关性索引: %d 对高相关因子 (source=%s, created_at=%s)",
+            len(correlations),
+            data.get("source", "?"),
+            data.get("created_at", "?"),
+        )
         return correlations
     except (json.JSONDecodeError, TypeError):
         logger.warning("[L3] L2 相关性索引文件损坏，跳过加载")
@@ -2975,6 +3087,7 @@ def load_l2_correlation_index(elite_dir: str | Path) -> list[dict[str, Any]]:
 
 
 # ─── 注入 FDT ────────────────────────────────────────────
+
 
 def inject_to_fdt(
     combo: PortfolioCombo,
@@ -2999,7 +3112,8 @@ def inject_to_fdt(
     # 写入组合配置
     combo_fp = out / COMBO_FILE_NAME
     combo_fp.write_text(
-        json.dumps(combo, ensure_ascii=False, indent=2), encoding="utf-8",
+        json.dumps(combo, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     paths["combo"] = str(combo_fp.resolve())
 
@@ -3010,14 +3124,19 @@ def inject_to_fdt(
             weights[s["name"]] = s["weight"]
     weights_fp = out / "factor_weights.json"
     weights_fp.write_text(
-        json.dumps({
-            "version": EVOLUTION_VERSION,
-            "updated_at": combo.get("updated_at", datetime.now().isoformat()),
-            "synthesis_mode": combo.get("synthesis_mode", "equal_weight"),
-            "weights": weights,
-            "combo_sharpe": combo.get("combo_sharpe", 0),
-            "n_factors": combo.get("n_factors", 0),
-        }, ensure_ascii=False, indent=2), encoding="utf-8",
+        json.dumps(
+            {
+                "version": EVOLUTION_VERSION,
+                "updated_at": combo.get("updated_at", datetime.now().isoformat()),
+                "synthesis_mode": combo.get("synthesis_mode", "equal_weight"),
+                "weights": weights,
+                "combo_sharpe": combo.get("combo_sharpe", 0),
+                "n_factors": combo.get("n_factors", 0),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
     )
     paths["weights"] = str(weights_fp.resolve())
 
@@ -3027,7 +3146,8 @@ def inject_to_fdt(
     for p in proposals:
         pp = props_dir / f"{p['proposal_id']}.json"
         pp.write_text(
-            json.dumps(p, ensure_ascii=False, indent=2), encoding="utf-8",
+            json.dumps(p, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
     paths["proposals_dir"] = str(props_dir.resolve())
 
@@ -3036,9 +3156,11 @@ def inject_to_fdt(
 
 # ─── 主循环 ──────────────────────────────────────────────
 
+
 @dataclass
 class PortfolioRunResult:
     """L3 运行结果。"""
+
     run_id: str
     trace_id: str
     n_factors_input: int
@@ -3096,6 +3218,7 @@ class PortfolioLoop:
         optimizer_mode: str = "risk_parity",
         optimizer_config: Optional[dict[str, Any]] = None,
         cost_config: Optional[dict[str, Any]] = None,
+        weight_config: Optional[Any] = None,
     ):
         self.memory_dir = Path(memory_dir)
         self.elite_dir = Path(elite_dir)
@@ -3123,6 +3246,8 @@ class PortfolioLoop:
         self.optimizer_config = dict(optimizer_config or {})
         # GAP-L305: 交易成本配置（None=不启用 net 指标）
         self.cost_config = dict(cost_config) if cost_config else None
+        # v2.74.0: 机构级权重学习配置（elastic_net 风险调整/滚动验证/面板自动匹配）
+        self.weight_config = weight_config
 
     def _generate_quality_report(self) -> None:
         """从 DuckDB 或 combo 回退，生成精英因子最终质量报告 JSON。
@@ -3138,30 +3263,41 @@ class PortfolioLoop:
         # ── 路径 A: 优先从 DuckDB 查询 ──
         try:
             from .factor_db import FactorRepository
+
             repo = FactorRepository()
             try:
-                rows = repo._execute("""
+                rows = repo._execute(
+                    """
                     SELECT factor_id, name, ic, sharpe, turnover_monthly, decay_6m,
                            market, is_elite, status
                     FROM factor_catalog
                     WHERE status='active' AND is_elite=TRUE AND market=?
                     ORDER BY ic DESC
-                """, [self.market]).fetchall()
+                """,
+                    [self.market],
+                ).fetchall()
 
                 if rows:
                     for r in rows:
-                        factors.append({
-                            "factor_id": r[0], "name": r[1],
-                            "ic": round(r[2], 4), "sharpe": round(r[3], 4),
-                            "turnover_monthly": round(r[4], 4),
-                            "decay_6m": round(r[5], 4),
-                            "market": r[6], "is_elite": r[7], "status": r[8],
-                        })
+                        factors.append(
+                            {
+                                "factor_id": r[0],
+                                "name": r[1],
+                                "ic": round(r[2], 4),
+                                "sharpe": round(r[3], 4),
+                                "turnover_monthly": round(r[4], 4),
+                                "decay_6m": round(r[5], 4),
+                                "market": r[6],
+                                "is_elite": r[7],
+                                "status": r[8],
+                            }
+                        )
                     source = "DuckDB"
             finally:
                 repo.close()
         except Exception as e:
             import traceback
+
             logger.warning("[L3] Step 7.5: DuckDB 查询失败 (%s)，尝试 combo 回退", e)
             logger.debug("[L3] Step 7.5: DuckDB 异常详情:\n%s", traceback.format_exc())
 
@@ -3174,17 +3310,19 @@ class PortfolioLoop:
                     weights = combo.get("weights", {}) or {}
                     # 从 weights 构建因子列表
                     for name, w in weights.items():
-                        factors.append({
-                            "factor_id": name,
-                            "name": name,
-                            "ic": round(w.get("ic", 0), 4) if isinstance(w, dict) else 0.0,
-                            "sharpe": round(w.get("sharpe", 0), 4) if isinstance(w, dict) else 0.0,
-                            "turnover_monthly": 0.0,
-                            "decay_6m": 0.0,
-                            "market": self.market,
-                            "is_elite": True,
-                            "status": "active",
-                        })
+                        factors.append(
+                            {
+                                "factor_id": name,
+                                "name": name,
+                                "ic": round(w.get("ic", 0), 4) if isinstance(w, dict) else 0.0,
+                                "sharpe": round(w.get("sharpe", 0), 4) if isinstance(w, dict) else 0.0,
+                                "turnover_monthly": 0.0,
+                                "decay_6m": 0.0,
+                                "market": self.market,
+                                "is_elite": True,
+                                "status": "active",
+                            }
+                        )
                     source = "combo_fallback"
                     logger.info("[L3] Step 7.5: combo 回退加载 %d 个因子", len(factors))
                 else:
@@ -3224,11 +3362,16 @@ class PortfolioLoop:
         out_file = self.memory_dir / f"elite_final_quality_{ts}.json"
         out_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
         logger.info(
-            "[L3] Step 7.5: 质量报告已生成 [%s, source=%s]: %d 因子, IC=[%.4f, %.4f], "
-            "IC<%.2f: %d, Sharpe<%.1f: %d",
-            out_file.name, source, len(factors), min(ics), max(ics) if ics else 0,
-            _RUNTIME_MIN_IC, sum(1 for ic in ics if abs(ic) < _RUNTIME_MIN_IC) if ics else 0,
-            _RUNTIME_MIN_SHARPE, sum(1 for s in sharpes if s < _RUNTIME_MIN_SHARPE) if sharpes else 0,
+            "[L3] Step 7.5: 质量报告已生成 [%s, source=%s]: %d 因子, IC=[%.4f, %.4f], IC<%.2f: %d, Sharpe<%.1f: %d",
+            out_file.name,
+            source,
+            len(factors),
+            min(ics),
+            max(ics) if ics else 0,
+            _RUNTIME_MIN_IC,
+            sum(1 for ic in ics if abs(ic) < _RUNTIME_MIN_IC) if ics else 0,
+            _RUNTIME_MIN_SHARPE,
+            sum(1 for s in sharpes if s < _RUNTIME_MIN_SHARPE) if sharpes else 0,
         )
 
     def _generate_attribution_report(
@@ -3276,7 +3419,9 @@ class PortfolioLoop:
         pf = FactorReturnsBuilder.portfolio_returns(fr, w_arr)
         weights_map = dict(zip(retained_ids, w_arr.tolist()))
         report = RiskAttributor().attribute(
-            portfolio_returns=pf, factor_returns=fr, weights=weights_map,
+            portfolio_returns=pf,
+            factor_returns=fr,
+            weights=weights_map,
         )
 
         ts = datetime.now().strftime("%Y-%m-%d")
@@ -3285,22 +3430,25 @@ class PortfolioLoop:
         reports_dir.mkdir(parents=True, exist_ok=True)
         out_file = reports_dir / f"portfolio_attribution_{combo_id}.md"
 
-        contrib_lines = "\n".join(
-            f"| {fid} | {val:.6f} |" for fid, val in
-            sorted(report.factor_contributions.items(), key=lambda kv: -abs(kv[1]))
-        ) or "| (无因子收益) | - |"
-        exposure_lines = "\n".join(
-            f"| {fid} | {val:.4f} |" for fid, val in
-            sorted(report.exposures.items(), key=lambda kv: -kv[1])
-        ) or "| (无暴露数据) | - |"
+        contrib_lines = (
+            "\n".join(
+                f"| {fid} | {val:.6f} |"
+                for fid, val in sorted(report.factor_contributions.items(), key=lambda kv: -abs(kv[1]))
+            )
+            or "| (无因子收益) | - |"
+        )
+        exposure_lines = (
+            "\n".join(f"| {fid} | {val:.4f} |" for fid, val in sorted(report.exposures.items(), key=lambda kv: -kv[1]))
+            or "| (无暴露数据) | - |"
+        )
 
         md = f"""# 组合归因报告
 
 - **combo_id**: {combo_id}
 - **trace_id**: {trace_id}
 - **生成时间**: {datetime.now().isoformat()}
-- **组合夏普**: {combo.get('combo_sharpe', 0.0):.3f}
-- **净夏普（扣成本）**: {combo.get('net_combo_sharpe') if combo.get('net_combo_sharpe') is not None else 'N/A'}
+- **组合夏普**: {combo.get("combo_sharpe", 0.0):.3f}
+- **净夏普（扣成本）**: {combo.get("net_combo_sharpe") if combo.get("net_combo_sharpe") is not None else "N/A"}
 - **归因矩阵样本**: {len(fr)} 天 × {len(retained_ids)} 因子
 - **年化波动率**: {report.realized_vol:.4f}
 
@@ -3328,7 +3476,10 @@ class PortfolioLoop:
         out_file.write_text(md, encoding="utf-8")
         logger.info(
             "[L3] Step 7.6: 归因报告已生成 [%s]: %d 因子, var95=%.4f, vol=%.4f",
-            out_file.name, len(retained_ids), report.var_95, report.realized_vol,
+            out_file.name,
+            len(retained_ids),
+            report.var_95,
+            report.realized_vol,
         )
         return out_file
 
@@ -3368,8 +3519,7 @@ class PortfolioLoop:
         sharpe_map = {s.get("factor_id"): s.get("sharpe", 0.0) for s in retained}
 
         def weight_fn(train_df: pd.DataFrame) -> np.ndarray:
-            w = np.array([max(sharpe_map.get(c, 0.0), 0.01) for c in train_df.columns],
-                         dtype=float)
+            w = np.array([max(sharpe_map.get(c, 0.0), 0.01) for c in train_df.columns], dtype=float)
             total = float(np.sum(w))
             return w / total if total > 0 else np.ones(len(w)) / len(w)
 
@@ -3382,23 +3532,26 @@ class PortfolioLoop:
         reports_dir.mkdir(parents=True, exist_ok=True)
         out_file = reports_dir / f"portfolio_wf_{combo_id}.md"
 
-        win_lines = "\n".join(
-            f"| {w.get('train_start')} → {w.get('test_end')} | "
-            f"{w.get('sharpe', 0.0):.3f} | {w.get('ic', 0.0):.4f} | "
-            f"{w.get('max_correlation', 0.0):.3f} | {w.get('turnover', 0.0):.3f} |"
-            for w in result.get("windows", [])
-        ) or "| (无窗口) | - | - | - | - |"
+        win_lines = (
+            "\n".join(
+                f"| {w.get('train_start')} → {w.get('test_end')} | "
+                f"{w.get('sharpe', 0.0):.3f} | {w.get('ic', 0.0):.4f} | "
+                f"{w.get('max_correlation', 0.0):.3f} | {w.get('turnover', 0.0):.3f} |"
+                for w in result.get("windows", [])
+            )
+            or "| (无窗口) | - | - | - | - |"
+        )
 
         md = f"""# 组合层走航验证报告
 
 - **combo_id**: {combo_id}
 - **trace_id**: {trace_id}
 - **生成时间**: {datetime.now().isoformat()}
-- **窗口数**: {result.get('n_windows_completed', 0)}
-- **夏普一致性**: {result.get('sharpe_consistency', 0.0):.2f}
-- **跨窗口夏普波动**: {result.get('sharpe_volatility', 0.0):.3f}
-- **一致性得分**: {result.get('consistency_score', 0.0):.2f}
-- **通过**: {result.get('passed', False)}
+- **窗口数**: {result.get("n_windows_completed", 0)}
+- **夏普一致性**: {result.get("sharpe_consistency", 0.0):.2f}
+- **跨窗口夏普波动**: {result.get("sharpe_volatility", 0.0):.3f}
+- **一致性得分**: {result.get("consistency_score", 0.0):.2f}
+- **通过**: {result.get("passed", False)}
 
 ## 各窗口表现
 
@@ -3409,8 +3562,10 @@ class PortfolioLoop:
         out_file.write_text(md, encoding="utf-8")
         logger.info(
             "[L3] Step 7.7: 走航报告已生成 [%s]: %d 窗口, score=%.2f, passed=%s",
-            out_file.name, result.get("n_windows_completed", 0),
-            result.get("consistency_score", 0.0), result.get("passed", False),
+            out_file.name,
+            result.get("n_windows_completed", 0),
+            result.get("consistency_score", 0.0),
+            result.get("passed", False),
         )
         return out_file
 
@@ -3435,10 +3590,13 @@ class PortfolioLoop:
         state = self.state_manager.mark_running()
         logger.info("[L3] ========== Portfolio Loop 启动 ==========")
         logger.info("[L3] trace_id=%s run_id=%s", trace_id, state.get("run_id"))
-        logger.info("[L3] market=%s elite_dir=%s synthesis_mode=%s",
-                    self.market, self.elite_dir, self.synthesis_mode)
-        logger.info("[L3] use_duckdb=%s enable_regime=%s memory_dir=%s",
-                    self.use_duckdb, self.enable_regime_adaptation, self.memory_dir)
+        logger.info("[L3] market=%s elite_dir=%s synthesis_mode=%s", self.market, self.elite_dir, self.synthesis_mode)
+        logger.info(
+            "[L3] use_duckdb=%s enable_regime=%s memory_dir=%s",
+            self.use_duckdb,
+            self.enable_regime_adaptation,
+            self.memory_dir,
+        )
 
         try:
             # Step 0.5: 加载市场数据（用于相关性去重）
@@ -3446,17 +3604,18 @@ class PortfolioLoop:
             if self.market == "futures":
                 try:
                     from ..data import FTSDataProvider
+
                     provider = FTSDataProvider()
                     panel_data, _cdates = provider.get_futures_panel(days=MIN_EVAL_DAYS)
-                    logger.info("[L3] Step 0.5: 期货面板数据加载完成 (%d 品种, %d 交易日)",
-                                len(panel_data), len(_cdates))
+                    logger.info(
+                        "[L3] Step 0.5: 期货面板数据加载完成 (%d 品种, %d 交易日)", len(panel_data), len(_cdates)
+                    )
                 except Exception as e:
                     logger.warning("[L3] Step 0.5: 期货面板数据加载失败 (%s)，使用 IC-only 去重", e)
                     panel_data = None
 
             # Step 1: 加载 elite 因子
-            logger.info("[L3] Step 1a: 开始加载 elite 因子 [market=%s, use_duckdb=%s]",
-                        self.market, self.use_duckdb)
+            logger.info("[L3] Step 1a: 开始加载 elite 因子 [market=%s, use_duckdb=%s]", self.market, self.use_duckdb)
             factors = load_elite_factors(
                 self.elite_dir,
                 use_duckdb=self.use_duckdb,
@@ -3471,14 +3630,25 @@ class PortfolioLoop:
                 sharpe_values = [f.get("sharpe", 0) for f in factors]
                 ic_values = [f.get("ic", 0) for f in factors]
                 turnover_values = [f.get("turnover", 0) for f in factors]
-                logger.info("[L3] 因子统计: sharpe=[%.2f, %.2f] ic=[%.4f, %.4f] turnover=[%.2f, %.2f]",
-                            min(sharpe_values), max(sharpe_values),
-                            min(ic_values), max(ic_values),
-                            min(turnover_values), max(turnover_values))
+                logger.info(
+                    "[L3] 因子统计: sharpe=[%.2f, %.2f] ic=[%.4f, %.4f] turnover=[%.2f, %.2f]",
+                    min(sharpe_values),
+                    max(sharpe_values),
+                    min(ic_values),
+                    max(ic_values),
+                    min(turnover_values),
+                    max(turnover_values),
+                )
                 for i, f in enumerate(factors[:5]):
-                    logger.info("[L3]   Top%d: %s | sharpe=%.2f | ic=%.4f | turnover=%.2f | src=%s",
-                                i+1, f.get("name", "?"), f.get("sharpe", 0),
-                                f.get("ic", 0), f.get("turnover", 0), f.get("source_file", "?"))
+                    logger.info(
+                        "[L3]   Top%d: %s | sharpe=%.2f | ic=%.4f | turnover=%.2f | src=%s",
+                        i + 1,
+                        f.get("name", "?"),
+                        f.get("sharpe", 0),
+                        f.get("ic", 0),
+                        f.get("turnover", 0),
+                        f.get("source_file", "?"),
+                    )
                 if len(factors) > 5:
                     logger.info("[L3]   ... 还有 %d 个因子", len(factors) - 5)
             n_input = len(factors)
@@ -3509,7 +3679,9 @@ class PortfolioLoop:
                 oos_demoted = 0
                 for i, factor in enumerate(factors):
                     factors[i] = _validate_oos_extrapolation(
-                        factor, panel_data, combo_updated_at,
+                        factor,
+                        panel_data,
+                        combo_updated_at,
                     )
                     oos_info = factors[i].get("oos_extrapolation", {})
                     if oos_info.get("needs_demotion", False):
@@ -3537,26 +3709,30 @@ class PortfolioLoop:
                 factors = sorted_factors[:ACTIVE_FACTOR_CAP]
                 logger.info(
                     "[L3] Step 1.7: ACTIVE_FACTOR_CAP=%d 触发, 过滤 %d 个因子 (sharpe 排序)",
-                    ACTIVE_FACTOR_CAP, len(removed),
+                    ACTIVE_FACTOR_CAP,
+                    len(removed),
                 )
                 for r in removed:
                     logger.info(
                         "[L3] Step 1.7:   过滤因子 %s | sharpe=%.2f | ic=%.4f",
-                        r.get("name", "?"), r.get("sharpe", 0), r.get("ic", 0),
+                        r.get("name", "?"),
+                        r.get("sharpe", 0),
+                        r.get("ic", 0),
                     )
             else:
                 logger.info(
                     "[L3] Step 1.7: 因子数 %d ≤ ACTIVE_FACTOR_CAP=%d, 无需过滤",
-                    len(factors), ACTIVE_FACTOR_CAP,
+                    len(factors),
+                    ACTIVE_FACTOR_CAP,
                 )
 
             # Step 1.8: P1 因子聚类（可选，系统性降低冗余）
             if self.enable_clustering and len(factors) >= 3:
-                logger.info("[L3] Step 1.8: 开始 P1 因子聚类 (factors=%d, threshold=%s)",
-                            len(factors), "0.7")
+                logger.info("[L3] Step 1.8: 开始 P1 因子聚类 (factors=%d, threshold=%s)", len(factors), "0.7")
                 try:
                     if self._clustering_engine is None:
                         from .factor_clustering import FactorClusteringEngine
+
                         self._clustering_engine = FactorClusteringEngine(
                             cluster_threshold=0.7,
                             linkage_method="average",
@@ -3568,7 +3744,9 @@ class PortfolioLoop:
                     if reduced > 0:
                         logger.info(
                             "[L3] Step 1.8: P1 聚类完成, 移除 %d 个冗余因子 (%d → %d)",
-                            reduced, n_before, n_after,
+                            reduced,
+                            n_before,
+                            n_after,
                         )
                     else:
                         logger.info(
@@ -3580,7 +3758,8 @@ class PortfolioLoop:
             else:
                 logger.info(
                     "[L3] Step 1.8: P1 聚类跳过 (enable_clustering=%s, n_factors=%d)",
-                    self.enable_clustering, len(factors),
+                    self.enable_clustering,
+                    len(factors),
                 )
 
             # Step 1.9: P2 PCA 降维（可选，信号源压缩）
@@ -3589,6 +3768,7 @@ class PortfolioLoop:
                 try:
                     if self._pca_compressor is None:
                         from .factor_clustering import PCASignalCompressor
+
                         self._pca_compressor = PCASignalCompressor(
                             variance_ratio=0.95,
                             max_components=10,
@@ -3601,7 +3781,9 @@ class PortfolioLoop:
                         explained = pca_result.get("explained_variance_ratio", 0.0)
                         logger.info(
                             "[L3] Step 1.9: PCA 降维完成: %d 因子 → %d 主成分 (解释方差=%.1f%%)",
-                            len(factors), n_components, explained * 100,
+                            len(factors),
+                            n_components,
+                            explained * 100,
                         )
                         if pca_signals:
                             # 更新因子权重
@@ -3638,52 +3820,64 @@ class PortfolioLoop:
             else:
                 logger.info(
                     "[L3] Step 1.9: PCA 降维跳过 (enable_pca=%s, n_factors=%d, panel_data=%s)",
-                    self.enable_pca, len(factors), panel_data is not None,
+                    self.enable_pca,
+                    len(factors),
+                    panel_data is not None,
                 )
 
             # Step 2: 信号合成
             signals, _max_corr, _combo_turn = synthesize_signals(
-                factors, self.synthesis_mode, elite_dir=self.elite_dir,
+                factors,
+                self.synthesis_mode,
+                elite_dir=self.elite_dir,
                 returns_matrix=factor_returns,
                 optimizer_mode=self.optimizer_mode,
-                optimizer_config={**self.optimizer_config,
-                                  **({"exposure_matrix": exposure_matrix}
-                                     if exposure_matrix is not None else {})},
+                optimizer_config={
+                    **self.optimizer_config,
+                    **({"exposure_matrix": exposure_matrix} if exposure_matrix is not None else {}),
+                },
+                market=self.market,
+                weight_config=self.weight_config,
             )
             logger.info("[L3] Step 2: 信号合成完成, mode=%s, 信号数=%d", self.synthesis_mode, len(signals))
             # [WEIGHT-LOG] Step 2 合成后权重摘要
             if signals:
                 sorted_by_w = sorted(signals, key=lambda x: -x.get("weight", 0))
                 w_sum = sum(s.get("weight", 0) for s in sorted_by_w)
-                logger.info("[L3-WEIGHT] Step 2 权重摘要: sum=%.4f, top3=[%s], bottom3=[%s]",
-                            w_sum,
-                            ", ".join(f"{s['name']}={s['weight']:.4f}" for s in sorted_by_w[:3]),
-                            ", ".join(f"{s['name']}={s['weight']:.4f}" for s in sorted_by_w[-3:]))
+                logger.info(
+                    "[L3-WEIGHT] Step 2 权重摘要: sum=%.4f, top3=[%s], bottom3=[%s]",
+                    w_sum,
+                    ", ".join(f"{s['name']}={s['weight']:.4f}" for s in sorted_by_w[:3]),
+                    ", ".join(f"{s['name']}={s['weight']:.4f}" for s in sorted_by_w[-3:]),
+                )
             state["total_signals_processed"] = len(signals)
 
             # Step 2.5: Regime 自适应权重调整
-            regime_info: dict[str, Any] = {}
             if self.enable_regime_adaptation and (market_ohlcv is not None or stock_regime is not None):
                 try:
                     # 股票风格 regime 优先（GAP-S03，v2.63.0）：StockRegimeSelector 输出
                     # 的 regime 字段直接映射 REGIME_STYLE_MULTIPLIERS 风格键
                     if self.market == "stock" and stock_regime is not None and stock_regime.get("regime"):
-                        regime = stock_regime
-                        regime_info = regime
-                        logger.info("[L3] Step 2.5: 使用股票风格 regime [%s] (conf=%.2f)",
-                                    regime.get("regime"), regime.get("confidence", 0.0))
+                        regime: Any = stock_regime
+                        logger.info(
+                            "[L3] Step 2.5: 使用股票风格 regime [%s] (conf=%.2f)",
+                            regime.get("regime"),
+                            regime.get("confidence", 0.0),
+                        )
                     else:
                         if self._regime_selector is None:
                             from .regime import RegimeAwareSelector
+
                             self._regime_selector = RegimeAwareSelector()
 
                         regime = self._regime_selector.detect(market_ohlcv)  # type: ignore[arg-type]
-                        regime_info = regime
 
                     aconfig = self.adaptive_config or DEFAULT_ADAPTIVE_CONFIG
                     if aconfig.get("enabled", True):
                         signals = regime_adaptive_weight_adjustment(
-                            signals, regime, factors,
+                            signals,
+                            regime,
+                            factors,
                             min_weight=aconfig.get("min_weight", 0.01),
                             dimension=aconfig.get("dimension", "both"),
                             min_clamp=aconfig.get("min_clamp", 0.5),
@@ -3692,6 +3886,7 @@ class PortfolioLoop:
                         # RegimeSmoother 权重平滑（A.3 / v2.56.0）
                         try:
                             from .adaptive_weight import RegimeSmoother
+
                             if self._regime_smoother is None:
                                 sm = aconfig.get("smoother", {}) or {}
                                 self._regime_smoother = RegimeSmoother(
@@ -3703,20 +3898,18 @@ class PortfolioLoop:
                             prev_weights = self.portfolio_manager.extract_prev_weights(prev_combo)
                             if prev_weights:
                                 new_weights = {
-                                    s.get("factor_id"): s.get("weight", 0.0)
-                                    for s in signals if s.get("retained", True)
+                                    s.get("factor_id"): s.get("weight", 0.0) for s in signals if s.get("retained", True)
                                 }
                                 smoothed = self._regime_smoother.should_apply(
                                     regime.get("regime", "oscillate"),
-                                    prev_weights, new_weights,
+                                    prev_weights,
+                                    new_weights,
                                 )
                                 for s in signals:
                                     if s.get("retained", True) and s.get("factor_id") in smoothed:
                                         s["weight"] = smoothed[s["factor_id"]]
                         except Exception as sm_err:
-                            logger.warning(
-                                "[L3] Step 2.5: RegimeSmoother 失败，使用调整后权重: %s", sm_err
-                            )
+                            logger.warning("[L3] Step 2.5: RegimeSmoother 失败，使用调整后权重: %s", sm_err)
                     logger.info(
                         "[L3] Step 2.5: Regime=%s (confidence=%.2f), 自适应调整完成 [dim=%s]",
                         regime.get("regime", "unknown"),
@@ -3733,18 +3926,34 @@ class PortfolioLoop:
                 # 加载 L2 相关性索引作为先验
                 l2_prior = load_l2_correlation_index(self.elite_dir)
                 pre_retained = [s["name"] for s in signals if s.get("retained", True)]
+                # L2 正交化元数据透传（GAP-I206 补充）：正交化因子在 L3 不重复剔除
+                _factor_by_id = {f.get("factor_id", ""): f for f in factors}
+                for s in signals:
+                    _f = _factor_by_id.get(s.get("factor_id", ""), {})
+                    if _f.get("orthogonalized"):
+                        s["orthogonalized"] = True
+                        s["orthogonalized_against"] = _f.get("orthogonalized_against", "")
+                        s["orthogonalized_pearson"] = _f.get("orthogonalized_pearson", 0.0)
                 signals = orthogonalize_factors(
-                    signals, max_corr_threshold=0.7, factors=factors,
+                    signals,
+                    max_corr_threshold=0.7,
+                    factors=factors,
                     use_tiered=(len(factors) >= 30),
                     l2_prior_correlations=l2_prior,
                 )
                 post_retained = [s["name"] for s in signals if s.get("retained", True)]
                 removed_in_ortho = set(pre_retained) - set(post_retained)
                 if removed_in_ortho:
-                    logger.info("[L3-WEIGHT] 正交化移除 %d 个因子: %s",
-                                len(removed_in_ortho), ", ".join(sorted(removed_in_ortho)))
-                logger.info("[L3] Step 3: 正交化完成, 保留 %d/%d",
-                            sum(1 for s in signals if s.get("retained", True)), len(signals))
+                    logger.info(
+                        "[L3-WEIGHT] 正交化移除 %d 个因子: %s",
+                        len(removed_in_ortho),
+                        ", ".join(sorted(removed_in_ortho)),
+                    )
+                logger.info(
+                    "[L3] Step 3: 正交化完成, 保留 %d/%d",
+                    sum(1 for s in signals if s.get("retained", True)),
+                    len(signals),
+                )
             else:
                 logger.info("[L3] Step 3: 跳过正交化（elastic_net L1 已做变量选择）")
 
@@ -3756,27 +3965,43 @@ class PortfolioLoop:
             # Step 5: 组合构建（含粘性约束 + 漂移监控）
             prev_combo = self.portfolio_manager.load_prev_combo()
             prev_weights = self.portfolio_manager.extract_prev_weights(prev_combo)
-            if self.sticky_config and prev_weights:
-                logger.info("[L3] Step 5: 读取上次组合 %s 共 %d 个因子权重 (粘性约束)",
-                            prev_combo.get("combo_id", "?"), len(prev_weights))
+            if self.sticky_config and prev_weights and prev_combo is not None:
+                logger.info(
+                    "[L3] Step 5: 读取上次组合 %s 共 %d 个因子权重 (粘性约束)",
+                    prev_combo.get("combo_id", "?"),
+                    len(prev_weights),
+                )
             combo = build_combo(
-                signals, self.synthesis_mode, trace_id,
+                signals,
+                self.synthesis_mode,
+                trace_id,
                 prev_weights=prev_weights or None,
                 sticky_config=self.sticky_config,
                 factor_returns=factor_returns,
                 market=self.market,
                 cost_config=self.cost_config,
             )
-            logger.info("[L3] Step 5: 组合构建完成, 夏普=%.2f, 换手率=%.2f",
-                        combo.get("combo_sharpe", 0), combo.get("combo_turnover", 0))
+            logger.info(
+                "[L3] Step 5: 组合构建完成, 夏普=%.2f, 换手率=%.2f",
+                combo.get("combo_sharpe", 0),
+                combo.get("combo_turnover", 0),
+            )
             if combo.get("net_combo_sharpe") is not None:
-                logger.info("[L3] Step 5: net 夏普=%.2f (gross=%.2f, 成本扣除)",
-                            combo.get("net_combo_sharpe"), combo.get("combo_sharpe"))
+                logger.info(
+                    "[L3] Step 5: net 夏普=%.2f (gross=%.2f, 成本扣除)",
+                    combo.get("net_combo_sharpe"),
+                    combo.get("combo_sharpe"),
+                )
 
-            # Step 5.5: 漂移监控 — 记录成员重合率 + 权重 L1 变化率
+            # Step 5.5: 漂移监控 — 记录成员重合率 + 权重 L1 变化率 + 阈值告警（GAP-F13）
+            drift_alert: dict[str, Any] = {}
             try:
                 drift = self.drift_monitor.compute(prev_combo, combo, trace_id)
                 self.drift_monitor.record(drift)
+                drift_alert = self.drift_monitor.check_and_alert(drift, trace_id)
+                if drift_alert.get("alerted"):
+                    state["drift_alerted"] = True
+                    state["drift_alert_info"] = drift_alert
             except Exception as e:
                 logger.warning("[L3] Step 5.5: 漂移监控记录失败 (非致命): %s", e)
 
@@ -3788,6 +4013,14 @@ class PortfolioLoop:
 
             # Step 7: 注入 FDT
             proposals = generate_agent_proposals(combo, trace_id)
+            # GAP-F13: 漂移超阈值且开启自动重平衡时，附加粘性重平衡建议供 Agent 消费
+            if drift_alert.get("trigger_rebalance"):
+                rebal_proposal = self.drift_monitor.generate_rebalance_proposal(
+                    drift,
+                    drift_alert,
+                )
+                if rebal_proposal is not None:
+                    proposals.append(rebal_proposal)
             paths = inject_to_fdt(combo, proposals, self.memory_dir)
             logger.info("[L3] Step 7: 注入完成, 路径=%s", paths)
 
@@ -3806,7 +4039,9 @@ class PortfolioLoop:
             try:
                 if factor_returns is not None and combo.get("signals"):
                     attr_path = self._generate_attribution_report(
-                        factor_returns, combo, trace_id,
+                        factor_returns,
+                        combo,
+                        trace_id,
                     )
                     if attr_path:
                         state["attribution_report"] = str(attr_path)
@@ -3817,7 +4052,9 @@ class PortfolioLoop:
             try:
                 if factor_returns is not None and combo.get("signals"):
                     wf_path = self._generate_walk_forward_report(
-                        factor_returns, combo, trace_id,
+                        factor_returns,
+                        combo,
+                        trace_id,
                     )
                     if wf_path:
                         state["walk_forward_report"] = str(wf_path)
@@ -3866,25 +4103,34 @@ class PortfolioLoop:
 
 # ─── CLI ──────────────────────────────────────────────────
 
+
 def main() -> None:
     """CLI 入口: python -m loop_engine.portfolio_loop [--once] [--mode ...] [--optimizer-mode ...]"""
     parser = argparse.ArgumentParser(description="L3 Portfolio Loop")
     parser.add_argument("--once", action="store_true", help="单次运行模式")
-    parser.add_argument("--mode", default="equal_weight",
-                        choices=["equal_weight", "sharpe_weight", "elastic_net", "optimizer"],
-                        help="信号合成模式（optimizer 需 --returns-matrix，GAP-L303）")
-    parser.add_argument("--optimizer-mode", default="risk_parity",
-                        choices=["risk_parity", "mvo"],
-                        help="optimizer 目标（GAP-L303，默认 risk_parity）")
-    parser.add_argument("--returns-matrix", default=None,
-                        help="因子收益矩阵 CSV 路径（optimizer 模式与实测化需要，可选）")
+    parser.add_argument(
+        "--mode",
+        default="equal_weight",
+        choices=["equal_weight", "sharpe_weight", "elastic_net", "optimizer"],
+        help="信号合成模式（optimizer 需 --returns-matrix，GAP-L303）",
+    )
+    parser.add_argument(
+        "--optimizer-mode",
+        default="risk_parity",
+        choices=["risk_parity", "mvo"],
+        help="optimizer 目标（GAP-L303，默认 risk_parity）",
+    )
+    parser.add_argument(
+        "--returns-matrix", default=None, help="因子收益矩阵 CSV 路径（optimizer 模式与实测化需要，可选）"
+    )
     parser.add_argument("--memory-dir", default="memory/portfolio", help="状态/组合存储目录")
     parser.add_argument("--elite-dir", default="memory/knowledge/factors/elite", help="精英因子目录")
-    parser.add_argument("--cost-config", default=None,
-                        help="交易成本配置 JSON 路径（GAP-L305 net 指标，可选；如 "
-                             '{"market": "futures", "slippage_bps": 0.5}）')
-    parser.add_argument("--capacity-limits", default=None,
-                        help="容量权重上限 CSV/JSON 数组（GAP-L305，可选）")
+    parser.add_argument(
+        "--cost-config",
+        default=None,
+        help='交易成本配置 JSON 路径（GAP-L305 net 指标，可选；如 {"market": "futures", "slippage_bps": 0.5}）',
+    )
+    parser.add_argument("--capacity-limits", default=None, help="容量权重上限 CSV/JSON 数组（GAP-L305，可选）")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
@@ -3900,6 +4146,7 @@ def main() -> None:
     if args.cost_config:
         try:
             import json as _json
+
             cost_config = _json.loads(Path(args.cost_config).read_text(encoding="utf-8"))
         except Exception as e:
             logger.warning("[L3] 读取 cost-config 失败 (%s)，net 指标禁用", e)
@@ -3908,6 +4155,7 @@ def main() -> None:
     if args.capacity_limits:
         try:
             import json as _json
+
             cap_vals = _json.loads(Path(args.capacity_limits).read_text(encoding="utf-8"))
             optimizer_config["capacity_limits"] = cap_vals
         except Exception as e:
@@ -3923,9 +4171,11 @@ def main() -> None:
     )
     result = loop.run(factor_returns=factor_returns)
 
-    print(f"[L3] run_id={result.run_id} status={result.status} "
-          f"input_factors={result.n_factors_input} retained={result.n_factors_retained} "
-          f"sharpe={result.combo_sharpe:.2f} proposals={result.n_proposals}")
+    print(
+        f"[L3] run_id={result.run_id} status={result.status} "
+        f"input_factors={result.n_factors_input} retained={result.n_factors_retained} "
+        f"sharpe={result.combo_sharpe:.2f} proposals={result.n_proposals}"
+    )
     if result.error:
         print(f"[L3] 警告/错误: {result.error}")
     sys.exit(0 if result.status in ("passed", "verifier_warning", "completed") else 1)

@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
 
 # 确保项目根目录在 sys.path 中
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +31,6 @@ from minute_microstructure_analysis import (  # noqa: E402
     SYMBOL,
     _compute_factor_values,
     _fmt,
-    _load_factor_by_id,
     _period_to_minutes,
     run_frequency_backtest,
 )
@@ -85,23 +83,27 @@ def _analyze_5m_series(factor_dict: dict, symbol: str, days: int) -> dict[str, A
         df[f"fwd_{p}"] = df["close"].pct_change(p).shift(-p)
         valid = df[["factor", f"fwd_{p}"]].dropna()
         if len(valid) >= 10:
-            decay_rows.append({
-                "forward_period": p,
-                "forward_minutes": p * _period_to_minutes(FREQ),
-                "ic": float(valid["factor"].corr(valid[f"fwd_{p}"])),
-                "n_samples": int(len(valid)),
-            })
+            decay_rows.append(
+                {
+                    "forward_period": p,
+                    "forward_minutes": p * _period_to_minutes(FREQ),
+                    "ic": float(valid["factor"].corr(valid[f"fwd_{p}"])),
+                    "n_samples": int(len(valid)),
+                }
+            )
     out["ic_decay"] = decay_rows
 
     # 信号自相关
     acf_rows = []
     s = df["factor"].dropna()
     for lag in range(1, 51):
-        acf_rows.append({
-            "lag": lag,
-            "lag_minutes": lag * _period_to_minutes(FREQ),
-            "autocorrelation": s.autocorr(lag=lag),
-        })
+        acf_rows.append(
+            {
+                "lag": lag,
+                "lag_minutes": lag * _period_to_minutes(FREQ),
+                "autocorrelation": s.autocorr(lag=lag),
+            }
+        )
     out["acf"] = acf_rows
 
     # 换手率 / 信号稳定性
@@ -270,12 +272,8 @@ def generate_report(results: list[dict]) -> str:
             "|:-----|:------|:---------------|:------------|",
         ]
         for name, ic_peak, period in peak_rows[:15]:
-            hl = _half_life(next(
-                (r["acf"] for r in ok if r["name"] == name), []
-            ))
-            lines.append(
-                f"| {name} | {_fmt(ic_peak, 4)} | {period} | {hl or 'N/A'} |"
-            )
+            hl = _half_life(next((r["acf"] for r in ok if r["name"] == name), []))
+            lines.append(f"| {name} | {_fmt(ic_peak, 4)} | {period} | {hl or 'N/A'} |")
     else:
         lines += ["（无有效 IC 衰减数据）"]
 
@@ -318,10 +316,10 @@ def main() -> None:
     factors = load_all_futures_elite()
     if args.limit > 0:
         factors = factors[: args.limit]
-    print(f"=" * 70)
-    print(f"期货精英因子批量分钟级微观结构分析")
+    print("=" * 70)
+    print("期货精英因子批量分钟级微观结构分析")
     print(f"品种: {args.symbol} | 数据量: {args.days} | 因子数: {len(factors)}")
-    print(f"=" * 70)
+    print("=" * 70)
 
     results = []
     for i, factor in enumerate(factors, 1):

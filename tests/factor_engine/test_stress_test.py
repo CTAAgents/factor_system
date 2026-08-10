@@ -22,7 +22,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 
 # 确保能导入 fts.factor_engine
 _FTS_ROOT = Path(__file__).resolve().parents[2]
@@ -31,25 +30,28 @@ if str(_FTS_ROOT) not in sys.path:
 
 from fts.factor_engine.stress_test import (
     StressScenario,
-    StressTestResult,
     StressTester,
 )
 
 
 # ─── 辅助函数 ─────────────────────────────────────────────
 
+
 def _make_ohlcv(n_days: int = 100, start: str = "2020-01-01") -> pd.DataFrame:
     """创建合成 OHLCV 数据。"""
     np.random.seed(42)
     dates = pd.date_range(start, periods=n_days, freq="D")
     close = 100 + np.cumsum(np.random.randn(n_days) * 0.5)
-    return pd.DataFrame({
-        "open": close + np.random.randn(n_days) * 0.1,
-        "high": close + np.abs(np.random.randn(n_days)) * 0.3,
-        "low": close - np.abs(np.random.randn(n_days)) * 0.3,
-        "close": close,
-        "volume": np.random.randint(1000, 10000, n_days).astype(float),
-    }, index=dates)
+    return pd.DataFrame(
+        {
+            "open": close + np.random.randn(n_days) * 0.1,
+            "high": close + np.abs(np.random.randn(n_days)) * 0.3,
+            "low": close - np.abs(np.random.randn(n_days)) * 0.3,
+            "close": close,
+            "volume": np.random.randint(1000, 10000, n_days).astype(float),
+        },
+        index=dates,
+    )
 
 
 def _make_aligned_signal(n: int, value: float = 0.5) -> np.ndarray:
@@ -58,6 +60,7 @@ def _make_aligned_signal(n: int, value: float = 0.5) -> np.ndarray:
 
 
 # ─── 内置场景测试 ─────────────────────────────────────────
+
 
 class TestBuiltinScenarios:
     """测试内置压力场景。"""
@@ -125,6 +128,7 @@ class TestBuiltinScenarios:
 
 
 # ─── run_scenario 测试 ────────────────────────────────────
+
 
 class TestRunScenario:
     """测试单场景运行。"""
@@ -288,6 +292,7 @@ class TestRunScenario:
 
 # ─── run_all 测试 ─────────────────────────────────────────
 
+
 class TestRunAll:
     """测试 run_all 方法。"""
 
@@ -327,6 +332,7 @@ class TestRunAll:
 
 
 # ─── 集成测试 ─────────────────────────────────────────────
+
 
 class TestIntegration:
     """集成测试。"""
@@ -401,13 +407,18 @@ class TestIntegration:
         np.random.seed(1)
         dates = pd.date_range("2020-01-01", periods=100, freq="D")
         close = 100 + np.cumsum(np.abs(np.random.randn(100)) * 0.3)  # 趋势上涨
-        ohlcv = {"X": pd.DataFrame({
-            "open": close,
-            "high": close * 1.02,
-            "low": close * 0.98,
-            "close": close,
-            "volume": np.ones(100) * 5000,
-        }, index=dates)}
+        ohlcv = {
+            "X": pd.DataFrame(
+                {
+                    "open": close,
+                    "high": close * 1.02,
+                    "low": close * 0.98,
+                    "close": close,
+                    "volume": np.ones(100) * 5000,
+                },
+                index=dates,
+            )
+        }
         signals = {"X": np.ones(100) * 0.5}  # 做多
 
         result = tester.run_scenario(scenario, signals, ohlcv)
@@ -418,6 +429,7 @@ class TestIntegration:
 
 # ─── 覆盖遗漏行 ───────────────────────────────────────────
 
+
 class TestCoverageGaps:
     """覆盖遗漏行 (221, 257, 294, 299, 307, 309)。"""
 
@@ -425,16 +437,25 @@ class TestCoverageGaps:
         """line 221: 只有 1 个收益值时 sharpe=0。"""
         tester = StressTester()
         scenario = StressScenario(
-            name="单数据点", symbols=["X"],
+            name="单数据点",
+            symbols=["X"],
             date_range=("2020-01-01", "2020-01-02"),
-            price_shock=-10.0, vol_multiplier=1.0,
+            price_shock=-10.0,
+            vol_multiplier=1.0,
         )
         dates = pd.date_range("2020-01-01", periods=2, freq="D")
-        ohlcv = {"X": pd.DataFrame({
-            "open": [100.0, 101.0], "high": [102.0, 103.0],
-            "low": [99.0, 100.0], "close": [100.0, 101.0],
-            "volume": [1000.0, 1000.0],
-        }, index=dates)}
+        ohlcv = {
+            "X": pd.DataFrame(
+                {
+                    "open": [100.0, 101.0],
+                    "high": [102.0, 103.0],
+                    "low": [99.0, 100.0],
+                    "close": [100.0, 101.0],
+                    "volume": [1000.0, 1000.0],
+                },
+                index=dates,
+            )
+        }
         signals = {"X": np.array([0.5, 0.5])}
         result = tester.run_scenario(scenario, signals, ohlcv)
         assert result["sharpe"] == 0.0

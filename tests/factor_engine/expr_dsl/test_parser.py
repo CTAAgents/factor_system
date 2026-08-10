@@ -1,7 +1,7 @@
 """FTS-Expr DSL 解析器测试。"""
+
 import pytest
 
-from fts.factor_engine.expr_dsl.ast import ExprNode
 from fts.factor_engine.expr_dsl.parser import FTSExprError, parse_expression
 
 

@@ -38,6 +38,7 @@ class ScenarioResult:
         signal_mean: 信号均值
         signal_std: 信号标准差
     """
+
     scenario_name: str
     category: str
     description: str
@@ -66,6 +67,7 @@ class ScenarioSummary:
         results: 每个场景的详细结果
         pass_rate: 通过率
     """
+
     total: int = 0
     passed: int = 0
     failed: int = 0
@@ -84,9 +86,11 @@ class ScenarioSummary:
         lines.append("=" * 70)
         lines.append("宏观行为场景测试报告")
         lines.append("=" * 70)
-        lines.append(f"总计: {self.total}  |  通过: {self.passed}  "
-                      f"|  失败: {self.failed}  |  异常: {self.errored}  "
-                      f"|  通过率: {self.pass_rate:.1%}")
+        lines.append(
+            f"总计: {self.total}  |  通过: {self.passed}  "
+            f"|  失败: {self.failed}  |  异常: {self.errored}  "
+            f"|  通过率: {self.pass_rate:.1%}"
+        )
         lines.append("")
 
         # 按分类聚合
@@ -102,8 +106,10 @@ class ScenarioSummary:
                 if r.error:
                     lines.append(f"    {status} {r.scenario_name}: ERROR - {r.error}")
                 elif not r.passed:
-                    detail = r.check_fn_message if r.check_fn_message else (
-                        f"信号范围 [{r.signal_min:.2f}, {r.signal_max:.2f}] 超出期望"
+                    detail = (
+                        r.check_fn_message
+                        if r.check_fn_message
+                        else (f"信号范围 [{r.signal_min:.2f}, {r.signal_max:.2f}] 超出期望")
                     )
                     lines.append(f"    {status} {r.scenario_name}: {detail}")
                 else:

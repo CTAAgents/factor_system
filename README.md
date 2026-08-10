@@ -2,8 +2,8 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-4464%2B%20passing-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.71.0-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-4680%2B%20passing-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.81.0-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -321,7 +321,7 @@ fts/                          # 核心源码（84 个 Python 文件）
 ├── llm.py                    # LLM 客户端（OpenAI/Anthropic/Mock）
 └── cli.py                    # CLI 统一入口
 
-tests/                        # 119+ 个测试文件，4474+ 个测试用例（含批量挖掘漏斗 21 用例 + GAP-X01/X02/X03 修复 6 用例 + GAP-L308/L309 收尾 26 用例 + GAP-S09~S12 收尾 27 用例 + GAP-I301/I205 收尾 14 用例 + GAP-I206 收尾 10 用例）
+tests/                        # 120+ 个测试文件，4671+ 个测试用例（含机构级权重学习 28 用例 + L3 调度期货路径 1 用例 + 批量挖掘漏斗 21 用例 + GAP-X01/X02/X03 修复 6 用例 + GAP-L308/L309 收尾 26 用例 + GAP-S09~S12 收尾 27 用例 + GAP-I301/I205 收尾 14 用例 + GAP-I206 收尾 10 用例 + GAP-I206 正交化闭环 10 用例 + GAP-I204 多目标适应度 7 用例 + GAP-L401 corr/cross_section_rank 算子 4 用例 + GAP-F13 漂移告警闭环 9 用例 + GAP-F10 种子库去重 13 用例 + GAP-F15 极值扰动 10 用例 + GAP-054 数据驱动动态池 11 用例 + GAP-055 盲测池机构标准 9 用例）
 scripts/                      # 工具脚本
 config/                       # 项目配置
 memory/                       # 运行时持久化（自动创建）

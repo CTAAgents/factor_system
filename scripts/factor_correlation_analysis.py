@@ -7,7 +7,9 @@
 
 依赖: numpy, pandas, matplotlib, seaborn, duckdb
 """
+
 import sys
+
 sys.path.insert(0, "d:/Programs/factor_system")
 
 import json
@@ -75,33 +77,33 @@ for i, f in enumerate(top_factors):
     sharpe = f.get("sharpe", 1.0)
     ic = f.get("ic", 0.05)
     family = f.get("family", "unknown")
-    
+
     # 基础特质收益
     idio_vol = 0.10 / (sharpe + 0.1)  # 特质波动率
     idio_return = np.random.normal(ic * 0.3, idio_vol, n_periods)
-    
+
     # 添加公共因子暴露（暴露系数随机，产生相关性）
     # 不同 family 的因子暴露不同，同 family 的因子暴露相似
     family_seed = hash(family) % 100
     np.random.seed(family_seed + i)
-    
+
     # 每个因子对公共因子的暴露系数
     exposures = np.random.uniform(-0.3, 0.8, n_common_factors)
     # 同 family 因子暴露相关性更高
-    if i > 0 and top_factors[i-1].get("family") == family:
+    if i > 0 and top_factors[i - 1].get("family") == family:
         prev_exposures = np.random.uniform(-0.2, 0.2, n_common_factors)
         exposures = 0.7 * exposures + 0.3 * prev_exposures
-    
+
     # 公共因子贡献
     common_contribution = common_factors @ exposures
-    
+
     # 合成收益 = 特质 + 公共因子贡献
     returns = idio_return + common_contribution
-    
+
     # 添加少量自相关
     for j in range(1, n_periods):
-        returns[j] += 0.02 * returns[j-1]
-    
+        returns[j] += 0.02 * returns[j - 1]
+
     factor_returns[factor_id] = returns
 
 np.random.seed(42)  # 重置随机种子
@@ -197,6 +199,7 @@ print(f"  • Spearman 热力图已保存: {spearman_path}")
 # ─── Step 5: 去冗余因子筛选 ────────────────────────────────
 print("\n🔍 Step 5: 去冗余因子筛选 (贪心算法)...")
 
+
 def greedy_diversification(
     corr_matrix: np.ndarray,
     factor_ids: list[str],
@@ -213,7 +216,7 @@ def greedy_diversification(
     3. 若最大相关性 < threshold，则加入组合
     4. 重复直到达到目标数量或遍历完所有因子
     """
-    n = len(factor_ids)
+    len(factor_ids)
     selected_indices = []
     selected_info = []
 
@@ -236,16 +239,19 @@ def greedy_diversification(
 
         if max_corr < corr_threshold:
             selected_indices.append(idx)
-            selected_info.append({
-                "rank": len(selected_indices),
-                "factor_id": factor_id,
-                "factor_name": factor_name,
-                "sharpe": round(sharpe, 4),
-                "max_corr_with_selected": round(max_corr, 4),
-                "index": idx,
-            })
+            selected_info.append(
+                {
+                    "rank": len(selected_indices),
+                    "factor_id": factor_id,
+                    "factor_name": factor_name,
+                    "sharpe": round(sharpe, 4),
+                    "max_corr_with_selected": round(max_corr, 4),
+                    "index": idx,
+                }
+            )
 
     return selected_info
+
 
 # 5.1 不同阈值筛选
 print("\n  测试不同相关性阈值...")
@@ -275,14 +281,16 @@ if best_selection is None:
     sorted_by_sharpe = np.argsort(factor_sharpes)[::-1]
     best_selection = []
     for rank, idx in enumerate(sorted_by_sharpe[:20], 1):
-        best_selection.append({
-            "rank": rank,
-            "factor_id": factor_ids[idx],
-            "factor_name": factor_names[idx],
-            "sharpe": round(factor_sharpes[idx], 4),
-            "max_corr_with_selected": 0.0,
-            "index": idx,
-        })
+        best_selection.append(
+            {
+                "rank": rank,
+                "factor_id": factor_ids[idx],
+                "factor_name": factor_names[idx],
+                "sharpe": round(factor_sharpes[idx], 4),
+                "max_corr_with_selected": 0.0,
+                "index": idx,
+            }
+        )
     best_threshold = "top_sharpe_only"
 
 print(f"\n  ✅ 最终选择: {len(best_selection)} 个因子 (策略={best_threshold})")
@@ -294,11 +302,7 @@ if best_threshold == "top_sharpe_only":
     for i, item in enumerate(best_selection):
         idx = item["index"]
         if selected_indices_temp:
-            max_corr = max(
-                abs(pearson_corr[idx, sel_idx])
-                for sel_idx in selected_indices_temp
-                if sel_idx != idx
-            )
+            max_corr = max(abs(pearson_corr[idx, sel_idx]) for sel_idx in selected_indices_temp if sel_idx != idx)
             item["max_corr_with_selected"] = round(max_corr, 4)
 
 print("\n  Top 20 去冗余因子组合:")
@@ -331,7 +335,7 @@ else:
     max_inner_corr = 0
     mean_inner_corr = 0
 
-print(f"\n  📈 组合统计:")
+print("\n  📈 组合统计:")
 print(f"    • 因子数量: {len(best_selection)}")
 print(f"    • 平均 Sharpe: {avg_sharpe:.4f}")
 print(f"    • 中位 Sharpe: {median_sharpe:.4f}")
@@ -421,22 +425,24 @@ print(f"  • Spearman 相关性矩阵: {spearman_csv_path}")
 # 7.3 因子元数据 CSV
 factors_meta = []
 for i, f in enumerate(top_factors):
-    factors_meta.append({
-        "factor_id": f["factor_id"],
-        "factor_name": f.get("name", ""),
-        "family": f.get("family", ""),
-        "sharpe": f.get("sharpe", 0),
-        "ic": f.get("ic", 0),
-        "is_selected": f["factor_id"] in [s["factor_id"] for s in best_selection],
-        "selection_rank": next(
-            (s["rank"] for s in best_selection if s["factor_id"] == f["factor_id"]),
-            None,
-        ),
-        "max_corr_in_selection": next(
-            (s["max_corr_with_selected"] for s in best_selection if s["factor_id"] == f["factor_id"]),
-            None,
-        ),
-    })
+    factors_meta.append(
+        {
+            "factor_id": f["factor_id"],
+            "factor_name": f.get("name", ""),
+            "family": f.get("family", ""),
+            "sharpe": f.get("sharpe", 0),
+            "ic": f.get("ic", 0),
+            "is_selected": f["factor_id"] in [s["factor_id"] for s in best_selection],
+            "selection_rank": next(
+                (s["rank"] for s in best_selection if s["factor_id"] == f["factor_id"]),
+                None,
+            ),
+            "max_corr_in_selection": next(
+                (s["max_corr_with_selected"] for s in best_selection if s["factor_id"] == f["factor_id"]),
+                None,
+            ),
+        }
+    )
 
 meta_df = pd.DataFrame(factors_meta)
 meta_csv_path = OUTPUT_DIR / "factors_metadata.csv"
@@ -450,15 +456,17 @@ for i in range(top_n):
         pearson_val = pearson_corr[i, j]
         spearman_val = spearman_corr[i, j]
         if abs(pearson_val) > 0.3:
-            high_corr_pairs.append({
-                "factor_a": factor_names[i],
-                "factor_b": factor_names[j],
-                "factor_id_a": factor_ids[i],
-                "factor_id_b": factor_ids[j],
-                "pearson_corr": round(pearson_val, 4),
-                "spearman_corr": round(spearman_val, 4),
-                "abs_pearson": round(abs(pearson_val), 4),
-            })
+            high_corr_pairs.append(
+                {
+                    "factor_a": factor_names[i],
+                    "factor_b": factor_names[j],
+                    "factor_id_a": factor_ids[i],
+                    "factor_id_b": factor_ids[j],
+                    "pearson_corr": round(pearson_val, 4),
+                    "spearman_corr": round(spearman_val, 4),
+                    "abs_pearson": round(abs(pearson_val), 4),
+                }
+            )
 
 high_corr_df = pd.DataFrame(high_corr_pairs)
 high_corr_csv_path = OUTPUT_DIR / "high_correlation_pairs.csv"
@@ -474,6 +482,7 @@ print(f"  • 去冗余筛选结果: {selection_csv_path} ({len(selection_df)} �
 # ─── Step 8: 保存分析报告 ──────────────────────────────────
 print("\n📝 Step 8: 生成分析报告...")
 
+
 # 转换 numpy 类型为 Python 原生类型
 def convert_numpy(obj):
     if isinstance(obj, (np.integer,)):
@@ -483,6 +492,7 @@ def convert_numpy(obj):
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
     return obj
+
 
 report = {
     "analysis_time": datetime.now().isoformat(),
@@ -521,10 +531,7 @@ report = {
 }
 
 report_path = OUTPUT_DIR / "analysis_report.json"
-report_path.write_text(
-    json.dumps(report, indent=2, ensure_ascii=False, default=convert_numpy),
-    encoding="utf-8"
-)
+report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=convert_numpy), encoding="utf-8")
 print(f"  • 分析报告已保存: {report_path}")
 
 # ─── 完成 ──────────────────────────────────────────────────
@@ -534,6 +541,6 @@ print("\n" + "=" * 70)
 print("✅ 因子相关性分析完成")
 print("=" * 70)
 print(f"\n📁 输出目录: {OUTPUT_DIR.absolute()}")
-print(f"\n生成文件:")
+print("\n生成文件:")
 for key, path_str in report["output_files"].items():
     print(f"  • {Path(path_str).name}")

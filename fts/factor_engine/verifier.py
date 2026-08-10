@@ -98,9 +98,7 @@ class FactorVerifier:
             VerifierNotLockedError: Verifier 未锁定时调用
         """
         if not self._locked:
-            raise VerifierNotLockedError(
-                "Verifier 未锁定，禁止判定。请调用 __init__ 后自动锁定。"
-            )
+            raise VerifierNotLockedError("Verifier 未锁定，禁止判定。请调用 __init__ 后自动锁定。")
 
         reasons: list[str] = []
         cfg = self._config
@@ -109,25 +107,15 @@ class FactorVerifier:
         bt = evaluation.get("level_1_backtest", {})
         if bt:
             if bt.get("ic", 0.0) < cfg["min_ic"]:
-                reasons.append(
-                    f"Level 1 失败: IC={bt.get('ic', 0.0):.4f} < {cfg['min_ic']}"
-                )
+                reasons.append(f"Level 1 失败: IC={bt.get('ic', 0.0):.4f} < {cfg['min_ic']}")
             if bt.get("icir", 0.0) < cfg["min_icir"]:
-                reasons.append(
-                    f"Level 1 失败: ICIR={bt.get('icir', 0.0):.4f} < {cfg['min_icir']}"
-                )
+                reasons.append(f"Level 1 失败: ICIR={bt.get('icir', 0.0):.4f} < {cfg['min_icir']}")
             if bt.get("sharpe", 0.0) < cfg["min_sharpe"]:
-                reasons.append(
-                    f"Level 1 失败: 夏普={bt.get('sharpe', 0.0):.4f} < {cfg['min_sharpe']}"
-                )
+                reasons.append(f"Level 1 失败: 夏普={bt.get('sharpe', 0.0):.4f} < {cfg['min_sharpe']}")
             if bt.get("max_drawdown", 1.0) > cfg["max_drawdown"]:
-                reasons.append(
-                    f"Level 1 失败: 最大回撤={bt.get('max_drawdown', 1.0):.4f} > {cfg['max_drawdown']}"
-                )
+                reasons.append(f"Level 1 失败: 最大回撤={bt.get('max_drawdown', 1.0):.4f} > {cfg['max_drawdown']}")
             if bt.get("oos_ratio", 0.0) < cfg["min_oos_ratio"]:
-                reasons.append(
-                    f"Level 1 失败: 样本外比例={bt.get('oos_ratio', 0.0):.4f} < {cfg['min_oos_ratio']}"
-                )
+                reasons.append(f"Level 1 失败: 样本外比例={bt.get('oos_ratio', 0.0):.4f} < {cfg['min_oos_ratio']}")
             if bt.get("turnover_monthly", 1.0) > cfg["max_turnover_monthly"]:
                 reasons.append(
                     f"Level 1 失败: 月度换手率={bt.get('turnover_monthly', 1.0):.4f} > {cfg['max_turnover_monthly']}"
@@ -140,9 +128,7 @@ class FactorVerifier:
         if ec:
             dims_passed = ec.get("dimensions_passed", 0)
             if dims_passed < cfg["min_economic_score"]:
-                reasons.append(
-                    f"Level 2 失败: 经济逻辑维度达标数={dims_passed} < {cfg['min_economic_score']}"
-                )
+                reasons.append(f"Level 2 失败: 经济逻辑维度达标数={dims_passed} < {cfg['min_economic_score']}")
 
         # Level 3: 多重检验
         mt = evaluation.get("level_3_multiple", {})
@@ -150,13 +136,9 @@ class FactorVerifier:
             if not mt.get("passed", False):
                 reasons.append("Level 3 失败: 多重检验未通过")
             if mt.get("adjusted_t", 0.0) < cfg["min_t_stat"]:
-                reasons.append(
-                    f"Level 3 失败: 调整后 t={mt.get('adjusted_t', 0.0):.4f} < {cfg['min_t_stat']}"
-                )
+                reasons.append(f"Level 3 失败: 调整后 t={mt.get('adjusted_t', 0.0):.4f} < {cfg['min_t_stat']}")
             if mt.get("fdr_q", 1.0) > cfg["max_fdr"]:
-                reasons.append(
-                    f"Level 3 失败: FDR={mt.get('fdr_q', 1.0):.4f} > {cfg['max_fdr']}"
-                )
+                reasons.append(f"Level 3 失败: FDR={mt.get('fdr_q', 1.0):.4f} > {cfg['max_fdr']}")
 
         # 整体判定（不接受任何 override）
         passed = len(reasons) == 0

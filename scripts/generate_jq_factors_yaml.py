@@ -65,10 +65,7 @@ def main():
         factors=[convert_to_yaml_format(d) for d in JQ_DEFINITIONS],
     )
 
-    output_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        "seeds", "stock", "jq_factors.yaml"
-    )
+    output_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "seeds", "stock", "jq_factors.yaml")
 
     with open(output_path, "w", encoding="utf-8") as f:
         yaml.dump(yaml_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)

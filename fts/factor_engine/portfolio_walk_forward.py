@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import statistics
 from collections.abc import Callable
-from typing import Optional, TypedDict
+from typing import Any, Optional, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -38,34 +38,37 @@ WeightFn = Callable[[pd.DataFrame], np.ndarray]
 
 class PortfolioWalkForwardConfig(TypedDict, total=False):
     """组合层走航验证配置。"""
-    window_days: int                    # 训练窗口长度（默认 180 交易日）
-    step_days: int                      # 滚动步长（默认 60）
-    min_test_days: int                  # 最小样本外长度（默认 20）
-    n_windows: int                      # 一次运行评估几个窗口（默认 3）
-    min_sharpe_consistency: float       # 至少 % 窗口夏普 > 0（默认 0.5）
-    max_sharpe_volatility: float        # 跨窗口夏普波动率上限（默认 0.5）
-    annualize_factor: int               # 年化因子（默认 252）
+
+    window_days: int  # 训练窗口长度（默认 180 交易日）
+    step_days: int  # 滚动步长（默认 60）
+    min_test_days: int  # 最小样本外长度（默认 20）
+    n_windows: int  # 一次运行评估几个窗口（默认 3）
+    min_sharpe_consistency: float  # 至少 % 窗口夏普 > 0（默认 0.5）
+    max_sharpe_volatility: float  # 跨窗口夏普波动率上限（默认 0.5）
+    annualize_factor: int  # 年化因子（默认 252）
 
 
 class PortfolioWindowResult(TypedDict, total=False):
     """单个窗口的组合走航结果。"""
+
     train_start: str
     train_end: str
     test_start: str
     test_end: str
-    sharpe: float                       # 样本外组合夏普（实测 w×R）
-    ic: float                           # 样本外组合 IC（权重×因子收益截面）
-    max_correlation: float              # 组合内最大因子相关性
-    turnover: float                     # 权重相对上窗口 L1 变化
+    sharpe: float  # 样本外组合夏普（实测 w×R）
+    ic: float  # 样本外组合 IC（权重×因子收益截面）
+    max_correlation: float  # 组合内最大因子相关性
+    turnover: float  # 权重相对上窗口 L1 变化
 
 
 class PortfolioWalkForwardResult(TypedDict, total=False):
     """组合层走航整体结果。"""
+
     windows: list[PortfolioWindowResult]
-    sharpe_consistency: float           # 夏普 > 0 的窗口占比
-    sharpe_volatility: float            # 跨窗口夏普标准差
-    consistency_score: float            # 综合评分（0-100）
-    passed: bool                        # 是否通过验证
+    sharpe_consistency: float  # 夏普 > 0 的窗口占比
+    sharpe_volatility: float  # 跨窗口夏普标准差
+    consistency_score: float  # 综合评分（0-100）
+    passed: bool  # 是否通过验证
     n_windows_completed: int
 
 
@@ -93,7 +96,7 @@ class PortfolioWalkForward:
     """
 
     def __init__(self, config: Optional[PortfolioWalkForwardConfig] = None) -> None:
-        merged = dict(DEFAULT_PORTFOLIO_WF_CONFIG)
+        merged: dict[str, Any] = dict(DEFAULT_PORTFOLIO_WF_CONFIG)
         if config:
             merged.update(config)
         self._config = merged
@@ -126,9 +129,7 @@ class PortfolioWalkForward:
                 w = np.nan_to_num(w, nan=0.0)
                 w = w / max(float(np.sum(w)), 1e-12)
                 if w.shape[0] != fr.shape[1]:
-                    raise ValueError(
-                        f"权重长度 {w.shape[0]} != 因子数 {fr.shape[1]}"
-                    )
+                    raise ValueError(f"权重长度 {w.shape[0]} != 因子数 {fr.shape[1]}")
             except Exception as e:
                 logger.warning("[L3-WF] 窗口权重计算失败: %s", e)
                 continue
@@ -137,19 +138,19 @@ class PortfolioWalkForward:
             sharpe = self._sharpe(test_returns)
             ic = self._portfolio_ic(test_df, w)
             max_corr = self._max_corr(test_df)
-            turnover = (
-                float(np.sum(np.abs(w - prev_w))) if prev_w is not None else 0.0
+            turnover = float(np.sum(np.abs(w - prev_w))) if prev_w is not None else 0.0
+            results.append(
+                PortfolioWindowResult(
+                    train_start=_to_date_str(train_df.index[0]),
+                    train_end=_to_date_str(train_df.index[-1]),
+                    test_start=_to_date_str(test_df.index[0]),
+                    test_end=_to_date_str(test_df.index[-1]),
+                    sharpe=float(sharpe),
+                    ic=float(ic),
+                    max_correlation=float(max_corr),
+                    turnover=turnover,
+                )
             )
-            results.append(PortfolioWindowResult(
-                train_start=_to_date_str(train_df.index[0]),
-                train_end=_to_date_str(train_df.index[-1]),
-                test_start=_to_date_str(test_df.index[0]),
-                test_end=_to_date_str(test_df.index[-1]),
-                sharpe=float(sharpe),
-                ic=float(ic),
-                max_correlation=float(max_corr),
-                turnover=turnover,
-            ))
             prev_w = w
 
         n = len(results)
@@ -160,7 +161,9 @@ class PortfolioWalkForward:
         sharpe_consistency = sum(1 for s in sharpes if s > 0) / n
         sharpe_vol = _safe_stdev(sharpes)
         consistency_score = self._compute_consistency_score(
-            sharpe_consistency, sharpe_vol, sharpes,
+            sharpe_consistency,
+            sharpe_vol,
+            sharpes,
         )
         min_consistency = self._config.get("min_sharpe_consistency", 0.5)
         max_vol = self._config.get("max_sharpe_volatility", 0.5)
@@ -196,7 +199,8 @@ class PortfolioWalkForward:
         return fr
 
     def _create_windows(
-        self, fr: pd.DataFrame,
+        self,
+        fr: pd.DataFrame,
     ) -> list[tuple[pd.DataFrame, pd.DataFrame]]:
         """创建 (train, test) 窗口对（滚动步长推进）。"""
         window_days = int(self._config.get("window_days", 180))
@@ -204,7 +208,6 @@ class PortfolioWalkForward:
         min_test_days = int(self._config.get("min_test_days", 20))
         n_windows = int(self._config.get("n_windows", 3))
 
-        dates = fr.index
         total = len(fr)
         windows: list[tuple[pd.DataFrame, pd.DataFrame]] = []
         # 用交易日个数近似窗口（日频数据）
@@ -269,8 +272,12 @@ class PortfolioWalkForward:
 
     def _empty_result(self) -> PortfolioWalkForwardResult:
         return PortfolioWalkForwardResult(
-            windows=[], sharpe_consistency=0.0, sharpe_volatility=0.0,
-            consistency_score=0.0, passed=False, n_windows_completed=0,
+            windows=[],
+            sharpe_consistency=0.0,
+            sharpe_volatility=0.0,
+            consistency_score=0.0,
+            passed=False,
+            n_windows_completed=0,
         )
 
 

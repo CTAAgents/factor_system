@@ -14,10 +14,8 @@ HARNESS §契约优先：本模块的输入/输出契约定义在 contracts.py �
 
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -37,6 +35,7 @@ DEFAULT_MIN_CLUSTER_SIZE: int = 1
 
 
 # ─── P1: 因子聚类 ─────────────────────────────────────────
+
 
 class FactorClusteringEngine:
     """因子聚类引擎（P1）— 信号相关性聚类 + 代表因子选择。
@@ -115,8 +114,8 @@ class FactorClusteringEngine:
                     signals[fid] = sig
                 else:
                     errors.append(f"{fid}: 信号为空或全 NaN")
-            except (FactorCompileError, Exception) as e:
-                errors.append(f"{fid}: {type(e).__name__}: {str(e)[:80]}")
+            except (FactorCompileError, Exception) as exc:
+                errors.append(f"{fid}: {type(exc).__name__}: {str(exc)[:80]}")
 
         if errors:
             for e in errors[:5]:
@@ -189,7 +188,10 @@ class FactorClusteringEngine:
         result = sorted(clusters.values(), key=len, reverse=True)
         logger.info(
             "[P1] 层次聚类完成: %d 个因子 → %d 个簇 (threshold=%.2f, method=%s)",
-            n, len(result), self.cluster_threshold, self.linkage_method,
+            n,
+            len(result),
+            self.cluster_threshold,
+            self.linkage_method,
         )
         return result
 
@@ -210,7 +212,7 @@ class FactorClusteringEngine:
             代表因子列表（每个簇选一个）
         """
         # 构建 fid → factor 映射
-        fid_to_factor = {}
+        fid_to_factor: dict[str, dict[str, Any]] = {}
         for f in factors:
             fid = f.get("factor_id", f.get("name", "?"))
             fid_to_factor[fid] = f
@@ -222,21 +224,19 @@ class FactorClusteringEngine:
             if len(cluster) == 1:
                 # 单因子簇直接保留
                 fid = factor_ids[cluster[0]]
-                f = fid_to_factor.get(fid)
-                if f:
-                    selected.append(f)
-                    cluster_info.append(
-                        f"  簇{cluster_idx}: [{f.get('name', fid)}] (单因子簇)"
-                    )
+                factor = fid_to_factor.get(fid)
+                if factor:
+                    selected.append(factor)
+                    cluster_info.append(f"  簇{cluster_idx}: [{factor.get('name', fid)}] (单因子簇)")
                 continue
 
             # 多因子簇：按 Sharpe 排序，选最高者
             cluster_factors = []
             for idx in cluster:
                 fid = factor_ids[idx]
-                f = fid_to_factor.get(fid)
-                if f:
-                    cluster_factors.append(f)
+                factor = fid_to_factor.get(fid)
+                if factor:
+                    cluster_factors.append(factor)
 
             if not cluster_factors:
                 continue
@@ -258,7 +258,9 @@ class FactorClusteringEngine:
         removed_count = len(factors) - len(selected)
         logger.info(
             "[P1] 代表因子选择完成: %d → %d 因子 (移除 %d 个冗余)",
-            len(factors), len(selected), removed_count,
+            len(factors),
+            len(selected),
+            removed_count,
         )
         for info in cluster_info:
             logger.info("[P1] %s", info)
@@ -306,6 +308,7 @@ class FactorClusteringEngine:
 
 
 # ─── P2: PCA 降维 ─────────────────────────────────────────
+
 
 class PCASignalCompressor:
     """PCA 信号降维压缩器（P2）— 信号源压缩。
@@ -360,7 +363,7 @@ class PCASignalCompressor:
                 factor_ids: 因子 ID 列表
                 dates: 日期索引
         """
-        from .factor_program import FactorExecutor, FactorCompileError
+        from .factor_program import FactorExecutor
 
         if not panel_data:
             logger.warning("[P2] 面板数据为空，无法计算信号矩阵")
@@ -482,7 +485,9 @@ class PCASignalCompressor:
 
         logger.info(
             "[P2] PCA 完成: %d 因子 → %d 主成分 (解释方差=%.1f%%)",
-            n_factors, n_keep, explained * 100,
+            n_factors,
+            n_keep,
+            explained * 100,
         )
 
         # Step 4: 构建 PCA 信号（通过载荷矩阵映射回因子权重）
@@ -511,27 +516,26 @@ class PCASignalCompressor:
             f = fid_to_factor.get(fid)
             if f is None:
                 continue
-            pca_signals.append({
-                "factor_id": fid,
-                "name": f.get("name", fid),
-                "weight": float(weights[j]),
-                "sharpe": f.get("sharpe", 0.0),
-                "ic": f.get("ic", 0.0),
-                "turnover": f.get("turnover", 0.0),
-                "decay_6m": f.get("decay_6m", 0.0),
-                "orthogonalized": True,  # PCA 主成分天然正交
-                "retained": weights[j] > 0.001,
-                "pca_loading": float(np.sum(np.abs(loadings[j]))),
-                "pca_component": int(np.argmax(np.abs(loadings[j]))),
-            })
+            pca_signals.append(
+                {
+                    "factor_id": fid,
+                    "name": f.get("name", fid),
+                    "weight": float(weights[j]),
+                    "sharpe": f.get("sharpe", 0.0),
+                    "ic": f.get("ic", 0.0),
+                    "turnover": f.get("turnover", 0.0),
+                    "decay_6m": f.get("decay_6m", 0.0),
+                    "orthogonalized": True,  # PCA 主成分天然正交
+                    "retained": weights[j] > 0.001,
+                    "pca_loading": float(np.sum(np.abs(loadings[j]))),
+                    "pca_component": int(np.argmax(np.abs(loadings[j]))),
+                }
+            )
 
         # 构建因子载荷映射
         factor_loadings = {}
         for j, fid in enumerate(fids):
-            factor_loadings[fid] = {
-                f"pc_{k}": float(loadings[j, k])
-                for k in range(n_keep)
-            }
+            factor_loadings[fid] = {f"pc_{k}": float(loadings[j, k]) for k in range(n_keep)}
 
         result["pca_applied"] = True
         result["n_components"] = n_keep
@@ -543,6 +547,7 @@ class PCASignalCompressor:
 
 
 # ─── 工具函数 ─────────────────────────────────────────────
+
 
 def compute_cluster_summary(
     factors: list[dict[str, Any]],
@@ -560,9 +565,7 @@ def compute_cluster_summary(
     return {
         "n_original": len(factors),
         "n_reduced": len(reduced_factors),
-        "reduction_ratio": round(
-            1.0 - len(reduced_factors) / len(factors), 4
-        ) if factors else 0.0,
+        "reduction_ratio": round(1.0 - len(reduced_factors) / len(factors), 4) if factors else 0.0,
         "removed_count": len(factors) - len(reduced_factors),
     }
 
@@ -582,9 +585,7 @@ def compute_pca_summary(pca_result: dict[str, Any]) -> dict[str, Any]:
         "pca_applied": pca_result.get("pca_applied", False),
         "n_original": n_original,
         "n_components": n_components,
-        "compression_ratio": round(
-            1.0 - n_components / n_original, 4
-        ) if n_original > 0 else 0.0,
+        "compression_ratio": round(1.0 - n_components / n_original, 4) if n_original > 0 else 0.0,
         "explained_variance_ratio": pca_result.get("explained_variance_ratio", 0.0),
     }
 

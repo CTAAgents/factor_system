@@ -47,7 +47,13 @@ DEFAULT_SOURCE_WEIGHTS: dict[str, float] = {
 
 # 参与融合的 OHLCV 字段（HOLD/OI_CHANGE/PRE_SETTLE 不融合，是事件型字段）
 FUSION_FIELDS: tuple[str, ...] = (
-    "open", "high", "low", "close", "volume", "amount", "settle",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+    "settle",
 )
 
 
@@ -115,9 +121,7 @@ class OHLCVFusion:
             return self._passthrough(symbol, date, src_name, row, trace_id)
 
         # 1) 收集每个字段的多源值
-        field_values: dict[str, dict[str, float]] = {
-            f: {} for f in FUSION_FIELDS
-        }
+        field_values: dict[str, dict[str, float]] = {f: {} for f in FUSION_FIELDS}
         for src_name, row in source_rows.items():
             for field in FUSION_FIELDS:
                 v = row.get(field)
@@ -182,7 +186,9 @@ class OHLCVFusion:
             result["amount"] = fused["amount"]
         if "settle" in fused:
             result["settle"] = fused["settle"]
-        result.update(other_fields)
+        for _f in ("hold", "oi_change", "pre_settle", "vwap"):
+            if _f in other_fields:
+                result[_f] = other_fields[_f]
         if max_diff_pct > 0:
             result["disagreement_pct"] = max_diff_pct
         return result
@@ -298,7 +304,9 @@ class OHLCVFusion:
         if diff_pct > self.outlier_threshold:
             logger.debug(
                 "[fusion][HIERARCHICAL] 主源 %s 偏离中位数 %.4f > %.4f，降级到中位数",
-                priority_src, diff_pct, self.outlier_threshold,
+                priority_src,
+                diff_pct,
+                self.outlier_threshold,
             )
             return median
         return priority_value
@@ -337,7 +345,7 @@ class OHLCVFusion:
             v = row.get(f)
             if v is not None and not (isinstance(v, float) and np.isnan(v)):
                 try:
-                    result[f] = float(v)  # type: ignore[literal-required]
+                    result[f] = float(v)
                 except (TypeError, ValueError):
                     pass
         return result

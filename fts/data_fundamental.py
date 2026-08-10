@@ -27,69 +27,70 @@ logger = logging.getLogger(__name__)
 
 # 估值类字段（来源于 data_profile）
 VALUATION_FIELDS: list[str] = [
-    "pe_ttm",       # 市盈率 TTM
-    "pb",           # 市净率
-    "ps_ttm",       # 市销率 TTM
-    "pcf_ttm",      # 市现率 TTM
+    "pe_ttm",  # 市盈率 TTM
+    "pb",  # 市净率
+    "ps_ttm",  # 市销率 TTM
+    "pcf_ttm",  # 市现率 TTM
 ]
 
 # 市值类字段（来源于 data_profile）
 SIZE_FIELDS: list[str] = [
-    "total_market_cap",    # 总市值
-    "free_market_cap",     # 流通市值
+    "total_market_cap",  # 总市值
+    "free_market_cap",  # 流通市值
     "circulating_market_cap",  # 流通市值（别名）
 ]
 
 # 交易类字段（来源于 data_profile）
 TRADING_FIELDS: list[str] = [
-    "turnover_rate",       # 换手率
-    "volume_ratio",        # 量比
-    "amplitude",           # 振幅
+    "turnover_rate",  # 换手率
+    "volume_ratio",  # 量比
+    "amplitude",  # 振幅
 ]
 
 # 财务质量类字段（来源于 data_finance 利润表+资产负债表）
 QUALITY_FIELDS: list[str] = [
-    "roe",                 # 净资产收益率
-    "roa",                 # 总资产收益率
-    "gross_margin",        # 毛利率
-    "net_margin",          # 净利率
-    "debt_to_equity",      # 资产负债率
-    "current_ratio",       # 流动比率
-    "eps",                 # 每股收益
-    "bps",                 # 每股净资产
+    "roe",  # 净资产收益率
+    "roa",  # 总资产收益率
+    "gross_margin",  # 毛利率
+    "net_margin",  # 净利率
+    "debt_to_equity",  # 资产负债率
+    "current_ratio",  # 流动比率
+    "eps",  # 每股收益
+    "bps",  # 每股净资产
 ]
 
 # 成长类字段（来源于 data_finance 同比数据）
 GROWTH_FIELDS: list[str] = [
-    "revenue_growth",      # 营业收入同比增长
-    "profit_growth",       # 净利润同比增长
-    "asset_growth",        # 总资产同比增长
+    "revenue_growth",  # 营业收入同比增长
+    "profit_growth",  # 净利润同比增长
+    "asset_growth",  # 总资产同比增长
 ]
 
 # 宏观类字段（来源于 data_macro）
 MACRO_FIELDS: list[str] = [
-    "pmi",                 # 制造业 PMI
-    "cpi",                 # CPI 同比
-    "gdp_growth",          # GDP 增速
-    "m2_growth",           # M2 增速
-    "shibor_1y",           # 1年期 SHIBOR
-    "lpr_1y",              # 1年期 LPR
+    "pmi",  # 制造业 PMI
+    "cpi",  # CPI 同比
+    "gdp_growth",  # GDP 增速
+    "m2_growth",  # M2 增速
+    "shibor_1y",  # 1年期 SHIBOR
+    "lpr_1y",  # 1年期 LPR
 ]
 
 # 全部基本面字段索引
-FUNDAMENTAL_FIELDS: list[str] = sorted(set(
-    VALUATION_FIELDS + SIZE_FIELDS + TRADING_FIELDS
-    + QUALITY_FIELDS + GROWTH_FIELDS + MACRO_FIELDS
-))
+FUNDAMENTAL_FIELDS: list[str] = sorted(
+    set(VALUATION_FIELDS + SIZE_FIELDS + TRADING_FIELDS + QUALITY_FIELDS + GROWTH_FIELDS + MACRO_FIELDS)
+)
 
 
 # ─── 基本面数据不可用异常 ─────────────────────────────────
+
 
 class FundamentalDataError(RuntimeError):
     """基本面数据获取失败。"""
 
 
 # ─── 基本面数据提供者 ─────────────────────────────────────
+
 
 class FundamentalProvider:
     """基本面数据提供者 — 获取并注入基本面字段到 OHLCV DataFrame。
@@ -121,8 +122,7 @@ class FundamentalProvider:
 
     # ── 公开接口 ──
 
-    def enrich_ohlcv(self, df: pd.DataFrame, symbol: str, *,
-                     trace_id: str = "") -> pd.DataFrame:
+    def enrich_ohlcv(self, df: pd.DataFrame, symbol: str, *, trace_id: str = "") -> pd.DataFrame:
         """将基本面字段注入 OHLCV DataFrame。
 
         Args:
@@ -146,8 +146,7 @@ class FundamentalProvider:
 
         return self._synthetic_enrich(df)
 
-    def enrich_panel(self, panel: dict[str, pd.DataFrame], *,
-                     trace_id: str = "") -> dict[str, pd.DataFrame]:
+    def enrich_panel(self, panel: dict[str, pd.DataFrame], *, trace_id: str = "") -> dict[str, pd.DataFrame]:
         """批量注入基本面字段到面板数据。
 
         Args:
@@ -167,8 +166,7 @@ class FundamentalProvider:
 
     # ── MCP 获取路径 ──
 
-    def _mcp_enrich(self, df: pd.DataFrame, symbol: str,
-                    trace_id: str) -> pd.DataFrame:
+    def _mcp_enrich(self, df: pd.DataFrame, symbol: str, trace_id: str) -> pd.DataFrame:
         """从 MCP 桥接缓存获取真实基本面数据并注入 DataFrame。
 
         数据来源:
@@ -196,11 +194,11 @@ class FundamentalProvider:
         """延迟初始化 MCPBridge。"""
         if self._bridge is None:
             from fts.data_mcp_bridge import MCPBridge
+
             self._bridge = MCPBridge()
         return self._bridge
 
-    def _apply_bridge_data(self, df: pd.DataFrame,
-                           data: dict[str, Any]) -> None:
+    def _apply_bridge_data(self, df: pd.DataFrame, data: dict[str, Any]) -> None:
         """将 MCP 桥接数据注入 DataFrame。"""
         # 估值类
         for field in VALUATION_FIELDS:
@@ -246,6 +244,7 @@ class FundamentalProvider:
 
         try:
             from fts.data_mcp import _get_http
+
             client = _get_http()
             # 使用东方财富宏观 API
             resp = client.get(
@@ -335,6 +334,7 @@ class FundamentalProvider:
 
 
 # ─── 辅助函数 ─────────────────────────────────────────────
+
 
 def _to_westock_code(code: str) -> str:
     """将 FTS 代码格式转为 westock 格式。

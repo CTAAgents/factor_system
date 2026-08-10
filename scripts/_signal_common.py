@@ -11,6 +11,7 @@ scripts/_signal_common.py — 信号管道公共模块（GAP-S04）
 
 版本: v1.0.0 (GAP-S04)
 """
+
 from __future__ import annotations
 
 import warnings
@@ -22,12 +23,13 @@ import pandas as pd
 # 抑制 numpy/scipy 运行时警告
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
 warnings.filterwarnings("ignore", category=FutureWarning, module="numpy")
-warnings.filterwarnings("ignore", category=FutureWarning,
-                        message=".*treating keys as positions is deprecated.*")
-warnings.filterwarnings("ignore", category=FutureWarning,
-                        message=".*Series.__setitem__ treating keys as positions is deprecated.*")
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*treating keys as positions is deprecated.*")
+warnings.filterwarnings(
+    "ignore", category=FutureWarning, message=".*Series.__setitem__ treating keys as positions is deprecated.*"
+)
 try:
     from scipy.stats import ConstantInputWarning
+
     warnings.filterwarnings("ignore", category=ConstantInputWarning)
 except ImportError:
     pass
@@ -108,6 +110,7 @@ def compute_factor_sign_flips(
                     warnings.filterwarnings("ignore", category=RuntimeWarning)
                     try:
                         from scipy.stats import ConstantInputWarning
+
                         warnings.filterwarnings("ignore", category=ConstantInputWarning)
                     except ImportError:
                         pass
@@ -215,8 +218,7 @@ def compute_ridge_weights(
     if valid_factor_names:
         dropped = set(factor_names) - set(valid_factor_names)
         if dropped:
-            print(f"      [Ridge] 排除 {len(dropped)} 个高 NaN 因子: "
-                  f"{', '.join(sorted(dropped))}")
+            print(f"      [Ridge] 排除 {len(dropped)} 个高 NaN 因子: {', '.join(sorted(dropped))}")
         factor_names = valid_factor_names
     n_factors = len(factor_names)
     if n_factors <= 1:
@@ -268,8 +270,7 @@ def compute_ridge_weights(
 
     min_samples = max(n_factors * 3, 30)
     if len(X_list) < min_samples:
-        print(f"      [Ridge] 训练样本不足 ({len(X_list)} < {min_samples})，"
-              f"回退到等权")
+        print(f"      [Ridge] 训练样本不足 ({len(X_list)} < {min_samples})，回退到等权")
         return {f: 1.0 / n_factors for f in factor_names}
 
     X = np.array(X_list)
@@ -295,8 +296,7 @@ def compute_ridge_weights(
                 high_corr_pairs.append((factor_names[i], factor_names[j], c))
 
     if high_corr_pairs:
-        print(f"      [相关性惩罚] 检测到 {len(high_corr_pairs)} 个高相关因子对 "
-              f"(|corr|>{corr_threshold}):")
+        print(f"      [相关性惩罚] 检测到 {len(high_corr_pairs)} 个高相关因子对 (|corr|>{corr_threshold}):")
         for f1, f2, c in high_corr_pairs[:5]:
             print(f"        - {f1} × {f2}: {c:.3f}")
         if len(high_corr_pairs) > 5:
@@ -319,8 +319,10 @@ def compute_ridge_weights(
         penalty_y = np.array(penalty_targets)
         X_augmented = np.vstack([X_scaled, penalty_X])
         y_augmented = np.concatenate([y, penalty_y])
-        print(f"      [相关性惩罚] 追加 {len(penalty_features_list)} 个惩罚样本，"
-              f"训练集从 {len(X_scaled)} 增至 {len(X_augmented)}")
+        print(
+            f"      [相关性惩罚] 追加 {len(penalty_features_list)} 个惩罚样本，"
+            f"训练集从 {len(X_scaled)} 增至 {len(X_augmented)}"
+        )
     else:
         X_augmented = X_scaled
         y_augmented = y
@@ -328,6 +330,7 @@ def compute_ridge_weights(
     # Ridge 回归
     if alpha is not None:
         from sklearn.linear_model import Ridge
+
         ridge = Ridge(alpha=alpha, fit_intercept=True)
     else:
         ridge = RidgeCV(
@@ -341,17 +344,14 @@ def compute_ridge_weights(
     if total < 1e-10:
         return {f: 1.0 / n_factors for f in factor_names}
 
-    weights = {fname: float(coef) / float(total)
-               for fname, coef in zip(factor_names, coefs)}
+    weights = {fname: float(coef) / float(total) for fname, coef in zip(factor_names, coefs)}
 
     # ── 极端相关因子硬删除 ──
-    extreme_pairs = [(f1, f2, c) for f1, f2, c in high_corr_pairs
-                     if c > extreme_threshold]
+    extreme_pairs = [(f1, f2, c) for f1, f2, c in high_corr_pairs if c > extreme_threshold]
     removed_factors: set[str] = set()
 
     if extreme_pairs:
-        print(f"      [硬删除] 检测到 {len(extreme_pairs)} 个极端相关因子对 "
-              f"(|corr|>{extreme_threshold}):")
+        print(f"      [硬删除] 检测到 {len(extreme_pairs)} 个极端相关因子对 (|corr|>{extreme_threshold}):")
         for f1, f2, c in extreme_pairs:
             print(f"        {f1} × {f2} = {c:.4f}")
 
@@ -364,8 +364,7 @@ def compute_ridge_weights(
                 weights[keep] += weights[drop]
                 weights[drop] = 0.0
                 removed_factors.add(drop)
-                print(f"        → 保留 {keep} (w={weights[keep]:.4f}), "
-                      f"剔除 {drop} (w=0)")
+                print(f"        → 保留 {keep} (w={weights[keep]:.4f}), 剔除 {drop} (w=0)")
             elif f1 in removed_factors and f2 not in removed_factors:
                 weights[f2] += weights[f1]
                 removed_factors.add(f1)
@@ -376,8 +375,7 @@ def compute_ridge_weights(
         weights = {k: v for k, v in weights.items() if k not in removed_factors}
         factor_names = [f for f in factor_names if f not in removed_factors]
         n_factors = len(factor_names)
-        print(f"      [硬删除] 已剔除 {len(removed_factors)} 个冗余因子, "
-              f"剩余 {n_factors} 个因子")
+        print(f"      [硬删除] 已剔除 {len(removed_factors)} 个冗余因子, 剩余 {n_factors} 个因子")
 
     # ── 高相关因子对权重调整 (0.7 < |corr| <= extreme_threshold) ──
     corr_adjusted = 0
@@ -406,9 +404,8 @@ def compute_ridge_weights(
     w_sorted = sorted(weights.items(), key=lambda x: -x[1])
     top3_str = ", ".join(f"{n}({w:.3f})" for n, w in w_sorted[:3])
     bottom3_str = ", ".join(f"{n}({w:.3f})" for n, w in w_sorted[-3:])
-    alpha_used = ridge.alpha_ if hasattr(ridge, 'alpha_') else alpha
-    print(f"      Ridge α={alpha_used:.2f} | 权重 Top3: {top3_str} | "
-          f"Bottom3: {bottom3_str}")
+    alpha_used = ridge.alpha_ if hasattr(ridge, "alpha_") else alpha
+    print(f"      Ridge α={alpha_used:.2f} | 权重 Top3: {top3_str} | Bottom3: {bottom3_str}")
 
     return weights
 

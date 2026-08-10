@@ -7,7 +7,6 @@ HARNESS §11-logic-review-plan.md §B.2:
 
 from __future__ import annotations
 
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -38,15 +37,17 @@ def sample_data() -> pd.DataFrame:
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
     volume = np.random.randint(1000, 10000, n).astype(float)
-    return pd.DataFrame({
-        "date": dates,
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.3,
-        "low": close - np.abs(np.random.randn(n)) * 0.3,
-        "close": close,
-        "volume": volume,
-        "vwap": close + np.random.randn(n) * 0.05,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.3,
+            "low": close - np.abs(np.random.randn(n)) * 0.3,
+            "close": close,
+            "volume": volume,
+            "vwap": close + np.random.randn(n) * 0.05,
+        }
+    )
 
 
 @pytest.fixture
@@ -62,7 +63,7 @@ def forward_returns() -> np.ndarray:
 @pytest.fixture
 def simple_momentum_factor() -> FactorProgram:
     """一个简单的动量因子。"""
-    code = '''
+    code = """
 def factor_program(data, params):
     import numpy as np
     import pandas as pd
@@ -70,7 +71,7 @@ def factor_program(data, params):
     n = params.get("lookback", 10)
     mom = pd.Series(close).pct_change(n).values
     return np.clip(np.nan_to_num(mom, nan=0.0), -1.0, 1.0)
-'''
+"""
     return create_factor_program(
         name="simple_momentum",
         code=code,
@@ -82,8 +83,11 @@ def factor_program(data, params):
             "lookback": 10,
         },
         economic_logic={
-            "theory": 3, "behavioral": 3, "microstructure": 3,
-            "institutional": 3, "narrative": "简单动量因子，用于测试",
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "简单动量因子，用于测试",
         },
         source="test",
     )
@@ -147,8 +151,8 @@ class TestGenerateOODData:
     def test_low_vol_decreases_volatility(self, sample_data):
         """低波动场景应减小价格波动。"""
         ood = _generate_ood_data(sample_data, "low_vol", random_seed=42)
-        original_std = sample_data["close"].std()
-        ood_std = ood["close"].std()
+        sample_data["close"].std()
+        ood["close"].std()
         # 低波动噪声很小，但 close 本身不变，所以 std 应接近
         # 这里只验证不崩溃
         assert ood.shape == sample_data.shape
@@ -187,9 +191,7 @@ class TestRobustnessTesterInit:
 class TestRobustnessTesterRun:
     """测试 run() 方法。"""
 
-    def test_run_returns_correct_structure(
-        self, sample_data, forward_returns, simple_momentum_factor
-    ):
+    def test_run_returns_correct_structure(self, sample_data, forward_returns, simple_momentum_factor):
         """run() 返回 RobustnessTestResult 且包含三类测试结果。"""
         tester = RobustnessTester()
         result = tester.run(simple_momentum_factor, sample_data, forward_returns)
@@ -201,9 +203,7 @@ class TestRobustnessTesterRun:
         assert len(result["missing_value_results"]) == 3
         assert len(result["ood_results"]) == 4
 
-    def test_adversarial_results_have_correct_fields(
-        self, sample_data, forward_returns, simple_momentum_factor
-    ):
+    def test_adversarial_results_have_correct_fields(self, sample_data, forward_returns, simple_momentum_factor):
         """对抗样本结果包含必要字段。"""
         tester = RobustnessTester()
         result = tester.run(simple_momentum_factor, sample_data, forward_returns)
@@ -217,9 +217,7 @@ class TestRobustnessTesterRun:
             assert "ic_change" in r
             assert "passed" in r
 
-    def test_missing_value_results_have_correct_fields(
-        self, sample_data, forward_returns, simple_momentum_factor
-    ):
+    def test_missing_value_results_have_correct_fields(self, sample_data, forward_returns, simple_momentum_factor):
         """缺失值结果包含必要字段。"""
         tester = RobustnessTester()
         result = tester.run(simple_momentum_factor, sample_data, forward_returns)
@@ -232,9 +230,7 @@ class TestRobustnessTesterRun:
             assert "ic_retention" in r
             assert "passed" in r
 
-    def test_ood_results_have_correct_fields(
-        self, sample_data, forward_returns, simple_momentum_factor
-    ):
+    def test_ood_results_have_correct_fields(self, sample_data, forward_returns, simple_momentum_factor):
         """分布外结果包含必要字段。"""
         tester = RobustnessTester()
         result = tester.run(simple_momentum_factor, sample_data, forward_returns)
@@ -247,9 +243,7 @@ class TestRobustnessTesterRun:
             assert "ic_retention" in r
             assert "passed" in r
 
-    def test_summary_contains_correct_info(
-        self, sample_data, forward_returns, simple_momentum_factor
-    ):
+    def test_summary_contains_correct_info(self, sample_data, forward_returns, simple_momentum_factor):
         """汇总信息应包含必要字段。"""
         tester = RobustnessTester()
         result = tester.run(simple_momentum_factor, sample_data, forward_returns)
@@ -264,24 +258,28 @@ class TestRobustnessTesterRun:
         assert s["missing_value"]["total"] == 3
         assert s["ood"]["total"] == 4
 
-    def test_run_without_forward_returns(
-        self, sample_data, simple_momentum_factor
-    ):
+    def test_run_without_forward_returns(self, sample_data, simple_momentum_factor):
         """不传 forward_returns 时仍可运行。"""
         # 使用不依赖 forward_returns 的因子（信号值排序）
-        code = '''
+        code = """
 def factor_program(data, params):
     import numpy as np
     close = data['close'].values if hasattr(data, 'close') else data['close']
     score = np.diff(close, prepend=close[0]) / np.maximum(close, 1e-10)
     return np.clip(np.nan_to_num(score, nan=0.0), -1.0, 1.0)
-'''
+"""
         factor = create_factor_program(
-            name="simple_momentum", code=code, params={},
-            signature={"input_fields": ["close"], "output_type": "signal",
-                       "frequency": "daily", "lookback": 2},
-            economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3,
-                            "institutional": 3, "narrative": "简单动量因子"},
+            name="simple_momentum",
+            code=code,
+            params={},
+            signature={"input_fields": ["close"], "output_type": "signal", "frequency": "daily", "lookback": 2},
+            economic_logic={
+                "theory": 3,
+                "behavioral": 3,
+                "microstructure": 3,
+                "institutional": 3,
+                "narrative": "简单动量因子",
+            },
             source="test",
         )
         forward_ret = np.random.randn(len(sample_data)) * 0.01
@@ -293,9 +291,7 @@ def factor_program(data, params):
 class TestRobustnessTesterReport:
     """测试报告生成。"""
 
-    def test_report_returns_string(
-        self, sample_data, forward_returns, simple_momentum_factor
-    ):
+    def test_report_returns_string(self, sample_data, forward_returns, simple_momentum_factor):
         """report() 应返回字符串。"""
         tester = RobustnessTester()
         result = tester.run(simple_momentum_factor, sample_data, forward_returns)
@@ -306,9 +302,7 @@ class TestRobustnessTesterReport:
         assert simple_momentum_factor["name"] in report_str
         assert "鲁棒性测试报告" in report_str
 
-    def test_report_contains_all_sections(
-        self, sample_data, forward_returns, simple_momentum_factor
-    ):
+    def test_report_contains_all_sections(self, sample_data, forward_returns, simple_momentum_factor):
         """报告应包含对抗样本、缺失值、分布外和汇总四个章节。"""
         tester = RobustnessTester()
         result = tester.run(simple_momentum_factor, sample_data, forward_returns)
@@ -323,9 +317,7 @@ class TestRobustnessTesterReport:
 class TestRobustnessTesterCustomThresholds:
     """测试自定义阈值。"""
 
-    def test_custom_thresholds_affect_results(
-        self, sample_data, forward_returns, simple_momentum_factor
-    ):
+    def test_custom_thresholds_affect_results(self, sample_data, forward_returns, simple_momentum_factor):
         """自定义阈值应影响通过/不通过判定。"""
         # 严格阈值
         strict = RobustnessTester(

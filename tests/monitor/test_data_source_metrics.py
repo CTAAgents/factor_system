@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT))
 def _clear_metrics_cache():
     """每次测试前清理 _build_data_source_metrics 的模块级别缓存，避免测试间干扰。"""
     import fts.monitor.http_server as mod
+
     mod._metrics_cache["data"] = None
     mod._metrics_cache["ts"] = 0.0
     yield
@@ -66,12 +67,18 @@ class TestMetricsDataSourcesEndpoint:
         mock_agg = MagicMock()
         mock_agg.get_source_status.return_value = {
             "TQ_LOCAL": {
-                "consecutive_failures": 0, "circuit_open": False,
-                "total_success": 100, "total_failure": 5, "last_error": "",
+                "consecutive_failures": 0,
+                "circuit_open": False,
+                "total_success": 100,
+                "total_failure": 5,
+                "last_error": "",
             },
             "WIND": {
-                "consecutive_failures": 0, "circuit_open": False,
-                "total_success": 50, "total_failure": 2, "last_error": "",
+                "consecutive_failures": 0,
+                "circuit_open": False,
+                "total_success": 50,
+                "total_failure": 2,
+                "last_error": "",
             },
         }
 
@@ -93,12 +100,18 @@ class TestMetricsDataSourcesEndpoint:
         mock_agg = MagicMock()
         mock_agg.get_source_status.return_value = {
             "TQ_LOCAL": {
-                "consecutive_failures": 0, "circuit_open": False,
-                "total_success": 100, "total_failure": 0, "last_error": "",
+                "consecutive_failures": 0,
+                "circuit_open": False,
+                "total_success": 100,
+                "total_failure": 0,
+                "last_error": "",
             },
             "WIND": {
-                "consecutive_failures": 5, "circuit_open": True,
-                "total_success": 50, "total_failure": 10, "last_error": "timeout",
+                "consecutive_failures": 5,
+                "circuit_open": True,
+                "total_success": 50,
+                "total_failure": 10,
+                "last_error": "timeout",
             },
         }
 
@@ -135,13 +148,24 @@ class TestMetricsDataSourcesEndpoint:
             "started_at": "2026-08-04T17:30:00",
             "finished_at": "2026-08-04T17:31:00",
             "elapsed_seconds": 60.0,
-            "symbols_total": 25, "success": 24, "failure": 1,
+            "symbols_total": 25,
+            "success": 24,
+            "failure": 1,
             "total_rows": 12000,
-            "source_status": {"TQ_LOCAL": {"consecutive_failures": 0, "circuit_open": False, "total_success": 25, "total_failure": 0, "last_error": ""}},
+            "source_status": {
+                "TQ_LOCAL": {
+                    "consecutive_failures": 0,
+                    "circuit_open": False,
+                    "total_success": 25,
+                    "total_failure": 0,
+                    "last_error": "",
+                }
+            },
             "failures": [{"symbol": "WH0", "reason": "empty"}],
         }
         (lineage / "sync_summary_20260804_173000.json").write_text(
-            json.dumps(summary, ensure_ascii=False), encoding="utf-8",
+            json.dumps(summary, ensure_ascii=False),
+            encoding="utf-8",
         )
 
         mock_agg = MagicMock()
@@ -163,14 +187,20 @@ class TestMetricsDataSourcesEndpoint:
         lineage = tmp_path / "data" / "_lineage"
         lineage.mkdir(parents=True)
         summary = {
-            "trace_id": "t1", "started_at": "t", "finished_at": "t",
+            "trace_id": "t1",
+            "started_at": "t",
+            "finished_at": "t",
             "elapsed_seconds": 0.0,
-            "symbols_total": 0, "success": 0, "failure": 20,
-            "total_rows": 0, "source_status": {},
+            "symbols_total": 0,
+            "success": 0,
+            "failure": 20,
+            "total_rows": 0,
+            "source_status": {},
             "failures": [{"symbol": f"S{i:02d}", "reason": "x"} for i in range(20)],
         }
         (lineage / "sync_summary_test.json").write_text(
-            json.dumps(summary, ensure_ascii=False), encoding="utf-8",
+            json.dumps(summary, ensure_ascii=False),
+            encoding="utf-8",
         )
 
         mock_agg = MagicMock()
@@ -193,8 +223,11 @@ class TestHealthEndpointWithDataSources:
         mock_agg = MagicMock()
         mock_agg.get_source_status.return_value = {
             "TQ_LOCAL": {
-                "consecutive_failures": 0, "circuit_open": False,
-                "total_success": 100, "total_failure": 0, "last_error": "",
+                "consecutive_failures": 0,
+                "circuit_open": False,
+                "total_success": 100,
+                "total_failure": 0,
+                "last_error": "",
             },
         }
 
@@ -214,8 +247,11 @@ class TestHealthEndpointWithDataSources:
         mock_agg = MagicMock()
         mock_agg.get_source_status.return_value = {
             "WIND": {
-                "consecutive_failures": 5, "circuit_open": True,
-                "total_success": 50, "total_failure": 10, "last_error": "timeout",
+                "consecutive_failures": 5,
+                "circuit_open": True,
+                "total_success": 50,
+                "total_failure": 10,
+                "last_error": "timeout",
             },
         }
 
@@ -246,8 +282,11 @@ class TestHealthEndpointWithDataSources:
         mock_agg = MagicMock()
         mock_agg.get_source_status.return_value = {
             "TQ_LOCAL": {
-                "consecutive_failures": 0, "circuit_open": False,
-                "total_success": 10, "total_failure": 0, "last_error": "",
+                "consecutive_failures": 0,
+                "circuit_open": False,
+                "total_success": 10,
+                "total_failure": 0,
+                "last_error": "",
             },
         }
         with patch("fts.cli._build_default_aggregator", return_value=mock_agg):
@@ -276,8 +315,11 @@ class TestCheckDataSourcesStatus:
         mock_agg = MagicMock()
         mock_agg.get_source_status.return_value = {
             "TQ_LOCAL": {
-                "consecutive_failures": 0, "circuit_open": False,
-                "total_success": 100, "total_failure": 0, "last_error": "",
+                "consecutive_failures": 0,
+                "circuit_open": False,
+                "total_success": 100,
+                "total_failure": 0,
+                "last_error": "",
             },
         }
         with patch("fts.cli._build_default_aggregator", return_value=mock_agg):
@@ -309,12 +351,18 @@ class TestCheckDataSourcesStatus:
         mock_agg = MagicMock()
         mock_agg.get_source_status.return_value = {
             "TQ_LOCAL": {
-                "consecutive_failures": 0, "circuit_open": False,
-                "total_success": 100, "total_failure": 0, "last_error": "",
+                "consecutive_failures": 0,
+                "circuit_open": False,
+                "total_success": 100,
+                "total_failure": 0,
+                "last_error": "",
             },
             "WIND": {
-                "consecutive_failures": 5, "circuit_open": True,
-                "total_success": 50, "total_failure": 10, "last_error": "x",
+                "consecutive_failures": 5,
+                "circuit_open": True,
+                "total_success": 50,
+                "total_failure": 10,
+                "last_error": "x",
             },
         }
         with patch("fts.cli._build_default_aggregator", return_value=mock_agg):
@@ -332,6 +380,7 @@ class TestHTTPRouting:
     def test_metrics_route_404_when_missing(self):
         """/api/unknown 返回 404。"""
         from fts.monitor.http_server import _DashboardHandler
+
         handler = _DashboardHandler.__new__(_DashboardHandler)
         handler.path = "/api/unknown"
         handler.wfile = MagicMock()
@@ -349,8 +398,11 @@ class TestHTTPRouting:
         mock_agg = MagicMock()
         mock_agg.get_source_status.return_value = {
             "TQ_LOCAL": {
-                "consecutive_failures": 0, "circuit_open": False,
-                "total_success": 10, "total_failure": 1, "last_error": "",
+                "consecutive_failures": 0,
+                "circuit_open": False,
+                "total_success": 10,
+                "total_failure": 1,
+                "last_error": "",
                 "opened_at": 0.0,  # float
             },
         }

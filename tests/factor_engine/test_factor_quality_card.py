@@ -12,12 +12,10 @@
 
 from __future__ import annotations
 
-import pytest
 
 from fts.factor_engine.factor_quality_card import (
     FactorQualityCard,
     FactorQualityCardConfig,
-    FactorQualityScore,
     DimensionScore,
     _map_ic_to_score,
     _map_icir_to_score,
@@ -122,11 +120,11 @@ class TestSharpeMapping:
 
     def test_sharpe_above_10_penalty(self) -> None:
         """Sharpe>overfit_threshold(默认20) 时线性减分（P1 过拟合保护）。"""
-        assert _map_sharpe_to_score(12) == 5.0    # 12<=20 无惩罚
-        assert _map_sharpe_to_score(20) == 5.0    # 20 为惩罚边界
-        assert _map_sharpe_to_score(25) == 2.5    # (25-20)*0.5=2.5 penalty → 5-2.5=2.5
-        assert _map_sharpe_to_score(30) == 0.0    # (30-20)*0.5=5.0 penalty → 0
-        assert _map_sharpe_to_score(40) == 0.0    # 惩罚上限 5.0
+        assert _map_sharpe_to_score(12) == 5.0  # 12<=20 无惩罚
+        assert _map_sharpe_to_score(20) == 5.0  # 20 为惩罚边界
+        assert _map_sharpe_to_score(25) == 2.5  # (25-20)*0.5=2.5 penalty → 5-2.5=2.5
+        assert _map_sharpe_to_score(30) == 0.0  # (30-20)*0.5=5.0 penalty → 0
+        assert _map_sharpe_to_score(40) == 0.0  # 惩罚上限 5.0
 
     def test_sharpe_penalty_threshold_override(self) -> None:
         """config 可覆盖 overfit 阈值（小样本场景放宽到 10）。"""
@@ -491,9 +489,15 @@ class TestFactorQualityCard:
         )
         dim_names = {d["name"] for d in score["dimension_scores"]}
         expected_names = {
-            "ic_score", "sharpe_score", "stability_score",
-            "robustness_score", "capacity_score", "tradability_score",
-            "diversity_score", "logic_score", "timeliness_score",
+            "ic_score",
+            "sharpe_score",
+            "stability_score",
+            "robustness_score",
+            "capacity_score",
+            "tradability_score",
+            "diversity_score",
+            "logic_score",
+            "timeliness_score",
             "compatibility_score",
         }
         assert dim_names == expected_names
@@ -613,33 +617,25 @@ class TestComputeTotalScore:
     """compute_total_score 便捷函数测试。"""
 
     def test_all_max(self) -> None:
-        dims: list[DimensionScore] = [
-            {"name": f"dim_{i}", "score": 5.0} for i in range(10)
-        ]
+        dims: list[DimensionScore] = [{"name": f"dim_{i}", "score": 5.0} for i in range(10)]
         weights = [1.0] * 10
         total = compute_total_score(dims, weights)
         assert total == 50.0
 
     def test_all_zero(self) -> None:
-        dims: list[DimensionScore] = [
-            {"name": f"dim_{i}", "score": 0.0} for i in range(10)
-        ]
+        dims: list[DimensionScore] = [{"name": f"dim_{i}", "score": 0.0} for i in range(10)]
         weights = [1.0] * 10
         total = compute_total_score(dims, weights)
         assert total == 0.0
 
     def test_custom_total_max(self) -> None:
-        dims: list[DimensionScore] = [
-            {"name": f"dim_{i}", "score": 5.0} for i in range(10)
-        ]
+        dims: list[DimensionScore] = [{"name": f"dim_{i}", "score": 5.0} for i in range(10)]
         weights = [1.0] * 10
         total = compute_total_score(dims, weights, total_max=100)
         assert total == 100.0
 
     def test_with_weights(self) -> None:
-        dims: list[DimensionScore] = [
-            {"name": f"dim_{i}", "score": 5.0} for i in range(3)
-        ]
+        dims: list[DimensionScore] = [{"name": f"dim_{i}", "score": 5.0} for i in range(3)]
         weights = [2.0, 1.0, 0.5]
         total = compute_total_score(dims, weights)
         # raw_total = 5*2 + 5*1 + 5*0.5 = 17.5

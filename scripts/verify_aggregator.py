@@ -16,7 +16,6 @@ from __future__ import annotations
 import shutil
 import sys
 import tempfile
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -36,32 +35,46 @@ from fts.data_sources.migrate import migrate_schema  # noqa: E402
 # ─── mock 数据源 ───────────────────────────────────────────
 
 
-def _make_kline_df(symbol: str, source: str, rows: int = 5,
-                   base_date: datetime | None = None) -> pd.DataFrame:
+def _make_kline_df(symbol: str, source: str, rows: int = 5, base_date: datetime | None = None) -> pd.DataFrame:
     """构造 K 线 DataFrame。"""
     if base_date is None:
         base_date = datetime.now() - timedelta(days=rows - 1)
     data = []
     for i in range(rows):
-        data.append({
-            "symbol": symbol, "period": "daily",
-            "date": (base_date + timedelta(days=i)).date(),
-            "open": 3500 + i, "high": 3550 + i, "low": 3490 + i, "close": 3540 + i,
-            "volume": 100000, "amount": 350000000,
-            "hold": 80000 + i * 100, "settle": 3540 + i, "pre_settle": 3520 + i,
-            "oi_change": 2000,
-            "vwap": 3500.0, "source": source,
-            "fetched_at": datetime.now(), "trace_id": "",
-        })
+        data.append(
+            {
+                "symbol": symbol,
+                "period": "daily",
+                "date": (base_date + timedelta(days=i)).date(),
+                "open": 3500 + i,
+                "high": 3550 + i,
+                "low": 3490 + i,
+                "close": 3540 + i,
+                "volume": 100000,
+                "amount": 350000000,
+                "hold": 80000 + i * 100,
+                "settle": 3540 + i,
+                "pre_settle": 3520 + i,
+                "oi_change": 2000,
+                "vwap": 3500.0,
+                "source": source,
+                "fetched_at": datetime.now(),
+                "trace_id": "",
+            }
+        )
     return pd.DataFrame(data)
 
 
 class _MockSource:
     """可配置的 mock 数据源。"""
 
-    def __init__(self, source_name: str, df: pd.DataFrame | None = None,
-                 raise_exc: Exception | None = None,
-                 return_none: bool = False):
+    def __init__(
+        self,
+        source_name: str,
+        df: pd.DataFrame | None = None,
+        raise_exc: Exception | None = None,
+        return_none: bool = False,
+    ):
         self.source_name = source_name
         self._df = df
         self._raise = raise_exc
@@ -110,18 +123,16 @@ def main() -> int:
             con.register("df_cache", df_cache)
             con.execute("INSERT INTO kline_cache SELECT * FROM df_cache")
             con.unregister("df_cache")
-            print(f"[1/7] 预填充 kline_cache 5 行 OK")
+            print("[1/7] 预填充 kline_cache 5 行 OK")
         finally:
             con.close()
 
         # ── Step 2: 缓存命中 → 不调任何源
-        print(f"\n[2/7] 场景 A: 缓存命中测试")
+        print("\n[2/7] 场景 A: 缓存命中测试")
         tq_mock = MagicMock()
         tq_mock.source_name = DataSource.TQ_LOCAL.value
         tq_mock.fetch_ohlcv = MagicMock(side_effect=AssertionError("不应调用"))
-        agg_cache = FuturesDataAggregator(
-            sources=[tq_mock], db_path=db_path, cache_max_age_days=30
-        )
+        agg_cache = FuturesDataAggregator(sources=[tq_mock], db_path=db_path, cache_max_age_days=30)
         df = agg_cache.get_ohlcv("RB0", days=5, trace_id="v-step2")
         assert len(df) == 5, f"期望 5 行，实际 {len(df)}"
         assert (df["source"] == DataSource.DUCKDB_CACHE.value).all()
@@ -129,7 +140,7 @@ def main() -> int:
         print(f"       ✅ 缓存命中返回 {len(df)} 行，未触发任何 K 线源")
 
         # ── Step 3: 5 级降级 (TQ_LOCAL → TQ_PYTHON → AKSHARE)
-        print(f"\n[3/7] 场景 B: 5 级降级链测试")
+        print("\n[3/7] 场景 B: 5 级降级链测试")
         agg_degrade = FuturesDataAggregator(
             sources=[
                 _MockSource(DataSource.TQ_LOCAL.value, raise_exc=ConnectionError("7721 down")),
@@ -142,35 +153,33 @@ def main() -> int:
         df = agg_degrade.get_ohlcv("RB0", days=3, trace_id="v-step3")
         assert len(df) == 3, f"期望 3 行，实际 {len(df)}"
         assert df["source"].iloc[0] == DataSource.AKSHARE.value
-        print(f"       ✅ TQ_LOCAL 失败 → TQ_PYTHON 失败 → AKSHARE 成功（3 行）")
+        print("       ✅ TQ_LOCAL 失败 → TQ_PYTHON 失败 → AKSHARE 成功（3 行）")
 
         # ── Step 4: 全失败 → 合成数据
-        print(f"\n[4/7] 场景 C: 全部失败 → 合成数据降级")
+        print("\n[4/7] 场景 C: 全部失败 → 合成数据降级")
         all_fail = [
             _MockSource(DataSource.TQ_LOCAL.value, raise_exc=ConnectionError("x")),
             _MockSource(DataSource.TQ_PYTHON.value, raise_exc=ConnectionError("x")),
             _MockSource(DataSource.AKSHARE.value, raise_exc=ConnectionError("x")),
         ]
-        agg_synth = FuturesDataAggregator(
-            sources=all_fail, db_path=None
-        )
+        agg_synth = FuturesDataAggregator(sources=all_fail, db_path=None)
         df = agg_synth.get_ohlcv("RB0", days=3, trace_id="v-step4")
         assert len(df) == 3, f"期望 3 行合成数据，实际 {len(df)}"
         assert df["source"].iloc[0] == DataSource.SYNTHETIC.value
         for s in all_fail:
             assert s.fetch_count == 1, f"{s.source_name} 应被调用 1 次"
-        print(f"       ✅ 3 个源全部失败 → 返回 3 行合成数据 (source=SYNTHETIC)")
+        print("       ✅ 3 个源全部失败 → 返回 3 行合成数据 (source=SYNTHETIC)")
 
         # ── Step 5: 熔断器开启
-        print(f"\n[5/7] 场景 D: 熔断器测试 (连续失败 5 次 → 开启)")
-        tq_local = _MockSource(DataSource.TQ_LOCAL.value,
-                               raise_exc=ConnectionError("always down"))
+        print("\n[5/7] 场景 D: 熔断器测试 (连续失败 5 次 → 开启)")
+        tq_local = _MockSource(DataSource.TQ_LOCAL.value, raise_exc=ConnectionError("always down"))
         tq_python = _MockSource(
             DataSource.TQ_PYTHON.value,
             df=_make_kline_df("RB0", DataSource.TQ_PYTHON.value, rows=3),
         )
         agg_cb = FuturesDataAggregator(
-            sources=[tq_local, tq_python], db_path=None,
+            sources=[tq_local, tq_python],
+            db_path=None,
             circuit_breaker_threshold=5,
         )
         # 5 次失败
@@ -184,42 +193,37 @@ def main() -> int:
         status = agg_cb.get_source_status()
         assert status[DataSource.TQ_LOCAL.value]["circuit_open"] is True
         assert status[DataSource.TQ_LOCAL.value]["consecutive_failures"] == 5
-        print(f"       ✅ TQ_LOCAL 连续 5 次失败 → 熔断器开启")
-        print(f"       ✅ 第 6 次调用跳过 TQ_LOCAL，直接用 TQ_PYTHON")
+        print("       ✅ TQ_LOCAL 连续 5 次失败 → 熔断器开启")
+        print("       ✅ 第 6 次调用跳过 TQ_LOCAL，直接用 TQ_PYTHON")
 
         # ── Step 6: 字段增强层 (Wind + iFinD)
-        print(f"\n[6/7] 场景 E: 字段增强层测试 (Wind + iFinD 补充 settle/oi_change)")
+        print("\n[6/7] 场景 E: 字段增强层测试 (Wind + iFinD 补充 settle/oi_change)")
         tq_df = _make_kline_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
         wind_df = _make_kline_df("RB0.SHFE", DataSource.WIND.value, rows=3)
         ifind_df = _make_kline_df("RB0.SHFE", DataSource.IFIND.value, rows=3)
         tq = _MockSource(DataSource.TQ_LOCAL.value, df=tq_df)
         wind = _MockSource(DataSource.WIND.value, df=wind_df)
         ifind = _MockSource(DataSource.IFIND.value, df=ifind_df)
-        agg_enh = FuturesDataAggregator(
-            sources=[tq], enhancers=[wind, ifind], db_path=None
-        )
+        agg_enh = FuturesDataAggregator(sources=[tq], enhancers=[wind, ifind], db_path=None)
         df = agg_enh.get_ohlcv("RB0", days=3, trace_id="v-step6")
         assert len(df) == 3
         assert df["source"].iloc[0] == DataSource.TQ_LOCAL.value
         assert wind.fetch_count == 1, f"Wind 应被调用 1 次，实际 {wind.fetch_count}"
         assert ifind.fetch_count == 1, f"iFinD 应被调用 1 次，实际 {ifind.fetch_count}"
-        print(f"       ✅ K 线源 TQ_LOCAL + 字段增强层 Wind + iFinD 全部调用")
+        print("       ✅ K 线源 TQ_LOCAL + 字段增强层 Wind + iFinD 全部调用")
 
         # 字段增强失败不破坏主路径
         wind_fail = _MockSource(DataSource.WIND.value, raise_exc=ConnectionError("wind"))
         ifind_fail = _MockSource(DataSource.IFIND.value, raise_exc=ConnectionError("ifind"))
-        tq2 = _MockSource(DataSource.TQ_LOCAL.value,
-                          df=_make_kline_df("RB0", DataSource.TQ_LOCAL.value, rows=3))
-        agg_enh_fail = FuturesDataAggregator(
-            sources=[tq2], enhancers=[wind_fail, ifind_fail], db_path=None
-        )
+        tq2 = _MockSource(DataSource.TQ_LOCAL.value, df=_make_kline_df("RB0", DataSource.TQ_LOCAL.value, rows=3))
+        agg_enh_fail = FuturesDataAggregator(sources=[tq2], enhancers=[wind_fail, ifind_fail], db_path=None)
         df = agg_enh_fail.get_ohlcv("RB0", days=3, trace_id="v-step6-fail")
         assert len(df) == 3
         assert df["source"].iloc[0] == DataSource.TQ_LOCAL.value
-        print(f"       ✅ 字段增强层失败 → K 线主路径仍正常返回 (优雅降级)")
+        print("       ✅ 字段增强层失败 → K 线主路径仍正常返回 (优雅降级)")
 
         # ── Step 7: trace_id 全链路贯通
-        print(f"\n[7/7] 场景 F: trace_id 全链路贯通")
+        print("\n[7/7] 场景 F: trace_id 全链路贯通")
         tq_trace = MagicMock()
         tq_trace.source_name = DataSource.TQ_LOCAL.value
         tq_trace.is_available = MagicMock(return_value=True)

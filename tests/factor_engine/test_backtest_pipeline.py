@@ -202,9 +202,13 @@ class TestGapF02TradeFilter:
         mask[15] = False  # 第 15 日被拦截
 
         returns, positions, blocked = BacktestPipeline._compute_strategy_returns(
-            factor_values, forward_returns,
-            cost_rate=0.001, slippage=0.0005,
-            zscore_window=10, dates=dates, tradeable_mask=mask,
+            factor_values,
+            forward_returns,
+            cost_rate=0.001,
+            slippage=0.0005,
+            zscore_window=10,
+            dates=dates,
+            tradeable_mask=mask,
         )
         assert positions[15] == pytest.approx(positions[14]), "拦截日持仓应保持"
         assert blocked["halt"] == 1, "拦截日应计入 blocked 统计"
@@ -225,9 +229,7 @@ class TestGapF02TradeFilter:
             "    return np.tanh(ret * 10)\n",
             "test_blocked_report",
         )
-        result = BacktestPipeline().run(
-            BacktestInput(factor=factor, data=data, trade_filter=True, limit_pct=0.08)
-        )
+        result = BacktestPipeline().run(BacktestInput(factor=factor, data=data, trade_filter=True, limit_pct=0.08))
         assert result.success, f"回测失败: {result.error}"
         assert result.output is not None
         blocked = result.output.summary["config"].get("blocked_trades", {})
@@ -254,10 +256,14 @@ class TestGapI501CapacityConstraint:
         close_price = np.full(n, 100.0)  # 低价位
 
         _, positions, stats = BacktestPipeline._compute_strategy_returns(
-            factor_values, forward_returns,
-            cost_rate=0.001, slippage=0.0005,
-            zscore_window=10, dates=dates,
-            volume=volume, close_price=close_price,
+            factor_values,
+            forward_returns,
+            cost_rate=0.001,
+            slippage=0.0005,
+            zscore_window=10,
+            dates=dates,
+            volume=volume,
+            close_price=close_price,
             capacity_cap_ratio=0.01,  # 持仓市值 ≤ 日均成交额 × 1%
             initial_capital=10_000_000.0,  # 大资金 → 必然超限
         )
@@ -280,10 +286,13 @@ class TestGapI501CapacityConstraint:
         close_price = np.full(n, 100.0)
 
         _, positions_no_cap, stats = BacktestPipeline._compute_strategy_returns(
-            factor_values, forward_returns,
-            cost_rate=0.001, slippage=0.0005,
+            factor_values,
+            forward_returns,
+            cost_rate=0.001,
+            slippage=0.0005,
             zscore_window=10,
-            volume=volume, close_price=close_price,
+            volume=volume,
+            close_price=close_price,
             capacity_cap_ratio=0.0,  # 不启用
             initial_capital=10_000_000.0,
         )
@@ -300,10 +309,13 @@ class TestGapI501CapacityConstraint:
         forward_returns = rng.normal(0.005, 0.02, n)
 
         _, positions, stats = BacktestPipeline._compute_strategy_returns(
-            factor_values, forward_returns,
-            cost_rate=0.001, slippage=0.0005,
+            factor_values,
+            forward_returns,
+            cost_rate=0.001,
+            slippage=0.0005,
             zscore_window=10,
-            volume=None, close_price=None,
+            volume=None,
+            close_price=None,
             capacity_cap_ratio=0.01,
             initial_capital=10_000_000.0,
         )
@@ -324,10 +336,14 @@ class TestGapI501CapacityConstraint:
         close_price = np.full(n, 100.0)
 
         _, positions, stats = BacktestPipeline._compute_strategy_returns(
-            factor_values, forward_returns,
-            cost_rate=0.001, slippage=0.0005,
-            zscore_window=10, dates=dates,
-            volume=volume, close_price=close_price,
+            factor_values,
+            forward_returns,
+            cost_rate=0.001,
+            slippage=0.0005,
+            zscore_window=10,
+            dates=dates,
+            volume=volume,
+            close_price=close_price,
             capacity_cap_ratio=0.01,
             initial_capital=10_000_000.0,
         )
@@ -355,14 +371,17 @@ class TestGapI501CapacityConstraint:
         )
         # 修改 settings 配置以启用容量约束
         import os
+
         os.environ["FTS_BACKTEST_CAPACITY_CAP"] = "true"
         os.environ["FTS_CAPACITY_CAP_RATIO"] = "0.001"  # 极低容量上限，确保触发
         try:
             from fts.config.settings import get_config, load_config
+
             # 重新加载配置使环境变量生效
-            old = get_config()
+            get_config()
             # 强制重新加载
             import fts.config.settings as settings_mod
+
             settings_mod._default_config = None
             cfg = load_config()
             assert cfg.backtest_capacity_cap
@@ -370,7 +389,8 @@ class TestGapI501CapacityConstraint:
 
             result = BacktestPipeline().run(
                 BacktestInput(
-                    factor=factor, data=data,
+                    factor=factor,
+                    data=data,
                     initialization_capital=10_000_000.0,
                 )
             )

@@ -1,6 +1,6 @@
 # FTS 可观测性
 
-> 版本: v2.71.0
+> 版本: v2.81.0
 > 最后更新: 2026-08-05
 
 ---
@@ -75,6 +75,22 @@ CLI 入口 (cli.py)
 ### 数据级质量监控任务（GAP-F06）
 
 scheduler 任务 `data_level_monitor_job`（每日 04:00）执行数据级质量监控：缺失率/异常值/复权一致性/多源分歧四维检查，输出告警计数与结果日志（trace_id 前缀 `fts.dlm`）。
+
+### L3 组合漂移告警（GAP-F13，v2.72.1）
+
+`DriftMonitor` 每次 L3 组合构建后计算成员重合率（Jaccard）与权重 L1 变化率，超阈值时输出告警日志 + Prometheus 兼容指标（可被 `/metrics` 采集解析）：
+
+| 配置项 | 默认值 | 说明 |
+|:-------|:-------|:-----|
+| `overlap_threshold` | 0.50 | 成员重合率下限（低于触发告警） |
+| `weight_l1_threshold` | 0.40 | 权重 L1 变化率上限（高于触发告警） |
+| `trigger_rebalance` | False | 超阈值时是否自动生成粘性重平衡建议 |
+
+告警指标格式（`METRIC drift_alert`）：
+```
+METRIC drift_alert{overlap=0.00,weight=1.00,o_th=0.50,w_th=0.40} 1
+```
+告警同时写入 `PortfolioLoop` state（`drift_alerted` / `drift_alert_info`）；`trigger_rebalance=True` 时生成 `AgentOptimizationProposal`（source=`drift_monitor`）附加到 proposals 供下游 Agent 消费。
 
 ### 指标字段
 

@@ -67,8 +67,7 @@ def _call_mcp(query: str) -> Any:
 
     if get_config().mcp_enabled:
         raise RuntimeError(
-            "Wind MCP 已启用但客户端未注入。请调用 "
-            "fts.data_sources.wind_source.set_mcp_handler(handler) 初始化。"
+            "Wind MCP 已启用但客户端未注入。请调用 fts.data_sources.wind_source.set_mcp_handler(handler) 初始化。"
         )
     logger.debug("[WIND] MCP 未启用，跳过增强字段查询: %s", query[:50])
     return None
@@ -163,8 +162,7 @@ class WindSource(BaseFuturesSource):
         try:
             return self.parse_ohlcv(raw, symbol, trace_id=trace_id)
         except Exception as e:  # noqa: BLE001
-            logger.warning("[%s] parse_ohlcv 异常 [%s]: %s",
-                           self.source_name, symbol, e)
+            logger.warning("[%s] parse_ohlcv 异常 [%s]: %s", self.source_name, symbol, e)
             return None
 
     def fetch_ohlcv_or_none(
@@ -181,12 +179,10 @@ class WindSource(BaseFuturesSource):
         try:
             return self.fetch_ohlcv(symbol, days, trace_id=trace_id)
         except SourceUnavailable as e:
-            logger.warning("[%s] MCP 不可用，字段增强降级 [%s]: %s",
-                           self.source_name, symbol, e)
+            logger.warning("[%s] MCP 不可用，字段增强降级 [%s]: %s", self.source_name, symbol, e)
             return None
         except Exception as e:  # noqa: BLE001
-            logger.warning("[%s] fetch_ohlcv 异常 [%s]: %s",
-                           self.source_name, symbol, e)
+            logger.warning("[%s] fetch_ohlcv 异常 [%s]: %s", self.source_name, symbol, e)
             return None
 
     def parse_ohlcv(
@@ -310,9 +306,23 @@ class WindSource(BaseFuturesSource):
     def _expected_columns() -> list[str]:
         """FTS kline_cache 完整 17 列。"""
         return [
-            "symbol", "period", "date", "open", "high", "low", "close",
-            "volume", "amount", "hold", "settle", "pre_settle", "oi_change",
-            "vwap", "source", "fetched_at", "trace_id",
+            "symbol",
+            "period",
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "hold",
+            "settle",
+            "pre_settle",
+            "oi_change",
+            "vwap",
+            "source",
+            "fetched_at",
+            "trace_id",
         ]
 
 

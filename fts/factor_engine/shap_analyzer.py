@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -32,6 +32,7 @@ from .factor_program import FactorExecutor
 
 class ShapFeatureImportance(dict):
     """单个特征的重要性。"""
+
     def __init__(
         self,
         feature_name: str,
@@ -46,6 +47,7 @@ class ShapFeatureImportance(dict):
 
 class ShapSampleAnalysis(dict):
     """单个样本的 SHAP 分析结果。"""
+
     def __init__(
         self,
         sample_index: int,
@@ -62,6 +64,7 @@ class ShapSampleAnalysis(dict):
 
 class ShapAnalysisResult(dict):
     """完整 SHAP 分析结果。"""
+
     def __init__(
         self,
         factor_id: str,
@@ -132,14 +135,16 @@ class ShapAnalyzer:
         self,
         factor: FactorProgram,
         feature_cols: list[str],
-    ) -> callable:
+    ) -> Callable[..., Any]:
         """创建 SHAP KernelExplainer 用的预测函数。
 
         预测函数接收特征子集，通过 FactorExecutor 执行因子程序，
         返回因子信号值。
         """
-        if self._executor is None:
-            self._executor = FactorExecutor(factor)
+        executor = self._executor
+        if executor is None:
+            executor = FactorExecutor(factor)
+            self._executor = executor
 
         def predict_fn(X: np.ndarray) -> np.ndarray:
             """接收特征矩阵，返回信号数组。
@@ -165,7 +170,7 @@ class ShapAnalyzer:
                         row_data[col] = 0.0
 
                 try:
-                    sig = self._executor.execute(row_data, {})
+                    sig = executor.execute(row_data, {})
                     signals[i] = float(sig[-1]) if len(sig) > 0 else 0.0
                 except Exception:
                     signals[i] = 0.0
@@ -210,17 +215,15 @@ class ShapAnalyzer:
 
         # 排序
         sorted_idx = valid_indices[np.argsort(ranking[valid_indices])]
-        bottom_indices = sorted_idx[:self._n_extreme]  # 最低收益
-        top_indices = sorted_idx[-self._n_extreme:]  # 最高收益
+        bottom_indices = sorted_idx[: self._n_extreme]  # 最低收益
+        top_indices = sorted_idx[-self._n_extreme :]  # 最高收益
 
         # 准备特征
         feature_cols = self._get_feature_cols(data)
         X = data[feature_cols].values.astype(np.float64)
 
         # 用背景样本初始化 KernelExplainer
-        bg_idx = np.random.choice(
-            len(X), min(self._n_background, len(X)), replace=False
-        )
+        bg_idx = np.random.choice(len(X), min(self._n_background, len(X)), replace=False)
         X_background = X[bg_idx]
         predict_fn = self._make_predict_fn(factor, feature_cols)
 
@@ -239,7 +242,7 @@ class ShapAnalyzer:
             (bottom_indices, bottom_samples),
         ]:
             for idx in idx_list:
-                X_sample = X[idx:idx+1]
+                X_sample = X[idx : idx + 1]
                 shap_values = explainer.shap_values(X_sample, nsamples=100)
 
                 if isinstance(shap_values, list):
@@ -269,12 +272,14 @@ class ShapAnalyzer:
                     for j in top5_idx
                 ]
 
-                sample_list.append(ShapSampleAnalysis(
-                    sample_index=int(idx),
-                    date=date_str,
-                    signal_value=float(full_signal[idx]),
-                    top_features=features,
-                ))
+                sample_list.append(
+                    ShapSampleAnalysis(
+                        sample_index=int(idx),
+                        date=date_str,
+                        signal_value=float(full_signal[idx]),
+                        top_features=features,
+                    )
+                )
 
         # 全局 top-5 特征（基于所有 SHAP 值均值的绝对值）
         if all_shap_values:
@@ -327,37 +332,25 @@ class ShapAnalyzer:
         lines.append(f"SHAP 分析报告 — {result['factor_name']} ({result['factor_id']})")
         lines.append(f"分析日期: {result['analysis_date']}")
         lines.append("=" * 70)
-        lines.append(f"\n全局 Top-5 特征（按平均 |SHAP| 排序）:")
+        lines.append("\n全局 Top-5 特征（按平均 |SHAP| 排序）:")
         lines.append(f"  {'特征':<20} {'平均 |SHAP|':>12} {'影响方向':>10}")
-        lines.append(f"  {'-'*20} {'-'*12} {'-'*10}")
+        lines.append(f"  {'-' * 20} {'-' * 12} {'-' * 10}")
         for feat in result["global_top_features"]:
-            lines.append(
-                f"  {feat['feature_name']:<20} {feat['shap_value']:>12.4f} {feat['impact_direction']:>10}"
-            )
+            lines.append(f"  {feat['feature_name']:<20} {feat['shap_value']:>12.4f} {feat['impact_direction']:>10}")
 
         lines.append(f"\n\nTop {result['num_extreme_samples']} 样本（收益最高）:")
         lines.append(f"  {'样本索引':<10} {'日期':<14} {'信号值':>10} → Top-5 特征")
         for s in result["top_samples"]:
-            feat_str = ", ".join(
-                f"{f['feature_name']}({f['shap_value']:+.3f})"
-                for f in s["top_features"]
-            )
-            lines.append(
-                f"  {s['sample_index']:<10} {s['date']:<14} {s['signal_value']:>10.4f} → {feat_str}"
-            )
+            feat_str = ", ".join(f"{f['feature_name']}({f['shap_value']:+.3f})" for f in s["top_features"])
+            lines.append(f"  {s['sample_index']:<10} {s['date']:<14} {s['signal_value']:>10.4f} → {feat_str}")
 
         lines.append(f"\n\nBottom {result['num_extreme_samples']} 样本（收益最低）:")
         lines.append(f"  {'样本索引':<10} {'日期':<14} {'信号值':>10} → Top-5 特征")
         for s in result["bottom_samples"]:
-            feat_str = ", ".join(
-                f"{f['feature_name']}({f['shap_value']:+.3f})"
-                for f in s["top_features"]
-            )
-            lines.append(
-                f"  {s['sample_index']:<10} {s['date']:<14} {s['signal_value']:>10.4f} → {feat_str}"
-            )
+            feat_str = ", ".join(f"{f['feature_name']}({f['shap_value']:+.3f})" for f in s["top_features"])
+            lines.append(f"  {s['sample_index']:<10} {s['date']:<14} {s['signal_value']:>10.4f} → {feat_str}")
 
-        lines.append(f"\n\n汇总:")
+        lines.append("\n\n汇总:")
         for k, v in result["summary"].items():
             lines.append(f"  {k}: {v}")
 

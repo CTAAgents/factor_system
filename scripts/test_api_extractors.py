@@ -1,6 +1,6 @@
 """测试 API 可访问性：东方财富研报、arXiv 论文。"""
+
 import requests
-import json
 
 # 1. 测试东方财富研报API
 print("=== 测试东方财富研报API ===")
@@ -44,6 +44,7 @@ try:
     r = requests.get(url, params=params, timeout=30)
     print(f"   Status: {r.status_code}")
     import xml.etree.ElementTree as ET
+
     root = ET.fromstring(r.content)
     ns = {"atom": "http://www.w3.org/2005/Atom"}
     entries = root.findall("atom:entry", ns)
@@ -68,6 +69,7 @@ try:
     r = requests.get("https://export.arxiv.org/api/query", params=params, timeout=30)
     print(f"   Status: {r.status_code}")
     import xml.etree.ElementTree as ET
+
     root = ET.fromstring(r.content)
     ns = {"atom": "http://www.w3.org/2005/Atom"}
     entries = root.findall("atom:entry", ns)

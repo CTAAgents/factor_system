@@ -21,7 +21,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -213,11 +213,7 @@ class SignalBridge:
 
             url = urlparse(self.rest_url)
             port = url.port or (443 if url.scheme == "https" else 80)
-            conn_cls = (
-                http.client.HTTPSConnection
-                if url.scheme == "https"
-                else http.client.HTTPConnection
-            )
+            conn_cls = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
             conn = conn_cls(url.hostname, port, timeout=5)
             body = json.dumps(signal, ensure_ascii=False)
             conn.request(

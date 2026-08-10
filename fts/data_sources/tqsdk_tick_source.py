@@ -26,14 +26,38 @@ logger = logging.getLogger(__name__)
 
 # tick 返回列（tick_cache 对齐，见 docs/harness/plans/16-tick-data-source-plan.md §1.3）
 TICK_COLUMNS: list[str] = [
-    "symbol", "datetime", "last_price", "average", "highest", "lowest",
-    "volume", "amount", "open_interest",
-    "bid_price1", "bid_volume1", "ask_price1", "ask_volume1",
-    "bid_price2", "bid_volume2", "ask_price2", "ask_volume2",
-    "bid_price3", "bid_volume3", "ask_price3", "ask_volume3",
-    "bid_price4", "bid_volume4", "ask_price4", "ask_volume4",
-    "bid_price5", "bid_volume5", "ask_price5", "ask_volume5",
-    "source", "fetched_at", "trace_id",
+    "symbol",
+    "datetime",
+    "last_price",
+    "average",
+    "highest",
+    "lowest",
+    "volume",
+    "amount",
+    "open_interest",
+    "bid_price1",
+    "bid_volume1",
+    "ask_price1",
+    "ask_volume1",
+    "bid_price2",
+    "bid_volume2",
+    "ask_price2",
+    "ask_volume2",
+    "bid_price3",
+    "bid_volume3",
+    "ask_price3",
+    "ask_volume3",
+    "bid_price4",
+    "bid_volume4",
+    "ask_price4",
+    "ask_volume4",
+    "bid_price5",
+    "bid_volume5",
+    "ask_price5",
+    "ask_volume5",
+    "source",
+    "fetched_at",
+    "trace_id",
 ]
 
 # TQSDK 免费账号 tick 最大行数
@@ -126,12 +150,17 @@ class TQSDKTickSource(BaseFuturesSource):
         # 统一数据类型（含 5 档盘口）
         df = df.copy()
         numeric_cols = (
-            "last_price", "average", "highest", "lowest",
-            "volume", "amount", "open_interest",
-        ) + tuple(
-            f"{side}_price{lvl}" for side in ("bid", "ask") for lvl in range(1, 6)
-        ) + tuple(
-            f"{side}_volume{lvl}" for side in ("bid", "ask") for lvl in range(1, 6)
+            (
+                "last_price",
+                "average",
+                "highest",
+                "lowest",
+                "volume",
+                "amount",
+                "open_interest",
+            )
+            + tuple(f"{side}_price{lvl}" for side in ("bid", "ask") for lvl in range(1, 6))
+            + tuple(f"{side}_volume{lvl}" for side in ("bid", "ask") for lvl in range(1, 6))
         )
         for col in numeric_cols:
             if col in df.columns:

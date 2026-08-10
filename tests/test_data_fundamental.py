@@ -37,6 +37,7 @@ from fts.data_fundamental import (
 # 1. 常量验证
 # ═══════════════════════════════════════════════════════════
 
+
 class TestConstants:
     def test_valuation_fields_not_empty(self):
         assert len(VALUATION_FIELDS) > 0
@@ -67,6 +68,7 @@ class TestConstants:
 # 2. FundamentalDataError
 # ═══════════════════════════════════════════════════════════
 
+
 class TestFundamentalDataError:
     def test_is_runtime_error(self):
         assert issubclass(FundamentalDataError, RuntimeError)
@@ -79,6 +81,7 @@ class TestFundamentalDataError:
 # ═══════════════════════════════════════════════════════════
 # 3. FundamentalProvider.__init__
 # ═══════════════════════════════════════════════════════════
+
 
 class TestInit:
     def test_mcp_available_default(self):
@@ -103,17 +106,20 @@ class TestInit:
 # 4. enrich_ohlcv — 合成数据降级路径
 # ═══════════════════════════════════════════════════════════
 
+
 class TestEnrichOhlcvSynthetic:
     """mcp_available=False 时使用合成数据。"""
 
     def _make_ohlcv(self, n: int = 100) -> pd.DataFrame:
-        return pd.DataFrame({
-            "close": np.random.randn(n) + 15.0,
-            "open": np.random.randn(n) + 15.0,
-            "high": np.random.randn(n) + 15.5,
-            "low": np.random.randn(n) + 14.5,
-            "volume": np.random.randint(1000, 10000, n).astype(float),
-        })
+        return pd.DataFrame(
+            {
+                "close": np.random.randn(n) + 15.0,
+                "open": np.random.randn(n) + 15.0,
+                "high": np.random.randn(n) + 15.5,
+                "low": np.random.randn(n) + 14.5,
+                "volume": np.random.randint(1000, 10000, n).astype(float),
+            }
+        )
 
     def test_returns_dataframe(self):
         p = FundamentalProvider(mcp_available=False)
@@ -169,15 +175,18 @@ class TestEnrichOhlcvSynthetic:
 # 5. enrich_panel — 批量注入
 # ═══════════════════════════════════════════════════════════
 
+
 class TestEnrichPanel:
     def _make_ohlcv(self, n: int = 50) -> pd.DataFrame:
-        return pd.DataFrame({
-            "close": np.random.randn(n) + 15.0,
-            "open": np.random.randn(n) + 15.0,
-            "high": np.random.randn(n) + 15.5,
-            "low": np.random.randn(n) + 14.5,
-            "volume": np.random.randint(1000, 10000, n).astype(float),
-        })
+        return pd.DataFrame(
+            {
+                "close": np.random.randn(n) + 15.0,
+                "open": np.random.randn(n) + 15.0,
+                "high": np.random.randn(n) + 15.5,
+                "low": np.random.randn(n) + 14.5,
+                "volume": np.random.randint(1000, 10000, n).astype(float),
+            }
+        )
 
     def test_returns_dict(self):
         p = FundamentalProvider(mcp_available=False)
@@ -211,24 +220,40 @@ class TestEnrichPanel:
 # 6. _synthetic_enrich — 输出字段验证
 # ═══════════════════════════════════════════════════════════
 
+
 class TestSyntheticEnrich:
     def _make_ohlcv(self, n: int = 100) -> pd.DataFrame:
-        return pd.DataFrame({
-            "close": np.random.randn(n) + 15.0,
-            "open": np.random.randn(n) + 15.0,
-            "high": np.random.randn(n) + 15.5,
-            "low": np.random.randn(n) + 14.5,
-            "volume": np.random.randint(1000, 10000, n).astype(float),
-        })
+        return pd.DataFrame(
+            {
+                "close": np.random.randn(n) + 15.0,
+                "open": np.random.randn(n) + 15.0,
+                "high": np.random.randn(n) + 15.5,
+                "low": np.random.randn(n) + 14.5,
+                "volume": np.random.randint(1000, 10000, n).astype(float),
+            }
+        )
 
     def test_all_expected_fields_present(self):
         p = FundamentalProvider(mcp_available=False)
         df = self._make_ohlcv(50)
         result = p._synthetic_enrich(df)
-        expected = {"pe_ttm", "pb", "ps_ttm", "total_market_cap",
-                     "free_market_cap", "turnover_rate", "roe", "roa",
-                     "gross_margin", "net_margin", "eps",
-                     "revenue_growth", "profit_growth", "pmi", "cpi"}
+        expected = {
+            "pe_ttm",
+            "pb",
+            "ps_ttm",
+            "total_market_cap",
+            "free_market_cap",
+            "turnover_rate",
+            "roe",
+            "roa",
+            "gross_margin",
+            "net_margin",
+            "eps",
+            "revenue_growth",
+            "profit_growth",
+            "pmi",
+            "cpi",
+        }
         for field in expected:
             assert field in result.columns, f"缺少字段: {field}"
 
@@ -261,15 +286,18 @@ class TestSyntheticEnrich:
 # 7. enrich_ohlcv — MCP 路径（mock 模拟）
 # ═══════════════════════════════════════════════════════════
 
+
 class TestEnrichOhlcvMCP:
     def _make_ohlcv(self, n: int = 50) -> pd.DataFrame:
-        return pd.DataFrame({
-            "close": np.random.randn(n) + 15.0,
-            "open": np.random.randn(n) + 15.0,
-            "high": np.random.randn(n) + 15.5,
-            "low": np.random.randn(n) + 14.5,
-            "volume": np.random.randint(1000, 10000, n).astype(float),
-        })
+        return pd.DataFrame(
+            {
+                "close": np.random.randn(n) + 15.0,
+                "open": np.random.randn(n) + 15.0,
+                "high": np.random.randn(n) + 15.5,
+                "low": np.random.randn(n) + 14.5,
+                "volume": np.random.randint(1000, 10000, n).astype(float),
+            }
+        )
 
     def test_mcp_error_falls_back_to_synthetic(self, mocker):
         """MCP 异常时降级到合成数据。"""
@@ -330,6 +358,7 @@ class TestEnrichOhlcvMCP:
 # 8. _to_westock_code
 # ═══════════════════════════════════════════════════════════
 
+
 class TestToWestockCode:
     def test_sz_prefix(self):
         assert _to_westock_code("000001") == "SZ000001"
@@ -363,6 +392,7 @@ class TestToWestockCode:
 # 9. _get_market
 # ═══════════════════════════════════════════════════════════
 
+
 class TestGetMarket:
     def test_sh_from_six_prefix(self):
         assert _get_market("600519") == "1"
@@ -387,6 +417,7 @@ class TestGetMarket:
 # 10. get_fundamental_provider
 # ═══════════════════════════════════════════════════════════
 
+
 class TestGetFundamentalProvider:
     def test_returns_fundamental_provider(self):
         p = get_fundamental_provider()
@@ -399,12 +430,14 @@ class TestGetFundamentalProvider:
 
     def test_mcp_available_param(self):
         import fts.data_fundamental as _df
+
         _df._default_fundamental_provider = None
         p = get_fundamental_provider(mcp_available=False)
         assert p._mcp_available is False
 
     def test_reset_between_tests(self):
         import fts.data_fundamental as _df
+
         _df._default_fundamental_provider = None
         p = get_fundamental_provider()
         assert _df._default_fundamental_provider is p
@@ -413,6 +446,7 @@ class TestGetFundamentalProvider:
 # ═══════════════════════════════════════════════════════════
 # 11. _parse_profile
 # ═══════════════════════════════════════════════════════════
+
 
 class TestParseProfile:
     def test_parse_valid_data(self):
@@ -445,12 +479,15 @@ class TestParseProfile:
 # 12. _apply_profile / _apply_finance / _apply_macro
 # ═══════════════════════════════════════════════════════════
 
+
 class TestApplyMethods:
     def _make_df(self) -> pd.DataFrame:
-        return pd.DataFrame({
-            "close": np.random.randn(10) + 15.0,
-            "volume": np.random.randint(1000, 10000, 10).astype(float),
-        })
+        return pd.DataFrame(
+            {
+                "close": np.random.randn(10) + 15.0,
+                "volume": np.random.randint(1000, 10000, 10).astype(float),
+            }
+        )
 
     def test_apply_profile_sets_columns(self):
         p = FundamentalProvider(mcp_available=False)

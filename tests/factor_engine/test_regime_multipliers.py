@@ -22,10 +22,7 @@ from fts.factor_engine.regime_multipliers import (
 
 def _records(regime: str = "bull", family: str = "trend", ic: float = 0.05, n: int = 10) -> list[dict]:
     """合成因子 IC 记录。"""
-    return [
-        {"regime": regime, "family": family, "ic": ic, "factor_id": f"{family}_{i}"}
-        for i in range(n)
-    ]
+    return [{"regime": regime, "family": family, "ic": ic, "factor_id": f"{family}_{i}"} for i in range(n)]
 
 
 class TestRegimeMultiplierEstimator:
@@ -47,7 +44,7 @@ class TestRegimeMultiplierEstimator:
         """同 regime 内不同家族相对全局基准差异化（bull 中 trend 强于 momentum）。"""
         records = (
             _records("bull", "trend", ic=0.06, n=20)
-            + _records("bear", "trend", ic=0.02, n=20)     # trend 全局 0.04
+            + _records("bear", "trend", ic=0.02, n=20)  # trend 全局 0.04
             + _records("bull", "momentum", ic=0.03, n=20)
             + _records("bear", "momentum", ic=0.03, n=20)  # momentum 全局 0.03
         )
@@ -156,10 +153,7 @@ class TestLoadDataDrivenMultipliers:
         """有效 YAML → 加载并转换为 regime→family→float。"""
         yaml_path = tmp_path / "l3_regime_multipliers.yaml"
         yaml_path.write_text(
-            "multipliers:\n"
-            "  bull:\n"
-            "    trend: 1.5\n"
-            "    momentum: 0.8\n",
+            "multipliers:\n  bull:\n    trend: 1.5\n    momentum: 0.8\n",
             encoding="utf-8",
         )
         table = load_data_driven_multipliers(str(yaml_path))
@@ -177,6 +171,4 @@ class TestLoadDataDrivenMultipliers:
         """默认路径与计划文档一致（_data 易变配置原则）。"""
         from fts.factor_engine import portfolio_loop
 
-        assert portfolio_loop._DEFAULT_REGIME_MULTIPLIERS_PATH == (
-            "docs/harness/_data/l3_regime_multipliers.yaml"
-        )
+        assert portfolio_loop._DEFAULT_REGIME_MULTIPLIERS_PATH == ("docs/harness/_data/l3_regime_multipliers.yaml")

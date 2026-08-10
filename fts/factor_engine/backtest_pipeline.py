@@ -132,10 +132,7 @@ class BacktestReport:
             "factor_id": self.factor_id,
             "factor_name": self.factor_name,
             "period": f"{self.start_date} to {self.end_date}",
-            "metrics": {
-                k: round(v, 4) if isinstance(v, float) else v
-                for k, v in self.metrics.__dict__.items()
-            },
+            "metrics": {k: round(v, 4) if isinstance(v, float) else v for k, v in self.metrics.__dict__.items()},
             "ic_mean": round(self.metrics.ic_mean, 4),
             "sharpe": round(self.metrics.sharpe_ratio, 4),
             "max_dd": round(self.metrics.max_drawdown, 4),
@@ -257,21 +254,25 @@ class PipelineError(Exception):
 
 class DataLoadError(PipelineError):
     """数据加载异常。"""
+
     pass
 
 
 class FactorComputeError(PipelineError):
     """因子计算异常。"""
+
     pass
 
 
 class PerformanceError(PipelineError):
     """绩效评估异常。"""
+
     pass
 
 
 class ReportError(PipelineError):
     """报告生成异常。"""
+
     pass
 
 
@@ -291,6 +292,7 @@ class BacktestPipeline:
         self._config = config or PipelineConfig()
         self._intermediate: dict[str, Any] = {}
         self._current_stage: Optional[PipelineStage] = None
+        self._builder_config: Optional[dict[str, Any]] = None  # Builder 注入（run_batch 时读取）
 
     def run_batch(
         self,
@@ -339,20 +341,29 @@ class BacktestPipeline:
                 )
                 result = self.run(input_data)
                 if result.success:
-                    results.append(BacktestResult(
-                        factor_id=factor_id, report=result.output,
-                    ))
+                    results.append(
+                        BacktestResult(
+                            factor_id=factor_id,
+                            report=result.output,
+                        )
+                    )
                 else:
-                    results.append(BacktestResult(
-                        factor_id=factor_id, error=result.error,
-                    ))
+                    results.append(
+                        BacktestResult(
+                            factor_id=factor_id,
+                            error=result.error,
+                        )
+                    )
             except Exception as e:  # noqa: BLE001
                 logger.exception("[run_batch] 因子 %s 回测异常", factor_id)
                 results.append(BacktestResult(factor_id=factor_id, error=str(e)))
 
         # 按 Sharpe 降序排名（失败因子排最后，保持 rank 连续）
         succeeded = [r for r in results if r.report is not None]
-        succeeded.sort(key=lambda r: r.report.metrics.sharpe_ratio, reverse=True)
+        succeeded.sort(
+            key=lambda r: r.report.metrics.sharpe_ratio if r.report is not None else float("-inf"),
+            reverse=True,
+        )
         for rank, r in enumerate(succeeded, start=1):
             r.rank = rank
         failed = [r for r in results if r.report is None]
@@ -361,7 +372,9 @@ class BacktestPipeline:
 
         logger.info(
             "[run_batch] 批量回测完成 [total=%d, ok=%d, failed=%d]",
-            len(results), len(succeeded), len(results) - len(succeeded),
+            len(results),
+            len(succeeded),
+            len(results) - len(succeeded),
         )
         return results
 
@@ -393,15 +406,11 @@ class BacktestPipeline:
 
             # Stage 3: Performance
             self._current_stage = PipelineStage.PERFORMANCE
-            metrics, equity_curve, trades = self._evaluate_performance(
-                factor_output, input_data
-            )
+            metrics, equity_curve, trades = self._evaluate_performance(factor_output, input_data)
 
             # Stage 4: Report
             self._current_stage = PipelineStage.REPORT
-            report = self._generate_report(
-                input_data, factor_output, metrics, equity_curve, trades
-            )
+            report = self._generate_report(input_data, factor_output, metrics, equity_curve, trades)
 
             duration_ms = (time.time() - start_time) * 1000
             return PipelineResult(
@@ -413,9 +422,7 @@ class BacktestPipeline:
 
         except PipelineError as e:
             duration_ms = (time.time() - start_time) * 1000
-            logger.error(
-                "流水线错误 [stage=%s]: %s", e.stage.value, str(e)
-            )
+            logger.error("流水线错误 [stage=%s]: %s", e.stage.value, str(e))
             return PipelineResult(
                 success=False,
                 stage=self._current_stage or e.stage,
@@ -437,9 +444,7 @@ class BacktestPipeline:
 
     # ─── Stage 1: Data Load ──────────────────────────────
 
-    def _load_data(
-        self, input_data: BacktestInput
-    ) -> tuple[dict[str, Any], pd.DataFrame]:
+    def _load_data(self, input_data: BacktestInput) -> tuple[dict[str, Any], pd.DataFrame]:
         """加载和验证输入数据。"""
         try:
             data = input_data.data.copy()
@@ -476,7 +481,8 @@ class BacktestPipeline:
             factor_code = input_data.factor
             logger.info(
                 "数据加载完成 [rows=%d, factor=%s, frequency=%s]",
-                len(data), factor_code.get("factor_id", "unknown"),
+                len(data),
+                factor_code.get("factor_id", "unknown"),
                 input_data.frequency,
             )
             return factor_code, data
@@ -542,17 +548,17 @@ class BacktestPipeline:
             # 对齐到数据长度
             n = len(data)
             if len(factor_values) < n:
-                factor_values = np.concatenate([
-                    np.zeros(n - len(factor_values)),
-                    factor_values,
-                ])
+                factor_values = np.concatenate(
+                    [
+                        np.zeros(n - len(factor_values)),
+                        factor_values,
+                    ]
+                )
             elif len(factor_values) > n:
                 factor_values = factor_values[-n:]
 
             # 计算未来收益率
-            forward_returns = self._compute_forward_returns(
-                data["close"].values, input_data.forward_period
-            )
+            forward_returns = self._compute_forward_returns(data["close"].values, input_data.forward_period)
 
             # 截断末尾 period 天（forward_returns 为 0，无未来数据可用）
             # 确保 IC 计算、策略收益和绩效指标不引入零值偏差
@@ -564,21 +570,18 @@ class BacktestPipeline:
 
             # 计算滚动 IC（无 date 列时回退到 index，兼容期货面板 DatetimeIndex 数据）
             date_values = data["date"].values if "date" in data.columns else data.index.values
-            ic_series = self._compute_ic_series(
-                factor_values, forward_returns, date_values
-            )
+            ic_series = self._compute_ic_series(factor_values, forward_returns, date_values)
 
             factor_id = factor_code.get("factor_id", "unknown")
             logger.info(
                 "因子计算完成 [factor_id=%s, values=%d]",
-                factor_id, len(factor_values),
+                factor_id,
+                len(factor_values),
             )
 
             return FactorOutput(
                 values=factor_values,
-                dates=pd.DatetimeIndex(
-                    data["date"] if "date" in data.columns else data.index
-                ),
+                dates=pd.DatetimeIndex(data["date"] if "date" in data.columns else data.index),
                 forward_returns=forward_returns,
                 ic_series=ic_series,
                 metadata={"factor_id": factor_id},
@@ -623,12 +626,12 @@ class BacktestPipeline:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
 
-            # 准备执行环境（直接使用 .values 获取 ndarray，避免 Series 索引警告）
-            open_price = data["open"].values.astype(np.float64)
-            high = data["high"].values.astype(np.float64)
-            low = data["low"].values.astype(np.float64)
-            close = data["close"].values.astype(np.float64)
-            volume = data["volume"].values.astype(np.float64)
+            # 准备执行环境（直接使用 to_numpy 获取 ndarray，避免 Series 索引警告）
+            open_price: np.ndarray = data["open"].to_numpy(dtype=np.float64)
+            high: np.ndarray = data["high"].to_numpy(dtype=np.float64)
+            low: np.ndarray = data["low"].to_numpy(dtype=np.float64)
+            close: np.ndarray = data["close"].to_numpy(dtype=np.float64)
+            volume: np.ndarray = data["volume"].to_numpy(dtype=np.float64)
             n = len(close)
 
             # 执行因子代码
@@ -659,10 +662,7 @@ class BacktestPipeline:
         factor_fn = local_vars.get("factor_program")
         if callable(factor_fn):
             # 以 dict[str, ndarray] 传入，兼容种子因子的 data['close'] / data.get('hold') 用法
-            data_dict = {
-                col: data[col].values.astype(np.float64)
-                for col in data.columns
-            }
+            data_dict: dict[str, np.ndarray] = {col: data[col].to_numpy(dtype=np.float64) for col in data.columns}
             try:
                 result = factor_fn(data_dict, params)
             except Exception as e:
@@ -678,7 +678,8 @@ class BacktestPipeline:
                 if len(result) != n:
                     logger.warning(
                         "因子输出长度不匹配: %d != %d, 返回零值",
-                        len(result), n,
+                        len(result),
+                        n,
                     )
                     return np.zeros(n)
                 result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
@@ -723,6 +724,7 @@ class BacktestPipeline:
             if roll_cost_bps is None:
                 try:
                     from fts.config.settings import get_config
+
                     roll_cost_bps = get_config().roll_cost_bps
                 except Exception:  # noqa: BLE001
                     roll_cost_bps = 0.0
@@ -736,6 +738,7 @@ class BacktestPipeline:
             capacity_cap_ratio = 0.0
             try:
                 from fts.config.settings import get_config
+
                 cfg = get_config()
                 if cfg.backtest_capacity_cap:
                     n_values = len(values)
@@ -750,7 +753,10 @@ class BacktestPipeline:
 
             # 计算策略收益
             strategy_returns, positions, blocked_stats = self._compute_strategy_returns(
-                values, fwd_returns, input_data.cost_rate, input_data.slippage,
+                values,
+                fwd_returns,
+                input_data.cost_rate,
+                input_data.slippage,
                 zscore_window=zscore_window,
                 dates=dates,
                 roll_dates=input_data.roll_dates,
@@ -777,7 +783,10 @@ class BacktestPipeline:
 
             # 计算绩效指标（频率自适应年化，v2.30.0）
             metrics = self._calculate_metrics(
-                strategy_returns, equity_curve, factor_output.ic_series, positions,
+                strategy_returns,
+                equity_curve,
+                factor_output.ic_series,
+                positions,
                 frequency=input_data.frequency,
             )
 
@@ -832,6 +841,7 @@ class BacktestPipeline:
             if eff_roll_cost_bps is None:
                 try:
                     from fts.config.settings import get_config
+
                     eff_roll_cost_bps = get_config().roll_cost_bps
                 except Exception:  # noqa: BLE001
                     eff_roll_cost_bps = 0.0
@@ -839,8 +849,14 @@ class BacktestPipeline:
             # v2.59.0 (GAP-F02): 被拦截成交统计（涨跌停/停牌，缺省为 0）
             blocked_stats = factor_output.metadata.get("blocked_stats")
             if blocked_stats is None:
-                blocked_stats = {"limit_up": 0, "limit_down": 0, "halt": 0,
-                                 "capacity_violations": 0, "capacity_avg_reduction": 0.0, "capacity_max_reduction": 0.0}
+                blocked_stats = {
+                    "limit_up": 0,
+                    "limit_down": 0,
+                    "halt": 0,
+                    "capacity_violations": 0,
+                    "capacity_avg_reduction": 0.0,
+                    "capacity_max_reduction": 0.0,
+                }
 
             # v2.67.0 (GAP-I501): 容量分析报告
             capacity_analysis = {
@@ -886,9 +902,7 @@ class BacktestPipeline:
     # ─── 辅助方法 ────────────────────────────────────────
 
     @staticmethod
-    def _compute_forward_returns(
-        close: np.ndarray, period: int
-    ) -> np.ndarray:
+    def _compute_forward_returns(close: np.ndarray, period: int) -> np.ndarray:
         """计算未来 N 日收益率。"""
         n = len(close)
         returns = np.zeros(n)
@@ -908,8 +922,8 @@ class BacktestPipeline:
         n = len(factor_values)
         ics = np.zeros(n)
         for i in range(window, n):
-            f = factor_values[i - window:i]
-            r = forward_returns[i - window:i]
+            f = factor_values[i - window : i]
+            r = forward_returns[i - window : i]
             if np.std(f) > 1e-8 and np.std(r) > 1e-8:
                 ic, _ = sp_stats.spearmanr(f, r)
                 ics[i] = ic
@@ -954,7 +968,7 @@ class BacktestPipeline:
                 return None, empty_stats
 
             n = len(df)
-            mask = np.ones(n, dtype=bool)
+            mask: np.ndarray = np.ones(n, dtype=bool)
             stats = {"limit_up": 0, "limit_down": 0, "halt": 0}
 
             close = df["close"].to_numpy(dtype=float)
@@ -1003,10 +1017,10 @@ class BacktestPipeline:
         roll_dates: Optional[set[str]] = None,
         roll_cost_bps: float = 0.0,
         tradeable_mask: Optional[np.ndarray] = None,
-        volume: Optional[np.ndarray] = None,              # v2.67.0 (GAP-I501): 日成交量
-        close_price: Optional[np.ndarray] = None,          # v2.67.0 (GAP-I501): 收盘价（用于持仓市值计算）
-        capacity_cap_ratio: float = 0.0,                   # v2.67.0 (GAP-I501): 0.0=不启用容量限制
-        initial_capital: float = 1_000_000.0,              # v2.67.0 (GAP-I501): 初始资金
+        volume: Optional[np.ndarray] = None,  # v2.67.0 (GAP-I501): 日成交量
+        close_price: Optional[np.ndarray] = None,  # v2.67.0 (GAP-I501): 收盘价（用于持仓市值计算）
+        capacity_cap_ratio: float = 0.0,  # v2.67.0 (GAP-I501): 0.0=不启用容量限制
+        initial_capital: float = 1_000_000.0,  # v2.67.0 (GAP-I501): 初始资金
         precomputed_blocked_stats: Optional[dict[str, Any]] = None,  # v2.59.0 (GAP-F02): _build_tradeable_mask 细分统计
     ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
         """计算策略收益率。
@@ -1096,7 +1110,7 @@ class BacktestPipeline:
             for i in range(n):
                 if abs(positions[i]) > 1e-8:
                     start = max(0, i - rolling_window + 1)
-                    avg_daily_value = float(np.mean(daily_trade_value[start:i + 1]))
+                    avg_daily_value = float(np.mean(daily_trade_value[start : i + 1]))
                     max_position_value = avg_daily_value * capacity_cap_ratio
                     current_value = abs(positions[i]) * initial_capital
                     if current_value > max_position_value > 0:
@@ -1119,8 +1133,7 @@ class BacktestPipeline:
     ) -> pd.DataFrame:
         """提取交易记录。"""
         trades = []
-        position = 0
-        entry_price = 0
+        position: float = 0
         entry_date = None
 
         for i in range(1, len(returns)):
@@ -1128,17 +1141,18 @@ class BacktestPipeline:
             if abs(new_position - position) > 0.1:
                 # 平仓
                 if position != 0 and entry_date is not None:
-                    trades.append({
-                        "entry_date": str(entry_date.date()) if entry_date else "N/A",
-                        "exit_date": str(dates[i].date()),
-                        "position": position,
-                        "return": returns[i],
-                    })
+                    trades.append(
+                        {
+                            "entry_date": str(entry_date.date()) if entry_date else "N/A",
+                            "exit_date": str(dates[i].date()),
+                            "position": position,
+                            "return": returns[i],
+                        }
+                    )
                 # 开仓
                 if new_position != 0:
                     entry_date = dates[i]
-                    entry_price = 0  # 简化
-                position = new_position
+                position = float(new_position)
 
         return pd.DataFrame(trades)
 

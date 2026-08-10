@@ -146,8 +146,9 @@ def analyze_spread_depth_relation(df: pd.DataFrame) -> dict[str, Any]:
         return {}
 
     abs_spread = df["ask_price1"] - df["bid_price1"]
-    total_depth = df[[f"bid_volume{i}" for i in range(1, 6)]].sum(axis=1) + \
-        df[[f"ask_volume{i}" for i in range(1, 6)]].sum(axis=1)
+    total_depth = df[[f"bid_volume{i}" for i in range(1, 6)]].sum(axis=1) + df[
+        [f"ask_volume{i}" for i in range(1, 6)]
+    ].sum(axis=1)
 
     valid = pd.DataFrame({"spread": abs_spread, "depth": total_depth}).dropna()
     if len(valid) < 10:
@@ -174,23 +175,23 @@ def generate_report(symbol: str, spread: dict, depth: dict, impact: dict, relati
         return "N/A" if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))) else f"{v:.{d}f}"
 
     lines = [
-        f"# tick 盘口微观结构特征分析报告",
-        f"",
+        "# tick 盘口微观结构特征分析报告",
+        "",
         f"> 品种: {symbol} (螺纹钢连续合约)",
-        f"> 数据源: TQSDK tick（含 5 档盘口）",
+        "> 数据源: TQSDK tick（含 5 档盘口）",
         f"> 生成时间: {now}",
-        f"> 分析版本: v2.31.0 Phase 5",
-        f"",
-        f"---",
-        f"",
-        f"## 1. 买卖价差（Spread）",
-        f"",
+        "> 分析版本: v2.31.0 Phase 5",
+        "",
+        "---",
+        "",
+        "## 1. 买卖价差（Spread）",
+        "",
     ]
 
     if spread:
         lines += [
-            f"| 指标 | 值 |",
-            f"|:----|:---|",
+            "| 指标 | 值 |",
+            "|:----|:---|",
             f"| tick 数 | {spread.get('n_ticks', 'N/A')} |",
             f"| 绝对价差均值 | {f(spread.get('abs_spread_mean'))} 元 |",
             f"| 绝对价差中位数 | {f(spread.get('abs_spread_median'))} 元 |",
@@ -205,22 +206,22 @@ def generate_report(symbol: str, spread: dict, depth: dict, impact: dict, relati
         lines += ["（盘口数据不足）"]
 
     lines += [
-        f"",
-        f"### 1.1 解读",
-        f"",
-        f"- **最小变动价位**: 螺纹钢为 1 元/吨，价差为 1 表示报价连续",
-        f"- **相对价差**: 反映流动性成本，越低越利于高频策略",
-        f"",
-        f"---",
-        f"",
-        f"## 2. 盘口深度（Depth）",
-        f"",
+        "",
+        "### 1.1 解读",
+        "",
+        "- **最小变动价位**: 螺纹钢为 1 元/吨，价差为 1 表示报价连续",
+        "- **相对价差**: 反映流动性成本，越低越利于高频策略",
+        "",
+        "---",
+        "",
+        "## 2. 盘口深度（Depth）",
+        "",
     ]
 
     if depth:
         lines += [
-            f"| 指标 | 值 |",
-            f"|:----|:---|",
+            "| 指标 | 值 |",
+            "|:----|:---|",
             f"| 五档买深均值 | {f(depth.get('bid_depth_mean'), 0)} 手 |",
             f"| 五档卖深均值 | {f(depth.get('ask_depth_mean'), 0)} 手 |",
             f"| 五档总深度均值 | {f(depth.get('total_depth_mean'), 0)} 手 |",
@@ -234,23 +235,23 @@ def generate_report(symbol: str, spread: dict, depth: dict, impact: dict, relati
         lines += ["（盘口深度数据不足）"]
 
     lines += [
-        f"",
-        f"### 2.1 解读",
-        f"",
-        f"- **OBI > 0**: 买方承接力强，短期上行动力",
-        f"- **OBI < 0**: 卖方供给强，短期下行压力",
-        f"- **一档占比**: 反映深度集中在最优报价的程度",
-        f"",
-        f"---",
-        f"",
-        f"## 3. 冲击成本（Impact）",
-        f"",
+        "",
+        "### 2.1 解读",
+        "",
+        "- **OBI > 0**: 买方承接力强，短期上行动力",
+        "- **OBI < 0**: 卖方供给强，短期下行压力",
+        "- **一档占比**: 反映深度集中在最优报价的程度",
+        "",
+        "---",
+        "",
+        "## 3. 冲击成本（Impact）",
+        "",
     ]
 
     if impact:
         lines += [
-            f"| 指标 | 值 |",
-            f"|:----|:---|",
+            "| 指标 | 值 |",
+            "|:----|:---|",
             f"| Amihud 非流动性均值 | {f(impact.get('amihud_mean'), 8)} |",
             f"| Amihud 中位数 | {f(impact.get('amihud_median'), 8)} |",
             f"| 有效价差均值 | {f(impact.get('eff_spread_mean'))} 元 |",
@@ -263,61 +264,61 @@ def generate_report(symbol: str, spread: dict, depth: dict, impact: dict, relati
         lines += ["（冲击成本数据不足）"]
 
     lines += [
-        f"",
-        f"### 3.1 解读",
-        f"",
-        f"- **Amihud**: 每元成交的价格冲击，越高流动性越差",
-        f"- **有效价差**: 实际成交相对中点的偏离，衡量成交成本",
-        f"- **Kyle's Lambda**: 单位成交量导致的价格变化斜率",
-        f"",
-        f"---",
-        f"",
-        f"## 4. 价差-深度联动",
-        f"",
+        "",
+        "### 3.1 解读",
+        "",
+        "- **Amihud**: 每元成交的价格冲击，越高流动性越差",
+        "- **有效价差**: 实际成交相对中点的偏离，衡量成交成本",
+        "- **Kyle's Lambda**: 单位成交量导致的价格变化斜率",
+        "",
+        "---",
+        "",
+        "## 4. 价差-深度联动",
+        "",
     ]
 
     if relation:
         lines += [
-            f"| 指标 | 值 |",
-            f"|:----|:---|",
+            "| 指标 | 值 |",
+            "|:----|:---|",
             f"| 价差-深度相关系数 | {f(relation.get('spread_depth_corr'))} |",
             f"| 最浅深度档平均价差 | {f(relation.get('spread_by_depth_q1'))} 元 |",
             f"| 最深深度档平均价差 | {f(relation.get('spread_by_depth_q4'))} 元 |",
         ]
         lines += [
-            f"",
-            f"### 4.1 解读",
-            f"",
-            f"- 相关系数为负: 深度越厚价差越窄（流动性越好）",
-            f"- 若为 0/正: 深度与价差无联动，可能存在流动性分层",
+            "",
+            "### 4.1 解读",
+            "",
+            "- 相关系数为负: 深度越厚价差越窄（流动性越好）",
+            "- 若为 0/正: 深度与价差无联动，可能存在流动性分层",
         ]
     else:
         lines += ["（联动数据不足）"]
 
     lines += [
-        f"",
-        f"---",
-        f"",
-        f"## 5. 综合结论",
-        f"",
-        f"### 5.1 流动性水平",
-        f"",
-        f"- 价差水平（绝对/相对）: 见 §1",
-        f"- 深度水平（五档总量）: 见 §2",
-        f"- 冲击成本（Amihud/Kyle）: 见 §3",
-        f"",
-        f"### 5.2 交易建议",
-        f"",
-        f"- 最优下单时机: 价差最窄时段",
-        f"- 订单拆分建议: 根据五档深度评估单笔冲击",
-        f"- 滑点预算: 基于有效价差均值设定",
-        f"",
-        f"### 5.3 风险提示",
-        f"",
-        f"- tick 数据仅覆盖盘中 42 分钟（免费账号限制），统计显著性有限",
-        f"- 5 档盘口为瞬时快照，未捕捉撤单行为",
-        f"- 实盘滑点可能高于盘口深度估计（大单冲击）",
-        f"",
+        "",
+        "---",
+        "",
+        "## 5. 综合结论",
+        "",
+        "### 5.1 流动性水平",
+        "",
+        "- 价差水平（绝对/相对）: 见 §1",
+        "- 深度水平（五档总量）: 见 §2",
+        "- 冲击成本（Amihud/Kyle）: 见 §3",
+        "",
+        "### 5.2 交易建议",
+        "",
+        "- 最优下单时机: 价差最窄时段",
+        "- 订单拆分建议: 根据五档深度评估单笔冲击",
+        "- 滑点预算: 基于有效价差均值设定",
+        "",
+        "### 5.3 风险提示",
+        "",
+        "- tick 数据仅覆盖盘中 42 分钟（免费账号限制），统计显著性有限",
+        "- 5 档盘口为瞬时快照，未捕捉撤单行为",
+        "- 实盘滑点可能高于盘口深度估计（大单冲击）",
+        "",
     ]
 
     report = "\n".join(lines)

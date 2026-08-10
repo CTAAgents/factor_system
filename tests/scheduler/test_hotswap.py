@@ -35,11 +35,15 @@ def fake_watchdog_modules():
     watchdog.events = events
     observers.Observer = MagicMock()
     events.FileSystemEventHandler = type("FileSystemEventHandler", (), {})
-    with patch.dict(sys.modules, {
-        "watchdog": watchdog,
-        "watchdog.observers": observers,
-        "watchdog.events": events,
-    }, clear=False):
+    with patch.dict(
+        sys.modules,
+        {
+            "watchdog": watchdog,
+            "watchdog.observers": observers,
+            "watchdog.events": events,
+        },
+        clear=False,
+    ):
         yield {"watchdog": watchdog, "observers": observers, "events": events}
 
 
@@ -129,9 +133,7 @@ class TestHotSwapWatcherStartStop:
             if not result:
                 return
             # 如果有 watchdog，应记录警告
-            mock_logger.warning.assert_any_call(
-                "[hotswap] watch dir not found: %s", Path("/nonexistent/path")
-            )
+            mock_logger.warning.assert_any_call("[hotswap] watch dir not found: %s", Path("/nonexistent/path"))
 
 
 # ─── _reload_module ─────────────────────────────────────
@@ -170,8 +172,10 @@ class TestReloadModule:
             mock_path.is_absolute.return_value = False
             mock_path.parts = ("fts", "scheduler", "hotswap.py")
 
-            with patch.object(importlib_mod, 'reload') as mock_reload:
-                with patch.dict("fts.scheduler.hotswap.sys.modules", {"fts.scheduler.hotswap": mock_module}, clear=True):
+            with patch.object(importlib_mod, "reload") as mock_reload:
+                with patch.dict(
+                    "fts.scheduler.hotswap.sys.modules", {"fts.scheduler.hotswap": mock_module}, clear=True
+                ):
                     _reload_module("fts/scheduler/hotswap.py")
                     mock_reload.assert_called_once_with(mock_module)
 
@@ -186,7 +190,7 @@ class TestReloadModule:
             mock_path.is_absolute.return_value = False
             mock_path.parts = ("fts", "scheduler", "__init__.py")
 
-            with patch.object(importlib_mod, 'reload') as mock_reload:
+            with patch.object(importlib_mod, "reload") as mock_reload:
                 with patch.dict("fts.scheduler.hotswap.sys.modules", {"fts.scheduler": mock_module}, clear=True):
                     _reload_module("fts/scheduler/__init__.py")
                     mock_reload.assert_called_once_with(mock_module)
@@ -201,7 +205,7 @@ class TestReloadModule:
             mock_path.is_absolute.return_value = False
             mock_path.parts = ("fts", "scheduler", "hotswap.py")
 
-            with patch.object(importlib_mod, 'reload', side_effect=ImportError("test error")):
+            with patch.object(importlib_mod, "reload", side_effect=ImportError("test error")):
                 with patch("fts.scheduler.hotswap.logger") as mock_logger:
                     _reload_module("fts/scheduler/hotswap.py")
                     mock_logger.warning.assert_called_once()
@@ -230,9 +234,7 @@ class TestHotSwapWatcherImportError:
         with patch.dict("sys.modules", {"watchdog": None, "watchdog.observers": None, "watchdog.events": None}):
             with patch("fts.scheduler.hotswap.logger") as mock_logger:
                 watcher.start()
-                mock_logger.warning.assert_called_once_with(
-                    "watchdog 未安装，热重载不可用。pip install watchdog"
-                )
+                mock_logger.warning.assert_called_once_with("watchdog 未安装，热重载不可用。pip install watchdog")
 
 
 # ─── HotSwapWatcher start() 成功路径 ──────────────────

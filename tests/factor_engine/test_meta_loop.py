@@ -28,7 +28,6 @@ if str(_FTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_FTS_ROOT))
 
 from fts.factor_engine.contracts import (
-    DEFAULT_L1_BUDGET_CONFIG,
     DEFAULT_L1_VERIFIER_CONFIG,
     EconomicLogic,
     EVOLUTION_VERSION,
@@ -46,15 +45,15 @@ from fts.factor_engine.meta_loop import (
     L1Verifier,
     L1VerifierLocked,
     MetaLoop,
-    MetaLoopError,
-    MetaRunResult,
     MetaStateManager,
     MetaStateManagerError,
+    validate_batch_candidates,
 )
 from fts.factor_engine.seed_pool import SeedPool
 
 
 # ─── 共享 fixtures ────────────────────────────────────────
+
 
 @pytest.fixture
 def tmp_meta_dir(tmp_path) -> Path:
@@ -146,6 +145,7 @@ def valid_candidate(valid_economic_logic) -> SeedCandidate:
 @pytest.fixture
 def mock_web_collector():
     """Mock 的 f10/web_collector 函数。"""
+
     def _collect(variety: str) -> dict:
         return {
             "symbol": variety,
@@ -156,6 +156,7 @@ def mock_web_collector():
             "news": [],
             "warnings": [],
         }
+
     return _collect
 
 
@@ -170,6 +171,7 @@ def mock_llm_client():
 # ════════════════════════════════════════════════════════
 # 1. L1Verifier 测试
 # ════════════════════════════════════════════════════════
+
 
 class TestL1Verifier:
     """L1 Verifier — 4 维度判定 + 锁定机制。"""
@@ -214,7 +216,10 @@ class TestL1Verifier:
     def test_verifier_rejects_short_narrative(self, valid_candidate):
         """narrative 长度不足被拒绝。"""
         valid_candidate["economic_logic"] = EconomicLogic(
-            theory=4, behavioral=4, microstructure=4, institutional=4,
+            theory=4,
+            behavioral=4,
+            microstructure=4,
+            institutional=4,
             narrative="短",  # 仅 1 字符
         )
         v = L1Verifier(L1VerifierConfig(min_narrative_length=20))
@@ -268,6 +273,7 @@ class TestL1Verifier:
 # ════════════════════════════════════════════════════════
 # 2. MetaStateManager 测试
 # ════════════════════════════════════════════════════════
+
 
 class TestMetaStateManager:
     """L1 状态管理器 — 持久化 + backup 恢复。"""
@@ -413,6 +419,7 @@ class TestMetaStateManager:
 # 3. FactorPoolManager 测试
 # ════════════════════════════════════════════════════════
 
+
 class TestFactorPoolManager:
     """factor_pool.json 管理器。"""
 
@@ -429,6 +436,7 @@ class TestFactorPoolManager:
         mgr = FactorPoolManager(tmp_factor_pool_path)
         mgr.load_or_init()
         from fts.factor_engine.contracts import FactorPoolEntry
+
         entry = FactorPoolEntry(
             factor_id="cand_abc123",
             name="test_factor",
@@ -451,10 +459,16 @@ class TestFactorPoolManager:
         mgr = FactorPoolManager(tmp_factor_pool_path)
         mgr.load_or_init()
         from fts.factor_engine.contracts import FactorPoolEntry
+
         entry = FactorPoolEntry(
-            factor_id="cand_eval", name="f1", source="l1_bootstrapping",
-            priority="high", status="injected", trace_id="t1",
-            created_at="2026-07-18", updated_at="2026-07-18",
+            factor_id="cand_eval",
+            name="f1",
+            source="l1_bootstrapping",
+            priority="high",
+            status="injected",
+            trace_id="t1",
+            created_at="2026-07-18",
+            updated_at="2026-07-18",
             evaluation_status="evaluated",
         )
         mgr.add_entry(entry)
@@ -466,17 +480,28 @@ class TestFactorPoolManager:
         mgr = FactorPoolManager(tmp_factor_pool_path)
         mgr.load_or_init()
         from fts.factor_engine.contracts import FactorPoolEntry
+
         entry = FactorPoolEntry(
-            factor_id="cand_dup", name="f1", source="l1_bootstrapping",
-            priority="high", status="pending", trace_id="t1",
-            created_at="2026-07-18", updated_at="2026-07-18",
+            factor_id="cand_dup",
+            name="f1",
+            source="l1_bootstrapping",
+            priority="high",
+            status="pending",
+            trace_id="t1",
+            created_at="2026-07-18",
+            updated_at="2026-07-18",
         )
         mgr.add_entry(entry)
         # 同 ID 不同状态
         entry2 = FactorPoolEntry(
-            factor_id="cand_dup", name="f1", source="l1_bootstrapping",
-            priority="high", status="injected", trace_id="t1",
-            created_at="2026-07-18", updated_at="2026-07-18",
+            factor_id="cand_dup",
+            name="f1",
+            source="l1_bootstrapping",
+            priority="high",
+            status="injected",
+            trace_id="t1",
+            created_at="2026-07-18",
+            updated_at="2026-07-18",
         )
         mgr.add_entry(entry2)
         assert mgr.count() == 1
@@ -487,10 +512,16 @@ class TestFactorPoolManager:
         mgr = FactorPoolManager(tmp_factor_pool_path)
         mgr.load_or_init()
         from fts.factor_engine.contracts import FactorPoolEntry
+
         entry = FactorPoolEntry(
-            factor_id="cand_xyz", name="f1", source="l1_bootstrapping",
-            priority="high", status="pending", trace_id="t1",
-            created_at="2026-07-18", updated_at="2026-07-18",
+            factor_id="cand_xyz",
+            name="f1",
+            source="l1_bootstrapping",
+            priority="high",
+            status="pending",
+            trace_id="t1",
+            created_at="2026-07-18",
+            updated_at="2026-07-18",
         )
         mgr.add_entry(entry)
         mgr.mark_status("cand_xyz", "injected")
@@ -503,11 +534,17 @@ class TestFactorPoolManager:
         mgr = FactorPoolManager(tmp_factor_pool_path)
         mgr.load_or_init()
         from fts.factor_engine.contracts import FactorPoolEntry
+
         for i in range(3):
             entry = FactorPoolEntry(
-                factor_id=f"cand_{i}", name=f"f{i}", source="l1_bootstrapping",
-                priority="high", status="pending", trace_id=f"t{i}",
-                created_at="2026-07-18", updated_at="2026-07-18",
+                factor_id=f"cand_{i}",
+                name=f"f{i}",
+                source="l1_bootstrapping",
+                priority="high",
+                status="pending",
+                trace_id=f"t{i}",
+                created_at="2026-07-18",
+                updated_at="2026-07-18",
             )
             mgr.add_entry(entry)
         pool = mgr.load_or_init()
@@ -527,6 +564,7 @@ class TestFactorPoolManager:
 # 4. DebateQualityAnalyzer 测试
 # ════════════════════════════════════════════════════════
 
+
 class TestDebateQualityAnalyzer:
     """辩论质量分析器。"""
 
@@ -543,20 +581,23 @@ class TestDebateQualityAnalyzer:
         journal_path = tmp_debates_dir.parent / "journal" / "debate_journal.json"
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         with open(journal_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "entries": [
-                    {
-                        "action": "debate_record",
-                        "symbols": {
-                            "rb": {
-                                "debate_round": 3,
-                                "bullish_arguments": ["a"],
-                                "bearish_arguments": ["a", "b", "c"],
-                            }
+            json.dump(
+                {
+                    "entries": [
+                        {
+                            "action": "debate_record",
+                            "symbols": {
+                                "rb": {
+                                    "debate_round": 3,
+                                    "bullish_arguments": ["a"],
+                                    "bearish_arguments": ["a", "b", "c"],
+                                }
+                            },
                         }
-                    }
-                ]
-            }, f)
+                    ]
+                },
+                f,
+            )
         analyzer = DebateQualityAnalyzer(tmp_debates_dir)
         result = analyzer.analyze_latest_debate()
         assert len(result["topics"]) == 1
@@ -568,20 +609,23 @@ class TestDebateQualityAnalyzer:
         journal_path = tmp_debates_dir.parent / "journal" / "debate_journal.json"
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         with open(journal_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "entries": [
-                    {
-                        "action": "debate_record",
-                        "symbols": {
-                            "i": {
-                                "debate_round": 3,
-                                "bullish_arguments": ["a", "b", "c"],
-                                "bearish_arguments": ["a"],
-                            }
+            json.dump(
+                {
+                    "entries": [
+                        {
+                            "action": "debate_record",
+                            "symbols": {
+                                "i": {
+                                    "debate_round": 3,
+                                    "bullish_arguments": ["a", "b", "c"],
+                                    "bearish_arguments": ["a"],
+                                }
+                            },
                         }
-                    }
-                ]
-            }, f)
+                    ]
+                },
+                f,
+            )
         analyzer = DebateQualityAnalyzer(tmp_debates_dir)
         result = analyzer.analyze_latest_debate()
         assert len(result["topics"]) == 1
@@ -592,20 +636,23 @@ class TestDebateQualityAnalyzer:
         journal_path = tmp_debates_dir.parent / "journal" / "debate_journal.json"
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         with open(journal_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "entries": [
-                    {
-                        "action": "debate_record",
-                        "symbols": {
-                            "j": {
-                                "debate_round": 1,
-                                "bullish_arguments": ["a"],
-                                "bearish_arguments": ["a"],
-                            }
+            json.dump(
+                {
+                    "entries": [
+                        {
+                            "action": "debate_record",
+                            "symbols": {
+                                "j": {
+                                    "debate_round": 1,
+                                    "bullish_arguments": ["a"],
+                                    "bearish_arguments": ["a"],
+                                }
+                            },
                         }
-                    }
-                ]
-            }, f)
+                    ]
+                },
+                f,
+            )
         analyzer = DebateQualityAnalyzer(tmp_debates_dir)
         result = analyzer.analyze_latest_debate()
         assert len(result["topics"]) == 1
@@ -635,20 +682,23 @@ class TestDebateQualityAnalyzer:
         journal_path = tmp_debates_dir.parent / "journal" / "debate_journal.json"
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         with open(journal_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "entries": [
-                    {
-                        "action": "debate_record",
-                        "symbols": {
-                            "rb": {
-                                "debate_round": 3,
-                                "bullish_arguments": ["a", "b"],
-                                "bearish_arguments": ["c", "d"],
-                            }
+            json.dump(
+                {
+                    "entries": [
+                        {
+                            "action": "debate_record",
+                            "symbols": {
+                                "rb": {
+                                    "debate_round": 3,
+                                    "bullish_arguments": ["a", "b"],
+                                    "bearish_arguments": ["c", "d"],
+                                }
+                            },
                         }
-                    }
-                ]
-            }, f)
+                    ]
+                },
+                f,
+            )
         analyzer = DebateQualityAnalyzer(tmp_debates_dir)
         result = analyzer.analyze_latest_debate()
         assert "无明显薄弱维度" in result["summary"]
@@ -660,26 +710,31 @@ class TestDebateQualityAnalyzer:
 
     def test_detect_gap_no_arguments(self):
         """无多头空头论证返回 no_debate（line 459）。"""
-        result = DebateQualityAnalyzer._detect_gap({
-            "debate_round": 3,
-            "bullish_arguments": [],
-            "bearish_arguments": [],
-        })
+        result = DebateQualityAnalyzer._detect_gap(
+            {
+                "debate_round": 3,
+                "bullish_arguments": [],
+                "bearish_arguments": [],
+            }
+        )
         assert result == "no_debate"
 
     def test_detect_gap_balanced(self):
         """多空论证平衡返回 None（line 464）。"""
-        result = DebateQualityAnalyzer._detect_gap({
-            "debate_round": 3,
-            "bullish_arguments": ["a", "b"],
-            "bearish_arguments": ["c", "d"],
-        })
+        result = DebateQualityAnalyzer._detect_gap(
+            {
+                "debate_round": 3,
+                "bullish_arguments": ["a", "b"],
+                "bearish_arguments": ["c", "d"],
+            }
+        )
         assert result is None
 
 
 # ════════════════════════════════════════════════════════
 # 5. BootstrappingChain 测试
 # ════════════════════════════════════════════════════════
+
 
 class TestBootstrappingChain:
     """Bootstrapping Agent 链。"""
@@ -767,11 +822,16 @@ class TestBootstrappingChain:
             code="def factor_program(data, params):\n    import os\n    os.system('rm -rf')\n",  # 安全沙箱禁止
             params={},
             signature=FactorSignature(
-                input_fields=["close"], output_type="signal",
-                frequency="daily", lookback=1,
+                input_fields=["close"],
+                output_type="signal",
+                frequency="daily",
+                lookback=1,
             ),
             economic_logic=EconomicLogic(
-                theory=4, behavioral=4, microstructure=4, institutional=4,
+                theory=4,
+                behavioral=4,
+                microstructure=4,
+                institutional=4,
                 narrative="恶意代码测试因子，应该被沙箱拒绝编译。",
             ),
             source="l1_bootstrapping",
@@ -782,8 +842,11 @@ class TestBootstrappingChain:
         mock_llm_client.bootstrap_factors.return_value = [bad_candidate]
         chain = BootstrappingChain(llm_client=mock_llm_client)
         candidates = chain.bootstrap(
-            market_snapshot={}, debate_gaps=[], max_candidates=1,
-            seed_pool=SeedPool(), trace_id="t",
+            market_snapshot={},
+            debate_gaps=[],
+            max_candidates=1,
+            seed_pool=SeedPool(),
+            trace_id="t",
         )
         assert len(candidates) == 1
         assert candidates[0]["is_executable"] is False
@@ -796,11 +859,16 @@ class TestBootstrappingChain:
             code="def factor_program(data, params):\n    return None\n",
             params={},
             signature=FactorSignature(
-                input_fields=["close"], output_type="signal",
-                frequency="daily", lookback=1,
+                input_fields=["close"],
+                output_type="signal",
+                frequency="daily",
+                lookback=1,
             ),
             economic_logic=EconomicLogic(
-                theory=4, behavioral=4, microstructure=4, institutional=4,
+                theory=4,
+                behavioral=4,
+                microstructure=4,
+                institutional=4,
                 narrative="测试编译异常",
             ),
             source="l1_bootstrapping",
@@ -810,11 +878,13 @@ class TestBootstrappingChain:
         )
         mock_llm_client.bootstrap_factors.return_value = [bad_candidate]
         chain = BootstrappingChain(llm_client=mock_llm_client)
-        with patch("fts.factor_engine.meta_loop.validate_factor_code",
-                    side_effect=RuntimeError("沙箱异常")):
+        with patch("fts.factor_engine.meta_loop.validate_factor_code", side_effect=RuntimeError("沙箱异常")):
             candidates = chain.bootstrap(
-                market_snapshot={}, debate_gaps=[], max_candidates=1,
-                seed_pool=SeedPool(), trace_id="t",
+                market_snapshot={},
+                debate_gaps=[],
+                max_candidates=1,
+                seed_pool=SeedPool(),
+                trace_id="t",
             )
         assert len(candidates) == 1
         assert candidates[0]["is_executable"] is False
@@ -825,8 +895,11 @@ class TestBootstrappingChain:
         mock_llm_client.bootstrap_factors.side_effect = RuntimeError("LLM 调用失败")
         chain = BootstrappingChain(llm_client=mock_llm_client)
         candidates = chain.bootstrap(
-            market_snapshot={}, debate_gaps=[], max_candidates=3,
-            seed_pool=SeedPool(), trace_id="t",
+            market_snapshot={},
+            debate_gaps=[],
+            max_candidates=3,
+            seed_pool=SeedPool(),
+            trace_id="t",
         )
         # 应从模板产生候选
         assert len(candidates) >= 1
@@ -837,8 +910,11 @@ class TestBootstrappingChain:
         pool.list_names.return_value = ["bbands_width_reversion", "oi_price_divergence"]
         chain = BootstrappingChain(llm_client=None)
         candidates = chain.bootstrap(
-            market_snapshot={}, debate_gaps=[], max_candidates=10,
-            seed_pool=pool, trace_id="t",
+            market_snapshot={},
+            debate_gaps=[],
+            max_candidates=10,
+            seed_pool=pool,
+            trace_id="t",
         )
         candidate_names = [c["name"] for c in candidates]
         assert "bbands_width_reversion" not in candidate_names
@@ -865,6 +941,7 @@ class TestBootstrappingChain:
 # 6. MetaLoop 主循环测试
 # ════════════════════════════════════════════════════════
 
+
 class TestMetaLoop:
     """L1 Meta-Loop 主循环。"""
 
@@ -888,8 +965,7 @@ class TestMetaLoop:
         assert result.trace_id.startswith("l1_")
 
     def test_run_with_web_collector(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir,
-        tmp_debates_dir, mock_web_collector
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir, mock_web_collector
     ):
         """配置 web_collector 时执行感知步骤。"""
         loop = MetaLoop(
@@ -903,9 +979,7 @@ class TestMetaLoop:
         result = loop.run(max_bootstraps=2)
         assert result.status == "completed"
 
-    def test_run_persists_state(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
-    ):
+    def test_run_persists_state(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
         """run() 后状态文件已持久化。"""
         loop = MetaLoop(
             memory_dir=tmp_meta_dir,
@@ -921,9 +995,7 @@ class TestMetaLoop:
         assert state["status"] == "completed"
         assert state["total_candidates_generated"] >= 1
 
-    def test_run_creates_backup(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
-    ):
+    def test_run_creates_backup(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
         """run() 创建 backup 文件。"""
         loop = MetaLoop(
             memory_dir=tmp_meta_dir,
@@ -934,9 +1006,7 @@ class TestMetaLoop:
         loop.run(max_bootstraps=1)
         assert (tmp_meta_dir / "state.json.backup").exists()
 
-    def test_run_updates_factor_pool(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
-    ):
+    def test_run_updates_factor_pool(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
         """run() 更新 factor_pool.json。"""
         loop = MetaLoop(
             memory_dir=tmp_meta_dir,
@@ -986,11 +1056,16 @@ class TestMetaLoop:
                         code="def factor_program(data, params):\n    return None\n",  # 编译过但 is_executable=False
                         params={},
                         signature=FactorSignature(
-                            input_fields=["close"], output_type="signal",
-                            frequency="daily", lookback=1,
+                            input_fields=["close"],
+                            output_type="signal",
+                            frequency="daily",
+                            lookback=1,
                         ),
                         economic_logic=EconomicLogic(
-                            theory=1, behavioral=1, microstructure=1, institutional=1,
+                            theory=1,
+                            behavioral=1,
+                            microstructure=1,
+                            institutional=1,
                             narrative="不达标",
                         ),
                         source="l1_bootstrapping",
@@ -1025,9 +1100,7 @@ class TestMetaLoop:
         # 5 个候选都失败，第 5 个之后应触发熔断
         assert result.status in ("circuit_broken", "completed")  # completed 也算（如果熔断在循环内未触发）
 
-    def test_run_result_to_dict(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
-    ):
+    def test_run_result_to_dict(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
         """MetaRunResult.to_dict() 正确序列化。"""
         loop = MetaLoop(
             memory_dir=tmp_meta_dir,
@@ -1043,28 +1116,29 @@ class TestMetaLoop:
         assert "candidates_generated" in d
         assert "candidates_injected" in d
 
-    def test_run_with_debate_gaps(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
-    ):
+    def test_run_with_debate_gaps(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
         """有辩论缺口数据时仍能正常完成。"""
         # 准备辩论数据
         journal_path = tmp_debates_dir.parent / "journal" / "debate_journal.json"
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         with open(journal_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "entries": [
-                    {
-                        "action": "debate_record",
-                        "symbols": {
-                            "rb": {
-                                "debate_round": 3,
-                                "bullish_arguments": ["a"],
-                                "bearish_arguments": ["a", "b", "c"],
-                            }
+            json.dump(
+                {
+                    "entries": [
+                        {
+                            "action": "debate_record",
+                            "symbols": {
+                                "rb": {
+                                    "debate_round": 3,
+                                    "bullish_arguments": ["a"],
+                                    "bearish_arguments": ["a", "b", "c"],
+                                }
+                            },
                         }
-                    }
-                ]
-            }, f)
+                    ]
+                },
+                f,
+            )
         loop = MetaLoop(
             memory_dir=tmp_meta_dir,
             factor_pool_path=tmp_factor_pool_path,
@@ -1090,11 +1164,16 @@ class TestMetaLoop:
                         code="def factor_program(data, params):\n    return None\n",
                         params={},
                         signature=FactorSignature(
-                            input_fields=["close"], output_type="signal",
-                            frequency="daily", lookback=1,
+                            input_fields=["close"],
+                            output_type="signal",
+                            frequency="daily",
+                            lookback=1,
                         ),
                         economic_logic=EconomicLogic(
-                            theory=1, behavioral=1, microstructure=1, institutional=1,
+                            theory=1,
+                            behavioral=1,
+                            microstructure=1,
+                            institutional=1,
                             narrative="不达标",
                         ),
                         source="l1_bootstrapping",
@@ -1133,7 +1212,9 @@ class TestMetaLoop:
         """Token 超限触发熔断（line 1054）。"""
         loop = MetaLoop()
         state = L1MetaLoopState(
-            run_id="test", started_at="", status="running",
+            run_id="test",
+            started_at="",
+            status="running",
             tokens_consumed=200000,  # 超过 50000 * 2 = 100000
             budget_limit=50000,
         )
@@ -1145,10 +1226,13 @@ class TestMetaLoop:
         """高失败率触发熔断（lines 1063-1065）。"""
         loop = MetaLoop()
         state = L1MetaLoopState(
-            run_id="test", started_at="", status="running",
-            tokens_consumed=1000, budget_limit=50000,
+            run_id="test",
+            started_at="",
+            status="running",
+            tokens_consumed=1000,
+            budget_limit=50000,
             total_candidates_generated=100,  # 累计生成 100 个
-            total_candidates_injected=2,     # 仅注入 2 个 → 98% 失败
+            total_candidates_injected=2,  # 仅注入 2 个 → 98% 失败
         )
         reason = loop._check_circuit_breaker(state, 0)
         assert reason is not None
@@ -1159,8 +1243,11 @@ class TestMetaLoop:
         loop = MetaLoop()
         loop._consecutive_low_quality = 5
         state = L1MetaLoopState(
-            run_id="test", started_at="", status="running",
-            tokens_consumed=1000, budget_limit=50000,
+            run_id="test",
+            started_at="",
+            status="running",
+            tokens_consumed=1000,
+            budget_limit=50000,
         )
         reason = loop._check_circuit_breaker(state, 0)
         assert reason is not None
@@ -1193,11 +1280,16 @@ class TestMetaLoop:
                         code="def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))\n",
                         params={},
                         signature=FactorSignature(
-                            input_fields=["close"], output_type="signal",
-                            frequency="daily", lookback=1,
+                            input_fields=["close"],
+                            output_type="signal",
+                            frequency="daily",
+                            lookback=1,
                         ),
                         economic_logic=EconomicLogic(
-                            theory=2, behavioral=2, microstructure=2, institutional=2,
+                            theory=2,
+                            behavioral=2,
+                            microstructure=2,
+                            institutional=2,
                             narrative="该因子缺乏足够的机制论证支撑，经济逻辑不足。",
                         ),
                         source="l1_bootstrapping",
@@ -1248,11 +1340,16 @@ class TestMetaLoop:
                     code="import os\nimport sys\n",
                     params={},
                     signature=FactorSignature(
-                        input_fields=["close"], output_type="signal",
-                        frequency="daily", lookback=1,
+                        input_fields=["close"],
+                        output_type="signal",
+                        frequency="daily",
+                        lookback=1,
                     ),
                     economic_logic=EconomicLogic(
-                        theory=3, behavioral=3, microstructure=3, institutional=3,
+                        theory=3,
+                        behavioral=3,
+                        microstructure=3,
+                        institutional=3,
                         narrative="该因子具备充分的经济逻辑论证。",
                     ),
                     source="l1_bootstrapping",
@@ -1278,10 +1375,9 @@ class TestMetaLoop:
         # 日志应包含具体编译错误 detail
         assert any("禁止 import 黑名单模块" in r.message for r in caplog.records)
 
-    def test_perceive_market_collector_error(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
-    ):
+    def test_perceive_market_collector_error(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
         """web_collector 异常时记录 error（lines 985-987）。"""
+
         def failing_collector(sym):
             if sym == "i":
                 raise RuntimeError("网络错误")
@@ -1302,8 +1398,7 @@ class TestMetaLoop:
         assert "error" in snapshot["snapshots"]["i"]
 
     def test_inject_candidate_exception(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir,
-        valid_candidate
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir, valid_candidate
     ):
         """注入候选异常时返回 None（lines 1028-1030）。"""
         loop = MetaLoop(
@@ -1324,11 +1419,16 @@ class TestMetaLoop:
             code="def factor_program(data, params):\n    return None\n",
             params={},
             signature=FactorSignature(
-                input_fields=["close"], output_type="signal",
-                frequency="daily", lookback=1,
+                input_fields=["close"],
+                output_type="signal",
+                frequency="daily",
+                lookback=1,
             ),
             economic_logic=EconomicLogic(
-                theory=2, behavioral=2, microstructure=3, institutional=2,  # 总分 = 9
+                theory=2,
+                behavioral=2,
+                microstructure=3,
+                institutional=2,  # 总分 = 9
                 narrative="低优先级因子",
             ),
             source="l1_bootstrapping",
@@ -1339,9 +1439,7 @@ class TestMetaLoop:
         priority = MetaLoop._compute_priority(cand)
         assert priority == "low"
 
-    def test_run_exception_handling(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
-    ):
+    def test_run_exception_handling(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
         """run() 异常时返回 paused 状态（lines 960-963）。"""
         loop = MetaLoop(
             memory_dir=tmp_meta_dir,
@@ -1350,9 +1448,7 @@ class TestMetaLoop:
             debates_dir=tmp_debates_dir,
         )
         # 让 _perceive_market 抛异常（在 try 块内部，line 870）
-        loop._perceive_market = MagicMock(
-            side_effect=RuntimeError("市场感知异常")
-        )
+        loop._perceive_market = MagicMock(side_effect=RuntimeError("市场感知异常"))
         result = loop.run(max_bootstraps=1)
         assert result.status == "paused"
         assert "市场感知异常" in str(result.circuit_breaker_reason)
@@ -1361,6 +1457,7 @@ class TestMetaLoop:
 # ════════════════════════════════════════════════════════
 # 7. SeedPool L1 注入接口测试
 # ════════════════════════════════════════════════════════
+
 
 class TestSeedPoolL1Injection:
     """SeedPool.inject_from_l1() 接口测试。"""
@@ -1421,32 +1518,35 @@ class TestSeedPoolL1Injection:
 # 8. 端到端集成测试
 # ════════════════════════════════════════════════════════
 
+
 class TestMetaLoopEndToEnd:
     """L1 Meta-Loop 端到端测试 — 5 步完整流程。"""
 
     def test_full_pipeline_with_all_components(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir,
-        tmp_debates_dir, mock_web_collector
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir, mock_web_collector
     ):
         """完整 5 步管道: 感知 → 辩论分析 → Bootstrapping → Verifier → 注入。"""
         # 准备辩论数据
         journal_path = tmp_debates_dir.parent / "journal" / "debate_journal.json"
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         with open(journal_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "entries": [
-                    {
-                        "action": "debate_record",
-                        "symbols": {
-                            "rb": {
-                                "debate_round": 3,
-                                "bullish_arguments": ["a"],
-                                "bearish_arguments": ["a", "b", "c"],
-                            }
+            json.dump(
+                {
+                    "entries": [
+                        {
+                            "action": "debate_record",
+                            "symbols": {
+                                "rb": {
+                                    "debate_round": 3,
+                                    "bullish_arguments": ["a"],
+                                    "bearish_arguments": ["a", "b", "c"],
+                                }
+                            },
                         }
-                    }
-                ]
-            }, f)
+                    ]
+                },
+                f,
+            )
 
         loop = MetaLoop(
             memory_dir=tmp_meta_dir,
@@ -1472,9 +1572,7 @@ class TestMetaLoopEndToEnd:
         injected_files = list(tmp_inject_dir.glob("cand_*.json"))
         assert len(injected_files) == result.candidates_injected
 
-    def test_idempotent_run_preserves_state(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
-    ):
+    def test_idempotent_run_preserves_state(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
         """两次运行状态文件持续累积。"""
         loop1 = MetaLoop(
             memory_dir=tmp_meta_dir,
@@ -1491,7 +1589,7 @@ class TestMetaLoopEndToEnd:
             inject_dir=tmp_inject_dir,
             debates_dir=tmp_debates_dir,
         )
-        r2 = loop2.run(max_bootstraps=2)
+        loop2.run(max_bootstraps=2)
 
         # 累计候选数应大于第一次
         with open(tmp_meta_dir / "state.json", "r", encoding="utf-8") as f:
@@ -1503,6 +1601,7 @@ class TestMetaLoopEndToEnd:
 # 9. CLI 入口 main() 测试
 # ════════════════════════════════════════════════════════
 
+
 class TestMainFunction:
     """CLI 入口 main() — lines 1087-1135。"""
 
@@ -1511,6 +1610,7 @@ class TestMainFunction:
         with patch.object(sys, "argv", ["meta_loop.py"]):
             with pytest.raises(SystemExit) as exc:
                 from fts.factor_engine.meta_loop import main
+
                 main()
         assert exc.value.code == 1
         captured = capsys.readouterr()
@@ -1524,16 +1624,126 @@ class TestMainFunction:
 
         with patch("fts.data.FTSDataProvider") as mock_provider:
             mock_provider.return_value = MagicMock()
-            with patch.object(sys, "argv", [
-                "meta_loop.py", "--once",
-                "--memory-dir", str(meta_dir),
-                "--factor-pool", str(pool_path),
-                "--inject-dir", str(inject_dir),
-                "--max-bootstraps", "2",
-            ]):
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "meta_loop.py",
+                    "--once",
+                    "--memory-dir",
+                    str(meta_dir),
+                    "--factor-pool",
+                    str(pool_path),
+                    "--inject-dir",
+                    str(inject_dir),
+                    "--max-bootstraps",
+                    "2",
+                ],
+            ):
                 from fts.factor_engine.meta_loop import main
+
                 with pytest.raises(SystemExit) as exc:
                     main()
         assert exc.value.code == 0
         captured = capsys.readouterr()
         assert "L1 Meta-Loop 完成" in captured.out
+
+
+# ════════════════════════════════════════════════════════
+# 10. GAP-I101: L1 批量候选契约校验 + 吞吐指标
+# ════════════════════════════════════════════════════════
+
+
+class TestValidateBatchCandidates:
+    """GAP-I101 (v2.72.0): validate_batch_candidates 契约校验。"""
+
+    @staticmethod
+    def _cand(cid: str = "cand_b01", missing: str | None = None) -> dict:
+        cand = {
+            "candidate_id": cid,
+            "name": f"factor_{cid}",
+            "code": "def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))\n",
+            "economic_logic": {"narrative": "测试经济逻辑。", "theory": 4, "behavioral": 4},
+        }
+        if missing:
+            cand.pop(missing, None)
+        return cand
+
+    def test_all_valid(self):
+        """全部合法 → valid=total, invalid=0。"""
+        cands = [self._cand("a"), self._cand("b"), self._cand("c")]
+        stats = validate_batch_candidates(cands)
+        assert stats["total"] == 3
+        assert stats["valid"] == 3
+        assert stats["invalid"] == 0
+        assert stats["invalid_samples"] == []
+
+    def test_empty_list(self):
+        """空列表 → total=0。"""
+        stats = validate_batch_candidates([])
+        assert stats["total"] == 0
+        assert stats["valid"] == 0
+        assert stats["invalid"] == 0
+
+    def test_missing_required_field(self):
+        """缺 code → invalid，缺失字段列表含 code。"""
+        stats = validate_batch_candidates([self._cand(missing="code")])
+        assert stats["total"] == 1
+        assert stats["invalid"] == 1
+        assert "code" in stats["invalid_samples"][0]["missing"]
+
+    def test_missing_candidate_id(self):
+        """缺 candidate_id → invalid。"""
+        stats = validate_batch_candidates([self._cand(missing="candidate_id")])
+        assert stats["invalid"] == 1
+
+    def test_missing_economic_narrative(self):
+        """缺 economic_logic.narrative → invalid。"""
+        cand = self._cand()
+        cand["economic_logic"] = {"theory": 4}
+        stats = validate_batch_candidates([cand])
+        assert stats["invalid"] == 1
+        assert "economic_logic.narrative" in stats["invalid_samples"][0]["missing"]
+
+    def test_non_dict_entry(self):
+        """非 dict 条目 → invalid（reason=非 dict）。"""
+        stats = validate_batch_candidates(["not-a-dict"])
+        assert stats["total"] == 1
+        assert stats["invalid"] == 1
+        assert stats["invalid_samples"][0]["reason"] == "非 dict"
+
+    def test_invalid_samples_capped(self):
+        """invalid_samples 仅返回前 5 条。"""
+        cands = [self._cand(missing="code") for _ in range(8)]
+        stats = validate_batch_candidates(cands)
+        assert stats["total"] == 8
+        assert stats["invalid"] == 8
+        assert len(stats["invalid_samples"]) == 5
+
+    def test_throughput_make_result(self):
+        """_make_result 吞吐指标 = 候选数 / 运行分钟。"""
+        result = MetaLoop._make_result(
+            run_id="r1",
+            trace_id="t1",
+            candidates_generated=60,
+            candidates_injected=10,
+            debate_gaps_detected=1,
+            tokens_consumed=100,
+            status="completed",
+            elapsed_seconds=120.0,
+        )
+        assert result.candidates_per_minute == 30.0
+
+    def test_throughput_zero_elapsed(self):
+        """elapsed=0 → 吞吐 0.0（避免除零）。"""
+        result = MetaLoop._make_result(
+            run_id="r2",
+            trace_id="t2",
+            candidates_generated=5,
+            candidates_injected=1,
+            debate_gaps_detected=0,
+            tokens_consumed=10,
+            status="completed",
+            elapsed_seconds=0.0,
+        )
+        assert result.candidates_per_minute == 0.0

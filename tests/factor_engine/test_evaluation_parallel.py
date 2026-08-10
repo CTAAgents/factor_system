@@ -14,7 +14,6 @@ import time
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from fts.factor_engine.contracts import FactorProgram
 from fts.factor_engine.evaluation_chain import (
@@ -26,7 +25,7 @@ from fts.factor_engine.factor_program import create_factor_program
 
 def _make_simple_factor() -> FactorProgram:
     """创建一个简单的测试因子 (SMA 均线)。"""
-    code = '''
+    code = """
 def factor_program(data, params):
     import numpy as np
     close = data['close'].values
@@ -35,7 +34,7 @@ def factor_program(data, params):
     for i in range(window, len(close)):
         result[i] = np.mean(close[i-window:i])
     return result
-'''
+"""
     return create_factor_program(
         name="test_sma",
         code=code,
@@ -47,7 +46,10 @@ def factor_program(data, params):
             "lookback": 5,
         },
         economic_logic={
-            "theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3,
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
             "narrative": "简单均线策略，用于并行化测试",
         },
         source="test",
@@ -62,15 +64,18 @@ def _make_panel_data(n_symbols: int = 10, n_days: int = 200) -> dict[str, pd.Dat
     for i in range(n_symbols):
         dates = pd.date_range(base_date, periods=n_days, freq="B")
         close = 100 + np.cumsum(rng.randn(n_days) * 0.5)
-        df = pd.DataFrame({
-            "open": close + rng.randn(n_days) * 0.2,
-            "high": close + abs(rng.randn(n_days) * 1.0),
-            "low": close - abs(rng.randn(n_days) * 1.0),
-            "close": close,
-            "volume": rng.randint(100000, 1000000, n_days),
-            "settle": close,
-            "open_interest": rng.randint(50000, 200000, n_days),
-        }, index=dates)
+        df = pd.DataFrame(
+            {
+                "open": close + rng.randn(n_days) * 0.2,
+                "high": close + abs(rng.randn(n_days) * 1.0),
+                "low": close - abs(rng.randn(n_days) * 1.0),
+                "close": close,
+                "volume": rng.randint(100000, 1000000, n_days),
+                "settle": close,
+                "open_interest": rng.randint(50000, 200000, n_days),
+            },
+            index=dates,
+        )
         panel[f"SYM{i:03d}"] = df
     return panel
 
@@ -83,6 +88,7 @@ class TestCsExecuteFactors:
 
     def test_returns_correct_shapes(self):
         from fts.factor_engine.factor_program import FactorExecutor
+
         factor = _make_simple_factor()
         executor = FactorExecutor(factor)
         panel = _make_panel_data(1, 50)
@@ -95,6 +101,7 @@ class TestCsExecuteFactors:
 
     def test_failed_factor_returns_empty(self):
         from fts.factor_engine.factor_program import FactorExecutor
+
         factor = _make_simple_factor()
         executor = FactorExecutor(factor)
         panel = _make_panel_data(1, 50)
@@ -106,6 +113,7 @@ class TestCsExecuteFactors:
 
     def test_handles_multiple_symbols(self):
         from fts.factor_engine.factor_program import FactorExecutor
+
         factor = _make_simple_factor()
         executor = FactorExecutor(factor)
         panel = _make_panel_data(15, 200)
@@ -116,6 +124,7 @@ class TestCsExecuteFactors:
 
     def test_consistent_results(self):
         from fts.factor_engine.factor_program import FactorExecutor
+
         factor = _make_simple_factor()
         executor = FactorExecutor(factor)
         panel = _make_panel_data(10, 200)
@@ -126,10 +135,14 @@ class TestCsExecuteFactors:
         assert set(sig1.keys()) == set(sig2.keys())
         for sym in sig1:
             pd.testing.assert_series_equal(
-                sig1[sym], sig2[sym], check_names=False,
+                sig1[sym],
+                sig2[sym],
+                check_names=False,
             )
             pd.testing.assert_series_equal(
-                ret1[sym], ret2[sym], check_names=False,
+                ret1[sym],
+                ret2[sym],
+                check_names=False,
             )
 
 
@@ -145,7 +158,9 @@ class TestCrossSectionIntegration:
         common_dates = panel["SYM000"].index
 
         result = cross_section_evaluate_backtest(
-            factor, panel, common_dates,
+            factor,
+            panel,
+            common_dates,
         )
         assert isinstance(result, dict)
         assert "ic" in result
@@ -158,7 +173,9 @@ class TestCrossSectionIntegration:
         common_dates = panel["SYM000"].index
 
         result = cross_section_evaluate_backtest(
-            factor, panel, common_dates,
+            factor,
+            panel,
+            common_dates,
         )
         assert isinstance(result, dict)
         assert "ic" in result
@@ -171,7 +188,9 @@ class TestCrossSectionIntegration:
         common_dates = panel["SYM000"].index
 
         result = cross_section_evaluate_backtest(
-            factor, panel, common_dates,
+            factor,
+            panel,
+            common_dates,
         )
         assert isinstance(result, dict)
         assert "ic" in result
@@ -186,6 +205,7 @@ class TestBenchmark:
 
     def test_basic_parallel_performance(self):
         from fts.factor_engine.factor_program import FactorExecutor
+
         factor = _make_simple_factor()
         executor = FactorExecutor(factor)
         panel = _make_panel_data(50, 500)

@@ -97,7 +97,9 @@ class FactorScreener:
 
         logger.info(
             "[FactorScreener] 筛选完成 [candidates=%d, passed=%d, grade>%s]",
-            len(candidates), len(filtered), min_grade,
+            len(candidates),
+            len(filtered),
+            min_grade,
         )
         return filtered
 
@@ -110,9 +112,7 @@ class FactorScreener:
         return _GRADE_ORDER.get(grade, 2) >= grade_min
 
     @staticmethod
-    def _pass_total_score(
-        factor: dict[str, Any], min_total_score: Optional[float]
-    ) -> bool:
+    def _pass_total_score(factor: dict[str, Any], min_total_score: Optional[float]) -> bool:
         """总分门槛检查。"""
         if min_total_score is None:
             return True
@@ -122,9 +122,7 @@ class FactorScreener:
         return score is not None and float(score) >= min_total_score
 
     @staticmethod
-    def _pass_status(
-        factor: dict[str, Any], status: Optional[list[str]]
-    ) -> bool:
+    def _pass_status(factor: dict[str, Any], status: Optional[list[str]]) -> bool:
         """状态过滤。"""
         if not status:
             return True
@@ -132,9 +130,7 @@ class FactorScreener:
         return f_status in status
 
     @staticmethod
-    def _pass_style(
-        factor: dict[str, Any], style_filter: Optional[list[str]]
-    ) -> bool:
+    def _pass_style(factor: dict[str, Any], style_filter: Optional[list[str]]) -> bool:
         """风格标签过滤。"""
         if not style_filter:
             return True

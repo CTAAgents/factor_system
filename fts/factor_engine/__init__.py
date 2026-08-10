@@ -289,6 +289,22 @@ __all__ = [
     "get_default_seed_pool",
     "compute_seed_correlations",
     "compute_cross_section_correlations",
+    # 种子加载（YAML 权威源）
+    "load_all_yaml_seeds",
+    "load_factors_from_dir",
+    "load_factors_from_yaml",
+    "verify_yaml_integrity",
+    # 程序加载（ProgramConfig / LLM 环境覆盖）
+    "ProgramConfig",
+    "parse_program_md",
+    "load_program",
+    "init_program",
+    "get_llm_env_overrides",
+    # 循环监控状态
+    "LoopStatus",
+    "AllStatus",
+    "check_loop",
+    "check_all",
     # 经验链
     "ExperienceChain",
     "ExperienceChainError",

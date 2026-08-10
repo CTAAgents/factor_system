@@ -33,6 +33,7 @@ if _pyproject.exists():
 _env_loaded = False
 try:
     from dotenv import load_dotenv
+
     _env_path = Path(__file__).resolve().parent.parent / ".env"
     if _env_path.exists():
         load_dotenv(_env_path, override=False)

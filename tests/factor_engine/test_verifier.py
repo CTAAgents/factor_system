@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from fts.factor_engine.contracts import (
-    DEFAULT_VERIFIER_CONFIG,
     BacktestMetrics,
     EconomicScore,
     FactorEvaluation,
@@ -25,21 +24,36 @@ from fts.factor_engine.verifier import (
 def passing_evaluation() -> FactorEvaluation:
     """完全通过的评估结果。"""
     return FactorEvaluation(
-        factor_id="fct_pass", trace_id="l2_t",
+        factor_id="fct_pass",
+        trace_id="l2_t",
         level_1_backtest=BacktestMetrics(
-            ic=0.05, icir=0.8, sharpe=2.0, max_drawdown=0.1,
-            monotonicity=True, oos_ratio=0.4, t_stat=3.5,
+            ic=0.05,
+            icir=0.8,
+            sharpe=2.0,
+            max_drawdown=0.1,
+            monotonicity=True,
+            oos_ratio=0.4,
+            t_stat=3.5,
             turnover_monthly=0.3,
         ),
         level_2_economic=EconomicScore(
-            theory=4, behavioral=3, microstructure=4, institutional=5,
-            dimensions_passed=4, narrative="四维全达标",
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=5,
+            dimensions_passed=4,
+            narrative="四维全达标",
         ),
         level_3_multiple=MultipleTestResult(
-            bonferroni_p=0.005, fdr_q=0.03, effective_n_factors=8,
-            adjusted_t=3.2, passed=True,
+            bonferroni_p=0.005,
+            fdr_q=0.03,
+            effective_n_factors=8,
+            adjusted_t=3.2,
+            passed=True,
         ),
-        passed=True, failure_reasons=[], evaluated_at="2026-07-18T00:00:00",
+        passed=True,
+        failure_reasons=[],
+        evaluated_at="2026-07-18T00:00:00",
     )
 
 
@@ -47,26 +61,41 @@ def passing_evaluation() -> FactorEvaluation:
 def failing_evaluation_low_ic() -> FactorEvaluation:
     """IC 不达标的评估结果。"""
     return FactorEvaluation(
-        factor_id="fct_fail_ic", trace_id="l2_t",
+        factor_id="fct_fail_ic",
+        trace_id="l2_t",
         level_1_backtest=BacktestMetrics(
-            ic=0.01, icir=0.3, sharpe=2.0, max_drawdown=0.1,
-            monotonicity=True, oos_ratio=0.4, t_stat=3.5,
+            ic=0.01,
+            icir=0.3,
+            sharpe=2.0,
+            max_drawdown=0.1,
+            monotonicity=True,
+            oos_ratio=0.4,
+            t_stat=3.5,
             turnover_monthly=0.3,
         ),
         level_2_economic=EconomicScore(
-            theory=4, behavioral=3, microstructure=4, institutional=5,
-            dimensions_passed=4, narrative="达标",
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=5,
+            dimensions_passed=4,
+            narrative="达标",
         ),
         level_3_multiple=MultipleTestResult(
-            bonferroni_p=0.005, fdr_q=0.03, effective_n_factors=8,
-            adjusted_t=3.2, passed=True,
+            bonferroni_p=0.005,
+            fdr_q=0.03,
+            effective_n_factors=8,
+            adjusted_t=3.2,
+            passed=True,
         ),
-        passed=False, failure_reasons=["Level 1 失败: IC=0.0100 < 0.03"],
+        passed=False,
+        failure_reasons=["Level 1 失败: IC=0.0100 < 0.03"],
         evaluated_at="2026-07-18T00:00:00",
     )
 
 
 # ─── Verifier 锁定机制 ────────────────────────────────────
+
 
 def test_verifier_is_locked_after_init():
     v = FactorVerifier()
@@ -106,6 +135,7 @@ def test_verifier_config_is_copy():
 
 # ─── Verifier 判定 ────────────────────────────────────────
 
+
 def test_verifier_passes_good_evaluation(passing_evaluation):
     v = FactorVerifier()
     result = v.check(passing_evaluation)
@@ -122,21 +152,35 @@ def test_verifier_fails_low_ic(failing_evaluation_low_ic):
 
 def test_verifier_fails_low_sharpe():
     ev = FactorEvaluation(
-        factor_id="fct", trace_id="t",
+        factor_id="fct",
+        trace_id="t",
         level_1_backtest=BacktestMetrics(
-            ic=0.05, icir=0.8, sharpe=1.0,  # 不达标
-            max_drawdown=0.1, monotonicity=True, oos_ratio=0.4,
-            t_stat=3.5, turnover_monthly=0.3,
+            ic=0.05,
+            icir=0.8,
+            sharpe=1.0,  # 不达标
+            max_drawdown=0.1,
+            monotonicity=True,
+            oos_ratio=0.4,
+            t_stat=3.5,
+            turnover_monthly=0.3,
         ),
         level_2_economic=EconomicScore(
-            theory=4, behavioral=3, microstructure=4, institutional=5,
-            dimensions_passed=4, narrative="达标",
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=5,
+            dimensions_passed=4,
+            narrative="达标",
         ),
         level_3_multiple=MultipleTestResult(
-            bonferroni_p=0.005, fdr_q=0.03, effective_n_factors=8,
-            adjusted_t=3.2, passed=True,
+            bonferroni_p=0.005,
+            fdr_q=0.03,
+            effective_n_factors=8,
+            adjusted_t=3.2,
+            passed=True,
         ),
-        passed=False, failure_reasons=[],
+        passed=False,
+        failure_reasons=[],
         evaluated_at="2026-07-18T00:00:00",
     )
     v = FactorVerifier()
@@ -147,21 +191,35 @@ def test_verifier_fails_low_sharpe():
 
 def test_verifier_fails_high_drawdown():
     ev = FactorEvaluation(
-        factor_id="fct", trace_id="t",
+        factor_id="fct",
+        trace_id="t",
         level_1_backtest=BacktestMetrics(
-            ic=0.05, icir=0.8, sharpe=2.0,
+            ic=0.05,
+            icir=0.8,
+            sharpe=2.0,
             max_drawdown=0.6,  # 不达标 > 0.50
-            monotonicity=True, oos_ratio=0.4, t_stat=3.5, turnover_monthly=0.3,
+            monotonicity=True,
+            oos_ratio=0.4,
+            t_stat=3.5,
+            turnover_monthly=0.3,
         ),
         level_2_economic=EconomicScore(
-            theory=4, behavioral=3, microstructure=4, institutional=5,
-            dimensions_passed=4, narrative="达标",
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=5,
+            dimensions_passed=4,
+            narrative="达标",
         ),
         level_3_multiple=MultipleTestResult(
-            bonferroni_p=0.005, fdr_q=0.03, effective_n_factors=8,
-            adjusted_t=3.2, passed=True,
+            bonferroni_p=0.005,
+            fdr_q=0.03,
+            effective_n_factors=8,
+            adjusted_t=3.2,
+            passed=True,
         ),
-        passed=False, failure_reasons=[],
+        passed=False,
+        failure_reasons=[],
         evaluated_at="2026-07-18T00:00:00",
     )
     v = FactorVerifier()
@@ -172,21 +230,35 @@ def test_verifier_fails_high_drawdown():
 
 def test_verifier_fails_low_economic_dimensions():
     ev = FactorEvaluation(
-        factor_id="fct", trace_id="t",
+        factor_id="fct",
+        trace_id="t",
         level_1_backtest=BacktestMetrics(
-            ic=0.05, icir=0.8, sharpe=2.0, max_drawdown=0.1,
-            monotonicity=True, oos_ratio=0.4, t_stat=3.5, turnover_monthly=0.3,
+            ic=0.05,
+            icir=0.8,
+            sharpe=2.0,
+            max_drawdown=0.1,
+            monotonicity=True,
+            oos_ratio=0.4,
+            t_stat=3.5,
+            turnover_monthly=0.3,
         ),
         level_2_economic=EconomicScore(
-            theory=2, behavioral=2, microstructure=2, institutional=2,
+            theory=2,
+            behavioral=2,
+            microstructure=2,
+            institutional=2,
             dimensions_passed=0,  # 全部不达标
             narrative="差",
         ),
         level_3_multiple=MultipleTestResult(
-            bonferroni_p=0.005, fdr_q=0.03, effective_n_factors=8,
-            adjusted_t=3.2, passed=True,
+            bonferroni_p=0.005,
+            fdr_q=0.03,
+            effective_n_factors=8,
+            adjusted_t=3.2,
+            passed=True,
         ),
-        passed=False, failure_reasons=[],
+        passed=False,
+        failure_reasons=[],
         evaluated_at="2026-07-18T00:00:00",
     )
     v = FactorVerifier()

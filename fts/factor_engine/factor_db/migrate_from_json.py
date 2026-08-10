@@ -28,7 +28,7 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ def migrate_factors(
 
     logger.info("[Migrate] 发现 %d 个因子 JSON 文件", len(factor_files))
 
-    stats = {
+    stats: dict[str, Any] = {
         "total_files": len(factor_files),
         "success": 0,
         "failed": 0,
@@ -151,8 +151,7 @@ def migrate_factors(
             # 检查是否已存在
             if conn and not force:
                 existing = conn.execute(
-                    "SELECT factor_id FROM factor_catalog WHERE factor_id = ?",
-                    [factor_id]
+                    "SELECT factor_id FROM factor_catalog WHERE factor_id = ?", [factor_id]
                 ).fetchone()
                 if existing:
                     stats["skipped"] += 1
@@ -176,44 +175,50 @@ def migrate_factors(
 
             if conn and not dry_run:
                 # 写入 factor_catalog
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT OR REPLACE INTO factor_catalog (
                         factor_id, name, code, code_hash, params, signature,
                         economic_logic, source, parent_id, generation, trace_id,
                         sharpe, ic, icir, max_drawdown, turnover_monthly,
                         decay_6m, status, market, created_at, is_elite, metadata
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, [
-                    factor_id,
-                    name,
-                    code,
-                    code_hash,
-                    json.dumps(data.get("params", {})),
-                    json.dumps(signature),
-                    json.dumps(economic_logic),
-                    data.get("source", "seed"),
-                    data.get("parent_id"),
-                    data.get("generation", 0),
-                    data.get("trace_id", factor_id),
-                    metrics["sharpe"],
-                    metrics["ic"],
-                    metrics["icir"],
-                    metrics["max_drawdown"],
-                    metrics["turnover_monthly"],
-                    data.get("decay_6m", 0.05),
-                    factor_info["status"],
-                    data.get("market", "stock"),
-                    data.get("created_at", datetime.now().isoformat()),
-                    True,
-                    json.dumps({
-                        "evaluation": data.get("evaluation"),
-                        "correlation_metadata": data.get("correlation_metadata", {}),
-                    }),
-                ])
+                """,
+                    [
+                        factor_id,
+                        name,
+                        code,
+                        code_hash,
+                        json.dumps(data.get("params", {})),
+                        json.dumps(signature),
+                        json.dumps(economic_logic),
+                        data.get("source", "seed"),
+                        data.get("parent_id"),
+                        data.get("generation", 0),
+                        data.get("trace_id", factor_id),
+                        metrics["sharpe"],
+                        metrics["ic"],
+                        metrics["icir"],
+                        metrics["max_drawdown"],
+                        metrics["turnover_monthly"],
+                        data.get("decay_6m", 0.05),
+                        factor_info["status"],
+                        data.get("market", "stock"),
+                        data.get("created_at", datetime.now().isoformat()),
+                        True,
+                        json.dumps(
+                            {
+                                "evaluation": data.get("evaluation"),
+                                "correlation_metadata": data.get("correlation_metadata", {}),
+                            }
+                        ),
+                    ],
+                )
 
                 # 写入 factor_evaluations
                 eval_id = f"eval_{uuid.uuid4().hex[:12]}"
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT INTO factor_evaluations (
                         eval_id, factor_id, trace_id,
                         level_1_ic, level_1_icir, level_1_sharpe, level_1_max_dd,
@@ -226,46 +231,51 @@ def migrate_factors(
                         level_3_effective_n, level_3_adjusted_t, level_3_passed,
                         overall_passed, failure_reasons, evaluated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, [
-                    eval_id,
-                    factor_id,
-                    data.get("evaluation", {}).get("trace_id"),
-                    metrics["ic"],
-                    metrics["icir"],
-                    metrics["sharpe"],
-                    metrics["max_drawdown"],
-                    metrics["turnover_monthly"],
-                    metrics["t_stat"],
-                    metrics["monotonicity"],
-                    metrics["oos_ratio"],
-                    metrics["l2_theory"],
-                    metrics["l2_behavioral"],
-                    metrics["l2_microstructure"],
-                    metrics["l2_institutional"],
-                    metrics["l2_dims_passed"],
-                    metrics["l3_bonferroni_p"],
-                    metrics["l3_fdr_q"],
-                    metrics["l3_effective_n"],
-                    metrics["l3_adjusted_t"],
-                    metrics["l3_passed"],
-                    metrics["overall_passed"],
-                    json.dumps(metrics["failure_reasons"]),
-                    data.get("evaluation", {}).get("evaluated_at", datetime.now().isoformat()),
-                ])
+                """,
+                    [
+                        eval_id,
+                        factor_id,
+                        data.get("evaluation", {}).get("trace_id"),
+                        metrics["ic"],
+                        metrics["icir"],
+                        metrics["sharpe"],
+                        metrics["max_drawdown"],
+                        metrics["turnover_monthly"],
+                        metrics["t_stat"],
+                        metrics["monotonicity"],
+                        metrics["oos_ratio"],
+                        metrics["l2_theory"],
+                        metrics["l2_behavioral"],
+                        metrics["l2_microstructure"],
+                        metrics["l2_institutional"],
+                        metrics["l2_dims_passed"],
+                        metrics["l3_bonferroni_p"],
+                        metrics["l3_fdr_q"],
+                        metrics["l3_effective_n"],
+                        metrics["l3_adjusted_t"],
+                        metrics["l3_passed"],
+                        metrics["overall_passed"],
+                        json.dumps(metrics["failure_reasons"]),
+                        data.get("evaluation", {}).get("evaluated_at", datetime.now().isoformat()),
+                    ],
+                )
 
                 # 写入 factor_versions
                 version_id = f"ver_{uuid.uuid4().hex[:12]}"
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT INTO factor_versions (
                         version_id, factor_id, code, code_hash,
                         version_number, change_type, change_summary
                     ) VALUES (?, ?, ?, ?, 1, 'migrate', 'JSON 迁移初始化')
-                """, [
-                    version_id,
-                    factor_id,
-                    code,
-                    code_hash,
-                ])
+                """,
+                    [
+                        version_id,
+                        factor_id,
+                        code,
+                        code_hash,
+                    ],
+                )
 
             stats["success"] += 1
             stats["factors"].append(factor_info)
@@ -337,7 +347,8 @@ def main():
         help="强制覆盖已有数据",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="详细日志输出",
     )

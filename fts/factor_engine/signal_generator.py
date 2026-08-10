@@ -98,7 +98,7 @@ class SignalGenerator:
         # 3. 每期截面排名 → 多空信号
         signals: dict[str, pd.Series] = {}
         for sym in wide.columns:
-            series = wide[sym]
+            wide[sym]
             signals[sym] = pd.Series(0.0, index=wide.index, name=sym)
         for t, row in wide.iterrows():
             valid = row.dropna()
@@ -120,9 +120,7 @@ class SignalGenerator:
     # ─── 内部方法 ────────────────────────────────────────
 
     @staticmethod
-    def _compute_factor_values(
-        factor: dict[str, Any], data: pd.DataFrame
-    ) -> np.ndarray | None:
+    def _compute_factor_values(factor: dict[str, Any], data: pd.DataFrame) -> np.ndarray | None:
         """计算因子值（复用 BacktestPipeline 沙箱执行器）。"""
         code = factor.get("code", "")
         if not code:
@@ -130,21 +128,17 @@ class SignalGenerator:
             return None
         from .backtest_pipeline import BacktestPipeline
 
-        return BacktestPipeline._execute_factor_code(
-            code, data, factor.get("params") or {}
-        )
+        return BacktestPipeline._execute_factor_code(code, data, factor.get("params") or {})
 
     @staticmethod
-    def _time_series_signal(
-        values: np.ndarray, index: pd.DatetimeIndex
-    ) -> pd.Series:
+    def _time_series_signal(values: np.ndarray, index: pd.DatetimeIndex) -> pd.Series:
         """时序信号：滚动 20 日 z-score → tanh 压缩到 [-1, 1]。"""
         values = np.asarray(values, dtype=float)
         n = len(values)
         window = 20
         z = np.zeros(n)
         for i in range(window, n):
-            hist = values[max(0, i - window):i]
+            hist = values[max(0, i - window) : i]
             std = np.std(hist)
             if std > 1e-8:
                 z[i] = (values[i] - np.mean(hist)) / std

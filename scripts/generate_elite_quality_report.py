@@ -6,6 +6,7 @@
 用法:
     python scripts/generate_elite_quality_report.py [--market futures|stock|all]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -51,17 +52,21 @@ def generate_report(db_path: str, market: str = "all", output_dir: str | None = 
     factors = []
     for row in rows:
         record = dict(zip(columns, row))
-        factors.append({
-            "factor_id": record["factor_id"],
-            "name": record["name"],
-            "market": record["market"],
-            "ic": round(record["ic"], 4) if record["ic"] is not None else None,
-            "sharpe": round(record["sharpe"], 4) if record["sharpe"] is not None else None,
-            "turnover_monthly": round(record["turnover_monthly"], 4) if record["turnover_monthly"] is not None else None,
-            "decay_6m": round(record["decay_6m"], 4) if record["decay_6m"] is not None else None,
-            "is_elite": record["is_elite"],
-            "status": record["status"],
-        })
+        factors.append(
+            {
+                "factor_id": record["factor_id"],
+                "name": record["name"],
+                "market": record["market"],
+                "ic": round(record["ic"], 4) if record["ic"] is not None else None,
+                "sharpe": round(record["sharpe"], 4) if record["sharpe"] is not None else None,
+                "turnover_monthly": round(record["turnover_monthly"], 4)
+                if record["turnover_monthly"] is not None
+                else None,
+                "decay_6m": round(record["decay_6m"], 4) if record["decay_6m"] is not None else None,
+                "is_elite": record["is_elite"],
+                "status": record["status"],
+            }
+        )
 
     # 统计
     by_market: dict[str, list] = {}
@@ -108,7 +113,9 @@ def generate_report(db_path: str, market: str = "all", output_dir: str | None = 
     print(f"✅ 报告已生成: {out_file}")
     print(f"   总因子数: {len(factors)}")
     for m, s in summary.items():
-        print(f"   [{m}] {s['count']} 因子 | IC: [{s['ic_min']}, {s['ic_max']}] 均值={s['ic_mean']} | Sharpe: [{s['sharpe_min']}, {s['sharpe_max']}] 均值={s['sharpe_mean']}")
+        print(
+            f"   [{m}] {s['count']} 因子 | IC: [{s['ic_min']}, {s['ic_max']}] 均值={s['ic_mean']} | Sharpe: [{s['sharpe_min']}, {s['sharpe_max']}] 均值={s['sharpe_mean']}"
+        )
         if s["below_ic_threshold"] > 0:
             print(f"   ⚠️  [{m}] IC < 0.03: {s['below_ic_threshold']} 个因子")
         if s["below_sharpe_threshold"] > 0:

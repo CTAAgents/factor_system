@@ -35,9 +35,9 @@ def collect_docs() -> list[Path]:
     """收集所有需要同步版本号的文档（排除历史验收文档）。"""
     docs: list[Path] = []
     glob_patterns = [
-        "*.md",                          # 核心文档
-        "plans/*.md",                    # 计划文档
-        "design/*.md",                   # 设计文档
+        "*.md",  # 核心文档
+        "plans/*.md",  # 计划文档
+        "design/*.md",  # 设计文档
     ]
     for pattern in glob_patterns:
         docs.extend(HARNESS_DIR.glob(pattern))
@@ -122,14 +122,14 @@ def main():
         sys.exit(1)
 
     if args.apply:
-        print(f"\n🔄 执行更新...\n")
+        print("\n🔄 执行更新...\n")
         apply_changes(changes)
-        print(f"\n✅ 更新完成。")
+        print("\n✅ 更新完成。")
     else:
-        print(f"\n💡 使用 --apply 参数执行更新。")
+        print("\n💡 使用 --apply 参数执行更新。")
 
     # 始终更新 pyproject.toml 和 fts/__init__.py 的一致性
-    init_file = PROJECT_ROOT / "fts" / "__init__.py"
+    PROJECT_ROOT / "fts" / "__init__.py"
     fts_version = f"v{target_version}"
     print(f"\n🔍 fts/__init__.py 动态读取版本: {fts_version}")
 

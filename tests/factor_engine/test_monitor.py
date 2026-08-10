@@ -31,6 +31,7 @@ from fts.factor_engine.monitor import AllStatus, LoopStatus, check_all, check_lo
 
 # ─── 辅助函数 ────────────────────────────────────────
 
+
 def write_state(dir_path: Path, overrides: dict | None = None) -> Path:
     """在 dir_path 下创建 state.json。"""
     dir_path.mkdir(parents=True, exist_ok=True)
@@ -50,6 +51,7 @@ def write_state(dir_path: Path, overrides: dict | None = None) -> Path:
 
 
 # ─── check_loop 测试 ────────────────────────────────────
+
 
 class TestCheckLoop:
     """check_loop 函数的单元测试。"""
@@ -204,6 +206,7 @@ class TestCheckLoop:
 
 # ─── check_all 测试 ────────────────────────────────────
 
+
 class TestCheckAll:
     """check_all 函数的单元测试。"""
 
@@ -216,8 +219,8 @@ class TestCheckAll:
         status = check_all(root)
 
         assert len(status.loops) == 3
-        assert all(l.exists for l in status.loops)
-        assert [l.name for l in status.loops] == ["L1", "L2", "L3"]
+        assert all(lp.exists for lp in status.loops)
+        assert [lp.name for lp in status.loops] == ["L1", "L2", "L3"]
         assert status.any_circuit_broken is False
         assert status.any_stale is False
         assert status.total_tokens_today == 1500 * 3
@@ -232,7 +235,7 @@ class TestCheckAll:
         status = check_all(root)
 
         assert len(status.loops) == 3
-        assert status.loops[0].exists is True   # L1
+        assert status.loops[0].exists is True  # L1
         assert status.loops[1].exists is False  # L2
         assert status.loops[2].exists is False  # L3
 
@@ -269,7 +272,7 @@ class TestCheckAll:
         status = check_all(root)
 
         assert status.any_stale is False
-        assert all(l.exists is False for l in status.loops)
+        assert all(lp.exists is False for lp in status.loops)
 
     def test_empty_root_default(self, tmp_path: Path) -> None:
         """fdt_root 为空字符串 → 使用当前工作目录。"""
@@ -277,11 +280,12 @@ class TestCheckAll:
         original_cwd = Path.cwd()
         try:
             import os
+
             os.chdir(tmp_path)
 
             status = check_all("")
             assert len(status.loops) == 3
-            assert all(l.exists is False for l in status.loops)
+            assert all(lp.exists is False for lp in status.loops)
         finally:
             os.chdir(original_cwd)
 
@@ -298,6 +302,7 @@ class TestCheckAll:
 
 
 # ─── Dataclass 创建测试 ─────────────────────────────────
+
 
 class TestDataclassCreation:
     """LoopStatus 和 AllStatus 数据类创建路径。"""
@@ -362,18 +367,46 @@ class TestDataclassCreation:
 
 # ─── print_status_table 测试 ──────────────────────────────
 
+
 class TestPrintStatusTable:
     """覆盖 print_status_table (lines 137-170) 的所有分支。"""
 
     def test_normal_healthy(self, capsys: pytest.CaptureFixture[str]) -> None:
         """所有循环健康 → 正常输出表格。"""
         loops = [
-            LoopStatus(name="L1", state_file="/a.json", exists=True, status="completed",
-                       run_id="run-001", tokens_consumed=100, budget_limit=500, age_hours=1.0, healthy=True),
-            LoopStatus(name="L2", state_file="/b.json", exists=True, status="completed",
-                       run_id="run-002", tokens_consumed=200, budget_limit=500, age_hours=2.0, healthy=True),
-            LoopStatus(name="L3", state_file="/c.json", exists=True, status="completed",
-                       run_id="run-003", tokens_consumed=300, budget_limit=500, age_hours=3.0, healthy=True),
+            LoopStatus(
+                name="L1",
+                state_file="/a.json",
+                exists=True,
+                status="completed",
+                run_id="run-001",
+                tokens_consumed=100,
+                budget_limit=500,
+                age_hours=1.0,
+                healthy=True,
+            ),
+            LoopStatus(
+                name="L2",
+                state_file="/b.json",
+                exists=True,
+                status="completed",
+                run_id="run-002",
+                tokens_consumed=200,
+                budget_limit=500,
+                age_hours=2.0,
+                healthy=True,
+            ),
+            LoopStatus(
+                name="L3",
+                state_file="/c.json",
+                exists=True,
+                status="completed",
+                run_id="run-003",
+                tokens_consumed=300,
+                budget_limit=500,
+                age_hours=3.0,
+                healthy=True,
+            ),
         ]
         status = AllStatus(loops=loops, checked_at="2026-07-24T10:00:00")
         print_status_table(status)
@@ -386,12 +419,17 @@ class TestPrintStatusTable:
     def test_circuit_broken(self, capsys: pytest.CaptureFixture[str]) -> None:
         """存在熔断 → 打印熔断警告。"""
         loops = [
-            LoopStatus(name="L1", state_file="/a.json", exists=True, status="circuit_broken",
-                       healthy=False, last_error="Budget exceeded", age_hours=1.0),
-            LoopStatus(name="L2", state_file="/b.json", exists=True, status="completed",
-                       healthy=True, age_hours=1.0),
-            LoopStatus(name="L3", state_file="/c.json", exists=True, status="completed",
-                       healthy=True, age_hours=1.0),
+            LoopStatus(
+                name="L1",
+                state_file="/a.json",
+                exists=True,
+                status="circuit_broken",
+                healthy=False,
+                last_error="Budget exceeded",
+                age_hours=1.0,
+            ),
+            LoopStatus(name="L2", state_file="/b.json", exists=True, status="completed", healthy=True, age_hours=1.0),
+            LoopStatus(name="L3", state_file="/c.json", exists=True, status="completed", healthy=True, age_hours=1.0),
         ]
         status = AllStatus(loops=loops, any_circuit_broken=True, checked_at="2026-07-24T10:00:00")
         print_status_table(status)
@@ -401,12 +439,9 @@ class TestPrintStatusTable:
     def test_stale(self, capsys: pytest.CaptureFixture[str]) -> None:
         """存在过期状态 → 打印过期警告。"""
         loops = [
-            LoopStatus(name="L1", state_file="/a.json", exists=True, status="completed",
-                       healthy=True, age_hours=48.0),
-            LoopStatus(name="L2", state_file="/b.json", exists=True, status="completed",
-                       healthy=True, age_hours=1.0),
-            LoopStatus(name="L3", state_file="/c.json", exists=True, status="completed",
-                       healthy=True, age_hours=1.0),
+            LoopStatus(name="L1", state_file="/a.json", exists=True, status="completed", healthy=True, age_hours=48.0),
+            LoopStatus(name="L2", state_file="/b.json", exists=True, status="completed", healthy=True, age_hours=1.0),
+            LoopStatus(name="L3", state_file="/c.json", exists=True, status="completed", healthy=True, age_hours=1.0),
         ]
         status = AllStatus(loops=loops, any_stale=True, checked_at="2026-07-24T10:00:00")
         print_status_table(status)
@@ -416,15 +451,22 @@ class TestPrintStatusTable:
     def test_circuit_broken_and_stale(self, capsys: pytest.CaptureFixture[str]) -> None:
         """同时存在熔断和过期 → 两种警告都打印。"""
         loops = [
-            LoopStatus(name="L1", state_file="/a.json", exists=True, status="circuit_broken",
-                       healthy=False, last_error="OOM", age_hours=48.0),
-            LoopStatus(name="L2", state_file="/b.json", exists=True, status="completed",
-                       healthy=True, age_hours=1.0),
-            LoopStatus(name="L3", state_file="/c.json", exists=True, status="completed",
-                       healthy=True, age_hours=1.0),
+            LoopStatus(
+                name="L1",
+                state_file="/a.json",
+                exists=True,
+                status="circuit_broken",
+                healthy=False,
+                last_error="OOM",
+                age_hours=48.0,
+            ),
+            LoopStatus(name="L2", state_file="/b.json", exists=True, status="completed", healthy=True, age_hours=1.0),
+            LoopStatus(name="L3", state_file="/c.json", exists=True, status="completed", healthy=True, age_hours=1.0),
         ]
         status = AllStatus(
-            loops=loops, any_circuit_broken=True, any_stale=True,
+            loops=loops,
+            any_circuit_broken=True,
+            any_stale=True,
             checked_at="2026-07-24T10:00:00",
         )
         print_status_table(status)
@@ -448,14 +490,38 @@ class TestPrintStatusTable:
     def test_budget_limit_zero(self, capsys: pytest.CaptureFixture[str]) -> None:
         """budget_limit 为 0 → 只显示 tokens_consumed 而非分式。"""
         loops = [
-            LoopStatus(name="L1", state_file="/a.json", exists=True, status="running",
-                       run_id="run-001", tokens_consumed=100, budget_limit=0,
-                       age_hours=0.5, healthy=True),
-            LoopStatus(name="L2", state_file="/b.json", exists=True, status="running",
-                       run_id="", tokens_consumed=200, budget_limit=0,
-                       age_hours=0.5, healthy=True),
-            LoopStatus(name="L3", state_file="/c.json", exists=True, status="paused",
-                       tokens_consumed=0, budget_limit=0, age_hours=0.5, healthy=True),
+            LoopStatus(
+                name="L1",
+                state_file="/a.json",
+                exists=True,
+                status="running",
+                run_id="run-001",
+                tokens_consumed=100,
+                budget_limit=0,
+                age_hours=0.5,
+                healthy=True,
+            ),
+            LoopStatus(
+                name="L2",
+                state_file="/b.json",
+                exists=True,
+                status="running",
+                run_id="",
+                tokens_consumed=200,
+                budget_limit=0,
+                age_hours=0.5,
+                healthy=True,
+            ),
+            LoopStatus(
+                name="L3",
+                state_file="/c.json",
+                exists=True,
+                status="paused",
+                tokens_consumed=0,
+                budget_limit=0,
+                age_hours=0.5,
+                healthy=True,
+            ),
         ]
         status = AllStatus(loops=loops, checked_at="2026-07-24T10:00:00")
         print_status_table(status)
@@ -466,8 +532,7 @@ class TestPrintStatusTable:
     def test_run_id_empty(self, capsys: pytest.CaptureFixture[str]) -> None:
         """run_id 为空 → 显示短横线。"""
         loops = [
-            LoopStatus(name="L1", state_file="/a.json", exists=True, status="unknown",
-                       age_hours=0.0, healthy=True),
+            LoopStatus(name="L1", state_file="/a.json", exists=True, status="unknown", age_hours=0.0, healthy=True),
         ]
         status = AllStatus(loops=loops, checked_at="2026-07-24T10:00:00")
         print_status_table(status)
@@ -476,6 +541,7 @@ class TestPrintStatusTable:
 
 
 # ─── main CLI 函数测试 ────────────────────────────────────
+
 
 class TestMainCLI:
     """覆盖 main() 和 __main__ 入口 (lines 175-193)。"""

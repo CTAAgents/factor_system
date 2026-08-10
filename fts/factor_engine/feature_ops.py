@@ -163,7 +163,9 @@ class RollingOps:
 
     @staticmethod
     def ts_regression_residual(
-        series: pd.Series, other: pd.Series, window: int = 20,
+        series: pd.Series,
+        other: pd.Series,
+        window: int = 20,
     ) -> pd.Series:
         """滚动线性回归残差（GAP-L401）。
 
@@ -187,8 +189,8 @@ class RollingOps:
             return result
         for i in range(window - 1, n):
             lo = i - window + 1
-            yy = y_vals[lo:i + 1]
-            xx = x_vals[lo:i + 1]
+            yy = y_vals[lo : i + 1]
+            xx = x_vals[lo : i + 1]
             if not (np.isfinite(yy).all() and np.isfinite(xx).all()):
                 continue
             if len(yy) < 3 or np.std(xx) < 1e-12:
@@ -222,6 +224,55 @@ class RollingOps:
         except ValueError:
             return pd.Series(np.nan, index=series.index, dtype=float)
         return buckets.reindex(series.index)
+
+    @staticmethod
+    def ts_slope(series: pd.Series, window: int = 20) -> pd.Series:
+        """滚动线性回归斜率（GAP-I202，v2.75.0）。
+
+        在滚动窗口内对序列关于时间索引（0,1,...,window-1）做一元线性回归，
+        返回回归斜率，用于刻画局部趋势强度与方向。
+        窗口内存在 NaN / 样本不足 / 方差过小时返回 NaN（安全降级）。
+
+        Args:
+            series: 输入序列
+            window: 滚动窗口长度
+
+        Returns:
+            斜率序列（NaN 安全）。
+        """
+        vals = series.to_numpy(dtype=float)
+        n = len(vals)
+        result = pd.Series(np.nan, index=series.index, dtype=float)
+        if n < window:
+            return result
+        t: np.ndarray = np.arange(window, dtype=float)
+        t_centered = t - t.mean()
+        denom = float(t_centered @ t_centered)
+        if denom < 1e-12:
+            return result
+        for i in range(window - 1, n):
+            w = vals[i - window + 1 : i + 1]
+            if not np.isfinite(w).all():
+                continue
+            y_centered = w - w.mean()
+            result.iloc[i] = float(t_centered @ y_centered) / denom
+        return result
+
+    @staticmethod
+    def ts_quantile(series: pd.Series, window: int = 20, q: float = 0.5) -> pd.Series:
+        """滚动分位数（GAP-I202，v2.75.0）。
+
+        Args:
+            series: 输入序列
+            window: 滚动窗口长度
+            q: 分位数（0~1）
+
+        Returns:
+            分位数序列（NaN 安全）。
+        """
+        if not (0.0 <= q <= 1.0):
+            raise ValueError("q 必须在 [0, 1] 区间")
+        return series.rolling(window=window).quantile(q)
 
 
 # ─── 技术指标算子 ──────────────────────────────────────────
@@ -282,9 +333,7 @@ class TechnicalOps:
     @staticmethod
     def max_drawdown(series: pd.Series, window: int = 252) -> pd.Series:
         """滚动最大回撤。"""
-        return series.rolling(window=window).apply(
-            lambda x: (x / x.cummax() - 1).min()
-        )
+        return series.rolling(window=window).apply(lambda x: (x / x.cummax() - 1).min())
 
 
 # ─── 截面算子 ───────────────────────────────────────────────
@@ -326,9 +375,7 @@ class CrossSectionOps:
     ) -> pd.DataFrame:
         """行业中性化。"""
         result = panel.copy()
-        result["industry_mean"] = result.groupby([group_col, industry_col])[
-            value_col
-        ].transform("mean")
+        result["industry_mean"] = result.groupby([group_col, industry_col])[value_col].transform("mean")
         result["neutralized"] = result[value_col] - result["industry_mean"]
         return result
 
@@ -348,9 +395,7 @@ class CrossSymbolOps:
     ) -> pd.DataFrame:
         """行业去均值 (中性化)。"""
         result = panel.copy()
-        result["industry_mean"] = result.groupby([group_col, industry_col])[
-            value_col
-        ].transform("mean")
+        result["industry_mean"] = result.groupby([group_col, industry_col])[value_col].transform("mean")
         result[value_col] = result[value_col] - result["industry_mean"]
         return result
 
@@ -404,9 +449,7 @@ class CrossSymbolOps:
         # 使用市值加权均值而非简单均值，以消除大盘/小盘风格影响
         total_cap = result.groupby(group_col)[cap_col].transform("sum")
         cap_weight = result[cap_col] / total_cap.replace(0, float("nan"))
-        weighted_mean = (industry_residual * cap_weight).groupby(
-            result[group_col]
-        ).transform("sum")
+        weighted_mean = (industry_residual * cap_weight).groupby(result[group_col]).transform("sum")
 
         result["neutralized"] = industry_residual - weighted_mean
         result["industry_mean"] = industry_mean
@@ -422,9 +465,7 @@ class CrossSymbolOps:
     ) -> pd.DataFrame:
         """区域去均值 (中性化)。"""
         result = panel.copy()
-        result["region_mean"] = result.groupby([group_col, region_col])[
-            value_col
-        ].transform("mean")
+        result["region_mean"] = result.groupby([group_col, region_col])[value_col].transform("mean")
         result[value_col] = result[value_col] - result["region_mean"]
         return result
 
@@ -577,8 +618,8 @@ class OperatorRegistry:
             ("abs", lambda s: s.abs(), ["series"]),
             ("sign", lambda s: np.sign(s), ["series"]),
         ]
-        for name, func, params in price_ops:
-            self.register(name, func, "price", params)
+        for name, func_p, params in price_ops:
+            self.register(name, func_p, "price", params)
 
         # 滚动算子
         rolling_ops = [
@@ -595,6 +636,24 @@ class OperatorRegistry:
         for name, func, params in rolling_ops:
             self.register(name, func, "rolling", params)
 
+        # GAP-I202 (v2.75.0): 组合/跨标的算子单一事实源——
+        # 与 expr_dsl 注册表（L1/L4）共用 RollingOps/PriceOps 底层原语，
+        # GP 演化与算子演化可发现同一组算子（verify_registry_consistency 强制共享）。
+        combo_ops = [
+            # 时序组合（L1 对应）
+            ("ts_slope", RollingOps.ts_slope, ["series", "window"]),
+            ("ts_quantile", RollingOps.ts_quantile, ["series", "window", "q"]),
+            # 组合数学/跨标的（L4 对应，GAP-L401）
+            ("regression_residual", RollingOps.ts_regression_residual, ["series", "other", "window"]),
+            ("quantile_bucket", RollingOps.ts_quantile_bucket, ["series", "n_buckets"]),
+            ("cross_section_demean", lambda s: s - s.mean(), ["series"]),
+            ("if_else", lambda cond, x, y: x.where(cond.fillna(False).astype(bool), y), ["cond", "x", "y"]),
+            ("corr", lambda x, y, n: x.rolling(n).corr(y), ["x", "y", "window"]),
+            ("cross_section_rank", PriceOps.rank, ["series"]),
+        ]
+        for name, func_c, params in combo_ops:
+            self.register(name, func_c, "combo", params)
+
         # 技术指标算子
         tech_ops = [
             ("rsi", TechnicalOps.rsi, ["series", "window"]),
@@ -605,29 +664,37 @@ class OperatorRegistry:
             ("macd", TechnicalOps.macd, ["series", "fast", "slow", "signal"]),
             ("max_drawdown", TechnicalOps.max_drawdown, ["series", "window"]),
         ]
-        for name, func, params in tech_ops:
-            self.register(name, func, "technical", params)
+        for name, func_t, params in tech_ops:
+            self.register(name, func_t, "technical", params)
 
         # 截面算子
         cs_ops = [
             ("cross_rank", CrossSectionOps.cross_rank, ["panel", "group_col", "value_col"]),
             ("cross_zscore", CrossSectionOps.cross_zscore, ["panel", "group_col", "value_col"]),
-            ("cross_demean", lambda p, g, v: p.assign(**{v: p[v] - p.groupby(g)[v].transform("mean")}), ["panel", "group_col", "value_col"]),
+            (
+                "cross_demean",
+                lambda p, g, v: p.assign(**{v: p[v] - p.groupby(g)[v].transform("mean")}),
+                ["panel", "group_col", "value_col"],
+            ),
             ("cross_median", lambda p, g, v: p.groupby(g)[v].transform("median"), ["panel", "group_col", "value_col"]),
             ("cross_std", lambda p, g, v: p.groupby(g)[v].transform("std"), ["panel", "group_col", "value_col"]),
         ]
-        for name, func, params in cs_ops:
-            self.register(name, func, "cross_section", params)
+        for name, func_cs, params in cs_ops:
+            self.register(name, func_cs, "cross_section", params)
 
         # 跨品种算子
         csymbol_ops = [
             ("industry_demean", CrossSymbolOps.industry_demean, ["panel", "group_col", "industry_col", "value_col"]),
             ("cap_demean", CrossSymbolOps.cap_demean, ["panel", "group_col", "cap_col", "value_col"]),
-            ("industry_cap_neutral", CrossSymbolOps.industry_cap_neutral, ["panel", "group_col", "industry_col", "cap_col", "value_col"]),
+            (
+                "industry_cap_neutral",
+                CrossSymbolOps.industry_cap_neutral,
+                ["panel", "group_col", "industry_col", "cap_col", "value_col"],
+            ),
             ("region_demean", CrossSymbolOps.region_demean, ["panel", "group_col", "region_col", "value_col"]),
         ]
-        for name, func, params in csymbol_ops:
-            self.register(name, func, "cross_symbol", params)
+        for name, func_s, params in csymbol_ops:
+            self.register(name, func_s, "cross_symbol", params)
 
         # 组合算子
         comp_ops = [
@@ -645,8 +712,8 @@ class OperatorRegistry:
             ("exp", lambda s: np.exp(s), ["series"]),
             ("log", lambda s: np.log(s.abs() + 1e-10), ["series"]),
         ]
-        for name, func, params in comp_ops:
-            self.register(name, func, "composite", params)
+        for name, func_comp, params in comp_ops:
+            self.register(name, func_comp, "composite", params)
 
         logger.info("初始化内置算子: %d 个", self.operator_count)
 

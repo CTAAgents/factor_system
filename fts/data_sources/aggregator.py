@@ -29,10 +29,10 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -53,6 +53,7 @@ _DEFAULT_DISAGREEMENT_LOG = Path("data") / "data_source_disagreements.jsonl"
 @dataclass
 class BreakerState:
     """单个数据源的熔断器状态。"""
+
     consecutive_failures: int = 0
     circuit_open: bool = False
     opened_at: float = 0.0
@@ -86,14 +87,14 @@ class FuturesDataAggregator:
         sources: list[BaseFuturesSource] | None = None,
         enhancers: list[BaseFuturesSource] | None = None,
         minute_sources: list[BaseFuturesSource] | None = None,  # v2.30.0: 分钟数据源
-        tick_sources: list[BaseFuturesSource] | None = None,    # v2.31.0: tick 数据源
+        tick_sources: list[BaseFuturesSource] | None = None,  # v2.31.0: tick 数据源
         db_path: Path | str | None = None,
         circuit_breaker_threshold: int = 5,
         circuit_breaker_cooldown_seconds: float = 6 * 3600,
         cache_max_age_days: int = 1,
-        enable_cross_check: bool = True,            # 14.2: 是否启用多源交叉验证
-        cross_check_threshold: float = 0.005,       # 14.2: 价格偏离告警阈值（0.5%）
-        cross_check_recent_days: int = 5,           # 14.2: 主路径触发时检查最近 N 天
+        enable_cross_check: bool = True,  # 14.2: 是否启用多源交叉验证
+        cross_check_threshold: float = 0.005,  # 14.2: 价格偏离告警阈值（0.5%）
+        cross_check_recent_days: int = 5,  # 14.2: 主路径触发时检查最近 N 天
         disagreement_log_path: Path | str | None = None,  # 14.2: 告警 JSONL 路径
     ):
         """
@@ -114,7 +115,7 @@ class FuturesDataAggregator:
         self.sources = sources or []
         self.enhancers = enhancers or []
         self.minute_sources = minute_sources or []  # v2.30.0: 分钟数据源
-        self.tick_sources = tick_sources or []      # v2.31.0: tick 数据源
+        self.tick_sources = tick_sources or []  # v2.31.0: tick 数据源
         self.db_path = Path(db_path) if db_path else None
         self.circuit_breaker_threshold = circuit_breaker_threshold
         self.circuit_breaker_cooldown = circuit_breaker_cooldown_seconds
@@ -123,10 +124,7 @@ class FuturesDataAggregator:
         self.enable_cross_check = enable_cross_check
         self.cross_check_threshold = cross_check_threshold
         self.cross_check_recent_days = cross_check_recent_days
-        self.disagreement_log_path = (
-            Path(disagreement_log_path) if disagreement_log_path
-            else _DEFAULT_DISAGREEMENT_LOG
-        )
+        self.disagreement_log_path = Path(disagreement_log_path) if disagreement_log_path else _DEFAULT_DISAGREEMENT_LOG
 
         # 每源熔断器状态
         self._breakers: dict[str, BreakerState] = {}
@@ -167,8 +165,7 @@ class FuturesDataAggregator:
             try:
                 df = source.fetch_ohlcv(symbol, days, trace_id=trace_id)
             except Exception as e:  # noqa: BLE001
-                logger.warning("[%s] fetch_ohlcv 异常 [%s]: %s",
-                               source.source_name, symbol, e)
+                logger.warning("[%s] fetch_ohlcv 异常 [%s]: %s", source.source_name, symbol, e)
                 self._record_failure(source.source_name, str(e))
                 continue
 
@@ -230,8 +227,9 @@ class FuturesDataAggregator:
         for src in self.minute_sources:
             # 源支持动态周期时，按请求频率重建（TDX/TQ-Local/TQSDK 均支持）
             try:
-                if getattr(src, "period", None) is not None and src.period != frequency:
-                    src = type(src)(period=frequency)
+                src_dyn = cast(Any, src)
+                if getattr(src_dyn, "period", None) is not None and src_dyn.period != frequency:
+                    src = cast(BaseFuturesSource, type(src_dyn)(period=frequency))
             except Exception:  # noqa: BLE001
                 logger.debug("[%s] 无法按频率 %s 重建源，跳过", src.source_name, frequency)
                 continue
@@ -244,8 +242,7 @@ class FuturesDataAggregator:
             try:
                 df = source.fetch_ohlcv(symbol, days, trace_id=trace_id)
             except Exception as e:  # noqa: BLE001
-                logger.warning("[%s] 分钟级 fetch_ohlcv 异常 [%s]: %s",
-                               source.source_name, symbol, e)
+                logger.warning("[%s] 分钟级 fetch_ohlcv 异常 [%s]: %s", source.source_name, symbol, e)
                 self._record_failure(source.source_name, str(e))
                 continue
 
@@ -263,8 +260,19 @@ class FuturesDataAggregator:
         # 3) 所有分钟源失败 → 返回空 DataFrame（minute_cache schema）
         logger.warning("[%s] 所有分钟数据源失败，frequency=%s", symbol, frequency)
         return pd.DataFrame(
-            columns=["symbol", "period", "datetime", "open", "high", "low",
-                     "close", "volume", "source", "fetched_at", "trace_id"]
+            columns=[
+                "symbol",
+                "period",
+                "datetime",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "source",
+                "fetched_at",
+                "trace_id",
+            ]
         )
 
     def _try_minute_cache(
@@ -288,12 +296,11 @@ class FuturesDataAggregator:
 
         try:
             # 品种匹配兼容
-            sym_variants = [symbol, f"{symbol}.SHFE", f"{symbol}.DCE",
-                            f"{symbol}.CZCE", f"{symbol}.CFFEX"]
+            sym_variants = [symbol, f"{symbol}.SHFE", f"{symbol}.DCE", f"{symbol}.CZCE", f"{symbol}.CFFEX"]
             placeholders = ",".join(["?"] * len(sym_variants))
 
             # 新鲜度检查
-            cutoff = (pd.Timestamp.now() - pd.Timedelta(days=self.cache_max_age_days))
+            cutoff = pd.Timestamp.now() - pd.Timedelta(days=self.cache_max_age_days)
             latest = con.execute(
                 f"""
                 SELECT MAX(datetime) FROM minute_cache
@@ -304,8 +311,7 @@ class FuturesDataAggregator:
             if latest is None or latest[0] is None:
                 return None
             if pd.Timestamp(latest[0]) < cutoff:
-                logger.debug("[minute_cache] 过期: symbol=%s, latest=%s, cutoff=%s",
-                             symbol, latest[0], cutoff)
+                logger.debug("[minute_cache] 过期: symbol=%s, latest=%s, cutoff=%s", symbol, latest[0], cutoff)
                 return None
 
             # 返回最近 days 行
@@ -337,6 +343,7 @@ class FuturesDataAggregator:
         # 确保 schema 已迁移
         try:
             from fts.data_sources.migrate import migrate_schema
+
             migrate_schema(self.db_path)
         except Exception as e:
             logger.warning("[minute_cache] migrate_schema 失败: %s", e)
@@ -392,10 +399,9 @@ class FuturesDataAggregator:
                 continue
 
             try:
-                df = source.fetch_ticks(symbol, count=count, trace_id=trace_id)
+                df = cast(Any, source).fetch_ticks(symbol, count=count, trace_id=trace_id)
             except Exception as e:  # noqa: BLE001
-                logger.warning("[%s] tick fetch 异常 [%s]: %s",
-                               source.source_name, symbol, e)
+                logger.warning("[%s] tick fetch 异常 [%s]: %s", source.source_name, symbol, e)
                 self._record_failure(source.source_name, str(e))
                 continue
 
@@ -465,6 +471,7 @@ class FuturesDataAggregator:
             return
         try:
             from fts.data_sources.migrate import migrate_schema
+
             migrate_schema(self.db_path)
         except Exception as e:
             logger.warning("[tick_cache] migrate_schema 失败: %s", e)
@@ -522,23 +529,20 @@ class FuturesDataAggregator:
                 # 字段增强层不直接接管 K 线，仅尝试补充字段
                 # 当前实现: 调用 fetch_ohlcv 拿到 df，从中提取 settle/oi_change
                 # 更精细的实现可在子类中覆盖 enhance() 方法
-                enrich_df = enhancer.fetch_ohlcv_or_none(
-                    symbol, days=len(df), trace_id=trace_id
-                )
+                enrich_df = enhancer.fetch_ohlcv_or_none(symbol, days=len(df), trace_id=trace_id)
                 if enrich_df is not None and not enrich_df.empty:
                     self._record_success(enhancer.source_name)
                     # 简单实现: 用 enrich_df 的 settle/oi_change/pre_settle 覆盖主路径的对应列
                     if "settle" in enrich_df.columns and "settle" in df.columns:
-                        df["settle"] = enrich_df["settle"].values[:len(df)]
+                        df["settle"] = enrich_df["settle"].values[: len(df)]
                     if "pre_settle" in enrich_df.columns and "pre_settle" in df.columns:
-                        df["pre_settle"] = enrich_df["pre_settle"].values[:len(df)]
+                        df["pre_settle"] = enrich_df["pre_settle"].values[: len(df)]
                     if "oi_change" in enrich_df.columns and "oi_change" in df.columns:
-                        df["oi_change"] = enrich_df["oi_change"].values[:len(df)]
+                        df["oi_change"] = enrich_df["oi_change"].values[: len(df)]
                     if "hold" in enrich_df.columns and "hold" in df.columns:
-                        df["hold"] = enrich_df["hold"].values[:len(df)]
+                        df["hold"] = enrich_df["hold"].values[: len(df)]
             except Exception as e:  # noqa: BLE001
-                logger.warning("[%s] 字段增强异常 [%s]: %s",
-                               enhancer.source_name, symbol, e)
+                logger.warning("[%s] 字段增强异常 [%s]: %s", enhancer.source_name, symbol, e)
                 self._record_failure(enhancer.source_name, str(e))
         return df
 
@@ -551,6 +555,7 @@ class FuturesDataAggregator:
         if not hasattr(self, "_cache_conn") or self._cache_conn is None:
             try:
                 import duckdb
+
                 self._cache_conn = duckdb.connect(str(self.db_path))
             except Exception as e:
                 logger.warning("[cache] DuckDB 连接失败: %s", e)
@@ -577,8 +582,7 @@ class FuturesDataAggregator:
 
         try:
             # 品种匹配兼容：缓存中可能是 RB0.SHFE 也可能是 RB0
-            sym_variants = [symbol, f"{symbol}.SHFE", f"{symbol}.DCE",
-                            f"{symbol}.CZCE", f"{symbol}.CFFEX"]
+            sym_variants = [symbol, f"{symbol}.SHFE", f"{symbol}.DCE", f"{symbol}.CZCE", f"{symbol}.CFFEX"]
             placeholders = ",".join(["?"] * len(sym_variants))
 
             # 1) 新鲜度检查：缓存中最新的日期 >= today - cache_max_age_days
@@ -595,7 +599,9 @@ class FuturesDataAggregator:
             if latest[0] < cutoff:
                 logger.debug(
                     "[cache] 缓存过期: symbol=%s, latest=%s, cutoff=%s",
-                    symbol, latest[0], cutoff,
+                    symbol,
+                    latest[0],
+                    cutoff,
                 )
                 return None  # 缓存过期，走上游源
 
@@ -625,6 +631,7 @@ class FuturesDataAggregator:
         # 确保 schema 已迁移
         try:
             from fts.data_sources.migrate import migrate_schema
+
             migrate_schema(self.db_path)
         except Exception as e:
             logger.warning("[cache] migrate_schema 失败: %s", e)
@@ -665,7 +672,7 @@ class FuturesDataAggregator:
         trace_id: str,
     ) -> pd.DataFrame:
         """生成合成 K 线数据（保证系统可运行）。"""
-        from datetime import date, timedelta
+        from datetime import timedelta
 
         np.random.seed(hash(symbol) % 2**31)
         end_date = pd.Timestamp.now().normalize()
@@ -677,20 +684,27 @@ class FuturesDataAggregator:
         highs = np.maximum(opens, closes) + abs(np.random.randn(days) * 8)
         lows = np.minimum(opens, closes) - abs(np.random.randn(days) * 8)
 
-        df = pd.DataFrame({
-            "symbol": symbol, "period": "daily",
-            "date": [d.date() for d in dates],
-            "open": opens, "high": highs, "low": lows, "close": closes,
-            "volume": np.random.randint(50000, 200000, days),
-            "amount": np.random.randint(1e8, 5e8, days),
-            "hold": np.random.randint(50000, 100000, days),
-            "settle": closes, "pre_settle": np.roll(closes, 1),
-            "oi_change": np.random.randint(-2000, 2000, days),
-            "vwap": closes,
-            "source": DataSource.SYNTHETIC.value,
-            "fetched_at": pd.Timestamp.now(),
-            "trace_id": trace_id,
-        })
+        df = pd.DataFrame(
+            {
+                "symbol": symbol,
+                "period": "daily",
+                "date": [d.date() for d in dates],
+                "open": opens,
+                "high": highs,
+                "low": lows,
+                "close": closes,
+                "volume": np.random.randint(50000, 200000, days),
+                "amount": np.random.randint(1e8, 5e8, days),
+                "hold": np.random.randint(50000, 100000, days),
+                "settle": closes,
+                "pre_settle": np.roll(closes, 1),
+                "oi_change": np.random.randint(-2000, 2000, days),
+                "vwap": closes,
+                "source": DataSource.SYNTHETIC.value,
+                "fetched_at": pd.Timestamp.now(),
+                "trace_id": trace_id,
+            }
+        )
         df["pre_settle"] = df["pre_settle"].fillna(closes[0])
         return df
 
@@ -727,7 +741,9 @@ class FuturesDataAggregator:
             state.opened_at = time.time()
             logger.warning(
                 "[%s] 连续失败 %d 次，熔断器开启（冷却 %.0f 秒）",
-                source_name, state.consecutive_failures, self.circuit_breaker_cooldown,
+                source_name,
+                state.consecutive_failures,
+                self.circuit_breaker_cooldown,
             )
 
     # ─── 监控 / 状态报告 ──
@@ -850,7 +866,10 @@ class FuturesDataAggregator:
 
         logger.warning(
             "[cross_check] %s @ %s 多源分歧: %d 个 outlier, max_diff=%.4f",
-            symbol, date, len(outliers), max_diff,
+            symbol,
+            date,
+            len(outliers),
+            max_diff,
         )
         return [record]
 

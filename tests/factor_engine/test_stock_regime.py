@@ -26,6 +26,7 @@ from fts.factor_engine.stock_regime import StockRegimeSelector
 
 # ─── 数据构造辅助 ─────────────────────────────────────────
 
+
 def _make_price(
     n_days: int,
     drift: float,
@@ -76,13 +77,11 @@ def _make_industry_panel(
     vol: float = 0.004,
 ) -> dict[str, pd.Series]:
     """构造行业收益面板：每个行业独立 drift。"""
-    return {
-        f"ind_{i}": _make_returns(n_days, d, base_seed + i, vol=vol)
-        for i, d in enumerate(drifts)
-    }
+    return {f"ind_{i}": _make_returns(n_days, d, base_seed + i, vol=vol) for i, d in enumerate(drifts)}
 
 
 # ─── 检测器核心 ───────────────────────────────────────────
+
 
 class TestStockRegimeSelector:
     def test_empty_panels_fallback(self) -> None:
@@ -110,8 +109,7 @@ class TestStockRegimeSelector:
     def test_industry_rotating(self) -> None:
         """强分化但无绝对主线 → rotating。"""
         # 行业动量正负交替且幅度大（离散度高，但 top 集中度被正负抵消）
-        drifts = [0.004, -0.004, 0.0035, -0.0035, 0.003,
-                  -0.003, 0.0025, -0.0025, 0.002, -0.002]
+        drifts = [0.004, -0.004, 0.0035, -0.0035, 0.003, -0.003, 0.0025, -0.0025, 0.002, -0.002]
         panel = _make_industry_panel(drifts)
         sel = StockRegimeSelector(rotation_std_threshold=0.001)
         state = sel.detect_industry(panel)
@@ -136,8 +134,10 @@ class TestStockRegimeSelector:
     def test_style_large_cap_dominant(self) -> None:
         """大盘占优 → large_cap。"""
         panel = _make_style_panel(
-            large_drift=0.002, small_drift=-0.002,
-            growth_drift=0.0, value_drift=0.0,
+            large_drift=0.002,
+            small_drift=-0.002,
+            growth_drift=0.0,
+            value_drift=0.0,
         )
         sel = StockRegimeSelector()
         state = sel.detect_style(panel)
@@ -146,8 +146,10 @@ class TestStockRegimeSelector:
     def test_style_small_cap_dominant(self) -> None:
         """小盘占优 → small_cap。"""
         panel = _make_style_panel(
-            large_drift=-0.002, small_drift=0.002,
-            growth_drift=0.0, value_drift=0.0,
+            large_drift=-0.002,
+            small_drift=0.002,
+            growth_drift=0.0,
+            value_drift=0.0,
         )
         sel = StockRegimeSelector()
         state = sel.detect_style(panel)
@@ -156,8 +158,10 @@ class TestStockRegimeSelector:
     def test_style_growth_dominant(self) -> None:
         """成长占优 → growth。"""
         panel = _make_style_panel(
-            large_drift=0.0, small_drift=0.0,
-            growth_drift=0.002, value_drift=-0.002,
+            large_drift=0.0,
+            small_drift=0.0,
+            growth_drift=0.002,
+            value_drift=-0.002,
         )
         sel = StockRegimeSelector()
         state = sel.detect_style(panel)
@@ -166,8 +170,10 @@ class TestStockRegimeSelector:
     def test_style_value_dominant(self) -> None:
         """价值占优 → value。"""
         panel = _make_style_panel(
-            large_drift=0.0, small_drift=0.0,
-            growth_drift=-0.002, value_drift=0.002,
+            large_drift=0.0,
+            small_drift=0.0,
+            growth_drift=-0.002,
+            value_drift=0.002,
         )
         sel = StockRegimeSelector()
         state = sel.detect_style(panel)
@@ -232,10 +238,16 @@ class TestStockRegimeSelector:
         n = 250
         idx = pd.date_range("2015-01-01", periods=n, freq="B")
         close = _make_price(n, 0.004, 1).to_numpy()
-        ohlcv = pd.DataFrame({
-            "open": close, "high": close * 1.01, "low": close * 0.99,
-            "close": close, "volume": np.ones(n),
-        }, index=idx)
+        ohlcv = pd.DataFrame(
+            {
+                "open": close,
+                "high": close * 1.01,
+                "low": close * 0.99,
+                "close": close,
+                "volume": np.ones(n),
+            },
+            index=idx,
+        )
         sel = StockRegimeSelector()
         state = sel.detect_industry({"ind_strong": ohlcv})
         assert state["state"] == "unknown"  # 单行业样本不足
@@ -243,18 +255,17 @@ class TestStockRegimeSelector:
 
 # ─── REGIME_STYLE_MULTIPLIERS 股票风格键 ───────────────────
 
+
 class TestStockStyleMultipliers:
     def test_new_style_keys_present(self) -> None:
         """v2.63.0 新增 6 个股票风格键。"""
-        for key in ("large_cap", "small_cap", "growth", "value",
-                    "sector_concentrated", "sector_rotating"):
+        for key in ("large_cap", "small_cap", "growth", "value", "sector_concentrated", "sector_rotating"):
             assert key in REGIME_STYLE_MULTIPLIERS
             assert isinstance(REGIME_STYLE_MULTIPLIERS[key], dict)
 
     def test_multiplier_values_reasonable(self) -> None:
         """新增键倍率在合理范围 [0.3, 1.5]。"""
-        for key in ("large_cap", "small_cap", "growth", "value",
-                    "sector_concentrated", "sector_rotating"):
+        for key in ("large_cap", "small_cap", "growth", "value", "sector_concentrated", "sector_rotating"):
             for style, mult in REGIME_STYLE_MULTIPLIERS[key].items():
                 assert 0.3 <= mult <= 1.5, f"{key}/{style}={mult}"
 
@@ -266,18 +277,24 @@ class TestStockStyleMultipliers:
 
 # ─── L3 集成 ──────────────────────────────────────────────
 
+
 class TestPortfolioLoopStockRegime:
     def _write_mock_factor(self, tmp_elite_dir) -> None:
-        (tmp_elite_dir / "factor_test.json").write_text(json.dumps({
-            "factor_id": "fct_mock",
-            "name": "mock_momentum",
-            "sharpe": 2.5,
-            "ic": 0.05,
-            "turnover": 0.3,
-            "decay_6m": 0.1,
-            "family": "trend",
-            "style_tags": ["momentum"],
-        }), encoding="utf-8")
+        (tmp_elite_dir / "factor_test.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_mock",
+                    "name": "mock_momentum",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                    "family": "trend",
+                    "style_tags": ["momentum"],
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def test_run_with_stock_regime(self, tmp_path) -> None:
         """market=stock + stock_regime 传入 → Step 2.5 使用风格 regime 驱动权重。"""
@@ -310,7 +327,8 @@ class TestPortfolioLoopStockRegime:
         assert args[1]["regime"] == "large_cap"
 
     def test_run_stock_regime_nonexistent_key_falls_back(
-        self, tmp_path,
+        self,
+        tmp_path,
     ) -> None:
         """market != stock 时 stock_regime 不生效（走通用 RegimeAwareSelector）。"""
         tmp_portfolio_dir = tmp_path / "portfolio"

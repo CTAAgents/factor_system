@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-import pytest
 
 from fts.factor_engine.audit import (
     AuditItemResult,
@@ -78,10 +77,7 @@ class TestFailurePattern:
         assert desc == "unknown_pattern_xyz"
 
     def test_all_patterns_have_description(self):
-        pattern_attrs = {
-            k: v for k, v in vars(FailurePattern).items()
-            if k.isupper() and not k.startswith("_")
-        }
+        pattern_attrs = {k: v for k, v in vars(FailurePattern).items() if k.isupper() and not k.startswith("_")}
         for key in pattern_attrs:
             value = pattern_attrs[key]
             if isinstance(value, str):
@@ -105,58 +101,43 @@ class TestReportDrivenClassification:
 
     def test_negative_ic_from_metrics(self):
         classifier = FailureClassifier()
-        result = classifier.classify(
-            factor_metrics={"ic": -0.05, "sharpe": 1.2}
-        )
+        result = classifier.classify(factor_metrics={"ic": -0.05, "sharpe": 1.2})
 
         patterns = [p["pattern"] for p in result["detected_patterns"]]
         assert "negative_ic" in patterns
-        assert any(
-            s.pattern == "negative_ic" and "反转" in s.action
-            for s in result["suggestions"]
-        )
+        assert any(s.pattern == "negative_ic" and "反转" in s.action for s in result["suggestions"])
 
     def test_sharpe_low(self):
         classifier = FailureClassifier()
-        result = classifier.classify(
-            factor_metrics={"sharpe": 0.3, "ic": 0.05}
-        )
+        result = classifier.classify(factor_metrics={"sharpe": 0.3, "ic": 0.05})
 
         patterns = [p["pattern"] for p in result["detected_patterns"]]
         assert "sharpe_low" in patterns
 
     def test_high_turnover(self):
         classifier = FailureClassifier()
-        result = classifier.classify(
-            factor_metrics={"turnover": 1.5, "ic": 0.05}
-        )
+        result = classifier.classify(factor_metrics={"turnover": 1.5, "ic": 0.05})
 
         patterns = [p["pattern"] for p in result["detected_patterns"]]
         assert "high_turnover" in patterns
 
     def test_oos_instability_from_metrics(self):
         classifier = FailureClassifier()
-        result = classifier.classify(
-            factor_metrics={"oos_pass_ratio": 0.3, "ic": 0.05}
-        )
+        result = classifier.classify(factor_metrics={"oos_pass_ratio": 0.3, "ic": 0.05})
 
         patterns = [p["pattern"] for p in result["detected_patterns"]]
         assert "oos_instability" in patterns
 
     def test_cross_symbol_from_metrics(self):
         classifier = FailureClassifier()
-        result = classifier.classify(
-            factor_metrics={"cross_symbol_ratio": 0.5, "ic": 0.05}
-        )
+        result = classifier.classify(factor_metrics={"cross_symbol_ratio": 0.5, "ic": 0.05})
 
         patterns = [p["pattern"] for p in result["detected_patterns"]]
         assert "cross_symbol_failure" in patterns
 
     def test_ic_decay(self):
         classifier = FailureClassifier()
-        result = classifier.classify(
-            factor_metrics={"ic_trend": "declining", "ic": 0.02}
-        )
+        result = classifier.classify(factor_metrics={"ic_trend": "declining", "ic": 0.02})
 
         patterns = [p["pattern"] for p in result["detected_patterns"]]
         assert "ic_decay" in patterns
@@ -247,24 +228,18 @@ class TestCombinedClassification:
 class TestSeverity:
     def test_high_severity(self):
         classifier = FailureClassifier()
-        result = classifier.classify(
-            factor_metrics={"ic": -0.05}
-        )
+        result = classifier.classify(factor_metrics={"ic": -0.05})
         assert result["severity"] == "high"
 
     def test_medium_severity(self):
         classifier = FailureClassifier()
-        result = classifier.classify(
-            factor_metrics={"sharpe": 0.3, "turnover": 1.5}
-        )
+        result = classifier.classify(factor_metrics={"sharpe": 0.3, "turnover": 1.5})
         assert result["severity"] == "medium"
 
     def test_low_severity(self):
         classifier = FailureClassifier()
         # 触发单一 medium confidence 模式
-        result = classifier.classify(
-            audit_report=_make_report(failed=["causal_validity"])
-        )
+        result = classifier.classify(audit_report=_make_report(failed=["causal_validity"]))
         assert result["severity"] == "low"
 
     def test_healthy_severity(self):
@@ -279,9 +254,7 @@ class TestSeverity:
 class TestSuggestions:
     def test_suggestions_have_required_fields(self):
         classifier = FailureClassifier()
-        result = classifier.classify(
-            factor_metrics={"ic": -0.05}
-        )
+        result = classifier.classify(factor_metrics={"ic": -0.05})
         for s in result["suggestions"]:
             assert isinstance(s, ImprovementSuggestion)
             assert s.pattern
@@ -301,17 +274,11 @@ class TestSuggestions:
 
     def test_high_priority_first(self):
         classifier = FailureClassifier()
-        result = classifier.classify(
-            factor_metrics={"ic": -0.05, "sharpe": 0.3}
-        )
+        result = classifier.classify(factor_metrics={"ic": -0.05, "sharpe": 0.3})
         if len(result["suggestions"]) >= 2:
             priorities = [s.priority for s in result["suggestions"]]
-            high_indexes = [
-                i for i, p in enumerate(priorities) if p == "high"
-            ]
-            medium_indexes = [
-                i for i, p in enumerate(priorities) if p == "medium"
-            ]
+            high_indexes = [i for i, p in enumerate(priorities) if p == "high"]
+            medium_indexes = [i for i, p in enumerate(priorities) if p == "medium"]
             if high_indexes and medium_indexes:
                 assert min(high_indexes) <= max(medium_indexes)
 

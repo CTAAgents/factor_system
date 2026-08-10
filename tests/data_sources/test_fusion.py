@@ -10,11 +10,9 @@ HARNESS §5.4: 测试随重构。覆盖:
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
-from fts.core.contracts import FusedOHLCV
 from fts.core.enums import FusionStrategy
 from fts.data_sources.fusion import DEFAULT_SOURCE_WEIGHTS, OHLCVFusion
 
@@ -286,20 +284,20 @@ class TestDataFrameFusion:
     def test_fuse_dataframe_aligns_by_date(self):
         """多源 DataFrame 按 date 对齐融合。"""
         dates = ["2026-08-01", "2026-08-02", "2026-08-03"]
-        df_tq = pd.DataFrame([
-            {"date": d, "open": 3500.0, "high": 3510.0, "low": 3490.0,
-             "close": 3500.0 + i, "volume": 100000}
-            for i, d in enumerate(dates)
-        ])
-        df_wind = pd.DataFrame([
-            {"date": d, "open": 3501.0, "high": 3511.0, "low": 3491.0,
-             "close": 3501.0 + i, "volume": 100000}
-            for i, d in enumerate(dates)
-        ])
-        fuser = OHLCVFusion(strategy=FusionStrategy.MEDIAN)
-        result = fuser.fuse_dataframe(
-            "RB0", {"TQ_LOCAL": df_tq, "WIND": df_wind}, trace_id="t-df"
+        df_tq = pd.DataFrame(
+            [
+                {"date": d, "open": 3500.0, "high": 3510.0, "low": 3490.0, "close": 3500.0 + i, "volume": 100000}
+                for i, d in enumerate(dates)
+            ]
         )
+        df_wind = pd.DataFrame(
+            [
+                {"date": d, "open": 3501.0, "high": 3511.0, "low": 3491.0, "close": 3501.0 + i, "volume": 100000}
+                for i, d in enumerate(dates)
+            ]
+        )
+        fuser = OHLCVFusion(strategy=FusionStrategy.MEDIAN)
+        result = fuser.fuse_dataframe("RB0", {"TQ_LOCAL": df_tq, "WIND": df_wind}, trace_id="t-df")
         assert len(result) == 3
         assert result.iloc[0]["close"] == 3500.5  # (3500+3501)/2
         assert result.iloc[1]["close"] == 3501.5
@@ -308,16 +306,38 @@ class TestDataFrameFusion:
 
     def test_fuse_dataframe_partial_coverage(self):
         """部分日期只有 1 个源有数据 → 透传。"""
-        df_tq = pd.DataFrame([
-            {"date": "2026-08-01", "open": 3500.0, "high": 3510.0, "low": 3490.0,
-             "close": 3500.0, "volume": 100000},
-            {"date": "2026-08-02", "open": 3510.0, "high": 3520.0, "low": 3500.0,
-             "close": 3510.0, "volume": 100000},
-        ])
-        df_wind = pd.DataFrame([
-            {"date": "2026-08-02", "open": 3511.0, "high": 3521.0, "low": 3501.0,
-             "close": 3511.0, "volume": 100000},
-        ])
+        df_tq = pd.DataFrame(
+            [
+                {
+                    "date": "2026-08-01",
+                    "open": 3500.0,
+                    "high": 3510.0,
+                    "low": 3490.0,
+                    "close": 3500.0,
+                    "volume": 100000,
+                },
+                {
+                    "date": "2026-08-02",
+                    "open": 3510.0,
+                    "high": 3520.0,
+                    "low": 3500.0,
+                    "close": 3510.0,
+                    "volume": 100000,
+                },
+            ]
+        )
+        df_wind = pd.DataFrame(
+            [
+                {
+                    "date": "2026-08-02",
+                    "open": 3511.0,
+                    "high": 3521.0,
+                    "low": 3501.0,
+                    "close": 3511.0,
+                    "volume": 100000,
+                },
+            ]
+        )
         fuser = OHLCVFusion(strategy=FusionStrategy.MEDIAN)
         result = fuser.fuse_dataframe("RB0", {"TQ_LOCAL": df_tq, "WIND": df_wind})
         assert len(result) == 2
@@ -345,8 +365,16 @@ class TestContractCompliance:
         sources = {"TQ_LOCAL": _row(close=3500.0), "WIND": _row(close=3510.0)}
         result = fuser.fuse_row("RB0", "2026-08-04", sources, trace_id="t-cc")
         required = {
-            "symbol", "date", "open", "high", "low", "close", "volume", "trace_id",
-            "contributing_sources", "fusion_strategy",
+            "symbol",
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "trace_id",
+            "contributing_sources",
+            "fusion_strategy",
         }
         assert required.issubset(result.keys())
         assert isinstance(result["contributing_sources"], list)

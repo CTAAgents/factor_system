@@ -14,33 +14,32 @@ from __future__ import annotations
 
 import importlib
 import logging
-import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class HotSwapWatcher:
     """文件变更监听 + 模块热重载。
-    
+
     使用 watchdog 库监听目录变更，检测到修改后自动 reload 受影响模块。
     如果 watchdog 未安装，静默降级（仅打印日志）。
-    
+
     Usage:
         watcher = HotSwapWatcher(["fts/factor_engine"])
         watcher.start()
     """
-    
+
     def __init__(self, watch_dirs: Optional[list[str]] = None):
         self.watch_dirs = [Path(d) for d in (watch_dirs or ["fts"])]
-        self._observer = None
+        self._observer: Optional[Any] = None
         self._running = False
-    
+
     def start(self) -> bool:
         """启动文件监听（非阻塞）。
-        
+
         Returns:
             True=启动成功, False=watchdog 未安装
         """
@@ -50,12 +49,12 @@ class HotSwapWatcher:
         except ImportError:
             logger.warning("watchdog 未安装，热重载不可用。pip install watchdog")
             return False
-        
+
         class _ReloadHandler(FileSystemEventHandler):
             def on_modified(self, event):
                 if event.src_path.endswith(".py"):
                     _reload_module(event.src_path)
-        
+
         self._observer = Observer()
         for d in self.watch_dirs:
             if d.exists():
@@ -67,7 +66,7 @@ class HotSwapWatcher:
         self._running = True
         logger.info("[hotswap] watcher started (%d dirs)", len(self.watch_dirs))
         return True
-    
+
     def stop(self) -> None:
         """停止监听。"""
         if self._observer is not None:
@@ -75,7 +74,7 @@ class HotSwapWatcher:
             self._observer = None
         self._running = False
         logger.info("[hotswap] watcher stopped")
-    
+
     @property
     def running(self) -> bool:
         return self._running
@@ -86,7 +85,7 @@ def _reload_module(file_path: str) -> None:
     path = Path(file_path)
     if not path.exists() or path.suffix != ".py":
         return
-    
+
     # Convert file path to module name
     rel_path = path.relative_to(Path.cwd()) if path.is_absolute() else path
     parts = list(rel_path.parts)
@@ -95,7 +94,7 @@ def _reload_module(file_path: str) -> None:
     elif parts[-1].endswith(".py"):
         parts[-1] = parts[-1][:-3]
     module_name = ".".join(parts)
-    
+
     if module_name in sys.modules:
         try:
             importlib.reload(sys.modules[module_name])

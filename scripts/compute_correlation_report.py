@@ -1,5 +1,7 @@
 """因子相关性矩阵计算脚本 - 生成可视化报告数据"""
+
 import sys
+
 sys.path.insert(0, "d:/Programs/factor_system")
 
 import numpy as np
@@ -25,20 +27,22 @@ def compute_correlation_matrix():
     # Step 1: 加载因子
     factors = load_futures_elite_factors(ic_threshold=0)
     print(f"\n[1] 加载因子: {len(factors)} 个")
-    
+
     factor_info = []
     for f in factors:
         fid = f.get("factor_id", "")
         name = f.get("name", "")
         display = name if name else fid[-8:]
-        factor_info.append({
-            "display": display,
-            "factor_id": fid,
-            "name": name,
-        })
-    
+        factor_info.append(
+            {
+                "display": display,
+                "factor_id": fid,
+                "name": name,
+            }
+        )
+
     for i, fi in enumerate(factor_info):
-        print(f"    {i+1}. {fi['display']} ({fi['factor_id']})")
+        print(f"    {i + 1}. {fi['display']} ({fi['factor_id']})")
 
     # Step 2: 获取数据
     provider = FTSDataProvider()
@@ -57,7 +61,7 @@ def compute_correlation_matrix():
     first_sym = list(signal_matrix.keys())[0]
     first_factor_key = list(signal_matrix[first_sym].keys())[0] if signal_matrix[first_sym] else None
     print(f"    signal_matrix key sample: {first_factor_key}")
-    
+
     # 确定使用 factor_id 还是 name 作为 key
     use_factor_id = any(first_factor_key == fi["factor_id"] for fi in factor_info)
     use_name = any(first_factor_key == fi["name"] for fi in factor_info)
@@ -69,18 +73,18 @@ def compute_correlation_matrix():
 
     # Step 5: 构建因子特征矩阵
     print("[5] 构建因子特征矩阵...")
-    
+
     # 确定每个因子在 signal_matrix 中的 key
     factor_features = {}
     factor_display_list = []
-    
+
     for fi in factor_info:
         fid = fi["factor_id"]
         display = fi["display"]
-        
+
         # 查找 signal_matrix 中对应的 key
         matrix_key = fid if use_factor_id else (fi["name"] if use_name else fid)
-        
+
         all_signals = []
         for sym in signal_matrix:
             if matrix_key in signal_matrix[sym]:
@@ -89,7 +93,7 @@ def compute_correlation_matrix():
                     sign = factor_sign_flips.get(matrix_key, 1)
                     corrected = np.array([v * sign if np.isfinite(v) else 0.0 for v in arr])
                     all_signals.append(corrected)
-        
+
         if all_signals:
             combined = np.concatenate(all_signals)
             factor_features[fid] = combined
@@ -106,7 +110,7 @@ def compute_correlation_matrix():
 
     valid_fids = list(factor_features.keys())
     valid_displays = factor_display_list
-    
+
     # 构建矩阵
     X = np.zeros((min_len, len(valid_fids)))
     for i, fid in enumerate(valid_fids):
@@ -145,28 +149,32 @@ def compute_correlation_matrix():
             c = abs(corr_matrix[i, j])
             if c > threshold:
                 level = "EXTREME" if c > extreme_threshold else ("HIGH" if c > 0.7 else "MODERATE")
-                high_corr_pairs.append({
-                    "factor_1": valid_displays[i],
-                    "factor_2": valid_displays[j],
-                    "factor_id_1": valid_fids[i],
-                    "factor_id_2": valid_fids[j],
-                    "correlation": round(float(c), 4),
-                    "level": level
-                })
+                high_corr_pairs.append(
+                    {
+                        "factor_1": valid_displays[i],
+                        "factor_2": valid_displays[j],
+                        "factor_id_1": valid_fids[i],
+                        "factor_id_2": valid_fids[j],
+                        "correlation": round(float(c), 4),
+                        "level": level,
+                    }
+                )
 
     high_corr_pairs.sort(key=lambda x: -x["correlation"])
 
     print(f"\n发现 {len(high_corr_pairs)} 个高相关因子对 (|corr| > {threshold}):")
     print("-" * 80)
-    
+
     extreme_count = 0
     high_count = 0
     moderate_count = 0
-    
+
     for pair in high_corr_pairs:
         level_icon = {"EXTREME": "🔴", "HIGH": "🟡", "MODERATE": "🟢"}[pair["level"]]
-        print(f"  {level_icon} {pair['factor_1']:30s} × {pair['factor_2']:30s} = {pair['correlation']:.4f}  [{pair['level']}]")
-        
+        print(
+            f"  {level_icon} {pair['factor_1']:30s} × {pair['factor_2']:30s} = {pair['correlation']:.4f}  [{pair['level']}]"
+        )
+
         if pair["level"] == "EXTREME":
             extreme_count += 1
         elif pair["level"] == "HIGH":
@@ -184,14 +192,14 @@ def compute_correlation_matrix():
     extreme_pairs = [p for p in high_corr_pairs if p["level"] == "EXTREME"]
     to_remove = set()
     kept = set()
-    
+
     if extreme_pairs:
         factor_degree = {}
         for pair in extreme_pairs:
             f1, f2 = pair["factor_1"], pair["factor_2"]
             factor_degree[f1] = factor_degree.get(f1, 0) + 1
             factor_degree[f2] = factor_degree.get(f2, 0) + 1
-        
+
         for pair in extreme_pairs:
             f1, f2 = pair["factor_1"], pair["factor_2"]
             if f1 not in kept and f2 not in kept:
@@ -205,11 +213,11 @@ def compute_correlation_matrix():
                 to_remove.add(f2)
             elif f2 in kept and f1 not in kept:
                 to_remove.add(f1)
-        
+
         print(f"\n  ❌ 建议剔除 {len(to_remove)} 个冗余因子:")
         for f in sorted(to_remove):
             print(f"      - {f}")
-        
+
         print(f"\n  ✅ 保留因子: {', '.join(sorted(kept))}")
     else:
         print("\n  ✅ 无极端相关因子对，无需剔除")
@@ -225,7 +233,7 @@ def compute_correlation_matrix():
             "extreme_count": extreme_count,
             "high_count": high_count,
             "moderate_count": moderate_count,
-        }
+        },
     }
 
     with open(output_dir / "correlation_analysis.json", "w", encoding="utf-8") as f:
@@ -235,13 +243,14 @@ def compute_correlation_matrix():
     # 导出完整矩阵数据
     matrix_data = {
         "labels": valid_displays,
-        "matrix": [[round(float(corr_matrix[i, j]), 4) for j in range(len(valid_displays))] 
-                   for i in range(len(valid_displays))]
+        "matrix": [
+            [round(float(corr_matrix[i, j]), 4) for j in range(len(valid_displays))] for i in range(len(valid_displays))
+        ],
     }
-    
+
     with open(output_dir / "full_matrix.json", "w", encoding="utf-8") as f:
         json.dump(matrix_data, f, ensure_ascii=False)
-    
+
     print(f"[9] 导出完整矩阵数据到: {output_dir}")
 
     return analysis_result, corr_df, valid_displays
@@ -249,7 +258,7 @@ def compute_correlation_matrix():
 
 if __name__ == "__main__":
     result, corr_df, factor_names = compute_correlation_matrix()
-    
+
     if result:
         print("\n" + "=" * 60)
         print("  总结")
@@ -258,7 +267,7 @@ if __name__ == "__main__":
         print(f"  高相关因子对 (>0.6): {len(result['high_corr_pairs'])}")
         print(f"  极端相关因子对 (>0.95): {len(result['extreme_pairs'])}")
         print(f"  建议剔除: {len(result['recommended_removal'])} 个因子")
-        print(f"\n  输出文件:")
-        print(f"    - reports/correlation/factor_correlation_matrix.csv")
-        print(f"    - reports/correlation/correlation_analysis.json")
-        print(f"    - reports/correlation/full_matrix.json")
+        print("\n  输出文件:")
+        print("    - reports/correlation/factor_correlation_matrix.csv")
+        print("    - reports/correlation/correlation_analysis.json")
+        print("    - reports/correlation/full_matrix.json")

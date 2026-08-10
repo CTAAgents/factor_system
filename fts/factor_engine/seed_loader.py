@@ -26,23 +26,23 @@ logger = logging.getLogger(__name__)
 
 # ─── 期货 YAML 文件名 → 家族名映射 ─────────────────────────
 _FUTURES_FAMILY_FILE_MAP: dict[str, tuple[int, str]] = {
-    "momentum.yaml":          (1,  "动量因子家族"),
-    "term_structure.yaml":    (2,  "期限结构因子家族"),
-    "position_flow.yaml":     (3,  "持仓/资金流因子家族"),
-    "liquidity.yaml":         (4,  "流动性因子家族"),
-    "higher_moments.yaml":    (5,  "偏度/峰度/高阶矩因子家族"),
-    "volatility.yaml":        (6,  "波动率因子家族"),
-    "fundamental.yaml":       (7,  "基本面因子家族"),
-    "crowding.yaml":          (8,  "拥挤度因子家族"),
-    "alpha_behavior.yaml":    (9,  "Alpha/量价行为因子家族"),
-    "high_frequency.yaml":    (10, "高频因子家族"),
-    "options.yaml":           (11, "期权隐含信息因子家族"),
-    "market_regime.yaml":     (12, "市场环境因子家族"),
-    "cta_registry.yaml":      (13, "CTA注册表补充因子 V2.0"),
-    "operator_dict.yaml":     (14, "算子字典种子因子"),
-    "vnpy_cta.yaml":          (15, "vnpy CTA技术指标因子家族"),
-    "wind_cta.yaml":          (16, "Wind平台特色因子家族"),
-    "mc_cta.yaml":            (17, "MultiCharts平台特色因子家族"),
+    "momentum.yaml": (1, "动量因子家族"),
+    "term_structure.yaml": (2, "期限结构因子家族"),
+    "position_flow.yaml": (3, "持仓/资金流因子家族"),
+    "liquidity.yaml": (4, "流动性因子家族"),
+    "higher_moments.yaml": (5, "偏度/峰度/高阶矩因子家族"),
+    "volatility.yaml": (6, "波动率因子家族"),
+    "fundamental.yaml": (7, "基本面因子家族"),
+    "crowding.yaml": (8, "拥挤度因子家族"),
+    "alpha_behavior.yaml": (9, "Alpha/量价行为因子家族"),
+    "high_frequency.yaml": (10, "高频因子家族"),
+    "options.yaml": (11, "期权隐含信息因子家族"),
+    "market_regime.yaml": (12, "市场环境因子家族"),
+    "cta_registry.yaml": (13, "CTA注册表补充因子 V2.0"),
+    "operator_dict.yaml": (14, "算子字典种子因子"),
+    "vnpy_cta.yaml": (15, "vnpy CTA技术指标因子家族"),
+    "wind_cta.yaml": (16, "Wind平台特色因子家族"),
+    "mc_cta.yaml": (17, "MultiCharts平台特色因子家族"),
 }
 
 # ─── 路径配置 ─────────────────────────────────────────────────
@@ -201,9 +201,9 @@ _EXPRESSION_OPS_SOURCE = """
 """
 
 _EXPRESSION_CODE_TEMPLATE = (
-    'def factor_program(data, params):\n'
+    "def factor_program(data, params):\n"
     '    """Alpha: {name} — {narrative}"""\n'
-    '{ops_source}\n'
+    "{ops_source}\n"
     '    close = data["close"].values if hasattr(data, "close") else data["close"]\n'
     '    high = data["high"].values if hasattr(data, "high") else data["high"]\n'
     '    low = data["low"].values if hasattr(data, "low") else data["low"]\n'
@@ -211,11 +211,11 @@ _EXPRESSION_CODE_TEMPLATE = (
     '    volume = data["volume"].values if hasattr(data, "volume") else data["volume"]\n'
     '    vwap = (data.get("vwap", data["close"]).values if hasattr(data, "vwap")\n'
     '            else data.get("vwap", data["close"]))\n'
-    '    returns = np.zeros_like(close)\n'
-    '    returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], _EPS)\n'
-    '\n'
-    '    score = {expression}\n'
-    '    return np.clip(np.nan_to_num(score, nan=0.0), -1.0, 1.0)\n'
+    "    returns = np.zeros_like(close)\n"
+    "    returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], _EPS)\n"
+    "\n"
+    "    score = {expression}\n"
+    "    return np.clip(np.nan_to_num(score, nan=0.0), -1.0, 1.0)\n"
 )
 
 
@@ -284,25 +284,27 @@ def _expression_factor_from_yaml(defn: dict[str, Any], market: str, family_hint:
 
 
 _FUNDAMENTAL_CODE_TEMPLATE = (
-    'def factor_program(data, params):\n'
+    "def factor_program(data, params):\n"
     '    """Fundamental Alpha: {name} — {narrative}"""\n'
-    '    import numpy as np\n'
+    "    import numpy as np\n"
     '    n = len(data["close"].values) if hasattr(data, "close") else len(data["close"])\n'
-    '    {field_defs}\n'
-    '\n'
-    '    if {field_check}:\n'
-    '        score = {expression}\n'
-    '    else:\n'
+    "    {field_defs}\n"
+    "\n"
+    "    if {field_check}:\n"
+    "        score = {expression}\n"
+    "    else:\n"
     '        close = data["close"].values if hasattr(data, "close") else data["close"]\n'
-    '        returns = np.zeros(n)\n'
-    '        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)\n'
-    '        score = np.tanh(returns * 10) * 0.3\n'
-    '\n'
-    '    return np.clip(np.nan_to_num(score, nan=0.0), -1.0, 1.0)\n'
+    "        returns = np.zeros(n)\n"
+    "        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)\n"
+    "        score = np.tanh(returns * 10) * 0.3\n"
+    "\n"
+    "    return np.clip(np.nan_to_num(score, nan=0.0), -1.0, 1.0)\n"
 )
 
 
-def _fundamental_factor_from_yaml(defn: dict[str, Any], market: str, family_hint: Optional[str] = None) -> FactorProgram:
+def _fundamental_factor_from_yaml(
+    defn: dict[str, Any], market: str, family_hint: Optional[str] = None
+) -> FactorProgram:
     """从 YAML 定义创建基本面因子。"""
     import textwrap
 
@@ -518,7 +520,8 @@ def load_all_yaml_seeds(
     if market in (None, "futures"):
         futures_dir = seeds_dir / "futures"
         logger.info(
-            "[yaml_seed] 开始加载期货 YAML 种子 (17 家族), trace_id=%s", trace_id,
+            "[yaml_seed] 开始加载期货 YAML 种子 (17 家族), trace_id=%s",
+            trace_id,
         )
         futures_files = list_yaml_files(futures_dir)
         futures_family_loaded: dict[int, tuple[str, int]] = {}
@@ -535,7 +538,11 @@ def load_all_yaml_seeds(
                 futures_family_loaded[fid] = (fam_name, count)
                 logger.info(
                     "[yaml_seed] ★ 家族 %2d 加载完成: %s (%d 个因子), file=%s, trace_id=%s",
-                    fid, fam_name, count, fname, trace_id,
+                    fid,
+                    fam_name,
+                    count,
+                    fname,
+                    trace_id,
                 )
 
         # ── 期货家族汇总验证 ──
@@ -546,12 +553,16 @@ def load_all_yaml_seeds(
         if missing_fids:
             logger.error(
                 "[yaml_seed] ❌ 期货家族不完整: 已加载 %s, 缺少 %s, trace_id=%s",
-                loaded_fids, missing_fids, trace_id,
+                loaded_fids,
+                missing_fids,
+                trace_id,
             )
         else:
             logger.info(
                 "[yaml_seed] ✅ 全部 %d 个期货家族加载完成, 总计 %d 个因子, trace_id=%s",
-                len(futures_family_loaded), total_futures, trace_id,
+                len(futures_family_loaded),
+                total_futures,
+                trace_id,
             )
 
     logger.info(f"Total YAML seeds loaded: {len(result)}")

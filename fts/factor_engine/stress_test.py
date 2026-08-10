@@ -21,20 +21,22 @@ import pandas as pd
 
 class StressScenario(TypedDict):
     """压力场景定义。"""
-    name: str                      # 场景名称
-    symbols: list[str]             # 涉及品种
-    date_range: tuple[str, str]    # (start, end) ISO dates
-    price_shock: float             # 最大价格冲击（%）
-    vol_multiplier: float          # 波动率倍数
+
+    name: str  # 场景名称
+    symbols: list[str]  # 涉及品种
+    date_range: tuple[str, str]  # (start, end) ISO dates
+    price_shock: float  # 最大价格冲击（%）
+    vol_multiplier: float  # 波动率倍数
 
 
 class StressTestResult(TypedDict, total=False):
     """单场景压力测试结果。"""
+
     scenario: str
-    max_drawdown: float            # 该场景下最大回撤
-    sharpe: float                  # 该场景下夏普
-    recovery_days: int             # 恢复天数（0 = 未恢复）
-    passed: bool                   # 是否通过（回撤 ≤ 40%）
+    max_drawdown: float  # 该场景下最大回撤
+    sharpe: float  # 该场景下夏普
+    recovery_days: int  # 恢复天数（0 = 未恢复）
+    passed: bool  # 是否通过（回撤 ≤ 40%）
 
 
 # ─── 内置压力场景 ─────────────────────────────────────────
@@ -181,9 +183,15 @@ class StressTester:
             if symbol in signals:
                 sig = signals[symbol]
                 # 对齐信号长度
-                sig_sliced = sig[-len(sliced):] if len(sig) >= len(sliced) else np.pad(
-                    sig, (len(sliced) - len(sig), 0), mode="edge",
-                )[:len(sliced)]
+                sig_sliced = (
+                    sig[-len(sliced) :]
+                    if len(sig) >= len(sliced)
+                    else np.pad(
+                        sig,
+                        (len(sliced) - len(sig), 0),
+                        mode="edge",
+                    )[: len(sliced)]
+                )
                 scenario_signals.append(sig_sliced)
             else:
                 scenario_signals.append(np.zeros(len(sliced)))
@@ -202,15 +210,12 @@ class StressTester:
         all_returns = np.concatenate(scenario_returns)
 
         # 合并信号
-        all_signals = (
-            np.concatenate(scenario_signals)
-            if scenario_signals
-            else np.array([])
-        )
+        all_signals = np.concatenate(scenario_signals) if scenario_signals else np.array([])
 
         # 估算压力下最大回撤
         max_dd = self._estimate_drawdown_from_signals(
-            all_signals, scenario["price_shock"],
+            all_signals,
+            scenario["price_shock"],
         )
 
         # 计算夏普（场景收益率 * vol_multiplier 放大波动）

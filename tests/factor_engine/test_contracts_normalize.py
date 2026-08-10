@@ -13,14 +13,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
 
 _FTS_ROOT = Path(__file__).resolve().parents[2]
 if str(_FTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_FTS_ROOT))
 
 import fts  # noqa: E402
-import fts.factor_engine.contracts as contracts  # noqa: E402
 from fts.factor_engine.contracts import (  # noqa: E402
     EVOLUTION_VERSION,
     FactorKind,
@@ -45,12 +43,14 @@ class TestNormalizeSignature:
         assert sig["lookback"] == 10
 
     def test_new_format_passthrough(self):
-        sig = normalize_factor_signature({
-            "input_fields": ["close", "volume"],
-            "output_type": "score",
-            "frequency": "1h",
-            "lookback": 5,
-        })
+        sig = normalize_factor_signature(
+            {
+                "input_fields": ["close", "volume"],
+                "output_type": "score",
+                "frequency": "1h",
+                "lookback": 5,
+            }
+        )
         assert sig["input_fields"] == ["close", "volume"]
         assert sig["output_type"] == "score"
         assert sig["frequency"] == "1h"

@@ -74,15 +74,17 @@ def _make_minute_df(n: int = 30) -> pd.DataFrame:
     """构造 AKShare 分钟数据。"""
     rng = np.random.default_rng(3)
     times = pd.date_range("2026-08-01 09:00", periods=n, freq="min")
-    return pd.DataFrame({
-        "datetime": times,
-        "open": rng.uniform(3000, 3100, n),
-        "high": rng.uniform(3100, 3200, n),
-        "low": rng.uniform(2900, 3000, n),
-        "close": rng.uniform(2950, 3150, n),
-        "volume": rng.integers(100, 1000, n).astype(float),
-        "hold": rng.integers(1000, 5000, n).astype(float),
-    })
+    return pd.DataFrame(
+        {
+            "datetime": times,
+            "open": rng.uniform(3000, 3100, n),
+            "high": rng.uniform(3100, 3200, n),
+            "low": rng.uniform(2900, 3000, n),
+            "close": rng.uniform(2950, 3150, n),
+            "volume": rng.integers(100, 1000, n).astype(float),
+            "hold": rng.integers(1000, 5000, n).astype(float),
+        }
+    )
 
 
 def _block_akshare(monkeypatch):
@@ -140,7 +142,20 @@ class TestFetchOhlcv:
         # 时间排序
         assert df["datetime"].is_monotonic_increasing
         # 元数据列齐全
-        for col in ("datetime", "open", "high", "low", "close", "volume", "hold", "symbol", "period", "source", "fetched_at", "trace_id"):
+        for col in (
+            "datetime",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "hold",
+            "symbol",
+            "period",
+            "source",
+            "fetched_at",
+            "trace_id",
+        ):
             assert col in df.columns
 
     def test_tail_truncation(self, monkeypatch):

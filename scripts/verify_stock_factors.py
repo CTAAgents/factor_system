@@ -8,22 +8,25 @@
 """
 
 import sys
+
 sys.path.insert(0, "d:\\Programs\\factor_system")
 
 import logging
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 from fts.factor_engine.seed_loader import (
     load_all_yaml_seeds,
-    load_factors_from_yaml,
-    verify_yaml_integrity,
     get_seeds_dir,
 )
-from pathlib import Path
 
 STOCK_SEEDS = [
-    "builtin.yaml", "wq101.yaml", "qlib158.yaml",
-    "gtja191.yaml", "fundamental.yaml", "jq_factors.yaml",
+    "builtin.yaml",
+    "wq101.yaml",
+    "qlib158.yaml",
+    "gtja191.yaml",
+    "fundamental.yaml",
+    "jq_factors.yaml",
 ]
 
 # ════════════════════════════════════════════════════════════
@@ -42,6 +45,7 @@ for fname in STOCK_SEEDS:
         continue
     try:
         import yaml
+
         with open(fpath, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         factors = data.get("factors", [])
@@ -115,9 +119,9 @@ print("=" * 60)
 print("5. Testing stock extractor pipeline...")
 try:
     from fts.factor_engine.extractors.stock_pipeline import (
-        StockExtractorPipeline,
         create_stock_extractor_pipeline,
     )
+
     pipeline = create_stock_extractor_pipeline(
         state_path="memory/extractors/test_state_stock.json",
         pause_jq_after_first=True,
@@ -130,6 +134,7 @@ try:
     print()
 except Exception as e:
     import traceback
+
     print(f"   ERROR: {e}")
     traceback.print_exc()
     print()

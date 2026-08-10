@@ -24,9 +24,7 @@ scripts/extract_broker_factors.py — 券商研报因子提取器
 from __future__ import annotations
 
 import ast
-import os
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -119,12 +117,7 @@ def validate_factor_code(code: str) -> tuple[bool, str]:
 
 def _make_code(body: str) -> str:
     """包装 factor_program 函数体。"""
-    return (
-        "\n"
-        "    def factor_program(data, params):\n"
-        "        import numpy as np\n"
-        f"{body}\n"
-    )
+    return f"\n    def factor_program(data, params):\n        import numpy as np\n{body}\n"
 
 
 def _factor(**kwargs: Any) -> dict[str, Any]:
@@ -184,7 +177,10 @@ def _build_broker_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=3, institutional=3,
+                theory=4,
+                behavioral=3,
+                microstructure=3,
+                institutional=3,
                 narrative="动量衰减因子：加权移动平均收益率，给近期更高权重。相比等权动量，更敏感于近期变化。",
             ),
         ),
@@ -216,7 +212,10 @@ def _build_broker_momentum_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=3, microstructure=3, institutional=3,
+                theory=4,
+                behavioral=3,
+                microstructure=3,
+                institutional=3,
                 narrative="动量加速度因子：收益率的二阶差分，衡量动量变化速度。动量加速=趋势强化。",
             ),
         ),
@@ -256,7 +255,10 @@ def _build_broker_volume_price_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=4, institutional=3,
+                theory=3,
+                behavioral=3,
+                microstructure=4,
+                institutional=3,
                 narrative="量价相关性因子：价格变化与成交量的滚动相关性。量价齐升=趋势健康，量缩价涨=趋势衰竭。",
             ),
         ),
@@ -288,7 +290,10 @@ def _build_broker_volume_price_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=4, institutional=3,
+                theory=3,
+                behavioral=3,
+                microstructure=4,
+                institutional=3,
                 narrative="成交量加权动量因子：用成交量作为权重的加权收益率，放量日的影响更大。",
             ),
         ),
@@ -325,7 +330,10 @@ def _build_broker_volatility_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=4, behavioral=4, microstructure=3, institutional=3,
+                theory=4,
+                behavioral=4,
+                microstructure=3,
+                institutional=3,
                 narrative="波动率不对称性因子：上涨日波动率与下跌日波动率的比值。下跌波动更大=恐慌=做空。",
             ),
         ),
@@ -356,7 +364,10 @@ def _build_broker_volatility_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=3, institutional=3,
+                theory=3,
+                behavioral=3,
+                microstructure=3,
+                institutional=3,
                 narrative="已实现波动率趋势因子：已实现波动率的短期与长期比值。短期波动>长期=波动加剧=谨慎。",
             ),
         ),
@@ -395,7 +406,10 @@ def _build_broker_position_factors() -> list[dict[str, Any]]:
             output_type="signal",
             frequency="daily",
             economic_logic=_factor(
-                theory=3, behavioral=3, microstructure=4, institutional=4,
+                theory=3,
+                behavioral=3,
+                microstructure=4,
+                institutional=4,
                 narrative="持仓动量比因子：持仓变化与价格变化的比值，衡量资金流与价格方向的一致性。",
             ),
         ),
@@ -409,15 +423,16 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="券商研报因子提取器")
-    parser.add_argument("--source", type=str, default=None,
-                        help="研报文本文件路径或URL")
-    parser.add_argument("--list-sources", action="store_true",
-                        help="列出支持的券商研报数据源")
-    parser.add_argument("--output", type=str, default=None,
-                        help="输出 YAML 文件路径（默认自动生成）")
-    parser.add_argument("--families", type=str, nargs="+",
-                        default=["momentum", "volume_price", "volatility", "position"],
-                        help="要提取的因子家族")
+    parser.add_argument("--source", type=str, default=None, help="研报文本文件路径或URL")
+    parser.add_argument("--list-sources", action="store_true", help="列出支持的券商研报数据源")
+    parser.add_argument("--output", type=str, default=None, help="输出 YAML 文件路径（默认自动生成）")
+    parser.add_argument(
+        "--families",
+        type=str,
+        nargs="+",
+        default=["momentum", "volume_price", "volatility", "position"],
+        help="要提取的因子家族",
+    )
     args = parser.parse_args()
 
     if args.list_sources:

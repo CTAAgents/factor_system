@@ -8,7 +8,6 @@
 """
 
 import logging
-import sys
 
 logging.basicConfig(
     level=logging.INFO,
@@ -107,4 +106,4 @@ if __name__ == "__main__":
     if total > 0:
         print(f"\n  ✅ 动态提取器正常工作，共产生 {total} 个候选因子")
     else:
-        print(f"\n  ⚠️  未产生候选因子（可能 LLM 客户端无响应）")
+        print("\n  ⚠️  未产生候选因子（可能 LLM 客户端无响应）")

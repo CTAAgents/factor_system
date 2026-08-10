@@ -405,8 +405,10 @@ class TestTieredOrthogonalize:
         opt = self._make_opt(tmp_path)
         # 需 > max(2, family_threshold)=3 个因子才进入分层流程
         factors = [
-            _make_factor("a", "f_a"), _make_factor("b", "f_b"),
-            _make_factor("c", "f_c"), _make_factor("d", "f_d"),
+            _make_factor("a", "f_a"),
+            _make_factor("b", "f_b"),
+            _make_factor("c", "f_c"),
+            _make_factor("d", "f_d"),
         ]
         l2 = [
             {"factor_id_a": "a", "factor_id_b": "b", "pearson": 0.99, "spearman": 0.95},
@@ -435,8 +437,7 @@ class TestTieredOrthogonalize:
         ]
         result, summary = opt.tiered_orthogonalize(factors)
         dup_flags = [
-            f for f in result
-            if any(fl.get("type") == "code_duplicate" for fl in f.get("correlation_flags", []))
+            f for f in result if any(fl.get("type") == "code_duplicate" for fl in f.get("correlation_flags", []))
         ]
         assert len(dup_flags) == 1
         assert dup_flags[0]["factor_id"] == "f2"  # Sharpe 低者被标记
@@ -463,8 +464,7 @@ class TestTieredOrthogonalize:
         factors.append(_make_factor("g1", "other_factor"))
         result, summary = opt.tiered_orthogonalize(factors)
         family_flags = [
-            f for f in result
-            if any(fl.get("type") == "family_pruned" for fl in f.get("correlation_flags", []))
+            f for f in result if any(fl.get("type") == "family_pruned" for fl in f.get("correlation_flags", []))
         ]
         assert len(family_flags) == 1  # 11 - 10 = 1 个被家族裁剪标记
         assert summary["phase1_marked"] >= 1  # 含家族标记（另有同 code 产生的重复标记）
@@ -488,7 +488,8 @@ class TestTieredOrthogonalize:
             signal_matrix["SYM0"][f"sig_{i}"] = rng.normal(size=100)
         result, summary = opt.tiered_orthogonalize(factors, signal_matrix=signal_matrix)
         marked = [
-            f["factor_id"] for f in result
+            f["factor_id"]
+            for f in result
             if any(fl.get("type") == "high_correlation" for fl in f.get("correlation_flags", []))
         ]
         assert "f1" in marked  # Sharpe 更低的一方被标记
@@ -496,7 +497,13 @@ class TestTieredOrthogonalize:
         assert summary["phase2_marked"] >= 1
 
     def test_phase2_skipped_when_few_factors(self, tmp_path):
-        opt = self._make_opt(tmp_path, ) if False else self._make_opt(tmp_path)
+        opt = (
+            self._make_opt(
+                tmp_path,
+            )
+            if False
+            else self._make_opt(tmp_path)
+        )
         # parallel_threshold 默认 30 → threshold//2=15，4 个因子跳过 Phase 2
         factors = [_make_factor(f"f{i}", f"n{i}", sharpe=1.0) for i in range(4)]
         _, summary = opt.tiered_orthogonalize(factors)

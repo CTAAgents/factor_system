@@ -38,6 +38,7 @@ from fts.config.settings import (
 # Fixtures
 # ═══════════════════════════════════════════════════════════
 
+
 @pytest.fixture(autouse=True)
 def _reset_global_config():
     """每个测试前重置全局配置单例，避免测试间污染。"""
@@ -53,10 +54,7 @@ def sample_yaml(tmp_path: Path) -> Path:
     """创建示例 YAML 配置文件。"""
     p = tmp_path / "config.yaml"
     p.write_text(
-        "max_generations: 50\n"
-        "population_size: 100\n"
-        "log_level: DEBUG\n"
-        "meta_loop_interval_hours: 12\n",
+        "max_generations: 50\npopulation_size: 100\nlog_level: DEBUG\nmeta_loop_interval_hours: 12\n",
         encoding="utf-8",
     )
     return p
@@ -75,6 +73,7 @@ def sample_json(tmp_path: Path) -> Path:
 # FTSConfig dataclass 默认值
 # ═══════════════════════════════════════════════════════════
 
+
 class TestFTSConfigDefaults:
     """FTSConfig dataclass 默认值正确性。"""
 
@@ -92,6 +91,7 @@ class TestFTSConfigDefaults:
         assert cfg.portfolio_max_factors == 20
         assert cfg.portfolio_top_n == 5
         assert cfg.portfolio_decay_days == 90
+        assert cfg.portfolio_optimizer_mode == "risk_parity"
         assert cfg.log_level == "INFO"
         assert cfg.log_file == ""
         assert cfg.llm_backend == ""
@@ -114,6 +114,17 @@ class TestFTSConfigDefaults:
         monkeypatch.setenv("FTS_INDUSTRY_MAP_PATH", "data/custom_map.json")
         cfg = load_config(config_path=None)
         assert cfg.industry_map_path == "data/custom_map.json"
+
+    def test_portfolio_optimizer_mode_default(self):
+        """组合优化器模式默认值（GAP-I302，v2.74.0）。"""
+        cfg = FTSConfig()
+        assert cfg.portfolio_optimizer_mode == "risk_parity"
+
+    def test_portfolio_optimizer_mode_env_override(self, monkeypatch):
+        """FTS_PORTFOLIO_OPTIMIZER_MODE 环境变量覆盖（GAP-I302）。"""
+        monkeypatch.setenv("FTS_PORTFOLIO_OPTIMIZER_MODE", "mvo")
+        cfg = load_config(config_path=None)
+        assert cfg.portfolio_optimizer_mode == "mvo"
 
     # ── v2.59.0 (GAP-F03/F02) 期货中性化 + 回测真实性仿真 ──
     def test_futures_neutralization_defaults(self):
@@ -166,12 +177,14 @@ class TestFTSConfigDefaults:
 # load_industry_map()
 # ═══════════════════════════════════════════════════════════
 
+
 class TestLoadIndustryMap:
     """load_industry_map() 行业映射加载。"""
 
     def test_load_valid_file(self, tmp_path):
         """有效 JSON 文件应正确加载为 dict。"""
         from fts.config.settings import load_industry_map
+
         p = tmp_path / "industry_map.json"
         p.write_text(json.dumps({"600519.SH": "食品饮料", "000858.SZ": "食品饮料"}), encoding="utf-8")
         result = load_industry_map(str(p))
@@ -180,6 +193,7 @@ class TestLoadIndustryMap:
     def test_file_not_found(self):
         """文件不存在 → 返回空字典。"""
         from fts.config.settings import load_industry_map
+
         result = load_industry_map("/nonexistent/industry_map.json")
         assert result == {}
 
@@ -187,6 +201,7 @@ class TestLoadIndustryMap:
         """JSON 格式错误 → 抛 JSONDecodeError。"""
         import json
         from fts.config.settings import load_industry_map
+
         p = tmp_path / "bad_map.json"
         p.write_text("{invalid json}", encoding="utf-8")
         with pytest.raises(json.JSONDecodeError):
@@ -195,6 +210,7 @@ class TestLoadIndustryMap:
     def test_non_dict_root(self, tmp_path):
         """JSON 根节点非对象 → 返回空字典。"""
         from fts.config.settings import load_industry_map
+
         p = tmp_path / "list_map.json"
         p.write_text(json.dumps(["a", "b"]), encoding="utf-8")
         result = load_industry_map(str(p))
@@ -203,6 +219,7 @@ class TestLoadIndustryMap:
     def test_whitespace_keys_filtered(self, tmp_path):
         """空白键和注释类键被过滤。"""
         from fts.config.settings import load_industry_map
+
         p = tmp_path / "dirty_map.json"
         p.write_text(json.dumps({"": "", "  600519.SH  ": " 食品饮料 "}), encoding="utf-8")
         result = load_industry_map(str(p))
@@ -211,6 +228,7 @@ class TestLoadIndustryMap:
     def test_uses_config_default_path(self, tmp_path, monkeypatch):
         """path=None 时使用配置默认路径。"""
         from fts.config.settings import load_industry_map
+
         # 指向临时文件
         p = tmp_path / "industry_map.json"
         p.write_text(json.dumps({"000001.SZ": "银行"}), encoding="utf-8")
@@ -223,12 +241,14 @@ class TestLoadIndustryMap:
 # load_cap_map()（v2.61.0 GAP-S01）
 # ═══════════════════════════════════════════════════════════
 
+
 class TestLoadCapMap:
     """load_cap_map() 市值映射加载（GAP-S01）。"""
 
     def test_load_valid_file(self, tmp_path):
         """有效 JSON 文件应加载为 {symbol: float}。"""
         from fts.config.settings import load_cap_map
+
         p = tmp_path / "cap_map.json"
         p.write_text(json.dumps({"600519.SH": 2.1e12, "000858.SZ": 6.0e11}), encoding="utf-8")
         result = load_cap_map(str(p))
@@ -238,18 +258,21 @@ class TestLoadCapMap:
     def test_path_empty_returns_empty(self):
         """cap_map_path 为空 → 返回空 dict（不尝试读取）。"""
         from fts.config.settings import load_cap_map
+
         result = load_cap_map("")
         assert result == {}
 
     def test_file_not_found_returns_empty(self, tmp_path):
         """文件不存在 → 返回空 dict。"""
         from fts.config.settings import load_cap_map
+
         result = load_cap_map(str(tmp_path / "missing_cap_map.json"))
         assert result == {}
 
     def test_non_numeric_values_filtered(self, tmp_path):
         """非数值市值条目被过滤。"""
         from fts.config.settings import load_cap_map
+
         p = tmp_path / "dirty_cap.json"
         p.write_text(json.dumps({"600519.SH": 2.1e12, "000001.SZ": "N/A"}), encoding="utf-8")
         result = load_cap_map(str(p))
@@ -259,6 +282,7 @@ class TestLoadCapMap:
 # ═══════════════════════════════════════════════════════════
 # load_config()
 # ═══════════════════════════════════════════════════════════
+
 
 class TestLoadConfig:
     """load_config() 配置加载路径全覆盖。"""
@@ -407,6 +431,7 @@ class TestLoadConfig:
 # _apply_env_overrides() 环境变量覆盖
 # ═══════════════════════════════════════════════════════════
 
+
 class TestApplyEnvOverrides:
     """_apply_env_overrides() 各分支全覆盖。"""
 
@@ -414,6 +439,7 @@ class TestApplyEnvOverrides:
 
     def test_bool_branch_with_enabled_field(self, monkeypatch):
         """_apply_env_overrides bool 分支 — 使用包含 bool 属性的对象。"""
+
         class _Cfg:
             verbose = False
             dry_run = True
@@ -424,15 +450,19 @@ class TestApplyEnvOverrides:
         assert cfg.verbose is True
         assert cfg.dry_run is True  # 无对应 env var，不变
 
-    @pytest.mark.parametrize("raw,expected", [
-        ("1", True),
-        ("true", True),
-        ("yes", True),
-        ("0", False),
-        ("false", False),
-    ])
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("1", True),
+            ("true", True),
+            ("yes", True),
+            ("0", False),
+            ("false", False),
+        ],
+    )
     def test_bool_branch_parametrized(self, monkeypatch, raw, expected):
         """_apply_env_overrides bool 分支参数化覆盖。"""
+
         class _Cfg:
             active = False
 
@@ -455,6 +485,7 @@ class TestApplyEnvOverrides:
 
     def test_float_env_override(self, monkeypatch):
         """浮点字段环境变量覆盖。"""
+
         class _Cfg:
             threshold = 0.5
 
@@ -478,6 +509,7 @@ class TestApplyEnvOverrides:
 
     def test_private_attribute_skip(self, monkeypatch):
         """以下划线开头的属性不被 env var 覆盖。"""
+
         class _Cfg:
             _secret = "original"
             name = "hello"
@@ -492,6 +524,7 @@ class TestApplyEnvOverrides:
 # ═══════════════════════════════════════════════════════════
 # _apply_dict()
 # ═══════════════════════════════════════════════════════════
+
 
 class TestApplyDict:
     """_apply_dict() 字典应用到配置。"""
@@ -523,6 +556,7 @@ class TestApplyDict:
 # ═══════════════════════════════════════════════════════════
 # get_config() 全局单例
 # ═══════════════════════════════════════════════════════════
+
 
 class TestGetConfig:
     """get_config() 全局单例初始化。"""
@@ -562,6 +596,7 @@ class TestGetConfig:
 # 集成场景: 多优先级叠加
 # ═══════════════════════════════════════════════════════════
 
+
 class TestConfigPriority:
     """配置优先级叠加验证（环境变量 > YAML > 默认值）。"""
 
@@ -582,13 +617,15 @@ class TestConfigPriority:
 # evolution_mode 配置字段 (Phase C.2)
 # ═══════════════════════════════════════════════════════════
 
+
 def test_evolution_mode_default_hybrid():
     cfg = load_config(config_path=None)  # 不落盘场景下取默认值
     assert cfg.evolution_mode in ("operator", "code", "hybrid")
 
 
 def test_validate_evolution_mode():
-    from fts.config.settings import EVOLUTION_MODES, validate_evolution_mode
+    from fts.config.settings import validate_evolution_mode
+
     assert validate_evolution_mode("operator") == "operator"
     assert validate_evolution_mode("hybrid") == "hybrid"
 
@@ -596,12 +633,14 @@ def test_validate_evolution_mode():
 def test_validate_evolution_mode_rejects_invalid():
     import pytest
     from fts.config.settings import validate_evolution_mode
+
     with pytest.raises(ValueError):
         validate_evolution_mode("quantum")
 
 
 def test_evolution_mode_env_override(monkeypatch):
     from fts.config.settings import load_config
+
     monkeypatch.setenv("FTS_EVOLUTION_MODE", "operator")
     cfg = load_config(config_path=None)
     assert cfg.evolution_mode == "operator"

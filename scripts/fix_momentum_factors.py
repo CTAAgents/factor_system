@@ -21,14 +21,12 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.run_factor_audit_real import (
     compute_factor_on_panel,
-    execute_factor_code,
     get_real_ohlcv_data,
     load_factors_from_yaml,
 )
@@ -129,14 +127,10 @@ def main():
         rev_mean_ic = float(np.mean([r["ic"] for r in reversed_ic.values()])) if reversed_ic else 0.0
 
         orig_positive_ratio = (
-            sum(1 for r in original_ic.values() if r["ic"] > 0) / len(original_ic)
-            if original_ic
-            else 0.0
+            sum(1 for r in original_ic.values() if r["ic"] > 0) / len(original_ic) if original_ic else 0.0
         )
         rev_positive_ratio = (
-            sum(1 for r in reversed_ic.values() if r["ic"] > 0) / len(reversed_ic)
-            if reversed_ic
-            else 0.0
+            sum(1 for r in reversed_ic.values() if r["ic"] > 0) / len(reversed_ic) if reversed_ic else 0.0
         )
 
         logger.info("  原始: IC=%.4f, 正收益比例=%.1f%%", orig_mean_ic, orig_positive_ratio * 100)
@@ -147,26 +141,28 @@ def main():
         ratio_improvement = rev_positive_ratio - orig_positive_ratio
         logger.info("  IC 改善: %+.4f, 比例改善: %+.1f%%", ic_improvement, ratio_improvement * 100)
 
-        comparison_results.append({
-            "factor_name": name,
-            "original": {
-                "mean_ic": orig_mean_ic,
-                "positive_ratio": orig_positive_ratio,
-                "n_symbols": len(original_ic),
-                "symbol_ics": {sym: r["ic"] for sym, r in original_ic.items()},
-            },
-            "reversed": {
-                "mean_ic": rev_mean_ic,
-                "positive_ratio": rev_positive_ratio,
-                "n_symbols": len(reversed_ic),
-                "symbol_ics": {sym: r["ic"] for sym, r in reversed_ic.items()},
-            },
-            "improvement": {
-                "ic_delta": ic_improvement,
-                "ratio_delta": ratio_improvement,
-                "improved": rev_mean_ic > orig_mean_ic,
-            },
-        })
+        comparison_results.append(
+            {
+                "factor_name": name,
+                "original": {
+                    "mean_ic": orig_mean_ic,
+                    "positive_ratio": orig_positive_ratio,
+                    "n_symbols": len(original_ic),
+                    "symbol_ics": {sym: r["ic"] for sym, r in original_ic.items()},
+                },
+                "reversed": {
+                    "mean_ic": rev_mean_ic,
+                    "positive_ratio": rev_positive_ratio,
+                    "n_symbols": len(reversed_ic),
+                    "symbol_ics": {sym: r["ic"] for sym, r in reversed_ic.items()},
+                },
+                "improvement": {
+                    "ic_delta": ic_improvement,
+                    "ratio_delta": ratio_improvement,
+                    "improved": rev_mean_ic > orig_mean_ic,
+                },
+            }
+        )
 
     # 4. 保存对比结果
     output_dir = PROJECT_ROOT / "reports"
@@ -181,8 +177,10 @@ def main():
     # 5. 生成对比图表
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+
         plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
         plt.rcParams["axes.unicode_minus"] = False
 
@@ -214,7 +212,14 @@ def main():
             for bar in bars:
                 h = bar.get_height()
                 offset = 0.005 if h >= 0 else -0.015
-                ax.text(bar.get_x() + bar.get_width() / 2, h + offset, f"{h:.3f}", ha="center", va="bottom" if h >= 0 else "top", fontsize=8)
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    h + offset,
+                    f"{h:.3f}",
+                    ha="center",
+                    va="bottom" if h >= 0 else "top",
+                    fontsize=8,
+                )
 
         plt.tight_layout()
         chart_path = chart_dir / "momentum_fix_comparison.png"
@@ -226,10 +231,12 @@ def main():
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
         # 收集所有品种
-        all_symbols = sorted(set(
-            list(comparison_results[0]["original"]["symbol_ics"].keys()) +
-            list(comparison_results[0]["reversed"]["symbol_ics"].keys())
-        ))
+        all_symbols = sorted(
+            set(
+                list(comparison_results[0]["original"]["symbol_ics"].keys())
+                + list(comparison_results[0]["reversed"]["symbol_ics"].keys())
+            )
+        )
 
         orig_matrix = np.zeros((len(factors), len(all_symbols)))
         rev_matrix = np.zeros((len(factors), len(all_symbols)))
@@ -280,7 +287,11 @@ def main():
         status = "✅ 改善" if delta > 0 else "❌ 未改善"
         logger.info(
             "  %s: 原始=%.4f → 反转=%.4f (Δ=%+.4f) %s",
-            name, orig_ic, rev_ic, delta, status,
+            name,
+            orig_ic,
+            rev_ic,
+            delta,
+            status,
         )
 
     logger.info("=" * 60)

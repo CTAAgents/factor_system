@@ -14,6 +14,7 @@ scripts/throughput_gp_channel.py — GP/operator 通道吞吐实测（修复验�
 Usage:
     python scripts/throughput_gp_channel.py [--symbols N] [--rows M] [--generations G]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -48,9 +49,8 @@ def load_futures_panel(
     """
     con = duckdb.connect(db_path)
     symbols = [
-        r[0] for r in con.execute(
-            "SELECT DISTINCT symbol FROM kline_cache WHERE period='daily' ORDER BY symbol"
-        ).fetchall()
+        r[0]
+        for r in con.execute("SELECT DISTINCT symbol FROM kline_cache WHERE period='daily' ORDER BY symbol").fetchall()
     ][:max_symbols]
     panel: dict[str, pd.DataFrame] = {}
     for sym in symbols:
@@ -62,7 +62,8 @@ def load_futures_panel(
         if not rows:
             continue
         df = pd.DataFrame(
-            rows, columns=["date", "open", "high", "low", "close", "volume"],
+            rows,
+            columns=["date", "open", "high", "low", "close", "volume"],
         )
         df["date"] = pd.to_datetime(df["date"])
         df.set_index("date", inplace=True)
@@ -71,9 +72,7 @@ def load_futures_panel(
         panel[sym] = df
     con.close()
 
-    common_dates = sorted(
-        set.intersection(*(set(df.index) for df in panel.values()))
-    )
+    common_dates = sorted(set.intersection(*(set(df.index) for df in panel.values())))
     if len(common_dates) < 60:
         print("[data] 共有交易日过少，改用合成面板")
         return _synthetic_panel(40, 400)
@@ -137,18 +136,25 @@ def _seed_parent(primary_data: pd.DataFrame) -> FactorProgram:
         "params": {},
         "family": "trend",
         "signature": FactorSignature(
-            input_fields=["close"], output_type="signal",
-            frequency="daily", lookback=60,
+            input_fields=["close"],
+            output_type="signal",
+            frequency="daily",
+            lookback=60,
         ),
         "economic_logic": EconomicLogic(
-            theory=3, behavioral=3, microstructure=3, institutional=3,
+            theory=3,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
             narrative="均线差趋势因子（吞吐实测父因子）",
         ),
     }
 
 
 def stage_batch_funnel(
-    loop: EvolutionLoop, parent: FactorProgram, generations: int,
+    loop: EvolutionLoop,
+    parent: FactorProgram,
+    generations: int,
 ) -> dict[str, float]:
     """Stage A: batch 漏斗吞吐实测（生成 + 并行粗筛）。"""
     miner = BatchMiner(
@@ -164,9 +170,15 @@ def stage_batch_funnel(
     )
     trace_id = generate_trace_id("tput")
     stats = {
-        "total_generated": 0, "total_passed": 0, "total_rejected": 0,
-        "gen_s": 0.0, "filter_s": 0.0, "cand_s": 0.0,
-        "runtime_reject": 0, "prefilter_reject": 0, "gp_count": 0,
+        "total_generated": 0,
+        "total_passed": 0,
+        "total_rejected": 0,
+        "gen_s": 0.0,
+        "filter_s": 0.0,
+        "cand_s": 0.0,
+        "runtime_reject": 0,
+        "prefilter_reject": 0,
+        "gp_count": 0,
     }
     t0 = time.perf_counter()
     for g in range(generations):
@@ -181,9 +193,7 @@ def stage_batch_funnel(
                 stats["runtime_reject"] += 1
             else:
                 stats["prefilter_reject"] += 1
-        stats["gp_count"] += sum(
-            1 for p in result.passed + result.rejected if p.get("method") == "gp_evolution"
-        )
+        stats["gp_count"] += sum(1 for p in result.passed + result.rejected if p.get("method") == "gp_evolution")
     wall = time.perf_counter() - t0
     stats["cand_s"] = stats["total_generated"] / max(wall, 1e-9)
     return stats
@@ -221,10 +231,7 @@ def stage_gp_evolution(loop: EvolutionLoop, parent: FactorProgram) -> float:
     factor_program = tree_to_factor_program(gp_result.best_tree)
     # 验证 GP 产物可通过运行时校验（恢复通道的端到端确认）
     ok, reason = loop._check_factor_runtime(factor_program)
-    print(
-        f"    GP 产物: fitness={gp_result.best_fitness:.4f} "
-        f"expr={gp_result.best_expression[:60]}"
-    )
+    print(f"    GP 产物: fitness={gp_result.best_fitness:.4f} expr={gp_result.best_expression[:60]}")
     print(f"    GP 产物运行时校验: {'通过' if ok else f'失败: {reason}'}")
     return elapsed
 
@@ -241,7 +248,8 @@ def main() -> None:
     print("=" * 72)
 
     panel, common_dates, forward_returns = load_futures_panel(
-        max_symbols=args.symbols, max_rows=args.rows,
+        max_symbols=args.symbols,
+        max_rows=args.rows,
     )
     primary = list(panel.values())[0]
     parent = _seed_parent(primary)
@@ -265,7 +273,9 @@ def main() -> None:
     for i in range(n_try):
         t0 = time.perf_counter()
         factor, _summary = loop._generate_operator_factor(
-            parent, generation=i, trace_id="tput-op",
+            parent,
+            generation=i,
+            trace_id="tput-op",
         )
         gen_cost += time.perf_counter() - t0
         t0 = time.perf_counter()
@@ -278,10 +288,7 @@ def main() -> None:
         prefilter_cost += time.perf_counter() - t0
         if ok2:
             passed += 1
-    print(
-        f"    生成 {n_try} 个 → 通过运行时+预筛 {passed} 个 "
-        f"({passed / n_try:.0%})"
-    )
+    print(f"    生成 {n_try} 个 → 通过运行时+预筛 {passed} 个 ({passed / n_try:.0%})")
     print(
         f"    平均延迟: 生成 {gen_cost / n_try * 1000:.1f}ms, "
         f"运行时校验 {runtime_cost / max(n_try, 1) * 1000:.1f}ms, "
@@ -291,14 +298,8 @@ def main() -> None:
     # ── Stage A: batch 漏斗吞吐 ────────────────────────
     print(f"\n--- Stage A: batch 漏斗吞吐（{args.generations} 代） ---")
     stats = stage_batch_funnel(loop, parent, args.generations)
-    print(
-        f"    生成 {stats['total_generated']} 候选, "
-        f"通过粗筛 {stats['total_passed']}, 拦截 {stats['total_rejected']}"
-    )
-    print(
-        f"    拦截分布: 运行时校验 {stats['runtime_reject']}, "
-        f"预筛 {stats['prefilter_reject']}"
-    )
+    print(f"    生成 {stats['total_generated']} 候选, 通过粗筛 {stats['total_passed']}, 拦截 {stats['total_rejected']}")
+    print(f"    拦截分布: 运行时校验 {stats['runtime_reject']}, 预筛 {stats['prefilter_reject']}")
     print(f"    吞吐: {stats['cand_s']:.1f} 候选/s")
 
     # ── Stage B: GP 演化耗时 ───────────────────────────

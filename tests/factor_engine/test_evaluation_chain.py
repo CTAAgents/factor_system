@@ -59,12 +59,15 @@ def factor_program(data, params):
         code=code,
         params={"window": 5},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-        economic_logic=EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4, narrative="5日动量因子"),
+        economic_logic=EconomicLogic(
+            theory=4, behavioral=3, microstructure=3, institutional=4, narrative="5日动量因子"
+        ),
         source="manual",
     )
 
 
 # ─── Level 1: 回测验证 ────────────────────────────────────
+
 
 def test_evaluate_backtest_returns_metrics(simple_factor, sample_ohlcv, forward_returns):
     """应返回完整的 BacktestMetrics。"""
@@ -93,6 +96,7 @@ def test_evaluate_backtest_zero_signal(simple_factor, sample_ohlcv, forward_retu
 
 # ─── Level 2: 经济逻辑 ────────────────────────────────────
 
+
 def test_evaluate_economic_logic_full_pass(simple_factor):
     """四维全达标的因子应通过。"""
     ec = evaluate_economic_logic(simple_factor)
@@ -117,9 +121,9 @@ def test_evaluate_economic_logic_partial_fail():
 
 # ─── Level 3: 多重检验 ────────────────────────────────────
 
+
 def test_evaluate_multiple_tests_empty():
     """空输入应返回默认值。"""
-    from fts.factor_engine.contracts import FactorEvaluation
     mt = evaluate_multiple_tests([])
     assert mt["effective_n_factors"] == 1
 
@@ -127,16 +131,24 @@ def test_evaluate_multiple_tests_empty():
 def test_evaluate_multiple_tests_with_data():
     """应正确计算 Bonferroni 校正。"""
     from fts.factor_engine.contracts import (
-        BacktestMetrics, EconomicScore, FactorEvaluation, MultipleTestResult,
+        BacktestMetrics,
+        EconomicScore,
+        FactorEvaluation,
+        MultipleTestResult,
     )
+
     evals = [
         FactorEvaluation(
-            factor_id=f"fct_{i}", trace_id="t",
+            factor_id=f"fct_{i}",
+            trace_id="t",
             level_1_backtest=BacktestMetrics(t_stat=3.0 + i * 0.5),
             level_2_economic=EconomicScore(),
             level_3_multiple=MultipleTestResult(),
-            passed=False, failure_reasons=[], evaluated_at="2026-07-18",
-        ) for i in range(5)
+            passed=False,
+            failure_reasons=[],
+            evaluated_at="2026-07-18",
+        )
+        for i in range(5)
     ]
     mt = evaluate_multiple_tests(evals)
     assert mt["effective_n_factors"] == 5
@@ -146,16 +158,24 @@ def test_evaluate_multiple_tests_with_data():
 def test_evaluate_multiple_tests_with_correlation():
     """提供相关性矩阵时应调整有效因子数。"""
     from fts.factor_engine.contracts import (
-        BacktestMetrics, EconomicScore, FactorEvaluation, MultipleTestResult,
+        BacktestMetrics,
+        EconomicScore,
+        FactorEvaluation,
+        MultipleTestResult,
     )
+
     evals = [
         FactorEvaluation(
-            factor_id=f"fct_{i}", trace_id="t",
+            factor_id=f"fct_{i}",
+            trace_id="t",
             level_1_backtest=BacktestMetrics(t_stat=3.0),
             level_2_economic=EconomicScore(),
             level_3_multiple=MultipleTestResult(),
-            passed=False, failure_reasons=[], evaluated_at="2026-07-18",
-        ) for i in range(3)
+            passed=False,
+            failure_reasons=[],
+            evaluated_at="2026-07-18",
+        )
+        for i in range(3)
     ]
     # 高相关矩阵（几乎完全共线）
     corr = np.array([[1.0, 0.95, 0.95], [0.95, 1.0, 0.95], [0.95, 0.95, 1.0]])
@@ -165,6 +185,7 @@ def test_evaluate_multiple_tests_with_correlation():
 
 
 # ─── 完整评估链 ───────────────────────────────────────────
+
 
 def test_evaluation_chain_evaluate(simple_factor, sample_ohlcv, forward_returns):
     """应能执行完整三级评估。"""
@@ -185,13 +206,16 @@ def test_evaluation_chain_with_prior(simple_factor, sample_ohlcv, forward_return
     ev1 = chain.evaluate(simple_factor, sample_ohlcv, forward_returns)
     # 第二次评估（带先验）
     ev2 = chain.evaluate(
-        simple_factor, sample_ohlcv, forward_returns,
+        simple_factor,
+        sample_ohlcv,
+        forward_returns,
         prior_evaluations=[ev1],
     )
     assert "level_3_multiple" in ev2
 
 
 # ─── evaluation_chain 边缘覆盖 ─────────────────────────
+
 
 class TestEvaluationChainCoverage:
     """补齐 evaluation_chain.py 覆盖率缺口。"""
@@ -201,6 +225,7 @@ class TestEvaluationChainCoverage:
     def test_compute_ic_short_arrays(self):
         """长度不足 2 时应返回 (0,0)。"""
         from fts.factor_engine.evaluation_chain import _compute_ic
+
         ic, icir = _compute_ic(np.array([1.0]), np.array([0.5]))
         assert ic == 0.0
         assert icir == 0.0
@@ -208,6 +233,7 @@ class TestEvaluationChainCoverage:
     def test_compute_ic_mismatched_length(self):
         """长度不匹配时应返回 (0,0)。"""
         from fts.factor_engine.evaluation_chain import _compute_ic
+
         ic, icir = _compute_ic(np.array([1.0, 2.0]), np.array([0.5]))
         assert ic == 0.0
         assert icir == 0.0
@@ -215,6 +241,7 @@ class TestEvaluationChainCoverage:
     def test_compute_ic_pearson_method(self):
         """pearson 方法应正常工作。"""
         from fts.factor_engine.evaluation_chain import _compute_ic
+
         a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         b = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
         ic, icir = _compute_ic(a, b, method="pearson")
@@ -224,6 +251,7 @@ class TestEvaluationChainCoverage:
     def test_compute_ic_constant_signal(self):
         """常数信号应返回 (0,0)。"""
         from fts.factor_engine.evaluation_chain import _compute_ic
+
         ic, icir = _compute_ic(np.ones(10), np.random.randn(10))
         assert ic == 0.0
         assert icir == 0.0
@@ -235,6 +263,7 @@ class TestEvaluationChainCoverage:
         修复后有效样本对参与计算，IC 与无 NaN 场景一致。
         """
         from fts.factor_engine.evaluation_chain import _compute_ic
+
         signal = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
         returns = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
         ic_clean, _ = _compute_ic(signal, returns)
@@ -251,6 +280,7 @@ class TestEvaluationChainCoverage:
     def test_compute_ic_nan_mask_pearson(self):
         """pearson 方法同样剔除 NaN 样本对。"""
         from fts.factor_engine.evaluation_chain import _compute_ic
+
         signal = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         returns = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
         ic_clean, _ = _compute_ic(signal, returns, method="pearson")
@@ -262,6 +292,7 @@ class TestEvaluationChainCoverage:
     def test_compute_ic_nan_mask_too_few_valid(self):
         """有效样本对不足 2 个时应返回 (0,0)（不崩溃）。"""
         from fts.factor_engine.evaluation_chain import _compute_ic
+
         signal = np.array([1.0, np.nan, np.nan, np.nan])
         returns = np.array([0.1, np.nan, np.nan, np.nan])
         ic, icir = _compute_ic(signal, returns)
@@ -273,11 +304,13 @@ class TestEvaluationChainCoverage:
     def test_compute_sharpe_short_returns(self):
         """长度不足 2 应返回 0。"""
         from fts.factor_engine.evaluation_chain import _compute_sharpe
+
         assert _compute_sharpe(np.array([0.01])) == 0.0
 
     def test_compute_sharpe_zero_std(self):
         """零标准差应返回 0。"""
         from fts.factor_engine.evaluation_chain import _compute_sharpe
+
         assert _compute_sharpe(np.ones(10)) == 0.0
 
     # ── _compute_max_drawdown 边缘 ──
@@ -285,17 +318,20 @@ class TestEvaluationChainCoverage:
     def test_max_drawdown_short(self):
         """长度不足 2 应返回 0。"""
         from fts.factor_engine.evaluation_chain import _compute_max_drawdown
+
         assert _compute_max_drawdown(np.array([1.0])) == 0.0
 
     def test_max_drawdown_no_drawdown(self):
         """持续上涨应返回 0。"""
         from fts.factor_engine.evaluation_chain import _compute_max_drawdown
+
         cum = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         assert _compute_max_drawdown(cum) == 0.0
 
     def test_max_drawdown_positive(self):
         """有回撤应返回正值。"""
         from fts.factor_engine.evaluation_chain import _compute_max_drawdown
+
         cum = np.array([1.0, 2.0, 1.5, 1.0, 3.0])
         dd = _compute_max_drawdown(cum)
         assert dd > 0.0
@@ -305,11 +341,13 @@ class TestEvaluationChainCoverage:
     def test_monotonicity_insufficient_data(self):
         """数据量不足时应返回 False。"""
         from fts.factor_engine.evaluation_chain import _check_monotonicity
+
         assert not _check_monotonicity(np.ones(10), np.ones(10))
 
     def test_monotonicity_increasing(self):
         """严格单调递增应通过。"""
         from fts.factor_engine.evaluation_chain import _check_monotonicity
+
         np.random.seed(42)
         n = 500
         signal = np.linspace(-1, 1, n) + np.random.randn(n) * 0.01
@@ -319,6 +357,7 @@ class TestEvaluationChainCoverage:
     def test_monotonicity_decreasing(self):
         """严格单调递减应通过。"""
         from fts.factor_engine.evaluation_chain import _check_monotonicity
+
         n = 500
         signal = np.linspace(1, -1, n)
         returns = np.linspace(0.1, -0.1, n)
@@ -327,6 +366,7 @@ class TestEvaluationChainCoverage:
     def test_monotonicity_not_monotonic(self):
         """非单调（倒 V 型）应返回 False。"""
         from fts.factor_engine.evaluation_chain import _check_monotonicity
+
         n = 500
         # 信号递增，收益先降后升（倒 V）：低信号/高信号→正收益，中信号→负收益
         signal = np.linspace(-1, 1, n)
@@ -338,6 +378,7 @@ class TestEvaluationChainCoverage:
     def test_evaluate_backtest_with_nan_signal(self, sample_ohlcv, forward_returns):
         """包含 NaN 的信号应正常处理。"""
         from fts.factor_engine.contracts import EconomicLogic, FactorProgram, FactorSignature
+
         code = """
 import numpy as np
 def factor_program(data, params):
@@ -352,7 +393,9 @@ def factor_program(data, params):
             code=code,
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="NaN测试"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="NaN测试"
+            ),
             source="manual",
         )
         bt = evaluate_backtest(fp, sample_ohlcv, forward_returns)
@@ -361,6 +404,7 @@ def factor_program(data, params):
     def test_evaluate_backtest_tiny_oos(self, sample_ohlcv, forward_returns):
         """极小的样本外比例应降级为 1。"""
         from fts.factor_engine.contracts import EconomicLogic, FactorProgram, FactorSignature
+
         code = """
 import numpy as np
 def factor_program(data, params):
@@ -372,7 +416,9 @@ def factor_program(data, params):
             code=code,
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="tiny测试"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="tiny测试"
+            ),
             source="manual",
         )
         # 用 3 条数据测试
@@ -386,15 +432,22 @@ def factor_program(data, params):
     def test_evaluate_multiple_tests_zero_t(self):
         """t_stat = 0 时应返回 p=1.0。"""
         from fts.factor_engine.contracts import (
-            BacktestMetrics, EconomicScore, FactorEvaluation, MultipleTestResult,
+            BacktestMetrics,
+            EconomicScore,
+            FactorEvaluation,
+            MultipleTestResult,
         )
+
         evals = [
             FactorEvaluation(
-                factor_id="fct_zero_t", trace_id="t",
+                factor_id="fct_zero_t",
+                trace_id="t",
                 level_1_backtest=BacktestMetrics(t_stat=0.0),
                 level_2_economic=EconomicScore(),
                 level_3_multiple=MultipleTestResult(),
-                passed=False, failure_reasons=[], evaluated_at="2026-07-18",
+                passed=False,
+                failure_reasons=[],
+                evaluated_at="2026-07-18",
             )
         ]
         mt = evaluate_multiple_tests(evals)
@@ -403,16 +456,24 @@ def factor_program(data, params):
     def test_evaluate_multiple_tests_correlation_eigenvalue_failure(self):
         """相关性矩阵特征值计算失败时应 fallback 到 n。"""
         from fts.factor_engine.contracts import (
-            BacktestMetrics, EconomicScore, FactorEvaluation, MultipleTestResult,
+            BacktestMetrics,
+            EconomicScore,
+            FactorEvaluation,
+            MultipleTestResult,
         )
+
         evals = [
             FactorEvaluation(
-                factor_id=f"fct_{i}", trace_id="t",
+                factor_id=f"fct_{i}",
+                trace_id="t",
                 level_1_backtest=BacktestMetrics(t_stat=2.0),
                 level_2_economic=EconomicScore(),
                 level_3_multiple=MultipleTestResult(),
-                passed=False, failure_reasons=[], evaluated_at="2026-07-18",
-            ) for i in range(3)
+                passed=False,
+                failure_reasons=[],
+                evaluated_at="2026-07-18",
+            )
+            for i in range(3)
         ]
         # 非方阵 → 特征值计算失败
         bad_corr = np.array([[1.0, 0.5], [0.5, 1.0], [0.3, 0.3]])
@@ -422,15 +483,22 @@ def factor_program(data, params):
     def test_evaluate_multiple_tests_passed(self):
         """高 t_stat + 低 n 应通过多重检验。"""
         from fts.factor_engine.contracts import (
-            BacktestMetrics, EconomicScore, FactorEvaluation, MultipleTestResult,
+            BacktestMetrics,
+            EconomicScore,
+            FactorEvaluation,
+            MultipleTestResult,
         )
+
         evals = [
             FactorEvaluation(
-                factor_id="fct_high_t", trace_id="t",
+                factor_id="fct_high_t",
+                trace_id="t",
                 level_1_backtest=BacktestMetrics(t_stat=15.0),
                 level_2_economic=EconomicScore(),
                 level_3_multiple=MultipleTestResult(),
-                passed=False, failure_reasons=[], evaluated_at="2026-07-18",
+                passed=False,
+                failure_reasons=[],
+                evaluated_at="2026-07-18",
             )
         ]
         mt = evaluate_multiple_tests(evals)
@@ -461,7 +529,9 @@ def factor_program(data, params):
             params={},
             trace_id="trace_fail",
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=1, behavioral=1, microstructure=1, institutional=1, narrative="失败因子"),
+            economic_logic=EconomicLogic(
+                theory=1, behavioral=1, microstructure=1, institutional=1, narrative="失败因子"
+            ),
             source="manual",
         )
         chain = EvaluationChain()
@@ -478,12 +548,14 @@ def factor_program(data, params):
 
 # ─── _check_monotonicity 深层边缘 ─────────────────────
 
+
 class TestCheckMonotonicityDeep:
     """补齐 _check_monotonicity 的深层分支覆盖。"""
 
     def test_nan_after_dropna_below_n_buckets(self):
         """dropna 后数据量不足 n_buckets → 返回 False (line 90)。"""
         from fts.factor_engine.evaluation_chain import _check_monotonicity
+
         n = 500
         signal = np.linspace(-1, 1, n)
         returns = np.random.randn(n)
@@ -496,6 +568,7 @@ class TestCheckMonotonicityDeep:
     def test_constant_returns_nan_corr(self):
         """常数收益率使桶均值恒定 → spearmanr 返回 NaN → 返回 False (line 98)。"""
         from fts.factor_engine.evaluation_chain import _check_monotonicity
+
         n = 500
         signal = np.linspace(-1, 1, n)
         returns = np.ones(n) * 0.01  # 所有收益率完全相同
@@ -504,6 +577,7 @@ class TestCheckMonotonicityDeep:
 
 
 # ─── evaluate_backtest 深层边缘 ──────────────────────
+
 
 class TestEvaluateBacktestDeep:
     """补齐 evaluate_backtest 的空数据/单行数据分支。"""
@@ -523,6 +597,7 @@ class TestEvaluateBacktestDeep:
             source="manual",
         )
         import pandas as pd
+
         empty_df = pd.DataFrame()
         bt = evaluate_backtest(fp, empty_df, np.array([]))
         assert bt["ic"] == 0.0
@@ -544,12 +619,14 @@ class TestEvaluateBacktestDeep:
             source="manual",
         )
         import pandas as pd
+
         df = pd.DataFrame({"close": [100.0]}, index=pd.DatetimeIndex(["2024-01-01"]))
         bt = evaluate_backtest(fp, df, np.array([0.01]))
         assert bt["turnover_monthly"] == 0.0
 
 
 # ─── evaluate_walk_forward 边缘 ──────────────────────
+
 
 class TestEvaluateWalkForward:
     """覆盖 evaluate_walk_forward 的深层分支。"""
@@ -597,7 +674,9 @@ class TestEvaluateWalkForward:
             code="import numpy as np\ndef factor_program(data, params):\n    return np.zeros(len(data['close']))",
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=0),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="微小信号"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="微小信号"
+            ),
             source="manual",
         )
         dates = pd.date_range("2024-01-01", periods=500, freq="D")
@@ -630,7 +709,9 @@ class TestEvaluateWalkForward:
             ),
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-            economic_logic=EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4, narrative="走航全路径"),
+            economic_logic=EconomicLogic(
+                theory=4, behavioral=3, microstructure=3, institutional=4, narrative="走航全路径"
+            ),
             source="manual",
         )
         # 500 天数据，窗口配置：1年训练 + 1月步长 + 1月验证，1个窗口
@@ -648,6 +729,7 @@ class TestEvaluateWalkForward:
 
 # ─── EvaluationChain walk_forward 分支 ───────────────
 
+
 class TestEvaluationChainWalkForward:
     """覆盖 EvaluationChain.evaluate 的走航分支 (lines 342, 360-361)。"""
 
@@ -657,7 +739,6 @@ class TestEvaluationChainWalkForward:
         from fts.factor_engine.evaluation_chain import EvaluationChain
         from fts.factor_engine.factor_program import create_factor_program
         from fts.factor_engine.walk_forward import WalkForwardConfig
-        import pandas as pd
         import numpy as np
 
         fp = create_factor_program(
@@ -665,7 +746,9 @@ class TestEvaluationChainWalkForward:
             code="import numpy as np\ndef factor_program(data, params):\n    return np.zeros(len(data))",
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="走航失败"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="走航失败"
+            ),
             source="manual",
         )
         forward_returns = np.zeros(len(sample_ohlcv))
@@ -683,29 +766,34 @@ class TestEvaluationChainWalkForward:
 
 # ─── cross_section_evaluate_backtest ─────────────────
 
+
 class TestCrossSectionEvaluateBacktest:
     """覆盖 cross_section_evaluate_backtest (lines 462-562) 全分支。"""
 
     @staticmethod
-    def _make_panel(n_stocks: int, n_dates: int = 500, seed: int = 42) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+    def _make_panel(
+        n_stocks: int, n_dates: int = 500, seed: int = 42
+    ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
         """创建横截面 panel 数据。"""
         np.random.seed(seed)
         dates = pd.date_range("2024-01-01", periods=n_dates, freq="D")
         panel: dict[str, pd.DataFrame] = {}
         for i in range(n_stocks):
             close = 100 + np.cumsum(np.random.randn(n_dates) * 0.5)
-            panel[f"STK_{i}"] = pd.DataFrame({
-                "open": close + np.random.randn(n_dates) * 0.1,
-                "high": close + np.abs(np.random.randn(n_dates)) * 0.3,
-                "low": close - np.abs(np.random.randn(n_dates)) * 0.3,
-                "close": close,
-                "volume": np.random.randint(1000, 10000, n_dates).astype(float),
-            }, index=dates)
+            panel[f"STK_{i}"] = pd.DataFrame(
+                {
+                    "open": close + np.random.randn(n_dates) * 0.1,
+                    "high": close + np.abs(np.random.randn(n_dates)) * 0.3,
+                    "low": close - np.abs(np.random.randn(n_dates)) * 0.3,
+                    "close": close,
+                    "volume": np.random.randint(1000, 10000, n_dates).astype(float),
+                },
+                index=dates,
+            )
         return panel, dates
 
     def test_normal_panel(self):
         """正常 panel（10 只股票）应返回有效 BacktestMetrics。"""
-        import pandas as pd
         from fts.factor_engine.contracts import EconomicLogic, FactorSignature
         from fts.factor_engine.evaluation_chain import cross_section_evaluate_backtest
         from fts.factor_engine.factor_program import create_factor_program
@@ -724,7 +812,9 @@ class TestCrossSectionEvaluateBacktest:
             ),
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-            economic_logic=EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4, narrative="横截面测试"),
+            economic_logic=EconomicLogic(
+                theory=4, behavioral=3, microstructure=3, institutional=4, narrative="横截面测试"
+            ),
             source="manual",
         )
         panel, dates = self._make_panel(10)
@@ -736,7 +826,6 @@ class TestCrossSectionEvaluateBacktest:
 
     def test_few_stocks(self):
         """少于 5 只股票 → 返回零值 BacktestMetrics (line 483-487)。"""
-        import pandas as pd
         from fts.factor_engine.contracts import EconomicLogic, FactorSignature
         from fts.factor_engine.evaluation_chain import cross_section_evaluate_backtest
         from fts.factor_engine.factor_program import create_factor_program
@@ -757,7 +846,6 @@ class TestCrossSectionEvaluateBacktest:
 
     def test_nan_in_signal(self):
         """因子信号含 NaN → 在 IC 计算中被过滤。"""
-        import pandas as pd
         from fts.factor_engine.contracts import EconomicLogic, FactorSignature
         from fts.factor_engine.evaluation_chain import cross_section_evaluate_backtest
         from fts.factor_engine.factor_program import create_factor_program
@@ -775,7 +863,9 @@ class TestCrossSectionEvaluateBacktest:
             ),
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="NaN信号"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="NaN信号"
+            ),
             source="manual",
         )
         panel, dates = self._make_panel(10, n_dates=200)
@@ -796,28 +886,31 @@ class TestCrossSectionEvaluateBacktest:
             code="import numpy as np\ndef factor_program(data, params):\n    return np.zeros(len(data['close']))",
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="恒定信号"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="恒定信号"
+            ),
             source="manual",
         )
         # 使用恒定 close 价格 → forward_returns 全为零 → 收益率恒定
         dates = pd.date_range("2024-01-01", periods=200, freq="D")
         panel = {}
         for i in range(10):
-            panel[f"C_{i}"] = pd.DataFrame({
-                "close": np.ones(200) * 100.0,
-                "open": np.ones(200) * 100.0,
-                "high": np.ones(200) * 100.5,
-                "low": np.ones(200) * 99.5,
-                "volume": np.ones(200) * 1000,
-            }, index=dates)
+            panel[f"C_{i}"] = pd.DataFrame(
+                {
+                    "close": np.ones(200) * 100.0,
+                    "open": np.ones(200) * 100.0,
+                    "high": np.ones(200) * 100.5,
+                    "low": np.ones(200) * 99.5,
+                    "volume": np.ones(200) * 1000,
+                },
+                index=dates,
+            )
         bt = cross_section_evaluate_backtest(fp, panel, dates)
         assert bt["ic"] == 0.0
         assert bt["t_stat"] == 0.0
 
     def test_exception_in_executor(self):
         """因子执行异常 → 被 except 捕获并 continue (lines 480-481)。"""
-        import pandas as pd
-        import numpy as np
         from fts.factor_engine.contracts import EconomicLogic, FactorSignature
         from fts.factor_engine.evaluation_chain import cross_section_evaluate_backtest
         from fts.factor_engine.factor_program import create_factor_program
@@ -828,7 +921,9 @@ class TestCrossSectionEvaluateBacktest:
             code="import numpy as np\ndef factor_program(data, params):\n    return np.array(data['nonexistent'])",
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="异常因子"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="异常因子"
+            ),
             source="manual",
         )
         panel, dates = self._make_panel(10)
@@ -838,8 +933,6 @@ class TestCrossSectionEvaluateBacktest:
 
     def test_t_stat_zero_std(self):
         """ls_returns 标准差为零 → t_stat = 0.0 (line 560)。"""
-        import pandas as pd
-        import numpy as np
         from unittest import mock
         from fts.factor_engine.contracts import EconomicLogic, FactorSignature
         from fts.factor_engine.evaluation_chain import cross_section_evaluate_backtest
@@ -860,7 +953,9 @@ class TestCrossSectionEvaluateBacktest:
             ),
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-            economic_logic=EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4, narrative="t_stat零"),
+            economic_logic=EconomicLogic(
+                theory=4, behavioral=3, microstructure=3, institutional=4, narrative="t_stat零"
+            ),
             source="manual",
         )
         panel, dates = self._make_panel(10, n_dates=200)
@@ -889,7 +984,9 @@ class TestCrossSectionEvaluateBacktest:
             ),
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-            economic_logic=EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4, narrative="行业中性化测试"),
+            economic_logic=EconomicLogic(
+                theory=4, behavioral=3, microstructure=3, institutional=4, narrative="行业中性化测试"
+            ),
             source="manual",
         )
         panel, dates = self._make_panel(10)
@@ -920,14 +1017,19 @@ class TestCrossSectionEvaluateBacktest:
             ),
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-            economic_logic=EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4, narrative="中性化前后IC对比"),
+            economic_logic=EconomicLogic(
+                theory=4, behavioral=3, microstructure=3, institutional=4, narrative="中性化前后IC对比"
+            ),
             source="manual",
         )
         panel, dates = self._make_panel(10)
         industry_map = {f"STK_{i}": ("A" if i < 5 else "B") for i in range(10)}
         # 带中性化：应输出 ic_pre_neutral 字段
         bt_neutral = cross_section_evaluate_backtest(
-            fp, panel, dates, industry_map=industry_map,
+            fp,
+            panel,
+            dates,
+            industry_map=industry_map,
         )
         assert "ic_pre_neutral" in bt_neutral
         assert isinstance(bt_neutral["ic_pre_neutral"], float)
@@ -955,14 +1057,20 @@ class TestCrossSectionEvaluateBacktest:
             ),
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
-            economic_logic=EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4, narrative="双重中性化测试"),
+            economic_logic=EconomicLogic(
+                theory=4, behavioral=3, microstructure=3, institutional=4, narrative="双重中性化测试"
+            ),
             source="manual",
         )
         panel, dates = self._make_panel(10)
         industry_map = {f"STK_{i}": ("A" if i < 5 else "B") for i in range(10)}
         cap_map = {f"STK_{i}": float(100 * (i + 1)) for i in range(10)}
         bt = cross_section_evaluate_backtest(
-            fp, panel, dates, industry_map=industry_map, cap_map=cap_map,
+            fp,
+            panel,
+            dates,
+            industry_map=industry_map,
+            cap_map=cap_map,
         )
         assert "ic" in bt
         assert "sharpe" in bt
@@ -970,15 +1078,18 @@ class TestCrossSectionEvaluateBacktest:
 
 # ─── _neutralize_signal_matrix ─────────────────────────
 
+
 class TestNeutralizeSignalMatrix:
     """覆盖 _neutralize_signal_matrix 全分支。"""
 
     def test_industry_demean(self):
         """按行业去均值后同行业残差和应接近 0。"""
-        matrix = np.array([
-            [1.0, 2.0, 3.0, 4.0],   # 行业 A,A,B,B
-            [5.0, 6.0, 7.0, 8.0],
-        ])
+        matrix = np.array(
+            [
+                [1.0, 2.0, 3.0, 4.0],  # 行业 A,A,B,B
+                [5.0, 6.0, 7.0, 8.0],
+            ]
+        )
         symbols = ["s1", "s2", "s3", "s4"]
         industry_map = {"s1": "A", "s2": "A", "s3": "B", "s4": "B"}
         result = _neutralize_signal_matrix(matrix, symbols, industry_map)
@@ -991,10 +1102,12 @@ class TestNeutralizeSignalMatrix:
 
     def test_industry_cap_demean(self):
         """行业去均值 + 市值加权去均值后全截面加权残差和≈0。"""
-        matrix = np.array([
-            [1.0, 2.0, 3.0, 4.0],
-            [5.0, 6.0, 7.0, 8.0],
-        ])
+        matrix = np.array(
+            [
+                [1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0],
+            ]
+        )
         symbols = ["s1", "s2", "s3", "s4"]
         industry_map = {"s1": "A", "s2": "A", "s3": "B", "s4": "B"}
         cap_map = {"s1": 1.0, "s2": 1.0, "s3": 1.0, "s4": 1.0}
@@ -1004,10 +1117,12 @@ class TestNeutralizeSignalMatrix:
 
     def test_nan_handling(self):
         """NaN 值应被排除在中性化计算外，且不抛异常。"""
-        matrix = np.array([
-            [1.0, np.nan, 3.0, 4.0],
-            [5.0, 6.0, np.nan, 8.0],
-        ])
+        matrix = np.array(
+            [
+                [1.0, np.nan, 3.0, 4.0],
+                [5.0, 6.0, np.nan, 8.0],
+            ]
+        )
         symbols = ["s1", "s2", "s3", "s4"]
         industry_map = {"s1": "A", "s2": "A", "s3": "B", "s4": "B"}
         result = _neutralize_signal_matrix(matrix, symbols, industry_map)
@@ -1029,6 +1144,7 @@ class TestNeutralizeSignalMatrix:
 
 
 # ─── vwap 近似因子通用 IC 门槛（v2.50.0 审计层统一） ─────
+
 
 class TestVwapICGate:
     """vwap 近似因子通用 IC 门槛：code 含 vwap 且 abs(IC)<0.08 判失败。
@@ -1057,19 +1173,29 @@ class TestVwapICGate:
         """受控执行 evaluate()：mock 各评估子模块，仅 bt.ic 可变。"""
         from unittest import mock
 
-        with mock.patch(
-            "fts.factor_engine.evaluation_chain.evaluate_backtest",
-            return_value=TestVwapICGate._make_bt(ic),
-        ), mock.patch(
-            "fts.factor_engine.evaluation_chain.evaluate_economic_logic",
-            return_value={"theory": 4, "behavioral": 4, "microstructure": 4,
-                          "institutional": 4, "dimensions_passed": 3},
-        ), mock.patch(
-            "fts.factor_engine.evaluation_chain.evaluate_multiple_tests",
-            return_value={"passed": True, "adjusted_t": 3.5, "fdr_q": 0.01},
-        ), mock.patch(
-            "fts.factor_engine.evaluation_chain.evaluate_walk_forward",
-            return_value=None,
+        with (
+            mock.patch(
+                "fts.factor_engine.evaluation_chain.evaluate_backtest",
+                return_value=TestVwapICGate._make_bt(ic),
+            ),
+            mock.patch(
+                "fts.factor_engine.evaluation_chain.evaluate_economic_logic",
+                return_value={
+                    "theory": 4,
+                    "behavioral": 4,
+                    "microstructure": 4,
+                    "institutional": 4,
+                    "dimensions_passed": 3,
+                },
+            ),
+            mock.patch(
+                "fts.factor_engine.evaluation_chain.evaluate_multiple_tests",
+                return_value={"passed": True, "adjusted_t": 3.5, "fdr_q": 0.01},
+            ),
+            mock.patch(
+                "fts.factor_engine.evaluation_chain.evaluate_walk_forward",
+                return_value=None,
+            ),
         ):
             return EvaluationChain().evaluate(factor, data, fwd)
 

@@ -85,9 +85,7 @@ class TestFactorReturnsBuilder:
         """信号矩阵与收益矩阵维度不匹配应抛 ValueError。"""
         signal, fwd, dates, fids = _make_panel()
         with pytest.raises(ValueError, match="维度"):
-            FactorReturnsBuilder().build_from_panel(
-                signal, fwd[:-1], dates, fids
-            )
+            FactorReturnsBuilder().build_from_panel(signal, fwd[:-1], dates, fids)
 
     def test_invalid_quantile_raises(self):
         """quantile 越界应抛 ValueError。"""
@@ -131,11 +129,13 @@ class TestFactorReturnsBuilder:
         """组合内最大 |相关性|（对角剔除）。"""
         rng = np.random.default_rng(3)
         x = rng.normal(size=(100,))
-        fr = pd.DataFrame({
-            "a": x,
-            "b": x + 0.01 * rng.normal(size=100),   # 与 a 高相关
-            "c": rng.normal(size=100),               # 独立
-        })
+        fr = pd.DataFrame(
+            {
+                "a": x,
+                "b": x + 0.01 * rng.normal(size=100),  # 与 a 高相关
+                "c": rng.normal(size=100),  # 独立
+            }
+        )
         max_corr = FactorReturnsBuilder.max_abs_correlation(fr)
         assert max_corr > 0.9
         # 单因子 → 0.0

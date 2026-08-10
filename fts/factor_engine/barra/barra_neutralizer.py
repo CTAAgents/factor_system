@@ -173,7 +173,9 @@ def barra_neutralize_matrix(
     if n_styles > 0:
         logger.debug(
             "[BarraNeutralizer] 完成 %d 期截面回归，使用 %d 个风格暴露 + %d 行业列",
-            n_dates, n_styles, industry_dummies.shape[1] if industry_dummies.size else 0,
+            n_dates,
+            n_styles,
+            industry_dummies.shape[1] if industry_dummies.size else 0,
         )
     return result
 

@@ -31,10 +31,11 @@ logger = logging.getLogger(__name__)
 
 # ─── 默认参数 ──────────────────────────────────────────────
 
-_DEFAULT_ROLLING = 20        # 滚动窗口默认值
+_DEFAULT_ROLLING = 20  # 滚动窗口默认值
 
 
 # ─── 单个特征提取 ──────────────────────────────────────────
+
 
 def volume_shock(ohlcv: pd.DataFrame, window: int = _DEFAULT_ROLLING) -> float:
     """成交量冲击因子: (vol - vol_ma) / vol_ma
@@ -197,9 +198,7 @@ def cross_symbol_correlation(
     recent = rets_df.iloc[-window:]
     corr_matrix = recent.corr()
     # 提取上三角均值（排除对角线）
-    triu = corr_matrix.where(
-        np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
-    )
+    triu = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
     values = triu.stack().values
     if len(values) == 0:
         return 0.0
@@ -207,6 +206,7 @@ def cross_symbol_correlation(
 
 
 # ─── 综合特征提取 ──────────────────────────────────────────
+
 
 def compute_extended_features(
     ohlcv: pd.DataFrame,
@@ -235,9 +235,7 @@ def compute_extended_features(
 
     # 跨品种相关性
     if panel is not None and sector_symbols is not None:
-        features["cross_corr_mean"] = round(
-            cross_symbol_correlation(panel, sector_symbols), 6
-        )
+        features["cross_corr_mean"] = round(cross_symbol_correlation(panel, sector_symbols), 6)
     else:
         features["cross_corr_mean"] = 0.0
 
@@ -272,8 +270,8 @@ def compute_hmm_feature_vector(
 
     rets = close.pct_change().dropna()
     if base_features is None:
-        rets_vals = rets.values.reshape(-1, 1)
-        vol = rets.rolling(20).std().fillna(0).values.reshape(-1, 1)
+        rets_vals = rets.to_numpy().reshape(-1, 1)
+        vol = rets.rolling(20).std().fillna(0).to_numpy().reshape(-1, 1)
         base_features = np.column_stack([rets_vals, vol])
 
     n = base_features.shape[0]
@@ -289,11 +287,11 @@ def compute_hmm_feature_vector(
         ext_features_list.append(shock[-n:])
 
     # 偏度（滚动 20d）
-    skew = rets.rolling(20, min_periods=5).skew().fillna(0).values.reshape(-1, 1)
+    skew = rets.rolling(20, min_periods=5).skew().fillna(0).to_numpy().reshape(-1, 1)
     ext_features_list.append(skew[-n:])
 
     # 峰度（滚动 20d）
-    kurt = (rets.rolling(20, min_periods=5).kurt() + 3).fillna(3).values.reshape(-1, 1)
+    kurt = (rets.rolling(20, min_periods=5).kurt() + 3).fillna(3).to_numpy().reshape(-1, 1)
     ext_features_list.append(kurt[-n:])
 
     # 自相关（滚动 20d）
@@ -302,7 +300,8 @@ def compute_hmm_feature_vector(
             lambda x: x.autocorr(lag=lag) if len(x) > lag else 0.0,
             raw=False,
         )
-    acf1 = _rolling_autocorr(rets, lag=1).fillna(0).values.reshape(-1, 1)
+
+    acf1 = _rolling_autocorr(rets, lag=1).fillna(0).to_numpy().reshape(-1, 1)
     ext_features_list.append(acf1[-n:])
 
     # 日内波幅比
@@ -310,7 +309,7 @@ def compute_hmm_feature_vector(
         high = ohlcv["high"].reindex(rets.index).ffill()
         low = ohlcv["low"].reindex(rets.index).ffill()
         c = close.reindex(rets.index)
-        range_ratio = ((high - low) / (c + 1e-12)).fillna(0).values.reshape(-1, 1)
+        range_ratio = ((high - low) / (c + 1e-12)).fillna(0).to_numpy().reshape(-1, 1)
         ext_features_list.append(range_ratio[-n:])
 
     if ext_features_list:

@@ -11,7 +11,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import duckdb
-import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -47,22 +46,35 @@ def main() -> int:
     print("Step 2: Mock TQ-Local 响应")
     print("=" * 70)
     tq_response = {
-        "jsonrpc": "2.0", "id": 1,
+        "jsonrpc": "2.0",
+        "id": 1,
         "result": {
             "symbol": "RB0.SHFE",
             "rows": [
                 {
                     "date": "2026-08-01",
-                    "open": 3500, "high": 3550, "low": 3490, "close": 3540,
-                    "volume": 100000, "amount": 350000000,
-                    "hold": 80000, "settle": 3540, "pre_settle": 3520,
+                    "open": 3500,
+                    "high": 3550,
+                    "low": 3490,
+                    "close": 3540,
+                    "volume": 100000,
+                    "amount": 350000000,
+                    "hold": 80000,
+                    "settle": 3540,
+                    "pre_settle": 3520,
                     "oi_change": 2000,
                 },
                 {
                     "date": "2026-08-04",
-                    "open": 3540, "high": 3600, "low": 3530, "close": 3580,
-                    "volume": 120000, "amount": 420000000,
-                    "hold": 82000, "settle": 3580, "pre_settle": 3540,
+                    "open": 3540,
+                    "high": 3600,
+                    "low": 3530,
+                    "close": 3580,
+                    "volume": 120000,
+                    "amount": 420000000,
+                    "hold": 82000,
+                    "settle": 3580,
+                    "pre_settle": 3540,
                     "oi_change": 2000,
                 },
             ],
@@ -74,12 +86,11 @@ def main() -> int:
     print("=" * 70)
     print("Step 3: TQLocalSource.fetch_ohlcv('RB0')")
     print("=" * 70)
-    with patch("fts.data_sources.tq_source.requests.post",
-               return_value=_ok(tq_response)):
+    with patch("fts.data_sources.tq_source.requests.post", return_value=_ok(tq_response)):
         df = TQLocalSource().fetch_ohlcv("RB0", days=30, trace_id="verify-001")
     print(f"  返回 DataFrame: {len(df)} 行 × {len(df.columns)} 列")
     print(f"  列: {list(df.columns)}")
-    print(f"  样本:")
+    print("  样本:")
     for col in df.columns:
         print(f"    {col:<14} {df[col].iloc[0]}")
 
@@ -119,8 +130,7 @@ def main() -> int:
             FROM kline_cache
         """).fetchone()
         expected = 2
-        field_names = ["hold", "settle", "pre_settle", "oi_change",
-                       "vwap", "source", "trace_id", "fetched_at"]
+        field_names = ["hold", "settle", "pre_settle", "oi_change", "vwap", "source", "trace_id", "fetched_at"]
         all_pass = True
         for name, val in zip(field_names, new_field_stats):
             ok = "✓" if val == expected else "✗"
@@ -141,8 +151,9 @@ def main() -> int:
         for d, amt, vol, vwap in rows:
             expected_vwap = amt / vol
             ok = "✓" if abs(vwap - expected_vwap) < 0.01 else "✗"
-            print(f"  {ok} {str(d):<12} amount={amt:>12,} volume={vol:>10,} "
-                  f"vwap={vwap:>10.2f} (期望 {expected_vwap:.2f})")
+            print(
+                f"  {ok} {str(d):<12} amount={amt:>12,} volume={vol:>10,} vwap={vwap:>10.2f} (期望 {expected_vwap:.2f})"
+            )
             assert abs(vwap - expected_vwap) < 0.01, f"vwap 不对: {vwap} != {expected_vwap}"
 
         # ─── Step 7: 验证 source 标识 ──
@@ -159,9 +170,7 @@ def main() -> int:
         print("=" * 70)
         print("Step 8: 验证 trace_id 全链路")
         print("=" * 70)
-        traces = con.execute(
-            "SELECT DISTINCT trace_id, count(*) FROM kline_cache GROUP BY trace_id"
-        ).fetchall()
+        traces = con.execute("SELECT DISTINCT trace_id, count(*) FROM kline_cache GROUP BY trace_id").fetchall()
         for t, n in traces:
             print(f"  trace_id={t!r}  行数={n}")
             assert t == "verify-001"
@@ -171,9 +180,7 @@ def main() -> int:
         print("=" * 70)
         print("Step 9: 验证 idx_kline_symbol_date_source 索引可查")
         print("=" * 70)
-        idx = con.execute(
-            "SELECT index_name FROM duckdb_indexes() WHERE table_name='kline_cache'"
-        ).fetchall()
+        idx = con.execute("SELECT index_name FROM duckdb_indexes() WHERE table_name='kline_cache'").fetchall()
         print(f"  索引: {[r[0] for r in idx]}")
         assert any(r[0] == "idx_kline_symbol_date_source" for r in idx)
 

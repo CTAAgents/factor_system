@@ -7,6 +7,7 @@
            | number                # 数值常量
     args  := term ("," term)*
 """
+
 from __future__ import annotations
 
 from .ast import ExprNode
@@ -28,9 +29,7 @@ class ExprParser:
         node = self._parse_term()
         self._skip_ws()
         if self.pos != self.n:
-            raise FTSExprError(
-                f"解析失败: 位置 {self.pos} 存在多余内容 '{self.text[self.pos:]}'"
-            )
+            raise FTSExprError(f"解析失败: 位置 {self.pos} 存在多余内容 '{self.text[self.pos :]}'")
         return node
 
     def _skip_ws(self) -> None:
@@ -43,8 +42,7 @@ class ExprParser:
     def _parse_term(self) -> ExprNode:
         self._skip_ws()
         ch = self._peek()
-        if ch and (ch.isdigit() or (ch == "-" and self.pos + 1 < self.n
-                                    and self.text[self.pos + 1].isdigit())):
+        if ch and (ch.isdigit() or (ch == "-" and self.pos + 1 < self.n and self.text[self.pos + 1].isdigit())):
             return self._parse_number()
         name = self._parse_ident()
         if self._peek() == "(":
@@ -68,24 +66,20 @@ class ExprParser:
     def _parse_ident(self) -> str:
         self._skip_ws()
         start = self.pos
-        while self.pos < self.n and (
-            self.text[self.pos].isalnum() or self.text[self.pos] == "_"
-        ):
+        while self.pos < self.n and (self.text[self.pos].isalnum() or self.text[self.pos] == "_"):
             self.pos += 1
         if start == self.pos:
             raise FTSExprError(f"位置 {self.pos}: 期望标识符, 实际 '{self._peek()}'")
-        return self.text[start:self.pos]
+        return self.text[start : self.pos]
 
     def _parse_number(self) -> ExprNode:
         self._skip_ws()
         start = self.pos
         if self._peek() == "-":
             self.pos += 1
-        while self.pos < self.n and (
-            self.text[self.pos].isdigit() or self.text[self.pos] == "."
-        ):
+        while self.pos < self.n and (self.text[self.pos].isdigit() or self.text[self.pos] == "."):
             self.pos += 1
-        text = self.text[start:self.pos]
+        text = self.text[start : self.pos]
         if text in ("", "-", "."):
             raise FTSExprError(f"位置 {start}: 非法数值 '{text}'")
         return ExprNode(op=text, kind="const")

@@ -10,12 +10,9 @@ HARNESS §契约优先：所有模块必须基于本文件的 TypedDict/常量�
 
 from __future__ import annotations
 
-from typing import Any, Optional, TypedDict
+from typing import Optional, TypedDict
 
-try:
-    from typing import NotRequired  # Python 3.11+
-except ImportError:  # pragma: no cover - Python 3.10
-    from typing_extensions import NotRequired
+from typing_extensions import NotRequired  # Python 3.10+ 兼容（mypy 识别 typing_extensions 版本）
 
 # Re-export factor_engine 契约（从 loop_engine/contracts.py 迁移）
 from fts.factor_engine.contracts import (
@@ -69,6 +66,7 @@ from fts.factor_engine.contracts import (
 
 # ─── 数据融合契约 ──────────────────────────────────────────
 
+
 class FusedOHLCV(TypedDict, total=False):
     """多源融合 OHLCV 数据契约。
 
@@ -78,7 +76,9 @@ class FusedOHLCV(TypedDict, total=False):
 
     可选字段:
         amount, settle, disagreement_pct
+        hold, oi_change, pre_settle, vwap（期货扩展，Phase 14.4 兼容）
     """
+
     symbol: str
     date: str
     open: float
@@ -88,6 +88,10 @@ class FusedOHLCV(TypedDict, total=False):
     volume: float
     amount: Optional[float]
     settle: Optional[float]
+    hold: Optional[float]
+    oi_change: Optional[float]
+    pre_settle: Optional[float]
+    vwap: Optional[float]
     trace_id: str
     contributing_sources: list[str]
     fusion_strategy: str
@@ -97,6 +101,7 @@ class FusedOHLCV(TypedDict, total=False):
 
 # ─── 期货 K 线契约（Phase 14.4，v2.3.0 起）──────────────────
 
+
 class FuturesOHLCV(TypedDict, total=False):
     """期货单条 K 线数据契约。
 
@@ -105,6 +110,7 @@ class FuturesOHLCV(TypedDict, total=False):
 
     HARNESS §契约优先: 字段集合锁定，禁止任意加减。
     """
+
     symbol: str
     date: str
     open: float
@@ -129,6 +135,7 @@ class FuturesDataLineage(TypedDict, total=False):
     必填字段(5): trace_id/started_at/finished_at/symbols/rows_written
     可选字段(3): sources_used/sources_failed/disagreements
     """
+
     trace_id: str
     started_at: str
     finished_at: str
@@ -147,6 +154,7 @@ class FusionReport(TypedDict, total=False):
 
     CLI `fts data fuse` 的 JSON 输出、联调脚本报告落盘均使用本契约。
     """
+
     trace_id: str
     symbol: str
     strategy: str

@@ -29,11 +29,11 @@ SUPPORTED_PERIODS: dict[str, str] = {
 # 年化因子（按 trading days × 每分钟 bars 数）
 FREQUENCY_ANNUALIZATION: dict[str, float] = {
     "daily": 252.0,
-    "1m": 252.0 * 390.0,   # 390 分钟/交易日
-    "5m": 252.0 * 78.0,    # 78 个 5分/交易日
-    "15m": 252.0 * 26.0,   # 26 个 15分/交易日
-    "30m": 252.0 * 13.0,   # 13 个 30分/交易日
-    "60m": 252.0 * 6.5,    # 6.5 个 60分/交易日
+    "1m": 252.0 * 390.0,  # 390 分钟/交易日
+    "5m": 252.0 * 78.0,  # 78 个 5分/交易日
+    "15m": 252.0 * 26.0,  # 26 个 15分/交易日
+    "30m": 252.0 * 13.0,  # 13 个 30分/交易日
+    "60m": 252.0 * 6.5,  # 6.5 个 60分/交易日
 }
 
 
@@ -76,6 +76,7 @@ class AKShareMinuteSource(BaseFuturesSource):
         """探活：尝试加载 akshare 模块。"""
         try:
             import akshare as ak  # noqa: F401
+
             return True
         except ImportError:
             return False
@@ -143,6 +144,7 @@ class AKShareMinuteSource(BaseFuturesSource):
         """获取实时快照（分钟源不做快照，委托给 akshare 日线）。"""
         try:
             import akshare as ak
+
             df = ak.futures_zh_minute_sina(symbol=symbol, period="1")
             if df is not None and not df.empty:
                 last = df.iloc[-1]

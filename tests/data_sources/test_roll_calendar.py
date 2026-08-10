@@ -45,19 +45,83 @@ def _build_contract_db(db_path) -> None:
         rows = []
         for i, d in enumerate(dates):
             if i < 60:
-                rows.append(("RB", "RB2509", "daily", d.date(), 3490, 3510, 3480,
-                             3500 + i * 0.1, 100_000.0, 0.0, 50_000.0, 3500.0,
-                             "TEST", pd.Timestamp.now(), "t"))
-                rows.append(("RB", "RB2601", "daily", d.date(), 3590, 3610, 3580,
-                             3600 + i * 0.1, 10_000.0, 0.0, 5_000.0, 3600.0,
-                             "TEST", pd.Timestamp.now(), "t"))
+                rows.append(
+                    (
+                        "RB",
+                        "RB2509",
+                        "daily",
+                        d.date(),
+                        3490,
+                        3510,
+                        3480,
+                        3500 + i * 0.1,
+                        100_000.0,
+                        0.0,
+                        50_000.0,
+                        3500.0,
+                        "TEST",
+                        pd.Timestamp.now(),
+                        "t",
+                    )
+                )
+                rows.append(
+                    (
+                        "RB",
+                        "RB2601",
+                        "daily",
+                        d.date(),
+                        3590,
+                        3610,
+                        3580,
+                        3600 + i * 0.1,
+                        10_000.0,
+                        0.0,
+                        5_000.0,
+                        3600.0,
+                        "TEST",
+                        pd.Timestamp.now(),
+                        "t",
+                    )
+                )
             else:
-                rows.append(("RB", "RB2509", "daily", d.date(), 3490, 3510, 3480,
-                             3500 + i * 0.1, 10_000.0, 0.0, 5_000.0, 3500.0,
-                             "TEST", pd.Timestamp.now(), "t"))
-                rows.append(("RB", "RB2601", "daily", d.date(), 3590, 3610, 3580,
-                             3600 + i * 0.1, 100_000.0, 0.0, 50_000.0, 3600.0,
-                             "TEST", pd.Timestamp.now(), "t"))
+                rows.append(
+                    (
+                        "RB",
+                        "RB2509",
+                        "daily",
+                        d.date(),
+                        3490,
+                        3510,
+                        3480,
+                        3500 + i * 0.1,
+                        10_000.0,
+                        0.0,
+                        5_000.0,
+                        3500.0,
+                        "TEST",
+                        pd.Timestamp.now(),
+                        "t",
+                    )
+                )
+                rows.append(
+                    (
+                        "RB",
+                        "RB2601",
+                        "daily",
+                        d.date(),
+                        3590,
+                        3610,
+                        3580,
+                        3600 + i * 0.1,
+                        100_000.0,
+                        0.0,
+                        50_000.0,
+                        3600.0,
+                        "TEST",
+                        pd.Timestamp.now(),
+                        "t",
+                    )
+                )
         con.executemany(
             """
             INSERT INTO contract_kline VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -105,9 +169,26 @@ class TestRollCalendarBuild:
                 )
             """)
             dates = pd.date_range("2024-01-01", periods=30, freq="D")
-            rows = [("RB", "RB2509", "daily", d.date(), 3500, 3510, 3490,
-                     3500.0, 100.0, 0.0, 50.0, 3500.0, "TEST",
-                     pd.Timestamp.now(), "t") for d in dates]
+            rows = [
+                (
+                    "RB",
+                    "RB2509",
+                    "daily",
+                    d.date(),
+                    3500,
+                    3510,
+                    3490,
+                    3500.0,
+                    100.0,
+                    0.0,
+                    50.0,
+                    3500.0,
+                    "TEST",
+                    pd.Timestamp.now(),
+                    "t",
+                )
+                for d in dates
+            ]
             con.executemany("INSERT INTO contract_kline VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
         finally:
             con.close()
@@ -139,17 +220,65 @@ class TestRollCalendarBuild:
             for i, d in enumerate(dates):
                 # 前 3 日 RB2509 主力；第 4 日起 RB2601 主力，但切换日缺 RB2509 收盘
                 if i < 3:
-                    rows.append(("RB", "RB2509", "daily", d.date(), 3500, 3510, 3490,
-                                 3500.0, 100.0, 0.0, 50.0, 3500.0, "TEST",
-                                 pd.Timestamp.now(), "t"))
-                    rows.append(("RB", "RB2601", "daily", d.date(), 3600, 3610, 3590,
-                                 3600.0, 10.0, 0.0, 5.0, 3600.0, "TEST",
-                                 pd.Timestamp.now(), "t"))
+                    rows.append(
+                        (
+                            "RB",
+                            "RB2509",
+                            "daily",
+                            d.date(),
+                            3500,
+                            3510,
+                            3490,
+                            3500.0,
+                            100.0,
+                            0.0,
+                            50.0,
+                            3500.0,
+                            "TEST",
+                            pd.Timestamp.now(),
+                            "t",
+                        )
+                    )
+                    rows.append(
+                        (
+                            "RB",
+                            "RB2601",
+                            "daily",
+                            d.date(),
+                            3600,
+                            3610,
+                            3590,
+                            3600.0,
+                            10.0,
+                            0.0,
+                            5.0,
+                            3600.0,
+                            "TEST",
+                            pd.Timestamp.now(),
+                            "t",
+                        )
+                    )
                 else:
                     # RB2509 第 4 日起无记录（缺失）
-                    rows.append(("RB", "RB2601", "daily", d.date(), 3600, 3610, 3590,
-                                 3600.0, 100.0, 0.0, 50.0, 3600.0, "TEST",
-                                 pd.Timestamp.now(), "t"))
+                    rows.append(
+                        (
+                            "RB",
+                            "RB2601",
+                            "daily",
+                            d.date(),
+                            3600,
+                            3610,
+                            3590,
+                            3600.0,
+                            100.0,
+                            0.0,
+                            50.0,
+                            3600.0,
+                            "TEST",
+                            pd.Timestamp.now(),
+                            "t",
+                        )
+                    )
             con.executemany("INSERT INTO contract_kline VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
         finally:
             con.close()
@@ -164,10 +293,22 @@ class TestAdjustFactors:
         """多换月事件 → 切换日之前数据乘所有后续 adj_ratio。"""
         dates = pd.date_range("2024-01-01", periods=30, freq="D")
         rolls = [
-            RollEvent(date=dates[10].date(), old_contract="A", new_contract="B",
-                      old_close=100.0, new_close=110.0, adj_ratio=1.10),
-            RollEvent(date=dates[20].date(), old_contract="B", new_contract="C",
-                      old_close=110.0, new_close=121.0, adj_ratio=1.10),
+            RollEvent(
+                date=dates[10].date(),
+                old_contract="A",
+                new_contract="B",
+                old_close=100.0,
+                new_close=110.0,
+                adj_ratio=1.10,
+            ),
+            RollEvent(
+                date=dates[20].date(),
+                old_contract="B",
+                new_contract="C",
+                old_close=110.0,
+                new_close=121.0,
+                adj_ratio=1.10,
+            ),
         ]
         factor = RollCalendar().compute_adjust_factors(dates, rolls)
         # 第 10 日之前: 1.10 × 1.10 = 1.21
@@ -195,14 +336,17 @@ class TestApplyAdjustment:
         db = tmp_path / "fts.duckdb"
         _build_contract_db(db)
         dates = pd.date_range("2024-01-01", periods=100, freq="D")
-        df = pd.DataFrame({
-            "open": np.linspace(3500, 3600, 100),
-            "high": np.linspace(3505, 3605, 100),
-            "low": np.linspace(3495, 3595, 100),
-            "close": np.linspace(3500, 3600, 100),
-            "volume": np.full(100, 1e5),
-            "settle": np.linspace(3500, 3600, 100),
-        }, index=dates)
+        df = pd.DataFrame(
+            {
+                "open": np.linspace(3500, 3600, 100),
+                "high": np.linspace(3505, 3605, 100),
+                "low": np.linspace(3495, 3595, 100),
+                "close": np.linspace(3500, 3600, 100),
+                "volume": np.full(100, 1e5),
+                "settle": np.linspace(3500, 3600, 100),
+            },
+            index=dates,
+        )
         rc = RollCalendar(str(db))
         result, rolls = rc.apply_adjustment(df, "RB0")
         assert len(rolls) == 1
@@ -249,21 +393,27 @@ class TestRollCostInBacktest:
         roll_dates = {str(dates[10].date())}
 
         returns_base, positions, _ = pipeline._compute_strategy_returns(
-            factor_values, forward_returns,
-            cost_rate=0.0003, slippage=0.0001,
-            dates=dates, roll_dates=None, roll_cost_bps=10.0,
+            factor_values,
+            forward_returns,
+            cost_rate=0.0003,
+            slippage=0.0001,
+            dates=dates,
+            roll_dates=None,
+            roll_cost_bps=10.0,
         )
         returns_roll, _, _ = pipeline._compute_strategy_returns(
-            factor_values, forward_returns,
-            cost_rate=0.0003, slippage=0.0001,
-            dates=dates, roll_dates=roll_dates, roll_cost_bps=10.0,
+            factor_values,
+            forward_returns,
+            cost_rate=0.0003,
+            slippage=0.0001,
+            dates=dates,
+            roll_dates=roll_dates,
+            roll_cost_bps=10.0,
         )
         # 第 10 日确已建仓
         assert abs(positions[10]) > 1e-8
         # 换月日扣除 |position[10]| × 10bps，其余收益不受影响
-        assert returns_roll[10] == pytest.approx(
-            returns_base[10] - abs(positions[10]) * (10.0 / 10000.0), abs=1e-12
-        )
+        assert returns_roll[10] == pytest.approx(returns_base[10] - abs(positions[10]) * (10.0 / 10000.0), abs=1e-12)
         assert returns_roll[5] == pytest.approx(returns_base[5], abs=1e-12)
 
     def test_no_roll_dates_no_cost(self):
@@ -277,15 +427,20 @@ class TestRollCostInBacktest:
         dates = pd.date_range("2024-01-01", periods=n, freq="D")
 
         returns, _, _ = pipeline._compute_strategy_returns(
-            factor_values, forward_returns,
-            cost_rate=0.0003, slippage=0.0001,
-            dates=dates, roll_dates=None, roll_cost_bps=10.0,
+            factor_values,
+            forward_returns,
+            cost_rate=0.0003,
+            slippage=0.0001,
+            dates=dates,
+            roll_dates=None,
+            roll_cost_bps=10.0,
         )
         assert returns[10] == pytest.approx(0.0, abs=1e-9)
 
     def test_backtest_input_roll_fields(self):
         """BacktestInput 支持 roll_dates / roll_cost_bps 字段。"""
         from fts.factor_engine.backtest_pipeline import BacktestInput
+
         inp = BacktestInput(
             factor={"factor_id": "fct_x", "code": "x"},
             data=pd.DataFrame({"close": [1.0]}),
@@ -304,12 +459,14 @@ class TestConfigDefaults:
 
     def test_defaults(self):
         from fts.config.settings import FTSConfig
+
         cfg = FTSConfig()
         assert cfg.futures_adjusted is True
         assert cfg.roll_cost_bps == pytest.approx(2.0)
 
     def test_env_overrides(self, monkeypatch):
         from fts.config.settings import load_config
+
         monkeypatch.setenv("FTS_FUTURES_ADJUSTED", "false")
         monkeypatch.setenv("FTS_ROLL_COST_BPS", "5.5")
         cfg = load_config(config_path=None)
@@ -328,13 +485,16 @@ class TestGetOhlcvAdjusted:
         from fts.data_futures import FuturesDataProvider
 
         dates = pd.date_range("2024-01-01", periods=10, freq="D")
-        raw = pd.DataFrame({
-            "open": np.linspace(3500, 3600, 10),
-            "high": np.linspace(3505, 3605, 10),
-            "low": np.linspace(3495, 3595, 10),
-            "close": np.linspace(3500, 3600, 10),
-            "volume": np.full(10, 1e5),
-        }, index=dates)
+        raw = pd.DataFrame(
+            {
+                "open": np.linspace(3500, 3600, 10),
+                "high": np.linspace(3505, 3605, 10),
+                "low": np.linspace(3495, 3595, 10),
+                "close": np.linspace(3500, 3600, 10),
+                "volume": np.full(10, 1e5),
+            },
+            index=dates,
+        )
 
         provider = FuturesDataProvider(use_akshare_fallback=False)
 
@@ -346,7 +506,8 @@ class TestGetOhlcvAdjusted:
                 return result, ["roll_event"]
 
         monkeypatch.setattr(
-            "fts.data_sources.roll_calendar.RollCalendar", lambda *a, **k: _FakeRoll(),
+            "fts.data_sources.roll_calendar.RollCalendar",
+            lambda *a, **k: _FakeRoll(),
         )
 
         # adjusted=True → 走复权

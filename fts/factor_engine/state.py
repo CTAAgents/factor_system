@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from ..core.atomic import atomic_write, atomic_write_state
+from ..core.atomic import atomic_write
 from .contracts import (
     DEFAULT_BUDGET_CONFIG,
     STATE_SCHEMA_VERSION,
@@ -38,6 +38,7 @@ class StateError(Exception):
 
 
 # ─── trace_id 生成 ────────────────────────────────────────
+
 
 def generate_trace_id(prefix: str = "l2") -> str:
     """生成全局唯一 trace_id: <prefix>_<8hex>_<timestamp>。
@@ -66,6 +67,7 @@ def generate_session_id() -> str:
 
 
 # ─── 状态管理器 ───────────────────────────────────────────
+
 
 class EvolutionStateManager:
     """演化状态文件管理器。
@@ -122,9 +124,7 @@ class EvolutionStateManager:
         """
         # schema 版本一致性检查（仅状态结构变更时冷启动）
         if state.get("schema_version") != STATE_SCHEMA_VERSION:
-            raise StateError(
-                f"状态 schema 版本不匹配: {state.get('schema_version')} != {STATE_SCHEMA_VERSION}"
-            )
+            raise StateError(f"状态 schema 版本不匹配: {state.get('schema_version')} != {STATE_SCHEMA_VERSION}")
         # 更新时间戳
         state["last_updated"] = datetime.now().isoformat()
         # 先写主文件
@@ -170,16 +170,12 @@ class EvolutionStateManager:
 
     def increment_evaluated(self, state: EvolutionState, count: int = 1) -> None:
         """累加评估因子数。"""
-        state["total_factors_evaluated"] = (
-            state.get("total_factors_evaluated", 0) + count
-        )
+        state["total_factors_evaluated"] = state.get("total_factors_evaluated", 0) + count
         self.save(state)
 
     def increment_promoted(self, state: EvolutionState, count: int = 1) -> None:
         """累加晋级因子数。"""
-        state["total_factors_promoted"] = (
-            state.get("total_factors_promoted", 0) + count
-        )
+        state["total_factors_promoted"] = state.get("total_factors_promoted", 0) + count
         self.save(state)
 
     def add_experience_ref(self, state: EvolutionState, trace_id: str) -> None:

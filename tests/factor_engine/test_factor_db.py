@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -364,7 +363,7 @@ class TestVersionManagement:
     def test_rollback_to_version(self, repo, sample_factor):
         """测试回滚到指定版本。"""
         factor_id = repo.create_factor(sample_factor)
-        original_code = sample_factor["code"]
+        sample_factor["code"]
 
         # 更新因子
         repo.update_factor(factor_id, {"code": "def compute(): return modified", "code_hash": "hash2"})
@@ -391,15 +390,18 @@ class TestEvaluationManagement:
     def test_add_evaluation(self, repo, sample_factor):
         """测试添加评估记录。"""
         factor_id = repo.create_factor(sample_factor)
-        eval_id = repo.add_evaluation(factor_id, {
-            "ic": 0.06,
-            "icir": 1.5,
-            "sharpe": 2.8,
-            "max_drawdown": 0.12,
-            "turnover": 0.3,
-            "overall_passed": True,
-            "trace_id": "eval_trace_001",
-        })
+        eval_id = repo.add_evaluation(
+            factor_id,
+            {
+                "ic": 0.06,
+                "icir": 1.5,
+                "sharpe": 2.8,
+                "max_drawdown": 0.12,
+                "turnover": 0.3,
+                "overall_passed": True,
+                "trace_id": "eval_trace_001",
+            },
+        )
         assert eval_id.startswith("eval_")
 
         evaluations = repo.get_evaluations(factor_id)
@@ -410,10 +412,13 @@ class TestEvaluationManagement:
         """测试添加多条评估记录。"""
         factor_id = repo.create_factor(sample_factor)
         for i in range(3):
-            repo.add_evaluation(factor_id, {
-                "sharpe": 1.0 + i,
-                "overall_passed": True,
-            })
+            repo.add_evaluation(
+                factor_id,
+                {
+                    "sharpe": 1.0 + i,
+                    "overall_passed": True,
+                },
+            )
         evaluations = repo.get_evaluations(factor_id)
         assert len(evaluations) == 3
 
@@ -435,10 +440,12 @@ class TestContextManager:
     def test_context_manager(self, temp_db):
         """测试 with 语句支持。"""
         with FactorRepository(temp_db) as r:
-            factor_id = r.create_factor({
-                "name": "ctx_test",
-                "code": "return 1",
-            })
+            factor_id = r.create_factor(
+                {
+                    "name": "ctx_test",
+                    "code": "return 1",
+                }
+            )
             assert factor_id is not None
 
     def test_context_manager_closes_connection(self, temp_db):
@@ -514,9 +521,7 @@ class TestMigration:
                 "passed": True,
             },
         }
-        (elite_dir / "test_001.json").write_text(
-            json.dumps(sample_json, indent=2), encoding="utf-8"
-        )
+        (elite_dir / "test_001.json").write_text(json.dumps(sample_json, indent=2), encoding="utf-8")
 
         db_path = tmp_path / "test_migrate.duckdb"
         stats = migrate_factors(elite_dir, db_path, dry_run=True)
@@ -565,9 +570,7 @@ class TestMigration:
                 "generation": 1,
                 "decay_6m": 0.04,
             }
-            (elite_dir / f"test_{i:03d}.json").write_text(
-                json.dumps(data, indent=2), encoding="utf-8"
-            )
+            (elite_dir / f"test_{i:03d}.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
 
         db_path = tmp_path / "test_migrate.duckdb"
         stats = migrate_factors(elite_dir, db_path, force=True)
@@ -602,9 +605,7 @@ class TestMigration:
 
         # 创建元数据文件（应被跳过）
         meta_data = {"index": True, "count": 100}
-        (elite_dir / "_elite_index.json").write_text(
-            json.dumps(meta_data), encoding="utf-8"
-        )
+        (elite_dir / "_elite_index.json").write_text(json.dumps(meta_data), encoding="utf-8")
 
         # 创建正常因子文件
         factor_data = {
@@ -616,9 +617,7 @@ class TestMigration:
                 "passed": True,
             },
         }
-        (elite_dir / "real.json").write_text(
-            json.dumps(factor_data), encoding="utf-8"
-        )
+        (elite_dir / "real.json").write_text(json.dumps(factor_data), encoding="utf-8")
 
         db_path = tmp_path / "test_migrate.duckdb"
         stats = migrate_factors(elite_dir, db_path, force=True)
@@ -647,9 +646,7 @@ class TestMigration:
                 "passed": True,
             },
         }
-        (elite_dir / "valid.json").write_text(
-            json.dumps(valid_data), encoding="utf-8"
-        )
+        (elite_dir / "valid.json").write_text(json.dumps(valid_data), encoding="utf-8")
 
         db_path = tmp_path / "test_migrate.duckdb"
         stats = migrate_factors(elite_dir, db_path, force=True)
@@ -674,9 +671,7 @@ class TestMigration:
                 "passed": True,
             },
         }
-        (elite_dir / "idem.json").write_text(
-            json.dumps(data), encoding="utf-8"
-        )
+        (elite_dir / "idem.json").write_text(json.dumps(data), encoding="utf-8")
 
         db_path = tmp_path / "test_migrate.duckdb"
 
@@ -792,9 +787,7 @@ class TestAdvancedQueries:
             repo.create_factor(f)
 
         # 带市场和阈值过滤
-        factors = repo.get_by_family(
-            "family_1", market="stock", min_sharpe=1.5
-        )
+        factors = repo.get_by_family("family_1", market="stock", min_sharpe=1.5)
         for f in factors:
             assert f["family"] == "family_1"
             assert f["market"] == "stock"
@@ -825,9 +818,7 @@ class TestAdvancedQueries:
             repo.create_factor(f)
 
         # 只返回精英因子
-        eligible = repo.get_eligible(
-            market="stock", min_sharpe=1.5, require_elite=True
-        )
+        eligible = repo.get_eligible(market="stock", min_sharpe=1.5, require_elite=True)
         for f in eligible:
             assert f["market"] == "stock"
             assert f["sharpe"] >= 1.5
@@ -870,19 +861,23 @@ class TestAdvancedQueries:
     def test_get_factor_lineage(self, repo, sample_factor):
         """测试获取因子演化谱系。"""
         # 创建父因子
-        parent_id = repo.create_factor({
-            **sample_factor,
-            "name": "parent_factor",
-            "generation": 1,
-        })
+        parent_id = repo.create_factor(
+            {
+                **sample_factor,
+                "name": "parent_factor",
+                "generation": 1,
+            }
+        )
 
         # 创建子因子
-        child_id = repo.create_factor({
-            **sample_factor,
-            "name": "child_factor",
-            "parent_id": parent_id,
-            "generation": 2,
-        })
+        child_id = repo.create_factor(
+            {
+                **sample_factor,
+                "name": "child_factor",
+                "parent_id": parent_id,
+                "generation": 2,
+            }
+        )
 
         # 获取子因子谱系
         lineage = repo.get_factor_lineage(child_id)

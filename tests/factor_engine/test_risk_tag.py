@@ -21,6 +21,7 @@ from fts.factor_engine.seed_data.loader import make_factor_program
 
 # ─── 测试 loader 风险标签设置 ─────────────────────────────
 
+
 class TestLoaderRiskTag:
     """验证 loader 正确设置 risk_tag。"""
 
@@ -72,6 +73,7 @@ class TestLoaderRiskTag:
 
 # ─── 测试 evolution_loop 风险标签阈值 ─────────────────────
 
+
 class TestEvolutionLoopRiskTag:
     """验证 evolution_loop 对 vwap_approx 因子施加更高 IC 阈值。"""
 
@@ -82,13 +84,16 @@ class TestEvolutionLoopRiskTag:
         n = 200
         dates = pd.date_range("2024-01-01", periods=n, freq="D")
         close = 100 + np.cumsum(np.random.randn(n) * 0.5)
-        return pd.DataFrame({
-            "open": close + np.random.randn(n) * 0.1,
-            "high": close + np.abs(np.random.randn(n)) * 0.3,
-            "low": close - np.abs(np.random.randn(n)) * 0.3,
-            "close": close,
-            "volume": np.random.randint(1000, 10000, n).astype(float),
-        }, index=dates)
+        return pd.DataFrame(
+            {
+                "open": close + np.random.randn(n) * 0.1,
+                "high": close + np.abs(np.random.randn(n)) * 0.3,
+                "low": close - np.abs(np.random.randn(n)) * 0.3,
+                "close": close,
+                "volume": np.random.randint(1000, 10000, n).astype(float),
+            },
+            index=dates,
+        )
 
     @pytest.fixture
     def forward_returns(self) -> np.ndarray:
@@ -122,8 +127,10 @@ class TestEvolutionLoopRiskTag:
                 "oos_ratio": 0.35,
             },
             "level_2_economic": {
-                "theory": 4, "behavioral": 4,
-                "microstructure": 4, "institutional": 4,
+                "theory": 4,
+                "behavioral": 4,
+                "microstructure": 4,
+                "institutional": 4,
                 "dimensions_passed": 3,
             },
             "level_3_multiple": {"adjusted_t": 3.5, "fdr_q": 0.01, "passed": True},
@@ -158,18 +165,16 @@ class TestEvolutionLoopRiskTag:
         # 构造带风险标签的种子因子
         seed = create_factor_program(
             name="test_vwap_risk",
-            code='''
+            code="""
 def factor_program(data, params):
     import numpy as np
     close = data['close'].values if hasattr(data, 'close') else data['close']
     score = np.diff(close, prepend=close[0]) / np.maximum(close, 1e-10)
     return np.clip(np.nan_to_num(score, nan=0.0), -1.0, 1.0)
-''',
+""",
             params={},
-            signature={"input_fields": ["close"], "output_type": "signal",
-                       "frequency": "daily", "lookback": 2},
-            economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3,
-                            "institutional": 3, "narrative": "测试"},
+            signature={"input_fields": ["close"], "output_type": "signal", "frequency": "daily", "lookback": 2},
+            economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3, "narrative": "测试"},
             source="seed",
             risk_tag="vwap_approx",
         )
@@ -183,18 +188,28 @@ def factor_program(data, params):
 
         # Mock evaluation_chain.evaluate 返回 IC=0.06, passed=True
         # 注：非横截面模式下 _evaluate_and_promote_seeds 调用 evaluation_chain.evaluate
-        with patch.object(loop.evaluation_chain, 'evaluate',
-                          return_value=self._make_mock_evaluation(ic=0.06, passed=True)):
+        with patch.object(
+            loop.evaluation_chain, "evaluate", return_value=self._make_mock_evaluation(ic=0.06, passed=True)
+        ):
             elite_ids: list[str] = []
             promoted = loop._evaluate_and_promote_seeds(
-                seeds=[seed], trace_id="test", state={
-                    "run_id": "test", "started_at": "", "last_generation": 0,
-                    "total_factors_evaluated": 0, "total_factors_promoted": 0,
-                    "tokens_consumed": 0, "budget_limit": 200000,
-                    "status": "running", "last_error": None,
-                    "experience_chain_ref": [], "last_updated": "",
+                seeds=[seed],
+                trace_id="test",
+                state={
+                    "run_id": "test",
+                    "started_at": "",
+                    "last_generation": 0,
+                    "total_factors_evaluated": 0,
+                    "total_factors_promoted": 0,
+                    "tokens_consumed": 0,
+                    "budget_limit": 200000,
+                    "status": "running",
+                    "last_error": None,
+                    "experience_chain_ref": [],
+                    "last_updated": "",
                     "version": "1.0.0",
-                }, elite_ids=elite_ids,
+                },
+                elite_ids=elite_ids,
             )
             assert promoted == 0, "vwap_approx 因子 IC=0.06 不应晋升"
             assert len(elite_ids) == 0
@@ -205,18 +220,16 @@ def factor_program(data, params):
 
         seed = create_factor_program(
             name="test_vwap_risk_high",
-            code='''
+            code="""
 def factor_program(data, params):
     import numpy as np
     close = data['close'].values if hasattr(data, 'close') else data['close']
     score = np.diff(close, prepend=close[0]) / np.maximum(close, 1e-10)
     return np.clip(np.nan_to_num(score, nan=0.0), -1.0, 1.0)
-''',
+""",
             params={},
-            signature={"input_fields": ["close"], "output_type": "signal",
-                       "frequency": "daily", "lookback": 2},
-            economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3,
-                            "institutional": 3, "narrative": "测试"},
+            signature={"input_fields": ["close"], "output_type": "signal", "frequency": "daily", "lookback": 2},
+            economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3, "narrative": "测试"},
             source="seed",
             risk_tag="vwap_approx",
         )
@@ -229,20 +242,30 @@ def factor_program(data, params):
         )
 
         # Mock evaluation_chain.evaluate 返回 IC=0.09, passed=True
-        with patch.object(loop.evaluation_chain, 'evaluate',
-                          return_value=self._make_mock_evaluation(ic=0.09, passed=True)):
+        with patch.object(
+            loop.evaluation_chain, "evaluate", return_value=self._make_mock_evaluation(ic=0.09, passed=True)
+        ):
             # v2.50.0 新增全链审查 mock 通过（聚焦 vwap 门槛验证）
             self._mock_quality_gates_pass(loop)
             elite_ids: list[str] = []
             promoted = loop._evaluate_and_promote_seeds(
-                seeds=[seed], trace_id="test", state={
-                    "run_id": "test", "started_at": "", "last_generation": 0,
-                    "total_factors_evaluated": 0, "total_factors_promoted": 0,
-                    "tokens_consumed": 0, "budget_limit": 200000,
-                    "status": "running", "last_error": None,
-                    "experience_chain_ref": [], "last_updated": "",
+                seeds=[seed],
+                trace_id="test",
+                state={
+                    "run_id": "test",
+                    "started_at": "",
+                    "last_generation": 0,
+                    "total_factors_evaluated": 0,
+                    "total_factors_promoted": 0,
+                    "tokens_consumed": 0,
+                    "budget_limit": 200000,
+                    "status": "running",
+                    "last_error": None,
+                    "experience_chain_ref": [],
+                    "last_updated": "",
                     "version": "1.0.0",
-                }, elite_ids=elite_ids,
+                },
+                elite_ids=elite_ids,
             )
             assert promoted == 1, "vwap_approx 因子 IC=0.09 应晋升"
             assert len(elite_ids) == 1
@@ -253,18 +276,16 @@ def factor_program(data, params):
 
         seed = create_factor_program(
             name="test_no_risk",
-            code='''
+            code="""
 def factor_program(data, params):
     import numpy as np
     close = data['close'].values if hasattr(data, 'close') else data['close']
     score = np.diff(close, prepend=close[0]) / np.maximum(close, 1e-10)
     return np.clip(np.nan_to_num(score, nan=0.0), -1.0, 1.0)
-''',
+""",
             params={},
-            signature={"input_fields": ["close"], "output_type": "signal",
-                       "frequency": "daily", "lookback": 2},
-            economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3,
-                            "institutional": 3, "narrative": "测试"},
+            signature={"input_fields": ["close"], "output_type": "signal", "frequency": "daily", "lookback": 2},
+            economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3, "narrative": "测试"},
             source="seed",
             risk_tag=None,
         )
@@ -277,20 +298,30 @@ def factor_program(data, params):
         )
 
         # Mock evaluation_chain.evaluate 返回 IC=0.06, passed=True
-        with patch.object(loop.evaluation_chain, 'evaluate',
-                          return_value=self._make_mock_evaluation(ic=0.06, passed=True)):
+        with patch.object(
+            loop.evaluation_chain, "evaluate", return_value=self._make_mock_evaluation(ic=0.06, passed=True)
+        ):
             # v2.50.0 新增全链审查 mock 通过（聚焦默认 IC 门槛验证）
             self._mock_quality_gates_pass(loop)
             elite_ids: list[str] = []
             promoted = loop._evaluate_and_promote_seeds(
-                seeds=[seed], trace_id="test", state={
-                    "run_id": "test", "started_at": "", "last_generation": 0,
-                    "total_factors_evaluated": 0, "total_factors_promoted": 0,
-                    "tokens_consumed": 0, "budget_limit": 200000,
-                    "status": "running", "last_error": None,
-                    "experience_chain_ref": [], "last_updated": "",
+                seeds=[seed],
+                trace_id="test",
+                state={
+                    "run_id": "test",
+                    "started_at": "",
+                    "last_generation": 0,
+                    "total_factors_evaluated": 0,
+                    "total_factors_promoted": 0,
+                    "tokens_consumed": 0,
+                    "budget_limit": 200000,
+                    "status": "running",
+                    "last_error": None,
+                    "experience_chain_ref": [],
+                    "last_updated": "",
                     "version": "1.0.0",
-                }, elite_ids=elite_ids,
+                },
+                elite_ids=elite_ids,
             )
             assert promoted == 1, "无 risk_tag 因子 IC=0.06 应晋升"
             assert len(elite_ids) == 1
@@ -301,18 +332,16 @@ def factor_program(data, params):
         """构造无 risk_tag 的普通种子因子。"""
         return create_factor_program(
             name=name,
-            code='''
+            code="""
 def factor_program(data, params):
     import numpy as np
     close = data['close'].values if hasattr(data, 'close') else data['close']
     score = np.diff(close, prepend=close[0]) / np.maximum(close, 1e-10)
     return np.clip(np.nan_to_num(score, nan=0.0), -1.0, 1.0)
-''',
+""",
             params={},
-            signature={"input_fields": ["close"], "output_type": "signal",
-                       "frequency": "daily", "lookback": 2},
-            economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3,
-                            "institutional": 3, "narrative": "测试"},
+            signature={"input_fields": ["close"], "output_type": "signal", "frequency": "daily", "lookback": 2},
+            economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3, "narrative": "测试"},
             source="seed",
             risk_tag=None,
         )
@@ -320,18 +349,26 @@ def factor_program(data, params):
     @staticmethod
     def _seed_state() -> dict[str, Any]:
         return {
-            "run_id": "test", "started_at": "", "last_generation": 0,
-            "total_factors_evaluated": 0, "total_factors_promoted": 0,
-            "tokens_consumed": 0, "budget_limit": 200000,
-            "status": "running", "last_error": None,
-            "experience_chain_ref": [], "last_updated": "",
+            "run_id": "test",
+            "started_at": "",
+            "last_generation": 0,
+            "total_factors_evaluated": 0,
+            "total_factors_promoted": 0,
+            "tokens_consumed": 0,
+            "budget_limit": 200000,
+            "status": "running",
+            "last_error": None,
+            "experience_chain_ref": [],
+            "last_updated": "",
             "version": "1.0.0",
         }
 
     def _run_seed_promotion(self, loop, seed) -> int:
         elite_ids: list[str] = []
         promoted = loop._evaluate_and_promote_seeds(
-            seeds=[seed], trace_id="test", state=self._seed_state(),
+            seeds=[seed],
+            trace_id="test",
+            state=self._seed_state(),
             elite_ids=elite_ids,
         )
         return promoted
@@ -350,10 +387,10 @@ def factor_program(data, params):
         """v2.50.0: Verifier 判定失败 → 种子不晋升。"""
         seed = self._make_seed("seed_verifier_fail")
         loop = self._make_loop(sample_data, forward_returns, tmp_path)
-        with patch.object(loop.evaluation_chain, 'evaluate',
-                          return_value=self._make_mock_evaluation(ic=0.09, passed=True)):
-            loop.verifier.check = MagicMock(
-                return_value={"passed": False, "failure_reasons": ["mock verifier fail"]})
+        with patch.object(
+            loop.evaluation_chain, "evaluate", return_value=self._make_mock_evaluation(ic=0.09, passed=True)
+        ):
+            loop.verifier.check = MagicMock(return_value={"passed": False, "failure_reasons": ["mock verifier fail"]})
             loop._run_ablation_check = MagicMock(return_value={"passed": True})
             loop._run_causal_validation = MagicMock(return_value={"passed": True})
             loop._run_robustness_check = MagicMock(return_value={"passed": True})
@@ -365,8 +402,9 @@ def factor_program(data, params):
         """v2.50.0: 消融实验失败（疑似伪相关）→ 种子不晋升。"""
         seed = self._make_seed("seed_ablation_fail")
         loop = self._make_loop(sample_data, forward_returns, tmp_path)
-        with patch.object(loop.evaluation_chain, 'evaluate',
-                          return_value=self._make_mock_evaluation(ic=0.09, passed=True)):
+        with patch.object(
+            loop.evaluation_chain, "evaluate", return_value=self._make_mock_evaluation(ic=0.09, passed=True)
+        ):
             loop.verifier.check = MagicMock(return_value={"passed": True, "failure_reasons": []})
             loop._run_ablation_check = MagicMock(return_value={"passed": False, "ablations": []})
             loop._run_causal_validation = MagicMock(return_value={"passed": True})
@@ -379,8 +417,9 @@ def factor_program(data, params):
         """v2.50.0: 因果结构审查失败（事件敏感）→ 种子不晋升。"""
         seed = self._make_seed("seed_causal_fail")
         loop = self._make_loop(sample_data, forward_returns, tmp_path)
-        with patch.object(loop.evaluation_chain, 'evaluate',
-                          return_value=self._make_mock_evaluation(ic=0.09, passed=True)):
+        with patch.object(
+            loop.evaluation_chain, "evaluate", return_value=self._make_mock_evaluation(ic=0.09, passed=True)
+        ):
             loop.verifier.check = MagicMock(return_value={"passed": True, "failure_reasons": []})
             loop._run_ablation_check = MagicMock(return_value={"passed": True})
             loop._run_causal_validation = MagicMock(return_value={"passed": False})
@@ -393,8 +432,9 @@ def factor_program(data, params):
         """v2.50.0: 鲁棒性审查失败 → 种子不晋升。"""
         seed = self._make_seed("seed_robustness_fail")
         loop = self._make_loop(sample_data, forward_returns, tmp_path)
-        with patch.object(loop.evaluation_chain, 'evaluate',
-                          return_value=self._make_mock_evaluation(ic=0.09, passed=True)):
+        with patch.object(
+            loop.evaluation_chain, "evaluate", return_value=self._make_mock_evaluation(ic=0.09, passed=True)
+        ):
             loop.verifier.check = MagicMock(return_value={"passed": True, "failure_reasons": []})
             loop._run_ablation_check = MagicMock(return_value={"passed": True})
             loop._run_causal_validation = MagicMock(return_value={"passed": True})

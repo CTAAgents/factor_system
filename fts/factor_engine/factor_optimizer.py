@@ -14,6 +14,7 @@ fts/factor_engine/factor_optimizer.py — 可扩展因子优化框架
 
 版本: v1.0.1
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -52,9 +53,11 @@ FACTOR_FAMILIES: dict[str, list[str]] = {
 
 # ─── 数据类 ────────────────────────────────────────────────
 
+
 @dataclass
 class FactorCacheKey:
     """因子信号缓存键。"""
+
     factor_id: str
     factor_code_hash: str
     symbol: str
@@ -77,6 +80,7 @@ class FactorCacheKey:
 @dataclass
 class FactorSignalCache:
     """因子信号缓存（磁盘持久化）。"""
+
     cache_dir: Path
     _signals: dict[str, np.ndarray] = field(default_factory=dict)
     _meta: dict[str, Any] = field(default_factory=dict)
@@ -168,6 +172,7 @@ class FactorSignalCache:
 @dataclass
 class CorrelationCache:
     """相关矩阵缓存。"""
+
     cache_dir: Path
     _matrices: dict[str, tuple[np.ndarray, list[str]]] = field(default_factory=dict)
     _stats: dict[str, int] = field(default_factory=lambda: {"hits": 0, "misses": 0})
@@ -236,6 +241,7 @@ class CorrelationCache:
 
 # ─── 优化器 ────────────────────────────────────────────────
 
+
 class FactorOptimizer:
     """可扩展因子优化框架。
 
@@ -287,14 +293,15 @@ class FactorOptimizer:
         Returns:
             signal_matrix[symbol][factor_name] = np.ndarray
         """
-        from fts.factor_engine.factor_program import FactorExecutor
 
         n_factors = len(factors)
         n_symbols = len(panel)
         use_parallel = n_factors >= self.parallel_threshold
 
-        print(f"      [优化器] 因子={n_factors} 品种={n_symbols} | "
-              f"并行={'ON' if use_parallel else 'OFF'} (阈值={self.parallel_threshold})")
+        print(
+            f"      [优化器] 因子={n_factors} 品种={n_symbols} | "
+            f"并行={'ON' if use_parallel else 'OFF'} (阈值={self.parallel_threshold})"
+        )
 
         # 计算数据版本哈希
         data_version = self._compute_data_version(panel)
@@ -373,7 +380,7 @@ class FactorOptimizer:
 
         if cache_hits > 0 or cache_misses > 0:
             total = cache_hits + cache_misses
-            print(f"      [缓存] 命中 {cache_hits}/{total} ({cache_hits/total:.0%})")
+            print(f"      [缓存] 命中 {cache_hits}/{total} ({cache_hits / total:.0%})")
 
         return signal_matrix
 
@@ -385,7 +392,6 @@ class FactorOptimizer:
         force_recompute: bool,
     ) -> dict[str, dict[str, np.ndarray]]:
         """并行计算（大因子池）。"""
-        from fts.factor_engine.factor_program import FactorExecutor
 
         # 准备任务列表
         tasks: list[tuple[str, dict[str, Any], FactorCacheKey]] = []
@@ -413,7 +419,7 @@ class FactorOptimizer:
                     tasks.append((sym, factor_data, cache_key))
 
         # 分批并行执行
-        batch_size = self.max_workers * 4
+        self.max_workers * 4
         signal_matrix: dict[str, dict[str, np.ndarray]] = {}
         n_workers = max(1, min(self.max_workers, len(tasks)))
 
@@ -435,7 +441,10 @@ class FactorOptimizer:
 
                 future = executor.submit(
                     self._compute_single_factor_signal,
-                    sym, factor_data, cache_key, force_recompute,
+                    sym,
+                    factor_data,
+                    cache_key,
+                    force_recompute,
                 )
                 futures[future] = (sym, factor_data, cache_key)
 
@@ -448,13 +457,12 @@ class FactorOptimizer:
                             signal_matrix[sym] = {}
                         signal_matrix[sym][name] = arr
                         cache_misses += 1
-                except Exception as e:
+                except Exception:
                     cache_misses += 1
 
         total = cache_hits + cache_misses
         if total > 0:
-            print(f"      [并行] 完成 | 缓存命中 {cache_hits}/{total} ({cache_hits/total:.0%}) | "
-                  f"workers={n_workers}")
+            print(f"      [并行] 完成 | 缓存命中 {cache_hits}/{total} ({cache_hits / total:.0%}) | workers={n_workers}")
 
         return signal_matrix
 
@@ -522,7 +530,7 @@ class FactorOptimizer:
 
         Returns:
             (标记后的因子列表, 过程摘要)
-            
+
         设计原则:
             - 精英因子池只做标记，不做硬删除
             - 代码完全相同的重复因子 (same hash) 可以安全删除
@@ -542,16 +550,17 @@ class FactorOptimizer:
 
         if len(factors) <= max(2, family_threshold):
             # 小因子池：跳过分层，直接返回
-            logger.info("[Optimizer] 跳过分层正交化: 因子数=%d <= 阈值=%d",
-                        len(factors), max(2, family_threshold))
+            logger.info("[Optimizer] 跳过分层正交化: 因子数=%d <= 阈值=%d", len(factors), max(2, family_threshold))
             summary["elapsed_seconds"] = time.perf_counter() - t0
             return factors, summary
 
-        logger.info("[Optimizer] 启动分层正交化: 输入=%d 因子, 相关性阈值=%.2f, 模式=%s",
-                    len(factors), max_corr_threshold, mode)
+        logger.info(
+            "[Optimizer] 启动分层正交化: 输入=%d 因子, 相关性阈值=%.2f, 模式=%s", len(factors), max_corr_threshold, mode
+        )
 
         # 复制因子列表，添加标记字段
         import copy
+
         marked_factors = copy.deepcopy(factors)
         for f in marked_factors:
             f.setdefault("correlation_flags", [])  # 相关性标记列表
@@ -563,17 +572,24 @@ class FactorOptimizer:
         if l2_prior_correlations:
             logger.info("[Optimizer] === 注入 L2 相关性先验 ===")
             logger.info("[Optimizer] L2 先验输入: %d 对高相关因子 (threshold=0.95)", len(l2_prior_correlations))
-            
+
             for idx, pair in enumerate(l2_prior_correlations):
                 fid_a = pair.get("factor_id_a", "")
                 fid_b = pair.get("factor_id_b", "")
                 pearson = pair.get("pearson", 0)
                 spearman = pair.get("spearman", 0)
                 max_abs = max(abs(pearson), abs(spearman))
-                
-                logger.info("[Optimizer] L2 先验对 #%d: %s × %s | Pearson=%.4f, Spearman=%.4f, max=%.4f",
-                            idx + 1, fid_a, fid_b, pearson, spearman, max_abs)
-                
+
+                logger.info(
+                    "[Optimizer] L2 先验对 #%d: %s × %s | Pearson=%.4f, Spearman=%.4f, max=%.4f",
+                    idx + 1,
+                    fid_a,
+                    fid_b,
+                    pearson,
+                    spearman,
+                    max_abs,
+                )
+
                 if max_abs >= 0.95:
                     # 标记两个因子
                     for f in marked_factors:
@@ -588,20 +604,20 @@ class FactorOptimizer:
                             f["correlation_flags"].append(flag)
                             l2_prior_count += 1
                             l2_prior_factor_ids.add(fid)
-                            logger.info("[Optimizer] L2 标记 → %s: %s",
-                                        f.get("name", fid), flag["reason"])
-            
+                            logger.info("[Optimizer] L2 标记 → %s: %s", f.get("name", fid), flag["reason"])
+
             if l2_prior_count > 0:
-                logger.info("[Optimizer] L2 先验标记完成: %d 个因子被标记 (涉及 %d 个因子ID)",
-                            l2_prior_count, len(l2_prior_factor_ids))
+                logger.info(
+                    "[Optimizer] L2 先验标记完成: %d 个因子被标记 (涉及 %d 个因子ID)",
+                    l2_prior_count,
+                    len(l2_prior_factor_ids),
+                )
             else:
                 logger.info("[Optimizer] L2 先验无超过阈值的因子对")
 
         # ── Phase 1: 廉价预筛 ──
         logger.info("[Optimizer] === Phase 1: 廉价预筛 ===")
-        phase1_flags, phase1_details = self._phase1_prescreen(
-            marked_factors, mode=mode
-        )
+        phase1_flags, phase1_details = self._phase1_prescreen(marked_factors, mode=mode)
         summary["phase1_marked"] = len(phase1_flags)
         summary["phase1_details"] = phase1_details
 
@@ -620,15 +636,17 @@ class FactorOptimizer:
 
         # 计算非排除因子数量
         non_excluded = [f for f in marked_factors if not f.get("exclude_from_portfolio", False)]
-        logger.info("[Optimizer] Phase 1 完成: 标记 %d 个因子, 非排除=%d",
-                    len(phase1_flags), len(non_excluded))
+        logger.info("[Optimizer] Phase 1 完成: 标记 %d 个因子, 非排除=%d", len(phase1_flags), len(non_excluded))
 
         # ── Phase 2: 统计标记（与 L2 先验合并）──
         if len(marked_factors) > max(2, self.parallel_threshold // 2):
             logger.info("[Optimizer] === Phase 2: 相关性标记（与 L2 先验合并）===")
-            logger.info("[Optimizer] Phase 2 输入: %d 因子, 已标记 L2 先验的因子: %d",
-                        len(marked_factors), len(l2_prior_factor_ids))
-            
+            logger.info(
+                "[Optimizer] Phase 2 输入: %d 因子, 已标记 L2 先验的因子: %d",
+                len(marked_factors),
+                len(l2_prior_factor_ids),
+            )
+
             phase2_flags, phase2_details = self._phase2_correlation_marking(
                 marked_factors, max_corr_threshold, signal_matrix=signal_matrix
             )
@@ -652,28 +670,32 @@ class FactorOptimizer:
                         "source": "phase2_full_correlation",
                     }
                     f["correlation_flags"].append(flag_entry)
-                    
+
                     if has_l2_prior:
                         phase2_already_marked += 1
-                        logger.info("[Optimizer] Phase 2 → %s: 新增 %s 标记 (已有 L2 先验)",
-                                    f.get("name", fid), flag_type)
+                        logger.info(
+                            "[Optimizer] Phase 2 → %s: 新增 %s 标记 (已有 L2 先验)", f.get("name", fid), flag_type
+                        )
                     else:
                         phase2_new_count += 1
-                        logger.info("[Optimizer] Phase 2 → %s: 新增 %s 标记 (首次标记)",
-                                    f.get("name", fid), flag_type)
+                        logger.info("[Optimizer] Phase 2 → %s: 新增 %s 标记 (首次标记)", f.get("name", fid), flag_type)
 
             logger.info(
-                "[Optimizer] Phase 2 完成: 标记 %d 个因子 "
-                "(新增 %d 个, 与 L2 先验重叠 %d 个)",
-                len(phase2_flags), phase2_new_count, phase2_already_marked,
+                "[Optimizer] Phase 2 完成: 标记 %d 个因子 (新增 %d 个, 与 L2 先验重叠 %d 个)",
+                len(phase2_flags),
+                phase2_new_count,
+                phase2_already_marked,
             )
-            
+
             # 合并汇总日志
             summary["phase2_new_count"] = phase2_new_count
             summary["phase2_overlap_count"] = phase2_already_marked
         else:
-            logger.info("[Optimizer] 跳过 Phase 2: 因子数=%d <= 阈值=%d",
-                        len(marked_factors), max(2, self.parallel_threshold // 2))
+            logger.info(
+                "[Optimizer] 跳过 Phase 2: 因子数=%d <= 阈值=%d",
+                len(marked_factors),
+                max(2, self.parallel_threshold // 2),
+            )
 
         summary["elapsed_seconds"] = time.perf_counter() - t0
         summary["output_count"] = len(marked_factors)
@@ -689,9 +711,9 @@ class FactorOptimizer:
             for flag in f.get("correlation_flags", []):
                 src = flag.get("source", "unknown")
                 source_counts[src] = source_counts.get(src, 0) + 1
-        
+
         source_str = ", ".join(f"{k}={v}" for k, v in source_counts.items())
-        
+
         logger.info(
             "[Optimizer] 分层正交化汇总: 输入 %d → 输出 %d | "
             "L2 先验标记 %d, Phase1 标记 %d, Phase2 标记 %d | "
@@ -704,7 +726,8 @@ class FactorOptimizer:
             summary["phase2_marked"],
             summary.get("phase2_new_count", 0),
             summary.get("phase2_overlap_count", 0),
-            total_flags, excluded_count,
+            total_flags,
+            excluded_count,
             summary["elapsed_seconds"],
         )
         logger.info("[Optimizer] 标记来源分布: %s", source_str)
@@ -720,7 +743,7 @@ class FactorOptimizer:
 
         1. 代码哈希标记（完全相同代码的因子标记为 code_duplicate）
         2. 家族裁剪标记（同家族因子数过多时，标记为 family_pruned）
-        
+
         Returns:
             (标记列表: [{"factor_id", "type", "reason"}], 详情列表)
         """
@@ -740,17 +763,21 @@ class FactorOptimizer:
                 group_sorted = sorted(group, key=lambda x: abs(x.get("sharpe", 0)), reverse=True)
                 for f in group_sorted[1:]:
                     fid = f.get("factor_id", "")
-                    flags.append({
-                        "factor_id": fid,
-                        "type": "code_duplicate",
-                        "reason": f"代码重复，保留 {group_sorted[0].get('name', '?')} (Sharpe={group_sorted[0].get('sharpe', 0):.2f})",
-                    })
+                    flags.append(
+                        {
+                            "factor_id": fid,
+                            "type": "code_duplicate",
+                            "reason": f"代码重复，保留 {group_sorted[0].get('name', '?')} (Sharpe={group_sorted[0].get('sharpe', 0):.2f})",
+                        }
+                    )
                     code_dup_count += 1
-                    details.append({
-                        "type": "code_duplicate",
-                        "reason": f"代码重复，保留 {group_sorted[0].get('name', '?')} (Sharpe={group_sorted[0].get('sharpe', 0):.2f})",
-                        "removed": f.get("name", "?"),
-                    })
+                    details.append(
+                        {
+                            "type": "code_duplicate",
+                            "reason": f"代码重复，保留 {group_sorted[0].get('name', '?')} (Sharpe={group_sorted[0].get('sharpe', 0):.2f})",
+                            "removed": f.get("name", "?"),
+                        }
+                    )
 
         if code_dup_count > 0:
             logger.info("[Optimizer] Phase 1-代码重复: 标记 %d 个因子", code_dup_count)
@@ -769,21 +796,29 @@ class FactorOptimizer:
             if len(group) > 10:  # 家族超过 10 个因子时标记
                 group_sorted = sorted(group, key=lambda x: abs(x.get("sharpe", 0)), reverse=True)
                 keep_n = min(len(group), 10)
-                logger.info("[Optimizer] 家族标记: %s 家族 %d 个因子 → 标记后 %d 个为家族冗余",
-                            family, len(group), len(group) - keep_n)
+                logger.info(
+                    "[Optimizer] 家族标记: %s 家族 %d 个因子 → 标记后 %d 个为家族冗余",
+                    family,
+                    len(group),
+                    len(group) - keep_n,
+                )
                 for f in group_sorted[keep_n:]:
                     fid = f.get("factor_id", "")
-                    flags.append({
-                        "factor_id": fid,
-                        "type": "family_pruned",
-                        "reason": f"家族 {family} 超过 10 个，仅保留 Top {keep_n}",
-                    })
+                    flags.append(
+                        {
+                            "factor_id": fid,
+                            "type": "family_pruned",
+                            "reason": f"家族 {family} 超过 10 个，仅保留 Top {keep_n}",
+                        }
+                    )
                     family_mark_count += 1
-                    details.append({
-                        "type": "family_prune",
-                        "reason": f"家族 {family} 超过 10 个，保留 Top {keep_n}",
-                        "removed": f.get("name", "?"),
-                    })
+                    details.append(
+                        {
+                            "type": "family_prune",
+                            "reason": f"家族 {family} 超过 10 个，保留 Top {keep_n}",
+                            "removed": f.get("name", "?"),
+                        }
+                    )
 
         if family_mark_count > 0:
             logger.info("[Optimizer] Phase 1-家族标记: 标记 %d 个因子", family_mark_count)
@@ -793,8 +828,12 @@ class FactorOptimizer:
 
         total_marked = code_dup_count + family_mark_count
         if total_marked > 0:
-            logger.info("[Optimizer] Phase 1 汇总: 标记 %d 个因子 (代码重复=%d, 家族标记=%d)",
-                        total_marked, code_dup_count, family_mark_count)
+            logger.info(
+                "[Optimizer] Phase 1 汇总: 标记 %d 个因子 (代码重复=%d, 家族标记=%d)",
+                total_marked,
+                code_dup_count,
+                family_mark_count,
+            )
 
         return flags, details
 
@@ -817,7 +856,7 @@ class FactorOptimizer:
 
         扫描所有因子对的相关性，标记相关性超过阈值的因子。
         只添加 correlation_flags，不修改因子列表。
-        
+
         Args:
             factors: 因子列表
             max_corr_threshold: 最大相关性阈值
@@ -826,16 +865,17 @@ class FactorOptimizer:
         flags: list[dict[str, Any]] = []
         details: list[dict[str, str]] = []
 
-        logger.info("[Optimizer] Phase 2 启动: 因子数=%d, 相关性阈值=%.2f",
-                    len(factors), max_corr_threshold)
+        logger.info("[Optimizer] Phase 2 启动: 因子数=%d, 相关性阈值=%.2f", len(factors), max_corr_threshold)
 
         # 获取或计算相关矩阵
-        factor_ids = [f.get("factor_id", "") for f in factors]
+        [f.get("factor_id", "") for f in factors]
         corr_result = self._get_or_compute_correlation(factors, signal_matrix=signal_matrix)
 
         if corr_result is None:
-            logger.warning("[Optimizer] Phase 2 跳过: 无法获取相关矩阵"
-                          + (" (未提供 signal_matrix)" if signal_matrix is None else ""))
+            logger.warning(
+                "[Optimizer] Phase 2 跳过: 无法获取相关矩阵"
+                + (" (未提供 signal_matrix)" if signal_matrix is None else "")
+            )
             return flags, details
 
         corr_matrix, labels = corr_result
@@ -847,13 +887,14 @@ class FactorOptimizer:
         high_corr_pairs: list[tuple[int, int, float]] = []
         for i in range(n):
             for j in range(i + 1, n):
-                c = abs(corr_matrix[i, j])
+                c = float(abs(corr_matrix[i, j]))
                 if c > max_corr_threshold:
                     high_corr_pairs.append((i, j, c))
 
         if high_corr_pairs:
-            logger.info("[Optimizer] Phase 2: 发现 %d 个高相关因子对 (|corr|>%.2f)",
-                        len(high_corr_pairs), max_corr_threshold)
+            logger.info(
+                "[Optimizer] Phase 2: 发现 %d 个高相关因子对 (|corr|>%.2f)", len(high_corr_pairs), max_corr_threshold
+            )
 
         # 标记高相关对中 Sharpe 更低的因子
         sharpe_map = {f.get("factor_id", ""): f.get("sharpe", 0) for f in factors}
@@ -875,29 +916,37 @@ class FactorOptimizer:
 
             if sharpe_i >= sharpe_j:
                 # 标记 j
-                flags.append({
-                    "factor_id": fid_j,
-                    "type": "high_correlation",
-                    "reason": f"与 {name_i}(Sharpe={sharpe_i:.2f}) 相关性 {c:.3f}",
-                })
-                details.append({
-                    "type": "high_correlation",
-                    "reason": f"{name_i}(Sharpe={sharpe_i:.2f}) × {name_j}(Sharpe={sharpe_j:.2f}) = {c:.3f}",
-                    "removed": name_j,
-                })
+                flags.append(
+                    {
+                        "factor_id": fid_j,
+                        "type": "high_correlation",
+                        "reason": f"与 {name_i}(Sharpe={sharpe_i:.2f}) 相关性 {c:.3f}",
+                    }
+                )
+                details.append(
+                    {
+                        "type": "high_correlation",
+                        "reason": f"{name_i}(Sharpe={sharpe_i:.2f}) × {name_j}(Sharpe={sharpe_j:.2f}) = {c:.3f}",
+                        "removed": name_j,
+                    }
+                )
                 marked_count += 1
             else:
                 # 标记 i
-                flags.append({
-                    "factor_id": fid_i,
-                    "type": "high_correlation",
-                    "reason": f"与 {name_j}(Sharpe={sharpe_j:.2f}) 相关性 {c:.3f}",
-                })
-                details.append({
-                    "type": "high_correlation",
-                    "reason": f"{name_i}(Sharpe={sharpe_i:.2f}) × {name_j}(Sharpe={sharpe_j:.2f}) = {c:.3f}",
-                    "removed": name_i,
-                })
+                flags.append(
+                    {
+                        "factor_id": fid_i,
+                        "type": "high_correlation",
+                        "reason": f"与 {name_j}(Sharpe={sharpe_j:.2f}) 相关性 {c:.3f}",
+                    }
+                )
+                details.append(
+                    {
+                        "type": "high_correlation",
+                        "reason": f"{name_i}(Sharpe={sharpe_i:.2f}) × {name_j}(Sharpe={sharpe_j:.2f}) = {c:.3f}",
+                        "removed": name_i,
+                    }
+                )
                 marked_count += 1
 
         if marked_count > 0:
@@ -926,9 +975,7 @@ class FactorOptimizer:
         # ── 1. 使用传入的 signal_matrix 计算真实相关矩阵 ──
         if signal_matrix is not None:
             logger.info("[Optimizer] 使用传入的 signal_matrix 计算相关矩阵")
-            return self.compute_correlation_from_matrix(
-                signal_matrix, factor_names
-            )
+            return self.compute_correlation_from_matrix(signal_matrix, factor_names)
 
         # ── 2. 检查缓存 ──
         cached = self.corr_cache.get(factor_ids)
@@ -938,7 +985,6 @@ class FactorOptimizer:
 
         # ── 3. 从因子特征计算（降级方案）──
         try:
-            from scripts.futures_signal_pipeline import _compute_signal_matrix, _compute_factor_sign_flips
             logger.info("[Optimizer] 从因子特征计算相关矩阵")
             return None  # 需要真实信号数据，跳过
         except ImportError:
@@ -996,7 +1042,7 @@ class FactorOptimizer:
                 X[:, i] = np.nan_to_num(combined, nan=0.0)
 
         # 计算相关矩阵
-        corr_matrix = np.corrcoef(X, rowvar=False)
+        corr_matrix: np.ndarray = np.corrcoef(X, rowvar=False)
         corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
 
         # 缓存
@@ -1004,8 +1050,7 @@ class FactorOptimizer:
         self.corr_cache.put(factor_ids, corr_matrix)
 
         mode = "SAMPLED" if use_sampling else "FULL"
-        print(f"      [相关性] {mode} | 因子={n_factors} 样本={len(sampled_symbols)} | "
-              f"矩阵={corr_matrix.shape}")
+        print(f"      [相关性] {mode} | 因子={n_factors} 样本={len(sampled_symbols)} | 矩阵={corr_matrix.shape}")
 
         return corr_matrix, factor_names
 
@@ -1047,6 +1092,7 @@ def set_panel_ref(panel: dict[str, pd.DataFrame]) -> None:
 
 
 # ─── 便捷函数 ──────────────────────────────────────────────
+
 
 def create_optimizer(**kwargs) -> FactorOptimizer:
     """创建优化器实例。"""

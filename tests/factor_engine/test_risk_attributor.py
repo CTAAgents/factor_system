@@ -99,12 +99,15 @@ class TestDegradation:
 
     def test_exposure_analysis(self) -> None:
         """暴露分析：平均绝对暴露。"""
-        holdings = pd.DataFrame({
-            "stock_a": [0.5, -0.5],
-            "stock_b": [0.2, 0.1],
-        })
+        holdings = pd.DataFrame(
+            {
+                "stock_a": [0.5, -0.5],
+                "stock_b": [0.2, 0.1],
+            }
+        )
         attr = RiskAttributor().attribute(
-            pd.Series([0.01, -0.01]), holdings=holdings,
+            pd.Series([0.01, -0.01]),
+            holdings=holdings,
         )
         assert attr.exposures["stock_a"] == pytest.approx(0.5)
         assert attr.exposures["stock_b"] == pytest.approx(0.15)

@@ -31,21 +31,91 @@ logger = logging.getLogger(__name__)
 # CFFEX 实际合约：IF/IH/IC/TF/TS/TL（注意：没有单独的 "T"，2 字母起）
 CFFEX_PREFIXES = ("IF", "IH", "IC", "TF", "TS", "TL")
 CZCE_PREFIXES = (
-    "SR", "CF", "CJ", "CY", "AP", "ER", "LR", "LW", "MR", "ME",
-    "PM", "RI", "RM", "RS", "SF", "SM", "TA", "TM", "UR", "WH",
-    "WS", "WT", "ZC", "GN", "RO", "PF", "PK", "PX", "SA", "SH",
-    "TC", "JR", "OI", "MA", "FG",  # MA/FG/OI 是郑商所
+    "SR",
+    "CF",
+    "CJ",
+    "CY",
+    "AP",
+    "ER",
+    "LR",
+    "LW",
+    "MR",
+    "ME",
+    "PM",
+    "RI",
+    "RM",
+    "RS",
+    "SF",
+    "SM",
+    "TA",
+    "TM",
+    "UR",
+    "WH",
+    "WS",
+    "WT",
+    "ZC",
+    "GN",
+    "RO",
+    "PF",
+    "PK",
+    "PX",
+    "SA",
+    "SH",
+    "TC",
+    "JR",
+    "OI",
+    "MA",
+    "FG",  # MA/FG/OI 是郑商所
 )
 # 上期所 (SHFE) — 优先按 2 字母匹配
 SHFE_PREFIXES = (
-    "RB", "CU", "AL", "ZN", "AU", "AG", "PB", "NI", "SN", "SS",
-    "BU", "RU", "FU", "SP", "WR", "HC", "FB", "BB", "AO", "AD",
-    "BC", "EC", "AU", "AG",
+    "RB",
+    "CU",
+    "AL",
+    "ZN",
+    "AU",
+    "AG",
+    "PB",
+    "NI",
+    "SN",
+    "SS",
+    "BU",
+    "RU",
+    "FU",
+    "SP",
+    "WR",
+    "HC",
+    "FB",
+    "BB",
+    "AO",
+    "AD",
+    "BC",
+    "EC",
+    "AU",
+    "AG",
 )
 # 大商所 (DCE) — 1 字母品种为主（如 A/B/C/M/Y/P/I/J/L/V/R）
 DCE_PREFIXES = (
-    "A", "B", "C", "CS", "M", "Y", "P", "L", "JD", "JM",
-    "I", "J", "R", "RR", "V", "EG", "EB", "PG", "LH", "FB",
+    "A",
+    "B",
+    "C",
+    "CS",
+    "M",
+    "Y",
+    "P",
+    "L",
+    "JD",
+    "JM",
+    "I",
+    "J",
+    "R",
+    "RR",
+    "V",
+    "EG",
+    "EB",
+    "PG",
+    "LH",
+    "FB",
 )
 
 
@@ -118,9 +188,23 @@ class TQLocalSource(BaseFuturesSource):
     def _expected_columns() -> list[str]:
         """FTS kline_cache 完整 17 列。"""
         return [
-            "symbol", "period", "date", "open", "high", "low", "close",
-            "volume", "amount", "hold", "settle", "pre_settle", "oi_change",
-            "vwap", "source", "fetched_at", "trace_id",
+            "symbol",
+            "period",
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "hold",
+            "settle",
+            "pre_settle",
+            "oi_change",
+            "vwap",
+            "source",
+            "fetched_at",
+            "trace_id",
         ]
 
     # ─── 构造 ──
@@ -132,9 +216,7 @@ class TQLocalSource(BaseFuturesSource):
             period: 周期，支持 "day"（默认）/ "1m" / "5m" / "15m" / "30m" / "60m"
         """
         if period not in self.TQ_PERIOD_MAP:
-            raise ValueError(
-                f"不支持的周期: {period}，可选: {list(self.TQ_PERIOD_MAP.keys())}"
-            )
+            raise ValueError(f"不支持的周期: {period}，可选: {list(self.TQ_PERIOD_MAP.keys())}")
         self._period = period
 
     @property
@@ -202,9 +284,24 @@ class TQLocalSource(BaseFuturesSource):
         if not rows:
             # 空数据 — 返回带 schema 的空 DataFrame
             expected = self._expected_columns()
-            return pd.DataFrame(columns=expected) if self._period == "day" else pd.DataFrame(
-                columns=["symbol", "period", "datetime", "open", "high", "low",
-                         "close", "volume", "source", "fetched_at", "trace_id"]
+            return (
+                pd.DataFrame(columns=expected)
+                if self._period == "day"
+                else pd.DataFrame(
+                    columns=[
+                        "symbol",
+                        "period",
+                        "datetime",
+                        "open",
+                        "high",
+                        "low",
+                        "close",
+                        "volume",
+                        "source",
+                        "fetched_at",
+                        "trace_id",
+                    ]
+                )
             )
 
         df = pd.DataFrame(rows)
@@ -263,7 +360,7 @@ class TQLocalSource(BaseFuturesSource):
         tq_sym: str,
         original_symbol: str,
         trace_id: str,
-    ) -> pd.DataFrame:
+    ) -> Optional[pd.DataFrame]:
         """处理分钟线返回数据（11 列 minute_cache schema）。
 
         注意: TQ-Local 分钟数据为**倒序**（新→旧），需反转。
@@ -297,8 +394,19 @@ class TQLocalSource(BaseFuturesSource):
         df["trace_id"] = trace_id
 
         # 返回分钟级 schema 列
-        cols = ["symbol", "period", "datetime", "open", "high", "low",
-                "close", "volume", "source", "fetched_at", "trace_id"]
+        cols = [
+            "symbol",
+            "period",
+            "datetime",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "source",
+            "fetched_at",
+            "trace_id",
+        ]
         return df[[c for c in cols if c in df.columns]]
 
     # ─── 实时快照 ──

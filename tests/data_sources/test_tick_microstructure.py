@@ -107,9 +107,7 @@ class TestAnalyzeDepth:
         assert r["obi_mean"] >= -1.0 and r["obi_mean"] <= 1.0
         # 买深 = 5 档量之和
         assert r["bid_depth_mean"] > 0
-        assert r["total_depth_mean"] == pytest.approx(
-            r["bid_depth_mean"] + r["ask_depth_mean"], rel=1e-3
-        )
+        assert r["total_depth_mean"] == pytest.approx(r["bid_depth_mean"] + r["ask_depth_mean"], rel=1e-3)
 
     def test_obi_range(self) -> None:
         """OBI 应在 [-1, 1] 区间。"""

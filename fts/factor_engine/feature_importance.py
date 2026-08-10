@@ -69,9 +69,7 @@ class FeatureImportanceAnalyzer:
         start_ms = time.time() * 1000
 
         if feature_names is None:
-            feature_names = [
-                c for c in data.columns if c != target_col
-            ]
+            feature_names = [c for c in data.columns if c != target_col]
 
         # 计算基线 IC
         target = data[target_col]
@@ -93,12 +91,19 @@ class FeatureImportanceAnalyzer:
             if feature not in data.columns:
                 continue
             importance[feature] = self._compute_permutation_importance(
-                factor_series, data, target_col, feature, baseline_ic, n_permutations,
+                factor_series,
+                data,
+                target_col,
+                feature,
+                baseline_ic,
+                n_permutations,
             )
 
         # 排序取 Top-10
         sorted_features = sorted(
-            importance.items(), key=lambda x: abs(x[1]), reverse=True,
+            importance.items(),
+            key=lambda x: abs(x[1]),
+            reverse=True,
         )
         top_features = sorted_features[:10]
 
@@ -143,15 +148,14 @@ class FeatureImportanceAnalyzer:
 
         for _ in range(n_permutations):
             # 打乱特征
-            shuffled_data[feature_col] = np.random.permutation(
-                shuffled_data[feature_col].values
-            )
+            shuffled_data[feature_col] = np.random.permutation(shuffled_data[feature_col].values)
 
             # 重新计算因子与目标的 IC
             # 简化: 直接用打乱后的特征和因子的相关性变化估计
             target = shuffled_data[target_col]
             aligned = pd.concat(
-                [factor_series, target], axis=1,
+                [factor_series, target],
+                axis=1,
             ).dropna()
 
             if len(aligned) < 5:

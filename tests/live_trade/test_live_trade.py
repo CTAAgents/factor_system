@@ -26,6 +26,7 @@ from fts.live_trade import (
 
 # ─── 订单状态机 ─────────────────────────────────────────
 
+
 def test_order_initial_state_pending():
     """订单初始状态应为 PENDING。"""
     order = Order(order_id="o1", symbol="RB0", direction="long", quantity=1.0, price=3000.0)
@@ -86,6 +87,7 @@ def test_order_lifecycle_rollback():
 
 # ─── 持仓级止损止盈单 ────────────────────────────────────
 
+
 def test_stop_order_register_and_list_active():
     """止损单注册后应处于 ACTIVE 并可列出。"""
     mgr = StopOrderManager()
@@ -135,6 +137,7 @@ def test_stop_order_cancel():
 
 # ─── 人工干预接口 ────────────────────────────────────────
 
+
 def test_intervention_default_normal():
     """默认状态应为 NORMAL（不拦截信号）。"""
     ctrl = InterventionController()
@@ -181,6 +184,7 @@ def test_intervention_authority_highest():
 
 
 # ─── 网关抽象 + 模拟 + 重试兜底 ──────────────────────────
+
 
 def test_gateway_abstract_is_abstract():
     """AbstractGateway 为抽象基类，不可实例化。"""

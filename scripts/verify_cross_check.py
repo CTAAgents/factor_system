@@ -33,20 +33,33 @@ from fts.data_sources.aggregator import FuturesDataAggregator  # noqa: E402
 # ─── mock 数据源 ───────────────────────────────────────────
 
 
-def _make_close_only_source(source_name: str, close_value: float,
-                            symbol: str = "RB0", date_str: str = "2026-08-04"
-                            ) -> MagicMock:
+def _make_close_only_source(
+    source_name: str, close_value: float, symbol: str = "RB0", date_str: str = "2026-08-04"
+) -> MagicMock:
     """构造一个仅返回单行 close 的 mock 源。"""
-    df = pd.DataFrame([{
-        "symbol": symbol, "period": "daily",
-        "date": datetime.fromisoformat(date_str).date(),
-        "open": close_value, "high": close_value,
-        "low": close_value, "close": close_value,
-        "volume": 100000, "amount": 350000000,
-        "hold": 80000, "settle": close_value, "pre_settle": close_value,
-        "oi_change": 0, "vwap": close_value, "source": source_name,
-        "fetched_at": datetime.now(), "trace_id": "",
-    }])
+    df = pd.DataFrame(
+        [
+            {
+                "symbol": symbol,
+                "period": "daily",
+                "date": datetime.fromisoformat(date_str).date(),
+                "open": close_value,
+                "high": close_value,
+                "low": close_value,
+                "close": close_value,
+                "volume": 100000,
+                "amount": 350000000,
+                "hold": 80000,
+                "settle": close_value,
+                "pre_settle": close_value,
+                "oi_change": 0,
+                "vwap": close_value,
+                "source": source_name,
+                "fetched_at": datetime.now(),
+                "trace_id": "",
+            }
+        ]
+    )
     mock = MagicMock()
     mock.source_name = source_name
     mock.fetch_count = 0
@@ -77,22 +90,33 @@ def _make_failing_source(source_name: str) -> MagicMock:
     return mock
 
 
-def _make_kline_df(source_name: str, rows: int = 5,
-                   base_date: datetime | None = None) -> pd.DataFrame:
+def _make_kline_df(source_name: str, rows: int = 5, base_date: datetime | None = None) -> pd.DataFrame:
     """构造 K 线 DataFrame（用于主路径触发）。"""
     if base_date is None:
         base_date = datetime.now() - timedelta(days=rows - 1)
     data = []
     for i in range(rows):
-        data.append({
-            "symbol": "RB0", "period": "daily",
-            "date": (base_date + timedelta(days=i)).date(),
-            "open": 3500 + i, "high": 3550 + i, "low": 3490 + i, "close": 3540 + i,
-            "volume": 100000, "amount": 350000000,
-            "hold": 80000 + i * 100, "settle": 3540 + i, "pre_settle": 3520 + i,
-            "oi_change": 2000, "vwap": 3500.0, "source": source_name,
-            "fetched_at": datetime.now(), "trace_id": "",
-        })
+        data.append(
+            {
+                "symbol": "RB0",
+                "period": "daily",
+                "date": (base_date + timedelta(days=i)).date(),
+                "open": 3500 + i,
+                "high": 3550 + i,
+                "low": 3490 + i,
+                "close": 3540 + i,
+                "volume": 100000,
+                "amount": 350000000,
+                "hold": 80000 + i * 100,
+                "settle": 3540 + i,
+                "pre_settle": 3520 + i,
+                "oi_change": 2000,
+                "vwap": 3500.0,
+                "source": source_name,
+                "fetched_at": datetime.now(),
+                "trace_id": "",
+            }
+        )
     return pd.DataFrame(data)
 
 
@@ -105,8 +129,8 @@ def scenario_1_within_threshold(tmp_dir: Path) -> bool:
     log_path = tmp_dir / "scenario1.jsonl"
     sources = [
         _make_close_only_source(DataSource.TQ_LOCAL.value, 3540.0),
-        _make_close_only_source(DataSource.WIND.value, 3541.5),    # 0.04%
-        _make_close_only_source(DataSource.IFIND.value, 3542.0),   # 0.06%
+        _make_close_only_source(DataSource.WIND.value, 3541.5),  # 0.04%
+        _make_close_only_source(DataSource.IFIND.value, 3542.0),  # 0.06%
     ]
     agg = FuturesDataAggregator(
         sources=sources,
@@ -168,8 +192,10 @@ def scenario_3_one_source_fails(tmp_dir: Path) -> bool:
     # 不应抛异常
     try:
         result = agg.cross_check(
-            "RB0", "2026-08-04",
-            sources=[good1, bad, good2], trace_id="v-cc-3",
+            "RB0",
+            "2026-08-04",
+            sources=[good1, bad, good2],
+            trace_id="v-cc-3",
         )
     except Exception as e:  # noqa: BLE001
         print(f"       ❌ 失败: 抛异常 {e}")
@@ -213,8 +239,9 @@ def scenario_5_main_path_triggers(tmp_dir: Path) -> bool:
     # K 线主路径 TQ 返回 5 天
     today = datetime.now().date()
     base_date = today - timedelta(days=4)
-    tq_df = _make_kline_df(DataSource.TQ_LOCAL.value, rows=5,
-                           base_date=datetime.combine(base_date, datetime.min.time()))
+    tq_df = _make_kline_df(
+        DataSource.TQ_LOCAL.value, rows=5, base_date=datetime.combine(base_date, datetime.min.time())
+    )
 
     tq_mock = MagicMock()
     tq_mock.source_name = DataSource.TQ_LOCAL.value
@@ -233,15 +260,27 @@ def scenario_5_main_path_triggers(tmp_dir: Path) -> bool:
     wind_data = []
     for i, d in enumerate(wind_dates):
         close_v = 3540.0 + i if i < 4 else 3595.0  # 最后一天偏离
-        wind_data.append({
-            "symbol": "RB0", "period": "daily",
-            "date": d, "open": close_v, "high": close_v,
-            "low": close_v, "close": close_v,
-            "volume": 100000, "amount": 350000000,
-            "hold": 80000, "settle": close_v, "pre_settle": close_v,
-            "oi_change": 0, "vwap": close_v, "source": DataSource.WIND.value,
-            "fetched_at": datetime.now(), "trace_id": "",
-        })
+        wind_data.append(
+            {
+                "symbol": "RB0",
+                "period": "daily",
+                "date": d,
+                "open": close_v,
+                "high": close_v,
+                "low": close_v,
+                "close": close_v,
+                "volume": 100000,
+                "amount": 350000000,
+                "hold": 80000,
+                "settle": close_v,
+                "pre_settle": close_v,
+                "oi_change": 0,
+                "vwap": close_v,
+                "source": DataSource.WIND.value,
+                "fetched_at": datetime.now(),
+                "trace_id": "",
+            }
+        )
     wind_df = pd.DataFrame(wind_data)
     wind_mock = MagicMock()
     wind_mock.source_name = DataSource.WIND.value
@@ -256,15 +295,30 @@ def scenario_5_main_path_triggers(tmp_dir: Path) -> bool:
     wind_mock.is_available = lambda: True
 
     # iFinD 字段增强层 — 同样 5 天，但最后一天不偏离
-    ifind_df = pd.DataFrame([{
-        "symbol": "RB0", "period": "daily",
-        "date": base_date + timedelta(days=i),
-        "open": 3540 + i, "high": 3540 + i, "low": 3540 + i, "close": 3540 + i,
-        "volume": 100000, "amount": 350000000,
-        "hold": 80000, "settle": 3540 + i, "pre_settle": 3540 + i,
-        "oi_change": 0, "vwap": 3540 + i, "source": DataSource.IFIND.value,
-        "fetched_at": datetime.now(), "trace_id": "",
-    } for i in range(5)])
+    ifind_df = pd.DataFrame(
+        [
+            {
+                "symbol": "RB0",
+                "period": "daily",
+                "date": base_date + timedelta(days=i),
+                "open": 3540 + i,
+                "high": 3540 + i,
+                "low": 3540 + i,
+                "close": 3540 + i,
+                "volume": 100000,
+                "amount": 350000000,
+                "hold": 80000,
+                "settle": 3540 + i,
+                "pre_settle": 3540 + i,
+                "oi_change": 0,
+                "vwap": 3540 + i,
+                "source": DataSource.IFIND.value,
+                "fetched_at": datetime.now(),
+                "trace_id": "",
+            }
+            for i in range(5)
+        ]
+    )
     ifind_mock = MagicMock()
     ifind_mock.source_name = DataSource.IFIND.value
     ifind_mock.fetch_count = 0

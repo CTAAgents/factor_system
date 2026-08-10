@@ -1,6 +1,6 @@
 # FTS 开发生命周期
 
-> 版本: v2.71.0
+> 版本: v2.81.0
 > 最后更新: 2026-08-09
 
 ---
@@ -46,6 +46,9 @@ FTS 从 FDT 剥离共经历 16 个 Phase，目前全部完成：
 | **Phase 35** | Barra 风格因子体系（v2.62.0，GAP-S02）：`fts/factor_engine/barra/` 新包三文件——`barra_style.py`（`BarraStyleEngine` 10 风格暴露计算引擎：size/beta/momentum/residual_vol/nonlinear_size/book_to_price/liquidity/earnings_yield/growth/leverage，逐日截面 rank→z-score 标准化，nonlinear_size 基于 size 暴露矩阵逐日 z³ 对 z 回归残差，字段缺失全 NaN 降级）+ `barra_neutralizer.py`（`barra_neutralize_matrix` 逐日 OLS 风格暴露 + 行业虚拟变量回归取残差，样本不足降级去均值、常数列剔除、正交性保证）；`cross_section_evaluate_backtest` 新增 `style_exposures` 参数 + Step 2.6 Barra 风格中性化（行业去均值后叠加风格回归残差，两级中性化链 GAP-S01/S02） | ✅ 完成 | 13 测试用例全绿（test_barra.py），股票因子评估剥离 10 大风格系统性偏差，回答"因子赚风格钱还是 alpha 钱" |
 | **Phase 36** | A 股行业轮动 + 风格轮动 Regime 检测（v2.65.0，GAP-S03）：新增 `fts/factor_engine/stock_regime.py`（`StockRegimeSelector`——行业动量横截面离散度 + top-N 集中度 → concentrated/rotating/balanced 三态；大小盘/成长价值比值动量 → large_cap/small_cap + growth/value 双态；复用 `regime_hmm.MultiHorizonHMMDetector` 多周期集成校正置信度，规则动量方向主判定，空面板/样本不足优雅降级）；`REGIME_STYLE_MULTIPLIERS` 新增 6 个股票风格键（large_cap/small_cap/growth/value/sector_concentrated/sector_rotating）；`PortfolioLoop.run(stock_regime=...)` market="stock" 时 Step 2.5 优先驱动风格自适应权重 | ✅ 完成 | 19 测试用例全绿（test_stock_regime.py，含风格切换样本正确率 ≥80%），L3 风格自适应权重在股票场景正式可用 |
 | **Phase 37** | 批量挖掘漏斗（v2.65.0，GAP-I201 Stage 1 首版）：新增 `fts/factor_engine/batch_mining.py`（`BatchMiner` 批量生成 → ThreadPoolExecutor 并行粗筛 → 按预筛 IC 排序截断 ≤ max_candidates，依赖注入回调零业务耦合）；`evolution_loop.py` 抽取 `_evolve_one`/`_process_candidate` 公共方法（batch 与单因子路径共用准入链）+ 新增 `_run_batch_generation`（同父多后代：macro 至多 1 次 + GP/operator 交替 + seed 递增，token 护栏，全失败回退）；`_quick_prefilter` 返回 (ok, reason, ic) 三元组；`evolution_mode="batch"` 生效 | ✅ 完成 | 21 新增测试用例全绿（test_batch_mining 11 + batch 集成 10），GAP-I201 关闭，单夜候选吞吐 ≥10× |
+| **Phase 39** | 机构级权重学习增强（v2.75.0，GAP-053）：`fts/factor_engine/weight_learning.py` 为 elastic_net 补齐三层机构级处理——① 风险调整权重（`FactorReturnsBuilder` 构建因子收益 → `RiskModelEstimator` Ledoit-Wolf 收缩协方差 → `volatility_scaling`（w∝\|coef\|/σ）或 `risk_parity`（等风险贡献，对角退化为逆波动率））；② 滚动样本外验证（滚动窗口 re-fit，报告权重稳定性 / OOS 组合 IC / 权重衰减）；③ 学习面板按目标交易市场自动匹配（`resolve_panel_market` panel_market="auto"）+ 跨市场迁移 IC 对比 | ✅ 完成 | 28 新增测试用例全绿（test_weight_learning.py），既有 elastic_net 回归 19 passed，组合权重体现"每单位风险的信号贡献" |
+| **Phase 38** | L3 定时任务显式期货路径（v2.73.0，调度一致性修复）：`fts/scheduler/jobs.py` `l3_portfolio_loop_job` 显式传 `elite_dir=cfg.futures_elite_dir` + `market="futures"`，与 CLI `portfolio run --universe futures` 对齐（此前误用股票 elite 目录，与下游期货信号管道不一致）；新增 `test_uses_futures_path` 断言（test_jobs.py 29→30 用例） | ✅ 完成 | 调度全量 152 passed，自动化任务组合构建与期货信号输出口径对齐 |
+
 
 ---
 

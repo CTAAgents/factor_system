@@ -41,7 +41,6 @@ from fts.data_futures import get_futures_provider
 from fts.factor_engine.walk_forward import (
     WalkForwardConfig,
     WalkForwardOptimizer,
-    DEFAULT_WALK_FORWARD_CONFIG,
 )
 
 logging.basicConfig(
@@ -94,9 +93,9 @@ def create_evaluate_fn(
         n = len(close)
         fwd_returns = np.zeros(n)
         if forward_period < n:
-            fwd_returns[: n - forward_period] = (
-                close[forward_period:] - close[: n - forward_period]
-            ) / np.maximum(close[: n - forward_period], 1e-10)
+            fwd_returns[: n - forward_period] = (close[forward_period:] - close[: n - forward_period]) / np.maximum(
+                close[: n - forward_period], 1e-10
+            )
 
         # 对齐
         min_len = min(len(factor_values), len(fwd_returns))
@@ -116,7 +115,9 @@ def create_evaluate_fn(
 
         # 计算因子收益 (简化: 因子值 * 收益率)
         factor_returns = fv * fr
-        sharpe = np.mean(factor_returns) / np.std(factor_returns) * np.sqrt(252) if np.std(factor_returns) > 1e-10 else 0.0
+        sharpe = (
+            np.mean(factor_returns) / np.std(factor_returns) * np.sqrt(252) if np.std(factor_returns) > 1e-10 else 0.0
+        )
 
         # 计算换手率 (信号变化率)
         turnover = np.mean(np.abs(np.diff(fv))) if len(fv) > 1 else 0.0
@@ -167,12 +168,14 @@ def param_sensitivity_analysis(
         mean_ic = float(np.mean(ic_values)) if ic_values else 0.0
         pos_ratio = sum(1 for ic in ic_values if ic > 0) / len(ic_values) if ic_values else 0.0
 
-        results.append({
-            "param_value": val,
-            "mean_ic": mean_ic,
-            "positive_ratio": pos_ratio,
-            "n_symbols": len(ic_values),
-        })
+        results.append(
+            {
+                "param_value": val,
+                "mean_ic": mean_ic,
+                "positive_ratio": pos_ratio,
+                "n_symbols": len(ic_values),
+            }
+        )
 
     # 找最优参数
     best = max(results, key=lambda r: r["mean_ic"] * r["positive_ratio"])
@@ -225,18 +228,30 @@ def main():
     # 自适应配置：500天数据使用较短窗口
     if n_days >= 750:
         wf_config: WalkForwardConfig = {
-            "window_years": 3, "step_months": 6, "min_oos_months": 3, "n_windows": 4,
-            "min_ic_consistency": 0.5, "max_ic_volatility": 0.3,
+            "window_years": 3,
+            "step_months": 6,
+            "min_oos_months": 3,
+            "n_windows": 4,
+            "min_ic_consistency": 0.5,
+            "max_ic_volatility": 0.3,
         }
     elif n_days >= 400:
         wf_config: WalkForwardConfig = {
-            "window_years": 1, "step_months": 3, "min_oos_months": 2, "n_windows": 5,
-            "min_ic_consistency": 0.5, "max_ic_volatility": 0.3,
+            "window_years": 1,
+            "step_months": 3,
+            "min_oos_months": 2,
+            "n_windows": 5,
+            "min_ic_consistency": 0.5,
+            "max_ic_volatility": 0.3,
         }
     else:
         wf_config: WalkForwardConfig = {
-            "window_years": 0.5, "step_months": 2, "min_oos_months": 1, "n_windows": 5,
-            "min_ic_consistency": 0.5, "max_ic_volatility": 0.3,
+            "window_years": 0.5,
+            "step_months": 2,
+            "min_oos_months": 1,
+            "n_windows": 5,
+            "min_ic_consistency": 0.5,
+            "max_ic_volatility": 0.3,
         }
     optimizer = WalkForwardOptimizer(config=wf_config)
     logger.info("WalkForward 配置: %s", wf_config)
@@ -265,8 +280,12 @@ def main():
                 df.index = dates
 
         df = df.sort_index()
-        logger.info("  数据准备完成: %d 行, %s 到 %s",
-                    len(df), df.index[0].strftime("%Y-%m-%d"), df.index[-1].strftime("%Y-%m-%d"))
+        logger.info(
+            "  数据准备完成: %d 行, %s 到 %s",
+            len(df),
+            df.index[0].strftime("%Y-%m-%d"),
+            df.index[-1].strftime("%Y-%m-%d"),
+        )
 
         evaluate_fn = create_evaluate_fn(factor_meta, forward_period=5)
 
@@ -279,30 +298,34 @@ def main():
             logger.info("  综合评分: %.1f", result.get("consistency_score", 0))
             logger.info("  是否通过: %s", result.get("passed", False))
 
-            wf_results.append({
-                "factor_name": name,
-                "family": factor_meta.get("_family", "unknown"),
-                "walk_forward": {
-                    "n_windows_completed": result.get("n_windows_completed", 0),
-                    "ic_consistency": result.get("ic_consistency", 0),
-                    "ic_volatility": result.get("ic_volatility", 0),
-                    "sharpe_volatility": result.get("sharpe_volatility", 0),
-                    "consistency_score": result.get("consistency_score", 0),
-                    "passed": result.get("passed", False),
-                    "windows": result.get("windows", []),
-                },
-            })
+            wf_results.append(
+                {
+                    "factor_name": name,
+                    "family": factor_meta.get("_family", "unknown"),
+                    "walk_forward": {
+                        "n_windows_completed": result.get("n_windows_completed", 0),
+                        "ic_consistency": result.get("ic_consistency", 0),
+                        "ic_volatility": result.get("ic_volatility", 0),
+                        "sharpe_volatility": result.get("sharpe_volatility", 0),
+                        "consistency_score": result.get("consistency_score", 0),
+                        "passed": result.get("passed", False),
+                        "windows": result.get("windows", []),
+                    },
+                }
+            )
 
         except Exception as e:
             logger.error("WalkForward 分析失败: %s", e)
-            wf_results.append({
-                "factor_name": name,
-                "family": factor_meta.get("_family", "unknown"),
-                "walk_forward": {
-                    "error": str(e),
-                    "passed": False,
-                },
-            })
+            wf_results.append(
+                {
+                    "factor_name": name,
+                    "family": factor_meta.get("_family", "unknown"),
+                    "walk_forward": {
+                        "error": str(e),
+                        "passed": False,
+                    },
+                }
+            )
 
     # 5. 参数敏感性分析
     logger.info("=" * 70)
@@ -326,22 +349,30 @@ def main():
         if "lookback" in params:
             param_to_analyze = "lookback"
             current = params["lookback"]
-            param_values = sorted(set([
-                max(5, current // 4),
-                max(10, current // 2),
-                current,
-                int(current * 1.5),
-                int(current * 2),
-            ]))
+            param_values = sorted(
+                set(
+                    [
+                        max(5, current // 4),
+                        max(10, current // 2),
+                        current,
+                        int(current * 1.5),
+                        int(current * 2),
+                    ]
+                )
+            )
         elif "window" in params:
             param_to_analyze = "window"
             current = params["window"]
-            param_values = sorted(set([
-                max(1, current // 2),
-                current,
-                int(current * 1.5),
-                current * 2,
-            ]))
+            param_values = sorted(
+                set(
+                    [
+                        max(1, current // 2),
+                        current,
+                        int(current * 1.5),
+                        current * 2,
+                    ]
+                )
+            )
         elif "lookback_months" in params:
             param_to_analyze = "lookback_months"
             current = params["lookback_months"]
@@ -351,14 +382,16 @@ def main():
             logger.info("  分析参数 '%s': %s", param_to_analyze, param_values)
 
             try:
-                sens_result = param_sensitivity_analysis(
-                    factor_meta, panel_data, param_to_analyze, param_values
-                )
+                sens_result = param_sensitivity_analysis(factor_meta, panel_data, param_to_analyze, param_values)
                 sensitivity_results.append(sens_result)
 
-                logger.info("  最优参数: %s=%.2f (IC=%.4f, 比例=%.1f%%)",
-                           param_to_analyze, sens_result["best_param"],
-                           sens_result["best_ic"], sens_result["best_ratio"] * 100)
+                logger.info(
+                    "  最优参数: %s=%.2f (IC=%.4f, 比例=%.1f%%)",
+                    param_to_analyze,
+                    sens_result["best_param"],
+                    sens_result["best_ic"],
+                    sens_result["best_ratio"] * 100,
+                )
 
                 # 更新 wf_results 中的建议参数
                 for wf in wf_results:
@@ -372,10 +405,12 @@ def main():
 
             except Exception as e:
                 logger.error("  参数敏感性分析失败: %s", e)
-                sensitivity_results.append({
-                    "param_name": param_to_analyze,
-                    "error": str(e),
-                })
+                sensitivity_results.append(
+                    {
+                        "param_name": param_to_analyze,
+                        "error": str(e),
+                    }
+                )
 
     # 6. 保存结果
     output_dir = PROJECT_ROOT / "reports"
@@ -390,11 +425,15 @@ def main():
         "summary": {
             "total_factors": len(target_factors),
             "passed_wf": sum(1 for r in wf_results if r.get("walk_forward", {}).get("passed", False)),
-            "avg_consistency_score": np.mean([
-                r.get("walk_forward", {}).get("consistency_score", 0)
-                for r in wf_results
-                if "error" not in r.get("walk_forward", {})
-            ]) if wf_results else 0,
+            "avg_consistency_score": np.mean(
+                [
+                    r.get("walk_forward", {}).get("consistency_score", 0)
+                    for r in wf_results
+                    if "error" not in r.get("walk_forward", {})
+                ]
+            )
+            if wf_results
+            else 0,
         },
     }
 
@@ -406,8 +445,10 @@ def main():
     # 7. 生成可视化图表
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+
         plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
         plt.rcParams["axes.unicode_minus"] = False
 
@@ -417,8 +458,16 @@ def main():
         # 7.1 OOS 稳定性对比图
         fig, ax = plt.subplots(figsize=(12, 6))
         factor_names = [r["factor_name"] for r in wf_results if "error" not in r.get("walk_forward", {})]
-        scores = [r.get("walk_forward", {}).get("consistency_score", 0) for r in wf_results if "error" not in r.get("walk_forward", {})]
-        consistencies = [r.get("walk_forward", {}).get("ic_consistency", 0) * 100 for r in wf_results if "error" not in r.get("walk_forward", {})]
+        scores = [
+            r.get("walk_forward", {}).get("consistency_score", 0)
+            for r in wf_results
+            if "error" not in r.get("walk_forward", {})
+        ]
+        consistencies = [
+            r.get("walk_forward", {}).get("ic_consistency", 0) * 100
+            for r in wf_results
+            if "error" not in r.get("walk_forward", {})
+        ]
 
         x = np.arange(len(factor_names))
         width = 0.35
@@ -491,15 +540,21 @@ def main():
                     ax.set_xticklabels([f"{v}" for v in x_vals], rotation=45)
                     ax.axhline(y=0.03, color="green", linestyle="--", alpha=0.5)
                     ax.axhline(y=0, color="gray", linestyle="-", alpha=0.3)
-                    ax.set_xlabel(f'{sens["param_name"]}')
+                    ax.set_xlabel(f"{sens['param_name']}")
                     ax.set_ylabel("平均 IC")
-                    ax.set_title(f'Param Sensitivity: {sens["param_name"]}')
+                    ax.set_title(f"Param Sensitivity: {sens['param_name']}")
 
                     for bar, val in zip(bars, y_vals):
                         h = bar.get_height()
                         offset = 0.005 if h >= 0 else -0.015
-                        ax.text(bar.get_x() + bar.get_width() / 2, h + offset, f"{val:.3f}",
-                               ha="center", va="bottom" if h >= 0 else "top", fontsize=8)
+                        ax.text(
+                            bar.get_x() + bar.get_width() / 2,
+                            h + offset,
+                            f"{val:.3f}",
+                            ha="center",
+                            va="bottom" if h >= 0 else "top",
+                            fontsize=8,
+                        )
 
                 plt.suptitle("参数敏感性分析 (绿色=IC>0.03, 红色=IC<0)")
                 plt.tight_layout()
@@ -534,7 +589,11 @@ def main():
 
         logger.info(
             "  %s: 评分=%.1f, 一致性=%.0f%%, 窗口=%d %s",
-            name, score, consistency * 100, n_win, status,
+            name,
+            score,
+            consistency * 100,
+            n_win,
+            status,
         )
 
         if rec_params:
@@ -546,12 +605,14 @@ def main():
     optimized_factors = []
     for r in wf_results:
         if r.get("walk_forward", {}).get("passed", False) and r.get("recommended_params"):
-            optimized_factors.append({
-                "name": r["factor_name"],
-                "family": r["family"],
-                "recommended_params": r["recommended_params"],
-                "consistency_score": r["walk_forward"]["consistency_score"],
-            })
+            optimized_factors.append(
+                {
+                    "name": r["factor_name"],
+                    "family": r["family"],
+                    "recommended_params": r["recommended_params"],
+                    "consistency_score": r["walk_forward"]["consistency_score"],
+                }
+            )
 
     if optimized_factors:
         opt_path = output_dir / f"optimized_params_{timestamp}.json"

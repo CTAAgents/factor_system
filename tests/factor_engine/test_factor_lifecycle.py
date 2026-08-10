@@ -14,16 +14,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from fts.factor_engine.audit import (
-    AuditItemResult,
-    FactorAuditConfig,
-    FactorAuditReport,
     FactorAuditor,
 )
 from fts.factor_engine.factor_db import (
@@ -71,20 +67,23 @@ def _add_evals(repo, factor_id, sharpe_values, ic=0.05):
     for i, sharpe in enumerate(sharpe_values):
         # 最旧值 (i=0) 使用最早日期，最新值使用最新日期
         eval_date = base_date - timedelta(days=(n - 1 - i) * 30)
-        repo._get_conn().execute("""
+        repo._get_conn().execute(
+            """
             INSERT INTO factor_evaluations (
                 eval_id, factor_id,
                 level_1_sharpe, level_1_ic, level_1_icir,
                 evaluated_at
             ) VALUES (?, ?, ?, ?, ?, ?)
-        """, [
-            f"eval_{uuid.uuid4().hex[:8]}",
-            factor_id,
-            sharpe,
-            ic,
-            ic * 2 if ic > 0 else ic,
-            eval_date.strftime("%Y-%m-%d %H:%M:%S"),
-        ])
+        """,
+            [
+                f"eval_{uuid.uuid4().hex[:8]}",
+                factor_id,
+                sharpe,
+                ic,
+                ic * 2 if ic > 0 else ic,
+                eval_date.strftime("%Y-%m-%d %H:%M:%S"),
+            ],
+        )
 
 
 # ─── 1. 因子入库 + 血缘追踪 ──────────────────────────
@@ -93,17 +92,19 @@ def _add_evals(repo, factor_id, sharpe_values, ic=0.05):
 class TestFactorStorageAndLineage:
     def test_factor_roundtrip(self, repo, lineage):
         """因子入库后可通过血缘查询获取完整信息。"""
-        fid = repo.create_factor({
-            "factor_id": "f_e2e_001",
-            "name": "E2E Factor",
-            "code": "close - open",
-            "family": "e2e",
-            "market": "stock",
-            "is_elite": True,
-            "status": "active",
-            "sharpe": 1.5,
-            "ic": 0.08,
-        })
+        fid = repo.create_factor(
+            {
+                "factor_id": "f_e2e_001",
+                "name": "E2E Factor",
+                "code": "close - open",
+                "family": "e2e",
+                "market": "stock",
+                "is_elite": True,
+                "status": "active",
+                "sharpe": 1.5,
+                "ic": 0.08,
+            }
+        )
 
         assert fid == "f_e2e_001"
 
@@ -120,15 +121,17 @@ class TestFactorStorageAndLineage:
 
     def test_lineage_with_evaluations(self, repo, lineage):
         """添加评估后血缘报告应包含评估摘要。"""
-        fid = repo.create_factor({
-            "factor_id": "f_e2e_002",
-            "name": "E2E Eval Factor",
-            "code": "close",
-            "family": "e2e",
-            "market": "futures",
-            "is_elite": True,
-            "sharpe": 2.0,
-        })
+        fid = repo.create_factor(
+            {
+                "factor_id": "f_e2e_002",
+                "name": "E2E Eval Factor",
+                "code": "close",
+                "family": "e2e",
+                "market": "futures",
+                "is_elite": True,
+                "sharpe": 2.0,
+            }
+        )
         _add_evals(repo, fid, sharpe_values=[2.0, 2.1, 1.9, 2.0])
 
         lineage_info = lineage.get_lineage(fid)
@@ -145,9 +148,11 @@ class TestAuditAndFailureClassification:
         """审计失败时自动输出 FailureClassifier 建议。"""
         n = 120
         rng = np.random.RandomState(42)
-        data = pd.DataFrame({
-            "close": np.cumsum(rng.randn(n) * 0.5) + 100,
-        })
+        data = pd.DataFrame(
+            {
+                "close": np.cumsum(rng.randn(n) * 0.5) + 100,
+            }
+        )
         forward_returns = rng.randn(n) * 0.01
 
         # 故意提供失败的审计条件
@@ -206,15 +211,17 @@ class TestAuditAndFailureClassification:
 class TestInspectionAndSuggestions:
     def test_degraded_factor_triggers_downgrade(self, inspector, repo):
         """Sharpe 持续退化的因子应被降级。"""
-        fid = repo.create_factor({
-            "factor_id": "f_degenerate",
-            "name": "Degenerate Factor",
-            "code": "close",
-            "family": "test",
-            "market": "stock",
-            "is_elite": True,
-            "sharpe": 1.0,
-        })
+        fid = repo.create_factor(
+            {
+                "factor_id": "f_degenerate",
+                "name": "Degenerate Factor",
+                "code": "close",
+                "family": "test",
+                "market": "stock",
+                "is_elite": True,
+                "sharpe": 1.0,
+            }
+        )
         # 时间顺序 [最旧 → 最新]: 1.0, 1.0, 0.2, 0.2 → 下降
         _add_evals(repo, fid, sharpe_values=[1.0, 1.0, 0.2, 0.2])
 
@@ -236,15 +243,17 @@ class TestInspectionAndSuggestions:
 
     def test_downgraded_factor_gets_suggestion(self, inspector, repo):
         """被降级因子的记录应包含退化原因。"""
-        fid = repo.create_factor({
-            "factor_id": "f_suggest",
-            "name": "Suggest Factor",
-            "code": "close",
-            "family": "test",
-            "market": "stock",
-            "is_elite": True,
-            "sharpe": 0.8,
-        })
+        fid = repo.create_factor(
+            {
+                "factor_id": "f_suggest",
+                "name": "Suggest Factor",
+                "code": "close",
+                "family": "test",
+                "market": "stock",
+                "is_elite": True,
+                "sharpe": 0.8,
+            }
+        )
         # 时间顺序: 0.8, 0.8, 0.1, 0.1 → 下降
         _add_evals(repo, fid, sharpe_values=[0.8, 0.8, 0.1, 0.1])
 
@@ -259,15 +268,17 @@ class TestInspectionAndSuggestions:
 
     def test_reactivate_restores_elite_status(self, inspector, repo):
         """重新激活因子应恢复精英状态。"""
-        fid = repo.create_factor({
-            "factor_id": "f_reactivate",
-            "name": "Reactivate Factor",
-            "code": "close",
-            "family": "test",
-            "market": "stock",
-            "is_elite": True,
-            "sharpe": 0.5,
-        })
+        fid = repo.create_factor(
+            {
+                "factor_id": "f_reactivate",
+                "name": "Reactivate Factor",
+                "code": "close",
+                "family": "test",
+                "market": "stock",
+                "is_elite": True,
+                "sharpe": 0.5,
+            }
+        )
         # 时间顺序: 0.5, 0.5, 0.1, 0.1 → 下降
         _add_evals(repo, fid, sharpe_values=[0.5, 0.5, 0.1, 0.1])
 
@@ -293,16 +304,18 @@ class TestFullLifecycleE2E:
     def test_full_closed_loop(self, repo, lineage, auditor, inspector):
         """完整闭环: 入库 → 评估 → 血缘 → 审计 → 降级 → 激活。"""
         # 1. 因子入库
-        fid = repo.create_factor({
-            "factor_id": "f_lifecycle",
-            "name": "Lifecycle Factor",
-            "code": "alpha - beta",
-            "family": "e2e",
-            "market": "futures",
-            "is_elite": True,
-            "sharpe": 1.8,
-            "ic": 0.07,
-        })
+        fid = repo.create_factor(
+            {
+                "factor_id": "f_lifecycle",
+                "name": "Lifecycle Factor",
+                "code": "alpha - beta",
+                "family": "e2e",
+                "market": "futures",
+                "is_elite": True,
+                "sharpe": 1.8,
+                "ic": 0.07,
+            }
+        )
 
         # 2. 添加评估历史 (最旧→最新: 1.8 → 0.3, 模拟退化)
         _add_evals(repo, fid, sharpe_values=[1.8, 1.5, 0.5, 0.3], ic=0.05)
@@ -337,9 +350,7 @@ class TestFullLifecycleE2E:
         assert len(suggestions) > 0
 
         # 5. 巡检 + 自动降级
-        inspection = inspector.inspect_and_downgrade(
-            threshold=-0.1, commit=True
-        )
+        inspection = inspector.inspect_and_downgrade(threshold=-0.1, commit=True)
         assert inspection["summary"]["downgraded"] >= 1
 
         # 验证降级结果
@@ -357,15 +368,17 @@ class TestFullLifecycleE2E:
 
     def test_healthy_factor_survives_inspection(self, repo, lineage, auditor, inspector):
         """健康因子应通过巡检不被降级。"""
-        fid = repo.create_factor({
-            "factor_id": "f_healthy",
-            "name": "Healthy Factor",
-            "code": "close",
-            "family": "e2e",
-            "market": "stock",
-            "is_elite": True,
-            "sharpe": 2.0,
-        })
+        fid = repo.create_factor(
+            {
+                "factor_id": "f_healthy",
+                "name": "Healthy Factor",
+                "code": "close",
+                "family": "e2e",
+                "market": "stock",
+                "is_elite": True,
+                "sharpe": 2.0,
+            }
+        )
         _add_evals(repo, fid, sharpe_values=[1.9, 2.0, 2.0, 2.1])
 
         result = inspector.inspect_and_downgrade(threshold=-0.1, commit=True)
@@ -390,20 +403,20 @@ class TestEdgeCases:
         assert result["summary"]["downgraded"] == 0
 
     def test_dry_run_does_not_modify(self, inspector, repo):
-        fid = repo.create_factor({
-            "factor_id": "f_dry",
-            "name": "Dry Run Factor",
-            "code": "close",
-            "family": "test",
-            "market": "stock",
-            "is_elite": True,
-            "sharpe": 0.5,
-        })
+        fid = repo.create_factor(
+            {
+                "factor_id": "f_dry",
+                "name": "Dry Run Factor",
+                "code": "close",
+                "family": "test",
+                "market": "stock",
+                "is_elite": True,
+                "sharpe": 0.5,
+            }
+        )
         _add_evals(repo, fid, sharpe_values=[0.5, 0.5, 0.1, 0.1])
 
-        result = inspector.inspect_and_downgrade(
-            threshold=-0.1, commit=False
-        )
+        inspector.inspect_and_downgrade(threshold=-0.1, commit=False)
 
         # dry-run 不修改数据
         factor = repo.get_factor(fid)

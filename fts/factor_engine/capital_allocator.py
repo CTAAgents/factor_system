@@ -85,25 +85,17 @@ class CapitalAllocator:
         if mode == "fixed":
             result = self._fixed_allocation(total_capital)
         elif mode == "vol_target":
-            result = self._vol_target_allocation(
-                portfolio_returns, total_capital, target_volatility, max_drawdown
-            )
+            result = self._vol_target_allocation(portfolio_returns, total_capital, target_volatility, max_drawdown)
         elif mode == "risk_parity":
             result = self._risk_parity_allocation(portfolio_returns, total_capital)
         elif mode == "kelly":
-            result = self._kelly_criterion_allocation(
-                total_capital, win_rate, payoff_ratio
-            )
+            result = self._kelly_criterion_allocation(total_capital, win_rate, payoff_ratio)
         else:
             logger.warning("[CapitalAllocator] 未知模式 %s，回退 vol_target", mode)
-            result = self._vol_target_allocation(
-                portfolio_returns, total_capital, target_volatility, max_drawdown
-            )
+            result = self._vol_target_allocation(portfolio_returns, total_capital, target_volatility, max_drawdown)
 
         # v2.60.0 (GAP-F09): 保证金占用约束（强平风险告警 + 上限截断）
-        result = self._apply_margin_constraint(
-            result, total_capital, margin_rates, max_margin_usage
-        )
+        result = self._apply_margin_constraint(result, total_capital, margin_rates, max_margin_usage)
         return result
 
     # ─── 保证金占用约束（GAP-F09，v2.60.0）────────────────
@@ -133,6 +125,7 @@ class CapitalAllocator:
         if margin_rates is None:
             try:
                 from fts.config.settings import get_config
+
                 margin_rates = get_config().margin_rate_map or {}
             except Exception:  # noqa: BLE001
                 margin_rates = {}
@@ -157,15 +150,14 @@ class CapitalAllocator:
             details["margin_scaled"] = True
             details["margin_scale_factor"] = round(scale, 6)
             logger.warning(
-                "[CapitalAllocator] 保证金占用 %.2f%% 超上限 %.0f%%，"
-                "权重等比缩放至 %.4f（强平风险告警）",
-                margin_usage * 100, max_margin_usage * 100, scale,
+                "[CapitalAllocator] 保证金占用 %.2f%% 超上限 %.0f%%，权重等比缩放至 %.4f（强平风险告警）",
+                margin_usage * 100,
+                max_margin_usage * 100,
+                scale,
             )
 
         result.weights = weights
-        result.allocated_capital = {
-            sym: total_capital * w for sym, w in weights.items()
-        }
+        result.allocated_capital = {sym: total_capital * w for sym, w in weights.items()}
         result.details = details
         return result
 
@@ -191,7 +183,8 @@ class CapitalAllocator:
         returns = _to_frame(portfolio_returns)
         if returns.empty:
             return AllocationResult(
-                mode="vol_target", leverage=1.0,
+                mode="vol_target",
+                leverage=1.0,
                 weights={"portfolio": 1.0},
                 allocated_capital={"portfolio": total_capital},
                 details={"reason": "no data"},
@@ -213,7 +206,8 @@ class CapitalAllocator:
         leverage = sum(weights.values())
         logger.info(
             "[CapitalAllocator] vol_target 完成 [target=%.2f, leverage=%.2f]",
-            target_volatility, leverage,
+            target_volatility,
+            leverage,
         )
         return AllocationResult(
             mode="vol_target",
@@ -235,7 +229,8 @@ class CapitalAllocator:
             return self._fixed_allocation(total_capital)
         if len(returns.columns) == 1:
             return AllocationResult(
-                mode="risk_parity", leverage=1.0,
+                mode="risk_parity",
+                leverage=1.0,
                 weights={"portfolio": 1.0},
                 allocated_capital={"portfolio": total_capital},
             )
@@ -253,7 +248,7 @@ class CapitalAllocator:
                     break
                 marg = (cov @ w) / sigma_p  # 边际风险贡献
                 rc = w * marg
-                rc_sum = np.sum(rc)
+                rc_sum: float = np.sum(rc)
                 if rc_sum < 1e-12:
                     break
                 target = rc_sum / n

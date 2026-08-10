@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import pytest
+
+if TYPE_CHECKING:  # pragma: no cover
+    from fts.factor_engine.evolution_loop import EvolutionLoop
 
 # 把 FTS 根目录加入 sys.path（fts.factor_engine 是 FTS 包的子模块）
 _FTS_ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +21,7 @@ if str(_FTS_ROOT) not in sys.path:
 
 # ─── 共享 fixtures ────────────────────────────────────────
 
+
 @pytest.fixture
 def sample_ohlcv() -> pd.DataFrame:
     """500 天的合成 OHLCV 数据（用于因子评估测试）。"""
@@ -24,13 +29,16 @@ def sample_ohlcv() -> pd.DataFrame:
     n = 500
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
-    return pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.3,
-        "low": close - np.abs(np.random.randn(n)) * 0.3,
-        "close": close,
-        "volume": np.random.randint(1000, 10000, n).astype(float),
-    }, index=dates)
+    return pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.3,
+            "low": close - np.abs(np.random.randn(n)) * 0.3,
+            "close": close,
+            "volume": np.random.randint(1000, 10000, n).astype(float),
+        },
+        index=dates,
+    )
 
 
 @pytest.fixture
@@ -58,10 +66,12 @@ def tmp_elite_dir(tmp_path) -> Path:
 
 # ─── Mock fixtures（减少 test_evolution_loop.py 中的重复 Mock 代码）───
 
+
 @pytest.fixture
 def mock_trial():
     """Mock optuna trial 对象。"""
     from unittest.mock import MagicMock
+
     return MagicMock()
 
 
@@ -74,10 +84,10 @@ def mock_optuna_study(monkeypatch):
     from unittest.mock import MagicMock
     import fts.factor_engine.micro_evolution as mev
 
-    monkeypatch.setattr(mev, 'TPESampler', MagicMock(), raising=False)
-    monkeypatch.setattr(mev, '_HAS_OPTUNA', True)
+    monkeypatch.setattr(mev, "TPESampler", MagicMock(), raising=False)
+    monkeypatch.setattr(mev, "_HAS_OPTUNA", True)
     mock_optuna = MagicMock()
-    monkeypatch.setattr(mev, 'optuna', mock_optuna)
+    monkeypatch.setattr(mev, "optuna", mock_optuna)
     mock_study = MagicMock()
     mock_optuna.create_study.return_value = mock_study
     return mock_optuna, mock_study
@@ -87,11 +97,13 @@ def mock_optuna_study(monkeypatch):
 def mock_evolve_micro():
     """Patch fts.factor_engine.evolution_loop.evolve_micro。"""
     from unittest.mock import patch
+
     with patch("fts.factor_engine.evolution_loop.evolve_micro") as m:
         yield m
 
 
 # ─── EvolutionLoop 集成测试 fixtures ──────────────────────
+
 
 @pytest.fixture
 def sample_seed() -> dict:

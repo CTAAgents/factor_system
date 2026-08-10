@@ -18,10 +18,9 @@ fts.factor_engine.portfolio_constructor — 组合构建器（B.2 Stage 3）。
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -75,8 +74,10 @@ class PortfolioConstructor:
         """
         if not signals:
             return PortfolioResult(
-                weights={}, portfolio_returns=pd.Series(dtype=float),
-                holdings=pd.DataFrame(), turnover=pd.Series(dtype=float),
+                weights={},
+                portfolio_returns=pd.Series(dtype=float),
+                holdings=pd.DataFrame(),
+                turnover=pd.Series(dtype=float),
             )
 
         # 1. 对齐信号为宽表
@@ -84,16 +85,11 @@ class PortfolioConstructor:
 
         # 2. 计算权重
         if weights is None:
-            weights = self._compute_weights(
-                list(signals.keys()), weight_method, regime, factor_metrics
-            )
+            weights = self._compute_weights(list(signals.keys()), weight_method, regime, factor_metrics)
         weights = {k: float(v) for k, v in weights.items() if v != 0}
 
         # 3. 组合收益 = Σ w_i * signal_i（逐日，缺数补 0）
-        weighted = pd.DataFrame(
-            {fid: holdings[fid].fillna(0.0) * weights.get(fid, 0.0)
-             for fid in holdings.columns}
-        )
+        weighted = pd.DataFrame({fid: holdings[fid].fillna(0.0) * weights.get(fid, 0.0) for fid in holdings.columns})
         portfolio_returns = weighted.sum(axis=1).dropna()
 
         # 4. 换手率 = 持仓绝对变化均值
@@ -101,7 +97,9 @@ class PortfolioConstructor:
 
         logger.info(
             "[PortfolioConstructor] 组合构建完成 [n=%d, method=%s, weights=%s]",
-            len(weights), weight_method, {k: round(v, 4) for k, v in weights.items()},
+            len(weights),
+            weight_method,
+            {k: round(v, 4) for k, v in weights.items()},
         )
         return PortfolioResult(
             weights=weights,

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -35,9 +34,9 @@ logger = logging.getLogger(__name__)
 # ─── 配置 ──────────────────────────────────────────────────
 
 FACTOR_ID = "fct_1bd8ac1e"  # fut_bias 因子
-SYMBOL = "RB0"              # 螺纹钢连续合约
+SYMBOL = "RB0"  # 螺纹钢连续合约
 FREQUENCIES = ["1m", "5m", "15m", "30m", "60m", "daily"]
-DAYS = 1000                 # 基础数据量
+DAYS = 1000  # 基础数据量
 
 # 交易时段（螺纹钢日盘 9:00-15:00, 夜盘 21:00-23:00）
 TRADING_SESSIONS = {
@@ -72,6 +71,7 @@ def _load_factor_by_id(factor_id: str, market: str = "futures") -> dict | None:
                 pass
     try:
         from fts.factor_engine.factor_db.repository import FactorRepository
+
         repo = FactorRepository()
         return repo.get_factor(factor_id)
     except Exception as e:  # noqa: BLE001
@@ -164,14 +164,18 @@ def analyze_intraday_pattern(symbol: str, days: int = 1000) -> pd.DataFrame:
     df["volatility"] = df["return"].abs()
 
     # 按小时分组统计
-    hourly = df.groupby("hour").agg(
-        n_bars=("close", "count"),
-        mean_return=("return", "mean"),
-        std_return=("return", "std"),
-        mean_vol=("volatility", "mean"),
-        avg_volume=("volume", "mean"),
-        avg_range=("close", lambda x: (x.max() - x.min()) / x.mean()),
-    ).reset_index()
+    hourly = (
+        df.groupby("hour")
+        .agg(
+            n_bars=("close", "count"),
+            mean_return=("return", "mean"),
+            std_return=("return", "std"),
+            mean_vol=("volatility", "mean"),
+            avg_volume=("volume", "mean"),
+            avg_range=("close", lambda x: (x.max() - x.min()) / x.mean()),
+        )
+        .reset_index()
+    )
 
     # 添加交易时段标签
     def _session_label(h: int) -> str:
@@ -196,6 +200,7 @@ def analyze_intraday_pattern(symbol: str, days: int = 1000) -> pd.DataFrame:
 def _compute_factor_values(factor_dict: dict, data: pd.DataFrame) -> np.ndarray | None:
     """使用 BacktestPipeline 执行器计算因子值。"""
     from fts.factor_engine.backtest_pipeline import BacktestPipeline
+
     try:
         return BacktestPipeline._execute_factor_code(
             factor_dict.get("code", ""),
@@ -246,12 +251,14 @@ def analyze_ic_decay(symbol: str, frequency: str = "5m", days: int = 1000) -> pd
         if len(valid) < 10:
             continue
         ic = valid["factor"].corr(valid[col])
-        decay_results.append({
-            "forward_period": p,
-            "forward_minutes": p * _period_to_minutes(frequency),
-            "ic": ic,
-            "n_samples": len(valid),
-        })
+        decay_results.append(
+            {
+                "forward_period": p,
+                "forward_minutes": p * _period_to_minutes(frequency),
+                "ic": ic,
+                "n_samples": len(valid),
+            }
+        )
 
     return pd.DataFrame(decay_results)
 
@@ -262,7 +269,9 @@ def _period_to_minutes(period: str) -> int:
     return mapping.get(period, 5)
 
 
-def analyze_signal_autocorrelation(symbol: str, frequency: str = "5m", days: int = 1000, max_lag: int = 50) -> pd.DataFrame:
+def analyze_signal_autocorrelation(
+    symbol: str, frequency: str = "5m", days: int = 1000, max_lag: int = 50
+) -> pd.DataFrame:
     """分析信号自相关（持续性）。"""
     factor_dict = _load_factor_by_id(FACTOR_ID, "futures")
     if factor_dict is None:
@@ -283,11 +292,13 @@ def analyze_signal_autocorrelation(symbol: str, frequency: str = "5m", days: int
     results = []
     for lag in range(1, max_lag + 1):
         acf = series.autocorr(lag=lag)
-        results.append({
-            "lag": lag,
-            "lag_minutes": lag * _period_to_minutes(frequency),
-            "autocorrelation": acf,
-        })
+        results.append(
+            {
+                "lag": lag,
+                "lag_minutes": lag * _period_to_minutes(frequency),
+                "autocorrelation": acf,
+            }
+        )
 
     return pd.DataFrame(results)
 
@@ -359,19 +370,19 @@ def generate_report(
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     lines = [
-        f"# 分钟级微观结构特征分析报告",
-        f"",
+        "# 分钟级微观结构特征分析报告",
+        "",
         f"> 因子: {FACTOR_ID} (fut_bias)",
         f"> 品种: {SYMBOL} (螺纹钢连续合约)",
         f"> 生成时间: {now}",
-        f"> 分析版本: v2.30.0 Phase 2",
-        f"",
-        f"---",
-        f"",
-        f"## 1. 多频率回测对比",
-        f"",
-        f"| 频率 | 行数 | 年化收益 | Sharpe | 最大回撤 | 胜率 | 盈亏比 | 盈亏因子 | IC均值 | IC IR | 换手率 |",
-        f"|:----|:----|:--------|:------|:--------|:----|:------|:--------|:------|:-----|:------|",
+        "> 分析版本: v2.30.0 Phase 2",
+        "",
+        "---",
+        "",
+        "## 1. 多频率回测对比",
+        "",
+        "| 频率 | 行数 | 年化收益 | Sharpe | 最大回撤 | 胜率 | 盈亏比 | 盈亏因子 | IC均值 | IC IR | 换手率 |",
+        "|:----|:----|:--------|:------|:--------|:----|:------|:--------|:------|:-----|:------|",
     ]
 
     for r in freq_results:
@@ -392,23 +403,23 @@ def generate_report(
             )
 
     lines += [
-        f"",
-        f"### 1.1 频率-绩效关系分析",
-        f"",
-        f"- **高频 vs 低频**: 对比 1m/5m 与 60m/日线的 Sharpe 和 IC 差异",
-        f"- **年化因子合理性**: 检查分钟级年化因子是否过度放大指标",
-        f"- **换手率随频率变化**: 频率越高，信号切换越频繁，换手率应越大",
-        f"",
-        f"---",
-        f"",
-        f"## 2. 日内波动模式",
-        f"",
+        "",
+        "### 1.1 频率-绩效关系分析",
+        "",
+        "- **高频 vs 低频**: 对比 1m/5m 与 60m/日线的 Sharpe 和 IC 差异",
+        "- **年化因子合理性**: 检查分钟级年化因子是否过度放大指标",
+        "- **换手率随频率变化**: 频率越高，信号切换越频繁，换手率应越大",
+        "",
+        "---",
+        "",
+        "## 2. 日内波动模式",
+        "",
     ]
 
     if not intraday.empty:
         lines += [
-            f"| 时段 | 小时 | K线数 | 平均收益(%) | 收益标准差(%) | 平均波动(%) | 平均成交量 | 日内振幅(%) |",
-            f"|:----|:----|:-----|:-----------|:-------------|:-----------|:---------|:-----------|",
+            "| 时段 | 小时 | K线数 | 平均收益(%) | 收益标准差(%) | 平均波动(%) | 平均成交量 | 日内振幅(%) |",
+            "|:----|:----|:-----|:-----------|:-------------|:-----------|:---------|:-----------|",
         ]
         for _, row in intraday.iterrows():
             lines.append(
@@ -423,23 +434,23 @@ def generate_report(
         lines += ["（日内数据不足，无法分析）"]
 
     lines += [
-        f"",
-        f"### 2.1 关键发现",
-        f"",
-        f"- **波动率集中时段**: 开盘/收盘前后波动率通常最高",
-        f"- **夜盘特征**: 夜盘波动率与外盘联动情况",
-        f"- **成交量分布**: 成交量在日内的分布特征",
-        f"",
-        f"---",
-        f"",
-        f"## 3. IC 衰减分析",
-        f"",
+        "",
+        "### 2.1 关键发现",
+        "",
+        "- **波动率集中时段**: 开盘/收盘前后波动率通常最高",
+        "- **夜盘特征**: 夜盘波动率与外盘联动情况",
+        "- **成交量分布**: 成交量在日内的分布特征",
+        "",
+        "---",
+        "",
+        "## 3. IC 衰减分析",
+        "",
     ]
 
     if not ic_decay.empty:
         lines += [
-            f"| 持有期(K线) | 持有期(分钟) | IC | 样本数 |",
-            f"|:-----------|:------------|:---|:------|",
+            "| 持有期(K线) | 持有期(分钟) | IC | 样本数 |",
+            "|:-----------|:------------|:---|:------|",
         ]
         for _, row in ic_decay.iterrows():
             lines.append(
@@ -453,9 +464,9 @@ def generate_report(
             ic_last = ic_decay["ic"].iloc[-1]
             decay_rate = (ic_first - ic_last) / ic_first * 100 if ic_first != 0 else 0
             lines += [
-                f"",
-                f"### 3.1 IC 衰减率",
-                f"",
+                "",
+                "### 3.1 IC 衰减率",
+                "",
                 f"- 短期 IC（{int(ic_decay['forward_period'].iloc[0])} 根 K 线）: {_fmt(ic_first, 4)}",
                 f"- 长期 IC（{int(ic_decay['forward_period'].iloc[-1])} 根 K 线）: {_fmt(ic_last, 4)}",
                 f"- 衰减幅度: {_fmt(decay_rate, 1)}%",
@@ -464,11 +475,11 @@ def generate_report(
         lines += ["（IC 衰减数据不足）"]
 
     lines += [
-        f"",
-        f"---",
-        f"",
-        f"## 4. 信号自相关分析",
-        f"",
+        "",
+        "---",
+        "",
+        "## 4. 信号自相关分析",
+        "",
     ]
 
     if not signal_acf.empty:
@@ -483,21 +494,18 @@ def generate_report(
                 break
 
         lines += [
-            f"| 滞后阶数 | 滞后时间(分钟) | 自相关系数 |",
-            f"|:--------|:--------------|:----------|",
+            "| 滞后阶数 | 滞后时间(分钟) | 自相关系数 |",
+            "|:--------|:--------------|:----------|",
         ]
         for _, row in signal_acf.iterrows():
             if row["lag"] > 20 and row["lag"] % 5 != 0:
                 continue
-            lines.append(
-                f"| {int(row['lag'])} | {int(row['lag_minutes'])} "
-                f"| {_fmt(row['autocorrelation'], 4)} |"
-            )
+            lines.append(f"| {int(row['lag'])} | {int(row['lag_minutes'])} | {_fmt(row['autocorrelation'], 4)} |")
 
         lines += [
-            f"",
-            f"### 4.1 信号半衰期与衰减",
-            f"",
+            "",
+            "### 4.1 信号半衰期与衰减",
+            "",
             f"- 半衰期（自相关 < 0.5）: {half_life or 'N/A'} 根 K 线",
             f"- 衰减期（自相关 < 0.1）: {decay_lag or 'N/A'} 根 K 线",
             f"- 信号持续性: {'高（长记忆性）' if half_life and half_life > 20 else '中' if half_life and half_life > 5 else '低（快速衰减）'}",
@@ -506,17 +514,17 @@ def generate_report(
         lines += ["（信号自相关数据不足）"]
 
     lines += [
-        f"",
-        f"---",
-        f"",
-        f"## 5. 换手率与信号稳定性",
-        f"",
+        "",
+        "---",
+        "",
+        "## 5. 换手率与信号稳定性",
+        "",
     ]
 
     if turnover:
         lines += [
-            f"| 指标 | 值 |",
-            f"|:----|:---|",
+            "| 指标 | 值 |",
+            "|:----|:---|",
             f"| 频率 | {turnover.get('frequency', 'N/A')} |",
             f"| 信号总数 | {turnover.get('n_signals', 'N/A')} |",
             f"| 方向变化次数 | {turnover.get('direction_changes', 'N/A')} |",
@@ -532,31 +540,31 @@ def generate_report(
         lines += ["（换手率数据不足）"]
 
     lines += [
-        f"",
-        f"---",
-        f"",
-        f"## 6. 综合结论",
-        f"",
-        f"### 6.1 频率选择建议",
-        f"",
-        f"- 基于 Sharpe 最高的频率: ...",
-        f"- 基于 IC 最稳定的频率: ...",
-        f"- 基于换手率合理的频率: ...",
-        f"",
-        f"### 6.2 最佳交易时段",
-        f"",
-        f"- 基于波动率/成交量分析的日内最佳交易窗口: ...",
-        f"",
-        f"### 6.3 信号持有期建议",
-        f"",
-        f"- IC 衰减曲线显示的最佳持有期: ...",
-        f"",
-        f"### 6.4 风险提示",
-        f"",
-        f"- 分钟级数据量有限（19 个交易日），统计显著性需谨慎评估",
-        f"- 因子在分钟级别上的表现可能受微观结构噪声影响",
-        f"- 实盘交易成本（滑点、手续费）在分钟级别上影响更大",
-        f"",
+        "",
+        "---",
+        "",
+        "## 6. 综合结论",
+        "",
+        "### 6.1 频率选择建议",
+        "",
+        "- 基于 Sharpe 最高的频率: ...",
+        "- 基于 IC 最稳定的频率: ...",
+        "- 基于换手率合理的频率: ...",
+        "",
+        "### 6.2 最佳交易时段",
+        "",
+        "- 基于波动率/成交量分析的日内最佳交易窗口: ...",
+        "",
+        "### 6.3 信号持有期建议",
+        "",
+        "- IC 衰减曲线显示的最佳持有期: ...",
+        "",
+        "### 6.4 风险提示",
+        "",
+        "- 分钟级数据量有限（19 个交易日），统计显著性需谨慎评估",
+        "- 因子在分钟级别上的表现可能受微观结构噪声影响",
+        "- 实盘交易成本（滑点、手续费）在分钟级别上影响更大",
+        "",
     ]
 
     report = "\n".join(lines)
@@ -575,10 +583,10 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=DAYS, help="数据量")
     args = parser.parse_args()
 
-    print(f"=" * 60)
-    print(f"Phase 2: 分钟级微观结构特征分析")
+    print("=" * 60)
+    print("Phase 2: 分钟级微观结构特征分析")
     print(f"因子: {args.factor_id} | 品种: {args.symbol} | 数据量: {args.days}")
-    print(f"=" * 60)
+    print("=" * 60)
 
     # ─── 1. 多频率对比 ──
     print("\n[1/5] 多频率回测对比...")

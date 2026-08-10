@@ -143,29 +143,35 @@ class TestCrossSectionOps:
     """截面算子测试。"""
 
     def test_cross_rank(self):
-        panel = pd.DataFrame({
-            "date": ["2024-01-01"] * 3 + ["2024-01-02"] * 3,
-            "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        })
+        panel = pd.DataFrame(
+            {
+                "date": ["2024-01-01"] * 3 + ["2024-01-02"] * 3,
+                "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            }
+        )
         result = CrossSectionOps.cross_rank(panel)
         assert "cross_rank" in result.columns
         assert len(result) == 6
 
     def test_cross_zscore(self):
-        panel = pd.DataFrame({
-            "date": ["2024-01-01"] * 3 + ["2024-01-02"] * 3,
-            "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        })
+        panel = pd.DataFrame(
+            {
+                "date": ["2024-01-01"] * 3 + ["2024-01-02"] * 3,
+                "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            }
+        )
         result = CrossSectionOps.cross_zscore(panel)
         assert "cross_zscore" in result.columns
         assert len(result) == 6
 
     def test_industry_neutral(self):
-        panel = pd.DataFrame({
-            "date": ["2024-01-01"] * 4,
-            "industry": ["A", "A", "B", "B"],
-            "value": [10.0, 20.0, 30.0, 40.0],
-        })
+        panel = pd.DataFrame(
+            {
+                "date": ["2024-01-01"] * 4,
+                "industry": ["A", "A", "B", "B"],
+                "value": [10.0, 20.0, 30.0, 40.0],
+            }
+        )
         result = CrossSectionOps.industry_neutral(panel)
         assert "neutralized" in result.columns
         assert "industry_mean" in result.columns
@@ -287,7 +293,10 @@ class TestOperatorRegistry:
             return series * 2
 
         registry.register(
-            "custom_double", custom_op, "custom", ["series"],
+            "custom_double",
+            custom_op,
+            "custom",
+            ["series"],
             description="自定义翻倍算子",
         )
         assert registry.operator_count == initial_count + 1
@@ -304,44 +313,52 @@ class TestCrossSymbolOps:
     """跨品种算子测试。"""
 
     def test_industry_demean(self):
-        panel = pd.DataFrame({
-            "date": ["2024-01-01"] * 4,
-            "industry": ["A", "A", "B", "B"],
-            "value": [10.0, 20.0, 30.0, 40.0],
-        })
+        panel = pd.DataFrame(
+            {
+                "date": ["2024-01-01"] * 4,
+                "industry": ["A", "A", "B", "B"],
+                "value": [10.0, 20.0, 30.0, 40.0],
+            }
+        )
         result = CrossSymbolOps.industry_demean(panel)
         assert "industry_mean" in result.columns
         assert len(result) == 4
 
     def test_cap_demean(self):
-        panel = pd.DataFrame({
-            "date": ["2024-01-01"] * 3,
-            "market_cap": [100.0, 200.0, 300.0],
-            "value": [10.0, 20.0, 30.0],
-        })
+        panel = pd.DataFrame(
+            {
+                "date": ["2024-01-01"] * 3,
+                "market_cap": [100.0, 200.0, 300.0],
+                "value": [10.0, 20.0, 30.0],
+            }
+        )
         result = CrossSymbolOps.cap_demean(panel)
         assert "cap_mean" in result.columns
         assert "cap_weight" in result.columns
         assert len(result) == 3
 
     def test_region_demean(self):
-        panel = pd.DataFrame({
-            "date": ["2024-01-01"] * 4,
-            "region": ["N", "N", "S", "S"],
-            "value": [10.0, 20.0, 30.0, 40.0],
-        })
+        panel = pd.DataFrame(
+            {
+                "date": ["2024-01-01"] * 4,
+                "region": ["N", "N", "S", "S"],
+                "value": [10.0, 20.0, 30.0, 40.0],
+            }
+        )
         result = CrossSymbolOps.region_demean(panel)
         assert "region_mean" in result.columns
         assert len(result) == 4
 
     def test_industry_cap_neutral(self):
         """行业+市值双重中性化应返回 neutralized 列。"""
-        panel = pd.DataFrame({
-            "date": ["2024-01-01"] * 6 + ["2024-01-02"] * 6,
-            "industry": ["A", "A", "A", "B", "B", "B"] * 2,
-            "market_cap": [100.0, 200.0, 300.0, 100.0, 200.0, 300.0] * 2,
-            "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0] * 2,
-        })
+        panel = pd.DataFrame(
+            {
+                "date": ["2024-01-01"] * 6 + ["2024-01-02"] * 6,
+                "industry": ["A", "A", "A", "B", "B", "B"] * 2,
+                "market_cap": [100.0, 200.0, 300.0, 100.0, 200.0, 300.0] * 2,
+                "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0] * 2,
+            }
+        )
         result = CrossSymbolOps.industry_cap_neutral(panel)
         assert "neutralized" in result.columns
         assert "industry_mean" in result.columns
@@ -354,12 +371,14 @@ class TestCrossSymbolOps:
 
     def test_industry_cap_neutral_no_industry_match(self):
         """行业列缺失时应优雅处理（所有标的归入 UNKNOWN 组）。"""
-        panel = pd.DataFrame({
-            "date": ["2024-01-01"] * 4,
-            "industry": [None, None, None, None],
-            "market_cap": [100.0, 200.0, 300.0, 400.0],
-            "value": [10.0, 20.0, 30.0, 40.0],
-        })
+        panel = pd.DataFrame(
+            {
+                "date": ["2024-01-01"] * 4,
+                "industry": [None, None, None, None],
+                "market_cap": [100.0, 200.0, 300.0, 400.0],
+                "value": [10.0, 20.0, 30.0, 40.0],
+            }
+        )
         result = CrossSymbolOps.industry_cap_neutral(panel)
         assert "neutralized" in result.columns
         assert result["neutralized"].notna().all()
@@ -416,7 +435,10 @@ class TestFeatureOpsEngine:
             return series * 3
 
         engine.register_operator(
-            "custom_triple", custom_op, "custom", ["series"],
+            "custom_triple",
+            custom_op,
+            "custom",
+            ["series"],
             description="自定义三倍算子",
         )
         assert engine.registry.operator_count == initial_count + 1
@@ -427,13 +449,15 @@ class TestFeatureOpsEngine:
 
     def test_run_gp_search(self):
         np.random.seed(42)
-        data = pd.DataFrame({
-            "close": 100 + np.cumsum(np.random.randn(100) * 0.5),
-            "high": 105 + np.cumsum(np.random.randn(100) * 0.5),
-            "low": 95 + np.cumsum(np.random.randn(100) * 0.5),
-            "volume": np.random.randint(1000, 10000, 100).astype(float),
-            "forward_return_20d": np.random.randn(100) * 0.02,
-        })
+        data = pd.DataFrame(
+            {
+                "close": 100 + np.cumsum(np.random.randn(100) * 0.5),
+                "high": 105 + np.cumsum(np.random.randn(100) * 0.5),
+                "low": 95 + np.cumsum(np.random.randn(100) * 0.5),
+                "volume": np.random.randint(1000, 10000, 100).astype(float),
+                "forward_return_20d": np.random.randn(100) * 0.02,
+            }
+        )
         engine = FeatureOpsEngine()
         result = engine.run_gp_search(
             data,
@@ -446,13 +470,15 @@ class TestFeatureOpsEngine:
 
     def test_analyze_importance(self):
         np.random.seed(42)
-        data = pd.DataFrame({
-            "close": 100 + np.cumsum(np.random.randn(100) * 0.5),
-            "high": 105 + np.cumsum(np.random.randn(100) * 0.5),
-            "low": 95 + np.cumsum(np.random.randn(100) * 0.5),
-            "volume": np.random.randint(1000, 10000, 100).astype(float),
-            "forward_return_20d": np.random.randn(100) * 0.02,
-        })
+        data = pd.DataFrame(
+            {
+                "close": 100 + np.cumsum(np.random.randn(100) * 0.5),
+                "high": 105 + np.cumsum(np.random.randn(100) * 0.5),
+                "low": 95 + np.cumsum(np.random.randn(100) * 0.5),
+                "volume": np.random.randint(1000, 10000, 100).astype(float),
+                "forward_return_20d": np.random.randn(100) * 0.02,
+            }
+        )
         close = data["close"]
         factor_series = (close - close.mean()) / close.std()
 
@@ -467,13 +493,15 @@ class TestFeatureOpsEngine:
 
     def test_analyze_importance_with_custom_features(self):
         np.random.seed(42)
-        data = pd.DataFrame({
-            "close": 100 + np.cumsum(np.random.randn(100) * 0.5),
-            "high": 105 + np.cumsum(np.random.randn(100) * 0.5),
-            "low": 95 + np.cumsum(np.random.randn(100) * 0.5),
-            "volume": np.random.randint(1000, 10000, 100).astype(float),
-            "forward_return_20d": np.random.randn(100) * 0.02,
-        })
+        data = pd.DataFrame(
+            {
+                "close": 100 + np.cumsum(np.random.randn(100) * 0.5),
+                "high": 105 + np.cumsum(np.random.randn(100) * 0.5),
+                "low": 95 + np.cumsum(np.random.randn(100) * 0.5),
+                "volume": np.random.randint(1000, 10000, 100).astype(float),
+                "forward_return_20d": np.random.randn(100) * 0.02,
+            }
+        )
         factor_series = data["close"]
 
         engine = FeatureOpsEngine()
@@ -493,23 +521,31 @@ class TestTechnicalOps:
     """技术指标算子测试。"""
 
     def test_rsi(self):
-        s = pd.Series([100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0])
+        s = pd.Series(
+            [100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0]
+        )
         result = TechnicalOps.rsi(s, window=5)
         assert not pd.isna(result.iloc[-1])
         assert 0 <= result.iloc[-1] <= 100
 
     def test_bollinger_upper(self):
-        s = pd.Series([100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0])
+        s = pd.Series(
+            [100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0]
+        )
         result = TechnicalOps.bollinger_upper(s, window=5)
         assert not pd.isna(result.iloc[-1])
 
     def test_bollinger_lower(self):
-        s = pd.Series([100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0])
+        s = pd.Series(
+            [100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0]
+        )
         result = TechnicalOps.bollinger_lower(s, window=5)
         assert not pd.isna(result.iloc[-1])
 
     def test_bollinger_width(self):
-        s = pd.Series([100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0])
+        s = pd.Series(
+            [100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0]
+        )
         result = TechnicalOps.bollinger_width(s, window=5)
         assert not pd.isna(result.iloc[-1])
 
@@ -522,7 +558,9 @@ class TestTechnicalOps:
         assert result.iloc[-1] > 0
 
     def test_macd(self):
-        s = pd.Series([100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0])
+        s = pd.Series(
+            [100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 106.0, 108.0, 107.0, 109.0, 110.0, 112.0, 111.0, 113.0, 115.0]
+        )
         result = TechnicalOps.macd(s, fast=5, slow=10, signal=3)
         assert not pd.isna(result.iloc[-1])
 

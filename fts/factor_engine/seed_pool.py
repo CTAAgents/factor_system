@@ -254,7 +254,10 @@ _SEED_DEFINITIONS: list[dict[str, Any]] = [
             lookback=30,
         ),
         "economic_logic": EconomicLogic(
-            theory=4, behavioral=3, microstructure=3, institutional=5,
+            theory=4,
+            behavioral=3,
+            microstructure=3,
+            institutional=5,
             narrative="动量因子：投资者过度反应/反应不足导致价格延续。理论支撑=行为金融学动量效应。",
         ),
     },
@@ -269,7 +272,10 @@ _SEED_DEFINITIONS: list[dict[str, Any]] = [
             lookback=30,
         ),
         "economic_logic": EconomicLogic(
-            theory=4, behavioral=3, microstructure=4, institutional=4,
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=4,
             narrative="波动率回归：高波动后均值回归。理论支撑=波动率锥与均值回归现象。",
         ),
     },
@@ -284,7 +290,10 @@ _SEED_DEFINITIONS: list[dict[str, Any]] = [
             lookback=15,
         ),
         "economic_logic": EconomicLogic(
-            theory=3, behavioral=4, microstructure=5, institutional=4,
+            theory=3,
+            behavioral=4,
+            microstructure=5,
+            institutional=4,
             narrative="资金流：放量方向反映知情交易者意图。理论支撑=微观结构信息不对称。",
         ),
     },
@@ -299,7 +308,10 @@ _SEED_DEFINITIONS: list[dict[str, Any]] = [
             lookback=1,
         ),
         "economic_logic": EconomicLogic(
-            theory=5, behavioral=3, microstructure=2, institutional=5,
+            theory=5,
+            behavioral=3,
+            microstructure=2,
+            institutional=5,
             narrative="宏观制度：bull/bear/neutral 三态。理论支撑=宏观周期理论。",
         ),
     },
@@ -314,7 +326,10 @@ _SEED_DEFINITIONS: list[dict[str, Any]] = [
             lookback=1,
         ),
         "economic_logic": EconomicLogic(
-            theory=5, behavioral=3, microstructure=3, institutional=5,
+            theory=5,
+            behavioral=3,
+            microstructure=3,
+            institutional=5,
             narrative="利率代理：LPR1Y 环比。理论支撑=利率平价与融资成本理论。",
         ),
     },
@@ -329,7 +344,10 @@ _SEED_DEFINITIONS: list[dict[str, Any]] = [
             lookback=1,
         ),
         "economic_logic": EconomicLogic(
-            theory=5, behavioral=3, microstructure=3, institutional=5,
+            theory=5,
+            behavioral=3,
+            microstructure=3,
+            institutional=5,
             narrative="PMI 代理：制造业景气度。理论支撑=景气周期理论。",
         ),
     },
@@ -345,7 +363,10 @@ _SEED_DEFINITIONS: list[dict[str, Any]] = [
             lookback=30,
         ),
         "economic_logic": EconomicLogic(
-            theory=5, behavioral=3, microstructure=3, institutional=4,
+            theory=5,
+            behavioral=3,
+            microstructure=3,
+            institutional=4,
             narrative="价值因子：低价+放量近似估值安全边际。理论支撑=价值投资理论。",
         ),
     },
@@ -360,7 +381,10 @@ _SEED_DEFINITIONS: list[dict[str, Any]] = [
             lookback=30,
         ),
         "economic_logic": EconomicLogic(
-            theory=4, behavioral=3, microstructure=4, institutional=4,
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=4,
             narrative="质量因子：低波动+稳定上涨代理盈利能力。理论支撑=质量溢价理论。",
         ),
     },
@@ -375,7 +399,10 @@ _SEED_DEFINITIONS: list[dict[str, Any]] = [
             lookback=30,
         ),
         "economic_logic": EconomicLogic(
-            theory=5, behavioral=4, microstructure=3, institutional=3,
+            theory=5,
+            behavioral=4,
+            microstructure=3,
+            institutional=3,
             narrative="市值因子：成交量+价格代理市值大小。理论支撑=小市值效应。",
         ),
     },
@@ -383,6 +410,7 @@ _SEED_DEFINITIONS: list[dict[str, Any]] = [
 
 
 # ─── 种子池管理器 ─────────────────────────────────────────
+
 
 class SeedPool:
     """种子池管理器 — 加载/查询/注入种子因子。
@@ -415,6 +443,7 @@ class SeedPool:
         self._trace_id = trace_id
         if market is None:
             from fts.config.settings import get_config
+
             market = get_config().default_market
         self._market = market
         self._cache: dict[str, FactorProgram] = {}
@@ -425,18 +454,20 @@ class SeedPool:
             logger.info(
                 "[SeedPool.init] ★ 期货模式 (默认) market=futures, trace_id=%s, "
                 "use_yaml=%s, 将加载 81 个期货专用种子 (14 大因子家族)",
-                trace_id, use_yaml,
+                trace_id,
+                use_yaml,
             )
         elif market == "stock":
             logger.info(
-                "[SeedPool.init] ★ 股票模式 market=stock, trace_id=%s, "
-                "use_yaml=%s, 将加载 9 内置 + 473 外部股票种子",
-                trace_id, use_yaml,
+                "[SeedPool.init] ★ 股票模式 market=stock, trace_id=%s, use_yaml=%s, 将加载 9 内置 + 473 外部股票种子",
+                trace_id,
+                use_yaml,
             )
         else:
             logger.warning(
                 "[SeedPool.init] ⚠ 未知市场类型 market=%s, trace_id=%s",
-                market, trace_id,
+                market,
+                trace_id,
             )
 
     @classmethod
@@ -466,7 +497,14 @@ class SeedPool:
         logger.info(
             "[SeedPool.get_seed_counts] 动态统计: 期货=%d (14 家族) | "
             "股票=9 内置 + %d 外部 (WQ101=%d, Qlib158=%d, GTJA191=%d, 基本面=%d, JQ=%d) = %d",
-            futures_total, ext_total, wq, ql, gj, fd, jq, stock_total,
+            futures_total,
+            ext_total,
+            wq,
+            ql,
+            gj,
+            fd,
+            jq,
+            stock_total,
         )
         return counts
 
@@ -494,7 +532,12 @@ class SeedPool:
         if self._use_yaml:
             try:
                 from .seed_loader import load_all_yaml_seeds
-                logger.info("[SeedPool.load] 尝试 YAML 种子加载 (market=%s, include_external=%s)...", self._market, include_external)
+
+                logger.info(
+                    "[SeedPool.load] 尝试 YAML 种子加载 (market=%s, include_external=%s)...",
+                    self._market,
+                    include_external,
+                )
                 yaml_seeds = load_all_yaml_seeds(
                     trace_id=self._trace_id,
                     market=self._market,
@@ -505,7 +548,8 @@ class SeedPool:
                         self._cache[fp["name"]] = fp
                     logger.info(
                         "[SeedPool.load] ✅ YAML 种子加载成功: count=%d, sample=%s",
-                        len(yaml_seeds), [s["name"] for s in yaml_seeds[:5]],
+                        len(yaml_seeds),
+                        [s["name"] for s in yaml_seeds[:5]],
                     )
                     return self._list_base_seeds()
                 else:
@@ -517,12 +561,14 @@ class SeedPool:
         if self._market == "futures":
             logger.info("[SeedPool.load] 加载期货专用种子 (14 大因子家族, 81 个, 硬编码路径)...")
             from .seed_data_futures_full import load_futures_seeds_full
+
             futures_seeds = load_futures_seeds_full(self._trace_id)
             for fp in futures_seeds:
                 self._cache[fp["name"]] = fp
             logger.info(
                 "[SeedPool.load] 期货种子加载完成: total=%d, sample_names=%s",
-                len(futures_seeds), [s["name"] for s in futures_seeds[:5]],
+                len(futures_seeds),
+                [s["name"] for s in futures_seeds[:5]],
             )
         else:
             logger.info("[SeedPool.load] 加载股票内置种子 (9 个, 硬编码路径)...")
@@ -551,16 +597,15 @@ class SeedPool:
         all_seeds = self._list_base_seeds()
         logger.info(
             "[SeedPool.load] 全部种子加载完成: market=%s, total=%d, names_sample=%s",
-            self._market, len(all_seeds), [s["name"] for s in all_seeds[:3]],
+            self._market,
+            len(all_seeds),
+            [s["name"] for s in all_seeds[:3]],
         )
         return all_seeds
 
     def _list_base_seeds(self) -> list[FactorProgram]:
         """返回非 L1 注入的种子因子（内置 + 外部）。"""
-        return [
-            fp for k, fp in self._cache.items()
-            if not k.startswith("l1:")
-        ]
+        return [fp for k, fp in self._cache.items() if not k.startswith("l1:")]
 
     def get_seed(self, name: str) -> Optional[FactorProgram]:
         """按名称获取种子因子（包括外部种子）。"""
@@ -601,13 +646,16 @@ class SeedPool:
             ValueError: candidate 缺少必需字段
         """
         import time
+
         t0 = time.time()
         required = ("name", "code", "params", "signature", "economic_logic")
         missing = [k for k in required if k not in candidate]
         if missing:
             logger.error(
                 "[inject_from_l1] 缺少必需字段, missing=%s, candidate_keys=%s, trace_id=%s",
-                missing, list(candidate.keys()), trace_id or candidate.get("trace_id"),
+                missing,
+                list(candidate.keys()),
+                trace_id or candidate.get("trace_id"),
             )
             raise ValueError(f"SeedCandidate 缺少必需字段: {missing}")
 
@@ -616,8 +664,11 @@ class SeedPool:
         cand_id = candidate.get("candidate_id", cand_name)
         logger.info(
             "[inject_from_l1] 开始注入, trace_id=%s, candidate_id=%s, name=%s, source=%s, code_len=%d",
-            injected_trace, cand_id, cand_name,
-            candidate.get("source", "unknown"), len(candidate["code"]),
+            injected_trace,
+            cand_id,
+            cand_name,
+            candidate.get("source", "unknown"),
+            len(candidate["code"]),
         )
 
         try:
@@ -636,7 +687,12 @@ class SeedPool:
             elapsed = (time.time() - t0) * 1000
             logger.error(
                 "[inject_from_l1] create_factor_program 异常, trace_id=%s, candidate_id=%s, name=%s, elapsed_ms=%.1f, error=%s",
-                injected_trace, cand_id, cand_name, elapsed, e, exc_info=True,
+                injected_trace,
+                cand_id,
+                cand_name,
+                elapsed,
+                e,
+                exc_info=True,
             )
             raise
 
@@ -646,16 +702,18 @@ class SeedPool:
         elapsed = (time.time() - t0) * 1000
         logger.info(
             "[inject_from_l1] 注入成功, trace_id=%s, candidate_id=%s, name=%s, cache_key=%s, elapsed_ms=%.1f, cache_size=%d",
-            injected_trace, cand_id, cand_name, cache_key, elapsed, len(self._cache),
+            injected_trace,
+            cand_id,
+            cand_name,
+            cache_key,
+            elapsed,
+            len(self._cache),
         )
         return fp
 
     def list_injected_l1(self) -> list[FactorProgram]:
         """列出所有从 L1 注入的种子因子。"""
-        return [
-            fp for k, fp in self._cache.items()
-            if k.startswith("l1:") and fp.get("source") == "bootstrapping"
-        ]
+        return [fp for k, fp in self._cache.items() if k.startswith("l1:") and fp.get("source") == "bootstrapping"]
 
     def compute_correlations(
         self,
@@ -733,8 +791,7 @@ def compute_seed_correlations(
             signal_matrix[:, i] = 0.0
 
     # 剔除全零信号和常数信号（零方差 → 无意义相关）
-    valid_mask = (np.any(signal_matrix != 0, axis=0) &
-                  (np.std(signal_matrix, axis=0) > 1e-10))
+    valid_mask = np.any(signal_matrix != 0, axis=0) & (np.std(signal_matrix, axis=0) > 1e-10)
     valid_indices = np.where(valid_mask)[0]
     valid_seeds = [seeds[i] for i in valid_indices]
     valid_signals = signal_matrix[:, valid_indices]
@@ -760,12 +817,14 @@ def compute_seed_correlations(
             spearman_val = float(spearman_matrix[i, j])
             max_abs = max(abs(pearson_val), abs(spearman_val))
             if max_abs >= threshold:
-                high_corr_pairs.append(FactorCorrelation(
-                    factor_id_a=valid_seeds[i]["factor_id"],
-                    factor_id_b=valid_seeds[j]["factor_id"],
-                    pearson=pearson_val,
-                    spearman=spearman_val,
-                ))
+                high_corr_pairs.append(
+                    FactorCorrelation(
+                        factor_id_a=valid_seeds[i]["factor_id"],
+                        factor_id_b=valid_seeds[j]["factor_id"],
+                        pearson=pearson_val,
+                        spearman=spearman_val,
+                    )
+                )
 
     return high_corr_pairs
 
@@ -810,7 +869,7 @@ def compute_cross_section_correlations(
         return []
 
     # Step 1: 执行每个因子，构建信号矩阵 (n_dates, n_varieties)
-    n_factors = len(seeds)
+    len(seeds)
     # 每个因子存 signal_matrix: (n_dates, n_varieties)
     factor_signals: dict[int, np.ndarray] = {}
 
@@ -836,7 +895,7 @@ def compute_cross_section_correlations(
                             aligned = sig_arr[:n_dates]
                         else:
                             aligned = np.zeros(n_dates)
-                            aligned[:len(sig_arr)] = sig_arr
+                            aligned[: len(sig_arr)] = sig_arr
                         signal_matrix[:, j] = aligned
                         valid_varieties += 1
                 except Exception:
@@ -910,12 +969,14 @@ def compute_cross_section_correlations(
             # 跨时间取均值
             mean_corr = float(np.mean(corr_per_date))
             if abs(mean_corr) >= threshold:
-                high_corr_pairs.append(FactorCorrelation(
-                    factor_id_a=valid_seeds[i]["factor_id"],
-                    factor_id_b=valid_seeds[j]["factor_id"],
-                    pearson=mean_corr,  # 复用 pearson 字段存储截面 Spearman
-                    spearman=mean_corr,
-                ))
+                high_corr_pairs.append(
+                    FactorCorrelation(
+                        factor_id_a=valid_seeds[i]["factor_id"],
+                        factor_id_b=valid_seeds[j]["factor_id"],
+                        pearson=mean_corr,  # 复用 pearson 字段存储截面 Spearman
+                        spearman=mean_corr,
+                    )
+                )
 
     return high_corr_pairs
 

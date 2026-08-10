@@ -11,7 +11,6 @@ tests/monitor/test_elite_tracker.py — A.2 因子衰减追踪与分级准入测
 
 from __future__ import annotations
 
-import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -21,7 +20,6 @@ from fts.monitor.elite_tracker import (
     AutoRetireConfig,
     AutoRetireManager,
     EliteFactorTracker,
-    FactorGrade,
     GradeThreshold,
     _calc_decay_6m,
     _is_past,
@@ -221,6 +219,7 @@ class TestObservationPeriod:
         )
         # 手动设置观察期为过去
         import fts.core.atomic as atomic
+
         snap["observation_end"] = past_date
         atomic.atomic_write(str(tracker._path("f_obs_active")), snap)
 
@@ -240,6 +239,7 @@ class TestObservationPeriod:
             quality_score=35.0,  # B 级
         )
         import fts.core.atomic as atomic
+
         snap["observation_end"] = past_date
         # 降低质量分以触发 decaying 路径
         snap["quality_score"] = 25.0
@@ -258,7 +258,7 @@ class TestEnhancedDecayDetection:
 
     def test_monthly_ic_decay_triggers_transition(self, custom_tracker: EliteFactorTracker):
         """连续月度 IC < 0 达到阈值应转为 decaying。"""
-        snap = custom_tracker.init_tracker(
+        custom_tracker.init_tracker(
             factor_id="f_ic_decay",
             name="factor_ic_decay",
             entry_ic=0.1,
@@ -276,7 +276,7 @@ class TestEnhancedDecayDetection:
 
     def test_sharpe_decline_triggers_critical(self, custom_tracker: EliteFactorTracker):
         """连续 Sharpe 下降达到阈值应转为 critical_decay。"""
-        snap = custom_tracker.init_tracker(
+        custom_tracker.init_tracker(
             factor_id="f_sharpe_decay",
             name="factor_sharpe_decay",
             entry_ic=0.1,
@@ -345,6 +345,7 @@ class TestAutoRetireEnhanced:
             quality_score=45.0,
         )
         import fts.core.atomic as atomic
+
         snap = tracker.get("f_crit")
         snap["status"] = "critical_decay"
         atomic.atomic_write(str(tracker._path("f_crit")), snap)
@@ -363,6 +364,7 @@ class TestAutoRetireEnhanced:
             quality_score=45.0,
         )
         import fts.core.atomic as atomic
+
         snap = tracker.get("f_12m")
         snap["consecutive_zero_months"] = 12
         atomic.atomic_write(str(tracker._path("f_12m")), snap)
@@ -380,6 +382,7 @@ class TestAutoRetireEnhanced:
             quality_score=45.0,
         )
         import fts.core.atomic as atomic
+
         snap = tracker.get("f_sharpe_12m")
         snap["consecutive_sharpe_decline_months"] = 12
         atomic.atomic_write(str(tracker._path("f_sharpe_12m")), snap)
@@ -397,6 +400,7 @@ class TestAutoRetireEnhanced:
             quality_score=45.0,
         )
         import fts.core.atomic as atomic
+
         snap = tracker.get("f_new")
         snap["status"] = "critical_decay"
         atomic.atomic_write(str(tracker._path("f_new")), snap)
@@ -419,6 +423,7 @@ class TestAutoRetireEnhanced:
             quality_score=45.0,
         )
         import fts.core.atomic as atomic
+
         snap = tracker.get("f_done")
         snap["status"] = "retired"
         atomic.atomic_write(str(tracker._path("f_done")), snap)
@@ -437,16 +442,25 @@ class TestMonthlyEvaluation:
         """月度评估应生成包含状态变化的报告。"""
         # 创建多个不同状态的因子
         tracker.init_tracker(
-            factor_id="f1", name="factor_1", entry_ic=0.1,
-            entry_sharpe=2.0, quality_score=45.0,
+            factor_id="f1",
+            name="factor_1",
+            entry_ic=0.1,
+            entry_sharpe=2.0,
+            quality_score=45.0,
         )
         tracker.init_tracker(
-            factor_id="f2", name="factor_2", entry_ic=0.08,
-            entry_sharpe=1.5, quality_score=35.0,
+            factor_id="f2",
+            name="factor_2",
+            entry_ic=0.08,
+            entry_sharpe=1.5,
+            quality_score=35.0,
         )
         tracker.init_tracker(
-            factor_id="f3", name="factor_3", entry_ic=0.03,
-            entry_sharpe=0.5, quality_score=20.0,
+            factor_id="f3",
+            name="factor_3",
+            entry_ic=0.03,
+            entry_sharpe=0.5,
+            quality_score=20.0,
         )
 
         report = tracker.run_monthly_evaluation()
@@ -472,7 +486,7 @@ class TestMonthlyEvaluation:
             tracker.update("f_monthly", -0.01, is_monthly=True)
 
         # 执行月度评估
-        report = tracker.run_monthly_evaluation()
+        tracker.run_monthly_evaluation()
         factor = tracker.get("f_monthly")
         assert factor is not None
         assert factor["status"] == "decaying"
@@ -487,16 +501,25 @@ class TestReportGeneration:
     def test_report_shows_grade_distribution(self, tracker: EliteFactorTracker):
         """报告应包含等级分布。"""
         tracker.init_tracker(
-            factor_id="f_a", name="factor_a", entry_ic=0.1,
-            entry_sharpe=2.0, quality_score=45.0,
+            factor_id="f_a",
+            name="factor_a",
+            entry_ic=0.1,
+            entry_sharpe=2.0,
+            quality_score=45.0,
         )
         tracker.init_tracker(
-            factor_id="f_b", name="factor_b", entry_ic=0.08,
-            entry_sharpe=1.5, quality_score=35.0,
+            factor_id="f_b",
+            name="factor_b",
+            entry_ic=0.08,
+            entry_sharpe=1.5,
+            quality_score=35.0,
         )
         tracker.init_tracker(
-            factor_id="f_c", name="factor_c", entry_ic=0.03,
-            entry_sharpe=0.5, quality_score=20.0,
+            factor_id="f_c",
+            name="factor_c",
+            entry_ic=0.03,
+            entry_sharpe=0.5,
+            quality_score=20.0,
         )
 
         report = tracker.report()
@@ -509,16 +532,25 @@ class TestReportGeneration:
     def test_report_shows_status_counts(self, tracker: EliteFactorTracker):
         """报告应包含状态计数。"""
         tracker.init_tracker(
-            factor_id="f_active", name="active_factor", entry_ic=0.1,
-            entry_sharpe=2.0, quality_score=45.0,
+            factor_id="f_active",
+            name="active_factor",
+            entry_ic=0.1,
+            entry_sharpe=2.0,
+            quality_score=45.0,
         )
         tracker.init_tracker(
-            factor_id="f_obs", name="obs_factor", entry_ic=0.08,
-            entry_sharpe=1.5, quality_score=35.0,
+            factor_id="f_obs",
+            name="obs_factor",
+            entry_ic=0.08,
+            entry_sharpe=1.5,
+            quality_score=35.0,
         )
         tracker.init_tracker(
-            factor_id="f_rej", name="rej_factor", entry_ic=0.03,
-            entry_sharpe=0.5, quality_score=20.0,
+            factor_id="f_rej",
+            name="rej_factor",
+            entry_ic=0.03,
+            entry_sharpe=0.5,
+            quality_score=20.0,
         )
 
         report = tracker.report()
@@ -581,6 +613,7 @@ class TestAutoRetireManager:
             quality_score=45.0,
         )
         import fts.core.atomic as atomic
+
         snap = tracker.get("f_retire")
         snap["status"] = "critical_decay"
         atomic.atomic_write(str(tracker._path("f_retire")), snap)
@@ -600,6 +633,7 @@ class TestAutoRetireManager:
             quality_score=45.0,
         )
         import fts.core.atomic as atomic
+
         snap = tracker.get("f_reeval")
         snap["status"] = "retired"
         # 设置 last_updated 为 10 天前
@@ -619,6 +653,7 @@ class TestAutoRetireManager:
             quality_score=45.0,
         )
         import fts.core.atomic as atomic
+
         snap = tracker.get("f_wait")
         snap["status"] = "retired"
         # 设置 last_updated 为 1 天前
@@ -648,12 +683,18 @@ class TestEdgeCases:
     def test_multiple_factors_independent(self, tracker: EliteFactorTracker):
         """多个因子应相互独立。"""
         tracker.init_tracker(
-            factor_id="f1", name="factor_1", entry_ic=0.1,
-            entry_sharpe=2.0, quality_score=45.0,
+            factor_id="f1",
+            name="factor_1",
+            entry_ic=0.1,
+            entry_sharpe=2.0,
+            quality_score=45.0,
         )
         tracker.init_tracker(
-            factor_id="f2", name="factor_2", entry_ic=0.05,
-            entry_sharpe=1.0, quality_score=40.0,
+            factor_id="f2",
+            name="factor_2",
+            entry_ic=0.05,
+            entry_sharpe=1.0,
+            quality_score=40.0,
         )
         tracker.update("f1", 0.2)
         tracker.update("f2", -0.05)
@@ -683,16 +724,25 @@ class TestEdgeCases:
     def test_get_by_status_filter(self, tracker: EliteFactorTracker):
         """get_by_status 应按状态筛选。"""
         tracker.init_tracker(
-            factor_id="f_active", name="fa", entry_ic=0.1,
-            entry_sharpe=2.0, quality_score=45.0,
+            factor_id="f_active",
+            name="fa",
+            entry_ic=0.1,
+            entry_sharpe=2.0,
+            quality_score=45.0,
         )
         tracker.init_tracker(
-            factor_id="f_obs", name="fb", entry_ic=0.08,
-            entry_sharpe=1.5, quality_score=35.0,
+            factor_id="f_obs",
+            name="fb",
+            entry_ic=0.08,
+            entry_sharpe=1.5,
+            quality_score=35.0,
         )
         tracker.init_tracker(
-            factor_id="f_rej", name="fc", entry_ic=0.03,
-            entry_sharpe=0.5, quality_score=20.0,
+            factor_id="f_rej",
+            name="fc",
+            entry_ic=0.03,
+            entry_sharpe=0.5,
+            quality_score=20.0,
         )
 
         assert len(tracker.get_by_status("active")) == 1

@@ -55,15 +55,19 @@ def test_migrate_creates_kline_cache_on_empty_db(fresh_db):
     """空 DB 上执行迁移，应创建 kline_cache 表。"""
     from fts.data_sources.migrate import migrate_schema
 
-    result = migrate_schema(fresh_db)
+    migrate_schema(fresh_db)
     assert fresh_db.exists()
 
     import duckdb
+
     con = duckdb.connect(str(fresh_db))
     try:
-        tables = [r[0] for r in con.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
-        ).fetchall()]
+        tables = [
+            r[0]
+            for r in con.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+            ).fetchall()
+        ]
         assert "kline_cache" in tables
     finally:
         con.close()
@@ -76,6 +80,7 @@ def test_migrate_creates_edb_cache(fresh_db):
     migrate_schema(fresh_db)
 
     import duckdb
+
     con = duckdb.connect(str(fresh_db))
     try:
         cols = con.execute("DESCRIBE edb_cache").fetchall()
@@ -92,12 +97,27 @@ def test_migrate_creates_option_chain_cache(fresh_db):
     migrate_schema(fresh_db)
 
     import duckdb
+
     con = duckdb.connect(str(fresh_db))
     try:
         cols = con.execute("DESCRIBE option_chain_cache").fetchall()
         col_names = {c[0] for c in cols}
-        assert {"underlying", "contract", "date", "type", "strike", "last", "bid", "ask",
-                "volume", "oi", "iv", "source", "fetched_at", "trace_id"} <= col_names
+        assert {
+            "underlying",
+            "contract",
+            "date",
+            "type",
+            "strike",
+            "last",
+            "bid",
+            "ask",
+            "volume",
+            "oi",
+            "iv",
+            "source",
+            "fetched_at",
+            "trace_id",
+        } <= col_names
     finally:
         con.close()
 
@@ -112,6 +132,7 @@ def test_migrate_adds_9_columns_to_legacy_kline_cache(legacy_db):
     migrate_schema(legacy_db)
 
     import duckdb
+
     con = duckdb.connect(str(legacy_db))
     try:
         cols = con.execute("DESCRIBE kline_cache").fetchall()
@@ -120,7 +141,17 @@ def test_migrate_adds_9_columns_to_legacy_kline_cache(legacy_db):
         for old in ("symbol", "period", "date", "open", "high", "low", "close", "volume", "amount"):
             assert old in col_names, f"旧字段 {old} 丢失"
         # 新字段已加（v2.3.0 的 8 列 + v2.58.0 的 adj_factor）
-        for new in ("hold", "settle", "pre_settle", "oi_change", "vwap", "source", "fetched_at", "trace_id", "adj_factor"):
+        for new in (
+            "hold",
+            "settle",
+            "pre_settle",
+            "oi_change",
+            "vwap",
+            "source",
+            "fetched_at",
+            "trace_id",
+            "adj_factor",
+        ):
             assert new in col_names, f"新字段 {new} 缺失"
     finally:
         con.close()
@@ -133,6 +164,7 @@ def test_migrate_preserves_existing_data(legacy_db):
     migrate_schema(legacy_db)
 
     import duckdb
+
     con = duckdb.connect(str(legacy_db))
     try:
         rows = con.execute("SELECT symbol, close FROM kline_cache ORDER BY symbol").fetchall()
@@ -151,11 +183,13 @@ def test_migrate_creates_symbol_date_source_index(fresh_db):
     migrate_schema(fresh_db)
 
     import duckdb
+
     con = duckdb.connect(str(fresh_db))
     try:
-        indexes = [r[0] for r in con.execute(
-            "SELECT index_name FROM duckdb_indexes() WHERE table_name='kline_cache'"
-        ).fetchall()]
+        indexes = [
+            r[0]
+            for r in con.execute("SELECT index_name FROM duckdb_indexes() WHERE table_name='kline_cache'").fetchall()
+        ]
         assert "idx_kline_symbol_date_source" in indexes
     finally:
         con.close()
@@ -168,7 +202,7 @@ def test_migrate_is_idempotent_on_fresh_db(fresh_db):
     """重跑迁移不应报错（幂等可重入）。"""
     from fts.data_sources.migrate import migrate_schema
 
-    r1 = migrate_schema(fresh_db)
+    migrate_schema(fresh_db)
     r2 = migrate_schema(fresh_db)  # 第二次
 
     # 第二次 columns_added 应为 0（所有列已存在）

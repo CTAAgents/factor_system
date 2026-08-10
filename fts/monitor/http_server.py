@@ -551,6 +551,7 @@ setInterval(refresh, 10000);
 
 # ─── HTTP 处理 ──────────────────────────────────────────────
 
+
 class _DashboardHandler(BaseHTTPRequestHandler):
     """HTTP 请求处理器 — 提供仪表盘和 API。"""
 
@@ -585,8 +586,12 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             report: SystemStatusReport = check_all_status(root)
         except Exception:  # noqa: BLE001
             report = SystemStatusReport(
-                healthy=False, loops=[], fts_version="?",
-                any_circuit_broken=False, any_stale=False, total_tokens_today=0,
+                healthy=False,
+                loops=[],
+                fts_version="?",
+                any_circuit_broken=False,
+                any_stale=False,
+                total_tokens_today=0,
             )
 
         # 从 DuckDB 查询精英因子计数和家族分布
@@ -676,17 +681,17 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             "family_distribution": dict(sorted(family_dist_map.items(), key=lambda x: -x[1])),
             "loops": [
                 {
-                    "loop_name": l.loop_name,
-                    "healthy": l.healthy,
-                    "status": l.status,
-                    "run_id": l.run_id,
-                    "last_run_at": l.last_run_at,
-                    "last_error": l.last_error,
-                    "tokens_consumed": l.tokens_consumed,
-                    "age_hours": l.age_hours,
-                    "version": l.version,
+                    "loop_name": loop.loop_name,
+                    "healthy": loop.healthy,
+                    "status": loop.status,
+                    "run_id": loop.run_id,
+                    "last_run_at": loop.last_run_at,
+                    "last_error": loop.last_error,
+                    "tokens_consumed": loop.tokens_consumed,
+                    "age_hours": loop.age_hours,
+                    "version": loop.version,
                 }
-                for l in report.loops
+                for loop in report.loops
             ],
         }
         return data
@@ -698,7 +703,6 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         """
         try:
             from ..factor_engine.factor_db.schema import DATABASE_PATH as _db_path
-            import duckdb as _duckdb
 
             if _db_path.exists():
                 return self._build_factor_list_from_duckdb(_db_path)
@@ -714,7 +718,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         try:
             # 检测可用表，构建动态 JOIN
             tables = {
-                r[0] for r in conn.execute(
+                r[0]
+                for r in conn.execute(
                     "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
                 ).fetchall()
             }
@@ -852,51 +857,57 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 family_stats[family]["sharpe_sum"] += sharpe_val
                 family_stats[family]["count"] += 1
 
-                factors.append({
-                    "factor_id": str(row_dict.get("factor_id", "")),
-                    "name": str(row_dict.get("name", "")),
-                    "generation": str(row_dict.get("generation", "?")),
-                    "ic": f"{ic_val:.4f}",
-                    "sharpe": f"{sharpe_val:.2f}",
-                    "source": str(row_dict.get("source", "?")),
-                    "family": family,
-                    "market": str(row_dict.get("market", "futures")),
-                    "icir": f"{float(row_dict.get('icir', 0) or 0):.4f}",
-                    "max_drawdown": f"{float(row_dict.get('max_drawdown', 0) or 0):.2%}",
-                    "turnover": f"{float(row_dict.get('turnover_monthly', 0) or 0):.2f}",
-                    "oos_ratio": f"{float(row_dict.get('level_1_oos_ratio', 0) or 0):.2f}",
-                    "monotonicity": bool(row_dict.get("level_1_monotonicity", False)),
-                    "t_stat": f"{float(row_dict.get('level_1_t_stat', 0) or 0):.2f}",
-                    "economic_logic": {
-                        "theory": int(eco.get("theory", 0)),
-                        "behavioral": int(eco.get("behavioral", 0)),
-                        "microstructure": int(eco.get("microstructure", 0)),
-                        "institutional": int(eco.get("institutional", 0)),
-                        "narrative": str(eco.get("narrative", "")),
-                    },
-                    "quality_score": qs,
-                    "status": str(row_dict.get("status", "active")),
-                    "evaluation_status": "evaluated" if (ic_val > 0 and sharpe_val > 0) else "pending",
-                })
+                factors.append(
+                    {
+                        "factor_id": str(row_dict.get("factor_id", "")),
+                        "name": str(row_dict.get("name", "")),
+                        "generation": str(row_dict.get("generation", "?")),
+                        "ic": f"{ic_val:.4f}",
+                        "sharpe": f"{sharpe_val:.2f}",
+                        "source": str(row_dict.get("source", "?")),
+                        "family": family,
+                        "market": str(row_dict.get("market", "futures")),
+                        "icir": f"{float(row_dict.get('icir', 0) or 0):.4f}",
+                        "max_drawdown": f"{float(row_dict.get('max_drawdown', 0) or 0):.2%}",
+                        "turnover": f"{float(row_dict.get('turnover_monthly', 0) or 0):.2f}",
+                        "oos_ratio": f"{float(row_dict.get('level_1_oos_ratio', 0) or 0):.2f}",
+                        "monotonicity": bool(row_dict.get("level_1_monotonicity", False)),
+                        "t_stat": f"{float(row_dict.get('level_1_t_stat', 0) or 0):.2f}",
+                        "economic_logic": {
+                            "theory": int(eco.get("theory", 0)),
+                            "behavioral": int(eco.get("behavioral", 0)),
+                            "microstructure": int(eco.get("microstructure", 0)),
+                            "institutional": int(eco.get("institutional", 0)),
+                            "narrative": str(eco.get("narrative", "")),
+                        },
+                        "quality_score": qs,
+                        "status": str(row_dict.get("status", "active")),
+                        "evaluation_status": "evaluated" if (ic_val > 0 and sharpe_val > 0) else "pending",
+                    }
+                )
 
             # 按家族因子数排序，组内按 Sharpe 降序
             family_order = sorted(family_dist.keys(), key=lambda f: -family_dist[f])
-            factors.sort(key=lambda f: (
-                family_order.index(f["family"]) if f["family"] in family_order else 999,
-                -float(f["sharpe"]),
-            ))
+            factors.sort(
+                key=lambda f: (
+                    family_order.index(f["family"]) if f["family"] in family_order else 999,
+                    -float(f["sharpe"]),
+                )
+            )
 
             # 构建家族汇总
             family_summary_list: list[dict] = []
             for fam in family_order:
                 st = family_stats.get(fam, {"ic_sum": 0, "sharpe_sum": 0, "count": 1})
                 cnt = st["count"]
-                family_summary_list.append({
-                    "family": fam,
-                    "count": cnt,
-                    "avg_ic": round(st["ic_sum"] / cnt, 4) if cnt else 0,
-                    "avg_sharpe": round(st["sharpe_sum"] / cnt, 2) if cnt else 0,
-                })
+                family_summary_list.append(
+                    {
+                        "family": fam,
+                        "count": cnt,
+                        "avg_ic": round(st["ic_sum"] / cnt, 4) if cnt else 0,
+                        "avg_sharpe": round(st["sharpe_sum"] / cnt, 2) if cnt else 0,
+                    }
+                )
 
             return {
                 "factors": factors,
@@ -938,55 +949,65 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                     family_stats[family]["sharpe_sum"] += sharpe_val
                     family_stats[family]["count"] += 1
 
-                    factors.append({
-                        "factor_id": raw.get("factor_id", fp.stem),
-                        "name": raw.get("name", fp.stem),
-                        "generation": raw.get("generation", "?"),
-                        "ic": f"{ic_val:.4f}",
-                        "sharpe": f"{sharpe_val:.2f}",
-                        "source": raw.get("source", "?"),
-                        "family": family,
-                        "market": raw.get("market", "futures"),
-                        "icir": f"{bt.get('icir', 0):.4f}",
-                        "max_drawdown": f"{bt.get('max_drawdown', 0):.2%}",
-                        "turnover": f"{bt.get('turnover_monthly', 0):.2f}",
-                        "oos_ratio": f"{bt.get('oos_ratio', 0):.2f}",
-                        "monotonicity": bool(bt.get("monotonicity", False)),
-                        "t_stat": f"{bt.get('t_stat', 0):.2f}",
-                        "economic_logic": {
-                            "theory": int(eco.get("theory", 0)),
-                            "behavioral": int(eco.get("behavioral", 0)),
-                            "microstructure": int(eco.get("microstructure", 0)),
-                            "institutional": int(eco.get("institutional", 0)),
-                            "narrative": str(eco.get("narrative", "")),
-                        },
-                        "quality_score": {
-                            "total_score": float(qs.get("total_score", 0)),
-                            "grade": str(qs.get("grade", "N/A")),
-                            "dimension_scores": qs.get("dimension_scores", {}),
-                        } if qs and qs.get("total_score") else None,
-                        "status": str(raw.get("status", "active")),
-                        "evaluation_status": "evaluated" if (bt.get("ic", 0) > 0 and bt.get("sharpe", 0) > 0) else "pending",
-                    })
+                    factors.append(
+                        {
+                            "factor_id": raw.get("factor_id", fp.stem),
+                            "name": raw.get("name", fp.stem),
+                            "generation": raw.get("generation", "?"),
+                            "ic": f"{ic_val:.4f}",
+                            "sharpe": f"{sharpe_val:.2f}",
+                            "source": raw.get("source", "?"),
+                            "family": family,
+                            "market": raw.get("market", "futures"),
+                            "icir": f"{bt.get('icir', 0):.4f}",
+                            "max_drawdown": f"{bt.get('max_drawdown', 0):.2%}",
+                            "turnover": f"{bt.get('turnover_monthly', 0):.2f}",
+                            "oos_ratio": f"{bt.get('oos_ratio', 0):.2f}",
+                            "monotonicity": bool(bt.get("monotonicity", False)),
+                            "t_stat": f"{bt.get('t_stat', 0):.2f}",
+                            "economic_logic": {
+                                "theory": int(eco.get("theory", 0)),
+                                "behavioral": int(eco.get("behavioral", 0)),
+                                "microstructure": int(eco.get("microstructure", 0)),
+                                "institutional": int(eco.get("institutional", 0)),
+                                "narrative": str(eco.get("narrative", "")),
+                            },
+                            "quality_score": {
+                                "total_score": float(qs.get("total_score", 0)),
+                                "grade": str(qs.get("grade", "N/A")),
+                                "dimension_scores": qs.get("dimension_scores", {}),
+                            }
+                            if qs and qs.get("total_score")
+                            else None,
+                            "status": str(raw.get("status", "active")),
+                            "evaluation_status": "evaluated"
+                            if (bt.get("ic", 0) > 0 and bt.get("sharpe", 0) > 0)
+                            else "pending",
+                        }
+                    )
                 except Exception:  # noqa: BLE001
                     continue
 
         family_order = sorted(family_dist.keys(), key=lambda f: -family_dist[f])
-        factors.sort(key=lambda f: (
-            family_order.index(f["family"]) if f["family"] in family_order else 999,
-            -float(f["sharpe"]),
-        ))
+        factors.sort(
+            key=lambda f: (
+                family_order.index(f["family"]) if f["family"] in family_order else 999,
+                -float(f["sharpe"]),
+            )
+        )
 
         family_summary_list: list[dict] = []
         for fam in family_order:
             st = family_stats.get(fam, {"ic_sum": 0, "sharpe_sum": 0, "count": 1})
             cnt = st["count"]
-            family_summary_list.append({
-                "family": fam,
-                "count": cnt,
-                "avg_ic": round(st["ic_sum"] / cnt, 4) if cnt else 0,
-                "avg_sharpe": round(st["sharpe_sum"] / cnt, 2) if cnt else 0,
-            })
+            family_summary_list.append(
+                {
+                    "family": fam,
+                    "count": cnt,
+                    "avg_ic": round(st["ic_sum"] / cnt, 4) if cnt else 0,
+                    "avg_sharpe": round(st["sharpe_sum"] / cnt, 2) if cnt else 0,
+                }
+            )
 
         return {
             "factors": factors,
@@ -1015,15 +1036,17 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         factors = pool.get("factors", [])
         items = []
         for f in factors:
-            items.append({
-                "factor_id": str(f.get("factor_id", "")),
-                "name": str(f.get("name", "")),
-                "source": str(f.get("source", "?")),
-                "status": str(f.get("status", "?")),
-                "evaluation_status": str(f.get("evaluation_status", "pending")),
-                "priority": str(f.get("priority", "-")),
-                "parent_topic": str(f.get("parent_topic", "-") or "-"),
-            })
+            items.append(
+                {
+                    "factor_id": str(f.get("factor_id", "")),
+                    "name": str(f.get("name", "")),
+                    "source": str(f.get("source", "?")),
+                    "status": str(f.get("status", "?")),
+                    "evaluation_status": str(f.get("evaluation_status", "pending")),
+                    "priority": str(f.get("priority", "-")),
+                    "parent_topic": str(f.get("parent_topic", "-") or "-"),
+                }
+            )
         # 待注入(pending)优先，组内按来源排序
         items.sort(key=lambda x: (0 if x["status"] == "pending" else 1, x["source"], x["name"]))
         return {
@@ -1080,6 +1103,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         # ── 因子生命周期 / Regime 权重指标 (A.2/A.3) ──
         try:
             from .prometheus_metrics import metrics_registry
+
             lines.extend(metrics_registry.render())
         except Exception as e:  # noqa: BLE001
             logger.error("获取生命周期/Regime 指标失败: %s", e)
@@ -1094,32 +1118,34 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 lines.append(f"# ERROR 获取数据质量指标失败: {e}")
         else:
             # DataQualityMonitor 未注册时输出默认零值
-            lines.extend([
-                "# HELP fts_data_quality_data_completeness_ratio 数据完整性比率 (1.0=完美)",
-                "# TYPE fts_data_quality_data_completeness_ratio gauge",
-                "fts_data_quality_data_completeness_ratio 1.0",
-                "",
-                "# HELP fts_data_quality_market_data_valid 市场数据是否有效 (1=有效)",
-                "# TYPE fts_data_quality_market_data_valid gauge",
-                "fts_data_quality_market_data_valid 1.0",
-                "",
-                "# HELP fts_data_quality_total_checks 数据质量检查总次数",
-                "# TYPE fts_data_quality_total_checks counter",
-                "fts_data_quality_total_checks 0",
-                "",
-                "# HELP fts_data_quality_total_alerts 告警总次数",
-                "# TYPE fts_data_quality_total_alerts counter",
-                "fts_data_quality_total_alerts 0",
-                "",
-                "# HELP fts_data_quality_critical_alerts 严重告警次数",
-                "# TYPE fts_data_quality_critical_alerts counter",
-                "fts_data_quality_critical_alerts 0",
-                "",
-                "# HELP fts_data_quality_registered_factors 已注册基准的因子数",
-                "# TYPE fts_data_quality_registered_factors gauge",
-                "fts_data_quality_registered_factors 0",
-                "",
-            ])
+            lines.extend(
+                [
+                    "# HELP fts_data_quality_data_completeness_ratio 数据完整性比率 (1.0=完美)",
+                    "# TYPE fts_data_quality_data_completeness_ratio gauge",
+                    "fts_data_quality_data_completeness_ratio 1.0",
+                    "",
+                    "# HELP fts_data_quality_market_data_valid 市场数据是否有效 (1=有效)",
+                    "# TYPE fts_data_quality_market_data_valid gauge",
+                    "fts_data_quality_market_data_valid 1.0",
+                    "",
+                    "# HELP fts_data_quality_total_checks 数据质量检查总次数",
+                    "# TYPE fts_data_quality_total_checks counter",
+                    "fts_data_quality_total_checks 0",
+                    "",
+                    "# HELP fts_data_quality_total_alerts 告警总次数",
+                    "# TYPE fts_data_quality_total_alerts counter",
+                    "fts_data_quality_total_alerts 0",
+                    "",
+                    "# HELP fts_data_quality_critical_alerts 严重告警次数",
+                    "# TYPE fts_data_quality_critical_alerts counter",
+                    "fts_data_quality_critical_alerts 0",
+                    "",
+                    "# HELP fts_data_quality_registered_factors 已注册基准的因子数",
+                    "# TYPE fts_data_quality_registered_factors gauge",
+                    "fts_data_quality_registered_factors 0",
+                    "",
+                ]
+            )
 
         return "\n".join(lines)
 
@@ -1131,14 +1157,12 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         """
         ttl = int(os.environ.get("FTS_METRICS_CACHE_TTL", "5"))
         now = time.time()
-        if (
-            _metrics_cache["data"] is not None
-            and now - _metrics_cache["ts"] < ttl
-        ):
+        if _metrics_cache["data"] is not None and now - _metrics_cache["ts"] < ttl:
             return _metrics_cache["data"]
 
         try:
             from fts.cli import _build_default_aggregator
+
             agg = _build_default_aggregator()
             status = agg.get_source_status()
         except Exception:  # noqa: BLE001
@@ -1156,8 +1180,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             lineage_dir = Path.cwd() / "data" / "_lineage"
             if lineage_dir.exists():
                 candidates = sorted(
-                    list(lineage_dir.glob("sync_summary_*.json"))
-                    + list(lineage_dir.glob("sync_summary_*.json.gz")),
+                    list(lineage_dir.glob("sync_summary_*.json")) + list(lineage_dir.glob("sync_summary_*.json.gz")),
                     reverse=True,
                 )
                 if candidates:
@@ -1165,6 +1188,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                     raw_bytes = latest.read_bytes()
                     if latest.suffix == ".gz":
                         import gzip
+
                         raw_bytes = gzip.decompress(raw_bytes)
                     raw = json.loads(raw_bytes.decode("utf-8"))
                     # 截断 failures 列表到 10 个，避免响应过大
@@ -1199,6 +1223,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 
         try:
             from fts.cli import _build_default_aggregator
+
             agg = _build_default_aggregator()
             status = agg.get_source_status()
         except Exception:  # noqa: BLE001
@@ -1213,41 +1238,41 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         version = _safe_version()
 
         # 版本信息
-        _add(f'# HELP fts_version FTS version info')
-        _add('# TYPE fts_version gauge')
+        _add("# HELP fts_version FTS version info")
+        _add("# TYPE fts_version gauge")
         _add(f'fts_version{{version="{version}"}} 1')
-        _add('')
+        _add("")
 
         # 数据源健康度
-        _add('# HELP fts_data_source_success_rate Data source overall success rate')
-        _add('# TYPE fts_data_source_success_rate gauge')
-        _add(f'fts_data_source_success_rate {success_rate:.4f}')
-        _add('')
-        _add('# HELP fts_circuit_open Whether any data source circuit is open (1=open)')
-        _add('# TYPE fts_circuit_open gauge')
-        _add(f'fts_circuit_open {"1" if any_open else "0"}')
-        _add('')
-        _add('# HELP fts_data_source_count Number of registered data sources')
-        _add('# TYPE fts_data_source_count gauge')
-        _add(f'fts_data_source_count {len(status)}')
-        _add('')
-        _add('# HELP fts_data_source_total_requests Total data source requests')
-        _add('# TYPE fts_data_source_total_requests counter')
-        _add(f'fts_data_source_total_requests_total {total_attempts}')
-        _add('')
-        _add('# HELP fts_data_source_failures_total Total data source failures')
-        _add('# TYPE fts_data_source_failures_total counter')
-        _add(f'fts_data_source_failures_total {total_failure}')
-        _add('')
+        _add("# HELP fts_data_source_success_rate Data source overall success rate")
+        _add("# TYPE fts_data_source_success_rate gauge")
+        _add(f"fts_data_source_success_rate {success_rate:.4f}")
+        _add("")
+        _add("# HELP fts_circuit_open Whether any data source circuit is open (1=open)")
+        _add("# TYPE fts_circuit_open gauge")
+        _add(f"fts_circuit_open {'1' if any_open else '0'}")
+        _add("")
+        _add("# HELP fts_data_source_count Number of registered data sources")
+        _add("# TYPE fts_data_source_count gauge")
+        _add(f"fts_data_source_count {len(status)}")
+        _add("")
+        _add("# HELP fts_data_source_total_requests Total data source requests")
+        _add("# TYPE fts_data_source_total_requests counter")
+        _add(f"fts_data_source_total_requests_total {total_attempts}")
+        _add("")
+        _add("# HELP fts_data_source_failures_total Total data source failures")
+        _add("# TYPE fts_data_source_failures_total counter")
+        _add(f"fts_data_source_failures_total {total_failure}")
+        _add("")
 
         # 各个源的详细指标
-        _add('# HELP fts_source_info Data source individual status')
-        _add('# TYPE fts_source_info gauge')
+        _add("# HELP fts_source_info Data source individual status")
+        _add("# TYPE fts_source_info gauge")
         for name, s in status.items():
             circuit = "1" if s.get("circuit_open", False) else "0"
             consec = s.get("consecutive_failures", 0)
             _add(f'fts_source_info{{source="{name}",circuit_open="{circuit}",consecutive_failures="{consec}"}} 1')
-        _add('')
+        _add("")
 
         # elite 因子计数
         try:
@@ -1256,20 +1281,21 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             elite_count = len(list(elite_dir.glob("*.json"))) if elite_dir.exists() else 0
         except Exception:  # noqa: BLE001
             elite_count = 0
-        _add('# HELP fts_elite_factor_count Number of elite factors')
-        _add('# TYPE fts_elite_factor_count gauge')
-        _add(f'fts_elite_factor_count {elite_count}')
+        _add("# HELP fts_elite_factor_count Number of elite factors")
+        _add("# TYPE fts_elite_factor_count gauge")
+        _add(f"fts_elite_factor_count {elite_count}")
 
         return "\n".join(lines) + "\n"
 
     def _build_health(self) -> dict:
         """构建 /health 响应（Phase 14.5 集成数据源状态）。"""
-        data = {
+        data: dict[str, Any] = {
             "status": "ok",
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         try:
             from fts.cli import _build_default_aggregator
+
             agg = _build_default_aggregator()
             status = agg.get_source_status()
             any_open = any(s.get("circuit_open", False) for s in status.values())
@@ -1323,7 +1349,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             self._respond_json(_build_live_factors())
 
         elif path.startswith("/api/v1/live/factors/") and path.endswith("/deviation"):
-            factor_id = path[len("/api/v1/live/factors/"):-len("/deviation")]
+            factor_id = path[len("/api/v1/live/factors/") : -len("/deviation")]
             self._respond_json(_build_live_deviation(factor_id))
 
         else:
@@ -1364,16 +1390,17 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         _record_risk_metrics(result)
 
         if not result.get("approved"):
-            self._respond_json({
-                "approved": False,
-                "violations": result.get("blocking_violations", []),
-            }, 403)
+            self._respond_json(
+                {
+                    "approved": False,
+                    "violations": result.get("blocking_violations", []),
+                },
+                403,
+            )
             return
 
         # 3. 模拟成交
         try:
-            from ..risk import SimulatedTradeAdapter
-
             adapter = _get_sim_adapter()
             if not adapter.is_connected():
                 adapter.connect({})
@@ -1456,9 +1483,13 @@ def _sim_account_status() -> dict[str, Any]:
     try:
         return _get_sim_adapter().get_account_status()
     except Exception:  # noqa: BLE001
-        return {"total_equity": 1_000_000.0, "balance": 1_000_000.0,
-                "peak_equity": 1_000_000.0, "daily_pnl": 0.0,
-                "position_value": 0.0}
+        return {
+            "total_equity": 1_000_000.0,
+            "balance": 1_000_000.0,
+            "peak_equity": 1_000_000.0,
+            "daily_pnl": 0.0,
+            "position_value": 0.0,
+        }
 
 
 def _sim_positions() -> dict[str, Any]:
@@ -1482,9 +1513,7 @@ def _record_risk_metrics(result: dict[str, Any]) -> None:
     for check in result.get("checks", []):
         check_name = check.get("check_name", "unknown")
         passed = bool(check.get("passed", False))
-        metrics_registry.record_risk_check(
-            check_name, "passed" if passed else "blocked"
-        )
+        metrics_registry.record_risk_check(check_name, "passed" if passed else "blocked")
 
 
 def _build_risk_status() -> dict[str, Any]:
@@ -1496,10 +1525,10 @@ def _build_risk_status() -> dict[str, Any]:
         # 空信号探测
         result = risk.check(
             {"signal_id": "probe", "signals": [], "timestamp": ""},
-            account, positions,
+            account,
+            positions,
         )
-        violations = [c for c in result.get("checks", [])
-                      if not c.get("passed", False)]
+        violations = [c for c in result.get("checks", []) if not c.get("passed", False)]
         return {
             "positions": list(positions.keys()),
             "risk_level": "critical" if violations else "normal",
@@ -1550,6 +1579,7 @@ def get_metric(name: str, default: Any = 0) -> Any:
 
 
 # ─── 服务器 ──────────────────────────────────────────────────
+
 
 class FTSDashboardServer:
     """FTS Web UI 仪表盘服务器。
@@ -1610,6 +1640,7 @@ def _safe_version() -> str:
     """安全获取 FTS 版本号（避免导入循环）。"""
     try:
         from fts import __version__ as v
+
         return v
     except Exception:  # noqa: BLE001
         return "?"

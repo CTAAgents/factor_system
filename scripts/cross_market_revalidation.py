@@ -21,6 +21,7 @@ scripts/cross_market_revalidation.py — 跨市场泛化验证脚本
     - 控制台: 验证结果摘要
     - 文件:     reports/{date}/cross_market_revalidation_{date}.md
 """
+
 from __future__ import annotations
 
 import logging
@@ -120,25 +121,27 @@ def main(
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="跨市场泛化验证")
     parser.add_argument(
-        "--direction", type=str, default="futures-to-stock",
+        "--direction",
+        type=str,
+        default="futures-to-stock",
         choices=["futures-to-stock", "futures-to-etf", "stock-to-futures"],
         help="验证方向 (default: futures-to-stock)",
     )
     parser.add_argument("--days", type=int, default=120, help="回溯天数")
-    parser.add_argument("--max-factors", type=int, default=0,
-                        help="最大因子数，0=全量")
-    parser.add_argument("--max-stocks", type=int, default=0,
-                        help="最大成分股数，0=全量 (仅 futures-to-stock)")
-    parser.add_argument("--output-dir", type=str, default=None,
-                        help="报告输出目录 (默认 reports/{date}/)")
+    parser.add_argument("--max-factors", type=int, default=0, help="最大因子数，0=全量")
+    parser.add_argument("--max-stocks", type=int, default=0, help="最大成分股数，0=全量 (仅 futures-to-stock)")
+    parser.add_argument("--output-dir", type=str, default=None, help="报告输出目录 (默认 reports/{date}/)")
     args = parser.parse_args()
 
-    sys.exit(main(
-        direction=args.direction,
-        days=args.days,
-        max_factors=args.max_factors,
-        max_stocks=args.max_stocks,
-        output_dir=args.output_dir,
-    ))
+    sys.exit(
+        main(
+            direction=args.direction,
+            days=args.days,
+            max_factors=args.max_factors,
+            max_stocks=args.max_stocks,
+            output_dir=args.output_dir,
+        )
+    )

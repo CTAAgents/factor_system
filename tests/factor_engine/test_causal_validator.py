@@ -7,7 +7,7 @@ HARNESS §11-logic-review-plan.md §C.1:
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 import numpy as np
 import pandas as pd
@@ -21,7 +21,6 @@ from fts.factor_engine.causal_validator import (
 from fts.factor_engine.contracts import FactorProgram
 from fts.factor_engine.factor_program import create_factor_program
 from tests.scenarios.natural_experiments import (
-    DEFAULT_EVENTS,
     NaturalExperiment,
 )
 
@@ -37,14 +36,16 @@ def sample_data() -> pd.DataFrame:
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
     volume = np.random.randint(1000, 10000, n).astype(float)
-    return pd.DataFrame({
-        "date": dates,
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.3,
-        "low": close - np.abs(np.random.randn(n)) * 0.3,
-        "close": close,
-        "volume": volume,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.3,
+            "low": close - np.abs(np.random.randn(n)) * 0.3,
+            "close": close,
+            "volume": volume,
+        }
+    )
 
 
 @pytest.fixture
@@ -83,7 +84,13 @@ def factor_program(data, params):
             "frequency": "daily",
         },
         source="seed",
-        economic_logic={"theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3, "narrative": "momentum test"},
+        economic_logic={
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "momentum test",
+        },
     )
 
 

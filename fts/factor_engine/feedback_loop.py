@@ -27,7 +27,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional, TypedDict
+from typing import Any, Optional, TypedDict, cast
 
 import numpy as np
 
@@ -119,19 +119,19 @@ class FeedbackTrigger:
                 continue
             if not self._pass_cooldown("live_deviation"):
                 continue
-            events.append({
-                "event_id": _new_id("fe_"),
-                "event_type": FeedbackEventType.LIVE_DEVIATION.value,
-                "factor_id": alert.get("factor_id"),
-                "trigger_reason": (
-                    f"{alert.get('metric')} 偏离 {alert.get('deviation_pct', 0):.1%}"
-                ),
-                "severity": "critical",
-                "payload": alert,
-                "timestamp": _now_iso(),
-                "handled": False,
-                "handled_at": None,
-            })
+            events.append(
+                {
+                    "event_id": _new_id("fe_"),
+                    "event_type": FeedbackEventType.LIVE_DEVIATION.value,
+                    "factor_id": alert.get("factor_id"),
+                    "trigger_reason": (f"{alert.get('metric')} 偏离 {alert.get('deviation_pct', 0):.1%}"),
+                    "severity": "critical",
+                    "payload": alert,
+                    "timestamp": _now_iso(),
+                    "handled": False,
+                    "handled_at": None,
+                }
+            )
         return events
 
     def _check_periodic_eval(self) -> list[dict[str, Any]]:
@@ -142,17 +142,19 @@ class FeedbackTrigger:
         if self._last_periodic_day == day_key:
             return []
         self._last_periodic_day = day_key
-        return [{
-            "event_id": _new_id("fe_"),
-            "event_type": FeedbackEventType.PERIODIC_EVAL.value,
-            "factor_id": None,
-            "trigger_reason": "定期因子评估",
-            "severity": "info",
-            "payload": {"day": day_key},
-            "timestamp": _now_iso(),
-            "handled": False,
-            "handled_at": None,
-        }]
+        return [
+            {
+                "event_id": _new_id("fe_"),
+                "event_type": FeedbackEventType.PERIODIC_EVAL.value,
+                "factor_id": None,
+                "trigger_reason": "定期因子评估",
+                "severity": "info",
+                "payload": {"day": day_key},
+                "timestamp": _now_iso(),
+                "handled": False,
+                "handled_at": None,
+            }
+        ]
 
     # ─── 冷却保护 ────────────────────────────────────────
 
@@ -191,9 +193,7 @@ class AttributionAnalyzer:
         Returns:
             AttributionReport 字典。
         """
-        root_cause, confidence = self._determine_root_cause(
-            event, factor or {}, market_data or {}
-        )
+        root_cause, confidence = self._determine_root_cause(event, factor or {}, market_data or {})
         recommendation = self._recommend_action(root_cause, factor or {}, event)
         return {
             "report_id": _new_id("ar_"),
@@ -204,8 +204,7 @@ class AttributionAnalyzer:
                 "factor_decay": self._analyze_factor_decay(factor or {}),
                 "regime_change": self._analyze_regime_change(event, market_data or {}),
                 "data_quality": self._analyze_data_quality(event),
-                "implementation": {"likely": False, "confidence": 0.1,
-                                   "evidence": []},
+                "implementation": {"likely": False, "confidence": 0.1, "evidence": []},
             },
             "recommendation": recommendation,
             "timestamp": _now_iso(),
@@ -225,9 +224,7 @@ class AttributionAnalyzer:
         }
 
     @staticmethod
-    def _analyze_regime_change(
-        event: dict[str, Any], market_data: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _analyze_regime_change(event: dict[str, Any], market_data: dict[str, Any]) -> dict[str, Any]:
         """市场状态切换分析。"""
         regime = market_data.get("regime", "")
         event_type = event.get("event_type", "")
@@ -276,9 +273,7 @@ class AttributionAnalyzer:
         return RootCause.NORMAL_FLUCTUATION.value, 0.5
 
     @staticmethod
-    def _recommend_action(
-        root_cause: str, factor: dict[str, Any], event: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _recommend_action(root_cause: str, factor: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
         """根据根因生成操作建议。"""
         if root_cause == RootCause.FACTOR_DECAY.value:
             return {
@@ -349,9 +344,7 @@ class EvolutionDirectionAdjuster:
 
         if action == "trigger_evolution":
             cur_gen = int(config.get("max_generation", config.get("max_generations", 20)))
-            config["max_generations"] = min(
-                int(cur_gen * 1.5), self._max_generation_limit
-            )
+            config["max_generations"] = min(int(cur_gen * 1.5), self._max_generation_limit)
             config["inject_experience"] = {
                 "type": attribution.get("root_cause", "unknown"),
                 "event_id": attribution.get("event_id"),
@@ -383,18 +376,14 @@ class EvolutionEffectiveness:
         """
         self._store: dict[str, Any] = dict(metrics_store or {})
 
-    def generate_monthly_report(
-        self, period: Optional[str] = None
-    ) -> dict[str, Any]:
+    def generate_monthly_report(self, period: Optional[str] = None) -> dict[str, Any]:
         """生成月度迭代效果报告。"""
         if period is None:
             period = datetime.now(timezone.utc).strftime("%Y-%m")
 
         new_factors = int(self._store.get("new_factors", 0))
         total_generated = int(self._store.get("total_generated", 0))
-        effective_rate = (
-            new_factors / total_generated if total_generated > 0 else 0.0
-        )
+        effective_rate = new_factors / total_generated if total_generated > 0 else 0.0
         handled = int(self._store.get("feedback_handled", 0))
         recommendations_total = int(self._store.get("recommendations_total", 0))
         accepted = int(self._store.get("recommendations_accepted", 0))
@@ -404,23 +393,14 @@ class EvolutionEffectiveness:
             "period": period,
             "new_factors": new_factors,
             "effective_rate": round(effective_rate, 4),
-            "avg_sharpe_improvement": float(
-                self._store.get("avg_sharpe_improvement", 0.0)
-            ),
-            "decay_rate_reduction": float(
-                self._store.get("decay_rate_reduction", 0.0)
-            ),
+            "avg_sharpe_improvement": float(self._store.get("avg_sharpe_improvement", 0.0)),
+            "decay_rate_reduction": float(self._store.get("decay_rate_reduction", 0.0)),
             "evolution_rounds": int(self._store.get("evolution_rounds", 0)),
             "feedback_events_handled": handled,
-            "attribution_accuracy": float(
-                self._store.get("attribution_accuracy", 0.0)
-            ),
+            "attribution_accuracy": float(self._store.get("attribution_accuracy", 0.0)),
             "recommendations_accepted": accepted,
             "recommendations_total": recommendations_total,
-            "summary_text": (
-                f"{period}: 新因子 {new_factors} 个，有效率 {effective_rate:.1%}，"
-                f"反馈处理 {handled} 件"
-            ),
+            "summary_text": (f"{period}: 新因子 {new_factors} 个，有效率 {effective_rate:.1%}，反馈处理 {handled} 件"),
             "timestamp": _now_iso(),
         }
 
@@ -453,16 +433,15 @@ class FeedbackLoop:
         )
         self._analyzer = AttributionAnalyzer()
         self._adjuster = EvolutionDirectionAdjuster()
-        self._evaluator = EvolutionEffectiveness(
-            self._config.get("metrics_store")
-        )
+        self._evaluator = EvolutionEffectiveness(self._config.get("metrics_store"))
         self._processed: set[str] = set()  # 幂等处理集合
         self._store = self._evaluator._store  # noqa: SLF001
 
     # ─── 主流程 ──────────────────────────────────────────
 
     def process_feedback(
-        self, factors: Optional[dict[str, dict[str, Any]]] = None,
+        self,
+        factors: Optional[dict[str, dict[str, Any]]] = None,
         market_data: Optional[dict[str, Any]] = None,
     ) -> list[dict[str, Any]]:
         """检查并处理所有待处理的反馈事件。
@@ -481,11 +460,9 @@ class FeedbackLoop:
             results.append(result)
         return results
 
-    def trigger_manual_feedback(
-        self, factor_id: str = "", reason: str = ""
-    ) -> dict[str, Any]:
+    def trigger_manual_feedback(self, factor_id: str = "", reason: str = "") -> dict[str, Any]:
         """手动触发反馈事件。"""
-        event = {
+        event: dict[str, Any] = {
             "event_id": _new_id("fe_"),
             "event_type": FeedbackEventType.USER_TRIGGERED.value,
             "factor_id": factor_id or None,
@@ -496,14 +473,10 @@ class FeedbackLoop:
             "handled": False,
             "handled_at": None,
         }
-        self._store["feedback_handled"] = (
-            self._store.get("feedback_handled", 0) + 1
-        )
+        self._store["feedback_handled"] = self._store.get("feedback_handled", 0) + 1
         return event
 
-    def generate_monthly_report(
-        self, period: Optional[str] = None
-    ) -> dict[str, Any]:
+    def generate_monthly_report(self, period: Optional[str] = None) -> dict[str, Any]:
         """生成月度迭代效果报告。"""
         report = self._evaluator.generate_monthly_report(period)
         self._store["last_report"] = report
@@ -539,26 +512,20 @@ class FeedbackLoop:
 
         factor = factors.get(event.get("factor_id", ""), {})
         attribution = self._analyzer.analyze(event, factor, market_data)
-        new_config = self._adjuster.adjust_direction(
-            attribution, self._config.get("evolution_config")
-        )
+        new_config = self._adjuster.adjust_direction(attribution, self._config.get("evolution_config"))
 
         # 记录处理结果
-        self._store["feedback_handled"] = (
-            self._store.get("feedback_handled", 0) + 1
-        )
-        self._store["recommendations_total"] = (
-            self._store.get("recommendations_total", 0) + 1
-        )
+        self._store["feedback_handled"] = self._store.get("feedback_handled", 0) + 1
+        self._store["recommendations_total"] = self._store.get("recommendations_total", 0) + 1
         action = attribution.get("recommendation", {}).get("action", "monitor_only")
         if action != "monitor_only":
-            self._store["recommendations_accepted"] = (
-                self._store.get("recommendations_accepted", 0) + 1
-            )
+            self._store["recommendations_accepted"] = self._store.get("recommendations_accepted", 0) + 1
 
         logger.info(
             "[FeedbackLoop] 处理事件 %s [root_cause=%s, action=%s]",
-            event_id, attribution.get("root_cause"), action,
+            event_id,
+            attribution.get("root_cause"),
+            action,
         )
         return {
             "event_id": event_id,
@@ -591,6 +558,7 @@ class LiveFeedbackRecord(TypedDict, total=False):
         backtest_ic: 回测 IC（用于对比，可选）
         weight: 组合权重（可选）
     """
+
     factor_id: str
     signal_date: str
     signal_value: float
@@ -621,8 +589,7 @@ def validate_live_feedback_record(
     signal_date = record.get("signal_date")
     if not signal_date or not isinstance(signal_date, str):
         return False, "signal_date 缺失或非字符串"
-    for key, label in (("signal_value", "信号值"), ("position_return", "持仓收益"),
-                       ("turnover", "换手率")):
+    for key, label in (("signal_value", "信号值"), ("position_return", "持仓收益"), ("turnover", "换手率")):
         val = record.get(key)
         if val is None:
             continue
@@ -667,8 +634,7 @@ class LiveFeedbackImporter:
         for r in records:
             ok, msg = validate_live_feedback_record(r)
             if ok:
-                valid.append(LiveFeedbackRecord(**{k: v for k, v in r.items()
-                                                   if v is not None}))
+                valid.append(cast(LiveFeedbackRecord, {k: v for k, v in r.items() if v is not None}))
             else:
                 invalid_msgs.append(msg)
         self._records.extend(valid)
@@ -696,7 +662,8 @@ class LiveFeedbackImporter:
     # ─── 实盘 IC ───────────────────────────────────────
 
     def compute_live_ic(
-        self, records: Optional[list[LiveFeedbackRecord]] = None,
+        self,
+        records: Optional[list[LiveFeedbackRecord]] = None,
     ) -> dict[str, Any]:
         """计算实盘 IC。
 
@@ -726,8 +693,7 @@ class LiveFeedbackImporter:
             by_date: dict[str, list[tuple[float, float]]] = defaultdict(list)
             for it in items:
                 by_date[it["signal_date"]].append(
-                    (float(it.get("signal_value", 0.0)),
-                     float(it.get("position_return", 0.0)))
+                    (float(it.get("signal_value", 0.0)), float(it.get("position_return", 0.0)))
                 )
             day_ics = []
             cross_section_days = 0
@@ -745,12 +711,9 @@ class LiveFeedbackImporter:
             # 时间序列回退：无任何截面日（单标的时序数据）时，
             # 用全期信号 vs 实际收益的秩相关作为时间序列 IC。
             if not day_ics:
-                sig_all = np.array([float(it.get("signal_value", 0.0))
-                                    for it in items])
-                ret_all = np.array([float(it.get("position_return", 0.0))
-                                    for it in items])
-                if (len(sig_all) >= 5 and np.std(sig_all) > 1e-12
-                        and np.std(ret_all) > 1e-12):
+                sig_all = np.array([float(it.get("signal_value", 0.0)) for it in items])
+                ret_all = np.array([float(it.get("position_return", 0.0)) for it in items])
+                if len(sig_all) >= 5 and np.std(sig_all) > 1e-12 and np.std(ret_all) > 1e-12:
                     r = np.corrcoef(sig_all, ret_all)[0, 1]
                     if np.isfinite(r):
                         day_ics.append(r)
@@ -758,14 +721,12 @@ class LiveFeedbackImporter:
             factor_stats[fid] = {
                 "ic": mean_ic,
                 "n_days": max(cross_section_days, len(day_ics)),
-                "mean_return": float(np.mean([it.get("position_return", 0.0)
-                                              for it in items])),
+                "mean_return": float(np.mean([it.get("position_return", 0.0) for it in items])),
             }
             if day_ics:
                 ics.append(mean_ic)
         overall = float(np.mean(ics)) if ics else 0.0
-        return {"factors": factor_stats, "overall_ic": overall,
-                "n_records": len(recs)}
+        return {"factors": factor_stats, "overall_ic": overall, "n_records": len(recs)}
 
     # ─── 落盘 ──────────────────────────────────────────
 
@@ -814,10 +775,17 @@ class LiveFeedbackImporter:
             for r in records:
                 con.execute(
                     "INSERT INTO feedback_live VALUES (?,?,?,?,?,?,?,?,?)",
-                    [r.get("factor_id"), r.get("signal_date"),
-                     r.get("signal_value"), r.get("position_return"),
-                     r.get("turnover"), r.get("slippage"),
-                     r.get("market"), r.get("backtest_ic"), r.get("weight")],
+                    [
+                        r.get("factor_id"),
+                        r.get("signal_date"),
+                        r.get("signal_value"),
+                        r.get("position_return"),
+                        r.get("turnover"),
+                        r.get("slippage"),
+                        r.get("market"),
+                        r.get("backtest_ic"),
+                        r.get("weight"),
+                    ],
                 )
         finally:
             con.close()
@@ -873,19 +841,25 @@ class LiveVsBacktestICReport:
                     status = "ok"
                 else:
                     status = "weak"
-            rows.append({
-                "factor_id": fid,
-                "live_ic": round(live_ic, 4),
-                "backtest_ic": round(bt_ic, 4) if bt_ic is not None else None,
-                "status": status,
-                "n_days": stats.get("n_days", 0),
-                "mean_return": round(stats.get("mean_return", 0.0), 6),
-            })
+            rows.append(
+                {
+                    "factor_id": fid,
+                    "live_ic": round(live_ic, 4),
+                    "backtest_ic": round(bt_ic, 4) if bt_ic is not None else None,
+                    "status": status,
+                    # GAP-I401 (v2.71.0): 退役建议（供 GAP-I305 衰减自动退役闭环消费）
+                    "recommend_retire": status == "decayed",
+                    "decay_gap": (round(abs(bt_ic) - abs(live_ic), 4) if bt_ic is not None else None),
+                    "n_days": stats.get("n_days", 0),
+                    "mean_return": round(stats.get("mean_return", 0.0), 6),
+                }
+            )
         return {
             "factors": sorted(rows, key=lambda r: r["live_ic"]),
             "summary": {
                 "n_factors": len(rows),
                 "n_decayed": decayed,
+                "n_recommend_retire": sum(1 for r in rows if r["recommend_retire"]),
                 "overall_live_ic": round(live_ic_result.get("overall_ic", 0.0), 4),
                 "n_records": live_ic_result.get("n_records", 0),
             },

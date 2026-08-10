@@ -1,12 +1,16 @@
 """验证标准化模块 — 6 种标准化方法功能正确性。"""
+
 import sys
 import os
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 from fts.factor_engine.standardizer import (
-    Standardizer, standardize, SUPPORTED_METHODS,
-    StandardizerConfig, StandardizeMethod,
+    Standardizer,
+    standardize,
+    SUPPORTED_METHODS,
+    StandardizerConfig,
 )
 
 np.random.seed(42)
@@ -30,9 +34,10 @@ def check(name, condition, detail=""):
 print("=== 1. 模块导入 ===")
 check("Standardizer 可导入", Standardizer is not None)
 check("standardize 函数可导入", callable(standardize))
-check("SUPPORTED_METHODS 包含 6 种方法", set(SUPPORTED_METHODS) == {
-    "zscore", "rank", "quantile", "minmax", "winsorize_then_zscore", "none"
-})
+check(
+    "SUPPORTED_METHODS 包含 6 种方法",
+    set(SUPPORTED_METHODS) == {"zscore", "rank", "quantile", "minmax", "winsorize_then_zscore", "none"},
+)
 check("StandardizerConfig 可实例化", StandardizerConfig() is not None)
 
 # ─── 2. zscore 测试 ────────────────────────────────────────
@@ -66,7 +71,7 @@ print("\n=== 3. rank ===")
 result = standardize(raw_1d, "rank")
 check("rank 范围 [0, 1]", 0 <= np.min(result) <= 1 and 0 <= np.max(result) <= 1)
 check("rank 最大值≈1", abs(np.max(result[~np.isnan(raw_1d)]) - 1.0) < 0.01)
-check("rank 最小值≈1/N", abs(np.min(result[~np.isnan(raw_1d)]) - 1.0/len(raw_1d)) < 0.01)
+check("rank 最小值≈1/N", abs(np.min(result[~np.isnan(raw_1d)]) - 1.0 / len(raw_1d)) < 0.01)
 
 # 2D 截面 rank
 result_2d = standardize(raw_2d, "rank", axis=0)
@@ -157,12 +162,13 @@ check("全 NaN zscore=0", np.all(result == 0))
 # ─── 10. 从 __init__ 导入测试 ──────────────────────────────
 print("\n=== 10. __init__ 导出 ===")
 from fts.factor_engine import Standardizer as Std2, standardize as std2, SUPPORTED_METHODS as sm2
+
 check("从 factor_engine 导入 Standardizer", Std2 is not None)
 check("从 factor_engine 导入 standardize", callable(std2))
 check("从 factor_engine 导入 SUPPORTED_METHODS", sm2 == SUPPORTED_METHODS)
 
 # ─── 结果汇总 ──────────────────────────────────────────────
-print(f"\n{'='*50}")
+print(f"\n{'=' * 50}")
 if errors:
     print(f"FAILED: {len(errors)} 项测试失败")
     for e in errors:

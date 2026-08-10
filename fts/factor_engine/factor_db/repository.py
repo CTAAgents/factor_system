@@ -20,7 +20,7 @@ import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class FactorRepository:
     _art_index_rebuild_count: int = 0
 
     def __init__(self, db_path: str | Path | None = None):
-        from .schema import DATABASE_PATH, get_connection
+        from .schema import DATABASE_PATH
 
         self._db_path = Path(db_path) if db_path else DATABASE_PATH
         self._conn = None
@@ -100,47 +100,53 @@ class FactorRepository:
         code = factor.get("code", "")
         code_hash = hashlib.sha256(code.encode()).hexdigest() if code else ""
 
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO factor_catalog (
                 factor_id, name, code, code_hash, params, signature,
                 economic_logic, source, parent_id, generation, trace_id,
                 sharpe, ic, icir, max_drawdown, turnover_monthly,
                 decay_6m, status, market, family, is_elite, metadata, style_tags
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            factor_id,
-            factor.get("name", factor_id),
-            code,
-            code_hash,
-            json.dumps(factor.get("params", {})),
-            json.dumps(factor.get("signature", {})),
-            json.dumps(factor.get("economic_logic", {})),
-            factor.get("source", "seed"),
-            factor.get("parent_id"),
-            factor.get("generation", 0),
-            factor.get("trace_id", factor_id),
-            factor.get("sharpe", 0.0),
-            factor.get("ic", 0.0),
-            factor.get("icir", 0.0),
-            factor.get("max_drawdown", 0.0),
-            factor.get("turnover_monthly", 0.0),
-            factor.get("decay_6m", 0.05),
-            factor.get("status", "active"),
-            factor.get("market", "stock"),
-            factor.get("family") or "other",
-            factor.get("is_elite", False),
-            json.dumps(factor.get("metadata", {})),
-            json.dumps(factor.get("style_tags") or []),
-        ])
+        """,
+            [
+                factor_id,
+                factor.get("name", factor_id),
+                code,
+                code_hash,
+                json.dumps(factor.get("params", {})),
+                json.dumps(factor.get("signature", {})),
+                json.dumps(factor.get("economic_logic", {})),
+                factor.get("source", "seed"),
+                factor.get("parent_id"),
+                factor.get("generation", 0),
+                factor.get("trace_id", factor_id),
+                factor.get("sharpe", 0.0),
+                factor.get("ic", 0.0),
+                factor.get("icir", 0.0),
+                factor.get("max_drawdown", 0.0),
+                factor.get("turnover_monthly", 0.0),
+                factor.get("decay_6m", 0.05),
+                factor.get("status", "active"),
+                factor.get("market", "stock"),
+                factor.get("family") or "other",
+                factor.get("is_elite", False),
+                json.dumps(factor.get("metadata", {})),
+                json.dumps(factor.get("style_tags") or []),
+            ],
+        )
 
         # 记录版本
         version_id = f"ver_{uuid.uuid4().hex[:12]}"
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO factor_versions (
                 version_id, factor_id, code, code_hash,
                 version_number, change_type, change_summary
             ) VALUES (?, ?, ?, ?, 1, 'create', ?)
-        """, [version_id, factor_id, code, code_hash, factor.get("summary", "创建新因子")])
+        """,
+            [version_id, factor_id, code, code_hash, factor.get("summary", "创建新因子")],
+        )
 
         conn.execute("CHECKPOINT")
         logger.info("[FactorRepo] 创建因子: %s (%s)", factor_id, factor.get("name"))
@@ -238,7 +244,8 @@ class FactorRepository:
 
         logger.info(
             "[FactorRepo] 更新因子: %s (ART workaround: drop=%d, rebuild=%d)",
-            factor_id, FactorRepository._art_index_drop_count,
+            factor_id,
+            FactorRepository._art_index_drop_count,
             FactorRepository._art_index_rebuild_count,
         )
         return True
@@ -275,14 +282,19 @@ class FactorRepository:
 
         # 1. 更新 factor_catalog 状态（使用 ART 索引 bug 规避）
         from .repository import FactorStatusRepository
+
         status_repo = FactorStatusRepository(self._db_path)
         status_repo.update_factor_status(factor_id, "retired")
 
         # 2. 记录状态变迁
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc).isoformat()
         status_repo.log_transition(
-            factor_id, old_status, "retired", reason,
+            factor_id,
+            old_status,
+            "retired",
+            reason,
             snapshot={
                 "retired_at": now,
                 "retired_by": "monthly_decay_eval",
@@ -294,6 +306,7 @@ class FactorRepository:
         json_moved_path: str | None = None
         if elite_dir:
             import shutil
+
             elite_path = Path(elite_dir)
             retired_dir = elite_path / "_retired"
             retired_dir.mkdir(parents=True, exist_ok=True)
@@ -313,7 +326,6 @@ class FactorRepository:
 
         # 4. 记录一致性日志（P4）
         self._log_retire_consistency(factor_id, factor.get("name", ""), json_moved_path)
-
         logger.info("[FactorRepo] 淘汰因子: %s (%s)", factor_id, factor.get("name", ""))
         return True
 
@@ -368,7 +380,10 @@ class FactorRepository:
             )
             logger.debug(
                 "[seed_lineage] 写入: %s ← %s (family=%s, gen=%d)",
-                factor_name, seed_name, seed_family, generation,
+                factor_name,
+                seed_name,
+                seed_family,
+                generation,
             )
             return True
         except Exception as e:
@@ -445,7 +460,8 @@ class FactorRepository:
         # 回溯失败 → 使用自身信息 fallback
         logger.debug(
             "[seed_lineage] 回溯失败 [%s]，使用自身 fallback (depth=%d)",
-            factor_name, depth,
+            factor_name,
+            depth,
         )
         return {
             "seed_name": factor_name,
@@ -455,11 +471,16 @@ class FactorRepository:
         }
 
     def _log_retire_consistency(
-        self, factor_id: str, factor_name: str, json_path: str | None = None,
+        self,
+        factor_id: str,
+        factor_name: str,
+        json_path: str | None = None,
+        market: str = "",
     ) -> None:
         """记录淘汰操作的一致性日志（P4）。"""
         import json
         from datetime import datetime, timezone
+
         try:
             log_path = Path("data/_lineage/catalog_consistency.jsonl")
             log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -467,7 +488,7 @@ class FactorRepository:
                 "event_type": "retire",
                 "factor_id": factor_id,
                 "factor_name": factor_name,
-                "market": factor.get("market", ""),
+                "market": market,
                 "status": "retired",
                 "json_path": json_path or "",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -507,9 +528,8 @@ class FactorRepository:
         Returns:
             因子列表
         """
-        conn = self._get_conn()
-        conditions = []
-        params = []
+        conditions: list[str] = []
+        params: list[Any] = []
 
         if market:
             conditions.append("market = ?")
@@ -617,7 +637,6 @@ class FactorRepository:
         Returns:
             匹配的因子列表
         """
-        conn = self._get_conn()
         conditions = ["(name ILIKE ? OR factor_id ILIKE ?)"]
         search_pattern = f"%{keyword}%"
         params = [search_pattern, search_pattern]
@@ -628,7 +647,7 @@ class FactorRepository:
 
         sql = f"""
             SELECT * FROM factor_catalog
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
             LIMIT ?
         """
         params.append(limit)
@@ -656,7 +675,8 @@ class FactorRepository:
         conn = self._get_conn()
         eval_id = f"eval_{uuid.uuid4().hex[:12]}"
 
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO factor_evaluations (
                 eval_id, factor_id, trace_id,
                 level_1_ic, level_1_icir, level_1_sharpe, level_1_max_dd,
@@ -669,42 +689,47 @@ class FactorRepository:
                 level_3_effective_n, level_3_adjusted_t, level_3_passed,
                 overall_passed, failure_reasons, evaluated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            eval_id,
-            factor_id,
-            evaluation.get("trace_id"),
-            evaluation.get("ic", 0.0),
-            evaluation.get("icir", 0.0),
-            evaluation.get("sharpe", 0.0),
-            evaluation.get("max_drawdown", 0.0),
-            evaluation.get("turnover", 0.0),
-            evaluation.get("t_stat", 0.0),
-            evaluation.get("monotonicity", False),
-            evaluation.get("oos_ratio", 0.0),
-            evaluation.get("theory_score", 0),
-            evaluation.get("behavioral_score", 0),
-            evaluation.get("microstructure_score", 0),
-            evaluation.get("institutional_score", 0),
-            evaluation.get("dims_passed", 0),
-            evaluation.get("bonferroni_p", 1.0),
-            evaluation.get("fdr_q", 0.05),
-            evaluation.get("effective_n", 1),
-            evaluation.get("adjusted_t", 0.0),
-            evaluation.get("l3_passed", False),
-            evaluation.get("overall_passed", False),
-            json.dumps(evaluation.get("failure_reasons", [])),
-            evaluation.get("evaluated_at", datetime.now().isoformat()),
-        ])
+        """,
+            [
+                eval_id,
+                factor_id,
+                evaluation.get("trace_id"),
+                evaluation.get("ic", 0.0),
+                evaluation.get("icir", 0.0),
+                evaluation.get("sharpe", 0.0),
+                evaluation.get("max_drawdown", 0.0),
+                evaluation.get("turnover", 0.0),
+                evaluation.get("t_stat", 0.0),
+                evaluation.get("monotonicity", False),
+                evaluation.get("oos_ratio", 0.0),
+                evaluation.get("theory_score", 0),
+                evaluation.get("behavioral_score", 0),
+                evaluation.get("microstructure_score", 0),
+                evaluation.get("institutional_score", 0),
+                evaluation.get("dims_passed", 0),
+                evaluation.get("bonferroni_p", 1.0),
+                evaluation.get("fdr_q", 0.05),
+                evaluation.get("effective_n", 1),
+                evaluation.get("adjusted_t", 0.0),
+                evaluation.get("l3_passed", False),
+                evaluation.get("overall_passed", False),
+                json.dumps(evaluation.get("failure_reasons", [])),
+                evaluation.get("evaluated_at", datetime.now().isoformat()),
+            ],
+        )
 
         # 更新主表最新评估
-        self.update_factor(factor_id, {
-            "sharpe": evaluation.get("sharpe", 0.0),
-            "ic": evaluation.get("ic", 0.0),
-            "icir": evaluation.get("icir", 0.0),
-            "max_drawdown": evaluation.get("max_drawdown", 0.0),
-            "turnover_monthly": evaluation.get("turnover", 0.0),
-            "status": "active" if evaluation.get("overall_passed") else "failed",
-        })
+        self.update_factor(
+            factor_id,
+            {
+                "sharpe": evaluation.get("sharpe", 0.0),
+                "ic": evaluation.get("ic", 0.0),
+                "icir": evaluation.get("icir", 0.0),
+                "max_drawdown": evaluation.get("max_drawdown", 0.0),
+                "turnover_monthly": evaluation.get("turnover", 0.0),
+                "status": "active" if evaluation.get("overall_passed") else "failed",
+            },
+        )
 
         conn.execute("CHECKPOINT")
         logger.info("[FactorRepo] 添加评估: %s -> %s", factor_id, eval_id)
@@ -716,12 +741,15 @@ class FactorRepository:
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         """获取因子的评估历史。"""
-        result = self._execute("""
+        result = self._execute(
+            """
             SELECT * FROM factor_evaluations
             WHERE factor_id = ?
             ORDER BY evaluated_at DESC
             LIMIT ?
-        """, [factor_id, limit])
+        """,
+            [factor_id, limit],
+        )
         rows = result.fetchall()
         return self._rows_to_dicts(rows)
 
@@ -729,47 +757,53 @@ class FactorRepository:
 
     def get_versions(self, factor_id: str) -> list[dict[str, Any]]:
         """获取因子的版本历史。"""
-        result = self._execute("""
+        result = self._execute(
+            """
             SELECT * FROM factor_versions
             WHERE factor_id = ?
             ORDER BY created_at DESC
-        """, [factor_id])
+        """,
+            [factor_id],
+        )
         rows = result.fetchall()
         return self._rows_to_dicts(rows)
 
     def rollback_to_version(self, factor_id: str, version_id: str) -> bool:
         """回滚到指定版本。"""
-        result = self._execute(
-            "SELECT * FROM factor_versions WHERE version_id = ?",
-            [version_id]
-        )
+        result = self._execute("SELECT * FROM factor_versions WHERE version_id = ?", [version_id])
         version_row = result.fetchone()
         if not version_row:
             return False
 
         version = self._row_to_dict(version_row)
 
-        self.update_factor(factor_id, {
-            "code": version["code"],
-            "code_hash": version["code_hash"],
-        })
+        self.update_factor(
+            factor_id,
+            {
+                "code": version["code"],
+                "code_hash": version["code_hash"],
+            },
+        )
 
         # 记录回滚版本
         new_version_id = f"ver_{uuid.uuid4().hex[:12]}"
         conn = self._get_conn()
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO factor_versions (
                 version_id, factor_id, code, code_hash,
                 version_number, change_type, change_summary
             ) VALUES (?, ?, ?, ?, ?, 'rollback', ?)
-        """, [
-            new_version_id,
-            factor_id,
-            version["code"],
-            version["code_hash"],
-            version["version_number"] + 1,
-            f"回滚到版本 {version['version_number']}",
-        ])
+        """,
+            [
+                new_version_id,
+                factor_id,
+                version["code"],
+                version["code_hash"],
+                version["version_number"] + 1,
+                f"回滚到版本 {version['version_number']}",
+            ],
+        )
 
         conn.execute("CHECKPOINT")
         logger.info("[FactorRepo] 回滚: %s -> version %s", factor_id, version_id)
@@ -782,18 +816,10 @@ class FactorRepository:
         conn = self._get_conn()
 
         total = conn.execute("SELECT COUNT(*) FROM factor_catalog").fetchone()[0]
-        active = conn.execute(
-            "SELECT COUNT(*) FROM factor_catalog WHERE status = 'active'"
-        ).fetchone()[0]
-        elite = conn.execute(
-            "SELECT COUNT(*) FROM factor_catalog WHERE is_elite = TRUE"
-        ).fetchone()[0]
-        avg_sharpe = conn.execute(
-            "SELECT AVG(sharpe) FROM factor_catalog WHERE sharpe > 0"
-        ).fetchone()[0]
-        avg_ic = conn.execute(
-            "SELECT AVG(ic) FROM factor_catalog WHERE ic > 0"
-        ).fetchone()[0]
+        active = conn.execute("SELECT COUNT(*) FROM factor_catalog WHERE status = 'active'").fetchone()[0]
+        elite = conn.execute("SELECT COUNT(*) FROM factor_catalog WHERE is_elite = TRUE").fetchone()[0]
+        avg_sharpe = conn.execute("SELECT AVG(sharpe) FROM factor_catalog WHERE sharpe > 0").fetchone()[0]
+        avg_ic = conn.execute("SELECT AVG(ic) FROM factor_catalog WHERE ic > 0").fetchone()[0]
 
         # 按市场分组
         market_stats = conn.execute("""
@@ -849,7 +875,7 @@ class FactorRepository:
 
         sql = f"""
             SELECT * FROM factor_catalog
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
             ORDER BY sharpe DESC
             LIMIT ?
         """
@@ -889,7 +915,7 @@ class FactorRepository:
 
         sql = f"""
             SELECT * FROM factor_catalog
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
             ORDER BY (ic + sharpe) DESC
         """
 
@@ -939,10 +965,7 @@ class FactorRepository:
 
         # 每个家族内按 Sharpe 排序
         for fam in family_groups:
-            family_groups[fam].sort(
-                key=lambda x: x.get("sharpe", 0),
-                reverse=True
-            )
+            family_groups[fam].sort(key=lambda x: x.get("sharpe", 0), reverse=True)
 
         # 多样性选择: 轮流从每个家族取一个
         selected: list[dict[str, Any]] = []
@@ -1041,7 +1064,7 @@ class FactorRepository:
                 MAX(sharpe) as max_sharpe,
                 AVG(ic) as avg_ic
             FROM factor_catalog
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
             GROUP BY family
             ORDER BY factor_count DESC
         """
@@ -1096,6 +1119,7 @@ class FactorRepository:
 
 # ─=== A.1: 因子质量评分卡仓储 ──────────────────────────────
 
+
 class FactorQualityScoreRepository:
     """因子质量评分卡仓储（A.1）。
 
@@ -1115,6 +1139,7 @@ class FactorQualityScoreRepository:
     def _get_conn(self):
         if self._conn is None:
             import duckdb
+
             self._conn = duckdb.connect(str(self._db_path))
         return self._conn
 
@@ -1131,11 +1156,23 @@ class FactorQualityScoreRepository:
 
     def _row_to_dict(self, row) -> dict[str, Any]:
         cols = [
-            "score_id", "factor_id", "total_score", "dimension_scores",
-            "grade", "evaluated_at", "score_version",
-            "ic_score", "sharpe_score", "stability_score", "robustness_score",
-            "capacity_score", "tradability_score", "diversity_score",
-            "logic_score", "timeliness_score", "compatibility_score",
+            "score_id",
+            "factor_id",
+            "total_score",
+            "dimension_scores",
+            "grade",
+            "evaluated_at",
+            "score_version",
+            "ic_score",
+            "sharpe_score",
+            "stability_score",
+            "robustness_score",
+            "capacity_score",
+            "tradability_score",
+            "diversity_score",
+            "logic_score",
+            "timeliness_score",
+            "compatibility_score",
         ]
         result = {}
         for i, val in enumerate(row):
@@ -1171,7 +1208,8 @@ class FactorQualityScoreRepository:
         dim_map = {d.get("name"): d.get("score", 0.0) for d in dims if isinstance(d, dict)}
         evaluated_at = score.get("evaluated_at") or datetime.now(timezone.utc).isoformat()
 
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO factor_quality_scores (
                 score_id, factor_id, total_score, dimension_scores, grade,
                 evaluated_at, score_version,
@@ -1179,44 +1217,46 @@ class FactorQualityScoreRepository:
                 capacity_score, tradability_score, diversity_score,
                 logic_score, timeliness_score, compatibility_score
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            score_id,
+        """,
+            [
+                score_id,
+                score.get("factor_id", "unknown"),
+                float(score.get("total_score", 0.0)),
+                json.dumps(dims),
+                score.get("grade", "C"),
+                evaluated_at,
+                score.get("score_version", "v1"),
+                float(dim_map.get("ic_score", 0.0)),
+                float(dim_map.get("sharpe_score", 0.0)),
+                float(dim_map.get("stability_score", 0.0)),
+                float(dim_map.get("robustness_score", 0.0)),
+                float(dim_map.get("capacity_score", 0.0)),
+                float(dim_map.get("tradability_score", 0.0)),
+                float(dim_map.get("diversity_score", 0.0)),
+                float(dim_map.get("logic_score", 0.0)),
+                float(dim_map.get("timeliness_score", 0.0)),
+                float(dim_map.get("compatibility_score", 0.0)),
+            ],
+        )
+        conn.execute("CHECKPOINT")
+        logger.info(
+            "[QualityScoreRepo] 保存评分卡: %s (total=%.2f, grade=%s)",
             score.get("factor_id", "unknown"),
             float(score.get("total_score", 0.0)),
-            json.dumps(dims),
             score.get("grade", "C"),
-            evaluated_at,
-            score.get("score_version", "v1"),
-            float(dim_map.get("ic_score", 0.0)),
-            float(dim_map.get("sharpe_score", 0.0)),
-            float(dim_map.get("stability_score", 0.0)),
-            float(dim_map.get("robustness_score", 0.0)),
-            float(dim_map.get("capacity_score", 0.0)),
-            float(dim_map.get("tradability_score", 0.0)),
-            float(dim_map.get("diversity_score", 0.0)),
-            float(dim_map.get("logic_score", 0.0)),
-            float(dim_map.get("timeliness_score", 0.0)),
-            float(dim_map.get("compatibility_score", 0.0)),
-        ])
-        conn.execute("CHECKPOINT")
-        logger.info("[QualityScoreRepo] 保存评分卡: %s (total=%.2f, grade=%s)",
-                    score.get("factor_id", "unknown"),
-                    float(score.get("total_score", 0.0)),
-                    score.get("grade", "C"))
+        )
         return score_id
 
     def get_latest_score(self, factor_id: str) -> dict[str, Any] | None:
         """获取因子最新评分卡。"""
         result = self._get_conn().execute(
-            "SELECT * FROM factor_quality_scores WHERE factor_id = ? "
-            "ORDER BY evaluated_at DESC LIMIT 1",
+            "SELECT * FROM factor_quality_scores WHERE factor_id = ? ORDER BY evaluated_at DESC LIMIT 1",
             [factor_id],
         )
         row = result.fetchone()
         return self._row_to_dict(row) if row else None
 
-    def list_top_scores(self, limit: int = 20,
-                        grade: str | None = None) -> list[dict[str, Any]]:
+    def list_top_scores(self, limit: int = 20, grade: str | None = None) -> list[dict[str, Any]]:
         """按总分降序取 Top-N（每因子仅取最新评分），可选按等级过滤。"""
         grade_filter = "WHERE grade = ?" if grade else ""
         params: list[Any] = [grade] if grade else []
@@ -1237,8 +1277,7 @@ class FactorQualityScoreRepository:
     def get_score_history(self, factor_id: str) -> list[dict[str, Any]]:
         """获取因子评分历史（按时间升序）。"""
         result = self._get_conn().execute(
-            "SELECT * FROM factor_quality_scores WHERE factor_id = ? "
-            "ORDER BY evaluated_at ASC",
+            "SELECT * FROM factor_quality_scores WHERE factor_id = ? ORDER BY evaluated_at ASC",
             [factor_id],
         )
         return [self._row_to_dict(row) for row in result.fetchall()]
@@ -1250,14 +1289,13 @@ class FactorQualityScoreRepository:
             "SELECT COUNT(*) FROM factor_quality_scores WHERE factor_id = ?",
             [factor_id],
         ).fetchone()[0]
-        conn.execute(
-            "DELETE FROM factor_quality_scores WHERE factor_id = ?", [factor_id]
-        )
+        conn.execute("DELETE FROM factor_quality_scores WHERE factor_id = ?", [factor_id])
         conn.execute("CHECKPOINT")
         return int(count)
 
 
 # ─=== A.2: 因子状态变迁仓储 ────────────────────────────────
+
 
 class FactorStatusRepository:
     """因子生命周期状态仓储（A.2）。
@@ -1278,6 +1316,7 @@ class FactorStatusRepository:
     def _get_conn(self):
         if self._conn is None:
             import duckdb
+
             self._conn = duckdb.connect(str(self._db_path))
         return self._conn
 
@@ -1286,8 +1325,9 @@ class FactorStatusRepository:
             self._conn.close()
             self._conn = None
 
-    def log_transition(self, factor_id: str, from_status: str, to_status: str,
-                       reason: str, snapshot: dict[str, Any] | None = None) -> str:
+    def log_transition(
+        self, factor_id: str, from_status: str, to_status: str, reason: str, snapshot: dict[str, Any] | None = None
+    ) -> str:
         """记录一次状态变迁。
 
         Args:
@@ -1305,27 +1345,26 @@ class FactorStatusRepository:
         conn = self._get_conn()
         history_id = f"fsh_{factor_id[:8]}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
         changed_at = datetime.now(timezone.utc).isoformat()
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO factor_status_history (
                 history_id, factor_id, from_status, to_status,
                 reason, changed_at, snapshot
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, [history_id, factor_id, from_status, to_status, reason,
-              changed_at, json.dumps(snapshot or {})])
+        """,
+            [history_id, factor_id, from_status, to_status, reason, changed_at, json.dumps(snapshot or {})],
+        )
         conn.execute("CHECKPOINT")
-        logger.info("[StatusRepo] 状态变迁: %s %s→%s (%s)",
-                    factor_id, from_status, to_status, reason)
+        logger.info("[StatusRepo] 状态变迁: %s %s→%s (%s)", factor_id, from_status, to_status, reason)
         return history_id
 
     def get_history(self, factor_id: str) -> list[dict[str, Any]]:
         """获取因子状态变迁历史（按时间升序）。"""
         result = self._get_conn().execute(
-            "SELECT * FROM factor_status_history WHERE factor_id = ? "
-            "ORDER BY changed_at ASC",
+            "SELECT * FROM factor_status_history WHERE factor_id = ? ORDER BY changed_at ASC",
             [factor_id],
         )
-        cols = ["history_id", "factor_id", "from_status", "to_status",
-                "reason", "changed_at", "snapshot"]
+        cols = ["history_id", "factor_id", "from_status", "to_status", "reason", "changed_at", "snapshot"]
         out = []
         for row in result.fetchall():
             item = {}
@@ -1362,9 +1401,13 @@ class FactorStatusRepository:
         if not has_col:
             conn.execute("ALTER TABLE factor_catalog ADD COLUMN IF NOT EXISTS status_updated_at TIMESTAMP")
         allowed = {
-            "status", "status_updated_at", "consecutive_ic_negative_months",
-            "consecutive_sharpe_drop_months", "last_incremental_eval_at",
-            "decay_rate_3m", "decay_rate_6m",
+            "status",
+            "status_updated_at",
+            "consecutive_ic_negative_months",
+            "consecutive_sharpe_drop_months",
+            "last_incremental_eval_at",
+            "decay_rate_3m",
+            "decay_rate_6m",
         }
         set_clauses = []
         params = []
@@ -1406,6 +1449,7 @@ class FactorStatusRepository:
 
 # ─=== B.3: 因子审计报告仓储 ────────────────────────────────
 
+
 class FactorAuditReportRepository:
     """因子审计报告仓储（B.3）。
 
@@ -1423,6 +1467,7 @@ class FactorAuditReportRepository:
     def _get_conn(self):
         if self._conn is None:
             import duckdb
+
             self._conn = duckdb.connect(str(self._db_path))
         return self._conn
 
@@ -1449,37 +1494,42 @@ class FactorAuditReportRepository:
         ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
         report_id = report.get("report_id") or f"far_{report.get('factor_id', 'unknown')}_{ts}"
         summary = report.get("summary", {})
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO factor_audit_reports (
                 report_id, factor_id, factor_version_id, passed, overall_score,
                 total_checks, passed_checks, results_json, summary_json,
                 recommendations, audited_at, audit_version
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            report_id,
-            report.get("factor_id", "unknown"),
-            report.get("factor_version_id"),
-            bool(report.get("passed", False)),
-            float(report.get("overall_score", 0.0)),
-            int(report.get("total_checks", summary.get("total", 0))),
-            int(report.get("passed_checks", summary.get("passed", 0))),
-            json.dumps(report.get("results", summary.get("failed_items", []))),
-            json.dumps(summary),
-            json.dumps(report.get("recommendations", [])),
-            report.get("audited_at") or datetime.now(timezone.utc).isoformat(),
-            report.get("audit_version", "v1"),
-        ])
+        """,
+            [
+                report_id,
+                report.get("factor_id", "unknown"),
+                report.get("factor_version_id"),
+                bool(report.get("passed", False)),
+                float(report.get("overall_score", 0.0)),
+                int(report.get("total_checks", summary.get("total", 0))),
+                int(report.get("passed_checks", summary.get("passed", 0))),
+                json.dumps(report.get("results", summary.get("failed_items", []))),
+                json.dumps(summary),
+                json.dumps(report.get("recommendations", [])),
+                report.get("audited_at") or datetime.now(timezone.utc).isoformat(),
+                report.get("audit_version", "v1"),
+            ],
+        )
         conn.execute("CHECKPOINT")
-        logger.info("[AuditRepo] 保存审计报告: %s (passed=%s, score=%.2f)",
-                    report.get("factor_id", "unknown"),
-                    report.get("passed"), float(report.get("overall_score", 0.0)))
+        logger.info(
+            "[AuditRepo] 保存审计报告: %s (passed=%s, score=%.2f)",
+            report.get("factor_id", "unknown"),
+            report.get("passed"),
+            float(report.get("overall_score", 0.0)),
+        )
         return report_id
 
     def get_latest_report(self, factor_id: str) -> dict[str, Any] | None:
         """获取因子最新审计报告。"""
         result = self._get_conn().execute(
-            "SELECT * FROM factor_audit_reports WHERE factor_id = ? "
-            "ORDER BY audited_at DESC LIMIT 1",
+            "SELECT * FROM factor_audit_reports WHERE factor_id = ? ORDER BY audited_at DESC LIMIT 1",
             [factor_id],
         )
         row = result.fetchone()
@@ -1488,8 +1538,7 @@ class FactorAuditReportRepository:
     def get_history(self, factor_id: str) -> list[dict[str, Any]]:
         """获取因子审计历史（按时间升序）。"""
         result = self._get_conn().execute(
-            "SELECT * FROM factor_audit_reports WHERE factor_id = ? "
-            "ORDER BY audited_at ASC",
+            "SELECT * FROM factor_audit_reports WHERE factor_id = ? ORDER BY audited_at ASC",
             [factor_id],
         )
         return [self._row_to_dict(row) for row in result.fetchall()]
@@ -1498,12 +1547,8 @@ class FactorAuditReportRepository:
         """获取审计统计（总数/通过率/各因子最新通过状态）。"""
         conn = self._get_conn()
         total = conn.execute("SELECT COUNT(*) FROM factor_audit_reports").fetchone()[0]
-        passed_total = conn.execute(
-            "SELECT COUNT(*) FROM factor_audit_reports WHERE passed = TRUE"
-        ).fetchone()[0]
-        distinct_factors = conn.execute(
-            "SELECT COUNT(DISTINCT factor_id) FROM factor_audit_reports"
-        ).fetchone()[0]
+        passed_total = conn.execute("SELECT COUNT(*) FROM factor_audit_reports WHERE passed = TRUE").fetchone()[0]
+        distinct_factors = conn.execute("SELECT COUNT(DISTINCT factor_id) FROM factor_audit_reports").fetchone()[0]
         return {
             "total_audits": int(total),
             "passed_audits": int(passed_total),
@@ -1513,10 +1558,18 @@ class FactorAuditReportRepository:
 
     def _row_to_dict(self, row) -> dict[str, Any]:
         cols = [
-            "report_id", "factor_id", "factor_version_id", "passed",
-            "overall_score", "total_checks", "passed_checks",
-            "results_json", "summary_json", "recommendations",
-            "audited_at", "audit_version",
+            "report_id",
+            "factor_id",
+            "factor_version_id",
+            "passed",
+            "overall_score",
+            "total_checks",
+            "passed_checks",
+            "results_json",
+            "summary_json",
+            "recommendations",
+            "audited_at",
+            "audit_version",
         ]
         result = {}
         for i, val in enumerate(row):

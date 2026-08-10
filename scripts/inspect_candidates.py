@@ -20,7 +20,7 @@ def print_candidates(candidates, title):
     print(f"【{title}】共 {len(candidates)} 个候选")
     print("=" * 70)
     for i, c in enumerate(candidates):
-        print(f"\n--- 候选 {i+1}: {c.get('name')} ---")
+        print(f"\n--- 候选 {i + 1}: {c.get('name')} ---")
         print(f"  来源: {c.get('source')}")
         print(f"  市场: {c.get('market')}")
         el = c.get("economic_logic", {})
@@ -34,10 +34,7 @@ def print_candidates(candidates, title):
         print(f"  代码长度: {len(c.get('code', ''))} 字符")
         print(f"  参数: {json.dumps(c.get('params', {}), ensure_ascii=False)}")
         sig = c.get("signature", {})
-        print(
-            f"  签名: input_fields={sig.get('input_fields')}, "
-            f"lookback={sig.get('lookback')}"
-        )
+        print(f"  签名: input_fields={sig.get('input_fields')}, lookback={sig.get('lookback')}")
 
 
 def main():
@@ -55,20 +52,17 @@ def main():
 
     # 汇总
     print("\n" + "=" * 70)
-    print(f"汇总: 研报 {len(c1)} 个 + 论文 {len(c2)} 个 = {len(c1)+len(c2)} 个候选")
+    print(f"汇总: 研报 {len(c1)} 个 + 论文 {len(c2)} 个 = {len(c1) + len(c2)} 个候选")
     print("=" * 70)
 
     # 统计经济逻辑评分有值的个数
     with_scores = sum(
-        1 for c in c1 + c2
+        1
+        for c in c1 + c2
         if isinstance(c.get("economic_logic", {}), dict)
-        and any(
-            v is not None
-            for v in c["economic_logic"].values()
-            if isinstance(v, (int, float))
-        )
+        and any(v is not None for v in c["economic_logic"].values() if isinstance(v, (int, float)))
     )
-    print(f"含经济逻辑评分的候选: {with_scores}/{len(c1)+len(c2)}")
+    print(f"含经济逻辑评分的候选: {with_scores}/{len(c1) + len(c2)}")
 
 
 if __name__ == "__main__":

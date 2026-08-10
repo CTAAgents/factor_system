@@ -25,10 +25,12 @@ if str(_FTS_ROOT) not in sys.path:
 
 # ─── Fixtures ────────────────────────────────────────────────
 
+
 @pytest.fixture
 def seeds_dir() -> Path:
     """返回 seeds 目录路径，确保存在。"""
     from fts.factor_engine.seed_loader import get_seeds_dir
+
     d = get_seeds_dir()
     assert d.exists(), f"seeds 目录不存在: {d}"
     return d
@@ -51,8 +53,10 @@ def sample_code_yaml(tmp_path: Path) -> Path:
                 "output_type": "signal",
                 "frequency": "daily",
                 "economic_logic": {
-                    "theory": 4, "behavioral": 3,
-                    "microstructure": 3, "institutional": 3,
+                    "theory": 4,
+                    "behavioral": 3,
+                    "microstructure": 3,
+                    "institutional": 3,
                     "narrative": "测试因子",
                 },
                 "code": (
@@ -84,8 +88,10 @@ def sample_expression_yaml(tmp_path: Path) -> Path:
                 "expression": "rank(close) * scale(volume)",
                 "params": {"d": 10},
                 "economic_logic": {
-                    "theory": 3, "behavioral": 3,
-                    "microstructure": 3, "institutional": 3,
+                    "theory": 3,
+                    "behavioral": 3,
+                    "microstructure": 3,
+                    "institutional": 3,
                     "narrative": "表达式测试",
                 },
             }
@@ -114,8 +120,10 @@ def sample_fundamental_yaml(tmp_path: Path) -> Path:
                 "input_fields": ["close"],
                 "lookback": 10,
                 "economic_logic": {
-                    "theory": 4, "behavioral": 3,
-                    "microstructure": 3, "institutional": 4,
+                    "theory": 4,
+                    "behavioral": 3,
+                    "microstructure": 3,
+                    "institutional": 4,
                     "narrative": "基本面测试",
                 },
             }
@@ -331,9 +339,7 @@ class TestDualPathConsistency:
 
         yaml_names = {f["name"] for f in load_all_yaml_seeds(market="futures")}
         hc_names = {f["name"] for f in SeedPool(market="futures", use_yaml=False).load_all_seeds()}
-        assert hc_names.issubset(yaml_names), (
-            f"硬编码兜底包含 YAML 主路径未覆盖的因子: {hc_names - yaml_names}"
-        )
+        assert hc_names.issubset(yaml_names), f"硬编码兜底包含 YAML 主路径未覆盖的因子: {hc_names - yaml_names}"
 
     def test_futures_count_match(self):
         """YAML 主路径 184 个期货因子，硬编码兜底 81 个。"""
@@ -352,9 +358,7 @@ class TestDualPathConsistency:
 
         yaml_names = {f["name"] for f in load_all_yaml_seeds(market="stock")}
         hc_names = {f["name"] for f in SeedPool(market="stock", use_yaml=False).load_all_seeds()}
-        assert hc_names.issubset(yaml_names), (
-            f"硬编码兜底包含 YAML 主路径未覆盖的股票因子: {hc_names - yaml_names}"
-        )
+        assert hc_names.issubset(yaml_names), f"硬编码兜底包含 YAML 主路径未覆盖的股票因子: {hc_names - yaml_names}"
 
     def test_seedpool_yaml_default(self):
         """SeedPool 默认使用 YAML 路径。"""
@@ -424,6 +428,7 @@ class TestEdgeCases:
             yaml.dump(doc, f, allow_unicode=True)
 
         from fts.factor_engine.seed_loader import load_factors_from_yaml
+
         factors = load_factors_from_yaml(p)
         assert factors == []
 
@@ -445,6 +450,7 @@ class TestEdgeCases:
             yaml.dump(doc, f, allow_unicode=True)
 
         from fts.factor_engine.seed_loader import load_factors_from_yaml
+
         factors = load_factors_from_yaml(p)
         assert len(factors) == 0
 
@@ -495,6 +501,7 @@ class TestPathConfig:
     def test_get_seeds_dir_default(self):
         """默认 seeds 目录在项目根目录下。"""
         from fts.factor_engine.seed_loader import get_seeds_dir
+
         d = get_seeds_dir()
         assert d.name == "seeds"
         assert d.exists()

@@ -13,7 +13,7 @@ fts.factor_engine.cost_model — 交易成本模型。
 
 from __future__ import annotations
 
-from typing import Any, Optional, TypedDict
+from typing import Any, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -22,21 +22,21 @@ from .contracts import BacktestMetrics
 
 
 class CostConfig(TypedDict, total=False):
-    slippage_bps: float       # 滑点（基点，默认 1.0）
-    commission_bps: float     # 手续费（基点，默认 0.3）
-    impact_bps_per_pct: float # 冲击成本（每 1% 日成交量占比，默认 2.0）
-    min_cost_bps: float       # 最低成本（基点，默认 0.5）
-    roll_cost_bps: float      # 展期成本（基点/次，期货主力换月穿越时扣除，v2.58.0 GAP-046）
-    market: str               # "futures" / "stock" / "etf"
+    slippage_bps: float  # 滑点（基点，默认 1.0）
+    commission_bps: float  # 手续费（基点，默认 0.3）
+    impact_bps_per_pct: float  # 冲击成本（每 1% 日成交量占比，默认 2.0）
+    min_cost_bps: float  # 最低成本（基点，默认 0.5）
+    roll_cost_bps: float  # 展期成本（基点/次，期货主力换月穿越时扣除，v2.58.0 GAP-046）
+    market: str  # "futures" / "stock" / "etf"
 
 
 class AdjustedMetrics(TypedDict, total=False):
-    gross_sharpe: float       # 调整前夏普
-    net_sharpe: float         # 成本调整后夏普
-    total_cost_bps: float     # 总成本（基点）
-    turnover: float           # 月度换手率
-    cost_adjusted_ic: float   # 成本调整后 IC（近似）
-    roll_cost_bps: float      # 展期成本合计（基点，持仓穿越换月日）
+    gross_sharpe: float  # 调整前夏普
+    net_sharpe: float  # 成本调整后夏普
+    total_cost_bps: float  # 总成本（基点）
+    turnover: float  # 月度换手率
+    cost_adjusted_ic: float  # 成本调整后 IC（近似）
+    roll_cost_bps: float  # 展期成本合计（基点，持仓穿越换月日）
 
 
 # ─── 默认市场成本配置 ─────────────────────────────────────
@@ -212,7 +212,8 @@ class TransactionCostModel:
         impact_extra = 0.0
         if volume is not None and len(volume) > 0:
             impact_extra = self._estimate_impact(
-                signal, config.get("impact_bps_per_pct", 2.0),
+                signal,
+                config.get("impact_bps_per_pct", 2.0),
             )
 
         # 2.5 展期成本（v2.58.0 GAP-046 / v2.67.0 GAP-F11）
@@ -221,12 +222,19 @@ class TransactionCostModel:
         if roll_events:
             spread_map = self._roll_events_to_spread_map(roll_events)
             roll_cost_total = self._estimate_roll_cost(
-                signal, dates, roll_dates, roll_cost_bps,
-                roll_events=roll_events, spread_map=spread_map,
+                signal,
+                dates,
+                roll_dates,
+                roll_cost_bps,
+                roll_events=roll_events,
+                spread_map=spread_map,
             )
         else:
             roll_cost_total = self._estimate_roll_cost(
-                signal, dates, roll_dates, roll_cost_bps,
+                signal,
+                dates,
+                roll_dates,
+                roll_cost_bps,
             )
 
         # 3. 总成本估算（基点）

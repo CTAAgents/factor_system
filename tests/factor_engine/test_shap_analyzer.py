@@ -12,7 +12,6 @@ import os
 import sys
 import tempfile
 import types
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -46,9 +45,7 @@ def fake_shap(monkeypatch):
 
         def shap_values(self, X_sample, nsamples=100):
             # 返回与输入同形的确定性 SHAP 值（正负交替），供排序/统计使用
-            arr = np.arange(X_sample.shape[0] * X_sample.shape[1], dtype=np.float64).reshape(
-                X_sample.shape
-            ) % 3 - 1.0
+            arr = np.arange(X_sample.shape[0] * X_sample.shape[1], dtype=np.float64).reshape(X_sample.shape) % 3 - 1.0
             return arr
 
     fake = types.ModuleType("shap")
@@ -65,15 +62,17 @@ def sample_data() -> pd.DataFrame:
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
     close = 100 + np.cumsum(np.random.randn(n) * 0.5)
     volume = np.random.randint(1000, 10000, n).astype(float)
-    return pd.DataFrame({
-        "date": dates,
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n)) * 0.3,
-        "low": close - np.abs(np.random.randn(n)) * 0.3,
-        "close": close,
-        "volume": volume,
-        "vwap": close + np.random.randn(n) * 0.05,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n)) * 0.3,
+            "low": close - np.abs(np.random.randn(n)) * 0.3,
+            "close": close,
+            "volume": volume,
+            "vwap": close + np.random.randn(n) * 0.05,
+        }
+    )
 
 
 @pytest.fixture
@@ -294,14 +293,16 @@ class TestShapAnalyzerEdgeCases:
         """小数据集不应崩溃。"""
         np.random.seed(42)
         n = 10
-        data = pd.DataFrame({
-            "date": pd.date_range("2024-01-01", periods=n, freq="D"),
-            "open": np.random.randn(n) * 0.1 + 100,
-            "high": np.random.randn(n) * 0.3 + 100,
-            "low": np.random.randn(n) * 0.3 + 100,
-            "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
-            "volume": np.random.randint(1000, 10000, n).astype(float),
-        })
+        data = pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-01", periods=n, freq="D"),
+                "open": np.random.randn(n) * 0.1 + 100,
+                "high": np.random.randn(n) * 0.3 + 100,
+                "low": np.random.randn(n) * 0.3 + 100,
+                "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
+                "volume": np.random.randint(1000, 10000, n).astype(float),
+            }
+        )
         forward_returns = np.random.randn(n) * 0.01
 
         analyzer = ShapAnalyzer(n_extreme=2, n_background=5)
@@ -314,10 +315,12 @@ class TestShapAnalyzerEdgeCases:
         """只有 close 列的数据。"""
         np.random.seed(42)
         n = 20
-        data = pd.DataFrame({
-            "date": pd.date_range("2024-01-01", periods=n, freq="D"),
-            "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
-        })
+        data = pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-01", periods=n, freq="D"),
+                "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
+            }
+        )
         forward_returns = np.random.randn(n) * 0.01
 
         analyzer = ShapAnalyzer(n_extreme=2, n_background=5)

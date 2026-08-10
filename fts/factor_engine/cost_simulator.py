@@ -16,7 +16,7 @@ fts.factor_engine.cost_simulator — 真实成本模拟器（B.2 Stage 4）。
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import numpy as np
@@ -124,7 +124,9 @@ class CostSimulator:
 
         logger.info(
             "[CostSimulator] 成本模拟完成 [symbol=%s, turnover=%.2f, cost_bps=%.2f]",
-            symbol or market, turnover, total_cost_bps,
+            symbol or market,
+            turnover,
+            total_cost_bps,
         )
         return CostResult(
             total_cost_bps=total_cost_bps,
@@ -144,9 +146,7 @@ class CostSimulator:
         """获取品种手续费率（基点）。"""
         market = market or self._default_market
         config = self._model.get_cost_bps(market)
-        return self._symbol_commission.get(
-            symbol, config.get("commission_bps", 0.3)
-        )
+        return self._symbol_commission.get(symbol, config.get("commission_bps", 0.3))
 
     def get_slippage(self, symbol: str, market: str | None = None) -> float:
         """获取品种滑点率（基点）。"""

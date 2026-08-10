@@ -15,10 +15,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -44,6 +42,7 @@ class FactorLineage:
     def repo(self):
         if self._repo is None:
             from .repository import FactorRepository
+
             self._repo = FactorRepository()
         return self._repo
 
@@ -121,13 +120,15 @@ class FactorLineage:
                 chain.append({"factor_id": pid, "status": "missing"})
                 break
 
-            chain.append({
-                "factor_id": parent["factor_id"],
-                "name": parent.get("name"),
-                "generation": parent.get("generation", 0),
-                "source": parent.get("source"),
-                "status": parent.get("status"),
-            })
+            chain.append(
+                {
+                    "factor_id": parent["factor_id"],
+                    "name": parent.get("name"),
+                    "generation": parent.get("generation", 0),
+                    "source": parent.get("source"),
+                    "status": parent.get("status"),
+                }
+            )
             current = parent
 
         return chain
@@ -135,11 +136,14 @@ class FactorLineage:
     def _find_descendants(self, factor_id: str) -> list[dict[str, Any]]:
         """查找子因子列表。"""
         conn = self._get_conn()
-        result = conn.execute("""
+        result = conn.execute(
+            """
             SELECT factor_id, name, generation, source, status
             FROM factor_catalog
             WHERE parent_id = ?
-        """, [factor_id])
+        """,
+            [factor_id],
+        )
         rows = result.fetchall()
         return [
             {
@@ -186,11 +190,13 @@ class FactorLineage:
         for eval in evaluations:
             val = eval.get(metric_key)
             if val is not None:
-                values.append({
-                    "value": float(val),
-                    "timestamp": eval.get("evaluated_at"),
-                    "passed": eval.get("overall_passed", False),
-                })
+                values.append(
+                    {
+                        "value": float(val),
+                        "timestamp": eval.get("evaluated_at"),
+                        "passed": eval.get("overall_passed", False),
+                    }
+                )
 
         if len(values) < 2:
             return {"factor_id": factor_id, "trend": "insufficient_data"}
@@ -252,22 +258,15 @@ class FactorLineage:
         sharpe_trend = self.get_evaluation_trend(factor_id, "sharpe")
         ic_trend = self.get_evaluation_trend(factor_id, "ic")
 
-        is_degraded = (
-            sharpe_trend.get("trend") == "declining"
-            and sharpe_trend.get("pct_change", 0) < threshold * 100
-        )
+        is_degraded = sharpe_trend.get("trend") == "declining" and sharpe_trend.get("pct_change", 0) < threshold * 100
 
         return {
             "factor_id": factor_id,
             "is_degraded": is_degraded,
-            "degradation_score": round(
-                sharpe_trend.get("pct_change", 0) / 100, 4
-            ),
+            "degradation_score": round(sharpe_trend.get("pct_change", 0) / 100, 4),
             "sharpe_trend": sharpe_trend,
             "ic_trend": ic_trend,
-            "recommendation": (
-                "考虑暂停使用该因子" if is_degraded else "继续监控"
-            ),
+            "recommendation": ("考虑暂停使用该因子" if is_degraded else "继续监控"),
             "detected_at": datetime.now().isoformat(),
         }
 
@@ -301,9 +300,7 @@ class FactorLineage:
                 "generation_depth": len(lineage.get("ancestors", [])),
                 "num_descendants": len(lineage.get("descendants", [])),
                 "total_versions": len(lineage.get("versions", [])),
-                "total_evaluations": lineage.get("evaluations_summary", {}).get(
-                    "total_evals", 0
-                ),
+                "total_evaluations": lineage.get("evaluations_summary", {}).get("total_evals", 0),
             },
             "evolution_path": [
                 {
@@ -316,9 +313,7 @@ class FactorLineage:
             "quality_assessment": {
                 "current_sharpe": lineage.get("factor_info", {}).get("sharpe", 0),
                 "current_ic": lineage.get("factor_info", {}).get("ic", 0),
-                "pass_rate": lineage.get("evaluations_summary", {}).get(
-                    "pass_rate", 0
-                ),
+                "pass_rate": lineage.get("evaluations_summary", {}).get("pass_rate", 0),
                 "is_degraded": degradation.get("is_degraded", False),
                 "degradation_score": degradation.get("degradation_score", 0),
             },
@@ -343,28 +338,20 @@ class FactorLineage:
         info = lineage.get("factor_info", {})
 
         if degradation.get("is_degraded"):
-            recommendations.append(
-                "因子质量退化：建议暂停使用，排查退化原因（市场环境/参数失效/过拟合）"
-            )
+            recommendations.append("因子质量退化：建议暂停使用，排查退化原因（市场环境/参数失效/过拟合）")
 
         sharpe = info.get("sharpe", 0)
         if sharpe < 0.5:
-            recommendations.append(
-                f"Sharpe 较低 ({sharpe:.3f})：建议优化参数或调整因子逻辑"
-            )
+            recommendations.append(f"Sharpe 较低 ({sharpe:.3f})：建议优化参数或调整因子逻辑")
 
         ic = info.get("ic", 0)
         if ic < 0.03:
-            recommendations.append(
-                f"IC 偏低 ({ic:.4f})：因子预测能力有限，建议增加特征维度"
-            )
+            recommendations.append(f"IC 偏低 ({ic:.4f})：因子预测能力有限，建议增加特征维度")
 
         eval_summary = lineage.get("evaluations_summary", {})
         pass_rate = eval_summary.get("pass_rate", 0)
         if pass_rate < 0.5 and eval_summary.get("total_evals", 0) > 3:
-            recommendations.append(
-                f"评估通过率低 ({pass_rate:.1%})：L3 检验不稳定，建议增强因子鲁棒性"
-            )
+            recommendations.append(f"评估通过率低 ({pass_rate:.1%})：L3 检验不稳定，建议增强因子鲁棒性")
 
         if not recommendations:
             recommendations.append("因子状态良好，建议定期监控趋势变化")
@@ -389,7 +376,7 @@ class FactorLineage:
         Returns:
             批量审计结果
         """
-        conn = self._get_conn()
+        self._get_conn()
         conditions: list[str] = []
         params: list[Any] = []
         if market:
@@ -417,31 +404,35 @@ class FactorLineage:
 
             # 已降级的因子直接记录，不再重复检测
             if status == "degraded" or not is_elite:
-                results.append({
-                    "factor_id": fid,
-                    "name": factor.get("name"),
-                    "family": factor.get("family"),
-                    "sharpe": factor.get("sharpe", 0),
-                    "ic": factor.get("ic", 0),
-                    "is_degraded": True,
-                    "degradation_score": 0.0,
-                    "recommendation": "因子已降级或非精英",
-                    "factor_status": status,
-                    "is_elite": is_elite,
-                    "evaluations": eval_count,
-                })
+                results.append(
+                    {
+                        "factor_id": fid,
+                        "name": factor.get("name"),
+                        "family": factor.get("family"),
+                        "sharpe": factor.get("sharpe", 0),
+                        "ic": factor.get("ic", 0),
+                        "is_degraded": True,
+                        "degradation_score": 0.0,
+                        "recommendation": "因子已降级或非精英",
+                        "factor_status": status,
+                        "is_elite": is_elite,
+                        "evaluations": eval_count,
+                    }
+                )
                 degraded_count += 1
                 continue
 
             if eval_count < min_evals:
-                results.append({
-                    "factor_id": fid,
-                    "name": factor.get("name"),
-                    "status": "insufficient_data",
-                    "evaluations": eval_count,
-                    "factor_status": status,
-                    "is_elite": is_elite,
-                })
+                results.append(
+                    {
+                        "factor_id": fid,
+                        "name": factor.get("name"),
+                        "status": "insufficient_data",
+                        "evaluations": eval_count,
+                        "factor_status": status,
+                        "is_elite": is_elite,
+                    }
+                )
                 continue
 
             degradation = self.detect_degradation(fid)
@@ -468,9 +459,7 @@ class FactorLineage:
             "total_audited": len(results),
             "degraded_count": degraded_count,
             "healthy_count": len(results) - degraded_count,
-            "degradation_rate": round(
-                degraded_count / len(results), 4
-            ) if results else 0,
+            "degradation_rate": round(degraded_count / len(results), 4) if results else 0,
             "results": results,
             "generated_at": datetime.now().isoformat(),
         }

@@ -25,6 +25,7 @@ from fts.bridge import BridgeError, SignalBridge
 
 # ─── Fixtures ─────────────────────────────────────────────
 
+
 @pytest.fixture
 def sample_signal():
     return {
@@ -69,6 +70,7 @@ def fake_redis(monkeypatch):
 
 # ─── 协议与构造 ──────────────────────────────────────────
 
+
 class TestProtocol:
     def test_invalid_protocol_raises(self):
         with pytest.raises(BridgeError):
@@ -79,6 +81,7 @@ class TestProtocol:
 
 
 # ─── JSON 协议 ───────────────────────────────────────────
+
 
 class TestJsonProtocol:
     def test_publish_writes_file(self, sample_signal, tmp_path):
@@ -121,6 +124,7 @@ class TestJsonProtocol:
 
 # ─── Redis 协议 ──────────────────────────────────────────
 
+
 class TestRedisProtocol:
     def test_publish_and_read(self, sample_signal, fake_redis, tmp_path):
         bridge = SignalBridge(protocol="redis", output_dir=tmp_path)
@@ -148,6 +152,7 @@ class TestRedisProtocol:
 
 
 # ─── REST 协议 ───────────────────────────────────────────
+
 
 class TestRestProtocol:
     def test_missing_url_raises(self, sample_signal):
@@ -221,6 +226,7 @@ class TestRestProtocol:
 
 # ─── CLI 子命令 ──────────────────────────────────────────
 
+
 class TestCliBridge:
     def _run_cli(self, *argv):
         from fts.cli import main
@@ -229,9 +235,12 @@ class TestCliBridge:
 
     def test_bridge_publish_json(self, tmp_path, capsys):
         rc = self._run_cli(
-            "bridge", "publish",
-            "--protocol", "json",
-            "--output-dir", str(tmp_path),
+            "bridge",
+            "publish",
+            "--protocol",
+            "json",
+            "--output-dir",
+            str(tmp_path),
         )
         assert rc == 0
         assert "发布成功" in capsys.readouterr().out
@@ -242,10 +251,14 @@ class TestCliBridge:
         signal_file.write_text(json.dumps(sample_signal), encoding="utf-8")
         out_dir = tmp_path / "out"
         rc = self._run_cli(
-            "bridge", "publish",
-            "--protocol", "json",
-            "--input", str(signal_file),
-            "--output-dir", str(out_dir),
+            "bridge",
+            "publish",
+            "--protocol",
+            "json",
+            "--input",
+            str(signal_file),
+            "--output-dir",
+            str(out_dir),
         )
         assert rc == 0
         latest = json.loads((out_dir / "latest_signal.json").read_text(encoding="utf-8"))
@@ -253,10 +266,14 @@ class TestCliBridge:
 
     def test_bridge_publish_missing_file(self, tmp_path, capsys):
         rc = self._run_cli(
-            "bridge", "publish",
-            "--protocol", "json",
-            "--input", str(tmp_path / "nope.json"),
-            "--output-dir", str(tmp_path),
+            "bridge",
+            "publish",
+            "--protocol",
+            "json",
+            "--input",
+            str(tmp_path / "nope.json"),
+            "--output-dir",
+            str(tmp_path),
         )
         assert rc == 1
         assert "失败" in capsys.readouterr().out

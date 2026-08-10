@@ -14,9 +14,7 @@ import pandas as pd
 import pytest
 
 from fts.factor_engine.audit import (
-    AuditItemResult,
     FactorAuditConfig,
-    FactorAuditReport,
     FactorAuditor,
     _bh_fdr_correction,
 )
@@ -49,11 +47,13 @@ def sample_dataframe() -> pd.DataFrame:
     n = 120
     rng = np.random.RandomState(42)
     close = 100 + np.cumsum(rng.randn(n) * 0.5)
-    return pd.DataFrame({
-        "date": pd.date_range("2023-01-01", periods=n),
-        "close": close,
-        "volume": np.abs(rng.randn(n) * 1000) + 500,
-    })
+    return pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=n),
+            "close": close,
+            "volume": np.abs(rng.randn(n) * 1000) + 500,
+        }
+    )
 
 
 @pytest.fixture
@@ -66,9 +66,7 @@ def forward_returns(n: int = 120) -> np.ndarray:
 
 
 class TestFactorAuditor:
-    def test_empty_audit_all_skipped(
-        self, auditor: FactorAuditor, sample_factor: dict
-    ):
+    def test_empty_audit_all_skipped(self, auditor: FactorAuditor, sample_factor: dict):
         """无任何输入时，所有审计项均应为 skipped，整体未通过。"""
         report = auditor.audit(factor=sample_factor)
         assert report.factor_id == "f_test_001"
@@ -80,9 +78,7 @@ class TestFactorAuditor:
         assert report.pass_rate == 0.0
         assert report.summary["skipped"] == 6
 
-    def test_report_item_lookup(
-        self, auditor: FactorAuditor, sample_factor: dict
-    ):
+    def test_report_item_lookup(self, auditor: FactorAuditor, sample_factor: dict):
         """report.item() 应按名称定位单项结果。"""
         report = auditor.audit(factor=sample_factor)
         item = report.item("cross_symbol")
@@ -90,27 +86,19 @@ class TestFactorAuditor:
         assert item.name == "cross_symbol"
         assert item.status == "skipped"
 
-    def test_report_item_missing(
-        self, auditor: FactorAuditor, sample_factor: dict
-    ):
+    def test_report_item_missing(self, auditor: FactorAuditor, sample_factor: dict):
         """查询不存在的名称返回 None。"""
         report = auditor.audit(factor=sample_factor)
         assert report.item("nonexistent") is None
 
-    def test_failed_items_property(
-        self, auditor: FactorAuditor, sample_factor: dict
-    ):
+    def test_failed_items_property(self, auditor: FactorAuditor, sample_factor: dict):
         """failed_items 应聚合所有 status=failed 的项。"""
         # 提供会触发失败的输入
         ics = {"RB": 0.01, "HC": -0.02, "I": -0.03}  # 仅 1/3 为正
-        report = auditor.audit(
-            factor=sample_factor, symbol_ic_map=ics
-        )
+        report = auditor.audit(factor=sample_factor, symbol_ic_map=ics)
         assert "cross_symbol" in [it.name for it in report.failed_items]
 
-    def test_to_dict_roundtrip(
-        self, auditor: FactorAuditor, sample_factor: dict
-    ):
+    def test_to_dict_roundtrip(self, auditor: FactorAuditor, sample_factor: dict):
         """to_dict 应包含完整审计信息。"""
         report = auditor.audit(factor=sample_factor)
         d = report.to_dict()
@@ -178,9 +166,7 @@ class TestCrossSymbol:
         assert auditor._check_cross_symbol(None).status == "skipped"
         assert auditor._check_cross_symbol({}).status == "skipped"
 
-    def test_cross_symbol_custom_threshold(
-        self, strict_auditor: FactorAuditor
-    ):
+    def test_cross_symbol_custom_threshold(self, strict_auditor: FactorAuditor):
         """自定义阈值 95% 时应更严格。"""
         ics = {"RB": 0.05, "HC": 0.03, "I": 0.02, "J": -0.01}  # 75%
         item = strict_auditor._check_cross_symbol(ics)
@@ -250,10 +236,12 @@ class TestSnoopingCheck:
         """含 close 列且数据充足时应执行窥探检验。"""
         n = 60
         rng = np.random.RandomState(7)
-        df = pd.DataFrame({
-            "close": 100 + np.cumsum(rng.randn(n)),
-            "date": pd.date_range("2023-01-01", periods=n),
-        })
+        df = pd.DataFrame(
+            {
+                "close": 100 + np.cumsum(rng.randn(n)),
+                "date": pd.date_range("2023-01-01", periods=n),
+            }
+        )
         fwd = rng.randn(n) * 0.01
         item = auditor._check_snooping(df, fwd)
         assert item.status in ("passed", "failed")
@@ -275,9 +263,12 @@ class TestStressResilience:
         signals = {"RB": np.ones(n) * 0.5}
         idx = pd.date_range("2016-01-01", periods=n)
         ohlcv = {
-            "RB": pd.DataFrame({
-                "close": 3500 + np.arange(n, dtype=float),
-            }, index=idx)
+            "RB": pd.DataFrame(
+                {
+                    "close": 3500 + np.arange(n, dtype=float),
+                },
+                index=idx,
+            )
         }
         item = auditor._check_stress_resilience(signals, ohlcv)
         # 执行过，可能 passed/failed/skipped，但应有 details
@@ -315,9 +306,7 @@ class TestEndToEnd:
         assert report.passed is False
         assert report.summary["skipped"] == 6
 
-    def test_complete_audit_with_cross_symbol_and_oos(
-        self, auditor: FactorAuditor, sample_factor: dict
-    ):
+    def test_complete_audit_with_cross_symbol_and_oos(self, auditor: FactorAuditor, sample_factor: dict):
         """仅提供跨品种 + OOS + p-values 时，这些项应通过/失败，其余 skipped。"""
         ics = {"RB": 0.05, "HC": 0.03, "I": 0.02}
         oos = {"ic_consistency": 0.8, "passed": True}
@@ -340,9 +329,7 @@ class TestEndToEnd:
         assert all(it.status == "passed" for it in non_skipped)
         assert report.passed is True
 
-    def test_one_failure_causes_overall_fail(
-        self, auditor: FactorAuditor, sample_factor: dict
-    ):
+    def test_one_failure_causes_overall_fail(self, auditor: FactorAuditor, sample_factor: dict):
         """任一审计项失败都应导致整体失败。"""
         # 跨品种严重不达标 (全部 IC 为负)
         ics = {"RB": -0.01, "HC": -0.02}

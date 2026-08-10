@@ -129,10 +129,12 @@ class TestSinglePositionLimit:
     def test_multiple_signals_takes_worst(self):
         """多信号时取占比最高的品种。"""
         rm = RiskManager()
-        sig = make_signal(signals=[
-            {"symbol": "RB", "position": 3, "price": 1_000.0},
-            {"symbol": "CU", "position": 15, "price": 1_000.0},
-        ])
+        sig = make_signal(
+            signals=[
+                {"symbol": "RB", "position": 3, "price": 1_000.0},
+                {"symbol": "CU", "position": 15, "price": 1_000.0},
+            ]
+        )
         item = rm._check_single_position_limit(sig, make_account(), {})
         # CU: 15000 / 100000 = 15%（最差）
         assert item["passed"] is False
@@ -280,10 +282,7 @@ class TestConcentrationLimit:
     def test_passed_diversified(self):
         """10 个等权品种时通过。"""
         rm = RiskManager()
-        positions = {
-            f"SYM{i}": {"symbol": f"SYM{i}", "market_value": 1_000.0}
-            for i in range(10)
-        }
+        positions = {f"SYM{i}": {"symbol": f"SYM{i}", "market_value": 1_000.0} for i in range(10)}
         item = rm._check_concentration_limit(make_signal(), positions)
         # top3 / total = 3000 / 10000 = 30% <= 50%
         assert item["passed"] is True

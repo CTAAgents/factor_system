@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from fts.factor_engine.contracts import EconomicLogic, FactorSignature
@@ -22,6 +21,7 @@ from fts.factor_engine.factor_program import (
 
 # ─── 因子 ID 生成 ─────────────────────────────────────────
 
+
 def test_generate_factor_id_format():
     """因子 ID 必须符合 fct_<8hex> 格式。"""
     fid = generate_factor_id("test", "def f(): pass")
@@ -38,6 +38,7 @@ def test_generate_factor_id_uniqueness():
 
 
 # ─── 代码安全沙箱 ─────────────────────────────────────────
+
 
 def test_validate_valid_code():
     code = """
@@ -116,6 +117,7 @@ def test_validate_syntax_error():
 
 
 # ─── 因子执行 ─────────────────────────────────────────────
+
 
 def test_executor_compile_and_run(sample_ohlcv):
     """可执行因子程序应能编译并返回 ndarray。"""
@@ -202,6 +204,7 @@ def test_forbidden_names_includes_eval_open():
 
 
 # ─── factor_program 额外覆盖 ────────────────────────────
+
 
 class TestFactorProgramCoverage:
     """补齐 factor_program.py 覆盖率缺口。"""
@@ -292,7 +295,9 @@ def factor_program(data, params):
             code="def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))",
             params={"window": 10},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="完整测试"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="完整测试"
+            ),
             source="manual",
             parent_id="fct_parent1234",
             generation=1,
@@ -309,6 +314,7 @@ def factor_program(data, params):
     def test_executor_empty_code(self):
         """空代码应抛 FactorCompileError。"""
         from fts.factor_engine.contracts import FactorProgram
+
         fp = FactorProgram(
             factor_id="fct_empty",
             name="empty",
@@ -321,6 +327,7 @@ def factor_program(data, params):
     def test_executor_code_no_factor_function(self):
         """无 factor_program 函数的代码应抛编译错误。"""
         from fts.factor_engine.contracts import FactorProgram
+
         fp = FactorProgram(
             factor_id="fct_no_func",
             name="no_func",
@@ -353,6 +360,7 @@ def factor_program(data, params):
     def test_executor_compile_non_callable_output(self):
         """编译后输出类型非 callable 应抛异常。"""
         from fts.factor_engine.contracts import FactorProgram
+
         # 代码需通过 _validate() 的 AST 检查（含 factor_program 函数定义），
         # 但 exec 后 factor_program 被覆盖为非 callable 值
         code = """
@@ -382,7 +390,9 @@ def factor_program(data, params):
             code=code,
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="runtime error"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="runtime error"
+            ),
             source="manual",
         )
         executor = FactorExecutor(fp)
@@ -405,7 +415,9 @@ def factor_program(data, params):
             code=code,
             params={},
             signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="scipy test"),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="scipy test"
+            ),
             source="manual",
         )
         executor = FactorExecutor(fp)
@@ -484,7 +496,9 @@ def factor_program(data, params):
         code=code,
         params={},
         signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
-        economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="LLM rolling 测试"),
+        economic_logic=EconomicLogic(
+            theory=3, behavioral=3, microstructure=3, institutional=3, narrative="LLM rolling 测试"
+        ),
         source="manual",
     )
     executor = FactorExecutor(fp)
@@ -496,6 +510,7 @@ def factor_program(data, params):
 
 
 # ─── fix_factor_code 自动修复 ─────────────────────────────
+
 
 def test_fix_factor_code_unterminated_single_quote():
     """修复未闭合的单引号字符串字面量。"""
@@ -536,7 +551,9 @@ def test_fix_factor_code_mismatched_bracket():
         "    result = np.where(close > 0, 1, 0]\n"
         "    return result\n"
     )
-    fixed, fixed_code = fix_factor_code(code, "语法错误: closing parenthesis ']' does not match opening parenthesis '(' (line 4)")
+    fixed, fixed_code = fix_factor_code(
+        code, "语法错误: closing parenthesis ']' does not match opening parenthesis '(' (line 4)"
+    )
     assert fixed, "不匹配括号应能被修复"
     ok, _ = validate_factor_code(fixed_code)
     assert ok, "修复后的代码应通过语法验证"
@@ -551,7 +568,9 @@ def test_fix_factor_code_mismatched_bracket_reverse():
         "    result = [close[0])\n"
         "    return np.zeros(len(close))\n"
     )
-    fixed, fixed_code = fix_factor_code(code, "语法错误: closing parenthesis ')' does not match opening parenthesis '[' (line 4)")
+    fixed, fixed_code = fix_factor_code(
+        code, "语法错误: closing parenthesis ')' does not match opening parenthesis '[' (line 4)"
+    )
     assert fixed, "不匹配括号应能被修复"
     ok, _ = validate_factor_code(fixed_code)
     assert ok, "修复后的代码应通过语法验证"
@@ -600,7 +619,9 @@ def test_fix_factor_code_global_bracket_balance():
         "    result = np.where(close > 0\n"
         "    return result\n"
     )
-    fixed, fixed_code = fix_factor_code(code, "语法错误: closing parenthesis ')' does not match opening parenthesis '(' (line 4)")
+    fixed, fixed_code = fix_factor_code(
+        code, "语法错误: closing parenthesis ')' does not match opening parenthesis '(' (line 4)"
+    )
     # 如果某行策略修复成功，验证通过即可
     if fixed:
         ok, _ = validate_factor_code(fixed_code)

@@ -14,7 +14,6 @@ fts.data_mcp — 腾讯自选股 MCP 数据适配层
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -26,14 +25,15 @@ logger = logging.getLogger(__name__)
 
 # ─── 异常 ──────────────────────────────────────────────────
 
+
 class MCPDataError(RuntimeError):
     """MCP 数据获取失败。"""
 
 
 # ─── 交易所代码前缀 ────────────────────────────────────────
 
-_SSE = "sh"      # 上海
-_SZE = "sz"      # 深圳
+_SSE = "sh"  # 上海
+_SZE = "sz"  # 深圳
 
 
 def _to_tencent_code(code: str) -> str:
@@ -68,6 +68,7 @@ def _get_http() -> Any:
     global _HTTP  # pylint: disable=global-statement
     if _HTTP is None:
         import httpx  # type: ignore[import-untyped]
+
         _HTTP = httpx.Client(timeout=15.0)
     return _HTTP
 
@@ -120,12 +121,13 @@ def _fetch_kline_json(code: str, days: int, adjust: str) -> list[list]:
 
 # ─── 代码格式转换 ──────────────────────────────────────────
 
+
 def _is_etf_code(code: str) -> bool:
     """判断是否为 ETF 代码。"""
     raw = code.strip().lower()
     for prefix in (_SSE, _SZE):
         if raw.startswith(prefix):
-            raw = raw[len(prefix):]
+            raw = raw[len(prefix) :]
     if raw.startswith("51") or raw.startswith("56") or raw.startswith("58"):
         return True
     if raw.startswith("159"):
@@ -134,6 +136,7 @@ def _is_etf_code(code: str) -> bool:
 
 
 # ─── DataFrame 转换 ────────────────────────────────────────
+
 
 def _kline_to_df(raw: list[list]) -> pd.DataFrame:
     """腾讯 K 线原始格式 → OHLCV DataFrame。
@@ -144,14 +147,16 @@ def _kline_to_df(raw: list[list]) -> pd.DataFrame:
     for item in raw:
         if len(item) < 6:
             continue
-        rows.append({
-            "open": float(item[1]),
-            "high": float(item[3]),
-            "low": float(item[4]),
-            "close": float(item[2]),
-            "volume": float(item[5]) if item[5] else 0,
-            "date": item[0],
-        })
+        rows.append(
+            {
+                "open": float(item[1]),
+                "high": float(item[3]),
+                "low": float(item[4]),
+                "close": float(item[2]),
+                "volume": float(item[5]) if item[5] else 0,
+                "date": item[0],
+            }
+        )
 
     if not rows:
         return pd.DataFrame()
@@ -164,6 +169,7 @@ def _kline_to_df(raw: list[list]) -> pd.DataFrame:
 
 
 # ─── MCP 数据提供者 ────────────────────────────────────────
+
 
 class MCPDataProvider:
     """腾讯自选股 MCP 数据提供者。
@@ -264,7 +270,7 @@ class MCPDataProvider:
             logger.warning("所有标的 MCP 数据获取失败，使用合成数据")
             df = self.synthesize_ohlcv(n_days=days, base_price=15.0, seed=42)
             panel["SYNTHETIC"] = df
-            return panel, df.index
+            return panel, pd.DatetimeIndex(df.index)
 
         common_dates = pd.DatetimeIndex(sorted(dates_set))
         return panel, common_dates
@@ -281,42 +287,124 @@ class MCPDataProvider:
         np.random.seed(seed)
         dates = pd.date_range(
             datetime.now() - timedelta(days=n_days),
-            periods=n_days, freq="D",
+            periods=n_days,
+            freq="D",
         )
         close = base_price + np.cumsum(np.random.randn(n_days) * 0.5)
-        return pd.DataFrame({
-            "open": close + np.random.randn(n_days) * 0.1,
-            "high": close + np.abs(np.random.randn(n_days)) * 0.3,
-            "low": close - np.abs(np.random.randn(n_days)) * 0.3,
-            "close": close,
-            "volume": np.random.randint(1000, 10000, n_days).astype(float),
-        }, index=dates)
+        return pd.DataFrame(
+            {
+                "open": close + np.random.randn(n_days) * 0.1,
+                "high": close + np.abs(np.random.randn(n_days)) * 0.3,
+                "low": close - np.abs(np.random.randn(n_days)) * 0.3,
+                "close": close,
+                "volume": np.random.randint(1000, 10000, n_days).astype(float),
+            },
+            index=dates,
+        )
 
 
 # ─── 沪深 300 代表性子集 ──────────────────────────────────
 
 CSI300_SUBSET: list[str] = [
-    "000001", "000002", "000333", "000568", "000651", "000725", "000858",
-    "002027", "002142", "002230", "002304", "002371", "002415", "002475",
-    "002594", "002714", "300015", "300059", "300124", "300274", "300308",
-    "300413", "300433", "300450", "300498", "300502", "300628", "300750",
-    "300760", "600000", "600009", "600028", "600030", "600031", "600036",
-    "600048", "600085", "600104", "600276", "600309", "600406", "600436",
-    "600438", "600519", "600547", "600585", "600690", "600809", "600887",
-    "600900", "600941", "601012", "601088", "601127", "601166", "601288",
-    "601318", "601328", "601398", "601628", "601728", "601766", "601857",
-    "601888", "601899", "601985", "603259", "603288", "603501", "603659",
-    "688008", "688036", "688111", "688122", "688256", "688396",
+    "000001",
+    "000002",
+    "000333",
+    "000568",
+    "000651",
+    "000725",
+    "000858",
+    "002027",
+    "002142",
+    "002230",
+    "002304",
+    "002371",
+    "002415",
+    "002475",
+    "002594",
+    "002714",
+    "300015",
+    "300059",
+    "300124",
+    "300274",
+    "300308",
+    "300413",
+    "300433",
+    "300450",
+    "300498",
+    "300502",
+    "300628",
+    "300750",
+    "300760",
+    "600000",
+    "600009",
+    "600028",
+    "600030",
+    "600031",
+    "600036",
+    "600048",
+    "600085",
+    "600104",
+    "600276",
+    "600309",
+    "600406",
+    "600436",
+    "600438",
+    "600519",
+    "600547",
+    "600585",
+    "600690",
+    "600809",
+    "600887",
+    "600900",
+    "600941",
+    "601012",
+    "601088",
+    "601127",
+    "601166",
+    "601288",
+    "601318",
+    "601328",
+    "601398",
+    "601628",
+    "601728",
+    "601766",
+    "601857",
+    "601888",
+    "601899",
+    "601985",
+    "603259",
+    "603288",
+    "603501",
+    "603659",
+    "688008",
+    "688036",
+    "688111",
+    "688122",
+    "688256",
+    "688396",
 ]
 
 # ─── 常见 ETF 子集 ─────────────────────────────────────────
 
 ETF_SUBSET: list[str] = [
-    "510050", "510300", "510500", "510880",
-    "512100", "512880", "513050", "513100",
-    "515050", "515790", "516160", "517010",
-    "518880", "588000",
-    "159915", "159949", "159992", "159995",
+    "510050",
+    "510300",
+    "510500",
+    "510880",
+    "512100",
+    "512880",
+    "513050",
+    "513100",
+    "515050",
+    "515790",
+    "516160",
+    "517010",
+    "518880",
+    "588000",
+    "159915",
+    "159949",
+    "159992",
+    "159995",
 ]
 
 __all__ = [

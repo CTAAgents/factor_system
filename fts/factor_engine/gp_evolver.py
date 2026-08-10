@@ -22,12 +22,13 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Literal, Optional
 
 import numpy as np
 import pandas as pd
 
 from .feature_ops import OperatorRegistry
+from .pareto import ParetoItem, compute_pareto_front
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,11 @@ class FitnessResult:
     fitness: float = 0.0
     factor_code: str = ""
     evaluation_time_ms: float = 0.0
+    # GAP-I204 (v2.71.0): 多目标适应度附加指标
+    turnover: float = 0.0
+    """信号换手（逐日绝对变化均值 / 信号标准差，无量纲归一）。"""
+    decay: float = 0.0
+    """信号衰减（前段 |IC| 相对后段 |IC| 的衰减比例，0=无衰减 1=完全衰减）。"""
 
 
 @dataclass
@@ -79,9 +85,23 @@ class GPEvolverConfig:
     max_tree_depth: int = 5
     min_tree_depth: int = 2
     elitism_size: int = 5
-    fitness_metric: Literal["ic", "sharpe", "ic_sharpe_combo"] = "ic_sharpe_combo"
+    fitness_metric: Literal["ic", "sharpe", "ic_sharpe_combo", "multi_objective"] = "ic_sharpe_combo"
     multi_parent_crossover_rate: float = 0.3
     """多父代交叉概率（0.0-1.0，默认 30% 概率使用 3 父代交叉）。"""
+    # GAP-I204 (v2.71.0): 多目标适应度惩罚系数（multi_objective 模式生效）
+    turnover_penalty: float = 0.3
+    """换手惩罚系数：fitness 扣除 turnover_penalty × 归一化换手。"""
+    decay_penalty: float = 0.3
+    """衰减惩罚系数：fitness 扣除 decay_penalty × 衰减比例。"""
+    # GAP-I204 二期 (v2.78.0): 符号回归补充搜索
+    symbolic_regression_enabled: bool = False
+    """演化结束后自动补充符号回归 beam-search，并并入 Pareto 前沿输出。"""
+    symbolic_max_depth: int = 4
+    """符号回归最大层级深度。"""
+    symbolic_beam_width: int = 10
+    """符号回归每层保留 top-K。"""
+    symbolic_max_candidates: int = 200
+    """符号回归候选评估上限。"""
 
 
 @dataclass
@@ -107,6 +127,12 @@ class GPEvolveResult:
     generations_completed: int
     history: list[GenerationSnapshot] = field(default_factory=list)
     total_evaluations: int = 0
+    # GAP-I204 (v2.71.0): 最优因子换手/衰减指标
+    best_turnover: float = 0.0
+    best_decay: float = 0.0
+    # GAP-I204 二期 (v2.78.0): Pareto 前沿输出（供人审）
+    pareto_front: list[ParetoItem] = field(default_factory=list)
+    """多目标 Pareto 前沿（rank 0 非支配解集，按 fitness 降序，含 source 标识）。"""
 
 
 # ─── 表达式树生成 ────────────────────────────────────────────
@@ -137,10 +163,9 @@ def _random_tree(
     force_func: bool = False,
 ) -> TreeNode:
     """递归生成随机表达式树。"""
-    categories = registry.list_categories()
+    registry.list_categories()
     composite_ops = [
-        info for info in registry.list_operators()
-        if info.category in ("composite", "time_series", "price", "rolling")
+        info for info in registry.list_operators() if info.category in ("composite", "time_series", "price", "rolling")
     ]
     if not composite_ops:
         return _random_terminal(columns)
@@ -155,7 +180,10 @@ def _random_tree(
 
     children = [
         _random_tree(
-            registry, columns, max_depth, current_depth + 1,
+            registry,
+            columns,
+            max_depth,
+            current_depth + 1,
         )
         for _ in range(n_children)
     ]
@@ -165,13 +193,30 @@ def _random_tree(
 def _get_operator_arity(op_name: str) -> int:
     """获取算子的参数数量。"""
     arity_map = {
-        "add": 2, "sub": 2, "mul": 2, "div": 2, "scale": 1,
-        "if_then_else": 3, "conditional_weight": 3,
-        "rank": 1, "zscore": 1, "delta": 1, "pct_change": 1, "log_return": 1,
-        "ts_mean": 1, "ts_std": 1, "ts_max": 1, "ts_min": 1,
-        "ts_sum": 1, "ts_product": 1,
-        "ts_rank": 1, "ts_zscore": 1, "ts_momentum": 1, "ts_volatility": 1,
-        "ts_skewness": 1, "ts_kurtosis": 1,
+        "add": 2,
+        "sub": 2,
+        "mul": 2,
+        "div": 2,
+        "scale": 1,
+        "if_then_else": 3,
+        "conditional_weight": 3,
+        "rank": 1,
+        "zscore": 1,
+        "delta": 1,
+        "pct_change": 1,
+        "log_return": 1,
+        "ts_mean": 1,
+        "ts_std": 1,
+        "ts_max": 1,
+        "ts_min": 1,
+        "ts_sum": 1,
+        "ts_product": 1,
+        "ts_rank": 1,
+        "ts_zscore": 1,
+        "ts_momentum": 1,
+        "ts_volatility": 1,
+        "ts_skewness": 1,
+        "ts_kurtosis": 1,
     }
     return arity_map.get(op_name, 2)
 
@@ -243,10 +288,20 @@ def _evaluate_tree(
 
         elif registry.get_operator(op_name) is not None:
             func = registry.call
-            kwargs = {}
-            if op_name in ("ts_mean", "ts_std", "ts_max", "ts_min", "ts_sum",
-                           "ts_product", "ts_rank", "ts_zscore", "ts_momentum",
-                           "ts_volatility", "ts_skewness", "ts_kurtosis"):
+            if op_name in (
+                "ts_mean",
+                "ts_std",
+                "ts_max",
+                "ts_min",
+                "ts_sum",
+                "ts_product",
+                "ts_rank",
+                "ts_zscore",
+                "ts_momentum",
+                "ts_volatility",
+                "ts_skewness",
+                "ts_kurtosis",
+            ):
                 window = 20
                 if len(tree.children) > 1 and tree.children[1].is_terminal:
                     window = max(2, int(tree.children[1].operand))
@@ -273,8 +328,7 @@ def _evaluate_tree(
                 if len(tree.children) > 2 and tree.children[2].is_terminal:
                     threshold = float(tree.children[2].operand)
                 return pd.Series(
-                    np.where(children_results[0] > threshold,
-                             children_results[0] * children_results[1], 0.0),
+                    np.where(children_results[0] > threshold, children_results[0] * children_results[1], 0.0),
                     index=data.index,
                 )
             else:
@@ -326,6 +380,8 @@ class GPEvolver:
         # 初始化种群
         population = self._initialize_population(self._config.population_size)
         fitness_cache: dict[str, float] = {}
+        # GAP-I204 二期: multi_objective 模式下跟踪全部已评估个体（多目标向量，用于 Pareto 前沿）
+        evaluated_pool: dict[str, FitnessResult] = {}
 
         best_tree: Optional[ExpressionTree] = None
         best_fitness = -float("inf")
@@ -342,6 +398,8 @@ class GPEvolver:
                     tree.fitness = result.fitness
                     fitness_cache[key] = result.fitness
                     self._total_evaluations += 1
+                    if self._config.fitness_metric == "multi_objective":
+                        evaluated_pool[key] = result
                 evaluated.append(tree)
 
             # 记录最优
@@ -367,7 +425,10 @@ class GPEvolver:
 
             logger.info(
                 "GP Gen %d: best_fitness=%.4f, avg=%.4f, diversity=%.2f%%",
-                gen, gen_best.fitness, avg_fitness, diversity * 100,
+                gen,
+                gen_best.fitness,
+                avg_fitness,
+                diversity * 100,
             )
 
             # 选择 + 交叉 + 变异
@@ -379,13 +440,70 @@ class GPEvolver:
                 expression="close",
             )
 
-        best_ic, best_sharpe = self._evaluate_best_metrics(best_tree)
+        best_ic, best_sharpe, best_turnover, best_decay = self._evaluate_best_metrics(best_tree)
 
         elapsed = (time.time() - start_time) * 1000
         logger.info(
-            "GP 演化完成: best_fitness=%.4f, ic=%.4f, sharpe=%.4f, time=%.0fms",
-            best_fitness, best_ic, best_sharpe, elapsed,
+            "GP 演化完成: best_fitness=%.4f, ic=%.4f, sharpe=%.4f, turnover=%.4f, decay=%.4f, time=%.0fms",
+            best_fitness,
+            best_ic,
+            best_sharpe,
+            best_turnover,
+            best_decay,
+            elapsed,
         )
+
+        # ── GAP-I204 二期 (v2.78.0): Pareto 前沿输出 ──
+        # multi_objective 模式下，从全部已评估个体提取 rank 0 非支配解集供人审。
+        pareto_front: list[ParetoItem] = []
+        if evaluated_pool:
+            items = [
+                ParetoItem(
+                    expression=expr,
+                    ic=r.ic,
+                    sharpe=r.sharpe,
+                    turnover=r.turnover,
+                    decay=r.decay,
+                    fitness=r.fitness,
+                    source="gp",
+                )
+                for expr, r in evaluated_pool.items()
+            ]
+            pareto_front = compute_pareto_front(items)
+
+        # 符号回归补充搜索（确定性 beam-search），结果并入 Pareto 前沿。
+        if self._config.symbolic_regression_enabled:
+            from .symbolic_regression import SymbolicRegressionConfig, SymbolicRegressionSearcher
+
+            searcher = SymbolicRegressionSearcher(
+                operator_registry=self._registry,
+                data_panel=self._data,
+                target_col=self._target_col,
+                config=SymbolicRegressionConfig(
+                    max_depth=self._config.symbolic_max_depth,
+                    beam_width=self._config.symbolic_beam_width,
+                    max_candidates=self._config.symbolic_max_candidates,
+                    turnover_penalty=self._config.turnover_penalty,
+                    decay_penalty=self._config.decay_penalty,
+                    fitness_metric=self._config.fitness_metric,
+                ),
+                train_mask=self._train_mask,
+            )
+            sr_result = searcher.search()
+            sr_items = [
+                ParetoItem(
+                    expression=c.expression,
+                    ic=c.ic,
+                    sharpe=c.sharpe,
+                    turnover=c.turnover,
+                    decay=c.decay,
+                    fitness=c.fitness,
+                    source="symbolic",
+                )
+                for c in sr_result.candidates
+            ]
+            if sr_items:
+                pareto_front = compute_pareto_front([*pareto_front, *sr_items])
 
         return GPEvolveResult(
             best_tree=best_tree,
@@ -396,6 +514,9 @@ class GPEvolver:
             generations_completed=len(self._history),
             history=self._history,
             total_evaluations=self._total_evaluations,
+            best_turnover=best_turnover,
+            best_decay=best_decay,
+            pareto_front=pareto_front,
         )
 
     def _initialize_population(self, size: int) -> list[ExpressionTree]:
@@ -403,17 +524,20 @@ class GPEvolver:
         population: list[ExpressionTree] = []
         for _ in range(size):
             root = _random_tree(
-                self._registry, self._columns,
+                self._registry,
+                self._columns,
                 self._config.max_tree_depth,
                 force_func=True,
             )
             expr = _tree_to_expression(root)
-            population.append(ExpressionTree(
-                root=root,
-                depth=_tree_depth(root),
-                size=_tree_size(root),
-                expression=expr,
-            ))
+            population.append(
+                ExpressionTree(
+                    root=root,
+                    depth=_tree_depth(root),
+                    size=_tree_size(root),
+                    expression=expr,
+                )
+            )
         return population
 
     def _evaluate_fitness(self, tree: ExpressionTree) -> FitnessResult:
@@ -437,9 +561,12 @@ class GPEvolver:
             np.clip(
                 np.nan_to_num(
                     factor_values.to_numpy(dtype=float),
-                    nan=0.0, posinf=1.0, neginf=-1.0,
+                    nan=0.0,
+                    posinf=1.0,
+                    neginf=-1.0,
                 ),
-                -10.0, 10.0,
+                -10.0,
+                10.0,
             ),
             index=factor_values.index,
         )
@@ -468,12 +595,45 @@ class GPEvolver:
         except Exception:
             sharpe = 0.0
 
+        # ── GAP-I204 (v2.71.0): 多目标适应度附加指标 ──
+        # 换手：信号逐日绝对变化均值 / 信号标准差（无量纲归一），衡量调仓频繁度。
+        # 高换手 → 实盘成本侵蚀（与 GAP-I501 冲击成本联动）。
+        sig_np = factor_values.to_numpy(dtype=float)
+        sig_std = float(np.nanstd(sig_np))
+        if sig_std > 1e-12:
+            turnover = float(np.nanmean(np.abs(np.diff(sig_np))) / (sig_std + 1e-9))
+        else:
+            turnover = 0.0
+
+        # 衰减：训练集按时间等分两半分别算 |IC|，后段相对前段的衰减比例。
+        # 衰减快 → 因子时效短（与 GAP-I305 衰减退役闭环联动）。
+        aligned_vals = aligned.iloc[:, 0].to_numpy(dtype=float)
+        aligned_tgt = aligned.iloc[:, 1].to_numpy(dtype=float)
+        half = len(aligned_vals) // 2
+        decay = 0.0
+        if half >= 10:
+            front_corr = float(np.corrcoef(aligned_vals[:half], aligned_tgt[:half])[0, 1])
+            back_corr = float(np.corrcoef(aligned_vals[half:], aligned_tgt[half:])[0, 1])
+            if not (np.isnan(front_corr) or np.isnan(back_corr)):
+                front_abs = abs(front_corr)
+                back_abs = abs(back_corr)
+                if front_abs > 1e-9:
+                    decay = max(0.0, (front_abs - back_abs) / front_abs)
+
         # 适应度计算
         metric = self._config.fitness_metric
         if metric == "ic":
             fitness = abs(ic)
         elif metric == "sharpe":
             fitness = sharpe
+        elif metric == "multi_objective":
+            # GAP-I204: IC×Sharpe 正向贡献 − 换手惩罚 − 衰减惩罚
+            fitness = (
+                abs(ic) * 0.6
+                + max(sharpe, 0) * 0.2
+                - self._config.turnover_penalty * min(turnover, 5.0)
+                - self._config.decay_penalty * decay
+            )
         else:  # ic_sharpe_combo
             fitness = abs(ic) * 0.6 + max(sharpe, 0) * 0.4
 
@@ -484,6 +644,8 @@ class GPEvolver:
             fitness=float(fitness),
             factor_code=tree.expression,
             evaluation_time_ms=elapsed_ms,
+            turnover=float(turnover),
+            decay=float(decay),
         )
 
     def _evolve_population(
@@ -705,10 +867,10 @@ class GPEvolver:
     def _evaluate_best_metrics(
         self,
         tree: ExpressionTree,
-    ) -> tuple[float, float]:
-        """评估最优树的 IC 和 Sharpe。"""
+    ) -> tuple[float, float, float, float]:
+        """评估最优树的 IC、Sharpe、换手与衰减（GAP-I204 扩展）。"""
         result = self._evaluate_fitness(tree)
-        return result.ic, result.sharpe
+        return result.ic, result.sharpe, result.turnover, result.decay
 
     @staticmethod
     def _copy_tree(node: TreeNode) -> TreeNode:
@@ -906,9 +1068,7 @@ def tree_to_factor_program(tree: ExpressionTree) -> dict[str, Any]:
 
     expression = tree.expression
     unique_key = f"{expression}_{time.time_ns()}_{id(tree)}"
-    factor_id = "fct_" + hashlib.md5(
-        unique_key.encode()
-    ).hexdigest()[:8]
+    factor_id = "fct_" + hashlib.md5(unique_key.encode()).hexdigest()[:8]
 
     code = _GP_FACTOR_CODE_TEMPLATE.format(
         factor_id=factor_id,

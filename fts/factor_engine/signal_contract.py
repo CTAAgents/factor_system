@@ -144,24 +144,17 @@ class SignalValidator:
             # 方向枚举
             direction = sig.get("direction")
             if direction not in DIRECTIONS:
-                errors.append(
-                    f"signals[{i}] invalid direction: {direction} "
-                    f"(expected {list(DIRECTIONS)})"
-                )
+                errors.append(f"signals[{i}] invalid direction: {direction} (expected {list(DIRECTIONS)})")
 
             # 置信度范围
             confidence = sig.get("confidence")
             if confidence is not None and not (0 <= confidence <= 1):
-                errors.append(
-                    f"signals[{i}] confidence out of range: {confidence}"
-                )
+                errors.append(f"signals[{i}] confidence out of range: {confidence}")
 
             # 仓位非负
             position = sig.get("position")
             if position is not None and position < 0:
-                errors.append(
-                    f"signals[{i}] position must be >= 0: {position}"
-                )
+                errors.append(f"signals[{i}] position must be >= 0: {position}")
 
             # 贡献因子
             for f in sig.get("contributing_factors") or []:
@@ -208,18 +201,23 @@ class SignalValidator:
                 "neutral": "flat",
             }.get(getattr(s, "direction", "neutral"), "flat")
             confidence = {
-                "STRONG": 0.9, "WATCH": 0.7, "WEAK": 0.5, "NOISE": 0.3,
+                "STRONG": 0.9,
+                "WATCH": 0.7,
+                "WEAK": 0.5,
+                "NOISE": 0.3,
             }.get(getattr(s, "grade", "NOISE"), 0.3)
             position = float(getattr(s, "position", 0.0) or 0.0)
             if position <= 0:
                 position = abs(float(getattr(s, "total", 0.0) or 0.0))
-            signals.append(SignalDetail(
-                symbol=getattr(s, "symbol", ""),
-                direction=direction,
-                position=round(position, 6),
-                confidence=confidence,
-                price=float(getattr(s, "price", 0.0) or 0.0),
-            ))
+            signals.append(
+                SignalDetail(
+                    symbol=getattr(s, "symbol", ""),
+                    direction=direction,
+                    position=round(position, 6),
+                    confidence=confidence,
+                    price=float(getattr(s, "price", 0.0) or 0.0),
+                )
+            )
 
         return FactorSignal(
             signal_id=generate_trace_id(),

@@ -27,18 +27,16 @@ logger = logging.getLogger(__name__)
 class OrderState(str, Enum):
     """订单状态枚举。"""
 
-    PENDING = "PENDING"        # 已创建，待提交
-    SUBMITTED = "SUBMITTED"    # 已提交网关，等待成交
-    PARTIAL = "PARTIAL"        # 部分成交
-    FILLED = "FILLED"          # 全部成交（终态）
-    CANCELED = "CANCELED"      # 已撤销（终态）
-    REJECTED = "REJECTED"      # 被拒/异常（终态）
+    PENDING = "PENDING"  # 已创建，待提交
+    SUBMITTED = "SUBMITTED"  # 已提交网关，等待成交
+    PARTIAL = "PARTIAL"  # 部分成交
+    FILLED = "FILLED"  # 全部成交（终态）
+    CANCELED = "CANCELED"  # 已撤销（终态）
+    REJECTED = "REJECTED"  # 被拒/异常（终态）
 
 
 # 终态集合
-TERMINAL_STATES: frozenset[OrderState] = frozenset(
-    {OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED}
-)
+TERMINAL_STATES: frozenset[OrderState] = frozenset({OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED})
 
 
 @dataclass
@@ -53,12 +51,8 @@ class Order:
     state: OrderState = OrderState.PENDING
     filled_quantity: float = 0.0
     avg_fill_price: float = 0.0
-    created_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
-    updated_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     error: str = ""
 
     def as_dict(self) -> dict:
@@ -88,16 +82,31 @@ class OrderLifecycle:
     # 合法转移表：{from_state: set(to_state)}
     _TRANSITIONS: dict[OrderState, frozenset[OrderState]] = {
         # PENDING 可直达 PARTIAL/FILLED（瞬时成交路径：市价单提交即部分/全部成交）
-        OrderState.PENDING: frozenset({
-            OrderState.SUBMITTED, OrderState.PARTIAL,
-            OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED,
-        }),
-        OrderState.SUBMITTED: frozenset({
-            OrderState.PARTIAL, OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED,
-        }),
-        OrderState.PARTIAL: frozenset({
-            OrderState.PARTIAL, OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED,
-        }),
+        OrderState.PENDING: frozenset(
+            {
+                OrderState.SUBMITTED,
+                OrderState.PARTIAL,
+                OrderState.FILLED,
+                OrderState.CANCELED,
+                OrderState.REJECTED,
+            }
+        ),
+        OrderState.SUBMITTED: frozenset(
+            {
+                OrderState.PARTIAL,
+                OrderState.FILLED,
+                OrderState.CANCELED,
+                OrderState.REJECTED,
+            }
+        ),
+        OrderState.PARTIAL: frozenset(
+            {
+                OrderState.PARTIAL,
+                OrderState.FILLED,
+                OrderState.CANCELED,
+                OrderState.REJECTED,
+            }
+        ),
         OrderState.FILLED: frozenset(),  # 终态
         OrderState.CANCELED: frozenset(),  # 终态
         OrderState.REJECTED: frozenset(),  # 终态
@@ -126,11 +135,11 @@ class OrderLifecycle:
         if not cls.can_transition(order.state, target):
             logger.warning(
                 "[OrderLifecycle] 非法状态转移 [order_id=%s, %s → %s]",
-                order.order_id, order.state.value, target.value,
+                order.order_id,
+                order.state.value,
+                target.value,
             )
-            raise ValueError(
-                f"非法订单状态转移: {order.state.value} → {target.value}"
-            )
+            raise ValueError(f"非法订单状态转移: {order.state.value} → {target.value}")
         for key, value in updates.items():
             if hasattr(order, key):
                 setattr(order, key, value)
@@ -144,7 +153,8 @@ class OrderLifecycle:
         if order.state in TERMINAL_STATES:
             logger.warning(
                 "[OrderLifecycle] 终态订单不可回滚 [order_id=%s, state=%s]",
-                order.order_id, order.state.value,
+                order.order_id,
+                order.state.value,
             )
             return order
         order.state = OrderState.REJECTED
@@ -152,7 +162,8 @@ class OrderLifecycle:
         order.updated_at = datetime.now(timezone.utc).isoformat()
         logger.error(
             "[OrderLifecycle] 订单异常回滚 [order_id=%s, error=%s]",
-            order.order_id, error,
+            order.order_id,
+            error,
         )
         return order
 

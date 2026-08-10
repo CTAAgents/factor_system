@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -30,13 +31,13 @@ if str(_FTS_ROOT) not in sys.path:
 
 from fts.factor_engine.contracts import BacktestMetrics
 from fts.factor_engine.cost_model import (
-    AdjustedMetrics,
     CostConfig,
     TransactionCostModel,
 )
 
 
 # ─── 辅助函数 ─────────────────────────────────────────────
+
 
 def _make_metrics(sharpe: float = 2.0, ic: float = 0.05) -> BacktestMetrics:
     """创建带默认值的 BacktestMetrics。"""
@@ -53,6 +54,7 @@ def _make_metrics(sharpe: float = 2.0, ic: float = 0.05) -> BacktestMetrics:
 
 
 # ─── 默认配置测试 ─────────────────────────────────────────
+
 
 class TestDefaultConfig:
     """测试默认配置值。"""
@@ -109,6 +111,7 @@ class TestDefaultConfig:
 
 
 # ─── adjust 方法测试 ──────────────────────────────────────
+
 
 class TestAdjust:
     """测试 adjust 方法的各种场景。"""
@@ -213,6 +216,7 @@ class TestAdjust:
 
 # ─── 展期成本测试（v2.58.0 GAP-046） ─────────────────────
 
+
 class TestRollCost:
     """展期成本项（持仓穿越换月日扣 |position| × roll_cost_bps）。"""
 
@@ -235,8 +239,11 @@ class TestRollCost:
         roll_dates = {str(dates[10].date()), str(dates[20].date())}
 
         result = model.adjust(
-            metrics, signal, market="futures",
-            dates=dates.to_numpy(), roll_dates=roll_dates,
+            metrics,
+            signal,
+            market="futures",
+            dates=dates.to_numpy(),
+            roll_dates=roll_dates,
         )
         # 展期成本 = |0.5| × 2.0 × 2 次 = 2.0 bps
         assert result["roll_cost_bps"] == pytest.approx(2.0, abs=1e-9)
@@ -254,8 +261,11 @@ class TestRollCost:
         signal = np.ones(n) * 0.5
 
         result = model.adjust(
-            metrics, signal, market="futures",
-            dates=dates.to_numpy(), roll_dates=None,
+            metrics,
+            signal,
+            market="futures",
+            dates=dates.to_numpy(),
+            roll_dates=None,
         )
         assert result["roll_cost_bps"] == 0.0
         assert result["total_cost_bps"] == pytest.approx(0.5, abs=1e-9)
@@ -272,8 +282,11 @@ class TestRollCost:
         roll_dates = {str(dates[10].date())}
 
         result = model.adjust(
-            metrics, signal, market="futures",
-            dates=dates.to_numpy(), roll_dates=roll_dates,
+            metrics,
+            signal,
+            market="futures",
+            dates=dates.to_numpy(),
+            roll_dates=roll_dates,
         )
         assert result["roll_cost_bps"] == 0.0
 
@@ -287,8 +300,11 @@ class TestRollCost:
         signal = np.ones(30) * 0.5
 
         result = model.adjust(
-            metrics, signal, market="futures",
-            dates=dates.to_numpy(), roll_dates={str(dates[5].date())},
+            metrics,
+            signal,
+            market="futures",
+            dates=dates.to_numpy(),
+            roll_dates={str(dates[5].date())},
         )
         assert result["roll_cost_bps"] == 0.0
 
@@ -304,8 +320,11 @@ class TestRollCost:
         roll_dates = {str(dates[10].date())}
 
         result = model.adjust(
-            metrics, signal, market="futures",
-            dates=dates.to_numpy(), roll_dates=roll_dates,
+            metrics,
+            signal,
+            market="futures",
+            dates=dates.to_numpy(),
+            roll_dates=roll_dates,
         )
         assert result["net_sharpe"] < metrics["sharpe"]
 
@@ -319,13 +338,17 @@ class TestRollCost:
         dates = pd.date_range("2024-01-01", periods=n, freq="D")
         signal = np.ones(n) * 0.5
         result = model.adjust(
-            metrics, signal, market="futures",
-            dates=dates.to_numpy(), roll_dates={str(dates[10].date())},
+            metrics,
+            signal,
+            market="futures",
+            dates=dates.to_numpy(),
+            roll_dates={str(dates[10].date())},
         )
         assert "roll_cost_bps" in result
 
 
 # ─── GAP-F11 展期成本联动换月日历（v2.67.0） ──────────────
+
 
 class TestRollCostWithRollEvents:
     """展期成本联动换月日历 — 基于 RollEvent 实际价差。"""
@@ -360,15 +383,16 @@ class TestRollCostWithRollEvents:
     def test_roll_events_to_spread_map_skip_bad_close(self) -> None:
         """old_close=0 或缺失时应跳过该事件。"""
         events = [
-            self._make_roll_event("2024-06-10", 0.0, 3050.0),   # old_close=0
+            self._make_roll_event("2024-06-10", 0.0, 3050.0),  # old_close=0
             self._make_roll_event("2024-09-10", 3100.0, 3080.0),  # 正常
         ]
         from types import SimpleNamespace
         from datetime import date
+
         events.append(SimpleNamespace(date=date(2024, 12, 10), old_close=3000.0))  # 缺 new_close
         result = TransactionCostModel._roll_events_to_spread_map(events)
         assert "2024-06-10" not in result  # 跳过
-        assert "2024-09-10" in result       # 正常
+        assert "2024-09-10" in result  # 正常
 
     def test_adjust_roll_events_uses_actual_spread(self) -> None:
         """roll_events 提供时，实际价差 > 固定 bps 则用价差。"""
@@ -382,8 +406,11 @@ class TestRollCostWithRollEvents:
         # 价差 166.7 bps > 固定 2.0 bps → 用实际价差
         roll_events = [self._make_roll_event("2024-01-10", 3000.0, 3050.0)]
         result = model.adjust(
-            metrics, signal, market="futures",
-            dates=dates.to_numpy(), roll_events=roll_events,
+            metrics,
+            signal,
+            market="futures",
+            dates=dates.to_numpy(),
+            roll_events=roll_events,
         )
         # 展期成本 = |0.5| × 166.7 = 83.35 bps（远高于固定 2.0）
         assert result["roll_cost_bps"] > 80.0
@@ -401,8 +428,11 @@ class TestRollCostWithRollEvents:
         # 价差 0.5 bps 远小于固定 2.0 bps → 用固定 2.0 bps
         roll_events = [self._make_roll_event("2024-01-10", 3000.0, 3000.15)]
         result = model.adjust(
-            metrics, signal, market="futures",
-            dates=dates.to_numpy(), roll_events=roll_events,
+            metrics,
+            signal,
+            market="futures",
+            dates=dates.to_numpy(),
+            roll_events=roll_events,
         )
         # 展期成本 = |0.5| × 2.0 = 1.0 bps（固定 bps 兜底）
         assert result["roll_cost_bps"] == pytest.approx(1.0, abs=0.01)
@@ -418,8 +448,11 @@ class TestRollCostWithRollEvents:
         signal = np.ones(n) * 0.5
         # 空列表
         result = model.adjust(
-            metrics, signal, market="futures",
-            dates=dates.to_numpy(), roll_events=[],
+            metrics,
+            signal,
+            market="futures",
+            dates=dates.to_numpy(),
+            roll_events=[],
             roll_dates={"2024-01-10"},
         )
         # 应回退到 roll_dates + 固定 bps
@@ -431,30 +464,39 @@ class TestRollCostWithRollEvents:
         metrics = _make_metrics(sharpe=2.0)
         signal = np.ones(30) * 0.5
         result = model.adjust(
-            metrics, signal, market="futures",
-            roll_events=[], dates=None,
+            metrics,
+            signal,
+            market="futures",
+            roll_events=[],
+            dates=None,
         )
         assert result["roll_cost_bps"] == 0.0
 
     def test_adjust_roll_events_no_roll_cost_bps(self) -> None:
         """roll_cost_bps=0 时，即使有 roll_events 也不扣展期成本。"""
         custom = CostConfig(
-            slippage_bps=0.5, commission_bps=0.2,
-            impact_bps_per_pct=1.0, min_cost_bps=0.5,
-            roll_cost_bps=0.0, market="futures",
+            slippage_bps=0.5,
+            commission_bps=0.2,
+            impact_bps_per_pct=1.0,
+            min_cost_bps=0.5,
+            roll_cost_bps=0.0,
+            market="futures",
         )
         model = TransactionCostModel(config=custom)
         metrics = _make_metrics(sharpe=2.0)
         signal = np.ones(30) * 0.5
         roll_events = [self._make_roll_event("2024-01-10", 3000.0, 3050.0)]
         result = model.adjust(
-            metrics, signal, market="futures",
+            metrics,
+            signal,
+            market="futures",
             roll_events=roll_events,
         )
         assert result["roll_cost_bps"] == 0.0
 
 
 # ─── 自定义配置测试 ───────────────────────────────────────
+
 
 class TestCustomConfig:
     """测试自定义配置。"""
@@ -512,6 +554,7 @@ class TestCustomConfig:
 
 # ─── 边缘情况测试 ─────────────────────────────────────────
 
+
 class TestEdgeCases:
     """测试边缘情况。"""
 
@@ -543,6 +586,7 @@ class TestEdgeCases:
 
 
 # ─── 冲击成本 square-root 模型（GAP-L305） ───────────────
+
 
 class TestImpactCost:
     """square-root 冲击成本函数（GAP-L305，衔接 GAP-I501/I303）。"""

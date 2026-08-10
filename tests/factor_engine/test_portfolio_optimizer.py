@@ -199,8 +199,7 @@ class TestSynthesizeSignalsOptimizer:
     def test_optimizer_mode_with_returns_matrix(self) -> None:
         """optimizer 模式 + returns_matrix（列名=factor_id）→ 权重满足杠杆约束且非负。"""
         rng = np.random.default_rng(5)
-        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)),
-                               columns=["f1", "f2", "f3"])
+        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)), columns=["f1", "f2", "f3"])
         factors = self._factors()
         signals, _, _ = synthesize_signals(factors, "optimizer", returns_matrix=returns)
         assert len(signals) == 3
@@ -216,14 +215,19 @@ class TestSynthesizeSignalsOptimizer:
     def test_optimizer_mode_mvo(self) -> None:
         """optimizer_mode="mvo" → 均值方差目标生效（权重分布不同于 risk_parity）。"""
         rng = np.random.default_rng(8)
-        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)),
-                               columns=["f1", "f2", "f3"])
+        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)), columns=["f1", "f2", "f3"])
         factors = self._factors()
         rp_signals, _, _ = synthesize_signals(
-            factors, "optimizer", returns_matrix=returns, optimizer_mode="risk_parity",
+            factors,
+            "optimizer",
+            returns_matrix=returns,
+            optimizer_mode="risk_parity",
         )
         mvo_signals, _, _ = synthesize_signals(
-            factors, "optimizer", returns_matrix=returns, optimizer_mode="mvo",
+            factors,
+            "optimizer",
+            returns_matrix=returns,
+            optimizer_mode="mvo",
             optimizer_config={"max_weight": 1.0},  # 放开集中度钳制以凸显目标差异
         )
         rp_w = np.array([s["weight"] for s in rp_signals])
@@ -309,7 +313,9 @@ class TestNeutralization:
         exposure = np.array([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]])
         target = np.array([0.2, 0.2])
         w = opt.optimize(
-            cov=cov, expected_returns=mu, exposure_matrix=exposure,
+            cov=cov,
+            expected_returns=mu,
+            exposure_matrix=exposure,
             target_exposure=target,
         )
         exposure_actual = exposure.T @ w
@@ -328,18 +334,14 @@ class TestCostAndCapacity:
         """换手惩罚生效：设 penalty>0 时权重变化应小于 penalty=0。"""
         prev = np.array([0.5, 0.3, 0.2])
         rng = np.random.default_rng(12)
-        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)),
-                               columns=["f1", "f2", "f3"])
+        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)), columns=["f1", "f2", "f3"])
         cov = RiskModelEstimator().estimate(returns).cov
         mu = np.array([0.08, 0.04, 0.02])
 
         cfg_plain = OptimizerConfig(mode="mean_variance", max_weight=1.0)
-        cfg_penalty = OptimizerConfig(mode="mean_variance", max_weight=1.0,
-                                      turnover_penalty=0.01)
-        w_plain = PortfolioOptimizer(cfg_plain).optimize(
-            cov=cov, expected_returns=mu, prev_weights=prev)
-        w_penalty = PortfolioOptimizer(cfg_penalty).optimize(
-            cov=cov, expected_returns=mu, prev_weights=prev)
+        cfg_penalty = OptimizerConfig(mode="mean_variance", max_weight=1.0, turnover_penalty=0.01)
+        w_plain = PortfolioOptimizer(cfg_plain).optimize(cov=cov, expected_returns=mu, prev_weights=prev)
+        w_penalty = PortfolioOptimizer(cfg_penalty).optimize(cov=cov, expected_returns=mu, prev_weights=prev)
         t_plain = float(np.sum(np.abs(w_plain - prev)))
         t_penalty = float(np.sum(np.abs(w_penalty - prev)))
         assert t_penalty <= t_plain + 1e-6
@@ -348,20 +350,15 @@ class TestCostAndCapacity:
         """成本项（cost_bps_per_turnover）入目标：权重变化被抑制。"""
         prev = np.array([0.5, 0.3, 0.2])
         rng = np.random.default_rng(13)
-        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)),
-                               columns=["f1", "f2", "f3"])
+        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)), columns=["f1", "f2", "f3"])
         cov = RiskModelEstimator().estimate(returns).cov
         mu = np.array([0.08, 0.04, 0.02])
 
         cfg_plain = OptimizerConfig(mode="mean_variance", max_weight=1.0)
-        cfg_cost = OptimizerConfig(mode="mean_variance", max_weight=1.0,
-                                   cost_bps_per_turnover=500.0)
-        w_plain = PortfolioOptimizer(cfg_plain).optimize(
-            cov=cov, expected_returns=mu, prev_weights=prev)
-        w_cost = PortfolioOptimizer(cfg_cost).optimize(
-            cov=cov, expected_returns=mu, prev_weights=prev)
-        assert float(np.sum(np.abs(w_cost - prev))) <= \
-            float(np.sum(np.abs(w_plain - prev))) + 1e-6
+        cfg_cost = OptimizerConfig(mode="mean_variance", max_weight=1.0, cost_bps_per_turnover=500.0)
+        w_plain = PortfolioOptimizer(cfg_plain).optimize(cov=cov, expected_returns=mu, prev_weights=prev)
+        w_cost = PortfolioOptimizer(cfg_cost).optimize(cov=cov, expected_returns=mu, prev_weights=prev)
+        assert float(np.sum(np.abs(w_cost - prev))) <= float(np.sum(np.abs(w_plain - prev))) + 1e-6
 
     def test_capacity_limits_respected(self) -> None:
         """容量上限生效：w_i <= capacity_limits_i。"""
@@ -377,8 +374,7 @@ class TestCostAndCapacity:
         """容量上限长度 ≠ 资产数 → ValueError。"""
         opt = PortfolioOptimizer(OptimizerConfig(mode="mean_variance"))
         with pytest.raises(ValueError, match="容量"):
-            opt.optimize(self._make_cov(), expected_returns=np.ones(3),
-                         capacity_limits=np.array([0.5, 0.5]))
+            opt.optimize(self._make_cov(), expected_returns=np.ones(3), capacity_limits=np.array([0.5, 0.5]))
 
     def test_capacity_limits_risk_parity(self) -> None:
         """风险平价路径容量约束同样生效。"""
@@ -392,19 +388,17 @@ class TestCostAndCapacity:
     def test_capacity_limits_in_optimizer_mode(self) -> None:
         """synthesize_signals optimizer 模式透传 capacity_limits。"""
         rng = np.random.default_rng(14)
-        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)),
-                               columns=["f1", "f2", "f3"])
+        returns = pd.DataFrame(rng.normal(0.0, 0.01, size=(300, 3)), columns=["f1", "f2", "f3"])
         factors = [
-            {"factor_id": "f1", "name": "mom", "sharpe": 1.8, "ic": 0.05,
-             "turnover": 0.3, "decay_6m": 0.9},
-            {"factor_id": "f2", "name": "carry", "sharpe": 1.5, "ic": 0.04,
-             "turnover": 0.2, "decay_6m": 0.7},
-            {"factor_id": "f3", "name": "value", "sharpe": 1.2, "ic": 0.03,
-             "turnover": 0.4, "decay_6m": 0.8},
+            {"factor_id": "f1", "name": "mom", "sharpe": 1.8, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.9},
+            {"factor_id": "f2", "name": "carry", "sharpe": 1.5, "ic": 0.04, "turnover": 0.2, "decay_6m": 0.7},
+            {"factor_id": "f3", "name": "value", "sharpe": 1.2, "ic": 0.03, "turnover": 0.4, "decay_6m": 0.8},
         ]
         cap = [0.2, 0.4, 0.6]
         signals, _, _ = synthesize_signals(
-            factors, "optimizer", returns_matrix=returns,
+            factors,
+            "optimizer",
+            returns_matrix=returns,
             optimizer_config={"max_weight": 0.8, "capacity_limits": cap},
         )
         for s, c in zip(signals, cap):

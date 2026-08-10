@@ -39,10 +39,12 @@ def main() -> int:
 
     con = duckdb.connect(str(prod), read_only=True)
     try:
-        tables = [r[0] for r in con.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema='main' ORDER BY table_name"
-        ).fetchall()]
+        tables = [
+            r[0]
+            for r in con.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='main' ORDER BY table_name"
+            ).fetchall()
+        ]
         print(f"  表清单: {tables}")
 
         if "kline_cache" not in tables:
@@ -59,17 +61,14 @@ def main() -> int:
         print()
         print("  Top 10 品种 (按记录数):")
         symbols = con.execute(
-            "SELECT symbol, count(*) AS n FROM kline_cache "
-            "GROUP BY symbol ORDER BY n DESC LIMIT 10"
+            "SELECT symbol, count(*) AS n FROM kline_cache GROUP BY symbol ORDER BY n DESC LIMIT 10"
         ).fetchall()
         for s, n in symbols:
             print(f"    {s:<10} {n:>10,}")
 
         print()
         print("  按 period 分组:")
-        for p, n in con.execute(
-            "SELECT period, count(*) FROM kline_cache GROUP BY period"
-        ).fetchall():
+        for p, n in con.execute("SELECT period, count(*) FROM kline_cache GROUP BY period").fetchall():
             print(f"    {p:<10} {n:>10,}")
 
         print()
@@ -77,12 +76,14 @@ def main() -> int:
         print(f"  日期范围: {dr[0]} ~ {dr[1]}")
 
         print()
-        cols = {r[0] for r in con.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name='kline_cache' ORDER BY ordinal_position"
-        ).fetchall()}
-        new_cols = {"hold", "settle", "pre_settle", "oi_change",
-                    "vwap", "source", "fetched_at", "trace_id"}
+        cols = {
+            r[0]
+            for r in con.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='kline_cache' ORDER BY ordinal_position"
+            ).fetchall()
+        }
+        new_cols = {"hold", "settle", "pre_settle", "oi_change", "vwap", "source", "fetched_at", "trace_id"}
         if new_cols <= cols:
             print("  按 source 分布 (v2.3.0 新字段):")
             for s, n in con.execute(
@@ -94,7 +95,7 @@ def main() -> int:
             missing = new_cols - cols
             print(f"  ⚠ kline_cache 仍为 v2.2.1 旧版 schema（缺字段: {sorted(missing)}）")
             print(f"  当前共 {len(cols)} 列: {sorted(cols)}")
-            print(f"  需先执行 migrate_schema() 升级到 v2.3.0 (17 列)")
+            print("  需先执行 migrate_schema() 升级到 v2.3.0 (17 列)")
     finally:
         con.close()
 

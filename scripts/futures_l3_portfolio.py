@@ -20,6 +20,7 @@ scripts/futures_l3_portfolio.py — 期货 L3 投资组合构建
     - 文件:     reports/{date}/futures_l3_portfolio_{date}.json
     - 文件:     memory/portfolio/futures_combo.json
 """
+
 from __future__ import annotations
 
 import json
@@ -47,6 +48,7 @@ DB_PATH = PROJECT_ROOT / "data/fts_history.duckdb"
 
 # ─── 1. 加载因子（去重 + 过滤 IC>threshold）────────────────
 
+
 def load_top_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]]:
     """加载期货 Elite 因子，按 name 去重，过滤 IC>threshold。"""
     records: dict[str, dict[str, Any]] = {}
@@ -71,20 +73,23 @@ def load_top_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]]:
     factors = []
     for name, rec in records.items():
         if abs(rec["ic"]) >= ic_threshold:
-            factors.append({
-                "name": name,
-                "ic": rec["ic"],
-                "sharpe": rec["sharpe"],
-                "t_stat": rec["t_stat"],
-                "max_dd": rec["max_dd"],
-                "data": rec["data"],
-            })
+            factors.append(
+                {
+                    "name": name,
+                    "ic": rec["ic"],
+                    "sharpe": rec["sharpe"],
+                    "t_stat": rec["t_stat"],
+                    "max_dd": rec["max_dd"],
+                    "data": rec["data"],
+                }
+            )
 
     factors.sort(key=lambda f: -abs(f["ic"]))
     return factors
 
 
 # ─── 2. 加载期货数据 ──────────────────────────────────────
+
 
 def load_futures_data(
     min_periods: int = 252,
@@ -95,7 +100,8 @@ def load_futures_data(
 
     con = duckdb.connect(str(DB_PATH))
     symbols = [
-        r[0] for r in con.execute(
+        r[0]
+        for r in con.execute(
             "SELECT DISTINCT symbol FROM kline_cache WHERE symbol NOT IN ('IC','IF','IH') ORDER BY symbol"
         ).fetchall()
     ]
@@ -133,11 +139,13 @@ def load_futures_data(
 
 # ─── 3. 信号计算 + 方向校正 ────────────────────────────────
 
+
 def compute_signal_matrix(
     panel: dict[str, pd.DataFrame],
     factors: list[dict[str, Any]],
 ) -> dict[str, dict[str, np.ndarray]]:
     from fts.factor_engine.factor_program import FactorExecutor
+
     signal_matrix: dict[str, dict[str, np.ndarray]] = {}
     n_errors = 0
     for sym, df in panel.items():
@@ -221,6 +229,7 @@ def compute_direction_correction(
 
 # ─── 4. 因子正交化 ────────────────────────────────────────
 
+
 def orthogonalize_factors(
     factors: list[dict[str, Any]],
     signal_matrix: dict[str, dict[str, np.ndarray]],
@@ -241,10 +250,18 @@ def orthogonalize_factors(
                 for j, n2 in enumerate(names):
                     if i < j:
                         c = np.corrcoef(
-                            [signal_matrix[s].get(n1, [np.nan])[-1] for s in signal_matrix
-                             if signal_matrix[s].get(n1) is not None and np.isfinite(signal_matrix[s].get(n1, [np.nan])[-1])],
-                            [signal_matrix[s].get(n2, [np.nan])[-1] for s in signal_matrix
-                             if signal_matrix[s].get(n2) is not None and np.isfinite(signal_matrix[s].get(n2, [np.nan])[-1])],
+                            [
+                                signal_matrix[s].get(n1, [np.nan])[-1]
+                                for s in signal_matrix
+                                if signal_matrix[s].get(n1) is not None
+                                and np.isfinite(signal_matrix[s].get(n1, [np.nan])[-1])
+                            ],
+                            [
+                                signal_matrix[s].get(n2, [np.nan])[-1]
+                                for s in signal_matrix
+                                if signal_matrix[s].get(n2) is not None
+                                and np.isfinite(signal_matrix[s].get(n2, [np.nan])[-1])
+                            ],
                         )[0, 1]
                         if np.isfinite(c):
                             corr_matrix[i, j] = corr_matrix[j, i] = c
@@ -276,6 +293,7 @@ def orthogonalize_factors(
 
 # ─── 5. 主函数 ────────────────────────────────────────────
 
+
 def main(mode: str = "ic_weight", ic_threshold: float = 0.3) -> int:
     t0 = time.time()
     today = date.today().isoformat()
@@ -296,24 +314,24 @@ def main(mode: str = "ic_weight", ic_threshold: float = 0.3) -> int:
         return 1
 
     # ── Step 2: 加载数据 ──
-    print(f"\n[2/6] 加载期货数据...")
+    print("\n[2/6] 加载期货数据...")
     panel, common_dates = load_futures_data()
     print(f"      品种: {len(panel)} 个, 交易日: {len(common_dates)} 天")
 
     # ── Step 3: 计算信号 ──
-    print(f"\n[3/6] 计算信号...")
+    print("\n[3/6] 计算信号...")
     signal_matrix = compute_signal_matrix(panel, factors)
     print(f"      有效品种: {len(signal_matrix)} 个")
 
     # ── Step 4: 正交化 ──
-    print(f"\n[4/6] 因子正交化...")
+    print("\n[4/6] 因子正交化...")
     factors = orthogonalize_factors(factors, signal_matrix, max_corr_threshold=0.7)
     if len(factors) < 3:
         print("[ERROR] 正交化后因子数不足 3 个")
         return 1
 
     # ── Step 5: 方向校正 + IC加权合成 ──
-    print(f"\n[5/6] 方向校正 (60天截面 IC)...")
+    print("\n[5/6] 方向校正 (60天截面 IC)...")
     common_dates_str = [d.strftime("%Y-%m-%d") for d in common_dates]
     factor_sign_flips = compute_direction_correction(signal_matrix, panel, common_dates_str, ic_lookback=60)
     n_flipped = sum(1 for v in factor_sign_flips.values() if v < 0)
@@ -330,7 +348,7 @@ def main(mode: str = "ic_weight", ic_threshold: float = 0.3) -> int:
         for f in factors:
             weights[f["name"]] = max(f["sharpe"], 0.01) / total_s
 
-    print(f"\n[6/6] 合成综合得分...")
+    print("\n[6/6] 合成综合得分...")
     sym_scores: dict[str, float] = {}
     sym_details: dict[str, dict[str, float]] = {}
 
@@ -361,10 +379,10 @@ def main(mode: str = "ic_weight", ic_threshold: float = 0.3) -> int:
 
     # ── 输出 ──
     print(f"\n{'=' * 60}")
-    print(f"  L3 投资组合信号排名")
+    print("  L3 投资组合信号排名")
     print(f"{'=' * 60}")
     print(f"{'排名':>4s} {'品种':>8s} {'综合得分':>10s} {'方向':>6s} {'最新价':>10s} {'Top 因子':>32s}")
-    print(f"{'-'*4} {'-'*8} {'-'*10} {'-'*6} {'-'*10} {'-'*32}")
+    print(f"{'-' * 4} {'-' * 8} {'-' * 10} {'-' * 6} {'-' * 10} {'-' * 32}")
 
     for i, (sym, score) in enumerate(ranked, 1):
         df = panel.get(sym)
@@ -378,7 +396,7 @@ def main(mode: str = "ic_weight", ic_threshold: float = 0.3) -> int:
 
     # ── 策略统计 ──
     print(f"\n{'=' * 60}")
-    print(f"  L3 投资组合统计")
+    print("  L3 投资组合统计")
     print(f"{'=' * 60}")
     print(f"  因子池:     {len(factors)} 个（IC>{ic_threshold} 正交化后）")
     print(f"  覆盖品种:   {len(sym_scores)} 个")
@@ -405,6 +423,7 @@ def main(mode: str = "ic_weight", ic_threshold: float = 0.3) -> int:
 
     out_md = report_dir / f"futures_l3_portfolio_{today}.md"
     lines: list[str] = []
+
     def w(s=""):
         lines.append(s)
 
@@ -454,7 +473,7 @@ def main(mode: str = "ic_weight", ic_threshold: float = 0.3) -> int:
         direction = "LONG" if score > 0 else "SHORT"
         w(f"| {i} | {sym} | {score:+.4f} | {direction} | {price:.2f} |")
     w()
-    w(f"*报告由 FTS L3 投资组合自动生成 | FTS v1.6.0*")
+    w("*报告由 FTS L3 投资组合自动生成 | FTS v1.6.0*")
 
     out_md.write_text("\n".join(lines), encoding="utf-8")
     print(f"\n[OK] 报告已保存: {out_md}")
@@ -468,16 +487,26 @@ def main(mode: str = "ic_weight", ic_threshold: float = 0.3) -> int:
         direction = "long" if score > 0 else "short"
         details = sym_details.get(sym, {})
         top3 = sorted(details.items(), key=lambda x: -abs(x[1]))[:3]
-        signals_out.append({
-            "rank": i, "symbol": sym, "composite_score": round(score, 4),
-            "direction": direction, "price": round(price, 2),
-            "top_factors": [{"name": n, "value": round(v, 4)} for n, v in top3],
-        })
+        signals_out.append(
+            {
+                "rank": i,
+                "symbol": sym,
+                "composite_score": round(score, 4),
+                "direction": direction,
+                "price": round(price, 2),
+                "top_factors": [{"name": n, "value": round(v, 4)} for n, v in top3],
+            }
+        )
 
     json_output = {
-        "date": today, "strategy": "futures_l3_portfolio", "synthesis_mode": mode,
-        "n_factors": len(factors), "n_symbols": len(sym_scores),
-        "n_long": long_count, "n_short": short_count, "n_flipped": n_flipped,
+        "date": today,
+        "strategy": "futures_l3_portfolio",
+        "synthesis_mode": mode,
+        "n_factors": len(factors),
+        "n_symbols": len(sym_scores),
+        "n_long": long_count,
+        "n_short": short_count,
+        "n_flipped": n_flipped,
         "score_stats": {
             "mean": round(float(np.mean(score_vals)), 4),
             "median": round(float(np.median(score_vals)), 4),
@@ -512,6 +541,7 @@ def main(mode: str = "ic_weight", ic_threshold: float = 0.3) -> int:
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="期货 L3 投资组合构建")
     parser.add_argument("--mode", default="ic_weight", choices=["ic_weight", "sharpe_weight"])
     parser.add_argument("--ic-threshold", type=float, default=0.3, help="IC 过滤阈值")

@@ -196,11 +196,13 @@ class _CompleteOnlyStub:
     """仅实现 complete() 的 LLM 客户端 — 用于测试 complete 分支（无 generate_json 时）。"""
 
     def complete(self, prompt, max_tokens=4000):
-        payload = [{
-            "name": "fut_trend_1",
-            "code": "def factor_program(data, params):\n    return data['close']",
-            "params": {"window": 10},
-        }]
+        payload = [
+            {
+                "name": "fut_trend_1",
+                "code": "def factor_program(data, params):\n    return data['close']",
+                "params": {"window": 10},
+            }
+        ]
         return json.dumps(payload), None
 
 
@@ -211,23 +213,27 @@ class _LLMStub:
         self.mode = mode
 
     def generate_json(self, prompt, max_tokens=4000):
-        return [{
-            "name": "stk_momentum_1" if "股票" in prompt else "fut_momentum_1",
-            "code": "def factor_program(data, params):\n    return data['close']",
-            "params": {"window": 20},
-            "input_fields": ["close", "volume"],
-            "lookback": 20,
-            "output_type": "signal",
-            "frequency": "daily",
-            "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3},
-        }]
+        return [
+            {
+                "name": "stk_momentum_1" if "股票" in prompt else "fut_momentum_1",
+                "code": "def factor_program(data, params):\n    return data['close']",
+                "params": {"window": 20},
+                "input_fields": ["close", "volume"],
+                "lookback": 20,
+                "output_type": "signal",
+                "frequency": "daily",
+                "economic_logic": {"theory": 4, "behavioral": 3, "microstructure": 4, "institutional": 3},
+            }
+        ]
 
     def complete(self, prompt, max_tokens=4000):
-        payload = [{
-            "name": "fut_trend_1",
-            "code": "def factor_program(data, params):\n    return data['close']",
-            "params": {"window": 10},
-        }]
+        payload = [
+            {
+                "name": "fut_trend_1",
+                "code": "def factor_program(data, params):\n    return data['close']",
+                "params": {"window": 10},
+            }
+        ]
         return json.dumps(payload), None
 
 

@@ -34,24 +34,41 @@ WIND_MCP_RAW = {
     "data": [
         {
             "date": "2026-08-01",
-            "open": 3500, "high": 3550, "low": 3490, "close": 3540,
-            "volume": 100000, "amount": 350000000,
-            "oi": 80000, "settle": 3540, "pre_settle": 3520,
+            "open": 3500,
+            "high": 3550,
+            "low": 3490,
+            "close": 3540,
+            "volume": 100000,
+            "amount": 350000000,
+            "oi": 80000,
+            "settle": 3540,
+            "pre_settle": 3520,
             "oi_chg": 2000,
         },
         {
             "date": "2026-08-04",
-            "open": 3540, "high": 3600, "low": 3530, "close": 3580,
-            "volume": 120000, "amount": 420000000,
-            "oi": 82000, "settle": 3580, "pre_settle": 3540,
+            "open": 3540,
+            "high": 3600,
+            "low": 3530,
+            "close": 3580,
+            "volume": 120000,
+            "amount": 420000000,
+            "oi": 82000,
+            "settle": 3580,
+            "pre_settle": 3540,
             "oi_chg": 2000,
         },
         {
             "date": "2026-08-05",
-            "open": 3580, "high": 3620, "low": 3570, "close": 3610,
-            "volume": 110000, "amount": 396000000,
+            "open": 3580,
+            "high": 3620,
+            "low": 3570,
+            "close": 3610,
+            "volume": 110000,
+            "amount": 396000000,
             "open_interest": 85000,  # 字段别名测试
-            "settle": 3610, "pre_settle": 3580,
+            "settle": 3610,
+            "pre_settle": 3580,
             "open_interest_change": 3000,  # 字段别名测试
         },
     ],
@@ -94,9 +111,7 @@ def main() -> int:
                 "fts.data_sources.wind_source._call_mcp",
                 return_value=WIND_MCP_RAW,
             ) as mock_mcp:
-                df = WindSource().fetch_ohlcv(
-                    "RB2509.SHFE", days=30, trace_id="verify-14.0.8"
-                )
+                df = WindSource().fetch_ohlcv("RB2509.SHFE", days=30, trace_id="verify-14.0.8")
             assert mock_mcp.called
             print(f"\n[4/6] WindSource.fetch_ohlcv 返回 {len(df)} 行")
             print("       DataFrame 前 3 列预览:")
@@ -105,11 +120,9 @@ def main() -> int:
 
             # 5. INSERT 到 kline_cache
             con.register("df_wind", df)
-            con.execute(
-                "INSERT INTO kline_cache SELECT * FROM df_wind"
-            )
+            con.execute("INSERT INTO kline_cache SELECT * FROM df_wind")
             con.unregister("df_wind")
-            print(f"\n[5/6] INSERT 完成")
+            print("\n[5/6] INSERT 完成")
 
             # 6. SELECT 回查，验证落库正确
             rows = con.execute(
@@ -151,19 +164,16 @@ def main() -> int:
                 assert r[8] == "verify-14.0.8", f"trace_id 不匹配: {r[8]}"
 
             # 验证索引
-            idx_list = con.execute(
-                "SELECT index_name FROM duckdb_indexes() "
-                "WHERE table_name='kline_cache'"
-            ).fetchall()
+            idx_list = con.execute("SELECT index_name FROM duckdb_indexes() WHERE table_name='kline_cache'").fetchall()
             print(f"\n       索引列表: {[r[0] for r in idx_list]}")
-            assert any(r[0] == "idx_kline_symbol_date_source" for r in idx_list), \
+            assert any(r[0] == "idx_kline_symbol_date_source" for r in idx_list), (
                 "索引 idx_kline_symbol_date_source 缺失"
+            )
             print("       ✅ 索引 idx_kline_symbol_date_source 存在")
 
             # 验证 edb_cache / option_chain_cache 表存在
             tables = con.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema='main'"
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
             ).fetchall()
             table_names = {r[0] for r in tables}
             print(f"\n       所有表: {sorted(table_names)}")
@@ -175,11 +185,11 @@ def main() -> int:
             print("\n" + "=" * 60)
             print("✅ 任务 14.0.8 端到端验证全部通过")
             print("=" * 60)
-            print(f"  - Wind 专属字段 (hold/settle/pre_settle/oi_change) 正确落库")
-            print(f"  - 字段别名 (open_interest / open_interest_change) 正确映射")
-            print(f"  - vwap 由 amount/volume 正确计算")
-            print(f"  - source='WIND' / trace_id 正确写入")
-            print(f"  - idx_kline_symbol_date_source 索引已建立")
+            print("  - Wind 专属字段 (hold/settle/pre_settle/oi_change) 正确落库")
+            print("  - 字段别名 (open_interest / open_interest_change) 正确映射")
+            print("  - vwap 由 amount/volume 正确计算")
+            print("  - source='WIND' / trace_id 正确写入")
+            print("  - idx_kline_symbol_date_source 索引已建立")
             return 0
         finally:
             con.close()

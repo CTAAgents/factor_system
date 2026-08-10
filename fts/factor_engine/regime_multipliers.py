@@ -34,20 +34,23 @@ logger = logging.getLogger(__name__)
 
 # ─── 契约 ───────────────────────────────────────────────────
 
+
 @dataclass
 class RegimeMultiplierConfig:
     """倍率估计配置。"""
-    min_samples: int = 10          # 家族×regime 最小样本数（不足回退硬编码 1.0）
-    min_ic_floor: float = 0.02     # IC 绝对下限（防噪音倍率膨胀）
-    clamp_lo: float = 0.5          # 倍率下限（钳制）
-    clamp_hi: float = 1.5          # 倍率上限（钳制）
+
+    min_samples: int = 10  # 家族×regime 最小样本数（不足回退硬编码 1.0）
+    min_ic_floor: float = 0.02  # IC 绝对下限（防噪音倍率膨胀）
+    clamp_lo: float = 0.5  # 倍率下限（钳制）
+    clamp_hi: float = 1.5  # 倍率上限（钳制）
 
 
 @dataclass
 class RegimeMultiplierReport:
     """倍率估计报告。"""
-    multipliers: dict[str, dict[str, float]]   # regime → family → multiplier
-    stats: dict[str, Any] = field(default_factory=dict)      # 分桶统计
+
+    multipliers: dict[str, dict[str, float]]  # regime → family → multiplier
+    stats: dict[str, Any] = field(default_factory=dict)  # 分桶统计
     comparison: dict[str, Any] = field(default_factory=dict)  # 硬编码 vs 数据驱动
     warnings: list[str] = field(default_factory=list)
 
@@ -83,7 +86,9 @@ class RegimeMultiplierEstimator:
         """
         if not records:
             return RegimeMultiplierReport(
-                multipliers={}, stats={}, comparison={},
+                multipliers={},
+                stats={},
+                comparison={},
                 warnings=["无输入记录，返回空倍率表"],
             )
 
@@ -115,9 +120,7 @@ class RegimeMultiplierEstimator:
 
         for (regime, family), ics in buckets.items():
             if len(ics) < self._config.min_samples:
-                warnings.append(
-                    f"{regime}/{family} 样本不足 ({len(ics)} < {self._config.min_samples})，回退 1.0"
-                )
+                warnings.append(f"{regime}/{family} 样本不足 ({len(ics)} < {self._config.min_samples})，回退 1.0")
                 continue
             mean_ic = float(np.mean(ics))
             base = abs(family_global.get(family, 0.0))
@@ -129,8 +132,10 @@ class RegimeMultiplierEstimator:
             win_rate = float(np.mean([1.0 if ic > 0 else 0.0 for ic in ics]))
             multipliers.setdefault(regime, {})[family] = round(mult, 3)
             stats["buckets"][f"{regime}/{family}"] = {
-                "n": len(ics), "mean_ic": round(mean_ic, 4),
-                "win_rate": round(win_rate, 3), "multiplier": round(mult, 3),
+                "n": len(ics),
+                "mean_ic": round(mean_ic, 4),
+                "win_rate": round(win_rate, 3),
+                "multiplier": round(mult, 3),
             }
 
         # 4. 硬编码 vs 数据驱动对比
@@ -140,11 +145,14 @@ class RegimeMultiplierEstimator:
             for regime, fam_map in multipliers.items():
                 hc = hardcoded.get(regime, {})
                 for family, mult in fam_map.items():
-                    comp_rows.append({
-                        "regime": regime, "family": family,
-                        "hardcoded": hc.get(family, 1.0),
-                        "data_driven": mult,
-                    })
+                    comp_rows.append(
+                        {
+                            "regime": regime,
+                            "family": family,
+                            "hardcoded": hc.get(family, 1.0),
+                            "data_driven": mult,
+                        }
+                    )
             comparison = {
                 "n_entries": len(comp_rows),
                 "rows": comp_rows,
@@ -155,12 +163,16 @@ class RegimeMultiplierEstimator:
                 comparison["max_deviation"] = round(max_dev, 3)
 
         report = RegimeMultiplierReport(
-            multipliers=multipliers, stats=stats,
-            comparison=comparison, warnings=warnings,
+            multipliers=multipliers,
+            stats=stats,
+            comparison=comparison,
+            warnings=warnings,
         )
         logger.info(
             "[GAP-L308] Regime 倍率估计完成: %d regimes, %d 桶, %d 警告",
-            len(multipliers), len(stats["buckets"]), len(warnings),
+            len(multipliers),
+            len(stats["buckets"]),
+            len(warnings),
         )
         return report
 
