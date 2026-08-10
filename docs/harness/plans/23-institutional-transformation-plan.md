@@ -1,8 +1,8 @@
 # FTS 追赶机构水平全面改造计划（Institutional-Level Transformation Plan）
 
-> 版本: v2.86.0
+> 版本: v2.87.0
 > 最后更新: 2026-08-10
-> 状态: 执行中（已登记 GAP 缺陷项 I101~I503 全部关闭 ✅ v2.85.0；Stage 3C 远期项待推进：另类数据因子上线、多节点分布式部署、Level2 因子入 elite）
+> 状态: 执行中（已登记 GAP 缺陷项 I101~I503 全部关闭 ✅ v2.85.0；Stage 1 单机达标 ✅ / Stage 2 单机+轻量并行达标 ✅ / Stage 3 首期完成 ✅ v2.83.0~v2.85.0；Stage 3C 远期项待推进：另类数据因子上线、多节点分布式部署、Level2 因子入 elite）
 > 适用范围: FTS 全链路（L0 人类设定 / L1 元循环 / L2 演化 / L3 组合 / L4 信号与实盘反馈 / 基础设施）
 
 > ⚠️ **计划定位说明**：本计划是**机构级对标总纲**，将 FTS 与三类机构基准（中小专业量化团队 / 国内头部量化私募 / 海外顶级量化机构）的全链路差距系统登记为 GAP-I001~I503 缺陷项，按 P0/P1/P2 优先级分三阶段追赶。与既有局部计划（plans/10 演化优化、plans/11 因子挖掘优化、plans/21 期货成熟度、plans/22 股票成熟度、plans/20 期货展期）的关系为「总纲 → 细则」，本计划只登记**机构级结构性差距**，单条缺陷的执行细则由对应子计划承载，不重复登记。
@@ -54,22 +54,22 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 
 | 层 | 维度 | FTS 现状 | T1 中小团队 | T2 国内头部 | T3 海外顶级 |
 |:---|:-----|:---------|:-----------|:-----------|:-----------|
-| **L1** | 知识补给吞吐 | 每日 1 次 LLM 知识补给 + 批量候选契约校验 + 吞吐指标监控（GAP-I101，v2.72.0） | ✅ 达标 | 🟡 差距（候选源单一，二期 v2.80.0 多路知识源） | 🔴 差距（缺另类知识源） |
-| **L1** | Alpha 审查 | 自动 L1Verifier + FactorReviewWorkflow 人审骨架（状态机+意见回写+CLI 队列，GAP-I102，v2.72.0） | ✅ 达标（骨架） | 🟡 人审工作台二期 v2.80.0 | 🔴 缺人审工作台 |
-| **L2** | 挖掘吞吐 | 单机串行，几十候选/夜 | 🟡 差 1~2 数量级 | 🔴 差 2~3 数量级 | 🔴 差 3+ 数量级 |
-| **L2** | 算子库 | ~50 算子 | 🟡 基本达标 | 🔴 差距 | 🔴 差距 |
-| **L2** | 搜索方法 | macro/GP/operator 三模式 | ✅ 达标 | 🟡 缺深度因子学习 | 🔴 缺深度/多目标/符号回归 |
-| **L2** | 过拟合控制 | walk-forward+多重检验+消融+因果+鲁棒性 | ✅ **局部领先** | 🟡 成本/容量保真不足 | 🟡 成本/容量保真不足 |
-| **L2** | 中性化 | 行业/市值中性化 + Barra 风格中性化 + 期货板块中性化已接入评估链（GAP-S01/S02/F03） | ✅ 达标 | ✅ 达标 | 🟡 缺全市场 Barra 暴露覆盖 |
+| **L1** | 知识补给吞吐 | 每日 1 次 LLM 知识补给 + 批量候选契约校验 + 吞吐指标监控（GAP-I101，v2.72.0）；公告/舆情/宏观多源并行（GAP-I103，v2.82.0） | ✅ 达标 | ✅ 达标 | 🟡 差距（缺海外级另类数据源：卫星/供应链） |
+| **L1** | Alpha 审查 | 自动 L1Verifier + FactorReviewWorkflow 人审骨架（状态机+意见回写+CLI 队列）+ 驳回意见入经验链（GAP-I102，v2.72.0 骨架 / v2.82.0 二期） | ✅ 达标 | ✅ 达标 | 🟡 差距（缺在线人审协作工作台） |
+| **L2** | 挖掘吞吐 | 批量候选生成（batch_size=20）+ 向量化批量粗筛漏斗 + 多进程 ExecutorBackend 批量评估（GAP-I201 批量漏斗 v2.71.0 + GAP-I502 v2.83.0 并行） | ✅ 达标（吞吐 ≥10×） | 🟡 差距（单机多进程，缺并行工厂） | 🔴 差距（缺分布式部署，Stage 3C） |
+| **L2** | 算子库 | ~50 算子 + 组合/跨标的算子双注册表单一事实源（GAP-I202，v2.75.0） | ✅ 达标 | 🟡 差距（规模距数百仍有差） | 🔴 差距 |
+| **L2** | 搜索方法 | macro/GP/operator 三模式 + 多目标适应度 + 符号回归 + Pareto 前沿 + GRU 深度因子（GAP-I204 v2.71.0/v2.78.0 + GAP-I203 v2.73.0） | ✅ 达标 | ✅ 达标 | 🟡 差距（缺 Transformer/GAN 深度模型） |
+| **L2** | 过拟合控制 | walk-forward+多重检验+消融+因果+鲁棒性 + 成本/容量约束建模（GAP-I501 联动） | ✅ **局部领先** | ✅ 达标 | 🟡 差距（缺实时成本监控） |
+| **L2** | 中性化 | 行业/市值中性化 + Barra 风格中性化 + 期货板块中性化 + 全市场 Barra 暴露覆盖（GAP-S01/S02/F03 + I304 v2.79.0） | ✅ 达标 | ✅ 达标 | ✅ 达标 |
 | **L2** | 去冗余 | 相关性预检+家族上限+正交化闭环+正交基底（L2 高相关 OLS 残差入库，Gram-Schmidt 多因子基底迭代残差化，L3 不重复剔除） | ✅ 达标 | ✅ 达标 | ✅ 达标 |
-| **L3** | 组合层 | 股票/期货统一 L3（PortfolioLoop 复用：聚类/PCA/正交化/六模式合成/Regime） | ✅ 达标 | ✅ 达标 | 🟡 差 ML 组合层 |
+| **L3** | 组合层 | 股票/期货统一 L3（PortfolioLoop 复用：聚类/PCA/正交化/六模式合成/Regime） | ✅ 达标 | ✅ 达标 | 🟡 差距（差 ML 组合层） |
 | **L3** | 组合优化器 | Elastic Net + Regime + 风险平价/均值方差 + Ledoit-Wolf 收缩（optimizer 模式） | ✅ 达标 | ✅ 达标 | 🔴 缺 ML 组合层 |
 | **L3** | 衰减管理 | elite_tracker + 定期复审 + 自动退役闭环（滚动 6M IC 斜率分级 + FACTOR_DECAY 反馈联动，v2.72.1 GAP-I305） | ✅ 达标 | ✅ 达标 | ✅ 达标 |
-| **L4** | 反馈闭环 | 信号→FDT，无实盘数据回流 | 🟡 差距 | 🔴 差距 | 🔴 差距 |
-| **L4** | 在线监控 | live_factor_monitor 框架 | ✅ 达标 | 🟡 缺实盘数据源 | 🟡 缺实盘数据源 |
-| **基础** | 回测保真 | 涨跌停/停牌/展期/冲击成本/容量约束+容量分析报告已建模 | ✅ 达标 | 🟡 缺冲击成本实证标定 | 🟡 缺融资成本/实时成本监控 |
-| **基础** | 数据深度 | 日线/分钟线 + tick 初接 | ✅ 达标 | 🟡 缺 Level2/另类 | 🔴 缺 Level2/另类 |
-| **基础** | 计算资源 | 单机 | 🟡 需轻量并行 | 🔴 需并行工厂 | 🔴 需分布式/GPU |
+| **L4** | 反馈闭环 | 信号→FDT，实盘成交/净值回流 + 实盘 vs 回测 IC 对比 + 退役建议（GAP-I401，v2.71.0） | ✅ 达标 | 🟡 差距（缺自动重校准） | 🔴 差距（缺在线学习） |
+| **L4** | 在线监控 | live_factor_monitor 接入实盘 IC + 衰减告警（GAP-I402，v2.77.0） | ✅ 达标 | ✅ 达标 | 🟡 差距（缺在线学习/实时仪表盘深化） |
+| **基础** | 回测保真 | 涨跌停/停牌/展期/冲击成本/容量约束+容量分析报告已建模 | ✅ 达标 | 🟡 差距（缺冲击成本实证标定） | 🟡 差距（缺融资成本/实时成本监控） |
+| **基础** | 数据深度 | 日线/分钟线 + tick 历史缓存增量累积 + Level2 订单流因子（GAP-I503 首期，v2.84.0） | ✅ 达标 | 🟡 差距（缺另类数据） | 🟡 差距（缺另类/卫星/供应链） |
+| **基础** | 计算资源 | 单机多进程执行器可插拔抽象（ExecutorBackend，GAP-I502 v2.83.0） | ✅ 达标 | 🟡 差距（需多机部署并行工厂） | 🔴 差距（需分布式/GPU，Stage 3C） |
 
 ---
 
@@ -85,6 +85,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | **机构级标准** | 挖掘工厂化：一次运行批量生成（如 WorldQuant 每夜数万候选），粗筛→精筛分级漏斗（秒级粗筛 → 分钟级精筛），批量向量化评估 + 多进程并行 |
 | **影响** | FTS 一夜 50 代约几十候选 vs 机构数万 → 同等时间窗口内命中精英因子的期望差 2~3 个数量级；这是与机构差距的核心根因 |
 | **实施步骤** | ① 引入「批量候选生成 + 批量粗筛」漏斗：每代生成 N（如 20~50）个后代（LLM 批量产出 / GP 种群批量评估 / operator 随机组合批量生成），`_quick_prefilter` 改为向量化批量拦截；② 粗筛通过者进细评估队列（ProcessPoolExecutor 多进程并行评估，先单机多核）；③ 保持单因子审计链不变（审计为精筛层） |
+| **完成记录** | ✅ v2.71.0（批量漏斗）：新建 `fts/factor_engine/batch_mining.py`——`BatchMiner`：`BatchMiningConfig(batch_size=20)` 每代批量生成 N 个后代（`generate_batch` 依赖注入 `generate_cb`，逐 i 生成失败者不计入）+ `filter_batch` 向量化批量粗筛（单因子 `_filter_one` 拦截逻辑向量化对齐）+ `run_iteration` 迭代闭环；`evolution_loop.py`（L1216-1229）接入 `BatchMiner`（`generate_cb=self._batch_generate_one` 方法轮换 + seed 递增），每代 1 个后代 → batch_size 个候选，吞吐 ≥10× 达成；✅ v2.83.0（批量并行）：`BatchMiner.filter_batch` 批量粗筛接入 `ExecutorBackend`（`BatchMiningConfig.executor_backend`/`executor_max_workers`，GAP-I502 联动），批量评估多进程并行；新增 batch_mining 11 + executor_backend 14 用例（四后端行为一致性/异常隔离） |
 | **测试方案** | 批量生成数量断言；批量粗筛与单因子拦截结果一致性；多进程评估结果与串行逐一对齐（误差 < 1e-9）；吞吐基准测试（每秒评估因子数，防止性能退化） |
 
 #### GAP-I207 股票因子行业/市值中性化未接入主流程（P0）
@@ -305,7 +306,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 
 | 版本 | 阶段 | 缺陷项 | 核心内容 |
 |:-----|:-----|:-------|:---------|
-| v2.65.0 | 1A | GAP-I201 首期 | 批量候选生成 + 向量化批量粗筛（单机多进程），吞吐目标 ≥ 10× |
+| v2.65.0 | 1A | GAP-I201 首期 | 批量候选生成 + 向量化批量粗筛（单机多进程），吞吐目标 ≥ 10× ✅ 已关闭（v2.71.0 实际落地 `BatchMiner` 批量漏斗 + v2.83.0 `ExecutorBackend` 多进程并行） |
 | v2.67.0 | 1A | GAP-I501 | 冲击成本模型 + 容量限制接入回测流水线 ✅ 已关闭 |
 | v2.68.0 | 1B | GAP-I301 | 股票 L3 组合层（复用期货组件）✅ 已关闭 |
 | v2.70.0 | 1B | GAP-I205 | 微演化自适应 trials + 早停 ✅ 已关闭 |
@@ -396,5 +397,5 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | `fts/factor_engine/evolution_loop.py`（GAP-I201/I206）；`fts/factor_engine/evaluation_chain.py`（GAP-I207）；`fts/factor_engine/micro_evolution.py`（GAP-I205）；`fts/factor_engine/gp_evolver.py`（GAP-I204）；`fts/factor_engine/portfolio_loop.py` + `portfolio_optimizer.py` + `portfolio_constructor.py`（GAP-I301/I302/I303）；`fts/factor_engine/cost_model.py` + `backtest_pipeline.py`（GAP-I501）；`fts/factor_engine/meta_loop.py`（GAP-I101）；`fts/factor_engine/factor_inspector.py`（GAP-I102）；`fts/factor_engine/expr_dsl/registry.py`（GAP-I202）；`fts/ml/models.py`（GAP-I203）；`fts/factor_engine/elite_tracker.py` + `feedback_loop.py` + `signal_contract.py` + `bridge/signal_bridge.py`（GAP-I401/I305/I402）；`fts/factor_engine/factor_db/repository.py`（GAP-I305/I206）；`fts/monitor/live_factor_monitor.py`（GAP-I402） |
-| 可验证断言 | 20 项 GAP-I 全部登记（P0×5 / P1×10 / P2×5）；Stage 1 退出标准含吞吐 ≥10× 与 5 项 P0 关闭；GAP-I207 已关闭（中性化接入主流程 v2.57.0）、GAP-I304 首期已落地（Barra 风格体系 v2.62.0）、GAP-I301/I501 已关闭（股票 L3 / 冲击成本+容量约束）；差距总览矩阵与 §0.1 现状参数表同步反映上述落地；GAP-I203 引用 GAP-037；路线图版本衔接 v2.65.0+ 与 plans/22 无冲突；实施按 §3 分阶段推进 |
+| 可验证断言 | 20 项 GAP-I 全部登记（P0×5 / P1×10 / P2×5）且 I101~I503 全部关闭（✅ v2.85.0）；差距总览矩阵 16 行中 13 行状态按最新落地刷新（v2.87.0）——L1 知识补给/Alpha 审查、L2 挖掘吞吐/算子库/搜索方法/过拟合/中性化、L4 反馈闭环/在线监控、基础数据深度/计算资源 差距消除或降档，残留差距均有明确依据（实证标定/另类数据/在线学习/分布式部署）；GAP-I201 完成记录补充（`BatchMiner` 批量漏斗 v2.71.0 + `ExecutorBackend` v2.83.0）；Stage 1/2 达标、Stage 3 首期完成；路线图版本衔接 v2.65.0+ 与 plans/22 无冲突；实施按 §3 分阶段推进 |
 | 检验方式 | `python scripts/verify_doc_consistency.py`；各缺陷项落地时配套 `pytest tests/... -v` 回归；每个 Stage 退出时运行全量回归 + 一致性 13/13 |
