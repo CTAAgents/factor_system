@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.83.0
+> 版本: v2.84.0
 > 最后更新: 2026-08-10
 
 ---
@@ -288,6 +288,8 @@ TOTAL                                      20326   1254    94%
 
 | 测试文件 | 用例数 | 覆盖模块 |
 |:---------|:-------|:---------|
+| `tests/factor_engine/test_microstructure_factors.py` | 20 | Level2 订单流因子（GAP-I503 首期，v2.84.0）：方向分类（升/降/持平延续/缺列降级）+ OFI（纯买=+1/纯卖=-1/混合界内/空输入）+ OBI（买深重/卖深重/缺深度=0）+ 大单占比（绝对/相对阈值/无大单=0）+ compute 契约列/trade_volume 差分/降级/排序 + 配置校验 |
+| `tests/data_sources/test_tick_cache_accumulate.py` | 11 | tick_cache 增量累积（GAP-I503 首期，v2.84.0）：去重写入（重复写/部分重叠/读无重复）+ 时间窗口查询（start/end/双界/无参数兼容）+ 保留清理（过期清除/新鲜保留） |
 | `tests/factor_engine/test_executor_backend.py` | 14 | 可插拔执行器抽象（GAP-I502，v2.83.0）：四后端 map 行为一致性（thread/process/dask/ray 输出一致 + 顺序保持）/process 支持 lambda 与 bound method（cloudpickle 序列化）/缺依赖降级 ProcessBackend/dask-ray 创建失败降级/未知后端回退 thread/并发性断言/BatchMiner.filter_batch 接入 + process 单任务异常隔离（单候选失败不影响其余）/filter_batch thread 与 process 结果一致 |
 | `tests/factor_engine/extractors/test_alternative_sources.py` | 16 | 另类知识源（GAP-I103，v2.82.0）：公告提取器 8（暂停/API 成功/空数据/无标题跳过/异常/非200/无数据降级/LLM 提取 + parent_topic）+ 宏观提取器 6（暂停/成功/空/异常/缺失 key/期货 LLM 提取）+ 管道接入 4（股票含公告+宏观/开关关闭/期货含宏观/关闭） |
 | `tests/factor_engine/test_review_experience_chain.py` | 7 | 审查意见接入经验链（GAP-I102 二期，v2.82.0）：驳回写 failure 轨迹（success=False/failure_reasons/lessons）/批准不写/空 comment 不写/开关关闭不写/经验链异常降级/审查人入 lessons/幂等不重复写 |

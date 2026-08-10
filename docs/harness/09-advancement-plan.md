@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.83.0
+> 版本: v2.84.0
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -207,6 +207,16 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ `FTSConfig` 新增 `executor_backend`（默认 thread 保持现状）/`executor_max_workers`（默认 4，`FTS_EXECUTOR_BACKEND`/`FTS_EXECUTOR_MAX_WORKERS`），evolution_loop 批量模式构造透传
 - 📋 新增 `test_executor_backend.py` 14 用例（四后端 map 行为一致性/process 支持 lambda 与 bound method/缺依赖降级/未知后端回退/并发性/BatchMiner 接入 + process 单任务异常隔离/filter_batch thread 与 process 结果一致），executor_backend 14 + batch_mining 11 合计 25 passed + evolution_loop batch 3 passed 全绿
 - ✅ 文档同步：01/03/06/07/08 + 23 计划（GAP-I502 ✅ 关闭）+ pyproject bump v2.82.0 → v2.83.0
+
+### v2.84.0 tick 历史缓存增量累积 + Level2 订单流因子（GAP-I503 首期，Stage 3A，已完成）
+
+**完成时间**: 2026-08-10
+
+**核心产出（总纲 plans/23 GAP-I503 首期）**:
+- ✅ tick_cache 增量累积——`FuturesDataAggregator._write_tick_cache` 按 (symbol, datetime) 去重写入（DELETE 已存在行再 INSERT）+ `tick_cache_retention_days` 保留清理（默认 7 天，写入时自动清理过期 tick），跨会话多次拉取累积成更长 tick 历史、无重复污染不膨胀；`get_ticks`/`_try_tick_cache` 新增 `start_time`/`end_time` 时间窗口查询（向后兼容）
+- ✅ 新建 `fts/factor_engine/microstructure_factors.py`——`MicrostructureConfig`（window/large_threshold_abs/large_threshold_mult/min_rows）+ `classify_tick_direction`（价差方向，持平沿用前向）+ `order_flow_imbalance`（滚动窗口主动买卖量差归一化 OFI）+ `order_book_imbalance`（5 档深度 OBI）+ `large_trade_ratio`（绝对/相对阈值大单占比）+ `compute_microstructure_factors` 统一入口（FACTOR_COLUMNS 契约，缺列/不足 min_rows 优雅降级空）
+- 📋 新增 `test_microstructure_factors.py` 20 用例 + `test_tick_cache_accumulate.py` 11 用例（31 passed），既有 tick/aggregator/migrate 125 passed 全绿
+- ✅ 文档同步：01/03/06/07/08 + 23 计划（GAP-I503 首期 ✅ 关闭）+ pyproject bump v2.83.0 → v2.84.0
 
 ### v2.61.0 股票流水线 GAP-S01（行业/市值中性化主流程，已完成）
 

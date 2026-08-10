@@ -92,6 +92,7 @@ class FuturesDataAggregator:
         circuit_breaker_threshold: int = 5,
         circuit_breaker_cooldown_seconds: float = 6 * 3600,
         cache_max_age_days: int = 1,
+        tick_cache_retention_days: int = 7,  # v2.84.0 (GAP-I503 首期): tick_cache 保留天数
         enable_cross_check: bool = True,  # 14.2: 是否启用多源交叉验证
         cross_check_threshold: float = 0.005,  # 14.2: 价格偏离告警阈值（0.5%）
         cross_check_recent_days: int = 5,  # 14.2: 主路径触发时检查最近 N 天
@@ -117,6 +118,7 @@ class FuturesDataAggregator:
         self.minute_sources = minute_sources or []  # v2.30.0: 分钟数据源
         self.tick_sources = tick_sources or []  # v2.31.0: tick 数据源
         self.db_path = Path(db_path) if db_path else None
+        self.tick_cache_retention_days = tick_cache_retention_days  # v2.84.0 (GAP-I503)
         self.circuit_breaker_threshold = circuit_breaker_threshold
         self.circuit_breaker_cooldown = circuit_breaker_cooldown_seconds
         self.cache_max_age_days = cache_max_age_days
@@ -376,6 +378,8 @@ class FuturesDataAggregator:
         symbol: str,
         count: int = 5000,
         trace_id: str = "",
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
     ) -> pd.DataFrame:
         """获取 tick 逐笔数据（tick_cache → tick_sources 降级）。
 
@@ -383,12 +387,14 @@ class FuturesDataAggregator:
             symbol: 品种代码（如 "RB0"）
             count: tick 行数
             trace_id: 链路追踪 ID
+            start_time: 可选起始时间（ISO 字符串），只读缓存中 >= start_time 的 tick
+            end_time: 可选结束时间（ISO 字符串），只读缓存中 <= end_time 的 tick
 
         Returns:
             含 tick schema 的 DataFrame，所有源失败时返回空 DataFrame。
         """
         # 1) 尝试 tick_cache
-        df = self._try_tick_cache(symbol, count)
+        df = self._try_tick_cache(symbol, count, start_time=start_time, end_time=end_time)
         if df is not None and not df.empty:
             return df
 
@@ -422,8 +428,17 @@ class FuturesDataAggregator:
         self,
         symbol: str,
         count: int,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
     ) -> Optional[pd.DataFrame]:
-        """尝试从 tick_cache 读取 tick 数据（按最新日期读取最近 count 行）。"""
+        """尝试从 tick_cache 读取 tick 数据。
+
+        Args:
+            symbol: 品种代码
+            count: 最大行数（按 datetime 升序取最近 count 行）
+            start_time: 可选起始时间过滤（>=）
+            end_time: 可选结束时间过滤（<=）
+        """
         if self.db_path is None or not self.db_path.exists():
             return None
 
@@ -439,8 +454,18 @@ class FuturesDataAggregator:
             if not exists:
                 return None
 
+            conditions = ["symbol = ?"]
+            params: list[Any] = [symbol]
+            if start_time is not None:
+                conditions.append("datetime >= ?")
+                params.append(start_time)
+            if end_time is not None:
+                conditions.append("datetime <= ?")
+                params.append(end_time)
+            where = " AND ".join(conditions)
+
             df = con.execute(
-                """
+                f"""
                 SELECT symbol, datetime, last_price, average, highest, lowest,
                        volume, amount, open_interest,
                        bid_price1, bid_volume1, ask_price1, ask_volume1,
@@ -450,11 +475,11 @@ class FuturesDataAggregator:
                        bid_price5, bid_volume5, ask_price5, ask_volume5,
                        source, fetched_at, trace_id
                 FROM tick_cache
-                WHERE symbol = ?
+                WHERE {where}
                 ORDER BY datetime DESC
                 LIMIT ?
                 """,
-                [symbol, count],
+                [*params, count],
             ).df()
             if df.empty:
                 return None
@@ -466,7 +491,12 @@ class FuturesDataAggregator:
             return None
 
     def _write_tick_cache(self, df: pd.DataFrame) -> None:
-        """将 tick 数据写入 tick_cache。失败不抛异常。"""
+        """将 tick 数据写入 tick_cache（去重增量累积，v2.84.0 GAP-I503 首期）。
+
+        - 按 (symbol, datetime) 去重：重复写入同时间段 tick 不产生重复行
+        - 保留清理：只保留最近 tick_cache_retention_days 天，跨会话累积有效且不膨胀
+        失败不抛异常。
+        """
         if self.db_path is None or df.empty:
             return
         try:
@@ -480,6 +510,20 @@ class FuturesDataAggregator:
         if con is None:
             return
         try:
+            # 1) 去重：删除目标表中已存在的 (symbol, datetime)
+            dup = df[["symbol", "datetime"]].drop_duplicates()
+            con.register("df_dup", dup)
+            con.execute(
+                """
+                DELETE FROM tick_cache
+                WHERE (symbol, datetime) IN (
+                    SELECT symbol, datetime FROM df_dup
+                )
+                """
+            )
+            con.unregister("df_dup")
+
+            # 2) 插入新数据
             con.register("df_new", df)
             con.execute(
                 """
@@ -506,6 +550,10 @@ class FuturesDataAggregator:
                 """
             )
             con.unregister("df_new")
+
+            # 3) 保留清理：删除超过 tick_cache_retention_days 的过期 tick
+            cutoff = pd.Timestamp.now() - pd.Timedelta(days=max(self.tick_cache_retention_days, 1))
+            con.execute("DELETE FROM tick_cache WHERE datetime < ?", [str(cutoff)])
         except Exception as e:  # noqa: BLE001
             logger.warning("[tick_cache] 写入失败: %s", e)
 
