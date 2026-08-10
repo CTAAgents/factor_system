@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.81.0
+> 版本: v2.82.0
 > 最后更新: 2026-08-10
 
 ---
@@ -56,6 +56,12 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  - MetaStateManager（状态管理）                                         │
 │  - validate_batch_candidates（批量候选契约校验，GAP-I101）              │
 │  - MetaRunResult.candidates_per_minute（L1 吞吐指标，GAP-I101）         │
+│  - extractors/ 多路知识源管道（GAP-I103，v2.82.0）                      │
+│    ├ 研报/论文/天软/YAML 三源 + 另类源：                               │
+│    ├ AnnouncementNewsExtractor（公告/舆情，股票管道）                  │
+│    └ MacroEventExtractor（宏观事件，股票+期货管道）                    │
+│    多源并行收集（BaseExtractorPipeline.extract ThreadPoolExecutor）    │
+│  - FactorReviewWorkflow 人审驳回 → ExperienceChain（GAP-I102 二期）     │
 │                                                                         │
 │  职责: 每日知识补给 → 种子因子注入 → 市场语境感知 → 演化方向指引        │
 └─────────────────────────────┬────────────────────────────────────────────┘

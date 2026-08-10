@@ -22,10 +22,6 @@ import yaml
 
 from ..contracts import SeedCandidate
 from .base import BaseExtractor, BaseExtractorPipeline
-from .futures_pipeline import (
-    ResearchReportExtractor as _FuturesResearchReportExtractor,
-    AcademicPaperExtractor as _FuturesAcademicPaperExtractor,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +31,13 @@ SEEDS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "seeds" / "st
 
 FACTOR_FILE_MAP: dict[str, str] = {
     "jq_factors": "jq_factors.yaml",
-    "broker_reports_stock": "",      # 预留 YAML 路径（已改为动态提取）
-    "academic_papers_stock": "",     # 预留 YAML 路径（已改为动态提取）
+    "broker_reports_stock": "",  # 预留 YAML 路径（已改为动态提取）
+    "academic_papers_stock": "",  # 预留 YAML 路径（已改为动态提取）
 }
 
 
 # ─── 源 1: YamlSeedExtractor（聚宽，静态） ────────────────
+
 
 class YamlSeedExtractor(BaseExtractor):
     """从 YAML 种子文件读取因子并转换为候选的提取器。"""
@@ -70,28 +67,28 @@ class YamlSeedExtractor(BaseExtractor):
                     data = yaml.safe_load(f)
                 factors = data.get("factors", [])
                 if factors:
-                    candidates = [
-                        self._convert_factor(f, trace_id) for f in factors
-                    ]
+                    candidates = [self._convert_factor(f, trace_id) for f in factors]
                     logger.info(
                         "[YamlSeedExtractor] %s 从文件提取: %d 个候选 (file=%s)",
-                        self.name, len(candidates), self.yaml_file.name,
+                        self.name,
+                        len(candidates),
+                        self.yaml_file.name,
                     )
                     return candidates
             except Exception as e:
                 logger.warning(
                     "[YamlSeedExtractor] %s 文件加载失败: %s, 尝试内置因子",
-                    self.name, e,
+                    self.name,
+                    e,
                 )
 
         # 回退到内置因子
         if self.builtin_factors:
-            candidates = [
-                self._convert_factor(f, trace_id) for f in self.builtin_factors
-            ]
+            candidates = [self._convert_factor(f, trace_id) for f in self.builtin_factors]
             logger.info(
                 "[YamlSeedExtractor] %s 从内置因子提取: %d 个候选",
-                self.name, len(candidates),
+                self.name,
+                len(candidates),
             )
             return candidates
 
@@ -99,7 +96,9 @@ class YamlSeedExtractor(BaseExtractor):
         return []
 
     def _convert_factor(
-        self, factor: dict[str, Any], trace_id: str,
+        self,
+        factor: dict[str, Any],
+        trace_id: str,
     ) -> SeedCandidate:
         return BaseExtractorPipeline._yaml_factor_to_candidate(
             factor=factor,
@@ -162,7 +161,10 @@ class StockResearchReportExtractor(BaseExtractor):
                 len(reports_text),
             )
             candidates = self._llm_extract_factors(
-                reports_text, trace_id, max_factors=5, market="stock",
+                reports_text,
+                trace_id,
+                max_factors=5,
+                market="stock",
             )
             if candidates:
                 for c in candidates:
@@ -183,7 +185,10 @@ class StockResearchReportExtractor(BaseExtractor):
             "请提取 3-5 个当前研究前沿的因子想法。"
         )
         candidates = self._llm_extract_factors(
-            fallback_text, trace_id, max_factors=5, market="stock",
+            fallback_text,
+            trace_id,
+            max_factors=5,
+            market="stock",
         )
         for c in candidates:
             c["parent_topic"] = f"extractor_pipeline/{self.name}/{c.get('name', 'unknown')}"
@@ -191,7 +196,8 @@ class StockResearchReportExtractor(BaseExtractor):
             c["market"] = "stock"
         logger.info(
             "[StockResearchReportExtractor] 回退提取完成: %d 个候选, trace_id=%s",
-            len(candidates), trace_id,
+            len(candidates),
+            trace_id,
         )
         return candidates
 
@@ -218,9 +224,7 @@ class StockResearchReportExtractor(BaseExtractor):
                             stock = rep.get("stockName", "")
                             summary = rep.get("summary", "")
                             if title:
-                                text_parts.append(
-                                    f"标题: {title}\n板块: {industry}\n标的: {stock}\n摘要: {summary}\n"
-                                )
+                                text_parts.append(f"标题: {title}\n板块: {industry}\n标的: {stock}\n摘要: {summary}\n")
                 except Exception:
                     continue
 
@@ -266,7 +270,10 @@ class StockAcademicPaperExtractor(BaseExtractor):
                 len(papers_text),
             )
             candidates = self._llm_extract_factors(
-                papers_text, trace_id, max_factors=5, market="stock",
+                papers_text,
+                trace_id,
+                max_factors=5,
+                market="stock",
             )
             for c in candidates:
                 c["parent_topic"] = f"extractor_pipeline/{self.name}/{c.get('name', 'unknown')}"
@@ -274,7 +281,8 @@ class StockAcademicPaperExtractor(BaseExtractor):
                 c["market"] = "stock"
             logger.info(
                 "[StockAcademicPaperExtractor] 提取完成: %d 个候选, trace_id=%s",
-                len(candidates), trace_id,
+                len(candidates),
+                trace_id,
             )
             return candidates
 
@@ -301,18 +309,17 @@ class StockAcademicPaperExtractor(BaseExtractor):
                     )
                     if r.status_code == 200:
                         import xml.etree.ElementTree as ET
+
                         root = ET.fromstring(r.content)
                         ns = {"atom": "http://www.w3.org/2005/Atom"}
                         entries = root.findall("atom:entry", ns)
                         for entry in entries:
                             title_el = entry.find("atom:title", ns)
                             summary_el = entry.find("atom:summary", ns)
-                            title = title_el.text.strip() if title_el is not None else ""
-                            summary = summary_el.text.strip()[:500] if summary_el is not None else ""
+                            title = (title_el.text or "").strip() if title_el is not None else ""
+                            summary = (summary_el.text or "").strip()[:500] if summary_el is not None else ""
                             if title:
-                                text_parts.append(
-                                    f"类别: {cat}\n标题: {title}\n摘要: {summary}\n"
-                                )
+                                text_parts.append(f"类别: {cat}\n标题: {title}\n摘要: {summary}\n")
                 except Exception:
                     continue
             return "\n---\n".join(text_parts) if text_parts else ""
@@ -322,6 +329,7 @@ class StockAcademicPaperExtractor(BaseExtractor):
 
 
 # ─── 管道 ──────────────────────────────────────────────────
+
 
 class StockExtractorPipeline(BaseExtractorPipeline):
     """股票三源提取器管道。
@@ -336,11 +344,15 @@ class StockExtractorPipeline(BaseExtractorPipeline):
         state_path: str | Path = "memory/extractors/state.json",
         pause_jq_after_first: bool = True,
         llm_client: Optional[Any] = None,
+        announcement_enabled: bool = True,
+        macro_enabled: bool = True,
     ):
         self._pause_jq_after_first = pause_jq_after_first
         self._first_extract = True
 
         jq_yaml = SEEDS_DIR / FACTOR_FILE_MAP["jq_factors"]
+
+        from .alternative_sources import AnnouncementNewsExtractor, MacroEventExtractor
 
         extractors = [
             YamlSeedExtractor(
@@ -362,6 +374,27 @@ class StockExtractorPipeline(BaseExtractorPipeline):
                 llm_client=llm_client,
             ),
         ]
+        # GAP-I103 (v2.80.0): 另类知识源——公告/舆情 + 宏观事件（股票侧）
+        if announcement_enabled:
+            extractors.append(
+                AnnouncementNewsExtractor(
+                    name="announcement_news_stock",
+                    family_name="announcement_news",
+                    paused=False,
+                    llm_client=llm_client,
+                    market="stock",
+                )
+            )
+        if macro_enabled:
+            extractors.append(
+                MacroEventExtractor(
+                    name="macro_events_stock",
+                    family_name="macro_events",
+                    paused=False,
+                    llm_client=llm_client,
+                    market="stock",
+                )
+            )
 
         super().__init__(
             extractors=extractors,
@@ -387,13 +420,18 @@ class StockExtractorPipeline(BaseExtractorPipeline):
 
 # ─── 便捷工厂函数 ──────────────────────────────────────────
 
+
 def create_stock_extractor_pipeline(
     state_path: str | Path = "memory/extractors/state.json",
     pause_jq_after_first: bool = True,
     llm_client: Optional[Any] = None,
+    announcement_enabled: bool = True,
+    macro_enabled: bool = True,
 ) -> StockExtractorPipeline:
     return StockExtractorPipeline(
         state_path=state_path,
         pause_jq_after_first=pause_jq_after_first,
         llm_client=llm_client,
+        announcement_enabled=announcement_enabled,
+        macro_enabled=macro_enabled,
     )

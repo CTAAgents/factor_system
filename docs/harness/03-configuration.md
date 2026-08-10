@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.81.0
+> 版本: v2.82.0
 > 最后更新: 2026-08-07
 
 ---
@@ -51,6 +51,9 @@ FTS 配置采用三级优先级（高→低）：
 | `batch_random_seed` | int | 42 | `FTS_BATCH_RANDOM_SEED` | 批量生成随机种子（同父多后代可复现，GAP-I201，v2.65.0） |
 | `meta_loop_interval_hours` | int | 24 | — | L1 Meta-Loop 间隔 |
 | `meta_loop_max_tokens` | int | 8000 | — | L1 单次运行 max token |
+| `l1_announcement_extractor_enabled` | bool | true | `FTS_L1_ANNOUNCEMENT_EXTRACTOR_ENABLED` | 另类知识源：公告/舆情提取器开关（股票管道，GAP-I103，v2.82.0） |
+| `l1_macro_extractor_enabled` | bool | true | `FTS_L1_MACRO_EXTRACTOR_ENABLED` | 另类知识源：宏观事件提取器开关（股票/期货管道，GAP-I103，v2.82.0） |
+| `review_experience_chain`（环境变量直读） | bool | true | `FTS_REVIEW_EXPERIENCE_CHAIN` | 人审驳回意见是否写入经验链（GAP-I102 二期，v2.82.0） |
 | `portfolio_max_factors` | int | 20 | — | L3 组合最大因子数 |
 | `portfolio_top_n` | int | 5 | — | L3 Top N 输出 |
 | `portfolio_decay_days` | int | 90 | — | L3 衰减检验窗口 |

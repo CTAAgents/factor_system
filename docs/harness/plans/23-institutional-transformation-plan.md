@@ -1,6 +1,6 @@
 # FTS 追赶机构水平全面改造计划（Institutional-Level Transformation Plan）
 
-> 版本: v2.81.0
+> 版本: v2.82.0
 > 最后更新: 2026-08-10
 > 状态: 规划中（文档先行，作为 FTS 全链路机构级改造总纲，子计划为执行细则）
 > 适用范围: FTS 全链路（L0 人类设定 / L1 元循环 / L2 演化 / L3 组合 / L4 信号与实盘反馈 / 基础设施）
@@ -324,7 +324,7 @@ FTS 已具备完整五层架构：L0 Program.md 人类设定 → L1 Meta-Loop（
 | v2.77.0 | 2C | GAP-I402 | 在线因子性能监控 + 告警（随 I401 数据源）✅ 已关闭（v2.77.0：`ingest_live_ic` 接入 GAP-I401 + 衰减告警 + Prometheus 指标） |
 | v2.78.0 | 2C | GAP-I204 二期 | 符号回归补充搜索 + Pareto 前沿输出 ✅ 已关闭（v2.78.0） |
 | v2.79.0 | 2D | GAP-I304 | Barra 风格暴露控制落地（联动 GAP-S02）✅ 已关闭（v2.62.0 GAP-S02 落地 10 风格暴露 + 评估链 style_exposures 参数；v2.79.0 补充全市场覆盖：`evolution_loop._build_barra_exposures` 自动构建 10 风格暴露接入 L2 `_evaluate_cross_section`（行业中性化后叠加 Barra 风格回归残差），`l2_barra_style_neutral` 配置默认 True + `test_barra_l2_integration.py` 7 用例） |
-| v2.80.0 | 2D | GAP-I101/I102 二期 | 知识源多路扩展 + 人审工作台正式启用 + 全量回归 |
+| v2.80.0 | 2D | GAP-I101/I102 二期 + I103 | 知识源多路扩展 + 人审工作台正式启用 ✅ 已关闭（v2.82.0 实际落地：GAP-I103 另类知识源——`AnnouncementNewsExtractor`（公告/舆情）+ `MacroEventExtractor`（宏观事件）接入股票 5 源/期货 4 源管道（`FTS_L1_*_EXTRACTOR_ENABLED` 开关）；GAP-I101 二期——`BaseExtractorPipeline.extract` 多源并行收集（ThreadPoolExecutor）；GAP-I102 二期——驳回意见写经验链 `ExperienceChain.record_failure`（`FTS_REVIEW_EXPERIENCE_CHAIN` 开关）；新增 16+7 用例） |
 
 **Stage 2 退出标准**：① 深度因子在 L2 出过 ≥ 1 个通过全套审计的精英因子；② 组合层支持均值方差/风险平价；③ 衰减自动退役运行 ≥ 1 个月且决策与人工复核一致率 ≥ 90%；④ 覆盖 11 项 P1 差距中的 9 项；⑤ 全量回归 + 覆盖率达标。
 

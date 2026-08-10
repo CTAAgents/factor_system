@@ -59,8 +59,10 @@ class FakeLLM:
                 "output_type": "signal",
                 "frequency": "daily",
                 "economic_logic": {
-                    "theory": 4, "behavioral": 3,
-                    "microstructure": 4, "institutional": 3,
+                    "theory": 4,
+                    "behavioral": 3,
+                    "microstructure": 4,
+                    "institutional": 3,
                     "narrative": "期货趋势因子",
                 },
             }
@@ -91,8 +93,10 @@ def futures_yaml_file(tmp_path: Path) -> Path:
                 "params": {"window": 10},
                 "input_fields": ["close", "volume"],
                 "economic_logic": {
-                    "theory": 3, "behavioral": 3,
-                    "microstructure": 3, "institutional": 3,
+                    "theory": 3,
+                    "behavioral": 3,
+                    "microstructure": 3,
+                    "institutional": 3,
                     "narrative": "测试期货因子 A",
                 },
             },
@@ -100,8 +104,10 @@ def futures_yaml_file(tmp_path: Path) -> Path:
                 "name": "fut_factor_b",
                 "code": "def factor_program(data, params): return data['close'] * -1",
                 "economic_logic": {
-                    "theory": 3, "behavioral": 3,
-                    "microstructure": 3, "institutional": 3,
+                    "theory": 3,
+                    "behavioral": 3,
+                    "microstructure": 3,
+                    "institutional": 3,
                     "narrative": "测试期货因子 B",
                 },
             },
@@ -177,9 +183,13 @@ class TestResearchReportExtractor:
 
     def test_fetch_reports_success(self, monkeypatch):
         """研报 API 返回数据时拼接为文本。"""
-        resp = _FakeResponse(data={"data": [
-            {"title": "螺纹钢研报", "industryName": "黑色系", "stockName": "RB", "summary": "供给收缩"},
-        ]})
+        resp = _FakeResponse(
+            data={
+                "data": [
+                    {"title": "螺纹钢研报", "industryName": "黑色系", "stockName": "RB", "summary": "供给收缩"},
+                ]
+            }
+        )
         monkeypatch.setattr(requests, "get", lambda *a, **k: resp)
         ext = ResearchReportExtractor()
         text = ext._fetch_reports()
@@ -189,11 +199,13 @@ class TestResearchReportExtractor:
 
     def test_fetch_reports_backup_api(self, monkeypatch):
         """主 API 无数据时走备用搜索 API。"""
+
         def handler(url, *a, **k):
             if "reportapi" in url:
                 return _FakeResponse(data={"data": []})
             # 备用 API
             return _FakeResponse(text="备用研报搜索结果内容")
+
         monkeypatch.setattr(requests, "get", handler)
         ext = ResearchReportExtractor()
         text = ext._fetch_reports()
@@ -201,18 +213,22 @@ class TestResearchReportExtractor:
 
     def test_fetch_reports_all_fail(self, monkeypatch):
         """主 API 与备用 API 均失败时返回空字符串。"""
+
         def handler(url, *a, **k):
             if "reportapi" in url:
                 return _FakeResponse(data={"data": []})
             return _FakeResponse(status_code=500)
+
         monkeypatch.setattr(requests, "get", handler)
         ext = ResearchReportExtractor()
         assert ext._fetch_reports() == ""
 
     def test_fetch_reports_request_exception(self, monkeypatch):
         """研报 API 抛异常时返回空字符串。"""
+
         def raiser(*a, **k):
             raise RuntimeError("network down")
+
         monkeypatch.setattr(requests, "get", raiser)
         ext = ResearchReportExtractor()
         assert ext._fetch_reports() == ""
@@ -243,15 +259,19 @@ class TestResearchReportExtractor:
         monkeypatch.setattr(ext, "_fetch_reports", lambda: "研报文本")
 
         calls = {"n": 0}
+
         def fake_generate_json(prompt, max_tokens=4000):
             calls["n"] += 1
             if calls["n"] == 1:
                 return []
-            return [{
-                "name": "fut_fallback",
-                "code": "def factor_program(data, params): return data['close']",
-                "economic_logic": {"narrative": "fallback"},
-            }]
+            return [
+                {
+                    "name": "fut_fallback",
+                    "code": "def factor_program(data, params): return data['close']",
+                    "economic_logic": {"narrative": "fallback"},
+                }
+            ]
+
         ext.llm_client.generate_json = fake_generate_json
 
         cands = ext.extract("trace_001")
@@ -288,8 +308,10 @@ class TestAcademicPaperExtractor:
 
     def test_fetch_papers_request_exception(self, monkeypatch):
         """arXiv API 抛异常时返回空字符串。"""
+
         def raiser(*a, **k):
             raise RuntimeError("network down")
+
         monkeypatch.setattr(requests, "get", raiser)
         ext = AcademicPaperExtractor()
         assert ext._fetch_papers() == ""
@@ -319,9 +341,9 @@ class TestFuturesExtractorPipeline:
     """测试期货提取器管道。"""
 
     def test_construct_three_sources(self, tmp_path: Path):
-        """管道包含三个源且市场为 futures。"""
+        """管道包含三源及宏观事件源且市场为 futures（GAP-I103）。"""
         pipe = FuturesExtractorPipeline(state_path=str(tmp_path / "state.json"))
-        assert set(pipe.extractors) == {"tinysoft", "broker_reports", "academic_papers"}
+        assert set(pipe.extractors) == {"tinysoft", "broker_reports", "academic_papers", "macro_events"}
         assert pipe.market == "futures"
 
     def test_tinysoft_yaml_path_resolved(self):
@@ -343,7 +365,8 @@ class TestFuturesExtractorPipeline:
     def test_extract_no_pause_when_flag_false(self, tmp_path: Path, monkeypatch):
         """pause_tinysoft_after_first=False 时不自动暂停。"""
         pipe = FuturesExtractorPipeline(
-            state_path=str(tmp_path / "state.json"), pause_tinysoft_after_first=False,
+            state_path=str(tmp_path / "state.json"),
+            pause_tinysoft_after_first=False,
         )
         for ext in pipe.extractors.values():
             monkeypatch.setattr(ext, "extract", lambda trace_id: [])
@@ -389,7 +412,8 @@ class TestFactory:
     def test_create_pipeline(self, tmp_path: Path):
         """工厂函数返回可用的管道实例。"""
         pipe = create_futures_extractor_pipeline(
-            state_path=str(tmp_path / "state.json"), pause_tinysoft_after_first=False,
+            state_path=str(tmp_path / "state.json"),
+            pause_tinysoft_after_first=False,
         )
         assert isinstance(pipe, FuturesExtractorPipeline)
-        assert set(pipe.extractors) == {"tinysoft", "broker_reports", "academic_papers"}
+        assert set(pipe.extractors) == {"tinysoft", "broker_reports", "academic_papers", "macro_events"}

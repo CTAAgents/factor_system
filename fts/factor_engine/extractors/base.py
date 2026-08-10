@@ -14,9 +14,9 @@ import secrets
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
-from ..contracts import SeedCandidate
+from ..contracts import EconomicLogic, FactorSignature, SeedCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +72,17 @@ class BaseExtractor(ABC):
         output_type: str = "signal",
         frequency: str = "daily",
         lookback: int = 20,
-    ) -> dict[str, Any]:
+    ) -> FactorSignature:
         """构造 FactorSignature 兼容的字典。"""
-        return {
-            "input_fields": input_fields,
-            "output_type": output_type,
-            "frequency": frequency,
-            "lookback": lookback,
-        }
+        return cast(
+            FactorSignature,
+            {
+                "input_fields": input_fields,
+                "output_type": output_type,
+                "frequency": frequency,
+                "lookback": lookback,
+            },
+        )
 
     def _llm_extract_factors(
         self,
@@ -102,7 +105,9 @@ class BaseExtractor(ABC):
         if self.llm_client is None or not source_text.strip():
             logger.info(
                 "[_llm_extract_factors] %s: llm_client=%s, source_text_len=%d, 跳过",
-                self.name, bool(self.llm_client), len(source_text),
+                self.name,
+                bool(self.llm_client),
+                len(source_text),
             )
             return []
 
@@ -110,18 +115,10 @@ class BaseExtractor(ABC):
             prefix = "stk_"
             market_desc = "股票/ETF"
             extra_fields = "（含 close, high, low, volume, pe, pb, market_cap 等字段）"
-            extra_directions = (
-                "包括但不限于：截面动量、估值因子、成长因子、质量因子、"
-                "低波因子、红利因子、情绪因子、资金流因子、分析师预期修正等方向。"
-            )
         else:
             prefix = "fut_"
             market_desc = "期货/CTA"
             extra_fields = "（含 close, high, low, volume 等字段）"
-            extra_directions = (
-                "包括但不限于：趋势跟踪、截面动量、期限结构套利、波动率预测、"
-                "量价背离、持仓量分析、季节性模式、跳跃风险、偏度交易等方向。"
-            )
 
         prompt = f"""你是一个量化因子研究专家。请从以下文本中提取可行的{market_desc}因子想法。
 
@@ -173,6 +170,7 @@ class BaseExtractor(ABC):
                 except Exception as de:  # noqa: BLE001
                     logger.warning("[_llm_extract_factors] 保存调试文件失败: %s", de)
                 import json
+
                 result = json.loads(text)
 
             if not isinstance(result, list):
@@ -188,44 +186,51 @@ class BaseExtractor(ABC):
                 economic_logic = item.get("economic_logic", {})
                 if not isinstance(economic_logic, dict):
                     economic_logic = {}
-                candidates.append(SeedCandidate(
-                    candidate_id=candidate_id,
-                    name=name,
-                    code=item["code"],
-                    params=item.get("params", {}),
-                    signature=self._make_signature(
-                        input_fields=item.get("input_fields", ["close"]),
-                        output_type=item.get("output_type", "signal"),
-                        frequency=item.get("frequency", "daily"),
-                        lookback=item.get("lookback", 20),
-                    ),
-                    economic_logic=economic_logic,
-                    source="l1_extractor_pipeline",
-                    market="futures",
-                    parent_topic=f"extractor_pipeline/{self.name}/{name}",
-                    debate_round_ref=None,
-                    debate_gap=None,
-                    web_snapshot_ref=None,
-                    is_executable=False,
-                    is_duplicate=False,
-                    passed_l1_verifier=False,
-                    failure_reasons=[],
-                    trace_id=trace_id,
-                    created_at=datetime.now().isoformat(),
-                    injected_to_l2=False,
-                    injected_at=None,
-                ))
+                candidates.append(
+                    SeedCandidate(
+                        candidate_id=candidate_id,
+                        name=name,
+                        code=item["code"],
+                        params=item.get("params", {}),
+                        signature=self._make_signature(
+                            input_fields=item.get("input_fields", ["close"]),
+                            output_type=item.get("output_type", "signal"),
+                            frequency=item.get("frequency", "daily"),
+                            lookback=item.get("lookback", 20),
+                        ),
+                        economic_logic=cast(EconomicLogic, economic_logic),
+                        source="l1_extractor_pipeline",
+                        market="futures",
+                        parent_topic=f"extractor_pipeline/{self.name}/{name}",
+                        debate_round_ref=None,
+                        debate_gap=None,
+                        web_snapshot_ref=None,
+                        is_executable=False,
+                        is_duplicate=False,
+                        passed_l1_verifier=False,
+                        failure_reasons=[],
+                        trace_id=trace_id,
+                        created_at=datetime.now().isoformat(),
+                        injected_to_l2=False,
+                        injected_at=None,
+                    )
+                )
 
             logger.info(
                 "[_llm_extract_factors] %s: LLM 提取完成, candidates=%d, source_len=%d",
-                self.name, len(candidates), len(source_text),
+                self.name,
+                len(candidates),
+                len(source_text),
             )
             return candidates
 
         except Exception as e:
             logger.error(
                 "[_llm_extract_factors] %s: LLM 提取异常: %s, trace_id=%s",
-                self.name, e, trace_id, exc_info=True,
+                self.name,
+                e,
+                trace_id,
+                exc_info=True,
             )
             return []
 
@@ -258,7 +263,10 @@ class BaseExtractorPipeline(ABC):
         self._load_state()
 
     def extract(self, trace_id: str) -> list[SeedCandidate]:
-        """执行所有未暂停提取器的提取。
+        """并行执行所有未暂停提取器的提取（GAP-I101 二期，v2.80.0）。
+
+        多源并行注入：各源独立无共享可变状态，线程并行可显著缩短
+        多路知识源（研报/论文/公告/宏观等）的合并等待时间。
 
         Args:
             trace_id: 全链路 trace_id
@@ -266,32 +274,72 @@ class BaseExtractorPipeline(ABC):
         Returns:
             list[SeedCandidate] — 合并后的候选因子列表
         """
-        all_candidates: list[SeedCandidate] = []
-        for name, extractor in self.extractors.items():
-            if extractor.paused:
-                logger.info(
-                    "[ExtractorPipeline] 跳过已暂停源: %s (market=%s)",
-                    name, self.market,
-                )
-                continue
-            try:
-                candidates = extractor.extract(trace_id)
-                logger.info(
-                    "[ExtractorPipeline] 源 %s 提取完成: %d 个候选 (market=%s)",
-                    name, len(candidates), self.market,
-                )
-                all_candidates.extend(candidates)
-            except Exception as e:
-                logger.error(
-                    "[ExtractorPipeline] 源 %s 提取异常: %s (market=%s)",
-                    name, e, self.market, exc_info=True,
-                )
+        active = [(name, ex) for name, ex in self.extractors.items() if not ex.paused]
+        if not active:
+            logger.info("[ExtractorPipeline] 全部源已暂停, 跳过 (market=%s)", self.market)
+            return []
+
+        # 单源直跑（避免线程开销）；多源并行收集
+        if len(active) == 1:
+            name, ex = active[0]
+            cands = self._extract_one(name, ex, trace_id)
+            all_candidates: list[SeedCandidate] = list(cands)
+        else:
+            all_candidates = self._extract_parallel(active, trace_id)
 
         logger.info(
             "[ExtractorPipeline] 全部提取完成: 共 %d 个候选 (market=%s, trace_id=%s)",
-            len(all_candidates), self.market, trace_id,
+            len(all_candidates),
+            self.market,
+            trace_id,
         )
         return all_candidates
+
+    def _extract_parallel(
+        self,
+        active: list[tuple[str, BaseExtractor]],
+        trace_id: str,
+    ) -> list[SeedCandidate]:
+        """并行收集多源候选（ThreadPoolExecutor，单源异常不影响其他源）。"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        results: list[list[SeedCandidate]] = []
+        with ThreadPoolExecutor(max_workers=min(len(active), 4)) as ex:
+            futures = {ex.submit(self._extract_one, name, ex_, trace_id): name for name, ex_ in active}
+            for fut in as_completed(futures):
+                name = futures[fut]
+                try:
+                    results.append(fut.result())
+                except Exception as e:  # pragma: no cover - 防御兜底
+                    logger.error(
+                        "[ExtractorPipeline] 并行提取异常: 源 %s: %s (market=%s)",
+                        name,
+                        e,
+                        self.market,
+                        exc_info=True,
+                    )
+        return [c for cands in results for c in cands]
+
+    def _extract_one(self, name: str, extractor: BaseExtractor, trace_id: str) -> list[SeedCandidate]:
+        """执行单源提取（含异常降级与统计日志）。"""
+        try:
+            candidates = extractor.extract(trace_id)
+            logger.info(
+                "[ExtractorPipeline] 源 %s 提取完成: %d 个候选 (market=%s)",
+                name,
+                len(candidates),
+                self.market,
+            )
+            return candidates
+        except Exception as e:
+            logger.error(
+                "[ExtractorPipeline] 源 %s 提取异常: %s (market=%s)",
+                name,
+                e,
+                self.market,
+                exc_info=True,
+            )
+            return []
 
     def pause_source(self, name: str) -> None:
         """暂停指定源。"""
@@ -323,7 +371,8 @@ class BaseExtractorPipeline(ABC):
                     self.extractors[name].paused = paused
             logger.info(
                 "[ExtractorPipeline] 状态已加载: market=%s, sources=%s",
-                self.market, {k: v for k, v in market_state.items()},
+                self.market,
+                {k: v for k, v in market_state.items()},
             )
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("[ExtractorPipeline] 状态加载失败: %s", e)
@@ -351,7 +400,8 @@ class BaseExtractorPipeline(ABC):
 
         logger.info(
             "[ExtractorPipeline] 状态已持久化: market=%s, sources=%s",
-            self.market, {k: v for k, v in state.get(self.market, {}).items()},
+            self.market,
+            {k: v for k, v in state.get(self.market, {}).items()},
         )
 
     @staticmethod
@@ -382,7 +432,7 @@ class BaseExtractorPipeline(ABC):
                 "frequency": factor.get("frequency", "daily"),
                 "lookback": factor.get("lookback", 20),
             },
-            economic_logic=economic_logic,
+            economic_logic=cast(EconomicLogic, economic_logic),
             source="l1_extractor_pipeline",
             market=market,
             parent_topic=f"extractor_pipeline/{family_name or source}/{name}",

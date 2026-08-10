@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.81.0
+> 版本: v2.82.0
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -185,6 +185,17 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ GAP-F15（GAP-042，极值扰动一票否决）— `evaluation_chain._compute_extreme_perturbation_ic` 极值剔除重算 IC（pct 可配置 `FTSConfig.extreme_perturb_pct` 默认 0.01）→ `FactorEvaluation.extreme_perturbation` → `_promote_to_elite` 传入 `HighICScreener` V2 一票否决（ic_drop > 25%）真正生效；新增 test_extreme_perturb.py 10 用例
 - ✅ GAP-F10（种子库去重）— `scripts/verify_seed_dedup.py` 内嵌 vs YAML 种子交叉去重校验 + 家族上限配置化（`FTSConfig.max_per_family` env 可配，缺省 15）+ 被拒因子日志；新增 test_seed_dedup.py 13 用例
 - ✅ 全量回归 4671 passed（修复 mypy 收敛引入的 schema.py verify_database 元组表名 SQL 回归 + test_jobs mock 同步）
+
+### v2.82.0 L1 知识源多路扩展 + 人审经验链闭环（GAP-I103 + I101/I102 二期，Stage 2 2D，已完成）
+
+**完成时间**: 2026-08-10
+
+**核心产出（总纲 plans/23 GAP-I103 + GAP-I101/I102 二期）**:
+- ✅ GAP-I103 另类知识源多路——新建 `fts/factor_engine/extractors/alternative_sources.py`：`AnnouncementNewsExtractor`（东方财富公告中心 API + LLM 提取 A 股事件/舆情因子）+ `MacroEventExtractor`（东方财富宏观日历 API + LLM 提取跨品种/跨板块宏观方向因子）；对齐既有三源模式（继承 `BaseExtractor` 复用 `_llm_extract_factors`，requests+timeout=15，失败/空数据优雅降级返回空不阻断 L1）；股票管道接入公告+宏观两源（5 源）、期货管道接入宏观源（4 源），`FTSConfig` 新增 `l1_announcement_extractor_enabled`/`l1_macro_extractor_enabled`（`FTS_L1_*_EXTRACTOR_ENABLED` 环境变量，默认 True），meta_loop 构造透传
+- ✅ GAP-I101 二期多源并行注入——`BaseExtractorPipeline.extract` 改为多源并行收集（ThreadPoolExecutor，单源异常不影响其他源，`_extract_one` 含异常降级与统计日志），多路知识源合并等待时间显著缩短
+- ✅ GAP-I102 二期审查意见接入经验链——`FactorReviewWorkflow` 新增 `experience_chain` 可选注入 + `_record_rejection`：驳回且 comment 非空时构造 `ExperienceTrace`（success=False + `evaluation.failure_reasons` + lessons 含审查人）写入 `ExperienceChain.record_failure`；`FTS_REVIEW_EXPERIENCE_CHAIN` 开关默认 True，写入异常降级不阻断审查流程
+- 📋 新增测试 23 用例：`test_alternative_sources.py` 16（公告 API 成功/空/异常/暂停/LLM 提取/管道接入+开关）+ `test_review_experience_chain.py` 7（驳回写链/批准不写/空 comment 不写/开关关闭/异常降级/审查人入 lessons/幂等）；提取器+审查 122 passed + meta_loop/settings 149 passed 全绿
+- ✅ 文档同步：01/03/06/07/08/09 + 23 计划（GAP-I103/I101/I102 二期 ✅ 关闭）+ pyproject bump v2.81.0 → v2.82.0
 
 ### v2.61.0 股票流水线 GAP-S01（行业/市值中性化主流程，已完成）
 
@@ -630,6 +641,7 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.82.0** | 2026-08-10 | L1 知识源多路扩展 + 人审经验链闭环（plans/23 GAP-I103 + I101/I102 二期）：另类知识源 `AnnouncementNewsExtractor`（公告/舆情）+ `MacroEventExtractor`（宏观事件）接入股票 5 源/期货 4 源管道；`BaseExtractorPipeline.extract` 多源并行收集；驳回意见写经验链 `ExperienceChain.record_failure`；新增 23 测试用例 |
 | **v2.69.0** | 2026-08-10 | 股票流水线成熟度收尾（plans/22 GAP-S09~S12 全部落地，13 项缺陷闭环）：seed_analyzer.py 种子表达式静态 PIT 审计 + estimate_lookback_static 替换正则；verify_registry_consistency 双注册表一致性；operator_first 模式（股票演化默认算子优先 + 方法分布记账）；A_SHARE_FIELDS 10 字段 + L5b 4 A 股领域算子；新增 27 测试用例 |
 | **v2.65.0** | 2026-08-09 | 股票流水线 GAP-S03：A 股行业轮动 + 风格轮动 Regime 检测——`fts/factor_engine/stock_regime.py`（`StockRegimeSelector`：行业动量离散度→集中/轮动/均衡三态；大小盘+成长价值比值动量→风格双态；复用 MultiHorizonHMMDetector 多周期集成校正置信度）；`REGIME_STYLE_MULTIPLIERS` 新增 6 股票风格键；`PortfolioLoop.run(stock_regime=...)` 驱动 L3 风格自适应权重；新增 test_stock_regime.py 19 用例 |
 | **v2.62.0** | 2026-08-09 | 股票流水线 GAP-S02：Barra 风格因子体系——`fts/factor_engine/barra/` 三文件（barra_style.py 10 风格暴露引擎 + barra_neutralizer.py 逐日 OLS 回归残差 + __init__ 导出）；`cross_section_evaluate_backtest` 新增 `style_exposures` 参数 + Step 2.6 风格回归残差（GAP-S01 行业去均值后叠加风格剥离，两级中性化链）；nonlinear_size 引擎层截面二次计算；新增 test_barra.py 13 用例 |

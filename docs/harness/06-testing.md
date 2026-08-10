@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.81.0
+> 版本: v2.82.0
 > 最后更新: 2026-08-10
 
 ---
@@ -288,6 +288,8 @@ TOTAL                                      20326   1254    94%
 
 | 测试文件 | 用例数 | 覆盖模块 |
 |:---------|:-------|:---------|
+| `tests/factor_engine/extractors/test_alternative_sources.py` | 16 | 另类知识源（GAP-I103，v2.82.0）：公告提取器 8（暂停/API 成功/空数据/无标题跳过/异常/非200/无数据降级/LLM 提取 + parent_topic）+ 宏观提取器 6（暂停/成功/空/异常/缺失 key/期货 LLM 提取）+ 管道接入 4（股票含公告+宏观/开关关闭/期货含宏观/关闭） |
+| `tests/factor_engine/test_review_experience_chain.py` | 7 | 审查意见接入经验链（GAP-I102 二期，v2.82.0）：驳回写 failure 轨迹（success=False/failure_reasons/lessons）/批准不写/空 comment 不写/开关关闭不写/经验链异常降级/审查人入 lessons/幂等不重复写 |
 | `tests/data_sources/test_tqsdk_tick_source.py` | 10 | TQSDK tick 数据源（品种映射/tick 解析/tick_cache 迁移/降级链/Provider 接口） |
 | `tests/data_sources/test_tdx_minute_source.py` | 29 | 通达信分钟适配器（主力连续代码映射/列字典解析/周期映射） |
 | `tests/data_sources/test_macro_aligner.py` | ~8 | 宏观字段增强层（EDB 缓存读写/时序对齐/发布滞后/缺数据降级/批量注入） |

@@ -59,8 +59,10 @@ class FakeLLM:
                 "output_type": "signal",
                 "frequency": "daily",
                 "economic_logic": {
-                    "theory": 4, "behavioral": 3,
-                    "microstructure": 4, "institutional": 3,
+                    "theory": 4,
+                    "behavioral": 3,
+                    "microstructure": 4,
+                    "institutional": 3,
                     "narrative": "股票动量因子",
                 },
             }
@@ -91,8 +93,10 @@ def stock_yaml_file(tmp_path: Path) -> Path:
                 "params": {"window": 10},
                 "input_fields": ["close", "volume"],
                 "economic_logic": {
-                    "theory": 3, "behavioral": 3,
-                    "microstructure": 3, "institutional": 3,
+                    "theory": 3,
+                    "behavioral": 3,
+                    "microstructure": 3,
+                    "institutional": 3,
                     "narrative": "测试股票因子 A",
                 },
             },
@@ -100,8 +104,10 @@ def stock_yaml_file(tmp_path: Path) -> Path:
                 "name": "stock_factor_b",
                 "code": "def factor_program(data, params): return data['close'] * -1",
                 "economic_logic": {
-                    "theory": 3, "behavioral": 3,
-                    "microstructure": 3, "institutional": 3,
+                    "theory": 3,
+                    "behavioral": 3,
+                    "microstructure": 3,
+                    "institutional": 3,
                     "narrative": "测试股票因子 B",
                 },
             },
@@ -138,9 +144,17 @@ class TestYamlSeedExtractor:
     def test_yaml_missing_falls_back_to_builtin(self, tmp_path: Path):
         """YAML 文件不存在时回退到内置因子。"""
         builtin = [
-            {"name": "builtin_stock", "code": "code",
-             "economic_logic": {"narrative": "n", "theory": 3, "behavioral": 3,
-                                "microstructure": 3, "institutional": 3}},
+            {
+                "name": "builtin_stock",
+                "code": "code",
+                "economic_logic": {
+                    "narrative": "n",
+                    "theory": 3,
+                    "behavioral": 3,
+                    "microstructure": 3,
+                    "institutional": 3,
+                },
+            },
         ]
         ext = YamlSeedExtractor(
             name="jq_factors",
@@ -198,9 +212,13 @@ class TestStockResearchReportExtractor:
 
     def test_fetch_reports_success(self, monkeypatch):
         """研报 API 返回数据时拼接为文本。"""
-        resp = _FakeResponse(data={"data": [
-            {"title": "钢铁行业研报", "industryName": "钢铁", "stockName": "宝钢", "summary": "需求回暖"},
-        ]})
+        resp = _FakeResponse(
+            data={
+                "data": [
+                    {"title": "钢铁行业研报", "industryName": "钢铁", "stockName": "宝钢", "summary": "需求回暖"},
+                ]
+            }
+        )
         monkeypatch.setattr(requests, "get", lambda *a, **k: resp)
         ext = StockResearchReportExtractor()
         text = ext._fetch_reports()
@@ -225,8 +243,10 @@ class TestStockResearchReportExtractor:
 
     def test_fetch_reports_request_exception(self, monkeypatch):
         """研报 API 抛异常时返回空字符串。"""
+
         def raiser(*a, **k):
             raise RuntimeError("network down")
+
         monkeypatch.setattr(requests, "get", raiser)
         ext = StockResearchReportExtractor()
         assert ext._fetch_reports() == ""
@@ -259,15 +279,19 @@ class TestStockResearchReportExtractor:
 
         # 第一次调用返回候选（研报路径），第二次返回空（回退路径）
         calls = {"n": 0}
+
         def fake_generate_json(prompt, max_tokens=4000):
             calls["n"] += 1
             if calls["n"] == 1:
                 return []
-            return [{
-                "name": "stk_fallback",
-                "code": "def factor_program(data, params): return data['close']",
-                "economic_logic": {"narrative": "fallback"},
-            }]
+            return [
+                {
+                    "name": "stk_fallback",
+                    "code": "def factor_program(data, params): return data['close']",
+                    "economic_logic": {"narrative": "fallback"},
+                }
+            ]
+
         ext.llm_client.generate_json = fake_generate_json
 
         cands = ext.extract("trace_001")
@@ -310,8 +334,10 @@ class TestStockAcademicPaperExtractor:
 
     def test_fetch_papers_request_exception(self, monkeypatch):
         """arXiv API 抛异常时返回空字符串。"""
+
         def raiser(*a, **k):
             raise RuntimeError("network down")
+
         monkeypatch.setattr(requests, "get", raiser)
         ext = StockAcademicPaperExtractor()
         assert ext._fetch_papers() == ""
@@ -341,10 +367,14 @@ class TestStockExtractorPipeline:
     """测试股票提取器管道。"""
 
     def test_construct_three_sources(self, tmp_path: Path):
-        """管道包含三个源且市场为 stock。"""
+        """管道包含三源及另类知识源且市场为 stock（GAP-I103）。"""
         pipe = StockExtractorPipeline(state_path=str(tmp_path / "state.json"))
         assert set(pipe.extractors) == {
-            "jq_factors", "broker_reports_stock", "academic_papers_stock",
+            "jq_factors",
+            "broker_reports_stock",
+            "academic_papers_stock",
+            "announcement_news_stock",
+            "macro_events_stock",
         }
         assert pipe.market == "stock"
 
@@ -376,7 +406,8 @@ class TestStockExtractorPipeline:
     def test_extract_no_pause_when_flag_false(self, tmp_path: Path, monkeypatch):
         """pause_jq_after_first=False 时不自动暂停。"""
         pipe = StockExtractorPipeline(
-            state_path=str(tmp_path / "state.json"), pause_jq_after_first=False,
+            state_path=str(tmp_path / "state.json"),
+            pause_jq_after_first=False,
         )
         for ext in pipe.extractors.values():
             monkeypatch.setattr(ext, "extract", lambda trace_id: [])
@@ -431,9 +462,14 @@ class TestFactory:
     def test_create_pipeline(self, tmp_path: Path):
         """工厂函数返回可用的管道实例。"""
         pipe = create_stock_extractor_pipeline(
-            state_path=str(tmp_path / "state.json"), pause_jq_after_first=False,
+            state_path=str(tmp_path / "state.json"),
+            pause_jq_after_first=False,
         )
         assert isinstance(pipe, StockExtractorPipeline)
         assert set(pipe.extractors) == {
-            "jq_factors", "broker_reports_stock", "academic_papers_stock",
+            "jq_factors",
+            "broker_reports_stock",
+            "academic_papers_stock",
+            "announcement_news_stock",
+            "macro_events_stock",
         }

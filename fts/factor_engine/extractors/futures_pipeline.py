@@ -14,9 +14,6 @@ fts/factor_engine/extractors/futures_pipeline.py — 期货三源提取器管道
 from __future__ import annotations
 
 import logging
-import secrets
-import hashlib
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -40,6 +37,7 @@ FACTOR_FILE_MAP = {
 
 
 # ─── 源 1: YamlSeedExtractor（天软，静态） ─────────────────
+
 
 class YamlSeedExtractor(BaseExtractor):
     """从 YAML 种子文件读取因子并转换为候选的提取器。
@@ -68,7 +66,8 @@ class YamlSeedExtractor(BaseExtractor):
         if not self.yaml_file.exists():
             logger.warning(
                 "[YamlSeedExtractor] %s 文件不存在: %s",
-                self.name, self.yaml_file,
+                self.name,
+                self.yaml_file,
             )
             return []
 
@@ -77,7 +76,9 @@ class YamlSeedExtractor(BaseExtractor):
                 data = yaml.safe_load(f)
         except Exception as e:
             logger.error(
-                "[YamlSeedExtractor] %s 加载失败: %s", self.name, e,
+                "[YamlSeedExtractor] %s 加载失败: %s",
+                self.name,
+                e,
             )
             return []
 
@@ -93,12 +94,16 @@ class YamlSeedExtractor(BaseExtractor):
 
         logger.info(
             "[YamlSeedExtractor] %s 提取完成: %d 个候选 (file=%s)",
-            self.name, len(candidates), self.yaml_file.name,
+            self.name,
+            len(candidates),
+            self.yaml_file.name,
         )
         return candidates
 
     def _convert_factor(
-        self, factor: dict[str, Any], trace_id: str,
+        self,
+        factor: dict[str, Any],
+        trace_id: str,
     ) -> SeedCandidate:
         return BaseExtractorPipeline._yaml_factor_to_candidate(
             factor=factor,
@@ -118,7 +123,7 @@ _EASTMONEY_REPORT_PARAMS = {
     "pageSize": 5,
     "industryCode": "*",
     "pageNo": 1,
-    "reportType": 1,       # 个股研报
+    "reportType": 1,  # 个股研报
     "columnsType": 1,
     "source": "WEB",
     "client": "WEB",
@@ -195,7 +200,8 @@ class ResearchReportExtractor(BaseExtractor):
             c["market"] = "futures"
         logger.info(
             "[ResearchReportExtractor] 回退提取完成: %d 个候选, trace_id=%s",
-            len(candidates), trace_id,
+            len(candidates),
+            trace_id,
         )
         return candidates
 
@@ -224,9 +230,7 @@ class ResearchReportExtractor(BaseExtractor):
                             stock = rep.get("stockName", "")
                             summary = rep.get("summary", "")
                             if title:
-                                text_parts.append(
-                                    f"标题: {title}\n板块: {industry}\n标的: {stock}\n摘要: {summary}\n"
-                                )
+                                text_parts.append(f"标题: {title}\n板块: {industry}\n标的: {stock}\n摘要: {summary}\n")
                 except Exception as e:
                     logger.debug("[ResearchReportExtractor] 类型 %d 请求失败: %s", report_type, e)
                     continue
@@ -249,7 +253,8 @@ class ResearchReportExtractor(BaseExtractor):
 
         except Exception as e:
             logger.warning(
-                "[ResearchReportExtractor] 研报 API 全部不可用: %s", e,
+                "[ResearchReportExtractor] 研报 API 全部不可用: %s",
+                e,
             )
             return ""
 
@@ -309,7 +314,8 @@ class AcademicPaperExtractor(BaseExtractor):
                 c["market"] = "futures"
             logger.info(
                 "[AcademicPaperExtractor] 提取完成: %d 个候选, trace_id=%s",
-                len(candidates), trace_id,
+                len(candidates),
+                trace_id,
             )
             return candidates
 
@@ -340,21 +346,22 @@ class AcademicPaperExtractor(BaseExtractor):
                     )
                     if r.status_code == 200:
                         import xml.etree.ElementTree as ET
+
                         root = ET.fromstring(r.content)
                         ns = {"atom": "http://www.w3.org/2005/Atom"}
                         entries = root.findall("atom:entry", ns)
                         for entry in entries:
                             title_el = entry.find("atom:title", ns)
                             summary_el = entry.find("atom:summary", ns)
-                            title = title_el.text.strip() if title_el is not None else ""
-                            summary = summary_el.text.strip()[:500] if summary_el is not None else ""
+                            title = (title_el.text or "").strip() if title_el is not None else ""
+                            summary = (summary_el.text or "").strip()[:500] if summary_el is not None else ""
                             if title:
-                                text_parts.append(
-                                    f"类别: {cat}\n标题: {title}\n摘要: {summary}\n"
-                                )
+                                text_parts.append(f"类别: {cat}\n标题: {title}\n摘要: {summary}\n")
                 except Exception as e:
                     logger.debug(
-                        "[AcademicPaperExtractor] 类别 %s 请求失败: %s", cat, e,
+                        "[AcademicPaperExtractor] 类别 %s 请求失败: %s",
+                        cat,
+                        e,
                     )
                     continue
 
@@ -362,12 +369,14 @@ class AcademicPaperExtractor(BaseExtractor):
 
         except Exception as e:
             logger.warning(
-                "[AcademicPaperExtractor] arXiv API 全部不可用: %s", e,
+                "[AcademicPaperExtractor] arXiv API 全部不可用: %s",
+                e,
             )
             return ""
 
 
 # ─── 管道 ──────────────────────────────────────────────────
+
 
 class FuturesExtractorPipeline(BaseExtractorPipeline):
     """期货三源提取器管道。
@@ -382,12 +391,14 @@ class FuturesExtractorPipeline(BaseExtractorPipeline):
         state_path: str | Path = "memory/extractors/state.json",
         pause_tinysoft_after_first: bool = True,
         llm_client: Optional[Any] = None,
+        macro_enabled: bool = True,
     ):
         """
         Args:
             state_path: 状态持久化路径
             pause_tinysoft_after_first: 是否在首次提取后自动暂停天软源
             llm_client: LLM 客户端（用于动态因子提取）
+            macro_enabled: 是否启用宏观事件提取器（GAP-I103）
         """
         self._pause_tinysoft_after_first = pause_tinysoft_after_first
         self._first_extract = True
@@ -415,6 +426,19 @@ class FuturesExtractorPipeline(BaseExtractorPipeline):
                 llm_client=llm_client,
             ),
         ]
+        # GAP-I103 (v2.80.0): 另类知识源——宏观事件（期货侧，跨品种方向注入）
+        if macro_enabled:
+            from .alternative_sources import MacroEventExtractor
+
+            extractors.append(
+                MacroEventExtractor(
+                    name="macro_events",
+                    family_name="macro_events",
+                    paused=False,
+                    llm_client=llm_client,
+                    market="futures",
+                )
+            )
 
         super().__init__(
             extractors=extractors,
@@ -442,17 +466,20 @@ class FuturesExtractorPipeline(BaseExtractorPipeline):
 
 # ─── 便捷工厂函数 ──────────────────────────────────────────
 
+
 def create_futures_extractor_pipeline(
     state_path: str | Path = "memory/extractors/state.json",
     pause_tinysoft_after_first: bool = True,
     llm_client: Optional[Any] = None,
+    macro_enabled: bool = True,
 ) -> FuturesExtractorPipeline:
-    """创建期货三源提取器管道。
+    """创建期货提取器管道。
 
     Args:
         state_path: 状态持久化路径
         pause_tinysoft_after_first: 是否在首次提取后自动暂停天软源
         llm_client: LLM 客户端（用于动态因子提取）
+        macro_enabled: 是否启用宏观事件提取器（GAP-I103）
 
     Returns:
         FuturesExtractorPipeline 实例
@@ -461,4 +488,5 @@ def create_futures_extractor_pipeline(
         state_path=state_path,
         pause_tinysoft_after_first=pause_tinysoft_after_first,
         llm_client=llm_client,
+        macro_enabled=macro_enabled,
     )
