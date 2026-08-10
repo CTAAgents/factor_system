@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v2.86.0
+> 版本: v2.88.0
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -90,6 +90,8 @@
 | GAP-054 | `scripts/liquidity_snapshot.py` + `scripts/sync_liquidity_pool.py` + `fts/data_futures.py` + `fts/scheduler/jobs.py` | FUTURES_CORE_SUBSET 为静态硬编码 25 品种，无法随市场流动性变化动态调整；流动性评估口径缺陷（当前主力合约 60 日历史含换月窗口污染，AU/IM/IF 等刚换月品种成交额被低估 10-1000 倍；合约乘数表 AU0 带主连后缀匹配失败；月均价合约 L-F2610 误匹配） | 核心交易池与市场流动性脱节：流动性恶化品种无法退出、改善品种无法进入；因子横截面与实盘可交易性错配（机构级缺陷） | v2.80.0 | ✅ 已关闭（v2.80.0：TQ-Local 17709 真实主力合约最近 5 日主力窗口口径 + 乘数表修复 + 月均价合约排除 + 渐进式替换动态池 + get_dynamic_core_subset 运行期零风险降级 + 每周六 08:00 调度刷新 + 10 用例；2026-08-10 快照 25 核心品种全部达标） |
 | GAP-055 | `fts/data_futures.py`（FUTURES_HOLDOUT） | 盲测池仅 6 个且以小品种为主（JD/AP/FG/UR 流动性弱），存在选择偏差，可能系统性低估因子跨品种泛化能力 | 盲测结论失真：因子泛化能力被低估，精英因子筛选标准失真 | v2.81.0 | ✅ 已关闭（v2.81.0：盲测池 6→15 按产业链分层抽样覆盖 10 条产业链，与核心动态池/分层训练集互不重叠，含大流动性代表 RU0/L0；新增 test_holdout_pool.py 9 用例全绿） |
 | GAP-056 | `fts/data_futures.py`（DuckDBConnection/AsyncWriteQueue/retry_on_conflict）+ `fts/scheduler/jobs.py` | DuckDB 并发模型治标不治本：① 跨进程并发写（scripts 与调度 job 并行）抢文件锁产生 ConcurrentTransactionException；② 写事务/checkpoint 期间只读查询被文件锁阻塞，回测/因子加载随机卡顿；③ 重试是概率规避而非结构消除，高负载下重试耗尽仍抛错 | 数据层并发冲突/读阻塞影响全链路稳定性，回测与实盘数据路径存在随机失败风险（架构级缺陷，见 design/E.1） | 1 月内 | ✅ 已关闭（v2.86.0：DuckDBWriter 单写者 + 进程内写锁 + executemany/copy_from_records 显式 BEGIN/COMMIT 整批原子 + DuckDBReader 读连接池读写解耦 + _get_db 拆分为 _get_writer/_get_reader + 4 配置项 + 15 用例，见 design/E.1-duckdb-concurrency-design.md） |
+| GAP-057 | `fts/data_sources/tq_source.py` + `fts/data_sources/tdx_minute_source.py` + `fts/core/enums.py` | 通达信数据源双源割裂且命名误导：① TQ_LOCAL 标注端口 7721 实际不存在（量化模拟客户端真实监听 17709），TQLocalSource 走 `tq_get_kline/tq_get_quote` 方法名返回 -32601 不可用；② TDXMinuteSource 仅支持分钟，命名暗示局限；③ 同一下游服务被拆成两个源，聚合器双源配置混淆，`TDX_MINUTE`/`TQ_LOCAL` 枚举语义不清 | 数据源路径含失效源，分钟/日线/快照能力碎片化，枚举与降级链语义误导维护与排障 | 2 周内 | ✅ 已关闭（v2.87.0：合并为 `TdxLocalSource` 单源统一承载日线（day→1d，17 列）+ 分钟（1m~60m，11 列）+ 快照（get_market_snapshot），`source_name="TDX_LOCAL"` 端口 17709；`DataSource.TDX_MINUTE`→`TDX_LOCAL`、TQ_LOCAL 标注已废弃；删除 tq_source.py/tdx_minute_source.py；aggregator/fusion/data_futures/cli 全链路替换；70 用例（51+19）迁移全绿，tdx_local_source 覆盖率 93%） |
+| GAP-058 | `tests/test_data_futures_panel.py::TestDominantContracts` + `fts/data_futures._get_reader` | 主力合约判定 2 用例（`test_missing_symbols_empty`/`test_db_error_returns_empty`）在全量回归中顺序依赖性失败：mock `_get_reader` 未拦截时泄漏真实 DuckDB 数据（RB2610/CU2609）；单文件/定向组合运行全部通过（325/363/424/261 用例组合多次验证），仅在特定全量顺序下复现（先前会话 `_regress_tl_fail`/`toplevel_all`/`blockA` 日志同失败、`_regress_tl_ok` 1041 passed 同配置通过）——疑与 v2.86.0 DuckDBReader 读连接池模块级 `_READER` 单例在全量序下连接状态相关 | 全量回归 2 红，回归基线无法一键全绿，新改动需人工排除此噪音 | 1 月内 | ⏳ 开放（v2.87.0 全量 5130 passed/2 failed；非本次 TDX_LOCAL 合并引入，定向回归 363 用例全绿） |
 
 
 
@@ -506,12 +508,13 @@
 - **解决方案**: ① `FactorFamily` 新增 qlib/gtja/wq101 三个标准家族（14→17 大类）；② `_infer_factor_family` 按名称前缀精确映射（`qlib_`→qlib、`gtja_`→gtja、`alpha_`/`wq_`→wq101、`fut_` 保持 trend）；③ `_infer_family_from_filename` 与 YAML 种子 family 字段对齐（qlib158/gtja191 → qlib/gtja，wq101 保持）；④ DuckDB 一次性数据迁移 111 条记录（qlib 43 / gtja 36 / wq101 30 / fut_gp_*→behavioral 2），迁移前已备份 `factor_catalog.duckdb.bak_family_split_20260808`
 - **验证结果**: 迁移后 cross_section 剩余 0 条；新增 12 测试用例（test_contracts_kind.py 8 个 family 推断 + test_seed_loader.py 4 个文件名映射），全绿
 
-### GAP-041: 16 个覆盖率 <90% 模块（P2，开放）
+### GAP-041: 14 个覆盖率 <90% 模块（P2，已关闭）
 
-- **问题描述**: v2.47.0 全量回归（3836 passed，覆盖率 94%）后仍有 16 个模块覆盖率 <90%，缺口语句集中在：① 外部数据源网络/鉴权路径（`ifind_source` 84% / `wind_source` 87% / `tq_source` 81% / `tdx_minute_source` 67% / `tqsdk_tick_source` 73%，需模拟网络异常/鉴权失败/超时）；② 近期新增模块参数校验与降级分支（`cross_market/data_adapter` 55% / `factor_clustering` 64% / `factor_db/migrate_from_json` 73%）；③ 核心引擎异常兜底（`evolution_loop` 80% / `data` 85% / `factor_db/repository` 85% / `ml/models` 86% / `causal_validator` 89% / `contracts` 89% / `factor_screener` 87% / `data_quality_monitor` 82%）
+- **问题描述**: v2.47.0 全量回归（3836 passed，覆盖率 94%）后 16 个模块覆盖率 <90%（v2.87.0 后 14 个：`tdx_minute_source`/`tq_source` 已合并删除，新源 `tdx_local_source` 93% 达标），缺口语句集中在：① 外部数据源网络/鉴权路径（`ifind_source` 84% / `wind_source` 87% / `tqsdk_tick_source` 73%，需模拟网络异常/鉴权失败/超时）；② 近期新增模块参数校验与降级分支（`cross_market/data_adapter` 55% / `factor_clustering` 64% / `factor_db/migrate_from_json` 73%）；③ 核心引擎异常兜底（`evolution_loop` 80% / `data` 85% / `factor_db/repository` 85% / `ml/models` 86% / `causal_validator` 89% / `contracts` 89% / `factor_screener` 87% / `data_quality_monitor` 82%）
 - **影响范围**: 关键路径异常分支未验证，外部数据源降级逻辑存在隐性 bug 风险；P0 级 bug（如 regime.py 模块 logger 缺失、http_server.py DuckDB 列名获取）即由低覆盖模块引入
 - **处理方案**: 按优先级分批补充（P1：`cross_market/data_adapter`、`factor_clustering`、`factor_db/repository`；P2：外部数据源异常路径 mock 测试；P3：`evolution_loop` 兜底分支）
-- **处理期限**: 3 月内（P2）
+- **验证结果**: v2.88.0（GAP-F16）三分组补齐 14 个 <90% 模块测试 +341 用例（组A 数据源 139：ifind/wind/tqsdk_tick/tq/tdx_minute 网络异常/鉴权失败/超时/降级兜底 mock + data/data_quality_monitor；组B factor_engine 139：evolution_loop TestGapF16* 11 类 + factor_screener 新建 35 + contracts/causal_validator/factor_clustering；组C 跨市场/DB/ML 63：migrate_from_json 新建 19 + data_layer_repos 31 + ml/models/mlp/gru），全量回归 5132 passed 全绿，覆盖率 TOTAL 94.31%（`--cov-fail-under=90` 达标），14 个缺口模块全部 ≥90%
+- **处理期限**: 已关闭（v2.88.0）
 
 ### GAP-043: 质检拦截器判定缺陷（P0，已关闭）
 

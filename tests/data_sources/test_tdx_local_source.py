@@ -1,13 +1,16 @@
 """
-tests.data_sources.test_tdx_minute_source — 通达信分钟数据源适配器测试（v2.30.0）。
+tests.data_sources.test_tdx_local_source — 通达信本地 HTTP 统一数据源测试（v2.85.0）。
 
 测试覆盖:
     1. 主力连续代码映射（RB0 → RBL8.SHF / IF0 → IFL0.CFF / TA0 → TAL8.CZC）
     2. 交易所后缀推断（不误判 TA 为 CFFEX 国债 T）
-    3. 周期映射（60m → 1h）
-    4. 列字典响应解析（TQ-Local 返回格式）
+    3. 周期映射（day → 1d / 60m → 1h）
+    4. 日线响应解析（17 列 kline_cache schema，date 列）
+    5. 分钟响应解析（11 列 minute_cache schema，datetime 列）
+    6. 实时快照 fetch_quote（get_market_snapshot）
+    7. 探活 is_available / 异常降级
 
-HARNESS §5.4 测试随重构: 修复代码映射/解析逻辑后补充测试。
+HARNESS §5.4 测试随重构: v2.87.0 合并 TQLocalSource(7721) 与 TDXMinuteSource(17709)。
 """
 
 from __future__ import annotations
@@ -19,9 +22,9 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from fts.data_sources.tdx_minute_source import (
+from fts.data_sources.tdx_local_source import (
     SUPPORTED_PERIODS,
-    TDXMinuteSource,
+    TdxLocalSource,
     _infer_exchange_suffix,
     _symbol_to_tdx,
 )
@@ -94,10 +97,11 @@ class TestInferExchangeSuffix:
 
 
 class TestSupportedPeriods:
-    """测试周期映射（60m 在通达信使用 1h 参数）。"""
+    """测试周期映射（day → 1d，60m → 1h）。"""
 
     def test_all_periods_supported(self) -> None:
         assert SUPPORTED_PERIODS == {
+            "day": "1d",
             "1m": "1m",
             "5m": "5m",
             "15m": "15m",
@@ -107,17 +111,100 @@ class TestSupportedPeriods:
 
     def test_invalid_period_rejected(self) -> None:
         with pytest.raises(ValueError):
-            TDXMinuteSource(period="2m")
+            TdxLocalSource(period="2m")
 
 
-# ─── 4. 列字典响应解析 ────────────────────────────────────
+# ─── 4. 日线响应解析 ──────────────────────────────────────
 
 
-class TestFetchOhlcvParsing:
-    """测试 TQ-Local 列字典返回格式的解析。"""
+class TestDailyParsing:
+    """测试日线列字典响应 → 17 列 kline_cache schema。"""
 
-    def _tq_response(self, symbol: str = "RBL8.SHF") -> dict:
-        """构造 TQ-Local 列字典格式响应。"""
+    def _daily_response(self, symbol: str = "RBL8.SHF") -> dict:
+        return {
+            "id": 1,
+            "result": {
+                "ErrorId": "0",
+                "KlineTotal": {symbol: 2},
+                "Value": {
+                    symbol: {
+                        "Date": ["20260806", "20260807"],
+                        "Time": ["0", "0"],
+                        "Open": ["3012", "3010"],
+                        "High": ["3023", "3025"],
+                        "Low": ["3000", "3000"],
+                        "Close": ["3014", "3008"],
+                        "Volume": ["824109.00", "742347.00"],
+                        "Amount": ["0.00", "0.00"],
+                    }
+                },
+            },
+        }
+
+    @patch("urllib.request.urlopen")
+    def test_parse_daily(self, mock_urlopen) -> None:
+        """日线响应应解析为 17 列 kline_cache schema（date 列）。"""
+        mock_urlopen.return_value = _FakeResp(self._daily_response())
+        src = TdxLocalSource(period="day")
+        df = src.fetch_ohlcv("RB0", days=500, trace_id="test_tdx")
+
+        assert df is not None
+        assert len(df) == 2
+        expected_cols = [
+            "symbol",
+            "period",
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "hold",
+            "settle",
+            "pre_settle",
+            "oi_change",
+            "vwap",
+            "source",
+            "fetched_at",
+            "trace_id",
+        ]
+        assert list(df.columns) == expected_cols
+        assert df["symbol"].iloc[0] == "RB0"
+        assert df["period"].iloc[0] == "daily"
+        assert df["source"].iloc[0] == "TDX_LOCAL"
+        assert df["close"].iloc[0] == 3014.0
+        assert pd.Timestamp(df["date"].iloc[0]) == pd.Timestamp("2026-08-06")
+
+    @patch("urllib.request.urlopen")
+    def test_daily_missing_futures_fields_na(self, mock_urlopen) -> None:
+        """日线响应缺 hold/settle/pre_settle/oi_change → 补 NA 保持 schema。"""
+        mock_urlopen.return_value = _FakeResp(self._daily_response())
+        df = TdxLocalSource(period="day").fetch_ohlcv("RB0", days=30)
+        assert df is not None
+        assert df["hold"].isna().all()
+        assert df["settle"].isna().all()
+        assert df["pre_settle"].isna().all()
+        assert df["oi_change"].isna().all()
+
+    @patch("urllib.request.urlopen")
+    def test_daily_vwap_fallback_typical(self, mock_urlopen) -> None:
+        """amount 无效时 vwap 回退到 (h+l+c)/3。"""
+        mock_urlopen.return_value = _FakeResp(self._daily_response())
+        df = TdxLocalSource(period="day").fetch_ohlcv("RB0", days=30)
+        assert df is not None
+        first = df.iloc[0]
+        expected = (first["high"] + first["low"] + first["close"]) / 3
+        assert abs(df["vwap"].iloc[0] - expected) < 0.01
+
+
+# ─── 5. 分钟响应解析 ──────────────────────────────────────
+
+
+class TestMinuteParsing:
+    """测试分钟列字典响应 → 11 列 minute_cache schema。"""
+
+    def _minute_response(self, symbol: str = "RBL8.SHF") -> dict:
         return {
             "id": 1,
             "result": {
@@ -139,28 +226,12 @@ class TestFetchOhlcvParsing:
         }
 
     @patch("urllib.request.urlopen")
-    def test_parse_column_dict(self, mock_urlopen) -> None:
-        """列字典响应应解析为标准分钟级 schema。"""
-        resp = self._tq_response()
-
-        class FakeResp:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def read(self):
-                return json.dumps(resp).encode("utf-8")
-
-            @property
-            def status(self):
-                return 200
-
-        mock_urlopen.return_value = FakeResp()
-
-        src = TDXMinuteSource(period="5m")
+    def test_parse_minute(self, mock_urlopen) -> None:
+        """分钟响应应解析为 11 列 minute_cache schema。"""
+        mock_urlopen.return_value = _FakeResp(self._minute_response())
+        src = TdxLocalSource(period="5m")
         df = src.fetch_ohlcv("RB0", days=500, trace_id="test_tdx")
+
         assert df is not None
         assert len(df) == 2
         assert list(df.columns) == [
@@ -178,60 +249,203 @@ class TestFetchOhlcvParsing:
         ]
         assert df["symbol"].iloc[0] == "RB0"
         assert df["period"].iloc[0] == "5m"
-        assert df["source"].iloc[0] == "TDX_MINUTE"
+        assert df["source"].iloc[0] == "TDX_LOCAL"
         assert df["close"].iloc[0] == 3006.0
         assert pd.Timestamp(df["datetime"].iloc[0]) == pd.Timestamp("2026-08-07 21:40:00")
 
     @patch("urllib.request.urlopen")
-    def test_empty_value_returns_none(self, mock_urlopen) -> None:
-        """Value 为空时应返回 None。"""
-        resp = {"id": 1, "result": {"Value": {}}}
+    def test_time_only_builds_datetime_with_today(self, mock_urlopen) -> None:
+        """仅有 Time 字段 → 使用当日日期构建 datetime。"""
+        block = {
+            "Time": ["214000", "214500"],
+            "Open": ["3003", "3005"],
+            "High": ["3007", "3008"],
+            "Low": ["3003", "3004"],
+            "Close": ["3006", "3006"],
+            "Volume": ["7952.00", "7413.00"],
+        }
+        mock_urlopen.return_value = _FakeResp({"result": {"Value": {"RBL8.SHF": block}}})
+        df = TdxLocalSource(period="5m").fetch_ohlcv("RB0")
+        assert df is not None
+        assert len(df) == 2
+        assert df["datetime"].iloc[0].date() == pd.Timestamp.now().normalize().date()
 
-        class FakeResp:
-            def __enter__(self):
-                return self
+    @patch("urllib.request.urlopen")
+    def test_date_only_builds_datetime(self, mock_urlopen) -> None:
+        """仅有 Date 字段 → 构建日期 datetime。"""
+        block = {
+            "Date": ["20260807", "20260808"],
+            "Open": ["3003", "3005"],
+            "High": ["3007", "3008"],
+            "Low": ["3003", "3004"],
+            "Close": ["3006", "3006"],
+            "Volume": ["7952.00", "7413.00"],
+        }
+        mock_urlopen.return_value = _FakeResp({"result": {"Value": {"RBL8.SHF": block}}})
+        df = TdxLocalSource(period="5m").fetch_ohlcv("RB0")
+        assert df is not None
+        assert df["datetime"].iloc[0] == pd.Timestamp("2026-08-07")
 
-            def __exit__(self, *args):
-                return False
+    @patch("urllib.request.urlopen")
+    def test_no_date_time_fields_returns_none(self, mock_urlopen) -> None:
+        """缺 date/time 字段 → 返回 None。"""
+        block = {"Open": ["3003"], "High": ["3007"], "Low": ["3003"], "Close": ["3006"], "Volume": ["1"]}
+        mock_urlopen.return_value = _FakeResp({"result": {"Value": {"RBL8.SHF": block}}})
+        assert TdxLocalSource(period="5m").fetch_ohlcv("RB0") is None
 
-            def read(self):
-                return json.dumps(resp).encode("utf-8")
-
-            @property
-            def status(self):
-                return 200
-
-        mock_urlopen.return_value = FakeResp()
-
-        src = TDXMinuteSource(period="5m")
-        assert src.fetch_ohlcv("RB0", days=500, trace_id="t") is None
-
-# ─── 5. 年化因子 / z-score 窗口 ──────────────────────────
-
-
-class TestAnnualization:
-    """测试频率年化因子与 z-score 窗口计算。"""
-
-    def test_known_frequencies(self) -> None:
-        from fts.data_sources.tdx_minute_source import FREQUENCY_ANNUALIZATION, get_annualization_factor
-
-        assert FREQUENCY_ANNUALIZATION["daily"] == 252.0
-        assert get_annualization_factor("5m") == 252.0 * 78.0
-        assert get_annualization_factor("60m") == 252.0 * 6.5
-
-    def test_unknown_frequency_defaults_to_daily(self) -> None:
-        from fts.data_sources.tdx_minute_source import get_annualization_factor
-
-        assert get_annualization_factor("unknown") == 252.0
-
-    def test_zscore_window(self) -> None:
-        from fts.data_sources.tdx_minute_source import get_default_zscore_window
-
-        assert get_default_zscore_window("daily") == 20
-        assert get_default_zscore_window("1m") == 20 * 390
+    @patch("urllib.request.urlopen")
+    def test_truncates_to_last_days_rows(self, mock_urlopen) -> None:
+        """截取最近 days 行。"""
+        n = 5
+        block = {
+            "Date": ["20260807"] * n,
+            "Time": [f"{210000 + i * 100:06d}" for i in range(n)],
+            "Open": ["3003"] * n,
+            "High": ["3007"] * n,
+            "Low": ["3003"] * n,
+            "Close": ["3006"] * n,
+            "Volume": ["7952.00"] * n,
+        }
+        mock_urlopen.return_value = _FakeResp({"result": {"Value": {"RBL8.SHF": block}}})
+        df = TdxLocalSource(period="5m").fetch_ohlcv("RB0", days=2)
+        assert df is not None
+        assert len(df) == 2
 
 
 # ─── 6. 探活 is_available ─────────────────────────────────
+
+
+class TestIsAvailable:
+    """测试 is_available 探活分支。"""
+
+    @patch("urllib.request.urlopen")
+    def test_available_when_200(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _FakeResp(status=200)
+        assert TdxLocalSource().is_available() is True
+
+    @patch("urllib.request.urlopen")
+    def test_unavailable_on_url_error(self, mock_urlopen) -> None:
+        mock_urlopen.side_effect = urllib.error.URLError("refused")
+        assert TdxLocalSource().is_available() is False
+
+    @patch("urllib.request.urlopen")
+    def test_unavailable_on_http_error(self, mock_urlopen) -> None:
+        mock_urlopen.side_effect = urllib.error.HTTPError("url", 500, "err", {}, None)
+        assert TdxLocalSource().is_available() is False
+
+    @patch("urllib.request.urlopen")
+    def test_unavailable_on_os_error(self, mock_urlopen) -> None:
+        mock_urlopen.side_effect = OSError("socket closed")
+        assert TdxLocalSource().is_available() is False
+
+
+# ─── 7. fetch_ohlcv 异常分支 ──────────────────────────────
+
+
+class TestFetchOhlcvErrors:
+    """测试 fetch_ohlcv 的 HTTP/解析异常 → SourceUnavailable。"""
+
+    @patch("urllib.request.urlopen")
+    def test_url_error_raises(self, mock_urlopen) -> None:
+        from fts.data_sources.base import SourceUnavailable
+
+        mock_urlopen.side_effect = urllib.error.URLError("refused")
+        with pytest.raises(SourceUnavailable):
+            TdxLocalSource().fetch_ohlcv("RB0", days=10)
+
+    @patch("urllib.request.urlopen")
+    def test_http_error_raises(self, mock_urlopen) -> None:
+        from fts.data_sources.base import SourceUnavailable
+
+        mock_urlopen.side_effect = urllib.error.HTTPError("url", 500, "err", {}, None)
+        with pytest.raises(SourceUnavailable):
+            TdxLocalSource().fetch_ohlcv("RB0", days=10)
+
+    @patch("urllib.request.urlopen")
+    def test_os_error_raises(self, mock_urlopen) -> None:
+        from fts.data_sources.base import SourceUnavailable
+
+        mock_urlopen.side_effect = OSError("connection refused")
+        with pytest.raises(SourceUnavailable):
+            TdxLocalSource().fetch_ohlcv("RB0", days=10)
+
+    @patch("urllib.request.urlopen")
+    def test_json_decode_error_raises(self, mock_urlopen) -> None:
+        from fts.data_sources.base import SourceUnavailable
+
+        mock_urlopen.return_value = _FakeResp("{not json")
+        with pytest.raises(SourceUnavailable):
+            TdxLocalSource().fetch_ohlcv("RB0", days=10)
+
+
+# ─── 8. fetch_ohlcv 解析降级分支 ──────────────────────────
+
+
+class TestFetchOhlcvDegradation:
+    """测试 fetch_ohlcv 对异常响应的降级返回 None。"""
+
+    @patch("urllib.request.urlopen")
+    def test_raw_not_dict_returns_none(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _FakeResp(["not", "dict"])
+        assert TdxLocalSource().fetch_ohlcv("RB0") is None
+
+    @patch("urllib.request.urlopen")
+    def test_result_without_value_returns_none(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _FakeResp({"result": {"ErrorId": "0"}})
+        assert TdxLocalSource().fetch_ohlcv("RB0") is None
+
+    @patch("urllib.request.urlopen")
+    def test_block_not_dict_returns_none(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _FakeResp({"result": {"Value": {"RBL8.SHF": ["not", "dict"]}}})
+        assert TdxLocalSource().fetch_ohlcv("RB0") is None
+
+    @patch("urllib.request.urlopen")
+    def test_empty_value_returns_none(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _FakeResp({"id": 1, "result": {"Value": {}}})
+        assert TdxLocalSource().fetch_ohlcv("RB0") is None
+
+
+# ─── 9. fetch_quote ──────────────────────────────────────
+
+
+class TestFetchQuote:
+    """测试 fetch_quote 快照解析。"""
+
+    @patch("urllib.request.urlopen")
+    def test_parse_result_dict(self, mock_urlopen) -> None:
+        result = {"Now": "3006", "Open": "3000", "Max": "3010", "Min": "2990", "Volume": "1000"}
+        mock_urlopen.return_value = _FakeResp({"result": result})
+        q = TdxLocalSource().fetch_quote("RB0", trace_id="t")
+        assert q is not None
+        assert q["last_price"] == 3006.0
+        assert q["open"] == 3000.0
+        assert q["high"] == 3010.0
+        assert q["low"] == 2990.0
+        assert q["volume"] == 1000.0
+        assert q["symbol"] == "RB0"
+        assert q["source"] == "TDX_LOCAL"
+        assert q["trace_id"] == "t"
+
+    @patch("urllib.request.urlopen")
+    def test_result_not_dict_returns_basic_quote(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _FakeResp({"result": "raw"})
+        q = TdxLocalSource().fetch_quote("RB0")
+        assert q is not None
+        assert "last_price" not in q
+        assert q["symbol"] == "RB0"
+
+    @patch("urllib.request.urlopen")
+    def test_empty_result_returns_none(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _FakeResp({"result": None})
+        assert TdxLocalSource().fetch_quote("RB0") is None
+
+    @patch("urllib.request.urlopen")
+    def test_exception_returns_none(self, mock_urlopen) -> None:
+        mock_urlopen.side_effect = OSError("boom")
+        assert TdxLocalSource().fetch_quote("RB0") is None
+
+
+# ─── 通用 mock HTTP 响应 ──────────────────────────────────
 
 
 class _FakeResp:
@@ -255,188 +469,3 @@ class _FakeResp:
     @property
     def status(self):
         return self._status
-
-
-class TestIsAvailable:
-    """测试 is_available 探活分支。"""
-
-    @patch("urllib.request.urlopen")
-    def test_available_when_200(self, mock_urlopen) -> None:
-        mock_urlopen.return_value = _FakeResp(status=200)
-        assert TDXMinuteSource().is_available() is True
-
-    @patch("urllib.request.urlopen")
-    def test_unavailable_on_url_error(self, mock_urlopen) -> None:
-        mock_urlopen.side_effect = urllib.error.URLError("refused")
-        assert TDXMinuteSource().is_available() is False
-
-    @patch("urllib.request.urlopen")
-    def test_unavailable_on_http_error(self, mock_urlopen) -> None:
-        mock_urlopen.side_effect = urllib.error.HTTPError("url", 500, "err", {}, None)
-        assert TDXMinuteSource().is_available() is False
-
-    @patch("urllib.request.urlopen")
-    def test_unavailable_on_os_error(self, mock_urlopen) -> None:
-        mock_urlopen.side_effect = OSError("socket closed")
-        assert TDXMinuteSource().is_available() is False
-
-
-# ─── 7. fetch_ohlcv 异常分支 ──────────────────────────────
-
-
-class TestFetchOhlcvErrors:
-    """测试 fetch_ohlcv 的 HTTP/解析异常 → SourceUnavailable。"""
-
-    @patch("urllib.request.urlopen")
-    def test_url_error_raises(self, mock_urlopen) -> None:
-        from fts.data_sources.base import SourceUnavailable
-
-        mock_urlopen.side_effect = urllib.error.URLError("refused")
-        with pytest.raises(SourceUnavailable):
-            TDXMinuteSource().fetch_ohlcv("RB0", days=10)
-
-    @patch("urllib.request.urlopen")
-    def test_http_error_raises(self, mock_urlopen) -> None:
-        from fts.data_sources.base import SourceUnavailable
-
-        mock_urlopen.side_effect = urllib.error.HTTPError("url", 500, "err", {}, None)
-        with pytest.raises(SourceUnavailable):
-            TDXMinuteSource().fetch_ohlcv("RB0", days=10)
-
-    @patch("urllib.request.urlopen")
-    def test_os_error_raises(self, mock_urlopen) -> None:
-        from fts.data_sources.base import SourceUnavailable
-
-        mock_urlopen.side_effect = OSError("connection refused")
-        with pytest.raises(SourceUnavailable):
-            TDXMinuteSource().fetch_ohlcv("RB0", days=10)
-
-    @patch("urllib.request.urlopen")
-    def test_json_decode_error_raises(self, mock_urlopen) -> None:
-        from fts.data_sources.base import SourceUnavailable
-
-        mock_urlopen.return_value = _FakeResp("{not json")
-        with pytest.raises(SourceUnavailable):
-            TDXMinuteSource().fetch_ohlcv("RB0", days=10)
-
-
-# ─── 8. fetch_ohlcv 解析降级分支 ──────────────────────────
-
-
-class TestFetchOhlcvDegradation:
-    """测试 fetch_ohlcv 对异常响应的降级返回 None。"""
-
-    @patch("urllib.request.urlopen")
-    def test_raw_not_dict_returns_none(self, mock_urlopen) -> None:
-        mock_urlopen.return_value = _FakeResp(["not", "dict"])
-        assert TDXMinuteSource().fetch_ohlcv("RB0") is None
-
-    @patch("urllib.request.urlopen")
-    def test_result_without_value_returns_none(self, mock_urlopen) -> None:
-        mock_urlopen.return_value = _FakeResp({"result": {"ErrorId": "0"}})
-        assert TDXMinuteSource().fetch_ohlcv("RB0") is None
-
-    @patch("urllib.request.urlopen")
-    def test_block_not_dict_returns_none(self, mock_urlopen) -> None:
-        mock_urlopen.return_value = _FakeResp({"result": {"Value": {"RBL8.SHF": ["not", "dict"]}}})
-        assert TDXMinuteSource().fetch_ohlcv("RB0") is None
-
-    @patch("urllib.request.urlopen")
-    def test_missing_required_fields_returns_none(self, mock_urlopen) -> None:
-        block = {"Date": ["20260807"], "Time": ["214000"], "Open": ["3003"], "High": ["3007"]}
-        mock_urlopen.return_value = _FakeResp({"result": {"Value": {"RBL8.SHF": block}}})
-        assert TDXMinuteSource().fetch_ohlcv("RB0") is None
-
-    @patch("urllib.request.urlopen")
-    def test_no_date_time_fields_returns_none(self, mock_urlopen) -> None:
-        block = {"Open": ["3003"], "High": ["3007"], "Low": ["3003"], "Close": ["3006"], "Volume": ["1"]}
-        mock_urlopen.return_value = _FakeResp({"result": {"Value": {"RBL8.SHF": block}}})
-        assert TDXMinuteSource().fetch_ohlcv("RB0") is None
-
-    @patch("urllib.request.urlopen")
-    def test_time_only_builds_datetime_with_today(self, mock_urlopen) -> None:
-        block = {
-            "Time": ["214000", "214500"],
-            "Open": ["3003", "3005"],
-            "High": ["3007", "3008"],
-            "Low": ["3003", "3004"],
-            "Close": ["3006", "3006"],
-            "Volume": ["7952.00", "7413.00"],
-        }
-        mock_urlopen.return_value = _FakeResp({"result": {"Value": {"RBL8.SHF": block}}})
-        df = TDXMinuteSource().fetch_ohlcv("RB0")
-        assert df is not None
-        assert len(df) == 2
-        assert df["datetime"].iloc[0].date() == pd.Timestamp.now().normalize().date()
-
-    @patch("urllib.request.urlopen")
-    def test_date_only_builds_datetime(self, mock_urlopen) -> None:
-        block = {
-            "Date": ["20260807", "20260808"],
-            "Open": ["3003", "3005"],
-            "High": ["3007", "3008"],
-            "Low": ["3003", "3004"],
-            "Close": ["3006", "3006"],
-            "Volume": ["7952.00", "7413.00"],
-        }
-        mock_urlopen.return_value = _FakeResp({"result": {"Value": {"RBL8.SHF": block}}})
-        df = TDXMinuteSource().fetch_ohlcv("RB0")
-        assert df is not None
-        assert df["datetime"].iloc[0] == pd.Timestamp("2026-08-07")
-
-    @patch("urllib.request.urlopen")
-    def test_truncates_to_last_days_rows(self, mock_urlopen) -> None:
-        n = 5
-        block = {
-            "Date": ["20260807"] * n,
-            "Time": [f"{210000 + i * 100:06d}" for i in range(n)],
-            "Open": ["3003"] * n,
-            "High": ["3007"] * n,
-            "Low": ["3003"] * n,
-            "Close": ["3006"] * n,
-            "Volume": ["7952.00"] * n,
-        }
-        mock_urlopen.return_value = _FakeResp({"result": {"Value": {"RBL8.SHF": block}}})
-        df = TDXMinuteSource().fetch_ohlcv("RB0", days=2)
-        assert df is not None
-        assert len(df) == 2
-
-
-# ─── 9. fetch_quote ──────────────────────────────────────
-
-
-class TestFetchQuote:
-    """测试 fetch_quote 快照解析。"""
-
-    @patch("urllib.request.urlopen")
-    def test_parse_result_dict(self, mock_urlopen) -> None:
-        result = {"Now": "3006", "Open": "3000", "Max": "3010", "Min": "2990", "Volume": "1000"}
-        mock_urlopen.return_value = _FakeResp({"result": result})
-        q = TDXMinuteSource().fetch_quote("RB0", trace_id="t")
-        assert q is not None
-        assert q["last_price"] == 3006.0
-        assert q["open"] == 3000.0
-        assert q["high"] == 3010.0
-        assert q["low"] == 2990.0
-        assert q["volume"] == 1000.0
-        assert q["symbol"] == "RB0"
-        assert q["source"] == "TDX_MINUTE"
-        assert q["trace_id"] == "t"
-
-    @patch("urllib.request.urlopen")
-    def test_result_not_dict_returns_basic_quote(self, mock_urlopen) -> None:
-        mock_urlopen.return_value = _FakeResp({"result": "raw"})
-        q = TDXMinuteSource().fetch_quote("RB0")
-        assert q is not None
-        assert "last_price" not in q
-        assert q["symbol"] == "RB0"
-
-    @patch("urllib.request.urlopen")
-    def test_empty_result_returns_none(self, mock_urlopen) -> None:
-        mock_urlopen.return_value = _FakeResp({"result": None})
-        assert TDXMinuteSource().fetch_quote("RB0") is None
-
-    @patch("urllib.request.urlopen")
-    def test_exception_returns_none(self, mock_urlopen) -> None:
-        mock_urlopen.side_effect = OSError("boom")
-        assert TDXMinuteSource().fetch_quote("RB0") is None

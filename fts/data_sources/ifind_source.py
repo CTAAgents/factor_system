@@ -217,7 +217,7 @@ class IFindSource(BaseFuturesSource):
     字段增强层 — 主要补充:
         - hold / settle / pre_settle / oi_change  期货全字段
         - EDB 宏观/产业链数据（独家能力，写入 edb_cache）
-    不参与 K 线主路径（DUCKDB_CACHE → TQ_LOCAL → TQ_PYTHON → AKSHARE）。
+    不参与 K 线主路径（DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON → AKSHARE）。
     """
 
     source_name: str = "IFIND"

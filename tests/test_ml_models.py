@@ -238,6 +238,7 @@ class TestSignalModelTrainer:
         pred = np.array([1.0, 1.0, 1.0])
         assert SignalModelTrainer._r2_score(y, pred) == 0.0  # 零方差目标
 
+
 # ─── GAP-F16: XGBoost / Ensemble 双子模型 / 边界分支 ────────
 
 

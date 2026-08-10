@@ -396,6 +396,7 @@ class TestHandleAlert:
 
     def test_alert_callback_exception_swallowed(self):
         """回调抛异常 → 不向外传播。"""
+
         def bad_callback(alert):
             raise RuntimeError("callback boom")
 

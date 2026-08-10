@@ -331,9 +331,277 @@ class DuckDBConnection:
             logger.info("DuckDB 异步写入队列已停止")
 
 
-# ─── 模块级 DuckDB 连接（兼容现有 _get_db() 调用方）───────
+# ─── 单写者 / 只读连接池（E.1 并发模型根治）──────────────
+
+
+class DuckDBWriter:
+    """DuckDB 单写者 — 唯一可写连接，进程内写锁串行化。
+
+    并发模型根治（design/E.1）核心组件:
+      - 对同一 .duckdb 文件，任意时刻至多一个可写连接（单写者）
+      - 进程内 `threading.Lock` 保证所有写操作串行，结构上消除写冲突
+      - 批量写入（executemany/copy_from_records）降低 commit 频率，
+        减少 checkpoint 对只读查询的阻塞
+
+    用法:
+        writer = DuckDBWriter(path)
+        writer.execute("INSERT INTO t VALUES (?, ?)", [1, "a"])
+        writer.executemany("INSERT INTO t VALUES (?, ?)", [(2, "b"), (3, "c")])
+        writer.copy_from_records("t", ["id", "name"], [(4, "d"), (5, "e")])
+        writer.close()
+    """
+
+    def __init__(self, path: Path, batch_size: int = 1000, commit_every: int = 100):
+        """
+        Args:
+            path: DuckDB 数据库文件路径
+            batch_size: copy_from_records 单批缓冲行数
+            commit_every: 批量写入 commit 周期（秒）—— 保留参数，批量提交由调用方批次控制
+        """
+        self._path = Path(path)
+        self._batch_size = batch_size
+        self._commit_every = commit_every
+        self._lock = threading.Lock()
+        import duckdb  # type: ignore[import-untyped]
+
+        self._conn: Any = duckdb.connect(str(self._path))
+        # 启用 lock_configuration（DuckDB 1.1+ 单写多读），失败静默降级（旧版）
+        try:
+            self._conn.execute("SET lock_configuration = true")
+        except Exception:
+            logger.debug("DuckDB lock_configuration 不可用（旧版），使用应用层串行写锁")
+        logger.info("DuckDBWriter 已建立: %s (batch_size=%d)", self._path, batch_size)
+
+    def execute(self, sql: str, params: Optional[list] = None) -> Any:
+        """带写锁执行单条 SQL（原子提交）。
+
+        Args:
+            sql: SQL 语句
+            params: 参数列表（可选）
+
+        Returns:
+            执行结果
+        """
+        with self._lock:
+            if params:
+                return self._conn.execute(sql, params)
+            return self._conn.execute(sql)
+
+    def executemany(self, sql: str, seq_params: list[list] | list[tuple]) -> Any:
+        """带写锁批量执行同一条 SQL（显式事务包裹，整批原子）。
+
+        DuckDB 的 executemany 为逐条执行（非单事务），必须用
+        BEGIN/COMMIT 包裹保证「整批成功或整批回滚」（E.1 §2.2）。
+
+        Args:
+            sql: SQL 语句
+            seq_params: 参数序列
+
+        Returns:
+            执行结果
+
+        Raises:
+            任一条失败时整批回滚并抛出原始异常
+        """
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                result = self._conn.executemany(sql, seq_params)
+                self._conn.execute("COMMIT")
+                return result
+            except Exception:
+                try:
+                    self._conn.execute("ROLLBACK")
+                except Exception:  # noqa: BLE001
+                    logger.debug("executemany 回滚失败: %s", self._path)
+                raise
+
+    def copy_from_records(self, table: str, columns: list[str], records: list[tuple]) -> None:
+        """批量写入（带写锁 + 显式事务，整批原子）。
+
+        等效于逐条 INSERT（数据一致），但单事务提交保证原子性，
+        并降低 commit 频率，减少 checkpoint 对读连接的阻塞（E.1 §2.4）。
+
+        Args:
+            table: 目标表名
+            columns: 目标列名列表
+            records: 行元组列表（空列表为 no-op）
+        """
+        if not records:
+            return
+        placeholders = ",".join("?" * len(columns))
+        col_sql = ",".join(columns)
+        sql = f"INSERT INTO {table} ({col_sql}) VALUES ({placeholders})"
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                self._conn.executemany(sql, records)
+                self._conn.execute("COMMIT")
+            except Exception:
+                try:
+                    self._conn.execute("ROLLBACK")
+                except Exception:  # noqa: BLE001
+                    logger.debug("copy_from_records 回滚失败: %s", self._path)
+                raise
+
+    def query(self, sql: str, params: Optional[list] = None) -> list[tuple]:
+        """带锁查询（writer 连接内读，避免额外连接）。
+
+        Args:
+            sql: SQL 语句
+            params: 参数列表（可选）
+
+        Returns:
+            查询结果行列表
+        """
+        with self._lock:
+            cur = self._conn.execute(sql, params) if params else self._conn.execute(sql)
+            return cur.fetchall()
+
+    def close(self) -> None:
+        """关闭连接（幂等）。"""
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+                logger.info("DuckDBWriter 已关闭: %s", self._path)
+
+
+class DuckDBReader:
+    """DuckDB 读连接池 — 读连接与单写者解耦。
+
+    并发模型根治（design/E.1）核心组件:
+      - 所有读操作走池内连接，与 DuckDBWriter 单写者连接并行共存
+      - DuckDB 单进程多连接基于 MVCC：读连接不参与写锁竞争，
+        写提交期间读侧看到快照，互不阻塞
+      - 注意: DuckDB 不允许同一文件并存可写连接与 read_only=True 连接
+        （"different configuration" 异常），故读池连接为普通连接，
+        「只用于读」由代码纪律保证（池内连接禁止 execute 写语句）
+
+    用法:
+        reader = DuckDBReader(path, max_connections=4)
+        con = reader.acquire()
+        try:
+            rows = con.execute("SELECT * FROM t").fetchall()
+        finally:
+            reader.release(con)
+        reader.close()
+    """
+
+    def __init__(self, path: Path, max_connections: int = 4):
+        """
+        Args:
+            path: DuckDB 数据库文件路径
+            max_connections: 连接池最大容量
+        """
+        self._path = Path(path)
+        self._max_connections = max_connections
+        self._lock = threading.Lock()
+        self._pool: list[Any] = []
+
+    def acquire(self) -> Any:
+        """获取一个连接（池内复用或新建）。
+
+        Returns:
+            DuckDB 连接对象（只读语义由调用方纪律保证）
+        """
+        with self._lock:
+            if self._pool:
+                return self._pool.pop()
+            import duckdb  # type: ignore[import-untyped]
+
+            return duckdb.connect(str(self._path))
+
+    def release(self, conn: Any) -> None:
+        """归还只读连接（池满时关闭）。
+
+        Args:
+            conn: 待归还的连接
+        """
+        with self._lock:
+            if len(self._pool) < self._max_connections:
+                self._pool.append(conn)
+            else:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001 — 关闭失败不阻断
+                    logger.debug("DuckDBReader 归还时关闭连接失败: %s", self._path)
+
+    def close(self) -> None:
+        """关闭池内所有连接（幂等）。"""
+        with self._lock:
+            for conn in self._pool:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    logger.debug("DuckDBReader 关闭连接失败: %s", self._path)
+            self._pool.clear()
+            logger.info("DuckDBReader 已关闭: %s (pool=%d)", self._path, self._max_connections)
+
+
+# ─── 模块级 DuckDB 连接（读写分离 + 兼容 _get_db() 调用方）──
 
 _DB: Optional[DuckDBConnection] = None
+_WRITER: Optional[DuckDBWriter] = None
+_READER: Optional[DuckDBReader] = None
+
+
+def _get_writer() -> DuckDBWriter:
+    """获取全局单写者（E.1 并发模型根治）。
+
+    所有写操作统一经此入口，保证对同一 DuckDB 文件任意时刻
+    至多一个可写连接（单写者）。进程内由 DuckDBWriter 内部写锁串行。
+    """
+    global _WRITER  # pylint: disable=global-statement
+    if _WRITER is None:
+        try:
+            batch_size = 1000
+            commit_every = 100
+            try:
+                from fts.config.settings import get_config
+
+                cfg = get_config()
+                batch_size = cfg.duckdb_batch_size
+                commit_every = cfg.duckdb_commit_every
+            except Exception:  # noqa: BLE001
+                pass
+            _WRITER = DuckDBWriter(_DUCKDB_PATH, batch_size=batch_size, commit_every=commit_every)
+        except Exception as e:
+            raise FuturesDataError(f"DuckDB 写连接初始化失败: {e}") from e
+    return _WRITER
+
+
+def _get_reader() -> Any:
+    """获取读连接（E.1 并发模型根治）。
+
+    所有读操作走池内连接，与写连接解耦、互不阻塞。
+    返回 DuckDB 原生连接对象（.execute()/.fetchall() 可用），
+    调用方完成后需调用 `_release_reader(conn)` 归还。
+
+    Returns:
+        DuckDB 连接对象
+    """
+    global _READER  # pylint: disable=global-statement
+    if _READER is None:
+        try:
+            pool_size = 4
+            try:
+                from fts.config.settings import get_config
+
+                pool_size = get_config().duckdb_read_pool_size
+            except Exception:  # noqa: BLE001
+                pass
+            _READER = DuckDBReader(_DUCKDB_PATH, max_connections=pool_size)
+        except Exception as e:
+            raise FuturesDataError(f"DuckDB 读连接池初始化失败: {e}") from e
+    return _READER.acquire()
+
+
+def _release_reader(conn: Any) -> None:
+    """归还只读连接至池（配合 _get_reader 使用）。"""
+    global _READER  # pylint: disable=global-statement
+    if _READER is not None:
+        _READER.release(conn)
 
 
 def _get_db() -> Any:
@@ -341,6 +609,9 @@ def _get_db() -> Any:
 
     返回 DuckDB 原生连接对象（.execute() 可用），
     但底层使用 DuckDBConnection 管理重试和生命周期。
+
+    ⚠️ 兼容入口：仅用于读语义的旧调用方；新代码统一用
+    `_get_reader()`（读）/ `_get_writer()`（写）。
     """
     global _DB  # pylint: disable=global-statement
     if _DB is None:
@@ -383,33 +654,26 @@ class FuturesDataProvider:
     def _init_default_aggregator(self) -> None:
         """惰性初始化默认 FuturesDataAggregator（按需导入 + 探活）。
 
-        v2.30.0: 分钟数据源也在此初始化（TDXMinuteSource → TQLocalSource → TQSDKSource）。
+        v2.87.0: TQLocalSource(7721) 与 TDXMinuteSource(17709) 合并为 TdxLocalSource(17709)。
         """
         try:
             from fts.data_sources.aggregator import FuturesDataAggregator
-            from fts.data_sources.tq_source import TQLocalSource
+            from fts.data_sources.tdx_local_source import TdxLocalSource
 
             sources: list = []
             try:
-                tq = TQLocalSource()
+                tq = TdxLocalSource()
                 # 不在这探活 — 让 aggregator 的熔断器管理失败状态
                 sources.append(tq)
             except Exception:
-                logger.debug("TQLocalSource 实例化失败，跳过")
+                logger.debug("TdxLocalSource 实例化失败，跳过")
 
-            # ── 分钟数据源（v2.30.0）──
+            # ── 分钟数据源（v2.85.0：TDX 统一源 + 天勤 TQSDK）──
             minute_sources: list = []
             try:
-                from fts.data_sources.tdx_minute_source import TDXMinuteSource
-
-                minute_sources.append(TDXMinuteSource())
+                minute_sources.append(TdxLocalSource(period="5m"))
             except Exception:
-                logger.debug("TDXMinuteSource 初始化失败，跳过分钟源")
-
-            try:
-                minute_sources.append(TQLocalSource(period="5m"))
-            except Exception:
-                logger.debug("TQLocalSource(5m) 初始化失败，跳过")
+                logger.debug("TdxLocalSource(5m) 初始化失败，跳过分钟源")
 
             try:
                 from fts.data_sources.tqsdk_source import TQSDKSource
@@ -730,24 +994,26 @@ class FuturesDataProvider:
         Returns:
             OHLCV DataFrame（含 hold/settle 列，DuckDB 无持仓量时设为 NaN）
         """
-        db = _get_db()
+        db = _get_reader()
+        try:
+            # 标准化: 去掉末尾的 "0" 连续合约标记
+            raw = symbol.strip().upper()
+            sym = raw[:-1] if raw.endswith("0") else raw
 
-        # 标准化: 去掉末尾的 "0" 连续合约标记
-        raw = symbol.strip().upper()
-        sym = raw[:-1] if raw.endswith("0") else raw
-
-        # 查询 kline_cache
-        # vwap: amount/volume（精确 VWAP，amount 有效时），否则用典型价格 (H+L+C)/3。
-        # kline_cache 无 settle 列，故用 (H+L+C)/3 而非 (H+L+C+settle)/4。
-        result = db.execute(
-            "SELECT date, open, high, low, close, volume, amount, "
-            "  CASE WHEN amount > 0 AND volume > 0 THEN amount / volume "
-            "       ELSE (high + low + close) / 3.0 END AS vwap "
-            "FROM kline_cache WHERE symbol = ? AND period = 'daily' "
-            "ORDER BY date DESC LIMIT ?",
-            [sym, days],
-        )
-        rows = result.fetchall()
+            # 查询 kline_cache
+            # vwap: amount/volume（精确 VWAP，amount 有效时），否则用典型价格 (H+L+C)/3。
+            # kline_cache 无 settle 列，故用 (H+L+C)/3 而非 (H+L+C+settle)/4。
+            result = db.execute(
+                "SELECT date, open, high, low, close, volume, amount, "
+                "  CASE WHEN amount > 0 AND volume > 0 THEN amount / volume "
+                "       ELSE (high + low + close) / 3.0 END AS vwap "
+                "FROM kline_cache WHERE symbol = ? AND period = 'daily' "
+                "ORDER BY date DESC LIMIT ?",
+                [sym, days],
+            )
+            rows = result.fetchall()
+        finally:
+            _release_reader(db)
         if not rows:
             return None
 
@@ -765,12 +1031,13 @@ class FuturesDataProvider:
         # 标准列顺序
         return df[["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]]
 
-    # ── TQ-Local 通达信本地客户端 ──
+    # ── 通达信本地客户端（TQ 服务 17709）──
 
     def _from_tq_local(self, symbol: str, days: int) -> Optional[pd.DataFrame]:
-        """从通达信 TQ-Local HTTP 服务获取 K 线数据。
+        """从通达信本地客户端 HTTP 服务获取 K 线数据。
 
-        TQ-Local 默认端口 7721，协议 JSON-RPC 2.0。
+        通达信 TQ 服务端口 17709，协议 JSON-RPC 2.0（get_market_data）。
+        v2.87.0: 原 7721 TQLocalSource 已合并为 17709 TdxLocalSource。
         失败时返回 None（不抛异常，供上层降级）。
 
         Args:
@@ -781,11 +1048,11 @@ class FuturesDataProvider:
             OHLCV DataFrame（含 hold/settle 列），或 None
         """
         try:
-            from fts.data_sources.tq_source import TQLocalSource
+            from fts.data_sources.tdx_local_source import TdxLocalSource
 
-            source = TQLocalSource()
+            source = TdxLocalSource()
             if not source.is_available():
-                logger.warning("TQ-Local 服务不可达 (127.0.0.1:7721)，降级到 AKShare")
+                logger.warning("通达信 TQ 服务不可达 (127.0.0.1:17709)，降级到 AKShare")
                 return None
             df = source.fetch_ohlcv(symbol, days)
             if df is None or df.empty:
@@ -798,10 +1065,10 @@ class FuturesDataProvider:
                 return None
             return df[["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]]
         except ImportError:
-            logger.warning("TQLocalSource 不可用（依赖缺失），降级到 AKShare")
+            logger.warning("TdxLocalSource 不可用（依赖缺失），降级到 AKShare")
             return None
         except Exception:
-            logger.warning("TQ-Local 获取异常，降级到 AKShare", exc_info=True)
+            logger.warning("通达信 TQ 获取异常，降级到 AKShare", exc_info=True)
             return None
 
     # ── AKShare 即时获取 ──
@@ -1462,28 +1729,31 @@ def get_dominant_contracts(symbols: list[str] | None = None) -> dict[str, str]:
     if not symbols:
         return result
     try:
-        db = _get_db()
+        db = _get_reader()
     except FuturesDataError:
         return result
 
     # contract_kline 中 symbol 无末尾 "0"（如 "RB"）
     base_syms = [s[:-1] if s.endswith("0") else s for s in symbols]
     placeholders = ",".join("?" * len(base_syms))
-    rows = db.execute(
-        f"""
-        WITH ranked AS (
-            SELECT symbol, contract,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY symbol
-                       ORDER BY date DESC, volume DESC
-                   ) AS rn
-            FROM contract_kline
-            WHERE symbol IN ({placeholders}) AND period = 'daily'
-        )
-        SELECT symbol, contract FROM ranked WHERE rn = 1
-        """,
-        base_syms,
-    ).fetchall()
+    try:
+        rows = db.execute(
+            f"""
+            WITH ranked AS (
+                SELECT symbol, contract,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY symbol
+                           ORDER BY date DESC, volume DESC
+                       ) AS rn
+                FROM contract_kline
+                WHERE symbol IN ({placeholders}) AND period = 'daily'
+            )
+            SELECT symbol, contract FROM ranked WHERE rn = 1
+            """,
+            base_syms,
+        ).fetchall()
+    finally:
+        _release_reader(db)
     code2sym = {s[:-1] if s.endswith("0") else s: s for s in symbols}
     for base, contract in rows:
         sym = code2sym.get(base)
@@ -1609,14 +1879,14 @@ def _write_contract_kline(base: str, rows: list[tuple]) -> None:
     """
     from fts.data_sources.migrate import migrate_schema
 
-    db = _get_db()
+    writer = _get_writer()
     try:
         migrate_schema(str(_get_db_path()))
     except Exception as e:  # noqa: BLE001
         logger.warning("[contract_kline] migrate_schema 失败: %s", e)
     # 按品种全量重写（保证与最新活跃合约集一致）
-    db.execute("DELETE FROM contract_kline WHERE symbol = ?", [base])
-    db.executemany(
+    writer.execute("DELETE FROM contract_kline WHERE symbol = ?", [base])
+    writer.executemany(
         """
         INSERT INTO contract_kline (
             symbol, contract, period, date, open, high, low, close,
@@ -1633,7 +1903,9 @@ def _get_db_path() -> str:
 
 
 def _try_tq_realtime(symbols: list[str]) -> tuple[dict[str, float], set[str]]:
-    """通过 TQ-Local HTTP 获取实时快照（主路径）。
+    """通过通达信本地 TQ 服务获取实时快照（主路径）。
+
+    v2.87.0: TQLocalSource(7721) 合并为 TdxLocalSource(17709, get_market_snapshot)。
 
     Returns:
         (成功价格字典, 失败品种集合)
@@ -1642,13 +1914,13 @@ def _try_tq_realtime(symbols: list[str]) -> tuple[dict[str, float], set[str]]:
     failed: set[str] = set()
 
     try:
-        from fts.data_sources.tq_source import TQLocalSource
+        from fts.data_sources.tdx_local_source import TdxLocalSource
     except ImportError:
         return prices, set(symbols)
 
-    tq = TQLocalSource()
+    tq = TdxLocalSource()
     if not tq.is_available():
-        logger.warning("TQ-Local 探活失败，跳过 TQ 实时路径")
+        logger.warning("通达信 TQ 服务探活失败，跳过实时路径")
         return prices, set(symbols)
 
     logger.info(f"[realtime] TQ-Local 探活成功，尝试获取 {len(symbols)} 个品种实时价")
@@ -1716,7 +1988,7 @@ def get_realtime_prices(symbols: list[str] | None = None) -> dict[str, float]:
     """获取期货品种盘中实时价。
 
     数据源优先级（与 K 线主路径一致）:
-        1. TQ_LOCAL — 通达信本地 HTTP 实时快照（tq_get_quote）
+        1. TDX_LOCAL — 通达信本地 HTTP 统一源 17709 实时快照（get_market_snapshot）
         2. AKSHARE — AKShare futures_zh_minute_sina 分时行情（降级）
 
     盘中实时价用于信号报告"最新价"展示；非交易时段返回当日最新分时价。
@@ -1794,6 +2066,8 @@ def get_dynamic_core_subset() -> list[str]:
 
 __all__ = [
     "DuckDBConnection",
+    "DuckDBWriter",
+    "DuckDBReader",
     "AsyncWriteQueue",
     "retry_on_conflict",
     "FuturesDataProvider",

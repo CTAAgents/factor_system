@@ -352,6 +352,7 @@ def test_call_mcp_module_function_exists():
     assert hasattr(wind_source, "_call_mcp")
     assert callable(wind_source._call_mcp)
 
+
 # ─── MCP 入口 / set_mcp_handler ─────────────────────────
 
 

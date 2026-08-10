@@ -121,6 +121,7 @@ class TestCreateMLPModel:
         """ModelKind 枚举含 MLP 成员。"""
         assert ModelKind.MLP == "mlp"
 
+
 class TestMLPBoundary:
     """GAP-F16 补充：1D 特征 / 零特征输入边界。"""
 

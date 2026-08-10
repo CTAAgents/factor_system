@@ -230,7 +230,7 @@ class TestBuildDefaultAggregator:
         duck.write_bytes(b"")
         with (
             patch("fts.data_futures._DUCKDB_PATH", duck),
-            patch("fts.data_sources.tq_source.TQLocalSource"),
+            patch("fts.data_sources.tdx_local_source.TdxLocalSource"),
             patch("fts.data_sources.aggregator.FuturesDataAggregator") as m_agg,
         ):
             _build_default_aggregator()
@@ -244,7 +244,7 @@ class TestBuildDefaultAggregator:
         """TQ 源初始化失败时静默跳过（sources 为空）。"""
         with (
             patch("fts.data_futures._DUCKDB_PATH", tmp_path / "none.duckdb"),
-            patch("fts.data_sources.tq_source.TQLocalSource", side_effect=RuntimeError("tq unavailable")),
+            patch("fts.data_sources.tdx_local_source.TdxLocalSource", side_effect=RuntimeError("tq unavailable")),
             patch("fts.data_sources.aggregator.FuturesDataAggregator") as m_agg,
         ):
             _build_default_aggregator()

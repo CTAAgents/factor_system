@@ -8,9 +8,8 @@
 4. 规模 12~15 —— 机构标准样本量
 5. 产业链覆盖 >= 8 —— 分层代表性，避免小品种系统性低估泛化
 """
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from fts.data_futures import (
     FUTURES_CORE_SUBSET,

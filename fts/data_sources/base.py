@@ -6,7 +6,7 @@
   - SourceUnavailable: 数据源不可用异常（向上传播供熔断判定）
   - validate_ohlcv_row: OHLCV 行字段校验
 
-K 线主路径: TQ_LOCAL → TQ_PYTHON → AKSHARE（不含 Wind/iFinD）
+K 线主路径: TDX_LOCAL → TQ_PYTHON → AKSHARE（不含 Wind/iFinD）
 字段增强层: WIND / IFIND（独立并行）
 
 HARNESS §5.3 契约优先: 适配器必须继承本类并实现 3 个抽象方法。
@@ -47,7 +47,7 @@ class BaseFuturesSource(ABC):
     """期货数据源抽象基类（v2.3.0 多源集成）。
 
     子类必须实现:
-        - source_name: str 标识（如 "TQ_LOCAL"）
+        - source_name: str 标识（如 "TDX_LOCAL"）
         - is_available() → bool: 探活
         - fetch_ohlcv(symbol, days, trace_id) → Optional[DataFrame]: 拉 K 线
         - fetch_quote(symbol, trace_id) → Optional[dict]: 拉快照

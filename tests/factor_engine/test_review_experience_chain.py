@@ -77,7 +77,7 @@ class TestReviewExperienceChain:
         assert tr["success"] is False
         assert "经济逻辑存疑" in tr["mutation_summary"]
         assert any("经济逻辑存疑" in r for r in tr["evaluation"]["failure_reasons"])
-        assert any("经济逻辑存疑" in l for l in tr["lessons"])
+        assert any("经济逻辑存疑" in lesson for lesson in tr["lessons"])
 
     def test_approve_does_not_write(self, isolated_db, exp_chain):
         """approve → 不写经验链。"""
@@ -116,7 +116,7 @@ class TestReviewExperienceChain:
         wf = _make_workflow(isolated_db, exp_chain)
         wf.reject("fct_rev_y", comment="数据口径存疑", reviewer="alpha-board")
         failures = exp_chain.read_all_failure()
-        assert any("alpha-board" in l for l in failures[0]["lessons"])
+        assert any("alpha-board" in lesson for lesson in failures[0]["lessons"])
 
     def test_approve_after_reject_no_extra_trace(self, isolated_db, exp_chain):
         """先 reject 再 approve（幂等覆盖）→ 经验链不重复写（仅驳回写 1 条）。"""

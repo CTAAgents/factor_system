@@ -398,8 +398,7 @@ class TestGetDb:
 class TestInitDefaultAggregator:
     def _patch_sources(self, mocker):
         """默认所有数据源可正常实例化（聚合器由各测试单独控制）。"""
-        mocker.patch("fts.data_sources.tq_source.TQLocalSource")
-        mocker.patch("fts.data_sources.tdx_minute_source.TDXMinuteSource")
+        mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource")
         mocker.patch("fts.data_sources.tqsdk_source.TQSDKSource")
         mocker.patch("fts.data_sources.tqsdk_tick_source.TQSDKTickSource")
 
@@ -419,8 +418,7 @@ class TestInitDefaultAggregator:
         """部分源实例化失败被跳过，聚合器仍初始化（空源列表）。"""
         mock_agg = mocker.MagicMock()
         mocker.patch("fts.data_sources.aggregator.FuturesDataAggregator", return_value=mock_agg)
-        mocker.patch("fts.data_sources.tq_source.TQLocalSource", side_effect=RuntimeError("no tq"))
-        mocker.patch("fts.data_sources.tdx_minute_source.TDXMinuteSource", side_effect=RuntimeError("no tdx"))
+        mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", side_effect=RuntimeError("no tdx"))
         mocker.patch("fts.data_sources.tqsdk_source.TQSDKSource", side_effect=RuntimeError("no tqsdk"))
         mocker.patch("fts.data_sources.tqsdk_tick_source.TQSDKTickSource", side_effect=RuntimeError("no tick"))
         provider = FuturesDataProvider(use_akshare_fallback=False, aggregator=None)
@@ -432,8 +430,7 @@ class TestInitDefaultAggregator:
             "fts.data_sources.aggregator.FuturesDataAggregator",
             side_effect=RuntimeError("boom"),
         )
-        mocker.patch("fts.data_sources.tq_source.TQLocalSource", side_effect=RuntimeError("no tq"))
-        mocker.patch("fts.data_sources.tdx_minute_source.TDXMinuteSource", side_effect=RuntimeError("no tdx"))
+        mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", side_effect=RuntimeError("no tdx"))
         mocker.patch("fts.data_sources.tqsdk_source.TQSDKSource", side_effect=RuntimeError("no tqsdk"))
         mocker.patch("fts.data_sources.tqsdk_tick_source.TQSDKTickSource", side_effect=RuntimeError("no tick"))
         provider = FuturesDataProvider(use_akshare_fallback=False, aggregator=None)
@@ -683,7 +680,8 @@ class TestFromKlineCache:
             ("2026-01-01", 10.0, 11.0, 9.0, 10.5, 1000.0, 10500.0, 10.5),
         ]
         mock_db.execute.return_value = mock_result
-        mocker.patch("fts.data_futures._get_db", return_value=mock_db)
+        mocker.patch("fts.data_futures._get_reader", return_value=mock_db)
+        mocker.patch("fts.data_futures._release_reader")
 
         mocker.patch.object(FuturesDataProvider, "_init_default_aggregator")
         provider = FuturesDataProvider(use_akshare_fallback=False, aggregator=None)
@@ -703,7 +701,8 @@ class TestFromKlineCache:
         mock_result = mocker.MagicMock()
         mock_result.fetchall.return_value = []
         mock_db.execute.return_value = mock_result
-        mocker.patch("fts.data_futures._get_db", return_value=mock_db)
+        mocker.patch("fts.data_futures._get_reader", return_value=mock_db)
+        mocker.patch("fts.data_futures._release_reader")
         provider = FuturesDataProvider(use_akshare_fallback=False, aggregator=None)
         mocker.patch.object(provider, "_init_default_aggregator")
         assert provider._from_kline_cache("RB0", days=10) is None
@@ -721,14 +720,14 @@ class TestFromTqLocal:
         return provider
 
     def test_service_unavailable_returns_none(self, mocker):
-        """TQ-Local 服务不可达 → None。"""
+        """TQ 服务不可达 → None。"""
         mock_source = mocker.MagicMock()
         mock_source.is_available.return_value = False
-        mocker.patch("fts.data_sources.tq_source.TQLocalSource", return_value=mock_source)
+        mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", return_value=mock_source)
         assert self._provider(mocker)._from_tq_local("RB0", 10) is None
 
     def test_hit_normalizes_columns(self, mocker):
-        """TQ-Local 命中 → 标准 8 列输出。"""
+        """TQ 命中 → 标准 8 列输出。"""
         mock_source = mocker.MagicMock()
         mock_source.is_available.return_value = True
         mock_source.fetch_ohlcv.return_value = (
@@ -738,7 +737,7 @@ class TestFromTqLocal:
             .reset_index()
             .rename(columns={"index": "date"})
         )
-        mocker.patch("fts.data_sources.tq_source.TQLocalSource", return_value=mock_source)
+        mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", return_value=mock_source)
         df = self._provider(mocker)._from_tq_local("RB0", 10)
         assert list(df.columns) == ["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]
         assert df.index.is_monotonic_increasing
@@ -748,7 +747,7 @@ class TestFromTqLocal:
         mock_source = mocker.MagicMock()
         mock_source.is_available.return_value = True
         mock_source.fetch_ohlcv.return_value = pd.DataFrame()
-        mocker.patch("fts.data_sources.tq_source.TQLocalSource", return_value=mock_source)
+        mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", return_value=mock_source)
         assert self._provider(mocker)._from_tq_local("RB0", 10) is None
 
         mock_source.fetch_ohlcv.return_value = pd.DataFrame(
@@ -760,19 +759,19 @@ class TestFromTqLocal:
         assert self._provider(mocker)._from_tq_local("RB0", 10) is None
 
     def test_import_error_returns_none(self, mocker):
-        """TQLocalSource 实例化抛 ImportError → None（降级不抛）。"""
+        """TdxLocalSource 实例化抛 ImportError → None（降级不抛）。"""
         mocker.patch(
-            "fts.data_sources.tq_source.TQLocalSource",
+            "fts.data_sources.tdx_local_source.TdxLocalSource",
             side_effect=ImportError("no module"),
         )
         assert self._provider(mocker)._from_tq_local("RB0", 10) is None
 
     def test_generic_exception_returns_none(self, mocker):
-        """TQ-Local 通用异常 → None（降级不抛）。"""
+        """TQ 通用异常 → None（降级不抛）。"""
         mock_source = mocker.MagicMock()
         mock_source.is_available.return_value = True
         mock_source.fetch_ohlcv.side_effect = RuntimeError("boom")
-        mocker.patch("fts.data_sources.tq_source.TQLocalSource", return_value=mock_source)
+        mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", return_value=mock_source)
         assert self._provider(mocker)._from_tq_local("RB0", 10) is None
 
 
@@ -875,17 +874,17 @@ class TestExtractQuotePrice:
 
 class TestTryTqRealtime:
     def test_import_error(self, mocker):
-        """TQLocalSource 模块不可用 → 全部失败。"""
-        mocker.patch.dict(sys.modules, {"fts.data_sources.tq_source": None})
+        """TdxLocalSource 模块不可用 → 全部失败。"""
+        mocker.patch.dict(sys.modules, {"fts.data_sources.tdx_local_source": None})
         prices, failed = _try_tq_realtime(["RB0"])
         assert prices == {}
         assert failed == {"RB0"}
 
     def test_service_not_available(self, mocker):
-        """TQ-Local 探活失败 → 全部失败。"""
+        """TQ 探活失败 → 全部失败。"""
         mock_source = mocker.MagicMock()
         mock_source.is_available.return_value = False
-        mocker.patch("fts.data_sources.tq_source.TQLocalSource", return_value=mock_source)
+        mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", return_value=mock_source)
         prices, failed = _try_tq_realtime(["RB0"])
         assert prices == {}
         assert failed == {"RB0"}
@@ -900,7 +899,7 @@ class TestTryTqRealtime:
             {"price": 0},  # 非正 → failed
             {"now": 100.5},  # 成功
         ]
-        mocker.patch("fts.data_sources.tq_source.TQLocalSource", return_value=mock_source)
+        mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", return_value=mock_source)
         prices, failed = _try_tq_realtime(["RB0", "CU0", "AU0", "AG0"])
         assert prices == {"RB0": 3500.0, "AG0": 100.5}
         assert failed == {"CU0", "AU0"}
@@ -910,7 +909,7 @@ class TestTryTqRealtime:
         mock_source = mocker.MagicMock()
         mock_source.is_available.return_value = True
         mock_source.fetch_quote.side_effect = RuntimeError("boom")
-        mocker.patch("fts.data_sources.tq_source.TQLocalSource", return_value=mock_source)
+        mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", return_value=mock_source)
         prices, failed = _try_tq_realtime(["RB0"])
         assert prices == {}
         assert failed == {"RB0"}
@@ -982,7 +981,8 @@ class TestDominantContractsExtra:
         """symbols=None → 全量 FUTURES_SUBSET，全部无数据返回空串。"""
         mock_db = mocker.MagicMock()
         mock_db.execute.return_value.fetchall.return_value = []
-        mocker.patch("fts.data_futures._get_db", return_value=mock_db)
+        mocker.patch("fts.data_futures._get_reader", return_value=mock_db)
+        mocker.patch("fts.data_futures._release_reader")
         mocker.patch("fts.data_futures._fetch_dominant_akshare", return_value={})
         result = get_dominant_contracts()
         assert len(result) == len(FUTURES_SUBSET)

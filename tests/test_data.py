@@ -781,6 +781,7 @@ class TestFTSFuturesIntegration:
         # 原 OHLCV 列不受影响
         assert list(result.columns[:5]) == ["close", "open", "high", "low", "volume"]
 
+
 # ═══════════════════════════════════════════════════════════
 # 19. FTSDataProvider.enrich_futures_fundamental provider 注入
 # ═══════════════════════════════════════════════════════════

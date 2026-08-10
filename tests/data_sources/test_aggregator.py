@@ -1076,7 +1076,7 @@ def test_get_minute_ohlcv_from_minute_cache(minute_cache_db: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     src = MagicMock()
-    src.source_name = DataSource.TDX_MINUTE.value
+    src.source_name = DataSource.TDX_LOCAL.value
     src.fetch_ohlcv = MagicMock(side_effect=AssertionError("不应调用分钟源"))
 
     agg = FuturesDataAggregator(
@@ -1123,7 +1123,7 @@ def test_get_minute_ohlcv_source_rebuilt_by_frequency(tmp_db: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     class PeriodSource:
-        def __init__(self, period: str = "5m", source_name: str = "TDX_MINUTE", df=None):
+        def __init__(self, period: str = "5m", source_name: str = "TDX_LOCAL", df=None):
             self.period = period
             self.source_name = source_name
             # 重建（type(src)(period=...)）时不传 df → 回退到闭包默认数据
@@ -1154,7 +1154,7 @@ def test_get_minute_ohlcv_rebuild_exception_skips(tmp_db: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     class BrokenInitSource:
-        def __init__(self, period: str = "5m", source_name: str = "TDX_MINUTE"):
+        def __init__(self, period: str = "5m", source_name: str = "TDX_LOCAL"):
             self.period = period
             self.source_name = source_name
 
@@ -1165,7 +1165,7 @@ def test_get_minute_ohlcv_rebuild_exception_skips(tmp_db: Path):
             raise AssertionError("不应被调用（初始化即失败）")
 
     class BadInit(BrokenInitSource):
-        def __init__(self, period: str = "5m", source_name: str = "TDX_MINUTE"):
+        def __init__(self, period: str = "5m", source_name: str = "TDX_LOCAL"):
             # 重建（period 变化）时抛异常，模拟源初始化失败
             if period != "5m":
                 raise RuntimeError("init failed")
@@ -1200,7 +1200,7 @@ def test_get_minute_ohlcv_source_exception_records_failure(tmp_db: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     bad = MagicMock()
-    bad.source_name = DataSource.TD_MINUTE if hasattr(DataSource, "TD_MINUTE") else DataSource.TDX_MINUTE
+    bad.source_name = DataSource.TD_MINUTE if hasattr(DataSource, "TD_MINUTE") else DataSource.TDX_LOCAL
     bad.period = None
     bad.fetch_ohlcv = MagicMock(side_effect=ConnectionError("down"))
 
@@ -1982,13 +1982,13 @@ def test_get_minute_ohlcv_circuit_open_skips_source(tmp_db: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     src = MagicMock()
-    src.source_name = DataSource.TDX_MINUTE.value
+    src.source_name = DataSource.TDX_LOCAL.value
     src.period = None
     src.fetch_ohlcv = MagicMock(side_effect=AssertionError("熔断后不应调用"))
 
     agg = FuturesDataAggregator(minute_sources=[src], db_path=tmp_db, circuit_breaker_threshold=2)
-    agg._record_failure(DataSource.TDX_MINUTE.value, "x")
-    agg._record_failure(DataSource.TDX_MINUTE.value, "y")
+    agg._record_failure(DataSource.TDX_LOCAL.value, "x")
+    agg._record_failure(DataSource.TDX_LOCAL.value, "y")
 
     df = agg.get_minute_ohlcv("RB0", days=3, frequency="5m", trace_id="t-min-open")
     assert df.empty  # 唯一源被熔断 → 空 DataFrame
@@ -2000,7 +2000,7 @@ def test_get_minute_ohlcv_source_returns_none(tmp_db: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     empty = MagicMock()
-    empty.source_name = DataSource.TDX_MINUTE.value
+    empty.source_name = DataSource.TDX_LOCAL.value
     empty.period = None
     empty.fetch_ohlcv = MagicMock(return_value=None)
 

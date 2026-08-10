@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.86.0
+> 版本: v2.88.0
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -227,6 +227,19 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ `build_combo`/`PortfolioLoop.__init__` 新增 `turnover_penalty` 参数透传；`FTSConfig` 新增 `l3_turnover_penalty`（env `FTS_L3_TURNOVER_PENALTY` 默认 0.0 关闭）
 - 📋 新增 `test_turnover_penalty.py` 12 用例（单元 4 + 换手惩罚生效断言 3——Σ\|Δw\| 严格更小且 λ 单调递减 + build_combo 集成 2 + 配置读取 3），portfolio_loop 213 + 12 合计 225 passed 全绿
 - ✅ 文档同步：01/03/06/07/08 + 23 计划（GAP-I303 ✅ 关闭）+ pyproject bump v2.84.0 → v2.85.0
+
+### v2.88.0 GAP-F16 覆盖率 <90% 模块补齐（plans/21 阶段 D，GAP-041 闭环，已完成）
+
+**完成时间**: 2026-08-10
+
+**核心产出**:
+- ✅ 组A 数据源测试补齐（139 用例）：`test_ifind_source`(+31)/`test_wind_source`(+13)/`test_tqsdk_tick_source`(+15)/`test_data`(+8)/`test_data_quality_monitor`(+34)——外部数据源网络异常/鉴权失败/超时/降级兜底 mock + `test_tdx_minute_source`(+25)/`test_tq_source`(+13)（随 v2.87.0 TDX_LOCAL 合并删除，能力迁入 test_tdx_local_source）
+- ✅ 组B factor_engine 测试补齐（139 用例）：`test_evolution_loop`(+87，TestGapF16* 11 类：L2 晋升双写原子化/熔断重置/家族多样性拦截/消融信息型判定/meta_loop 失败回退等兜底分支) + `test_contracts_normalize`(+5) + `test_factor_screener`(新建 35：V1 一票否决 + V2 否决链含极值扰动 ic_drop>25%/打分分级/报告) + `test_causal_validator`(+7) + `test_factor_clustering`(+5)
+- ✅ 组C 跨市场/DB/ML 测试补齐（63 用例）：`test_migrate_from_json`(新建 19) + `test_data_layer_repos`(+31) + `test_ml_models`(+8) + `test_mlp_factor`(+2) + `test_gru_factor`(+3)
+- ✅ 修复外部会话新增测试文件 ruff 违规 8 处（F401 未使用 import 6 + E741 变量名 2）
+- ✅ 全量回归 5132 passed 全绿（5 个竞态失败——DuckDB 外部进程占锁 ×4 + pyproject 版本并发 bump ×1——重跑验证后全绿）
+- ✅ 覆盖率 TOTAL 94.31% 达标（`--cov-fail-under=90` 通过），14 个 <90% 缺口模块清零
+- ✅ 文档同步：06（覆盖率汇总缺口清零 + 用例统计 +341）/08（GAP-041 ✅ 关闭）/21 计划（GAP-F16 ✅ 完成）+ pyproject bump v2.87.0 → v2.88.0 + README
 
 ### v2.86.0 DuckDB 并发模型根治（GAP-056，数据基础设施，已完成）
 

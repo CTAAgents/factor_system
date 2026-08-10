@@ -402,6 +402,7 @@ class TestAuditReportRepository:
         finally:
             repo.close()
 
+
 # ─── FactorRepository 补充缺口（GAP-F16）────────────────────
 
 
@@ -565,6 +566,7 @@ class TestRepositoryGap:
     def test_write_seed_lineage_failure_returns_false(self, db_path: Path, monkeypatch):
         repo = FactorRepository(db_path)
         try:
+
             def _boom(*args, **kwargs):
                 raise RuntimeError("db down")
 
@@ -608,9 +610,7 @@ class TestRepositoryGap:
         """沿 parent_id 链回溯到种子因子。"""
         repo = FactorRepository(db_path)
         try:
-            seed_id = repo.create_factor(
-                _mk_factor("seedA", source="seed", generation=0, family="famA")
-            )
+            seed_id = repo.create_factor(_mk_factor("seedA", source="seed", generation=0, family="famA"))
             mid_id = repo.create_factor(
                 _mk_factor("midB", source="evolution", generation=1, family="famB", parent_id=seed_id)
             )
@@ -647,13 +647,12 @@ class TestRepositoryGap:
         """get_factor 抛异常 → except → break → fallback。"""
         repo = FactorRepository(db_path)
         try:
+
             def _boom(factor_id):
                 raise RuntimeError("db error")
 
             monkeypatch.setattr(repo, "get_factor", _boom)
-            result = repo.resolve_seed_lineage(
-                "child", "childC", "evolution", 3, "famC", factor_parent_id="p1"
-            )
+            result = repo.resolve_seed_lineage("child", "childC", "evolution", 3, "famC", factor_parent_id="p1")
             assert result["seed_name"] == "childC"
         finally:
             repo.close()
@@ -775,6 +774,8 @@ class TestRepositoryGap:
             assert max(fam_counts.values()) <= 2
         finally:
             repo.close()
+
+
 # ─── 内部工具与子仓储缺口（GAP-F16）────────────────────────
 
 
@@ -846,8 +847,23 @@ class TestQualityScoreRepoGap:
         repo = FactorQualityScoreRepository(db_path)
         try:
             row = (
-                "q1", "fct", 1.0, "not-json", "A", "2026-01-01", "v1",
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                "q1",
+                "fct",
+                1.0,
+                "not-json",
+                "A",
+                "2026-01-01",
+                "v1",
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
             )
             out = repo._row_to_dict(row)
             assert out["dimension_scores"] == "not-json"
@@ -921,8 +937,18 @@ class TestAuditRepoGap:
         repo = FactorAuditReportRepository(db_path)
         try:
             row = (
-                "r1", "fct", "v1", True, 90.0, 6, 6, "bad-json", "{}", "[]",
-                "2026-01-01", "v1",
+                "r1",
+                "fct",
+                "v1",
+                True,
+                90.0,
+                6,
+                6,
+                "bad-json",
+                "{}",
+                "[]",
+                "2026-01-01",
+                "v1",
             )
             out = repo._row_to_dict(row)
             assert out["results_json"] == "bad-json"

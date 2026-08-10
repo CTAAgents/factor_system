@@ -4695,3 +4695,1362 @@ class TestGapS11OperatorFirst:
         state2 = mgr.load_or_init()
         assert state2["evolution_method_counts"]["operator_evolution"] == 2
         assert state2["evolution_method_counts"]["macro_evolution"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════
+# GAP-F16: 方法级未覆盖路径补充（全部直接调用，不跑完整 run()）
+# ═══════════════════════════════════════════════════════════════
+
+
+def _make_ohlcv(n: int = 200) -> pd.DataFrame:
+    """构造完整 OHLCV 数据（BacktestPipeline._execute_factor_code 需要全字段）。
+
+    价格范围控制在 [-10, 10] 内，避免被 _execute_factor_code 的 clip 截断为常数。
+    """
+    close = 1.0 + np.arange(float(n)) * 0.01
+    return pd.DataFrame(
+        {
+            "open": close - 0.001,
+            "high": close + 0.002,
+            "low": close - 0.002,
+            "close": close,
+            "volume": np.ones(n) * 1000,
+        }
+    )
+
+
+class TestGapF16ModuleHelpers:
+    """模块级辅助函数 + 工具方法。"""
+
+    def test_add_trading_days_skips_weekend(self):
+        """_add_trading_days 跳过周末（roll=forward）。"""
+        from datetime import datetime
+
+        from fts.factor_engine.evolution_loop import _add_trading_days
+
+        start = datetime(2026, 8, 7)  # 周五
+        end = _add_trading_days(start, 1)
+        assert end.weekday() == 0  # 周一
+
+    def test_build_shadow_pool_structure(self):
+        """_build_shadow_pool 返回影子池标记结构。"""
+        from fts.factor_engine.evolution_loop import _SHADOW_OBSERVE_TRADING_DAYS, _build_shadow_pool
+
+        pool = _build_shadow_pool()
+        assert pool["observe_trading_days"] == _SHADOW_OBSERVE_TRADING_DAYS
+        assert "promoted_at" in pool
+        assert "observe_until" in pool
+
+    def test_normalize_industry_keys(self):
+        """_normalize_industry_keys 生成裸代码键并保留原始键。"""
+        from fts.factor_engine.evolution_loop import _normalize_industry_keys
+
+        mapping = {"600519.SH": "白酒", "000001.SZ": "银行", "RB": "钢铁"}
+        result = _normalize_industry_keys(mapping)
+        assert result["600519.SH"] == "白酒"
+        assert result["600519"] == "白酒"
+        assert result["RB"] == "钢铁"
+
+    def test_log_consistency_event_writes_file(self, tmp_path, monkeypatch):
+        """_log_consistency_event 正常写入 jsonl。"""
+        from fts.factor_engine import evolution_loop as el_mod
+
+        target = tmp_path / "catalog_consistency.jsonl"
+        monkeypatch.setattr(el_mod, "_CONSISTENCY_LOG_PATH", target)
+        el_mod._log_consistency_event(
+            event_type="promote",
+            factor_id="fct_aaa",
+            factor_name="test",
+            market="futures",
+            status="active",
+            json_path="elite/fct_aaa.json",
+            trace_id="t1",
+        )
+        assert target.exists()
+        line = target.read_text(encoding="utf-8").strip()
+        assert "fct_aaa" in line
+        assert "promote" in line
+
+    def test_log_consistency_event_write_failure(self, tmp_path, monkeypatch):
+        """_log_consistency_event 写入失败不抛异常。"""
+        from fts.factor_engine import evolution_loop as el_mod
+
+        target = tmp_path / "catalog_consistency.jsonl"
+        monkeypatch.setattr(el_mod, "_CONSISTENCY_LOG_PATH", target)
+        with patch("builtins.open", side_effect=OSError("disk full")):
+            # 不应抛异常
+            el_mod._log_consistency_event("promote", "fct_x", "x", "stock", "active")
+
+    def test_evolution_run_result_to_dict_defaults(self):
+        """EvolutionRunResult.to_dict 空字段回退为 []。"""
+        from fts.factor_engine.evolution_loop import EvolutionRunResult
+
+        result = EvolutionRunResult(
+            run_id="r1",
+            trace_id="t1",
+            generations_completed=0,
+            total_factors_evaluated=0,
+            total_factors_promoted=0,
+            tokens_consumed=0,
+            status="completed",
+        )
+        d = result.to_dict()
+        assert d["elite_factor_ids"] == []
+        assert d["seed_correlations"] == []
+        assert d["error"] is None
+
+    def test_quality_inspection_compat_result(self):
+        """_QualityInspectionResult 属性接口。"""
+        from fts.factor_engine.evolution_loop import _QualityInspectionResult
+
+        r = _QualityInspectionResult({"total_score": 40.0, "grade": "B"}, filtered=True, reason="淘汰")
+        assert r.total_score == 40.0
+        assert r.grade == "B"
+        assert r.filtered is True
+        assert r.reason == "淘汰"
+
+
+class TestGapF16UctAndCircuitBreaker:
+    """UCT 父因子选择 + 熔断检查。"""
+
+    @staticmethod
+    def _make_loop(tmp_memory_dir):
+        return EvolutionLoop(
+            data=_make_ohlcv(3),
+            forward_returns=np.array([0.01, 0.0, -0.01]),
+            memory_dir=tmp_memory_dir,
+        )
+
+    def test_select_parent_uct_visited_factors(self, tmp_memory_dir):
+        """已访问父因子按 UCB 公式选择。"""
+        loop = self._make_loop(tmp_memory_dir)
+        parents = [{"factor_id": "a", "name": "a"}, {"factor_id": "b", "name": "b"}]
+        loop._uct_stats = {
+            "a": {"visits": 1, "total_reward": 0.2},
+            "b": {"visits": 5, "total_reward": 0.5},
+        }
+        # a 有更高的平均奖励 + 更高探索项
+        chosen = loop._select_parent_uct(parents)
+        assert chosen["factor_id"] in ("a", "b")
+
+    def test_select_parent_uct_unvisited_returns_first(self, tmp_memory_dir):
+        """存在未访问父因子时直接返回（探索优先）。"""
+        loop = self._make_loop(tmp_memory_dir)
+        parents = [{"factor_id": "a", "name": "a"}, {"factor_id": "b", "name": "b"}]
+        loop._uct_stats = {"a": {"visits": 2, "total_reward": 0.3}}
+        chosen = loop._select_parent_uct(parents)
+        assert chosen["factor_id"] == "b"
+
+    def test_update_uct_stats_passed_reward(self, tmp_memory_dir):
+        """通过评估奖励 = abs(IC)。"""
+        loop = self._make_loop(tmp_memory_dir)
+        parent = {"factor_id": "p1"}
+        evaluation = {"passed": True, "level_1_backtest": {"ic": -0.04}}
+        loop._update_uct_stats(parent, evaluation)
+        assert loop._uct_stats["p1"]["visits"] == 1
+        assert loop._uct_stats["p1"]["total_reward"] == 0.04
+
+    def test_update_uct_stats_failed_zero_reward(self, tmp_memory_dir):
+        """失败评估奖励 = 0。"""
+        loop = self._make_loop(tmp_memory_dir)
+        parent = {"factor_id": "p2"}
+        evaluation = {"passed": False, "level_1_backtest": {"ic": 0.1}}
+        loop._update_uct_stats(parent, evaluation)
+        assert loop._uct_stats["p2"]["total_reward"] == 0.0
+
+    def test_circuit_breaker_token(self, tmp_memory_dir):
+        """Token 超 2x 触发熔断。"""
+        loop = self._make_loop(tmp_memory_dir)
+        state = {"tokens_consumed": 500_000, "budget_limit": 200_000}
+        reason = loop._check_circuit_breaker(state)
+        assert reason is not None
+        assert "Token" in reason
+
+    def test_circuit_breaker_consecutive_low_ic(self, tmp_memory_dir):
+        """连续低 IC 触发熔断。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._consecutive_low_ic = loop.budget["circuit_breaker_consecutive_low_ic"]
+        reason = loop._check_circuit_breaker({"tokens_consumed": 0, "budget_limit": 200_000})
+        assert reason is not None
+        assert "连续低 IC" in reason
+
+    def test_circuit_breaker_failure_rate(self, tmp_memory_dir):
+        """失败率超阈值触发熔断。"""
+        loop = self._make_loop(tmp_memory_dir)
+        state = {
+            "tokens_consumed": 0,
+            "budget_limit": 200_000,
+            "total_factors_evaluated": 100,
+            "total_factors_promoted": 0,
+        }
+        reason = loop._check_circuit_breaker(state)
+        assert reason is not None
+        assert "失败率" in reason
+
+    def test_circuit_breaker_not_triggered(self, tmp_memory_dir):
+        """正常状态不触发熔断。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._consecutive_low_ic = 0
+        state = {
+            "tokens_consumed": 0,
+            "budget_limit": 200_000,
+            "total_factors_evaluated": 5,
+            "total_factors_promoted": 3,
+        }
+        assert loop._check_circuit_breaker(state) is None
+
+
+class TestGapF16EliteRedundancy:
+    """L2 准入去冗余（相关性检查 + 正交化闭环）方法级测试。"""
+
+    @staticmethod
+    def _make_loop(tmp_memory_dir, tmp_elite_dir):
+        loop = EvolutionLoop(
+            data=_make_ohlcv(200),
+            forward_returns=np.zeros(200),
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+        )
+        return loop
+
+    @staticmethod
+    def _write_elite(elite_dir, fid, name="elite"):
+        import json as _json
+
+        elite_dir.mkdir(parents=True, exist_ok=True)
+        (elite_dir / f"{fid}.json").write_text(
+            _json.dumps(
+                {
+                    "factor_id": fid,
+                    "name": name,
+                    "code": ("def factor_program(data, params):\n    import numpy as np\n    return data['close']"),
+                    "params": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_check_elite_correlation_hit(self, tmp_memory_dir, tmp_elite_dir):
+        """与既有 elite 高相关时返回相关性列表。"""
+        self._write_elite(tmp_elite_dir, "fct_elite01")
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        factor = {
+            "factor_id": "fct_new001",
+            "name": "new",
+            "code": "def factor_program(data, params):\n    import numpy as np\n    return data['close']",
+            "params": {},
+        }
+        result = loop._check_elite_correlation(factor)
+        assert result is not None
+        assert len(result["correlations"]) == 1
+        assert result["correlations"][0]["factor_id_b"] == "fct_elite01"
+
+    def test_check_elite_correlation_no_elite(self, tmp_memory_dir, tmp_elite_dir):
+        """elite 目录为空（无 json）→ 返回 None。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        factor = {
+            "factor_id": "fct_new002",
+            "name": "new2",
+            "code": "def factor_program(data, params):\n    import numpy as np\n    return data['close']",
+            "params": {},
+        }
+        assert loop._check_elite_correlation(factor) is None
+
+    def test_check_elite_correlation_exec_failure(self, tmp_memory_dir, tmp_elite_dir):
+        """新因子信号执行失败 → 返回 None。"""
+        self._write_elite(tmp_elite_dir, "fct_elite02")
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        factor = {"factor_id": "fct_new003", "name": "n3", "code": "raise RuntimeError", "params": {}}
+        with patch(
+            "fts.factor_engine.backtest_pipeline.BacktestPipeline._execute_factor_code",
+            side_effect=RuntimeError("boom"),
+        ):
+            assert loop._check_elite_correlation(factor) is None
+
+    def test_check_elite_correlation_skips_index_and_self(self, tmp_memory_dir, tmp_elite_dir):
+        """跳过相关性索引文件与自身因子。"""
+        self._write_elite(tmp_elite_dir, "fct_elite03")
+        (tmp_elite_dir / "_l2_seed_correlation_index.json").write_text("{}", encoding="utf-8")
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        factor = {
+            "factor_id": "fct_elite03",  # 与自身相同 → 跳过
+            "name": "self",
+            "code": "def factor_program(data, params):\n    import numpy as np\n    return data['close']",
+            "params": {},
+        }
+        assert loop._check_elite_correlation(factor) is None
+
+    def test_orthogonalize_via_basis_disabled(self, tmp_memory_dir, tmp_elite_dir):
+        """正交基底未启用 → None。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        loop._l2_orthogonal_basis_enabled = False
+        assert loop._orthogonalize_via_basis({"factor_id": "x"}) is None
+
+    def test_orthogonalize_via_basis_success(self, tmp_memory_dir, tmp_elite_dir):
+        """基底正交化成功 → 返回并注册。"""
+        self._write_elite(tmp_elite_dir, "fct_basis01")
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        orth = {"factor_id": "fct_orth001", "orthogonalized": True, "orthogonalized_basis": ["fct_basis01"]}
+        loop.orthogonal_basis.orthogonalize = MagicMock(return_value=orth)
+        loop.orthogonal_basis.register = MagicMock()
+        factor = {
+            "factor_id": "fct_orth001",
+            "name": "orth",
+            "code": "def factor_program(data, params):\n    import numpy as np\n    return data['close']",
+            "params": {},
+            "evaluation": {"level_1_backtest": {"sharpe": 1.5}},
+        }
+        result = loop._orthogonalize_via_basis(factor)
+        assert result is not None
+        loop.orthogonal_basis.register.assert_called_once_with(orth)
+
+    def test_orthogonalize_via_basis_exception(self, tmp_memory_dir, tmp_elite_dir):
+        """基底正交化异常 → None 回退。"""
+        self._write_elite(tmp_elite_dir, "fct_basis02")
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        loop.orthogonal_basis.orthogonalize = MagicMock(side_effect=RuntimeError("fail"))
+        factor = {
+            "factor_id": "fct_orth002",
+            "name": "orth2",
+            "code": "def factor_program(data, params):\n    import numpy as np\n    return data['close']",
+            "params": {},
+        }
+        assert loop._orthogonalize_via_basis(factor) is None
+
+    def test_orthogonalize_candidate_success(self, tmp_memory_dir, tmp_elite_dir):
+        """单参照 OLS 正交化成功。"""
+        self._write_elite(tmp_elite_dir, "fct_ref01")
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        loop._l2_orthogonal_residual_corr_max = 0.3
+        loop._l2_orthogonal_min_retained_ratio = 0.3
+        # 构造与参照信号低相关的候选（close 平方 vs close）
+        factor = {
+            "factor_id": "fct_orthc001",
+            "name": "cand",
+            "code": (
+                "def factor_program(data, params):\n"
+                "    import numpy as np\n"
+                "    close = data['close']\n"
+                "    return (close - close.mean()) ** 2\n"
+            ),
+            "params": {},
+        }
+        pair = {"factor_id_b": "fct_ref01", "factor_name_b": "elite", "pearson": 0.95}
+        orth = loop._orthogonalize_candidate(factor, pair)
+        assert orth is not None
+        assert orth["orthogonalized"] is True
+        assert orth["orthogonalized_against"] == "fct_ref01"
+        assert "orthogonal_signal" in orth
+
+    def test_orthogonalize_candidate_no_fid_b(self, tmp_memory_dir, tmp_elite_dir):
+        """pair 缺少 factor_id_b → None。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        assert loop._orthogonalize_candidate({"factor_id": "x"}, {}) is None
+
+    def test_orthogonalize_candidate_ref_missing(self, tmp_memory_dir, tmp_elite_dir):
+        """参照 elite 文件不存在 → None。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        pair = {"factor_id_b": "fct_ghost", "factor_name_b": "ghost"}
+        assert loop._orthogonalize_candidate({"factor_id": "x", "code": ""}, pair) is None
+
+    def test_orthogonalize_candidate_residual_corr_too_high(self, tmp_memory_dir, tmp_elite_dir):
+        """残差与参照相关过高 → None（拒绝）。"""
+        self._write_elite(tmp_elite_dir, "fct_ref02")
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        loop._l2_orthogonal_residual_corr_max = 0.01  # 极严 → 残差必然不合格
+        factor = {
+            "factor_id": "fct_orthc002",
+            "name": "cand2",
+            "code": ("def factor_program(data, params):\n    import numpy as np\n    return data['close']\n"),
+            "params": {},
+        }
+        pair = {"factor_id_b": "fct_ref02", "factor_name_b": "elite2", "pearson": 1.0}
+        assert loop._orthogonalize_candidate(factor, pair) is None
+
+
+class TestGapF16PromoteToElite:
+    """_promote_to_elite 各拒绝分支 + 成功路径。"""
+
+    @staticmethod
+    def _mock_repo(loop, get_factor_by_name=None, get_by_family=None, get_factor=None):
+        mock_repo = MagicMock()
+        mock_repo.get_factor_by_name.return_value = get_factor_by_name
+        mock_repo.get_by_family.return_value = get_by_family if get_by_family is not None else []
+        mock_repo.get_factor.return_value = get_factor
+        loop._get_repo = MagicMock(return_value=mock_repo)
+        return mock_repo
+
+    @staticmethod
+    def _make_factor(fid="fct_prom001", name="promote_me"):
+        return {
+            "factor_id": fid,
+            "name": name,
+            "code": "def factor_program(data, params):\n    import numpy as np\n    return data['close']",
+            "params": {},
+            "family": "trend",
+            "market": "multi",
+            "source": "macro_evolution",
+            "parent_id": None,
+            "generation": 1,
+            "trace_id": "t",
+            "symbols": ["RB0"],
+        }
+
+    @staticmethod
+    def _make_evaluation(passed_l3=True):
+        return {
+            "level_1_backtest": {"ic": 0.05, "sharpe": 2.0},
+            "level_2_economic": {"theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3},
+            "level_3_multiple": {"passed": passed_l3, "bonferroni_p": 0.01, "adjusted_t": 3.0},
+            "passed": True,
+            "failure_reasons": [],
+        }
+
+    def _make_loop(self, tmp_memory_dir, tmp_elite_dir):
+        return EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+        )
+
+    def _mock_screen_grade(self, loop, grade="A"):
+        screen = MagicMock()
+        screen.grade = grade
+        screen.to_dict.return_value = {"grade": grade, "total_score": 80.0}
+        screen.veto_reasons = []
+        screen.total_score = 80.0
+        loop.high_ic_screener.screen = MagicMock(return_value=screen)
+
+    def test_promote_duplicate_name_returns_none(self, tmp_memory_dir, tmp_elite_dir):
+        """DuckDB 已存在同名因子 → 返回 None。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        self._mock_repo(loop, get_factor_by_name={"factor_id": "fct_existing"})
+        assert loop._promote_to_elite(self._make_factor(), self._make_evaluation(), shadow_observe=False) is None
+
+    def test_promote_family_limit_returns_none(self, tmp_memory_dir, tmp_elite_dir):
+        """家族因子数达上限 → 返回 None。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        loop.budget["max_per_family"] = 2
+        self._mock_repo(loop, get_by_family=[{"factor_id": "a"}, {"factor_id": "b"}])
+        assert loop._promote_to_elite(self._make_factor(), self._make_evaluation(), shadow_observe=False) is None
+
+    def test_promote_multiple_test_fail_returns_none(self, tmp_memory_dir, tmp_elite_dir):
+        """多重检验未通过 → 返回 None。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        self._mock_repo(loop)
+        self._mock_screen_grade(loop)
+        assert (
+            loop._promote_to_elite(self._make_factor(), self._make_evaluation(passed_l3=False), shadow_observe=False)
+            is None
+        )
+
+    def test_promote_high_ic_grade_c_returns_none(self, tmp_memory_dir, tmp_elite_dir):
+        """高 IC 筛查 C 级 → 返回 None。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        self._mock_repo(loop)
+        self._mock_screen_grade(loop, grade="C")
+        assert loop._promote_to_elite(self._make_factor(), self._make_evaluation(), shadow_observe=False) is None
+
+    def test_promote_duckdb_write_failure_rolls_back(self, tmp_memory_dir, tmp_elite_dir):
+        """DuckDB 写入失败 → 回滚 JSON 快照并返回 None。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        mock_repo = self._mock_repo(loop)
+        self._mock_screen_grade(loop)
+        mock_repo.create_factor.side_effect = RuntimeError("db down")
+        factor = self._make_factor()
+        result = loop._promote_to_elite(factor, self._make_evaluation(), shadow_observe=False)
+        assert result is None
+        # JSON 快照应被回滚删除
+        assert not (tmp_elite_dir / f"{factor['factor_id']}.json").exists()
+
+    def test_promote_success(self, tmp_memory_dir, tmp_elite_dir):
+        """正常晋升 → 返回路径且 JSON 快照存在。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        mock_repo = self._mock_repo(loop)
+        self._mock_screen_grade(loop)
+        loop.elite_tracker.init_tracker = MagicMock()
+        loop._check_elite_correlation = MagicMock(return_value=None)
+        factor = self._make_factor()
+        fp = loop._promote_to_elite(factor, self._make_evaluation(), shadow_observe=False)
+        assert fp is not None
+        assert fp.exists()
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        # 因子 market=multi → 使用演化上下文市场（默认 futures）
+        assert data["market"] == "futures"
+        mock_repo.create_factor.assert_called_once()
+
+    def test_promote_bootstrapping_cleans_injected_file(self, tmp_memory_dir, tmp_elite_dir):
+        """bootstrapping 来源晋升后删除 l1_injected 候选文件（GAP-036）。"""
+        inject_dir = tmp_memory_dir.parent / "l1_injected"
+        inject_dir.mkdir(parents=True, exist_ok=True)
+        (inject_dir / "cand_test.json").write_text("{}", encoding="utf-8")
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        loop.inject_dir = inject_dir
+        self._mock_repo(loop)
+        self._mock_screen_grade(loop)
+        loop.elite_tracker.init_tracker = MagicMock()
+        loop._check_elite_correlation = MagicMock(return_value=None)
+        factor = self._make_factor(fid="fct_prom010", name="bs_factor")
+        factor["source"] = "bootstrapping"
+        factor["parent_id"] = "cand_test"
+        fp = loop._promote_to_elite(factor, self._make_evaluation(), shadow_observe=False)
+        assert fp is not None
+        assert not (inject_dir / "cand_test.json").exists()
+
+    def test_write_to_duckdb_update_existing(self, tmp_memory_dir, tmp_elite_dir):
+        """factor_id 已存在 → 走 update_factor 分支。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        mock_repo = self._mock_repo(loop, get_factor={"factor_id": "fct_existing"})
+        ok = loop._write_to_duckdb(
+            self._make_factor(),
+            self._make_evaluation(),
+        )
+        assert ok is True
+        mock_repo.update_factor.assert_called_once()
+
+    def test_write_to_duckdb_exception_returns_false(self, tmp_memory_dir, tmp_elite_dir):
+        """DuckDB 写入异常 → 返回 False。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        mock_repo = self._mock_repo(loop)
+        mock_repo.create_factor.side_effect = RuntimeError("boom")
+        assert loop._write_to_duckdb(self._make_factor(), self._make_evaluation()) is False
+
+
+class TestGapF16WalkForwardAndAudit:
+    """WalkForward 配置/OOS 与审计降级。"""
+
+    @staticmethod
+    def _make_loop(tmp_memory_dir):
+        return EvolutionLoop(
+            data=_make_ohlcv(300),
+            forward_returns=np.zeros(300),
+            memory_dir=tmp_memory_dir,
+        )
+
+    def test_build_wf_config_3y(self, tmp_memory_dir):
+        """数据 ≥3 年 → 默认配置。"""
+        cfg = EvolutionLoop._build_wf_config(_make_ohlcv(800))
+        assert cfg["n_windows"] >= 4
+
+    def test_build_wf_config_2y(self, tmp_memory_dir):
+        cfg = EvolutionLoop._build_wf_config(_make_ohlcv(600))
+        assert cfg["n_windows"] == 4
+
+    def test_build_wf_config_1y(self, tmp_memory_dir):
+        cfg = EvolutionLoop._build_wf_config(_make_ohlcv(300))
+        assert cfg["n_windows"] == 3
+
+    def test_build_wf_config_half_year(self, tmp_memory_dir):
+        cfg = EvolutionLoop._build_wf_config(_make_ohlcv(150))
+        assert cfg["n_windows"] == 2
+
+    def test_build_wf_config_short(self, tmp_memory_dir):
+        cfg = EvolutionLoop._build_wf_config(_make_ohlcv(50))
+        assert cfg["n_windows"] == 1
+
+    def test_run_walkforward_oos_disabled(self, tmp_memory_dir, monkeypatch):
+        """force_walkforward=false → 返回 None。"""
+        from fts.config.settings import get_config
+
+        monkeypatch.setattr(get_config(), "force_walkforward", False)
+        loop = self._make_loop(tmp_memory_dir)
+        assert loop._run_walkforward_oos(_make_minimal_factor()) is None
+
+    def test_run_walkforward_oos_short_data(self, tmp_memory_dir, monkeypatch):
+        """数据 <125 行 → 返回 None。"""
+        from fts.config.settings import get_config
+
+        monkeypatch.setattr(get_config(), "force_walkforward", True)
+        loop = EvolutionLoop(
+            data=_make_ohlcv(60),
+            forward_returns=np.zeros(60),
+            memory_dir=tmp_memory_dir,
+        )
+        assert loop._run_walkforward_oos(_make_minimal_factor()) is None
+
+    def test_run_factor_audit_exception_degrades(self, tmp_memory_dir):
+        """审计器抛异常 → 降级为全失败报告。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop.auditor.audit = MagicMock(side_effect=RuntimeError("audit crash"))
+        factor = _make_minimal_factor("fct_audit001")
+        evaluation = {
+            "level_1_backtest": {"oos_ratio": 0.3, "ic": 0.05, "icir": 1.5},
+            "level_3_multiple": {"bonferroni_p": 0.02},
+        }
+        report = loop._run_factor_audit(factor, evaluation, "t")
+        assert report.passed is False
+        assert report.pass_rate == 0.0
+
+
+class TestGapF16AblationRobustnessShapCausal:
+    """Phase A/B/C 审查异常与降级分支。"""
+
+    @staticmethod
+    def _make_loop(tmp_memory_dir):
+        return EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+        )
+
+    def test_is_blocking_ablation_modes(self):
+        """_is_blocking_ablation 各模式判定。"""
+        assert EvolutionLoop._is_blocking_ablation({"mode": "shuffle_dates"}) is False
+        assert EvolutionLoop._is_blocking_ablation({"mode": "volume_zero"}) is False
+        assert EvolutionLoop._is_blocking_ablation({"mode": "zero_one_feature", "feature": "close"}) is False
+        assert EvolutionLoop._is_blocking_ablation({"mode": "zero_one_feature", "feature": "volume"}) is True
+        assert EvolutionLoop._is_blocking_ablation({"mode": "other"}) is False
+
+    def test_run_ablation_data_unavailable(self, tmp_memory_dir):
+        """data 缺失 → skipped=True。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop.data = pd.DataFrame()
+        result = loop._run_ablation_check(_make_minimal_factor(), {}, "t")
+        assert result["passed"] is True
+        assert result.get("skipped") is True
+
+    def test_run_ablation_exception_returns_passed(self, tmp_memory_dir):
+        """消融实验异常 → 返回 passed=True 兜底。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop.ablation_experiment.run = MagicMock(side_effect=RuntimeError("ab crash"))
+        result = loop._run_ablation_check(_make_minimal_factor(), {}, "t")
+        assert result["passed"] is True
+        assert "error" in result
+
+    def test_run_ablation_zero_baseline_passes(self, tmp_memory_dir):
+        """baseline_ic≈0 → 直接通过。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop.ablation_experiment.run = MagicMock(return_value={"baseline_ic": 0.0, "ablations": []})
+        result = loop._run_ablation_check(_make_minimal_factor(), {}, "t")
+        assert result["passed"] is True
+
+    def test_run_robustness_exception_returns_passed(self, tmp_memory_dir):
+        """鲁棒性审查异常 → passed=True 兜底。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop.robustness_tester.run = MagicMock(side_effect=RuntimeError("rob crash"))
+        result = loop._run_robustness_check(_make_minimal_factor(), {}, "t")
+        assert result["passed"] is True
+
+    def test_run_robustness_futures_threshold(self, tmp_memory_dir):
+        """期货市场阈值 0.7；通过率 0.8 → 通过。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop.market = "futures"
+        loop.robustness_tester.run = MagicMock(return_value={"summary": {"overall_pass_rate": 0.8}})
+        result = loop._run_robustness_check(_make_minimal_factor(), {}, "t")
+        assert result["passed"] is True
+
+    def test_run_shap_exception_returns_passed(self, tmp_memory_dir):
+        """SHAP 分析异常 → passed=True 兜底。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop.shap_analyzer.analyze = MagicMock(side_effect=RuntimeError("shap crash"))
+        result = loop._run_shap_analysis(_make_minimal_factor(), {}, "t")
+        assert result["passed"] is True
+
+    def test_run_causal_exception_returns_passed(self, tmp_memory_dir):
+        """因果验证异常 → passed=True 兜底。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop.causal_validator.validate = MagicMock(side_effect=RuntimeError("causal crash"))
+        result = loop._run_causal_validation(_make_minimal_factor(), {}, "t")
+        assert result["passed"] is True
+
+    def test_record_failed_traces_write_files(self, tmp_memory_dir):
+        """audit/ablation/robustness/causal 失败轨迹均写文件。"""
+        loop = self._make_loop(tmp_memory_dir)
+        factor = _make_minimal_factor("fct_trace001")
+        loop._record_audit_failed_trace(factor, 1, "t", _make_passing_audit_report())
+        loop._record_ablation_failed_trace(factor, 1, "t", {"passed": False})
+        loop._record_robustness_failed_trace(factor, 1, "t", {"passed": False})
+        loop._record_causal_failed_trace(factor, 1, "t", {"passed": False, "n_anomalous": 2})
+        trace_dir = tmp_memory_dir / "traces"
+        files = list(trace_dir.glob("*.json"))
+        assert len(files) >= 4
+
+    def test_log_inspection_detail_low_dims(self, tmp_memory_dir):
+        """质检日志低分项分支。"""
+        loop = self._make_loop(tmp_memory_dir)
+        from fts.factor_engine.evolution_loop import _QualityInspectionResult
+
+        inspection = _QualityInspectionResult(
+            {
+                "total_score": 30.0,
+                "grade": "C",
+                "dimension_scores": [
+                    {"name": "ic", "score": 2.0, "description": "低"},
+                    {"name": "sharpe", "score": 4.0, "description": "高"},
+                ],
+            },
+            filtered=True,
+            reason="等级 C",
+        )
+        loop._log_inspection_detail(_make_minimal_factor("fct_insp001"), inspection, "淘汰", 1)
+
+    def test_record_quality_filtered_trace(self, tmp_memory_dir):
+        """质检过滤轨迹（evaluation=None 自动构造）。"""
+        loop = self._make_loop(tmp_memory_dir)
+        from fts.factor_engine.evolution_loop import _QualityInspectionResult
+
+        inspection = _QualityInspectionResult({"total_score": 20.0, "grade": "C"}, filtered=True, reason="低分")
+        loop._record_quality_filtered_trace(
+            _make_minimal_factor("fct_qf001"),
+            1,
+            "t",
+            inspection,
+        )
+        failure_dir = tmp_memory_dir / "failure"
+        assert len(list(failure_dir.glob("*.json"))) > 0
+
+    def test_record_failure_trace_with_evaluation(self, tmp_memory_dir):
+        """_record_failure_trace 传入 evaluation 时补齐 failure_reasons。"""
+        loop = self._make_loop(tmp_memory_dir)
+        factor = _make_minimal_factor("fct_fail001")
+        evaluation = {"factor_id": "fct_fail001", "trace_id": "t2", "passed": False, "evaluated_at": "now"}
+        loop._record_failure_trace(factor, 2, "macro_evolution", "summary", ["IC 过低"], "t", evaluation=evaluation)
+        assert evaluation["failure_reasons"] == ["IC 过低"]
+
+
+class TestGapF16PrefilterAndRuntime:
+    """快速预筛选 / 横截面预筛 / 运行时校验各分支。"""
+
+    @staticmethod
+    def _make_loop(tmp_memory_dir):
+        return EvolutionLoop(
+            data=_make_ohlcv(200),
+            forward_returns=np.zeros(200),
+            memory_dir=tmp_memory_dir,
+        )
+
+    @staticmethod
+    def _constant_factor():
+        return {
+            "factor_id": "fct_const001",
+            "name": "const",
+            "code": (
+                "def factor_program(data, params):\n    import numpy as np\n    return np.ones(len(data['close']))\n"
+            ),
+            "params": {},
+        }
+
+    def test_quick_prefilter_exec_failure(self, tmp_memory_dir):
+        """预筛执行异常 → 失败。"""
+        loop = self._make_loop(tmp_memory_dir)
+        factor = {"factor_id": "fct_e001", "name": "e", "code": "raise RuntimeError", "params": {}}
+        ok, reason, ic = loop._quick_prefilter(factor, "t")
+        assert ok is False
+        assert "执行失败" in reason
+        assert ic == 0.0
+
+    def test_quick_prefilter_length_mismatch(self, tmp_memory_dir):
+        """预筛输出长度不匹配 → 失败。
+
+        _execute_factor_code 内部会把长度不齐信号对齐为 n，故 mock 返回
+        错误长度数组以触发 _quick_prefilter 自身的长度校验。
+        """
+        loop = self._make_loop(tmp_memory_dir)
+        factor = {
+            "factor_id": "fct_e002",
+            "name": "e2",
+            "code": ("def factor_program(data, params):\n    import numpy as np\n    return np.ones(3)\n"),
+            "params": {},
+        }
+        with patch(
+            "fts.factor_engine.backtest_pipeline.BacktestPipeline._execute_factor_code",
+            return_value=np.ones(3),
+        ):
+            ok, reason, _ = loop._quick_prefilter(factor, "t")
+        assert ok is False
+        assert "长度不匹配" in reason
+
+    def test_quick_prefilter_constant_signal(self, tmp_memory_dir):
+        """常数信号（nunique <= 10）→ 失败。"""
+        loop = self._make_loop(tmp_memory_dir)
+        ok, reason, _ = loop._quick_prefilter(self._constant_factor(), "t")
+        assert ok is False
+        assert "nunique" in reason
+
+    def test_quick_prefilter_tiny_std(self, tmp_memory_dir):
+        """信号标准差过小 → 失败。"""
+        loop = self._make_loop(tmp_memory_dir)
+        # 11 个不同值但幅度极小 → nunique=11 > 10 但 std < 1e-6
+        factor = {
+            "factor_id": "fct_e003",
+            "name": "e3",
+            "code": (
+                "def factor_program(data, params):\n"
+                "    import numpy as np\n"
+                "    x = np.zeros(len(data['close']))\n"
+                "    x[:11] = np.arange(11) * 1e-9\n"
+                "    return x\n"
+            ),
+            "params": {},
+        }
+        ok, reason, _ = loop._quick_prefilter(factor, "t")
+        assert ok is False
+        assert "标准差" in reason
+
+    def test_quick_prefilter_no_forward_returns_passes(self, tmp_memory_dir):
+        """forward_returns 缺失 → 跳过 IC 检查直接通过。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop.forward_returns = None
+        factor = {
+            "factor_id": "fct_e004",
+            "name": "e4",
+            "code": (
+                "def factor_program(data, params):\n"
+                "    import numpy as np\n"
+                "    close = data['close']\n"
+                "    return close - close.mean()\n"
+            ),
+            "params": {},
+        }
+        ok, reason, ic = loop._quick_prefilter(factor, "t")
+        assert ok is True
+        assert ic == 0.0
+
+    def test_check_factor_runtime_failure(self, tmp_memory_dir):
+        """运行时校验执行失败 → False。"""
+        loop = self._make_loop(tmp_memory_dir)
+        factor = {"factor_id": "fct_r001", "name": "r", "code": "raise ValueError", "params": {}}
+        ok, reason = loop._check_factor_runtime(factor)
+        assert ok is False
+        assert "执行失败" in reason
+
+    def test_check_factor_runtime_length_mismatch(self, tmp_memory_dir):
+        """运行时校验长度不匹配 → False。
+
+        _execute_factor_code 内部会把长度不齐信号对齐为 n，故 mock 返回
+        错误长度数组以触发 _check_factor_runtime 自身的长度校验。
+        """
+        loop = self._make_loop(tmp_memory_dir)
+        factor = {
+            "factor_id": "fct_r002",
+            "name": "r2",
+            "code": "def factor_program(data, params):\n    import numpy as np\n    return np.ones(5)\n",
+            "params": {},
+        }
+        with patch(
+            "fts.factor_engine.backtest_pipeline.BacktestPipeline._execute_factor_code",
+            return_value=np.ones(5),
+        ):
+            ok, reason = loop._check_factor_runtime(factor)
+        assert ok is False
+        assert "长度不匹配" in reason
+
+    def test_check_factor_runtime_constant(self, tmp_memory_dir):
+        """运行时校验常数信号 → False。"""
+        loop = self._make_loop(tmp_memory_dir)
+        ok, reason = loop._check_factor_runtime(self._constant_factor())
+        assert ok is False
+        assert "常数" in reason
+
+    def test_check_factor_runtime_pass(self, tmp_memory_dir):
+        """运行时校验通过。"""
+        loop = self._make_loop(tmp_memory_dir)
+        factor = {
+            "factor_id": "fct_r003",
+            "name": "r3",
+            "code": (
+                "def factor_program(data, params):\n"
+                "    import numpy as np\n"
+                "    close = data['close']\n"
+                "    return close - close.mean()\n"
+            ),
+            "params": {},
+        }
+        ok, reason = loop._check_factor_runtime(factor)
+        assert ok is True
+
+    def test_cross_section_prefilter_empty_panel(self, tmp_memory_dir):
+        """横截面面板为空 → 放行。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._is_cross_section = True
+        loop.cross_section_data = {}
+        ok, reason, _ = loop._cross_section_prefilter(_make_minimal_factor(), "t")
+        assert ok is True
+
+    def test_cross_section_prefilter_exec_failure(self, tmp_memory_dir):
+        """横截面预筛执行异常 → 失败。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._is_cross_section = True
+        loop.cross_section_data = {"S0": _make_ohlcv(50)}
+        loop.cross_section_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=50))
+        with patch(
+            "fts.factor_engine.evaluation_chain._cs_execute_factors",
+            side_effect=RuntimeError("boom"),
+        ):
+            ok, reason, _ = loop._cross_section_prefilter(_make_minimal_factor(), "t")
+        assert ok is False
+        assert "执行失败" in reason
+
+    def test_cross_section_prefilter_insufficient_symbols(self, tmp_memory_dir):
+        """横截面有效标的 < 5 → 失败。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._is_cross_section = True
+        loop.cross_section_data = {"S0": _make_ohlcv(50)}
+        loop.cross_section_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=50))
+        with patch(
+            "fts.factor_engine.evaluation_chain._cs_execute_factors",
+            return_value=({"S0": np.ones(50)}, {"S0": np.zeros(50)}),
+        ):
+            ok, reason, _ = loop._cross_section_prefilter(_make_minimal_factor(), "t")
+        assert ok is False
+        assert "标的不足" in reason
+
+    def test_cross_section_prefilter_no_dates_passes(self, tmp_memory_dir):
+        """common_dates 为空 → 放行。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._is_cross_section = True
+        loop.cross_section_data = {"S0": _make_ohlcv(50)}
+        loop.cross_section_dates = None
+        with patch(
+            "fts.factor_engine.evaluation_chain._cs_execute_factors",
+            return_value=(
+                {f"S{i}": np.ones(50) for i in range(6)},
+                {f"S{i}": np.zeros(50) for i in range(6)},
+            ),
+        ):
+            ok, reason, _ = loop._cross_section_prefilter(_make_minimal_factor(), "t")
+        assert ok is True
+
+    def test_cross_section_prefilter_ic_too_low(self, tmp_memory_dir):
+        """横截面 IC 过低 → 失败。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._is_cross_section = True
+        loop.market = "stock"
+        loop.cross_section_data = {f"S{i}": _make_ohlcv(50) for i in range(6)}
+        loop.cross_section_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=50))
+        with (
+            patch(
+                "fts.factor_engine.evaluation_chain._cs_execute_factors",
+                return_value=(
+                    {f"S{i}": np.ones(50) for i in range(6)},
+                    {f"S{i}": np.zeros(50) for i in range(6)},
+                ),
+            ),
+            patch(
+                "fts.factor_engine.evaluation_chain._cs_build_matrices",
+                return_value=(np.ones((50, 6)), np.zeros((50, 6))),
+            ),
+            patch(
+                "fts.factor_engine.evaluation_chain._cs_compute_ics",
+                return_value=[0.005],
+            ),
+        ):
+            ok, reason, _ = loop._cross_section_prefilter(_make_minimal_factor(), "t")
+        assert ok is False
+        assert "IC 过低" in reason
+
+    def test_cross_section_prefilter_pass(self, tmp_memory_dir):
+        """横截面预筛通过。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._is_cross_section = True
+        loop.market = "stock"
+        loop.cross_section_data = {f"S{i}": _make_ohlcv(50) for i in range(6)}
+        loop.cross_section_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=50))
+        with (
+            patch(
+                "fts.factor_engine.evaluation_chain._cs_execute_factors",
+                return_value=(
+                    {f"S{i}": np.ones(50) for i in range(6)},
+                    {f"S{i}": np.zeros(50) for i in range(6)},
+                ),
+            ),
+            patch(
+                "fts.factor_engine.evaluation_chain._cs_build_matrices",
+                return_value=(np.ones((50, 6)), np.zeros((50, 6))),
+            ),
+            patch(
+                "fts.factor_engine.evaluation_chain._cs_compute_ics",
+                return_value=[0.08],
+            ),
+        ):
+            ok, reason, ic = loop._cross_section_prefilter(_make_minimal_factor(), "t")
+        assert ok is True
+        assert ic == 0.08
+
+
+class TestGapF16EvolveOneAndBatch:
+    """_evolve_one method_hint 各分支 + batch 漏斗。"""
+
+    @staticmethod
+    def _make_loop(tmp_memory_dir):
+        return EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+        )
+
+    def test_evolve_one_hint_deep_success(self, tmp_memory_dir):
+        """method_hint=deep 成功。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._run_deep_evolution = MagicMock(
+            return_value=(
+                {"factor_id": "fct_d001", "deep_model": {"lookback": 5, "hidden": 8, "val_ic": 0.02}},
+                "Deep ok",
+            )
+        )
+        out = loop._evolve_one({"factor_id": "p1"}, 1, "t", method_hint="deep", seed=1)
+        assert out is not None
+        assert out[1] == "deep_evolution"
+
+    def test_evolve_one_hint_deep_failure(self, tmp_memory_dir):
+        """method_hint=deep 失败 → None。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._run_deep_evolution = MagicMock(side_effect=RuntimeError("deep down"))
+        assert loop._evolve_one({"factor_id": "p1"}, 1, "t", method_hint="deep", seed=1) is None
+
+    def test_evolve_one_hint_operator_failure(self, tmp_memory_dir):
+        """method_hint=operator 失败 → None。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._generate_operator_factor = MagicMock(side_effect=RuntimeError("op down"))
+        assert loop._evolve_one({"factor_id": "p1"}, 1, "t", method_hint="operator", seed=1) is None
+
+    def test_evolve_one_hint_macro_failure(self, tmp_memory_dir):
+        """method_hint=macro 失败 → None。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop.macro_evolver.evolve = MagicMock(side_effect=RuntimeError("llm down"))
+        assert loop._evolve_one({"factor_id": "p1"}, 1, "t", method_hint="macro", seed=1) is None
+
+    def test_evolve_one_hint_gp_success(self, tmp_memory_dir):
+        """method_hint=gp 成功。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._run_gp_evolution = MagicMock(return_value=({"factor_id": "fct_g001"}, "GP ok"))
+        out = loop._evolve_one({"factor_id": "p1"}, 1, "t", method_hint="gp", seed=1)
+        assert out is not None
+        assert out[1] == "gp_evolution"
+
+    def test_batch_generate_one_rotation(self, tmp_memory_dir):
+        """batch 单候选生成方法轮换 hint: macro→gp→deep→operator→gp。"""
+        loop = self._make_loop(tmp_memory_dir)
+        hints: list[str] = []
+
+        def fake_evolve_one(parent, generation, trace_id, method_hint=None, seed=None):
+            hints.append(method_hint)
+            return ({"factor_id": "fct_b001"}, method_hint, "summary", 0)
+
+        loop._evolve_one = MagicMock(side_effect=fake_evolve_one)
+        for i in range(5):
+            loop._batch_idx = i
+            proposal = loop._batch_generate_one({"factor_id": "p1"}, 1, "t")
+            assert proposal is not None
+        assert hints == ["macro", "gp", "deep", "operator", "gp"]
+
+    def test_batch_generate_one_none(self, tmp_memory_dir):
+        """batch 单候选生成失败 → None。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._evolve_one = MagicMock(return_value=None)
+        assert loop._batch_generate_one({"factor_id": "p1"}, 1, "t") is None
+
+    def test_run_batch_generation_all_rejected(self, tmp_memory_dir, tmp_elite_dir):
+        """batch 一代全部被拦截 → 记录失败轨迹并返回 False。"""
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+        )
+        mock_result = MagicMock()
+        mock_result.tokens_consumed = 0
+        mock_result.total_generated = 2
+        mock_result.total_passed = 0
+        mock_result.passed = []
+        mock_result.rejected = [
+            {"method": "gp", "prefilter_reason": "低 IC"},
+            {"method": "operator", "prefilter_reason": "常数"},
+        ]
+        mock_result.duration_ms = 12.0
+        with patch("fts.factor_engine.batch_mining.BatchMiner") as mock_miner_cls:
+            mock_miner_cls.return_value.run_iteration.return_value = mock_result
+            ok = loop._run_batch_generation({"factor_id": "p1"}, 1, "t", {"tokens_consumed": 0}, [], [])
+        assert ok is False
+
+    def test_run_batch_generation_promoted(self, tmp_memory_dir, tmp_elite_dir):
+        """batch 一代有候选通过 → 走准入链并返回 True。"""
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+        )
+        mock_result = MagicMock()
+        mock_result.tokens_consumed = 50
+        mock_result.total_generated = 1
+        mock_result.total_passed = 1
+        mock_result.passed = [{"factor": {"factor_id": "fct_bp001"}, "method": "gp", "summary": "s"}]
+        mock_result.rejected = []
+        mock_result.duration_ms = 5.0
+        loop._process_candidate = MagicMock(return_value=True)
+        full_state = loop.state_manager.load_or_init()
+        with patch("fts.factor_engine.batch_mining.BatchMiner") as mock_miner_cls:
+            mock_miner_cls.return_value.run_iteration.return_value = mock_result
+            ok = loop._run_batch_generation({"factor_id": "p1"}, 1, "t", full_state, [], [])
+        assert ok is True
+        loop._process_candidate.assert_called_once()
+
+
+class TestGapF16RunBoundaries:
+    """run() 数据质量熔断 / 无父因子直接返回。"""
+
+    def test_run_data_quality_critical(self, tmp_memory_dir, tmp_elite_dir):
+        """数据质量 critical 告警 → circuit_broken。"""
+        from fts.monitor.data_quality_monitor import QualityAlert
+
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+        )
+        critical_alert = QualityAlert(
+            factor_id="market",
+            alert_type="data_missing",
+            severity="critical",
+            message="close 缺失",
+            metric_name="coverage",
+            metric_value=0.1,
+            baseline_value=1.0,
+            threshold=0.5,
+        )
+        loop.data_quality_monitor.validate_market_data = MagicMock(return_value=[critical_alert])
+        result = loop.run(max_generation=2)
+        assert result.status == "circuit_broken"
+        assert result.circuit_breaker_reason == "data_quality_critical"
+
+    def test_run_no_parent_factors(self, tmp_memory_dir, tmp_elite_dir):
+        """无种子且 elite 池为空 → 直接返回 completed 0 代。"""
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+        )
+        loop.seed_pool.load_all_seeds = MagicMock(return_value=[])
+        loop._merge_l1_candidates = MagicMock(return_value=[])
+        loop._run_seed_correlation_check = MagicMock(return_value=[])
+        loop._evaluate_and_promote_seeds = MagicMock(return_value=0)
+        loop._load_elite_parent_factors = MagicMock(return_value=[])
+        result = loop.run(max_generation=3)
+        assert result.status == "completed"
+        assert result.generations_completed == 0
+
+    def test_run_seed_correlation_check_cross_section_skip(self, tmp_memory_dir, tmp_elite_dir):
+        """横截面模式 + 种子 > 50 → 相关性预检跳过。"""
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            elite_dir=tmp_elite_dir,
+            memory_dir=tmp_memory_dir,
+            cross_section_data={"S0": _make_ohlcv(100)},
+            cross_section_dates=pd.DatetimeIndex(pd.date_range("2026-01-01", periods=100)),
+        )
+        seeds = [{"factor_id": f"fct_s{i}", "name": f"s{i}", "code": "x"} for i in range(60)]
+        result = loop._run_seed_correlation_check(seeds, "t")
+        assert result == []
+
+
+class TestGapF16CrossSectionAndEvolution:
+    """横截面评估 / Barra / GP / Deep 演化分支。"""
+
+    def test_build_barra_exposures_not_cross_section(self, tmp_memory_dir):
+        """非横截面模式 → None。"""
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+        )
+        assert loop._build_barra_exposures() is None
+
+    def test_build_barra_exposures_disabled(self, tmp_memory_dir, monkeypatch):
+        """横截面但配置关闭 → None。"""
+        from fts.config.settings import get_config
+
+        monkeypatch.setattr(get_config(), "l2_barra_style_neutral", False)
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+            cross_section_data={"S0": _make_ohlcv(100)},
+            cross_section_dates=pd.DatetimeIndex(pd.date_range("2026-01-01", periods=100)),
+        )
+        assert loop._build_barra_exposures() is None
+
+    def test_build_barra_exposures_exception(self, tmp_memory_dir, monkeypatch):
+        """Barra 构建异常 → None 不阻断。"""
+        from fts.config.settings import get_config
+
+        monkeypatch.setattr(get_config(), "l2_barra_style_neutral", True)
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+            cross_section_data={"S0": _make_ohlcv(100)},
+            cross_section_dates=pd.DatetimeIndex(pd.date_range("2026-01-01", periods=100)),
+        )
+        with patch(
+            "fts.factor_engine.barra.barra_style.BarraStyleEngine.compute_exposures",
+            side_effect=RuntimeError("barra crash"),
+        ):
+            assert loop._build_barra_exposures() is None
+
+    def test_evaluate_cross_section_failure_reasons(self, tmp_memory_dir):
+        """横截面评估低 IC/夏普 → failure_reasons 非空。"""
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+            cross_section_data={"S0": _make_ohlcv(100)},
+            cross_section_dates=pd.DatetimeIndex(pd.date_range("2026-01-01", periods=100)),
+        )
+        with patch("fts.factor_engine.evolution_loop.cross_section_evaluate_backtest") as mock_cs:
+            mock_cs.return_value = {"ic": 0.01, "sharpe": 0.8, "t_stat": 1.0}
+            factor = _make_minimal_factor("fct_cs001")
+            evaluation = loop._evaluate_cross_section(factor, "t")
+        assert evaluation["passed"] is False
+        assert len(evaluation["failure_reasons"]) == 2
+
+    def test_run_gp_evolution_bad_fitness(self, tmp_memory_dir):
+        """GP 适应度 <= 0 → RuntimeError。"""
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+        )
+        mock_result = MagicMock()
+        mock_result.best_fitness = -0.5
+        loop.feature_ops_engine.run_gp_search = MagicMock(return_value=mock_result)
+        with pytest.raises(RuntimeError, match="适应度"):
+            loop._run_gp_evolution({"factor_id": "p1"}, 1, "t")
+
+    def test_run_deep_evolution_insufficient_data(self, tmp_memory_dir):
+        """深度演化数据不足 → RuntimeError。"""
+        loop = EvolutionLoop(
+            data=_make_ohlcv(1),
+            forward_returns=np.zeros(1),
+            memory_dir=tmp_memory_dir,
+        )
+        with pytest.raises(RuntimeError, match="无可用行情数据"):
+            loop._run_deep_evolution({"factor_id": "p1", "name": "p"}, 1, "t")
+
+
+class TestGapF16MergeL1Candidates:
+    """_merge_l1_candidates 各分支。"""
+
+    def _make_loop(self, tmp_memory_dir, inject_dir):
+        return EvolutionLoop(
+            data=_make_ohlcv(50),
+            forward_returns=np.zeros(50),
+            memory_dir=tmp_memory_dir,
+            inject_dir=str(inject_dir),
+        )
+
+    def test_inject_dir_missing_returns_seeds(self, tmp_memory_dir, tmp_path):
+        """注入目录不存在 → 返回原种子。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_path / "no_such_dir")
+        seeds = [{"factor_id": "s1", "name": "s1"}]
+        assert loop._merge_l1_candidates(seeds, "t") == seeds
+
+    def test_merge_consumes_candidate(self, tmp_memory_dir, tmp_path):
+        """正常合并：候选转为 FactorProgram 并消费（文件删除）。
+
+        factor_pool.json 使用工作目录相对路径，测试中 patch Path.exists
+        使其视为不存在（pool_loaded=False 放行），避免读写真实文件。
+        """
+        inject_dir = tmp_path / "l1"
+        inject_dir.mkdir()
+        cand = {
+            "candidate_id": "cand_abc12345",
+            "name": "l1_factor",
+            "code": "def factor_program(data, params):\n    import numpy as np\n    return data['close']",
+            "params": {},
+            "market": "futures",
+            "economic_logic": {
+                "theory": 3,
+                "behavioral": 3,
+                "microstructure": 3,
+                "institutional": 3,
+                "narrative": "L1 注入候选测试",
+            },
+        }
+        cand_file = inject_dir / "cand_abc12345.json"
+        cand_file.write_text(json.dumps(cand), encoding="utf-8")
+        loop = self._make_loop(tmp_memory_dir, inject_dir)
+        real_exists = Path.exists
+
+        def fake_exists(self):
+            if str(self).endswith("factor_pool.json"):
+                return False
+            return real_exists(self)
+
+        with patch.object(Path, "exists", fake_exists):
+            merged = loop._merge_l1_candidates([], "t")
+        assert len(merged) == 1
+        assert merged[0]["source"] == "bootstrapping"
+        assert merged[0]["parent_id"] == "cand_abc12345"
+        # 消费后候选文件被删除（GAP-036）
+        assert not cand_file.exists()
+
+    def test_merge_market_mismatch_skips(self, tmp_memory_dir, tmp_path):
+        """候选 market 不匹配 → 跳过。"""
+        inject_dir = tmp_path / "l1b"
+        inject_dir.mkdir()
+        cand = {
+            "candidate_id": "cand_xyz12345",
+            "name": "stock_factor",
+            "code": "def factor_program(data, params):\n    import numpy as np\n    return data['close']",
+            "params": {},
+            "market": "stock",
+        }
+        (inject_dir / "cand_xyz12345.json").write_text(json.dumps(cand), encoding="utf-8")
+        loop = self._make_loop(tmp_memory_dir, inject_dir)
+        loop.market = "futures"
+        real_exists = Path.exists
+
+        def fake_exists(self):
+            if str(self).endswith("factor_pool.json"):
+                return False
+            return real_exists(self)
+
+        with patch.object(Path, "exists", fake_exists):
+            merged = loop._merge_l1_candidates([], "t")
+        assert len(merged) == 0
+
+    def test_merge_duplicate_name_skips(self, tmp_memory_dir, tmp_path):
+        """候选名称与现有种子重复 → 跳过。"""
+        inject_dir = tmp_path / "l1c"
+        inject_dir.mkdir()
+        cand = {
+            "candidate_id": "cand_dup12345",
+            "name": "dup_factor",
+            "code": "def factor_program(data, params):\n    import numpy as np\n    return data['close']",
+            "params": {},
+            "market": "futures",
+        }
+        (inject_dir / "cand_dup12345.json").write_text(json.dumps(cand), encoding="utf-8")
+        loop = self._make_loop(tmp_memory_dir, inject_dir)
+        real_exists = Path.exists
+
+        def fake_exists(self):
+            if str(self).endswith("factor_pool.json"):
+                return False
+            return real_exists(self)
+
+        with patch.object(Path, "exists", fake_exists):
+            merged = loop._merge_l1_candidates([{"factor_id": "s1", "name": "dup_factor"}], "t")
+        assert len(merged) == 1  # 仅原种子
+
+    def test_merge_invalid_candidate_skipped(self, tmp_memory_dir, tmp_path):
+        """候选缺少 candidate_id/name/code → 跳过。"""
+        inject_dir = tmp_path / "l1d"
+        inject_dir.mkdir()
+        (inject_dir / "cand_bad.json").write_text(json.dumps({"candidate_id": "cand_bad"}), encoding="utf-8")
+        loop = self._make_loop(tmp_memory_dir, inject_dir)
+        real_exists = Path.exists
+
+        def fake_exists(self):
+            if str(self).endswith("factor_pool.json"):
+                return False
+            return real_exists(self)
+
+        with patch.object(Path, "exists", fake_exists):
+            merged = loop._merge_l1_candidates([], "t")
+        assert merged == []

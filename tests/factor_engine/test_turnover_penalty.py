@@ -76,10 +76,7 @@ class TestTurnoverPenaltyEffectiveness:
         assert _abs_delta(penalized, PREV) < base_delta
 
     def test_lambda_monotonic(self) -> None:
-        deltas = [
-            _abs_delta(apply_turnover_penalty(_make_signals(), PREV, lam), PREV)
-            for lam in (0.0, 1.0, 3.0, 10.0)
-        ]
+        deltas = [_abs_delta(apply_turnover_penalty(_make_signals(), PREV, lam), PREV) for lam in (0.0, 1.0, 3.0, 10.0)]
         assert deltas[0] > deltas[1] > deltas[2] > deltas[3]
 
     def test_large_lambda_keeps_prev_weights(self) -> None:

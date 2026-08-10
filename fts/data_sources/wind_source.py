@@ -102,7 +102,7 @@ class WindSource(BaseFuturesSource):
     """万得 Wind MCP 适配器（v2.3.0）。
 
     字段增强层 — 主要补充 settle/oi_change/期权 IV 等 TQ 不全的字段。
-    不参与 K 线主路径（DUCKDB_CACHE → TQ_LOCAL → TQ_PYTHON → AKSHARE）。
+    不参与 K 线主路径（DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON → AKSHARE）。
     """
 
     source_name: str = "WIND"

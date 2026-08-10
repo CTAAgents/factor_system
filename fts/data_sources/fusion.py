@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # ─── 默认源权重 ────────────────────────────────────────────
 # 用于 WEIGHTED 策略。可在构造 OHLCVFusion 时覆盖。
 DEFAULT_SOURCE_WEIGHTS: dict[str, float] = {
-    "TQ_LOCAL": 2.0,
+    "TDX_LOCAL": 2.0,
     "TQ_PYTHON": 2.0,
     "WIND": 1.5,
     "IFIND": 1.0,
@@ -103,7 +103,7 @@ class OHLCVFusion:
             symbol: 品种代码
             date: ISO 日期
             source_rows: 源名 → 该行 dict（必含 FUSION_FIELDS 中的字段）
-                例: {"TQ_LOCAL": {...}, "WIND": {...}}
+                例: {"TDX_LOCAL": {...}, "WIND": {...}}
             trace_id: 链路追踪 ID
 
         Returns:

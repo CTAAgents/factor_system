@@ -323,6 +323,7 @@ class TestProviderGetTickData:
         df = provider.get_tick_data("RB0", count=10, trace_id="t")
         assert df.empty
 
+
 # ─── 6. is_available 探活 ─────────────────────────────────
 
 

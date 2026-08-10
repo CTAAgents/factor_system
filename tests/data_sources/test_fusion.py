@@ -46,11 +46,11 @@ class TestPassthrough:
         for strategy in FusionStrategy:
             fuser = OHLCVFusion(strategy=strategy)
             row = _row(close=3500.0)
-            result = fuser.fuse_row("RB0", "2026-08-04", {"TQ_LOCAL": row}, trace_id="t-1")
-            assert result["contributing_sources"] == ["TQ_LOCAL"]
+            result = fuser.fuse_row("RB0", "2026-08-04", {"TDX_LOCAL": row}, trace_id="t-1")
+            assert result["contributing_sources"] == ["TDX_LOCAL"]
             assert result["fusion_strategy"] == "PASSTHROUGH"
             assert result["close"] == 3500.0
-            assert result["source"] == "TQ_LOCAL"
+            assert result["source"] == "TDX_LOCAL"
             assert result["symbol"] == "RB0"
             assert result["date"] == "2026-08-04"
             assert result["trace_id"] == "t-1"
@@ -70,11 +70,11 @@ class TestMedianStrategy:
         """2 源 MEDIAN: 取两个值的平均（中位数 = (a+b)/2）。"""
         fuser = OHLCVFusion(strategy=FusionStrategy.MEDIAN)
         sources = {
-            "TQ_LOCAL": _row(close=3500.0),
+            "TDX_LOCAL": _row(close=3500.0),
             "WIND": _row(close=3510.0),
         }
         result = fuser.fuse_row("RB0", "2026-08-04", sources, trace_id="t-med-2")
-        assert result["contributing_sources"] == ["TQ_LOCAL", "WIND"]
+        assert result["contributing_sources"] == ["TDX_LOCAL", "WIND"]
         assert result["fusion_strategy"] == "MEDIAN"
         assert result["close"] == 3505.0  # (3500+3510)/2
 
@@ -82,7 +82,7 @@ class TestMedianStrategy:
         """3 源 MEDIAN: 中位数 = 第二个值，抗异常值。"""
         fuser = OHLCVFusion(strategy=FusionStrategy.MEDIAN)
         sources = {
-            "TQ_LOCAL": _row(close=3500.0),
+            "TDX_LOCAL": _row(close=3500.0),
             "WIND": _row(close=3502.0),
             "IFIND": _row(close=4000.0),  # 异常值
         }
@@ -100,7 +100,7 @@ class TestMedianStrategy:
 class TestMeanStrategy:
     def test_mean_two_sources(self):
         fuser = OHLCVFusion(strategy=FusionStrategy.MEAN)
-        sources = {"TQ_LOCAL": _row(close=3500.0), "WIND": _row(close=3510.0)}
+        sources = {"TDX_LOCAL": _row(close=3500.0), "WIND": _row(close=3510.0)}
         result = fuser.fuse_row("RB0", "2026-08-04", sources)
         assert result["close"] == 3505.0
         assert result["fusion_strategy"] == "MEAN"
@@ -108,7 +108,7 @@ class TestMeanStrategy:
     def test_mean_three_sources(self):
         fuser = OHLCVFusion(strategy=FusionStrategy.MEAN)
         sources = {
-            "TQ_LOCAL": _row(close=3500.0),
+            "TDX_LOCAL": _row(close=3500.0),
             "WIND": _row(close=3504.0),
             "IFIND": _row(close=3506.0),
         }
@@ -123,7 +123,7 @@ class TestWeightedStrategy:
     def test_weighted_default_tq_dominates(self):
         """默认权重 TQ=2 > WIND=1.5，close 应更接近 TQ。"""
         fuser = OHLCVFusion(strategy=FusionStrategy.WEIGHTED)
-        sources = {"TQ_LOCAL": _row(close=3500.0), "WIND": _row(close=3510.0)}
+        sources = {"TDX_LOCAL": _row(close=3500.0), "WIND": _row(close=3510.0)}
         result = fuser.fuse_row("RB0", "2026-08-04", sources)
         # 加权 = (2*3500 + 1.5*3510) / 3.5 = (7000+5265)/3.5 = 3504.29
         assert abs(result["close"] - 3504.29) < 0.1
@@ -133,16 +133,16 @@ class TestWeightedStrategy:
         """自定义权重可覆盖默认。"""
         fuser = OHLCVFusion(
             strategy=FusionStrategy.WEIGHTED,
-            source_weights={"TQ_LOCAL": 0.0, "WIND": 1.0},
+            source_weights={"TDX_LOCAL": 0.0, "WIND": 1.0},
         )
-        sources = {"TQ_LOCAL": _row(close=3500.0), "WIND": _row(close=3510.0)}
+        sources = {"TDX_LOCAL": _row(close=3500.0), "WIND": _row(close=3510.0)}
         result = fuser.fuse_row("RB0", "2026-08-04", sources)
         # TQ 权重 0 → 实际只用 WIND
         assert result["close"] == 3510.0
 
     def test_default_source_weights_present(self):
         """默认权重表应包含 TQ/WIND/IFIND/AKSHARE/SYNTHETIC。"""
-        assert "TQ_LOCAL" in DEFAULT_SOURCE_WEIGHTS
+        assert "TDX_LOCAL" in DEFAULT_SOURCE_WEIGHTS
         assert "WIND" in DEFAULT_SOURCE_WEIGHTS
         assert "IFIND" in DEFAULT_SOURCE_WEIGHTS
         assert "AKSHARE" in DEFAULT_SOURCE_WEIGHTS
@@ -203,7 +203,7 @@ class TestTrimmedMeanStrategy:
         """3 源: 去掉最高/最低后取均值。"""
         fuser = OHLCVFusion(strategy=FusionStrategy.TRIMMED_MEAN)
         sources = {
-            "TQ_LOCAL": _row(close=3500.0),
+            "TDX_LOCAL": _row(close=3500.0),
             "WIND": _row(close=3502.0),
             "IFIND": _row(close=4000.0),  # 异常
         }
@@ -214,7 +214,7 @@ class TestTrimmedMeanStrategy:
     def test_trimmed_mean_two_sources_falls_back_to_mean(self):
         """2 源 < 3: 退化为均值。"""
         fuser = OHLCVFusion(strategy=FusionStrategy.TRIMMED_MEAN)
-        sources = {"TQ_LOCAL": _row(close=3500.0), "WIND": _row(close=3510.0)}
+        sources = {"TDX_LOCAL": _row(close=3500.0), "WIND": _row(close=3510.0)}
         result = fuser.fuse_row("RB0", "2026-08-04", sources)
         assert result["close"] == 3505.0
 
@@ -241,7 +241,7 @@ class TestFieldHandling:
         """某源缺字段时，不影响其他源。"""
         fuser = OHLCVFusion(strategy=FusionStrategy.MEDIAN)
         sources = {
-            "TQ_LOCAL": _row(close=3500.0),  # 完整
+            "TDX_LOCAL": _row(close=3500.0),  # 完整
             "WIND": {"close": 3510.0, "volume": 100000},  # 缺 open/high/low
         }
         result = fuser.fuse_row("RB0", "2026-08-04", sources)
@@ -257,7 +257,7 @@ class TestFieldHandling:
         """NaN 字段被跳过。"""
         fuser = OHLCVFusion(strategy=FusionStrategy.MEDIAN)
         sources = {
-            "TQ_LOCAL": _row(close=3500.0),
+            "TDX_LOCAL": _row(close=3500.0),
             "WIND": {**_row(close=3510.0), "amount": float("nan")},
         }
         result = fuser.fuse_row("RB0", "2026-08-04", sources)
@@ -268,7 +268,7 @@ class TestFieldHandling:
         """非融合字段 (hold/oi_change/pre_settle/vwap) 取首个非空源。"""
         fuser = OHLCVFusion(strategy=FusionStrategy.MEDIAN)
         sources = {
-            "TQ_LOCAL": _row(close=3500.0, hold=80000, oi_change=2000),
+            "TDX_LOCAL": _row(close=3500.0, hold=80000, oi_change=2000),
             "WIND": _row(close=3510.0, hold=85000, oi_change=2500),
         }
         result = fuser.fuse_row("RB0", "2026-08-04", sources)
@@ -297,12 +297,12 @@ class TestDataFrameFusion:
             ]
         )
         fuser = OHLCVFusion(strategy=FusionStrategy.MEDIAN)
-        result = fuser.fuse_dataframe("RB0", {"TQ_LOCAL": df_tq, "WIND": df_wind}, trace_id="t-df")
+        result = fuser.fuse_dataframe("RB0", {"TDX_LOCAL": df_tq, "WIND": df_wind}, trace_id="t-df")
         assert len(result) == 3
         assert result.iloc[0]["close"] == 3500.5  # (3500+3501)/2
         assert result.iloc[1]["close"] == 3501.5
         assert result.iloc[2]["close"] == 3502.5
-        assert all(result["contributing_sources"].apply(lambda x: set(x) == {"TQ_LOCAL", "WIND"}))
+        assert all(result["contributing_sources"].apply(lambda x: set(x) == {"TDX_LOCAL", "WIND"}))
 
     def test_fuse_dataframe_partial_coverage(self):
         """部分日期只有 1 个源有数据 → 透传。"""
@@ -339,7 +339,7 @@ class TestDataFrameFusion:
             ]
         )
         fuser = OHLCVFusion(strategy=FusionStrategy.MEDIAN)
-        result = fuser.fuse_dataframe("RB0", {"TQ_LOCAL": df_tq, "WIND": df_wind})
+        result = fuser.fuse_dataframe("RB0", {"TDX_LOCAL": df_tq, "WIND": df_wind})
         assert len(result) == 2
         # 08-01 只有 TQ → 透传 3500
         assert result.iloc[0]["close"] == 3500.0
@@ -352,7 +352,7 @@ class TestDataFrameFusion:
         """空输入返回空 DataFrame。"""
         fuser = OHLCVFusion()
         assert fuser.fuse_dataframe("RB0", {}).empty
-        assert fuser.fuse_dataframe("RB0", {"TQ_LOCAL": pd.DataFrame()}).empty
+        assert fuser.fuse_dataframe("RB0", {"TDX_LOCAL": pd.DataFrame()}).empty
 
 
 # ─── 契约合规 ────────────────────────────────────────────
@@ -362,7 +362,7 @@ class TestContractCompliance:
     def test_result_is_fused_ohlcv(self):
         """返回结果符合 FusedOHLCV 契约（必填字段齐全）。"""
         fuser = OHLCVFusion()
-        sources = {"TQ_LOCAL": _row(close=3500.0), "WIND": _row(close=3510.0)}
+        sources = {"TDX_LOCAL": _row(close=3500.0), "WIND": _row(close=3510.0)}
         result = fuser.fuse_row("RB0", "2026-08-04", sources, trace_id="t-cc")
         required = {
             "symbol",

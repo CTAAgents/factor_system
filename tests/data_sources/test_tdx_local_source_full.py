@@ -1,6 +1,6 @@
-"""tests/data_sources/test_tdx_minute_source_full.py — TDX 分钟适配器补充测试。
+"""tests/data_sources/test_tdx_local_source_full.py — TDX 统一数据源补充测试。
 
-补充 test_tdx_minute_source.py 未覆盖的路径:
+补充 test_tdx_local_source.py 未覆盖的路径:
     - fetch_ohlcv 异常分支（HTTP/OSError/JSON）
     - 三种时间格式（date+time / time-only / date-only / 缺失）
     - 缺字段 / 非 dict 结构 / 多品种回退 / 截断
@@ -24,7 +24,7 @@ if str(_FTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_FTS_ROOT))
 
 from fts.data_sources.base import SourceUnavailable  # noqa: E402
-from fts.data_sources.tdx_minute_source import TDXMinuteSource  # noqa: E402
+from fts.data_sources.tdx_local_source import TdxLocalSource  # noqa: E402
 
 
 # ─── fake urlopen ──────────────────────────────────────────
@@ -77,34 +77,34 @@ class TestFetchOhlcvErrors:
     def test_http_error_raises(self, monkeypatch):
         _patch_urlopen(monkeypatch, FakeResp(raise_error=urllib.error.URLError("boom")))
         with pytest.raises(SourceUnavailable, match="HTTP 请求失败"):
-            TDXMinuteSource().fetch_ohlcv("RB0")
+            TdxLocalSource(period="5m").fetch_ohlcv("RB0")
 
     def test_oserror_raises(self, monkeypatch):
         _patch_urlopen(monkeypatch, FakeResp(raise_error=OSError("conn")))
         with pytest.raises(SourceUnavailable, match="连接失败"):
-            TDXMinuteSource().fetch_ohlcv("RB0")
+            TdxLocalSource(period="5m").fetch_ohlcv("RB0")
 
     def test_json_error_raises(self, monkeypatch):
         _patch_urlopen(monkeypatch, FakeResp(data=b"not json"))
         with pytest.raises(SourceUnavailable, match="JSON 解析失败"):
-            TDXMinuteSource().fetch_ohlcv("RB0")
+            TdxLocalSource(period="5m").fetch_ohlcv("RB0")
 
     def test_result_none_returns_none(self, monkeypatch):
         _patch_urlopen(monkeypatch, FakeResp(data=b'{"result": null}'))
-        assert TDXMinuteSource().fetch_ohlcv("RB0") is None
+        assert TdxLocalSource(period="5m").fetch_ohlcv("RB0") is None
 
     def test_value_not_dict_returns_none(self, monkeypatch):
         _patch_urlopen(monkeypatch, FakeResp(data=b'{"result": {"Value": 123}}'))
-        assert TDXMinuteSource().fetch_ohlcv("RB0") is None
+        assert TdxLocalSource(period="5m").fetch_ohlcv("RB0") is None
 
     def test_block_not_dict_returns_none(self, monkeypatch):
         _patch_urlopen(monkeypatch, FakeResp(data=b'{"result": {"Value": {"RBL8.SHF": 123}}}'))
-        assert TDXMinuteSource().fetch_ohlcv("RB0") is None
+        assert TdxLocalSource(period="5m").fetch_ohlcv("RB0") is None
 
     def test_missing_required_fields_returns_none(self, monkeypatch):
         block = {"Date": ["20260801"], "Close": [3000.0]}
         _patch_urlopen(monkeypatch, FakeResp(data=_make_raw(block)))
-        assert TDXMinuteSource().fetch_ohlcv("RB0") is None
+        assert TdxLocalSource(period="5m").fetch_ohlcv("RB0") is None
 
     def test_no_date_time_returns_none(self, monkeypatch):
         # 无 Date/Time 列（仅 OHLCV）
@@ -117,19 +117,19 @@ class TestFetchOhlcvErrors:
             "Volume": rng.integers(100, 1000, 10).astype(float).tolist(),
         }
         _patch_urlopen(monkeypatch, FakeResp(data=_make_raw(block)))
-        assert TDXMinuteSource().fetch_ohlcv("RB0") is None
+        assert TdxLocalSource(period="5m").fetch_ohlcv("RB0") is None
 
 
 class TestFetchOhlcvFormats:
     def test_normal_date_time(self, monkeypatch):
         block = _make_kline_block(n=30)
         _patch_urlopen(monkeypatch, FakeResp(data=_make_raw(block)))
-        df = TDXMinuteSource("1m").fetch_ohlcv("RB0", days=500, trace_id="tid")
+        df = TdxLocalSource("1m").fetch_ohlcv("RB0", days=500, trace_id="tid")
         assert df is not None
         assert len(df) == 30
         assert df["symbol"].iloc[0] == "RB0"
         assert df["period"].iloc[0] == "1m"
-        assert df["source"].iloc[0] == "TDX_MINUTE"
+        assert df["source"].iloc[0] == "TDX_LOCAL"
         assert df["trace_id"].iloc[0] == "tid"
         assert pd.api.types.is_datetime64_any_dtype(df["datetime"])
         assert df["datetime"].is_monotonic_increasing
@@ -140,7 +140,7 @@ class TestFetchOhlcvFormats:
         block = _make_kline_block(n=20, has_date=True, has_time=True)
         block.pop("Date", None)
         _patch_urlopen(monkeypatch, FakeResp(data=_make_raw(block)))
-        df = TDXMinuteSource().fetch_ohlcv("RB0")
+        df = TdxLocalSource(period="5m").fetch_ohlcv("RB0")
         assert df is not None and len(df) == 20
 
     def test_date_only(self, monkeypatch):
@@ -148,20 +148,20 @@ class TestFetchOhlcvFormats:
         block = _make_kline_block(n=20, has_date=True, has_time=True)
         block.pop("Time", None)
         _patch_urlopen(monkeypatch, FakeResp(data=_make_raw(block)))
-        df = TDXMinuteSource().fetch_ohlcv("RB0")
+        df = TdxLocalSource(period="5m").fetch_ohlcv("RB0")
         assert df is not None
         assert pd.api.types.is_datetime64_any_dtype(df["datetime"])
 
     def test_tail_truncation(self, monkeypatch):
         block = _make_kline_block(n=100)
         _patch_urlopen(monkeypatch, FakeResp(data=_make_raw(block)))
-        assert len(TDXMinuteSource().fetch_ohlcv("RB0", days=20)) == 20
+        assert len(TdxLocalSource(period="5m").fetch_ohlcv("RB0", days=20)) == 20
 
     def test_fallback_first_block_for_unknown_symbol(self, monkeypatch):
         block = _make_kline_block(n=10)
         raw = json.dumps({"result": {"Value": {"RBX1.SHF": block}}}).encode("utf-8")
         _patch_urlopen(monkeypatch, FakeResp(data=raw))
-        df = TDXMinuteSource().fetch_ohlcv("RB0")
+        df = TdxLocalSource(period="5m").fetch_ohlcv("RB0")
         assert df is not None and len(df) == 10
 
 
@@ -169,7 +169,7 @@ class TestFetchQuoteAndProbe:
     def test_quote_normal(self, monkeypatch):
         raw = json.dumps({"result": {"Now": 3005.5, "Open": 3000, "Max": 3010, "Min": 2990, "Volume": 999}}).encode()
         _patch_urlopen(monkeypatch, FakeResp(data=raw))
-        quote = TDXMinuteSource().fetch_quote("RB0", trace_id="tq")
+        quote = TdxLocalSource().fetch_quote("RB0", trace_id="tq")
         assert quote is not None
         assert quote["symbol"] == "RB0"
         assert quote["last_price"] == 3005.5
@@ -178,26 +178,26 @@ class TestFetchQuoteAndProbe:
 
     def test_quote_exception_returns_none(self, monkeypatch):
         _patch_urlopen(monkeypatch, FakeResp(raise_error=OSError("down")))
-        assert TDXMinuteSource().fetch_quote("RB0") is None
+        assert TdxLocalSource().fetch_quote("RB0") is None
 
     def test_quote_empty_result_returns_none(self, monkeypatch):
         _patch_urlopen(monkeypatch, FakeResp(data=b'{"result": null}'))
-        assert TDXMinuteSource().fetch_quote("RB0") is None
+        assert TdxLocalSource().fetch_quote("RB0") is None
 
     def test_quote_result_not_dict_defaults_zero(self, monkeypatch):
         _patch_urlopen(monkeypatch, FakeResp(data=b'{"result": 42}'))
-        quote = TDXMinuteSource().fetch_quote("RB0")
+        quote = TdxLocalSource().fetch_quote("RB0")
         assert quote is not None
         # result 非 dict → 仅基础字段，无 last_price
         assert "last_price" not in quote
 
     def test_is_available_true(self, monkeypatch):
         _patch_urlopen(monkeypatch, FakeResp(status=200))
-        assert TDXMinuteSource().is_available() is True
+        assert TdxLocalSource().is_available() is True
 
     def test_is_available_false(self, monkeypatch):
         def _raise(req, timeout):
             raise urllib.error.URLError("down")
 
         monkeypatch.setattr(urllib.request, "urlopen", _raise)
-        assert TDXMinuteSource().is_available() is False
+        assert TdxLocalSource().is_available() is False

@@ -172,6 +172,39 @@ class TestFTSConfigDefaults:
         cfg = load_config(config_path=None)
         assert cfg.max_margin_usage == pytest.approx(0.60)
 
+    # ── v2.86.0 (GAP-056, design/E.1) DuckDB 并发模型 ──
+    def test_duckdb_concurrency_defaults(self):
+        """DuckDB 并发模型配置默认值（GAP-056）。"""
+        cfg = FTSConfig()
+        assert cfg.duckdb_single_writer is True
+        assert cfg.duckdb_read_pool_size == 4
+        assert cfg.duckdb_batch_size == 1000
+        assert cfg.duckdb_commit_every == 100
+
+    def test_duckdb_single_writer_env_override(self, monkeypatch):
+        """FTS_DUCKDB_SINGLE_WRITER 环境变量覆盖。"""
+        monkeypatch.setenv("FTS_DUCKDB_SINGLE_WRITER", "false")
+        cfg = load_config(config_path=None)
+        assert cfg.duckdb_single_writer is False
+
+    def test_duckdb_read_pool_size_env_override(self, monkeypatch):
+        """FTS_DUCKDB_READ_POOL_SIZE 环境变量覆盖。"""
+        monkeypatch.setenv("FTS_DUCKDB_READ_POOL_SIZE", "8")
+        cfg = load_config(config_path=None)
+        assert cfg.duckdb_read_pool_size == 8
+
+    def test_duckdb_batch_size_env_override(self, monkeypatch):
+        """FTS_DUCKDB_BATCH_SIZE 环境变量覆盖。"""
+        monkeypatch.setenv("FTS_DUCKDB_BATCH_SIZE", "500")
+        cfg = load_config(config_path=None)
+        assert cfg.duckdb_batch_size == 500
+
+    def test_duckdb_commit_every_env_override(self, monkeypatch):
+        """FTS_DUCKDB_COMMIT_EVERY 环境变量覆盖。"""
+        monkeypatch.setenv("FTS_DUCKDB_COMMIT_EVERY", "50")
+        cfg = load_config(config_path=None)
+        assert cfg.duckdb_commit_every == 50
+
 
 # ═══════════════════════════════════════════════════════════
 # load_industry_map()

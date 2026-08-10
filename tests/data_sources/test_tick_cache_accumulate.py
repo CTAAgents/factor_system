@@ -11,10 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import duckdb
 import numpy as np
 import pandas as pd
-import pytest
 
 from fts.data_sources.aggregator import FuturesDataAggregator
 from fts.data_sources.migrate import migrate_schema
@@ -148,8 +146,11 @@ class TestTickCacheTimeWindow:
             df = _tick_df(n=10, start="2026-08-07 14:30:00")
             agg._write_tick_cache(df)
             out = agg.get_ticks(
-                "RB0", count=100, trace_id="t",
-                start_time="2026-08-07 14:30:01", end_time="2026-08-07 14:30:03",
+                "RB0",
+                count=100,
+                trace_id="t",
+                start_time="2026-08-07 14:30:01",
+                end_time="2026-08-07 14:30:03",
             )
             assert not out.empty
             assert (out["datetime"] >= pd.Timestamp("2026-08-07 14:30:01")).all()

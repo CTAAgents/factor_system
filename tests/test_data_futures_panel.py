@@ -163,7 +163,8 @@ class TestDominantContracts:
             ("RB", "RB2610"),
             ("CU", "CU2609"),
         ]
-        mocker.patch("fts.data_futures._get_db", return_value=mock_db)
+        mocker.patch("fts.data_futures._get_reader", return_value=mock_db)
+        mocker.patch("fts.data_futures._release_reader")
         result = get_dominant_contracts(["RB0", "CU0"])
         assert result == {"RB0": "RB2610", "CU0": "CU2609"}
 
@@ -171,7 +172,8 @@ class TestDominantContracts:
         """无数据品种返回空串。"""
         mock_db = mocker.MagicMock()
         mock_db.execute.return_value.fetchall.return_value = [("RB", "RB2610")]
-        mocker.patch("fts.data_futures._get_db", return_value=mock_db)
+        mocker.patch("fts.data_futures._get_reader", return_value=mock_db)
+        mocker.patch("fts.data_futures._release_reader")
         mocker.patch(
             "fts.data_futures._fetch_dominant_akshare",
             return_value={},
@@ -185,9 +187,10 @@ class TestDominantContracts:
         from fts.data_futures import FuturesDataError
 
         mocker.patch(
-            "fts.data_futures._get_db",
+            "fts.data_futures._get_reader",
             side_effect=FuturesDataError("boom"),
         )
+        mocker.patch("fts.data_futures._release_reader")
         mocker.patch(
             "fts.data_futures._fetch_dominant_akshare",
             return_value={},
@@ -199,7 +202,8 @@ class TestDominantContracts:
         """DB 缺失品种由 AKShare fallback 补全。"""
         mock_db = mocker.MagicMock()
         mock_db.execute.return_value.fetchall.return_value = [("RB", "RB2610")]
-        mocker.patch("fts.data_futures._get_db", return_value=mock_db)
+        mocker.patch("fts.data_futures._get_reader", return_value=mock_db)
+        mocker.patch("fts.data_futures._release_reader")
         mocker.patch(
             "fts.data_futures._fetch_dominant_akshare",
             return_value={"RU0": "RU2609"},

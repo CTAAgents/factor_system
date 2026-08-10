@@ -3,9 +3,9 @@
 TQSDK（天勤量化）: 通过 Python SDK 获取期货行情数据。
 支持分钟/日线 K 线，正序返回（旧→新）。
 
-注意: TQSDK 与 TQ-Local（通达信本地 HTTP 7721）是两个完全不同的数据源。
+注意: TQSDK 与 TdxLocalSource（通达信本地 HTTP 17709，TDX_LOCAL）是两个完全不同的数据源。
 - TQSDK: pip install tqsdk，通过 tqsdk 包连接天勤服务器
-- TQ-Local: 通达信本地客户端 HTTP 服务，端口 7721
+- TDX_LOCAL: 通达信本地客户端 HTTP 服务，端口 17709（v2.87.0 合并原 TQLocal/TDXMinute）
 
 HARNESS §5.3 契约优先: 实现 BaseFuturesSource 抽象方法。
 """

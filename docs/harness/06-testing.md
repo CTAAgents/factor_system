@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.86.0
+> 版本: v2.88.0
 > 最后更新: 2026-08-10
 
 ---
@@ -271,16 +271,16 @@ TOTAL                                      20326   1254    94%
 
 ### 模块覆盖统计
 
-> 完整逐模块清单见上方"模块覆盖详情"表。以下按覆盖率区间汇总（v2.47.0 实测，TOTAL 94%）。
+> 完整逐模块清单见上方"模块覆盖详情"表。以下按覆盖率区间汇总（v2.47.0 实测，TOTAL 94%；v2.88.0 GAP-F16 后 TOTAL 94.31%，14 个缺口模块全部 ≥90%）。
 
 | 覆盖率区间 | 模块数 | 代表模块 |
 |:-----------|:-------|:---------|
 | **100%** | 31 | `core/atomic` `core/contracts` `core/enums` `data_mcp` `data_sources/{aggregator,base,migrate,tqsdk_source,akshare_minute_source}` `factor_engine/{cost_model,feature_ops,monitor,program,robustness,state,stress_test,walk_forward}` `expr_dsl/{compiler,factory,registry}` `factor_db/schema` `llm` `monitor/prometheus_metrics` `risk/risk_manager` `scheduler/{engine,hotswap,jobs,tasks,watchdog}` |
 | **95%-99%** | 22 | `cli(99%)` `data_futures(99%)` `portfolio_loop(99%)` `extractors/base(99%)` `report_generator(99%)` `experience_chain(99%)` `data_mcp_bridge(98%)` `extractors/futures_pipeline(98%)` `factor_quality_card(98%)` `regime(98%)` `elite_tracker(98%)` `live_factor_monitor(98%)` `ablation(97%)` `http_server(97%)` `micro_evolution(97%)` `operator_evolution(97%)` `regime_features(97%)` `seed_data_futures_full(97%)` `evaluation_chain(96%)` `adaptive_weight(96%)` `gp_evolver(96%)` `regime_hmm(96%)` |
 | **90%-94%** | 27 | `meta_loop(94%)` `data_fundamental(93%)` `cross_market/engine(93%)` `factor_inspector(93%)` `feedback_loop(93%)` `seed_loader(93%)` `backtest_pipeline(92%)` `macro_evolution(92%)` `ml/trainer(92%)` `logic_monitor(92%)` `portfolio_constructor(92%)` `seed_pool(91%)` `capital_allocator(91%)` `simulated_adapter(91%)` `bridge/signal_bridge(90%)` `fusion(90%)` `feature_importance(90%)` `expr_dsl/validator(90%)` 等 |
-| **<90%（缺口）** | 16 | `cross_market/data_adapter(55%)` `factor_clustering(64%)` `tdx_minute_source(67%)` `tqsdk_tick_source(73%)` `factor_db/migrate_from_json(73%)` `evolution_loop(80%)` `tq_source(81%)` `data_quality_monitor(82%)` `ifind_source(84%)` `data(85%)` `factor_db/repository(85%)` `ml/models(86%)` `wind_source(87%)` `factor_screener(87%)` `causal_validator(89%)` `contracts(89%)` |
+| **<90%（缺口）** | 0 | 无（v2.88.0 GAP-F16 补齐：`cross_market/data_adapter`/`factor_clustering`/`tqsdk_tick_source`/`factor_db/migrate_from_json`/`evolution_loop`/`data_quality_monitor`/`ifind_source`/`data`/`factor_db/repository`/`ml/models`/`wind_source`/`factor_screener`/`causal_validator`/`contracts` 14 个缺口模块全部 ≥90%） |
 
-> 注：<90% 缺口模块多为外部数据源（网络/鉴权路径需集成环境）或异常分支兜底代码；`cross_market/data_adapter` 与 `factor_clustering` 为近期新增模块，缺口语句集中在参数校验与降级分支，后续按 P1/P2 优先级补充。
+> 注：v2.88.0（GAP-F16）三分组补齐 14 个 <90% 模块测试 +341 用例（外部数据源网络/鉴权/超时/降级兜底 mock + 核心引擎异常分支 + 参数校验降级路径），全量回归 5132 passed，TOTAL 覆盖率 94.31%，缺口清零。
 
 ---
 
@@ -288,7 +288,9 @@ TOTAL                                      20326   1254    94%
 
 | 测试文件 | 用例数 | 覆盖模块 |
 |:---------|:-------|:---------|
-| `tests/test_duckdb_writer.py` | 10 | DuckDB 单写者（GAP-056，v2.86.0）：连接可写/单条读写/executemany 批量/execute 原子性/executemany 原子性（唯一约束冲突整批回滚）/错误恢复/8 线程并发写零冲突/批量 COPY 与逐条一致/空 COPY no-op/close 释放 |
+| `tests/factor_engine/test_factor_screener.py` | 35 | 高IC筛查器（GAP-F16，v2.88.0，新建）：V1 一票否决（IC<门槛/样本不足/常数信号）+ V2 否决链（稳健性/极值扰动 ic_drop>25%/因子衰减）+ 打分/分级/报告输出 + 配置读取与边界 |
+| `tests/factor_engine/factor_db/test_migrate_from_json.py` | 19 | JSON→DuckDB 因子迁移（GAP-F16，v2.88.0，新建）：记录迁移字段映射/契约校验/幂等/表不存在/重复记录/类型转换/异常兜底 |
+| `tests/factor_engine/test_duckdb_writer.py` | 10 | DuckDB 单写者（GAP-056，v2.86.0）：连接可写/单条读写/executemany 批量/execute 原子性/executemany 原子性（唯一约束冲突整批回滚）/错误恢复/8 线程并发写零冲突/批量 COPY 与逐条一致/空 COPY no-op/close 释放 |
 | `tests/test_duckdb_reader.py` | 5 | DuckDB 读连接池（GAP-056，v2.86.0）：acquire 查询/池复用/池满关闭/写连接打开时读共存/close 全关 |
 | `tests/factor_engine/test_turnover_penalty.py` | 12 | 组合换手惩罚项（GAP-I303，v2.85.0）：apply_turnover_penalty 单元 4（λ=0 不变/λ>0 收缩/新因子不惩罚/无 prev 直返）+ 换手惩罚生效断言 3（惩罚后 Σ\|Δw\| 严格更小/λ 单调递减/大 λ 贴近 prev）+ build_combo 集成 2（惩罚生效且归一化/默认 0 不变）+ PortfolioLoop 配置 3（读配置/默认 0/显式参数覆盖） |
 | `tests/factor_engine/test_microstructure_factors.py` | 20 | Level2 订单流因子（GAP-I503 首期，v2.84.0）：方向分类（升/降/持平延续/缺列降级）+ OFI（纯买=+1/纯卖=-1/混合界内/空输入）+ OBI（买深重/卖深重/缺深度=0）+ 大单占比（绝对/相对阈值/无大单=0）+ compute 契约列/trade_volume 差分/降级/排序 + 配置校验 |
@@ -422,5 +424,5 @@ TOTAL                                      20326   1254    94%
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | `test_futures_signal_pipeline.py` → 21 个信号管道测试用例（Ridge 回归加权 + 方向校正 + 组合合成）；`test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面）；`test_seed_pool.py` → 种子池测试（含期货种子）；`factor_db/test_*` → 54 个 DuckDB 因子仓库测试用例；`test_gp_evolver.py::TestGpFactorExecutable` → 5 个 GP 因子代码可执行性测试用例（v2.8.4）；`test_expr_*.py` → FTS-Expr DSL 算子因子测试（v2.8.5）；`test_backtest_stage3.py` → 27 个 B.2 回测增强用例（v2.9.0）；`test_feedback_loop.py` → 20 个 C.3 反馈闭环用例（v2.9.0）；`test_cli_feature_gp.py` → 5 个 C.1 CLI 用例（v2.9.0）；`test_stage5_risk_live.py` → 27 个 C.2 实盘对接用例（v2.9.0）；`test_portfolio_loop.py` → 20 个漂移治理用例（粘性约束 7 + 漂移监控 7 + 影子池 6，v2.11.0）；`test_evolution_loop.py` → 4 个 L2 晋升双写原子化用例（DuckDB 失败回滚 JSON，v2.13.0）+ 2 个 factor_db_path 注入用例（GAP-030 测试隔离，v2.14.0）；`test_cross_market.py` → 20 个跨市场泛化验证用例（数据适配/分类/报告/加载/边缘情况/集成，v2.27.0）；`test_tdx_minute_source.py` → 29 个通达信分钟适配器用例（主力连续代码映射/列字典解析/周期映射，v2.30.0）；`test_tqsdk_tick_source.py` → 10 个 TQSDK tick 数据源用例（品种映射/tick 解析/tick_cache 迁移/降级链/Provider 接口，v2.31.0） |
-| 可验证断言 | 总测试数 = 4020+ passed, 0 failed, 0 skipped（v2.51.0 基线）；v2.54.0 精英因子全员质量巡检 230 因子——229 合格/1 出库（`volume_price_efficiency_ratio` V5 经济逻辑维度最低 1<2.0），质检报告 `reports/2026-08-09/elite_quality_inspection_20260809_075754.md`；v2.55.0 回溯分析确认 V5 为 LLM 评分缺陷（institutional 真实值应为 4），更新评分后重新质检通过 V5，因子归库；v2.57.0 行业/市值中性化 ~17 用例（feature_ops 2 + evaluation_chain 7 + config_settings 8）全绿；v2.58.0 换月复权/展期仿真 ~15 用例全绿；v2.59.0 GAP-F02/GAP-F03 用例全绿（test_backtest_pipeline 4 涨跌停/停牌拦截 + test_evolution_loop 3 板块中性化注入 + test_config_settings 4 配置默认值/env 覆盖）；v2.61.0 GAP-S01 股票中性化主流程用例全绿（test_evolution_loop 4 自动注入 + test_evaluation_chain 中性化前后 IC 对比） |
+| 可验证断言 | 总测试数 = 4020+ passed, 0 failed, 0 skipped（v2.51.0 基线）；v2.54.0 精英因子全员质量巡检 230 因子——229 合格/1 出库（`volume_price_efficiency_ratio` V5 经济逻辑维度最低 1<2.0），质检报告 `reports/2026-08-09/elite_quality_inspection_20260809_075754.md`；v2.55.0 回溯分析确认 V5 为 LLM 评分缺陷（institutional 真实值应为 4），更新评分后重新质检通过 V5，因子归库；v2.57.0 行业/市值中性化 ~17 用例（feature_ops 2 + evaluation_chain 7 + config_settings 8）全绿；v2.58.0 换月复权/展期仿真 ~15 用例全绿；v2.59.0 GAP-F02/GAP-F03 用例全绿（test_backtest_pipeline 4 涨跌停/停牌拦截 + test_evolution_loop 3 板块中性化注入 + test_config_settings 4 配置默认值/env 覆盖）；v2.61.0 GAP-S01 股票中性化主流程用例全绿（test_evolution_loop 4 自动注入 + test_evaluation_chain 中性化前后 IC 对比）；v2.88.0 GAP-F16 全量回归 5132 passed 全绿，覆盖率 TOTAL 94.31%（`--cov-fail-under=90` 达标），14 个 <90% 缺口模块清零 |
 | 检验方式 | `python -m pytest tests/ --no-cov -q 2>&1 | Select-String "passed"` |

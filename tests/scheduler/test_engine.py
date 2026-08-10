@@ -191,8 +191,8 @@ class TestSchedulerEngineStart:
         assert engine._scheduler is apscheduler_available
         assert engine.running is True
         apscheduler_available.start.assert_called_once()
-        # 11 = 10 个默认任务 + 1 个 sample_task
-        assert apscheduler_available.add_job.call_count == 11
+        # 12 = 11 个默认任务（含 sync_liquidity_pool）+ 1 个 sample_task
+        assert apscheduler_available.add_job.call_count == 12
         # 验证 sample_task 的 job 被加入
         job_calls = apscheduler_available.add_job.call_args_list
         test_job_call = next(
@@ -203,7 +203,7 @@ class TestSchedulerEngineStart:
         assert test_job_call.kwargs["minute"] == "0"
         assert test_job_call.kwargs["hour"] == "9"
         assert "已启动" in caplog.text
-        assert "11 个任务" in caplog.text
+        assert "12 个任务" in caplog.text
 
 
 # ─── stop ───────────────────────────────────────────────

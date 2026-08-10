@@ -111,9 +111,7 @@ class TestOrderFlowImbalance:
         """混合方向：OFI ∈ (-1, 1)。"""
         times = pd.date_range("2026-08-07 14:30:00", periods=30, freq="500ms")
         prices = [3000.0] + [3000.0 + (1 if i % 2 == 0 else -1) * 0.5 for i in range(29)]
-        df = pd.DataFrame(
-            {"datetime": times, "last_price": prices, "volume": np.arange(30, dtype=float) + 1.0}
-        )
+        df = pd.DataFrame({"datetime": times, "last_price": prices, "volume": np.arange(30, dtype=float) + 1.0})
         ofi = order_flow_imbalance(df, window=10)
         assert not ofi.empty
         assert (ofi >= -1.0).all() and (ofi <= 1.0).all()
@@ -169,7 +167,12 @@ class TestComputeMicrostructureFactors:
         df = _make_tick(n=40, up=True, big_idx=(10, 20), big_vol=50.0)
         out = compute_microstructure_factors(df)
         assert list(out.columns) == [
-            "datetime", "direction", "trade_volume", "ofi", "obi", "large_trade_ratio",
+            "datetime",
+            "direction",
+            "trade_volume",
+            "ofi",
+            "obi",
+            "large_trade_ratio",
         ]
         assert len(out) == 40
         assert (out["direction"].isin([-1, 0, 1])).all()
@@ -188,7 +191,12 @@ class TestComputeMicrostructureFactors:
         out = compute_microstructure_factors(df, cfg)
         assert out.empty
         assert list(out.columns) == [
-            "datetime", "direction", "trade_volume", "ofi", "obi", "large_trade_ratio",
+            "datetime",
+            "direction",
+            "trade_volume",
+            "ofi",
+            "obi",
+            "large_trade_ratio",
         ]
 
     def test_missing_columns_degrade_empty(self) -> None:

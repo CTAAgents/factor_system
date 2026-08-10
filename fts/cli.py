@@ -386,11 +386,11 @@ def _build_default_aggregator():
         FuturesDataAggregator 实例（TQ 本地源 + DuckDB 缓存路径）。
     """
     from fts.data_sources.aggregator import FuturesDataAggregator
-    from fts.data_sources.tq_source import TQLocalSource
+    from fts.data_sources.tdx_local_source import TdxLocalSource
 
     sources: list = []
     try:
-        sources.append(TQLocalSource())
+        sources.append(TdxLocalSource())
     except Exception:  # noqa: BLE001
         pass
 

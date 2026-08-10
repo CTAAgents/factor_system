@@ -12,8 +12,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
-
 _FTS_ROOT = Path(__file__).resolve().parents[3]
 if str(_FTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_FTS_ROOT))
@@ -73,7 +71,9 @@ class TestAnnouncementNewsExtractor:
         assert AnnouncementNewsExtractor()._fetch_announcements() == ""
 
     def test_fetch_announcements_no_title_skipped(self, monkeypatch):
-        resp = _FakeResponse({"data": {"list": [{"title": "", "columns": ["x"]}, {"title": "有效公告", "columns": []}]}})
+        resp = _FakeResponse(
+            {"data": {"list": [{"title": "", "columns": ["x"]}, {"title": "有效公告", "columns": []}]}}
+        )
         monkeypatch.setattr("fts.factor_engine.extractors.alternative_sources.requests.get", lambda *a, **k: resp)
         text = AnnouncementNewsExtractor()._fetch_announcements()
         assert "有效公告" in text
@@ -126,7 +126,12 @@ class TestMacroEventExtractor:
             {
                 "result": {
                     "data": [
-                        {"TITLE": "中国 8 月 CPI 同比", "REPORT_DATE": "2026-08-10", "COUNTRY": "中国", "IMPORTANCE": "高"}
+                        {
+                            "TITLE": "中国 8 月 CPI 同比",
+                            "REPORT_DATE": "2026-08-10",
+                            "COUNTRY": "中国",
+                            "IMPORTANCE": "高",
+                        }
                     ]
                 }
             }

@@ -39,13 +39,13 @@ class FactorStatus(str, Enum):
 
 
 class DataSource(str, Enum):
-    """FTS 数据源枚举 — 7 个成员。
+    """FTS 数据源枚举 — 10 个成员。
 
     对应多源数据融合策略中的源标识符。
     """
 
     DUCKDB_CACHE = "DUCKDB_CACHE"  # DuckDB 本地缓存（主路径 Top1）
-    TQ_LOCAL = "TQ_LOCAL"  # 通达信本地 HTTP 7721
+    TQ_LOCAL = "TQ_LOCAL"  # 通达信本地 HTTP（已废弃，7721 端口不存在，v2.87.0 起由 TDX_LOCAL 统一承载）
     TQ_PYTHON = "TQ_PYTHON"  # 通达信 TQ-Python SDK
     AKSHARE = "AKSHARE"  # AKShare 即时获取（降级）
     SYNTHETIC = "SYNTHETIC"  # 合成数据降级（保证系统可运行）
@@ -53,7 +53,7 @@ class DataSource(str, Enum):
     IFIND = "IFIND"  # 同花顺 iFinD（字段增强层）
     TQSDK = "TQSDK"  # 天勤 TQSDK（分钟/日线数据源）
     TQSDK_TICK = "TQSDK_TICK"  # 天勤 TQSDK tick 逐笔数据源（v2.31.0）
-    TDX_MINUTE = "TDX_MINUTE"  # 通达信 TQ-Local 分钟数据（端口 17709）
+    TDX_LOCAL = "TDX_LOCAL"  # 通达信本地 HTTP 统一源（端口 17709，日线+分钟+快照，v2.85.0）
 
 
 class FusionStrategy(str, Enum):

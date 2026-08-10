@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 
 _FTS_ROOT = Path(__file__).resolve().parents[2]
@@ -233,3 +234,39 @@ class TestEvolutionVersion:
 
     def test_get_version_from_modules(self):
         assert _get_evolution_version() == fts.__version__
+
+    def test_get_version_from_file_when_fts_unloaded(self, monkeypatch):
+        """sys.modules 中无 fts 时回退读取 __init__.py 文件（lines 77-89）。
+
+        注: __init__.py 中 __version__ 先声明为占位符 "0.0.0" 再由 pyproject
+        toml 动态覆盖，故文件解析路径返回占位符值（正常运行时 fts 恒已导入，
+        该路径不会触发）。
+        """
+        monkeypatch.delitem(sys.modules, "fts", raising=False)
+        assert _get_evolution_version() == "0.0.0"
+
+    def test_get_version_file_missing_returns_unknown(self, monkeypatch):
+        """__init__.py 不存在时返回 unknown（lines 81-82）。"""
+        import fts.factor_engine.contracts as contracts
+
+        monkeypatch.delitem(sys.modules, "fts", raising=False)
+        with patch.object(Path, "exists", return_value=False):
+            assert contracts._get_evolution_version() == "unknown"
+
+    def test_get_version_file_read_error_returns_unknown(self, monkeypatch):
+        """读取 __init__.py 抛异常时返回 unknown（lines 90-91）。"""
+        import fts.factor_engine.contracts as contracts
+
+        monkeypatch.delitem(sys.modules, "fts", raising=False)
+        with patch.object(Path, "read_text", side_effect=OSError("io error")):
+            assert contracts._get_evolution_version() == "unknown"
+
+    def test_get_version_no_version_line(self, monkeypatch, tmp_path):
+        """__init__.py 中无 __version__ 行时返回 unknown。"""
+        import fts.factor_engine.contracts as contracts
+
+        fake_init = tmp_path / "__init__.py"
+        fake_init.write_text("x = 1\n", encoding="utf-8")
+        monkeypatch.delitem(sys.modules, "fts", raising=False)
+        with patch.object(Path, "read_text", return_value=fake_init.read_text(encoding="utf-8")):
+            assert contracts._get_evolution_version() == "unknown"

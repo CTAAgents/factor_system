@@ -443,6 +443,7 @@ def test_symbol_to_ifind_conversion():
     assert IFindSource._symbol_to_ifind("TA509") == "TA509.CZC"
     assert IFindSource._symbol_to_ifind("IF2509") == "IF2509.CFX"
 
+
 # ─── MCP 入口 / set_mcp_handler ─────────────────────────
 
 

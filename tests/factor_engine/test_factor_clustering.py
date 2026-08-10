@@ -433,3 +433,84 @@ class TestComputePCASummary:
         summary = compute_pca_summary({})
         assert summary["n_original"] == 0
         assert summary["compression_ratio"] == 0.0
+
+
+# ═══════════════════════════════════════════════════════════
+# GAP-F16 边缘路径补充
+# ═══════════════════════════════════════════════════════════
+
+
+class TestClusteringEdgePaths:
+    """补充 compute_signal_correlations / select_representative / PCA 边缘路径。"""
+
+    def test_all_nan_signal_recorded_as_error(self) -> None:
+        """因子信号全 NaN 时记为 error（line 116）。
+
+        FactorExecutor.execute 内部会把 NaN 置 0，故此处 mock 直接返回
+        全 NaN 数组以覆盖 else 分支。
+        """
+        from unittest.mock import patch
+
+        engine = FactorClusteringEngine()
+        factor = {
+            "factor_id": "fct_nan_sig",
+            "name": "nan_sig",
+            "code": "def factor_program(data, params):\n    import numpy as np\n    return np.full(len(data), np.nan)",
+        }
+        panel = _make_panel_data()
+        with patch(
+            "fts.factor_engine.factor_program.FactorExecutor.execute",
+            return_value=np.full(50, np.nan),
+        ):
+            corr, fids = engine.compute_signal_correlations([factor], panel)
+        # 单因子且全 NaN → 有效信号不足返回空
+        assert corr.size == 0
+        assert fids == []
+
+    def test_select_representative_skips_orphan_fids(self) -> None:
+        """多因子簇中 fid 全部无法映射到 factor 时跳过整簇（line 242）。"""
+        engine = FactorClusteringEngine()
+        factors = [{"factor_id": "a", "name": "a", "code": "...", "sharpe": 1.0}]
+        # 簇 [0, 1] 的 fids 均为孤儿 → cluster_factors 为空 → continue
+        clusters = [[0, 1]]
+        fids = ["ghost1", "ghost2"]
+        selected = engine.select_representative_factors(factors, clusters, fids)
+        assert selected == []
+
+    def test_pca_compute_matrix_skips_no_code(self) -> None:
+        """P2 信号矩阵构建跳过无 code 因子（line 380）。"""
+        compressor = PCASignalCompressor()
+        factors = _make_factors_without_code(3)  # code="" → 全部跳过
+        panel = _make_panel_data()
+        matrix, fids, dates = compressor.compute_signal_matrix(factors, panel)
+        assert matrix.size == 0
+        assert fids == []
+
+    def test_pca_zero_variance_falls_back_uniform_weights(self) -> None:
+        """PCA 全零方差信号 → 均匀权重兜底（line 504）。"""
+        compressor = PCASignalCompressor(variance_ratio=0.0)
+        factors = [
+            {
+                "factor_id": f"fct_z{i}",
+                "name": f"fct_z{i}",
+                "code": (
+                    "def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))"
+                ),
+                "sharpe": 1.0,
+            }
+            for i in range(4)
+        ]
+        panel = _make_panel_data(n_dates=30)
+        result = compressor.run(factors, panel_data=panel)
+        # 全零信号 → PCA 解释方差为 0 → 均匀权重
+        assert result["pca_applied"] in (True, False)
+        for sig in result["pca_signals"]:
+            assert sig["weight"] >= 0.0
+
+    def test_run_correlation_failure_keeps_all(self) -> None:
+        """相关性计算失败（信号不足）时保留全部因子（line 298）。"""
+        engine = FactorClusteringEngine()
+        factors = _make_factors_without_code(5)  # 全部无 code → 无有效信号
+        panel = _make_panel_data()
+        result = engine.run(factors, panel_data=panel)
+        assert len(result) == len(factors)

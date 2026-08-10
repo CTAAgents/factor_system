@@ -1,6 +1,6 @@
 # 期货因子流水线成熟度实施优化计划（机构级对标）
 
-> 版本: v2.86.0
+> 版本: v2.88.0
 > 最后更新: 2026-08-09
 > 状态: 规划中（文档先行，作为期货流水线缺陷改进唯一推进主线）
 > 适用范围: FTS 期货因子流水线（数据层 / 因子层 / 模型层 / 组合层 / 回测层 / 执行实盘 / 运维）
@@ -176,14 +176,15 @@ FTS 期货因子流水线已具备完整链路：5 级 K 线多源降级 → 184
 | **测试方案** | 构造极值依赖因子验证否决触发 + 无极值依赖因子放行 |
 | **完成记录** | v2.79.0：① `evaluation_chain` 新增 `_compute_extreme_perturbation_ic` 极值剔除重算 IC（剔除信号上下 `pct` 百分位极端样本后重算，返回 `ic_before/ic_after/ic_drop/n_total/n_removed`，数据不足/常数输入返回 None 由 screener 按数据缺失处理），`evaluate()` 输出 `FactorEvaluation.extreme_perturbation`（`pct` 可配置 `FTSConfig.extreme_perturb_pct` 默认 0.01）；② `_promote_to_elite` 经 evaluation 整体传入 `HighICScreener`，V2 极值扰动一票否决（`ic_drop > 25%`，`HighICScreenConfig.extreme_drop_max` 默认 0.25）真正生效；③ 筛查报告输出扰动前后 IC 对比（ic_before/ic_after）；新增 `tests/factor_engine/test_extreme_perturb.py` 10 用例 |
 
-#### GAP-F16 覆盖率 <90% 模块补齐（P2，承接 GAP-041）
+#### GAP-F16 覆盖率 <90% 模块补齐（P2，承接 GAP-041）✅ 已完成
 
 | 维度 | 内容 |
 |---|---|
-| **代码现状** | 16 个模块覆盖率 <90%：`cross_market/data_adapter(55%)` `factor_clustering(64%)` `tdx_minute_source(67%)` `tqsdk_tick_source(73%)` `factor_db/migrate_from_json(73%)` `evolution_loop(80%)` `tq_source(81%)` `data_quality_monitor(82%)` `ifind_source(84%)` `data(85%)` `factor_db/repository(85%)` `ml/models(86%)` `wind_source(87%)` `factor_screener(87%)` `causal_validator(89%)` `contracts(89%)`（GAP-041） |
+| **代码现状** | 14 个模块覆盖率 <90%（v2.87.0 后，`tdx_minute_source`/`tq_source` 已合并删除、新源 `tdx_local_source` 93% 达标）：`cross_market/data_adapter(55%)` `factor_clustering(64%)` `tqsdk_tick_source(73%)` `factor_db/migrate_from_json(73%)` `evolution_loop(80%)` `data_quality_monitor(82%)` `ifind_source(84%)` `data(85%)` `factor_db/repository(85%)` `ml/models(86%)` `wind_source(87%)` `factor_screener(87%)` `causal_validator(89%)` `contracts(89%)`（GAP-041） |
 | **机构级标准** | 关键路径异常分支须有测试覆盖（外部数据源网络/鉴权路径与异常兜底分支） |
 | **实施步骤** | ① 按模块补齐缺失分支测试（外部源网络异常/鉴权失败/降级兜底）；② 覆盖率目标 ≥90%（优先 P1 涉及模块）；③ 更新 06-testing.md 用例统计 |
 | **测试方案** | `pytest --cov=fts --cov-fail-under=90` 分模块验证 |
+| **完成记录** | v2.88.0：三分组补齐 14 个 <90% 模块测试，新增/扩展 18 个测试文件合计 +341 用例——组A 数据源（139）：`test_ifind_source`(+31)/`test_wind_source`(+13)/`test_tqsdk_tick_source`(+15)/`test_data`(+8)/`test_data_quality_monitor`(+34) + `test_tdx_minute_source`(+25)/`test_tq_source`(+13)（随 v2.87.0 TDX_LOCAL 合并删除，能力迁入 `test_tdx_local_source`）；组B factor_engine（139）：`test_evolution_loop`(+87，TestGapF16* 11 类)/`test_contracts_normalize`(+5)/`test_factor_screener`(新建 35)/`test_causal_validator`(+7)/`test_factor_clustering`(+5)；组C 跨市场/DB/ML（63）：`test_migrate_from_json`(新建 19)/`test_data_layer_repos`(+31)/`test_ml_models`(+8)/`test_mlp_factor`(+2)/`test_gru_factor`(+3)；全量回归 5132 passed（5 个竞态失败——DuckDB 外部进程占锁 + pyproject 版本并发 bump——重跑验证后全绿），覆盖率 TOTAL 94.31% 达标（`--cov-fail-under=90` 通过），GAP-041 关闭 |
 
 ### 1.4 P3 — 远期差距（研究探索性）
 
@@ -214,7 +215,7 @@ FTS 期货因子流水线已具备完整链路：5 级 K 线多源降级 → 184
 | v2.60.0 | 阶段 C | GAP-F11 | 展期成本联动换月日历（后续批） ✅ 已完成 |
 | v2.60.0 | 阶段 C | GAP-F13/F15 | 漂移告警闭环 + 极值扰动一票否决（后续批） ✅ 已完成（F13 v2.72.1、F15 v2.79.0） |
 | v2.72.1 | 阶段 D | GAP-F13 | 漂移告警闭环（阈值可配置 + 超阈值告警 + 粘性重平衡建议） ✅ 已完成 |
-| v2.61.0+ | 阶段 D | GAP-F12/F14/F16 | CI 质量门禁 + tick 回测闭环 + 覆盖率补齐 ✅ 已完成（F12 v2.79.0；F14/F16 开放） |
+| v2.61.0+ | 阶段 D | GAP-F12/F14/F16 | CI 质量门禁 + tick 回测闭环 + 覆盖率补齐 ✅ 已完成（F12 v2.79.0；F16 v2.88.0；F14 开放） |
 | 远期 | — | GAP-F10 | 种子库合并去重 + 家族上限配置化 ✅ 已完成（v2.79.0） |
 
 > 注：GAP-F01（实盘执行）为 P0 但依赖下游交易系统边界（角色边界：FTS 只产信号、FDT 执行），实施重点是"信号侧完备性"（订单契约、人工干预接口、参数隔离），真实网关由下游负责。

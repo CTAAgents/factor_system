@@ -76,7 +76,7 @@ class FuturesDataAggregator:
     # 默认 K 线主路径（5 级降级）
     DEFAULT_KLINE_SOURCES: tuple[str, ...] = (
         DataSource.DUCKDB_CACHE.value,
-        DataSource.TQ_LOCAL.value,
+        DataSource.TDX_LOCAL.value,
         DataSource.TQ_PYTHON.value,
         DataSource.AKSHARE.value,
         DataSource.SYNTHETIC.value,
@@ -207,9 +207,8 @@ class FuturesDataAggregator:
 
         分钟数据路径（按优先级）:
             1. minute_cache（DuckDB 缓存，命中且新鲜）
-            2. TDXMinuteSource（通达信 HTTP 17709）
-            3. TQLocalSource（通达信 HTTP 7721，带 period 参数）
-            4. TQSDKSource（天勤 TQSDK，带 period 参数）
+            2. TdxLocalSource（通达信本地 HTTP 17709，统一源，支持 day/1m/5m/15m/30m/60m）
+            3. TQSDKSource（天勤 TQSDK，带 period 参数）
 
         Args:
             symbol: 品种代码（如 "RB0"）

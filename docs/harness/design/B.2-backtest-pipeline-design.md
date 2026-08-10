@@ -1,6 +1,6 @@
 # B.2 端到端回测流水线 — 详细技术设计
 
-> 版本: v2.86.0
+> 版本: v2.88.0
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase B.2
 > 状态: **已实现**（4 阶段流水线 + 6 阶段类 + Builder + CLI）
 > 实现说明: 实际实现为 `fts/factor_engine/backtest_pipeline.py`（v0.1.0）**4 阶段**流水线（DataLoadStage/FactorComputeStage/PerformanceStage/ReportStage），单因子入口 `BacktestPipeline.run(factor, data, benchmark, ...)`，含 `_execute_factor_code()`（被演化循环 `_check_factor_runtime` 复用）。**v2.9.0 增强**：新增 7 个独立阶段类（`FactorScreener`/`SignalGenerator`/`PortfolioConstructor`/`CostSimulator`/`RiskAttributor`/`ReportGenerator`/`CapitalAllocator`）、`BacktestPipeline.run_batch()` 批量对比排名、`BacktestPipelineBuilder` 构建器、CLI `fts backtest run/batch/compare` 子命令。
