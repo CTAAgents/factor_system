@@ -64,10 +64,22 @@ class TestExecutorBackend:
         with create_executor_backend("process", 2) as b:
             assert list(b.map(obj.apply, [2, 3, 4])) == [4, 9, 16]
 
-    def test_dask_missing_degrades_to_process(self):
+    def test_dask_missing_degrades_to_process(self, monkeypatch):
+        """dask 依赖缺失时降级 process（强制导入失败，与 C4 test_executor_dask 语义一致）。"""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "distributed" or name.startswith("distributed."):
+                raise ImportError("no dask")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
         with create_executor_backend("dask", 2) as b:
             assert isinstance(b, DaskBackend)
             assert b._degraded is not None
+            assert isinstance(b._degraded, ProcessBackend)
             assert list(b.map(_double, [1, 2, 3])) == [2, 4, 6]
 
     def test_ray_missing_degrades_to_process(self):

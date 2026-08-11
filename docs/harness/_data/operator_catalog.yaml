@@ -1,0 +1,3873 @@
+# FTS 算子目录（自动生成 by scripts/generate_operator_catalog.py，勿手改）
+# 算子总数: 512
+operators:
+  - name: abs
+    category: L4
+    params: [x]
+    differentiable: true
+    economic_meaning: 绝对值
+  - name: add
+    category: L4
+    params: [a, b]
+    differentiable: true
+    economic_meaning: 加法
+  - name: amount
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 基础数据字段
+  - name: analyst_down_count
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 分析师下调家数
+  - name: analyst_eps_revision
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: EPS 一致预期修正幅度
+  - name: analyst_revision_ratio
+    category: L5
+    params: [up, total]
+    differentiable: true
+    economic_meaning: 分析师上调比率(上调家数/覆盖家数)
+  - name: analyst_total_count
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 分析师覆盖总家数
+  - name: analyst_up_count
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 分析师上调家数
+  - name: and_
+    category: L3
+    params: [a, b]
+    differentiable: true
+    economic_meaning: 逻辑与
+  - name: clip
+    category: L4
+    params: [x, lo, hi]
+    float_params: [hi, lo]
+    differentiable: true
+    economic_meaning: 截断
+  - name: close
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 基础数据字段
+  - name: consecutive_true
+    category: L3
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 连续满足条件计数(持续性)
+  - name: corr
+    category: L4
+    params: [x, y, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: false
+    economic_meaning: 滚动相关系数(双序列共动)
+  - name: cross_above
+    category: L3
+    params: [x, threshold]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 上穿阈值事件
+  - name: cross_below
+    category: L3
+    params: [x, threshold]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 下穿阈值事件
+  - name: cross_section_demean
+    category: L4
+    params: [x]
+    differentiable: true
+    economic_meaning: 横截面去均值(暴露剥离)
+  - name: cross_section_rank
+    category: L4
+    params: [x]
+    differentiable: false
+    economic_meaning: 横截面排名(0-1 归一化)
+  - name: cs_breadth_position
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 广度位置
+  - name: cs_coefficient_variation
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 变异系数
+  - name: cs_composite_score
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 复合得分
+  - name: cs_concentration
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 集中度
+  - name: cs_cross_rank_diff
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 截面排名差
+  - name: cs_cross_section_bucket
+    category: L2
+    params: [series, window, n_buckets]
+    int_params: [n_buckets, window]
+    param_bounds: {n_buckets: 2-20, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 截面分桶
+  - name: cs_demean_ratio
+    category: L2
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 去均值比率(x/|mean|-1)
+  - name: cs_diff
+    category: L4
+    params: [x, y]
+    differentiable: true
+    economic_meaning: 差x-y
+  - name: cs_dispersion
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 截面离散度
+  - name: cs_distance_mean
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 距均值距离
+  - name: cs_distance_median
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 距中位数距离
+  - name: cs_entropy_rank
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 排名熵
+  - name: cs_ewm_rank
+    category: L2
+    params: [series, span]
+    int_params: [span]
+    param_bounds: {span: 2-250}
+    lookback_param: span
+    differentiable: true
+    economic_meaning: 指数排名
+  - name: cs_exponential_ratio
+    category: L4
+    params: [x, y, span]
+    int_params: [span]
+    param_bounds: {span: 2-250}
+    lookback_param: span
+    differentiable: true
+    economic_meaning: 指数比率
+  - name: cs_extreme_gap
+    category: L2
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 距极值缺口(远离上轨为正)
+  - name: cs_extreme_ratio
+    category: L2
+    params: [x, n, n_std]
+    int_params: [n]
+    float_params: [n_std]
+    param_bounds: {n: 2-250, n_std: 0.5-5.0}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 窗口极端值占比(|z|>n_std)
+  - name: cs_extreme_skew
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 极端偏度
+  - name: cs_extreme_strength
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 极端强度
+  - name: cs_gini_score
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 基尼系数
+  - name: cs_herfindahl
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 赫芬达尔指数
+  - name: cs_inverse_rank
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 逆排名
+  - name: cs_kurtosis_score
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 4-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 峰度得分
+  - name: cs_log_ratio
+    category: L4
+    params: [x, y]
+    differentiable: true
+    economic_meaning: 对数比率
+  - name: cs_mad_zscore
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: MAD稳健zscore
+  - name: cs_market_relative
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 相对市场超额
+  - name: cs_max
+    category: L4
+    params: [x, y]
+    differentiable: true
+    economic_meaning: 两序列大者
+  - name: cs_max_share
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 占最大比例
+  - name: cs_med_ratio
+    category: L2
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 与滚动中位数比(x/med-1)
+  - name: cs_median_dev
+    category: L2
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 与滚动中位数偏离
+  - name: cs_median_gap
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 中位差
+  - name: cs_min
+    category: L4
+    params: [x, y]
+    differentiable: true
+    economic_meaning: 两序列小者
+  - name: cs_minmax_norm
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Min-Max归一化
+  - name: cs_normalize_01
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 0-1归一化
+  - name: cs_normalized_ratio
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 归一化比率
+  - name: cs_outlier_flag
+    category: L2
+    params: [series, window, k]
+    int_params: [window]
+    float_params: [k]
+    param_bounds: {k: 1.0-6.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 异常点标记
+  - name: cs_outlier_ratio
+    category: L2
+    params: [series, window, k]
+    int_params: [window]
+    float_params: [k]
+    param_bounds: {k: 1.0-6.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 异常占比
+  - name: cs_pct_diff
+    category: L4
+    params: [x, y]
+    differentiable: true
+    economic_meaning: 百分比差
+  - name: cs_percent_rank
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 百分比排名
+  - name: cs_product
+    category: L4
+    params: [x, y]
+    differentiable: true
+    economic_meaning: 积x·y
+  - name: cs_quantile_rank
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 分位排名
+  - name: cs_rank_demean
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 排名去均值
+  - name: cs_rank_diff
+    category: L2
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 1-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 截面排名变化(排名动量)
+  - name: cs_rank_momentum
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 排名动量
+  - name: cs_rank_norm
+    category: L2
+    params: [x]
+    differentiable: true
+    economic_meaning: 截面rank归一化[-1,1]
+  - name: cs_rank_pct
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 滚动排名百分位
+  - name: cs_rank_ratio
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 排名比
+  - name: cs_rank_stability
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 排名稳定性
+  - name: cs_rank_volatility
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 排名波动
+  - name: cs_ratio
+    category: L4
+    params: [x, y]
+    differentiable: true
+    economic_meaning: 比率x/y
+  - name: cs_ratio_ma
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 比率均线偏离
+  - name: cs_ratio_zscore
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 比率zscore
+  - name: cs_relative_ratio
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 相对比率
+  - name: cs_relative_strength_ratio
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 相对强弱比率
+  - name: cs_relative_to_max
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 相对最大值
+  - name: cs_relative_to_min
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 相对最小值
+  - name: cs_return_spread
+    category: L4
+    params: [x, y]
+    differentiable: true
+    economic_meaning: 收益差
+  - name: cs_robust_rank
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 稳健排名(MAD)
+  - name: cs_signed_rank
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 带符号排名
+  - name: cs_skewness_score
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 3-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 偏度得分
+  - name: cs_smooth_rank
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 平滑排名
+  - name: cs_smoothed_ratio
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 平滑比率
+  - name: cs_softmax_weight
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Softmax权重
+  - name: cs_spread
+    category: L4
+    params: [x, y]
+    differentiable: true
+    economic_meaning: 价差
+  - name: cs_sum
+    category: L4
+    params: [x, y]
+    differentiable: true
+    economic_meaning: 和x+y
+  - name: cs_tail_weight
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 尾部权重
+  - name: cs_top_bottom_spread
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 高低分位差
+  - name: cs_trim_mean_diff
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 与修剪均值差
+  - name: cs_weighted_average
+    category: L4
+    params: [x, y, w]
+    float_params: [w]
+    param_bounds: {w: 0.0-1.0}
+    differentiable: true
+    economic_meaning: 加权平均
+  - name: cs_winner_loser_gap
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 赢家输家差
+  - name: cs_winsor_flag
+    category: L2
+    params: [x, n, k]
+    int_params: [n]
+    float_params: [k]
+    param_bounds: {k: 1.0-5.0, n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 极端值标记(|z|>k)
+  - name: cs_winsor_z
+    category: L2
+    params: [series, window, k]
+    int_params: [window]
+    float_params: [k]
+    param_bounds: {k: 1.0-6.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Winsorize后zscore
+  - name: cs_zscore_diff
+    category: L2
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 1-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 截面 zscore 变化
+  - name: cs_zscore_med
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 中位数zscore
+  - name: div
+    category: L4
+    params: [a, b]
+    differentiable: true
+    economic_meaning: 除法(0 安全)
+  - name: exp
+    category: L4
+    params: [x]
+    differentiable: true
+    economic_meaning: 指数
+  - name: gt
+    category: L3
+    params: [a, b]
+    differentiable: true
+    economic_meaning: 大于
+  - name: high
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 基础数据字段
+  - name: hold
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 基础数据字段
+  - name: holder_concentration
+    category: L5
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 筹码集中度(股东户数下降取正)
+  - name: holder_count
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 股东户数(户)
+  - name: if_else
+    category: L4
+    params: [cond, x, y]
+    differentiable: false
+    economic_meaning: 条件选择(NaN 安全)
+  - name: liquidity
+    category: L5
+    params: [p, v, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 流动性(量/均量)
+  - name: liquidity_dryup
+    category: L5
+    params: [volume, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 流动性枯竭(量<均值0.5)
+  - name: log
+    category: L4
+    params: [x]
+    differentiable: true
+    economic_meaning: 对数
+  - name: low
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 基础数据字段
+  - name: lt
+    category: L3
+    params: [a, b]
+    differentiable: true
+    economic_meaning: 小于
+  - name: margin_balance
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 融资余额(元)
+  - name: margin_change
+    category: L5
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 1-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 融资余额变化率
+  - name: margin_net_buy
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 融资净买入(元)
+  - name: margin_short_balance
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 融券余量(股)
+  - name: max
+    category: L4
+    params: [a, b]
+    differentiable: true
+    economic_meaning: 取大
+  - name: mean_reversion_signal
+    category: L5
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 均值回归触发信号
+  - name: mean_reversion_z
+    category: L5
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 均值回归强度(-滚动 zscore)
+  - name: min
+    category: L4
+    params: [a, b]
+    differentiable: true
+    economic_meaning: 取小
+  - name: momentum
+    category: L5
+    params: [p, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 价格动量
+  - name: momentum_break
+    category: L3
+    params: [x, n, k]
+    int_params: [n]
+    float_params: [k]
+    param_bounds: {k: 0.1-5.0, n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 动量突破(超自身std·k)
+  - name: mul
+    category: L4
+    params: [a, b]
+    differentiable: true
+    economic_meaning: 乘法
+  - name: nb_momentum
+    category: L5
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 北向资金动量(当前-滚动均值)
+  - name: neg
+    category: L4
+    params: [x]
+    differentiable: true
+    economic_meaning: 取负
+  - name: normalize
+    category: L2
+    params: [x]
+    differentiable: true
+    economic_meaning: min-max 归一化
+  - name: northbound_flow
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 北向资金当日净流入(元)
+  - name: northbound_hold_pct
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 北向持股占流通市值比例
+  - name: not_
+    category: L3
+    params: [a]
+    differentiable: true
+    economic_meaning: 逻辑非
+  - name: open
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 基础数据字段
+  - name: or_
+    category: L3
+    params: [a, b]
+    differentiable: true
+    economic_meaning: 逻辑或
+  - name: pow
+    category: L4
+    params: [a, b]
+    differentiable: true
+    economic_meaning: 幂
+  - name: price_volume_div
+    category: L5
+    params: [close, volume, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 价量背离占比
+  - name: quantile
+    category: L2
+    params: [x, q]
+    float_params: [q]
+    param_bounds: {q: 0.0-1.0}
+    differentiable: true
+    economic_meaning: 分位数
+  - name: quantile_bucket
+    category: L4
+    params: [x, n_buckets]
+    int_params: [n_buckets]
+    param_bounds: {n_buckets: 2-10}
+    differentiable: false
+    economic_meaning: 分位桶(截面 0~n-1)
+  - name: rank
+    category: L2
+    params: [x]
+    differentiable: true
+    economic_meaning: 截面排名(0-1)
+  - name: regression_residual
+    category: L4
+    params: [x, y, n]
+    int_params: [n]
+    param_bounds: {n: 20-250}
+    lookback_param: n
+    differentiable: false
+    economic_meaning: 滚动回归残差(去 beta 的 alpha)
+  - name: returns
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 基础数据字段
+  - name: reversal
+    category: L5
+    params: [p, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 价格反转
+  - name: reversal_strength
+    category: L5
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 反转强度(-动量/波动)
+  - name: self_corr
+    category: L5
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 3-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: lag-1自相关(趋势持续)
+  - name: settle
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 基础数据字段
+  - name: sign
+    category: L4
+    params: [x]
+    differentiable: true
+    economic_meaning: 符号
+  - name: sign_entropy
+    category: L5
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 方向熵(无序度)
+  - name: sign_flip
+    category: L3
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 窗口符号翻转计数(方向稳定)
+  - name: sqrt
+    category: L4
+    params: [x]
+    differentiable: true
+    economic_meaning: 平方根
+  - name: sub
+    category: L4
+    params: [a, b]
+    differentiable: true
+    economic_meaning: 减法
+  - name: trend_strength
+    category: L5
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 趋势强度(|斜率| 归一化)
+  - name: ts_above_ma_ratio
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: MA上方占比
+  - name: ts_acceleration
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 1-60}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 加速度(速度平滑差分)
+  - name: ts_adi
+    category: L1
+    params: [high, low, close, volume]
+    differentiable: true
+    economic_meaning: ADI累积派发线
+  - name: ts_advance_decline_ratio
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 涨跌比
+  - name: ts_adx
+    category: L5
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: ADX趋势强度
+  - name: ts_adx_neg
+    category: L5
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: -DI负向指标
+  - name: ts_adx_pos
+    category: L5
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: +DI正向指标
+  - name: ts_alpha
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 滚动alpha
+  - name: ts_amihud_illiquidity
+    category: L5
+    params: [close, amount, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Amihud非流动性
+  - name: ts_amount_velocity
+    category: L5
+    params: [amount, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 成交额速度
+  - name: ts_argmax
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 窗口内最大值位置
+  - name: ts_argmin
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 窗口内最小值位置(滞后形态)
+  - name: ts_aroon_down
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Aroon下降
+  - name: ts_aroon_osc
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Aroon振荡
+  - name: ts_aroon_up
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Aroon上升
+  - name: ts_atr
+    category: L1
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: ATR平均真实波幅
+  - name: ts_avg_drawdown
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 窗口平均回撤(回撤深度均值)
+  - name: ts_avg_gain
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 平均盈利(正收益均值)
+  - name: ts_avg_loss
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 平均亏损(负收益均值)
+  - name: ts_awesome
+    category: L1
+    params: [high, low, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-100, short: 2-30}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: AO动量振荡器
+  - name: ts_baseline_vol
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 20-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 基准波动(长窗口已实现波动)
+  - name: ts_basis
+    category: L4
+    params: [spot, future]
+    differentiable: true
+    economic_meaning: 基差
+  - name: ts_basis_ratio
+    category: L4
+    params: [spot, future]
+    differentiable: true
+    economic_meaning: 基差率
+  - name: ts_bb_bandwidth
+    category: L1
+    params: [series, window, k]
+    int_params: [window]
+    float_params: [k]
+    param_bounds: {k: 0.5-5.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 布林带宽
+  - name: ts_bb_percent_b
+    category: L1
+    params: [series, window, k]
+    int_params: [window]
+    float_params: [k]
+    param_bounds: {k: 0.5-5.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 布林%B
+  - name: ts_bb_width
+    category: L1
+    params: [series, window, k]
+    int_params: [window]
+    float_params: [k]
+    param_bounds: {k: 0.5-5.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 布林带宽度
+  - name: ts_below_ma_ratio
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: MA下方占比
+  - name: ts_best_day
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 窗口最佳日收益
+  - name: ts_beta
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 滚动beta
+  - name: ts_beta_vol
+    category: L1
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 波动率beta(短波动对长波动斜率)
+  - name: ts_bias_ma
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 乖离率(x/MA-1)
+  - name: ts_bid_ask_spread_proxy
+    category: L5
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 买卖价差代理
+  - name: ts_bipower_var
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 双幂变差(跳跃稳健波动)
+  - name: ts_boll_position
+    category: L1
+    params: [x, n, k]
+    int_params: [n]
+    float_params: [k]
+    param_bounds: {k: 0.5-5.0, n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 布林带位置(标准化波动位置)
+  - name: ts_breadth_divergence
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 广度背离
+  - name: ts_breadth_momentum
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 广度动量
+  - name: ts_breakdown_event
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 跌破事件
+  - name: ts_breakout
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 突破滚动新高(事件信号)
+  - name: ts_breakout_condition
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 突破条件
+  - name: ts_breakout_distance
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 距突破位距离
+  - name: ts_breakout_event
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 突破事件
+  - name: ts_breakout_pullback_signal
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 突破回踩信号
+  - name: ts_breakout_strength
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 突破强度
+  - name: ts_calmar_ratio
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 20-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Calmar比率(年化收益/最大回撤)
+  - name: ts_cci
+    category: L1
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: CCI顺势指标
+  - name: ts_chaikin_osc
+    category: L1
+    params: [high, low, close, volume, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-100, short: 2-30}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 蔡金振荡
+  - name: ts_chaikin_vol
+    category: L1
+    params: [high, low, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 蔡金波动率
+  - name: ts_cmf
+    category: L1
+    params: [high, low, close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: CMF蔡金资金流
+  - name: ts_cointegration_proxy
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 协整代理
+  - name: ts_concentration_index
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 集中度指数
+  - name: ts_condition_change
+    category: L3
+    params: [series, threshold]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 条件切换事件
+  - name: ts_condition_combo
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 条件组合
+  - name: ts_condition_count
+    category: L3
+    params: [series, threshold, window]
+    int_params: [window]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 条件满足计数
+  - name: ts_condition_entropy
+    category: L3
+    params: [series, threshold, window]
+    int_params: [window]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 条件熵
+  - name: ts_condition_ratio
+    category: L3
+    params: [series, threshold, window]
+    int_params: [window]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 条件占比
+  - name: ts_condition_switch_rate
+    category: L3
+    params: [series, threshold, window]
+    int_params: [window]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 条件切换率
+  - name: ts_consecutive_above
+    category: L3
+    params: [series, threshold]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 连续高于阈值
+  - name: ts_consecutive_below
+    category: L3
+    params: [series, threshold]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 连续低于阈值
+  - name: ts_consecutive_decrease
+    category: L3
+    params: [series]
+    differentiable: true
+    economic_meaning: 连续下跌天数
+  - name: ts_consecutive_increase
+    category: L3
+    params: [series]
+    differentiable: true
+    economic_meaning: 连续上涨天数
+  - name: ts_consecutive_same_sign
+    category: L3
+    params: [series]
+    differentiable: true
+    economic_meaning: 连续同号天数
+  - name: ts_continuation_signal
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 延续信号
+  - name: ts_convergence_rate
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 收敛速度
+  - name: ts_correlation
+    category: L1
+    params: [x, y, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动相关系数
+  - name: ts_correlation_regime
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 相关制度
+  - name: ts_cov
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 滚动协方差
+  - name: ts_covariance
+    category: L1
+    params: [x, y, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动协方差
+  - name: ts_cross_corr_lag1
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 滞后互相关
+  - name: ts_cross_ma_event
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 穿均线事件
+  - name: ts_cross_momentum
+    category: L1
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 交叉动量
+  - name: ts_cross_section_momentum
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 截面动量
+  - name: ts_cross_section_reversal
+    category: L2
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 截面反转
+  - name: ts_cross_threshold_down
+    category: L3
+    params: [series, threshold]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 下穿阈值事件
+  - name: ts_cross_threshold_up
+    category: L3
+    params: [series, threshold]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 上穿阈值事件
+  - name: ts_cumulative_return
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: n 期累计收益
+  - name: ts_curvature
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 曲率
+  - name: ts_cvar_95
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 95% CVaR(条件尾部损失)
+  - name: ts_cvar_99
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 99% CVaR(条件尾部损失)
+  - name: ts_cycle_score
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 周期得分
+  - name: ts_death_cross_event
+    category: L3
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 死叉事件
+  - name: ts_decay_linear
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 线性衰减加权
+  - name: ts_delay
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 1-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滞后 n 期
+  - name: ts_delta
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 1-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 差分
+  - name: ts_dema
+    category: L1
+    params: [series, span]
+    int_params: [span]
+    param_bounds: {span: 2-250}
+    lookback_param: span
+    differentiable: true
+    economic_meaning: 双重指数平均
+  - name: ts_directional_down
+    category: L1
+    params: [high, low, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: -DM方向运动
+  - name: ts_directional_up
+    category: L1
+    params: [high, low, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: +DM方向运动
+  - name: ts_diversification_index
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 分散度指数
+  - name: ts_dollar_volume
+    category: L5
+    params: [close, volume]
+    differentiable: true
+    economic_meaning: 成交额
+  - name: ts_donchian_break
+    category: L3
+    params: [high, low, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 唐奇安突破
+  - name: ts_donchian_mid
+    category: L1
+    params: [high, low, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 唐奇安中轨
+  - name: ts_down_ratio
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 下跌天数占比(弱势强度)
+  - name: ts_downside_deviation
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 下行偏差(目标0半方差开方)
+  - name: ts_downside_vol
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 下行波动率(仅负收益)
+  - name: ts_downtrend_flag
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 下降趋势标志
+  - name: ts_dpo
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: DPO去趋势振荡
+  - name: ts_drawdown
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 0-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 当前回撤(相对历史峰值)
+  - name: ts_drawdown_duration
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 回撤持续期(回撤天数)
+  - name: ts_ease_of_movement
+    category: L5
+    params: [high, low, close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: EMV易动度
+  - name: ts_ema
+    category: L1
+    params: [x, span]
+    int_params: [span]
+    param_bounds: {span: 2-250}
+    lookback_param: span
+    differentiable: true
+    economic_meaning: 指数移动平均(半衰期平滑)
+  - name: ts_ema_cross_signal
+    category: L3
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 双EMA交叉信号
+  - name: ts_ema_fast_slow
+    category: L1
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 快慢EMA差(趋势强度)
+  - name: ts_event_count_n
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: n期事件数
+  - name: ts_event_density
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 事件密度
+  - name: ts_ewm_momentum
+    category: L1
+    params: [series, span]
+    int_params: [span]
+    param_bounds: {span: 2-250}
+    lookback_param: span
+    differentiable: true
+    economic_meaning: 指数动量
+  - name: ts_ewma_vol
+    category: L1
+    params: [series, span]
+    int_params: [span]
+    param_bounds: {span: 2-250}
+    lookback_param: span
+    differentiable: true
+    economic_meaning: 指数加权波动率(EWMA半衰期)
+  - name: ts_exhaustion_signal
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 衰竭信号
+  - name: ts_expectancy
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 期望收益(窗口收益均值)
+  - name: ts_fear_greed_index
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 恐惧贪婪指数
+  - name: ts_fisher_transform
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Fisher变换
+  - name: ts_float_turnover
+    category: L5
+    params: [volume, float_shares]
+    differentiable: true
+    economic_meaning: 流通换手
+  - name: ts_force_index
+    category: L5
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 强力指数
+  - name: ts_fractal_down
+    category: L3
+    params: [low, window]
+    int_params: [window]
+    param_bounds: {window: 2-20}
+    differentiable: true
+    economic_meaning: 分形向下
+  - name: ts_fractal_up
+    category: L3
+    params: [high, window]
+    int_params: [window]
+    param_bounds: {window: 2-20}
+    differentiable: true
+    economic_meaning: 分形向上
+  - name: ts_gain_loss_ratio
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 涨跌幅比(平均涨/平均跌)
+  - name: ts_gain_std
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 正收益波动(正收益段标准差)
+  - name: ts_garch_proxy
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 波动聚集代理(|r|滚动均值)
+  - name: ts_garman_klass
+    category: L1
+    params: [open_p, high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Garman-Klass波动率(含跳空)
+  - name: ts_golden_cross_event
+    category: L3
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 金叉事件
+  - name: ts_granger_proxy
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 格兰杰代理
+  - name: ts_harmonic_vol
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 调和波动率(收益绝对值调和均值)
+  - name: ts_hedge_ratio
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 对冲比率
+  - name: ts_herding_proxy
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 羊群代理
+  - name: ts_high_low_ratio
+    category: L4
+    params: [high, low]
+    differentiable: true
+    economic_meaning: 高低比
+  - name: ts_higher_high_count
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 新高计数
+  - name: ts_hpm_2
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 二阶上偏矩(正收益平方均值)
+  - name: ts_ichimoku_base
+    category: L1
+    params: [high, low, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 云图基准线
+  - name: ts_ichimoku_conv
+    category: L1
+    params: [high, low, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 云图转换线
+  - name: ts_ichimoku_span_a
+    category: L1
+    params: [high, low, window]
+    int_params: [window]
+    param_bounds: {window: 5-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 云图A
+  - name: ts_ichimoku_span_b
+    category: L1
+    params: [high, low, window]
+    int_params: [window]
+    param_bounds: {window: 10-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 云图B
+  - name: ts_implied_vol_proxy
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 隐含波动代理
+  - name: ts_intraday_return
+    category: L4
+    params: [open_p, close]
+    differentiable: true
+    economic_meaning: 日内收益
+  - name: ts_iqr
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动四分位距(q75-q25)
+  - name: ts_jerk
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 1-60}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 急动度(三阶差分)
+  - name: ts_kama
+    category: L1
+    params: [series, window, fast, slow]
+    int_params: [fast, slow, window]
+    param_bounds: {fast: 2-10, slow: 10-60, window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 自适应均线KAMA
+  - name: ts_kelly_fraction
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Kelly比例(胜率-败率)
+  - name: ts_kst
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: KST综合振荡
+  - name: ts_kst_signal
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: KST信号线
+  - name: ts_kurt
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 4-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动峰度(分布厚尾)
+  - name: ts_kurtosis
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动峰度
+  - name: ts_lead_lag_corr
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 前导滞后相关
+  - name: ts_level_test
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 水平测试
+  - name: ts_leverage_effect
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 杠杆效应(收益与后续波动负相关)
+  - name: ts_linear_trend_score
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 线性趋势R²
+  - name: ts_liquidity_filter
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 流动性过滤
+  - name: ts_liquidity_premium
+    category: L5
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 流动性溢价
+  - name: ts_liquidity_ratio
+    category: L5
+    params: [volume, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 流动性比率
+  - name: ts_liquidity_regime_proxy
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 流动性制度代理
+  - name: ts_liquidity_risk
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 流动性风险
+  - name: ts_liquidity_zscore
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 流动性zscore
+  - name: ts_long_term_vol
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 20-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 长期波动(120窗口)
+  - name: ts_loss_rate
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 败率(负收益占比)
+  - name: ts_loss_std
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 负收益波动(负收益段标准差)
+  - name: ts_low_vol_factor_proxy
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 低波因子代理
+  - name: ts_lower_low_count
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 新低计数
+  - name: ts_lpm_2
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 二阶下偏矩(负收益平方均值)
+  - name: ts_ma_diff
+    category: L1
+    params: [x, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 双均线差(趋势强弱)
+  - name: ts_macd
+    category: L1
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: MACD线(快减慢EMA)
+  - name: ts_macd_hist
+    category: L1
+    params: [series, short, long, signal]
+    int_params: [long, short, signal]
+    param_bounds: {long: 5-250, short: 2-60, signal: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: MACD柱(动能)
+  - name: ts_macd_signal
+    category: L1
+    params: [series, short, long, signal]
+    int_params: [long, short, signal]
+    param_bounds: {long: 5-250, short: 2-60, signal: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: MACD信号线
+  - name: ts_mad
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动中位数绝对偏差(稳健离散)
+  - name: ts_market_breadth
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 市场广度
+  - name: ts_market_dispersion
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 市场离散
+  - name: ts_market_facilitation
+    category: L1
+    params: [high, low, volume]
+    differentiable: true
+    economic_meaning: 市场便利指数
+  - name: ts_market_phase
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 市场阶段
+  - name: ts_market_regime_score
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 市场制度得分
+  - name: ts_market_timing_score
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 择时得分
+  - name: ts_mass_index
+    category: L1
+    params: [high, low, window]
+    int_params: [window]
+    param_bounds: {window: 2-60}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 质量指数
+  - name: ts_max
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动最大值
+  - name: ts_max_drawdown
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 窗口最大回撤(最深跌幅)
+  - name: ts_max_loss_ratio
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 最大损失占比(最差日/总波动)
+  - name: ts_mean
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动均值(趋势基准)
+  - name: ts_median
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动中位数
+  - name: ts_mfi
+    category: L1
+    params: [high, low, close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: MFI资金流量指数
+  - name: ts_min
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动最小值
+  - name: ts_min_max_ratio
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动 max/min-1(区间幅度)
+  - name: ts_momentum
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 动量(当前/前n)
+  - name: ts_momentum_breakout_ratio
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 动量突破比
+  - name: ts_momentum_consistency
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 动量一致性
+  - name: ts_momentum_crowding
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 动量拥挤度
+  - name: ts_momentum_factor_proxy
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 动量因子代理
+  - name: ts_momentum_filter
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 动量过滤
+  - name: ts_momentum_index
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 动量指标
+  - name: ts_momentum_ratio
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 动量比(x/x_{t-n})
+  - name: ts_momentum_regime
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 动量制度评分
+  - name: ts_momentum_vol_adj
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 波动调整动量
+  - name: ts_money_flow_ratio
+    category: L5
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 资金流比率
+  - name: ts_multi_tf_trend
+    category: L5
+    params: [series, short, mid, long]
+    int_params: [long, mid, short]
+    param_bounds: {long: 30-250, mid: 10-80, short: 2-30}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 多周期趋势一致
+  - name: ts_natr
+    category: L1
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 归一化ATR
+  - name: ts_new_high_low_ratio
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 新高新低比
+  - name: ts_new_high_ratio
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 新高占比
+  - name: ts_new_low_ratio
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 新低占比
+  - name: ts_obv
+    category: L1
+    params: [close, volume]
+    differentiable: true
+    economic_meaning: OBV能量潮
+  - name: ts_obv_ma
+    category: L1
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: OBV均线
+  - name: ts_omega_ratio
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Omega比率(收益加权概率比)
+  - name: ts_open_close_diff
+    category: L4
+    params: [open_p, close]
+    differentiable: true
+    economic_meaning: 开盘收盘差
+  - name: ts_order_flow_proxy
+    category: L5
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 订单流代理
+  - name: ts_overnight_return
+    category: L4
+    params: [open_p, close]
+    differentiable: true
+    economic_meaning: 隔夜收益
+  - name: ts_pair_convergence
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 配对收敛
+  - name: ts_pair_corr
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 滚动相关
+  - name: ts_pair_divergence
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 配对背离
+  - name: ts_pair_trade_signal
+    category: L4
+    params: [x, y, window, k]
+    int_params: [window]
+    float_params: [k]
+    param_bounds: {k: 0.5-5.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 配对交易信号
+  - name: ts_parabolic_sar
+    category: L1
+    params: [high, low, step, max_step]
+    float_params: [max_step, step]
+    param_bounds: {max_step: 0.05-0.5, step: 0.001-0.1}
+    differentiable: true
+    economic_meaning: 抛物线SAR
+  - name: ts_parkinson
+    category: L1
+    params: [high, low, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Parkinson高低价波动率
+  - name: ts_pattern_continuation
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 形态延续
+  - name: ts_pattern_reversal
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 形态反转
+  - name: ts_pct_change
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 1-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 百分比变化
+  - name: ts_pct_rank_window
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 窗口内当前值百分位(相对位置)
+  - name: ts_position_extreme
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 仓位极端度
+  - name: ts_position_in_range
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 窗口区间位置[0,1](现价相对高低)
+  - name: ts_ppo
+    category: L1
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: PPO百分比价格振荡
+  - name: ts_price_channel
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 价格通道位置
+  - name: ts_price_gap
+    category: L4
+    params: [open_p, close]
+    differentiable: true
+    economic_meaning: 价格缺口
+  - name: ts_price_impact
+    category: L5
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 价格冲击
+  - name: ts_price_oscillator
+    category: L1
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 价格振荡器
+  - name: ts_price_volume_divergence_score
+    category: L5
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 价量背离得分
+  - name: ts_price_volume_sync
+    category: L5
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量价同步
+  - name: ts_profit_factor
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 盈亏比(正收益和/负损失和)
+  - name: ts_psar_position
+    category: L3
+    params: [high, low, step, max_step]
+    float_params: [max_step, step]
+    param_bounds: {max_step: 0.05-0.5, step: 0.001-0.1}
+    differentiable: true
+    economic_meaning: SAR位置
+  - name: ts_pullback_depth
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 回踩深度
+  - name: ts_quality_factor_proxy
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 质量因子代理
+  - name: ts_quantile
+    category: L1
+    params: [x, n, q]
+    int_params: [n]
+    float_params: [q]
+    param_bounds: {n: 2-250, q: 0.0-1.0}
+    lookback_param: n
+    differentiable: false
+    economic_meaning: 滚动分位数(尾部/中枢水平)
+  - name: ts_quantile_range
+    category: L1
+    params: [x, n, q_hi, q_lo]
+    int_params: [n]
+    float_params: [q_hi, q_lo]
+    param_bounds: {n: 2-250, q_hi: 0.0-1.0, q_lo: 0.0-1.0}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动分位差(尾部宽度)
+  - name: ts_range
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动振幅 (max-min)/mean
+  - name: ts_range_condition
+    category: L3
+    params: [series, lo, hi]
+    float_params: [hi, lo]
+    param_bounds: {hi: -10.0-10.0, lo: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 区间内状态
+  - name: ts_range_expansion
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 区间扩张
+  - name: ts_range_ratio
+    category: L4
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 区间比
+  - name: ts_range_vol
+    category: L1
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 振幅波动率((H-L)/C)
+  - name: ts_rank
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动窗口内排名
+  - name: ts_rate_of_change_ma
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: ROC均线
+  - name: ts_realized_vol
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 已实现波动率(滚动收益标准差)
+  - name: ts_realized_vol_pct
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 波动率百分比(波动/价格水平)
+  - name: ts_recovery_factor
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 20-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 恢复因子(收益均值/最大回撤)
+  - name: ts_regime_confidence
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 制度置信度
+  - name: ts_regime_persistence
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 制度持续
+  - name: ts_regime_transition_prob
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 制度转移概率
+  - name: ts_relative_strength
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 相对强度
+  - name: ts_resistance_break
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 压力突破
+  - name: ts_resistance_proximity
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 压力接近度
+  - name: ts_return_over_max
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 距滚动高点回撤(回调深度)
+  - name: ts_reversal_condition
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 反转条件
+  - name: ts_reversal_signal_z
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 反转zscore信号
+  - name: ts_risk_appetite
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 风险偏好
+  - name: ts_risk_return_ratio
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 风险收益比(收益均值/收益波动)
+  - name: ts_risk_reversal_proxy
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 风险逆转代理
+  - name: ts_roc
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: ROC变动率
+  - name: ts_roc_sum
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 窗口收益率累加(累积动量)
+  - name: ts_roc_zscore
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: ROC标准化
+  - name: ts_rogers_satchell
+    category: L1
+    params: [open_p, high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Rogers-Satchell波动率(含漂移)
+  - name: ts_roll_yield
+    category: L4
+    params: [near, far, window]
+    int_params: [window]
+    param_bounds: {window: 1-60}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 展期收益
+  - name: ts_rsi
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: RSI相对强弱(超买超卖)
+  - name: ts_rsi_smoothed
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 平滑RSI(Wilder)
+  - name: ts_rvi
+    category: L1
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: RVI相对活力指数
+  - name: ts_sector_rotation_score
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 板块轮动得分
+  - name: ts_semi_std
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 半标准差(下行半方差)
+  - name: ts_sentiment_score
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 情绪得分
+  - name: ts_sharpe_ratio
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 滚动夏普比率(收益均值/标准差)
+  - name: ts_short_term_vol
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-60}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 短期波动(10窗口)
+  - name: ts_sideways_flag
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 横盘标志
+  - name: ts_signal_decay
+    category: L3
+    params: [series, threshold, window]
+    int_params: [window]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 信号衰减
+  - name: ts_signal_persistence
+    category: L3
+    params: [series, threshold, window]
+    int_params: [window]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 信号持续
+  - name: ts_size_premium_proxy
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 市值溢价代理
+  - name: ts_skew
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 3-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动偏度(分布不对称)
+  - name: ts_skewness
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动偏度
+  - name: ts_slope
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: false
+    economic_meaning: 滚动回归斜率(局部趋势强度与方向)
+  - name: ts_slope_change
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 斜率变化
+  - name: ts_slope_pct
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 回归斜率占价格比(无量纲趋势)
+  - name: ts_sma_cross_signal
+    category: L3
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 双SMA交叉信号
+  - name: ts_smile_proxy
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 波动微笑代理
+  - name: ts_sortino_ratio
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Sortino比率(收益均值/下行偏差)
+  - name: ts_spread_band
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 价差带位置
+  - name: ts_spread_zscore
+    category: L4
+    params: [x, y, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 价差zscore
+  - name: ts_state_age
+    category: L3
+    params: [series, threshold]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 状态年龄
+  - name: ts_state_duration
+    category: L3
+    params: [series, threshold]
+    float_params: [threshold]
+    param_bounds: {threshold: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 状态持续期
+  - name: ts_std
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动波动
+  - name: ts_std_ratio
+    category: L1
+    params: [x, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 短/长波动比(均值回归强度)
+  - name: ts_stoch_d
+    category: L1
+    params: [high, low, close, window, smooth]
+    int_params: [smooth, window]
+    param_bounds: {smooth: 2-30, window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 随机指标%D
+  - name: ts_stoch_k
+    category: L1
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 随机指标%K
+  - name: ts_stoch_rsi
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 随机RSI
+  - name: ts_sum
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动求和
+  - name: ts_supertrend_signal
+    category: L3
+    params: [series, high, low, window, mult]
+    int_params: [window]
+    float_params: [mult]
+    param_bounds: {mult: 1.0-5.0, window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 超级趋势信号
+  - name: ts_support_break
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 支撑跌破
+  - name: ts_support_proximity
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 支撑接近度
+  - name: ts_tail_risk
+    category: L1
+    params: [x, n, q]
+    int_params: [n]
+    float_params: [q]
+    param_bounds: {n: 2-250, q: 0.01-0.5}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 尾部风险(x-下分位)
+  - name: ts_tema
+    category: L1
+    params: [series, span]
+    int_params: [span]
+    param_bounds: {span: 2-250}
+    lookback_param: span
+    differentiable: true
+    economic_meaning: 三重指数平均
+  - name: ts_term_spread
+    category: L4
+    params: [near, far]
+    differentiable: true
+    economic_meaning: 期限价差
+  - name: ts_threshold_band
+    category: L3
+    params: [series, lo, hi]
+    float_params: [hi, lo]
+    param_bounds: {hi: -10.0-10.0, lo: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 阈值带内
+  - name: ts_tick_size_proxy
+    category: L5
+    params: [close, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 最小变动代理
+  - name: ts_trade_value_ratio
+    category: L5
+    params: [amount, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 成交额比
+  - name: ts_trading_intensity
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 交易强度
+  - name: ts_trend_angle
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 趋势角度
+  - name: ts_trend_condition
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 趋势条件
+  - name: ts_trend_direction_strength
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 趋势方向强度
+  - name: ts_trend_entropy
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 趋势熵
+  - name: ts_trend_filter
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 趋势过滤器
+  - name: ts_trend_persistence
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 趋势持续
+  - name: ts_trend_regime_proxy
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 趋势制度代理
+  - name: ts_trend_score
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 趋势得分
+  - name: ts_trend_strength_ma
+    category: L1
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 均线趋势强度
+  - name: ts_trend_strength_pct
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 趋势强度百分比
+  - name: ts_trend_vol_ratio
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 趋势波动比
+  - name: ts_trix
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: TRIX三重指数平均变化率
+  - name: ts_tsi
+    category: L1
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: TSI真实强弱指数
+  - name: ts_turning_point
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-30}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 转折点
+  - name: ts_turnover
+    category: L5
+    params: [volume, float_shares, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 换手率
+  - name: ts_turnover_zscore
+    category: L5
+    params: [volume, float_shares, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 换手zscore
+  - name: ts_ulcer_index
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 溃疡指数(回撤平方均值开方)
+  - name: ts_ultimate_osc
+    category: L1
+    params: [high, low, close, short, mid, long]
+    int_params: [long, mid, short]
+    param_bounds: {long: 10-100, mid: 5-40, short: 3-20}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: UO终极振荡器
+  - name: ts_up_down_strength
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 涨跌强度差
+  - name: ts_up_ratio
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 上涨天数占比(强势强度)
+  - name: ts_upside_vol
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 上行波动率(仅正收益)
+  - name: ts_uptrend_flag
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 上升趋势标志
+  - name: ts_value_premium_proxy
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 价值溢价代理
+  - name: ts_var_95
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 95% VaR(5%分位收益)
+  - name: ts_var_99
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 99% VaR(1%分位收益)
+  - name: ts_velocity
+    category: L1
+    params: [series]
+    differentiable: true
+    economic_meaning: 速度(一阶差分)
+  - name: ts_velocity_zscore
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 速度zscore
+  - name: ts_vol_asymmetry
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 波动不对称(下行-上行波动)
+  - name: ts_vol_of_vol
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 波动率的波动(波动聚集)
+  - name: ts_vol_percentile
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 波动率分位(当前波动历史百分位)
+  - name: ts_vol_ratio_ewma
+    category: L1
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: EWMA波动比(短/长指数波动)
+  - name: ts_vol_shrink
+    category: L1
+    params: [x, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 波动收缩度(收敛/扩张)
+  - name: ts_vol_term_structure
+    category: L1
+    params: [series, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 20-500, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 波动期限结构(短/长波动比)
+  - name: ts_vol_zscore
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 波动率zscore(相对长期波动偏离)
+  - name: ts_volatility
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动年化波动率
+  - name: ts_volatility_filter
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 波动过滤
+  - name: ts_volatility_regime_proxy
+    category: L5
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 波动制度代理
+  - name: ts_volume_acceleration
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-60}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量加速度
+  - name: ts_volume_autocorr
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量自相关
+  - name: ts_volume_breakout
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量突破
+  - name: ts_volume_breakout_ratio
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量突破比
+  - name: ts_volume_change_rate
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量变化率
+  - name: ts_volume_cluster
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量聚集
+  - name: ts_volume_concentration
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量集中度
+  - name: ts_volume_cycle
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量周期
+  - name: ts_volume_entropy
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量熵
+  - name: ts_volume_kurtosis
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 4-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量峰度
+  - name: ts_volume_ma_ratio
+    category: L5
+    params: [volume, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 量均线比
+  - name: ts_volume_momentum
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量动量
+  - name: ts_volume_oscillator
+    category: L1
+    params: [volume, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 量振荡器
+  - name: ts_volume_pressure_ratio
+    category: L5
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量压比
+  - name: ts_volume_price_corr
+    category: L4
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量价相关
+  - name: ts_volume_price_corr_lag
+    category: L5
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 滞后量价相关
+  - name: ts_volume_price_regime
+    category: L5
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量价制度
+  - name: ts_volume_price_trend
+    category: L5
+    params: [close, volume]
+    differentiable: true
+    economic_meaning: VPT量价趋势
+  - name: ts_volume_ratio_vs_avg
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量比
+  - name: ts_volume_shrinkage
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量萎缩
+  - name: ts_volume_skewness
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 3-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量偏度
+  - name: ts_volume_spike
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 5-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量尖峰
+  - name: ts_volume_std_ratio
+    category: L5
+    params: [volume, short, long]
+    int_params: [long, short]
+    param_bounds: {long: 5-250, short: 2-60}
+    lookback_param: long
+    differentiable: true
+    economic_meaning: 量波动比
+  - name: ts_volume_surge
+    category: L5
+    params: [volume, window, k]
+    int_params: [window]
+    float_params: [k]
+    param_bounds: {k: 1.0-5.0, window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量激增
+  - name: ts_volume_weighted_return
+    category: L5
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量加权收益
+  - name: ts_volume_zscore
+    category: L5
+    params: [volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 量zscore
+  - name: ts_vortex_neg
+    category: L1
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Vortex负向
+  - name: ts_vortex_pos
+    category: L1
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Vortex正向
+  - name: ts_vortex_ratio
+    category: L1
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Vortex比率
+  - name: ts_vwap
+    category: L1
+    params: [close, volume, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 成交量加权均价
+  - name: ts_williams_r
+    category: L1
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 威廉%R
+  - name: ts_win_rate
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 胜率(正收益占比)
+  - name: ts_worst_day
+    category: L1
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 10-500}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 窗口最差日收益
+  - name: ts_yang_zhang
+    category: L1
+    params: [open_p, high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-250}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Yang-Zhang波动率(隔夜+日内加权)
+  - name: ts_zigzag_direction
+    category: L3
+    params: [series, window]
+    int_params: [window]
+    param_bounds: {window: 2-30}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: 之字形方向
+  - name: ts_zscore
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动标准化
+  - name: ts_zscore_rolling
+    category: L1
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 滚动zscore(均值回归强度)
+  - name: vol_regime
+    category: L5
+    params: [x, n]
+    int_params: [n]
+    param_bounds: {n: 3-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 波动率制度(高/低/中)
+  - name: volatility
+    category: L5
+    params: [p, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 波动率
+  - name: volume
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 基础数据字段
+  - name: volume_pressure
+    category: L5
+    params: [close, volume, n]
+    int_params: [n]
+    param_bounds: {n: 2-250}
+    lookback_param: n
+    differentiable: true
+    economic_meaning: 量价压力(量比×涨跌幅)
+  - name: vwap
+    category: L0
+    params: [x]
+    differentiable: true
+    economic_meaning: 基础数据字段
+  - name: where
+    category: L3
+    params: [cond, x, y]
+    differentiable: true
+    economic_meaning: 条件选择
+  - name: where_between
+    category: L3
+    params: [x, lo, hi, a, b]
+    float_params: [a, b, hi, lo]
+    param_bounds: {a: -10.0-10.0, b: -10.0-10.0, hi: -10.0-10.0, lo: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 区间条件选值(lo≤x≤hi取a)
+  - name: where_gt
+    category: L3
+    params: [x, threshold, a, b]
+    float_params: [a, b, threshold]
+    param_bounds: {a: -10.0-10.0, b: -10.0-10.0, threshold: -10.0-10.0}
+    differentiable: true
+    economic_meaning: 条件选值(x>阈值取 a 否则 b)
+  - name: winsorize
+    category: L2
+    params: [x, n_std]
+    float_params: [n_std]
+    param_bounds: {n_std: 0.0-10.0}
+    differentiable: true
+    economic_meaning: 缩尾
+  - name: zscore
+    category: L2
+    params: [x]
+    differentiable: true
+    economic_meaning: 截面 Z-Score

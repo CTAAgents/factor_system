@@ -239,6 +239,8 @@ class MultiHorizonHMMDetector:
 
         返回:
             (regime, confidence, features) 三元组。
+            confidence 为各周期后验制度概率的加权平均（28-T2，有概率语义），
+            features 含 regime_probs（全制度概率分布，和为 1）与投票日志。
         """
         if not self._available or ohlcv is None or ohlcv.empty:
             return "unknown", 0.0, {}
@@ -246,6 +248,7 @@ class MultiHorizonHMMDetector:
         votes: dict[str, float] = {}
         confidences: list[float] = []
         horizon_details: dict[int, dict] = {}
+        regime_probs_agg: dict[str, float] = {}
 
         for h, det in self._detectors.items():
             w = self.weights.get(h, 1.0)
@@ -255,6 +258,9 @@ class MultiHorizonHMMDetector:
                 if regime != "unknown" and conf >= 0.3:
                     votes[regime] = votes.get(regime, 0.0) + w
                     confidences.append(conf * w)
+                    # 各周期制度概率 → 加权聚合（28-T2）
+                    for r, p in (feats.get("regime_probs") or {}).items():
+                        regime_probs_agg[r] = regime_probs_agg.get(r, 0.0) + w * p
                     horizon_details[h] = {"regime": regime, "confidence": conf, "weight": w}
                 else:
                     horizon_details[h] = {"regime": "unknown", "confidence": 0.0, "weight": w}
@@ -265,20 +271,22 @@ class MultiHorizonHMMDetector:
         if not votes:
             return "unknown", 0.0, {"horizon_details": {str(h): v for h, v in horizon_details.items()}}
 
-        # 加权投票决定 regime
+        # 新置信度：主制度概率的加权平均（多周期后验加权，有概率语义且具区分度；
+        # 部分 horizon 被 gate 时总概率 < total_weight，置信度自然随之折扣）
         total_weight = sum(self.weights.values())
-        best_regime = max(votes, key=votes.get)
-        best_vote = votes[best_regime]
+        regime_probs = {r: p / total_weight for r, p in regime_probs_agg.items()}
+        best_regime = max(regime_probs, key=regime_probs.get)
+        confidence = float(np.clip(regime_probs[best_regime], 0.0, 0.99))
 
-        # 置信度 = 最佳得票率 × 平均置信度
-        vote_share = best_vote / total_weight
-        avg_conf = np.mean(confidences) if confidences else 0.0
-        confidence = float(np.clip(vote_share * avg_conf * 2.0, 0.0, 0.99))
+        # 制度概率分布归一化（features 输出，和为 1）
+        norm_total = sum(regime_probs.values()) or 1.0
+        regime_probs_norm = {r: p / norm_total for r, p in regime_probs.items()}
 
         features = {
             "multi_hmm_votes": {k: round(v, 2) for k, v in votes.items()},
-            "multi_hmm_vote_share": round(vote_share, 4),
-            "multi_hmm_avg_confidence": round(avg_conf, 4),
+            "multi_hmm_vote_share": round(regime_probs_norm[best_regime], 4),
+            "multi_hmm_avg_confidence": round(confidence, 4),
+            "regime_probs": {k: round(v, 4) for k, v in regime_probs_norm.items()},
             "horizon_details": {str(h): v for h, v in horizon_details.items()},
         }
 
@@ -287,6 +295,30 @@ class MultiHorizonHMMDetector:
     @property
     def is_available(self) -> bool:
         return self._available
+
+
+def _light_states_to_regime_probs(
+    state_probs: np.ndarray,
+    state_map: dict[int, str],
+) -> dict[str, float]:
+    """HMM 状态概率数组 → 制度概率分布（28-T2）。
+
+    同制度的多状态概率求和后归一化，保证输出分布和为 1
+    （状态数 4 < 制度数 5 时，未映射状态概率并入 oscillate）。
+
+    参数:
+        state_probs: HMM predict_proba 输出的最后一个点状态概率数组。
+        state_map:   状态 → 制度映射。
+
+    返回:
+        {制度名: 概率}，和为 1。
+    """
+    agg: dict[str, float] = {}
+    for s, p in enumerate(state_probs):
+        r = state_map.get(s, "oscillate")
+        agg[r] = agg.get(r, 0.0) + float(p)
+    total = sum(agg.values()) or 1.0
+    return {r: p / total for r, p in agg.items()}
 
 
 class _LightHMM:
@@ -403,7 +435,8 @@ class _LightHMM:
             probs = self._model.predict_proba(features)[-1]
             regime = self._state_map.get(state, "oscillate")
             confidence = float(min(1.0, max(0.0, probs[state])))
-            return regime, confidence, {"hmm_state": state}
+            regime_probs = _light_states_to_regime_probs(probs, self._state_map)
+            return regime, confidence, {"hmm_state": state, "regime_probs": regime_probs}
         except Exception:
             return "unknown", 0.0, {}
 

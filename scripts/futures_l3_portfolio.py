@@ -16,8 +16,8 @@ scripts/futures_l3_portfolio.py — 期货 L3 投资组合构建
 
 输出:
     - 控制台: 组合统计 + 信号排名
-    - 文件:     reports/{date}/futures_l3_portfolio_{date}.md
-    - 文件:     reports/{date}/futures_l3_portfolio_{date}.json
+    - 文件:     reports/futures/{date}/futures_l3_portfolio_{date}.md
+    - 文件:     reports/futures/{date}/futures_l3_portfolio_{date}.json
     - 文件:     memory/portfolio/futures_combo.json
 """
 
@@ -42,7 +42,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 FUTURES_ELITE_DIR = PROJECT_ROOT / "memory/knowledge/factors/futures_elite"
 REPORTS_ROOT = PROJECT_ROOT / "reports"
-PORTFOLIO_DIR = PROJECT_ROOT / "memory/portfolio"
+PORTFOLIO_DIR = PROJECT_ROOT / "memory/portfolio/futures"
 DB_PATH = PROJECT_ROOT / "data/fts_history.duckdb"
 
 
@@ -417,7 +417,7 @@ def main(mode: str = "ic_weight", ic_threshold: float = 0.3) -> int:
         print(f"  {i:2d}. {f['name']:<30s} w={w:.4f}  IC={f['ic']:.4f}  Sharpe={f['sharpe']:.2f}")
 
     # ── 写入报告 ──
-    report_dir = REPORTS_ROOT / today
+    report_dir = REPORTS_ROOT / "futures" / today
     report_dir.mkdir(parents=True, exist_ok=True)
     PORTFOLIO_DIR.mkdir(parents=True, exist_ok=True)
 

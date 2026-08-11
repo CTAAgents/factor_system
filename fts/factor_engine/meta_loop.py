@@ -1115,28 +1115,42 @@ class MetaLoop:
         self.web_collector = web_collector
         self.market = market
 
+        # ── 感知层默认样本：按市场区分（股票 → CSI300 成分股 / 期货 → 五大板块品种）──
+        if sample_symbols:
+            effective_symbols = sample_symbols
+        elif market == "stock":
+            from fts.data_mcp import CSI300_SUBSET
+
+            effective_symbols = list(CSI300_SUBSET[:13])
+        else:
+            effective_symbols = [
+                "rb",
+                "i",
+                "j",
+                "hc",  # 黑色系
+                "au",
+                "ag",
+                "cu",  # 有色金属
+                "sc",
+                "ta",
+                "ma",  # 化工
+                "m",
+                "a",
+                "y",  # 农产品
+            ]  # 默认抽样 13 个期货品种，覆盖五大板块
+
         # ── 日志: 市场类型与种子池初始化 ──
         logger.info(
             "[L1.init] market=%s, seed_pool_mode=%s, sample_symbols=%s",
             market,
             market,
-            sample_symbols
-            or [
-                "rb",
-                "i",
-                "j",
-                "hc",
-                "au",
-                "ag",
-                "cu",
-                "sc",
-                "ta",
-                "ma",
-                "m",
-                "a",
-                "y",
-            ],
+            effective_symbols,
         )
+        if market == "stock":
+            logger.info(
+                "[L1.init] 股票感知样本: CSI300 成分股前 %d 只（与演化 L2 csi300 面板同源）",
+                len(effective_symbols),
+            )
         if market == "futures":
             logger.info(
                 "[L1.init] 期货知识注入模式: 将加载 81 个期货专用种子因子 (14 大因子家族)",
@@ -1164,21 +1178,7 @@ class MetaLoop:
             self.seed_pool.list_names()[:5],
         )
 
-        self.sample_symbols = sample_symbols or [
-            "rb",
-            "i",
-            "j",
-            "hc",  # 黑色系
-            "au",
-            "ag",
-            "cu",  # 有色金属
-            "sc",
-            "ta",
-            "ma",  # 化工（原能源化工拆分）
-            "m",
-            "a",
-            "y",  # 农产品
-        ]  # 默认抽样 13 个期货品种，覆盖五大板块
+        self.sample_symbols = effective_symbols
 
         self.state_manager = MetaStateManager(self.memory_dir)
         self.factor_pool_manager = FactorPoolManager(self.factor_pool_path)
@@ -1735,11 +1735,12 @@ class MetaLoop:
 # ─── web_collector ──────────────────────────────────────
 
 
-def _make_web_collector(provider: Any | None = None) -> Callable[..., dict]:
+def _make_web_collector(provider: Any | None = None, market: str = "futures") -> Callable[..., dict]:
     """创建 web_collector 可调用对象 — 基于 FTSDataProvider 的市场快照采集。
 
     Args:
         provider: FTSDataProvider 实例（None 时惰性初始化）
+        market: 市场类型（"futures" 期货 / "stock" 股票），决定 OHLCV 数据源与实时价路径。
 
     Returns:
         Callable(symbol: str) -> dict — 市场快照，包含 quote、kline、news 等字段
@@ -1747,16 +1748,18 @@ def _make_web_collector(provider: Any | None = None) -> Callable[..., dict]:
     lazy_provider: Any | None = provider
 
     def _collect(symbol: str) -> dict:
-        """采集单个品种的市场快照。"""
+        """采集单个标的的市场快照。"""
         nonlocal lazy_provider
         if lazy_provider is None:
             from fts.data import FTSDataProvider
 
             lazy_provider = FTSDataProvider()
 
-        # 转换 symbol 格式: "rb" → "RB0"
-        symbol_upper = symbol.upper().strip()
-        contract_symbol = symbol_upper if symbol_upper.endswith("0") else f"{symbol_upper}0"
+        # 转换 symbol 格式: "rb" → "RB0"（仅期货模式；股票模式保留裸代码，如 "600519"）
+        contract_symbol = symbol
+        if market != "stock":
+            symbol_upper = symbol.upper().strip()
+            contract_symbol = symbol_upper if symbol_upper.endswith("0") else f"{symbol_upper}0"
 
         result: dict = {
             "symbol": symbol,
@@ -1769,9 +1772,12 @@ def _make_web_collector(provider: Any | None = None) -> Callable[..., dict]:
             "warnings": [],
         }
 
-        # 1. 获取 OHLCV 数据
+        # 1. 获取 OHLCV 数据（股票: FTSDataProvider 统一入口 MCP/AKShare 日 K / 期货: 多源聚合）
         try:
-            df = lazy_provider._futures.get_ohlcv(contract_symbol, days=60)
+            if market == "stock":
+                df = lazy_provider.get_ohlcv(symbol, days=60)
+            else:
+                df = lazy_provider._futures.get_ohlcv(contract_symbol, days=60)
             if df is not None and not df.empty:
                 # 取最新 5 根 K 线
                 recent = df.tail(5)
@@ -1800,15 +1806,16 @@ def _make_web_collector(provider: Any | None = None) -> Callable[..., dict]:
         except Exception as e:
             result["warnings"].append(f"OHLCV 获取失败: {e}")
 
-        # 2. 获取实时价格
-        try:
-            from fts.data_futures import get_realtime_prices
+        # 2. 获取实时价格（仅期货模式；股票感知层无实时价接口，最近收盘价已含于 quote）
+        if market != "stock":
+            try:
+                from fts.data_futures import get_realtime_prices
 
-            prices = get_realtime_prices([contract_symbol])
-            if contract_symbol in prices:
-                result["quote"]["realtime_price"] = prices[contract_symbol]
-        except Exception as e:
-            result["warnings"].append(f"实时价获取失败: {e}")
+                prices = get_realtime_prices([contract_symbol])
+                if contract_symbol in prices:
+                    result["quote"]["realtime_price"] = prices[contract_symbol]
+            except Exception as e:
+                result["warnings"].append(f"实时价获取失败: {e}")
 
         return result
 
@@ -1870,7 +1877,7 @@ def main():
     from fts.llm import get_llm_client
 
     # 创建 web_collector — 基于 FTSDataProvider 的市场快照采集
-    web_collector = _make_web_collector(provider)
+    web_collector = _make_web_collector(provider, market=args.market)
     logger.info("web_collector 已就绪 — 市场快照感知已启用")
 
     loop = MetaLoop(

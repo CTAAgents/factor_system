@@ -1236,3 +1236,117 @@ class TestVwapICGate:
         result = self._run_eval(factor, sample_ohlcv, forward_returns, ic=0.05)
         assert result["passed"] is True
         assert not any("vwap" in r for r in result["failure_reasons"])
+
+
+# ─── GAP-071: 走航窗口 IC 口径 + 信号缓存复用 ──────────────
+
+
+class TestGap071WalkForwardAndSignalCache:
+    """GAP-071: 评估链走航窗口 IC 口径修正 + signal_cache 复用。"""
+
+    @staticmethod
+    def _make_momentum_factor() -> FactorProgram:
+        code = (
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    close = data['close'].values\n"
+            "    n = len(close)\n"
+            "    signal = np.zeros(n)\n"
+            "    for i in range(5, n):\n"
+            "        signal[i] = (close[i] - close[i-5]) / max(close[i-5], 1e-10)\n"
+            "    return np.clip(signal * 10, -1.0, 1.0)"
+        )
+        return create_factor_program(
+            name="gap070_momentum",
+            code=code,
+            params={"window": 5},
+            signature=FactorSignature(
+                input_fields=["close"], output_type="signal", frequency="daily", lookback=5
+            ),
+            economic_logic=EconomicLogic(
+                theory=3, behavioral=3, microstructure=3, institutional=3, narrative="GAP-070 测试因子"
+            ),
+            source="manual",
+        )
+
+    def test_walkforward_window_ic_from_oos_internal_returns(self, monkeypatch):
+        """走航窗口 IC 由 oos 段内收益计算，而非全局 forward_returns 尾部。
+
+        构造 500 行数据：行 30-60 close 非线性递减（oos 段内 fwd<0），
+        全局尾部（470-500）递增（fwd>0）。因子信号 = -close。
+        修正后窗口1 IC 与 oos 段内负收益正相关（>0）；
+        旧口径（全局尾部）会得到 <0。
+        """
+        from fts.factor_engine.evaluation_chain import evaluate_walk_forward
+        from fts.factor_engine.factor_program import FactorExecutor
+        from fts.factor_engine.walk_forward import WalkForwardConfig
+
+        n = 500
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        close = np.zeros(n)
+        close[0:30] = np.linspace(100.0, 200.0, 30)
+        i30 = np.arange(30, 60)
+        close[30:60] = 200.0 - 0.5 * (i30 - 30) - 0.02 * (i30 - 30) ** 2  # 非线性递减（fwd 非常数）
+        # 60-500 非线性递增（fwd 非常数，避免线性段收益恒定导致窗口评估失败）
+        i60 = np.arange(60, n)
+        close[60:500] = close[59] + 0.5 * (i60 - 60) + 0.001 * (i60 - 60) ** 2
+        df = pd.DataFrame({"close": close}, index=dates)
+
+        factor = self._make_momentum_factor()
+        calls: list[int] = []
+
+        def fake_execute(self, data, params):
+            calls.append(len(data))
+            return -np.asarray(data["close"].to_numpy(dtype=float))
+
+        monkeypatch.setattr(FactorExecutor, "execute", fake_execute)
+
+        config = WalkForwardConfig(window_years=0, step_months=1, min_oos_months=1, n_windows=2)
+        result = evaluate_walk_forward(factor, df, np.zeros(n), config=config)
+        assert result is not None
+        assert result["n_windows_completed"] == 2
+        # 每个窗口只执行一次（只算 oos 信号，不再执行 train）→ 执行次数 == 窗口数
+        assert len(calls) == 2
+        # 窗口1 oos 段（30-60）close 递减 → oos 内 fwd<0 → 信号 -close 递增 → IC>0
+        assert result["windows"][0]["ic"] > 0
+
+    def test_walkforward_window_executes_only_oos(self, monkeypatch):
+        """修正后每个窗口仅执行 oos 信号（train 信号不再计算，省一半执行）。"""
+        from fts.factor_engine.evaluation_chain import evaluate_walk_forward
+        from fts.factor_engine.factor_program import FactorExecutor
+        from fts.factor_engine.walk_forward import WalkForwardConfig
+
+        n = 400
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        # 非线性递增，保证各窗口 oos 段 fwd 非常数（线性段收益恒定会导致窗口评估失败）
+        idx = np.arange(n)
+        close = 100.0 + 0.5 * idx + 0.001 * idx**2
+        df = pd.DataFrame({"close": close}, index=dates)
+        factor = self._make_momentum_factor()
+        calls: list[int] = []
+
+        def fake_execute(self, data, params):
+            calls.append(len(data))
+            return data["close"].to_numpy(dtype=float)
+
+        monkeypatch.setattr(FactorExecutor, "execute", fake_execute)
+        config = WalkForwardConfig(window_years=0, step_months=1, min_oos_months=1, n_windows=3)
+        result = evaluate_walk_forward(factor, df, np.zeros(n), config=config)
+        assert result["n_windows_completed"] == 3
+        # 3 窗口 × 仅 oos = 3 次执行（修正前为 3×2=6 次）
+        assert len(calls) == 3
+
+    def test_evaluate_signal_cache_hits_on_second_call(self, sample_ohlcv, forward_returns):
+        """evaluate 传入共享缓存：第二次调用 L1/极值扰动命中，不重新执行因子。"""
+        from fts.factor_engine.signal_cache import SignalCache
+
+        cache = SignalCache(max_entries=16)
+        chain = EvaluationChain()
+        factor = self._make_momentum_factor()
+        ev1 = chain.evaluate(factor, sample_ohlcv, forward_returns, signal_cache=cache)
+        ev2 = chain.evaluate(factor, sample_ohlcv, forward_returns, signal_cache=cache)
+        # 第二次调用命中（full-data 信号已缓存，L1 + 极值扰动均命中）
+        assert cache.stats()["hits"] >= 2
+        # 两次评估结果一致（缓存复用不影响正确性）
+        assert ev1["level_1_backtest"]["ic"] == ev2["level_1_backtest"]["ic"]
+        assert ev1["passed"] == ev2["passed"]

@@ -9,7 +9,7 @@ scripts/futures_factor_revalidation.py — 期货精英因子全量重验证
 
 输出:
     - 控制台: 验证结果摘要
-    - 文件:     reports/{date}/futures_factor_revalidation_{date}.md
+    - 文件:     reports/futures/{date}/futures_factor_revalidation_{date}.md
 """
 
 from __future__ import annotations
@@ -292,7 +292,7 @@ def main(
     print(f"      ⬇️ 已降级: {sum(1 for r in results if r['is_deprecated'])}")
 
     # 写入报告
-    report_dir = REPORTS_ROOT / today
+    report_dir = REPORTS_ROOT / "futures" / today
     report_dir.mkdir(parents=True, exist_ok=True)
     out_path = report_dir / f"futures_factor_revalidation_{today}.md"
 

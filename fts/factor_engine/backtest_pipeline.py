@@ -107,6 +107,7 @@ class PerformanceMetrics:
     exposure: float = 0.0
     payoff_ratio: float = 0.0  # 盈亏比 = 平均盈利 / 平均亏损
     profit_factor: float = 0.0  # 盈亏因子 = 总盈利 / 总亏损绝对值
+    max_consecutive_losses: int = 0  # 最大连续亏损天数（GAP-062）
 
 
 @dataclass
@@ -663,6 +664,10 @@ class BacktestPipeline:
         if callable(factor_fn):
             # 以 dict[str, ndarray] 传入，兼容种子因子的 data['close'] / data.get('hold') 用法
             data_dict: dict[str, np.ndarray] = {col: data[col].to_numpy(dtype=np.float64) for col in data.columns}
+            # C1 (microstructure)：data 为 DatetimeIndex 时注入 datetime 列，供日期对齐类
+            # 因子 code（micro_{symbol}_{kind}）按日期确定性查找，零未来由聚合层保证
+            if isinstance(data.index, pd.DatetimeIndex):
+                data_dict["datetime"] = data.index.strftime("%Y-%m-%d").to_numpy(dtype=str)
             try:
                 result = factor_fn(data_dict, params)
             except Exception as e:
@@ -1210,6 +1215,16 @@ class BacktestPipeline:
         total_loss = float(abs(negative_returns.sum())) if len(negative_returns) > 0 else 0.0
         profit_factor = total_win / total_loss if total_loss > 1e-8 else 0.0
 
+        # 最大连续亏损天数（GAP-062）
+        best_streak = cur_streak = 0
+        for r in returns:
+            if r < 0:
+                cur_streak += 1
+                if cur_streak > best_streak:
+                    best_streak = cur_streak
+            else:
+                cur_streak = 0
+
         return PerformanceMetrics(
             total_return=total_return,
             annual_return=annual_return,
@@ -1228,6 +1243,7 @@ class BacktestPipeline:
             exposure=float(np.mean(np.abs(returns))),
             payoff_ratio=payoff_ratio,
             profit_factor=profit_factor,
+            max_consecutive_losses=best_streak,
         )
 
 

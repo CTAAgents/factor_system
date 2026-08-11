@@ -13,6 +13,7 @@ HARNESS §11-loop-engineering.md §4:
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, Optional
 
@@ -29,6 +30,8 @@ from .contracts import (
 )
 from .factor_program import FactorExecutor
 from .walk_forward import WalkForwardOptimizer, WalkForwardConfig, WalkForwardResult, DEFAULT_WALK_FORWARD_CONFIG
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Level 1: 回测验证 ────────────────────────────────────
@@ -163,12 +166,198 @@ def _check_monotonicity(signal: np.ndarray, returns: np.ndarray, n_buckets: int 
     return bool(abs(corr) >= 0.5 and p_value < 0.05)
 
 
+def _max_consecutive_losses(returns: np.ndarray) -> int:
+    """最大连续亏损天数（GAP-062）。"""
+    best = cur = 0
+    for r in returns:
+        if r < 0:
+            cur += 1
+            if cur > best:
+                best = cur
+        else:
+            cur = 0
+    return int(best)
+
+
+def _block_ic_stats(signal: np.ndarray, forward_returns: np.ndarray, block_size: int = 20) -> Optional[tuple[float, float]]:
+    """块状 IC 序列的 t 统计量与胜率（GAP-062）。
+
+    将样本切分为非重叠块，逐块计算 IC，得到 IC 序列：
+        ic_t = IC均值 / (IC标准差 / sqrt(块数))   —— IC 均值显著性检验
+        win_rate = 正 IC 块占比（日度/块级 IC 胜率）
+
+    Returns:
+        (ic_t_stat, win_rate)；IC 序列不足 2 块或无常量差异返回 None。
+    """
+    ics: list[float] = []
+    n = len(signal)
+    for s in range(0, n - block_size + 1, block_size):
+        e = s + block_size
+        ic, _ = _compute_ic(signal[s:e], forward_returns[s:e])
+        ics.append(ic)
+    if len(ics) < 2:
+        return None
+    arr = np.asarray(ics, dtype=float)
+    mu = float(np.mean(arr))
+    sd = float(np.std(arr, ddof=1))
+    if sd < 1e-10:
+        return None
+    ic_t = mu / (sd / np.sqrt(len(arr)))
+    return float(ic_t), float(np.mean(arr > 0))
+
+
+def _cs_quintile_returns(signal_mat: np.ndarray, ret_mat: np.ndarray) -> dict:
+    """横截面 Q1-Q5 完整分组收益（GAP-062）。
+
+    每期按因子值把品种分 5 组（等分），计算各组未来收益均值，跨期平均；
+    输出 {1..5: mean_ret, q5_q1_spread, monotonic}。样本不足返回空 dict。
+
+    Args:
+        signal_mat: (dates, symbols) 信号矩阵
+        ret_mat: (dates, symbols) 未来收益矩阵
+    """
+    n_dates, n_syms = signal_mat.shape
+    if n_dates < 2 or n_syms < 10:
+        return {}
+    groups: dict[int, list[float]] = {g: [] for g in range(1, 6)}
+    for d in range(n_dates):
+        sig = signal_mat[d]
+        ret = ret_mat[d]
+        valid = np.isfinite(sig) & np.isfinite(ret)
+        if int(valid.sum()) < 10:
+            continue
+        s = sig[valid]
+        r = ret[valid]
+        order = np.argsort(s)
+        n = len(s)
+        bounds = np.linspace(0, n, 6).astype(int)
+        for gi in range(5):
+            idx = order[bounds[gi] : bounds[gi + 1]]
+            if len(idx) > 0:
+                groups[gi + 1].append(float(np.mean(r[idx])))
+    result: dict = {}
+    for g in range(1, 6):
+        if groups[g]:
+            result[g] = float(np.mean(groups[g]))
+    if 1 in result and 5 in result:
+        result["q5_q1_spread"] = result[5] - result[1]
+        vals = [result[g] for g in range(1, 6) if g in result]
+        if len(vals) >= 3:
+            corr, _ = sp_stats.spearmanr(range(len(vals)), vals)
+            result["monotonic"] = bool(not np.isnan(corr) and abs(corr) >= 0.5)
+    return result
+
+
+def compute_cs_multi_horizon_ic(
+    oos_signal: np.ndarray,
+    panel_data: dict[str, pd.DataFrame],
+    symbols_list: list[str],
+    common_dates: pd.DatetimeIndex,
+    oos_n: int,
+    horizons: tuple[int, ...] = (1, 5, 10, 20),
+    min_dates: int = 10,
+    block_size: int = 20,
+) -> Optional[Any]:
+    """横截面多持有期 IC（GAP-060 股票/横截面接入，v2.90.0）。
+
+    对每个持有期 h 构建 h 日前向收益矩阵，逐期计算截面 Spearman IC，
+    输出与 `horizon_analysis.HorizonAnalysisResult.to_dict()` 对齐的结构：
+    horizons / ic_by_horizon / icir_by_horizon / win_rate_by_horizon /
+    best_horizon / decay_curve / monotonic_decay。
+
+    与时序路径（evaluate_backtest → compute_multi_horizon_ic）的区别：
+    本函数作用于截面信号矩阵，IC 是"每个截面期一次秩相关"的时序聚合，
+    而非单标的信号与未来收益的时序相关。
+
+    Args:
+        oos_signal: 中性化后的信号矩阵 (n_dates, n_stocks)
+        panel_data: {symbol: OHLCV DataFrame} 字典
+        symbols_list: 与 oos_signal 列顺序一致的标的列表
+        common_dates: 面板共同日期
+        oos_n: 样本外天数（= oos_signal.shape[0]）
+        horizons: 持有期集合（天）
+        min_dates: 有效截面期数下限（不足返回 None）
+        block_size: 非重叠块大小（块状 IC 序列）
+
+    Returns:
+        HorizonAnalysisResult 或 None（数据不足/全部持有期无效）
+    """
+    from .horizon_analysis import HorizonAnalysisResult
+
+    n_dates = int(oos_signal.shape[0])
+    if n_dates < min_dates:
+        return None
+
+    result = HorizonAnalysisResult(horizons=[h for h in horizons if h > 0])
+    if not result.horizons:
+        return None
+
+    # 各标的 close 对齐共同日期 → 收盘价矩阵 (n_dates_total, n_stocks)
+    n_total = len(common_dates)
+    close_matrix = np.zeros((n_total, len(symbols_list)))
+    for j, sym in enumerate(symbols_list):
+        df = panel_data.get(sym)
+        if df is None or "close" not in df.columns:
+            close_matrix[:, j] = np.nan
+        else:
+            close_matrix[:, j] = df["close"].reindex(common_dates).values
+    oos_close = close_matrix[-oos_n:, :]
+
+    for h in result.horizons:
+        fwd = np.full_like(oos_close, np.nan)
+        if h < oos_n:
+            denom = np.maximum(np.abs(oos_close[: oos_n - h, :]), 1e-10)
+            fwd[: oos_n - h, :] = (oos_close[h:, :] - oos_close[: oos_n - h, :]) / denom
+        # 块状截面 IC 序列（非重叠块）
+        ics: list[float] = []
+        n_blocks = max(n_dates // block_size, 1)
+        for b in range(n_blocks):
+            s = b * block_size
+            e = min(s + block_size, n_dates)
+            ics.extend(_cs_compute_ics(oos_signal[s:e, :], fwd[s:e, :]))
+        if not ics:
+            # 块状失败退化全段
+            ics = _cs_compute_ics(oos_signal, fwd)
+        if not ics:
+            continue
+        ic_arr = np.asarray(ics, dtype=float)
+        result.ic_series_by_horizon[h] = [float(v) for v in ics]
+        result.ic_by_horizon[h] = float(np.mean(ic_arr))
+        result.win_rate_by_horizon[h] = float(np.mean(ic_arr > 0))
+        std = float(np.std(ic_arr))
+        result.icir_by_horizon[h] = float(np.mean(ic_arr) / max(std, 1e-10))
+
+    if not result.ic_by_horizon:
+        return None
+
+    # 最佳持有期：|ICIR| 最大（平局取较短持有期）
+    valid = [(h, abs(result.icir_by_horizon[h])) for h in result.horizons if h in result.icir_by_horizon]
+    if valid:
+        result.best_horizon = min(valid, key=lambda x: (-x[1], x[0]))[0]
+
+    # 衰减曲线：IC(h)/IC(1)（绝对 IC 归一化）
+    base_h = result.horizons[0]
+    base_abs = abs(result.ic_by_horizon.get(base_h, 0.0))
+    for h in result.horizons:
+        ic_h = abs(result.ic_by_horizon.get(h, 0.0))
+        result.decay_curve[h] = float(ic_h / base_abs) if base_abs > 1e-10 else 0.0
+
+    # 单调衰减判定：IC 绝对值随持有期非增
+    abs_ics = [abs(result.ic_by_horizon.get(h, 0.0)) for h in result.horizons if h in result.ic_by_horizon]
+    result.monotonic_decay = bool(
+        len(abs_ics) >= 2 and all(abs_ics[i] >= abs_ics[i + 1] - 1e-9 for i in range(len(abs_ics) - 1))
+    )
+    return result
+
+
 def evaluate_backtest(
     factor: FactorProgram,
     data: pd.DataFrame,
     forward_returns: np.ndarray,
     oos_ratio: float = 0.3,
     periods_per_year: int = 252,
+    horizons: Optional[tuple[int, ...]] = None,
+    signal_cache: Optional[Any] = None,
 ) -> BacktestMetrics:
     """Level 1 — 回测验证。
 
@@ -178,11 +367,13 @@ def evaluate_backtest(
         forward_returns: 未来收益率（与 data 等长）
         oos_ratio: 样本外比例
         periods_per_year: 年化系数
+        horizons: 多持有期 IC 分析（GAP-060）；None 不执行（默认关闭，避免影响既有评估路径）
+        signal_cache: 可选信号缓存（GAP-070），命中后跳过因子沙箱执行
 
     Returns:
         BacktestMetrics
     """
-    executor = FactorExecutor(factor)
+    executor = FactorExecutor(factor, signal_cache=signal_cache)
     signal = executor.execute(data, factor.get("params", {}))
 
     n = len(signal)
@@ -237,7 +428,7 @@ def evaluate_backtest(
         if abs(ic_first) > 0.01:
             decay_6m = max(0.0, min(1.0, 1.0 - abs(ic_second) / abs(ic_first)))
 
-    return BacktestMetrics(
+    metrics: BacktestMetrics = BacktestMetrics(
         ic=ic,
         icir=icir,
         sharpe=sharpe,
@@ -248,6 +439,51 @@ def evaluate_backtest(
         turnover_monthly=turnover,
         decay_6m=decay_6m,
     )
+
+    # GAP-062 统计补全（时序路径）：信号翻转频率 / 最大连续亏损 / IC t 值 / 胜率
+    if len(signal) > 1:
+        metrics["sign_flip_rate"] = float(np.mean(np.abs(np.diff(np.sign(signal)))) / 2)  # 归一化 [0,1]：0/2=不翻转，2/2=每日翻转
+    if len(ls_returns) > 0:
+        metrics["max_consecutive_losses"] = _max_consecutive_losses(ls_returns)
+    block_stats = _block_ic_stats(signal, forward_returns)
+    if block_stats is not None:
+        metrics["ic_t_stat"], metrics["win_rate"] = block_stats
+
+    # GAP-060 多持有期 IC 体系：显式传入或配置 FTS_EVAL_HORIZONS 时附加（默认 1,5,10,20）
+    if horizons is None:
+        try:
+            from ..config import get_config
+
+            horizons = getattr(get_config(), "eval_horizons", ()) or None
+        except Exception:  # noqa: BLE001 — 配置读取失败降级关闭
+            horizons = None
+    if horizons is not None and "close" in getattr(data, "columns", []):
+        try:
+            from .horizon_analysis import compute_multi_horizon_ic
+
+            hr = compute_multi_horizon_ic(signal, data["close"].values, horizons=horizons)
+            if hr is not None:
+                metrics["multi_horizon"] = hr.to_dict()
+        except Exception:  # noqa: BLE001 — 多持有期分析失败降级，不阻断既有评估
+            pass
+
+    # GAP-061 可交易性压力层：配置 FTS_COST_SENSITIVITY_ENABLED=1 时附加（默认关闭）
+    try:
+        from ..config import get_config as _get_cfg
+
+        _cs_enabled = bool(getattr(_get_cfg(), "cost_sensitivity_enabled", False))
+    except Exception:  # noqa: BLE001
+        _cs_enabled = False
+    if _cs_enabled and "close" in getattr(data, "columns", []):
+        try:
+            from .cost_sensitivity import run_slippage_stress
+
+            cs = run_slippage_stress(signal, data["close"].values, market="futures")
+            if cs is not None:
+                metrics["cost_sensitivity"] = cs.to_dict()
+        except Exception:  # noqa: BLE001 — 成本敏感性失败降级，不阻断既有评估
+            pass
+    return metrics
 
 
 # ─── Level 2: 经济逻辑评分 ────────────────────────────────
@@ -388,6 +624,7 @@ class EvaluationChain:
         prior_evaluations: Optional[list[FactorEvaluation]] = None,
         correlation_matrix: Optional[np.ndarray] = None,
         walk_forward_config: Optional[WalkForwardConfig] = None,
+        signal_cache: Optional[Any] = None,
     ) -> FactorEvaluation:
         """执行三级评估链（WalkForward 强制走航）。
 
@@ -398,16 +635,19 @@ class EvaluationChain:
             prior_evaluations: 之前所有因子的评估结果（用于多重检验）
             correlation_matrix: 因子相关性矩阵
             walk_forward_config: 走航配置（覆盖默认值）
+            signal_cache: 可选信号缓存（GAP-070），L1/极值扰动/走航共享信号
 
         Returns:
             FactorEvaluation
         """
         # Level 1
-        bt = evaluate_backtest(factor, data, forward_returns, self.oos_ratio, self.periods_per_year)
+        bt = evaluate_backtest(
+            factor, data, forward_returns, self.oos_ratio, self.periods_per_year, signal_cache=signal_cache
+        )
         # GAP-F15 (v2.73.0): 极值扰动 IC 重算——剔除信号上下 pct 百分位极端样本后重算 IC，
         # 供 HighICScreener 的 V2 极值扰动一票否决消费（ic_drop > 25% 拦截）。
         try:
-            _executor = FactorExecutor(factor)
+            _executor = FactorExecutor(factor, signal_cache=signal_cache)
             _signal = _executor.execute(data, factor.get("params", {}))
             extreme_perturbation = _compute_extreme_perturbation_ic(
                 _signal, forward_returns, pct=self.extreme_perturb_pct
@@ -439,6 +679,7 @@ class EvaluationChain:
             data,
             forward_returns,
             config=wf_config,
+            signal_cache=signal_cache,
         )
 
         # 如果走航成功，用多窗口 IC 均值/标准差更新 BacktestMetrics
@@ -494,6 +735,7 @@ def evaluate_walk_forward(
     data: pd.DataFrame,
     forward_returns: np.ndarray,
     config: Optional[WalkForwardConfig] = None,
+    signal_cache: Optional[Any] = None,
 ) -> WalkForwardResult:
     """走航验证 — 多窗口样本外稳定性评估。
 
@@ -503,8 +745,9 @@ def evaluate_walk_forward(
     Args:
         factor: 因子程序
         data: OHLCV 数据
-        forward_returns: 未来收益率
+        forward_returns: 未来收益率（保留参数以兼容既有签名）
         config: 走航配置（None=使用默认配置）
+        signal_cache: 可选信号缓存（GAP-070）
 
     Returns:
         WalkForwardResult
@@ -512,12 +755,17 @@ def evaluate_walk_forward(
     optimizer = WalkForwardOptimizer(config=config)
 
     def _evaluate_window(train_data: pd.DataFrame, oos_data: pd.DataFrame) -> dict[str, float]:
-        """单窗口评估函数（注入到 WalkForwardOptimizer）。"""
-        executor = FactorExecutor(factor)
+        """单窗口评估函数（注入到 WalkForwardOptimizer）。
+
+        GAP-070（v2.98.0）修正: 样本外收益在 oos 段内自行计算
+        （close 差分），而非取全局 forward_returns 尾部——走航窗口是
+        全量的中间切片，全局尾部不等于该窗口，原口径导致非末窗口
+        IC 失真。修正后与审计侧 `_run_walkforward_oos` 完全同口径，
+        支撑审计直接复用评估链走航结果（双重 WalkForward 合并）。
+        """
+        executor = FactorExecutor(factor, signal_cache=signal_cache)
         params = factor.get("params", {})
 
-        # 训练集信号
-        train_signal = executor.execute(train_data, params)
         # 样本外信号
         oos_signal = executor.execute(oos_data, params)
 
@@ -525,22 +773,31 @@ def evaluate_walk_forward(
         if min_len < 2:
             return {"ic": 0.0, "sharpe": 0.0, "turnover": 0.0}
 
-        oos_sig = oos_signal[:min_len]
-        oos_ret = forward_returns[-min_len:] if len(forward_returns) >= min_len else np.zeros(min_len)
+        oos_sig = np.asarray(oos_signal[:min_len], dtype=float)
+        # oos 段内自算前向收益（与审计 _run_walkforward_oos 同口径）
+        close = oos_data["close"].to_numpy(dtype=float)[:min_len]
+        fwd = np.zeros(min_len)
+        if min_len > 1:
+            fwd[:-1] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        mask = np.isfinite(oos_sig) & np.isfinite(fwd)
+        if int(np.sum(mask)) < 10:
+            return {"ic": 0.0, "sharpe": 0.0, "turnover": 0.0}
+        oos_sig_v = oos_sig[mask]
+        oos_ret_v = fwd[mask]
 
-        ic, _ = _compute_ic(oos_sig, oos_ret)
+        ic, _ = _compute_ic(oos_sig_v, oos_ret_v)
 
         # 多空组合收益
-        sorted_idx = np.argsort(oos_sig)
-        top_n = max(1, len(oos_sig) // 5)
-        long_ret = np.mean(oos_ret[sorted_idx[-top_n:]])
-        short_ret = np.mean(oos_ret[sorted_idx[:top_n]])
-        ls_returns = np.full(len(oos_sig), long_ret - short_ret)
+        sorted_idx = np.argsort(oos_sig_v)
+        top_n = max(1, len(oos_sig_v) // 5)
+        long_ret = np.mean(oos_ret_v[sorted_idx[-top_n:]])
+        short_ret = np.mean(oos_ret_v[sorted_idx[:top_n]])
+        ls_returns = np.full(len(oos_sig_v), long_ret - short_ret)
         sharpe = _compute_sharpe(ls_returns)
 
         # 换手率
-        if len(train_signal) > 1:
-            sig_changes = np.abs(np.diff(np.sign(oos_sig)))
+        if len(oos_sig_v) > 1:
+            sig_changes = np.abs(np.diff(np.sign(oos_sig_v)))
             turnover = float(np.mean(sig_changes) * 21)
         else:
             turnover = 0.0
@@ -564,6 +821,8 @@ def cross_section_evaluate_backtest(
     cap_map: Optional[dict[str, float]] = None,
     style_exposures: Optional[dict[str, Any]] = None,
     long_only: bool = False,
+    horizons: Optional[tuple[int, ...]] = None,
+    holdout_ratio: float = 0.2,
 ) -> BacktestMetrics:
     """横截面回测评估 — 单因子在多个标的上跨 section IC。
 
@@ -578,6 +837,10 @@ def cross_section_evaluate_backtest(
         - 如果多空组合收益均值为负，自动翻转信号并重新计算指标
         - 确保因子方向与预测目标一致
 
+    GAP-075（跨标的稳健性检查）:
+        - 输出 `symbol_ic`（逐标的时序 IC，方向翻转同步），供审计 cross_symbol 激活
+        - 输出 `symbol_holdout`（行业分层留出验证，`holdout_ratio` 控制留出比例）
+
     Args:
         factor: 因子程序
         panel_data: {symbol: OHLCV DataFrame} 字典
@@ -588,6 +851,8 @@ def cross_section_evaluate_backtest(
         style_exposures: {style_name: DataFrame} Barra 风格暴露（可选，GAP-S02）。
             启用后在行业中性化基础上叠加风格回归残差（剥离风格暴露）。
         long_only: 仅做多口径（GAP-S07），股票/ETF 路径默认 True
+        horizons: 多持有期 IC 分析（GAP-060 横截面接入）；None 时从配置 eval_horizons 读取（空=关闭）
+        holdout_ratio: 标的留出比例（GAP-075，默认 20%；行业分层，缺失回退随机）
 
     Returns:
         BacktestMetrics
@@ -603,11 +868,12 @@ def cross_section_evaluate_backtest(
     # Step 2: 对齐到共同日期，构建矩阵 + OOS 切片
     oos_n = max(int(len(common_dates) * oos_ratio), 5)
     oos_signal, oos_ret = _cs_build_matrices(signal_dict, ret_dict, common_dates, oos_n)
+    # GAP-060 横截面接入：标的列表统一定义（中性化/多持有期共用）
+    symbols_list = list(signal_dict.keys())
 
     # Step 2.5: 行业中性化（可选）— GAP-S01: 记录中性化前 IC 供对比
     ic_pre_neutral: Optional[float] = None
     if industry_map is not None:
-        symbols_list = list(signal_dict.keys())
         # 中性化前 IC（方向检测前，供报告对比剥离效果）
         pre_ics = _cs_compute_ics(oos_signal, oos_ret)
         if pre_ics:
@@ -636,6 +902,20 @@ def cross_section_evaluate_backtest(
     if not ics:
         return _cs_empty_metrics(oos_ratio)
 
+    # GAP-075: 逐标的时序 IC（供审计 cross_symbol ≥80% 标的 IC 为正；方向翻转后同步取反）
+    symbol_ic: dict[str, float] = {}
+    for j, sym in enumerate(symbols_list):
+        sig_col, ret_col = oos_signal[:, j], oos_ret[:, j]
+        valid = ~(np.isnan(sig_col) | np.isnan(ret_col))
+        if np.sum(valid) < 5:
+            continue
+        s, r = sig_col[valid], ret_col[valid]
+        if np.std(s) < 1e-10 or np.std(r) < 1e-10:
+            continue
+        ic_val, _ = sp_stats.spearmanr(s, r)
+        if not np.isnan(ic_val):
+            symbol_ic[sym] = float(ic_val)
+
     ic_mean = float(np.mean(ics))
     ic_std = float(np.std(ics, ddof=1)) if len(ics) > 1 else 0.0
     icir = float(ic_mean / max(ic_std, 1e-10))
@@ -663,6 +943,8 @@ def cross_section_evaluate_backtest(
         # 中性化前 IC 同步翻转（保持同一方向语义）
         if ic_pre_neutral is not None:
             ic_pre_neutral = -ic_pre_neutral
+        # GAP-075: 逐标的 IC 同步翻转（信号方向取反 → 各标的 IC 取反）
+        symbol_ic = {k: -v for k, v in symbol_ic.items()}
 
     sharpe = _compute_sharpe(ls_returns)
     cumulative = np.cumsum(ls_returns)
@@ -691,6 +973,68 @@ def cross_section_evaluate_backtest(
         metrics["layer_ic"] = layer_ic
     if lo_sharpe is not None:
         metrics["long_only_sharpe"] = lo_sharpe
+
+    # GAP-062 统计补全（横截面路径）：IC t 值 / IC 胜率 / 截面分散度 / Q1-Q5 分组
+    if len(ics) > 1:
+        ic_std_dd = float(np.std(ics, ddof=1))
+        metrics["ic_t_stat"] = float(ic_mean / max(ic_std_dd / np.sqrt(len(ics)), 1e-10))
+        metrics["win_rate"] = float(np.mean(np.asarray(ics) > 0))
+    disp_vals: list[float] = []
+    for d in range(oos_signal.shape[0]):
+        row = oos_signal[d]
+        row_valid = row[np.isfinite(row)]
+        if len(row_valid) >= 2:
+            disp_vals.append(float(np.std(row_valid)))
+    if disp_vals:
+        metrics["cs_dispersion"] = float(np.mean(disp_vals))
+    qr = _cs_quintile_returns(oos_signal, oos_ret)
+    if qr:
+        metrics["quintile_returns"] = qr
+
+    # GAP-062 补充（横截面路径）：信号翻转频率 + 最大连续亏损（时序路径已实现）
+    metrics["sign_flip_rate"] = float(np.mean(np.abs(np.diff(np.sign(oos_signal), axis=0))) / 2) if oos_signal.shape[0] > 1 else 0.0
+    if len(ls_returns) > 0:
+        metrics["max_consecutive_losses"] = _max_consecutive_losses(ls_returns)
+
+    # GAP-060 横截面多持有期 IC：配置 eval_horizons 控制（空=关闭）；显式传入优先
+    if horizons is None:
+        try:
+            from ..config import get_config
+
+            horizons = getattr(get_config(), "eval_horizons", ()) or None
+        except Exception:  # noqa: BLE001 — 配置读取失败降级关闭
+            horizons = None
+    if horizons is not None:
+        try:
+            hr = compute_cs_multi_horizon_ic(
+                oos_signal,
+                panel_data,
+                symbols_list,
+                common_dates,
+                oos_n,
+                horizons=horizons,
+            )
+            if hr is not None:
+                metrics["multi_horizon"] = hr.to_dict()
+        except Exception:  # noqa: BLE001 — 多持有期分析失败降级，不阻断既有评估
+            pass
+
+    # GAP-075: 跨标的稳健性检查输出
+    if symbol_ic:
+        metrics["symbol_ic"] = symbol_ic
+    try:
+        from .symbol_holdout import SymbolHoldoutConfig, run_symbol_holdout
+
+        ho = run_symbol_holdout(
+            signal_dict,
+            ret_dict,
+            SymbolHoldoutConfig(holdout_ratio=holdout_ratio),
+            industry_map,
+        )
+        metrics["symbol_holdout"] = ho.to_dict() if ho is not None else None
+    except Exception:  # noqa: BLE001 — 留出验证失败降级为 None，不阻断既有评估
+        logger.warning("标的留出验证失败，降级为 None")
+        metrics["symbol_holdout"] = None
     return metrics
 
 
@@ -943,6 +1287,7 @@ __all__ = [
     "evaluate_multiple_tests",
     "evaluate_walk_forward",
     "cross_section_evaluate_backtest",
+    "compute_cs_multi_horizon_ic",
     "EvaluationChain",
     "_neutralize_signal_matrix",
 ]

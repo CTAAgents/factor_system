@@ -115,6 +115,17 @@ class TestFTSConfigDefaults:
         cfg = load_config(config_path=None)
         assert cfg.industry_map_path == "data/custom_map.json"
 
+    def test_stock_signal_regime_default(self):
+        """股票信号管道 Regime 自适应配置默认值（D.2 偏差 b，默认 none 保持现状）。"""
+        cfg = FTSConfig()
+        assert cfg.stock_signal_regime == "none"
+
+    def test_stock_signal_regime_env_override(self, monkeypatch):
+        """FTS_STOCK_SIGNAL_REGIME 环境变量覆盖（D.2 偏差 b）。"""
+        monkeypatch.setenv("FTS_STOCK_SIGNAL_REGIME", "auto")
+        cfg = load_config(config_path=None)
+        assert cfg.stock_signal_regime == "auto"
+
     def test_portfolio_optimizer_mode_default(self):
         """组合优化器模式默认值（GAP-I302，v2.74.0）。"""
         cfg = FTSConfig()

@@ -15,8 +15,8 @@ scripts/futures_elite_diagnostic.py — 期货精英因子全面诊断
     python scripts/futures_elite_diagnostic.py [--factor-id fct_xxx] [--days 500]
 
 输出:
-    reports/{date}/futures_elite_diagnostic_{date}.md
-    reports/{date}/factor_details/{factor_id}.md (每个因子详细报告)
+    reports/futures/{date}/futures_elite_diagnostic_{date}.md
+    reports/futures/{date}/factor_details/{factor_id}.md (每个因子详细报告)
 """
 
 from __future__ import annotations
@@ -719,7 +719,7 @@ def main(factor_id=None, days=500):
 
     # 生成报告
     print("\n生成报告...")
-    report_dir = REPORTS_ROOT / today
+    report_dir = REPORTS_ROOT / "futures" / today
     report_dir.mkdir(parents=True, exist_ok=True)
 
     # 汇总报告

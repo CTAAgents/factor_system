@@ -126,11 +126,12 @@ class TestShapAnalyzerInit:
     """测试 ShapAnalyzer 初始化。"""
 
     def test_default_init(self):
-        """默认参数应正确设置。"""
+        """默认参数应正确设置（GAP-080 降频：50→25 / 100→50 / nsamples=50）。"""
         analyzer = ShapAnalyzer()
-        assert analyzer._n_extreme == 50
-        assert analyzer._n_background == 100
+        assert analyzer._n_extreme == 25
+        assert analyzer._n_background == 50
         assert analyzer._random_seed == 42
+        assert analyzer._nsamples == 50
 
     def test_custom_init(self):
         """自定义参数应正确设置。"""

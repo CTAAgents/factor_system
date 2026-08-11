@@ -222,7 +222,7 @@ class TestSchedulerTasks:
     def test_monthly_decay_task_registered(self):
         task = get_task("monthly_decay_eval")
         assert task is not None
-        assert task.cron_expression == "0 2 1 * *"
+        assert task.cron_expression == "0 4 1 * *"
         assert "monthly_decay_eval_job" in task.callable_path
 
     def test_data_quality_task_registered(self):

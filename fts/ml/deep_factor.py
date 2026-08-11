@@ -31,7 +31,7 @@ from typing import Any, Optional, cast
 
 import numpy as np
 
-from .models import GRUFactorModel, ModelNotAvailableError
+from .models import GRUFactorModel, ModelNotAvailableError, TransformerFactorModel
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +41,13 @@ _FEATURE_FIELDS = ("close", "volume")
 
 @dataclass
 class DeepFactorConfig:
-    """深度因子生成配置（GAP-I203）。
+    """深度因子生成配置（GAP-I203 / C5）。
 
     Attributes:
+        model_kind: 深度模型类型 "gru"（默认）| "transformer"（C5）。
         lookback: 滚动窗口步数（序列长度，默认 10）。
         horizon: 前向收益预测窗口（天，默认 5）。
-        hidden: GRU 隐藏单元数（默认 8）。
+        hidden: 隐藏单元数（默认 8）。
         epochs: 训练轮数（默认 120）。
         learning_rate: 学习率（默认 0.01）。
         train_ratio: 训练集占前比例（默认 0.7，剩余作验证）。
@@ -54,6 +55,7 @@ class DeepFactorConfig:
         seed: 随机种子（可复现）。
     """
 
+    model_kind: str = "gru"  # "gru" | "transformer"（C5）
     lookback: int = 10
     horizon: int = 5
     hidden: int = 8
@@ -126,16 +128,25 @@ class DeepFactorGenerator:
         X_val, y_val = X[n_train:], y_seq[n_train:]
 
         try:
-            model = GRUFactorModel(
-                hidden=self.config.hidden,
-                learning_rate=self.config.learning_rate,
-                epochs=self.config.epochs,
-                seed=self.config.seed,
-                min_samples=self.config.min_samples,
-            )
+            if self.config.model_kind == "transformer":
+                model = TransformerFactorModel(
+                    hidden=self.config.hidden,
+                    learning_rate=self.config.learning_rate,
+                    epochs=self.config.epochs,
+                    seed=self.config.seed,
+                    min_samples=self.config.min_samples,
+                )
+            else:
+                model = GRUFactorModel(
+                    hidden=self.config.hidden,
+                    learning_rate=self.config.learning_rate,
+                    epochs=self.config.epochs,
+                    seed=self.config.seed,
+                    min_samples=self.config.min_samples,
+                )
             model.fit(X_train, y_train)
         except ModelNotAvailableError as e:
-            logger.warning("[DeepFactor] GRU 训练降级: %s", e)
+            logger.warning("[DeepFactor] %s 训练降级: %s", self.config.model_kind, e)
             return None
 
         # 验证集评估（用于日志，不参与权重）
@@ -151,7 +162,8 @@ class DeepFactorGenerator:
             except Exception:  # noqa: BLE001
                 val_ic = 0.0
         logger.info(
-            "[DeepFactor] GRU 训练完成: lookback=%d hidden=%d train=%d val=%d val_ic=%.4f",
+            "[DeepFactor] %s 训练完成: lookback=%d hidden=%d train=%d val=%d val_ic=%.4f",
+            self.config.model_kind,
             self.config.lookback,
             self.config.hidden,
             len(X_train),
@@ -162,6 +174,7 @@ class DeepFactorGenerator:
         # 生成因子（内嵌权重）
         return self._build_factor(
             model=model,
+            model_kind=self.config.model_kind,
             feat_mean=feat[:n_train].mean(axis=0),
             feat_std=feat[:n_train].std(axis=0),
             market=market,
@@ -175,7 +188,8 @@ class DeepFactorGenerator:
 
     def _build_factor(
         self,
-        model: GRUFactorModel,
+        model: Any,
+        model_kind: str,
         feat_mean: np.ndarray,
         feat_std: np.ndarray,
         market: str,
@@ -184,7 +198,7 @@ class DeepFactorGenerator:
         val_ic: float,
         n_samples: int,
     ) -> dict[str, Any]:
-        """构造 FactorProgram（code 内嵌 GRU 权重 + 特征标准化统计）。"""
+        """构造 FactorProgram（code 内嵌深度模型权重 + 特征标准化统计）。"""
         params = model.get_params()
         cfg = self.config
 
@@ -196,6 +210,7 @@ class DeepFactorGenerator:
         std_repr = self._arr_repr(std_safe)
 
         code = self._build_code(
+            model_kind=model_kind,
             lookback=cfg.lookback,
             hidden=cfg.hidden,
             w_reprs=w_reprs,
@@ -209,9 +224,9 @@ class DeepFactorGenerator:
         )
         from fts.factor_engine.factor_program import create_factor_program
 
-        unique_key = f"deep_{parent_name}_{time.time_ns()}_{cfg.lookback}_{cfg.hidden}"
+        unique_key = f"deep_{parent_name}_{time.time_ns()}_{cfg.lookback}_{cfg.hidden}_{model_kind}"
         factor_id = "fct_" + hashlib.md5(unique_key.encode()).hexdigest()[:8]
-        factor_name = f"deep_gru_{cfg.lookback}_{factor_id[:6]}"
+        factor_name = f"deep_{model_kind}_{cfg.lookback}_{factor_id[:6]}"
 
         signature = FactorSignature(
             input_fields=list(_FEATURE_FIELDS),
@@ -219,6 +234,7 @@ class DeepFactorGenerator:
             frequency="daily",
             lookback=cfg.lookback,
         )
+        model_label = "GRU" if model_kind == "gru" else "Transformer"
         factor: dict[str, Any] = cast(
             dict[str, Any],
             create_factor_program(
@@ -228,6 +244,7 @@ class DeepFactorGenerator:
                     "lookback": cfg.lookback,
                     "hidden": cfg.hidden,
                     "horizon": cfg.horizon,
+                    "model_kind": model_kind,
                 },
                 signature=signature,
                 economic_logic=EconomicLogic(
@@ -236,7 +253,7 @@ class DeepFactorGenerator:
                     microstructure=3,
                     institutional=3,
                     narrative=(
-                        f"深度时序因子（GAP-I203）: 单层 GRU 对 {cfg.lookback} 日滚动窗口"
+                        f"深度时序因子（GAP-I203/C5）: 单层{model_label}对 {cfg.lookback} 日滚动窗口"
                         f"（收益率+量变化）提取时序特征，预测 {cfg.horizon} 日前向收益；"
                         f"权重由训练段固化内嵌，逐 t 窗口滚动推理（零未来函数）。"
                         f"验证集 IC={val_ic:.4f}，训练样本 {n_samples}。"
@@ -253,7 +270,7 @@ class DeepFactorGenerator:
         factor["generation"] = 0
         factor["kind"] = "code"
         factor["deep_model"] = {
-            "model": "gru",
+            "model": model_kind,
             "lookback": cfg.lookback,
             "hidden": cfg.hidden,
             "horizon": cfg.horizon,
@@ -264,6 +281,20 @@ class DeepFactorGenerator:
     # ─── code 生成 ───────────────────────────────────────
 
     def _build_code(
+        self,
+        model_kind: str,
+        lookback: int,
+        hidden: int,
+        w_reprs: dict[str, str],
+        mean_repr: str,
+        std_repr: str,
+    ) -> str:
+        """生成确定性因子 code：按模型类型分派前向 + 特征标准化 + 逐窗口滚动推理。"""
+        if model_kind == "transformer":
+            return self._build_code_transformer(lookback, hidden, w_reprs, mean_repr, std_repr)
+        return self._build_code_gru(lookback, hidden, w_reprs, mean_repr, std_repr)
+
+    def _build_code_gru(
         self,
         lookback: int,
         hidden: int,
@@ -318,6 +349,65 @@ def factor_program(data, params):
             ht = np.tanh(xt @ Wh + (r * h) @ Uh + bh)
             h = (1.0 - z) * h + z * ht
         out[t] = float(np.tanh(h @ Wo + bo).item())
+    return out
+"""
+        return code
+
+    def _build_code_transformer(
+        self,
+        lookback: int,
+        hidden: int,
+        w_reprs: dict[str, str],
+        mean_repr: str,
+        std_repr: str,
+    ) -> str:
+        """生成确定性因子 code：单头自注意力 + 因果掩码 + LN + 最后步预测（C5）。"""
+        code = f"""\
+def factor_program(data, params):
+    import numpy as np
+    close = np.asarray(data.get('close'), dtype=float) if 'close' in data else None
+    volume = np.asarray(data.get('volume'), dtype=float) if 'volume' in data else None
+    n = len(close)
+    lookback = {lookback}
+    hidden = {hidden}
+    # ── 特征: 日收益率 + 成交量变化率 ──
+    ret = np.zeros(n)
+    ret[1:] = np.diff(close) / np.maximum(np.abs(close[:-1]), 1e-10)
+    if volume is not None:
+        vol_chg = np.zeros(n)
+        vol_chg[1:] = np.diff(volume) / np.maximum(volume[:-1], 1e-10)
+    else:
+        vol_chg = np.zeros(n)
+    feat = np.stack([ret, vol_chg], axis=1)  # (n, 2)
+    # ── 特征标准化（训练段统计，固定） ──
+    fmean = np.array({mean_repr}, dtype=float)
+    fstd = np.array({std_repr}, dtype=float)
+    feat = (feat - fmean) / fstd
+    # ── 单头自注意力权重 ──
+    Wq = np.array({w_reprs["Wq"]}, dtype=float)
+    Wk = np.array({w_reprs["Wk"]}, dtype=float)
+    Wv = np.array({w_reprs["Wv"]}, dtype=float)
+    Wo = np.array({w_reprs["Wo"]}, dtype=float)
+    bo = np.array({w_reprs["bo"]}, dtype=float)
+    pos = np.array({w_reprs["pos_emb"]}, dtype=float)
+    # 因果掩码（上三角 −inf）：t 时刻只用 ≤t 输入（零未来函数）
+    mask = np.triu(np.ones((lookback, lookback)), k=1)
+    out = np.zeros(n)
+    if n < lookback:
+        return out
+    for t in range(lookback - 1, n):
+        Xw = feat[t - lookback + 1 : t + 1]  # (lookback, 2)，窗口止于 t
+        Q = Xw @ Wq
+        K = Xw @ Wk
+        V = Xw @ Wv
+        logits = Q @ K.T / np.sqrt(hidden) - 1e9 * mask
+        e = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
+        attn = e / np.sum(e, axis=-1, keepdims=True)
+        ctx = attn @ V + pos
+        m = ctx.mean(axis=-1, keepdims=True)
+        s = ctx.std(axis=-1, keepdims=True) + 1e-6
+        ctx_ln = (ctx - m) / s
+        out[t] = float(np.tanh(ctx_ln[-1] @ Wo + bo).item())
     return out
 """
         return code

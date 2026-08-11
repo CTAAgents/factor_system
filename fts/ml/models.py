@@ -696,6 +696,279 @@ def create_gru_model(params: Optional[dict[str, Any]] = None) -> GRUFactorModel:
     return GRUFactorModel(**(params or {}))
 
 
+# ─── Transformer 因子模型（C5，v2.100.1）────────────────────
+
+
+class TransformerFactorModel:
+    """轻量纯 numpy 单头自注意力因子模型（C5）。
+
+    不引入 torch/tensorflow 等重依赖，用 numpy 实现单层单头自注意力
+    （Q/K/V 投影 + 因果掩码 + 简化 LayerNorm），对滚动窗口序列提取
+    时序特征，取最后时间步输出预测，映射为因子信号。
+
+    设计原则（与 GRUFactorModel 对齐）:
+        - 纯 numpy 实现，无可选依赖，``is_available`` 恒为 True
+        - 输入 X 形状 (n_samples, seq_len, n_features)；训练前按窗口 z-score
+        - **因果掩码**（上三角 −inf）：t 时刻输出只依赖 ≤t 输入，天然零未来函数
+        - 样本不足 ``min_samples`` 抛 ``ModelNotAvailableError`` 降级
+        - 参数可导出（``get_params``）供因子 code 序列化内嵌
+
+    Transformer 前向（单头、单层）:
+        Q = X·Wq, K = X·Wk, V = X·Wv
+        attn = softmax(QK'/√d + causal_mask)          # 因果掩码
+        ctx  = attn·V + pos_emb                        # 位置编码
+        ctx_ln = LayerNorm(ctx)                        # 简化 LN（减均值除 std）
+        pred = tanh(ctx_ln[:, -1, :]·Wo + bo)          # 取最后时间步
+    """
+
+    def __init__(
+        self,
+        hidden: int = 8,
+        learning_rate: float = 0.01,
+        epochs: int = 120,
+        l2: float = 1e-4,
+        seed: int = 42,
+        min_samples: int = 32,
+    ) -> None:
+        self.hidden = int(hidden)
+        self.learning_rate = float(learning_rate)
+        self.epochs = int(epochs)
+        self.l2 = float(l2)
+        self.seed = int(seed)
+        self.min_samples = int(min_samples)
+
+        self._Wq: Optional[np.ndarray] = None
+        self._Wk: Optional[np.ndarray] = None
+        self._Wv: Optional[np.ndarray] = None
+        self._Wo: Optional[np.ndarray] = None
+        self._bo: Optional[np.ndarray] = None
+        self._pos_emb: Optional[np.ndarray] = None
+        self._x_mean: Optional[np.ndarray] = None
+        self._x_std: Optional[np.ndarray] = None
+        self._fitted = False
+
+    @property
+    def is_available(self) -> bool:
+        """纯 numpy 实现，无重依赖，恒可用。"""
+        return True
+
+    @property
+    def seq_len(self) -> int:
+        if not self._fitted:
+            raise ModelNotAvailableError("Transformer 因子模型未训练，无法获取 seq_len")
+        assert self._x_mean is not None
+        return int(self._x_mean.shape[0])
+
+    @property
+    def n_features(self) -> int:
+        if not self._fitted:
+            raise ModelNotAvailableError("Transformer 因子模型未训练，无法获取 n_features")
+        assert self._x_mean is not None
+        return int(self._x_mean.shape[1])
+
+    # ─── 训练与预测 ──────────────────────────────────────
+
+    def fit(self, X: Any, y: Any, **kwargs: Any) -> "TransformerFactorModel":
+        """训练单头自注意力模型（动量 SGD + L2）。
+
+        Args:
+            X: 特征序列 (n_samples, seq_len, n_features)
+            y: 目标向量 (n_samples,)
+
+        Returns:
+            self
+
+        Raises:
+            ModelNotAvailableError: 样本数不足 min_samples 或输入非数值
+        """
+        X_arr, y_arr = self._validate(X, y)
+        n_samples, seq_len, n_features = X_arr.shape
+
+        rng = np.random.default_rng(self.seed)
+        scale = 1.0 / np.sqrt(max(n_features, 1))
+        self._Wq = rng.normal(0.0, scale, (n_features, self.hidden))
+        self._Wk = rng.normal(0.0, scale, (n_features, self.hidden))
+        self._Wv = rng.normal(0.0, scale, (n_features, self.hidden))
+        self._Wo = rng.normal(0.0, scale, (self.hidden, 1))
+        self._bo = np.zeros(1)
+        self._pos_emb = rng.normal(0.0, scale, (seq_len, self.hidden))
+
+        X_norm = (X_arr - self._x_mean) / self._x_std
+        momentum = 0.9
+        vel: dict[str, np.ndarray] = {}
+        for name in ("Wq", "Wk", "Wv", "Wo", "bo", "pos_emb"):
+            vel[name] = np.zeros_like(getattr(self, f"_{name}"))
+
+        for _ in range(self.epochs):
+            grads = self._backward(X_norm, y_arr)
+            for name, g in grads.items():
+                vel[name] = momentum * vel[name] - self.learning_rate * g
+                param = getattr(self, f"_{name}")
+                param += vel[name]
+
+        self._fitted = True
+        logger.info(
+            "[ML] Transformer 因子模型训练完成: samples=%d seq=%d features=%d hidden=%d",
+            n_samples,
+            seq_len,
+            n_features,
+            self.hidden,
+        )
+        return self
+
+    def predict(self, X: Any) -> np.ndarray:
+        """预测。未训练时抛 ModelNotAvailableError。"""
+        if not self._fitted:
+            raise ModelNotAvailableError("Transformer 因子模型未训练，无法预测")
+        X_arr = self._to_float_array(X)
+        if X_arr.ndim != 3:
+            raise ModelNotAvailableError(f"预测输入需为 3D 序列 (n, seq, f)，收到 {X_arr.ndim}D")
+        if X_arr.shape[1:] != (self.seq_len, self.n_features):
+            raise ModelNotAvailableError(
+                f"输入序列形状不匹配: 期望 (n,{self.seq_len},{self.n_features})，收到 {X_arr.shape}"
+            )
+        X_norm = (X_arr - self._x_mean) / self._x_std
+        out, _ = self._forward(X_norm)
+        return np.asarray(out, dtype=float).ravel()
+
+    # ─── 内部实现 ────────────────────────────────────────
+
+    def _forward(self, X: np.ndarray) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+        """批量前向。返回 (pred (b,), cache)。"""
+        assert self._Wq is not None and self._Wo is not None and self._pos_emb is not None
+        b, seq, _ = X.shape
+        d = self.hidden
+        Q = X @ self._Wq  # (b, seq, d)
+        K = X @ self._Wk
+        V = X @ self._Wv
+        logits = Q @ K.transpose(0, 2, 1) / np.sqrt(d)  # (b, seq, seq)
+        # 因果掩码：上三角 −inf（t 时刻只用 ≤t）
+        mask = np.triu(np.ones((seq, seq)), k=1)
+        logits = logits - 1e9 * mask
+        e = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
+        attn = e / np.sum(e, axis=-1, keepdims=True)
+        ctx = attn @ V + self._pos_emb[:seq]  # (b, seq, d)
+        mean = ctx.mean(axis=-1, keepdims=True)
+        std = ctx.std(axis=-1, keepdims=True) + 1e-6
+        ctx_ln = (ctx - mean) / std
+        out = np.tanh(ctx_ln @ self._Wo + self._bo)  # (b, seq, 1)
+        cache = {
+            "X": X,
+            "Q": Q,
+            "K": K,
+            "V": V,
+            "logits": logits,
+            "attn": attn,
+            "ctx": ctx,
+            "mean": mean,
+            "std": std,
+            "ctx_ln": ctx_ln,
+        }
+        return out[:, -1, 0], cache
+
+    def _backward(
+        self,
+        X_norm: np.ndarray,
+        y: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """解析梯度（仅最后时间步贡献 loss）。"""
+        b, seq, _ = X_norm.shape
+        d = self.hidden
+        pred, cache = self._forward(X_norm)
+        X, Q, K, V, logits, attn, ctx, mean, std, ctx_ln = (
+            cache["X"], cache["Q"], cache["K"], cache["V"], cache["logits"],
+            cache["attn"], cache["ctx"], cache["mean"], cache["std"], cache["ctx_ln"],
+        )
+
+        d_out = 2.0 * (pred - y) / b  # MSE 梯度（除批次）
+        d_tanh = d_out * (1.0 - pred ** 2)  # (b,)
+        d_Wo = ctx_ln[:, -1, :].T @ d_tanh[:, None]  # (d, 1)
+        d_bo = np.array([float(np.sum(d_tanh))])
+        d_ctx_ln_last = d_tanh[:, None] * self._Wo.T  # (b, d)
+
+        # LayerNorm 反向（最后位置）
+        ctx_last = ctx[:, -1, :]  # (b, d)
+        ctx_ln_last = ctx_ln[:, -1, :]
+        d_ctx_last = (d_ctx_ln_last - d_ctx_ln_last.mean(axis=-1, keepdims=True)
+                      - ctx_ln_last * (d_ctx_ln_last * ctx_ln_last).mean(axis=-1, keepdims=True)) / std[:, -1, :]
+
+        # 位置编码梯度（最后位置）
+        d_pos_emb = np.zeros_like(self._pos_emb)
+        d_pos_emb[seq - 1] = d_ctx_last.sum(axis=0)
+
+        # 注意力反向（仅最后位置有梯度）
+        a_last = attn[:, -1, :]  # (b, seq)
+        dV = a_last.T @ d_ctx_last  # (seq, d)（聚合 batch）
+        # 逐样本 score：score_b = d_ctx_last_b @ V_b^T（避免 matmul batch 广播歧义）
+        score = np.einsum("bd,bsd->bs", d_ctx_last, V)  # (b, seq)
+        d_logits_last = a_last * (score - (a_last * score).sum(axis=-1, keepdims=True))
+        # 逐样本聚合：避免 2D @ 3D matmul 广播歧义（会得到 (b,b,d)）
+        dQ_last = np.einsum("bs,bsd->bd", d_logits_last, K) / np.sqrt(d)  # (b, d)
+        dK = (d_logits_last.T @ Q[:, -1, :]) / np.sqrt(d)  # (seq, d)
+
+        X_last = X[:, -1, :]  # (b, f)
+        d_Wq = X_last.T @ dQ_last  # (f, d)
+        d_Wk = np.einsum("bsf,sd->fd", X, dK)  # sum_b X_b^T @ dK
+        d_Wv = np.einsum("bsf,sd->fd", X, dV)
+
+        # L2 正则（不计入 pos_emb）
+        reg = self.l2 / b
+        n = max(b, 1)
+        return {
+            "Wq": d_Wq / n + reg * self._Wq,
+            "Wk": d_Wk / n + reg * self._Wk,
+            "Wv": d_Wv / n + reg * self._Wv,
+            "Wo": d_Wo / n + reg * self._Wo,
+            "bo": d_bo / n,
+            "pos_emb": d_pos_emb / n,
+        }
+
+    @staticmethod
+    def _to_float_array(X: Any) -> np.ndarray:
+        """将输入转为 float64 numpy 数组，非数值抛 ModelNotAvailableError。"""
+        try:
+            arr = np.asarray(X, dtype=float)
+        except (TypeError, ValueError) as e:
+            raise ModelNotAvailableError(f"输入含非数值数据: {e}") from e
+        return arr
+
+    def _validate(self, X: Any, y: Any) -> tuple[np.ndarray, np.ndarray]:
+        """校验并标准化训练输入。"""
+        X_arr = self._to_float_array(X)
+        y_arr = self._to_float_array(y)
+        if X_arr.ndim != 3:
+            raise ModelNotAvailableError(f"特征需为 3D 序列 (n, seq, f)，收到 {X_arr.ndim}D")
+        if X_arr.shape[0] != y_arr.shape[0]:
+            raise ModelNotAvailableError(f"特征与目标样本数不一致: {X_arr.shape[0]} vs {y_arr.shape[0]}")
+        if X_arr.shape[0] < self.min_samples:
+            raise ModelNotAvailableError(f"样本数 {X_arr.shape[0]} 低于最小要求 {self.min_samples}，降级回退")
+        self._x_mean = X_arr.mean(axis=0)  # (seq, f)
+        self._x_std = X_arr.std(axis=0)
+        self._x_std[self._x_std < 1e-12] = 1.0
+        return X_arr, y_arr
+
+    def get_params(self) -> dict[str, np.ndarray]:
+        """导出训练参数（权重），供因子 code 序列化内嵌（C5）。"""
+        if not self._fitted:
+            raise ModelNotAvailableError("Transformer 因子模型未训练，无法导出参数")
+        return {
+            name: np.array(getattr(self, f"_{name}"), copy=True)
+            for name in ("Wq", "Wk", "Wv", "Wo", "bo", "pos_emb")
+        }
+
+
+def create_transformer_model(params: Optional[dict[str, Any]] = None) -> TransformerFactorModel:
+    """创建 Transformer 因子模型（C5 深度因子学习二期）。
+
+    Args:
+        params: 超参（hidden/learning_rate/epochs/l2/seed/min_samples）
+
+    Returns:
+        TransformerFactorModel 实例（纯 numpy 实现，恒可用）。
+    """
+    return TransformerFactorModel(**(params or {}))
+
+
 __all__ = [
     "ModelKind",
     "ModelNotAvailableError",
@@ -705,4 +978,6 @@ __all__ = [
     "create_mlp_model",
     "GRUFactorModel",
     "create_gru_model",
+    "TransformerFactorModel",
+    "create_transformer_model",
 ]

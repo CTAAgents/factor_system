@@ -6,7 +6,14 @@ fts.config — FTS 全局配置模块。
 
 from __future__ import annotations
 
-from .settings import FTSConfig, get_config, load_config, DEFAULT_MEMORY_DIR, DEFAULT_ELITE_DIR
+from .settings import (
+    FTSConfig,
+    get_config,
+    load_config,
+    is_weight_recompute_day,
+    DEFAULT_MEMORY_DIR,
+    DEFAULT_ELITE_DIR,
+)
 from .factor_quality_card_config import (
     DimensionWeights,
     GradeThresholds,
@@ -22,6 +29,7 @@ __all__ = [
     "FTSConfig",
     "get_config",
     "load_config",
+    "is_weight_recompute_day",
     "DEFAULT_MEMORY_DIR",
     "DEFAULT_ELITE_DIR",
     "DimensionWeights",

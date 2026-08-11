@@ -206,6 +206,16 @@ class BacktestMetrics(TypedDict, total=False):
     n_walk_windows: int  # WalkForward 有效窗口数
     layer_ic: dict  # 分层 IC（GAP-S06）：{layer_name: ic_mean}
     long_only_sharpe: float  # 仅做多夏普（GAP-S07）
+    multi_horizon: dict  # 多持有期 IC（GAP-060）：{horizons/ic_by_horizon/icir_by_horizon/win_rate_by_horizon/best_horizon/decay_curve/monotonic_decay}
+    cs_dispersion: float  # 因子截面分散度（GAP-062）：截面因子值 std 的时间均值
+    sign_flip_rate: float  # 信号翻转频率（GAP-062）：日均信号方向变化占比
+    max_consecutive_losses: int  # 最大连续亏损天数（GAP-062）
+    ic_t_stat: float  # IC 均值 t 统计量（GAP-062）：IC均值 / IC标准误
+    win_rate: float  # 日度/块级 IC 胜率（GAP-062）：正 IC 占比
+    cost_sensitivity: dict  # 可交易性压力层（GAP-061）：滑点倍数 -> 净夏普/净IC/盈亏平衡
+    quintile_returns: dict  # Q1-Q5 分组收益（GAP-062）：{1..5: mean_ret, q5_q1_spread, monotonic}
+    symbol_ic: dict  # 逐标的时序 IC（GAP-075）：{symbol: ic}，供审计 cross_symbol 激活
+    symbol_holdout: dict  # 标的留出验证（GAP-075）：{train_ic/holdout_ic/ic_retention/passed/...}，None=数据不足
 
 
 class EconomicScore(TypedDict, total=False):
@@ -344,6 +354,8 @@ class BudgetConfig(TypedDict, total=False):
     circuit_breaker_low_ic_threshold: float  # 低 IC 阈值（默认 0.01）
     circuit_breaker_failure_rate: float  # 失败率熔断（默认 0.95）
     max_per_family: int  # 单一家族最大精英因子数（默认 3）
+    evolution_stop_enabled: bool  # P1-3 (Phase 3): 提前达标停止开关（默认 False 保守）
+    evolution_stop_consecutive_empty_generations: int  # P1-3: 连续零晋升 K 代 → 提前结束（默认 5）
 
 
 # ─── 默认配置常量 ─────────────────────────────────────────
@@ -625,6 +637,9 @@ class PortfolioCombo(TypedDict, total=False):
     sharpe_warning: Optional[str]  # 夏普警戒提示（None=正常, str=警戒原因）
     sharpe_randomization_passed: Optional[bool]  # 随机化测试是否通过
     metrics_source: Optional[str]  # 组合指标来源（"measured"=因子收益矩阵 w×R 实测, "estimated"=估算回退，GAP-L301）
+    qc_standards: dict  # 组合质检三标准（GAP-063）：synthesis_gain/diversification_gain/drawdown_control_ratio + passed 标记
+    exposure_scale: Optional[float]  # 置信度仓位缩放因子（28-T6，None=未启用）
+    regime_meta: Optional[dict]  # regime 元信息 {regime, confidence, exposure_scale, entropy_norm}（28-T6）
 
 
 class AgentOptimizationProposal(TypedDict, total=False):
@@ -738,6 +753,12 @@ class AdaptiveWeightConfig(TypedDict, total=False):
         - "family": 仅按 FactorFamily 倍率（既有 REGIME_FAMILY_MULTIPLIERS）
         - "style":  仅按 FactorStyle 倍率（REGIME_STYLE_MULTIPLIERS，v2.56.0）
         - "both":   family × style 双倍率乘积（默认，乘积后 clamp 到 ±50%）
+
+    机构级优化（28-T4）:
+        - probability_mix: 制度概率混合（regime blend，默认 True）
+        - confidence_scale: 置信度仓位缩放（默认 True）
+        - confidence_scale_min: 熵标定后缩放下限（默认 0.3）
+        - confidence_entropy_penalty: 熵标定惩罚系数（默认 0.5）
     """
 
     enabled: bool  # 是否启用（默认 True）
@@ -746,6 +767,10 @@ class AdaptiveWeightConfig(TypedDict, total=False):
     min_weight: float  # 调整后权重下限比例（默认 0.01）
     min_clamp: float  # 双维度乘积下限 clamp 倍率（默认 0.5）
     max_clamp: float  # 双维度乘积上限 clamp 倍率（默认 1.5）
+    probability_mix: bool  # 制度概率混合开关（regime blend，默认 True；28-T4）
+    confidence_scale: bool  # 置信度仓位缩放开关（默认 True；28-T4）
+    confidence_scale_min: float  # 熵标定缩放下限（默认 0.3；28-T4）
+    confidence_entropy_penalty: float  # 熵标定惩罚系数（默认 0.5；28-T4）
 
 
 DEFAULT_ADAPTIVE_CONFIG: AdaptiveWeightConfig = AdaptiveWeightConfig(
@@ -755,8 +780,12 @@ DEFAULT_ADAPTIVE_CONFIG: AdaptiveWeightConfig = AdaptiveWeightConfig(
     min_weight=0.01,
     min_clamp=0.5,
     max_clamp=1.5,
+    probability_mix=True,
+    confidence_scale=True,
+    confidence_scale_min=0.3,
+    confidence_entropy_penalty=0.5,
 )
-"""v2.56.0 锁定的 L3 自适应权重默认配置（更灵敏平滑档）。"""
+"""v2.56.0 锁定的 L3 自适应权重默认配置（更灵敏平滑档；28-T4 扩展概率混合与置信度缩放）。"""
 
 
 # ─── 多源数据交叉验证契约 ──────────────────────────────────

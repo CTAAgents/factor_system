@@ -20,8 +20,9 @@ import re
 from typing import Optional
 
 from .contracts import EconomicLogic, ExperienceTrace, FactorProgram
-from .experience_chain import ExperienceChain, FailurePatternAnalyzer
+from .experience_chain import ExperienceChain, FailurePatternAnalyzer, ParentFailureContext
 from .factor_program import create_factor_program
+from .success_pattern import SuccessPatternReport, format_report_for_llm
 from ..llm import LLMClient, MockLLMClient, get_llm_client as _get_llm_client
 
 
@@ -56,6 +57,8 @@ class MacroEvolver:
         parent: FactorProgram,
         generation: int,
         trace_id: Optional[str] = None,
+        parent_failure_ctx: Optional[ParentFailureContext] = None,
+        success_pattern: Optional[SuccessPatternReport] = None,
     ) -> tuple[FactorProgram, str, int]:
         """对父因子进行宏观演化（LLM 改逻辑）。
 
@@ -63,6 +66,10 @@ class MacroEvolver:
             parent: 父因子
             generation: 新因子的代数（= parent.generation + 1）
             trace_id: 全链路 trace_id
+            parent_failure_ctx: 父因子最近失败归因（Phase 1.1 P0-2 定向修复）；
+                为 None 时不注入失败归因段落
+            success_pattern: 近期成功模式（Phase 1.2 P0-1 soft 偏向）；
+                为 None 或空报告时不注入成功模式段落
 
         Returns:
             (new_factor, mutation_summary, tokens_consumed)
@@ -71,7 +78,13 @@ class MacroEvolver:
         experience_context = self._read_experience_for_llm()
 
         # 构造 LLM prompt
-        prompt = self._build_prompt(parent, generation, experience_context)
+        prompt = self._build_prompt(
+            parent,
+            generation,
+            experience_context,
+            parent_failure_ctx=parent_failure_ctx,
+            success_pattern=success_pattern,
+        )
 
         # 调用 LLM
         try:
@@ -134,8 +147,19 @@ class MacroEvolver:
         parent: FactorProgram,
         generation: int,
         experience: dict[str, list[ExperienceTrace]],
+        parent_failure_ctx: Optional[ParentFailureContext] = None,
+        success_pattern: Optional[SuccessPatternReport] = None,
     ) -> str:
-        """构造 LLM 提示词。"""
+        """构造 LLM 提示词。
+
+        Args:
+            parent: 父因子
+            generation: 当前代数
+            experience: 经验链上下文（成功/失败轨迹）
+            parent_failure_ctx: 父因子最近失败归因（Phase 1.1 P0-2 定向修复）；
+                为 None 时不注入该段落
+            success_pattern: 近期成功模式（Phase 1.2 P0-1）；为 None/空报告时不注入
+        """
         recent_success = experience.get("success", [])
         recent_failure = experience.get("failure", [])
 
@@ -157,6 +181,8 @@ class MacroEvolver:
 
 失败模式聚类分析（避免系统性重复犯错）:
 {self._format_failure_patterns()}
+{self._format_parent_failure_guidance(parent_failure_ctx)}
+{format_report_for_llm(success_pattern)}
 
 任务: 生成代 {generation} 的新因子变异。
 
@@ -250,6 +276,25 @@ class MacroEvolver:
         if self._failure_analyzer is None:
             return "(无经验链数据，无法分析)"
         return self._failure_analyzer.format_for_llm(max_traces=20)
+
+    @staticmethod
+    def _format_parent_failure_guidance(
+        ctx: Optional[ParentFailureContext],
+    ) -> str:
+        """格式化父因子最近失败归因段落（Phase 1.1 P0-2 定向修复）。
+
+        ctx 为 None 时返回空串，不注入段落（现有行为不变）。
+        """
+        if ctx is None:
+            return ""
+        reasons = "、".join(ctx.failure_reasons) if ctx.failure_reasons else "(无)"
+        time_info = f"，最近失败于 {ctx.latest_failed_at}" if ctx.latest_failed_at else ""
+        return (
+            "\n=== 父因子最近失败归因（定向修复） ===\n"
+            f"父因子最近失败归因: {reasons}{time_info}\n"
+            "定向修复要求: 针对上述失败维度调整因子逻辑，显式规避这些失败原因，"
+            "避免子代重复踩坑。"
+        )
 
     @staticmethod
     def _apply_code_modification(original_code: str, modification: str) -> str:

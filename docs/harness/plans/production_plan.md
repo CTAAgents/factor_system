@@ -1,6 +1,6 @@
 # FTS 生产就绪计划
 
-> 版本: v2.89.0
+> 版本: v2.102.0
 > 最后更新: 2026-08-07
 
 > ⚠️ **重要说明**：FTS 当前为**开发阶段**，尚未达到生产就绪状态。本文档记录生产部署所需的各项准备工作。
@@ -180,6 +180,49 @@
 | 8 | 生产切换 runbook（灰度：先读密钥服务，降级回 `.env`） | 1 天 | Runbook 文档 |
 
 **切换策略**：灰度执行，先读密钥服务，降级回 `.env`，确保 0 停机。
+
+---
+
+### Phase 5: 分布式挖掘集群拓扑（C4，2026-08-11，部署后置）
+
+> **策略**：代码与单机 LocalCluster 验证已落地（见 plans/23 C4 实施设计），本小节为**真实多机部署拓扑方案**，待硬件/基建条件成熟后执行。
+
+**架构拓扑（scheduler + N workers + 单写者 DuckDB）**
+
+```text
+┌────────────────────────── 调度层 ──────────────────────────┐
+│  Dask Scheduler（tcp://scheduler:8786）                    │
+│  - 任务分派/worker 心跳/失败重试                           │
+│  - 单点（可配 HA：scheduler 进程守护）                     │
+└────────────────────────────────────────────────────────────┘
+        │ 调度
+┌───────▼────────┐  ┌───────▼────────┐  ┌───────▼────────┐
+│ Worker 1       │  │ Worker 2       │  │ Worker N       │
+│ 批量粗筛/评估   │  │ 批量粗筛/评估   │  │ 批量粗筛/评估   │
+│ 读 replica-1   │  │ 读 replica-2   │  │ 读 replica-N   │
+└────────────────┘  └────────────────┘  └────────────────┘
+        │ 只读                       ┌──────────────┐
+        └───────────────────────────▶│ DuckDB 副本   │
+                                     │ replica-*.db │
+                                     └──────────────┘
+                          ┌──────────────┐   写唯一
+                          │ DuckDB 主写节点│◀── 演化晋升/审查落库
+                          │ (单写者, 锁)  │    仅在写节点执行
+                          └──────────────┘
+```
+
+**接线要点**：
+
+| 项 | 方案 |
+|:---|:-----|
+| 调度器/Worker | `dask scheduler` + `dask worker tcp://scheduler:8786`（N 节点）；单机验证用 `Client(n_workers)` 本地集群等价语义 |
+| 接入 | `BatchMiningConfig.executor_backend="dask"` + `FTS_EXECUTOR_BACKEND=dask`；集群模式 `DaskBackend(address="tcp://scheduler:8786")` |
+| **DuckDB 数据访问** | **单写者多读副本**：写节点唯一（演化晋升/审查落库 `factor_reviews`/`factor_catalog`），Worker 只读挂载 `data/` 只读副本（或同一 NFS 只读挂载）——避免多进程写同一 DuckDB 文件锁冲突（GAP-056 架构延续；memory 教训：并发进程同文件不同配置连接报 "Can't open a connection..."） |
+| 任务失败隔离 | dask 默认单任务异常仅该 future 抛，不中断整批；worker 掉线任务自动重派给存活 worker |
+| 监控告警 | scheduler 心跳 + worker 存活探针；批次失败率超阈值告警；`BatchMiner.filter_batch` 结果按输入顺序保真（一致性 < 1e-9 验收） |
+| 灰度路径 | 单机先 `process` → 单机 `dask`（LocalCluster）→ 双节点真实集群，逐级验证吞吐与一致性 |
+
+**验收数据**：`scripts/benchmark_executor.py` 输出 dask vs process vs thread 吞吐对比表（纳入 Stage 3 验收报告）；真实集群批量评估吞吐 ≥ 单机 ProcessBackend 且结果一致性 < 1e-9、单 worker 故障不中断整批。
 
 ---
 

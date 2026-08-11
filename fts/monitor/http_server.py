@@ -552,6 +552,153 @@ setInterval(refresh, 10000);
 # ─── HTTP 处理 ──────────────────────────────────────────────
 
 
+# 人审工作台页面（C8，2026-08-11）：内联样式无外链资源，微信排版兼容
+REVIEW_HTML = r"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FTS Alpha 审查工作台</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px; }
+  h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+  h1 span { color: #3b82f6; }
+  .sub { color: #94a3b8; font-size: 13px; margin-bottom: 24px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
+  .section-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; color: #94a3b8; padding: 8px 12px;
+       border-bottom: 1px solid #334155; }
+  td { font-size: 13px; padding: 8px 12px; border-bottom: 1px solid #334155; }
+  input[type=text] { background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+                     border-radius: 6px; padding: 6px 8px; font-size: 12px; width: 100%; }
+  button { border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px;
+           cursor: pointer; font-weight: 500; }
+  .approve { background: #22c55e; color: #fff; }
+  .reject { background: #ef4444; color: #fff; }
+  button:hover { opacity: 0.85; }
+  .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 4px; }
+  .tag.approved { background: rgba(34,197,94,0.15); color: #22c55e; }
+  .tag.rejected { background: rgba(239,68,68,0.15); color: #ef4444; }
+  .empty { color: #94a3b8; text-align: center; padding: 24px; }
+  .mode-badge { display: inline-block; font-size: 11px; padding: 2px 10px; border-radius: 999px;
+                background: rgba(59,130,246,0.15); color: #3b82f6; margin-left: 8px; }
+  .mode-badge.manual { background: rgba(234,179,8,0.15); color: #eab308; }
+  .need-human { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 4px;
+                background: rgba(234,179,8,0.15); color: #eab308; }
+  .btn-auto { background: #3b82f6; color: #fff; margin-right: 8px; }
+</style>
+</head>
+<body>
+<h1>FTS <span>Alpha 审查工作台</span></h1>
+<div class="sub">人工审查前置 · approve/reject 回写 factor_reviews 表 + 经验链 · 与 CLI 同一后端<span class="mode-badge" id="modeBadge">模式: auto</span></div>
+
+<div class="card">
+  <div class="section-title">待审查队列 <span style="font-size:12px;color:#94a3b8" id="pendingCount"></span>
+    <button class="btn-auto" onclick="runAutoReview()">运行机审</button>
+    <span style="font-size:12px;color:#94a3b8">机审: 正常自动批准 / 低质自动驳回 / 异常值转人审</span>
+  </div>
+  <table>
+    <thead><tr><th>因子 ID</th><th>名称</th><th>市场</th><th>来源</th><th>IC</th><th>Sharpe</th><th>标记</th><th>意见</th><th style="width:150px">操作</th></tr></thead>
+    <tbody id="pendingBody"><tr><td colspan="9" class="empty">正在加载...</td></tr></tbody>
+  </table>
+</div>
+
+<div class="card">
+  <div class="section-title">最近审查记录</div>
+  <table>
+    <thead><tr><th>因子</th><th>决定</th><th>意见</th><th>审查人</th><th>时间</th></tr></thead>
+    <tbody id="historyBody"><tr><td colspan="5" class="empty">正在加载...</td></tr></tbody>
+  </table>
+</div>
+
+<script>
+async function fetchJSON(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(r.statusText);
+  return r.json();
+}
+function sanitize(s) { return String(s ?? '--'); }
+
+async function loadPending() {
+  try {
+    const d = await fetchJSON('/api/review/pending');
+    const list = d.items || [];
+    const mb = document.getElementById('modeBadge');
+    if (mb) { mb.textContent = '模式: ' + sanitize(d.mode || 'auto'); mb.className = 'mode-badge' + (d.mode === 'manual' ? ' manual' : ''); }
+    document.getElementById('pendingCount').textContent = '共 ' + list.length + ' 个';
+    const body = document.getElementById('pendingBody');
+    if (!list.length) { body.innerHTML = '<tr><td colspan="9" class="empty">暂无待审查因子</td></tr>'; return; }
+    body.innerHTML = list.map(function (f) {
+      return '<tr>'
+        + '<td style="font-family:monospace;font-size:12px">' + sanitize(f.factor_id) + '</td>'
+        + '<td>' + sanitize(f.name) + '</td>'
+        + '<td>' + sanitize(f.market) + '</td>'
+        + '<td>' + sanitize(f.source) + '</td>'
+        + '<td>' + sanitize(f.ic) + '</td>'
+        + '<td>' + sanitize(f.sharpe) + '</td>'
+        + '<td>' + (f.needs_human ? '<span class="need-human" title="' + sanitize(f.review_reason) + '">需人工</span>' : '<span style="color:#22c55e">✓</span>') + '</td>'
+        + '<td><input type="text" id="comment-' + sanitize(f.factor_id) + '" placeholder="审查意见(可选)"></td>'
+        + '<td><button class="approve" onclick="decide(\'' + sanitize(f.factor_id) + '\',\'approve\')">批准</button> '
+        + '<button class="reject" onclick="decide(\'' + sanitize(f.factor_id) + '\',\'reject\')">驳回</button></td>'
+        + '</tr>';
+    }).join('');
+  } catch (e) {
+    document.getElementById('pendingBody').innerHTML = '<tr><td colspan="9" class="empty">加载失败: ' + sanitize(e) + '</td></tr>';
+  }
+}
+
+async function runAutoReview() {
+  try {
+    const r = await fetch('/api/review/auto', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    const d = await r.json();
+    if (d.error) { alert('机审失败: ' + d.error); return; }
+    alert('机审完成: 批准 ' + d.auto_approved + ' / 驳回 ' + d.auto_rejected + ' / 转人审 ' + (d.needs_human || []).length);
+    loadPending(); loadHistory();
+  } catch (e) { alert('机审失败: ' + e); }
+}
+
+async function decide(factorId, decision) {
+  const comment = (document.getElementById('comment-' + factorId) || {}).value || '';
+  try {
+    const r = await fetch('/api/review/' + decision, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ factor_id: factorId, comment: comment, reviewer: 'web' }),
+    });
+    const d = await r.json();
+    alert((decision === 'approve' ? '已批准: ' : '已驳回: ') + factorId + (d.error ? ('\n' + d.error) : ''));
+    loadPending(); loadHistory();
+  } catch (e) { alert('操作失败: ' + e); }
+}
+
+async function loadHistory() {
+  try {
+    const d = await fetchJSON('/api/review/history');
+    const list = d.items || [];
+    const body = document.getElementById('historyBody');
+    if (!list.length) { body.innerHTML = '<tr><td colspan="5" class="empty">暂无审查记录</td></tr>'; return; }
+    body.innerHTML = list.map(function (h) {
+      return '<tr><td>' + sanitize(h.name) + '</td>'
+        + '<td><span class="tag ' + sanitize(h.decision) + '">' + sanitize(h.decision) + '</span></td>'
+        + '<td>' + sanitize(h.comment) + '</td>'
+        + '<td>' + sanitize(h.reviewer) + '</td>'
+        + '<td>' + sanitize(h.reviewed_at) + '</td></tr>';
+    }).join('');
+  } catch (e) { /* 忽略历史加载失败 */ }
+}
+
+loadPending(); loadHistory();
+setInterval(loadPending, 15000);
+</script>
+</body>
+</html>
+"""
+
+
 class _DashboardHandler(BaseHTTPRequestHandler):
     """HTTP 请求处理器 — 提供仪表盘和 API。"""
 
@@ -1318,6 +1465,106 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             data["data_sources_error"] = str(e)
         return data
 
+    # ── C8 人审工作台端点（复用 FactorReviewWorkflow，GAP-I102） ──
+
+    def _build_review_pending(self) -> dict:
+        """构建 /api/review/pending 响应（待审查队列 + 机审标注，C8-2）。"""
+        try:
+            from ..factor_engine.factor_inspector import (
+                AutoReviewPolicy,
+                FactorReviewWorkflow,
+                load_review_mode,
+            )
+
+            items = FactorReviewWorkflow().list_pending(limit=200)
+            policy = AutoReviewPolicy.from_env()
+            annotated: list[dict[str, Any]] = []
+            for f in items:
+                f = dict(f)
+                decision, reason = policy.classify(f.get("ic"), f.get("sharpe"))
+                f["needs_human"] = decision is None
+                f["review_reason"] = reason
+                annotated.append(f)
+            return {"count": len(items), "mode": load_review_mode(), "items": annotated}
+        except Exception as e:  # noqa: BLE001
+            logger.error("[ui] 审查队列查询失败: %s", e)
+            return {"count": 0, "items": [], "mode": "auto", "error": str(e)}
+
+    def _build_review_history(self) -> dict:
+        """构建 /api/review/history 响应（最近审查记录）。"""
+        try:
+            from ..factor_engine.factor_inspector import FactorReviewWorkflow
+
+            conn = FactorReviewWorkflow()._conn()  # noqa: SLF001
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT r.factor_id, r.decision, r.comment, r.reviewer, r.reviewed_at,
+                           COALESCE(c.name, r.factor_id) AS name
+                    FROM factor_reviews r
+                    LEFT JOIN factor_catalog c ON c.factor_id = r.factor_id
+                    ORDER BY r.reviewed_at DESC
+                    LIMIT 50
+                    """
+                ).fetchall()
+                cols = ["factor_id", "decision", "comment", "reviewer", "reviewed_at", "name"]
+                return {"count": len(rows), "items": [dict(zip(cols, r)) for r in rows]}
+            finally:
+                conn.close()
+        except Exception as e:  # noqa: BLE001
+            logger.error("[ui] 审查历史查询失败: %s", e)
+            return {"count": 0, "items": [], "error": str(e)}
+
+    def _handle_review_decision(self, decision: str) -> None:
+        """处理 POST /api/review/{approve|reject}：回写审查决定（与 CLI 同一后端）。"""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+            payload = json.loads(body or "{}")
+            factor_id = str(payload.get("factor_id", "")).strip()
+            if not factor_id:
+                self._respond_json({"error": "factor_id 必填"}, 400)
+                return
+            from ..factor_engine.factor_inspector import FactorReviewWorkflow
+
+            workflow = FactorReviewWorkflow()
+            comment = str(payload.get("comment", "") or "")
+            reviewer = str(payload.get("reviewer", "") or "web")
+            result = (
+                workflow.approve(factor_id, comment, reviewer)
+                if decision == "approve"
+                else workflow.reject(factor_id, comment, reviewer)
+            )
+            self._respond_json(result)
+        except Exception as e:  # noqa: BLE001
+            logger.error("[ui] 审查操作失败: %s", e)
+            self._respond_json({"error": str(e)}, 500)
+
+    def _handle_review_auto(self) -> None:
+        """处理 POST /api/review/auto：批量机审（C8-2）。
+
+        正常自动批准、低质自动驳回、异常值转人审；manual 模式拒绝（403）。
+        """
+        try:
+            from ..factor_engine.factor_inspector import FactorReviewWorkflow
+
+            payload: dict[str, Any] = {}
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 0:
+                body = self.rfile.read(length).decode("utf-8")
+                try:
+                    payload = json.loads(body or "{}")
+                except json.JSONDecodeError:
+                    payload = {}
+            force = bool(payload.get("force", False))
+            result = FactorReviewWorkflow().auto_review(limit=200, force=force)
+            self._respond_json(result)
+        except ValueError as e:  # manual 模式拒绝
+            self._respond_json({"error": str(e)}, 403)
+        except Exception as e:  # noqa: BLE001
+            logger.error("[ui] 机审执行失败: %s", e)
+            self._respond_json({"error": str(e)}, 500)
+
     def do_GET(self):  # noqa: N802
         path = self.path.rstrip("/")
 
@@ -1332,6 +1579,15 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/candidates":
             self._respond_json(self._build_candidate_list())
+
+        elif path == "/review":
+            self._respond_html(REVIEW_HTML)
+
+        elif path == "/api/review/pending":
+            self._respond_json(self._build_review_pending())
+
+        elif path == "/api/review/history":
+            self._respond_json(self._build_review_history())
 
         elif path == "/metrics":
             self._respond_metrics(self._build_metrics())
@@ -1356,11 +1612,17 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             self._respond_json({"error": "not found"}, 404)
 
     def do_POST(self):  # noqa: N802
-        """处理 POST 请求（信号提交）。"""
+        """处理 POST 请求（信号提交 / C8 审查决定）。"""
         path = self.path.rstrip("/")
 
         if path == "/api/v1/signal/submit":
             self._handle_signal_submit()
+        elif path == "/api/review/approve":
+            self._handle_review_decision("approve")
+        elif path == "/api/review/reject":
+            self._handle_review_decision("reject")
+        elif path == "/api/review/auto":
+            self._handle_review_auto()
         else:
             self._respond_json({"error": "not found"}, 404)
 

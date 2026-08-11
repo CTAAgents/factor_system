@@ -12,6 +12,16 @@ fts.live_trade — 实盘执行链路（GAP-F01，v2.60.0）。
 版本: v1.0.0（GAP-F01）
 """
 
+from .contracts import (
+    ReplayResult,
+    SimAccount,
+    SimApplyResult,
+    SimDailyRecord,
+    SimFill,
+    SimPosition,
+    contract_multiplier,
+    infer_market,
+)
 from .gateway import AbstractGateway, SimulatedGateway, submit_with_retry
 from .intervention import (
     AllCloseInstruction,
@@ -20,6 +30,9 @@ from .intervention import (
     InterventionState,
 )
 from .orders import Order, OrderLifecycle, OrderState, TERMINAL_STATES
+from .simulated_engine import SimulatedPaperTrader, SimulatedReplayEngine
+from .simulated_portfolio import SimPortfolioConfig, SimulatedPortfolio
+from .sqlite_store import SimSQLiteStore
 from .stop_orders import (
     CloseInstruction,
     StopOrder,
@@ -49,4 +62,21 @@ __all__ = [
     "AbstractGateway",
     "SimulatedGateway",
     "submit_with_retry",
+    # contracts (D.1)
+    "SimPosition",
+    "SimAccount",
+    "SimDailyRecord",
+    "SimFill",
+    "SimApplyResult",
+    "ReplayResult",
+    "contract_multiplier",
+    "infer_market",
+    # simulated portfolio (D.1)
+    "SimPortfolioConfig",
+    "SimulatedPortfolio",
+    # simulated engine (D.1)
+    "SimulatedReplayEngine",
+    "SimulatedPaperTrader",
+    # sqlite store (D.1)
+    "SimSQLiteStore",
 ]

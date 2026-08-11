@@ -14,7 +14,7 @@ scripts/daily_signal_pipeline.py — 每日信号生成管道（v2 GAP-S04）
 
 输出:
     - 控制台: 信号排名表（含方向校正/权重学习/成本信息）
-    - 文件:     docs/daily_signals_{date}.md
+    - 文件:     reports/stock/daily_signals_{date}.md（股票信号报告按市场输出到 reports/stock/）
 """
 
 from __future__ import annotations
@@ -44,14 +44,20 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-ELITE_DIR = PROJECT_ROOT / "memory/knowledge/factors/elite"
-OUTPUT_DIR = PROJECT_ROOT / "docs"
+ELITE_DIR = PROJECT_ROOT / "memory/knowledge/factors/stocks_elite"
+# 股票信号报告按市场输出到 reports/stock/（与期货 reports/futures/ 对齐）
+OUTPUT_DIR = PROJECT_ROOT / "reports" / "stock"
 
 # 公共信号模块
 from scripts._signal_common import (
     compute_factor_sign_flips,
     compute_ridge_weights,
     compute_composite_scores,
+    load_weight_snapshot,
+    save_weight_snapshot,
+    filter_factors_by_weights,
+    normalize_signal_matrix,
+    neutralize_signal_matrix,
 )
 
 
@@ -109,7 +115,15 @@ def _compute_signal_matrix(
 # ── 主流程 ──
 
 
-def main(max_stocks: int = 50, days: int = 120) -> int:
+def main(
+    max_stocks: int = 50,
+    days: int = 120,
+    recompute_weights: bool | None = None,
+    normalize: str = "none",
+    neutralize: str = "none",
+    l3_mode: str = "ridge",
+    regime: str = "none",
+) -> int:
     t0 = time.time()
     today = date.today().isoformat()
     print("=" * 60)
@@ -156,27 +170,151 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
 
     n_steps = 0
 
-    # 4a: 方向校正（截面 IC 法）
-    print("\n[4/5] 方向校正: 截面 IC 法...")
-    factor_sign_flips = compute_factor_sign_flips(
-        signal_matrix,
-        panel,
-        common_dates,
-    )
+    # 4a-4b: 方向校正 + Ridge 权重学习（GAP-072 v2.99.0: 权重周五重算，其余日冻结复用快照）
+    snapshot_path = PROJECT_ROOT / "memory" / "portfolio" / "stock" / "stock_signal_weights.json"
+    if recompute_weights is None:
+        from fts.config import is_weight_recompute_day
+
+        recompute_weights = is_weight_recompute_day()
+
+    snapshot = load_weight_snapshot(snapshot_path) if not recompute_weights else None
+
+    # 4a-0: 截面标准化（消除因子值非零中心/量纲偏置对合成符号的主导影响；
+    #       冻结日复用快照记录的 normalize 方式，保证与重算日口径一致）
+    normalize_method = snapshot.get("normalize", normalize) if snapshot is not None else normalize
+    if normalize_method not in (None, "", "none"):
+        normalize_signal_matrix(signal_matrix, panel, common_dates, normalize_method)
+    else:
+        print("      [标准化] 截面 none（保持原始信号）")
+
+    # 4a-0b: 截面中性化（D.2 股票 L3 补齐：剥离行业/市值 proxy 偏好，消除伪预测力）
+    #        冻结日复用快照记录的 neutralize 方式，保证与重算日口径一致
+    neutralize_method = snapshot.get("neutralize", neutralize) if snapshot is not None else neutralize
+    # Regime 自适应方式（D.2 偏差 b，none/auto；冻结日复用快照口径）
+    regime_mode = snapshot.get("regime", regime) if snapshot is not None else regime
+    if neutralize_method not in (None, "", "none"):
+        from fts.config.settings import load_cap_map, load_industry_map
+
+        ind_map = (
+            load_industry_map()
+            if neutralize_method in ("industry", "both")
+            else None
+        )
+        cap = load_cap_map() if neutralize_method in ("size", "both") else None
+        neutralize_signal_matrix(signal_matrix, panel, common_dates, neutralize_method, ind_map, cap)
+    else:
+        print("      [中性化] 截面 none（保持原始信号）")
+
+    if snapshot is not None:
+        # 冻结日：复用上周权重快照，仅刷新因子值（新因子等待下次重算进入）
+        factor_sign_flips = snapshot.get("factor_sign_flips", {})
+        factor_weights = snapshot["factor_weights"]
+        all_factors = filter_factors_by_weights(all_factors, factor_weights)
+        print(
+            f"      [权重冻结] 复用 {snapshot.get('recomputed_at', '?')} 权重快照 "
+            f"({len(factor_weights)} 因子)，仅刷新因子值"
+        )
+    else:
+        # 重算日 / 冷启动：方向校正（截面 IC 法）
+        print("\n[4/5] 方向校正: 截面 IC 法...")
+        factor_sign_flips = compute_factor_sign_flips(
+            signal_matrix,
+            panel,
+            common_dates,
+        )
+
+        # 4b: 权重学习（D.2: 默认 Ridge；--l3-mode elastic_net 走共享 L3 Elastic Net）
+        if l3_mode == "elastic_net":
+            print("      权重学习: Elastic Net 共享 L3 合成（L1+L2 自动变量选择）...")
+            from fts.factor_engine.portfolio_loop import synthesize_signals
+
+            try:
+                synthesized, _, _ = synthesize_signals(
+                    factors=[
+                        {
+                            "factor_id": f.get("factor_id", ""),
+                            "name": f.get("name", ""),
+                            "sharpe": f.get("sharpe", 0.0),
+                            "ic": f.get("ic", 0.0),
+                            "turnover": f.get("turnover", 0.0),
+                            "decay_6m": f.get("decay_6m", 0.0),
+                        }
+                        for f in all_factors
+                    ],
+                    mode="elastic_net",
+                    elite_dir=ELITE_DIR,
+                    market="stock",
+                )
+                fid_to_name = {f.get("factor_id"): f.get("name") for f in all_factors}
+                factor_weights = {
+                    fid_to_name[s["factor_id"]]: s["weight"]
+                    for s in synthesized
+                    if s["factor_id"] in fid_to_name and s["weight"] > 0.0
+                }
+                if factor_weights:
+                    print(f"      [权重] Elastic Net: {len(factor_weights)} 个因子获非零权重")
+                else:
+                    print("      [权重] Elastic Net 未产出非零权重，回退 Ridge")
+                    factor_weights = compute_ridge_weights(
+                        signal_matrix,
+                        panel,
+                        common_dates,
+                        factor_sign_flips,
+                    )
+            except Exception as e:  # noqa: BLE001
+                print(f"      [WARN] Elastic Net 失败（{e}），回退 Ridge")
+                factor_weights = compute_ridge_weights(
+                    signal_matrix,
+                    panel,
+                    common_dates,
+                    factor_sign_flips,
+                )
+        else:
+            print("      权重学习: Ridge 回归（L2 正则化，含相关性惩罚）...")
+            factor_weights = compute_ridge_weights(
+                signal_matrix,
+                panel,
+                common_dates,
+                factor_sign_flips,
+            )
+        save_weight_snapshot(
+            snapshot_path,
+            factor_weights,
+            factor_sign_flips=factor_sign_flips,
+            normalize=normalize_method,
+            neutralize=neutralize_method,
+            regime=regime_mode,
+        )
+        print(f"      [权重] 本周重算日: 权重已学习并保存快照 -> {snapshot_path}")
+
+    # 4b-1: Regime 自适应权重（D.2 偏差 b 补齐：股票行业/风格制度 → 权重倍率）
+    #        冻结日复用快照记录的 regime 方式，保证与重算日口径一致
+    if regime_mode == "auto":
+        from _signal_common import apply_stock_regime_weights, build_stock_regime_panels
+        from fts.config.settings import load_cap_map, load_industry_map
+        from fts.factor_engine.stock_regime import StockRegimeSelector
+
+        ind_map = load_industry_map()
+        cap_map = load_cap_map()
+        industry_panel, style_panel = build_stock_regime_panels(panel, ind_map, cap_map)
+        if not industry_panel and not style_panel:
+            print("      [Regime] 无行业/风格面板数据，跳过")
+        else:
+            stock_regime = StockRegimeSelector().detect(industry_panel, style_panel)
+            if stock_regime and stock_regime.get("regime"):
+                print(
+                    f"      [Regime] {stock_regime['regime']} "
+                    f"(conf={stock_regime.get('confidence', 0):.2%}, method={stock_regime.get('method', '?')})"
+                )
+                factor_weights = apply_stock_regime_weights(factor_weights, all_factors, stock_regime)
+            else:
+                print("      [Regime] 检测结果为空，跳过")
+    else:
+        print("      [Regime] 截面 none（保持 L3 权重）")
+
     n_flipped = sum(1 for v in factor_sign_flips.values() if v < 0)
     if n_flipped > 0:
-        print(f"      方向反转: {n_flipped}/{n_factors} 个因子 (截面 IC<0)")
-    n_steps += 1
-
-    # 4b: Ridge 回归学习因子权重
-    print("      权重学习: Ridge 回归（L2 正则化，含相关性惩罚）...")
-    factor_weights = compute_ridge_weights(
-        signal_matrix,
-        panel,
-        common_dates,
-        factor_sign_flips,
-    )
-    n_steps += 1
+        print(f"      方向反转: {n_flipped}/{len(all_factors)} 个因子 (截面 IC<0)")
 
     # 4c: 加权合成（方向校正 + Ridge 权重）
     print("      加权合成: 方向校正 + Ridge 权重...")
@@ -193,7 +331,7 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
     from fts.factor_engine.cost_model import TransactionCostModel
 
     # 收集信号序列用于成本估算
-    cost_model = TransactionCostModel(market="stock")
+    cost_model = TransactionCostModel()
     total_cost_bps = 0.0
     adjusted_stock_scores: dict[str, float] = {}
     for sym, score in stock_scores.items():
@@ -290,6 +428,10 @@ def main(max_stocks: int = 50, days: int = 120) -> int:
     w(f"因子池: {len(all_factors)} 个 | 覆盖股票: {len(stock_scores)} 只")
     w(f"方向校正: 截面 IC 法 | 方向反转: {n_flipped} 个因子")
     w("权重学习: Ridge 回归（L2 正则化，含相关性惩罚）")
+    w(f"截面标准化: {normalize_method}")
+    w(f"截面中性化: {neutralize_method}（D.2 股票 L3，行业/市值 proxy 剥离）")
+    w(f"L3 合成模式: {l3_mode}")
+    w(f"Regime 自适应: {regime_mode}（D.2 偏差 b，行业/风格制度权重倍率）")
     w(f"成本约束: TransactionCostModel | 平均成本: {avg_cost_bps:.2f} bps")
     w("评估口径: 仅做多（股票/ETF 仅做多，空头不可成交）")
     w()
@@ -404,5 +546,44 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="每日信号生成管道 v2")
     parser.add_argument("--max-stocks", type=int, default=50, help="最大股票数")
     parser.add_argument("--days", type=int, default=120, help="回溯天数")
+    parser.add_argument(
+        "--force-recompute",
+        action="store_true",
+        help="强制重算 Ridge 权重并更新快照（GAP-072，默认按 l3_weight_recompute_cadence 自动判定）",
+    )
+    parser.add_argument(
+        "--normalize",
+        choices=["none", "zscore", "rank"],
+        default="none",
+        help="因子信号截面标准化方式：none=原始信号 / zscore=截面z分数 / rank=截面百分位秩",
+    )
+    parser.add_argument(
+        "--neutralize",
+        choices=["none", "industry", "size", "both"],
+        default="none",
+        help="因子信号截面中性化（D.2）：none=不处理 / industry=行业组内去均值 / size=市值回归残差 / both=两者",
+    )
+    parser.add_argument(
+        "--l3-mode",
+        choices=["ridge", "elastic_net"],
+        default="ridge",
+        help="L3 权重学习模式：ridge=默认 Ridge 回归 / elastic_net=共享 L3 Elastic Net 合成（失败回退 Ridge）",
+    )
+    parser.add_argument(
+        "--regime",
+        choices=["none", "auto"],
+        default="none",
+        help="Regime 自适应权重（D.2 偏差 b）：none=不调整 / auto=检测股票行业/风格制度后按风格倍率调整",
+    )
     args = parser.parse_args()
-    sys.exit(main(max_stocks=args.max_stocks, days=args.days))
+    sys.exit(
+        main(
+            max_stocks=args.max_stocks,
+            days=args.days,
+            recompute_weights=True if args.force_recompute else None,
+            normalize=args.normalize,
+            neutralize=args.neutralize,
+            l3_mode=args.l3_mode,
+            regime=args.regime,
+        )
+    )

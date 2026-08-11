@@ -47,6 +47,7 @@ from fts.factor_engine.meta_loop import (
     MetaLoop,
     MetaStateManager,
     MetaStateManagerError,
+    _make_web_collector,
     validate_batch_candidates,
 )
 from fts.factor_engine.seed_pool import SeedPool
@@ -1595,6 +1596,117 @@ class TestMetaLoopEndToEnd:
         with open(tmp_meta_dir / "state.json", "r", encoding="utf-8") as f:
             state = json.load(f)
         assert state["total_candidates_generated"] >= r1.candidates_generated
+
+
+class TestMetaLoopSampleSymbols:
+    """感知层默认样本按市场区分（股票 → CSI300 成分股）。"""
+
+    def test_stock_default_sample_symbols(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
+    ):
+        """market=stock 默认使用 CSI300 成分股子集作为感知样本。"""
+        from fts.data_mcp import CSI300_SUBSET
+
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+            market="stock",
+            web_collector=None,
+        )
+        assert loop.sample_symbols == list(CSI300_SUBSET[:13])
+
+    def test_futures_default_sample_symbols(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
+    ):
+        """market=futures 默认仍为 13 个期货品种（五大板块）。"""
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+            market="futures",
+            web_collector=None,
+        )
+        assert len(loop.sample_symbols) == 13
+        assert loop.sample_symbols[0] == "rb"
+        assert "y" in loop.sample_symbols
+
+    def test_explicit_sample_symbols_override(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
+    ):
+        """显式传入 sample_symbols 时优先使用（不随市场切换）。"""
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+            market="stock",
+            sample_symbols=["600519"],
+            web_collector=None,
+        )
+        assert loop.sample_symbols == ["600519"]
+
+
+class TestMakeWebCollector:
+    """web_collector 数据源按市场分流（股票 OHLCV / 期货 OHLCV + 实时价）。"""
+
+    @staticmethod
+    def _make_df():
+        import pandas as pd
+
+        idx = pd.date_range("2026-06-01", periods=5, freq="D")
+        return pd.DataFrame(
+            {
+                "open": [10.0] * 5,
+                "high": [11.0] * 5,
+                "low": [9.0] * 5,
+                "close": [10.5] * 5,
+                "volume": [1000] * 5,
+            },
+            index=idx,
+        )
+
+    def test_stock_mode_uses_stock_ohlcv(self):
+        """股票模式走 FTSDataProvider.get_ohlcv，不访问期货源、不取实时价。"""
+        provider = MagicMock()
+        provider.get_ohlcv.return_value = self._make_df()
+
+        collect = _make_web_collector(provider, market="stock")
+        snap = collect("600519")
+
+        provider.get_ohlcv.assert_called_once_with("600519", days=60)
+        provider._futures.get_ohlcv.assert_not_called()
+        assert snap["contract_symbol"] == "600519"
+        assert len(snap["kline"]["bars"]) == 5
+        assert "realtime_price" not in snap["quote"]
+
+    def test_futures_mode_keeps_futures_path(self):
+        """期货模式保持原行为：主连转换 + 期货 OHLCV + 实时价。"""
+        provider = MagicMock()
+        provider._futures.get_ohlcv.return_value = self._make_df()
+
+        with patch("fts.data_futures.get_realtime_prices", return_value={"RB0": 123.4}):
+            collect = _make_web_collector(provider, market="futures")
+            snap = collect("rb")
+
+        provider._futures.get_ohlcv.assert_called_once_with("RB0", days=60)
+        provider.get_ohlcv.assert_not_called()
+        assert snap["contract_symbol"] == "RB0"
+        assert snap["quote"]["realtime_price"] == 123.4
+
+    def test_stock_mode_ohlcv_failure_is_degraded(self):
+        """股票模式 OHLCV 失败时记录 warning 且不中断。"""
+        provider = MagicMock()
+        provider.get_ohlcv.side_effect = RuntimeError("数据源不可用")
+
+        collect = _make_web_collector(provider, market="stock")
+        snap = collect("600519")
+
+        assert snap["kline"]["bars"] == []
+        assert snap["warnings"]
+        assert "OHLCV 获取失败" in snap["warnings"][0]
 
 
 # ════════════════════════════════════════════════════════

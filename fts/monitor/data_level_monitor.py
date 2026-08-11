@@ -5,7 +5,7 @@ fts.monitor.data_level_monitor — 数据级质量监控器（GAP-F06，v2.60.0�
 **数据本身**的四维质量：
 
     1. 完整性 (missing): 全表/关键字段缺失率
-    2. 准确性 (outliers): close/volume/open_interest 的 3σ 异常值比例
+    2. 准确性 (outliers): close/volume/hold 的 3σ 异常值比例
     3. 复权一致性 (adjust_consistency): 复权因子序列与参考序列的相对偏差
     4. 多源分歧 (source_disagreement): 主源/次源 close 相对偏差中位数
 
@@ -51,7 +51,7 @@ class DataLevelConfig:
     missing_ratio_warning: float = 0.05
     missing_ratio_critical: float = 0.20
     # 关键字段集合（缺失率逐字段检查）
-    key_fields: tuple[str, ...] = ("close", "volume", "open_interest")
+    key_fields: tuple[str, ...] = ("close", "volume", "hold")  # GAP-085: 原 open_interest 与期货日线字段 hold 错位 → 修正
 
     # 准确性：异常值
     outlier_zscore: float = 3.0

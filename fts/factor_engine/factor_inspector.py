@@ -19,6 +19,7 @@ fts.factor_engine.factor_inspector — 因子定时巡检与自动降级 (Phase 
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -65,8 +66,9 @@ class FactorInspector:
         self,
         repo: Optional[FactorRepository] = None,
         lineage: Optional[FactorLineage] = None,
+        market: str = "stock",
     ) -> None:
-        self._repo = repo or FactorRepository()
+        self._repo = repo or FactorRepository(market=market)
         self._lineage = lineage or FactorLineage(self._repo)
 
     def inspect_and_downgrade(
@@ -315,6 +317,70 @@ class ReviewDecision(str, Enum):
     REJECTED = "rejected"
 
 
+class ReviewMode(str, Enum):
+    """审查模式（C8-2，2026-08-11）：机审优先 vs 纯人审。"""
+
+    AUTO = "auto"  # 默认：机审批量处理，异常值转人审
+    MANUAL = "manual"  # 纯人审（GAP-I102 现状）
+
+
+def load_review_mode() -> str:
+    """读取审查模式（FTS_REVIEW_MODE，默认 auto，env 直读不触碰受保护配置）。"""
+    import os
+
+    return os.getenv("FTS_REVIEW_MODE", ReviewMode.AUTO.value)
+
+
+@dataclass
+class AutoReviewPolicy:
+    """机审判定策略（C8-2）：IC/Sharpe 边界 + 三态分类。
+
+    ``classify(ic, sharpe) -> (decision, reason)``：
+        - decision=None → 转人审（IC/Sharpe 缺失/非数值/极端偏高，疑过拟合或未来函数）
+        - REJECTED → 低质（低于下限），自动驳回落库（reviewer=auto）
+        - APPROVED → 正常，自动批准落库（reviewer=auto）
+    """
+
+    min_ic: float = 0.02
+    max_ic: float = 0.8
+    min_sharpe: float = 0.5
+    max_sharpe: float = 30.0
+
+    @classmethod
+    def from_env(cls) -> "AutoReviewPolicy":
+        """从 FTS_REVIEW_* 环境变量读取阈值（非法值回退默认）。"""
+        import os
+
+        def _f(key: str, default: float) -> float:
+            try:
+                return float(os.getenv(key, default))
+            except (TypeError, ValueError):
+                return default
+
+        return cls(
+            min_ic=_f("FTS_REVIEW_MIN_IC", 0.02),
+            max_ic=_f("FTS_REVIEW_MAX_IC", 0.8),
+            min_sharpe=_f("FTS_REVIEW_MIN_SHARPE", 0.5),
+            max_sharpe=_f("FTS_REVIEW_MAX_SHARPE", 30.0),
+        )
+
+    def classify(self, ic: Any, sharpe: Any) -> tuple[Optional[ReviewDecision], str]:
+        """机审分类（三态）。decision=None 表示转人审。"""
+        if ic is None or sharpe is None:
+            return None, "IC/Sharpe 缺失，无法机审"
+        try:
+            ic_f, sharpe_f = float(ic), float(sharpe)
+        except (TypeError, ValueError):
+            return None, "IC/Sharpe 非数值"
+        if not math.isfinite(ic_f) or not math.isfinite(sharpe_f):
+            return None, "IC/Sharpe 非有限值"
+        if ic_f > self.max_ic or sharpe_f > self.max_sharpe:
+            return None, f"疑似过拟合/未来函数 (ic={ic_f:.4f}, sharpe={sharpe_f:.2f} 超上限)"
+        if ic_f < self.min_ic or sharpe_f < self.min_sharpe:
+            return ReviewDecision.REJECTED, f"低质 (ic={ic_f:.4f}<{self.min_ic} 或 sharpe={sharpe_f:.2f}<{self.min_sharpe})"
+        return ReviewDecision.APPROVED, f"机审通过 (ic={ic_f:.4f}, sharpe={sharpe_f:.2f})"
+
+
 class FactorReviewWorkflow:
     """Alpha 审查工作流（GAP-I102，v2.71.0 骨架 + v2.80.0 经验链闭环）。
 
@@ -335,8 +401,9 @@ class FactorReviewWorkflow:
         repo: Optional[FactorRepository] = None,
         db_path: Optional[str] = None,
         experience_chain: Optional[Any] = None,
+        market: str = "stock",
     ) -> None:
-        self._repo = repo or FactorRepository()
+        self._repo = repo or FactorRepository(market=market)
         self._db_path = db_path
         self._experience_chain = experience_chain
 
@@ -430,6 +497,59 @@ class FactorReviewWorkflow:
         finally:
             conn.close()
 
+    def auto_review(
+        self,
+        limit: int = 200,
+        policy: Optional[AutoReviewPolicy] = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """批量机审（C8-2）：正常自动批准、低质自动驳回、异常转人审。
+
+        与人工审查共用 ``_decide``（幂等 UPSERT + 驳回经验链），reviewer 标记为
+        "auto"，意见自动生成机审原因，保证与 CLI/Web 审查同一后端、全程留痕。
+
+        Args:
+            limit: 处理队列上限
+            policy: 判定策略（默认 ``AutoReviewPolicy.from_env()``）
+            force: manual（纯人审）模式下是否强制运行（用户显式决定权）
+
+        Returns:
+            统计字典 {mode, total_pending, auto_approved, auto_rejected, needs_human, skipped}
+
+        Raises:
+            ValueError: manual 模式且未 force 时拒绝执行
+        """
+        mode = load_review_mode()
+        if mode != ReviewMode.AUTO.value and not force:
+            raise ValueError(
+                "当前为 manual（纯人审）模式，机审已禁用；"
+                "请设置 FTS_REVIEW_MODE=auto 或使用 --force 显式覆盖"
+            )
+        policy = policy or AutoReviewPolicy.from_env()
+        pending = self.list_pending(limit=limit)
+        approved: list[str] = []
+        rejected: list[str] = []
+        needs_human: list[dict[str, str]] = []
+        for f in pending:
+            decision, reason = policy.classify(f.get("ic"), f.get("sharpe"))
+            if decision is None:
+                needs_human.append({"factor_id": f["factor_id"], "reason": reason})
+                continue
+            if decision == ReviewDecision.APPROVED:
+                self.approve(f["factor_id"], comment=f"[机审] {reason}", reviewer="auto")
+                approved.append(f["factor_id"])
+            else:
+                self.reject(f["factor_id"], comment=f"[机审] {reason}", reviewer="auto")
+                rejected.append(f["factor_id"])
+        return {
+            "mode": mode,
+            "total_pending": len(pending),
+            "auto_approved": len(approved),
+            "auto_rejected": len(rejected),
+            "needs_human": needs_human,
+            "skipped": 0,
+        }
+
     def _decide(
         self,
         factor_id: str,
@@ -512,5 +632,8 @@ __all__ = [
     "FactorInspector",
     "DowngradeRecord",
     "ReviewDecision",
+    "ReviewMode",
+    "AutoReviewPolicy",
+    "load_review_mode",
     "FactorReviewWorkflow",
 ]

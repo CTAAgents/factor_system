@@ -2828,6 +2828,7 @@ _FAMILY_SUMMARY: dict[int, tuple[str, list[str]]] = {
             "fut_macro_cpi",
             "fut_macro_interest_rate",
             "fut_macro_export",
+            "fut_macro_import",
             "fut_macro_us_bond",
             "fut_mkt_trend",
             "fut_mkt_speculation",

@@ -49,28 +49,52 @@ def fresh_registry() -> TaskRegistry:
 
 DEFAULT_TASKS = {
     "l1_meta_loop": {
-        "cron": "30 8 * * *",
+        "cron": "59 7 * * 1-5",
         "callable": "fts.scheduler.jobs.l1_meta_loop_job",
         "desc": "L1 Meta-Loop：每日知识补给 + Bootstrapping + 种子注入",
         "prefix": "fts.l1",
     },
     "l2_evolution_loop": {
-        "cron": "0 23 * * *",
+        "cron": "0 0 * * 1-5",
         "callable": "fts.scheduler.jobs.l2_evolution_loop_job",
         "desc": "L2 Evolution Loop：夜间因子演化（LLM 改逻辑 + optuna 调参 + 横截面评估）",
         "prefix": "fts.l2",
     },
     "l3_portfolio_loop": {
-        "cron": "0 20 * * *",
+        "cron": "0 19 * * 5",
         "callable": "fts.scheduler.jobs.l3_portfolio_loop_job",
-        "desc": "L3 Portfolio Loop（期货路径：futures_elite + market=futures）：因子筛选 + 信号合成（equal/sharpe/elastic_net）+ Verifier 校验 + 期货信号管道",
+        "desc": "L3 Portfolio Loop（期货路径：futures_elite + market=futures）：每周五收盘后重算组合权重（Elastic Net 信号合成 + Verifier 校验），与期货信号管道解绑",
         "prefix": "fts.l3",
+    },
+    "l3_portfolio_loop_stock": {
+        "cron": "30 19 * * 5",
+        "callable": "fts.scheduler.jobs.l3_portfolio_loop_stock_job",
+        "desc": "L3 Portfolio Loop（股票路径：elite_dir + market=stock）：每周五重算股票组合权重（GAP-063 组合质检前置接入），与股票信号管道解绑",
+        "prefix": "fts.l3.stock",
+    },
+    "futures_signal_pipeline": {
+        "cron": "0 20 * * 1-5",
+        "callable": "fts.scheduler.jobs.futures_signal_pipeline_job",
+        "desc": "期货信号管道（每日独立运行）：Ridge 权重周五重算并存快照，其余日冻结复用快照仅刷新因子值 → reports/futures/{date}/futures_signals_*.md",
+        "prefix": "fts.signal",
+    },
+    "daily_signal_pipeline": {
+        "cron": "45 8 * * 1-5",
+        "callable": "fts.scheduler.jobs.daily_signal_pipeline_job",
+        "desc": "股票/ETF 信号管道（每日独立运行）：Ridge 权重周五重算并存快照，其余日冻结复用快照仅刷新因子值 → reports/stock/{date}/daily_signals_*.md",
+        "prefix": "fts.signal.stock",
     },
     "sync_futures_data": {
         "cron": "30 17 * * 1-5",
         "callable": "fts.scheduler.jobs.sync_futures_data_job",
         "desc": "Phase 14.5 期货多源数据同步（DUCKDB 缓存 + TQ 源 → DuckDB）",
         "prefix": "fts.sync",
+    },
+    "sync_stock_data": {
+        "cron": "0 17 * * 1-5",
+        "callable": "fts.scheduler.jobs.sync_stock_data_job",
+        "desc": "股票/ETF 日 K 线缓存同步（腾讯 API → DuckDB stock_kline_cache，供次日信号管道/演化）",
+        "prefix": "fts.sync.stock",
     },
     "health_check": {
         "cron": "*/10 * * * *",
@@ -79,7 +103,7 @@ DEFAULT_TASKS = {
         "prefix": "fts.health",
     },
     "monthly_decay_eval": {
-        "cron": "0 2 1 * *",
+        "cron": "0 4 1 * *",
         "callable": "fts.scheduler.jobs.monthly_decay_eval_job",
         "desc": "月度因子衰减评估（A.2）：精英池增量评估 + 状态机 + 自动淘汰",
         "prefix": "fts.decay",
@@ -218,9 +242,9 @@ def test_registry_is_taskregistry():
 
 
 def test_register_default_tasks_registers_five():
-    """register_default_tasks 注册 10 个默认任务。"""
+    """register_default_tasks 注册 15 个默认任务。"""
     register_default_tasks()
-    assert len(REGISTRY) == 11
+    assert len(REGISTRY) == 15
 
 
 @pytest.mark.parametrize("name,expected", DEFAULT_TASKS.items())
@@ -245,27 +269,48 @@ def test_register_default_tasks_idempotent():
     assert len(REGISTRY) == first_len
 
 
+def test_default_task_callables_importable():
+    """每个默认任务的 callable_path 必须真实可导入（防止注册了不存在的函数）。
+
+    回归用例：v2.80.0 曾注册 sync_liquidity_pool 任务指向 jobs.py 缺失的
+    sync_liquidity_pool_job，导致内部调度器与自动化任务运行时 ImportError。
+    """
+    register_default_tasks()
+    import importlib
+
+    for name in list(DEFAULT_TASKS):
+        spec = REGISTRY.get(name)
+        assert spec is not None, f"任务 {name} 未注册"
+        module_name, _, attr = spec.callable_path.rpartition(".")
+        module = importlib.import_module(module_name)
+        assert hasattr(module, attr), f"任务 {name} 的 callable 不存在: {spec.callable_path}"
+
+
 # ─── list_tasks ─────────────────────────────────────────
 
 
 def test_list_tasks_returns_sorted():
     """list_tasks 返回按 name 排序的列表，自动注册默认任务。"""
     tasks = list_tasks()
-    assert len(tasks) == 11
+    assert len(tasks) == 15
     names = [t.name for t in tasks]
     assert names == sorted(names)
     assert names == [
+        "daily_signal_pipeline",
         "data_level_monitor",
         "data_quality_eval",
         "factor_inspector",
+        "futures_signal_pipeline",
         "health_check",
         "l1_meta_loop",
         "l2_evolution_loop",
         "l3_portfolio_loop",
+        "l3_portfolio_loop_stock",
         "logic_monitor",
         "monthly_decay_eval",
         "sync_futures_data",
         "sync_liquidity_pool",
+        "sync_stock_data",
     ]
 
 
@@ -274,7 +319,7 @@ def test_list_tasks_after_manual_register():
     register_default_tasks()
     REGISTRY.register(TaskSpec("custom_job", "0 12 * * *", "mod.custom"))
     tasks = list_tasks()
-    assert len(tasks) == 12
+    assert len(tasks) == 16
     names = [t.name for t in tasks]
     assert "custom_job" in names
 
@@ -287,7 +332,7 @@ def test_get_task_returns_spec():
     spec = get_task("l1_meta_loop")
     assert spec is not None
     assert spec.name == "l1_meta_loop"
-    assert spec.cron_expression == "30 8 * * *"
+    assert spec.cron_expression == "59 7 * * 1-5"
 
 
 def test_get_task_nonexistent():

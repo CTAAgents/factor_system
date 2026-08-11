@@ -28,6 +28,7 @@ if str(_FTS_ROOT) not in sys.path:
 
 import fts.factor_engine.factor_optimizer as fo  # noqa: E402
 from fts.factor_engine.factor_optimizer import (  # noqa: E402
+    PARQUET_CACHE_VERSION,
     CorrelationCache,
     FactorCacheKey,
     FactorOptimizer,
@@ -141,24 +142,28 @@ class TestFactorSignalCache:
         key = FactorCacheKey("f1", "h1", "RB0", "v1")
         cache1 = FactorSignalCache(cache_dir)
         cache1.put(key, np.array([1.0, 2.0, 3.0]))
-        # 新实例从磁盘加载
+        # 新实例从磁盘（Parquet）加载
         cache2 = FactorSignalCache(cache_dir)
         result = cache2.get(key)
         assert result is not None
         np.testing.assert_array_equal(result, np.array([1.0, 2.0, 3.0]))
-        # 索引文件持久化
+        # Parquet 文件落盘 + 索引文件持久化
+        assert (cache_dir / f"{key.cache_id}.parquet").exists()
         index_fp = cache_dir / "signal_index.json"
         assert index_fp.exists()
         meta = json.loads(index_fp.read_text(encoding="utf-8"))
         assert key.cache_id in meta
+        assert meta[key.cache_id]["backend"] == "parquet"
+        assert meta[key.cache_id]["version"] == PARQUET_CACHE_VERSION
+        assert "checksum" in meta[key.cache_id]
 
     def test_corrupted_disk_file_is_miss(self, tmp_path):
         cache_dir = tmp_path / "sig"
         key = FactorCacheKey("f1", "h1", "RB0", "v1")
         cache1 = FactorSignalCache(cache_dir)
         cache1.put(key, np.array([1.0, 2.0]))
-        # 破坏 npy 文件
-        (cache_dir / f"{key.cache_id}.npy").write_text("not a npy", encoding="utf-8")
+        # 破坏 parquet 文件
+        (cache_dir / f"{key.cache_id}.parquet").write_text("not a parquet", encoding="utf-8")
         cache2 = FactorSignalCache(cache_dir)
         assert cache2.get(key) is None
         assert cache2._stats["misses"] >= 1
@@ -175,10 +180,10 @@ class TestFactorSignalCache:
         cache = FactorSignalCache(cache_dir)
         for i in range(3):
             cache.put(FactorCacheKey(f"f{i}", "h", "RB0", "v1"), np.array([i]))
-        assert len(list(cache_dir.glob("*.npy"))) == 3
+        assert len(list(cache_dir.glob("*.parquet"))) == 3
         removed = cache.clear()
         assert removed == 3
-        assert len(list(cache_dir.glob("*.npy"))) == 0
+        assert len(list(cache_dir.glob("*.parquet"))) == 0
         assert cache._signals == {}
         assert cache._meta == {}
 
@@ -201,6 +206,76 @@ class TestFactorSignalCache:
         cache.put(key, np.array([1.0]))
         cache.get(key)  # hit
         assert cache.hit_rate == pytest.approx(0.5)
+
+
+# ─── FactorSignalCache Parquet（plans/29 P3） ───────────────
+
+
+class TestFactorSignalCacheParquet:
+    def test_put_writes_parquet_not_npy(self, tmp_path):
+        cache_dir = tmp_path / "sig"
+        cache = FactorSignalCache(cache_dir)
+        key = FactorCacheKey("f1", "h1", "RB0", "v1")
+        cache.put(key, np.array([1.0, 2.0, 3.0]))
+        assert (cache_dir / f"{key.cache_id}.parquet").exists()
+        assert not (cache_dir / f"{key.cache_id}.npy").exists()
+        meta = cache._meta[key.cache_id]
+        assert meta["backend"] == "parquet"
+        assert meta["version"] == PARQUET_CACHE_VERSION
+        assert meta["checksum"]
+
+    def test_disk_reload_from_parquet_without_npy(self, tmp_path):
+        cache_dir = tmp_path / "sig"
+        key = FactorCacheKey("f1", "h1", "RB0", "v1")
+        cache1 = FactorSignalCache(cache_dir)
+        cache1.put(key, np.array([0.5, -1.25, 3.0]))
+        # 手动删除 .npy（不应存在），仅保留 parquet 重开读回
+        cache2 = FactorSignalCache(cache_dir)
+        assert not (cache_dir / f"{key.cache_id}.npy").exists()
+        result = cache2.get(key)
+        assert result is not None
+        np.testing.assert_allclose(result, np.array([0.5, -1.25, 3.0]))
+
+    def test_checksum_tamper_misses_and_removes(self, tmp_path):
+        cache_dir = tmp_path / "sig"
+        key = FactorCacheKey("f1", "h1", "RB0", "v1")
+        cache1 = FactorSignalCache(cache_dir)
+        cache1.put(key, np.array([1.0, 2.0, 3.0]))
+        # 篡改 checksum 元数据模拟内容损坏 → get 判 miss 且删除损坏文件
+        meta_fp = cache_dir / "signal_index.json"
+        meta = json.loads(meta_fp.read_text(encoding="utf-8"))
+        meta[key.cache_id]["checksum"] = "deadbeef"
+        meta_fp.write_text(json.dumps(meta), encoding="utf-8")
+        cache2 = FactorSignalCache(cache_dir)
+        assert cache2.get(key) is None
+        assert not (cache_dir / f"{key.cache_id}.parquet").exists()
+        assert key.cache_id not in cache2._meta
+
+    def test_npy_compat_fallback_and_rebuild(self, tmp_path):
+        cache_dir = tmp_path / "sig"
+        key = FactorCacheKey("f1", "h1", "RB0", "v1")
+        cache = FactorSignalCache(cache_dir)
+        # 模拟旧 .npy 缓存（无 parquet、无 meta）
+        arr = np.array([7.0, 8.0, 9.0])
+        np.save(cache_dir / f"{key.cache_id}.npy", arr)
+        result = cache.get(key)
+        assert result is not None
+        np.testing.assert_array_equal(result, arr)
+        # 自动重建为 parquet
+        assert (cache_dir / f"{key.cache_id}.parquet").exists()
+        assert cache._meta[key.cache_id]["backend"] == "parquet"
+
+    def test_clear_removes_both_formats(self, tmp_path):
+        cache_dir = tmp_path / "sig"
+        cache = FactorSignalCache(cache_dir)
+        key = FactorCacheKey("f1", "h1", "RB0", "v1")
+        cache.put(key, np.array([1.0]))
+        # 遗留一个旧 .npy
+        np.save(cache_dir / "legacy.npy", np.array([2.0]))
+        removed = cache.clear()
+        assert removed == 2
+        assert not list(cache_dir.glob("*.parquet"))
+        assert not list(cache_dir.glob("*.npy"))
 
 
 # ─── CorrelationCache ──────────────────────────────────────

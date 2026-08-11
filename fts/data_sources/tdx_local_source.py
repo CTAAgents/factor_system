@@ -200,6 +200,84 @@ def _symbol_to_tdx(symbol: str) -> str:
     return f"{product}L8.{suffix}"
 
 
+def _tdx_stock_code(symbol: str) -> str:
+    """A 股/ETF 6 位代码 → 通达信 TQ 代码（000001 → 000001.SZ, 600000 → 600000.SH）。
+
+    通达信本地 TQ（17709）get_market_data 对 A 股使用 {code}.{exchange} 格式，
+    与期货主连格式（RBL8.SHF）不同。无法识别时原样返回。
+    """
+    raw = symbol.strip().lower()
+    for pfx in ("sh", "sz"):
+        if raw.startswith(pfx):
+            raw = raw[len(pfx):]
+    if len(raw) != 6 or not raw.isdigit():
+        return symbol
+    # 沪市 6/9 开头、沪 ETF 5 开头；其余默认深市（0/3 开头、159 ETF）
+    if raw.startswith(("6", "9", "5")):
+        return f"{raw}.SH"
+    return f"{raw}.SZ"
+
+
+def fetch_stock_ohlcv(
+    symbol: str,
+    days: int = 500,
+    trace_id: str = "",
+    adjust: str = "qfq",
+) -> Optional[pd.DataFrame]:
+    """从通达信本地 TQ（17709）拉取 A 股/ETF 日 K 线（真实行情）。
+
+    Args:
+        symbol: A 股 6 位代码（如 "000001" / "600519" / "510300"）
+        days: 回溯 K 线数量
+        trace_id: 链路追踪 ID
+        adjust: 复权方式（"qfq" 前复权 → dividend_type 'front'；"hfq" → 'back'；其余不复权）
+
+    Returns:
+        DataFrame（index=DatetimeIndex，列 open/high/low/close/volume）或 None（失败/无数据）。
+    """
+    tdx_code = _tdx_stock_code(symbol)
+    dividend = {"qfq": "front", "hfq": "back"}.get(adjust or "", "none")
+    src = TdxLocalSource(period="day")
+    try:
+        result = src._rpc(
+            "get_market_data",
+            {
+                "stock_list": [tdx_code],
+                "count": days,
+                "period": "1d",
+                "dividend_type": dividend,
+            },
+        )
+    except SourceUnavailable:
+        return None
+    if not isinstance(result, dict):
+        return None
+    value = result.get("Value")
+    if not isinstance(value, dict):
+        return None
+    # 目标代码数据块（兼容返回多个代码时取首个有效块）
+    block = value.get(tdx_code) or next(iter(value.values()), None)
+    if not isinstance(block, dict):
+        return None
+
+    df = pd.DataFrame(block)
+    col_map = {c.lower(): c for c in df.columns}
+    df = df.rename(columns={v: k for k, v in col_map.items()})
+    required = ("open", "high", "low", "close", "volume")
+    if not all(c in df.columns for c in required) or "date" not in df.columns:
+        return None
+    for c in required:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["date"] = pd.to_datetime(df["date"], format="%Y%m%d", errors="coerce")
+    df = df.dropna(subset=["date"]).sort_values("date")
+    if len(df) > days:
+        df = df.tail(days).reset_index(drop=True)
+    # 涨跌幅（小数：0.05 = +5%；首日为 NaN，供信号报告 change_pct 列）
+    df["change_pct"] = pd.to_numeric(df["close"], errors="coerce").pct_change()
+    df = df.set_index("date")
+    return df[list(required) + ["change_pct"]]
+
+
 class TdxLocalSource(BaseFuturesSource):
     """通达信本地 HTTP 数据源适配器（端口 17709）。
 
@@ -538,4 +616,5 @@ __all__ = [
     "get_annualization_factor",
     "get_default_zscore_window",
     "TDX_RPC_URL",
+    "fetch_stock_ohlcv",
 ]

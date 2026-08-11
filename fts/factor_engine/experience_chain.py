@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -77,6 +78,30 @@ FAILURE_PATTERN_KEYWORDS: dict[str, str] = {
 
 # 默认模式（匹配不到任何关键词时）
 DEFAULT_PATTERN = "其他原因"
+
+
+# ─── 父因子失败归因上下文（Phase 1.1 P0-2）──────────────────
+
+
+@dataclass
+class ParentFailureContext:
+    """父因子最近失败归因上下文（26 号计划 §5.2 P0-2 定向修复）。
+
+    子代演化时从失败经验链按 parent_id 聚合生成，供 MacroEvolver 定向修复：
+    让 LLM 明确父因子最近失败的维度（换手率过高 / IC 过低等），
+    在生成变异时针对性规避，避免重复踩坑。
+
+    Attributes:
+        parent_id: 父因子 factor_id
+        failure_reasons: 去重后的最近失败原因列表（按时间倒序聚合）
+        patterns: 失败模式聚类名（当前取失败原因原文，后续可升级为关键词聚类）
+        latest_failed_at: 最近一次失败时间（ISO 字符串），无则 None
+    """
+
+    parent_id: str
+    failure_reasons: list[str]
+    patterns: list[str]
+    latest_failed_at: Optional[str] = None
 
 
 # ─── 失败模式分析器 ────────────────────────────────────────
@@ -224,6 +249,24 @@ class ExperienceChain:
     def read_all_failure(self) -> list[ExperienceTrace]:
         """读取全部失败轨迹。"""
         return self._read_dir(self.failure_dir, limit=None)
+
+    def read_failures_by_parent(self, parent_id: str, limit: int = 5) -> list[ExperienceTrace]:
+        """读取指定父因子的最近失败轨迹（时间倒序，按 parent_id 过滤）。
+
+        Phase 1.1 (P0-2, 26 号计划 §5.2): 子代演化时继承父因子最近失败归因，
+        供 MacroEvolver 定向修复。`_read_dir` 已按 mtime 倒序（最近优先），
+        过滤后保持倒序取前 limit 条。
+
+        Args:
+            parent_id: 父因子 factor_id
+            limit: 返回条数上限（默认 5）
+
+        Returns:
+            最近失败轨迹列表；无匹配返回 []
+        """
+        traces = self._read_dir(self.failure_dir, limit=None)
+        matched = [t for t in traces if t.get("parent_id") == parent_id]
+        return matched[:limit]
 
     def count(self) -> dict[str, int]:
         """返回当前经验链计数。"""
@@ -399,6 +442,7 @@ __all__ = [
     "LLM_READ_FAILURE_COUNT",
     "FAILURE_PATTERN_KEYWORDS",
     "DEFAULT_PATTERN",
+    "ParentFailureContext",
     "FailurePatternAnalyzer",
     "ExperienceChain",
     "ExperienceChainError",

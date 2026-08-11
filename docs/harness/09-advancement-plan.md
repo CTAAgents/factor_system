@@ -1,8 +1,10 @@
 # FTS 晋级计划
 
-> 版本: v2.89.0
+> 版本: v2.102.0
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
+
+> **版本策略（v2.101.0 修订）**：版本号仅代表"可交付发布里程碑"，不随日常开发递增。日常开发（GAP 实现、测试、文档）只在 07-operations.md 追加记录；满足发布条件时统一通过 `python scripts/bump_version.py --type patch|minor|major --message "..."` 执行 bump（单日限 bump 一次）。详见 [07-operations.md §6 版本升级流程](07-operations.md)。
 
 ---
 
@@ -507,6 +509,31 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ L2 影子池（shadow_pool）：新晋升因子写入 `shadow_pool` 标记（promoted_at/observe_trading_days=5/observe_until，跳过周末），L3 `load_elite_factors` 过滤观察期内因子；种子因子 `shadow_observe=False` 直接进正式组合；DuckDB metadata + JSON 双存储
 - ✅ 新增 20 测试用例（粘性约束 7 + 漂移监控 7 + 影子池 6），82 个 portfolio_loop 测试全绿；evolution_loop 既有环境性失败（6 个）经 git stash 验证与本改动无关
 
+### v2.99.0 差距收尾：08-gap-analysis 开放差距全部关闭（GAP-046/045/050/X01/X02/X03/037/041/058）（已完成）
+
+**完成时间**: 2026-08-10
+
+**核心产出**（08-gap-analysis.md 状态闭环，98 项已关闭 / 2 项延期研究项）:
+- ✅ GAP-046（P0）换月复权+展期成本：阶段 A v2.58.0（roll_calendar.py/cost_model.py/contract_kline）+ plans/21 承接项（GAP-F03/F02/F08/F11）全落地
+- ✅ GAP-045（P1）adaptive 权重 L3：synthesis_mode="adaptive" 统一入口 + RegimeSmoother 平滑 + FactorStyle/style_tags 双维度（64 用例全绿）
+- ✅ GAP-050（P1）数据源生产可用性：GAP-F04 MCP 可配置注入/降级 + tick 缓存回放（GAP-I503 v2.84.0）+ F06 数据级监控 + F07 优化器 + F09 保证金
+- ✅ GAP-X01/X02/X03（P1）演化预筛三件套：横截面预筛同口径 / operator 常数前置拦截 / exec_globals 合并 + ts_product pandas2 修复（29 用例全绿）
+- ✅ GAP-037（P2）深度因子学习：MLP（v2.60.0）+ GRU（v2.73.0）已落地，RL 登记远期
+- ✅ GAP-041（P2）覆盖率补齐：v2.88.0 GAP-F16（+341 用例、TOTAL 94.31%），本次仅同步状态
+- ✅ GAP-058（P2）测试竞态：根因=并发会话竞态，测试已加固 mock，规避方式记录
+- 📋 全量回归 5267 passed（唯一失败 test_package_init pyproject 版本并发 bump 竞态，重跑即绿）
+- ✅ 文档同步：08（总览 98 关/2 延期 + 一致性元数据）/07（版本历史）
+
+### v2.99.0 L3 与信号管道解耦 + 权重每周重算（GAP-072）（已完成）
+
+**完成时间**: 2026-08-10
+
+**核心产出**:
+- ✅ 调度解绑：l3_portfolio_loop 期货每周五 19:00（v2.99.0 由每日 20:00 → 每周五 20:00，v2.101.0 对齐 TRAE Schedule 调整至 19:00）、l3_portfolio_loop_stock 每周五 19:30（v2.99.0 由每日 08:30 → 每周五 08:30，v2.101.0 对齐 TRAE Schedule 调整至 19:30）；新增独立每日任务 futures_signal_pipeline（工作日 20:00）与 daily_signal_pipeline（工作日 08:45）；jobs.py 两个 L3 job 移除对信号管道的联动触发（信号管道不再依赖 L3 运行）
+- ✅ 权重重算节奏配置化：FTSConfig.l3_weight_recompute_cadence（daily/weekly，默认 weekly）+ l3_weight_recompute_weekday（默认 4=周五）+ is_weight_recompute_day()；PortfolioLoop.run(recompute_weights=None) 按配置判定，冻结日返回 status="frozen" 且不重建组合、不落盘 combo（冷启动保护：无上次组合时冻结日仍全量构建）；CLI ts portfolio run --force-recompute 强制重算
+- ✅ 信号管道权重冻结：scripts/_signal_common.py save/load_weight_snapshot + ilter_factors_by_weights；futures/daily 信号管道周五重算 Ridge 权重存快照 memory/portfolio/futures/futures_signal_weights.json 与 memory/portfolio/stock/stock_signal_weights.json（v2.101.0 起按市场隔离），其余日复用快照仅刷新因子值（快照外新因子等待下次重算进入）；--force-recompute 强制重算
+- ✅ 新增测试：	est_weight_recompute.py 5 用例 + 	est_signal_common.py TestWeightSnapshot 4 用例 + 	est_portfolio_loop.py 冻结/强制/冷启动 3 用例；更新 test_tasks（12→14 任务）/test_jobs（L3 解绑断言）/test_cli_extra（解绑+冻结）/test_engine（add_job 12→15），受影响 375+243 passed 全绿
+
 ### v2.9.0 Design 全量落地（已完成）
 
 **完成时间**: 2026-08-06
@@ -690,6 +717,7 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 | **v2.0.0** | 生产部署 | 监控告警完善、容器化、CI/CD 流水线、期货全链路 E2E 测试 |
 | **v2.65.0+ 三阶段（plans/23）** | 追赶机构水平全面改造（规划中） | 全链路机构级对标（GAP-I 系列 20 项）：Stage 1 对标中小团队 v2.65.0~v2.72.0（吞吐 ≥10×、股票 L3、冲击成本/容量、实盘反馈闭环、中性化门槛）→ Stage 2 对标国内头部 v2.73.0~v2.80.0（深度因子学习、组合优化器机构化、衰减自动退役、Barra 风格暴露）→ Stage 3 对标海外顶级 v2.81.0+（分布式/GPU、Level2/另类数据）；详见 [plans/23-institutional-transformation-plan.md](plans/23-institutional-transformation-plan.md) |
 | **v2.61.0~v2.72.0 L3/L4 专项（plans/24）** | L3/L4 机构级追赶（规划中，A 阶段随 v2.61.0 启动） | L3 因子收益序列层 + 风险模型（Ledoit-Wolf 收缩 Σ）+ 组合指标实测化 + optimizer 接入主流程 + 中性化/成本约束 + 归因/组合层走航 + L4 实盘反馈闭环 + 表达式组合算子扩充（GAP-L 系列 11 项）；详见 [plans/24-l3-l4-institutional-plan.md](plans/24-l3-l4-institutional-plan.md) |
+| **plans/28 Regime 机构级优化** | ✅ 已实施（2026-08-11，T1~T10 全部完成） | 多周期 HMM regime_probs 概率输出 → regime blend 概率混合权重（probability_mix）→ RegimeSmoother 不对称切换（de_risk/re_risk alpha）→ 置信度熵标定 exposure_scale 仓位缩放（confidence_scale）→ BIC 状态数选择（StateMapStabilizer 防翻转）→ 制度有效性样本外验证（regime_validation + validate_regime CLI）→ fts_regime_* 观测指标（T10）；详见 [plans/28-regime-institutional-optimization-plan.md](plans/28-regime-institutional-optimization-plan.md) |
 
 ---
 
@@ -697,6 +725,7 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **plans/28（日常开发）** | 2026-08-11 | Regime 机构级优化（T1~T10 全部完成）：多周期 HMM 后验 regime_probs（`regime_hmm.py`）→ regime blend 概率混合权重（`probability_mix` 开关，28-T3）→ RegimeSmoother 不对称切换（`de_risk_alpha`/`re_risk_alpha`，28-T6）→ 置信度熵标定 exposure_scale 仓位缩放（`regime_calibration.py` + `portfolio_loop` Step 2.5 计算/build_combo 消费，28-T4）→ BIC 状态数选择（`regime_model_selection.py` + StateMapStabilizer 防翻转，28-T7）→ 制度有效性样本外验证（`regime_validation.py` + `validate_regime` CLI，28-T9）→ 观测指标 fts_regime_*（`prometheus_metrics.record_regime_metrics`，28-T10）；详见 [plans/28-regime-institutional-optimization-plan.md](plans/28-regime-institutional-optimization-plan.md) |
 | **v2.82.0** | 2026-08-10 | L1 知识源多路扩展 + 人审经验链闭环（plans/23 GAP-I103 + I101/I102 二期）：另类知识源 `AnnouncementNewsExtractor`（公告/舆情）+ `MacroEventExtractor`（宏观事件）接入股票 5 源/期货 4 源管道；`BaseExtractorPipeline.extract` 多源并行收集；驳回意见写经验链 `ExperienceChain.record_failure`；新增 23 测试用例 |
 | **v2.69.0** | 2026-08-10 | 股票流水线成熟度收尾（plans/22 GAP-S09~S12 全部落地，13 项缺陷闭环）：seed_analyzer.py 种子表达式静态 PIT 审计 + estimate_lookback_static 替换正则；verify_registry_consistency 双注册表一致性；operator_first 模式（股票演化默认算子优先 + 方法分布记账）；A_SHARE_FIELDS 10 字段 + L5b 4 A 股领域算子；新增 27 测试用例 |
 | **v2.65.0** | 2026-08-09 | 股票流水线 GAP-S03：A 股行业轮动 + 风格轮动 Regime 检测——`fts/factor_engine/stock_regime.py`（`StockRegimeSelector`：行业动量离散度→集中/轮动/均衡三态；大小盘+成长价值比值动量→风格双态；复用 MultiHorizonHMMDetector 多周期集成校正置信度）；`REGIME_STYLE_MULTIPLIERS` 新增 6 股票风格键；`PortfolioLoop.run(stock_regime=...)` 驱动 L3 风格自适应权重；新增 test_stock_regime.py 19 用例 |

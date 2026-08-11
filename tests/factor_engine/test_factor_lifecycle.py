@@ -427,4 +427,4 @@ class TestEdgeCases:
         """最小输入审计不崩溃。"""
         report = auditor.audit(factor={"factor_id": "f_min"})
         assert report.factor_id == "f_min"
-        assert len(report.items) == 6
+        assert len(report.items) == 7

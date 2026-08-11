@@ -18,8 +18,8 @@ scripts/futures_strategy.py — 期货因子组合策略信号生成
 
 输出:
     - 控制台: 信号排名表 + 策略统计
-    - 文件:     reports/{date}/futures_strategy_{date}.md
-    - 文件:     reports/{date}/futures_strategy_{date}.json
+    - 文件:     reports/futures/{date}/futures_strategy_{date}.md
+    - 文件:     reports/futures/{date}/futures_strategy_{date}.json
 """
 
 from __future__ import annotations
@@ -433,7 +433,7 @@ def main(mode: str = "ic_weight", top_n: int = 10) -> int:
         print(f"  {i:2d}. {f['name']:<30s} w={w:.4f}  IC={f['ic']:.4f}  Sharpe={f['sharpe']:.2f}")
 
     # ── 写入 Markdown 报告 ──
-    report_dir = REPORTS_ROOT / today
+    report_dir = REPORTS_ROOT / "futures" / today
     report_dir.mkdir(parents=True, exist_ok=True)
     out_md = report_dir / f"futures_strategy_{today}.md"
 

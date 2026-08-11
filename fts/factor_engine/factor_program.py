@@ -20,7 +20,7 @@ import secrets
 import types
 import warnings
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -46,6 +46,9 @@ from .contracts import (  # noqa: E402 — 前置 warnings.filterwarnings 后导
     FactorProgram,
     FactorSignature,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - 仅类型检查
+    from .signal_cache import SignalCache
 
 
 # ─── 安全沙箱约束 ─────────────────────────────────────────
@@ -498,8 +501,20 @@ class FactorExecutor:
         4. 输出必须为 np.ndarray
     """
 
-    def __init__(self, program: FactorProgram):
+    def __init__(
+        self,
+        program: FactorProgram,
+        signal_cache: Optional["SignalCache"] = None,
+    ):
+        """初始化执行器。
+
+        Args:
+            program: 因子程序
+            signal_cache: 可选信号缓存（GAP-070，质检链信号复用）；
+                传入后 execute 对相同 (factor_id, params, 数据指纹) 命中直接返回缓存信号。
+        """
         self.program = program
+        self._signal_cache = signal_cache
         self._compiled: Optional[types.FunctionType] = None  # type: ignore[name-defined]
         self._validate()
 
@@ -590,7 +605,7 @@ class FactorExecutor:
             raise FactorCompileError(f"编译失败: {type(e).__name__}: {e}") from e
 
     def execute(self, data: pd.DataFrame, params: dict[str, Any]) -> np.ndarray:
-        """执行因子程序，返回 np.ndarray 信号。
+        """执行因子程序，返回 np.ndarray 信号（GAP-070 支持信号缓存）。
 
         Args:
             data: OHLCV 数据 (columns: open/high/low/close/volume/settle/open_interest...)
@@ -599,6 +614,18 @@ class FactorExecutor:
         Returns:
             np.ndarray: 信号数组（-1~+1）或评分数组，长度与 data 行数对齐
         """
+        # ── 信号缓存快速路径（GAP-070）: 相同 (factor, params, 数据指纹) 直接复用 ──
+        if self._signal_cache is not None:
+            cached = self._signal_cache.get(self.program, data)
+            if cached is not None:
+                return cached
+        signal = self._execute_uncached(data, params)
+        if self._signal_cache is not None:
+            self._signal_cache.put(self.program, data, signal)
+        return signal
+
+    def _execute_uncached(self, data: pd.DataFrame, params: dict[str, Any]) -> np.ndarray:
+        """执行因子程序（无缓存路径，供 execute 内部调用）。"""
         # ── 算子因子快速路径 (Phase C.2): 直接解释 FTS-Expr，不编译沙箱代码 ──
         if self.program.get("kind") == "operator" and self.program.get("expression"):
             try:

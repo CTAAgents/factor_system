@@ -14,7 +14,9 @@ scripts/_signal_common.py — 信号管道公共模块（GAP-S04）
 
 from __future__ import annotations
 
+import math
 import warnings
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -34,6 +36,322 @@ try:
 except ImportError:
     pass
 warnings.filterwarnings("ignore", message=".*An input array is constant.*")
+
+
+# ─── 截面标准化 ──────────────────────────────────────────
+
+
+def normalize_signal_matrix(
+    signal_matrix: dict[str, dict[str, np.ndarray]],
+    panel: dict[str, pd.DataFrame],
+    common_dates: list[str],
+    method: str = "none",
+) -> None:
+    """对每个因子按交易日做截面标准化（z-score / rank），原地修改 signal_matrix。
+
+    消除因子值非零中心/量纲偏置对加权合成符号的主导影响：
+    - zscore: 每交易日截面 (x - mean) / std；std<1e-12 的常数截面置 0（无信息不贡献）
+    - rank:   每交易日截面百分比秩映射到 [-1, 1]（等价 Spearman 口径，不改变方向校正符号）
+    - none:   不处理（向后兼容，保持原行为）
+
+    Args:
+        signal_matrix: 信号矩阵 {symbol: {factor_name: array}}（原位修改）
+        panel: 行情面板 {symbol: DataFrame}
+        common_dates: 共同交易日列表
+        method: "none" / "zscore" / "rank"；非法值抛 ValueError
+    """
+    if method in (None, "", "none"):
+        return
+    if method not in ("zscore", "rank"):
+        raise ValueError(f"normalize method 非法: {method!r}，可选 none/zscore/rank")
+
+    if not signal_matrix or len(common_dates) == 0:
+        return
+
+    syms = list(signal_matrix.keys())
+    first_sym = next(iter(signal_matrix))
+    factor_names = list(signal_matrix[first_sym].keys())
+    dates_index = pd.DatetimeIndex(common_dates)
+
+    for fname in factor_names:
+        # 构建 (交易日 × 股票) 截面矩阵
+        cs = pd.DataFrame(index=dates_index, columns=syms, dtype=np.float64)
+        for sym in syms:
+            sig = signal_matrix[sym].get(fname)
+            if sig is None:
+                continue
+            df = panel.get(sym)
+            if df is None or df.empty:
+                continue
+            try:
+                pos = df.index.get_indexer(dates_index)
+            except (TypeError, ValueError):
+                continue
+            valid = (pos >= 0) & (pos < len(sig))
+            if valid.any():
+                cs.loc[dates_index[valid], sym] = np.asarray(sig)[pos[valid]]
+
+        if method == "zscore":
+            mu = cs.mean(axis=1)
+            sd = cs.std(axis=1, ddof=0).replace(0.0, 1.0)
+            normed = cs.sub(mu, axis=0).div(sd, axis=0)
+        else:  # rank
+            normed = cs.rank(axis=1, pct=True) * 2.0 - 1.0
+
+        # 写回 signal_matrix（NaN -> 0，与合成阶段 isfinite 兜底语义一致）
+        for sym in syms:
+            sig = signal_matrix[sym].get(fname)
+            if sig is None:
+                continue
+            df = panel.get(sym)
+            if df is None or df.empty:
+                continue
+            try:
+                pos = df.index.get_indexer(dates_index)
+            except (TypeError, ValueError):
+                continue
+            valid = (pos >= 0) & (pos < len(sig))
+            if not valid.any():
+                continue
+            vals = normed.loc[dates_index[valid], sym].to_numpy(dtype=np.float64)
+            sig_arr = np.asarray(sig)
+            sig_arr[pos[valid]] = np.where(np.isfinite(vals), vals, 0.0)
+
+    print(f"      [标准化] 截面 {method} 已应用到 {len(factor_names)} 个因子（{len(common_dates)} 交易日）")
+
+
+def neutralize_signal_matrix(
+    signal_matrix: dict[str, dict[str, np.ndarray]],
+    panel: dict[str, pd.DataFrame],
+    common_dates: list[str],
+    method: str = "none",
+    industry_map: dict[str, str] | None = None,
+    cap_map: dict[str, float] | None = None,
+) -> None:
+    """对每个因子按交易日做截面中性化（行业组内去均值 / 市值回归残差），原地修改。
+
+    D.2 股票 L3 补齐：剥离因子信号中行业/市值 proxy 偏好，消除"伪预测力"。
+    与 ``normalize_signal_matrix`` 同构（{symbol: {factor_name: array}}），
+    可叠加使用（先标准化后中性化，或反之）。
+
+    Args:
+        signal_matrix: 信号矩阵 {symbol: {factor_name: array}}（原位修改）
+        panel: 行情面板 {symbol: DataFrame}
+        common_dates: 共同交易日列表
+        method: "none" / "industry" / "size" / "both"；非法值抛 ValueError
+        industry_map: {symbol: industry_name}；method 含 industry 但为 None/空时跳过该步
+        cap_map: {symbol: market_cap}；method 含 size 但为 None/空时跳过该步
+    """
+    if method in (None, "", "none"):
+        return
+    if method not in ("industry", "size", "both"):
+        raise ValueError(f"neutralize method 非法: {method!r}，可选 none/industry/size/both")
+
+    from fts.factor_engine.neutralization import cross_section_neutralize
+
+    use_industry = method in ("industry", "both") and bool(industry_map)
+    use_size = method in ("size", "both") and bool(cap_map)
+    if not use_industry and not use_size:
+        print(f"      [中性化] {method} 已请求但映射缺失，跳过（industry={bool(industry_map)}, size={bool(cap_map)}）")
+        return
+
+    # 归一化映射键（600519.SH → 600519，对齐面板纯代码键；与 build_stock_regime_panels 同款）
+    if use_industry:
+        industry_map = {sym.split(".")[0] if "." in sym else sym: v for sym, v in industry_map.items()}
+    if use_size:
+        cap_map = {sym.split(".")[0] if "." in sym else sym: v for sym, v in cap_map.items()}
+
+    if not signal_matrix or len(common_dates) == 0:
+        return
+
+    syms = list(signal_matrix.keys())
+    first_sym = next(iter(signal_matrix))
+    factor_names = list(signal_matrix[first_sym].keys())
+    dates_index = pd.DatetimeIndex(common_dates)
+
+    for fname in factor_names:
+        # 构建 (交易日 × 股票) 截面矩阵（与 normalize_signal_matrix 同构）
+        cs = pd.DataFrame(index=dates_index, columns=syms, dtype=np.float64)
+        for sym in syms:
+            sig = signal_matrix[sym].get(fname)
+            if sig is None:
+                continue
+            df = panel.get(sym)
+            if df is None or df.empty:
+                continue
+            try:
+                pos = df.index.get_indexer(dates_index)
+            except (TypeError, ValueError):
+                continue
+            valid = (pos >= 0) & (pos < len(sig))
+            if valid.any():
+                cs.loc[dates_index[valid], sym] = np.asarray(sig)[pos[valid]]
+
+        ind_map = industry_map if use_industry else None
+        cap = cap_map if use_size else None
+        normed = cross_section_neutralize(cs, ind_map, cap)
+
+        # 写回 signal_matrix（NaN -> 0，与合成阶段 isfinite 兜底语义一致）
+        for sym in syms:
+            sig = signal_matrix[sym].get(fname)
+            if sig is None:
+                continue
+            df = panel.get(sym)
+            if df is None or df.empty:
+                continue
+            try:
+                pos = df.index.get_indexer(dates_index)
+            except (TypeError, ValueError):
+                continue
+            valid = (pos >= 0) & (pos < len(sig))
+            if not valid.any():
+                continue
+            vals = normed.loc[dates_index[valid], sym].to_numpy(dtype=np.float64)
+            sig_arr = np.asarray(sig)
+            sig_arr[pos[valid]] = np.where(np.isfinite(vals), vals, 0.0)
+
+    print(
+        f"      [中性化] 截面 {method} 已应用到 {len(factor_names)} 个因子（{len(common_dates)} 交易日）"
+    )
+
+
+# ─── Regime 自适应权重（D.2 偏差 b 补齐）─────────────────────────
+
+
+def build_stock_regime_panels(
+    panel: dict[str, pd.DataFrame],
+    industry_map: dict[str, str] | None,
+    cap_map: dict[str, float] | None,
+) -> tuple[dict[str, pd.Series], dict[str, pd.Series]]:
+    """由个股行情面板聚合构造 StockRegimeSelector 所需的行业/风格收益面板。
+
+    - industry_panel: {行业名 → 组内个股等权收益率序列}（无行业映射 → 空 dict）
+    - style_panel:    {large/small → 市值中位数分组等权收益率序列}（cap_map 缺失 → 空 dict）
+
+    数据不足时返回空面板（StockRegimeSelector 对空面板降级 unknown / oscillate，
+    管道不中断）。symbol 键兼容带后缀（600519.SH）与纯代码（600519）两种格式。
+
+    Args:
+        panel: 行情面板 {symbol: DataFrame（含 close 列）}
+        industry_map: {symbol: industry_name}；None/空 → industry_panel 为空
+        cap_map: {symbol: market_cap}；None/空 → style_panel 为空
+
+    Returns:
+        (industry_panel, style_panel)，均 {key: pd.Series(收益率)}。
+    """
+
+    def _norm(sym: str) -> str:
+        return sym.split(".")[0] if "." in sym else sym
+
+    def _rets(close: pd.Series) -> pd.Series:
+        r = close.pct_change().dropna()
+        return r[np.isfinite(r)]
+
+    # 归一化映射键（600519.SH → 600519，对齐面板纯代码键）
+    ind_norm = {_norm(k): v for k, v in (industry_map or {}).items()}
+    cap_norm = {_norm(k): v for k, v in (cap_map or {}).items()}
+
+    # 行业面板：组内等权收益率
+    industry_panel: dict[str, pd.Series] = {}
+    if ind_norm:
+        groups: dict[str, list[pd.Series]] = {}
+        for sym, df in panel.items():
+            ind = ind_norm.get(_norm(sym))
+            if not ind or "close" not in df.columns:
+                continue
+            rets = _rets(df["close"])
+            if len(rets) >= 2:
+                groups.setdefault(ind, []).append(rets)
+        for ind, rets_list in groups.items():
+            joined = pd.concat(rets_list, axis=1).dropna(axis=1, how="all")
+            if joined.empty:
+                continue
+            industry_panel[ind] = joined.mean(axis=1, skipna=True).dropna()
+
+    # 风格面板：市值中位数分 large/small 组等权收益率（growth/value 需基本面，本期不构造）
+    style_panel: dict[str, pd.Series] = {}
+    if cap_norm:
+        syms_with_cap = [s for s in panel if _norm(s) in cap_norm and "close" in panel[s].columns]
+        if len(syms_with_cap) >= 4:
+            median = float(np.median([cap_norm[_norm(s)] for s in syms_with_cap]))
+            buckets: dict[str, list[pd.Series]] = {"large": [], "small": []}
+            for s in syms_with_cap:
+                bucket = "large" if cap_norm[_norm(s)] >= median else "small"
+                buckets[bucket].append(_rets(panel[s]["close"]))
+            for bname, rets_list in buckets.items():
+                if not rets_list:
+                    continue
+                joined = pd.concat(rets_list, axis=1).dropna(axis=1, how="all")
+                if joined.empty:
+                    continue
+                style_panel[bname] = joined.mean(axis=1, skipna=True).dropna()
+
+    return industry_panel, style_panel
+
+
+def apply_stock_regime_weights(
+    factor_weights: dict[str, float],
+    factors: list[dict[str, Any]],
+    regime: dict[str, Any],
+    dimension: str = "style",
+    min_weight: float = 0.01,
+    min_clamp: float = 0.5,
+    max_clamp: float = 1.5,
+) -> dict[str, float]:
+    """按股票 Regime 结果调整因子权重（{factor_name: weight} 字典接口）。
+
+    复用 ``fts.factor_engine.portfolio_loop.regime_adaptive_weight_adjustment``：
+    将权重字典转为 signals（factor_id/name/weight）→ 按 REGIME_STYLE_MULTIPLIERS
+    风格倍率调整（dimension="style" 匹配 StockRegimeSelector 输出的股票风格键，
+    large_cap/small_cap/growth/value/sector_*）→ 转回 {name: weight}。
+
+    - regime 为空 / 无 regime 键 / 调整异常 → 原样返回（降级不中断）
+    - 因子无显式 style_tags 时按名称推断（momentum/mean_reversion/...），推断不到 → 倍率 1.0
+
+    Args:
+        factor_weights: {factor_name: weight}
+        factors: 因子元数据列表（含 factor_id/name 字段）
+        regime: StockRegimeSelector.detect() 输出（需含 regime 键）
+        dimension: 调整维度 "style"（股票风格键）/ "family" / "both"
+        min_weight: 最低权重下限（避免完全归零）
+        min_clamp / max_clamp: dimension="both" 时的乘积 clamp 倍率
+
+    Returns:
+        调整后的 {factor_name: weight}（键集合与入参一致）。
+    """
+    if not factor_weights or not factors or not regime or not regime.get("regime"):
+        return factor_weights
+
+    name_to_fid = {f.get("name"): f.get("factor_id") for f in factors if f.get("factor_id")}
+    signals: list[dict[str, Any]] = [
+        {"factor_id": name_to_fid.get(name, name), "name": name, "weight": float(w)}
+        for name, w in factor_weights.items()
+    ]
+    try:
+        from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
+
+        adjusted = regime_adaptive_weight_adjustment(
+            signals,
+            regime,
+            factors,
+            min_weight=min_weight,
+            dimension=dimension,
+            min_clamp=min_clamp,
+            max_clamp=max_clamp,
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"      [Regime] 权重调整失败（{e}），保持原权重")
+        return factor_weights
+
+    out: dict[str, float] = {}
+    for s in adjusted:
+        name = s.get("name", "")
+        if name in factor_weights:
+            out[name] = float(s.get("weight", factor_weights[name]))
+    # 兜底：保持键集合与入参一致（异常缺失键保留原值）
+    for name, w in factor_weights.items():
+        out.setdefault(name, w)
+    return out
 
 
 # ─── 方向校正 ────────────────────────────────────────────────
@@ -176,11 +494,16 @@ def compute_ridge_weights(
     if n_factors <= 1:
         return {f: 1.0 for f in factor_names}
 
-    # 取所有品种共有的因子交集
-    common_factors = set(factor_names)
+    # 因子覆盖率过滤：标的数较多时，因子在不同标的上的执行成功集合必然不同，
+    # "全标的交集"几乎恒为空，导致权重静默回退等权（factor_weights={}）。
+    # 改为保留覆盖 >= 50% 标的的因子；缺失标的在训练样本级跳过
+    # （下方逐样本有效性检查已兜底）。
+    factor_coverage: dict[str, int] = {}
     for sym in signal_matrix:
-        common_factors &= set(signal_matrix[sym].keys())
-    factor_names = sorted(common_factors)
+        for fname in signal_matrix[sym]:
+            factor_coverage[fname] = factor_coverage.get(fname, 0) + 1
+    min_coverage = max(1, math.ceil(len(signal_matrix) * 0.5))
+    factor_names = sorted(f for f, c in factor_coverage.items() if c >= min_coverage)
     n_factors = len(factor_names)
     if n_factors <= 1:
         fallback = {f: 1.0 / n_factors for f in factor_names} if n_factors > 0 else {}
@@ -462,3 +785,108 @@ def compute_composite_scores(
             sym_details[sym] = details
 
     return sym_scores, sym_details
+
+
+# ─── 权重快照（GAP-072，v2.99.0：解绑 L3 与信号管道）────────
+
+
+def save_weight_snapshot(
+    path: Path | str,
+    factor_weights: dict[str, float],
+    factor_sign_flips: dict[str, float] | None = None,
+    per_variety_weights: dict[str, dict[str, float]] | None = None,
+    per_variety_ic: dict[str, dict[str, float]] | None = None,
+    recomputed_at: str | None = None,
+    normalize: str = "none",
+    neutralize: str = "none",
+    regime: str = "none",
+) -> Path:
+    """持久化信号管道权重快照（重算日写入，冻结日读取复用）。
+
+    Args:
+        path: 快照文件路径
+        factor_weights: 全局 Ridge 权重 {factor_name: weight}
+        factor_sign_flips: 方向校正 {factor_name: +1/-1}
+        per_variety_weights: 品种级权重 {variety: {factor: weight}}（期货可选）
+        per_variety_ic: 品种-因子 IC 矩阵 {factor_name: {variety: ic}}（期货可选，
+            每周重算日计算并持久化，供冻结日报告复用）
+        recomputed_at: 重算日期字符串（None 用今天）
+        normalize: 重算日使用的截面标准化方式（none/zscore/rank），
+            冻结日读取快照同值应用，保证重算日与冻结日口径一致
+        neutralize: 重算日使用的截面中性化方式（none/industry/size/both，D.2），
+            冻结日读取快照同值应用，保证口径一致
+        regime: 重算日使用的 Regime 自适应方式（none/auto，D.2 偏差 b），
+            冻结日读取快照同值应用，保证口径一致
+    """
+    import json
+    from datetime import date as _date
+
+    fp = Path(path)
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "schema": "signal_weights_v1",
+        "recomputed_at": recomputed_at or _date.today().isoformat(),
+        "factor_weights": {k: float(v) for k, v in (factor_weights or {}).items()},
+        "factor_sign_flips": {k: float(v) for k, v in (factor_sign_flips or {}).items()},
+        "normalize": normalize,
+        "neutralize": neutralize,
+        "regime": regime,
+    }
+    if per_variety_weights:
+        payload["per_variety_weights"] = per_variety_weights
+    if per_variety_ic:
+        # 过滤非有限 IC（常数信号 Spearman 未定义 → NaN），保证 JSON 为标准格式
+        cleaned_ic: dict[str, dict[str, float]] = {}
+        for fname, vics in per_variety_ic.items():
+            finite = {v: float(ic) for v, ic in vics.items() if math.isfinite(ic)}
+            if finite:
+                cleaned_ic[fname] = finite
+        if cleaned_ic:
+            payload["per_variety_ic"] = cleaned_ic
+    fp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return fp
+
+
+def load_weight_snapshot(path: Path | str) -> dict[str, Any] | None:
+    """读取信号管道权重快照；缺失/损坏返回 None（触发冷启动重算）。
+
+    Args:
+        path: 快照文件路径
+
+    Returns:
+        快照 dict（含 factor_weights/factor_sign_flips/per_variety_weights）；
+        缺失、损坏或权重为空时返回 None。
+    """
+    import json
+
+    fp = Path(path)
+    if not fp.exists():
+        return None
+    try:
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        if not data.get("factor_weights"):
+            return None
+        return data
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        return None
+
+
+def filter_factors_by_weights(
+    factors: list[dict[str, Any]],
+    factor_weights: dict[str, float],
+) -> list[dict[str, Any]]:
+    """过滤因子池：仅保留在冻结权重快照中的因子（新因子等待下次重算进入）。
+
+    Args:
+        factors: 全部精英因子列表
+        factor_weights: 冻结权重 {factor_name: weight}
+
+    Returns:
+        仅含快照内因子的列表（保持输入顺序）
+    """
+    known = set(factor_weights.keys())
+    kept = [f for f in factors if f.get("name") in known]
+    dropped = len(factors) - len(kept)
+    if dropped:
+        print(f"      [权重冻结] 排除 {dropped} 个快照外因子（等待下次重算进入）")
+    return kept

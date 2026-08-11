@@ -26,6 +26,10 @@ from .data_fundamental import (
     get_fundamental_provider,
 )
 from .data_futures import FuturesDataProvider, FuturesDataError
+from .data_futures_fundamental import (
+    AkshareFuturesFundamentalProvider,
+    get_futures_fundamental_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +64,13 @@ class FTSDataProvider:
         mcp_provider: Optional[MCPDataProvider] = None,
         fundamental_provider: Optional[FundamentalProvider] = None,
         futures_provider: Optional[FuturesDataProvider] = None,
+        futures_fundamental_provider: Optional[AkshareFuturesFundamentalProvider] = None,
     ):
         self._mcp = mcp_provider or MCPDataProvider()
         self._fundamental = fundamental_provider or FundamentalProvider(mcp_available=False)
         self._futures = futures_provider or FuturesDataProvider()
-        # 期货基本面 provider（库存/基差/仓单），当前无实现，注入点为 None
-        self._futures_fundamental = None
+        # 期货基本面 provider（库存/基差，AKShare；仓单 SHFE/DCE 反爬不可用，见 08-gap-analysis.md GAP）
+        self._futures_fundamental = futures_fundamental_provider or get_futures_fundamental_provider()
 
     # ── 基本面注入 ──
 
@@ -164,9 +169,10 @@ class FTSDataProvider:
             panel: dict[symbol, OHLCV DataFrame]（含基本面列如果 fundamental=True）
             common_dates: 所有股票共有日期
         """
-        from .data_mcp import CSI300_SUBSET
+        from .data_mcp import CSI300_SUBSET, get_csi300_constituents
 
-        symbols = CSI300_SUBSET[:max_stocks] if max_stocks > 0 else CSI300_SUBSET
+        # max_stocks>0 用代表性子集前 N 只；0=全部沪深300成分股（akshare 动态拉取）
+        symbols = CSI300_SUBSET[:max_stocks] if max_stocks > 0 else get_csi300_constituents()
 
         panel: dict[str, pd.DataFrame] = {}
         dates_set: set[pd.Timestamp] = set()
@@ -257,6 +263,8 @@ class FTSDataProvider:
         注入字段（可用时）:
             - inventory: 库存
             - inventory_change: 库存增减
+            - warehouse_receipt: 交易所仓单（GAP-091 阶段 1 仅 CZCE/GFEX 品种）
+            - warehouse_receipt_change: 仓单增减
             - spot_price: 现货价格
             - near_basis: 近月基差
             - dom_basis: 主力基差
@@ -299,10 +307,28 @@ class FTSDataProvider:
             except Exception:  # noqa: BLE001
                 pass
 
+            # 注入仓单（GAP-091 阶段 1：CZCE/GFEX 品种真实，SHFE/DCE 降级 NaN）
+            try:
+                wr_df = provider.get_warehouse_receipt(symbol)
+                if not wr_df.empty and "warehouse_receipt" in wr_df.columns:
+                    df = df.join(
+                        wr_df[["warehouse_receipt", "change"]].rename(
+                            columns={
+                                "warehouse_receipt": "fut_warehouse_receipt",
+                                "change": "fut_warehouse_receipt_chg",
+                            }
+                        ),
+                        how="left",
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
         # 缺失列用 NaN 填充
         for col in [
             "fut_inventory",
             "fut_inventory_chg",
+            "fut_warehouse_receipt",
+            "fut_warehouse_receipt_chg",
             "fut_spot_price",
             "fut_near_basis",
             "fut_dom_basis",

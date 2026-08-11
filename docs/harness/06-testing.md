@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.89.0
+> 版本: v2.102.0
 > 最后更新: 2026-08-10
 
 ---
@@ -22,10 +22,10 @@
 
 | 层级 | 测试文件数 | 用例数 | 说明 |
 |:-----|:----------|:-------|:-----|
-| 单元测试 | 90+ | ~2600 | 各模块独立测试（含基本面数据层 + 信号管道 + 消融实验 + 风险标签 + 场景测试 + SHAP分析 + 鲁棒性 + 因果验证 + 逻辑监控 + 种子因子相关性预检 + DuckDB因子仓库 + 因子相关性矩阵 + 因子血缘审计 + 失败模式分类 + 因子巡检 + 生命周期E2E闭环 + 回测流水线 + 后代因子运行时校验 + FTS-Expr DSL 算子因子 + GP 多父代交叉 + 快速预筛选 + 评分卡配置 + **算子演化引擎（C.4，13 用例）** + **L1→L2 候选合并（GAP-031，8 用例）** + **L2 晋升双写原子化（GAP-032，4 用例）** + **factor_db_path 测试隔离注入（GAP-030，2 用例）** + **SectorRegimeSelector 产业链级制度检测（15 用例）** + **L1 候选因子评分缺陷修复（150 测试全绿）** + **分钟级回测频率自适应（3 用例）** + **ML 模型层（v2.38.0，~30 用例）** + **SignalBridge 信号桥接（v2.38.0，~25 用例）** + **L1 注入质量优化（v2.48.0，5 用例：硬/软失败分类 + 软失败不熔断 + verify 编译 detail 日志 + extractor debug 落盘 2 项）** + **高IC筛查剔除（B.4，v2.49.0，25 用例：16 项打分 + 5 项一票否决 + A/B/C/PASS 评级边界 + 市场统一性 + B级优化建议）** + **质检拦截器判定修复（v2.50.0，~18 用例：消融信息型/拦截型判定 + IC NaN 掩码 + SingleAblation feature 契约）** + **vwap 通用 IC 门槛 + 种子全链质检（v2.50.0，7 用例：vwap code abs(IC)<0.08 拦截 3 + 种子 Verifier/消融/因果/鲁棒失败拒绝晋升 4）** + **精英因子全员质量巡检（v2.54.0，质检脚本 `scripts/elite_quality_inspection.py`——230 因子全量 HighICScreener 质检，含 V5 经济逻辑 fallback 修复，229 合格 1 出库）** + **FactorStyle 分类器 + L3 adaptive 权重（v2.56.0，40 用例：test_style_classifier.py 32 用例（名称/代码/签名推断 + 显式 style_tags 优先 + REGIME_STYLE_MULTIPLIERS 覆盖）+ test_portfolio_loop_adaptive.py 8 用例（adaptive 基权重=sharpe + AdaptiveWeightConfig 契约 + PortfolioLoop 端到端））** + **股票因子行业/市值中性化（v2.57.0，~17 用例：feature_ops 2（industry_cap_neutral 双重中性化 + NaN 行业归 UNKNOWN）+ evaluation_chain 7（横截面行业/双重中性化 2 + _neutralize_signal_matrix 5：行业去均值/市值加权去均值/NaN/空列表/UNKNOWN）+ config_settings 8（stock_neutralization 配置默认值与 env 覆盖 + load_industry_map 有效/缺失/格式错误/非 dict/空白键过滤/默认路径））** + **Barra 风格体系（v2.62.0，13 用例：test_barra.py——10 风格暴露引擎 5（齐全/形状/size 单调/未知风格抛错/字段缺失降级）+ 截面中性化 7（残差形状/正交 corr<0.15/size 剥离/空暴露/行业叠加/小样本降级/常数列剔除）+ 评估链集成 1（style_exposures 生效））** + **期货换月复权与展期仿真（v2.58.0，~22 用例：test_roll_calendar.py——换月日历构建（最大成交量主力判定）、复权因子计算（比率法）、复权序列应用（get_ohlcv adjusted）、contract_kline 缺失降级、展期成本扣除（BacktestPipeline 持仓穿越换月）、报告展期成本统计、配置默认值；test_cost_model.py 展期成本项 7 用例——期货默认 roll_cost_bps=2.0/股票 ETF=0、展期成本计入 total_cost、无换月日期/空仓/长度不匹配不扣、net_sharpe 惩罚、AdjustedMetrics.roll_cost_bps 字段）** + **L2 准入去冗余（GAP-I206，v2.71.0，10 用例：test_l2_elite_redundancy.py——高相关命中/负高相关 abs 判断/低相关放行/空 elite 放行/索引文件跳过/容量护栏/执行失败容错 + shadow 高相关拦截不落盘/种子跳过检查正常晋升/低相关正常晋升）** + **正交基底+衰减分级（GAP-I206 补充 + GAP-I305，v2.72.0，19 用例：test_orthogonal_basis.py——IC 斜率/衰减分级 normal/observe/retired/基底读写/注册上限/Gram-Schmidt 正交/弱候选拒绝/L2 集成降级）** + **L1 批量候选 + 审查工作流（GAP-I101/I102，v2.72.0，12 用例：test_meta_loop.py 批量候选契约校验 8（全合法/空列表/缺必填字段 ×3/非 dict/样本截断/吞吐计算/零耗时）+ test_review_workflow.py CLI 命令 4（list 队列/market 过滤/approve 回写/reject 回写））** + **深度因子学习（GAP-I203，v2.73.0，28 用例：test_gru_factor.py——GRU 模型级 11（形状/学习/可复现/降级 4/常数列/权重导出/工厂）+ DeepFactor 生成器集成 9（契约/code 可执行/零未来函数截断一致性/降级 3/确定性）+ EvolutionLoop 接线 8（`_run_deep_evolution` 血缘与降级/`_evolve_one` deep 分派/批次轮换））** + **组合/跨标的算子单一事实源（GAP-I202，v2.75.0，7 用例：test_registry.py——ts_slope/ts_quantile 元数据/功能/边界 + GP 注册表含组合算子/可调用 + required_shared 硬约束一致性 + DSL 执行）** + **在线因子性能监控（GAP-I402，v2.77.0，12 用例：test_live_factor_monitor.py——偏离检查 5 + ingest_live_ic 6 + GAP-I401 端到端对接 1）** + **数据驱动动态池（GAP-054，v2.80.0，10 用例：test_dynamic_pool.py——get_dynamic_core_subset 缺失/非法/损坏回退 + 白名单过滤 6 + build_pool 渐进保留/替代/产业约束/池大小 4 + test_tasks.py 任务数断言 10→11）** + **盲测池机构标准（GAP-055，v2.81.0，9 用例：test_holdout_pool.py——规模 12~15/与核心池·训练集不重叠/全量内/去重/产业链覆盖≥8/大流动性代表/训练集充足）**） |
+| 单元测试 | 90+ | ~2600 | 各模块独立测试（含基本面数据层 + 信号管道 + 消融实验 + 风险标签 + 场景测试 + SHAP分析 + 鲁棒性 + 因果验证 + 逻辑监控 + 种子因子相关性预检 + DuckDB因子仓库 + 因子相关性矩阵 + 因子血缘审计 + 失败模式分类 + 因子巡检 + 生命周期E2E闭环 + 回测流水线 + 后代因子运行时校验 + FTS-Expr DSL 算子因子 + GP 多父代交叉 + 快速预筛选 + 评分卡配置 + **算子演化引擎（C.4，13 用例）** + **L1→L2 候选合并（GAP-031，8 用例）** + **L2 晋升双写原子化（GAP-032，4 用例）** + **factor_db_path 测试隔离注入（GAP-030，2 用例）** + **SectorRegimeSelector 产业链级制度检测（15 用例）** + **L1 候选因子评分缺陷修复（150 测试全绿）** + **分钟级回测频率自适应（3 用例）** + **ML 模型层（v2.38.0，~30 用例）** + **SignalBridge 信号桥接（v2.38.0，~25 用例）** + **L1 注入质量优化（v2.48.0，5 用例：硬/软失败分类 + 软失败不熔断 + verify 编译 detail 日志 + extractor debug 落盘 2 项）** + **高IC筛查剔除（B.4，v2.49.0，25 用例：16 项打分 + 5 项一票否决 + A/B/C/PASS 评级边界 + 市场统一性 + B级优化建议）** + **质检拦截器判定修复（v2.50.0，~18 用例：消融信息型/拦截型判定 + IC NaN 掩码 + SingleAblation feature 契约）** + **vwap 通用 IC 门槛 + 种子全链质检（v2.50.0，7 用例：vwap code abs(IC)<0.08 拦截 3 + 种子 Verifier/消融/因果/鲁棒失败拒绝晋升 4）** + **精英因子全员质量巡检（v2.54.0，质检脚本 `scripts/elite_quality_inspection.py`——230 因子全量 HighICScreener 质检，含 V5 经济逻辑 fallback 修复，229 合格 1 出库）** + **FactorStyle 分类器 + L3 adaptive 权重（v2.56.0，40 用例：test_style_classifier.py 32 用例（名称/代码/签名推断 + 显式 style_tags 优先 + REGIME_STYLE_MULTIPLIERS 覆盖）+ test_portfolio_loop_adaptive.py 8 用例（adaptive 基权重=sharpe + AdaptiveWeightConfig 契约 + PortfolioLoop 端到端））** + **股票因子行业/市值中性化（v2.57.0，~17 用例：feature_ops 2（industry_cap_neutral 双重中性化 + NaN 行业归 UNKNOWN）+ evaluation_chain 7（横截面行业/双重中性化 2 + _neutralize_signal_matrix 5：行业去均值/市值加权去均值/NaN/空列表/UNKNOWN）+ config_settings 8（stock_neutralization 配置默认值与 env 覆盖 + load_industry_map 有效/缺失/格式错误/非 dict/空白键过滤/默认路径））** + **Barra 风格体系（v2.62.0，13 用例：test_barra.py——10 风格暴露引擎 5（齐全/形状/size 单调/未知风格抛错/字段缺失降级）+ 截面中性化 7（残差形状/正交 corr<0.15/size 剥离/空暴露/行业叠加/小样本降级/常数列剔除）+ 评估链集成 1（style_exposures 生效））** + **期货换月复权与展期仿真（v2.58.0，~22 用例：test_roll_calendar.py——换月日历构建（最大成交量主力判定）、复权因子计算（比率法）、复权序列应用（get_ohlcv adjusted）、contract_kline 缺失降级、展期成本扣除（BacktestPipeline 持仓穿越换月）、报告展期成本统计、配置默认值；test_cost_model.py 展期成本项 7 用例——期货默认 roll_cost_bps=2.0/股票 ETF=0、展期成本计入 total_cost、无换月日期/空仓/长度不匹配不扣、net_sharpe 惩罚、AdjustedMetrics.roll_cost_bps 字段）** + **L2 准入去冗余（GAP-I206，v2.71.0，10 用例：test_l2_elite_redundancy.py——高相关命中/负高相关 abs 判断/低相关放行/空 elite 放行/索引文件跳过/容量护栏/执行失败容错 + shadow 高相关拦截不落盘/种子跳过检查正常晋升/低相关正常晋升）** + **正交基底+衰减分级（GAP-I206 补充 + GAP-I305，v2.72.0，19 用例：test_orthogonal_basis.py——IC 斜率/衰减分级 normal/observe/retired/基底读写/注册上限/Gram-Schmidt 正交/弱候选拒绝/L2 集成降级）** + **L1 批量候选 + 审查工作流（GAP-I101/I102，v2.72.0，12 用例：test_meta_loop.py 批量候选契约校验 8（全合法/空列表/缺必填字段 ×3/非 dict/样本截断/吞吐计算/零耗时）+ test_review_workflow.py CLI 命令 4（list 队列/market 过滤/approve 回写/reject 回写））** + **深度因子学习（GAP-I203，v2.73.0，28 用例：test_gru_factor.py——GRU 模型级 11（形状/学习/可复现/降级 4/常数列/权重导出/工厂）+ DeepFactor 生成器集成 9（契约/code 可执行/零未来函数截断一致性/降级 3/确定性）+ EvolutionLoop 接线 8（`_run_deep_evolution` 血缘与降级/`_evolve_one` deep 分派/批次轮换））** + **组合/跨标的算子单一事实源（GAP-I202，v2.75.0，7 用例：test_registry.py——ts_slope/ts_quantile 元数据/功能/边界 + GP 注册表含组合算子/可调用 + required_shared 硬约束一致性 + DSL 执行）** + **在线因子性能监控（GAP-I402，v2.77.0，12 用例：test_live_factor_monitor.py——偏离检查 5 + ingest_live_ic 6 + GAP-I401 端到端对接 1）** + **数据驱动动态池（GAP-054，v2.80.0，10 用例：test_dynamic_pool.py——get_dynamic_core_subset 缺失/非法/损坏回退 + 白名单过滤 6 + build_pool 渐进保留/替代/产业约束/池大小 4 + test_tasks.py 任务数断言 10→11）** + **盲测池机构标准（GAP-055，v2.81.0，9 用例：test_holdout_pool.py——规模 12~15/与核心池·训练集不重叠/全量内/去重/产业链覆盖≥8/大流动性代表/训练集充足）** + **多持有期 IC 体系（GAP-060，v2.90.0，20 用例：test_horizon_analysis.py 12——形状/正 IC/最佳持有期/衰减归一化/常数信号/短样本/NaN/无效持有期/序列化/确定性/最佳选择/默认持有期 + test_cross_section_horizon.py 8——横截面形状/序列化/短样本降级/无效持有期/NaN close 兜底/确定性/评估链 multi_horizon 输出/空 horizons 关闭）** + **可交易性压力层（GAP-061，v2.97.0，12 用例：test_cost_sensitivity.py——盈亏平衡倍数/净夏普单调/最大倍数仍正/毛夏普口径/市场参数透传/退化 4 项）** + **评估链统计补全（GAP-062 补测，v2.97.0，10 用例：test_qc_stats_completion.py——max_consecutive_losses 基础/全正 + block_ic_stats 预测力/常数回 None + cs_quintile_returns 单调/小面板空 + evaluate_backtest/cross_section GAP-062 字段 + 多持有期开关 + backtest_pipeline 连亏）** + **组合质检三标准（GAP-063，v2.97.0，6 用例：test_portfolio_qc.py——synthesis_gain/diversification_gain/drawdown_control 判定 + 空组合 qc_standards + 契约序列化）** + **IC 协方差加权合成（GAP-064，v2.97.0，10 用例：test_ic_weight.py——w=Σ⁻¹μ 形状/归一化/收缩正则/NaN 行剔除/奇异回退/样本<20 回退/单因子 None/synthesize ic_weight 模式/失败回退 IC 均值加权）** + **品种板块联动（GAP-065，v2.97.0，8 用例：test_sector_linkage.py——板块内相关/跨板块/因子截面分散度/high_linkage 标记/空板块/序列化）** + **夜盘隔夜跳空标记（GAP-066，v2.97.0，8 用例：test_overnight_gap.py——跳空列注入/首日 NaN/flag 阈值边界/开关关闭/注入幂等）** + **组合级回撤止损 + 相关性熔断（GAP-067，v2.97.0，10 用例：test_portfolio_risk_controls.py——回撤触发/阈值可配/上升不触发/危机相关触发/独立不触发/短窗不触发/综合告警/无输入不崩溃/to_dict 序列化）** + **兜底家族豁免（GAP-070，v2.98.0，2 用例：test_evolution_loop.py TestGapF16PromoteToElite——other/unknown 兜底家族达上限仍晋升 + JSON 快照落盘，trend 家族拦截不变）** + **短样本 OOS 审计判定（GAP-073，v2.98.0，4 用例：test_audit.py TestOOSConsistency——单窗口 skipped/双窗口正常评估（低一致性照常失败）/L1 兜底无窗口键保持原逻辑/原有 None skipped）**） + **算子演化多样性修复（GAP-074，v2.100.0，4 用例：test_gap074_operator_diversity.py——UCT 失败反馈切换父因子/失败不授予正奖励/同父不同代种子差异/同父同代种子可复现）**） |
 | 集成测试 | 5 | ~200 | strategies 策略层 + 演化循环集成 + 数据源聚合 + 期货同步 |
 | E2E | 2 | 24 | test_e2e.py(10) + test_factor_lifecycle.py(14) |
-|│ 合计 | 100+ | 用例数 | 2220 | 2364+ passed（20 cross-market tests all green，v2.33.0 新增 bincount 边界 12 用例 + g 因子 NaN 防护 12 用例 + repository 事务修复 3 用例，v2.34.0 批量防护 232 用例，v2.38.0 新增 ML 模型层 ~30 用例 + SignalBridge ~25 用例；最新全量 v2.81.0 = 4650+ passed（GAP-055 新增 test_holdout_pool.py 9 用例）（GAP-054 新增 test_dynamic_pool.py 10 用例 + test_tasks.py 任务断言 1 更新）：GAP-I203 新增 test_gru_factor.py 28 用例 + GAP-I202 新增 test_registry.py 7 用例 + GAP-I402 新增 test_live_factor_monitor.py 12 用例 + GAP-I204 二期新增 test_pareto.py 12 用例 + test_symbolic_regression.py 15 用例 + GAP-054 新增 test_dynamic_pool.py 10 用例 + GAP-055 新增 test_holdout_pool.py 9 用例） |
+|│ 合计 | 100+ | 用例数 | 2220 | 2364+ passed（20 cross-market tests all green，v2.33.0 新增 bincount 边界 12 用例 + g 因子 NaN 防护 12 用例 + repository 事务修复 3 用例，v2.34.0 批量防护 232 用例，v2.38.0 新增 ML 模型层 ~30 用例 + SignalBridge ~25 用例；最新全量 v2.81.0 = 4650+ passed（GAP-055 新增 test_holdout_pool.py 9 用例）（GAP-054 新增 test_dynamic_pool.py 10 用例 + test_tasks.py 任务断言 1 更新）：GAP-I203 新增 test_gru_factor.py 28 用例 + GAP-I202 新增 test_registry.py 7 用例 + GAP-I402 新增 test_live_factor_monitor.py 12 用例 + GAP-I204 二期新增 test_pareto.py 12 用例 + test_symbolic_regression.py 15 用例 + GAP-054 新增 test_dynamic_pool.py 10 用例 + GAP-055 新增 test_holdout_pool.py 9 用例 + GAP-060 新增 test_horizon_analysis.py 12 用例 + test_cross_section_horizon.py 8 用例 + GAP-061/063/064/065/066/067 新增 6 测试文件 64 用例（test_cost_sensitivity.py 12 + test_qc_stats_completion.py 10 + test_portfolio_qc.py 6 + test_ic_weight.py 10 + test_sector_linkage.py 8 + test_overnight_gap.py 8 + test_portfolio_risk_controls.py 10） + GAP-074 新增 test_gap074_operator_diversity.py 4 用例 + GAP-077 新增 test_structure_cluster_quota.py 11 用例 + GAP-079 新增 test_gap079_oos_skip.py 6 用例 + Phase 1.1 P0-2 新增 test_failure_guidance.py 9 用例 + GAP-080 新增 test_shap_optimization.py 7 用例 + Phase 1.2 P0-1 新增 test_success_pattern.py 14 用例 + D.1 新增 test_simulated_portfolio.py 14 用例）） |
 
 ---
 
@@ -113,7 +113,21 @@ tests/
 ├── test_futures_signal_pipeline.py  # 期货信号管道 Ridge 回归加权 + 方向校正 + 组合合成测试
 ├── test_cross_market.py             # 跨市场泛化验证测试（20 用例，含数据适配/分类/报告/集成）
 ├── test_llm.py                      # LLM 客户端测试
-└── test_monitor.py                  # 项目级 monitor 测试
+├── test_monitor.py                  # 项目级 monitor 测试
+│
+├── live_trade/                      # 3 个测试文件（D.1 + D.2）
+│   ├── __init__.py
+│   ├── test_simulated_portfolio.py  # 模拟仓测试（19 用例：开/加/减/平/反手、盯市、风控/干预拦截、因子归因、回放引擎、合约乘数/市场推断 + SQLite 存取/恢复/PaperTrader 持久化 + D.2 组合级风控集成）
+│   └── test_book_matching.py        # tick 盘口撮合测试（26 用例：build_book_from_ticks 聚合/排序/截断 + 逐档消耗/深度不足/空盘口降级/滑点自然性 + gateway 部分成交 PARTIAL→FILLED + P2 限价单/集合竞价）
+│
+├── factor_engine/                   # 因子引擎测试（D.2 新增 1 文件）
+│   └── test_neutralization.py       # 横截面中性化测试（14 用例：行业组内去均值/单股行业归零/市值回归残差/逐日/映射缺失降级/入参不可变）
+│
+├── risk/                            # 风控测试（D.2 新增 1 文件）
+│   └── test_portfolio_metrics.py    # 组合级风控指标测试（17 用例：杠杆/仓位/保证金/有效持仓/波动-VaR-CVaR/回撤/连续亏损 + 三级预警 WARN/BLOCK/FORCE + 空数据降级）
+│
+├── scripts/                         # 脚本测试（D.2 新增 1 文件）
+│   └── test_calibrate_book_vs_bps.py# book vs bps 标定测试（7 用例：可复现/价差敏感性单调/部分成交率/滑点分布/报告章节/bps 折算）
 ```
 
 ---
@@ -263,7 +277,7 @@ fts\risk\risk_manager.py                     100      0   100%
 fts\risk\simulated_adapter.py                 34      3    91%
 fts\scheduler\engine.py                      100      0   100%
 fts\scheduler\hotswap.py                      61      0   100%
-fts\scheduler\jobs.py                        246      0   100%
+fts\scheduler\jobs.py                        292     35    88%
 fts\scheduler\tasks.py                        49      0   100%
 fts\scheduler\watchdog.py                     57      0   100%
 TOTAL                                      20326   1254    94%
@@ -283,6 +297,14 @@ TOTAL                                      20326   1254    94%
 > 注：v2.88.0（GAP-F16）三分组补齐 14 个 <90% 模块测试 +341 用例（外部数据源网络/鉴权/超时/降级兜底 mock + 核心引擎异常分支 + 参数校验降级路径），全量回归 5132 passed，TOTAL 覆盖率 94.31%，缺口清零。
 >
 > 注：v2.89.0（同步范围扩大）——`test_sync_futures_task.py` `test_default_symbols_is_core_subset` 更名为 `test_default_symbols_is_full_universe`（默认同步断言由 core 25 改为 FUTURES_SUBSET 全品种 82），用例总数不变（5132）。
+
+> 注：v2.99.0（GAP-072 L3 与信号管道解耦）——新增 	ests/config/test_weight_recompute.py 5 用例（权重重算日判定 daily/weekly/未知 cadence 回退）+ 	ests/scripts/test_signal_common.py TestWeightSnapshot 4 用例（快照存读往返/缺失/损坏降级/冻结过滤）+ 	ests/factor_engine/test_portfolio_loop.py 冻结/强制重算/冷启动保护 3 用例；更新 	ests/scheduler/test_tasks.py（默认任务 12→14，L3 cron 改每周五 + 新增期货/股票信号管道独立任务）/	est_jobs.py（L3 job 不再联动信号管道、独立任务入口 called_once）/	est_cli_extra.py（解绑 + 冻结提示）/	est_engine.py（add_job 12→15），受影响 375+243 passed 全绿，全量回归 5266+ passed。
+
+> 注：v2.101.0（GAP-076 信号管道截面标准化 + 卷积修复）——新增 tests/scripts/test_signal_common.py 10 用例：TestNormalizeSignalMatrix 8（none 不改 / zscore 截面均值 0 方差 1（ddof=0）/ 常数截面置 0 / rank 值域 [-1,1] 与保序 / NaN 写回 0 / 非法 method 抛 ValueError / 空矩阵降级 / DatetimeIndex 输入回归）+ TestWeightSnapshot 2（normalize 字段存读往返 / 旧快照无 normalize 默认 none 向后兼容），test_signal_common 17→26 全绿；volatility_reversion_g2 因子卷积 bug 修复后沙箱编译通过、最新截面恢复区分度（std 0→0.238）；受影响定向回归全绿。
+
+> 注：v2.101.0（D.2 偏差 b：Regime 自适应权重接线）——新增 tests/scripts/test_signal_common.py 17 用例（当前 50）：TestBuildStockRegimePanels 6（行业面板等权聚合 / symbol 后缀对齐 / 映射后缀对齐（真实数据格式回归）/ 风格 large/small 分位 / 映射缺失空面板 / 样本不足降级）+ TestApplyStockRegimeWeights 6（style 倍率 large_cap momentum×0.9 quality×1.2 / 键集合保持 / 空 regime 原样返回 / 未知 regime 倍率 1.0 / family 维度兼容）+ TestRegimeChainIntegration 1（面板构造→StockRegimeSelector 检测→权重调整全链路）+ TestWeightSnapshot 2（regime 字段存读往返 / 旧快照无 regime 默认 none）+ TestNeutralizeSignalMatrix 2（后缀键行业/市值对齐回归——修复 P0.1 中性化适配器静默空转：`data/industry_map.json` 后缀键 vs 面板纯代码键，修复后真实数据实测「industry 已应用到 129 因子×80 交易日」）；tests/test_config_settings.py +2 用例（stock_signal_regime 默认 none / FTS_STOCK_SIGNAL_REGIME env 覆盖 auto），test_config_settings 65 passed；真实管道冒烟 `--regime auto`（CSI300 6 只）实测检测 `sector_concentrated (conf=50%, method=stock_rule)` 并完成权重调整；受影响模块/集成测试 + ruff check 通过。
+
+> 注：v2.101.0（GAP-078 TQ 探活进程级重试）——新增 tests/test_data.py TestTqStockAvailable 6 用例（首次成功缓存 / 瞬时抖动重试恢复 / 全失败冷却不重探 / 冷却期满重探恢复 / 合法响应解析 / 异常降级），test_data.py 75 passed 全绿；附带 zscore vs rank 历史对比（81 交易日 IC 差 0.0015 噪声量级，rank 略稳健）。
 
 ---
 
@@ -308,17 +330,17 @@ TOTAL                                      20326   1254    94%
 | `tests/core/test_atomic.py` | ~32 | 原子操作 |
 | `tests/core/test_contracts.py` | ~39 | core contracts |
 | `tests/core/test_enums.py` | ~17 | enums |
-| `tests/test_config_settings.py` | ~39 | 配置管理（含 v2.59.0 期货中性化/回测真实性仿真 4 配置用例 + v2.60.0 样本外强制/保证金 3 配置用例：force_walkforward/max_margin_usage 默认值与 env 覆盖） |
+| `tests/test_config_settings.py` | 65 | 配置管理（含 v2.59.0 期货中性化/回测真实性仿真 4 配置用例 + v2.60.0 样本外强制/保证金 3 配置用例：force_walkforward/max_margin_usage 默认值与 env 覆盖 + D.2 偏差 b stock_signal_regime 2 配置用例 + plans/28 28-T4 配置用例：probability_mix/confidence_scale 等默认值与契约） |
 | `tests/test_mlp_factor.py` | 12 | MLP 因子模型（GAP-F05）：训练/推理形状 + 线性目标学习 + 标准化/常数列 + 降级路径（样本不足/未训练/非数值/维度）+ 工厂/可复现 |
 | `tests/test_gru_factor.py` | 28 | GAP-I203 深度因子学习（v2.73.0）：GRU 模型级 11（训练/预测形状 + seq_len·n_features 属性 + 线性记忆目标学习相关 >0.3 + 同 seed 可复现 + 样本不足/未训练/非数值/维度不匹配降级 + 常数列兜底 + 权重导出形状 + 工厂）+ DeepFactor 生成器集成 9（契约字段 + 生成 code 经 `_execute_factor_code` 可执行且 \|out\|≤1 + 零未来函数截断一致性 + 短序列/非数值/长度不齐降级 + 缺 volume 兜底 + 同 seed code 确定性 + 训练失败降级）+ EvolutionLoop 接线 8（`_run_deep_evolution` 成功血缘/无数据/样本不足抛错 + `_evolve_one` deep 分派/失败返回 None + 批次轮换断言） |
-| `tests/monitor/test_data_level_monitor.py` | 22 | 数据级质量监控（GAP-F06）：缺失率/异常值/复权一致性/多源分歧 + 阈值边界/冷却/回调 + scheduler 接入 |
+| `tests/monitor/test_data_level_monitor.py` | 24 | 数据级质量监控（GAP-F06 + GAP-085）：缺失率/异常值/复权一致性/多源分歧 + 阈值边界/冷却/回调 + scheduler 接入 + hold 缺失检测/无 hold 列跳过（v2.101.0） |
 | `tests/monitor/test_live_factor_monitor.py` | 12 | 在线因子性能监控（GAP-I402，v2.77.0）：偏离检查 5（无偏离/中度 warning/重度 critical/报告/因子列表）+ ingest_live_ic 6（基线构建/衰减告警/开关关闭/状态存取/空数据降级/指标日志）+ GAP-I401 端到端对接 1（compute_live_ic+report 输出可被 ingest 消费） |
 | `tests/factor_engine/test_pareto.py` | 12 | Pareto 多目标前沿（GAP-I204 二期，v2.78.0）：objectives 口径 2（越大越好/默认值）+ 快速非支配排序 5（单个体/双层/互不支配同层/相同个体/链式支配）+ 前沿提取 5（空集/空表达式过滤/fitness 降序/被支配剔除/换手衰减支配） |
 | `tests/factor_engine/test_symbolic_regression.py` | 15 | 符号回归补充搜索（GAP-I204 二期，v2.78.0）：配置 2（默认/自定义）+ 初始化 2（排除目标列/multi_objective 复用）+ 候选生成 2（一元包装/二元组合）+ 搜索 7（结果结构/排序/字段填充/最优候选/固定种子可复现/深度约束/beam 上限）+ GP 集成 2（symbolic 前沿合并/multi_objective 前沿输出） |
 | `tests/factor_engine/test_portfolio_optimizer.py` | 19 | 组合优化器（GAP-F07）：风险平价/均值方差 + 换手/VaR/集中度/杠杆约束 + scipy 降级 + synthesize_signals optimizer 模式接入 |
 | `tests/data_sources/test_mcp_degradation.py` | 6 | MCP 降级（GAP-F04）：未启用返回 None / 启用未注入抛错 / 注入正常调用 |
 | `tests/test_mlp_factor.py` | 12 | MLP 因子模型（GAP-F05）：训练/推理形状 + 线性目标学习 + 标准化/常数列 + 降级路径（样本不足/未训练/非数值/维度）+ 工厂/可复现 |
-| `tests/monitor/test_data_level_monitor.py` | 22 | 数据级质量监控（GAP-F06）：缺失率/异常值/复权一致性/多源分歧 + 阈值边界/冷却/回调 + scheduler 接入 |
+| `tests/monitor/test_data_level_monitor.py` | 24 | 数据级质量监控（GAP-F06 + GAP-085）：缺失率/异常值/复权一致性/多源分歧 + 阈值边界/冷却/回调 + scheduler 接入 + hold 缺失检测/无 hold 列跳过（v2.101.0） |
 | `tests/factor_engine/test_portfolio_optimizer.py` | 19 | 组合优化器（GAP-F07）：风险平价/均值方差 + 换手/VaR/集中度/杠杆约束 + scipy 降级 + synthesize_signals optimizer 模式接入 |
 | `tests/data_sources/test_mcp_degradation.py` | 6 | MCP 降级（GAP-F04）：未启用返回 None / 启用未注入抛错 / 注入正常调用 |
 | `tests/factor_engine/test_ablation.py` | ~20 | 消融实验（五种消融模式 + 边界情况） |
@@ -328,24 +350,33 @@ TOTAL                                      20326   1254    94%
 | `tests/factor_engine/test_causal_validator.py` | ~14 | 因果结构审查（自然实验/预测误差） |
 | `tests/scenarios/test_natural_experiments.py` | ~10 | 自然实验事件定义 |
 | `tests/factor_engine/test_contracts.py` | ~16 | 契约定义 |
-| `tests/factor_engine/test_evaluation_chain.py` | ~50 | 三级评估链（含 v2.62.0 GAP-S02 Barra 风格中性化集成：`style_exposures` 参数生效 + 行业+风格叠加） |
+| `tests/factor_engine/test_evaluation_chain.py` | ~53 | 三级评估链（含 v2.62.0 GAP-S02 Barra 风格中性化集成：`style_exposures` 参数生效 + 行业+风格叠加；v2.98.2 GAP-071 +3：走航窗口 IC 由 oos 段内收益计算（非全局尾部）/每窗口仅执行 oos 信号/evaluate 共享缓存二次调用命中） |
+| `tests/factor_engine/test_signal_cache.py` | 14 | 质检信号缓存（GAP-071，v2.98.2 新增）：命中语义 5（同 factor+同数据命中/扰动列 miss/单特征归零 miss/不同 factor miss/不同 params miss）+ LRU 与 clear 3（容量淘汰最久未用/clear 清空/put 存副本防下游修改污染）+ 边界 3（空数据不缓存/缺 factor_id 不缓存/列顺序无关命中）+ FactorExecutor 集成 3（二次执行命中跳过沙箱/扰动数据不命中正常重算/无缓存向后兼容） |
 | `tests/factor_engine/test_barra.py` | 13 | Barra 风格体系（GAP-S02）：10 风格暴露引擎（齐全/形状/size 单调/未知风格抛错/字段缺失降级）+ 截面中性化（残差形状/残差与风格正交 corr<0.15/size 暴露剥离/空暴露原样/行业叠加/小样本降级）+ 评估链集成 |
 | `tests/factor_engine/test_stock_regime.py` | 19 | A 股行业轮动 + 风格轮动 Regime（GAP-S03）：行业三态（concentrated/rotating/balanced）/风格四方向（large_cap/small_cap/growth/value）/风格切换样本正确率 ≥80%/空面板降级/HMM 复用回退/multipliers 键与值域/PortfolioLoop 集成 2 |
 | `tests/factor_engine/test_batch_mining.py` | 11 | 批量挖掘漏斗（GAP-I201，v2.65.0）：BatchMiner 批量生成/并行粗筛/排序截断/依赖注入回调/契约 |
+| `tests/factor_engine/test_executor_backend.py` | 17 | 可插拔执行器后端（GAP-I502，v2.83.0；C4 2026-08-11 dask 降级用例改强制 import 失败）：四后端工厂创建 + thread/process 一致性 + process lambda/bound method 跨进程序列化 + dask/ray 缺依赖降级 process + 未知后端回退 thread + BatchMiner.filter_batch 接入与单任务异常隔离 + 配置字段 |
+| `tests/factor_engine/test_executor_dask.py` | 17 | C4 多节点分布式挖掘工厂（2026-08-11 新增）：DaskBackend LocalCluster map 顺序/结果/worker_count/shutdown 幂等与归零/cluster 句柄注入/address 优先/工厂创建 + 故障注入 4（kill 后 alive≥1 且减少/kill 后 map 正确/单 worker 集群/降级返回 0）+ 一致性 vs thread <1e-9 + 缺 dask 依赖降级 ProcessBackend（monkeypatch import 失败）+ BatchMiner.filter_batch dask vs process 一致与单任务异常隔离 + vs ThreadBackend 对齐 |
 | `tests/factor_engine/test_l2_elite_redundancy.py` | 10 | L2 准入去冗余（GAP-I206，v2.71.0）：方法级 7（高相关命中/负高相关 abs 判断/低相关放行/空 elite 放行/索引文件跳过/容量护栏/执行失败容错）+ 集成 3（shadow 高相关拦截不落盘/种子跳过检查正常晋升/低相关正常晋升） |
+| `tests/factor_engine/test_structure_cluster_quota.py` | 11 | 结构性聚类配额（GAP-077，v2.102.0）：方法级 5（`_count_cluster_members` 同类计数/混合信号/空 elite/扫描上限/新因子执行失败/索引跳过）+ 集成 6（配额满拒绝不落盘/未满放行/other 家族不再豁免/低相关簇放行/开关回退 max_per_family 拒绝/回退 other 豁免晋升） |
+| `tests/factor_engine/test_gap079_oos_skip.py` | 6 | oos_consistency 误杀修复（GAP-079，v2.102.0）：`_run_factor_audit` 集成 4（评估链走航 0 窗口+独立走航失败→skipped / 独立走航成功优先 / 2 窗口低一致性仍 failed / walk_forward 缺失保持 L1 兜底）+ `_check_oos_consistency` 方法级 2（0/1 窗口 skipped） |
+| `tests/factor_engine/test_failure_guidance.py` | 9 | 父代失败归因定向修复（Phase 1.1 P0-2/26 计划 §5.2）：`read_failures_by_parent` 4（按 parent_id 过滤 / limit 生效 / 无匹配返回 [] / 空链返回 []）+ MacroEvolver prompt 注入 3（有 ctx 含"父因子最近失败归因"+"定向修复要求" / 无 ctx 不含该段落现有行为不变 / 带 ctx 仍正常产出因子）+ `_evolve_one` macro 分支传递 2（有失败记录构造 ctx 传给 evolver / 无记录传 None 照常调用） |
+| `tests/factor_engine/test_shap_optimization.py` | 7 | SHAP 批量计算降频（GAP-080，v2.102.0）：默认参数降频 3（n_extreme 25 / n_background 50 / nsamples 50 + 自定义参数）+ nsamples 透传 shap_values 1 + summary n_nsamples 1 + FTSConfig 三项 2（默认 / env 覆盖）+ EvolutionLoop 接线 1（用配置值构造 ShapAnalyzer） |
+| `tests/factor_engine/test_success_pattern.py` | 14 | 成功模式定向演化（Phase 1.2 P0-1/26 计划 §6）：`analyze_success_patterns` 8（空链空报告 / 窗口截断 / by_method 晋升率 / 时间衰减权重 / top_operators 提取 / top_window_bins 分箱 / min_sample 不足空报告 / 坏 recorded_at 降级）+ MacroEvolver prompt 注入 4（有 report 含"近期成功模式"段落 / 无 report 不含 / 空 report 不注入 / 带 report 正常产出因子）+ `_evolve_one` 传递与缓存 2（macro 分支传 report / 进程内缓存二次调用不重读经验链） |
 | `tests/factor_engine/test_orthogonal_basis.py` | 19 | GAP-I206 补充（v2.72.1）正交基底 + GAP-I305 衰减分级：IC 斜率 5（上升正斜率/下降负斜率/平坦近零/点数不足回零/归一化范围）+ 衰减分级 5（normal/observe/retired 判定/update 写入分级字段/auto_retire 按级退役）+ 基底管理器 7（空基底/注册加载/上限淘汰/重复注册更新/Gram-Schmidt 正交性/弱候选拒绝/无基底返回 None）+ L2 集成 2（开关关闭返回 None/基底成员缺失降级） |
 | `tests/factor_engine/test_factor_quality_card.py` | ~100 | 因子质量评分卡（10 维评分，A/B/C 分级，可配置映射阈值） |
-| `tests/factor_engine/test_evolution_loop.py` | ~124 | L2 主循环（含孤立模块集成审查门禁测试：消融/因果/鲁棒/SHAP/特征重要性/逻辑监控 + 端到端流水线 + v2.59.0 GAP-F03 期货板块中性化注入 3 用例 + v2.60.0 GAP-F08 样本外强制 7 用例：WalkForward 冷启动/配置开关/审计优先 + v2.61.0 GAP-S01 股票中性化自动注入 4 用例：启用注入/键归一化/关闭跳过/空映射降级 + v2.65.0 GAP-I201 batch 集成 10 用例 + v2.66.0 GAP-X01/X02 3 用例：常数前置拦截/真实截面 IC/无截面能力拦截） |
+| `tests/factor_engine/test_evolution_loop.py` | ~126 | L2 主循环（含孤立模块集成审查门禁测试：消融/因果/鲁棒/SHAP/特征重要性/逻辑监控 + 端到端流水线 + v2.59.0 GAP-F03 期货板块中性化注入 3 用例 + v2.60.0 GAP-F08 样本外强制 7 用例：WalkForward 冷启动/配置开关/审计优先 + v2.61.0 GAP-S01 股票中性化自动注入 4 用例：启用注入/键归一化/关闭跳过/空映射降级 + v2.65.0 GAP-I201 batch 集成 10 用例 + v2.66.0 GAP-X01/X02 3 用例：常数前置拦截/真实截面 IC/无截面能力拦截 + v2.98.2 GAP-071 审计复用 2 用例：复用评估链走航不调用兜底/缺失回退独立计算） |
 | `tests/factor_engine/test_experience_chain.py` | ~19 | 经验链 |
 | `tests/factor_engine/test_factor_program.py` | ~32 | 因子程序 |
 | `tests/factor_engine/test_failure_pattern.py` | ~22 | 失败模式聚类分析 |
 | `tests/factor_engine/test_macro_evolution.py` | ~30 | 宏观演化 |
-| `tests/factor_engine/test_meta_loop.py` | ~86 | L1 元循环（含 schema 版本兼容冷启动测试；v2.72.0 GAP-I101 批量候选契约校验 + 吞吐指标 8 用例） |
+| `tests/factor_engine/test_meta_loop.py` | ~97 | L1 元循环（含 schema 版本兼容冷启动测试；v2.72.0 GAP-I101 批量候选契约校验 + 吞吐指标 8 用例；v2.100.1 感知层样本按市场区分 6 用例：股票默认 CSI300[:13]/期货默认 13 品种不变/显式覆盖 + stock collector 走股票 OHLCV 不取实时价/期货原路径+实时价/股票 OHLCV 失败降级） |
 | `tests/factor_engine/test_review_workflow.py` | 11 | Alpha 审查工作流（GAP-I102，v2.72.0）：状态机 7（approve/reject 决策回写 + get_status 查询/未审查 None + 队列排除已审查 + market 过滤 + 幂等 UPSERT + 意见与审查人落盘）+ CLI 命令 4（list 队列输出/market 过滤/approve 回写/reject 回写） |
 | `tests/factor_engine/test_micro_evolution.py` | ~13 | 微观演化（含 ImportError 覆盖 + 两阶段漏斗 5（GAP-I205）） |
 | `tests/factor_engine/test_monitor.py` | ~45 | 因子引擎监控 |
 | `tests/monitor/test_logic_monitor.py` | ~15 | 逻辑监控仪表盘（漂移检测/极端预测/换月日） |
-| `tests/factor_engine/test_portfolio_loop.py` | ~96 | L3 组合循环（含粘性约束 5 + 漂移监控 7 + 影子池 6 + 过拟合保护 6 + 股票 L3 组合层 6（GAP-I301）） |
+| `tests/factor_engine/test_portfolio_loop.py` | 217 | L3 组合循环（含粘性约束 5 + 漂移监控 7 + 影子池 6 + 过拟合保护 6 + 股票 L3 组合层 6（GAP-I301）+ plans/28 28-T4/T6/T10 用例扩增：exposure_scale 计算与消费/RegimeSmoother 不对称/指标上报接线） |
+| `tests/factor_engine/test_portfolio_loop_adaptive.py` | 12 | L3 adaptive 权重（v2.56.0 8 用例 + plans/28 28-T3/T6 扩增：probability_mix 概率混合/平滑参数契约） |
 | `tests/factor_engine/test_regime_multipliers.py` | ~14 | GAP-L308 数据驱动 Regime 倍率（估计/钳制/样本回退/YAML 往返/接线回退，v2.68.0 新增） |
 | `tests/factor_engine/test_data_provider_panel.py` | ~12 | GAP-L309 面板数据规模（PanelLoadingConfig/分层抽样/覆盖日志/默认参数透传，v2.68.0 新增） |
 | `tests/factor_engine/test_program.py` | ~16 | Program.md |
@@ -354,13 +385,13 @@ TOTAL                                      20326   1254    94%
 | `tests/factor_engine/test_uct_selection.py` | ~10 | UCT 树搜索父因子选择 |
 | `tests/factor_engine/test_verifier.py` | ~12 | Verifier |
 | `tests/factor_engine/test_walk_forward.py` | ~57 | 走航验证 |
-| `tests/factor_engine/test_regime.py` | ~25 | 市场体制 |
+| `tests/factor_engine/test_regime.py` | 86 | 市场体制（plans/28 机构级优化：regime blend 概率混合/置信度仓位缩放/不对称切换/回退路径等 T1~T6 用例扩增） |
 | `tests/scenarios/test_scenarios.py` | ~20 | 宏观行为场景测试 |
 | `tests/pipeline/test_base.py` | ~25 | 管线基础 |
 | `tests/pipeline/test_factor_combiner.py` | ~33 | 因子组合器 |
 | `tests/scheduler/test_engine.py` | ~35 | 调度引擎 |
 | `tests/scheduler/test_hotswap.py` | ~21 | 热加载 |
-| `tests/scheduler/test_tasks.py` | ~31 | 调度任务 |
+| `tests/scheduler/test_tasks.py` | ~32 | 调度任务 |
 | `tests/scheduler/test_watchdog.py` | ~22 | 看门狗 |
 | `tests/strategies/test_base_v2.py` | ~55 | 策略基类 |
 | `tests/strategies/test_multi_factor.py` | ~88 | 多因子策略 |
@@ -379,6 +410,11 @@ TOTAL                                      20326   1254    94%
 | `tests/factor_db/test_repository.py` | ~28 | FactorRepository CRUD + 搜索 + 版本管理 |
 | `tests/factor_engine/test_extreme_perturb.py` | 10 | 极值扰动一票否决（GAP-F15，v2.79.0）：极值剔除重算 IC（ic_before/ic_after/ic_drop 计算 + 数据不足/常数输入返回 None）+ 构造极值依赖因子验证否决触发 + 无极值依赖因子放行 + pct 可配置生效 |
 | `tests/scripts/test_seed_dedup.py` | 13 | 种子库去重校验（GAP-F10，v2.79.0）：内嵌 vs YAML 种子交叉比对命中重复/一致性差异 + 家族上限配置化生效（max_per_family 优先级/env 覆盖/缺省 15）+ 去重脚本 CLI 输出 |
+| `tests/scripts/test_verify_doc_consistency.py` | 30 | 文档一致性校验脚本（v2.100.1）：find_docs 扫描/元数据表格检查/文件存在性/01·06·07·08 断言/流程文档存在性/版本号一致性/run_all_checks 汇总/main CLI（--file 作用域 + --json + --fix-versions 成功与失败路径 + subprocess 列表参数回归——解释器路径含空格不再被 cmd 拆分） |
+| `tests/scripts/test_validate_sector_clusters.py` | 6 | 产业链分类聚类校验脚本（GAP-S05，v2.101.0）：return_corr 相关填 0 / 层次聚类分组 / ARI 一致性 / 主导簇纯度（单品种链跳过）/ 板块内外相关 / Markdown 报告章节 |
+| `tests/factor_engine/test_holdout_pool.py` | 9 | 盲测池机构标准（v2.81.0 建，v2.101.0 拆分农产品后核心链断言 农产品→畜牧）：规模 12~15/不与核心池·训练集重叠/全量内/去重/产业链覆盖≥8/核心链覆盖/大流动性代表/L2 训练充足 |
+| `tests/factor_engine/test_experiment_log.py` | 9 | 结构化实验日志（Phase 2 P1-2/26 计划 §7）：writer schema 4（分组与 by_method 汇总/幂等覆盖/非法 payload 跳过+warning/嵌套目录自动创建）+ `extract_scores` 2（指标映射 turnover←turnover_monthly/空评估默认 {}）+ EvolutionLoop 集成 3（record_variant 字段完整含 quality_grade 合并/export 落盘/run() finally 自动导出） |
+| `tests/factor_engine/test_evolution_stop.py` | 8 | 提前达标停止（Phase 3 P1-3/26 计划 §8）：`_maybe_early_stop` 3（连续 K 代零晋升触发+reason/中断晋升归零需重新累计/开关关闭恒 False 不累计）+ run() 集成 3（连续 K 代提前结束 early_stopped+代数正确/开关关闭跑满/提前停止后实验日志仍导出）+ FTSConfig 2（保守默认关闭 K=5/env 覆盖生效） |
 | `tests/factor_db/test_correlations.py` | ~8 | 因子相关性矩阵计算测试 |
 | `tests/factor_db/test_yaml_loader.py` | ~6 | YAML 种子因子加载测试 |
 | `tests/factor_engine/test_factor_lineage.py` | ~27 | 因子数据血缘审计（演化谱系/评估趋势/退化检测/批量审计） |
@@ -391,22 +427,53 @@ TOTAL                                      20326   1254    94%
 | `tests/test_stage5_risk_live.py` | ~27 | C.2 实盘对接（信号契约/风控/模拟适配/Live 偏离/指标/HTTP 端点）（v2.9.0） |
 | `tests/test_ml_models.py` | ~30 | ML 模型层（LightGBM/XGBoost 模型封装/训练管线/导入防护/降级回退）（v2.38.0） |
 | `tests/test_bridge.py` | ~25 | SignalBridge 信号桥接（JSON/Redis/REST 协议/格式转换/CLI 桥接命令/Redis 降级）（v2.38.0） |
-| `tests/factor_engine/test_factor_optimizer.py` | ~46 | 因子优化器（Phase1/Phase2 去重/剪枝/相关性缓存/数据版本/分类）（v2.47.0） |
+| `tests/factor_engine/test_factor_optimizer.py` | 51 | 因子优化器（Phase1/Phase2 去重/剪枝/相关性缓存/数据版本/分类）（v2.47.0；plans/29 P3-A 2026-08-11 同步断言 .npy→.parquet + 新增 TestFactorSignalCacheParquet 5：put 写 parquet 非 npy/磁盘重开读回/checksum 篡改判 miss 并删除/.npy 兼容回退并自动重建/clear 双格式清理） |
 | `tests/factor_engine/test_standardizer.py` | ~41 | 因子标准化器（6 种方法 fit/transform/边界/NaN）（v2.47.0） |
-| `tests/factor_engine/test_regime_hmm.py` | ~24 | 隐马尔可夫/马尔可夫切换市场制度（fit/predict/状态推断）（v2.47.0） |
+| `tests/factor_engine/test_regime_hmm.py` | 47 | 隐马尔可夫/马尔可夫切换市场制度（fit/predict/状态推断）（v2.47.0；plans/28 多周期 HMM 后验 regime_probs T2 用例扩增） |
+| `tests/factor_engine/test_regime_calibration.py` | 3 | 置信度熵标定 + 规则伪概率（plans/28 28-T5 新增）：熵惩罚折扣/无 probs 直通/规则伪概率归一化 |
+| `tests/factor_engine/test_regime_model_selection.py` | 2 | BIC 状态数选择（plans/28 28-T7 新增）：状态数确定/映射冻结防翻转 |
+| `tests/factor_engine/test_regime_validation.py` | 3 | 制度样本外有效性验证（plans/28 28-T9 新增）：IC/方向准确率/全制度概率比对 |
 | `tests/factor_engine/test_regime_features.py` | ~3 | 市场制度特征工程（补充用例）（v2.47.0） |
 | `tests/factor_engine/extractors/test_base.py` | ~26 | 提取器基类与管道抽象（LLM 提取全路径/YAML 转换/暂停持久化）（v2.47.0） |
 | `tests/factor_engine/extractors/test_stock_pipeline.py` | ~27 | 股票提取管道（v2.47.0） |
 | `tests/factor_engine/extractors/test_futures_pipeline.py` | ~27 | 期货提取管道（v2.47.0） |
-| `tests/scheduler/test_jobs.py` | ~30 | 调度任务定义（job 注册/运行/周期）（v2.47.0；v2.73.0 L3 期货路径 1 用例） |
+| `tests/scheduler/test_jobs.py` | ~35 | 调度任务定义（job 注册/运行/周期）（v2.47.0；v2.73.0 L3 期货路径 1 用例；v2.98.3 股票信号管道 3 用例 + 股票 L3 联动断言；v2.99.0 GAP-072 解绑断言——L3 job 不再联动信号管道（assert_not_called）、独立信号管道任务入口 called_once） |
 | `tests/factor_engine/test_weight_learning.py` | ~30 | 机构级权重学习（风险调整/滚动样本外验证/面板市场自动匹配/跨市场 IC）（v2.75.0；v2.78.1 默认关闭断言 2 用例） |
 
 | `tests/risk/test_risk_manager.py` | ~26 | 实盘风控管理器（限额/止损/连续亏损暂停/多层校验）（v2.47.0） |
-| `tests/monitor/test_prometheus_metrics.py` | ~38 | Prometheus 指标采集（指标注册/标签/时序）（v2.47.0） |
+| `tests/monitor/test_prometheus_metrics.py` | 42 | Prometheus 指标采集（指标注册/标签/时序）（v2.47.0；plans/28 28-T10 +4：record_regime_metrics 记录/render 输出 fts_regime_*/无 probs 确定性回退/同市场覆盖/空 market unknown 桶） |
 | `tests/test_cli_extra.py` | ~102 | CLI 补充（catalog/stats/cross-market/seeds 命令路径）（v2.47.0） |
-| `tests/test_data_futures.py` | ~72 | 期货数据层（K 线主路径/缓存/重试/并发写入队列）（v2.47.0） |
+| `tests/test_data_futures.py` | ~73 | 期货数据层（K 线主路径/缓存/重试/并发写入队列）（v2.47.0，v2.101.0 TestFromKlineCache 适配 11 列） |
+| `tests/test_data_futures_hold.py` | 15 | 期货持仓/结算接入（GAP-083 阶段 A+C，v2.101.0）：_from_kline_cache 真实优先/0 占位代理/NULL 代理/混合/双格式 RB0 优先/8 列契约 + 增强层注册（默认注册 TQSDK/启用注册 TQSDK+iFinD SDK/实例化失败跳过/导入失败降级）+ 有效值覆盖 4（hold/settle 正数-only、oi_change 任意有效、缺列 noop） |
+| `tests/data_sources/test_tqsdk_enhance_source.py` | 14 | 天勤 TQSDK 字段增强源（GAP-083 阶段 C，v2.101.0）：close_oi→hold+差分→oi_change/open_oi 回退/无持仓字段 None/零值→NaN/无账号 None/无映射 None/天勤异常 None + 符号映射 + is_available 三态 |
+| `tests/data_sources/test_ifind_sdk_source.py` | 20 | iFinD 官方 SDK 字段增强源（GAP-083 阶段 C 方案 A，v2.101.0）：符号映射（主连剥 0/具体合约/指数 CFX/未知 None）+ futures_get 解析（DataFrame/dict/无效值清理）+ 认证双模式（token/账号密码）+ 全降级路径（无 SDK/无凭据/无映射/登录失败/接口异常/空结果）+ is_available 三态 |
+| `tests/scripts/test_backfill_futures_hold.py` | 13 | AKShare 持仓/结算回填脚本（GAP-083 阶段 B，v2.101.0）：resolve_symbols/双格式 UPDATE/无效值跳过/dry-run/异常跳过/CLI + TestFetchHoldSettle 3（索引对齐回归/缺列补 0.0/空或缺 date） |
 | `tests/data_sources/test_tqsdk_source.py` | ~18 | 天勤 TQSDK 数据源（周期/探活/映射/fetch_ohlcv 全路径/认证）（v2.47.0） |
-| **合计** | **4038+** | |
+| `tests/factor_engine/test_position_rank_crowding.py` | ~15 | 会员持仓排名拥挤度（GAP-069 v2.101.0：契约字段/指标计算/信号方向/列映射归一化/交易所路由/AKShare Provider 降级） |
+| `tests/factor_engine/test_multi_frequency.py` | ~22 | 多频信号叠加与冲突消解（GAP-068 v2.101.0：分钟信号计算/四种聚合/叠加权重/三种冲突消解规则/分钟回测含成本方向/数据不足降级） |
+| `tests/factor_engine/test_black_litterman.py` | 22 | Black-Litterman 观点融合组合层（C3，2026-08-11）：闭式性质（隐含收益/后验 μ/Σ 解析解）/零观点退化=风险平价先验/观点方向一致性/置信度单调（omega_scale↓ 偏离先验↑）/约束投影/维度校验/奇异协方差兜底/NaN 清理/auto-views 构建/合成信号 bl 集成/显式 views 透传/回退路径 |
+| `tests/factor_engine/test_recalibration.py` | 18 | 在线重校准队列（C6，2026-08-11）：队列状态机（pending/processing/done/skipped/failed）/入队去重/JSON 幂等持久化/recalibrate 三态判定（提升→done/无提升→skipped/异常→failed）/process 队列回写 elite 元数据/DuckDB 同步/开关关闭跳过/CLI 命令/与 LiveVsBacktestICReport 触发联动 |
+| `tests/factor_engine/test_cost_calibration.py` | 20 | 回测成本实证化（C7，2026-08-11）：配置优先级（env>overrides>默认）/融资成本单调性（利率↑成本↑）/margin 按品种差异化/AdjustedMetrics 分项字段/成本构成明细/标定回归函数（合成样本直线拟合）/样本收集/数据不足降级/开关关闭 |
+| `tests/test_transformer_factor.py` | 21 | 轻量 Transformer 深度模型（C5，2026-08-11）：模型级 11（前向形状/seq·n_features 属性/线性目标学习/同 seed 可复现/因果掩码/常数列/未训练/非数值/维度/权重导出/工厂）+ DeepFactor 集成 6（契约字段/生成 code 经 `_execute_factor_code` 可执行/零未来函数截断一致性/确定性/短序列/默认 gru）+ EvolutionLoop 3（transformer 分派/失败降级/批次轮换含 transformer） |
+| `tests/factor_engine/test_microstructure_generator.py` | 20 | 微观结构因子生成器（C1，2026-08-11）：聚合正确性（全涨/全跌 tick → OFI 方向）/排除当日/批量生成全部 kinds/坏品种跳过/降级 3 项（空 tick/少行/少日）/code 可执行与窗口自适应/日期对齐/零未来截断一致性/覆盖外归零/执行器 datetime 注入 + CLI micro-generate 3 用例（无候选 rc=1/候选输出/JSON） |
+| `tests/factor_engine/test_alternative_sentiment.py` | 26 | 舆情情感因子生成器（C2，2026-08-11）：词典打分 7（积极/消极/中性/空/否定反转/混合/越界）/聚合（均值手算对照/变化率首日 0）/契约字段/全积极正向/全消极负向/批量全部 kinds/坏品种跳过/降级 4 项（空新闻/少记录/少日/缺列）/code 可执行与窗口自适应/零未来截断一致性/覆盖外归零 + CLI senti-generate 3 用例 |
+| `tests/factor_engine/test_operator_expansion.py` | 57 | C8 算子扩容（2026-08-11）：22 算子功能与边界（L1 时序 12：ts_argmin 窗口最左/ts_ema 平滑·常数恒等/ts_mad·ts_iqr 常数 0·波动正/ts_range 振幅·零均值兜底/ts_quantile_range q1-q0=max-min·非负/ts_return_over_max 恒≤0·新高≈0/ts_min_max_ratio/ts_std_ratio 平稳→高波动>1·常数 NaN/ts_roc_sum/ts_breakout 新高触发·常数不触发/ts_cumulative_return + L2 截面 4：rank·zscore 差分常数 0·手算一致/极端占比 [0,1]·尖峰检出/中位数偏离 + L3 条件 3：where_gt 边界·等于取 b/连续计数 1,2,0,1,2·截断·非 Series 降级/符号翻转计数 + L5 领域 3：均值回归=−zscore/趋势强度 [0,1]/量价压力正负·零量兜底）+ 双注册表一致（GP category=c8 22 项/DSL 102 项/verify consistent·mismatched 0/required_shared 全覆盖/GP 按名调用）+ 目录生成幂等（rows 覆盖 102/确定性/render 一致/含经济含义/main rc=0/subprocess CLI） |
+| `tests/test_http_server.py`（C8 增补） | +19 | 人审工作台端点（2026-08-11 C8 +14：REVIEW_HTML 内容 3/GET `/review`/GET `/api/review/pending`·异常降级/GET `/api/review/history`·连接关闭/POST approve·reject/缺 factor_id 400/未知路径 404；C8-2 机审 +5：pending mode+needs_human 标注/POST `/api/review/auto` 成功·manual 403·异常 500/页面含机审控件） |
+| `tests/factor_engine/test_auto_review.py` | 28 | C8-2 机审/人审可配置（2026-08-11）：classify 三态全分支 13（缺失 None/NaN/非数值/非有限/IC·Sharpe 超上限→人审；低质 IC·Sharpe 低于下限→驳回；正常→批准；边界相等→正常；env 覆盖·非法回退/默认）+ auto_review 主流程 10（正常批准 reviewer=auto/低质驳回/异常·缺失保持 pending/统计返回/manual 拒绝 ValueError/manual+force 覆盖/幂等二次/空队列/limit/load_review_mode 默认·env）+ CLI 4（成功 rc=0/manual 拒绝 rc=2/异常 rc=1/parser 含 auto 子命令）+ http_server 增补 5（pending mode+needs_human 标注/auto 成功/manual 403/异常 500/页面含机审控件） |
+| `tests/factor_engine/test_operator_expansion_c9.py` | 39 | C9 算子扩容二期（2026-08-11）：30 算子功能与边界（L1 时序 14：ts_pct_rank_window 常数 0.5 兜底/ts_zscore_rolling/ts_skew/ts_kurt 常数序列 std.where→0/ts_slope_pct/ts_position_in_range fillna 0.5/ts_down_ratio/ts_up_ratio/ts_gain_loss_ratio/ts_bias_ma/ts_boll_position fillna 0.0/ts_ma_diff/ts_vol_shrink/ts_tail_risk + L2 截面 5：cs_winsor_flag/cs_demean_ratio/cs_rank_norm 2*rank(pct)−1/cs_med_ratio/cs_extreme_gap fillna 0.0 + L3 条件 4：where_between/cross_above/cross_below/momentum_break + L5 领域 7：vol_regime 三态/mean_reversion_signal/price_volume_div/liquidity_dryup/self_corr/sign_entropy/reversal_strength）+ 双注册表一致（GP category=c9 30 项/DSL 132 项/verify consistent·mismatched 0/required_shared 全覆盖）+ 目录覆盖（rows≥132/确定性/含经济含义） |
+| `tests/factor_engine/test_operator_expansion_d10.py` | 85 | D10 波动/风险族扩容（2026-08-11，55 算子）：波动率估计 12（realized/ewma/parkinson/garman_klass/rogers_satchell/yang_zhang/downside/upside/vol_of_vol/bipower/range/harmonic 常数序列→0·NaN 兜底）+ 回撤类 8（drawdown/max_drawdown/avg_drawdown/drawdown_duration/ulcer_index 单调性·常数 0）+ VaR/CVaR 4（var_95/99 负值·cvar 尾部·常数 0）+ 比率类 15（sharpe/sortino 纯升序列≥0/calmar/profit_factor/omega/kelly 等有限兜底）+ 结构类 16（worst_day/best_day/win_rate/loss_rate/avg_gain/avg_loss/expectancy/recovery_factor/risk_return/downside_deviation/vol_ratio_ewma/realized_vol_pct/vol_zscore/vol_percentile/garch_proxy/vol_asymmetry/leverage_effect/baseline_vol/long_term_vol/short_term_vol/vol_term_structure/max_loss_ratio/beta_vol）+ 双注册表一致（GP category=d10 55 项/DSL 含全量/verify consistent·mismatched 0/required_shared 全覆盖） |
+| `tests/factor_engine/test_operator_expansion_d11.py` | 104 | D11 技术指标族扩容（2026-08-11，60 算子）：MACD 系 5（macd/signal/histogram 金叉死叉方向性）+ RSI 系 4（rsi/rsi_ma/rsi_slope/wilder_rsi 边界 [0,100]）+ 随机指标 3（%K/%D/%J 边界）+ 趋势 8（OBV/obv_slope/cci/atr/atr_pct/natr/bollinger_upper/lower 与 band_width/percent_b 边界）+ 摆动 10（aroon_up/down/oscillator/stoch_rsi 等）+ 高级 30（kst/vortex/ichimoku/sar/ppo/trix 等方向性·常数序列不抛异常）+ 双注册表一致（GP category=d11 60 项/DSL 全量/verify consistent·mismatched 0） |
+| `tests/factor_engine/test_operator_expansion_d12.py` | 121 | D12 动量/趋势族扩容（2026-08-11，55 算子）：动量多尺度 10（ts_mom_n/速度/加速度/急动度 单调性·方向性）+ 趋势强度 8（trend_strength/trend_persistence/momentum_consistency/curvature 趋势序列判定）+ 新高新低 10（new_high/low/count/ratio 单调性·常数 0）+ 唐奇安 6（donchian_upper/lower/mid/width 突破）+ ADX 系 6（adx/+di/−di 方向性）+ 分形/其他 15（fractal_dim/entropy 等有限兜底）+ 双注册表一致（GP category=d12 55 项/DSL 全量/verify consistent·mismatched 0） |
+| `tests/factor_engine/test_operator_expansion_d13_d17.py` | 432 | D13~D17 五族扩容（2026-08-11，215 算子，inspect 自动构造参数）：D13 截面/排名族 45（cs_rank_pct/cs_demean/cs_inv_rank/cs_signed_rank/cs_zscore 截面中心化·cs_rank_stability/cs_breadth_position）+ D14 条件/事件族 40（cross_above/below/ts_consecutive_increase 连续计数/state_duration/转折点/zizag/金叉死叉/突破跌破）+ D15 组合/跨序列族 50（cs_ratio/min/max/spread/ts_pair_corr/ts_beta/ts_alpha/ts_lead_lag_corr/ts_granger_proxy/ts_cointegration_proxy/基差 zscore 常数序列 _corr_clean 兜底）+ D16 量价/流动性族 40（amihud 非流动性/换手率/流动性 zscore/emv/量突破/量熵）+ D17 市场结构/分布族 35（市场广度/涨跌比/新高新低比/分散度/情绪得分/恐惧贪婪/制度持续）+ 每算子随机序列有限·常数序列不抛异常（inspect.signature 按参数名分配 series/volume/high/low/amount）+ 双注册表一致（GP category=d13~d17 215 项/DSL 全量/verify consistent·mismatched 0/required_shared 全覆盖）+ 冒烟（`scripts/verify_operator_expansion.py` -W error::RuntimeWarning 380 新算子 bad: NONE） |
+| `tests/factor_engine/test_microstructure_promotion.py` | 7 | C1 微观结构评估晋升接线（2026-08-11）：无候选全 skipped/评估 passed 晋升/failed 不晋升/eval 异常单跳过/audit 异常降级仍晋升/limit 截断/CLI parser 含 micro-evaluate |
+| `tests/factor_engine/test_simulated_approval.py` | 9 | 5 个待人工确认异常因子模拟审批（2026-08-11）：机审 classify 五类异常（缺失 IC/缺失 Sharpe/超上限 IC/超上限 Sharpe/NaN）全转人审/auto_review 后全部保持 pending 且入 needs_human（未落库）/模拟人工批准全流程落库 approved+队列清空（reviewer=alpha-board）/模拟人工驳回全流程落库 rejected/幂等覆盖（批准后驳回覆盖旧决定）/意见与审查人落盘 |
+| `tests/store/test_storage_registry.py` | 13 | 存储域注册表（plans/29 P0 基建，2026-08-11）：默认 storage_landscape.yaml 加载覆盖全部存储域/必填字段齐全/已知域路由/未知域抛错/契约校验零违规/legacy 必须声明 migrated_to/planned 必须声明 migrated_from/无绝对路径/summary 聚合/env 路径覆盖/缺失契约降级空表/from_dict 默认值与非法后端校验 |
+| `tests/scripts/test_migrate_elite_json_to_catalog.py` | 17 | P1 因子资产入库迁移脚本（plans/29 P1，2026-08-11）：差量补齐+status 子目录映射/幂等重跑/已存在校验零差异/字段差异报告/sync 更新漂移（update_catalog_status=False 保持 archived）/dry-run 不写/verify-only 只读/坏 JSON 跳过/孤儿报告/futures 市场路由/build_factor_dict·eval·verify 构建/verify 一致性与差异检测/CLI dry-run |
+| `tests/store/test_state_db.py` | 11 | 状态 KV 存储层（plans/29 P2，2026-08-11）：upsert 写当前表+追加历史返回 seq/get 命中与缺失/get_all namespace 聚合/同 key 覆盖 UPSERT/历史追加多条可回放/snapshot 全量 dump 对账/persist 重开连接读回/非 JSON 值序列化/历史过滤 limit |
+| `tests/scripts/test_migrate_state_to_duckdb.py` | 8 | P2 运行状态迁移脚本（plans/29 P2，2026-08-11）：发现规则 glob 展开+resolve 去重/迁移入库+读回对账/幂等重跑零重复/process 痕迹归档打包（复制语义不删源）/dry-run 不写/verify-only 只读/坏 JSON 跳过 |
+| `tests/scripts/test_archive_history_cold.py` | 7 | P3-B 行情库冷热归档脚本（plans/29 P3，2026-08-12）：年份统计（VARCHAR date cast）/min_year/dry-run 计数/空表抛错/归档-verify 闭环（cold_rows 一致+hot_remaining=0）/幂等重跑（文件跳过+零删除）/不一致检测（缺年份冷层） |
+| `tests/test_data_futures_fundamental.py` | 40 | 期货基本面 provider（库存/基差/仓单，GAP-083 补充 + GAP-091 关闭，2026-08-11）：品种解析 5 + 库存归一化 4 + 基差归一化 2 + 库存获取 7 + 基差获取 4 + 仓单 17（CZCE dict 聚合/缺品种/空表/非 dict + CZCE 成功/GFEX 成功/SHFE·DCE 东财路由/INE 东财小写码/无映射 EC 空/股指空/未知空/缓存/部分日失败跳过/核心子集全部路由/阶段 1 交易所映射覆盖/东财映射全覆盖/东财映射无孤儿）+ FTSDataProvider 挂接 2，全部 monkeypatch 隔离网络 |
+| **合计** | **5311+** | plans/28 追加：test_regime.py →86（T1~T6 扩增）、test_regime_hmm.py →47（T2 扩增）、新增 test_regime_calibration.py 3 + test_regime_model_selection.py 2 + test_regime_validation.py 3、test_portfolio_loop.py →217、test_portfolio_loop_adaptive.py →12、test_config_settings.py →65、test_prometheus_metrics.py →42（T10 +4）；plans/29 P1 追加：test_migrate_elite_json_to_catalog.py 17；plans/29 P2 追加：test_state_db.py 11 + test_migrate_state_to_duckdb.py 8；plans/29 P3-A 追加：test_factor_optimizer.py →51（TestFactorSignalCacheParquet +5）；plans/29 P3-B 追加：test_archive_history_cold.py 7；GAP-091 阶段 2 追加：test_data_futures_fundamental.py 36→40（+4：东财路由/INE/EC 空/映射覆盖） |
 |
 
 ---
@@ -418,6 +485,7 @@ TOTAL                                      20326   1254    94%
 3. **trace_id 验证**：测试必须验证 trace_id 是否正确传播
 4. **Verifier 锁定测试**：必须测试锁定后的只读行为
 5. **覆盖率门禁**：新增代码必须有对应测试，覆盖率不得低于模块当前水平
+6. **分级回归（2026-08-11 修订）**：日常任务只跑受影响的**模块/集成测试**；**全量回归**仅两类时机执行——① 发布前（版本 bump/晋级里程碑）必跑；② 每月底例行巡检一次。日常任务输出报告注明"模块/集成定向回归 N passed（未跑全量）"。
 
 ---
 
@@ -426,5 +494,5 @@ TOTAL                                      20326   1254    94%
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | `test_futures_signal_pipeline.py` → 21 个信号管道测试用例（Ridge 回归加权 + 方向校正 + 组合合成）；`test_data_fundamental.py` → 62 个基本面数据层测试用例；`test_loader.py` → 5 个种子加载测试（含基本面）；`test_seed_pool.py` → 种子池测试（含期货种子）；`factor_db/test_*` → 54 个 DuckDB 因子仓库测试用例；`test_gp_evolver.py::TestGpFactorExecutable` → 5 个 GP 因子代码可执行性测试用例（v2.8.4）；`test_expr_*.py` → FTS-Expr DSL 算子因子测试（v2.8.5）；`test_backtest_stage3.py` → 27 个 B.2 回测增强用例（v2.9.0）；`test_feedback_loop.py` → 20 个 C.3 反馈闭环用例（v2.9.0）；`test_cli_feature_gp.py` → 5 个 C.1 CLI 用例（v2.9.0）；`test_stage5_risk_live.py` → 27 个 C.2 实盘对接用例（v2.9.0）；`test_portfolio_loop.py` → 20 个漂移治理用例（粘性约束 7 + 漂移监控 7 + 影子池 6，v2.11.0）；`test_evolution_loop.py` → 4 个 L2 晋升双写原子化用例（DuckDB 失败回滚 JSON，v2.13.0）+ 2 个 factor_db_path 注入用例（GAP-030 测试隔离，v2.14.0）；`test_cross_market.py` → 20 个跨市场泛化验证用例（数据适配/分类/报告/加载/边缘情况/集成，v2.27.0）；`test_tdx_minute_source.py` → 29 个通达信分钟适配器用例（主力连续代码映射/列字典解析/周期映射，v2.30.0）；`test_tqsdk_tick_source.py` → 10 个 TQSDK tick 数据源用例（品种映射/tick 解析/tick_cache 迁移/降级链/Provider 接口，v2.31.0） |
-| 可验证断言 | 总测试数 = 4020+ passed, 0 failed, 0 skipped（v2.51.0 基线）；v2.54.0 精英因子全员质量巡检 230 因子——229 合格/1 出库（`volume_price_efficiency_ratio` V5 经济逻辑维度最低 1<2.0），质检报告 `reports/2026-08-09/elite_quality_inspection_20260809_075754.md`；v2.55.0 回溯分析确认 V5 为 LLM 评分缺陷（institutional 真实值应为 4），更新评分后重新质检通过 V5，因子归库；v2.57.0 行业/市值中性化 ~17 用例（feature_ops 2 + evaluation_chain 7 + config_settings 8）全绿；v2.58.0 换月复权/展期仿真 ~15 用例全绿；v2.59.0 GAP-F02/GAP-F03 用例全绿（test_backtest_pipeline 4 涨跌停/停牌拦截 + test_evolution_loop 3 板块中性化注入 + test_config_settings 4 配置默认值/env 覆盖）；v2.61.0 GAP-S01 股票中性化主流程用例全绿（test_evolution_loop 4 自动注入 + test_evaluation_chain 中性化前后 IC 对比）；v2.88.0 GAP-F16 全量回归 5132 passed 全绿，覆盖率 TOTAL 94.31%（`--cov-fail-under=90` 达标），14 个 <90% 缺口模块清零 |
+| 可验证断言 | 总测试数 = 4020+ passed, 0 failed, 0 skipped（v2.51.0 基线）；v2.54.0 精英因子全员质量巡检 230 因子——229 合格/1 出库（`volume_price_efficiency_ratio` V5 经济逻辑维度最低 1<2.0），质检报告 `reports/2026-08-09/elite_quality_inspection_20260809_075754.md`；v2.55.0 回溯分析确认 V5 为 LLM 评分缺陷（institutional 真实值应为 4），更新评分后重新质检通过 V5，因子归库；v2.57.0 行业/市值中性化 ~17 用例（feature_ops 2 + evaluation_chain 7 + config_settings 8）全绿；v2.58.0 换月复权/展期仿真 ~15 用例全绿；v2.59.0 GAP-F02/GAP-F03 用例全绿（test_backtest_pipeline 4 涨跌停/停牌拦截 + test_evolution_loop 3 板块中性化注入 + test_config_settings 4 配置默认值/env 覆盖）；v2.61.0 GAP-S01 股票中性化主流程用例全绿（test_evolution_loop 4 自动注入 + test_evaluation_chain 中性化前后 IC 对比）；v2.88.0 GAP-F16 全量回归 5132 passed 全绿，覆盖率 TOTAL 94.31%（`--cov-fail-under=90` 达标），14 个 <90% 缺口模块清零；v2.98.1 新增 test_portfolio_loop_market_ohlcv.py 3 用例（L3 期货路径 Step 0.5b 自动构建市场合成 OHLCV → Step 2.5 regime 调整触发 / 面板空跳过 / 显式传入优先），portfolio_loop 相关 238 passed 全绿；v2.98.3 股票 L3 早间调度 + 信号管道联动：test_jobs.py TestDailySignalPipeline 3 用例（成功/异常捕获/job 入口）+ TestL3PortfolioLoopStockJob.test_stock_path 联动断言，test_tasks.py l3_portfolio_loop_stock cron 08:30 断言，调度 72 passed 全绿；2026-08-11 算子库扩容：DSL 512 / GP 491，`verify_registry_consistency` consistent=True·mismatched=0，D10~D17 380 新算子 `scripts/verify_operator_expansion.py` -W error::RuntimeWarning 冒烟 bad: NONE，算子专项测试 838 passed（operator_expansion 57 + c9 39 + d10 85 + d11 104 + d12 121 + d13_d17 432），目录 `scripts/generate_operator_catalog.py` 512 行 |
 | 检验方式 | `python -m pytest tests/ --no-cov -q 2>&1 | Select-String "passed"` |

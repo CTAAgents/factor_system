@@ -1,6 +1,6 @@
 # C.4 算子演化引擎 — 详细技术设计（Phase 3+）
 
-> 版本: v2.89.0
+> 版本: v2.102.0
 > 关联: [C.1-feature-engineering-platform-design.md](file:///d:/Programs/factor_system/docs/harness/design/C.1-feature-engineering-platform-design.md)（特征工程中台）、`fts/factor_engine/expr_dsl/`（FTS-Expr DSL 基础层）
 > 状态: **已实现**（v2.10.0）
 > 实现说明: 由 `fts/factor_engine/operator_evolution.py`（`OperatorEvolutionEngine`）承担，在 DSL 算子空间做适应度导向的进化式搜索，产物为 **OPERATOR 类型因子**（`kind=OPERATOR`、携带 `expression`/`max_lookback`）。关闭 GAP-026（GP 引擎算子命名与 DSL 对齐：引擎直接以 DSL 注册表为算子空间）。
@@ -218,6 +218,36 @@ operator 模式 / hybrid fallback:
 - 引擎评估数据源与 `_run_gp_evolution` 一致（`self.data` + `self.forward_returns`）
 - 横截面模式用代表序列评估（与 micro_evolution 选 `cross_section_data` 首序列一致）
 - 产物仍走 Step 1.3 运行时校验 → 预筛选 → 微观演化 → 评估链 → Verifier → 准入的既有链路，**零侵入**
+
+---
+
+## 6.1 P0 修复契约（GAP-074，v2.100.0）
+
+> 背景: 2026-08-11 csi300 演化实测 50 代 elite_count=0。根因两处：① L2 父因子 UCT 统计仅在评估通过时更新，失败路径导致 `visits` 恒 0、`_select_parent_uct` 永远返回 `parents[0]`；② 算子演化种子仅由父因子 factor_id MD5 派生，同父因子不同代生成完全相同的表达式。
+
+### 6.1.1 UCT 失败反馈（P0-1）
+
+新增 `EvolutionLoop._update_uct_failure(parent)`：visits+1、正奖励不加（与 `_update_uct_stats` 的 reward 语义区分，失败不得获得正奖励）。接线三条 continue 路径：
+
+| 路径 | 位置 | 语义 |
+|:-----|:-----|:-----|
+| 演化失败 | `_evolve_one` 返回 None | 父因子被选中但未产出因子 |
+| 运行时校验失败 | Step 1.3 `runtime_ok=False` | 产物不合格 |
+| 快速预筛选失败 | Step 1.4 `prefilter_ok=False` | 产物 IC 不达标 |
+
+修复后 UCT 在 `visits==0` 优先探索的前提下，失败父因子 `visits` 递增，下一轮 `_select_parent_uct` 自然切换到下一个未访问父因子，129 个 elite 父因子逐轮覆盖，消除选择坍缩。
+
+### 6.1.2 种子注入代际（P0-2）
+
+`_try_operator_engine_evolution` 种子派生由 `md5(factor_id)` 改为 `md5(f"{factor_id}::{generation}")`。同父因子不同代产生不同搜索轨迹；同父同代仍完全可复现（确定性保留）。
+
+### 6.1.3 验收
+
+| # | 标准 | 检验方式 |
+|---|------|----------|
+| 1 | 失败父因子 visits 递增，`_select_parent_uct` 切换至下一未访问父因子 | 单元测试 |
+| 2 | 同父因子不同 generation → 引擎 random_seed 不同 | 单元测试 |
+| 3 | 同父因子同 generation → 种子一致（可复现性保留） | 单元测试 |
 
 ---
 

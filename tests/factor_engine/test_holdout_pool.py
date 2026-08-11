@@ -47,9 +47,9 @@ class TestHoldoutPoolDesign:
         assert len(covered) >= 8, f"盲测池产业链覆盖仅 {len(covered)}: {covered}"
 
     def test_sector_coverage_includes_major_chains(self) -> None:
-        """必须覆盖 黑色系/有色/农产品/煤化工 等核心产业链。"""
+        """必须覆盖 黑色系/有色/畜牧/煤化工 等核心产业链。"""
         h = set(FUTURES_HOLDOUT)
-        for required in ("黑色系", "有色金属", "农产品", "煤化工"):
+        for required in ("黑色系", "有色金属", "畜牧", "煤化工"):
             assert h & set(FUTURES_SECTOR_MAP[required]), f"盲测池未覆盖产业链: {required}"
 
     def test_contains_large_liquidity_representative(self) -> None:

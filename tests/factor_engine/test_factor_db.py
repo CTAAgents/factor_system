@@ -27,7 +27,6 @@ if str(_FTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_FTS_ROOT))
 
 from fts.factor_engine.factor_db.schema import (
-    DATABASE_PATH,
     init_database,
     verify_database,
 )
@@ -744,10 +743,16 @@ class TestRepositoryInit:
     """Repository 初始化测试。"""
 
     def test_default_database_path(self):
-        """测试默认数据库路径。"""
+        """测试默认数据库路径（分库后默认 market=stock）。"""
+        from fts.factor_engine.factor_db.schema import DATABASE_PATH_STOCK, DATABASE_PATH_FUTURES
+
         repo = FactorRepository()
-        assert repo._db_path == DATABASE_PATH
+        assert repo._db_path == DATABASE_PATH_STOCK
         repo.close()
+
+        repo_futures = FactorRepository(market="futures")
+        assert repo_futures._db_path == DATABASE_PATH_FUTURES
+        repo_futures.close()
 
     def test_custom_database_path(self, temp_db):
         """测试自定义数据库路径。"""

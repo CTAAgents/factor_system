@@ -244,7 +244,7 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
             data=data_df,
             forward_returns=fwd_ret,
             elite_dir=cfg.get_elite_dir("stock"),
-            memory_dir=cfg.memory_dir + "/evolution",
+            memory_dir=cfg.memory_dir + "/evolution/stock",
             llm_client=llm,
             seed_pool=seed_pool,
             verifier=verifier,
@@ -257,7 +257,10 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
         # ── 期货横截面模式（使用期货专用种子因子） ──
         print(f"[evolution] universe=futures (max_symbols={args.max_stocks})")
         panel, common_dates, fwd_ret = _prepare_futures_data(
-            days=500,
+            # GAP-073 (v2.98.0): 500→700 行（约 2.8 年，仍处 _build_wf_config 2 年分支）——
+            # 使冷启动 WalkForward 完整产出 4 个窗口（500 行仅 1 窗口，一致性判定失效）；
+            # 注意勿超 750 行，否则落入 3 年默认分支（window_days=1096 > 行数）产出 0 窗口。
+            days=700,
             max_symbols=args.max_stocks,
         )
         print(f"[evolution] 期货 panel symbols={len(panel)}, common_dates={len(common_dates)}")
@@ -276,7 +279,7 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
             data=data_df,
             forward_returns=fwd_ret,
             elite_dir=cfg.get_elite_dir("futures"),
-            memory_dir=cfg.memory_dir + "/evolution",
+            memory_dir=cfg.memory_dir + "/evolution/futures",
             llm_client=llm,
             seed_pool=seed_pool,
             n_trials_micro=min(args.max_generations * 3, 30),
@@ -305,7 +308,7 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
             data=data_df,
             forward_returns=fwd_ret,
             elite_dir=cfg.get_elite_dir("stock"),
-            memory_dir=cfg.memory_dir + "/evolution",
+            memory_dir=cfg.memory_dir + "/evolution/stock",
             llm_client=llm,
             seed_pool=seed_pool,
             verifier=verifier,
@@ -360,12 +363,12 @@ def _cmd_meta_loop_run(args: argparse.Namespace) -> int:
         # 创建 web_collector — 基于 FTSDataProvider 的市场快照采集
         from .factor_engine.meta_loop import _make_web_collector
 
-        web_collector = _make_web_collector(FTSDataProvider())
+        web_collector = _make_web_collector(FTSDataProvider(), market=market)
         print("[meta-loop] web_collector 已就绪 — 市场快照感知已启用")
 
         # MetaLoop
         loop = MetaLoop(
-            memory_dir=cfg.memory_dir + "/meta_loop",
+            memory_dir=cfg.memory_dir + f"/meta_loop/{market}",
             llm_client=llm,
             market=market,
             web_collector=web_collector,
@@ -446,6 +449,18 @@ def _cmd_data_sync(args: argparse.Namespace) -> int:
     symbols = getattr(args, "symbol", None)
     days = getattr(args, "days", 120)
     sync_futures_data_job(symbols=[symbols] if symbols else None, days=days)
+    return 0
+
+
+def _cmd_data_sync_stock(args: argparse.Namespace) -> int:
+    """`fts data sync-stock` — 主动同步股票/ETF 日 K 线数据到 DuckDB 缓存。"""
+    from fts.scheduler.jobs import sync_stock_data_job
+
+    trace_id = generate_trace_id()
+    print(f"trace_id={trace_id}")
+    max_stocks = getattr(args, "max_stocks", 50)
+    days = getattr(args, "days", 120)
+    sync_stock_data_job(max_stocks=max_stocks, days=days)
     return 0
 
 
@@ -578,7 +593,7 @@ def _cmd_data_fuse(args: argparse.Namespace) -> int:
 
 
 def _cmd_portfolio_run(args: argparse.Namespace) -> int:
-    """启动 L3 组合构建 → 期货信号管道（L3 完成后自动触发）。"""
+    """启动 L3 组合构建（GAP-072 与信号管道解绑：L3 仅组合权重，信号管道每日独立运行）。"""
     trace_id = generate_trace_id()
     run_id = generate_run_id()
     session_id = getattr(args, "session_id", "") or ""
@@ -609,7 +624,7 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
     try:
         loop = PortfolioLoop(
             elite_dir=elite_dir,
-            memory_dir=cfg.memory_dir + "/portfolio",
+            memory_dir=cfg.memory_dir + f"/portfolio/{universe}",
             verifier_config=verifier_cfg,
             synthesis_mode=synthesis_mode,
             optimizer_mode=optimizer_mode,
@@ -626,29 +641,17 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
                 print(f"[portfolio] 加载 returns-matrix: {factor_returns.shape}")
             except Exception as e:
                 print(f"[portfolio] returns-matrix 读取失败（跳过 optimizer/实测化输入）: {e}", file=sys.stderr)
-        result = loop.run(factor_returns=factor_returns)
+        result = loop.run(
+            factor_returns=factor_returns,
+            recompute_weights=(True if getattr(args, "force_recompute", False) else None),
+        )
         print(
             f"[portfolio] 完成: status={result.status} "
             f"factors={result.n_factors_retained} "
             f"sharpe={result.combo_sharpe:.4f}"
         )
-
-        # L3 完成后自动触发信号管道（期货/股票对称，GAP-I301）
-        if result.status in ("passed", "verifier_warning", "completed"):
-            if universe == "futures":
-                print("[portfolio] 触发期货信号生成管道...")
-                from scripts.futures_signal_pipeline import main as signal_main
-
-                rc = signal_main(max_symbols=82, days=120, universe="all")
-                if rc != 0:
-                    print(f"[portfolio] 信号管道异常退出: rc={rc}", file=sys.stderr)
-            elif universe == "stock":
-                print("[portfolio] 触发股票信号生成管道...")
-                from scripts.daily_signal_pipeline import main as stock_signal_main
-
-                rc = stock_signal_main(max_stocks=50, days=120)
-                if rc != 0:
-                    print(f"[portfolio] 信号管道异常退出: rc={rc}", file=sys.stderr)
+        if result.status == "frozen":
+            print("[portfolio] 权重冻结日：跳过组合重算（复用上次组合，GAP-072）；信号管道每日独立运行")
         return 0
     except Exception as e:  # noqa: BLE001
         print(f"[portfolio] 运行失败: {e}", file=sys.stderr)
@@ -699,36 +702,50 @@ def _cmd_scheduler_list(_args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_factor_repo():
-    """延迟加载 FactorRepository（避免 CLI 启动依赖 DuckDB）。"""
+def _load_factor_repo(market: str = "stock"):
+    """延迟加载 FactorRepository（避免 CLI 启动依赖 DuckDB）。
+
+    Args:
+        market: 市场类型（"stock" / "futures"），用于路由到对应分库文件。
+    """
     from .factor_engine.factor_db.repository import FactorRepository
 
-    return FactorRepository()
+    return FactorRepository(market=market)
 
 
-def _get_catalog_db_path() -> Path:
-    """获取因子目录数据库路径。"""
-    from .factor_engine.factor_db.schema import DATABASE_PATH
+def _get_catalog_db_path(market: str = "stock") -> Path:
+    """获取因子目录数据库路径（分市场）。
 
-    return Path(DATABASE_PATH)
+    Args:
+        market: 市场类型（"stock" / "futures"）。
+
+    Returns:
+        对应市场的 DuckDB 文件路径。
+    """
+    from .factor_engine.factor_db.schema import get_db_path
+
+    return Path(get_db_path(market))
 
 
 def _cmd_catalog_stats(args: argparse.Namespace) -> int:
     """查看因子存储统计（DuckDB + JSON 文件）。"""
     cfg = get_config()
-    db_path = _get_catalog_db_path()
 
-    # DuckDB 统计
-    stats: dict[str, Any] = {"database_path": str(db_path), "database_exists": db_path.exists()}
-    if db_path.exists():
-        try:
-            repo = _load_factor_repo()
-            duck_stats = repo.get_stats()
-            stats.update(duck_stats)
-            stats["database_size_mb"] = round(db_path.stat().st_size / (1024 * 1024), 2)
-        except Exception as e:
-            print(f"[catalog stats] DuckDB 读取失败: {e}", file=sys.stderr)
-            stats["duckdb_error"] = str(e)
+    # DuckDB 统计（分市场）
+    stats: dict[str, Any] = {}
+    for mkt in ("stock", "futures"):
+        db_path = _get_catalog_db_path(mkt)
+        mkt_key = f"{mkt}_database"
+        stats[mkt_key] = {"path": str(db_path), "exists": db_path.exists()}
+        if db_path.exists():
+            try:
+                repo = _load_factor_repo(market=mkt)
+                duck_stats = repo.get_stats()
+                stats[mkt_key].update(duck_stats)
+                stats[mkt_key]["size_mb"] = round(db_path.stat().st_size / (1024 * 1024), 2)
+            except Exception as e:
+                print(f"[catalog stats] {mkt} DuckDB 读取失败: {e}", file=sys.stderr)
+                stats[mkt_key]["error"] = str(e)
 
     # JSON 文件统计
     for market in ("stock", "futures"):
@@ -755,16 +772,22 @@ def _cmd_catalog_stats(args: argparse.Namespace) -> int:
         return 0
 
     print("=== 因子存储统计 ===")
-    print(f"数据库: {db_path}")
-    size_mb = float(stats.get("database_size_mb", 0) or 0)
-    print(f"  存在: {stats.get('database_exists', '?')}  大小: {size_mb:.1f} MB" if db_path.exists() else "  (不存在)")
-    if db_path.exists():
-        print(
-            f"  总因子: {stats.get('total_factors', '?')}  "
-            f"活跃: {stats.get('active_factors', '?')}  "
-            f"精英: {stats.get('elite_factors', '?')}"
-        )
-        print(f"  平均 Sharpe: {stats.get('avg_sharpe', '?')}  平均 IC: {stats.get('avg_ic', '?')}")
+    for mkt in ("stock", "futures"):
+        mkt_key = f"{mkt}_database"
+        db_info = stats.get(mkt_key, {})
+        db_path = db_info.get("path", "?")
+        print(f"\n{mkt.upper()} 数据库: {db_path}")
+        if db_info.get("exists"):
+            size_mb = float(db_info.get("size_mb", 0) or 0)
+            print(f"  大小: {size_mb:.1f} MB")
+            print(
+                f"  总因子: {db_info.get('total_factors', '?')}  "
+                f"活跃: {db_info.get('active_factors', '?')}  "
+                f"精英: {db_info.get('elite_factors', '?')}"
+            )
+            print(f"  平均 Sharpe: {db_info.get('avg_sharpe', '?')}  平均 IC: {db_info.get('avg_ic', '?')}")
+        else:
+            print("  (不存在)")
     for market in ("stock", "futures"):
         print(f"\n{market.upper()} JSON 文件:")
         print(f"  目录: {stats.get(f'{market}_json_dir', '?')}")
@@ -777,117 +800,141 @@ def _cmd_catalog_stats(args: argparse.Namespace) -> int:
 
 
 def _cmd_catalog_verify(args: argparse.Namespace) -> int:
-    """验证 JSON ↔ DuckDB 一致性。"""
+    """验证 JSON ↔ DuckDB 一致性（分市场校验）。"""
     cfg = get_config()
-    db_path = _get_catalog_db_path()
 
-    if not db_path.exists():
-        print("[catalog verify] ❌ DuckDB 数据库不存在", file=sys.stderr)
-        return 1
+    # 分市场校验
+    all_consistent = True
+    combined_result: dict[str, Any] = {"markets": {}}
 
-    try:
-        repo = _load_factor_repo()
-    except Exception as e:
-        print(f"[catalog verify] ❌ DuckDB 连接失败: {e}", file=sys.stderr)
-        return 1
+    for mkt in ("stock", "futures"):
+        db_path = _get_catalog_db_path(mkt)
+        mkt_result: dict[str, Any] = {"database_path": str(db_path)}
 
-    # 收集 DuckDB 中的 factor_id 集合
-    duck_ids: set[str] = set()
-    try:
-        conn = repo._get_conn()
-        rows = conn.execute("SELECT factor_id, name, market, is_elite, status FROM factor_catalog").fetchall()
-        for r in rows:
-            duck_ids.add(str(r[0]))
-    except Exception as e:
-        print(f"[catalog verify] ❌ DuckDB 查询失败: {e}", file=sys.stderr)
-        return 1
-
-    # 收集 JSON 文件中的 factor_id 集合
-    json_ids: dict[str, dict[str, str]] = {}  # factor_id -> {market, status}
-    for market in ("stock", "futures"):
-        elite_dir = Path(cfg.get_elite_dir(market))
-        if not elite_dir.exists():
+        if not db_path.exists():
+            mkt_result["error"] = "数据库不存在"
+            combined_result["markets"][mkt] = mkt_result
+            if getattr(args, "json", False):
+                combined_result["markets"][mkt] = mkt_result
+            print(f"[catalog verify] {mkt} DuckDB 数据库不存在: {db_path}", file=sys.stderr)
+            all_consistent = False
             continue
-        for fp in sorted(elite_dir.glob("*.json")):
-            if fp.name.startswith("_"):
-                continue
-            try:
-                data = json.loads(fp.read_text(encoding="utf-8"))
-                fid = data.get("factor_id", fp.stem)
-                json_ids[fid] = {
-                    "market": data.get("market", market),
-                    "status": data.get("status", "active"),
-                    "file": str(fp),
-                }
-            except Exception:
-                pass
 
-    # 比对
-    only_in_duckdb = duck_ids - json_ids.keys()
-    only_in_json = json_ids.keys() - duck_ids
-    common = duck_ids & json_ids.keys()
+        try:
+            repo = _load_factor_repo(market=mkt)
+        except Exception as e:
+            print(f"[catalog verify] {mkt} DuckDB 连接失败: {e}", file=sys.stderr)
+            mkt_result["error"] = str(e)
+            combined_result["markets"][mkt] = mkt_result
+            all_consistent = False
+            continue
 
-    result: dict[str, Any] = {
-        "duckdb_total": len(duck_ids),
-        "json_total": len(json_ids),
-        "common": len(common),
-        "only_in_duckdb": len(only_in_duckdb),
-        "only_in_json": len(only_in_json),
-        "consistent": len(only_in_duckdb) == 0 and len(only_in_json) == 0,
-        "duckdb_only_samples": sorted(only_in_duckdb)[:10] if only_in_duckdb else [],
-        "json_only_samples": sorted(only_in_json)[:10] if only_in_json else [],
-    }
+        # 收集 DuckDB 中的 factor_id 集合
+        duck_ids: set[str] = set()
+        try:
+            conn = repo._get_conn()
+            rows = conn.execute("SELECT factor_id, name, market, is_elite, status FROM factor_catalog").fetchall()
+            for r in rows:
+                duck_ids.add(str(r[0]))
+        except Exception as e:
+            print(f"[catalog verify] {mkt} DuckDB 查询失败: {e}", file=sys.stderr)
+            mkt_result["error"] = str(e)
+            combined_result["markets"][mkt] = mkt_result
+            all_consistent = False
+            continue
 
+        # 收集 JSON 文件中的 factor_id 集合
+        json_ids: dict[str, dict[str, str]] = {}
+        elite_dir = Path(cfg.get_elite_dir(mkt))
+        if elite_dir.exists():
+            for fp in sorted(elite_dir.glob("*.json")):
+                if fp.name.startswith("_"):
+                    continue
+                try:
+                    data = json.loads(fp.read_text(encoding="utf-8"))
+                    fid = data.get("factor_id", fp.stem)
+                    json_ids[fid] = {
+                        "market": data.get("market", mkt),
+                        "status": data.get("status", "active"),
+                        "file": str(fp),
+                    }
+                except Exception:
+                    pass
+
+        # 比对
+        only_in_duckdb = duck_ids - json_ids.keys()
+        only_in_json = json_ids.keys() - duck_ids
+        common = duck_ids & json_ids.keys()
+        consistent = len(only_in_duckdb) == 0 and len(only_in_json) == 0
+
+        mkt_result.update({
+            "duckdb_total": len(duck_ids),
+            "json_total": len(json_ids),
+            "common": len(common),
+            "only_in_duckdb": len(only_in_duckdb),
+            "only_in_json": len(only_in_json),
+            "consistent": consistent,
+            "duckdb_only_samples": sorted(only_in_duckdb)[:10] if only_in_duckdb else [],
+            "json_only_samples": sorted(only_in_json)[:10] if only_in_json else [],
+        })
+        combined_result["markets"][mkt] = mkt_result
+        if not consistent:
+            all_consistent = False
+
+        if getattr(args, "json", False):
+            continue
+
+        print(f"\n=== {mkt.upper()} JSON ↔ DuckDB 一致性校验 ===")
+        print(f"  DuckDB 因子数: {mkt_result['duckdb_total']}")
+        print(f"  JSON 文件数:   {mkt_result['json_total']}")
+        print(f"  交集:          {mkt_result['common']}")
+        print(f"  仅 DuckDB 有:  {mkt_result['only_in_duckdb']}")
+        print(f"  仅 JSON 有:    {mkt_result['only_in_json']}")
+        if consistent:
+            print("  ✅ 一致")
+        else:
+            print("  ⚠️ 不一致")
+            if mkt_result["duckdb_only_samples"]:
+                print(f"  DuckDB 独有 (前10): {', '.join(mkt_result['duckdb_only_samples'])}")
+            if mkt_result["json_only_samples"]:
+                for fid in mkt_result["json_only_samples"]:
+                    info = json_ids.get(fid, {})
+                    print(f"  JSON 独有: {fid} ({info.get('file', '?')})")
+
+    combined_result["all_consistent"] = all_consistent
     if getattr(args, "json", False):
-        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
-        return 0
-
-    print("=== JSON ↔ DuckDB 一致性校验 ===")
-    print(f"  DuckDB 因子数: {result['duckdb_total']}")
-    print(f"  JSON 文件数:   {result['json_total']}")
-    print(f"  交集:          {result['common']}")
-    print(f"  仅 DuckDB 有:  {result['only_in_duckdb']}")
-    print(f"  仅 JSON 有:    {result['only_in_json']}")
-    if result["consistent"]:
-        print("  ✅ 一致")
-    else:
-        print("  ⚠️ 不一致")
-        if result["duckdb_only_samples"]:
-            print(f"  DuckDB 独有 (前10): {', '.join(result['duckdb_only_samples'])}")
-        if result["json_only_samples"]:
-            for fid in result["json_only_samples"]:
-                info = json_ids.get(fid, {})
-                print(f"  JSON 独有: {fid} ({info.get('file', '?')})")
-    return 0 if result["consistent"] else 1
+        print(json.dumps(combined_result, indent=2, ensure_ascii=False, default=str))
+    return 0 if all_consistent else 1
 
 
 def _cmd_catalog_backup(args: argparse.Namespace) -> int:
-    """备份因子存储（DuckDB + JSON 文件）。"""
+    """备份因子存储（DuckDB + JSON 文件，分市场）。"""
     from datetime import datetime
     import shutil
 
     cfg = get_config()
-    db_path = _get_catalog_db_path()
     backup_dir = Path("data/backups")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_dir.mkdir(parents=True, exist_ok=True)
 
     results: dict[str, Any] = {"timestamp": timestamp, "backup_dir": str(backup_dir)}
 
-    # 1. 备份 DuckDB
-    if db_path.exists():
-        db_backup = backup_dir / f"factor_catalog.duckdb.{timestamp}"
-        try:
-            shutil.copy2(str(db_path), str(db_backup))
-            db_size_mb = round(db_path.stat().st_size / (1024 * 1024), 2)
-            results["duckdb_backup"] = str(db_backup)
-            results["duckdb_size_mb"] = db_size_mb
-            print(f"  ✅ DuckDB: {db_backup.name} ({db_size_mb:.1f} MB)")
-        except Exception as e:
-            print(f"  ❌ DuckDB 备份失败: {e}", file=sys.stderr)
-            results["duckdb_error"] = str(e)
-    else:
-        print("  ⚠️ DuckDB 数据库不存在，跳过备份")
+    # 1. 备份 DuckDB（分市场）
+    for mkt in ("stock", "futures"):
+        db_path = _get_catalog_db_path(mkt)
+        if db_path.exists():
+            db_backup = backup_dir / f"factor_catalog_{mkt}.duckdb.{timestamp}"
+            try:
+                shutil.copy2(str(db_path), str(db_backup))
+                db_size_mb = round(db_path.stat().st_size / (1024 * 1024), 2)
+                results[f"{mkt}_duckdb_backup"] = str(db_backup)
+                results[f"{mkt}_duckdb_size_mb"] = db_size_mb
+                print(f"  ✅ {mkt.upper()} DuckDB: {db_backup.name} ({db_size_mb:.1f} MB)")
+            except Exception as e:
+                print(f"  ❌ {mkt} DuckDB 备份失败: {e}", file=sys.stderr)
+                results[f"{mkt}_duckdb_error"] = str(e)
+        else:
+            print(f"  ⚠️ {mkt} DuckDB 数据库不存在，跳过备份")
 
     # 2. 备份 JSON 文件
     for market in ("stock", "futures"):
@@ -1068,7 +1115,7 @@ def _cmd_factor_stats(args: argparse.Namespace) -> int:
     market = getattr(args, "market", None)
     min_sharpe = getattr(args, "min_sharpe", 0.0)
     try:
-        repo = _load_factor_repo()
+        repo = _load_factor_repo(market=market or "stock")
         dist = repo.get_family_distribution(market=market, min_sharpe=min_sharpe)
     except Exception as e:  # noqa: BLE001
         print(f"[factor stats] 查询失败: {e}", file=sys.stderr)
@@ -1121,6 +1168,7 @@ def _cmd_factor_lineage(args: argparse.Namespace) -> int:
     """查询单个因子的演化血缘（DuckDB 模式）。"""
     factor_id = args.factor_id
     try:
+        # lineage 查询默认使用 stock 库，如果需要跨市场可指定 --market 参数
         repo = _load_factor_repo()
         lineage = repo.get_factor_lineage(factor_id)
     except Exception as e:  # noqa: BLE001
@@ -1228,6 +1276,255 @@ def _cmd_factor_review_reject(args: argparse.Namespace) -> int:
     workflow = FactorReviewWorkflow(db_path=args.db)
     result = workflow.reject(args.factor_id, comment=args.comment)
     print(f"[review] ❌ 已驳回 {result['factor_id']}: decision={result['decision']} (comment={args.comment or '-'})")
+    return 0
+
+
+def _cmd_factor_review_auto(args: argparse.Namespace) -> int:
+    """批量机审（C8-2）：正常自动批准、低质自动驳回、异常值转人审。
+
+    默认机审（FTS_REVIEW_MODE=auto）；manual 模式需 --force 显式覆盖。
+    """
+    from .factor_engine.factor_inspector import FactorReviewWorkflow
+
+    workflow = FactorReviewWorkflow(db_path=args.db)
+    try:
+        result = workflow.auto_review(limit=args.limit, force=args.force)
+    except ValueError as e:  # manual 模式拒绝
+        print(f"[review] ⚠️ {e}", file=sys.stderr)
+        return 2
+    except Exception as e:  # noqa: BLE001
+        print(f"[review] 机审执行失败: {e}", file=sys.stderr)
+        return 1
+    print(
+        f"[review] 机审完成 (mode={result['mode']}): 处理 {result['total_pending']} 个待审因子 "
+        f"| ✅ 自动批准 {result['auto_approved']} | ❌ 自动驳回 {result['auto_rejected']} "
+        f"| 🧐 转人审 {len(result['needs_human'])}"
+    )
+    for f in result["needs_human"][:20]:
+        print(f"  - 转人审 {f['factor_id']}: {f['reason']}")
+    return 0
+
+
+def _cmd_factor_recalibrate_list(args: argparse.Namespace) -> int:
+    """列出待重校准因子队列（C6）。"""
+    import json as _json
+
+    from .factor_engine.recalibration import RecalibrationQueue
+
+    queue = RecalibrationQueue(args.queue).list_pending(limit=args.limit)
+    if args.json:
+        print(_json.dumps([i.to_dict() for i in queue], ensure_ascii=False, indent=2))
+        return 0
+    if not queue:
+        print("[recalibrate] 重校准队列为空（无 pending 项）")
+        return 0
+    print(f"=== 待重校准因子队列 ({len(queue)}) ===")
+    for item in queue:
+        print(
+            f"  - {item.factor_id} | {item.name or '-'} | reason={item.reason or '-'} "
+            f"| created_at={item.created_at}"
+        )
+    return 0
+
+
+def _cmd_factor_recalibrate_run(args: argparse.Namespace) -> int:
+    """处理重校准队列：微调 + 回写 elite 元数据（C6）。"""
+    from .factor_engine.recalibration import (
+        RecalibrationConfig,
+        RecalibrationQueue,
+        process_recalibration_queue,
+    )
+
+    cfg = RecalibrationConfig(
+        n_trials=args.trials,
+        coarse_trials=args.coarse_trials,
+        min_ic_gap=args.min_ic_gap,
+        queue_path=args.queue,
+    )
+    # 数据加载（期货主力，4 级降级链含合成兜底）
+    from fts.data_futures import FuturesDataProvider
+
+    df = FuturesDataProvider().get_ohlcv(args.symbol, days=args.days)
+    if df is None or len(df) < 20:
+        print(f"[recalibrate] 数据不足: symbol={args.symbol} days={args.days}", file=sys.stderr)
+        return 1
+    close = df["close"]
+    horizon = max(1, args.horizon)
+    forward_returns = (close.shift(-horizon) / close - 1.0).to_numpy(dtype=float)
+
+    elite_dir = args.elite_dir
+    if not elite_dir:
+        from fts.config.settings import FTSConfig
+
+        elite_dir = FTSConfig().futures_elite_dir
+    stats = process_recalibration_queue(
+        elite_dir,
+        df,
+        forward_returns,
+        config=cfg,
+        queue=RecalibrationQueue(args.queue),
+        factor_db_path=args.db,
+        dry_run=args.dry_run,
+    )
+    print(f"[recalibrate] 处理完成: {stats}" + ("（dry-run，未落盘）" if args.dry_run else ""))
+    return 0
+
+
+def _cmd_factor_micro_generate(args: argparse.Namespace) -> int:
+    """生成微观结构因子候选（C1：tick → 日频聚合 → FactorProgram，独立候选源）。"""
+    from fts.factor_engine.microstructure_generator import (
+        MicrostructureFactorGenerator,
+    )
+
+    gen = MicrostructureFactorGenerator()
+    cands = gen.generate_batch(symbols=args.symbols, trace_id="cli_micro_generate")
+    if not cands:
+        print("[micro-generate] 无候选生成（tick 数据不足，见日志）", file=sys.stderr)
+        return 1
+    if args.limit > 0:
+        cands = cands[: args.limit]
+    if args.json:
+        import json
+
+        payload = [
+            {
+                "factor_id": c.factor["factor_id"],
+                "name": c.factor["name"],
+                "symbol": c.symbol,
+                "kind": c.kind,
+                "n_days": c.n_days,
+                "date_start": c.factor["params"]["dates"][0],
+                "date_end": c.factor["params"]["dates"][-1],
+            }
+            for c in cands
+        ]
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"=== 微观结构因子候选 ({len(cands)}) ===")
+        for c in cands:
+            f = c.factor
+            dates = f["params"]["dates"]
+            print(
+                f"  - {f.get('name')} [{f['factor_id']}] "
+                f"days={c.n_days} ({dates[0]} ~ {dates[-1]})"
+            )
+    return 0
+
+
+def _cmd_factor_micro_evaluate(args: argparse.Namespace) -> int:
+    """C1 评估晋升接线：microstructure 候选 → L2 评估链 → 审计 → elite。"""
+    from .factor_engine.evolution_loop import EvolutionLoop
+
+    panel, common_dates, fwd_ret = _prepare_futures_data(days=700, max_symbols=args.max_symbols)
+    print(f"[micro-evaluate] futures panel symbols={len(panel)}, common_dates={len(common_dates)}")
+
+    first_sym = list(panel.keys())[0]
+    loop = EvolutionLoop(
+        data=panel[first_sym],
+        forward_returns=fwd_ret,
+        elite_dir=args.elite_dir or get_config().get_elite_dir("futures"),
+        memory_dir=get_config().memory_dir + "/evolution/futures",
+        llm_client=get_default_llm_client(),
+        seed_pool=SeedPool(market="futures"),
+        n_trials_micro=10,
+        cross_section_data=panel,
+        cross_section_dates=common_dates,
+        market="futures",
+    )
+    result = loop.run_microstructure_promotion(symbols=args.symbols or None, limit=args.limit, trace_id="cli_micro_evaluate")
+    print(
+        f"[micro-evaluate] 生成 {result['generated']} | 评估 {result['evaluated']} "
+        f"| 过门槛 {result['passed']} | 晋升 {result['promoted']} | 跳过 {result['skipped']}"
+    )
+    for fid in result["promoted_ids"]:
+        print(f"  - ✅ 晋升 elite: {fid}")
+    return 0
+
+
+def _cmd_factor_senti_generate(args: argparse.Namespace) -> int:
+    """生成舆情情感因子候选（C2：新闻 → 词典打分 → 日频聚合 → FactorProgram）。"""
+    from fts.factor_engine.alternative_sentiment import SentimentFactorGenerator
+
+    gen = SentimentFactorGenerator()
+    cands = gen.generate_batch(symbols=args.symbols, trace_id="cli_senti_generate")
+    if not cands:
+        print("[senti-generate] 无候选生成（新闻数据不足，见日志）", file=sys.stderr)
+        return 1
+    if args.limit > 0:
+        cands = cands[: args.limit]
+    if args.json:
+        import json
+
+        payload = [
+            {
+                "factor_id": c.factor["factor_id"],
+                "name": c.factor["name"],
+                "symbol": c.symbol,
+                "kind": c.kind,
+                "n_days": c.n_days,
+                "date_start": c.factor["params"]["dates"][0],
+                "date_end": c.factor["params"]["dates"][-1],
+            }
+            for c in cands
+        ]
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"=== 舆情情感因子候选 ({len(cands)}) ===")
+        for c in cands:
+            f = c.factor
+            dates = f["params"]["dates"]
+            print(
+                f"  - {f.get('name')} [{f['factor_id']}] "
+                f"days={c.n_days} ({dates[0]} ~ {dates[-1]})"
+            )
+    return 0
+
+
+def _cmd_factor_senti_consistency(args: argparse.Namespace) -> int:
+    """C2 LLM 精修：词典打分与 LLM 抽样标注一致性验证（验收 ≥0.7）。"""
+    from .factor_engine.alternative_sentiment import (
+        EastmoneyNewsProvider,
+        evaluate_lexicon_consistency,
+    )
+    from .llm import get_default_llm_client
+
+    provider = EastmoneyNewsProvider()
+    symbols = list(args.symbols) if args.symbols else []
+    if not symbols:
+        try:
+            from fts.data_futures import get_dynamic_core_subset
+
+            symbols = get_dynamic_core_subset()
+        except Exception:  # noqa: BLE001 — 动态池异常回退空
+            symbols = []
+    texts: list[str] = []
+    for symbol in symbols[: args.max_symbols or 25]:
+        try:
+            df = provider.fetch_news(symbol=symbol, lookback_days=args.lookback_days)
+        except Exception as e:  # noqa: BLE001 — 单品种抓取失败跳过
+            print(f"[senti-consistency] {symbol} 抓取失败: {e}")
+            continue
+        if df is None or df.empty:
+            continue
+        for row in df.itertuples(index=False):
+            t = str(getattr(row, "title", "") or "").strip()
+            s = str(getattr(row, "summary", "") or "").strip()
+            if t:
+                texts.append(t)
+            elif s:
+                texts.append(s)
+    if not texts:
+        print("[senti-consistency] 无新闻样本（网络/数据不足），跳过", file=sys.stderr)
+        return 1
+    if args.sample > 0:
+        texts = texts[: args.sample]
+    llm = get_default_llm_client()
+    res = evaluate_lexicon_consistency(texts, llm, min_consistency=args.min_consistency)
+    print(
+        f"[senti-consistency] 样本 {res['total']} | 有效标注 {res['valid']} "
+        f"| 一致 {res['agreement']} | 一致率 {res['agreement_rate']:.2%} "
+        f"| 阈值 {res['min_consistency']:.0%} | {'✅ 达标' if res['passed'] else '❌ 未达标'}"
+    )
     return 0
 
 
@@ -1361,7 +1658,7 @@ def _load_factor_by_id(factor_id: str, market: str = "futures") -> dict | None:
             except Exception:  # noqa: BLE001
                 pass
     try:
-        repo = _load_factor_repo()
+        repo = _load_factor_repo(market=market)
         return repo.get_by_id(factor_id, market=market)
     except Exception as e:  # noqa: BLE001
         print(f"[backtest] 因子加载失败: {e}", file=sys.stderr)
@@ -2049,11 +2346,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--optimizer-mode",
         type=str,
         default=None,
-        choices=["risk_parity", "mvo"],
-        help="optimizer 目标模式（GAP-I302，默认 risk_parity；mvo=均值方差）",
+        choices=["risk_parity", "mvo", "bl"],
+        help="optimizer 目标模式（GAP-I302，默认 risk_parity；mvo=均值方差；bl=Black-Litterman 观点融合，C3）",
     )
     p_port_run.add_argument(
         "--returns-matrix", type=str, default=None, help="因子收益矩阵 CSV 路径（optimizer 模式与实测化输入，可选）"
+    )
+    p_port_run.add_argument(
+        "--force-recompute",
+        action="store_true",
+        help="强制全量重算组合权重（GAP-072，默认按 l3_weight_recompute_cadence 自动判定：weekly 仅周五重算，其余日冻结）",
     )
     p_port_run.set_defaults(func=_cmd_portfolio_run)
 
@@ -2169,6 +2471,80 @@ def build_parser() -> argparse.ArgumentParser:
     p_rev_reject.add_argument("--comment", default="", help="审查意见")
     p_rev_reject.add_argument("--db", default=None, help="DuckDB 文件路径")
     p_rev_reject.set_defaults(func=_cmd_factor_review_reject)
+
+    p_rev_auto = review_sub.add_parser("auto", help="批量机审（C8-2）：正常自动批准/低质自动驳回/异常转人审")
+    p_rev_auto.add_argument("--limit", type=int, default=200, help="处理队列上限（默认 200）")
+    p_rev_auto.add_argument("--force", action="store_true", help="manual（纯人审）模式下强制运行机审")
+    p_rev_auto.add_argument("--db", default=None, help="DuckDB 文件路径")
+    p_rev_auto.set_defaults(func=_cmd_factor_review_auto)
+
+    # factor recalibrate（C6 自动重校准队列）
+    p_factor_recal = factor_sub.add_parser("recalibrate", help="因子自动重校准（C6）")
+    recal_sub = p_factor_recal.add_subparsers(dest="subcommand", required=True)
+
+    p_recal_list = recal_sub.add_parser("list", help="列出待重校准队列")
+    p_recal_list.add_argument("--queue", default="memory/portfolio/recalibration_queue.json", help="队列 JSON 路径")
+    p_recal_list.add_argument("--limit", type=int, default=50, help="显示上限（默认 50）")
+    p_recal_list.add_argument("--json", action="store_true", help="JSON 格式输出")
+    p_recal_list.set_defaults(func=_cmd_factor_recalibrate_list)
+
+    p_recal_run = recal_sub.add_parser("run", help="处理重校准队列（微调 + 回写 elite）")
+    p_recal_run.add_argument("--queue", default="memory/portfolio/recalibration_queue.json", help="队列 JSON 路径")
+    p_recal_run.add_argument("--elite-dir", default=None, help="elite 因子目录（默认期货 elite）")
+    p_recal_run.add_argument("--symbol", default="rb", help="数据品种（主连，默认 rb）")
+    p_recal_run.add_argument("--days", type=int, default=300, help="回溯交易日数（默认 300）")
+    p_recal_run.add_argument("--horizon", type=int, default=5, help="前向收益持有期（默认 5）")
+    p_recal_run.add_argument("--trials", type=int, default=40, help="精筛试验数（默认 40）")
+    p_recal_run.add_argument("--coarse-trials", type=int, default=20, help="粗筛试验数（默认 20）")
+    p_recal_run.add_argument("--min-ic-gap", type=float, default=0.0, help="微调后 IC 提升下限（默认 0.0）")
+    p_recal_run.add_argument("--db", default=None, help="DuckDB 路径（存在时同步 metadata）")
+    p_recal_run.add_argument("--dry-run", action="store_true", help="只评估不落盘（不回写队列/elite）")
+    p_recal_run.set_defaults(func=_cmd_factor_recalibrate_run)
+
+    # factor micro-generate（C1 微观结构因子候选生成）
+    p_factor_micro = factor_sub.add_parser(
+        "micro-generate", help="生成微观结构因子候选（C1，tick→日频聚合）"
+    )
+    p_factor_micro.add_argument(
+        "--symbols", nargs="*", default=None, help="品种清单（默认动态池 25 品种）"
+    )
+    p_factor_micro.add_argument("--limit", type=int, default=0, help="最多输出候选数（0=全部）")
+    p_factor_micro.add_argument("--json", action="store_true", help="JSON 格式输出")
+    p_factor_micro.set_defaults(func=_cmd_factor_micro_generate)
+
+    # factor micro-evaluate（C1 评估晋升接线）
+    p_factor_micro_ev = factor_sub.add_parser(
+        "micro-evaluate", help="评估并晋升微观结构候选（C1：L2 评估链 → 审计 → elite）"
+    )
+    p_factor_micro_ev.add_argument(
+        "--symbols", nargs="*", default=None, help="品种清单（默认动态池）"
+    )
+    p_factor_micro_ev.add_argument("--limit", type=int, default=0, help="最多评估候选数（0=全部）")
+    p_factor_micro_ev.add_argument("--max-symbols", type=int, default=0, help="面板最大品种数（0=全部）")
+    p_factor_micro_ev.add_argument("--elite-dir", type=str, default="", help="elite 目录（默认期货 elite 目录）")
+    p_factor_micro_ev.set_defaults(func=_cmd_factor_micro_evaluate)
+
+    # factor senti-generate（C2 舆情情感因子候选生成）
+    p_factor_senti = factor_sub.add_parser(
+        "senti-generate", help="生成舆情情感因子候选（C2，新闻→词典打分→日频聚合）"
+    )
+    p_factor_senti.add_argument(
+        "--symbols", nargs="*", default=None, help="品种清单（默认动态池 25 品种）"
+    )
+    p_factor_senti.add_argument("--limit", type=int, default=0, help="最多输出候选数（0=全部）")
+    p_factor_senti.add_argument("--json", action="store_true", help="JSON 格式输出")
+    p_factor_senti.set_defaults(func=_cmd_factor_senti_generate)
+
+    # factor senti-consistency（C2 LLM 精修：词典-LLM 一致性验收）
+    p_factor_senti_cc = factor_sub.add_parser(
+        "senti-consistency", help="词典打分与 LLM 标注一致性验证（C2 验收 ≥0.7）"
+    )
+    p_factor_senti_cc.add_argument("--symbols", nargs="*", default=None, help="品种清单（默认动态池）")
+    p_factor_senti_cc.add_argument("--sample", type=int, default=50, help="抽样文本数（默认 50）")
+    p_factor_senti_cc.add_argument("--lookback-days", type=int, default=63, help="新闻回看天数")
+    p_factor_senti_cc.add_argument("--max-symbols", type=int, default=25, help="最多抓取品种数")
+    p_factor_senti_cc.add_argument("--min-consistency", type=float, default=0.7, help="一致性达标阈值（默认 0.7）")
+    p_factor_senti_cc.set_defaults(func=_cmd_factor_senti_consistency)
 
     # seed（种子因子管理）
     p_seed = sub.add_parser("seed", help="种子因子管理（验证/报告/去重）")
@@ -2343,6 +2719,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_data_sync.add_argument("--days", type=int, default=120, help="回溯天数（默认 120）")
     p_data_sync.add_argument("--json", action="store_true", help="JSON 格式输出")
     p_data_sync.set_defaults(func=_cmd_data_sync)
+
+    p_data_sync_stock = data_sub.add_parser("sync-stock", help="主动同步股票/ETF 日 K 线数据")
+    p_data_sync_stock.add_argument("--max-stocks", type=int, default=50, help="最大成分股数（默认 50）")
+    p_data_sync_stock.add_argument("--days", type=int, default=120, help="回溯天数（默认 120）")
+    p_data_sync_stock.add_argument("--json", action="store_true", help="JSON 格式输出")
+    p_data_sync_stock.set_defaults(func=_cmd_data_sync_stock)
 
     p_data_cc = data_sub.add_parser("cross-check", help="对指定 symbol+date 做多源交叉验证")
     p_data_cc.add_argument("--symbol", type=str, required=True, help="品种代码（如 RB0）")

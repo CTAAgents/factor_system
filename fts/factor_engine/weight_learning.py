@@ -524,6 +524,57 @@ def cross_market_ic_check(
     return meta
 
 
+def ic_covariance_weights(
+    ic_matrix: np.ndarray,
+    shrinkage: Optional[float] = None,
+    ridge: float = 1e-6,
+    min_samples: int = 20,
+) -> Optional[np.ndarray]:
+    """IC 协方差加权（GAP-064，v2.94.0）：w = (Σ + λI)⁻¹μ。
+
+    对照框架「阶段一·方法 2 ICIR 加权」：μ = IC 均值向量，Σ = IC 协方差矩阵，
+    等价于 Markowitz 均值-方差优化在 IC 空间的映射。实现：
+        - Σ 采用 Ledoit-Wolf 收缩（对角结构化目标，收缩强度默认 min(1, N/T)）
+        - 加对角正则 λI 防奇异
+        - 样本（完整 IC 观测期）不足 min_samples 返回 None（调用方回退 IC 均值加权）
+
+    Args:
+        ic_matrix: T×N IC 观测矩阵（T 期样本，N 因子）
+        shrinkage: Ledoit-Wolf 收缩强度（None = min(1, N/T) 自适应）
+        ridge: 对角正则项 λ
+        min_samples: 最少完整观测期数
+
+    Returns:
+        N 维权重向量（Σ|w|=1，保留符号以支持期货多空）；样本不足/奇异返回 None。
+    """
+    icm = np.asarray(ic_matrix, dtype=float)
+    if icm.ndim != 2 or icm.shape[0] < min_samples or icm.shape[1] < 2:
+        return None
+    # 完整观测：剔除含 NaN 的行（IC 序列缺口的保守处理）
+    mask = ~np.isnan(icm).any(axis=1)
+    icm_c = icm[mask]
+    if icm_c.shape[0] < min_samples:
+        return None
+    T, N = icm_c.shape
+    mu = np.mean(icm_c, axis=0)
+    sigma = np.cov(icm_c, rowvar=False)
+    # Ledoit-Wolf 收缩：对角结构化目标
+    target = np.diag(np.diag(sigma))
+    s = float(shrinkage) if shrinkage is not None else min(1.0, N / max(T, 1))
+    sigma_shrunk = (1.0 - s) * sigma + s * target
+    A = sigma_shrunk + ridge * np.eye(N)
+    try:
+        w = np.linalg.solve(A, mu)
+    except np.linalg.LinAlgError:
+        return None
+    if not np.all(np.isfinite(w)):
+        return None
+    denom = float(np.sum(np.abs(w)))
+    if denom < 1e-12:
+        return None
+    return w / denom
+
+
 __all__ = [
     "WeightLearningConfig",
     "resolve_panel_market",
@@ -532,4 +583,5 @@ __all__ = [
     "risk_adjust_from_panel",
     "rolling_oos_validate",
     "cross_market_ic_check",
+    "ic_covariance_weights",
 ]

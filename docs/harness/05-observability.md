@@ -1,6 +1,6 @@
 # FTS 可观测性
 
-> 版本: v2.89.0
+> 版本: v2.102.0
 > 最后更新: 2026-08-05
 
 ---
@@ -92,6 +92,14 @@ METRIC drift_alert{overlap=0.00,weight=1.00,o_th=0.50,w_th=0.40} 1
 ```
 告警同时写入 `PortfolioLoop` state（`drift_alerted` / `drift_alert_info`）；`trigger_rebalance=True` 时生成 `AgentOptimizationProposal`（source=`drift_monitor`）附加到 proposals 供下游 Agent 消费。
 
+### 股票信号管道标准化与权重冻结日志（GAP-076 / GAP-072，v2.101.0）
+
+`scripts/daily_signal_pipeline.py` 每次运行输出结构化进度日志（stdout，含 trace_id 前置）：
+- `[标准化] 截面 none/zscore/rank 已应用到 {n} 个因子（{m} 交易日）`——Step 4 前截面标准化方式与覆盖范围（GAP-076）
+- `[权重冻结] 复用 {recomputed_at} 权重快照（{k} 因子），仅刷新因子值`——冻结日复用快照（GAP-072，快照含 `normalize` 字段记录重算日标准化口径）
+- `[权重] 本周重算日: 权重已学习并保存快照 -> {path}`——重算日 Ridge 权重学习 + 快照落盘
+- `[警告] 信号计算错误: {n} 次`——因子执行异常计数（不阻断主流程）
+
 ### 指标字段
 
 ```
@@ -113,6 +121,16 @@ fts_tokens_consumed{loop="L3"} 5000.0
 # TYPE fts_quality_score gauge
 # HELP fts_regime_weight_adjustment 市场制度权重调整（A.3）
 # TYPE fts_regime_weight_adjustment gauge
+# HELP fts_regime_confidence 当前市场制度置信度（28-T10）
+# TYPE fts_regime_confidence gauge
+# HELP fts_regime_entropy_norm 制度后验归一化熵(0~1, 越高越不确定)（28-T10）
+# TYPE fts_regime_entropy_norm gauge
+# HELP fts_regime_exposure_scale 置信度仓位缩放因子（28-T10）
+# TYPE fts_regime_exposure_scale gauge
+# HELP fts_regime_blend_hhi 制度概率分布集中度(HHI)（28-T10）
+# TYPE fts_regime_blend_hhi gauge
+# HELP fts_regime_name 当前市场制度名称 (1=当前生效)（28-T10）
+# TYPE fts_regime_name gauge
 # HELP fts_dq_completeness 数据完整性指标（B.1）
 # TYPE fts_dq_completeness gauge
 # HELP fts_live_factor_ic 实盘因子 IC（C.2）
@@ -121,6 +139,27 @@ fts_tokens_consumed{loop="L3"} 5000.0
 # TYPE fts_risk_check_total counter
 # HELP fts_feedback_triggers_total 反馈触发次数（C.3）
 # TYPE fts_feedback_triggers_total counter
+```
+
+### Regime 观测指标（28-T10，机构观测纪律）
+
+`fts_regime_*` 指标由 `fts/monitor/prometheus_metrics.py:MetricsRegistry.record_regime_metrics(market, regime, confidence, probs, exposure_scale)` 落盘，`PortfolioLoop` Step 2.5 Regime 调整完成后按市场上报（失败仅告警不阻断主流程），供 `GET /metrics` 审计 regime 决策：
+
+| 指标 | 语义 | 说明 |
+|:-----|:-----|:-----|
+| `fts_regime_confidence{market=...}` | 当前制度置信度 ∈ [0,1] | 越界钳制 |
+| `fts_regime_entropy_norm{market=...}` | 制度后验归一化熵 ∈ [0,1] | `H/ln(K)`；无 probs（硬查表回退）记 0.0 |
+| `fts_regime_exposure_scale{market=...}` | 置信度仓位缩放因子 | ∈ [scale_min, 1.0]，`confidence_scale` 关闭时恒 1.0 |
+| `fts_regime_blend_hhi{market=...}` | 制度概率分布集中度 HHI = Σ p_i² | 无 probs 记 1.0（确定性分布） |
+| `fts_regime_name{market=...,regime=...}` | 当前制度名（1=生效） | 空 regime 不上报 |
+
+示例（futures 市场）：
+```
+fts_regime_confidence{market="futures"} 0.7
+fts_regime_entropy_norm{market="futures"} 0.63
+fts_regime_exposure_scale{market="futures"} 0.6
+fts_regime_blend_hhi{market="futures"} 0.52
+fts_regime_name{market="futures",regime="bear"} 1
 ```
 
 ## 4. Elite 因子追踪

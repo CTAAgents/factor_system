@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
@@ -20,7 +21,8 @@ logger = logging.getLogger(__name__)
 # ─── 默认路径 ────────────────────────────────────────────
 
 DEFAULT_MEMORY_DIR = "memory"
-DEFAULT_ELITE_DIR = "memory/knowledge/factors/elite"
+# v2.86.0: 股票精英因子目录由 elite/ 重命名为 stocks_elite/（与期货 futures_elite/ 命名对齐）
+DEFAULT_ELITE_DIR = "memory/knowledge/factors/stocks_elite"
 DEFAULT_FUTURES_ELITE_DIR = "memory/knowledge/factors/futures_elite"
 
 
@@ -83,10 +85,83 @@ class FTSConfig:
     # BudgetConfig.max_per_family 优先；未显式传入 budget 时回退此配置（缺省沿用 15）。
     max_per_family: int = field(default_factory=lambda: int(os.getenv("FTS_MAX_PER_FAMILY", "15")))
 
+    # ── 结构性聚类配额 (GAP-077, v2.102.0) ──
+    # 以信号相关性聚类配额替代 max_per_family 家族配额：family 是知识注入来源标签
+    # （非正交结构维度），多样性控制改由信号相关性承担（_count_cluster_members）。
+    # 开关关闭 → 回退 max_per_family 旧逻辑（平滑迁移）。
+    structure_cluster_quota_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_CLUSTER_QUOTA_ENABLED", "1") == "1"
+    )
+    # 每结构簇最大因子数（对齐原 max_per_family 默认 15）
+    structure_cluster_max: int = field(default_factory=lambda: int(os.getenv("FTS_CLUSTER_MAX", "15")))
+    # 判定"同类"的相关性阈值（略宽于 GAP-I206 的 0.9：0.9 强拦截 vs 0.85 数量配额）
+    structure_cluster_corr_threshold: float = field(
+        default_factory=lambda: float(os.getenv("FTS_CLUSTER_CORR_THRESHOLD", "0.85"))
+    )
+
+    # ── SHAP 批量计算降频 (GAP-080, v2.102.0) ──
+    # KernelExplainer 每因子评估量 ≈ n_extreme×2 × nsamples 次单行因子执行，
+    # 原默认 50×2×100=1 万次/因子（~14s 串行）成晋升链新瓶颈。降频三项均为
+    # 信息型审查（SHAP 成功即通过）的采样参数，缩小样本不改变门禁语义。
+    # 极端样本数（top+bottom 各 N）
+    shap_n_extreme: int = field(default_factory=lambda: int(os.getenv("FTS_SHAP_N_EXTREME", "25")))
+    # KernelExplainer 背景样本数
+    shap_n_background: int = field(default_factory=lambda: int(os.getenv("FTS_SHAP_N_BACKGROUND", "50")))
+    # 每个极端样本的 KernelExplainer 扰动次数（nsamples，降频核心）
+    shap_nsamples: int = field(default_factory=lambda: int(os.getenv("FTS_SHAP_NSAMPLES", "50")))
+
+    # ── 成功模式定向演化 (Phase 1.2 P0-1, 26 号计划 §6) ──
+    # 从经验链成功轨迹聚合近期成功模式（方法/算子/窗口维度，明确排除 family），
+    # 注入 MacroEvolver prompt 作 soft 偏向（参考非硬性约束）。五重防过拟合：
+    # soft 偏向 + 时间衰减 + 滚动窗口 + 开关 + 样本下限。
+    evolution_success_pattern_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_SUCCESS_PATTERN_ENABLED", "1") == "1"
+    )
+    # 成功模式滚动窗口（天）
+    success_pattern_window_days: int = field(
+        default_factory=lambda: int(os.getenv("FTS_SUCCESS_PATTERN_WINDOW", "14"))
+    )
+    # 样本下限：窗口内成功轨迹 < 该值 → 空报告（不注入，防过拟合）
+    success_pattern_min_sample: int = field(
+        default_factory=lambda: int(os.getenv("FTS_SUCCESS_PATTERN_MIN_SAMPLE", "10"))
+    )
+
+    # ── 提前达标停止 (Phase 3 P1-3, 26 号计划 §8) ──
+    # 连续 K 代零晋升 → 提前结束 run，节约 token 预算。保守默认关闭（验证见
+    # plans/26 §8.7.1：修复后真实 run 连续 15 代零晋升），开启需显式设 env。
+    evolution_stop_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_EVOLUTION_STOP_ENABLED", "0") == "1"
+    )
+    # 连续零晋升代数阈值 K（达到即提前结束并正常收尾）
+    evolution_stop_consecutive_empty_generations: int = field(
+        default_factory=lambda: int(os.getenv("FTS_EVOLUTION_STOP_EMPTY_GENS", "5"))
+    )
+
     # ── 极值扰动一票否决 (GAP-F15, v2.73.0) ──
     # 极值剔除百分位：评估链剔除信号上下该百分位的极端样本后重算 IC，
     # ic_drop 降幅 > 25%（HighICScreener.extreme_drop_max）触发 V2 一票否决。
     extreme_perturb_pct: float = field(default_factory=lambda: float(os.getenv("FTS_EXTREME_PERTURB_PCT", "0.01")))
+
+    # ── 多持有期 IC 体系 (GAP-060, v2.90.0) ──
+    # evaluate_backtest / cross_section_evaluate_backtest 的多持有期扫描
+    # （逗号分隔，如 "1,5,10,20"）；空 = 关闭。v2.90.0 默认启用 (1,5,10,20)。
+    eval_horizons: tuple[int, ...] = field(
+        default_factory=lambda: tuple(
+            int(x) for x in os.getenv("FTS_EVAL_HORIZONS", "1,5,10,20").split(",") if x.strip().isdigit()
+        )
+    )
+    # 可交易性压力层（GAP-061）：evaluate_backtest 是否附加成本敏感性/滑点放大分析（默认关闭）
+    cost_sensitivity_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_COST_SENSITIVITY_ENABLED", "0") == "1"
+    )
+    # 夜盘/隔夜跳空列注入（GAP-066）：get_ohlcv 是否附加 overnight_gap/overnight_gap_flag 列（默认关闭）
+    inject_overnight_gap_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_INJECT_OVERNIGHT_GAP", "0") == "1"
+    )
+    # 显著隔夜跳空阈值（绝对值比例，默认 1%）
+    overnight_gap_flag_threshold: float = field(
+        default_factory=lambda: float(os.getenv("FTS_OVERNIGHT_GAP_THRESHOLD", "0.01"))
+    )
 
     # ── L2 准入去冗余 (GAP-I206, v2.71.0) ──
     # 演化因子晋升 elite 前与既有 elite 做信号相关性检查，超过阈值拒绝晋升（防 elite 池相关性膨胀）
@@ -178,8 +253,24 @@ class FTSConfig:
         default_factory=lambda: os.getenv("FTS_PORTFOLIO_OPTIMIZER_MODE", "risk_parity")
     )
     # GAP-I303 (v2.85.0): 组合目标函数换手惩罚项 λ（0=关闭，λ 越大权重变动越收缩、换手越低）
-    l3_turnover_penalty: float = field(
-        default_factory=lambda: float(os.getenv("FTS_L3_TURNOVER_PENALTY", "0.0"))
+    l3_turnover_penalty: float = field(default_factory=lambda: float(os.getenv("FTS_L3_TURNOVER_PENALTY", "0.0")))
+    # GAP-072 (v2.99.0): 权重重算频率（解绑 L3 与信号管道）
+    # cadence=daily: 每日重算权重；cadence=weekly: 仅在 l3_weight_recompute_weekday 重算（默认周五收盘后）
+    l3_weight_recompute_cadence: str = field(
+        default_factory=lambda: os.getenv("FTS_L3_WEIGHT_RECOMPUTE_CADENCE", "weekly")
+    )
+    # 周度重算日（Python weekday: 0=周一 ... 4=周五；默认周五，L3 组合与信号管道权重周度重算）
+    l3_weight_recompute_weekday: int = field(
+        default_factory=lambda: int(os.getenv("FTS_L3_WEIGHT_RECOMPUTE_WEEKDAY", "4"))
+    )
+
+    # ── C6 (v2.100.1): 因子自动重校准（decayed → 微调而非直接退役）──
+    recalibration_enabled: bool = field(default_factory=lambda: os.getenv("FTS_RECALIBRATION_ENABLED", "0") == "1")
+    recalibration_coarse_trials: int = field(
+        default_factory=lambda: int(os.getenv("FTS_RECALIBRATION_COARSE_TRIALS", "20"))
+    )
+    recalibration_min_ic_gap: float = field(
+        default_factory=lambda: float(os.getenv("FTS_RECALIBRATION_MIN_IC_GAP", "0.0"))
     )
 
     # ── 股票因子中性化（v2.54.0+）──
@@ -191,6 +282,18 @@ class FTSConfig:
     industry_map_path: str = field(default_factory=lambda: os.getenv("FTS_INDUSTRY_MAP_PATH", "data/industry_map.json"))
     # 市值映射文件路径（JSON 格式，{symbol: market_cap}，可选）
     cap_map_path: str = field(default_factory=lambda: os.getenv("FTS_CAP_MAP_PATH", ""))
+    # 股票信号管道截面中性化方式（D.2，默认 none 保持现状；none/industry/size/both）
+    stock_signal_neutralize: str = field(
+        default_factory=lambda: os.getenv("FTS_STOCK_SIGNAL_NEUTRALIZE", "none")
+    )
+    # 股票信号管道 L3 权重学习模式（D.2，默认 ridge 保持现状；ridge/elastic_net）
+    stock_signal_l3_mode: str = field(
+        default_factory=lambda: os.getenv("FTS_STOCK_SIGNAL_L3_MODE", "ridge")
+    )
+    # 股票信号管道 Regime 自适应权重（D.2 偏差 b，默认 none 保持现状；none/auto）
+    stock_signal_regime: str = field(
+        default_factory=lambda: os.getenv("FTS_STOCK_SIGNAL_REGIME", "none")
+    )
 
     # ── 期货换月复权与展期成本（v2.58.0，GAP-046）──
     # 期货连续合约 K 线是否默认返回换月后复权序列（因子计算用）
@@ -202,6 +305,11 @@ class FTSConfig:
     # 期货横截面因子评估是否做板块/产业链中性化（剥离产业链系统性偏差）
     futures_neutralization: bool = field(
         default_factory=lambda: os.getenv("FTS_FUTURES_NEUTRALIZATION", "true").lower() == "true"
+    )
+    # 字段增强层（GAP-083 阶段 C）：启用 iFinD/Wind 增强源补充 hold/settle/pre_settle/oi_change。
+    # 默认关闭——需配置 mcp_enabled=true + set_mcp_handler 注入客户端（API Key 认证）后开启。
+    futures_enhance_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_FUTURES_ENHANCE_ENABLED", "false").lower() == "true"
     )
     # 回测是否启用涨跌停拦截 + 停牌过滤（真实成交仿真）
     backtest_trade_filter: bool = field(
@@ -269,6 +377,30 @@ def get_config() -> FTSConfig:
     if _default_config is None:
         _default_config = load_config()
     return _default_config
+
+
+def is_weight_recompute_day(cfg: Optional[FTSConfig] = None, today: Optional[Any] = None) -> bool:
+    """判断今日是否应重算 L3 组合 / 信号管道权重（GAP-072，v2.99.0）。
+
+    解绑 L3 与信号管道：信号管道每日生成信号（因子值每日刷新），
+    权重（L3 Elastic Net / 信号管道 Ridge）仅在重算日学习，其余日复用快照。
+
+    Args:
+        cfg: 配置实例（None 用全局配置）
+        today: 日期（None 用今天；测试可注入 `datetime.date` 实例）
+
+    Returns:
+        True=今日重算权重；False=今日冻结权重，复用上次快照
+    """
+    c = cfg or get_config()
+    cadence = (c.l3_weight_recompute_cadence or "weekly").lower()
+    if cadence == "daily":
+        return True
+    if cadence == "weekly":
+        d = today or date.today()
+        return d.weekday() == int(c.l3_weight_recompute_weekday)
+    logger.warning("未知 l3_weight_recompute_cadence=%s，安全回退为每日重算", cadence)
+    return True
 
 
 def load_config(config_path: Optional[str] = None) -> FTSConfig:

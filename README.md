@@ -2,8 +2,8 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-5132%20passing-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.89.0-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-5193%20passing-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.101.0-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -107,6 +107,7 @@ L3 参数：
 | `--synthesis-mode` | 自动 | 信号合成模式（`elastic_net` / `adaptive` / `sharpe_weight` / `equal_weight` / `ml_ensemble` / `optimizer`） |
 | `--optimizer-mode` | `risk_parity` | optimizer 目标（`risk_parity` / `mvo`，GAP-L303） |
 | `--returns-matrix` | 无 | 因子收益矩阵 CSV 路径（optimizer 模式与组合实测化需要，可选） |
+| --force-recompute | 关闭 | 强制全量重算组合权重（GAP-072，默认按 l3_weight_recompute_cadence 判定：weekly 仅周五重算，其余日冻结复用上次组合） |
 
 ### 因子管理
 
@@ -234,7 +235,10 @@ print(status_report_to_json(report))
 |------|----------|----------|
 | L1 Meta-Loop | 每日 08:30 | 市场感知、知识补给、Bootstrapping、Debate 分析 |
 | L2 Evolution | 每日 23:00 | LLM 宏观改逻辑 + Optuna 微观调参、三级评估链、质量评分 |
-| L3 Portfolio | 每日 20:00 | 因子筛选、正交化、信号合成、Verifier 校验 |
+| L3 Portfolio | 每周五 20:00 | 因子筛选、正交化、信号合成、Verifier 校验（GAP-072 与信号管道解绑，权重每周重算） |
+| L3 Portfolio (股票) | 每周五 08:30 | 股票组合权重重算（GAP-072） |
+| 期货信号管道 | 工作日每日 20:00 | 横截面信号报告（Ridge 权重周五重算，其余日冻结复用快照） |
+| 股票/ETF 信号管道 | 工作日每日 08:45 | 逐股打分信号（Ridge 权重周五重算，其余日冻结复用快照） |
 
 ### 6 类因子强制审计
 
@@ -281,6 +285,7 @@ print(status_report_to_json(report))
 - **FactorStyle 维度**（v2.56.0）：`REGIME_STYLE_MULTIPLIERS`（momentum/value/defensive 等 15 风格 × 5 制度）
 - **双维度调整**：`dimension="both"` 时 family×style 乘积，clamp 到 [0.5, 1.5]×base
 - **RegimeSmoother**：Regime 切换时权重指数平滑（默认 alpha=0.5, min_days=2）
+- **机构级优化（plans/28）**：多周期 HMM 后验概率 `regime_probs` → 概率混合权重（`probability_mix`，关闭/无 probs 回退硬查表）→ RegimeSmoother 不对称切换（`de_risk_alpha`/`re_risk_alpha`）→ 置信度熵标定 `exposure_scale` 仓位缩放（`confidence_scale`，Step 2.5 计算、组合整体缩放）→ BIC 状态数选择（防翻转）→ 制度样本外有效性验证（`validate_regime` CLI）→ `fts_regime_*` 观测指标（/metrics 审计）
 
 ### 断路器保护
 
@@ -296,7 +301,7 @@ L2/L3 内置多层熔断机制：
 ## 项目结构
 
 ```
-fts/                          # 核心源码（84 个 Python 文件）
+fts/                          # 核心源码（86 个 Python 文件）
 ├── config/                   # 配置系统（YAML + 环境变量 + 默认值）
 ├── core/                     # 核心契约（enums + TypedDict）
 ├── factor_engine/            # 因子引擎（L1/L2/L3 + 审计 + 评分卡）
@@ -318,10 +323,11 @@ fts/                          # 核心源码（84 个 Python 文件）
 ├── data.py                   # 数据层统一入口
 ├── data_futures.py           # 期货数据（DuckDB + AKShare）
 ├── data_mcp.py               # MCP 数据适配层
+├── live_trade/               # 实盘执行链路（orders/stop_orders/intervention/gateway）+ 模拟仓（D.1：contracts/simulated_portfolio/simulated_engine/sqlite_store；D.2：book/matching tick 盘口撮合 + 组合级风控 + PARTIAL/限价单/集合竞价，回放+纸面+SQLite 持久化）
 ├── llm.py                    # LLM 客户端（OpenAI/Anthropic/Mock）
 └── cli.py                    # CLI 统一入口
 
-tests/                        # 120+ 个测试文件，5132 个测试用例（含机构级权重学习 28 用例 + L3 调度期货路径 1 用例 + 批量挖掘漏斗 21 用例 + GAP-X01/X02/X03 修复 6 用例 + GAP-L308/L309 收尾 26 用例 + GAP-S09~S12 收尾 27 用例 + GAP-I301/I205 收尾 14 用例 + GAP-I206 收尾 10 用例 + GAP-I206 正交化闭环 10 用例 + GAP-I204 多目标适应度 7 用例 + GAP-L401 corr/cross_section_rank 算子 4 用例 + GAP-F13 漂移告警闭环 9 用例 + GAP-F10 种子库去重 13 用例 + GAP-F15 极值扰动 10 用例 + GAP-054 数据驱动动态池 11 用例 + GAP-055 盲测池机构标准 9 用例 + GAP-F16 覆盖率补齐 341 用例）
+tests/                        # 120+ 个测试文件，5307+ 个测试用例（含机构级权重学习 28 用例 + L3 调度期货路径 1 用例 + 批量挖掘漏斗 21 用例 + GAP-X01/X02/X03 修复 6 用例 + GAP-L308/L309 收尾 26 用例 + GAP-S09~S12 收尾 27 用例 + GAP-I301/I205 收尾 14 用例 + GAP-I206 收尾 10 用例 + GAP-I206 正交化闭环 10 用例 + GAP-I204 多目标适应度 7 用例 + GAP-L401 corr/cross_section_rank 算子 4 用例 + GAP-F13 漂移告警闭环 9 用例 + GAP-F10 种子库去重 13 用例 + GAP-F15 极值扰动 10 用例 + GAP-054 数据驱动动态池 11 用例 + GAP-055 盲测池机构标准 9 用例 + GAP-F16 覆盖率补齐 341 用例 + GAP-070 兜底家族豁免 2 用例 + v2.98.1 L3 期货路径市场 OHLCV 自动构建 3 用例 + v2.98.2 GAP-071 L2 质检性能 19 用例（test_signal_cache 14 + 走航口径 3 + 审计复用 2） + v2.98.3 股票 L3 早间调度+信号管道联动 3 用例 + v2.100.0 GAP-074 算子演化多样性修复 4 用例 + v2.100.1 L1 感知层样本按市场区分 6 用例（股票→CSI300 成分股 / 期货 13 品种原样） + v2.101.0 GAP-068 多频叠加 22 用例 + GAP-069 持仓拥挤度 15 用例 + GAP-075 跨标的稳健性检查 15 用例（标的留出验证 + cross_symbol 激活） + GAP-076 信号管道截面标准化 10 用例（normalize_signal_matrix 8 + 权重快照 normalize 2） + GAP-078 TQ 探活进程级重试 6 用例（探活缓存/瞬时重试/冷却/恢复） + D.1 模拟仓 18 用例（test_simulated_portfolio.py：开/加/减/平/反手、盯市、风控/干预拦截、因子归因、回放引擎、合约乘数/市场推断、SQLite 存取/恢复/PaperTrader 持久化） + D.2 模拟交易进阶 64 用例（test_book_matching.py 26：tick 盘口撮合/部分成交/限价单/集合竞价；test_neutralization.py 14：行业/市值中性化；test_portfolio_metrics.py 17：组合级风控三级预警；test_calibrate_book_vs_bps.py 7：book vs bps 标定） + D.2 偏差 b Regime 自适应接线 19 用例（test_signal_common.py 17：行业/风格面板聚合构造 6、权重 style 倍率调整 6、全链路集成 1、快照 regime 字段 2、后缀键行业/市值对齐回归 2；test_config_settings.py 2：stock_signal_regime 默认与 env 覆盖） + GAP-083 pre_settle 零依赖派生 18 用例（test_aggregator.py _derive_pre_settle 7 + 缓存接入点 1：settle.shift(1)/0·NaN 回退 close/已有值不覆盖/倒序输入自适应排序；test_backfill_futures_hold.py TestDerivePreSettle 10：跨行派生/有效不覆盖/dry-run/settle 不推进/双格式/异常不阻断/CLI） + GAP-090 存储域注册表 13 用例（tests/store/test_storage_registry.py：YAML 契约加载/路由/契约校验/legacy·planned 血缘约束/env 覆盖/降级） + plans/29 P1 迁移脚本 17 用例（tests/scripts/test_migrate_elite_json_to_catalog.py：差量补齐+status 映射/幂等/sync 漂移同步/dry-run/verify-only/孤儿/市场路由） + plans/29 P2 状态存储与迁移 19 用例（tests/store/test_state_db.py 11：UPSERT/历史追加/快照/持久化读回；tests/scripts/test_migrate_state_to_duckdb.py 8：glob 发现去重/迁移对账/幂等/痕迹归档） + plans/29 P3-A 信号缓存 Parquet 化 5 用例（test_factor_optimizer.py TestFactorSignalCacheParquet：put 写 parquet/磁盘重开读回/checksum 篡改判 miss/.npy 回退重建/clear 双格式清理） + plans/29 P3-B 行情库冷热归档 7 用例（tests/scripts/test_archive_history_cold.py：年份统计/min_year/dry-run/归档-verify 闭环/幂等/不一致检测） + plans/28 Regime 机构级 12 用例（test_regime_calibration 3 + test_regime_model_selection 2 + test_regime_validation 3 + test_prometheus_metrics T10 4）））
 scripts/                      # 工具脚本
 config/                       # 项目配置
 memory/                       # 运行时持久化（自动创建）

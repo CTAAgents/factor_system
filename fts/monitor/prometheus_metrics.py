@@ -28,7 +28,34 @@ HARNESS §trace_id: 本模块无 trace_id，仅聚合计数。
 
 from __future__ import annotations
 
+import math
 import threading
+
+
+def _entropy_norm_hhi(probs: dict[str, float] | None) -> tuple[float, float]:
+    """计算制度后验概率的归一化熵与 HHI 集中度（28-T10）。
+
+    Args:
+        probs: 制度后验概率分布；None / 空 / 全零视为确定性分布。
+
+    Returns:
+        (entropy_norm, blend_hhi)：归一化熵 ∈ [0, 1]（0 完全确定），
+        HHI = Σ p_i² ∈ [0, 1]（1 完全集中）。
+    """
+    if not probs:
+        return 0.0, 1.0
+    ps = [max(0.0, float(p)) for p in probs.values()]
+    total = sum(ps)
+    if total <= 0.0:
+        return 0.0, 1.0
+    ps = [p / total for p in ps]
+    hhi = sum(p * p for p in ps)
+    nonzero = [p for p in ps if p > 0.0]
+    if len(nonzero) <= 1:
+        return 0.0, hhi
+    h = -sum(p * math.log(p) for p in nonzero)
+    entropy_norm = h / math.log(len(nonzero))
+    return max(0.0, min(1.0, entropy_norm)), hhi
 
 
 class MetricsRegistry:
@@ -71,6 +98,10 @@ class MetricsRegistry:
         self._recommendations_accepted: float = 0.0
         self._new_factors: int = 0
         self._effective_rate: float = 0.0
+        # 28-T10 Regime 观测指标: market -> {confidence, entropy_norm, exposure_scale, blend_hhi}
+        self._regime_metrics: dict[str, dict[str, float]] = {}
+        # 28-T10 当前制度名: market -> regime
+        self._regime_by_market: dict[str, str] = {}
 
     # ─── 衰减追踪指标 (A.2) ────────────────────────────────
 
@@ -118,6 +149,36 @@ class MetricsRegistry:
         """记录一次权重再平衡。"""
         with self._lock:
             self._rebalance_total[regime or "unknown"] = self._rebalance_total.get(regime or "unknown", 0) + 1
+
+    def record_regime_metrics(
+        self,
+        market: str,
+        regime: str,
+        confidence: float,
+        probs: dict[str, float] | None = None,
+        exposure_scale: float = 1.0,
+    ) -> None:
+        """记录某市场当前 regime 观测指标（28-T10）。
+
+        置信度、归一化熵、exposure_scale 与 blend HHI 全部落盘供 /metrics 审计；
+        无 probs（硬查表回退场景）时熵为 0.0、HHI 为 1.0（确定性分布）。
+
+        Args:
+            market: 市场标识（futures/stock/...）。
+            regime: 当前制度名称（bear/bull/...）。
+            confidence: 制度置信度 ∈ [0, 1]（越界钳制）。
+            probs: 制度后验概率分布；可无。
+            exposure_scale: 置信度仓位缩放因子。
+        """
+        entropy_norm, blend_hhi = _entropy_norm_hhi(probs)
+        with self._lock:
+            self._regime_by_market[market or "unknown"] = regime or ""
+            self._regime_metrics[market or "unknown"] = {
+                "confidence": max(0.0, min(1.0, float(confidence))),
+                "entropy_norm": entropy_norm,
+                "exposure_scale": float(exposure_scale),
+                "blend_hhi": blend_hhi,
+            }
 
     # ─── Live 因子指标 (C.2) ─────────────────────────────
 
@@ -225,6 +286,41 @@ class MetricsRegistry:
                 lines.append(f'fts_weight_rebalance_total{{regime="{r}"}} {n}')
         else:
             lines.append("fts_weight_rebalance_total 0")
+        lines.append("")
+
+        # ── Regime 观测指标 (28-T10) ──
+        regime_metrics = dict(self._regime_metrics)
+        regime_by_market = dict(self._regime_by_market)
+
+        lines.append("# HELP fts_regime_confidence 当前市场制度置信度")
+        lines.append("# TYPE fts_regime_confidence gauge")
+        for m, vals in sorted(regime_metrics.items()):
+            lines.append(f'fts_regime_confidence{{market="{m}"}} {vals["confidence"]}')
+        lines.append("")
+
+        lines.append("# HELP fts_regime_entropy_norm 制度后验归一化熵(0~1, 越高越不确定)")
+        lines.append("# TYPE fts_regime_entropy_norm gauge")
+        for m, vals in sorted(regime_metrics.items()):
+            lines.append(f'fts_regime_entropy_norm{{market="{m}"}} {vals["entropy_norm"]}')
+        lines.append("")
+
+        lines.append("# HELP fts_regime_exposure_scale 置信度仓位缩放因子")
+        lines.append("# TYPE fts_regime_exposure_scale gauge")
+        for m, vals in sorted(regime_metrics.items()):
+            lines.append(f'fts_regime_exposure_scale{{market="{m}"}} {vals["exposure_scale"]}')
+        lines.append("")
+
+        lines.append("# HELP fts_regime_blend_hhi 制度概率分布集中度(HHI)")
+        lines.append("# TYPE fts_regime_blend_hhi gauge")
+        for m, vals in sorted(regime_metrics.items()):
+            lines.append(f'fts_regime_blend_hhi{{market="{m}"}} {vals["blend_hhi"]}')
+        lines.append("")
+
+        lines.append("# HELP fts_regime_name 当前市场制度名称 (1=当前生效)")
+        lines.append("# TYPE fts_regime_name gauge")
+        for m, r in sorted(regime_by_market.items()):
+            if r:
+                lines.append(f'fts_regime_name{{market="{m}",regime="{r}"}} 1')
         lines.append("")
 
         # ── Live 因子指标 (C.2) ──

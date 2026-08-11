@@ -15,11 +15,14 @@ fts.data_mcp — 腾讯自选股 MCP 数据适配层
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+
+from fts.data_sources.tdx_local_source import fetch_stock_ohlcv
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,80 @@ logger = logging.getLogger(__name__)
 
 class MCPDataError(RuntimeError):
     """MCP 数据获取失败。"""
+
+
+# ─── TQ 可用性探活缓存（进程内，避免 TQ 离线时每次调用都超时）────
+# 进程级重试机制：探活失败进入冷却期（_TQ_PROBE_COOLDOWN），冷却期后自动重探
+# 并带瞬时重试（_TQ_PROBE_RETRIES），TQ 短暂抖动不再导致整进程永久降级。
+
+
+_TQ_STOCK_AVAILABLE: Optional[bool] = None
+_TQ_LAST_PROBE_TS: float = 0.0
+_TQ_PROBE_COOLDOWN: float = 30.0  # 探活失败后的冷却期（秒），期间不重复探活
+_TQ_PROBE_RETRIES: int = 2  # 每次探活周期内重试次数（吸收瞬时抖动）
+_TQ_PROBE_RETRY_INTERVAL: float = 1.0  # 重试间隔（秒）
+
+
+def _probe_tq_once() -> bool:
+    """单次 TQ 探活：HTTP POST get_market_data（000001.SZ，5s 超时）。
+
+    Returns:
+        True 表示 TQ 可返回合法行情结构（result.Value 为 dict）。
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    payload = {
+        "id": int(time.time() * 1000),
+        "method": "get_market_data",
+        "params": {"stock_list": ["000001.SZ"], "count": 1, "period": "1d"},
+    }
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:17709/",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        result = body.get("result") if isinstance(body, dict) else None
+        return bool(isinstance(result, dict) and isinstance(result.get("Value"), dict))
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError):
+        return False
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _tq_stock_available() -> bool:
+    """通达信 TQ（17709）股票行情是否可用（进程内缓存 + 失败冷却重试）。
+
+    直接用股票端点 000001.SZ 探测（与 fetch_stock_ohlcv 同协议），
+    短超时（5s）避免 TQ 离线时拖慢降级链；期货探活对股票路径无意义。
+
+    进程级重试机制：
+    - 探活成功 → 缓存 True，进程内不再探活
+    - 探活失败 → 记录失败时间戳，冷却期（_TQ_PROBE_COOLDOWN=30s）内保持
+      不可用且不重复探活（TQ 离线时避免每次调用都阻塞）
+    - 冷却期后自动重新探活（带 _TQ_PROBE_RETRIES 次瞬时重试，间隔 1s），
+      成功即恢复 True——TQ 短暂抖动不再导致整个进程永久降级
+    """
+    global _TQ_STOCK_AVAILABLE, _TQ_LAST_PROBE_TS  # pylint: disable=global-statement
+    now = time.time()
+    if _TQ_STOCK_AVAILABLE is True:
+        return True
+    if _TQ_STOCK_AVAILABLE is False and now - _TQ_LAST_PROBE_TS < _TQ_PROBE_COOLDOWN:
+        return False  # 冷却期内不重复探活
+    _TQ_LAST_PROBE_TS = now
+    ok = False
+    for _ in range(_TQ_PROBE_RETRIES + 1):
+        if _probe_tq_once():
+            ok = True
+            break
+        time.sleep(_TQ_PROBE_RETRY_INTERVAL)
+    _TQ_STOCK_AVAILABLE = ok
+    return ok
 
 
 # ─── 交易所代码前缀 ────────────────────────────────────────
@@ -194,6 +271,7 @@ class MCPDataProvider:
         days: int = 500,
         adjust: str = "qfq",
         trace_id: str = "",
+        strict: bool = False,
     ) -> pd.DataFrame:
         """获取单只股票/ETF 的 OHLCV 日 K 线数据。
 
@@ -202,20 +280,37 @@ class MCPDataProvider:
             days: 回溯天数
             adjust: 复权方式 ("qfq"前复权 / "hfq"后复权 / ""不复权)
             trace_id: HARNESS trace_id
+            strict: 严格模式。True 时数据获取失败抛 MCPDataError，
+                不降级为合成数据（供缓存同步等对数据真实性有硬要求的场景）。
 
         Returns:
             pd.DataFrame with columns: open, high, low, close, volume
             Index: DatetimeIndex
+
+        Raises:
+            MCPDataError: strict=True 且数据获取失败时抛出。
         """
         code = _to_tencent_code(symbol)
+        # TQ 首源：通达信本地 TQ（127.0.0.1:17709）真实行情，
+        # 失败/不可用时降级腾讯 API → 合成数据（数据源优先级 TQ → 腾讯 → 合成）。
+        if _tq_stock_available():
+            df = fetch_stock_ohlcv(symbol, days=days, trace_id=trace_id, adjust=adjust)
+            if df is not None and not df.empty:
+                return df
         try:
             raw = _fetch_kline_json(code, days, adjust)
             df = _kline_to_df(raw)
             if not df.empty:
                 return df
+            if strict:
+                raise MCPDataError(f"MCP OHLCV 无数据 [{symbol}]")
         except MCPDataError as e:
+            if strict:
+                raise
             logger.warning(f"MCP OHLCV 获取失败 [{symbol}]: {e}")
         except Exception as e:
+            if strict:
+                raise MCPDataError(f"MCP OHLCV 异常 [{symbol}]: {e}") from e
             logger.warning(f"MCP OHLCV 异常 [{symbol}]: {e}")
 
         # 降级回退
@@ -285,8 +380,10 @@ class MCPDataProvider:
     ) -> pd.DataFrame:
         """合成 OHLCV 数据（网络不可用时的降级回退）。"""
         np.random.seed(seed)
+        # 起点归一化到日界（无时间分量），保证同日内多次调用索引一致，
+        # 避免面板交集因微秒时间戳漂移而为空（0 交易日崩溃）。
         dates = pd.date_range(
-            datetime.now() - timedelta(days=n_days),
+            (datetime.now() - timedelta(days=n_days)).date(),
             periods=n_days,
             freq="D",
         )
@@ -407,9 +504,62 @@ ETF_SUBSET: list[str] = [
     "159995",
 ]
 
+
+def get_csi300_constituents(cache_days: int = 7) -> list[str]:
+    """获取沪深300 全量成分股代码（中证官网 akshare，本地缓存降级）。
+
+    优先读本地缓存（cache_days 天内有效）；缓存缺失/过期时经 akshare
+    拉取并落盘；akshare 不可用时回退 CSI300_SUBSET（代表性子集）。
+
+    Args:
+        cache_days: 缓存有效期（天）
+
+    Returns:
+        6 位股票代码列表（全量约 300 只；回退时 77 只）。
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    cache = _Path("data") / "_lineage" / "csi300_constituents.json"
+    if cache.exists():
+        try:
+            payload = _json.loads(cache.read_text(encoding="utf-8"))
+            fetched = datetime.fromisoformat(payload["fetched_at"])
+            if (datetime.now() - fetched).days < cache_days and payload.get("codes"):
+                return payload["codes"]
+        except (ValueError, KeyError, OSError, _json.JSONDecodeError):
+            pass
+
+    codes: list[str] = []
+    try:
+        import akshare as ak  # type: ignore[import-untyped]
+
+        df = ak.index_stock_cons_csindex(symbol="000300")
+        if df is not None and not df.empty and "成分券代码" in df.columns:
+            codes = df["成分券代码"].astype(str).str.zfill(6).tolist()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("akshare 获取沪深300成分股失败: %s", e)
+
+    # 过滤非法代码（NaN → "nan" 等）
+    codes = [c for c in codes if len(c) == 6 and c.isdigit()]
+    if not codes:
+        return list(CSI300_SUBSET)
+
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(
+            _json.dumps({"fetched_at": datetime.now().isoformat(), "codes": codes}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+    return codes
+
+
 __all__ = [
     "MCPDataProvider",
     "MCPDataError",
     "CSI300_SUBSET",
     "ETF_SUBSET",
+    "get_csi300_constituents",
 ]

@@ -7,8 +7,11 @@
 关键设计:
   - 发布滞后防未来函数: lag_days 将报告期数据点后移，避免用未来数据回测。
   - 缺数据降级: 某指标拉取失败 → 不注入列，因子走 close 代理（不阻断主路径）。
+  - 默认数据源: EastmoneyMacroSource（东财 CPI/进出口 + 中债登/美债收益率，
+    2026-08-11 起替代 iFinD EDB——iFinD MCP 需 API Key 实测不可用；
+    显式传 source 可切回 IFindSource）。
 
-HARNESS §5.3 契约优先: 依赖 IFindSource.get_macro_series() 与 pd.DataFrame。
+HARNESS §5.3 契约优先: 依赖 source.get_macro_series() 与 pd.DataFrame。
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-# 因子字段名 → EDB 指标查询词（iFinD get_edb_data 自然语言）
+# 因子字段名 → EDB 指标查询词（源 get_macro_series 自然语言）
 MACRO_FIELD_QUERIES: dict[str, str] = {
     "export": "中国出口金额当月值",
     "import_data": "中国进口金额当月值",
@@ -35,7 +38,8 @@ class MacroFieldAligner:
     """宏观字段增强层：批量拉取 + 时序对齐 + 注入。
 
     Args:
-        source: IFindSource 实例（提供 get_macro_series()）。None 时延迟导入。
+        source: 宏观数据源（提供 get_macro_series()）。None 时默认
+            EastmoneyMacroSource（东财+中债登，无需 API Key）。
         lag_days: 发布滞后天数（防未来函数，默认 0）。
         db_path: edb_cache DuckDB 路径（None = 默认 data/fts_history.duckdb）。
     """
@@ -105,9 +109,9 @@ class MacroFieldAligner:
         """
         df = df.copy()
         if self._source is None:
-            from fts.data_sources.ifind_source import IFindSource
+            from fts.data_sources.macro_eastmoney_source import EastmoneyMacroSource
 
-            self._source = IFindSource()
+            self._source = EastmoneyMacroSource()
 
         for field in fields or list(MACRO_FIELD_QUERIES):
             indicator = MACRO_FIELD_QUERIES.get(field, field)

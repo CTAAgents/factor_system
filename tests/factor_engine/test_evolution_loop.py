@@ -2003,16 +2003,17 @@ class TestEvolutionLoopCoverage:
         assert str(repo._db_path).endswith("catalog.duckdb")
 
     def test_get_repo_defaults_to_real_db(self, tmp_path, monkeypatch):
-        """GAP-030: 未传 factor_db_path 时 _get_repo 应使用默认库路径。"""
+        """GAP-030: 未传 factor_db_path 时 _get_repo 应使用默认库路径（分库后按 market 路由）。"""
         import fts.factor_engine.factor_db.schema as schema
 
         fake_default = tmp_path / "default_catalog.duckdb"
-        monkeypatch.setattr(schema, "DATABASE_PATH", fake_default)
+        monkeypatch.setattr(schema, "DATABASE_PATH_FUTURES", fake_default)
         loop = EvolutionLoop(
             data=pd.DataFrame({"close": [1.0]}),
             forward_returns=np.array([0.0]),
             elite_dir=tmp_path / "elite",
             memory_dir=tmp_path / "memory",
+            market="futures",
         )
         repo = loop._get_repo()
         assert str(repo._db_path).endswith("default_catalog.duckdb")
@@ -2967,6 +2968,58 @@ class TestGapF08WalkForwardEnforcement:
         # L1 icir=1.2 → ic_consistency=1.0 ≥ 0.5 → 通过
         assert oos_item.status == "passed"
 
+    def test_factor_audit_reuses_evaluation_walkforward(self, minimal_loop, sample_dataframe):
+        """GAP-070: evaluation 已带评估链走航结果 → 审计直接复用，不再独立计算（双重 WalkForward 合并）。"""
+        from unittest.mock import MagicMock
+
+        from fts.factor_engine.audit import FactorAuditReport
+
+        minimal_loop.data = sample_dataframe
+        # 若被调用则视为合并失败（应完全跳过独立走航）
+        minimal_loop._run_walkforward_oos = MagicMock(return_value=None)
+
+        evaluation = self._make_evaluation()
+        evaluation["walk_forward"] = {
+            "ic_consistency": 0.8,
+            "ic_volatility": 0.1,
+            "sharpe_volatility": 0.2,
+            "consistency_score": 82.0,
+            "passed": True,
+            "windows": [{"ic": 0.1, "sharpe": 1.0, "turnover": 0.5}],
+            "n_windows_completed": 2,
+        }
+        report = minimal_loop._run_factor_audit(self._make_factor(), evaluation, "trace_wf")
+        assert isinstance(report, FactorAuditReport)
+        minimal_loop._run_walkforward_oos.assert_not_called()
+        oos_item = [it for it in report.items if it.name == "oos_consistency"][0]
+        assert oos_item.status == "passed"
+        assert "0.80" in oos_item.evidence
+
+    def test_factor_audit_falls_back_when_walkforward_missing(self, minimal_loop, sample_dataframe):
+        """GAP-073: evaluation 无走航结果 → 兜底独立计算（双窗口正常评估），保持 passed 判定。"""
+        from unittest.mock import MagicMock
+
+        from fts.factor_engine.audit import FactorAuditReport
+
+        minimal_loop.data = sample_dataframe
+        minimal_loop._run_walkforward_oos = MagicMock(
+            return_value={
+                "ic_consistency": 0.6,
+                "passed": True,
+                "windows": [],
+                "n_windows_completed": 2,
+            }
+        )
+        report = minimal_loop._run_factor_audit(
+            self._make_factor(),
+            self._make_evaluation(),  # 无 walk_forward 字段
+            "trace_wf",
+        )
+        assert isinstance(report, FactorAuditReport)
+        minimal_loop._run_walkforward_oos.assert_called_once()
+        oos_item = [it for it in report.items if it.name == "oos_consistency"][0]
+        assert oos_item.status == "passed"
+
 
 # ─── Phase B.2: BacktestPipeline 集成测试 ────────────────
 
@@ -3392,9 +3445,14 @@ class TestFactorAuditorIntegration:
         record = json.loads(path.read_text(encoding="utf-8"))
         assert "audit_report" in record
 
-    def test_promote_to_elite_audit_fails_blocks_promotion(self, minimal_loop, sample_seed):
+    def test_promote_to_elite_audit_fails_blocks_promotion(self, minimal_loop, sample_seed, tmp_path):
         """验证审计未通过时审计报告写入记录（阻塞在 run() 中执行）。"""
         from fts.factor_engine.audit import FactorAuditReport, AuditItemResult
+
+        # 注入隔离 DuckDB：minimal_loop 默认连真实因子库，直接调 _promote_to_elite
+        # 会写入生产库导致测试非幂等（残留 seed_test_001/test_momentum 使重跑去重拦截）
+        minimal_loop.factor_db_path = tmp_path / "iso_catalog.duckdb"
+        minimal_loop._repo = None
 
         mock_report = FactorAuditReport(
             factor_id=sample_seed["factor_id"],
@@ -5129,11 +5187,40 @@ class TestGapF16PromoteToElite:
         assert loop._promote_to_elite(self._make_factor(), self._make_evaluation(), shadow_observe=False) is None
 
     def test_promote_family_limit_returns_none(self, tmp_memory_dir, tmp_elite_dir):
-        """家族因子数达上限 → 返回 None。"""
+        """家族因子数达上限 → 返回 None（结构簇配额关闭时回退 max_per_family 旧逻辑）。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        loop.budget["max_per_family"] = 2
+        loop._cluster_quota_enabled = False  # GAP-077: 默认走结构簇配额，显式关闭以覆盖 max_per_family 回退路径
+        self._mock_repo(loop, get_by_family=[{"factor_id": "a"}, {"factor_id": "b"}])
+        assert loop._promote_to_elite(self._make_factor(), self._make_evaluation(), shadow_observe=False) is None
+
+    def test_promote_family_limit_other_exempt(self, tmp_memory_dir, tmp_elite_dir):
+        """兜底家族 'other' 达上限仍晋升（GAP-070：永久豁免）。"""
         loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
         loop.budget["max_per_family"] = 2
         self._mock_repo(loop, get_by_family=[{"factor_id": "a"}, {"factor_id": "b"}])
-        assert loop._promote_to_elite(self._make_factor(), self._make_evaluation(), shadow_observe=False) is None
+        self._mock_screen_grade(loop)
+        loop.elite_tracker.init_tracker = MagicMock()
+        loop._check_elite_correlation = MagicMock(return_value=None)
+        factor = self._make_factor(fid="fct_prom070a", name="promote_other")
+        factor["family"] = "other"
+        fp = loop._promote_to_elite(factor, self._make_evaluation(), shadow_observe=False)
+        assert fp is not None
+        assert fp.exists()
+
+    def test_promote_family_limit_unknown_exempt(self, tmp_memory_dir, tmp_elite_dir):
+        """兜底家族 'unknown' 达上限仍晋升（GAP-070：永久豁免）。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        loop.budget["max_per_family"] = 2
+        self._mock_repo(loop, get_by_family=[{"factor_id": "a"}, {"factor_id": "b"}])
+        self._mock_screen_grade(loop)
+        loop.elite_tracker.init_tracker = MagicMock()
+        loop._check_elite_correlation = MagicMock(return_value=None)
+        factor = self._make_factor(fid="fct_prom070b", name="promote_unknown")
+        factor["family"] = "unknown"
+        fp = loop._promote_to_elite(factor, self._make_evaluation(), shadow_observe=False)
+        assert fp is not None
+        assert fp.exists()
 
     def test_promote_multiple_test_fail_returns_none(self, tmp_memory_dir, tmp_elite_dir):
         """多重检验未通过 → 返回 None。"""
@@ -5720,7 +5807,7 @@ class TestGapF16EvolveOneAndBatch:
         assert out[1] == "gp_evolution"
 
     def test_batch_generate_one_rotation(self, tmp_memory_dir):
-        """batch 单候选生成方法轮换 hint: macro→gp→deep→operator→gp。"""
+        """batch 单候选生成方法轮换 hint: macro→gp→deep→transformer→operator→gp。"""
         loop = self._make_loop(tmp_memory_dir)
         hints: list[str] = []
 
@@ -5733,7 +5820,7 @@ class TestGapF16EvolveOneAndBatch:
             loop._batch_idx = i
             proposal = loop._batch_generate_one({"factor_id": "p1"}, 1, "t")
             assert proposal is not None
-        assert hints == ["macro", "gp", "deep", "operator", "gp"]
+        assert hints == ["macro", "gp", "deep", "transformer", "operator"]
 
     def test_batch_generate_one_none(self, tmp_memory_dir):
         """batch 单候选生成失败 → None。"""

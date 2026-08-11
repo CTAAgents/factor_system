@@ -174,6 +174,7 @@ class FactorAuditor:
         ohlcv_by_symbol: Optional[dict[str, pd.DataFrame]] = None,
         oos_result: Optional[dict[str, Any]] = None,
         p_values: Optional[list[float]] = None,
+        symbol_holdout: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> FactorAuditReport:
         """执行完整审计流程。
@@ -189,6 +190,8 @@ class FactorAuditor:
             ohlcv_by_symbol: 品种 → OHLCV DataFrame (压力测试)
             oos_result: 外部已计算的 OOS 结果 (含 ic_consistency, passed 等)
             p_values: 多重检验的 p 值列表
+            symbol_holdout: 标的留出验证结果 dict (GAP-075，含 train_ic/holdout_ic/
+                ic_retention/passed)，缺失标记 skipped
             **kwargs: 保留扩展
 
         Returns:
@@ -202,6 +205,7 @@ class FactorAuditor:
         items.append(self._check_causal_validity(factor, data, forward_returns))
         items.append(self._check_oos_consistency(oos_result))
         items.append(self._check_cross_symbol(symbol_ic_map))
+        items.append(self._check_symbol_holdout(symbol_holdout))
         items.append(self._check_stress_resilience(signals_by_symbol, ohlcv_by_symbol))
         items.append(self._check_multiple_testing(p_values))
         items.append(self._check_snooping(data, forward_returns))
@@ -334,6 +338,20 @@ class FactorAuditor:
                 evidence="未提供 OOS 结果",
             )
 
+        # GAP-073 (v2.98.0): 短样本下 WalkForward 实际完成窗口数 < 2 时，单窗口
+        # 无法做跨窗口一致性验证（ic_consistency 退化为单窗口 IC 正负的 0/1 硬币），
+        # 标记 skipped 而非 failed——与 cross_symbol/stress_resilience/multiple_testing
+        # 等数据缺失项对齐，避免 500 行日频数据下演化候选全量被一致性项误杀。
+        # 仅当走航结果显式给出窗口数时生效；L1 兜底结果（无 n_windows_completed 键）
+        # 保持原判定逻辑。
+        n_windows = oos_result.get("n_windows_completed")
+        if isinstance(n_windows, int) and n_windows < 2:
+            return AuditItemResult(
+                name=name,
+                status="skipped",
+                evidence=f"WalkForward 窗口不足（n_windows={n_windows} < 2），跳过一致性判定",
+            )
+
         ic_consistency = oos_result.get("ic_consistency", 0.0)
         passed_flag = oos_result.get("passed", False)
         min_ratio = self._config.min_oos_pass_ratio
@@ -395,6 +413,50 @@ class FactorAuditor:
                 "positive_ratio": positive_ratio,
                 "mean_ic": float(np.mean(ics)),
                 "threshold": threshold,
+            },
+        )
+
+    # ─── 3.5 标的留出验证（GAP-075）────────────────────────
+
+    def _check_symbol_holdout(
+        self,
+        symbol_holdout: Optional[dict[str, Any]],
+    ) -> AuditItemResult:
+        """标的留出验证：同市场泛化——留出集 IC > 0 且保持率 ≥ 阈值。
+
+        数据缺失（未提供/留出集过小）标记 skipped，不阻断主流程。
+        """
+        name = "symbol_holdout"
+
+        if not symbol_holdout:
+            return AuditItemResult(
+                name=name,
+                status="skipped",
+                evidence="未提供标的留出验证结果",
+            )
+
+        passed_flag = bool(symbol_holdout.get("passed", False))
+        train_ic = symbol_holdout.get("train_ic")
+        holdout_ic = symbol_holdout.get("holdout_ic")
+        retention = symbol_holdout.get("ic_retention")
+        n_holdout = symbol_holdout.get("n_holdout")
+
+        def _fmt(v: Any) -> str:
+            return f"{float(v):.4f}" if isinstance(v, (int, float)) else str(v)
+
+        return AuditItemResult(
+            name=name,
+            status="passed" if passed_flag else "failed",
+            evidence=(
+                f"train_ic={_fmt(train_ic)} holdout_ic={_fmt(holdout_ic)} "
+                f"retention={_fmt(retention)} (n_holdout={n_holdout})"
+            ),
+            score=float(retention) if isinstance(retention, (int, float)) else 0.0,
+            details={
+                "n_holdout": int(n_holdout) if isinstance(n_holdout, (int, float)) else 0,
+                "train_ic": train_ic,
+                "holdout_ic": holdout_ic,
+                "ic_retention": retention,
             },
         )
 

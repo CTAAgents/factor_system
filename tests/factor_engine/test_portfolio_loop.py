@@ -1029,6 +1029,91 @@ class TestPortfolioLoop:
         assert result.error is not None
         assert "模拟致命错误" in result.error
 
+    # ── GAP-072 权重重算日 / 冻结日 ──
+
+    def test_run_frozen_skips_recompute(self, tmp_portfolio_dir, tmp_elite_dir):
+        """recompute_weights=False 时冻结返回 status="frozen"，不构建组合、不落盘 combo。"""
+        factor_file = tmp_elite_dir / "factor_test.json"
+        factor_file.write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_mock",
+                    "name": "mock_momentum",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+        )
+        result = loop.run(recompute_weights=False)
+        assert result.status == "frozen"
+        assert result.n_factors_retained == 0
+        assert result.n_factors_input == 0
+        # 冻结日不重写 current_combo.json（复用上次组合）
+        assert not (Path(tmp_portfolio_dir) / "current_combo.json").exists()
+
+    def test_run_force_recompute(self, tmp_portfolio_dir, tmp_elite_dir):
+        """recompute_weights=True 强制全量重算（非周五也可触发）。"""
+        factor_file = tmp_elite_dir / "factor_test.json"
+        factor_file.write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_mock",
+                    "name": "mock_momentum",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+        )
+        result = loop.run(recompute_weights=True)
+        assert result.status in ("passed", "verifier_warning", "completed")
+        assert result.n_factors_retained >= 1
+        assert (Path(tmp_portfolio_dir) / "current_combo.json").exists()
+
+    def test_run_cold_start_frozen_day_recomputes(self, tmp_portfolio_dir, tmp_elite_dir):
+        """冻结日 + 无上次组合（冷启动）仍执行全量构建（无权重可冻结）。"""
+        factor_file = tmp_elite_dir / "factor_test.json"
+        factor_file.write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_mock",
+                    "name": "mock_momentum",
+                    "sharpe": 2.5,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "decay_6m": 0.1,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+        )
+        with patch("fts.config.is_weight_recompute_day", return_value=False):
+            result = loop.run()
+        assert result.status in ("passed", "verifier_warning", "completed")
+        assert (Path(tmp_portfolio_dir) / "current_combo.json").exists()
+
     # ── P1/P2 集成测试 ──
 
     def test_enable_clustering_no_crash(self, tmp_portfolio_dir, tmp_elite_dir):
@@ -1245,11 +1330,11 @@ class TestPortfolioLoop:
         )
         result = loop.run(factor_returns=fr)
         assert result.status in ("passed", "verifier_warning", "completed")
-        # 归因报告写入 reports/{date}/
+        # 归因报告写入 reports/{market}/{date}/（v2.101.0 市场目录隔离）
         import datetime as _dt
 
         ts = _dt.date.today().isoformat()
-        reports_dir = Path("reports") / ts
+        reports_dir = Path("reports") / "stock" / ts
         assert reports_dir.exists()
         md_files = list(reports_dir.glob("portfolio_attribution_*.md"))
         assert len(md_files) >= 1
@@ -1301,7 +1386,7 @@ class TestPortfolioLoop:
         import datetime as _dt
 
         ts = _dt.date.today().isoformat()
-        reports_dir = Path("reports") / ts
+        reports_dir = Path("reports") / "stock" / ts
         wf_files = list(reports_dir.glob("portfolio_wf_*.md"))
         assert len(wf_files) >= 1
         content = wf_files[-1].read_text(encoding="utf-8")
@@ -2689,8 +2774,8 @@ class TestShadowPool:
                     "market": "stock",
                     "shadow_pool": {
                         "promoted_at": today.isoformat(),
-                        "observe_trading_days": 5,
-                        "observe_until": (today + timedelta(days=5)).isoformat(),
+                        "observe_trading_days": 30,
+                        "observe_until": (today + timedelta(days=30)).isoformat(),
                     },
                 }
             ),
@@ -3394,6 +3479,36 @@ class TestStickySharpeBuildComboBranches:
                 combo = build_combo(signals, mode="equal_weight")
         assert combo["sharpe_randomization_passed"] is False
         assert "随机化测试未通过" in caplog.text
+
+    def test_build_combo_applies_exposure_scale(self):
+        """28-T6: exposure_scale 在归一化后统一缩放总仓位并写入组合字段。"""
+        signals = [
+            PortfolioSignal(
+                factor_id="a",
+                name="f1",
+                weight=2.0,
+                sharpe=1.0,
+                ic=0.05,
+                turnover=0.1,
+                decay_6m=0.0,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="b",
+                name="f2",
+                weight=1.0,
+                sharpe=1.2,
+                ic=0.06,
+                turnover=0.1,
+                decay_6m=0.0,
+                retained=True,
+            ),
+        ]
+        combo = build_combo(signals, "equal_weight", "trace-x", exposure_scale=0.5)
+        total = sum(s["weight"] for s in combo["signals"])
+        assert abs(total - 0.5) < 1e-6  # 归一化 1.0 × scale 0.5
+        assert combo.get("exposure_scale") == 0.5
+        assert combo.get("regime_meta", {}).get("exposure_scale") == 0.5
 
 
 # ════════════════════════════════════════════════════════════

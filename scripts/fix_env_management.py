@@ -34,7 +34,7 @@ RECOMMENDED_ENV_VARS: dict[str, str] = {
     "ANTHROPIC_MODEL": "claude-sonnet-4-20250514",
     # FTS 路径配置
     "FTS_MEMORY_DIR": "memory",
-    "FTS_ELITE_DIR": "memory/knowledge/factors/elite",
+    "FTS_ELITE_DIR": "memory/knowledge/factors/stocks_elite",
     "FTS_FUTURES_ELITE_DIR": "memory/knowledge/factors/futures_elite",
     "FTS_DEFAULT_MARKET": "futures",
     "FTS_MAX_WORKERS": "4",

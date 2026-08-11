@@ -36,10 +36,13 @@ class FactorRepository:
     _art_index_drop_count: int = 0
     _art_index_rebuild_count: int = 0
 
-    def __init__(self, db_path: str | Path | None = None):
-        from .schema import DATABASE_PATH
+    def __init__(self, db_path: str | Path | None = None, market: str = "stock"):
+        from .schema import get_db_path
 
-        self._db_path = Path(db_path) if db_path else DATABASE_PATH
+        if db_path:
+            self._db_path = Path(db_path)
+        else:
+            self._db_path = get_db_path(market)
         self._conn = None
         self._last_columns: list[str] = []
 
@@ -662,12 +665,16 @@ class FactorRepository:
         self,
         factor_id: str,
         evaluation: dict[str, Any],
+        update_catalog_status: bool = True,
     ) -> str:
         """添加因子评估记录。
 
         Args:
             factor_id: 因子 ID
             evaluation: 评估数据
+            update_catalog_status: 是否同步回写 factor_catalog.status
+                （True=按评估结果置 active/failed，plans/29 P1 迁移归档/退役因子时
+                传 False 保持既有 lifecycle 状态不被覆盖）
 
         Returns:
             eval_id
@@ -718,18 +725,19 @@ class FactorRepository:
             ],
         )
 
-        # 更新主表最新评估
-        self.update_factor(
-            factor_id,
-            {
-                "sharpe": evaluation.get("sharpe", 0.0),
-                "ic": evaluation.get("ic", 0.0),
-                "icir": evaluation.get("icir", 0.0),
-                "max_drawdown": evaluation.get("max_drawdown", 0.0),
-                "turnover_monthly": evaluation.get("turnover", 0.0),
-                "status": "active" if evaluation.get("overall_passed") else "failed",
-            },
-        )
+        # 更新主表最新评估（plans/29 P1：迁移归档/退役因子时关闭，避免覆盖 lifecycle 状态）
+        if update_catalog_status:
+            self.update_factor(
+                factor_id,
+                {
+                    "sharpe": evaluation.get("sharpe", 0.0),
+                    "ic": evaluation.get("ic", 0.0),
+                    "icir": evaluation.get("icir", 0.0),
+                    "max_drawdown": evaluation.get("max_drawdown", 0.0),
+                    "turnover_monthly": evaluation.get("turnover", 0.0),
+                    "status": "active" if evaluation.get("overall_passed") else "failed",
+                },
+            )
 
         conn.execute("CHECKPOINT")
         logger.info("[FactorRepo] 添加评估: %s -> %s", factor_id, eval_id)
@@ -1130,10 +1138,13 @@ class FactorQualityScoreRepository:
 
     _JSON_COLS = frozenset({"dimension_scores"})
 
-    def __init__(self, db_path: str | Path | None = None):
-        from .schema import DATABASE_PATH
+    def __init__(self, db_path: str | Path | None = None, market: str = "stock"):
+        from .schema import get_db_path
 
-        self._db_path = Path(db_path) if db_path else DATABASE_PATH
+        if db_path:
+            self._db_path = Path(db_path)
+        else:
+            self._db_path = get_db_path(market)
         self._conn = None
 
     def _get_conn(self):
@@ -1307,10 +1318,13 @@ class FactorStatusRepository:
     _art_index_drop_count: int = 0
     _art_index_rebuild_count: int = 0
 
-    def __init__(self, db_path: str | Path | None = None):
-        from .schema import DATABASE_PATH
+    def __init__(self, db_path: str | Path | None = None, market: str = "stock"):
+        from .schema import get_db_path
 
-        self._db_path = Path(db_path) if db_path else DATABASE_PATH
+        if db_path:
+            self._db_path = Path(db_path)
+        else:
+            self._db_path = get_db_path(market)
         self._conn = None
 
     def _get_conn(self):
@@ -1458,10 +1472,13 @@ class FactorAuditReportRepository:
 
     _JSON_COLS = frozenset({"results_json", "summary_json", "recommendations"})
 
-    def __init__(self, db_path: str | Path | None = None):
-        from .schema import DATABASE_PATH
+    def __init__(self, db_path: str | Path | None = None, market: str = "stock"):
+        from .schema import get_db_path
 
-        self._db_path = Path(db_path) if db_path else DATABASE_PATH
+        if db_path:
+            self._db_path = Path(db_path)
+        else:
+            self._db_path = get_db_path(market)
         self._conn = None
 
     def _get_conn(self):

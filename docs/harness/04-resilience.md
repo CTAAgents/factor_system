@@ -1,6 +1,6 @@
 # FTS 韧性设计
 
-> 版本: v2.89.0
+> 版本: v2.102.0
 > 最后更新: 2026-08-05
 
 ---
@@ -128,7 +128,7 @@ state.json.bak.2    ← 上上上一次写入
 | `mcp_enabled=true` 且已注入 handler | 直接调用注入的 MCP 客户端（`set_mcp_handler`） |
 | `mcp_enabled=true` 但未注入 handler | 抛 RuntimeError 显式初始化报错，避免静默失败掩盖配置错误 |
 
-### DuckDB 并发模型（v2.86.0，GAP-056，design/E.1）
+### DuckDB 并发模型（v2.86.0，GAP-056，design/E.1；v2.101.0 补充分库方案）
 
 | 场景 | 机制 |
 |:-----|:-----|
@@ -136,6 +136,7 @@ state.json.bak.2    ← 上上上一次写入
 | 批量写原子性 | `executemany`/`copy_from_records` 显式 `BEGIN/COMMIT` 包裹（DuckDB executemany 为逐条执行非单事务），任一条失败整批 `ROLLBACK`，不留半写入 |
 | 读写互不阻塞 | 读走 `DuckDBReader` 连接池（普通连接，DuckDB 不允许同文件并存可写 + read_only=True 连接，读语义由代码纪律保证），MVCC 快照使写提交期间读侧不受阻塞 |
 | 跨进程写 | 写 job 单一化（模块级 `_get_writer` 单例）+ 脚本 `--readonly` 声明受限，同一 .duckdb 任意时刻至多一个可写连接 |
+| 跨市场文件锁竞争 | 按市场（股票/期货）拆分独立 DuckDB 文件（`factor_catalog_stock.duckdb`/`factor_catalog_futures.duckdb`），物理隔离消除跨市场锁冲突 |
 | 兼容降级 | `duckdb_single_writer=false` 回退旧多路径；`retry_on_conflict`/`AsyncWriteQueue`/`lock_configuration` 保留为防御兜底（不依赖其解决并发） |
 | 锁配置降级 | 旧版 DuckDB 不支持 `lock_configuration` 时静默降级，由应用层写锁兜底 |
 

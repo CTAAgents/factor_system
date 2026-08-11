@@ -58,6 +58,25 @@ class TestMissing:
         field_alerts = [a for a in alerts if a.metric_name == "missing_ratio_volume"]
         assert field_alerts and field_alerts[0].severity == "critical"
 
+    def test_hold_missing_detected(self) -> None:
+        """GAP-085 回归：key_fields 修正为 hold 后，持仓量缺失率真实触发告警。
+
+        原 key_fields 用 open_interest（期货日线字段为 hold），持仓量缺失静默跳过。
+        """
+        monitor = DataLevelMonitor()
+        df = _make_ohlcv(n=100)
+        df["hold"] = 200_000.0
+        df.loc[:49, "hold"] = np.nan  # 50% 缺失
+        alerts = monitor.check_missing(df)
+        field_alerts = [a for a in alerts if a.metric_name == "missing_ratio_hold"]
+        assert field_alerts and field_alerts[0].severity == "critical"
+
+    def test_hold_not_in_df_no_alert(self) -> None:
+        """数据无 hold 列（如纯 OHLCV）→ 跳过，不误报。"""
+        monitor = DataLevelMonitor()
+        df = _make_ohlcv(n=100).drop(columns=["open_interest"])
+        assert monitor.check_missing(df) == []
+
     def test_threshold_boundary(self) -> None:
         """恰好等于阈值不触发（严格大于）。"""
         monitor = DataLevelMonitor(config=DataLevelConfig(missing_ratio_warning=0.10))

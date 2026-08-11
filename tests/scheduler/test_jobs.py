@@ -271,7 +271,7 @@ class TestL3PortfolioLoopJob:
     """l3_portfolio_loop_job 测试。"""
 
     def test_success(self, caplog):
-        """成功路径：期货组合构建（futures_elite + market=futures）后触发期货信号管道。"""
+        """成功路径：期货组合构建（futures_elite + market=futures），与信号管道解绑不联动。"""
         result = MagicMock(status="ok", n_factors_retained=5, combo_sharpe=1.2345)
         fake_portfolio = _fake_module(PortfolioLoop=MagicMock())
         fake_portfolio.PortfolioLoop.return_value.run.return_value = result
@@ -290,7 +290,7 @@ class TestL3PortfolioLoopJob:
             jobs.l3_portfolio_loop_job()
 
         assert "[L3] 完成: status=ok retained=5 sharpe=1.2345" in caplog.text
-        mock_pipeline.assert_called_once()
+        mock_pipeline.assert_not_called()  # GAP-072: L3 与信号管道解绑，不再联动触发
 
     def test_uses_futures_path(self, caplog):
         """显式期货路径：elite_dir=futures_elite_dir + market="futures"（v2.73.0）。"""
@@ -332,6 +332,52 @@ class TestL3PortfolioLoopJob:
             jobs.l3_portfolio_loop_job()  # 不应抛出
 
         assert "[L3] 运行失败: portfolio crash" in caplog.text
+
+
+class TestL3PortfolioLoopStockJob:
+    """l3_portfolio_loop_stock_job 测试（GAP-063 股票 L3 前置接入，v2.90.0）。"""
+
+    def test_stock_path(self, caplog):
+        """股票路径：elite_dir=cfg.elite_dir + market="stock"，完成后联动股票信号管道。"""
+        result = MagicMock(status="ok", n_factors_retained=3, combo_sharpe=2.3456)
+        fake_portfolio = _fake_module(PortfolioLoop=MagicMock())
+        fake_portfolio.PortfolioLoop.return_value.run.return_value = result
+
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "fts.factor_engine.portfolio_loop": fake_portfolio,
+                    "fts.config": _make_cfg_module(),
+                },
+            ),
+            patch("fts.scheduler.jobs._run_daily_signal_pipeline") as mock_pipeline,
+        ):
+            caplog.set_level(logging.INFO)
+            jobs.l3_portfolio_loop_stock_job()
+
+        _, kwargs = fake_portfolio.PortfolioLoop.call_args
+        assert kwargs["market"] == "stock"
+        assert kwargs["elite_dir"] == "/tmp/elite"  # 股票精英目录
+        assert "[L3-stock] 完成: status=ok retained=3 sharpe=2.3456" in caplog.text
+        mock_pipeline.assert_not_called()  # GAP-072: L3 与信号管道解绑，不再联动触发
+
+    def test_stock_failure_caught(self, caplog):
+        """股票组合构建失败时捕获并记录错误。"""
+        fake_portfolio = _fake_module(PortfolioLoop=MagicMock(side_effect=RuntimeError("stock crash")))
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "fts.factor_engine.portfolio_loop": fake_portfolio,
+                    "fts.config": _make_cfg_module(),
+                },
+            ),
+        ):
+            caplog.set_level(logging.ERROR)
+            jobs.l3_portfolio_loop_stock_job()  # 不应抛出
+
+        assert "[L3-stock] 运行失败: stock crash" in caplog.text
 
 
 # ─── 期货信号管道 ────────────────────────────────────────
@@ -385,6 +431,59 @@ class TestFuturesSignalPipeline:
 
         mock_pipeline.assert_called_once()
         assert "[信号管道] 启动 trace_id=fts.signal.sched_" in caplog.text
+
+
+# ─── 股票/ETF 信号管道 ───────────────────────────────────
+
+
+class TestDailySignalPipeline:
+    """_run_daily_signal_pipeline / daily_signal_pipeline_job 测试（与期货对称）。"""
+
+    def test_pipeline_success(self, caplog):
+        """管道主函数成功并返回 0。"""
+        scripts_pkg = types.ModuleType("scripts")
+        scripts_pkg.__path__ = []
+        fake_pipeline = _fake_module(main=MagicMock(return_value=0))
+
+        with patch.dict(
+            sys.modules,
+            {
+                "scripts": scripts_pkg,
+                "scripts.daily_signal_pipeline": fake_pipeline,
+            },
+        ):
+            caplog.set_level(logging.INFO)
+            jobs._run_daily_signal_pipeline()
+
+        fake_pipeline.main.assert_called_once_with(max_stocks=50, days=120)
+        assert "[股票信号管道] 完成: exit_code=0" in caplog.text
+
+    def test_pipeline_failure_caught(self, caplog):
+        """管道主函数抛异常时捕获并记录错误。"""
+        scripts_pkg = types.ModuleType("scripts")
+        scripts_pkg.__path__ = []
+        fake_pipeline = _fake_module(main=MagicMock(side_effect=RuntimeError("pipeline crash")))
+
+        with patch.dict(
+            sys.modules,
+            {
+                "scripts": scripts_pkg,
+                "scripts.daily_signal_pipeline": fake_pipeline,
+            },
+        ):
+            caplog.set_level(logging.ERROR)
+            jobs._run_daily_signal_pipeline()  # 不应抛出
+
+        assert "[股票信号管道] 失败: pipeline crash" in caplog.text
+
+    def test_daily_signal_pipeline_job(self, caplog):
+        """独立任务入口调用 _run_daily_signal_pipeline。"""
+        with patch("fts.scheduler.jobs._run_daily_signal_pipeline") as mock_pipeline:
+            caplog.set_level(logging.INFO)
+            jobs.daily_signal_pipeline_job()
+
+        mock_pipeline.assert_called_once()
+        assert "[股票信号管道] 启动 trace_id=fts.signal.stock.sched_" in caplog.text
 
 
 # ─── 健康检查 ────────────────────────────────────────────
@@ -480,10 +579,14 @@ class TestMonthlyDecayEvalJob:
         assert "淘汰已同步至" not in caplog.text
 
     def test_success_with_retirement(self, caplog):
-        """存在淘汰因子时同步 DuckDB + JSON（含 market 与回退分支）。"""
+        """存在淘汰因子时同步 DuckDB + JSON（含 market 与回退分支）。
+
+        分库后 get_factor 先查 stock 库，fid2 缺失时回退查 futures 库（共 3 次）。
+        """
         fake_tracker_mod, fake_db, fake_registry = self._build_mocks(
             retired=["fid1", "fid2"],
-            factor_results=[{"market": "futures"}, None],  # 第二个因子不存在
+            # fid1: stock 命中（market=futures）；fid2: stock 未命中 → 回退 futures 也未命中
+            factor_results=[{"market": "futures"}, None, None],
         )
         with (
             patch.dict(
@@ -500,7 +603,7 @@ class TestMonthlyDecayEvalJob:
             jobs.monthly_decay_eval_job()
 
         repo = fake_db.FactorRepository.return_value
-        assert repo.get_factor.call_count == 2
+        assert repo.get_factor.call_count == 3
         assert repo.retire_factor.call_count == 2
         assert "[衰减评估] 淘汰已同步至 DuckDB + JSON: 2/2 个因子" in caplog.text
 
@@ -611,7 +714,7 @@ class TestLogicMonitorJob:
             caplog.set_level(logging.INFO)
             jobs.logic_monitor_job()
 
-        assert "[逻辑监控] 完成: total=2 drift=2 extreme=2" in caplog.text
+        assert "[逻辑监控] 完成: total=4 drift=4 extreme=4" in caplog.text
         assert "[逻辑监控] 因子异常: f1 drift=True extreme=True" in caplog.text
 
     def test_no_active_factors(self, caplog):
@@ -651,7 +754,7 @@ class TestLogicMonitorJob:
 
         assert "[逻辑监控] 因子 f1 检查失败: factor check crash" in caplog.text
         # 完成后仍输出汇总日志
-        assert "[逻辑监控] 完成: total=2 drift=0 extreme=0" in caplog.text
+        assert "[逻辑监控] 完成: total=4 drift=0 extreme=0" in caplog.text
 
     def test_failure_caught(self, caplog):
         """数据库加载失败时捕获并记录错误。"""
@@ -785,3 +888,23 @@ class TestSyncFuturesDataJobExtra:
         assert summary["success"] == 1
         assert summary["failure"] == 0
         assert "[Sync] 完成:" in caplog.text
+
+
+# ─── 数据驱动动态池刷新（GAP-054） ───────────────────────
+
+
+class TestSyncLiquidityPoolJob:
+    """sync_liquidity_pool_job 成功/失败路径（GAP-054 动态池刷新）。"""
+
+    def test_success_calls_main(self):
+        """成功路径：调用 scripts.sync_liquidity_pool.main()。"""
+        with patch("scripts.sync_liquidity_pool.main") as m_main:
+            jobs.sync_liquidity_pool_job()
+            m_main.assert_called_once()
+
+    def test_failure_logs_without_raising(self, caplog):
+        """失败路径：main 抛异常仅记录错误日志，不向上抛出。"""
+        with patch("scripts.sync_liquidity_pool.main", side_effect=RuntimeError("snapshot failed")):
+            caplog.set_level(logging.ERROR)
+            jobs.sync_liquidity_pool_job()
+        assert "[L-Pool] 动态池刷新失败: snapshot failed" in caplog.text

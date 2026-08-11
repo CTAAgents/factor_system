@@ -1,0 +1,77 @@
+# FTS Deploy (Manual) — 手动发布 GitHub Release
+#
+# 用途（作为 ci.yml 自动发布的补充通道）：
+#   1. CI 自动发布失败（如网络/构建偶发）时，人工确认后补发
+#   2. 对任意 tag 或分支手动出包发布（不依赖 CI 全绿）
+#
+# 用法：GitHub 仓库 → Actions → "FTS Deploy (Manual)" → Run workflow → 填写 ref。
+# 零外部凭据：使用内置 GITHUB_TOKEN，无需配置 secret。
+# 注意：本工作流会覆盖已存在的同名 Release（幂等），且不运行测试，仅做构建与发布。
+
+name: FTS Deploy (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to publish（tag 如 v2.100.0，或分支名）"
+        required: true
+        default: ""
+      prerelease:
+        description: "标记为预发布（prerelease）"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+      - name: Resolve version from pyproject.toml
+        run: |
+          VER="$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")"
+          echo "VER=${VER}" >> "$GITHUB_ENV"
+          echo "Resolved version: ${VER}"
+      - name: Build sdist + wheel
+        run: python -m build
+      - name: Sanity-check artifacts
+        run: |
+          python - <<'EOF'
+          import glob
+          sdist = glob.glob('dist/fts-*.tar.gz')
+          wheel = glob.glob('dist/*.whl')
+          assert sdist, f'missing sdist: {sdist}'
+          assert wheel, f'missing wheel: {wheel}'
+          print('artifacts ok:', sdist, wheel)
+          EOF
+      - name: Publish GitHub Release (create or update)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${VER}"
+          PRE="${{ inputs.prerelease }}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" --title "FTS ${VER}" --prerelease="${PRE}"
+            gh release upload "${TAG}" dist/* --clobber
+            echo "Updated existing release ${TAG} (prerelease=${PRE})"
+          else
+            EXTRA=""
+            if [ "${PRE}" = "true" ]; then EXTRA="--prerelease"; fi
+            gh release create "${TAG}" dist/* --title "FTS ${VER}" --notes "手动发布自 ${GITHUB_WORKFLOW} (run ${GITHUB_RUN_ID})" ${EXTRA}
+            echo "Created release ${TAG}"
+          fi

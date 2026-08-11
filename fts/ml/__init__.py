@@ -26,9 +26,11 @@ from .models import (
     MLSignalModel,
     ModelKind,
     ModelNotAvailableError,
+    TransformerFactorModel,
     create_gru_model,
     create_mlp_model,
     create_signal_model,
+    create_transformer_model,
 )
 from .trainer import (
     TrainMode,
@@ -42,9 +44,11 @@ __all__ = [
     "MLSignalModel",
     "ModelKind",
     "ModelNotAvailableError",
+    "TransformerFactorModel",
     "create_gru_model",
     "create_mlp_model",
     "create_signal_model",
+    "create_transformer_model",
     "TrainMode",
     "SignalModelTrainer",
     "TrainResult",

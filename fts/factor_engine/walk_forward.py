@@ -116,18 +116,10 @@ class WalkForwardOptimizer:
                 metrics = evaluate_fn(train_df, oos_df)
                 window_results.append(
                     WalkForwardWindowResult(
-                        train_start=_to_date_str(
-                            train_df.index[0] if hasattr(train_df.index, "dtype") else train_df.iloc[0].name
-                        ),
-                        train_end=_to_date_str(
-                            train_df.index[-1] if hasattr(train_df.index, "dtype") else train_df.iloc[-1].name
-                        ),
-                        oos_start=_to_date_str(
-                            oos_df.index[0] if hasattr(oos_df.index, "dtype") else oos_df.iloc[0].name
-                        ),
-                        oos_end=_to_date_str(
-                            oos_df.index[-1] if hasattr(oos_df.index, "dtype") else oos_df.iloc[-1].name
-                        ),
+                        train_start=_df_boundary_date(train_df, "first"),
+                        train_end=_df_boundary_date(train_df, "last"),
+                        oos_start=_df_boundary_date(oos_df, "first"),
+                        oos_end=_df_boundary_date(oos_df, "last"),
                         ic=metrics.get("ic", 0.0),
                         sharpe=metrics.get("sharpe", 0.0),
                         turnover=metrics.get("turnover", 0.0),
@@ -278,6 +270,23 @@ def _to_date_str(value: pd.Timestamp | object) -> str:
     if isinstance(value, pd.Timestamp):
         return value.strftime("%Y-%m-%d")
     return str(value)
+
+
+def _df_boundary_date(df: pd.DataFrame, which: str) -> str:
+    """取 DataFrame 首/尾索引日期（空 df 返回空串，容错 window_years=0 空训练段）。
+
+    Args:
+        df: 数据段
+        which: "first" 取首行，否则取末行
+    """
+    if df is None or len(df) == 0:
+        return ""
+    try:
+        if which == "first":
+            return _to_date_str(df.index[0] if hasattr(df.index, "dtype") else df.iloc[0].name)
+        return _to_date_str(df.index[-1] if hasattr(df.index, "dtype") else df.iloc[-1].name)
+    except (IndexError, KeyError):
+        return ""
 
 
 __all__ = [

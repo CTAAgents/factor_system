@@ -197,7 +197,10 @@ class RollCalendar:
         try:
             import duckdb
 
-            con = duckdb.connect(self.db_path, read_only=True)
+            # 与主流程（FuturesDataProvider/DuckDBReader）保持一致的打开配置：
+            # 同一进程内同一 DuckDB 文件只允许一种连接配置，read_only=True 会与
+            # 主连接的默认读写配置冲突（"different configuration than existing connections"）
+            con = duckdb.connect(self.db_path)
         except Exception as e:  # noqa: BLE001
             logger.warning("[RollCalendar] DuckDB 连接失败 [%s]: %s", base, e)
             return None

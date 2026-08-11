@@ -444,10 +444,12 @@ class TestInitDefaultAggregator:
 
 class TestFromAggregatorDf:
     def test_converts_columns_and_index(self):
-        """17 列聚合器输出 → 8 列标准格式，date 索引升序。"""
+        """17 列聚合器输出 → 9 列标准格式，date 索引升序。"""
         agg_df = _make_agg_df(["2026-01-02", "2026-01-01"], base=100.0)
         df = FuturesDataProvider._from_aggregator_df(agg_df, "RB0")
-        assert list(df.columns) == ["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]
+        assert list(df.columns) == [
+            "open", "high", "low", "close", "volume", "amount", "vwap", "hold", "settle",
+        ]
         assert isinstance(df.index, pd.DatetimeIndex)
         assert df.index.is_monotonic_increasing
 
@@ -479,6 +481,7 @@ class TestGetOhlcvFallbackChain:
             "low",
             "close",
             "volume",
+            "amount",
             "vwap",
             "hold",
             "settle",
@@ -671,13 +674,13 @@ class TestMinuteAndTick:
 
 class TestFromKlineCache:
     def test_reads_and_enriches(self, mocker):
-        """DuckDB 读取：vwap 精确计算、settle/hold 代理列、升序索引。"""
+        """DuckDB 读取：vwap 精确计算、settle/hold 代理列（NULL 回退）、升序索引。"""
         mock_db = mocker.MagicMock()
         mock_result = mocker.MagicMock()
-        # 8 列: date, open, high, low, close, volume, amount, vwap
+        # 11 列: date, open, high, low, close, volume, amount, hold, settle, vwap, symbol
         mock_result.fetchall.return_value = [
-            ("2026-01-02", 10.5, 11.5, 9.5, 11.0, 2000.0, 22000.0, 11.0),
-            ("2026-01-01", 10.0, 11.0, 9.0, 10.5, 1000.0, 10500.0, 10.5),
+            ("2026-01-02", 10.5, 11.5, 9.5, 11.0, 2000.0, 22000.0, None, None, 11.0, "RB0"),
+            ("2026-01-01", 10.0, 11.0, 9.0, 10.5, 1000.0, 10500.0, None, None, 10.5, "RB0"),
         ]
         mock_db.execute.return_value = mock_result
         mocker.patch("fts.data_futures._get_reader", return_value=mock_db)
@@ -686,11 +689,15 @@ class TestFromKlineCache:
         mocker.patch.object(FuturesDataProvider, "_init_default_aggregator")
         provider = FuturesDataProvider(use_akshare_fallback=False, aggregator=None)
         df = provider._from_kline_cache("RB0", days=10)
-        assert list(df.columns) == ["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]
+        assert list(df.columns) == [
+            "open", "high", "low", "close", "volume", "amount", "vwap", "hold", "settle",
+        ]
         assert df.index.is_monotonic_increasing
         # 排序后第一行 = 2026-01-01: vwap = amount/volume = 10500/1000
         assert df["vwap"].iloc[0] == pytest.approx(10500.0 / 1000.0)
-        # settle 代理 = (H+L+C)/3
+        # amount 原样保留
+        assert df["amount"].iloc[0] == 10500.0
+        # settle 代理 = (H+L+C)/3（hold/settle 为 NULL → 回退代理）
         assert df["settle"].iloc[0] == pytest.approx((11.0 + 9.0 + 10.5) / 3)
         # hold 代理 = 20 日滚动均量（min_periods=1）
         assert df["hold"].iloc[0] == 1000.0
@@ -739,7 +746,9 @@ class TestFromTqLocal:
         )
         mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", return_value=mock_source)
         df = self._provider(mocker)._from_tq_local("RB0", 10)
-        assert list(df.columns) == ["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]
+        assert list(df.columns) == [
+            "open", "high", "low", "close", "volume", "amount", "vwap", "hold", "settle",
+        ]
         assert df.index.is_monotonic_increasing
 
     def test_empty_or_missing_close_returns_none(self, mocker):
@@ -806,8 +815,12 @@ class TestFromAkshare:
         )
         mocker.patch("akshare.futures_zh_daily_sina", return_value=df)
         result = self._provider(mocker)._from_akshare("RB", 10)
-        assert list(result.columns) == ["open", "high", "low", "close", "volume", "hold", "settle", "vwap"]
+        assert list(result.columns) == [
+            "open", "high", "low", "close", "volume", "hold", "settle", "vwap", "amount",
+        ]
         assert result["vwap"].iloc[0] == pytest.approx((11.0 + 9.0 + 10.5 + 10.6) / 4)
+        # GAP-083 补充 amount：AKShare sina 无成交额 → 0.0
+        assert result["amount"].iloc[0] == 0.0
 
     def test_limit_days(self, mocker):
         """行数超过 days 时截断。"""

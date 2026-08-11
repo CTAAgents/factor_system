@@ -1,3 +1,13 @@
+# FTS CI/CD — 自动构建、测试、部署
+#
+# 触发策略：
+#   - push 到 main / develop        → 全量 CI（lint / type-check / test / benchmark）
+#   - PR 到 main                     → 全量 CI（部署跳过）
+#   - push tag v*（如 v2.100.0）    → CI 全绿后自动发布 GitHub Release（部署环节）
+#
+# 部署零外部凭据：GitHub Release 使用仓库内置 GITHUB_TOKEN，无需配置任何 secret。
+# 若后续要发布 PyPI，只需：在仓库 Secrets 添加 PYPI_API_TOKEN，并在 release job 增加 twine upload 步骤。
+
 name: FTS CI
 
 on:
@@ -7,7 +17,13 @@ on:
   pull_request:
     branches: [main]
 
+# 同分支并发时取消旧任务，节省 runner 配额
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # ──────────────── CI: Lint ────────────────
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
@@ -17,13 +33,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
       - name: Install ruff
-        run: python -m pip install ruff>=0.4
+        # 注意版本约束必须加引号，否则 bash 会把 '>' 解析为输出重定向
+        run: python -m pip install "ruff>=0.4"
       - name: ruff check
         run: ruff check fts/ tests/ scripts/
       - name: ruff format --check
         run: ruff format --check fts/ tests/ scripts/
 
+  # ──────────────── CI: Type-check ────────────────
   type-check:
     name: Type-check (mypy)
     runs-on: ubuntu-latest
@@ -33,6 +52,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -40,19 +60,21 @@ jobs:
       - name: mypy fts/
         run: mypy fts/
 
+  # ──────────────── CI: Test（版本矩阵）────────────
   test:
     name: Test (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
-
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -66,6 +88,7 @@ jobs:
           file: ./coverage.xml
           fail_ci_if_error: false
 
+  # ──────────────── CI: Benchmark ────────────────
   benchmark:
     name: Benchmark
     runs-on: ubuntu-latest
@@ -76,6 +99,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -83,24 +107,67 @@ jobs:
       - name: Run benchmarks
         run: python -m pytest tests/benchmarks/ --benchmark-only -q
 
+  # ──────────────── CD: 部署（GitHub Release）────────────────
+  # tag v* 推送时触发，lint/type-check/test 全绿后自动构建并发布 Release 附件。
   release:
-    name: Release (sdist + wheel)
+    name: Deploy · GitHub Release
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [lint, type-check, test]
+    permissions:
+      contents: write # 仅此 job 授予写权限，遵循最小权限原则
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build package
+      - name: Install build tooling
         run: |
           python -m pip install --upgrade pip
           pip install build
-          python -m build
-      - name: Upload artifacts
+      - name: Validate tag ↔ pyproject.toml version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"                # 例如 v2.100.0
+          VER="$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")"
+          if [ "${TAG#v}" != "$VER" ]; then
+            echo "::error::Tag '${TAG}' does not match pyproject.toml version 'v${VER}'. Fix the tag or bump the version before releasing."
+            exit 1
+          fi
+          echo "TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "VER=${VER}" >> "$GITHUB_ENV"
+      - name: Build sdist + wheel
+        run: python -m build
+      - name: Sanity-check artifacts
+        run: |
+          python - <<'EOF'
+          import glob
+          sdist = glob.glob('dist/fts-*.tar.gz')
+          wheel = glob.glob('dist/*.whl')
+          assert sdist, f'missing sdist: {sdist}'
+          assert wheel, f'missing wheel: {wheel}'
+          print('artifacts ok:', sdist, wheel)
+          EOF
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
+          retention-days: 30
+      - name: Publish GitHub Release (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES="## FTS v${VER} 自动发布
+
+          - 构建产物: sdist + wheel
+          - 由 GitHub Actions 自动生成
+          - Workflow: ${GITHUB_WORKFLOW} / Run: ${GITHUB_RUN_ID}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" --title "FTS ${VER}" --notes "${NOTES}"
+            gh release upload "${TAG}" dist/* --clobber
+            echo "Updated existing release ${TAG}"
+          else
+            gh release create "${TAG}" dist/* --title "FTS ${VER}" --notes "${NOTES}"
+            echo "Created release ${TAG}"
+          fi

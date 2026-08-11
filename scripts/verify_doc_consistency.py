@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -169,8 +170,13 @@ def check_version_consistency() -> list[dict[str, str]]:
     return issues
 
 
-def run_all_checks() -> dict[str, Any]:
-    """运行全部一致性检查。"""
+def run_all_checks(docs: list[Path] | None = None) -> dict[str, Any]:
+    """运行全部一致性检查。
+
+    Args:
+        docs: 待检查文档列表；None 时扫描 HARNESS_DIR 下全部 .md。
+              传 None 保持全量扫描行为；--file 指定时由 main() 传入单文档列表。
+    """
     results: dict[str, Any] = {
         "passed": 0,
         "failed": 0,
@@ -179,7 +185,8 @@ def run_all_checks() -> dict[str, Any]:
         "errors": [],
     }
 
-    docs = find_docs()
+    if docs is None:
+        docs = find_docs()
     if not docs:
         results["errors"].append("未找到 Harness 文档")
         return results
@@ -321,7 +328,16 @@ def main() -> int:
         if not update_script.exists():
             print(f"❌ 修复脚本不存在: {update_script}")
             return 1
-        os.system(f"{sys.executable} {update_script} --apply")
+        # 用 subprocess 列表参数执行，避免解释器路径含空格时被 cmd 拆分（原 os.system 缺陷）
+        result = subprocess.run(
+            [sys.executable, str(update_script), "--apply"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        if result.returncode != 0:
+            print(f"❌ 版本号修复失败（exit={result.returncode}）：\n{result.stdout}{result.stderr}")
+            return 1
         print("\n✅ 版本号修复完成，继续检查一致性...\n")
 
     if args.file:
@@ -336,7 +352,7 @@ def main() -> int:
             print("❌ 未找到文档")
             return 1
 
-    results = run_all_checks()
+    results = run_all_checks(docs)
 
     if args.json:
         print(json.dumps(results, ensure_ascii=False, indent=2))

@@ -265,7 +265,7 @@ class TestDirectoryLoading:
 
         futures_dir = seeds_dir / "futures"
         factors = load_factors_from_dir(futures_dir)
-        assert len(factors) == 184
+        assert len(factors) == 185
 
     def test_load_stock_directory(self, seeds_dir: Path):
         """股票目录可正确加载所有 YAML 文件。"""
@@ -298,18 +298,18 @@ class TestLoadAllYamlSeeds:
     """测试全量加载 API。"""
 
     def test_load_all_seeds(self):
-        """加载所有市场种子（898 个）。"""
+        """加载所有市场种子（899 个）。"""
         from fts.factor_engine.seed_loader import load_all_yaml_seeds
 
         seeds = load_all_yaml_seeds()
-        assert len(seeds) == 898
+        assert len(seeds) == 899
 
     def test_load_futures_only(self):
-        """仅加载期货种子（184 个）。"""
+        """仅加载期货种子（185 个）。"""
         from fts.factor_engine.seed_loader import load_all_yaml_seeds
 
         seeds = load_all_yaml_seeds(market="futures")
-        assert len(seeds) == 184
+        assert len(seeds) == 185
 
     def test_load_stock_only(self):
         """仅加载股票种子（714 个，含 GAP-S05 A 股特有种子）。"""
@@ -342,13 +342,13 @@ class TestDualPathConsistency:
         assert hc_names.issubset(yaml_names), f"硬编码兜底包含 YAML 主路径未覆盖的因子: {hc_names - yaml_names}"
 
     def test_futures_count_match(self):
-        """YAML 主路径 184 个期货因子，硬编码兜底 81 个。"""
+        """YAML 主路径 185 个期货因子，硬编码兜底 81 个。"""
         from fts.factor_engine.seed_loader import load_all_yaml_seeds
         from fts.factor_engine.seed_pool import SeedPool
 
         yaml_count = len(load_all_yaml_seeds(market="futures"))
         hc_count = len(SeedPool(market="futures", use_yaml=False).load_all_seeds())
-        assert yaml_count == 184
+        assert yaml_count == 185
         assert yaml_count >= hc_count
 
     def test_stock_names_match(self):
@@ -366,7 +366,7 @@ class TestDualPathConsistency:
 
         pool = SeedPool(market="futures")
         seeds = pool.load_all_seeds()
-        assert len(seeds) == 184
+        assert len(seeds) == 185
 
     def test_seedpool_use_yaml_false(self):
         """SeedPool use_yaml=False 走硬编码路径。"""
@@ -468,7 +468,7 @@ class TestIntegrityVerification:
         report = verify_yaml_integrity()
         assert report["valid"] is True
         assert report["total_files"] == 30
-        assert report["total_factors"] == 898
+        assert report["total_factors"] == 899
         assert len(report["errors"]) == 0
 
     def test_verify_report_structure(self):

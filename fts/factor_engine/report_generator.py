@@ -79,6 +79,8 @@ class ReportGenerator:
         lines.append(self._generate_equity_curve(report))
         lines.append(self._generate_drawdown_curve(report))
         lines.append(self._generate_ic_timeline(report))
+        lines.append(self._generate_ic_cumulative(report))
+        lines.append(self._generate_ic_decay(report))
         lines.append(self._generate_monthly_heatmap(report))
         return "\n".join(lines)
 
@@ -147,6 +149,47 @@ class ReportGenerator:
             f"- IC 标准差: {float(ic.std()):.4f}\n"
             f"- IC IR: {float(ic.mean()) / float(ic.std() + 1e-12):.3f}\n"
             f"- IC>0 占比: {float((ic > 0).mean()):.2%}\n"
+        )
+
+    def _generate_ic_cumulative(self, report: Any) -> str:
+        """生成 IC 累计曲线（cumsum 采样，判断因子持续有效性）。
+
+        单调上升 → 因子持续有效；波动大/下降 → 因子失效（对照六层框架 Layer 2 累计 IC）。
+        """
+        ic = _get(report, "ic_series", None)
+        if ic is None or len(ic) == 0:
+            return "## IC 累计曲线\n\n（无 IC 数据）\n"
+        cum = ic.cumsum()
+        sample = cum.iloc[:: max(1, len(cum) // 20)][:20]
+        rows = "\n".join(f"| {idx.date() if hasattr(idx, 'date') else idx} | {v:.4f} |" for idx, v in sample.items())
+        return (
+            "## IC 累计曲线\n\n"
+            "IC 序列 cumsum：单调上升说明因子持续有效，波动大/下降说明失效。\n\n"
+            f"| 日期 | 累计 IC |\n|------|--------|\n{rows}\n"
+            f"\n期末累计 IC: {float(cum.iloc[-1]):.4f}\n"
+        )
+
+    def _generate_ic_decay(self, report: Any) -> str:
+        """生成 IC 衰减曲线（多持有期 IC/ICIR，GAP-060）。
+
+        各持有期 IC 与 ICIR 一览，best_horizon 为 |ICIR| 最大持有期，指导调仓频率。
+        """
+        metrics = _get_metrics(report)
+        mh = metrics.get("multi_horizon") if isinstance(metrics, dict) else None
+        if not isinstance(mh, dict) or not mh.get("ic_by_horizon"):
+            return "## IC 衰减曲线\n\n（无多持有期数据，配置 FTS_EVAL_HORIZONS 启用）\n"
+        ic_by_h = mh.get("ic_by_horizon", {})
+        icir_by_h = mh.get("icir_by_horizon", {})
+        best = mh.get("best_horizon")
+        rows = "\n".join(
+            f"| {h} 日 | {ic_by_h.get(h, 0.0):.4f} | {icir_by_h.get(h, 0.0):.4f} |"
+            for h in sorted(ic_by_h)
+        )
+        return (
+            "## IC 衰减曲线\n\n"
+            "各持有期 IC 与 ICIR（GAP-060），best_horizon 为 |ICIR| 最大持有期。\n\n"
+            f"| 持有期 | IC | ICIR |\n|--------|-----|------|\n{rows}\n"
+            f"\n- 最佳持有期: {best} 日\n"
         )
 
     def _generate_monthly_heatmap(self, report: Any) -> str:

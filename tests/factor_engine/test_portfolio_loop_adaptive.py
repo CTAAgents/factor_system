@@ -14,12 +14,14 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
+from fts.factor_engine.adaptive_weight import RegimeSmoother
 from fts.factor_engine.contracts import (
     DEFAULT_ADAPTIVE_CONFIG,
     AdaptiveWeightConfig,
 )
 from fts.factor_engine.portfolio_loop import (
     PortfolioLoop,
+    regime_adaptive_weight_adjustment,
     synthesize_signals,
 )
 
@@ -79,6 +81,13 @@ def test_default_adaptive_config() -> None:
     assert DEFAULT_ADAPTIVE_CONFIG["smoother"] == {"alpha": 0.5, "min_days": 2}
     assert DEFAULT_ADAPTIVE_CONFIG["min_clamp"] == 0.5
     assert DEFAULT_ADAPTIVE_CONFIG["max_clamp"] == 1.5
+
+
+def test_default_adaptive_config_has_probability_mix() -> None:
+    """默认配置: 制度概率混合 + 置信度仓位缩放（28-T4）。"""
+    cfg = DEFAULT_ADAPTIVE_CONFIG
+    assert cfg.get("probability_mix", False) is True
+    assert 0.0 < cfg.get("confidence_scale_min", 0.3) <= 1.0
 
 
 def test_custom_adaptive_config_override() -> None:
@@ -159,3 +168,71 @@ def test_portfolio_loop_custom_adaptive_config() -> None:
     loop = PortfolioLoop(synthesis_mode="adaptive", adaptive_config=cfg)
     assert loop.adaptive_config["dimension"] == "family"
     assert loop.adaptive_config["smoother"]["alpha"] == 0.2
+
+
+# ─── regime blend（28-T3：制度概率混合权重）──────────────────
+
+
+def _make_signals(specs: list[tuple[str, str, float]]) -> list[dict]:
+    """构造最小信号列表（regime blend 测试用）。"""
+    return [
+        {
+            "factor_id": fid,
+            "name": fid,
+            "weight": weight,
+            "sharpe": 1.5,
+            "ic": 0.05,
+            "turnover": 0.3,
+            "decay_6m": 0.05,
+            "retained": True,
+        }
+        for fid, _family, weight in specs
+    ]
+
+
+def _make_factors(specs: list[tuple[str, str]]) -> list[dict]:
+    """构造最小因子列表（regime blend 测试用）。"""
+    return [{"factor_id": fid, "name": fid, "family": family} for fid, family in specs]
+
+
+def test_regime_blend_mixes_probability_weighted_multipliers() -> None:
+    """regime_probs 存在时按概率混合倍率，而非硬查表。"""
+    signals = _make_signals([("f1", "trend", 0.10)])
+    regime = {
+        "regime": "oscillate",
+        "confidence": 0.5,
+        "regime_probs": {"bull": 0.6, "oscillate": 0.4, "bear": 0.0, "high_vol": 0.0, "low_vol": 0.0},
+    }
+    adjusted = regime_adaptive_weight_adjustment(signals, regime, _make_factors([("f1", "trend")]))
+    # bull trend 倍率 1.3 × 0.6 + oscillate trend 倍率 0.8 × 0.4 = 1.10
+    assert abs(adjusted[0]["weight"] - 0.10 * 1.10) < 1e-6
+
+
+def test_regime_blend_fallback_hardcoded() -> None:
+    """无 regime_probs 时回退硬查表（向后兼容）。"""
+    signals = _make_signals([("f1", "trend", 0.10)])
+    regime = {"regime": "bull", "confidence": 0.8}
+    adjusted = regime_adaptive_weight_adjustment(signals, regime, _make_factors([("f1", "trend")]))
+    assert abs(adjusted[0]["weight"] - 0.10 * 1.3) < 1e-6  # bull/trend=1.3
+
+
+# ─── RegimeSmoother 不对称切换（28-T7：de-risk 快 / re-risk 慢）───────
+
+
+def test_smoother_asymmetric_de_risk_faster() -> None:
+    """进入风险制度快速降权（de-risk），离开风险制度缓慢加仓（re-risk）。
+
+    对标 Man AHL / PIMCO 战术配置：进入 bear/high_vol 用大 alpha 快速向新权重
+    靠拢，回归安全制度用小 alpha 缓慢回升，滞后确认防震荡。
+    注：min_days=1 保证 stable_days(0) < min_days 走过渡期分支（min_days=0
+    会命中稳定期直接采用分支，见 monitor 既有用例语义）。
+    """
+    smoother = RegimeSmoother(alpha=0.3, min_days=1, de_risk_alpha=0.8, re_risk_alpha=0.1)
+    prev = {"a": 1.0}
+    # 进入风险制度：快速下降（0.8×0.2 + 0.2×1.0 = 0.36）
+    w1 = smoother.should_apply("high_vol", prev, {"a": 0.2})
+    assert w1["a"] < 0.5  # 大幅向新权重靠拢
+    # 回归安全制度：缓慢上升（0.1×1.0 + 0.9×0.36 = 0.424）
+    w2 = smoother.should_apply("bull", w1, {"a": 1.0})
+    assert w2["a"] < 0.9  # 仅小幅回升
+    assert w2["a"] > w1["a"]

@@ -154,6 +154,7 @@ class FuturesDataAggregator:
         if df is not None and not df.empty:
             df = self._set_source(df, DataSource.DUCKDB_CACHE.value)
             df = self._enhance_fields(df, symbol, trace_id)
+            df = self._derive_pre_settle(df)
             # 14.2: 缓存命中后自动交叉验证最近 N 天
             self._maybe_cross_check(df, symbol, trace_id)
             return df
@@ -181,6 +182,7 @@ class FuturesDataAggregator:
                 # 缓存到 DuckDB
                 self._write_cache(df)
                 df = self._enhance_fields(df, symbol, trace_id)
+                df = self._derive_pre_settle(df)
                 # 14.2: K 线拉取成功 + 字段增强后自动交叉验证最近 N 天
                 self._maybe_cross_check(df, symbol, trace_id)
                 return df
@@ -510,13 +512,17 @@ class FuturesDataAggregator:
             return
         try:
             # 1) 去重：删除目标表中已存在的 (symbol, datetime)
+            # DuckDB 不支持多列 IN 子查询（Binder Error: Subquery returns 2 columns），
+            # 改用 EXISTS 相关子查询（等价语义，兼容 DuckDB/SQLite）。
             dup = df[["symbol", "datetime"]].drop_duplicates()
             con.register("df_dup", dup)
             con.execute(
                 """
                 DELETE FROM tick_cache
-                WHERE (symbol, datetime) IN (
-                    SELECT symbol, datetime FROM df_dup
+                WHERE EXISTS (
+                    SELECT 1 FROM df_dup
+                    WHERE df_dup.symbol = tick_cache.symbol
+                      AND df_dup.datetime = tick_cache.datetime
                 )
                 """
             )
@@ -579,18 +585,86 @@ class FuturesDataAggregator:
                 enrich_df = enhancer.fetch_ohlcv_or_none(symbol, days=len(df), trace_id=trace_id)
                 if enrich_df is not None and not enrich_df.empty:
                     self._record_success(enhancer.source_name)
-                    # 简单实现: 用 enrich_df 的 settle/oi_change/pre_settle 覆盖主路径的对应列
-                    if "settle" in enrich_df.columns and "settle" in df.columns:
-                        df["settle"] = enrich_df["settle"].values[: len(df)]
-                    if "pre_settle" in enrich_df.columns and "pre_settle" in df.columns:
-                        df["pre_settle"] = enrich_df["pre_settle"].values[: len(df)]
-                    if "oi_change" in enrich_df.columns and "oi_change" in df.columns:
-                        df["oi_change"] = enrich_df["oi_change"].values[: len(df)]
-                    if "hold" in enrich_df.columns and "hold" in df.columns:
-                        df["hold"] = enrich_df["hold"].values[: len(df)]
+                    # 有效值覆盖：hold/settle/pre_settle 仅覆盖 >0 的行，oi_change 仅覆盖非 NaN 行
+                    # （GAP-083 阶段 C：增强源字段缺失/NaN 时保留主路径回填值，避免污染）
+                    self._apply_enrich_column(df, enrich_df, "settle", positive_only=True)
+                    self._apply_enrich_column(df, enrich_df, "pre_settle", positive_only=True)
+                    self._apply_enrich_column(df, enrich_df, "oi_change", positive_only=False)
+                    self._apply_enrich_column(df, enrich_df, "hold", positive_only=True)
             except Exception as e:  # noqa: BLE001
                 logger.warning("[%s] 字段增强异常 [%s]: %s", enhancer.source_name, symbol, e)
                 self._record_failure(enhancer.source_name, str(e))
+        return df
+
+    @staticmethod
+    def _apply_enrich_column(
+        df: pd.DataFrame,
+        enrich_df: pd.DataFrame,
+        column: str,
+        positive_only: bool,
+    ) -> None:
+        """将 enrich_df 某列的有效值按行位置覆盖到 df 对应列（失败不抛异常）。
+
+        - positive_only=True: 仅覆盖 >0 且非 NaN 的行（价格/持仓类字段）
+        - positive_only=False: 仅覆盖非 NaN 的行（可正可负，如 oi_change）
+        使用 iloc 位置赋值，避免 datetime index 与 RangeIndex 对齐错位。
+        """
+        if column not in enrich_df.columns or column not in df.columns:
+            return
+        try:
+            vals = enrich_df[column].to_numpy()[: len(df)]
+            if positive_only:
+                mask = ~pd.isna(vals) & (vals > 0)
+            else:
+                mask = ~pd.isna(vals)
+            if mask.any():
+                df.iloc[mask, df.columns.get_loc(column)] = vals[mask]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[enhance] 覆盖列 %s 失败: %s", column, e)
+
+    @staticmethod
+    def _derive_pre_settle(df: pd.DataFrame) -> pd.DataFrame:
+        """按财务定义派生 pre_settle = 前一交易日 settle（缺失回退 close.shift(1)）。
+
+        仅派生当前无效行（NaN/≤0），不覆盖已有有效值（如增强层补的权威值）。
+        pre_settle 财务定义：昨结算 = 前一交易日结算价（settle 权威来源为 AKShare 回填）。
+        内部按 date 升序派生后还原原行序——兼容源路径（升序）与缓存路径
+        （ORDER BY date DESC 倒序）两种聚合器输出，不改变输出行序契约。
+
+        Args:
+            df: 17 列 FTS schema DataFrame（含 settle/pre_settle/close）
+
+        Returns:
+            派生后的 df（不改变行数/列数，公开输出契约不变）
+        """
+        if "settle" not in df.columns or "pre_settle" not in df.columns or "close" not in df.columns:
+            return df
+        try:
+            if "date" not in df.columns:
+                # 无 date 列：按当前行序派生（升序假设）
+                prev_settle = df["settle"].shift(1)
+                prev_close = df["close"].shift(1)
+                derived = prev_settle.where(prev_settle.fillna(0.0) > 0, prev_close).fillna(df["close"])
+                mask = df["pre_settle"].isna() | (df["pre_settle"] <= 0)
+                if mask.any():
+                    df["pre_settle"] = derived.where(mask, df["pre_settle"])
+                return df
+
+            order = np.argsort(df["date"].to_numpy(), kind="stable")
+            rev = np.argsort(order, kind="stable")
+            s = pd.Series(df["settle"].to_numpy()[order])
+            c = pd.Series(df["close"].to_numpy()[order])
+            prev_s = s.shift(1)
+            prev_c = c.shift(1)
+            derived_sorted = prev_s.where(prev_s.fillna(0.0) > 0, prev_c).fillna(c)
+            pre_arr = df["pre_settle"].to_numpy()[order]
+            mask_sorted = np.isnan(pre_arr) | (pre_arr <= 0)
+            if mask_sorted.any():
+                vals = derived_sorted.to_numpy()[rev]  # 还原到原行序
+                mask_orig = mask_sorted[rev]
+                df["pre_settle"] = df["pre_settle"].where(~mask_orig, vals)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[pre_settle] 派生失败: %s", e)
         return df
 
     # ─── DuckDB 缓存（单连接模式，避免 read_only 冲突）──

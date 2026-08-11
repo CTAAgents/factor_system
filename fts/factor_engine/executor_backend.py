@@ -104,14 +104,48 @@ class ProcessBackend(ExecutorBackend):
         self._pool.shutdown(wait=True)
 
 
+class _DaskResultIterator:
+    """Dask Future 结果迭代器（逐项取结果，单项异常不影响后续）。
+
+    对齐 concurrent.futures.map 契约：某任务异常在 ``next()`` 时抛出，
+    迭代器位置已推进，后续 ``next()`` 继续产出剩余任务结果
+    （生成器表达式无法做到——异常会关闭生成器，导致剩余任务丢失）。
+    """
+
+    def __init__(self, futures: list[Any]) -> None:
+        self._futures = list(futures)
+        self._idx = 0
+
+    def __iter__(self) -> "_DaskResultIterator":
+        return self
+
+    def __next__(self) -> Any:
+        if self._idx >= len(self._futures):
+            raise StopIteration
+        f = self._futures[self._idx]
+        self._idx += 1
+        return f.result()
+
+
 class DaskBackend(ExecutorBackend):
-    """Dask 分布式后端（Stage 3 集群）。无 dask 依赖时降级 ProcessBackend。"""
+    """Dask 分布式后端（Stage 3 集群；C4 2026-08-11 增强：cluster 注入/故障注入/worker 诊断）。
+
+    无 dask 依赖或集群创建失败时降级 ProcessBackend（缺依赖不阻断主流程）。
+    单机 LocalCluster（Client(n_workers)）等价多节点调度语义，真实集群通过
+    ``address="tcp://scheduler:8786"`` 接入（部署后置，见 plans/23 C4 实施设计）。
+    """
 
     name = "dask"
 
-    def __init__(self, max_workers: int = 4, address: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        max_workers: int = 4,
+        address: Optional[str] = None,
+        cluster: Optional[Any] = None,
+    ) -> None:
         self._degraded: Optional[ExecutorBackend] = None
         self._client: Optional[Any] = None
+        self._cluster = cluster
         try:
             from distributed import Client
         except ImportError:
@@ -119,20 +153,62 @@ class DaskBackend(ExecutorBackend):
             self._degraded = ProcessBackend(max_workers)
             return
         try:
-            self._client = Client(address=address, n_workers=max(1, int(max_workers))) if address else Client(
-                n_workers=max(1, int(max_workers)), threads_per_worker=1, processes=True
-            )
+            if address:
+                self._client = Client(address=address)
+            elif cluster is not None:
+                self._client = Client(cluster)
+            else:
+                self._client = Client(n_workers=max(1, int(max_workers)), threads_per_worker=1, processes=True)
         except Exception as e:  # noqa: BLE001 - 集群不可用降级
             logger.warning("[ExecutorBackend] dask Client 创建失败(%s)，降级 ProcessBackend", e)
             self._degraded = ProcessBackend(max_workers)
             self._client = None
+
+    @property
+    def worker_count(self) -> int:
+        """调度器活跃 worker 数（诊断/故障注入；降级或异常返回 0）。
+
+        以 ``client.scheduler_info()`` 为准（retire/kill 后准确反映可调度 worker），
+        而非 ``cluster.workers``（LocalCluster 会保留已退休 worker 状态）。
+        """
+        if self._degraded is not None or self._client is None:
+            return 0
+        try:
+            workers = self._client.scheduler_info().get("workers") or {}
+            return len(workers) if workers else 0
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def kill_worker(self) -> int:
+        """退休并关闭一个 worker（故障注入测试，close_workers=True 真正终止进程）。
+
+        调度器将已分配任务重派给存活 worker（dask 自动重算）。返回剩余 worker 数。
+        """
+        if self._degraded is not None or self._client is None:
+            return 0
+        try:
+            workers = self._client.scheduler_info().get("workers") or {}
+            victims = list(workers.keys())
+            if not victims:
+                return self.worker_count
+            import random
+
+            victim = victims[random.randrange(len(victims))]
+            self._client.retire_workers(workers=[victim], close_workers=True)
+            return self.worker_count
+        except Exception:  # noqa: BLE001
+            return self.worker_count
+
+    def alive_workers(self) -> int:
+        """存活 worker 数（kill_worker 后剩余；降级/异常返回 0）。"""
+        return self.worker_count
 
     def map(self, fn: Callable[..., Any], *iterables: Iterable[Any]) -> Iterator[Any]:
         if self._degraded is not None:
             return self._degraded.map(fn, *iterables)
         assert self._client is not None
         futures = [self._client.submit(fn, *args) for args in zip(*iterables)]
-        return (f.result() for f in futures)
+        return _DaskResultIterator(futures)
 
     def shutdown(self) -> None:
         if self._degraded is not None:
@@ -171,7 +247,7 @@ class RayBackend(ExecutorBackend):
         if self._degraded is not None:
             return self._degraded.map(fn, *iterables)
         assert self._ray is not None
-        from cloudpickle import dumps, loads
+        from cloudpickle import dumps
 
         payload = dumps(fn)
         remote = self._ray.remote(_process_worker)

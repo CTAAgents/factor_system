@@ -238,10 +238,11 @@ _FUTURES_SEED_NAMES = {
     "fut_option_vol_term",
     "fut_option_skew",
     "fut_option_pcr",
-    # 家族 12: 市场环境因子家族 (8)
+    # 家族 12: 市场环境因子家族 (9)
     "fut_macro_cpi",
     "fut_macro_interest_rate",
     "fut_macro_export",
+    "fut_macro_import",
     "fut_macro_us_bond",
     "fut_mkt_trend",
     "fut_mkt_speculation",
@@ -284,16 +285,16 @@ _FUTURES_SEED_NAMES = {
 
 
 def test_futures_seed_pool_loads_all_seeds():
-    """期货模式加载 184 个期货专用种子因子（17 大因子家族，YAML 主路径）。"""
+    """期货模式加载 185 个期货专用种子因子（17 大因子家族，YAML 主路径）。"""
     pool = SeedPool(market="futures")
     seeds = pool.load_all_seeds()
-    assert len(seeds) == 184
+    assert len(seeds) == 185
 
 
 def test_futures_seed_pool_count():
-    """期货模式 count() 返回 184。"""
+    """期货模式 count() 返回 185。"""
     pool = SeedPool(market="futures")
-    assert pool.count() == 184
+    assert pool.count() == 185
 
 
 def test_futures_seed_pool_list_names():
@@ -301,7 +302,7 @@ def test_futures_seed_pool_list_names():
     pool = SeedPool(market="futures")
     names = pool.list_names()
     assert _FUTURES_SEED_NAMES.issubset(set(names))
-    assert len(names) == 184
+    assert len(names) == 185
 
 
 def test_futures_seed_pool_no_stock_seeds():
@@ -384,7 +385,7 @@ def test_futures_seed_inject_from_l1():
     pool = SeedPool(market="futures")
     # 先加载种子，再注入 L1
     pool.load_all_seeds()
-    assert pool.count() == 184
+    assert pool.count() == 185
     candidate = {
         "name": "fut_test_candidate",
         "code": "def factor_program(data, params):\n    import numpy as np\n    return np.clip(data['close'], -1, 1)",
@@ -397,7 +398,7 @@ def test_futures_seed_inject_from_l1():
     assert injected is not None
     assert injected["source"] == "bootstrapping"
     # 注入后种子数不变（L1 注入不计入 base seeds）
-    assert pool.count() == 184
+    assert pool.count() == 185
     injected_list = pool.list_injected_l1()
     assert len(injected_list) == 1
 

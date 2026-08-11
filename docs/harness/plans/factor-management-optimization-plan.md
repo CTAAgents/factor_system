@@ -1,7 +1,7 @@
 # FTS 因子管理优化实施计划
 
 
-> 版本: v2.89.0
+> 版本: v2.102.0
 
 **版本**: v1.0  
 **创建日期**: 2026-08-05  
@@ -58,7 +58,7 @@
 | 版本历史 | 无 | 无法回溯演化谱系 |
 | 备份方式 | 逐文件拷贝 | 操作繁琐 |
 
-**涉及目录**: [memory/knowledge/factors/elite/](file:///d:/Programs/factor_system/memory/knowledge/factors/elite)
+**涉及目录**: [memory/knowledge/factors/stocks_elite/](file:///d:/Programs/factor_system/memory/knowledge/factors/stocks_elite)
 
 **涉及文件**:
 - [evolution_loop.py#L480-L520](file:///d:/Programs/factor_system/fts/factor_engine/evolution_loop.py#L480-L520) — Elite 写入
@@ -194,7 +194,7 @@ scripts/migrate_seeds_to_yaml.py
 scripts/migrate_elite_to_db.py
   ├── Task 1: 连接 DuckDB（复用 data/fts_history.duckdb 或新建 data/factor_catalog.duckdb）
   ├── Task 2: 创建 factor_catalog 表 + 索引
-  ├── Task 3: 扫描 memory/knowledge/factors/elite/*.json
+  ├── Task 3: 扫描 memory/knowledge/factors/stocks_elite/*.json
   ├── Task 4: 解析 JSON → INSERT INTO factor_catalog
   ├── Task 5: 解析相关性元数据 → corr_flags JSON 字段
   ├── Task 6: 代码哈希去重（INSERT OR IGNORE ON code_hash）
@@ -326,7 +326,7 @@ scripts/migrate_elite_to_db.py
 #### Task 2.3: 迁移现有 JSON 因子
 
 - [ ] 创建 `scripts/migrate_elite_to_db.py`
-- [ ] 扫描 `memory/knowledge/factors/elite/*.json`
+- [ ] 扫描 `memory/knowledge/factors/stocks_elite/*.json`
 - [ ] 解析 JSON → factor_catalog 记录
 - [ ] 计算 `code_hash`（SHA256）用于去重
 - [ ] 处理 `correlation_metadata` → `corr_flags` JSON 字段

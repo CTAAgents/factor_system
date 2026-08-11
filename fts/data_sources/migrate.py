@@ -232,6 +232,28 @@ CREATE TABLE IF NOT EXISTS option_chain_cache (
 )
 """
 
+# v2.86.0 (GAP-xxx): stock_kline_cache 股票/ETF 日 K 线缓存表。
+# 与期货 kline_cache 同风格，去掉期货特有字段（hold/settle/pre_settle/
+# oi_change/vwap），保留 A 股/ETF 全量 OHLCV + amount + 复权因子。
+STOCK_KLINE_CACHE_CREATE_DDL: str = """
+CREATE TABLE IF NOT EXISTS stock_kline_cache (
+    symbol      VARCHAR,
+    period      VARCHAR,
+    date        DATE,
+    open        DOUBLE,
+    high        DOUBLE,
+    low         DOUBLE,
+    close       DOUBLE,
+    volume      DOUBLE,
+    amount      DOUBLE,
+    adj_factor  DOUBLE,
+    source      VARCHAR,
+    fetched_at  TIMESTAMP,
+    trace_id    VARCHAR,
+    PRIMARY KEY (symbol, period, date, source)
+)
+"""
+
 
 # ─── 内部辅助函数 ──────────────────────────────────────────
 
@@ -338,8 +360,22 @@ def migrate_schema(db_path: str | Path) -> dict[str, int]:
             tables_created += 1
 
         # 1.5) contract_kline（具体合约日线，换月日历基础，v2.58.0）
-        if _create_table_if_absent(con, "contract_kline", CONTRACT_KLINE_CREATE_DDL):
-            tables_created += 1
+        # v2.101.0+: 旧表扩列（hold, settle, source, fetched_at, trace_id）
+        CONTRACT_KLINE_NEW_COLUMNS: list[tuple[str, str]] = [
+            ("hold", "DOUBLE"),
+            ("settle", "DOUBLE"),
+            ("source", "VARCHAR"),
+            ("fetched_at", "TIMESTAMP"),
+            ("trace_id", "VARCHAR"),
+        ]
+        if _table_exists(con, "contract_kline"):
+            columns_added += _add_missing_columns(con, "contract_kline", CONTRACT_KLINE_NEW_COLUMNS)
+            # 旧数据补 source 默认值
+            if columns_added > 0:
+                con.execute("UPDATE contract_kline SET source = 'AKSHARE' WHERE source IS NULL")
+        else:
+            if _create_table_if_absent(con, "contract_kline", CONTRACT_KLINE_CREATE_DDL):
+                tables_created += 1
 
         # 2) minute_cache（分钟级 K 线缓存）
         if _create_table_if_absent(con, "minute_cache", MINUTE_CACHE_CREATE_DDL):
@@ -349,6 +385,10 @@ def migrate_schema(db_path: str | Path) -> dict[str, int]:
         if _create_table_if_absent(con, "edb_cache", EDB_CACHE_DDL):
             tables_created += 1
         if _create_table_if_absent(con, "option_chain_cache", OPTION_CHAIN_CACHE_DDL):
+            tables_created += 1
+
+        # 3.5) stock_kline_cache（股票/ETF 日 K 线缓存，v2.86.0）
+        if _create_table_if_absent(con, "stock_kline_cache", STOCK_KLINE_CACHE_CREATE_DDL):
             tables_created += 1
 
         # 4) tick_cache（TQSDK tick 逐笔数据缓存，v2.31.0）
@@ -388,4 +428,5 @@ __all__ = [
     "MINUTE_CACHE_CREATE_DDL",
     "EDB_CACHE_DDL",
     "OPTION_CHAIN_CACHE_DDL",
+    "STOCK_KLINE_CACHE_CREATE_DDL",
 ]

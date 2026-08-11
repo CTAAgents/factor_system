@@ -158,17 +158,51 @@ def l3_portfolio_loop_job() -> None:
             result.combo_sharpe,
         )
 
-        # 组合构建完成后，生成期货信号报告
-        _run_futures_signal_pipeline()
     except Exception as e:
         logger.error("[L3] 运行失败: %s", e, exc_info=True)
 
 
-# ── 期货信号管道 — 每日 20:00（L3 完成后执行）────────────
+def l3_portfolio_loop_stock_job() -> None:
+    """执行 L3 Portfolio Loop（股票路径：elite_dir + market="stock"）。
+
+    股票精英因子筛选 + 信号合成（equal/sharpe/elastic_net）+ Verifier 校验，
+    与期货 L3 任务（l3_portfolio_loop_job）并列，补齐股票侧组合层闭环
+    （GAP-063 组合质检三标准的前置接入）。
+
+    trace_id: fts.l3.stock.sched_<ts>
+    """
+    trace_id = f"fts.l3.stock.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[L3-stock] Portfolio Loop 启动 trace_id=%s", trace_id)
+
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.factor_engine.portfolio_loop import PortfolioLoop
+        from fts.config import get_config
+
+        cfg = get_config()
+
+        loop = PortfolioLoop(
+            elite_dir=cfg.elite_dir,
+            memory_dir=cfg.memory_dir + "/portfolio",
+            market="stock",
+        )
+        result = loop.run()
+        logger.info(
+            "[L3-stock] 完成: status=%s retained=%d sharpe=%.4f",
+            result.status,
+            result.n_factors_retained,
+            result.combo_sharpe,
+        )
+
+    except Exception as e:
+        logger.error("[L3-stock] 运行失败: %s", e, exc_info=True)
+
+
+# ── 期货信号管道 — 工作日每日 20:00（独立调度，与 L3 解绑，GAP-072）──
 
 
 def _run_futures_signal_pipeline() -> None:
-    """生成期货信号报告（L3 组合构建后自动触发）。
+    """生成期货信号报告（独立每日任务；权重周五重算，其余日冻结复用快照）。
 
     使用全量商品期货池（--universe all）：
     - 覆盖 FUTURES_SUBSET 中所有非僵尸品种（剔除停更/陈旧品种后参与排名）
@@ -194,6 +228,34 @@ def futures_signal_pipeline_job() -> None:
     trace_id = f"fts.signal.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[信号管道] 启动 trace_id=%s", trace_id)
     _run_futures_signal_pipeline()
+
+
+# ── 股票/ETF 信号管道 — 工作日每日 08:45 独立调度（与股票 L3 解绑，GAP-072）─
+
+
+def _run_daily_signal_pipeline() -> None:
+    """生成股票/ETF 信号报告（与期货信号管道 `_run_futures_signal_pipeline` 对称）。
+
+    权重计算方法（daily_signal_pipeline.py）:
+    - 方向校正: 截面 IC 法（Spearman 秩相关 vs 未来 5 日收益）
+    - 权重学习: Ridge 回归（L2 正则化，含相关性惩罚）
+    - 输出: 仅做多信号排名（股票/ETF 仅做多）→ reports/{date}/daily_signals_*.md
+    """
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from scripts.daily_signal_pipeline import main
+
+        exit_code = main(max_stocks=50, days=120)
+        logger.info("[股票信号管道] 完成: exit_code=%d", exit_code)
+    except Exception as e:
+        logger.error("[股票信号管道] 失败: %s", e, exc_info=True)
+
+
+def daily_signal_pipeline_job() -> None:
+    """独立的股票/ETF 信号管道任务入口（供手动/外部调度调用）。"""
+    trace_id = f"fts.signal.stock.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[股票信号管道] 启动 trace_id=%s", trace_id)
+    _run_daily_signal_pipeline()
 
 
 # ── 健康检查 — 每 10 分钟 ────────────────────────────────
@@ -261,16 +323,21 @@ def monthly_decay_eval_job() -> None:
             # 同步淘汰到 DuckDB + JSON 文件（主流程中真正生效）
             from fts.factor_engine.factor_db import FactorRepository
 
-            repo = FactorRepository()
+            # 分市场 repo：按因子所属市场路由到对应分库
+            repo_stock = FactorRepository(market="stock")
+            repo_futures = FactorRepository(market="futures")
+            repos = {"stock": repo_stock, "futures": repo_futures}
             retired_count = 0
             for fid in retired:
-                factor = repo.get_factor(fid)
+                # 尝试从两个市场查找因子
+                factor = repo_stock.get_factor(fid) or repo_futures.get_factor(fid)
                 if factor:
                     mkt = factor.get("market", "stock")
                     elite_dir = cfg.get_elite_dir(mkt)
                 else:
+                    mkt = "stock"
                     elite_dir = cfg.get_elite_dir("stock")
-                if repo.retire_factor(fid, reason="月度衰减评估自动淘汰", elite_dir=elite_dir):
+                if repos[mkt].retire_factor(fid, reason="月度衰减评估自动淘汰", elite_dir=elite_dir):
                     retired_count += 1
             logger.warning("[衰减评估] 淘汰已同步至 DuckDB + JSON: %d/%d 个因子", retired_count, len(retired))
     except Exception as e:
@@ -293,16 +360,18 @@ def logic_monitor_job() -> None:
         from fts.monitor.logic_monitor import LogicMonitor
         from fts.factor_engine.factor_db import FactorRepository
 
-        repo = FactorRepository()
         logic = LogicMonitor()
 
-        # 加载活跃精英因子
-        conn = repo._get_conn()
-        rows = conn.execute("SELECT * FROM factor_catalog WHERE is_elite = 1 AND status = 'active'").fetchall()
-        columns = [desc[0] for desc in conn.description]
-        elite_factors = [dict(zip(columns, row)) for row in rows]
+        # 分市场加载活跃精英因子
+        all_elite_factors: list[dict] = []
+        for mkt in ("stock", "futures"):
+            repo = FactorRepository(market=mkt)
+            conn = repo._get_conn()
+            rows = conn.execute("SELECT * FROM factor_catalog WHERE is_elite = 1 AND status = 'active'").fetchall()
+            columns = [desc[0] for desc in conn.description]
+            all_elite_factors.extend([dict(zip(columns, row)) for row in rows])
 
-        if not elite_factors:
+        if not all_elite_factors:
             logger.info("[逻辑监控] 无活跃精英因子，跳过 (trace_id=%s)", trace_id)
             return
 
@@ -311,9 +380,9 @@ def logic_monitor_job() -> None:
 
         drift_count = 0
         extreme_count = 0
-        total = len(elite_factors)
+        total = len(all_elite_factors)
 
-        for factor in elite_factors:
+        for factor in all_elite_factors:
             try:
                 factor_id = factor.get("factor_id", "unknown")
                 # 构建简化的 FactorProgram 用于检查
@@ -578,6 +647,271 @@ def sync_futures_data_job(symbols: list[str] | None = None, days: int = 120) -> 
     )
 
 
+def sync_liquidity_pool_job() -> None:
+    """每周刷新数据驱动动态池（GAP-054）：TqSdk 流动性快照 → 渐进式替换 → 落盘缓存。"""
+    trace_id = f"fts.lpool.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[L-Pool] 动态池刷新启动 trace_id=%s", trace_id)
+
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from scripts.sync_liquidity_pool import main as _run_pool
+
+        _run_pool()
+        logger.info("[L-Pool] 动态池刷新完成 trace_id=%s", trace_id)
+    except Exception as e:  # noqa: BLE001
+        logger.error("[L-Pool] 动态池刷新失败: %s (trace_id=%s)", e, trace_id)
+
+# ── 股票数据缓存同步 — 工作日 17:00（每日股票数据更新）──────
+
+
+
+def _tdx_stock_code(symbol: str) -> str:
+    """A 股/ETF 6 位代码 → 通达信 TQ 代码（000001 → 000001.SZ, 600000 → 600000.SH）。
+
+    通达信本地 TQ（17709）get_market_data 对 A 股使用 {code}.{exchange} 格式，
+    与期货主连格式（RBL8.SHF）不同。无法识别时原样返回。
+    """
+    raw = symbol.strip().lower()
+    for pfx in ("sh", "sz"):
+        if raw.startswith(pfx):
+            raw = raw[len(pfx):]
+    if len(raw) != 6 or not raw.isdigit():
+        return symbol
+    # 沪市 6/9 开头、沪 ETF 5 开头；其余默认深市（0/3 开头、159 ETF）
+    if raw.startswith(("6", "9", "5")):
+        return f"{raw}.SH"
+    return f"{raw}.SZ"
+
+
+def _fetch_stock_ohlcv_from_tdx(symbol: str, days: int, trace_id: str) -> object | None:
+    """从通达信本地 TQ（17709）拉取 A 股日 K 线（不复权）。
+
+    Args:
+        symbol: A 股 6 位代码（如 "000001"）
+        days: 回溯天数
+        trace_id: 链路追踪 ID
+
+    Returns:
+        DataFrame（index=DatetimeIndex，列 open/high/low/close/volume）或 None。
+    """
+    import json
+    import time
+    import urllib.request
+
+    tdx_code = _tdx_stock_code(symbol)
+    payload = {
+        "id": int(time.time() * 1000),
+        "method": "get_market_data",
+        "params": {
+            "stock_list": [tdx_code],
+            "count": days,
+            "period": "1d",
+            "dividend_type": "none",
+        },
+    }
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:17709/",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10.0) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[Sync-stock] TQ 拉取失败 %s: %s", symbol, e)
+        return None
+
+    result = body.get("result") if isinstance(body, dict) else None
+    if not isinstance(result, dict):
+        return None
+    value = result.get("Value")
+    if not isinstance(value, dict) or not value:
+        return None
+    block = value.get(tdx_code) or next(iter(value.values()), None)
+    if not isinstance(block, dict) or not block:
+        return None
+    if block.get("ErrorId") not in (None, 0, "0"):
+        return None
+
+    import pandas as pd
+
+    try:
+        df = pd.DataFrame(block)
+        col_map = {c.lower(): c for c in df.columns}
+        df = df.rename(columns={v: k for k, v in col_map.items()})
+        required = ("open", "high", "low", "close", "volume")
+        if not all(c in df.columns for c in required) or "date" not in df.columns:
+            return None
+        df["date"] = pd.to_datetime(df["date"], format="%Y%m%d", errors="coerce").dt.date
+        df = df.dropna(subset=["date"])
+        for col in required:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df.dropna(subset=["close"])
+        if len(df) == 0:
+            return None
+        df = df.sort_values("date")
+        df.index = pd.DatetimeIndex(pd.to_datetime(df["date"]))
+        df.index.name = None
+        return df[list(required)]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[Sync-stock] TQ 解析失败 %s: %s", symbol, e)
+        return None
+
+
+def sync_stock_data_job(max_stocks: int = 50, days: int = 120) -> None:
+    """执行股票/ETF 日 K 线缓存同步（工作日 17:00 调度）。
+
+    数据源优先级（v2.86.0）:
+        1. 通达信本地 TQ（17709，get_market_data，A 股不复权日线）
+        2. 腾讯 API 降级（MCPDataProvider 严格模式，前复权；失败抛 MCPDataError）
+    拉取失败/空数据不写入（避免合成数据污染缓存），
+    upsert 写入 DuckDB stock_kline_cache，供次日 08:45 股票信号管道 / 因子演化。
+    单标失败不中断，完成后落盘同步摘要 data/_lineage/sync_stock_summary_*.json.gz。
+
+    Args:
+        max_stocks: 最大成分股数（默认 50，与信号管道对齐）。
+        days: 回溯天数。
+    """
+    trace_id = f"fts.sync.stock.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[Sync-stock] 股票数据缓存同步启动 trace_id=%s", trace_id)
+
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.data_mcp import MCPDataProvider, MCPDataError, CSI300_SUBSET
+        from fts.data_sources.migrate import migrate_schema
+        from fts.data_futures import _DUCKDB_PATH
+
+        # TQ 优先（通达信本地 17709），失败降级腾讯 API 严格模式。
+        # 两个源均只写入真实行情，不落合成回退数据。
+        provider = MCPDataProvider()
+        panel: dict[str, object] = {}
+        sources: dict[str, str] = {}
+        fetch_failures: list[dict] = []
+        for sym in CSI300_SUBSET[:max_stocks]:
+            df = _fetch_stock_ohlcv_from_tdx(sym, days, trace_id)
+            used_source = "TDX_LOCAL"
+            if df is None or df.empty or "close" not in df.columns:
+                try:
+                    df = provider.get_ohlcv(sym, days=days, adjust="qfq", trace_id=trace_id, strict=True)
+                    used_source = "TENCENT"
+                except MCPDataError as e:
+                    logger.warning("[Sync-stock] 腾讯降级失败 %s: %s", sym, e)
+                    fetch_failures.append({"symbol": sym, "error": str(e)})
+                    continue
+            if df is not None and not df.empty and "close" in df.columns:
+                panel[sym] = df
+                sources[sym] = used_source
+            else:
+                fetch_failures.append({"symbol": sym, "error": "empty data"})
+    except Exception as e:  # noqa: BLE001
+        logger.error("[Sync-stock] 面板拉取失败: %s (trace_id=%s)", e, trace_id, exc_info=True)
+        return
+
+    if not panel:
+        logger.error("[Sync-stock] 无股票数据，跳过 (trace_id=%s)", trace_id)
+        return
+
+    # 确保 stock_kline_cache 表存在
+    try:
+        migrate_schema(_DUCKDB_PATH)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Sync-stock] migrate_schema 失败（尝试直接写入）: %s", e)
+
+    import gzip
+    import json
+
+    import duckdb
+    import pandas as pd
+
+    started_at = datetime.now().isoformat()
+    success = 0
+    failure = 0
+    total_rows = 0
+    failures: list[dict] = []
+
+    try:
+        con = duckdb.connect(str(_DUCKDB_PATH))
+        for sym, df in panel.items():
+            if df is None or df.empty or "close" not in df.columns:
+                failure += 1
+                failures.append({"symbol": sym, "error": "empty data"})
+                continue
+            try:
+                rows_df = pd.DataFrame(
+                    {
+                        "symbol": sym,
+                        "period": "daily",
+                        "date": [d.date() for d in df.index],
+                        "open": df["open"].values,
+                        "high": df["high"].values,
+                        "low": df["low"].values,
+                        "close": df["close"].values,
+                        "volume": df["volume"].values if "volume" in df.columns else [0.0] * len(df),
+                        "amount": df["amount"].values if "amount" in df.columns else None,
+                        "adj_factor": None,
+                        "source": sources.get(sym, "TENCENT"),
+                        "fetched_at": pd.Timestamp.now(),
+                        "trace_id": trace_id,
+                    }
+                )
+                con.register("stock_new", rows_df)
+                con.execute(
+                    """
+                    INSERT OR REPLACE INTO stock_kline_cache (
+                        symbol, period, date, open, high, low, close,
+                        volume, amount, adj_factor, source, fetched_at, trace_id
+                    )
+                    SELECT
+                        symbol, period, CAST(date AS DATE) AS date,
+                        open, high, low, close,
+                        volume, amount, adj_factor,
+                        source, fetched_at, trace_id
+                    FROM stock_new
+                    """
+                )
+                con.unregister("stock_new")
+                success += 1
+                total_rows += int(len(rows_df))
+            except Exception as e:  # noqa: BLE001
+                failure += 1
+                failures.append({"symbol": sym, "error": str(e)})
+        con.close()
+    except Exception as e:  # noqa: BLE001
+        logger.error("[Sync-stock] 缓存写入失败: %s (trace_id=%s)", e, trace_id, exc_info=True)
+
+    finished_at = datetime.now().isoformat()
+    all_failures = fetch_failures + failures
+    summary = {
+        "trace_id": trace_id,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "elapsed_seconds": round((datetime.now() - datetime.fromisoformat(started_at)).total_seconds(), 3),
+        "symbols_total": len(panel) + len(fetch_failures),
+        "success": success,
+        "failure": failure + len(fetch_failures),
+        "failures": all_failures,
+        "total_rows": total_rows,
+        "source": "TDX_LOCAL|TENCENT",
+    }
+
+    lineage_dir = Path("data") / "_lineage"
+    lineage_dir.mkdir(parents=True, exist_ok=True)
+    out_path = lineage_dir / f"sync_stock_summary_{datetime.now().strftime('%Y%m%d%H%M%S')}.json.gz"
+    with gzip.open(out_path, "wt", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False)
+
+    logger.info(
+        "[Sync-stock] 完成: total=%d success=%d failure=%d rows=%d -> %s (trace_id=%s)",
+        len(panel),
+        success,
+        failure,
+        total_rows,
+        out_path.name,
+        trace_id,
+    )
+
+
 __all__ = [
     "l1_meta_loop_job",
     "l2_evolution_loop_job",
@@ -589,4 +923,6 @@ __all__ = [
     "logic_monitor_job",
     "factor_inspector_job",
     "sync_futures_data_job",
+    "sync_liquidity_pool_job",
+    "sync_stock_data_job",
 ]

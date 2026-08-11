@@ -72,11 +72,11 @@ class TestFactorAuditor:
         assert report.factor_id == "f_test_001"
         assert report.factor_name == "test_factor"
         assert report.passed is False
-        # 6 项审计
-        assert len(report.items) == 6
+        # 7 项审计（GAP-075 新增 symbol_holdout）
+        assert len(report.items) == 7
         assert all(it.status == "skipped" for it in report.items)
         assert report.pass_rate == 0.0
-        assert report.summary["skipped"] == 6
+        assert report.summary["skipped"] == 7
 
     def test_report_item_lookup(self, auditor: FactorAuditor, sample_factor: dict):
         """report.item() 应按名称定位单项结果。"""
@@ -104,7 +104,7 @@ class TestFactorAuditor:
         d = report.to_dict()
         assert d["factor_id"] == "f_test_001"
         assert "items" in d
-        assert len(d["items"]) == 6
+        assert len(d["items"]) == 7
         assert "summary" in d
 
 
@@ -135,6 +135,24 @@ class TestOOSConsistency:
         """缺失 OOS 结果时应为 skipped。"""
         item = auditor._check_oos_consistency(None)
         assert item.status == "skipped"
+
+    def test_oos_skipped_when_single_window(self, auditor: FactorAuditor):
+        """GAP-073: WalkForward 仅完成 1 个窗口 → skipped（短样本无法做一致性验证）。"""
+        result = {"ic_consistency": 0.0, "passed": False, "n_windows_completed": 1}
+        item = auditor._check_oos_consistency(result)
+        assert item.status == "skipped"
+
+    def test_oos_evaluated_when_two_windows(self, auditor: FactorAuditor):
+        """GAP-071: 窗口数 ≥2 仍正常评估（低一致性照常失败）。"""
+        result = {"ic_consistency": 0.2, "passed": False, "n_windows_completed": 2}
+        item = auditor._check_oos_consistency(result)
+        assert item.status == "failed"
+
+    def test_oos_l1_fallback_without_window_key(self, auditor: FactorAuditor):
+        """GAP-073: L1 兜底结果（无 n_windows_completed 键）保持原判定逻辑。"""
+        result = {"ic_consistency": 0.6, "passed": False}
+        item = auditor._check_oos_consistency(result)
+        assert item.status == "passed"
 
 
 # ─── 3. 跨品种验证 ──────────────────────────────────────────
@@ -304,7 +322,7 @@ class TestEndToEnd:
         """无任何输入应全部 skipped。"""
         report = auditor.audit()
         assert report.passed is False
-        assert report.summary["skipped"] == 6
+        assert report.summary["skipped"] == 7
 
     def test_complete_audit_with_cross_symbol_and_oos(self, auditor: FactorAuditor, sample_factor: dict):
         """仅提供跨品种 + OOS + p-values 时，这些项应通过/失败，其余 skipped。"""
@@ -319,11 +337,11 @@ class TestEndToEnd:
             p_values=p_vals,
         )
 
-        # 3 项应非 skipped，其余 skipped
+        # 3 项应非 skipped（cross_symbol/oos/multiple_testing），其余 4 项 skipped
         non_skipped = [it for it in report.items if it.status != "skipped"]
         skipped = [it for it in report.items if it.status == "skipped"]
         assert len(non_skipped) == 3
-        assert len(skipped) == 3
+        assert len(skipped) == 4
 
         # 所有非 skipped 项均通过 → 整体 passed=True
         assert all(it.status == "passed" for it in non_skipped)

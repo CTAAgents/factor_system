@@ -145,12 +145,20 @@ from .evaluation_chain import (  # noqa: E402
 )
 from .experience_chain import (  # noqa: E402
     ExperienceChain,
+    ParentFailureContext,
     create_trace_from_evaluation,
 )
+from .experiment_log import ExperimentLogWriter, extract_scores  # noqa: E402
 from .macro_evolution import MacroEvolver, get_default_llm_client  # noqa: E402
 from .micro_evolution import evolve_micro  # noqa: E402
 from .seed_pool import SeedPool, compute_seed_correlations  # noqa: E402
+from .signal_cache import SignalCache  # noqa: E402
 from .state import EvolutionStateManager, generate_trace_id  # noqa: E402
+from .success_pattern import (  # noqa: E402
+    SuccessPatternConfig,
+    SuccessPatternReport,
+    analyze_success_patterns,
+)
 from .verifier import FactorVerifier, get_global_verifier  # noqa: E402
 
 
@@ -158,6 +166,11 @@ from .verifier import FactorVerifier, get_global_verifier  # noqa: E402
 
 UCT_EXPLORATION_C: float = 1.0
 """UCT 探索常数。越大越倾向探索未访问的父因子。"""
+
+# GAP-070: 质检链信号缓存容量上限（LRU，超出淘汰最久未使用项）。
+# 每条目为一份完整面板信号（~4MB/104品种×5163日），16 条上限覆盖单候选
+# L1/极值扰动/消融 baseline/鲁棒性 baseline/SHAP 全部复用场景。
+_QC_SIGNAL_CACHE_MAX_ENTRIES: int = 16
 
 
 # ─── 演化结果 ─────────────────────────────────────────────
@@ -178,6 +191,9 @@ class EvolutionRunResult:
     elite_factor_ids: list[str] = None  # type: ignore[assignment]
     seed_correlations: Optional[list[FactorCorrelation]] = None  # type: ignore[assignment]
     error: Optional[str] = None
+    # P1-3 (Phase 3): 提前达标停止标记（status 保持 completed，正常收尾）
+    early_stopped: bool = False
+    early_stop_reason: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -192,6 +208,8 @@ class EvolutionRunResult:
             "elite_factor_ids": self.elite_factor_ids or [],
             "seed_correlations": self.seed_correlations or [],
             "error": self.error,
+            "early_stopped": self.early_stopped,
+            "early_stop_reason": self.early_stop_reason,
         }
 
 
@@ -291,7 +309,7 @@ class EvolutionLoop:
         loop = EvolutionLoop(
             data=my_ohlcv_df,
             forward_returns=my_returns_array,
-            elite_dir="memory/knowledge/factors/elite",
+            elite_dir="memory/knowledge/factors/stocks_elite",
         )
         result = loop.run()
     """
@@ -317,6 +335,7 @@ class EvolutionLoop:
         audit_config: Optional[Any] = None,
         industry_map: Optional[dict[str, str]] = None,
         cap_map: Optional[dict[str, float]] = None,
+        experiment_log_dir: Optional[str | Path] = None,
     ):
         self.data = data
         self.forward_returns = forward_returns
@@ -397,7 +416,7 @@ class EvolutionLoop:
             if market == "futures":
                 elite_dir = "memory/knowledge/factors/futures_elite"
             else:
-                elite_dir = "memory/knowledge/factors/elite"
+                elite_dir = "memory/knowledge/factors/stocks_elite"
         self.elite_dir = Path(elite_dir)
         self.elite_dir.mkdir(parents=True, exist_ok=True)
         self.inject_dir = Path(inject_dir)
@@ -414,6 +433,24 @@ class EvolutionLoop:
                 self.budget["max_per_family"] = get_config().max_per_family
             except Exception:
                 pass  # 配置读取失败沿用 DEFAULT_BUDGET_CONFIG 缺省值 15
+
+        # ── P1-3 (Phase 3, 26 计划 §8): 提前达标停止（保守默认关闭） ──
+        # budget 未显式配置时回退 FTSConfig（env FTS_EVOLUTION_STOP_* 可控）；
+        # DEFAULT_BUDGET_CONFIG 不含这两个键，故默认走 FTSConfig（enabled=False）。
+        try:
+            from fts.config.settings import get_config as _get_stop_cfg
+
+            _stop_cfg = _get_stop_cfg()
+            _stop_enabled_cfg = bool(getattr(_stop_cfg, "evolution_stop_enabled", False))
+            _stop_k_cfg = int(getattr(_stop_cfg, "evolution_stop_consecutive_empty_generations", 5))
+        except Exception:
+            _stop_enabled_cfg = False
+            _stop_k_cfg = 5
+        self._evolution_stop_enabled = bool(self.budget.get("evolution_stop_enabled", _stop_enabled_cfg))
+        self._evolution_stop_k = int(self.budget.get("evolution_stop_consecutive_empty_generations", _stop_k_cfg))
+        self._consecutive_empty_generations: int = 0
+        self._early_stop_last_count: int = 0
+        self._early_stop_reason: Optional[str] = None
         if verifier is not None:
             self.verifier = verifier
         elif market == "futures":
@@ -451,6 +488,12 @@ class EvolutionLoop:
             self._decay_retire_slope = float(getattr(_micro_cfg, "decay_retire_slope", 0.20))
             self._decay_slope_min_points = int(getattr(_micro_cfg, "decay_slope_min_points", 6))
             self._decay_auto_retire_enabled = bool(getattr(_micro_cfg, "decay_auto_retire_enabled", True))
+            # GAP-XXX (v2.102.0): 结构性聚类配额配置（替代 max_per_family 家族配额，
+            # family 为来源标签非结构维度，多样性控制改由信号相关性承担）
+            self._cluster_quota_enabled = bool(getattr(_micro_cfg, "structure_cluster_quota_enabled", True))
+            self._cluster_max = int(getattr(_micro_cfg, "structure_cluster_max", 15))
+            self._cluster_corr_threshold = float(getattr(_micro_cfg, "structure_cluster_corr_threshold", 0.85))
+            self._cluster_max_scan = int(getattr(_micro_cfg, "l2_elite_corr_max_scan", 50))
         except Exception:
             # 配置读取失败时采用模块默认值，不阻断演化
             self._micro_staged_evolution = True
@@ -469,6 +512,10 @@ class EvolutionLoop:
             self._decay_retire_slope = 0.20
             self._decay_slope_min_points = 6
             self._decay_auto_retire_enabled = True
+            self._cluster_quota_enabled = True
+            self._cluster_max = 15
+            self._cluster_corr_threshold = 0.85
+            self._cluster_max_scan = 50
 
         # 子模块
         self.state_manager = EvolutionStateManager(self.memory_dir)
@@ -479,6 +526,15 @@ class EvolutionLoop:
             max_tokens_per_call=self.budget["max_tokens_per_factor"],
         )
         self.evaluation_chain = EvaluationChain()
+        # GAP-070: 质检链信号缓存（三级评估/消融/鲁棒性/SHAP 共享，避免同一候选重复执行因子代码）
+        self._signal_cache = SignalCache(max_entries=_QC_SIGNAL_CACHE_MAX_ENTRIES)
+
+        # Phase 1.2 (P0-1): 成功模式报告进程内缓存（避免每代重复读取经验链）
+        self._success_pattern_cache: Optional[SuccessPatternReport] = None
+
+        # Phase 2 (P1-2): 结构化实验日志——run 内候选聚合 + 导出目录
+        self._experiment_log_dir: str = str(experiment_log_dir) if experiment_log_dir else "data"
+        self._experiment_variants: list[dict] = []
 
         # 子模块: 因子质检过滤器 (Phase A.1 集成)
         # 使用 _QualityInspectionCompat 替代已删除的 pipeline.FactorQualityInspection
@@ -552,7 +608,16 @@ class EvolutionLoop:
         # 子模块: SHAP 可解释性分析 (Phase B 集成)
         from .shap_analyzer import ShapAnalyzer
 
-        self.shap_analyzer = ShapAnalyzer()
+        # GAP-080 (v2.102.0): SHAP 批量计算降频——从 FTSConfig 读取采样参数
+        # （默认 n_extreme=25 / n_background=50 / nsamples=50，env 可覆盖）
+        from fts.config.settings import get_config as _get_shap_cfg
+
+        _shap_cfg = _get_shap_cfg()
+        self.shap_analyzer = ShapAnalyzer(
+            n_extreme=_shap_cfg.shap_n_extreme,
+            n_background=_shap_cfg.shap_n_background,
+            nsamples=_shap_cfg.shap_nsamples,
+        )
 
         # 子模块: 鲁棒性审查 (Phase B 集成)
         from .robustness import RobustnessTester
@@ -608,6 +673,11 @@ class EvolutionLoop:
             EvolutionRunResult
         """
         trace_id = generate_trace_id("l2")
+
+        # GAP-070: 每次运行清空进程内质检信号缓存，防止跨运行残留
+        self._signal_cache.clear()
+        # Phase 2 (P1-2): 每次运行清空实验候选聚合（防止跨运行残留）
+        self._experiment_variants.clear()
 
         # ── 清理前日因子信号缓存（缓存随因子集变化而失效） ──
         try:
@@ -734,6 +804,11 @@ class EvolutionLoop:
                     )
                 print(f"[evo] 种子因子均已晋升过，改用 elite 池 {len(parent_seeds)} 个因子作为父因子")
 
+            # ── P1-3 (Phase 3): 提前达标停止状态重置（基于 state 晋升计数） ──
+            self._consecutive_empty_generations = 0
+            self._early_stop_last_count = state.get("total_factors_promoted", 0)
+            self._early_stop_reason = None
+
             for generation in range(start_gen, start_gen + max_gen):
                 # 熔断检查
                 print(f"[DEBUG-evo] gen={generation} _consecutive_low_ic={self._consecutive_low_ic}")
@@ -776,12 +851,19 @@ class EvolutionLoop:
                     )
                     # 经验链清理（generation 级）
                     self.experience_chain.cleanup_if_needed()
+                    # P1-3 (Phase 3): 提前达标停止检查（本代零晋升计入）
+                    if self._maybe_early_stop(state):
+                        break
                     continue
 
                 # ── 单因子路径: Step 1 演化分派（macro/GP/operator，配置分派） ──
                 evolved = self._evolve_one(parent, generation, trace_id)
                 if evolved is None:
-                    # 演化失败轨迹已在 _evolve_one 内记录
+                    # 演化失败轨迹已在 _evolve_one 内记录；UCT 失败反馈避免父因子恒被选中（GAP-074）
+                    self._update_uct_failure(parent)
+                    # P1-3 (Phase 3): 提前达标停止检查（本代零晋升计入）
+                    if self._maybe_early_stop(state):
+                        break
                     continue
                 new_factor, evolution_method, evolution_summary, evo_tokens = evolved
                 if evo_tokens:
@@ -805,6 +887,13 @@ class EvolutionLoop:
                         [],
                         trace_id,
                     )
+                    self._record_experiment_variant(
+                        new_factor, parent, generation, evolution_method, evolution_summary, None, "verifier_failed"
+                    )
+                    self._update_uct_failure(parent)  # GAP-074: UCT 失败反馈
+                    # P1-3 (Phase 3): 提前达标停止检查（本代零晋升计入）
+                    if self._maybe_early_stop(state):
+                        break
                     continue
 
                 # ── Step 1.4: 快速预筛选（源头拦截低质量信号，避免浪费评估资源） ──
@@ -826,6 +915,10 @@ class EvolutionLoop:
                         [],
                         trace_id,
                     )
+                    self._record_experiment_variant(
+                        new_factor, parent, generation, evolution_method, evolution_summary, None, "prefilter_rejected"
+                    )
+                    self._update_uct_failure(parent)  # GAP-074: UCT 失败反馈
                     continue
 
                 # ── Step 2-6: 准入链（公共方法，batch 与单因子路径共用，GAP-I201） ──
@@ -844,19 +937,29 @@ class EvolutionLoop:
                 # 经验链清理（如果超过 100 条）
                 self.experience_chain.cleanup_if_needed()
 
-            # 正常完成
+                # ── P1-3 (Phase 3): 每代结束后检查提前达标停止 ──
+                if self._maybe_early_stop(state):
+                    break
+
+            # 正常完成（或 P1-3 提前达标停止，正常收尾）
             print(f"[DEBUG-evo] before mark_completed: _consecutive_low_ic={self._consecutive_low_ic}")
+            if self._early_stop_reason:
+                state["early_stopped"] = True
+                state["early_stop_reason"] = self._early_stop_reason
+                print(f"[evo] 提前达标停止: {self._early_stop_reason}（正常收尾）")
             self.state_manager.mark_completed(state)
             return EvolutionRunResult(
                 run_id=run_id,
                 trace_id=trace_id,
-                generations_completed=max_gen,
+                generations_completed=generation - start_gen + 1,
                 total_factors_evaluated=state.get("total_factors_evaluated", 0),
                 total_factors_promoted=state.get("total_factors_promoted", 0),
                 tokens_consumed=state.get("tokens_consumed", 0),
                 status="completed",
                 elite_factor_ids=elite_ids,
                 seed_correlations=seed_correlations,
+                early_stopped=self._early_stop_reason is not None,
+                early_stop_reason=self._early_stop_reason,
             )
 
         except Exception as e:
@@ -883,6 +986,13 @@ class EvolutionLoop:
 
             # ── Phase A.2: 精英因子定期重评估 ──
             self._run_periodic_factor_review(elite_ids, trace_id)
+
+            # ── Phase 2 (P1-2): 导出结构化实验日志（非阻塞） ──
+            self._export_experiment_log(
+                run_id,
+                trace_id,
+                state.get("last_generation", 0),
+            )
 
     def _write_seed_correlation_index(
         self,
@@ -922,6 +1032,133 @@ class EvolutionLoop:
     # ─── 内部方法 ───
 
     # ── GAP-I201 (v2.65.0): 批量挖掘漏斗 ──────────────────
+
+    def _build_parent_failure_ctx(
+        self, parent: FactorProgram
+    ) -> Optional[ParentFailureContext]:
+        """构造父因子最近失败归因上下文（Phase 1.1 P0-2 定向修复）。
+
+        从失败经验链按 parent_id 读取最近失败轨迹，聚合去重失败原因。
+        无失败记录或父因子无 factor_id 时返回 None（不注入归因段落）。
+
+        Args:
+            parent: 父因子
+
+        Returns:
+            ParentFailureContext 或 None
+        """
+        parent_id = parent.get("factor_id")
+        if not parent_id:
+            return None
+        traces = self.experience_chain.read_failures_by_parent(parent_id)
+        if not traces:
+            return None
+        reasons: list[str] = []
+        latest_failed_at: Optional[str] = None
+        for t in traces:
+            eval_ = t.get("evaluation", {})
+            for reason in eval_.get("failure_reasons", []):
+                if reason and reason not in reasons:
+                    reasons.append(reason)
+            if latest_failed_at is None:
+                latest_failed_at = t.get("recorded_at")
+        if not reasons:
+            return None
+        return ParentFailureContext(
+            parent_id=parent_id,
+            failure_reasons=reasons,
+            patterns=list(reasons),
+            latest_failed_at=latest_failed_at,
+        )
+
+    def _build_success_pattern_report(self) -> Optional[SuccessPatternReport]:
+        """构造近期成功模式报告（Phase 1.2 P0-1），进程内缓存避免重复读取。
+
+        从 FTSConfig 读取开关/窗口/样本下限，构造 SuccessPatternConfig 聚合经验链。
+        异常/开关关闭 → None（prompt 层不注入）；空报告（样本不足）照常返回，
+        由 MacroEvolver 判断 sample_count==0 不注入。
+
+        Returns:
+            SuccessPatternReport 或 None
+        """
+        if self._success_pattern_cache is not None:
+            return self._success_pattern_cache
+        try:
+            from fts.config.settings import get_config as _get_sp_cfg
+
+            _cfg = _get_sp_cfg()
+            config = SuccessPatternConfig(
+                enabled=_cfg.evolution_success_pattern_enabled,
+                window_days=_cfg.success_pattern_window_days,
+                min_sample=_cfg.success_pattern_min_sample,
+            )
+            if not config.enabled:
+                return None
+            report = analyze_success_patterns(self.experience_chain, config)
+            self._success_pattern_cache = report
+            return report
+        except Exception as e:  # noqa: BLE001 — 降级不阻断演化
+            logger.debug("成功模式报告构造失败（降级跳过）: %s", e)
+            return None
+
+    def _record_experiment_variant(
+        self,
+        factor: FactorProgram,
+        parent: Optional[FactorProgram],
+        generation: int,
+        method: str,
+        summary: str,
+        evaluation: Optional[FactorEvaluation],
+        outcome: str,
+        quality_grade: Optional[str] = None,
+    ) -> None:
+        """记录实验候选（Phase 2 P1-2），run 结束时导出实验日志。
+
+        Args:
+            factor: 候选因子
+            parent: 父因子（可能为 None）
+            generation: 当前代数
+            method: 演化方法（macro/gp/operator/deep）
+            summary: 演化摘要
+            evaluation: 评估结果（预筛/运行时拦截可能为 None）
+            outcome: 候选结局（prefilter_rejected/verifier_failed/audit_failed/promoted）
+            quality_grade: 质量评分卡等级（A/B/C），available 时传入
+        """
+        scores = extract_scores(evaluation)
+        if quality_grade is not None:
+            scores["quality_grade"] = quality_grade
+        self._experiment_variants.append(
+            {
+                "generation": generation,
+                "parent_id": parent.get("factor_id") if parent else None,
+                "candidate_id": factor.get("factor_id", "?"),
+                "method": method,
+                "summary": summary,
+                "scores": scores,
+                "outcome": outcome,
+            }
+        )
+
+    def _export_experiment_log(
+        self,
+        run_id: str,
+        trace_id: str,
+        generations_completed: int,
+    ) -> Optional[Path]:
+        """导出结构化实验日志（Phase 2 P1-2），非阻塞（失败仅 warning）。"""
+        try:
+            writer = ExperimentLogWriter(self._experiment_log_dir)
+            return writer.export(
+                run_id=run_id,
+                trace_id=trace_id,
+                market=self.market,
+                started_at=datetime.now().isoformat(),
+                generations_completed=generations_completed,
+                variants=self._experiment_variants,
+            )
+        except Exception as e:  # noqa: BLE001 — 导出失败降级不阻断 run
+            logger.warning("实验日志导出失败（降级不阻断）: %s", e)
+            return None
 
     def _evolve_one(
         self,
@@ -970,6 +1207,8 @@ class EvolutionLoop:
                         parent,
                         generation=generation,
                         trace_id=trace_id,
+                        parent_failure_ctx=self._build_parent_failure_ctx(parent),
+                        success_pattern=self._build_success_pattern_report(),
                     )
                     return new_factor, "macro_evolution", macro_summary, macro_tokens
                 except Exception as e:
@@ -997,6 +1236,19 @@ class EvolutionLoop:
                     return new_factor, "deep_evolution", deep_summary, 0
                 except Exception as e:
                     logger.debug("深度演化失败 [%s]: %s", parent.get("name", "?"), e)
+                    return None
+            if method_hint == "transformer":
+                # C5 (v2.100.1): 深度因子（Transformer）候选源
+                try:
+                    new_factor, deep_summary = self._run_deep_evolution(
+                        parent,
+                        generation=generation,
+                        trace_id=trace_id,
+                        model_kind="transformer",
+                    )
+                    return new_factor, "deep_evolution", deep_summary, 0
+                except Exception as e:
+                    logger.debug("Transformer 演化失败 [%s]: %s", parent.get("name", "?"), e)
                     return None
             return None
 
@@ -1040,6 +1292,8 @@ class EvolutionLoop:
                         parent,
                         generation=generation,
                         trace_id=trace_id,
+                        parent_failure_ctx=self._build_parent_failure_ctx(parent),
+                        success_pattern=self._build_success_pattern_report(),
                     )
                     tokens = macro_tokens
                     evolution_method = "macro_evolution"
@@ -1111,7 +1365,11 @@ class EvolutionLoop:
             # CODE / HYBRID 模式: 1.1 宏观演化尝试（LLM 改逻辑）
             try:
                 new_factor, macro_summary, macro_tokens = self.macro_evolver.evolve(
-                    parent, generation=generation, trace_id=trace_id
+                    parent,
+                    generation=generation,
+                    trace_id=trace_id,
+                    parent_failure_ctx=self._build_parent_failure_ctx(parent),
+                    success_pattern=self._build_success_pattern_report(),
                 )
                 tokens = macro_tokens
                 evolution_summary = macro_summary
@@ -1255,6 +1513,20 @@ class EvolutionLoop:
                 [r.get("prefilter_reason", "") for r in result.rejected][:3],
                 trace_id,
             )
+            # Phase 2 P1-2: 被粗筛拦截的候选逐一记入实验日志
+            for r in result.rejected:
+                rfactor = r.get("factor") or {}
+                if not rfactor.get("factor_id"):
+                    continue
+                self._record_experiment_variant(
+                    rfactor,
+                    parent,
+                    generation,
+                    r.get("method", "batch_evolution"),
+                    r.get("prefilter_reason", "粗筛拦截"),
+                    None,
+                    "prefilter_rejected",
+                )
             return False
 
         promoted_any = False
@@ -1300,17 +1572,20 @@ class EvolutionLoop:
         """batch 模式单个候选生成回调（D.1 §4：方法轮换 + seed 递增）。
 
         第 0 个走 macro（LLM，token 护栏每代至多 1 次），
-        其余按 gp / deep / operator 三方法轮换（纯 CPU，GAP-I203 deep 并入）。
+        其余按 gp / deep / transformer / operator 四方法轮换（纯 CPU，
+        GAP-I203 deep 并入，C5 transformer 并入）。
         """
         idx = self._batch_idx
         self._batch_idx = idx + 1
         seed = self.batch_random_seed + idx
         if idx == 0:
             method_hint = "macro"
-        elif idx % 3 == 1:
+        elif idx % 4 == 1:
             method_hint = "gp"
-        elif idx % 3 == 2:
+        elif idx % 4 == 2:
             method_hint = "deep"
+        elif idx % 4 == 3:
+            method_hint = "transformer"
         else:
             method_hint = "operator"
         evolved = self._evolve_one(
@@ -1403,17 +1678,30 @@ class EvolutionLoop:
                 [],
                 trace_id,
             )
+            self._record_experiment_variant(
+                factor,
+                parent,
+                generation,
+                evolution_method,
+                f"微观演化失败: {e}",
+                None,
+                "verifier_failed",
+            )
             return False
 
         # ── Step 3: 三级评估链 ──
         if self._is_cross_section:
             evaluation = self._evaluate_cross_section(optimized_factor, trace_id)
         else:
+            # GAP-070: 注入共享信号缓存 + 统一走航配置（与审计 _build_wf_config 同源，
+            # 支撑审计复用本走航结果，消除双重 WalkForward）
             evaluation = self.evaluation_chain.evaluate(
                 optimized_factor,
                 self.data,
                 self.forward_returns,
                 prior_evaluations=self._prior_evaluations,
+                signal_cache=self._signal_cache,
+                walk_forward_config=self._build_wf_config(self.data),
             )
         self._prior_evaluations.append(evaluation)
         self.state_manager.increment_evaluated(state)
@@ -1451,6 +1739,15 @@ class EvolutionLoop:
             critical = any(getattr(a, "severity", "") == "critical" for a in dq_alerts)
             if critical:
                 print(f"[evo] 数据质量严重告警 [{optimized_factor.get('name', '?')}]: 跳过晋升")
+                self._record_experiment_variant(
+                    optimized_factor,
+                    parent,
+                    generation,
+                    evolution_method,
+                    f"数据质量严重告警: {[a.message for a in dq_alerts if getattr(a, 'severity', '') == 'critical'][:2]}",
+                    evaluation,
+                    "audit_failed",
+                )
                 return False
 
         # ── Step 4.6: 因子强制审计 (Phase B.3) ──
@@ -1479,6 +1776,16 @@ class EvolutionLoop:
                     inspection,
                     evaluation=evaluation,
                 )
+                self._record_experiment_variant(
+                    optimized_factor,
+                    parent,
+                    generation,
+                    evolution_method,
+                    f"质检过滤淘汰: 质量分={inspection.total_score}/50 ({inspection.grade}级)",
+                    evaluation,
+                    "audit_failed",
+                    quality_grade=inspection.grade,
+                )
                 return False
 
             # 审计过滤: 审计未通过则拒绝准入
@@ -1494,6 +1801,15 @@ class EvolutionLoop:
                     trace_id,
                     audit_report,
                     evaluation=evaluation,
+                )
+                self._record_experiment_variant(
+                    optimized_factor,
+                    parent,
+                    generation,
+                    evolution_method,
+                    f"审计未通过: 失败项={failed_items}, 通过率={audit_report.pass_rate:.0%}",
+                    evaluation,
+                    "audit_failed",
                 )
                 return False
 
@@ -1512,6 +1828,15 @@ class EvolutionLoop:
                     trace_id,
                     ablation_result,
                 )
+                self._record_experiment_variant(
+                    optimized_factor,
+                    parent,
+                    generation,
+                    evolution_method,
+                    "消融实验未通过: 疑似伪相关",
+                    evaluation,
+                    "audit_failed",
+                )
                 return False
 
             # ── Step 4.6.6: 因果结构审查 (Phase C 集成) ──
@@ -1529,6 +1854,15 @@ class EvolutionLoop:
                     trace_id,
                     causal_result,
                 )
+                self._record_experiment_variant(
+                    optimized_factor,
+                    parent,
+                    generation,
+                    evolution_method,
+                    "因果审查未通过: 事件敏感",
+                    evaluation,
+                    "audit_failed",
+                )
                 return False
 
             # ── Step 4.6.7: 鲁棒性审查 (Phase B 集成) ──
@@ -1545,6 +1879,15 @@ class EvolutionLoop:
                     generation,
                     trace_id,
                     robustness_result,
+                )
+                self._record_experiment_variant(
+                    optimized_factor,
+                    parent,
+                    generation,
+                    evolution_method,
+                    "鲁棒性审查未通过",
+                    evaluation,
+                    "audit_failed",
                 )
                 return False
 
@@ -1572,6 +1915,16 @@ class EvolutionLoop:
             )
             if promoted_path is None:
                 # 因子名称重复，跳过
+                self._record_experiment_variant(
+                    optimized_factor,
+                    parent,
+                    generation,
+                    evolution_method,
+                    "因子名称重复，跳过晋升",
+                    evaluation,
+                    "audit_failed",
+                    quality_grade=inspection.grade,
+                )
                 return False
             self.state_manager.increment_promoted(state)
             elite_ids.append(optimized_factor["factor_id"])
@@ -1588,6 +1941,16 @@ class EvolutionLoop:
                 ],
                 trace_id,
             )
+            self._record_experiment_variant(
+                optimized_factor,
+                parent,
+                generation,
+                evolution_method,
+                evolution_summary,
+                evaluation,
+                "promoted",
+                quality_grade=inspection.grade,
+            )
             self._consecutive_low_ic = 0
             print("[DEBUG-evo] promotion path: _consecutive_low_ic reset to 0")
             promoted = True
@@ -1601,6 +1964,15 @@ class EvolutionLoop:
                 verifier_result["failure_reasons"],
                 trace_id,
                 evaluation=evaluation,
+            )
+            self._record_experiment_variant(
+                optimized_factor,
+                parent,
+                generation,
+                evolution_method,
+                f"Verifier 未通过: {verifier_result.get('failure_reasons', [])[:3]}",
+                evaluation,
+                "verifier_failed",
             )
             # 检查低 IC
             bt = evaluation.get("level_1_backtest", {})
@@ -1660,6 +2032,18 @@ class EvolutionLoop:
         self._uct_stats[fid]["visits"] += 1
         self._uct_stats[fid]["total_reward"] += reward
 
+    def _update_uct_failure(self, parent: FactorProgram) -> None:
+        """记录父因子演化失败的 UCT 反馈（GAP-074 P0-1）。
+
+        演化失败/运行时校验失败/快速预筛失败路径均调用：visits+1、不授予
+        正奖励。避免失败父因子 visits 恒 0，导致 `_select_parent_uct`
+        永远返回 parents[0] 的选择坍缩（50 代全部演化同一父因子）。
+        """
+        fid = parent["factor_id"]
+        if fid not in self._uct_stats:
+            self._uct_stats[fid] = {"visits": 0, "total_reward": 0.0}
+        self._uct_stats[fid]["visits"] += 1
+
     def _check_circuit_breaker(self, state: EvolutionState) -> Optional[str]:
         """熔断检查。返回原因字符串（None = 未触发）。"""
         # Token 超 2x
@@ -1684,29 +2068,64 @@ class EvolutionLoop:
 
         return None
 
-    # ── GAP-I206 (v2.71.0): L2 准入去冗余 — 与既有 elite 相关性检查 ──
+    def _maybe_early_stop(self, state: EvolutionState) -> bool:
+        """P1-3 (Phase 3, 26 计划 §8): 连续 K 代零晋升 → 提前停止（每代结束后调用）。
 
-    def _check_elite_correlation(self, factor: FactorProgram) -> Optional[dict[str, Any]]:
-        """L2 准入去冗余：新演化因子晋升前与既有 elite 因子的信号相关性检查。
-
-        对既有 elite 池（self.elite_dir 下已晋升 JSON）逐个执行因子代码计算
-        信号，与新因子信号做 Pearson 相关；存在相关绝对值 ≥ 阈值
-        （l2_elite_corr_threshold，默认 0.9）的高相关对时返回最高相关对列表，
-        否则返回 None（放行）。种子因子（shadow_observe=False）不经过本检查，
-        由 _promote_to_elite 调用侧控制。
+        基于 `state.total_factors_promoted` 与上次记录值的差异判断本代是否晋升，
+        覆盖全部路径（演化失败/运行时拦截/预筛拦截 continue 均计入零晋升代）。
+        保守默认关闭（enabled=False，验证见 plans/26 §8.7.1）。
 
         Args:
-            factor: 待晋升的新演化因子
+            state: L2 演化状态
 
         Returns:
-            None: 无既有 elite / 无高相关命中（放行）
-            dict: {"correlations": [{factor_name_b, factor_id_b, pearson,
-                  abs_pearson}, ...]} 相关 ≥ 阈值的对（按 abs_pearson 降序）
+            True 表示达到阈值应提前结束 run（调用方 break，正常收尾）
+        """
+        if not self._evolution_stop_enabled:
+            self._consecutive_empty_generations = 0
+            self._early_stop_last_count = state.get("total_factors_promoted", 0)
+            return False
+        cur = state.get("total_factors_promoted", 0)
+        if cur == self._early_stop_last_count:
+            self._consecutive_empty_generations += 1
+        else:
+            self._consecutive_empty_generations = 0
+        self._early_stop_last_count = cur
+        if self._consecutive_empty_generations >= self._evolution_stop_k:
+            self._early_stop_reason = (
+                f"连续 {self._consecutive_empty_generations} 代零晋升"
+                f"（阈值 K={self._evolution_stop_k}）"
+            )
+            return True
+        return False
+
+    # ── GAP-I206 (v2.71.0): L2 准入去冗余 — 与既有 elite 相关性检查 ──
+
+    def _scan_elite_correlations(
+        self,
+        factor: FactorProgram,
+        threshold: float,
+        max_scan: int,
+    ) -> list[dict[str, Any]]:
+        """扫描既有 elite，返回与新因子信号 |corr| ≥ threshold 的相关性对。
+
+        新因子信号只计算一次；既有 elite 执行失败/NaN 兜底跳过；索引文件跳过。
+        L2 准入去冗余（_check_elite_correlation）与结构簇配额（_count_cluster_members）
+        共用本扫描，避免重复实现。
+
+        Args:
+            factor: 待检查因子
+            threshold: 相关性判定阈值
+            max_scan: 扫描上限（容量护栏）
+
+        Returns:
+            [{"factor_name_b", "factor_id_b", "pearson", "abs_pearson"}, ...]
+            按 abs_pearson 降序；无命中返回 []
         """
         from .backtest_pipeline import BacktestPipeline
 
         if not self.elite_dir.exists():
-            return None
+            return []
 
         # 新因子信号只计算一次，避免对每个既有 elite 重复执行
         try:
@@ -1716,16 +2135,16 @@ class EvolutionLoop:
                 factor.get("params", {}),
             )
         except Exception:  # noqa: BLE001
-            return None
+            return []
         if not isinstance(new_signal, np.ndarray) or len(new_signal) != len(self.data):
-            return None
+            return []
 
         correlations: list[dict[str, Any]] = []
         scanned = 0
         for fp in sorted(self.elite_dir.glob("*.json")):
             if fp.name == "_l2_seed_correlation_index.json":
                 continue
-            if scanned >= self._l2_elite_corr_max_scan:
+            if scanned >= max_scan:
                 break
             try:
                 data = json.loads(fp.read_text(encoding="utf-8"))
@@ -1752,7 +2171,7 @@ class EvolutionLoop:
             pearson = float(np.corrcoef(other_signal[valid], new_signal[valid])[0, 1])
             if np.isnan(pearson):
                 continue
-            if abs(pearson) >= self._l2_elite_corr_threshold:
+            if abs(pearson) >= threshold:
                 correlations.append(
                     {
                         "factor_name_b": data.get("name", data.get("factor_name", "?")),
@@ -1761,10 +2180,55 @@ class EvolutionLoop:
                         "abs_pearson": abs(pearson),
                     }
                 )
+        correlations.sort(key=lambda c: c["abs_pearson"], reverse=True)
+        return correlations
+
+    def _check_elite_correlation(self, factor: FactorProgram) -> Optional[dict[str, Any]]:
+        """L2 准入去冗余：新演化因子晋升前与既有 elite 因子的信号相关性检查。
+
+        对既有 elite 池（self.elite_dir 下已晋升 JSON）逐个执行因子代码计算
+        信号，与新因子信号做 Pearson 相关；存在相关绝对值 ≥ 阈值
+        （l2_elite_corr_threshold，默认 0.9）的高相关对时返回最高相关对列表，
+        否则返回 None（放行）。种子因子（shadow_observe=False）不经过本检查，
+        由 _promote_to_elite 调用侧控制。
+
+        Args:
+            factor: 待晋升的新演化因子
+
+        Returns:
+            None: 无既有 elite / 无高相关命中（放行）
+            dict: {"correlations": [{factor_name_b, factor_id_b, pearson,
+                  abs_pearson}, ...]} 相关 ≥ 阈值的对（按 abs_pearson 降序）
+        """
+        correlations = self._scan_elite_correlations(
+            factor,
+            self._l2_elite_corr_threshold,
+            self._l2_elite_corr_max_scan,
+        )
         if not correlations:
             return None
-        correlations.sort(key=lambda c: c["abs_pearson"], reverse=True)
         return {"correlations": correlations}
+
+    def _count_cluster_members(self, factor: FactorProgram) -> int:
+        """结构簇规模代理：与既有 elite 信号 |corr| ≥ cluster_corr_threshold 的成员数。
+
+        结构性聚类配额（GAP-XXX）替代 max_per_family 家族配额：family 为知识注入
+        来源标签（非正交结构维度），多样性控制改由信号相关性承担。复用
+        _scan_elite_correlations 扫描逻辑；无既有 elite / 信号异常返回 0（放行）。
+
+        Args:
+            factor: 待晋升因子
+
+        Returns:
+            同类成员数（0 = 放行）
+        """
+        return len(
+            self._scan_elite_correlations(
+                factor,
+                self._cluster_corr_threshold,
+                self._cluster_max_scan,
+            )
+        )
 
     def _orthogonalize_via_basis(
         self,
@@ -1957,7 +2421,7 @@ class EvolutionLoop:
         if self._repo is None:
             from .factor_db import FactorRepository
 
-            self._repo = FactorRepository(db_path=self.factor_db_path) if self.factor_db_path else FactorRepository()
+            self._repo = FactorRepository(db_path=self.factor_db_path, market=self.market) if self.factor_db_path else FactorRepository(market=self.market)
         return self._repo
 
     def _promote_to_elite(
@@ -2001,29 +2465,51 @@ class EvolutionLoop:
         except Exception:
             pass
 
-        # ── 家族多样性检查：限制单一家族因子数量，避免演化收敛过度集中 ──
-        factor_family = factor.get("family", "unknown")
-        max_per_family = self.budget.get("max_per_family", 15)
-        try:
-            repo = self._get_repo()
-            existing_family = repo.get_by_family(
-                family=factor_family,
-                market=self.market,
-                limit=100,
-            )
-            if len(existing_family) >= max_per_family:
-                # GAP-F10 (v2.73.0): 家族拦截升级分级日志 + 结构化拒绝记录
+        # ── 多样性配额检查（GAP-077 v2.102.0）：结构簇配额替代 max_per_family 家族配额 ──
+        # family 是知识注入来源标签（非正交结构维度），多样性控制改由信号相关性承担：
+        # 统计与既有 elite |corr| ≥ cluster_corr_threshold 的同类成员数，≥ 上限拒绝晋升。
+        # 开关关闭时回退 max_per_family 旧逻辑（平滑迁移）。
+        if self._cluster_quota_enabled:
+            cluster_size = self._count_cluster_members(factor)
+            if cluster_size >= self._cluster_max:
                 logger.warning(
-                    "[evo] 家族多样性限制拒绝晋升 [%s]: 家族 '%s' 已有 %d 个因子 (上限 %d, trace_id=%s)",
+                    "[evo] 结构簇配额拒绝晋升 [%s]: 同类成员 %d ≥ 上限 %d (corr≥%.2f, trace_id=%s)",
                     factor_name,
-                    factor_family,
-                    len(existing_family),
-                    max_per_family,
+                    cluster_size,
+                    self._cluster_max,
+                    self._cluster_corr_threshold,
                     getattr(self, "_trace_id", ""),
                 )
                 return None
-        except Exception:
-            pass
+        else:
+            # ── 回退：max_per_family 家族配额（旧逻辑，平滑迁移） ──
+            factor_family = factor.get("family", "unknown")
+            max_per_family = self.budget.get("max_per_family", 15)
+            # GAP-070 (v2.98.0): 兜底家族 'other'/'unknown' 永久豁免上限——它们是
+            # "无法归类"的回收站家族，对其设限等价于对整个演化新因子晋升通道设总量
+            # 上限，压制演化空间；逻辑同质化保护已由 L2 准入去冗余（GAP-I206 相关性
+            # 预检 + 正交化闭环 + Gram-Schmidt 基底）承担。
+            if factor_family not in ("other", "unknown"):
+                try:
+                    repo = self._get_repo()
+                    existing_family = repo.get_by_family(
+                        family=factor_family,
+                        market=self.market,
+                        limit=100,
+                    )
+                    if len(existing_family) >= max_per_family:
+                        # GAP-F10 (v2.73.0): 家族拦截升级分级日志 + 结构化拒绝记录
+                        logger.warning(
+                            "[evo] 家族多样性限制拒绝晋升 [%s]: 家族 '%s' 已有 %d 个因子 (上限 %d, trace_id=%s)",
+                            factor_name,
+                            factor_family,
+                            len(existing_family),
+                            max_per_family,
+                            getattr(self, "_trace_id", ""),
+                        )
+                        return None
+                except Exception:
+                    pass
 
         fp = self.elite_dir / f"{factor['factor_id']}.json"
         # 将 factor 字段展开到顶层，方便 cli 直接读取
@@ -2200,15 +2686,10 @@ class EvolutionLoop:
         # ── 晋升时间戳（用于纯外推验证，P2 差距修复） ──
         record["promoted_at"] = datetime.now().isoformat()
 
-        # ── 写入 JSON 文件（debug/备份） ──
-        fp.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
-
-        # ── 写入 DuckDB（主存储） ──
-        # GAP-032 严格一致：DuckDB 是主存储，写入失败则回滚已写 JSON 快照并判定
-        # 晋升失败，杜绝"快照有、catalog 无"的孤儿数据
+        # ── 写入 DuckDB（主存储，SSOT；plans/29 P1 写路径反转） ──
+        # GAP-032 严格一致：DuckDB 是主存储。P1 起 JSON 仅降级为只读快照——
+        # 先写 DuckDB，成功后写 JSON（JSON 写失败不阻断晋升）；DuckDB 失败
+        # 则不写 JSON 直接判定晋升失败，杜绝"快照有、catalog 无"孤儿数据
         write_ok = self._write_to_duckdb(
             factor,
             evaluation,
@@ -2218,12 +2699,17 @@ class EvolutionLoop:
             shadow_pool=record.get("shadow_pool"),
         )
         if not write_ok:
-            try:
-                fp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            print(f"[evo] ❌ 晋升失败 [{factor.get('name', '?')}]: DuckDB 写入失败，已回滚 JSON 快照 {fp.name}")
+            print(f"[evo] ❌ 晋升失败 [{factor.get('name', '?')}]: DuckDB 写入失败（未写 JSON 快照）{fp.name}")
             return None
+
+        # ── 写入 JSON 快照（只读备份，非阻塞） ──
+        try:
+            fp.write_text(
+                json.dumps(record, ensure_ascii=False, indent=2, default=str),
+                encoding="utf-8",
+            )
+        except OSError as e:
+            logger.warning("[evo] JSON 快照写入失败（不影响晋升）: %s, err=%s", fp.name, e)
 
         # ── ★ GAP-036: 激进清理 — L1 注入候选晋升精英后删除 l1_injected 文件 ──
         # 非阻塞：删除失败不影响晋升，仅记录 warning
@@ -2969,6 +3455,72 @@ class EvolutionLoop:
             evaluated_at=datetime.now().isoformat(),
         )
 
+    def run_microstructure_promotion(
+        self,
+        symbols: Optional[list[str]] = None,
+        limit: int = 0,
+        trace_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """C1 评估晋升接线：microstructure 候选 → L2 评估链 → 审计 → elite。
+
+        复用 ``_evaluate_cross_section``（横截面评估，内置 ic≥0.03 & sharpe≥1.5 门槛）
+        与 ``_promote_to_elite``（重复/家族/去冗余护栏），与 L2 演化晋升完全同构；
+        单候选评估/审计异常降级跳过，不阻断整批。tick 数据不足时
+        ``MicrostructureFactorGenerator.generate_batch`` 返回空（全 skipped）。
+
+        Args:
+            symbols: 品种列表（None=动态池默认）
+            limit: 候选上限（0=全量）
+            trace_id: 全链路 trace_id
+
+        Returns:
+            统计 {generated, evaluated, passed, promoted, skipped, promoted_ids}
+        """
+        from .microstructure_generator import MicrostructureFactorGenerator
+
+        tid = trace_id or "evo_micro_promote"
+        gen = MicrostructureFactorGenerator()
+        cands = gen.generate_batch(symbols=symbols, trace_id=tid)
+        if limit > 0:
+            cands = cands[:limit]
+        result: dict[str, Any] = {
+            "generated": len(cands),
+            "evaluated": 0,
+            "passed": 0,
+            "promoted": 0,
+            "skipped": 0,
+            "promoted_ids": [],
+        }
+        if not cands:
+            logger.info("[micro-promote] 无候选（tick 数据不足），跳过 (trace_id=%s)", tid)
+            return result
+        for c in cands:
+            factor = c.factor
+            fid = factor.get("factor_id", "?")
+            try:
+                ev = self._evaluate_cross_section(factor, tid)
+            except Exception as e:  # noqa: BLE001 - 单候选评估异常降级
+                logger.warning("[micro-promote] 候选评估异常跳过 %s: %s (trace_id=%s)", fid, e, tid)
+                result["skipped"] += 1
+                continue
+            result["evaluated"] += 1
+            if not ev.passed:
+                continue
+            result["passed"] += 1
+            # 审计尽力而为：数据缺失项标记 skipped，不拦截晋升
+            audit = None
+            try:
+                from .audit import FactorAuditor
+
+                audit = FactorAuditor().audit(factor=factor)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[micro-promote] 候选审计降级 %s: %s (trace_id=%s)", fid, e, tid)
+            path = self._promote_to_elite(factor, ev, audit_report=audit)
+            if path is not None:
+                result["promoted"] += 1
+                result["promoted_ids"].append(fid)
+        return result
+
     # ── Phase A.2: EliteFactorTracker 定期重评估 ──────────
 
     def _run_periodic_factor_review(
@@ -3269,25 +3821,28 @@ class EvolutionLoop:
         parent: FactorProgram,
         generation: int,
         trace_id: str,
+        model_kind: str = "gru",
     ) -> tuple[FactorProgram, str]:
-        """执行深度因子演化 (GAP-I203, v2.73.0)。
+        """执行深度因子演化 (GAP-I203 v2.73.0 / C5 v2.100.1)。
 
-        使用 DeepFactorGenerator 在历史行情序列上训练轻量纯 numpy GRU，
-        将训练权重固化内嵌为可执行因子 code（零未来函数：每步只用截至
-        t 的特征窗口推理），产出可过全套审计链的 FactorProgram。
+        使用 DeepFactorGenerator 在历史行情序列上训练轻量纯 numpy 深度模型
+        （GRU 或 Transformer，C5），将训练权重固化内嵌为可执行因子 code
+        （零未来函数：每步只用截至 t 的特征窗口推理），产出可过全套审计链
+        的 FactorProgram。
 
         Args:
             parent: 父因子（仅用于命名与血缘）
             generation: 当前代数
             trace_id: 全链路 trace_id
+            model_kind: 深度模型类型 "gru"（默认）| "transformer"（C5）
 
         Returns:
             (新因子程序, 演化摘要)
 
         Raises:
-            RuntimeError: 数据缺失、样本不足或 GRU 训练失败（调用方降级回退）
+            RuntimeError: 数据缺失、样本不足或深度模型训练失败（调用方降级回退）
         """
-        from fts.ml.deep_factor import create_deep_factor
+        from fts.ml.deep_factor import DeepFactorConfig, create_deep_factor
 
         if self.data is None or len(self.data) < 2:
             raise RuntimeError("深度演化: 无可用行情数据")
@@ -3304,16 +3859,18 @@ class EvolutionLoop:
             market=self.market,
             parent_name=parent.get("name", "?"),
             trace_id=trace_id,
+            config=DeepFactorConfig(model_kind=model_kind),
         )
         if factor is None:
-            raise RuntimeError("深度演化: 样本不足或 GRU 训练失败")
+            raise RuntimeError(f"深度演化({model_kind}): 样本不足或训练失败")
         factor["parent_id"] = parent.get("factor_id")
         factor["generation"] = generation
         factor["trace_id"] = trace_id
 
         dm = factor.get("deep_model", {})
+        label = "Transformer" if model_kind == "transformer" else "GRU"
         summary = (
-            f"Deep GRU lookback={dm.get('lookback', '?')} "
+            f"Deep {label} lookback={dm.get('lookback', '?')} "
             f"hidden={dm.get('hidden', '?')} "
             f"val_ic={float(dm.get('val_ic', 0.0)):.4f}"
         )
@@ -3514,10 +4071,11 @@ class EvolutionLoop:
                 return None
             data[target_col] = self.forward_returns
 
-            # 种子由父因子派生，保证同一父因子结果可复现
+            # 种子由父因子 + 代际序号派生（GAP-074 P0-2）：同父因子不同代
+            # 产生不同搜索轨迹（原仅父因子派生产生完全确定性空转）；同父同代仍可复现
             seed = int(
                 hashlib.md5(
-                    str(parent.get("factor_id", "?")).encode(),
+                    f"{parent.get('factor_id', '?')}::{generation}".encode(),
                 ).hexdigest()[:8],
                 16,
             ) % (2**31)
@@ -3970,8 +4528,13 @@ class EvolutionLoop:
             }
 
         # v2.60.0 (GAP-F08): 冷启动 WalkForward 样本外验证优先。
-        # 用真实多窗口 OOS 结果覆盖 L1 单段 ICIR 近似（数据不足/关闭时保持原逻辑）。
-        wf_result = self._run_walkforward_oos(factor)
+        # GAP-070 (v2.98.0): 优先复用三级评估链走航结果（Step 3 已强制走航，
+        # 配置同源 `_build_wf_config`，窗口 IC 口径一致），消除双重 WalkForward
+        # 重复计算；评估链走航失败/跳过（数据不足/force_walkforward=false）时
+        # 兜底独立计算保持原逻辑。
+        wf_result = evaluation.get("walk_forward")
+        if not (wf_result and wf_result.get("n_windows_completed", 0) > 0):
+            wf_result = self._run_walkforward_oos(factor)
         if wf_result is not None:
             oos_result = {
                 "ic_consistency": wf_result.get("ic_consistency", 0.0),
@@ -3979,6 +4542,23 @@ class EvolutionLoop:
                 "passed": wf_result.get("passed", False),
                 "windows": wf_result.get("windows", []),
                 "n_windows_completed": wf_result.get("n_windows_completed", 0),
+            }
+        elif (
+            isinstance(evaluation.get("walk_forward"), dict)
+            and int(evaluation.get("walk_forward", {}).get("n_windows_completed", 0)) < 2
+        ):
+            # GAP-079 (v2.102.0): 评估链走航存在但窗口不足（n_windows_completed<2），
+            # 且独立走航失败（数据不足/force_walkforward=false）——保留"窗口不足"事实
+            # 而非回退 L1 icir 兜底，使 _check_oos_consistency 命中 GAP-073 的
+            # n_windows<2 → skipped 分支。修复短样本下 oos_consistency 全量误杀
+            # （1073 audit_fail 中 99.4% 由 oos 导致，其中 90% 走航 0 窗口，
+            # 见 plans/26-phase0-audit-breakdown.md）。
+            oos_result = {
+                "ic_consistency": 0.0,
+                "oos_ic": 0.0,
+                "passed": False,
+                "windows": [],
+                "n_windows_completed": 0,
             }
 
         # 构造 p-values（从 L3 提取，仅当非默认值时传递）
@@ -3992,6 +4572,8 @@ class EvolutionLoop:
                 factor=factor_meta,
                 data=self.data,
                 forward_returns=self.forward_returns,
+                symbol_ic_map=l1.get("symbol_ic") or None,  # GAP-075: 激活 cross_symbol
+                symbol_holdout=l1.get("symbol_holdout") or None,  # GAP-075: 标的留出审计项
                 oos_result=oos_result,
                 p_values=p_values if p_values else None,
             )
@@ -4116,7 +4698,7 @@ class EvolutionLoop:
             if forward_returns is None:
                 forward_returns = np.zeros(len(data))
 
-            result = self.ablation_experiment.run(factor, data, forward_returns)
+            result = self.ablation_experiment.run(factor, data, forward_returns, signal_cache=self._signal_cache)
             # AblationResult 是 dict 子类，直接使用
             baseline_ic = result.get("baseline_ic", 0.0)
             ablations = result.get("ablations", [])
@@ -4198,7 +4780,7 @@ class EvolutionLoop:
             # 期货市场鲁棒性审查阈值放宽（低信噪比、短样本场景）
             min_pass_rate = 0.7 if getattr(self, "market", "stock") == "futures" else 0.9
 
-            result = self.robustness_tester.run(factor, data, forward_returns)
+            result = self.robustness_tester.run(factor, data, forward_returns, signal_cache=self._signal_cache)
             # RobustnessTestResult 是 dict 子类，直接使用
             summary = result.get("summary", {})
             pass_rate = summary.get("overall_pass_rate", 1.0)
@@ -4271,7 +4853,7 @@ class EvolutionLoop:
             if forward_returns is None:
                 forward_returns = np.zeros(len(data))
 
-            result = self.shap_analyzer.analyze(factor, data, forward_returns)
+            result = self.shap_analyzer.analyze(factor, data, forward_returns, signal_cache=self._signal_cache)
             # ShapAnalysisResult 是 dict 子类，直接使用；SHAP 为信息型审查，成功即通过
             return {**result, "passed": True}
         except Exception as e:
@@ -4509,7 +5091,7 @@ def main():
     parser.add_argument("--once", action="store_true", help="运行一次完整演化")
     parser.add_argument("--max-generation", type=int, default=None, help="最大代数")
     parser.add_argument("--memory-dir", default="memory/evolution", help="状态目录")
-    parser.add_argument("--elite-dir", default="memory/knowledge/factors/elite", help="精英池目录")
+    parser.add_argument("--elite-dir", default="memory/knowledge/factors/stocks_elite", help="精英池目录")
     args = parser.parse_args()
 
     if not args.once:

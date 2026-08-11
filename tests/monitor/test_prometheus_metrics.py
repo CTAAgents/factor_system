@@ -42,6 +42,8 @@ class TestMetricsRegistryInit:
         assert reg._recommendations_accepted == 0.0
         assert reg._new_factors == 0
         assert reg._effective_rate == 0.0
+        assert reg._regime_metrics == {}
+        assert reg._regime_by_market == {}
 
 
 # ─── 衰减追踪指标 (A.2) ──────────────────────────────────
@@ -134,6 +136,52 @@ class TestRegime:
         reg = MetricsRegistry()
         reg.record_rebalance("")
         assert reg._rebalance_total == {"unknown": 1}
+
+
+class TestRegimeMetrics:
+    """record_regime_metrics 测试（28-T10 观测指标）。"""
+
+    def test_record_regime_metrics(self):
+        """记录后 render() 输出 fts_regime_* 指标行。"""
+        reg = MetricsRegistry()
+        reg.record_regime_metrics(
+            "futures",
+            "bear",
+            0.7,
+            {"bear": 0.7, "bull": 0.1, "oscillate": 0.1, "high_vol": 0.05, "low_vol": 0.05},
+            0.6,
+        )
+        text = "\n".join(reg.render())
+        assert 'fts_regime_confidence{market="futures"} 0.7' in text
+        assert 'fts_regime_entropy_norm{market="futures"}' in text
+        assert 'fts_regime_exposure_scale{market="futures"} 0.6' in text
+        assert 'fts_regime_blend_hhi{market="futures"}' in text
+        assert 'fts_regime_name{market="futures",regime="bear"} 1' in text
+
+    def test_record_regime_metrics_no_probs(self):
+        """无 probs 时熵=0.0、HHI=1.0（确定性回退）。"""
+        reg = MetricsRegistry()
+        reg.record_regime_metrics("stock", "bull", 0.9, None, 1.0)
+        text = "\n".join(reg.render())
+        assert 'fts_regime_entropy_norm{market="stock"} 0.0' in text
+        assert 'fts_regime_blend_hhi{market="stock"} 1.0' in text
+
+    def test_record_regime_metrics_overwrite(self):
+        """同市场重复上报覆盖旧值。"""
+        reg = MetricsRegistry()
+        reg.record_regime_metrics("futures", "bear", 0.7, None, 0.6)
+        reg.record_regime_metrics("futures", "bull", 0.9, None, 1.0)
+        text = "\n".join(reg.render())
+        assert 'fts_regime_confidence{market="futures"} 0.9' in text
+        assert 'fts_regime_name{market="futures",regime="bull"} 1' in text
+        assert 'fts_regime_name{market="futures",regime="bear"}' not in text
+
+    def test_record_regime_metrics_empty_market(self):
+        """空 market 归入 unknown 桶。"""
+        reg = MetricsRegistry()
+        reg.record_regime_metrics("", "bear", 0.5, None, 1.0)
+        assert reg._regime_by_market == {"unknown": "bear"}
+        assert "fts_regime_name{market=\"unknown\",regime=\"bear\"} 1" in "\n".join(reg.render())
 
 
 # ─── Live 因子指标 (C.2) ─────────────────────────────────

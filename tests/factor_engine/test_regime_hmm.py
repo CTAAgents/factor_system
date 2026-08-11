@@ -43,8 +43,23 @@ def stabilizer() -> StateMapStabilizer:
     return StateMapStabilizer(history_maxlen=3, fusion_alpha=0.7, freeze_confidence=0.8)
 
 
-def _make_ohlcv(close_series: np.ndarray, n: int | None = None) -> pd.DataFrame:
-    """从收盘价序列构造 OHLCV DataFrame。"""
+def _make_ohlcv(
+    close_series: np.ndarray | None = None,
+    n: int | None = None,
+    trend: float = 0.0,
+) -> pd.DataFrame:
+    """构造 OHLCV DataFrame（28-T2 起支持 n + trend 生成价格序列）。
+
+    两种用法：
+      1. _make_ohlcv(close_series, n) — 直接给定收盘价序列（既有用法）；
+      2. _make_ohlcv(n=300, trend=0.3) — 由 n 与每日趋势漂移生成价格序列，
+         口径与 test_regime.py 的 _make_trend_ohlcv 一致（trend=每步漂移点数）。
+    """
+    if close_series is None:
+        if n is None:
+            raise ValueError("close_series 与 n 至少提供一个")
+        np.random.seed(42)
+        close_series = 100 + np.cumsum(np.random.randn(n) * 0.3 + trend)
     if n is None:
         n = len(close_series)
     dates = pd.date_range("2024-01-01", periods=n, freq="D")
@@ -735,3 +750,32 @@ class TestMSMRegimeDetectorMore:
         regime, conf, _ = det.predict(ohlcv)
         assert regime == "unknown"
         assert conf == 0.0
+
+
+# ═══════════════════════════════════════════════════════════
+# 9. 多周期 HMM 置信度公式 + regime_probs（28 计划 Task 2）
+# ═══════════════════════════════════════════════════════════
+
+
+@pytest.mark.skipif(not _HMM_AVAILABLE, reason="需要 hmmlearn")
+def test_multi_hmm_confidence_is_weighted_posterior() -> None:
+    """多周期 HMM 置信度 ∈[0,1]（有概率语义，非 ×2 启发式），regime_probs 和为 1。"""
+    det = MultiHorizonHMMDetector(horizons=[63, 126], weights={63: 0.4, 126: 0.6})
+    ohlcv = _make_ohlcv(n=300, trend=0.3)  # 强上涨趋势（trend=每步漂移点数）
+    regime, conf, feats = det.predict(ohlcv)
+    assert 0.0 <= conf <= 1.0
+    assert "regime_probs" in feats
+    probs = feats["regime_probs"]
+    assert abs(sum(probs.values()) - 1.0) < 1e-6
+    assert all(0.0 <= v <= 1.0 for v in probs.values())
+
+
+@pytest.mark.skipif(not _HMM_AVAILABLE, reason="需要 hmmlearn")
+def test_multi_hmm_probs_agree_with_regime() -> None:
+    """主制度应为其概率最大项。"""
+    det = MultiHorizonHMMDetector()
+    ohlcv = _make_ohlcv(n=400, trend=-0.2)  # 明确下跌
+    regime, conf, feats = det.predict(ohlcv)
+    assert regime != "unknown"
+    probs = feats["regime_probs"]
+    assert probs[regime] == max(probs.values())

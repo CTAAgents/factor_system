@@ -284,6 +284,8 @@ class PortfolioManager:
             status="pending",
             created_at=datetime.now().isoformat(),
             metrics_source="estimated",
+            exposure_scale=None,
+            regime_meta=None,
         )
         self._cache = combo
         return combo
@@ -620,6 +622,7 @@ def regime_adaptive_weight_adjustment(
     dimension: str = "family",
     min_clamp: float = 0.5,
     max_clamp: float = 1.5,
+    probability_mix: bool = True,
 ) -> list[PortfolioSignal]:
     """根据市场制度自适应调整因子权重。
 
@@ -634,6 +637,11 @@ def regime_adaptive_weight_adjustment(
     4. 将原始权重 × 倍率 → 调整后权重（不低于 min_weight 比例）
     5. 对高波动期（high_vol）额外缩减衰减过快因子
 
+    制度概率混合（28-T3，regime blend，对标 Two Sigma / AQR）:
+    - 启用 probability_mix 且 regime 含 regime_probs 时，对全部制度倍率表按概率
+      加权混合: mult = Σ p_i × table_i，替代硬查表——制度误判只按概率摊薄而非全错。
+    - 无 regime_probs 或 probability_mix=False 时回退旧硬查表逻辑（向后兼容）。
+
     Args:
         signals: 合成后的信号列表
         regime: 市场制度检测结果 (from RegimeAwareSelector.detect())
@@ -642,6 +650,7 @@ def regime_adaptive_weight_adjustment(
         dimension: 调整维度 "family" | "style" | "both"
         min_clamp: 双维度乘积下限 clamp 倍率（dimension="both" 时生效）
         max_clamp: 双维度乘积上限 clamp 倍率（dimension="both" 时生效）
+        probability_mix: 是否启用制度概率混合（regime blend，默认 True）
 
     Returns:
         调整后的 signals 列表（权重已更新，retained 可能变化）
@@ -658,7 +667,14 @@ def regime_adaptive_weight_adjustment(
     )
     style_multipliers = REGIME_STYLE_MULTIPLIERS.get(regime_name, {})
 
-    if not family_multipliers and not style_multipliers:
+    # 制度概率混合（28-T3）：按制度概率对各制度倍率表加权混合
+    regime_probs: dict[str, float] | None = regime.get("regime_probs") if probability_mix else None
+    # blend 需跨制度取表（mult = Σ p_i × table_i）：数据驱动全表优先，缺失回退硬编码全表
+    family_tables: dict[str, dict[str, float]] = (
+        _DATA_DRIVEN_FAMILY_MULTIPLIERS if _DATA_DRIVEN_FAMILY_MULTIPLIERS else REGIME_FAMILY_MULTIPLIERS
+    )
+    style_tables: dict[str, dict[str, float]] = REGIME_STYLE_MULTIPLIERS
+    if not family_multipliers and not style_multipliers and regime_probs is None:
         logger.info("[L3-Regime] 无制度倍率配置，跳过自适应调整 [regime=%s]", regime_name)
         return signals
 
@@ -685,9 +701,19 @@ def regime_adaptive_weight_adjustment(
         family = factor_family_map.get(fid, "other")
         style = factor_style_map.get(fid, "other")
 
-        # 获取各维度倍率（默认 1.0）
-        family_mult = family_multipliers.get(family, 1.0)
-        style_mult = style_multipliers.get(style, 1.0)
+        # 获取各维度倍率（默认 1.0）；启用概率混合时按制度概率跨制度加权（28-T3）
+        if regime_probs:
+            family_mult = sum(
+                p * (family_tables.get(r, {}).get(family, 1.0) if family_tables else 1.0)
+                for r, p in regime_probs.items()
+            )
+            style_mult = sum(
+                p * (style_tables.get(r, {}).get(style, 1.0) if style_tables else 1.0)
+                for r, p in regime_probs.items()
+            )
+        else:
+            family_mult = family_multipliers.get(family, 1.0)
+            style_mult = style_multipliers.get(style, 1.0)
 
         if dimension == "style":
             multiplier = style_mult
@@ -730,6 +756,46 @@ def regime_adaptive_weight_adjustment(
         logger.info("[L3-Regime] 自适应权重调整完成 [regime=%s, dim=%s, 无需调整]", regime_name, dimension)
 
     return signals
+
+
+def _compute_exposure_scale(
+    regime: Optional[dict[str, Any]],
+    enabled: bool = True,
+    scale_min: float = 0.3,
+    entropy_penalty: float = 0.5,
+) -> float:
+    """计算置信度仓位缩放因子（28-T4，T6 在 build_combo 消费）。
+
+    对标机构 vol targeting 简化版：低确定性（高后验熵 / 低置信度）降低总暴露。
+    未启用或 regime 缺失/异常时返回 1.0（不缩放），保证默认行为不变。
+
+    Args:
+        regime: 市场制度检测结果（含 confidence / regime_probs，可无 regime_probs）。
+        enabled: 是否启用置信度缩放。
+        scale_min: 熵标定后缩放下限。
+        entropy_penalty: 熵标定惩罚系数。
+
+    Returns:
+        暴露缩放因子 ∈ [scale_min, 1.0]；未启用/异常时 1.0。
+    """
+    if not enabled or regime is None:
+        return 1.0
+    try:
+        from .regime_calibration import RegimeConfidenceCalibrator
+
+        calibrator = RegimeConfidenceCalibrator(
+            entropy_penalty=float(entropy_penalty),
+            scale_min=float(scale_min),
+        )
+        return float(
+            calibrator.calibrate(
+                regime.get("confidence", 0.5),
+                regime.get("regime_probs"),
+            )
+        )
+    except Exception as e:  # 容错兜底：任何异常不阻断主流程
+        logger.warning("[L3-Regime] 置信度仓位缩放计算失败，回退 1.0: %s", e)
+        return 1.0
 
 
 def _infer_factor_style_from_name(name: str) -> str:
@@ -785,6 +851,7 @@ def synthesize_signals(
     optimizer_config: Optional[dict[str, Any]] = None,
     market: str = "stock",
     weight_config: Optional[Any] = None,
+    ic_matrix: Optional[np.ndarray] = None,
 ) -> tuple[list[PortfolioSignal], float, float]:
     """信号合成。
 
@@ -792,15 +859,19 @@ def synthesize_signals(
         factors: 每个 dict 必须含 factor_id, name, sharpe, ic, turnover, decay_6m
         mode: "equal_weight" | "sharpe_weight" | "elastic_net" | "ml_ensemble"
               | "optimizer"（GAP-F07/GAP-L303：PortfolioOptimizer 约束优化，需 returns_matrix）
+              | "ic_weight"（GAP-064：IC 协方差加权，需 ic_matrix；否则回退 IC 均值加权）
         elite_dir: 精英因子目录（elastic_net/ml_ensemble 模式需要，用于加载因子代码）
         returns_matrix: 因子历史收益矩阵（行=样本，列=因子 factor_id；
             optimizer 模式需要，列将自动对齐 factors 顺序）
-        optimizer_mode: optimizer 模式目标 "risk_parity" | "mvo"（GAP-L303）
+        optimizer_mode: optimizer 模式目标 "risk_parity" | "mvo" | "bl"（GAP-L303；
+            "bl"=Black-Litterman 观点融合，C3：先验=风险平价，观点=IC 自动构建或
+            optimizer_config["views_p"]/["views_q"] 显式传入）
         optimizer_config: PortfolioOptimizer 配置透传（OptimizerConfig 字段 dict，
             含 neutralization/exposure_tolerance，GAP-L304；可含 "exposure_matrix"/"target_exposure"/
             "capacity_limits"（GAP-L305））
         market: 目标交易市场（elastic_net 权重学习面板自动匹配，v2.74.0）
         weight_config: 机构级权重学习配置（WeightLearningConfig，None 用默认，v2.74.0）
+        ic_matrix: T×N IC 观测矩阵（列序与 factors 一致；ic_weight 模式用，GAP-064）
 
     Returns:
         (signals, max_correlation, combo_turnover)
@@ -926,6 +997,55 @@ def synthesize_signals(
             logger.info(
                 "[L3-WEIGHT]   [%d] %s | sharpe=%.2f | raw_weight=%.4f", idx + 1, s["name"], s["sharpe"], s["weight"]
             )
+    elif mode == "ic_weight":
+        # GAP-064 (v2.94.0): IC 加权。提供 ic_matrix（T×N，列序与 factors 一致）时
+        # 升级为 IC 协方差加权 w=(Σ+λI)⁻¹μ（Ledoit-Wolf 收缩 + 正则）；
+        # 未提供/样本不足时回退 IC 均值加权（w ∝ |ic|）。
+        ic_weights: Optional[np.ndarray] = None
+        if ic_matrix is not None:
+            try:
+                from .weight_learning import ic_covariance_weights
+
+                ic_weights = ic_covariance_weights(np.asarray(ic_matrix, dtype=float))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[L3] IC 协方差加权失败，回退 IC 均值加权: %s", e)
+                ic_weights = None
+        signals = []
+        if ic_weights is not None and len(ic_weights) == n:
+            logger.info("[L3-WEIGHT] ic_weight 模式: IC 协方差加权 (Σ⁻¹μ, n=%d 因子)", n)
+            for i, f in enumerate(factors):
+                signals.append(
+                    PortfolioSignal(
+                        factor_id=f["factor_id"],
+                        name=f["name"],
+                        weight=float(ic_weights[i]),
+                        sharpe=f.get("sharpe", 0.0),
+                        ic=f.get("ic", 0.0),
+                        turnover=f.get("turnover", 0.0),
+                        decay_6m=f.get("decay_6m", 0.0),
+                        orthogonalized=False,
+                        retained=True,
+                    )
+                )
+        else:
+            mu_ics = [abs(f.get("ic", 0.0)) for f in factors]
+            total_mu = sum(mu_ics)
+            logger.info("[L3-WEIGHT] ic_weight 模式: IC 均值加权回退 (w ∝ |ic|, n=%d)", n)
+            for i, f in enumerate(factors):
+                w = mu_ics[i] / total_mu if total_mu > 0 else 1.0 / n
+                signals.append(
+                    PortfolioSignal(
+                        factor_id=f["factor_id"],
+                        name=f["name"],
+                        weight=w,
+                        sharpe=f.get("sharpe", 0.0),
+                        ic=f.get("ic", 0.0),
+                        turnover=f.get("turnover", 0.0),
+                        decay_6m=f.get("decay_6m", 0.0),
+                        orthogonalized=False,
+                        retained=True,
+                    )
+                )
     elif mode == "adaptive":
         # 自适应模式（A.3 / v2.56.0）: 以 Sharpe 权重为基，
         # 后续由 Step 2.5 regime 双维度调整（family×style）+ RegimeSmoother 接管。
@@ -975,54 +1095,76 @@ def synthesize_signals(
         )
         from fts.factor_engine.risk_model import RiskModelEstimator
 
+        # 协方差用 Ledoit-Wolf 收缩估计（GAP-L302 联动）
+        cov = RiskModelEstimator().estimate(rm).cov
+
         # 构造优化配置（GAP-L303/L304/L305）：exposure_matrix/target_exposure/capacity_limits 透传，不入 OptimizerConfig
         cfg_dict = dict(optimizer_config or {})
         # "mvo" 为 "mean_variance" 的 CLI 别名（GAP-L303）
         mode_internal = "mean_variance" if optimizer_mode == "mvo" else optimizer_mode
-        cfg_dict.setdefault("mode", mode_internal)
         exposure_matrix = cfg_dict.pop("exposure_matrix", None)
         target_exposure = cfg_dict.pop("target_exposure", None)
         capacity_limits = cfg_dict.pop("capacity_limits", None)
-        opt_cfg = OptimizerConfig(**cfg_dict)
-        opt = PortfolioOptimizer(opt_cfg)
 
-        # 协方差用 Ledoit-Wolf 收缩估计（GAP-L302 联动）
-        cov = RiskModelEstimator().estimate(rm).cov
-
-        # 期望收益代理（mvo 模式需要）：截断后 Sharpe 作为 alpha 代理
-        mu = np.array(
-            [f.get("_sharpe_raw", f.get("sharpe", 0.0)) for f in factors],
-            dtype=float,
-        )
-        weights = opt.optimize(
-            cov=cov,
-            expected_returns=mu,
-            exposure_matrix=exposure_matrix,
-            target_exposure=target_exposure,
-            capacity_limits=capacity_limits,
-        )
-        signals = []
-        for i, f in enumerate(factors):
-            wi = float(weights[i])
-            signals.append(
-                PortfolioSignal(
-                    factor_id=f["factor_id"],
-                    name=f["name"],
-                    weight=wi,
-                    sharpe=f.get("sharpe", 0.0),
-                    ic=f.get("ic", 0.0),
-                    turnover=f.get("turnover", 0.0),
-                    decay_6m=f.get("decay_6m", 0.0),
-                    orthogonalized=False,
-                    retained=wi > 0.0,
+        # C3: Black-Litterman 观点融合（optimizer_mode="bl"）
+        if mode_internal == "bl":
+            try:
+                signals = _synthesize_bl_weights(cov, factors, cfg_dict)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[L3] Black-Litterman 融合异常 (%s)，回退 risk_parity", e)
+                signals = None
+            if signals is None:
+                logger.warning("[L3] Black-Litterman 融合失败，回退 risk_parity")
+                return synthesize_signals(
+                    factors,
+                    "optimizer",
+                    elite_dir=elite_dir,
+                    returns_matrix=returns_matrix,
+                    optimizer_mode="risk_parity",
+                    optimizer_config=optimizer_config,
+                    market=market,
+                    weight_config=weight_config,
+                    ic_matrix=ic_matrix,
                 )
+        else:
+            cfg_dict.setdefault("mode", mode_internal)
+            opt_cfg = OptimizerConfig(**cfg_dict)
+            opt = PortfolioOptimizer(opt_cfg)
+
+            # 期望收益代理（mvo 模式需要）：截断后 Sharpe 作为 alpha 代理
+            mu = np.array(
+                [f.get("_sharpe_raw", f.get("sharpe", 0.0)) for f in factors],
+                dtype=float,
             )
-        logger.info(
-            "[L3] PortfolioOptimizer(%s) 完成: %d/%d 因子获得非零权重",
-            opt._config.mode,
-            sum(1 for s in signals if s["retained"]),
-            len(signals),
-        )
+            weights = opt.optimize(
+                cov=cov,
+                expected_returns=mu,
+                exposure_matrix=exposure_matrix,
+                target_exposure=target_exposure,
+                capacity_limits=capacity_limits,
+            )
+            signals = []
+            for i, f in enumerate(factors):
+                wi = float(weights[i])
+                signals.append(
+                    PortfolioSignal(
+                        factor_id=f["factor_id"],
+                        name=f["name"],
+                        weight=wi,
+                        sharpe=f.get("sharpe", 0.0),
+                        ic=f.get("ic", 0.0),
+                        turnover=f.get("turnover", 0.0),
+                        decay_6m=f.get("decay_6m", 0.0),
+                        orthogonalized=False,
+                        retained=wi > 0.0,
+                    )
+                )
+            logger.info(
+                "[L3] PortfolioOptimizer(%s) 完成: %d/%d 因子获得非零权重",
+                opt._config.mode,
+                sum(1 for s in signals if s["retained"]),
+                len(signals),
+            )
     else:
         # lightgbm 等未实现模式暂回退等权
         signals = []
@@ -1046,6 +1188,90 @@ def synthesize_signals(
     total_turnover = sum(s.get("turnover", 0) for s in signals) / len(signals) if signals else 0.0
 
     return signals, max_corr, total_turnover
+
+
+def _synthesize_bl_weights(
+    cov: np.ndarray,
+    factors: list[dict[str, Any]],
+    cfg_dict: dict[str, Any],
+) -> Optional[list[PortfolioSignal]]:
+    """C3: Black-Litterman 观点融合合成信号。
+
+    先验权重 = 同协方差风险平价解；观点来源 = 显式（cfg_dict["views_p"]/["views_q"]）
+    或 build_auto_views 自动构建（因子原始 IC × 先验隐含收益尺度）。
+
+    Args:
+        cov: Ledoit-Wolf 收缩协方差 (n, n)
+        factors: 因子列表（含 factor_id/name/sharpe/ic/turnover/decay_6m）
+        cfg_dict: optimizer_config 中 BL 专属字段（tau/omega_scale/risk_aversion/
+            max_weight/max_leverage/views_p/views_q；已剔除 mode/exposure 等）
+
+    Returns:
+        signals 列表；融合失败返回 None（调用方回退 risk_parity）
+    """
+    try:
+        from fts.factor_engine.black_litterman import (
+            BlackLittermanConfig,
+            black_litterman_weights,
+            build_auto_views,
+            implied_returns,
+        )
+        from fts.factor_engine.portfolio_optimizer import (
+            OptimizerConfig,
+            PortfolioOptimizer,
+        )
+
+        n = len(factors)
+        bl_dict = {
+            key: cfg_dict.pop(key)
+            for key in ("tau", "omega_scale", "risk_aversion", "max_weight", "max_leverage")
+            if key in cfg_dict
+        }
+        views_p = cfg_dict.pop("views_p", None)
+        views_q = cfg_dict.pop("views_q", None)
+
+        # 先验权重 = 风险平价（同协方差求解）
+        prior_opt = PortfolioOptimizer(
+            OptimizerConfig(
+                mode="risk_parity",
+                max_weight=bl_dict.get("max_weight", 0.3),
+                max_leverage=bl_dict.get("max_leverage", 1.0),
+            )
+        )
+        prior_w = prior_opt.optimize(cov=cov)
+        pi = implied_returns(cov, prior_w, bl_dict.get("risk_aversion", 1.0))
+        if views_q is None:
+            views_p, views_q = build_auto_views(factors, pi)
+        bl_cfg = BlackLittermanConfig(**bl_dict) if bl_dict else None
+        bl_res = black_litterman_weights(cov, prior_w, views_q, views_p=views_p, config=bl_cfg)
+        weights = bl_res.weights
+
+        signals = []
+        for i, f in enumerate(factors):
+            wi = float(weights[i])
+            signals.append(
+                PortfolioSignal(
+                    factor_id=f["factor_id"],
+                    name=f["name"],
+                    weight=wi,
+                    sharpe=f.get("sharpe", 0.0),
+                    ic=f.get("ic", 0.0),
+                    turnover=f.get("turnover", 0.0),
+                    decay_6m=f.get("decay_6m", 0.0),
+                    orthogonalized=False,
+                    retained=wi > 0.0,
+                )
+            )
+        logger.info(
+            "[L3] Black-Litterman 完成: %d/%d 因子非零权重（views=%d）",
+            sum(1 for s in signals if s["retained"]),
+            n,
+            len(bl_res.view_q),
+        )
+        return signals
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[L3] Black-Litterman 融合失败 (%s)", e)
+        return None
 
 
 # ─── GAP-L309: 面板数据规模参数化配置 ──────────────────────
@@ -1942,6 +2168,8 @@ def build_combo(
     market: str = "futures",
     cost_config: Optional[dict[str, Any]] = None,
     turnover_penalty: float = 0.0,
+    exposure_scale: Optional[float] = None,
+    regime_meta: Optional[dict] = None,
 ) -> PortfolioCombo:
     """构建组合 — 归一化权重 + 计算组合指标。
 
@@ -1958,6 +2186,8 @@ def build_combo(
         cost_config: 成本配置（CostConfig 字段 dict，GAP-L305；None=不启用成本模型，
             net_combo_sharpe 为 None）
         turnover_penalty: 换手惩罚系数 λ（GAP-I303，0=关闭；粘性约束后收缩权重变动）
+        exposure_scale: 置信度仓位缩放因子（28-T6，None=未启用；归一化后统一缩放总仓位）
+        regime_meta: regime 元信息 {regime, confidence, exposure_scale, entropy_norm}（28-T6）
 
     Returns:
         PortfolioCombo
@@ -1979,6 +2209,9 @@ def build_combo(
             status="pending",
             created_at=datetime.now().isoformat(),
             metrics_source="estimated",
+            qc_standards={},
+            exposure_scale=None,
+            regime_meta=None,
         )
 
     # 粘性约束（归一化前，保证约束后的权重和为 1 的归一化语义一致）
@@ -2005,6 +2238,14 @@ def build_combo(
         for s in retained:
             s["weight"] = s.get("weight", 0) / total_w
 
+    # 置信度仓位缩放（28-T6）：归一化后统一缩放总暴露，随组合落盘可追溯
+    if exposure_scale is not None and total_w > 0:
+        for s in retained:
+            s["weight"] = s["weight"] * exposure_scale
+        logger.info("[L3-WEIGHT] 置信度仓位缩放: exposure_scale=%.4f", exposure_scale)
+        # regime_meta 统一携带 exposure_scale，保证落盘可追溯（不修改调用方传入 dict）
+        regime_meta = {**(regime_meta or {}), "exposure_scale": round(exposure_scale, 4)}
+
     # [WEIGHT-LOG] 归一化后权重分布
     sorted_retained = sorted(retained, key=lambda x: -x["weight"])
     effective_n = 1.0 / sum((s["weight"] ** 2) for s in sorted_retained)
@@ -2030,6 +2271,7 @@ def build_combo(
     # 优先用因子收益矩阵 w×R 实测组合夏普/相关性；矩阵缺失、不可对齐或样本不足时回退估算。
     metrics_source: str = "estimated"
     combo_turnover = sum(s.get("turnover", 0) for s in retained) / n_ret
+    _qc_drawdown: dict[str, float] = {}  # GAP-063 实测回撤控制（仅 measured 路径）
     if factor_returns is not None and n_ret > 0:
         retained_ids = [s.get("factor_id") for s in retained if s.get("factor_id")]
         if retained_ids:
@@ -2043,6 +2285,24 @@ def build_combo(
                     combo_sharpe = FactorReturnsBuilder.annualized_sharpe(pf, annualize_factor)
                     max_corr = FactorReturnsBuilder.max_abs_correlation(fr)
                     metrics_source = "measured"
+                    # GAP-063 回撤控制：组合最大回撤 vs 成分因子最大回撤均值（净值从 1 起，与 portfolio_risk_controls 口径一致）
+                    try:
+                        combo_nav = np.concatenate([[1.0], np.cumprod(1.0 + np.asarray(pf, dtype=float))])
+                        combo_peak = np.maximum.accumulate(combo_nav)
+                        combo_dd = float(np.max((combo_peak - combo_nav) / combo_peak)) if len(combo_nav) else 0.0
+                        f_dds: list[float] = []
+                        for col in fr.columns:
+                            fnav = np.concatenate([[1.0], np.cumprod(1.0 + fr[col].to_numpy(dtype=float))])
+                            fpeak = np.maximum.accumulate(fnav)
+                            if len(fnav):
+                                f_dds.append(float(np.max((fpeak - fnav) / fpeak)))
+                        if f_dds:
+                            _qc_drawdown = {
+                                "combo_max_dd": combo_dd,
+                                "mean_factor_max_dd": float(np.mean(f_dds)),
+                            }
+                    except Exception:  # noqa: BLE001
+                        _qc_drawdown = {}
             except Exception as e:
                 logger.warning("[L3] 实测指标计算失败，回退估算: %s", e)
 
@@ -2104,6 +2364,32 @@ def build_combo(
         except Exception as e:
             logger.warning("[L3-NET] net 指标计算失败（非致命）: %s", e)
 
+    # ── 组合质检三标准（GAP-063）──
+    qc_standards: dict[str, Any] = {}
+    sharpe_vals = [float(s.get("sharpe", 0.0) or 0.0) for s in retained]
+    weight_vals = [float(s.get("weight", 0.0) or 0.0) for s in retained]
+    best_single_sharpe = max(sharpe_vals) if sharpe_vals else 0.0
+    tw = sum(weight_vals)
+    wavg_sharpe = sum(w * s for w, s in zip(weight_vals, sharpe_vals)) / tw if tw > 0 else 0.0
+    if best_single_sharpe > 0:
+        qc_standards["synthesis_gain"] = float(combo_sharpe / best_single_sharpe)
+        qc_standards["synthesis_passed"] = bool(combo_sharpe > best_single_sharpe)
+    if wavg_sharpe > 0:
+        qc_standards["diversification_gain"] = float(combo_sharpe / wavg_sharpe)
+        qc_standards["diversification_passed"] = bool(combo_sharpe > wavg_sharpe)
+    if _qc_drawdown:
+        combo_dd = _qc_drawdown["combo_max_dd"]
+        mean_fdd = _qc_drawdown["mean_factor_max_dd"]
+        qc_standards["drawdown_control_ratio"] = float(combo_dd / mean_fdd) if mean_fdd > 1e-10 else None
+        qc_standards["drawdown_control_passed"] = bool(mean_fdd > 1e-10 and combo_dd < mean_fdd)
+    if qc_standards:
+        logger.info(
+            "[L3-QC] 组合质检: synthesis_gain=%s diversification_gain=%s drawdown_ratio=%s",
+            qc_standards.get("synthesis_gain"),
+            qc_standards.get("diversification_gain"),
+            qc_standards.get("drawdown_control_ratio"),
+        )
+
     return PortfolioCombo(
         version=EVOLUTION_VERSION,
         updated_at=datetime.now().isoformat(),
@@ -2121,6 +2407,9 @@ def build_combo(
         sharpe_warning=sharpe_warning,
         sharpe_randomization_passed=sharpe_randomization_passed,
         metrics_source=metrics_source,
+        qc_standards=qc_standards,
+        exposure_scale=round(exposure_scale, 4) if exposure_scale is not None else None,
+        regime_meta=regime_meta,
     )
 
 
@@ -2924,9 +3213,8 @@ def load_elite_factors(
             logger.info("[L3] DuckDB 查询: market=%s, status=active, is_elite=True", market)
             from .factor_db import FactorRepository
 
-            repo = FactorRepository()
+            repo = FactorRepository(market=market)
             try:
-                # 先统计总数
                 total_count = repo._execute(
                     "SELECT count(*) FROM factor_catalog WHERE market=? AND status='active' AND is_elite=true", [market]
                 ).fetchone()[0]
@@ -3251,7 +3539,7 @@ class PortfolioLoop:
     def __init__(
         self,
         memory_dir: str | Path = "memory/portfolio",
-        elite_dir: str | Path = "memory/knowledge/factors/elite",
+        elite_dir: str | Path = "memory/knowledge/factors/stocks_elite",
         verifier_config: Optional[L3VerifierConfig] = None,
         synthesis_mode: str = "elastic_net",
         use_duckdb: bool = True,
@@ -3283,6 +3571,9 @@ class PortfolioLoop:
         self.drift_monitor = DriftMonitor(memory_dir)
         self._regime_selector: Optional[Any] = None
         self._regime_smoother: Optional[Any] = None
+        # 28-T4: 置信度仓位缩放因子（Step 2.5 计算，T6 在 build_combo 消费）与 regime 元信息
+        self._regime_exposure_scale: float = 1.0
+        self._regime_meta: Optional[dict[str, Any]] = None
         # P1/P2 控制开关
         self.enable_clustering = enable_clustering
         self.enable_pca = enable_pca
@@ -3321,7 +3612,7 @@ class PortfolioLoop:
         try:
             from .factor_db import FactorRepository
 
-            repo = FactorRepository()
+            repo = FactorRepository(market=self.market)
             try:
                 rows = repo._execute(
                     """
@@ -3445,7 +3736,7 @@ class PortfolioLoop:
             - VaR 95/99 与 ES 95（历史模拟法）
             - 组合实际收益序列（w×R）
 
-        报告写入 `reports/{date}/portfolio_attribution_{combo_id}.md`。
+        报告写入 `reports/{market}/{date}/portfolio_attribution_{combo_id}.md`。
 
         Args:
             factor_returns: 因子收益矩阵（T×N，列名=factor_id）
@@ -3483,7 +3774,7 @@ class PortfolioLoop:
 
         ts = datetime.now().strftime("%Y-%m-%d")
         combo_id = combo.get("combo_id", "unknown")
-        reports_dir = Path("reports") / ts
+        reports_dir = Path("reports") / self.market / ts
         reports_dir.mkdir(parents=True, exist_ok=True)
         out_file = reports_dir / f"portfolio_attribution_{combo_id}.md"
 
@@ -3585,7 +3876,7 @@ class PortfolioLoop:
 
         ts = datetime.now().strftime("%Y-%m-%d")
         combo_id = combo.get("combo_id", "unknown")
-        reports_dir = Path("reports") / ts
+        reports_dir = Path("reports") / self.market / ts
         reports_dir.mkdir(parents=True, exist_ok=True)
         out_file = reports_dir / f"portfolio_wf_{combo_id}.md"
 
@@ -3632,6 +3923,7 @@ class PortfolioLoop:
         factor_returns: Optional[pd.DataFrame] = None,
         exposure_matrix: Optional[np.ndarray] = None,
         stock_regime: Optional[dict[str, Any]] = None,
+        recompute_weights: Optional[bool] = None,
     ) -> PortfolioRunResult:
         """执行一次完整的 L3 Portfolio Loop。
 
@@ -3642,6 +3934,10 @@ class PortfolioLoop:
                          的检测结果（含 regime 字段映射 REGIME_STYLE_MULTIPLIERS）。
                          当 market="stock" 且传入时，Step 2.5 优先使用该结果驱动
                          风格自适应权重（覆盖 market_ohlcv 的通用 RegimeAwareSelector）。
+            recompute_weights: 是否重算组合权重（GAP-072，v2.99.0）。
+                         None=按配置 l3_weight_recompute_cadence 自动判定
+                         （weekly 仅重算日全量构建，其余日冻结返回 status="frozen"）；
+                         True=强制全量重算；False=强制冻结。
         """
         trace_id = generate_trace_id("l3")
         state = self.state_manager.mark_running()
@@ -3654,6 +3950,40 @@ class PortfolioLoop:
             self.enable_regime_adaptation,
             self.memory_dir,
         )
+
+        # GAP-072 (v2.99.0): 权重重算日判定 — 解绑 L3 与信号管道。
+        # 冻结日不重算权重、不重建组合（复用上次 current_combo.json），
+        # 信号管道每日独立运行并复用权重快照，仅刷新因子值。
+        if recompute_weights is None:
+            try:
+                from fts.config import is_weight_recompute_day
+
+                recompute_weights = is_weight_recompute_day()
+            except Exception:  # noqa: BLE001
+                recompute_weights = True
+            # 冷启动保护：尚无上次组合时，冻结日仍执行全量构建（无权重可冻结）
+            if not recompute_weights and self.portfolio_manager.load_prev_combo() is None:
+                logger.info("[L3] 冷启动（无上次组合）：冻结日仍执行全量组合构建")
+                recompute_weights = True
+        if not recompute_weights:
+            logger.info("[L3] 权重冻结日：跳过权重重算与组合重建（复用上次组合，仅信号管道每日刷新因子值）")
+            state["total_signals_processed"] = 0
+            state["total_signals_retained"] = 0
+            state["status"] = "frozen"
+            state["last_error"] = None
+            self.state_manager.save(state)
+            return PortfolioRunResult(
+                run_id=state["run_id"],
+                trace_id=trace_id,
+                n_factors_input=0,
+                n_factors_retained=0,
+                combo_sharpe=0.0,
+                max_correlation=0.0,
+                n_proposals=0,
+                status="frozen",
+                error=None,
+                output_paths={},
+            )
 
         try:
             # Step 0.5: 加载市场数据（用于相关性去重）
@@ -3669,6 +3999,40 @@ class PortfolioLoop:
                     )
                 except Exception as e:
                     logger.warning("[L3] Step 0.5: 期货面板数据加载失败 (%s)，使用 IC-only 去重", e)
+                    panel_data = None
+                # Step 0.5b: 未显式传入市场数据时，自动构建市场级合成 OHLCV，
+                # 供 Step 2.5 Regime 自适应权重调整使用（v2.98.1，方案 B）。
+                # 仅期货路径：股票路径保持 stock_regime 驱动（GAP-S03）不受影响。
+                if market_ohlcv is None and panel_data:
+                    try:
+                        from .regime import SectorRegimeSelector
+
+                        _mkt = SectorRegimeSelector._build_sector_ohlcv(panel_data, list(panel_data.keys()))
+                        if _mkt is not None and not _mkt.empty:
+                            market_ohlcv = _mkt
+                            logger.info(
+                                "[L3] Step 0.5b: 市场合成 OHLCV 构建完成 (%d 交易日)，Step 2.5 Regime 自适应启用",
+                                len(market_ohlcv),
+                            )
+                        else:
+                            logger.info("[L3] Step 0.5b: 面板数据不足，跳过 Regime 自适应")
+                            market_ohlcv = None
+                    except Exception as e:
+                        logger.warning("[L3] Step 0.5b: 市场 OHLCV 构建失败，跳过 Regime 自适应: %s", e)
+                        market_ohlcv = None
+            elif self.market == "stock":
+                # GAP-063 股票 L3 前置接入（v2.90.0）：加载 CSI300 面板，
+                # 供 load_elite_factors 相关性去重与 Regime 检测使用
+                try:
+                    from ..data import FTSDataProvider
+
+                    provider = FTSDataProvider()
+                    panel_data, _cdates = provider.get_csi300_panel(days=MIN_EVAL_DAYS)
+                    logger.info(
+                        "[L3] Step 0.5: 股票面板数据加载完成 (%d 标的, %d 交易日)", len(panel_data), len(_cdates)
+                    )
+                except Exception as e:
+                    logger.warning("[L3] Step 0.5: 股票面板数据加载失败 (%s)，使用 IC-only 去重", e)
                     panel_data = None
 
             # Step 1: 加载 elite 因子
@@ -3939,7 +4303,35 @@ class PortfolioLoop:
                             dimension=aconfig.get("dimension", "both"),
                             min_clamp=aconfig.get("min_clamp", 0.5),
                             max_clamp=aconfig.get("max_clamp", 1.5),
+                            probability_mix=aconfig.get("probability_mix", True),
                         )
+                        # 28-T4: 计算并暂存置信度仓位缩放因子（T6 在 build_combo 消费）
+                        self._regime_exposure_scale = _compute_exposure_scale(
+                            regime,
+                            enabled=aconfig.get("confidence_scale", True),
+                            scale_min=aconfig.get("confidence_scale_min", 0.3),
+                            entropy_penalty=aconfig.get("confidence_entropy_penalty", 0.5),
+                        )
+                        self._regime_meta = {
+                            "regime": regime.get("regime", "unknown"),
+                            "confidence": regime.get("confidence", 0.0),
+                            "exposure_scale": self._regime_exposure_scale,
+                            "entropy_norm": None,
+                        }
+                        # 28-T10: 上报 regime 观测指标（置信度/熵/exposure_scale/blend HHI），
+                        # 供 /metrics 审计；失败不阻断主流程。
+                        try:
+                            from fts.monitor.prometheus_metrics import metrics_registry
+
+                            metrics_registry.record_regime_metrics(
+                                self.market,
+                                regime.get("regime", ""),
+                                regime.get("confidence", 0.0),
+                                regime.get("regime_probs"),
+                                self._regime_exposure_scale,
+                            )
+                        except Exception as met_err:
+                            logger.warning("[L3] Step 2.5: Regime 指标上报失败: %s", met_err)
                         # RegimeSmoother 权重平滑（A.3 / v2.56.0）
                         try:
                             from .adaptive_weight import RegimeSmoother
@@ -3949,6 +4341,8 @@ class PortfolioLoop:
                                 self._regime_smoother = RegimeSmoother(
                                     alpha=float(sm.get("alpha", 0.5)),
                                     min_days=int(sm.get("min_days", 2)),
+                                    de_risk_alpha=float(sm.get("de_risk_alpha", 0.8)),
+                                    re_risk_alpha=float(sm.get("re_risk_alpha", 0.1)),
                                 )
                             # 平滑需要当前权重；首次运行（无 prev_weights）时直接采用
                             prev_combo = self.portfolio_manager.load_prev_combo()
@@ -3968,10 +4362,11 @@ class PortfolioLoop:
                         except Exception as sm_err:
                             logger.warning("[L3] Step 2.5: RegimeSmoother 失败，使用调整后权重: %s", sm_err)
                     logger.info(
-                        "[L3] Step 2.5: Regime=%s (confidence=%.2f), 自适应调整完成 [dim=%s]",
+                        "[L3] Step 2.5: Regime=%s (confidence=%.2f), 自适应调整完成 [dim=%s, exposure_scale=%.2f]",
                         regime.get("regime", "unknown"),
                         regime.get("confidence", 0.0),
                         aconfig.get("dimension", "both"),
+                        self._regime_exposure_scale,
                     )
                 except Exception as e:
                     logger.warning("[L3] Step 2.5: Regime 检测失败，跳过自适应调整: %s", e)
@@ -4038,6 +4433,8 @@ class PortfolioLoop:
                 market=self.market,
                 cost_config=self.cost_config,
                 turnover_penalty=self.turnover_penalty,
+                exposure_scale=self._regime_exposure_scale,
+                regime_meta=self._regime_meta,
             )
             logger.info(
                 "[L3] Step 5: 组合构建完成, 夏普=%.2f, 换手率=%.2f",
@@ -4119,6 +4516,37 @@ class PortfolioLoop:
             except Exception as e:
                 logger.warning("[L3] Step 7.7: 走航报告生成失败 (非致命): %s", e)
 
+            # Step 7.8: 组合级风控（GAP-067）— 回撤止损 + 相关性熔断建议（写入 state，执行由 FDT）
+            try:
+                if factor_returns is not None and combo.get("signals"):
+                    from .portfolio_risk_controls import run_portfolio_risk_controls
+
+                    retained_rc = [s for s in combo.get("signals", []) if s.get("retained", True)]
+                    retained_ids_rc = [s.get("factor_id") for s in retained_rc if s.get("factor_id")]
+                    if retained_ids_rc:
+                        fr_rc = FactorReturnsBuilder.align_to_factors(factor_returns, retained_ids_rc)
+                        if len(fr_rc) >= 5:
+                            w_rc = np.array([s.get("weight", 0.0) for s in retained_rc], dtype=float)
+                            tw_rc = float(np.sum(w_rc))
+                            if tw_rc > 0:
+                                w_rc = w_rc / tw_rc
+                            pf_rc = FactorReturnsBuilder.portfolio_returns(fr_rc, w_rc)
+                            alert = run_portfolio_risk_controls(
+                                combo_returns=np.asarray(pf_rc, dtype=float),
+                                member_returns=fr_rc,
+                            )
+                            state["risk_alerts"] = alert.to_dict()
+                            if alert.drawdown_stop or alert.correlation_breaker:
+                                logger.warning("[L3] Step 7.8: 组合风控告警: %s", alert.notes)
+                            else:
+                                logger.info(
+                                    "[L3] Step 7.8: 组合风控正常 dd=%.2f%% corr=%.2f",
+                                    alert.drawdown_current * 100.0,
+                                    alert.correlation_current,
+                                )
+            except Exception as e:
+                logger.warning("[L3] Step 7.8: 组合风控检查失败 (非致命): %s", e)
+
             # 更新状态
             state["total_signals_retained"] = n_retained
             state["total_proposals_generated"] = len(proposals)
@@ -4182,13 +4610,18 @@ def main() -> None:
         "--returns-matrix", default=None, help="因子收益矩阵 CSV 路径（optimizer 模式与实测化需要，可选）"
     )
     parser.add_argument("--memory-dir", default="memory/portfolio", help="状态/组合存储目录")
-    parser.add_argument("--elite-dir", default="memory/knowledge/factors/elite", help="精英因子目录")
+    parser.add_argument("--elite-dir", default="memory/knowledge/factors/stocks_elite", help="精英因子目录")
     parser.add_argument(
         "--cost-config",
         default=None,
         help='交易成本配置 JSON 路径（GAP-L305 net 指标，可选；如 {"market": "futures", "slippage_bps": 0.5}）',
     )
     parser.add_argument("--capacity-limits", default=None, help="容量权重上限 CSV/JSON 数组（GAP-L305，可选）")
+    parser.add_argument(
+        "--force-recompute",
+        action="store_true",
+        help="强制全量重算组合权重（GAP-072，默认按 l3_weight_recompute_cadence 自动判定）",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
@@ -4227,7 +4660,7 @@ def main() -> None:
         optimizer_config=optimizer_config,
         cost_config=cost_config,
     )
-    result = loop.run(factor_returns=factor_returns)
+    result = loop.run(factor_returns=factor_returns, recompute_weights=(True if args.force_recompute else None))
 
     print(
         f"[L3] run_id={result.run_id} status={result.status} "
@@ -4236,7 +4669,7 @@ def main() -> None:
     )
     if result.error:
         print(f"[L3] 警告/错误: {result.error}")
-    sys.exit(0 if result.status in ("passed", "verifier_warning", "completed") else 1)
+    sys.exit(0 if result.status in ("passed", "verifier_warning", "completed", "frozen") else 1)
 
 
 if __name__ == "__main__":  # pragma: no cover

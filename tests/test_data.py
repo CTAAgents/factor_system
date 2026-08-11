@@ -285,6 +285,119 @@ class TestIsEtfCode:
 
 
 # ═══════════════════════════════════════════════════════════
+# 9.5 _tq_stock_available 探活缓存 + 失败冷却重试（GAP-076）
+# ═══════════════════════════════════════════════════════════
+
+
+class TestTqStockAvailable:
+    """覆盖 data_mcp._tq_stock_available 的探活缓存/失败冷却重试机制。
+
+    修复场景：TQ-Local（17709）瞬时抖动导致首次探活失败后整进程永久降级
+    （缓存 False 不再重试）。新机制：失败冷却期后自动重探活 + 瞬时重试。
+    """
+
+    def _reset(self, monkeypatch):
+        import fts.data_mcp as data_mcp
+
+        monkeypatch.setattr(data_mcp, "_TQ_STOCK_AVAILABLE", None)
+        monkeypatch.setattr(data_mcp, "_TQ_LAST_PROBE_TS", 0.0)
+        monkeypatch.setattr(data_mcp.time, "sleep", lambda _s: None)
+        return data_mcp
+
+    def test_first_probe_success_cached(self, monkeypatch):
+        """首次探活成功 → True 且缓存，后续不再探活。"""
+        data_mcp = self._reset(monkeypatch)
+        calls = {"n": 0}
+
+        def probe() -> bool:
+            calls["n"] += 1
+            return True
+
+        monkeypatch.setattr(data_mcp, "_probe_tq_once", probe)
+        assert data_mcp._tq_stock_available() is True
+        assert data_mcp._tq_stock_available() is True
+        assert calls["n"] == 1, "成功后应缓存，不再探活"
+
+    def test_transient_failure_retry_recovers(self, monkeypatch):
+        """瞬时抖动：首次探活失败、重试成功 → 返回 True（间歇性失败被吸收）。"""
+        data_mcp = self._reset(monkeypatch)
+        seq = iter([False, True])
+
+        def probe() -> bool:
+            return next(seq)
+
+        monkeypatch.setattr(data_mcp, "_probe_tq_once", probe)
+        assert data_mcp._tq_stock_available() is True
+        assert data_mcp._TQ_STOCK_AVAILABLE is True
+
+    def test_all_failures_cooldown_no_reprobe(self, monkeypatch):
+        """全部重试失败 → False，且冷却期内不再重复探活。"""
+        data_mcp = self._reset(monkeypatch)
+        calls = {"n": 0}
+
+        def probe() -> bool:
+            calls["n"] += 1
+            return False
+
+        monkeypatch.setattr(data_mcp, "_probe_tq_once", probe)
+        assert data_mcp._tq_stock_available() is False
+        assert calls["n"] == data_mcp._TQ_PROBE_RETRIES + 1, "重试次数 = retries + 1"
+        # 冷却期内不再探活
+        assert data_mcp._tq_stock_available() is False
+        assert calls["n"] == data_mcp._TQ_PROBE_RETRIES + 1
+
+    def test_cooldown_expiry_reprobe_recovers(self, monkeypatch):
+        """冷却期结束自动重探活，成功则恢复 True（进程级恢复能力）。"""
+        import time as _time
+
+        data_mcp = self._reset(monkeypatch)
+        monkeypatch.setattr(data_mcp, "_probe_tq_once", lambda: False)
+        assert data_mcp._tq_stock_available() is False
+        # 推进到冷却期之外
+        monkeypatch.setattr(
+            data_mcp,
+            "_TQ_LAST_PROBE_TS",
+            _time.time() - data_mcp._TQ_PROBE_COOLDOWN - 1.0,
+        )
+        monkeypatch.setattr(data_mcp, "_probe_tq_once", lambda: True)
+        assert data_mcp._tq_stock_available() is True
+
+    def test_probe_once_ok_response(self, monkeypatch):
+        """_probe_tq_once 对合法 TQ 响应返回 True。"""
+        import json
+        from unittest import mock
+
+        data_mcp = self._reset(monkeypatch)
+
+        class _FakeResp:
+            def __init__(self, body):
+                self._body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return self._body
+
+        resp = _FakeResp(json.dumps({"result": {"Value": {"000001.SZ": {"Close": ["11.37"]}}}}).encode("utf-8"))
+        with mock.patch("urllib.request.urlopen", return_value=resp) as m_urlopen:
+            assert data_mcp._probe_tq_once() is True
+        assert m_urlopen.called
+
+    def test_probe_once_error_response(self, monkeypatch):
+        """_probe_tq_once 对异常/非法响应返回 False。"""
+        import urllib.error
+        from unittest import mock
+
+        data_mcp = self._reset(monkeypatch)
+        with mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError("down")):
+            assert data_mcp._probe_tq_once() is False
+
+
+# ═══════════════════════════════════════════════════════════
 # 10. _fetch_kline_json 错误处理
 # ═══════════════════════════════════════════════════════════
 
@@ -747,14 +860,15 @@ class TestFTSFuturesIntegration:
     def test_enrich_futures_fundamental_fills_nan(self, mocker):
         """enrich_futures_fundamental 返回原 df 并补齐 fut_ 前缀 NaN 列。
 
-        注: FTSDataProvider.__init__ 未初始化 _futures_fundamental 属性（产品 bug #2），
-        enrich_futures_fundamental 内部的 AttributeError 被 except 吞掉，
-        此处固化其兜底行为：不抛异常、7 个期货基本面列全部补齐（NaN）。
+        注: FTSDataProvider.__init__ 自 v2.101.0（GAP-083 缺口补充）起默认挂接 AKShare 期货基本面 provider，
+        此处显式置 None 固化"无 provider 兜底"语义：不抛异常、7 个期货基本面列全部补齐（NaN）。
         """
         p = FTSDataProvider(
             mcp_provider=mocker.MagicMock(),
             futures_provider=mocker.MagicMock(spec=FuturesDataProvider),
         )
+        # 固化无 provider 路径（避免默认 AKShare provider 发起网络请求）
+        p._futures_fundamental = None
         base_df = pd.DataFrame(
             {
                 "close": [1.0, 2.0],
@@ -769,6 +883,8 @@ class TestFTSFuturesIntegration:
         expected_cols = [
             "fut_inventory",
             "fut_inventory_chg",
+            "fut_warehouse_receipt",
+            "fut_warehouse_receipt_chg",
             "fut_spot_price",
             "fut_near_basis",
             "fut_dom_basis",
@@ -890,7 +1006,7 @@ class TestCsi300PanelFull:
     """覆盖 get_csi300_panel 的 max_stocks=0 与正常交集路径。"""
 
     def test_max_stocks_zero_uses_all(self, mocker):
-        """max_stocks=0 → 使用全部成分股。"""
+        """max_stocks=0 → 使用全部沪深300成分股（动态获取）。"""
         good_df = pd.DataFrame(
             {
                 "close": [1.0, 2.0],
@@ -904,7 +1020,7 @@ class TestCsi300PanelFull:
         mocker.patch.object(FTSDataProvider, "get_ohlcv", return_value=good_df)
         from unittest.mock import patch
 
-        with patch("fts.data_mcp.CSI300_SUBSET", ["AAA", "BBB", "CCC"]):
+        with patch("fts.data_mcp.get_csi300_constituents", return_value=["AAA", "BBB", "CCC"]):
             p = FTSDataProvider(mcp_provider=mocker.MagicMock())
             panel, _ = p.get_csi300_panel(days=10, max_stocks=0)
         assert set(panel.keys()) == {"AAA", "BBB", "CCC"}

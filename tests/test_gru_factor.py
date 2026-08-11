@@ -483,7 +483,7 @@ class TestEvolutionLoopDeep:
         assert result is None
 
     def test_batch_generate_one_rotation_includes_deep(self, tmp_path):
-        """batch 轮换: idx 2 → deep（第 0 个 macro，之后 gp/deep/operator 轮换）。"""
+        """batch 轮换: idx 2 → deep, idx 3 → transformer（macro 打头，gp/deep/transformer/operator 四方法轮换）。"""
         loop = _make_loop(tmp_path)
         loop._batch_idx = 0
         hints = []
@@ -493,6 +493,6 @@ class TestEvolutionLoopDeep:
             return None
 
         loop._evolve_one = _capture  # type: ignore[method-assign]
-        for _ in range(7):
+        for _ in range(8):
             loop._batch_generate_one(_parent_factor(), 1, "t_gru_evol_006")
-        assert hints == ["macro", "gp", "deep", "operator", "gp", "deep", "operator"]
+        assert hints == ["macro", "gp", "deep", "transformer", "operator", "gp", "deep", "transformer"]

@@ -240,6 +240,7 @@ def factor_program(data, params):
             elite_dir="memory/evolution/test_elite",
             factor_db_path=tmp_path / "test_catalog.duckdb",
         )
+        loop._cluster_quota_enabled = False  # GAP-077: 结构簇配额滞后同步，与 test_evolution_loop.py 一致
 
         # Mock evaluation_chain.evaluate 返回 IC=0.09, passed=True
         with patch.object(
@@ -296,6 +297,7 @@ def factor_program(data, params):
             elite_dir="memory/evolution/test_elite",
             factor_db_path=tmp_path / "test_catalog.duckdb",
         )
+        loop._cluster_quota_enabled = False  # GAP-077: 结构簇配额滞后同步，与 test_evolution_loop.py 一致
 
         # Mock evaluation_chain.evaluate 返回 IC=0.06, passed=True
         with patch.object(

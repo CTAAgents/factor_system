@@ -11,7 +11,7 @@ scripts/futures_seed_diagnostic.py — 期货种子因子批量诊断
 
 输出:
   - 控制台: 诊断结果摘要
-  - reports/{date}/futures_seed_diagnostic_{date}.md
+  - reports/futures/{date}/futures_seed_diagnostic_{date}.md
 """
 
 from __future__ import annotations
@@ -510,7 +510,7 @@ def main(
     print(f"{'=' * 60}")
 
     # ── 保存报告 ──
-    report_dir = REPORTS_ROOT / today
+    report_dir = REPORTS_ROOT / "futures" / today
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"futures_seed_diagnostic_{today}.md"
     report_path.write_text(_generate_report(results, corr_pairs, today), encoding="utf-8")

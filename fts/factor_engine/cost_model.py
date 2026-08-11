@@ -13,12 +13,16 @@ fts.factor_engine.cost_model — 交易成本模型。
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+import logging
+import os
+from typing import Any, Optional, TypedDict
 
 import numpy as np
 import pandas as pd
 
 from .contracts import BacktestMetrics
+
+logger = logging.getLogger(__name__)
 
 
 class CostConfig(TypedDict, total=False):
@@ -27,6 +31,8 @@ class CostConfig(TypedDict, total=False):
     impact_bps_per_pct: float  # 冲击成本（每 1% 日成交量占比，默认 2.0）
     min_cost_bps: float  # 最低成本（基点，默认 0.5）
     roll_cost_bps: float  # 展期成本（基点/次，期货主力换月穿越时扣除，v2.58.0 GAP-046）
+    margin_rate: float  # 保证金占用比例（期货 0.12 / 股票、ETF 全额 1.0，C7 融资成本）
+    financing_rate_annual: float  # 年化融资利率（0=关闭融资成本，C7）
     market: str  # "futures" / "stock" / "etf"
 
 
@@ -37,6 +43,8 @@ class AdjustedMetrics(TypedDict, total=False):
     turnover: float  # 月度换手率
     cost_adjusted_ic: float  # 成本调整后 IC（近似）
     roll_cost_bps: float  # 展期成本合计（基点，持仓穿越换月日）
+    financing_cost_bps: float  # 融资成本合计（年化基点，C7）
+    cost_breakdown: dict[str, float]  # 成本构成明细（滑点/手续费/冲击/融资/展期，C7）
 
 
 # ─── 默认市场成本配置 ─────────────────────────────────────
@@ -47,6 +55,8 @@ _DEFAULT_FUTURES: CostConfig = CostConfig(
     impact_bps_per_pct=1.0,
     min_cost_bps=0.5,
     roll_cost_bps=2.0,  # v2.58.0 GAP-046: 期货主力换月展期成本（与 FTSConfig.roll_cost_bps 默认一致）
+    margin_rate=0.12,  # C7: 期货保证金占用比例
+    financing_rate_annual=0.0,  # C7: 融资成本默认关闭
     market="futures",
 )
 
@@ -56,6 +66,8 @@ _DEFAULT_STOCK: CostConfig = CostConfig(
     impact_bps_per_pct=2.0,
     min_cost_bps=0.5,
     roll_cost_bps=0.0,  # 股票/ETF 无主力换月
+    margin_rate=1.0,  # C7: 股票全额资金占用
+    financing_rate_annual=0.0,
     market="stock",
 )
 
@@ -65,6 +77,8 @@ _DEFAULT_ETF: CostConfig = CostConfig(
     impact_bps_per_pct=1.0,
     min_cost_bps=0.5,
     roll_cost_bps=0.0,  # 股票/ETF 无主力换月
+    margin_rate=1.0,  # C7: ETF 全额资金占用
+    financing_rate_annual=0.0,
     market="etf",
 )
 
@@ -73,6 +87,49 @@ _DEFAULT_MARKET_CONFIGS: dict[str, CostConfig] = {
     "stock": _DEFAULT_STOCK,
     "etf": _DEFAULT_ETF,
 }
+
+# 成本参数环境变量（C7：FTS_COST_*，实证标定结果注入入口）
+_COST_ENV_KEYS: dict[str, str] = {
+    "slippage_bps": "FTS_COST_SLIPPAGE_BPS",
+    "commission_bps": "FTS_COST_COMMISSION_BPS",
+    "impact_bps_per_pct": "FTS_COST_IMPACT_BPS_PER_PCT",
+    "min_cost_bps": "FTS_COST_MIN_COST_BPS",
+    "roll_cost_bps": "FTS_COST_ROLL_COST_BPS",
+    "margin_rate": "FTS_COST_MARGIN_RATE",
+    "financing_rate_annual": "FTS_COST_FINANCING_RATE_ANNUAL",
+}
+
+
+def load_market_cost_config(
+    market: str = "futures",
+    overrides: Optional[dict[str, float]] = None,
+) -> CostConfig:
+    """加载市场成本配置（C7：环境变量 + overrides 注入，缺省回落内置默认）。
+
+    优先级: overrides > FTS_COST_* 环境变量 > 内置 _DEFAULT_*。
+
+    Args:
+        market: 市场类型（"futures" / "stock" / "etf"）
+        overrides: 显式覆盖项（如实证标定结果 {impact_bps_per_pct: 1.5}）
+
+    Returns:
+        合并后的 CostConfig。
+    """
+    base = dict(_DEFAULT_MARKET_CONFIGS.get(market, _DEFAULT_FUTURES))
+    # 环境变量
+    for key, env_name in _COST_ENV_KEYS.items():
+        raw = os.getenv(env_name)
+        if raw:
+            try:
+                base[key] = float(raw)
+            except ValueError:
+                logger.warning("[Cost] 环境变量 %s 非法: %r，忽略", env_name, raw)
+    # overrides（最高优先级）
+    if overrides:
+        for key, value in overrides.items():
+            if key in _COST_ENV_KEYS:
+                base[key] = float(value)
+    return CostConfig(**base)
 
 # 假设的年化波动率（用于夏普成本惩罚估算）
 _ASSUMED_ANNUAL_VOL = 0.15
@@ -247,6 +304,25 @@ class TransactionCostModel:
         raw_cost = turnover * (slippage + commission + impact) + impact_extra
         total_cost_bps = max(raw_cost, min_cost) + roll_cost_total
 
+        # 3.5 融资成本（C7）：年化 bps = 平均名义仓位 × 保证金占用 × 年化利率
+        #     mean(|signal|) ≈ 平均目标仓位比例；期货仅保证金占用，股票/ETF 全额占用
+        financing_rate = config.get("financing_rate_annual", 0.0)
+        margin_rate = config.get("margin_rate", 1.0)
+        financing_cost_bps = 0.0
+        if financing_rate > 0 and margin_rate > 0 and len(signal) > 0:
+            avg_pos = float(np.mean(np.abs(signal)))
+            financing_cost_bps = avg_pos * margin_rate * financing_rate * 10000.0
+            total_cost_bps += financing_cost_bps
+
+        # 成本构成明细（C7）：供容量分析与成本敏感性（GAP-061）复用
+        cost_breakdown = {
+            "slippage_bps": round(turnover * slippage, 4),
+            "commission_bps": round(turnover * commission, 4),
+            "impact_bps": round(turnover * impact + impact_extra, 4),
+            "financing_bps": round(financing_cost_bps, 4),
+            "roll_bps": round(roll_cost_total, 4),
+        }
+
         # 4. 成本调整后夏普
         #    cost_decimal = total_cost_bps / 10000（基点转小数）
         #    年化成本 = cost_decimal * 12
@@ -269,6 +345,8 @@ class TransactionCostModel:
             turnover=turnover,
             cost_adjusted_ic=cost_adjusted_ic,
             roll_cost_bps=roll_cost_total,
+            financing_cost_bps=round(financing_cost_bps, 4),
+            cost_breakdown=cost_breakdown,
         )
 
     @staticmethod

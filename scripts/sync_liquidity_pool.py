@@ -2,7 +2,7 @@
 scripts/sync_liquidity_pool.py — 数据驱动动态池生成（GAP-054）
 
 基于 TqSdk 流动性快照，按**渐进式替换 + 产业覆盖约束**生成动态核心池，
-落盘 memory/portfolio/futures_dynamic_pool.json 供运行期
+落盘 memory/portfolio/futures/futures_dynamic_pool.json 供运行期
 `fts.data_futures.get_dynamic_core_subset()` 读取。
 
 渐进式替换规则（机构实践，避免因子横截面断裂）:
@@ -17,7 +17,7 @@ scripts/sync_liquidity_pool.py — 数据驱动动态池生成（GAP-054）
         [--pool-size 25] [--max-per-sector 6] [--json out.json]
 
 输出:
-    - memory/portfolio/futures_dynamic_pool.json（运行期动态池缓存）
+    - memory/portfolio/futures/futures_dynamic_pool.json（运行期动态池缓存）
 """
 
 from __future__ import annotations

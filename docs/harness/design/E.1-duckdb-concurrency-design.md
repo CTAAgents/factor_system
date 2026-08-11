@@ -1,8 +1,8 @@
 # E.1 DuckDB 并发模型根治 — 详细技术设计（GAP-056）
 
-> 版本: v2.89.0
+> 版本: v2.102.0
 > 关联: [08-gap-analysis.md](../08-gap-analysis.md) GAP-056、`fts/data_futures.py`（DuckDBConnection/AsyncWriteQueue/retry_on_conflict）、`fts/scheduler/`（多任务并发写入）
-> 状态: **设计完成，待实施**
+> 状态: **已实施（含分库方案扩展）**
 > 定位: 数据基础设施层架构决策变更（单写者 + 多只读 + 批量导入），改动集中在 `fts/data_futures.py` 与配置层，不改动业务模块
 
 ---
@@ -104,7 +104,59 @@ class DuckDBWriter:
 - **脚本**：`scripts/` 写入型脚本统一改用 writer 入口；`--readonly` 显式标注只读脚本直接走 read_only 连接
 - **IPC 转发（可选，v2 阶段）**：跨进程写需求集中时，通过本地队列（文件/Unix socket）转发到写 job，脚本侧不直接写库
 
-### 2.4 批量写入
+### 2.4 分库扩展（Phase 2）
+
+为解决跨市场文件锁竞争，按市场（股票/期货）拆分 DuckDB 文件，实现物理隔离：
+
+```
+┌──────────────────────────────────────────────────┐
+│               因子目录数据库                        │
+│  ┌─────────────────────┐  ┌─────────────────────┐ │
+│  │ factor_catalog_stock│  │factor_catalog_futures│ │
+│  │  .duckdb            │  │  .duckdb             │ │
+│  │                     │  │                      │ │
+│  │ market='stock'      │  │ market='futures'     │ │
+│  │ market='multi'      │  │ market='multi'       │ │
+│  └──────────┬──────────┘  └──────────┬───────────┘ │
+│             │                        │              │
+│      ┌──────▼──────┐          ┌──────▼──────┐      │
+│      │ 股票因子管道  │          │ 期货因子管道  │      │
+│      │ (L2/L3)      │          │ (L2/L3)      │      │
+│      └─────────────┘          └─────────────┘      │
+└──────────────────────────────────────────────────┘
+```
+
+### 2.4.1 路由规则
+
+| 市场 | 数据库文件 | 写入方 | 读取方 |
+|:-----|:-----------|:-------|:-------|
+| `stock` | `factor_catalog_stock.duckdb` | 股票 L2 演化、股票 L3 组合 | 股票因子加载、CLI 查询 |
+| `futures` | `factor_catalog_futures.duckdb` | 期货 L2 演化、期货 L3 组合 | 期货因子加载、CLI 查询 |
+| `multi`（通用因子） | 同时写入两个库 | 种子因子、通用因子 | 按市场读取 |
+
+### 2.4.2 实现细节
+
+- `fts/factor_engine/factor_db/schema.py`：新增 `DATABASE_PATH_STOCK`/`DATABASE_PATH_FUTURES` 常量 + `get_db_path(market)` 路由函数
+- `fts/factor_engine/factor_db/repository.py`：`FactorRepository`/`FactorQualityScoreRepository`/`FactorStatusRepository`/`FactorAuditReportRepository` 四类构造器均新增 `market` 参数（默认 `"stock"`），通过 `get_db_path(market)` 解析对应路径
+- `fts/factor_engine/evolution_loop.py`/`portfolio_loop.py`/`cli.py`/`lineage.py`：10+ 个调用方按市场传递 `market` 参数
+- 通用因子（`market='multi'`）写入时两库各写一份，确保跨市场可用性
+
+### 2.4.3 迁移
+
+- `scripts/migrate_factor_catalog_split.py`：将 `factor_catalog.duckdb` 按 `market` 字段拆分为 `factor_catalog_stock.duckdb`（`market='stock' + 'multi'`）和 `factor_catalog_futures.duckdb`（`market='futures' + 'multi'`），关联表（`factor_versions`/`factor_correlations`/`factor_evaluations`/`factor_status_history`/`factor_quality_scores`/`factor_audit_reports`/`factor_reviews`）按因子 ID 归属同步拆分
+- `scripts/verify_split.py`：验证分库后数据完整性，检查两库记录数之和与原始库一致、因子元数据完整、关联表行数正确
+- `scripts/concurrent_test.py`：并发压力测试，验证分库后股票与期货管道可同时读写各自数据库，无跨库文件锁冲突
+
+### 2.4.4 与 GAP-056 的组合效果
+
+| 场景 | GAP-056 单写者 | 分库扩展 | 组合效果 |
+|:-----|:---------------|:---------|:---------|
+| 同市场多线程写 | 单写者 + 写锁串行化 | — | 结构消除 `ConcurrentTransactionException` |
+| 同市场写时读 | 读写分离 + MVCC | — | 写不阻塞读 |
+| 跨市场并发写（股票 vs 期货） | 跨文件锁竞争仍存在 | 物理隔离至独立文件 | 完全消除跨市场锁冲突 |
+| 跨市场写时读 | 单写者 + 读池 | 分库隔离 | 双重保障，零阻塞 |
+
+## 2.5 批量写入
 
 高频数据（kline_cache 分钟/tick）改 `copy_from_records`：
 - 缓冲至 `batch_size`（默认 1000）或 `commit_every` 周期后 `COPY` + 单次 commit

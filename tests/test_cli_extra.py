@@ -501,30 +501,33 @@ class TestCmdPortfolioRunFutures:
     @patch("scripts.futures_signal_pipeline.main", return_value=0)
     @patch("fts.cli.PortfolioLoop")
     @patch("fts.cli.get_config")
-    def test_futures_triggers_signal_pipeline(self, mock_cfg, mock_port, mock_signal, capsys):
-        """futures + passed 触发期货信号管道。"""
+    def test_futures_not_trigger_signal_pipeline(self, mock_cfg, mock_port, mock_signal, capsys):
+        """GAP-072 解绑：portfolio run 不再联动触发期货信号管道（独立每日任务）。"""
         self._setup(mock_cfg, mock_port)
         rc = main(["portfolio", "run", "--universe", "futures"])
         assert rc == 0
-        mock_signal.assert_called_once_with(max_symbols=82, days=120, universe="all")
-        assert "触发期货信号生成管道" in capsys.readouterr().out
+        mock_signal.assert_not_called()
+        captured = capsys.readouterr()
+        assert "触发期货信号生成管道" not in captured.out
+        assert "完成: status=passed" in captured.out
 
     @patch("scripts.futures_signal_pipeline.main", return_value=3)
     @patch("fts.cli.PortfolioLoop")
     @patch("fts.cli.get_config")
-    def test_futures_signal_pipeline_nonzero_rc(self, mock_cfg, mock_port, mock_signal, capsys):
-        """信号管道非零退出时打印告警但仍返回 0。"""
-        self._setup(mock_cfg, mock_port)
+    def test_futures_frozen_status_message(self, mock_cfg, mock_port, mock_signal, capsys):
+        """权重冻结日（status=frozen）打印冻结提示并返回 0。"""
+        self._setup(mock_cfg, mock_port, status="frozen")
         rc = main(["portfolio", "run", "--universe", "futures"])
         assert rc == 0
         captured = capsys.readouterr()
-        assert "信号管道异常退出: rc=3" in captured.err
+        assert "权重冻结日" in captured.out
+        mock_signal.assert_not_called()
 
     @patch("scripts.futures_signal_pipeline.main")
     @patch("fts.cli.PortfolioLoop")
     @patch("fts.cli.get_config")
     def test_futures_status_not_triggering(self, mock_cfg, mock_port, mock_signal, capsys):
-        """状态不在触发集时不调用信号管道。"""
+        """状态为失败时仍返回 0 且不调用信号管道。"""
         self._setup(mock_cfg, mock_port, status="failed")
         rc = main(["portfolio", "run", "--universe", "futures"])
         assert rc == 0
@@ -552,42 +555,38 @@ class TestCmdPortfolioRunStock:
             combo_sharpe=1.2,
         )
 
-    @patch("scripts.daily_signal_pipeline.main", return_value=0)
     @patch("fts.cli.PortfolioLoop")
     @patch("fts.cli.get_config")
-    def test_stock_triggers_signal_pipeline(self, mock_cfg, mock_port, mock_signal, capsys):
-        """stock + passed 触发股票信号管道。"""
-        self._setup(mock_cfg, mock_port)
-        rc = main(["portfolio", "run", "--universe", "stock"])
-        assert rc == 0
-        mock_signal.assert_called_once_with(max_stocks=50, days=120)
-        assert "触发股票信号生成管道" in capsys.readouterr().out
-
-    @patch("scripts.daily_signal_pipeline.main", return_value=3)
-    @patch("fts.cli.PortfolioLoop")
-    @patch("fts.cli.get_config")
-    def test_stock_signal_pipeline_nonzero_rc(self, mock_cfg, mock_port, mock_signal, capsys):
-        """股票信号管道非零退出时打印告警但仍返回 0。"""
+    def test_stock_not_trigger_signal_pipeline(self, mock_cfg, mock_port, capsys):
+        """GAP-072 解绑：portfolio run 不再联动触发股票信号管道（独立每日任务）。"""
         self._setup(mock_cfg, mock_port)
         rc = main(["portfolio", "run", "--universe", "stock"])
         assert rc == 0
         captured = capsys.readouterr()
-        assert "信号管道异常退出: rc=3" in captured.err
+        assert "触发股票信号生成管道" not in captured.out
+        assert "完成: status=passed" in captured.out
 
-    @patch("scripts.daily_signal_pipeline.main")
     @patch("fts.cli.PortfolioLoop")
     @patch("fts.cli.get_config")
-    def test_stock_status_not_triggering(self, mock_cfg, mock_port, mock_signal, capsys):
-        """状态不在触发集时不调用股票信号管道。"""
+    def test_stock_frozen_status_message(self, mock_cfg, mock_port, capsys):
+        """权重冻结日（status=frozen）打印冻结提示并返回 0。"""
+        self._setup(mock_cfg, mock_port, status="frozen")
+        rc = main(["portfolio", "run", "--universe", "stock"])
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "权重冻结日" in captured.out
+
+    @patch("fts.cli.PortfolioLoop")
+    @patch("fts.cli.get_config")
+    def test_stock_status_not_triggering(self, mock_cfg, mock_port, capsys):
+        """状态为失败时仍返回 0 且不调用股票信号管道。"""
         self._setup(mock_cfg, mock_port, status="failed")
         rc = main(["portfolio", "run", "--universe", "stock"])
         assert rc == 0
-        mock_signal.assert_not_called()
 
-    @patch("scripts.daily_signal_pipeline.main")
     @patch("fts.cli.PortfolioLoop")
     @patch("fts.cli.get_config")
-    def test_stock_optimizer_mode_passthrough(self, mock_cfg, mock_port, mock_signal, capsys):
+    def test_stock_optimizer_mode_passthrough(self, mock_cfg, mock_port, capsys):
         """GAP-I302: --synthesis-mode optimizer + --optimizer-mode 透传到 PortfolioLoop。"""
         self._setup(mock_cfg, mock_port)
         rc = main(
@@ -606,13 +605,12 @@ class TestCmdPortfolioRunStock:
         _, kwargs = mock_port.call_args
         assert kwargs["synthesis_mode"] == "optimizer"
         assert kwargs["optimizer_mode"] == "mvo"
-        # 无 returns-matrix 时 run() 仍可调用（实测化输入缺省）
-        mock_port.return_value.run.assert_called_once_with(factor_returns=None)
+        # 无 returns-matrix 时 run() 仍可调用（实测化输入缺省；recompute_weights 按配置自动判定）
+        mock_port.return_value.run.assert_called_once_with(factor_returns=None, recompute_weights=None)
 
-    @patch("scripts.daily_signal_pipeline.main")
     @patch("fts.cli.PortfolioLoop")
     @patch("fts.cli.get_config")
-    def test_optimizer_mode_default_from_config(self, mock_cfg, mock_port, mock_signal, capsys):
+    def test_optimizer_mode_default_from_config(self, mock_cfg, mock_port, capsys):
         """GAP-I302: 未传 --optimizer-mode 时取 settings 配置默认值。"""
         cfg = mock_cfg.return_value
         cfg.get_elite_dir.return_value = "/tmp/elite_stock"
@@ -630,10 +628,9 @@ class TestCmdPortfolioRunStock:
         _, kwargs = mock_port.call_args
         assert kwargs["optimizer_mode"] == "mvo"
 
-    @patch("scripts.daily_signal_pipeline.main")
     @patch("fts.cli.PortfolioLoop")
     @patch("fts.cli.get_config")
-    def test_returns_matrix_loaded(self, mock_cfg, mock_port, mock_signal, tmp_path, capsys):
+    def test_returns_matrix_loaded(self, mock_cfg, mock_port, tmp_path, capsys):
         """GAP-I302: --returns-matrix CSV 加载并传入 run(factor_returns=...)。"""
         self._setup(mock_cfg, mock_port)
         import pandas as pd
@@ -711,7 +708,7 @@ class TestCmdCatalogStats:
         assert "总因子: 10" in out
 
     def test_db_exists_repo_error_json(self, tmp_path, capsys):
-        """DuckDB 读取失败时记录 duckdb_error（JSON 模式不崩）。"""
+        """DuckDB 读取失败时在对应市场节点记录 error（JSON 模式不崩）。"""
         db = tmp_path / "f.duckdb"
         db.write_bytes(b"x")
         repo = MagicMock()
@@ -725,7 +722,8 @@ class TestCmdCatalogStats:
             rc = _cmd_catalog_stats(Namespace(json=True))
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
-        assert "duckdb_error" in payload
+        assert payload["stock_database"]["error"] == "conn broken"
+        assert payload["futures_database"]["error"] == "conn broken"
 
     def test_db_exists_repo_error_text_bug(self, tmp_path, capsys):
         """[已修复] 文本模式 + DuckDB 读取失败 → size 兜底为 0 不崩溃。
@@ -773,9 +771,9 @@ class TestGetCatalogDbPath:
     """测试 _get_catalog_db_path。"""
 
     def test_returns_schema_path(self, tmp_path):
-        """返回 factor_db.schema.DATABASE_PATH 的 Path。"""
+        """返回 factor_db.schema 分库后默认 market=stock 的 Path。"""
         fake = tmp_path / "db.duckdb"
-        with patch("fts.factor_engine.factor_db.schema.DATABASE_PATH", fake):
+        with patch("fts.factor_engine.factor_db.schema.DATABASE_PATH_STOCK", fake):
             p = _get_catalog_db_path()
         assert p == fake
 
@@ -860,7 +858,7 @@ class TestCmdCatalogVerify:
             rc = _cmd_catalog_verify(Namespace(json=True))
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
-        assert payload["consistent"] is True
+        assert payload["markets"]["stock"]["consistent"] is True
 
     def test_inconsistent_text_mode(self, tmp_path, capsys):
         """DuckDB 独有 + JSON 独有 → 文本模式返回 1 并打印明细。
@@ -971,7 +969,8 @@ class TestCmdCatalogBackup:
             rc = _cmd_catalog_backup(Namespace(json=True))
         assert rc == 0
         payload = _parse_json(capsys.readouterr().out)
-        assert "duckdb_error" in payload
+        assert "stock_duckdb_error" in payload
+        assert "futures_duckdb_error" in payload
         assert "futures_json_error" in payload
 
 

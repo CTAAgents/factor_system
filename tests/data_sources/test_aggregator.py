@@ -2105,3 +2105,107 @@ def test_close_ignores_conn_close_exception(cache_with_data: Path):
 
     agg.close()  # 不应抛异常
     assert agg._cache_conn is None
+
+
+# ═══════════════════════════════════════════════════════════
+# pre_settle 派生（GAP-083 方案 C：零依赖 pre_settle = 前日 settle）
+# ═══════════════════════════════════════════════════════════
+
+
+class TestDerivePreSettle:
+    """aggregator 运行时派生 pre_settle = 前一交易日 settle（回退 close.shift(1)）。"""
+
+    def _df(self, **overrides):
+        cols = {
+            "date": pd.to_datetime(["2026-01-05", "2026-01-06", "2026-01-07"]),
+            "settle": [3100.0, 3120.0, 3110.0],
+            "pre_settle": [0.0, 0.0, 0.0],
+            "close": [3098.0, 3118.0, 3108.0],
+        }
+        for k, v in overrides.items():
+            cols[k] = v
+        return pd.DataFrame(cols)
+
+    def test_derives_from_prev_settle(self):
+        """pre_settle = 前一交易日 settle；首日无前值回退当日 close。"""
+        from fts.data_sources.aggregator import FuturesDataAggregator
+
+        out = FuturesDataAggregator._derive_pre_settle(self._df())
+        assert list(out["pre_settle"]) == [3098.0, 3100.0, 3120.0]
+
+    def test_prev_settle_invalid_falls_back_close(self):
+        """前日 settle 无效（0）时回退 close.shift(1)。"""
+        from fts.data_sources.aggregator import FuturesDataAggregator
+
+        out = FuturesDataAggregator._derive_pre_settle(self._df(settle=[3100.0, 0.0, 3110.0]))
+        assert list(out["pre_settle"]) == [3098.0, 3100.0, 3118.0]
+
+    def test_prev_settle_nan_falls_back_close(self):
+        """前日 settle 为 NaN 时同样回退 close.shift(1)。"""
+        from fts.data_sources.aggregator import FuturesDataAggregator
+
+        out = FuturesDataAggregator._derive_pre_settle(
+            self._df(settle=[3100.0, float("nan"), 3110.0])
+        )
+        assert list(out["pre_settle"]) == [3098.0, 3100.0, 3118.0]
+
+    def test_existing_valid_presettle_untouched(self):
+        """已有有效 pre_settle 不被覆盖（增强层权威值优先）。"""
+        from fts.data_sources.aggregator import FuturesDataAggregator
+
+        out = FuturesDataAggregator._derive_pre_settle(self._df(pre_settle=[3300.0, 0.0, 0.0]))
+        assert list(out["pre_settle"]) == [3300.0, 3100.0, 3120.0]
+
+    def test_missing_column_noop(self):
+        """缺 settle/pre_settle/close 任一列 → 原样返回（不抛）。"""
+        from fts.data_sources.aggregator import FuturesDataAggregator
+
+        df = pd.DataFrame({"date": pd.to_datetime(["2026-01-05"]), "close": [1.0]})
+        out = FuturesDataAggregator._derive_pre_settle(df)
+        assert out.equals(df)
+        assert "pre_settle" not in out.columns
+
+    def test_all_valid_presettle_noop(self):
+        """pre_settle 全部有效时不产生任何修改。"""
+        from fts.data_sources.aggregator import FuturesDataAggregator
+
+        df = self._df(pre_settle=[3300.0, 3301.0, 3302.0])
+        out = FuturesDataAggregator._derive_pre_settle(df.copy())
+        assert list(out["pre_settle"]) == [3300.0, 3301.0, 3302.0]
+
+    def test_descending_date_input(self):
+        """缓存路径倒序（ORDER BY date DESC）输入：按日期升序派生后还原原行序。"""
+        from fts.data_sources.aggregator import FuturesDataAggregator
+
+        df = self._df().iloc[::-1].reset_index(drop=True)  # 倒序：07, 06, 05
+        out = FuturesDataAggregator._derive_pre_settle(df.copy())
+        # 原行序 07: 前日(06) settle=3120；06: 前日(05) settle=3100；05: 首日回退 close=3098
+        assert list(out["pre_settle"]) == [3120.0, 3100.0, 3098.0]
+
+
+def test_get_ohlcv_derives_pre_settle_from_cache(tmp_db: Path):
+    """缓存命中路径：pre_settle 无效时按前日 settle 派生（接入点验证）。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+    from fts.data_sources.migrate import migrate_schema
+
+    migrate_schema(tmp_db)
+    base = (datetime.now() - timedelta(days=4)).date()
+    df = _make_kline_df("RB0", DataSource.DUCKDB_CACHE.value, rows=5, base_date=base)
+    df["pre_settle"] = 0.0  # 模拟缓存中 pre_settle 全无效（TQ 15 年数据现状）
+    import duckdb
+
+    con = duckdb.connect(str(tmp_db))
+    try:
+        con.register("df_cache", df)
+        con.execute("INSERT INTO kline_cache SELECT * FROM df_cache")
+        con.unregister("df_cache")
+    finally:
+        con.close()
+
+    agg = FuturesDataAggregator(db_path=tmp_db, enable_cross_check=False)
+    out = agg.get_ohlcv("RB0", days=5, trace_id="t-pre-cache")
+
+    assert len(out) == 5
+    # 缓存路径输出为倒序（ORDER BY date DESC）：派生值按原行序还原后 = 前日 settle
+    expected_asc = df["settle"].shift(1).fillna(df["close"])
+    assert list(out["pre_settle"]) == expected_asc.tolist()[::-1]

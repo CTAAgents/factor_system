@@ -40,7 +40,7 @@ Write-Host "  fts meta-loop run       - L1 市场感知" -ForegroundColor White
 Write-Host "  fts evolution run       - L2 因子演化" -ForegroundColor White
 Write-Host "  fts portfolio run       - L3 组合构建" -ForegroundColor White
 Write-Host "  fts backtest batch      - 批量回测 + 对比排名" -ForegroundColor White
-Write-Host "  fts feature list        - 特征算子清单 (50 算子)" -ForegroundColor White
+Write-Host "  fts feature list        - 特征算子清单 (59 算子)" -ForegroundColor White
 Write-Host "  fts gp evolve           - GP 遗传规划演化" -ForegroundColor White
 Write-Host "  fts factor stats        - 因子家族分布统计" -ForegroundColor White
 Write-Host "  fts feedback trigger    - 反馈闭环" -ForegroundColor White

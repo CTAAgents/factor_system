@@ -39,6 +39,22 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 DATABASE_PATH = DATA_DIR / "factor_catalog.duckdb"
+DATABASE_PATH_STOCK = DATA_DIR / "factor_catalog_stock.duckdb"
+DATABASE_PATH_FUTURES = DATA_DIR / "factor_catalog_futures.duckdb"
+
+
+def get_db_path(market: str = "stock") -> Path:
+    """按市场返回因子目录数据库路径。
+
+    Args:
+        market: "stock" 或 "futures"
+
+    Returns:
+        对应的 DuckDB 文件路径
+    """
+    if market == "futures":
+        return DATABASE_PATH_FUTURES
+    return DATABASE_PATH_STOCK
 
 
 # ─── DDL 语句 ─────────────────────────────────────────────
@@ -359,26 +375,33 @@ CREATE TABLE IF NOT EXISTS factor_reviews (
     reviewer    VARCHAR DEFAULT 'cli',
     reviewed_at TIMESTAMP NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_frv_decision ON factor_reviews(decision);
+-- 注意：不在 decision 列建索引——DuckDB 不允许 ON CONFLICT DO UPDATE 更新被索引
+-- 引用的列（BinderException: Can not assign to column ... referenced by an INDEX），
+-- 幂等 UPSERT（重复审查覆盖旧决定）是写路径核心，索引价值低（审查表小、低频）。
 """
 
 
 # ─── 初始化函数 ──────────────────────────────────────────
 
 
-def init_database(db_path: Optional[Path] = None) -> Path:
+def init_database(db_path: Optional[Path] = None, market: Optional[str] = None) -> Path:
     """初始化因子目录数据库，创建所有表和索引。
 
     Args:
-        db_path: 数据库文件路径，默认使用 DATABASE_PATH
+        db_path: 数据库文件路径（优先级高于 market）
+        market: "stock" 或 "futures"，用于确定默认路径（db_path 为 None 时生效）
 
     Returns:
         实际使用的数据库路径
     """
     import duckdb
 
-    path = Path(db_path) if db_path else DATABASE_PATH
+    if db_path:
+        path = Path(db_path)
+    elif market:
+        path = get_db_path(market)
+    else:
+        path = DATABASE_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
 
     logger.info("[FactorDB] 初始化数据库: %s", path)
@@ -403,6 +426,8 @@ def init_database(db_path: Optional[Path] = None) -> Path:
         conn.execute(_CREATE_SEED_LINEAGE)
         # E.1 Alpha 审查工作流
         conn.execute(_CREATE_FACTOR_REVIEWS)
+        # 迁移：清除旧版 decision 索引（阻塞 UPSERT，见 _CREATE_FACTOR_REVIEWS 注释）
+        conn.execute("DROP INDEX IF EXISTS idx_frv_decision")
 
         conn.execute("CHECKPOINT")
         logger.info("[FactorDB] ✅ 数据库初始化完成")
@@ -417,33 +442,45 @@ def init_database(db_path: Optional[Path] = None) -> Path:
     return path
 
 
-def get_connection(db_path: Optional[Path] = None):
+def get_connection(db_path: Optional[Path] = None, market: Optional[str] = None):
     """获取数据库连接。
 
     Args:
-        db_path: 数据库文件路径
+        db_path: 数据库文件路径（优先级高于 market）
+        market: "stock" 或 "futures"，用于确定默认路径
 
     Returns:
         duckdb 连接对象（调用方负责关闭）
     """
     import duckdb
 
-    path = Path(db_path) if db_path else DATABASE_PATH
+    if db_path:
+        path = Path(db_path)
+    elif market:
+        path = get_db_path(market)
+    else:
+        path = DATABASE_PATH
     return duckdb.connect(str(path))
 
 
-def verify_database(db_path: Optional[Path] = None) -> dict:
+def verify_database(db_path: Optional[Path] = None, market: Optional[str] = None) -> dict:
     """验证数据库完整性，返回统计信息。
 
     Args:
-        db_path: 数据库文件路径
+        db_path: 数据库文件路径（优先级高于 market）
+        market: "stock" 或 "futures"，用于确定默认路径
 
     Returns:
         统计信息字典
     """
     import duckdb
 
-    path = Path(db_path) if db_path else DATABASE_PATH
+    if db_path:
+        path = Path(db_path)
+    elif market:
+        path = get_db_path(market)
+    else:
+        path = DATABASE_PATH
     if not path.exists():
         return {"exists": False}
 

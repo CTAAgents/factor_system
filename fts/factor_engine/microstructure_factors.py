@@ -23,7 +23,7 @@ HARNESS §5.3 契约优先: 输出列契约冻结 —— datetime/direction/trad
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np

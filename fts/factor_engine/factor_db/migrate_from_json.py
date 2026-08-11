@@ -10,7 +10,7 @@
 
 用法:
     python -m fts.factor_engine.factor_db.migrate_from_json \
-        --elite-dir memory/knowledge/factors/elite \
+        --elite-dir memory/knowledge/factors/stocks_elite \
         --db-path data/factor_catalog.duckdb \
         [--dry-run] \
         [--force]
@@ -32,7 +32,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ELITE_DIR = "memory/knowledge/factors/elite"
+DEFAULT_ELITE_DIR = "memory/knowledge/factors/stocks_elite"
 
 
 def compute_code_hash(code: str) -> str:

@@ -798,13 +798,24 @@ class LiveVsBacktestICReport:
     输出对比报告：衰减判定（|实盘 − 回测| 阈值）、退役建议。
     """
 
-    def __init__(self, live_decay_threshold: float = 0.02) -> None:
+    def __init__(
+        self,
+        live_decay_threshold: float = 0.02,
+        recalibration_enabled: bool = False,
+        recalibration_queue_path: Optional[str] = None,
+    ) -> None:
         """初始化。
 
         Args:
             live_decay_threshold: 实盘 IC 显著低于回测 IC 的绝对阈值（默认 0.02）
+            recalibration_enabled: C6 自动重校准开关——decayed 因子入重校准队列
+                （而非仅建议退役）；默认关闭，不改变既有行为
+            recalibration_queue_path: 重校准队列 JSON 路径（None 用默认
+                memory/portfolio/recalibration_queue.json）
         """
         self._threshold = live_decay_threshold
+        self._recalibration_enabled = recalibration_enabled
+        self._recalibration_queue_path = recalibration_queue_path
 
     def generate(
         self,
@@ -849,6 +860,8 @@ class LiveVsBacktestICReport:
                     "status": status,
                     # GAP-I401 (v2.71.0): 退役建议（供 GAP-I305 衰减自动退役闭环消费）
                     "recommend_retire": status == "decayed",
+                    # C6 (v2.100.1): decayed 因子入重校准队列（微调替代直接退役）
+                    "recalibration_queued": self._enqueue_recalibration(fid, status),
                     "decay_gap": (round(abs(bt_ic) - abs(live_ic), 4) if bt_ic is not None else None),
                     "n_days": stats.get("n_days", 0),
                     "mean_return": round(stats.get("mean_return", 0.0), 6),
@@ -865,6 +878,21 @@ class LiveVsBacktestICReport:
             },
             "generated_at": _now_iso(),
         }
+
+    def _enqueue_recalibration(self, factor_id: str, status: str) -> bool:
+        """C6: decayed 因子入重校准队列（开关关闭/非衰减返回 False，不改变既有行为）。"""
+        if not self._recalibration_enabled or status != "decayed":
+            return False
+        try:
+            from .recalibration import RecalibrationQueue
+
+            q = RecalibrationQueue(
+                self._recalibration_queue_path or "memory/portfolio/recalibration_queue.json"
+            )
+            return q.enqueue(factor_id, reason="decayed")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[Feedback] 重校准入队失败 %s: %s", factor_id, e)
+            return False
 
 
 __all__ = [

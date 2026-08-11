@@ -147,7 +147,7 @@ class FactorScreener:
             try:
                 from .factor_db.repository import FactorRepository
 
-                self._repo = FactorRepository()
+                self._repo = FactorRepository(market=self._market)
             except Exception as e:  # noqa: BLE001
                 logger.warning("[FactorScreener] 仓库初始化失败: %s", e)
                 return []

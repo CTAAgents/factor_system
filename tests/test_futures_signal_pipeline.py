@@ -23,6 +23,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from futures_signal_pipeline import (
     _compute_composite_scores,
     _compute_factor_sign_flips,
+    _compute_per_variety_weights,
     _compute_ridge_weights,
     load_futures_elite_factors,
 )
@@ -102,6 +103,95 @@ def _make_factor_sign_flips(
         else:
             flips[fname] = 1.0
     return flips
+
+
+# ─── _compute_per_variety_weights ─────────────────────────────────────────
+
+
+class TestComputePerVarietyWeights:
+    """_compute_per_variety_weights 测试（修复：NaN IC 污染 total 导致品种被跳过）。"""
+
+    def test_nan_ic_does_not_poison_total(self):
+        """因子 IC 为 NaN（常数信号导致 Spearman IC 未定义）不应使整品种被跳过。"""
+        global_weights = {"f_a": 0.6, "f_b": 0.4}
+        per_variety_ic = {"f_a": {"RB0": np.nan}, "f_b": {"RB0": 0.5}}
+
+        result = _compute_per_variety_weights(global_weights, per_variety_ic)
+
+        assert "RB0" in result
+        # f_a 的 NaN IC 按低 IC 回退：weight ∝ gw * min_ic
+        w_a = result["RB0"]["f_a"]
+        w_b = result["RB0"]["f_b"]
+        assert w_a > 0 and w_b > 0
+        assert abs(sum(result["RB0"].values()) - 1.0) < 1e-9
+        # 有效 IC(0.5) 因子权重大于 NaN 回退因子
+        assert w_b > w_a
+
+    def test_all_nan_ics_variety_kept(self):
+        """品种所有因子 IC 均 NaN → 按 min_ic 回退保留，不因 total=NaN 被丢弃。"""
+        global_weights = {"f_a": 0.5, "f_b": 0.5}
+        per_variety_ic = {"f_a": {"RB0": np.nan}, "f_b": {"RB0": np.nan}}
+
+        result = _compute_per_variety_weights(global_weights, per_variety_ic)
+
+        assert "RB0" in result
+        assert abs(sum(result["RB0"].values()) - 1.0) < 1e-9
+
+    def test_weights_normalized_per_variety(self):
+        """正常 IC → 每个品种权重归一化和为 1，强 IC 因子获得更高权重。"""
+        global_weights = {"f_a": 0.5, "f_b": 0.5}
+        per_variety_ic = {
+            "f_a": {"RB0": 0.8, "CU0": 0.1},
+            "f_b": {"RB0": 0.2, "CU0": 0.6},
+        }
+
+        result = _compute_per_variety_weights(global_weights, per_variety_ic)
+
+        assert set(result.keys()) == {"RB0", "CU0"}
+        for var in result:
+            assert abs(sum(result[var].values()) - 1.0) < 1e-9
+        # RB0 上 f_a IC 更高 → f_a 权重大；CU0 上 f_b IC 更高 → f_b 权重大
+        assert result["RB0"]["f_a"] > result["RB0"]["f_b"]
+        assert result["CU0"]["f_b"] > result["CU0"]["f_a"]
+
+    def test_low_ic_factor_min_fallback(self):
+        """|IC| < min_ic → 因子仅获得 min_ic 级别权重（接近丢弃而非完全剔除）。"""
+        global_weights = {"f_strong": 0.7, "f_weak": 0.3}
+        per_variety_ic = {"f_strong": {"RB0": 0.6}, "f_weak": {"RB0": 0.001}}
+
+        result = _compute_per_variety_weights(global_weights, per_variety_ic)
+
+        w_strong = result["RB0"]["f_strong"]
+        w_weak = result["RB0"]["f_weak"]
+        assert w_weak > 0  # 低 IC 因子不剔除，仅极低权重
+        assert w_strong / w_weak > 10
+
+    def test_factor_missing_from_ic_min_fallback(self):
+        """全局权重中的因子缺失该品种 IC → 按 min_ic 回退（不因 key 不匹配丢失）。"""
+        global_weights = {"f_a": 0.6, "f_b": 0.4}
+        per_variety_ic = {"f_a": {"RB0": 0.5}}  # f_b 完全缺失
+
+        result = _compute_per_variety_weights(global_weights, per_variety_ic)
+
+        assert "RB0" in result
+        assert "f_b" in result["RB0"]  # 缺失因子仍被保留（min_ic 权重）
+        assert "f_a" in result["RB0"]
+        assert abs(sum(result["RB0"].values()) - 1.0) < 1e-9
+
+    def test_empty_per_variety_ic_returns_empty(self):
+        """无品种级 IC 数据 → 返回空 dict。"""
+        result = _compute_per_variety_weights({"f_a": 1.0}, {})
+        assert result == {}
+
+    def test_zero_global_weight_factor_skipped(self):
+        """全局权重为 0 的因子不参与品种级权重分配。"""
+        global_weights = {"f_a": 0.0, "f_b": 1.0}
+        per_variety_ic = {"f_a": {"RB0": 0.9}, "f_b": {"RB0": 0.5}}
+
+        result = _compute_per_variety_weights(global_weights, per_variety_ic)
+
+        assert "f_a" not in result["RB0"]
+        assert result["RB0"]["f_b"] == 1.0
 
 
 # ─── _compute_ridge_weights ──────────────────────────────────────────────
@@ -306,6 +396,31 @@ class TestComputeRidgeWeights:
         # 权重可能不同（因为 Ridge 取 abs(coef)，方向反转改变特征空间，
         # 但 abs 操作使权重只取决于预测强度而非方向）
         assert len(weights_normal) == len(weights_reversed)
+
+    def test_empty_cross_symbol_intersection_uses_coverage(self):
+        """回归: 全品种因子交集为空时（品种多、因子执行成功集合不同），
+        覆盖率阈值过滤应保留覆盖>=50%品种的因子，避免权重静默回退等权。"""
+        rng = np.random.default_rng(7)
+        panel, dates = _make_panel(n_symbols=5, n_days=120)
+        factor_names = ["f1", "f2", "f3", "f4"]
+        signal_matrix: dict[str, dict[str, np.ndarray]] = {}
+        for i, sym in enumerate(panel):
+            signal_matrix[sym] = {f: rng.normal(0, 1, len(panel[sym])) for f in factor_names}
+            # 前 4 只品种各缺 1 个因子 → 全品种交集为空，但各因子覆盖 4/5 >= 50%
+            if i < 4:
+                del signal_matrix[sym][f"f{i + 1}"]
+        flips = _make_factor_sign_flips(factor_names)
+
+        weights = _compute_ridge_weights(
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=60,
+        )
+
+        assert len(weights) == 4, f"覆盖率过滤应保留 4 个因子, 实际 {len(weights)}"
+        assert abs(sum(weights.values()) - 1.0) < 1e-6
 
 
 # ─── _compute_factor_sign_flips ──────────────────────────────────────────

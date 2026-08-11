@@ -99,7 +99,7 @@ def loop(sample_data: pd.DataFrame, sample_returns: np.ndarray) -> EvolutionLoop
     return EvolutionLoop(
         data=sample_data,
         forward_returns=sample_returns,
-        elite_dir="memory/knowledge/factors/elite",
+        elite_dir="memory/knowledge/factors/stocks_elite",
         memory_dir="memory/evolution",
     )
 

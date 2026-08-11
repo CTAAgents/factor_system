@@ -1160,7 +1160,7 @@ TQSDK_PASSWORD=xxx
 
 # FTS 配置（可选，有默认值）
 FTS_MEMORY_DIR=memory
-FTS_ELITE_DIR=memory/knowledge/factors/elite
+FTS_ELITE_DIR=memory/knowledge/factors/stocks_elite
 FTS_FUTURES_ELITE_DIR=memory/knowledge/factors/futures_elite
 FTS_DEFAULT_MARKET=futures
 FTS_EVOLUTION_MODE=hybrid
@@ -1277,7 +1277,7 @@ ruff check fts/
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `FTS_MEMORY_DIR` | `memory` | 运行时持久化目录 |
-| `FTS_ELITE_DIR` | `memory/knowledge/factors/elite` | 股票精英因子目录 |
+| `FTS_ELITE_DIR` | `memory/knowledge/factors/stocks_elite` | 股票精英因子目录 |
 | `FTS_FUTURES_ELITE_DIR` | `memory/knowledge/factors/futures_elite` | 期货精英因子目录 |
 | `FTS_DEFAULT_MARKET` | `futures` | 默认市场 |
 | `FTS_EVOLUTION_MODE` | `hybrid` | 演化模式（operator/code/hybrid） |

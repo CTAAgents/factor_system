@@ -36,7 +36,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="numpy")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 FUTURES_ELITE_DIR = PROJECT_ROOT / "memory/knowledge/factors/futures_elite"
-STOCK_ELITE_DIR = PROJECT_ROOT / "memory/knowledge/factors/elite"
+STOCK_ELITE_DIR = PROJECT_ROOT / "memory/knowledge/factors/stocks_elite"
 REPORTS_ROOT = PROJECT_ROOT / "reports"
 
 # 金融期货（排除）

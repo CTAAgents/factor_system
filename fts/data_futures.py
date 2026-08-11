@@ -657,6 +657,7 @@ class FuturesDataProvider:
         v2.87.0: TQLocalSource(7721) 与 TDXMinuteSource(17709) 合并为 TdxLocalSource(17709)。
         """
         try:
+            from fts.config.settings import get_config as _agg_cfg
             from fts.data_sources.aggregator import FuturesDataAggregator
             from fts.data_sources.tdx_local_source import TdxLocalSource
 
@@ -692,9 +693,30 @@ class FuturesDataProvider:
                 logger.debug("TQSDKTickSource 初始化失败，跳过 tick 源")
 
             db_path = _DUCKDB_PATH if _DUCKDB_PATH.exists() else None
+
+            # ── 字段增强层（GAP-083 阶段 C）：TQSDK 真实持仓增强 + iFinD SDK 可选 ──
+            # TQSDKEnhanceSource 默认注册：天勤账号已在 .env，零额外依赖，补充权威 hold/oi_change，
+            # 失败自动降级（_enhance_fields 内部 try/except + 熔断器）不阻断主路径。
+            # futures_enhance_enabled=true 时追加 IFindSDKSource（方案 A：iFinD 官方 SDK 直连，
+            # 补 settle/pre_settle 权威值；需本地安装 iFinDPy + .env 凭据，失败自动降级）。
+            enhancers: list = []
+            try:
+                from fts.data_sources.tqsdk_enhance_source import TQSDKEnhanceSource
+
+                enhancers.append(TQSDKEnhanceSource())
+            except Exception as _e:
+                logger.debug("TQSDKEnhanceSource 实例化失败，跳过字段增强 [%s]", _e)
+            if _agg_cfg().futures_enhance_enabled:
+                try:
+                    from fts.data_sources.ifind_sdk_source import IFindSDKSource
+
+                    enhancers.append(IFindSDKSource())
+                except Exception as _e:
+                    logger.debug("IFindSDKSource 实例化失败，跳过 [%s]", _e)
+
             self._aggregator = FuturesDataAggregator(
                 sources=sources,
-                enhancers=[],
+                enhancers=enhancers,
                 minute_sources=minute_sources,
                 tick_sources=tick_sources,
                 db_path=db_path,
@@ -712,12 +734,18 @@ class FuturesDataProvider:
 
     @staticmethod
     def _from_aggregator_df(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
-        """将 FuturesDataAggregator（17 列）输出转换为 FuturesDataProvider 格式。"""
+        """将 FuturesDataAggregator（17 列）输出转换为 FuturesDataProvider 格式。
+
+        GAP-083 补充 amount 输出（aggregator 17 列含 amount，TDX_LOCAL 真实值）；
+        缺失时补 0.0（vwap 回退典型价逻辑兼容）。
+        """
         df = df.copy()
         df["date"] = pd.to_datetime(df["date"])
         df.set_index("date", inplace=True)
         df.sort_index(inplace=True)
-        return df[["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]]
+        if "amount" not in df.columns:
+            df["amount"] = 0.0
+        return df[["open", "high", "low", "close", "volume", "amount", "vwap", "hold", "settle"]]
 
     # ── 单标的 OHLCV ──
 
@@ -739,7 +767,7 @@ class FuturesDataProvider:
                       contract_kline 缺失时降级返回原始拼接序列。
 
         Returns:
-            pd.DataFrame with columns: open, high, low, close, volume, hold, settle
+            pd.DataFrame with columns: open, high, low, close, volume, amount, hold, settle
             复权路径（adjusted=True 且 symbol 以 0 结尾）额外含 adj_factor 列
             Index: DatetimeIndex
 
@@ -771,6 +799,22 @@ class FuturesDataProvider:
                     )
             except Exception as e:  # noqa: BLE001
                 logger.warning("[复权] [%s] 复权失败，返回原始序列: %s", symbol, e)
+
+        # GAP-066 (v2.96.0): 夜盘/隔夜跳空列注入（配置开关，默认关闭，不改变既有列结构）
+        try:
+            from fts.config.settings import get_config as _og_cfg
+
+            _og_enabled = bool(getattr(_og_cfg(), "inject_overnight_gap_enabled", False))
+            _og_th = float(getattr(_og_cfg(), "overnight_gap_flag_threshold", 0.01))
+        except Exception:  # noqa: BLE001
+            _og_enabled, _og_th = False, 0.01
+        if _og_enabled:
+            try:
+                from fts.data_sources.overnight_gap import inject_overnight_gap
+
+                df = inject_overnight_gap(df, flag_threshold=_og_th)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[跳空标记] [%s] 注入失败: %s", symbol, e)
         return df
 
     def _get_ohlcv_raw(
@@ -787,7 +831,7 @@ class FuturesDataProvider:
             trace_id: HARNESS trace_id。
 
         Returns:
-            pd.DataFrame with columns: open, high, low, close, volume, hold, settle
+            pd.DataFrame with columns: open, high, low, close, volume, amount, hold, settle
             Index: DatetimeIndex
 
         Raises:
@@ -980,19 +1024,20 @@ class FuturesDataProvider:
         """从 DuckDB kline_cache 表读取连续合约数据。
 
         kline_cache 表结构:
-            symbol: 品种代码（如 "RB"）
+            symbol: 品种代码（如 "RB" / "RB0"，双格式并存）
             period: 周期（如 "daily"）
             date: 日期字符串
             open/high/low/close: 价格
             volume: 成交量
             amount: 成交额
+            hold/settle: 持仓量/结算价（GAP-083：真实优先、代理兜底）
 
         Args:
             symbol: 期货代码（支持 "RB0" / "RB" 两种格式）
             days: 回溯天数
 
         Returns:
-            OHLCV DataFrame（含 hold/settle 列，DuckDB 无持仓量时设为 NaN）
+            OHLCV DataFrame（含 hold/settle 列，真实值优先、缺失/0 占位用代理）
         """
         db = _get_reader()
         try:
@@ -1000,16 +1045,19 @@ class FuturesDataProvider:
             raw = symbol.strip().upper()
             sym = raw[:-1] if raw.endswith("0") else raw
 
-            # 查询 kline_cache
+            # 双格式对齐（GAP-083）：同时匹配 "RB" 与 "RB0"（TQ 15 年同步写入带 0 后缀），
+            # 同日期优先保留 "RB0"（ORDER BY date DESC, 0 后缀优先 → drop_duplicates keep first）。
             # vwap: amount/volume（精确 VWAP，amount 有效时），否则用典型价格 (H+L+C)/3。
-            # kline_cache 无 settle 列，故用 (H+L+C)/3 而非 (H+L+C+settle)/4。
+            # hold/settle 真实列读取；无效（NULL/0 占位）在下方代理兜底。
             result = db.execute(
-                "SELECT date, open, high, low, close, volume, amount, "
+                "SELECT date, open, high, low, close, volume, amount, hold, settle, "
                 "  CASE WHEN amount > 0 AND volume > 0 THEN amount / volume "
-                "       ELSE (high + low + close) / 3.0 END AS vwap "
-                "FROM kline_cache WHERE symbol = ? AND period = 'daily' "
-                "ORDER BY date DESC LIMIT ?",
-                [sym, days],
+                "       ELSE (high + low + close) / 3.0 END AS vwap, "
+                "  symbol "
+                "FROM kline_cache WHERE symbol IN (?, ?) AND period = 'daily' "
+                "ORDER BY date DESC, CASE WHEN symbol LIKE '%0' THEN 0 ELSE 1 END "
+                "LIMIT ?",
+                [sym, f"{sym}0", days * 2],
             )
             rows = result.fetchall()
         finally:
@@ -1017,19 +1065,28 @@ class FuturesDataProvider:
         if not rows:
             return None
 
-        df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume", "amount", "vwap"])
+        df = pd.DataFrame(
+            rows,
+            columns=["date", "open", "high", "low", "close", "volume", "amount", "hold", "settle", "vwap", "symbol"],
+        )
         df["date"] = pd.to_datetime(df["date"])
+        # 双格式去重：ORDER BY 已保证 "RB0" 在前，按日期保留首行
+        df = df.drop_duplicates(subset="date", keep="first")
         df.set_index("date", inplace=True)
         df.sort_index(inplace=True)
+        if len(df) > days:
+            df = df.iloc[-days:]
 
-        # 添加期货特有字段（kline_cache 无 hold/settle 字段，使用代理值）
+        # GAP-083 真实优先/代理兜底：settle/hold 无效（NULL 或 0 占位）才用代理
         # settle 代理：(H+L+C)/3 —— 与 vwap 回退公式保持一致，业内典型做法
         # hold 代理：20 日滚动均量（反映资金关注度持续性，因子代码中需注意此为代理）
-        df["settle"] = (df["high"] + df["low"] + df["close"]) / 3.0
-        df["hold"] = df["volume"].rolling(window=20, min_periods=1).mean()
+        mask_settle = df["settle"].isna() | (df["settle"] <= 0)
+        df.loc[mask_settle, "settle"] = (df["high"] + df["low"] + df["close"]) / 3.0
+        mask_hold = df["hold"].isna() | (df["hold"] <= 0)
+        df.loc[mask_hold, "hold"] = df["volume"].rolling(window=20, min_periods=1).mean()
 
-        # 标准列顺序
-        return df[["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]]
+        # 标准列顺序（GAP-083 补充 amount：kline_cache 已有 amount 列，TDX 真实值/TQ 0.0 占位）
+        return df[["open", "high", "low", "close", "volume", "amount", "vwap", "hold", "settle"]]
 
     # ── 通达信本地客户端（TQ 服务 17709）──
 
@@ -1063,7 +1120,10 @@ class FuturesDataProvider:
             df.sort_index(inplace=True)
             if "close" not in df.columns:
                 return None
-            return df[["open", "high", "low", "close", "volume", "vwap", "hold", "settle"]]
+            # GAP-083 补充 amount：TdxLocalSource 17 列含 amount（缺失补 0.0 兜底）
+            if "amount" not in df.columns:
+                df["amount"] = 0.0
+            return df[["open", "high", "low", "close", "volume", "amount", "vwap", "hold", "settle"]]
         except ImportError:
             logger.warning("TdxLocalSource 不可用（依赖缺失），降级到 AKShare")
             return None
@@ -1131,6 +1191,10 @@ class FuturesDataProvider:
         df["vwap"] = (df["high"] + df["low"] + df["close"] + df["settle"]) / 4.0
         cols.append("vwap")
 
+        # GAP-083 补充 amount：AKShare sina 源无成交额 → 补 0.0（vwap 回退典型价逻辑兼容）
+        df["amount"] = 0.0
+        cols.append("amount")
+
         # 限制天数
         if len(df) > days:
             df = df.iloc[-days:]
@@ -1173,6 +1237,7 @@ class FuturesDataProvider:
                 "low": low,
                 "close": close,
                 "volume": np.random.randint(10000, 500000, n_days).astype(float),
+                "amount": np.zeros(n_days),  # 合成无成交额 → 0.0（vwap 回退典型价）
                 "hold": hold,
                 "settle": close + np.random.randn(n_days) * 5,
                 "vwap": (high + low + close + (close + np.random.randn(n_days) * 5)) / 4.0,
@@ -1405,30 +1470,38 @@ FUTURES_SECTOR_MAP: dict[str, list[str]] = {
     "航运": [
         "EC0",  # 集运欧线（航运运价，独立于商品产业链）
     ],
-    "农产品": [
-        "C0",
+    "油脂油料": [
         "A0",
         "B0",
         "M0",
         "Y0",
-        "P0",  # 大豆/玉米/油脂
-        "CS0",
-        "RR0",
-        "LH0",  # 淀粉/生猪
+        "P0",  # 豆系/棕榈油
         "OI0",
         "RS0",
-        "RM0",  # 菜籽/菜粕
-        "SR0",
-        "CF0",
-        "CY0",  # 白糖/棉花/棉纱
+        "RM0",  # 菜籽系
+        "PK0",  # 花生（油脂压榨为主）
+    ],
+    "谷物": [
+        "C0",
+        "CS0",
+        "RR0",
         "WH0",
         "JR0",
         "RI0",
-        "LR0",  # 谷物
-        "JD0",
+        "LR0",  # 玉米/淀粉/稻米/麦
+    ],
+    "畜牧": [
+        "LH0",
+        "JD0",  # 生猪/鸡蛋（养殖链）
+    ],
+    "软商品": [
+        "SR0",
+        "CF0",
+        "CY0",  # 白糖/棉花/棉纱（进口/天气驱动）
+    ],
+    "果蔬": [
         "AP0",
-        "CJ0",
-        "PK0",  # 软商品/果蔬
+        "CJ0",  # 苹果/红枣（鲜果现货驱动）
     ],
     "贵金属": [
         "AU0",
@@ -2036,7 +2109,7 @@ def get_futures_provider() -> FuturesDataProvider:
 # ─── 数据驱动动态池（GAP-054）────────────────────────────
 
 DYNAMIC_POOL_CACHE: str = str(
-    Path(__file__).resolve().parent.parent / "memory" / "portfolio" / "futures_dynamic_pool.json"
+    Path(__file__).resolve().parent.parent / "memory" / "portfolio" / "futures" / "futures_dynamic_pool.json"
 )
 
 

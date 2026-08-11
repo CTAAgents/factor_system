@@ -64,8 +64,23 @@ class SimulatedGateway(AbstractGateway):
         self._latency_seconds = float(latency_seconds)
         self._orders: dict[str, Order] = {}
 
-    def submit_order(self, order: Order) -> str:
-        """模拟提交：可注入失败/拒绝/延迟。
+    def submit_order(
+        self,
+        order: Order,
+        match_result: dict | None = None,
+        order_type: str = "market",
+        book: dict | None = None,
+    ) -> str:
+        """模拟提交：可注入失败/拒绝/延迟；支持部分成交与限价单（D.2 §4/§P2）。
+
+        Args:
+            order: 订单（PENDING 状态）
+            match_result: tick 撮合结果（可选，来自 OrderBookMatchingEngine）。
+                含 book_used=True 且 unfilled_qty>0 时订单转 PARTIAL
+                （filled_quantity=已成交部分）；否则全量成交。
+            order_type: "market"（市价，默认）| "limit"（限价，P2 能力储备）
+            book: 盘口快照（限价单判断用，可选）。限价单对手盘最优价优于
+                限价时按限价成交；否则挂单（SUBMITTED，待撤单或后续撮合）。
 
         Raises:
             RuntimeError: fail_submit=True 时抛出（模拟网络/网关故障）
@@ -77,10 +92,96 @@ class SimulatedGateway(AbstractGateway):
         gateway_id = f"gw_{order.order_id}"
         self._orders[gateway_id] = order
         if self._fill_on_submit:
-            OrderLifecycle.transition(order, OrderState.FILLED, filled_quantity=order.quantity)
+            if order_type == "limit":
+                # 限价单：对手盘最优价优于/等于限价 → 按限价成交；否则挂单
+                if book and self._limit_tradeable(order, book):
+                    OrderLifecycle.transition(order, OrderState.FILLED, filled_quantity=order.quantity)
+                else:
+                    OrderLifecycle.transition(order, OrderState.SUBMITTED)
+            elif match_result and match_result.get("book_used") and match_result.get("unfilled_qty", 0.0) > 1e-9:
+                # 部分成交：已成交部分入账，剩余挂单等待补单（PARTIAL → FILLED）
+                filled = float(match_result.get("filled_qty", 0.0))
+                OrderLifecycle.transition(
+                    order,
+                    OrderState.PARTIAL,
+                    filled_quantity=filled,
+                    avg_fill_price=float(match_result.get("avg_price", 0.0)),
+                )
+            else:
+                OrderLifecycle.transition(order, OrderState.FILLED, filled_quantity=order.quantity)
         else:
             OrderLifecycle.transition(order, OrderState.SUBMITTED)
         return gateway_id
+
+    @staticmethod
+    def _limit_tradeable(order: Order, book: dict) -> bool:
+        """限价单是否可成交：对手盘最优价优于/等于限价。
+
+        long 买入：ask 最优价 ≤ 限价可成交；short 卖出：bid 最优价 ≥ 限价可成交。
+        """
+        levels = book.get("ask_levels", []) if order.direction == "long" else book.get("bid_levels", [])
+        prices = [float(lv.get("price", 0.0) or 0.0) for lv in levels if float(lv.get("price", 0.0) or 0.0) > 0]
+        if not prices:
+            return False
+        best = min(prices) if order.direction == "long" else max(prices)
+        if order.direction == "long":
+            return best <= order.price + 1e-9
+        return best >= order.price - 1e-9
+
+    @staticmethod
+    def auction_open(
+        buy_limits: list[tuple[float, float]],
+        sell_limits: list[tuple[float, float]],
+    ) -> float:
+        """简化集合竞价：确定最大成交量的均衡价（P2 能力储备）。
+
+        对候选价格（所有买卖限价并集）计算可成交量 = min(累计买量, 累计卖量)，
+        取成交量最大的价格为开盘价；并列取中间价。
+
+        Args:
+            buy_limits: [(限价, 数量), ...]（价格升序）
+            sell_limits: [(限价, 数量), ...]（价格升序）
+
+        Returns:
+            均衡开盘价；无有效输入返回 0.0。
+        """
+        if not buy_limits or not sell_limits:
+            return 0.0
+        candidates = sorted({p for p, _ in buy_limits} | {p for p, _ in sell_limits})
+        best_price, best_vol = 0.0, -1.0
+        for price in candidates:
+            cum_buy = sum(q for p, q in buy_limits if p >= price)     # 限价≥价格愿意买
+            cum_sell = sum(q for p, q in sell_limits if p <= price)   # 限价≤价格愿意卖
+            vol = min(cum_buy, cum_sell)
+            if vol > best_vol:
+                best_vol, best_price = vol, price
+        return float(best_price)
+
+    def fill_partial(self, gateway_order_id: str, qty: float, price: float) -> Order:
+        """补单成交（D.2 §4.6）：PARTIAL → PARTIAL（未满）→ FILLED（满仓）。
+
+        模拟盘口后续回补：剩余挂单在后续 tick 逐笔撮合成交。
+        订单为终态或非 PARTIAL 时返回原订单（幂等，不抛错）。
+
+        Args:
+            gateway_order_id: 网关订单号
+            qty: 本次补单数量（>0）
+            price: 补单成交价
+
+        Returns:
+            更新后的订单
+        """
+        order = self._orders.get(gateway_order_id)
+        if order is None or order.state != OrderState.PARTIAL or qty <= 0:
+            return order  # type: ignore[return-value]
+        new_filled = order.filled_quantity + qty
+        if new_filled >= order.quantity - 1e-9:
+            OrderLifecycle.transition(
+                order, OrderState.FILLED, filled_quantity=order.quantity, avg_fill_price=price
+            )
+        else:
+            OrderLifecycle.transition(order, OrderState.PARTIAL, filled_quantity=new_filled, avg_fill_price=price)
+        return order
 
     def cancel_order(self, gateway_order_id: str) -> bool:
         """模拟撤单：非终态订单 → CANCELED。"""

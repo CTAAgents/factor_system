@@ -1302,3 +1302,42 @@ class TestAdaptiveRegimeConfig:
         c.reset()
         assert c._history == []
         assert c._eval_count == 0
+
+
+# ═══════════════════════════════════════════════════════════
+# 32. regime_probs 全制度概率分布（28 计划 Task 1）
+# ═══════════════════════════════════════════════════════════
+
+
+def _make_trend_ohlcv(n: int = 300, trend: float = 0.0) -> pd.DataFrame:
+    """生成带每日趋势漂移的 OHLCV DataFrame（28-T1 测试辅助）。
+
+    参数:
+        n:     交易日数。
+        trend: 每日趋势漂移（正=上涨倾向，负=下跌倾向）。
+
+    返回:
+        含 open/high/low/close/volume 列的 DataFrame，DatetimeIndex。
+    """
+    np.random.seed(42)
+    dates = pd.date_range("2024-01-01", periods=n, freq="D")
+    close = 100 + np.cumsum(np.random.randn(n) * 0.3 + trend)
+    return _make_ohlcv(close, dates)
+
+
+def test_market_regime_has_regime_probs_distribution() -> None:
+    """规则方法必须输出全制度概率分布（和为 1，覆盖 5 制度）。"""
+    ohlcv = _make_trend_ohlcv(n=300, trend=0.001)
+    result = _detect_by_rule(ohlcv, prev_regime=None)
+    probs = result["regime_probs"]
+    assert set(probs.keys()) == {"bull", "bear", "oscillate", "high_vol", "low_vol"}
+    assert abs(sum(probs.values()) - 1.0) < 1e-6
+    assert all(0.0 <= v <= 1.0 for v in probs.values())
+    # 主制度概率应为其置信度的主导项
+    assert probs[result["regime"]] > 0.0
+
+
+def test_fallback_regime_probs() -> None:
+    """兜底路径 regime_probs 应为 {oscillate: 1.0}。"""
+    result = RegimeAwareSelector().detect(pd.DataFrame())  # 空数据 → fallback
+    assert result["regime_probs"] == {"oscillate": 1.0}

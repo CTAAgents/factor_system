@@ -41,6 +41,10 @@ PARALLEL_THRESHOLD = 30
 # 缓存版本号（缓存结构变更时 bump 以自动失效）
 CACHE_VERSION = 1
 
+# 信号缓存 Parquet 后端版本（plans/29 P3：.npy → Parquet 列式 + 校验和）
+# signal_index.json 元数据条目用此值标记 backend 与 version，便于未来变更失效
+PARQUET_CACHE_VERSION = 2
+
 # 因子家族分类（用于 Tier 2 预筛）
 FACTOR_FAMILIES: dict[str, list[str]] = {
     "hf_microstructure": ["hf_", "option_", "bid_ask", "trade_imbalance"],
@@ -52,6 +56,44 @@ FACTOR_FAMILIES: dict[str, list[str]] = {
 
 
 # ─── 数据类 ────────────────────────────────────────────────
+
+
+def _q(s: str) -> str:
+    """转义 SQL 字符串字面量（路径内嵌于 COPY/read_parquet 语句）。"""
+    return s.replace("'", "''")
+
+
+def _signal_checksum(arr: np.ndarray) -> str:
+    """信号数组内容校验和（float64 序列化后 sha256 前 16 位）。"""
+    return hashlib.sha256(arr.astype(np.float64).tobytes()).hexdigest()[:16]
+
+
+def _write_parquet(fp: Path, arr: np.ndarray) -> None:
+    """用 DuckDB 将一维 float64 信号数组写入单列 Parquet（零新增依赖）。"""
+    import duckdb
+
+    con = duckdb.connect()
+    try:
+        con.execute(
+            f"COPY (SELECT ?::DOUBLE[] AS signal) TO '{_q(str(fp))}' (FORMAT PARQUET)",
+            [arr.astype(np.float64).tolist()],
+        )
+    finally:
+        con.close()
+
+
+def _read_parquet(fp: Path) -> np.ndarray:
+    """从单列 Parquet 读回一维 float64 信号数组。"""
+    import duckdb
+
+    con = duckdb.connect()
+    try:
+        row = con.execute(f"SELECT signal FROM read_parquet('{_q(str(fp))}')").fetchone()
+    finally:
+        con.close()
+    if row is None or row[0] is None:
+        raise ValueError("empty parquet")
+    return np.asarray(row[0], dtype=np.float64)
 
 
 @dataclass
@@ -103,37 +145,84 @@ class FactorSignalCache:
         index_fp.write_text(json.dumps(self._meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def get(self, key: FactorCacheKey) -> Optional[np.ndarray]:
-        """获取缓存信号。"""
+        """获取缓存信号（Parquet 为主 + .npy 只读兼容，plans/29 P3）。"""
         if key.cache_id in self._signals:
             self._stats["hits"] += 1
             return self._signals[key.cache_id]
 
-        # 尝试从磁盘加载
-        fp = self.cache_dir / f"{key.cache_id}.npy"
-        if fp.exists():
+        # 1) Parquet 优先（含校验和）
+        arr = self._load_parquet(key)
+        if arr is not None:
+            return arr
+
+        # 2) .npy 只读兼容 → 读到后自动重建为 Parquet
+        arr = self._load_npy_compat(key)
+        if arr is not None:
             try:
-                arr = np.load(fp)
+                self.put(key, arr)
+            except Exception:
+                # 重建失败不阻断本次命中（仅记录，.npy 仍可再次读取）
                 self._signals[key.cache_id] = arr
-                self._stats["hits"] += 1
-                return arr
-            except (IOError, ValueError):
-                pass
+            self._stats["hits"] += 1
+            return arr
 
         self._stats["misses"] += 1
         return None
 
+    def _load_parquet(self, key: FactorCacheKey) -> Optional[np.ndarray]:
+        """读 Parquet 并校验 checksum；损坏/篡改则删除并判 miss。"""
+        cid = key.cache_id
+        fp = self.cache_dir / f"{cid}.parquet"
+        if not fp.exists():
+            return None
+        try:
+            arr = _read_parquet(fp)
+        except Exception:
+            return None
+        meta = self._meta.get(cid)
+        if meta and meta.get("checksum"):
+            if _signal_checksum(arr) != meta["checksum"]:
+                # 校验和不匹配 → 内容损坏或篡改，删除并判 miss（触发重建）
+                self._signals.pop(cid, None)
+                self._meta.pop(cid, None)
+                try:
+                    fp.unlink()
+                except OSError:
+                    pass
+                self._save_index()
+                return None
+        self._signals[cid] = arr
+        self._stats["hits"] += 1
+        return arr
+
+    def _load_npy_compat(self, key: FactorCacheKey) -> Optional[np.ndarray]:
+        """旧 .npy 只读兼容（P4 前保留，用于自动重建 Parquet）。"""
+        cid = key.cache_id
+        fp = self.cache_dir / f"{cid}.npy"
+        if not fp.exists():
+            return None
+        try:
+            return np.load(fp)
+        except (IOError, ValueError):
+            return None
+
     def put(self, key: FactorCacheKey, signal: np.ndarray) -> None:
-        """存入缓存。"""
+        """存入缓存（Parquet 为主，plans/29 P3）。"""
         self._signals[key.cache_id] = signal
-        fp = self.cache_dir / f"{key.cache_id}.npy"
-        np.save(fp, signal)
-        self._meta[key.cache_id] = key.to_dict()
+        fp = self.cache_dir / f"{key.cache_id}.parquet"
+        _write_parquet(fp, signal)
+        self._meta[key.cache_id] = {
+            **key.to_dict(),
+            "backend": "parquet",
+            "version": PARQUET_CACHE_VERSION,
+            "checksum": _signal_checksum(signal),
+        }
         self._save_index()
 
     def clear(self) -> int:
-        """清空所有缓存，返回删除的文件数。"""
+        """清空所有缓存（Parquet + 旧 .npy），返回删除的文件数。"""
         removed = 0
-        for fp in self.cache_dir.glob("*.npy"):
+        for fp in list(self.cache_dir.glob("*.parquet")) + list(self.cache_dir.glob("*.npy")):
             try:
                 fp.unlink()
                 removed += 1
@@ -145,7 +234,7 @@ class FactorSignalCache:
         return removed
 
     def invalidate_factor(self, factor_id: str) -> int:
-        """失效指定因子的所有缓存。"""
+        """失效指定因子的所有缓存（Parquet + 旧 .npy）。"""
         removed = 0
         to_remove = []
         for cid, meta in self._meta.items():
@@ -155,10 +244,14 @@ class FactorSignalCache:
         for cid in to_remove:
             self._meta.pop(cid, None)
             self._signals.pop(cid, None)
-            fp = self.cache_dir / f"{cid}.npy"
-            if fp.exists():
-                fp.unlink()
-            removed += 1
+            for suffix in (".parquet", ".npy"):
+                fp = self.cache_dir / f"{cid}{suffix}"
+                if fp.exists():
+                    try:
+                        fp.unlink()
+                        removed += 1
+                    except OSError:
+                        pass
 
         self._save_index()
         return removed

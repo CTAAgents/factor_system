@@ -1,0 +1,128 @@
+# FTS 存储域盘点登记（Storage Landscape — Layer 3 数据）
+# 来源: docs/harness/plans/29-storage-convergence-plan.md §1.2 勘察量化
+# 契约: fts/store/registry.py StorageRegistry 加载并校验
+# status 取值: active（当前权威存储）/ legacy（待迁移）/ planned（目标态）/ archived
+# 原则: 一数一源 SSOT，legacy 域必须声明 migrated_to，planned 域必须声明 migrated_from
+version: "2026-08-11"
+domains:
+  # ── L1 配置层（属配置非数据，现状不变） ─────────────────────────
+  - domain: config_seeds
+    description: 种子因子与系统配置（seeds/*.yaml + config/）
+    backend: yaml
+    path: seeds
+    retention: "永久（随代码版本管理）"
+    status: active
+
+  # ── L2 行情库 ──────────────────────────────────────────────────
+  - domain: market_history
+    description: 期货/股票 K 线、分钟、tick、情感日频（追加式 + 分区 + 冷热；P3-B 已冷归档 kline_cache ≤2013 → data/archive/history_kline_cache_{year}.parquet）
+    backend: duckdb
+    path: data/fts_history.duckdb
+    tables: [kline_cache, contract_kline, minute_cache, tick_cache, sentiment_daily]
+    partition_key: date
+    retention: "永久（热层 + 冷层归档 data/archive/history_*_{year}.parquet）"
+    status: active
+
+  # ── L3 因子资产库（SSOT 目标，JSON 快照将降级为只读） ───────────
+  - domain: factor_assets
+    description: 因子/评估/版本/审查/血缘（股票期货物理分库）
+    backend: duckdb
+    path: data/factor_catalog_{stock,futures}.duckdb
+    tables: [factor_catalog, factor_evaluations, factor_versions, factor_reviews, factor_correlations, seed_lineage]
+    partition_key: ""
+    retention: "永久"
+    status: active
+    migrated_from: [elite_snapshots]
+
+  - domain: elite_snapshots
+    description: 精英因子 JSON 快照（memory/knowledge/factors/，P1 后降级只读；P4 冻结期≥1 发布周期后退役清理）
+    backend: json
+    path: memory/knowledge/factors
+    partition_key: ""
+    retention: "只读快照（P1 冻结，P4 冻结期后退役）"
+    status: legacy
+    migrated_to: [factor_assets]
+
+  # ── L4 运行状态库（P2 已落地 2026-08-11） ───────────────────────
+  - domain: run_state
+    description: 演化/组合/combo 历史/权重/动态池（当前状态表 + 历史追加表，state_kv/state_history 双表，StateKVStore）
+    backend: duckdb
+    path: data/state.duckdb
+    tables: [state_kv, state_history]
+    partition_key: namespace
+    retention: "当前状态 UPSERT + 历史追加永久"
+    status: active
+    migrated_from: [evolution_state, portfolio_state]
+
+  - domain: evolution_state
+    description: 演化运行状态（memory/evolution/ 下 state/tracking，P2 迁移；P4 冻结期≥1 发布周期后退役清理）
+    backend: json
+    path: memory/evolution
+    partition_key: ""
+    retention: "过程痕迹 gz 归档（traces 不逐条入库；P4 冻结期后退役源）"
+    status: legacy
+    migrated_to: [run_state]
+
+  - domain: portfolio_state
+    description: 组合与权重状态（memory/portfolio/ 下 combo/权重/动态池/质量快照，P2 迁移；P4 冻结期≥1 发布周期后退役清理）
+    backend: json
+    path: memory/portfolio
+    partition_key: ""
+    retention: "当前状态入库 + 历史追加（P4 冻结期后退役源）"
+    status: legacy
+    migrated_to: [run_state]
+
+  # ── L5 信号缓存（P3-A 已落地 2026-08-11：原缓存目录内 Parquet 化） ──
+  - domain: signal_parquet
+    description: 因子信号缓存（FactorSignalCache 单列 Parquet + checksum，plans/29 P3-A；原缓存目录内 Parquet 化，未搬至湖式目录——信号缓存为引用缓存可重建，无需湖式）
+    backend: parquet
+    path: memory/cache/factor_signals
+    partition_key: ""
+    retention: "按因子版本保留（.npy 只读兼容，P4 冻结期清理）"
+    status: active
+    migrated_from: [signal_cache]
+
+  - domain: signal_cache
+    description: 因子信号缓存旧格式（memory/cache/factor_signals/ 裸 .npy，P3-A 已切 Parquet，.npy 只读兼容；P4 冻结期≥1 发布周期后清理）
+    backend: npy
+    path: memory/cache/factor_signals
+    partition_key: ""
+    retention: "重建可再生成（P4 冻结期后清理）"
+    status: legacy
+    migrated_to: [signal_parquet]
+
+  # ── L6 日志血缘 ────────────────────────────────────────────────
+  - domain: lineage_logs
+    description: 数据血缘/多源分歧/同步摘要（追加日志 + 摘要入库）
+    backend: jsonl
+    path: data
+    partition_key: date
+    retention: "追加永久，旧摘要按策略压缩"
+    status: active
+
+  - domain: experiment_logs
+    description: 演化实验日志（data/experiments-*.json，摘要入库 + gz 归档；P4 冻结期≥1 发布周期后压缩清理）
+    backend: json
+    path: data
+    partition_key: run_id
+    retention: "摘要入库 + gz 归档（P4 冻结期后压缩源）"
+    status: legacy
+    migrated_to: [lineage_logs]
+
+  # ── 辅助域 ─────────────────────────────────────────────────────
+  - domain: sim_portfolio
+    description: 模拟组合账户/持仓/成交/权益（live_trade SQLite 持久化，WAL+事务）
+    backend: sqlite
+    path: memory/portfolio/simulated/sim_state.db
+    tables: [sim_account, sim_positions, sim_fills, sim_equity_curve]
+    partition_key: ""
+    retention: "永久"
+    status: active
+
+  - domain: reports
+    description: 分析报告输出（相关性矩阵/因子详情/信号历史，可再生成）
+    backend: mixed
+    path: reports
+    partition_key: date
+    retention: "按保留期滚动，可再生成"
+    status: active

@@ -8,8 +8,8 @@ scripts/futures_signal_pipeline.py — 期货每日信号生成管道
 
 输出:
     - 控制台: 信号排名表
-    - 文件:     reports/{date}/futures_signals_{date}.md（信号排名报告）
-    - 文件:     reports/{date}/trading_advice_{date}.md（交易建议报告）
+    - 文件:     reports/futures/{date}/futures_signals_{date}.md（信号排名报告）
+    - 文件:     reports/futures/{date}/trading_advice_{date}.md（交易建议报告）
 
 方向校正方法（v2）:
     期货是多空双向，因子在期货上的 IC 方向可能为负。
@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sys
 import time
 import warnings
@@ -431,11 +432,16 @@ def _compute_ridge_weights(
     if n_factors <= 1:
         return {f: 1.0 for f in factor_names}
 
-    # 取所有品种共有的因子交集（不同品种可能因子执行成功集合不同）
-    common_factors = set(factor_names)
+    # 因子覆盖率过滤：品种数较多时，因子在不同品种上的执行成功集合必然不同，
+    # "全品种交集"几乎恒为空，导致权重静默回退等权（factor_weights={}）。
+    # 改为保留覆盖 >= 50% 品种的因子；缺失品种在训练样本级跳过
+    # （下方逐样本有效性检查已兜底）。
+    factor_coverage: dict[str, int] = {}
     for sym in signal_matrix:
-        common_factors &= set(signal_matrix[sym].keys())
-    factor_names = sorted(common_factors)
+        for fname in signal_matrix[sym]:
+            factor_coverage[fname] = factor_coverage.get(fname, 0) + 1
+    min_coverage = max(1, math.ceil(len(signal_matrix) * 0.5))
+    factor_names = sorted(f for f, c in factor_coverage.items() if c >= min_coverage)
     n_factors = len(factor_names)
     if n_factors <= 1:
         fallback = {f: 1.0 / n_factors for f in factor_names} if n_factors > 0 else {}
@@ -753,15 +759,17 @@ def _compute_per_variety_weights(
             if gw <= 0:
                 continue
             vic = per_variety_ic.get(fname, {}).get(var, 0.0)
-            if abs(vic) < min_ic:
-                # IC 过低，该因子对此品种无效，赋予极低权重
+            # NaN（常数信号导致 Spearman IC 未定义）视为无数据，
+            # 按低 IC 回退赋予极低权重，避免 NaN 污染 total 导致整品种被跳过
+            if not np.isfinite(vic) or abs(vic) < min_ic:
+                # IC 过低/缺失，该因子对此品种无效，赋予极低权重
                 raw_weights[fname] = gw * min_ic
             else:
                 raw_weights[fname] = gw * abs(vic)
 
-        # 归一化
+        # 归一化（total 必须有限，防御性兜底）
         total = sum(raw_weights.values())
-        if total > 1e-10:
+        if np.isfinite(total) and total > 1e-10:
             per_variety_weights[var] = {f: w / total for f, w in raw_weights.items()}
 
     return per_variety_weights
@@ -1007,7 +1015,7 @@ def _generate_trading_advice_report(
 ) -> None:
     """生成交易建议报告（独立于信号排名报告）。
 
-    输出文件: reports/{date}/trading_advice_{date}.md
+    输出文件: reports/futures/{date}/trading_advice_{date}.md
     """
     regime_type = market_regime.get("regime", "unknown")
     confidence = market_regime.get("confidence", 0)
@@ -1216,7 +1224,7 @@ def _generate_trading_advice_report(
     if max_weight > 0.3:
         w(f"| **因子集中风险** | 当前 Top 因子权重 {max_weight:.1%} > 30% | 建议增加多样性或手动限制 |")
     w("| **流动性风险** | 部分品种流动性不足 | 主力合约优先，避开持仓量 < 1 万手的品种 |")
-    w("| **过拟合风险** | 组合夏普 1.12，V erifier 未通过 | 不过度依赖信号，严格止损 |")
+    w("| **过拟合风险** | 组合夏普 1.12，Verifier 未通过 | 不过度依赖信号，严格止损 |")
     w()
 
     # ── 8. 今日交易执行计划 ──
@@ -1323,7 +1331,7 @@ def _generate_trading_advice_report(
     print(f"[OK] 交易建议报告已保存: {out_path}")
 
 
-def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
+def main(max_symbols: int = 25, days: int = 120, universe: str = "core", recompute_weights: bool | None = None) -> int:
     t0 = time.time()
     today = date.today().isoformat()
     print("=" * 60)
@@ -1457,40 +1465,73 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     signal_matrix = _compute_signal_matrix(panel, factors, use_optimizer=True)
     print(f"      信号矩阵: {sum(len(v) for v in signal_matrix.values())} 项")
 
-    # 3b: 方向校正（截面 IC 法）
-    print("      方向校正: 截面 IC 法（因子信号 vs 未来 5 日收益的 Spearman 秩相关）...")
-    factor_sign_flips = _compute_factor_sign_flips(signal_matrix, panel, common_dates)
+    # 3b-3e: 方向校正 + Ridge 权重学习（GAP-072 v2.99.0: 权重周五重算，其余日冻结复用快照）
+    from scripts._signal_common import filter_factors_by_weights, load_weight_snapshot, save_weight_snapshot
+
+    snapshot_path = PROJECT_ROOT / "memory" / "portfolio" / "futures" / "futures_signal_weights.json"
+    if recompute_weights is None:
+        from fts.config import is_weight_recompute_day
+
+        recompute_weights = is_weight_recompute_day()
+
+    snapshot = load_weight_snapshot(snapshot_path) if not recompute_weights else None
+    # 品种-因子 IC 矩阵：重算路径计算并持久化到快照；冻结日从快照复用（报告 IC 章节不空）
+    per_variety_ic: dict[str, dict[str, float]] = {}
+    if snapshot is not None:
+        # 冻结日：复用上周权重快照，仅刷新因子值（新因子等待下次重算进入）
+        factor_weights = snapshot["factor_weights"]
+        factor_sign_flips = snapshot.get("factor_sign_flips", {})
+        per_variety_weights = snapshot.get("per_variety_weights") or {}
+        per_variety_ic = snapshot.get("per_variety_ic") or {}
+        factors = filter_factors_by_weights(factors, factor_weights)
+        print(
+            f"      [权重冻结] 复用 {snapshot.get('recomputed_at', '?')} 权重快照 "
+            f"({len(factor_weights)} 因子)，仅刷新因子值"
+        )
+    else:
+        # 重算日 / 冷启动：方向校正（截面 IC 法）
+        print("      方向校正: 截面 IC 法（因子信号 vs 未来 5 日收益的 Spearman 秩相关）...")
+        factor_sign_flips = _compute_factor_sign_flips(signal_matrix, panel, common_dates)
+
+        # 3c: Ridge 回归学习因子权重（替代等权合成）
+        print("      权重学习: Ridge 回归（L2 正则化，弱因子保留不丢弃）...")
+        factor_weights = _compute_ridge_weights(
+            signal_matrix,
+            panel,
+            common_dates,
+            factor_sign_flips,
+        )
+
+        # 3d: 品种-因子 IC 矩阵（每个因子 × 每个品种的时序 IC）
+        print("      品种-因子 IC 矩阵计算...")
+        per_variety_ic = _compute_per_variety_ic_matrix(
+            signal_matrix,
+            panel,
+            common_dates,
+            factor_sign_flips,
+        )
+        n_factor_ic = len(per_variety_ic)
+        n_variety_ic = len(set(v for vics in per_variety_ic.values() for v in vics)) if per_variety_ic else 0
+        print(f"      IC 矩阵: {n_factor_ic} 因子 × {n_variety_ic} 品种")
+
+        # 3e: 品种级 Ridge 权重分配（结合全局 Ridge 权重 + 品种级 IC）
+        per_variety_weights = _compute_per_variety_weights(
+            factor_weights,
+            per_variety_ic,
+        )
+        save_weight_snapshot(
+            snapshot_path,
+            factor_weights,
+            factor_sign_flips=factor_sign_flips,
+            per_variety_weights=per_variety_weights,
+            per_variety_ic=per_variety_ic,
+        )
+        print(f"      [权重] 本周重算日: 权重已学习并保存快照（含 IC 矩阵）-> {snapshot_path}")
 
     n_flipped = sum(1 for v in factor_sign_flips.values() if v < 0)
     if n_flipped > 0:
         print(f"      方向反转: {n_flipped}/{n_factors} 个因子 (截面 IC<0)")
 
-    # 3c: Ridge 回归学习因子权重（替代等权合成）
-    print("      权重学习: Ridge 回归（L2 正则化，弱因子保留不丢弃）...")
-    factor_weights = _compute_ridge_weights(
-        signal_matrix,
-        panel,
-        common_dates,
-        factor_sign_flips,
-    )
-
-    # 3d: 品种-因子 IC 矩阵（每个因子 × 每个品种的时序 IC）
-    print("      品种-因子 IC 矩阵计算...")
-    per_variety_ic = _compute_per_variety_ic_matrix(
-        signal_matrix,
-        panel,
-        common_dates,
-        factor_sign_flips,
-    )
-    n_factor_ic = len(per_variety_ic)
-    n_variety_ic = len(set(v for vics in per_variety_ic.values() for v in vics)) if per_variety_ic else 0
-    print(f"      IC 矩阵: {n_factor_ic} 因子 × {n_variety_ic} 品种")
-
-    # 3e: 品种级 Ridge 权重分配（结合全局 Ridge 权重 + 品种级 IC）
-    per_variety_weights = _compute_per_variety_weights(
-        factor_weights,
-        per_variety_ic,
-    )
     if per_variety_weights:
         # 统计品种级权重相对于全局权重的平均偏离度
         total_dev = 0.0
@@ -1629,7 +1670,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
         print(f"          {holdout_result['warning']}")
 
     # ── Step 4: 保存信号快照 + 加载昨日信号计算增量 ──
-    report_dir = REPORTS_ROOT / today
+    report_dir = REPORTS_ROOT / "futures" / today
     report_dir.mkdir(parents=True, exist_ok=True)
 
     # 保存今日信号快照 (JSON)
@@ -1640,7 +1681,7 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core") -> int:
     )
 
     # 追加到历史 JSONL
-    history_path = REPORTS_ROOT / "signal_scores_history.jsonl"
+    history_path = REPORTS_ROOT / "futures" / "signal_scores_history.jsonl"
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with open(history_path, "a", encoding="utf-8") as hf:
         hf.write(json.dumps({"date": today, "scores": sym_scores}, ensure_ascii=False) + "\n")
@@ -2132,11 +2173,17 @@ if __name__ == "__main__":
         choices=["core", "all"],
         help="品种池: core=25 核心品种 / all=全量商品期货（FUTURES_SUBSET 剔除金融期货）",
     )
+    parser.add_argument(
+        "--force-recompute",
+        action="store_true",
+        help="强制重算 Ridge 权重并更新快照（GAP-072，默认按 l3_weight_recompute_cadence 自动判定）",
+    )
     args = parser.parse_args()
     sys.exit(
         main(
             max_symbols=args.max_symbols,
             days=args.days,
             universe=args.universe,
+            recompute_weights=True if args.force_recompute else None,
         )
     )

@@ -59,6 +59,12 @@ from fts.factor_engine.regime_hmm import (  # noqa: E402 — MSM 可选依赖探
 # 导入扩展特征模块（STEP3 P2.1）
 from fts.factor_engine.regime_features import compute_hmm_feature_vector  # noqa: E402
 
+# 导入规则伪概率构造（28-T1）
+from fts.factor_engine.regime_calibration import build_rule_regime_probs  # noqa: E402
+
+# 导入 BIC 状态数选择与特征标准化（28-T8）
+from fts.factor_engine.regime_model_selection import fit_standardizer, select_n_states  # noqa: E402
+
 
 # ─── 契约 ─────────────────────────────────────────────────
 
@@ -71,6 +77,7 @@ class MarketRegime(TypedDict):
     detected_at: str  # ISO 8601
     features: dict  # 检测特征
     method: str  # 检测方法: "hmm" / "rule" / "fallback"
+    regime_probs: dict[str, float]  # 新增：全制度概率分布（和为 1）
 
 
 class RegimePerformance(TypedDict, total=False):
@@ -179,6 +186,24 @@ def _ewma_volatility(rets: pd.Series, span: int = 30) -> pd.Series:
 # ─── HMMRegimeDetector ────────────────────────────────────
 
 
+def _states_to_regime_probs(state_probs: np.ndarray, state_map: dict[int, str]) -> dict[str, float]:
+    """HMM 状态概率数组 → 制度概率分布（同制度多状态求和）。
+
+    参数:
+        state_probs: HMM 后验概率数组（每状态一概率，和为 1）。
+        state_map:   HMM 状态索引 → 制度名映射。
+
+    返回:
+        制度名 → 概率 的分布 dict，和为 1（28-T1）。
+    """
+    agg: dict[str, float] = {}
+    for s, p in enumerate(state_probs):
+        r = state_map.get(s, "oscillate")
+        agg[r] = agg.get(r, 0.0) + float(p)
+    total = sum(agg.values()) or 1.0
+    return {r: p / total for r, p in agg.items()}
+
+
 class HMMRegimeDetector:
     """HMM-based 市场制度检测器。
 
@@ -254,6 +279,16 @@ class HMMRegimeDetector:
 
         # 取最近 lookback 窗口
         train_features = features[-min(self.lookback, len(features)) :]
+
+        # 28-T8: 特征标准化（只 fit 训练段，防数据窥探；predict 用同一参数 transform）
+        self._scaler_mean, self._scaler_std = fit_standardizer(train_features)
+        train_features = (train_features - self._scaler_mean) / self._scaler_std
+
+        # 28-T8: BIC 状态数选择（状态数变化时重建模型，重置 _state_map 重新推断）
+        if getattr(self, "_last_n_states", None) != self.n_states:
+            self.n_states = select_n_states(train_features, candidates=(2, 3, 4))
+            self._last_n_states = self.n_states
+            self._state_map = {}  # 状态数变化 → 映射失效，重新推断
 
         try:
             self._model = hmm.GaussianHMM(
@@ -360,14 +395,19 @@ class HMMRegimeDetector:
         if features.size == 0:
             features = base_features
 
+        # 28-T8: 用训练段 fit 的标准化参数 transform（同一套参数，防数据泄露）
+        if hasattr(self, "_scaler_mean"):
+            features = (features - self._scaler_mean) / self._scaler_std
+
         try:
             state = int(self._model.predict(features)[-1])
             probs = self._model.predict_proba(features)[-1]
             regime = self._state_map.get(state, "oscillate")
             confidence = float(min(1.0, max(0.0, probs[state])))
+            regime_probs = _states_to_regime_probs(probs, self._state_map)  # 28-T1
             # 存储置信度，供 stabilizer 在下一次 _infer_state_map 使用
             self._last_confidence = confidence
-            return regime, confidence, {"hmm_state": state, "hmm_probs": probs.tolist()}
+            return regime, confidence, {"hmm_state": state, "hmm_probs": probs.tolist(), "regime_probs": regime_probs}
         except Exception:
             return "unknown", 0.0, {}
 
@@ -423,6 +463,7 @@ def _detect_by_rule(ohlcv: pd.DataFrame, prev_regime: MarketRegime | None) -> Ma
             detected_at=datetime.now().isoformat(),
             features={},
             method="fallback",
+            regime_probs={"oscillate": 1.0},
         )
 
     close = ohlcv["close"].dropna()
@@ -433,6 +474,7 @@ def _detect_by_rule(ohlcv: pd.DataFrame, prev_regime: MarketRegime | None) -> Ma
             detected_at=datetime.now().isoformat(),
             features={},
             method="fallback",
+            regime_probs={"oscillate": 1.0},
         )
 
     close_filled = close.ffill()
@@ -599,6 +641,7 @@ def _detect_by_rule(ohlcv: pd.DataFrame, prev_regime: MarketRegime | None) -> Ma
         detected_at=datetime.now().isoformat(),
         features=features,
         method="rule",
+        regime_probs=build_rule_regime_probs(trend_score, vol_score),
     )
 
 
@@ -868,6 +911,7 @@ class RegimeAwareSelector:
                 detected_at=datetime.now().isoformat(),
                 features={},
                 method="fallback",
+                regime_probs={"oscillate": 1.0},
             )
             self._prev_regime = result
             assert result is not None
@@ -881,6 +925,7 @@ class RegimeAwareSelector:
                 detected_at=datetime.now().isoformat(),
                 features={},
                 method="fallback",
+                regime_probs={"oscillate": 1.0},
             )
             self._prev_regime = result
             assert result is not None

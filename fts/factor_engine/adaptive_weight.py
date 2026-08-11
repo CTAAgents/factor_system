@@ -26,6 +26,9 @@ from typing import Any, Optional, cast
 
 logger = logging.getLogger(__name__)
 
+# 风险制度集合：进入这些制度时快速降权（de-risk），离开时缓慢加仓（re-risk）
+_RISK_REGIMES: tuple[str, ...] = ("bear", "high_vol")
+
 
 class AdaptiveWeightManager:
     """自适应权重管理器（A.3）。
@@ -124,14 +127,29 @@ class AdaptiveWeightManager:
 class RegimeSmoother:
     """Regime 切换时的权重指数平滑器。
 
-    避免 Regime 频繁切换导致权重剧烈跳变：
+    避免 Regime 频繁切换导致权重剧烈跳变，并支持不对称切换（28-T7）：
     - Regime 变化且已稳定 min_days：直接应用新权重
-    - Regime 未稳定（过渡期）：新旧权重指数平滑
+    - Regime 未稳定（过渡期）：按方向选择平滑系数做指数平滑
+        - 进入风险制度（bear/high_vol）：用 de_risk_alpha 快速降权（de-risk）
+        - 离开风险制度：用 re_risk_alpha 缓慢加仓（re-risk）
+        - 其余切换：用默认 alpha
+
+    对标 Man AHL / PIMCO 战术配置：风险来临快降、风险消退慢加，滞后确认防震荡。
     """
 
-    def __init__(self, alpha: float = 0.3, min_days: int = 3) -> None:
+    def __init__(
+        self,
+        alpha: float = 0.3,
+        min_days: int = 3,
+        de_risk_alpha: float = 0.8,  # 进入风险制度：快速降权
+        re_risk_alpha: float = 0.1,  # 回归安全制度：缓慢加仓
+        risk_regimes: tuple[str, ...] = _RISK_REGIMES,
+    ) -> None:
         self._alpha = float(alpha)
         self._min_days = int(min_days)
+        self._de_risk_alpha = float(de_risk_alpha)
+        self._re_risk_alpha = float(re_risk_alpha)
+        self._risk_regimes = risk_regimes
         self._current_regime: Optional[str] = None
         self._regime_since: Optional[Any] = None  # datetime
 
@@ -150,6 +168,7 @@ class RegimeSmoother:
         """
         from datetime import datetime, timezone
 
+        prev_regime = self._current_regime
         if detected_regime != self._current_regime:
             self._current_regime = detected_regime
             self._regime_since = datetime.now(timezone.utc)
@@ -161,16 +180,17 @@ class RegimeSmoother:
             stable_days = 0
 
         if stable_days < self._min_days:
-            # 过渡期：指数平滑
-            smoothed: dict[str, float] = {}
-            for fid in set(list(current_weights.keys()) + list(new_weights.keys())):
-                old = current_weights.get(fid, 0.0)
-                new = new_weights.get(fid, 0.0)
-                smoothed[fid] = (1 - self._alpha) * old + self._alpha * new
-            total = sum(smoothed.values())
-            if total > 0:
-                smoothed = {k: v / total for k, v in smoothed.items()}
-            return smoothed
+            # 过渡期：按方向选择不对称平滑系数
+            if detected_regime in self._risk_regimes:
+                eff_alpha = self._de_risk_alpha  # 进入风险 → 快速降
+            elif prev_regime in self._risk_regimes:
+                eff_alpha = self._re_risk_alpha  # 离开风险 → 缓慢加
+            else:
+                eff_alpha = self._alpha
+            return {
+                fid: eff_alpha * new_weights.get(fid, 0.0) + (1.0 - eff_alpha) * current_weights.get(fid, 0.0)
+                for fid in set(current_weights) | set(new_weights)
+            }
 
         # Regime 稳定：直接使用新权重
         return dict(new_weights)

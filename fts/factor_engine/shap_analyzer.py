@@ -107,19 +107,23 @@ class ShapAnalyzer:
 
     def __init__(
         self,
-        n_extreme: int = 50,
-        n_background: int = 100,
+        n_extreme: int = 25,
+        n_background: int = 50,
         random_seed: int = 42,
+        nsamples: int = 50,
     ):
         """
         Args:
-            n_extreme: 从两端各取多少样本做 SHAP 分析（默认 50）
-            n_background: KernelExplainer 的背景样本数（默认 100）
+            n_extreme: 从两端各取多少样本做 SHAP 分析（默认 25；GAP-080 降频 50→25）
+            n_background: KernelExplainer 的背景样本数（默认 50；GAP-080 降频 100→50）
             random_seed: 随机种子
+            nsamples: 每个极端样本的 KernelExplainer 扰动次数（默认 50；
+                GAP-080 降频 100→50，与 n_extreme 合并 ~4x 评估量下降）
         """
         self._n_extreme = n_extreme
         self._n_background = n_background
         self._random_seed = random_seed
+        self._nsamples = nsamples
 
         self._executor: Optional[FactorExecutor] = None
 
@@ -184,6 +188,7 @@ class ShapAnalyzer:
         factor: FactorProgram,
         data: pd.DataFrame,
         forward_returns: Optional[np.ndarray] = None,
+        signal_cache: Optional[Any] = None,
     ) -> ShapAnalysisResult:
         """对因子执行 SHAP 分析。
 
@@ -191,6 +196,7 @@ class ShapAnalyzer:
             factor: 因子程序
             data: OHLCV 数据
             forward_returns: 可选，未来收益率，用于排序极端样本
+            signal_cache: 可选信号缓存（GAP-070），全量信号命中后复用
 
         Returns:
             ShapAnalysisResult
@@ -199,9 +205,9 @@ class ShapAnalyzer:
 
         np.random.seed(self._random_seed)
 
-        # 执行因子程序获取全量信号
-        executor = FactorExecutor(factor)
-        full_signal = executor.execute(data, {})
+        # 执行因子程序获取全量信号（复用缓存，与 L1/消融/鲁棒性同源）
+        self._executor = FactorExecutor(factor, signal_cache=signal_cache)
+        full_signal = self._executor.execute(data, {})
         if len(full_signal) != len(data):
             full_signal = np.full(len(data), np.nan)
 
@@ -243,7 +249,7 @@ class ShapAnalyzer:
         ]:
             for idx in idx_list:
                 X_sample = X[idx : idx + 1]
-                shap_values = explainer.shap_values(X_sample, nsamples=100)
+                shap_values = explainer.shap_values(X_sample, nsamples=self._nsamples)
 
                 if isinstance(shap_values, list):
                     sv = shap_values[0]
@@ -302,6 +308,7 @@ class ShapAnalyzer:
             "valid_samples": int(np.sum(valid_mask)),
             "n_extreme_analyzed": self._n_extreme,
             "n_background": min(self._n_background, len(X)),
+            "n_nsamples": self._nsamples,
             "n_features": len(feature_cols),
             "feature_names": feature_cols,
             "signal_range": [

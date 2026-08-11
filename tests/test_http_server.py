@@ -1544,3 +1544,263 @@ class TestSafeVersion:
 
         with patch.object(builtins, "__import__", side_effect=fake_import):
             assert http_server._safe_version() == "?"
+
+
+# ═══════════════════════════════════════════════════════════
+# C8 人审工作台 — REVIEW_HTML + /review + /api/review/*
+# ═══════════════════════════════════════════════════════════
+
+
+def _make_review_get_handler(path="/review"):
+    """构造 C8 审查 GET 请求 handler。"""
+    handler = MagicMock(spec=_DashboardHandler)
+    handler.command = "GET"
+    handler.path = path
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler.wfile = BytesIO()
+    handler._respond_json = _DashboardHandler._respond_json.__get__(handler, _DashboardHandler)
+    handler._respond_html = _DashboardHandler._respond_html.__get__(handler, _DashboardHandler)
+    handler._build_review_pending = _DashboardHandler._build_review_pending.__get__(handler, _DashboardHandler)
+    handler._build_review_history = _DashboardHandler._build_review_history.__get__(handler, _DashboardHandler)
+    handler.do_GET = _DashboardHandler.do_GET.__get__(handler, _DashboardHandler)
+    return handler
+
+
+def _make_review_post_handler(path="/api/review/approve", body: bytes | None = None):
+    """构造 C8 审查 POST 请求 handler。"""
+    body = body if body is not None else b'{"factor_id": "fct_x", "comment": "ok", "reviewer": "tester"}'
+    handler = MagicMock(spec=_DashboardHandler)
+    handler.command = "POST"
+    handler.path = path
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler.wfile = BytesIO()
+    handler.headers = {"Content-Length": str(len(body))}
+    handler.rfile = BytesIO(body)
+    handler._respond_json = _DashboardHandler._respond_json.__get__(handler, _DashboardHandler)
+    handler._handle_review_decision = _DashboardHandler._handle_review_decision.__get__(
+        handler, _DashboardHandler
+    )
+    handler.do_POST = _DashboardHandler.do_POST.__get__(handler, _DashboardHandler)
+    return handler
+
+
+class TestReviewHTML:
+    """C8 人审工作台页面内容测试。"""
+
+    def test_contains_title(self):
+        """HTML 包含审查工作台标题。"""
+        from fts.monitor.http_server import REVIEW_HTML
+
+        assert "审查工作台" in REVIEW_HTML
+
+    def test_contains_api_endpoints(self):
+        """HTML 引用待审/历史/决定端点（决定端点为 JS 动态拼接）。"""
+        from fts.monitor.http_server import REVIEW_HTML
+
+        assert "/api/review/pending" in REVIEW_HTML
+        assert "/api/review/history" in REVIEW_HTML
+        assert "/api/review/" in REVIEW_HTML
+        assert "method: 'POST'" in REVIEW_HTML
+
+    def test_auto_refresh_15s(self):
+        """页面 15 秒自动刷新。"""
+        from fts.monitor.http_server import REVIEW_HTML
+
+        assert "setInterval(loadPending, 15000)" in REVIEW_HTML
+
+
+class TestReviewEndpoints:
+    """C8 审查端点 GET 路由测试。"""
+
+    def test_get_review_page_html(self):
+        """GET /review 返回审查页面 HTML。"""
+        handler = _make_review_get_handler(path="/review")
+        handler.do_GET()
+        handler.send_response.assert_called_once_with(200)
+        handler.send_header.assert_any_call("Content-Type", "text/html; charset=utf-8")
+        body = handler.wfile.getvalue().decode()
+        assert "审查工作台" in body
+
+    def test_get_review_pending_json(self):
+        """GET /api/review/pending 返回待审查队列 JSON。"""
+        handler = _make_review_get_handler(path="/api/review/pending")
+        items = [{"factor_id": "fct_p1", "name": "p1", "market": "futures", "ic": 0.05, "sharpe": 1.5}]
+        with patch("fts.factor_engine.factor_inspector.FactorReviewWorkflow") as mock_cls:
+            mock_cls.return_value.list_pending.return_value = items
+            handler.do_GET()
+        mock_cls.return_value.list_pending.assert_called_once_with(limit=200)
+        handler.send_response.assert_called_once_with(200)
+        body = json.loads(handler.wfile.getvalue().decode())
+        assert body["count"] == 1
+        assert body["items"][0]["factor_id"] == "fct_p1"
+
+    def test_get_review_pending_failure_degraded(self):
+        """审查队列查询异常 → 空结果 + error。"""
+        handler = _make_review_get_handler(path="/api/review/pending")
+        with patch("fts.factor_engine.factor_inspector.FactorReviewWorkflow", side_effect=RuntimeError("db down")):
+            handler.do_GET()
+        body = json.loads(handler.wfile.getvalue().decode())
+        assert body["count"] == 0
+        assert body["items"] == []
+        assert "error" in body
+
+    def test_get_review_history_json(self):
+        """GET /api/review/history 返回最近审查记录 JSON。"""
+        handler = _make_review_get_handler(path="/api/review/history")
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchall.return_value = [
+            ("fct_x", "approved", "ok", "tester", "2026-08-11T10:00:00", "fct_x"),
+        ]
+        with patch("fts.factor_engine.factor_inspector.FactorReviewWorkflow") as mock_cls:
+            mock_cls.return_value._conn.return_value = mock_conn
+            handler.do_GET()
+        handler.send_response.assert_called_once_with(200)
+        body = json.loads(handler.wfile.getvalue().decode())
+        assert body["count"] == 1
+        assert body["items"][0]["decision"] == "approved"
+        assert body["items"][0]["reviewer"] == "tester"
+        mock_conn.close.assert_called_once()
+
+
+class TestReviewDecisionPost:
+    """C8 审查决定 POST 端点测试。"""
+
+    def test_post_review_approve(self):
+        """POST /api/review/approve 调 workflow.approve 并回写。"""
+        handler = _make_review_post_handler(path="/api/review/approve")
+        with patch("fts.factor_engine.factor_inspector.FactorReviewWorkflow") as mock_cls:
+            mock_cls.return_value.approve.return_value = {
+                "factor_id": "fct_x",
+                "decision": "approved",
+            }
+            handler.do_POST()
+        mock_cls.return_value.approve.assert_called_once_with("fct_x", "ok", "tester")
+        handler.send_response.assert_called_once_with(200)
+        body = json.loads(handler.wfile.getvalue().decode())
+        assert body["decision"] == "approved"
+
+    def test_post_review_reject(self):
+        """POST /api/review/reject 调 workflow.reject 并回写。"""
+        handler = _make_review_post_handler(path="/api/review/reject")
+        with patch("fts.factor_engine.factor_inspector.FactorReviewWorkflow") as mock_cls:
+            mock_cls.return_value.reject.return_value = {
+                "factor_id": "fct_x",
+                "decision": "rejected",
+            }
+            handler.do_POST()
+        mock_cls.return_value.reject.assert_called_once_with("fct_x", "ok", "tester")
+        body = json.loads(handler.wfile.getvalue().decode())
+        assert body["decision"] == "rejected"
+
+    def test_post_review_missing_factor_id_400(self):
+        """factor_id 缺失 → 400。"""
+        handler = _make_review_post_handler(body=b'{"comment": "no id"}')
+        handler.do_POST()
+        handler.send_response.assert_called_once_with(400)
+        body = json.loads(handler.wfile.getvalue().decode())
+        assert "error" in body
+
+    def test_post_review_unknown_path_404(self):
+        """POST 未知审查路径 → 404。"""
+        handler = _make_review_post_handler(path="/api/review/unknown")
+        handler.do_POST()
+        handler.send_response.assert_called_once_with(404)
+        body = json.loads(handler.wfile.getvalue().decode())
+        assert body["error"] == "not found"
+
+
+# ═══════════════════════════════════════════════════════════
+# C8-2 机审/人审可配置 — pending 标注 + POST /api/review/auto
+# ═══════════════════════════════════════════════════════════
+
+
+def _make_review_auto_handler(body: bytes | None = None):
+    """构造 C8-2 机审 POST 请求 handler。"""
+    body = body if body is not None else b"{}"
+    handler = MagicMock(spec=_DashboardHandler)
+    handler.command = "POST"
+    handler.path = "/api/review/auto"
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler.wfile = BytesIO()
+    handler.headers = {"Content-Length": str(len(body))}
+    handler.rfile = BytesIO(body)
+    handler._respond_json = _DashboardHandler._respond_json.__get__(handler, _DashboardHandler)
+    handler._handle_review_auto = _DashboardHandler._handle_review_auto.__get__(handler, _DashboardHandler)
+    handler.do_POST = _DashboardHandler.do_POST.__get__(handler, _DashboardHandler)
+    return handler
+
+
+class TestReviewAutoEndpoints:
+    """C8-2 机审端点测试。"""
+
+    def test_get_review_pending_includes_mode_and_flag(self):
+        """GET /api/review/pending 返回 mode 字段 + needs_human 标注（不落库）。"""
+        handler = _make_review_get_handler(path="/api/review/pending")
+        items = [
+            {"factor_id": "fct_ok", "name": "ok", "market": "futures", "ic": 0.05, "sharpe": 2.0},
+            {"factor_id": "fct_high", "name": "high", "market": "futures", "ic": 0.9, "sharpe": 2.0},
+            {"factor_id": "fct_nan", "name": "nan", "market": "stock", "ic": None, "sharpe": None},
+        ]
+        with patch("fts.factor_engine.factor_inspector.FactorReviewWorkflow") as mock_cls:
+            mock_cls.return_value.list_pending.return_value = items
+            handler.do_GET()
+        body = json.loads(handler.wfile.getvalue().decode())
+        assert body["mode"] == "auto"
+        by_id = {f["factor_id"]: f for f in body["items"]}
+        assert by_id["fct_ok"]["needs_human"] is False
+        assert by_id["fct_high"]["needs_human"] is True
+        assert "过拟合" in by_id["fct_high"]["review_reason"]
+        assert by_id["fct_nan"]["needs_human"] is True
+
+    def test_post_review_auto_success(self):
+        """POST /api/review/auto → 机审执行并返回统计。"""
+        handler = _make_review_auto_handler()
+        with patch("fts.factor_engine.factor_inspector.FactorReviewWorkflow") as mock_cls:
+            mock_cls.return_value.auto_review.return_value = {
+                "mode": "auto",
+                "total_pending": 4,
+                "auto_approved": 2,
+                "auto_rejected": 1,
+                "needs_human": [{"factor_id": "f", "reason": "超上限"}],
+                "skipped": 0,
+            }
+            handler.do_POST()
+        mock_cls.return_value.auto_review.assert_called_once_with(limit=200, force=False)
+        handler.send_response.assert_called_once_with(200)
+        body = json.loads(handler.wfile.getvalue().decode())
+        assert body["auto_approved"] == 2
+
+    def test_post_review_auto_manual_403(self):
+        """manual 模式拒绝 → 403。"""
+        handler = _make_review_auto_handler()
+        with patch("fts.factor_engine.factor_inspector.FactorReviewWorkflow") as mock_cls:
+            mock_cls.return_value.auto_review.side_effect = ValueError("manual（纯人审）模式")
+            handler.do_POST()
+        handler.send_response.assert_called_once_with(403)
+        body = json.loads(handler.wfile.getvalue().decode())
+        assert "error" in body
+
+    def test_post_review_auto_failure_500(self):
+        """执行异常 → 500。"""
+        handler = _make_review_auto_handler()
+        with patch("fts.factor_engine.factor_inspector.FactorReviewWorkflow") as mock_cls:
+            mock_cls.return_value.auto_review.side_effect = RuntimeError("db down")
+            handler.do_POST()
+        handler.send_response.assert_called_once_with(500)
+        body = json.loads(handler.wfile.getvalue().decode())
+        assert "error" in body
+
+    def test_review_html_has_auto_controls(self):
+        """工作台页面含模式徽标/运行机审按钮/需人工标记。"""
+        from fts.monitor.http_server import REVIEW_HTML
+
+        assert "modeBadge" in REVIEW_HTML
+        assert "runAutoReview" in REVIEW_HTML
+        assert "运行机审" in REVIEW_HTML
+        assert "需人工" in REVIEW_HTML

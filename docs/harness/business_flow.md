@@ -1,6 +1,6 @@
 # FTS 业务流程图
 
-> 版本: v2.89.0
+> 版本: v2.102.0
 > 最后更新: 2026-08-05
 
 ## 全景业务流
@@ -81,7 +81,7 @@
   │  ├── regime.py: 市场制度检测 (bull/bear/oscillate/high_vol/low_vol)     │
   │  └── state.py: 演化状态管理 + trace_id 全链路                           │
   │       │                                                                 │
-  │       │ elite 因子 → memory/knowledge/factors/elite/ (JSON)             │
+  │       │ elite 因子 → memory/knowledge/factors/stocks_elite/ (JSON)             │
   │       ▼                                                                 │
   └───────┬─────────────────────────────────────────────────────────────────┘
           │
@@ -98,7 +98,7 @@
   │  ├── synthesize_signals(): 信号合成                                     │
   │  └── L3Verifier: L3 锁定协议                                            │
   │       │                                                                 │
-  │       │ PortfolioCombo → memory/portfolio/current_combo.json            │
+  │       │ PortfolioCombo → memory/portfolio/{market}/current_combo.json │
   │       ▼                                                                 │
   └───────┬─────────────────────────────────────────────────────────────────┘
           │
@@ -124,20 +124,22 @@
 ```
 时间线
   │
-08:30  L1 Meta-Loop 启动
+07:59  L1 Meta-Loop 启动（工作日每日，对齐 TRAE Schedule 期货 L1）
   │      ├── Web 感知 → 市场知识补给
   │      ├── 种子因子注入 → l1_injected/ + factor_pool.json（pending）
   │      └── 演化方向指引 → L2
   │
-20:00  L3 Portfolio Loop 启动
+19:00  L3 Portfolio Loop 启动（每周五，期货，对齐 TRAE Schedule 期货 L3 19:00）
   │      ├── 加载 elite 因子
   │      ├── 正交化 → 去相关性
   │      ├── 衰减检验 → 淘汰失效因子
   │      ├── 组合构建 → 权重分配
   │      ├── 信号合成 → ScoredSignal
-  │      └── 期货信号管道 → 横截面信号报告
+  │      └── 期货信号管道 → 横截面信号报告（20:00 独立任务）
   │
-23:00  L2 Evolution Loop 启动
+19:30  L3 Portfolio Loop（股票）启动（每周五，对齐 TRAE Schedule 股票 L3 19:30）
+  │
+00:00  L2 Evolution Loop 启动（工作日每日，对齐 TRAE Schedule 期货 L2）
   │      ├── 加载种子因子 (81 期货专用)
   │      ├── 合并 L1 注入候选 (GAP-031: pending 门控 + market 过滤 + 去重)
   │      ├── 种子评估 → 晋升 elite (IC≥0.03, Sharpe≥1.5)
@@ -145,6 +147,9 @@
   │      ├── optuna 微观调参 → 参数优化
   │      ├── 三级评估 → 审计 → 质量评分卡 → elite 晋升
   │      └── 熔断检查 → 保护机制
+  │
+08:45  股票/ETF 信号管道启动（工作日每日，独立调度）
+20:00  期货信号管道启动（工作日每日，独立调度）
   │
 每10分钟  Health Check
          ├── 状态轮询
@@ -176,5 +181,5 @@
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | 本文件描述 FTS 全景业务流，覆盖 `meta_loop.py`（L1）、`evolution_loop.py`（L2）、`portfolio_loop.py`（L3）、`scheduler/engine.py`（调度器）、`monitor/`（监控）各模块的职责边界和触发时序 |
-| 可验证断言 | 业务流包含 L0~L3 四层 + 信号输出层共 5 层架构；时序图中 L1 08:30 / L3 20:00 / L2 23:00 三个定时任务 + 每 10 分钟健康检查；角色边界表中 L1 不可修改因子代码、L2 不可构建组合、L3 不执行交易 |
+| 可验证断言 | 业务流包含 L0~L3 四层 + 信号输出层共 5 层架构；时序图中 L1 07:59 / L3 期货 19:00 / L3 股票 19:30 / L2 00:00 + 信号管道 08:45/20:00 + 每 10 分钟健康检查；角色边界表中 L1 不可修改因子代码、L2 不可构建组合、L3 不执行交易 |
 | 检验方式 | 对照 `01-architecture.md` 架构文档确认层级定义一致；检查 `scheduler/tasks.py` 确认定时任务时间点一致

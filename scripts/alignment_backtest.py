@@ -41,7 +41,7 @@ ELITE_DIR = PROJECT_ROOT / "memory/knowledge/factors/futures_elite"
 
 def load_alignment_report(date_str: str) -> dict[str, Any] | None:
     """加载当日信号报告中的对齐度数据。"""
-    report_dir = REPORTS_ROOT / date_str
+    report_dir = REPORTS_ROOT / "futures" / date_str
     if not report_dir.exists():
         return None
     # 读取信号报告 md 文件，提取对齐度部分
@@ -58,7 +58,7 @@ def load_signal_history() -> pd.DataFrame:
 
     返回: DataFrame(index=date, columns=symbol, values=score)
     """
-    history_path = REPORTS_ROOT / "signal_scores_history.jsonl"
+    history_path = REPORTS_ROOT / "futures" / "signal_scores_history.jsonl"
     if not history_path.exists():
         return pd.DataFrame()
 
@@ -403,8 +403,8 @@ def generate_report(
     w("品种-链对齐度增强通过以下步骤解决上述问题：")
     w()
     w(
-        "1. **产业链制度检测**：`SectorRegimeSelector.detect_all()` 按 13 个产业链"
-        "（黑色系/有色金属/能源/聚酯链/油化工/煤化工/橡胶/造纸林浆纸/航运/农产品/贵金属/新能源新材料/金融期货）独立检测市场制度"
+        "1. **产业链制度检测**：`SectorRegimeSelector.detect_all()` 按 17 个产业链"
+        "（黑色系/有色金属/能源/聚酯链/油化工/煤化工/橡胶/造纸林浆纸/航运/油脂油料/谷物/畜牧/软商品/果蔬/贵金属/新能源新材料/金融期货）独立检测市场制度"
     )
     w("2. **品种制度检测**：为每个品种独立创建 `RegimeAwareSelector` 实例，检测其个体市场制度")
     w("3. **对齐度计算**：`compute_alignment()` 方法计算品种制度与产业链制度的对齐度 (0~1)：")
