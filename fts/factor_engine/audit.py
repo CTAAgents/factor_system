@@ -114,8 +114,11 @@ class FactorAuditReport:
 class FactorAuditConfig:
     """因子审计配置。"""
 
-    # 跨品种验证
-    min_cross_symbol_ratio: float = 0.8  # ≥80% 品种 IC 为正
+    # 跨品种验证（A+C 双机制，v2.103.0 GAP-096）
+    min_cross_symbol_ratio: float = 0.8  # 主防线：≥80% 品种 IC 为正
+    min_mean_ic: float = 0.05  # 软门控A：平均 IC 强度下限
+    ratio_floor: float = 0.6  # 软门控A：符号比例下限（联合 min_mean_ic）
+    binomial_alpha: float = 0.05  # 软门控C：二项检验显著性水平
 
     # 多重检验
     bonferroni_alpha: float = 0.05  # Bonferroni 校正显著性
@@ -376,7 +379,17 @@ class FactorAuditor:
         self,
         symbol_ic_map: Optional[dict[str, float]],
     ) -> AuditItemResult:
-        """跨品种验证：≥80% 品种 IC 为正。"""
+        """跨品种验证（A+C 双机制 OR 判定，v2.103.0 GAP-096）。
+
+        任一机制通过即通过：
+        - 主防线：≥ min_cross_symbol_ratio（默认 80%）品种 IC 为正
+        - 软门控A：平均 IC ≥ min_mean_ic 且符号比例 ≥ ratio_floor
+        - 软门控C：IC>0 品种数经二项检验显著高于随机（binomtest p < binomial_alpha）
+
+        短样本下 IC 符号噪声大，绝对值符号门槛过严（GAP-096）：22 品种要求 18/22
+        为正，5 品种负即拒，大量 14-17/22 泛化尚可的因子被边界误杀。A+C 双机制
+        保留强泛化主防线，同时允许"平均 IC 强"或"符号比例二项显著"的因子通过。
+        """
         name = "cross_symbol"
 
         if not symbol_ic_map:
@@ -394,25 +407,58 @@ class FactorAuditor:
                 evidence="IC 列表为空",
             )
 
-        positive_ratio = sum(1 for ic in ics if ic > 0) / len(ics)
-        threshold = self._config.min_cross_symbol_ratio
-        passed = positive_ratio >= threshold
+        n_symbols = len(ics)
+        n_positive = sum(1 for ic in ics if ic > 0)
+        positive_ratio = n_positive / n_symbols
+        mean_ic = float(np.mean(ics))
+
+        # 机制1（主防线）：符号比例 ≥ 阈值
+        passed_ratio = positive_ratio >= self._config.min_cross_symbol_ratio
+        # 机制2（软门控A）：平均 IC 强度 + 符号比例下限
+        passed_mean = (
+            mean_ic >= self._config.min_mean_ic
+            and positive_ratio >= self._config.ratio_floor
+        )
+        # 机制3（软门控C）：二项检验显著性（IC>0 品种数显著高于随机二项分布）
+        passed_binomial = False
+        binomial_p = 1.0
+        try:
+            from scipy.stats import binomtest
+
+            # 零假设 p0=0.5（随机一半正一半负），单侧检验 IC>0 过多
+            res = binomtest(n_positive, n_symbols, p=0.5, alternative="greater")
+            binomial_p = float(res.pvalue)
+            passed_binomial = binomial_p < self._config.binomial_alpha
+        except Exception:  # noqa: BLE001 — scipy 缺失/异常时降级为不通过，不阻断
+            passed_binomial = False
+
+        passed = passed_ratio or passed_mean or passed_binomial
+
+        mechanisms = []
+        if passed_ratio:
+            mechanisms.append("ratio")
+        if passed_mean:
+            mechanisms.append("mean_ic")
+        if passed_binomial:
+            mechanisms.append("binomial")
 
         return AuditItemResult(
             name=name,
             status="passed" if passed else "failed",
             evidence=(
-                f"positive_ratio={positive_ratio:.1%} "
-                f"({sum(1 for ic in ics if ic > 0)}/{len(ics)}), "
-                f"threshold={threshold:.0%}"
+                f"positive_ratio={positive_ratio:.1%} ({n_positive}/{n_symbols})"
+                f", mean_ic={mean_ic:.4f}, binomial_p={binomial_p:.4f}"
+                f", passed_via={mechanisms or 'none'}"
             ),
             score=positive_ratio,
             details={
-                "n_symbols": len(ics),
-                "n_positive": sum(1 for ic in ics if ic > 0),
+                "n_symbols": n_symbols,
+                "n_positive": n_positive,
                 "positive_ratio": positive_ratio,
-                "mean_ic": float(np.mean(ics)),
-                "threshold": threshold,
+                "mean_ic": mean_ic,
+                "binomial_p": binomial_p,
+                "threshold": self._config.min_cross_symbol_ratio,
+                "mechanisms": mechanisms,
             },
         )
 

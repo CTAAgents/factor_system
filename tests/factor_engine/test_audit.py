@@ -191,6 +191,44 @@ class TestCrossSymbol:
         assert item.status == "failed"
         assert item.details["threshold"] == 0.95
 
+    # ── GAP-096 (v2.103.0): A+C 双机制 OR 判定 ──
+
+    def test_cross_symbol_mean_ic_soft_gate_passes(self, auditor: FactorAuditor):
+        """软门控A：符号比例不及 80% 但平均 IC 足够强且比例≥下限时通过。"""
+        # 14/22≈64%（<80% 主防线），但平均 IC≈0.055 ≥ 0.05 且比例≥0.6 → 通过
+        ics = {f"s{i}": 0.10 for i in range(14)}
+        ics.update({f"s{i}": -0.02 for i in range(14, 22)})  # mean=(1.40-0.16)/22≈0.056
+        item = auditor._check_cross_symbol(ics)
+        assert item.status == "passed"
+        assert "mean_ic" in item.details["mechanisms"]
+
+    def test_cross_symbol_mean_ic_insufficient_fails(self, auditor: FactorAuditor):
+        """软门控A：平均 IC 不足且符号比例不及 80% 时失败。"""
+        # 14/22=64%，平均 IC 0.03 < 0.05 → 软门控A不通过
+        ics = {f"s{i}": 0.05 for i in range(14)}
+        ics.update({f"s{i}": -0.02 for i in range(14, 22)})
+        item = auditor._check_cross_symbol(ics)
+        # mean 0.03 < 0.05；二项 14/22 p≈0.14 > 0.05 → 全不通过
+        assert item.status == "failed"
+
+    def test_cross_symbol_binomial_significant_passes(self, auditor: FactorAuditor):
+        """软门控C：符号比例不及 80% 但二项检验显著时通过。"""
+        # 16/22=73%（<80%），二项检验 p≈0.026 < 0.05 → 通过
+        ics = {f"s{i}": 0.06 for i in range(16)}
+        ics.update({f"s{i}": -0.03 for i in range(16, 22)})  # 6 个负
+        item = auditor._check_cross_symbol(ics)
+        assert item.status == "passed"
+        assert "binomial" in item.details["mechanisms"]
+
+    def test_cross_symbol_all_mechanisms_fail(self, auditor: FactorAuditor):
+        """三机制全不满足时失败。"""
+        # 12/22=55%（<80% 且 <60% 下限），平均 IC≈0.02 <0.05，二项 p≈0.42 → 失败
+        ics = {f"s{i}": 0.04 for i in range(12)}
+        ics.update({f"s{i}": -0.02 for i in range(12, 22)})
+        item = auditor._check_cross_symbol(ics)
+        assert item.status == "failed"
+        assert item.details["mechanisms"] == []
+
 
 # ─── 5. 多重检验 ────────────────────────────────────────────
 

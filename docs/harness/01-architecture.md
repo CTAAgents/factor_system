@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.102.0
+> 版本: v2.103.0
 > 最后更新: 2026-08-10
 
 ---
@@ -265,7 +265,8 @@ fts/
 │   ├── tqsdk_source.py         # 天勤 TQSDK 数据源（分钟/日线）
 │   ├── tqsdk_enhance_source.py # 天勤 TQSDK 字段增强源（GAP-083 阶段 C：close_oi→hold、差分→oi_change）
 │   ├── ifind_sdk_source.py     # iFinD 官方 SDK 字段增强源（GAP-083 方案 A 框架保留：settle/pre_settle 权威，无 iFinDPy 权限不启用，pre_settle 走零依赖派生）
-│   ├── macro_aligner.py        # 宏观字段增强层（EDB 时序对齐 + 注入，v2.32.0）
+│   ├── macro_aligner.py        # 宏观字段增强层（EDB 时序对齐 + 注入，v2.32.0；v2.101.0 默认源切 EastmoneyMacroSource）
+│   ├── macro_eastmoney_source.py # 东财/中债登宏观数据源（GAP-088 数据源闭环，v2.101.0：东财 RPT_ECONOMY_CPI/CUSTOMS + akshare 中债登 1 年期/美债 10 年期，edb_cache 与 IFindSource 同构互操作）
 │   └── migrate.py              # 数据迁移工具
 ├── factor_engine/              # 因子引擎（核心模块）
 │   ├── __init__.py             # 模块入口 + 版本号 v1.1.0
@@ -619,7 +620,9 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
 │    cross_section_evaluate_backtest 输出 symbol_ic（逐标的时序 IC）  │
 │      + symbol_holdout（行业分层留出 20% 验证，train 定方向/留出集  │
 │        IC 保持率）→ _run_factor_audit 传 symbol_ic_map 激活审计    │
-│      cross_symbol（≥80% 标的 IC 为正）+ 新增审计项 symbol_holdout  │
+│      cross_symbol（≥80% 标的 IC 为正，或二项检验显著/平均 IC      │
+│        达阈值且符号比例≥下限，A+C 双机制 OR 判定，v2.103.0）        │
+│        + 新增审计项 symbol_holdout                                  │
 │      （留出集 IC > 0 且保持率 ≥ 阈值）；数据缺失→skipped           │
 │      股票 L2 晋升需额外满足两项（同市场泛化量化保障）              │
 └─────────────────────────────────────────────────────────────────────┘
@@ -728,10 +731,11 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
 │ 分钟级回测报告                                                        │
 └───────────────────────────────────────────────────────────────────────┘
 
-┌─ 宏观字段增强层（v2.32.0+） ──────────────────────────────────────────┐
-│ iFinD EDB (get_edb_data MCP) → edb_cache (indicator/date/value)      │
-│    │                                                                  │
-│    │ IFindSource.get_macro_series()（缓存查 → miss 拉取 → 幂等写回）   │
+┌─ 宏观字段增强层（v2.32.0+；v2.101.0 默认源切 EastmoneyMacroSource）──┐
+│ EastmoneyMacroSource（东财 RPT_ECONOMY_CPI/CUSTOMS + akshare 中债登   │
+│   1 年期/美债 10 年期）→ edb_cache (indicator/date/value 七列)        │
+│    │（iFinD EDB 需 API Key 实测不可用，显式传 source 可切回）          │
+│    │ get_macro_series()（缓存查 → miss 拉取 → 幂等写回）              │
 │    ▼                                                                  │
 │ MacroFieldAligner.align()（月度→交易日 ffill + 发布滞后防未来函数）    │
 │    │                                                                  │
@@ -752,6 +756,10 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
 **common_dates 语义（v1.7.1）**：
 - `get_futures_panel()` 返回的 `common_dates` 由「全品种日期交集」改为「多数对齐」：
   取至少 `max(2, 品种数//2)` 个品种共有的日期。
+- `get_csi300_panel()`（股票横截面，GAP-XXX，v2.103.0）`common_dates` 由「300 只成分股日期硬交集」改为「覆盖率阈值对齐」：取至少 `ceil(股票数 × min_coverage_ratio)`（默认 0.8）只股票共有的日期，默认 `min_coverage_ratio=0.8`。
+  - 原因：全交集在 300 只沪深300成分股（含前复权索引差异、停牌、上市时间不同）下被压缩至约 103 天（实测），OOS 窗口仅约 31 天，导致非横截面审计项 `cross_symbol`（≥80% 标的正 IC）与 `oos_consistency`（|ICIR|≥1.0）在短窗口下统计噪声主导、通过率恒为 0，全量误杀演化候选。
+  - 覆盖率阈值对齐后共同日期提升至约 750 天（实测），OOS 窗口约 225 天，恢复两项审计的统计可信度。
+  - 兼容性：`_cs_build_matrices` 用 `reindex(common_dates)`，少数据股票在缺省日得 NaN；`_cs_compute_ics` 每期已用 `valid=~isnan` 过滤，故放宽后无需改动下游。
 - 原因：全交集在 76 个商品期货（FUTURES_SUBSET）下会因个别停更品种
   （WH0/JR0/RI0/LR0 数据止于 2022-2023）将交集清空，导致横截面方向校正
   （截面 IC 法）静默失效，全部因子 flip=1.0。
