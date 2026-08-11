@@ -1,6 +1,6 @@
 # FTS 业务流程图
 
-> 版本: v2.102.0
+> 版本: v2.103.0
 > 最后更新: 2026-08-05
 
 ## 全景业务流
@@ -79,6 +79,8 @@
   │  │   ├── IC 稳定性/Sharpe/换手率/容量/频率/覆盖率/鲁棒性/经济逻辑        │
   │  │   └── A/B/C 级分级准入                                               │
   │  ├── regime.py: 市场制度检测 (bull/bear/oscillate/high_vol/low_vol)     │
+  │  │   └── 28 计划: 全制度概率 regime_probs → 概率混合权重 (regime blend) │
+  │  │       → 熵标定 exposure_scale 仓位缩放（见 plans/28-*）             │
   │  └── state.py: 演化状态管理 + trace_id 全链路                           │
   │       │                                                                 │
   │       │ elite 因子 → memory/knowledge/factors/stocks_elite/ (JSON)             │

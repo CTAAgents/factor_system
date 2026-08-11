@@ -1,6 +1,6 @@
 # FTS 韧性设计
 
-> 版本: v2.102.0
+> 版本: v2.103.0
 > 最后更新: 2026-08-05
 
 ---
@@ -37,6 +37,17 @@
 ### 种子因子豁免规则
 
 种子因子评估不计入熔断计数器。种子因子是已知起点，仅通过简单 IC/Sharpe 筛选（IC≥0.03, Sharpe≥1.5）后直接晋升 elite，跳过 Verifier 三级验证。种子评估的通过/失败不计入 `evaluated`/`promoted` 计数器，不影响熔断判定。
+
+### Regime 降级路径（28 计划，2026-08-11）
+
+| 场景 | 降级行为 | 恢复方式 |
+|:-----|:---------|:---------|
+| regime 无 `regime_probs`（旧格式/异常） | 概率混合回退硬查表（`regime_adaptive_weight_adjustment` 非 blend 分支） | 检测器恢复输出 probs 后自动启用 blend |
+| `probability_mix=False` 配置关闭 | 恒走硬查表 | 配置开启后生效 |
+| `confidence_scale=False` 或 regime 为 None/异常 | `exposure_scale` 恒 1.0（`_compute_exposure_scale` try/except 兜底） | 配置开启/数据恢复后生效 |
+| 熵标定输入无 probs | `RegimeConfidenceCalibrator.calibrate` 直通 `confidence`（视为确定性分布） | — |
+| 指标上报失败 | `record_regime_metrics` 异常仅告警不阻断主流程（Step 2.5 try/except） | 下一轮自动重试 |
+| HMM 检测失败（hmmlearn 不可用/训练异常） | 5 层降级链逐级回退（multi_hmm → msm → hmm → rule → oscillate/0.5） | 依赖/数据恢复后自动升级 |
 
 ### 熔断恢复流程
 

@@ -1,7 +1,7 @@
 # 28 — Regime 机构级优化实施计划（置信度仓位缩放 + 制度概率混合权重）
 
 
-> 版本: v2.102.0
+> 版本: v2.103.0
 
 > 状态: ✅ 已实施（T1~T10 全部完成，2026-08-11；实施记录见 [07-operations.md](../07-operations.md) v2.101.0「Regime 机构级优化计划」条目，远期差距登记 GAP-092~095）
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐步实现本计划。步骤使用复选框（`- [ ]`）语法跟踪。
@@ -207,6 +207,8 @@ def _states_to_regime_probs(state_probs: np.ndarray, state_map: dict[int, str]) 
 
 Run: `python -m pytest tests/factor_engine/test_regime.py -v`
 Expected: PASS（含既有用例，回归不破坏）
+
+> **端到端修复注记（2026-08-11 抽查发现）**：HMM/MSM 路径的 `regime_probs` 起初只写入 `features`，未提升到 `MarketRegime` 顶层，导致真实管线中 regime blend 与熵标定实际走回退路径。修复：`RegimeAwareSelector.detect` 末尾统一提升——当 `result["regime_probs"]` 为 None 时从 `features["regime_probs"]` 提取。配套测试 `test_detect_promotes_hmm_regime_probs_to_top_level` 锁定该行为。
 
 - [ ] **Step 6: Commit**
 

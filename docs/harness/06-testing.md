@@ -385,7 +385,7 @@ TOTAL                                      20326   1254    94%
 | `tests/factor_engine/test_uct_selection.py` | ~10 | UCT 树搜索父因子选择 |
 | `tests/factor_engine/test_verifier.py` | ~12 | Verifier |
 | `tests/factor_engine/test_walk_forward.py` | ~57 | 走航验证 |
-| `tests/factor_engine/test_regime.py` | 86 | 市场体制（plans/28 机构级优化：regime blend 概率混合/置信度仓位缩放/不对称切换/回退路径等 T1~T6 用例扩增） |
+| `tests/factor_engine/test_regime.py` | 87 | 市场体制（plans/28 机构级优化：regime blend 概率混合/置信度仓位缩放/不对称切换/回退路径等 T1~T6 用例扩增 + 端到端修复用例 test_detect_promotes_hmm_regime_probs_to_top_level） |
 | `tests/scenarios/test_scenarios.py` | ~20 | 宏观行为场景测试 |
 | `tests/pipeline/test_base.py` | ~25 | 管线基础 |
 | `tests/pipeline/test_factor_combiner.py` | ~33 | 因子组合器 |
