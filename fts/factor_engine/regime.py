@@ -985,6 +985,14 @@ class RegimeAwareSelector:
         if result is None:
             result = _detect_by_rule(ohlcv, self._prev_regime)
 
+        # ── 28 补充: 将 HMM/MSM 路径 features 内的 regime_probs 提升到顶层 ──
+        # （multi_hmm/hmm/msm 的 predict 将 regime_probs 放入 features，此处统一提升，
+        #   使 regime blend / 熵标定可消费；rule/fallback 路径已在构造时直接输出）
+        if result is not None and result.get("regime_probs") is None:
+            _feats_rp = (result.get("features") or {}).get("regime_probs")
+            if isinstance(_feats_rp, dict) and _feats_rp:
+                result["regime_probs"] = _feats_rp
+
         # ── 更新上次结果 ────────────────────────────────
         self._prev_regime = result
         return result

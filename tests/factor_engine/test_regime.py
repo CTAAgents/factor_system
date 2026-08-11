@@ -1341,3 +1341,37 @@ def test_fallback_regime_probs() -> None:
     """兜底路径 regime_probs 应为 {oscillate: 1.0}。"""
     result = RegimeAwareSelector().detect(pd.DataFrame())  # 空数据 → fallback
     assert result["regime_probs"] == {"oscillate": 1.0}
+
+
+def test_detect_promotes_hmm_regime_probs_to_top_level() -> None:
+    """HMM 路径 features 内的 regime_probs 必须提升到 MarketRegime 顶层（28 端到端修复）。
+
+    regime blend / 熵标定从顶层 regime_probs 取数；此测试锁定 detect 的统一提升逻辑。
+    """
+
+    class _FakeMultiHMM:
+        """模拟多周期 HMM：仅返回 features 内含 regime_probs，不触发真实训练。"""
+
+        def predict(self, ohlcv: pd.DataFrame) -> tuple[str, float, dict]:
+            return (
+                "bull",
+                0.9,
+                {
+                    "regime_probs": {
+                        "bull": 0.9,
+                        "bear": 0.05,
+                        "oscillate": 0.03,
+                        "high_vol": 0.01,
+                        "low_vol": 0.01,
+                    }
+                },
+            )
+
+    sel = RegimeAwareSelector(use_hmm=False, use_multi_hmm=False)
+    sel._use_multi_hmm = True
+    sel._multi_hmm = _FakeMultiHMM()  # type: ignore[assignment]
+    result = sel.detect(_make_trend_ohlcv(n=300, trend=0.1))
+    assert result["method"] == "multi_hmm"
+    assert "regime_probs" in result  # 顶层必须携带（28 修复）
+    assert abs(sum(result["regime_probs"].values()) - 1.0) < 1e-6
+    assert result["regime_probs"]["bull"] > 0.8
