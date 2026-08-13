@@ -91,12 +91,15 @@ def _yesterday_str() -> str:
     return (date.today() - timedelta(days=1)).isoformat()
 
 
-def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]]:
-    """加载期货顶级 Elite 因子（IC>{threshold}），两层去重。
+def _dedup_factors(
+    factors: list[dict[str, Any]],
+    ic_threshold: float = 0.3,
+) -> list[dict[str, Any]]:
+    """两层去重（代码哈希 + 回测结果 stat）与 IC 过滤，JSON/DB 加载路径共用。
 
     去重策略:
         1. 代码哈希去重：对每个因子的 code 字段做 SHA256 哈希，
-           相同哈希的因子只保留第一个（按文件名排序）。
+           相同哈希的因子只保留第一个（按输入顺序）。
         2. 回测结果去重：如果两个因子的 (IC, sharpe, t_stat) 完全相同，
            视为同一因子逻辑的不同符号/参数版本，只保留第一个。
 
@@ -105,10 +108,9 @@ def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]
     seen_codes: set[str] = set()
     seen_stats: set[tuple[float, float, float]] = set()
     duplicate_count = 0
-    factors: list[dict[str, Any]] = []
-    for fp in sorted(ELITE_DIR.glob("*.json")):
+    kept: list[dict[str, Any]] = []
+    for data in factors:
         try:
-            data = json.loads(fp.read_text(encoding="utf-8"))
             ev = data.get("evaluation", {})
             bt = ev.get("level_1_backtest", {})
             ic = bt.get("ic", 0)
@@ -131,13 +133,143 @@ def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]
                 continue
             seen_stats.add(stat_key)
 
-            factors.append(data)
-        except (json.JSONDecodeError, OSError):
+            kept.append(data)
+        except Exception:
             continue
 
     if duplicate_count:
         print(f"      [去重] 跳过 {duplicate_count} 个重复因子")
-    return factors
+    return kept
+
+
+def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]]:
+    """加载期货顶级 Elite 因子（JSON 快照目录，GAP-097 后为降级回退路径）。
+
+    主路径已切换为 DuckDB 因子资产库（`load_futures_elite_factors_from_db`），
+    本函数保留用于：① 数据库不可用/为空时的降级回退；② 既有测试兼容。
+    """
+    factors: list[dict[str, Any]] = []
+    for fp in sorted(ELITE_DIR.glob("*.json")):
+        try:
+            factors.append(json.loads(fp.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, OSError):
+            continue
+    return _dedup_factors(factors, ic_threshold=ic_threshold)
+
+
+def load_futures_elite_factors_from_db(
+    ic_threshold: float = 0.3,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """从 DuckDB 因子资产库（SSOT，plans/29）加载期货精英因子（GAP-097 v2.103.0）。
+
+    factor_catalog 表为权威源：market='futures' + is_elite=TRUE + status='active'。
+    复用 metadata.evaluation（与 JSON 快照同构，含 level_1_backtest.ic/sharpe/t_stat）
+    构造兼容 dict；缺失时用顶层 ic/sharpe/icir 列构造。加载失败/为空返回 []，
+    由调用方回退 JSON 快照目录。
+
+    Args:
+        ic_threshold: IC 阈值（|ic| < 阈值跳过；信号管道 Ridge 加权模式用 0 全量加载）
+        db_path: 注入测试用隔离库路径（默认经 FactorRepository market 路由到
+                 data/factor_catalog_futures.duckdb）
+
+    Returns:
+        与 JSON 快照同构的因子 dict 列表
+    """
+    try:
+        from fts.factor_engine.factor_db.repository import FactorRepository
+
+        with FactorRepository(market="futures", db_path=db_path) as repo:
+            rows = repo.list_factors(
+                market="futures",
+                status="active",
+                is_elite=True,
+                limit=10000,
+                sort_by="sharpe",
+                sort_order="desc",
+            )
+    except Exception as e:  # noqa: BLE001
+        print(f"      [警告] DuckDB 因子资产库加载失败（回退 JSON 快照）: {e}")
+        return []
+
+    factors: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            code = row.get("code") or ""
+            if not code:
+                continue
+            metadata = row.get("metadata") or {}
+            evaluation = metadata.get("evaluation")
+            if not isinstance(evaluation, dict):
+                # metadata 无完整评估时，用 factor_catalog 顶层评估列构造 level_1_backtest
+                bt = {}
+                if isinstance(metadata.get("evaluation"), dict):
+                    bt = metadata["evaluation"].get("level_1_backtest") or {}
+                evaluation = {
+                    "factor_id": row.get("factor_id"),
+                    "level_1_backtest": {
+                        "ic": row.get("ic") or 0.0,
+                        "icir": row.get("icir") or 0.0,
+                        "sharpe": row.get("sharpe") or 0.0,
+                        "t_stat": bt.get("t_stat", 0.0),
+                        "turnover_monthly": row.get("turnover_monthly") or 0.0,
+                        "max_drawdown": row.get("max_drawdown") or 0.0,
+                    },
+                }
+            factors.append(
+                {
+                    "factor_id": row.get("factor_id"),
+                    "name": row.get("name"),
+                    "code": code,
+                    "params": row.get("params") or {},
+                    "signature": row.get("signature") or {},
+                    "economic_logic": row.get("economic_logic") or {},
+                    "market": row.get("market", "futures"),
+                    "family": row.get("family"),
+                    "source": row.get("source"),
+                    "metadata": metadata,
+                    "evaluation": evaluation,
+                }
+            )
+        except Exception:
+            continue
+    return _dedup_factors(factors, ic_threshold=ic_threshold)
+
+
+def _load_signal_factors(ic_threshold: float = 0.0) -> list[dict[str, Any]]:
+    """加载期货信号因子：DuckDB 因子资产库（SSOT）优先，JSON 快照目录降级回退（GAP-097）。
+
+    Args:
+        ic_threshold: IC 阈值（信号管道 Ridge 加权模式下默认 0 = 全量加载不过滤）
+    """
+    factors = load_futures_elite_factors_from_db(ic_threshold=ic_threshold)
+    if factors:
+        print(f"      [加载源] DuckDB 因子资产库（SSOT）: {len(factors)} 个")
+        return factors
+    print("      [提示] DuckDB 因子资产库无可用期货精英因子，回退 JSON 快照目录")
+    return load_futures_elite_factors(ic_threshold=ic_threshold)
+
+
+def _inject_macro_to_panel(
+    panel: dict[str, "pd.DataFrame"],
+    enabled: bool = True,
+    trace_id: str = "",
+) -> dict[str, "pd.DataFrame"]:
+    """宏观字段注入（GAP-088 v2.103.0 信号管道接线）。
+
+    fut_macro_cpi/interest_rate/export/us_bond 等宏观因子读取 export/
+    import_data/cpi/rate/us_bond 5 列真实数据；拉取失败降级不阻断主路径
+    （因子走 close 趋势代理），与回测管线 `macro_field_injection` 语义一致。
+    """
+    if not enabled or not panel:
+        return panel
+    try:
+        from fts.data_sources.macro_aligner import inject_macro_fields_to_panel
+
+        return inject_macro_fields_to_panel(panel, trace_id=trace_id)
+    except Exception as e:  # noqa: BLE001
+        print(f"      [提示] 宏观注入失败（因子走 close 代理）: {e}")
+        return panel
 
 
 def _compute_signal_matrix(
@@ -1331,7 +1463,13 @@ def _generate_trading_advice_report(
     print(f"[OK] 交易建议报告已保存: {out_path}")
 
 
-def main(max_symbols: int = 25, days: int = 120, universe: str = "core", recompute_weights: bool | None = None) -> int:
+def main(
+    max_symbols: int = 25,
+    days: int = 120,
+    universe: str = "core",
+    recompute_weights: bool | None = None,
+    macro_injection: bool = True,
+) -> int:
     t0 = time.time()
     today = date.today().isoformat()
     print("=" * 60)
@@ -1339,7 +1477,8 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core", recompu
     print("=" * 60)
 
     # ── Step 1: 加载全部期货 Elite 因子（Ridge 加权模式下不过滤 IC）──
-    factors = load_futures_elite_factors(ic_threshold=0)
+    # GAP-097: DuckDB 因子资产库（SSOT）优先，JSON 快照目录降级回退
+    factors = _load_signal_factors(ic_threshold=0)
     print(f"\n[1/5] 加载全部期货 Elite 因子: {len(factors)} 个")
 
     if not factors:
@@ -1379,6 +1518,16 @@ def main(max_symbols: int = 25, days: int = 120, universe: str = "core", recompu
             panel.pop(sym)
         if stale:
             print(f"      [提示] 剔除 {len(stale)} 个停更/陈旧品种: {', '.join(stale)} (数据止于共同交易日之前)")
+
+    # ── Step 2c: 宏观字段注入（GAP-088 v2.103.0 信号管道接线）──
+    # fut_macro_cpi/interest_rate/export/us_bond 等宏观因子读取 export/
+    # import_data/cpi/rate/us_bond 5 列真实数据；失败降级不阻断（close 代理）
+    panel = _inject_macro_to_panel(panel, enabled=macro_injection, trace_id=f"futures_signal_{today}")
+    n_macro = sum(
+        1 for df in panel.values() if df is not None and not df.empty and "export" in df.columns
+    )
+    if macro_injection:
+        print(f"      [宏观注入] 宏观字段已注入: {n_macro}/{len(panel)} 个品种")
 
     # ── Step 2b: 产业链级 Market Regime 检测 ──
     from fts.factor_engine.regime import SectorRegimeSelector
@@ -2178,6 +2327,13 @@ if __name__ == "__main__":
         action="store_true",
         help="强制重算 Ridge 权重并更新快照（GAP-072，默认按 l3_weight_recompute_cadence 自动判定）",
     )
+    parser.add_argument(
+        "--no-macro-injection",
+        action="store_false",
+        dest="macro_injection",
+        help="关闭宏观字段注入（GAP-088；默认开启——fut_macro_* 因子读取真实宏观数据，"
+        "拉取失败降级 close 代理，不阻断管道）",
+    )
     args = parser.parse_args()
     sys.exit(
         main(
@@ -2185,5 +2341,6 @@ if __name__ == "__main__":
             days=args.days,
             universe=args.universe,
             recompute_weights=True if args.force_recompute else None,
+            macro_injection=args.macro_injection,
         )
     )

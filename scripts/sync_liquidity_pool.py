@@ -140,6 +140,18 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # 同步写 SSOT `state.duckdb`（plans/29 P4 读路径切换：读端优先 DuckDB）
+    try:
+        from fts.store.state_db import StateKVStore
+
+        store = StateKVStore()
+        try:
+            store.upsert("portfolio", "futures_dynamic_pool", result, run_id="sync_liquidity_pool")
+        finally:
+            store.close()
+    except Exception as exc:  # noqa: BLE001 — DuckDB 写失败不阻断（JSON 已落盘）
+        logger.warning("state.duckdb 动态池写入失败（JSON 已落盘）: %s", exc)
+
     print(f"== 动态池已生成（数据截至 {asof or 'N/A'}）==")
     print(
         f"池大小: {len(result['pool'])} | 保留: {len(result['kept'])} | 新增: {len(result['added'])} | 移除: {len(result['removed'])}"

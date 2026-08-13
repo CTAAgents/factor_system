@@ -29,7 +29,7 @@ import json
 import logging
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -263,7 +263,6 @@ def _generate_contract_codes(
 
 def _migrate_contract_kline_schema(con: Any) -> int:
     """向 contract_kline 表添加缺失列，返回新增列数。"""
-    import duckdb
 
     # 检查表是否存在
     exists = con.execute(
@@ -607,14 +606,16 @@ def main() -> int:
     logger.info("  Phase 1: Schema 迁移")
     logger.info("=" * 60)
 
-    from fts.data_futures import _get_writer, _DUCKDB_PATH
+    from fts.data_futures import _write_scope, _DUCKDB_PATH
 
     logger.info("DuckDB 路径: %s", _DUCKDB_PATH)
     if not _DUCKDB_PATH.exists():
         logger.error("DuckDB 文件不存在: %s", _DUCKDB_PATH)
         return 1
 
-    writer = _get_writer()
+    # E.4 S1：写窗口（filelock + 短生命周期连接），main 退出前显式释放
+    _write_ctx = _write_scope()
+    writer = _write_ctx.__enter__()
     cols_added = _migrate_contract_kline_schema(writer)
     logger.info("Schema 迁移: %d 列新增", cols_added)
 
@@ -645,6 +646,7 @@ def main() -> int:
         }
         if args.json:
             print(json.dumps(summary, ensure_ascii=False, indent=2))
+        _write_ctx.__exit__(None, None, None)  # E.4 S1：写窗口结束，释放跨进程锁
         return 0
 
     # ── 4. TQ 主源同步 ──
@@ -653,7 +655,6 @@ def main() -> int:
     logger.info("=" * 60)
 
     tq_results: dict[str, dict[str, int]] = {}  # base -> {contract: rows}
-    tq_failed: list[str] = []
 
     for base, contracts in all_contracts.items():
         exchange = _get_exchange_suffix(base)
@@ -700,8 +701,8 @@ def main() -> int:
 
     # 检查哪些合约已有 TQ 数据
     existing_tq_contracts: set[tuple[str, str]] = set()
-    for base, contracts in tq_results.items():
-        for c in contracts:
+    for base, contract_map in tq_results.items():
+        for c in contract_map:
             existing_tq_contracts.add((base, c))
 
     aks_results: dict[str, int] = {}  # base -> rows
@@ -773,6 +774,7 @@ def main() -> int:
         print(f"  缺失合约数        : {summary['aks_missing_contracts']}")
         print(f"  elapsed_seconds   : {summary['elapsed_seconds']}")
 
+    _write_ctx.__exit__(None, None, None)  # 写窗口结束，释放跨进程锁
     return 0
 
 

@@ -14,7 +14,7 @@ for c in cols:
     print(f"  {c[0]} ({c[1]})")
 
 src = con.execute("SELECT source, COUNT(*) FROM contract_kline GROUP BY source").fetchall()
-print(f"\n数据源分布:")
+print("\n数据源分布:")
 for s in src:
     print(f"  {s[0]}: {s[1]}")
 

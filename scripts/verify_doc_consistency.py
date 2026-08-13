@@ -12,7 +12,6 @@ FTS 文档一致性检查脚本 — Layer 2 自动校验
     python scripts/verify_doc_consistency.py --help   # 帮助
 """
 
-import os
 import re
 import sys
 import json
@@ -57,7 +56,7 @@ def check_metadata_table(doc_path: Path) -> list[str]:
             issues.append(f"缺少元数据字段: {field}")
 
     # 检查版本号和最后更新日期
-    version_match = re.search(r"> 版本: (v[\d.]+)", content)
+    version_match = re.search(r"> 版本: (v[\d.]+(?:\+\d+)?)", content)
     date_match = re.search(r"> 最后更新: (\d{4}-\d{2}-\d{2})", content)
 
     if not version_match:
@@ -80,11 +79,11 @@ def check_doc_assertions(doc_path: Path) -> list[str]:
     content = doc_path.read_text(encoding="utf-8")
     doc_name = doc_path.name
 
-    # 01-architecture: 检查种子池数
+    # 01-architecture: 检查种子池数（185 = 期货 YAML 种子全量口径，17 家族，含 fut_macro_import）
     if doc_name == "01-architecture.md":
-        seed_count = len(re.findall(r"482", content))
+        seed_count = len(re.findall(r"185", content))
         if seed_count == 0:
-            issues.append("种子池数 482 未在文档中体现")
+            issues.append("种子池数 185 未在文档中体现")
 
     # 06-testing: 检查测试用例数
     if doc_name == "06-testing.md":
@@ -157,7 +156,7 @@ def check_version_consistency() -> list[dict[str, str]]:
                 continue
             checked.add(doc)
             content = doc.read_text(encoding="utf-8")
-            match = re.search(r"> 版本: (v[\d.]+)", content)
+            match = re.search(r"> 版本: (v[\d.]+(?:\+\d+)?)", content)
             if match and match.group(1) != target_version:
                 issues.append(
                     {

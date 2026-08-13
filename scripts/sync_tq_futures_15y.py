@@ -180,7 +180,7 @@ def main() -> int:
     logger.info("TQ 服务可达 ✓")
 
     # ── 3. 初始化 DuckDB 写入器 ──
-    from fts.data_futures import _get_writer, _DUCKDB_PATH
+    from fts.data_futures import _write_scope, _DUCKDB_PATH
 
     logger.info("DuckDB 路径: %s", _DUCKDB_PATH)
     if not _DUCKDB_PATH.exists():
@@ -194,8 +194,9 @@ def main() -> int:
     except Exception as e:
         logger.info("migrate_schema 跳过（表结构应已存在）: %s", e)
 
-    # 获取写入器（如 FTS 进程已打开连接，复用单写者）
-    writer = _get_writer()
+    # E.4 S1：写窗口（filelock + 短生命周期连接），main 退出前显式释放
+    _write_ctx = _write_scope()
+    writer = _write_ctx.__enter__()
     logger.info("DuckDB 写入器就绪 ✓")
 
     # ── 4. 逐品种同步 ──
@@ -278,6 +279,7 @@ def main() -> int:
         for f in results["failure"]:
             print(f"    - {f['symbol']}: {f['error']}")
 
+    _write_ctx.__exit__(None, None, None)  # 写窗口结束，释放跨进程锁
     return 0 if summary["failure"] == 0 else 1
 
 

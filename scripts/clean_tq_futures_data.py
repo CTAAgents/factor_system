@@ -29,7 +29,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import duckdb
-import numpy as np
 
 logger = logging.getLogger("clean_tq_futures")
 

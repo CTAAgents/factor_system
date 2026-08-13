@@ -31,7 +31,7 @@ DST_FUTURES = DATA_DIR / "factor_catalog_futures.duckdb"
 def _get_schema_sql(conn: duckdb.DuckDBPyConnection, table_name: str) -> str:
     """获取建表 DDL（CREATE TABLE ...）。"""
     rows = conn.execute(
-        f"SELECT sql FROM sqlite_master WHERE type='table' AND name=?", [table_name]
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", [table_name]
     ).fetchall()
     return rows[0][0] if rows else ""
 
@@ -75,7 +75,7 @@ def migrate(dry_run: bool = False) -> int:
         print("[DRY-RUN] 模拟迁移，不写入文件")
         return 0
 
-    print(f"=== 分库迁移 ===")
+    print("=== 分库迁移 ===")
     print(f"源: {SRC_DB}")
     print(f"目标: {DST_STOCK.name} (stock + multi)")
     print(f"目标: {DST_FUTURES.name} (futures + multi)")

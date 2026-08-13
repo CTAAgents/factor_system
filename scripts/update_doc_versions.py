@@ -44,7 +44,7 @@ def collect_docs() -> list[Path]:
     return sorted(set(docs))
 
 
-VERSION_HEADER_RE = re.compile(r"> 版本: v[\d.]+")
+VERSION_HEADER_RE = re.compile(r"> 版本: v[\d.]+(?:\+\d+)?")
 VERSION_HEADER_TEMPLATE = "> 版本: v{version}"
 
 
