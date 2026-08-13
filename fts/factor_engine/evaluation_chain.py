@@ -179,15 +179,16 @@ def _max_consecutive_losses(returns: np.ndarray) -> int:
     return int(best)
 
 
-def _block_ic_stats(signal: np.ndarray, forward_returns: np.ndarray, block_size: int = 20) -> Optional[tuple[float, float]]:
-    """块状 IC 序列的 t 统计量与胜率（GAP-062）。
+def _block_ic_stats(signal: np.ndarray, forward_returns: np.ndarray, block_size: int = 20) -> Optional[tuple[float, float, float]]:
+    """块状 IC 序列的 t 统计量、胜率与 ICIR（GAP-062 + G4）。
 
     将样本切分为非重叠块，逐块计算 IC，得到 IC 序列：
         ic_t = IC均值 / (IC标准差 / sqrt(块数))   —— IC 均值显著性检验
         win_rate = 正 IC 块占比（日度/块级 IC 胜率）
+        icir_block = IC均值 / IC标准差             —— 块级 ICIR（G4 硬门槛口径）
 
     Returns:
-        (ic_t_stat, win_rate)；IC 序列不足 2 块或无常量差异返回 None。
+        (ic_t_stat, win_rate, icir_block)；IC 序列不足 2 块或无常量差异返回 None。
     """
     ics: list[float] = []
     n = len(signal)
@@ -203,7 +204,7 @@ def _block_ic_stats(signal: np.ndarray, forward_returns: np.ndarray, block_size:
     if sd < 1e-10:
         return None
     ic_t = mu / (sd / np.sqrt(len(arr)))
-    return float(ic_t), float(np.mean(arr > 0))
+    return float(ic_t), float(np.mean(arr > 0)), float(mu / sd)
 
 
 def _cs_quintile_returns(signal_mat: np.ndarray, ret_mat: np.ndarray) -> dict:
@@ -421,12 +422,15 @@ def evaluate_backtest(
 
     # 6 个月 IC 衰减率计算: OOS 期前后两半的 IC 对比
     decay_6m = 0.0
+    sign_flip_half_split = False  # G4（35-gap-closure-plan）：前后半段 IC 符号反转标记
     if len(oos_signal) >= 20:
         half = len(oos_signal) // 2
         ic_first, _ = _compute_ic(oos_signal[:half], oos_returns[:half])
         ic_second, _ = _compute_ic(oos_signal[half:], oos_returns[half:])
         if abs(ic_first) > 0.01:
             decay_6m = max(0.0, min(1.0, 1.0 - abs(ic_second) / abs(ic_first)))
+            if ic_first * ic_second < 0:
+                sign_flip_half_split = True
 
     metrics: BacktestMetrics = BacktestMetrics(
         ic=ic,
@@ -439,6 +443,7 @@ def evaluate_backtest(
         turnover_monthly=turnover,
         decay_6m=decay_6m,
     )
+    metrics["sign_flip_half_split"] = sign_flip_half_split  # G4：前后半段 IC 符号反转
 
     # GAP-062 统计补全（时序路径）：信号翻转频率 / 最大连续亏损 / IC t 值 / 胜率
     if len(signal) > 1:
@@ -447,7 +452,7 @@ def evaluate_backtest(
         metrics["max_consecutive_losses"] = _max_consecutive_losses(ls_returns)
     block_stats = _block_ic_stats(signal, forward_returns)
     if block_stats is not None:
-        metrics["ic_t_stat"], metrics["win_rate"] = block_stats
+        metrics["ic_t_stat"], metrics["win_rate"], metrics["icir_block"] = block_stats  # G4：块级 ICIR（硬门槛口径）
 
     # GAP-060 多持有期 IC 体系：显式传入或配置 FTS_EVAL_HORIZONS 时附加（默认 1,5,10,20）
     if horizons is None:
@@ -699,6 +704,14 @@ class EvaluationChain:
         reasons: list[str] = []
         if bt.get("ic", 0) < 0.03:
             reasons.append(f"Level 1: IC={bt.get('ic', 0):.4f} < 0.03")
+        # G4（35-gap-closure-plan）：ICIR 硬门槛（时序路径用块级 ICIR 真口径，
+        # 横截面路径用日度 IC 序列 ICIR——L921 已计算 icir）
+        icir_gate = float(bt.get("icir_block", bt.get("icir", 0.0)) or 0.0)
+        if abs(icir_gate) < 0.30:
+            reasons.append(f"Level 1: |ICIR|={abs(icir_gate):.4f} < 0.30")
+        # G4（35-gap-closure-plan）：前后半段 IC 符号反转一票否决（过拟合局部最优典型特征）
+        if bt.get("sign_flip_half_split", False):
+            reasons.append("Level 1: 前后半段 IC 符号反转（不稳定）")
         # vwap 近似因子通用 IC 门槛（v2.50.0 审计层统一，覆盖种子+演化全路径）
         factor_code = factor.get("code") or ""
         if "vwap" in str(factor_code).lower() and abs(bt.get("ic", 0)) < 0.08:

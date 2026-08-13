@@ -408,10 +408,174 @@ class RobustnessTester:
         return "\n".join(lines)
 
 
+# ─── G5: Bootstrap 自助抽样检验（35-gap-closure-plan §4.2）───────
+
+
+def bootstrap_ic_ci(
+    factor_signal: np.ndarray,
+    forward_returns: np.ndarray,
+    n_bootstrap: int = 500,
+    block_size: int = 20,
+    ci_level: float = 0.95,
+    seed: int = 42,
+) -> dict:
+    """块 Bootstrap 自助抽样 IC 置信区间检验（G5）。
+
+    时间块抽样（block bootstrap，非重叠块长 block_size）保留序列自相关结构，
+    禁止 iid 重抽样（会高估显著性）。固定 seed=42 保证可复现（AGENTS.md）。
+
+    判定：IC 的 95% CI 下界 ≥ 0 → passed（信息量充足）；否则不通过。
+
+    Args:
+        factor_signal: 因子信号序列（与 forward_returns 等长）
+        forward_returns: 前向收益序列
+        n_bootstrap: 重抽样次数（默认 500）
+        block_size: 时间块长（默认 20，保序列相关）
+        ci_level: 置信水平（默认 0.95）
+        seed: 随机种子（固定可复现）
+
+    Returns:
+        {n_bootstrap, block_size, ic_mean, ic_std, ci_lower, ci_upper, passed}
+        样本不足（<2 块）或有效重抽样 <30 次时 passed=False。
+    """
+    sig = np.asarray(factor_signal, dtype=float)
+    ret = np.asarray(forward_returns, dtype=float)
+    valid = np.isfinite(sig) & np.isfinite(ret)
+    sig_v = sig[valid]
+    ret_v = ret[valid]
+    n = int(len(sig_v))
+    empty = {
+        "n_bootstrap": 0,
+        "block_size": int(block_size),
+        "ic_mean": float("nan"),
+        "ic_std": float("nan"),
+        "ci_lower": float("nan"),
+        "ci_upper": float("nan"),
+        "passed": False,
+    }
+    if n < block_size * 2:
+        return empty
+
+    rng = np.random.default_rng(seed)
+    block_starts = np.arange(0, n - block_size + 1, block_size)
+    if len(block_starts) < 2:
+        block_starts = np.arange(0, n - block_size + 1)  # 重叠兜底
+    n_blocks = n // block_size
+
+    from .evaluation_chain import _compute_ic
+
+    ics: list[float] = []
+    for _ in range(int(n_bootstrap)):
+        chosen = rng.integers(0, len(block_starts), n_blocks)
+        idx_parts: list[int] = []
+        for s in chosen:
+            idx_parts.extend(range(int(block_starts[s]), int(block_starts[s]) + block_size))
+        idx = np.asarray(idx_parts[:n], dtype=int)
+        ic, _ = _compute_ic(sig_v[idx], ret_v[idx])
+        if np.isfinite(ic):
+            ics.append(float(ic))
+    if len(ics) < 30:
+        return empty
+
+    arr = np.asarray(ics, dtype=float)
+    alpha_pct = (1.0 - ci_level) / 2.0 * 100.0
+    lo = float(np.percentile(arr, alpha_pct))
+    hi = float(np.percentile(arr, 100.0 - alpha_pct))
+    return {
+        "n_bootstrap": len(ics),
+        "block_size": int(block_size),
+        "ic_mean": float(np.mean(arr)),
+        "ic_std": float(np.std(arr, ddof=1)),
+        "ci_lower": lo,
+        "ci_upper": hi,
+        "passed": bool(lo >= 0),
+    }
+
+
+# ─── G6: 分布平稳性检验（35-gap-closure-plan §4.3）───────
+
+
+def check_stationarity(
+    factor_returns: np.ndarray,
+    adf_significance: float = 0.05,
+    use_adf: bool = True,
+    drift_threshold: float = 0.2,
+) -> dict:
+    """分布平稳性校验（G6）：ADF 单位根检验 + 滚动矩漂移比双通道。
+
+    ★ 检验对象必须是因子收益序列（非因子值）——因子值常含趋势
+    （如动量累积），ADF 必然拒绝原假设，直接检验因子值会误杀趋势因子。
+
+    - ADF（statsmodels 可用时优先）：p < adf_significance → 平稳通过；
+    - 无 statsmodels 或 use_adf=False：滚动矩漂移比
+      （前/后半段均值差绝对值 / 全段 std）< drift_threshold → 通过。
+
+    Args:
+        factor_returns: 因子收益序列
+        adf_significance: ADF 显著性水平（默认 0.05）
+        use_adf: 是否尝试 ADF（默认 True；statsmodels 缺失自动降级）
+        drift_threshold: 滚动矩漂移比阈值（默认 0.2）
+
+    Returns:
+        {adf_available, adf_stat, adf_p, adf_passed, drift_ratio, drift_passed, passed}
+        样本 <20 时全部判不通过（数据不足）。
+    """
+    arr = np.asarray(factor_returns, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    empty = {
+        "adf_available": False,
+        "adf_stat": None,
+        "adf_p": None,
+        "adf_passed": False,
+        "drift_ratio": float("nan"),
+        "drift_passed": False,
+        "passed": False,
+    }
+    if arr.size < 20:
+        return empty
+
+    adf_available = False
+    adf_stat: float | None = None
+    adf_p: float | None = None
+    adf_passed = False
+    if use_adf:
+        try:
+            from statsmodels.tsa.stattools import adfuller  # type: ignore[import-not-found]
+
+            adf_stat_f, adf_p_f, *_ = adfuller(arr, autolag="AIC")
+            adf_available = True
+            adf_stat = float(adf_stat_f)
+            adf_p = float(adf_p_f)
+            adf_passed = adf_p < adf_significance
+        except Exception:  # noqa: BLE001 — statsmodels 缺失/失败降级滚动矩
+            adf_available = False
+
+    # 滚动矩漂移（稳健近似，不依赖 statsmodels）
+    drift_ratio = 0.0
+    half = int(arr.size // 2)
+    if half >= 10:
+        std_full = float(np.std(arr, ddof=1))
+        if std_full > 1e-10:
+            drift_ratio = abs(float(np.mean(arr[:half])) - float(np.mean(arr[half:]))) / std_full
+    drift_passed = drift_ratio < drift_threshold
+
+    return {
+        "adf_available": adf_available,
+        "adf_stat": adf_stat,
+        "adf_p": adf_p,
+        "adf_passed": adf_passed,
+        "drift_ratio": drift_ratio,
+        "drift_passed": drift_passed,
+        "passed": bool(adf_passed if adf_available else drift_passed),
+    }
+
+
 __all__ = [
     "AdversarialTestResult",
     "MissingValueTestResult",
     "OODTestResult",
     "RobustnessTestResult",
     "RobustnessTester",
+    "bootstrap_ic_ci",
+    "check_stationarity",
 ]

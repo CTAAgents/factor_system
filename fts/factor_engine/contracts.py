@@ -216,6 +216,8 @@ class BacktestMetrics(TypedDict, total=False):
     quintile_returns: dict  # Q1-Q5 分组收益（GAP-062）：{1..5: mean_ret, q5_q1_spread, monotonic}
     symbol_ic: dict  # 逐标的时序 IC（GAP-075）：{symbol: ic}，供审计 cross_symbol 激活
     symbol_holdout: Optional[dict]  # 标的留出验证（GAP-075）：{train_ic/holdout_ic/ic_retention/passed/...}，None=数据不足
+    sign_flip_half_split: bool  # 前后半段 IC 符号反转（G4，35-gap-closure-plan）：一票否决标记
+    icir_block: float  # 块级 ICIR（G4，35-gap-closure-plan）：IC均值/IC标准差，时序路径硬门槛口径
 
 
 class EconomicScore(TypedDict, total=False):

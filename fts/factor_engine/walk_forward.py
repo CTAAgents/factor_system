@@ -35,6 +35,7 @@ class WalkForwardConfig(TypedDict, total=False):
     n_windows: int  # 一次运行评估几个窗口（默认 4）
     min_ic_consistency: float  # 至少 % 窗口 IC > 0（默认 0.5）
     max_ic_volatility: float  # IC 跨窗口波动率上限（默认 0.3）
+    min_oos_icir: float  # 跨窗口 |ICIR| 门槛（G4，35-gap-closure-plan，默认 0.25）
 
 
 class WalkForwardWindowResult(TypedDict, total=False):
@@ -59,6 +60,7 @@ class WalkForwardResult(TypedDict, total=False):
     consistency_score: float  # 综合评分（0-100）
     passed: bool  # 是否通过验证
     n_windows_completed: int  # 实际完成的窗口数
+    icir: float  # 跨窗口 ICIR（G4，35-gap-closure-plan：mean(IC)/std(IC)）
 
 
 # ─── 默认配置 ───────────────────────────────────────────────
@@ -70,8 +72,9 @@ DEFAULT_WALK_FORWARD_CONFIG: WalkForwardConfig = WalkForwardConfig(
     n_windows=4,
     min_ic_consistency=0.5,
     max_ic_volatility=0.3,
+    min_oos_icir=0.25,
 )
-"""v0.1.0 默认走航验证配置。"""
+"""v0.1.0 默认走航验证配置（v2.103.0+9 G4 追加 min_oos_icir=0.25）。"""
 
 
 # ─── WalkForwardOptimizer ───────────────────────────────────
@@ -139,6 +142,7 @@ class WalkForwardOptimizer:
                 consistency_score=0.0,
                 passed=False,
                 n_windows_completed=0,
+                icir=0.0,
             )
 
         # IC 一致性：IC > 0 的窗口占比
@@ -149,6 +153,15 @@ class WalkForwardOptimizer:
         ic_volatility = _safe_stdev(ic_values)
         sharpe_values = [w["sharpe"] for w in window_results]
         sharpe_volatility = _safe_stdev(sharpe_values)
+
+        # G4（35-gap-closure-plan）：跨窗口 ICIR = mean(IC)/std(IC)
+        icir_wf = 0.0
+        if len(ic_values) >= 2:
+            if ic_volatility > 1e-10:
+                icir_wf = statistics.mean(ic_values) / ic_volatility
+            elif statistics.mean(ic_values) != 0:
+                # IC 跨窗口恒定（零波动）→ 完全稳定，ICIR 视为充分大（避免 inf 序列化问题用 999.0）
+                icir_wf = 999.0
 
         # 综合评分（0-100）
         # 权重：一致性 40%，波动率 30%，均值强度 30%
@@ -161,7 +174,12 @@ class WalkForwardOptimizer:
 
         min_ic_consistency = self._config.get("min_ic_consistency", 0.5)
         max_ic_volatility = self._config.get("max_ic_volatility", 0.3)
-        passed = ic_consistency >= min_ic_consistency and ic_volatility <= max_ic_volatility
+        min_oos_icir = self._config.get("min_oos_icir", 0.25)
+        passed = (
+            ic_consistency >= min_ic_consistency
+            and ic_volatility <= max_ic_volatility
+            and abs(icir_wf) >= min_oos_icir
+        )
 
         return WalkForwardResult(
             windows=window_results,
@@ -171,6 +189,7 @@ class WalkForwardOptimizer:
             consistency_score=consistency_score,
             passed=passed,
             n_windows_completed=n_completed,
+            icir=icir_wf,
         )
 
     # ─── 窗口创建 ────────────────────────────────────────
