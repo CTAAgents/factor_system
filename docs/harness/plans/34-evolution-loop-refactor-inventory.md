@@ -1,7 +1,7 @@
 # 34-evolution-loop-refactor-inventory.md — evolution_loop.py 职责盘点与属性耦合清单
 
 
-> 版本: v2.103.0+9
+> 版本: v2.103.0+11
 
 > 状态: Phase-0 盘点（B 阶段 Mixin 抽取 / C 阶段组合式重构的前置证据）
 > 日期: 2026-08-13
@@ -206,7 +206,7 @@
 | 1 | `evolution_uct.py` | I | ~105 | 5 | ✅ **Phase 46a 已交付（2026-08-13，v2.103.0+4）**：`_select_parent_uct`/`_update_uct_stats`/`_update_uct_failure`/`_check_circuit_breaker`/`_maybe_early_stop` 迁移完成，`_uct_stats` 等 6 属性随迁；受影响测试 22+244 passed 全绿；UCT_EXPLORATION_C 单一事实源迁至 evolution_uct.py（evolution_loop re-export） |
 | 2 | `evolution_trace.py` | J | ~420 | 12 | OK Phase 46b 已交付（2026-08-13，v2.103.0+6）：12 方法 + _QualityInspectionResult 数据类迁移完成；_success_pattern_cache/_experiment_log_dir/_experiment_variants 随迁（类型声明于 mixin，装配于主类 __init__）；run 的 _experiment_variants.clear() 经 mixin 属性声明兼容保留；受影响测试全绿 |
 | 3 | `evolution_channels.py` | G | ~400 | 4 | OK Phase 46c 已交付（2026-08-13，v2.103.0+7）：4 方法迁移完成；feature_ops_engine/feature_importance_analyzer 组件装配于主类（mixin 类型声明）；受影响测试全绿 |
-| 4 | `evolution_seeds.py` | D | ~590 | 6 | `_evaluate_and_promote_seeds` 跨 B/E/C/J 调用，先迁移其调用的方法或保留 self 派发 |
+| 4 | `evolution_seeds.py` | D | ~590 | 6 | OK **Phase 46d 已交付（2026-08-13，v2.103.0+11）**：`_evaluate_and_promote_seeds`/`_merge_l1_candidates`/`_run_seed_correlation_check`/`_build_barra_exposures`/`_evaluate_cross_section`/`run_microstructure_promotion` 迁移完成；跨域方法引用（_promote_to_elite/_run_*_check 等 15 个）经 mixin 类体 Callable 类型声明供 mypy 解析；cap_map/industry_map/_barra_exposures_cache 随迁声明；受影响测试全绿 |
 | 5 | `evolution_audit.py` | E | ~430 | 9 | `_signal_cache` 与 B 域共享，抽取时须保留共享引用 |
 | 6 | `evolution_review.py` | F | ~200 | 4 | `data_quality_monitor` 与 A 域共享 |
 | 7 | `evolution_prefilter.py` | H | ~180 | 3 | 无特殊（读全局上下文） |

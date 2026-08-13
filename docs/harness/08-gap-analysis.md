@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v2.103.0+9
+> 版本: v2.103.0+11
 > 最后更新: 2026-08-11
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -11,10 +11,10 @@
 | 优先级 | 开放 | 已关闭 | 总计 |
 |:-------|:-----|:-------|:-----|
 | P0 | 0 | 20 | 20 |
-| P1 | 1 | 45 | 46 |
+| P1 | 1 | 49 | 50 |
 | P2 | 7 | 48 | 55 |
 | GAP-C（Stage 3C 远期） | 1 | 7 | 8 |
-| **合计** | **8** | **120** | **128** |
+| **合计** | **8** | **124** | **132** |
 
 > 注：GAP-068/069（P1，原延期项）已于 v2.101.0 关闭；GAP-075（P1，跨标的稳健性检查）于 v2.101.0 收尾关闭（cross_symbol 激活 + 标的留出验证）；GAP-C 系列为 Stage 3C 远期机构级差距（细则见 plans/23 §3.3），C1~C8 已于 2026-08-11 全部首期实施（C1 含评估晋升接线 / C2 含 LLM 精修 / C8 含 C9 算子扩容二期 DSL 132），C4 开放项为真实多机集群部署（单机 LocalCluster 代码/测试/基准已落地），待硬件/基建条件成熟后按 DaskBackend 抽象接入。
 > GAP-081~089（数据字段缺口）于 2026-08-11 由数据字段字典审计（docs/factor_data_dict/）登记——A 股增强字段（北向/两融/股东/分析师）与期货持仓/结算字段为 P0 阻塞性数据缺口，详见下方登记表。
@@ -22,6 +22,7 @@
 > 总览开放口径修订（2026-08-12）：开放 = 登记表状态非「✅ 已关闭」项——P0 0 项、P1 1 项（GAP-097 开放，2026-08-12 登记——信号管道未与因子资产库接通）、P2 6 项（GAP-092~095 开放 + GAP-089/090 🟡 受限）、GAP-C 1 项（C4 真实多机集群后置）；**GAP-082 于当日关闭（股票基本面字段数据源接入——估值/市值日频 + 财务/成长季度真实数据，plans/31，P0 项移除）**；**GAP-084/086/087 于当日关闭（股票 OHLCV 虚构字段 / 市值中性化默认空转 / 股票侧宏观字段硬编码，P1 开放 4→1）**；**GAP-096 于当日收尾关闭（cross_symbol A+C 双机制验证通过，P1 开放 1→0，合计开放 9→8）**；**GAP-088 于当日关闭（期货宏观注入端闭环——面板级注入 helper + 期货信号管道/横截面演化接线，P2 开放 7→6、合计开放 8→7）**；**GAP-089 于当日受限登记（高频数据深度受外部数据源制约——逐笔/10 档/订单簿重建非本机可实现，登记受限不假完成，🟡）**；**GAP-097 于当日登记（信号管道未与因子资产库接通，P1 开放 0→1、合计开放 7→8——2026-08-12 06:15 期货 elite 因子库清理后管道因子池 104→1，见登记表）**。
 > 总览开放口径更新（2026-08-13）：**GAP-098 于当日登记并关闭（L1 Meta-Loop 失败率熔断时序缺陷——验证循环首候选前以「本批总数 + 0 注入」误判 100% 失败率导致整批 0 注入，修复后按「已实际验证数」计算，P1 已关闭 41→42，开放维持 8）**；**E.3 S2 已落地（L4 运行状态库 DuckDB → SQLite WAL，state.duckdb 写锁被演化进程持有期间只读亦锁问题根治，见 07-operations）**。
 > 总览更新（2026-08-13 v2.103.0+9，35-gap-closure-plan P0 批次）：**GAP-099/100/101 于当日登记并关闭（同向敞口惩罚 / 集中踩踏规避 / 换手预算+默认 λ 0.15，P1 关闭 42→45、合计 117→120，开放维持 8）**；G4/G11 阈值校准已执行（scripts/gap_threshold_calibration.py，|ICIR| P25≈0.22、≥0.30 通过率 70.9% → icir_min=0.30 数据支持；日换手库中 turnover 全为 0 无法校准 → G11 阈值待评估链回填后复核，见 plans/35 §9.1）。
+> 总览更新（2026-08-13 v2.103.0+10，35-gap-closure-plan P1 批次）：**GAP-102/103/104/105 于当日登记并关闭（ICIR+符号反转硬门槛 / Bootstrap / ADF 平稳性 / 5-Regime 拆分检验，P1 关闭 45→49、合计 120→124，开放维持 8）**；新增测试 test_g4_screening_gates.py（6）+ test_robustness_g56.py（11）+ test_regime_split_validation.py（7）共 24 用例，335 定向回归全绿 + ruff 通过。
 
 ---
 
@@ -83,6 +84,10 @@
 | GAP-099 | `fts/factor_engine/portfolio_risk_controls.py` `check_aligned_exposure` + `fts/factor_engine/portfolio_loop.py` `build_combo` | 同向敞口惩罚缺失（35-gap-closure-plan G1，SOP 阶段 7「局部最优共振踩踏」根因项）：多个同向因子共振时仓位线性叠加，无中心化压缩 | 多因子同向共振重仓，行情拐点集中回撤（核心命题直接威胁项） | v2.103.0+9 | ✅ 已关闭（v2.103.0+9：`AlignedExposureConfig` + `check_aligned_exposure`——以因子 IC 符号代理方向、按 \|weight\| 加权计算同向占比，≥0.6 触发压缩 scale∈[0.5,1]（linear/sqrt/exp 三曲线）；`build_combo` 新增 `aligned_exposure_config` 参数，归一化后与 exposure_scale 乘性合并；主流程默认开启（单测直接调用默认关闭向后兼容）；test_portfolio_risk_controls.py +15 用例） |
 | GAP-100 | `fts/factor_engine/portfolio_risk_controls.py` `throttle_exit_stampede` | 集中踩踏止损规避缺失（35-gap-closure-plan G2）：同一时点批量止损无节流，行情拐点集体平仓冲击成本无护栏 | 拐点集体平仓冲击成本放大、滑点恶化 | v2.103.0+9 | ✅ 已关闭（v2.103.0+9：`ExitStampedeConfig` + `throttle_exit_stampede`——单日平仓数 ≤ max_same_day_exits(3)，超限按风险敞口降序顺延 ≥batch_gap_days 日分批执行；仅重排执行顺序不取消止损触发（纪律优先）；计划日耗尽回填原触发日不丢弃；test_portfolio_risk_controls.py +7 用例） |
 | GAP-101 | `fts/factor_engine/portfolio_turnover.py`（新）`allocate_turnover_budget` + `fts/config/settings.py` `l3_turnover_penalty` | 换手率全局上限约束缺失（35-gap-closure-plan G3）：`apply_turnover_penalty` 默认 λ=0 关闭；无「剔除边际收益最低弱信号」的换手预算机制 | 摩擦成本随无效换手非线性增长，弱信号噪声调仓 | v2.103.0+9 | ✅ 已关闭（v2.103.0+9：新建 `portfolio_turnover.py`——`TurnoverBudgetConfig` + `allocate_turnover_budget`（单日换手上限 0.30，超限按边际收益从最弱开始回退当前持仓并重归一化，浮点容差 eps）；`build_combo` 新增 `turnover_budget_config` 参数归一化后接入；`l3_turnover_penalty` 默认 0.0→0.15 开启（D5）；test_turnover_budget.py 12 用例 + test_turnover_penalty 默认断言同步） |
+| GAP-102 | `fts/factor_engine/evaluation_chain.py`（ICIR 硬门槛 + 符号反转）+ `fts/factor_engine/walk_forward.py`（跨窗口 ICIR 门槛） | ICIR 无硬门槛 / WFA 无 ICIR 门槛 / 前后半段无符号反转硬检查（35-gap-closure-plan G4）：ICIR 合格线 0.5 仅在 high_ic_screener 打分体系；时序路径 icir 为 in/out 两段近似；`decay_6m` 仅衰减率无符号反转判定 | 高 IC 波动大的伪因子与前后半段符号反转的不稳定因子通过准入，过拟合局部最优混入因子库 | v2.103.0+10 | ✅ 已关闭（v2.103.0+10：① `_block_ic_stats` 扩展返回 (ic_t, win_rate, icir_block)（块级 ICIR 真口径），时序 metrics 注入 `icir_block`；② `evaluate` 失败判定新增 `\|ICIR\|<0.30` 硬门槛 + `sign_flip_half_split` 前后半段符号反转一票否决（时序路径 `icir_block`、横截面路径 L921 日度 IC 序列 ICIR）；③ `walk_forward` 新增 `min_oos_icir=0.25`（跨窗口 ICIR=mean/std，零波动恒定 IC 视为充分稳定 999.0）；`WalkForwardConfig/Result` 契约扩展；test_g4_screening_gates.py 6 用例 + test_qc_stats_completion 三元组同步，141 定向回归全绿） |
+| GAP-103 | `fts/factor_engine/robustness.py` `bootstrap_ic_ci` | Bootstrap 自助抽样检验缺失（35-gap-closure-plan G4.2）：无统计 Bootstrap，因子 IC 无置信区间验证 | 随机剔除样本后绩效崩塌的因子无法被统计识别，显著性高估 | v2.103.0+10 | ✅ 已关闭（v2.103.0+10：`bootstrap_ic_ci`——时间块抽样（block bootstrap 块长 20）保留自相关结构（禁止 iid 重抽样防显著性高估），固定 seed=42 可复现，IC 95%CI 下界 ≥0 判通过；样本 <2 块或有效重抽样 <30 返回不通过；test_robustness_g56.py 5 用例） |
+| GAP-104 | `fts/factor_engine/robustness.py` `check_stationarity` | ADF/分布平稳性检验缺失（35-gap-closure-plan G4.3）：全库 adfuller 零命中，ACF 仅作 Regime 特征 | 非平稳因子收益序列的伪相关未被识别，趋势漂移污染 IC | v2.103.0+10 | ✅ 已关闭（v2.103.0+10：`check_stationarity`——ADF 单位根（statsmodels 可用时，p<0.05 平稳）+ 滚动矩漂移比双通道（无 statsmodels 自动降级，前/后半段均值差/全段 std <0.2）；★ 检验对象为因子收益序列非因子值（docstring 写死，防误杀趋势因子）；test_robustness_g56.py 6 用例） |
+| GAP-105 | `fts/factor_engine/regime_validation.py` `validate_factor_across_regimes` | 显式 5-Regime 拆分检验缺失（35-gap-closure-plan G4.4）：`high_ic_screener._check_multi_regime` 仅用 WF 窗口 IC 正占比近似，未按 bull/bear/oscillate/high_vol/low_vol 显式拆分 | 环境依赖因子（仅在特定制度有效）未被识别，跨制度失效风险无预警 | v2.103.0+10 | ✅ 已关闭（v2.103.0+10：`regime_validation.validate_factor_across_regimes`——按 5 制度拆分计算 IC + 制度内块状 ICIR（块长 20），覆盖 ≥3 制度且正向制度数 ≥3 判通过；制度 ICIR<-0.5 打 `regime_dependent` 环境依赖标记（不否决，入库标记）；与既有 `validate_regime_predictive_power` 互补；high_ic_screener 保持 WF 近似（输入域无 regime 序列，接线留调用方）；test_regime_split_validation.py 7 用例） |
 
 ### P2 — 一般改进（优化代码质量）
 
@@ -102,7 +107,7 @@
 | GAP-013 | `plans/production_plan.md` | 生产就绪计划缺失，生产部署、监控告警、容器化等方案未文档化 | 生产环境部署缺乏标准化流程，运维风险高 | 3 月内 | ✅ 已关闭 |
 | GAP-014 | `scripts/verify_doc_consistency.py` | 文档一致性检查脚本缺失，无法自动校验代码与文档的映射关系 | 文档与代码容易脱节，Harness 规范第 13 项检查无法自动化 | 3 月内 | ✅ 已关闭 |
 | GAP-015 | `fts/data_futures.py`, `fts/data.py`, `fts/cli.py` | 期货数据接入缺失，FTS 仅支持 A 股/ETF 因子演化，无法覆盖期货横截面因子 | 策略覆盖范围受限，无法实现跨品种因子（跨商品动量、品种间强弱） | 3 月内 | ✅ 已关闭 |
-| GAP-099 | `fts/factor_engine/evolution_loop.py` | evolution_loop.py God Class：5117 行单文件 / 62 方法 / 5 个巨方法（>280 行）内联编排逻辑，`__init__` 装配 76 属性 | 单文件不可并行开发、review 困难；方法间共享 self 状态改动互相牵制（34 计划 B 阶段治理中） | 34 计划（B 阶段进行中） | 🔴 修复中（2026-08-13 登记，plans/34-evolution-loop-refactor-inventory.md 盘点完成：**Phase 46a 已抽 `evolution_uct.py`**（领域 I UCT/熔断 5 方法，v2.103.0+4）；**Phase 46b 已抽 `evolution_trace.py`**（领域 J trace/经验链/实验日志 12 方法 + _QualityInspectionResult，v2.103.0+6）；**Phase 46c 已抽 `evolution_channels.py`**（领域 G GP/深度/算子 DSL 通道 4 方法，v2.103.0+7）；后续 6 领域 Mixin 按顺序推进，公开 API 不变） |
+| GAP-099 | `fts/factor_engine/evolution_loop.py` | evolution_loop.py God Class：5117 行单文件 / 62 方法 / 5 个巨方法（>280 行）内联编排逻辑，`__init__` 装配 76 属性 | 单文件不可并行开发、review 困难；方法间共享 self 状态改动互相牵制（34 计划 B 阶段治理中） | 34 计划（B 阶段进行中） | 🔴 修复中（2026-08-13 登记，plans/34-evolution-loop-refactor-inventory.md 盘点完成：**Phase 46a 已抽 `evolution_uct.py`**（领域 I UCT/熔断 5 方法，v2.103.0+4）；**Phase 46b 已抽 `evolution_trace.py`**（领域 J trace/经验链/实验日志 12 方法 + _QualityInspectionResult，v2.103.0+6）；**Phase 46c 已抽 `evolution_channels.py`**（领域 G GP/深度/算子 DSL 通道 4 方法，v2.103.0+7）；**Phase 46d 已抽 `evolution_seeds.py`**（领域 D 种子评估晋升/L1 合并/种子相关性/横截面/Barra 暴露/microstructure 晋升 6 方法，v2.103.0+11）；后续 5 领域 Mixin 按顺序推进，公开 API 不变） |
 
 ### P2 — 新登记
 

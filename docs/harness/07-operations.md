@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.103.0+9
+> 版本: v2.103.0+11
 > 最后更新: 2026-08-11
 
 ---
@@ -12,6 +12,8 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.103.0+11** | **2026-08-13** | **evolution_loop.py God Class Mixin 化拆分 Phase 46d（34 计划 B 阶段第四步，日常开发，build bump）**：① 新建 `fts/factor_engine/evolution_seeds.py`（`EvolutionSeedsMixin`，领域 D）——`_evaluate_and_promote_seeds`（种子评估晋升编排，跨调 E/F/C/J 域方法）/`_merge_l1_candidates`（GAP-031 L1 注入候选合并 + GAP-036 历史遗留清理 + pending 门控 + market 过滤）/`_run_seed_correlation_check`（L2 种子相关性预检，>50 种子跳过 + 横截面/时序双模式）/`_build_barra_exposures`（GAP-I304 风格暴露缓存）/`_evaluate_cross_section`（横截面评估，ic≥0.03 & sharpe≥1.5 门槛）/`run_microstructure_promotion`（C1 公开入口）6 方法原样剪切迁移；② 组件随领域声明（`cap_map`/`industry_map`/`_barra_exposures_cache`/`_barra_exposures_attempted` mixin 类型声明 + 主类 `__init__` 装配），跨领域共享（`data`/`forward_returns`/`market`/`cross_section_data`/`cross_section_dates`/`_is_cross_section`/`evaluation_chain`/`verifier`/`quality_inspector`/`inject_dir`）留在主类；③ **首个含跨域 self 方法调用的 Mixin**——`_promote_to_elite`/`_run_*_check`/`_record_*_trace` 等 15 个跨域方法经 mixin 类体 Callable 类型声明供 mypy 解析（运行时 MRO 动态派发，不遮蔽真实实现）；④ `evolution_loop.py` 改为 `class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMixin, EvolutionSeedsMixin)`，删除 6 个已迁移方法体，清理孤儿 import（`cross_section_evaluate_backtest`/`compute_seed_correlations`/`EvolutionState`）；⑤ 测试适配：`test_evolution_loop.py` 两处 `cross_section_evaluate_backtest` monkeypatch 目标由 `evolution_loop` 模块迁至 `evolution_seeds` 模块（补丁跟随符号实际归属）；⑥ 验证：`analyze_evolution_loop.py` 基线（行数 4177→3581、方法数 43→37）+ 受影响测试全绿（283 passed）+ ruff/mypy 全绿；⑦ 同步 01（模块清单 + Mixin 拆分契约 + 一致性元数据）/02（Phase 46d）/08（GAP-099 状态）/09（日常开发里程碑记录）/34 盘点文档。**遗留**：后续 5 个领域 Mixin（audit/review/prefilter/promote/candidate）按 34 计划顺序推进，C 阶段（组合式重构）另立 plan。 |** |
+| **v2.103.0+10** | **2026-08-13** | **35-gap-closure-plan P1: G4 ICIR/符号反转硬门槛 + G5 Bootstrap + G6 ADF/平稳性 + G7 5-Regime 拆分检验 (evaluation_chain/walk_forward/robustness/regime_validation)** |** |
 | **v2.103.0+9** | **2026-08-13** | **35-gap-closure-plan P0: G1 同向敞口惩罚 + G2 踩踏规避 + G3 换手预算 (portfolio_risk_controls/portfolio_turnover/portfolio_loop)** |** |
 | **v2.103.0+8** | **2026-08-13** | **ruff+mypy 全量修复（50 lint + 198 类型错误清零）+ 累积变更提交** |** |
 | **v2.103.0+7** | **2026-08-13** | **evolution_loop.py God Class Mixin 化拆分 Phase 46c（34 计划 B 阶段第三步，日常开发，build bump）**：① 新建 `fts/factor_engine/evolution_channels.py`（`EvolutionChannelsMixin`，领域 G）——`_run_gp_evolution`（GP 遗传规划，feature_ops_engine + feature_importance_analyzer）/`_run_deep_evolution`（GRU/Transformer 深度因子，GAP-I203/C5）/`_generate_operator_factor`（FTS-Expr DSL 随机生成 + 常数信号前置拦截）/`_try_operator_engine_evolution`（算子演化引擎搜索，C.4）4 方法原样剪切迁移；② 本领域无独享状态——组件（`feature_ops_engine`/`feature_importance_analyzer`）与跨领域共享数据（`data`/`forward_returns`/`market`/`cross_section_data`/`_is_cross_section`）均由主类 `__init__` 装配，mixin 仅类型声明；③ `evolution_loop.py` 改为 `class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMixin)`，删除 4 个已迁移方法体；④ 公开 API 与行为等价不变；⑤ 验证：`analyze_evolution_loop.py` 基线 + 受影响测试全绿（69 passed + test_evolution_loop 全量）+ ruff/mypy 全绿；⑥ 同步 01（模块清单 + Mixin 拆分契约 + 一致性元数据）/02（Phase 46c）/08（GAP-099 状态）/09（日常开发里程碑记录）/34 盘点文档。**遗留**：后续 6 个领域 Mixin（seeds/audit/review/prefilter/promote/candidate）按 34 计划顺序推进，C 阶段（组合式重构）另立 plan。 |** |

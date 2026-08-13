@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.103.0+9
+> 版本: v2.103.0+11
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -289,6 +289,17 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ `evolution_loop.py` `class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMixin)`；公开 API 与行为等价不变
 - ✅ 验证：`analyze_evolution_loop.py` 基线 + 受影响测试全绿；01/02/08/09/34 文档同步
 - ⏳ 后续：seeds/audit/review/prefilter/promote/candidate 6 领域 Mixin 按 34 盘点顺序推进
+
+### 34 计划 Phase 46d evolution_loop.py Mixin 化拆分第四步（2026-08-13，日常开发，build bump v2.103.0+11）
+
+**完成时间**: 2026-08-13
+
+**核心产出（34 盘点领域 D 种子/横截面抽取，B 阶段第四步）**:
+- ✅ 新建 `fts/factor_engine/evolution_seeds.py` `EvolutionSeedsMixin`（领域 D）：6 方法迁移——`_evaluate_and_promote_seeds`（种子评估晋升编排，跨调 E/F/C/J 域方法）/`_merge_l1_candidates`（GAP-031 L1 注入候选合并 + GAP-036 历史遗留清理 + pending 门控 + market 过滤）/`_run_seed_correlation_check`（L2 种子相关性预检，>50 种子跳过 + 横截面/时序双模式）/`_build_barra_exposures`（GAP-I304 风格暴露缓存）/`_evaluate_cross_section`（横截面评估，ic≥0.03 & sharpe≥1.5 门槛）/`run_microstructure_promotion`（C1 公开入口）
+- ✅ 组件随领域声明：`cap_map`/`industry_map`/`_barra_exposures_cache`/`_barra_exposures_attempted`（mixin 类型声明，主类 `__init__` 装配）；跨领域共享（`data`/`forward_returns`/`market`/`cross_section_data`/`cross_section_dates`/`_is_cross_section`/`evaluation_chain`/`verifier`/`quality_inspector`/`inject_dir`）留在主类
+- ✅ `evolution_loop.py` `class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMixin, EvolutionSeedsMixin)`；公开 API 与行为等价不变
+- ✅ 验证：`analyze_evolution_loop.py` 基线（方法数 43→37）+ 受影响测试全绿 + ruff/mypy 通过；01/02/08/09/34 文档同步
+- ⏳ 后续：audit/review/prefilter/promote/candidate 5 领域 Mixin 按 34 盘点顺序推进
 
 ### E.3 S2 L4 状态库 SQLite 化（2026-08-13，日常开发，未 bump）
 
