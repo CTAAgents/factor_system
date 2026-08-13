@@ -1,6 +1,6 @@
 # FTS 韧性设计
 
-> 版本: v2.103.0
+> 版本: v2.103.0+9
 > 最后更新: 2026-08-05
 
 ---
@@ -145,11 +145,13 @@ state.json.bak.2    ← 上上上一次写入
 |:-----|:-----|
 | 进程内并发写 | 单写者 `DuckDBWriter` + 进程内写锁，所有写操作串行，结构上消除 `ConcurrentTransactionException` |
 | 批量写原子性 | `executemany`/`copy_from_records` 显式 `BEGIN/COMMIT` 包裹（DuckDB executemany 为逐条执行非单事务），任一条失败整批 `ROLLBACK`，不留半写入 |
-| 读写互不阻塞 | 读走 `DuckDBReader` 连接池（普通连接，DuckDB 不允许同文件并存可写 + read_only=True 连接，读语义由代码纪律保证），MVCC 快照使写提交期间读侧不受阻塞 |
-| 跨进程写 | 写 job 单一化（模块级 `_get_writer` 单例）+ 脚本 `--readonly` 声明受限，同一 .duckdb 任意时刻至多一个可写连接 |
+| 读写互不阻塞 | 读走 `read_only=True` 短连接（E.4 S1 起），配合 `lock_configuration=true` 与写窗口（秒级短连接）共存；MVCC 快照使写提交期间读侧不受阻塞 |
+| 跨进程写 | 写入口统一经 `fts/store/duckdb_lock.py` `duckdb_write_lock`（`data/.locks/*.duckdb.lock` filelock，msvcrt/fcntl 标准库）串行化——写窗口任意时刻至多一个（跨进程），结构上消除文件锁互抢（E.4 S1，2026-08-13） |
 | 跨市场文件锁竞争 | 按市场（股票/期货）拆分独立 DuckDB 文件（`factor_catalog_stock.duckdb`/`factor_catalog_futures.duckdb`），物理隔离消除跨市场锁冲突 |
 | 兼容降级 | `duckdb_single_writer=false` 回退旧多路径；`retry_on_conflict`/`AsyncWriteQueue`/`lock_configuration` 保留为防御兜底（不依赖其解决并发） |
 | 锁配置降级 | 旧版 DuckDB 不支持 `lock_configuration` 时静默降级，由应用层写锁兜底 |
+| L4 运行状态库（E.3 S2，2026-08-13） | `data/state.db` 后端切换 **SQLite WAL**（`StateKVStore`）：写连接存活期间外部只读**不受阻塞**（多读单写不互斥，解决演化进程持锁连只读亦被锁）；upsert 单事务包裹双表原子；跨进程写冲突由 `busy_timeout=5000` 等待而非失败 |
+| L2/L3 连接生命周期（E.4 S1，2026-08-13） | 写连接一律**短生命周期**（`_write_scope` = filelock 互斥 + 写完即关，秒级，演化/同步进程其余时间零写连接）；读连接一律 `read_only=True` 短连接（`_open_read_conn`）；模块级常驻写连接（`_WRITER`/`_DB`/`_cache_conn`）已移除——读侧不再被长驻写连接阻塞 |
 
 ### 容错兜底
 

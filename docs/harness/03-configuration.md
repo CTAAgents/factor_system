@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.102.0
+> 版本: v2.103.0+9
 > 最后更新: 2026-08-10
 
 ---
@@ -22,10 +22,11 @@ FTS 配置采用三级优先级（高→低）：
 |:-------|:-----|:-------|:---------|:-----|
 | `memory_dir` | str | `"memory"` | `FTS_MEMORY_DIR` | 运行时状态持久化目录 |
 | 存储域契约路径（plans/29 P0） | str（注册表内部） | `docs/harness/_data/storage_landscape.yaml` | `FTS_STORAGE_LANDSCAPE_PATH` | 存储域注册表 YAML 路径（StorageRegistry 加载，13 域；缺省回落内置默认路径，缺失时注册表空不抛错）（GAP-090，v2.101.0） |
-| `elite_dir` | str | `"memory/knowledge/factors/stocks_elite"` | `FTS_ELITE_DIR` | elite 因子存储目录 |
+| `elite_dir` | str | `"memory/knowledge/factors/futures_elite"` | `FTS_ELITE_DIR` | elite 因子存储目录（股票剥离后默认对齐期货精英目录，v2.86.0） |
 | `default_market` | str | `"futures"` | `FTS_DEFAULT_MARKET` | 默认市场类型 |
 | `llm_backend` | str | `""` | `FTS_LLM_BACKEND` | LLM 后端选择（空=自动检测）|
 | `evolution_mode` | str | `"hybrid"` | `FTS_EVOLUTION_MODE` | 演化模式: operator(算子主干) / code(代码创新) / hybrid(混合) / batch(批量挖掘漏斗, GAP-I201, v2.65.0) |
+| 演化 CLI 失败率熔断阈值 | float | 0.99 | `FTS_EVOLUTION_CB_FAILURE_RATE` | `fts.cli evolution run` 失败率熔断阈值（0.95→0.99 短样本放宽；设 1.0 = 禁用失败率熔断，保留 token 与连续低 IC 熔断兜底，夜间演化需强制跑满世代数场景）（v2.103.0 日常开发追加） |
 | `max_generations` | int | 10 | — | L2 最大演化代数 |
 | `population_size` | int | 20 | — | 种群大小 |
 | `micro_trials_per_generation` | int | 50 | — | 每代 optuna 试验数 |
@@ -63,8 +64,8 @@ FTS 配置采用三级优先级（高→低）：
 | `batch_random_seed` | int | 42 | `FTS_BATCH_RANDOM_SEED` | 批量生成随机种子（同父多后代可复现，GAP-I201，v2.65.0） |
 | `meta_loop_interval_hours` | int | 24 | — | L1 Meta-Loop 间隔 |
 | `meta_loop_max_tokens` | int | 8000 | — | L1 单次运行 max token |
-| `l1_announcement_extractor_enabled` | bool | true | `FTS_L1_ANNOUNCEMENT_EXTRACTOR_ENABLED` | 另类知识源：公告/舆情提取器开关（股票管道，GAP-I103，v2.82.0） |
-| `l1_macro_extractor_enabled` | bool | true | `FTS_L1_MACRO_EXTRACTOR_ENABLED` | 另类知识源：宏观事件提取器开关（股票/期货管道，GAP-I103，v2.82.0） |
+| `l1_announcement_extractor_enabled` | bool | true | `FTS_L1_ANNOUNCEMENT_EXTRACTOR_ENABLED` | 另类知识源：公告/舆情提取器开关（原股票管道，GAP-I103，v2.82.0；已随股票管线剥离至 fts-stock（2026-08），配置项保留兼容、主系统不再使用） |
+| `l1_macro_extractor_enabled` | bool | true | `FTS_L1_MACRO_EXTRACTOR_ENABLED` | 另类知识源：宏观事件提取器开关（期货管道，GAP-I103，v2.82.0；仍由 L1 Meta-Loop 使用） |
 | `review_experience_chain`（环境变量直读） | bool | true | `FTS_REVIEW_EXPERIENCE_CHAIN` | 人审驳回意见是否写入经验链（GAP-I102 二期，v2.82.0） |
 | `review_mode`（环境变量直读） | str | `"auto"` | `FTS_REVIEW_MODE` | 审查模式：`auto`=机审优先（正常自动批准/低质自动驳回/异常值转人审）/ `manual`=纯人审（C8-2，2026-08-11；manual 下 auto_review 需 --force 显式覆盖） |
 | `review_auto_min_ic`（环境变量直读） | float | 0.02 | `FTS_REVIEW_MIN_IC` | 机审 IC 下限：低于视为低质自动驳回（C8-2） |
@@ -84,7 +85,7 @@ FTS 配置采用三级优先级（高→低）：
 | `adaptive_config.smoother.de_risk_alpha` | float | `0.8` | —（AdaptiveWeightConfig.smoother） | RegimeSmoother 风控切换（进入降风险制度）不对称系数（28-T6）：切换更激进平滑（28 计划） |
 | `adaptive_config.smoother.re_risk_alpha` | float | `0.1` | —（AdaptiveWeightConfig.smoother） | RegimeSmoother 恢复切换（离开降风险制度）不对称系数（28-T6）：恢复更保守平滑（28 计划） |
 
-**股票信号管道脚本参数（`scripts/daily_signal_pipeline.py`，GAP-076，v2.101.0）**：
+**股票信号管道脚本参数（`scripts/daily_signal_pipeline.py`，GAP-076，v2.101.0；以下股票专属配置项已随股票管线剥离至 fts-stock（2026-08），主系统 FTSConfig 中已移除，保留列表仅供历史追溯）**：
 
 | 参数 | 取值 | 默认 | 说明 |
 |:-----|:-----|:-----|:-----|
@@ -98,12 +99,16 @@ FTS 配置采用三级优先级（高→低）：
 | `log_file` | str | `""` | `FTS_LOG_FILE` | 日志文件路径 |
 | `stock_neutralization` | bool | `true` | `FTS_STOCK_NEUTRALIZATION` | 股票因子横截面评估是否做行业/市值中性化（v2.57.0） |
 | `industry_map_path` | str | `"data/industry_map.json"` | `FTS_INDUSTRY_MAP_PATH` | 行业映射文件路径（JSON，`{symbol: industry_name}`，v2.57.0） |
-| `cap_map_path` | str | `""` | `FTS_CAP_MAP_PATH` | 市值映射文件路径（JSON，`{symbol: market_cap}`，可选，v2.57.0） |
+| `cap_map_path` | str | `""`（动态） | `FTS_CAP_MAP_PATH` | 市值映射文件路径（JSON，`{symbol: market_cap}`，v2.57.0；GAP-086 v2.103.0 默认动态化——env 优先；未设置且 `data/cap_map.json` 存在（`scripts/build_cap_map.py` 生成）时自动指向该文件使市值中性化生效，不存在保持空串降级） |
 | `stock_signal_neutralize` | str | `"none"` | `FTS_STOCK_SIGNAL_NEUTRALIZE` | 股票信号管道截面中性化方式（`none`/`industry`/`size`/`both`，D.2，v2.101.0） |
 | `stock_signal_l3_mode` | str | `"ridge"` | `FTS_STOCK_SIGNAL_L3_MODE` | 股票信号管道 L3 权重学习模式（`ridge`/`elastic_net`，D.2，v2.101.0） |
 | `stock_signal_regime` | str | `"none"` | `FTS_STOCK_SIGNAL_REGIME` | 股票信号管道 Regime 自适应权重（`none`/`auto`，D.2 偏差 b，v2.101.0） |
+| `cs_panel_min_coverage` | float | `0.8` | `FTS_CS_MIN_COVERAGE` | 股票横截面共同日期覆盖率阈值：某日至少 `ceil(股票数×该值)` 只股票有数据才纳入共同日期（替代全量硬交集，GAP-XXX，v2.103.0） |
+| `ashare_special_enabled` | bool | `false` | `FTS_ASHARE_SPECIAL_ENABLED` | A 股特有字段注入开关（GAP-081，v2.103.0）：`true` 时 FundamentalProvider.enrich_ohlcv 注入北向/两融/股东户数/分析师预期字段（读 ashare_special_cache，先执行 scripts/backfill_ashare_special.py 回填；默认关避免未回填时引入网络请求） |
+| `stock_fundamental_enabled` | bool | `false` | `FTS_STOCK_FUNDAMENTAL_ENABLED` | 股票基本面字段注入开关（GAP-082，v2.103.0）：`true` 时 FundamentalProvider.enrich_ohlcv 注入估值/市值日频 + 财务/成长季度字段（读 stock_fundamental_cache，先执行 scripts/backfill_stock_fundamental.py 回填；默认关避免未回填时引入网络请求） |
 | `futures_adjusted` | bool | `true` | `FTS_FUTURES_ADJUSTED` | 期货连续合约 K 线是否默认返回换月复权序列（因子计算用，v2.58.0） |
 | `roll_cost_bps` | float | `2.0` | `FTS_ROLL_COST_BPS` | 展期成本系数（基点/次，回测持仓穿越换月日扣除，v2.58.0） |
+| `minute_cache_max_age_days` | int | `1` | `FTS_MINUTE_CACHE_MAX_AGE_DAYS` | 分钟缓存最大新鲜度（天，独立于日线 30 天窗口——避免旧分钟缓存持续命中挡住 TDX 实时拉取，v2.101.0） |
 | `eval_horizons` | tuple[int,...] | `(1,5,10,20)` | `FTS_EVAL_HORIZONS` | 多持有期 IC 体系：横截面/时序评估的多持有期列表（空=关闭，v2.90.0，GAP-060） |
 | `cost_sensitivity_enabled` | bool | `false` | `FTS_COST_SENSITIVITY_ENABLED` | 可交易性压力层：评估链是否输出成本敏感性扫描（滑点 1/2/4/8 倍，v2.97.0，GAP-061） |
 | `inject_overnight_gap_enabled` | bool | `false` | `FTS_INJECT_OVERNIGHT_GAP` | 夜盘/隔夜跳空标记：`get_ohlcv` 是否注入 overnight_gap/overnight_gap_flag 列（v2.97.0，GAP-066） |
@@ -218,6 +223,5 @@ L2 Verifier 默认配置（定义在 `contracts.py` 中，初始化后锁定）�
 | 代码→文档映射 | 可验证断言 | 检验方式 |
 |:-------------|:-----------|:---------|
 | `fts/config/settings.py:FTSConfig` | 所有字段有默认值 | `python -c "from fts.config.settings import FTSConfig; assert hasattr(FTSConfig, 'memory_dir')"` |
-| `fts/config/settings.py:load_industry_map` | 行业映射 JSON 可被加载（非 dict 根/文件缺失返回空 dict，空白键过滤） | `python -c "from fts.config.settings import load_industry_map; m = load_industry_map('data/industry_map.json'); assert len(m) > 0"` |
 | `config/settings.yaml` | YAML 可被 `load_config()` 解析 | `python -c "from fts.config.settings import load_config; cfg = load_config('config/settings.yaml')"` |
 | `contracts.py:VerifierConfig` | 默认值与本文档一致 | 手动比对 |

@@ -1,6 +1,6 @@
 # FTS 执行模式流程图
 
-> 版本: v2.102.0
+> 版本: v2.103.0+9
 > 最后更新: 2026-08-05
 
 ## 三种执行模式
@@ -44,7 +44,7 @@
 │  │  ├─────────────────────────────────────────────────────┤ │   │
 │  │  │ L3 Portfolio     │ 每周五 19:00 │ 期货组合构建(futures_elite)+信号合成+期货信号管道(20:00) │ │   │
 │  │  ├─────────────────────────────────────────────────────┤ │   │
-│  │  │ L3 (股票)        │ 每周五 19:30 │ 股票组合构建+信号合成    │ │   │
+│  │  │ L3 (股票)        │ 每周五 19:30 │ 已随股票管线剥离至 fts-stock（2026-08）│ │   │
 │  │  ├─────────────────────────────────────────────────────┤ │   │
 │  │  │ L2 Evolution     │ 工作日每日 00:00 │ 夜间因子演化       │ │   │
 │  │  ├─────────────────────────────────────────────────────┤ │   │
@@ -155,5 +155,5 @@
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | 本文件描述 FTS 三种执行模式（CLI 命令行、Scheduler 定时调度、Monitor 监控），对应 `fts/cli.py`、`fts/scheduler/engine.py`、`fts/monitor/` 模块 |
-| 可验证断言 | CLI 支持 `fts evolution run` / `fts portfolio run` / `fts meta-loop run` 等子命令；Scheduler 注册 15 个任务（L1:07:59 工作日 / L2:00:00 工作日 / L3 期货:周五19:00 / L3 股票:周五19:30 / 期货信号管道:20:00 工作日 / 股票信号管道:08:45 工作日 / 健康检查:每10m / 月度衰减 / 数据质量 / 逻辑监控 + 因子巡检等，时间与 TRAE Schedule 对齐）；Monitor 提供 HTTP 健康检查端点 GET /health、Elite 因子追踪、熔断保护 |
-| 检验方式 | 运行 `python -m fts.cli --help` 验证 CLI 命令；`python -c "from fts.scheduler.tasks import list_tasks; assert len(list_tasks()) == 15"` 验证调度任务数 |
+| 可验证断言 | CLI 支持 `fts evolution run` / `fts portfolio run` / `fts meta-loop run` 等子命令；Scheduler 注册 13 个任务（L1:07:59 工作日 / L2:00:00 工作日 / L3 期货:周五19:00 / 期货信号管道:20:00 工作日 / 期货数据同步:17:30 工作日 / 健康检查:每10m / 月度衰减 / 数据质量 / 数据级监控:每日04:00 / 逻辑监控:22:00 / 因子巡检:03:00 / 流动性池:周六08:00 / MHF 信号:每30m；股票 L3 19:30 与股票信号管道 08:45 已随股票管线剥离至 fts-stock（2026-08），时间与 TRAE Schedule 对齐）；Monitor 提供 HTTP 健康检查端点 GET /health、Elite 因子追踪、熔断保护 |
+| 检验方式 | 运行 `python -m fts.cli --help` 验证 CLI 命令；`python -c "from fts.scheduler.tasks import list_tasks; assert len(list_tasks()) == 13"` 验证调度任务数 |

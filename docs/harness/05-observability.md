@@ -1,6 +1,6 @@
 # FTS 可观测性
 
-> 版本: v2.102.0
+> 版本: v2.103.0+9
 > 最后更新: 2026-08-05
 
 ---
@@ -92,7 +92,9 @@ METRIC drift_alert{overlap=0.00,weight=1.00,o_th=0.50,w_th=0.40} 1
 ```
 告警同时写入 `PortfolioLoop` state（`drift_alerted` / `drift_alert_info`）；`trigger_rebalance=True` 时生成 `AgentOptimizationProposal`（source=`drift_monitor`）附加到 proposals 供下游 Agent 消费。
 
-### 股票信号管道标准化与权重冻结日志（GAP-076 / GAP-072，v2.101.0）
+### 股票信号管道标准化与权重冻结日志（GAP-076 / GAP-072，v2.101.0；已随股票管线剥离至 fts-stock，2026-08）
+
+> 以下为历史记录：`scripts/daily_signal_pipeline.py`（股票信号管道）已随股票管线剥离至 fts-stock（2026-08），主系统仅保留期货信号管道（`scripts/futures_signal_pipeline.py`）的同类结构化进度日志。
 
 `scripts/daily_signal_pipeline.py` 每次运行输出结构化进度日志（stdout，含 trace_id 前置）：
 - `[标准化] 截面 none/zscore/rank 已应用到 {n} 个因子（{m} 交易日）`——Step 4 前截面标准化方式与覆盖范围（GAP-076）

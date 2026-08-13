@@ -3,7 +3,7 @@
 # 契约: fts/store/registry.py StorageRegistry 加载并校验
 # status 取值: active（当前权威存储）/ legacy（待迁移）/ planned（目标态）/ archived
 # 原则: 一数一源 SSOT，legacy 域必须声明 migrated_to，planned 域必须声明 migrated_from
-version: "2026-08-11"
+version: "2026-08-13"
 domains:
   # ── L1 配置层（属配置非数据，现状不变） ─────────────────────────
   - domain: config_seeds
@@ -14,14 +14,28 @@ domains:
     status: active
 
   # ── L2 行情库 ──────────────────────────────────────────────────
-  - domain: market_history
-    description: 期货/股票 K 线、分钟、tick、情感日频（追加式 + 分区 + 冷热；P3-B 已冷归档 kline_cache ≤2013 → data/archive/history_kline_cache_{year}.parquet）
+  # 32-stock-extraction-plan.md P3: 原 market_history 域拆为期货/股票两域
+  # （不对称分离：主系统保留期货，股票域迁至 d:\Programs\fts-stock）
+  - domain: market_history_futures
+    description: 期货 K 线、分钟、tick、情感日频（追加式 + 分区 + 冷热；P3-B 已冷归档 kline_cache ≤2013 → data/archive/history_kline_cache_{year}.parquet）
     backend: duckdb
     path: data/fts_history.duckdb
     tables: [kline_cache, contract_kline, minute_cache, tick_cache, sentiment_daily]
     partition_key: date
     retention: "永久（热层 + 冷层归档 data/archive/history_*_{year}.parquet）"
     status: active
+    migrated_from: [market_history]
+
+  - domain: market_history_stock
+    description: 股票/ETF K 线、基本面、北向/两融特表（32-stock-extraction-plan.md P3 拆分，P5 迁至新项目 data/）
+    backend: duckdb
+    path: data/fts_history.duckdb
+    tables: [stock_kline_cache, stock_fundamental_cache, ashare_special_cache, option_chain_cache]
+    partition_key: date
+    retention: "永久"
+    status: active
+    migrated_from: [market_history]
+    target: d:/Programs/fts-stock/data/fts_history_stock.duckdb  # P5 物理分库目标
 
   # ── L3 因子资产库（SSOT 目标，JSON 快照将降级为只读） ───────────
   - domain: factor_assets
@@ -43,32 +57,32 @@ domains:
     status: legacy
     migrated_to: [factor_assets]
 
-  # ── L4 运行状态库（P2 已落地 2026-08-11） ───────────────────────
+  # ── L4 运行状态库（P2 已落地 2026-08-11；E.3 S2 后端切换 SQLite WAL 2026-08-13） ──
   - domain: run_state
-    description: 演化/组合/combo 历史/权重/动态池（当前状态表 + 历史追加表，state_kv/state_history 双表，StateKVStore）
-    backend: duckdb
-    path: data/state.duckdb
+    description: 演化/组合/combo 历史/权重/动态池（当前状态表 + 历史追加表，state_kv/state_history 双表，StateKVStore；SQLite WAL 多读单写不互斥，解决 DuckDB 写锁阻塞读）
+    backend: sqlite
+    path: data/state.db
     tables: [state_kv, state_history]
     partition_key: namespace
     retention: "当前状态 UPSERT + 历史追加永久"
     status: active
-    migrated_from: [evolution_state, portfolio_state]
+    migrated_from: [evolution_state, portfolio_state, state_duckdb]
 
   - domain: evolution_state
-    description: 演化运行状态（memory/evolution/ 下 state/tracking，P2 迁移；P4 冻结期≥1 发布周期后退役清理）
+    description: 演化运行状态（memory/evolution/ 下 state/tracking，P2 迁移、P4 读路径已切换至 run_state；P4 冻结期≥1 发布周期后退役清理）
     backend: json
     path: memory/evolution
     partition_key: ""
-    retention: "过程痕迹 gz 归档（traces 不逐条入库；P4 冻结期后退役源）"
+    retention: "过程痕迹 gz 归档（traces 不逐条入库；读路径已切 SSOT，P4 冻结期后退役源）"
     status: legacy
     migrated_to: [run_state]
 
   - domain: portfolio_state
-    description: 组合与权重状态（memory/portfolio/ 下 combo/权重/动态池/质量快照，P2 迁移；P4 冻结期≥1 发布周期后退役清理）
+    description: 组合与权重状态（memory/portfolio/ 下 combo/权重/动态池/质量快照，P2 迁移、P4 读路径已切换至 run_state；P4 冻结期≥1 发布周期后退役清理）
     backend: json
     path: memory/portfolio
     partition_key: ""
-    retention: "当前状态入库 + 历史追加（P4 冻结期后退役源）"
+    retention: "当前状态入库 + 历史追加（读路径已切 SSOT，P4 冻结期后退役源）"
     status: legacy
     migrated_to: [run_state]
 

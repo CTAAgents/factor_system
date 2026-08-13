@@ -11,6 +11,7 @@
 - **技术栈**：Python 3.11+, Pandas, NumPy, SciPy, Statsmodels, TA-Lib, Numba, DuckDB, Pydantic V2, 可选：LangGraph（交易智能体）
 - **Python路径**：'C:\Program Files\Python312\python.exe'
 - **K线主路径**（统一路由引擎，含熔断器+缓存+降级）：`DUCKDB_CACHE`（本地缓存 Top1）→ `TDX_LOCAL`（通达信本地 HTTP 统一源 127.0.0.1:17709，日线+分钟+快照，v2.87.0 起合并 TQLocal/TDXMinute，TQ_LOCAL 旧 7721 已废弃）→ `TQ_PYTHON`（TQ-Python SDK）→ `AKSHARE`（即时获取降级）→ `SYNTHETIC`（合成数据兜底保证可运行）；分钟级降级链 `minute_cache → TDX_LOCAL`（17709）→ `TQSDK`（天勤，分钟/日线）；tick 降级链 `tick_cache → TQSDK_TICK`；实时价路径 `TDX_LOCAL → AKSHARE`；`WIND`/`IFIND` 仅用于字段增强层（宏观/基本面），多源交叉验证优先（≥2 源同日数据差异 >0.5% 记录分歧）
+- **数据持久化（六层存储架构，plans/29，SSOT 单一事实源）**：L1 配置层（`seeds/*.yaml` + `config/`，YAML 文件）→ L2 行情库（`data/fts_history.duckdb`，kline/minute/tick，追加式 + 按年冷热归档至 `data/archive/*.parquet`）→ L3 因子资产库（`data/factor_catalog_{stock,futures}.duckdb`，因子/评估/版本/审查/血缘，**DuckDB 为权威存储**）→ L4 运行状态库（`data/state.db` **SQLite WAL**，`state_kv` 当前状态表 + `state_history` 历史追加表可回放，StateKVStore；E.3 S2 2026-08-13 自 DuckDB 迁移，多读单写不互斥）→ L5 信号缓存（Parquet 列式 + checksum，`memory/cache/factor_signals/`）→ L6 日志血缘（JSONL 保留追加 + 摘要入库）。**核心约束**：结构化数据统一进 DuckDB/SQLite 且一数一源，禁止同类数据双写漂移；JSON 一律降级为只读快照/兼容回退（旧格式冻结期后退役清理）；信号/大面板与归档层走 Parquet；`fts/store/` 数据访问层（`StorageRegistry` + `storage_landscape.yaml` 域登记）为唯一读写入口契约，新增数据域必须先登记后落库。**DuckDB 连接生命周期（E.4 S1 2026-08-13）**：L2/L3 写连接一律短生命周期（`_write_scope` = `fts/store/duckdb_lock.py` 跨进程 filelock 互斥 + 写操作完成即关，秒级），读连接一律 `read_only=True` 短连接；禁止模块级常驻写连接（`_WRITER`/`_DB`/`_cache_conn` 已移除）；跨进程写经 `data/.locks/*.duckdb.lock` 串行化；repository `lock_configuration=true` 兼容读写共存。
 - **四大核心场景**：因子挖掘（离线）、策略开发与回测（仿真）、自动化实盘（生产）、风控治理（贯穿），场景代码完全解耦、逻辑严格对齐
 - **环境隔离**：研发环境、回测环境、实盘环境配置独立，禁止环境参数混用
 - **通用开发准则**：向量化优先、参数配置化、逻辑极简、分层解耦、兼容离线与生产双模式
@@ -73,7 +74,7 @@ docs/                # 项目文档、设计决策记录、FAQ
 - 因子去冗余：因子入库前必须做相关性筛查，共线因子只保留代表，避免共线性污染组合。
 - 固定随机种子：抽样、降噪、模型训练全固定种子，保证因子结果可复现。
 - 单因子职责单一：一个因子函数仅实现单一逻辑，复合因子由基础因子组合生成。
-- 因子存储规范：挖掘完成的因子需序列化（如Parquet格式）并附带元数据（计算日期、参数、版本号），存入指定数据库或路径。
+- 因子存储规范：挖掘完成的因子统一入库 `factor_catalog_*.duckdb`（L3 因子资产库，SSOT，附带计算日期、参数、版本号等元数据），JSON 仅作只读快照备份；禁止直接落散文件（.json/.npy 等）绕过存储层，信号/大面板类数据走 Parquet 缓存层。
 
 ### 4.2 策略回测场景红线（仿真）
 
@@ -140,9 +141,10 @@ docs/                # 项目文档、设计决策记录、FAQ
 - 因子回归测试：因子逻辑修改后必须重跑 IC/单调性基准，确保无逻辑漂移、无数据泄露。
 - 回测测试：固定测试数据集，验证迭代后指标无异常突变、逻辑无漂移、无数据泄露。
 - 实盘逻辑测试：模拟网络异常、行情缺失、风控触发、订单失败场景，验证兜底机制生效。
-- 回归测试（分级执行，2026-08-11 修订）：日常任务仅跑**受影响的模块/集成测试**，验证新改动不破坏相关功能；**全量回归**只在两类时机执行——① 发布前（版本 bump/晋级里程碑）必跑；② 每月底例行巡检一次。禁止每次任务都跑全量，避免测试时间随系统规模线性膨胀。
+- 回归测试（分级执行，2026-08-13 修订）：日常任务仅跑**受影响的模块/集成测试**，验证新改动不破坏相关功能；**全量回归**只在两类时机执行——① 发布前（里程碑版本 bump/晋级里程碑）必跑；② 每月底例行巡检一次。日常 build bump（`bump_version.py --build`）不触发全量回归。禁止每次任务都跑全量，避免测试时间随系统规模线性膨胀。
+- slow 分级（2026-08-13 起）：重量级真实演化/回测测试统一标记 `@pytest.mark.slow`（当前 26 个，集中于 test_evolution_loop.py），日常回归用 `pytest tests/ -m "not slow"` 跳过、全量验收必跑；DuckDB 嵌入式单进程写约束下，xdist 多 worker 并发写 `factor_catalog_futures.duckdb`（L3 因子资产库）会锁冲突，日常回归建议单进程执行，锁冲突类测试单进程定向复核（`state.db` 已切 SQLite WAL 多读单写不互斥，2026-08-13 E.3 S2；L2/L3 DuckDB 写锁已由 E.4 S1 短连接 + filelock 跨进程串行化解锁，写冲突概率大降，锁冲突类测试仍建议单进程定向复核）。
 - 性能基准测试：对关键计算路径（如因子计算、信号生成）设定性能基准（如每秒处理多少条K线），防止性能退化。
-- 所有新增功能必须配套单元测试；日常验证命令：模块测试 `pytest tests/<模块>/ -v`、集成测试 `pytest tests/<集成路径>/ -v`；全量命令 `pytest tests/ -v`（仅发布前/月度巡检）
+- 所有新增功能必须配套单元测试；日常验证命令：模块测试 `pytest tests/<模块>/ -v`、集成测试 `pytest tests/<集成路径>/ -v`；全量命令 `pytest tests/ -v`（仅发布前/月度巡检）；日常回归命令 `pytest tests/ -m "not slow" -q -o addopts="" -p no:cacheprovider`
 
 ## 七、项目运维命令规范
 

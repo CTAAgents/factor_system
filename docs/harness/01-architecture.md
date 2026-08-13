@@ -1,19 +1,18 @@
 # FTS 系统架构文档
 
-> 版本: v2.103.0
+> 版本: v2.103.0+9
 > 最后更新: 2026-08-10
 
 ---
 
 ## 1. 项目概述
 
-FTS（Factor Intelligence System，因子智能系统）是一个独立的因子策略系统，专注于因子推演、策略组建与交易信号产出。数据层基于腾讯自选股 MCP (akshare) 提供 A 股/ETF/期货行情数据，FTS **本身包含自洽的数据源适配层**，无外部数据项目依赖。
+FTS（Factor Intelligence System，因子智能系统）是一个独立的期货因子策略系统，专注于期货因子推演、策略组建与交易信号产出。数据层基于 DuckDB kline_cache（主源）+ AKShare/通达信/天勤（降级）提供期货行情数据，FTS **本身包含自洽的数据源适配层**，无外部数据项目依赖。股票管线已剥离至独立项目 fts-stock（v0.0.1，2026-08）。
 
 ### 项目边界
 
 | 职责 | 归属 |
 |:-----|:-----|
-| 行情数据获取（A 股/ETF OHLCV） | **FTS（通过 MCP/akshare 接入腾讯/东方财富 API）** |
 | 行情数据获取（期货 OHLCV） | **FTS（通过 DuckDB kline_cache/分钟 + AKShare futures_zh_daily_sina + 通达信/TQSDK 分钟数据）** |
 | 因子推演（挖掘/演化/评估） | **FTS 核心能力** |
 | 多因子策略组建 | **FTS 核心能力** |
@@ -58,13 +57,13 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  - MetaRunResult.candidates_per_minute（L1 吞吐指标，GAP-I101）         │
 │  - extractors/ 多路知识源管道（GAP-I103，v2.82.0）                      │
 │    ├ 研报/论文/天软/YAML 三源 + 另类源：                               │
-│    ├ AnnouncementNewsExtractor（公告/舆情，股票管道）                  │
-│    └ MacroEventExtractor（宏观事件，股票+期货管道）                    │
+│    ├ AnnouncementNewsExtractor（公告/舆情，已剥离至 fts-stock）        │
+│    └ MacroEventExtractor（宏观事件，期货管道）                        │
 │    多源并行收集（BaseExtractorPipeline.extract ThreadPoolExecutor）    │
 │  - FactorReviewWorkflow 人审驳回 → ExperienceChain（GAP-I102 二期）     │
-│  - 感知层样本按市场区分（v2.100.1）：股票 → CSI300 成分股子集          │
-│    （CSI300_SUBSET[:13]，与 L2 csi300 面板同源）；期货 → 五大板块 13    │
-│    品种；web_collector 股票模式走 FTSDataProvider.get_ohlcv 股票日 K    │
+│  - 感知层样本：期货 → 五大板块 13 品种；web_collector 期货模式走        │
+│    FTSDataProvider.get_futures_ohlcv（v2.100.1 按市场区分的机制已随     │
+│    股票样本剥离至 fts-stock，成为历史记录）                            │
 │                                                                         │
 │  职责: 每日知识补给 → 种子因子注入 → 市场语境感知 → 演化方向指引        │
 └─────────────────────────────┬────────────────────────────────────────────┘
@@ -72,25 +71,6 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
                               ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  L2 Evolution Loop (演化循环 — 因子核心演化层)                           │
-│                                                                         │
-│  ┌─ 股票 L2 (单标的时序) ─────────────────────────────────────────┐     │
-│  │ seed_correlation_check → parent_selection → macro_evolution    │     │
-│  │ (种子因子相关性预检        (UCT 树搜索)      (LLM 改逻辑)       │     │
-│  │  时序 Pearson+Spearman)                                              │     │
-│  │   → micro_evolution → evaluation_chain → elite                    │     │
-│  │   (optuna 调参)      (三级评估链)                                  │     │
-│  │                                                                         │
-│  │   股票横截面模式 (cross_section_data + industry_map/cap_map):        │     │
-│  │   cross_section_evaluate_backtest 支持行业/市值中性化               │     │
-│  │   (v2.57.0): _neutralize_signal_matrix 行业去均值 + 市值加权去均值 │     │
-│  │   (v2.61.0, GAP-S01): EvolutionLoop(market="stock") 自动加载       │     │
-│  │   industry_map.json + cap_map（stock_neutralization=true，          │     │
-│  │   键归一化：后缀 .SH/.SZ → 裸代码兼容面板 symbol）                 │     │
-│  │                                                                         │
-│  │   种子池: 482 因子 (9 内置+WQ101+Qlib158+GTJA191+23 基本面)       │     │
-│  │   数据: 单标的 OHLCV 时序                                           │     │
-│  │   评估: EvaluationChain 三级评估                                    │     │
-│  └─────────────────────────────────────────────────────────────────────┘     │
 │                                                                         │
 │  ┌─ 期货 L2 (横截面面板) ─────────────────────────────────────────┐     │
 │  │ parent_selection → evolution_mode → micro_evolution              │     │
@@ -124,7 +104,7 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │    - operator 生成常数校验前移: 生成循环内 evaluate 过滤非常数表达式       │
 │    - _execute_factor_code exec 后 exec_globals.update(local_vars), 修复    │
 │      eval_fts_expr 未定义 (模块级 import 绑定并入 factor_program.__globals__)
-│  seed_pool.py — 双种子池管理 + compute_seed_correlations() 时序相关性预检 │
+│  seed_pool.py — 期货种子池管理（81 因子，14 家族）                     │
 │  factor_program.py — 因子程序（图灵完备代码 + 安全沙箱）                  │
 │  verifier.py — Verifier 锁定协议                                       │
 │  state.py — 演化状态管理 + trace_id 全链路                              │
@@ -144,7 +124,8 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  expr_dsl/ — FTS-Expr 算子表达式语言 (Phase C.2)                        │
 │    registry.py — 算子注册表 (L0-L5 分层, 参数边界, 经济语义;            │
 │      GAP-S10: verify_registry_consistency 双注册表一致性;               │
-│      GAP-S12: A_SHARE_FIELDS 10 A股特有字段 + L5b 4 领域算子;           │
+│      GAP-S12: A_SHARE_FIELDS 10 A股特有字段 + L5b 4 领域算子           │
+│      （A 股特有，已随股票管线剥离至 fts-stock）；                       │
 │      GAP-I202: ts_slope/ts_quantile 时序组合算子 + required_shared      │
 │      硬约束——440 算子（8 组合/跨标的 + C8 22 + C9 30 + D10~D17 380）必须 │
 │      feature_ops.OperatorRegistry 共享；DSL 算子总数 512（2026-08-11     │
@@ -166,7 +147,7 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  - 多父代交叉提升种群多样性, 避免局部最优                                │
 │                                                                         │
 │  职责: 夜间批量演化 → 父因子选择 → 演化模式分派                       │
-│        (code/hybrid/operator/operator_first/batch; 股票默认 operator_first  │
+│        (code/hybrid/operator/operator_first/batch;                      │
 │         GAP-S11: 算子优先 → LLM → GP 逐级兜底; 方法分布记账)           │
 │        → optuna 参数优化 → 评估 → 审计 → 高IC筛查(B.4) → 4 重审查门禁 → 结构性聚类配额(GAP-077: 与既有 elite |corr|≥0.85 同类成员 ≥15 拒绝，替代 max_per_family 家族配额；关闭回退旧逻辑) → elite 因子 →       │
 │        [Phase 1.1 P0-2/26 计划] LLM 宏观演化注入父因子失败归因: read_failures_by_parent → ParentFailureContext → prompt 定向修复 │
@@ -224,11 +205,9 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 
 - **L0 → L1**: Program.md 设定 L1 的搜索空间、预算、市场偏好
 - **L1 → L2**: 注入种子因子 + 演化方向指引（通过 seed_pool.inject()）
-  - 股票 L2: 482 股票因子种子池（时序模式）
-  - 期货 L2: 184 期货因子种子池（17 家族，横截面模式）
+  - 期货 L2: 185 期货因子种子池（17 家族，YAML 优先加载 seed_loader，横截面模式；硬编码兜底 81 因子/14 家族，见 L2 架构图）
   - 种子晋升 elite 质检链与演化因子完全对齐（v2.50.0）：Verifier 判定 + 质量评分卡 + 端到端回测 + 数据质量监控 + FactorAuditor 6 项强制审计 + 消融实验 + 因果结构审查 + 鲁棒性审查 + SHAP 可解释性分析，任一关卡失败即拒绝晋升（种子 L1 注入候选与人工精选种子一视同仁）
 - **L2 → L3**: 
-  - 股票 L2: elite 因子（写入 memory/knowledge/factors/stocks_elite/）+ 种子因子相关性预检结果（`seed_correlations` 通过 EvolutionRunResult 传递给 L3 组合阶段参考）
   - 期货 L2: elite 因子 + 横截面评估指标 + 因子加权权重（Ridge 回归）
 
 ---
@@ -239,13 +218,12 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 fts/
 ├── __init__.py                 # 包入口 + 版本号 v2.3.0
 ├── cli.py                      # 统一命令行入口
-├── data.py                     # 数据层统一入口（股票/ETF/期货）
+├── data.py                     # 数据层统一入口（期货）
 ├── data_cache.py               # 数据缓存管理
 ├── data_mcp.py                 # MCP 数据适配层（akshare 腾讯/东方财富）
 ├── data_mcp_bridge.py          # MCP Bridge 桥接层
 ├── data_futures.py             # 期货数据适配层（DuckDB kline_cache + AKShare）
 ├── data_futures_fundamental.py # 期货基本面数据（库存/仓单/基差）
-├── data_fundamental.py         # 股票基本面数据层
 ├── llm.py                      # LLM 客户端（OpenAI/Anthropic/Mock）
 ├── talib_bridge.py             # TA-Lib 技术指标桥接
 ├── config/                     # 配置系统
@@ -261,7 +239,7 @@ fts/
 │   ├── fusion.py               # 数据融合引擎
 │   ├── ifind_source.py         # iFinD 数据源
 │   ├── wind_source.py          # Wind 数据源
-│   ├── tdx_local_source.py     # 通达信本地 HTTP 统一源（端口 17709，日线+分钟+快照，v2.87.0）
+│   ├── tdx_local_source.py     # 通达信本地 HTTP 统一源（端口 17709，日线+分钟+快照，v2.87.0；GAP-084 股票列扩展已随股票管线剥离至 fts-stock）
 │   ├── tqsdk_source.py         # 天勤 TQSDK 数据源（分钟/日线）
 │   ├── tqsdk_enhance_source.py # 天勤 TQSDK 字段增强源（GAP-083 阶段 C：close_oi→hold、差分→oi_change）
 │   ├── ifind_sdk_source.py     # iFinD 官方 SDK 字段增强源（GAP-083 方案 A 框架保留：settle/pre_settle 权威，无 iFinDPy 权限不启用，pre_settle 走零依赖派生）
@@ -271,7 +249,10 @@ fts/
 ├── factor_engine/              # 因子引擎（核心模块）
 │   ├── __init__.py             # 模块入口 + 版本号 v1.1.0
 │   ├── contracts.py            # 完整 TypedDict 契约（L1+L2+L3）
-│   ├── evolution_loop.py       # L2 主循环（股票时序/期货横截面双模式）
+│   ├── evolution_loop.py       # L2 主循环（期货横截面模式）；34 计划起拆分为多 Mixin 组合（UCT/trace/channels/seeds/audit/review/prefilter/promote/candidate），公开 API 不变
+│   ├── evolution_uct.py        # UCT 父因子选择 Mixin（34 计划领域 I，2026-08-13）：_select_parent_uct/_update_uct_stats/_update_uct_failure + _check_circuit_breaker/_maybe_early_stop，内部状态 _uct_stats/_evolution_stop_*/_consecutive_empty_generations/_early_stop_*
+│   ├── evolution_trace.py      # trace/经验链 Mixin（34 计划领域 J，2026-08-13）：12 方法（_record_*_trace ×6 + _build_parent_failure_ctx/_build_success_pattern_report/_record_experiment_variant/_export_experiment_log/_log_inspection_detail + _QualityInspectionResult 数据类），内部状态 _success_pattern_cache/_experiment_log_dir/_experiment_variants
+│   ├── evolution_channels.py   # 演化通道 Mixin（34 计划领域 G，2026-08-13）：_run_gp_evolution/_run_deep_evolution/_generate_operator_factor/_try_operator_engine_evolution（GP/深度/算子 DSL 三通道），组件 feature_ops_engine/feature_importance_analyzer 装配于主类
 │   ├── orthogonal_basis.py     # 多因子正交基底（GAP-I206 补充, v2.72.1）：Gram-Schmidt 迭代残差化 + 基底注册/持久化
 │   ├── batch_mining.py         # 批量挖掘漏斗（GAP-I201, v2.65.0）：BatchMiner 批量生成 + 并行粗筛 + 排序截断，evolution_mode="batch" 时每代批量候选
 │   ├── executor_backend.py     # 可插拔执行器抽象（GAP-I502, v2.83.0；C4 2026-08-11 增强）：ExecutorBackend（thread/process/dask/ray）+ create_executor_backend 工厂，BatchMiner.filter_batch 接入；DaskBackend：cluster 句柄注入/address 优先（单机 LocalCluster 等价多节点调度语义，真实集群 tcp://scheduler:8786 接入后置）、worker_count（scheduler_info 视角诊断）/kill_worker（故障注入）/alive_workers 均降级不抛、map 经 _DaskResultIterator 单任务异常隔离（对齐 concurrent.futures.map 契约，生成器异常会关闭丢失后续任务）；缺依赖自动降级 ProcessBackend
@@ -288,7 +269,7 @@ fts/
 │   ├── ml/deep_factor.py       # 深度因子生成器（GAP-I203, v2.73.0；C5 2026-08-11 并入 Transformer）：GRU/Transformer 训练 → 权重内嵌零未来函数 code（DeepFactorConfig.model_kind 分派）
 │   ├── factor_optimizer.py    # 因子优化器（FactorSignalCache 信号缓存 Parquet 化：put 写单列 Parquet（DuckDB 零依赖）+ checksum 校验 + .npy 只读兼容回退重建，plans/29 P3-A）
 │   ├── seed_data_futures_full.py # 期货全量种子因子（14 家族 81 因子）
-│   ├── seed_pool.py            # 双种子池（股票 482 + 期货 81）+ 种子因子相关性预检
+│   ├── seed_pool.py            # 期货种子池（81 因子，14 家族）
 │   ├── factor_program.py       # 因子程序（安全沙箱）
 │   ├── standardizer.py        # 因子标准化
 │   ├── verifier.py             # Verifier 锁定协议
@@ -332,7 +313,6 @@ fts/
 │   ├── recalibration.py        # 在线重校准队列（C6 2026-08-11）：RecalibrationQueue 状态机（pending/processing/done/skipped/failed）+ JSON 幂等落盘 + recalibrate_factor（复用 optimize_params_staged 两阶段漏斗）+ process_recalibration_queue（elite JSON/DuckDB 元数据回写）；CLI fts factor recalibrate list/run
 │   ├── experiment_log.py       # 结构化实验日志（Phase 2 P1-2/26 计划 §7，2026-08-11）：ExperimentLogWriter 聚合 run 内候选（预筛拦截/失败/晋升全结局）→ data/experiments-{run_id}.json（run_id 幂等覆盖，按 generation+parent_id 分组 rounds + summary by_method，轻量契约校验非法 warning 不阻断）；evolution_loop run() finally 自动导出
 │   ├── success_pattern.py      # 成功模式定向演化（Phase 1.2 P0-1/26 计划 §6，2026-08-11）：analyze_success_patterns 滚动窗口+时间衰减聚合近期成功模式（by_method 晋升率/算子/窗口分箱，排除 family）→ format_report_for_llm prompt soft 偏向（样本 <min_sample 空报告不注入）
-│   ├── neutralization.py       # 横截面因子中性化（D.2 股票 L3 补齐，2026-08-11）：industry_neutralize 组内去均值 / size_neutralize log市值 OLS 残差 / cross_section_neutralize 逐日施加；映射缺失/样本不足降级不抛错
 │   └── expr_dsl/               # 算子演化基础层 (Phase C.2): FTS-Expr DSL
 │       ├── parser.py           # 递归下降解析器 (表达式 → AST)
 │       ├── validator.py        # 静态校验 (算子/字段/参数边界/max_lookback PIT)
@@ -370,7 +350,7 @@ fts/
 ├── store/                      # 数据持久化访问层（plans/29 Phase 0，2026-08-11，GAP-090）
 │   ├── __init__.py             # 导出 StorageBackend/StorageDomain/StorageRegistry/load_storage_landscape/StateKVStore/DEFAULT_STATE_DB
 │   ├── registry.py             # 存储域注册表：storage_landscape.yaml 契约加载（FTS_STORAGE_LANDSCAPE_PATH env 覆盖，13 域）+ StorageDomain 契约（domain/description/backend/path/tables/partition_key/retention/status/migrated_from·to）+ validate_contract（必填字段/后端枚举/相对路径/状态合法/legacy·planned 迁移血缘方向）；SSOT 单一事实源第一步，零存量数据变更
-│   └── state_db.py             # 运行状态 KV 存储（plans/29 Phase 2，2026-08-11）：StateKVStore 双表（state_kv 当前状态表 namespace+key 复合主键 UPSERT + state_history 历史追加表 seq 自增可回放），value JSON 序列化，upsert/get/get_all/snapshot（全量 dump 供无 state.json 冷启动）/history；默认库 data/state.duckdb（L4 运行状态库）
+│   └── state_db.py             # 运行状态 KV 存储（plans/29 Phase 2，2026-08-11；E.3 S2 后端切换 SQLite WAL 2026-08-13）：StateKVStore 双表（state_kv 当前状态表 namespace+key 复合主键 UPSERT + state_history 历史追加表 seq AUTOINCREMENT 自增可回放），value JSON 序列化（TEXT 存储），upsert/get/get_all/snapshot（全量 dump 供无 state.json 冷启动）/history；upsert 单事务包裹双表原子、WAL 下写连接存活不阻塞外部读、seq 单调；默认库 data/state.db（L4 运行状态库，SQLite，零新增依赖）
 ├── risk/                       # 风控层（C.2）
 │   ├── __init__.py             # 导出 RiskManager/TradeAdapter/SimulatedTradeAdapter
 │   ├── risk_manager.py         # RiskManager 五项风控规则（仓位/回撤/亏损/杠杆/集中度）
@@ -428,16 +408,16 @@ AST (ExprNode 树)
 ### 全局数据流
 
 ```
-MCP/akshare (腾讯自选股/东方财富 API)     DuckDB kline_cache (期货)
-    │                                          │
-    │ OHLCV K 线数据 (A 股 / ETF)              │ OHLCV 日线 (期货连续合约)
-    │                                          │
-    ▼                                          ▼
-FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
+DuckDB kline_cache (期货, data/fts_history.duckdb)     AKShare / 通达信 / TQSDK（降级源）
+    │                                                       │
+    │ OHLCV 日线 (期货连续合约, 复权)                        │ 日线/分钟 即时获取
+    │                                                       │
+    ▼                                                       ▼
+FTS (因子推演) — 支持期货横截面因子演化
     │
     ├── 因子引擎 → 策略组建 → 信号合成
     │       │
-    │       ├── elastic_net（默认，Elastic Net 截面回归）
+    │       ├── elastic_net（默认，Elastic Net 截面回归；因子代码经 _build_factor_code_map 加载：内存 code 优先 → DuckDB 补拉 → JSON 快照兜底，v2.103.0+5）
     │       ├── sharpe_weight（按 Sharpe 归一化加权）
     │       ├── equal_weight（等权 1/N）
     │       └── ml_ensemble（ML 模型集成融合，通过 fts/ml/ 可选依赖）
@@ -475,7 +455,10 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
 │    ▼                                                                │
 │ scripts/futures_signal_pipeline.py（横截面信号管道，方向校正 = 截面 IC │
 │ 法，因子加权 = Ridge 回归 L2 正则化，Market Regime 检测 =           │
-│ RegimeAwareSelector，品种-链对齐度修正 = compute_alignment）         │
+│ RegimeAwareSelector，品种-链对齐度修正 = compute_alignment；因子     │
+│ 来源 = DuckDB 因子资产库 factor_catalog_futures.duckdb（SSOT，      │
+│ market=futures + is_elite + status=active，GAP-097 v2.103.0），     │
+│ JSON 快照目录 futures_elite/ 仅作降级回退）                          │
 │    │                                                                │
 │    ▼                                                                │
 │ reports/{date}/futures_signals_{date}.md                            │
@@ -499,26 +482,28 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
 │    │   → contract_kline 缺失时降级：返回原始拼接序列（不报错）      │
 └─────────────────────────────────────────────────────────────────────┘
 
-┌─ DuckDB 并发模型（v2.86.0，GAP-056，design/E.1；v2.101.0 分库扩展） ─┐
-│ 单写者 + 读连接池（读写分离，互不阻塞）+ 按市场物理分库                │
-│    │                                                                │
-│    │ _get_writer() → DuckDBWriter（唯一可写连接，进程内写锁）       │
-│    │   → execute / executemany / copy_from_records（BEGIN/COMMIT    │
-│    │     包裹，批量原子，异常整批 ROLLBACK）                         │
-│    │   → 写路径：_write_contract_kline / 数据同步                   │
-│    ▼                                                                │
-│ _get_reader() → DuckDBReader（连接池，普通连接，读语义纪律保证）    │
-│    │   → _from_kline_cache / get_dominant_contracts 等读路径        │
-│    │   → MVCC 快照：写提交期间读侧不阻塞                            │
-│    ▼                                                                │
-│ 因子目录分库（v2.101.0，GAP-056 扩展，design/E.1 §2.4）：            │
-│   get_db_path(market) 路由 → factor_catalog_stock.duckdb（stock+multi）│
-│   / factor_catalog_futures.duckdb（futures+multi），物理隔离消除      │
-│   跨市场文件锁竞争；行情数据（kline_cache/stock_kline_cache）仍单库   │
-│   统一存于 data/fts_history.duckdb（写一次读多次，单写者已覆盖）      │
-│ 兼容层：_get_db() 保留（旧调用方）；retry_on_conflict/AsyncWriteQueue│
-│ 保留为防御兜底；duckdb_single_writer=false 回退旧多路径              │
-└─────────────────────────────────────────────────────────────────────┘
+┌─ DuckDB 并发模型（v2.86.0，GAP-056，design/E.1；v2.101.0 分库扩展；v2.103.0 E.4 S1 连接生命周期根治） ─┐
+│ 写窗口短生命周期 + filelock 跨进程互斥 + 读路径 read_only（E.4 S1，2026-08-13）      │
+│    │                                                                                │
+│    │ _write_scope() → filelock（fts/store/duckdb_lock.py，data/.locks/*.lock）       │
+│    │   + 短生命周期写连接（写完即关，秒级；演化/同步进程其余时间零写连接）            │
+│    │   → execute / executemany / copy_from_records（BEGIN/COMMIT 包裹，批量原子）    │
+│    │   → 写路径：_write_contract_kline / _write_cache / repository 4 类               │
+│    ▼                                                                                │
+│ _open_read_conn() / DuckDBReader → read_only=True 短连接（读完成即关）               │
+│    │   → _from_kline_cache / get_dominant_contracts 等读路径                        │
+│    │   → MVCC 快照：写提交期间读侧不阻塞（lock_configuration=true 读写共存）        │
+│    ▼                                                                                │
+│ 因子目录分库（v2.101.0，GAP-056 扩展，design/E.1 §2.4）：                            │
+│   get_db_path(market) 路由 → factor_catalog_futures.duckdb（futures+                │
+│   multi）；物理隔离消除跨市场文件锁竞争（factor_catalog_stock.duckdb                 │
+│   已随股票管线剥离至 fts-stock）；行情数据（kline_cache）仍单库                      │
+│   统一存于 data/fts_history.duckdb                                                    │
+│ 兼容层：repository _get_conn 补 lock_configuration=true（旧版静默降级）；             │
+│ retry_on_conflict/AsyncWriteQueue 保留为防御兜底；duckdb_single_writer=false 回退旧  │
+│ 多路径；_get_db()/DuckDBReader 读路径 read_only=True（E.4 S1 起）；_get_writer 已     │
+│ 降级为一次性短连接 deprecated（旧脚本兼容）                                           │
+└──────────────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ 期货截面中性化 + 回测真实性仿真（v2.59.0，GAP-F03/F02） ────────┐
 │ 板块映射（FUTURES_SECTOR_MAP 反向构建 {symbol: sector}）            │
@@ -534,35 +519,12 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
 │    │   → trade_filter=False 时跳过拦截（回归兼容）                  │
 └─────────────────────────────────────────────────────────────────────┘
 
-┌─ 股票截面中性化主流程（v2.61.0+，GAP-S01/S02） ────────────────┐
-│ 行业映射 data/industry_map.json + 市值映射 cap_map                │
-│    │                                                                │
-│    │ EvolutionLoop(market="stock", cross_section) 自动加载          │
-│    │   → 读取 FTSConfig.stock_neutralization（默认 true）           │
-│    │   → load_industry_map() + cap_map_path（缺失股票标 UNKNOWN）   │
-│    │   → 键归一化：映射键 "600519.SH" → 裸代码 "600519"（面板键）    │
-│    ▼                                                                │
-│ cross_section_evaluate_backtest（industry_map/cap_map 透传）        │
-│    │   → _neutralize_signal_matrix 行业去均值 + 市值加权去均值       │
-│    │   → 剥离行业/市值系统性偏差，消除伪预测力（GAP-S01）           │
-│    │   → 报告输出中性化前后 IC 对比（ic_pre_neutral）               │
-│    ▼                                                                │
-│ Barra 风格中性化（v2.62.0，GAP-S02）                               │
-│    │   → fts/factor_engine/barra/                                   │
-│    │     ├─ barra_style.py        10 风格因子截面暴露（CNE6 简化）  │
-│    │     │  size/beta/momentum/residual_vol/nonlinear_size/         │
-│    │     │  book_to_price/liquidity/earnings_yield/growth/leverage  │
-│    │     └─ barra_neutralizer.py  逐日截面 OLS 回归取残差           │
-│    │   → 残差 = 纯 alpha（剥离风格暴露，回答"风格钱还是 alpha 钱"）  │
-│    │   → 行业去均值 → 风格回归残差 两级中性化链                    │
-└─────────────────────────────────────────────────────────────────────┘
-
 ┌─ 多持有期 IC 体系（v2.90.0，GAP-060） ─────────────────────────┐
 │ fts/factor_engine/horizon_analysis.py（时序，单标的）              │
 │    │  compute_multi_horizon_ic(signal, close, horizons=(1,5,10,20))│
 │    │    → 各持有期 IC/ICIR/胜率 + best_horizon + decay_curve       │
 │    ▼                                                               │
-│ evaluation_chain.cross_section_evaluate_backtest（横截面，股票主） │
+│ evaluation_chain.cross_section_evaluate_backtest（横截面，期货） │
 │    │  compute_cs_multi_horizon_ic(oos_signal, panel, symbols, ...) │
 │    │    → 各持有期 h 日前向收益矩阵 → 逐期截面 Spearman IC 聚合     │
 │    │    → 输出 multi_horizon（ic_by_horizon/icir_by_horizon/       │
@@ -624,48 +586,6 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
 │        达阈值且符号比例≥下限，A+C 双机制 OR 判定，v2.103.0）        │
 │        + 新增审计项 symbol_holdout                                  │
 │      （留出集 IC > 0 且保持率 ≥ 阈值）；数据缺失→skipped           │
-│      股票 L2 晋升需额外满足两项（同市场泛化量化保障）              │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌─ 股票行业轮动 + 风格轮动 Regime（v2.65.0，GAP-S03） ──────────────┐
-│ fts/factor_engine/stock_regime.py（StockRegimeSelector）            │
-│    │  行业轮动维度: 行业收益面板 → 动量横截面离散度                  │
-│    │    → rotation_strength + top-N 集中度                          │
-│    │    → concentrated / rotating / balanced 三态                   │
-│    │  风格切换维度: 风格指数面板（large/small/growth/value）        │
-│    │    → 大小盘比值 + 成长价值比值 尾部动量方向                     │
-│    │    → large_cap / small_cap + growth / value 双态               │
-│    │  多周期集成: 复用 regime_hmm.MultiHorizonHMMDetector           │
-│    │    → 比值序列构造合成 OHLCV → HMM 趋势态校正置信度              │
-│    │  降级: hmmlearn 缺失/样本不足 → 规则动量判定 / fallback        │
-│    ▼                                                                │
-│ PortfolioLoop.run(stock_regime=...)（market="stock"）               │
-│    │   → Step 2.5 优先使用 StockRegimeSelector 结果                  │
-│    │   → REGIME_STYLE_MULTIPLIERS 新增 6 股票风格键:                 │
-│    │     large_cap/small_cap/growth/value/                           │
-│    │     sector_concentrated/sector_rotating → 风格自适应权重        │
-│    ▼                                                                │
-│ CLI `fts portfolio run --universe stock`（GAP-I301, v2.68.0）       │
-│    │   → L3 组合构建完成（状态 passed/verifier_warning/completed）   │
-│    │   → 自动触发 scripts/daily_signal_pipeline（股票信号管道，      │
-│    │     方向校正=截面IC + Ridge 权重学习 + 仅做多 TopN）            │
-│    ▼                                                                │
-│ scripts/daily_signal_pipeline.py（GAP-072 权重快照 + GAP-076 标准化      │
-│    + D.2 中性化/L3 升级 + 偏差 b Regime 自适应）                          │
-│    │   --normalize none/zscore/rank（默认 none）                        │
-│    │   --neutralize none/industry/size/both（默认 none，D.2）          │
-│    │   --l3-mode ridge/elastic_net（默认 ridge，D.2，失败回退 ridge）   │
-│    │   --regime none/auto（默认 none，D.2 偏差 b）                      │
-│    │   → 截面标准化（normalize_signal_matrix：逐交易日截面             │
-│    │     z-score(ddof=0) / rank 百分位秩→[-1,1]，NaN→0，常数截面→0）  │
-│    │   → 截面中性化（D.2 neutralize_signal_matrix：行业组内去均值 +     │
-│    │     市值回归残差，剥离行业/市值 proxy 偏好；快照记录口径复用）     │
-│    │   → 方向校正（截面 IC，Spearman vs 未来5日收益）                   │
-│    │   → 权重学习（默认 Ridge；--l3-mode elastic_net 走共享 L3 合成）   │
-│    │   → Regime 自适应权重（D.2 偏差 b --regime auto：自聚合行业/风格   │
-│    │     面板（industry_map/cap_map 双端键归一化）→ StockRegimeSelector │
-│    │     .detect → apply_stock_regime_weights style 倍率；数据不足降级）│
-│    │   → 加权合成（方向校正 + 权重 + 成本扣减）→ 仅做多 TopN           │
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌─ 实盘执行链路 + 样本外强制 + 保证金建模（v2.60.0，GAP-F01/F08/F09）─┐
@@ -698,7 +618,7 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
 │     ├─ simulated_portfolio.py                                       │
 │     │    SimulatedPortfolio 模拟仓：apply_signal（干预→风控→         │
 │     │    reconcile 加/减/平/反手）→ mark_to_market（期货保证金+       │
-│     │    盯市/股票全额现金）→ attribute_factor_returns（权重×下期    │
+│     │    盯市）→ attribute_factor_returns（权重×下期              │
 │     │    收益 → LiveFeedbackRecord 归因）→ portfolio_risk_status     │
 │     │    （D.2 组合级风控：6 维度指标 + WARN/BLOCK/FORCE 三级预警）   │
 │     │    + set_book_provider（D.2 盘口撮合注入，无盘口降级 bps）      │
@@ -731,7 +651,7 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
 │ 分钟级回测报告                                                        │
 └───────────────────────────────────────────────────────────────────────┘
 
-┌─ 宏观字段增强层（v2.32.0+；v2.101.0 默认源切 EastmoneyMacroSource）──┐
+┌─ 宏观字段增强层（v2.32.0+；v2.101.0 默认源切 EastmoneyMacroSource；v2.103.0 注入端闭环）─┐
 │ EastmoneyMacroSource（东财 RPT_ECONOMY_CPI/CUSTOMS + akshare 中债登   │
 │   1 年期/美债 10 年期）→ edb_cache (indicator/date/value 七列)        │
 │    │（iFinD EDB 需 API Key 实测不可用，显式传 source 可切回）          │
@@ -740,8 +660,11 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
 │ MacroFieldAligner.align()（月度→交易日 ffill + 发布滞后防未来函数）    │
 │    │                                                                  │
 │    ▼ 注入为 K 线 DataFrame 列（export/import_data/cpi/rate/us_bond）  │
-│ BacktestPipeline._compute_factor() → _execute_factor_code()           │
-│   → 宏观因子 data.get('export') 读取真实宏观数据（不再走 close 代理）  │
+│ 注入端三条消费链（GAP-088 v2.103.0 注入端闭环）:                       │
+│ ① BacktestPipeline._compute_factor() → _execute_factor_code()         │
+│ ② futures_signal_pipeline._inject_macro_to_panel（--no-macro-injection 可关）│
+│ ③ cli._prepare_futures_data（横截面演化面板，失败降级不阻断）          │
+│    → 宏观因子 data.get('export') 读取真实宏观数据（不再走 close 代理） │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -750,16 +673,12 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
   fut_macro_export 家族在单品种（RB0）时序上 IC≈0（历史 Sharpe 7.68 为
   close 代理假象），v2.33.0 已全部 retire。
 - 宏观数据注入层保留，仅作为**跨品种/板块层面**数据供给：
-  ① SectorRegimeSelector 产业链 regime 选择；② 组合风险预算归因；
-  ③ 跨市场泛化验证（futures→ETF 方向）。
+  ① SectorRegimeSelector 产业链 regime 选择；② 组合风险预算归因。
 
 **common_dates 语义（v1.7.1）**：
 - `get_futures_panel()` 返回的 `common_dates` 由「全品种日期交集」改为「多数对齐」：
   取至少 `max(2, 品种数//2)` 个品种共有的日期。
-- `get_csi300_panel()`（股票横截面，GAP-XXX，v2.103.0）`common_dates` 由「300 只成分股日期硬交集」改为「覆盖率阈值对齐」：取至少 `ceil(股票数 × min_coverage_ratio)`（默认 0.8）只股票共有的日期，默认 `min_coverage_ratio=0.8`。
-  - 原因：全交集在 300 只沪深300成分股（含前复权索引差异、停牌、上市时间不同）下被压缩至约 103 天（实测），OOS 窗口仅约 31 天，导致非横截面审计项 `cross_symbol`（≥80% 标的正 IC）与 `oos_consistency`（|ICIR|≥1.0）在短窗口下统计噪声主导、通过率恒为 0，全量误杀演化候选。
-  - 覆盖率阈值对齐后共同日期提升至约 750 天（实测），OOS 窗口约 225 天，恢复两项审计的统计可信度。
-  - 兼容性：`_cs_build_matrices` 用 `reindex(common_dates)`，少数据股票在缺省日得 NaN；`_cs_compute_ics` 每期已用 `valid=~isnan` 过滤，故放宽后无需改动下游。
+- `get_csi300_panel()`（股票横截面，GAP-XXX，v2.103.0）`common_dates` 覆盖率阈值对齐实现已随股票管线剥离至 fts-stock（2026-08）。
 - 原因：全交集在 76 个商品期货（FUTURES_SUBSET）下会因个别停更品种
   （WH0/JR0/RI0/LR0 数据止于 2022-2023）将交集清空，导致横截面方向校正
   （截面 IC 法）静默失效，全部因子 flip=1.0。
@@ -770,9 +689,9 @@ FTS (因子推演) — 支持 A 股/ETF/期货横截面因子演化
 - 信号报告输出品种中文名称（FUTURES_SYMBOL_NAMES 映射）与主力合约代码
   （get_dominant_contracts() 按 contract_kline 最新交易日最大成交量判定）。
 - L3 定时任务（20:00）组合构建显式走期货路径（v2.73.0）：`elite_dir=futures_elite_dir` + `market="futures"`，与 CLI `portfolio run --universe futures` 对齐；完成后触发信号管道使用 `--universe all` 全量商品池。
-- L3 `run()` Step 0.5 期货分支自动构建市场级合成 OHLCV（v2.98.1，方案 B）：未显式传 `market_ohlcv` 时，用 `SectorRegimeSelector._build_sector_ohlcv`（全品种 close 截面均值 + volume 截面和）构建市场级合成 OHLCV，激活 Step 2.5 Regime 自适应权重调整（此前定时任务/CLI 期货路径因 `market_ohlcv=None` 恒跳过）；数据不足/构建异常降级置 None 保持原跳过路径；仅期货路径生效，股票路径仍由 `stock_regime` 驱动（GAP-S03）不受影响。
+- L3 `run()` Step 0.5 期货分支自动构建市场级合成 OHLCV（v2.98.1，方案 B）：未显式传 `market_ohlcv` 时，用 `SectorRegimeSelector._build_sector_ohlcv`（全品种 close 截面均值 + volume 截面和）构建市场级合成 OHLCV，激活 Step 2.5 Regime 自适应权重调整（此前定时任务/CLI 期货路径因 `market_ohlcv=None` 恒跳过）；数据不足/构建异常降级置 None 保持原跳过路径；仅期货路径生效（股票路径已随股票管线剥离至 fts-stock）。
 - Regime 机构级优化链路（plans/28，2026-08-11）：`regime_hmm.MultiHorizonHMMDetector`（多周期 HMM 后验概率输出 regime_probs，28-T2）→ `regime_calibration.RegimeConfidenceCalibrator`（置信度熵标定 exposure_scale 仓位缩放：`scaled = confidence × (1 − entropy_penalty × H_norm)`，28-T4，`_compute_exposure_scale` 在 Step 2.5 计算、build_combo 消费）→ `regime_model_selection.BICStateSelector`（BIC 状态数选择 + StateMapStabilizer 防翻转，28-T7）→ `regime_validation.RegimeOutOfSampleValidator`（制度有效性样本外验证 + 全制度概率比对，28-T9）。`PortfolioLoop` Step 2.5 组合链路：regime_probs 概率混合权重（`probability_mix` 开关，28-T3，无 probs / 关闭时回退硬查表）→ RegimeSmoother 不对称切换（`de_risk_alpha`/`re_risk_alpha`，28-T6）→ exposure_scale 置信度仓位缩放（`confidence_scale` 开关，关闭时恒 1.0）→ `prometheus_metrics.record_regime_metrics` 观测指标上报（fts_regime_confidence/entropy_norm/exposure_scale/blend_hhi/name，28-T10，失败不阻断主流程）。
-- 股票 L3 定时任务（v2.98.3）：`l3_portfolio_loop_stock` 每周五 19:30（收盘后重算组合权重），与股票信号管道解绑（GAP-072），信号由独立 `daily_signal_pipeline`（工作日 08:45）生成。
+- 股票 L3 定时任务（v2.98.3，已剥离）：`l3_portfolio_loop_stock`（每周五 19:30 重算组合权重）与 `daily_signal_pipeline`（工作日 08:45）等股票调度已随股票管线剥离至 fts-stock（2026-08），主系统仅保留期货调度。
 
 **因子加权方法（v1.7.3 — Ridge 回归）**：
 - 基于 Shen & Xiu 的弱信号理论：当因子信号普遍较弱时，L2 正则化（Ridge）优于 L1 选择（Lasso/硬阈值）。
@@ -811,17 +730,6 @@ Program.md (L0 人类设定)
     │
     ▼
 L1 Meta-Loop ──→ 知识补给 + 种子注入 ──→ seed_pool.py
-    │                                       │
-    │                                       ▼
-    │                              ┌─ 股票 L2 Evolution Loop ─┐
-    │                              │ seed_correlation_check    │
-    │                              │ (时序 Pearson+Spearman)   │
-    │                              │ → parent_selection (UCT) │
-    │                              │ → macro_evolution (LLM)  │
-    │                              │ → micro_evolution (optuna)│
-    │                              │ → evaluation_chain (3级) │
-    │                              │ → elite + correlations   │
-    │                              └───────────────────────────┘
     │                                       │
     │                                       ▼
     │                              ┌─ 期货 L2 Evolution Loop ─┐
@@ -873,7 +781,7 @@ monthly_decay_eval_job (每月1日 02:00)
             │
             ├── 1. FactorStatusRepository.update_factor_status() → DuckDB status = "retired"
             ├── 2. FactorStatusRepository.log_transition() → 记录状态变迁（old_status → retired）
-            ├── 3. 移动 JSON 快照到 {elite_dir}/_retired/{factor_id}.json（股票=stocks_elite，期货=futures_elite，v2.86.0）
+            ├── 3. 移动 JSON 快照到 {elite_dir}/_retired/{factor_id}.json（期货=futures_elite，v2.86.0）
             │
             └── 因子从活跃池移除，不再参与 L3 组合构建与信号合成
 ```
@@ -901,6 +809,31 @@ Verifier 是 FTS 的核心安全机制，锁定后不可逆：
 - **L2 Verifier**: 控制 L2 因子演化流程
 - **L3 Verifier**: 控制 L3 组合构建和信号产出
 - 锁定后只能读取，无法修改配置
+
+### EvolutionLoop Mixin 拆分契约（34 计划，2026-08-13 起）
+
+`evolution_loop.py` God Class 重构为「领域 Mixin 组合」模式（先 B 后 C 路径的 B 阶段）：
+
+```python
+class EvolutionLoop(
+    EvolutionUctMixin,      # 领域 I: UCT 选择 + 熔断/提前停止（evolution_uct.py）
+    EvolutionTraceMixin,    # 领域 J: trace 记录 + 经验链 + 实验日志（evolution_trace.py）
+    EvolutionChannelsMixin, # 领域 G: GP/深度/算子演化通道（evolution_channels.py）
+    # 后续按 34 盘点顺序接入: SeedsMixin /
+    # AuditMixin / ReviewMixin / PrefilterMixin / PromoteMixin / CandidateMixin
+):
+```
+
+**契约约束（不可破坏）**：
+1. 公开导入路径不变：`from fts.factor_engine.evolution_loop import EvolutionLoop, EvolutionRunResult, UCT_EXPLORATION_C` 等全部保持；
+2. 公开方法签名与返回值不变：`run(max_generation)` / `run_microstructure_promotion(...)` 等行为等价（纯移动不改逻辑）；
+3. 私有符号兼容：被测试 import 的 `_add_trading_days`/`_build_shadow_pool`/`_QualityInspectionResult`/`main` 等须在 `evolution_loop.py` 保留转发符号或同步迁移；
+4. Mixin 方法名全局唯一，避免多继承 MRO 冲突；Mixin 间通过 `self` 动态派发互调，不互相 import；
+5. 跨领域共享状态（`data`/`market`/`forward_returns`/`budget`/`_signal_cache`/`_consecutive_low_ic` 等）留在主类实例，由 `__init__` 装配；
+6. 领域独享状态随 Mixin 整体搬迁（如 `_uct_stats`/`_evolution_stop_*` → `EvolutionUctMixin`）；
+7. 模块级常量/辅助函数归属：被多领域引用的常量下沉 `evolution_constants.py` 或保持单向依赖（禁止 `evolution_uct.py` import `evolution_loop.py` 引发循环导入）。
+
+C 阶段（后续 plan）：每个 Mixin 演化为独立协作类（`UctSelector`/`TraceRecorder`/`EliteStore`/...），全局上下文构造注入。盘点证据见 plans/34-evolution-loop-refactor-inventory.md。
 
 ### FactorCorrelation 契约
 
@@ -959,9 +892,7 @@ class FactorKind(str, Enum):
 | L1 Meta-Loop | 07:59 | 工作日每日 | 知识补给 + 种子注入（对齐 TRAE Schedule 期货 L1） |
 | L2 Evolution Loop | 00:00 | 工作日每日 | 夜间因子演化（对齐 TRAE Schedule 期货 L2） |
 | L3 Portfolio Loop | 19:00 | 每周五 | 期货路径（futures_elite + market=futures，v2.73.0）：因子筛选(ACTIVE_FACTOR_CAP=20) + 信号合成(默认elastic_net) + Verifier 校验；GAP-072 v2.99.0 与期货信号管道解绑，每周五收盘后重算组合权重（对齐 TRAE Schedule 期货 L3 19:00） |
-| L3 Portfolio Loop (股票) | 19:30 | 每周五 | 股票路径（elite_dir + market=stock，GAP-063）：GAP-072 v2.99.0 与股票信号管道解绑，每周五重算组合权重（对齐 TRAE Schedule 股票 L3 19:30） |
-| 期货信号管道 | 20:00 | 工作日每日 | 独立调度（GAP-072 v2.99.0 与 L3 解绑）：Ridge 权重周五重算并存快照，其余日冻结复用快照仅刷新因子值 |
-| 股票/ETF 信号管道 | 08:45 | 工作日每日 | 独立调度（GAP-072 v2.99.0 与股票 L3 解绑）：Ridge 权重周五重算并存快照，其余日冻结复用快照仅刷新因子值 |
+| 期货信号管道 | 20:00 | 工作日每日 | 独立调度（GAP-072 v2.99.0 与 L3 解绑）：Ridge 权重周五重算并存快照，其余日冻结复用快照仅刷新因子值；因子来源 = DuckDB 因子资产库（factor_catalog_futures.duckdb，market=futures + is_elite + status=active，GAP-097 v2.103.0），JSON 快照目录降级回退 |
 | 因子巡检 (FactorInspector) | 03:00 | 每日 | 基于 batch_audit 自动检测退化因子并降级 |
 | Health Check | 每 10 分钟 | 高频 | 状态监控 |
 
@@ -986,12 +917,16 @@ class FactorKind(str, Enum):
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | `seed_pool.py` → 双种子池（股票 482 因子：9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面；期货 81 因子：14 家族，见 seed_data_futures_full.py）；种子因子相关性预检（compute_seed_correlations，仅股票时序模式，≥0.95 标记高相关对）；`data_fundamental.py` → FundamentalProvider 基本面数据层；`data_futures.py` → FuturesDataProvider 期货数据层（82 品种 FUTURES_SUBSET + 59 个品种 DuckDB 缓存 + AKShare 降级，`get_futures_panel()` common_dates 多数对齐 ≥ 品种数//2，FUTURES_SYMBOL_NAMES 名称映射，get_dominant_contracts() 主力合约判定；`FUTURES_SECTOR_MAP` 7 产业链分类）；`data_futures_fundamental.py` → AkshareFuturesFundamentalProvider 期货基本面数据（库存/基差/仓单；仓单 CZCE/GFEX 官方接口 + SHFE/DCE/INE 东财 RPT_FUTU_STOCKDATA，GAP-091 已关闭）；`scheduler/` → 调度层（15 个 APScheduler 定时任务：L1:07:59 / L2:00:00 / L3期货:周五19:00 / L3股票:周五19:30 / 期货信号管道:工作日20:00 / 股票信号管道:工作日08:45 / 健康检查:每10m / 期货数据同步:工作日17:30 / 股票数据同步:工作日17:00 / 动态池:周六08:00 等）；`scripts/futures_signal_pipeline.py` → 横截面信号管道（方向校正 = 截面 IC 法，因子加权 = Ridge 回归 L2 正则化，Market Regime 检测 = SectorRegimeSelector 产业链级分层判定，品种-链对齐度修正 = compute_alignment + _ALIGNMENT_BLEND=0.20，按日期定位，`--universe all` 全量商品池，输出品种名称/主力合约 + 产业链 Breakdown + Regime 调整交易建议 + 对齐度等级分组）；`scripts/daily_signal_pipeline.py` → 股票/ETF 信号管道（GAP-072 权重快照：周五重算 Ridge 权重存 `memory/portfolio/stock/stock_signal_weights.json`（v2.101.0 起按市场隔离到 memory/portfolio/stock/）、其余日冻结复用仅刷新因子值，`--force-recompute` 强制重算；GAP-076 截面标准化 `--normalize none/zscore/rank` 默认 none，`normalize_signal_matrix` 逐交易日截面 z-score(ddof=0)/rank 百分位秩→[-1,1]（NaN 写回 0、常数截面置 0、非法 method 抛错），冻结日复用快照 normalize 口径保证一致，`save_weight_snapshot` 持久化 normalize 字段且旧快照缺省 none 向后兼容；方向校正=截面 IC（Spearman vs 未来 5 日收益）+ 成本约束 TransactionCostModel 扣减 + 仅做多 TopN）；`fts/factor_engine/regime.py` → RegimeAwareSelector 市场制度感知（5 种制度：bull/bear/high_vol/low_vol/oscillate，MA20 斜率 + ATR/价格 + 量比 + 收益自相关）+ SectorRegimeSelector 产业链级制度检测（每个产业链独立构建合成 OHLCV，品种数加权投票计算主制度）+ `compute_alignment()` 品种-链对齐度计算（单品种独立检测与产业链对比，制度相同=置信度乘积，不同=上限0.5）；`strategies/strategy_evolution.py` → 策略进化（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion）；`fts/factor_engine/barra/barra_style.py` → BarraStyleEngine 10 风格暴露计算引擎（size/beta/momentum/residual_vol/nonlinear_size/book_to_price/liquidity/earnings_yield/growth/leverage，逐日截面 rank→z-score，字段缺失全 NaN 降级，nonlinear_size 引擎层基于 size 暴露矩阵逐日 z³ 对 z 回归残差）；`fts/factor_engine/barra/barra_neutralizer.py` → barra_neutralize_matrix 逐日 OLS（np.linalg.lstsq）风格暴露 + 行业虚拟变量回归取残差（样本不足降级去均值、常数列剔除、正交性保证）；`fts/factor_engine/evaluation_chain.py` → 评估链 Step 2.6 Barra 风格中性化（style_exposures 可选参数，行业去均值后叠加风格回归残差，两级中性化链 GAP-S01/S02）；`fts/factor_engine/stock_regime.py` → StockRegimeSelector 股票行业轮动 + 风格轮动检测（GAP-S03）：行业动量横截面离散度 + top-N 集中度 → concentrated/rotating/balanced 三态；大小盘/成长价值比值动量 → large_cap/small_cap + growth/value 双态；复用 regime_hmm.MultiHorizonHMMDetector 多周期集成（比值序列合成 OHLCV 校正置信度，规则动量方向主判定，空面板/样本不足降级）；`fts/factor_engine/portfolio_loop.py` → L3 Step 2.5 股票风格自适应（REGIME_STYLE_MULTIPLIERS 新增 6 股票风格键 large_cap/small_cap/growth/value/sector_concentrated/sector_rotating，run(stock_regime=...) market=stock 优先驱动）；`fts/factor_engine/regime_hmm.py` → MultiHorizonHMMDetector 多周期 HMM 制度后验（3 周期 HMM 独立拟合 + 伪计数加权投票，hmmlearn 缺失降级规则），regime_probs 全制度概率输出（28-T2）；`fts/factor_engine/regime_calibration.py` → RegimeConfidenceCalibrator 置信度熵标定（`scaled = confidence × (1 − entropy_penalty × H_norm)`，单点分布不折扣/均匀分布最大折扣，无 probs 直通）+ build_rule_regime_probs 规则伪概率构造（28-T4/T5）；`fts/factor_engine/regime_model_selection.py` → BICStateSelector 状态数选择（2~4 态 BIC 贪心搜索 + StateMapStabilizer 映射冻结防翻转，28-T7）；`fts/factor_engine/regime_validation.py` → RegimeOutOfSampleValidator 制度样本外有效性验证（IC/方向准确率/全制度概率比对，28-T9）；`fts/factor_engine/portfolio_loop.py` Step 2.5 → `_compute_exposure_scale` 置信度仓位缩放（28-T4）+ `prometheus_metrics.record_regime_metrics` 观测指标上报（28-T10） |
-| 可验证断言 | 股票种子池总数 = 482；期货种子池总数 = 81（14 家族）；期货数据层支持 82 个连续合约品种，数据源优先级 3 级（DuckDB → AKShare → 合成）；common_dates 多数对齐（WH0 等停更品种不清空交集）；方向校正按日期定位；信号管道因子加权 = Ridge 回归（全量因子，L2 正则化）；主力合约判定 = contract_kline 最新交易日最大成交量；调度器注册 15 个任务（L1/L2/L3期货每周五/L3股票每周五 + 期货/股票信号管道每日 + 健康检查 + 月度衰减 + 数据质量 + 逻辑监控 + 因子巡检 + 数据级监控 + 期货数据同步 + 动态池刷新）；信号管道集成 Market Regime 检测（5 种制度分层判定，输出 Regime 调整交易建议）；品种-链对齐度计算支持 3 种对齐度等级（高≥0.7/中0.5~0.7/低<0.5），默认 _ALIGNMENT_BLEND=0.20；策略进化模块包含 3 种策略（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion）；股票 L2 启用种子因子相关性预检（≥0.95 标记），期货 L2 跳过；L3 组合支持粘性约束（StickyConfig ±30% / 新因子首日封顶）+ 漂移监控（DriftMonitor → drift_history/YYYY-MM-DD.json）；L2 新晋升因子进影子池（shadow_pool 观察 5 交易日，种子因子 shadow_observe=False 直接进正式组合）；SchedulerEngine 支持 `start_watchdog()` 进程看门狗；L3 信号合成默认 elastic_net 模式（Elastic Net 截面回归，L1+L2 自动变量选择）；v2.73.0 调度器 `l3_portfolio_loop_job` 显式期货路径（elite_dir=futures_elite_dir + market=futures，`fts/scheduler/jobs.py`）；v2.75.0 机构级权重学习（`fts/factor_engine/weight_learning.py`）：Elastic Net 系数叠加 Ledoit-Wolf 收缩协方差风险调整（volatility_scaling/risk_parity）+ 滚动样本外验证（OOS IC/稳定性/衰减）+ 学习面板按目标交易市场自动匹配（futures→FUTURES_CORE_SUBSET / stock→CSI300）+ 跨市场迁移 IC 对比（v2.78.1 起默认关闭 cross_market_ic=False，避免无关股票面板下载，需显式开启）；ACTIVE_FACTOR_CAP=20，超出上限时按 Sharpe 排名保留 Top 20；v2.58.0 换月复权与展期仿真（GAP-046）：`kline_cache` 含 `adj_factor` 列，`get_ohlcv(adjusted=True)` 默认复权，BacktestPipeline 持仓穿越换月日扣展期价差成本，contract_kline 缺失时降级返回原始序列；v2.59.0 期货截面中性化 + 回测真实性仿真（GAP-F03/F02）：EvolutionLoop(market="futures") 自动注入板块映射（FUTURES_SECTOR_MAP 反向构建 {symbol: sector}），截面信号板块去均值；BacktestPipeline 涨跌停拦截（close 涨跌幅 ≥ limit_pct 持仓保持）+ 停牌过滤（volume==0 持仓保持），报告含「被拦截成交统计」；v2.62.0 Barra 风格体系（GAP-S02）：barra 包 10 风格暴露 + 逐日 OLS 回归残差（样本不足降级去均值、常数列剔除、正交性保证），`cross_section_evaluate_backtest` Step 2.6 风格中性化（行业去均值后叠加，两级中性化链），test_barra.py 13 用例全绿；v2.65.0 股票 Regime（GAP-S03）：StockRegimeSelector 行业轮动三态 + 风格切换双态（规则动量方向主判定 + MultiHorizonHMMDetector 多周期集成校正置信度），REGIME_STYLE_MULTIPLIERS 含 6 股票风格键（large_cap/small_cap/growth/value/sector_concentrated/sector_rotating），PortfolioLoop.run(stock_regime=...) 驱动 L3，test_stock_regime.py 19 用例全绿；v2.69.0 股票流水线成熟度收尾（GAP-S09~S12）：`expr_dsl/seed_analyzer.py` 种子表达式静态 PIT 审计（estimate_lookback_static 替换正则，705 表达式扫描仅 1 个 fundamental 切片语法需显式 lookback）；`verify_registry_consistency` 双注册表重叠算子一致性（test_registry 断言 overlapping ≥ 10 且 zero mismatch）；`evolution_mode` 新增 operator_first（股票演化默认算子优先 → LLM → GP 逐级兜底，state `evolution_method_counts` 方法分布记账）；`A_SHARE_FIELDS` 10 A 股特有字段 + L5b 4 领域算子（nb_momentum/margin_change/holder_concentration/analyst_revision_ratio）；新增 test_seed_analyzer 14 + TestGapS11OperatorFirst 7 用例；v2.79.0 阶段 D 收尾（GAP-F10/F12/F15）：CI 质量门禁（`ruff check` + `ruff format --check` fts/tests/scripts + `mypy fts/` 150 files Success + `pytest tests/benchmarks/ --benchmark-only` + `v*` tag 构建发布，`.github/workflows/ci.yml`）；极值扰动一票否决（`evaluation_chain._compute_extreme_perturbation_ic` 极值剔除重算 IC → `FactorEvaluation.extreme_perturbation` → HighICScreener V2 `ic_drop>25%` 拦截真正生效，`FTSConfig.extreme_perturb_pct` 默认 0.01）；种子库去重校验（`scripts/verify_seed_dedup.py` 内嵌 vs YAML 交叉比对）+ 家族上限配置化（`FTSConfig.max_per_family` env `FTS_MAX_PER_FAMILY` 缺省 15）；v2.80.0 数据驱动动态池（GAP-054）：`get_dynamic_core_subset()` 读取 memory/portfolio/futures/futures_dynamic_pool.json（v2.101.0 起按市场隔离到 memory/portfolio/futures/；缺失/损坏回退静态 FUTURES_CORE_SUBSET 25 品种），data.py/CLI/L3 portfolio_loop/weight_learning/sync_contract_kline/调度任务默认路径全部走动态池；流动性快照口径 = TQ-Local（通达信 17709）真实主力合约最近 5 日主力窗口成交额（量×价×合约乘数），每周六 08:00 `sync_liquidity_pool` 渐进式替换刷新（池内够格全保留 + 产业覆盖约束）；v2.81.0 盲测池（GAP-055）：`FUTURES_HOLDOUT` 6→15 个按产业链分层抽样（覆盖 10 条产业链），与核心动态池/分层训练集互不重叠，L2 演化训练排除盲测池后训练品种 >= 10；v2.84.0 tick 历史缓存增量累积 + Level2 订单流因子（GAP-I503 首期）：`aggregator._write_tick_cache` 按 (symbol, datetime) 去重写入 + `tick_cache_retention_days` 保留清理（默认 7 天），`get_ticks`/`_try_tick_cache` 支持 `start_time`/`end_time` 时间窗口查询（跨会话多次拉取累积成更长 tick 历史）；新建 `fts/factor_engine/microstructure_factors.py`——`classify_tick_direction`（价差方向，持平沿用前向）/`order_flow_imbalance`（滚动窗口主动买卖量差归一化 OFI）/`order_book_imbalance`（5 档深度 OBI）/`large_trade_ratio`（绝对/相对阈值大单占比）/`compute_microstructure_factors` 统一入口（FACTOR_COLUMNS 契约 datetime/direction/trade_volume/ofi/obi/large_trade_ratio，缺列/不足 min_rows 优雅降级空）；v2.85.0 组合目标函数换手惩罚项（GAP-I303）：`portfolio_loop.apply_turnover_penalty`——粘性约束后、归一化前 `w_new' = w_old + (w_new − w_old)/(1+λ)` 收缩权重变动（λ=0 关闭、λ 越大换手越低、新因子不惩罚），`build_combo`/`PortfolioLoop` 参数透传 + `FTSConfig.l3_turnover_penalty`（env `FTS_L3_TURNOVER_PENALTY` 默认 0.0）；v2.89.0 期货多源同步范围扩大——`sync_futures_data_job` 默认同步 `FUTURES_SUBSET` 全品种 82 个（替代原 25 核心/动态池路径，调度任务 17:30 + `fts data sync-futures` CLI 同步生效），`scripts/sync_futures_data.py` `--universe` 默认 all（`--universe core` 仍可手动仅同步核心）；v2.98.0 兜底家族豁免（GAP-070）：`_promote_to_elite` 家族多样性检查（max_per_family 缺省 15）跳过 'other'/'unknown'，其他家族仍受上限约束，TestGapF16PromoteToElite 9→11 用例；v2.98.1 L3 期货路径 Step 0.5b 自动构建市场合成 OHLCV（`SectorRegimeSelector._build_sector_ohlcv`，全品种 close 截面均值 + volume 截面和）——未显式传 `market_ohlcv` 时激活 Step 2.5 Regime 自适应权重调整，面板数据不足/构建异常降级置 None 跳过，仅期货路径生效（股票路径仍由 `stock_regime` 驱动），test_portfolio_loop_market_ohlcv.py 3 用例全绿；v2.98.2 L2 质检性能（GAP-071）：审计 `_run_factor_audit` 优先复用 `evaluation["walk_forward"]`（n_windows_completed>0 直接构建 oos_result，否则兜底 `_run_walkforward_oos`）；EvolutionLoop 调 `evaluation_chain.evaluate` 传 `walk_forward_config=_build_wf_config(data)`；`evaluate_walk_forward._evaluate_window` 样本外收益 oos 段内自算 fwd 且每窗口仅执行 oos 信号；`signal_cache.SignalCache`（LRU，key=factor_id+params+数据全列值指纹）接入 `FactorExecutor`，`evaluate_backtest`/`evaluate_walk_forward`/`EvaluationChain.evaluate`/`ShapAnalyzer.analyze` 透传，EvolutionLoop 共享缓存（容量 16）注入消融/鲁棒性/SHAP；`walk_forward._df_boundary_date` 空 train 段容错；新增 test_signal_cache.py 14 用例 + test_evaluation_chain TestGap071 3 + test_evolution_loop 审计复用 2 全绿；v2.98.3 股票 L3 早间调度（`l3_portfolio_loop_stock` cron `30 8 * * *`）+ 完成后联动 `_run_daily_signal_pipeline`（daily_signal_pipeline.main(max_stocks=50, days=120)），新增 `daily_signal_pipeline_job` 独立入口，清理 `l3_portfolio_loop_stock_job` 重复定义，test_jobs.py TestDailySignalPipeline 3 用例 + stock_path 联动断言，调度 72 passed 全绿；v2.98.0 GAP-073 短样本 OOS 审计根治：`audit.py` `_check_oos_consistency` 对走航结果 `n_windows_completed < 2` 标记 skipped（L1 兜底无窗口键保持原逻辑），期货横截面演化 `days=500→700` 使 WalkForward 完整产出 4 窗口（探针验证 n_windows_completed=4），test_audit.py 28→32 全绿；v2.100.1 感知层样本按市场区分（`MetaLoop.__init__` market="stock" 默认 `CSI300_SUBSET[:13]` 与 L2 csi300 面板同源、futures 保持 13 期货品种、显式 sample_symbols 优先；`_make_web_collector(market=...)` 股票模式走 `FTSDataProvider.get_ohlcv` 股票日 K 且跳过期货实时价、期货模式保持主连转换+多源 OHLCV+TQ/AKShare 实时价），test_meta_loop 97 用例全绿；v2.101.0 GAP-076 信号管道截面标准化：`daily_signal_pipeline` CLI 支持 `--normalize none/zscore/rank`（默认 none）；`normalize_signal_matrix` 按交易日截面 z-score(ddof=0)/rank 百分位秩→[-1,1]（NaN 写回 0、常数截面置 0、非法 method 抛 ValueError、空矩阵降级）；`save_weight_snapshot` 持久化 normalize 字段、旧快照缺省 none 向后兼容；volatility_reversion_g2 因子（fct_2e94cf1d.json）修复 convolve mode='same' 尾部补零失真后最新截面恢复区分度（std>0）；test_signal_common.py 17→26 用例全绿；v2.101.0 GAP-078 TQ 探活进程级重试：`_tq_stock_available()` 失败冷却 30s + `_TQ_PROBE_RETRIES=2` 瞬时重试 + 冷却期后自动重探活（成功恢复 True），test_data.py TestTqStockAvailable 6 用例全绿；zscore vs rank 历史对比（81 交易日）IC 差 0.0015 噪声量级；v2.101.0 市场目录隔离（输出按市场分目录，日常开发追加）：`scripts/daily_signal_pipeline.py` 股票信号报告 `docs/` → `reports/stock/daily_signals_{date}.md`、权重快照 → `memory/portfolio/stock/stock_signal_weights.json`；`scripts/futures_signal_pipeline.py` 期货信号报告/信号历史 → `reports/futures/{date}/`、权重快照 → `memory/portfolio/futures/futures_signal_weights.json`；`fts/scheduler/jobs.py` L1 期货 → `memory/meta_loop/futures/`、L3 股票 → `memory/portfolio/stock/`；`fts/cli.py` evolution → `memory/evolution/{stock,futures}/`、meta_loop → `memory/meta_loop/{market}/`、portfolio → `memory/portfolio/{universe}/`；`fts/factor_engine/portfolio_loop.py` 归因/走航报告 → `reports/{market}/{date}/`；`fts/data_futures.py` 动态池缓存 → `memory/portfolio/futures/futures_dynamic_pool.json`；`scripts/sync_liquidity_pool.py` + 5 个期货专属脚本（futures_strategy/futures_seed_diagnostic/futures_l3_portfolio/futures_factor_revalidation/futures_elite_diagnostic）报告目录 → `reports/futures/{date}/`；跨市场任务（月度衰减）保留共享目录 memory/logs/decay/ 不拆分；v2.101.0 GAP-083 期货持仓/结算接入（plans/27）：`_from_kline_cache` SQL SELECT 增加 hold/settle 列 + 双格式对齐（symbol IN (RB,RB0)，ORDER BY date DESC + 0 后缀优先 → drop_duplicates 保留 RB0=TQ 15 年）+ 真实优先/代理兜底（无效值 NULL/≤0 才用代理 settle=(H+L+C)/3、hold=volume 20 日均量），输出 8 列契约不变；`scripts/backfill_futures_hold.py` AKShare 真实 hold/settle 按日期 UPDATE 双格式回填（幂等/限速/dry-run/异常跳过）；`FTSConfig.futures_enhance_enabled`（FTS_FUTURES_ENHANCE_ENABLED 默认 false）控制 aggregator 注册 IFindSource/WindSource 增强源（_enhance_fields 补 settle/pre_settle/oi_change/hold，需 mcp_enabled+set_mcp_handler 认证，失败降级不阻断）；v2.101.0 GAP-085 数据级监控字段修正：`data_level_monitor.key_fields` 由 `("close","volume","open_interest")` 修正为 `("close","volume","hold")`（期货日线字段为 hold，持仓量缺失/异常监控生效）；v2.101.0 pre_settle 零依赖派生（GAP-083 收尾，plans/27 §12 决策变更）：方案 A（iFinD SDK）因无 iFinDPy 权限不真实接入（`ifind_sdk_source.py` 框架保留），改 `aggregator._derive_pre_settle` 运行时派生 `pre_settle[t]=settle[t-1]`（缺失回退 close[t-1]、首行回退当日 close、仅覆盖无效行、内部按 date 升序派生后还原原行序——兼容缓存路径倒序/源路径升序）接入 get_ohlcv 两路径；`scripts/backfill_futures_hold.py --derive-presettle` 库内幂等回写（双格式 RB/RB0，仅覆盖无效行，dry-run 只读统计）；v2.101.0 字段缺口补充收尾：get_ohlcv 输出扩为 9 列（amount：TDX/kline_cache 真实、AKShare/合成补 0.0）；`fts/data_futures_fundamental.py` `AkshareFuturesFundamentalProvider` 接入 `FTSDataProvider._futures_fundamental`（`enrich_futures_fundamental` 注入 fut_inventory/fut_inventory_chg/fut_spot_price/fut_near_basis/fut_dom_basis/fut_near_basis_rate/fut_dom_basis_rate 7 列，库存 AKShare em/99 双源降级、基差 100ppi 并行逐日（25 自然日窗口））；`fut_macro_import` 种子因子（GAP-088 消费端闭环，期货种子 184→185）；v2.101.0 仓单全品种闭环（GAP-091 关闭）：`AkshareFuturesFundamentalProvider.get_warehouse_receipt` 注入 fut_warehouse_receipt/fut_warehouse_receipt_chg 2 列（enrich 共 9 列）——CZCE/GFEX 走 AKShare 官方接口（ThreadPoolExecutor 6 线程并行逐日 + 跳过周末 + 25 自然日窗口，SR 实测 72,243 手）；SHFE/DCE/INE 走东财 RPT_FUTU_STOCKDATA（`EM_WAREHOUSE_MAP` 品种→SECURITY_CODE：SHFE/DCE 大写、INE 小写 sc/nr/lu/bc，`_fetch_warehouse_receipt_em` 单接口全历史 200 自然日窗口，ON_WARRANT_NUM→warehouse_receipt/ADDCHANGE→change，RB 实测 36,512/M 25,100/NR 16,632/SC 2,961,000）；中金所股指无商品仓单降级空 |
-| 检验方式 | `python -c "from fts.scheduler.tasks import list_tasks; assert len(list_tasks()) == 15"` |
+| 代码→文档映射 | `seed_pool.py` → 期货种子池（81 因子：14 家族，见 seed_data_futures_full.py）；`data_futures.py` → FuturesDataProvider 期货数据层（82 品种 FUTURES_SUBSET + 59 个品种 DuckDB 缓存 + AKShare 降级，`get_futures_panel()` common_dates 多数对齐 ≥ 品种数//2，FUTURES_SYMBOL_NAMES 名称映射，get_dominant_contracts() 主力合约判定；`FUTURES_SECTOR_MAP` 7 产业链分类）；`data_futures_fundamental.py` → AkshareFuturesFundamentalProvider 期货基本面数据（库存/基差/仓单；仓单 CZCE/GFEX 官方接口 + SHFE/DCE/INE 东财 RPT_FUTU_STOCKDATA，GAP-091 已关闭）；`scheduler/` → 调度层（13 个 APScheduler 定时任务：L1:07:59 / L2:00:00 / L3期货:周五19:00 / 期货信号管道:工作日20:00 / 健康检查:每10m / 期货数据同步:工作日17:30 / 月度衰减:每月1日04:00 / 数据质量:每5m / 数据级监控:每日04:00 / 逻辑监控:每日22:00 / 因子巡检:每日03:00 / 动态池:周六08:00 / MHF信号:每30m；股票调度已剥离至 fts-stock）；`scripts/futures_signal_pipeline.py` → 横截面信号管道（方向校正 = 截面 IC 法，因子加权 = Ridge 回归 L2 正则化，Market Regime 检测 = SectorRegimeSelector 产业链级分层判定，品种-链对齐度修正 = compute_alignment + _ALIGNMENT_BLEND=0.20，按日期定位，`--universe all` 全量商品池，输出品种名称/主力合约 + 产业链 Breakdown + Regime 调整交易建议 + 对齐度等级分组）；`scripts/daily_signal_pipeline.py`（股票/ETF 信号管道）已随股票管线剥离至 fts-stock（2026-08）；`fts/factor_engine/regime.py` → RegimeAwareSelector 市场制度感知（5 种制度：bull/bear/high_vol/low_vol/oscillate，MA20 斜率 + ATR/价格 + 量比 + 收益自相关）+ SectorRegimeSelector 产业链级制度检测（每个产业链独立构建合成 OHLCV，品种数加权投票计算主制度）+ `compute_alignment()` 品种-链对齐度计算（单品种独立检测与产业链对比，制度相同=置信度乘积，不同=上限0.5）；`strategies/strategy_evolution.py` → 策略进化（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion）；`fts/factor_engine/barra/barra_style.py`（BarraStyleEngine 10 风格暴露）与 `fts/factor_engine/barra/barra_neutralizer.py`（逐日 OLS 风格残差中性化）仍在主系统期货横截面模式使用（`evaluation_chain.py` Step 2.6 调用，GAP-I304 v2.79.0 `l2_barra_style_neutral` 默认开启，面板字段缺失风格自动跳过不阻断评估）；`fts/factor_engine/stock_regime.py`（StockRegimeSelector 股票行业轮动 + 风格轮动检测，GAP-S03）及 `fts/factor_engine/portfolio_loop.py` L3 Step 2.5 股票风格自适应（REGIME_STYLE_MULTIPLIERS 6 股票风格键）均已随股票管线剥离至 fts-stock（2026-08，GAP-S01/S02 股票侧应用成为历史记录）；`fts/factor_engine/regime_hmm.py` → MultiHorizonHMMDetector 多周期 HMM 制度后验（3 周期 HMM 独立拟合 + 伪计数加权投票，hmmlearn 缺失降级规则），regime_probs 全制度概率输出（28-T2）；`fts/factor_engine/regime_calibration.py` → RegimeConfidenceCalibrator 置信度熵标定（`scaled = confidence × (1 − entropy_penalty × H_norm)`，单点分布不折扣/均匀分布最大折扣，无 probs 直通）+ build_rule_regime_probs 规则伪概率构造（28-T4/T5）；`fts/factor_engine/regime_model_selection.py` → BICStateSelector 状态数选择（2~4 态 BIC 贪心搜索 + StateMapStabilizer 映射冻结防翻转，28-T7）；`fts/factor_engine/regime_validation.py` → RegimeOutOfSampleValidator 制度样本外有效性验证（IC/方向准确率/全制度概率比对，28-T9）；`fts/factor_engine/portfolio_loop.py` Step 2.5 → `_compute_exposure_scale` 置信度仓位缩放（28-T4）+ `prometheus_metrics.record_regime_metrics` 观测指标上报（28-T10） |
+| 可验证断言 | 期货种子池总数 = 81（14 家族）；期货数据层支持 82 个连续合约品种，数据源优先级 3 级（DuckDB → AKShare → 合成）；common_dates 多数对齐（WH0 等停更品种不清空交集）；方向校正按日期定位；信号管道因子加权 = Ridge 回归（全量因子，L2 正则化）；主力合约判定 = contract_kline 最新交易日最大成交量；调度器注册 13 个任务（L1/L2/L3期货每周五 + 期货信号管道每日 + 健康检查 + 月度衰减 + 数据质量 + 逻辑监控 + 因子巡检 + 数据级监控 + 期货数据同步 + 动态池刷新 + MHF信号）；信号管道集成 Market Regime 检测（5 种制度分层判定，输出 Regime 调整交易建议）；品种-链对齐度计算支持 3 种对齐度等级（高≥0.7/中0.5~0.7/低<0.5），默认 _ALIGNMENT_BLEND=0.20；策略进化模块包含 3 种策略（RegimeAdaptiveStrategy/DynamicWeightStrategy/MultiPeriodSignalFusion）；股票 L2 种子因子相关性预检（≥0.95 标记）已随股票管线剥离至 fts-stock，期货 L2 跳过；L3 组合支持粘性约束（StickyConfig ±30% / 新因子首日封顶）+ 漂移监控（DriftMonitor → drift_history/YYYY-MM-DD.json）；L2 新晋升因子进影子池（shadow_pool 观察 5 交易日，种子因子 shadow_observe=False 直接进正式组合）；SchedulerEngine 支持 `start_watchdog()` 进程看门狗；L3 信号合成默认 elastic_net 模式（Elastic Net 截面回归，L1+L2 自动变量选择）；v2.73.0 调度器 `l3_portfolio_loop_job` 显式期货路径（elite_dir=futures_elite_dir + market=futures，`fts/scheduler/jobs.py`）；v2.75.0 机构级权重学习（`fts/factor_engine/weight_learning.py`）：Elastic Net 系数叠加 Ledoit-Wolf 收缩协方差风险调整（volatility_scaling/risk_parity）+ 滚动样本外验证（OOS IC/稳定性/衰减）+ 学习面板按目标交易市场自动匹配（futures→FUTURES_CORE_SUBSET；stock→CSI300 已随股票管线剥离至 fts-stock）+ 跨市场迁移 IC 对比（v2.78.1 起默认关闭 cross_market_ic=False，需显式开启）；ACTIVE_FACTOR_CAP=20，超出上限时按 Sharpe 排名保留 Top 20；v2.58.0 换月复权与展期仿真（GAP-046）：`kline_cache` 含 `adj_factor` 列，`get_ohlcv(adjusted=True)` 默认复权，BacktestPipeline 持仓穿越换月日扣展期价差成本，contract_kline 缺失时降级返回原始序列；v2.59.0 期货截面中性化 + 回测真实性仿真（GAP-F03/F02）：EvolutionLoop(market="futures") 自动注入板块映射（FUTURES_SECTOR_MAP 反向构建 {symbol: sector}），截面信号板块去均值；BacktestPipeline 涨跌停拦截（close 涨跌幅 ≥ limit_pct 持仓保持）+ 停牌过滤（volume==0 持仓保持），报告含「被拦截成交统计」；v2.62.0 Barra 风格体系（GAP-S02，主系统保留期货横截面应用）：barra 包 10 风格暴露 + 逐日 OLS 回归残差 + `cross_section_evaluate_backtest` Step 2.6 风格中性化在主系统期货横截面模式继续使用（GAP-I304 v2.79.0 `l2_barra_style_neutral` 默认开启，风格缺失自动跳过；test_barra.py 13 用例随股票侧迁移至 fts-stock，主系统由 evolution_futures/evaluation_chain 集成测试覆盖）；v2.65.0 股票 Regime（GAP-S03，已剥离）：StockRegimeSelector 行业轮动三态 + 风格切换双态 + REGIME_STYLE_MULTIPLIERS 6 股票风格键已随股票管线剥离至 fts-stock（test_stock_regime.py 19 用例迁移）；v2.69.0 股票流水线成熟度收尾（GAP-S09~S12）：`expr_dsl/seed_analyzer.py` 种子表达式静态 PIT 审计（estimate_lookback_static 替换正则，705 表达式扫描仅 1 个 fundamental 切片语法需显式 lookback）；`verify_registry_consistency` 双注册表重叠算子一致性（test_registry 断言 overlapping ≥ 10 且 zero mismatch）；`evolution_mode` 新增 operator_first（历史记录，股票演化默认算子优先 → LLM → GP 逐级兜底已随股票管线剥离至 fts-stock，state `evolution_method_counts` 方法分布记账保留）；`A_SHARE_FIELDS` 10 A 股特有字段 + L5b 4 领域算子（已随股票管线剥离至 fts-stock）；新增 test_seed_analyzer 14 + TestGapS11OperatorFirst 7 用例；v2.79.0 阶段 D 收尾（GAP-F10/F12/F15）：CI 质量门禁（`ruff check` + `ruff format --check` fts/tests/scripts + `mypy fts/` 150 files Success + `pytest tests/benchmarks/ --benchmark-only` + `v*` tag 构建发布，`.github/workflows/ci.yml`）；极值扰动一票否决（`evaluation_chain._compute_extreme_perturbation_ic` 极值剔除重算 IC → `FactorEvaluation.extreme_perturbation` → HighICScreener V2 `ic_drop>25%` 拦截真正生效，`FTSConfig.extreme_perturb_pct` 默认 0.01）；种子库去重校验（`scripts/verify_seed_dedup.py` 内嵌 vs YAML 交叉比对）+ 家族上限配置化（`FTSConfig.max_per_family` env `FTS_MAX_PER_FAMILY` 缺省 15）；v2.80.0 数据驱动动态池（GAP-054）：`get_dynamic_core_subset()` 读取 memory/portfolio/futures/futures_dynamic_pool.json（v2.101.0 起按市场隔离到 memory/portfolio/futures/；缺失/损坏回退静态 FUTURES_CORE_SUBSET 25 品种），data.py/CLI/L3 portfolio_loop/weight_learning/sync_contract_kline/调度任务默认路径全部走动态池；流动性快照口径 = TQ-Local（通达信 17709）真实主力合约最近 5 日主力窗口成交额（量×价×合约乘数），每周六 08:00 `sync_liquidity_pool` 渐进式替换刷新（池内够格全保留 + 产业覆盖约束）；v2.81.0 盲测池（GAP-055）：`FUTURES_HOLDOUT` 6→15 个按产业链分层抽样（覆盖 10 条产业链），与核心动态池/分层训练集互不重叠，L2 演化训练排除盲测池后训练品种 >= 10；v2.84.0 tick 历史缓存增量累积 + Level2 订单流因子（GAP-I503 首期）：`aggregator._write_tick_cache` 按 (symbol, datetime) 去重写入 + `tick_cache_retention_days` 保留清理（默认 7 天），`get_ticks`/`_try_tick_cache` 支持 `start_time`/`end_time` 时间窗口查询（跨会话多次拉取累积成更长 tick 历史）；新建 `fts/factor_engine/microstructure_factors.py`——`classify_tick_direction`（价差方向，持平沿用前向）/`order_flow_imbalance`（滚动窗口主动买卖量差归一化 OFI）/`order_book_imbalance`（5 档深度 OBI）/`large_trade_ratio`（绝对/相对阈值大单占比）/`compute_microstructure_factors` 统一入口（FACTOR_COLUMNS 契约 datetime/direction/trade_volume/ofi/obi/large_trade_ratio，缺列/不足 min_rows 优雅降级空）；v2.85.0 组合目标函数换手惩罚项（GAP-I303）：`portfolio_loop.apply_turnover_penalty`——粘性约束后、归一化前 `w_new' = w_old + (w_new − w_old)/(1+λ)` 收缩权重变动（λ=0 关闭、λ 越大换手越低、新因子不惩罚），`build_combo`/`PortfolioLoop` 参数透传 + `FTSConfig.l3_turnover_penalty`（env `FTS_L3_TURNOVER_PENALTY` 默认 0.0）；v2.89.0 期货多源同步范围扩大——`sync_futures_data_job` 默认同步 `FUTURES_SUBSET` 全品种 82 个（替代原 25 核心/动态池路径，调度任务 17:30 + `fts data sync-futures` CLI 同步生效），`scripts/sync_futures_data.py` `--universe` 默认 all（`--universe core` 仍可手动仅同步核心）；v2.98.0 兜底家族豁免（GAP-070）：`_promote_to_elite` 家族多样性检查（max_per_family 缺省 15）跳过 'other'/'unknown'，其他家族仍受上限约束，TestGapF16PromoteToElite 9→11 用例；v2.98.1 L3 期货路径 Step 0.5b 自动构建市场合成 OHLCV（`SectorRegimeSelector._build_sector_ohlcv`，全品种 close 截面均值 + volume 截面和）——未显式传 `market_ohlcv` 时激活 Step 2.5 Regime 自适应权重调整，面板数据不足/构建异常降级置 None 跳过，仅期货路径生效（股票路径已随股票管线剥离至 fts-stock），test_portfolio_loop_market_ohlcv.py 3 用例全绿；v2.98.2 L2 质检性能（GAP-071）：审计 `_run_factor_audit` 优先复用 `evaluation["walk_forward"]`（n_windows_completed>0 直接构建 oos_result，否则兜底 `_run_walkforward_oos`）；EvolutionLoop 调 `evaluation_chain.evaluate` 传 `walk_forward_config=_build_wf_config(data)`；`evaluate_walk_forward._evaluate_window` 样本外收益 oos 段内自算 fwd 且每窗口仅执行 oos 信号；`signal_cache.SignalCache`（LRU，key=factor_id+params+数据全列值指纹）接入 `FactorExecutor`，`evaluate_backtest`/`evaluate_walk_forward`/`EvaluationChain.evaluate`/`ShapAnalyzer.analyze` 透传，EvolutionLoop 共享缓存（容量 16）注入消融/鲁棒性/SHAP；`walk_forward._df_boundary_date` 空 train 段容错；新增 test_signal_cache.py 14 用例 + test_evaluation_chain TestGap071 3 + test_evolution_loop 审计复用 2 全绿；v2.98.3 股票 L3 早间调度（`l3_portfolio_loop_stock` cron `30 8 * * *`）+ `daily_signal_pipeline_job` 等股票调度已随股票管线剥离至 fts-stock（2026-08）；v2.98.0 GAP-073 短样本 OOS 审计根治：`audit.py` `_check_oos_consistency` 对走航结果 `n_windows_completed < 2` 标记 skipped（L1 兜底无窗口键保持原逻辑），期货横截面演化 `days=500→700` 使 WalkForward 完整产出 4 窗口（探针验证 n_windows_completed=4），test_audit.py 28→32 全绿；v2.100.1 感知层样本按市场区分（历史记录，股票侧 `CSI300_SUBSET[:13]` 已随股票管线剥离至 fts-stock；期货保持 13 期货品种），test_meta_loop 97 用例全绿；v2.101.0 GAP-076 信号管道截面标准化（已随股票管线剥离至 fts-stock）：`daily_signal_pipeline` `--normalize`/`normalize_signal_matrix`/`save_weight_snapshot` 实现迁移至 fts-stock；v2.101.0 GAP-078 TQ 探活进程级重试（已随股票管线剥离至 fts-stock）：`_tq_stock_available()` 股票探活实现迁移至 fts-stock；v2.101.0 市场目录隔离（输出按市场分目录，日常开发追加）：`scripts/futures_signal_pipeline.py` 期货信号报告/信号历史 → `reports/futures/{date}/`、权重快照 → `memory/portfolio/futures/futures_signal_weights.json`；`fts/scheduler/jobs.py` L1 期货 → `memory/meta_loop/futures/`；`fts/cli.py` evolution → `memory/evolution/futures/`、meta_loop → `memory/meta_loop/`、portfolio → `memory/portfolio/`；`fts/factor_engine/portfolio_loop.py` 归因/走航报告 → `reports/{market}/{date}/`；`fts/data_futures.py` 动态池缓存 → `memory/portfolio/futures/futures_dynamic_pool.json`；`scripts/sync_liquidity_pool.py` + 5 个期货专属脚本（futures_strategy/futures_seed_diagnostic/futures_l3_portfolio/futures_factor_revalidation/futures_elite_diagnostic）报告目录 → `reports/futures/{date}/`；跨市场任务（月度衰减）保留共享目录 memory/logs/decay/ 不拆分；v2.101.0 GAP-083 期货持仓/结算接入（plans/27）：`_from_kline_cache` SQL SELECT 增加 hold/settle 列 + 双格式对齐（symbol IN (RB,RB0)，ORDER BY date DESC + 0 后缀优先 → drop_duplicates 保留 RB0=TQ 15 年）+ 真实优先/代理兜底（无效值 NULL/≤0 才用代理 settle=(H+L+C)/3、hold=volume 20 日均量），输出 8 列契约不变；`scripts/backfill_futures_hold.py` AKShare 真实 hold/settle 按日期 UPDATE 双格式回填（幂等/限速/dry-run/异常跳过）；`FTSConfig.futures_enhance_enabled`（FTS_FUTURES_ENHANCE_ENABLED 默认 false）控制 aggregator 注册 IFindSource/WindSource 增强源（_enhance_fields 补 settle/pre_settle/oi_change/hold，需 mcp_enabled+set_mcp_handler 认证，失败降级不阻断）；v2.101.0 GAP-085 数据级监控字段修正：`data_level_monitor.key_fields` 由 `("close","volume","open_interest")` 修正为 `("close","volume","hold")`（期货日线字段为 hold，持仓量缺失/异常监控生效）；v2.101.0 pre_settle 零依赖派生（GAP-083 收尾，plans/27 §12 决策变更）：方案 A（iFinD SDK）因无 iFinDPy 权限不真实接入（`ifind_sdk_source.py` 框架保留），改 `aggregator._derive_pre_settle` 运行时派生 `pre_settle[t]=settle[t-1]`（缺失回退 close[t-1]、首行回退当日 close、仅覆盖无效行、内部按 date 升序派生后还原原行序——兼容缓存路径倒序/源路径升序）接入 get_ohlcv 两路径；`scripts/backfill_futures_hold.py --derive-presettle` 库内幂等回写（双格式 RB/RB0，仅覆盖无效行，dry-run 只读统计）；v2.101.0 字段缺口补充收尾：get_ohlcv 输出扩为 9 列（amount：TDX/kline_cache 真实、AKShare/合成补 0.0）；`fts/data_futures_fundamental.py` `AkshareFuturesFundamentalProvider` 接入 `FTSDataProvider._futures_fundamental`（`enrich_futures_fundamental` 注入 fut_inventory/fut_inventory_chg/fut_spot_price/fut_near_basis/fut_dom_basis/fut_near_basis_rate/fut_dom_basis_rate 7 列，库存 AKShare em/99 双源降级、基差 100ppi 并行逐日（25 自然日窗口））；`fut_macro_import` 种子因子（GAP-088 消费端闭环，期货种子 184→185）；v2.101.0 仓单全品种闭环（GAP-091 关闭）：`AkshareFuturesFundamentalProvider.get_warehouse_receipt` 注入 fut_warehouse_receipt/fut_warehouse_receipt_chg 2 列（enrich 共 9 列）——CZCE/GFEX 走 AKShare 官方接口（ThreadPoolExecutor 6 线程并行逐日 + 跳过周末 + 25 自然日窗口，SR 实测 72,243 手）；SHFE/DCE/INE 走东财 RPT_FUTU_STOCKDATA（`EM_WAREHOUSE_MAP` 品种→SECURITY_CODE：SHFE/DCE 大写、INE 小写 sc/nr/lu/bc，`_fetch_warehouse_receipt_em` 单接口全历史 200 自然日窗口，ON_WARRANT_NUM→warehouse_receipt/ADDCHANGE→change，RB 实测 36,512/M 25,100/NR 16,632/SC 2,961,000）；中金所股指无商品仓单降级空 |
+| 检验方式 | `python -c "from fts.scheduler.tasks import list_tasks; assert len(list_tasks()) == 13"` |
 | 存储域注册表（plans/29 P0，2026-08-11） | `fts/store/registry.py` StorageRegistry 加载 `docs/harness/_data/storage_landscape.yaml`（13 域，version=2026-08-11）；`validate_contract()` 返回空（必填字段/后端枚举/相对路径/状态合法/legacy·planned 迁移血缘方向全部合规）；`FTS_STORAGE_LANDSCAPE_PATH` env 可覆盖 | `python -c "from fts.store import StorageRegistry; assert StorageRegistry().validate_contract() == []"` |
 | P1 因子资产入库（plans/29，2026-08-11） | `scripts/migrate_elite_json_to_catalog.py` 差量补齐 + 逐字段校验（`--verify-only` 复核零写入零不一致）；写路径反转 `_promote_to_elite`（先 DuckDB 后 JSON 快照）；`add_evaluation(update_catalog_status=False)` 保持归档 lifecycle | `python scripts/migrate_elite_json_to_catalog.py --market all --verify-only`（exit 0 = 778 因子逐字段一致） |
-| P2 运行状态入库（plans/29，2026-08-11） | `fts/store/state_db.py` StateKVStore（state_kv + state_history 双表）；`scripts/migrate_state_to_duckdb.py` 权威状态 glob 规则入库 + 过程痕迹 tar.gz 归档（复制语义）；231 条目入库读回对账 231/231 一致；`--archive` 产出 data/archive/state_traces_*.tar.gz | `python scripts/migrate_state_to_duckdb.py --verify-only`（exit 0 = 231/231 一致）；`python -c "import duckdb; c=duckdb.connect('data/state.duckdb', read_only=True); assert c.execute('SELECT COUNT(*) FROM state_kv').fetchone()[0] == c.execute('SELECT COUNT(*) FROM state_history').fetchone()[0]"` |
+| P2 运行状态入库（plans/29，2026-08-11；E.3 S2 后端切换 SQLite 2026-08-13） | `fts/store/state_db.py` StateKVStore（state_kv + state_history 双表，**E.3 S2 后端由 DuckDB 切换 SQLite WAL，默认库 data/state.db**）；`scripts/migrate_state_to_duckdb.py` 权威状态 glob 规则入库 + 过程痕迹 tar.gz 归档（复制语义）；231 条目入库读回对账 231/231 一致；`--archive` 产出 data/archive/state_traces_*.tar.gz；`scripts/migrate_state_to_sqlite.py`（E.3 S2）state.duckdb → state.db 迁移 + 行数校验（幂等/锁占用降级），旧库保留冻结期 | `python scripts/migrate_state_to_duckdb.py --verify-only`（exit 0 = 231/231 一致）；`python -c "import sqlite3; c=sqlite3.connect('data/state.db'); assert c.execute('SELECT COUNT(*) FROM state_kv').fetchone()[0] > 0"`；`python -m pytest tests/store/test_state_db.py tests/scripts/test_migrate_state_to_sqlite.py`（33 passed） |
+| E.3 L4 状态库 SQLite 化（S2，2026-08-13） | `fts/store/state_db.py` SQLite WAL 后端（upsert 单事务双表原子、seq AUTOINCREMENT 单调、WAL 写连接存活不阻塞外部读）；`scripts/migrate_state_to_sqlite.py` 迁移；storage_landscape `run_state` 域 backend=sqlite/path=data/state.db；API 契约不变，5 个调用模块零改动 | `python -m pytest tests/store/ tests/scripts/test_migrate_state_to_sqlite.py`（33 passed）；`python scripts/migrate_state_to_sqlite.py`（exit 0 = 迁移完成） |
 | P3 信号缓存 Parquet 化（plans/29 P3-A，2026-08-11） | `fts/factor_engine/factor_optimizer.py` FactorSignalCache：put 写 `{cache_id}.parquet`（DuckDB 单列 Parquet），signal_index.json 元数据含 backend="parquet"/version=2/checksum；get 优先 Parquet 校验 checksum、.npy 只读兼容回退并自动重建；clear/invalidate 双格式清理 | `python -m pytest tests/factor_engine/test_factor_optimizer.py`（51 passed，含 TestFactorSignalCacheParquet 5 用例）；`python -c "from fts.factor_engine.factor_optimizer import PARQUET_CACHE_VERSION; assert PARQUET_CACHE_VERSION == 2"` |
 | P3 行情库冷热归档（plans/29 P3-B，2026-08-12） | `scripts/archive_history_cold.py`：kline_cache 按 `year(date::DATE)` 冷热归档，≤until-year 导出 `data/archive/history_kline_cache_{year}.parquet` 并从热库 DELETE；dry-run/verify-only/archive 三模式，幂等，写锁占用降级拒绝 | `python scripts/archive_history_cold.py --verify-only --until-year 2013`（exit 0 = cold_rows=44134/hot_remaining=0/consistent=true）；`python -m pytest tests/scripts/test_archive_history_cold.py`（7 passed） |
+| P4 读路径切换（plans/29 P4，2026-08-12） | JSON 双读兼容期收紧为 DuckDB SSOT 优先、JSON 仅回退：`get_dynamic_core_subset` 三级降级（state.duckdb → JSON → 静态池）；CLI `factor list/show` 默认 DuckDB 查询（`--elite-dir` 目录仅回退，`factor show` 支持 `--market`）；`state.py`/`portfolio_loop`/`meta_loop`/`extractors` 状态读写走 `StateKVStore`（`get_state_store()` 进程级单例 + 可注入 store 测试隔离） | `python -m pytest tests/factor_engine/test_dynamic_pool.py`（10 passed）；`python -m pytest tests/factor_engine/test_evolution_loop.py tests/factor_engine/test_meta_loop.py tests/factor_engine/test_portfolio_loop.py tests/factor_engine/extractors/ -q`（状态类 SSOT 隔离全绿）；`python -m pytest tests/test_cli_extra.py::TestCmdFactorListExtra`（DuckDB 回退目录模式用例） |
+| GAP-084/086/087 股票数据层三 P1 关闭（v2.103.0，已剥离） | `fetch_stock_ohlcv` 列扩展（amount/vwap/pre_close）、`scripts/build_cap_map.py` 市值映射、`data_fundamental.py` 股票宏观源等股票数据层增强已随股票管线剥离至 fts-stock（2026-08） | 验收命令与测试用例（test_stock_ohlcv_columns / test_build_cap_map）迁移至 fts-stock |
 | 分钟级数据流 | `fts/data_sources/aggregator.py` 新增 `get_minute_ohlcv()` 方法；`fts/data_sources/tdx_local_source.py` 通达信本地 HTTP 统一源（端口 17709，日线+分钟+快照，v2.87.0，`TDX_RPC_URL=http://127.0.0.1:17709/`，`SUPPORTED_PERIODS={"day":"1d","1m":"1m","5m":"5m","15m":"15m","30m":"30m","60m":"1h"}`，日线 17 列/minute 11 列，`source_name="TDX_LOCAL"`）；`fts/data_sources/tqsdk_source.py` TQSDK 分钟数据源；`fts/factor_engine/backtest_pipeline.py` `BacktestInput.frequency` 字段；`fts/cli.py` `--frequency` 参数 | `minute_cache` 表结构存在 (symbol/period/datetime/open/high/low/close/volume/source)；`BacktestInput.frequency` 支持 "daily"/"1m"/"5m"/"15m"/"30m"/"60m"；年化因子自适应 252(daily)→98280(1m) | `pytest tests/test_backtest_frequency.py` |
+| EvolutionLoop Mixin 拆分（34 计划 B 阶段，2026-08-13） | `evolution_uct.py` EvolutionUctMixin（领域 I：_select_parent_uct/_update_uct_stats/_update_uct_failure/_check_circuit_breaker/_maybe_early_stop）；`evolution_trace.py` EvolutionTraceMixin（领域 J：_build_parent_failure_ctx/_build_success_pattern_report/_record_experiment_variant/_export_experiment_log/_record_audit_failed_trace/_record_ablation_failed_trace/_record_robustness_failed_trace/_record_causal_failed_trace/_record_success_trace/_record_failure_trace/_log_inspection_detail/_record_quality_filtered_trace + _QualityInspectionResult）；`evolution_channels.py` EvolutionChannelsMixin（领域 G：_run_gp_evolution/_run_deep_evolution/_generate_operator_factor/_try_operator_engine_evolution）；`evolution_loop.py` `class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMixin)`；公开 API（EvolutionLoop/EvolutionRunResult/UCT_EXPLORATION_C/_add_trading_days/_build_shadow_pool/_QualityInspectionResult/main）与行为等价不变 | `python scripts/analyze_evolution_loop.py`（方法/属性分布基线）；`pytest tests/factor_engine/test_uct_selection.py tests/factor_engine/test_evolution_stop.py tests/factor_engine/test_evolution_loop.py tests/factor_engine/test_experiment_log.py tests/factor_engine/test_success_pattern.py tests/factor_engine/operator_evolution/test_operator_evolution.py -m "not slow" -q`（受影响测试全绿） |

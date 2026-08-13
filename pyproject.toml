@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fts"
-version = "2.103.0"
+version = "2.103.0+9"
 description = "FTS — Factor Trading System: 独立因子策略系统，支持多因子挖掘、演化与交易"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -98,6 +98,9 @@ include = ["fts*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=fts --cov-report=term-missing -v"
+markers = [
+    "slow: 重量级真实演化/回测测试（日常回归默认跳过，全量验收必跑）",
+]
 
 [tool.ruff]
 target-version = "py310"

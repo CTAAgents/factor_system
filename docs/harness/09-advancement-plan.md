@@ -1,10 +1,10 @@
 # FTS 晋级计划
 
-> 版本: v2.102.0
+> 版本: v2.103.0+9
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
-> **版本策略（v2.101.0 修订）**：版本号仅代表"可交付发布里程碑"，不随日常开发递增。日常开发（GAP 实现、测试、文档）只在 07-operations.md 追加记录；满足发布条件时统一通过 `python scripts/bump_version.py --type patch|minor|major --message "..."` 执行 bump（单日限 bump 一次）。详见 [07-operations.md §6 版本升级流程](07-operations.md)。
+> **版本策略（v2.103.0 修订）**：版本号 = 里程碑版本 + build 段（SemVer build 段制）。日常开发（GAP 实现、测试、文档）通过 `python scripts/bump_version.py --build --message "..."` bump build 段（如 2.103.0 → 2.103.0+1，不限次）；满足发布条件（晋级里程碑完成 + 全量回归通过）时通过 `--type patch|minor|major --message "..."` bump 正式版本（build 清零，单日限一次）。详见 [07-operations.md §6 版本升级流程](07-operations.md)。
 
 ---
 
@@ -242,6 +242,64 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ 全量回归 5132 passed 全绿（5 个竞态失败——DuckDB 外部进程占锁 ×4 + pyproject 版本并发 bump ×1——重跑验证后全绿）
 - ✅ 覆盖率 TOTAL 94.31% 达标（`--cov-fail-under=90` 通过），14 个 <90% 缺口模块清零
 - ✅ 文档同步：06（覆盖率汇总缺口清零 + 用例统计 +341）/08（GAP-041 ✅ 关闭）/21 计划（GAP-F16 ✅ 完成）+ pyproject bump v2.87.0 → v2.88.0 + README
+
+### E.4 S1 L2/L3 DuckDB 连接生命周期根治（2026-08-13，日常开发，未 bump）
+
+**完成时间**: 2026-08-13
+
+**核心产出（design/E.4 实施，E.2 推荐路线 S1+S2 之 S1，L2/L3 剩余锁痛点根治）**:
+- ✅ 新增 `fts/store/duckdb_lock.py` 跨进程写锁 `duckdb_write_lock`（msvcrt/fcntl 标准库零依赖，`data/.locks/{name}.lock`，超时抛 TimeoutError）+ `tests/store/test_duckdb_lock.py` 4 用例
+- ✅ L2 `fts/data_futures.py`：删 `_WRITER`/`_DB` 模块级常驻写连接（仅留 `_READER` 池）；新增 `_write_scope()`（filelock + 短生命周期写连接，写完即关秒级）；读池 `_get_db()`/`DuckDBReader.acquire()` 改 `read_only=True`；`_write_contract_kline` 迁移短连接
+- ✅ L2 `fts/data_sources/aggregator.py`：删 `_get_cache_conn`/`_cache_conn` 常驻连接；读路径 `_open_read_conn()`（read_only 短连接 + finally close）+ 写路径（kline/minute/tick）`_write_scope()`；`close()` 幂等 no-op
+- ✅ L3 `fts/factor_engine/factor_db/repository.py` 4 类：`_get_conn` 补 `lock_configuration=true`（旧版静默降级）+ `retire_factor` 嵌套 repo 用后即关
+- ✅ 演化晋升：`evolution_loop.py`/`evolution_futures.py` `_promote_to_elite` 注入 `@_release_repo_after`（方法退出 finally 释放 repo 写锁）
+- ✅ 同步脚本 `sync_tq_contract_kline.py`/`sync_tq_futures_15y.py` 写段迁移 `_write_scope`（含 dry-run 分支释放）
+- ✅ 受影响模块 **653 passed** + ruff 全绿 + mypy 通过（剩 2 处 HEAD 预存不顺手修）；顺带修复预存 tick_cache TIMESTAMP Binder Error（CAST）与注入破坏的类结构（100+ mypy attr-defined → 归零）
+- ✅ 验收达成：演化进程零长驻写连接、跨进程写 filelock 串行、写后连接即关、读路径 read_only
+
+### 34 计划 Phase 46a evolution_loop.py Mixin 化拆分第一步（2026-08-13，日常开发，build bump v2.103.0+4）
+
+**完成时间**: 2026-08-13
+
+**核心产出（plans/34-evolution-loop-refactor-inventory.md 盘点落地，B 阶段第一步）**:
+- ✅ 职责盘点交付：`scripts/analyze_evolution_loop.py` AST 分析工具 + 34 盘点文档（11 领域分组 / 属性读点清单 / 纯函数候选）
+- ✅ 新建 `fts/factor_engine/evolution_uct.py` `EvolutionUctMixin`（领域 I）：`_select_parent_uct`/`_update_uct_stats`/`_update_uct_failure`/`_check_circuit_breaker`/`_maybe_early_stop` 5 方法原样迁移，领域独享状态（`_uct_stats`/`_evolution_stop_*`/`_consecutive_empty_generations`/`_early_stop_*`）随迁
+- ✅ `evolution_loop.py` `class EvolutionLoop(EvolutionUctMixin)`；公开 API 与行为等价不变（测试引用经 evolution_loop 模块兼容）
+- ✅ 验证：`analyze_evolution_loop.py` 基线 + 受影响测试全绿；01/02/06/07/08/09/34 文档同步
+- ⏳ 后续：channels/seeds/audit/review/prefilter/promote/candidate 8 领域 Mixin 按 34 盘点顺序推进；C 阶段组合式重构另立 plan
+
+### 34 计划 Phase 46b evolution_loop.py Mixin 化拆分第二步（2026-08-13，日常开发，build bump v2.103.0+6）
+
+**完成时间**: 2026-08-13
+
+**核心产出（34 盘点领域 J trace 抽取，B 阶段第二步）**:
+- ✅ 新建 `fts/factor_engine/evolution_trace.py` `EvolutionTraceMixin`（领域 J）：12 方法迁移——`_build_parent_failure_ctx`/`_build_success_pattern_report`/`_record_experiment_variant`/`_export_experiment_log`/`_record_audit_failed_trace`/`_record_ablation_failed_trace`/`_record_robustness_failed_trace`/`_record_causal_failed_trace`/`_record_success_trace`/`_record_failure_trace`/`_log_inspection_detail`/`_record_quality_filtered_trace` + `_QualityInspectionResult` 数据类（被 trace 方法与 `_QualityInspectionCompat` 共用）
+- ✅ 领域独享状态随迁：`_success_pattern_cache`/`_experiment_log_dir`/`_experiment_variants`（mixin 类型声明，主类 `__init__` 装配）；`run` 的 `_experiment_variants.clear()` 经继承属性声明兼容保留
+- ✅ `evolution_loop.py` `class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin)`；`_QualityInspectionResult` re-export（测试 import 兼容）；公开 API 与行为等价不变
+- ✅ 验证：`analyze_evolution_loop.py` 基线 + 受影响测试全绿；01/02/08/09/34 文档同步
+- ⏳ 后续：seeds/audit/review/prefilter/promote/candidate 6 领域 Mixin 按 34 盘点顺序推进
+
+### 34 计划 Phase 46c evolution_loop.py Mixin 化拆分第三步（2026-08-13，日常开发，build bump v2.103.0+7）
+
+**完成时间**: 2026-08-13
+
+**核心产出（34 盘点领域 G 演化通道抽取，B 阶段第三步）**:
+- ✅ 新建 `fts/factor_engine/evolution_channels.py` `EvolutionChannelsMixin`（领域 G）：4 方法迁移——`_run_gp_evolution`（GP 遗传规划，feature_ops_engine + feature_importance_analyzer）/`_run_deep_evolution`（GRU/Transformer 深度因子，GAP-I203/C5）/`_generate_operator_factor`（FTS-Expr DSL 随机生成 + 常数信号前置拦截）/`_try_operator_engine_evolution`（算子演化引擎搜索，C.4）
+- ✅ 组件随领域声明：`feature_ops_engine`/`feature_importance_analyzer`（mixin 类型声明，主类 `__init__` 装配）；跨领域共享（`data`/`forward_returns`/`market`/`cross_section_data`/`_is_cross_section`）留在主类
+- ✅ `evolution_loop.py` `class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMixin)`；公开 API 与行为等价不变
+- ✅ 验证：`analyze_evolution_loop.py` 基线 + 受影响测试全绿；01/02/08/09/34 文档同步
+- ⏳ 后续：seeds/audit/review/prefilter/promote/candidate 6 领域 Mixin 按 34 盘点顺序推进
+
+### E.3 S2 L4 状态库 SQLite 化（2026-08-13，日常开发，未 bump）
+
+**完成时间**: 2026-08-13
+
+**核心产出（design/E.3 实施，E.2 推荐路线 S1+S2 之 S2）**:
+- ✅ `fts/store/state_db.py` `StateKVStore` 后端 DuckDB → **SQLite WAL**：写连接存活期间外部只读不阻塞（WAL 多读单写，解决演化进程持锁连只读亦被锁）；upsert 单事务双表原子；seq AUTOINCREMENT 单调；**API 契约不变，5 个调用模块零改动**
+- ✅ 新增 `scripts/migrate_state_to_sqlite.py`（迁移 + 行数校验 + 幂等保护 + --force 覆盖 + 源库锁占用降级拒绝，旧库保留冻结期）
+- ✅ storage_landscape `run_state` 域 backend=sqlite / path=data/state.db
+- ✅ tests **33 passed**（test_state_db 14 + test_migrate_state_to_sqlite 6 + registry 13）+ 调用方回归 **74 passed** + ruff check 全绿 + mypy 2 文件 Success
+- 📋 遗留：旧 `data/state.duckdb` 冻结期（≥1 发布周期）后按 plans/29 约定清理；**S1（L2/L3 DuckDB 库写连接短生命周期 + filelock 跨进程写互斥）已实施（见 E.4 S1）**
 
 ### v2.86.0 DuckDB 并发模型根治（GAP-056，数据基础设施，已完成）
 

@@ -87,7 +87,7 @@ CLAUDE.md — FTS 编码行为准则 @AGENTS.md
 
 5.4 测试随重构原则
 每阶段先写测试，测试全绿才能进入下一阶段。当前 709 测试，覆盖率 92%，目标 100%。
-分级测试政策（2026-08-11 修订）：日常任务只跑受影响的**模块/集成测试**；**全量回归**仅两类时机执行——发布前（版本 bump/晋级里程碑）必跑 + 每月底例行巡检一次。禁止每次任务跑全量，避免测试时间随系统规模线性膨胀。
+分级测试政策（2026-08-13 修订）：日常任务只跑受影响的**模块/集成测试**；**全量回归**仅两类时机执行——发布前（里程碑版本 bump/晋级里程碑）必跑 + 每月底例行巡检一次。日常 build bump 不触发全量回归。禁止每次任务跑全量，避免测试时间随系统规模线性膨胀。
 
 5.5 trace_id 全链路原则
 trace_id 必须贯穿所有模块、文档和日志。所有 CLI 子命令和工作流启动时必须生成 trace_id。
@@ -98,12 +98,12 @@ Agent 职责不可越界。FTS 专注因子发现、评估、组合与演化。�
 5.7 差距管理原则
 重大技术债务必须登记到 docs/harness/08-gap-analysis.md，按 P0/P1/P2 优先级推进。
 
-5.8 版本号纪律原则（v2.101.0 修订：发布里程碑制）
-版本号仅代表"可交付发布里程碑"，不随日常开发递增：
-- 日常开发（GAP 实现、测试补充、bugfix、文档同步、数据修复）→ 只在 docs/harness/07-operations.md 追加变更记录，不 bump 版本号
-- 满足发布条件（晋级里程碑完成 + 全量回归通过 + 可交付）→ 统一通过 scripts/bump_version.py 执行 bump（patch=修复/minor=新功能/major=破坏性变更），禁止手工改 pyproject.toml
-- 同一天最多 bump 一次；并发会话同日冲突时后到者追加到当日已有版本条目，不产生新版本号
-- bump 后同步 pyproject.toml 与全部文档版本头（scripts/update_doc_versions.py --apply 自动完成）
+5.8 版本号纪律原则（v2.103.0 修订：SemVer build 段制）
+版本号 = 里程碑版本 + build 段（x.y.z[+N]），统一通过 scripts/bump_version.py 管理，禁止手工改 pyproject.toml：
+- 日常开发（GAP 实现、测试补充、bugfix、文档同步、数据修复）→ `python scripts/bump_version.py --build --message "..."`，build 段 +1（如 2.103.0 → 2.103.0+1 → 2.103.0+2），并同步 pyproject.toml、README 徽章、07-operations.md 版本历史与全部文档版本头
+- 里程碑发布（晋级里程碑完成 + 全量回归通过 + 可交付）→ `python scripts/bump_version.py --type patch/minor/major --message "..."`（patch=修复/minor=新功能/major=破坏性变更），正式版本 +1 且 build 段清零
+- 单日护栏仅约束里程碑 bump（一天最多一次，并发会话同日冲突时追加到当日已有条目，确需新版本用 --force）；build bump 不限次
+- bump 后文档版本头同步由 scripts/update_doc_versions.py --apply 自动完成
 
 5.9 安全与可移植性原则
 - 禁止硬编码绝对路径（如 D:\Programs\...）：一律使用相对路径、`Path(__file__)` 或配置系统解析
