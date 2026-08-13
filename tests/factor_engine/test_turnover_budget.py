@@ -6,8 +6,6 @@ HARNESS §测试随重构。
 
 from __future__ import annotations
 
-import numpy as np
-
 from fts.factor_engine.portfolio_turnover import TurnoverBudgetConfig, allocate_turnover_budget
 
 

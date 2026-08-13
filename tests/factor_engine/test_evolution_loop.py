@@ -2554,7 +2554,7 @@ class TestCoverageGaps:
             cross_section_dates=cross_dates,
         )
         # Mock 使得 cross_section_evaluate_backtest 返回低 IC
-        with patch("fts.factor_engine.evolution_loop.cross_section_evaluate_backtest") as mock_cs:
+        with patch("fts.factor_engine.evolution_seeds.cross_section_evaluate_backtest") as mock_cs:
             mock_cs.return_value = {"ic": 0.01, "sharpe": 1.0}
             loop.macro_evolver.evolve = MagicMock(
                 return_value=(
@@ -5848,7 +5848,7 @@ class TestGapF16CrossSectionAndEvolution:
             cross_section_data={"S0": _make_ohlcv(100)},
             cross_section_dates=pd.DatetimeIndex(pd.date_range("2026-01-01", periods=100)),
         )
-        with patch("fts.factor_engine.evolution_loop.cross_section_evaluate_backtest") as mock_cs:
+        with patch("fts.factor_engine.evolution_seeds.cross_section_evaluate_backtest") as mock_cs:
             mock_cs.return_value = {"ic": 0.01, "sharpe": 0.8, "t_stat": 1.0}
             factor = _make_minimal_factor("fct_cs001")
             evaluation = loop._evaluate_cross_section(factor, "t")

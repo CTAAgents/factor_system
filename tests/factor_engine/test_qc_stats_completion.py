@@ -75,15 +75,16 @@ def test_max_consecutive_losses_all_positive():
 
 
 def test_block_ic_stats_predictive():
-    """预测性信号：ic_t > 0 且 win_rate ∈ (0,1]。"""
+    """预测性信号：ic_t > 0 且 win_rate ∈ (0,1]（G4 三元组含 icir_block）。"""
     df = _predictive_ohlcv()
     fwd = np.zeros(len(df))
     fwd[:-1] = (df["close"].values[1:] - df["close"].values[:-1]) / np.maximum(df["close"].values[:-1], 1e-10)
     stats = _block_ic_stats(df["driver"].values, fwd)
     assert stats is not None
-    ic_t, win_rate = stats
+    ic_t, win_rate, icir_block = stats
     assert ic_t > 0
     assert 0.0 < win_rate <= 1.0
+    assert icir_block > 0
 
 
 def test_block_ic_stats_constant_returns_none():
