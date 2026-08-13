@@ -215,7 +215,7 @@ class BacktestMetrics(TypedDict, total=False):
     cost_sensitivity: dict  # 可交易性压力层（GAP-061）：滑点倍数 -> 净夏普/净IC/盈亏平衡
     quintile_returns: dict  # Q1-Q5 分组收益（GAP-062）：{1..5: mean_ret, q5_q1_spread, monotonic}
     symbol_ic: dict  # 逐标的时序 IC（GAP-075）：{symbol: ic}，供审计 cross_symbol 激活
-    symbol_holdout: dict  # 标的留出验证（GAP-075）：{train_ic/holdout_ic/ic_retention/passed/...}，None=数据不足
+    symbol_holdout: Optional[dict]  # 标的留出验证（GAP-075）：{train_ic/holdout_ic/ic_retention/passed/...}，None=数据不足
 
 
 class EconomicScore(TypedDict, total=False):
@@ -691,7 +691,7 @@ class L3MetaLoopState(TypedDict, total=False):
     total_proposals_generated: int
     tokens_consumed: int
     budget_limit: int
-    status: Literal["running", "paused", "completed", "circuit_broken"]
+    status: Literal["running", "paused", "completed", "circuit_broken", "frozen"]
     last_error: Optional[str]
     combo_ref: list[str]  # 组合 ID 列表
     last_updated: str
@@ -700,6 +700,7 @@ class L3MetaLoopState(TypedDict, total=False):
     drift_alert_info: dict[str, Any]  # 漂移告警详情（GAP-F13）
     attribution_report: str  # 归因报告路径（GAP-L307）
     walk_forward_report: str  # 组合层走航报告路径（GAP-L306）
+    risk_alerts: dict[str, Any]  # 组合风控告警详情（Step 7.8）
 
 
 # ─── L3 默认配置 ───────────────────────────────────────────

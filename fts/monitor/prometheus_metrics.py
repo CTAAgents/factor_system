@@ -327,16 +327,16 @@ class MetricsRegistry:
         live_values = dict(self._live_factor_values)
         lines.append("# HELP fts_live_factor_ic Live 因子 IC 值")
         lines.append("# TYPE fts_live_factor_ic gauge")
-        for fid, m in sorted(live_values.items()):
-            if "ic" in m:
-                lines.append(f'fts_live_factor_ic{{factor_id="{fid}"}} {m["ic"]}')
+        for fid, lv in sorted(live_values.items()):
+            if "ic" in lv:
+                lines.append(f'fts_live_factor_ic{{factor_id="{fid}"}} {lv["ic"]}')
         lines.append("")
 
         lines.append("# HELP fts_live_factor_sharpe Live 因子 Sharpe 值")
         lines.append("# TYPE fts_live_factor_sharpe gauge")
-        for fid, m in sorted(live_values.items()):
-            if "sharpe" in m:
-                lines.append(f'fts_live_factor_sharpe{{factor_id="{fid}"}} {m["sharpe"]}')
+        for fid, lv in sorted(live_values.items()):
+            if "sharpe" in lv:
+                lines.append(f'fts_live_factor_sharpe{{factor_id="{fid}"}} {lv["sharpe"]}')
         lines.append("")
 
         alerts = dict(self._live_deviation_alerts)

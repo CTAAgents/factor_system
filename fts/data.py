@@ -1,13 +1,13 @@
 """
-fts.data — FTS 数据层集成入口
+fts.data — FTS 数据层集成入口（期货因子系统）
 
-基于腾讯自选股 MCP (akshare) 为 FTS 因子引擎提供统一数据访问接口。
-替换原 Data-Core (datacore) 依赖，支持 A 股/ETF/期货因子演化。
+股票剥离（A 股/ETF 迁至 fts-stock）后，FTS 主系统定位期货因子系统，
+统一通过 FuturesDataProvider / AkshareFuturesFundamentalProvider
+提供期货行情与基本面数据。
 
 数据流:
-    因子引擎 → FTSDataProvider → MCPDataProvider(akshare) → 腾讯/东方财富 API
-                              → FundamentalProvider → MCP westock API
-                              → FuturesDataProvider → DuckDB kline_cache
+    因子引擎 → FTSDataProvider → FuturesDataProvider → DuckDB kline_cache
+                              → AkshareFuturesFundamentalProvider → AKShare
 
 HARNESS §契约优先: 所有数据接口通过本模块定义。
 """
@@ -15,16 +15,12 @@ HARNESS §契约优先: 所有数据接口通过本模块定义。
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, cast
+from datetime import datetime, timedelta
+from typing import Any, Optional
 
+import numpy as np
 import pandas as pd
 
-from .data_mcp import MCPDataProvider, MCPDataError
-from .data_fundamental import (
-    FundamentalProvider,
-    FundamentalDataError,
-    get_fundamental_provider,
-)
 from .data_futures import FuturesDataProvider, FuturesDataError
 from .data_futures_fundamental import (
     AkshareFuturesFundamentalProvider,
@@ -45,172 +41,31 @@ class DataUnavailableError(RuntimeError):
 
 
 class FTSDataProvider:
-    """FTS 统一数据提供者 — 基于 MCP (akshare) 的数据访问层。
+    """FTS 统一数据提供者 — 期货因子系统的数据访问层。
 
     职责:
-        - 提供因子计算所需的 A 股和 ETF 的 OHLCV 数据
+        - 提供因子计算所需的期货连续合约 OHLCV 数据
         - 所有数据以 pandas DataFrame 格式返回（兼容 factor_program 接口）
-        - 自动降级：MCP → 合成数据
+        - 自动降级：期货数据源 → 合成数据
         - 全链路 trace_id 传播
 
     用法:
         provider = FTSDataProvider()
-        ohlcv = provider.get_ohlcv("000001", days=500)
-        df = provider.get_etf_ohlcv("510050", days=500)
+        ohlcv = provider.get_futures_ohlcv("RB0", days=500)
     """
 
     def __init__(
         self,
-        mcp_provider: Optional[MCPDataProvider] = None,
-        fundamental_provider: Optional[FundamentalProvider] = None,
+        mcp_provider: Optional[Any] = None,
+        fundamental_provider: Optional[Any] = None,
         futures_provider: Optional[FuturesDataProvider] = None,
         futures_fundamental_provider: Optional[AkshareFuturesFundamentalProvider] = None,
     ):
-        self._mcp = mcp_provider or MCPDataProvider()
-        self._fundamental = fundamental_provider or FundamentalProvider(mcp_available=False)
+        # 注: mcp_provider / fundamental_provider 参数为兼容旧调用
+        # （FTSDataProvider(mcp_provider=...)）保留，股票剥离后不再实例化。
         self._futures = futures_provider or FuturesDataProvider()
         # 期货基本面 provider（库存/基差，AKShare；仓单 SHFE/DCE 反爬不可用，见 08-gap-analysis.md GAP）
         self._futures_fundamental = futures_fundamental_provider or get_futures_fundamental_provider()
-
-    # ── 基本面注入 ──
-
-    def set_fundamental_provider(self, provider: FundamentalProvider) -> None:
-        """设置基本面数据提供者（外部注入用）。"""
-        self._fundamental = provider
-
-    def enrich_with_fundamental(self, df: pd.DataFrame, symbol: str, *, trace_id: str = "") -> pd.DataFrame:
-        """将基本面字段注入 OHLCV DataFrame。
-
-        Args:
-            df: OHLCV DataFrame
-            symbol: 股票代码
-            trace_id: HARNESS trace_id
-
-        Returns:
-            DataFrame — 新增 pe_ttm, pb, total_market_cap 等基本面列。
-        """
-        return self._fundamental.enrich_ohlcv(df, symbol, trace_id=trace_id)
-
-    # ── 单标的 OHLCV ──
-
-    def get_ohlcv(
-        self,
-        symbol: str,
-        *,
-        days: int = 500,
-        adjust: str = "qfq",
-        trace_id: str = "",
-        fundamental: bool = False,
-    ) -> pd.DataFrame:
-        """获取股票/ETF OHLCV K线数据。
-
-        Args:
-            symbol: 股票/ETF 代码（如 "000001" / "510050"）
-            days: 回溯天数
-            adjust: 复权方式 ("qfq"前复权 / "hfq"后复权 / ""不复权)
-            trace_id: HARNESS trace_id
-            fundamental: 是否注入基本面字段（pe_ttm, pb 等）
-
-        Returns:
-            pd.DataFrame with columns: open, high, low, close, volume
-            If fundamental=True, also includes pe_ttm, pb, etc.
-
-        Raises:
-            DataUnavailableError: 所有数据源不可用
-        """
-        try:
-            df = self._mcp.get_ohlcv(symbol, days=days, adjust=adjust, trace_id=trace_id)
-            if df is not None and not df.empty and "close" in df.columns:
-                if fundamental:
-                    df = self._fundamental.enrich_ohlcv(df, symbol, trace_id=trace_id)
-                return df
-        except (MCPDataError, Exception) as e:
-            logger.warning(f"MCP OHLCV 获取失败 [{symbol}]: {e}")
-
-        # 回退：合成数据（确保系统可运行）
-        logger.warning(f"使用合成数据回退 [{symbol}]")
-        df = self.synthesize_ohlcv(n_days=days, base_price=15.0, seed=42)
-        if fundamental:
-            df = self._fundamental.enrich_ohlcv(df, symbol, trace_id=trace_id)
-        return df
-
-    # ── ETF 专用接口 ──
-
-    def get_etf_ohlcv(
-        self,
-        symbol: str,
-        *,
-        days: int = 500,
-        adjust: str = "qfq",
-        trace_id: str = "",
-    ) -> pd.DataFrame:
-        """获取 ETF OHLCV 数据。"""
-        return self.get_ohlcv(symbol, days=days, adjust=adjust, trace_id=trace_id)
-
-    # ── 面板数据 ──
-
-    def get_csi300_panel(
-        self,
-        days: int = 500,
-        max_stocks: int = 50,
-        trace_id: str = "",
-        fundamental: bool = False,
-    ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
-        """获取沪深 300 成分股批量 OHLCV 面板数据。
-
-        Args:
-            days: 回溯天数
-            max_stocks: 最大成分股数（0 = 使用全部）
-            trace_id: HARNESS trace_id
-            fundamental: 是否注入基本面字段
-
-        Returns:
-            (panel, common_dates)
-            panel: dict[symbol, OHLCV DataFrame]（含基本面列如果 fundamental=True）
-            common_dates: 所有股票共有日期
-        """
-        from .data_mcp import CSI300_SUBSET, get_csi300_constituents
-
-        # max_stocks>0 用代表性子集前 N 只；0=全部沪深300成分股（akshare 动态拉取）
-        symbols = CSI300_SUBSET[:max_stocks] if max_stocks > 0 else get_csi300_constituents()
-
-        panel: dict[str, pd.DataFrame] = {}
-        dates_set: set[pd.Timestamp] = set()
-        first = True
-
-        for sym in symbols:
-            try:
-                df = self.get_ohlcv(sym, days=days, adjust="qfq", trace_id=trace_id, fundamental=fundamental)
-                if df is not None and not df.empty and "close" in df.columns:
-                    panel[sym] = df
-                    if first:
-                        dates_set = set(df.index)
-                        first = False
-                    else:
-                        dates_set &= set(df.index)
-            except Exception:  # noqa: BLE001
-                continue
-
-        if not panel:
-            df = self.synthesize_ohlcv(n_days=days, base_price=15.0, seed=42)
-            if fundamental:
-                df = self._fundamental.enrich_ohlcv(df, "SYNTHETIC", trace_id=trace_id)
-            panel["SYNTHETIC"] = df
-            return panel, pd.DatetimeIndex(df.index)
-
-        common_dates = pd.DatetimeIndex(sorted(dates_set))
-        return panel, common_dates
-
-    def get_etf_panel(self, days: int = 500, trace_id: str = "") -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
-        """获取常见 ETF 批量 OHLCV 面板数据。"""
-        from .data_mcp import ETF_SUBSET
-
-        return self._mcp.get_stock_panel(
-            ETF_SUBSET,
-            days=days,
-            adjust="qfq",
-            trace_id=trace_id,
-        )
 
     # ── 期货接口 ──
 
@@ -340,33 +195,29 @@ class FTSDataProvider:
 
         return df
 
-    def get_stock_panel(
-        self, symbols: list[str], days: int = 500, trace_id: str = ""
-    ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
-        """获取任意股票列表的 OHLCV 面板数据。"""
-        return self._mcp.get_stock_panel(
-            symbols,
-            days=days,
-            adjust="qfq",
-            trace_id=trace_id,
-        )
-
-    # ── 搜索接口 ──
-
-    def search_symbol(self, query: str, limit: int = 10) -> list[dict[str, str]]:
-        """搜索股票/ETF 代码。"""
-        # 注: MCPDataProvider 暂未实现 search_symbol（潜在 GAP，测试容忍网络异常）
-        return cast(Any, self._mcp).search_symbol(query, limit=limit)
-
     # ── 合成数据 ──
 
     @staticmethod
     def synthesize_ohlcv(n_days: int = 500, base_price: float = 15.0, seed: int = 42) -> pd.DataFrame:
-        """合成 OHLCV 数据（无网络时使用）。"""
-        return MCPDataProvider.synthesize_ohlcv(
-            n_days=n_days,
-            base_price=base_price,
-            seed=seed,
+        """合成 OHLCV 数据（数据源不可用时的降级回退）。"""
+        np.random.seed(seed)
+        # 起点归一化到日界（无时间分量），保证同日内多次调用索引一致，
+        # 避免面板交集因微秒时间戳漂移而为空（0 交易日崩溃）。
+        dates = pd.date_range(
+            (datetime.now() - timedelta(days=n_days)).date(),
+            periods=n_days,
+            freq="D",
+        )
+        close = base_price + np.cumsum(np.random.randn(n_days) * 0.5)
+        return pd.DataFrame(
+            {
+                "open": close + np.random.randn(n_days) * 0.1,
+                "high": close + np.abs(np.random.randn(n_days)) * 0.3,
+                "low": close - np.abs(np.random.randn(n_days)) * 0.3,
+                "close": close,
+                "volume": np.random.randint(1000, 10000, n_days).astype(float),
+            },
+            index=dates,
         )
 
 
@@ -386,10 +237,7 @@ def get_data_provider() -> FTSDataProvider:
 __all__ = [
     "FTSDataProvider",
     "DataUnavailableError",
-    "FundamentalProvider",
-    "FundamentalDataError",
     "FuturesDataProvider",
     "FuturesDataError",
     "get_data_provider",
-    "get_fundamental_provider",
 ]

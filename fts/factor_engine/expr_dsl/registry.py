@@ -18,6 +18,7 @@ import pandas as pd
 from ..feature_ops import CompositeOps, PriceOps, RollingOps, TimeSeriesOps
 
 # L0 基础数据字段（数据访问层）
+# F.1 契约拆分: hold/settle 为期货专用字段（FuturesOHLCV），vwap/amount/returns 双市场通用
 L0_FIELDS: tuple[str, ...] = (
     "open",
     "high",
@@ -27,8 +28,8 @@ L0_FIELDS: tuple[str, ...] = (
     "vwap",
     "amount",
     "returns",
-    "hold",
-    "settle",
+    "hold",  # 期货专用（持仓量）
+    "settle",  # 期货专用（结算价）
 )
 
 # GAP-S12 (v2.67.0): A 股特有数据字段（北向/两融/股东户数/分析师预期）

@@ -8,7 +8,6 @@ fts/factor_engine/extractors/base.py — 提取器基类与管道抽象
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import secrets
 from abc import ABC, abstractmethod
@@ -97,7 +96,7 @@ class BaseExtractor(ABC):
             source_text: 文本内容（研报摘要、论文摘要等）
             trace_id: 全链路 trace_id
             max_factors: 最大提取因子数
-            market: 市场类型 ("futures" 或 "stock")
+            market: 市场类型（默认 "futures"）
 
         Returns:
             list[SeedCandidate] — LLM 提取的候选因子
@@ -111,14 +110,9 @@ class BaseExtractor(ABC):
             )
             return []
 
-        if market == "stock":
-            prefix = "stk_"
-            market_desc = "股票/ETF"
-            extra_fields = "（含 close, high, low, volume, pe, pb, market_cap 等字段）"
-        else:
-            prefix = "fut_"
-            market_desc = "期货/CTA"
-            extra_fields = "（含 close, high, low, volume 等字段）"
+        prefix = "fut_"
+        market_desc = "期货/CTA"
+        extra_fields = "（含 close, high, low, volume 等字段）"
 
         prompt = f"""你是一个量化因子研究专家。请从以下文本中提取可行的{market_desc}因子想法。
 
@@ -250,16 +244,19 @@ class BaseExtractorPipeline(ABC):
         extractors: list[BaseExtractor],
         market: str,
         state_path: str | Path = "memory/extractors/state.json",
+        state_store: Any | None = None,
     ):
         """
         Args:
             extractors: 提取器列表
-            market: 市场类型 ("futures" 或 "stock")
-            state_path: 状态持久化路径
+            market: 市场类型（"futures"）
+            state_path: 兼容保留（DuckDB SSOT 下不再使用）
+            state_store: 可选状态存储（StateKVStore），缺省用全局 SSOT（供测试隔离）
         """
         self.extractors = {e.name: e for e in extractors}
         self.market = market
         self.state_path = Path(state_path)
+        self._state_store = state_store
         self._load_state()
 
     def extract(self, trace_id: str) -> list[SeedCandidate]:
@@ -359,44 +356,37 @@ class BaseExtractorPipeline(ABC):
         return ext.paused if ext else True
 
     def _load_state(self) -> None:
-        """从文件加载暂停状态。"""
-        if not self.state_path.exists():
-            return
+        """从 state.duckdb 加载暂停状态（SSOT，plans/29 P4 读路径切换）。"""
+        from fts.store.state_db import get_state_store
+
+        store = self._state_store if self._state_store is not None else get_state_store()
         try:
-            with open(self.state_path, "r", encoding="utf-8") as f:
-                state = json.load(f)
-            market_state = state.get(self.market, {})
-            for name, paused in market_state.items():
-                if name in self.extractors:
-                    self.extractors[name].paused = paused
-            logger.info(
-                "[ExtractorPipeline] 状态已加载: market=%s, sources=%s",
-                self.market,
-                {k: v for k, v in market_state.items()},
-            )
-        except (json.JSONDecodeError, OSError) as e:
+            state = store.get("extractors", "state")
+            market_state = (state or {}).get(self.market, {}) if isinstance(state, dict) else {}
+        except Exception as e:  # noqa: BLE001 — 加载失败不阻断提取
             logger.warning("[ExtractorPipeline] 状态加载失败: %s", e)
+            return
+        for name, paused in market_state.items():
+            if name in self.extractors:
+                self.extractors[name].paused = paused
+        logger.info(
+            "[ExtractorPipeline] 状态已加载: market=%s, sources=%s",
+            self.market,
+            {k: v for k, v in market_state.items()},
+        )
 
     def _save_state(self) -> None:
-        """持久化暂停状态到文件。"""
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        """持久化暂停状态到 state.duckdb（SSOT，UPSERT）。"""
+        from fts.store.state_db import get_state_store
 
-        # 加载现有状态
-        state: dict[str, dict[str, bool]] = {}
-        if self.state_path.exists():
-            try:
-                with open(self.state_path, "r", encoding="utf-8") as f:
-                    state = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                pass
-
+        store = self._state_store if self._state_store is not None else get_state_store()
+        current = store.get("extractors", "state")
+        state: dict[str, dict[str, bool]] = dict(current) if isinstance(current, dict) else {}
         # 更新当前 market 的状态
         state.setdefault(self.market, {})
         for name, ext in self.extractors.items():
             state[self.market][name] = ext.paused
-
-        with open(self.state_path, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
+        store.upsert("extractors", "state", state, run_id="extractor_pipeline")
 
         logger.info(
             "[ExtractorPipeline] 状态已持久化: market=%s, sources=%s",

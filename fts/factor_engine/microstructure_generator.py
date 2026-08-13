@@ -224,9 +224,9 @@ class MicrostructureFactorGenerator:
         if self._tick_provider is not None:
             return self._tick_provider(symbol, _TICK_FETCH_COUNT, trace_id or "")
         if self._aggregator is None:
-            from fts.data_sources.aggregator import DataAggregator
+            from fts.data_sources.aggregator import FuturesDataAggregator
 
-            self._aggregator = DataAggregator(db_path=_DEFAULT_DB_PATH)
+            self._aggregator = FuturesDataAggregator(db_path=_DEFAULT_DB_PATH)
         return self._aggregator.get_ticks(
             symbol,
             count=_TICK_FETCH_COUNT,
@@ -288,7 +288,7 @@ class MicrostructureFactorGenerator:
             "ltr_mean": "日大单成交量占比均值",
             "ofi_std": "日订单流不平衡波动（分歧度）",
         }[kind]
-        factor: dict[str, Any] = create_factor_program(
+        factor: Any = create_factor_program(
             name=factor_name,
             code=code,
             params={

@@ -850,7 +850,7 @@ def cross_section_evaluate_backtest(
         cap_map: {symbol: market_cap} 市值映射字典（可选，配合 industry_map 做双重中性化，GAP-S06 启用分层 IC）
         style_exposures: {style_name: DataFrame} Barra 风格暴露（可选，GAP-S02）。
             启用后在行业中性化基础上叠加风格回归残差（剥离风格暴露）。
-        long_only: 仅做多口径（GAP-S07），股票/ETF 路径默认 True
+        long_only: 仅做多口径（GAP-S07），默认 False（期货横截面）
         horizons: 多持有期 IC 分析（GAP-060 横截面接入）；None 时从配置 eval_horizons 读取（空=关闭）
         holdout_ratio: 标的留出比例（GAP-075，默认 20%；行业分层，缺失回退随机）
 

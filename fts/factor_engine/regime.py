@@ -943,6 +943,7 @@ class RegimeAwareSelector:
                         detected_at=datetime.now().isoformat(),
                         features=feats,
                         method="multi_hmm",
+                        regime_probs={},
                     )
             except Exception:
                 pass  # 多周期 HMM 失败，尝试下一个
@@ -961,6 +962,7 @@ class RegimeAwareSelector:
                             detected_at=datetime.now().isoformat(),
                             features=feats,
                             method="msm",
+                            regime_probs={},
                         )
             except Exception:
                 pass  # MSM 失败，尝试下一个
@@ -977,6 +979,7 @@ class RegimeAwareSelector:
                         detected_at=datetime.now().isoformat(),
                         features=hmm_features,
                         method="hmm",
+                        regime_probs={},
                     )
             except Exception:
                 pass  # HMM 失败，回退到规则方法
@@ -988,7 +991,7 @@ class RegimeAwareSelector:
         # ── 28 补充: 将 HMM/MSM 路径 features 内的 regime_probs 提升到顶层 ──
         # （multi_hmm/hmm/msm 的 predict 将 regime_probs 放入 features，此处统一提升，
         #   使 regime blend / 熵标定可消费；rule/fallback 路径已在构造时直接输出）
-        if result is not None and result.get("regime_probs") is None:
+        if result is not None and not result.get("regime_probs"):
             _feats_rp = (result.get("features") or {}).get("regime_probs")
             if isinstance(_feats_rp, dict) and _feats_rp:
                 result["regime_probs"] = _feats_rp

@@ -462,7 +462,7 @@ class SentimentFactorGenerator:
             "sent_std": "日舆情情感离散度（分歧）",
             "sent_chg": "日舆情情感变化率（动量）",
         }[kind]
-        factor: dict[str, Any] = create_factor_program(
+        factor: Any = create_factor_program(
             name=factor_name,
             code=code,
             params={

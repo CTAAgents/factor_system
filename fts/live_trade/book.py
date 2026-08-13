@@ -107,8 +107,12 @@ def build_book_from_ticks(
         return None
 
     # 档位排序：bid 价格降序（最优在前），ask 价格升序（最优在前）
-    bids = [{"price": float(p), "quantity": float(bid_map[p])} for p in sorted(bid_map.keys(), reverse=True)]
-    asks = [{"price": float(p), "quantity": float(ask_map[p])} for p in sorted(ask_map.keys())]
+    bids: list[BookLevel] = [
+        {"price": float(p), "quantity": float(bid_map[p])} for p in sorted(bid_map.keys(), reverse=True)
+    ]
+    asks: list[BookLevel] = [
+        {"price": float(p), "quantity": float(ask_map[p])} for p in sorted(ask_map.keys())
+    ]
 
     # 无档位但有 last_price → 单档兜底（量 0，撮合将按该价成交）
     if not bids:

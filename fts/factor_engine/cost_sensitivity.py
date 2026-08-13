@@ -15,20 +15,14 @@ fts/factor_engine/cost_sensitivity.py — 可交易性压力层（GAP-061，v2.9
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional, cast
 
 import numpy as np
 from scipy import stats as _sp
 
-from .cost_model import CostConfig, TransactionCostModel, _DEFAULT_FUTURES, _DEFAULT_STOCK, _DEFAULT_ETF
+from .cost_model import CostConfig, TransactionCostModel, _DEFAULT_FUTURES
 
 DEFAULT_SLIPPAGE_MULTS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
-
-_DEFAULT_BASE_BPS = {
-    "futures": _DEFAULT_FUTURES.get("slippage_bps", 0.5),
-    "stock": _DEFAULT_STOCK.get("slippage_bps", 1.0),
-    "etf": _DEFAULT_ETF.get("slippage_bps", 0.5),
-}
 
 
 @dataclass
@@ -106,9 +100,9 @@ def _gross_metrics(
 
 def _scaled_config(base: CostConfig, mult: float) -> CostConfig:
     """按倍数缩放滑点，其余成本参数不变。"""
-    scaled = dict(base)
+    scaled: dict[str, Any] = dict(base)
     scaled["slippage_bps"] = float(base.get("slippage_bps", 0.5)) * float(mult)
-    return CostConfig(**scaled)
+    return cast(CostConfig, scaled)
 
 
 def run_slippage_stress(

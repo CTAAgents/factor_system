@@ -6,7 +6,7 @@
 版本: v1.1 (Phase 3 读写链路改造)
 """
 
-from .schema import init_database, verify_database, DATABASE_PATH, DATABASE_PATH_STOCK, DATABASE_PATH_FUTURES, get_db_path
+from .schema import init_database, verify_database, DATABASE_PATH, DATABASE_PATH_FUTURES, get_db_path
 from .repository import (
     FactorRepository,
     FactorQualityScoreRepository,
@@ -19,7 +19,6 @@ __all__ = [
     "init_database",
     "verify_database",
     "DATABASE_PATH",
-    "DATABASE_PATH_STOCK",
     "DATABASE_PATH_FUTURES",
     "get_db_path",
     "FactorRepository",

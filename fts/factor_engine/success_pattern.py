@@ -24,10 +24,9 @@ fts/factor_engine/success_pattern.py — 成功模式定向演化（Phase 1.2 P0
 from __future__ import annotations
 
 import re
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional, Protocol
 
 # ─── 契约 ─────────────────────────────────────────────────
 
@@ -139,8 +138,16 @@ def _parse_ts(value: Optional[str]) -> Optional[datetime]:
 # ─── 核心聚合 ─────────────────────────────────────────────
 
 
+class _ExperienceChain(Protocol):
+    """经验链最小接口（duck typing，见 ExperienceChain）。"""
+
+    def read_all_success(self) -> list[dict[str, Any]]: ...
+
+    def read_all_failure(self) -> list[dict[str, Any]]: ...
+
+
 def analyze_success_patterns(
-    chain: object,
+    chain: _ExperienceChain,
     config: SuccessPatternConfig | None = None,
 ) -> SuccessPatternReport:
     """从经验链聚合近期成功模式（滚动窗口 + 时间衰减）。
@@ -193,15 +200,15 @@ def analyze_success_patterns(
         return report
 
     # by_method 晋升率（加权）
-    promoted_by_method: Counter = Counter()
-    evaluated_by_method: Counter = Counter()
+    promoted_by_method: dict[str, float] = {}
+    evaluated_by_method: dict[str, float] = {}
     for t, w in success_weighted:
         method = t.get("mutation_type") or "unknown"
-        promoted_by_method[method] += w
-        evaluated_by_method[method] += w
+        promoted_by_method[method] = promoted_by_method.get(method, 0.0) + w
+        evaluated_by_method[method] = evaluated_by_method.get(method, 0.0) + w
     for t, w in failure_weighted:
         method = t.get("mutation_type") or "unknown"
-        evaluated_by_method[method] += w
+        evaluated_by_method[method] = evaluated_by_method.get(method, 0.0) + w
 
     report.by_method = {
         method: PromotionStat(
@@ -217,20 +224,20 @@ def analyze_success_patterns(
     }
 
     # top_operators（加权计频）
-    op_counter: Counter = Counter()
+    op_counter: dict[str, float] = {}
     for t, w in success_weighted:
         for op in _extract_operators(t.get("mutation_summary", "")):
-            op_counter[op] += w
-    report.top_operators = [op for op, _ in op_counter.most_common(config.max_operators)]
+            op_counter[op] = op_counter.get(op, 0.0) + w
+    report.top_operators = sorted(op_counter, key=op_counter.get, reverse=True)[: config.max_operators]
 
     # top_window_bins（加权计频）
-    bin_counter: Counter = Counter()
+    bin_counter: dict[str, float] = {}
     for t, w in success_weighted:
         for value in _extract_window_values(t.get("mutation_summary", "")):
             label = _bin_window(value)
             if label is not None:
-                bin_counter[label] += w
-    report.top_window_bins = [label for label, _ in bin_counter.most_common(5)]
+                bin_counter[label] = bin_counter.get(label, 0.0) + w
+    report.top_window_bins = sorted(bin_counter, key=bin_counter.get, reverse=True)[:5]
 
     return report
 

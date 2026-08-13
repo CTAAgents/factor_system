@@ -21,8 +21,9 @@ logger = logging.getLogger(__name__)
 # ─── 默认路径 ────────────────────────────────────────────
 
 DEFAULT_MEMORY_DIR = "memory"
-# v2.86.0: 股票精英因子目录由 elite/ 重命名为 stocks_elite/（与期货 futures_elite/ 命名对齐）
-DEFAULT_ELITE_DIR = "memory/knowledge/factors/stocks_elite"
+# v2.86.0: 股票精英因子目录 stocks_elite/（与期货 futures_elite/ 命名对齐）。
+# 股票剥离后 FTS 主系统定位期货因子系统，elite_dir 默认对齐期货精英目录。
+DEFAULT_ELITE_DIR = "memory/knowledge/factors/futures_elite"
 DEFAULT_FUTURES_ELITE_DIR = "memory/knowledge/factors/futures_elite"
 
 
@@ -40,18 +41,16 @@ class FTSConfig:
         default_factory=lambda: os.getenv("FTS_FUTURES_ELITE_DIR", DEFAULT_FUTURES_ELITE_DIR)
     )
 
-    def get_elite_dir(self, market: str = "stock") -> str:
-        """按市场获取对应的 elite 目录。
+    def get_elite_dir(self, market: str = "futures") -> str:
+        """获取 elite 目录（股票剥离后统一为期货精英目录）。
 
         Args:
-            market: "stock" 或 "futures"
+            market: 兼容参数（历史调用方传 "futures"/"stock"），股票剥离后忽略
 
         Returns:
-            对应的 elite 目录路径
+            期货 elite 目录路径
         """
-        if market == "futures":
-            return self.futures_elite_dir
-        return self.elite_dir
+        return self.futures_elite_dir
 
     # ── 数据配置 ──
     default_market: str = field(default_factory=lambda: os.getenv("FTS_DEFAULT_MARKET", "futures"))
@@ -118,9 +117,7 @@ class FTSConfig:
         default_factory=lambda: os.getenv("FTS_SUCCESS_PATTERN_ENABLED", "1") == "1"
     )
     # 成功模式滚动窗口（天）
-    success_pattern_window_days: int = field(
-        default_factory=lambda: int(os.getenv("FTS_SUCCESS_PATTERN_WINDOW", "14"))
-    )
+    success_pattern_window_days: int = field(default_factory=lambda: int(os.getenv("FTS_SUCCESS_PATTERN_WINDOW", "14")))
     # 样本下限：窗口内成功轨迹 < 该值 → 空报告（不注入，防过拟合）
     success_pattern_min_sample: int = field(
         default_factory=lambda: int(os.getenv("FTS_SUCCESS_PATTERN_MIN_SAMPLE", "10"))
@@ -129,9 +126,7 @@ class FTSConfig:
     # ── 提前达标停止 (Phase 3 P1-3, 26 号计划 §8) ──
     # 连续 K 代零晋升 → 提前结束 run，节约 token 预算。保守默认关闭（验证见
     # plans/26 §8.7.1：修复后真实 run 连续 15 代零晋升），开启需显式设 env。
-    evolution_stop_enabled: bool = field(
-        default_factory=lambda: os.getenv("FTS_EVOLUTION_STOP_ENABLED", "0") == "1"
-    )
+    evolution_stop_enabled: bool = field(default_factory=lambda: os.getenv("FTS_EVOLUTION_STOP_ENABLED", "0") == "1")
     # 连续零晋升代数阈值 K（达到即提前结束并正常收尾）
     evolution_stop_consecutive_empty_generations: int = field(
         default_factory=lambda: int(os.getenv("FTS_EVOLUTION_STOP_EMPTY_GENS", "5"))
@@ -253,7 +248,8 @@ class FTSConfig:
         default_factory=lambda: os.getenv("FTS_PORTFOLIO_OPTIMIZER_MODE", "risk_parity")
     )
     # GAP-I303 (v2.85.0): 组合目标函数换手惩罚项 λ（0=关闭，λ 越大权重变动越收缩、换手越低）
-    l3_turnover_penalty: float = field(default_factory=lambda: float(os.getenv("FTS_L3_TURNOVER_PENALTY", "0.0")))
+    # v2.103.0+7 (35-gap-closure-plan G3): 默认开启 0.15（原 0.0 关闭）
+    l3_turnover_penalty: float = field(default_factory=lambda: float(os.getenv("FTS_L3_TURNOVER_PENALTY", "0.15")))
     # GAP-072 (v2.99.0): 权重重算频率（解绑 L3 与信号管道）
     # cadence=daily: 每日重算权重；cadence=weekly: 仅在 l3_weight_recompute_weekday 重算（默认周五收盘后）
     l3_weight_recompute_cadence: str = field(
@@ -273,33 +269,14 @@ class FTSConfig:
         default_factory=lambda: float(os.getenv("FTS_RECALIBRATION_MIN_IC_GAP", "0.0"))
     )
 
-    # ── 股票因子中性化（v2.54.0+）──
-    # 股票因子横截面评估时是否做行业/市值中性化预处理
-    stock_neutralization: bool = field(
-        default_factory=lambda: os.getenv("FTS_STOCK_NEUTRALIZATION", "true").lower() == "true"
-    )
-    # 行业映射文件路径（JSON 格式，{symbol: industry_name}）
-    industry_map_path: str = field(default_factory=lambda: os.getenv("FTS_INDUSTRY_MAP_PATH", "data/industry_map.json"))
-    # 市值映射文件路径（JSON 格式，{symbol: market_cap}，可选）
-    cap_map_path: str = field(default_factory=lambda: os.getenv("FTS_CAP_MAP_PATH", ""))
-    # 股票信号管道截面中性化方式（D.2，默认 none 保持现状；none/industry/size/both）
-    stock_signal_neutralize: str = field(
-        default_factory=lambda: os.getenv("FTS_STOCK_SIGNAL_NEUTRALIZE", "none")
-    )
-    # 股票信号管道 L3 权重学习模式（D.2，默认 ridge 保持现状；ridge/elastic_net）
-    stock_signal_l3_mode: str = field(
-        default_factory=lambda: os.getenv("FTS_STOCK_SIGNAL_L3_MODE", "ridge")
-    )
-    # 股票信号管道 Regime 自适应权重（D.2 偏差 b，默认 none 保持现状；none/auto）
-    stock_signal_regime: str = field(
-        default_factory=lambda: os.getenv("FTS_STOCK_SIGNAL_REGIME", "none")
-    )
-
     # ── 期货换月复权与展期成本（v2.58.0，GAP-046）──
     # 期货连续合约 K 线是否默认返回换月后复权序列（因子计算用）
     futures_adjusted: bool = field(default_factory=lambda: os.getenv("FTS_FUTURES_ADJUSTED", "true").lower() == "true")
     # 展期成本系数（基点/次，回测持仓穿越换月日扣除）
     roll_cost_bps: float = field(default_factory=lambda: float(os.getenv("FTS_ROLL_COST_BPS", "2.0")))
+    # 分钟缓存最大新鲜度（天，v2.101.0：独立于日线缓存窗口——生产日线 30 天窗口不适用于分钟，
+    # 旧分钟缓存持续命中会挡住 TDX 实时分钟拉取；默认 1 天）
+    minute_cache_max_age_days: int = field(default_factory=lambda: int(os.getenv("FTS_MINUTE_CACHE_MAX_AGE_DAYS", "1")))
 
     # ── 期货截面中性化 + 回测真实性仿真（v2.59.0，GAP-F03/F02）──
     # 期货横截面因子评估是否做板块/产业链中性化（剥离产业链系统性偏差）
@@ -490,85 +467,10 @@ def validate_evolution_mode(mode: str) -> str:
     return mode
 
 
-def load_industry_map(path: Optional[str] = None) -> dict[str, str]:
-    """加载行业映射文件。
-
-    Args:
-        path: 行业映射 JSON 文件路径，None=使用配置中的默认路径
-
-    Returns:
-        {symbol: industry_name} 字典
-
-    Raises:
-        FileNotFoundError: 文件不存在时抛出
-        json.JSONDecodeError: JSON 格式错误时抛出
-    """
-    import json
-
-    if path is None:
-        path = get_config().industry_map_path
-    p = Path(path)
-    if not p.exists():
-        logger.warning("行业映射文件不存在: %s", path)
-        return {}
-    text = p.read_text(encoding="utf-8")
-    data = json.loads(text)
-    if not isinstance(data, dict):
-        logger.warning("行业映射文件格式错误: 期望 JSON 对象，实际 %s", type(data).__name__)
-        return {}
-    # 过滤非字符串键（如注释等）
-    result: dict[str, str] = {}
-    for k, v in data.items():
-        if isinstance(k, str) and isinstance(v, str) and k.strip():
-            result[k.strip()] = v.strip()
-    logger.info("加载行业映射: %d 条记录", len(result))
-    return result
-
-
-def load_cap_map(path: Optional[str] = None) -> dict[str, float]:
-    """加载市值映射文件。
-
-    Args:
-        path: 市值映射 JSON 文件路径，None=使用配置中的默认路径
-
-    Returns:
-        {symbol: market_cap} 字典（值为 float，非数值条目过滤）
-
-    Raises:
-        json.JSONDecodeError: JSON 格式错误时抛出
-    """
-    import json
-
-    if path is None:
-        path = get_config().cap_map_path
-    if not path:
-        return {}
-    p = Path(path)
-    if not p.exists():
-        logger.warning("市值映射文件不存在: %s", path)
-        return {}
-    text = p.read_text(encoding="utf-8")
-    data = json.loads(text)
-    if not isinstance(data, dict):
-        logger.warning("市值映射文件格式错误: 期望 JSON 对象，实际 %s", type(data).__name__)
-        return {}
-    result: dict[str, float] = {}
-    for k, v in data.items():
-        if isinstance(k, str) and k.strip():
-            try:
-                result[k.strip()] = float(v)
-            except (TypeError, ValueError):
-                continue
-    logger.info("加载市值映射: %d 条记录", len(result))
-    return result
-
-
 __all__ = [
     "FTSConfig",
     "get_config",
     "load_config",
-    "load_industry_map",
-    "load_cap_map",
     "DEFAULT_MEMORY_DIR",
     "DEFAULT_ELITE_DIR",
     "EVOLUTION_MODES",

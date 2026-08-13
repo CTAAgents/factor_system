@@ -40,7 +40,6 @@ import json
 import logging
 import re
 import secrets
-import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -86,8 +85,6 @@ class L3Error(Exception):
 
 # ─── 常量 ──────────────────────────────────────────────────
 
-STATE_FILE_NAME: str = "state.json"
-BACKUP_FILE_NAME: str = "state.json.backup"
 COMBO_FILE_NAME: str = "current_combo.json"
 PROPOSALS_DIR: str = "agent_proposals"
 COMBO_HISTORY_DIR: str = "combo_history"
@@ -160,34 +157,41 @@ class L3Verifier:
 
 
 class PortfolioStateManager:
-    """L3 组合状态持久化 — 先写主文件再镜像 backup。"""
+    """L3 组合状态持久化（SSOT 为 state.duckdb，plans/29 P4 读路径切换）。
 
-    def __init__(self, memory_dir: str | Path = "memory/portfolio"):
+    JSON（state.json/backup）退役为只读历史快照不再回写。
+    """
+
+    def __init__(self, memory_dir: str | Path = "memory/portfolio", state_store=None):
+        # 保留 memory_dir 以派生 namespace/key（portfolio 根目录）
         self.memory_dir = Path(memory_dir)
-        self.state_file = self.memory_dir / STATE_FILE_NAME
-        self.backup_file = self.memory_dir / BACKUP_FILE_NAME
-        self.memory_dir.mkdir(parents=True, exist_ok=True)
+        self._store = state_store  # None → 全局 SSOT（供测试注入临时 store）
+
+    def _store_conn(self):
+        """返回状态存储连接（注入的或全局 SSOT）。"""
+        from fts.store.state_db import get_state_store
+
+        return self._store if self._store is not None else get_state_store()
+
+    def _ns_key(self) -> tuple[str, str]:
+        """派生 state.duckdb 的 (namespace, key)（与 migrate 规则一致）。"""
+        return "portfolio", "state"
 
     def load_or_init(self) -> L3MetaLoopState:
-        state = self._try_load(self.state_file)
-        if state is None:
-            state = self._try_load(self.backup_file)
-            if state is not None:
-                self._write(state)
-            else:
-                state = self._init_state()
-                self._write(state)
+        ns, key = self._ns_key()
+        data = self._store_conn().get(ns, key)
+        if isinstance(data, dict) and data.get("schema_version") == STATE_SCHEMA_VERSION:
+            return L3MetaLoopState(**data)
+        state = self._init_state()
+        self.save(state)
         return state
 
     def save(self, state: L3MetaLoopState) -> None:
         if state.get("schema_version") != STATE_SCHEMA_VERSION:
             raise L3Error(f"状态 schema 版本不匹配: {state.get('schema_version')} != {STATE_SCHEMA_VERSION}")
         state["last_updated"] = datetime.now().isoformat()
-        self._write(state)
-        try:
-            shutil.copy2(self.state_file, self.backup_file)
-        except OSError as e:
-            raise L3Error(f"备份失败: {e}") from e
+        ns, key = self._ns_key()
+        self._store_conn().upsert(ns, key, state, run_id=state.get("run_id") or "")
 
     def mark_running(self, run_id: Optional[str] = None) -> L3MetaLoopState:
         state = self.load_or_init()
@@ -206,23 +210,6 @@ class PortfolioStateManager:
         state["status"] = "circuit_broken"
         state["last_error"] = reason
         self.save(state)
-
-    def _try_load(self, fp: Path) -> L3MetaLoopState | None:
-        if not fp.exists():
-            return None
-        try:
-            data = json.loads(fp.read_text(encoding="utf-8"))
-            if data.get("schema_version") != STATE_SCHEMA_VERSION:
-                return None
-            return L3MetaLoopState(**data)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return None
-
-    def _write(self, state: L3MetaLoopState) -> None:
-        self.state_file.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
 
     @staticmethod
     def _init_state() -> L3MetaLoopState:
@@ -472,67 +459,6 @@ REGIME_STYLE_MULTIPLIERS: dict[str, dict[str, float]] = {
         "volatility": 0.7,  # 波动率 -30%
         "high_beta": 1.2,  # 高 beta +20%（低波下风险偏好回升）
         "mean_reversion": 1.0,  # 均值回归中性
-    },
-    # ── 股票风格 regime（GAP-S03，v2.63.0，StockRegimeSelector 驱动）──
-    # 大小盘风格：large_cap 质量/价值占优，small_cap 动量/情绪占优
-    "large_cap": {
-        "quality": 1.2,  # 大盘 → 质量 +20%
-        "value": 1.1,  # 价值 +10%
-        "low_vol": 1.1,  # 低波 +10%
-        "defensive": 1.1,  # 防御 +10%
-        "momentum": 0.9,  # 动量 -10%（大盘趋势弱于小盘）
-        "sentiment": 0.9,  # 情绪 -10%
-        "high_beta": 0.8,  # 高 beta -20%
-        "cross_section": 0.9,  # 横截面 -10%
-    },
-    "small_cap": {
-        "momentum": 1.2,  # 小盘 → 动量 +20%
-        "sentiment": 1.2,  # 情绪 +20%
-        "cross_section": 1.1,  # 横截面 +10%
-        "high_beta": 1.1,  # 高 beta +10%
-        "quality": 0.9,  # 质量 -10%
-        "value": 0.9,  # 价值 -10%
-        "low_vol": 0.9,  # 低波 -10%
-        "defensive": 0.8,  # 防御 -20%
-    },
-    # 成长价值风格：growth 动量占优，value 价值/质量占优
-    "growth": {
-        "momentum": 1.3,  # 成长 → 动量 +30%
-        "cross_section": 1.1,  # 横截面 +10%
-        "sentiment": 1.1,  # 情绪 +10%
-        "high_beta": 1.1,  # 高 beta +10%
-        "value": 0.8,  # 价值 -20%
-        "quality": 0.9,  # 质量 -10%
-        "low_vol": 0.8,  # 低波 -20%
-        "mean_reversion": 0.9,  # 均值回归 -10%
-    },
-    "value": {
-        "value": 1.3,  # 价值 → 价值 +30%
-        "quality": 1.2,  # 质量 +20%
-        "low_vol": 1.1,  # 低波 +10%
-        "defensive": 1.1,  # 防御 +10%
-        "momentum": 0.8,  # 动量 -20%
-        "high_beta": 0.7,  # 高 beta -30%
-        "sentiment": 0.8,  # 情绪 -20%
-        "mean_reversion": 1.1,  # 均值回归 +10%
-    },
-    # 行业轮动状态（StockRegimeSelector.detect_industry 输出）
-    "sector_concentrated": {
-        "cross_section": 1.2,  # 主线集中 → 横截面 +20%（跟随主线）
-        "momentum": 1.2,  # 动量 +20%
-        "carry": 1.1,  # Carry +10%
-        "mean_reversion": 0.8,  # 均值回归 -20%
-        "value": 0.9,  # 价值 -10%
-        "quality": 0.9,  # 质量 -10%
-    },
-    "sector_rotating": {
-        "mean_reversion": 1.2,  # 行业轮动 → 均值回归 +20%
-        "cross_section": 1.0,  # 横截面中性
-        "momentum": 0.8,  # 动量 -20%（追涨易接盘）
-        "sentiment": 0.8,  # 情绪 -20%
-        "value": 1.1,  # 价值 +10%
-        "low_vol": 1.1,  # 低波 +10%
-        "defensive": 1.1,  # 防御 +10%
     },
 }
 
@@ -849,7 +775,7 @@ def synthesize_signals(
     returns_matrix: Optional[pd.DataFrame] = None,
     optimizer_mode: str = "risk_parity",
     optimizer_config: Optional[dict[str, Any]] = None,
-    market: str = "stock",
+    market: str = "futures",
     weight_config: Optional[Any] = None,
     ic_matrix: Optional[np.ndarray] = None,
 ) -> tuple[list[PortfolioSignal], float, float]:
@@ -924,7 +850,7 @@ def synthesize_signals(
             "[L3] Elastic Net 完成: %d/%d 因子获得非零权重", sum(1 for s in signals if s["retained"]), len(signals)
         )
     elif mode == "ml_ensemble" and elite_dir is not None:
-        ml_weights = _compute_ml_ensemble_weights(factors, Path(elite_dir))
+        ml_weights = _compute_ml_ensemble_weights(factors, Path(elite_dir), market=market)
         if not ml_weights:
             logger.warning("[L3] ML Ensemble 权重计算失败，回退到 sharpe_weight")
             return synthesize_signals(factors, "sharpe_weight")
@@ -1109,11 +1035,11 @@ def synthesize_signals(
         # C3: Black-Litterman 观点融合（optimizer_mode="bl"）
         if mode_internal == "bl":
             try:
-                signals = _synthesize_bl_weights(cov, factors, cfg_dict)
+                bl_signals = _synthesize_bl_weights(cov, factors, cfg_dict)
             except Exception as e:  # noqa: BLE001
                 logger.warning("[L3] Black-Litterman 融合异常 (%s)，回退 risk_parity", e)
-                signals = None
-            if signals is None:
+                bl_signals = None
+            if bl_signals is None:
                 logger.warning("[L3] Black-Litterman 融合失败，回退 risk_parity")
                 return synthesize_signals(
                     factors,
@@ -1126,6 +1052,7 @@ def synthesize_signals(
                     weight_config=weight_config,
                     ic_matrix=ic_matrix,
                 )
+            signals = bl_signals
         else:
             cfg_dict.setdefault("mode", mode_internal)
             opt_cfg = OptimizerConfig(**cfg_dict)
@@ -1274,125 +1201,56 @@ def _synthesize_bl_weights(
         return None
 
 
-# ─── GAP-L309: 面板数据规模参数化配置 ──────────────────────
+def _build_factor_code_map(
+    factors: list[dict[str, Any]],
+    elite_dir: Path,
+    market: str = "futures",
+) -> dict[str, dict[str, Any]]:
+    """构建 factor_id → 因子记录(含 code) 映射（SSOT 对齐）。
 
+    优先级：内存 factors 自带 code（load_elite_factors 已从 DuckDB 读回，
+    v2.73.0+ 主流程）→ DuckDB FactorRepository 按 factor_id 补拉 → JSON
+    快照兜底（旧格式只读快照）。
 
-@dataclass
-class PanelLoadingConfig:
-    """组合层面板加载配置（GAP-L309，替代硬编码 days=120 / max_stocks=50）。
-
-    默认提升至全 CSI300 子集 × MIN_EVAL_DAYS（500 天），与因子级评价窗口对齐，
-    提升截面回归统计功效；`max_stocks` 用于在数据规模过大时按流动性分层抽样。
+    背景（v2.103.0 修复）：此前仅从 elite_dir/*.json 读因子代码，而
+    futures_elite JSON 目录在存储迁移 DuckDB 后已退役（仅剩最近注入的
+    少量快照），导致聚类后的因子大多匹配不到代码 → valid_factors<2 →
+    回退 sharpe_weight。本函数绕开对 JSON 目录的全量依赖，重启后仍可
+    从 DuckDB 读到 code。
     """
+    factor_codes: dict[str, dict[str, Any]] = {}
+    for f in factors:
+        fid = f.get("factor_id")
+        if fid and f.get("code"):
+            factor_codes[fid] = f
 
-    days: int = 500  # 回溯交易日数（默认对齐 MIN_EVAL_DAYS=500）
-    max_stocks: int = 0  # 0 = 全量（默认）；>0 = 流动性分层抽样上限
-    liquidity_layers: int = 4  # 流动性分层数（抽样时）
-    min_common_dates: int = 20  # 最小共同交易日阈值（不足回退）
+    # DuckDB 补拉（内存缺 code 的因子）
+    missing = [f["factor_id"] for f in factors if f["factor_id"] not in factor_codes]
+    if missing:
+        try:
+            from .factor_db import FactorRepository
 
-
-def _liquidity_stratified_sample(
-    panel: dict[str, pd.DataFrame],
-    max_stocks: int,
-    n_layers: int = 4,
-) -> dict[str, pd.DataFrame]:
-    """按流动性分层抽样（GAP-L309）。
-
-    以平均成交额（volume × close）为流动性代理排序，均匀分桶后从每桶
-    按流动性从高到低抽取，保证高低流动性股票均有覆盖（替代随机/顺序截断）。
-
-    Args:
-        panel: symbol → OHLCV DataFrame
-        max_stocks: 目标股票数
-        n_layers: 分桶数
-
-    Returns:
-        抽样后的 panel（保留输入顺序的排序子集）；无 volume 数据时退化等权均分。
-    """
-    import math
-
-    symbols = list(panel.keys())
-    if len(symbols) <= max_stocks:
-        return panel
-
-    # 1. 流动性代理：平均成交额（volume × close），缺失列退 0.0
-    liq: dict[str, float] = {}
-    for sym, df in panel.items():
-        if "volume" in df.columns and "close" in df.columns:
+            repo = FactorRepository(market=market)
             try:
-                vol = df["volume"].replace(0, np.nan).mean()
-                px = float(df["close"].mean())
-                if vol == vol and px == px and vol > 0:
-                    liq[sym] = float(vol) * px
-                    continue
-            except Exception:  # noqa: BLE001
-                pass
-        liq[sym] = 0.0
+                for fid in missing:
+                    rec = repo.get_factor(fid)
+                    if rec and rec.get("code"):
+                        factor_codes[fid] = rec
+            finally:
+                repo.close()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[L3] DuckDB 因子代码补拉失败 (%s)，回退 JSON 快照", e)
 
-    # 2. 按流动性降序
-    ordered = sorted(symbols, key=lambda s: -liq[s])
-    # 3. 均匀分桶
-    per = max(1, math.ceil(len(ordered) / max(1, n_layers)))
-    buckets = [ordered[i : i + per] for i in range(0, len(ordered), per)]
-    # 4. 桶间轮询抽取，直到达到 max_stocks（保证每层都有覆盖）
-    picked: list[str] = []
-    cursor = [0] * len(buckets)
-    while len(picked) < max_stocks and any(cursor[b] < len(buckets[b]) for b in range(len(buckets))):
-        for b in range(len(buckets)):
-            if len(picked) >= max_stocks:
-                break
-            if cursor[b] < len(buckets[b]):
-                picked.append(buckets[b][cursor[b]])
-                cursor[b] += 1
-
-    return {sym: panel[sym] for sym in ordered if sym in set(picked)}
-
-
-def _load_panel_with_liquidity_sampling(
-    provider: Any,
-    config: PanelLoadingConfig,
-    fundamental: bool = True,
-    trace_id: str = "",
-) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
-    """GAP-L309: 面板加载 + 流动性分层抽样 + 覆盖日志。
-
-    Args:
-        provider: FTSDataProvider 实例
-        config: 面板加载配置
-        fundamental: 是否注入基本面字段
-        trace_id: HARNESS trace_id
-
-    Returns:
-        (panel, common_dates)；面板为空或共同交易日不足时返回 (panel, dates) 原样，
-        由调用方按 min_common_dates 阈值回退。
-    """
-    panel, common_dates = provider.get_csi300_panel(
-        days=config.days,
-        max_stocks=0,
-        fundamental=fundamental,
-        trace_id=trace_id,
-    )
-    if not panel:
-        logger.warning("[GAP-L309] 面板加载为空，回退")
-        return panel, common_dates
-
-    n_loaded = len(panel)
-    if config.max_stocks > 0 and n_loaded > config.max_stocks:
-        panel = _liquidity_stratified_sample(panel, config.max_stocks, config.liquidity_layers)
-        logger.info(
-            "[GAP-L309] 流动性分层抽样: %d → %d 只（%d 层）",
-            n_loaded,
-            len(panel),
-            config.liquidity_layers,
-        )
-    # 覆盖日志 + 幸存者偏差提示（CSI300_SUBSET 为当前成分股快照，非 Point-in-time）
-    logger.info(
-        "[GAP-L309] 面板覆盖: %d 只 × %d 交易日（days=%d）; 注意 CSI300_SUBSET 为当前成分快照，存在幸存者偏差",
-        len(panel),
-        len(common_dates),
-        config.days,
-    )
-    return panel, common_dates
+    # JSON 快照兜底（只读兼容，旧格式冻结期后退役）
+    for fp in sorted(elite_dir.glob("*.json")):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            fid = data.get("factor_id", "")
+            if fid and data.get("code"):
+                factor_codes.setdefault(fid, data)
+        except Exception:
+            continue
+    return factor_codes
 
 
 def _compute_elastic_net_weights(
@@ -1403,13 +1261,13 @@ def _compute_elastic_net_weights(
     l1_ratio: float = 0.5,
     cv_folds: int = 5,
     config: Optional["WeightLearningConfig"] = None,
-    market: str = "stock",
+    market: str = "futures",
 ) -> dict[str, float]:
     """Elastic Net 截面回归确定因子权重（v2.74.0 机构级增强）。
 
     步骤:
-        1. 按目标交易市场自动匹配学习面板（futures→期货核心面板 / stock→CSI300）
-        2. 对每个因子，逐股票执行因子代码获取信号序列
+        1. 加载期货核心面板（股票面板已剥离）
+        2. 对每个因子，逐标的执行因子代码获取信号序列
         3. 逐日截面回归: 因子信号[t] → 5 日前向收益
         4. 平均各日回归系数绝对值 → 归一化 → 权重
         5. 风险调整: Ledoit-Wolf 收缩协方差 → 波动率缩放 / 风险平价
@@ -1420,11 +1278,11 @@ def _compute_elastic_net_weights(
         factors: 因子列表
         elite_dir: 精英因子目录（含因子代码 JSON）
         days: 回溯天数（默认 500，对齐 MIN_EVAL_DAYS）
-        max_stocks: 最大股票数（0 = 全量；>0 = 流动性分层抽样上限）
+        max_stocks: 最大标的数（0 = 全量；股票剥离后恒 0）
         l1_ratio: ElasticNet L1 比例（0=Ridge, 1=Lasso）
         cv_folds: 交叉验证折数
         config: 机构级权重学习配置（None 用默认，panel_market="auto" 跟随 market）
-        market: 目标交易市场（决定学习面板，默认 stock）
+        market: 目标交易市场（决定学习面板，默认 futures）
 
     Returns:
         {factor_id: weight} 映射（权重和为 1.0）
@@ -1448,9 +1306,8 @@ def _compute_elastic_net_weights(
     wl_config = config if config is not None else WeightLearningConfig()
     panel_market = resolve_panel_market(wl_config.panel_market, market)
 
-    # ── 1. 加载学习面板（按目标交易市场自动匹配，v2.74.0）──
+    # ── 1. 加载学习面板（期货核心面板；股票面板已剥离）──
     provider = FTSDataProvider()
-    cfg = PanelLoadingConfig(days=days, max_stocks=max_stocks)
     if panel_market == "futures":
         from ..data_futures import get_dynamic_core_subset
 
@@ -1461,26 +1318,19 @@ def _compute_elastic_net_weights(
             len(common_dates),
         )
     else:
-        panel, common_dates = _load_panel_with_liquidity_sampling(provider, cfg)
-    if not panel or len(common_dates) < cfg.min_common_dates:
-        logger.warning("[L3] 面板数据不足（需 ≥%d 个交易日），回退", cfg.min_common_dates)
+        logger.warning("[L3] 权重学习面板 market=%s 不可用（股票面板已剥离），回退", panel_market)
+        return {}
+    if not panel or len(common_dates) < 20:
+        logger.warning("[L3] 面板数据不足（需 ≥%d 个交易日），回退", 20)
         return {}
 
     n_dates = len(common_dates)
     stocks = sorted(panel.keys())
     n_stocks = len(stocks)
-    logger.info("[L3] Elastic Net 数据: %d 只股票 × %d 个交易日", n_stocks, n_dates)
+    logger.info("[L3] Elastic Net 数据: %d 只标的 × %d 个交易日", n_stocks, n_dates)
 
-    # ── 2. 加载因子代码 ──
-    factor_codes: dict[str, dict[str, Any]] = {}
-    for fp in sorted(elite_dir.glob("*.json")):
-        try:
-            data = json.loads(fp.read_text(encoding="utf-8"))
-            fid = data.get("factor_id", "")
-            if fid and data.get("code"):
-                factor_codes[fid] = data
-        except Exception:
-            continue
+    # ── 2. 加载因子代码（SSOT 对齐：内存 code → DuckDB 补拉 → JSON 快照兜底）──
+    factor_codes = _build_factor_code_map(factors, elite_dir, market=market)
 
     valid_factors = [f for f in factors if f["factor_id"] in factor_codes]
     if len(valid_factors) < 2:
@@ -1592,21 +1442,23 @@ def _compute_ml_ensemble_weights(
     days: int = 500,
     max_stocks: int = 0,
     model_kind: str = "lightgbm",
+    market: str = "futures",
 ) -> dict[str, float]:
     """ML 集成融合确定因子权重（Phase 24，v2.38.0）。
 
     步骤:
-        1. 加载 CSI300 面板数据 + 基本面字段
-        2. 对每个因子，逐股票执行因子代码获取信号序列
+        1. 加载期货核心面板（股票面板已剥离）
+        2. 对每个因子，逐标的执行因子代码获取信号序列
         3. 训练横截面回归模型: 因子信号矩阵 → 5 日前向收益
         4. 特征重要性归一化 → 权重（ML 自动变量选择）
 
     Args:
         factors: 因子列表
-        elite_dir: 精英因子目录（含因子代码 JSON）
+        elite_dir: 精英因子目录（含因子代码 JSON 快照，仅兜底）
         days: 回溯天数（默认 500，对齐 MIN_EVAL_DAYS）
-        max_stocks: 最大股票数（0 = 全量；>0 = 流动性分层抽样上限）
+        max_stocks: 最大标的数（0 = 全量；股票剥离后恒 0）
         model_kind: 模型类型（lightgbm / xgboost / ensemble）
+        market: 目标交易市场（DuckDB 补拉因子代码用，默认 futures）
 
     Returns:
         {factor_id: weight} 映射（权重和为 1.0）
@@ -1623,29 +1475,22 @@ def _compute_ml_ensemble_weights(
     from ..data import FTSDataProvider
     from .factor_program import FactorExecutor
 
-    # ── 1. 加载 CSI300 面板数据（GAP-L309: 参数化 + 流动性分层抽样）──
+    # ── 1. 加载期货核心面板数据 ──
     provider = FTSDataProvider()
-    cfg = PanelLoadingConfig(days=days, max_stocks=max_stocks)
-    panel, common_dates = _load_panel_with_liquidity_sampling(provider, cfg)
-    if not panel or len(common_dates) < cfg.min_common_dates:
-        logger.warning("[L3] ML Ensemble 面板数据不足（需 ≥%d 个交易日），回退", cfg.min_common_dates)
+    from ..data_futures import get_dynamic_core_subset
+
+    panel, common_dates = provider.get_futures_panel(symbols=get_dynamic_core_subset(), days=days, trace_id="")
+    if not panel or len(common_dates) < 20:
+        logger.warning("[L3] ML Ensemble 面板数据不足（需 ≥%d 个交易日），回退", 20)
         return {}
 
     n_dates = len(common_dates)
     stocks = sorted(panel.keys())
     n_stocks = len(stocks)
-    logger.info("[L3] ML Ensemble 数据: %d 只股票 × %d 个交易日", n_stocks, n_dates)
+    logger.info("[L3] ML Ensemble 数据: %d 只标的 × %d 个交易日", n_stocks, n_dates)
 
-    # ── 2. 加载因子代码 ──
-    factor_codes: dict[str, dict[str, Any]] = {}
-    for fp in sorted(elite_dir.glob("*.json")):
-        try:
-            data = json.loads(fp.read_text(encoding="utf-8"))
-            fid = data.get("factor_id", "")
-            if fid and data.get("code"):
-                factor_codes[fid] = data
-        except Exception:
-            continue
+    # ── 2. 加载因子代码（SSOT 对齐：内存 code → DuckDB 补拉 → JSON 快照兜底）──
+    factor_codes = _build_factor_code_map(factors, elite_dir, market=market)
 
     valid_factors = [f for f in factors if f["factor_id"] in factor_codes]
     if len(valid_factors) < 2:
@@ -2170,6 +2015,8 @@ def build_combo(
     turnover_penalty: float = 0.0,
     exposure_scale: Optional[float] = None,
     regime_meta: Optional[dict] = None,
+    aligned_exposure_config: Optional[Any] = None,
+    turnover_budget_config: Optional[Any] = None,
 ) -> PortfolioCombo:
     """构建组合 — 归一化权重 + 计算组合指标。
 
@@ -2182,12 +2029,16 @@ def build_combo(
         factor_returns: 因子收益矩阵（T×N，GAP-L301 实测化输入，可选）。
             提供且可对齐时，组合夏普/相关性由 w×R 实测；否则回退 diversity-adjusted 估算。
         annualize_factor: 年化因子（夏普年化，默认 252）
-        market: 市场类型（"futures"/"stock"/"etf"，GAP-L305 net 指标成本参数）
+        market: 市场类型（"futures"，GAP-L305 net 指标成本参数）
         cost_config: 成本配置（CostConfig 字段 dict，GAP-L305；None=不启用成本模型，
             net_combo_sharpe 为 None）
         turnover_penalty: 换手惩罚系数 λ（GAP-I303，0=关闭；粘性约束后收缩权重变动）
         exposure_scale: 置信度仓位缩放因子（28-T6，None=未启用；归一化后统一缩放总仓位）
         regime_meta: regime 元信息 {regime, confidence, exposure_scale, entropy_norm}（28-T6）
+        aligned_exposure_config: 同向敞口惩罚配置（G1，35-gap-closure-plan；
+            AlignedExposureConfig，None=关闭，向后兼容；启用时与 exposure_scale 乘性合并）
+        turnover_budget_config: 换手预算分配配置（G3，35-gap-closure-plan；
+            TurnoverBudgetConfig，None=关闭，向后兼容；归一化后剔除边际收益最低弱信号）
 
     Returns:
         PortfolioCombo
@@ -2238,11 +2089,42 @@ def build_combo(
         for s in retained:
             s["weight"] = s.get("weight", 0) / total_w
 
+    # G3 换手预算分配（35-gap-closure-plan）：单日组合换手超上限时剔除边际收益最低弱信号。
+    # 归一化后执行（target 与 prev_weights 尺度一致）；剔除项回退当前持仓并重归一化。
+    if turnover_budget_config is not None and prev_weights:
+        from .portfolio_turnover import allocate_turnover_budget
+
+        target_w = {s.get("factor_id", ""): s.get("weight", 0.0) for s in retained if s.get("factor_id")}
+        current_w = {k: float(v) for k, v in prev_weights.items()}
+        scores = {s.get("factor_id", ""): float(s.get("sharpe", 0.0) or 0.0) for s in retained}
+        allocated = allocate_turnover_budget(target_w, current_w, scores, turnover_budget_config)
+        for s in retained:
+            fid = s.get("factor_id", "")
+            if fid in allocated:
+                s["weight"] = allocated[fid]
+
+    # G1 同向敞口惩罚（35-gap-closure-plan）：多因子同向共振时压缩组合总敞口。
+    # 与置信度仓位缩放（28-T6）乘性合并：exposure_final = exposure_scale × aligned_scale。
+    aligned_scale: float = 1.0
+    if aligned_exposure_config is not None:
+        from .portfolio_risk_controls import check_aligned_exposure
+
+        _aligned = check_aligned_exposure(retained, aligned_exposure_config)
+        aligned_scale = float(_aligned["compress_scale"])
+        if _aligned["triggered"]:
+            logger.info(
+                "[L3] G1 同向敞口压缩: 看多占比=%.3f 看空占比=%.3f → scale=%.4f",
+                float(_aligned["long_ratio"]),
+                float(_aligned["short_ratio"]),
+                aligned_scale,
+            )
+
     # 置信度仓位缩放（28-T6）：归一化后统一缩放总暴露，随组合落盘可追溯
-    if exposure_scale is not None and total_w > 0:
+    if (exposure_scale is not None or aligned_scale < 1.0) and total_w > 0:
+        exposure_scale = float(exposure_scale if exposure_scale is not None else 1.0) * aligned_scale
         for s in retained:
             s["weight"] = s["weight"] * exposure_scale
-        logger.info("[L3-WEIGHT] 置信度仓位缩放: exposure_scale=%.4f", exposure_scale)
+        logger.info("[L3-WEIGHT] 仓位缩放: exposure_scale=%.4f (置信度×同向敞口)", exposure_scale)
         # regime_meta 统一携带 exposure_scale，保证落盘可追溯（不修改调用方传入 dict）
         regime_meta = {**(regime_meta or {}), "exposure_scale": round(exposure_scale, 4)}
 
@@ -3166,7 +3048,7 @@ def _validate_oos_extrapolation(
 def load_elite_factors(
     elite_dir: str | Path,
     use_duckdb: bool = True,
-    market: str = "stock",
+    market: str = "futures",
     panel_data: dict[str, Any] | None = None,
     corr_threshold: float = 0.8,
 ) -> list[dict[str, Any]]:
@@ -3180,7 +3062,7 @@ def load_elite_factors(
     Args:
         elite_dir: 精英因子 JSON 目录
         use_duckdb: 是否优先从 DuckDB 加载（测试时可设为 False）
-        market: 市场类型过滤（futures/stock/etf 等）
+        market: 市场类型过滤（futures 等）
         panel_data: {symbol: DataFrame} 市场数据（用于相关性去重）
         corr_threshold: 相关性阈值（默认 0.8）
 
@@ -3346,7 +3228,7 @@ def load_elite_factors(
                 turnover = data.get("turnover", 0.3)
 
             # 根据 market 过滤 JSON 因子
-            factor_market = data.get("market", "stock")
+            factor_market = data.get("market", "futures")
             if factor_market != market:
                 skipped_market += 1
                 continue
@@ -3539,12 +3421,12 @@ class PortfolioLoop:
     def __init__(
         self,
         memory_dir: str | Path = "memory/portfolio",
-        elite_dir: str | Path = "memory/knowledge/factors/stocks_elite",
+        elite_dir: str | Path = "memory/knowledge/factors/futures_elite",
         verifier_config: Optional[L3VerifierConfig] = None,
         synthesis_mode: str = "elastic_net",
         use_duckdb: bool = True,
         enable_regime_adaptation: bool = True,
-        market: str = "stock",
+        market: str = "futures",
         sticky_config: Optional[StickyConfig] = None,
         enable_clustering: bool = True,
         enable_pca: bool = False,
@@ -3922,7 +3804,6 @@ class PortfolioLoop:
         market_ohlcv: Optional[Any] = None,
         factor_returns: Optional[pd.DataFrame] = None,
         exposure_matrix: Optional[np.ndarray] = None,
-        stock_regime: Optional[dict[str, Any]] = None,
         recompute_weights: Optional[bool] = None,
     ) -> PortfolioRunResult:
         """执行一次完整的 L3 Portfolio Loop。
@@ -3930,10 +3811,6 @@ class PortfolioLoop:
         Args:
             market_ohlcv: 市场 OHLCV 数据（pd.DataFrame），用于 Regime 检测。
                          若为 None 或 enable_regime_adaptation=False，跳过自适应调整。
-            stock_regime: 股票风格 regime（GAP-S03，v2.63.0）— StockRegimeSelector
-                         的检测结果（含 regime 字段映射 REGIME_STYLE_MULTIPLIERS）。
-                         当 market="stock" 且传入时，Step 2.5 优先使用该结果驱动
-                         风格自适应权重（覆盖 market_ohlcv 的通用 RegimeAwareSelector）。
             recompute_weights: 是否重算组合权重（GAP-072，v2.99.0）。
                          None=按配置 l3_weight_recompute_cadence 自动判定
                          （weekly 仅重算日全量构建，其余日冻结返回 status="frozen"）；
@@ -3988,52 +3865,36 @@ class PortfolioLoop:
         try:
             # Step 0.5: 加载市场数据（用于相关性去重）
             panel_data = None
-            if self.market == "futures":
+            try:
+                from ..data import FTSDataProvider
+
+                provider = FTSDataProvider()
+                panel_data, _cdates = provider.get_futures_panel(days=MIN_EVAL_DAYS)
+                logger.info(
+                    "[L3] Step 0.5: 期货面板数据加载完成 (%d 品种, %d 交易日)", len(panel_data), len(_cdates)
+                )
+            except Exception as e:
+                logger.warning("[L3] Step 0.5: 期货面板数据加载失败 (%s)，使用 IC-only 去重", e)
+                panel_data = None
+            # Step 0.5b: 未显式传入市场数据时，自动构建市场级合成 OHLCV，
+            # 供 Step 2.5 Regime 自适应权重调整使用（v2.98.1，方案 B）。
+            if market_ohlcv is None and panel_data:
                 try:
-                    from ..data import FTSDataProvider
+                    from .regime import SectorRegimeSelector
 
-                    provider = FTSDataProvider()
-                    panel_data, _cdates = provider.get_futures_panel(days=MIN_EVAL_DAYS)
-                    logger.info(
-                        "[L3] Step 0.5: 期货面板数据加载完成 (%d 品种, %d 交易日)", len(panel_data), len(_cdates)
-                    )
-                except Exception as e:
-                    logger.warning("[L3] Step 0.5: 期货面板数据加载失败 (%s)，使用 IC-only 去重", e)
-                    panel_data = None
-                # Step 0.5b: 未显式传入市场数据时，自动构建市场级合成 OHLCV，
-                # 供 Step 2.5 Regime 自适应权重调整使用（v2.98.1，方案 B）。
-                # 仅期货路径：股票路径保持 stock_regime 驱动（GAP-S03）不受影响。
-                if market_ohlcv is None and panel_data:
-                    try:
-                        from .regime import SectorRegimeSelector
-
-                        _mkt = SectorRegimeSelector._build_sector_ohlcv(panel_data, list(panel_data.keys()))
-                        if _mkt is not None and not _mkt.empty:
-                            market_ohlcv = _mkt
-                            logger.info(
-                                "[L3] Step 0.5b: 市场合成 OHLCV 构建完成 (%d 交易日)，Step 2.5 Regime 自适应启用",
-                                len(market_ohlcv),
-                            )
-                        else:
-                            logger.info("[L3] Step 0.5b: 面板数据不足，跳过 Regime 自适应")
-                            market_ohlcv = None
-                    except Exception as e:
-                        logger.warning("[L3] Step 0.5b: 市场 OHLCV 构建失败，跳过 Regime 自适应: %s", e)
+                    _mkt = SectorRegimeSelector._build_sector_ohlcv(panel_data, list(panel_data.keys()))
+                    if _mkt is not None and not _mkt.empty:
+                        market_ohlcv = _mkt
+                        logger.info(
+                            "[L3] Step 0.5b: 市场合成 OHLCV 构建完成 (%d 交易日)，Step 2.5 Regime 自适应启用",
+                            len(market_ohlcv),
+                        )
+                    else:
+                        logger.info("[L3] Step 0.5b: 面板数据不足，跳过 Regime 自适应")
                         market_ohlcv = None
-            elif self.market == "stock":
-                # GAP-063 股票 L3 前置接入（v2.90.0）：加载 CSI300 面板，
-                # 供 load_elite_factors 相关性去重与 Regime 检测使用
-                try:
-                    from ..data import FTSDataProvider
-
-                    provider = FTSDataProvider()
-                    panel_data, _cdates = provider.get_csi300_panel(days=MIN_EVAL_DAYS)
-                    logger.info(
-                        "[L3] Step 0.5: 股票面板数据加载完成 (%d 标的, %d 交易日)", len(panel_data), len(_cdates)
-                    )
                 except Exception as e:
-                    logger.warning("[L3] Step 0.5: 股票面板数据加载失败 (%s)，使用 IC-only 去重", e)
-                    panel_data = None
+                    logger.warning("[L3] Step 0.5b: 市场 OHLCV 构建失败，跳过 Regime 自适应: %s", e)
+                    market_ohlcv = None
 
             # Step 1: 加载 elite 因子
             logger.info("[L3] Step 1a: 开始加载 elite 因子 [market=%s, use_duckdb=%s]", self.market, self.use_duckdb)
@@ -4274,24 +4135,14 @@ class PortfolioLoop:
             state["total_signals_processed"] = len(signals)
 
             # Step 2.5: Regime 自适应权重调整
-            if self.enable_regime_adaptation and (market_ohlcv is not None or stock_regime is not None):
+            if self.enable_regime_adaptation and market_ohlcv is not None:
                 try:
-                    # 股票风格 regime 优先（GAP-S03，v2.63.0）：StockRegimeSelector 输出
-                    # 的 regime 字段直接映射 REGIME_STYLE_MULTIPLIERS 风格键
-                    if self.market == "stock" and stock_regime is not None and stock_regime.get("regime"):
-                        regime: Any = stock_regime
-                        logger.info(
-                            "[L3] Step 2.5: 使用股票风格 regime [%s] (conf=%.2f)",
-                            regime.get("regime"),
-                            regime.get("confidence", 0.0),
-                        )
-                    else:
-                        if self._regime_selector is None:
-                            from .regime import RegimeAwareSelector
+                    if self._regime_selector is None:
+                        from .regime import RegimeAwareSelector
 
-                            self._regime_selector = RegimeAwareSelector()
+                        self._regime_selector = RegimeAwareSelector()
 
-                        regime = self._regime_selector.detect(market_ohlcv)  # type: ignore[arg-type]
+                    regime = self._regime_selector.detect(market_ohlcv)  # type: ignore[arg-type]
 
                     aconfig = self.adaptive_config or DEFAULT_ADAPTIVE_CONFIG
                     if aconfig.get("enabled", True):
@@ -4370,7 +4221,7 @@ class PortfolioLoop:
                     )
                 except Exception as e:
                     logger.warning("[L3] Step 2.5: Regime 检测失败，跳过自适应调整: %s", e)
-            elif self.enable_regime_adaptation and market_ohlcv is None and stock_regime is None:
+            elif self.enable_regime_adaptation and market_ohlcv is None:
                 logger.info("[L3] Step 2.5: 无市场数据，跳过 Regime 自适应调整")
 
             # Step 3: 因子正交化（elastic_net 模式跳过，L1 已做变量选择）
@@ -4423,6 +4274,10 @@ class PortfolioLoop:
                     prev_combo.get("combo_id", "?"),
                     len(prev_weights),
                 )
+            # G1 同向敞口惩罚 + G3 换手预算默认开启（35-gap-closure-plan D5；单测直接调用默认关闭）
+            from .portfolio_risk_controls import AlignedExposureConfig
+            from .portfolio_turnover import TurnoverBudgetConfig
+
             combo = build_combo(
                 signals,
                 self.synthesis_mode,
@@ -4435,6 +4290,8 @@ class PortfolioLoop:
                 turnover_penalty=self.turnover_penalty,
                 exposure_scale=self._regime_exposure_scale,
                 regime_meta=self._regime_meta,
+                aligned_exposure_config=AlignedExposureConfig(),
+                turnover_budget_config=TurnoverBudgetConfig(),
             )
             logger.info(
                 "[L3] Step 5: 组合构建完成, 夏普=%.2f, 换手率=%.2f",
@@ -4610,7 +4467,7 @@ def main() -> None:
         "--returns-matrix", default=None, help="因子收益矩阵 CSV 路径（optimizer 模式与实测化需要，可选）"
     )
     parser.add_argument("--memory-dir", default="memory/portfolio", help="状态/组合存储目录")
-    parser.add_argument("--elite-dir", default="memory/knowledge/factors/stocks_elite", help="精英因子目录")
+    parser.add_argument("--elite-dir", default="memory/knowledge/factors/futures_elite", help="精英因子目录")
     parser.add_argument(
         "--cost-config",
         default=None,

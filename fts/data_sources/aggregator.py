@@ -29,10 +29,11 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Iterator, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -92,7 +93,8 @@ class FuturesDataAggregator:
         circuit_breaker_threshold: int = 5,
         circuit_breaker_cooldown_seconds: float = 6 * 3600,
         cache_max_age_days: int = 1,
-        tick_cache_retention_days: int = 7,  # v2.84.0 (GAP-I503 首期): tick_cache 保留天数
+        minute_cache_max_age_days: int = 1,  # v2.101.0: 分钟缓存新鲜度独立配置（默认 1 天，避免日线 30 天窗口挡住分钟实时）
+        tick_cache_retention_days: int = 7,  # v2.84.0 (GAP-I503): tick_cache 保留天数
         enable_cross_check: bool = True,  # 14.2: 是否启用多源交叉验证
         cross_check_threshold: float = 0.005,  # 14.2: 价格偏离告警阈值（0.5%）
         cross_check_recent_days: int = 5,  # 14.2: 主路径触发时检查最近 N 天
@@ -108,6 +110,8 @@ class FuturesDataAggregator:
             circuit_breaker_threshold: 连续失败次数阈值（默认 5）
             circuit_breaker_cooldown_seconds: 熔断冷却秒数（默认 6 小时）
             cache_max_age_days: 缓存最大新鲜度（默认 1 天）
+            minute_cache_max_age_days: 分钟缓存最大新鲜度（默认 1 天，与日线解耦——
+                生产日线缓存 30 天窗口不适用于分钟，避免旧分钟缓存持续命中挡住实时拉取）
             enable_cross_check: 是否启用多源交叉验证（14.2，默认 True）
             cross_check_threshold: 多源价格偏离告警阈值（14.2，默认 0.5%）
             cross_check_recent_days: 主路径自动交叉验证最近 N 天（14.2，默认 5）
@@ -122,6 +126,7 @@ class FuturesDataAggregator:
         self.circuit_breaker_threshold = circuit_breaker_threshold
         self.circuit_breaker_cooldown = circuit_breaker_cooldown_seconds
         self.cache_max_age_days = cache_max_age_days
+        self.minute_cache_max_age_days = minute_cache_max_age_days
         # 14.2 交叉验证配置
         self.enable_cross_check = enable_cross_check
         self.cross_check_threshold = cross_check_threshold
@@ -287,13 +292,13 @@ class FuturesDataAggregator:
         """尝试从 minute_cache 读取分钟数据。
 
         两步检查:
-          1. 新鲜度: 缓存中最新的 datetime >= now - cache_max_age_days
+          1. 新鲜度: 缓存中最新的 datetime >= now - minute_cache_max_age_days（v2.101.0 独立于日线窗口）
           2. 大小: 返回足够的数据行（≥ days 的 80%）
         """
         if self.db_path is None or not self.db_path.exists():
             return None
 
-        con = self._get_cache_conn()
+        con = self._open_read_conn()
         if con is None:
             return None
 
@@ -303,7 +308,7 @@ class FuturesDataAggregator:
             placeholders = ",".join(["?"] * len(sym_variants))
 
             # 新鲜度检查
-            cutoff = pd.Timestamp.now() - pd.Timedelta(days=self.cache_max_age_days)
+            cutoff = pd.Timestamp.now() - pd.Timedelta(days=self.minute_cache_max_age_days)
             latest = con.execute(
                 f"""
                 SELECT MAX(datetime) FROM minute_cache
@@ -338,6 +343,8 @@ class FuturesDataAggregator:
         except Exception as e:  # noqa: BLE001
             logger.warning("[minute_cache] 读取失败: %s", e)
             return None
+        finally:
+            con.close()
 
     def _write_minute_cache(self, df: pd.DataFrame, frequency: str) -> None:
         """将分钟数据写入 minute_cache。失败不抛异常。"""
@@ -351,26 +358,26 @@ class FuturesDataAggregator:
         except Exception as e:
             logger.warning("[minute_cache] migrate_schema 失败: %s", e)
 
-        con = self._get_cache_conn()
-        if con is None:
-            return
-        try:
-            con.register("df_new", df)
-            con.execute(
-                """
-                INSERT INTO minute_cache (
-                    symbol, period, datetime, open, high, low, close,
-                    volume, source, fetched_at, trace_id
+        with self._write_scope() as con:
+            if con is None:
+                return
+            try:
+                con.register("df_new", df)
+                con.execute(
+                    """
+                    INSERT INTO minute_cache (
+                        symbol, period, datetime, open, high, low, close,
+                        volume, source, fetched_at, trace_id
+                    )
+                    SELECT
+                        symbol, period, datetime, open, high, low, close,
+                        volume, source, fetched_at, trace_id
+                    FROM df_new
+                    """
                 )
-                SELECT
-                    symbol, period, datetime, open, high, low, close,
-                    volume, source, fetched_at, trace_id
-                FROM df_new
-                """
-            )
-            con.unregister("df_new")
-        except Exception as e:  # noqa: BLE001
-            logger.warning("[minute_cache] 写入失败: %s", e)
+                con.unregister("df_new")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[minute_cache] 写入失败: %s", e)
 
     # ─── tick 逐笔数据路径（v2.31.0）──
 
@@ -443,7 +450,7 @@ class FuturesDataAggregator:
         if self.db_path is None or not self.db_path.exists():
             return None
 
-        con = self._get_cache_conn()
+        con = self._open_read_conn()
         if con is None:
             return None
 
@@ -458,10 +465,10 @@ class FuturesDataAggregator:
             conditions = ["symbol = ?"]
             params: list[Any] = [symbol]
             if start_time is not None:
-                conditions.append("datetime >= ?")
+                conditions.append("datetime >= CAST(? AS TIMESTAMP)")
                 params.append(start_time)
             if end_time is not None:
-                conditions.append("datetime <= ?")
+                conditions.append("datetime <= CAST(? AS TIMESTAMP)")
                 params.append(end_time)
             where = " AND ".join(conditions)
 
@@ -490,6 +497,8 @@ class FuturesDataAggregator:
         except Exception as e:  # noqa: BLE001
             logger.warning("[tick_cache] 读取失败: %s", e)
             return None
+        finally:
+            con.close()
 
     def _write_tick_cache(self, df: pd.DataFrame) -> None:
         """将 tick 数据写入 tick_cache（去重增量累积，v2.84.0 GAP-I503 首期）。
@@ -507,60 +516,60 @@ class FuturesDataAggregator:
         except Exception as e:
             logger.warning("[tick_cache] migrate_schema 失败: %s", e)
 
-        con = self._get_cache_conn()
-        if con is None:
-            return
-        try:
-            # 1) 去重：删除目标表中已存在的 (symbol, datetime)
-            # DuckDB 不支持多列 IN 子查询（Binder Error: Subquery returns 2 columns），
-            # 改用 EXISTS 相关子查询（等价语义，兼容 DuckDB/SQLite）。
-            dup = df[["symbol", "datetime"]].drop_duplicates()
-            con.register("df_dup", dup)
-            con.execute(
-                """
-                DELETE FROM tick_cache
-                WHERE EXISTS (
-                    SELECT 1 FROM df_dup
-                    WHERE df_dup.symbol = tick_cache.symbol
-                      AND df_dup.datetime = tick_cache.datetime
+        with self._write_scope() as con:
+            if con is None:
+                return
+            try:
+                # 1) 去重：删除目标表中已存在的 (symbol, datetime)
+                # DuckDB 不支持多列 IN 子查询（Binder Error: Subquery returns 2 columns），
+                # 改用 EXISTS 相关子查询（等价语义，兼容 DuckDB/SQLite）。
+                dup = df[["symbol", "datetime"]].drop_duplicates()
+                con.register("df_dup", dup)
+                con.execute(
+                    """
+                    DELETE FROM tick_cache
+                    WHERE EXISTS (
+                        SELECT 1 FROM df_dup
+                        WHERE df_dup.symbol = tick_cache.symbol
+                          AND df_dup.datetime = tick_cache.datetime
+                    )
+                    """
                 )
-                """
-            )
-            con.unregister("df_dup")
+                con.unregister("df_dup")
 
-            # 2) 插入新数据
-            con.register("df_new", df)
-            con.execute(
-                """
-                INSERT INTO tick_cache (
-                    symbol, datetime, last_price, average, highest, lowest,
-                    volume, amount, open_interest,
-                    bid_price1, bid_volume1, ask_price1, ask_volume1,
-                    bid_price2, bid_volume2, ask_price2, ask_volume2,
-                    bid_price3, bid_volume3, ask_price3, ask_volume3,
-                    bid_price4, bid_volume4, ask_price4, ask_volume4,
-                    bid_price5, bid_volume5, ask_price5, ask_volume5,
-                    source, fetched_at, trace_id
+                # 2) 插入新数据
+                con.register("df_new", df)
+                con.execute(
+                    """
+                    INSERT INTO tick_cache (
+                        symbol, datetime, last_price, average, highest, lowest,
+                        volume, amount, open_interest,
+                        bid_price1, bid_volume1, ask_price1, ask_volume1,
+                        bid_price2, bid_volume2, ask_price2, ask_volume2,
+                        bid_price3, bid_volume3, ask_price3, ask_volume3,
+                        bid_price4, bid_volume4, ask_price4, ask_volume4,
+                        bid_price5, bid_volume5, ask_price5, ask_volume5,
+                        source, fetched_at, trace_id
+                    )
+                    SELECT
+                        symbol, datetime, last_price, average, highest, lowest,
+                        volume, amount, open_interest,
+                        bid_price1, bid_volume1, ask_price1, ask_volume1,
+                        bid_price2, bid_volume2, ask_price2, ask_volume2,
+                        bid_price3, bid_volume3, ask_price3, ask_volume3,
+                        bid_price4, bid_volume4, ask_price4, ask_volume4,
+                        bid_price5, bid_volume5, ask_price5, ask_volume5,
+                        source, fetched_at, trace_id
+                    FROM df_new
+                    """
                 )
-                SELECT
-                    symbol, datetime, last_price, average, highest, lowest,
-                    volume, amount, open_interest,
-                    bid_price1, bid_volume1, ask_price1, ask_volume1,
-                    bid_price2, bid_volume2, ask_price2, ask_volume2,
-                    bid_price3, bid_volume3, ask_price3, ask_volume3,
-                    bid_price4, bid_volume4, ask_price4, ask_volume4,
-                    bid_price5, bid_volume5, ask_price5, ask_volume5,
-                    source, fetched_at, trace_id
-                FROM df_new
-                """
-            )
-            con.unregister("df_new")
+                con.unregister("df_new")
 
-            # 3) 保留清理：删除超过 tick_cache_retention_days 的过期 tick
-            cutoff = pd.Timestamp.now() - pd.Timedelta(days=max(self.tick_cache_retention_days, 1))
-            con.execute("DELETE FROM tick_cache WHERE datetime < ?", [str(cutoff)])
-        except Exception as e:  # noqa: BLE001
-            logger.warning("[tick_cache] 写入失败: %s", e)
+                # 3) 保留清理：删除超过 tick_cache_retention_days 的过期 tick
+                cutoff = pd.Timestamp.now() - pd.Timedelta(days=max(self.tick_cache_retention_days, 1))
+                con.execute("DELETE FROM tick_cache WHERE datetime < CAST(? AS TIMESTAMP)", [str(cutoff)])
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[tick_cache] 写入失败: %s", e)
 
     # ─── 字段增强层 ──
 
@@ -618,7 +627,7 @@ class FuturesDataAggregator:
             else:
                 mask = ~pd.isna(vals)
             if mask.any():
-                df.iloc[mask, df.columns.get_loc(column)] = vals[mask]
+                df.loc[df.index[mask], column] = vals[mask]
         except Exception as e:  # noqa: BLE001
             logger.warning("[enhance] 覆盖列 %s 失败: %s", column, e)
 
@@ -667,21 +676,49 @@ class FuturesDataAggregator:
             logger.warning("[pre_settle] 派生失败: %s", e)
         return df
 
-    # ─── DuckDB 缓存（单连接模式，避免 read_only 冲突）──
+    # ─── DuckDB 缓存（E.4 S1：读 read_only 短连接 / 写 filelock+短连接）──
 
-    def _get_cache_conn(self):
-        """获取或创建持久化 DuckDB 连接。"""
-        if self.db_path is None:
+    def _open_read_conn(self) -> Any | None:
+        """E.4 S1：read_only 短连接（读完成调用方负责 close）。
+
+        跨进程写窗口存在时只读连接可能打开失败 → 返回 None（调用方
+        走既有降级链/实时源，不抛异常）。
+        """
+        import duckdb
+
+        if self.db_path is None or not self.db_path.exists():
             return None
-        if not hasattr(self, "_cache_conn") or self._cache_conn is None:
-            try:
+        try:
+            return duckdb.connect(str(self.db_path), read_only=True)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("[cache] DuckDB 只读连接失败（写窗口冲突?）: %s", e)
+            return None
+
+    @contextmanager
+    def _write_scope(self, timeout: float = 30.0) -> Iterator[Any]:
+        """E.4 S1：跨进程写锁 + 短生命周期写连接。
+
+        写操作在 `duckdb_write_lock` 保护下以短连接执行，窗口结束即关闭
+        连接并释放跨进程写锁（写锁存活从进程级降到秒级）。db_path 缺失/
+        连接失败/获锁超时 → yield None（写路径降级不抛异常）。
+        """
+        from fts.store.duckdb_lock import duckdb_write_lock
+
+        if self.db_path is None or not self.db_path.exists():
+            yield None
+            return
+        try:
+            with duckdb_write_lock(self.db_path, timeout=timeout):
                 import duckdb
 
-                self._cache_conn = duckdb.connect(str(self.db_path))
-            except Exception as e:
-                logger.warning("[cache] DuckDB 连接失败: %s", e)
-                return None
-        return self._cache_conn
+                conn = duckdb.connect(str(self.db_path))
+                try:
+                    yield conn
+                finally:
+                    conn.close()
+        except Exception as e:  # noqa: BLE001 — 写路径降级不抛异常
+            logger.warning("[cache] 写窗口开启失败: %s", e)
+            yield None
 
     def _try_cache(
         self,
@@ -697,7 +734,7 @@ class FuturesDataAggregator:
         if self.db_path is None or not self.db_path.exists():
             return None
 
-        con = self._get_cache_conn()
+        con = self._open_read_conn()
         if con is None:
             return None
 
@@ -744,6 +781,8 @@ class FuturesDataAggregator:
         except Exception as e:  # noqa: BLE001
             logger.warning("[cache] 读取失败: %s", e)
             return None
+        finally:
+            con.close()
 
     def _write_cache(self, df: pd.DataFrame) -> None:
         """将 K 线写入 DuckDB 缓存。失败不抛异常（缓存是次要路径）。"""
@@ -757,32 +796,32 @@ class FuturesDataAggregator:
         except Exception as e:
             logger.warning("[cache] migrate_schema 失败: %s", e)
 
-        con = self._get_cache_conn()
-        if con is None:
-            return
-        try:
-            con.register("df_new", df)
-            # 显式列 + CAST(date AS VARCHAR)：双 schema 兼容
-            # - 新 schema（date DATE）：CAST 转为 'YYYY-MM-DD' 字符串
-            # - 老 schema（date VARCHAR）：CAST 透传，零成本
-            con.execute(
-                """
-                INSERT INTO kline_cache (
-                    symbol, period, date, open, high, low, close,
-                    volume, amount, hold, settle, pre_settle, oi_change, vwap,
-                    source, fetched_at, trace_id
+        with self._write_scope() as con:
+            if con is None:
+                return
+            try:
+                con.register("df_new", df)
+                # 显式列 + CAST(date AS VARCHAR)：双 schema 兼容
+                # - 新 schema（date DATE）：CAST 转为 'YYYY-MM-DD' 字符串
+                # - 老 schema（date VARCHAR）：CAST 透传，零成本
+                con.execute(
+                    """
+                    INSERT INTO kline_cache (
+                        symbol, period, date, open, high, low, close,
+                        volume, amount, hold, settle, pre_settle, oi_change, vwap,
+                        source, fetched_at, trace_id
+                    )
+                    SELECT
+                        symbol, period, CAST(date AS VARCHAR) AS date,
+                        open, high, low, close,
+                        volume, amount, hold, settle, pre_settle, oi_change, vwap,
+                        source, fetched_at, trace_id
+                    FROM df_new
+                    """
                 )
-                SELECT
-                    symbol, period, CAST(date AS VARCHAR) AS date,
-                    open, high, low, close,
-                    volume, amount, hold, settle, pre_settle, oi_change, vwap,
-                    source, fetched_at, trace_id
-                FROM df_new
-                """
-            )
-            con.unregister("df_new")
-        except Exception as e:  # noqa: BLE001
-            logger.warning("[cache] 写入失败: %s", e)
+                con.unregister("df_new")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[cache] 写入失败: %s", e)
 
     # ─── 合成数据（最后兜底）──
 
@@ -1047,14 +1086,10 @@ class FuturesDataAggregator:
     # ─── 资源清理 ──
 
     def close(self) -> None:
-        """关闭持久连接。"""
-        conn = getattr(self, "_cache_conn", None)
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-            self._cache_conn = None
+        """关闭持久连接（E.4 S1：无常驻连接，幂等 no-op 保留兼容调用方）。"""
+        # 连接均为短生命周期（读 read_only 短连接 / 写 filelock+短连接），
+        # 无需进程级常驻连接清理。
+        return
 
 
 __all__ = ["FuturesDataAggregator", "BreakerState"]

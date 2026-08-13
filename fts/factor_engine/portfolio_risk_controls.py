@@ -1,10 +1,12 @@
 """
-fts/factor_engine/portfolio_risk_controls.py — 组合级风控：回撤止损 + 相关性熔断（GAP-067，v2.97.0）
+fts/factor_engine/portfolio_risk_controls.py — 组合级风控：回撤止损 + 相关性熔断 + 同向敞口惩罚 + 踩踏规避
 
-对照《期货因子策略组合·阶段三 风控与执行》补齐组合层约束：
+对照《期货因子策略组合·阶段三 风控与执行》补齐组合层约束（35-gap-closure-plan G1/G2）：
     - 组合级回撤止损：组合滚动回撤超过阈值 → 减仓/止损建议（CTA 高杠杆下回撤控制优先于收益）
     - 相关性熔断：组合成员收益相关性异常飙升（危机模式）→ 平仓建议
       （相关性常态下分散风险，危机时趋同变为同向暴露）
+    - 同向敞口惩罚（G1）：多个同向因子共振时压缩组合总敞口，切断「局部最优共振重仓」
+    - 集中踩踏止损规避（G2）：同一交易日批量止损超限时按风险敞口分批执行
 
 设计约束:
     - 纯函数、零未来函数（滚动窗口仅用截至当前日的数据）
@@ -99,6 +101,169 @@ def check_correlation_circuit_breaker(
     return {"triggered": bool(mean_corr >= threshold), "mean_corr": mean_corr, "threshold": threshold}
 
 
+# ─── G1: 同向敞口惩罚（35-gap-closure-plan G1）────────────────
+
+
+@dataclass
+class AlignedExposureConfig:
+    """组合级同向敞口惩罚配置（G1）。
+
+    Attributes:
+        enabled: 是否启用（默认 True）
+        align_threshold: 同向权重占比阈值（默认 0.6；≥60% 触发压缩）
+        max_compress: 最大压缩系数（默认 0.5，即最多压缩至原敞口 50%）
+        compress_curve: 压缩曲线 "linear" | "sqrt"（更温和） | "exp"（更激进）
+    """
+
+    enabled: bool = True
+    align_threshold: float = 0.60
+    max_compress: float = 0.50
+    compress_curve: str = "linear"
+
+
+def check_aligned_exposure(
+    signals: list[dict],
+    config: Optional[AlignedExposureConfig] = None,
+) -> dict[str, float | bool]:
+    """组合级同向敞口检测：以因子 IC 符号代理方向，按 |weight| 加权计算同向占比。
+
+    因子 ic>0 视为看多因子、ic<0 视为看空因子；同向权重占比 = max(看多占比, 看空占比)。
+    同向占比 ≥ align_threshold 时输出 compress_scale ∈ [max_compress, 1]，
+    用于压缩组合总敞口——多个同向因子共振时整体降仓，切断「局部最优共振重仓」。
+
+    零未来函数：仅使用当期信号与权重；纯函数，不修改输入。
+
+    Args:
+        signals: PortfolioSignal 列表（含 ic 与 weight 字段；权重归一化与否均可，
+            占比对常数缩放不变）
+        config: AlignedExposureConfig；None 或 enabled=False 返回不触发（scale=1.0）
+
+    Returns:
+        {triggered, long_ratio, short_ratio, compress_scale}
+    """
+    cfg = config if config is not None else AlignedExposureConfig()
+    if not cfg.enabled:
+        return {"triggered": False, "long_ratio": 0.0, "short_ratio": 0.0, "compress_scale": 1.0}
+
+    long_w = 0.0
+    short_w = 0.0
+    for s in signals:
+        ic = float(s.get("ic", 0.0) or 0.0)
+        w = abs(float(s.get("weight", 0.0) or 0.0))
+        if ic > 0:
+            long_w += w
+        elif ic < 0:
+            short_w += w
+    total = long_w + short_w
+    if total <= 0:
+        return {"triggered": False, "long_ratio": 0.0, "short_ratio": 0.0, "compress_scale": 1.0}
+
+    long_ratio = long_w / total
+    short_ratio = short_w / total
+    ratio = max(long_ratio, short_ratio)
+    if ratio < cfg.align_threshold:
+        return {
+            "triggered": False,
+            "long_ratio": long_ratio,
+            "short_ratio": short_ratio,
+            "compress_scale": 1.0,
+        }
+
+    # 线性：阈值处 scale=1.0，占比=1 时 scale=max_compress
+    scale = 1.0 - (ratio - cfg.align_threshold) / (1.0 - cfg.align_threshold) * (1.0 - cfg.max_compress)
+    if cfg.compress_curve == "sqrt":
+        # sqrt 在 [0,1] 内大于原值 → 压缩更温和
+        scale = float(np.sqrt(max(scale, 0.0)))
+    elif cfg.compress_curve == "exp":
+        # 指数衰减：占比=1 时指数压至 max_compress，k 由 max_compress 反解
+        k = -np.log(max(float(cfg.max_compress), 1e-6))
+        scale = float(np.exp(-k * (ratio - cfg.align_threshold) / (1.0 - cfg.align_threshold)))
+    scale = float(np.clip(scale, cfg.max_compress, 1.0))
+    return {"triggered": True, "long_ratio": long_ratio, "short_ratio": short_ratio, "compress_scale": scale}
+
+
+# ─── G2: 集中踩踏止损规避（35-gap-closure-plan G2）────────────────
+
+
+@dataclass
+class ExitStampedeConfig:
+    """集中踩踏止损规避配置（G2）。
+
+    Attributes:
+        enabled: 是否启用（默认 True）
+        max_same_day_exits: 单日最大同时平仓数（默认 3）
+        batch_gap_days: 顺延批次间隔（计划日数，默认 1）
+        order_by: 排序口径 "exposure_desc"（优先平最大敞口）
+    """
+
+    enabled: bool = True
+    max_same_day_exits: int = 3
+    batch_gap_days: int = 1
+    order_by: str = "exposure_desc"
+
+
+def throttle_exit_stampede(
+    exit_signals: pd.DataFrame,
+    exposures: pd.Series,
+    config: Optional[ExitStampedeConfig] = None,
+) -> pd.DataFrame:
+    """集中踩踏止损规避：单日触发止损合约数超限时，按风险敞口分批执行。
+
+    仅重排执行顺序（将超限合约顺延到后续计划日），不取消止损触发——保住止损纪律，
+    同时降低行情拐点集体平仓的冲击成本。
+
+    Args:
+        exit_signals: 触发平仓矩阵（index=日期，columns=合约，值 1/True=触发）
+        exposures: 各合约当前敞口（index=合约；用于 exposure_desc 排序）
+        config: ExitStampedeConfig；None 或 enabled=False 原样返回
+
+    Returns:
+        分批平仓计划 DataFrame（同 index/columns，值为 1 表示该计划日执行）；
+        每计划日执行数 ≤ max_same_day_exits（计划日耗尽时保留原日不丢弃）。
+    """
+    cfg = config if config is not None else ExitStampedeConfig()
+    if not cfg.enabled or exit_signals is None or exit_signals.empty:
+        return exit_signals
+
+    dates = list(exit_signals.index)
+    n_days = len(dates)
+    result = pd.DataFrame(0, index=exit_signals.index, columns=exit_signals.columns)
+
+    # 收集 (触发日索引, 合约)，按触发日 + 敞口降序稳定排序
+    pending: list[tuple[int, str]] = []
+    for i, d in enumerate(dates):
+        for c in exit_signals.columns:
+            if bool(exit_signals.loc[d, c]):
+                pending.append((i, str(c)))
+    if not pending:
+        return result
+
+    def _exposure(c: str) -> float:
+        try:
+            return float(exposures.get(c, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    pending.sort(key=lambda x: (x[0], -_exposure(x[1])))
+
+    day_cnt: dict[str, int] = {d: 0 for d in dates}
+    for trig_i, c in pending:
+        if day_cnt[dates[trig_i]] < cfg.max_same_day_exits:
+            exec_i = trig_i
+        else:
+            exec_i = trig_i + max(1, int(cfg.batch_gap_days))
+            while exec_i < n_days and day_cnt[dates[exec_i]] >= cfg.max_same_day_exits:
+                exec_i += 1
+            if exec_i >= n_days:
+                exec_i = trig_i  # 计划日耗尽：保留原日，不丢弃止损
+        result.loc[dates[exec_i], c] = 1
+        day_cnt[dates[exec_i]] += 1
+    return result
+
+
+# ─── 综合入口 ────────────────────────────────────────────
+
+
 def run_portfolio_risk_controls(
     combo_returns: Optional[np.ndarray],
     member_returns: Optional[pd.DataFrame],
@@ -142,6 +307,10 @@ __all__ = [
     "check_drawdown_stop",
     "check_correlation_circuit_breaker",
     "run_portfolio_risk_controls",
+    "AlignedExposureConfig",
+    "check_aligned_exposure",
+    "ExitStampedeConfig",
+    "throttle_exit_stampede",
     "DEFAULT_DRAWDOWN_THRESHOLD",
     "DEFAULT_CORR_THRESHOLD",
     "DEFAULT_CORR_WINDOW",

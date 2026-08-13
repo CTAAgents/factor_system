@@ -482,13 +482,13 @@ def cross_market_ic_check(
     ic_primary = {fid: _factor_cs_ic(signal_matrix, forward_returns, j) for j, fid in enumerate(factor_ids)}
 
     alt = alternate_market(panel_market)
+    if alt != "futures":
+        # 主系统期货化（plans/32 剥离）：无股票面板数据，跨市场 IC 对比跳过
+        return {}
     try:
-        if alt == "futures":
-            from ..data_futures import get_dynamic_core_subset
+        from ..data_futures import get_dynamic_core_subset
 
-            panel_alt, dates_alt = provider.get_futures_panel(symbols=get_dynamic_core_subset(), days=500, trace_id="")
-        else:
-            panel_alt, dates_alt = provider.get_csi300_panel(days=500, max_stocks=0, fundamental=True, trace_id="")
+        panel_alt, dates_alt = provider.get_futures_panel(symbols=get_dynamic_core_subset(), days=500, trace_id="")
     except Exception as e:  # noqa: BLE001
         logger.warning("[L3-WEIGHT] 替代面板加载失败，跳过跨市场 IC 对比: %s", e)
         return {}

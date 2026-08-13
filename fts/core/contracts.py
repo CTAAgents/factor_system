@@ -67,8 +67,58 @@ from fts.factor_engine.contracts import (
 # ─── 数据融合契约 ──────────────────────────────────────────
 
 
+class OHLCVBase(TypedDict, total=False):
+    """公共 OHLCV 字段（无市场形状，共享层）。
+
+    股票/期货两市场 K 线的公共字段。字段集合锁定，禁止任意加减。
+    """
+
+    symbol: str
+    date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    trace_id: str
+
+
+class FusionMeta(TypedDict, total=False):
+    """多源融合元数据（两市场共用，共享层）。"""
+
+    contributing_sources: list[str]
+    fusion_strategy: str
+    disagreement_pct: float
+
+
+class StockOHLCV(TypedDict, total=False):
+    """股票/ETF 单条 K 线契约（股票特有形状：复权因子）。
+
+    必填字段: symbol/date/open/high/low/close/volume/trace_id
+    可选字段: amount/adjust_factor/source/fetched_at/融合元数据
+
+    HARNESS §契约优先: 字段集合锁定，禁止任意加减。
+    """
+
+    symbol: str
+    date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    trace_id: str
+    amount: NotRequired[float]
+    adjust_factor: NotRequired[float]  # 复权因子（股票特有）
+    source: NotRequired[str]
+    fetched_at: NotRequired[str]
+    contributing_sources: NotRequired[list[str]]
+    fusion_strategy: NotRequired[str]
+    disagreement_pct: NotRequired[float]
+
+
 class FusedOHLCV(TypedDict, total=False):
-    """多源融合 OHLCV 数据契约。
+    """多源融合 OHLCV 数据契约（通用兼容契约）。
 
     必填字段:
         symbol, date, open, high, low, close, volume,
@@ -77,6 +127,9 @@ class FusedOHLCV(TypedDict, total=False):
     可选字段:
         amount, settle, disagreement_pct
         hold, oi_change, pre_settle, vwap（期货扩展，Phase 14.4 兼容）
+
+    ⚠️ 兼容说明（F.1 契约拆分）: 新代码优先使用市场契约 `StockOHLCV` /
+    `FuturesOHLCV`；本契约保留以兼容旧调用方，字段集合冻结不再演进。
     """
 
     symbol: str
@@ -106,7 +159,8 @@ class FuturesOHLCV(TypedDict, total=False):
     """期货单条 K 线数据契约。
 
     必填字段(8): symbol/date/open/high/low/close/volume/trace_id
-    可选字段(8): amount/hold/settle/pre_settle/oi_change/vwap/source/fetched_at
+    可选字段(8+): amount/hold/settle/pre_settle/oi_change/vwap/source/fetched_at
+                  + 融合元数据（contributing_sources/fusion_strategy/disagreement_pct，F.1 补入）
 
     HARNESS §契约优先: 字段集合锁定，禁止任意加减。
     """
@@ -127,6 +181,9 @@ class FuturesOHLCV(TypedDict, total=False):
     vwap: NotRequired[float]
     source: NotRequired[str]
     fetched_at: NotRequired[str]
+    contributing_sources: NotRequired[list[str]]
+    fusion_strategy: NotRequired[str]
+    disagreement_pct: NotRequired[float]
 
 
 class FuturesDataLineage(TypedDict, total=False):
@@ -205,6 +262,10 @@ __all__ = [
     "MultiSourceDisagreement",
     # 数据融合契约
     "FusedOHLCV",
+    # F.1 契约拆分：公共基契约 + 市场契约
+    "OHLCVBase",
+    "FusionMeta",
+    "StockOHLCV",
     # 期货 K 线 / 血缘 / 融合报告契约（Phase 14.4）
     "FuturesOHLCV",
     "FuturesDataLineage",

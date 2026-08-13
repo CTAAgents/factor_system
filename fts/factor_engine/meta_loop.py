@@ -26,7 +26,6 @@ import argparse
 import hashlib
 import json
 import logging
-import shutil
 import sys
 import secrets
 import time
@@ -38,6 +37,7 @@ from typing import Any, Callable, Literal, Optional, cast
 from .contracts import (
     DEFAULT_L1_BUDGET_CONFIG,
     DEFAULT_L1_VERIFIER_CONFIG,
+    STATE_SCHEMA_VERSION,
     EconomicLogic,
     FactorPool,
     FactorPoolEntry,
@@ -52,7 +52,7 @@ from .factor_program import (
     fix_factor_code,
     validate_factor_code,
 )
-from .extractors import FuturesExtractorPipeline, StockExtractorPipeline
+from .extractors import FuturesExtractorPipeline
 from .seed_pool import SeedPool
 from .state import generate_run_id, generate_trace_id
 
@@ -167,56 +167,41 @@ class L1Verifier:
 
 
 class MetaStateManager:
-    """L1 Meta-Loop 状态文件管理器。
+    """L1 Meta-Loop 状态管理器（SSOT 为 state.duckdb，plans/29 P4 读路径切换）。
 
-    存储位置: memory/meta_loop/state.json
-    备份位置: memory/meta_loop/state.json.backup
+    JSON（state.json/backup）退役为只读历史快照不再回写。
     """
 
-    def __init__(self, memory_dir: str | Path = "memory/meta_loop"):
+    def __init__(self, memory_dir: str | Path = "memory/meta_loop", state_store=None):
+        # 保留 memory_dir 以派生 namespace/key（meta_loop 根目录 vs 子目录）
         self.memory_dir = Path(memory_dir)
-        self.state_file = self.memory_dir / "state.json"
-        self.backup_file = self.memory_dir / "state.json.backup"
+        self._store = state_store  # None → 全局 SSOT（供测试注入临时 store）
+
+    def _store_conn(self):
+        """返回状态存储连接（注入的或全局 SSOT）。"""
+        from fts.store.state_db import get_state_store
+
+        return self._store if self._store is not None else get_state_store()
+
+    def _ns_key(self) -> tuple[str, str]:
+        """派生 state.duckdb 的 (namespace, key)（与 migrate 规则一致）。"""
+        if self.memory_dir.name == "meta_loop":
+            return "meta_loop", "state"
+        return "meta_loop", f"{self.memory_dir.name}/state"
 
     def load_or_init(self, budget_limit: int) -> L1MetaLoopState:
-        """加载或初始化状态。"""
-        self.memory_dir.mkdir(parents=True, exist_ok=True)
-        if self.state_file.exists():
-            try:
-                with open(self.state_file, "r", encoding="utf-8") as f:
-                    state = json.load(f)
-                # schema 版本检查（仅状态结构变更时冷启动）
-                from .contracts import STATE_SCHEMA_VERSION
-
-                if state.get("schema_version") != STATE_SCHEMA_VERSION:
-                    logger.warning(
-                        "L1 状态 schema 版本不匹配: %s != %s, 冷启动",
-                        state.get("schema_version"),
-                        STATE_SCHEMA_VERSION,
-                    )
-                    return self._init_state(budget_limit)
-                return state
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning("L1 状态文件损坏: %s, 尝试备份恢复", e)
-                return self._recover_from_backup(budget_limit)
-        return self._init_state(budget_limit)
-
-    def _recover_from_backup(self, budget_limit: int) -> L1MetaLoopState:
-        """从备份恢复状态。"""
-        if self.backup_file.exists():
-            try:
-                shutil.copy2(self.backup_file, self.state_file)
-                with open(self.state_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (OSError, json.JSONDecodeError) as e:
-                logger.error("备份恢复失败: %s, 冷启动", e)
-        return self._init_state(budget_limit)
+        """从 state.duckdb 加载状态；缺失则冷启动初始化。"""
+        ns, key = self._ns_key()
+        data = self._store_conn().get(ns, key)
+        if isinstance(data, dict) and data.get("schema_version") == STATE_SCHEMA_VERSION:
+            return cast(L1MetaLoopState, data)
+        state = self._init_state(budget_limit)
+        self.save(state)
+        return state
 
     @staticmethod
     def _init_state(budget_limit: int) -> L1MetaLoopState:
         """初始化新的状态。"""
-        from .contracts import STATE_SCHEMA_VERSION
-
         # generate_run_id 不接受参数，用 prefix 通过 trace_id 体系区分
         # run_id 格式: run_<8hex>_<timestamp>
         return L1MetaLoopState(
@@ -236,23 +221,14 @@ class MetaStateManager:
         )
 
     def save(self, state: L1MetaLoopState) -> None:
-        """持久化状态 — 先写主文件，再镜像到 backup。"""
-        from .contracts import STATE_SCHEMA_VERSION
-
+        """持久化状态 → 写 state.duckdb（SSOT，UPSERT + 历史追加）。"""
         if state.get("schema_version") != STATE_SCHEMA_VERSION:
             raise MetaStateManagerError(
                 f"状态 schema 版本不匹配: {state.get('schema_version')} != {STATE_SCHEMA_VERSION}"
             )
         state["last_updated"] = datetime.now().isoformat()
-        self.memory_dir.mkdir(parents=True, exist_ok=True)
-        # 先写主文件
-        with open(self.state_file, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        # 再镜像到 backup
-        try:
-            shutil.copy2(self.state_file, self.backup_file)
-        except OSError as e:
-            raise MetaStateManagerError(f"备份失败: {e}") from e
+        ns, key = self._ns_key()
+        self._store_conn().upsert(ns, key, state, run_id=state.get("run_id") or "")
 
     def mark_running(self, state: L1MetaLoopState) -> L1MetaLoopState:
         """标记为运行中。"""
@@ -649,8 +625,8 @@ def factor_program(data, params):
                         None 时使用内置模板回退。
             web_collector: f10/web_collector 的 collect_fundamental_web 函数。
                         None 时跳过感知步骤。
-            extractor_pipeline: 三源提取器管道（如 FuturesExtractorPipeline /
-                        StockExtractorPipeline），在 LLM 候选后自动调用来补充候选。
+            extractor_pipeline: 三源提取器管道（如 FuturesExtractorPipeline），
+                        在 LLM 候选后自动调用来补充候选。
         """
         self.llm_client = llm_client
         self.web_collector = web_collector
@@ -1090,6 +1066,7 @@ class MetaLoop:
         seed_pool: Optional[SeedPool] = None,
         sample_symbols: Optional[list[str]] = None,
         market: str = "futures",
+        state_store: Any | None = None,
     ):
         """
         Args:
@@ -1103,7 +1080,8 @@ class MetaLoop:
             web_collector: f10/web_collector 函数
             seed_pool: 现有种子池
             sample_symbols: 感知层抽样品种（None 时用默认 3 个）
-            market: 市场类型 ("futures" 或 "stock")，默认 "futures"
+            market: 市场类型（默认 "futures"）
+            state_store: 可选状态存储（StateKVStore），缺省用全局 SSOT（供测试隔离）
         """
         self.memory_dir = Path(memory_dir)
         self.factor_pool_path = Path(factor_pool_path)
@@ -1114,14 +1092,11 @@ class MetaLoop:
         self.llm_client = llm_client
         self.web_collector = web_collector
         self.market = market
+        self._state_store = state_store
 
-        # ── 感知层默认样本：按市场区分（股票 → CSI300 成分股 / 期货 → 五大板块品种）──
+        # ── 感知层默认样本：期货五大板块品种 ──
         if sample_symbols:
             effective_symbols = sample_symbols
-        elif market == "stock":
-            from fts.data_mcp import CSI300_SUBSET
-
-            effective_symbols = list(CSI300_SUBSET[:13])
         else:
             effective_symbols = [
                 "rb",
@@ -1146,25 +1121,9 @@ class MetaLoop:
             market,
             effective_symbols,
         )
-        if market == "stock":
-            logger.info(
-                "[L1.init] 股票感知样本: CSI300 成分股前 %d 只（与演化 L2 csi300 面板同源）",
-                len(effective_symbols),
-            )
         if market == "futures":
             logger.info(
                 "[L1.init] 期货知识注入模式: 将加载 81 个期货专用种子因子 (14 大因子家族)",
-            )
-        elif market == "stock":
-            counts = SeedPool.get_seed_counts()
-            logger.info(
-                "[L1.init] 股票知识注入模式: 将加载 %d 内置 + %d 外部 (WQ101=%d, Qlib158=%d, GTJA191=%d, 基本面=%d)",
-                counts["stock_internal"],
-                counts["stock_external_total"],
-                counts["stock_wq101"],
-                counts["stock_qlib158"],
-                counts["stock_gtja191"],
-                counts["stock_fundamental"],
             )
         else:
             logger.warning("[L1.init] 未知市场类型: %s", market)
@@ -1180,17 +1139,16 @@ class MetaLoop:
 
         self.sample_symbols = effective_symbols
 
-        self.state_manager = MetaStateManager(self.memory_dir)
+        self.state_manager = MetaStateManager(self.memory_dir, state_store=self._state_store)
         self.factor_pool_manager = FactorPoolManager(self.factor_pool_path)
         self.debate_analyzer = DebateQualityAnalyzer(self.debates_dir)
 
         # ── 根据市场类型创建对应的提取器管道（GAP-I103 多路知识源）──
-        self._extractor_pipeline: Optional[FuturesExtractorPipeline | StockExtractorPipeline] = None
+        self._extractor_pipeline: Optional[FuturesExtractorPipeline] = None
         # 另类知识源开关（公告/舆情 + 宏观事件，FTS_L1_*_EXTRACTOR_ENABLED 可配）
         from fts.config.settings import get_config
 
         _cfg = get_config()
-        _announcement_enabled = bool(getattr(_cfg, "l1_announcement_extractor_enabled", True))
         _macro_enabled = bool(getattr(_cfg, "l1_macro_extractor_enabled", True))
         if market == "futures":
             self._extractor_pipeline = FuturesExtractorPipeline(
@@ -1199,18 +1157,6 @@ class MetaLoop:
             )
             logger.info(
                 "[L1.init] 期货提取器管道已就绪: 天软/研报/论文/宏观(macro_enabled=%s)",
-                _macro_enabled,
-            )
-        elif market == "stock":
-            self._extractor_pipeline = StockExtractorPipeline(
-                llm_client=self.llm_client,
-                announcement_enabled=_announcement_enabled,
-                macro_enabled=_macro_enabled,
-            )
-            logger.info(
-                "[L1.init] 股票提取器管道已就绪: 聚宽/研报/论文/公告/宏观"
-                "(announcement_enabled=%s, macro_enabled=%s)",
-                _announcement_enabled,
                 _macro_enabled,
             )
         else:
@@ -1335,7 +1281,6 @@ class MetaLoop:
                 state,
                 trace_id,
                 injected_ids,
-                candidates_generated,
             )
             if circuit_broken:
                 logger.warning(
@@ -1448,7 +1393,8 @@ class MetaLoop:
                 "[L1.batch] 批量候选契约校验通过: total=%d (GAP-I101)",
                 contract_stats["total"],
             )
-        state["total_candidates_generated"] = state.get("total_candidates_generated", 0) + candidates_generated
+        # P2（2026-08-13）: total_candidates_generated 不再在此提前累计——避免失败率熔断
+        # 把"已生成未验证"的候选计入分母；改由 _verify_and_inject 在整批验证后统一累计。
         state["last_bootstrap_topic"] = candidates[0].get("parent_topic", "") if candidates else ""
         return candidates, candidates_generated
 
@@ -1474,9 +1420,14 @@ class MetaLoop:
         state: L1MetaLoopState,
         trace_id: str,
         injected_ids: list[str],
-        candidates_generated: int,
     ) -> Optional[str]:
-        """Step 4: L1 Verifier 检查 + 注入候选因子。返回熔断原因或 None。"""
+        """Step 4: L1 Verifier 检查 + 注入候选因子。返回熔断原因或 None。
+
+        P2 修复（误熔断，2026-08-13）: 失败率熔断按"已实际验证的候选数"计算——
+        循环内传入已处理数 i 与本批已注入数 batch_injected，整批验证完成后做
+        最终失败率检查。原实现传入"本批总数"，在验证开始前以 0 注入误判 100%
+        失败率，导致整批候选 0 验证 0 注入。
+        """
         cfg = self.verifier._config  # noqa: SLF001 — L1 Verifier 配置引用
         logger.info(
             "[L1.verify] 开始验证注入: candidates=%d, verifier=min_economic=%s, require_exec=%s, require_nodup=%s",
@@ -1487,11 +1438,13 @@ class MetaLoop:
         )
         passed_count = 0
         rejected_count = 0
+        batch_injected = 0  # 本次运行已注入数（失败率熔断分母/分子修正）
         for i, cand in enumerate(candidates):
             cand_name = cand.get("name", "unknown")
             cand_id = cand.get("candidate_id", "unknown")
 
-            cb_reason = self._check_circuit_breaker(state, candidates_generated)
+            # 失败率熔断仅统计"已验证数 i"，未验证候选不计入分母（避免 0 注入误熔断）
+            cb_reason = self._check_circuit_breaker(state, i, batch_injected)
             if cb_reason:
                 logger.warning(
                     "[L1.verify] 熔断触发: reason=%s, 已处理=%d/%d, 剩余跳过",
@@ -1499,6 +1452,7 @@ class MetaLoop:
                     i,
                     len(candidates),
                 )
+                state["total_candidates_generated"] = state.get("total_candidates_generated", 0) + i
                 state = self.state_manager.mark_circuit_broken(state, cb_reason)
                 return cb_reason
 
@@ -1543,7 +1497,25 @@ class MetaLoop:
                 injected_ids.append(injected_id)
                 state["total_candidates_injected"] = state.get("total_candidates_injected", 0) + 1
                 state.setdefault("candidates_ref", []).append(injected_id)
+                batch_injected += 1
                 self._consecutive_low_quality = 0
+
+        # 整批验证完成后的最终失败率检查——此时已验证数 = len(candidates)，
+        # 覆盖"本批全部失败"的真实熔断场景，且不再误判未验证候选
+        cb_reason = self._check_circuit_breaker(state, len(candidates), batch_injected)
+        if cb_reason:
+            logger.warning(
+                "[L1.verify] 整批验证后熔断触发: reason=%s, 已验证=%d, 本批注入=%d",
+                cb_reason,
+                len(candidates),
+                batch_injected,
+            )
+            state["total_candidates_generated"] = state.get("total_candidates_generated", 0) + len(candidates)
+            state = self.state_manager.mark_circuit_broken(state, cb_reason)
+            return cb_reason
+
+        # 本批全部验证完毕，累计到历史已验证数（供跨批失败率熔断使用）
+        state["total_candidates_generated"] = state.get("total_candidates_generated", 0) + len(candidates)
 
         logger.info(
             "[L1.verify] 验证注入完成: total=%d, passed=%d, rejected=%d, injected=%d, consecutive_low_quality=%d",
@@ -1700,17 +1672,29 @@ class MetaLoop:
         text = " ".join(reasons)
         return ("编译" in text) or ("重复" in text)
 
-    def _check_circuit_breaker(self, state: L1MetaLoopState, candidates_generated: int) -> Optional[str]:
-        """熔断检查。返回原因字符串（None = 未触发）。"""
+    def _check_circuit_breaker(
+        self,
+        state: L1MetaLoopState,
+        candidates_generated: int,
+        batch_injected: int = 0,
+    ) -> Optional[str]:
+        """熔断检查。返回原因字符串（None = 未触发）。
+
+        P2 修复（误熔断，2026-08-13）: `candidates_generated` 语义改为
+        "本次运行已实际验证的候选数"，新增 `batch_injected`（本次运行已注入数）。
+        失败率 = (累计已评估 - 累计已注入) / 累计已评估，其中"已评估"不包含
+        尚未执行 verifier.check 的候选。原缺陷: 调用方在验证循环第一个候选前
+        传入"本批总数 20 + 注入 0"，导致 100% > 95% 立即误熔断、整批 0 注入。
+        """
         # 1. Token 超 2x
         tokens = state.get("tokens_consumed", 0)
         limit = state.get("budget_limit", self.budget["daily_token_limit"])
         if tokens > limit * self.budget["circuit_breaker_token_ratio"]:
             return f"Token 熔断: {tokens} > {limit} * {self.budget['circuit_breaker_token_ratio']}"
 
-        # 2. 失败率 > 95%
+        # 2. 失败率 > 95% —— 仅基于已实际验证的候选（历史 + 本次已验证/已注入）
         evaluated = state.get("total_candidates_generated", 0) + candidates_generated
-        injected = state.get("total_candidates_injected", 0)
+        injected = state.get("total_candidates_injected", 0) + batch_injected
         if evaluated >= 20:  # 至少累计 20 个候选才检查
             failure_rate = (evaluated - injected) / evaluated
             if failure_rate > self.budget["circuit_breaker_failure_rate"]:
@@ -1740,7 +1724,7 @@ def _make_web_collector(provider: Any | None = None, market: str = "futures") ->
 
     Args:
         provider: FTSDataProvider 实例（None 时惰性初始化）
-        market: 市场类型（"futures" 期货 / "stock" 股票），决定 OHLCV 数据源与实时价路径。
+        market: 市场类型（默认 "futures"），决定 OHLCV 数据源与实时价路径。
 
     Returns:
         Callable(symbol: str) -> dict — 市场快照，包含 quote、kline、news 等字段
@@ -1755,11 +1739,9 @@ def _make_web_collector(provider: Any | None = None, market: str = "futures") ->
 
             lazy_provider = FTSDataProvider()
 
-        # 转换 symbol 格式: "rb" → "RB0"（仅期货模式；股票模式保留裸代码，如 "600519"）
-        contract_symbol = symbol
-        if market != "stock":
-            symbol_upper = symbol.upper().strip()
-            contract_symbol = symbol_upper if symbol_upper.endswith("0") else f"{symbol_upper}0"
+        # 转换 symbol 格式: "rb" → "RB0"
+        symbol_upper = symbol.upper().strip()
+        contract_symbol = symbol_upper if symbol_upper.endswith("0") else f"{symbol_upper}0"
 
         result: dict = {
             "symbol": symbol,
@@ -1772,12 +1754,9 @@ def _make_web_collector(provider: Any | None = None, market: str = "futures") ->
             "warnings": [],
         }
 
-        # 1. 获取 OHLCV 数据（股票: FTSDataProvider 统一入口 MCP/AKShare 日 K / 期货: 多源聚合）
+        # 1. 获取 OHLCV 数据（多源聚合）
         try:
-            if market == "stock":
-                df = lazy_provider.get_ohlcv(symbol, days=60)
-            else:
-                df = lazy_provider._futures.get_ohlcv(contract_symbol, days=60)
+            df = lazy_provider._futures.get_ohlcv(contract_symbol, days=60)
             if df is not None and not df.empty:
                 # 取最新 5 根 K 线
                 recent = df.tail(5)
@@ -1806,16 +1785,15 @@ def _make_web_collector(provider: Any | None = None, market: str = "futures") ->
         except Exception as e:
             result["warnings"].append(f"OHLCV 获取失败: {e}")
 
-        # 2. 获取实时价格（仅期货模式；股票感知层无实时价接口，最近收盘价已含于 quote）
-        if market != "stock":
-            try:
-                from fts.data_futures import get_realtime_prices
+        # 2. 获取实时价格
+        try:
+            from fts.data_futures import get_realtime_prices
 
-                prices = get_realtime_prices([contract_symbol])
-                if contract_symbol in prices:
-                    result["quote"]["realtime_price"] = prices[contract_symbol]
-            except Exception as e:
-                result["warnings"].append(f"实时价获取失败: {e}")
+            prices = get_realtime_prices([contract_symbol])
+            if contract_symbol in prices:
+                result["quote"]["realtime_price"] = prices[contract_symbol]
+        except Exception as e:
+            result["warnings"].append(f"实时价获取失败: {e}")
 
         return result
 
@@ -1826,7 +1804,7 @@ def _make_web_collector(provider: Any | None = None, market: str = "futures") ->
 
 
 def main():
-    """CLI 入口: python -m fts.factor_engine.meta_loop --once [--market stock]"""
+    """CLI 入口: python -m fts.factor_engine.meta_loop --once"""
     parser = argparse.ArgumentParser(description="L1 Meta-Loop 知识补给循环")
     parser.add_argument("--once", action="store_true", help="运行一次完整 L1 循环")
     parser.add_argument(
@@ -1853,8 +1831,8 @@ def main():
     parser.add_argument(
         "--market",
         default="futures",
-        choices=["futures", "stock"],
-        help="市场类型: futures（期货，默认）或 stock（股票）",
+        choices=["futures"],
+        help="市场类型（期货，默认）",
     )
     args = parser.parse_args()
 

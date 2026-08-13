@@ -30,10 +30,7 @@ logger = logging.getLogger(__name__)
 
 # 东财数据中心 API
 _EM_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "Chrome/126.0.0.0 Safari/537.36"
-)
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36"
 
 # 东财报表: 字段名 → (报表, 取值列, 日期列)
 _EM_REPORTS: dict[str, tuple[str, str, str]] = {
@@ -113,7 +110,7 @@ class EastmoneyMacroSource:
         rows = [
             {
                 "indicator": indicator,
-                "date": idx.date().isoformat(),
+                "date": pd.Timestamp(idx).date().isoformat(),
                 "value": float(val),
                 "unit": key,
                 "source": self.source_name,
@@ -146,9 +143,12 @@ class EastmoneyMacroSource:
         params = {
             "reportName": report,
             "columns": f"{date_col},{column}",
-            "pageNumber": "1", "pageSize": "5000",
-            "sortTypes": "1", "sortColumns": date_col,
-            "source": "WEB", "client": "WEB",
+            "pageNumber": "1",
+            "pageSize": "5000",
+            "sortTypes": "1",
+            "sortColumns": date_col,
+            "source": "WEB",
+            "client": "WEB",
         }
         r = requests.get(_EM_URL, params=params, headers={"User-Agent": _UA}, timeout=20)
         j = r.json()
@@ -234,10 +234,7 @@ class EastmoneyMacroSource:
 
             con = duckdb.connect(str(db_path), read_only=True)
             try:
-                sql = (
-                    "SELECT date, value FROM edb_cache "
-                    "WHERE indicator = ? AND value IS NOT NULL"
-                )
+                sql = "SELECT date, value FROM edb_cache WHERE indicator = ? AND value IS NOT NULL"
                 params: list[Any] = [indicator]
                 if start_date:
                     sql += " AND date >= CAST(? AS DATE)"

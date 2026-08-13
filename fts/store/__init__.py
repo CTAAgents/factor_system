@@ -11,6 +11,7 @@ HARNESS §文档先行: 本层为 plans/29 存储收敛计划的 Phase 0 基建�
     - 存量数据零变更（Phase 0 纯加固）
 """
 
+from .duckdb_lock import duckdb_write_lock
 from .registry import (
     StorageBackend,
     StorageDomain,
@@ -26,4 +27,5 @@ __all__ = [
     "load_storage_landscape",
     "StateKVStore",
     "DEFAULT_STATE_DB",
+    "duckdb_write_lock",
 ]

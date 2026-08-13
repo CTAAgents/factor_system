@@ -39,22 +39,19 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 DATABASE_PATH = DATA_DIR / "factor_catalog.duckdb"
-DATABASE_PATH_STOCK = DATA_DIR / "factor_catalog_stock.duckdb"
 DATABASE_PATH_FUTURES = DATA_DIR / "factor_catalog_futures.duckdb"
 
 
-def get_db_path(market: str = "stock") -> Path:
+def get_db_path(market: str = "futures") -> Path:
     """按市场返回因子目录数据库路径。
 
     Args:
-        market: "stock" 或 "futures"
+        market: 市场类型（仅 "futures"）
 
     Returns:
         对应的 DuckDB 文件路径
     """
-    if market == "futures":
-        return DATABASE_PATH_FUTURES
-    return DATABASE_PATH_STOCK
+    return DATABASE_PATH_FUTURES
 
 
 # ─── DDL 语句 ─────────────────────────────────────────────
@@ -85,7 +82,7 @@ CREATE TABLE IF NOT EXISTS factor_catalog (
     last_incremental_eval_at TIMESTAMP,
     decay_rate_3m    DOUBLE DEFAULT 0.0,
     decay_rate_6m    DOUBLE DEFAULT 0.0,
-    market          VARCHAR NOT NULL DEFAULT 'stock',
+    market          VARCHAR NOT NULL DEFAULT 'futures',
     family          VARCHAR NOT NULL DEFAULT 'other',
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -389,7 +386,7 @@ def init_database(db_path: Optional[Path] = None, market: Optional[str] = None) 
 
     Args:
         db_path: 数据库文件路径（优先级高于 market）
-        market: "stock" 或 "futures"，用于确定默认路径（db_path 为 None 时生效）
+        market: "futures"，用于确定默认路径（db_path 为 None 时生效）
 
     Returns:
         实际使用的数据库路径
@@ -447,7 +444,7 @@ def get_connection(db_path: Optional[Path] = None, market: Optional[str] = None)
 
     Args:
         db_path: 数据库文件路径（优先级高于 market）
-        market: "stock" 或 "futures"，用于确定默认路径
+        market: "futures"，用于确定默认路径
 
     Returns:
         duckdb 连接对象（调用方负责关闭）
@@ -468,7 +465,7 @@ def verify_database(db_path: Optional[Path] = None, market: Optional[str] = None
 
     Args:
         db_path: 数据库文件路径（优先级高于 market）
-        market: "stock" 或 "futures"，用于确定默认路径
+        market: "futures"，用于确定默认路径
 
     Returns:
         统计信息字典

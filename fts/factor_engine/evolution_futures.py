@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -82,7 +83,7 @@ def _log_consistency_event(
         event_type: 事件类型（promote / retire / verify）
         factor_id: 因子 ID
         factor_name: 因子名称
-        market: 市场类型（futures）
+        market: 市场类型（stock / futures）
         status: 因子状态（active / retired）
         json_path: JSON 文件路径（可选）
         trace_id: 追踪 ID（可选）
@@ -107,6 +108,28 @@ def _log_consistency_event(
         logger.debug("[consistency_log] 写入失败: %s", e)
 
 
+def _normalize_industry_keys(mapping: dict[str, Any]) -> dict[str, Any]:
+    """键归一化：映射键剥离交易所后缀（.SH/.SZ）生成裸代码键，同时保留原始键。
+
+    行业/市值映射文件（data/industry_map.json）键为 "600519.SH" 格式，
+    而 CSI300 面板 symbol 为裸代码 "600519"。归一化后两种格式均可命中。
+
+    Args:
+        mapping: {symbol: value} 原始映射
+
+    Returns:
+        归一化后的映射（原始键 + 裸代码键均保留）
+    """
+    result: dict[str, Any] = {}
+    for sym, value in mapping.items():
+        result[sym] = value
+        # 剥离 "600519.SH" → "600519"（面板 symbol 为裸代码）
+        base = sym.split(".")[0].strip()
+        if base and base != sym:
+            result[base] = value
+    return result
+
+
 from .contracts import (  # noqa: E402 — 延迟导入规避循环依赖
     DEFAULT_BUDGET_CONFIG,
     BudgetConfig,
@@ -120,31 +143,35 @@ from .evaluation_chain import (  # noqa: E402
     EvaluationChain,
     cross_section_evaluate_backtest,
 )
-from .experience_chain import ExperienceChain  # noqa: E402
+from .experience_chain import (  # noqa: E402
+    ExperienceChain,
+    ParentFailureContext,
+    create_trace_from_evaluation,
+)
+from .experiment_log import ExperimentLogWriter, extract_scores  # noqa: E402
 from .macro_evolution import MacroEvolver, get_default_llm_client  # noqa: E402
 from .micro_evolution import evolve_micro  # noqa: E402
 from .seed_pool import SeedPool, compute_seed_correlations  # noqa: E402
 from .signal_cache import SignalCache  # noqa: E402
 from .state import EvolutionStateManager, generate_trace_id  # noqa: E402
-from .success_pattern import SuccessPatternReport  # noqa: E402
-from .verifier import FactorVerifier, get_global_verifier  # noqa: E402
+from .success_pattern import (  # noqa: E402
+    SuccessPatternConfig,
+    SuccessPatternReport,
+    analyze_success_patterns,
+)
+from .verifier import FactorVerifier  # noqa: E402
 
-# ─── UCT 常量（34 计划 Phase 46a：单一事实源迁移至 evolution_uct.py，
-#    此处 re-export 保持测试 `from ...evolution_loop import UCT_EXPLORATION_C` 兼容） ──
 
-from .evolution_uct import EvolutionUctMixin, UCT_EXPLORATION_C  # noqa: E402
+# ─── UCT 常量 ─────────────────────────────────────────────
 
-# ─── 领域 J trace Mixin（34 计划 Phase 46b：evolution_trace.py 迁移，
-#    _QualityInspectionResult re-export 保持测试 import 兼容） ──
-from .evolution_trace import EvolutionTraceMixin, _QualityInspectionResult  # noqa: E402
-
-# ─── 领域 G 演化通道 Mixin（34 计划 Phase 46c：evolution_channels.py 迁移） ──
-from .evolution_channels import EvolutionChannelsMixin  # noqa: E402
+UCT_EXPLORATION_C: float = 1.0
+"""UCT 探索常数。越大越倾向探索未访问的父因子。"""
 
 # GAP-070: 质检链信号缓存容量上限（LRU，超出淘汰最久未使用项）。
 # 每条目为一份完整面板信号（~4MB/104品种×5163日），16 条上限覆盖单候选
 # L1/极值扰动/消融 baseline/鲁棒性 baseline/SHAP 全部复用场景。
 _QC_SIGNAL_CACHE_MAX_ENTRIES: int = 16
+
 
 # ─── 演化结果 ─────────────────────────────────────────────
 
@@ -187,6 +214,17 @@ class EvolutionRunResult:
 
 
 # ─── 兼容包装: 替代已删除的 FactorQualityInspection ────
+
+
+class _QualityInspectionResult:
+    """兼容 InspectionResult 属性接口，用于 evolution_loop 内部。"""
+
+    def __init__(self, score: dict, filtered: bool, reason: str = "") -> None:
+        self.total_score: float = score.get("total_score", 0.0)
+        self.grade: str = score.get("grade", "C")
+        self.reason: str = reason
+        self.filtered: bool = filtered
+        self.quality_score: dict = score
 
 
 class _QualityInspectionCompat:
@@ -264,24 +302,16 @@ class _QualityInspectionCompat:
 # ─── 演化循环 ─────────────────────────────────────────────
 
 
-class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMixin):
+class EvolutionLoop:
     """L2 因子演化主循环。
 
     Usage:
         loop = EvolutionLoop(
             data=my_ohlcv_df,
             forward_returns=my_returns_array,
-            elite_dir="memory/knowledge/factors/futures_elite",
+            elite_dir="memory/knowledge/factors/stocks_elite",
         )
         result = loop.run()
-
-    34 计划（plans/34-evolution-loop-refactor-inventory.md）B 阶段：
-    领域 Mixin 组合模式。领域 I（UCT 选择 + 熔断/提前停止）已抽取至
-    evolution_uct.py（EvolutionUctMixin），领域 J（trace 记录 + 经验链 +
-    实验日志）已抽取至 evolution_trace.py（EvolutionTraceMixin），领域 G
-    （GP/深度/算子 DSL 演化通道）已抽取至 evolution_channels.py
-    （EvolutionChannelsMixin），后续领域按盘点顺序推进，
-    公开 API 与行为等价不变。
     """
 
     def __init__(
@@ -313,12 +343,10 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         self.cross_section_dates = cross_section_dates
         self.industry_map = industry_map
         self.cap_map = cap_map
-        if market is None:
-            from fts.config.settings import get_config
-
-            market = get_config().default_market
+        # F.2 引擎分叉: 本文件固定期货市场，market 入参忽略
+        market = "futures"
         self.market = market
-        # 演化模式解析：读取 FTSConfig.evolution_mode（hybrid / operator_first / batch）
+        # GAP-S11 (v2.67.0): 期货演化保持原配置行为（不启用股票 operator-first）
         from fts.config.settings import get_config
 
         _raw_mode = getattr(get_config(), "evolution_mode", "hybrid")
@@ -331,7 +359,7 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         # v2.59.0 (GAP-F03): 期货横截面模式自动注入板块映射（板块/产业链中性化）
         # 从 FUTURES_SECTOR_MAP 反向构建 {symbol: sector}；futures_neutralization=false
         # 或已显式传入 industry_map 时跳过。
-        if self._is_cross_section and market == "futures" and self.industry_map is None:
+        if self._is_cross_section and self.industry_map is None:
             try:
                 from fts.config.settings import get_config
 
@@ -388,12 +416,10 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         self._early_stop_reason: Optional[str] = None
         if verifier is not None:
             self.verifier = verifier
-        elif market == "futures":
+        else:
             from .contracts import FUTURES_VERIFIER_CONFIG
 
             self.verifier = FactorVerifier(FUTURES_VERIFIER_CONFIG)
-        else:
-            self.verifier = get_global_verifier()
         self.llm_client = llm_client or get_default_llm_client()
         self.seed_pool = seed_pool or SeedPool()
         self.n_trials_micro = n_trials_micro
@@ -485,12 +511,9 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         # 子模块: 高IC筛查器 (Phase B.4 集成, 所有市场统一)
         from .high_ic_screener import HighICScreener, HighICScreenConfig
 
-        if market == "futures":
-            # 期货市场放宽 V5 经济逻辑维度最低分（LLM 演化因子 L2 评分偏低）
-            futures_config = HighICScreenConfig(logic_min_score=1.0)
-            self.high_ic_screener = HighICScreener(config=futures_config)
-        else:
-            self.high_ic_screener = HighICScreener()
+        # 期货市场放宽 V5 经济逻辑维度最低分（LLM 演化因子 L2 评分偏低）
+        futures_config = HighICScreenConfig(logic_min_score=1.0)
+        self.high_ic_screener = HighICScreener(config=futures_config)
 
         # 子模块: 端到端回测流水线 (Phase B.2 集成)
         from .backtest_pipeline import BacktestPipeline, PipelineConfig
@@ -967,6 +990,133 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
     # ─── 内部方法 ───
 
     # ── GAP-I201 (v2.65.0): 批量挖掘漏斗 ──────────────────
+
+    def _build_parent_failure_ctx(
+        self, parent: FactorProgram
+    ) -> Optional[ParentFailureContext]:
+        """构造父因子最近失败归因上下文（Phase 1.1 P0-2 定向修复）。
+
+        从失败经验链按 parent_id 读取最近失败轨迹，聚合去重失败原因。
+        无失败记录或父因子无 factor_id 时返回 None（不注入归因段落）。
+
+        Args:
+            parent: 父因子
+
+        Returns:
+            ParentFailureContext 或 None
+        """
+        parent_id = parent.get("factor_id")
+        if not parent_id:
+            return None
+        traces = self.experience_chain.read_failures_by_parent(parent_id)
+        if not traces:
+            return None
+        reasons: list[str] = []
+        latest_failed_at: Optional[str] = None
+        for t in traces:
+            eval_ = t.get("evaluation", {})
+            for reason in eval_.get("failure_reasons", []):
+                if reason and reason not in reasons:
+                    reasons.append(reason)
+            if latest_failed_at is None:
+                latest_failed_at = t.get("recorded_at")
+        if not reasons:
+            return None
+        return ParentFailureContext(
+            parent_id=parent_id,
+            failure_reasons=reasons,
+            patterns=list(reasons),
+            latest_failed_at=latest_failed_at,
+        )
+
+    def _build_success_pattern_report(self) -> Optional[SuccessPatternReport]:
+        """构造近期成功模式报告（Phase 1.2 P0-1），进程内缓存避免重复读取。
+
+        从 FTSConfig 读取开关/窗口/样本下限，构造 SuccessPatternConfig 聚合经验链。
+        异常/开关关闭 → None（prompt 层不注入）；空报告（样本不足）照常返回，
+        由 MacroEvolver 判断 sample_count==0 不注入。
+
+        Returns:
+            SuccessPatternReport 或 None
+        """
+        if self._success_pattern_cache is not None:
+            return self._success_pattern_cache
+        try:
+            from fts.config.settings import get_config as _get_sp_cfg
+
+            _cfg = _get_sp_cfg()
+            config = SuccessPatternConfig(
+                enabled=_cfg.evolution_success_pattern_enabled,
+                window_days=_cfg.success_pattern_window_days,
+                min_sample=_cfg.success_pattern_min_sample,
+            )
+            if not config.enabled:
+                return None
+            report = analyze_success_patterns(self.experience_chain, config)
+            self._success_pattern_cache = report
+            return report
+        except Exception as e:  # noqa: BLE001 — 降级不阻断演化
+            logger.debug("成功模式报告构造失败（降级跳过）: %s", e)
+            return None
+
+    def _record_experiment_variant(
+        self,
+        factor: FactorProgram,
+        parent: Optional[FactorProgram],
+        generation: int,
+        method: str,
+        summary: str,
+        evaluation: Optional[FactorEvaluation],
+        outcome: str,
+        quality_grade: Optional[str] = None,
+    ) -> None:
+        """记录实验候选（Phase 2 P1-2），run 结束时导出实验日志。
+
+        Args:
+            factor: 候选因子
+            parent: 父因子（可能为 None）
+            generation: 当前代数
+            method: 演化方法（macro/gp/operator/deep）
+            summary: 演化摘要
+            evaluation: 评估结果（预筛/运行时拦截可能为 None）
+            outcome: 候选结局（prefilter_rejected/verifier_failed/audit_failed/promoted）
+            quality_grade: 质量评分卡等级（A/B/C），available 时传入
+        """
+        scores = extract_scores(evaluation)
+        if quality_grade is not None:
+            scores["quality_grade"] = quality_grade
+        self._experiment_variants.append(
+            {
+                "generation": generation,
+                "parent_id": parent.get("factor_id") if parent else None,
+                "candidate_id": factor.get("factor_id", "?"),
+                "method": method,
+                "summary": summary,
+                "scores": scores,
+                "outcome": outcome,
+            }
+        )
+
+    def _export_experiment_log(
+        self,
+        run_id: str,
+        trace_id: str,
+        generations_completed: int,
+    ) -> Optional[Path]:
+        """导出结构化实验日志（Phase 2 P1-2），非阻塞（失败仅 warning）。"""
+        try:
+            writer = ExperimentLogWriter(self._experiment_log_dir)
+            return writer.export(
+                run_id=run_id,
+                trace_id=trace_id,
+                market=self.market,
+                started_at=datetime.now().isoformat(),
+                generations_completed=generations_completed,
+                variants=self._experiment_variants,
+            )
+        except Exception as e:  # noqa: BLE001 — 导出失败降级不阻断 run
+            logger.warning("实验日志导出失败（降级不阻断）: %s", e)
+            return None
 
     def _evolve_one(
         self,
@@ -1799,6 +1949,114 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
 
         return promoted
 
+    def _select_parent_uct(self, parents: list[FactorProgram]) -> FactorProgram:
+        """UCT 树搜索选择父因子，平衡探索与利用。
+
+        UCB = avg_reward + c * sqrt(ln(total_visits) / visits)
+
+        未访问的父因子（visits=0）返回无限大 UCB，确保优先探索。
+        """
+        total_visits = sum(s.get("visits", 0) for s in self._uct_stats.values())
+        best_score = -float("inf")
+        best_parent = parents[0]
+
+        for p in parents:
+            fid = p["factor_id"]
+            stats = self._uct_stats.get(fid, {"visits": 0, "total_reward": 0.0})
+            visits = stats["visits"]
+            if visits == 0:
+                # 未访问 → 优先探索
+                return p
+            avg_reward = stats["total_reward"] / visits
+            exploration = UCT_EXPLORATION_C * math.sqrt(math.log(max(total_visits, 1)) / visits)
+            ucb = avg_reward + exploration
+            if ucb > best_score:
+                best_score = ucb
+                best_parent = p
+
+        return best_parent
+
+    def _update_uct_stats(self, parent: FactorProgram, evaluation: FactorEvaluation) -> None:
+        """根据子因子评估结果更新父因子的 UCT 统计。
+
+        奖励 = abs(IC)（通过）/ 0（失败），鼓励 IC 高的父因子。
+        """
+        fid = parent["factor_id"]
+        if fid not in self._uct_stats:
+            self._uct_stats[fid] = {"visits": 0, "total_reward": 0.0}
+        bt = evaluation.get("level_1_backtest", {})
+        passed = evaluation.get("passed", False)
+        reward = abs(bt.get("ic", 0.0)) if passed else 0.0
+        self._uct_stats[fid]["visits"] += 1
+        self._uct_stats[fid]["total_reward"] += reward
+
+    def _update_uct_failure(self, parent: FactorProgram) -> None:
+        """记录父因子演化失败的 UCT 反馈（GAP-074 P0-1）。
+
+        演化失败/运行时校验失败/快速预筛失败路径均调用：visits+1、不授予
+        正奖励。避免失败父因子 visits 恒 0，导致 `_select_parent_uct`
+        永远返回 parents[0] 的选择坍缩（50 代全部演化同一父因子）。
+        """
+        fid = parent["factor_id"]
+        if fid not in self._uct_stats:
+            self._uct_stats[fid] = {"visits": 0, "total_reward": 0.0}
+        self._uct_stats[fid]["visits"] += 1
+
+    def _check_circuit_breaker(self, state: EvolutionState) -> Optional[str]:
+        """熔断检查。返回原因字符串（None = 未触发）。"""
+        # Token 超 2x
+        tokens = state.get("tokens_consumed", 0)
+        limit = state.get("budget_limit", self.budget["nightly_token_limit"])
+        if tokens > limit * self.budget["circuit_breaker_token_ratio"]:
+            return f"Token 熔断: {tokens} > {limit} * {self.budget['circuit_breaker_token_ratio']}"
+
+        # 连续低 IC
+        if self._consecutive_low_ic >= self.budget["circuit_breaker_consecutive_low_ic"]:
+            return (
+                f"连续低 IC 熔断: {self._consecutive_low_ic} 代 IC < {self.budget['circuit_breaker_low_ic_threshold']}"
+            )
+
+        # 失败率 > 90%
+        evaluated = state.get("total_factors_evaluated", 0)
+        promoted = state.get("total_factors_promoted", 0)
+        if evaluated >= 10:
+            failure_rate = (evaluated - promoted) / evaluated
+            if failure_rate > self.budget["circuit_breaker_failure_rate"]:
+                return f"失败率熔断: {failure_rate:.2%} > {self.budget['circuit_breaker_failure_rate']:.2%}"
+
+        return None
+
+    def _maybe_early_stop(self, state: EvolutionState) -> bool:
+        """P1-3 (Phase 3, 26 计划 §8): 连续 K 代零晋升 → 提前停止（每代结束后调用）。
+
+        基于 `state.total_factors_promoted` 与上次记录值的差异判断本代是否晋升，
+        覆盖全部路径（演化失败/运行时拦截/预筛拦截 continue 均计入零晋升代）。
+        保守默认关闭（enabled=False，验证见 plans/26 §8.7.1）。
+
+        Args:
+            state: L2 演化状态
+
+        Returns:
+            True 表示达到阈值应提前结束 run（调用方 break，正常收尾）
+        """
+        if not self._evolution_stop_enabled:
+            self._consecutive_empty_generations = 0
+            self._early_stop_last_count = state.get("total_factors_promoted", 0)
+            return False
+        cur = state.get("total_factors_promoted", 0)
+        if cur == self._early_stop_last_count:
+            self._consecutive_empty_generations += 1
+        else:
+            self._consecutive_empty_generations = 0
+        self._early_stop_last_count = cur
+        if self._consecutive_empty_generations >= self._evolution_stop_k:
+            self._early_stop_reason = (
+                f"连续 {self._consecutive_empty_generations} 代零晋升"
+                f"（阈值 K={self._evolution_stop_k}）"
+            )
+            return True
+        return False
+
     # ── GAP-I206 (v2.71.0): L2 准入去冗余 — 与既有 elite 相关性检查 ──
 
     def _scan_elite_correlations(
@@ -2139,11 +2397,7 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         if self._repo is None:
             from .factor_db import FactorRepository
 
-            self._repo = (
-                FactorRepository(db_path=self.factor_db_path, market=self.market)
-                if self.factor_db_path
-                else FactorRepository(market=self.market)
-            )
+            self._repo = FactorRepository(db_path=self.factor_db_path, market=self.market) if self.factor_db_path else FactorRepository(market=self.market)
         return self._repo
 
     @_release_repo_after
@@ -2238,7 +2492,7 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         # 将 factor 字段展开到顶层，方便 cli 直接读取
         record = dict(factor)
         # 确保 market 字段正确：若因子为默认 "multi"，使用演化上下文的市场
-        if record.get("market", "multi") in ("multi", "other") and self.market in ("futures",):
+        if record.get("market", "multi") in ("multi", "other") and self.market in ("futures", "stock"):
             record["market"] = self.market
         record["evaluation"] = evaluation
 
@@ -2264,7 +2518,7 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
                     if orth_factor is not None:
                         factor = cast(FactorProgram, orth_factor)
                         record = dict(factor)
-                        if record.get("market", "multi") in ("multi", "other") and self.market in ("futures",):
+                        if record.get("market", "multi") in ("multi", "other") and self.market in ("futures", "stock"):
                             record["market"] = self.market
                         record["evaluation"] = evaluation
                         _basis_tag = (
@@ -2566,7 +2820,7 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
             factor_name = factor.get("name", "?")
             factor_market: str = factor.get("market", "multi")
             # 若因子未显式指定有效市场（multi/other 为默认值），使用演化上下文的市场
-            if factor_market in ("multi", "other") and self.market in ("futures",):
+            if factor_market in ("multi", "other") and self.market in ("futures", "stock"):
                 factor_market = self.market
             factor_family = factor.get("family", "other")
 
@@ -3080,12 +3334,8 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         # 原因：compute_cross_section_correlations 在 184 种子 × 25 品种下耗时 > 10 分钟
         # 且 ThreadPoolExecutor timeout 无法中断卡在 numpy/scipy C 扩展中的线程
         # 仅做标记不删除，L3 组合时通过 ACTIVE_FACTOR_CAP 和 Elastic Net 控制冗余
-        # GAP-038 补丁扩展: 时序模式同样存在规模爆炸——185 种子 × 500 日逐个因子
-        # 代码执行（spearmanr/percentile 重算子）+ 全对相关矩阵，计算量随种子数平方
-        # 增长且无超时保护，种子集 > 50 时同样跳过预检。
-        if len(seeds) > 50:
-            mode = "横截面" if self._is_cross_section else "时序"
-            print(f"[evo] 种子因子相关性预检跳过: {len(seeds)} 种子，{mode}模式计算量过大")
+        if self._is_cross_section and len(seeds) > 50:
+            print(f"[evo] 种子因子相关性预检跳过: {len(seeds)} 种子，横截面模式计算量过大")
             return []
         try:
             if self._is_cross_section:
@@ -3461,7 +3711,407 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
 
     # ── Phase B.2: 端到端回测流水线集成 ──────────────────
 
+    def _run_gp_evolution(
+        self,
+        parent: FactorProgram,
+        generation: int,
+        trace_id: str,
+    ) -> tuple[FactorProgram, str]:
+        """执行 GP 遗传规划演化 (Phase C.1 集成)。
+
+        使用 FeatureOpsEngine 在算子空间搜索最优因子表达式，
+        作为宏观演化的补充或备选。
+
+        Args:
+            parent: 父因子
+            generation: 当前代数
+            trace_id: 全链路 trace_id
+
+        Returns:
+            (新因子程序, 演化摘要)
+        """
+        from .gp_evolver import tree_to_factor_program
+
+        target_col = "forward_return"
+        gp_data = self.data.copy()
+        if self.forward_returns is not None and len(self.forward_returns) == len(gp_data):
+            gp_data[target_col] = self.forward_returns
+        else:
+            gp_data[target_col] = 0.0
+
+        # 数据泄露防护: 构建训练集掩码（前 60% 数据），
+        # 确保 GP 搜索仅在训练集上计算适应度
+        train_ratio = 0.6
+        train_size = max(int(len(gp_data) * train_ratio), 1)
+        train_mask = pd.Series(
+            [True] * train_size + [False] * (len(gp_data) - train_size),
+            index=gp_data.index,
+        )
+
+        gp_result = self.feature_ops_engine.run_gp_search(
+            data=gp_data,
+            target=target_col,
+            config={
+                "population_size": 100,
+                "max_generations": 20,
+                "tournament_size": 3,
+                "crossover_rate": 0.7,
+                "mutation_rate": 0.1,
+                "max_tree_depth": 4,
+            },
+            train_mask=train_mask,
+        )
+
+        if gp_result.best_fitness <= 0:
+            raise RuntimeError(f"GP 演化适应度无效: {gp_result.best_fitness:.4f}")
+
+        factor_program = tree_to_factor_program(gp_result.best_tree)
+        factor_program["parent_id"] = parent.get("factor_id")
+        factor_program["generation"] = generation
+        factor_program["trace_id"] = trace_id
+        factor_program["market"] = self.market
+
+        # ── Phase C.1: 特征重要性分析 (集成到 GP 管线) ──
+        try:
+            from .factor_program import FactorExecutor
+
+            # 执行因子程序得到信号序列，作为特征重要性的输入
+            executor = FactorExecutor(factor_program)
+            signals = executor.execute(gp_data, {})
+            if len(signals) != len(gp_data):
+                signals = np.full(len(gp_data), np.nan)
+
+            importance_result = self.feature_importance_analyzer.analyze(
+                pd.Series(signals),
+                gp_data,
+                target_col,
+            )
+            # FeatureImportanceResult 是 dataclass，转 dict 存快照
+            factor_program["feature_importance"] = {k: v for k, v in importance_result.__dict__.items()}
+        except Exception as e:
+            logger.debug("特征重要性分析跳过: %s", e)
+
+        summary = (
+            f"GP Gen={gp_result.generations_completed}, "
+            f"Fitness={gp_result.best_fitness:.4f}, "
+            f"IC={gp_result.best_ic:.4f}, Sharpe={gp_result.best_sharpe:.4f}, "
+            f"Expression={gp_result.best_expression[:80]}"
+        )
+
+        logger.info("GP 演化完成 [%s]: %s", parent.get("name", "?"), summary)
+        return cast(FactorProgram, factor_program), summary
+
+    def _run_deep_evolution(
+        self,
+        parent: FactorProgram,
+        generation: int,
+        trace_id: str,
+        model_kind: str = "gru",
+    ) -> tuple[FactorProgram, str]:
+        """执行深度因子演化 (GAP-I203 v2.73.0 / C5 v2.100.1)。
+
+        使用 DeepFactorGenerator 在历史行情序列上训练轻量纯 numpy 深度模型
+        （GRU 或 Transformer，C5），将训练权重固化内嵌为可执行因子 code
+        （零未来函数：每步只用截至 t 的特征窗口推理），产出可过全套审计链
+        的 FactorProgram。
+
+        Args:
+            parent: 父因子（仅用于命名与血缘）
+            generation: 当前代数
+            trace_id: 全链路 trace_id
+            model_kind: 深度模型类型 "gru"（默认）| "transformer"（C5）
+
+        Returns:
+            (新因子程序, 演化摘要)
+
+        Raises:
+            RuntimeError: 数据缺失、样本不足或深度模型训练失败（调用方降级回退）
+        """
+        from fts.ml.deep_factor import DeepFactorConfig, create_deep_factor
+
+        if self.data is None or len(self.data) < 2:
+            raise RuntimeError("深度演化: 无可用行情数据")
+
+        data = self.data
+        # forward_returns 缺失/长度不齐时由生成器内部降级（返回 None）
+        forward_returns: np.ndarray | None = self.forward_returns
+        if forward_returns is None or len(forward_returns) != len(data):
+            forward_returns = None
+
+        factor = create_deep_factor(
+            data=data,
+            forward_returns=forward_returns,
+            market=self.market,
+            parent_name=parent.get("name", "?"),
+            trace_id=trace_id,
+            config=DeepFactorConfig(model_kind=model_kind),
+        )
+        if factor is None:
+            raise RuntimeError(f"深度演化({model_kind}): 样本不足或训练失败")
+        factor["parent_id"] = parent.get("factor_id")
+        factor["generation"] = generation
+        factor["trace_id"] = trace_id
+
+        dm = factor.get("deep_model", {})
+        label = "Transformer" if model_kind == "transformer" else "GRU"
+        summary = (
+            f"Deep {label} lookback={dm.get('lookback', '?')} "
+            f"hidden={dm.get('hidden', '?')} "
+            f"val_ic={float(dm.get('val_ic', 0.0)):.4f}"
+        )
+        logger.info("深度演化完成 [%s]: %s", parent.get("name", "?"), summary)
+        return cast(FactorProgram, factor), summary
+
     # ── Phase C.2: 算子演化（FTS-Expr DSL） ──────────────
+
+    def _generate_operator_factor(
+        self,
+        parent: FactorProgram,
+        generation: int,
+        trace_id: str,
+    ) -> tuple[FactorProgram, str]:
+        """使用 FTS-Expr DSL 算子生成因子表达式 (Phase C.2)。
+
+        基于算子注册表随机组合合法因子表达式，通过:
+        1. 从 L0 字段池采样
+        2. 随机选择 L1 时序算子（带合理的窗口参数）
+        3. 可选 L2 横截面或 L4 组合算子封装
+        4. 全程校验通过（参数边界、最大 lookback）
+
+        Args:
+            parent: 父因子
+            generation: 当前代数
+            trace_id: 全链路 trace_id
+
+        Returns:
+            (新因子程序, 演化摘要)
+        """
+        # ── Phase 3+ / C.4: 优先适应度导向进化搜索 ──
+        engine_factor = self._try_operator_engine_evolution(
+            parent,
+            generation,
+            trace_id,
+        )
+        if engine_factor is not None:
+            new_factor = engine_factor
+            summary = f"OpEvolve: {new_factor.get('expression', '?')}"
+            logger.info(
+                "算子演化引擎因子生成成功 [%s]: %s",
+                new_factor.get("name", "?"),
+                summary,
+            )
+            return new_factor, summary
+
+        # ── fallback: 随机组合生成（无评估数据或引擎失败） ──
+        import hashlib
+        import random
+        import time
+
+        from .expr_dsl.factory import create_operator_factor
+        from .expr_dsl.executor import evaluate
+        from .expr_dsl.parser import parse_expression
+        from .expr_dsl.registry import L0_FIELDS, build_registry
+        from .expr_dsl.validator import validate_expr
+
+        # 构建算子注册表
+        registry = build_registry()
+
+        # 按类别分组算子
+        l1_ops = [
+            name
+            for name, meta in registry.items()
+            if meta.category == "L1" and name not in ("ts_covariance", "ts_correlation")
+        ]
+        l2_ops = [name for name, meta in registry.items() if meta.category == "L2"]
+        l4_ops = [name for name, meta in registry.items() if meta.category == "L4"]
+
+        # 种子随机（基于父因子，保证可复现性）
+        seed = int(
+            hashlib.md5(f"{parent.get('factor_id', '?')}_{generation}_{time.time_ns()}".encode()).hexdigest()[:8], 16
+        ) % (2**31)
+        rng = random.Random(seed)
+
+        # 尝试生成合法的表达式，最多 10 次
+        for attempt in range(10):
+            try:
+                # Step 1: 选择 1-2 个 L0 字段
+                n_fields = rng.randint(1, 2)
+                fields = rng.sample(list(L0_FIELDS), n_fields)
+
+                # Step 2: 随机选择 1 个 L1 时序算子
+                l1_op = rng.choice(l1_ops)
+
+                # 确定窗口参数（5 的倍数，看起来更"专业"）
+                window = ((rng.randint(5, 60) + 4) // 5) * 5
+
+                # 构建表达式
+                expr_parts = [f"{l1_op}({f}, {window})" for f in fields]
+
+                # Step 3: 可选 L4 组合算子
+                if len(expr_parts) == 2 and rng.random() < 0.5:
+                    l4_op = rng.choice(l4_ops)
+                    expression = f"{l4_op}({expr_parts[0]}, {expr_parts[1]})"
+                else:
+                    expression = expr_parts[0]
+
+                # Step 4: 可选 L2 横截面封装
+                if rng.random() < 0.4:
+                    l2_op = rng.choice(l2_ops)
+                    expression = f"{l2_op}({expression})"
+
+                # 校验
+                node = parse_expression(expression)
+                errors, max_lookback = validate_expr(node, registry)
+                if errors:
+                    continue
+
+                # Step 4.5: 常数信号前置拦截（生成阶段即过滤非常数表达式，
+                # 避免到运行时校验/预筛阶段才被淘汰，浪费下游资源）
+                try:
+                    probe_data = (
+                        list(self.cross_section_data.values())[0]
+                        if (self._is_cross_section and self.cross_section_data is not None)
+                        else self.data
+                    )
+                    sig = evaluate(node, probe_data, registry)
+                    sig_arr = sig.values if isinstance(sig, pd.Series) else np.asarray(sig, dtype=float)
+                    sig_arr = np.asarray(sig_arr, dtype=float)
+                except Exception:
+                    continue
+                finite = sig_arr[np.isfinite(sig_arr)]
+                if finite.size == 0 or np.nanstd(sig_arr) < 1e-8:
+                    logger.debug(
+                        "算子表达式非常数信号被前置拦截: %s",
+                        expression,
+                    )
+                    continue
+
+                # 创建因子程序
+                parent_id = parent.get("factor_id", "?")
+                unique_key = f"op_{parent_id}_{generation}_{expression}_{time.time_ns()}"
+                factor_id = "fct_" + hashlib.md5(unique_key.encode()).hexdigest()[:8]
+
+                factor_name = f"op_{l1_op}_{generation}_{factor_id[:6]}"
+
+                new_factor = create_operator_factor(
+                    expression=expression,
+                    name=factor_name,
+                    market=self.market,
+                    family=parent.get("family", "operator"),
+                    narrative=(f"算子演化: {expression} (基于父因子 {parent.get('name', '?')})"),
+                    params={},
+                    trace_id=trace_id,
+                    source="operator_evolution",
+                )
+                # 覆盖产生的 factor_id 确保唯一
+                new_factor["factor_id"] = factor_id
+                new_factor["parent_id"] = parent_id
+                new_factor["generation"] = generation
+
+                summary = f"OpGen: {expression}, lookback={max_lookback}, fields={fields}"
+
+                logger.info("算子因子生成成功 [%s]: %s", factor_name, summary)
+                return new_factor, summary
+
+            except Exception as e:
+                logger.debug("算子因子生成尝试 %d/10 失败: %s", attempt + 1, e)
+                continue
+
+        raise RuntimeError(f"无法生成合法算子因子 (10 次尝试均失败, parent={parent.get('name', '?')})")
+
+    def _try_operator_engine_evolution(
+        self,
+        parent: FactorProgram,
+        generation: int,
+        trace_id: str,
+    ) -> Optional[FactorProgram]:
+        """算子演化引擎搜索（Phase 3+ / C.4）。
+
+        在 DSL 算子空间做适应度导向进化搜索，产物为 kind=OPERATOR 因子。
+        无评估数据或引擎失败时返回 None（由调用方回退随机组合生成）。
+
+        Returns:
+            引擎产出的 OPERATOR 因子，或 None
+        """
+        import hashlib
+
+        try:
+            from .operator_evolution import (
+                OperatorEvolutionConfig,
+                OperatorEvolutionEngine,
+            )
+        except Exception as e:
+            logger.debug("算子演化引擎导入失败: %s", e)
+            return None
+
+        try:
+            # 评估数据源: 横截面模式用代表序列（与 micro_evolution 一致）
+            if self._is_cross_section and self.cross_section_data is not None:
+                data = list(self.cross_section_data.values())[0].copy()
+            else:
+                data = self.data.copy()
+            target_col = "forward_return"
+            if self.forward_returns is None or len(self.forward_returns) != len(data):
+                logger.debug("算子演化引擎跳过: 无 forward_returns 评估数据")
+                return None
+            data[target_col] = self.forward_returns
+
+            # 种子由父因子 + 代际序号派生（GAP-074 P0-2）：同父因子不同代
+            # 产生不同搜索轨迹（原仅父因子派生产生完全确定性空转）；同父同代仍可复现
+            seed = int(
+                hashlib.md5(
+                    f"{parent.get('factor_id', '?')}::{generation}".encode(),
+                ).hexdigest()[:8],
+                16,
+            ) % (2**31)
+
+            # 数据泄露防护: 构建训练集掩码（前 60% 数据），
+            # 确保算子演化仅在训练集上计算适应度
+            train_ratio = 0.6
+            train_size = max(int(len(data) * train_ratio), 1)
+            train_mask = pd.Series(
+                [True] * train_size + [False] * (len(data) - train_size),
+                index=data.index,
+            )
+
+            engine = OperatorEvolutionEngine(
+                data_panel=data,
+                target_col=target_col,
+                config=OperatorEvolutionConfig(
+                    population_size=40,
+                    max_generations=8,
+                    random_seed=seed,
+                ),
+                train_mask=train_mask,
+            )
+            result = engine.evolve()
+            if result.best_fitness <= 0:
+                logger.info(
+                    "算子演化引擎无正适应度因子 [%s]，回退随机生成",
+                    parent.get("name", "?"),
+                )
+                return None
+
+            factor = engine.best_factor_program(
+                result,
+                name=f"op_evolved_{generation}_{parent.get('factor_id', '?')[:6]}",
+                market=self.market,
+                family=parent.get("family", "operator"),
+                narrative=(f"算子演化引擎: {result.best_expression} (基于父因子 {parent.get('name', '?')})"),
+                trace_id=trace_id,
+                parent_id=parent.get("factor_id", "?"),
+                generation=generation,
+            )
+            logger.info(
+                "算子演化引擎成功 [%s]: %s (fitness=%.4f)",
+                parent.get("name", "?"),
+                result.best_expression,
+                result.best_fitness,
+            )
+            return factor
+        except Exception as e:
+            logger.debug("算子演化引擎失败，回退随机生成: %s", e)
+            return None
 
     # ── Phase B.2.1: 快速预筛选（新增） ──────────────────
 
@@ -3524,7 +4174,7 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         # 检查3: 快速 IC 检查（导致 NaN 也视为无效）
         # 期货日频单品种时序 IC 信噪比低（常见 0.01-0.02 区间），
         # 阈值按市场自适应放宽，避免拦截本可进入截面评估的后代
-        ic_threshold = 0.01 if self.market == "futures" else 0.02
+        ic_threshold = 0.01
         fr = self.forward_returns
         if fr is not None and len(fr) == len(signal):
             valid = ~(np.isnan(signal) | np.isnan(fr))
@@ -3603,7 +4253,7 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
             return True, "", 0.0
 
         ic_abs = abs(float(np.mean(ics)))
-        ic_threshold = 0.01 if self.market == "futures" else 0.02
+        ic_threshold = 0.01
         if ic_abs < ic_threshold:
             return False, (f"横截面快速 IC 过低: abs(IC)={ic_abs:.4f} < {ic_threshold}"), 0.0
         return True, "", ic_abs
@@ -3930,6 +4580,53 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
 
         return report
 
+    def _record_audit_failed_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        trace_id: str,
+        audit_report: FactorAuditReport,
+        evaluation: Optional[FactorEvaluation] = None,
+    ) -> None:
+        """记录审计失败轨迹。
+
+        Args:
+            factor: 因子程序
+            generation: 当前代数
+            trace_id: 全链路 trace_id
+            audit_report: 审计报告
+            evaluation: 评估结果（可选）
+        """
+        import json
+
+        factor_id = factor.get("factor_id", "unknown")
+        factor_name = factor.get("name", "?")
+        sub_trace_id = f"{trace_id}_g{generation}_audit_fail_{factor_id[:8]}"
+
+        trace_dir = self.memory_dir / "traces"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        fp = trace_dir / f"{sub_trace_id}.json"
+
+        record: dict[str, Any] = {
+            "trace_id": sub_trace_id,
+            "parent_trace_id": trace_id,
+            "factor_id": factor_id,
+            "factor_name": factor_name,
+            "generation": generation,
+            "type": "audit_failed",
+            "timestamp": datetime.now().isoformat(),
+            "audit_report": audit_report.to_dict(),
+            "failure_analysis": audit_report.failure_analysis,
+        }
+        if evaluation:
+            record["evaluation"] = evaluation
+
+        fp.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        print(f"[evo] 审计失败轨迹已记录: {factor_name} → 代 {generation}, 通过率={audit_report.pass_rate:.0%}")
+
     # ── Phase A: 消融实验检查 ──────────────────────────
 
     # v2.50.0 判定语义：核心价格列（因子正常依赖的输入）与信息型消融模式
@@ -4000,6 +4697,43 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
             logger.warning("消融实验异常: %s", e)
             return {"passed": True, "error": str(e), "ablations": []}
 
+    def _record_ablation_failed_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        trace_id: str,
+        ablation_result: dict[str, Any],
+    ) -> None:
+        """记录消融实验失败轨迹。"""
+        import json
+
+        factor_id = factor.get("factor_id", "unknown")
+        factor_name = factor.get("name", "?")
+        sub_trace_id = f"{trace_id}_g{generation}_ablation_fail_{factor_id[:8]}"
+
+        trace_dir = self.memory_dir / "traces"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        fp = trace_dir / f"{sub_trace_id}.json"
+
+        record: dict[str, Any] = {
+            "trace_id": sub_trace_id,
+            "parent_trace_id": trace_id,
+            "factor_id": factor_id,
+            "factor_name": factor_name,
+            "generation": generation,
+            "type": "ablation_failed",
+            "timestamp": datetime.now().isoformat(),
+            "ablation_result": ablation_result,
+        }
+
+        fp.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        print(f"[evo] 消融失败轨迹已记录: {factor_name}")
+
+    # ── Phase B: 鲁棒性审查 ──────────────────────────
+
     def _run_robustness_check(
         self,
         factor: FactorProgram,
@@ -4039,6 +4773,41 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         except Exception as e:
             logger.warning("鲁棒性审查异常: %s", e)
             return {"passed": True, "error": str(e)}
+
+    def _record_robustness_failed_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        trace_id: str,
+        robustness_result: dict[str, Any],
+    ) -> None:
+        """记录鲁棒性审查失败轨迹。"""
+        import json
+
+        factor_id = factor.get("factor_id", "unknown")
+        factor_name = factor.get("name", "?")
+        sub_trace_id = f"{trace_id}_g{generation}_robustness_fail_{factor_id[:8]}"
+
+        trace_dir = self.memory_dir / "traces"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        fp = trace_dir / f"{sub_trace_id}.json"
+
+        record: dict[str, Any] = {
+            "trace_id": sub_trace_id,
+            "parent_trace_id": trace_id,
+            "factor_id": factor_id,
+            "factor_name": factor_name,
+            "generation": generation,
+            "type": "robustness_failed",
+            "timestamp": datetime.now().isoformat(),
+            "robustness_result": robustness_result,
+        }
+
+        fp.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        print(f"[evo] 鲁棒性失败轨迹已记录: {factor_name}")
 
     # ── Phase B: SHAP 可解释性分析 ──────────────────────
 
@@ -4112,6 +4881,190 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
             logger.warning("因果验证异常: %s", e)
             return {"passed": True, "error": str(e)}
 
+    def _record_causal_failed_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        trace_id: str,
+        causal_result: dict[str, Any],
+    ) -> None:
+        """记录因果验证失败轨迹。"""
+        import json
+
+        factor_id = factor.get("factor_id", "unknown")
+        factor_name = factor.get("name", "?")
+        sub_trace_id = f"{trace_id}_g{generation}_causal_fail_{factor_id[:8]}"
+
+        trace_dir = self.memory_dir / "traces"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        fp = trace_dir / f"{sub_trace_id}.json"
+
+        record: dict[str, Any] = {
+            "trace_id": sub_trace_id,
+            "parent_trace_id": trace_id,
+            "factor_id": factor_id,
+            "factor_name": factor_name,
+            "generation": generation,
+            "type": "causal_failed",
+            "timestamp": datetime.now().isoformat(),
+            "causal_result": causal_result,
+        }
+
+        fp.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        print(f"[evo] 因果失败轨迹已记录: {factor_name}")
+
+    def _record_success_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        mutation_type: str,
+        mutation_summary: str,
+        evaluation: FactorEvaluation,
+        lessons: list[str],
+        trace_id: str,
+    ) -> None:
+        """记录成功轨迹。"""
+        # 生成唯一子 trace_id（避免文件名碰撞）
+        sub_trace_id = f"{trace_id}_g{generation}_{mutation_type}_{factor['factor_id'][:8]}"
+        trace = create_trace_from_evaluation(
+            factor_id=factor["factor_id"],
+            parent_id=factor.get("parent_id"),
+            generation=generation,
+            mutation_type=mutation_type,
+            mutation_summary=mutation_summary,
+            evaluation=evaluation,
+            lessons=lessons,
+            trace_id=sub_trace_id,
+        )
+        self.experience_chain.record_success(trace)
+        self.state_manager.add_experience_ref(self.state_manager.load_or_init(), trace["trace_id"])
+
+    def _record_failure_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        mutation_type: str,
+        mutation_summary: str,
+        failure_reasons: list[str],
+        trace_id: str,
+        evaluation: Optional[FactorEvaluation] = None,
+    ) -> None:
+        """记录失败轨迹。"""
+        # 生成唯一子 trace_id（避免文件名碰撞）
+        sub_trace_id = f"{trace_id}_g{generation}_{mutation_type}_{factor['factor_id'][:8]}"
+        # 构造评估结果
+        if evaluation is None:
+            evaluation = FactorEvaluation(
+                factor_id=factor["factor_id"],
+                trace_id=sub_trace_id,
+                passed=False,
+                failure_reasons=failure_reasons or ["未知失败"],
+                evaluated_at=datetime.now().isoformat(),
+            )
+        else:
+            # 确保失败原因非空
+            if not evaluation.get("failure_reasons"):
+                evaluation["failure_reasons"] = failure_reasons or ["未知失败"]
+
+        trace = create_trace_from_evaluation(
+            factor_id=factor["factor_id"],
+            parent_id=factor.get("parent_id"),
+            generation=generation,
+            mutation_type=mutation_type,
+            mutation_summary=mutation_summary,
+            evaluation=evaluation,
+            lessons=[f"代 {generation} 失败: {r}" for r in failure_reasons[:3]],
+            trace_id=sub_trace_id,
+        )
+        try:
+            self.experience_chain.record_failure(trace)
+        except Exception:
+            pass  # 失败轨迹记录失败不应中断主循环
+
+    def _log_inspection_detail(
+        self,
+        factor: FactorProgram,
+        inspection: _QualityInspectionResult,
+        status: str,
+        generation: int,
+    ) -> None:
+        """打印详细的因子质检日志。
+
+        Args:
+            factor: 因子程序
+            inspection: 质检结果
+            status: 状态 ("通过" / "淘汰")
+            generation: 当前代数
+        """
+        factor_name = factor.get("name", factor.get("factor_id", "?"))
+        total = inspection.total_score
+        grade = inspection.grade
+        reason = inspection.reason
+
+        # 主日志行
+        icon = "✅" if status == "通过" else "❌"
+        print(f"[evo] {icon} 代{generation} 因子质检{status}: {factor_name} (等级={grade}, 总分={total}/50)")
+
+        # 淘汰时显示原因
+        if status == "淘汰" and reason:
+            print(f"       淘汰原因: {reason}")
+
+        # 显示各维度得分
+        dims = inspection.quality_score.get("dimension_scores", [])
+        if dims:
+            low_dims = [d for d in dims if d.get("score", 5) < 3]
+            if low_dims:
+                print("       ⚠️  低分项 (< 3.0):")
+                for d in low_dims[:5]:  # 最多显示 5 个低分项
+                    name = d.get("name", "?")
+                    score = d.get("score", 0)
+                    desc = d.get("description", "")
+                    print(f"         - {name}: {score:.1f}/5.0 ({desc})")
+
+    def _record_quality_filtered_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        trace_id: str,
+        inspection: _QualityInspectionResult,
+        evaluation: Optional[FactorEvaluation] = None,
+    ) -> None:
+        """记录质检过滤轨迹 (Phase A.1)。
+
+        当因子通过 Verifier 但质量评分低于阈值时记录。
+        """
+        sub_trace_id = f"{trace_id}_g{generation}_quality_filtered_{factor['factor_id'][:8]}"
+        reasons = [inspection.reason] if inspection.reason else ["质检淘汰"]
+        if evaluation is None:
+            evaluation = FactorEvaluation(
+                factor_id=factor["factor_id"],
+                trace_id=sub_trace_id,
+                passed=False,
+                failure_reasons=reasons,
+                evaluated_at=datetime.now().isoformat(),
+            )
+        else:
+            if not evaluation.get("failure_reasons"):
+                evaluation["failure_reasons"] = reasons
+
+        trace = create_trace_from_evaluation(
+            factor_id=factor["factor_id"],
+            parent_id=factor.get("parent_id"),
+            generation=generation,
+            mutation_type="quality_filtered",
+            mutation_summary=(f"质量评分淘汰: 等级={inspection.grade}, 总分={inspection.total_score}/50"),
+            evaluation=evaluation,
+            lessons=[f"质检淘汰: {inspection.reason}"],
+            trace_id=sub_trace_id,
+        )
+        try:
+            self.experience_chain.record_failure(trace)
+        except Exception:
+            pass
+
 
 # ─── CLI 入口 ─────────────────────────────────────────────
 
@@ -4168,6 +5121,7 @@ def main():
 
 if __name__ == "__main__":  # pragma: no cover
     main()
+
 
 __all__ = [
     "UCT_EXPLORATION_C",

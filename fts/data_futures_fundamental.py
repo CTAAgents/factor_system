@@ -331,18 +331,23 @@ class AkshareFuturesFundamentalProvider:
         return df
 
     def _fetch_inventory(self, variety: str) -> pd.DataFrame:
-        """主源东财库存，失败回退 99 期货库存。"""
-        em_code, name99 = VARIETY_MAP[variety]
-        try:
-            import akshare as ak  # type: ignore[import-untyped]
+        """主源东财库存，失败回退 99 期货库存。
 
-            raw = ak.futures_inventory_em(symbol=em_code)
-            df = self._normalize_inventory_em(raw)
-            if not df.empty:
-                logger.info("期货库存[%s] 东财 %d 行", variety, len(df))
-                return df
-        except Exception as e:  # noqa: BLE001
-            logger.warning("期货库存[%s] 东财接口失败: %s", variety, e)
+        东财接口 symbol 大小写敏感且代码表大小写不一致（rb/cu 小写、SR/CF/TA 大写），
+        依次尝试小写/大写两种形式，命中其一即返回。
+        """
+        em_code, name99 = VARIETY_MAP[variety]
+        for code in (em_code, em_code.upper()):
+            try:
+                import akshare as ak  # type: ignore[import-untyped]
+
+                raw = ak.futures_inventory_em(symbol=code)
+                df = self._normalize_inventory_em(raw)
+                if not df.empty:
+                    logger.info("期货库存[%s] 东财 %d 行", variety, len(df))
+                    return df
+            except Exception as e:  # noqa: BLE001
+                logger.warning("期货库存[%s] 东财接口失败(symbol=%s): %s", variety, code, e)
         if name99:
             try:
                 import akshare as ak  # type: ignore[import-untyped]

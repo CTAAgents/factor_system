@@ -12,14 +12,11 @@ HARNESS §trace_id 全链路: trace_id 必须贯穿所有模块、文档和日�
 
 from __future__ import annotations
 
-import json
 import secrets
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from ..core.atomic import atomic_write
 from .contracts import (
     DEFAULT_BUDGET_CONFIG,
     STATE_SCHEMA_VERSION,
@@ -70,13 +67,14 @@ def generate_session_id() -> str:
 
 
 class EvolutionStateManager:
-    """演化状态文件管理器。
+    """演化状态管理器（SSOT 为 state.duckdb，plans/29 P4 读路径切换）。
 
     约束:
-        1. 每次写入前自动备份到 state.json.backup
-        2. 状态文件损坏时从 backup 恢复；若无 backup 则冷启动
+        1. 每次写入落 state.duckdb（UPSERT + 历史追加），JSON 不再回写
+           （旧 state.json 退役为只读历史快照）
+        2. 状态缺失/损坏时冷启动 _init_state
         3. version 字段必须等于 EVOLUTION_VERSION，否则报错
-        4. trace_id 必须贯穿所有写入
+        4. trace_id（run_id）贯穿所有写入
 
     Usage:
         manager = EvolutionStateManager("memory/evolution")
@@ -85,17 +83,33 @@ class EvolutionStateManager:
         manager.save(state)
     """
 
-    def __init__(self, memory_dir: str | Path = "memory/evolution"):
+    def __init__(self, memory_dir: str | Path = "memory/evolution", state_store=None):
+        # 保留 memory_dir 以派生 namespace/key（stock 根目录 vs futures 子目录）
         self.memory_dir = Path(memory_dir)
-        self.state_file = self.memory_dir / STATE_FILE_NAME
-        self.backup_file = self.memory_dir / BACKUP_FILE_NAME
-        self.memory_dir.mkdir(parents=True, exist_ok=True)
+        self._store = state_store  # None → 全局 SSOT（供测试注入临时 store）
+
+    def _store_conn(self):
+        """返回状态存储连接（注入的或全局 SSOT）。"""
+        from fts.store.state_db import get_state_store
+
+        return self._store if self._store is not None else get_state_store()
+
+    def _ns_key(self) -> tuple[str, str]:
+        """派生 state.duckdb 的 (namespace, key)。
+
+        与 migrate_state_to_duckdb 规则一致：
+            memory/evolution/state.json        → ("evolution", "state")
+            memory/evolution/{parent}/state.json → ("evolution", "{parent}/state")
+        """
+        if self.memory_dir.name == "evolution":
+            return "evolution", "state"
+        return "evolution", f"{self.memory_dir.name}/state"
 
     def load_or_init(
         self,
         budget_limit: Optional[int] = None,
     ) -> EvolutionState:
-        """加载状态文件；若不存在或损坏则初始化新状态。
+        """从 state.duckdb 加载状态；缺失则冷启动初始化。
 
         Args:
             budget_limit: 预算上限（仅初始化时生效）
@@ -103,37 +117,22 @@ class EvolutionStateManager:
         Returns:
             EvolutionState
         """
-        # 优先加载主状态文件
-        state = self._try_load(self.state_file)
-        if state is None:
-            # 主文件不可用，尝试备份
-            state = self._try_load(self.backup_file)
-            if state is not None:
-                # 从备份恢复
-                self._write(state)
-            else:
-                # 冷启动
-                state = self._init_state(budget_limit)
-                self._write(state)
+        ns, key = self._ns_key()
+        data = self._store_conn().get(ns, key)
+        if isinstance(data, dict) and data.get("schema_version") == STATE_SCHEMA_VERSION:
+            return EvolutionState(**data)  # type: ignore[typeddict-item]
+        state = self._init_state(budget_limit)
+        self.save(state)
         return state
 
     def save(self, state: EvolutionState) -> None:
-        """保存状态 — 先写主文件，再镜像到 backup。
-
-        backup 始终反映最新已知良好状态，主文件外部损坏时可从 backup 恢复最新数据。
-        """
+        """保存状态 → 写 state.duckdb（SSOT，UPSERT + 历史追加）。"""
         # schema 版本一致性检查（仅状态结构变更时冷启动）
         if state.get("schema_version") != STATE_SCHEMA_VERSION:
             raise StateError(f"状态 schema 版本不匹配: {state.get('schema_version')} != {STATE_SCHEMA_VERSION}")
-        # 更新时间戳
         state["last_updated"] = datetime.now().isoformat()
-        # 先写主文件
-        self._write(state)
-        # 再镜像到 backup（保证 backup 始终反映最新已知良好状态）
-        try:
-            shutil.copy2(self.state_file, self.backup_file)
-        except OSError as e:
-            raise StateError(f"备份失败: {e}") from e
+        ns, key = self._ns_key()
+        self._store_conn().upsert(ns, key, state, run_id=state.get("run_id") or "")
 
     def mark_running(self, run_id: Optional[str] = None) -> EvolutionState:
         """标记状态为 running（演化开始）。"""
@@ -194,23 +193,6 @@ class EvolutionStateManager:
         self.save(state)
 
     # ─── 内部方法 ───
-
-    def _try_load(self, fp: Path) -> Optional[EvolutionState]:
-        """尝试加载 JSON 状态文件。失败返回 None。"""
-        if not fp.exists():
-            return None
-        try:
-            data = json.loads(fp.read_text(encoding="utf-8"))
-            # schema 版本检查（缺失视为不匹配）
-            if data.get("schema_version") != STATE_SCHEMA_VERSION:
-                return None
-            return EvolutionState(**data)  # type: ignore[typeddict-item]
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return None
-
-    def _write(self, state: EvolutionState) -> None:
-        """原子写入状态文件（临时文件 + rename，避免残缺文件）。"""
-        atomic_write(self.state_file, state)
 
     @staticmethod
     def _init_state(budget_limit: Optional[int]) -> EvolutionState:

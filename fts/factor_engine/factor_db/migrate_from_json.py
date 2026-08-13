@@ -10,7 +10,7 @@
 
 用法:
     python -m fts.factor_engine.factor_db.migrate_from_json \
-        --elite-dir memory/knowledge/factors/stocks_elite \
+        --elite-dir memory/knowledge/factors/futures_elite \
         --db-path data/factor_catalog.duckdb \
         [--dry-run] \
         [--force]
@@ -32,7 +32,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ELITE_DIR = "memory/knowledge/factors/stocks_elite"
+DEFAULT_ELITE_DIR = "memory/knowledge/factors/futures_elite"
 
 
 def compute_code_hash(code: str) -> str:
@@ -203,7 +203,7 @@ def migrate_factors(
                         metrics["turnover_monthly"],
                         data.get("decay_6m", 0.05),
                         factor_info["status"],
-                        data.get("market", "stock"),
+                        data.get("market", "futures"),
                         data.get("created_at", datetime.now().isoformat()),
                         True,
                         json.dumps(

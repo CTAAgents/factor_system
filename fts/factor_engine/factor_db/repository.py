@@ -36,7 +36,7 @@ class FactorRepository:
     _art_index_drop_count: int = 0
     _art_index_rebuild_count: int = 0
 
-    def __init__(self, db_path: str | Path | None = None, market: str = "stock"):
+    def __init__(self, db_path: str | Path | None = None, market: str = "futures"):
         from .schema import get_db_path
 
         if db_path:
@@ -131,7 +131,7 @@ class FactorRepository:
                 factor.get("turnover_monthly", 0.0),
                 factor.get("decay_6m", 0.05),
                 factor.get("status", "active"),
-                factor.get("market", "stock"),
+                factor.get("market", "futures"),
                 factor.get("family") or "other",
                 factor.get("is_elite", False),
                 json.dumps(factor.get("metadata", {})),
@@ -304,6 +304,8 @@ class FactorRepository:
                 "reason": reason,
             },
         )
+        # E.4 S1：嵌套 repo 用后即关，避免持有 L3 写锁
+        status_repo.close()
 
         # 3. 移动 JSON 文件到 _retired/ 目录
         json_moved_path: str | None = None
@@ -518,7 +520,7 @@ class FactorRepository:
         """查询因子列表。
 
         Args:
-            market: 市场过滤 ('stock'/'futures'/None)
+            market: 市场过滤 ('futures'/None)
             status: 状态过滤 ('active'/'failed'/'deleted'/None)
             is_elite: 是否精英因子
             min_sharpe: 最小 Sharpe
@@ -894,7 +896,7 @@ class FactorRepository:
 
     def get_eligible(
         self,
-        market: str = "stock",
+        market: str = "futures",
         min_ic: float = 0.02,
         min_sharpe: float = 0.5,
         require_elite: bool = True,
@@ -932,7 +934,7 @@ class FactorRepository:
 
     def get_diverse_factors(
         self,
-        market: str = "stock",
+        market: str = "futures",
         total_count: int = 10,
         max_per_family: int = 15,
         min_ic: float = 0.02,
@@ -1138,7 +1140,7 @@ class FactorQualityScoreRepository:
 
     _JSON_COLS = frozenset({"dimension_scores"})
 
-    def __init__(self, db_path: str | Path | None = None, market: str = "stock"):
+    def __init__(self, db_path: str | Path | None = None, market: str = "futures"):
         from .schema import get_db_path
 
         if db_path:
@@ -1152,6 +1154,11 @@ class FactorQualityScoreRepository:
             import duckdb
 
             self._conn = duckdb.connect(str(self._db_path))
+            # E.4 S1：启用单写多读锁配置（DuckDB 1.1+），写连接与只读连接可共存
+            try:
+                self._conn.execute("SET lock_configuration = true")
+            except Exception:  # noqa: BLE001 — 旧版不支持时静默降级
+                pass
         return self._conn
 
     def close(self) -> None:
@@ -1318,7 +1325,7 @@ class FactorStatusRepository:
     _art_index_drop_count: int = 0
     _art_index_rebuild_count: int = 0
 
-    def __init__(self, db_path: str | Path | None = None, market: str = "stock"):
+    def __init__(self, db_path: str | Path | None = None, market: str = "futures"):
         from .schema import get_db_path
 
         if db_path:
@@ -1332,6 +1339,11 @@ class FactorStatusRepository:
             import duckdb
 
             self._conn = duckdb.connect(str(self._db_path))
+            # E.4 S1：启用单写多读锁配置（DuckDB 1.1+），写连接与只读连接可共存
+            try:
+                self._conn.execute("SET lock_configuration = true")
+            except Exception:  # noqa: BLE001 — 旧版不支持时静默降级
+                pass
         return self._conn
 
     def close(self) -> None:
@@ -1472,7 +1484,7 @@ class FactorAuditReportRepository:
 
     _JSON_COLS = frozenset({"results_json", "summary_json", "recommendations"})
 
-    def __init__(self, db_path: str | Path | None = None, market: str = "stock"):
+    def __init__(self, db_path: str | Path | None = None, market: str = "futures"):
         from .schema import get_db_path
 
         if db_path:
@@ -1486,6 +1498,11 @@ class FactorAuditReportRepository:
             import duckdb
 
             self._conn = duckdb.connect(str(self._db_path))
+            # E.4 S1：启用单写多读锁配置（DuckDB 1.1+），写连接与只读连接可共存
+            try:
+                self._conn.execute("SET lock_configuration = true")
+            except Exception:  # noqa: BLE001 — 旧版不支持时静默降级
+                pass
         return self._conn
 
     def close(self) -> None:

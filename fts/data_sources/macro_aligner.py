@@ -137,8 +137,74 @@ def inject_macro_fields(
     return aligner.inject(df, fields=fields, trace_id=trace_id)
 
 
+def inject_macro_fields_to_panel(
+    panel: dict[str, pd.DataFrame],
+    fields: list[str] | None = None,
+    lag_days: int = 30,
+    db_path: Any | None = None,
+    trace_id: str = "",
+    aligner: MacroFieldAligner | None = None,
+) -> dict[str, pd.DataFrame]:
+    """面板级批量宏观注入（GAP-088 v2.103.0 信号管道/横截面演化复用）。
+
+    宏观序列为跨标的共享序列：先对每个字段拉取一次（源内部 edb_cache
+    缓存，跨标的二次调用命中，避免重复网络请求），再对每只标的 df 调
+    `MacroFieldAligner.align` 注入 export/import_data/cpi/rate/us_bond 列
+    （对齐回测管线逻辑，lag_days 发布滞后防未来函数）。
+
+    降级语义与 `MacroFieldAligner.inject` 一致：某字段拉取失败 → 该列不
+    注入；某标的注入异常 → 跳过该标的；均不阻断主路径（因子走 close 代理）。
+
+    Args:
+        panel: {symbol: OHLCV DataFrame}（DatetimeIndex）
+        fields: 要注入的因子字段名列表（默认 MACRO_FIELD_QUERIES 全部）
+        lag_days: 发布滞后天数（默认 30，对齐回测管线 macro_lag_days）
+        db_path: edb_cache DuckDB 路径（None = 默认 data/fts_history.duckdb）
+        trace_id: 链路追踪 ID
+        aligner: 可选 MacroFieldAligner（测试注入 mock source 用）
+
+    Returns:
+        注入宏观列后的 panel（失败降级返回原 panel/原标的，不抛异常）。
+    """
+    if panel is None:
+        return panel
+    field_list = list(fields) if fields is not None else list(MACRO_FIELD_QUERIES)
+    if not field_list:
+        return panel
+    if aligner is None:
+        aligner = MacroFieldAligner(lag_days=lag_days, db_path=db_path)
+    if aligner._source is None:  # noqa: SLF001 — 模块内复用 MacroFieldAligner 惰性源
+        from fts.data_sources.macro_eastmoney_source import EastmoneyMacroSource
+
+        aligner._source = EastmoneyMacroSource()
+    source = aligner._source  # noqa: SLF001
+
+    # 预拉取共享宏观序列（每字段一次；源 edb_cache 缓存避免重复网络请求）
+    series_map: dict[str, Optional[pd.Series]] = {}
+    for field in field_list:
+        indicator = MACRO_FIELD_QUERIES.get(field, field)
+        try:
+            series_map[field] = source.get_macro_series(indicator, db_path=db_path, trace_id=trace_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[macro] 面板预拉取失败 [%s]: %s，因子将走代理", field, e)
+            series_map[field] = None
+
+    # 逐标的对齐注入（某标的失败不阻断其余）
+    out: dict[str, pd.DataFrame] = dict(panel)
+    for sym, df in out.items():
+        if df is None or df.empty or not isinstance(df.index, pd.DatetimeIndex):
+            continue
+        try:
+            for field in field_list:
+                out[sym] = MacroFieldAligner.align(out[sym], series_map.get(field), field, lag_days=lag_days)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[macro] 面板注入失败 [%s]: %s，因子将走代理", sym, e)
+    return out
+
+
 __all__ = [
     "MACRO_FIELD_QUERIES",
     "MacroFieldAligner",
     "inject_macro_fields",
+    "inject_macro_fields_to_panel",
 ]

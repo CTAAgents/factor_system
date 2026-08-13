@@ -66,7 +66,7 @@ class FactorInspector:
         self,
         repo: Optional[FactorRepository] = None,
         lineage: Optional[FactorLineage] = None,
-        market: str = "stock",
+        market: str = "futures",
     ) -> None:
         self._repo = repo or FactorRepository(market=market)
         self._lineage = lineage or FactorLineage(self._repo)
@@ -401,7 +401,7 @@ class FactorReviewWorkflow:
         repo: Optional[FactorRepository] = None,
         db_path: Optional[str] = None,
         experience_chain: Optional[Any] = None,
-        market: str = "stock",
+        market: str = "futures",
     ) -> None:
         self._repo = repo or FactorRepository(market=market)
         self._db_path = db_path

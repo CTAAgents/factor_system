@@ -35,10 +35,11 @@ import asyncio
 import logging
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 
 import numpy as np
 import pandas as pd
@@ -468,15 +469,14 @@ class DuckDBWriter:
 
 
 class DuckDBReader:
-    """DuckDB 读连接池 — 读连接与单写者解耦。
+    """DuckDB 读连接池 — read_only 连接与写连接解耦。
 
-    并发模型根治（design/E.1）核心组件:
-      - 所有读操作走池内连接，与 DuckDBWriter 单写者连接并行共存
-      - DuckDB 单进程多连接基于 MVCC：读连接不参与写锁竞争，
-        写提交期间读侧看到快照，互不阻塞
-      - 注意: DuckDB 不允许同一文件并存可写连接与 read_only=True 连接
-        （"different configuration" 异常），故读池连接为普通连接，
-        「只用于读」由代码纪律保证（池内连接禁止 execute 写语句）
+    并发模型根治（design/E.1 + E.4 S1）核心组件:
+      - 所有读操作走池内连接，连接为 `read_only=True`（零写语义，不持有写锁）
+      - DuckDB 1.1+ `lock_configuration=true`（写连接已启用）下单进程内
+        可写连接 + 只读连接可共存；跨进程写锁存在时只读连接打开可能短暂
+        失败（写窗口已由 E.4 filelock 收敛至秒级，读侧由既有降级链兜底）
+      - 读侧不参与写锁竞争，写提交期间读侧基于 MVCC 快照
 
     用法:
         reader = DuckDBReader(path, max_connections=4)
@@ -500,17 +500,17 @@ class DuckDBReader:
         self._pool: list[Any] = []
 
     def acquire(self) -> Any:
-        """获取一个连接（池内复用或新建）。
+        """获取一个连接（池内复用或新建，read_only=True）。
 
         Returns:
-            DuckDB 连接对象（只读语义由调用方纪律保证）
+            DuckDB read_only 连接对象（写操作将被 DuckDB 拒绝）
         """
         with self._lock:
             if self._pool:
                 return self._pool.pop()
             import duckdb  # type: ignore[import-untyped]
 
-            return duckdb.connect(str(self._path))
+            return duckdb.connect(str(self._path), read_only=True)
 
     def release(self, conn: Any) -> None:
         """归还只读连接（池满时关闭）。
@@ -539,47 +539,55 @@ class DuckDBReader:
             logger.info("DuckDBReader 已关闭: %s (pool=%d)", self._path, self._max_connections)
 
 
-# ─── 模块级 DuckDB 连接（读写分离 + 兼容 _get_db() 调用方）──
+# ─── 模块级 DuckDB 连接（E.4 S1：写短生命周期 + 读 read_only）──
 
-_DB: Optional[DuckDBConnection] = None
-_WRITER: Optional[DuckDBWriter] = None
 _READER: Optional[DuckDBReader] = None
 
 
-def _get_writer() -> DuckDBWriter:
-    """获取全局单写者（E.1 并发模型根治）。
+@contextmanager
+def _write_scope(timeout: float = 30.0) -> Iterator[DuckDBWriter]:
+    """写窗口 contextmanager（E.4 S1）：跨进程写锁 + 短生命周期写连接。
 
-    所有写操作统一经此入口，保证对同一 DuckDB 文件任意时刻
-    至多一个可写连接（单写者）。进程内由 DuckDBWriter 内部写锁串行。
+    写操作在 `duckdb_write_lock` 保护下以短连接执行；窗口结束（with 退出）
+    即关闭连接并释放跨进程写锁——写锁存活从「进程级（小时）」降到「秒级」。
+
+    Args:
+        timeout: 跨进程写锁等待上限（秒），超时抛 TimeoutError
+
+    Usage:
+        with _write_scope() as writer:
+            writer.execute("DELETE FROM t WHERE symbol = ?", [s])
+            writer.executemany("INSERT INTO t VALUES (?, ?)", rows)
     """
-    global _WRITER  # pylint: disable=global-statement
-    if _WRITER is None:
-        try:
-            batch_size = 1000
-            commit_every = 100
-            try:
-                from fts.config.settings import get_config
+    from fts.store.duckdb_lock import duckdb_write_lock
 
-                cfg = get_config()
-                batch_size = cfg.duckdb_batch_size
-                commit_every = cfg.duckdb_commit_every
-            except Exception:  # noqa: BLE001
-                pass
-            _WRITER = DuckDBWriter(_DUCKDB_PATH, batch_size=batch_size, commit_every=commit_every)
-        except Exception as e:
-            raise FuturesDataError(f"DuckDB 写连接初始化失败: {e}") from e
-    return _WRITER
+    with duckdb_write_lock(_DUCKDB_PATH, timeout=timeout):
+        writer = DuckDBWriter(_DUCKDB_PATH)
+        try:
+            yield writer
+        finally:
+            writer.close()
+
+
+def _get_writer() -> DuckDBWriter:
+    """创建一次性短生命周期写连接（E.4 S1：不再全局常驻）。
+
+    ⚠️ deprecated：新代码应使用 `_write_scope()`（filelock + 写完即关）。
+    本函数仅为兼容旧调用方（脚本），返回的连接**必须在使用后 close()**，
+    否则仍会持有写锁到进程结束。
+    """
+    return DuckDBWriter(_DUCKDB_PATH)
 
 
 def _get_reader() -> Any:
-    """获取读连接（E.1 并发模型根治）。
+    """获取读连接（E.4 S1：read_only=True，不持有写锁）。
 
-    所有读操作走池内连接，与写连接解耦、互不阻塞。
-    返回 DuckDB 原生连接对象（.execute()/.fetchall() 可用），
+    所有读操作走池内 read_only 连接，与写连接解耦。
+    返回 DuckDB 原生连接对象（.execute()/.fetchall() 可用，写操作被拒），
     调用方完成后需调用 `_release_reader(conn)` 归还。
 
     Returns:
-        DuckDB 连接对象
+        DuckDB read_only 连接对象
     """
     global _READER  # pylint: disable=global-statement
     if _READER is None:
@@ -605,21 +613,14 @@ def _release_reader(conn: Any) -> None:
 
 
 def _get_db() -> Any:
-    """延迟获取 DuckDB 连接（兼容现有调用方）。
+    """延迟获取 DuckDB 连接（兼容读语义调用方，E.4 S1 改 read_only 短连接）。
 
-    返回 DuckDB 原生连接对象（.execute() 可用），
-    但底层使用 DuckDBConnection 管理重试和生命周期。
-
-    ⚠️ 兼容入口：仅用于读语义的旧调用方；新代码统一用
-    `_get_reader()`（读）/ `_get_writer()`（写）。
+    ⚠️ 兼容入口：返回 `read_only=True` 连接，**不持有写锁**；
+    调用方使用后必须 `close()`。新代码用 `_get_reader()`/`_release_reader()`。
     """
-    global _DB  # pylint: disable=global-statement
-    if _DB is None:
-        try:
-            _DB = DuckDBConnection(_DUCKDB_PATH, concurrency_retries=3)
-        except Exception as e:
-            raise FuturesDataError(f"DuckDB 连接初始化失败: {e}") from e
-    return _DB.connect()
+    import duckdb  # type: ignore[import-untyped]
+
+    return duckdb.connect(str(_DUCKDB_PATH), read_only=True)
 
 
 # ─── 期货数据提供者 ───────────────────────────────────────
@@ -721,6 +722,7 @@ class FuturesDataProvider:
                 tick_sources=tick_sources,
                 db_path=db_path,
                 cache_max_age_days=30,
+                minute_cache_max_age_days=_agg_cfg().minute_cache_max_age_days,
             )
             logger.info(
                 "FuturesDataAggregator 初始化完成（源数=%d, 分钟源数=%d, tick 源数=%d）",
@@ -738,6 +740,8 @@ class FuturesDataProvider:
 
         GAP-083 补充 amount 输出（aggregator 17 列含 amount，TDX_LOCAL 真实值）；
         缺失时补 0.0（vwap 回退典型价逻辑兼容）。
+        与 _from_kline_cache 对齐：settle/hold 无效（NA/≤0 占位）代理兜底，
+        防止缓存中未回填的 0 占位（如股指 settle sina 源缺失）流入因子计算。
         """
         df = df.copy()
         df["date"] = pd.to_datetime(df["date"])
@@ -745,6 +749,12 @@ class FuturesDataProvider:
         df.sort_index(inplace=True)
         if "amount" not in df.columns:
             df["amount"] = 0.0
+        # settle 代理：(H+L+C)/3 —— 与 vwap 回退公式一致
+        mask_settle = df["settle"].isna() | (df["settle"] <= 0)
+        df.loc[mask_settle, "settle"] = (df["high"] + df["low"] + df["close"]) / 3.0
+        # hold 代理：20 日滚动均量
+        mask_hold = df["hold"].isna() | (df["hold"] <= 0)
+        df.loc[mask_hold, "hold"] = df["volume"].rolling(window=20, min_periods=1).mean()
         return df[["open", "high", "low", "close", "volume", "amount", "vwap", "hold", "settle"]]
 
     # ── 单标的 OHLCV ──
@@ -1945,6 +1955,9 @@ def sync_contract_kline(
 def _write_contract_kline(base: str, rows: list[tuple]) -> None:
     """将具体合约日线写入 contract_kline（按品种全量重写，幂等）。
 
+    E.4 S1：写操作在 `_write_scope()`（filelock + 短连接）内执行，
+    写锁存活从进程级降到秒级。
+
     Args:
         base: 品种基础代码（如 "RB"，无 "0" 后缀）
         rows: (symbol, contract, period, date, open, high, low, close,
@@ -1952,22 +1965,22 @@ def _write_contract_kline(base: str, rows: list[tuple]) -> None:
     """
     from fts.data_sources.migrate import migrate_schema
 
-    writer = _get_writer()
-    try:
-        migrate_schema(str(_get_db_path()))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("[contract_kline] migrate_schema 失败: %s", e)
-    # 按品种全量重写（保证与最新活跃合约集一致）
-    writer.execute("DELETE FROM contract_kline WHERE symbol = ?", [base])
-    writer.executemany(
-        """
-        INSERT INTO contract_kline (
-            symbol, contract, period, date, open, high, low, close,
-            volume, amount, hold, settle, source, fetched_at, trace_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
+    with _write_scope() as writer:
+        try:
+            migrate_schema(str(_get_db_path()))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[contract_kline] migrate_schema 失败: %s", e)
+        # 按品种全量重写（保证与最新活跃合约集一致）
+        writer.execute("DELETE FROM contract_kline WHERE symbol = ?", [base])
+        writer.executemany(
+            """
+            INSERT INTO contract_kline (
+                symbol, contract, period, date, open, high, low, close,
+                volume, amount, hold, settle, source, fetched_at, trace_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
 
 
 def _get_db_path() -> str:
@@ -2113,28 +2126,52 @@ DYNAMIC_POOL_CACHE: str = str(
 )
 
 
+def _extract_pool(value: Any) -> list[str] | None:
+    """从动态池值（dict 含 pool 列表）提取有效品种列表；非法返回 None。"""
+    pool = value.get("pool") if isinstance(value, dict) else None
+    if isinstance(pool, list) and pool:
+        valid = [s for s in pool if isinstance(s, str) and s.strip()]
+        if valid:
+            return valid
+    return None
+
+
 def get_dynamic_core_subset() -> list[str]:
     """读取数据驱动动态核心池；缓存缺失/损坏时回退静态 FUTURES_CORE_SUBSET。
 
     动态池由 scripts/sync_liquidity_pool.py 定期刷新落盘（渐进式替换 +
     产业覆盖约束，见 GAP-054）。本函数纯读取、不抛异常，运行期零风险降级：
-    - 缓存文件不存在 / 格式非法 / pool 为空 → 回退静态清单
+    - SSOT `state.duckdb`（plans/29 P4 读路径切换）→ JSON 缓存（兼容期）→ 静态清单
     - 任意异常 → 回退静态清单（降级优先）
     """
     import json
 
+    # 1) SSOT: state.duckdb（读路径切换，plans/29 P4）
+    try:
+        from fts.store.state_db import StateKVStore
+
+        store = StateKVStore()
+        try:
+            pool = _extract_pool(store.get("portfolio", "futures_dynamic_pool"))
+            if pool:
+                return pool
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 — 降级优先，绝不阻断运行期
+        pass
+
+    # 2) 兼容: JSON 缓存（冻结期退役前保留）
     try:
         path = Path(DYNAMIC_POOL_CACHE)
-        if not path.exists():
-            return list(FUTURES_CORE_SUBSET)
-        data = json.loads(path.read_text(encoding="utf-8"))
-        pool = data.get("pool")
-        if not isinstance(pool, list) or not pool:
-            return list(FUTURES_CORE_SUBSET)
-        valid = [s for s in pool if isinstance(s, str) and s.strip()]
-        return valid or list(FUTURES_CORE_SUBSET)
-    except Exception:  # noqa: BLE001 — 降级优先，绝不阻断运行期
-        return list(FUTURES_CORE_SUBSET)
+        if path.exists():
+            pool = _extract_pool(json.loads(path.read_text(encoding="utf-8")))
+            if pool:
+                return pool
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 3) 降级: 静态池
+    return list(FUTURES_CORE_SUBSET)
 
 
 __all__ = [

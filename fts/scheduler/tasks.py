@@ -5,9 +5,7 @@ fts.scheduler.tasks — FTS 定时任务注册表。
     - l1_meta_loop          : 工作日每日 07:59 触发 L1 Meta-Loop（知识补给 + 种子注入，对齐 TRAE Schedule 期货 L1）
     - l2_evolution_loop     : 工作日每日 00:00 触发 L2 因子演化（夜间演化，对齐 TRAE Schedule 期货 L2）
     - l3_portfolio_loop     : 每周五 19:00 触发 L3 组合权重重算（期货，与信号管道解绑，GAP-072，对齐 TRAE Schedule）
-    - l3_portfolio_loop_stock : 每周五 19:30 触发 L3 组合权重重算（股票，GAP-072，对齐 TRAE Schedule）
     - futures_signal_pipeline : 工作日每日 20:00 期货信号管道（独立运行，权重周五重算其余日冻结，GAP-072）
-    - daily_signal_pipeline   : 工作日每日 08:45 股票/ETF 信号管道（独立运行，GAP-072）
     - health_check          : 每 10 分钟触发健康检查
 
 cron 表达式格式（5 字段）: minute hour day-of-month month day-of-week
@@ -111,13 +109,6 @@ def register_default_tasks() -> None:
             trace_id_prefix="fts.l3",
         ),
         TaskSpec(
-            name="l3_portfolio_loop_stock",
-            cron_expression="30 19 * * 5",  # 每周五 19:30（对齐 TRAE Schedule 股票 L3 32745e2b，GAP-072）
-            callable_path="fts.scheduler.jobs.l3_portfolio_loop_stock_job",
-            description="L3 Portfolio Loop（股票路径：elite_dir + market=stock）：每周五重算股票组合权重（GAP-063 组合质检前置接入），与股票信号管道解绑",
-            trace_id_prefix="fts.l3.stock",
-        ),
-        TaskSpec(
             name="futures_signal_pipeline",
             cron_expression="0 20 * * 1-5",  # 工作日每日 20:00（GAP-072 解绑后独立运行）
             callable_path="fts.scheduler.jobs.futures_signal_pipeline_job",
@@ -125,25 +116,11 @@ def register_default_tasks() -> None:
             trace_id_prefix="fts.signal",
         ),
         TaskSpec(
-            name="daily_signal_pipeline",
-            cron_expression="45 8 * * 1-5",  # 工作日每日 08:45（开盘前，GAP-072 解绑后独立运行）
-            callable_path="fts.scheduler.jobs.daily_signal_pipeline_job",
-            description="股票/ETF 信号管道（每日独立运行）：Ridge 权重周五重算并存快照，其余日冻结复用快照仅刷新因子值 → reports/stock/{date}/daily_signals_*.md",
-            trace_id_prefix="fts.signal.stock",
-        ),
-        TaskSpec(
             name="sync_futures_data",
             cron_expression="30 17 * * 1-5",  # 工作日 17:30
             callable_path="fts.scheduler.jobs.sync_futures_data_job",
             description="Phase 14.5 期货多源数据同步（DUCKDB 缓存 + TQ 源 → DuckDB）",
             trace_id_prefix="fts.sync",
-        ),
-        TaskSpec(
-            name="sync_stock_data",
-            cron_expression="0 17 * * 1-5",  # 工作日 17:00
-            callable_path="fts.scheduler.jobs.sync_stock_data_job",
-            description="股票/ETF 日 K 线缓存同步（腾讯 API → DuckDB stock_kline_cache，供次日信号管道/演化）",
-            trace_id_prefix="fts.sync.stock",
         ),
         TaskSpec(
             name="health_check",
@@ -193,6 +170,13 @@ def register_default_tasks() -> None:
             callable_path="fts.scheduler.jobs.sync_liquidity_pool_job",
             description="数据驱动动态池刷新（GAP-054）：TqSdk 流动性快照 → 渐进式替换 → 落盘动态池缓存",
             trace_id_prefix="fts.lpool",
+        ),
+        TaskSpec(
+            name="mhf_signal",
+            cron_expression="*/30 * * * *",  # 每 30 分钟（对齐 30m bar 收盘；最新 bar 无更新时幂等）
+            callable_path="fts.scheduler.jobs.mhf_signal_job",
+            description="MHF 中高频信号（plans/33 Phase 4）：30m 反转混合信号 → SignalBridge 发布（JSON）",
+            trace_id_prefix="fts.mhf",
         ),
     ]
     for spec in defaults:

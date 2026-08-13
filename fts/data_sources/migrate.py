@@ -232,28 +232,6 @@ CREATE TABLE IF NOT EXISTS option_chain_cache (
 )
 """
 
-# v2.86.0 (GAP-xxx): stock_kline_cache 股票/ETF 日 K 线缓存表。
-# 与期货 kline_cache 同风格，去掉期货特有字段（hold/settle/pre_settle/
-# oi_change/vwap），保留 A 股/ETF 全量 OHLCV + amount + 复权因子。
-STOCK_KLINE_CACHE_CREATE_DDL: str = """
-CREATE TABLE IF NOT EXISTS stock_kline_cache (
-    symbol      VARCHAR,
-    period      VARCHAR,
-    date        DATE,
-    open        DOUBLE,
-    high        DOUBLE,
-    low         DOUBLE,
-    close       DOUBLE,
-    volume      DOUBLE,
-    amount      DOUBLE,
-    adj_factor  DOUBLE,
-    source      VARCHAR,
-    fetched_at  TIMESTAMP,
-    trace_id    VARCHAR,
-    PRIMARY KEY (symbol, period, date, source)
-)
-"""
-
 
 # ─── 内部辅助函数 ──────────────────────────────────────────
 
@@ -387,11 +365,7 @@ def migrate_schema(db_path: str | Path) -> dict[str, int]:
         if _create_table_if_absent(con, "option_chain_cache", OPTION_CHAIN_CACHE_DDL):
             tables_created += 1
 
-        # 3.5) stock_kline_cache（股票/ETF 日 K 线缓存，v2.86.0）
-        if _create_table_if_absent(con, "stock_kline_cache", STOCK_KLINE_CACHE_CREATE_DDL):
-            tables_created += 1
-
-        # 4) tick_cache（TQSDK tick 逐笔数据缓存，v2.31.0）
+        # 3.5) tick_cache（TQSDK tick 逐笔数据缓存，v2.31.0）
         if _create_table_if_absent(con, "tick_cache", TICK_CACHE_CREATE_DDL):
             tables_created += 1
         else:
@@ -428,5 +402,4 @@ __all__ = [
     "MINUTE_CACHE_CREATE_DDL",
     "EDB_CACHE_DDL",
     "OPTION_CHAIN_CACHE_DDL",
-    "STOCK_KLINE_CACHE_CREATE_DDL",
 ]

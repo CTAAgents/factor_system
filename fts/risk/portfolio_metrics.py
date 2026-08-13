@@ -270,7 +270,7 @@ def evaluate_metrics(
           "force_close": bool,      # 是否触发强平
         }
     """
-    cfg = dict(_DEFAULT_CONFIG)
+    cfg: dict[str, Any] = dict(_DEFAULT_CONFIG)
     if config:
         cfg.update({k: v for k, v in config.items() if v is not None})
 

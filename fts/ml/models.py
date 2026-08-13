@@ -875,19 +875,19 @@ class TransformerFactorModel:
         b, seq, _ = X_norm.shape
         d = self.hidden
         pred, cache = self._forward(X_norm)
-        X, Q, K, V, logits, attn, ctx, mean, std, ctx_ln = (
-            cache["X"], cache["Q"], cache["K"], cache["V"], cache["logits"],
-            cache["attn"], cache["ctx"], cache["mean"], cache["std"], cache["ctx_ln"],
+        X, Q, K, V, attn, std, ctx_ln = (
+            cache["X"], cache["Q"], cache["K"], cache["V"],
+            cache["attn"], cache["std"], cache["ctx_ln"],
         )
 
         d_out = 2.0 * (pred - y) / b  # MSE 梯度（除批次）
         d_tanh = d_out * (1.0 - pred ** 2)  # (b,)
+        assert self._Wo is not None
         d_Wo = ctx_ln[:, -1, :].T @ d_tanh[:, None]  # (d, 1)
         d_bo = np.array([float(np.sum(d_tanh))])
         d_ctx_ln_last = d_tanh[:, None] * self._Wo.T  # (b, d)
 
         # LayerNorm 反向（最后位置）
-        ctx_last = ctx[:, -1, :]  # (b, d)
         ctx_ln_last = ctx_ln[:, -1, :]
         d_ctx_last = (d_ctx_ln_last - d_ctx_ln_last.mean(axis=-1, keepdims=True)
                       - ctx_ln_last * (d_ctx_ln_last * ctx_ln_last).mean(axis=-1, keepdims=True)) / std[:, -1, :]

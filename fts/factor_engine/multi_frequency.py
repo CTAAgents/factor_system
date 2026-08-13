@@ -53,9 +53,9 @@ def _default_minute_loader() -> MinuteLoader:
     """延迟构造默认分钟数据加载器（FuturesDataAggregator.get_minute_ohlcv）。"""
 
     def loader(symbol: str, days: int, frequency: str, trace_id: str = "") -> pd.DataFrame:
-        from fts.data_futures import FuturesDataAggregator
+        from fts.data_futures import FuturesDataProvider
 
-        return FuturesDataAggregator().get_minute_ohlcv(
+        return FuturesDataProvider().get_minute_ohlcv(
             symbol, days, frequency, trace_id
         )
 

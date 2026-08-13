@@ -127,6 +127,7 @@ class DeepFactorGenerator:
         X_train, y_train = X[:n_train], y_seq[:n_train]
         X_val, y_val = X[n_train:], y_seq[n_train:]
 
+        model: Any
         try:
             if self.config.model_kind == "transformer":
                 model = TransformerFactorModel(

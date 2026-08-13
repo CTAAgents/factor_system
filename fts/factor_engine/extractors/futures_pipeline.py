@@ -392,6 +392,7 @@ class FuturesExtractorPipeline(BaseExtractorPipeline):
         pause_tinysoft_after_first: bool = True,
         llm_client: Optional[Any] = None,
         macro_enabled: bool = True,
+        state_store: Any | None = None,
     ):
         """
         Args:
@@ -399,6 +400,7 @@ class FuturesExtractorPipeline(BaseExtractorPipeline):
             pause_tinysoft_after_first: 是否在首次提取后自动暂停天软源
             llm_client: LLM 客户端（用于动态因子提取）
             macro_enabled: 是否启用宏观事件提取器（GAP-I103）
+            state_store: 可选状态存储（StateKVStore），缺省用全局 SSOT（供测试隔离）
         """
         self._pause_tinysoft_after_first = pause_tinysoft_after_first
         self._first_extract = True
@@ -444,6 +446,7 @@ class FuturesExtractorPipeline(BaseExtractorPipeline):
             extractors=extractors,
             market="futures",
             state_path=state_path,
+            state_store=state_store,
         )
 
     def extract(self, trace_id: str) -> list[SeedCandidate]:

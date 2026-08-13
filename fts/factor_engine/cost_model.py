@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional, TypedDict
+from typing import Any, Optional, TypedDict, cast
 
 import numpy as np
 import pandas as pd
@@ -33,7 +33,7 @@ class CostConfig(TypedDict, total=False):
     roll_cost_bps: float  # 展期成本（基点/次，期货主力换月穿越时扣除，v2.58.0 GAP-046）
     margin_rate: float  # 保证金占用比例（期货 0.12 / 股票、ETF 全额 1.0，C7 融资成本）
     financing_rate_annual: float  # 年化融资利率（0=关闭融资成本，C7）
-    market: str  # "futures" / "stock" / "etf"
+    market: str  # "futures"
 
 
 class AdjustedMetrics(TypedDict, total=False):
@@ -60,32 +60,8 @@ _DEFAULT_FUTURES: CostConfig = CostConfig(
     market="futures",
 )
 
-_DEFAULT_STOCK: CostConfig = CostConfig(
-    slippage_bps=1.0,
-    commission_bps=0.8,
-    impact_bps_per_pct=2.0,
-    min_cost_bps=0.5,
-    roll_cost_bps=0.0,  # 股票/ETF 无主力换月
-    margin_rate=1.0,  # C7: 股票全额资金占用
-    financing_rate_annual=0.0,
-    market="stock",
-)
-
-_DEFAULT_ETF: CostConfig = CostConfig(
-    slippage_bps=0.5,
-    commission_bps=0.3,
-    impact_bps_per_pct=1.0,
-    min_cost_bps=0.5,
-    roll_cost_bps=0.0,  # 股票/ETF 无主力换月
-    margin_rate=1.0,  # C7: ETF 全额资金占用
-    financing_rate_annual=0.0,
-    market="etf",
-)
-
 _DEFAULT_MARKET_CONFIGS: dict[str, CostConfig] = {
     "futures": _DEFAULT_FUTURES,
-    "stock": _DEFAULT_STOCK,
-    "etf": _DEFAULT_ETF,
 }
 
 # 成本参数环境变量（C7：FTS_COST_*，实证标定结果注入入口）
@@ -109,13 +85,13 @@ def load_market_cost_config(
     优先级: overrides > FTS_COST_* 环境变量 > 内置 _DEFAULT_*。
 
     Args:
-        market: 市场类型（"futures" / "stock" / "etf"）
+        market: 市场类型（"futures"）
         overrides: 显式覆盖项（如实证标定结果 {impact_bps_per_pct: 1.5}）
 
     Returns:
         合并后的 CostConfig。
     """
-    base = dict(_DEFAULT_MARKET_CONFIGS.get(market, _DEFAULT_FUTURES))
+    base: dict[str, Any] = dict(_DEFAULT_MARKET_CONFIGS.get(market, _DEFAULT_FUTURES))
     # 环境变量
     for key, env_name in _COST_ENV_KEYS.items():
         raw = os.getenv(env_name)
@@ -129,7 +105,7 @@ def load_market_cost_config(
         for key, value in overrides.items():
             if key in _COST_ENV_KEYS:
                 base[key] = float(value)
-    return CostConfig(**base)
+    return cast(CostConfig, base)
 
 # 假设的年化波动率（用于夏普成本惩罚估算）
 _ASSUMED_ANNUAL_VOL = 0.15
@@ -175,11 +151,11 @@ class TransactionCostModel:
             if market not in self._market_configs:
                 self._market_configs[market] = cfg
 
-    def get_cost_bps(self, market: str = "stock") -> CostConfig:
+    def get_cost_bps(self, market: str = "futures") -> CostConfig:
         """获取指定市场的成本配置。
 
         Args:
-            market: 市场名称（"futures" / "stock" / "etf"）。
+            market: 市场名称（"futures"）。
 
         Returns:
             该市场的 CostConfig。

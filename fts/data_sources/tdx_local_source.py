@@ -209,7 +209,7 @@ def _tdx_stock_code(symbol: str) -> str:
     raw = symbol.strip().lower()
     for pfx in ("sh", "sz"):
         if raw.startswith(pfx):
-            raw = raw[len(pfx):]
+            raw = raw[len(pfx) :]
     if len(raw) != 6 or not raw.isdigit():
         return symbol
     # 沪市 6/9 开头、沪 ETF 5 开头；其余默认深市（0/3 开头、159 ETF）
@@ -233,7 +233,9 @@ def fetch_stock_ohlcv(
         adjust: 复权方式（"qfq" 前复权 → dividend_type 'front'；"hfq" → 'back'；其余不复权）
 
     Returns:
-        DataFrame（index=DatetimeIndex，列 open/high/low/close/volume）或 None（失败/无数据）。
+        DataFrame（index=DatetimeIndex，列 open/high/low/close/volume/amount/vwap/pre_close/change_pct，
+        GAP-084 扩展列：amount 真实成交额或 0.0 占位、vwap 精确/典型价回退、pre_close 前收、change_pct 涨跌幅）
+        或 None（失败/无数据）。
     """
     tdx_code = _tdx_stock_code(symbol)
     dividend = {"qfq": "front", "hfq": "back"}.get(adjust or "", "none")
@@ -274,8 +276,20 @@ def fetch_stock_ohlcv(
         df = df.tail(days).reset_index(drop=True)
     # 涨跌幅（小数：0.05 = +5%；首日为 NaN，供信号报告 change_pct 列）
     df["change_pct"] = pd.to_numeric(df["close"], errors="coerce").pct_change()
+    # GAP-084 (v2.103.0): 扩展 amount/vwap/pre_close 列（对齐 _process_daily 模式）
+    # amount: TQ 日线 17 列 schema 含真实成交额则保留，缺失补 0.0（vwap 回退典型价兼容）
+    if "amount" in df.columns:
+        df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+    else:
+        df["amount"] = 0.0
+    typical = (df["high"] + df["low"] + df["close"]) / 3
+    amt = pd.to_numeric(df["amount"], errors="coerce")
+    vol = pd.to_numeric(df["volume"], errors="coerce")
+    vwap = amt / vol
+    df["vwap"] = vwap.where(amt.gt(0) & vol.gt(0), typical)
+    df["pre_close"] = df["close"].shift(1)
     df = df.set_index("date")
-    return df[list(required) + ["change_pct"]]
+    return df[list(required) + ["amount", "vwap", "pre_close", "change_pct"]]
 
 
 class TdxLocalSource(BaseFuturesSource):
@@ -616,5 +630,4 @@ __all__ = [
     "get_annualization_factor",
     "get_default_zscore_window",
     "TDX_RPC_URL",
-    "fetch_stock_ohlcv",
 ]

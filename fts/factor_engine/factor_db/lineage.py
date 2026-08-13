@@ -29,12 +29,12 @@ class FactorLineage:
     支持因子演化谱系、评估历史、使用记录的完整查询。
     """
 
-    def __init__(self, repo=None, market: str = "stock"):
+    def __init__(self, repo=None, market: str = "futures"):
         """初始化血缘审计器。
 
         Args:
             repo: FactorRepository 实例（可选，延迟初始化）
-            market: 市场类型（"stock" / "futures"），延迟初始化时使用
+            market: 市场类型（"futures"），延迟初始化时使用
         """
         self._repo = repo
         self._market = market
