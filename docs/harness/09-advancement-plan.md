@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.104.0+4
+> 版本: v2.104.0+12
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -785,8 +785,8 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 
 **核心产出**:
 - ✅ 调度解绑：l3_portfolio_loop 期货每周五 19:00（v2.99.0 由每日 20:00 → 每周五 20:00，v2.101.0 对齐 TRAE Schedule 调整至 19:00）、l3_portfolio_loop_stock 每周五 19:30（v2.99.0 由每日 08:30 → 每周五 08:30，v2.101.0 对齐 TRAE Schedule 调整至 19:30）；新增独立每日任务 futures_signal_pipeline（工作日 20:00）与 daily_signal_pipeline（工作日 08:45）；jobs.py 两个 L3 job 移除对信号管道的联动触发（信号管道不再依赖 L3 运行）
-- ✅ 权重重算节奏配置化：FTSConfig.l3_weight_recompute_cadence（daily/weekly，默认 weekly）+ l3_weight_recompute_weekday（默认 4=周五）+ is_weight_recompute_day()；PortfolioLoop.run(recompute_weights=None) 按配置判定，冻结日返回 status="frozen" 且不重建组合、不落盘 combo（冷启动保护：无上次组合时冻结日仍全量构建）；CLI ts portfolio run --force-recompute 强制重算
-- ✅ 信号管道权重冻结：scripts/_signal_common.py save/load_weight_snapshot + ilter_factors_by_weights；futures/daily 信号管道周五重算 Ridge 权重存快照 memory/portfolio/futures/futures_signal_weights.json 与 memory/portfolio/stock/stock_signal_weights.json（v2.101.0 起按市场隔离），其余日复用快照仅刷新因子值（快照外新因子等待下次重算进入）；--force-recompute 强制重算
+- ✅ 权重重算节奏配置化：FTSConfig.l3_weight_recompute_cadence（daily/weekly，默认 daily，v2.104.0+7 由 weekly 改 daily）+ l3_weight_recompute_weekday（默认 4=周五）+ is_weight_recompute_day()；PortfolioLoop.run(recompute_weights=None) 按配置判定，冻结日返回 status="frozen" 且不重建组合、不落盘 combo（冷启动保护：无上次组合时冻结日仍全量构建）；CLI ts portfolio run --force-recompute 强制重算
+- ✅ 信号管道权重冻结：scripts/_signal_common.py save/load_weight_snapshot + ilter_factors_by_weights；futures/daily 信号管道按 cadence 重算 Ridge 权重存快照 memory/portfolio/futures/futures_signal_weights.json 与 memory/portfolio/stock/stock_signal_weights.json（v2.101.0 起按市场隔离），其余日复用快照仅刷新因子值（快照外新因子等待下次重算进入）；--force-recompute 强制重算
 - ✅ 新增测试：	est_weight_recompute.py 5 用例 + 	est_signal_common.py TestWeightSnapshot 4 用例 + 	est_portfolio_loop.py 冻结/强制/冷启动 3 用例；更新 test_tasks（12→14 任务）/test_jobs（L3 解绑断言）/test_cli_extra（解绑+冻结）/test_engine（add_job 12→15），受影响 375+243 passed 全绿
 
 ### v2.9.0 Design 全量落地（已完成）

@@ -95,6 +95,23 @@ class TestFTSConfigDefaults:
         assert cfg.log_level == "INFO"
         assert cfg.log_file == ""
         assert cfg.llm_backend == ""
+        assert cfg.factor_turnover_daily_max == 0.45
+
+    def test_factor_turnover_daily_max_default(self):
+        """G11 日换手硬剔除阈值默认 0.45 开启（期货 P95 校准，v2.104.0+9）。"""
+        cfg = FTSConfig()
+        assert cfg.factor_turnover_daily_max == 0.45
+
+    def test_factor_turnover_daily_max_env_override(self, monkeypatch):
+        """FTS_FACTOR_TURNOVER_DAILY_MAX 覆盖：数值覆盖 / off 关闭 / 空值默认 0.45（v2.104.0+9）。"""
+        monkeypatch.setenv("FTS_FACTOR_TURNOVER_DAILY_MAX", "0.20")
+        assert FTSConfig().factor_turnover_daily_max == 0.20
+        monkeypatch.setenv("FTS_FACTOR_TURNOVER_DAILY_MAX", "off")
+        assert FTSConfig().factor_turnover_daily_max is None
+        monkeypatch.setenv("FTS_FACTOR_TURNOVER_DAILY_MAX", "none")
+        assert FTSConfig().factor_turnover_daily_max is None
+        monkeypatch.setenv("FTS_FACTOR_TURNOVER_DAILY_MAX", "")
+        assert FTSConfig().factor_turnover_daily_max == 0.45
 
     def test_portfolio_optimizer_mode_default(self):
         """组合优化器模式默认值（GAP-I302，v2.74.0）。"""

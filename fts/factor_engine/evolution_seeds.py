@@ -439,6 +439,11 @@ class SeedManager:
                 if entry.get("factor_id") in consumed_ids:
                     entry["status"] = "injected"
                     entry["updated_at"] = datetime.now().isoformat()
+            # GAP-I306: 消费后重算 total_count/pending_count，避免残留过期值
+            pool_data["total_count"] = len(pool_data.get("factors", []))
+            pool_data["pending_count"] = sum(
+                1 for f in pool_data.get("factors", []) if f.get("status") == "pending"
+            )
             try:
                 pool_path.write_text(
                     json.dumps(pool_data, ensure_ascii=False, indent=2),

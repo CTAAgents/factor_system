@@ -1006,6 +1006,9 @@ class TestMetaLoop:
             pool = json.load(f)
         assert pool["total_count"] == result.candidates_injected
         assert pool["pending_count"] == result.candidates_injected
+        # GAP-I306: 注入 entry 记录 market，供 Step 2.5 市场隔离去重
+        if pool["factors"]:
+            assert pool["factors"][0]["market"] == "futures"
 
     def test_run_persists_injected_candidates(
         self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
@@ -1021,6 +1024,55 @@ class TestMetaLoop:
         if result.candidates_injected > 0:
             injected_files = list(tmp_inject_dir.glob("cand_*.json"))
             assert len(injected_files) == result.candidates_injected
+
+    # ─── GAP-I306: Step 2.5 去重口径修复（改读 factor_pool.json SSOT） ───
+
+    def test_scan_injected_names_reads_factor_pool(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
+    ):
+        """去重改读 factor_pool.json：l1_injected 目录被 L2(GAP-036) 清空后仍能扫描到历史注入名。"""
+        tmp_factor_pool_path.write_text(
+            json.dumps(
+                {
+                    "version": EVOLUTION_VERSION,
+                    "updated_at": "2026-08-13T00:00:00",
+                    "factors": [
+                        {"factor_id": "cand_f1", "name": "FUT_Alpha_A", "market": "futures", "status": "injected"},
+                        {"factor_id": "cand_f2", "name": "ohlc_positioning", "market": "futures", "status": "pending"},
+                        {"factor_id": "cand_s1", "name": "stock_alpha_a", "market": "stock", "status": "injected"},
+                        # 历史 entry 无 market 字段 → 市场归属不明，纳入去重（宁多勿漏）
+                        {"factor_id": "cand_h1", "name": "legacy_factor", "status": "injected"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        # 模拟 L2 GAP-036 消费后清空 l1_injected 目录（修复前此场景去重必然失效）
+        assert list(tmp_inject_dir.glob("*.json")) == []
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+            market="futures",
+        )
+        names = loop._scan_injected_names()  # noqa: SLF001
+        # 小写化 + 本市场 + 无 market 历史记录纳入，明确其他市场记录排除
+        assert names == {"fut_alpha_a", "ohlc_positioning", "legacy_factor"}
+        assert "stock_alpha_a" not in names
+
+    def test_scan_injected_names_empty_pool(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
+    ):
+        """factor_pool.json 不存在或无记录 → 返回空集（不报错）。"""
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+            market="futures",
+        )
+        assert loop._scan_injected_names() == set()  # noqa: SLF001
 
     def test_circuit_breaker_on_consecutive_low_quality(
         self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir

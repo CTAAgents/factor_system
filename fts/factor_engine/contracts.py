@@ -500,6 +500,7 @@ class FactorPoolEntry(TypedDict, total=False):
     economic_logic: EconomicLogic  # 四维评分
     priority: Literal["high", "medium", "low"]  # 优先级（基于 debate_gap + 经济逻辑）
     status: Literal["pending", "injected", "decayed", "rejected"]
+    market: Optional[str]  # 市场标识（futures/stock），GAP-I306 新增；缺失=历史记录（Step 2.5 去重纳入）
     evaluation_status: Literal["pending", "evaluated"]  # pending=未评估（无 IC/Sharpe），evaluated=已评估
     trace_id: str
     created_at: str

@@ -1,7 +1,7 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+4
-> 最后更新: 2026-08-11
+> 版本: v2.104.0+12
+> 最后更新: 2026-08-13
 
 ---
 
@@ -12,6 +12,14 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+12** | **2026-08-13** | **全量回归验收通过 + 推送前版本标记：not-slow 6693 passed（22:21）+ slow 26 passed（33:38）= 6719 测试全绿零失败，无需修复 bug；覆盖本日累积变更（+5~+11：G11 阈值 0.45 重开 / G4 块数感知 ic_t / 03-configuration §2.1 / GAP-072 max_weight_cap / GAP-I307 去重口径 / L3 权重重算等）** |** |
+| **v2.104.0+11** | **2026-08-13** | **信号管道单因子权重上限 max_weight_cap=0.30（GAP-072 补充）：Ridge 权重超限因子截断+按比例重分配+归一化（fut_bias_g19 43.5%→30.0% 实测生效）；--max-weight-cap CLI 透传（0 关闭/None 用默认）；trading_advice 因子集中风险判定加浮点容差 1e-9 避免 cap 恰好 30% 误报；新增 4 用例 cap 截断/None/低于等权回退/单因子忽略（test_futures_signal_pipeline.py 41 用例，定向回归 58 passed）** |** |
+| **v2.104.0+10** | **2026-08-13** | **L1 Step 2.5 去重口径修复（GAP-I307）**：① `meta_loop._scan_injected_names` 由扫描 `l1_injected/` 目录改读 factor_pool.json（SSOT）——目录文件会被 L2 演化 GAP-036 消费后删除（08-13 实测 48 个累计注入名对去重不可见），改读 pool 后消费不丢事实源；按 `self.market` 过滤、market 缺失历史记录纳入（宁多勿漏）；② `FactorPoolEntry` 契约新增 `market` 字段 + L1 注入 entry 写 `self.market`（市场隔离去重）；③ `evolution_seeds.py`/`evolution_futures.py` 消费后重算 total_count/pending_count（修复顶层字段残留过期值）；④ 测试 +3（test_meta_loop 93→95、test_evolution_l1_merge 13→14），模块回归 95+14+5+5 passed 全绿 + ruff 通过 |
+| **v2.104.0+9** | **2026-08-13** | **G11 阈值默认重开 0.45（用户修正：期货换手率过高同样无交易价值）：`FTSConfig.factor_turnover_daily_max` 默认 None→0.45（P95 校准，仅拦 top ~5% 极端抖动，较股票 0.30 宽松）；env 支持数值/"off"/"none"/"0"=关闭/空值=0.45；test_config_settings +2、test_g11_turnover_gate +1（默认开启用例）+2 更名 off_when_null；定向回归 73 passed** |** |
+| **v2.104.0+8** | **2026-08-13** | **03-configuration 新增 §2.1 G11 日换手口径说明（纯文档同步）：明确 turnover_daily = mean(\|Δsign(信号)\|)/2 = 信号翻转率（衡量因子调仓频率），≠ 期货合约换手率（成交量÷持仓量）；含值域/与市场活跃度无关/股票期货摩擦成本差异 → 默认关闭保留可配置；表格行补 §2.1 交叉引用** |** |
+| **v2.104.0+7** | **2026-08-13** | **L3 权重重算默认改 daily（GAP-072）；信号管道因子加载源强制 DuckDB（GAP-097 移除 JSON 静默回退）；trading_advice 第5节增量排序+方向判定修正** |** |
+| **v2.104.0+6** | **2026-08-13** | **G4 IC 硬门槛升级块数感知 |ic_t|（用户指令）：时序 `evaluate_backtest` + 横截面 `_evaluate_cross_section` 门槛由 `\|ICIR\|<0.30` → `\|ic_t\|=\|ICIR\|×√N < 1.65`（N=IC 块数/有效截面期数，自动适配样本长度，短样本高 ICIR 不再放行；`ic_t_stat` 缺失 <2 块回退旧口径）；test_g4_screening_gates 新增 test_cross_section_g4_t_stat_block_count_aware + 2 用例断言更新；定向回归 316 passed** |** |
+| **v2.104.0+5** | **2026-08-13** | **G11 换手硬剔除默认关闭（用户指令：G11 语义属股票市场，期货换手成本低无意义）：`FTSConfig.factor_turnover_daily_max` 默认 0.30→None（env 可覆盖保留可配置，0.30 参考值保留注释）；时序 `evaluate_backtest` + 横截面 `_evaluate_cross_section` 门槛代码保留；turnover_daily 指标注入/回填不变；03-configuration/06-testing/08-gap-analysis 同步** |** |
 | **v2.104.0+4** | **2026-08-13** | **G11 换手回填+阈值启用：横截面路径 turnover 计算修复（曾硬编码 0）+ 换手回填入库 69 因子 + factor_turnover_daily_max 定值 0.30（真实分布校准）+ 横截面 G11 硬剔除 + 测试+4 用例** |** |
 | **v2.104.0+3** | **2026-08-13** | **GAP-092 Bridgewater 增长×通胀四象限宏观制度层落地（plans/28 远期第三项）：新建 fts/factor_engine/macro_regime.py MacroRegimeDetector（水平阈值四象限 + 置信度联合软概率 + 象限画像）+ scripts/macro_regime_report.py 报告 CLI（真实实测 2026-07 recession 衰退 PMI 49.2 + CPI 0.5%）+ 19 新增测试 + 定向回归全绿 + ruff 全绿** |** |
 | **v2.104.0+2** | **2026-08-13** | **L3 双指标夏普 signal_sharpe + 实测化输入自动构建（方案③+①）：PortfolioCombo 新增 signal_sharpe（缩放前信号质量），build_combo 双指标落盘；_auto_build_factor_returns 自动构建因子收益矩阵（measured 口径，失败回退估算）；CLI/归因报告输出双指标；新增 8 测试用例** |** |
@@ -121,6 +129,7 @@ ts.signal.stock）；jobs.py 两个 L3 job 移除对信号管道的联动触发�
 ts.config）；PortfolioLoop.run(recompute_weights=None) 按配置判定，冻结日返回 status="frozen" 且不重建组合不落盘 combo（冷启动保护：无上次组合时冻结日仍全量构建）；③ 信号管道权重冻结——scripts/_signal_common.py 新增 save_weight_snapshot/load_weight_snapshot/
 ilter_factors_by_weights；futures/daily 信号管道周五重算 Ridge 权重存快照 memory/portfolio/{futures,stock}_signal_weights.json，其余日复用快照仅刷新因子值（快照外新因子等待下次重算进入），--force-recompute 强制重算；④ CLI 
 ts portfolio run 新增 --force-recompute 并移除信号管道联动触发（解绑语义）；⑤ 测试：新增 	est_weight_recompute.py 5 用例 + 	est_signal_common.py TestWeightSnapshot 4 用例 + 	est_portfolio_loop.py 冻结/强制/冷启动 3 用例；更新 test_tasks（任务 12→14、cron、desc）/test_jobs（L3 解绑 not_called、独立任务 called_once）/test_cli_extra（解绑+冻结）/test_engine（add_job 12→15）；受影响 375+243 passed 全绿；⑥ 同步 01/02/03/06/08/09 + pyproject v2.98.3→v2.99.0 |
+| **v2.104.0+7** | **2026-08-13** | **L3 权重重算默认改每日 + 信号管道因子加载源强制 DuckDB + trading_advice 操作逻辑修正：① FTSConfig.l3_weight_recompute_cadence 默认 weekly→daily（8/12 冻结日复用旧快照导致因子池骤减至单因子的根因修复；仍可经 FTS_L3_WEIGHT_RECOMPUTE_CADENCE=weekly 恢复周度）；② scripts/futures_signal_pipeline._load_signal_factors 移除 JSON 快照目录静默回退，DuckDB 因子资产库为唯一加载源（JSON 仅只读备份）；③ trading_advice 第 5 节新增 _classify_delta_moves：减速清单按增量降序取最大正增量（原升序取最小正增量，与主报告清单不一致）+ 按信号方向判定标注（多头品种增量正标"多头加强"而非误标"做空减弱"），增量区间表改为空头/多头双向；④ 8.1/8.2 执行计划增量缺失显示 N/A 而非 +0.0000；⑤ 测试：test_weight_recompute +1（默认 daily）、test_futures_signal_pipeline 新增 TestClassifyDeltaMoves 6 用例 + TestLoadSignalFactors 2 用例；受影响 43+388 passed 全绿；⑥ 同步 01/03/06/08/09 + pyproject v2.104.0+6→v2.104.0+7 |
 | **v2.98.3** | **2026-08-10** | **股票 L3 早间调度 + 股票信号管道联动（GAP-I301 补齐）：① `fts/scheduler/tasks.py` `l3_portfolio_loop_stock` cron 由 20:30 改为每日 08:30（开盘前完成股票 L3 组合构建）；② `fts/scheduler/jobs.py` `l3_portfolio_loop_stock_job` 完成后直接调用新增 `_run_daily_signal_pipeline()`（`daily_signal_pipeline.main(max_stocks=50, days=120)`，与期货 L3 联动对称），并清理既有 `l3_portfolio_loop_stock_job` 重复定义（v2.90.0 复制粘贴遗留，第二个 def 覆盖第一个导致函数体失效）；新增 `daily_signal_pipeline_job` 独立入口（供手动/外部调度，`__all__` 导出）；③ 测试：test_jobs.py 新增 TestDailySignalPipeline 3 用例（成功/异常捕获/job 入口）+ TestL3PortfolioLoopStockJob.test_stock_path 断言联动触发，test_tasks.py `l3_portfolio_loop_stock` cron 断言 20:30→08:30，调度 72 passed 全绿；④ 同步 01（L3 调度描述 + 一致性断言）/06（用例数）+ pyproject v2.98.1→v2.98.2 + README 
 | **v2.98.2** | **2026-08-10** | **L2 质检性能优化（GAP-071 闭环）：① 合并双重 WalkForward——`_run_factor_audit` 优先复用三级评估链走航结果（`evaluation["walk_forward"]` n_windows_completed>0 时直接构建 oos_result，否则兜底 `_run_walkforward_oos` 保持原逻辑）；`EvolutionLoop` 调 `evaluation_chain.evaluate` 传 `walk_forward_config=_build_wf_config(data)` 统一走航配置（评估链走航按数据长度适配），消除每候选一次完整走航的重复计算（默认 4 窗口 × train+oos 各执行一次因子代码）；② 走航窗口 IC 口径修正——`evaluate_walk_forward._evaluate_window` 样本外收益改为 oos 段内自算（close 差分），替换原全局 `forward_returns` 尾部切片（非末窗口 IC 失真 bug），且每窗口不再执行 train 信号（省一半执行），与审计侧同口径支撑复用；③ 质检信号缓存（新增 `fts/factor_engine/signal_cache.py` `SignalCache`：LRU+线程安全，key=(factor_id, params_json, 数据全列值指纹)，覆盖消融/鲁棒性扰动区分）——`FactorExecutor` 接入可选缓存，`evaluate_backtest`/`evaluate_walk_forward`/`EvaluationChain.evaluate`/`ShapAnalyzer.analyze` 透传，`EvolutionLoop` 创建共享缓存（容量 16）并注入消融/鲁棒性/SHAP（完整数据信号在 L1 回测/极值扰动/消融 baseline/鲁棒性 baseline 间全部命中）；④ 修复 `WalkForwardOptimizer` 空 train 段窗口结果构建 IndexError（`_df_boundary_date` 容错，window_years=0 短数据适配路径窗口不再丢失）；⑤ 新增 test_signal_cache.py 14 用例（命中/扰动 miss/params 区分/LRU/clear/copy 语义/边界）+ test_evaluation_chain TestGap071 3 用例（窗口 IC 口径/仅执行 oos/缓存二次命中）+ test_evolution_loop 审计复用 2 用例（复用不调用兜底/缺失回退），受影响模块回归 583 passed 全绿；⑥ 同步 01（质检链路缓存架构）/06（用例数）/08（GAP-071 ✅ 关闭）+ pyproject v2.98.1→v2.98.2 |** |
 | **v2.98.1** | **2026-08-10** | **L3 期货路径自动构建市场合成 OHLCV（方案 B）：① `fts/factor_engine/portfolio_loop.py` `run()` Step 0.5 期货分支新增 Step 0.5b——未显式传 `market_ohlcv` 时用 `SectorRegimeSelector._build_sector_ohlcv`（全品种 close 截面均值 + volume 截面和）构建市场级合成 OHLCV，激活 Step 2.5 Regime 自适应权重调整（此前定时任务/CLI 期货路径因 `market_ohlcv=None` 恒跳过，adaptive 优势未落地）；数据不足/构建异常降级置 None 保持原跳过路径；仅期货路径生效，股票路径仍由 `stock_regime` 驱动（GAP-S03）不受影响；② 新增 `test_portfolio_loop_market_ohlcv.py` 3 用例（自动构建触发 Step 2.5 / 面板空跳过 / 显式传入优先），portfolio_loop 相关 238 passed 全绿；③ 同步 01（Step 0.5b 架构描述 + 一致性断言）/06（用例数）+ pyproject v2.98.0→v2.98.1 |** |
@@ -300,8 +309,8 @@ python -m fts.cli scheduler list
 | `l2_evolution_loop` | `0 0 * * 1-5` | 工作日每日 00:00 | L2 Evolution Loop：夜间因子演化（LLM + optuna + 横截面，对齐期货 L2） |
 | `l3_portfolio_loop` | `0 19 * * 1-5` | 工作日每日 19:00 | L3 Portfolio Loop（期货路径：futures_elite + market=futures）：因子筛选(ACTIVE_FACTOR_CAP=20) + 信号合成(默认equal_weight，v2.103.0+23，等权漂移小每日重算稳定) + Verifier 校验（GAP-072 与信号管道解绑，--force-recompute 保证每日全量重算） |
 | `l3_portfolio_loop_stock` | `30 19 * * 5` | 每周五 19:30 | L3 Portfolio Loop（股票路径：elite_dir + market=stock）：股票组合权重重算（GAP-063 组合质检） |
-| `futures_signal_pipeline` | `0 20 * * 1-5` | 工作日每日 20:00 | 期货信号管道：Ridge 权重周五重算其余日冻结，独立生成横截面信号报告 |
-| `daily_signal_pipeline` | `45 8 * * 1-5` | 工作日每日 08:45 | 股票/ETF 信号管道：Ridge 权重周五重算其余日冻结，独立生成做多信号报告 |
+| `futures_signal_pipeline` | `0 20 * * 1-5` | 工作日每日 20:00 | 期货信号管道：Ridge 权重每日重算（v2.104.0+7 默认 daily，可按 FTS_L3_WEIGHT_RECOMPUTE_CADENCE 配置周度），独立生成横截面信号报告 |
+| `daily_signal_pipeline` | `45 8 * * 1-5` | 工作日每日 08:45 | 股票/ETF 信号管道：Ridge 权重每日重算（v2.104.0+7 默认 daily，可按 FTS_L3_WEIGHT_RECOMPUTE_CADENCE 配置周度），独立生成做多信号报告 |
 | `sync_futures_data` | `30 17 * * 1-5` | 工作日 17:30 | 期货多源数据同步（Phase 14.5） |
 | `sync_stock_data` | `0 17 * * 1-5` | 工作日 17:00 | 股票/ETF 日 K 线缓存同步 |
 | `sync_liquidity_pool` | `0 8 * * 6` | 每周六 08:00 | 数据驱动动态池刷新（GAP-054） |

@@ -252,6 +252,31 @@ def test_idempotent_updates_pool_status(chdir_tmp):
     assert entry["status"] == "injected"
 
 
+def test_consume_recomputes_pending_count(chdir_tmp):
+    """消费后 pending_count/total_count 重算（GAP-I306）: 不残留过期字段。"""
+    cand = _make_candidate()
+    _write_candidate(chdir_tmp, cand)
+    # 构造 3 条记录：1 个本次待消费 pending + 1 个已消费 injected + 1 个剩余 pending
+    _write_pool(
+        chdir_tmp,
+        [
+            {"factor_id": cand["candidate_id"], "name": cand["name"], "source": "l1_bootstrapping", "status": "pending"},
+            {"factor_id": "cand_old", "name": "old_factor", "source": "l1_bootstrapping", "status": "injected"},
+            {"factor_id": "cand_left", "name": "left_pending", "source": "l1_bootstrapping", "status": "pending"},
+        ],
+    )
+    # _write_pool 顶层不含 total_count/pending_count → 模拟旧版直接 write_text 残留过期值场景
+    pool_before = json.loads((chdir_tmp / "memory" / "knowledge" / "factors" / "factor_pool.json").read_text(encoding="utf-8"))
+    assert "pending_count" not in pool_before
+
+    loop = _make_loop(chdir_tmp)
+    loop._merge_l1_candidates([], "trace-test")  # noqa: SLF001
+
+    pool = json.loads((chdir_tmp / "memory" / "knowledge" / "factors" / "factor_pool.json").read_text(encoding="utf-8"))
+    assert pool["pending_count"] == 1  # 仅 cand_left 仍 pending
+    assert pool["total_count"] == 3
+
+
 def test_consumed_marker_skipped(chdir_tmp):
     """候选文件带 injected_to_l2=True 时跳过（防重复消费）。"""
     cand = _make_candidate(injected_to_l2=True)

@@ -2,8 +2,8 @@
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
-[![Tests](https://img.shields.io/badge/tests-5200%20passing-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.104.0%2B4-blue)](#)
+[![Tests](https://img.shields.io/badge/tests-5203%20passing-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.104.0%2B12-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -107,7 +107,7 @@ L3 参数：
 | `--synthesis-mode` | 自动 | 信号合成模式（`elastic_net` / `adaptive` / `sharpe_weight` / `equal_weight` / `ml_ensemble` / `optimizer`） |
 | `--optimizer-mode` | `risk_parity` | optimizer 目标（`risk_parity` / `mvo`，GAP-L303） |
 | `--returns-matrix` | 无 | 因子收益矩阵 CSV 路径（optimizer 模式与组合实测化需要，可选） |
-| --force-recompute | 关闭 | 强制全量重算组合权重（GAP-072，默认按 l3_weight_recompute_cadence 判定：weekly 仅周五重算，其余日冻结复用上次组合） |
+| --force-recompute | 关闭 | 强制全量重算组合权重（GAP-072，默认按 l3_weight_recompute_cadence 判定：daily 每日重算，weekly 仅周五重算） |
 
 ### 因子管理
 
@@ -236,7 +236,7 @@ print(status_report_to_json(report))
 | L1 Meta-Loop | 工作日每日 07:59 | 市场感知、知识补给、Bootstrapping、Debate 分析 |
 | L2 Evolution | 工作日每日 00:00 | LLM 宏观改逻辑 + Optuna 微观调参、三级评估链、质量评分 |
 | L3 Portfolio | 工作日每日 19:00 | 因子筛选、正交化、信号合成、Verifier 校验（GAP-072 与信号管道解绑，equal_weight 权重每日重算） |
-| 期货信号管道 | 工作日每日 20:00 | 横截面信号报告（Ridge 权重周五重算，其余日冻结复用快照） |
+| 期货信号管道 | 工作日每日 20:00 | 横截面信号报告（Ridge 权重按 cadence 每日重算，v2.104.0+7 默认 daily） |
 
 ### 6 类因子强制审计
 

@@ -3302,6 +3302,11 @@ class EvolutionLoop:
                 if entry.get("factor_id") in consumed_ids:
                     entry["status"] = "injected"
                     entry["updated_at"] = datetime.now().isoformat()
+            # GAP-I306: 消费后重算 total_count/pending_count，避免残留过期值
+            pool_data["total_count"] = len(pool_data.get("factors", []))
+            pool_data["pending_count"] = sum(
+                1 for f in pool_data.get("factors", []) if f.get("status") == "pending"
+            )
             try:
                 pool_path.write_text(
                     json.dumps(pool_data, ensure_ascii=False, indent=2),
@@ -3475,6 +3480,16 @@ class EvolutionLoop:
             reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
         if bt.get("sharpe", 0) < 1.5:
             reasons.append(f"截面夏普={bt.get('sharpe', 0):.4f} < 1.5")
+        # G4（35-gap-closure-plan §4.1）：IC 显著性硬门槛——截面期数感知的 t 统计量
+        # 横截面 ic_t_stat = 日度 IC 序列 t 值（ICIR×√有效截面期数，L1012），与时序路径
+        # 同阈值 1.65；ic_t_stat 缺失（有效截面期数 <2）时回退旧 |ICIR|≥0.30 口径。
+        ic_t_gate = bt.get("ic_t_stat")
+        if ic_t_gate is None:
+            icir_fb = abs(float(bt.get("icir_block", bt.get("icir", 0.0)) or 0.0))
+            if icir_fb < 0.30:
+                reasons.append(f"截面|ICIR|={icir_fb:.4f} < 0.30（样本不足，回退口径）")
+        elif abs(float(ic_t_gate)) < 1.65:
+            reasons.append(f"截面|ic_t|={abs(float(ic_t_gate)):.4f} < 1.65")
         # G11（35-gap-closure-plan §5.4）：日换手硬剔除（与时序路径同口径，
         # 阈值经 FTSConfig.factor_turnover_daily_max 可配，None=关闭）
         try:

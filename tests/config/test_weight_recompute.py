@@ -52,3 +52,10 @@ class TestIsWeightRecomputeDay:
         cfg = FTSConfig(l3_weight_recompute_cadence="", l3_weight_recompute_weekday=4)
         assert is_weight_recompute_day(cfg, today=date(2026, 8, 14)) is True
         assert is_weight_recompute_day(cfg, today=date(2026, 8, 10)) is False
+
+    def test_default_cadence_is_daily(self):
+        """默认配置（v2.104.0+7）cadence=daily：任意交易日都重算权重。"""
+        cfg = FTSConfig()
+        assert cfg.l3_weight_recompute_cadence == "daily"
+        for d in [date(2026, 8, 10), date(2026, 8, 12), date(2026, 8, 14)]:
+            assert is_weight_recompute_day(cfg, today=d) is True

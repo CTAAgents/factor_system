@@ -237,17 +237,24 @@ def load_futures_elite_factors_from_db(
 
 
 def _load_signal_factors(ic_threshold: float = 0.0) -> list[dict[str, Any]]:
-    """加载期货信号因子：DuckDB 因子资产库（SSOT）优先，JSON 快照目录降级回退（GAP-097）。
+    """加载期货信号因子：DuckDB 因子资产库（SSOT）为唯一加载源（GAP-097 强约束）。
+
+    v2.104.0+7 (2026-08-13): 移除 JSON 快照目录静默回退——JSON 仅作只读备份，
+    不作为加载源。8/12 曾因 JSON 目录仅有 1 个文件回退导致因子池骤降、权重快照
+    被污染（单因子）。DuckDB 无可用精英因子时返回 []，由调用方报错退出，
+    不静默回退到不完整的 JSON 快照。
 
     Args:
         ic_threshold: IC 阈值（信号管道 Ridge 加权模式下默认 0 = 全量加载不过滤）
     """
     factors = load_futures_elite_factors_from_db(ic_threshold=ic_threshold)
-    if factors:
-        print(f"      [加载源] DuckDB 因子资产库（SSOT）: {len(factors)} 个")
-        return factors
-    print("      [提示] DuckDB 因子资产库无可用期货精英因子，回退 JSON 快照目录")
-    return load_futures_elite_factors(ic_threshold=ic_threshold)
+    print(f"      [加载源] DuckDB 因子资产库（SSOT）: {len(factors)} 个")
+    if not factors:
+        print(
+            "[ERROR] DuckDB 因子资产库无可用期货精英因子 "
+            "（JSON 快照已降级为只读备份，不作为加载源，请检查 L3 因子库状态）"
+        )
+    return factors
 
 
 def _inject_macro_to_panel(
@@ -529,6 +536,7 @@ def _compute_ridge_weights(
     factor_sign_flips: dict[str, float],
     lookback: int = 120,
     alpha: float | None = None,
+    max_weight_cap: float | None = 0.30,
 ) -> dict[str, float]:
     """用 Ridge 回归学习因子权重（替代等权合成）。
 
@@ -543,6 +551,9 @@ def _compute_ridge_weights(
         factor_sign_flips: 方向校正（+1=正常, -1=需反转）
         lookback: 训练窗口天数
         alpha: Ridge 正则化强度，None 则用 RidgeCV 自动选择
+        max_weight_cap: 单因子权重上限（v2.104.0+7）：默认 0.30——Ridge 弱信号
+            场景易产生单因子权重过大（如 43.5%）导致事实单因子策略，
+            截断超限因子并将多余权重按比例重分配给未超限因子，再归一化。
 
     Returns:
         dict[factor_name, weight]  权重（已归一化，和为 1）
@@ -815,6 +826,37 @@ def _compute_ridge_weights(
     total_w = sum(w for w in weights.values() if w > 0)
     if total_w > 0:
         weights = {k: max(0.0, v) / total_w for k, v in weights.items()}
+
+    # ── 单因子权重上限截断 (v2.104.0+7) ──
+    # Ridge 弱信号场景易产生单因子权重过大（如 fut_bias_g19 43.5%），
+    # 超过风控红线（单因子 ≤ 30%）。截断超限因子，将多余权重按比例
+    # 重分配给未超限因子，再归一化；多轮迭代至所有权重 ≤ cap。
+    if max_weight_cap is not None and max_weight_cap > 0 and len(weights) > 1:
+        n = len(weights)
+        if max_weight_cap < 1.0 / n:
+            # cap 低于等权下限：数学上不存在 Σ=1 且所有 w_i ≤ cap 的解，
+            # 回退等权（满足 Σ=1 的最分散分布）
+            weights = {k: 1.0 / n for k in weights}
+            print(f"      [权重上限] cap={max_weight_cap:.2f} < 等权(1/{n}={1.0/n:.3f})，回退等权")
+        else:
+            for _ in range(10):
+                over = [(k, v) for k, v in weights.items() if v > max_weight_cap]
+                if not over:
+                    break
+                excess = sum(v - max_weight_cap for _, v in over)
+                for k, v in over:
+                    weights[k] = max_weight_cap
+                under_keys = [k for k, v in weights.items() if v <= max_weight_cap]
+                under_sum = sum(weights[k] for k in under_keys)
+                if under_sum <= 0:
+                    break
+                for k in under_keys:
+                    weights[k] += excess * weights[k] / under_sum
+            # 最终归一化（迭代重分配可能引入浮点漂移）
+            total_w = sum(weights.values())
+            if total_w > 0:
+                weights = {k: v / total_w for k, v in weights.items()}
+            print(f"      [权重上限] 已应用 cap={max_weight_cap:.2f}，最大单因子权重={max(weights.values()):.4f}")
 
     # 输出权重分布
     w_sorted = sorted(weights.items(), key=lambda x: -x[1])
@@ -1126,6 +1168,52 @@ def _compute_holdout_validation(
     }
 
 
+def _classify_delta_moves(
+    sym_scores: dict[str, float],
+    sym_deltas: dict[str, float],
+    accel_threshold: float = -0.02,
+    decel_threshold: float = 0.02,
+    top_n: int = 5,
+) -> tuple[list[tuple[str, float, str]], list[tuple[str, float, str]]]:
+    """按信号方向与增量方向分类加速/减速品种（trading_advice 第 5 节）。
+
+    v2.104.0+7 (2026-08-13): 修正逻辑——① 减速按增量降序取最大正增量
+    （原升序取最小正增量，与主报告减速清单不一致）；② 按品种信号方向判定
+    标注（多头品种增量正应标"多头加强"，原实现一律标"做空减弱"错误）。
+
+    Args:
+        sym_scores: 品种信号得分 {symbol: score}
+        sym_deltas: 品种信号增量 {symbol: delta}
+        accel_threshold: 增量低于此值视为加速（默认 -0.02）
+        decel_threshold: 增量高于此值视为减速/反转萌芽（默认 0.02）
+        top_n: 各方向最多返回数量
+
+    Returns:
+        (accel, decel)：加速与减速列表，元素 (symbol, delta, 操作标注)；
+        加速按增量升序（最负优先），减速按增量降序（最大正增量优先）
+    """
+    accel = sorted(((s, d) for s, d in sym_deltas.items() if d < accel_threshold), key=lambda x: x[1])[:top_n]
+    decel = sorted(((s, d) for s, d in sym_deltas.items() if d > decel_threshold), key=lambda x: -x[1])[:top_n]
+
+    accel_out: list[tuple[str, float, str]] = []
+    for sym, delta in accel:
+        if sym_scores.get(sym, 0) < 0:
+            label = "做空信号加强中"
+        else:
+            label = "多头信号减弱中，警惕回撤"
+        accel_out.append((sym, delta, label))
+
+    decel_out: list[tuple[str, float, str]] = []
+    for sym, delta in decel:
+        if sym_scores.get(sym, 0) > 0:
+            label = "多头信号加强中，做多关注"
+        else:
+            label = "做空信号减弱中，建议减仓"
+        decel_out.append((sym, delta, label))
+
+    return accel_out, decel_out
+
+
 def _generate_trading_advice_report(
     today: str,
     report_dir: Path,
@@ -1279,31 +1367,30 @@ def _generate_trading_advice_report(
     w("> 信号增量 = 今日得分 - 昨日得分，反映信号强度的变化方向和幅度。")
     w()
     if has_delta:
-        delta_ranked = sorted(sym_deltas.items(), key=lambda x: x[1])
-        accel_short = [(s, d) for s, d in delta_ranked if d < -0.02][:5]
-        decel_short = [(s, d) for s, d in delta_ranked if d > 0.02][:5]
+        # 按信号方向 + 增量方向分类（对齐主报告减速清单；v2.104.0+7 双向判定修正）
+        accel_short, decel_short = _classify_delta_moves(sym_scores, sym_deltas)
 
-        w("| 信号增量区间 | 操作 | 含义 |")
-        w("|-------------|------|------|")
-        w("| $\\Delta < -0.02$ | 加仓或持有 | 空头加速，做空信号加强 |")
-        w("| $-0.02 \\leq \\Delta \\leq 0.02$ | 持有观望 | 信号稳定，维持现有仓位 |")
-        w("| $\\Delta > 0.02$ | 减仓或平仓 | 空头减速/反转萌芽，警惕反转 |")
+        w("| 信号增量区间 | 空头持仓 | 多头持仓 |")
+        w("|-------------|----------|----------|")
+        w("| $\\Delta < -0.02$ | 加仓或持有（空头加速） | 减仓或平仓（多头减弱） |")
+        w("| $-0.02 \\leq \\Delta \\leq 0.02$ | 持有观望 | 持有观望 |")
+        w("| $\\Delta > 0.02$ | 减仓或平仓（空头减速/反转萌芽） | 加仓或持有（多头加强/反转萌芽） |")
         w()
 
         if accel_short:
-            w("**空头加速品种（做空优先关注）**：")
+            w("**信号加速（增量最负）**：")
             w()
-            for sym, delta in accel_short:
+            for sym, delta, label in accel_short:
                 score = sym_scores.get(sym, 0)
-                w(f"- **{sym}** | 信号={score:+.4f} | 增量={delta:+.4f} | 做空信号加强中")
+                w(f"- **{sym}** | 信号={score:+.4f} | 增量={delta:+.4f} | {label}")
             w()
 
         if decel_short:
-            w("**空头减速/反转萌芽品种（警惕反转）**：")
+            w("**信号减速/反转萌芽（增量最正）**：")
             w()
-            for sym, delta in decel_short:
+            for sym, delta, label in decel_short:
                 score = sym_scores.get(sym, 0)
-                w(f"- **{sym}** | 信号={score:+.4f} | 增量={delta:+.4f} | 做空信号减弱中，建议减仓")
+                w(f"- **{sym}** | 信号={score:+.4f} | 增量={delta:+.4f} | {label}")
             w()
     else:
         w("- 无昨日信号数据，无法计算增量。首次运行或数据缺失不影响交易。")
@@ -1353,7 +1440,8 @@ def _generate_trading_advice_report(
         w("| **Regime 低置信度** | 当前 regime 识别置信度偏低 | 信号可靠性下降，仓位减半 |")
     w("| **因子集中度** | 权重最高因子占比过大 | 单因子不超过总权重 30%，超标需人工核查 |")
     max_weight = max(factor_weights.values()) if factor_weights else 0
-    if max_weight > 0.3:
+    # 加浮点容差：cap=0.30 截断后归一化可能恰好 0.3000，避免误报"30.0% > 30%"
+    if max_weight > 0.3 + 1e-9:
         w(f"| **因子集中风险** | 当前 Top 因子权重 {max_weight:.1%} > 30% | 建议增加多样性或手动限制 |")
     w("| **流动性风险** | 部分品种流动性不足 | 主力合约优先，避开持仓量 < 1 万手的品种 |")
     w("| **过拟合风险** | 组合夏普 1.12，Verifier 未通过 | 不过度依赖信号，严格止损 |")
@@ -1368,8 +1456,8 @@ def _generate_trading_advice_report(
         w("| 优先级 | 品种 | 名称 | 信号强度 | 增量 | 建议仓位 | 开仓条件 |")
         w("|--------|------|------|----------|------|---------|---------|")
         for i, (sym, score) in enumerate(short_signals[:5], 1):
-            delta = sym_deltas.get(sym, 0) if has_delta else 0
-            delta_str = f"{delta:+.4f}" if has_delta else "N/A"
+            delta = sym_deltas.get(sym) if has_delta else None
+            delta_str = f"{delta:+.4f}" if delta is not None else "N/A"
             if abs(score) >= 0.60:
                 size = "15-20%"
                 condition = "开盘直接建仓"
@@ -1395,8 +1483,8 @@ def _generate_trading_advice_report(
         w("| 优先级 | 品种 | 名称 | 信号强度 | 增量 | 建议仓位 | 开仓条件 |")
         w("|--------|------|------|----------|------|---------|---------|")
         for i, (sym, score) in enumerate(long_signals[:3], 1):
-            delta = sym_deltas.get(sym, 0) if has_delta else 0
-            delta_str = f"{delta:+.4f}" if has_delta else "N/A"
+            delta = sym_deltas.get(sym) if has_delta else None
+            delta_str = f"{delta:+.4f}" if delta is not None else "N/A"
             if abs(score) >= 0.60:
                 size = "15-20%"
                 condition = "开盘直接建仓"
@@ -1469,6 +1557,7 @@ def main(
     universe: str = "core",
     recompute_weights: bool | None = None,
     macro_injection: bool = True,
+    max_weight_cap: float | None = 0.30,
 ) -> int:
     t0 = time.time()
     today = date.today().isoformat()
@@ -1649,6 +1738,7 @@ def main(
             panel,
             common_dates,
             factor_sign_flips,
+            max_weight_cap=max_weight_cap,
         )
 
         # 3d: 品种-因子 IC 矩阵（每个因子 × 每个品种的时序 IC）
@@ -2334,6 +2424,12 @@ if __name__ == "__main__":
         help="关闭宏观字段注入（GAP-088；默认开启——fut_macro_* 因子读取真实宏观数据，"
         "拉取失败降级 close 代理，不阻断管道）",
     )
+    parser.add_argument(
+        "--max-weight-cap",
+        type=float,
+        default=None,
+        help="单因子权重上限（v2.104.0+7，默认 0.30；Ridge 弱信号场景单因子权重过大时截断并重分配）",
+    )
     args = parser.parse_args()
     sys.exit(
         main(
@@ -2342,5 +2438,6 @@ if __name__ == "__main__":
             universe=args.universe,
             recompute_weights=True if args.force_recompute else None,
             macro_injection=args.macro_injection,
+            max_weight_cap=args.max_weight_cap if args.max_weight_cap is not None else 0.30,
         )
     )

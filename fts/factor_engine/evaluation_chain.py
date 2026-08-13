@@ -707,11 +707,17 @@ class EvaluationChain:
         reasons: list[str] = []
         if bt.get("ic", 0) < 0.03:
             reasons.append(f"Level 1: IC={bt.get('ic', 0):.4f} < 0.03")
-        # G4（35-gap-closure-plan）：ICIR 硬门槛（时序路径用块级 ICIR 真口径，
-        # 横截面路径用日度 IC 序列 ICIR——L921 已计算 icir）
-        icir_gate = float(bt.get("icir_block", bt.get("icir", 0.0)) or 0.0)
-        if abs(icir_gate) < 0.30:
-            reasons.append(f"Level 1: |ICIR|={abs(icir_gate):.4f} < 0.30")
+        # G4（35-gap-closure-plan）：IC 显著性硬门槛——块数感知的 t 统计量
+        # |ic_t| = |ICIR|×√N（N=IC 块数，块长 20），自动适配样本长度：短样本块数少，
+        # 同样 0.30 的 ICIR 显著性不足不再放行。ic_t_stat 由 _block_ic_stats 提供（L458）；
+        # 缺失（样本 <2 块）时回退旧 |ICIR|≥0.30 口径，避免短样本误杀。
+        ic_t_gate = bt.get("ic_t_stat")
+        if ic_t_gate is None:
+            icir_fb = abs(float(bt.get("icir_block", bt.get("icir", 0.0)) or 0.0))
+            if icir_fb < 0.30:
+                reasons.append(f"Level 1: |ICIR|={icir_fb:.4f} < 0.30（样本不足，回退口径）")
+        elif abs(float(ic_t_gate)) < 1.65:
+            reasons.append(f"Level 1: |ic_t|={abs(float(ic_t_gate)):.4f} < 1.65")
         # G4（35-gap-closure-plan）：前后半段 IC 符号反转一票否决（过拟合局部最优典型特征）
         if bt.get("sign_flip_half_split", False):
             reasons.append("Level 1: 前后半段 IC 符号反转（不稳定）")

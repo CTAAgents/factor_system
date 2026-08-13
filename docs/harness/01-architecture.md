@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+4
+> 版本: v2.104.0+12
 > 最后更新: 2026-08-10
 
 ---
@@ -913,7 +913,7 @@ class FactorKind(str, Enum):
 | L1 Meta-Loop | 07:59 | 工作日每日 | 知识补给 + 种子注入（对齐 TRAE Schedule 期货 L1） |
 | L2 Evolution Loop | 00:00 | 工作日每日 | 夜间因子演化（对齐 TRAE Schedule 期货 L2） |
 | L3 Portfolio Loop | 19:00 | 工作日每日 | 期货路径（futures_elite + market=futures，v2.73.0）：因子筛选(ACTIVE_FACTOR_CAP=20) + 信号合成(默认equal_weight，v2.103.0+23) + Verifier 校验；GAP-072 v2.99.0 与期货信号管道解绑，工作日每日收盘后重算组合权重（equal_weight 等权漂移小每日重算稳定；对齐 TRAE Schedule 期货 L3 19:00） |
-| 期货信号管道 | 20:00 | 工作日每日 | 独立调度（GAP-072 v2.99.0 与 L3 解绑）：Ridge 权重周五重算并存快照，其余日冻结复用快照仅刷新因子值；因子来源 = DuckDB 因子资产库（factor_catalog_futures.duckdb，market=futures + is_elite + status=active，GAP-097 v2.103.0），JSON 快照目录降级回退 |
+| 期货信号管道 | 20:00 | 工作日每日 | 独立调度（GAP-072 v2.99.0 与 L3 解绑）：Ridge 权重按 l3_weight_recompute_cadence 重算并存快照（v2.104.0+7 默认 daily 每日重算，其余日冻结复用快照仅刷新因子值）；因子来源 = DuckDB 因子资产库（factor_catalog_futures.duckdb，market=futures + is_elite + status=active，GAP-097 v2.103.0），v2.104.0+7 起为唯一加载源，JSON 快照目录仅作只读备份不再回退 |
 | 因子巡检 (FactorInspector) | 03:00 | 每日 | 基于 batch_audit 自动检测退化因子并降级 |
 | Health Check | 每 10 分钟 | 高频 | 状态监控 |
 

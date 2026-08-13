@@ -1399,19 +1399,23 @@ class MetaLoop:
         return candidates, candidates_generated
 
     def _scan_injected_names(self) -> set[str]:
-        """扫描 l1_injected/ 目录，返回已注入因子名称（小写）。"""
-        if not self.inject_dir.exists():
-            return set()
+        """扫描 factor_pool.json，返回本市场已注入因子名称（小写）。
+
+        GAP-I306 修复: 原实现扫描 l1_injected/ 目录文件——该目录会被 L2 演化
+        按 GAP-036 消费后删除，导致 Step 2.5 去重事实源丢失（目录空即永远
+        扫不到历史注入名）。改读 factor_pool.json（SSOT 索引，消费后仍保留）。
+        market 缺失的历史记录纳入（宁多勿漏），仅排除明确属于其他市场的记录。
+        """
+        pool = self.factor_pool_manager.load_or_init()
         names: set[str] = set()
-        for f in self.inject_dir.glob("*.json"):
-            try:
-                with open(f, "r", encoding="utf-8") as fp:
-                    cand = json.load(fp)
-                    name = cand.get("name", "")
-                    if name:
-                        names.add(name.lower())
-            except (json.JSONDecodeError, OSError):
+        for entry in pool.get("factors", []):
+            name = entry.get("name", "")
+            if not name:
                 continue
+            market = entry.get("market")
+            if market and market != self.market:
+                continue
+            names.add(name.lower())
         return names
 
     def _verify_and_inject(
@@ -1609,6 +1613,7 @@ class MetaLoop:
                 economic_logic=cand.get("economic_logic", {}),
                 priority=self._compute_priority(cand),
                 status="pending",
+                market=self.market,
                 trace_id=trace_id,
                 created_at=cand.get("created_at", datetime.now().isoformat()),
                 updated_at=datetime.now().isoformat(),

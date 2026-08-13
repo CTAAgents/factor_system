@@ -251,9 +251,9 @@ fts portfolio run --synthesis-mode sharpe_weight
   - 连续 3 代质量分 < 30 → 熔断
 ```
 
-### 📊 每周五 20:00 — L3 Portfolio Loop（组合构建 + 权重重算）
+### 📊 工作日每日 20:00 — L3 Portfolio Loop（组合构建 + 权重重算）
 
-把 Elite 因子组合成交易信号。每周五重算组合权重，其余交易日冻结复用（冷启动保护）。
+把 Elite 因子组合成交易信号。组合权重按 `l3_weight_recompute_cadence` 重算（v2.104.0+7 默认 daily 每日重算；配置为 weekly 时周五重算、其余交易日冻结复用，冷启动保护）。
 
 ```
 1. 加载所有 elite 因子
@@ -280,7 +280,7 @@ fts portfolio run --synthesis-mode sharpe_weight
 1. 加载期货 Elite 因子
 2. 从 DuckDB 加载期货品种日线数据
 3. 方向校正（截面 IC 法，自动反转 IC<0 的因子）
-4. Ridge 回归加权合成综合得分（周五重算权重存快照，其余日复用）
+4. Ridge 回归加权合成综合得分（按 l3_weight_recompute_cadence 重算权重存快照，v2.104.0+7 默认 daily 每日重算，其余日复用）
 5. 输出排名 + 信号报告到 reports/{date}/
 ```
 

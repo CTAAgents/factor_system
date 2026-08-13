@@ -4,8 +4,8 @@
   - load_futures_elite_factors_from_db: 基础加载（market/is_elite/status 过滤 + 字段构造 +
     metadata.evaluation 复用 + metadata 缺失时顶层评估列构造 + code 空跳过 + IC 阈值过滤）
   - 两层去重（代码哈希 + 回测结果 stat）
-  - DB 空库/文件缺失 → 返回 []（触发 JSON 快照回退）
-  - _load_signal_factors: DuckDB 优先 + JSON 降级回退
+  - DB 空库/文件缺失 → 返回 []
+  - _load_signal_factors: DuckDB 为唯一加载源（v2.104.0+7 移除 JSON 降级回退）
 """
 
 import sys
@@ -198,10 +198,10 @@ def test_load_signal_factors_db_priority(tmp_path):
     mock_json.assert_not_called()
 
 
-def test_load_signal_factors_json_fallback(tmp_path):
-    """DB 为空时回退 JSON 快照目录加载。"""
+def test_load_signal_factors_json_fallback_removed(tmp_path):
+    """DB 为空时返回 [] 不回退 JSON（v2.104.0+7：JSON 快照仅只读备份，不作为加载源）。"""
     with patch("futures_signal_pipeline.load_futures_elite_factors_from_db", return_value=[]):
         with patch("futures_signal_pipeline.load_futures_elite_factors", return_value=[{"name": "json_only"}]) as mock_json:
             factors = _load_signal_factors(ic_threshold=0)
-    assert [f["name"] for f in factors] == ["json_only"]
-    mock_json.assert_called_once_with(ic_threshold=0)
+    assert factors == []
+    mock_json.assert_not_called()

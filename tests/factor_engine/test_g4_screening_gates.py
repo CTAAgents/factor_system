@@ -163,3 +163,131 @@ def test_backtest_metrics_sign_flip_field_type(sample_ohlcv, forward_returns):
 
     bt = evaluate_backtest(_good_factor(), sample_ohlcv, forward_returns)
     assert isinstance(bt["sign_flip_half_split"], (bool, np.bool_))
+
+
+# ─── 横截面路径 G4（v2.104.0+5 补：_evaluate_cross_section 曾缺 ICIR 硬门槛）──
+
+
+def _cs_panel(n_symbols: int = 20, n_dates: int = 120, seed: int = 7, coef: float = 0.02) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+    """合成横截面面板；coef 为收益对信号系数（越大信号预测性越强 → ICIR 越高）。"""
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2024-01-01", periods=n_dates, freq="D")
+    panel: dict[str, pd.DataFrame] = {}
+    for i in range(n_symbols):
+        signal = rng.normal(0, 1, n_dates)
+        rets = np.zeros(n_dates)
+        rets[1:] = coef * signal[:-1] + rng.normal(0, 0.005, n_dates - 1)
+        close = 100 * np.exp(np.cumsum(rets))
+        panel[f"S{i:03d}"] = pd.DataFrame(
+            {
+                "open": close,
+                "high": close * 1.01,
+                "low": close * 0.99,
+                "close": close,
+                "volume": 1000,
+            },
+            index=dates,
+        )
+    common = pd.DatetimeIndex(sorted(set().union(*[set(df.index) for df in panel.values()])))
+    return panel, common
+
+
+def _cs_momentum(lookback: int = 5) -> FactorProgram:
+    code = """
+import numpy as np
+def factor_program(data, params):
+    close = data['close'].values
+    n = len(close)
+    signal = np.zeros(n)
+    for i in range(%d, n):
+        signal[i] = (close[i] - close[i-%d]) / max(close[i-%d], 1e-10)
+    return np.clip(signal * 10, -1.0, 1.0)
+""" % (lookback, lookback, lookback)
+    return create_factor_program(
+        name="cs_momentum_g4",
+        code=code,
+        params={},
+        signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=lookback + 5),
+        economic_logic=EconomicLogic(theory=4, behavioral=3, microstructure=3, institutional=4, narrative="横截面动量（G4 测试）"),
+        source="manual",
+    )
+
+
+def _cs_loop(monkeypatch, panel: dict[str, pd.DataFrame], dates: pd.DatetimeIndex):
+    """构造 object.__new__ 的 EvolutionLoop（横截面评估最小装配）。"""
+    from fts.factor_engine.evolution_futures import EvolutionLoop
+
+    loop = object.__new__(EvolutionLoop)
+    loop.cross_section_data = panel
+    loop.cross_section_dates = dates
+    loop.industry_map = None
+    loop.cap_map = None
+    monkeypatch.setattr(loop, "_build_barra_exposures", lambda: None)
+    monkeypatch.setattr(loop, "_build_vol_map", lambda: None)
+    return loop
+
+
+def test_cross_section_metrics_include_icir():
+    """横截面评估返回非零 icir（日度 IC 序列 ICIR，G4 硬门槛口径）。"""
+    from fts.factor_engine.evaluation_chain import cross_section_evaluate_backtest
+
+    panel, dates = _cs_panel(coef=0.08)
+    bt = cross_section_evaluate_backtest(_cs_momentum(), panel, dates)
+    assert "icir" in bt
+    assert abs(float(bt["icir"])) > 0
+
+
+def test_cross_section_g4_rejects_low_icir(monkeypatch):
+    """横截面晋升判定（_evaluate_cross_section）拒绝低显著性因子（|ic_t|<1.65）。"""
+    panel, dates = _cs_panel()
+    loop = _cs_loop(monkeypatch, panel, dates)
+    # 1 日反转信号：横截面 IC≈0、ICIR≈0 → ic_t≈0 < 1.65 被拒
+    code = """
+import numpy as np
+def factor_program(data, params):
+    close = data['close'].values
+    n = len(close)
+    signal = np.zeros(n)
+    for i in range(1, n):
+        signal[i] = np.sign(close[i-1] - close[i])
+    return signal
+"""
+    factor = create_factor_program(
+        name="cs_rev_g4",
+        code=code,
+        params={},
+        signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=2),
+        economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="横截面反转（G4 测试）"),
+        source="manual",
+    )
+    ev = loop._evaluate_cross_section(factor, "trace-g4-cs-low")
+    assert "截面|ic_t|" in " ".join(ev.get("failure_reasons") or [])
+    assert ev.get("passed") is False
+
+
+def test_cross_section_g4_passes_high_icir(monkeypatch):
+    """横截面晋升判定放行高显著性因子（强预测动量，|ic_t|≥1.65）。"""
+    panel, dates = _cs_panel(coef=0.08)  # 强预测面板 → 动量 ICIR≈0.45、ic_t≈4.7
+    loop = _cs_loop(monkeypatch, panel, dates)
+    ev = loop._evaluate_cross_section(_cs_momentum(), "trace-g4-cs-high")
+    reasons = " ".join(ev.get("failure_reasons") or [])
+    assert "截面|ic_t|" not in reasons
+
+
+def test_cross_section_g4_t_stat_block_count_aware(monkeypatch):
+    """G4 块数感知：同信号短样本 |ICIR|≥0.30 但 |ic_t|<1.65 → t 门槛拦截；
+    长样本有效截面期数足够 → ic_t≥1.65 放行。"""
+    # 短面板（25 期）：IC=0.14/sharpe=9.1 均过既有门槛，|ICIR|=0.66≥0.30（旧口径会放行），
+    # 但截面期数少 → |ic_t|=0.94<1.65 → 新 t 门槛拒绝
+    panel, dates = _cs_panel(n_dates=25, coef=0.03)
+    loop = _cs_loop(monkeypatch, panel, dates)
+    ev = loop._evaluate_cross_section(_cs_momentum(), "trace-g4-cs-short")
+    reasons = " ".join(ev.get("failure_reasons") or [])
+    assert "截面|ic_t|" in reasons
+    assert "截面|ICIR|" not in reasons  # 旧 ICIR 口径本身不触发——拒绝完全来自 t 门槛
+    assert ev.get("passed") is False
+    # 长面板（120 期）：同因子 |ic_t|≈2.05≥1.65 → t 门槛不触发
+    panel2, dates2 = _cs_panel(n_dates=120, coef=0.03)
+    loop2 = _cs_loop(monkeypatch, panel2, dates2)
+    ev2 = loop2._evaluate_cross_section(_cs_momentum(), "trace-g4-cs-long")
+    assert "截面|ic_t|" not in " ".join(ev2.get("failure_reasons") or [])

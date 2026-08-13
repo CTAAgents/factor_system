@@ -149,11 +149,15 @@ class FTSConfig:
     cost_sensitivity_enabled: bool = field(
         default_factory=lambda: os.getenv("FTS_COST_SENSITIVITY_ENABLED", "0") == "1"
     )
-    # G11（35-gap-closure-plan §5.4）：日换手硬剔除阈值（信号翻转率，0.30 由
-    # 2026-08-13 active 期货因子真实分布校准——P90≈0.32，剔除 top ~12% 极端换手；
-    # env FTS_FACTOR_TURNOVER_DAILY_MAX 可覆盖，空值=关闭观察）
+    # G11（35-gap-closure-plan §5.4）：日换手硬剔除阈值（信号翻转率口径 turnover/(21×2)）。
+    # 2026-08-13 判定（v2.104.0+9 修订）：期货换手成本低，但换手率过高同样无交易价值——
+    # 期货主系统默认 0.45 开启（P95 校准：83 个 active 期货因子真实分布 P95=0.456，
+    # 仅拦 top ~5% 天天翻仓的极端抖动因子；股票侧 fts-stock 如需更严可设 0.30=P90 参考值）。
+    # env FTS_FACTOR_TURNOVER_DAILY_MAX：数值=覆盖阈值；"off"/"none"/"0"=关闭；空值=默认 0.45
     factor_turnover_daily_max: Optional[float] = field(
-        default_factory=lambda: (lambda v: float(v) if v else 0.30)(os.getenv("FTS_FACTOR_TURNOVER_DAILY_MAX", ""))
+        default_factory=lambda: (
+            lambda v: None if v.strip().lower() in ("off", "none", "0") else (float(v) if v else 0.45)
+        )(os.getenv("FTS_FACTOR_TURNOVER_DAILY_MAX", ""))
     )
     # 夜盘/隔夜跳空列注入（GAP-066 + G8）：get_ohlcv 附加 overnight_gap/overnight_gap_flag 列
     # G8（v2.104.0, D5）：默认开启（跳空标记进入因子面板）
@@ -263,8 +267,10 @@ class FTSConfig:
     l3_turnover_penalty: float = field(default_factory=lambda: float(os.getenv("FTS_L3_TURNOVER_PENALTY", "0.15")))
     # GAP-072 (v2.99.0): 权重重算频率（解绑 L3 与信号管道）
     # cadence=daily: 每日重算权重；cadence=weekly: 仅在 l3_weight_recompute_weekday 重算（默认周五收盘后）
+    # v2.104.0+7 (2026-08-13): 默认改为 daily——L3 组合与信号管道权重每日重算，
+    # 避免冻结日复用旧快照导致因子池骤减（8/12 快照仅 1 因子的根因）。
     l3_weight_recompute_cadence: str = field(
-        default_factory=lambda: os.getenv("FTS_L3_WEIGHT_RECOMPUTE_CADENCE", "weekly")
+        default_factory=lambda: os.getenv("FTS_L3_WEIGHT_RECOMPUTE_CADENCE", "daily")
     )
     # 周度重算日（Python weekday: 0=周一 ... 4=周五；默认周五，L3 组合与信号管道权重周度重算）
     l3_weight_recompute_weekday: int = field(

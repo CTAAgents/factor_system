@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.104.0+4
+> 版本: v2.104.0+12
 > 最后更新: 2026-08-10
 
 ---
@@ -76,7 +76,7 @@ FTS 配置采用三级优先级（高→低）：
 | `executor_max_workers` | int | 4 | `FTS_EXECUTOR_MAX_WORKERS` | 执行器后端并行工作数（GAP-I502，v2.83.0） |
 | `tick_cache_retention_days` | int | 7 | —（FuturesDataAggregator 构造参数） | tick_cache 保留天数：超过该时长的过期 tick 写入时自动清理（GAP-I503 首期，v2.84.0） |
 | `l3_turnover_penalty` | float | 0.0 | `FTS_L3_TURNOVER_PENALTY` | 组合目标函数换手惩罚系数 λ：粘性约束后按 1/(1+λ) 收缩权重变动（0=关闭，λ 越大换手越低，GAP-I303，v2.85.0） |
-| l3_weight_recompute_cadence | str | "weekly" | FTS_L3_WEIGHT_RECOMPUTE_CADENCE | 权重重算频率：daily=每日重算 / weekly=仅 l3_weight_recompute_weekday 重算（GAP-072，v2.99.0；解绑 L3 与信号管道——信号管道每日生成信号，权重仅在重算日学习，其余日冻结复用快照） |
+| l3_weight_recompute_cadence | str | "daily" | FTS_L3_WEIGHT_RECOMPUTE_CADENCE | 权重重算频率：daily=每日重算 / weekly=仅 l3_weight_recompute_weekday 重算（GAP-072，v2.99.0；解绑 L3 与信号管道——信号管道每日生成信号，权重在重算日学习，其余日冻结复用快照；v2.104.0+7 默认改 daily——避免冻结日复用旧快照导致因子池骤减） |
 | l3_weight_recompute_weekday | int | 4 | FTS_L3_WEIGHT_RECOMPUTE_WEEKDAY | 周度重算日（Python weekday 0=周一...4=周五，默认周五收盘后重算；GAP-072，v2.99.0） |
 | `l3_turnover_budget_enabled` | bool | `false` | `FTS_L3_TURNOVER_BUDGET_ENABLED` | G3 换手预算分配开关（v2.103.0+17）：`true`=启用（单日换手 > daily_turnover_cap=0.30 时按边际收益剔除弱信号回退当前持仓）；`false`=关闭（默认，不剔除；换手控制由粘性约束 + 换手惩罚 λ 双通道兜底）。期货周频场景关闭可避免 sharpe 被 SHARPE_CAP 截断后评分并列导致的误剔最强因子（2026-08-13 实测 fut_bias_g18=0.9859 被误剔归零） |
 | `evolution_shadow_observe`（环境变量直读） | bool | `false` | `FTS_EVOLUTION_SHADOW_OBSERVE` | 新晋级精英因子影子池观察期开关（v2.103.0+20）：`1`=晋升写入 shadow_pool 标记（观察 5 交易日，L3 观察期内不纳入组合）；`0`/未设=默认关闭（新晋级直接进正式组合）。仅作用于新晋级因子，重审降级因子 shadow_pool 保留不变 |
@@ -94,6 +94,7 @@ FTS 配置采用三级优先级（高→低）：
 |:-----|:-----|:-----|:-----|
 | `--normalize` | `none` / `zscore` / `rank` | `none` | 因子信号截面标准化方式：none=原始信号 / zscore=每交易日截面 z 分数（ddof=0）/ rank=每交易日截面百分位秩映射到 [-1,1]。重算日写入权重快照 `normalize` 字段，冻结日读取同值应用保证口径一致（旧快照缺省 none 向后兼容） |
 | `--force-recompute` | — | 关 | 强制重算 Ridge 权重并更新快照（GAP-072，默认按 l3_weight_recompute_cadence 自动判定） |
+| `--max-weight-cap` | float | `None`（应用默认 `0.30`） | 单因子权重上限（v2.104.0+11）：Ridge 弱信号场景易产生单因子权重过大（如 43.5%），超限因子截断后多余权重按比例重分配给未超限因子再归一化；`None` 表示用代码默认 0.30，可传其他值（如 `0.20`）覆盖，`--max-weight-cap 0` 关闭截断 |
 | `portfolio_max_factors` | int | 20 | — | L3 组合最大因子数 |
 | `portfolio_top_n` | int | 5 | — | L3 Top N 输出 |
 | `portfolio_decay_days` | int | 90 | — | L3 衰减检验窗口 |
@@ -117,7 +118,7 @@ FTS 配置采用三级优先级（高→低）：
 | `inject_overnight_gap_enabled` | bool | `true` | `FTS_INJECT_OVERNIGHT_GAP` | 夜盘/隔夜跳空标记：`get_ohlcv` 是否注入 overnight_gap/overnight_gap_flag 列（v2.97.0 GAP-066；v2.103.0+15 G8 D5 默认 `false`→`true`） |
 | `overnight_gap_flag_threshold` | float | `0.01` | `FTS_OVERNIGHT_GAP_THRESHOLD` | 隔夜跳空标记阈值：\|overnight_gap\| ≥ 该值 flag=1（v2.97.0，GAP-066） |
 | `inject_data_gap_enabled` | bool | `true` | `FTS_INJECT_DATA_GAP` | G8 断K/跳空清洗标记：`get_futures_panel` 面板 df 是否附加 data_gap/gap_anomaly 列（断K不进因子计算、异常跳空进 QC，v2.103.0+15） |
-| `factor_turnover_daily_max` | float\|null | `null` | `FTS_FACTOR_TURNOVER_DAILY_MAX` | G11 日换手硬剔除阈值（信号翻转率口径 turnover/(21×2)）：`evaluate_backtest` 失败原因接入该门槛；默认 `null`=观察期（库中换手历史未回填，待真实分布复核后启用，v2.103.0+15） |
+| `factor_turnover_daily_max` | float\|null | `0.45` | `FTS_FACTOR_TURNOVER_DAILY_MAX` | G11 日换手硬剔除阈值（信号翻转率口径 turnover/(21×2)）：`evaluate_backtest`/`_evaluate_cross_section` 失败原因接入该门槛。**2026-08-13 判定（v2.104.0+9 修订）：期货换手成本低，但换手率过高同样无交易价值 → 期货主系统默认 `0.45` 开启（P95 校准：83 个 active 期货因子真实分布 P95=0.456，仅拦 top ~5% 天天翻仓的极端抖动因子）**（v2.103.0+15 观察期 → v2.104.0+1 定值 0.30 → v2.104.0+5 回默认关闭 → v2.104.0+9 重开 0.45；env：数值=覆盖阈值，"off"/"none"/"0"=关闭，空值=默认 0.45；股票侧 fts-stock 如需更严可设 0.30=P90 参考值；口径说明见 §2.1） |
 | `futures_neutralization` | bool | `true` | `FTS_FUTURES_NEUTRALIZATION` | 期货横截面因子评估是否做板块/产业链中性化（GAP-F03，v2.59.0） |
 | `futures_enhance_enabled` | bool | `false` | `FTS_FUTURES_ENHANCE_ENABLED` | 字段增强层 iFinD SDK 选项（GAP-083 阶段 C，v2.101.0）：`false` 时仅默认注册天勤 TQSDKEnhanceSource（close_oi→hold/oi_change，零额外依赖）；`true` 时追加 IFindSDKSource（方案 A：iFinD 官方 SDK 直连补 settle/pre_settle 权威值，需本地安装 iFinDPy + .env 凭据 IFIND_TOKEN 或 IFIND_USERNAME/PASSWORD，失败自动降级） |
 | `backtest_trade_filter` | bool | `true` | `FTS_BACKTEST_TRADE_FILTER` | 回测是否启用涨跌停拦截 + 停牌过滤（GAP-F02，v2.59.0） |
@@ -130,6 +131,19 @@ FTS 配置采用三级优先级（高→低）：
 | `duckdb_read_pool_size` | int | `4` | `FTS_DUCKDB_READ_POOL_SIZE` | DuckDB 读连接池大小（读操作与单写者解耦，互不阻塞，GAP-056，v2.86.0） |
 | `duckdb_batch_size` | int | `1000` | `FTS_DUCKDB_BATCH_SIZE` | DuckDB 批量写入缓冲行数（批量 COPY 降低 commit 频率，GAP-056，v2.86.0） |
 | `duckdb_commit_every` | int | `100` | `FTS_DUCKDB_COMMIT_EVERY` | DuckDB 批量写入 commit 周期（秒，GAP-056，v2.86.0） |
+
+### 2.1 G11 日换手口径说明（信号翻转率）
+
+G11 的"日换手"衡量的是**因子信号本身的变号频率**，**不是期货合约换手率**：
+
+| 概念 | 口径 | 衡量对象 |
+|:-----|:-----|:---------|
+| G11 日换手 | `turnover_daily = mean(\|Δsign(信号)\|)/2`（时序路径 `turnover/(21×2)`，横截面路径 `np.nanmean(\|Δsign\|)/2`） | 因子信号在相邻交易日翻转符号的占比 → 因子层面调仓频率（摩擦成本代理） |
+| 期货合约换手率 | `成交量 ÷ 持仓量` | 市场交易活跃度 / 流动性 |
+
+- 值域 `[0,1]`：0=从不翻转（买入持有），1=每日变号（每日全仓反转）。
+- 与市场活跃度无关：只看因子信号翻不翻，不看市场成交放不放量。
+- 语义判断（2026-08-13，v2.104.0+9 修订）：换手硬剔除建立在"高换手 = 高摩擦成本"前提上，该前提在股票（印花税 + 佣金 + T+1，单次往返 ≈0.12%）成立、在期货（手续费为主，单次往返 ≈0.02%）明显弱化——但换手率过高在期货同样无交易价值，故期货主系统 `factor_turnover_daily_max` 默认 `0.45` 开启（P95 校准：83 个 active 期货因子真实分布 P95=0.456，仅拦 top ~5% 天天翻仓的极端抖动因子，较股票 0.30=P90 参考值更宽松）；env 可配置（数值=覆盖，"off"/"none"/"0"=关闭）。
 
 ## 3. YAML 配置文件
 

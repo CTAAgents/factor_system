@@ -1,6 +1,7 @@
 """tests/factor_engine/test_g11_turnover_gate.py — G11 日换手硬剔除测试（35-gap-closure-plan §5.4）。
 
-覆盖: turnover_daily 字段注入 / 配置门槛开启时高换手因子拒收 / 默认关闭不改变准入。
+覆盖: turnover_daily 字段注入 / 门槛开启时高换手因子拒收 / 关闭态（None）不改变准入 /
+期货默认 0.45 开启（v2.104.0+9，P95 校准）。
 HARNESS §测试随重构。
 """
 
@@ -73,8 +74,8 @@ def test_turnover_daily_field_injected(sample_ohlcv):
     assert abs(float(bt["turnover_daily"]) - 1.0) < 1e-6
 
 
-def test_turnover_gate_disabled_by_default(sample_ohlcv, monkeypatch):
-    """默认（factor_turnover_daily_max=None）→ 高换手因子不被换手门槛拒收。"""
+def test_turnover_gate_off_when_null(sample_ohlcv, monkeypatch):
+    """关闭态（factor_turnover_daily_max=None，env 空值可配）→ 高换手因子不被换手门槛拒收。"""
     monkeypatch.setattr(
         "fts.config.get_config",
         lambda: type("Cfg", (), {"factor_turnover_daily_max": None})(),
@@ -82,6 +83,17 @@ def test_turnover_gate_disabled_by_default(sample_ohlcv, monkeypatch):
     factor = _factor_with_signal("(np.arange(n) % 2) * 2 - 1")
     result = EvaluationChain().evaluate(factor, sample_ohlcv, _forward_returns(sample_ohlcv["close"].values))
     assert "日换手" not in _reasons(result)
+
+
+def test_turnover_gate_on_by_default(sample_ohlcv, monkeypatch):
+    """期货默认 0.45 开启（v2.104.0+9，P95 校准）：日换手 1.0 的因子被默认门槛拒收。"""
+    from fts.config.settings import FTSConfig
+
+    monkeypatch.setenv("FTS_FACTOR_TURNOVER_DAILY_MAX", "")
+    monkeypatch.setattr("fts.config.get_config", lambda: FTSConfig())
+    factor = _factor_with_signal("(np.arange(n) % 2) * 2 - 1")  # 日换手 1.0 > 0.45
+    result = EvaluationChain().evaluate(factor, sample_ohlcv, _forward_returns(sample_ohlcv["close"].values))
+    assert "日换手" in _reasons(result)
 
 
 def test_turnover_gate_rejects_when_enabled(sample_ohlcv, monkeypatch):
@@ -178,8 +190,8 @@ def test_cross_section_gate_rejects_when_enabled(monkeypatch):
     assert ev.get("passed") is False
 
 
-def test_cross_section_gate_disabled_by_default(monkeypatch):
-    """默认（factor_turnover_daily_max=None）→ 高换手横截面因子不被换手门槛拒收。"""
+def test_cross_section_gate_off_when_null(monkeypatch):
+    """关闭态（factor_turnover_daily_max=None，env 空值可配）→ 高换手横截面因子不被换手门槛拒收。"""
     from fts.factor_engine.evolution_futures import EvolutionLoop
 
     loop = object.__new__(EvolutionLoop)

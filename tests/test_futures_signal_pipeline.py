@@ -21,10 +21,12 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from futures_signal_pipeline import (
+    _classify_delta_moves,
     _compute_composite_scores,
     _compute_factor_sign_flips,
     _compute_per_variety_weights,
     _compute_ridge_weights,
+    _load_signal_factors,
     load_futures_elite_factors,
 )
 
@@ -422,6 +424,83 @@ class TestComputeRidgeWeights:
         assert len(weights) == 4, f"覆盖率过滤应保留 4 个因子, 实际 {len(weights)}"
         assert abs(sum(weights.values()) - 1.0) < 1e-6
 
+    def test_max_weight_cap_limits_single_factor(self):
+        """max_weight_cap=0.30：单因子权重不超过上限，其余因子按比例承接。"""
+        panel, dates = _make_panel(n_symbols=5, n_days=120)
+        factor_names = [f"f{i}" for i in range(5)]
+        signal_matrix = _make_signal_matrix(panel, factor_names)
+        flips = _make_factor_sign_flips(factor_names)
+
+        weights = _compute_ridge_weights(
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=60,
+            max_weight_cap=0.30,
+        )
+
+        assert len(weights) == 5
+        assert abs(sum(weights.values()) - 1.0) < 0.001
+        assert max(weights.values()) <= 0.30 + 1e-6
+
+    def test_max_weight_cap_none_keeps_original(self):
+        """max_weight_cap=None：不截断，保持 Ridge 原始权重分布。"""
+        panel, dates = _make_panel(n_symbols=5, n_days=120)
+        factor_names = [f"f{i}" for i in range(5)]
+        signal_matrix = _make_signal_matrix(panel, factor_names)
+        flips = _make_factor_sign_flips(factor_names)
+
+        weights = _compute_ridge_weights(
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=60,
+            max_weight_cap=None,
+        )
+
+        assert len(weights) == 5
+        assert abs(sum(weights.values()) - 1.0) < 0.001
+
+    def test_max_weight_cap_below_equal_weight_clamped(self):
+        """cap 低于等权时自动抬升到等权下限（避免无法归一化）。"""
+        panel, dates = _make_panel(n_symbols=3, n_days=120)
+        factor_names = [f"f{i}" for i in range(3)]
+        signal_matrix = _make_signal_matrix(panel, factor_names)
+        flips = _make_factor_sign_flips(factor_names)
+
+        weights = _compute_ridge_weights(
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=60,
+            max_weight_cap=0.10,  # < 1/3 等权下限
+        )
+
+        assert len(weights) == 3
+        assert abs(sum(weights.values()) - 1.0) < 0.001
+        assert max(weights.values()) <= 1.0 / 3 + 1e-6
+
+    def test_max_weight_cap_single_factor_ignored(self):
+        """单因子时 cap 不生效（等权权重=1.0 保持）。"""
+        panel, dates = _make_panel(n_symbols=2, n_days=60)
+        factor_names = ["f1"]
+        signal_matrix = _make_signal_matrix(panel, factor_names)
+        flips = _make_factor_sign_flips(factor_names)
+
+        weights = _compute_ridge_weights(
+            signal_matrix,
+            panel,
+            dates,
+            flips,
+            lookback=30,
+            max_weight_cap=0.30,
+        )
+
+        assert weights == {"f1": 1.0}
+
 
 # ─── _compute_factor_sign_flips ──────────────────────────────────────────
 
@@ -616,3 +695,96 @@ class TestLoadFuturesEliteFactors:
         )
         factors = load_futures_elite_factors(ic_threshold=0)
         assert factors == []
+
+
+# ─── _classify_delta_moves ───────────────────────────────────────────────
+
+
+class TestClassifyDeltaMoves:
+    """_classify_delta_moves 测试（trading_advice 第 5 节增量分类，v2.104.0+7 修正）。"""
+
+    def test_decel_takes_largest_positive_delta(self):
+        """减速清单按增量降序取最大正增量（原升序取最小正增量 bug 修正）。"""
+        sym_scores = {"SA0": 0.57, "A0": 0.31, "Y0": 0.06, "AP0": 0.06}
+        sym_deltas = {"SA0": 0.44, "A0": 0.24, "Y0": 0.06, "AP0": 0.05, "CS0": -0.44}
+        accel, decel = _classify_delta_moves(sym_scores, sym_deltas, top_n=5)
+        # 增量 0.02 阈值仅取 >0.02；SA0 最大正增量排首位
+        assert [s for s, _, _ in decel] == ["SA0", "A0", "Y0", "AP0"]
+        assert [s for s, _, _ in accel] == ["CS0"]
+        assert decel[0] == ("SA0", 0.44, "多头信号加强中，做多关注")
+
+    def test_positive_score_decel_label_long(self):
+        """正信号品种 + 正增量 → 标注"多头信号加强中，做多关注"（原误标"做空减弱"）。"""
+        sym_scores = {"L0": 0.07}
+        sym_deltas = {"L0": 0.03}
+        _, decel = _classify_delta_moves(sym_scores, sym_deltas)
+        assert decel == [("L0", 0.03, "多头信号加强中，做多关注")]
+
+    def test_negative_score_decel_label_short(self):
+        """负信号品种 + 正增量 → 标注"做空信号减弱中，建议减仓"。"""
+        sym_scores = {"BU0": -0.08}
+        sym_deltas = {"BU0": 0.03}
+        _, decel = _classify_delta_moves(sym_scores, sym_deltas)
+        assert decel == [("BU0", 0.03, "做空信号减弱中，建议减仓")]
+
+    def test_negative_score_accel_label_short(self):
+        """负信号品种 + 负增量 → 标注"做空信号加强中"。"""
+        sym_scores = {"CS0": -0.45}
+        sym_deltas = {"CS0": -0.44}
+        accel, _ = _classify_delta_moves(sym_scores, sym_deltas)
+        assert accel == [("CS0", -0.44, "做空信号加强中")]
+
+    def test_positive_score_accel_label_long_weaken(self):
+        """正信号品种 + 负增量 → 标注"多头信号减弱中，警惕回撤"。"""
+        sym_scores = {"SA0": 0.57}
+        sym_deltas = {"SA0": -0.44}
+        accel, _ = _classify_delta_moves(sym_scores, sym_deltas)
+        assert accel == [("SA0", -0.44, "多头信号减弱中，警惕回撤")]
+
+    def test_thresholds_and_top_n(self):
+        """阈值边界与 top_n 截断生效。"""
+        sym_scores = {"A": -0.1, "B": 0.1, "C": 0.2}
+        sym_deltas = {"A": -0.01, "B": 0.01, "C": 0.02}  # 均未过 ±0.02 阈值
+        accel, decel = _classify_delta_moves(sym_scores, sym_deltas)
+        assert accel == []
+        assert decel == []
+        sym_deltas2 = {"A": -0.03, "B": 0.03, "C": 0.04, "D": 0.05}
+        accel2, decel2 = _classify_delta_moves(sym_scores, sym_deltas2, top_n=2)
+        assert [s for s, _, _ in accel2] == ["A"]
+        assert [s for s, _, _ in decel2] == ["D", "C"]
+
+
+# ─── _load_signal_factors ────────────────────────────────────────────────
+
+
+class TestLoadSignalFactors:
+    """_load_signal_factors 测试（GAP-097 强制 DuckDB 加载源，v2.104.0+7）。"""
+
+    def test_duckdb_primary_source(self):
+        """DuckDB 有因子 → 返回因子且不回退 JSON。"""
+        factors = [{"name": "f1", "code": "def f(): return 1"}]
+        with patch(
+            "futures_signal_pipeline.load_futures_elite_factors_from_db",
+            return_value=factors,
+        ) as mock_db, patch(
+            "futures_signal_pipeline.load_futures_elite_factors",
+            return_value=[{"name": "json_fallback"}],
+        ) as mock_json:
+            result = _load_signal_factors()
+        assert result == factors
+        mock_db.assert_called_once()
+        mock_json.assert_not_called()
+
+    def test_duckdb_empty_no_json_fallback(self):
+        """DuckDB 为空 → 返回 []，不静默回退 JSON（8/12 单因子污染根因修复）。"""
+        with patch(
+            "futures_signal_pipeline.load_futures_elite_factors_from_db",
+            return_value=[],
+        ) as mock_db, patch(
+            "futures_signal_pipeline.load_futures_elite_factors",
+            return_value=[{"name": "json_fallback"}],
+        ) as mock_json:
+            result = _load_signal_factors()
+        assert result == []
+        mock_db.assert_called_once()
+        mock_json.assert_not_called()
