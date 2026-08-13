@@ -21,14 +21,12 @@
 
 from __future__ import annotations
 
-import math
 
 import pytest
 
 from fts.factor_engine.factor_inspector import (
     AutoReviewPolicy,
     FactorReviewWorkflow,
-    ReviewDecision,
 )
 
 # 5 个待人工确认的异常因子样例（ic/sharpe 各类异常）

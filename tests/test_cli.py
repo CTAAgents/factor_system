@@ -205,16 +205,24 @@ class TestMain:
         assert "ERROR" in captured.err.upper() or "ERROR" in captured.out
 
     @patch("fts.cli.EvolutionLoop")
+    @patch("fts.cli.get_default_llm_client")
+    @patch("fts.cli._prepare_futures_data")
     @patch("fts.cli.generate_trace_id", return_value="l2_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
     def test_evolution_run_default_max_gen(
         self,
         mock_run_id,
         mock_trace_id,
+        mock_prep_fut,
+        mock_llm,
         mock_evoloop,
         capsys,
     ):
         """evolution run 默认 max_generations=10。"""
+        df = pd.DataFrame({"close": np.arange(10, dtype=float)})
+        panel = {"RB0": df}
+        common_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=10))
+        mock_prep_fut.return_value = (panel, common_dates, np.ones(10))
         mock_loop = mock_evoloop.return_value
         mock_loop.run.return_value = MagicMock(
             status="completed",
@@ -231,6 +239,8 @@ class TestMain:
         mock_loop.run.assert_called_once()
 
     @patch("fts.cli.EvolutionLoop")
+    @patch("fts.cli.get_default_llm_client")
+    @patch("fts.cli._prepare_futures_data")
     @patch("fts.cli.generate_session_id", return_value="session_abcd1234_20260718T000000")
     @patch("fts.cli.generate_trace_id", return_value="l2_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
@@ -239,10 +249,16 @@ class TestMain:
         mock_run_id,
         mock_trace_id,
         mock_session,
+        mock_prep_fut,
+        mock_llm,
         mock_evoloop,
         capsys,
     ):
         """evolution run 启动日志输出 session_id。"""
+        df = pd.DataFrame({"close": np.arange(10, dtype=float)})
+        panel = {"RB0": df}
+        common_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=10))
+        mock_prep_fut.return_value = (panel, common_dates, np.ones(10))
         mock_loop = mock_evoloop.return_value
         mock_loop.run.return_value = MagicMock(
             status="completed",
@@ -256,16 +272,24 @@ class TestMain:
         assert "session_abcd1234_20260718T000000" in captured.out
 
     @patch("fts.cli.EvolutionLoop")
+    @patch("fts.cli.get_default_llm_client")
+    @patch("fts.cli._prepare_futures_data")
     @patch("fts.cli.generate_trace_id", return_value="l2_abcd1234_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_ef567890_20260718T000000")
     def test_evolution_run_custom_max_gen(
         self,
         mock_run_id,
         mock_trace_id,
+        mock_prep_fut,
+        mock_llm,
         mock_evoloop,
         capsys,
     ):
         """evolution run --max-generations 20 使用自定义值。"""
+        df = pd.DataFrame({"close": np.arange(10, dtype=float)})
+        panel = {"RB0": df}
+        common_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=10))
+        mock_prep_fut.return_value = (panel, common_dates, np.ones(10))
         mock_loop = mock_evoloop.return_value
         mock_loop.run.return_value = MagicMock(
             status="completed",
@@ -386,7 +410,8 @@ class TestMain:
 class TestCmdFactorList:
     """测试 _cmd_factor_list。"""
 
-    def test_non_existing_elite_dir(self, capsys):
+    @patch("fts.cli._load_factor_repo", side_effect=RuntimeError("db down"))
+    def test_non_existing_elite_dir(self, mock_load, capsys):
         """elite 目录不存在时打印提示，返回 0。"""
         args = MagicMock(spec=[])
         args.elite_dir = "/tmp/nonexistent_elite_xyz"
@@ -395,9 +420,10 @@ class TestCmdFactorList:
         captured = capsys.readouterr()
         assert "不存在" in captured.out or "不存在" in captured.out
 
+    @patch("fts.cli._load_factor_repo", side_effect=RuntimeError("db down"))
     @patch("pathlib.Path.exists", return_value=True)
     @patch("pathlib.Path.glob", return_value=[])
-    def test_empty_elite_dir(self, mock_glob, mock_exists, capsys):
+    def test_empty_elite_dir(self, mock_glob, mock_exists, mock_load, capsys):
         """elite 目录存在但无 JSON 文件。"""
         args = MagicMock(spec=[])
         args.elite_dir = "/tmp/elite"
@@ -406,9 +432,10 @@ class TestCmdFactorList:
         captured = capsys.readouterr()
         assert "无符合条件的因子" in captured.out
 
+    @patch("fts.cli._load_factor_repo", side_effect=RuntimeError("db down"))
     @patch("pathlib.Path.exists", return_value=True)
     @patch("pathlib.Path.glob")
-    def test_with_factors(self, mock_glob, mock_exists, capsys):
+    def test_with_factors(self, mock_glob, mock_exists, mock_load, capsys):
         """elite 目录有因子文件时正确列出。"""
         # 创建模拟的 Path 对象
         factor_data = json.dumps(
@@ -440,7 +467,8 @@ class TestCmdFactorList:
         assert "RB_001" in captured.out
         assert "Reversal Beta" in captured.out
 
-    def test_unevaluated_factor_shows_not_evaluated(self, capsys, tmp_path):
+    @patch("fts.cli._load_factor_repo", side_effect=RuntimeError("db down"))
+    def test_unevaluated_factor_shows_not_evaluated(self, mock_load, capsys, tmp_path):
         """无评估指标的因子显示'未评估'而非空白。"""
         from argparse import Namespace
 
@@ -475,9 +503,10 @@ class TestCmdFactorList:
         assert "未评估" in captured.out
         assert "CAND_001" in captured.out
 
+    @patch("fts.cli._load_factor_repo", side_effect=RuntimeError("db down"))
     @patch("pathlib.Path.exists", return_value=True)
     @patch("pathlib.Path.glob")
-    def test_factor_read_error(self, mock_glob, mock_exists, capsys):
+    def test_factor_read_error(self, mock_glob, mock_exists, mock_load, capsys):
         """因子文件读取失败时优雅处理。"""
         mock_file = MagicMock(spec=Path)
         mock_file.stem = "BROKEN"
@@ -501,7 +530,8 @@ class TestCmdFactorList:
         assert "BROKEN" in captured.out
         assert "读取失败" in captured.out
 
-    def test_default_elite_dir_none(self, capsys, tmp_path):
+    @patch("fts.cli._load_factor_repo", side_effect=RuntimeError("db down"))
+    def test_default_elite_dir_none(self, mock_load, capsys, tmp_path):
         """elite_dir 为 None 时使用默认路径。"""
         from unittest.mock import patch
 
@@ -629,92 +659,6 @@ class TestMainGuard:
 
 
 # ═══════════════════════════════════════════════════════════
-# _cmd_evolution_run — 横截面(csi300)模式
-# ═══════════════════════════════════════════════════════════
-
-
-class TestCmdEvolutionRunCrossSection:
-    """测试 _cmd_evolution_run 横截面(csi300)模式（lines 142-158）。"""
-
-    @patch("fts.cli.EvolutionLoop")
-    @patch("fts.cli.FactorVerifier")
-    @patch("fts.cli.get_default_seed_pool")
-    @patch("fts.cli.get_default_llm_client")
-    @patch("fts.cli._prepare_cross_section_data")
-    @patch("fts.cli.generate_trace_id", return_value="l2_cs_20260718T000000")
-    @patch("fts.cli.generate_run_id", return_value="run_cs_20260718T000000")
-    def test_csi300_mode(
-        self,
-        mock_run_id,
-        mock_trace_id,
-        mock_prep_cs,
-        mock_llm,
-        mock_seed,
-        mock_verifier,
-        mock_evoloop,
-        capsys,
-    ):
-        """--universe csi300 走横截面代码路径。"""
-        panel = {"000001": pd.DataFrame({"close": range(10)})}
-        common_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=10))
-        fwd_ret = np.ones(10)
-        mock_prep_cs.return_value = (panel, common_dates, fwd_ret)
-
-        mock_loop = mock_evoloop.return_value
-        mock_loop.run.return_value = MagicMock(
-            status="completed",
-            generations_completed=1,
-            elite_factor_ids=[],
-            circuit_breaker_reason="",
-        )
-
-        rc = main(["evolution", "run", "--universe", "csi300"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "csi300" in captured.out
-        assert "panel symbols=1" in captured.out
-        mock_prep_cs.assert_called_once()
-
-    @patch("fts.cli.FTSDataProvider")
-    def test_csi300_data_provider_fails(self, mock_provider, capsys):
-        """数据提供者失败时传播异常（_prepare_cross_section_data 未在 try 内）。"""
-        instance = mock_provider.return_value
-        instance.get_csi300_panel.side_effect = RuntimeError("API unavailable")
-        with pytest.raises(RuntimeError, match="API unavailable"):
-            main(["evolution", "run", "--universe", "csi300"])
-
-    @patch("fts.cli.FTSDataProvider")
-    @patch("fts.cli.EvolutionLoop")
-    def test_csi300_real_prepare_path(
-        self,
-        mock_evoloop,
-        mock_provider,
-        capsys,
-    ):
-        """不 mock _prepare_cross_section_data，验证其实际执行路径覆盖 lines 99-106。"""
-        # 模拟数据提供者返回合理的面板数据
-        mock_instance = mock_provider.return_value
-        close_data = np.arange(10, dtype=float)
-        df = pd.DataFrame({"close": close_data})
-        panel = {"000001": df}
-        common_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=10))
-        mock_instance.get_csi300_panel.return_value = (panel, common_dates)
-
-        mock_loop = mock_evoloop.return_value
-        mock_loop.run.return_value = MagicMock(
-            status="completed",
-            generations_completed=1,
-            elite_factor_ids=[],
-            circuit_breaker_reason="",
-        )
-
-        rc = main(["evolution", "run", "--universe", "csi300"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "panel symbols=1" in captured.out
-
-
-# ═══════════════════════════════════════════════════════════
 # _cmd_evolution_run — 错误处理
 # ═══════════════════════════════════════════════════════════
 
@@ -723,22 +667,22 @@ class TestCmdEvolutionRunErrors:
     """测试 _cmd_evolution_run 异常处理路径（lines 205/207-209）。"""
 
     @patch("fts.cli.EvolutionLoop")
+    @patch("fts.cli.get_default_llm_client")
+    @patch("fts.cli._prepare_futures_data")
     @patch("fts.cli.generate_trace_id", return_value="l2_err_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_err_20260718T000000")
-    def test_loop_run_raises(self, mock_run_id, mock_trace_id, mock_evoloop, capsys):
+    def test_loop_run_raises(self, mock_run_id, mock_trace_id, mock_prep_fut, mock_llm, mock_evoloop, capsys):
         """loop.run() 抛出异常时返回 2。"""
+        df = pd.DataFrame({"close": np.arange(10, dtype=float)})
+        panel = {"RB0": df}
+        common_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=10))
+        mock_prep_fut.return_value = (panel, common_dates, np.ones(10))
         mock_loop = mock_evoloop.return_value
         mock_loop.run.side_effect = RuntimeError("evolution crashed")
         rc = main(["evolution", "run"])
         assert rc == 2
         captured = capsys.readouterr()
         assert "运行失败" in captured.out or "运行失败" in captured.err
-
-    @patch("fts.cli._prepare_data", side_effect=RuntimeError("prepare_data failed"))
-    def test_prepare_data_raises(self, mock_prep, capsys):
-        """_prepare_data 失败时传播异常（未在 try 内，单标分支走此路径）。"""
-        with pytest.raises(RuntimeError, match="prepare_data failed"):
-            main(["evolution", "run", "--universe", "single"])
 
 
 # ═══════════════════════════════════════════════════════════
@@ -783,7 +727,8 @@ def _write_factor_snapshot(elite_dir: Path, factor_id: str, name: str, ic: float
 class TestFactorListDirectoryRead:
     """factor list 目录直读：跳过内部索引文件 + 提取嵌套评估。"""
 
-    def test_factor_list_skips_underscore_index_file(self, tmp_path, capsys):
+    @patch("fts.cli._load_factor_repo", side_effect=RuntimeError("db down"))
+    def test_factor_list_skips_underscore_index_file(self, mock_load, tmp_path, capsys):
         """_l2_seed_correlation_index.json 等内部文件不计入因子。"""
         elite_dir = tmp_path / "elite"
         elite_dir.mkdir(parents=True, exist_ok=True)
@@ -812,7 +757,8 @@ class TestFactorListDirectoryRead:
         assert "test_factor" in out
         assert "fct_abc12345" in out
 
-    def test_factor_list_extracts_evaluation_ic_sharpe(self, tmp_path, capsys):
+    @patch("fts.cli._load_factor_repo", side_effect=RuntimeError("db down"))
+    def test_factor_list_extracts_evaluation_ic_sharpe(self, mock_load, tmp_path, capsys):
         """ic/sharpe 从 evaluation.level_1_backtest 提取（而非显示 -）。"""
         elite_dir = tmp_path / "elite"
         _write_factor_snapshot(elite_dir, "fct_abc12345", "test_factor", ic=0.1234, sharpe=2.5)
@@ -965,7 +911,10 @@ class TestCmdSchedulerRun:
         """调度器成功启动返回 0。"""
         instance = mock_engine.return_value
         instance.start.return_value = True
-        rc = main(["scheduler", "run"])
+        # _cmd_scheduler_run 成功路径以 threading.Event().wait() 常驻保活，
+        # mock 使其立即返回，避免测试无限阻塞
+        with patch("threading.Event.wait", return_value=None):
+            rc = main(["scheduler", "run"])
         assert rc == 0
         captured = capsys.readouterr()
         assert "调度器已启动" in captured.out
@@ -1024,16 +973,24 @@ class TestCmdEvolutionRunCircuitBreaker:
     """测试 evolution run 熔断器输出路径（line 205）。"""
 
     @patch("fts.cli.EvolutionLoop")
+    @patch("fts.cli.get_default_llm_client")
+    @patch("fts.cli._prepare_futures_data")
     @patch("fts.cli.generate_trace_id", return_value="l2_cb_20260718T000000")
     @patch("fts.cli.generate_run_id", return_value="run_cb_20260718T000000")
     def test_circuit_breaker_reason_printed(
         self,
         mock_run_id,
         mock_trace_id,
+        mock_prep_fut,
+        mock_llm,
         mock_evoloop,
         capsys,
     ):
         """有 circuit_breaker_reason 时打印原因。"""
+        df = pd.DataFrame({"close": np.arange(10, dtype=float)})
+        panel = {"RB0": df}
+        common_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=10))
+        mock_prep_fut.return_value = (panel, common_dates, np.ones(10))
         mock_loop = mock_evoloop.return_value
         mock_loop.run.return_value = MagicMock(
             status="completed",
@@ -1057,10 +1014,9 @@ class TestFactorStatsParser:
 
     def test_factor_stats_parser(self):
         parser = build_parser()
-        args = parser.parse_args(["factor", "stats", "--market", "stock", "--min-sharpe", "0.5"])
+        args = parser.parse_args(["factor", "stats", "--min-sharpe", "0.5"])
         assert args.command == "factor"
         assert args.subcommand == "stats"
-        assert args.market == "stock"
         assert args.min_sharpe == 0.5
 
     def test_factor_lineage_parser(self):

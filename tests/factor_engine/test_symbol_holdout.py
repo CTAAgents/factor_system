@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from fts.factor_engine.audit import FactorAuditor
 from fts.factor_engine.evaluation_chain import cross_section_evaluate_backtest

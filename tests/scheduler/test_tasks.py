@@ -66,35 +66,17 @@ DEFAULT_TASKS = {
         "desc": "L3 Portfolio Loop（期货路径：futures_elite + market=futures）：每周五收盘后重算组合权重（Elastic Net 信号合成 + Verifier 校验），与期货信号管道解绑",
         "prefix": "fts.l3",
     },
-    "l3_portfolio_loop_stock": {
-        "cron": "30 19 * * 5",
-        "callable": "fts.scheduler.jobs.l3_portfolio_loop_stock_job",
-        "desc": "L3 Portfolio Loop（股票路径：elite_dir + market=stock）：每周五重算股票组合权重（GAP-063 组合质检前置接入），与股票信号管道解绑",
-        "prefix": "fts.l3.stock",
-    },
     "futures_signal_pipeline": {
         "cron": "0 20 * * 1-5",
         "callable": "fts.scheduler.jobs.futures_signal_pipeline_job",
         "desc": "期货信号管道（每日独立运行）：Ridge 权重周五重算并存快照，其余日冻结复用快照仅刷新因子值 → reports/futures/{date}/futures_signals_*.md",
         "prefix": "fts.signal",
     },
-    "daily_signal_pipeline": {
-        "cron": "45 8 * * 1-5",
-        "callable": "fts.scheduler.jobs.daily_signal_pipeline_job",
-        "desc": "股票/ETF 信号管道（每日独立运行）：Ridge 权重周五重算并存快照，其余日冻结复用快照仅刷新因子值 → reports/stock/{date}/daily_signals_*.md",
-        "prefix": "fts.signal.stock",
-    },
     "sync_futures_data": {
         "cron": "30 17 * * 1-5",
         "callable": "fts.scheduler.jobs.sync_futures_data_job",
         "desc": "Phase 14.5 期货多源数据同步（DUCKDB 缓存 + TQ 源 → DuckDB）",
         "prefix": "fts.sync",
-    },
-    "sync_stock_data": {
-        "cron": "0 17 * * 1-5",
-        "callable": "fts.scheduler.jobs.sync_stock_data_job",
-        "desc": "股票/ETF 日 K 线缓存同步（腾讯 API → DuckDB stock_kline_cache，供次日信号管道/演化）",
-        "prefix": "fts.sync.stock",
     },
     "health_check": {
         "cron": "*/10 * * * *",
@@ -242,9 +224,9 @@ def test_registry_is_taskregistry():
 
 
 def test_register_default_tasks_registers_five():
-    """register_default_tasks 注册 15 个默认任务。"""
+    """register_default_tasks 注册默认任务。"""
     register_default_tasks()
-    assert len(REGISTRY) == 15
+    assert len(REGISTRY) == 13
 
 
 @pytest.mark.parametrize("name,expected", DEFAULT_TASKS.items())
@@ -292,11 +274,10 @@ def test_default_task_callables_importable():
 def test_list_tasks_returns_sorted():
     """list_tasks 返回按 name 排序的列表，自动注册默认任务。"""
     tasks = list_tasks()
-    assert len(tasks) == 15
+    assert len(tasks) == 13
     names = [t.name for t in tasks]
     assert names == sorted(names)
     assert names == [
-        "daily_signal_pipeline",
         "data_level_monitor",
         "data_quality_eval",
         "factor_inspector",
@@ -305,12 +286,11 @@ def test_list_tasks_returns_sorted():
         "l1_meta_loop",
         "l2_evolution_loop",
         "l3_portfolio_loop",
-        "l3_portfolio_loop_stock",
         "logic_monitor",
+        "mhf_signal",
         "monthly_decay_eval",
         "sync_futures_data",
         "sync_liquidity_pool",
-        "sync_stock_data",
     ]
 
 
@@ -319,7 +299,7 @@ def test_list_tasks_after_manual_register():
     register_default_tasks()
     REGISTRY.register(TaskSpec("custom_job", "0 12 * * *", "mod.custom"))
     tasks = list_tasks()
-    assert len(tasks) == 16
+    assert len(tasks) == 14
     names = [t.name for t in tasks]
     assert "custom_job" in names
 

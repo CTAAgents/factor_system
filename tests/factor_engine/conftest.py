@@ -22,6 +22,22 @@ if str(_FTS_ROOT) not in sys.path:
 # ─── 共享 fixtures ────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _no_real_macro_source(monkeypatch):
+    """隔离真实宏观数据源，防止 DuckDB 读锁阻塞（全量回归卡点）。
+
+    backtest_pipeline._inject_macro_fields 会真实访问 EDB 缓存库
+    （data/fts_history.duckdb）；后台 scheduler/MCP 进程周期性写库时，
+    测试读锁会无限阻塞（曾导致全量回归 timeout）。此处 mock
+    MacroFieldAligner，使宏观注入静默返回原数据，不回退语义改变。
+    """
+    from unittest.mock import MagicMock
+
+    mock_cls = MagicMock()
+    mock_cls.return_value.inject.side_effect = lambda data, **kw: data
+    monkeypatch.setattr("fts.data_sources.macro_aligner.MacroFieldAligner", mock_cls)
+
+
 @pytest.fixture
 def sample_ohlcv() -> pd.DataFrame:
     """500 天的合成 OHLCV 数据（用于因子评估测试）。"""

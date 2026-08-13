@@ -42,21 +42,21 @@ def test_gp_evolve_parser_full():
             "gp",
             "evolve",
             "--universe",
-            "csi300",
+            "futures",
             "--population",
             "50",
             "--generations",
             "10",
-            "--max-stocks",
+            "--max-symbols",
             "10",
             "--output",
             "tmp/out",
         ]
     )
-    assert args.universe == "csi300"
+    assert args.universe == "futures"
     assert args.population == 50
     assert args.generations == 10
-    assert args.max_stocks == 10
+    assert args.max_symbols == 10
     assert args.output == "tmp/out"
 
 

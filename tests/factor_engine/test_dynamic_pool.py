@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -23,6 +24,24 @@ from scripts.sync_liquidity_pool import build_pool
 
 
 # ─── ① get_dynamic_core_subset ─────────────────────────
+
+
+class _EmptySSOT:
+    """模拟 SSOT state.duckdb 无数据，使 JSON 兼容路径成为被测对象（plans/29 P4 读路径切换）。"""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def get(self, ns, key):
+        return None
+
+    def close(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _empty_ssot(monkeypatch):
+    monkeypatch.setattr("fts.store.state_db.StateKVStore", _EmptySSOT)
 
 
 def _make_pool_json(tmp_path: Path, payload) -> Path:

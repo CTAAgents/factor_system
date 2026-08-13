@@ -8,7 +8,6 @@ tests/factor_engine/test_alternative_sentiment.py — C2 舆情情感因子生�
 
 from __future__ import annotations
 
-from typing import Optional
 
 import numpy as np
 import pandas as pd

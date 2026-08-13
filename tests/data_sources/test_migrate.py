@@ -236,9 +236,10 @@ def test_migrate_returns_dict_with_change_counts(fresh_db):
     assert "tables_created" in result
     assert "indexes_created" in result
     # 全新 DB：kline_cache 全新创建（不算 columns_added）
-    # tables_created: kline_cache + contract_kline + minute_cache + edb_cache + option_chain_cache + stock_kline_cache + tick_cache = 7（v2.86.0 新增股票缓存表）
+    # tables_created: kline_cache + contract_kline + minute_cache + edb_cache + option_chain_cache
+    #                 + tick_cache = 6（plans/32 剥离后，股票缓存表已移除）
     # indexes_created: 1
-    assert result["tables_created"] == 7
+    assert result["tables_created"] == 6
     assert result["indexes_created"] == 1
 
 

@@ -69,22 +69,18 @@ class TestDefaultConfig:
         assert cfg["min_cost_bps"] == 0.5
 
     def test_default_stock_config(self) -> None:
-        """股票默认成本配置应正确。"""
+        """股票默认成本配置：主系统剥离后回退到期货默认。"""
         model = TransactionCostModel()
         cfg = model.get_cost_bps("stock")
-        assert cfg["slippage_bps"] == 1.0
-        assert cfg["commission_bps"] == 0.8
-        assert cfg["impact_bps_per_pct"] == 2.0
-        assert cfg["min_cost_bps"] == 0.5
+        assert cfg["slippage_bps"] == 0.5  # 回退期货默认
+        assert cfg["commission_bps"] == 0.2
 
     def test_default_etf_config(self) -> None:
-        """ETF 默认成本配置应正确。"""
+        """ETF 默认成本配置：主系统剥离后回退到期货默认。"""
         model = TransactionCostModel()
         cfg = model.get_cost_bps("etf")
-        assert cfg["slippage_bps"] == 0.5
-        assert cfg["commission_bps"] == 0.3
-        assert cfg["impact_bps_per_pct"] == 1.0
-        assert cfg["min_cost_bps"] == 0.5
+        assert cfg["slippage_bps"] == 0.5  # 回退期货默认
+        assert cfg["commission_bps"] == 0.2
 
     def test_unknown_market_falls_back(self) -> None:
         """未知市场应回退到全局默认配置。"""
@@ -159,7 +155,7 @@ class TestAdjust:
         assert result_with_vol["total_cost_bps"] >= result_no_vol["total_cost_bps"]
 
     def test_different_markets_different_costs(self) -> None:
-        """不同市场的成本应不同。"""
+        """主系统剥离后：stock/etf 回退期货配置，成本一致。"""
         model = TransactionCostModel()
         metrics = _make_metrics(sharpe=2.0)
         signal = np.tile([0.5, -0.5], 126)
@@ -168,9 +164,9 @@ class TestAdjust:
         result_stock = model.adjust(metrics, signal, market="stock")
         result_etf = model.adjust(metrics, signal, market="etf")
 
-        # 股票成本最高（手续费 0.8 > 期货 0.2）
-        assert result_stock["total_cost_bps"] > result_futures["total_cost_bps"]
-        assert result_etf["total_cost_bps"] <= result_stock["total_cost_bps"]
+        # 剥离后 stock/etf 回退期货默认，成本一致
+        assert result_stock["total_cost_bps"] == result_futures["total_cost_bps"]
+        assert result_etf["total_cost_bps"] == result_futures["total_cost_bps"]
 
     def test_constant_signal_zero_turnover(self) -> None:
         """完全恒定的信号应产生零换手率。"""
@@ -221,11 +217,11 @@ class TestRollCost:
     """展期成本项（持仓穿越换月日扣 |position| × roll_cost_bps）。"""
 
     def test_futures_default_roll_cost_bps(self) -> None:
-        """期货默认配置应含 roll_cost_bps=2.0；股票/ETF 为 0。"""
+        """期货默认配置应含 roll_cost_bps=2.0（主系统剥离后 stock/etf 回退期货）。"""
         model = TransactionCostModel()
         assert model.get_cost_bps("futures")["roll_cost_bps"] == 2.0
-        assert model.get_cost_bps("stock")["roll_cost_bps"] == 0.0
-        assert model.get_cost_bps("etf")["roll_cost_bps"] == 0.0
+        assert model.get_cost_bps("stock")["roll_cost_bps"] == 2.0
+        assert model.get_cost_bps("etf")["roll_cost_bps"] == 2.0
 
     def test_roll_cost_added_to_total(self) -> None:
         """持仓穿越换月日时，总成本应包含展期成本。"""

@@ -22,6 +22,24 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _no_real_data_source(monkeypatch):
+    """隔离真实数据源，杜绝 TqSdk 网络等待（全量回归卡点）。
+
+    MetaLoop 感知步骤 `_make_web_collector` 在 web_collector=None 时惰性
+    初始化 FTSDataProvider 并调用 `data_futures.get_realtime_prices`（内部
+    TqSdk asyncio 事件循环 select 等待网络），断网/无行情环境下无限阻塞。
+    此处统一 mock 两者，使感知步骤返回合成快照。
+    """
+    from unittest.mock import MagicMock
+
+    mock_provider = MagicMock()
+    mock_provider.return_value.get_realtime_prices.return_value = {"RB": 123.4}
+    monkeypatch.setattr("fts.data.FTSDataProvider", mock_provider)
+    monkeypatch.setattr("fts.data_futures.get_realtime_prices", lambda *a, **k: {"RB": 123.4})
+
+
 # 确保能导入 fts.factor_engine
 _FTS_ROOT = Path(__file__).resolve().parents[2]
 if str(_FTS_ROOT) not in sys.path:
@@ -62,6 +80,16 @@ def tmp_meta_dir(tmp_path) -> Path:
     p = tmp_path / "meta_loop"
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+@pytest.fixture
+def tmp_state_store(tmp_path):
+    """临时 state.duckdb 存储（测试隔离，避免污染全局 SSOT）。"""
+    from fts.store.state_db import StateKVStore
+
+    store = StateKVStore(tmp_path / "state.duckdb")
+    yield store
+    store.close()
 
 
 @pytest.fixture
@@ -277,100 +305,89 @@ class TestL1Verifier:
 
 
 class TestMetaStateManager:
-    """L1 状态管理器 — 持久化 + backup 恢复。"""
+    """L1 状态管理器 — DuckDB SSOT 持久化（plans/29 P4 读路径切换）。"""
 
-    def test_init_creates_state(self, tmp_meta_dir):
+    def test_init_creates_state(self, tmp_meta_dir, tmp_state_store):
         """首次调用 load_or_init 创建新状态。"""
-        sm = MetaStateManager(tmp_meta_dir)
+        sm = MetaStateManager(tmp_meta_dir, state_store=tmp_state_store)
         state = sm.load_or_init(budget_limit=50000)
         assert state["status"] == "paused"
         assert state["budget_limit"] == 50000
         assert state["schema_version"] == STATE_SCHEMA_VERSION
         assert state["total_candidates_generated"] == 0
 
-    def test_save_persists_state(self, tmp_meta_dir):
-        """save() 持久化状态文件。"""
-        sm = MetaStateManager(tmp_meta_dir)
+    def test_save_persists_state(self, tmp_meta_dir, tmp_state_store):
+        """save() 持久化到 state.duckdb。"""
+        sm = MetaStateManager(tmp_meta_dir, state_store=tmp_state_store)
         state = sm.load_or_init(50000)
         state["total_candidates_generated"] = 5
         sm.save(state)
-        # 重新加载
-        with open(sm.state_file, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
+        # 从 DuckDB 读回
+        loaded = tmp_state_store.get("meta_loop", "state")
         assert loaded["total_candidates_generated"] == 5
 
-    def test_save_creates_backup(self, tmp_meta_dir):
-        """save() 同时创建 backup 文件。"""
-        sm = MetaStateManager(tmp_meta_dir)
+    def test_save_reload_roundtrip(self, tmp_meta_dir, tmp_state_store):
+        """save() 后新建管理器可重新加载（DuckDB 持久化）。"""
+        sm = MetaStateManager(tmp_meta_dir, state_store=tmp_state_store)
         state = sm.load_or_init(50000)
+        state["total_candidates_generated"] = 7
         sm.save(state)
-        assert sm.backup_file.exists()
+        # 新管理器从 DuckDB 加载
+        sm2 = MetaStateManager(tmp_meta_dir, state_store=tmp_state_store)
+        recovered = sm2.load_or_init(50000)
+        assert recovered["total_candidates_generated"] == 7
 
-    def test_mark_running(self, tmp_meta_dir):
+    def test_mark_running(self, tmp_meta_dir, tmp_state_store):
         """mark_running() 切换状态。"""
-        sm = MetaStateManager(tmp_meta_dir)
+        sm = MetaStateManager(tmp_meta_dir, state_store=tmp_state_store)
         state = sm.load_or_init(50000)
         state = sm.mark_running(state)
         assert state["status"] == "running"
         assert state["last_error"] is None
 
-    def test_mark_completed(self, tmp_meta_dir):
+    def test_mark_completed(self, tmp_meta_dir, tmp_state_store):
         """mark_completed() 切换状态。"""
-        sm = MetaStateManager(tmp_meta_dir)
+        sm = MetaStateManager(tmp_meta_dir, state_store=tmp_state_store)
         state = sm.load_or_init(50000)
         state = sm.mark_completed(state)
         assert state["status"] == "completed"
 
-    def test_mark_paused_with_error(self, tmp_meta_dir):
+    def test_mark_paused_with_error(self, tmp_meta_dir, tmp_state_store):
         """mark_paused() 记录错误信息。"""
-        sm = MetaStateManager(tmp_meta_dir)
+        sm = MetaStateManager(tmp_meta_dir, state_store=tmp_state_store)
         state = sm.load_or_init(50000)
         err_msg = "测试异常"
         state = sm.mark_paused(state, err_msg)
         assert state["status"] == "paused"
         assert state["last_error"] == err_msg
 
-    def test_mark_circuit_broken(self, tmp_meta_dir):
+    def test_mark_circuit_broken(self, tmp_meta_dir, tmp_state_store):
         """mark_circuit_broken() 切换状态。"""
-        sm = MetaStateManager(tmp_meta_dir)
+        sm = MetaStateManager(tmp_meta_dir, state_store=tmp_state_store)
         state = sm.load_or_init(50000)
         reason = "Token 超限"
         state = sm.mark_circuit_broken(state, reason)
         assert state["status"] == "circuit_broken"
         assert state["last_error"] == reason
 
-    def test_recover_from_backup(self, tmp_meta_dir):
-        """主文件损坏时从 backup 恢复。"""
-        sm = MetaStateManager(tmp_meta_dir)
-        # 先正常保存
-        state = sm.load_or_init(50000)
-        state["total_candidates_generated"] = 7
-        sm.save(state)
-        # 损坏主文件
-        sm.state_file.write_text("not a json", encoding="utf-8")
-        # 重新加载应从 backup 恢复
-        recovered = sm.load_or_init(50000)
-        assert recovered["total_candidates_generated"] == 7
-
-    def test_schema_version_mismatch_triggers_cold_start(self, tmp_meta_dir):
+    def test_schema_version_mismatch_triggers_cold_start(self, tmp_meta_dir, tmp_state_store):
         """schema 版本不匹配触发冷启动。"""
-        sm = MetaStateManager(tmp_meta_dir)
+        sm = MetaStateManager(tmp_meta_dir, state_store=tmp_state_store)
         # 写入旧 schema 版本状态
         old_state = {
             "run_id": "old",
             "schema_version": "0",  # 旧 schema 版本
             "status": "completed",
         }
-        with open(sm.state_file, "w", encoding="utf-8") as f:
-            json.dump(old_state, f)
+        tmp_state_store.upsert("meta_loop", "state", old_state, run_id="test")
         # 重新加载应冷启动
         state = sm.load_or_init(50000)
         assert state["schema_version"] == STATE_SCHEMA_VERSION
         assert state["status"] == "paused"  # 冷启动默认
 
-    def test_schema_version_compatible_keeps_state(self, tmp_meta_dir):
+    def test_schema_version_compatible_keeps_state(self, tmp_meta_dir, tmp_state_store):
         """schema 版本一致时不冷启动，保留原状态。"""
-        sm = MetaStateManager(tmp_meta_dir)
+        sm = MetaStateManager(tmp_meta_dir, state_store=tmp_state_store)
         # 写入当前 schema 版本状态（模拟升级版本号但 schema 未变）
         existing_state = {
             "run_id": "existing_run",
@@ -378,42 +395,20 @@ class TestMetaStateManager:
             "status": "completed",
             "total_candidates_generated": 42,
         }
-        with open(sm.state_file, "w", encoding="utf-8") as f:
-            json.dump(existing_state, f)
+        tmp_state_store.upsert("meta_loop", "state", existing_state, run_id="test")
         # 重新加载应保留状态，不冷启动
         state = sm.load_or_init(50000)
         assert state["run_id"] == "existing_run"
         assert state["total_candidates_generated"] == 42
         assert state["status"] == "completed"
 
-    def test_save_with_wrong_schema_version_raises(self, tmp_meta_dir):
+    def test_save_with_wrong_schema_version_raises(self, tmp_meta_dir, tmp_state_store):
         """save() schema 版本不匹配抛异常。"""
-        sm = MetaStateManager(tmp_meta_dir)
+        sm = MetaStateManager(tmp_meta_dir, state_store=tmp_state_store)
         state = sm.load_or_init(50000)
         state["schema_version"] = "0"  # 篡改 schema 版本
         with pytest.raises(MetaStateManagerError):
             sm.save(state)
-
-    def test_backup_recovery_failure(self, tmp_meta_dir):
-        """备份文件也损坏时恢复失败，冷启动（lines 205-207）。"""
-        sm = MetaStateManager(tmp_meta_dir)
-        state = sm.load_or_init(50000)
-        state["total_candidates_generated"] = 7
-        sm.save(state)
-        # 损坏主文件和备份文件
-        sm.state_file.write_text("not json", encoding="utf-8")
-        sm.backup_file.write_text("{invalid}", encoding="utf-8")
-        # 重新加载: 主文件损坏 → 尝试从 backup 恢复 → json.load 也失败 → 冷启动
-        new_state = sm.load_or_init(50000)
-        assert new_state["total_candidates_generated"] == 0  # 冷启动
-
-    def test_save_backup_failure_raises(self, tmp_meta_dir):
-        """save() 备份失败抛 MetaStateManagerError（lines 246-247）。"""
-        sm = MetaStateManager(tmp_meta_dir)
-        state = sm.load_or_init(50000)
-        with patch("shutil.copy2", side_effect=OSError("磁盘空间不足")):
-            with pytest.raises(MetaStateManagerError, match="备份失败"):
-                sm.save(state)
 
 
 # ════════════════════════════════════════════════════════
@@ -980,32 +975,22 @@ class TestMetaLoop:
         result = loop.run(max_bootstraps=2)
         assert result.status == "completed"
 
-    def test_run_persists_state(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
-        """run() 后状态文件已持久化。"""
+    def test_run_persists_state(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir, tmp_state_store
+    ):
+        """run() 后状态已持久化到 state.duckdb。"""
         loop = MetaLoop(
             memory_dir=tmp_meta_dir,
             factor_pool_path=tmp_factor_pool_path,
             inject_dir=tmp_inject_dir,
             debates_dir=tmp_debates_dir,
+            state_store=tmp_state_store,
         )
         loop.run(max_bootstraps=2)
-        state_file = tmp_meta_dir / "state.json"
-        assert state_file.exists()
-        with open(state_file, "r", encoding="utf-8") as f:
-            state = json.load(f)
+        state = tmp_state_store.get("meta_loop", "state")
+        assert state is not None
         assert state["status"] == "completed"
         assert state["total_candidates_generated"] >= 1
-
-    def test_run_creates_backup(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
-        """run() 创建 backup 文件。"""
-        loop = MetaLoop(
-            memory_dir=tmp_meta_dir,
-            factor_pool_path=tmp_factor_pool_path,
-            inject_dir=tmp_inject_dir,
-            debates_dir=tmp_debates_dir,
-        )
-        loop.run(max_bootstraps=1)
-        assert (tmp_meta_dir / "state.json.backup").exists()
 
     def test_run_updates_factor_pool(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
         """run() 更新 factor_pool.json。"""
@@ -1254,6 +1239,47 @@ class TestMetaLoop:
         assert reason is not None
         assert "连续低质量" in reason
 
+    def test_check_circuit_breaker_no_false_positive_unverified_batch(self):
+        """整批候选尚未验证时不误熔断（P2 修复：失败率只按已验证数计算）。
+
+        回归场景: 首次运行生成 20 个候选，验证开始前/中途已评估数 < 20，
+        失败率熔断不应触发。修复前 _verify_and_inject 以"本批总数 20 + 注入 0"
+        计算失败率 → 100% > 95% 在第一个候选前即误熔断（2026-08-13 实测复现，
+        昨日 2026-08-12 相同现象）。
+        """
+        loop = MetaLoop()
+        state = L1MetaLoopState(
+            run_id="test",
+            started_at="",
+            status="running",
+            tokens_consumed=1000,
+            budget_limit=50000,
+            total_candidates_generated=0,  # 首批运行: 历史已验证 0
+            total_candidates_injected=0,
+        )
+        # 验证开始前（0 个已验证）与中途（19 个已验证 < 20 门槛）均不应触发
+        assert loop._check_circuit_breaker(state, 0, 0) is None
+        assert loop._check_circuit_breaker(state, 19, 0) is None
+
+    def test_check_circuit_breaker_failure_rate_after_full_batch(self):
+        """整批候选验证完成后按真实失败率熔断（P2 修复语义保留）。"""
+        loop = MetaLoop()
+        state = L1MetaLoopState(
+            run_id="test",
+            started_at="",
+            status="running",
+            tokens_consumed=1000,
+            budget_limit=50000,
+            total_candidates_generated=0,
+            total_candidates_injected=0,
+        )
+        # 本批 20 个全部验证完且 0 注入 → 100% 失败率应熔断（真实高失败场景）
+        reason = loop._check_circuit_breaker(state, 20, 0)
+        assert reason is not None
+        assert "失败率熔断" in reason
+        # 本批 20 个验证完、3 个注入成功 → 85% < 95% 不熔断
+        assert loop._check_circuit_breaker(state, 20, 3) is None
+
     def test_is_hard_failure_classification(self):
         """硬失败/软失败分类（P1a）。"""
         loop = MetaLoop()
@@ -1324,6 +1350,79 @@ class TestMetaLoop:
         result = loop.run(max_bootstraps=6)
         # 6 个软失败不应触发连续低质量熔断
         assert result.status == "completed"
+        assert result.circuit_breaker_reason is None
+
+    def test_run_no_false_circuit_breaker_on_valid_batch(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir, tmp_state_store
+    ):
+        """整批有效候选不被失败率熔断误杀（P2 修复核心回归）。
+
+        修复前: _verify_and_inject 在验证循环第一个候选前以"本批总数 20 + 注入 0"
+        计算失败率 → 100% > 95% 立即熔断（失败率熔断: 100.00% > 0.95, 已处理=0/20），
+        20 个有效候选全部 0 注入。
+        修复后: 失败率按"已实际验证的候选数"计算，本批 20 个全部通过 → completed 且 20 注入。
+        使用 tmp_state_store 隔离，避免全局 state.duckdb 历史熔断状态污染断言。
+        """
+        from fts.factor_engine.meta_loop import BootstrappingChain
+        from fts.factor_engine.contracts import EconomicLogic, FactorSignature, SeedCandidate
+
+        class ValidChain(BootstrappingChain):
+            def bootstrap(self, *args, **kwargs):
+                return [
+                    SeedCandidate(
+                        candidate_id=f"cand_valid_{i}",
+                        name=f"l1_fix_valid_{i}",
+                        code=(
+                            "def factor_program(data, params):\n"
+                            "    import numpy as np\n"
+                            "    return np.zeros(len(data['close']))\n"
+                        ),
+                        params={"window": 10},
+                        signature=FactorSignature(
+                            input_fields=["close"],
+                            output_type="signal",
+                            frequency="daily",
+                            lookback=15,
+                        ),
+                        economic_logic=EconomicLogic(
+                            theory=4,
+                            behavioral=4,
+                            microstructure=4,
+                            institutional=4,
+                            narrative="这是一个测试因子，捕捉动量效应与波动率回归的经济逻辑，满足长度要求。",
+                        ),
+                        source="l1_bootstrapping",
+                        parent_topic="误熔断回归测试",
+                        is_executable=True,
+                        is_duplicate=False,
+                        passed_l1_verifier=False,
+                        failure_reasons=[],
+                        trace_id="t",
+                        created_at="2026-08-13",
+                    )
+                    for i in range(20)
+                ]
+
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+            state_store=tmp_state_store,
+            budget=L1BudgetConfig(
+                daily_token_limit=50000,
+                monthly_token_limit=1500000,
+                max_bootstraps_per_run=20,
+                max_tokens_per_candidate=5000,
+                circuit_breaker_token_ratio=2.0,
+                circuit_breaker_failure_rate=0.95,
+                circuit_breaker_consecutive_low_quality=5,
+            ),
+        )
+        loop.bootstrap_chain = ValidChain()
+        result = loop.run(max_bootstraps=20)
+        assert result.status == "completed"
+        assert result.candidates_injected == 20
         assert result.circuit_breaker_reason is None
 
     def test_hard_failure_verify_log_includes_compile_detail(
@@ -1573,13 +1672,16 @@ class TestMetaLoopEndToEnd:
         injected_files = list(tmp_inject_dir.glob("cand_*.json"))
         assert len(injected_files) == result.candidates_injected
 
-    def test_idempotent_run_preserves_state(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
-        """两次运行状态文件持续累积。"""
+    def test_idempotent_run_preserves_state(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir, tmp_state_store
+    ):
+        """两次运行 state.duckdb 状态持续累积。"""
         loop1 = MetaLoop(
             memory_dir=tmp_meta_dir,
             factor_pool_path=tmp_factor_pool_path,
             inject_dir=tmp_inject_dir,
             debates_dir=tmp_debates_dir,
+            state_store=tmp_state_store,
         )
         r1 = loop1.run(max_bootstraps=2)
 
@@ -1589,37 +1691,19 @@ class TestMetaLoopEndToEnd:
             factor_pool_path=tmp_factor_pool_path,
             inject_dir=tmp_inject_dir,
             debates_dir=tmp_debates_dir,
+            state_store=tmp_state_store,
         )
         loop2.run(max_bootstraps=2)
 
         # 累计候选数应大于第一次
-        with open(tmp_meta_dir / "state.json", "r", encoding="utf-8") as f:
-            state = json.load(f)
+        state = tmp_state_store.get("meta_loop", "state")
         assert state["total_candidates_generated"] >= r1.candidates_generated
 
 
 class TestMetaLoopSampleSymbols:
-    """感知层默认样本按市场区分（股票 → CSI300 成分股）。"""
+    """感知层默认样本按市场区分（期货 13 品种）。"""
 
-    def test_stock_default_sample_symbols(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
-    ):
-        """market=stock 默认使用 CSI300 成分股子集作为感知样本。"""
-        from fts.data_mcp import CSI300_SUBSET
-
-        loop = MetaLoop(
-            memory_dir=tmp_meta_dir,
-            factor_pool_path=tmp_factor_pool_path,
-            inject_dir=tmp_inject_dir,
-            debates_dir=tmp_debates_dir,
-            market="stock",
-            web_collector=None,
-        )
-        assert loop.sample_symbols == list(CSI300_SUBSET[:13])
-
-    def test_futures_default_sample_symbols(
-        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
-    ):
+    def test_futures_default_sample_symbols(self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir):
         """market=futures 默认仍为 13 个期货品种（五大板块）。"""
         loop = MetaLoop(
             memory_dir=tmp_meta_dir,
@@ -1642,11 +1726,11 @@ class TestMetaLoopSampleSymbols:
             factor_pool_path=tmp_factor_pool_path,
             inject_dir=tmp_inject_dir,
             debates_dir=tmp_debates_dir,
-            market="stock",
-            sample_symbols=["600519"],
+            market="futures",
+            sample_symbols=["rb"],
             web_collector=None,
         )
-        assert loop.sample_symbols == ["600519"]
+        assert loop.sample_symbols == ["rb"]
 
 
 class TestMakeWebCollector:
@@ -1668,20 +1752,6 @@ class TestMakeWebCollector:
             index=idx,
         )
 
-    def test_stock_mode_uses_stock_ohlcv(self):
-        """股票模式走 FTSDataProvider.get_ohlcv，不访问期货源、不取实时价。"""
-        provider = MagicMock()
-        provider.get_ohlcv.return_value = self._make_df()
-
-        collect = _make_web_collector(provider, market="stock")
-        snap = collect("600519")
-
-        provider.get_ohlcv.assert_called_once_with("600519", days=60)
-        provider._futures.get_ohlcv.assert_not_called()
-        assert snap["contract_symbol"] == "600519"
-        assert len(snap["kline"]["bars"]) == 5
-        assert "realtime_price" not in snap["quote"]
-
     def test_futures_mode_keeps_futures_path(self):
         """期货模式保持原行为：主连转换 + 期货 OHLCV + 实时价。"""
         provider = MagicMock()
@@ -1695,18 +1765,6 @@ class TestMakeWebCollector:
         provider.get_ohlcv.assert_not_called()
         assert snap["contract_symbol"] == "RB0"
         assert snap["quote"]["realtime_price"] == 123.4
-
-    def test_stock_mode_ohlcv_failure_is_degraded(self):
-        """股票模式 OHLCV 失败时记录 warning 且不中断。"""
-        provider = MagicMock()
-        provider.get_ohlcv.side_effect = RuntimeError("数据源不可用")
-
-        collect = _make_web_collector(provider, market="stock")
-        snap = collect("600519")
-
-        assert snap["kline"]["bars"] == []
-        assert snap["warnings"]
-        assert "OHLCV 获取失败" in snap["warnings"][0]
 
 
 # ════════════════════════════════════════════════════════

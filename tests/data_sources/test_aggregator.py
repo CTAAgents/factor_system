@@ -10,6 +10,7 @@ HARNESS §5.4: 测试随重构。先写 25+ 测试覆盖：
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -18,6 +19,20 @@ import pandas as pd
 import pytest
 
 from fts.core.enums import DataSource
+
+
+@contextmanager
+def _none_scope(timeout: float = 30.0):
+    """E.4 S1: 模拟 _write_scope 连接不可用（yield None，写路径降级）。"""
+    yield None
+
+
+@contextmanager
+def _boom_write_scope(timeout: float = 30.0):
+    """E.4 S1: 模拟 _write_scope 内连接 execute 抛异常（写路径静默吞掉）。"""
+    con = MagicMock()
+    con.execute.side_effect = RuntimeError("insert fail")
+    yield con
 
 
 # ─── Fixture: 通用 mock 数据源 ────────────────────────────
@@ -1274,6 +1289,38 @@ def test_try_minute_cache_stale_returns_none(tmp_path: Path):
     assert agg._try_minute_cache("RB0", 100, "5m") is None
 
 
+def test_try_minute_cache_uses_independent_freshness(tmp_path: Path):
+    """分钟新鲜度用独立 minute_cache_max_age_days（v2.101.0），不受日线 cache_max_age_days 影响。
+
+    日线窗口 30 天但分钟窗口 1 天 → 5 天前的分钟缓存判过期；分钟窗口 10 天 → 命中。
+    """
+    from fts.data_sources.migrate import migrate_schema
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    db = tmp_path / "indep_minute.duckdb"
+    migrate_schema(db)
+    old_time = datetime.now() - timedelta(days=5)
+    df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3, base_time=old_time)
+    import duckdb
+
+    con = duckdb.connect(str(db))
+    try:
+        con.register("df_min", df)
+        con.execute("INSERT INTO minute_cache SELECT * FROM df_min")
+        con.unregister("df_min")
+    finally:
+        con.close()
+
+    # 日线窗口 30 天、分钟窗口 1 天 → 5 天前数据判过期（旧逻辑会因 30 天窗口误命中）
+    agg_strict = FuturesDataAggregator(db_path=db, cache_max_age_days=30, minute_cache_max_age_days=1)
+    assert agg_strict._try_minute_cache("RB0", 100, "5m") is None
+
+    # 分钟窗口放宽到 10 天 → 5 天前数据命中
+    agg_loose = FuturesDataAggregator(db_path=db, cache_max_age_days=30, minute_cache_max_age_days=10)
+    hit = agg_loose._try_minute_cache("RB0", 100, "5m")
+    assert hit is not None and not hit.empty
+
+
 def test_try_minute_cache_no_db_returns_none():
     """db_path=None 时 _try_minute_cache 返回 None。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
@@ -1295,10 +1342,10 @@ def test_try_minute_cache_read_exception_returns_none(minute_cache_db: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     agg = FuturesDataAggregator(db_path=minute_cache_db)
-    # duckdb 连接 execute 是只读属性，用 MagicMock 替换连接
+    # E.4 S1：读路径走 _open_read_conn（短连接），mock 其返回 execute 抛异常的连接
     mock_con = MagicMock()
     mock_con.execute.side_effect = RuntimeError("boom")
-    agg._cache_conn = mock_con
+    agg._open_read_conn = MagicMock(return_value=mock_con)  # type: ignore[method-assign]
     assert agg._try_minute_cache("RB0", 100, "5m") is None
 
 
@@ -1330,10 +1377,8 @@ def test_write_minute_cache_insert_failure_silent(tmp_db: Path):
     migrate_schema(tmp_db)
     df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
     agg = FuturesDataAggregator(db_path=tmp_db)
-    mock_con = MagicMock()
-    mock_con.execute.side_effect = RuntimeError("insert fail")
-    agg._cache_conn = mock_con
-    agg._write_minute_cache(df, "5m")  # 不应抛异常
+    with patch.object(agg, "_write_scope", new=_boom_write_scope):
+        agg._write_minute_cache(df, "5m")  # 不应抛异常
 
 
 def test_write_minute_cache_persists_data(tmp_db: Path):
@@ -1549,11 +1594,11 @@ def test_try_tick_cache_read_exception_returns_none(tick_cache_db: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     agg = FuturesDataAggregator(db_path=tick_cache_db)
-    # duckdb 连接 execute 是只读属性，用 MagicMock 替换连接
+    # duckdb 连接 execute 是只读属性，用 MagicMock 替换只读短连接
     mock_con = MagicMock()
     mock_con.execute.side_effect = RuntimeError("boom")
-    agg._cache_conn = mock_con
-    assert agg._try_tick_cache("RB0", 100) is None
+    with patch.object(agg, "_open_read_conn", return_value=mock_con):
+        assert agg._try_tick_cache("RB0", 100) is None
 
 
 def test_write_tick_cache_persists_data(tmp_db: Path):
@@ -1592,10 +1637,8 @@ def test_write_tick_cache_insert_failure_silent(tmp_db: Path):
     migrate_schema(tmp_db)
     df = _make_tick_df("RB0", DataSource.TQSDK_TICK.value, rows=3)
     agg = FuturesDataAggregator(db_path=tmp_db)
-    mock_con = MagicMock()
-    mock_con.execute.side_effect = RuntimeError("insert fail")
-    agg._cache_conn = mock_con
-    agg._write_tick_cache(df)  # 不应抛异常
+    with patch.object(agg, "_write_scope", new=_boom_write_scope):
+        agg._write_tick_cache(df)  # 不应抛异常
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1656,31 +1699,33 @@ def test_enhance_fields_enrich_exception_records_failure(tmp_db: Path):
     assert status[DataSource.WIND.value]["total_failure"] == 1
 
 
-def test_get_cache_conn_none_db_returns_none():
-    """db_path=None 时 _get_cache_conn 返回 None。"""
+def test_open_read_conn_none_db_returns_none():
+    """E.4 S1: db_path=None 时 _open_read_conn 返回 None。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     agg = FuturesDataAggregator(db_path=None)
-    assert agg._get_cache_conn() is None
+    assert agg._open_read_conn() is None
 
 
-def test_get_cache_conn_connect_failure_returns_none(tmp_path: Path):
-    """duckdb.connect 抛异常时 _get_cache_conn 返回 None。"""
-    from fts.data_sources.aggregator import FuturesDataAggregator
-
-    agg = FuturesDataAggregator(db_path=tmp_path / "fts.duckdb")
-    with patch("duckdb.connect", side_effect=RuntimeError("cannot open db")):
-        assert agg._get_cache_conn() is None
-
-
-def test_try_cache_conn_none_returns_none(tmp_path: Path):
-    """_get_cache_conn 返回 None 时 _try_cache 返回 None。"""
+def test_open_read_conn_connect_failure_returns_none(tmp_path: Path):
+    """E.4 S1: duckdb.connect 抛异常时 _open_read_conn 返回 None。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     db = tmp_path / "fts.duckdb"
     db.write_bytes(b"")  # 文件存在
     agg = FuturesDataAggregator(db_path=db)
-    with patch.object(agg, "_get_cache_conn", return_value=None):
+    with patch("duckdb.connect", side_effect=RuntimeError("cannot open db")):
+        assert agg._open_read_conn() is None
+
+
+def test_try_cache_conn_none_returns_none(tmp_path: Path):
+    """_open_read_conn 返回 None 时 _try_cache 返回 None。"""
+    from fts.data_sources.aggregator import FuturesDataAggregator
+
+    db = tmp_path / "fts.duckdb"
+    db.write_bytes(b"")  # 文件存在
+    agg = FuturesDataAggregator(db_path=db)
+    with patch.object(agg, "_open_read_conn", return_value=None):
         assert agg._try_cache("RB0", days=10) is None
 
 
@@ -1732,11 +1777,11 @@ def test_try_cache_query_exception_returns_none(cache_with_data: Path):
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     agg = FuturesDataAggregator(db_path=cache_with_data)
-    # duckdb 连接 execute 是只读属性，用 MagicMock 替换连接
+    # duckdb 连接 execute 是只读属性，用 MagicMock 替换只读短连接
     mock_con = MagicMock()
     mock_con.execute.side_effect = RuntimeError("boom")
-    agg._cache_conn = mock_con
-    assert agg._try_cache("RB0", days=10) is None
+    with patch.object(agg, "_open_read_conn", return_value=mock_con):
+        assert agg._try_cache("RB0", days=10) is None
 
 
 def test_write_cache_migrate_failure_silent(tmp_db: Path):
@@ -1761,12 +1806,12 @@ def test_write_cache_migrate_failure_silent(tmp_db: Path):
 
 
 def test_write_cache_conn_none_returns(tmp_db: Path):
-    """_get_cache_conn 返回 None 时 _write_cache 静默返回。"""
+    """_write_scope 连接不可用（yield None）时 _write_cache 静默返回。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     df = _make_kline_df("RB0", DataSource.SYNTHETIC.value, rows=3)
     agg = FuturesDataAggregator(db_path=tmp_db)
-    with patch.object(agg, "_get_cache_conn", return_value=None):
+    with patch.object(agg, "_write_scope", new=_none_scope):
         agg._write_cache(df)  # 不应抛异常
 
 
@@ -1778,10 +1823,8 @@ def test_write_cache_insert_failure_silent(tmp_db: Path):
     migrate_schema(tmp_db)
     df = _make_kline_df("RB0", DataSource.SYNTHETIC.value, rows=3)
     agg = FuturesDataAggregator(db_path=tmp_db)
-    mock_con = MagicMock()
-    mock_con.execute.side_effect = RuntimeError("insert fail")
-    agg._cache_conn = mock_con
-    agg._write_cache(df)  # 不应抛异常
+    with patch.object(agg, "_write_scope", new=_boom_write_scope):
+        agg._write_cache(df)  # 不应抛异常
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1958,18 +2001,15 @@ def test_maybe_cross_check_triggers_alerts(tmp_path: Path):
 # ═══════════════════════════════════════════════════════════
 
 
-def test_close_releases_connection(cache_with_data: Path):
-    """close() 关闭持久连接并清空引用。"""
+def test_close_is_idempotent_noop(cache_with_data: Path):
+    """E.4 S1: close() 为幂等 no-op（无常驻连接需释放），关闭后读路径仍可用。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     agg = FuturesDataAggregator(db_path=cache_with_data)
-    con = agg._get_cache_conn()
-    assert con is not None
-
     agg.close()
-    assert agg._cache_conn is None
-    # 再次 close 不抛异常
-    agg.close()
+    agg.close()  # 再次 close 不抛异常
+    # 关闭后读路径仍可打开短连接（连接生命周期与 agg 实例解耦）
+    assert agg._try_cache("RB0", days=10) is not None
 
 
 # ═══════════════════════════════════════════════════════════
@@ -2018,11 +2058,11 @@ def test_get_minute_ohlcv_source_returns_none(tmp_db: Path):
 
 
 def test_try_minute_cache_conn_none_returns_none(minute_cache_db: Path):
-    """_get_cache_conn 返回 None 时 _try_minute_cache 返回 None。"""
+    """_open_read_conn 返回 None 时 _try_minute_cache 返回 None。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     agg = FuturesDataAggregator(db_path=minute_cache_db)
-    with patch.object(agg, "_get_cache_conn", return_value=None):
+    with patch.object(agg, "_open_read_conn", return_value=None):
         assert agg._try_minute_cache("RB0", 100, "5m") is None
 
 
@@ -2035,12 +2075,12 @@ def test_try_minute_cache_zero_rows_returns_none(minute_cache_db: Path):
 
 
 def test_write_minute_cache_conn_none_returns(tmp_db: Path):
-    """_get_cache_conn 返回 None 时 _write_minute_cache 静默返回。"""
+    """_write_scope 连接不可用（yield None）时 _write_minute_cache 静默返回。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     df = _make_minute_df("RB0", DataSource.TQ_LOCAL.value, rows=3)
     agg = FuturesDataAggregator(db_path=tmp_db)
-    with patch.object(agg, "_get_cache_conn", return_value=None):
+    with patch.object(agg, "_write_scope", new=_none_scope):
         agg._write_minute_cache(df, "5m")  # 不应抛异常
 
 
@@ -2060,11 +2100,11 @@ def test_get_ticks_source_returns_none(tmp_db: Path):
 
 
 def test_try_tick_cache_conn_none_returns_none(tick_cache_db: Path):
-    """_get_cache_conn 返回 None 时 _try_tick_cache 返回 None。"""
+    """_open_read_conn 返回 None 时 _try_tick_cache 返回 None。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     agg = FuturesDataAggregator(db_path=tick_cache_db)
-    with patch.object(agg, "_get_cache_conn", return_value=None):
+    with patch.object(agg, "_open_read_conn", return_value=None):
         assert agg._try_tick_cache("RB0", 100) is None
 
 
@@ -2085,26 +2125,23 @@ def test_write_tick_cache_skips_empty(tmp_db: Path):
 
 
 def test_write_tick_cache_conn_none_returns(tmp_db: Path):
-    """_get_cache_conn 返回 None 时 _write_tick_cache 静默返回。"""
+    """_write_scope 连接不可用（yield None）时 _write_tick_cache 静默返回。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     df = _make_tick_df("RB0", DataSource.TQSDK_TICK.value, rows=3)
     agg = FuturesDataAggregator(db_path=tmp_db)
-    with patch.object(agg, "_get_cache_conn", return_value=None):
+    with patch.object(agg, "_write_scope", new=_none_scope):
         agg._write_tick_cache(df)  # 不应抛异常
 
 
-def test_close_ignores_conn_close_exception(cache_with_data: Path):
-    """close() 中 conn.close 抛异常被吞掉，引用仍清空。"""
+def test_close_noop_never_touches_connection(cache_with_data: Path):
+    """E.4 S1: close() no-op，不接触任何连接（无常驻句柄）。"""
     from fts.data_sources.aggregator import FuturesDataAggregator
 
     agg = FuturesDataAggregator(db_path=cache_with_data)
-    mock_con = MagicMock()
-    mock_con.close.side_effect = RuntimeError("close failed")
-    agg._cache_conn = mock_con
-
     agg.close()  # 不应抛异常
-    assert agg._cache_conn is None
+    # 关闭后读路径仍可打开短连接（连接生命周期与 agg 实例解耦）
+    assert agg._try_cache("RB0", days=10) is not None
 
 
 # ═══════════════════════════════════════════════════════════

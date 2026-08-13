@@ -1,10 +1,11 @@
-"""bump_version.py 统一版本 bump 工具测试（v2.101.0 发布里程碑制）。
+"""bump_version.py 统一版本 bump 工具测试（v2.103.0 SemVer build 段制）。
 
 覆盖:
-    - 版本递增逻辑（patch/minor/major）
+    - 版本递增逻辑（patch/minor/major/build）
+    - 里程碑 bump 清 build 段、build bump 递增 build 段
     - 竖线转义
-    - pyproject/07-operations 文件操作（版本替换、条目追加、CRLF 保留）
-    - 单日护栏（同日重复 bump 拒绝 / --force 跳过）
+    - pyproject/07-operations/README 文件操作（版本替换、条目追加、CRLF 保留）
+    - 单日护栏仅约束里程碑 bump（同日重复 bump 拒绝 / --force 跳过 / build 不受限）
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import scripts.bump_version as bv  # noqa: E402
 
 @pytest.fixture()
 def iso_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
-    """构造隔离的 pyproject/07-operations 临时文件（CRLF），并接管模块路径与副作用。"""
+    """构造隔离的 pyproject/07-operations/README 临时文件（CRLF），并接管模块路径与副作用。"""
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_bytes(b'name = "fts"\r\nversion = "2.100.1"\r\n')
 
@@ -43,11 +44,19 @@ def iso_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path
         newline="",
     )
 
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "[![Version](https://img.shields.io/badge/version-2.100.1-blue)](#)\n",
+        encoding="utf-8",
+        newline="",
+    )
+
     monkeypatch.setattr(bv, "PYPROJECT", pyproject)
     monkeypatch.setattr(bv, "OPERATIONS", operations)
+    monkeypatch.setattr(bv, "README", readme)
     monkeypatch.setattr(bv, "today", lambda: "2099-01-01")
     monkeypatch.setattr(bv.subprocess, "run", lambda *a, **k: None)
-    return {"pyproject": pyproject, "operations": operations}
+    return {"pyproject": pyproject, "operations": operations, "readme": readme}
 
 
 class TestVersionComputation:
@@ -60,10 +69,25 @@ class TestVersionComputation:
             ("2.99.0", "minor", "2.100.0"),
             ("2.101.0", "patch", "2.101.1"),
             ("3.0.0", "patch", "3.0.1"),
+            # 里程碑 bump 清 build 段（SemVer 标准）
+            ("2.100.1+3", "patch", "2.100.2"),
+            ("2.100.1+3", "minor", "2.101.0"),
+            ("2.100.1+3", "major", "3.0.0"),
         ],
     )
     def test_bump(self, current: str, bump_type: str, expected: str) -> None:
         assert bv.bump_version(current, bump_type) == expected
+
+    @pytest.mark.parametrize(
+        ("current", "expected"),
+        [
+            ("2.100.1", "2.100.1+1"),  # 无 build 段 → 从 1 起
+            ("2.100.1+1", "2.100.1+2"),
+            ("2.100.1+42", "2.100.1+43"),
+        ],
+    )
+    def test_bump_build(self, current: str, expected: str) -> None:
+        assert bv.bump_build(current) == expected
 
 
 class TestEscaped:
@@ -96,6 +120,30 @@ class TestFileOps:
     def test_latest_history_date(self, iso_files: dict[str, Path]) -> None:
         assert bv.latest_history_date() == "2099-01-01"
 
+    def test_update_readme_version_encodes_plus(self, iso_files: dict[str, Path]) -> None:
+        bv.update_readme_version("2.100.1+1")
+        content = iso_files["readme"].read_text(encoding="utf-8")
+        assert "version-2.100.1%2B1" in content  # shields.io 路径中 + 编码为 %2B
+
+    def test_update_readme_version_plain(self, iso_files: dict[str, Path]) -> None:
+        bv.update_readme_version("2.100.2")
+        content = iso_files["readme"].read_text(encoding="utf-8")
+        assert "version-2.100.2" in content
+
+    def test_update_readme_version_increments_encoded_build(
+        self, iso_files: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # README 徽章已含编码 build 段（%2B）时再次更新不应残留旧段
+        iso_files["readme"].write_text(
+            "[![Version](https://img.shields.io/badge/version-2.100.1%2B1-blue)](#)\n",
+            encoding="utf-8",
+            newline="",
+        )
+        bv.update_readme_version("2.100.1+2")
+        content = iso_files["readme"].read_text(encoding="utf-8")
+        assert "version-2.100.1%2B2-blue" in content
+        assert "version-2.100.1%2B2%2B1" not in content  # 旧 build 段不残留
+
 
 class TestDailyGuard:
     def test_double_bump_rejected(self, iso_files: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,6 +152,12 @@ class TestDailyGuard:
         with pytest.raises(SystemExit) as exc:
             bv.main()
         assert exc.value.code == 1
+
+    def test_build_bump_not_guarded(self, iso_files: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+        # 同日已有里程碑条目，但 --build 不受单日护栏约束
+        monkeypatch.setattr(sys, "argv", ["bump_version.py", "--build", "--message", "x"])
+        bv.main()  # 不应抛异常
+        assert bv.get_current_version() == "2.100.1+1"
 
     def test_force_allows_same_day(self, iso_files: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
@@ -125,4 +179,5 @@ class TestDailyGuard:
         bv.main()
         out = capsys.readouterr().out
         assert "当前版本: v2.100.1" in out
+        assert "下次 build: v2.100.1+1" in out
         assert "下次 minor: v2.101.0" in out

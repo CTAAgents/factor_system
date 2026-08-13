@@ -267,13 +267,13 @@ class TestDirectoryLoading:
         factors = load_factors_from_dir(futures_dir)
         assert len(factors) == 185
 
-    def test_load_stock_directory(self, seeds_dir: Path):
-        """股票目录可正确加载所有 YAML 文件。"""
+    def test_load_stock_directory_missing(self, seeds_dir: Path):
+        """纯期货版 FTS 无股票种子目录，加载返回空。"""
         from fts.factor_engine.seed_loader import load_factors_from_dir
 
         stock_dir = seeds_dir / "stock"
         factors = load_factors_from_dir(stock_dir)
-        assert len(factors) == 714
+        assert factors == []
 
     def test_load_nonexistent_directory(self, tmp_path: Path):
         """不存在的目录返回空列表。"""
@@ -298,11 +298,11 @@ class TestLoadAllYamlSeeds:
     """测试全量加载 API。"""
 
     def test_load_all_seeds(self):
-        """加载所有市场种子（899 个）。"""
+        """加载所有市场种子（185 个，纯期货版仅期货种子）。"""
         from fts.factor_engine.seed_loader import load_all_yaml_seeds
 
         seeds = load_all_yaml_seeds()
-        assert len(seeds) == 899
+        assert len(seeds) == 185
 
     def test_load_futures_only(self):
         """仅加载期货种子（185 个）。"""
@@ -310,20 +310,6 @@ class TestLoadAllYamlSeeds:
 
         seeds = load_all_yaml_seeds(market="futures")
         assert len(seeds) == 185
-
-    def test_load_stock_only(self):
-        """仅加载股票种子（714 个，含 GAP-S05 A 股特有种子）。"""
-        from fts.factor_engine.seed_loader import load_all_yaml_seeds
-
-        seeds = load_all_yaml_seeds(market="stock")
-        assert len(seeds) == 714
-
-    def test_load_stock_builtin_only(self):
-        """仅加载股票内置种子（9 个）。"""
-        from fts.factor_engine.seed_loader import load_all_yaml_seeds
-
-        seeds = load_all_yaml_seeds(market="stock", include_external=False)
-        assert len(seeds) == 9
 
 
 # ─── 双路径一致性 ────────────────────────────────────────────
@@ -350,15 +336,6 @@ class TestDualPathConsistency:
         hc_count = len(SeedPool(market="futures", use_yaml=False).load_all_seeds())
         assert yaml_count == 185
         assert yaml_count >= hc_count
-
-    def test_stock_names_match(self):
-        """YAML 股票因子名称覆盖硬编码兜底（YAML 为主路径，硬编码为子集）。"""
-        from fts.factor_engine.seed_loader import load_all_yaml_seeds
-        from fts.factor_engine.seed_pool import SeedPool
-
-        yaml_names = {f["name"] for f in load_all_yaml_seeds(market="stock")}
-        hc_names = {f["name"] for f in SeedPool(market="stock", use_yaml=False).load_all_seeds()}
-        assert hc_names.issubset(yaml_names), f"硬编码兜底包含 YAML 主路径未覆盖的股票因子: {hc_names - yaml_names}"
 
     def test_seedpool_yaml_default(self):
         """SeedPool 默认使用 YAML 路径。"""
@@ -467,8 +444,8 @@ class TestIntegrityVerification:
 
         report = verify_yaml_integrity()
         assert report["valid"] is True
-        assert report["total_files"] == 30
-        assert report["total_factors"] == 899
+        assert report["total_files"] == 20
+        assert report["total_factors"] == 185
         assert len(report["errors"]) == 0
 
     def test_verify_report_structure(self):

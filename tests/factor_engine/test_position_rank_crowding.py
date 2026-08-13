@@ -11,7 +11,6 @@ import sys
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from fts.factor_engine.position_rank_crowding import (
     AKSharePositionRankProvider,

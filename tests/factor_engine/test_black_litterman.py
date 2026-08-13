@@ -56,7 +56,6 @@ def _make_factors(n: int = 3) -> list[dict]:
 
 def _make_returns_matrix(factors: list[dict], rows: int = 30, seed: int = 3) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    n = len(factors)
     data = {f["factor_id"]: rng.normal(0.001, 0.02, rows) for f in factors}
     return pd.DataFrame(data)
 

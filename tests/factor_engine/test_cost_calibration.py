@@ -60,10 +60,6 @@ class TestLoadMarketCostConfig:
         assert cfg["margin_rate"] == 0.12
         assert cfg["financing_rate_annual"] == 0.0
 
-    def test_stock_margin_full(self) -> None:
-        cfg = load_market_cost_config("stock")
-        assert cfg["margin_rate"] == 1.0
-
     def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("FTS_COST_SLIPPAGE_BPS", "5.0")
         cfg = load_market_cost_config("futures")

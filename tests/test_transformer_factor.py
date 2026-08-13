@@ -15,7 +15,6 @@ tests/test_transformer_factor.py — C5 轻量 Transformer 深度因子测试（
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -268,7 +267,6 @@ class TestEvolutionLoopTransformer:
             return self._fake_factor(), "ok"
 
         monkeypatch.setattr(loop, "_run_deep_evolution", _fake_run)
-        from fts.factor_engine.contracts import FactorProgram
 
         parent = {"factor_id": "p1", "name": "parent1"}
         result = loop._evolve_one(parent, generation=1, trace_id="t_tf_loop_1", method_hint="transformer")

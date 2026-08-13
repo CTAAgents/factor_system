@@ -17,7 +17,6 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from fts.bridge import BridgeError
 from fts.cli import (
@@ -35,7 +34,6 @@ from fts.cli import (
     _cmd_data_fuse,
     _cmd_data_status,
     _cmd_data_sync,
-    _cmd_factor_cross_market,
     _cmd_factor_list,
     _cmd_factor_seeds,
     _cmd_feature_analyze,
@@ -50,7 +48,6 @@ from fts.cli import (
     _cmd_seed_validate,
     _get_catalog_db_path,
     _load_factor_by_id,
-    _prepare_cross_section_data,
     _prepare_data,
     _print_backtest_ranking,
     main,
@@ -81,13 +78,13 @@ def _parse_json(out: str) -> dict | list:
 
 
 class TestPrepareData:
-    """测试 _prepare_data（单标数据准备）。"""
+    """测试 _prepare_data（单标数据准备，期货主连）。"""
 
     def test_prepare_data_forward_returns(self):
         """长样本计算 forward_returns（5 日平移）。"""
         with patch("fts.cli.FTSDataProvider") as m_provider:
-            m_provider.return_value.get_ohlcv.return_value = _close_df(10)
-            df, fwd = _prepare_data("000001", days=500)
+            m_provider.return_value.get_futures_ohlcv.return_value = _close_df(10)
+            df, fwd = _prepare_data("RB0", days=500)
         assert len(df) == 10
         assert len(fwd) == 10
         assert fwd[-5] == 0  # 末尾 5 个为 0
@@ -96,87 +93,10 @@ class TestPrepareData:
     def test_prepare_data_short_sample(self):
         """样本过短（≤5）时 forward_returns 全零。"""
         with patch("fts.cli.FTSDataProvider") as m_provider:
-            m_provider.return_value.get_ohlcv.return_value = _close_df(5)
-            df, fwd = _prepare_data("000001", days=500)
+            m_provider.return_value.get_futures_ohlcv.return_value = _close_df(5)
+            df, fwd = _prepare_data("RB0", days=500)
         assert len(fwd) == 5
         assert (fwd == 0).all()
-
-
-class TestPrepareCrossSectionData:
-    """测试 _prepare_cross_section_data（基本面注入分支）。"""
-
-    def _setup(self, m_provider, m_fp):
-        panel = {"000001": _close_df(10)}
-        dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=10))
-        m_provider.return_value.get_csi300_panel.return_value = (panel, dates)
-        return panel
-
-    def test_fundamental_inject_success(self, capsys):
-        """基本面注入成功分支打印提示。"""
-        with (
-            patch("fts.cli.FTSDataProvider") as m_provider,
-            patch("fts.data_fundamental.get_fundamental_provider") as m_fp,
-        ):
-            panel = self._setup(m_provider, m_fp)
-            m_fp.return_value.enrich_panel.return_value = panel
-            result_panel, dates, fwd = _prepare_cross_section_data()
-        assert "000001" in result_panel
-        assert len(fwd) == 10
-        assert "基本面数据注入完成" in capsys.readouterr().out
-
-    def test_fundamental_inject_fails(self, capsys):
-        """基本面注入失败时降级为合成数据。"""
-        with (
-            patch("fts.cli.FTSDataProvider") as m_provider,
-            patch("fts.data_fundamental.get_fundamental_provider") as m_fp,
-        ):
-            self._setup(m_provider, m_fp)
-            m_fp.return_value.enrich_panel.side_effect = RuntimeError("mcp down")
-            result_panel, dates, fwd = _prepare_cross_section_data()
-        assert "000001" in result_panel
-        assert "基本面注入失败" in capsys.readouterr().out
-
-
-# ═══════════════════════════════════════════════════════════
-# evolution run — 单标模式
-# ═══════════════════════════════════════════════════════════
-
-
-class TestCmdEvolutionRunSingle:
-    """测试 _cmd_evolution_run 单标模式成功路径。"""
-
-    @patch("fts.cli.EvolutionLoop")
-    @patch("fts.cli.FactorVerifier")
-    @patch("fts.cli.get_default_seed_pool")
-    @patch("fts.cli.get_default_llm_client")
-    @patch("fts.cli._prepare_data")
-    @patch("fts.cli.generate_trace_id", return_value="l2_s_20260718T000000")
-    @patch("fts.cli.generate_run_id", return_value="run_s_20260718T000000")
-    def test_single_mode_success(
-        self,
-        mock_run_id,
-        mock_trace_id,
-        mock_prep,
-        mock_llm,
-        mock_seed,
-        mock_verifier,
-        mock_evoloop,
-        capsys,
-    ):
-        """--universe single 走单标分支并成功完成。"""
-        mock_prep.return_value = (_close_df(10), np.zeros(10))
-        mock_loop = mock_evoloop.return_value
-        mock_loop.run.return_value = MagicMock(
-            status="completed",
-            generations_completed=1,
-            elite_factor_ids=[],
-            circuit_breaker_reason="",
-        )
-        rc = main(["evolution", "run", "--universe", "single", "--symbol", "600000"])
-        assert rc == 0
-        out = capsys.readouterr().out
-        assert "symbol=600000" in out
-        mock_prep.assert_called_once_with(symbol="600000", days=500)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -535,130 +455,6 @@ class TestCmdPortfolioRunFutures:
 
 
 # ═══════════════════════════════════════════════════════════
-# portfolio run — stock 分支 + 股票信号管道（GAP-I301）
-# ═══════════════════════════════════════════════════════════
-
-
-class TestCmdPortfolioRunStock:
-    """测试 _cmd_portfolio_run stock 分支及股票信号管道触发（GAP-I301）。"""
-
-    def _setup(self, mock_cfg, mock_port, status: str = "passed"):
-        cfg = mock_cfg.return_value
-        cfg.get_elite_dir.return_value = "/tmp/elite_stock"
-        cfg.memory_dir = "/tmp/memory"
-        cfg.verifier = {"max_correlation": 0.4}
-        cfg.portfolio_optimizer_mode = "risk_parity"
-        mock_loop = mock_port.return_value
-        mock_loop.run.return_value = MagicMock(
-            status=status,
-            n_factors_retained=3,
-            combo_sharpe=1.2,
-        )
-
-    @patch("fts.cli.PortfolioLoop")
-    @patch("fts.cli.get_config")
-    def test_stock_not_trigger_signal_pipeline(self, mock_cfg, mock_port, capsys):
-        """GAP-072 解绑：portfolio run 不再联动触发股票信号管道（独立每日任务）。"""
-        self._setup(mock_cfg, mock_port)
-        rc = main(["portfolio", "run", "--universe", "stock"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "触发股票信号生成管道" not in captured.out
-        assert "完成: status=passed" in captured.out
-
-    @patch("fts.cli.PortfolioLoop")
-    @patch("fts.cli.get_config")
-    def test_stock_frozen_status_message(self, mock_cfg, mock_port, capsys):
-        """权重冻结日（status=frozen）打印冻结提示并返回 0。"""
-        self._setup(mock_cfg, mock_port, status="frozen")
-        rc = main(["portfolio", "run", "--universe", "stock"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "权重冻结日" in captured.out
-
-    @patch("fts.cli.PortfolioLoop")
-    @patch("fts.cli.get_config")
-    def test_stock_status_not_triggering(self, mock_cfg, mock_port, capsys):
-        """状态为失败时仍返回 0 且不调用股票信号管道。"""
-        self._setup(mock_cfg, mock_port, status="failed")
-        rc = main(["portfolio", "run", "--universe", "stock"])
-        assert rc == 0
-
-    @patch("fts.cli.PortfolioLoop")
-    @patch("fts.cli.get_config")
-    def test_stock_optimizer_mode_passthrough(self, mock_cfg, mock_port, capsys):
-        """GAP-I302: --synthesis-mode optimizer + --optimizer-mode 透传到 PortfolioLoop。"""
-        self._setup(mock_cfg, mock_port)
-        rc = main(
-            [
-                "portfolio",
-                "run",
-                "--universe",
-                "stock",
-                "--synthesis-mode",
-                "optimizer",
-                "--optimizer-mode",
-                "mvo",
-            ]
-        )
-        assert rc == 0
-        _, kwargs = mock_port.call_args
-        assert kwargs["synthesis_mode"] == "optimizer"
-        assert kwargs["optimizer_mode"] == "mvo"
-        # 无 returns-matrix 时 run() 仍可调用（实测化输入缺省；recompute_weights 按配置自动判定）
-        mock_port.return_value.run.assert_called_once_with(factor_returns=None, recompute_weights=None)
-
-    @patch("fts.cli.PortfolioLoop")
-    @patch("fts.cli.get_config")
-    def test_optimizer_mode_default_from_config(self, mock_cfg, mock_port, capsys):
-        """GAP-I302: 未传 --optimizer-mode 时取 settings 配置默认值。"""
-        cfg = mock_cfg.return_value
-        cfg.get_elite_dir.return_value = "/tmp/elite_stock"
-        cfg.memory_dir = "/tmp/memory"
-        cfg.verifier = {"max_correlation": 0.4}
-        cfg.portfolio_optimizer_mode = "mvo"
-        mock_loop = mock_port.return_value
-        mock_loop.run.return_value = MagicMock(
-            status="passed",
-            n_factors_retained=3,
-            combo_sharpe=1.2,
-        )
-        rc = main(["portfolio", "run", "--universe", "stock"])
-        assert rc == 0
-        _, kwargs = mock_port.call_args
-        assert kwargs["optimizer_mode"] == "mvo"
-
-    @patch("fts.cli.PortfolioLoop")
-    @patch("fts.cli.get_config")
-    def test_returns_matrix_loaded(self, mock_cfg, mock_port, tmp_path, capsys):
-        """GAP-I302: --returns-matrix CSV 加载并传入 run(factor_returns=...)。"""
-        self._setup(mock_cfg, mock_port)
-        import pandas as pd
-
-        csv_path = tmp_path / "returns.csv"
-        pd.DataFrame(
-            {"fct_a": [0.01, 0.02, 0.03], "fct_b": [-0.01, 0.0, 0.01]},
-            index=pd.date_range("2026-01-01", periods=3),
-        ).to_csv(csv_path)
-        rc = main(
-            [
-                "portfolio",
-                "run",
-                "--universe",
-                "stock",
-                "--synthesis-mode",
-                "optimizer",
-                "--returns-matrix",
-                str(csv_path),
-            ]
-        )
-        assert rc == 0
-        call_kwargs = mock_port.return_value.run.call_args
-        fr = call_kwargs.kwargs["factor_returns"]
-        assert fr is not None and list(fr.columns) == ["fct_a", "fct_b"]
-
-
-# ═══════════════════════════════════════════════════════════
 # fts catalog 子命令组
 # ═══════════════════════════════════════════════════════════
 
@@ -722,7 +518,6 @@ class TestCmdCatalogStats:
             rc = _cmd_catalog_stats(Namespace(json=True))
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
-        assert payload["stock_database"]["error"] == "conn broken"
         assert payload["futures_database"]["error"] == "conn broken"
 
     def test_db_exists_repo_error_text_bug(self, tmp_path, capsys):
@@ -771,9 +566,9 @@ class TestGetCatalogDbPath:
     """测试 _get_catalog_db_path。"""
 
     def test_returns_schema_path(self, tmp_path):
-        """返回 factor_db.schema 分库后默认 market=stock 的 Path。"""
+        """返回 factor_db.schema 分库后默认 market=futures 的 Path。"""
         fake = tmp_path / "db.duckdb"
-        with patch("fts.factor_engine.factor_db.schema.DATABASE_PATH_STOCK", fake):
+        with patch("fts.factor_engine.factor_db.schema.DATABASE_PATH_FUTURES", fake):
             p = _get_catalog_db_path()
         assert p == fake
 
@@ -858,7 +653,7 @@ class TestCmdCatalogVerify:
             rc = _cmd_catalog_verify(Namespace(json=True))
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
-        assert payload["markets"]["stock"]["consistent"] is True
+        assert payload["markets"]["futures"]["consistent"] is True
 
     def test_inconsistent_text_mode(self, tmp_path, capsys):
         """DuckDB 独有 + JSON 独有 → 文本模式返回 1 并打印明细。
@@ -969,7 +764,6 @@ class TestCmdCatalogBackup:
             rc = _cmd_catalog_backup(Namespace(json=True))
         assert rc == 0
         payload = _parse_json(capsys.readouterr().out)
-        assert "stock_duckdb_error" in payload
         assert "futures_duckdb_error" in payload
         assert "futures_json_error" in payload
 
@@ -1007,7 +801,7 @@ class TestCmdFactorListExtra:
         assert "F1" in capsys.readouterr().out
 
     def test_json_mode(self, tmp_path, capsys):
-        """目录模式 + --json 输出 JSON 数组。"""
+        """目录模式 + --json 输出 JSON 数组（DuckDB 查询失败回退目录模式，plans/29 P4 读路径切换）。"""
         elite_dir = tmp_path / "elite"
         elite_dir.mkdir()
         (elite_dir / "F1.json").write_text(
@@ -1031,7 +825,8 @@ class TestCmdFactorListExtra:
             limit=50,
             json=True,
         )
-        rc = _cmd_factor_list(args)
+        with patch("fts.cli._load_factor_repo", side_effect=RuntimeError("db unavailable")):
+            rc = _cmd_factor_list(args)
         assert rc == 0
         payload = _parse_json(capsys.readouterr().out)
         assert payload[0]["factor_id"] == "F1"
@@ -1043,11 +838,7 @@ class TestCmdFactorListExtra:
 
 
 class TestCmdFactorSeeds:
-    """测试 _cmd_factor_seeds 期货/股票两条路径。
-
-    注: 产品代码 `from fts.factor_engine.seed_data import load_stock_seeds`
-    引用了不存在的属性（真实 bug），测试通过 monkeypatch 注入以覆盖分支。
-    """
+    """测试 _cmd_factor_seeds 期货路径。"""
 
     @patch("fts.factor_engine.seed_data_futures_full.load_futures_seeds_full")
     def test_futures(self, mock_load, capsys):
@@ -1060,165 +851,6 @@ class TestCmdFactorSeeds:
         out = capsys.readouterr().out
         assert "期货种子因子" in out
         assert "momentum_10" in out
-
-    def test_stock(self, monkeypatch, capsys):
-        """股票种子因子列表（WQ101/Qlib158/GTJA191 外部种子）。"""
-        from fts.factor_engine import seed_data as seed_data_mod
-
-        monkeypatch.setattr(
-            seed_data_mod,
-            "load_all_external_seeds",
-            lambda trace_id: [
-                {"name": "reversal", "signature": {"input_fields": ["close"]}, "params": {}},
-            ],
-            raising=False,
-        )
-        rc = _cmd_factor_seeds(Namespace(market="stock"))
-        assert rc == 0
-        out = capsys.readouterr().out
-        assert "股票种子因子" in out
-        assert "reversal" in out
-
-
-class TestCmdFactorCrossMarket:
-    """测试 _cmd_factor_cross_market 各方向与异常分支。"""
-
-    def _engine(self, report=None) -> MagicMock:
-        engine = MagicMock()
-        engine.run_futures_to_stock.return_value = report
-        engine.run_futures_to_etf.return_value = report
-        engine.run_stock_to_futures.return_value = report
-        engine.generate_report.return_value = "/tmp/report.md"
-        return engine
-
-    def _report(self) -> MagicMock:
-        return MagicMock(n_universal=5, n_market_specific=3, n_failed=1, n_deprecated=1)
-
-    def test_futures_to_stock_with_max_stocks(self, capsys):
-        """futures-to-stock + max_stocks>0 打印成分股信息。"""
-        engine = self._engine(self._report())
-        with (
-            patch("fts.cross_market.CrossMarketDataAdapter"),
-            patch("fts.cross_market.CrossMarketEngine", return_value=engine),
-        ):
-            rc = _cmd_factor_cross_market(
-                Namespace(
-                    direction="futures-to-stock",
-                    days=120,
-                    max_factors=10,
-                    max_stocks=50,
-                    output_dir=None,
-                )
-            )
-        assert rc == 0
-        out = capsys.readouterr().out
-        assert "期货→A股" in out
-        assert "最大成分股: 50" in out
-        engine.generate_report.assert_called_once()
-
-    def test_futures_to_stock_zero_stocks(self, capsys):
-        """max_stocks=0 显示'全量'。"""
-        engine = self._engine(self._report())
-        with (
-            patch("fts.cross_market.CrossMarketDataAdapter"),
-            patch("fts.cross_market.CrossMarketEngine", return_value=engine),
-        ):
-            rc = _cmd_factor_cross_market(
-                Namespace(
-                    direction="futures-to-stock",
-                    days=120,
-                    max_factors=0,
-                    max_stocks=0,
-                    output_dir=None,
-                )
-            )
-        assert rc == 0
-        assert "最大成分股: 全量" in capsys.readouterr().out
-
-    @pytest.mark.parametrize(
-        "direction,attr",
-        [
-            ("futures-to-etf", "run_futures_to_etf"),
-            ("stock-to-futures", "run_stock_to_futures"),
-        ],
-    )
-    def test_other_directions(self, direction, attr, capsys):
-        """另外两个方向正常执行。"""
-        engine = self._engine(self._report())
-        with (
-            patch("fts.cross_market.CrossMarketDataAdapter"),
-            patch("fts.cross_market.CrossMarketEngine", return_value=engine),
-        ):
-            rc = _cmd_factor_cross_market(
-                Namespace(
-                    direction=direction,
-                    days=120,
-                    max_factors=5,
-                    max_stocks=0,
-                    output_dir=None,
-                )
-            )
-        assert rc == 0
-        getattr(engine, attr).assert_called_once()
-
-    def test_output_dir(self, tmp_path, capsys):
-        """指定 output_dir 时生成带日期的报告路径。"""
-        engine = self._engine(self._report())
-        with (
-            patch("fts.cross_market.CrossMarketDataAdapter"),
-            patch("fts.cross_market.CrossMarketEngine", return_value=engine),
-        ):
-            rc = _cmd_factor_cross_market(
-                Namespace(
-                    direction="futures-to-stock",
-                    days=120,
-                    max_factors=5,
-                    max_stocks=0,
-                    output_dir=str(tmp_path),
-                )
-            )
-        assert rc == 0
-        out_path = engine.generate_report.call_args.kwargs["output_path"]
-        assert str(out_path).endswith(".md")
-
-    def test_import_error(self, capsys):
-        """CrossMarketDataAdapter 构造抛 ImportError 时返回 1。
-
-        注: `from fts.cross_market import ...` 在函数 try 块之外执行，
-        模块整体缺失时 ModuleNotFoundError 无法被 except ImportError 捕获（真实 bug）。
-        """
-        with patch("fts.cross_market.CrossMarketDataAdapter", side_effect=ImportError("missing dep")):
-            rc = _cmd_factor_cross_market(
-                Namespace(
-                    direction="futures-to-stock",
-                    days=120,
-                    max_factors=5,
-                    max_stocks=0,
-                    output_dir=None,
-                )
-            )
-        assert rc == 1
-        assert "导入失败" in capsys.readouterr().err
-
-    def test_generic_error(self, capsys):
-        """执行异常返回 1。"""
-        engine = self._engine()
-        engine.run_futures_to_stock.side_effect = RuntimeError("boom")
-        with (
-            patch("fts.cross_market.CrossMarketDataAdapter"),
-            patch("fts.cross_market.CrossMarketEngine", return_value=engine),
-        ):
-            rc = _cmd_factor_cross_market(
-                Namespace(
-                    direction="futures-to-stock",
-                    days=120,
-                    max_factors=5,
-                    max_stocks=0,
-                    output_dir=None,
-                )
-            )
-        assert rc == 1
-        assert "执行失败" in capsys.readouterr().err
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1816,35 +1448,6 @@ class TestCmdGpEvolve:
         out = capsys.readouterr().out
         assert "GP 演化结果" in out
         assert "适应度: 0.5000" in out
-
-    def test_csi300_success_with_output(self, tmp_path, capsys):
-        """csi300 universe + 输出落盘。"""
-        gp = MagicMock()
-        gp.evolve.return_value = self._result()
-        with (
-            patch(
-                "fts.cli._prepare_cross_section_data",
-                return_value=({"000001": _close_df(30)}, pd.DatetimeIndex([]), np.zeros(30)),
-            ),
-            patch("fts.factor_engine.gp_evolver.GPEvolver", return_value=gp),
-        ):
-            out_dir = tmp_path / "gp_out"
-            rc = _cmd_gp_evolve(
-                Namespace(
-                    universe="csi300",
-                    population=50,
-                    generations=5,
-                    days=500,
-                    max_stocks=30,
-                    max_symbols=0,
-                    forward=20,
-                    output=str(out_dir),
-                )
-            )
-        assert rc == 0
-        out = capsys.readouterr().out
-        assert "最优因子已保存" in out
-        assert (out_dir / "gp_best_factor.json").exists()
 
 
 # ═══════════════════════════════════════════════════════════

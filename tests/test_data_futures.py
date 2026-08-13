@@ -92,9 +92,8 @@ class _FakeConn:
 
 @pytest.fixture(autouse=True)
 def _reset_module_globals():
-    """每个测试后重置模块级全局连接/单例，避免测试间串扰。"""
+    """每个测试后重置模块级全局单例，避免测试间串扰（E.4 S1：_DB/_WRITER 常驻缓存已移除）。"""
     yield
-    fut_mod._DB = None
     fut_mod._default_futures_provider = None
 
 
@@ -373,20 +372,21 @@ class TestDuckDBConnection:
 
 
 class TestGetDb:
-    def test_returns_connected_connection(self, mocker):
-        """首次调用创建 DuckDBConnection 并返回原生连接。"""
-        mock_db = mocker.MagicMock()
-        mock_db.connect.return_value = "native-conn"
-        mocker.patch("fts.data_futures.DuckDBConnection", return_value=mock_db)
-        assert _get_db() == "native-conn"
+    def test_returns_readonly_connection(self, mocker):
+        """E.4 S1：_get_db 返回 read_only 短连接（不持有写锁）。"""
+        import duckdb
 
-    def test_init_failure_raises_futures_error(self, mocker):
-        """连接初始化失败 → FuturesDataError。"""
-        mocker.patch(
-            "fts.data_futures.DuckDBConnection",
-            side_effect=RuntimeError("boom"),
-        )
-        with pytest.raises(FuturesDataError, match="DuckDB 连接初始化失败"):
+        mock_conn = mocker.MagicMock()
+        mocker.patch.object(duckdb, "connect", return_value=mock_conn)
+        assert _get_db() == mock_conn
+        duckdb.connect.assert_called_once_with(str(fut_mod._DUCKDB_PATH), read_only=True)
+
+    def test_connect_failure_propagates(self, mocker):
+        """E.4 S1：连接失败抛原始异常（_get_db 不再包装 FuturesDataError）。"""
+        import duckdb
+
+        mocker.patch.object(duckdb, "connect", side_effect=RuntimeError("boom"))
+        with pytest.raises(RuntimeError, match="boom"):
             _get_db()
 
 
@@ -452,6 +452,26 @@ class TestFromAggregatorDf:
         ]
         assert isinstance(df.index, pd.DatetimeIndex)
         assert df.index.is_monotonic_increasing
+
+    def test_settle_zero_placeholder_proxied(self):
+        """aggregator 输出 settle=0 占位（如股指 sina 源缺失）→ 代理为典型价 (H+L+C)/3。"""
+        agg_df = _make_agg_df(["2026-01-04", "2026-01-05", "2026-01-06"], base=100.0)
+        agg_df["settle"] = 0.0
+        df = FuturesDataProvider._from_aggregator_df(agg_df, "IF0")
+        assert (df["settle"] > 0).all()
+        expected = (agg_df.set_index("date")[["high", "low", "close"]].sum(axis=1) / 3.0)
+        pd.testing.assert_series_equal(df["settle"], expected.rename("settle"))
+
+    def test_hold_zero_placeholder_proxied(self):
+        """aggregator 输出 hold=0 占位 → 20 日滚动均量代理（非 0 保留原值）。"""
+        agg_df = _make_agg_df(
+            [f"2026-01-{d:02d}" for d in range(1, 22)], base=100.0
+        )
+        agg_df["hold"] = 0.0
+        df = FuturesDataProvider._from_aggregator_df(agg_df, "RB0")
+        assert (df["hold"] > 0).all()
+        # 全部置 0 → 全部代理为滚动均量（首行 min_periods=1 = 当日 volume）
+        assert df["hold"].iloc[0] == agg_df["volume"].iloc[0]
 
 
 # ═══════════════════════════════════════════════════════════

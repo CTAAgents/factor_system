@@ -141,7 +141,7 @@ class TestEnhancersRegistration:
 
         mocker.patch(
             "fts.config.settings.get_config",
-            return_value=SimpleNamespace(futures_enhance_enabled=enhance_enabled),
+            return_value=SimpleNamespace(futures_enhance_enabled=enhance_enabled, minute_cache_max_age_days=1),
         )
         mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", return_value=mocker.MagicMock())
         fake_tq = mocker.MagicMock()

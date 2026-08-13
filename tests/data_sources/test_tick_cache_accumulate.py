@@ -71,7 +71,11 @@ def _make_agg(tmp_path: Path, retention_days: int = 7) -> FuturesDataAggregator:
 
 
 def _count_rows(agg: FuturesDataAggregator) -> int:
-    return agg._cache_conn.execute("SELECT COUNT(*) FROM tick_cache").fetchone()[0]
+    con = agg._open_read_conn()
+    try:
+        return con.execute("SELECT COUNT(*) FROM tick_cache").fetchone()[0]
+    finally:
+        con.close()
 
 
 class TestTickCacheDedup:
@@ -85,7 +89,7 @@ class TestTickCacheDedup:
             agg._write_tick_cache(df)  # 重复写入
             assert _count_rows(agg) == 10
         finally:
-            agg._cache_conn.close()
+            agg.close()  # E.4 S1: no persistent conn
 
     def test_partial_overlap_dedup(self, tmp_path: Path) -> None:
         """部分重叠：重叠 tick 去重，新增 tick 追加（跨会话累积）。"""
@@ -97,7 +101,7 @@ class TestTickCacheDedup:
             agg._write_tick_cache(batch2)
             assert _count_rows(agg) == 8
         finally:
-            agg._cache_conn.close()
+            agg.close()  # E.4 S1: no persistent conn
 
     def test_get_ticks_no_duplicates_after_rewrite(self, tmp_path: Path) -> None:
         """get_ticks 返回无重复行。"""
@@ -110,7 +114,7 @@ class TestTickCacheDedup:
             assert len(out) == 6
             assert out["datetime"].duplicated().sum() == 0
         finally:
-            agg._cache_conn.close()
+            agg.close()  # E.4 S1: no persistent conn
 
 
 class TestTickCacheTimeWindow:
@@ -126,7 +130,7 @@ class TestTickCacheTimeWindow:
             assert (out["datetime"] >= pd.Timestamp("2026-08-07 14:30:01")).all()
             assert len(out) < 10
         finally:
-            agg._cache_conn.close()
+            agg.close()  # E.4 S1: no persistent conn
 
     def test_end_time_filter(self, tmp_path: Path) -> None:
         agg = _make_agg(tmp_path)
@@ -138,7 +142,7 @@ class TestTickCacheTimeWindow:
             assert (out["datetime"] <= pd.Timestamp("2026-08-07 14:30:03")).all()
             assert len(out) < 10
         finally:
-            agg._cache_conn.close()
+            agg.close()  # E.4 S1: no persistent conn
 
     def test_window_both_bounds(self, tmp_path: Path) -> None:
         agg = _make_agg(tmp_path)
@@ -156,7 +160,7 @@ class TestTickCacheTimeWindow:
             assert (out["datetime"] >= pd.Timestamp("2026-08-07 14:30:01")).all()
             assert (out["datetime"] <= pd.Timestamp("2026-08-07 14:30:03")).all()
         finally:
-            agg._cache_conn.close()
+            agg.close()  # E.4 S1: no persistent conn
 
     def test_no_window_backward_compat(self, tmp_path: Path) -> None:
         """不带时间窗口参数行为不变（返回全部）。"""
@@ -167,7 +171,7 @@ class TestTickCacheTimeWindow:
             out = agg.get_ticks("RB0", count=10, trace_id="t")
             assert len(out) == 10
         finally:
-            agg._cache_conn.close()
+            agg.close()  # E.4 S1: no persistent conn
 
 
 class TestTickCacheRetention:
@@ -184,7 +188,7 @@ class TestTickCacheRetention:
             out = agg.get_ticks("RB0", count=100, trace_id="t")
             assert (out["datetime"] >= pd.Timestamp("2026-08-07")).all()
         finally:
-            agg._cache_conn.close()
+            agg.close()  # E.4 S1: no persistent conn
 
     def test_fresh_data_kept(self, tmp_path: Path) -> None:
         agg = _make_agg(tmp_path, retention_days=7)
@@ -193,4 +197,4 @@ class TestTickCacheRetention:
             agg._write_tick_cache(df)
             assert _count_rows(agg) == 5
         finally:
-            agg._cache_conn.close()
+            agg.close()  # E.4 S1: no persistent conn

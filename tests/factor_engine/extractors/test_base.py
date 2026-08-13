@@ -104,10 +104,10 @@ class TestBaseExtractor:
     def test_llm_extract_generate_json_path(self):
         client = _LLMStub(mode="generate_json")
         ext = DummyExtractor("src_a", llm_client=client)
-        candidates = ext._llm_extract_factors("text about momentum", "t1", market="stock")
+        candidates = ext._llm_extract_factors("text about momentum", "t1", market="futures")
         assert len(candidates) == 1
         cand = candidates[0]
-        assert cand["name"].startswith("stk_")  # stock 市场前缀
+        assert cand["name"].startswith("fut_")  # futures 市场前缀（主系统期货化，plans/32 剥离）
         assert cand["market"] == "futures"  # SeedCandidate 固定 market
         assert cand["source"] == "l1_extractor_pipeline"
         assert cand["trace_id"] == "t1"
@@ -241,6 +241,15 @@ class _LLMStub:
 
 
 class TestBaseExtractorPipeline:
+    @pytest.fixture(autouse=True)
+    def _isolated_store(self, tmp_path):
+        """每个测试使用独立临时 state.duckdb，避免全局 SSOT 相互污染。"""
+        from fts.store.state_db import StateKVStore
+
+        self._store = StateKVStore(tmp_path / "state.duckdb")
+        yield
+        self._store.close()
+
     def _make_pipeline(self, tmp_path, paused_src: str | None = None):
         exts = [
             DummyExtractor("a", results=[_dummy_candidate("ca")]),
@@ -250,7 +259,9 @@ class TestBaseExtractorPipeline:
             for e in exts:
                 if e.name == paused_src:
                     e.pause()
-        pipe = BaseExtractorPipeline(exts, market="futures", state_path=tmp_path / "state.json")
+        pipe = BaseExtractorPipeline(
+            exts, market="futures", state_path=tmp_path / "state.json", state_store=self._store
+        )
         return pipe, exts
 
     def test_init_builds_extractor_map(self, tmp_path):
@@ -278,23 +289,29 @@ class TestBaseExtractorPipeline:
             [BoomExtractor("bad"), DummyExtractor("good", results=[_dummy_candidate("ok")])],
             market="futures",
             state_path=tmp_path / "state.json",
+            state_store=self._store,
         )
         candidates = pipe.extract("t1")
         assert len(candidates) == 1
         assert candidates[0]["name"] == "ok"
 
+    def _get_extractor_state(self):
+        """读取当前测试临时 store 中 extractors/state 值。"""
+        return self._store.get("extractors", "state")
+
     def test_pause_resume_source_persists(self, tmp_path):
         pipe, _ = self._make_pipeline(tmp_path)
-        state_file = tmp_path / "state.json"
         pipe.pause_source("a")
         assert pipe.is_paused("a") is True
         assert pipe.is_paused("b") is False
-        assert state_file.exists()
-        # 重新加载状态
+        # 状态已写入 DuckDB（SSOT）
+        assert self._get_extractor_state()["futures"]["a"] is True
+        # 重新创建管道从 DuckDB 加载已暂停状态
         pipe2 = BaseExtractorPipeline(
             [DummyExtractor("a"), DummyExtractor("b")],
             market="futures",
-            state_path=state_file,
+            state_path=tmp_path / "state.json",
+            state_store=self._store,
         )
         assert pipe2.is_paused("a") is True
         pipe2.resume_source("a")
@@ -305,26 +322,39 @@ class TestBaseExtractorPipeline:
         pipe.pause_source("nonexistent")  # 不抛异常
         assert pipe.is_paused("nonexistent") is True  # 不存在视为暂停
 
-    def test_load_state_missing_file(self, tmp_path):
-        pipe = BaseExtractorPipeline([DummyExtractor("a")], market="futures", state_path=tmp_path / "nope.json")
+    def test_load_state_when_no_duckdb_state(self, tmp_path):
+        # 无 DuckDB 状态时，所有源默认未暂停
+        pipe = BaseExtractorPipeline(
+            [DummyExtractor("a")], market="futures", state_path=tmp_path / "nope.json", state_store=self._store
+        )
         assert pipe.is_paused("a") is False
 
-    def test_load_state_corrupted_json(self, tmp_path):
-        state_file = tmp_path / "state.json"
-        state_file.write_text("{broken", encoding="utf-8")
-        pipe = BaseExtractorPipeline([DummyExtractor("a")], market="futures", state_path=state_file)
-        assert pipe.is_paused("a") is False  # 加载失败降级
+    def test_load_state_from_duckdb(self, tmp_path):
+        pipe, _ = self._make_pipeline(tmp_path)
+        pipe.pause_source("b")
+        # 新管道从 DuckDB 加载已暂停状态
+        pipe2 = BaseExtractorPipeline(
+            [DummyExtractor("a"), DummyExtractor("b")],
+            market="futures",
+            state_path=tmp_path / "state.json",
+            state_store=self._store,
+        )
+        assert pipe2.is_paused("b") is True
+        assert pipe2.is_paused("a") is False
 
     def test_save_state_preserves_other_markets(self, tmp_path):
-        state_file = tmp_path / "state.json"
-        pipe1 = BaseExtractorPipeline([DummyExtractor("a")], market="futures", state_path=state_file)
+        pipe1 = BaseExtractorPipeline(
+            [DummyExtractor("a")], market="futures", state_path=tmp_path / "state.json", state_store=self._store
+        )
         pipe1.pause_source("a")
-        # 另一个 market 实例写状态
-        pipe2 = BaseExtractorPipeline([DummyExtractor("a")], market="stock", state_path=state_file)
+        # 另一个 market 实例写状态（同一 store，不同 market 键共存）
+        pipe2 = BaseExtractorPipeline(
+            [DummyExtractor("a")], market="stock", state_path=tmp_path / "state.json", state_store=self._store
+        )
         pipe2.pause_source("a")
-        data = json.loads(state_file.read_text(encoding="utf-8"))
-        assert data["futures"]["a"] is True
-        assert data["stock"]["a"] is True
+        state = self._get_extractor_state()
+        assert state["futures"]["a"] is True
+        assert state["stock"]["a"] is True
 
     def test_yaml_factor_to_candidate(self, tmp_path):
         factor = {

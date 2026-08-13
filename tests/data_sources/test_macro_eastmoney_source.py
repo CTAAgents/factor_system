@@ -39,7 +39,13 @@ class TestFetchEm:
             {"REPORT_DATE": "2026-07-01 00:00", "NATIONAL_SAME": "0.3"},
         ]
 
-        def fake_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int | None = None, **kwargs: object) -> MagicMock:
+        def fake_get(
+            url: str,
+            params: dict | None = None,
+            headers: dict | None = None,
+            timeout: int | None = None,
+            **kwargs: object,
+        ) -> MagicMock:
             assert params["reportName"] == "RPT_ECONOMY_CPI"
             return _em_rows(rows)
 
@@ -55,7 +61,13 @@ class TestFetchEm:
 
         rows = [{"REPORT_DATE": "2026-07-01 00:00", "EXIT_BASE": "186931000", "IMPORT_BASE": "168569000"}]
 
-        def fake_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int | None = None, **kwargs: object) -> MagicMock:
+        def fake_get(
+            url: str,
+            params: dict | None = None,
+            headers: dict | None = None,
+            timeout: int | None = None,
+            **kwargs: object,
+        ) -> MagicMock:
             return _em_rows(rows)
 
         monkeypatch.setattr(real_requests, "get", fake_get)
@@ -65,7 +77,13 @@ class TestFetchEm:
     def test_em_no_rows_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import requests as real_requests
 
-        def fake_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int | None = None, **kwargs: object) -> MagicMock:
+        def fake_get(
+            url: str,
+            params: dict | None = None,
+            headers: dict | None = None,
+            timeout: int | None = None,
+            **kwargs: object,
+        ) -> MagicMock:
             return _em_rows([])
 
         monkeypatch.setattr(real_requests, "get", fake_get)
@@ -116,15 +134,22 @@ class TestGetMacroSeries:
     def test_unknown_indicator_none(self) -> None:
         assert EastmoneyMacroSource().get_macro_series("不存在指标") is None
 
-    def test_fetch_failure_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """拉取异常 → None（降级不抛错）。"""
+    def test_fetch_failure_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """拉取异常 → None（降级不抛错；空库隔离，避免命中真实 edb_cache）。"""
         import requests as real_requests
 
-        def boom(url: str, params: dict | None = None, headers: dict | None = None, timeout: int | None = None, **kwargs: object) -> MagicMock:
+        def boom(
+            url: str,
+            params: dict | None = None,
+            headers: dict | None = None,
+            timeout: int | None = None,
+            **kwargs: object,
+        ) -> MagicMock:
             raise ConnectionError("net down")
 
         monkeypatch.setattr(real_requests, "get", boom)
-        assert EastmoneyMacroSource().get_macro_series("中国CPI当月同比") is None
+        db = tmp_path / "t.duckdb"
+        assert EastmoneyMacroSource().get_macro_series("中国CPI当月同比", db_path=db) is None
 
     def test_cache_write_and_hit(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """首次拉取写 edb_cache，二次直接命中（不请求网络）。"""
@@ -135,7 +160,13 @@ class TestGetMacroSeries:
         rows = [{"REPORT_DATE": "2026-07-01 00:00", "NATIONAL_SAME": "0.3"}]
         calls: list[int] = []
 
-        def fake_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int | None = None, **kwargs: object) -> MagicMock:
+        def fake_get(
+            url: str,
+            params: dict | None = None,
+            headers: dict | None = None,
+            timeout: int | None = None,
+            **kwargs: object,
+        ) -> MagicMock:
             calls.append(1)
             return _em_rows(rows)
 
@@ -159,7 +190,13 @@ class TestAlignerIntegration:
         db = tmp_path / "t.duckdb"
         rows = [{"REPORT_DATE": "2026-06-30 00:00", "NATIONAL_SAME": "0.2"}]
 
-        def fake_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int | None = None, **kwargs: object) -> MagicMock:
+        def fake_get(
+            url: str,
+            params: dict | None = None,
+            headers: dict | None = None,
+            timeout: int | None = None,
+            **kwargs: object,
+        ) -> MagicMock:
             return _em_rows(rows)
 
         monkeypatch.setattr(real_requests, "get", fake_get)

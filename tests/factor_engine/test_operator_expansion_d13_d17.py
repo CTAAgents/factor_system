@@ -8,6 +8,8 @@
     3. 双注册表一致性（DSL 512 项 / required_shared 全覆盖 / verify consistent）
 """
 
+# ruff: noqa: E741  # OHLC 低价用 l 命名（o/h/l/c），属领域标准命名
+
 from __future__ import annotations
 
 import inspect

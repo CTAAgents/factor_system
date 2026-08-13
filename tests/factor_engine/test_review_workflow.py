@@ -113,25 +113,15 @@ class TestReviewCliCommands:
         return Namespace(**kw)
 
     def test_cli_review_list(self, workflow, _isolate_factor_db, capsys):
-        """list 输出待审查队列（含 factor_id 行）。"""
+        """list 输出待审查队列（主系统期货化，仅列 futures 因子）。"""
         from fts.cli import _cmd_factor_review_list
 
-        rc = _cmd_factor_review_list(self._args(market=None, limit=50, db=_isolate_factor_db))
+        rc = _cmd_factor_review_list(self._args(limit=50, db=_isolate_factor_db))
         assert rc == 0
         out = capsys.readouterr().out
         assert "待审查因子队列" in out
         assert "fct_rev_a" in out
-        assert "fct_rev_b" in out
-
-    def test_cli_review_list_market_filter(self, workflow, _isolate_factor_db, capsys):
-        """list --market stock 只输出 stock 因子。"""
-        from fts.cli import _cmd_factor_review_list
-
-        rc = _cmd_factor_review_list(self._args(market="stock", limit=50, db=_isolate_factor_db))
-        assert rc == 0
-        out = capsys.readouterr().out
-        assert "fct_rev_b" in out
-        assert "fct_rev_a" not in out
+        assert "fct_rev_b" not in out  # stock 因子已剥离（plans/32），不进入期货 CLI 队列
 
     def test_cli_review_approve(self, _isolate_factor_db, capsys):
         """approve 命令回写 DuckDB（决策 approved）。"""

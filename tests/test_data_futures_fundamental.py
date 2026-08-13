@@ -174,6 +174,22 @@ class TestGetInventory:
         provider = AkshareFuturesFundamentalProvider()
         assert provider.get_inventory("XX0").empty
 
+    def test_em_case_sensitive_fallback_upper(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """东财接口 symbol 大小写敏感（SR 小写报错、大写可查）→ 大写兜底命中。"""
+        provider = AkshareFuturesFundamentalProvider()
+        seen: list[str] = []
+
+        def fake_em(symbol: str) -> pd.DataFrame:
+            seen.append(symbol)
+            if symbol == "sr":
+                raise ValueError("请输入正确的 symbol")
+            return pd.DataFrame({"日期": ["2026-08-10", "2026-08-11"], "库存": [24387, 24081], "增减": [None, -306.0]})
+
+        monkeypatch.setattr(ak, "futures_inventory_em", fake_em)
+        df = provider.get_inventory("SR0")
+        assert len(df) == 2 and df["inventory"].iloc[-1] == 24081.0
+        assert seen == ["sr", "SR"]  # 先小写失败 → 大写成功
+
     def test_cached_no_second_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
         provider = AkshareFuturesFundamentalProvider()
         calls: list[str] = []

@@ -18,7 +18,15 @@ class TestStorageRegistry:
         domains = registry.domains()
         assert len(domains) >= 8
         ids = {d.domain for d in domains}
-        for required in ("market_history", "factor_assets", "elite_snapshots", "run_state", "signal_cache"):
+        # 32-stock-extraction-plan.md P3: market_history 域拆为 futures/stock 两域
+        for required in (
+            "market_history_futures",
+            "market_history_stock",
+            "factor_assets",
+            "elite_snapshots",
+            "run_state",
+            "signal_cache",
+        ):
             assert required in ids
 
     def test_required_fields_present(self, registry: StorageRegistry) -> None:

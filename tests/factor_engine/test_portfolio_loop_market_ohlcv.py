@@ -14,8 +14,27 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from fts.factor_engine.portfolio_loop import PortfolioLoop
+
+
+@pytest.fixture(autouse=True)
+def _no_real_data_source(monkeypatch):
+    """统一隔离真实数据源（TqSdk/DuckDB），防止 run() 内任何路径触碰网络。
+
+    拦截 fts.data.FTSDataProvider 与 fts.data_futures.FuturesDataProvider，
+    返回合成期货面板。测试体内的 with patch 优先级更高，不受影响。
+    """
+    panel = _make_panel()
+    dates = pd.DatetimeIndex(panel["SYM0"].index)
+    mock_provider = MagicMock()
+    mock_provider.get_futures_panel.return_value = (panel, dates)
+    mock_cls = MagicMock(return_value=mock_provider)
+    monkeypatch.setattr("fts.data.FTSDataProvider", mock_cls)
+    # 双保险：任何直接实例化 FuturesDataProvider 的路径也返回 mock
+    monkeypatch.setattr("fts.data_futures.FuturesDataProvider", MagicMock())
+    return mock_provider
 
 
 def _factor(fid: str, name: str, sharpe: float = 1.8) -> dict:

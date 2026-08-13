@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -43,6 +44,20 @@ def _isolate_factor_db(tmp_path, monkeypatch):
     isolated_db = tmp_path / "factor_catalog.duckdb"
     schema.init_database(isolated_db)
     monkeypatch.setattr(schema, "DATABASE_PATH", isolated_db)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_state_store(tmp_path, monkeypatch):
+    """全文隔离 state.duckdb（SSOT 读路径切换后，状态管理器默认走全局 SSOT）。
+
+    将 `fts.store.state_db.get_state_store` 重定向到每测试临时库，防污染真实 state.duckdb。
+    """
+    from fts.store import state_db
+
+    store = state_db.StateKVStore(tmp_path / "state.duckdb")
+    monkeypatch.setattr(state_db, "get_state_store", lambda: store)
+    yield
+    store.close()
 
 
 def test_generate_trace_id_format():
@@ -98,26 +113,14 @@ def test_state_manager_save_and_load(tmp_memory_dir):
     assert state2["total_factors_evaluated"] == 20
 
 
-def test_state_manager_creates_backup(tmp_memory_dir):
-    """保存时应自动创建 backup 文件。"""
-    mgr = EvolutionStateManager(tmp_memory_dir)
-    state = mgr.load_or_init()
-    mgr.save(state)
-    backup = tmp_memory_dir / "state.json.backup"
-    assert backup.exists()
-
-
-def test_state_manager_recovers_from_backup(tmp_memory_dir):
-    """主文件损坏时应从 backup 恢复。"""
+def test_state_manager_save_reload_roundtrip(tmp_memory_dir):
+    """保存后新建管理器可重新加载（DuckDB SSOT 持久化）。"""
     mgr = EvolutionStateManager(tmp_memory_dir)
     state = mgr.load_or_init()
     state["last_generation"] = 7
     mgr.save(state)
 
-    # 损坏主文件
-    (tmp_memory_dir / "state.json").write_text("invalid json", encoding="utf-8")
-
-    # 重新加载应从 backup 恢复
+    # 重新加载应从 DuckDB 恢复
     mgr2 = EvolutionStateManager(tmp_memory_dir)
     state2 = mgr2.load_or_init()
     assert state2["last_generation"] == 7
@@ -125,11 +128,10 @@ def test_state_manager_recovers_from_backup(tmp_memory_dir):
 
 def test_state_manager_version_check(tmp_memory_dir):
     """schema 版本不匹配时应视为损坏。"""
-    # 写入错误 schema 版本
-    (tmp_memory_dir / "state.json").write_text(
-        json.dumps({"schema_version": "0", "status": "running"}),
-        encoding="utf-8",
-    )
+    # 写入错误 schema 版本到 DuckDB
+    from fts.store.state_db import get_state_store
+
+    get_state_store().upsert("evolution", "state", {"schema_version": "0", "status": "running"}, run_id="t")
     mgr = EvolutionStateManager(tmp_memory_dir)
     state = mgr.load_or_init()
     # 应重新初始化
@@ -331,6 +333,7 @@ def _mock_review_pass(loop: EvolutionLoop) -> None:
     )
 
 
+@pytest.mark.slow
 def test_evolution_loop_runs_minimal(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client):
     """应能完整运行 1 代演化（状态检查）。"""
     loop = EvolutionLoop(
@@ -346,6 +349,7 @@ def test_evolution_loop_runs_minimal(sample_ohlcv, forward_returns, tmp_memory_d
     assert result.status in ("completed", "paused", "circuit_broken")
 
 
+@pytest.mark.slow
 def test_evolution_loop_produces_metrics(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client):
     """运行后指标应被正确填充。"""
     loop = EvolutionLoop(
@@ -362,10 +366,11 @@ def test_evolution_loop_produces_metrics(sample_ohlcv, forward_returns, tmp_memo
     assert result.tokens_consumed > 0
 
 
+@pytest.mark.slow
 def test_evolution_loop_creates_state_file(
     sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
 ):
-    """运行后应创建 state.json。"""
+    """运行后演化状态已持久化到 state.duckdb。"""
     loop = EvolutionLoop(
         data=sample_ohlcv,
         forward_returns=forward_returns,
@@ -375,9 +380,12 @@ def test_evolution_loop_creates_state_file(
         n_trials_micro=3,
     )
     loop.run(max_generation=1)
-    assert (tmp_memory_dir / "state.json").exists()
+    from fts.store.state_db import get_state_store
+
+    assert get_state_store().get("evolution", "state") is not None
 
 
+@pytest.mark.slow
 def test_evolution_loop_creates_elite_dir(
     sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
 ):
@@ -395,6 +403,7 @@ def test_evolution_loop_creates_elite_dir(
     assert tmp_elite_dir.exists()
 
 
+@pytest.mark.slow
 def test_evolution_loop_record_experience_traces(
     sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
 ):
@@ -421,6 +430,7 @@ def test_evolution_loop_record_experience_traces(
     assert total > 0
 
 
+@pytest.mark.slow
 def test_evolution_loop_circuit_breaker_on_token(
     sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
 ):
@@ -473,6 +483,7 @@ def test_evolution_loop_circuit_breaker_on_token(
     assert "Token" in (result.circuit_breaker_reason or "")
 
 
+@pytest.mark.slow
 def test_evolution_loop_to_dict(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client):
     """EvolutionRunResult.to_dict() 应返回完整字典。"""
     loop = EvolutionLoop(
@@ -549,22 +560,6 @@ def test_state_manager_save_version_mismatch(tmp_memory_dir):
         mgr.save(state)
 
 
-def test_state_manager_backup_failure(tmp_memory_dir, monkeypatch):
-    """backup 失败应抛 StateError。"""
-    mgr = EvolutionStateManager(tmp_memory_dir)
-    state = mgr.load_or_init()
-    import shutil
-
-    def broken_copy(*args, **kwargs):
-        raise OSError("模拟 backup 失败")
-
-    monkeypatch.setattr(shutil, "copy2", broken_copy)
-    from fts.factor_engine.state import StateError
-
-    with pytest.raises(StateError, match="备份失败"):
-        mgr.save(state)
-
-
 def test_state_manager_cold_start_budget(tmp_memory_dir):
     """冷启动时传入 budget_limit 应生效。"""
     mgr = EvolutionStateManager(tmp_memory_dir)
@@ -572,11 +567,10 @@ def test_state_manager_cold_start_budget(tmp_memory_dir):
     assert state["budget_limit"] == 9999
 
 
-def test_state_manager_try_load_empty_state(tmp_memory_dir):
-    """空状态文件应视为损坏返回 None。"""
+def test_state_manager_cold_start_when_no_state(tmp_memory_dir):
+    """无已有状态时冷启动。"""
     mgr = EvolutionStateManager(tmp_memory_dir)
-    (tmp_memory_dir / "state.json").write_text("", encoding="utf-8")
-    # 内部 _try_load 会返回 None，应触发冷启动
+    # 临时 store 无 evolution/state → 冷启动
     state = mgr.load_or_init()
     assert state["status"] == "running"
 
@@ -584,6 +578,7 @@ def test_state_manager_try_load_empty_state(tmp_memory_dir):
 # ─── EvolutionLoop 熔断覆盖 ───────────────────────────────
 
 
+@pytest.mark.slow
 def test_evolution_loop_circuit_breaker_consecutive_low_ic(
     sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
 ):
@@ -613,6 +608,7 @@ def test_evolution_loop_circuit_breaker_consecutive_low_ic(
     assert result.status in ("completed", "circuit_broken")
 
 
+@pytest.mark.slow
 def test_evolution_loop_circuit_breaker_high_failure_rate(
     sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
 ):
@@ -660,6 +656,7 @@ def test_evolution_run_result_defaults():
     assert d["elite_factor_ids"] == []
 
 
+@pytest.mark.slow
 def test_evolution_run_result_contains_seed_correlations(
     sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
 ):
@@ -682,6 +679,7 @@ def test_evolution_run_result_contains_seed_correlations(
     assert isinstance(d["seed_correlations"], list)
 
 
+@pytest.mark.slow
 def test_seed_correlation_check_in_run(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client):
     """run() 应在种子加载后执行相关性预检。"""
     loop = EvolutionLoop(
@@ -759,6 +757,10 @@ def test_generate_operator_factor_constant_precheck_rejected(tmp_memory_dir, tmp
     回归: 此前常数表达式要到 _check_factor_runtime 阶段才被淘汰；
     现在 _generate_operator_factor 在生成循环内评估表达式并过滤非常数信号，
     10 次尝试全部被拦截后抛出 RuntimeError。
+
+    注: 随机表达式空间含 warm-up 类算子（ts_dema/ts_tema/ts_aroon_down 等对
+    常数输入输出 0→100 爬坡的伪变化信号，属正常实现），不能依赖真实随机性
+    保证 10 次全拦截；此处固定随机时序算子为常数保持的 ts_mean 使场景可复现。
     """
     n = 80
     dates = pd.date_range("2024-01-01", periods=n, freq="B")
@@ -782,8 +784,13 @@ def test_generate_operator_factor_constant_precheck_rejected(tmp_memory_dir, tmp
         market="futures",
     )
     parent = {"factor_id": "fct_p", "name": "p", "family": "trend"}
-    with pytest.raises(RuntimeError):
-        loop._generate_operator_factor(parent, generation=0, trace_id="t")
+
+    def _fixed_choice(seq):
+        return "ts_mean" if "ts_mean" in seq else seq[0]
+
+    with patch.object(random.Random, "choice", side_effect=_fixed_choice):
+        with pytest.raises(RuntimeError):
+            loop._generate_operator_factor(parent, generation=0, trace_id="t")
 
 
 def test_cross_section_prefilter_uses_real_cross_section_returns(tmp_memory_dir, tmp_elite_dir, mock_llm_client):
@@ -1584,6 +1591,7 @@ class TestEvolutionLoopCoverage:
 
     # ─── 宏观演化失败（line 178-184）────────────────────
 
+    @pytest.mark.slow
     def test_macro_evolution_failure(
         self,
         sample_ohlcv,
@@ -1611,6 +1619,7 @@ class TestEvolutionLoopCoverage:
         # token 消耗应为 0（宏观演化全部失败，GP 也失败，无 token 消耗）
         assert result.tokens_consumed == 0
 
+    @pytest.mark.slow
     def test_macro_evolution_failure_recorded(
         self,
         sample_ohlcv,
@@ -1642,6 +1651,7 @@ class TestEvolutionLoopCoverage:
 
     # ─── 微观演化失败（line 192-197）────────────────────
 
+    @pytest.mark.slow
     def test_micro_evolution_failure(
         self,
         sample_ohlcv,
@@ -1666,6 +1676,7 @@ class TestEvolutionLoopCoverage:
         assert result.status == "completed"
         assert result.tokens_consumed > 0  # 宏观演化的 token 被消耗
 
+    @pytest.mark.slow
     def test_micro_evolution_failure_recorded(
         self,
         sample_ohlcv,
@@ -1692,6 +1703,7 @@ class TestEvolutionLoopCoverage:
 
     # ─── Verifier → 晋级精英池（line 213-221）─────────────
 
+    @pytest.mark.slow
     def test_evolution_loop_promote_to_elite(
         self,
         sample_ohlcv,
@@ -1769,6 +1781,7 @@ class TestEvolutionLoopCoverage:
 
     # ─── 失败率熔断（line 293-295）───────────────────────
 
+    @pytest.mark.slow
     def test_evolution_loop_failure_rate_circuit_breaker(
         self,
         sample_ohlcv,
@@ -2126,6 +2139,7 @@ class TestEvolutionLoopCoverage:
 
     # ─── low_ic 分支（line 232-235）───────────────────────
 
+    @pytest.mark.slow
     def test_low_ic_increment(
         self,
         sample_ohlcv,
@@ -2194,6 +2208,7 @@ class TestMainFunction:
             main()
         assert exc.value.code == 1
 
+    @pytest.mark.slow
     def test_main_with_once_flag(self, monkeypatch, tmp_path):
         """带 --once 标志应运行完整演化。"""
         monkeypatch.setattr(
@@ -2215,6 +2230,7 @@ class TestMainFunction:
         # 不应抛出异常
         main()
 
+    @pytest.mark.slow
     def test_main_with_max_generation(self, monkeypatch, tmp_path):
         """带 --max-generation 参数应限定代数。"""
         monkeypatch.setattr(
@@ -2383,6 +2399,7 @@ class TestMainFunction:
 class TestLine221:
     """专门覆盖 evolution_loop.py line 221 (self._consecutive_low_ic = 0)。"""
 
+    @pytest.mark.slow
     def test_consecutive_low_ic_reset_on_success(
         self,
         sample_ohlcv,
@@ -2451,6 +2468,7 @@ class TestCoverageGaps:
 
     # ── cross_section 路径 lines 217-234 ──
 
+    @pytest.mark.slow
     def test_cross_section_evaluation_path(
         self,
         sample_ohlcv,
@@ -2499,6 +2517,7 @@ class TestCoverageGaps:
         assert result.status in ("completed", "circuit_broken")
         assert result.generations_completed >= 0
 
+    @pytest.mark.slow
     def test_cross_section_failure_reasons_low_ic(
         self,
         sample_ohlcv,
@@ -2701,132 +2720,6 @@ class TestGapF03SectorNeutralization:
             lambda: FTSConfig(futures_neutralization=True),
         )
         explicit = {"RB0": "自定义板块"}
-        loop = self._make_loop(
-            sample_ohlcv,
-            forward_returns,
-            tmp_memory_dir,
-            tmp_elite_dir,
-            industry_map=explicit,
-        )
-        assert loop.industry_map == explicit
-
-
-# ─── v2.61.0 (GAP-S01) 股票横截面行业/市值中性化 ──────────
-
-
-class TestGapS01StockNeutralization:
-    """GAP-S01: market=stock + 横截面模式自动注入行业/市值映射（行业/市值中性化）。"""
-
-    @staticmethod
-    def _budget():
-        from fts.factor_engine.contracts import BudgetConfig
-
-        return BudgetConfig(
-            nightly_token_limit=1_000_000,
-            monthly_token_limit=10_000_000,
-            max_generation=3,
-            max_tokens_per_factor=10_000,
-            circuit_breaker_token_ratio=10.0,
-            circuit_breaker_consecutive_low_ic=100,
-            circuit_breaker_low_ic_threshold=0.01,
-            circuit_breaker_failure_rate=0.99,
-        )
-
-    def _make_loop(self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, **kwargs):
-        cross_data = {"600519": sample_ohlcv, "000858": sample_ohlcv, "601318": sample_ohlcv}
-        cross_dates = pd.DatetimeIndex(sample_ohlcv.index)
-        base = dict(
-            data=sample_ohlcv,
-            forward_returns=forward_returns,
-            elite_dir=tmp_elite_dir,
-            memory_dir=tmp_memory_dir,
-            budget=self._budget(),
-            n_trials_micro=2,
-            cross_section_data=cross_data,
-            cross_section_dates=cross_dates,
-            market="stock",
-        )
-        base.update(kwargs)
-        return EvolutionLoop(**base)
-
-    def test_stock_cross_section_auto_injects_industry_map(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch
-    ):
-        """GAP-S01: stock_neutralization=true 时自动加载行业映射并键归一化。"""
-        from fts.config.settings import FTSConfig
-
-        raw_map = {"600519.SH": "食品饮料", "000858.SZ": "食品饮料", "601318.SH": "非银金融"}
-        monkeypatch.setattr(
-            "fts.config.settings.load_industry_map",
-            lambda: raw_map,
-        )
-        monkeypatch.setattr(
-            "fts.config.settings.get_config",
-            lambda: FTSConfig(stock_neutralization=True, industry_map_path="", cap_map_path=""),
-        )
-        loop = self._make_loop(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir)
-        assert loop.industry_map is not None
-        # 键归一化：裸代码键（面板 symbol）可命中
-        assert loop.industry_map["600519"] == "食品饮料"
-        assert loop.industry_map["000858"] == "食品饮料"
-        assert loop.industry_map["601318"] == "非银金融"
-        # 原始带后缀键保留（兼容其他调用方）
-        assert loop.industry_map["600519.SH"] == "食品饮料"
-
-    def test_stock_cap_map_injected(self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch):
-        """cap_map_path 配置时自动加载市值映射。"""
-        from fts.config.settings import FTSConfig
-
-        raw_map = {"600519.SH": "食品饮料", "000858.SZ": "食品饮料"}
-        cap_map = {"600519.SH": 2.1e12, "000858.SZ": 6.0e11}
-        monkeypatch.setattr(
-            "fts.config.settings.load_industry_map",
-            lambda: raw_map,
-        )
-        monkeypatch.setattr(
-            "fts.config.settings.load_cap_map",
-            lambda: cap_map,
-        )
-        monkeypatch.setattr(
-            "fts.config.settings.get_config",
-            lambda: FTSConfig(stock_neutralization=True, industry_map_path="", cap_map_path="x"),
-        )
-        loop = self._make_loop(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir)
-        assert loop.cap_map is not None
-        assert loop.cap_map["600519"] == pytest.approx(2.1e12)
-
-    def test_stock_neutralization_disabled_skips_injection(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch
-    ):
-        """stock_neutralization=false 时不应注入行业/市值映射。"""
-        from fts.config.settings import FTSConfig
-
-        monkeypatch.setattr(
-            "fts.config.settings.load_industry_map",
-            lambda: {"600519.SH": "食品饮料"},
-        )
-        monkeypatch.setattr(
-            "fts.config.settings.get_config",
-            lambda: FTSConfig(stock_neutralization=False, industry_map_path="", cap_map_path=""),
-        )
-        loop = self._make_loop(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir)
-        assert loop.industry_map is None
-
-    def test_stock_explicit_industry_map_not_overridden(
-        self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, monkeypatch
-    ):
-        """显式传入 industry_map 时不应被自动注入覆盖。"""
-        from fts.config.settings import FTSConfig
-
-        monkeypatch.setattr(
-            "fts.config.settings.load_industry_map",
-            lambda: {"600519.SH": "食品饮料"},
-        )
-        monkeypatch.setattr(
-            "fts.config.settings.get_config",
-            lambda: FTSConfig(stock_neutralization=True, industry_map_path="", cap_map_path=""),
-        )
-        explicit = {"600519": "自定义行业"}
         loop = self._make_loop(
             sample_ohlcv,
             forward_returns,
@@ -3290,6 +3183,7 @@ class TestGPEvolutionIntegration:
                 trace_id="test_trace_gp",
             )
 
+    @pytest.mark.slow
     def test_gp_fallback_in_evolution_loop(self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir):
         """验证宏观演化失败时回退到 GP 演化。"""
         loop = EvolutionLoop(
@@ -3308,6 +3202,7 @@ class TestGPEvolutionIntegration:
         assert result.generations_completed == 3
         assert result.status == "completed"
 
+    @pytest.mark.slow
     def test_gp_success_flow_integration(self, sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir):
         """验证 GP 成功后因子流入微观演化→评估→审计→回测全链路。"""
         loop = EvolutionLoop(
@@ -3951,13 +3846,10 @@ class TestRobustnessIntegration:
             ],
             missing_value_results=[],
             ood_results=[],
-            summary={"overall_pass_rate": 0.8, "total": 11, "passed": 10},
+            summary={"overall_pass_rate": 0.6, "total": 11, "passed": 7},
         )
         minimal_loop.data = sample_dataframe
         minimal_loop.robustness_tester.run = MagicMock(return_value=mock_result)
-        # 显式锁定 stock 语境（min_pass_rate=0.9）：配置 default_market=futures 时
-        # 阈值放宽为 0.7，会导致 0.8 pass_rate 被误判为通过，与"失败阻止晋升"语义冲突。
-        minimal_loop.market = "stock"
 
         evaluation = FactorEvaluation(
             factor_id=sample_seed["factor_id"],
@@ -4455,6 +4347,7 @@ class TestEliteParentFallback:
         assert parents[0]["factor_id"] == "fct_aaa111"
         assert parents[0]["code"]
 
+    @pytest.mark.slow
     def test_run_uses_elite_pool_when_seeds_duplicated(
         self,
         sample_ohlcv,
@@ -4592,29 +4485,6 @@ class TestGapS11OperatorFirst:
             market=market,
             **kwargs,
         )
-
-    def test_stock_default_resolves_to_operator_first(
-        self,
-        monkeypatch,
-        sample_ohlcv,
-        forward_returns,
-        tmp_memory_dir,
-        tmp_elite_dir,
-        mock_llm_client,
-    ):
-        """股票演化 + hybrid 配置 → 默认 operator_first。"""
-        from fts.config.settings import get_config
-
-        monkeypatch.setattr(get_config(), "evolution_mode", "hybrid")
-        loop = self._make_loop(
-            "stock",
-            sample_ohlcv,
-            forward_returns,
-            tmp_memory_dir,
-            tmp_elite_dir,
-            mock_llm_client,
-        )
-        assert loop.evolution_mode == "operator_first"
 
     def test_futures_keeps_hybrid(
         self,
@@ -4798,16 +4668,6 @@ class TestGapF16ModuleHelpers:
         assert pool["observe_trading_days"] == _SHADOW_OBSERVE_TRADING_DAYS
         assert "promoted_at" in pool
         assert "observe_until" in pool
-
-    def test_normalize_industry_keys(self):
-        """_normalize_industry_keys 生成裸代码键并保留原始键。"""
-        from fts.factor_engine.evolution_loop import _normalize_industry_keys
-
-        mapping = {"600519.SH": "白酒", "000001.SZ": "银行", "RB": "钢铁"}
-        result = _normalize_industry_keys(mapping)
-        assert result["600519.SH"] == "白酒"
-        assert result["600519"] == "白酒"
-        assert result["RB"] == "钢铁"
 
     def test_log_consistency_event_writes_file(self, tmp_path, monkeypatch):
         """_log_consistency_event 正常写入 jsonl。"""

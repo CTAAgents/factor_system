@@ -743,11 +743,11 @@ class TestRepositoryInit:
     """Repository 初始化测试。"""
 
     def test_default_database_path(self):
-        """测试默认数据库路径（分库后默认 market=stock）。"""
-        from fts.factor_engine.factor_db.schema import DATABASE_PATH_STOCK, DATABASE_PATH_FUTURES
+        """测试默认数据库路径（股票剥离后默认 market=futures）。"""
+        from fts.factor_engine.factor_db.schema import DATABASE_PATH_FUTURES
 
         repo = FactorRepository()
-        assert repo._db_path == DATABASE_PATH_STOCK
+        assert repo._db_path == DATABASE_PATH_FUTURES
         repo.close()
 
         repo_futures = FactorRepository(market="futures")

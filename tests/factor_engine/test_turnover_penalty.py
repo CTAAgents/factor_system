@@ -124,7 +124,8 @@ class TestPortfolioLoopConfig:
         loop = PortfolioLoop(memory_dir=str(tmp_path / "mem"))
         assert loop.turnover_penalty == 3.0
 
-    def test_default_zero(self, tmp_path, monkeypatch) -> None:
+    def test_default_enabled_015(self, tmp_path, monkeypatch) -> None:
+        """默认启用 0.15（35-gap-closure-plan G3 D5：原默认 0.0 关闭改为 0.15 开启）。"""
         from fts.config.settings import FTSConfig
 
         monkeypatch.setattr(
@@ -132,7 +133,7 @@ class TestPortfolioLoopConfig:
             lambda: FTSConfig(),
         )
         loop = PortfolioLoop(memory_dir=str(tmp_path / "mem"))
-        assert loop.turnover_penalty == 0.0
+        assert loop.turnover_penalty == 0.15
 
     def test_explicit_parameter_overrides_config(self, tmp_path, monkeypatch) -> None:
         from fts.config.settings import FTSConfig

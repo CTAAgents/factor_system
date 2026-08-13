@@ -29,6 +29,20 @@ import pandas as pd
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _mock_provider(monkeypatch):
+    """统一 mock FTSDataProvider，杜绝测试真实访问 TqSdk 网络。
+
+    portfolio_loop 内 3 处 `from ..data import FTSDataProvider` 局部导入
+    （1243/1429/3794 行）都会从 fts.data 模块取该类；此处将其替换为
+    mock 类，get_futures_panel 返回空面板 ({}, []) → 触发空数据降级路径，
+    避免测试在 TqSdk `wait_update` 上无限网络等待（曾导致全量回归卡死）。
+    """
+    mock_cls = MagicMock()
+    mock_cls.return_value.get_futures_panel.return_value = ({}, [])
+    monkeypatch.setattr("fts.data.FTSDataProvider", mock_cls)
+
+
 def _repair_numpy_no_value() -> None:
     """修复 pytest-cov 下 numpy reload 导致的 ufunc reduce 崩溃。
 
@@ -159,6 +173,17 @@ def _repair_numpy_sentinel():
     """pytest-cov 会触发 numpy reload（Python 层与 C 扩展 sentinel 分裂），
     每个测试前执行修复，保证 ndarray.sum() 等 ufunc reduce 可用。"""
     _repair_numpy_no_value()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_state_store(tmp_path, monkeypatch):
+    """全文隔离 state.duckdb（SSOT 读路径切换后，状态管理器默认走全局 SSOT）。"""
+    from fts.store import state_db
+
+    store = state_db.StateKVStore(tmp_path / "state.duckdb")
+    monkeypatch.setattr(state_db, "get_state_store", lambda: store)
+    yield
+    store.close()
 
 
 @pytest.fixture
@@ -333,13 +358,15 @@ class TestL3Verifier:
 
 
 class TestPortfolioStateManager:
-    """L3 状态管理器 — 持久化 + backup 恢复。"""
+    """L3 状态管理器 — DuckDB SSOT 持久化（plans/29 P4 读路径切换）。"""
 
-    def test_init_creates_file(self, tmp_portfolio_dir):
-        """load_or_init 后 state.json 存在。"""
+    def test_init_creates_state(self, tmp_portfolio_dir):
+        """load_or_init 后将状态持久化到 state.duckdb。"""
         psm = PortfolioStateManager(tmp_portfolio_dir)
         psm.load_or_init()
-        assert psm.state_file.exists()
+        from fts.store.state_db import get_state_store
+
+        assert get_state_store().get("portfolio", "state") is not None
 
     def test_save_and_load(self, tmp_portfolio_dir):
         """保存后加载字段一致。"""
@@ -356,18 +383,15 @@ class TestPortfolioStateManager:
         assert loaded["total_signals_retained"] == 5
         assert loaded["schema_version"] == STATE_SCHEMA_VERSION
 
-    def test_backup_recovery(self, tmp_portfolio_dir):
-        """主文件损坏后从 backup 恢复。"""
+    def test_reload_roundtrip(self, tmp_portfolio_dir):
+        """保存后新建管理器从 DuckDB 重新加载。"""
         psm = PortfolioStateManager(tmp_portfolio_dir)
         state = psm.load_or_init()
         state["total_signals_processed"] = 7
         state["total_proposals_generated"] = 3
         psm.save(state)
 
-        # 损坏主文件
-        psm.state_file.write_text("invalid json content", encoding="utf-8")
-
-        # 重新加载应从 backup 恢复
+        # 重新加载应从 DuckDB 恢复
         psm2 = PortfolioStateManager(tmp_portfolio_dir)
         recovered = psm2.load_or_init()
         assert recovered["total_signals_processed"] == 7
@@ -544,6 +568,109 @@ class TestSynthesizeSignals:
         assert len(signals) == 3
         for s in signals:
             assert s["weight"] == pytest.approx(1.0 / 3)
+
+
+# ════════════════════════════════════════════════════════════
+# 4b. _build_factor_code_map 测试（SSOT 对齐修复，v2.103.0）
+# ════════════════════════════════════════════════════════════
+
+
+class TestBuildFactorCodeMap:
+    """因子代码映射构建 — 内存 code 优先 / DuckDB 补拉 / JSON 兜底。
+
+    覆盖 v2.103.0 修复：此前仅从 elite_dir/*.json 读代码，存储迁移
+    DuckDB 后 JSON 目录退役，导致 elastic_net/ml_ensemble 有效因子
+    不足回退 sharpe_weight。
+    """
+
+    def _factor(self, fid: str, with_code: bool = True) -> dict[str, Any]:
+        f = {"factor_id": fid, "name": f"factor_{fid}"}
+        if with_code:
+            f["code"] = "def factor_program(data, params):\n    return data['close']"
+        return f
+
+    def test_memory_code_priority(self, tmp_path, monkeypatch):
+        """内存 factors 自带 code → 直接命中，不触库/JSON。"""
+        from fts.factor_engine.portfolio_loop import _build_factor_code_map
+
+        def _boom(*a, **k):
+            raise AssertionError("不应访问 DuckDB")
+
+        monkeypatch.setattr("fts.factor_engine.factor_db.FactorRepository", _boom)
+        factors = [self._factor("fct_a"), self._factor("fct_b"), self._factor("fct_c")]
+        result = _build_factor_code_map(factors, tmp_path, market="futures")
+        assert set(result) == {"fct_a", "fct_b", "fct_c"}
+        assert result["fct_a"]["code"].startswith("def factor_program")
+
+    def test_duckdb_backfill_for_missing_code(self, tmp_path, monkeypatch):
+        """内存缺 code → DuckDB 补拉；已有 code 的不再覆盖。"""
+        from fts.factor_engine.portfolio_loop import _build_factor_code_map
+
+        captured: list[str] = []
+
+        class _FakeRepo:
+            def __init__(self, **kwargs):
+                captured.append(kwargs.get("market", "?"))
+                self._closed = False
+
+            def get_factor(self, fid: str):
+                if fid == "fct_b":
+                    return {"factor_id": "fct_b", "code": "def factor_program(data, params):\n    return data['high']"}
+                return None
+
+            def close(self):
+                self._closed = True
+
+        monkeypatch.setattr("fts.factor_engine.factor_db.FactorRepository", _FakeRepo)
+        factors = [self._factor("fct_a"), self._factor("fct_b", with_code=False)]
+        result = _build_factor_code_map(factors, tmp_path, market="futures")
+        assert result["fct_b"]["code"].endswith("data['high']")
+        assert captured == ["futures"]  # market 透传
+
+    def test_json_snapshot_fallback(self, tmp_path, monkeypatch):
+        """DuckDB 无记录且内存无 code → JSON 快照兜底。"""
+        from fts.factor_engine.portfolio_loop import _build_factor_code_map
+
+        # JSON 快照兜底仅含 fct_c
+        (tmp_path / "fct_c.json").write_text(
+            json.dumps({"factor_id": "fct_c", "name": "factor_c", "code": "def factor_program(data, params):\n    return data['low']"}),
+            encoding="utf-8",
+        )
+
+        class _EmptyRepo:
+            def __init__(self, **kwargs):
+                pass
+
+            def get_factor(self, fid: str):
+                return None
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("fts.factor_engine.factor_db.FactorRepository", _EmptyRepo)
+        factors = [self._factor("fct_a"), self._factor("fct_c", with_code=False)]
+        result = _build_factor_code_map(factors, tmp_path, market="futures")
+        assert "fct_c" in result
+        assert result["fct_c"]["code"].endswith("data['low']")
+
+    def test_all_missing_returns_minus_only(self, tmp_path, monkeypatch):
+        """全部无 code → 仅返回能解析到的（空 JSON 目录时为空 dict）。"""
+        from fts.factor_engine.portfolio_loop import _build_factor_code_map
+
+        class _EmptyRepo:
+            def __init__(self, **kwargs):
+                pass
+
+            def get_factor(self, fid: str):
+                return None
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("fts.factor_engine.factor_db.FactorRepository", _EmptyRepo)
+        factors = [self._factor("fct_a", with_code=False)]
+        result = _build_factor_code_map(factors, tmp_path, market="futures")
+        assert result == {}
 
 
 # ════════════════════════════════════════════════════════════
@@ -1334,7 +1461,7 @@ class TestPortfolioLoop:
         import datetime as _dt
 
         ts = _dt.date.today().isoformat()
-        reports_dir = Path("reports") / "stock" / ts
+        reports_dir = Path("reports") / "futures" / ts
         assert reports_dir.exists()
         md_files = list(reports_dir.glob("portfolio_attribution_*.md"))
         assert len(md_files) >= 1
@@ -1386,7 +1513,7 @@ class TestPortfolioLoop:
         import datetime as _dt
 
         ts = _dt.date.today().isoformat()
-        reports_dir = Path("reports") / "stock" / ts
+        reports_dir = Path("reports") / "futures" / ts
         wf_files = list(reports_dir.glob("portfolio_wf_*.md"))
         assert len(wf_files) >= 1
         content = wf_files[-1].read_text(encoding="utf-8")
@@ -1501,34 +1628,17 @@ class TestCoverageGaps:
         assert passed is False
         assert any("衰减率" in r for r in reasons)
 
-    # ── PortfolioStateManager lines 154-155 ──
-
-    def test_state_manager_backup_oserror(self, tmp_portfolio_dir, monkeypatch):
-        """lines 154-155: backup 备份失败应抛 L3Error。"""
-        import shutil
-
-        psm = PortfolioStateManager(tmp_portfolio_dir)
-        state = psm.load_or_init()
-
-        def broken_copy2(*args, **kwargs):
-            raise OSError("备份失败")
-
-        monkeypatch.setattr(shutil, "copy2", broken_copy2)
-        with pytest.raises(L3Error, match="备份失败"):
-            psm.save(state)
-
-    # ── PortfolioStateManager line 181 ──
+    # ── PortfolioStateManager schema 版本冷却 ──
 
     def test_state_manager_try_load_version_mismatch(self, tmp_portfolio_dir):
-        """line 181: _try_load 发现 schema 版本不匹配返回 None。"""
-        # 写入 schema 版本不匹配的 state
-        state_file = tmp_portfolio_dir / "state.json"
-        state_file.write_text(
-            json.dumps({"schema_version": "0", "status": "completed"}),
-            encoding="utf-8",
+        """schema 版本不匹配时冷启动。"""
+        from fts.store.state_db import get_state_store
+
+        get_state_store().upsert(
+            "portfolio", "state", {"schema_version": "0", "status": "completed"}, run_id="t"
         )
         psm = PortfolioStateManager(tmp_portfolio_dir)
-        # load_or_init 应重新初始化（因为 _try_load 返回 None）
+        # load_or_init 应重新初始化（schema 版本不匹配）
         state = psm.load_or_init()
         assert state["schema_version"] == STATE_SCHEMA_VERSION
 
@@ -2971,7 +3081,7 @@ class TestSynthesisElasticNetMl:
         from fts.factor_engine.portfolio_loop import _compute_elastic_net_weights
 
         with patch("fts.data.FTSDataProvider") as m_prov:
-            m_prov.return_value.get_csi300_panel.return_value = ({}, [])
+            m_prov.return_value.get_futures_panel.return_value = ({}, [])
             assert _compute_elastic_net_weights([], tmp_path) == {}
 
     def test_ml_ensemble_panel_insufficient(self, tmp_path):
@@ -2979,7 +3089,7 @@ class TestSynthesisElasticNetMl:
         from fts.factor_engine.portfolio_loop import _compute_ml_ensemble_weights
 
         with patch("fts.data.FTSDataProvider") as m_prov:
-            m_prov.return_value.get_csi300_panel.return_value = ({}, [])
+            m_prov.return_value.get_futures_panel.return_value = ({}, [])
             assert _compute_ml_ensemble_weights([], tmp_path) == {}
 
     def test_elastic_net_valid_factors_insufficient(self, tmp_path):
@@ -2990,7 +3100,7 @@ class TestSynthesisElasticNetMl:
         empty_elite = tmp_path / "no_codes"
         empty_elite.mkdir()
         with patch("fts.data.FTSDataProvider") as m_prov:
-            m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
+            m_prov.return_value.get_futures_panel.return_value = (panel, dates)
             assert _compute_elastic_net_weights(self._factors(2), empty_elite) == {}
 
     def test_ml_ensemble_valid_factors_insufficient(self, tmp_path):
@@ -3001,7 +3111,7 @@ class TestSynthesisElasticNetMl:
         empty_elite = tmp_path / "no_codes_ml"
         empty_elite.mkdir()
         with patch("fts.data.FTSDataProvider") as m_prov:
-            m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
+            m_prov.return_value.get_futures_panel.return_value = (panel, dates)
             assert _compute_ml_ensemble_weights(self._factors(2), empty_elite) == {}
 
     def test_elastic_net_executor_failure_skips(self, tmp_path):
@@ -3019,7 +3129,7 @@ class TestSynthesisElasticNetMl:
             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
             patch("sklearn.linear_model.ElasticNetCV", return_value=fake_model),
         ):
-            m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
+            m_prov.return_value.get_futures_panel.return_value = (panel, dates)
             # f0 构造失败 → 信号全 NaN → 无有效截面回归日
             m_exec.side_effect = [RuntimeError("exec fail"), exec_ok]
             assert _compute_elastic_net_weights(self._factors(2), elite) == {}
@@ -3037,7 +3147,7 @@ class TestSynthesisElasticNetMl:
             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
             patch("sklearn.linear_model.ElasticNetCV", return_value=fake_model),
         ):
-            m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
+            m_prov.return_value.get_futures_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.linspace(-0.5, 0.5, 40)
             result = _compute_elastic_net_weights(self._factors(2), elite)
         assert set(result.keys()) == {"f0", "f1"}
@@ -3056,7 +3166,7 @@ class TestSynthesisElasticNetMl:
             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
             patch("sklearn.linear_model.ElasticNetCV", return_value=fake_model),
         ):
-            m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
+            m_prov.return_value.get_futures_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.linspace(-0.5, 0.5, 40)
             assert _compute_elastic_net_weights(self._factors(2), elite) == {}
 
@@ -3080,7 +3190,7 @@ class TestSynthesisElasticNetMl:
             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
             patch("fts.ml.SignalModelTrainer", return_value=fake_trainer),
         ):
-            m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
+            m_prov.return_value.get_futures_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.linspace(-0.5, 0.5, 40)
             result = _compute_ml_ensemble_weights(self._factors(2), elite)
         assert abs(result["f0"] - 0.7) < 1e-9
@@ -3105,7 +3215,7 @@ class TestSynthesisElasticNetMl:
             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
             patch("fts.ml.SignalModelTrainer", return_value=fake_trainer),
         ):
-            m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
+            m_prov.return_value.get_futures_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.linspace(-0.5, 0.5, 40)
             assert _compute_ml_ensemble_weights(self._factors(2), elite) == {}
 
@@ -3129,7 +3239,7 @@ class TestSynthesisElasticNetMl:
             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
             patch("fts.ml.SignalModelTrainer", return_value=fake_trainer),
         ):
-            m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
+            m_prov.return_value.get_futures_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.linspace(-0.5, 0.5, 40)
             assert _compute_ml_ensemble_weights(self._factors(2), elite) == {}
 
@@ -3153,7 +3263,7 @@ class TestSynthesisElasticNetMl:
             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
             patch("fts.ml.SignalModelTrainer", return_value=fake_trainer),
         ):
-            m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
+            m_prov.return_value.get_futures_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.linspace(-0.5, 0.5, 40)
             assert _compute_ml_ensemble_weights(self._factors(2), elite) == {}
 
@@ -3167,7 +3277,7 @@ class TestSynthesisElasticNetMl:
             patch("fts.data.FTSDataProvider") as m_prov,
             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
         ):
-            m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
+            m_prov.return_value.get_futures_panel.return_value = (panel, dates)
             m_exec.return_value.execute.return_value = np.full(40, np.nan)  # 信号全 NaN
             assert _compute_ml_ensemble_weights(self._factors(2), elite) == {}
 
@@ -4015,7 +4125,7 @@ class TestLoadEliteDuckdb:
 class TestQualityReportAndRunBranches:
     """_generate_quality_report 路径 A/B + PortfolioLoop.run 各场景分支。"""
 
-    def _write_factors(self, elite_dir, market: str = "stock", n: int = 3) -> None:
+    def _write_factors(self, elite_dir, market: str = "futures", n: int = 3) -> None:
         """写入 n 个通过质量门槛的 elite 因子。"""
         elite_dir.mkdir(parents=True, exist_ok=True)
         for i in range(n):
@@ -4298,10 +4408,10 @@ class TestQualityReportAndRunBranches:
             result = loop.run()
         assert result.status in ("passed", "verifier_warning", "completed")
         assert "drift_monitor" in {p.get("source") for p in captured["proposals"]}, "重平衡建议应附加到 proposals"
-        # state 标记告警（写入 memory/portfolio/state.json）
-        state_fp = tmp_portfolio_dir / "state.json"
-        assert state_fp.exists()
-        state_obj = json.loads(state_fp.read_text(encoding="utf-8"))
+        # state 标记告警（写入 state.duckdb portfolio/state）
+        from fts.store.state_db import get_state_store
+
+        state_obj = get_state_store().get("portfolio", "state")
         assert state_obj.get("drift_alerted") is True, "state 应标记 drift_alerted"
 
     def test_run_drift_alert_disabled_no_proposal(self, tmp_portfolio_dir, tmp_elite_dir):
@@ -4588,7 +4698,7 @@ class TestCoveragePolish:
             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
             patch("sklearn.linear_model.ElasticNetCV", return_value=fake_model),
         ):
-            m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
+            m_prov.return_value.get_futures_panel.return_value = (panel, dates)
             m_exec.return_value = exec_ok
             assert _compute_elastic_net_weights(factors, elite) == {}
 
@@ -4632,204 +4742,11 @@ class TestCoveragePolish:
             patch("fts.factor_engine.factor_program.FactorExecutor") as m_exec,
             patch("fts.ml.SignalModelTrainer", return_value=fake_trainer),
         ):
-            m_prov.return_value.get_csi300_panel.return_value = (panel, dates)
+            m_prov.return_value.get_futures_panel.return_value = (panel, dates)
             # f0 构造失败（914-915），f1 首只股票执行失败（926-927）
             m_exec.side_effect = [RuntimeError("ctor fail"), exec_ok]
             result = _compute_ml_ensemble_weights(factors, elite)
         assert set(result.keys()) <= {"f0", "f1"}  # 权重由剩余有效样本训练得出
 
 
-# ════════════════════════════════════════════════════════════
-# 26. 股票 L3 组合层测试 (GAP-I301, v2.68.0)
-# ════════════════════════════════════════════════════════════
 
-
-class TestStockL3PortfolioLayer:
-    """股票 L3 组合层：复用期货组件 + TopN 组合回测 + 成本模型。
-
-    GAP-I301 测试方案:
-        - 股票 L3 与期货 L3 组件复用性断言（synthesize_signals/build_combo/
-          load_elite_factors 以 market 区分，同一实现）
-        - TopN 组合回测 Sharpe/回撤
-        - 成本模型开启后 net_combo_sharpe 仍为正
-    """
-
-    def _stock_factors(self, n: int = 3) -> list[dict]:
-        """构造股票因子列表（含 market="stock"）。"""
-        return [
-            {
-                "factor_id": f"fct_s{i}",
-                "name": f"stock_f{i}",
-                "sharpe": 2.2,
-                "ic": 0.05,
-                "turnover": 0.3,
-                "decay_6m": 0.1,
-                "market": "stock",
-                "code": "close",
-            }
-            for i in range(n)
-        ]
-
-    # ── 组件复用性断言 ──
-
-    def test_load_elite_factors_stock_market_filter(self, tmp_path):
-        """股票 L3 从 elite 目录按 market="stock" 过滤，期货因子被排除。"""
-        elite = tmp_path / "elite"
-        elite.mkdir(parents=True, exist_ok=True)
-        (elite / "s.json").write_text(
-            json.dumps(
-                {
-                    "factor_id": "fct_s1",
-                    "name": "stock_f1",
-                    "sharpe": 2.2,
-                    "ic": 0.05,
-                    "turnover": 0.3,
-                    "decay_6m": 0.1,
-                    "market": "stock",
-                    "code": "close",
-                }
-            ),
-            encoding="utf-8",
-        )
-        (elite / "f.json").write_text(
-            json.dumps(
-                {
-                    "factor_id": "fct_f1",
-                    "name": "fut_f1",
-                    "sharpe": 2.2,
-                    "ic": 0.05,
-                    "turnover": 0.3,
-                    "decay_6m": 0.1,
-                    "market": "futures",
-                    "code": "close",
-                }
-            ),
-            encoding="utf-8",
-        )
-        factors = load_elite_factors(elite, use_duckdb=False, market="stock")
-        assert {f["factor_id"] for f in factors} == {"fct_s1"}
-
-    def test_synthesize_signals_shared_for_stock(self):
-        """synthesize_signals 同一实现服务股票/期货（组件复用）。"""
-        signals, max_corr, turnover = synthesize_signals(
-            self._stock_factors(3),
-            mode="equal_weight",
-        )
-        assert len(signals) == 3
-        assert all(s["factor_id"].startswith("fct_s") for s in signals)
-        assert max_corr == 0.0
-        assert turnover >= 0.0
-
-    def test_build_combo_stock_with_cost(self):
-        """股票组合成本模型开启后 net_combo_sharpe 存在且为正。"""
-        signals = [
-            PortfolioSignal(
-                factor_id=f"fct_s{i}",
-                name=f"stock_f{i}",
-                weight=1.0 / 3,
-                sharpe=2.5,
-                ic=0.05,
-                turnover=0.1,
-                decay_6m=0.05,
-                orthogonalized=False,
-                retained=True,
-            )
-            for i in range(3)
-        ]
-        combo = build_combo(
-            signals,
-            mode="equal_weight",
-            trace_id="l3_stock_test",
-            market="stock",
-            cost_config={"market": "stock", "slippage_bps": 0.5, "commission_bps": 0.3, "impact_bps_per_pct": 2.0},
-        )
-        assert combo["combo_sharpe"] > 0
-        assert combo["net_combo_sharpe"] is not None
-        assert combo["net_combo_sharpe"] > 0  # 低换手下成本扣除后 alpha 仍为正
-
-    def test_build_combo_stock_no_cost(self):
-        """股票组合未开启成本模型时 net_combo_sharpe 为 None。"""
-        signals = [
-            PortfolioSignal(
-                factor_id="fct_s1",
-                name="stock_f1",
-                weight=1.0,
-                sharpe=2.5,
-                ic=0.05,
-                turnover=0.1,
-                decay_6m=0.05,
-                orthogonalized=False,
-                retained=True,
-            ),
-        ]
-        combo = build_combo(signals, mode="equal_weight", market="stock")
-        assert combo["net_combo_sharpe"] is None
-
-    def test_portfolio_loop_stock_run(self, tmp_path):
-        """PortfolioLoop market="stock" 端到端 run（复用期货组件路径）。"""
-        memory_dir = tmp_path / "mem_stock"
-        elite_dir = tmp_path / "elite_stock"
-        memory_dir.mkdir(parents=True, exist_ok=True)
-        elite_dir.mkdir(parents=True, exist_ok=True)
-        for i in range(3):
-            (elite_dir / f"fct_s{i}.json").write_text(
-                json.dumps(
-                    {
-                        "factor_id": f"fct_s{i}",
-                        "name": f"stock_f{i}",
-                        "sharpe": 2.5,
-                        "ic": 0.05,
-                        "turnover": 0.3,
-                        "decay_6m": 0.1,
-                        "market": "stock",
-                        "code": "close",
-                    }
-                ),
-                encoding="utf-8",
-            )
-        loop = PortfolioLoop(
-            memory_dir=memory_dir,
-            elite_dir=elite_dir,
-            use_duckdb=False,
-            synthesis_mode="equal_weight",
-            enable_regime_adaptation=False,
-            enable_clustering=False,
-            market="stock",
-        )
-        result = loop.run()
-        assert result.n_factors_input == 3
-        assert result.status in ("passed", "verifier_warning", "completed")
-
-    def test_portfolio_loop_stock_stock_regime(self, tmp_path):
-        """股票 L3 传入 stock_regime 驱动风格自适应（GAP-S03 联动）。"""
-        memory_dir = tmp_path / "mem_stock_r"
-        elite_dir = tmp_path / "elite_stock_r"
-        memory_dir.mkdir(parents=True, exist_ok=True)
-        elite_dir.mkdir(parents=True, exist_ok=True)
-        (elite_dir / "fct_s1.json").write_text(
-            json.dumps(
-                {
-                    "factor_id": "fct_s1",
-                    "name": "stock_f1",
-                    "sharpe": 2.5,
-                    "ic": 0.05,
-                    "turnover": 0.3,
-                    "decay_6m": 0.1,
-                    "market": "stock",
-                    "code": "close",
-                }
-            ),
-            encoding="utf-8",
-        )
-        stock_regime = {"regime": "large_cap", "confidence": 0.8}
-        loop = PortfolioLoop(
-            memory_dir=memory_dir,
-            elite_dir=elite_dir,
-            use_duckdb=False,
-            synthesis_mode="sharpe_weight",
-            enable_regime_adaptation=True,
-            enable_clustering=False,
-            market="stock",
-        )
-        result = loop.run(stock_regime=stock_regime)
-        assert result.status in ("passed", "verifier_warning", "completed")

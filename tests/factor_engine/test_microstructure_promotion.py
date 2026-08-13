@@ -14,7 +14,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from fts.factor_engine.evolution_loop import EvolutionLoop
 from fts.factor_engine.microstructure_generator import MicrostructureFactorCandidate
@@ -23,13 +22,14 @@ RNG = np.random.default_rng(11)
 
 
 def _mock_eval(passed: bool = True):
-    """mock 评估结果（避免真实编译候选 code）。"""
-    from unittest import mock
-
-    ev = mock.MagicMock()
-    ev.passed = passed
-    ev.failure_reasons = [] if passed else ["ic 低质"]
-    return ev
+    """mock 评估结果（避免真实编译候选 code）。返回 FactorEvaluation 形状 dict。"""
+    return {
+        "factor_id": "fct_micro_x",
+        "trace_id": "t",
+        "passed": passed,
+        "failure_reasons": [] if passed else ["ic 低质"],
+        "evaluated_at": "",
+    }
 
 
 def _make_candidate(factor_id: str, symbol: str = "RB0", kind: str = "ofi_mean") -> MicrostructureFactorCandidate:
@@ -125,7 +125,7 @@ class TestRunMicrostructurePromotion:
 
         ev = _mock_eval(passed=False)
         monkeypatch.setattr(loop, "_evaluate_cross_section", lambda factor, tid: ev)
-        monkeypatch.setattr(loop, "_promote_to_elite", lambda **kw: Path("x"))
+        monkeypatch.setattr(loop, "_promote_to_elite", lambda factor, evaluation, audit_report=None, **kw: Path("x"))
         res = loop.run_microstructure_promotion(trace_id="t-c1-fail")
         assert res["evaluated"] == 1 and res["passed"] == 0 and res["promoted"] == 0
 

@@ -82,6 +82,17 @@ class _FakeResponse:
         return self._data
 
 
+@pytest.fixture(autouse=True)
+def _isolate_state_store(tmp_path, monkeypatch):
+    """全文隔离 state.duckdb（SSOT 读路径切换后，管道默认走全局 SSOT）。"""
+    from fts.store import state_db
+
+    store = state_db.StateKVStore(tmp_path / "state.duckdb")
+    monkeypatch.setattr(state_db, "get_state_store", lambda: store)
+    yield
+    store.close()
+
+
 @pytest.fixture
 def futures_yaml_file(tmp_path: Path) -> Path:
     """创建一个含 2 个因子的期货 YAML 种子文件。"""
@@ -388,14 +399,15 @@ class TestFuturesExtractorPipeline:
         assert names == {"tiny_cand", "broker_cand"}
 
     def test_pause_and_resume_source(self, tmp_path: Path):
-        """pause_source / resume_source 正常工作并持久化状态。"""
-        state_file = tmp_path / "state.json"
-        pipe = FuturesExtractorPipeline(state_path=str(state_file))
+        """pause_source / resume_source 正常工作并持久化状态到 state.duckdb。"""
+        pipe = FuturesExtractorPipeline(state_path=str(tmp_path / "state.json"))
         pipe.pause_source("broker_reports")
         assert pipe.extractors["broker_reports"].paused is True
-        assert state_file.exists()
+        from fts.store.state_db import get_state_store
 
-        pipe2 = FuturesExtractorPipeline(state_path=str(state_file))
+        assert get_state_store().get("extractors", "state")["futures"]["broker_reports"] is True
+
+        pipe2 = FuturesExtractorPipeline(state_path=str(tmp_path / "state.json"))
         assert pipe2.extractors["broker_reports"].paused is True
         assert pipe2.extractors["academic_papers"].paused is False
 

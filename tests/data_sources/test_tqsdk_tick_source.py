@@ -224,7 +224,7 @@ class TestAggregatorGetTicks:
         assert not df.empty
         assert len(df) == 10
         assert df["symbol"].iloc[0] == "RB0"
-        agg._cache_conn.close()
+        agg.close()  # E.4 S1：无常驻连接，close 为兼容 no-op
 
     def test_source_fallback(self, tmp_path: Path) -> None:
         """缓存未命中时走数据源。"""
@@ -298,7 +298,7 @@ class TestAggregatorGetTicks:
             assert n == 5
         finally:
             con.close()
-        agg._cache_conn.close()
+        agg.close()  # E.4 S1：无常驻连接，close 为兼容 no-op
 
     def test_all_sources_fail(self, tmp_path: Path) -> None:
         """所有源失败返回空 DataFrame。"""
@@ -307,7 +307,7 @@ class TestAggregatorGetTicks:
         agg = FuturesDataAggregator(minute_sources=[], tick_sources=[], db_path=db_path)
         df = agg.get_ticks("RB0", count=5, trace_id="t")
         assert df.empty
-        agg._cache_conn.close()
+        agg.close()  # E.4 S1：无常驻连接，close 为兼容 no-op
 
 
 # ─── 5. Provider.get_tick_data 接口 ───────────────────────

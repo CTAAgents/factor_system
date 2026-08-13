@@ -164,6 +164,10 @@ FUTURES_OHLCV_OPTIONAL = [
     "vwap",
     "source",
     "fetched_at",
+    # F.1 契约拆分：融合元数据（共享层 FusionMeta，2026-08-12 补入）
+    "contributing_sources",
+    "fusion_strategy",
+    "disagreement_pct",
 ]
 FUTURES_OHLCV_ALL = FUTURES_OHLCV_REQUIRED + FUTURES_OHLCV_OPTIONAL
 
