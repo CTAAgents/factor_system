@@ -24,7 +24,9 @@ class TestPackageInit:
         assert fts.__version__ == data["project"]["version"]
 
     def test_version_format(self):
-        parts = fts.__version__.split(".")
+        # v2.103.0（SemVer build 段制，CLAUDE.md 5.8）：x.y.z[+N]，build 段不计入主版本号
+        core = fts.__version__.split("+", 1)[0]
+        parts = core.split(".")
         assert len(parts) >= 3
         for p in parts:
             assert p.isdigit()

@@ -283,6 +283,9 @@ class AuditPipeline:
         """
         import traceback
 
+        # 兼容类级未绑定调用（测试 object.__new__ 绕过 __init__ 装配，self 即 owner）
+        owner = getattr(self, "_owner", self)
+
         factor_meta = {
             "factor_id": factor.get("factor_id", ""),
             "name": factor.get("name", ""),
@@ -315,7 +318,7 @@ class AuditPipeline:
         # 兜底独立计算保持原逻辑。
         wf_result: dict[str, Any] | None = cast(dict[str, Any] | None, evaluation.get("walk_forward"))
         if not (wf_result and wf_result.get("n_windows_completed", 0) > 0):
-            wf_result = self._owner._run_walkforward_oos(factor)
+            wf_result = owner._run_walkforward_oos(factor)
         if wf_result is not None:
             oos_result = {
                 "ic_consistency": wf_result.get("ic_consistency", 0.0),
@@ -350,8 +353,8 @@ class AuditPipeline:
         try:
             report = self.auditor.audit(
                 factor=factor_meta,
-                data=self._owner.data,
-                forward_returns=self._owner.forward_returns,
+                data=owner.data,
+                forward_returns=owner.forward_returns,
                 symbol_ic_map=l1.get("symbol_ic") or None,  # GAP-075: 激活 cross_symbol
                 symbol_holdout=l1.get("symbol_holdout") or None,  # GAP-075: 标的留出审计项
                 oos_result=oos_result,

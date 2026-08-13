@@ -68,16 +68,22 @@ class TestDuckDBReader:
         mock_conns[0].close.assert_not_called()
         reader.close()
 
-    def test_read_while_writer_open(self, db_file):
-        """写连接打开时，读池连接可正常打开并读取（单写者 + 读连接共存）。"""
+    def test_read_after_writer_closed(self, db_file):
+        """E.4 S1 语义：写连接短生命周期（写入即关），关闭后读池 read_only 连接可正常打开并读取最新数据。
+
+        实测约束：DuckDB lock_configuration 写连接打开期间，read_only=True 连接因
+        "different configuration" 无法打开——E.4 S1 以「写短生命周期 + 读 read_only 短连接」
+        规避（写完成即关，读连接只在写关闭后打开）。
+        """
         writer = DuckDBWriter(db_file)
+        writer.execute("INSERT INTO t VALUES (99, 'z')")
+        writer.close()
         reader = DuckDBReader(db_file, max_connections=2)
         con = reader.acquire()
         rows = con.execute("SELECT COUNT(*) FROM t").fetchall()
-        assert rows[0][0] == 3
+        assert rows[0][0] == 4
         reader.release(con)
         reader.close()
-        writer.close()
 
     def test_close_closes_all(self, db_file, mocker):
         """close 关闭池内所有连接（用 mock 连接断言 close）。"""

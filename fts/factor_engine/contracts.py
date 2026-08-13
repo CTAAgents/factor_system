@@ -629,7 +629,8 @@ class PortfolioCombo(TypedDict, total=False):
     trace_id: str
     synthesis_mode: Literal["equal_weight", "sharpe_weight", "lightgbm"]
     signals: list[PortfolioSignal]
-    combo_sharpe: float  # 组合整体夏普
+    combo_sharpe: float  # 组合整体夏普（风控后净暴露口径：含 exposure_scale 仓位缩放）
+    signal_sharpe: Optional[float]  # 缩放前信号质量夏普（风控约束前，方案③；None=未计算）
     net_combo_sharpe: Optional[float]  # 扣除交易成本后的净夏普（GAP-L305，None=未启用成本模型）
     combo_turnover: float  # 组合整体换手率
     max_correlation: float  # 组合内最大因子间相关性

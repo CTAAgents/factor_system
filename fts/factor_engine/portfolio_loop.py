@@ -1261,6 +1261,101 @@ def _build_factor_code_map(
     return factor_codes
 
 
+def _auto_build_factor_returns(
+    panel: dict[str, Any],
+    factors: list[dict[str, Any]],
+    elite_dir: Path,
+    market: str = "futures",
+    horizon: int = 5,
+    min_dates: int = 20,
+) -> Optional[pd.DataFrame]:
+    """自动构建因子收益矩阵（方案①：L3 实测化输入自动回退）。
+
+    从市场面板 + 因子代码构建横截面信号矩阵与前向收益，经 FactorReturnsBuilder
+    生成 T×N 因子收益矩阵，供 build_combo 走 measured 实测口径（w×R）。
+    未显式传 --returns-matrix 时，调度场景自动获得实测化指标；任何失败/数据
+    不足返回 None，由 build_combo 回退估算口径（不阻断主流程）。
+
+    Args:
+        panel: 市场面板 {symbol: DataFrame(OHLCV)}
+        factors: 因子列表（含 factor_id）
+        elite_dir: 精英因子目录（因子代码 SSOT）
+        market: 目标市场（决定因子代码分库）
+        horizon: 前向收益持有期（默认 5 日）
+        min_dates: 最小共同交易日（不足回退）
+
+    Returns:
+        因子收益矩阵 DataFrame（index=dates, columns=factor_id）；失败/数据不足返回 None。
+    """
+    try:
+        from .factor_program import FactorExecutor
+        from .factor_returns import FactorReturnsBuilder
+
+        if not panel or not factors:
+            return None
+        common_dates = sorted(set.intersection(*[set(df.index) for df in panel.values()]))
+        if len(common_dates) < min_dates:
+            logger.warning(
+                "[L3-FR] 自动构建因子收益: 共同交易日不足 (%d < %d)，回退估算",
+                len(common_dates),
+                min_dates,
+            )
+            return None
+        stocks = sorted(panel.keys())
+        factor_codes = _build_factor_code_map(factors, elite_dir, market=market)
+        valid_factors = [f for f in factors if f.get("factor_id") in factor_codes]
+        if len(valid_factors) < 2:
+            logger.warning("[L3-FR] 自动构建因子收益: 有效因子不足 (<2)，回退估算")
+            return None
+
+        n_dates, n_stocks, n_factors = len(common_dates), len(stocks), len(valid_factors)
+        signal_matrix = np.full((n_dates, n_stocks, n_factors), np.nan)
+        date_idx = {d: t for t, d in enumerate(common_dates)}
+        for j, f in enumerate(valid_factors):
+            fdata = factor_codes[f["factor_id"]]
+            try:
+                executor = FactorExecutor(fdata)
+            except Exception:
+                continue
+            for i, sym in enumerate(stocks):
+                df = panel[sym]
+                try:
+                    sig = executor.execute(df, fdata.get("params", {}))
+                    for d, t in date_idx.items():
+                        if d in df.index:
+                            idx = list(df.index).index(d)
+                            signal_matrix[t, i, j] = float(sig[idx]) if idx < len(sig) else np.nan
+                except Exception:
+                    continue
+
+        forward_returns = np.full((n_dates, n_stocks), np.nan)
+        for i, sym in enumerate(stocks):
+            closes = panel[sym]["close"].to_numpy(dtype=float)
+            fwd = np.full(len(closes), np.nan)
+            fwd[:-horizon] = (closes[horizon:] - closes[:-horizon]) / np.maximum(closes[:-horizon], 1e-10)
+            for d, t in date_idx.items():
+                if d in panel[sym].index:
+                    idx = list(panel[sym].index).index(d)
+                    forward_returns[t, i] = fwd[idx] if idx < len(fwd) else np.nan
+
+        builder = FactorReturnsBuilder()
+        fr = builder.build_from_panel(
+            signal_matrix=signal_matrix,
+            forward_returns=forward_returns,
+            dates=list(common_dates),
+            factor_ids=[f["factor_id"] for f in valid_factors],
+        )
+        logger.info(
+            "[L3-FR] 自动构建因子收益矩阵完成: %d 因子 × %d 交易日（measured 口径）",
+            len(valid_factors),
+            len(common_dates),
+        )
+        return fr.returns
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[L3-FR] 自动构建因子收益矩阵失败，回退估算口径: %s", e)
+        return None
+
+
 def _compute_elastic_net_weights(
     factors: list[dict[str, Any]],
     elite_dir: Path,
@@ -2061,6 +2156,7 @@ def build_combo(
             synthesis_mode=cast(Literal["equal_weight", "sharpe_weight", "lightgbm"], mode),
             signals=signals,
             combo_sharpe=0.0,
+            signal_sharpe=None,
             net_combo_sharpe=None,
             combo_turnover=0.0,
             max_correlation=0.0,
@@ -2113,6 +2209,8 @@ def build_combo(
 
     # G1 同向敞口惩罚（35-gap-closure-plan）：多因子同向共振时压缩组合总敞口。
     # 与置信度仓位缩放（28-T6）乘性合并：exposure_final = exposure_scale × aligned_scale。
+    # 缩放前权重快照：供 signal_sharpe（信号质量夏普）计算使用（方案③，与风控后 combo_sharpe 区分）
+    pre_scale_weights: list[float] = [float(s.get("weight", 0.0)) for s in retained]
     aligned_scale: float = 1.0
     if aligned_exposure_config is not None:
         from .portfolio_risk_controls import check_aligned_exposure
@@ -2220,6 +2318,31 @@ def build_combo(
         else:
             max_corr = 0.0
 
+    # ── 信号质量夏普 signal_sharpe（方案③）──
+    # 缩放前权重口径：separate 风控约束（regime 降仓 × 同向敞口压缩）对指标的影响。
+    # measured 口径下 portfolio_returns 内部重新归一化权重，缩放前后一致，直接沿用 combo_sharpe；
+    # estimated 口径下用缩放前权重重算 diversity-adjusted 加权 Sharpe。
+    if metrics_source == "measured":
+        signal_sharpe: Optional[float] = combo_sharpe
+    else:
+        pre_w = np.array(pre_scale_weights, dtype=float)
+        pre_w_sum = float(np.sum(pre_w))
+        if pre_w_sum > 0:
+            pre_w = pre_w / pre_w_sum
+        else:
+            pre_w = np.ones(n_ret) / max(n_ret, 1)
+        pre_weighted_sharpe = float(np.sum(pre_w * np.array([s.get("sharpe", 0.0) for s in retained], dtype=float)))
+        pre_hhi = float(np.sum(pre_w**2))
+        pre_effective_n = 1.0 / pre_hhi if pre_hhi > 0 else float(n_ret)
+        pre_diversity_factor = min(1.0, (pre_effective_n / n_ret) ** 0.5)
+        signal_sharpe = pre_weighted_sharpe * pre_diversity_factor
+    logger.info(
+        "[L3] 双指标: signal_sharpe=%.4f (缩放前信号质量) combo_sharpe=%.4f (风控后净暴露, scale=%s)",
+        signal_sharpe,
+        combo_sharpe,
+        round(exposure_scale, 4) if exposure_scale is not None else "1.0",
+    )
+
     # Sharpe 虚高验证（P1 差距修复）
     sharpe_warning = _validate_combo_sharpe(combo_sharpe)
     sharpe_randomization_passed = _run_sharpe_randomization_test(retained)
@@ -2288,6 +2411,7 @@ def build_combo(
         synthesis_mode=cast(Literal["equal_weight", "sharpe_weight", "lightgbm"], mode),
         signals=signals,
         combo_sharpe=combo_sharpe,
+        signal_sharpe=signal_sharpe,
         net_combo_sharpe=net_combo_sharpe,
         combo_turnover=combo_turnover,
         max_correlation=max_corr,
@@ -3390,6 +3514,7 @@ class PortfolioRunResult:
     n_factors_input: int
     n_factors_retained: int
     combo_sharpe: float
+    signal_sharpe: Optional[float]
     max_correlation: float
     n_proposals: int
     status: str
@@ -3693,7 +3818,8 @@ class PortfolioLoop:
 - **combo_id**: {combo_id}
 - **trace_id**: {trace_id}
 - **生成时间**: {datetime.now().isoformat()}
-- **组合夏普**: {combo.get("combo_sharpe", 0.0):.3f}
+- **组合夏普（风控后净暴露）**: {combo.get("combo_sharpe", 0.0):.3f}
+- **信号质量夏普（缩放前）**: {combo.get("signal_sharpe") if combo.get("signal_sharpe") is not None else "N/A"}
 - **净夏普（扣成本）**: {combo.get("net_combo_sharpe") if combo.get("net_combo_sharpe") is not None else "N/A"}
 - **归因矩阵样本**: {len(fr)} 天 × {len(retained_ids)} 因子
 - **年化波动率**: {report.realized_vol:.4f}
@@ -3871,6 +3997,7 @@ class PortfolioLoop:
                 n_factors_input=0,
                 n_factors_retained=0,
                 combo_sharpe=0.0,
+                signal_sharpe=None,
                 max_correlation=0.0,
                 n_proposals=0,
                 status="frozen",
@@ -4282,6 +4409,14 @@ class PortfolioLoop:
             logger.info("[L3] Step 4: 衰减检验完成, 保留 %d 个因子", n_retained)
 
             # Step 5: 组合构建（含粘性约束 + 漂移监控）
+            # 方案①：未显式传因子收益矩阵时，自动从面板+因子代码构建（measured 实测口径）；
+            # 构建失败/数据不足时保持 None，build_combo 回退估算口径。
+            if factor_returns is None and panel_data:
+                auto_fr = _auto_build_factor_returns(panel_data, factors, self.elite_dir, market=self.market)
+                if auto_fr is not None:
+                    factor_returns = auto_fr
+                else:
+                    logger.info("[L3] Step 5: 无因子收益矩阵，组合指标回退估算口径（estimated）")
             prev_combo = self.portfolio_manager.load_prev_combo()
             prev_weights = self.portfolio_manager.extract_prev_weights(prev_combo)
             if self.sticky_config and prev_weights and prev_combo is not None:
@@ -4436,6 +4571,7 @@ class PortfolioLoop:
                 n_factors_input=n_input,
                 n_factors_retained=n_retained,
                 combo_sharpe=combo.get("combo_sharpe", 0),
+                signal_sharpe=combo.get("signal_sharpe"),
                 max_correlation=combo.get("max_correlation", 0),
                 n_proposals=len(proposals),
                 status="passed" if passed else "verifier_warning",
@@ -4452,6 +4588,7 @@ class PortfolioLoop:
                 n_factors_input=0,
                 n_factors_retained=0,
                 combo_sharpe=0.0,
+                signal_sharpe=None,
                 max_correlation=0.0,
                 n_proposals=0,
                 status="circuit_broken",

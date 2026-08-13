@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.103.0+33
+> 版本: v2.104.0
 > 最后更新: 2026-08-10
 
 ---
@@ -827,12 +827,11 @@ Verifier 是 FTS 的核心安全机制，锁定后不可逆：
 `evolution_loop.py` God Class 重构为「领域 Mixin 组合」模式（先 B 后 C 路径的 B 阶段）：
 
 ```python
-class EvolutionLoop(
-    EvolutionCandidateMixin, # 领域 B: 候选准入链（evolution_candidate.py，C 阶段 47i → CandidateProcessor）
-):
+class EvolutionLoop:
+    # C 阶段 47i 后继承链清零——组合持有 9 个协作类实例（见下方状态所有权）
 ```
 
-> C 阶段（Phase 47 系列）逐领域将 Mixin 组合式重构为协作类（主类组合持有 + 转发桩 + property 转发，见 34 §8）。**已退役的 Mixin → 协作类**：`EvolutionUctMixin` → `UctSelector`（47a，v2.103.0+21）；`EvolutionPrefilterMixin` → `CandidatePrefilter`（47b，+22）；`EvolutionPromoteMixin` → `EliteStore`（47c，+25）；`EvolutionAuditMixin` → `AuditPipeline`（47d，+26，`_signal_cache` 归本类）；`EvolutionTraceMixin` → `TraceRecorder`（47e，+27）；`EvolutionReviewMixin` → `FactorReviewer`（47f，+29）；`EvolutionChannelsMixin` → `EvolutionChannels`（47g，+30，组件 macro_evolver/feature_ops_engine/feature_importance_analyzer 随迁）；`EvolutionSeedsMixin` → `SeedManager`（47h，+32，状态 _barra_exposures_cache/_barra_exposures_attempted 随迁，industry_map/cap_map 可变上下文经 owner 读取）。主类当前继承 1 个 Mixin（Candidate）并组合持有 9 个协作类实例；47i（CandidateProcessor）完成后继承链清零。
+> C 阶段（Phase 47 系列）逐领域将 Mixin 组合式重构为协作类（主类组合持有 + 转发桩 + property 转发，见 34 §8）。**全部 9 个 Mixin 已退役为协作类**：`EvolutionUctMixin` → `UctSelector`（47a，v2.103.0+21）；`EvolutionPrefilterMixin` → `CandidatePrefilter`（47b，+22）；`EvolutionPromoteMixin` → `EliteStore`（47c，+25）；`EvolutionAuditMixin` → `AuditPipeline`（47d，+26，`_signal_cache` 归本类）；`EvolutionTraceMixin` → `TraceRecorder`（47e，+27）；`EvolutionReviewMixin` → `FactorReviewer`（47f，+29）；`EvolutionChannelsMixin` → `EvolutionChannels`（47g，+30）；`EvolutionSeedsMixin` → `SeedManager`（47h，+32）；`EvolutionCandidateMixin` → `CandidateProcessor`（47i，+33）。**C 阶段收官（Phase 47a-47i）**：`class EvolutionLoop:` 零 Mixin 继承，组合持有 9 协作类实例（_uct_selector/_candidate_prefilter/_audit_pipeline/_trace_recorder/_factor_reviewer/_evolution_channels/_seed_manager/_elite_store/_candidate_processor）+ 全部 `_*` 方法转发桩 + 状态属性 property 转发，公开 API 与行为等价不变。
 
 **契约约束（不可破坏）**：
 1. 公开导入路径不变：`from fts.factor_engine.evolution_loop import EvolutionLoop, EvolutionRunResult, UCT_EXPLORATION_C` 等全部保持；

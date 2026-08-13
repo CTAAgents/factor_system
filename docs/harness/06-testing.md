@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.103.0+33
+> 版本: v2.104.0
 > 最后更新: 2026-08-10
 
 ---
@@ -318,6 +318,8 @@ TOTAL                                      20326   1254    94%
 > 注：v2.101.0（D.2 偏差 b：Regime 自适应权重接线）——新增 tests/scripts/test_signal_common.py 17 用例（当前 50）：TestBuildStockRegimePanels 6（行业面板等权聚合 / symbol 后缀对齐 / 映射后缀对齐（真实数据格式回归）/ 风格 large/small 分位 / 映射缺失空面板 / 样本不足降级）+ TestApplyStockRegimeWeights 6（style 倍率 large_cap momentum×0.9 quality×1.2 / 键集合保持 / 空 regime 原样返回 / 未知 regime 倍率 1.0 / family 维度兼容）+ TestRegimeChainIntegration 1（面板构造→StockRegimeSelector 检测→权重调整全链路）+ TestWeightSnapshot 2（regime 字段存读往返 / 旧快照无 regime 默认 none）+ TestNeutralizeSignalMatrix 2（后缀键行业/市值对齐回归——修复 P0.1 中性化适配器静默空转：`data/industry_map.json` 后缀键 vs 面板纯代码键，修复后真实数据实测「industry 已应用到 129 因子×80 交易日」）；tests/test_config_settings.py +2 用例（stock_signal_regime 默认 none / FTS_STOCK_SIGNAL_REGIME env 覆盖 auto），test_config_settings 65 passed；真实管道冒烟 `--regime auto`（CSI300 6 只）实测检测 `sector_concentrated (conf=50%, method=stock_rule)` 并完成权重调整；受影响模块/集成测试 + ruff check 通过。
 
 > 注：v2.101.0（GAP-078 TQ 探活进程级重试）——新增 tests/test_data.py TestTqStockAvailable 6 用例（首次成功缓存 / 瞬时抖动重试恢复 / 全失败冷却不重探 / 冷却期满重探恢复 / 合法响应解析 / 异常降级），test_data.py 75 passed 全绿；附带 zscore vs rank 历史对比（81 交易日 IC 差 0.0015 噪声量级，rank 略稳健）。
+
+> 注：v2.104.0（35-gap-closure 全链路缺口关闭完成里程碑）——全量回归 `pytest tests/ -m "not slow"` **6621 passed / 0 failed / 26 deselected**（25 分 35 秒）；3 个回归失败全部处置：① test_symbol_holdout（auditor property fallback，34 计划 47i 修复）；② test_package_init::test_version_format（SemVer build 段制适配，v2.103.0 修订）；③ tests/test_duckdb_reader.py `test_read_while_writer_open` 更名 `test_read_after_writer_closed`（E.4 S1 语义适配——写短生命周期后读池 read_only 可打开并读到最新数据，写连接打开期间 read_only 打不开属 DuckDB 配置约束，GAP-090 遗留项关闭）。
 
 ---
 

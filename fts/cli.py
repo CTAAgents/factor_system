@@ -549,7 +549,8 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
         print(
             f"[portfolio] 完成: status={result.status} "
             f"factors={result.n_factors_retained} "
-            f"sharpe={result.combo_sharpe:.4f}"
+            f"signal_sharpe={result.signal_sharpe if result.signal_sharpe is not None else 0.0:.4f} "
+            f"combo_sharpe={result.combo_sharpe:.4f}"
         )
         if result.status == "frozen":
             print("[portfolio] 权重冻结日：跳过组合重算（复用上次组合，GAP-072）；信号管道每日独立运行")

@@ -1695,7 +1695,11 @@ class EvolutionLoop:
         evaluation: FactorEvaluation,
         trace_id: str,
     ) -> FactorAuditReport:
-        return self._audit_pipeline._run_factor_audit(factor, evaluation, trace_id)
+        pipeline = getattr(self, "_audit_pipeline", None)
+        if pipeline is not None:
+            return pipeline._run_factor_audit(factor, evaluation, trace_id)
+        # 兼容类级未绑定调用（测试 object.__new__ 绕过 __init__ 装配场景）
+        return AuditPipeline._run_factor_audit(self, factor, evaluation, trace_id)
 
     @staticmethod
     def _is_blocking_ablation(ab: dict[str, Any]) -> bool:
@@ -1746,11 +1750,19 @@ class EvolutionLoop:
 
     @property
     def auditor(self) -> Any:
-        return self._audit_pipeline.auditor
+        pipeline = getattr(self, "_audit_pipeline", None)
+        if pipeline is not None:
+            return pipeline.auditor
+        # 兼容测试 object.__new__ 绕过 __init__（无 _audit_pipeline 装配）场景
+        return getattr(self, "_auditor_standalone", None)
 
     @auditor.setter
     def auditor(self, v: Any) -> None:
-        self._audit_pipeline.auditor = v
+        pipeline = getattr(self, "_audit_pipeline", None)
+        if pipeline is not None:
+            pipeline.auditor = v
+        else:
+            object.__setattr__(self, "_auditor_standalone", v)
 
     @property
     def backtest_pipeline(self) -> Any:

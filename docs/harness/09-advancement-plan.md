@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.103.0+33
+> 版本: v2.104.0
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -457,6 +457,35 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ 公开 API 与行为等价不变；25+ 测试文件零改动（test_evolution_l1_merge/test_microstructure_promotion/test_risk_tag/test_evolution_stop 等）
 - ✅ 验证：`analyze_evolution_loop.py` 基线（行数 2037→2110、方法数 127→138）+ 受影响测试 **300 passed**（65 专项 + 235 test_evolution_loop not-slow）+ ruff/mypy 通过；01/02/08/09/34 文档同步
 - ⏳ 后续：47i（CandidateProcessor + 主循环 `run`/`_evolve_one` 编排改造 + `__init__` 精简）——C 阶段收官，完成后继承链清零 + 里程碑全量回归
+
+### 34 计划 Phase 47i evolution_loop.py C 阶段组合式重构收官（2026-08-13，日常开发，build bump v2.103.0+33）
+
+**完成时间**: 2026-08-13
+
+**核心产出（34 计划 §8 C 阶段：Mixin → 协作类，领域 B 候选准入链 + 继承链清零）**:
+- ✅ `fts/factor_engine/evolution_candidate.py` `EvolutionCandidateMixin` → **`CandidateProcessor` 协作类**（`_process_candidate` 单方法随迁，Step 2-6 准入链）
+- ✅ 领域 B 状态随迁构造：`_prior_evaluations`（34 §8.3 状态所有权确认归本协作类，原主类 __init__ 段迁移）
+- ✅ 跨领域共享数据经 owner 动态读取：`data`/`forward_returns`/`cross_section_data`/`_is_cross_section`/`evaluation_chain`/`verifier`/`quality_inspector`/`state_manager`/`budget`/`n_trials_micro`/`_micro_staged_evolution`；**`_signal_cache`**（归 AuditPipeline，主类 property 转发共享同一引用）与 **`_consecutive_low_ic`**（归主循环，主类 property 转发到 low_ic_box 与 UctSelector 共享）经主类 property 读写
+- ✅ **跨域方法 21 处经 owner 转发**使测试实例打桩生效（test_evolution_stop/test_evolution_loop batch 路径对 `loop._process_candidate` 打桩、`loop._consecutive_low_ic += 1` 经 property 写 low_ic_box 与熔断联动）
+- ✅ `evolution_loop.py`：**继承链清零，`class EvolutionLoop:`**（MRO 仅 object）；`__init__` 删除 `_prior_evaluations` 装配段；类尾新增 **1 方法转发桩** `_process_candidate` + **1 属性 property 转发含 setter** `_prior_evaluations`；**C 阶段 9 协作类全部组合持有**（_uct_selector/_candidate_prefilter/_audit_pipeline/_trace_recorder/_factor_reviewer/_evolution_channels/_seed_manager/_elite_store/_candidate_processor）
+- ✅ 公开 API 与行为等价不变；25+ 测试文件零改动（batch_mining 调用 `loop._process_candidate` 走转发桩）
+- ✅ 验证：`analyze_evolution_loop.py` 基线（行数 2110→2153、方法数 138→141）+ 受影响测试 **314 passed** + ruff/mypy 通过 + **里程碑 not-slow 全量回归通过（6617 passed）**
+- ✅ **34 计划 C 阶段（Phase 47a-47i）全部完成，GAP-099 进入验收**：`evolution_loop.py` 5117 行/62 方法 → 2153 行/141 方法（逻辑 + 转发桩/property），9 协作类可独立构造/测试
+- 📋 里程碑回归处置（4 failed → 3 修复 + 1 登记）：① `test_symbol_holdout::test_run_factor_audit_wires_symbol_ic_and_holdout`（`object.__new__` 绕过 __init__ 场景）——`auditor` property + `_run_factor_audit` 转发桩补 `_audit_pipeline` 缺失 fallback（47c 先例），`AuditPipeline._run_factor_audit` 内部 `self._owner` → `owner = getattr(self, "_owner", self)`（15 passed）；② `test_package_init::test_version_format`——v2.103.0 SemVer build 段制（`x.y.z[+N]`）未适配，测试改为剥离 build 段校验（3 passed）；③ `test_read_while_writer_open`——E.4 S1 read_only 读池与旧「读池用普通连接」测试设计冲突（写 lock_configuration + 读 read_only 同文件配置不兼容），非本次重构引入，登记至 GAP-090 遗留（P2 级，待适配）
+
+### v2.104.0 里程碑：35-gap-closure 全链路缺口关闭完成（G1–G17）（已完成）
+
+**完成时间**: 2026-08-13
+
+**核心产出**（[plans/35-gap-closure-plan.md](plans/35-gap-closure-plan.md) 全链路缺口关闭 SOP 对齐 + 34 计划 C 阶段收官合流）:
+- ✅ **P0 批次（G1-G3）**：同向敞口惩罚（check_aligned_exposure）+ 集中踩踏止损规避（throttle_exit_stampede）+ 换手全局上限（turnover_budget）全部实现 + 测试（v2.103.0+9/+17）
+- ✅ **P1 批次（G4-G7）**：ICIR/符号反转硬门槛 + Bootstrap CI + ADF 平稳性 + 5-Regime 拆分检验实现 + 测试（v2.103.0+10），阈值经 §9.1 校准（icir_min=0.30）
+- ✅ **P2 批次（G8-G15）**：交易日历/断K清洗 + MAD + 波动率/季节中性化 + 日换手硬剔除 + 信号统一契约 + 月度调度 + Regime 风控参数 + 方差最小化仓位实现 + 测试（v2.103.0+15，55 用例），GAP-106~113 登记关闭
+- ✅ **G16 LLM 审核**：批次末评估=**维持暂缓（不启用）**——G4-G7 已覆盖增量拦截、AP06 约束、角色边界、G17 前置（§5.9 记录启用条件）
+- ✅ **G17 柜台对接**：FDT 交接——FTS 交付 G12 信号契约 + Order/OrderLifecycle + SimulatedGateway 对拍基准（§5.10）
+- ✅ **34 计划 C 阶段收官合流**（Phase 47a-47i，并发会话）：`evolution_loop.py` 9 Mixin → 协作类（继承链清零，6621 用例基线）
+- ✅ **里程碑全量回归**：`pytest tests/ -m "not slow"` **6621 passed / 0 failed / 26 deselected**（25 分 35 秒，2026-08-13）；3 个回归失败全部处置——test_symbol_holdout（auditor property fallback）+ test_package_init（SemVer build 段适配，均为并发会话修复）+ test_read_while_writer_open（**本里程碑修复**：E.4 S1 语义适配，`test_read_after_writer_closed` 验证写短生命周期后读可打开，关闭 GAP-090 遗留项）
+- ✅ **文档同步**：35 计划头部状态（全部完成+验收）+ 08（GAP-106~113 关闭 + GAP-090 遗留关闭）+ 06（P2 55 用例 + 修复注记）+ 07（v2.104.0 版本历史）+ 01/09（34 计划 C 阶段收官）
 
 ### E.3 S2 L4 状态库 SQLite 化（2026-08-13，日常开发，未 bump）
 

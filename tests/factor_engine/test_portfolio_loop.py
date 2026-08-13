@@ -718,6 +718,80 @@ class TestBuildFactorCodeMap:
 # ════════════════════════════════════════════════════════════
 
 
+class TestAutoBuildFactorReturns:
+    """自动构建因子收益矩阵（方案①：L3 实测化输入自动回退）。"""
+
+    @staticmethod
+    def _make_panel(n_dates: int = 60, n_symbols: int = 12) -> dict[str, pd.DataFrame]:
+        """构造 n_symbols 品种 × n_dates 交易日的 OHLCV 面板（≥min_stocks=10）。"""
+        rng = np.random.default_rng(7)
+        dates = pd.date_range("2025-01-01", periods=n_dates, freq="B")
+        panel: dict[str, pd.DataFrame] = {}
+        for i in range(n_symbols):
+            close = 100 + np.cumsum(rng.normal(0, 1, n_dates))
+            panel[f"SYM{i:02d}"] = pd.DataFrame(
+                {
+                    "open": close,
+                    "high": close * 1.01,
+                    "low": close * 0.99,
+                    "close": close,
+                    "volume": rng.integers(1000, 5000, n_dates),
+                },
+                index=dates,
+            )
+        return panel
+
+    @staticmethod
+    def _factors() -> list[dict[str, Any]]:
+        return [
+            {
+                "factor_id": f"fct_0{i}",
+                "name": f"f{i}",
+                "code": "def factor_program(data, params):\n    return data['close'].pct_change()",
+            }
+            for i in range(2)
+        ]
+
+    def test_builds_returns_matrix(self, tmp_path):
+        """正常路径：返回 T×N 因子收益矩阵（列=factor_id）。"""
+        from fts.factor_engine.portfolio_loop import _auto_build_factor_returns
+
+        fr = _auto_build_factor_returns(self._make_panel(), self._factors(), tmp_path, market="futures")
+        assert fr is not None
+        assert list(fr.columns) == ["fct_00", "fct_01"]
+        assert len(fr) >= 20
+
+    def test_insufficient_dates_returns_none(self, tmp_path):
+        """共同交易日不足（<20）→ 返回 None（调用方回退估算）。"""
+        from fts.factor_engine.portfolio_loop import _auto_build_factor_returns
+
+        assert _auto_build_factor_returns(self._make_panel(n_dates=5), self._factors(), tmp_path, market="futures") is None
+
+    def test_empty_panel_returns_none(self, tmp_path):
+        """空面板 → 返回 None。"""
+        from fts.factor_engine.portfolio_loop import _auto_build_factor_returns
+
+        assert _auto_build_factor_returns({}, self._factors(), tmp_path, market="futures") is None
+
+    def test_factors_without_code_returns_none(self, tmp_path, monkeypatch):
+        """因子均无代码（DuckDB/JSON 均缺失）→ 有效因子<2 → 返回 None。"""
+        from fts.factor_engine.portfolio_loop import _auto_build_factor_returns
+
+        class _EmptyRepo:
+            def __init__(self, **kwargs):
+                pass
+
+            def get_factor(self, fid: str):
+                return None
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("fts.factor_engine.factor_db.FactorRepository", _EmptyRepo)
+        factors = [{"factor_id": "fct_00", "name": "f0"}, {"factor_id": "fct_01", "name": "f1"}]
+        assert _auto_build_factor_returns(self._make_panel(), factors, tmp_path, market="futures") is None
+
+
 class TestOrthogonalize:
     """因子正交化 — 高相关性剔除。"""
 
@@ -1033,6 +1107,54 @@ class TestBuildCombo:
         """空组合 net_combo_sharpe 为 None。"""
         combo = build_combo([], mode="equal_weight", cost_config={"market": "futures"})
         assert combo["net_combo_sharpe"] is None
+
+    # ── 方案③ 双指标 signal_sharpe（v2.103.0+）────────────
+
+    def test_signal_sharpe_separates_exposure_scale(self, sample_signals):
+        """estimated 口径 + exposure_scale：signal_sharpe 用缩放前权重，combo_sharpe 含风控缩放。"""
+        combo = build_combo(
+            sample_signals,
+            mode="equal_weight",
+            exposure_scale=0.2686,
+            regime_meta={"regime": "oscillate", "confidence": 0.7},
+        )
+        # 缩放前：w=[0.5,0.3,0.2], sharpe=[2.5,2.0,1.8] → 加权 2.21 × diversity sqrt((1/0.38)/3)
+        pre_diversity = min(1.0, ((1.0 / 0.38) / 3) ** 0.5)
+        assert combo["signal_sharpe"] == pytest.approx(2.21 * pre_diversity, abs=1e-6)
+        # 缩放后：权重 ×0.2686 且 diversity_factor 归 1 → combo_sharpe = 2.21 × 0.2686
+        assert combo["combo_sharpe"] == pytest.approx(2.21 * 0.2686, abs=1e-6)
+        assert combo["signal_sharpe"] > combo["combo_sharpe"]
+        assert combo["exposure_scale"] == pytest.approx(0.2686, abs=1e-4)
+
+    def test_signal_sharpe_no_scale_equals_combo(self, sample_signals):
+        """无 exposure_scale 时缩放前后权重一致 → signal_sharpe == combo_sharpe。"""
+        combo = build_combo(sample_signals, mode="equal_weight")
+        assert combo["signal_sharpe"] == pytest.approx(combo["combo_sharpe"], abs=1e-9)
+
+    def test_signal_sharpe_measured_equals_combo(self, sample_signals):
+        """measured 口径下 portfolio_returns 内部归一化 → signal_sharpe == combo_sharpe。"""
+        rng = np.random.default_rng(21)
+        n = 60
+        fr = pd.DataFrame(
+            {
+                "fct_001": rng.normal(0.0005, 0.01, size=n),
+                "fct_002": rng.normal(0.0003, 0.01, size=n),
+                "fct_003": rng.normal(0.0002, 0.01, size=n),
+            }
+        )
+        combo = build_combo(
+            sample_signals,
+            mode="equal_weight",
+            factor_returns=fr,
+            exposure_scale=0.2686,
+        )
+        assert combo["metrics_source"] == "measured"
+        assert combo["signal_sharpe"] == pytest.approx(combo["combo_sharpe"], abs=1e-9)
+
+    def test_empty_combo_signal_sharpe_none(self):
+        """空组合 signal_sharpe 为 None。"""
+        combo = build_combo([], mode="equal_weight")
+        assert combo["signal_sharpe"] is None
 
 
 # ════════════════════════════════════════════════════════════
