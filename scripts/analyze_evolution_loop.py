@@ -48,7 +48,7 @@ def scan_mixin_method_names() -> set[str]:
     误记为实例属性读点。
     """
     names: set[str] = set()
-    for fname in ("evolution_uct.py", "evolution_trace.py", "evolution_channels.py"):
+    for fname in ("evolution_uct.py", "evolution_trace.py", "evolution_channels.py", "evolution_seeds.py"):
         p = ENGINE_DIR / fname
         if not p.exists():
             continue
