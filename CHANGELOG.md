@@ -3,7 +3,11 @@
 本文件记录 FTS（因子交易系统）的累积变更日志。版本号遵循 SemVer + build 段纪律
 （`scripts/bump_version.py` 统一管理），正式版本历史见 `docs/harness/07-operations.md`。
 
-## [v2.103.0+8] - 2026-08-13
+## [v2.103.0+9] - 2026-08-13
+
+> 注：v2.103.0+8 为本会话 bump（ruff/mypy 修复），+9 为并发会话同步推进
+> （35-gap-closure-plan P0 批次，GAP-099/100/101 落地 + 版本头全量同步），
+> 两者同属本次累积变更，统一记录于此。
 
 ### 修复（代码质量全量清零）
 
@@ -63,6 +67,11 @@
   演化循环重构清单 / GAP 收尾）。
 - plans/35 gap 阈值校准执行结果回填 §9.1：G4 `icir_min=0.30` 定值，
   G11 `turnover_daily_max` 暂缓（库中换手字段未回填，待 evaluation_chain 落地后复核）。
+- 35-gap-closure-plan P0 批次（v2.103.0+9）：GAP-099 同向敞口惩罚
+  （`AlignedExposureConfig` + `check_aligned_exposure`）、GAP-100 集中踩踏规避
+  （`ExitStampedeConfig` + `throttle_exit_stampede`）、GAP-101 换手预算
+  （`portfolio_turnover.py` + `l3_turnover_penalty` 默认 0.15）登记关闭；
+  01-architecture.md 记录 `EvolutionSeedsMixin`（34 计划领域 D）接入。
 
 ### 提交记录
 
@@ -73,8 +82,10 @@
 | `c2cf19a` | chore(scripts): 累积工具脚本入库 + lint 修复 | 50 |
 | `acc0bb2` | test: 回归测试对齐 + 新增用例 | 77 |
 | `52fcfb5` | docs(plan35): gap 阈值校准执行结果回填（§9.1） | 1 |
+| `2609c4c` | docs: 新增 CHANGELOG.md（本文件） | 1 |
+| `96b9a61` | docs: GAP-099/100/101 登记关闭 + evolution_seeds 架构记录 | 2 |
 
-累计 267 文件变更（+20,702 / −19,288），工作区已干净。
+累计 269 文件变更，工作区已干净。
 
 ### 验证结果
 
