@@ -77,15 +77,37 @@ _DEFAULT_CONFIG: RiskConfig = {
 class RiskManager:
     """实时风控管理器（C.2 §4）。"""
 
-    def __init__(self, config: RiskConfig | None = None) -> None:
+    def __init__(self, config: RiskConfig | None = None, regime: str | None = None) -> None:
         """初始化风控管理器。
 
         Args:
             config: 风控配置（缺省使用默认值）
+            regime: 当前市场制度（G14，可选）。提供且命中 `REGIME_RISK_PARAMS`
+                时，将表内 leverage_cap / daily_loss_pct 注入对应配置项
+                （max_leverage / daily_loss_limit_pct），按制度收紧/放大风控边界。
+                不改变 `check()` 内部逻辑。
         """
         merged: dict[str, Any] = dict(_DEFAULT_CONFIG)
         if config:
             merged.update({k: v for k, v in config.items() if v is not None})
+        if regime:
+            try:
+                from fts.factor_engine.regime_multipliers import REGIME_RISK_PARAMS
+
+                params = REGIME_RISK_PARAMS.get(regime)
+                if params:
+                    if params.get("leverage_cap") is not None:
+                        merged["max_leverage"] = float(params["leverage_cap"])
+                    if params.get("daily_loss_pct") is not None:
+                        merged["daily_loss_limit_pct"] = float(params["daily_loss_pct"])
+                    logger.info(
+                        "[RiskManager] Regime=%s 风控参数注入: max_leverage=%.2f, daily_loss_limit=%.2f",
+                        regime,
+                        merged["max_leverage"],
+                        merged["daily_loss_limit_pct"],
+                    )
+            except Exception as e:  # noqa: BLE001 — 注入失败回退常量，不阻断初始化
+                logger.warning("[RiskManager] Regime 风控参数注入失败，回退常量: %s", e)
         self._config: RiskConfig = cast(RiskConfig, merged)
 
     # ─── 主入口 ──────────────────────────────────────────

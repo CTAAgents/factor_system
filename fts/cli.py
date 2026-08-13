@@ -235,13 +235,10 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
     # 熔断预算：每个因子最多 4000 token
     budget = DEFAULT_BUDGET_CONFIG.copy()
     budget["max_generation"] = args.max_generations
-    # 短样本演化期放宽失败率熔断（0.95 → 0.99），
-    # 避免后代因子因评分卡边界线批量淘汰而提前熔断；
-    # 阈值支持 FTS_EVOLUTION_CB_FAILURE_RATE 环境变量覆盖（如 1.0 = 禁用失败率熔断，
-    # 保留 token 与连续低 IC 熔断兜底），用于夜间演化需强制跑满世代数的场景。
-    budget["circuit_breaker_failure_rate"] = float(
-        os.getenv("FTS_EVOLUTION_CB_FAILURE_RATE", "0.99")
-    )
+    # 失败率熔断默认禁用（默认 1.0，2026-08-13 用户指令：夜间演化需强制跑满世代数），
+    # 保留 token 与连续低 IC 熔断兜底；
+    # 阈值支持 FTS_EVOLUTION_CB_FAILURE_RATE 环境变量覆盖（如 0.99 = 恢复失败率熔断）。
+    budget["circuit_breaker_failure_rate"] = float(os.getenv("FTS_EVOLUTION_CB_FAILURE_RATE", "1.0"))
     loop.budget = budget
 
     # 执行演化
@@ -515,7 +512,7 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
     if universe == "futures":
         elite_dir = cfg.get_elite_dir("futures")
         if synthesis_mode is None:
-            synthesis_mode = "elastic_net"
+            synthesis_mode = "equal_weight"  # v2.103.0+23 默认：等权 1/N 分散组合
     print(f"[portfolio] universe={universe} elite_dir={elite_dir} mode={synthesis_mode} optimizer={optimizer_mode}")
 
     # 从配置加载 Verifier 配置
@@ -2197,7 +2194,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         choices=["equal_weight", "sharpe_weight", "elastic_net", "adaptive", "optimizer"],
-        help="信号合成模式: elastic_net（默认）/ adaptive（Regime 自适应双维度）/ sharpe_weight / equal_weight / optimizer（GAP-I302，需 returns-matrix）",
+        help="信号合成模式: equal_weight（默认）/ elastic_net / adaptive（Regime 自适应双维度）/ sharpe_weight / optimizer（GAP-I302，需 returns-matrix）",
     )
     p_port_run.add_argument(
         "--optimizer-mode",
@@ -2213,6 +2210,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-recompute",
         action="store_true",
         help="强制全量重算组合权重（GAP-072，默认按 l3_weight_recompute_cadence 自动判定：weekly 仅周五重算，其余日冻结）",
+    )
+    p_port_run.add_argument(
+        "--enable-pca",
+        action="store_true",
+        help="启用 P2 PCA 降维权重（Step 1.9；equal_weight 模式下以 PCA 载荷×解释方差权重替换均匀等权，v2.103.0+24）",
     )
     p_port_run.set_defaults(func=_cmd_portfolio_run)
 

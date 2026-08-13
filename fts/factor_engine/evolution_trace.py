@@ -1,16 +1,18 @@
 """
-loop_engine/evolution_trace.py — EvolutionLoop 领域 J Mixin：trace 记录 + 经验链 + 实验日志
+loop_engine/evolution_trace.py — TraceRecorder 协作类：trace 记录 + 经验链 + 实验日志
 
-34 计划（plans/34-evolution-loop-refactor-inventory.md）B 阶段第二步：从
-evolution_loop.py 抽取领域 J（trace 记录与经验链）为独立 Mixin，行为等价、
-公开 API 不变。原方法剪切迁移（不改逻辑），领域独享状态（_success_pattern_cache
-/ _experiment_log_dir / _experiment_variants）随迁（mixin 类型声明 + 主类
-__init__ 装配），跨领域共享状态（experience_chain / memory_dir / state_manager /
-market）留在主类实例，经 self 访问。
+34 计划（plans/34-evolution-loop-refactor-inventory.md）C 阶段 Phase 47e：
+B 阶段产物 EvolutionTraceMixin 组合式重构为 TraceRecorder 协作类，行为等价、
+公开 API 不变。领域独享状态（_success_pattern_cache / _experiment_log_dir /
+_experiment_variants）随迁本类并在构造内装配（原主类 __init__ 对应段迁移，
+_experiment_log_dir 经 __init__ 参数注入）；跨领域共享状态（experience_chain /
+memory_dir / state_manager / market）经 owner（主类实例）动态读取。主类
+EvolutionLoop 组合持有本类实例，保留 12 方法转发桩 + 3 属性 property 转发
+（兼容测试零改动，见 34 §8.5）。
 
-契约（见 01-architecture.md §5 EvolutionLoop Mixin 拆分契约）：
-- Mixin 方法名全局唯一，不 import evolution_loop（单向依赖，防循环导入）；
-- `_QualityInspectionResult` 数据类随迁至此（被 trace 方法与
+跨组件约束（34 §8.3）：协作类不 import evolution_loop（防循环导入），
+owner 仅经 Any 标注，运行时经主类组装注入。
+- `_QualityInspectionResult` 数据类保留于本模块（被 trace 方法与
   evolution_loop._QualityInspectionCompat 共用），evolution_loop re-export。
 """
 
@@ -23,9 +25,8 @@ from typing import Any, Optional
 
 from .audit import FactorAuditReport
 from .contracts import FactorEvaluation, FactorProgram
-from .experience_chain import ExperienceChain, ParentFailureContext, create_trace_from_evaluation
+from .experience_chain import ParentFailureContext, create_trace_from_evaluation
 from .experiment_log import ExperimentLogWriter, extract_scores
-from .state import EvolutionStateManager
 from .success_pattern import SuccessPatternConfig, SuccessPatternReport, analyze_success_patterns
 
 logger = logging.getLogger(__name__)
@@ -45,24 +46,25 @@ class _QualityInspectionResult:
         self.quality_score: dict = score
 
 
-class EvolutionTraceMixin:
-    """领域 J：trace 记录 + 经验链 + 实验日志。
+class TraceRecorder:
+    """领域 J：trace 记录 + 经验链 + 实验日志（34 计划 C 阶段协作类）。
 
-    实例属性由主类 EvolutionLoop.__init__ 装配；此处类型声明供 mypy
-    跨文件识别（34 计划 Mixin 拆分契约第 5/6 条）。领域独享状态
-    （_success_pattern_cache/_experiment_log_dir/_experiment_variants）
-    随本 Mixin 迁移，跨领域共享状态（experience_chain/memory_dir/
-    state_manager/market）留在主类。
+    状态所有权（34 §8.3）：领域独享状态（_success_pattern_cache /
+    _experiment_log_dir / _experiment_variants）随迁本类并在构造内装配
+    （原主类 __init__ 对应段迁移，_experiment_log_dir 经 __init__ 参数注入）；
+    跨领域共享状态（experience_chain/memory_dir/state_manager/market）经
+    owner（主类实例）动态读取。主类 EvolutionLoop 组合持有本类实例，保留
+    12 方法转发桩 + 3 属性 property 转发（兼容测试零改动，见 34 §8.5）。
     """
 
-    # ── 实例属性类型声明（装配在 evolution_loop.py EvolutionLoop.__init__） ──
-    _success_pattern_cache: Optional[SuccessPatternReport]
-    _experiment_log_dir: str
-    _experiment_variants: list[dict]
-    experience_chain: ExperienceChain
-    memory_dir: Path
-    state_manager: EvolutionStateManager
-    market: str
+    def __init__(self, owner: Any, experiment_log_dir: Optional[str] = None) -> None:
+        self._owner: Any = owner
+        # ── 领域独享状态随迁（原主类 __init__ 对应段迁移） ──
+        # Phase 1.2 (P0-1): 成功模式报告进程内缓存（避免每代重复读取经验链）
+        self._success_pattern_cache: Optional[SuccessPatternReport] = None
+        # Phase 2 (P1-2): 结构化实验日志——run 内候选聚合 + 导出目录
+        self._experiment_log_dir: str = str(experiment_log_dir) if experiment_log_dir else "data"
+        self._experiment_variants: list[dict] = []
 
     def _build_parent_failure_ctx(self, parent: FactorProgram) -> Optional[ParentFailureContext]:
         """构造父因子最近失败归因上下文（Phase 1.1 P0-2 定向修复）。
@@ -79,7 +81,7 @@ class EvolutionTraceMixin:
         parent_id = parent.get("factor_id")
         if not parent_id:
             return None
-        traces = self.experience_chain.read_failures_by_parent(parent_id)
+        traces = self._owner.experience_chain.read_failures_by_parent(parent_id)
         if not traces:
             return None
         reasons: list[str] = []
@@ -123,7 +125,7 @@ class EvolutionTraceMixin:
             )
             if not config.enabled:
                 return None
-            report = analyze_success_patterns(self.experience_chain, config)
+            report = analyze_success_patterns(self._owner.experience_chain, config)
             self._success_pattern_cache = report
             return report
         except Exception as e:  # noqa: BLE001 — 降级不阻断演化
@@ -180,7 +182,7 @@ class EvolutionTraceMixin:
             return writer.export(
                 run_id=run_id,
                 trace_id=trace_id,
-                market=self.market,
+                market=self._owner.market,
                 started_at=datetime.now().isoformat(),
                 generations_completed=generations_completed,
                 variants=self._experiment_variants,
@@ -212,7 +214,7 @@ class EvolutionTraceMixin:
         factor_name = factor.get("name", "?")
         sub_trace_id = f"{trace_id}_g{generation}_audit_fail_{factor_id[:8]}"
 
-        trace_dir = self.memory_dir / "traces"
+        trace_dir = self._owner.memory_dir / "traces"
         trace_dir.mkdir(parents=True, exist_ok=True)
         fp = trace_dir / f"{sub_trace_id}.json"
 
@@ -250,7 +252,7 @@ class EvolutionTraceMixin:
         factor_name = factor.get("name", "?")
         sub_trace_id = f"{trace_id}_g{generation}_ablation_fail_{factor_id[:8]}"
 
-        trace_dir = self.memory_dir / "traces"
+        trace_dir = self._owner.memory_dir / "traces"
         trace_dir.mkdir(parents=True, exist_ok=True)
         fp = trace_dir / f"{sub_trace_id}.json"
 
@@ -285,7 +287,7 @@ class EvolutionTraceMixin:
         factor_name = factor.get("name", "?")
         sub_trace_id = f"{trace_id}_g{generation}_robustness_fail_{factor_id[:8]}"
 
-        trace_dir = self.memory_dir / "traces"
+        trace_dir = self._owner.memory_dir / "traces"
         trace_dir.mkdir(parents=True, exist_ok=True)
         fp = trace_dir / f"{sub_trace_id}.json"
 
@@ -320,7 +322,7 @@ class EvolutionTraceMixin:
         factor_name = factor.get("name", "?")
         sub_trace_id = f"{trace_id}_g{generation}_causal_fail_{factor_id[:8]}"
 
-        trace_dir = self.memory_dir / "traces"
+        trace_dir = self._owner.memory_dir / "traces"
         trace_dir.mkdir(parents=True, exist_ok=True)
         fp = trace_dir / f"{sub_trace_id}.json"
 
@@ -364,8 +366,8 @@ class EvolutionTraceMixin:
             lessons=lessons,
             trace_id=sub_trace_id,
         )
-        self.experience_chain.record_success(trace)
-        self.state_manager.add_experience_ref(self.state_manager.load_or_init(), trace["trace_id"])
+        self._owner.experience_chain.record_success(trace)
+        self._owner.state_manager.add_experience_ref(self._owner.state_manager.load_or_init(), trace["trace_id"])
 
     def _record_failure_trace(
         self,
@@ -405,7 +407,7 @@ class EvolutionTraceMixin:
             trace_id=sub_trace_id,
         )
         try:
-            self.experience_chain.record_failure(trace)
+            self._owner.experience_chain.record_failure(trace)
         except Exception:
             pass  # 失败轨迹记录失败不应中断主循环
 
@@ -486,6 +488,6 @@ class EvolutionTraceMixin:
             trace_id=sub_trace_id,
         )
         try:
-            self.experience_chain.record_failure(trace)
+            self._owner.experience_chain.record_failure(trace)
         except Exception:
             pass

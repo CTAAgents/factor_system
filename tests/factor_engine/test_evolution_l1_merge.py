@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
@@ -385,3 +386,84 @@ def test_promote_to_elite_deletes_l1_candidate_file(chdir_tmp):
     assert fp is not None
     # 晋升成功后 l1_injected 文件被删除
     assert not cand_file.exists()
+
+
+# ─── 新晋级精英因子观察期默认关闭（2026-08-13） ──────────
+
+
+def _make_promote_factor(fid: str, name: str) -> Any:
+    """构造最小 FactorProgram（晋升测试用）。"""
+    from fts.factor_engine.contracts import (
+        EconomicLogic,
+        FactorProgram,
+        FactorSignature,
+    )
+
+    return FactorProgram(
+        factor_id=fid,
+        name=name,
+        code="close - close.shift(5)",
+        params={},
+        signature=FactorSignature(
+            input_fields=["close"],
+            output_type="signal",
+            frequency="daily",
+            lookback=1,
+        ),
+        economic_logic=EconomicLogic(
+            theory=3,
+            behavioral=3,
+            microstructure=3,
+            institutional=3,
+            narrative="测试",
+        ),
+        source="macro_evolution",
+        generation=1,
+        created_at="2026-08-13T00:00:00",
+        trace_id="trace-test",
+    )
+
+
+def _make_promote_eval(fid: str) -> Any:
+    """构造最小 FactorEvaluation（晋升测试用）。"""
+    from fts.factor_engine.contracts import FactorEvaluation
+
+    return FactorEvaluation(
+        factor_id=fid,
+        trace_id="trace-test",
+        passed=True,
+        failure_reasons=[],
+        level_3_multiple={"passed": True},
+        evaluated_at="2026-08-13T00:00:00",
+    )
+
+
+def _promote_via_loop(chdir_tmp, fid: str, name: str):
+    """mock repo 后执行默认参数晋升，返回 JSON 快照 record。"""
+    from pathlib import Path
+
+    from unittest.mock import MagicMock
+
+    loop = _make_loop(chdir_tmp)
+    mock_repo = MagicMock()
+    mock_repo.get_factor_by_name = MagicMock(return_value=None)
+    loop._get_repo = MagicMock(return_value=mock_repo)  # noqa: SLF001
+
+    fp = loop._promote_to_elite(_make_promote_factor(fid, name), _make_promote_eval(fid))  # noqa: SLF001
+    assert fp is not None
+    return json.loads(Path(fp).read_text(encoding="utf-8"))
+
+
+def test_promote_default_shadow_observe_disabled(chdir_tmp, monkeypatch):
+    """默认（env 未设）新晋级因子观察期关闭——晋升记录不含 shadow_pool。"""
+    monkeypatch.delenv("FTS_EVOLUTION_SHADOW_OBSERVE", raising=False)
+    record = _promote_via_loop(chdir_tmp, "fct_shadow_0001", "default_no_shadow")
+    assert "shadow_pool" not in record
+
+
+def test_promote_default_shadow_observe_enabled_by_env(chdir_tmp, monkeypatch):
+    """FTS_EVOLUTION_SHADOW_OBSERVE=1 恢复观察期——晋升记录含 shadow_pool。"""
+    monkeypatch.setenv("FTS_EVOLUTION_SHADOW_OBSERVE", "1")
+    record = _promote_via_loop(chdir_tmp, "fct_shadow_0002", "env_shadow_enabled")
+    assert "shadow_pool" in record
+    assert record["shadow_pool"]["observe_trading_days"] == 5

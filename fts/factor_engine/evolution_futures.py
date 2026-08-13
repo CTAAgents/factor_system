@@ -991,9 +991,7 @@ class EvolutionLoop:
 
     # ── GAP-I201 (v2.65.0): 批量挖掘漏斗 ──────────────────
 
-    def _build_parent_failure_ctx(
-        self, parent: FactorProgram
-    ) -> Optional[ParentFailureContext]:
+    def _build_parent_failure_ctx(self, parent: FactorProgram) -> Optional[ParentFailureContext]:
         """构造父因子最近失败归因上下文（Phase 1.1 P0-2 定向修复）。
 
         从失败经验链按 parent_id 读取最近失败轨迹，聚合去重失败原因。
@@ -2051,8 +2049,7 @@ class EvolutionLoop:
         self._early_stop_last_count = cur
         if self._consecutive_empty_generations >= self._evolution_stop_k:
             self._early_stop_reason = (
-                f"连续 {self._consecutive_empty_generations} 代零晋升"
-                f"（阈值 K={self._evolution_stop_k}）"
+                f"连续 {self._consecutive_empty_generations} 代零晋升（阈值 K={self._evolution_stop_k}）"
             )
             return True
         return False
@@ -2397,7 +2394,11 @@ class EvolutionLoop:
         if self._repo is None:
             from .factor_db import FactorRepository
 
-            self._repo = FactorRepository(db_path=self.factor_db_path, market=self.market) if self.factor_db_path else FactorRepository(market=self.market)
+            self._repo = (
+                FactorRepository(db_path=self.factor_db_path, market=self.market)
+                if self.factor_db_path
+                else FactorRepository(market=self.market)
+            )
         return self._repo
 
     @_release_repo_after
@@ -2408,7 +2409,7 @@ class EvolutionLoop:
         seed_correlations: Optional[list[FactorCorrelation]] = None,
         quality_score: Optional[dict] = None,
         audit_report: Optional[FactorAuditReport] = None,
-        shadow_observe: bool = True,
+        shadow_observe: Optional[bool] = None,
     ) -> Optional[Path]:
         """将因子晋升到精英池。
 
@@ -2418,13 +2419,19 @@ class EvolutionLoop:
             seed_correlations: L2 种子因子相关性标记（可选）
             quality_score: 质量评分卡结果（Phase A.1 集成）
             audit_report: 因子审计报告（Phase B.3 集成）
-            shadow_observe: 是否进入影子池观察（新演化因子默认 True；
-                            种子因子/初始池导入传 False 直接进正式组合）
+            shadow_observe: 是否进入影子池观察（默认 None → 读 FTS_EVOLUTION_SHADOW_OBSERVE，
+                            默认 "0" = 关闭观察期直接进正式组合；种子因子/初始池导入
+                            显式传 False；设 env=1 可恢复观察期模式）
 
         Returns:
             Path: 晋升成功
             None: 因子名称重复，跳过晋升
         """
+        # 2026-08-13: 新晋级精英因子观察期默认关闭（env 可恢复）
+        if shadow_observe is None:
+            import os
+
+            shadow_observe = os.getenv("FTS_EVOLUTION_SHADOW_OBSERVE", "0") == "1"
         # 去重检查：DuckDB 是权威数据源，通过 factor_catalog 表检查
         factor_name = factor.get("name", "")
         try:
@@ -3398,6 +3405,44 @@ class EvolutionLoop:
             logger.warning("[EvolutionLoop] Barra 风格暴露构建失败，跳过风格中性化: %s", e)
             return None
 
+    def _build_vol_map(self) -> Optional[dict[str, float]]:
+        """构建波动率中性化映射（G10，v2.103.0+15）。
+
+        计算各品种全样本日收益年化波动率作为静态截面暴露（对标股票市值），
+        供 `cross_section_evaluate_backtest(vol_map=...)` 剥离信号与品种
+        波动率水平的相关性；开启时序去季节化剥离日历季节性。
+
+        Returns:
+            {symbol: 年化波动率}；非横截面 / 配置关闭 / 数据不足 / 异常返回 None
+        """
+        if not self._is_cross_section or not self.cross_section_data:
+            return None
+        try:
+            from fts.config.settings import get_config
+
+            if not get_config().l2_barra_style_neutral:
+                return None
+            vol_map: dict[str, float] = {}
+            for sym, df in self.cross_section_data.items():
+                if "close" not in df.columns:
+                    continue
+                close = df["close"].dropna()
+                if len(close) < 20:
+                    continue
+                ret = close.pct_change().dropna()
+                if len(ret) < 20 or float(ret.std()) < 1e-12:
+                    continue
+                vol_map[sym] = float(ret.std() * np.sqrt(252.0))
+            logger.info(
+                "[EvolutionLoop] 波动率中性化映射构建完成: %d/%d 品种可用",
+                len(vol_map),
+                len(self.cross_section_data),
+            )
+            return vol_map or None
+        except Exception as e:  # noqa: BLE001 — 构建失败不阻断评估
+            logger.warning("[EvolutionLoop] 波动率中性化映射构建失败，跳过: %s", e)
+            return None
+
     def _evaluate_cross_section(self, factor: FactorProgram, trace_id: str) -> FactorEvaluation:
         """横截面模式下的评估：直接回测 + 自动构造 FactorEvaluation。"""
         from .contracts import EconomicScore, MultipleTestResult
@@ -3409,6 +3454,7 @@ class EvolutionLoop:
             industry_map=self.industry_map,
             cap_map=self.cap_map,
             style_exposures=self._build_barra_exposures(),
+            vol_map=self._build_vol_map(),
             long_only=False,
         )
         # 从因子自身读取经济逻辑评分（种子 YAML 或 LLM 生成），默认 3 分

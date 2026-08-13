@@ -149,13 +149,23 @@ class FTSConfig:
     cost_sensitivity_enabled: bool = field(
         default_factory=lambda: os.getenv("FTS_COST_SENSITIVITY_ENABLED", "0") == "1"
     )
-    # 夜盘/隔夜跳空列注入（GAP-066）：get_ohlcv 是否附加 overnight_gap/overnight_gap_flag 列（默认关闭）
+    # G11（35-gap-closure-plan）：日换手硬剔除阈值（信号翻转率，None=关闭观察；
+    # 库中换手历史未回填，待真实分布复核后启用，见 plans/35 §9.1）
+    factor_turnover_daily_max: Optional[float] = field(
+        default_factory=lambda: (lambda v: float(v) if v else None)(os.getenv("FTS_FACTOR_TURNOVER_DAILY_MAX", ""))
+    )
+    # 夜盘/隔夜跳空列注入（GAP-066 + G8）：get_ohlcv 附加 overnight_gap/overnight_gap_flag 列
+    # G8（v2.104.0, D5）：默认开启（跳空标记进入因子面板）
     inject_overnight_gap_enabled: bool = field(
-        default_factory=lambda: os.getenv("FTS_INJECT_OVERNIGHT_GAP", "0") == "1"
+        default_factory=lambda: os.getenv("FTS_INJECT_OVERNIGHT_GAP", "1") == "1"
     )
     # 显著隔夜跳空阈值（绝对值比例，默认 1%）
     overnight_gap_flag_threshold: float = field(
         default_factory=lambda: float(os.getenv("FTS_OVERNIGHT_GAP_THRESHOLD", "0.01"))
+    )
+    # G8（v2.103.0+15）：面板级断K/跳空清洗标记（data_gap/gap_anomaly 列，默认开启）
+    inject_data_gap_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_INJECT_DATA_GAP", "1") == "1"
     )
 
     # ── L2 准入去冗余 (GAP-I206, v2.71.0) ──
@@ -258,6 +268,12 @@ class FTSConfig:
     # 周度重算日（Python weekday: 0=周一 ... 4=周五；默认周五，L3 组合与信号管道权重周度重算）
     l3_weight_recompute_weekday: int = field(
         default_factory=lambda: int(os.getenv("FTS_L3_WEIGHT_RECOMPUTE_WEEKDAY", "4"))
+    )
+    # G3 换手预算分配开关（v2.103.0+17，2026-08-13）：true=启用（单日换手 > daily_turnover_cap=0.30 剔除弱信号）
+    # false=关闭（默认）：组合换手控制由粘性约束 + 换手惩罚 λ 双通道兜底；
+    # 期货周频 elastic_net 场景关闭可避免 sharpe 被 SHARPE_CAP 截断后评分并列导致的误剔最强因子
+    l3_turnover_budget_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_L3_TURNOVER_BUDGET_ENABLED", "0") == "1"
     )
 
     # ── C6 (v2.100.1): 因子自动重校准（decayed → 微调而非直接退役）──

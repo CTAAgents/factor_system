@@ -15,6 +15,7 @@ HARNESS §降级/熔断: 捕获所有异常，日志记录但不抛出。
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -216,12 +217,34 @@ def health_check_job() -> None:
 
 
 def monthly_decay_eval_job() -> None:
-    """月度因子衰减评估：对精英池执行增量评估并触发状态机/自动淘汰。
+    """月度因子衰减评估 + 新标准准入重审（2026-08-13 起合并）。`n`n    流程:`n        Step A: 新标准全量重审（fts.monitor.reaudit.run_reaudit，apply=True）——`n                对 active elite 按当前准入标准（审计/鲁棒性/评分卡）复检，`n                不合格降级观察或淘汰；FTS_MONTHLY_REAUDIT_ENABLED=0 可关闭。`n        Step B: 衰减评估（A.2 EliteFactorTracker.run_monthly_evaluation）+`n                状态机 + 自动淘汰同步 DuckDB/JSON。
 
     关联设计: A.2 因子衰减追踪（EliteFactorTracker.run_monthly_evaluation）。
     """
     trace_id = f"fts.decay.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[衰减评估] 启动 trace_id=%s", trace_id)
+
+    # ---- Step A: 新标准全量重审（与月度衰减合并） ----
+    if os.getenv("FTS_MONTHLY_REAUDIT_ENABLED", "1") == "1":
+        try:
+            sys.path.insert(0, str(PROJECT_ROOT))
+            from fts.monitor.reaudit import run_reaudit
+
+            rep = run_reaudit(market="futures", trace_id=f"{trace_id}.reaudit", apply=True, out_json=True)
+            logger.info(
+                "[衰减评估] Step A 新标准重审完成: retain=%d shadow=%d retire=%d error=%d (total=%d)",
+                rep.counts.get("retain", 0),
+                rep.counts.get("shadow", 0),
+                rep.counts.get("retire", 0),
+                rep.counts.get("error", 0),
+                rep.total,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error("[衰减评估] Step A 重审失败（不阻断衰减评估）: %s", e, exc_info=True)
+    else:
+        logger.info("[衰减评估] Step A 新标准重审已关闭（FTS_MONTHLY_REAUDIT_ENABLED=0）")
+
+    # ---- Step B: 衰减评估（原有逻辑） ----
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.monitor.elite_tracker import EliteFactorTracker, AutoRetireManager
@@ -612,7 +635,10 @@ def mhf_signal_job() -> None:
         SignalBridge(protocol="json", output_dir=str(PROJECT_ROOT / "signals")).publish(payload)
         logger.info(
             "[MHF] 信号发布完成: %s symbols=%d bar=%s (trace_id=%s)",
-            payload["signal_id"], payload["symbols"], payload.get("bar_time"), trace_id,
+            payload["signal_id"],
+            payload["symbols"],
+            payload.get("bar_time"),
+            trace_id,
         )
         self_serial_exec(payload, trace_id)
     except Exception as e:  # noqa: BLE001
@@ -644,8 +670,10 @@ def self_serial_exec(payload: dict, trace_id: str) -> None:
         )
         logger.info(
             "[MHF] 模拟执行串行完成: ok=%s targets=%d equity=%.2f (trace_id=%s)",
-            result.get("ok"), len(result.get("targets") or {}),
-            (result.get("equity") or {}).get("balance", 0.0), exec_trace,
+            result.get("ok"),
+            len(result.get("targets") or {}),
+            (result.get("equity") or {}).get("balance", 0.0),
+            exec_trace,
         )
     except Exception as e:  # noqa: BLE001
         logger.error("[MHF] 模拟执行失败: %s (trace_id=%s)", e, trace_id)

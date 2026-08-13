@@ -103,6 +103,18 @@ class TestBuildParser:
         assert args.factor_id == "RB"
         assert args.elite_dir == "/tmp/elite"
 
+    def test_portfolio_run_has_enable_pca(self):
+        """portfolio run 有 --enable-pca 参数（v2.103.0+24）。"""
+        parser = build_parser()
+        args = parser.parse_args(["portfolio", "run", "--enable-pca"])
+        assert args.enable_pca is True
+
+    def test_portfolio_run_enable_pca_default(self):
+        """portfolio run --enable-pca 默认为 False。"""
+        parser = build_parser()
+        args = parser.parse_args(["portfolio", "run"])
+        assert args.enable_pca is False
+
     def test_parser_has_version_flag(self):
         """顶层 --version 标志存在。"""
         parser = build_parser()

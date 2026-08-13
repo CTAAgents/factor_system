@@ -111,3 +111,63 @@ class TestGapF09MarginModeling:
         )
         assert result.details["margin_scaled"] is True
         assert result.weights["portfolio"] == pytest.approx(0.50)
+
+
+# ─── G15: 方差最小化仓位模式（35-gap-closure-plan §5.8）──
+
+
+class TestMinVariance:
+    def test_diag_cov_weights_inverse_vol(self):
+        """对角协方差 → 权重反比于方差（低波动资产权重高）。"""
+        # A0 波动 1%，A1 波动 2%，A2 波动 3%（确定性序列）
+        rng = np.random.default_rng(3)
+        n = 400
+        df = pd.DataFrame(
+            {
+                "A0": rng.normal(0, 0.01, n),
+                "A1": rng.normal(0, 0.02, n),
+                "A2": rng.normal(0, 0.03, n),
+            }
+        )
+        alloc = CapitalAllocator(min_weight=0.0)
+        result = alloc.allocate(df, total_capital=1_000_000, mode="min_variance")
+        w = result.weights
+        assert w["A0"] > w["A1"] > w["A2"]  # 低波动 → 高权重
+        assert sum(w.values()) == pytest.approx(1.0)
+        assert result.mode == "min_variance"
+        assert all(v >= 0 for v in w.values())
+
+    def test_singular_cov_shrunk_solvable(self):
+        """奇异协方差（恒等资产）→ Ledoit-Wolf 收缩后可解，不崩溃。"""
+        rng = np.random.default_rng(5)
+        base = rng.normal(0, 0.01, 300)
+        df = pd.DataFrame({"A0": base, "A1": base, "A2": base})  # 完全共线 → 奇异
+        alloc = CapitalAllocator(min_weight=0.0)
+        result = alloc.allocate(df, total_capital=1_000_000, mode="min_variance")
+        assert sum(result.weights.values()) == pytest.approx(1.0)
+        assert result.mode == "min_variance"
+
+    def test_single_asset(self):
+        """单资产 → portfolio 权重 1.0。"""
+        df = pd.DataFrame({"A0": np.random.default_rng(1).normal(0, 0.01, 100)})
+        alloc = CapitalAllocator()
+        result = alloc.allocate(df, total_capital=100_000, mode="min_variance")
+        assert result.weights["portfolio"] == pytest.approx(1.0)
+
+    def test_empty_panel_no_crash(self):
+        """空面板 → 回退 fixed，不崩溃。"""
+        alloc = CapitalAllocator()
+        result = alloc.allocate(pd.DataFrame(), total_capital=100_000, mode="min_variance")
+        assert result.weights["portfolio"] == pytest.approx(1.0)
+
+    def test_margin_constraint_applies(self):
+        """保证金占用约束在 min_variance 模式同样生效。"""
+        rng = np.random.default_rng(9)
+        df = pd.DataFrame({f"A{i}": rng.normal(0, 0.01, 300) for i in range(3)})
+        alloc = CapitalAllocator(min_weight=0.0)
+        margin_rates = {"A0": 0.10, "A1": 0.10, "A2": 0.10}
+        result = alloc.allocate(
+            df, total_capital=1_000_000, mode="min_variance", margin_rates=margin_rates, max_margin_usage=0.20
+        )
+        assert "margin_usage" in result.details
+        assert result.details["margin_usage"] <= 0.20 + 1e-9

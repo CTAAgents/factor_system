@@ -1011,7 +1011,7 @@ def test_process_candidate_promotes(
         "params": {},
     }
     # mock 微观演化（避免真实 optuna 依赖）
-    with patch("fts.factor_engine.evolution_loop.evolve_micro") as m_micro:
+    with patch("fts.factor_engine.evolution_candidate.evolve_micro") as m_micro:
         m_micro.return_value = (factor, None)
         _mock_seed_evaluation_pass(loop)
         loop.verifier.check = MagicMock(return_value={"passed": True, "failure_reasons": []})
@@ -1068,7 +1068,7 @@ def test_process_candidate_verifier_fail_returns_false(
         "code": "close - close.shift(1)",
         "params": {},
     }
-    with patch("fts.factor_engine.evolution_loop.evolve_micro") as m_micro:
+    with patch("fts.factor_engine.evolution_candidate.evolve_micro") as m_micro:
         m_micro.return_value = (factor, None)
         loop.evaluation_chain.evaluate = MagicMock(
             return_value={
@@ -5838,6 +5838,46 @@ class TestGapF16CrossSectionAndEvolution:
             side_effect=RuntimeError("barra crash"),
         ):
             assert loop._build_barra_exposures() is None
+
+    def test_build_vol_map_not_cross_section(self, tmp_memory_dir):
+        """非横截面模式 → None。"""
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+        )
+        assert loop._build_vol_map() is None
+
+    def test_build_vol_map_disabled(self, tmp_memory_dir, monkeypatch):
+        """横截面但配置关闭（l2_barra_style_neutral=False）→ None。"""
+        from fts.config.settings import get_config
+
+        monkeypatch.setattr(get_config(), "l2_barra_style_neutral", False)
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+            cross_section_data={"S0": _make_ohlcv(100)},
+            cross_section_dates=pd.DatetimeIndex(pd.date_range("2026-01-01", periods=100)),
+        )
+        assert loop._build_vol_map() is None
+
+    def test_build_vol_map_returns_map(self, tmp_memory_dir, monkeypatch):
+        """横截面 + 配置开启 → 返回 {symbol: 年化波动率}。"""
+        from fts.config.settings import get_config
+
+        monkeypatch.setattr(get_config(), "l2_barra_style_neutral", True)
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+            cross_section_data={"S0": _make_ohlcv(150), "S1": _make_ohlcv(150)},
+            cross_section_dates=pd.DatetimeIndex(pd.date_range("2026-01-01", periods=150)),
+        )
+        vol_map = loop._build_vol_map()
+        assert vol_map is not None
+        assert set(vol_map.keys()) == {"S0", "S1"}
+        assert all(v > 0 for v in vol_map.values())
 
     def test_evaluate_cross_section_failure_reasons(self, tmp_memory_dir):
         """横截面评估低 IC/夏普 → failure_reasons 非空。"""

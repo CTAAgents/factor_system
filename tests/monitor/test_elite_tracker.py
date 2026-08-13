@@ -37,8 +37,15 @@ def temp_dir(tmp_path: Path) -> str:
 
 @pytest.fixture
 def tracker(temp_dir: str) -> EliteFactorTracker:
-    """创建 EliteFactorTracker 实例。"""
+    """创建 EliteFactorTracker 实例（默认 B 级观察期关闭）。"""
     return EliteFactorTracker(tracking_dir=temp_dir)
+
+
+@pytest.fixture
+def observe_tracker(temp_dir: str) -> EliteFactorTracker:
+    """创建显式开启 B 级观察期的 EliteFactorTracker（观察期机制测试用）。"""
+    threshold = GradeThreshold(b_grade_observe_enabled=True)
+    return EliteFactorTracker(tracking_dir=temp_dir, grade_threshold=threshold)
 
 
 @pytest.fixture
@@ -48,6 +55,7 @@ def custom_tracker(temp_dir: str) -> EliteFactorTracker:
         a_threshold=35.0,
         b_threshold=25.0,
         observation_months=2,
+        b_grade_observe_enabled=True,
         ic_decay_months=2,
         sharpe_decline_months=3,
         sharpe_decline_ratio=0.4,
@@ -102,9 +110,22 @@ class TestGradeAdmission:
         assert snap["grade"] == "A"
         assert snap["quality_score"] == 45.0
 
-    def test_b_grade_enters_observing(self, tracker: EliteFactorTracker):
-        """B 级因子应进入观察期。"""
+    def test_b_grade_default_active(self, tracker: EliteFactorTracker):
+        """默认 B 级观察期关闭：B 级因子直接 active（2026-08-13）。"""
         snap = tracker.init_tracker(
+            factor_id="f_b",
+            name="factor_b",
+            entry_ic=0.08,
+            entry_sharpe=1.5,
+            quality_score=35.0,
+        )
+        assert snap["status"] == "active"
+        assert snap["grade"] == "B"
+        assert snap["observation_end"] is None
+
+    def test_b_grade_enters_observing_when_enabled(self, observe_tracker: EliteFactorTracker):
+        """显式开启 B 级观察期开关时，B 级因子应进入观察期。"""
+        snap = observe_tracker.init_tracker(
             factor_id="f_b",
             name="factor_b",
             entry_ic=0.08,
@@ -173,9 +194,9 @@ class TestGradeAdmission:
 class TestObservationPeriod:
     """测试 B 级因子观察期机制。"""
 
-    def test_observation_end_set(self, tracker: EliteFactorTracker):
-        """观察期结束时间应被设置。"""
-        snap = tracker.init_tracker(
+    def test_observation_end_set(self, observe_tracker: EliteFactorTracker):
+        """观察期结束时间应被设置（观察期开关开启时）。"""
+        snap = observe_tracker.init_tracker(
             factor_id="f_obs",
             name="factor_obs",
             entry_ic=0.08,
@@ -206,11 +227,11 @@ class TestObservationPeriod:
         days_diff = (obs_dt - entry_at).days
         assert 55 <= days_diff <= 65  # 2 个月 ≈ 60 天
 
-    def test_observing_to_active_after_period(self, tracker: EliteFactorTracker):
+    def test_observing_to_active_after_period(self, observe_tracker: EliteFactorTracker):
         """观察期结束且质量分达标应转为 active。"""
         # 设置一个已过期的观察期
         past_date = (datetime.now(timezone.utc) - timedelta(days=100)).isoformat()
-        snap = tracker.init_tracker(
+        snap = observe_tracker.init_tracker(
             factor_id="f_obs_active",
             name="factor_obs_active",
             entry_ic=0.08,
@@ -221,17 +242,17 @@ class TestObservationPeriod:
         import fts.core.atomic as atomic
 
         snap["observation_end"] = past_date
-        atomic.atomic_write(str(tracker._path("f_obs_active")), snap)
+        atomic.atomic_write(str(observe_tracker._path("f_obs_active")), snap)
 
         # 触发更新以检查状态转换
-        updated = tracker.update("f_obs_active", 0.09, is_monthly=True)
+        updated = observe_tracker.update("f_obs_active", 0.09, is_monthly=True)
         assert updated is not None
         assert updated["status"] == "active"
 
-    def test_observing_to_decaying_after_period(self, tracker: EliteFactorTracker):
+    def test_observing_to_decaying_after_period(self, observe_tracker: EliteFactorTracker):
         """观察期结束但质量分不足应转为 decaying。"""
         past_date = (datetime.now(timezone.utc) - timedelta(days=100)).isoformat()
-        snap = tracker.init_tracker(
+        snap = observe_tracker.init_tracker(
             factor_id="f_obs_decay",
             name="factor_obs_decay",
             entry_ic=0.08,
@@ -243,9 +264,9 @@ class TestObservationPeriod:
         snap["observation_end"] = past_date
         # 降低质量分以触发 decaying 路径
         snap["quality_score"] = 25.0
-        atomic.atomic_write(str(tracker._path("f_obs_decay")), snap)
+        atomic.atomic_write(str(observe_tracker._path("f_obs_decay")), snap)
 
-        updated = tracker.update("f_obs_decay", 0.09, is_monthly=True)
+        updated = observe_tracker.update("f_obs_decay", 0.09, is_monthly=True)
         assert updated is not None
         assert updated["status"] == "decaying"
 
@@ -555,8 +576,8 @@ class TestReportGeneration:
 
         report = tracker.report()
         sc = report["status_counts"]
-        assert sc["active"] == 1
-        assert sc["observing"] == 1
+        assert sc["active"] == 2  # A 级 + B 级（默认观察期关闭，B 级直接 active）
+        assert sc["observing"] == 0
         assert sc["rejected"] == 1
         assert sc["total"] == 3
 
@@ -745,7 +766,7 @@ class TestEdgeCases:
             quality_score=20.0,
         )
 
-        assert len(tracker.get_by_status("active")) == 1
-        assert len(tracker.get_by_status("observing")) == 1
+        assert len(tracker.get_by_status("active")) == 2  # A 级 + B 级（默认观察期关闭）
+        assert len(tracker.get_by_status("observing")) == 0
         assert len(tracker.get_by_status("rejected")) == 1
         assert len(tracker.get_by_status("decaying")) == 0

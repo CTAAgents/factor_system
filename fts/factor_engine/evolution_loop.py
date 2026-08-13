@@ -22,11 +22,10 @@ HARNESS §11-loop-engineering.md §2.2:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, cast
 
@@ -110,37 +109,56 @@ def _log_consistency_event(
 from .contracts import (  # noqa: E402 — 延迟导入规避循环依赖
     DEFAULT_BUDGET_CONFIG,
     BudgetConfig,
+    EvolutionState,
     FactorCorrelation,
     FactorEvaluation,
     FactorProgram,
 )
-from .audit import FactorAuditor, FactorAuditReport  # noqa: E402
+from .audit import FactorAuditReport  # noqa: E402
 from .evaluation_chain import (  # noqa: E402
     EvaluationChain,
 )
-from .experience_chain import ExperienceChain  # noqa: E402
-from .macro_evolution import MacroEvolver, get_default_llm_client  # noqa: E402
-from .micro_evolution import evolve_micro  # noqa: E402
+from .experience_chain import ExperienceChain, ParentFailureContext  # noqa: E402
+from .macro_evolution import get_default_llm_client  # noqa: E402
 from .seed_pool import SeedPool  # noqa: E402
-from .signal_cache import SignalCache  # noqa: E402
 from .state import EvolutionStateManager, generate_trace_id  # noqa: E402
 from .success_pattern import SuccessPatternReport  # noqa: E402
 from .verifier import FactorVerifier, get_global_verifier  # noqa: E402
 
-# ─── UCT 常量（34 计划 Phase 46a：单一事实源迁移至 evolution_uct.py，
-#    此处 re-export 保持测试 `from ...evolution_loop import UCT_EXPLORATION_C` 兼容） ──
-
-from .evolution_uct import EvolutionUctMixin, UCT_EXPLORATION_C  # noqa: E402
+# ─── UCT 协作类（34 计划 C 阶段 Phase 47a：EvolutionUctMixin 组合式重构为
+#    UctSelector，主类组合持有 + 转发桩兼容；UCT_EXPLORATION_C 单一事实源
+#    仍在本模块，此处 re-export 保持测试 `from ...evolution_loop import
+#    UCT_EXPLORATION_C` 兼容） ──
+from .evolution_uct import UctSelector, UCT_EXPLORATION_C  # noqa: E402
 
 # ─── 领域 J trace Mixin（34 计划 Phase 46b：evolution_trace.py 迁移，
 #    _QualityInspectionResult re-export 保持测试 import 兼容） ──
-from .evolution_trace import EvolutionTraceMixin, _QualityInspectionResult  # noqa: E402
+from .evolution_trace import TraceRecorder, _QualityInspectionResult  # noqa: E402
 
-# ─── 领域 G 演化通道 Mixin（34 计划 Phase 46c：evolution_channels.py 迁移） ──
-from .evolution_channels import EvolutionChannelsMixin  # noqa: E402
+# ─── 领域 G 演化通道协作类（34 计划 C 阶段 Phase 47g：EvolutionChannelsMixin
+#    组合式重构为 EvolutionChannels，主类组合持有 + 转发桩/property 兼容） ──
+from .evolution_channels import EvolutionChannels  # noqa: E402
 
-# ─── 领域 D 种子/横截面 Mixin（34 计划 Phase 46d：evolution_seeds.py 迁移） ──
-from .evolution_seeds import EvolutionSeedsMixin  # noqa: E402
+# ─── 领域 D 种子/横截面协作类（34 计划 C 阶段 Phase 47h：EvolutionSeedsMixin
+#    组合式重构为 SeedManager，主类组合持有 + 转发桩/property 兼容） ──
+from .evolution_seeds import SeedManager  # noqa: E402
+
+# ─── 领域 E 审计/验证 Mixin（34 计划 Phase 46e：evolution_audit.py 迁移） ──
+from .evolution_audit import AuditPipeline  # noqa: E402
+
+# ─── 领域 F 定期评审/数据质量 Mixin（34 计划 Phase 46f：evolution_review.py 迁移） ──
+from .evolution_review import FactorReviewer  # noqa: E402
+
+# ─── 领域 H 候选预筛协作类（C 阶段 Phase 47b：evolution_prefilter.py 改造） ──
+from .evolution_prefilter import CandidatePrefilter  # noqa: E402
+
+# ─── 领域 C 精英晋升/持久化 Mixin（34 计划 Phase 46h：evolution_promote.py 迁移） ──
+from .evolution_promote import EliteStore  # noqa: E402
+
+# ─── 领域 B 候选准入链协作类（34 计划 C 阶段 Phase 47i：EvolutionCandidateMixin
+#    组合式重构为 CandidateProcessor，主类组合持有 + 转发桩/property 兼容；
+#    C 阶段 9 协作类收官，继承链清零） ──
+from .evolution_candidate import CandidateProcessor  # noqa: E402
 
 # GAP-070: 质检链信号缓存容量上限（LRU，超出淘汰最久未使用项）。
 # 每条目为一份完整面板信号（~4MB/104品种×5163日），16 条上限覆盖单候选
@@ -265,7 +283,7 @@ class _QualityInspectionCompat:
 # ─── 演化循环 ─────────────────────────────────────────────
 
 
-class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMixin, EvolutionSeedsMixin):
+class EvolutionLoop:
     """L2 因子演化主循环。
 
     Usage:
@@ -276,13 +294,12 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         )
         result = loop.run()
 
-    34 计划（plans/34-evolution-loop-refactor-inventory.md）B 阶段：
-    领域 Mixin 组合模式。领域 I（UCT 选择 + 熔断/提前停止）已抽取至
-    evolution_uct.py（EvolutionUctMixin），领域 J（trace 记录 + 经验链 +
-    实验日志）已抽取至 evolution_trace.py（EvolutionTraceMixin），领域 G
-    （GP/深度/算子 DSL 演化通道）已抽取至 evolution_channels.py
-    （EvolutionChannelsMixin），后续领域按盘点顺序推进，
-    公开 API 与行为等价不变。
+    34 计划（plans/34-evolution-loop-refactor-inventory.md）C 阶段：领域 Mixin
+    组合式重构为协作类（组合持有），Phase 47a-47i 全部交付——UctSelector（47a）/
+    CandidatePrefilter（47b）/EliteStore（47c）/AuditPipeline（47d）/
+    TraceRecorder（47e）/FactorReviewer（47f）/EvolutionChannels（47g）/
+    SeedManager（47h）/CandidateProcessor（47i），**继承链清零**，主类组合持有
+    9 个协作类实例 + 转发桩/property 兼容层，公开 API 与行为等价不变。
     """
 
     def __init__(
@@ -326,8 +343,6 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         self.evolution_mode = _raw_mode
         self.factor_db_path = factor_db_path
         self._is_cross_section = cross_section_data is not None
-        # GAP-I304 (v2.79.0): Barra 风格暴露缓存（成功=dict / 失败=None，避免每因子重复构建）
-        self._barra_exposures_cache: Optional[dict[str, Any]] = None
 
         # v2.59.0 (GAP-F03): 期货横截面模式自动注入板块映射（板块/产业链中性化）
         # 从 FUTURES_SECTOR_MAP 反向构建 {symbol: sector}；futures_neutralization=false
@@ -373,6 +388,7 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         # ── P1-3 (Phase 3, 26 计划 §8): 提前达标停止（保守默认关闭） ──
         # budget 未显式配置时回退 FTSConfig（env FTS_EVOLUTION_STOP_* 可控）；
         # DEFAULT_BUDGET_CONFIG 不含这两个键，故默认走 FTSConfig（enabled=False）。
+        # C 阶段 47a：解析结果传给 UctSelector 构造（状态装配已随迁协作类）。
         try:
             from fts.config.settings import get_config as _get_stop_cfg
 
@@ -382,11 +398,8 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         except Exception:
             _stop_enabled_cfg = False
             _stop_k_cfg = 5
-        self._evolution_stop_enabled = bool(self.budget.get("evolution_stop_enabled", _stop_enabled_cfg))
-        self._evolution_stop_k = int(self.budget.get("evolution_stop_consecutive_empty_generations", _stop_k_cfg))
-        self._consecutive_empty_generations: int = 0
-        self._early_stop_last_count: int = 0
-        self._early_stop_reason: Optional[str] = None
+        _stop_enabled = bool(self.budget.get("evolution_stop_enabled", _stop_enabled_cfg))
+        _stop_k = int(self.budget.get("evolution_stop_consecutive_empty_generations", _stop_k_cfg))
         if verifier is not None:
             self.verifier = verifier
         elif market == "futures":
@@ -407,70 +420,26 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
             self._micro_staged_evolution = bool(getattr(_micro_cfg, "micro_staged_evolution", True))
             self._micro_coarse_trials = int(getattr(_micro_cfg, "micro_coarse_trials", 20))
             self._micro_coarse_ic_floor = float(getattr(_micro_cfg, "micro_coarse_ic_floor", 0.02))
-            # GAP-I206 (v2.71.0): L2 准入去冗余配置
-            self._l2_elite_corr_threshold = float(getattr(_micro_cfg, "l2_elite_corr_threshold", 0.9))
-            self._l2_elite_corr_max_scan = int(getattr(_micro_cfg, "l2_elite_corr_max_scan", 50))
-            self._l2_elite_corr_debug = bool(getattr(_micro_cfg, "l2_elite_corr_debug", False))
-            # GAP-I206 补充（v2.71.0）：正交化闭环配置
-            self._l2_elite_orthogonalize = bool(getattr(_micro_cfg, "l2_elite_orthogonalize", True))
-            self._l2_orthogonal_residual_corr_max = float(getattr(_micro_cfg, "l2_orthogonal_residual_corr_max", 0.3))
-            self._l2_orthogonal_min_retained_ratio = float(getattr(_micro_cfg, "l2_orthogonal_min_retained_ratio", 0.3))
-            # GAP-I206 补充（v2.72.0）：正交基底配置
-            self._l2_orthogonal_basis_enabled = bool(getattr(_micro_cfg, "l2_orthogonal_basis_enabled", True))
-            self._l2_orthogonal_basis_max_size = int(getattr(_micro_cfg, "l2_orthogonal_basis_max_size", 10))
-            self._l2_orthogonal_basis_min_sharpe = float(getattr(_micro_cfg, "l2_orthogonal_basis_min_sharpe", 1.0))
             # GAP-I305（v2.72.0）：衰减自动退役配置
             self._decay_observe_slope = float(getattr(_micro_cfg, "decay_observe_slope", 0.10))
             self._decay_retire_slope = float(getattr(_micro_cfg, "decay_retire_slope", 0.20))
             self._decay_slope_min_points = int(getattr(_micro_cfg, "decay_slope_min_points", 6))
             self._decay_auto_retire_enabled = bool(getattr(_micro_cfg, "decay_auto_retire_enabled", True))
-            # GAP-XXX (v2.102.0): 结构性聚类配额配置（替代 max_per_family 家族配额，
-            # family 为来源标签非结构维度，多样性控制改由信号相关性承担）
-            self._cluster_quota_enabled = bool(getattr(_micro_cfg, "structure_cluster_quota_enabled", True))
-            self._cluster_max = int(getattr(_micro_cfg, "structure_cluster_max", 15))
-            self._cluster_corr_threshold = float(getattr(_micro_cfg, "structure_cluster_corr_threshold", 0.85))
-            self._cluster_max_scan = int(getattr(_micro_cfg, "l2_elite_corr_max_scan", 50))
+
         except Exception:
             # 配置读取失败时采用模块默认值，不阻断演化
             self._micro_staged_evolution = True
             self._micro_coarse_trials = 20
             self._micro_coarse_ic_floor = 0.02
-            self._l2_elite_corr_threshold = 0.9
-            self._l2_elite_corr_max_scan = 50
-            self._l2_elite_corr_debug = False
-            self._l2_elite_orthogonalize = True
-            self._l2_orthogonal_residual_corr_max = 0.3
-            self._l2_orthogonal_min_retained_ratio = 0.3
-            self._l2_orthogonal_basis_enabled = True
-            self._l2_orthogonal_basis_max_size = 10
-            self._l2_orthogonal_basis_min_sharpe = 1.0
             self._decay_observe_slope = 0.10
             self._decay_retire_slope = 0.20
             self._decay_slope_min_points = 6
             self._decay_auto_retire_enabled = True
-            self._cluster_quota_enabled = True
-            self._cluster_max = 15
-            self._cluster_corr_threshold = 0.85
-            self._cluster_max_scan = 50
 
         # 子模块
         self.state_manager = EvolutionStateManager(self.memory_dir)
         self.experience_chain = ExperienceChain(self.memory_dir)
-        self.macro_evolver = MacroEvolver(
-            llm_client=self.llm_client,
-            experience_chain=self.experience_chain,
-            max_tokens_per_call=self.budget["max_tokens_per_factor"],
-        )
         self.evaluation_chain = EvaluationChain()
-        # GAP-070: 质检链信号缓存（三级评估/消融/鲁棒性/SHAP 共享，避免同一候选重复执行因子代码）
-        self._signal_cache = SignalCache(max_entries=_QC_SIGNAL_CACHE_MAX_ENTRIES)
-
-        # Phase 1.2 (P0-1): 成功模式报告进程内缓存（避免每代重复读取经验链）
-        self._success_pattern_cache: Optional[SuccessPatternReport] = None
-
-        # Phase 2 (P1-2): 结构化实验日志——run 内候选聚合 + 导出目录
-        self._experiment_log_dir: str = str(experiment_log_dir) if experiment_log_dir else "data"
-        self._experiment_variants: list[dict] = []
 
         # 子模块: 因子质检过滤器 (Phase A.1 集成)
         # 使用 _QualityInspectionCompat 替代已删除的 pipeline.FactorQualityInspection
@@ -478,30 +447,6 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
             card_config=quality_card_config,
             min_grade=quality_min_grade,
         )
-
-        # 子模块: 因子审计器 (Phase B.3 集成)
-        # audit_config: 允许外部注入审计阈值（如期货低信噪比场景放宽 OOS 阈值）
-        self.auditor = FactorAuditor(config=audit_config) if audit_config else FactorAuditor()
-
-        # 子模块: 高IC筛查器 (Phase B.4 集成, 所有市场统一)
-        from .high_ic_screener import HighICScreener, HighICScreenConfig
-
-        if market == "futures":
-            # 期货市场放宽 V5 经济逻辑维度最低分（LLM 演化因子 L2 评分偏低）
-            futures_config = HighICScreenConfig(logic_min_score=1.0)
-            self.high_ic_screener = HighICScreener(config=futures_config)
-        else:
-            self.high_ic_screener = HighICScreener()
-
-        # 子模块: 端到端回测流水线 (Phase B.2 集成)
-        from .backtest_pipeline import BacktestPipeline, PipelineConfig
-
-        self.backtest_pipeline = BacktestPipeline(config=PipelineConfig())
-
-        # 子模块: GP 特征演化引擎 (Phase C.1 集成)
-        from .feature_ops import FeatureOpsEngine
-
-        self.feature_ops_engine = FeatureOpsEngine()
 
         # 子模块: 数据质量监控器 (Phase B.1 集成)
         from ..monitor.data_quality_monitor import DataQualityMonitor
@@ -512,63 +457,6 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         from ..monitor import set_data_quality_monitor
 
         set_data_quality_monitor(self.data_quality_monitor)
-
-        # 子模块: 精英因子追踪器 (Phase A.2 集成)
-        from ..monitor.elite_tracker import AutoRetireConfig, EliteFactorTracker
-
-        self.elite_tracker = EliteFactorTracker(
-            tracking_dir=str(self.memory_dir / "tracking"),
-            retire_config=AutoRetireConfig(
-                observe_slope=self._decay_observe_slope,
-                retire_slope=self._decay_retire_slope,
-                slope_min_points=self._decay_slope_min_points,
-            ),
-        )
-
-        # GAP-I206 补充（v2.72.0）: 多因子正交基底（Gram-Schmidt 迭代残差化）
-        from .orthogonal_basis import OrthogonalBasisManager
-
-        self.orthogonal_basis = OrthogonalBasisManager(
-            basis_path=str(self.memory_dir / "orthogonal_basis.json"),
-            max_size=self._l2_orthogonal_basis_max_size,
-            min_sharpe=self._l2_orthogonal_basis_min_sharpe,
-            residual_corr_max=self._l2_orthogonal_residual_corr_max,
-            min_retained_ratio=self._l2_orthogonal_min_retained_ratio,
-        )
-
-        # 子模块: 消融实验 (Phase A 集成)
-        from .ablation import AblationExperiment
-
-        self.ablation_experiment = AblationExperiment(random_seed=42)
-
-        # 子模块: SHAP 可解释性分析 (Phase B 集成)
-        from .shap_analyzer import ShapAnalyzer
-
-        # GAP-080 (v2.102.0): SHAP 批量计算降频——从 FTSConfig 读取采样参数
-        # （默认 n_extreme=25 / n_background=50 / nsamples=50，env 可覆盖）
-        from fts.config.settings import get_config as _get_shap_cfg
-
-        _shap_cfg = _get_shap_cfg()
-        self.shap_analyzer = ShapAnalyzer(
-            n_extreme=_shap_cfg.shap_n_extreme,
-            n_background=_shap_cfg.shap_n_background,
-            nsamples=_shap_cfg.shap_nsamples,
-        )
-
-        # 子模块: 鲁棒性审查 (Phase B 集成)
-        from .robustness import RobustnessTester
-
-        self.robustness_tester = RobustnessTester()
-
-        # 子模块: 因果验证 (Phase C 集成)
-        from .causal_validator import CausalValidator
-
-        self.causal_validator = CausalValidator()
-
-        # 子模块: 特征重要性分析 (Phase C.1 集成)
-        from .feature_importance import FeatureImportanceAnalyzer
-
-        self.feature_importance_analyzer = FeatureImportanceAnalyzer()
 
         # 子模块: 逻辑监控 (Phase C.2 集成)
         from ..monitor.logic_monitor import LogicMonitor
@@ -581,12 +469,47 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         self.feedback_loop = FeedbackLoop()
 
         # 状态
-        self._prior_evaluations: list[FactorEvaluation] = []
-        self._consecutive_low_ic: int = 0
-        # UCT 统计: {factor_id: {"visits": int, "total_reward": float}}
-        self._uct_stats: dict[str, dict[str, float]] = {}
-        # DuckDB 仓储（延迟初始化）
-        self._repo: Optional[Any] = None
+        # ── C 阶段 47a: UCT 协作类（UctSelector）——领域状态随迁协作类，
+        # 主循环仅持 _consecutive_low_ic 可变引用（box），经 property 读写。
+        self._low_ic_box: list[int] = [0]
+        self._uct_selector = UctSelector(
+            budget=self.budget,
+            low_ic_box=self._low_ic_box,
+            evolution_stop_enabled=_stop_enabled,
+            evolution_stop_k=_stop_k,
+        )
+        # ── C 阶段 47b: 候选预筛协作类（CandidatePrefilter）——领域 H 纯读
+        # 全局上下文；上下文可被主类/测试动态重赋值，故注入 owner 动态读取。
+        self._candidate_prefilter = CandidatePrefilter(owner=self)
+        # ── C 阶段 47d: 审计/验证管线协作类（AuditPipeline）——领域 E 组件与
+        # _signal_cache（34 §8.3 归本类，CandidateProcessor 经 property 转发共享）
+        # 随迁构造；audit_config 为 __init__ 注入参数。
+        self._audit_pipeline = AuditPipeline(owner=self, audit_config=audit_config)
+        # ── C 阶段 47e: trace 记录/经验链协作类（TraceRecorder）——领域 J 状态
+        # 随迁构造，experience_chain/memory_dir/state_manager/market 经 owner 读取。
+        self._trace_recorder = TraceRecorder(owner=self, experiment_log_dir=experiment_log_dir)
+        # ── C 阶段 47f: 定期评审/数据质量协作类（FactorReviewer）——领域 F 无
+        # 独享状态，组件经 owner 动态读取。
+        self._factor_reviewer = FactorReviewer(owner=self)
+        # ── C 阶段 47g: 演化通道协作类（EvolutionChannels）——领域 G 组件
+        # （macro_evolver/feature_ops_engine/feature_importance_analyzer）随迁
+        # 构造（依赖 owner.llm_client/experience_chain/budget，须在 llm_client
+        # 与 experience_chain 装配之后），上下文经 owner 动态读取。
+        self._evolution_channels = EvolutionChannels(owner=self)
+        # ── C 阶段 47h: 种子管理/横截面协作类（SeedManager）——领域 D 状态
+        # （_barra_exposures_cache/_barra_exposures_attempted）随迁构造，
+        # 上下文（含可变 industry_map/cap_map）经 owner 动态读取。
+        self._seed_manager = SeedManager(owner=self)
+        # ── C 阶段 47i: 候选准入链协作类（CandidateProcessor）——领域 B 状态
+        # （_prior_evaluations）随迁构造，_consecutive_low_ic（主循环持有，
+        # 经 _low_ic_box property 共享）/_signal_cache（归 AuditPipeline）经
+        # owner 动态读写。C 阶段 9 协作类收官，继承链清零。
+        self._candidate_processor = CandidateProcessor(owner=self)
+        # ── C 阶段 47c: 精英晋升/持久化协作类（EliteStore）——领域 C 重状态
+        # 随迁协作类构造（_repo/_cluster_*/_l2_*/orthogonal_basis/high_ic_screener/
+        # elite_tracker），上下文经 owner 动态读取；测试对 loop 的属性读写与
+        # _get_repo 等 mock 经 property 转发 + owner 转发生效。
+        self._elite_store = EliteStore(owner=self)
 
         # GAP-I201 (v2.65.0): 批量挖掘配置（evolution_mode="batch" 时生效）
         from fts.config.settings import get_config as _batch_cfg
@@ -929,41 +852,6 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
                 trace_id,
                 state.get("last_generation", 0),
             )
-
-    def _write_seed_correlation_index(
-        self,
-        seed_correlations: list[FactorCorrelation],
-        trace_id: str,
-    ) -> None:
-        """将 L2 种子因子相关性预检结果写入 elite 目录的共享索引文件。
-
-        该文件供 L3 Portfolio Loop 批量读取，作为相关性管理的先验数据。
-        """
-        import json
-        from datetime import datetime
-
-        index_path = self.elite_dir / "_l2_seed_correlation_index.json"
-        index_data = {
-            "source": "l2_seed_correlation_check",
-            "trace_id": trace_id,
-            "created_at": datetime.now().isoformat(),
-            "threshold": 0.95,
-            "total_pairs": len(seed_correlations),
-            "correlations": [
-                {
-                    "factor_id_a": sc.get("factor_id_a", ""),
-                    "factor_id_b": sc.get("factor_id_b", ""),
-                    "pearson": sc.get("pearson", 0),
-                    "spearman": sc.get("spearman", 0),
-                }
-                for sc in seed_correlations
-            ],
-        }
-        index_path.write_text(
-            json.dumps(index_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        print(f"[evo] L2 相关性索引已写入: {index_path} ({len(seed_correlations)} 对高相关因子)")
 
     # ─── 内部方法 ───
 
@@ -1426,6 +1314,184 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         """batch 预筛回调：包装 _quick_prefilter（返回预筛 IC 供排序截断）。"""
         return self._quick_prefilter(factor, trace_id)
 
+    # ── C 阶段 47b: 领域 H 候选预筛方法转发桩（行为等价，委托
+    #    self._candidate_prefilter，兼容测试直接调用/patch，见 34 §8.5） ──
+
+    def _quick_prefilter(
+        self,
+        factor: FactorProgram,
+        trace_id: str,
+    ) -> tuple[bool, str, float]:
+        return self._candidate_prefilter._quick_prefilter(factor, trace_id)
+
+    def _cross_section_prefilter(
+        self,
+        factor: FactorProgram,
+        trace_id: str,
+    ) -> tuple[bool, str, float]:
+        return self._candidate_prefilter._cross_section_prefilter(factor, trace_id)
+
+    def _check_factor_runtime(
+        self,
+        factor: FactorProgram,
+    ) -> tuple[bool, str]:
+        return self._candidate_prefilter._check_factor_runtime(factor)
+
+    # ── C 阶段 47f: 领域 F 定期评审/数据质量方法转发桩（行为等价，委托
+    #    self._factor_reviewer，兼容测试直接调用/patch，见 34 §8.5） ──
+
+    def _run_periodic_factor_review(
+        self,
+        elite_ids: list[str],
+        trace_id: str,
+    ) -> None:
+        self._factor_reviewer._run_periodic_factor_review(elite_ids, trace_id)
+
+    def _get_factor_data_for_review(self, factor_id: str) -> Optional[dict[str, float]]:
+        return self._factor_reviewer._get_factor_data_for_review(factor_id)
+
+    def _register_factor_baseline(
+        self,
+        factor: FactorProgram,
+        evaluation: FactorEvaluation,
+    ) -> None:
+        self._factor_reviewer._register_factor_baseline(factor, evaluation)
+
+    def _check_factor_data_quality(
+        self,
+        factor: FactorProgram,
+        evaluation: FactorEvaluation,
+    ) -> list[Any]:
+        return self._factor_reviewer._check_factor_data_quality(factor, evaluation)
+
+    # ── C 阶段 47g: 领域 G 演化通道方法转发桩（行为等价，委托
+    #    self._evolution_channels，兼容测试直接调用/patch，见 34 §8.5） ──
+
+    def _run_gp_evolution(
+        self,
+        parent: FactorProgram,
+        generation: int,
+        trace_id: str,
+    ) -> tuple[FactorProgram, str]:
+        return self._evolution_channels._run_gp_evolution(parent, generation, trace_id)
+
+    def _run_deep_evolution(
+        self,
+        parent: FactorProgram,
+        generation: int,
+        trace_id: str,
+        model_kind: str = "gru",
+    ) -> tuple[FactorProgram, str]:
+        return self._evolution_channels._run_deep_evolution(parent, generation, trace_id, model_kind)
+
+    def _generate_operator_factor(
+        self,
+        parent: FactorProgram,
+        generation: int,
+        trace_id: str,
+    ) -> tuple[FactorProgram, str]:
+        return self._evolution_channels._generate_operator_factor(parent, generation, trace_id)
+
+    def _try_operator_engine_evolution(
+        self,
+        parent: FactorProgram,
+        generation: int,
+        trace_id: str,
+    ) -> Optional[FactorProgram]:
+        return self._evolution_channels._try_operator_engine_evolution(parent, generation, trace_id)
+
+    # ── C 阶段 47g: 领域 G 组件属性 property 转发（兼容测试对 loop.macro_evolver
+    #    / feature_ops_engine / feature_importance_analyzer 的直接读写，见 34 §8.5） ──
+
+    @property
+    def macro_evolver(self) -> Any:
+        """领域 G 宏观演化器（经 _evolution_channels 组合持有，property 转发）。"""
+        return self._evolution_channels.macro_evolver
+
+    @property
+    def feature_ops_engine(self) -> Any:
+        """领域 G GP 特征演化引擎（经 _evolution_channels 组合持有，property 转发）。"""
+        return self._evolution_channels.feature_ops_engine
+
+    @property
+    def feature_importance_analyzer(self) -> Any:
+        """领域 G 特征重要性分析器（经 _evolution_channels 组合持有，property 转发）。"""
+        return self._evolution_channels.feature_importance_analyzer
+
+    # ── C 阶段 47h: 领域 D 种子管理/横截面方法转发桩（行为等价，委托
+    #    self._seed_manager，兼容测试直接调用/patch，见 34 §8.5） ──
+
+    def _evaluate_and_promote_seeds(
+        self,
+        seeds: list[FactorProgram],
+        trace_id: str,
+        state: EvolutionState,
+        elite_ids: list[str],
+        seed_correlations: Optional[list[FactorCorrelation]] = None,
+    ) -> int:
+        return self._seed_manager._evaluate_and_promote_seeds(
+            seeds,
+            trace_id,
+            state,
+            elite_ids,
+            seed_correlations,
+        )
+
+    def _merge_l1_candidates(
+        self,
+        seeds: list[FactorProgram],
+        trace_id: str,
+    ) -> list[FactorProgram]:
+        return self._seed_manager._merge_l1_candidates(seeds, trace_id)
+
+    def _run_seed_correlation_check(
+        self,
+        seeds: list[FactorProgram],
+        trace_id: str,
+    ) -> list[FactorCorrelation]:
+        return self._seed_manager._run_seed_correlation_check(seeds, trace_id)
+
+    def _build_barra_exposures(self) -> Optional[dict[str, Any]]:
+        return self._seed_manager._build_barra_exposures()
+
+    def _build_vol_map(self) -> Optional[dict[str, float]]:
+        return self._seed_manager._build_vol_map()
+
+    def _evaluate_cross_section(self, factor: FactorProgram, trace_id: str) -> FactorEvaluation:
+        return self._seed_manager._evaluate_cross_section(factor, trace_id)
+
+    def run_microstructure_promotion(
+        self,
+        symbols: Optional[list[str]] = None,
+        limit: int = 0,
+        trace_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        return self._seed_manager.run_microstructure_promotion(symbols, limit, trace_id)
+
+    # ── C 阶段 47h: 领域 D 状态属性 property 转发（兼容测试对 loop.
+    #    _barra_exposures_cache/_barra_exposures_attempted 的直接读写，见 34 §8.5） ──
+
+    @property
+    def _barra_exposures_cache(self) -> Optional[dict[str, Any]]:
+        """领域 D Barra 风格暴露缓存（经 _seed_manager 组合持有，property 转发）。"""
+        return self._seed_manager._barra_exposures_cache
+
+    @_barra_exposures_cache.setter
+    def _barra_exposures_cache(self, value: Optional[dict[str, Any]]) -> None:
+        self._seed_manager._barra_exposures_cache = value
+
+    @property
+    def _barra_exposures_attempted(self) -> bool:
+        """领域 D Barra 暴露构建尝试标记（经 _seed_manager 组合持有，property 转发）。"""
+        return self._seed_manager._barra_exposures_attempted
+
+    @_barra_exposures_attempted.setter
+    def _barra_exposures_attempted(self, value: bool) -> None:
+        self._seed_manager._barra_exposures_attempted = value
+
+    # ── C 阶段 47i: 领域 B 候选准入链方法转发桩（行为等价，委托
+    #    self._candidate_processor，兼容测试直接调用/patch，见 34 §8.5） ──
+
     def _process_candidate(
         self,
         factor: FactorProgram,
@@ -1438,716 +1504,297 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         trace_id: str,
         seed_correlations: list[FactorCorrelation],
     ) -> bool:
-        """Step 2-6 准入链（GAP-I201 抽取，batch 与单因子路径共用）。
-
-        流程: 微观演化 → 三级评估 → UCT 反馈 → Verifier → 质量评分卡
-              → 端到端回测 → 数据质量 → 6 项强制审计 → 消融 → 因果
-              → 鲁棒性 → SHAP → 晋升/淘汰 → 状态持久化。
-
-        Args:
-            factor: 后代因子（已通过运行时校验与快速预筛）
-            parent: 父因子
-            generation: 当前代数
-            evolution_method: 演化方式
-            evolution_summary: 演化摘要
-            state: L2 演化状态
-            elite_ids: 已晋升 elite 因子 ID 列表
-            trace_id: 全链路 trace_id
-            seed_correlations: 种子相关性预检结果
-
-        Returns:
-            是否成功晋升 elite。
-        """
-        promoted = False
-
-        # ── Step 2: 微观演化（optuna 调参） ──
-        try:
-            # 横截面模式：用第一个股票的数据做微参
-            micro_data = (
-                list(self.cross_section_data.values())[0]
-                if (self._is_cross_section and self.cross_section_data is not None)
-                else self.data
-            )
-            micro_ret = self.forward_returns
-            # GAP-I205 (v2.68.0): 两阶段漏斗——粗筛低 trials 快速打分淘汰低潜力，
-            # 精筛 trials 按粗筛得分自适应 + TPE 早停；配置 micro_staged_evolution 可关闭。
-            optimized_factor, _ = evolve_micro(
-                factor,
-                micro_data,
-                micro_ret,
-                n_trials=self.n_trials_micro,
-                use_staged=self._micro_staged_evolution,
-            )
-        except Exception as e:
-            self._record_failure_trace(
-                factor,
-                generation,
-                "micro_evolution",
-                f"微观演化失败: {e}",
-                [],
-                trace_id,
-            )
-            self._record_experiment_variant(
-                factor,
-                parent,
-                generation,
-                evolution_method,
-                f"微观演化失败: {e}",
-                None,
-                "verifier_failed",
-            )
-            return False
-
-        # ── Step 3: 三级评估链 ──
-        if self._is_cross_section:
-            evaluation = self._evaluate_cross_section(optimized_factor, trace_id)
-        else:
-            # GAP-070: 注入共享信号缓存 + 统一走航配置（与审计 _build_wf_config 同源，
-            # 支撑审计复用本走航结果，消除双重 WalkForward）
-            evaluation = self.evaluation_chain.evaluate(
-                optimized_factor,
-                self.data,
-                self.forward_returns,
-                prior_evaluations=self._prior_evaluations,
-                signal_cache=self._signal_cache,
-                walk_forward_config=self._build_wf_config(self.data),
-            )
-        self._prior_evaluations.append(evaluation)
-        self.state_manager.increment_evaluated(state)
-
-        # ── UCT 反馈: 根据子因子表现更新父因子统计 ──
-        self._update_uct_stats(parent, evaluation)
-
-        # ── Step 4: Verifier 判定 ──
-        verifier_result = self.verifier.check(evaluation)
-        print(f"[DEBUG-evo] verifier_result={verifier_result}")
-        print(f"[DEBUG-evo] evaluation.get('level_1_backtest')={evaluation.get('level_1_backtest')}")
-
-        # ── Step 4.5: 因子质量评分卡 (Phase A.1) ──
-        inspection: _QualityInspectionResult = self.quality_inspector.inspect(
-            factor=optimized_factor,
-            evaluation=evaluation,
-        )
-
-        # ── Step 4.5.5: 端到端回测流水线 (Phase B.2) ──
-        backtest_result = self._run_backtest_pipeline(
-            optimized_factor,
-            evaluation,
-            trace_id,
-        )
-        if backtest_result:
-            evaluation["backtest_pipeline"] = backtest_result
-
-        # ── Step 4.5.6: 数据质量监控 (Phase B.1) ──
-        self._register_factor_baseline(optimized_factor, evaluation)
-        dq_alerts = self._check_factor_data_quality(
-            optimized_factor,
-            evaluation,
-        )
-        if dq_alerts:
-            critical = any(getattr(a, "severity", "") == "critical" for a in dq_alerts)
-            if critical:
-                print(f"[evo] 数据质量严重告警 [{optimized_factor.get('name', '?')}]: 跳过晋升")
-                self._record_experiment_variant(
-                    optimized_factor,
-                    parent,
-                    generation,
-                    evolution_method,
-                    f"数据质量严重告警: {[a.message for a in dq_alerts if getattr(a, 'severity', '') == 'critical'][:2]}",
-                    evaluation,
-                    "audit_failed",
-                )
-                return False
-
-        # ── Step 4.6: 因子强制审计 (Phase B.3) ──
-        audit_report = self._run_factor_audit(
-            optimized_factor,
-            evaluation,
-            trace_id,
-        )
-
-        # ── Step 5: 经验链记录 + 分级准入 ──
-        print(f"[DEBUG-evo] verifier_result['passed']={verifier_result.get('passed')}")
-        if verifier_result["passed"]:
-            print("[DEBUG-evo] PROMOTION PATH")
-            # 质检过滤: 仅 A/B 级晋升，C 级淘汰
-            if inspection.filtered:
-                self._log_inspection_detail(
-                    optimized_factor,
-                    inspection,
-                    "淘汰",
-                    generation,
-                )
-                self._record_quality_filtered_trace(
-                    optimized_factor,
-                    generation,
-                    trace_id,
-                    inspection,
-                    evaluation=evaluation,
-                )
-                self._record_experiment_variant(
-                    optimized_factor,
-                    parent,
-                    generation,
-                    evolution_method,
-                    f"质检过滤淘汰: 质量分={inspection.total_score}/50 ({inspection.grade}级)",
-                    evaluation,
-                    "audit_failed",
-                    quality_grade=inspection.grade,
-                )
-                return False
-
-            # 审计过滤: 审计未通过则拒绝准入
-            if not audit_report.passed:
-                failed_items = [it.name for it in audit_report.failed_items]
-                print(
-                    f"[evo] 审计未通过 [{optimized_factor.get('name', '?')}]: "
-                    f"失败项={failed_items}, 通过率={audit_report.pass_rate:.0%}"
-                )
-                self._record_audit_failed_trace(
-                    optimized_factor,
-                    generation,
-                    trace_id,
-                    audit_report,
-                    evaluation=evaluation,
-                )
-                self._record_experiment_variant(
-                    optimized_factor,
-                    parent,
-                    generation,
-                    evolution_method,
-                    f"审计未通过: 失败项={failed_items}, 通过率={audit_report.pass_rate:.0%}",
-                    evaluation,
-                    "audit_failed",
-                )
-                return False
-
-            # ── Step 4.6.5: 消融实验检查 (Phase A 集成) ──
-            ablation_result = self._run_ablation_check(
-                optimized_factor,
-                evaluation,
-                trace_id,
-            )
-            evaluation["ablation_check"] = ablation_result
-            if not ablation_result.get("passed", True):
-                print(f"[evo] 消融实验未通过 [{optimized_factor.get('name', '?')}]: 疑似伪相关")
-                self._record_ablation_failed_trace(
-                    optimized_factor,
-                    generation,
-                    trace_id,
-                    ablation_result,
-                )
-                self._record_experiment_variant(
-                    optimized_factor,
-                    parent,
-                    generation,
-                    evolution_method,
-                    "消融实验未通过: 疑似伪相关",
-                    evaluation,
-                    "audit_failed",
-                )
-                return False
-
-            # ── Step 4.6.6: 因果结构审查 (Phase C 集成) ──
-            causal_result = self._run_causal_validation(
-                optimized_factor,
-                evaluation,
-                trace_id,
-            )
-            evaluation["causal_validation"] = causal_result
-            if not causal_result.get("passed", True):
-                print(f"[evo] 因果审查未通过 [{optimized_factor.get('name', '?')}]: 事件敏感")
-                self._record_causal_failed_trace(
-                    optimized_factor,
-                    generation,
-                    trace_id,
-                    causal_result,
-                )
-                self._record_experiment_variant(
-                    optimized_factor,
-                    parent,
-                    generation,
-                    evolution_method,
-                    "因果审查未通过: 事件敏感",
-                    evaluation,
-                    "audit_failed",
-                )
-                return False
-
-            # ── Step 4.6.7: 鲁棒性审查 (Phase B 集成) ──
-            robustness_result = self._run_robustness_check(
-                optimized_factor,
-                evaluation,
-                trace_id,
-            )
-            evaluation["robustness_check"] = robustness_result
-            if not robustness_result.get("passed", True):
-                print(f"[evo] 鲁棒性审查未通过 [{optimized_factor.get('name', '?')}]")
-                self._record_robustness_failed_trace(
-                    optimized_factor,
-                    generation,
-                    trace_id,
-                    robustness_result,
-                )
-                self._record_experiment_variant(
-                    optimized_factor,
-                    parent,
-                    generation,
-                    evolution_method,
-                    "鲁棒性审查未通过",
-                    evaluation,
-                    "audit_failed",
-                )
-                return False
-
-            # ── Step 4.6.8: SHAP 可解释性分析 (Phase B 集成) ──
-            shap_result = self._run_shap_analysis(
-                optimized_factor,
-                evaluation,
-                trace_id,
-            )
-            evaluation["shap_analysis"] = shap_result
-
-            # 晋级精英池（去重检查 + 质量评分附加 + 审计报告）
-            self._log_inspection_detail(
-                optimized_factor,
-                inspection,
-                "通过",
-                generation,
-            )
-            promoted_path = self._promote_to_elite(
-                optimized_factor,
-                evaluation,
-                seed_correlations=seed_correlations,
-                quality_score=inspection.quality_score,
-                audit_report=audit_report,
-            )
-            if promoted_path is None:
-                # 因子名称重复，跳过
-                self._record_experiment_variant(
-                    optimized_factor,
-                    parent,
-                    generation,
-                    evolution_method,
-                    "因子名称重复，跳过晋升",
-                    evaluation,
-                    "audit_failed",
-                    quality_grade=inspection.grade,
-                )
-                return False
-            self.state_manager.increment_promoted(state)
-            elite_ids.append(optimized_factor["factor_id"])
-            self._record_success_trace(
-                optimized_factor,
-                generation,
-                evolution_method,
-                evolution_summary,
-                evaluation,
-                [
-                    f"代 {generation} 晋级精英池",
-                    f"质量分={inspection.total_score}/50 ({inspection.grade}级)",
-                    f"审计通过率={audit_report.pass_rate:.0%}",
-                ],
-                trace_id,
-            )
-            self._record_experiment_variant(
-                optimized_factor,
-                parent,
-                generation,
-                evolution_method,
-                evolution_summary,
-                evaluation,
-                "promoted",
-                quality_grade=inspection.grade,
-            )
-            self._consecutive_low_ic = 0
-            print("[DEBUG-evo] promotion path: _consecutive_low_ic reset to 0")
-            promoted = True
-        else:
-            # 失败轨迹
-            self._record_failure_trace(
-                optimized_factor,
-                generation,
-                evolution_method,
-                evolution_summary,
-                verifier_result["failure_reasons"],
-                trace_id,
-                evaluation=evaluation,
-            )
-            self._record_experiment_variant(
-                optimized_factor,
-                parent,
-                generation,
-                evolution_method,
-                f"Verifier 未通过: {verifier_result.get('failure_reasons', [])[:3]}",
-                evaluation,
-                "verifier_failed",
-            )
-            # 检查低 IC
-            bt = evaluation.get("level_1_backtest", {})
-            if abs(bt.get("ic", 0)) < self.budget["circuit_breaker_low_ic_threshold"]:
-                self._consecutive_low_ic += 1
-                print(
-                    f"[DEBUG-evo] failure path, low IC: _consecutive_low_ic incremented to {self._consecutive_low_ic}"
-                )
-            else:
-                self._consecutive_low_ic = 0
-                print("[DEBUG-evo] failure path, not low IC: _consecutive_low_ic reset to 0")
-
-        # ── Step 6: 状态持久化 ──
-        state["last_generation"] = generation
-        self.state_manager.save(state)
-
-        return promoted
-
-    # ── GAP-I206 (v2.71.0): L2 准入去冗余 — 与既有 elite 相关性检查 ──
-
-    def _scan_elite_correlations(
-        self,
-        factor: FactorProgram,
-        threshold: float,
-        max_scan: int,
-    ) -> list[dict[str, Any]]:
-        """扫描既有 elite，返回与新因子信号 |corr| ≥ threshold 的相关性对。
-
-        新因子信号只计算一次；既有 elite 执行失败/NaN 兜底跳过；索引文件跳过。
-        L2 准入去冗余（_check_elite_correlation）与结构簇配额（_count_cluster_members）
-        共用本扫描，避免重复实现。
-
-        Args:
-            factor: 待检查因子
-            threshold: 相关性判定阈值
-            max_scan: 扫描上限（容量护栏）
-
-        Returns:
-            [{"factor_name_b", "factor_id_b", "pearson", "abs_pearson"}, ...]
-            按 abs_pearson 降序；无命中返回 []
-        """
-        from .backtest_pipeline import BacktestPipeline
-
-        if not self.elite_dir.exists():
-            return []
-
-        # 新因子信号只计算一次，避免对每个既有 elite 重复执行
-        try:
-            new_signal = BacktestPipeline._execute_factor_code(
-                factor.get("code", ""),
-                self.data,
-                factor.get("params", {}),
-            )
-        except Exception:  # noqa: BLE001
-            return []
-        if not isinstance(new_signal, np.ndarray) or len(new_signal) != len(self.data):
-            return []
-
-        correlations: list[dict[str, Any]] = []
-        scanned = 0
-        for fp in sorted(self.elite_dir.glob("*.json")):
-            if fp.name == "_l2_seed_correlation_index.json":
-                continue
-            if scanned >= max_scan:
-                break
-            try:
-                data = json.loads(fp.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
-                continue
-            if not (isinstance(data, dict) and data.get("code") and data.get("factor_id")):
-                continue
-            if data.get("factor_id") == factor.get("factor_id"):
-                continue
-            scanned += 1
-            try:
-                other_signal = BacktestPipeline._execute_factor_code(
-                    data.get("code", ""),
-                    self.data,
-                    data.get("params", {}),
-                )
-            except Exception:  # noqa: BLE001
-                continue
-            if not isinstance(other_signal, np.ndarray) or len(other_signal) != len(new_signal):
-                continue
-            valid = ~(np.isnan(other_signal) | np.isnan(new_signal))
-            if valid.sum() < 10:
-                continue
-            pearson = float(np.corrcoef(other_signal[valid], new_signal[valid])[0, 1])
-            if np.isnan(pearson):
-                continue
-            if abs(pearson) >= threshold:
-                correlations.append(
-                    {
-                        "factor_name_b": data.get("name", data.get("factor_name", "?")),
-                        "factor_id_b": data.get("factor_id", "?"),
-                        "pearson": pearson,
-                        "abs_pearson": abs(pearson),
-                    }
-                )
-        correlations.sort(key=lambda c: c["abs_pearson"], reverse=True)
-        return correlations
-
-    def _check_elite_correlation(self, factor: FactorProgram) -> Optional[dict[str, Any]]:
-        """L2 准入去冗余：新演化因子晋升前与既有 elite 因子的信号相关性检查。
-
-        对既有 elite 池（self.elite_dir 下已晋升 JSON）逐个执行因子代码计算
-        信号，与新因子信号做 Pearson 相关；存在相关绝对值 ≥ 阈值
-        （l2_elite_corr_threshold，默认 0.9）的高相关对时返回最高相关对列表，
-        否则返回 None（放行）。种子因子（shadow_observe=False）不经过本检查，
-        由 _promote_to_elite 调用侧控制。
-
-        Args:
-            factor: 待晋升的新演化因子
-
-        Returns:
-            None: 无既有 elite / 无高相关命中（放行）
-            dict: {"correlations": [{factor_name_b, factor_id_b, pearson,
-                  abs_pearson}, ...]} 相关 ≥ 阈值的对（按 abs_pearson 降序）
-        """
-        correlations = self._scan_elite_correlations(
+        return self._candidate_processor._process_candidate(
             factor,
-            self._l2_elite_corr_threshold,
-            self._l2_elite_corr_max_scan,
-        )
-        if not correlations:
-            return None
-        return {"correlations": correlations}
-
-    def _count_cluster_members(self, factor: FactorProgram) -> int:
-        """结构簇规模代理：与既有 elite 信号 |corr| ≥ cluster_corr_threshold 的成员数。
-
-        结构性聚类配额（GAP-XXX）替代 max_per_family 家族配额：family 为知识注入
-        来源标签（非正交结构维度），多样性控制改由信号相关性承担。复用
-        _scan_elite_correlations 扫描逻辑；无既有 elite / 信号异常返回 0（放行）。
-
-        Args:
-            factor: 待晋升因子
-
-        Returns:
-            同类成员数（0 = 放行）
-        """
-        return len(
-            self._scan_elite_correlations(
-                factor,
-                self._cluster_corr_threshold,
-                self._cluster_max_scan,
-            )
+            parent,
+            generation,
+            evolution_method,
+            evolution_summary,
+            state,
+            elite_ids,
+            trace_id,
+            seed_correlations,
         )
 
-    def _orthogonalize_via_basis(
+    # ── C 阶段 47i: 领域 B 状态属性 property 转发（兼容测试对 loop.
+    #    _prior_evaluations 的直接读写，见 34 §8.5） ──
+
+    @property
+    def _prior_evaluations(self) -> list[FactorEvaluation]:
+        """领域 B 历史评估列表（经 _candidate_processor 组合持有，property 转发）。"""
+        return self._candidate_processor._prior_evaluations
+
+    @_prior_evaluations.setter
+    def _prior_evaluations(self, value: list[FactorEvaluation]) -> None:
+        self._candidate_processor._prior_evaluations = value
+
+    # ── C 阶段 47e: 领域 J trace/经验链/实验日志方法转发桩（行为等价，委托
+    #    self._trace_recorder，兼容测试直接调用/patch，见 34 §8.5） ──
+
+    def _build_parent_failure_ctx(self, parent: FactorProgram) -> Optional[ParentFailureContext]:
+        return self._trace_recorder._build_parent_failure_ctx(parent)
+
+    def _build_success_pattern_report(self) -> Optional[SuccessPatternReport]:
+        return self._trace_recorder._build_success_pattern_report()
+
+    def _record_experiment_variant(
         self,
         factor: FactorProgram,
-    ) -> Optional[dict[str, Any]]:
-        """多因子正交基底正交化（GAP-I206 补充，v2.72.0）。
+        parent: Optional[FactorProgram],
+        generation: int,
+        method: str,
+        summary: str,
+        evaluation: Optional[FactorEvaluation],
+        outcome: str,
+        quality_grade: Optional[str] = None,
+    ) -> None:
+        self._trace_recorder._record_experiment_variant(
+            factor, parent, generation, method, summary, evaluation, outcome, quality_grade
+        )
 
-        候选因子与既有 elite 高相关时，优先对正交基底（Gram-Schmidt）做
-        迭代 OLS 残差化：依次剥离候选信号与基底每个成员的线性成分，得到
-        与整个基底近似正交的残差信号。质量合格（残差与基底最大相关 <
-        ``l2_orthogonal_residual_corr_max`` 且保留比 > ``l2_orthogonal_min_retained_ratio``）
-        则返回正交化因子 dict 并注册为新基底成员；否则返回 None（回退
-        单参照 OLS 或拒绝兜底）。
+    def _export_experiment_log(
+        self,
+        run_id: str,
+        trace_id: str,
+        generations_completed: int,
+    ) -> Optional[Path]:
+        return self._trace_recorder._export_experiment_log(run_id, trace_id, generations_completed)
 
-        Args:
-            factor: 待晋升的演化因子
-
-        Returns:
-            dict: 基底正交化版本因子；None: 基底不可用/失败/质量不合格
-        """
-        if not self._l2_orthogonal_basis_enabled:
-            return None
-        try:
-            from .backtest_pipeline import BacktestPipeline
-
-            def _basis_signal_getter(member: dict[str, Any]):
-                """从 elite 快照读取基底成员代码并执行（失败返回 None）。"""
-                fid = member.get("factor_id", "")
-                if not fid:
-                    return None
-                fp = self.elite_dir / f"{fid}.json"
-                if not fp.exists():
-                    return None
-                data = json.loads(fp.read_text(encoding="utf-8"))
-                if not (isinstance(data, dict) and data.get("code")):
-                    return None
-                return BacktestPipeline._execute_factor_code(
-                    data.get("code", ""),
-                    self.data,
-                    data.get("params", {}),
-                )
-
-            new_signal = BacktestPipeline._execute_factor_code(
-                factor.get("code", ""),
-                self.data,
-                factor.get("params", {}),
-            )
-            if not isinstance(new_signal, np.ndarray):
-                return None
-            sharpe = 0.0
-            eval_info = factor.get("evaluation")
-            if isinstance(eval_info, dict):
-                bt = eval_info.get("level_1_backtest", {})
-                if isinstance(bt, dict):
-                    sharpe = float(bt.get("sharpe", 0.0))
-            orth = self.orthogonal_basis.orthogonalize(
-                factor=factor,
-                candidate_signal=new_signal,
-                signal_getter=_basis_signal_getter,
-                sharpe=sharpe,
-            )
-            if orth is not None:
-                # 注册为新基底成员（保持基底随 elite 池动态扩充）
-                self.orthogonal_basis.register(orth)
-                logger.warning(
-                    "[orth-basis] 因子 %s 基底正交化入库（basis=%d 成员, pearson %.3f, GAP-I206 补充）",
-                    factor.get("name", "?"),
-                    len(orth.get("orthogonalized_basis", [])),
-                    orth.get("orthogonalized_pearson", 0.0),
-                )
-            return orth
-        except Exception as e:  # noqa: BLE001
-            logger.debug("[orth-basis] 基底正交化失败回退单参照: %s", e)
-            return None
-
-    def _orthogonalize_candidate(
+    def _record_audit_failed_trace(
         self,
         factor: FactorProgram,
-        pair: dict[str, Any],
+        generation: int,
+        trace_id: str,
+        audit_report: FactorAuditReport,
+        evaluation: Optional[FactorEvaluation] = None,
+    ) -> None:
+        self._trace_recorder._record_audit_failed_trace(factor, generation, trace_id, audit_report, evaluation)
+
+    def _record_ablation_failed_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        trace_id: str,
+        ablation_result: dict[str, Any],
+    ) -> None:
+        self._trace_recorder._record_ablation_failed_trace(factor, generation, trace_id, ablation_result)
+
+    def _record_robustness_failed_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        trace_id: str,
+        robustness_result: dict[str, Any],
+    ) -> None:
+        self._trace_recorder._record_robustness_failed_trace(factor, generation, trace_id, robustness_result)
+
+    def _record_causal_failed_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        trace_id: str,
+        causal_result: dict[str, Any],
+    ) -> None:
+        self._trace_recorder._record_causal_failed_trace(factor, generation, trace_id, causal_result)
+
+    def _record_success_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        mutation_type: str,
+        mutation_summary: str,
+        evaluation: FactorEvaluation,
+        lessons: list[str],
+        trace_id: str,
+    ) -> None:
+        self._trace_recorder._record_success_trace(
+            factor, generation, mutation_type, mutation_summary, evaluation, lessons, trace_id
+        )
+
+    def _record_failure_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        mutation_type: str,
+        mutation_summary: str,
+        failure_reasons: list[str],
+        trace_id: str,
+        evaluation: Optional[FactorEvaluation] = None,
+    ) -> None:
+        self._trace_recorder._record_failure_trace(
+            factor, generation, mutation_type, mutation_summary, failure_reasons, trace_id, evaluation
+        )
+
+    def _log_inspection_detail(
+        self,
+        factor: FactorProgram,
+        inspection: _QualityInspectionResult,
+        status: str,
+        generation: int,
+    ) -> None:
+        self._trace_recorder._log_inspection_detail(factor, inspection, status, generation)
+
+    def _record_quality_filtered_trace(
+        self,
+        factor: FactorProgram,
+        generation: int,
+        trace_id: str,
+        inspection: _QualityInspectionResult,
+        evaluation: Optional[FactorEvaluation] = None,
+    ) -> None:
+        self._trace_recorder._record_quality_filtered_trace(factor, generation, trace_id, inspection, evaluation)
+
+    # ── C 阶段 47e: 领域 J 实例属性 property 转发（兼容测试直接读写；
+    #    状态实际由 self._trace_recorder 持有，见 34 §8.3） ──
+
+    @property
+    def _success_pattern_cache(self) -> Optional[Any]:
+        return self._trace_recorder._success_pattern_cache
+
+    @_success_pattern_cache.setter
+    def _success_pattern_cache(self, v: Optional[Any]) -> None:
+        self._trace_recorder._success_pattern_cache = v
+
+    @property
+    def _experiment_log_dir(self) -> str:
+        return self._trace_recorder._experiment_log_dir
+
+    @_experiment_log_dir.setter
+    def _experiment_log_dir(self, v: str) -> None:
+        self._trace_recorder._experiment_log_dir = v
+
+    @property
+    def _experiment_variants(self) -> list[dict]:
+        return self._trace_recorder._experiment_variants
+
+    @_experiment_variants.setter
+    def _experiment_variants(self, v: list[dict]) -> None:
+        self._trace_recorder._experiment_variants = v
+
+    # ── C 阶段 47d: 领域 E 审计/验证管线方法转发桩（行为等价，委托
+    #    self._audit_pipeline，兼容测试直接调用/patch，见 34 §8.5） ──
+
+    def _run_backtest_pipeline(
+        self,
+        factor: FactorProgram,
+        evaluation: FactorEvaluation,
+        trace_id: str,
     ) -> Optional[dict[str, Any]]:
-        """正交化闭环（GAP-I206 补充）：对候选因子信号关于参照 elite 做 OLS 残差。
+        return self._audit_pipeline._run_backtest_pipeline(factor, evaluation, trace_id)
 
-        候选因子与既有 elite 高相关（_check_elite_correlation 命中）时，
-        不直接拒绝——对候选信号关于参照 elite 信号做一元线性回归取残差；
-        残差质量合格（与参照因子相关性 < ``l2_orthogonal_residual_corr_max``
-        且保留比 > ``l2_orthogonal_min_retained_ratio``）时返回正交化因子
-        dict（保留原字段 + orthogonalized 元数据 + ``orthogonal_signal`` 残差
-        快照），由调用方以正交化版本入库；否则返回 None（拒绝兜底）。
+    @staticmethod
+    def _build_wf_config(data: Any) -> dict[str, Any]:
+        return AuditPipeline._build_wf_config(data)
 
-        Args:
-            factor: 待晋升的演化因子
-            pair: _check_elite_correlation 返回的高相关对（含 factor_id_b）
+    def _run_walkforward_oos(self, factor: FactorProgram) -> Optional[dict[str, Any]]:
+        return self._audit_pipeline._run_walkforward_oos(factor)
 
-        Returns:
-            dict: 正交化版本因子；None: 残差质量不合格 / 信号不可算
-        """
-        from .backtest_pipeline import BacktestPipeline
+    def _run_factor_audit(
+        self,
+        factor: FactorProgram,
+        evaluation: FactorEvaluation,
+        trace_id: str,
+    ) -> FactorAuditReport:
+        return self._audit_pipeline._run_factor_audit(factor, evaluation, trace_id)
 
-        fid_b = pair.get("factor_id_b", "")
-        if not fid_b:
-            return None
-        ref_fp = self.elite_dir / f"{fid_b}.json"
-        if not ref_fp.exists():
-            return None
-        try:
-            ref_data = json.loads(ref_fp.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
-            return None
-        try:
-            new_signal = BacktestPipeline._execute_factor_code(
-                factor.get("code", ""),
-                self.data,
-                factor.get("params", {}),
-            )
-            other_signal = BacktestPipeline._execute_factor_code(
-                ref_data.get("code", ""),
-                self.data,
-                ref_data.get("params", {}),
-            )
-        except Exception:  # noqa: BLE001
-            return None
-        if not (isinstance(new_signal, np.ndarray) and isinstance(other_signal, np.ndarray)):
-            return None
-        if len(new_signal) != len(other_signal):
-            return None
-        valid = ~(np.isnan(new_signal) | np.isnan(other_signal))
-        if int(valid.sum()) < 20:
-            return None
-        y = new_signal[valid].astype(float)
-        x = other_signal[valid].astype(float)
-        if float(np.std(x)) < 1e-12 or float(np.std(y)) < 1e-12:
-            return None
-        # OLS 残差: residual = y - (a + b·x)
-        b = float(np.cov(x, y)[0, 1] / np.var(x))
-        a = float(np.mean(y) - b * np.mean(x))
-        residual = y - (a + b * x)
-        # 质量校验：残差与参照因子正交性 + 独立信息保留比
-        resid_corr = abs(float(np.corrcoef(residual, x)[0, 1])) if float(np.std(residual)) > 1e-12 else 1.0
-        retained_ratio = float(np.std(residual) / np.std(y))
-        if resid_corr > self._l2_orthogonal_residual_corr_max:
-            logger.info(
-                "[L2-redun] %s 正交化残差仍与 %s 相关 %.3f > %.2f，残差不合格",
-                factor.get("name", "?"),
-                pair.get("factor_name_b", "?"),
-                resid_corr,
-                self._l2_orthogonal_residual_corr_max,
-            )
-            return None
-        if retained_ratio < self._l2_orthogonal_min_retained_ratio:
-            logger.info(
-                "[L2-redun] %s 正交化残差保留比 %.3f < %.2f，独立信息不足",
-                factor.get("name", "?"),
-                retained_ratio,
-                self._l2_orthogonal_min_retained_ratio,
-            )
-            return None
-        # 构造正交化因子：保留原字段 + 正交化元数据 + 残差信号快照（对齐全长度）
-        residual_full = np.full(len(new_signal), np.nan)
-        residual_full[valid] = residual
-        orth = dict(factor)
-        orth["orthogonalized"] = True
-        orth["orthogonalized_against"] = fid_b
-        orth["orthogonalized_pearson"] = float(pair.get("pearson", 0.0))
-        orth["orthogonal_signal"] = [float(v) if np.isfinite(v) else None for v in residual_full]
-        return orth
+    @staticmethod
+    def _is_blocking_ablation(ab: dict[str, Any]) -> bool:
+        return AuditPipeline._is_blocking_ablation(ab)
 
-    def _load_elite_parent_factors(self) -> list[dict[str, Any]]:
-        """从 elite 快照目录加载因子作为父因子池。
+    def _run_ablation_check(
+        self,
+        factor: FactorProgram,
+        evaluation: FactorEvaluation,
+        trace_id: str,
+    ) -> dict[str, Any]:
+        return self._audit_pipeline._run_ablation_check(factor, evaluation, trace_id)
 
-        场景: 种子因子全部已存在 elite 快照（去重跳过、无新晋升）时，
-        无合格父因子导致演化循环 0 代跳过。回退使用既有精英因子继续
-        演化（种子重复晋升由 _promote_to_elite 去重保护）。
-        """
-        import json
+    def _run_robustness_check(
+        self,
+        factor: FactorProgram,
+        evaluation: FactorEvaluation,
+        trace_id: str,
+    ) -> dict[str, Any]:
+        return self._audit_pipeline._run_robustness_check(factor, evaluation, trace_id)
 
-        parents: list[dict[str, Any]] = []
-        for fp in sorted(self.elite_dir.glob("*.json")):
-            if fp.name == "_l2_seed_correlation_index.json":
-                continue
-            try:
-                data = json.loads(fp.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
-                continue
-            if isinstance(data, dict) and data.get("code") and data.get("factor_id"):
-                parents.append(data)
-        return parents
+    def _run_shap_analysis(
+        self,
+        factor: FactorProgram,
+        evaluation: FactorEvaluation,
+        trace_id: str,
+    ) -> dict[str, Any]:
+        return self._audit_pipeline._run_shap_analysis(factor, evaluation, trace_id)
 
-    def _release_repo_after(func):
-        """E.4 S1: release L3 repo write lock after method exits (decorator)."""
-        from functools import wraps
+    def _run_causal_validation(
+        self,
+        factor: FactorProgram,
+        evaluation: FactorEvaluation,
+        trace_id: str,
+    ) -> dict[str, Any]:
+        return self._audit_pipeline._run_causal_validation(factor, evaluation, trace_id)
 
-        @wraps(func)
-        def wrapper(self, *args, **kwargs):
-            try:
-                return func(self, *args, **kwargs)
-            finally:
-                if getattr(self, "_repo", None) is not None:
-                    try:
-                        self._repo.close()
-                    except Exception:
-                        pass
-                    self._repo = None
+    # ── C 阶段 47d: 领域 E 实例属性 property 转发（兼容测试直接读写；
+    #    状态实际由 self._audit_pipeline 持有，见 34 §8.3） ──
 
-        return wrapper
+    @property
+    def _signal_cache(self) -> Any:
+        return self._audit_pipeline._signal_cache
 
-    def _get_repo(self):
-        """延迟初始化 DuckDB 仓储（GAP-030: 支持 factor_db_path 注入隔离库）。"""
-        if self._repo is None:
-            from .factor_db import FactorRepository
+    @_signal_cache.setter
+    def _signal_cache(self, v: Any) -> None:
+        self._audit_pipeline._signal_cache = v
 
-            self._repo = (
-                FactorRepository(db_path=self.factor_db_path, market=self.market)
-                if self.factor_db_path
-                else FactorRepository(market=self.market)
-            )
-        return self._repo
+    @property
+    def auditor(self) -> Any:
+        return self._audit_pipeline.auditor
 
-    @_release_repo_after
+    @auditor.setter
+    def auditor(self, v: Any) -> None:
+        self._audit_pipeline.auditor = v
+
+    @property
+    def backtest_pipeline(self) -> Any:
+        return self._audit_pipeline.backtest_pipeline
+
+    @backtest_pipeline.setter
+    def backtest_pipeline(self, v: Any) -> None:
+        self._audit_pipeline.backtest_pipeline = v
+
+    @property
+    def ablation_experiment(self) -> Any:
+        return self._audit_pipeline.ablation_experiment
+
+    @ablation_experiment.setter
+    def ablation_experiment(self, v: Any) -> None:
+        self._audit_pipeline.ablation_experiment = v
+
+    @property
+    def robustness_tester(self) -> Any:
+        return self._audit_pipeline.robustness_tester
+
+    @robustness_tester.setter
+    def robustness_tester(self, v: Any) -> None:
+        self._audit_pipeline.robustness_tester = v
+
+    @property
+    def shap_analyzer(self) -> Any:
+        return self._audit_pipeline.shap_analyzer
+
+    @shap_analyzer.setter
+    def shap_analyzer(self, v: Any) -> None:
+        self._audit_pipeline.shap_analyzer = v
+
+    @property
+    def causal_validator(self) -> Any:
+        return self._audit_pipeline.causal_validator
+
+    @causal_validator.setter
+    def causal_validator(self, v: Any) -> None:
+        self._audit_pipeline.causal_validator = v
+
+    # ── C 阶段 47c: 领域 C 精英晋升/持久化方法转发桩（行为等价，委托
+    #    self._elite_store，兼容测试直接调用/patch，见 34 §8.5） ──
+
     def _promote_to_elite(
         self,
         factor: FactorProgram,
@@ -2155,385 +1802,16 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         seed_correlations: Optional[list[FactorCorrelation]] = None,
         quality_score: Optional[dict] = None,
         audit_report: Optional[FactorAuditReport] = None,
-        shadow_observe: bool = True,
+        shadow_observe: Optional[bool] = None,
     ) -> Optional[Path]:
-        """将因子晋升到精英池。
-
-        Args:
-            factor: 因子程序
-            evaluation: 评估结果
-            seed_correlations: L2 种子因子相关性标记（可选）
-            quality_score: 质量评分卡结果（Phase A.1 集成）
-            audit_report: 因子审计报告（Phase B.3 集成）
-            shadow_observe: 是否进入影子池观察（新演化因子默认 True；
-                            种子因子/初始池导入传 False 直接进正式组合）
-
-        Returns:
-            Path: 晋升成功
-            None: 因子名称重复，跳过晋升
-        """
-        # 去重检查：DuckDB 是权威数据源，通过 factor_catalog 表检查
-        factor_name = factor.get("name", "")
-        try:
-            repo = self._get_repo()
-            existing = repo.get_factor_by_name(factor_name, market=self.market)
-            if existing:
-                # GAP-F10 (v2.73.0): 被拒因子结构化记录（分级日志，替代 print）
-                logger.info(
-                    "[evo] 跳过重复因子: %s (DuckDB 已存在, market=%s, trace_id=%s)",
-                    factor_name,
-                    self.market,
-                    getattr(self, "_trace_id", ""),
-                )
-                return None
-        except Exception:
-            pass
-
-        # ── 多样性配额检查（GAP-077 v2.102.0）：结构簇配额替代 max_per_family 家族配额 ──
-        # family 是知识注入来源标签（非正交结构维度），多样性控制改由信号相关性承担：
-        # 统计与既有 elite |corr| ≥ cluster_corr_threshold 的同类成员数，≥ 上限拒绝晋升。
-        # 开关关闭时回退 max_per_family 旧逻辑（平滑迁移）。
-        if self._cluster_quota_enabled:
-            cluster_size = self._count_cluster_members(factor)
-            if cluster_size >= self._cluster_max:
-                logger.warning(
-                    "[evo] 结构簇配额拒绝晋升 [%s]: 同类成员 %d ≥ 上限 %d (corr≥%.2f, trace_id=%s)",
-                    factor_name,
-                    cluster_size,
-                    self._cluster_max,
-                    self._cluster_corr_threshold,
-                    getattr(self, "_trace_id", ""),
-                )
-                return None
-        else:
-            # ── 回退：max_per_family 家族配额（旧逻辑，平滑迁移） ──
-            factor_family = factor.get("family", "unknown")
-            max_per_family = self.budget.get("max_per_family", 15)
-            # GAP-070 (v2.98.0): 兜底家族 'other'/'unknown' 永久豁免上限——它们是
-            # "无法归类"的回收站家族，对其设限等价于对整个演化新因子晋升通道设总量
-            # 上限，压制演化空间；逻辑同质化保护已由 L2 准入去冗余（GAP-I206 相关性
-            # 预检 + 正交化闭环 + Gram-Schmidt 基底）承担。
-            if factor_family not in ("other", "unknown"):
-                try:
-                    repo = self._get_repo()
-                    existing_family = repo.get_by_family(
-                        family=factor_family,
-                        market=self.market,
-                        limit=100,
-                    )
-                    if len(existing_family) >= max_per_family:
-                        # GAP-F10 (v2.73.0): 家族拦截升级分级日志 + 结构化拒绝记录
-                        logger.warning(
-                            "[evo] 家族多样性限制拒绝晋升 [%s]: 家族 '%s' 已有 %d 个因子 (上限 %d, trace_id=%s)",
-                            factor_name,
-                            factor_family,
-                            len(existing_family),
-                            max_per_family,
-                            getattr(self, "_trace_id", ""),
-                        )
-                        return None
-                except Exception:
-                    pass
-
-        fp = self.elite_dir / f"{factor['factor_id']}.json"
-        # 将 factor 字段展开到顶层，方便 cli 直接读取
-        record = dict(factor)
-        # 确保 market 字段正确：若因子为默认 "multi"，使用演化上下文的市场
-        if record.get("market", "multi") in ("multi", "other") and self.market in ("futures",):
-            record["market"] = self.market
-        record["evaluation"] = evaluation
-
-        # ── ★ GAP-I206 (v2.71.0): L2 准入去冗余 — 与既有 elite 相关性检查 ──
-        # 演化因子（shadow_observe=True）晋升前与既有 elite 计算信号相关性，
-        # 超过阈值拒绝晋升（防 elite 池相关性膨胀稀释组合夏普）。种子因子
-        # （shadow_observe=False 首轮导入）跳过——初始入库全量放行。
-        if shadow_observe:
-            elite_corr = self._check_elite_correlation(factor)
-            if elite_corr is not None:
-                _pairs = elite_corr.get("correlations", [])
-                _max = _pairs[0] if _pairs else {}
-                _name_b = _max.get("factor_name_b", "?")
-                _corr = _max.get("pearson", 0.0)
-                if self._l2_elite_orthogonalize and _pairs:
-                    # 正交化闭环（GAP-I206 补充）：高相关因子先尝试 OLS 残差化，
-                    # 残差质量合格则以正交化版本入库；不合格拒绝兜底。
-                    # v2.72.0: 优先走多因子正交基底（Gram-Schmidt），
-                    # 基底不可用/失败时回退单参照 OLS。
-                    orth_factor = self._orthogonalize_via_basis(factor)
-                    if orth_factor is None:
-                        orth_factor = self._orthogonalize_candidate(factor, _max)
-                    if orth_factor is not None:
-                        factor = cast(FactorProgram, orth_factor)
-                        record = dict(factor)
-                        if record.get("market", "multi") in ("multi", "other") and self.market in ("futures",):
-                            record["market"] = self.market
-                        record["evaluation"] = evaluation
-                        _basis_tag = (
-                            f"正交基底({len(factor.get('orthogonalized_basis', []))}成员)"
-                            if factor.get("orthogonalized_basis")
-                            else f"参照 {_name_b}"
-                        )
-                        print(
-                            f"[evo] ★ L2 正交化闭环 [{factor.get('name', '?')}]: "
-                            f"与既有 elite 相关 {_corr:.3f} ≥ 阈值 "
-                            f"{self._l2_elite_corr_threshold}，{_basis_tag} 正交化残差入库"
-                        )
-                        logger.warning(
-                            "[L2-redun] 因子 %s 正交化残差入库（against %s, pearson %.3f, GAP-I206 补充）",
-                            factor.get("name", "?"),
-                            _name_b,
-                            _corr,
-                        )
-                    else:
-                        print(
-                            f"[evo] ★ L2 准入去冗余拦截 [{factor.get('name', '?')}]: "
-                            f"与既有 elite {_name_b} 相关 {_corr:.3f} ≥ 阈值 "
-                            f"{self._l2_elite_corr_threshold}，正交化残差不合格，拒绝晋升"
-                        )
-                        logger.warning(
-                            "[L2-redun] 因子 %s 与既有 elite %s 相关 %.3f ≥ %.2f，正交化残差不合格拒绝（GAP-I206）",
-                            factor.get("name", "?"),
-                            _name_b,
-                            _corr,
-                            self._l2_elite_corr_threshold,
-                        )
-                        return None
-                else:
-                    print(
-                        f"[evo] ★ L2 准入去冗余拦截 [{factor.get('name', '?')}]: "
-                        f"与既有 elite {_name_b} 相关 {_corr:.3f} ≥ 阈值 {self._l2_elite_corr_threshold}，拒绝晋升"
-                    )
-                    logger.warning(
-                        "[L2-redun] 因子 %s 与既有 elite %s 相关 %.3f ≥ %.2f，拒绝晋升（GAP-I206）",
-                        factor.get("name", "?"),
-                        _name_b,
-                        _corr,
-                        self._l2_elite_corr_threshold,
-                    )
-                    return None
-            if self._l2_elite_corr_debug:
-                # 无既有 elite 或检查失败时静默放行（首次晋升场景）
-                logger.debug(
-                    "[L2-redun] %s 无既有 elite 相关性命中，放行",
-                    factor.get("name", "?"),
-                )
-
-        # ── ★ Phase B.4: 高IC筛查强制门（所有市场统一） ──
-        # 前置计算: 从种子相关性标记提取 max_corr（若已传入）
-        max_corr_detected = None
-        if seed_correlations:
-            factor_id = factor.get("factor_id", "")
-            corr_vals = [
-                max(abs(sc.get("pearson", 0)), abs(sc.get("spearman", 0)))
-                for sc in seed_correlations
-                if factor_id in (sc.get("factor_id_a", ""), sc.get("factor_id_b", ""))
-            ]
-            if corr_vals:
-                max_corr_detected = max(corr_vals)
-        high_ic_screen = self.high_ic_screener.screen(
-            factor=record,
-            evaluation=evaluation,
-            correlation_metadata=({"max_corr_detected": max_corr_detected} if max_corr_detected is not None else {}),
-            backtest_pipeline=(
-                evaluation.get("backtest_pipeline", {}) if isinstance(evaluation.get("backtest_pipeline"), dict) else {}
-            ),
-            trace_id=getattr(self, "_trace_id", ""),
-        )
-        if high_ic_screen.grade == "C":
-            veto_info = (
-                "；".join(high_ic_screen.veto_reasons)
-                if high_ic_screen.veto_reasons
-                else f"总分 {high_ic_screen.total_score:.1f} < 60"
-            )
-            print(
-                f"[evo] ★ 高IC筛查拦截 [{factor_name}]: "
-                f"grade={high_ic_screen.grade}, 总分={high_ic_screen.total_score:.1f}, "
-                f"原因={veto_info}"
-            )
-            return None
-        record["high_ic_screen"] = high_ic_screen.to_dict()
-
-        # ── 多重检验强制门: 拒绝未通过多重检验校正的因子 ──
-        level_3 = evaluation.get("level_3_multiple", {})
-        if not level_3.get("passed", False):
-            bonf_p = level_3.get("bonferroni_p", "N/A")
-            adj_t = level_3.get("adjusted_t", "N/A")
-            p_str = f"{bonf_p:.4f}" if isinstance(bonf_p, float) else str(bonf_p)
-            t_str = f"{adj_t:.4f}" if isinstance(adj_t, float) else str(adj_t)
-            print(f"[evo] 多重检验未通过 [{factor_name}]: Bonferroni p={p_str}, adjusted_t={t_str}")
-            return None
-
-        # ── 写入质量评分卡 (Phase A.1 集成) ──
-        if quality_score is not None:
-            record["quality_score"] = quality_score
-
-        # ── 写入审计报告 (Phase B.3 集成) ──
-        if audit_report is not None:
-            record["audit_report"] = audit_report.to_dict()
-
-        # ── 写入 L2 相关性元数据（供 L3 参考） ──
-        if seed_correlations:
-            factor_id = factor.get("factor_id", "")
-            corr_flags: list[dict[str, Any]] = []
-
-            for sc in seed_correlations:
-                a, b = sc.get("factor_id_a", ""), sc.get("factor_id_b", "")
-                pearson = sc.get("pearson", 0)
-                spearman = sc.get("spearman", 0)
-                max_abs = max(abs(pearson), abs(spearman))
-
-                if factor_id == a or factor_id == b:
-                    partner = b if factor_id == a else a
-                    corr_flags.append(
-                        {
-                            "partner_factor_id": partner,
-                            "pearson": pearson,
-                            "spearman": spearman,
-                            "max_abs": max_abs,
-                            "source": "l2_seed_correlation_check",
-                        }
-                    )
-
-            if corr_flags:
-                record["correlation_metadata"] = {
-                    "l2_seed_flags": corr_flags,
-                    "flag_count": len(corr_flags),
-                    "max_corr_detected": max((f["max_abs"] for f in corr_flags), default=0),
-                }
-                print(f"[evo] 因子 {factor.get('name', '?')} 写入 L2 相关性标记: {len(corr_flags)} 个高相关对")
-
-        # ── 影子池标记（L2 晋升节奏控制）：新演化因子先进影子池观察 ──
-        if shadow_observe:
-            record["shadow_pool"] = _build_shadow_pool()
-            print(f"[evo] 因子 {factor.get('name', '?')} 进入影子池观察 ({_SHADOW_OBSERVE_TRADING_DAYS} 个交易日)")
-
-        # ── 晋升时间戳（用于纯外推验证，P2 差距修复） ──
-        record["promoted_at"] = datetime.now().isoformat()
-
-        # ── 写入 DuckDB（主存储，SSOT；plans/29 P1 写路径反转） ──
-        # GAP-032 严格一致：DuckDB 是主存储。P1 起 JSON 仅降级为只读快照——
-        # 先写 DuckDB，成功后写 JSON（JSON 写失败不阻断晋升）；DuckDB 失败
-        # 则不写 JSON 直接判定晋升失败，杜绝"快照有、catalog 无"孤儿数据
-        write_ok = self._write_to_duckdb(
+        return self._elite_store._promote_to_elite(
             factor,
             evaluation,
-            quality_score,
             seed_correlations,
+            quality_score,
             audit_report,
-            shadow_pool=record.get("shadow_pool"),
+            shadow_observe,
         )
-        if not write_ok:
-            print(f"[evo] ❌ 晋升失败 [{factor.get('name', '?')}]: DuckDB 写入失败（未写 JSON 快照）{fp.name}")
-            return None
-
-        # ── 写入 JSON 快照（只读备份，非阻塞） ──
-        try:
-            fp.write_text(
-                json.dumps(record, ensure_ascii=False, indent=2, default=str),
-                encoding="utf-8",
-            )
-        except OSError as e:
-            logger.warning("[evo] JSON 快照写入失败（不影响晋升）: %s, err=%s", fp.name, e)
-
-        # ── ★ GAP-036: 激进清理 — L1 注入候选晋升精英后删除 l1_injected 文件 ──
-        # 非阻塞：删除失败不影响晋升，仅记录 warning
-        f_source = factor.get("source", "")
-        f_parent_id = factor.get("parent_id")
-        if f_source == "bootstrapping" and f_parent_id and self.inject_dir.exists():
-            cand_file = self.inject_dir / f"{f_parent_id}.json"
-            try:
-                if cand_file.exists():
-                    cand_file.unlink()
-                    logger.info(
-                        "[GAP-036] 已删除 L1 注入候选文件: %s (factor=%s, source=%s)",
-                        cand_file.name,
-                        factor.get("name", "?"),
-                        f_source,
-                    )
-            except OSError as e:
-                logger.warning("[GAP-036] 删除 L1 候选文件失败: %s, err=%s", cand_file.name, e)
-
-        # ── ★ 种子溯源写入 (seed_lineage) ──
-        # 非阻塞：溯源写入失败不影响晋升，仅记录 warning
-        try:
-            repo = self._get_repo()
-            f_id = factor.get("factor_id", "")
-            f_name = factor.get("name", "")
-            f_source = factor.get("source", "")
-            f_gen = factor.get("generation", 0)
-            f_family = factor.get("family", "unknown")
-            f_parent_id = factor.get("parent_id")
-            f_trace_id = factor.get("trace_id", "")
-
-            lineage = repo.resolve_seed_lineage(
-                factor_id=f_id,
-                factor_name=f_name,
-                factor_source=f_source,
-                factor_generation=f_gen,
-                factor_family=f_family,
-                factor_parent_id=f_parent_id,
-                market=self.market,
-            )
-            repo.write_seed_lineage(
-                factor_id=f_id,
-                factor_name=f_name,
-                seed_name=lineage["seed_name"],
-                seed_family=lineage["seed_family"],
-                seed_market=lineage["seed_market"],
-                generation=lineage["generation"],
-                parent_id=f_parent_id,
-                trace_id=f_trace_id,
-            )
-        except Exception as e:
-            logger.debug("[seed_lineage] 溯源写入非阻塞异常: %s", e)
-
-        # ── Phase A.2: 注册到精英因子追踪器 ──
-        try:
-            factor_id = factor.get("factor_id", "")
-            factor_name = factor.get("name", "?")
-            sharpe = 0.0
-            ic = 0.0
-            if isinstance(evaluation, dict):
-                bt = evaluation.get("level_1_backtest", {})
-                if isinstance(bt, dict):
-                    ic = bt.get("ic", 0.0)
-                    sharpe = bt.get("sharpe", 0.0)
-            grade = None
-            quality_score_value = None
-            if quality_score is not None:
-                grade = quality_score.get("grade")
-                quality_score_value = quality_score.get("total_score")
-            self.elite_tracker.init_tracker(
-                factor_id=factor_id,
-                name=factor_name,
-                entry_ic=ic,
-                entry_sharpe=sharpe,
-                grade=grade,
-                quality_score=quality_score_value,
-            )
-        except Exception as e:
-            logger.debug("精英因子追踪器注册失败: %s", e)
-
-        # ── 记录一致性日志（P4） ──
-        _log_consistency_event(
-            event_type="promote",
-            factor_id=factor.get("factor_id", ""),
-            factor_name=factor.get("name", ""),
-            market=self.market,
-            status="active",
-            json_path=str(fp),
-            trace_id=factor.get("trace_id", ""),
-        )
-
-        # E.4 S1: promotion done, release L3 repo write lock
-        if self._repo is not None:
-            try:
-                self._repo.close()
-            except Exception:
-                pass
-            self._repo = None
-
-        return fp
 
     def _write_to_duckdb(
         self,
@@ -2544,977 +1822,271 @@ class EvolutionLoop(EvolutionUctMixin, EvolutionTraceMixin, EvolutionChannelsMix
         audit_report: Optional[FactorAuditReport] = None,
         shadow_pool: Optional[dict] = None,
     ) -> bool:
-        """将因子写入 DuckDB（主存储层）。
+        return self._elite_store._write_to_duckdb(
+            factor,
+            evaluation,
+            quality_score,
+            seed_correlations,
+            audit_report,
+            shadow_pool,
+        )
 
-        支持幂等写入：若 factor_id 已存在则更新，不存在则创建。
-
-        Args:
-            factor: 因子程序
-            evaluation: 评估结果
-            quality_score: 质量评分卡结果
-            seed_correlations: L2 种子因子相关性标记
-            audit_report: 因子审计报告（Phase B.3 集成）
-            shadow_pool: 影子池标记（L2 晋升节奏控制，可选）
-
-        Returns:
-            True: 写入成功
-            False: 写入失败（GAP-032 严格一致：失败不再吞异常，
-                   由调用方决定是否回滚 JSON 快照）
-        """
-        try:
-            repo = self._get_repo()
-            factor_id = factor.get("factor_id")
-            factor_name = factor.get("name", "?")
-            factor_market: str = factor.get("market", "multi")
-            # 若因子未显式指定有效市场（multi/other 为默认值），使用演化上下文的市场
-            if factor_market in ("multi", "other") and self.market in ("futures",):
-                factor_market = self.market
-            factor_family = factor.get("family", "other")
-
-            l1 = evaluation.get("level_1_backtest", {})
-
-            factor_dict = {
-                "factor_id": factor_id,
-                "name": factor_name,
-                "code": factor.get("code", ""),
-                "params": factor.get("params", {}),
-                "signature": factor.get("signature", {}),
-                "economic_logic": factor.get("economic_logic", {}),
-                "source": factor.get("source", "macro_evolution"),
-                "parent_id": factor.get("parent_id"),
-                "generation": factor.get("generation", 0),
-                "trace_id": factor.get("trace_id"),
-                "market": factor_market,
-                "family": factor_family,
-                "is_elite": True,
-                "sharpe": l1.get("sharpe", 0.0),
-                "ic": l1.get("ic", 0.0),
-                "icir": l1.get("icir", 0.0),
-                "max_drawdown": l1.get("max_drawdown", 0.0),
-                "turnover_monthly": l1.get("turnover_monthly", 0.0),
-                "decay_6m": l1.get("decay_6m", 0.0),
-                "metadata": {
-                    "quality_score": quality_score,
-                    "correlation_metadata": factor.get("correlation_metadata", {}),
-                    "symbols": factor.get("symbols", []),
-                    "risk_tag": factor.get("risk_tag"),
-                    "factor_version": factor.get("factor_version", "v2"),
-                    "audit_report": audit_report.to_dict() if audit_report else None,
-                    "shadow_pool": shadow_pool,
-                    # 正交化闭环（GAP-I206 补充，v2.71.0/v2.72.0 基底）
-                    "orthogonalized": factor.get("orthogonalized", False),
-                    "orthogonalized_against": factor.get("orthogonalized_against", ""),
-                    "orthogonalized_pearson": factor.get("orthogonalized_pearson", 0.0),
-                    "orthogonalized_basis": factor.get("orthogonalized_basis", []),
-                    "orthogonal_signal": factor.get("orthogonal_signal", []),
-                },
-            }
-
-            # ── 幂等写入：已存在则更新，不存在则创建 ──
-            existing = repo.get_factor(factor_id)
-            if existing:
-                repo.update_factor(factor_id, factor_dict)
-                print(f"[evo] 🔄 更新已有因子 {factor_name} 到 DuckDB [market={factor_market}]")
-            else:
-                repo.create_factor(factor_dict)
-                print(f"[evo] ✅ 新建因子 {factor_name} 到 DuckDB [market={factor_market}]")
-
-            # ── 写入/更新评估记录 ──
-            l2 = evaluation.get("level_2_economic", {})
-            l3 = evaluation.get("level_3_multiple", {})
-
-            eval_dict = {
-                "trace_id": evaluation.get("trace_id"),
-                "ic": l1.get("ic", 0),
-                "icir": l1.get("icir", 0),
-                "sharpe": l1.get("sharpe", 0),
-                "max_drawdown": l1.get("max_drawdown", 0),
-                "turnover": l1.get("turnover_monthly", 0),
-                "t_stat": l1.get("t_stat", 0),
-                "monotonicity": l1.get("monotonicity", False),
-                "oos_ratio": l1.get("oos_ratio", 0),
-                "theory_score": l2.get("theory", 0),
-                "behavioral_score": l2.get("behavioral", 0),
-                "microstructure_score": l2.get("microstructure", 0),
-                "institutional_score": l2.get("institutional", 0),
-                "dims_passed": l2.get("dims_passed", 0),
-                "bonferroni_p": l3.get("bonferroni_p", 1.0),
-                "fdr_q": l3.get("fdr_q", 0.05),
-                "effective_n": l3.get("effective_n_factors", 1),
-                "adjusted_t": l3.get("adjusted_t", 0),
-                "l3_passed": l3.get("passed", False),
-                "overall_passed": evaluation.get("passed", False),
-                "failure_reasons": evaluation.get("failure_reasons", []),
-                "evaluated_at": evaluation.get("evaluated_at"),
-            }
-
-            repo.add_evaluation(factor_id, eval_dict)
-            return True
-
-        except Exception as e:
-            factor_name = factor.get("name", "?")
-            print(f"[evo] ⚠️ DuckDB 写入失败 [{factor_name}]: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return False
-
-
-    # ── Phase A.2: EliteFactorTracker 定期重评估 ──────────
-
-    def _run_periodic_factor_review(
+    def _scan_elite_correlations(
         self,
-        elite_ids: list[str],
+        factor: FactorProgram,
+        threshold: float,
+        max_scan: int,
+    ) -> list[dict[str, Any]]:
+        return self._elite_store._scan_elite_correlations(factor, threshold, max_scan)
+
+    def _check_elite_correlation(self, factor: FactorProgram) -> Optional[dict[str, Any]]:
+        return self._elite_store._check_elite_correlation(factor)
+
+    def _count_cluster_members(self, factor: FactorProgram) -> int:
+        return self._elite_store._count_cluster_members(factor)
+
+    def _orthogonalize_via_basis(self, factor: FactorProgram) -> Optional[dict[str, Any]]:
+        store = getattr(self, "_elite_store", None)
+        if store is not None:
+            return store._orthogonalize_via_basis(factor)
+        # 兼容类级未绑定调用（测试 EvolutionLoop._orthogonalize_via_basis(mock_loop, ...)）
+        return EliteStore._orthogonalize_via_basis(self, factor)
+
+    def _orthogonalize_candidate(
+        self,
+        factor: FactorProgram,
+        pair: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        return self._elite_store._orthogonalize_candidate(factor, pair)
+
+    def _load_elite_parent_factors(self) -> list[dict[str, Any]]:
+        return self._elite_store._load_elite_parent_factors()
+
+    def _write_seed_correlation_index(
+        self,
+        seed_correlations: list[FactorCorrelation],
         trace_id: str,
     ) -> None:
-        """运行精英因子定期重评估（Phase A.2 集成）。
-
-        在演化循环结束时，对所有精英因子执行:
-        1. 自动淘汰检查（衰减/严重衰减）
-        2. 生成因子状态报告
-        3. 更新因子跟踪快照
-
-        Args:
-            elite_ids: 精英因子 ID 列表
-            trace_id: 全链路 trace_id
-        """
-        try:
-            print("[elite-review] 开始精英因子定期重评估...")
-
-            # 1. 自动淘汰检查（GAP-I305: 受 decay_auto_retire_enabled 开关控制）
-            if self._decay_auto_retire_enabled:
-                retired = self.elite_tracker.auto_retire()
-                if retired:
-                    print(f"[elite-review] 自动淘汰 {len(retired)} 个因子: {retired}")
-            else:
-                # 开关关闭：仅统计应退役而未退役的因子（日志告警）
-                observe = self.elite_tracker.get_by_status("decaying")
-                if observe:
-                    print(f"[elite-review] 自动退役已关闭，当前 {len(observe)} 个衰减因子待处理")
-
-            # 2. 为每个精英因子更新跟踪快照 + 逻辑监控
-            for fid in elite_ids:
-                # 先检查跟踪记录是否存在，不存在则跳过（可能种子因子重复跳过）
-                tracker_snapshot = self.elite_tracker.get(fid)
-                if tracker_snapshot is None:
-                    logger.debug(
-                        "跳过重评估: 跟踪记录不存在 [factor_id=%s]（可能种子因子重复跳过）",
-                        fid,
-                    )
-                    continue
-                factor_data = self._get_factor_data_for_review(fid)
-                if factor_data is None:
-                    continue
-                ic = factor_data.get("ic", 0.0)
-                sharpe = factor_data.get("sharpe", 0.0)
-                self.elite_tracker.update(fid, ic, sharpe)
-
-                # ── GAP-I305: 衰减分级 + 反馈闭环联动 ──
-                try:
-                    snapshot = self.elite_tracker.get(fid)
-                    decay_grade = (snapshot or {}).get("decay_grade", "normal")
-                    if decay_grade in ("observe", "retired"):
-                        # 构造 FACTOR_DECAY 反馈事件，走归因分析并记录动作
-                        event = {
-                            "event_id": f"fe_decay_{fid}",
-                            "event_type": "factor_decay",
-                            "factor_id": fid,
-                            "trigger_reason": f"衰减分级={decay_grade}",
-                            "severity": ("critical" if decay_grade == "retired" else "warning"),
-                            "payload": {
-                                "decay_grade": decay_grade,
-                                "ic_slope_6m": (snapshot or {}).get("ic_slope_6m", 0.0),
-                            },
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "handled": False,
-                            "handled_at": None,
-                        }
-                        result = self.feedback_loop._handle_event(  # noqa: SLF001
-                            event,
-                            {fid: factor_data},
-                            {},
-                        )
-                        # 反馈结果写回跟踪快照（可追溯）
-                        snap = self.elite_tracker.get(fid) or {}
-                        snap["last_feedback"] = {
-                            "decay_grade": decay_grade,
-                            "root_cause": result.get("root_cause", "unknown"),
-                            "action": result.get("action_taken", "monitor_only"),
-                            "at": datetime.now(timezone.utc).isoformat(),
-                        }
-                        self.elite_tracker._write_snapshot(fid, snap)  # noqa: SLF001
-                except Exception as e:
-                    logger.debug("衰减反馈联动跳过 %s: %s", fid, e)
-
-                # ── Phase C.2: LogicMonitor 集成 ──
-                try:
-                    import json
-
-                    # 从 elite 快照读取因子程序（_promote_to_elite 写入）
-                    fp_snapshot = self.elite_dir / f"{fid}.json"
-                    if not fp_snapshot.exists() or self.data is None:
-                        continue
-                    factor_program = json.loads(fp_snapshot.read_text(encoding="utf-8"))
-                    logic_report = self.logic_monitor.run(
-                        factor_program,
-                        self.data,
-                        switch_dates=[],
-                    )
-                    if not logic_report.all_healthy:
-                        print(f"[elite-review] 逻辑监控告警: {fid}")
-                except Exception as e:
-                    logger.debug("逻辑监控跳过 %s: %s", fid, e)
-
-            # 3. 生成报告
-            report = self.elite_tracker.report()
-            status_counts = report.get("status_counts", {})
-            grade_counts = report.get("grade_counts", {})
-            print(
-                f"[elite-review] 因子状态报告: "
-                f"活跃={status_counts.get('active', 0)}, "
-                f"观察={status_counts.get('observing', 0)}, "
-                f"衰减={status_counts.get('decaying', 0)}, "
-                f"淘汰={status_counts.get('retired', 0)}, "
-                f"总计={status_counts.get('total', 0)}"
-            )
-            print(
-                f"[elite-review] 等级分布: "
-                f"A级={grade_counts.get('A', 0)}, "
-                f"B级={grade_counts.get('B', 0)}, "
-                f"C级={grade_counts.get('C', 0)}"
-            )
-        except Exception as e:
-            logger.debug("精英因子定期重评估异常: %s", e)
-
-    def _get_factor_data_for_review(
-        self,
-        factor_id: str,
-    ) -> Optional[dict[str, float]]:
-        """获取因子的 IC 和 Sharpe 数据用于重评估。
-
-        Args:
-            factor_id: 因子 ID
-
-        Returns:
-            包含 ic 和 sharpe 的字典，失败返回 None
-        """
-        try:
-            factor_data = (
-                self.verifier.get_factor_by_id(factor_id) if hasattr(self.verifier, "get_factor_by_id") else None
-            )
-            if factor_data is None:
-                return {"ic": 0.0, "sharpe": 0.0}
-            return {"ic": 0.0, "sharpe": 0.0}
-        except Exception:
-            return None
-
-    # ── Phase B.1: 数据质量监控集成 ──────────────────────────
-
-    def _register_factor_baseline(
-        self,
-        factor: FactorProgram,
-        evaluation: FactorEvaluation,
-    ) -> None:
-        """注册因子基准数据到数据质量监控器。
-
-        当因子首次通过评估时，将其 IC 和容量注册为基准，
-        用于后续监控数据漂移和容量突变。
-
-        Args:
-            factor: 因子程序
-            evaluation: 评估结果
-        """
-        factor_id = factor.get("factor_id", "?")
-        bt = evaluation.get("level_1_backtest", {}) if isinstance(evaluation, dict) else {}
-        ic = bt.get("ic", 0.0) if isinstance(bt, dict) else 0.0
-        self.data_quality_monitor.register_factor(
-            factor_id=factor_id,
-            baseline_ic=ic,
-            baseline_capacity=0.0,
-            ic_std=max(abs(ic) * 0.1, 0.001),
-        )
-
-    def _check_factor_data_quality(
-        self,
-        factor: FactorProgram,
-        evaluation: FactorEvaluation,
-    ) -> list[Any]:
-        """检查因子数据质量，返回触发的告警列表。
-
-        Args:
-            factor: 因子程序
-            evaluation: 当前评估结果
-
-        Returns:
-            告警列表（可能为空）
-        """
-        factor_id = factor.get("factor_id", "?")
-        bt = evaluation.get("level_1_backtest", {}) if isinstance(evaluation, dict) else {}
-        current_ic = bt.get("ic", 0.0) if isinstance(bt, dict) else 0.0
-        alerts = self.data_quality_monitor.check(
-            factor_id=factor_id,
-            current_ic=current_ic,
-        )
-        if alerts:
-            for alert in alerts:
-                alert_type = getattr(alert, "alert_type", "unknown")
-                severity = getattr(alert, "severity", "unknown")
-                msg = getattr(alert, "message", "")
-                print(f"[dq-monitor] 告警 [{factor_id}]: type={alert_type}, severity={severity}, msg={msg}")
-        return alerts
-
-    # ── Phase B.2: 端到端回测流水线集成 ──────────────────
-
-    # ── Phase C.2: 算子演化（FTS-Expr DSL） ──────────────
-
-    # ── Phase B.2.1: 快速预筛选（新增） ──────────────────
-
-    def _quick_prefilter(
-        self,
-        factor: FactorProgram,
-        trace_id: str,
-    ) -> tuple[bool, str, float]:
-        """快速预筛选：在源头拦截低质量信号，避免浪费评估资源。
-
-        检查项:
-            1. 信号非全常数: nunique > 10
-            2. 快速 IC 检查: abs(IC) > 0.02（Spearman 秩相关）
-            3. 信号标准差 > 1e-6
-
-        横截面模式使用真实截面收益（信号矩阵 vs 截面 forward 收益，
-        与 cross_section_evaluate_backtest 同口径），而非单标的时序 IC。
-
-        Args:
-            factor: 因子程序
-            trace_id: 全链路 trace_id
-
-        Returns:
-            (是否通过, 失败原因, 预筛 IC；通过时原因为空，失败时 IC 为 0.0)
-        """
-        from scipy import stats as sp_stats
-        from .backtest_pipeline import BacktestPipeline
-
-        # 横截面模式: 用全面板构建真实截面收益计算 IC（GAP-X01）
-        if self._is_cross_section:
-            return self._cross_section_prefilter(factor, trace_id)
-
-        probe_data = self.data
-        try:
-            signal = BacktestPipeline._execute_factor_code(
-                factor.get("code", ""),
-                probe_data,
-                factor.get("params", {}),
-            )
-        except Exception as e:
-            return False, f"预筛选执行失败: {type(e).__name__}: {e}", 0.0
-
-        if not isinstance(signal, np.ndarray) or len(signal) != len(probe_data):
-            return (
-                False,
-                f"预筛选输出长度不匹配: {len(signal) if hasattr(signal, '__len__') else '?'} != {len(probe_data)}",
-                0.0,
-            )
-
-        # 检查1: 信号非全常数
-        nunique = len(np.unique(signal))
-        if nunique <= 10:
-            return False, f"信号无足够变化: nunique={nunique} <= 10", 0.0
-
-        # 检查2: 信号标准差
-        sig_std = np.nanstd(signal)
-        if sig_std < 1e-6:
-            return False, f"信号标准差过小: {sig_std:.2e} < 1e-6", 0.0
-
-        # 检查3: 快速 IC 检查（导致 NaN 也视为无效）
-        # 期货日频单品种时序 IC 信噪比低（常见 0.01-0.02 区间），
-        # 阈值按市场自适应放宽，避免拦截本可进入截面评估的后代
-        ic_threshold = 0.01 if self.market == "futures" else 0.02
-        fr = self.forward_returns
-        if fr is not None and len(fr) == len(signal):
-            valid = ~(np.isnan(signal) | np.isnan(fr))
-            if valid.sum() >= 10:
-                ic, pval = sp_stats.spearmanr(signal[valid], fr[valid])
-                if np.isnan(ic) or abs(ic) < ic_threshold:
-                    return (
-                        False,
-                        (
-                            f"快速 IC 过低: abs(IC)={abs(ic):.4f} < {ic_threshold}"
-                            f"{'' if np.isnan(ic) else f', p={pval:.4f}'}"
-                        ),
-                        0.0,
-                    )
-                return True, "", abs(ic)
-
-        return True, "", 0.0
-
-    def _cross_section_prefilter(
-        self,
-        factor: FactorProgram,
-        trace_id: str,
-    ) -> tuple[bool, str, float]:
-        """横截面快速预筛：用真实截面收益计算截面 Spearman IC。
-
-        与 cross_section_evaluate_backtest 同口径：对所有标的同时运行因子，
-        对齐共同日期构建信号矩阵与截面 forward 收益矩阵，每期计算截面 IC。
-        替代原先单标的时序 IC 口径（与 forward_returns 长度不齐时常被跳过，
-        且单标的时序 IC 无法反映因子截面区分能力）。
-
-        Args:
-            factor: 因子程序
-            trace_id: 全链路 trace_id
-
-        Returns:
-            (是否通过, 失败原因, 预筛 IC 绝对值；失败时 IC 为 0.0)
-        """
-        from .evaluation_chain import (
-            _cs_build_matrices,
-            _cs_compute_ics,
-            _cs_execute_factors,
-        )
-        from .factor_program import FactorExecutor
-
-        panel = self.cross_section_data
-        if not panel:
-            return True, "", 0.0
-
-        try:
-            executor = FactorExecutor(factor)
-            signal_dict, ret_dict = _cs_execute_factors(
-                executor,
-                factor.get("params", {}),
-                panel,
-            )
-        except Exception as e:
-            return False, f"预筛选执行失败: {type(e).__name__}: {e}", 0.0
-
-        if len(signal_dict) < 5:
-            return False, f"横截面有效标的不足: {len(signal_dict)} < 5", 0.0
-
-        common_dates = self.cross_section_dates
-        if common_dates is None or len(common_dates) == 0:
-            return True, "", 0.0
-
-        # 全样本截面（预筛不切片，正式评估再走 OOS）
-        signal_matrix, ret_matrix = _cs_build_matrices(
-            signal_dict,
-            ret_dict,
-            common_dates,
-            len(common_dates),
-        )
-        ics = _cs_compute_ics(signal_matrix, ret_matrix)
-        if not ics:
-            # 无有效截面期（如窗口期样本不足），放行交由正式评估兜底
-            return True, "", 0.0
-
-        ic_abs = abs(float(np.mean(ics)))
-        ic_threshold = 0.01 if self.market == "futures" else 0.02
-        if ic_abs < ic_threshold:
-            return False, (f"横截面快速 IC 过低: abs(IC)={ic_abs:.4f} < {ic_threshold}"), 0.0
-        return True, "", ic_abs
-
-    # ── Phase B.2.1: 后代因子运行时校验 ──────────────────
-
-    def _check_factor_runtime(
-        self,
-        factor: FactorProgram,
-    ) -> tuple[bool, str]:
-        """试运行因子程序，在源头拦截 LLM 生成代码的运行时错误。
-
-        拦截场景:
-            - 广播错误（如 shapes (n,) 与 (2,) 混合运算）
-            - 输出长度与输入不匹配（np.diff/np.convolve 未保持长度 n）
-            - 常数信号（无信息量）
-
-        复用 BacktestPipeline._execute_factor_code（与回测流水线同一执行路径），
-        保证「校验通过 = 流水线可执行」，避免无效后代进入下游评估。
-
-        Args:
-            factor: 因子程序
-
-        Returns:
-            (是否通过, 失败原因；通过时原因为空)
-        """
-        from .backtest_pipeline import BacktestPipeline
-
-        probe_data = (
-            list(self.cross_section_data.values())[0]
-            if (self._is_cross_section and self.cross_section_data is not None)
-            else self.data
-        )
-        try:
-            signal = BacktestPipeline._execute_factor_code(
-                factor.get("code", ""),
-                probe_data,
-                factor.get("params", {}),
-            )
-        except Exception as e:
-            return False, f"执行失败: {type(e).__name__}: {e}"
-
-        if not isinstance(signal, np.ndarray) or len(signal) != len(probe_data):
-            return False, (f"输出长度不匹配: {len(signal) if hasattr(signal, '__len__') else '?'} != {len(probe_data)}")
-        if np.std(signal) < 1e-12:
-            return False, "输出为常数信号（无信息量）"
-        return True, ""
-
-    def _run_backtest_pipeline(
-        self,
-        factor: FactorProgram,
-        evaluation: FactorEvaluation,
-        trace_id: str,
-    ) -> Optional[dict[str, Any]]:
-        """执行端到端回测流水线（Phase B.2 集成）。
-
-        在因子通过 L1/L2/L3 评估后，运行标准化回测流水线，
-        生成完整的回测报告，供质检和审计使用。
-
-        Args:
-            factor: 因子程序
-            evaluation: L1/L2/L3 评估结果
-            trace_id: 全链路 trace_id
-
-        Returns:
-            回测结果字典，包含绩效指标和报告路径；失败返回 None
-        """
-        try:
-            from .backtest_pipeline import BacktestInput
-
-            bt_input = BacktestInput(
-                factor=factor if isinstance(factor, dict) else dict(factor),
-                data=self.data,
-                benchmark=None,
-                forward_period=1,
-            )
-            result = self.backtest_pipeline.run(bt_input)
-
-            if not result.success:
-                print(f"[evo] 回测流水线失败 [{factor.get('factor_id', '?')}]: {result.error}")
-                return None
-
-            report = result.output
-            return {
-                "success": True,
-                "duration_ms": result.duration_ms,
-                "report_path": getattr(report, "file_path", None) if report else None,
-                "metrics": {
-                    "total_return": getattr(report, "total_return", 0.0),
-                    "sharpe": getattr(report, "sharpe_ratio", 0.0),
-                    "max_drawdown": getattr(report, "max_drawdown", 0.0),
-                    "calmar": getattr(report, "calmar_ratio", 0.0),
-                }
-                if report
-                else {},
-            }
-        except Exception as e:
-            logger.debug("回测流水线异常: %s", e)
-            return None
-
-    # ── Phase B.3: 因子强制审计 ──────────────────────────
-
-    @staticmethod
-    def _build_wf_config(data: pd.DataFrame) -> dict[str, Any]:
-        """按数据长度适配 WalkForward 窗口配置（GAP-F08，v2.60.0）。
-
-        数据不足 3 年时缩短窗口，保证短样本也能构建多窗口冷启动验证；
-        数据 < 半年（约 125 交易日）无法构建，由调用方跳过并记录原因。
-
-        Args:
-            data: 主时间序列数据
-
-        Returns:
-            WalkForwardConfig 字典
-        """
-        from .walk_forward import DEFAULT_WALK_FORWARD_CONFIG
-
-        cfg = dict(DEFAULT_WALK_FORWARD_CONFIG)
-        n = len(data)
-        years = n / 250.0
-        if years >= 3.0:
-            return cfg
-        if years >= 2.0:
-            cfg.update(window_years=1, step_months=3, min_oos_months=2, n_windows=4)
-        elif years >= 1.0:
-            cfg.update(window_years=1, step_months=2, min_oos_months=1, n_windows=3)
-        elif years >= 0.5:
-            cfg.update(window_years=0, step_months=1, min_oos_months=0, n_windows=2)
-        else:
-            cfg.update(window_years=0, step_months=0, min_oos_months=0, n_windows=1)
-        return cfg
-
-    def _run_walkforward_oos(
-        self,
-        factor: FactorProgram,
-    ) -> Optional[dict[str, Any]]:
-        """冷启动 WalkForward 样本外验证（GAP-F08，v2.60.0）。
-
-        用多窗口滚动样本外评估替代 L1 单段 ICIR 近似，验证因子时间维度稳定性。
-        数据不足或 force_walkforward=false 时返回 None（跳过并记录原因），
-        审计 oos_consistency 项回退原逻辑。
-
-        Args:
-            factor: 因子程序
-
-        Returns:
-            WalkForwardResult 字典；跳过时返回 None
-        """
-        from fts.config.settings import get_config
-
-        if not get_config().force_walkforward:
-            logger.info("[Evo] force_walkforward=false，跳过冷启动样本外验证")
-            return None
-
-        data = self.data
-        if data is None or len(data) < 125:
-            logger.info(
-                "[Evo] 数据长度不足（%d 行 < 125），跳过冷启动样本外验证",
-                len(data) if data is not None else 0,
-            )
-            return None
-
-        try:
-            from scipy import stats as sp_stats  # type: ignore[import-untyped]
-
-            from .backtest_pipeline import BacktestPipeline
-            from .walk_forward import WalkForwardOptimizer
-
-            code = factor.get("code", "") if isinstance(factor, dict) else getattr(factor, "code", "")
-            params = factor.get("params", {}) if isinstance(factor, dict) else getattr(factor, "params", {})
-
-            def _eval_fn(
-                train_df: pd.DataFrame,
-                oos_df: pd.DataFrame,
-            ) -> dict[str, float]:
-                """评估函数：在 oos 段计算因子 IC/夏普/换手。"""
-                try:
-                    signal = BacktestPipeline._execute_factor_code(code, oos_df, params)
-                except Exception:  # noqa: BLE001
-                    return {"ic": 0.0, "sharpe": 0.0, "turnover": 0.0}
-                signal = np.asarray(signal, dtype=float)
-                close = oos_df["close"].to_numpy(dtype=float)
-                fwd = np.zeros(len(close))
-                if len(close) > 1:
-                    fwd[:-1] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
-                mask = np.isfinite(signal) & np.isfinite(fwd)
-                if int(np.sum(mask)) < 10:
-                    return {"ic": 0.0, "sharpe": 0.0, "turnover": 0.0}
-                ic, _ = sp_stats.spearmanr(signal[mask], fwd[mask])
-                if not np.isfinite(ic):
-                    ic = 0.0
-                rets = fwd[mask]
-                sharpe = float(np.mean(rets) / max(np.std(rets), 1e-9) * np.sqrt(252))
-                turnover = float(np.mean(np.abs(np.diff(signal))))
-                return {"ic": float(ic), "sharpe": sharpe, "turnover": turnover}
-
-            optimizer = WalkForwardOptimizer(self._build_wf_config(data))
-            result = optimizer.evaluate(data, _eval_fn)
-            if result.get("n_windows_completed", 0) == 0:
-                logger.info("[Evo] WalkForward 无可用窗口，跳过冷启动样本外验证")
-                return None
-            logger.info(
-                "[Evo] 冷启动样本外验证完成 [ic_consistency=%.2f, windows=%d, passed=%s]",
-                result.get("ic_consistency", 0.0),
-                result.get("n_windows_completed", 0),
-                result.get("passed", False),
-            )
-            return dict(result)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("[Evo] WalkForward 冷启动验证异常，跳过: %s", e)
-            return None
-
-    def _run_factor_audit(
-        self,
-        factor: FactorProgram,
-        evaluation: FactorEvaluation,
-        trace_id: str,
-    ) -> FactorAuditReport:
-        """执行因子审计（Phase B.3 集成）。
-
-        将评估结果中的数据映射到审计器所需的输入，
-        执行 6 项强制审计检查。
-
-        Args:
-            factor: 因子程序
-            evaluation: 评估结果
-            trace_id: 全链路 trace_id
-
-        Returns:
-            FactorAuditReport 审计报告
-        """
-        import traceback
-
-        factor_meta = {
-            "factor_id": factor.get("factor_id", ""),
-            "name": factor.get("name", ""),
-            "trace_id": trace_id,
-            "family": factor.get("family", ""),
-        }
-
-        l1 = evaluation.get("level_1_backtest", {})
-        l3 = evaluation.get("level_3_multiple", {})
-
-        # 构造 OOS 结果（从评估链 L1 提取）
-        # 注意: L1 的 oos_ratio 是样本外数据切分比例（评估链默认 0.3），
-        # 并非一致性通过率，不能直接与审计阈值 0.5 比较。
-        # 样本外一致性以 OOS ICIR 度量（|ICIR| ≥ 1.0 → ic_consistency=1.0）。
-        oos_ratio = l1.get("oos_ratio", 0)
-        oos_ic = l1.get("ic", 0)
-        oos_icir = l1.get("icir", 0)
-        oos_result: dict[str, Any] | None = None
-        if oos_ratio > 0:
-            oos_result = {
-                "ic_consistency": min(1.0, abs(oos_icir)),
-                "oos_ic": oos_ic,
-                "passed": abs(oos_icir) >= 1.0,
-            }
-
-        # v2.60.0 (GAP-F08): 冷启动 WalkForward 样本外验证优先。
-        # GAP-070 (v2.98.0): 优先复用三级评估链走航结果（Step 3 已强制走航，
-        # 配置同源 `_build_wf_config`，窗口 IC 口径一致），消除双重 WalkForward
-        # 重复计算；评估链走航失败/跳过（数据不足/force_walkforward=false）时
-        # 兜底独立计算保持原逻辑。
-        wf_result: dict[str, Any] | None = cast(dict[str, Any] | None, evaluation.get("walk_forward"))
-        if not (wf_result and wf_result.get("n_windows_completed", 0) > 0):
-            wf_result = self._run_walkforward_oos(factor)
-        if wf_result is not None:
-            oos_result = {
-                "ic_consistency": wf_result.get("ic_consistency", 0.0),
-                "oos_ic": 0.0,  # 一致性已含多窗口均值信息
-                "passed": wf_result.get("passed", False),
-                "windows": wf_result.get("windows", []),
-                "n_windows_completed": wf_result.get("n_windows_completed", 0),
-            }
-        elif isinstance(evaluation.get("walk_forward"), dict):
-            chain_wf = evaluation.get("walk_forward")
-            if chain_wf is not None and int(chain_wf.get("n_windows_completed", 0)) < 2:
-                # GAP-079 (v2.102.0): 评估链走航存在但窗口不足（n_windows_completed<2），
-                # 且独立走航失败（数据不足/force_walkforward=false）——保留"窗口不足"事实
-                # 而非回退 L1 icir 兜底，使 _check_oos_consistency 命中 GAP-073 的
-                # n_windows<2 → skipped 分支。修复短样本下 oos_consistency 全量误杀
-                # （1073 audit_fail 中 99.4% 由 oos 导致，其中 90% 走航 0 窗口，
-                # 见 plans/26-phase0-audit-breakdown.md）。
-                oos_result = {
-                    "ic_consistency": 0.0,
-                    "oos_ic": 0.0,
-                    "passed": False,
-                    "windows": [],
-                    "n_windows_completed": 0,
-                }
-
-        # 构造 p-values（从 L3 提取，仅当非默认值时传递）
-        p_values: list[float] = []
-        bonf_p = l3.get("bonferroni_p")
-        if bonf_p is not None and bonf_p < 1.0:
-            p_values.append(float(bonf_p))
-
-        try:
-            report = self.auditor.audit(
-                factor=factor_meta,
-                data=self.data,
-                forward_returns=self.forward_returns,
-                symbol_ic_map=l1.get("symbol_ic") or None,  # GAP-075: 激活 cross_symbol
-                symbol_holdout=l1.get("symbol_holdout") or None,  # GAP-075: 标的留出审计项
-                oos_result=oos_result,
-                p_values=p_values if p_values else None,
-            )
-        except Exception as e:
-            logger.warning(
-                "审计执行异常 [%s]: %s (降级为跳过所有审计项)",
-                factor_meta["name"],
-                str(e),
-            )
-            logger.debug(traceback.format_exc())
-            report = FactorAuditReport(
-                factor_id=factor_meta["factor_id"],
-                factor_name=factor_meta["name"],
-                audited_at=datetime.now().isoformat(),
-                items=[],
-                passed=False,
-                pass_rate=0.0,
-                summary={"total": 6, "passed": 0, "failed": 0, "skipped": 6, "pass_rate": 0.0},
-            )
-
-        return report
-
-    # ── Phase A: 消融实验检查 ──────────────────────────
-
-    # v2.50.0 判定语义：核心价格列（因子正常依赖的输入）与信息型消融模式
-    # 不参与"伪相关"拦截判定——时序因子依赖时序因果（shuffle_dates）、
-    # 价格因子依赖价格列、量价因子依赖成交量/VWAP 均属必要特征。
-    _ABLATION_PRICE_CORE_COLS: frozenset[str] = frozenset({"open", "high", "low", "close", "vwap", "settle"})
-    # 信息型消融模式：记录但不拦截
-    _ABLATION_INFORMATIONAL_MODES: frozenset[str] = frozenset(
-        {"volume_zero", "vwap_to_close", "vwap_to_settle", "shuffle_dates"}
-    )
-
-    @staticmethod
-    def _is_blocking_ablation(ab: dict[str, Any]) -> bool:
-        """是否属于拦截型消融（非价格列置零导致的输入依赖崩塌）。
-
-        仅当 zero_one_feature 置零的是「非核心价格列」（如 volume/持仓量等
-        逻辑上为辅助输入的特征）时才参与伪相关判定。
-        """
-        mode = ab.get("mode", "")
-        if mode in EvolutionLoop._ABLATION_INFORMATIONAL_MODES:
-            return False
-        if mode == "zero_one_feature":
-            feature = ab.get("feature") or ""
-            return feature.lower() not in EvolutionLoop._ABLATION_PRICE_CORE_COLS
-        return False
-
-    def _run_ablation_check(
-        self,
-        factor: FactorProgram,
-        evaluation: FactorEvaluation,
-        trace_id: str,
-    ) -> dict[str, Any]:
-        """执行消融实验检查（Phase A 集成）。
-
-        随机扰动因子输入特征，检测伪相关。
-        仅「拦截型消融」（非价格列置零）IC 降幅超过基线 50% 时判定为伪相关；
-        信息型消融（时序结构/成交量/VWAP/核心价格列）只记录不拦截。
-        数据缺失时跳过（passed=True，不误杀）。
-
-        Args:
-            factor: 因子程序
-            evaluation: 评估结果
-            trace_id: 全链路 trace_id
-
-        Returns:
-            消融结果字典，包含 passed 标志
-        """
-        try:
-            data = getattr(self, "data", None)
-            if data is None or len(data) == 0:
-                return {"passed": True, "skipped": True, "error": "data unavailable"}
-            forward_returns = getattr(self, "forward_returns", None)
-            if forward_returns is None:
-                forward_returns = np.zeros(len(data))
-
-            result = self.ablation_experiment.run(factor, data, forward_returns, signal_cache=self._signal_cache)
-            # AblationResult 是 dict 子类，直接使用
-            baseline_ic = result.get("baseline_ic", 0.0)
-            ablations = result.get("ablations", [])
-            if abs(baseline_ic) < 1e-9:
-                is_passed = True
-            else:
-                # 仅拦截型消融的 IC 降幅超过基线 50% → 疑似伪相关
-                blocking = [ab for ab in ablations if self._is_blocking_ablation(ab)]
-                is_passed = all(ab.get("ic_change", 0.0) >= -0.5 * abs(baseline_ic) for ab in blocking)
-            return {**result, "passed": is_passed}
-        except Exception as e:
-            logger.warning("消融实验异常: %s", e)
-            return {"passed": True, "error": str(e), "ablations": []}
-
-    def _run_robustness_check(
-        self,
-        factor: FactorProgram,
-        evaluation: FactorEvaluation,
-        trace_id: str,
-    ) -> dict[str, Any]:
-        """执行鲁棒性审查（Phase B 集成）。
-
-        在因子通过审计后，检测在对抗扰动、缺失值和
-        分布外场景下的稳定性。
-
-        Args:
-            factor: 因子程序
-            evaluation: 评估结果
-            trace_id: 全链路 trace_id
-
-        Returns:
-            鲁棒性结果字典，包含 passed 标志
-        """
-        try:
-            data = getattr(self, "data", None)
-            if data is None or len(data) == 0:
-                return {"passed": True, "skipped": True, "error": "data unavailable"}
-            forward_returns = getattr(self, "forward_returns", None)
-            if forward_returns is None:
-                forward_returns = np.zeros(len(data))
-
-            # 期货市场鲁棒性审查阈值放宽（低信噪比、短样本场景）
-            min_pass_rate = 0.7
-
-            result = self.robustness_tester.run(factor, data, forward_returns, signal_cache=self._signal_cache)
-            # RobustnessTestResult 是 dict 子类，直接使用
-            summary = result.get("summary", {})
-            pass_rate = summary.get("overall_pass_rate", 1.0)
-            is_passed = pass_rate >= min_pass_rate
-            return {**result, "passed": is_passed}
-        except Exception as e:
-            logger.warning("鲁棒性审查异常: %s", e)
-            return {"passed": True, "error": str(e)}
-
-    # ── Phase B: SHAP 可解释性分析 ──────────────────────
-
-    def _run_shap_analysis(
-        self,
-        factor: FactorProgram,
-        evaluation: FactorEvaluation,
-        trace_id: str,
-    ) -> dict[str, Any]:
-        """执行 SHAP 可解释性分析（Phase B 集成）。
-
-        对极端预测样本进行特征归因，确保模型可解释。
-
-        Args:
-            factor: 因子程序
-            evaluation: 评估结果
-            trace_id: 全链路 trace_id
-
-        Returns:
-            SHAP 分析结果字典
-        """
-        try:
-            data = getattr(self, "data", None)
-            if data is None or len(data) == 0:
-                return {"passed": True, "skipped": True, "error": "data unavailable"}
-            forward_returns = getattr(self, "forward_returns", None)
-            if forward_returns is None:
-                forward_returns = np.zeros(len(data))
-
-            result = self.shap_analyzer.analyze(factor, data, forward_returns, signal_cache=self._signal_cache)
-            # ShapAnalysisResult 是 dict 子类，直接使用；SHAP 为信息型审查，成功即通过
-            return {**result, "passed": True}
-        except Exception as e:
-            logger.warning("SHAP 分析异常: %s", e)
-            return {"passed": True, "error": str(e)}
-
-    # ── Phase C: 因果结构审查 ──────────────────────────
-
-    def _run_causal_validation(
-        self,
-        factor: FactorProgram,
-        evaluation: FactorEvaluation,
-        trace_id: str,
-    ) -> dict[str, Any]:
-        """执行因果结构审查（Phase C 集成）。
-
-        使用自然实验验证因子是否捕获了真实因果关系。
-        对熔断等极端事件进行预测误差分析。
-
-        Args:
-            factor: 因子程序
-            evaluation: 评估结果
-            trace_id: 全链路 trace_id
-
-        Returns:
-            因果验证结果字典，包含 passed 标志
-        """
-        try:
-            data = getattr(self, "data", None)
-            if data is None or len(data) == 0:
-                return {"passed": True, "skipped": True, "error": "data unavailable"}
-            forward_returns = getattr(self, "forward_returns", None)
-            if forward_returns is None:
-                forward_returns = np.zeros(len(data))
-
-            result = self.causal_validator.validate(factor, data, forward_returns)
-            # CausalValidationResult 是 dict 子类，直接使用
-            is_passed = result.get("n_anomalous", 0) == 0
-            return {**result, "passed": is_passed}
-        except Exception as e:
-            logger.warning("因果验证异常: %s", e)
-            return {"passed": True, "error": str(e)}
+        return self._elite_store._write_seed_correlation_index(seed_correlations, trace_id)
+
+    def _get_repo(self) -> Any:
+        return self._elite_store._get_repo()
+
+    # ── C 阶段 47c: 领域 C 实例属性 property 转发（兼容测试直接读写；
+    #    状态实际由 self._elite_store 持有，见 34 §8.3） ──
+
+    @property
+    def _repo(self) -> Optional[Any]:
+        return self._elite_store._repo
+
+    @_repo.setter
+    def _repo(self, v: Optional[Any]) -> None:
+        self._elite_store._repo = v
+
+    @property
+    def _cluster_quota_enabled(self) -> bool:
+        return self._elite_store._cluster_quota_enabled
+
+    @_cluster_quota_enabled.setter
+    def _cluster_quota_enabled(self, v: bool) -> None:
+        self._elite_store._cluster_quota_enabled = v
+
+    @property
+    def _cluster_max(self) -> int:
+        return self._elite_store._cluster_max
+
+    @_cluster_max.setter
+    def _cluster_max(self, v: int) -> None:
+        self._elite_store._cluster_max = v
+
+    @property
+    def _cluster_corr_threshold(self) -> float:
+        return self._elite_store._cluster_corr_threshold
+
+    @_cluster_corr_threshold.setter
+    def _cluster_corr_threshold(self, v: float) -> None:
+        self._elite_store._cluster_corr_threshold = v
+
+    @property
+    def _cluster_max_scan(self) -> int:
+        return self._elite_store._cluster_max_scan
+
+    @_cluster_max_scan.setter
+    def _cluster_max_scan(self, v: int) -> None:
+        self._elite_store._cluster_max_scan = v
+
+    @property
+    def _l2_elite_corr_threshold(self) -> float:
+        return self._elite_store._l2_elite_corr_threshold
+
+    @_l2_elite_corr_threshold.setter
+    def _l2_elite_corr_threshold(self, v: float) -> None:
+        self._elite_store._l2_elite_corr_threshold = v
+
+    @property
+    def _l2_elite_corr_max_scan(self) -> int:
+        return self._elite_store._l2_elite_corr_max_scan
+
+    @_l2_elite_corr_max_scan.setter
+    def _l2_elite_corr_max_scan(self, v: int) -> None:
+        self._elite_store._l2_elite_corr_max_scan = v
+
+    @property
+    def _l2_elite_corr_debug(self) -> bool:
+        return self._elite_store._l2_elite_corr_debug
+
+    @_l2_elite_corr_debug.setter
+    def _l2_elite_corr_debug(self, v: bool) -> None:
+        self._elite_store._l2_elite_corr_debug = v
+
+    @property
+    def _l2_elite_orthogonalize(self) -> bool:
+        return self._elite_store._l2_elite_orthogonalize
+
+    @_l2_elite_orthogonalize.setter
+    def _l2_elite_orthogonalize(self, v: bool) -> None:
+        self._elite_store._l2_elite_orthogonalize = v
+
+    @property
+    def _l2_orthogonal_residual_corr_max(self) -> float:
+        return self._elite_store._l2_orthogonal_residual_corr_max
+
+    @_l2_orthogonal_residual_corr_max.setter
+    def _l2_orthogonal_residual_corr_max(self, v: float) -> None:
+        self._elite_store._l2_orthogonal_residual_corr_max = v
+
+    @property
+    def _l2_orthogonal_min_retained_ratio(self) -> float:
+        return self._elite_store._l2_orthogonal_min_retained_ratio
+
+    @_l2_orthogonal_min_retained_ratio.setter
+    def _l2_orthogonal_min_retained_ratio(self, v: float) -> None:
+        self._elite_store._l2_orthogonal_min_retained_ratio = v
+
+    @property
+    def _l2_orthogonal_basis_enabled(self) -> bool:
+        return self._elite_store._l2_orthogonal_basis_enabled
+
+    @_l2_orthogonal_basis_enabled.setter
+    def _l2_orthogonal_basis_enabled(self, v: bool) -> None:
+        self._elite_store._l2_orthogonal_basis_enabled = v
+
+    @property
+    def _l2_orthogonal_basis_max_size(self) -> int:
+        return self._elite_store._l2_orthogonal_basis_max_size
+
+    @_l2_orthogonal_basis_max_size.setter
+    def _l2_orthogonal_basis_max_size(self, v: int) -> None:
+        self._elite_store._l2_orthogonal_basis_max_size = v
+
+    @property
+    def _l2_orthogonal_basis_min_sharpe(self) -> float:
+        return self._elite_store._l2_orthogonal_basis_min_sharpe
+
+    @_l2_orthogonal_basis_min_sharpe.setter
+    def _l2_orthogonal_basis_min_sharpe(self, v: float) -> None:
+        self._elite_store._l2_orthogonal_basis_min_sharpe = v
+
+    @property
+    def orthogonal_basis(self) -> Any:
+        return self._elite_store.orthogonal_basis
+
+    @orthogonal_basis.setter
+    def orthogonal_basis(self, v: Any) -> None:
+        self._elite_store.orthogonal_basis = v
+
+    @property
+    def high_ic_screener(self) -> Any:
+        return self._elite_store.high_ic_screener
+
+    @high_ic_screener.setter
+    def high_ic_screener(self, v: Any) -> None:
+        self._elite_store.high_ic_screener = v
+
+    @property
+    def elite_tracker(self) -> Any:
+        return self._elite_store.elite_tracker
+
+    @elite_tracker.setter
+    def elite_tracker(self, v: Any) -> None:
+        self._elite_store.elite_tracker = v
+
+    # ── C 阶段 47a: UCT 域实例属性 property 转发（兼容测试直接读写；
+    #    状态实际由 self._uct_selector 持有，见 34 §8.3） ──
+
+    @property
+    def _uct_stats(self) -> dict[str, dict[str, float]]:
+        return self._uct_selector._uct_stats
+
+    @_uct_stats.setter
+    def _uct_stats(self, v: dict[str, dict[str, float]]) -> None:
+        self._uct_selector._uct_stats = v
+
+    @property
+    def _consecutive_low_ic(self) -> int:
+        return self._low_ic_box[0]
+
+    @_consecutive_low_ic.setter
+    def _consecutive_low_ic(self, v: int) -> None:
+        self._low_ic_box[0] = v
+
+    @property
+    def _evolution_stop_enabled(self) -> bool:
+        return self._uct_selector._evolution_stop_enabled
+
+    @_evolution_stop_enabled.setter
+    def _evolution_stop_enabled(self, v: bool) -> None:
+        self._uct_selector._evolution_stop_enabled = v
+
+    @property
+    def _evolution_stop_k(self) -> int:
+        return self._uct_selector._evolution_stop_k
+
+    @_evolution_stop_k.setter
+    def _evolution_stop_k(self, v: int) -> None:
+        self._uct_selector._evolution_stop_k = v
+
+    @property
+    def _consecutive_empty_generations(self) -> int:
+        return self._uct_selector._consecutive_empty_generations
+
+    @_consecutive_empty_generations.setter
+    def _consecutive_empty_generations(self, v: int) -> None:
+        self._uct_selector._consecutive_empty_generations = v
+
+    @property
+    def _early_stop_last_count(self) -> int:
+        return self._uct_selector._early_stop_last_count
+
+    @_early_stop_last_count.setter
+    def _early_stop_last_count(self, v: int) -> None:
+        self._uct_selector._early_stop_last_count = v
+
+    @property
+    def _early_stop_reason(self) -> Optional[str]:
+        return self._uct_selector._early_stop_reason
+
+    @_early_stop_reason.setter
+    def _early_stop_reason(self, v: Optional[str]) -> None:
+        self._uct_selector._early_stop_reason = v
+
+    # ── C 阶段 47a: UCT 域方法转发桩（兼容测试直接调用与 patch.object，
+    #    run/_process_candidate 等 MRO 调用点零改动；实现委托 UctSelector） ──
+
+    def _select_parent_uct(self, parents: list[FactorProgram]) -> FactorProgram:
+        return self._uct_selector._select_parent_uct(parents)
+
+    def _update_uct_stats(self, parent: FactorProgram, evaluation: FactorEvaluation) -> None:
+        self._uct_selector._update_uct_stats(parent, evaluation)
+
+    def _update_uct_failure(self, parent: FactorProgram) -> None:
+        self._uct_selector._update_uct_failure(parent)
+
+    def _check_circuit_breaker(self, state: EvolutionState) -> Optional[str]:
+        return self._uct_selector._check_circuit_breaker(state)
+
+    def _maybe_early_stop(self, state: EvolutionState) -> bool:
+        return self._uct_selector._maybe_early_stop(state)
 
 
 # ─── CLI 入口 ─────────────────────────────────────────────

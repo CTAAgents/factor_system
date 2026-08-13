@@ -141,8 +141,8 @@ class TestCheckFileExists:
 
 class TestCheckDocAssertions:
     def test_01_architecture_seed_count(self, iso: dict[str, Path]) -> None:
-        ok = _write_doc(iso["harness"] / "01-architecture.md", extra_body="种子 482 个")
-        bad = _write_doc(iso["root"] / "01-architecture.md")  # 同名不同路径：无 482
+        ok = _write_doc(iso["harness"] / "01-architecture.md", extra_body="种子 185 个")
+        bad = _write_doc(iso["root"] / "01-architecture.md")  # 同名不同路径：无 185
         assert vdc.check_doc_assertions(ok) == []
         assert vdc.check_doc_assertions(bad) != []
 
@@ -219,7 +219,7 @@ class TestCheckVersionConsistency:
 
 class TestRunAllChecks:
     def test_all_green(self, iso: dict[str, Path]) -> None:
-        _write_doc(iso["harness"] / "01-architecture.md", extra_body="种子 482 个")
+        _write_doc(iso["harness"] / "01-architecture.md", extra_body="种子 185 个")
         _write_doc(iso["harness"] / "02-lifecycle.md")
         _write_doc(iso["harness"] / "execution_modes_flowchart.md")
         _write_doc(iso["harness"] / "business_flow.md")
@@ -246,14 +246,14 @@ class TestMain:
         return vdc.main()
 
     def test_no_args_all_green(self, iso: dict[str, Path], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-        _write_doc(iso["harness"] / "01-architecture.md", extra_body="种子 482 个")
+        _write_doc(iso["harness"] / "01-architecture.md", extra_body="种子 185 个")
         _write_doc(iso["harness"] / "execution_modes_flowchart.md")
         _write_doc(iso["harness"] / "business_flow.md")
         assert self._call_main(monkeypatch, []) == 0
         assert "全部通过" in capsys.readouterr().out
 
     def test_json_output(self, iso: dict[str, Path], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-        _write_doc(iso["harness"] / "01-architecture.md", extra_body="种子 482 个")
+        _write_doc(iso["harness"] / "01-architecture.md", extra_body="种子 185 个")
         _write_doc(iso["harness"] / "execution_modes_flowchart.md")
         _write_doc(iso["harness"] / "business_flow.md")
         assert self._call_main(monkeypatch, ["--json"]) == 0
@@ -267,7 +267,7 @@ class TestMain:
 
     def test_file_scoped_check(self, iso: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
         # 存在坏文档 + 其他正常：--file 指定好文档应只对该文档做元数据/断言检查并放行
-        _write_doc(iso["harness"] / "01-architecture.md", extra_body="种子 482 个")
+        _write_doc(iso["harness"] / "01-architecture.md", extra_body="种子 185 个")
         (iso["harness"] / "02-lifecycle.md").write_text("# 坏文档\n", encoding="utf-8")
         _write_doc(iso["harness"] / "execution_modes_flowchart.md")
         _write_doc(iso["harness"] / "business_flow.md")
@@ -279,7 +279,7 @@ class TestMain:
         update_script = iso["scripts"] / "update_doc_versions.py"
         update_script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
         # 完整文档集，保证 fix 后继续校验全绿
-        _write_doc(iso["harness"] / "01-architecture.md", extra_body="种子 482 个")
+        _write_doc(iso["harness"] / "01-architecture.md", extra_body="种子 185 个")
         _write_doc(iso["harness"] / "execution_modes_flowchart.md")
         _write_doc(iso["harness"] / "business_flow.md")
         captured: dict[str, object] = {}

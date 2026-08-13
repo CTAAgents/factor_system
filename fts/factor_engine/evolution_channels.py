@@ -1,48 +1,63 @@
 """
-loop_engine/evolution_channels.py — EvolutionLoop 领域 G Mixin：演化通道（GP/深度/算子 DSL）
+loop_engine/evolution_channels.py — 领域 G 协作类：演化通道（GP/深度/算子 DSL）
 
-34 计划（plans/34-evolution-loop-refactor-inventory.md）B 阶段第三步：从
-evolution_loop.py 抽取领域 G（演化通道）为独立 Mixin，行为等价、公开 API
-不变。原方法剪切迁移（不改逻辑）。本领域无独享状态；组件
-（feature_ops_engine / feature_importance_analyzer）与跨领域共享数据
-（data / forward_returns / market / cross_section_data / _is_cross_section）
-均由主类 EvolutionLoop.__init__ 装配，mixin 仅做类型声明经 self 访问。
+34 计划（plans/34-evolution-loop-refactor-inventory.md）C 阶段 Phase 47g：
+B 阶段产物 EvolutionChannelsMixin 组合式重构为 EvolutionChannels 协作类，
+行为等价、公开 API 不变。领域独享组件（macro_evolver / feature_ops_engine /
+feature_importance_analyzer）随迁本类并在构造内装配（原主类 __init__ 对应段
+迁移）；跨领域共享数据（data / forward_returns / market / cross_section_data /
+_is_cross_section）经 owner（主类实例）动态读取，兼容运行时重赋值
+（34 §8.3 可变上下文修订，47b CandidatePrefilter 先例）。主类 EvolutionLoop
+组合持有本类实例，保留 4 方法转发桩 + 3 属性 property 转发（兼容测试零改动）。
 
 契约（见 01-architecture.md §5 EvolutionLoop Mixin 拆分契约）：
-- Mixin 方法名全局唯一，不 import evolution_loop（单向依赖，防循环导入）。
+- 协作类不 import evolution_loop（防循环导入），owner 仅经 Any 标注，
+  运行时经主类组装注入。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型检查
-    from .feature_importance import FeatureImportanceAnalyzer
-    from .feature_ops import FeatureOpsEngine
     from .contracts import FactorProgram
 
 logger = logging.getLogger(__name__)
 
 
-class EvolutionChannelsMixin:
-    """领域 G：演化通道（GP 遗传规划 / 深度因子 / 算子 DSL）。
+class EvolutionChannels:
+    """领域 G：演化通道（GP 遗传规划 / 深度因子 / 算子 DSL）协作类。
 
-    实例属性由主类 EvolutionLoop.__init__ 装配；此处类型声明供 mypy
-    跨文件识别（34 计划 Mixin 拆分契约第 5 条）。本领域无独享状态。
+    状态所有权（34 §8.3）：领域独享组件（macro_evolver / feature_ops_engine /
+    feature_importance_analyzer）随迁本类并在构造内装配（原主类 __init__
+    对应段迁移）；跨领域共享数据（data / forward_returns / market /
+    cross_section_data / _is_cross_section）经 owner（主类实例）动态读取，
+    兼容运行时重赋值。主类 EvolutionLoop 组合持有本类实例，保留 4 方法
+    转发桩 + 3 属性 property 转发（兼容测试零改动，见 34 §8.5）。
     """
 
-    # ── 实例属性类型声明（装配在 evolution_loop.py EvolutionLoop.__init__） ──
-    data: pd.DataFrame
-    forward_returns: np.ndarray | None
-    market: str
-    cross_section_data: Optional[dict[str, pd.DataFrame]]
-    _is_cross_section: bool
-    feature_ops_engine: "FeatureOpsEngine"
-    feature_importance_analyzer: "FeatureImportanceAnalyzer"
+    def __init__(self, owner: Any) -> None:
+        self._owner: Any = owner
+        # ── 领域独享组件随迁（原主类 __init__ 对应段迁移） ──
+        from .macro_evolution import MacroEvolver
+
+        self.macro_evolver = MacroEvolver(
+            llm_client=owner.llm_client,
+            experience_chain=owner.experience_chain,
+            max_tokens_per_call=owner.budget["max_tokens_per_factor"],
+        )
+        # 子模块: GP 特征演化引擎 (Phase C.1 集成)
+        from .feature_ops import FeatureOpsEngine
+
+        self.feature_ops_engine = FeatureOpsEngine()
+        # 子模块: 特征重要性分析 (Phase C.1 集成)
+        from .feature_importance import FeatureImportanceAnalyzer
+
+        self.feature_importance_analyzer = FeatureImportanceAnalyzer()
 
     def _run_gp_evolution(
         self,
@@ -66,9 +81,9 @@ class EvolutionChannelsMixin:
         from .gp_evolver import tree_to_factor_program
 
         target_col = "forward_return"
-        gp_data = self.data.copy()
-        if self.forward_returns is not None and len(self.forward_returns) == len(gp_data):
-            gp_data[target_col] = self.forward_returns
+        gp_data = self._owner.data.copy()
+        if self._owner.forward_returns is not None and len(self._owner.forward_returns) == len(gp_data):
+            gp_data[target_col] = self._owner.forward_returns
         else:
             gp_data[target_col] = 0.0
 
@@ -102,7 +117,7 @@ class EvolutionChannelsMixin:
         factor_program["parent_id"] = parent.get("factor_id")
         factor_program["generation"] = generation
         factor_program["trace_id"] = trace_id
-        factor_program["market"] = self.market
+        factor_program["market"] = self._owner.market
 
         # ── Phase C.1: 特征重要性分析 (集成到 GP 管线) ──
         try:
@@ -162,19 +177,19 @@ class EvolutionChannelsMixin:
         """
         from fts.ml.deep_factor import DeepFactorConfig, create_deep_factor
 
-        if self.data is None or len(self.data) < 2:
+        if self._owner.data is None or len(self._owner.data) < 2:
             raise RuntimeError("深度演化: 无可用行情数据")
 
-        data = self.data
+        data = self._owner.data
         # forward_returns 缺失/长度不齐时由生成器内部降级（返回 None）
-        forward_returns: np.ndarray | None = self.forward_returns
+        forward_returns: np.ndarray | None = self._owner.forward_returns
         if forward_returns is None or len(forward_returns) != len(data):
             forward_returns = None
 
         factor = create_deep_factor(
             data=data,
             forward_returns=forward_returns,
-            market=self.market,
+            market=self._owner.market,
             parent_name=parent.get("name", "?"),
             trace_id=trace_id,
             config=DeepFactorConfig(model_kind=model_kind),
@@ -300,9 +315,9 @@ class EvolutionChannelsMixin:
                 # 避免到运行时校验/预筛阶段才被淘汰，浪费下游资源）
                 try:
                     probe_data = (
-                        list(self.cross_section_data.values())[0]
-                        if (self._is_cross_section and self.cross_section_data is not None)
-                        else self.data
+                        list(self._owner.cross_section_data.values())[0]
+                        if (self._owner._is_cross_section and self._owner.cross_section_data is not None)
+                        else self._owner.data
                     )
                     sig = evaluate(node, probe_data, registry)
                     sig_arr = sig.values if isinstance(sig, pd.Series) else np.asarray(sig, dtype=float)
@@ -327,7 +342,7 @@ class EvolutionChannelsMixin:
                 new_factor = create_operator_factor(
                     expression=expression,
                     name=factor_name,
-                    market=self.market,
+                    market=self._owner.market,
                     family=parent.get("family", "operator"),
                     narrative=(f"算子演化: {expression} (基于父因子 {parent.get('name', '?')})"),
                     params={},
@@ -377,15 +392,15 @@ class EvolutionChannelsMixin:
 
         try:
             # 评估数据源: 横截面模式用代表序列（与 micro_evolution 一致）
-            if self._is_cross_section and self.cross_section_data is not None:
-                data = list(self.cross_section_data.values())[0].copy()
+            if self._owner._is_cross_section and self._owner.cross_section_data is not None:
+                data = list(self._owner.cross_section_data.values())[0].copy()
             else:
-                data = self.data.copy()
+                data = self._owner.data.copy()
             target_col = "forward_return"
-            if self.forward_returns is None or len(self.forward_returns) != len(data):
+            if self._owner.forward_returns is None or len(self._owner.forward_returns) != len(data):
                 logger.debug("算子演化引擎跳过: 无 forward_returns 评估数据")
                 return None
-            data[target_col] = self.forward_returns
+            data[target_col] = self._owner.forward_returns
 
             # 种子由父因子 + 代际序号派生（GAP-074 P0-2）：同父因子不同代
             # 产生不同搜索轨迹（原仅父因子派生产生完全确定性空转）；同父同代仍可复现
@@ -426,7 +441,7 @@ class EvolutionChannelsMixin:
             factor = engine.best_factor_program(
                 result,
                 name=f"op_evolved_{generation}_{parent.get('factor_id', '?')[:6]}",
-                market=self.market,
+                market=self._owner.market,
                 family=parent.get("family", "operator"),
                 narrative=(f"算子演化引擎: {result.best_expression} (基于父因子 {parent.get('name', '?')})"),
                 trace_id=trace_id,

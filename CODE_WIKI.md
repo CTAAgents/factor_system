@@ -64,7 +64,7 @@ FTS（因子智能系统 → 交易信号）
 
 | 能力 | 说明 |
 |------|------|
-| **四层循环体系** | L0 Program（人类设定）+ L1 Meta-Loop（工作日 07:59 知识补给）+ L2 Evolution Loop（工作日 00:00 夜间演化）+ L3 Portfolio Loop（周五 19:00 期货 / 19:30 股票） |
+| **四层循环体系** | L0 Program（人类设定）+ L1 Meta-Loop（工作日 07:59 知识补给）+ L2 Evolution Loop（工作日 00:00 夜间演化）+ L3 Portfolio Loop（工作日每日 19:00 期货 / 19:30 股票已剥离 fts-stock） |
 | **多市场支持** | 🎯 **主系统=期货**（定位）：期货 82 全量连续合约 / 25 核心 / 15 盲测池 / 21 分层训练集。A 股/ETF 已剥离至独立项目 `d:\Programs\fts-stock`（v0.0.1），本仓库内残留的股票代码（evolution_stock/data_mcp/barra 等）为**工程残余**，不属于主系统设计意图 |
 | **因子种子库** | 期货 YAML 种子 20 文件（seeds/futures/，主路径）+ Python 硬编码 81 种子 14 家族；股票 9 内置 + WQ101 + Qlib158 + GTJA191 + 基本面 + JQ 外部库 + YAML |
 | **FTS-Expr DSL** | 算子表达式语言，**512 项算子**（20 字段 + 492 算子，L0-L5 分层），支持表达式因子，双注册表一致性校验 |
@@ -126,7 +126,7 @@ FTS（因子智能系统 → 交易信号）
                                   │ 精英因子（futures_elite|stocks_elite）
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                  L3 Portfolio Loop（周五 19:00/19:30）                 │
+│                  L3 Portfolio Loop（工作日每日 19:00 期货 / 19:30 股票已剥离）                 │
 │  加载精英因子（DuckDB SSOT 优先）→ 质量门槛/影子池过滤 → 基础名去重     │
 │  → ACTIVE_FACTOR_CAP=20 → 聚类/PCA（可选）→ 信号合成（9 种模式）       │
 │  → Regime 自适应权重（family×style + 概率混合 + 置信度缩放）            │
@@ -987,7 +987,7 @@ A 股路径:     TDX_LOCAL 17709 股票端点 → 腾讯 HTTP API → 合成
 |--------|------|------|
 | `l1_meta_loop` | `59 7 * * 1-5` | L1 知识补给 + 种子注入 |
 | `l2_evolution_loop` | `0 0 * * 1-5` | L2 夜间演化（分层训练集排除盲测池） |
-| `l3_portfolio_loop` | `0 19 * * 5` | L3 期货组合构建 + 触发信号管道 |
+| `l3_portfolio_loop` | `0 19 * * 1-5` | L3 期货组合构建（equal_weight 每日重算，与信号管道解绑 GAP-072） |
 | `l3_portfolio_loop_stock` | `30 19 * * 5` | L3 股票组合权重重算 |
 | `futures_signal_pipeline` | `0 20 * * 1-5` | 期货横截面信号报告 |
 | `daily_signal_pipeline` | `45 8 * * 1-5` | 股票/ETF 逐股打分信号 |
@@ -1496,7 +1496,7 @@ L2 Evolution Loop (工作日 00:00)
   ├── 经验链记录 → 状态持久化（state.duckdb）→ 实验日志导出
   └── 收尾：相关性索引 + 周期因子审查（自动退役 + 反馈闭环 + 逻辑监控）
         ▼
-L3 Portfolio Loop (周五 19:00/19:30)
+L3 Portfolio Loop (工作日每日 19:00 期货 / 19:30 股票已剥离)
   ├── GAP-072 权重重算日判定（冻结日复用上次组合）
   ├── 加载精英因子（DuckDB SSOT 优先 → 质量门槛 → 影子池过滤 → 基础名去重）
   ├── 纯外推验证 → ACTIVE_FACTOR_CAP=20 → 聚类/PCA（可选）

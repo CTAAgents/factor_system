@@ -61,9 +61,9 @@ DEFAULT_TASKS = {
         "prefix": "fts.l2",
     },
     "l3_portfolio_loop": {
-        "cron": "0 19 * * 5",
+        "cron": "0 19 * * 1-5",
         "callable": "fts.scheduler.jobs.l3_portfolio_loop_job",
-        "desc": "L3 Portfolio Loop（期货路径：futures_elite + market=futures）：每周五收盘后重算组合权重（Elastic Net 信号合成 + Verifier 校验），与期货信号管道解绑",
+        "desc": "L3 Portfolio Loop（期货路径：futures_elite + market=futures）：工作日每日收盘后重算组合权重（equal_weight 信号合成 + Verifier 校验，v2.103.0+23 默认；--force-recompute 保证每日全量重算），与期货信号管道解绑",
         "prefix": "fts.l3",
     },
     "futures_signal_pipeline": {
@@ -87,7 +87,7 @@ DEFAULT_TASKS = {
     "monthly_decay_eval": {
         "cron": "0 4 1 * *",
         "callable": "fts.scheduler.jobs.monthly_decay_eval_job",
-        "desc": "月度因子衰减评估（A.2）：精英池增量评估 + 状态机 + 自动淘汰",
+        "desc": "月度治理（2026-08-13 起与重审合并）：Step A 新标准准入重审（audit/robustness/评分卡复检 active elite，不合格降级观察或淘汰，FTS_MONTHLY_REAUDIT_ENABLED=0 关闭）+ Step B 因子衰减评估（A.2 增量评估 + 状态机 + 自动淘汰）",
         "prefix": "fts.decay",
     },
     "data_quality_eval": {

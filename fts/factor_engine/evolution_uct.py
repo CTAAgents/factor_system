@@ -1,15 +1,16 @@
 """
-loop_engine/evolution_uct.py — EvolutionLoop 领域 I Mixin：UCT 父因子选择 + 熔断/提前停止
+loop_engine/evolution_uct.py — UctSelector 协作类：UCT 父因子选择 + 熔断/提前停止
 
-34 计划（plans/34-evolution-loop-refactor-inventory.md）B 阶段第一步：从
-evolution_loop.py 抽取领域 I（UCT 选择与熔断停止）为独立 Mixin，行为等价、
-公开 API 不变。原方法剪切迁移（不改逻辑），领域独享状态（_uct_stats /
-_evolution_stop_* / _consecutive_empty_generations / _early_stop_*）随迁，
-跨领域共享状态（budget / _consecutive_low_ic）留在主类实例，经 self 访问。
+34 计划（plans/34-evolution-loop-refactor-inventory.md）C 阶段 Phase 47a：
+B 阶段产物 EvolutionUctMixin 组合式重构为 UctSelector 协作类，行为等价、
+公开 API 不变。领域独享状态（_uct_stats / _evolution_stop_* /
+_consecutive_empty_generations / _early_stop_*）随迁本类，全局上下文
+（budget）与共享状态（_consecutive_low_ic 经 low_ic_box 注入，主循环持有）
+构造注入。主类 EvolutionLoop 组合持有本类实例，保留原 5 方法转发桩与
+实例属性 property 转发（兼容 25+ 测试文件零改动，见 34 §8.3/8.5）。
 
-契约（见 01-architecture.md §5 EvolutionLoop Mixin 拆分契约）：
-- Mixin 方法名全局唯一，不 import evolution_loop（单向依赖，防循环导入）；
-- 本模块为 UCT_EXPLORATION_C 单一事实源，evolution_loop.py re-export。
+跨组件约束（34 §8.3）：协作类不 import evolution_loop（防循环导入）；
+本模块为 UCT_EXPLORATION_C 单一事实源，evolution_loop.py re-export。
 """
 
 from __future__ import annotations
@@ -24,24 +25,36 @@ UCT_EXPLORATION_C: float = 1.0
 """UCT 探索常数。越大越倾向探索未访问的父因子。"""
 
 
-class EvolutionUctMixin:
-    """领域 I：UCT 树搜索父因子选择 + 熔断/提前停止。
+class UctSelector:
+    """领域 I：UCT 树搜索父因子选择 + 熔断/提前停止（34 计划 C 阶段协作类）。
 
-    实例属性由主类 EvolutionLoop.__init__ 装配；此处类型声明供 mypy
-    跨文件识别（34 计划 Mixin 拆分契约第 5/6 条）。领域独享状态
-    （_uct_stats/_evolution_stop_*/_consecutive_empty_generations/_early_stop_*）
-    随本 Mixin 迁移，跨领域共享状态（budget/_consecutive_low_ic）留在主类。
+    状态所有权（34 §8.3）：
+    - 随迁：`_uct_stats`/`_evolution_stop_enabled`/`_evolution_stop_k`/
+      `_consecutive_empty_generations`/`_early_stop_last_count`/`_early_stop_reason`
+    - 注入：`budget`（全局上下文）；`low_ic_box`（主循环持有的
+      `_consecutive_low_ic` 可变引用，经 property 只读访问）
     """
 
-    # ── 实例属性类型声明（装配在 evolution_loop.py EvolutionLoop.__init__） ──
-    _uct_stats: dict[str, dict[str, float]]
-    budget: BudgetConfig
-    _consecutive_low_ic: int
-    _evolution_stop_enabled: bool
-    _evolution_stop_k: int
-    _consecutive_empty_generations: int
-    _early_stop_last_count: int
-    _early_stop_reason: Optional[str]
+    def __init__(
+        self,
+        budget: BudgetConfig,
+        low_ic_box: list[int],
+        evolution_stop_enabled: bool = False,
+        evolution_stop_k: int = 5,
+    ) -> None:
+        self.budget = budget
+        self._low_ic_box = low_ic_box
+        self._uct_stats: dict[str, dict[str, float]] = {}
+        self._evolution_stop_enabled = evolution_stop_enabled
+        self._evolution_stop_k = evolution_stop_k
+        self._consecutive_empty_generations = 0
+        self._early_stop_last_count = 0
+        self._early_stop_reason: Optional[str] = None
+
+    @property
+    def _consecutive_low_ic(self) -> int:
+        """只读共享状态（主循环持有 box，本类仅读取熔断判定）。"""
+        return self._low_ic_box[0]
 
     def _select_parent_uct(self, parents: list[FactorProgram]) -> FactorProgram:
         """UCT 树搜索选择父因子，平衡探索与利用。

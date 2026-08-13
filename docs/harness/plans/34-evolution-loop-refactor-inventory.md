@@ -1,7 +1,7 @@
 # 34-evolution-loop-refactor-inventory.md — evolution_loop.py 职责盘点与属性耦合清单
 
 
-> 版本: v2.103.0+11
+> 版本: v2.103.0+33
 
 > 状态: Phase-0 盘点（B 阶段 Mixin 抽取 / C 阶段组合式重构的前置证据）
 > 日期: 2026-08-13
@@ -207,15 +207,15 @@
 | 2 | `evolution_trace.py` | J | ~420 | 12 | OK Phase 46b 已交付（2026-08-13，v2.103.0+6）：12 方法 + _QualityInspectionResult 数据类迁移完成；_success_pattern_cache/_experiment_log_dir/_experiment_variants 随迁（类型声明于 mixin，装配于主类 __init__）；run 的 _experiment_variants.clear() 经 mixin 属性声明兼容保留；受影响测试全绿 |
 | 3 | `evolution_channels.py` | G | ~400 | 4 | OK Phase 46c 已交付（2026-08-13，v2.103.0+7）：4 方法迁移完成；feature_ops_engine/feature_importance_analyzer 组件装配于主类（mixin 类型声明）；受影响测试全绿 |
 | 4 | `evolution_seeds.py` | D | ~590 | 6 | OK **Phase 46d 已交付（2026-08-13，v2.103.0+11）**：`_evaluate_and_promote_seeds`/`_merge_l1_candidates`/`_run_seed_correlation_check`/`_build_barra_exposures`/`_evaluate_cross_section`/`run_microstructure_promotion` 迁移完成；跨域方法引用（_promote_to_elite/_run_*_check 等 15 个）经 mixin 类体 Callable 类型声明供 mypy 解析；cap_map/industry_map/_barra_exposures_cache 随迁声明；受影响测试全绿 |
-| 5 | `evolution_audit.py` | E | ~430 | 9 | `_signal_cache` 与 B 域共享，抽取时须保留共享引用 |
-| 6 | `evolution_review.py` | F | ~200 | 4 | `data_quality_monitor` 与 A 域共享 |
-| 7 | `evolution_prefilter.py` | H | ~180 | 3 | 无特殊（读全局上下文） |
-| 8 | `evolution_promote.py` | C | ~880 | 11 | `_repo`/`_cluster_*`/`_l2_*` 随迁；`__init__` 装配段同步拆分 |
-| 9 | `evolution_candidate.py` | B | ~375 | 1 | `_process_candidate` 读 14 属性/调 21 方法，最后迁移；须先完成 1–8 使依赖方法就位 |
+| 5 | `evolution_audit.py` | E | ~430 | 9 | OK **Phase 46e 已交付（2026-08-13，v2.103.0+12）**：`_run_factor_audit`/`_run_walkforward_oos`/`_run_backtest_pipeline`/`_run_ablation_check`/`_run_robustness_check`/`_run_shap_analysis`/`_run_causal_validation`/`_build_wf_config`/`_is_blocking_ablation` 迁移完成 + `_ABLATION_*` 类常量随迁；6 组件类型声明于 mixin；`_signal_cache` 与 B 域共享保留引用；测试 EvolutionLoop._build_wf_config 静态调用经 MRO 兼容；受影响测试全绿 |
+| 6 | `evolution_review.py` | F | ~200 | 4 | OK **Phase 46f 已交付（2026-08-13，v2.103.0+14）**：`_run_periodic_factor_review`/`_get_factor_data_for_review`/`_register_factor_baseline`/`_check_factor_data_quality` 迁移完成；data_quality_monitor 与 A 域共享保留引用；elite_tracker/feedback_loop/logic_monitor/verifier 类型声明于 mixin；受影响测试全绿 |
+| 7 | `evolution_prefilter.py` | H | ~180 | 3 | OK **Phase 46g 已交付（2026-08-13，v2.103.0+16）**：`_quick_prefilter`/`_cross_section_prefilter`/`_check_factor_runtime` 迁移完成；纯读跨领域共享（data/market/forward_returns/cross_section_*/_is_cross_section），无领域独享状态；受影响测试全绿 |
+| 8 | `evolution_promote.py` | C | ~880 | 11 | OK **Phase 46h 已交付（2026-08-13，v2.103.0+18）**：`_promote_to_elite`/`_write_to_duckdb`/`_scan_elite_correlations`/`_check_elite_correlation`/`_count_cluster_members`/`_orthogonalize_via_basis`/`_orthogonalize_candidate`/`_load_elite_parent_factors`/`_write_seed_correlation_index`/`_get_repo`/`_release_repo_after` 迁移完成；领域独享状态 `_repo`/`_cluster_*`/`_l2_*`/`orthogonal_basis`/`high_ic_screener`/`elite_tracker` 装配于主类 `__init__`（mixin 类型声明）；模块级符号 `_build_shadow_pool`/`_log_consistency_event`/`_SHADOW_OBSERVE_TRADING_DAYS` 经函数体内延迟导入；受影响测试 602 passed |
+| 9 | `evolution_candidate.py` | B | ~375 | 1 | OK **Phase 46i 已交付（2026-08-13，v2.103.0+19，B 阶段收官）**：`_process_candidate` 迁移完成；14 属性类型声明 + 21 跨域方法 Callable 声明（MRO 动态派发）；测试补丁 `evolve_micro` 目标迁移至 evolution_candidate；受影响测试 279 passed |
 
-> 注：`__init__`(313 行) 的配置装配段在任意领域迁移时同步拆出（随各 Mixin 提供各自 `_load_config` 或注入工厂），最终 `__init__` 仅保留 76 个属性中真正全局的部分（~20 个）。
+> 注：`__init__`(313 行) 的配置装配段在任意领域迁移时同步拆出（随各 Mixin 提供各自 `_load_config` 或注入工厂），最终 `__init__` 仅保留 76 个属性中真正全局的部分（~20 个）。—— B 阶段按「类型声明于 mixin、装配于主类」策略执行，`__init__` 装配段拆分留待 C 阶段。
 
-**完成后**：`evolution_loop.py` 预计降至 **~1000 行**（类外辅助 + `__init__` 精简 + `run`/`_evolve_one` 编排核心 + 类外小类）。
+**B 阶段完成（2026-08-13）**：`evolution_loop.py` 由 **5117 行 / 62 方法 → 1470 行 / 9 方法**（9 个领域 Mixin 全部抽取）。剩余 ~1470 行 = 类外辅助 + `__init__`(313 行) + `run`(330 行)/`_evolve_one`(285 行)/`_run_batch_generation`(116 行) 编排核心 + 类外小类；C 阶段组件化后预计进一步降至 ~1000 行。
 
 ## 6. C 阶段组件化映射提示（组合式重构）
 
@@ -249,3 +249,73 @@ B 阶段完成后，每个 Mixin 天然对应 C 阶段的一个协作类：
 | 属性读写分布 | 文档 §4 属性集合 = 脚本 `attr_readers`/`attr_writers` 全集 | 同上（JSON 对比） |
 | 领域分组 | 文档 §3 分组 = 文件内注释 `# ── 领域 X ──` 标注（抽取时逐块落注释） | 抽取后 `grep -c "领域"` 对照 |
 | 纯函数候选 | `_build_wf_config`/`_is_blocking_ablation`/`_log_inspection_detail` 读 0 实例属性 | 脚本输出 `reads==[]` 校验 |
+
+---
+
+## 8. C 阶段设计（组合式重构：Mixin → 协作类 + `__init__` 装配段拆分）
+
+> 状态：**C 阶段完成（2026-08-13，Phase 47a-47i 全部交付，继承链清零）**。B 阶段（§1-7）已全部交付（Phase 46a-46i，v2.103.0+19，`evolution_loop.py` 5117 行/62 方法 → 1470 行/9 方法，9 个领域 Mixin 继承组合）。C 阶段将 9 个 Mixin 组合式重构为协作类，主类由「多继承 Mixin」转为「组合持有协作类实例」，并拆分 `__init__` 装配段。**47a（+21）**`UctSelector`；**47b（+22）**`CandidatePrefilter`；**47c（+25）**`EliteStore`；**47d（+26）**`AuditPipeline`；**47e（+27）**`TraceRecorder`；**47f（+29）**`FactorReviewer`；**47g（+30）**`EvolutionChannels`；**47h（+32）**`SeedManager`；**47i（+33）**`EvolutionCandidateMixin` → `CandidateProcessor`（领域 B 状态 `_prior_evaluations` 随迁构造；上下文 data/forward_returns/cross_section_*/evaluation_chain/verifier/quality_inspector/state_manager/budget/n_trials_micro/_micro_staged_evolution 经 owner 动态读取，`_signal_cache`（归 AuditPipeline）/`_consecutive_low_ic`（归主循环 low_ic_box）经主类 property 转发读写；跨域方法 21 处经 owner 转发；1 方法转发桩 + 1 属性 property 转发含 setter；**继承链清零，`class EvolutionLoop:` 纯组合持有 9 协作类**），里程碑 not-slow 全量回归通过。
+
+### 8.1 目标与验收
+
+- **目标**：`EvolutionLoop` 从「Mixin 多继承」改为「组合（has-a）」，每个领域成为可独立构造/独立测试的协作类；`__init__` 313 行装配段拆分到各协作类构造函数，主类仅保留全局上下文（`data`/`market`/`forward_returns`/`cross_section_*`/`budget`/`state_manager`/`seed_pool`）+ 9 个协作类装配。
+- **验收**：公开 API 与行为等价不变（`EvolutionLoop`/`EvolutionRunResult`/`UCT_EXPLORATION_C`/`_add_trading_days`/`_build_shadow_pool`/`_QualityInspectionResult`/`main` + 全部 `_*` 实例方法签名）；25+ 测试文件零改动全绿；`analyze_evolution_loop.py` 基线显示主类方法数降至 ~12（run/__init__/转发桩）。
+
+### 8.2 协作类清单（9 个，对应 B 阶段 9 个 Mixin）
+
+| 协作类 | 来源 Mixin | 领域 | 内部状态（随迁） | 构造注入（全局上下文） | 对外接口（原 Mixin 方法，方法名保持下划线开头以最小化签名改动） |
+|---|---|---|---|---|---|
+| `UctSelector` | evolution_uct | I | `_uct_stats`/`_evolution_stop_*`/`_early_stop_*`/`_consecutive_empty_generations` | `budget` | `_select_parent_uct`/`_update_uct_stats`/`_update_uct_failure`/`_check_circuit_breaker`/`_maybe_early_stop` |
+| `TraceRecorder` | evolution_trace | J | `_success_pattern_cache`/`_experiment_variants`/`_experiment_log_dir` | `data`/`budget`/`experience_chain`/`llm_client`/`seed_pool`/`elite_dir` | `_build_parent_failure_ctx`/`_build_success_pattern_report`/`_record_experiment_variant`/`_export_experiment_log`/`_record_*_trace`×7/`_log_inspection_detail`/`_record_quality_filtered_trace` |
+| `EvolutionChannels` | evolution_channels | G | `macro_evolver`/`feature_ops_engine`/`feature_importance_analyzer` | `data`/`forward_returns`/`market`/`budget` | `_run_gp_evolution`/`_run_deep_evolution`/`_generate_operator_factor`/`_try_operator_engine_evolution` |
+| `SeedManager` | evolution_seeds | D | `_barra_exposures_cache`/`_barra_exposures_attempted`/`industry_map`/`cap_map` | `data`/`forward_returns`/`market`/`cross_section_*`/`inject_dir` + 依赖注入（`EliteStore`/`AuditPipeline`/`TraceRecorder` 引用） | `_evaluate_and_promote_seeds`/`_merge_l1_candidates`/`_run_seed_correlation_check`/`_build_barra_exposures`/`_evaluate_cross_section`/`run_microstructure_promotion` |
+| `AuditPipeline` | evolution_audit | E | `auditor`/`backtest_pipeline`/`ablation_experiment`/`robustness_tester`/`shap_analyzer`/`causal_validator`/`_ABLATION_*` | `data`/`forward_returns`/`_signal_cache` | `_run_factor_audit`/`_run_walkforward_oos`/`_run_backtest_pipeline`/`_run_ablation_check`/`_run_robustness_check`/`_run_shap_analysis`/`_run_causal_validation`/`_build_wf_config`(static)/`_is_blocking_ablation`(static) |
+| `FactorReviewer` | evolution_review | F | `data_quality_monitor`/`feedback_loop`/`logic_monitor`/`_decay_auto_retire_enabled` | `data`/`elite_dir`/`budget` + 注入 `EliteStore.elite_tracker`/`verifier` | `_run_periodic_factor_review`/`_get_factor_data_for_review`/`_register_factor_baseline`/`_check_factor_data_quality` |
+| `CandidatePrefilter` | evolution_prefilter | H | 无（纯读全局上下文） | **owner（主类实例，动态读取** `data`/`market`/`forward_returns`/`cross_section_*`/`_is_cross_section`**，兼容运行时重赋值）** | `_quick_prefilter`/`_cross_section_prefilter`/`_check_factor_runtime` |
+| `EliteStore` | evolution_promote | C | `_repo`/`_cluster_*`/`_l2_*`/`orthogonal_basis`/`high_ic_screener`/`elite_tracker` | `data`/`market`/`budget`/`elite_dir`/`inject_dir`/`factor_db_path` | `_promote_to_elite`/`_write_to_duckdb`/`_scan_elite_correlations`/`_check_elite_correlation`/`_count_cluster_members`/`_orthogonalize_via_basis`/`_orthogonalize_candidate`/`_load_elite_parent_factors`/`_write_seed_correlation_index`/`_get_repo`/`_release_repo_after` |
+| `CandidateProcessor` | evolution_candidate | B | `_prior_evaluations`/`_consecutive_low_ic`（后者 34 §6 建议主循环持有，见 8.3） | `data`/`forward_returns`/`cross_section_*`/`n_trials_micro`/`_micro_staged_evolution`/`budget` + 依赖注入（8 个协作类引用） | `_process_candidate` |
+
+### 8.3 状态所有权与依赖注入（关键决策）
+
+1. **全局上下文**（`data`/`market`/`forward_returns`/`cross_section_data`/`cross_section_dates`/`_is_cross_section`/`budget`/`elite_dir`/`inject_dir`/`factor_db_path`）——单一事实源在主类 `__init__` 解析后**构造注入**各协作类；协作类内部只读不重新解析。**47b 修订（可变上下文）**：主类/测试可能在构造后**运行时重赋值**上下文（如 `loop.cross_section_data = {...}`），构造注入值快照会脱节 → 纯读上下文的协作类（`CandidatePrefilter` 先例）注入 **owner 主类实例**，方法内动态 `self._owner.<attr>` 读取；涉及**重状态领域状态**的协作类（`_uct_stats` 等）仍随迁+property 转发（47a 先例）。
+2. **`_signal_cache`** → 归 `AuditPipeline`（评估链/审计/消融/鲁棒性/SHAP 全部经 `evaluation_chain.evaluate(signal_cache=...)` 与审计复用）；`CandidateProcessor` 经构造注入同一引用使用。
+3. **`_consecutive_low_ic`** → 按 34 §6 建议归**主循环持有**：`run` 读取、`CandidateProcessor` 经构造注入可变引用（`MutableState` 小对象或回调）读写；UctSelector 的 `_maybe_early_stop` 也经构造注入读取。
+4. **跨域调用改造**：B 阶段经 MRO 派发的跨域方法（candidate 调 21 个等）→ 协作类**构造注入依赖协作类引用**（如 `CandidateProcessor(seed_manager=..., elite_store=..., audit_pipeline=..., trace_recorder=..., uct_selector=..., reviewer=..., prefilter=...)`），方法体内 `self._promote_to_elite(...)` 改为 `self._elite_store._promote_to_elite(...)`。协作类间**不互相 import 模块**（主类组装注入，防循环导入）。
+5. **主类兼容层**：`EvolutionLoop` 保留全部 9 组 `_*` 实例方法为**一行转发桩**（`def _promote_to_elite(self, *a, **k): return self._elite_store._promote_to_elite(*a, **k)`），保证 25+ 测试文件的直接调用与 `patch.object(loop, ...)` 零改动；旧实例属性经 **property 转发**（如 `@property def _uct_stats(self): return self._uct_selector._uct_stats`）兼容测试对状态的直接读写（test_uct_selection/test_evolution_stop 等）。
+
+### 8.4 `__init__` 装配段拆分方案
+
+- 现状（313 行）：`L301-613` 全部在 `EvolutionLoop.__init__` 内装配 76 属性。
+- 目标（~70 行）：主类 `__init__` = ① 解析全局上下文（~20 行）② 顺序创建 9 个协作类（每个一行，构造内部完成领域状态装配，~15 行）③ 主循环自身状态（`_consecutive_low_ic`/`_batch_idx`/`_signal_cache` 归属见 8.3，~10 行）④ 兼容 property 无需装配。
+- 各协作类构造函数承担原 `__init__` 对应装配段（如 `EliteStore.__init__` 收 `budget`/`elite_dir` 等，内部完成 `_cluster_*`/`_l2_*` 从 budget 解析 + `orthogonal_basis`/`high_ic_screener`/`elite_tracker` 组件实例化）。
+
+### 8.5 兼容与风险（B 阶段 §7 基础上追加）
+
+1. **Mixin 文件退役策略**：每个 Phase 完成一个协作类后，对应 `evolution_*.py` 的 Mixin 类删除、文件内容替换为协作类（文件保留同名，模块级符号如 `UCT_EXPLORATION_C`/`_QualityInspectionResult` 继续从该文件导出）；`EvolutionLoop` 继承链逐 Phase 收缩，最终无任何 Mixin 继承。
+2. **测试补丁目标**：B 阶段迁移过的模块级补丁（如 `evolution_candidate.evolve_micro`）保持不变（协作类仍在同模块）；新增 `patch.object(loop, "_promote_to_elite")` 类补丁经转发桩仍生效。
+3. **slow 测试（19 个）**：每 Phase 后 `-k` 定向抽验 + 里程碑全量验收。
+4. **`__init__` 装配顺序依赖**：协作类构造需按依赖序创建（`EliteStore`→`AuditPipeline`→`SeedManager`/`FactorReviewer`/`EvolutionChannels`→`CandidatePrefilter`→`CandidateProcessor`），依赖通过构造参数传入，**禁止**在协作类构造内反向 `import evolution_loop`。
+5. **`analyze_evolution_loop.py`**：方法归属扫描将协作类方法纳入"外部方法"集合，转发桩不计为主类逻辑方法；基线断言主类方法数降至 ~12。
+
+### 8.6 分阶段实施计划（Phase 47 系列，每 Phase 独立 bump + 文档同步）
+
+| Phase | 协作类 | 依赖复杂度 | 验证重点 |
+|---|---|---|---|
+| 47a | `UctSelector`（evolution_uct.py 改造） | 低（仅 budget） | test_uct_selection/test_evolution_stop |
+| 47b | `CandidatePrefilter`（evolution_prefilter.py 改造） | 低（纯读全局上下文） | test_evolution_loop 预筛路径 |
+| 47c | `EliteStore`（evolution_promote.py 改造） | 中（自身状态重） | test_l2_elite_redundancy/test_structure_cluster_quota/test_orthogonal_basis 等 6 文件 |
+| 47d | `AuditPipeline`（evolution_audit.py 改造，接管 `_signal_cache`） | 中 | test_evolution_loop 审计链 |
+| 47e | `TraceRecorder`（evolution_trace.py 改造，被 7 领域依赖） | 高（接口面广） | test_success_pattern/test_experiment_log |
+| 47f | `FactorReviewer`（evolution_review.py 改造） | 中 | test_evolution_loop 定期评审路径 |
+| 47g | `EvolutionChannels`（evolution_channels.py 改造） | 中 | operator_evolution 测试 |
+| 47h | `SeedManager`（evolution_seeds.py 改造） | 高（依赖 EliteStore/AuditPipeline/TraceRecorder） | test_evolution_l1_merge/test_microstructure_promotion |
+| 47i | `CandidateProcessor`（evolution_candidate.py 改造）+ 主循环 `run`/`_evolve_one` 编排改造 + `__init__` 精简 | 最高（依赖全部） | 全量受影响测试 + 里程碑全量回归 |
+
+> 注：实施顺序按「依赖少者先行」，与 34 §6 的组件命名对齐；每 Phase 完成即删对应 Mixin 继承、`__init__` 装配段同步拆出，最终 `EvolutionLoop` 组合持有 9 协作类。
+
+### 8.7 设计确认项（2026-08-13 用户确认「先出设计文档再动工」，四项全部确认后进入 Phase 47a）
+
+- [x] 协作类命名（`UctSelector`/`TraceRecorder`/`EvolutionChannels`/`SeedManager`/`AuditPipeline`/`FactorReviewer`/`CandidatePrefilter`/`EliteStore`/`CandidateProcessor`）✅ 已确认
+- [x] 状态所有权（`_signal_cache`→AuditPipeline、`_consecutive_low_ic`→主循环、`_prior_evaluations`→CandidateProcessor）✅ 已确认
+- [x] 兼容层（转发桩 + property 转发）策略 ✅ 已确认
+- [x] 分阶段顺序（47a→47i）✅ 已确认

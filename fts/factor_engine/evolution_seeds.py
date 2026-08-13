@@ -1,24 +1,23 @@
 """
-loop_engine/evolution_seeds.py — EvolutionLoop 领域 D Mixin：种子管理与横截面评估
+loop_engine/evolution_seeds.py — 领域 D 协作类：种子管理与横截面评估
 
-34 计划（plans/34-evolution-loop-refactor-inventory.md）B 阶段第四步：从
-evolution_loop.py 抽取领域 D（种子评估晋升 / L1 候选合并 / 种子相关性预检 /
-横截面评估 / Barra 暴露 / microstructure 晋升）为独立 Mixin，行为等价、公开
-API 不变。原方法剪切迁移（不改逻辑）。
-
-领域独享状态（cap_map / industry_map / _barra_exposures_cache /
-_barra_exposures_attempted）与跨领域共享数据（data / forward_returns /
-market / cross_section_data / cross_section_dates / _is_cross_section /
-evaluation_chain / verifier / quality_inspector / inject_dir）均由主类
-EvolutionLoop.__init__ 装配，mixin 仅做类型声明经 self 访问。
-
-跨域方法调用（_promote_to_elite / _run_*_check / _record_*_trace /
-_register_factor_baseline 等 15 个）经 Mixin 类体 Callable 类型声明供 mypy
-解析——运行时由 MRO 动态派发到主类或其他 Mixin 的真实实现（34 计划 Mixin
-拆分契约第 4 条），声明仅为类型检查占位，不遮蔽真实方法。
+34 计划（plans/34-evolution-loop-refactor-inventory.md）C 阶段 Phase 47h：
+B 阶段产物 EvolutionSeedsMixin 组合式重构为 SeedManager 协作类，行为等价、
+公开 API 不变。领域独享状态（_barra_exposures_cache / _barra_exposures_attempted）
+随迁本类构造（原主类 __init__ 对应段迁移）；跨领域共享数据（data /
+forward_returns / market / cross_section_data / cross_section_dates /
+_is_cross_section / inject_dir / evaluation_chain / verifier /
+quality_inspector / industry_map / cap_map——industry_map 在主类 __init__ 内经
+期货板块映射自动注入、cap_map/industry_map 可被测试运行时重赋值，属可变上下文）
+经 owner（主类实例）动态读取。跨域方法调用（_promote_to_elite / _run_*_check /
+_record_*_trace / _log_inspection_detail / _register_factor_baseline /
+_check_factor_data_quality / _evaluate_cross_section 等）经 owner 转发使测试
+`loop._X = MagicMock` 类实例打桩生效。主类 EvolutionLoop 组合持有本类实例，
+保留 7 方法转发桩 + 2 属性 property 转发（兼容测试零改动，见 34 §8.5）。
 
 契约（见 01-architecture.md §5 EvolutionLoop Mixin 拆分契约）：
-- Mixin 方法名全局唯一，不 import evolution_loop（单向依赖，防循环导入）。
+- 协作类不 import evolution_loop（防循环导入），owner 仅经 Any 标注，
+  运行时经主类组装注入。
 """
 
 from __future__ import annotations
@@ -26,10 +25,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
-import pandas as pd
 
 from .contracts import FactorEvaluation  # noqa: E402 — 延迟导入规避循环依赖
 from .evaluation_chain import cross_section_evaluate_backtest  # noqa: E402 — 延迟导入规避循环依赖
@@ -37,51 +35,27 @@ from .seed_pool import compute_seed_correlations  # noqa: E402
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型检查
     from .contracts import EvolutionState, FactorCorrelation, FactorProgram
-    from .evaluation_chain import EvaluationChain
-    from .verifier import FactorVerifier
 
 logger = logging.getLogger(__name__)
 
 
-class EvolutionSeedsMixin:
-    """领域 D：种子管理与横截面评估。
+class SeedManager:
+    """领域 D：种子管理与横截面评估（34 计划 C 阶段协作类）。
 
-    实例属性由主类 EvolutionLoop.__init__ 装配；此处类型声明供 mypy
-    跨文件识别（34 计划 Mixin 拆分契约第 5 条）。
+    状态所有权（34 §8.3）：领域独享状态（_barra_exposures_cache /
+    _barra_exposures_attempted）随迁本类构造；跨领域共享数据经 owner（主类
+    实例）动态读取，兼容运行时重赋值（34 §8.3 可变上下文修订，47b
+    CandidatePrefilter 先例）；跨域方法调用经 owner 转发使测试实例打桩生效。
+    主类 EvolutionLoop 组合持有本类实例，保留 7 方法转发桩 + 2 属性 property
+    转发（兼容测试零改动，见 34 §8.5）。
     """
 
-    # ── 实例属性类型声明（装配在 evolution_loop.py EvolutionLoop.__init__） ──
-    data: pd.DataFrame
-    forward_returns: np.ndarray | None
-    market: str
-    _is_cross_section: bool
-    cross_section_data: Optional[dict[str, pd.DataFrame]]
-    cross_section_dates: Optional[pd.DatetimeIndex]
-    evaluation_chain: "EvaluationChain"
-    verifier: "FactorVerifier"
-    quality_inspector: Any
-    inject_dir: Path
-    industry_map: Optional[dict[str, str]]
-    cap_map: Optional[dict[str, float]]
-    _barra_exposures_cache: Optional[dict[str, Any]]
-    _barra_exposures_attempted: bool
-
-    # ── 跨域方法调用类型声明（由主类 / 其他 Mixin 经 MRO 提供，仅 mypy 占位） ──
-    _promote_to_elite: Callable[..., Any]
-    _run_backtest_pipeline: Callable[..., Any]
-    _register_factor_baseline: Callable[..., Any]
-    _check_factor_data_quality: Callable[..., Any]
-    _run_factor_audit: Callable[..., Any]
-    _run_ablation_check: Callable[..., Any]
-    _run_causal_validation: Callable[..., Any]
-    _run_robustness_check: Callable[..., Any]
-    _run_shap_analysis: Callable[..., Any]
-    _record_failure_trace: Callable[..., Any]
-    _record_audit_failed_trace: Callable[..., Any]
-    _record_ablation_failed_trace: Callable[..., Any]
-    _record_causal_failed_trace: Callable[..., Any]
-    _record_robustness_failed_trace: Callable[..., Any]
-    _log_inspection_detail: Callable[..., Any]
+    def __init__(self, owner: Any) -> None:
+        self._owner: Any = owner
+        # ── 领域独享状态随迁（原主类 __init__ 对应段迁移） ──
+        # GAP-I304 (v2.79.0): Barra 风格暴露缓存（成功=dict / 失败=None，避免每因子重复构建）
+        self._barra_exposures_cache: Optional[dict[str, Any]] = None
+        self._barra_exposures_attempted: bool = False
 
     def _evaluate_and_promote_seeds(
         self,
@@ -110,13 +84,13 @@ class EvolutionSeedsMixin:
         promoted = 0
         for seed in seeds:
             try:
-                if self._is_cross_section:
-                    evaluation = self._evaluate_cross_section(seed, trace_id)
+                if self._owner._is_cross_section:
+                    evaluation = self._owner._evaluate_cross_section(seed, trace_id)
                 else:
-                    evaluation = self.evaluation_chain.evaluate(
+                    evaluation = self._owner.evaluation_chain.evaluate(
                         seed,
-                        self.data,
-                        self.forward_returns,
+                        self._owner.data,
+                        self._owner.forward_returns,
                     )
                 # 确保 WalkForward 结果存在（若缺失则执行轻量 2 窗口验证）
                 if evaluation.get("walk_forward") is None:
@@ -125,8 +99,8 @@ class EvolutionSeedsMixin:
                     try:
                         wf = evaluate_walk_forward(
                             seed,
-                            self.data,
-                            self.forward_returns,
+                            self._owner.data,
+                            self._owner.forward_returns,
                             config={"n_windows": 2},
                         )
                         evaluation["walk_forward"] = wf
@@ -147,9 +121,9 @@ class EvolutionSeedsMixin:
 
                 if passed:
                     # ── Verifier 判定（v2.50.0 与演化因子完全对齐） ──
-                    verifier_result = self.verifier.check(evaluation)
+                    verifier_result = self._owner.verifier.check(evaluation)
                     if not verifier_result.get("passed", False):
-                        self._record_failure_trace(
+                        self._owner._record_failure_trace(
                             seed,
                             0,
                             "seed_verifier",
@@ -168,12 +142,12 @@ class EvolutionSeedsMixin:
                             continue
 
                     # 种子因子质量评分卡 (Phase A.1 集成)
-                    inspection = self.quality_inspector.inspect(
+                    inspection = self._owner.quality_inspector.inspect(
                         factor=seed,
                         evaluation=evaluation,
                     )
                     if inspection.filtered:
-                        self._log_inspection_detail(
+                        self._owner._log_inspection_detail(
                             seed,
                             inspection,
                             "淘汰",
@@ -182,7 +156,7 @@ class EvolutionSeedsMixin:
                         continue
 
                     # 端到端回测流水线 (Phase B.2 集成)
-                    backtest_result = self._run_backtest_pipeline(
+                    backtest_result = self._owner._run_backtest_pipeline(
                         seed,
                         evaluation,
                         trace_id,
@@ -191,8 +165,8 @@ class EvolutionSeedsMixin:
                         evaluation["backtest_pipeline"] = backtest_result
 
                     # 数据质量监控 (Phase B.1 集成)
-                    self._register_factor_baseline(seed, evaluation)
-                    dq_alerts = self._check_factor_data_quality(
+                    self._owner._register_factor_baseline(seed, evaluation)
+                    dq_alerts = self._owner._check_factor_data_quality(
                         seed,
                         evaluation,
                     )
@@ -203,7 +177,7 @@ class EvolutionSeedsMixin:
                             continue
 
                     # 种子因子强制审计 (Phase B.3 集成)
-                    audit_report = self._run_factor_audit(
+                    audit_report = self._owner._run_factor_audit(
                         seed,
                         evaluation,
                         trace_id,
@@ -214,7 +188,7 @@ class EvolutionSeedsMixin:
                             f"[evo] 种子审计未通过 [{seed.get('name', '?')}]: "
                             f"失败项={failed_items}, 通过率={audit_report.pass_rate:.0%}"
                         )
-                        self._record_audit_failed_trace(
+                        self._owner._record_audit_failed_trace(
                             seed,
                             0,
                             trace_id,
@@ -224,7 +198,7 @@ class EvolutionSeedsMixin:
                         continue
 
                     # ── 消融实验检查（v2.50.0 与演化因子对齐） ──
-                    ablation_result = self._run_ablation_check(
+                    ablation_result = self._owner._run_ablation_check(
                         seed,
                         evaluation,
                         trace_id,
@@ -232,7 +206,7 @@ class EvolutionSeedsMixin:
                     evaluation["ablation_check"] = ablation_result
                     if not ablation_result.get("passed", True):
                         print(f"[evo] 种子消融实验未通过 [{seed.get('name', '?')}]: 疑似伪相关")
-                        self._record_ablation_failed_trace(
+                        self._owner._record_ablation_failed_trace(
                             seed,
                             0,
                             trace_id,
@@ -241,7 +215,7 @@ class EvolutionSeedsMixin:
                         continue
 
                     # ── 因果结构审查（v2.50.0 与演化因子对齐） ──
-                    causal_result = self._run_causal_validation(
+                    causal_result = self._owner._run_causal_validation(
                         seed,
                         evaluation,
                         trace_id,
@@ -249,7 +223,7 @@ class EvolutionSeedsMixin:
                     evaluation["causal_validation"] = causal_result
                     if not causal_result.get("passed", True):
                         print(f"[evo] 种子因果审查未通过 [{seed.get('name', '?')}]: 事件敏感")
-                        self._record_causal_failed_trace(
+                        self._owner._record_causal_failed_trace(
                             seed,
                             0,
                             trace_id,
@@ -258,7 +232,7 @@ class EvolutionSeedsMixin:
                         continue
 
                     # ── 鲁棒性审查（v2.50.0 与演化因子对齐） ──
-                    robustness_result = self._run_robustness_check(
+                    robustness_result = self._owner._run_robustness_check(
                         seed,
                         evaluation,
                         trace_id,
@@ -266,7 +240,7 @@ class EvolutionSeedsMixin:
                     evaluation["robustness_check"] = robustness_result
                     if not robustness_result.get("passed", True):
                         print(f"[evo] 种子鲁棒性审查未通过 [{seed.get('name', '?')}]")
-                        self._record_robustness_failed_trace(
+                        self._owner._record_robustness_failed_trace(
                             seed,
                             0,
                             trace_id,
@@ -275,20 +249,20 @@ class EvolutionSeedsMixin:
                         continue
 
                     # ── SHAP 可解释性分析（v2.50.0 与演化因子对齐，不阻断） ──
-                    shap_result = self._run_shap_analysis(
+                    shap_result = self._owner._run_shap_analysis(
                         seed,
                         evaluation,
                         trace_id,
                     )
                     evaluation["shap_analysis"] = shap_result
 
-                    self._log_inspection_detail(
+                    self._owner._log_inspection_detail(
                         seed,
                         inspection,
                         "通过",
                         0,
                     )
-                    promoted_path = self._promote_to_elite(
+                    promoted_path = self._owner._promote_to_elite(
                         seed,
                         evaluation,
                         seed_correlations=seed_correlations,
@@ -332,7 +306,7 @@ class EvolutionSeedsMixin:
         """
         import json
 
-        inject_dir = self.inject_dir
+        inject_dir = self._owner.inject_dir
         pool_path = Path("memory/knowledge/factors/factor_pool.json")
         if not inject_dir.exists():
             return seeds
@@ -382,7 +356,7 @@ class EvolutionSeedsMixin:
         existing_names = {fp.get("name") for fp in seeds}
 
         # 3. 扫描候选并合并
-        merged: list[FactorProgram] = list(seeds)
+        merged: list["FactorProgram"] = list(seeds)
         consumed_ids: list[str] = []
         for cand_file in sorted(inject_dir.glob("*.json")):
             try:
@@ -402,7 +376,7 @@ class EvolutionSeedsMixin:
                 continue
             # market 过滤: 候选带 market 时严格匹配，缺失时放行（老文件兼容）
             cand_market = cand.get("market")
-            if cand_market is not None and cand_market != self.market:
+            if cand_market is not None and cand_market != self._owner.market:
                 continue
             # 名称去重
             if cand_name in existing_names:
@@ -508,26 +482,26 @@ class EvolutionSeedsMixin:
         # 代码执行（spearmanr/percentile 重算子）+ 全对相关矩阵，计算量随种子数平方
         # 增长且无超时保护，种子集 > 50 时同样跳过预检。
         if len(seeds) > 50:
-            mode = "横截面" if self._is_cross_section else "时序"
+            mode = "横截面" if self._owner._is_cross_section else "时序"
             print(f"[evo] 种子因子相关性预检跳过: {len(seeds)} 种子，{mode}模式计算量过大")
             return []
         try:
-            if self._is_cross_section:
+            if self._owner._is_cross_section:
                 # 期货横截面模式: 截面排名 Spearman 相关
                 from .seed_pool import compute_cross_section_correlations
 
                 correlations = compute_cross_section_correlations(
                     seeds,
-                    self.cross_section_data,
-                    self.cross_section_dates,
+                    self._owner.cross_section_data,
+                    self._owner.cross_section_dates,
                     threshold=0.95,
                 )
             else:
                 # 股票时序模式: Pearson/Spearman 相关
-                correlations = compute_seed_correlations(seeds, self.data, threshold=0.95)
+                correlations = compute_seed_correlations(seeds, self._owner.data, threshold=0.95)
             return correlations
         except Exception as e:
-            mode = "横截面" if self._is_cross_section else "时序"
+            mode = "横截面" if self._owner._is_cross_section else "时序"
             print(f"[evo] 种子因子相关性预检异常（{mode}模式，跳过）: {e}")
             return []
 
@@ -543,9 +517,9 @@ class EvolutionSeedsMixin:
         Returns:
             {style_name: DataFrame(index=dates, columns=symbols)} 或 None
         """
-        if not self._is_cross_section:
+        if not self._owner._is_cross_section:
             return None
-        if self._barra_exposures_cache is not None or hasattr(self, "_barra_exposures_attempted"):
+        if self._barra_exposures_cache is not None or self._barra_exposures_attempted:
             return self._barra_exposures_cache
         self._barra_exposures_attempted = True
         try:
@@ -557,8 +531,8 @@ class EvolutionSeedsMixin:
 
             engine = BarraStyleEngine()
             exposures = engine.compute_exposures(
-                self.cross_section_data,
-                self.cross_section_dates,
+                self._owner.cross_section_data,
+                self._owner.cross_section_dates,
             )
             self._barra_exposures_cache = exposures
             n_available = sum(1 for s in exposures.values() if s is not None and not s.isna().all().all())
@@ -572,17 +546,56 @@ class EvolutionSeedsMixin:
             logger.warning("[EvolutionLoop] Barra 风格暴露构建失败，跳过风格中性化: %s", e)
             return None
 
+    def _build_vol_map(self) -> Optional[dict[str, float]]:
+        """构建波动率中性化映射（G10，v2.103.0+15）。
+
+        计算各品种全样本日收益年化波动率作为静态截面暴露（对标股票市值），
+        供 `cross_section_evaluate_backtest(vol_map=...)` 剥离信号与品种
+        波动率水平的相关性；开启时序去季节化剥离日历季节性。
+
+        Returns:
+            {symbol: 年化波动率}；非横截面 / 配置关闭 / 数据不足 / 异常返回 None
+        """
+        if not self._owner._is_cross_section or not self._owner.cross_section_data:
+            return None
+        try:
+            from fts.config.settings import get_config
+
+            if not get_config().l2_barra_style_neutral:
+                return None
+            vol_map: dict[str, float] = {}
+            for sym, df in self._owner.cross_section_data.items():
+                if "close" not in df.columns:
+                    continue
+                close = df["close"].dropna()
+                if len(close) < 20:
+                    continue
+                ret = close.pct_change().dropna()
+                if len(ret) < 20 or float(ret.std()) < 1e-12:
+                    continue
+                vol_map[sym] = float(ret.std() * np.sqrt(252.0))
+            logger.info(
+                "[EvolutionLoop] 波动率中性化映射构建完成: %d/%d 品种可用",
+                len(vol_map),
+                len(self._owner.cross_section_data),
+            )
+            return vol_map or None
+        except Exception as e:  # noqa: BLE001 — 构建失败不阻断评估
+            logger.warning("[EvolutionLoop] 波动率中性化映射构建失败，跳过: %s", e)
+            return None
+
     def _evaluate_cross_section(self, factor: "FactorProgram", trace_id: str) -> "FactorEvaluation":
         """横截面模式下的评估：直接回测 + 自动构造 FactorEvaluation。"""
         from .contracts import EconomicScore, MultipleTestResult
 
         bt = cross_section_evaluate_backtest(
             factor,
-            self.cross_section_data,
-            self.cross_section_dates,
-            industry_map=self.industry_map,
-            cap_map=self.cap_map,
+            self._owner.cross_section_data,
+            self._owner.cross_section_dates,
+            industry_map=self._owner.industry_map,
+            cap_map=self._owner.cap_map,
             style_exposures=self._build_barra_exposures(),
+            vol_map=self._build_vol_map(),
             long_only=False,
         )
         # 从因子自身读取经济逻辑评分（种子 YAML 或 LLM 生成），默认 3 分
@@ -657,7 +670,7 @@ class EvolutionSeedsMixin:
             factor = c.factor
             fid = factor.get("factor_id", "?")
             try:
-                ev = self._evaluate_cross_section(factor, tid)
+                ev = self._owner._evaluate_cross_section(factor, tid)
             except Exception as e:  # noqa: BLE001 - 单候选评估异常降级
                 logger.warning("[micro-promote] 候选评估异常跳过 %s: %s (trace_id=%s)", fid, e, tid)
                 result["skipped"] += 1
@@ -674,7 +687,7 @@ class EvolutionSeedsMixin:
                 audit = FactorAuditor().audit(factor=factor)
             except Exception as e:  # noqa: BLE001
                 logger.warning("[micro-promote] 候选审计降级 %s: %s (trace_id=%s)", fid, e, tid)
-            path = self._promote_to_elite(factor, ev, audit_report=audit)
+            path = self._owner._promote_to_elite(factor, ev, audit_report=audit)
             if path is not None:
                 result["promoted"] += 1
                 result["promoted_ids"].append(fid)

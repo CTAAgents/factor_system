@@ -42,6 +42,8 @@ StandardizeMethod = Literal[
     "quantile",
     "minmax",
     "winsorize_then_zscore",
+    "mad_winsorize",
+    "mad_then_zscore",
     "none",
 ]
 
@@ -51,6 +53,8 @@ SUPPORTED_METHODS: tuple[StandardizeMethod, ...] = (
     "quantile",
     "minmax",
     "winsorize_then_zscore",
+    "mad_winsorize",
+    "mad_then_zscore",
     "none",
 )
 
@@ -74,6 +78,7 @@ class StandardizerConfig:
     clip: Optional[float] = 3.0
     winsorize_lower: float = 0.01
     winsorize_upper: float = 0.99
+    mad_k: float = 3.0  # MAD 截断倍数（G9，35-gap-closure-plan；边界 = med ± k*1.4826*MAD）
     axis: Optional[int] = 0
     skipna: bool = True
 
@@ -159,6 +164,9 @@ class Standardizer:
             # 缩尾后的均值/标准差在 transform 时计算
             self._params["mean"] = None
             self._params["std"] = None
+        elif method in ("mad_winsorize", "mad_then_zscore"):
+            # MAD 参数（中位数/边界）在 transform 时动态计算（依赖数据本身，G9）
+            self._params = {}
 
         self._fitted = True
         return self
@@ -208,6 +216,18 @@ class Standardizer:
                 data,
                 self._params.get("lower"),
                 self._params.get("upper"),
+                clip=self._config.clip,
+                axis=self._config.axis,
+                skipna=self._config.skipna,
+            )
+
+        if method == "mad_winsorize":
+            return _apply_mad_winsorize(data, k=self._config.mad_k, axis=self._config.axis, skipna=self._config.skipna)
+
+        if method == "mad_then_zscore":
+            return _apply_mad_then_zscore(
+                data,
+                k=self._config.mad_k,
                 clip=self._config.clip,
                 axis=self._config.axis,
                 skipna=self._config.skipna,
@@ -416,6 +436,49 @@ def _apply_winsorize_zscore(
     std = _nanstd(winsorized, axis=axis, skipna=skipna)
     std = np.where(std < 1e-10, 1.0, std)
     result = (winsorized - mean) / std
+    if clip is not None:
+        result = np.clip(result, -clip, clip)
+    return result
+
+
+# ─── MAD 中位数去极值（G9，35-gap-closure-plan §5.2）──
+
+
+def _mad_bounds(data: np.ndarray, k: float, axis=None, skipna=True) -> tuple[np.ndarray, np.ndarray]:
+    """MAD 截断边界：med ± k*1.4826*MAD。
+
+    1.4826 系数与 ops_library.cs_mad_zscore 对齐；MAD=0 时以 1.0 兜底避免全量截断。
+    """
+    if skipna:
+        med = np.nanmedian(data, axis=axis, keepdims=True)
+    else:
+        med = np.median(data, axis=axis, keepdims=True)
+    abs_dev = np.abs(data - med)
+    if skipna:
+        mad = np.nanmedian(abs_dev, axis=axis, keepdims=True)
+    else:
+        mad = np.median(abs_dev, axis=axis, keepdims=True)
+    bound = float(k) * 1.4826 * np.where(np.asarray(mad) < 1e-10, 1.0, np.asarray(mad))
+    return med, bound
+
+
+def _apply_mad_winsorize(data: np.ndarray, k: float = 3.0, axis=None, skipna=True) -> np.ndarray:
+    """MAD 去极值：|x - med| > k*1.4826*MAD 截断到边界（厚尾稳健，优于 3σ）。"""
+    med, bound = _mad_bounds(data, k, axis, skipna)
+    result = np.clip(data, med - bound, med + bound)
+    # NaN 位置保持不变（与 zscore 一致）
+    if skipna:
+        result = np.where(np.isnan(data), np.nan, result)
+    return result
+
+
+def _apply_mad_then_zscore(data: np.ndarray, k: float = 3.0, clip=None, axis=None, skipna=True) -> np.ndarray:
+    """MAD 去极值后 zscore：先截断再标准化（默认 clip=3.0）。"""
+    wins = _apply_mad_winsorize(data, k, axis, skipna)
+    mean = _nanmean(wins, axis=axis, skipna=skipna)
+    std = _nanstd(wins, axis=axis, skipna=skipna)
+    std = np.where(std < 1e-10, 1.0, std)
+    result = (wins - mean) / std
     if clip is not None:
         result = np.clip(result, -clip, clip)
     return result

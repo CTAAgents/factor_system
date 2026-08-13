@@ -78,6 +78,7 @@ class GradeThreshold:
     a_threshold: float = 40.0  # A级下限 (总分)
     b_threshold: float = 30.0  # B级下限 (总分)
     observation_months: int = 3  # B级观察期 (月)
+    b_grade_observe_enabled: bool = False  # B级观察期开关（2026-08-13 默认关闭：B级直接 active）
     ic_decay_months: int = 3  # 连续IC<0 衰减判定
     sharpe_decline_months: int = 6  # 连续Sharpe下降 严重衰减判定
     sharpe_decline_ratio: float = 0.5  # Sharpe下降比例阈值
@@ -198,14 +199,14 @@ class EliteFactorTracker:
         # 分级准入逻辑
         if grade == "C":
             status = "rejected"
-        elif grade == "B":
+        elif grade == "B" and self._threshold.b_grade_observe_enabled:
             status = "observing"
         else:
             status = "active"
 
-        # 计算观察期结束时间
+        # 计算观察期结束时间（仅当 B 级观察期开关开启时设置）
         observation_end = None
-        if grade == "B":
+        if grade == "B" and self._threshold.b_grade_observe_enabled:
             obs_end_dt = datetime.fromisoformat(now) + timedelta(days=self._threshold.observation_months * 30)
             observation_end = obs_end_dt.isoformat()
 

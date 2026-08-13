@@ -1023,6 +1023,33 @@ class FuturesDataProvider:
             panel["SYNTHETIC"] = df
             return panel, pd.DatetimeIndex(df.index)
 
+        # G8 (v2.103.0+15): 断K/跳空清洗标记（data_gap/gap_anomaly 列，配置默认开启；
+        # 清洗失败仅告警不阻断面板构建）
+        try:
+            from fts.config.settings import get_config as _g8_cfg
+
+            if getattr(_g8_cfg(), "inject_data_gap_enabled", True):
+                from fts.data_sources.trading_calendar import (
+                    TradingCalendar,
+                    mark_gap_anomalies,
+                    mark_panel_data_gaps,
+                )
+
+                calendar = TradingCalendar.from_symbol_dates(
+                    {s: df.index for s, df in panel.items()}
+                )
+                gap_marks = mark_panel_data_gaps(panel, calendar)
+                for sym, df in panel.items():
+                    m = gap_marks.get(sym, {})
+                    if m.get("data_gap"):
+                        logger.warning("[G8] 断K标记 [%s]: %s", sym, m.get("reason", "?"))
+                    out = df.copy()
+                    out["data_gap"] = bool(m.get("data_gap", False))
+                    out["gap_anomaly"] = mark_gap_anomalies(out).to_numpy()
+                    panel[sym] = out
+        except Exception as e:  # noqa: BLE001 — 清洗失败降级，不阻断面板
+            logger.warning("[G8] 断K/跳空清洗标记失败，跳过: %s", e)
+
         # 多数对齐：至少 max(2, 品种数//2) 个品种共有的日期
         min_syms = max(2, len(panel) // 2)
         common_dates = pd.DatetimeIndex(sorted(d for d, c in date_counts.items() if c >= min_syms))

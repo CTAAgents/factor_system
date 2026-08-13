@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.103.0+11
+> 版本: v2.103.0+33
 > 最后更新: 2026-08-10
 
 ---
@@ -26,7 +26,7 @@ FTS 配置采用三级优先级（高→低）：
 | `default_market` | str | `"futures"` | `FTS_DEFAULT_MARKET` | 默认市场类型 |
 | `llm_backend` | str | `""` | `FTS_LLM_BACKEND` | LLM 后端选择（空=自动检测）|
 | `evolution_mode` | str | `"hybrid"` | `FTS_EVOLUTION_MODE` | 演化模式: operator(算子主干) / code(代码创新) / hybrid(混合) / batch(批量挖掘漏斗, GAP-I201, v2.65.0) |
-| 演化 CLI 失败率熔断阈值 | float | 0.99 | `FTS_EVOLUTION_CB_FAILURE_RATE` | `fts.cli evolution run` 失败率熔断阈值（0.95→0.99 短样本放宽；设 1.0 = 禁用失败率熔断，保留 token 与连续低 IC 熔断兜底，夜间演化需强制跑满世代数场景）（v2.103.0 日常开发追加） |
+| 演化 CLI 失败率熔断阈值 | float | 1.0 | `FTS_EVOLUTION_CB_FAILURE_RATE` | `fts.cli evolution run` 失败率熔断阈值（v2.103.0+28 默认 0.99→1.0=禁用失败率熔断，夜间演化默认跑满世代数；保留 token 与连续低 IC 熔断兜底；设 <1.0 可恢复失败率熔断） |
 | `max_generations` | int | 10 | — | L2 最大演化代数 |
 | `population_size` | int | 20 | — | 种群大小 |
 | `micro_trials_per_generation` | int | 50 | — | 每代 optuna 试验数 |
@@ -78,6 +78,9 @@ FTS 配置采用三级优先级（高→低）：
 | `l3_turnover_penalty` | float | 0.0 | `FTS_L3_TURNOVER_PENALTY` | 组合目标函数换手惩罚系数 λ：粘性约束后按 1/(1+λ) 收缩权重变动（0=关闭，λ 越大换手越低，GAP-I303，v2.85.0） |
 | l3_weight_recompute_cadence | str | "weekly" | FTS_L3_WEIGHT_RECOMPUTE_CADENCE | 权重重算频率：daily=每日重算 / weekly=仅 l3_weight_recompute_weekday 重算（GAP-072，v2.99.0；解绑 L3 与信号管道——信号管道每日生成信号，权重仅在重算日学习，其余日冻结复用快照） |
 | l3_weight_recompute_weekday | int | 4 | FTS_L3_WEIGHT_RECOMPUTE_WEEKDAY | 周度重算日（Python weekday 0=周一...4=周五，默认周五收盘后重算；GAP-072，v2.99.0） |
+| `l3_turnover_budget_enabled` | bool | `false` | `FTS_L3_TURNOVER_BUDGET_ENABLED` | G3 换手预算分配开关（v2.103.0+17）：`true`=启用（单日换手 > daily_turnover_cap=0.30 时按边际收益剔除弱信号回退当前持仓）；`false`=关闭（默认，不剔除；换手控制由粘性约束 + 换手惩罚 λ 双通道兜底）。期货周频场景关闭可避免 sharpe 被 SHARPE_CAP 截断后评分并列导致的误剔最强因子（2026-08-13 实测 fut_bias_g18=0.9859 被误剔归零） |
+| `evolution_shadow_observe`（环境变量直读） | bool | `false` | `FTS_EVOLUTION_SHADOW_OBSERVE` | 新晋级精英因子影子池观察期开关（v2.103.0+20）：`1`=晋升写入 shadow_pool 标记（观察 5 交易日，L3 观察期内不纳入组合）；`0`/未设=默认关闭（新晋级直接进正式组合）。仅作用于新晋级因子，重审降级因子 shadow_pool 保留不变 |
+| `b_grade_observe_enabled`（GradeThreshold 配置） | bool | `false` | — | elite_tracker B 级因子观察期开关（v2.103.0+28 默认关闭）：`false`=B 级因子（30≤score<40）直接 active 入池，不进入 observing；`true`=恢复 3 个月（默认）观察期。与 shadow_pool 5 交易日观察为两套独立机制 |
 | `adaptive_config.probability_mix` | bool | `true` | —（AdaptiveWeightConfig） | Regime 制度概率混合开关（regime blend，28-T4）：启用且 regime 含 `regime_probs` 时按概率加权混合全部制度倍率；关闭或缺失 probs 时回退硬查表（28 计划） |
 | `adaptive_config.confidence_scale` | bool | `true` | —（AdaptiveWeightConfig） | 置信度仓位缩放开关（28-T4）：启用时 Step 2.5 计算 exposure_scale 供 build_combo 整体缩放；关闭时恒 1.0（28 计划） |
 | `adaptive_config.confidence_scale_min` | float | `0.3` | —（AdaptiveWeightConfig） | 熵标定后 exposure_scale 缩放下限（28-T4）：`scaled = confidence × (1 − entropy_penalty × H_norm)` 后 clip 到 [scale_min, 1.0]（28 计划） |
@@ -111,8 +114,10 @@ FTS 配置采用三级优先级（高→低）：
 | `minute_cache_max_age_days` | int | `1` | `FTS_MINUTE_CACHE_MAX_AGE_DAYS` | 分钟缓存最大新鲜度（天，独立于日线 30 天窗口——避免旧分钟缓存持续命中挡住 TDX 实时拉取，v2.101.0） |
 | `eval_horizons` | tuple[int,...] | `(1,5,10,20)` | `FTS_EVAL_HORIZONS` | 多持有期 IC 体系：横截面/时序评估的多持有期列表（空=关闭，v2.90.0，GAP-060） |
 | `cost_sensitivity_enabled` | bool | `false` | `FTS_COST_SENSITIVITY_ENABLED` | 可交易性压力层：评估链是否输出成本敏感性扫描（滑点 1/2/4/8 倍，v2.97.0，GAP-061） |
-| `inject_overnight_gap_enabled` | bool | `false` | `FTS_INJECT_OVERNIGHT_GAP` | 夜盘/隔夜跳空标记：`get_ohlcv` 是否注入 overnight_gap/overnight_gap_flag 列（v2.97.0，GAP-066） |
+| `inject_overnight_gap_enabled` | bool | `true` | `FTS_INJECT_OVERNIGHT_GAP` | 夜盘/隔夜跳空标记：`get_ohlcv` 是否注入 overnight_gap/overnight_gap_flag 列（v2.97.0 GAP-066；v2.103.0+15 G8 D5 默认 `false`→`true`） |
 | `overnight_gap_flag_threshold` | float | `0.01` | `FTS_OVERNIGHT_GAP_THRESHOLD` | 隔夜跳空标记阈值：\|overnight_gap\| ≥ 该值 flag=1（v2.97.0，GAP-066） |
+| `inject_data_gap_enabled` | bool | `true` | `FTS_INJECT_DATA_GAP` | G8 断K/跳空清洗标记：`get_futures_panel` 面板 df 是否附加 data_gap/gap_anomaly 列（断K不进因子计算、异常跳空进 QC，v2.103.0+15） |
+| `factor_turnover_daily_max` | float\|null | `null` | `FTS_FACTOR_TURNOVER_DAILY_MAX` | G11 日换手硬剔除阈值（信号翻转率口径 turnover/(21×2)）：`evaluate_backtest` 失败原因接入该门槛；默认 `null`=观察期（库中换手历史未回填，待真实分布复核后启用，v2.103.0+15） |
 | `futures_neutralization` | bool | `true` | `FTS_FUTURES_NEUTRALIZATION` | 期货横截面因子评估是否做板块/产业链中性化（GAP-F03，v2.59.0） |
 | `futures_enhance_enabled` | bool | `false` | `FTS_FUTURES_ENHANCE_ENABLED` | 字段增强层 iFinD SDK 选项（GAP-083 阶段 C，v2.101.0）：`false` 时仅默认注册天勤 TQSDKEnhanceSource（close_oi→hold/oi_change，零额外依赖）；`true` 时追加 IFindSDKSource（方案 A：iFinD 官方 SDK 直连补 settle/pre_settle 权威值，需本地安装 iFinDPy + .env 凭据 IFIND_TOKEN 或 IFIND_USERNAME/PASSWORD，失败自动降级） |
 | `backtest_trade_filter` | bool | `true` | `FTS_BACKTEST_TRADE_FILTER` | 回测是否启用涨跌停拦截 + 停牌过滤（GAP-F02，v2.59.0） |

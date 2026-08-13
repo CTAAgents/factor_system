@@ -192,6 +192,18 @@ class TqSdkMhfExecutor:
             "bar_time": payload.get("bar_time"),
             "ok": False,
         }
+        # G12 (v2.103.0+15): 若 payload 含 FactorSignal 契约 → SignalValidator 校验
+        factor_signal = payload.get("factor_signal")
+        if factor_signal:
+            try:
+                from fts.factor_engine.signal_contract import SignalValidator
+
+                errors = SignalValidator().validate(factor_signal)
+                if errors:
+                    logger.warning("[%s] FactorSignal 校验未通过: %s", self._trace_id, errors[:5])
+                    result["validation_errors"] = errors
+            except Exception as e:  # noqa: BLE001 — 校验失败不阻断执行
+                logger.warning("[%s] FactorSignal 校验异常: %s", self._trace_id, e)
         signals = parse_signal_directions(payload, self._cfg.max_positions)
         result["signals"] = signals
         if not signals:

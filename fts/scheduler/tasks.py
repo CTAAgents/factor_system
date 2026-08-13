@@ -4,7 +4,7 @@ fts.scheduler.tasks — FTS 定时任务注册表。
 任务清单（默认）:
     - l1_meta_loop          : 工作日每日 07:59 触发 L1 Meta-Loop（知识补给 + 种子注入，对齐 TRAE Schedule 期货 L1）
     - l2_evolution_loop     : 工作日每日 00:00 触发 L2 因子演化（夜间演化，对齐 TRAE Schedule 期货 L2）
-    - l3_portfolio_loop     : 每周五 19:00 触发 L3 组合权重重算（期货，与信号管道解绑，GAP-072，对齐 TRAE Schedule）
+    - l3_portfolio_loop     : 工作日每日 19:00 触发 L3 组合权重重算（期货，equal_weight 等权漂移小每日重算稳定，与信号管道解绑，GAP-072，对齐 TRAE Schedule）
     - futures_signal_pipeline : 工作日每日 20:00 期货信号管道（独立运行，权重周五重算其余日冻结，GAP-072）
     - health_check          : 每 10 分钟触发健康检查
 
@@ -103,9 +103,9 @@ def register_default_tasks() -> None:
         ),
         TaskSpec(
             name="l3_portfolio_loop",
-            cron_expression="0 19 * * 5",  # 每周五 19:00（对齐 TRAE Schedule 期货 L3 4ad19ae6，GAP-072）
+            cron_expression="0 19 * * 1-5",  # 工作日每日 19:00（对齐 TRAE Schedule 期货 L3 4ad19ae6；equal_weight 等权漂移小，每日重算稳定，2026-08-13）
             callable_path="fts.scheduler.jobs.l3_portfolio_loop_job",
-            description="L3 Portfolio Loop（期货路径：futures_elite + market=futures）：每周五收盘后重算组合权重（Elastic Net 信号合成 + Verifier 校验），与期货信号管道解绑",
+            description="L3 Portfolio Loop（期货路径：futures_elite + market=futures）：工作日每日收盘后重算组合权重（equal_weight 信号合成 + Verifier 校验，v2.103.0+23 默认；--force-recompute 保证每日全量重算），与期货信号管道解绑",
             trace_id_prefix="fts.l3",
         ),
         TaskSpec(
@@ -133,7 +133,7 @@ def register_default_tasks() -> None:
             name="monthly_decay_eval",
             cron_expression="0 4 1 * *",  # 每月 1 日 04:00（对齐 TRAE Schedule 月度衰减 a6f69113）
             callable_path="fts.scheduler.jobs.monthly_decay_eval_job",
-            description="月度因子衰减评估（A.2）：精英池增量评估 + 状态机 + 自动淘汰",
+            description="月度治理（2026-08-13 起与重审合并）：Step A 新标准准入重审（audit/robustness/评分卡复检 active elite，不合格降级观察或淘汰，FTS_MONTHLY_REAUDIT_ENABLED=0 关闭）+ Step B 因子衰减评估（A.2 增量评估 + 状态机 + 自动淘汰）",
             trace_id_prefix="fts.decay",
         ),
         TaskSpec(

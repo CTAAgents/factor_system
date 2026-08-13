@@ -419,6 +419,8 @@ def evaluate_backtest(
         turnover = float(np.mean(signal_changes) * 21)  # 日均换手 * 21 = 月度
     else:
         turnover = 0.0
+    # G11（35-gap-closure-plan §5.4）：日换手口径 = 信号翻转率 = mean(|Δsign|)/2（= 月度/21/2）
+    turnover_daily = turnover / (21.0 * 2.0)
 
     # 6 个月 IC 衰减率计算: OOS 期前后两半的 IC 对比
     decay_6m = 0.0
@@ -444,6 +446,7 @@ def evaluate_backtest(
         decay_6m=decay_6m,
     )
     metrics["sign_flip_half_split"] = sign_flip_half_split  # G4：前后半段 IC 符号反转
+    metrics["turnover_daily"] = turnover_daily  # G11：日换手口径（信号翻转率）
 
     # GAP-062 统计补全（时序路径）：信号翻转频率 / 最大连续亏损 / IC t 值 / 胜率
     if len(signal) > 1:
@@ -712,6 +715,16 @@ class EvaluationChain:
         # G4（35-gap-closure-plan）：前后半段 IC 符号反转一票否决（过拟合局部最优典型特征）
         if bt.get("sign_flip_half_split", False):
             reasons.append("Level 1: 前后半段 IC 符号反转（不稳定）")
+        # G11（35-gap-closure-plan §5.4）：日换手硬剔除（阈值经 FTSConfig 可配，
+        # 默认 None=关闭观察——库中换手历史未回填，待真实分布复核后启用）
+        try:
+            from ..config import get_config as _get_cfg
+
+            _td_max = getattr(_get_cfg(), "factor_turnover_daily_max", None)
+        except Exception:  # noqa: BLE001
+            _td_max = None
+        if _td_max is not None and float(bt.get("turnover_daily", 0.0) or 0.0) > float(_td_max):
+            reasons.append(f"Level 1: 日换手={float(bt.get('turnover_daily', 0.0) or 0.0):.4f} > {_td_max}")
         # vwap 近似因子通用 IC 门槛（v2.50.0 审计层统一，覆盖种子+演化全路径）
         factor_code = factor.get("code") or ""
         if "vwap" in str(factor_code).lower() and abs(bt.get("ic", 0)) < 0.08:
@@ -833,6 +846,7 @@ def cross_section_evaluate_backtest(
     industry_map: Optional[dict[str, str]] = None,
     cap_map: Optional[dict[str, float]] = None,
     style_exposures: Optional[dict[str, Any]] = None,
+    vol_map: Optional[dict[str, float]] = None,
     long_only: bool = False,
     horizons: Optional[tuple[int, ...]] = None,
     holdout_ratio: float = 0.2,
@@ -863,6 +877,8 @@ def cross_section_evaluate_backtest(
         cap_map: {symbol: market_cap} 市值映射字典（可选，配合 industry_map 做双重中性化，GAP-S06 启用分层 IC）
         style_exposures: {style_name: DataFrame} Barra 风格暴露（可选，GAP-S02）。
             启用后在行业中性化基础上叠加风格回归残差（剥离风格暴露）。
+        vol_map: {symbol: 年化波动率}（G10，可选）。开启后做波动率截面中性化；
+            日期传入时同时做时序月度去季节化（日历季节性剥离）。
         long_only: 仅做多口径（GAP-S07），默认 False（期货横截面）
         horizons: 多持有期 IC 分析（GAP-060 横截面接入）；None 时从配置 eval_horizons 读取（空=关闭）
         holdout_ratio: 标的留出比例（GAP-075，默认 20%；行业分层，缺失回退随机）
@@ -899,15 +915,18 @@ def cross_section_evaluate_backtest(
         )
 
     # Step 2.6: Barra 风格中性化（可选）— GAP-S02: 行业去均值后叠加风格回归残差
-    if style_exposures is not None:
+    # G10: 叠加波动率截面中性化 + 时序月度去季节化（vol_map 非空时）
+    if style_exposures is not None or vol_map is not None:
         symbols_list = list(signal_dict.keys())
         from .barra.barra_neutralizer import barra_neutralize_matrix
 
         oos_signal = barra_neutralize_matrix(
             oos_signal,
             symbols_list,
-            style_exposures,
+            style_exposures if style_exposures is not None else {},
             industry_map=None,  # 行业已在 Step 2.5 处理，此处仅风格
+            vol_map=vol_map,
+            dates=common_dates[-oos_n:],
         )
 
     # Step 3: 每期截面 IC

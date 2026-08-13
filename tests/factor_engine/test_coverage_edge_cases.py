@@ -333,7 +333,7 @@ class TestEvolutionLoopResetLowIC:
         # --- 使用 patch.object 模拟所有外部依赖（避免污染全局单例） ---
         # 注意：Python 3.10 限制 single with 最多 20 个上下文管理器，
         # 因此使用嵌套 with 块 + patch.multiple 合并相关 patches
-        mock_evolve_micro = patch("fts.factor_engine.evolution_loop.evolve_micro")
+        mock_evolve_micro = patch("fts.factor_engine.evolution_candidate.evolve_micro")
         mock_sm = patch.multiple(
             loop.state_manager,
             save=MagicMock(return_value=None),

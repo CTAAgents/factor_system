@@ -120,6 +120,26 @@ def generate_mhf_signals(
         "symbols": int(len(signal_map)),
         "ok": True,
     }
+    # G12 (v2.103.0+15): 统一输出 FactorSignal 契约并过 SignalValidator，
+    # 供风控层/FDT 消费；legacy signals 字典保留向后兼容。
+    try:
+        from fts.factor_engine.signal_contract import (
+            SignalValidator,
+            signal_map_to_factor_signal,
+        )
+
+        factor_signal = signal_map_to_factor_signal(
+            signal_map,
+            signal_id=trace,
+            timestamp=payload["timestamp"],
+            frequency=FREQ,
+            trace_id=trace,
+        )
+        payload["factor_signal"] = factor_signal
+        payload["validation_errors"] = SignalValidator().validate(factor_signal)
+    except Exception as e:  # noqa: BLE001 — 契约组装失败不阻断原始信号
+        print(f"  [WARN] FactorSignal 契约组装失败: {e}", flush=True)
+        payload["validation_errors"] = [f"factor_signal assembly failed: {e}"]
     return payload
 
 

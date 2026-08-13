@@ -530,6 +530,40 @@ class TestSynthesizeSignals:
             assert s["weight"] == pytest.approx(1.0 / 3)
         assert max_corr == 0.0
 
+    def test_equal_weight_pca_weights(self):
+        """enable_pca=True 时 equal_weight 模式使用 Step 1.9 PCA 权重替换均匀等权（v2.103.0+24）。"""
+        factors = [
+            {"factor_id": "fct_a", "name": "factor_a", "pca_weight": 0.2068, "pca_orthogonalized": True},
+            {"factor_id": "fct_b", "name": "factor_b", "pca_weight": 0.1863, "pca_orthogonalized": True},
+            {"factor_id": "fct_c", "name": "factor_c", "pca_weight": 0.2061, "pca_orthogonalized": True},
+        ]
+        signals, _, _ = synthesize_signals(factors, mode="equal_weight")
+        assert len(signals) == 3
+        total = 0.2068 + 0.1863 + 0.2061
+        for s, expected in zip(signals, (0.2068, 0.1863, 0.2061)):
+            assert s["weight"] == pytest.approx(expected / total)
+        # PCA 主成分天然正交 → orthogonalized 标记透传
+        assert all(s["orthogonalized"] for s in signals)
+
+    def test_equal_weight_no_pca_fallback(self, sample_factors):
+        """无 pca_weight 时回退均匀 1/N，orthogonalized=False。"""
+        signals, _, _ = synthesize_signals(sample_factors, mode="equal_weight")
+        assert len(signals) == 3
+        for s in signals:
+            assert s["weight"] == pytest.approx(1.0 / 3)
+            assert s["orthogonalized"] is False
+
+    def test_equal_weight_zero_pca_fallback(self):
+        """pca_weight 全为 0 / 缺失时回退 1/N（不除以 0）。"""
+        factors = [
+            {"factor_id": "fct_a", "name": "factor_a", "pca_weight": 0.0},
+            {"factor_id": "fct_b", "name": "factor_b"},
+            {"factor_id": "fct_c", "name": "factor_c", "pca_weight": None},
+        ]
+        signals, _, _ = synthesize_signals(factors, mode="equal_weight")
+        for s in signals:
+            assert s["weight"] == pytest.approx(1.0 / 3)
+
     def test_sharpe_weight(self, sample_factors):
         """夏普越高权重越大。"""
         signals, max_corr, turnover = synthesize_signals(sample_factors, mode="sharpe_weight")
@@ -633,7 +667,13 @@ class TestBuildFactorCodeMap:
 
         # JSON 快照兜底仅含 fct_c
         (tmp_path / "fct_c.json").write_text(
-            json.dumps({"factor_id": "fct_c", "name": "factor_c", "code": "def factor_program(data, params):\n    return data['low']"}),
+            json.dumps(
+                {
+                    "factor_id": "fct_c",
+                    "name": "factor_c",
+                    "code": "def factor_program(data, params):\n    return data['low']",
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -1634,9 +1674,7 @@ class TestCoverageGaps:
         """schema 版本不匹配时冷启动。"""
         from fts.store.state_db import get_state_store
 
-        get_state_store().upsert(
-            "portfolio", "state", {"schema_version": "0", "status": "completed"}, run_id="t"
-        )
+        get_state_store().upsert("portfolio", "state", {"schema_version": "0", "status": "completed"}, run_id="t")
         psm = PortfolioStateManager(tmp_portfolio_dir)
         # load_or_init 应重新初始化（schema 版本不匹配）
         state = psm.load_or_init()
@@ -2922,7 +2960,11 @@ class TestShadowPool:
         return loop, elite_dir
 
     def test_promote_to_elite_writes_shadow_pool(self, tmp_path):
-        """_promote_to_elite 默认给新因子写入 shadow_pool 标记。"""
+        """显式开启观察期（shadow_observe=True）给新因子写入 shadow_pool 标记。
+
+        v2.103.0+20 起默认观察期关闭（env FTS_EVOLUTION_SHADOW_OBSERVE），
+        本用例显式传 True 验证观察期写入路径仍可用（等价 env=1）。
+        """
         loop, elite_dir = self._make_evolution_loop(tmp_path)
 
         factor = {
@@ -2937,8 +2979,8 @@ class TestShadowPool:
             "level_3_multiple": {"passed": True},
             "passed": True,
         }
-        # 直接调用 _promote_to_elite（repo 已 mock）
-        path = loop._promote_to_elite(factor, evaluation)
+        # 直接调用 _promote_to_elite（repo 已 mock），显式开启观察期
+        path = loop._promote_to_elite(factor, evaluation, shadow_observe=True)
         assert path is not None
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         assert "shadow_pool" in data
@@ -4747,6 +4789,3 @@ class TestCoveragePolish:
             m_exec.side_effect = [RuntimeError("ctor fail"), exec_ok]
             result = _compute_ml_ensemble_weights(factors, elite)
         assert set(result.keys()) <= {"f0", "f1"}  # 权重由剩余有效样本训练得出
-
-
-

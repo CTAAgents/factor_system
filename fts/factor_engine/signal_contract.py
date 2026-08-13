@@ -35,6 +35,33 @@ DIRECTIONS: tuple[str, ...] = ("long", "short", "flat")
 FREQUENCIES: tuple[str, ...] = ("tick", "1m", "5m", "15m", "30m", "1h", "4h", "1d")
 
 
+def to_lots(
+    position_pct: float,
+    equity: float,
+    price: float,
+    multiplier: float,
+    max_lots: int = 0,
+) -> int:
+    """资金占比 → 目标手数（G12，v2.103.0+15）。
+
+    Args:
+        position_pct: 目标资金占比 [0,1]
+        equity: 总权益
+        price: 最新价
+        multiplier: 合约乘数
+        max_lots: 手数上限（0=不截断）
+
+    Returns:
+        目标手数；资金不足 → 0 手，超上限 → 截断。
+    """
+    if position_pct <= 0 or equity <= 0 or price <= 0 or multiplier <= 0:
+        return 0
+    lots = int(round(position_pct * equity / (price * multiplier)))
+    if max_lots > 0:
+        lots = min(lots, max_lots)
+    return lots
+
+
 class FactorContribution(TypedDict, total=False):
     """因子贡献详情。"""
 
@@ -48,7 +75,13 @@ class SignalDetail(TypedDict, total=False):
 
     symbol: str
     direction: str  # Literal['long', 'short', 'flat']
-    position: float
+    position: float  # 目标资金占比
+    target_lots: int  # G12: 目标手数
+    current_lots: int  # G12: 当前持仓手数
+    delta_lots: int  # G12: 调仓手数 = target - current
+    score: float  # G12: 触发因子得分（Composite Score）
+    regime: str  # G12: 市场状态标签
+    risk_usage: float  # G12: 风险占用比例 ∈ [0,1]
     confidence: float
     price: float
     stop_loss: float
@@ -156,6 +189,32 @@ class SignalValidator:
             if position is not None and position < 0:
                 errors.append(f"signals[{i}] position must be >= 0: {position}")
 
+            # G12: 手数字段（可选，提供时校验非负整数）
+            for lots_field in ("target_lots", "current_lots", "delta_lots"):
+                lots_val = sig.get(lots_field)
+                if lots_val is None:
+                    continue
+                if not isinstance(lots_val, int) or lots_val < 0:
+                    errors.append(f"signals[{i}] {lots_field} must be a non-negative int: {lots_val}")
+
+            # G12: 调仓手数一致性 delta = target - current（三者齐备时校验）
+            tgt, cur, delta = sig.get("target_lots"), sig.get("current_lots"), sig.get("delta_lots")
+            if tgt is not None and cur is not None and delta is not None and delta != tgt - cur:
+                errors.append(f"signals[{i}] delta_lots {delta} != target - current = {tgt - cur}")
+
+            # G12: 风险占用比例 ∈ [0,1]
+            risk_usage = sig.get("risk_usage")
+            if risk_usage is not None and not (0 <= risk_usage <= 1):
+                errors.append(f"signals[{i}] risk_usage out of range [0,1]: {risk_usage}")
+
+            # G12: score 数值化（可选）
+            score = sig.get("score")
+            if score is not None:
+                try:
+                    float(score)
+                except (TypeError, ValueError):
+                    errors.append(f"signals[{i}] score must be numeric: {score}")
+
             # 贡献因子
             for f in sig.get("contributing_factors") or []:
                 if not isinstance(f, dict) or not f.get("factor_id"):
@@ -235,12 +294,112 @@ class SignalValidator:
         )
 
 
+def signal_map_to_factor_signal(
+    signal_map: dict[str, Any],
+    signal_id: str = "",
+    timestamp: str = "",
+    frequency: str = "1d",
+    portfolio_id: str = "default",
+    trace_id: str = "",
+    regime: str = "",
+    source_version: str = "",
+    equity: float = 0.0,
+    price_multiplier: float = 1.0,
+    default_position_pct: float = 0.0,
+    confidence: float = 0.7,
+) -> FactorSignal:
+    """信号映射 {symbol: {direction, score, price, ...}} → FactorSignal 契约（G12）。
+
+    统一 mhf_signal_pipeline / tqsdk_mhf_executor 等管道输出为
+    FactorSignal 结构，经 `SignalValidator` 校验后供风控层/FDT 消费。
+
+    Args:
+        signal_map: {symbol: {direction, score, price, position, target_lots, ...}}。
+            direction 支持 int（+1 多 / -1 空 / 0 平）或 str（long/short/flat）。
+        signal_id: 信号 ID（缺省自动生成）
+        timestamp: 信号时间戳（缺省当前 UTC ISO）
+        frequency: 信号频率
+        portfolio_id: 组合 ID
+        trace_id: 全链路 trace_id
+        regime: 市场状态标签（写入每条 SignalDetail.regime）
+        source_version: 信号源版本
+        equity: 总权益（提供且含 position 时计算 target_lots）
+        price_multiplier: 合约乘数（计算 target_lots 用）
+        default_position_pct: 无 position 时的兜底目标占比
+        confidence: 默认置信度
+
+    Returns:
+        FactorSignal 字典。
+    """
+    from .state import generate_trace_id
+
+    trace_id = trace_id or generate_trace_id()
+    signal_id = signal_id or generate_trace_id()
+    timestamp = timestamp or datetime.now().isoformat()
+
+    details: list[SignalDetail] = []
+    for sym, data in signal_map.items():
+        if not isinstance(data, dict):
+            continue
+        raw_dir = data.get("direction", 0)
+        if isinstance(raw_dir, str):
+            direction = raw_dir.lower() if raw_dir.lower() in DIRECTIONS else "flat"
+        else:
+            direction = {1: "long", -1: "short"}.get(int(raw_dir), "flat")
+        price = float(data.get("price") or data.get("last_close") or 0.0)
+        position = float(data.get("position", default_position_pct) or 0.0)
+        detail: SignalDetail = {
+            "symbol": sym,
+            "direction": direction,
+            "position": round(position, 6),
+            "confidence": float(data.get("confidence", confidence) or confidence),
+            "price": price,
+        }
+        if data.get("score") is not None:
+            try:
+                detail["score"] = float(data["score"])
+            except (TypeError, ValueError):
+                detail["score"] = data["score"]  # 非数值原样保留，交 validator 拒绝
+        if regime:
+            detail["regime"] = regime
+        if data.get("target_lots") is not None:
+            detail["target_lots"] = int(data["target_lots"])
+        if data.get("current_lots") is not None:
+            detail["current_lots"] = int(data["current_lots"])
+        if not detail.get("target_lots") and equity > 0 and price > 0 and position > 0:
+            detail["target_lots"] = to_lots(position, equity, price, price_multiplier or 1.0)
+        if data.get("delta_lots") is not None:
+            detail["delta_lots"] = int(data["delta_lots"])
+        elif detail.get("target_lots") is not None and detail.get("current_lots") is not None:
+            detail["delta_lots"] = detail["target_lots"] - detail["current_lots"]
+        if data.get("risk_usage") is not None:
+            detail["risk_usage"] = float(data["risk_usage"])
+        details.append(detail)
+
+    return FactorSignal(
+        signal_id=signal_id,
+        portfolio_id=portfolio_id,
+        timestamp=timestamp,
+        frequency=frequency,
+        universe=list(signal_map.keys()),
+        signals=details,
+        meta=SignalMeta(
+            trace_id=trace_id,
+            factor_count=len(details),
+            regime=regime,
+            source_version=source_version,
+        ),
+    )
+
+
 __all__ = [
     "FactorContribution",
     "SignalDetail",
     "SignalMeta",
     "FactorSignal",
     "SignalValidator",
+    "to_lots",
+    "signal_map_to_factor_signal",
     "DIRECTIONS",
     "FREQUENCIES",
 ]

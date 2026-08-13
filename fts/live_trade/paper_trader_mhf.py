@@ -42,6 +42,39 @@ class MhfRiskConfig:
     def cost_for(self, symbol: str) -> float:
         return self.cost_bps_map.get(symbol, self.default_cost_bps)
 
+    @classmethod
+    def from_regime(
+        cls,
+        regime: str,
+        base: "MhfRiskConfig | None" = None,
+    ) -> "MhfRiskConfig":
+        """按 Regime 解析止损/日内止损参数（G14）。
+
+        Args:
+            regime: 市场制度（"bull"/"bear"/"oscillate"/"high_vol"/"low_vol"）。
+                未知制度回退 base（默认常量配置）。
+            base: 基础配置（默认 MhfRiskConfig()）。
+
+        Returns:
+            新配置（stop_loss_pct / daily_loss_pct 按 Regime 覆盖，其余字段继承）。
+        """
+        from fts.factor_engine.regime_multipliers import resolve_risk_params
+
+        cfg = base or cls()
+        resolved = resolve_risk_params(
+            regime,
+            {"stop_loss_pct": cfg.stop_loss_pct, "daily_loss_pct": cfg.daily_loss_pct},
+        )
+        return cls(
+            stop_loss_pct=float(resolved["stop_loss_pct"]),
+            daily_loss_pct=float(resolved["daily_loss_pct"]),
+            holding_bars=cfg.holding_bars,
+            max_positions=cfg.max_positions,
+            target_pct=cfg.target_pct,
+            cost_bps_map=dict(cfg.cost_bps_map),
+            default_cost_bps=cfg.default_cost_bps,
+        )
+
 
 @dataclass
 class PaperFill:

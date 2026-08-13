@@ -490,6 +490,7 @@ class TestGetOhlcvFallbackChain:
         """Aggregator 返回非合成数据 → 直接采用。
 
         v2.58.0 (GAP-046): 复权路径额外返回 adj_factor 列（供落库使用）。
+        v2.103.0+15 (G8, D5): 隔夜跳空列注入默认开启 → 追加 overnight_gap 两列。
         """
         mock_agg = mocker.MagicMock()
         mock_agg.get_ohlcv.return_value = _make_agg_df(["2026-01-01", "2026-01-02"])
@@ -506,6 +507,8 @@ class TestGetOhlcvFallbackChain:
             "hold",
             "settle",
             "adj_factor",
+            "overnight_gap",
+            "overnight_gap_flag",
         ]
         mock_agg.get_ohlcv.assert_called_once_with("RB0", 30, "")
 

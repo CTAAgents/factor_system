@@ -111,10 +111,10 @@ def mock_optuna_study(monkeypatch):
 
 @pytest.fixture
 def mock_evolve_micro():
-    """Patch fts.factor_engine.evolution_loop.evolve_micro。"""
+    """Patch fts.factor_engine.evolution_candidate.evolve_micro。"""
     from unittest.mock import patch
 
-    with patch("fts.factor_engine.evolution_loop.evolve_micro") as m:
+    with patch("fts.factor_engine.evolution_candidate.evolve_micro") as m:
         yield m
 
 

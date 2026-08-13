@@ -54,6 +54,13 @@ def _make_cfg_module() -> types.ModuleType:
     return _fake_module(get_config=MagicMock(return_value=_fake_cfg()))
 
 
+def _fake_reaudit_mod(counts=None) -> types.ModuleType:
+    """构造 fake fts.monitor.reaudit 模块（run_reaudit 返回假 report）。"""
+    counts = counts or {"retain": 0, "shadow": 0, "retire": 0, "error": 0}
+    report = MagicMock(total=0, counts=counts)
+    return _fake_module(run_reaudit=MagicMock(return_value=report))
+
+
 # 确保父包已加载，patch 子模块时不会触发 "Parent module not loaded"
 import fts.scheduler.jobs as jobs  # noqa: E402
 import fts.factor_engine  # noqa: E402,F401
@@ -459,6 +466,7 @@ class TestMonthlyDecayEvalJob:
                 sys.modules,
                 {
                     "fts.monitor.elite_tracker": fake_tracker_mod,
+                    "fts.monitor.reaudit": _fake_reaudit_mod(),
                     "fts.config": _make_cfg_module(),
                     "fts.factor_engine.factor_db": fake_db,
                 },
@@ -479,6 +487,49 @@ class TestMonthlyDecayEvalJob:
         fake_db.FactorRepository.assert_not_called()
         assert "淘汰已同步至" not in caplog.text
 
+    def test_step_a_reaudit_invoked(self, caplog):
+        """Step A 新标准重审被调用（默认启用）并记录汇总日志。"""
+        fake_tracker_mod, fake_db, fake_registry = self._build_mocks(retired=[])
+        reaudit_mod = _fake_reaudit_mod(counts={"retain": 1, "shadow": 2, "retire": 3, "error": 0})
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "fts.monitor.elite_tracker": fake_tracker_mod,
+                    "fts.monitor.reaudit": reaudit_mod,
+                    "fts.config": _make_cfg_module(),
+                    "fts.factor_engine.factor_db": fake_db,
+                },
+            ),
+            patch("fts.monitor.prometheus_metrics.metrics_registry", fake_registry),
+        ):
+            caplog.set_level(logging.INFO)
+            jobs.monthly_decay_eval_job()
+
+        reaudit_mod.run_reaudit.assert_called_once()
+        assert "Step A 新标准重审完成: retain=1 shadow=2 retire=3 error=0" in caplog.text
+
+    def test_step_a_reaudit_disabled(self, monkeypatch, caplog):
+        """FTS_MONTHLY_REAUDIT_ENABLED=0 时跳过重审。"""
+        monkeypatch.setenv("FTS_MONTHLY_REAUDIT_ENABLED", "0")
+        fake_tracker_mod, fake_db, fake_registry = self._build_mocks(retired=[])
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "fts.monitor.elite_tracker": fake_tracker_mod,
+                    "fts.monitor.reaudit": _fake_reaudit_mod(),
+                    "fts.config": _make_cfg_module(),
+                    "fts.factor_engine.factor_db": fake_db,
+                },
+            ),
+            patch("fts.monitor.prometheus_metrics.metrics_registry", fake_registry),
+        ):
+            caplog.set_level(logging.INFO)
+            jobs.monthly_decay_eval_job()
+
+        assert "Step A 新标准重审已关闭" in caplog.text
+
     def test_success_with_retirement(self, caplog):
         """存在淘汰因子时同步 DuckDB + JSON（期货版单库，无分库回退）。"""
         fake_tracker_mod, fake_db, fake_registry = self._build_mocks(
@@ -490,6 +541,7 @@ class TestMonthlyDecayEvalJob:
                 sys.modules,
                 {
                     "fts.monitor.elite_tracker": fake_tracker_mod,
+                    "fts.monitor.reaudit": _fake_reaudit_mod(),
                     "fts.config": _make_cfg_module(),
                     "fts.factor_engine.factor_db": fake_db,
                 },
@@ -521,6 +573,7 @@ class TestMonthlyDecayEvalJob:
                 sys.modules,
                 {
                     "fts.monitor.elite_tracker": fake_tracker_mod,
+                    "fts.monitor.reaudit": _fake_reaudit_mod(),
                     "fts.config": _make_cfg_module(),
                     "fts.factor_engine.factor_db": fake_db,
                 },
@@ -544,6 +597,7 @@ class TestMonthlyDecayEvalJob:
                 sys.modules,
                 {
                     "fts.monitor.elite_tracker": fake_tracker_mod,
+                    "fts.monitor.reaudit": _fake_reaudit_mod(),
                     "fts.config": _make_cfg_module(),
                     "fts.factor_engine.factor_db": _fake_module(FactorRepository=MagicMock()),
                 },

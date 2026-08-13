@@ -88,6 +88,8 @@ class CapitalAllocator:
             result = self._vol_target_allocation(portfolio_returns, total_capital, target_volatility, max_drawdown)
         elif mode == "risk_parity":
             result = self._risk_parity_allocation(portfolio_returns, total_capital)
+        elif mode == "min_variance":
+            result = self._min_variance_allocation(portfolio_returns, total_capital)
         elif mode == "kelly":
             result = self._kelly_criterion_allocation(total_capital, win_rate, payoff_ratio)
         else:
@@ -263,6 +265,63 @@ class CapitalAllocator:
             leverage=1.0,
             weights=weights,
             allocated_capital=capital,
+        )
+
+    def _min_variance_allocation(
+        self,
+        portfolio_returns: pd.Series | pd.DataFrame,
+        total_capital: float,
+    ) -> AllocationResult:
+        """方差最小化：w = Σ⁻¹1 / (1'Σ⁻¹1)（G15，35-gap-closure-plan §5.8）。
+
+        Ledoit-Wolf 收缩（对角结构化目标，收缩强度 min(1, N/T)）防奇异；
+        负权重截断到 min_weight 后重归一化（资金分配为非负语义）。
+        """
+        returns = _to_frame(portfolio_returns)
+        if returns.empty or len(returns.columns) == 0:
+            return self._fixed_allocation(total_capital)
+        if len(returns.columns) == 1:
+            return AllocationResult(
+                mode="min_variance",
+                leverage=1.0,
+                weights={"portfolio": 1.0},
+                allocated_capital={"portfolio": total_capital},
+            )
+
+        df = returns.dropna()
+        cov = df.cov().values
+        n = len(returns.columns)
+        # Ledoit-Wolf 收缩（对角结构化目标）——与 weight_learning.ic_covariance_weights 同口径
+        target = np.diag(np.diag(cov))
+        s = min(1.0, n / max(int(len(df)), 1))
+        cov_shrunk = (1.0 - s) * cov + s * target
+        ones = np.ones(n)
+        try:
+            inv_cov_ones = np.linalg.solve(cov_shrunk + 1e-6 * np.eye(n), ones)
+        except np.linalg.LinAlgError:
+            inv_cov_ones = ones  # 奇异 → 等权兜底
+        denom = float(np.sum(inv_cov_ones))
+        if not np.isfinite(denom) or denom <= 0:
+            w = np.ones(n) / n
+        else:
+            w = inv_cov_ones / denom
+            # 负权重截断（资金分配非负语义），重归一化
+            w = np.clip(w, float(self._min_weight), None)
+            w_sum = float(np.sum(w))
+            if w_sum <= 0 or not np.isfinite(w_sum):
+                w = np.ones(n) / n
+            else:
+                w = w / w_sum
+
+        cols = list(returns.columns)
+        weights = {c: float(wi) for c, wi in zip(cols, w)}
+        capital = {c: total_capital * wi for c, wi in weights.items()}
+        return AllocationResult(
+            mode="min_variance",
+            leverage=1.0,
+            weights=weights,
+            allocated_capital=capital,
+            details={"shrinkage": round(float(s), 4)},
         )
 
     def _kelly_criterion_allocation(

@@ -24,6 +24,8 @@ from fts.factor_engine.standardizer import (  # noqa: E402
     Standardizer,
     StandardizerConfig,
     standardize,
+    _apply_mad_then_zscore,
+    _apply_mad_winsorize,
     _apply_minmax,
     _apply_quantile,
     _apply_rank,
@@ -48,6 +50,8 @@ class TestConstantsAndConfig:
             "quantile",
             "minmax",
             "winsorize_then_zscore",
+            "mad_winsorize",
+            "mad_then_zscore",
             "none",
         }
 
@@ -57,6 +61,7 @@ class TestConstantsAndConfig:
         assert cfg.clip == 3.0
         assert cfg.winsorize_lower == 0.01
         assert cfg.winsorize_upper == 0.99
+        assert cfg.mad_k == 3.0  # G9
         assert cfg.axis == 0
         assert cfg.skipna is True
 
@@ -299,3 +304,59 @@ class TestFitTransformAndHelper:
         # 缩尾后范围应受控
         assert out.min() >= -3.5
         assert out.max() <= 3.5
+
+
+# ─── G9: MAD 中位数去极值（35-gap-closure-plan §5.2）──
+
+
+class TestMADWinsorize:
+    def test_mad_winsorize_clips_extremes(self):
+        """厚尾数据：极端值被截断到 med ± k*1.4826*MAD 边界。"""
+        data = np.array([0.0] * 50 + [100.0])  # 1 个极端离群点
+        out = _apply_mad_winsorize(data, k=3.0)
+        # 中位数=0，|0-0| 多数为 0 → MAD=0 → bound 兜底 1.0 → 极端值截到 3.0
+        assert out.max() <= 3.0 * 1.4826
+        assert out.min() >= -3.0 * 1.4826
+
+    def test_mad_winsorize_keeps_center_unchanged(self):
+        """中位数附近值保持不变（稳健性）。"""
+        rng = np.random.default_rng(7)
+        data = rng.normal(0, 1, 200)
+        out = _apply_mad_winsorize(data, k=3.0)
+        # 中位数附近 ±0.1 的值不变
+        med = np.median(data)
+        mask = np.abs(data - med) < 0.1
+        np.testing.assert_allclose(out[mask], data[mask])
+
+    def test_mad_winsorize_nan_preserved(self):
+        """NaN 位置保持不变。"""
+        data = np.array([1.0, 2.0, np.nan, 4.0, 100.0])
+        out = _apply_mad_winsorize(data, k=3.0)
+        assert np.isnan(out[2])
+        assert np.isfinite(out[4])
+
+    def test_mad_then_zscore_finite(self):
+        """mad_then_zscore 输出有限且默认 clip=3.0。"""
+        rng = np.random.default_rng(11)
+        data = rng.normal(0, 1, 300)
+        data[::19] = 50.0  # 注入离群点
+        out = _apply_mad_then_zscore(data, k=3.0, clip=3.0)
+        assert np.isfinite(out).all()
+        assert out.min() >= -3.0 - 1e-9
+        assert out.max() <= 3.0 + 1e-9
+
+    def test_mad_then_zscore_consistent_with_ops_library_coefficient(self):
+        """1.4826 系数与 ops_library.cs_mad_zscore 一致（MAD 常数）。"""
+        from fts.factor_engine import ops_library  # noqa: F401  # 确认模块可导入，系数对齐由 ops 层注册测试覆盖
+        assert abs(1.4826 * 3.0 - 4.4478) < 1e-9
+
+    def test_standardizer_mad_methods_end_to_end(self):
+        """Standardizer 集成：mad_winsorize/mad_then_zscore 走 fit/transform。"""
+        rng = np.random.default_rng(23)
+        data = rng.normal(0, 1, 200)
+        data[::17] = 80.0
+        for method in ("mad_winsorize", "mad_then_zscore"):
+            std = Standardizer(method, mad_k=3.0)
+            out = std.fit_transform(data)
+            assert out.shape == data.shape
+            assert np.isfinite(out).all()

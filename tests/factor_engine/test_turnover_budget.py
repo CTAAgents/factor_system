@@ -125,3 +125,46 @@ def test_budget_scores_nan_safe():
     scores = {"a": 2.0, "b": float("nan"), "c": None}  # type: ignore[dict-item]
     out = allocate_turnover_budget(target, current, scores, TurnoverBudgetConfig(daily_turnover_cap=0.30))
     assert _single_side_turnover(out, current) <= 0.30 + 1e-9
+
+
+def test_build_combo_turnover_budget_disabled_keeps_all():
+    """build_combo turnover_budget_config=None（G3 关闭，v2.103.0+17）→ 超换手也不剔除，全部因子保留。"""
+    from fts.factor_engine.contracts import PortfolioSignal
+    from fts.factor_engine.portfolio_loop import build_combo
+
+    signals = [
+        PortfolioSignal(
+            factor_id="f_a",
+            name="a",
+            weight=0.6,
+            sharpe=2.0,
+            ic=0.04,
+            turnover=0.0,
+            decay_6m=0.0,
+            orthogonalized=True,
+            retained=True,
+        ),
+        PortfolioSignal(
+            factor_id="f_b",
+            name="b",
+            weight=0.4,
+            sharpe=2.0,
+            ic=0.04,
+            turnover=0.0,
+            decay_6m=0.0,
+            orthogonalized=True,
+            retained=True,
+        ),
+    ]
+    # 空仓 → 全换仓（单边换手 = 1.0 > cap 0.30）：G3 关闭时不应剔除任何因子
+    prev_weights = {"f_a": 0.0, "f_b": 0.0}
+    combo = build_combo(
+        signals,
+        mode="equal_weight",
+        trace_id="l3_g3_off",
+        prev_weights=prev_weights,
+        turnover_budget_config=None,
+    )
+    assert {s["factor_id"] for s in combo["signals"] if s.get("retained", True)} == {"f_a", "f_b"}
+    assert all(s["weight"] > 0 for s in combo["signals"] if s.get("retained", True))
+    assert combo["n_factors"] == 2

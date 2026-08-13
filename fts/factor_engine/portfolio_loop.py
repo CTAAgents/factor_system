@@ -875,9 +875,17 @@ def synthesize_signals(
             "[L3] ML Ensemble 完成: %d/%d 因子获得非零权重", sum(1 for s in signals if s["retained"]), len(signals)
         )
     elif mode == "equal_weight":
-        w = 1.0 / n
+        # P2 PCA 权重优先（v2.103.0+24）：enable_pca=True 时 Step 1.9 已写入
+        # f["pca_weight"]（载荷×解释方差加权）；有 pca_weight 时替换均匀等权，否则回退 1/N。
+        pca_ws = [float(f.get("pca_weight", 0.0) or 0.0) for f in factors]
+        w_total = sum(pca_ws)
+        if w_total > 0:
+            weights = [pw / w_total for pw in pca_ws]
+            logger.info("[L3] equal_weight 模式启用 PCA 权重（Step 1.9 输出，Σ=%.4f）", w_total)
+        else:
+            weights = [1.0 / n] * n
         signals = []
-        for f in factors:
+        for f, w in zip(factors, weights):
             signals.append(
                 PortfolioSignal(
                     factor_id=f["factor_id"],
@@ -887,7 +895,7 @@ def synthesize_signals(
                     ic=f.get("ic", 0.0),
                     turnover=f.get("turnover", 0.0),
                     decay_6m=f.get("decay_6m", 0.0),
-                    orthogonalized=False,
+                    orthogonalized=bool(f.get("pca_orthogonalized", False)),
                     retained=True,
                 )
             )
@@ -3423,7 +3431,7 @@ class PortfolioLoop:
         memory_dir: str | Path = "memory/portfolio",
         elite_dir: str | Path = "memory/knowledge/factors/futures_elite",
         verifier_config: Optional[L3VerifierConfig] = None,
-        synthesis_mode: str = "elastic_net",
+        synthesis_mode: str = "equal_weight",
         use_duckdb: bool = True,
         enable_regime_adaptation: bool = True,
         market: str = "futures",
@@ -3478,6 +3486,14 @@ class PortfolioLoop:
                 self.turnover_penalty = float(getattr(_l3_cfg(), "l3_turnover_penalty", 0.0))
             except Exception:
                 self.turnover_penalty = 0.0
+        # G3 换手预算分配开关（v2.103.0+17）：默认关闭（FTS_L3_TURNOVER_BUDGET_ENABLED），
+        # 关闭后 build_combo 传 None 跳过换手预算裁剪，换手控制由粘性约束 + 换手惩罚 λ 兜底
+        try:
+            from fts.config.settings import get_config as _l3_cfg
+
+            self.turnover_budget_enabled = bool(getattr(_l3_cfg(), "l3_turnover_budget_enabled", False))
+        except Exception:
+            self.turnover_budget_enabled = False
 
     def _generate_quality_report(self) -> None:
         """从 DuckDB 或 combo 回退，生成精英因子最终质量报告 JSON。
@@ -4291,7 +4307,7 @@ class PortfolioLoop:
                 exposure_scale=self._regime_exposure_scale,
                 regime_meta=self._regime_meta,
                 aligned_exposure_config=AlignedExposureConfig(),
-                turnover_budget_config=TurnoverBudgetConfig(),
+                turnover_budget_config=TurnoverBudgetConfig() if self.turnover_budget_enabled else None,
             )
             logger.info(
                 "[L3] Step 5: 组合构建完成, 夏普=%.2f, 换手率=%.2f",

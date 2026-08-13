@@ -1,7 +1,7 @@
 # 35-gap-closure-plan.md — 全链路缺口关闭实施方案（G1–G17）
 
-> 版本: v2.103.0+11
-> 状态: P0+P1 批次完成（G1-G7 已实现+测试），P2 批次待推进
+> 版本: v2.103.0+33
+> 状态: P0+P1+P2 批次全部完成（G1-G15 已实现+测试；G16 批次末评估结论=维持暂缓，见 §5.9；G17 柜台对接 FDT 交接，见 §5.10）
 > 日期: 2026-08-13
 > 范围: 对照《完整全链路：原始数据挖掘 → 最终下单可交易信号》SOP 的缺口关闭
 > 关联: 34-evolution-loop-refactor-inventory.md（存量重构盘点）、08-gap-analysis.md（差距登记）
@@ -314,16 +314,29 @@ StandardizerConfig.mad_k: float = 3.0
 
 ```python
 def barra_neutralize_matrix(
-    signal_matrix, style_exposure, industry_map,
-    include_vol_neutral: bool = True,     # 截面加 rolling_vol_20 列
-    include_season_neutral: bool = True,  # 加 12 个月虚拟变量
+    signal_matrix, symbols_list, style_exposures,
+    industry_map=None, cap_map=None, min_samples_factor=1.5,
+    vol_map: Optional[dict[str, float]] = None,   # {symbol: 年化波动率} 截面列
+    dates: Optional[pd.DatetimeIndex] = None,     # 时序去季节化所需日期索引
+    include_vol_neutral: bool = True,             # 截面加波动率列
+    include_season_neutral: bool = True,          # 时序月度去季节化
     ...
 )
 ```
 
-**接入点**：`evolution_futures.py` L359-376 的板块注入处同时注入 `{symbol: rolling_vol}` 与 `{symbol: month}`。
+**实现要点（2026-08-13 设计修正）**：
+- **波动率中性化（截面）**：`vol_map` 作为静态截面暴露（对标股票市值），逐日截面回归 X 中追加
+  `[vol_map[sym]]` 列，剥离信号与品种波动率水平的相关性。
+- **季节性中性化（时序）**：⚠️ 原设计"12 个月虚拟变量进截面 X"在主力连续合约下退化——同一交易日
+  所有品种月份相同 → 哑变量为常数列被剔除、功能空转。修正为**逐品种时序回归**
+  `signal_t ~ Σ 月哑变量(2..12) + 截距` 取残差（`dates.month` 推导月份），真正剥离日历季节性
+  （如"一月效应"）。`dates=None` 或样本不足（<15）自动跳过，向后兼容。
+- **接入点**：`evolution_futures.py` 板块注入处新增 `_build_vol_map()`（全样本日收益年化波动率，
+  静态暴露），随 `cross_section_evaluate_backtest(vol_map=...)` 传入；与 `l2_barra_style_neutral`
+  同一配置门控；`cross_section_evaluate_backtest` 增加 `vol_map` 参数并透传 `dates`。
 
-**测试**：合成「波动率单调影响信号」面板 → 中性化后 IC 与波动率相关归零；月度季节性剥离验证。
+**测试**：合成「波动率单调影响信号」面板 → 中性化后残差与波动率相关归零；强一月效应面板 →
+去季节化后一月偏移消失；无 vol_map/dates → 行为不变（向后兼容）。
 
 ### 5.4 G11 换手 >20% 因子级硬剔除
 
@@ -361,7 +374,15 @@ class SignalDetail(TypedDict, total=False):
 `risk_usage` 由 `capital_allocator` 的 margin_usage 回填；
 新增 `to_lots(position, equity, price, multiplier)` 辅助：资金占比→手数，四舍五入、资金不足→0 手、超上限→截断。
 
-**测试**：三管道输出 validator 零错误；`to_lots` 边界（0 手 / 截断）。
+**接线范围（2026-08-13 实施说明）**：
+- `generate_mhf_signals` 已接入：`signal_map_to_factor_signal` 组装 FactorSignal →
+  `SignalValidator` 校验，结果附入 payload `factor_signal` / `validation_errors`
+  （legacy `signals` 字典保留，tqsdk 执行器兼容）。
+- `tqsdk_mhf_executor.run_once` 已接入：payload 含 `factor_signal` 时先过校验（不阻断执行）。
+- `futures_signal_pipeline` 为**报告型脚本**（输出多空排名 md），其 FactorSignal
+  发射依赖报告 payload 契约化改造，暂缓（G17 FDT 消费入口以 MHF 链路先行）。
+
+**测试**：`to_lots` 边界（0 手 / 截断）；转换器 + validator 零错误；新字段校验（risk_usage 越界 / delta 不一致）。
 
 ### 5.6 G13 月度重跑自动调度
 
@@ -420,6 +441,17 @@ def _min_variance_allocation(returns: pd.DataFrame, **kw) -> pd.Series:
 approved/rejected 状态（AP06 反模式约束：AI 输出永不自动改变入库状态）。
 
 **建议**：不阻塞主线，批次三末尾视团队需求决定是否启用。
+
+**批次末评估结论（2026-08-13，v2.103.0 批次）**：**维持暂缓（不启用）**，理由：
+1. **无增量拦截能力**：P1 批次 G4-G7 已落地统计硬门槛（ICIR≥0.30/符号反转一票否决/Bootstrap CI/ADF/5-Regime 拆分），
+   审计链 7 项 + SHAP 信息型审查已覆盖，LLM 辅助标注对 approved/rejected 无影响（契约只写 review_note）；
+2. **AP06 约束**：AI 输出永不自动改变入库状态，G16 收益仅为标注信息，成本（LLM API/延迟/维护）> 收益；
+3. **角色边界**（AGENTS.md §5.6）：FTS 专注因子发现/评估/组合与演化，LLM 审核标注属可选增强，
+   团队需要时可按本节契约以独立模块接入，不占主线预算；
+4. **G17 交接前置**：真实柜台（FDT）落地后，若信号质量需人工/LLM 复核标注再评估启用。
+
+**启用条件（后续触发）**：团队决定需要 → 新建 `fts/factor_engine/llm_review.py`（按本节契约，仅写
+`factor_reviews.review_note`），配置 `FTS_LLM_REVIEW_ENABLED` 默认关闭。
 
 ### 5.10 G17 真实柜台对接（FDT 交接，非本仓库编码）
 

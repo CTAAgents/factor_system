@@ -1,6 +1,6 @@
 # FTS 业务流程图
 
-> 版本: v2.103.0+11
+> 版本: v2.103.0+33
 > 最后更新: 2026-08-05
 
 ## 全景业务流
@@ -131,7 +131,7 @@
   │      ├── 种子因子注入 → l1_injected/ + factor_pool.json（pending）
   │      └── 演化方向指引 → L2
   │
-19:00  L3 Portfolio Loop 启动（每周五，期货，对齐 TRAE Schedule 期货 L3 19:00）
+19:00  L3 Portfolio Loop 启动（工作日每日，期货，对齐 TRAE Schedule 期货 L3 19:00；equal_weight 等权漂移小，每日重算稳定）
   │      ├── 加载 elite 因子
   │      ├── 正交化 → 去相关性
   │      ├── 衰减检验 → 淘汰失效因子
