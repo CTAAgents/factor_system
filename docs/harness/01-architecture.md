@@ -253,6 +253,7 @@ fts/
 │   ├── evolution_uct.py        # UCT 父因子选择 Mixin（34 计划领域 I，2026-08-13）：_select_parent_uct/_update_uct_stats/_update_uct_failure + _check_circuit_breaker/_maybe_early_stop，内部状态 _uct_stats/_evolution_stop_*/_consecutive_empty_generations/_early_stop_*
 │   ├── evolution_trace.py      # trace/经验链 Mixin（34 计划领域 J，2026-08-13）：12 方法（_record_*_trace ×6 + _build_parent_failure_ctx/_build_success_pattern_report/_record_experiment_variant/_export_experiment_log/_log_inspection_detail + _QualityInspectionResult 数据类），内部状态 _success_pattern_cache/_experiment_log_dir/_experiment_variants
 │   ├── evolution_channels.py   # 演化通道 Mixin（34 计划领域 G，2026-08-13）：_run_gp_evolution/_run_deep_evolution/_generate_operator_factor/_try_operator_engine_evolution（GP/深度/算子 DSL 三通道），组件 feature_ops_engine/feature_importance_analyzer 装配于主类
+│   ├── evolution_seeds.py      # 种子/横截面 Mixin（34 计划领域 D，2026-08-13）：_evaluate_and_promote_seeds（种子评估晋升编排，跨调 E/F/C/J 域方法）/ _merge_l1_candidates（GAP-031 L1 注入候选合并）/ _run_seed_correlation_check / _build_barra_exposures（GAP-I304 风格暴露缓存）/ _evaluate_cross_section / run_microstructure_promotion（C1 公开入口），组件 cap_map/industry_map/_barra_exposures_cache 装配于主类
 │   ├── orthogonal_basis.py     # 多因子正交基底（GAP-I206 补充, v2.72.1）：Gram-Schmidt 迭代残差化 + 基底注册/持久化
 │   ├── batch_mining.py         # 批量挖掘漏斗（GAP-I201, v2.65.0）：BatchMiner 批量生成 + 并行粗筛 + 排序截断，evolution_mode="batch" 时每代批量候选
 │   ├── executor_backend.py     # 可插拔执行器抽象（GAP-I502, v2.83.0；C4 2026-08-11 增强）：ExecutorBackend（thread/process/dask/ray）+ create_executor_backend 工厂，BatchMiner.filter_batch 接入；DaskBackend：cluster 句柄注入/address 优先（单机 LocalCluster 等价多节点调度语义，真实集群 tcp://scheduler:8786 接入后置）、worker_count（scheduler_info 视角诊断）/kill_worker（故障注入）/alive_workers 均降级不抛、map 经 _DaskResultIterator 单任务异常隔离（对齐 concurrent.futures.map 契约，生成器异常会关闭丢失后续任务）；缺依赖自动降级 ProcessBackend
@@ -819,8 +820,9 @@ class EvolutionLoop(
     EvolutionUctMixin,      # 领域 I: UCT 选择 + 熔断/提前停止（evolution_uct.py）
     EvolutionTraceMixin,    # 领域 J: trace 记录 + 经验链 + 实验日志（evolution_trace.py）
     EvolutionChannelsMixin, # 领域 G: GP/深度/算子演化通道（evolution_channels.py）
-    # 后续按 34 盘点顺序接入: SeedsMixin /
-    # AuditMixin / ReviewMixin / PrefilterMixin / PromoteMixin / CandidateMixin
+    EvolutionSeedsMixin,    # 领域 D: 种子评估晋升 + L1 合并 + 横截面（evolution_seeds.py）
+    # 后续按 34 盘点顺序接入: AuditMixin /
+    # ReviewMixin / PrefilterMixin / PromoteMixin / CandidateMixin
 ):
 ```
 
