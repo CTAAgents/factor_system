@@ -747,7 +747,14 @@ class TestAutoBuildFactorReturns:
             {
                 "factor_id": f"fct_0{i}",
                 "name": f"f{i}",
-                "code": "def factor_program(data, params):\n    return data['close'].pct_change()",
+                "code": (
+                    "def factor_program(data, params):\n"
+                    "    import numpy as np\n"
+                    "    close = np.asarray(data['close'], dtype=float)\n"
+                    "    sig = np.full(len(close), np.nan)\n"
+                    "    sig[5:] = close[5:] / np.maximum(close[:-5], 1e-10) - 1.0\n"
+                    "    return sig"
+                ),
             }
             for i in range(2)
         ]

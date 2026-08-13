@@ -149,10 +149,11 @@ class FTSConfig:
     cost_sensitivity_enabled: bool = field(
         default_factory=lambda: os.getenv("FTS_COST_SENSITIVITY_ENABLED", "0") == "1"
     )
-    # G11（35-gap-closure-plan）：日换手硬剔除阈值（信号翻转率，None=关闭观察；
-    # 库中换手历史未回填，待真实分布复核后启用，见 plans/35 §9.1）
+    # G11（35-gap-closure-plan §5.4）：日换手硬剔除阈值（信号翻转率，0.30 由
+    # 2026-08-13 active 期货因子真实分布校准——P90≈0.32，剔除 top ~12% 极端换手；
+    # env FTS_FACTOR_TURNOVER_DAILY_MAX 可覆盖，空值=关闭观察）
     factor_turnover_daily_max: Optional[float] = field(
-        default_factory=lambda: (lambda v: float(v) if v else None)(os.getenv("FTS_FACTOR_TURNOVER_DAILY_MAX", ""))
+        default_factory=lambda: (lambda v: float(v) if v else 0.30)(os.getenv("FTS_FACTOR_TURNOVER_DAILY_MAX", ""))
     )
     # 夜盘/隔夜跳空列注入（GAP-066 + G8）：get_ohlcv 附加 overnight_gap/overnight_gap_flag 列
     # G8（v2.104.0, D5）：默认开启（跳空标记进入因子面板）

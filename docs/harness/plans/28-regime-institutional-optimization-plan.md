@@ -1,7 +1,7 @@
 # 28 — Regime 机构级优化实施计划（置信度仓位缩放 + 制度概率混合权重）
 
 
-> 版本: v2.104.0
+> 版本: v2.104.0+4
 
 > 状态: ✅ 已实施（T1~T10 全部完成，2026-08-11；实施记录见 [07-operations.md](../07-operations.md) v2.101.0「Regime 机构级优化计划」条目，远期差距登记 GAP-092~095）
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐步实现本计划。步骤使用复选框（`- [ ]`）语法跟踪。
@@ -1212,7 +1212,7 @@ git commit -m "feat(regime): 观测指标 + HARNESS 文档同步 + 定向回归�
 
 ## 6. 远期差距（登记 08-gap-analysis.md，P2）
 
-- 宏观制度（Bridgewater 增长×通胀四象限）——需宏观数据面板接入（18-macro-field-enhancement 基础）；
+- ~~宏观制度（Bridgewater 增长×通胀四象限）——需宏观数据面板接入（18-macro-field-enhancement 基础）~~ **✅ 已落地（GAP-092，v2.104.0+3）**：新建 `fts/factor_engine/macro_regime.py` `MacroRegimeDetector`——增长（制造业 PMI，akshare）× 通胀（CPI 当月同比，东财已闭环）水平阈值四象限（overheat/goldilocks/stagflation/recession）+ 置信度（主象限联合概率）+ 象限画像；`scripts/macro_regime_report.py` 报告 CLI；真实实测 2026-07 = recession 衰退（PMI 49.2 + CPI 0.5%，置信 0.507）；月度发布天然滞后防未来函数，量价/宏观双维度独立并存。
 - RL 制度条件决策层（SSRN 5785443）——需实盘反馈闭环（simulated_portfolio 已铺垫）；
-- 置信度 isotonic/Platt 校准——需足够历史 regime 标签（T9 验证模块提供基础）；
-- regime blend 幂次调节（`blend_power`）——视实测倍率拉平情况启用。
+- ~~置信度 isotonic/Platt 校准——需足够历史 regime 标签（T9 验证模块提供基础）~~ **✅ 已落地（GAP-094，v2.104.0+1）**：`StatisticalRegimeCalibrator`（isotonic/Platt/binning + sklearn 缺失降级 + save/load）+ `scripts/fit_regime_calibration.py` 离线拟合（滚动检测重放 + 制度方向预期命中标签 + Brier/阶梯诊断）+ `_compute_exposure_scale` calibration_path 接线（默认熵标定，文件有效优先统计校准）；真实 RB0 校准产物 `data/regime_calibration.json`——阶梯表 [0.6,0.8) 置信 0.679↔命中 0.673，置信度具备频率语义。
+- ~~regime blend 幂次调节（`blend_power`）——视实测倍率拉平情况启用~~ **✅ 已落地（GAP-095，v2.104.0+1）**：`_power_normalize_probs` 幂次归一化 + `regime_adaptive_weight_adjustment(blend_power=...)` + `AdaptiveWeightConfig.blend_power`（默认 1.0 线性向后兼容）；>1 锐化大概率制度、<1 钝化趋平。

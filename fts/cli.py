@@ -546,10 +546,12 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
             factor_returns=factor_returns,
             recompute_weights=(True if getattr(args, "force_recompute", False) else None),
         )
+        # signal_sharpe 为 Optional（frozen/completed 分支为 None），非数值时兜底 0.0
+        sig_sharpe = result.signal_sharpe if isinstance(result.signal_sharpe, (int, float)) else 0.0
         print(
             f"[portfolio] 完成: status={result.status} "
             f"factors={result.n_factors_retained} "
-            f"signal_sharpe={result.signal_sharpe if result.signal_sharpe is not None else 0.0:.4f} "
+            f"signal_sharpe={sig_sharpe:.4f} "
             f"combo_sharpe={result.combo_sharpe:.4f}"
         )
         if result.status == "frozen":

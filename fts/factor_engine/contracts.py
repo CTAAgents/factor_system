@@ -763,6 +763,12 @@ class AdaptiveWeightConfig(TypedDict, total=False):
         - confidence_scale: 置信度仓位缩放（默认 True）
         - confidence_scale_min: 熵标定后缩放下限（默认 0.3）
         - confidence_entropy_penalty: 熵标定惩罚系数（默认 0.5）
+
+    P2 远期（GAP-094/095）:
+        - blend_power: 制度概率混合幂次调节（默认 1.0 线性；
+          >1 锐化大概率权重、<1 钝化趋平；plans/28 §5 风险表）
+        - calibration_path: 统计概率校准文件（GAP-094 isotonic/Platt 拟合产物
+          JSON 路径；默认空 = 使用熵标定，校准文件存在且有效时优先统计校准）
     """
 
     enabled: bool  # 是否启用（默认 True）
@@ -775,6 +781,8 @@ class AdaptiveWeightConfig(TypedDict, total=False):
     confidence_scale: bool  # 置信度仓位缩放开关（默认 True；28-T4）
     confidence_scale_min: float  # 熵标定缩放下限（默认 0.3；28-T4）
     confidence_entropy_penalty: float  # 熵标定惩罚系数（默认 0.5；28-T4）
+    blend_power: float  # 制度概率混合幂次（默认 1.0 线性；GAP-095）
+    calibration_path: str  # 统计概率校准 JSON 路径（默认 ""；GAP-094）
 
 
 DEFAULT_ADAPTIVE_CONFIG: AdaptiveWeightConfig = AdaptiveWeightConfig(
@@ -788,8 +796,11 @@ DEFAULT_ADAPTIVE_CONFIG: AdaptiveWeightConfig = AdaptiveWeightConfig(
     confidence_scale=True,
     confidence_scale_min=0.3,
     confidence_entropy_penalty=0.5,
+    blend_power=1.0,
+    calibration_path="",
 )
-"""v2.56.0 锁定的 L3 自适应权重默认配置（更灵敏平滑档；28-T4 扩展概率混合与置信度缩放）。"""
+"""v2.56.0 锁定的 L3 自适应权重默认配置（更灵敏平滑档；28-T4 扩展概率混合与置信度缩放；
+GAP-094/095 远期参数默认值：blend_power=1.0 线性、calibration_path="" 熵标定）。"""
 
 
 # ─── 多源数据交叉验证契约 ──────────────────────────────────

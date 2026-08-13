@@ -1025,6 +1025,15 @@ def cross_section_evaluate_backtest(
 
     # GAP-062 补充（横截面路径）：信号翻转频率 + 最大连续亏损（时序路径已实现）
     metrics["sign_flip_rate"] = float(np.mean(np.abs(np.diff(np.sign(oos_signal), axis=0))) / 2) if oos_signal.shape[0] > 1 else 0.0
+    # G11（35-gap-closure-plan §5.4）：横截面日换手口径——与 sign_flip_rate 同源
+    # （时间轴信号翻转率 mean(|Δsign|)/2）；月度 turnover = 日口径 × 42（= mean(|Δsign|) × 21）。
+    # NaN 安全：真实面板存在缺失行（NaN），翻转差分后需剔除无效对再取均值。
+    if oos_signal.shape[0] > 1:
+        _cs_diffs = np.abs(np.diff(np.sign(oos_signal), axis=0))
+        if np.isfinite(_cs_diffs).any():
+            _turnover_daily_cs = float(np.nanmean(_cs_diffs)) / 2.0
+            metrics["turnover_daily"] = _turnover_daily_cs
+            metrics["turnover_monthly"] = _turnover_daily_cs * 42.0
     if len(ls_returns) > 0:
         metrics["max_consecutive_losses"] = _max_consecutive_losses(ls_returns)
 

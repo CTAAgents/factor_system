@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0
+> 版本: v2.104.0+4
 > 最后更新: 2026-08-11
 
 ---
@@ -12,6 +12,10 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+4** | **2026-08-13** | **G11 换手回填+阈值启用：横截面路径 turnover 计算修复（曾硬编码 0）+ 换手回填入库 69 因子 + factor_turnover_daily_max 定值 0.30（真实分布校准）+ 横截面 G11 硬剔除 + 测试+4 用例** |** |
+| **v2.104.0+3** | **2026-08-13** | **GAP-092 Bridgewater 增长×通胀四象限宏观制度层落地（plans/28 远期第三项）：新建 fts/factor_engine/macro_regime.py MacroRegimeDetector（水平阈值四象限 + 置信度联合软概率 + 象限画像）+ scripts/macro_regime_report.py 报告 CLI（真实实测 2026-07 recession 衰退 PMI 49.2 + CPI 0.5%）+ 19 新增测试 + 定向回归全绿 + ruff 全绿** |** |
+| **v2.104.0+2** | **2026-08-13** | **L3 双指标夏普 signal_sharpe + 实测化输入自动构建（方案③+①）：PortfolioCombo 新增 signal_sharpe（缩放前信号质量），build_combo 双指标落盘；_auto_build_factor_returns 自动构建因子收益矩阵（measured 口径，失败回退估算）；CLI/归因报告输出双指标；新增 8 测试用例** |** |
+| **v2.104.0+1** | **2026-08-13** | **GAP-094/095 落地 + GAP-081/096/090 状态收敛（plans/28 远期两项）：StatisticalRegimeCalibrator 统计概率校准（isotonic/Platt/binning + scripts/fit_regime_calibration.py + _compute_exposure_scale calibration_path 接线 + 真实 RB0 校准文件 data/regime_calibration.json）+ regime blend 幂次调节 blend_power（_power_normalize_probs + AdaptiveWeightConfig）+ 27 新增测试 + 定向回归 143 passed 全绿 + ruff 通过** |** |
 | **v2.104.0** | **2026-08-13** | **35-gap-closure 全链路缺口关闭完成（G1-G17 全部实现+测试+批次末评估）+ 34 计划 C 阶段收官（Mixin->协作类）+ 全量回归 6621 passed 全绿（not slow）** |** |
 | **v2.103.0+33** | **2026-08-13** | **evolution_loop.py C 阶段 Phase 47i：候选准入链域组合式重构 CandidateProcessor 协作类（C 阶段收官，继承链清零）** |** |
 | **v2.103.0+32** | **2026-08-13** | **evolution_loop.py C 阶段 Phase 47h：种子管理/横截面域组合式重构 SeedManager 协作类** |** |

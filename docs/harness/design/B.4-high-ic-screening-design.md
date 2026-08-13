@@ -1,6 +1,6 @@
 # B.4 高IC因子筛查剔除流程 — 详细技术设计
 
-> 版本: v2.104.0
+> 版本: v2.104.0+4
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase B.4（新增）
 > 状态: **已实现**
 > 实现说明: 实际实现为 `fts/factor_engine/high_ic_screener.py`（v1.0.0）的 `HighICScreener`。16 项检查 × 6 大模块，总分 100 分；5 项一票否决任意触发直接剔除（C 级）。评级规则：A 级 ≥85 正常入库、B 级 60~84 暂缓优化、C 级 <60 直接剔除。该筛查在所有市场（股票/期货）统一启用，作为 `_promote_to_elite` 入库前的强制质检关卡。

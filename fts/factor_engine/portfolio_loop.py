@@ -38,11 +38,13 @@ import argparse
 import importlib.util
 import json
 import logging
+import os
 import re
 import secrets
 import sys
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Optional, cast
 
@@ -540,6 +542,31 @@ def load_data_driven_multipliers(path: Optional[str] = None) -> dict[str, dict[s
         return {}
 
 
+def _power_normalize_probs(probs: dict[str, float], power: float) -> dict[str, float]:
+    """制度概率幂次归一化（GAP-095，regime blend 幂次调节）。
+
+    线性加权混合（power=1）在概率分布过平（如规则伪概率多制度接近均分）时
+    会拉平跨制度倍率差异（plans/28 §5 风险表）。幂次归一化:
+        p_i' = p_i^power / Σ_j p_j^power
+    power > 1 锐化（大概率制度权重更大）、power < 1 钝化（概率趋平）。
+    零概率以 1e-12 兜底避免 0^power 除零；全零/非法 power 返回原分布。
+
+    Args:
+        probs: 全制度概率分布（和为 1）。
+        power: 幂次指数（1.0 等价于不调整）。
+
+    Returns:
+        幂次归一化后的概率分布（和仍为 1）；power=1.0 或输入异常时原样返回。
+    """
+    if power <= 0 or abs(power - 1.0) < 1e-9 or not probs:
+        return probs
+    raw = {r: max(float(p), 1e-12) ** power for r, p in probs.items()}
+    total = sum(raw.values())
+    if total <= 1e-12:
+        return probs
+    return {r: v / total for r, v in raw.items()}
+
+
 def regime_adaptive_weight_adjustment(
     signals: list[PortfolioSignal],
     regime: dict[str, Any],
@@ -549,6 +576,7 @@ def regime_adaptive_weight_adjustment(
     min_clamp: float = 0.5,
     max_clamp: float = 1.5,
     probability_mix: bool = True,
+    blend_power: float = 1.0,
 ) -> list[PortfolioSignal]:
     """根据市场制度自适应调整因子权重。
 
@@ -566,6 +594,8 @@ def regime_adaptive_weight_adjustment(
     制度概率混合（28-T3，regime blend，对标 Two Sigma / AQR）:
     - 启用 probability_mix 且 regime 含 regime_probs 时，对全部制度倍率表按概率
       加权混合: mult = Σ p_i × table_i，替代硬查表——制度误判只按概率摊薄而非全错。
+    - blend_power ≠ 1.0 时先对 regime_probs 做幂次归一化（GAP-095）:
+      p_i' = p_i^power / Σ_j p_j^power，>1 锐化大概率制度、<1 钝化趋平。
     - 无 regime_probs 或 probability_mix=False 时回退旧硬查表逻辑（向后兼容）。
 
     Args:
@@ -577,6 +607,7 @@ def regime_adaptive_weight_adjustment(
         min_clamp: 双维度乘积下限 clamp 倍率（dimension="both" 时生效）
         max_clamp: 双维度乘积上限 clamp 倍率（dimension="both" 时生效）
         probability_mix: 是否启用制度概率混合（regime blend，默认 True）
+        blend_power: 制度概率混合幂次（默认 1.0 线性；GAP-095）
 
     Returns:
         调整后的 signals 列表（权重已更新，retained 可能变化）
@@ -595,6 +626,8 @@ def regime_adaptive_weight_adjustment(
 
     # 制度概率混合（28-T3）：按制度概率对各制度倍率表加权混合
     regime_probs: dict[str, float] | None = regime.get("regime_probs") if probability_mix else None
+    # GAP-095: 幂次归一化（blend_power≠1.0 时锐化/钝化概率分布，power=1 原样返回）
+    regime_probs = _power_normalize_probs(regime_probs or {}, blend_power) or None
     # blend 需跨制度取表（mult = Σ p_i × table_i）：数据驱动全表优先，缺失回退硬编码全表
     family_tables: dict[str, dict[str, float]] = (
         _DATA_DRIVEN_FAMILY_MULTIPLIERS if _DATA_DRIVEN_FAMILY_MULTIPLIERS else REGIME_FAMILY_MULTIPLIERS
@@ -689,17 +722,20 @@ def _compute_exposure_scale(
     enabled: bool = True,
     scale_min: float = 0.3,
     entropy_penalty: float = 0.5,
+    calibration_path: str = "",
 ) -> float:
     """计算置信度仓位缩放因子（28-T4，T6 在 build_combo 消费）。
 
     对标机构 vol targeting 简化版：低确定性（高后验熵 / 低置信度）降低总暴露。
-    未启用或 regime 缺失/异常时返回 1.0（不缩放），保证默认行为不变。
+    GAP-094：配置 calibration_path 且统计校准文件有效时，优先用 isotonic/Platt
+    统计校准（频率语义），否则回退熵标定。未启用或 regime 缺失/异常时返回 1.0。
 
     Args:
         regime: 市场制度检测结果（含 confidence / regime_probs，可无 regime_probs）。
         enabled: 是否启用置信度缩放。
-        scale_min: 熵标定后缩放下限。
-        entropy_penalty: 熵标定惩罚系数。
+        scale_min: 校准后缩放下限。
+        entropy_penalty: 熵标定惩罚系数（统计校准路径不使用）。
+        calibration_path: GAP-094 统计校准 JSON 路径（默认 ""=熵标定）。
 
     Returns:
         暴露缩放因子 ∈ [scale_min, 1.0]；未启用/异常时 1.0。
@@ -707,6 +743,13 @@ def _compute_exposure_scale(
     if not enabled or regime is None:
         return 1.0
     try:
+        # GAP-094: 统计校准优先（文件存在且拟合有效）
+        if calibration_path:
+            cal = _load_statistical_calibrator(calibration_path)
+            if cal is not None and cal.calibrated:
+                p = cal.predict(regime.get("confidence", 0.5))
+                return float(np.clip(p, scale_min, 1.0))
+
         from .regime_calibration import RegimeConfidenceCalibrator
 
         calibrator = RegimeConfidenceCalibrator(
@@ -722,6 +765,25 @@ def _compute_exposure_scale(
     except Exception as e:  # 容错兜底：任何异常不阻断主流程
         logger.warning("[L3-Regime] 置信度仓位缩放计算失败，回退 1.0: %s", e)
         return 1.0
+
+
+@lru_cache(maxsize=4)
+def _load_statistical_calibrator(path: str) -> Any:
+    """缓存加载 GAP-094 统计校准器；缺失/损坏返回 None（调用方回退熵标定）。
+
+    Args:
+        path: 校准 JSON 路径。
+
+    Returns:
+        StatisticalRegimeCalibrator（已拟合）或 None。
+    """
+    try:
+        from .regime_calibration import StatisticalRegimeCalibrator
+
+        cal = StatisticalRegimeCalibrator.load(path)
+        return cal if cal.calibrated else None
+    except Exception:  # 任何加载异常不阻断主流程
+        return None
 
 
 def _infer_factor_style_from_name(name: str) -> str:
@@ -4086,6 +4148,7 @@ class PortfolioLoop:
                     n_factors_input=0,
                     n_factors_retained=0,
                     combo_sharpe=0.0,
+                    signal_sharpe=None,
                     max_correlation=0.0,
                     n_proposals=0,
                     status="completed",
@@ -4298,6 +4361,7 @@ class PortfolioLoop:
                             min_clamp=aconfig.get("min_clamp", 0.5),
                             max_clamp=aconfig.get("max_clamp", 1.5),
                             probability_mix=aconfig.get("probability_mix", True),
+                            blend_power=aconfig.get("blend_power", 1.0),
                         )
                         # 28-T4: 计算并暂存置信度仓位缩放因子（T6 在 build_combo 消费）
                         self._regime_exposure_scale = _compute_exposure_scale(
@@ -4305,6 +4369,7 @@ class PortfolioLoop:
                             enabled=aconfig.get("confidence_scale", True),
                             scale_min=aconfig.get("confidence_scale_min", 0.3),
                             entropy_penalty=aconfig.get("confidence_entropy_penalty", 0.5),
+                            calibration_path=aconfig.get("calibration_path", ""),
                         )
                         self._regime_meta = {
                             "regime": regime.get("regime", "unknown"),
@@ -4409,9 +4474,11 @@ class PortfolioLoop:
             logger.info("[L3] Step 4: 衰减检验完成, 保留 %d 个因子", n_retained)
 
             # Step 5: 组合构建（含粘性约束 + 漂移监控）
-            # 方案①：未显式传因子收益矩阵时，自动从面板+因子代码构建（measured 实测口径）；
-            # 构建失败/数据不足时保持 None，build_combo 回退估算口径。
-            if factor_returns is None and panel_data:
+            # 实测化输入（方案①）：--returns-matrix 手动 CSV 已由 CLI 传入（factor_returns 非 None）。
+            # 自动构建（_auto_build_factor_returns）默认关闭：横截面多空腿（quantile=0.2, 25 品种）
+            # 收益矩阵 Sharpe 严重虚高（v2.104.0+2 实测 20.06，超 max_sharpe 3.5 过拟合告警），
+            # 仅显式设置 FTS_L3_AUTO_FACTOR_RETURNS=1 时启用；其余场景回退估算口径。
+            if factor_returns is None and panel_data and os.environ.get("FTS_L3_AUTO_FACTOR_RETURNS") == "1":
                 auto_fr = _auto_build_factor_returns(panel_data, factors, self.elite_dir, market=self.market)
                 if auto_fr is not None:
                     factor_returns = auto_fr

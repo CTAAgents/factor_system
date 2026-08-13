@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -22,9 +23,12 @@ from fts.factor_engine.contracts import (
 )
 from fts.factor_engine.portfolio_loop import (
     PortfolioLoop,
+    _compute_exposure_scale,
+    _power_normalize_probs,
     regime_adaptive_weight_adjustment,
     synthesize_signals,
 )
+from fts.factor_engine.regime_calibration import StatisticalRegimeCalibrator
 
 
 @pytest.fixture(autouse=True)
@@ -232,6 +236,130 @@ def test_regime_blend_fallback_hardcoded() -> None:
     regime = {"regime": "bull", "confidence": 0.8}
     adjusted = regime_adaptive_weight_adjustment(signals, regime, _make_factors([("f1", "trend")]))
     assert abs(adjusted[0]["weight"] - 0.10 * 1.3) < 1e-6  # bull/trend=1.3
+
+
+# ─── GAP-095: regime blend 幂次调节（blend_power）────────────
+
+
+def test_default_adaptive_config_has_blend_power() -> None:
+    """默认配置含 blend_power=1.0（线性，向后兼容）与 calibration_path=""。"""
+    cfg = DEFAULT_ADAPTIVE_CONFIG
+    assert cfg.get("blend_power", 1.0) == 1.0
+    assert cfg.get("calibration_path", "") == ""
+
+
+def test_power_normalize_probs_identity() -> None:
+    """power=1.0 原样返回；非法 power（≤0）不调整。"""
+    probs = {"bull": 0.6, "oscillate": 0.4}
+    assert _power_normalize_probs(probs, 1.0) is probs
+    assert _power_normalize_probs(probs, 0.0) is probs
+    assert _power_normalize_probs(probs, -2.0) is probs
+    assert _power_normalize_probs({}, 3.0) == {}
+
+
+def test_power_normalize_probs_sharpens() -> None:
+    """power>1 锐化：大概率制度权重放大，分布更尖锐且和仍为 1。"""
+    probs = {"bull": 0.6, "oscillate": 0.4, "bear": 0.0}
+    sharp = _power_normalize_probs(probs, 3.0)
+    assert abs(sum(sharp.values()) - 1.0) < 1e-9
+    assert sharp["bull"] > 0.6  # 0.7714
+    assert sharp["oscillate"] < 0.4  # 0.2286
+    assert sharp["bear"] < 1e-9  # 零概率仍为零（1e-12^3 归一化后≈0）
+
+
+def test_power_normalize_probs_flattens() -> None:
+    """power<1 钝化：概率趋平（锐化反向）。"""
+    probs = {"bull": 0.9, "oscillate": 0.1}
+    flat = _power_normalize_probs(probs, 0.5)
+    assert abs(sum(flat.values()) - 1.0) < 1e-9
+    assert flat["bull"] < 0.9  # sqrt(0.9)/(sqrt(0.9)+sqrt(0.1)) ≈ 0.75
+    assert flat["oscillate"] > 0.1
+
+
+def test_blend_power_default_matches_linear_mix() -> None:
+    """默认 blend_power=1.0 时结果与既有线性概率混合一致（回归保护）。"""
+    regime = {
+        "regime": "oscillate",
+        "confidence": 0.5,
+        "regime_probs": {"bull": 0.6, "oscillate": 0.4, "bear": 0.0, "high_vol": 0.0, "low_vol": 0.0},
+    }
+    factors = _make_factors([("f1", "trend")])
+    # 注：adjustment 原地修改 signals，每次调用须用独立列表
+    w_default = regime_adaptive_weight_adjustment(_make_signals([("f1", "trend", 0.10)]), regime, factors)[0]["weight"]
+    w_explicit = regime_adaptive_weight_adjustment(
+        _make_signals([("f1", "trend", 0.10)]), regime, factors, blend_power=1.0
+    )[0]["weight"]
+    assert abs(w_default - w_explicit) < 1e-9
+    assert abs(w_default - 0.10 * (1.3 * 0.6 + 0.8 * 0.4)) < 1e-6
+
+
+def test_blend_power_sharpens_toward_high_prob_regime() -> None:
+    """blend_power>1 时权重向大概率（高倍率）制度靠拢（锐化）。
+
+    线性混合 mult=1.3×0.6+0.8×0.4=1.10；power=3 归一化后 bull≈0.771/osc≈0.229
+    → mult≈1.186，最终权重高于线性混合（锐化生效）。
+    """
+    regime = {
+        "regime": "oscillate",
+        "confidence": 0.5,
+        "regime_probs": {"bull": 0.6, "oscillate": 0.4, "bear": 0.0, "high_vol": 0.0, "low_vol": 0.0},
+    }
+    factors = _make_factors([("f1", "trend")])
+    w_sharp = regime_adaptive_weight_adjustment(
+        _make_signals([("f1", "trend", 0.10)]), regime, factors, blend_power=3.0
+    )[0]["weight"]
+    w_linear = regime_adaptive_weight_adjustment(_make_signals([("f1", "trend", 0.10)]), regime, factors)[0]["weight"]
+    assert w_sharp > w_linear  # 锐化后更靠近 bull（倍率 1.3 > oscillate 0.8）
+    expected = 0.10 * (1.3 * (0.6**3) / (0.6**3 + 0.4**3) + 0.8 * (0.4**3) / (0.6**3 + 0.4**3))
+    assert abs(w_sharp - expected) < 1e-6
+
+
+# ─── GAP-094: 统计校准接入 _compute_exposure_scale ─────────
+
+
+def _synth_calibration_samples(n: int = 240, seed: int = 7):
+    """合成可校准样本：真实命中率 p = 0.1 + 0.8×conf。"""
+    rng = np.random.default_rng(seed)
+    conf = rng.uniform(0.05, 0.95, size=n)
+    p = 0.1 + 0.8 * conf
+    return conf.tolist(), (rng.random(n) < p).astype(int).tolist()
+
+
+def _regime_with(confidence: float, probs: dict | None = None) -> dict:
+    return {"regime": "bull", "confidence": confidence, "regime_probs": probs}
+
+
+def test_exposure_scale_statistical_calibration_used(tmp_path) -> None:
+    """配置 calibration_path 且校准有效时，exposure_scale 用统计校准值（频率语义）。"""
+    conf, hits = _synth_calibration_samples()
+    path = tmp_path / "cal.json"
+    StatisticalRegimeCalibrator().fit(conf, hits).save(path)
+    scale = _compute_exposure_scale(_regime_with(0.8), calibration_path=str(path))
+    # 0.8 置信度真实命中率 ≈ 0.74，统计校准值接近 0.74（熵标定 0.8 被概率熵折扣后远低）
+    assert 0.5 < scale <= 1.0
+    # 与默认熵标定路径不同（统计校准替换生效）
+    default_scale = _compute_exposure_scale(_regime_with(0.8))
+    assert abs(scale - default_scale) > 1e-6
+
+
+def test_exposure_scale_fallback_when_no_calibration_path() -> None:
+    """无 calibration_path → 熵标定（默认行为不变）。"""
+    sharp = {"bull": 0.95, "bear": 0.01, "oscillate": 0.02, "high_vol": 0.01, "low_vol": 0.01}
+    scale = _compute_exposure_scale(_regime_with(0.9, sharp))
+    assert 0.3 <= scale <= 1.0
+    assert scale > 0.8  # 尖锐分布熵标定几乎不折扣
+
+
+def test_exposure_scale_missing_calibration_file_falls_back(tmp_path) -> None:
+    """calibration_path 指向不存在/损坏文件 → 安全回退熵标定（不抛异常）。"""
+    missing = str(tmp_path / "nope.json")
+    scale = _compute_exposure_scale(_regime_with(0.8), calibration_path=missing)
+    assert 0.3 <= scale <= 1.0
+
+
+def test_exposure_scale_disabled_returns_one() -> None:
+    """enabled=False 返回 1.0（不缩放）。"""
+    assert _compute_exposure_scale(_regime_with(0.8), enabled=False) == 1.0
 
 
 # ─── RegimeSmoother 不对称切换（28-T7：de-risk 快 / re-risk 慢）───────

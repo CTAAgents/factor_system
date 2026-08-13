@@ -3475,6 +3475,16 @@ class EvolutionLoop:
             reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
         if bt.get("sharpe", 0) < 1.5:
             reasons.append(f"截面夏普={bt.get('sharpe', 0):.4f} < 1.5")
+        # G11（35-gap-closure-plan §5.4）：日换手硬剔除（与时序路径同口径，
+        # 阈值经 FTSConfig.factor_turnover_daily_max 可配，None=关闭）
+        try:
+            from ..config import get_config as _get_cfg
+
+            _td_max = getattr(_get_cfg(), "factor_turnover_daily_max", None)
+        except Exception:  # noqa: BLE001
+            _td_max = None
+        if _td_max is not None and float(bt.get("turnover_daily", 0.0) or 0.0) > float(_td_max):
+            reasons.append(f"截面日换手={float(bt.get('turnover_daily', 0.0) or 0.0):.4f} > {_td_max}")
         return FactorEvaluation(
             factor_id=factor["factor_id"],
             trace_id=trace_id,

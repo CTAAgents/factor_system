@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0
+> 版本: v2.104.0+4
 > 最后更新: 2026-08-10
 
 ---
@@ -554,6 +554,18 @@ FTS (因子推演) — 支持期货横截面因子演化
 │      + diversification_gain（组合/权重加权夏普）                    │
 │      + drawdown_control_ratio（组合/成分因子均值回撤，cumprod 实测）│
 │      → PortfolioCombo.qc_standards 契约                            │
+│ ②b 双指标夏普（方案③，portfolio_loop.build_combo，v2.104.0+2）      │
+│    signal_sharpe（缩放前信号质量夏普）：exposure_scale 仓位缩放前      │
+│      权重口径（Regime 降仓 × G1 同向敞口压缩前）                      │
+│    combo_sharpe（风控后净暴露夏普）：缩放后权重口径（原有字段）        │
+│    measured 口径下 portfolio_returns 内部归一化，两者相等             │
+│    → PortfolioCombo.signal_sharpe 契约（estimated 差异可解释）       │
+│ ②c 实测化输入（方案①，_auto_build_factor_returns，v2.104.0+2）       │
+│    --returns-matrix 手动 CSV 优先（CLI 传入 factor_returns）          │
+│    自动构建默认关闭（env FTS_L3_AUTO_FACTOR_RETURNS=1 启用）：          │
+│      面板+因子代码 → 横截面信号矩阵 + 5 日前向收益 → FactorReturnsBuilder│
+│      实测 Sharpe 虚高 20.06（v2.104.0+2 验证，quantile=0.2 腿过小），  │
+│      默认回退估算口径（metrics_source），自动构建质量问题登记 GAP-I306 │
 │ ③ IC 协方差加权合成（GAP-064，weight_learning.ic_covariance_weights）│
 │    w=(Σ+λI)⁻¹μ（Ledoit-Wolf 收缩 + 对角正则 + w/Σ|w| 归一化）       │
 │    → synthesize_signals ic_matrix 参数 + ic_weight 模式             │
