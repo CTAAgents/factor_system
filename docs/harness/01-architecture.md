@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+12
+> 版本: v2.104.0+16
 > 最后更新: 2026-08-10
 
 ---
@@ -833,6 +833,10 @@ Verifier 是 FTS 的核心安全机制，锁定后不可逆：
 - **L2 Verifier**: 控制 L2 因子演化流程
 - **L3 Verifier**: 控制 L3 组合构建和信号产出
 - 锁定后只能读取，无法修改配置
+
+**L2 Verifier Level 1 换手校验（方案 A，v2.104.0+13 / GAP-114）**：`max_turnover_monthly` 从「绝对阈值硬剔」升级为「成本敏感净收益校验」——换手超 5.0（次/月）时不再直接判失败，改按 `净夏普 = 毛夏普 − 月换手×12×2×单边成本率 / 年化波动`（`one_side_cost_rate=0.0005`、`assumed_annual_vol=0.15`，与 `cost_model` 净夏普口径一致）判定：净夏普仍 ≥ `min_sharpe` 即准入并输出 `cost_adjusted` 审计明细。与评估链日换手硬剔除 `factor_turnover_daily_max=0.45`（P95 校准拦极端）分层：外层拦天天翻仓、内层对中高换手因子做成本覆盖判定。动机：库内 active 因子 75.7% 换手>5.0（中位数 6.27），绝对阈值导致审计通过的高 IC 因子系统性被拒、夜间演化 0 晋升。
+
+**EvolutionLoop 熔断预算传播契约（v2.104.0+14 / GAP-115）**：`EvolutionLoop.budget` 为 **property**（setter 重绑时同步传播 `_uct_selector.budget`——UctSelector 是唯一经构造注入 budget 的协作类，其余协作类经 `owner.budget` 动态读主类引用不受影响）。因此任何入口重绑 budget（如 cli.py 夜间任务 `loop.budget = budget`，含 `FTS_EVOLUTION_CB_FAILURE_RATE` env 覆盖失败率阈值）都会自动生效到熔断判定，修复"cli 重绑不传播导致按 DEFAULT 0.95 失败率熔断提前终止"缺陷。
 
 ### EvolutionLoop Mixin 拆分契约（34 计划，2026-08-13 起）
 

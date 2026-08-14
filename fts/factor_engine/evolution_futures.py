@@ -253,7 +253,7 @@ class _QualityInspectionCompat:
         turnover = bt.get("turnover_monthly", 0.3)
         # 为 L1 候选因子设置合理换手率默认值（当回测未提供换手率时）
         if turnover <= 0:
-            turnover = 0.5  # 期货 50% 月换手作为合理默认值
+            turnover = 0.5  # 缺省月度换手（次/月，低频保守默认；单位与 verifier max_turnover_monthly 一致，GAP-114）
         walk_forward = evaluation.get("walk_forward")
 
         # 经济逻辑评分: 四维平均

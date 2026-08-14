@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+12
+> 版本: v2.104.0+16
 > 最后更新: 2026-08-13
 
 ---
@@ -12,6 +12,10 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+16** | **2026-08-14** | **阈值校准脚本日换手反推口径修复（GAP-117）：`scripts/gap_threshold_calibration.py` 反推日换手由 `turnover_monthly/21` 改 `turnover_monthly/42`——库内月度换手 = 日换手 × 42（G11 信号翻转率口径：`turnover_daily = mean(\|Δsign\|)/2`、`turnover_monthly = mean(\|Δsign\|)×21`，见 evaluation_chain 时序/横截面两条路径与 `scripts/backfill_turnover.py`；`TRADING_DAYS_PER_MONTH=21` 常量改 `TURNOVER_DAILY_TO_MONTHLY=42` 并修正 docstring 口径说明）——修复 `/21` 将日换手高估 2 倍致 G4/G11 校准分布失真（2026-08-14 全库校准实测：修正前日换手 P90=0.324→修正后 0.162，≤0.20 通过率 80.1%→91.1%，修正后与 G11 定值基准 active 因子 P90=0.320 量级一致）；新增测试 test_gap_threshold_calibration.py 7 用例（换算系数=42 / catalog / elite / evaluations 反推口径 / 候选阈值通过率），全绿 + ruff 通过；重跑全库校准生成正确基线 `reports/gap/threshold_calibration_20260814.md`；P1 关闭 53→54、合计关闭 140→141、合计 144→145，开放维持 4** |** |
+| **v2.104.0+15** | **2026-08-14** | **标的留出验证弱信号保护（GAP-116）：`SymbolHoldoutConfig` 新增 `min_train_ic=0.05`，`run_symbol_holdout()` 在训练集 \|IC\| < 阈值时返回 None（审计项 skipped，不阻断演化）——修复 retention = holdout_ic/\|train_ic\| 被近零分母放大导致判定噪声主导（实测 fut_linearreg train_ic=0.0278/holdout_ic=0.0009 → retention 3.2% 被判失败，而 fut_trix train_ic=0.0197 → retention 101% 完全由留出集 ±0.005 噪声决定）；\`min_train_ic=0\` 时回退旧行为向后兼容；测试 test_symbol_holdout.py 15→18（+3：弱信号返回 None / 阈值 0 向后兼容 / 强信号不受影响），模块回归 18 passed + ruff 通过** |** |
+| **v2.104.0+14** | **2026-08-14** | **熔断预算传播修复（GAP-115）：`EvolutionLoop.budget` 由普通属性改 property setter，重绑时同步传播 `_uct_selector.budget`（UctSelector 是唯一经构造注入 budget 的协作类，其余协作类经 `owner.budget` 动态读主类）——cli.py 夜间任务构造后 `loop.budget = budget`（失败率阈值 1.0=禁用，`FTS_EVOLUTION_CB_FAILURE_RATE` env 可覆盖）现在真正生效，修复"重绑不传播 → 熔断仍按 DEFAULT 0.95 在 g16~g23 提前终止、强制跑满世代数指令失效"（2026-08-13/14 连续三次实测）；测试 test_evolution_loop.py +3（重绑传播至 UctSelector/100% 失败率禁用态不熔断/重绑保留熔断态按新阈值触发 + owner 动态读取一致性），受影响回归 46 passed + ruff 通过 |** |
+| **v2.104.0+13** | **2026-08-14** | **Verifier Level 1 换手校验升级成本敏感净收益（方案 A，GAP-114）：`max_turnover_monthly` 由绝对阈值硬剔改「成本敏感净收益校验触发线」——换手超 5.0（次/月）时按净夏普=毛夏普−月换手×12×2×单边成本率/年化波动（新增 `one_side_cost_rate=0.0005`/`assumed_annual_vol=0.15`/`turnover_cost_net=True` 三项 VerifierConfig，与 `cost_model` 净夏普口径一致）判定，净夏普 ≥ min_sharpe 准入并输出 `cost_adjusted` 审计明细，否则判失败；`turnover_cost_net=False` 回退旧硬剔；三处口径统一「次/月」（contracts 注释 0.50→5.0、03-configuration 0.50→5.0、演化内部缺省 0.5 注明单位）；动机：库内 active 因子 75.7% 换手>5.0（中位数 6.27），绝对阈值导致夜间演化审计通过高 IC 因子系统性被拒、稳定 0 晋升（08-13/14 复现）；测试 test_verifier.py +5（成本覆盖放行/成本不足拦截/开关回退/明细字段/毛夏普口径），模块回归 300 passed + ruff 通过 |** |
 | **v2.104.0+12** | **2026-08-13** | **全量回归验收通过 + 推送前版本标记：not-slow 6693 passed（22:21）+ slow 26 passed（33:38）= 6719 测试全绿零失败，无需修复 bug；覆盖本日累积变更（+5~+11：G11 阈值 0.45 重开 / G4 块数感知 ic_t / 03-configuration §2.1 / GAP-072 max_weight_cap / GAP-I307 去重口径 / L3 权重重算等）** |** |
 | **v2.104.0+11** | **2026-08-13** | **信号管道单因子权重上限 max_weight_cap=0.30（GAP-072 补充）：Ridge 权重超限因子截断+按比例重分配+归一化（fut_bias_g19 43.5%→30.0% 实测生效）；--max-weight-cap CLI 透传（0 关闭/None 用默认）；trading_advice 因子集中风险判定加浮点容差 1e-9 避免 cap 恰好 30% 误报；新增 4 用例 cap 截断/None/低于等权回退/单因子忽略（test_futures_signal_pipeline.py 41 用例，定向回归 58 passed）** |** |
 | **v2.104.0+10** | **2026-08-13** | **L1 Step 2.5 去重口径修复（GAP-I307）**：① `meta_loop._scan_injected_names` 由扫描 `l1_injected/` 目录改读 factor_pool.json（SSOT）——目录文件会被 L2 演化 GAP-036 消费后删除（08-13 实测 48 个累计注入名对去重不可见），改读 pool 后消费不丢事实源；按 `self.market` 过滤、market 缺失历史记录纳入（宁多勿漏）；② `FactorPoolEntry` 契约新增 `market` 字段 + L1 注入 entry 写 `self.market`（市场隔离去重）；③ `evolution_seeds.py`/`evolution_futures.py` 消费后重算 total_count/pending_count（修复顶层字段残留过期值）；④ 测试 +3（test_meta_loop 93→95、test_evolution_l1_merge 13→14），模块回归 95+14+5+5 passed 全绿 + ruff 通过 |

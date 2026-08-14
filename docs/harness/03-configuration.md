@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.104.0+12
+> 版本: v2.104.0+16
 > 最后更新: 2026-08-10
 
 ---
@@ -143,7 +143,7 @@ G11 的"日换手"衡量的是**因子信号本身的变号频率**，**不是�
 
 - 值域 `[0,1]`：0=从不翻转（买入持有），1=每日变号（每日全仓反转）。
 - 与市场活跃度无关：只看因子信号翻不翻，不看市场成交放不放量。
-- 语义判断（2026-08-13，v2.104.0+9 修订）：换手硬剔除建立在"高换手 = 高摩擦成本"前提上，该前提在股票（印花税 + 佣金 + T+1，单次往返 ≈0.12%）成立、在期货（手续费为主，单次往返 ≈0.02%）明显弱化——但换手率过高在期货同样无交易价值，故期货主系统 `factor_turnover_daily_max` 默认 `0.45` 开启（P95 校准：83 个 active 期货因子真实分布 P95=0.456，仅拦 top ~5% 天天翻仓的极端抖动因子，较股票 0.30=P90 参考值更宽松）；env 可配置（数值=覆盖，"off"/"none"/"0"=关闭）。
+- 语义判断（2026-08-13，v2.104.0+9 修订）：换手硬剔除建立在"高换手 = 高摩擦成本"前提上，该前提在股票（印花税 + 佣金 + T+1，单次往返 ≈0.12%）成立、在期货（手续费为主，单次往返 ≈0.02%）明显弱化——但换手率过高在期货同样无交易价值，故期货主系统 `factor_turnover_daily_max` 默认 `0.45` 开启（P95 校准：83 个 active 期货因子真实分布 P95=0.456，仅拦 top ~5% 天天翻仓的极端抖动因子，较股票 0.30=P90 参考值更宽松）；env 可配置（数值=覆盖，"off"/"none"/"0"=关闭）。评估链/演化审计实现中 `FTSConfig.factor_turnover_daily_max` 默认 0.45（settings.py 生效），仅当 env 显式关闭时硬剔除不生效。
 
 ## 3. YAML 配置文件
 
@@ -178,7 +178,12 @@ L2 Verifier 默认配置（定义在 `contracts.py` 中，初始化后锁定）�
 | `min_t_stat` | 3.0 | 最小 t 统计量 |
 | `max_fdr` | 0.05 | 最大 FDR |
 | `min_oos_ratio` | 0.30 | 最小样本外比例 |
-| `max_turnover_monthly` | 0.50 | 最大月度换手率 |
+| `max_turnover_monthly` | 5.0 | 最大月度换手率（次/月，= turnover_daily×42，G11 日换手口径）；`turnover_cost_net=True` 时为**成本敏感净收益校验触发线**（换手超线不再硬剔，改判成本后净夏普），`False` 时回退绝对阈值硬剔 |
+| `one_side_cost_rate` | 0.0005 | 期货单边往返成本率（含滑点+手续费+冲击，默认 5bps；可经 `FTS_COST_*` 实证标定值覆盖），用于成本敏感净收益校验 |
+| `assumed_annual_vol` | 0.15 | 年化波动率假设（与 `cost_model._ASSUMED_ANNUAL_VOL` 一致），用于将年化成本侵蚀换算为夏普惩罚 |
+| `turnover_cost_net` | True | 成本敏感净收益校验开关（方案 A，v2.104.0+13）：换手超 `max_turnover_monthly` 时，按 `净夏普 = 毛夏普 − 年化成本侵蚀/年化波动` 判定（年化成本侵蚀 = 月换手×12×2×单边成本率），净夏普仍 ≥ `min_sharpe` 即准入并记录 `cost_adjusted` 明细；`False` 时回退旧绝对阈值硬剔 |
+
+> 口径修正（v2.104.0+13，GAP-114）：`max_turnover_monthly` 实现值一直为 5.0，本文档与 `contracts.py:VerifierConfig` 注释此前误标 0.50，已统一为 5.0 并明确单位「次/月」（= 月均信号翻转次数，G11 口径 ×42）。与另一层日换手硬剔除 `factor_turnover_daily_max=0.45`（P95 校准，拦 top ~5% 天天翻仓极端因子）形成分层：外层拦极端、内层 verifier 对中高换手因子做成本覆盖判定。
 
 ## 5. 因子质量评分卡配置
 
@@ -244,3 +249,4 @@ L2 Verifier 默认配置（定义在 `contracts.py` 中，初始化后锁定）�
 | `fts/config/settings.py:FTSConfig` | 所有字段有默认值 | `python -c "from fts.config.settings import FTSConfig; assert hasattr(FTSConfig, 'memory_dir')"` |
 | `config/settings.yaml` | YAML 可被 `load_config()` 解析 | `python -c "from fts.config.settings import load_config; cfg = load_config('config/settings.yaml')"` |
 | `contracts.py:VerifierConfig` | 默认值与本文档一致 | 手动比对 |
+| `fts/factor_engine/symbol_holdout.py:SymbolHoldoutConfig` | `min_train_ic` 默认 0.05 与本文档一致 | 手动比对 |

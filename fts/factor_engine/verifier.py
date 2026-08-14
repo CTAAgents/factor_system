@@ -10,13 +10,14 @@ HARNESS §11-loop-engineering.md §6:
     2. check() 严格按 VerifierConfig 判定，不接受任何 override
     3. 判定结果含 checked_against 快照，可审计
 
-版本: v1.1.0（与 FTS 同步）
+版本: v1.2.0（GAP-114：Level 1 换手校验升级成本敏感净收益校验）
 """
 # pylint: disable=too-many-branches
 
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from .contracts import (
     DEFAULT_VERIFIER_CONFIG,
@@ -102,6 +103,7 @@ class FactorVerifier:
 
         reasons: list[str] = []
         cfg = self._config
+        cost_detail: dict[str, Any] | None = None  # GAP-114: 成本敏感校验明细（审计用）
 
         # Level 1: 回测验证
         bt = evaluation.get("level_1_backtest", {})
@@ -116,10 +118,38 @@ class FactorVerifier:
                 reasons.append(f"Level 1 失败: 最大回撤={bt.get('max_drawdown', 1.0):.4f} > {cfg['max_drawdown']}")
             if bt.get("oos_ratio", 0.0) < cfg["min_oos_ratio"]:
                 reasons.append(f"Level 1 失败: 样本外比例={bt.get('oos_ratio', 0.0):.4f} < {cfg['min_oos_ratio']}")
-            if bt.get("turnover_monthly", 1.0) > cfg["max_turnover_monthly"]:
-                reasons.append(
-                    f"Level 1 失败: 月度换手率={bt.get('turnover_monthly', 1.0):.4f} > {cfg['max_turnover_monthly']}"
-                )
+            # GAP-114（v2.104.0+13，方案 A）：换手校验由绝对阈值硬剔升级为成本敏感净收益校验。
+            # 换手超 max_turnover_monthly（次/月）时，按 cost_model 一致口径计算净夏普
+            #   net_sharpe = gross_sharpe − 年化成本侵蚀 / 年化波动
+            #   年化成本侵蚀 = 月换手 × 12 × 2（双边往返）× 单边成本率
+            # 净夏普仍 ≥ min_sharpe 即准入（高换手但毛利覆盖成本的真实因子不再被口径错杀），
+            # 并输出 cost_adjusted 审计明细；turnover_cost_net=False 时回退旧绝对硬剔。
+            turnover = bt.get("turnover_monthly", 1.0)
+            if turnover > cfg["max_turnover_monthly"]:
+                if cfg.get("turnover_cost_net", True):
+                    cost_rate = float(cfg.get("one_side_cost_rate", 0.0005))
+                    vol_annual = float(cfg.get("assumed_annual_vol", 0.15))
+                    annual_cost_drag = turnover * 12.0 * 2.0 * cost_rate
+                    sharpe_penalty = annual_cost_drag / max(vol_annual, 1e-9)
+                    gross_sharpe = bt.get("sharpe", 0.0)
+                    net_sharpe = gross_sharpe - sharpe_penalty
+                    cost_detail = {
+                        "turnover_monthly": turnover,
+                        "one_side_cost_rate": cost_rate,
+                        "annual_cost_drag": annual_cost_drag,
+                        "sharpe_penalty": sharpe_penalty,
+                        "gross_sharpe": gross_sharpe,
+                        "net_sharpe": net_sharpe,
+                    }
+                    if net_sharpe < cfg["min_sharpe"]:
+                        reasons.append(
+                            f"Level 1 失败: 换手成本后净夏普={net_sharpe:.3f} < {cfg['min_sharpe']}"
+                            f"（月换手 {turnover:.2f} 次，年化成本侵蚀 {annual_cost_drag * 100:.2f}%）"
+                        )
+                else:
+                    reasons.append(
+                        f"Level 1 失败: 月度换手率={turnover:.4f} > {cfg['max_turnover_monthly']}"
+                    )
             if not bt.get("monotonicity", False):
                 reasons.append("Level 1 失败: 十分位组合非单调")
 
@@ -142,12 +172,15 @@ class FactorVerifier:
 
         # 整体判定（不接受任何 override）
         passed = len(reasons) == 0
-        return VerifierResult(
-            passed=passed,
-            failure_reasons=reasons,
-            checked_against=dict(self._config),  # type: ignore[typeddict-item]
-            checked_at=datetime.now().isoformat(),
-        )
+        result: VerifierResult = {
+            "passed": passed,
+            "failure_reasons": reasons,
+            "checked_against": dict(self._config),  # type: ignore[typeddict-item]
+            "checked_at": datetime.now().isoformat(),
+        }
+        if cost_detail is not None:
+            result["cost_adjusted"] = cost_detail
+        return result
 
 
 # ─── 全局单例（v1.1.0 锁定值） ────────────────────────────

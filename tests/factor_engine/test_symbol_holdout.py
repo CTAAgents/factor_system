@@ -24,15 +24,16 @@ def _make_signal_ret(
     n_days: int = 60,
     seed: int = 1,
     corr_sign: float = 1.0,
+    corr: float = 0.1,
 ) -> tuple[dict[str, pd.Series], dict[str, pd.Series]]:
-    """构造信号与未来收益正（或负）相关的面板。"""
+    """构造信号与未来收益正（或负）相关的面板（corr 控制相关强度）。"""
     rng = np.random.default_rng(seed)
     dates = pd.date_range("2026-01-01", periods=n_days, freq="B")
     signal_dict: dict[str, pd.Series] = {}
     ret_dict: dict[str, pd.Series] = {}
     for i in range(n_symbols):
         sig = rng.normal(0, 1, n_days)
-        ret = corr_sign * 0.1 * sig + rng.normal(0, 0.3, n_days)
+        ret = corr_sign * corr * sig + rng.normal(0, 0.3, n_days)
         sym = f"S{i:02d}"
         signal_dict[sym] = pd.Series(sig, index=dates)
         ret_dict[sym] = pd.Series(ret, index=dates)
@@ -122,6 +123,27 @@ def test_result_to_dict_fields():
     d = res.to_dict()
     for k in ("n_train", "n_holdout", "train_ic", "holdout_ic", "ic_retention", "passed", "holdout_symbols"):
         assert k in d
+
+
+def test_weak_train_ic_returns_none():
+    """弱信号（|train_ic| < min_train_ic）→ 判定不可靠 → 返回 None（审计 skipped）。"""
+    sig, ret = _make_signal_ret(corr=0.001, seed=5)
+    assert run_symbol_holdout(sig, ret) is None
+
+
+def test_min_train_ic_zero_preserves_legacy():
+    """min_train_ic=0.0 → 弱信号也不跳过（向后兼容）。"""
+    sig, ret = _make_signal_ret(corr=0.001, seed=5)
+    res = run_symbol_holdout(sig, ret, SymbolHoldoutConfig(min_train_ic=0.0))
+    assert isinstance(res, SymbolHoldoutResult)
+
+
+def test_strong_train_ic_above_threshold():
+    """强信号 |train_ic| ≥ min_train_ic → 正常返回结果（不受下限保护影响）。"""
+    sig, ret = _make_signal_ret(corr=0.1)
+    res = run_symbol_holdout(sig, ret)
+    assert isinstance(res, SymbolHoldoutResult)
+    assert abs(res.train_ic) >= 0.05
 
 
 # ── B. 横截面评估集成 ───────────────────────────────────────

@@ -33,6 +33,7 @@ class SymbolHoldoutConfig:
     min_symbols_per_ic: int = 5       # 单期截面 IC 最少有效标的
     min_ic_retention: float = 0.5     # IC 保持率下限（holdout_ic / |train_ic|）
     min_holdout_ic: float = 0.0       # 留出集 IC 下限（方向对齐后）
+    min_train_ic: float = 0.05        # 训练集 |IC| 下限（弱信号下保持率判定噪声主导 → None）
     seed: int = 42                    # 分层留出随机种子（固定保证可复现）
 
 
@@ -164,6 +165,16 @@ def run_symbol_holdout(
     # 训练集定方向（避免用留出集数据选方向的数据窥探）
     dir_sign = 1.0 if float(np.mean(tr_ics)) >= 0 else -1.0
     train_ic = float(np.mean(tr_ics)) * dir_sign
+    if abs(train_ic) < cfg.min_train_ic:
+        # 弱信号下 retention = holdout_ic / |train_ic| 被近零分母放大，
+        # 留出集噪声（±0.005）即可主导判定（如 0.03 → 0.0009 / 0.03 = 3%），
+        # 判定不可靠 → 返回 None（审计项 skipped，不阻断演化流程）。
+        logger.debug(
+            "训练集 |IC|=%.4f 低于下限 %.2f，标的留出验证跳过（弱信号判定不可靠）",
+            abs(train_ic),
+            cfg.min_train_ic,
+        )
+        return None
     holdout_ic = float(np.mean(ho_ics)) * dir_sign
     if abs(train_ic) > 1e-10:
         retention = holdout_ic / abs(train_ic)

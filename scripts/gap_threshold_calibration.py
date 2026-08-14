@@ -10,7 +10,9 @@
   - factor_evaluations:    评估历史（level_1_ic/level_1_icir/level_1_turnover）
 
 说明：
-  - 日换手为近似口径：turnover_monthly / 21（月度换手 = 信号翻转率 × 21，见 evaluation_chain）
+  - 日换手反推口径：turnover_monthly / 42——库内月度换手 = 日换手 × 42
+    （G11 信号翻转率口径：turnover_daily = mean(|Δsign|)/2、turnover_monthly = mean(|Δsign|)×21，
+    见 evaluation_chain 时序/横截面两条路径与 scripts/backfill_turnover.py）
   - 前后半段符号反转无直接存储列，无法从库中校准，需在 evaluation_chain 落地时以样本分布记录（见计划 §4.1）
 
 用法:
@@ -36,7 +38,10 @@ DEFAULT_DB = PROJECT_ROOT / "data" / "factor_catalog_futures.duckdb"
 # 候选阈值（供通过率对比）
 CANDIDATE_ICIR: tuple[float, ...] = (0.10, 0.20, 0.30, 0.40, 0.50)
 CANDIDATE_DAILY_TURNOVER: tuple[float, ...] = (0.10, 0.15, 0.20, 0.25, 0.30)
-TRADING_DAYS_PER_MONTH: int = 21
+# 库内 turnover_monthly = turnover_daily × 42（G11 口径：turnover_daily = mean(|Δsign|)/2，
+# turnover_monthly = mean(|Δsign|)×21，故换算系数 = 21/(1/2) = 42；见 evaluation_chain 与 backfill_turnover.py）。
+# 注意：21 为月均交易日数，但 G11 日换手取信号翻转率 mean(|Δsign|)/2，反推日换手须除以 42。
+TURNOVER_DAILY_TO_MONTHLY: int = 42
 
 
 def _percentiles(values: np.ndarray, ps: tuple[float, ...] = (25.0, 50.0, 75.0, 90.0, 95.0)) -> dict[str, float]:
@@ -78,13 +83,13 @@ def _calibrate_catalog(conn: duckdb.DuckDBPyConnection) -> dict[str, Any]:
     ic = _clean([r[0] for r in rows])
     icir = _clean([r[1] for r in rows])
     turnover_monthly = _clean([r[2] for r in rows])
-    daily_turnover = turnover_monthly / TRADING_DAYS_PER_MONTH if turnover_monthly.size else turnover_monthly
+    daily_turnover = turnover_monthly / TURNOVER_DAILY_TO_MONTHLY if turnover_monthly.size else turnover_monthly
     decay = _clean([r[3] for r in rows])
     sharpe = _clean([r[4] for r in rows])
 
     elite = [r for r in rows if r[6] is True]
     icir_elite = _clean([r[1] for r in elite])
-    daily_turnover_elite = _clean([r[2] for r in elite]) / TRADING_DAYS_PER_MONTH if elite else np.array([])
+    daily_turnover_elite = _clean([r[2] for r in elite]) / TURNOVER_DAILY_TO_MONTHLY if elite else np.array([])
 
     icir_abs = np.abs(icir)
     icir_abs_elite = np.abs(icir_elite)
@@ -127,7 +132,7 @@ def _calibrate_evaluations(conn: duckdb.DuckDBPyConnection) -> dict[str, Any]:
     ic = _clean([r[0] for r in rows])
     icir = _clean([r[1] for r in rows])
     turnover = _clean([r[2] for r in rows])
-    daily_turnover = turnover / TRADING_DAYS_PER_MONTH if turnover.size else turnover
+    daily_turnover = turnover / TURNOVER_DAILY_TO_MONTHLY if turnover.size else turnover
 
     icir_abs = np.abs(icir)
     out: dict[str, Any] = {

@@ -329,7 +329,10 @@ class VerifierConfig(TypedDict, total=False):
     min_t_stat: float  # 最小 t 统计量（默认 3.0）
     max_fdr: float  # 最大 FDR（默认 0.05）
     min_oos_ratio: float  # 最小样本外比例（默认 0.30）
-    max_turnover_monthly: float  # 最大月度换手率（默认 0.50）
+    max_turnover_monthly: float  # 最大月度换手率（次/月，默认 5.0；turnover_cost_net=True 时为成本敏感净收益校验触发线，False 时为绝对阈值硬剔；GAP-114 v2.104.0+13 修正单位与语义）
+    one_side_cost_rate: float  # 单边往返成本率（含滑点+手续费+冲击，默认 0.0005=5bps，可经 FTS_COST_* 实证标定覆盖；GAP-114 新增）
+    assumed_annual_vol: float  # 年化波动率假设（默认 0.15，与 cost_model._ASSUMED_ANNUAL_VOL 一致，用于成本侵蚀→夏普惩罚换算；GAP-114 新增）
+    turnover_cost_net: bool  # 成本敏感净收益校验开关（默认 True；False=回退绝对阈值硬剔；GAP-114 新增）
 
 
 class VerifierResult(TypedDict, total=False):
@@ -339,6 +342,7 @@ class VerifierResult(TypedDict, total=False):
     failure_reasons: list[str]  # 失败维度（人类/LLM 可读）
     checked_against: VerifierConfig  # 使用的 Verifier 配置快照
     checked_at: str  # ISO 8601
+    cost_adjusted: dict[str, Any]  # 成本敏感净收益校验明细（GAP-114，换手超阈值时记录：turnover/one_side_cost_rate/annual_cost_drag/sharpe_penalty/gross_sharpe/net_sharpe）
 
 
 # ─── 预算配置 ─────────────────────────────────────────────
@@ -371,9 +375,12 @@ DEFAULT_VERIFIER_CONFIG: VerifierConfig = VerifierConfig(
     min_t_stat=3.0,
     max_fdr=0.05,
     min_oos_ratio=0.30,
-    max_turnover_monthly=5.0,
+    max_turnover_monthly=5.0,  # 次/月（GAP-114 修正单位说明，原注释误标 0.50）
+    one_side_cost_rate=0.0005,  # 期货单边往返成本率（5bps）
+    assumed_annual_vol=0.15,  # 年化波动假设（与 cost_model 一致）
+    turnover_cost_net=True,  # 成本敏感净收益校验（方案 A）
 )
-"""v1.1.0 锁定的 Verifier 默认配置 — 不可在运行时修改。"""
+"""v1.2.0 锁定的 Verifier 默认配置（GAP-114 新增成本敏感净收益校验）— 不可在运行时修改。"""
 
 FUTURES_VERIFIER_CONFIG: VerifierConfig = VerifierConfig(
     min_ic=0.03,
@@ -384,7 +391,10 @@ FUTURES_VERIFIER_CONFIG: VerifierConfig = VerifierConfig(
     min_t_stat=2.0,
     max_fdr=0.05,
     min_oos_ratio=0.30,
-    max_turnover_monthly=5.0,
+    max_turnover_monthly=5.0,  # 次/月（GAP-114 修正单位说明，原注释误标 0.50）
+    one_side_cost_rate=0.0005,  # 期货单边往返成本率（5bps）
+    assumed_annual_vol=0.15,  # 年化波动假设（与 cost_model 一致）
+    turnover_cost_net=True,  # 成本敏感净收益校验（方案 A）
 )
 """期货市场 Verifier 配置 — 适配期货更低夏普、更高噪声的特性。
 放宽阈值: min_sharpe=1.0, min_icir=0.3, min_t_stat=2.0"""

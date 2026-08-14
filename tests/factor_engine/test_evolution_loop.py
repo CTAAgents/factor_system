@@ -6041,3 +6041,98 @@ class TestGapF16MergeL1Candidates:
         with patch.object(Path, "exists", fake_exists):
             merged = loop._merge_l1_candidates([], "t")
         assert merged == []
+
+
+# ─── GAP-115（v2.104.0+14）：熔断预算传播修复 ─────────────
+
+
+def _make_breaker_state(evaluated: int = 10, promoted: int = 0) -> dict:
+    """构造熔断检查状态（默认 100% 失败率：evaluated=10, promoted=0）。"""
+    return {
+        "tokens_consumed": 0,
+        "total_factors_evaluated": evaluated,
+        "total_factors_promoted": promoted,
+    }
+
+
+def test_budget_rebind_propagates_to_uct_selector(
+    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
+):
+    """GAP-115: loop.budget 构造后重绑（cli.py 模式）应同步传播到 UctSelector。
+
+    cli.py 夜间任务：构造 EvolutionLoop 后执行 `loop.budget = budget`
+    （circuit_breaker_failure_rate=1.0 禁用失败率熔断）——重绑必须生效到
+    `_uct_selector.budget`，否则熔断仍按 DEFAULT 0.95 判定。
+    """
+    from fts.factor_engine.contracts import DEFAULT_BUDGET_CONFIG
+
+    loop = EvolutionLoop(
+        data=sample_ohlcv,
+        forward_returns=forward_returns,
+        elite_dir=tmp_elite_dir,
+        memory_dir=tmp_memory_dir,
+        llm_client=mock_llm_client,
+        n_trials_micro=1,
+    )
+    rebind = DEFAULT_BUDGET_CONFIG.copy()
+    rebind["circuit_breaker_failure_rate"] = 1.0  # cli 默认：禁用失败率熔断
+    loop.budget = rebind
+    assert loop._uct_selector.budget["circuit_breaker_failure_rate"] == 1.0
+    # 100% 失败率下不应触发失败率熔断（禁用态）
+    assert loop._uct_selector._check_circuit_breaker(_make_breaker_state()) is None
+
+
+def test_circuit_breaker_rebound_honors_new_threshold(
+    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
+):
+    """GAP-115: 重绑预算应被熔断判定按最新阈值执行（保留熔断态仍触发/禁用态放行）。"""
+    from fts.factor_engine.contracts import DEFAULT_BUDGET_CONFIG
+
+    loop = EvolutionLoop(
+        data=sample_ohlcv,
+        forward_returns=forward_returns,
+        elite_dir=tmp_elite_dir,
+        memory_dir=tmp_memory_dir,
+        llm_client=mock_llm_client,
+        n_trials_micro=1,
+    )
+    state = _make_breaker_state(evaluated=10, promoted=0)  # 100% 失败率
+    # 默认构造 → DEFAULT 0.95 → 触发
+    assert loop._uct_selector._check_circuit_breaker(state) is not None
+    # 重绑 0.99（保留失败率熔断）→ 仍触发
+    keep = DEFAULT_BUDGET_CONFIG.copy()
+    keep["circuit_breaker_failure_rate"] = 0.99
+    loop.budget = keep
+    assert loop._uct_selector._check_circuit_breaker(state) is not None
+    # 重绑 1.0（禁用）→ 不触发
+    disable = DEFAULT_BUDGET_CONFIG.copy()
+    disable["circuit_breaker_failure_rate"] = 1.0
+    loop.budget = disable
+    assert loop._uct_selector._check_circuit_breaker(state) is None
+
+
+def test_budget_rebind_keeps_other_collaborators_dynamic(
+    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
+):
+    """GAP-115: 重绑后主类与经 owner 动态读取的协作类（如 EvolutionChannels）保持一致。
+
+    UctSelector 是唯一经构造注入 budget 的协作类；其余协作类经 ``owner.budget``
+    动态读主类，重绑后自动可见，无需额外传播。
+    """
+    from fts.factor_engine.contracts import DEFAULT_BUDGET_CONFIG
+
+    loop = EvolutionLoop(
+        data=sample_ohlcv,
+        forward_returns=forward_returns,
+        elite_dir=tmp_elite_dir,
+        memory_dir=tmp_memory_dir,
+        llm_client=mock_llm_client,
+        n_trials_micro=1,
+    )
+    rebind = DEFAULT_BUDGET_CONFIG.copy()
+    rebind["max_tokens_per_factor"] = 777
+    loop.budget = rebind
+    assert loop.budget["max_tokens_per_factor"] == 777
+    assert loop._uct_selector.budget["max_tokens_per_factor"] == 777
+    # 协作类（owner 动态读取）与主类引用同一预算对象
+    assert loop._evolution_channels._owner.budget is loop.budget

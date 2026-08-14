@@ -8,6 +8,7 @@ from fts.factor_engine.contracts import (
     BacktestMetrics,
     EconomicScore,
     FactorEvaluation,
+    FUTURES_VERIFIER_CONFIG,
     MultipleTestResult,
     VerifierConfig,
 )
@@ -281,3 +282,108 @@ def test_global_verifier_singleton():
     v1 = get_global_verifier()
     v2 = get_global_verifier()
     assert v1 is v2
+
+
+# ─── GAP-114（v2.104.0+13）：换手成本敏感净收益校验 ───────
+
+
+def _high_turnover_evaluation(turnover: float, sharpe: float) -> FactorEvaluation:
+    """构造换手超阈值（>5.0 次/月）的评估结果。"""
+    return FactorEvaluation(
+        factor_id="fct_hi_turn",
+        trace_id="t",
+        level_1_backtest=BacktestMetrics(
+            ic=0.05,
+            icir=0.8,
+            sharpe=sharpe,
+            max_drawdown=0.1,
+            monotonicity=True,
+            oos_ratio=0.4,
+            t_stat=3.5,
+            turnover_monthly=turnover,
+        ),
+        level_2_economic=EconomicScore(
+            theory=4,
+            behavioral=3,
+            microstructure=4,
+            institutional=5,
+            dimensions_passed=4,
+            narrative="达标",
+        ),
+        level_3_multiple=MultipleTestResult(
+            bonferroni_p=0.005,
+            fdr_q=0.03,
+            effective_n_factors=8,
+            adjusted_t=3.2,
+            passed=True,
+        ),
+        passed=False,
+        failure_reasons=[],
+        evaluated_at="2026-07-18T00:00:00",
+    )
+
+
+def test_verifier_passes_high_turnover_when_cost_covered():
+    """GAP-114: 换手超阈值（次/月 >5.0）但成本后净夏普仍 ≥ min_sharpe → 准入。
+
+    turnover=10、one_side_cost_rate=0.0005、assumed_annual_vol=0.15：
+    年化成本侵蚀 = 10×12×2×0.0005 = 0.12 → 夏普惩罚 = 0.12/0.15 = 0.8；
+    gross=2.0 → net=1.2 ≥ 1.0（期货 min_sharpe）。
+    """
+    ev = _high_turnover_evaluation(turnover=10.0, sharpe=2.0)
+    v = FactorVerifier(FUTURES_VERIFIER_CONFIG)
+    result = v.check(ev)
+    assert result["passed"] is True
+    assert result["cost_adjusted"]["turnover_monthly"] == 10.0
+    assert result["cost_adjusted"]["net_sharpe"] == pytest.approx(1.2, abs=1e-6)
+
+
+def test_verifier_fails_high_turnover_when_cost_not_covered():
+    """GAP-114: 换手超阈值且成本后净夏普 < min_sharpe → 拦截（成本原因）。"""
+    # gross=1.0 → net=0.2 < 1.0
+    ev = _high_turnover_evaluation(turnover=10.0, sharpe=1.0)
+    v = FactorVerifier(FUTURES_VERIFIER_CONFIG)
+    result = v.check(ev)
+    assert result["passed"] is False
+    assert any("成本后净夏普" in r for r in result["failure_reasons"])
+
+
+def test_verifier_extreme_turnover_always_fails_on_net_sharpe():
+    """GAP-114: 极端高换手（40 次/月）即使毛利不差也因成本侵蚀被拦截。"""
+    # 年化成本侵蚀 = 40×12×2×0.0005 = 0.48 → 夏普惩罚 = 3.2；gross=2.0 → net=-1.2 < 1.0
+    ev = _high_turnover_evaluation(turnover=40.0, sharpe=2.0)
+    v = FactorVerifier(FUTURES_VERIFIER_CONFIG)
+    result = v.check(ev)
+    assert result["passed"] is False
+    assert any("成本后净夏普" in r for r in result["failure_reasons"])
+    assert result["cost_adjusted"]["net_sharpe"] == pytest.approx(-1.2, abs=1e-6)
+
+
+def test_verifier_turnover_cost_net_false_absolute_gate():
+    """GAP-114: turnover_cost_net=False 回退旧绝对阈值硬剔（换手>5.0 直接失败）。"""
+    cfg = dict(FUTURES_VERIFIER_CONFIG)
+    cfg["turnover_cost_net"] = False
+    v = FactorVerifier(VerifierConfig(**cfg))
+    ev = _high_turnover_evaluation(turnover=10.0, sharpe=2.0)
+    result = v.check(ev)
+    assert result["passed"] is False
+    assert any("月度换手率" in r for r in result["failure_reasons"])
+    assert "cost_adjusted" not in result
+
+
+def test_verifier_cost_adjusted_detail_fields():
+    """GAP-114: cost_adjusted 审计明细字段完整（turnover/成本率/年化侵蚀/惩罚/毛净夏普）。"""
+    ev = _high_turnover_evaluation(turnover=10.0, sharpe=2.0)
+    v = FactorVerifier(FUTURES_VERIFIER_CONFIG)
+    result = v.check(ev)
+    detail = result["cost_adjusted"]
+    assert set(detail) >= {
+        "turnover_monthly",
+        "one_side_cost_rate",
+        "annual_cost_drag",
+        "sharpe_penalty",
+        "gross_sharpe",
+        "net_sharpe",
+    }
+    assert detail["annual_cost_drag"] == pytest.approx(0.12, abs=1e-9)
+    assert detail["sharpe_penalty"] == pytest.approx(0.8, abs=1e-9)

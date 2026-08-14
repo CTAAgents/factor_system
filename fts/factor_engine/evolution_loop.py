@@ -234,7 +234,7 @@ class _QualityInspectionCompat:
         turnover = bt.get("turnover_monthly", 0.3)
         # 为 L1 候选因子设置合理换手率默认值（当回测未提供换手率时）
         if turnover <= 0:
-            turnover = 0.5  # 期货 50% 月换手作为合理默认值
+            turnover = 0.5  # 缺省月度换手（次/月，低频保守默认；单位与 verifier max_turnover_monthly 一致，GAP-114）
         walk_forward = evaluation.get("walk_forward")
 
         # 经济逻辑评分: 四维平均
@@ -372,7 +372,7 @@ class EvolutionLoop:
         self.elite_dir.mkdir(parents=True, exist_ok=True)
         self.inject_dir = Path(inject_dir)
         self.memory_dir = Path(memory_dir)
-        self.budget: BudgetConfig = budget or DEFAULT_BUDGET_CONFIG
+        self._budget: BudgetConfig = budget or DEFAULT_BUDGET_CONFIG
         # GAP-F10 (v2.73.0): 家族多样性上限配置化——
         # 未显式传入 budget 时，max_per_family 回退到 FTSConfig（FTS_MAX_PER_FAMILY，缺省 15）。
         # 注：DEFAULT_BUDGET_CONFIG 本身含 max_per_family 键，故仅以 budget is None 判定，
@@ -521,6 +521,23 @@ class EvolutionLoop:
         self.batch_random_seed: int = int(getattr(_cfg_batch, "batch_random_seed", 42))
         # batch 模式批量生成游标（_batch_generate_one 内自增，保证方法轮换 + seed 递增）
         self._batch_idx: int = 0
+
+    @property
+    def budget(self) -> BudgetConfig:
+        """演化预算（含熔断阈值）。重绑时经 setter 同步传播到 UctSelector（GAP-115，v2.104.0+14）。
+
+        UctSelector 是唯一经构造注入 budget 的协作类（其余协作类经 ``owner.budget``
+        动态读主类引用，不受影响）；重绑不传播会导致失败率熔断仍按 DEFAULT(0.95)
+        判定，使 cli.py 夜间任务「强制跑满世代数」（失败率阈值 1.0 / env 覆盖）失效。
+        """
+        return self._budget
+
+    @budget.setter
+    def budget(self, value: BudgetConfig) -> None:
+        self._budget = value
+        uct = getattr(self, "_uct_selector", None)
+        if uct is not None:
+            uct.budget = value  # GAP-115: 重绑同步传播，熔断判定使用最新阈值
 
     def run(self, max_generation: Optional[int] = None) -> EvolutionRunResult:
         """执行 L2 演化循环。
