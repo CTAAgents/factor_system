@@ -262,7 +262,6 @@ class DeepFactorGenerator:
                 ),
                 source="deep_evolution",
                 market=market,
-                family="deep",
                 trace_id=trace_id,
             ),
         )

@@ -235,8 +235,39 @@ def mark_gap_anomalies(
     return anomaly.fillna(False).astype(bool)
 
 
+def mark_hold_anomalies(
+    df: pd.DataFrame,
+    hold_change_pct: float = 0.5,
+    hold_min: float = 1.0,
+) -> pd.Series:
+    """持仓量突变异常标记（CTA 手册阶段1：持仓量突变做标记剔除）。
+
+    单日持仓量环比变化超过阈值（默认 50%）视为异常（数据错误或极端事件），
+    下游因子计算应剔除/降权该样本。与 G8 断K/跳空标记同链路注入。
+
+    Args:
+        df: OHLCV DataFrame（含 hold 列）
+        hold_change_pct: 单日持仓量环比变化阈值（默认 0.5 = 50%）
+        hold_min: 分母下限（避免除零，默认 1.0）
+
+    Returns:
+        bool Series（与 df 索引一致）；数据不足 2 日 → 全 False（异常不误标）。
+    """
+    n = len(df)
+    default_false = pd.Series(False, index=df.index)
+    if n < 2 or "hold" not in df.columns:
+        return default_false
+    hold = pd.to_numeric(df["hold"], errors="coerce")
+    prev = hold.shift(1)
+    denom = prev.abs().clip(lower=hold_min)
+    pct_change = (hold - prev).abs() / denom
+    anomaly = pct_change > hold_change_pct
+    return anomaly.fillna(False).astype(bool)
+
+
 __all__ = [
     "TradingCalendar",
     "mark_panel_data_gaps",
     "mark_gap_anomalies",
+    "mark_hold_anomalies",
 ]

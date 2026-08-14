@@ -418,12 +418,12 @@ class SeedPool:
     种子数据来源:
         - 股票内置: _SEED_DEFINITIONS (9 个)
         - 股票外部: WQ101 (101) + Qlib158 (158) + GTJA191 (191) + 基本面 (23) = 473 个
-        - 期货专用: seed_data_futures_full._FUTURES_FULL_DEFINITIONS (81 个, 14 大因子家族)
+        - 期货专用: seed_data_futures_full._FUTURES_FULL_DEFINITIONS (81 个)
 
     Args:
         trace_id: 全链路 trace_id。
         market: 市场类型 ("futures" 或 "stock")。
-            - "futures"（默认）: 加载 81 个期货专用种子（14 大因子家族）。
+            - "futures"（默认）: 加载 81 个期货专用种子。
             - "stock": 加载 9 内置 + 473 外部股票种子。
 
     Usage:
@@ -453,7 +453,14 @@ class SeedPool:
         if market == "futures":
             logger.info(
                 "[SeedPool.init] ★ 期货模式 (默认) market=futures, trace_id=%s, "
-                "use_yaml=%s, 将加载 81 个期货专用种子 (14 大因子家族)",
+                "use_yaml=%s, 将加载 81 个期货专用种子",
+                trace_id,
+                use_yaml,
+            )
+        elif market == "energy":
+            logger.info(
+                "[SeedPool.init] ★ 能源链专属模式 market=energy, trace_id=%s, "
+                "use_yaml=%s, 将混入加载通用期货种子 + 能化专属种子（GAP-121）",
                 trace_id,
                 use_yaml,
             )
@@ -495,7 +502,7 @@ class SeedPool:
 
         # ── 关键日志: 动态种子统计快照 ──
         logger.info(
-            "[SeedPool.get_seed_counts] 动态统计: 期货=%d (14 家族) | "
+            "[SeedPool.get_seed_counts] 动态统计: 期货=%d | "
             "股票=9 内置 + %d 外部 (WQ101=%d, Qlib158=%d, GTJA191=%d, 基本面=%d, JQ=%d) = %d",
             futures_total,
             ext_total,
@@ -558,18 +565,29 @@ class SeedPool:
                 logger.warning("[SeedPool.load] YAML 加载失败: %s，回退到硬编码路径", e)
 
         # ── 路径 2: 硬编码兜底 ──
-        if self._market == "futures":
-            logger.info("[SeedPool.load] 加载期货专用种子 (14 大因子家族, 81 个, 硬编码路径)...")
+        if self._market in ("futures", "energy"):
             from .seed_data_futures_full import load_futures_seeds_full
 
             futures_seeds = load_futures_seeds_full(self._trace_id)
-            for fp in futures_seeds:
-                self._cache[fp["name"]] = fp
             logger.info(
                 "[SeedPool.load] 期货种子加载完成: total=%d, sample_names=%s",
                 len(futures_seeds),
                 [s["name"] for s in futures_seeds[:5]],
             )
+            for fp in futures_seeds:
+                self._cache[fp["name"]] = fp
+            # energy 市场硬编码回退：补充能化专属种子（YAML 路径不可用时仍保证能化知识输入）
+            if self._market == "energy":
+                from .seed_loader import get_seeds_dir, load_factors_from_dir
+
+                energy_seeds = load_factors_from_dir(str(get_seeds_dir() / "energy"))
+                for fp in energy_seeds:
+                    self._cache[fp["name"]] = fp
+                logger.info(
+                    "[SeedPool.load] 能化专属种子硬编码回退: total=%d, sample_names=%s",
+                    len(energy_seeds),
+                    [s["name"] for s in energy_seeds[:5]],
+                )
         else:
             logger.info("[SeedPool.load] 加载股票内置种子 (9 个, 硬编码路径)...")
             for defn in _SEED_DEFINITIONS:

@@ -290,7 +290,6 @@ class AuditPipeline:
             "factor_id": factor.get("factor_id", ""),
             "name": factor.get("name", ""),
             "trace_id": trace_id,
-            "family": factor.get("family", ""),
         }
 
         l1 = evaluation.get("level_1_backtest", {})

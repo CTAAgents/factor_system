@@ -5,7 +5,7 @@
     2. FactorSignalCache 信号缓存（内存/磁盘/命中率/失效/损坏容错）
     3. CorrelationCache 相关矩阵缓存（内存/磁盘/清理/命中率）
     4. FactorOptimizer 信号矩阵并行计算（顺序/并行/缓存命中/强制重算/短数据跳过）
-    5. tiered_orthogonalize 两阶段正交化（L2 先验/Phase1 代码重复/家族裁剪/Phase2 高相关标记）
+    5. tiered_orthogonalize 两阶段正交化（L2 先验/Phase1 代码重复/Phase2 高相关标记）
     6. compute_correlation_from_matrix（全量/采样/空信号零矩阵）
 
 隔离性说明: 所有测试均使用 tmp_path + monkeypatch，不写全局状态，避免污染其他测试。
@@ -478,7 +478,7 @@ class TestTieredOrthogonalize:
 
     def test_l2_prior_marks_high_corr(self, tmp_path):
         opt = self._make_opt(tmp_path)
-        # 需 > max(2, family_threshold)=3 个因子才进入分层流程
+        # 需 > max(2, min_factors)=3 个因子才进入分层流程
         factors = [
             _make_factor("a", "f_a"),
             _make_factor("b", "f_b"),
@@ -532,18 +532,6 @@ class TestTieredOrthogonalize:
         excluded = [f for f in result if f.get("exclude_from_portfolio")]
         assert [f["factor_id"] for f in excluded] == ["f2"]
 
-    def test_phase1_family_prune_over_10(self, tmp_path):
-        opt = self._make_opt(tmp_path)
-        # 11 个同家族（name 含 mkt_trend）因子
-        factors = [_make_factor(f"f{i}", f"mkt_trend_{i}", sharpe=float(i)) for i in range(11)]
-        factors.append(_make_factor("g1", "other_factor"))
-        result, summary = opt.tiered_orthogonalize(factors)
-        family_flags = [
-            f for f in result if any(fl.get("type") == "family_pruned" for fl in f.get("correlation_flags", []))
-        ]
-        assert len(family_flags) == 1  # 11 - 10 = 1 个被家族裁剪标记
-        assert summary["phase1_marked"] >= 1  # 含家族标记（另有同 code 产生的重复标记）
-
     def test_phase2_marks_lower_sharpe_of_high_corr(self, tmp_path):
         opt = self._make_opt(tmp_path)
         rng = np.random.default_rng(7)
@@ -584,14 +572,6 @@ class TestTieredOrthogonalize:
         _, summary = opt.tiered_orthogonalize(factors)
         assert summary["phase2_marked"] == 0
 
-    def test_classify_family(self, tmp_path):
-        opt = self._make_opt(tmp_path)
-        assert opt._classify_family({"name": "hf_price"}) == "hf_microstructure"
-        assert opt._classify_family({"name": "mkt_trend_x"}) == "trend"
-        assert opt._classify_family({"name": "basis_ratio"}) == "value_carry"
-        assert opt._classify_family({"name": "macro_gdp"}) == "macro"
-        assert opt._classify_family({"name": "upside_skewness"}) == "volatility"
-        assert opt._classify_family({"name": "random_name"}) == "other"
 
     def test_get_or_compute_correlation_prefers_signal_matrix(self, tmp_path):
         opt = self._make_opt(tmp_path)

@@ -172,8 +172,8 @@ class TestYamlSeedExtractor:
         ext = YamlSeedExtractor(name="tinysoft", yaml_file=p)
         assert ext.extract("trace_001") == []
 
-    def test_convert_factor_default_family(self, tmp_path: Path):
-        """family_name 默认取 name。"""
+    def test_convert_factor_defaults(self, tmp_path: Path):
+        """_convert_factor 输出基本契约字段。"""
         ext = YamlSeedExtractor(name="tinysoft", yaml_file=tmp_path / "x.yaml")
         c = ext._convert_factor({"name": "x", "code": "code"}, "trace_001")
         assert c["name"] == "x"

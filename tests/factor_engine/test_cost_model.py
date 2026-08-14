@@ -33,6 +33,8 @@ from fts.factor_engine.contracts import BacktestMetrics
 from fts.factor_engine.cost_model import (
     CostConfig,
     TransactionCostModel,
+    VarietyCostConfig,
+    liquidity_slippage_bps,
 )
 
 
@@ -615,3 +617,120 @@ class TestImpactCost:
         """自定义参考占比生效。"""
         # ref_pct=0.05 时，占比 5% 对应成本 = impact_bps_per_pct
         assert TransactionCostModel.impact_cost(0.05, 3.0, ref_pct=0.05) == pytest.approx(3.0)
+
+
+# ─── 品种差异化成本（CTA 手册阶段1，v2.104.0+19） ────────
+
+
+class TestVarietyCostConfig:
+    """品种差异化成本：按比例/固定金额手续费、滑点覆盖、平今仓倍率。"""
+
+    def test_ratio_variety_overrides_commission(self) -> None:
+        """按比例品种（FG 玻璃 万1.5）覆盖默认手续费。"""
+        model = TransactionCostModel()
+        cfg = model.get_effective_cost_bps("futures", symbol="FG")
+        assert cfg["commission_bps"] == pytest.approx(1.5)
+
+    def test_fixed_variety_converts_to_bps(self) -> None:
+        """固定金额品种（RB 螺纹钢 14.4 元/手 × 乘数10 @ 3600）→ bps。"""
+        model = TransactionCostModel()
+        cfg = model.get_effective_cost_bps("futures", symbol="RB", avg_price=3600.0)
+        # 14.4 / (3600 × 10) × 10000 = 4.0 bps
+        assert cfg["commission_bps"] == pytest.approx(4.0, abs=1e-6)
+
+    def test_fixed_variety_avg_price_scale(self) -> None:
+        """固定金额换算随价格变化（价格越高 bps 越低）。"""
+        model = TransactionCostModel()
+        low = model.get_effective_cost_bps("futures", symbol="RB", avg_price=3000.0)
+        high = model.get_effective_cost_bps("futures", symbol="RB", avg_price=4000.0)
+        assert low["commission_bps"] > high["commission_bps"]
+
+    def test_slippage_override(self) -> None:
+        """品种级滑点覆盖生效。"""
+        model = TransactionCostModel(
+            variety_configs={"CU": VarietyCostConfig(slippage_bps=2.0)},
+        )
+        cfg = model.get_effective_cost_bps("futures", symbol="CU")
+        assert cfg["slippage_bps"] == pytest.approx(2.0)
+        # 未配置品种保持市场默认
+        assert model.get_effective_cost_bps("futures", symbol="AU")["slippage_bps"] == pytest.approx(0.5)
+
+    def test_close_today_ratio_penalty(self) -> None:
+        """平今仓加收（ratio=2.0）→ 手续费 ×1.5。"""
+        model = TransactionCostModel(
+            variety_configs={"CU": VarietyCostConfig(commission_bps=2.0, close_today_ratio=2.0)},
+        )
+        cfg = model.get_effective_cost_bps("futures", symbol="CU")
+        assert cfg["commission_bps"] == pytest.approx(2.0 * 1.5)
+
+    def test_close_today_ratio_discount(self) -> None:
+        """平今仓优惠（ratio=0.5）→ 手续费 ×0.75。"""
+        model = TransactionCostModel(
+            variety_configs={"CU": VarietyCostConfig(commission_bps=2.0, close_today_ratio=0.5)},
+        )
+        cfg = model.get_effective_cost_bps("futures", symbol="CU")
+        assert cfg["commission_bps"] == pytest.approx(2.0 * 0.75)
+
+    def test_no_symbol_market_default(self) -> None:
+        """不传 symbol → 市场默认（向后兼容）。"""
+        model = TransactionCostModel()
+        cfg = model.get_effective_cost_bps("futures")
+        assert cfg["commission_bps"] == pytest.approx(0.2)
+        assert cfg["slippage_bps"] == pytest.approx(0.5)
+
+    def test_unconfigured_symbol_market_default(self) -> None:
+        """未配置品种 → 市场默认。"""
+        model = TransactionCostModel()
+        cfg = model.get_effective_cost_bps("futures", symbol="CU")
+        assert cfg["commission_bps"] == pytest.approx(0.2)
+
+    def test_custom_variety_configs_overrides_builtin(self) -> None:
+        """传入自定义品种配置表覆盖内置示例表。"""
+        model = TransactionCostModel(variety_configs={})
+        # 空表 → FG 不再有品种覆盖
+        cfg = model.get_effective_cost_bps("futures", symbol="FG")
+        assert cfg["commission_bps"] == pytest.approx(0.2)
+
+    def test_adjust_with_symbol_uses_variety_cost(self) -> None:
+        """adjust(symbol=...) 使用品种差异化成本。"""
+        model = TransactionCostModel()
+        metrics = _make_metrics(sharpe=2.0)
+        signal = np.tile([0.5, -0.5], 126)
+        default = model.adjust(metrics, signal, market="futures")
+        fg = model.adjust(metrics, signal, market="futures", symbol="FG")
+        # FG 手续费 1.5 bps > 默认 0.2 bps → 总成本更高
+        assert fg["total_cost_bps"] > default["total_cost_bps"]
+
+    def test_impact_bps_override(self) -> None:
+        """品种级冲击成本覆盖生效。"""
+        model = TransactionCostModel(
+            variety_configs={"CU": VarietyCostConfig(impact_bps_per_pct=3.0)},
+        )
+        cfg = model.get_effective_cost_bps("futures", symbol="CU")
+        assert cfg["impact_bps_per_pct"] == pytest.approx(3.0)
+
+
+# ─── 流动性分档滑点（CTA 手册阶段1，v2.104.0+20） ───────
+
+
+class TestLiquiditySlippage:
+    """流动性分档滑点：基准 1 跳 / 低流动性（后 30%）强制 2 跳。"""
+
+    def test_high_liquidity_base(self) -> None:
+        """流动性前 70% → 基准 1 跳。"""
+        assert liquidity_slippage_bps(0.9) == pytest.approx(1.0)
+        assert liquidity_slippage_bps(0.5) == pytest.approx(1.0)
+
+    def test_low_liquidity_stress(self) -> None:
+        """流动性后 30% → 强制 2 跳。"""
+        assert liquidity_slippage_bps(0.29) == pytest.approx(2.0)
+        assert liquidity_slippage_bps(0.0) == pytest.approx(2.0)
+
+    def test_boundary_at_threshold(self) -> None:
+        """恰好等于阈值分位 → 基准档（>= 阈值）。"""
+        assert liquidity_slippage_bps(0.3) == pytest.approx(1.0)
+
+    def test_custom_parameters(self) -> None:
+        """自定义基准/压力/阈值档位。"""
+        assert liquidity_slippage_bps(0.5, base_slippage_bps=1.5, stress_slippage_bps=3.0, low_liquidity_percentile=0.6) == pytest.approx(3.0)
+        assert liquidity_slippage_bps(0.7, base_slippage_bps=1.5, stress_slippage_bps=3.0, low_liquidity_percentile=0.6) == pytest.approx(1.5)

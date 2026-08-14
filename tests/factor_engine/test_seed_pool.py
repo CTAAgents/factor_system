@@ -10,60 +10,60 @@ from fts.factor_engine.seed_pool import SeedPool
 # ─── 期货种子因子测试 ─────────────────────────────────────
 
 _FUTURES_SEED_NAMES = {
-    # 家族 1: 动量因子家族 (5)
+    # 组 1: 动量因子组 (5)
     "fut_xsmom",
     "fut_tsmom",
     "fut_short_reversal",
     "fut_composite_momentum",
     "fut_basis_momentum",
-    # 家族 2: 期限结构因子家族 (3)
+    # 组 2: 期限结构因子组 (3)
     "fut_roll_yield_carry",
     "fut_stable_term_structure",
     "fut_basis_factor",
-    # 家族 3: 持仓/资金流因子家族 (3)
+    # 组 3: 持仓/资金流因子组 (3)
     "fut_open_interest_full",
     "fut_warehouse_receipt",
     "fut_hedge_pressure",
-    # 家族 4: 流动性因子家族 (3)
+    # 组 4: 流动性因子组 (3)
     "fut_turnover",
     "fut_bid_ask_spread",
     "fut_amihud_full",
-    # 家族 5: 偏度/峰度/高阶矩因子家族 (3)
+    # 组 5: 偏度/峰度/高阶矩因子组 (3)
     "fut_skewness_full",
     "fut_upside_skewness",
     "fut_kurtosis",
-    # 家族 6: 波动率因子家族 (2)
+    # 组 6: 波动率因子组 (2)
     "fut_cv",
     "fut_downside_volatility",
-    # 家族 7: 基本面因子家族 (4)
+    # 组 7: 基本面因子组 (4)
     "fut_volume_price_corr_full",
     "fut_trend_strength",
     "fut_amplitude",
     "fut_mobile_big_data",
-    # 家族 8: 拥挤度因子家族 (6)
+    # 组 8: 拥挤度因子组 (6)
     "fut_crowd_volume",
     "fut_crowd_volatility",
     "fut_crowd_turnover",
     "fut_crowd_bias_volume",
     "fut_crowd_bias_amount",
     "fut_crowd_composite",
-    # 家族 9: Alpha/量价行为因子家族 (4)
+    # 组 9: Alpha/量价行为因子组 (4)
     "fut_time_series_regression",
     "fut_bias",
     "fut_gp_alpha1",
     "fut_ht_alpha",
-    # 家族 10: 高频因子家族 (6)
+    # 组 10: 高频因子组 (6)
     "fut_hf_quote_imbalance",
     "fut_hf_trade_imbalance",
     "fut_hf_historical_return",
     "fut_hf_turnover",
     "fut_hf_spread",
     "fut_hf_down_vol",
-    # 家族 11: 期权隐含信息因子家族 (3)
+    # 组 11: 期权隐含信息因子组 (3)
     "fut_option_vol_term",
     "fut_option_skew",
     "fut_option_pcr",
-    # 家族 12: 市场环境因子家族 (9)
+    # 组 12: 市场环境因子组 (9)
     "fut_macro_cpi",
     "fut_macro_interest_rate",
     "fut_macro_export",
@@ -73,7 +73,7 @@ _FUTURES_SEED_NAMES = {
     "fut_mkt_speculation",
     "fut_mkt_rotation",
     "fut_mkt_concentration",
-    # 家族 13: CTA注册表补充因子 (7)
+    # 组 13: CTA注册表补充因子 (7)
     "tsmom_5d",
     "tsmom_22d",
     "basis_level",
@@ -81,7 +81,7 @@ _FUTURES_SEED_NAMES = {
     "liquidity_ratio",
     "long_term_reversal",
     "oi_change_rate",
-    # 家族 14: 算子字典种子因子 (24)
+    # 组 14: 算子字典种子因子 (24)
     "seed_kbar_mid",
     "seed_kbar_upper",
     "seed_kbar_lower",
@@ -110,7 +110,7 @@ _FUTURES_SEED_NAMES = {
 
 
 def test_futures_seed_pool_loads_all_seeds():
-    """期货模式加载 185 个期货专用种子因子（17 大因子家族，YAML 主路径）。"""
+    """期货模式加载 185 个期货专用种子因子（YAML 主路径）。"""
     pool = SeedPool(market="futures")
     seeds = pool.load_all_seeds()
     assert len(seeds) == 185

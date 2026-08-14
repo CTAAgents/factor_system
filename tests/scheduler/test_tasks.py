@@ -61,9 +61,9 @@ DEFAULT_TASKS = {
         "prefix": "fts.l2",
     },
     "l3_portfolio_loop": {
-        "cron": "0 19 * * 1-5",
+        "cron": "0 6 * * 1-5",
         "callable": "fts.scheduler.jobs.l3_portfolio_loop_job",
-        "desc": "L3 Portfolio Loop（期货路径：futures_elite + market=futures）：工作日每日收盘后重算组合权重（equal_weight 信号合成 + Verifier 校验，v2.103.0+23 默认；--force-recompute 保证每日全量重算），与期货信号管道解绑",
+        "desc": "L3 Portfolio Loop（期货路径：futures_elite + market=futures）：工作日每日 06:00 开盘前重算组合权重（基于截至昨收数据；equal_weight 信号合成 + Verifier 校验，v2.103.0+23 默认；--force-recompute 保证每日全量重算），与期货信号管道解绑",
         "prefix": "fts.l3",
     },
     "futures_signal_pipeline": {

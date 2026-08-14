@@ -44,8 +44,8 @@ class TestAdaptiveWeightManager:
             {"factor_id": "fct_b", "weight": 0.5, "decay_6m": 0.10},
         ]
         factors = [
-            {"factor_id": "fct_a", "name": "ts_momentum", "family": "momentum"},
-            {"factor_id": "fct_b", "name": "ts_mean_reversion", "family": "mean_reversion"},
+            {"factor_id": "fct_a", "name": "ts_momentum"},
+            {"factor_id": "fct_b", "name": "ts_mean_reversion"},
         ]
         regime = {"regime": "oscillate", "confidence": 0.9}
         adjusted = manager.adjust(signals, regime, factors)
@@ -57,8 +57,8 @@ class TestAdaptiveWeightManager:
     def test_compute_weights(self):
         manager = AdaptiveWeightManager()
         factors = [
-            {"factor_id": "fct_a", "name": "ts_momentum", "family": "momentum"},
-            {"factor_id": "fct_b", "name": "carry_1", "family": "carry"},
+            {"factor_id": "fct_a", "name": "ts_momentum"},
+            {"factor_id": "fct_b", "name": "carry_1"},
         ]
         weights = manager.compute_weights(factors, {"regime": "bull"})
         assert set(weights.keys()) == {"fct_a", "fct_b"}

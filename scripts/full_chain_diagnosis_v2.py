@@ -7,7 +7,6 @@
   - 成本时序对齐
   - 信号生成时序对齐（回测 vs 实盘）
   - 数据融合中的潜在问题
-  - 因子家族推断 vs 真实家族字段
   - Verifier 阈值边界
   - 回测 vs 实盘信号差异
 """
@@ -341,49 +340,6 @@ def check_signal_alignment(data: pd.DataFrame):
         _pass("方向一致率可接受")
 
 
-# ─── 7. 因子家族推断检查 ──────────────────────────────────
-
-
-def check_factor_family_inference():
-    _print_header("[7/8] 因子家族推断检查")
-
-    test_cases = [
-        # (name, expected_family)
-        ("fut_bias", "trend"),  # 趋势
-        ("fut_momentum_5d", "trend"),  # 动量 → trend
-        ("fut_mean_reversion_20d", "mean_reversion"),  # 均值回归
-        ("fut_carry_spread", "carry"),  # 跨期套利
-        ("fut_volume_ratio", "volume"),  # 成交量
-        ("fut_volatility_20d", "volatility"),  # 波动率 → volatility
-        ("fut_herrick_payoff", "other"),  # 无法推断
-        ("fut_bollinger_band", "volatility"),  # 布林带 → volatility
-        ("fut_atr_20d", "volatility"),  # ATR → volatility
-        ("fut_liquidity_ratio", "liquidity"),  # 流动性
-    ]
-
-    from fts.factor_engine.portfolio_loop import _infer_factor_family_from_name
-
-    for name, expected in test_cases:
-        inferred = _infer_factor_family_from_name(name)
-        if inferred == expected:
-            _pass(f"{name} → {inferred}")
-        else:
-            _warn(f"{name} → {inferred} (期望: {expected})")
-
-    # 检查 "vol" 与 "volume" 的区分
-    vol_name = "fut_volatility_ratio"
-    volume_name = "fut_volume_ratio"
-    vol_result = _infer_factor_family_from_name(vol_name)
-    volume_result = _infer_factor_family_from_name(volume_name)
-    print("\n  'vol' vs 'volume' 区分测试:")
-    print(f"    {vol_name} → {vol_result}")
-    print(f"    {volume_name} → {volume_result}")
-    if vol_result == "volatility" and volume_result == "volume":
-        _pass("'vol' 和 'volume' 区分正确（先检查 volume 再检查 vol）")
-    else:
-        _warn(f"区分异常: vol->{vol_result}, volume->{volume_result}")
-
-
 # ─── 8. Verifier 阈值边界检查 ──────────────────────────────
 
 
@@ -454,10 +410,7 @@ def main():
     # 6. 信号对齐
     check_signal_alignment(data)
 
-    # 7. 因子家族
-    check_factor_family_inference()
-
-    # 8. Verifier 阈值
+    # 7. Verifier 阈值
     check_verifier_thresholds()
 
     # ─── 汇总 ────────────────────────────────────────────
@@ -493,12 +446,6 @@ def main():
             "forward_returns 最后 N 天为 0",
             "forward_period 的最后 N 个 forward_returns 为 0，导致策略收益被低估",
             "截断最后 N 天的数据，或使用填充策略",
-        ),
-        (
-            "P2",
-            "因子家族推断不够精确",
-            "部分因子名称无法准确推断家族（如 fut_bias → trend 可能不准确）",
-            "在因子 YAML 中明确标注 family 字段",
         ),
     ]
 

@@ -5,13 +5,16 @@ HARNESS §测试随重构: 覆盖 http_server.py 核心路径。
 
 from __future__ import annotations
 
+import hashlib
 import json
+import time
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import fts.monitor.http_server as http_server
 from fts.monitor.http_server import (
     FTSDashboardServer,
     _DashboardHandler,
@@ -202,6 +205,7 @@ class MockRequestHandler:
         handler._build_factor_list_json_fallback = _DashboardHandler._build_factor_list_json_fallback.__get__(
             handler, _DashboardHandler
         )
+        handler._apply_cluster_groups = _DashboardHandler._apply_cluster_groups.__get__(handler, _DashboardHandler)
         handler._build_candidate_list = _DashboardHandler._build_candidate_list.__get__(handler, _DashboardHandler)
         handler.do_GET = _DashboardHandler.do_GET.__get__(handler, _DashboardHandler)
         return handler
@@ -466,11 +470,19 @@ class TestDashboardHandlerBuildFactorList:
                     "fts.factor_engine.factor_db.schema.DATABASE_PATH",
                     Path(tmpdir) / "nonexistent.duckdb",
                 ):
-                    result = _DashboardHandler._build_factor_list(handler)
+                    with patch(
+                        "fts.monitor.http_server._cluster_factors_by_signal",
+                        return_value={
+                            "assign": {"F001": 0, "F002": 0},
+                            "cluster_order": [0],
+                            "cluster_members": {0: ["F001", "F002"]},
+                        },
+                    ):
+                        result = _DashboardHandler._build_factor_list(handler)
 
         assert result["count"] == 2
         assert len(result["factors"]) == 2
-        # fallback 按 sharpe 降序，F001 (sharpe=1.25) 在前
+        # 单簇（size=2）→ applied，簇内按 sharpe 降序，F001 (sharpe=1.25) 在前
         assert result["factors"][0]["factor_id"] == "F001"
         assert result["factors"][0]["name"] == "测试因子1"
         assert result["factors"][0]["generation"] == 5
@@ -551,10 +563,9 @@ class TestDashboardHandlerBuildFactorList:
             "name": "已评估因子",
             "generation": 1,
             "source": "seed",
-            "family": "trend",
             "evaluation": {"level_1_backtest": {"ic": 0.05, "sharpe": 1.5}},
         }
-        unevaluated = {"factor_id": "P001", "name": "未评估因子", "generation": 0, "source": "seed", "family": "trend"}
+        unevaluated = {"factor_id": "P001", "name": "未评估因子", "generation": 0, "source": "seed"}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             elite_dir = Path(tmpdir) / "memory" / "knowledge" / "factors" / "futures_elite"
@@ -848,7 +859,7 @@ class TestBuildStatusExtended:
             elite_dir.mkdir(parents=True)
             (elite_dir / "_private.json").write_text("{}", encoding="utf-8")
             (elite_dir / "bad.json").write_text("{invalid", encoding="utf-8")
-            (elite_dir / "F001.json").write_text(json.dumps({"family": "trend"}), encoding="utf-8")
+            (elite_dir / "F001.json").write_text(json.dumps({"factor_id": "F001", "name": "trend_factor"}), encoding="utf-8")
 
             with patch("fts.monitor.check_all_status", return_value=self._mock_report()):
                 with patch("pathlib.Path.cwd", return_value=root):
@@ -860,8 +871,6 @@ class TestBuildStatusExtended:
 
         # elite_count 统计所有 *.json（含 _ 前缀与坏文件）
         assert result["elite_factor_count"] == 3
-        # family 分布仅统计可解析的非 _ 前缀文件
-        assert result["family_distribution"] == {"trend": 1}
 
     def test_build_status_duckdb_query_failure_falls_back(self):
         """DuckDB 连接失败时回退 JSON 统计（line 662-664）。"""
@@ -874,7 +883,7 @@ class TestBuildStatusExtended:
             db_file.write_bytes(b"dummy")
             elite_dir = root / "memory" / "knowledge" / "factors" / "futures_elite"
             elite_dir.mkdir(parents=True)
-            (elite_dir / "F001.json").write_text(json.dumps({"family": "carry"}), encoding="utf-8")
+            (elite_dir / "F001.json").write_text(json.dumps({"factor_id": "F001", "name": "carry_factor"}), encoding="utf-8")
 
             with patch("fts.monitor.check_all_status", return_value=self._mock_report()):
                 with patch("pathlib.Path.cwd", return_value=root):
@@ -886,7 +895,6 @@ class TestBuildStatusExtended:
                             result = _DashboardHandler._build_status(handler)
 
         assert result["elite_factor_count"] == 1
-        assert result["family_distribution"] == {"carry": 1}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -917,7 +925,9 @@ class TestBuildFactorListFromDuckDB:
         main_resp = MagicMock()
         main_resp.description = [(f"c{i}",) for i in range(24)]
         main_resp.fetchall.return_value = [tuple(["x"] * 24)]
-        mock_conn.execute.side_effect = [tables_resp, main_resp]
+        cluster_resp = MagicMock()
+        cluster_resp.fetchall.return_value = []
+        mock_conn.execute.side_effect = [tables_resp, main_resp, cluster_resp]
 
         handler = MockRequestHandler.make_handler()
         with patch("duckdb.connect", return_value=mock_conn):
@@ -925,6 +935,7 @@ class TestBuildFactorListFromDuckDB:
         assert isinstance(result, dict)
         assert result["count"] >= 1
         assert result["factors"][0]["factor_id"] == ""  # 列名未对齐时走默认值而非崩溃
+        assert result["clustering_applied"] is False  # 无 code 因子 → 聚类降级
 
     def test_no_join_tables_null_select_branch(self):
         """无 evaluation/quality 表时走 NULL 列 else 分支（line 754, 778）。"""
@@ -934,7 +945,9 @@ class TestBuildFactorListFromDuckDB:
         main_resp = MagicMock()
         main_resp.description = [(f"c{i}",) for i in range(24)]
         main_resp.fetchall.return_value = [tuple(["x"] * 24)]
-        mock_conn.execute.side_effect = [tables_resp, main_resp]
+        cluster_resp = MagicMock()
+        cluster_resp.fetchall.return_value = []
+        mock_conn.execute.side_effect = [tables_resp, main_resp, cluster_resp]
 
         handler = MockRequestHandler.make_handler()
         with patch("duckdb.connect", return_value=mock_conn):
@@ -1804,3 +1817,222 @@ class TestReviewAutoEndpoints:
         assert "runAutoReview" in REVIEW_HTML
         assert "运行机审" in REVIEW_HTML
         assert "需人工" in REVIEW_HTML
+
+
+# ═══════════════════════════════════════════════════════════
+# 因子信号相关性聚类（UI 按聚类分组）
+# ═══════════════════════════════════════════════════════════
+
+
+class TestFactorClustering:
+    """_compute_signal_clusters / _cluster_factors_by_signal / _apply_cluster_groups 测试。"""
+
+    def _reset_cluster_cache(self):
+        """重置模块级聚类缓存（避免测试间污染）。"""
+        from fts.monitor import http_server
+
+        http_server._cluster_cache["key"] = ""
+        http_server._cluster_cache["data"] = None
+        http_server._cluster_cache["ts"] = 0.0
+
+    @pytest.fixture(autouse=True)
+    def _clean_cluster_cache(self):
+        self._reset_cluster_cache()
+        yield
+        self._reset_cluster_cache()
+
+    def test_compute_signal_clusters_groups_by_correlation(self):
+        """高相关信号同簇、低相关信号分簇。"""
+        import numpy as np
+        import pandas as pd
+        from fts.monitor import http_server
+
+        df = pd.DataFrame({"close": np.arange(100.0)})
+        rng = np.random.RandomState(0)
+        base = np.linspace(0, 1, 100)
+        signals = {
+            "f1": base + rng.normal(0, 0.01, 100),
+            "f2": base + rng.normal(0, 0.01, 100),  # 与 f1 高相关
+            "f3": rng.normal(0, 1, 100),  # 与 f1/f2 低相关
+        }
+
+        class FakeExecutor:
+            def __init__(self, prog):
+                self.prog = prog
+
+            def execute(self, data, params):
+                return signals[self.prog["factor_id"]]
+
+        mock_provider = MagicMock()
+        mock_provider.get_futures_ohlcv.return_value = df
+        with (
+            patch("fts.data.FTSDataProvider", return_value=mock_provider),
+            patch("fts.factor_engine.factor_program.FactorExecutor", FakeExecutor),
+        ):
+            result = http_server._compute_signal_clusters(
+                [
+                    {"factor_id": "f1", "code": "x"},
+                    {"factor_id": "f2", "code": "x"},
+                    {"factor_id": "f3", "code": "x"},
+                ]
+            )
+
+        assert result is not None
+        assign = result["assign"]
+        assert assign["f1"] == assign["f2"]  # 高相关同簇
+        assert assign["f3"] != assign["f1"]  # 低相关分簇
+
+    def test_compute_signal_clusters_no_signal_returns_none(self):
+        """参考品种行情不可用（<2 信号）时返回 None 触发降级。"""
+        from fts.monitor import http_server
+
+        mock_provider = MagicMock()
+        mock_provider.get_futures_ohlcv.side_effect = RuntimeError("no data source")
+        with patch("fts.data.FTSDataProvider", return_value=mock_provider):
+            result = http_server._compute_signal_clusters(
+                [
+                    {"factor_id": "f1", "code": "x"},
+                    {"factor_id": "f2", "code": "x"},
+                    {"factor_id": "f3", "code": "x"},
+                ]
+            )
+        assert result is None
+
+    def test_compute_signal_clusters_too_few_factors(self):
+        """因子数 < 2 时直接返回 None。"""
+        from fts.monitor import http_server
+
+        result = http_server._compute_signal_clusters([{"factor_id": "f1", "code": "x"}])
+        assert result is None
+
+    def test_cluster_cache_hit_skips_recompute(self):
+        """TTL 缓存命中时不再重复计算。"""
+        from fts.monitor import http_server
+
+        code_factors = [{"factor_id": f"f{i}", "code": "x"} for i in range(3)]
+        data = {"assign": {"f0": 0, "f1": 0, "f2": 1}, "cluster_order": [0, 1], "cluster_members": {0: ["f0", "f1"], 1: ["f2"]}}
+        key = hashlib.sha256("|".join(["f0", "f1", "f2"]).encode("utf-8")).hexdigest()[:16]
+        http_server._cluster_cache["key"] = key
+        http_server._cluster_cache["data"] = data
+        http_server._cluster_cache["ts"] = time.time()
+
+        with patch("fts.monitor.http_server._compute_signal_clusters", side_effect=AssertionError("不应重算")):
+            result = http_server._cluster_factors_by_signal(code_factors)
+        assert result == data
+
+    def test_apply_cluster_groups_degrades_when_no_cluster(self):
+        """聚类不可用时不标注 cluster_id，保持原列表。"""
+        handler = MockRequestHandler.make_handler()
+        factors = [
+            {"factor_id": "F001", "name": "f1", "ic": "0.01", "sharpe": "0.5"},
+            {"factor_id": "F002", "name": "f2", "ic": "0.02", "sharpe": "1.2"},
+        ]
+        with patch("fts.monitor.http_server._cluster_factors_by_signal", return_value=None):
+            factors, meta = _DashboardHandler._apply_cluster_groups(handler, factors, [])
+
+        assert meta["applied"] is False
+        assert meta["distribution"] == {}
+        assert "cluster_id" not in factors[0]
+
+    def test_apply_cluster_groups_annotates_and_sorts(self):
+        """聚类成功时标注 cluster_id、生成汇总并按簇排序。"""
+        handler = MockRequestHandler.make_handler()
+        factors = [
+            {"factor_id": "A", "name": "a1", "ic": "0.01", "sharpe": "0.5"},
+            {"factor_id": "B", "name": "b1", "ic": "0.02", "sharpe": "1.2"},
+            {"factor_id": "C", "name": "c1", "ic": "0.03", "sharpe": "2.0"},
+            {"factor_id": "D", "name": "d1", "ic": "0.01", "sharpe": "0.8"},
+        ]
+        cluster_result = {
+            "assign": {"A": 0, "B": 0, "C": 1, "D": 1},
+            "cluster_order": [0, 1],
+            "cluster_members": {0: ["A", "B"], 1: ["C", "D"]},
+        }
+        with patch("fts.monitor.http_server._cluster_factors_by_signal", return_value=cluster_result):
+            factors, meta = _DashboardHandler._apply_cluster_groups(handler, factors, [])
+
+        assert meta["applied"] is True
+        assert meta["distribution"] == {"0": 2, "1": 2}
+        assert meta["summary"][0]["cluster_id"] == 0
+        assert meta["summary"][0]["rep_name"] == "b1"  # 簇内 sharpe 最高
+        assert meta["summary"][0]["avg_sharpe"] == 0.85
+        # 簇 0 内按 sharpe 降序（b1=1.2 > a1=0.5），簇间按 size 降序
+        assert [f["factor_id"] for f in factors] == ["B", "A", "C", "D"]
+        assert factors[0]["cluster_id"] == 0
+
+    def test_dashboard_html_uses_cluster_sections(self):
+        """仪表盘 HTML 使用聚类区块与渲染函数。"""
+        from fts.monitor.http_server import DASHBOARD_HTML
+
+        assert "聚类分布" in DASHBOARD_HTML
+        assert "clusterDistSection" in DASHBOARD_HTML
+        assert "renderClusterDistribution" in DASHBOARD_HTML
+        assert "renderClusterFilterChips" in DASHBOARD_HTML
+        # 旧家族渲染函数不应残留
+        assert "renderFamilyDistribution" not in DASHBOARD_HTML
+
+
+class TestWorkflowStaticAssets:
+    """_serve_workflow_static 静态资源托管（/workflow SPA + /assets 构建产物）。
+
+    回归防护：http_server 必须同时路由 /workflow（SPA fallback）与 /assets/（Vite 构建产物），
+    否则 WorkFlow UI 白屏（ERR_ABORTED assets 资源）。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _fake_dist(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """构造 fake 项目 dist 目录，并让 http_server 解析到该路径。"""
+        dist = tmp_path / "web" / "workflow_ui" / "dist"
+        (dist / "assets").mkdir(parents=True)
+        (dist / "index.html").write_text('<div id="root">fake-app</div>', encoding="utf-8")
+        (dist / "assets" / "index-abc.js").write_text("console.log(1)", encoding="utf-8")
+        (dist / "assets" / "style-abc.css").write_text("body {}", encoding="utf-8")
+        # __file__ 指向 tmp_path/fts/monitor/，则 dist = tmp_path/web/workflow_ui/dist
+        monkeypatch.setattr(
+            http_server, "__file__", str(tmp_path / "fts" / "monitor" / "http_server.py")
+        )
+
+    def _serve(self, handler: MockRequestHandler, path: str) -> None:
+        """以真实方法绑定 handler 执行 _serve_workflow_static。"""
+        _DashboardHandler._serve_workflow_static.__get__(handler, _DashboardHandler)(path)
+
+    def _content_type(self, handler: MockRequestHandler) -> str:
+        """提取最后一次 send_header Content-Type 值。"""
+        for args, _kwargs in handler.send_header.call_args_list:
+            if args[0] == "Content-Type":
+                return args[1]
+        return ""
+
+    def test_workflow_index_serves_html(self):
+        """GET /workflow 返回 SPA index.html。"""
+        handler = MockRequestHandler.make_handler(path="/workflow")
+        self._serve(handler, "/workflow")
+        assert handler.send_response.call_args_list[-1].args[0] == 200
+        assert self._content_type(handler) == "text/html"
+        assert '<div id="root">fake-app</div>' in handler.wfile.getvalue().decode()
+
+    def test_workflow_assets_js_served(self):
+        """GET /assets/index-abc.js 返回构建产物 JS 与正确 Content-Type。"""
+        handler = MockRequestHandler.make_handler(path="/assets/index-abc.js")
+        self._serve(handler, "/assets/index-abc.js")
+        assert handler.wfile.getvalue() == b"console.log(1)"
+        assert self._content_type(handler) in ("text/javascript", "application/javascript")
+
+    def test_workflow_assets_css_served(self):
+        """GET /assets/style-abc.css 返回构建产物 CSS。"""
+        handler = MockRequestHandler.make_handler(path="/assets/style-abc.css")
+        self._serve(handler, "/assets/style-abc.css")
+        assert handler.wfile.getvalue() == b"body {}"
+        assert self._content_type(handler) == "text/css"
+
+    def test_workflow_assets_unknown_falls_back_to_index(self):
+        """未知 /assets 文件回退 index.html（SPA fallback）。"""
+        handler = MockRequestHandler.make_handler(path="/assets/missing-xyz.js")
+        self._serve(handler, "/assets/missing-xyz.js")
+        assert '<div id="root">fake-app</div>' in handler.wfile.getvalue().decode()
+
+    def test_workflow_assets_traversal_rejected(self):
+        """路径越界（../）拒绝并回退 index.html。"""
+        handler = MockRequestHandler.make_handler(path="/assets/../../secret.txt")
+        self._serve(handler, "/assets/../../secret.txt")
+        assert '<div id="root">fake-app</div>' in handler.wfile.getvalue().decode()

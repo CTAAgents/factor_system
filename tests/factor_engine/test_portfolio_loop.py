@@ -2169,7 +2169,7 @@ class TestRegimeAdaptiveWeight:
 
     @pytest.fixture
     def regime_fixtures(self):
-        """构建带 family 字段的因子和对应 signals。"""
+        """构建带 style_tags 字段的因子和对应 signals。"""
         factors = [
             {
                 "factor_id": "fct_trend",
@@ -2178,7 +2178,7 @@ class TestRegimeAdaptiveWeight:
                 "ic": 0.05,
                 "turnover": 0.3,
                 "decay_6m": 0.05,
-                "family": "trend",
+                "style_tags": ["momentum"],
             },
             {
                 "factor_id": "fct_reversion",
@@ -2187,7 +2187,7 @@ class TestRegimeAdaptiveWeight:
                 "ic": 0.04,
                 "turnover": 0.4,
                 "decay_6m": 0.1,
-                "family": "mean_reversion",
+                "style_tags": ["mean_reversion"],
             },
             {
                 "factor_id": "fct_vol",
@@ -2196,7 +2196,7 @@ class TestRegimeAdaptiveWeight:
                 "ic": 0.03,
                 "turnover": 0.2,
                 "decay_6m": 0.08,
-                "family": "volatility",
+                "style_tags": ["volatility"],
             },
             {
                 "factor_id": "fct_carry",
@@ -2205,7 +2205,7 @@ class TestRegimeAdaptiveWeight:
                 "ic": 0.03,
                 "turnover": 0.15,
                 "decay_6m": 0.12,
-                "family": "carry",
+                "style_tags": ["carry"],
             },
         ]
         signals = [
@@ -2330,7 +2330,7 @@ class TestRegimeAdaptiveWeight:
                 "ic": 0.02,
                 "turnover": 0.5,
                 "decay_6m": 0.25,
-                "family": "trend",
+                "style_tags": ["momentum"],
             },
         ]
         signals = [
@@ -2394,28 +2394,11 @@ class TestRegimeAdaptiveWeight:
         for s in result:
             assert s["weight"] == 0.25
 
-    def test_infer_family_from_name(self):
-        """从因子名称推断家族分类。"""
-        from fts.factor_engine.portfolio_loop import _infer_factor_family_from_name
-
-        assert _infer_factor_family_from_name("momentum_factor") == "trend"
-        assert _infer_factor_family_from_name("trend_following") == "trend"
-        assert _infer_factor_family_from_name("breakout_signal") == "trend"
-        assert _infer_factor_family_from_name("mean_reversion") == "mean_reversion"
-        assert _infer_factor_family_from_name("price_reversal") == "mean_reversion"
-        assert _infer_factor_family_from_name("carry_spread") == "carry"
-        assert _infer_factor_family_from_name("volatility_ratio") == "volatility"
-        assert _infer_factor_family_from_name("atr_filter") == "volatility"
-        assert _infer_factor_family_from_name("volume_weighted") == "volume"
-        assert _infer_factor_family_from_name("fundamental_pe") == "fundamental"
-        assert _infer_factor_family_from_name("illiquidity") == "liquidity"
-        assert _infer_factor_family_from_name("unknown_factor") == "other"
-
-    def test_fallback_name_inference_when_no_family(self):
-        """因子无 family 字段时从名称推断。"""
+    def test_fallback_name_inference_when_no_style(self):
+        """因子无 style_tags 时从名称推断 style。"""
         from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
 
-        # 因子只有 name 字段，无 family
+        # 因子只有 name 字段，无 style_tags
         factors = [
             {
                 "factor_id": "fct_1",
@@ -2442,7 +2425,7 @@ class TestRegimeAdaptiveWeight:
         regime = {"regime": "bull", "confidence": 0.9, "detected_at": "now", "features": {}}
         result = regime_adaptive_weight_adjustment(signals, regime, factors)
 
-        # momentum_factor → trend (通过名称推断) → bull 下 ×1.3
+        # momentum_factor → momentum (通过名称推断) → bull 下 ×1.3
         adjusted = next(s for s in result)
         assert abs(adjusted["weight"] - 0.65) < 1e-6  # 0.5 × 1.3 = 0.65
 
@@ -3101,7 +3084,6 @@ class TestShadowPool:
             "name": "shadow_factor",
             "code": "code",
             "market": "futures",
-            "family": "trend",
         }
         evaluation = {
             "level_1_backtest": {"sharpe": 2.0, "ic": 0.05},
@@ -3125,7 +3107,6 @@ class TestShadowPool:
             "name": "seed_factor",
             "code": "code",
             "market": "futures",
-            "family": "trend",
         }
         evaluation = {
             "level_1_backtest": {"sharpe": 2.0, "ic": 0.05},
@@ -3514,7 +3495,7 @@ class TestOrthogonalizeBranches:
             "phase2_marked": 2,
             "phase1_details": [
                 {"type": "code_duplicate", "removed": "n2", "reason": "same code"},
-                {"type": "family_prune", "removed": "n3", "reason": "family prune"},
+                {"type": "style_prune", "removed": "n3", "reason": "style prune"},
             ],
             "phase2_details": [{"type": "correlation", "removed": "n1", "reason": "corr 0.9"}],
             "l2_prior_count": 1,
@@ -4703,15 +4684,8 @@ class TestPortfolioManagerAndRegimeMisc:
         shutil.rmtree(pm.proposals_dir)
         assert pm.list_active_proposals() == []
 
-    def test_infer_family_cross_section(self):
-        """从名称推断 cross_section 家族。"""
-        from fts.factor_engine.portfolio_loop import _infer_factor_family_from_name
-
-        assert _infer_factor_family_from_name("rank_based") == "cross_section"
-        assert _infer_factor_family_from_name("cs_style") == "cross_section"
-
     def test_regime_no_adjustment_log(self):
-        """regime 有配置但家族倍率=1.0 时无需调整。"""
+        """regime 有配置但 style 未覆盖（other）时倍率 1.0 无需调整。"""
         from fts.factor_engine.portfolio_loop import regime_adaptive_weight_adjustment
 
         signals = [
@@ -4727,7 +4701,7 @@ class TestPortfolioManagerAndRegimeMisc:
                 retained=True,
             ),
         ]
-        factors = [{"factor_id": "f1", "family": "cross_section"}]  # bear 下倍率 1.0
+        factors = [{"factor_id": "f1"}]  # 无 style_tags/name → style=other → bear 下倍率 1.0
         out = regime_adaptive_weight_adjustment(signals, {"regime": "bear"}, factors)
         assert out[0]["weight"] == pytest.approx(0.5)
 

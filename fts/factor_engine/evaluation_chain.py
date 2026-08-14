@@ -30,6 +30,7 @@ from .contracts import (
 )
 from .factor_program import FactorExecutor
 from .walk_forward import WalkForwardOptimizer, WalkForwardConfig, WalkForwardResult, DEFAULT_WALK_FORWARD_CONFIG
+from .ir_thresholds import factor_ir_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -714,8 +715,10 @@ class EvaluationChain:
         ic_t_gate = bt.get("ic_t_stat")
         if ic_t_gate is None:
             icir_fb = abs(float(bt.get("icir_block", bt.get("icir", 0.0)) or 0.0))
-            if icir_fb < 0.30:
-                reasons.append(f"Level 1: |ICIR|={icir_fb:.4f} < 0.30（样本不足，回退口径）")
+            # CTA 手册阶段4（v2.104.0+19）：IR 按因子类别分级门槛（量价 0.30/基本面 0.40/期限结构 0.35）
+            ir_gate = factor_ir_threshold(factor)
+            if icir_fb < ir_gate:
+                reasons.append(f"Level 1: |ICIR|={icir_fb:.4f} < {ir_gate:.2f}（样本不足，回退口径）")
         elif abs(float(ic_t_gate)) < 1.65:
             reasons.append(f"Level 1: |ic_t|={abs(float(ic_t_gate)):.4f} < 1.65")
         # G4（35-gap-closure-plan）：前后半段 IC 符号反转一票否决（过拟合局部最优典型特征）

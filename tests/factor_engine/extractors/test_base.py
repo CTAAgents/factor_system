@@ -366,14 +366,14 @@ class TestBaseExtractorPipeline:
             "economic_logic": {"theory": 3},
         }
         cand = BaseExtractorPipeline._yaml_factor_to_candidate(
-            factor, source="broker", market="stock", trace_id="t9", family_name="trend"
+            factor, source="broker", market="stock", trace_id="t9"
         )
         assert isinstance(cand, dict)
         assert cand["name"] == "momentum_yaml"
         assert cand["market"] == "stock"
         assert cand["trace_id"] == "t9"
         assert cand["is_executable"] is True
-        assert cand["parent_topic"] == "extractor_pipeline/trend/momentum_yaml"
+        assert cand["parent_topic"] == "extractor_pipeline/broker/momentum_yaml"
         assert cand["signature"]["lookback"] == 5
 
     def test_yaml_factor_to_candidate_defaults(self, tmp_path):

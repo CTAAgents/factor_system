@@ -15,10 +15,11 @@ HARNESS §降级/熔断: 捕获所有异常，日志记录但不抛出。
 from __future__ import annotations
 
 import logging
-import os
 import sys
+import os
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # ── L1 Meta-Loop — 每日 08:30 知识补给 + 种子注入 ─────────
 
 
-def l1_meta_loop_job() -> None:
-    """执行 L1 Meta-Loop（每日知识补给 + Bootstrapping + 种子注入）。"""
+def l1_meta_loop_job(market: str = "futures") -> None:
+    """执行 L1 Meta-Loop（每日知识补给 + Bootstrapping + 种子注入）。
+
+    Args:
+        market: 市场类型（futures 默认；energy 走能源链独立 L1 输出，GAP-121 2026-08-15）。
+    """
     trace_id = f"fts.l1.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    logger.info("[L1] Meta-Loop 启动 trace_id=%s", trace_id)
+    logger.info("[L1] Meta-Loop 启动 trace_id=%s market=%s", trace_id, market)
 
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
@@ -41,9 +46,29 @@ def l1_meta_loop_job() -> None:
 
         cfg = get_config()
 
+        kwargs: dict[str, Any] = {}
+        if market == "energy":
+            from fts.data_futures import (
+                ENERGY_CHAIN_L1_DEBATES_DIR,
+                ENERGY_CHAIN_L1_INJECT_DIR,
+                ENERGY_CHAIN_L1_MEMORY_DIR,
+                ENERGY_CHAIN_L1_POOL_PATH,
+            )
+
+            kwargs = {
+                "memory_dir": cfg.memory_dir + "/" + ENERGY_CHAIN_L1_MEMORY_DIR.removeprefix("memory/"),
+                "factor_pool_path": PROJECT_ROOT / ENERGY_CHAIN_L1_POOL_PATH,
+                "inject_dir": PROJECT_ROOT / ENERGY_CHAIN_L1_INJECT_DIR,
+                "debates_dir": PROJECT_ROOT / ENERGY_CHAIN_L1_DEBATES_DIR,
+            }
+
         loop = MetaLoop(
-            memory_dir=cfg.memory_dir + "/meta_loop",
+            memory_dir=kwargs.get("memory_dir", cfg.memory_dir + "/meta_loop"),
             llm_client=get_llm_client(),
+            market=market,
+            factor_pool_path=kwargs.get("factor_pool_path", "memory/knowledge/factors/factor_pool.json"),
+            inject_dir=kwargs.get("inject_dir", "memory/knowledge/factors/l1_injected"),
+            debates_dir=kwargs.get("debates_dir", "memory/debates"),
         )
         result = loop.run()
         logger.info("[L1] 完成: status=%s injected=%d", result.status, len(result.injected_candidate_ids))
@@ -120,7 +145,7 @@ def l2_evolution_loop_job() -> None:
         logger.error("[L2] 运行失败: %s", e, exc_info=True)
 
 
-# ── L3 Portfolio Loop — 每日 20:00 组合构建 + 信号合成 ───
+# ── L3 Portfolio Loop — 工作日每日 19:00 组合权重重算（GAP-072 与信号管道解绑）───
 
 
 def l3_portfolio_loop_job() -> None:
@@ -130,11 +155,13 @@ def l3_portfolio_loop_job() -> None:
     与下游期货信号管道不一致，v2.73.0 修复）。
 
     权重计算模式（portfolio_loop.py）:
-        - elastic_net: Elastic Net 截面回归（CSI300 面板，L1+L2，默认）
-        - equal_weight: 等权 1/N
+        - equal_weight: 等权 1/N（默认，v2.103.0+23；可选 --enable-pca 以 PCA 载荷权重
+          替换均匀等权，v2.103.0+24）
+        - elastic_net: Elastic Net 截面回归（CSI300 面板，L1+L2 自动变量选择）
         - sharpe_weight: 按 Sharpe 比率归一化加权
 
-    完成后自动触发期货信号管道（Ridge 回归加权）。
+    与期货信号管道解绑（GAP-072）：本任务仅重算组合权重，不触发信号管道；
+    信号由独立每日任务（futures_signal_pipeline，工作日 20:00）生成。
     """
     trace_id = f"fts.l3.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L3] Portfolio Loop 启动 trace_id=%s", trace_id)
@@ -173,9 +200,9 @@ def _run_futures_signal_pipeline() -> None:
     - 覆盖 FUTURES_SUBSET 中所有非僵尸品种（剔除停更/陈旧品种后参与排名）
     - 报告输出品种中文名称、主力合约代码、盘中实时价
 
-    权重计算方法（Ridge 回归）:
-    - 方向校正: 截面 IC 法（Spearman 秩相关 vs 未来 5 日收益）
-    - 权重学习: Ridge 回归（L2 正则化，弱因子保留不丢弃）
+    权重计算方法（v2.105.0 起 — L3 组合权威源）:
+    - 因子选择与基础权重: 由 L3 组合层负责（factor_weights.json）
+    - Regime 调整: 信号管道按市场制度做因子权重档位缩放
     - 输出: 多空双向信号排名 → reports/{date}/futures_signals_*.md
     """
     try:
@@ -217,7 +244,7 @@ def health_check_job() -> None:
 
 
 def monthly_decay_eval_job() -> None:
-    """月度因子衰减评估 + 新标准准入重审（2026-08-13 起合并）。`n`n    流程:`n        Step A: 新标准全量重审（fts.monitor.reaudit.run_reaudit，apply=True）——`n                对 active elite 按当前准入标准（审计/鲁棒性/评分卡）复检，`n                不合格降级观察或淘汰；FTS_MONTHLY_REAUDIT_ENABLED=0 可关闭。`n        Step B: 衰减评估（A.2 EliteFactorTracker.run_monthly_evaluation）+`n                状态机 + 自动淘汰同步 DuckDB/JSON。
+    """月度因子衰减评估：对精英池执行增量评估并触发状态机/自动淘汰。
 
     关联设计: A.2 因子衰减追踪（EliteFactorTracker.run_monthly_evaluation）。
     """
@@ -245,6 +272,7 @@ def monthly_decay_eval_job() -> None:
         logger.info("[衰减评估] Step A 新标准重审已关闭（FTS_MONTHLY_REAUDIT_ENABLED=0）")
 
     # ---- Step B: 衰减评估（原有逻辑） ----
+
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.monitor.elite_tracker import EliteFactorTracker, AutoRetireManager
@@ -515,11 +543,47 @@ def data_level_monitor_job() -> None:
         logger.error("数据级监控 运行失败: %s (trace_id=%s)", e, trace_id)
 
 
+def _verify_field_coverage(kline_ok: bool, fundamental_ok: bool, term_ok: bool) -> dict[str, Any]:
+    """按字段消费字典校验：全部登记字段必须已有产出通道（失败透明）。
+
+    Returns:
+        {"registered": 登记字段数, "produced": {组: 产出字段数},
+         "missing": 缺失字段清单, "error": 字典加载失败原因（可选）}
+    """
+    try:
+        from fts.config.futures_field_consumption import FUTURES_FIELD_CONSUMPTION
+
+        groups = FUTURES_FIELD_CONSUMPTION.groups()
+    except Exception as e:  # noqa: BLE001
+        logger.error("[Sync] 字段消费字典加载失败: %s", e)
+        return {"registered": 0, "produced": {}, "missing": [], "error": str(e)}
+
+    produced = {
+        "kline": set(groups["kline"]) if kline_ok else set(),
+        "fundamental": set(groups["fundamental"]) if fundamental_ok else set(),
+        "term_structure": set(groups["term_structure"]) if term_ok else set(),
+    }
+    missing: list[str] = []
+    for g, fields in groups.items():
+        for f in fields:
+            if f not in produced[g]:
+                missing.append(f)
+    return {
+        "registered": sum(len(fs) for fs in groups.values()),
+        "produced": {g: len(fs) for g, fs in produced.items()},
+        "missing": missing,
+    }
+
+
 def sync_futures_data_job(symbols: list[str] | None = None, days: int = 120) -> None:
     """执行期货多源数据同步（Phase 14.5，工作日 17:30 调度）。
 
-    对每个品种通过默认聚合器拉取 K 线并写缓存；单个品种失败不中断，
-    完成后将同步摘要（gzip JSON）落盘 data/_lineage/sync_summary_*.json.gz。
+    按字段消费字典（fts/config/futures_field_consumption.py）三组字段每日同步:
+      Stage 1 kline（17 字段）        → kline_cache（DuckDB，多源聚合器）
+      Stage 2 fundamental（9 字段）   → futures_fundamental（Parquet，含现货价 WebSearch 补充）
+      Stage 3 term_structure（4 字段）→ futures_term_structure（Parquet，多合约截面）
+    单品种失败不中断；完成后做字典字段覆盖校验，
+    同步摘要（gzip JSON）落盘 data/_lineage/sync_summary_*.json.gz。
 
     Args:
         symbols: 品种代码列表；None 时使用 FUTURES_SUBSET（全品种 82 个）。
@@ -546,23 +610,61 @@ def sync_futures_data_job(symbols: list[str] | None = None, days: int = 120) -> 
     import json
 
     started_at = datetime.now().isoformat()
-    success = 0
-    failure = 0
-    total_rows = 0
-    failures: list[dict] = []
 
+    # ── Stage 1: 行情 17 字段 → kline_cache（DuckDB）──
+    kline_success = 0
+    kline_failure = 0
+    kline_rows = 0
+    kline_failures: list[dict] = []
     for sym in symbols:
         try:
             df = agg.get_ohlcv(sym, days, trace_id)
             if df is None or len(df) == 0:
-                failure += 1
-                failures.append({"symbol": sym, "error": "empty data"})
+                kline_failure += 1
+                kline_failures.append({"symbol": sym, "error": "empty data"})
             else:
-                success += 1
-                total_rows += int(len(df))
+                kline_success += 1
+                kline_rows += int(len(df))
         except Exception as e:  # noqa: BLE001
-            failure += 1
-            failures.append({"symbol": sym, "error": str(e)})
+            kline_failure += 1
+            kline_failures.append({"symbol": sym, "error": str(e)})
+
+    # ── Stage 2: 基本面 9 字段 → futures_fundamental（Parquet）──
+    try:
+        from fts.data_futures_fundamental_sync import sync_fundamental_fields
+
+        fund_result = sync_fundamental_fields(symbols, days=days, trace_id=trace_id)
+    except Exception as e:  # noqa: BLE001
+        logger.error("[Sync] Stage2 基本面同步失败: %s (trace_id=%s)", e, trace_id, exc_info=True)
+        fund_result = {
+            "success": 0,
+            "failure": len(symbols),
+            "rows": 0,
+            "failures": [{"symbol": "*", "error": str(e)}],
+            "missing_spot": [],
+        }
+
+    # ── Stage 3: 期限结构 4 字段 → futures_term_structure（Parquet）──
+    try:
+        from fts.data_futures_term_structure import sync_term_structure_fields
+
+        ts_result = sync_term_structure_fields(symbols, days=days, trace_id=trace_id)
+    except Exception as e:  # noqa: BLE001
+        logger.error("[Sync] Stage3 期限结构同步失败: %s (trace_id=%s)", e, trace_id, exc_info=True)
+        ts_result = {
+            "success": 0,
+            "failure": len(symbols),
+            "rows": 0,
+            "failures": [{"symbol": "*", "error": str(e)}],
+            "no_section": [],
+        }
+
+    # ── 字段覆盖校验（字典全部字段必须有产出通道）──
+    coverage = _verify_field_coverage(
+        kline_ok=kline_success > 0,
+        fundamental_ok=fund_result.get("success", 0) > 0,
+        term_ok=ts_result.get("success", 0) > 0,
+    )
 
     try:
         source_status = agg.get_source_status()
@@ -575,11 +677,17 @@ def sync_futures_data_job(symbols: list[str] | None = None, days: int = 120) -> 
         "started_at": started_at,
         "finished_at": finished_at,
         "elapsed_seconds": round((datetime.now() - datetime.fromisoformat(started_at)).total_seconds(), 3),
+        # 顶层兼容字段（v2.103.0 前=整体统计，现=Stage1 行情统计）
         "symbols_total": len(symbols),
-        "success": success,
-        "failure": failure,
-        "failures": failures,
-        "total_rows": total_rows,
+        "success": kline_success,
+        "failure": kline_failure,
+        "failures": kline_failures,
+        "total_rows": kline_rows,
+        # 分阶段统计（v2.103.0+）
+        "kline": {"success": kline_success, "failure": kline_failure, "rows": kline_rows, "failures": kline_failures},
+        "fundamental": fund_result,
+        "term_structure": ts_result,
+        "coverage": coverage,
         "source_status": source_status,
     }
 
@@ -590,11 +698,14 @@ def sync_futures_data_job(symbols: list[str] | None = None, days: int = 120) -> 
         json.dump(summary, f, ensure_ascii=False)
 
     logger.info(
-        "[Sync] 完成: total=%d success=%d failure=%d rows=%d -> %s (trace_id=%s)",
+        "[Sync] 完成: kline total=%d success=%d failure=%d rows=%d | fund rows=%d | ts rows=%d | coverage_missing=%d -> %s (trace_id=%s)",
         len(symbols),
-        success,
-        failure,
-        total_rows,
+        kline_success,
+        kline_failure,
+        kline_rows,
+        fund_result.get("rows", 0),
+        ts_result.get("rows", 0),
+        len(coverage.get("missing", [])),
         out_path.name,
         trace_id,
     )
@@ -635,10 +746,7 @@ def mhf_signal_job() -> None:
         SignalBridge(protocol="json", output_dir=str(PROJECT_ROOT / "signals")).publish(payload)
         logger.info(
             "[MHF] 信号发布完成: %s symbols=%d bar=%s (trace_id=%s)",
-            payload["signal_id"],
-            payload["symbols"],
-            payload.get("bar_time"),
-            trace_id,
+            payload["signal_id"], payload["symbols"], payload.get("bar_time"), trace_id,
         )
         self_serial_exec(payload, trace_id)
     except Exception as e:  # noqa: BLE001
@@ -670,10 +778,8 @@ def self_serial_exec(payload: dict, trace_id: str) -> None:
         )
         logger.info(
             "[MHF] 模拟执行串行完成: ok=%s targets=%d equity=%.2f (trace_id=%s)",
-            result.get("ok"),
-            len(result.get("targets") or {}),
-            (result.get("equity") or {}).get("balance", 0.0),
-            exec_trace,
+            result.get("ok"), len(result.get("targets") or {}),
+            (result.get("equity") or {}).get("balance", 0.0), exec_trace,
         )
     except Exception as e:  # noqa: BLE001
         logger.error("[MHF] 模拟执行失败: %s (trace_id=%s)", e, trace_id)
@@ -693,3 +799,4 @@ __all__ = [
     "sync_liquidity_pool_job",
     "mhf_signal_job",
 ]
+

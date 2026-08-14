@@ -3,7 +3,7 @@
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
 [![Tests](https://img.shields.io/badge/tests-5218%20passing-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.104.0%2B16-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.104.0%2B39-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -76,7 +76,7 @@ fts scheduler list
 
 | 命令 | 说明 |
 |------|------|
-| `fts meta-loop run [--market {futures}]` | 启动 L1 市场感知与知识补给 |
+| `fts meta-loop run [--market {futures,energy}]` | 启动 L1 市场感知与知识补给；`--market energy` 走能源链独立输出，知识输入混入通用期货种子（seeds/futures）+ 能化专属种子（seeds/energy）双线（GAP-121） |
 
 ### L2 Evolution Loop
 
@@ -92,6 +92,37 @@ L2 演化参数：
 | `--symbol` | `000001` | 单标的演化的代码 |
 | `--universe` | `futures` | 演化市场（`futures`） |
 | `--max-stocks` | 0 | 横截面模式最大标的数（0 = 使用全部品种） |
+| `--chain` | 空 | 产业链专属工作流：`energy`（能源链专属训练链 + 独立因子库路由，GAP-121） |
+| `--symbols` | 空 | 显式品种列表（逗号分隔，如 `SC0,FU0,LU0`；覆盖 `--chain` 默认链品种） |
+
+### 能源产业链专属工作流（GAP-121）
+
+独立于通用期货工作流的链级闭环（因子挖掘 → 质检 → 信号组合 → 综合得分），
+以 12 个化工品种为训练链、其余化工产业链 8 品种为链外盲测池，
+因子库/精英目录/报告独立隔离。品种池与产业链分类单一事实源：
+`config/futures_universe.yaml`（训练池/泛化范围/盲测池派生，改 YAML 即自动换池，
+`fts/data_futures` 内置默认兜底，v2.104.0+38）：
+
+```bash
+# 0) 数据深度补全（LU0/PR0/PL0 等新上市品种，AKShare 全历史 → kline_cache）
+python scripts/sync_energy_chain_depth.py            # 全品种；--symbols LU0,PR0 指定
+python scripts/sync_energy_chain_depth.py --dry-run  # 只报告不写库
+
+# 1) 因子挖掘（12 化工品种演化，落 data/factor_catalog_energy.duckdb）
+fts evolution run --chain energy --max-generations 10
+
+# 2) 因子质检（12 品种全链质检）
+python scripts/verify_qa_workflow.py --chain energy --days 300
+
+# 3) 信号组合 + 综合得分（12 训练 + 8 化工盲测，链外盲测 IC 对比 + 化工链分层泛化）
+python scripts/futures_signal_pipeline.py --chain energy --days 120
+# 输出: reports/energy_chain/{date}/（信号快照 + 交易建议 + 盲测泛化对比 + 分层）
+```
+
+训练链/盲测池再优化（2026-08-15）：扩池 9→12 品种（能源3 SC/FU/BU + 聚酯3 PX/TA/PF +
+油化工3 L/PP/PG + 煤化工3 MA/UR/SA，四大化工子链各 3 降相关性），盲测池自动重算为
+其余化工链 8 品种；`ENERGY_CHAIN_MIN_TRAIN_ROWS=300` 深度阈值 +
+`check_energy_chain_depth()` 审计（排除 SYNTHETIC 合成脏数据）。
 
 ### L3 Portfolio Loop
 
@@ -113,9 +144,9 @@ L3 参数：
 
 | 命令 | 说明 |
 |------|------|
-| `fts factor list [--market] [--family] [--min-ic] [--min-sharpe] [--diverse] [--json]` | 列出 elite 因子，支持筛选和多样性选择 |
+| `fts factor list [--market] [--cluster] [--min-ic] [--min-sharpe] [--diverse] [--json]` | 列出 elite 因子，支持信号聚类簇筛选和多样性选择 |
 | `fts factor show <factor_id>` | 查看单个因子详情 |
-| `fts factor stats [--market] [--json]` | 因子家族分布统计 |
+| `fts factor stats [--market] [--json]` | 因子聚类分布统计（信号相关性分组） |
 | `fts factor lineage <factor_id>` | 查询因子演化血缘 |
 | `fts factor seeds [--market]` | 列出种子因子 |
 
@@ -131,7 +162,7 @@ L3 参数：
 | 命令 | 说明 |
 |------|------|
 | `fts backtest run <factor_id> [--days] [--capital]` | 单个因子回测 |
-| `fts backtest batch --family <family>` | 批量回测 + Sharpe 排名 |
+| `fts backtest batch [--grade] [--limit] [--days]` | 批量回测 + 对比排名 |
 | `fts backtest compare <id1> <id2>` | 两个因子对比回测 |
 
 ### 特征工程（C.1）
@@ -156,6 +187,13 @@ L3 参数：
 | 命令 | 说明 |
 |------|------|
 | `fts ui [--host] [--port]` | 启动 Web UI 仪表盘（默认 `127.0.0.1:9100`） |
+
+WorkFlow UI（CTA 手册端到端工作流，v2.104.0+25）：
+- 访问 `http://127.0.0.1:9100/workflow` 打开 WorkFlow 看板（React SPA，`web/workflow_ui/dist` 构建产物）
+- 工作流页：11 阶段 + 质检闭环节点流（数据基建→因子库挖掘→预处理→IC/IR→Regime→合成→调仓→风控→样本外→仿真→爬坡→质检）、端到端/单动作真实执行、批次历史、阶段日志与 JSON 产物查看
+- 质检看板页：QA 7 状态分布 + 观察/暂停预警清单
+- API：`GET /api/workflow/stages|runs|runs/{id}|qa/board`、`POST /api/workflow/runs|runs/{id}/run_all|runs/{id}/stage/{s}/action/{a}/run`
+- 前端开发：`cd web/workflow_ui && npm run dev`（代理 `/api` → 9100）；构建：`npm run build`
 
 ### 信号桥接（Phase 25，v2.39.0）
 
@@ -229,6 +267,14 @@ print(status_report_to_json(report))
 
 ## 系统特性
 
+### CTA 手册 WorkFlow 端到端工作流（v2.104.0+25）
+
+按《期货CTA多因子策略标准化作业手册》(v1.3) 编排 11 阶段 + 因子质检闭环，UI 一键驱动 FTS 真实执行：
+- **阶段编排**：`fts/workflow/stages.py` 定义 12 节点（数据基建→因子库挖掘→预处理与正交化→单因子 IC/IR→Regime 识别→多因子合成→信号转仓位与风险平价→组合风控→滚动样本外回测→仿真柜台联调→实盘分阶段上线→因子质检闭环），动作映射 `fts cli` 真实命令
+- **执行器**：`fts/workflow/executor.py` 单阶段后台线程 subprocess + 端到端顺序推进、失败即停、超时熔断、JSON 产物解析、批次状态按阶段记录汇总同步
+- **状态持久化**：`fts/workflow/store.py` SQLite WAL（`data/workflow.db`，workflow_runs + stage_runs 双表，崩溃可回放）
+- **前端**：`web/workflow_ui/` React18 + Vite SPA（`fts ui` → `http://127.0.0.1:9100/workflow`）
+
 ### 三层进化循环
 
 | 循环 | 调度时间 | 核心职责 |
@@ -236,7 +282,7 @@ print(status_report_to_json(report))
 | L1 Meta-Loop | 工作日每日 07:59 | 市场感知、知识补给、Bootstrapping、Debate 分析 |
 | L2 Evolution | 工作日每日 00:00 | LLM 宏观改逻辑 + Optuna 微观调参、三级评估链、质量评分 |
 | L3 Portfolio | 工作日每日 19:00 | 因子筛选、正交化、信号合成、Verifier 校验（GAP-072 与信号管道解绑，equal_weight 权重每日重算） |
-| 期货信号管道 | 工作日每日 20:00 | 横截面信号报告（Ridge 权重按 cadence 每日重算，v2.104.0+7 默认 daily） |
+| 期货信号管道 | 工作日每日 20:00 | 横截面信号报告（v2.105.0 起因子选择与基础权重由 L3 组合提供，仅信号计算 + Regime 档位缩放权重调整） |
 
 ### 6 类因子强制审计
 
@@ -271,7 +317,7 @@ print(status_report_to_json(report))
 | `equal_weight` | 期货（默认） | 等权合成（enable_pca=True 时用 P2 PCA 权重） |
 | `sharpe_weight` | 期货（备用） | 因子夏普比率加权 |
 | `elastic_net` | 期货（备用） | L1+L2 正则化学习权重 |
-| `adaptive` | 通用（v2.56.0） | Sharpe 基权重 + Regime 自适应双维度（FactorFamily × FactorStyle）+ RegimeSmoother 平滑 |
+| `adaptive` | 通用（v2.56.0） | Sharpe 基权重 + Regime 自适应 style 维度（FactorStyle）+ RegimeSmoother 平滑 |
 
 ### Market Regime 自适应
 
@@ -279,9 +325,8 @@ print(status_report_to_json(report))
 
 `bull` / `bear` / `high_vol` / `low_vol` / `oscillate`
 
-- **FactorFamily 维度**：`REGIME_FAMILY_MULTIPLIERS`（17 家族 × 5 制度倍率表）
 - **FactorStyle 维度**（v2.56.0）：`REGIME_STYLE_MULTIPLIERS`（momentum/value/defensive 等 15 风格 × 5 制度）
-- **双维度调整**：`dimension="both"` 时 family×style 乘积，clamp 到 [0.5, 1.5]×base
+- **Style 维度调整**：按 FactorStyle 倍率调整，clamp 到 [0.5, 1.5]×base
 - **RegimeSmoother**：Regime 切换时权重指数平滑（默认 alpha=0.5, min_days=2）
 - **机构级优化（plans/28）**：多周期 HMM 后验概率 `regime_probs` → 概率混合权重（`probability_mix`，关闭/无 probs 回退硬查表）→ RegimeSmoother 不对称切换（`de_risk_alpha`/`re_risk_alpha`）→ 置信度熵标定 `exposure_scale` 仓位缩放（`confidence_scale`，Step 2.5 计算、组合整体缩放）→ BIC 状态数选择（防翻转）→ 制度样本外有效性验证（`validate_regime` CLI）→ `fts_regime_*` 观测指标（/metrics 审计）
 
@@ -377,6 +422,11 @@ python -m pytest tests/factor_engine/ -q
 
 # 查看覆盖率
 python -m pytest tests/ --cov=fts --cov-report=term-missing
+
+# 因子质检工作流程端到端验证（CTA 手册第六章）
+# 真实数据优先，--synthetic 用合成面板（CI/无网络，确定性）
+python scripts/verify_qa_workflow.py --days 300
+python scripts/verify_qa_workflow.py --days 150 --synthetic
 ```
 
 ---

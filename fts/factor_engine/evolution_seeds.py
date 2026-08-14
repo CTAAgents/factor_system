@@ -307,7 +307,7 @@ class SeedManager:
         import json
 
         inject_dir = self._owner.inject_dir
-        pool_path = Path("memory/knowledge/factors/factor_pool.json")
+        pool_path = Path(getattr(self._owner, "factor_pool_path", "memory/knowledge/factors/factor_pool.json"))
         if not inject_dir.exists():
             return seeds
 
@@ -641,7 +641,7 @@ class SeedManager:
         """C1 评估晋升接线：microstructure 候选 → L2 评估链 → 审计 → elite。
 
         复用 ``_evaluate_cross_section``（横截面评估，内置 ic≥0.03 & sharpe≥1.5 门槛）
-        与 ``_promote_to_elite``（重复/家族/去冗余护栏），与 L2 演化晋升完全同构；
+        与 ``_promote_to_elite``（重复/去冗余护栏），与 L2 演化晋升完全同构；
         单候选评估/审计异常降级跳过，不阻断整批。tick 数据不足时
         ``MicrostructureFactorGenerator.generate_batch`` 返回空（全 skipped）。
 

@@ -385,17 +385,6 @@ class EvolutionLoop:
         self.inject_dir = Path(inject_dir)
         self.memory_dir = Path(memory_dir)
         self.budget: BudgetConfig = budget or DEFAULT_BUDGET_CONFIG
-        # GAP-F10 (v2.73.0): 家族多样性上限配置化——
-        # 未显式传入 budget 时，max_per_family 回退到 FTSConfig（FTS_MAX_PER_FAMILY，缺省 15）。
-        # 注：DEFAULT_BUDGET_CONFIG 本身含 max_per_family 键，故仅以 budget is None 判定，
-        # 而非检查键是否存在（否则配置回退永不生效）。
-        if budget is None:
-            try:
-                from fts.config.settings import get_config
-
-                self.budget["max_per_family"] = get_config().max_per_family
-            except Exception:
-                pass  # 配置读取失败沿用 DEFAULT_BUDGET_CONFIG 缺省值 15
 
         # ── P1-3 (Phase 3, 26 计划 §8): 提前达标停止（保守默认关闭） ──
         # budget 未显式配置时回退 FTSConfig（env FTS_EVOLUTION_STOP_* 可控）；
@@ -449,8 +438,7 @@ class EvolutionLoop:
             self._decay_retire_slope = float(getattr(_micro_cfg, "decay_retire_slope", 0.20))
             self._decay_slope_min_points = int(getattr(_micro_cfg, "decay_slope_min_points", 6))
             self._decay_auto_retire_enabled = bool(getattr(_micro_cfg, "decay_auto_retire_enabled", True))
-            # GAP-XXX (v2.102.0): 结构性聚类配额配置（替代 max_per_family 家族配额，
-            # family 为来源标签非结构维度，多样性控制改由信号相关性承担）
+            # GAP-XXX (v2.102.0): 结构性聚类配额配置（多样性控制由信号相关性聚类承担）
             self._cluster_quota_enabled = bool(getattr(_micro_cfg, "structure_cluster_quota_enabled", True))
             self._cluster_max = int(getattr(_micro_cfg, "structure_cluster_max", 15))
             self._cluster_corr_threshold = float(getattr(_micro_cfg, "structure_cluster_corr_threshold", 0.85))
@@ -2167,8 +2155,7 @@ class EvolutionLoop:
     def _count_cluster_members(self, factor: FactorProgram) -> int:
         """结构簇规模代理：与既有 elite 信号 |corr| ≥ cluster_corr_threshold 的成员数。
 
-        结构性聚类配额（GAP-XXX）替代 max_per_family 家族配额：family 为知识注入
-        来源标签（非正交结构维度），多样性控制改由信号相关性承担。复用
+        结构性聚类配额（GAP-XXX）：多样性控制统一由信号相关性承担。复用
         _scan_elite_correlations 扫描逻辑；无既有 elite / 信号异常返回 0（放行）。
 
         Args:
@@ -2449,10 +2436,8 @@ class EvolutionLoop:
         except Exception:
             pass
 
-        # ── 多样性配额检查（GAP-077 v2.102.0）：结构簇配额替代 max_per_family 家族配额 ──
-        # family 是知识注入来源标签（非正交结构维度），多样性控制改由信号相关性承担：
+        # ── 多样性配额检查（GAP-077 v2.102.0）：信号相关性结构簇配额 ──
         # 统计与既有 elite |corr| ≥ cluster_corr_threshold 的同类成员数，≥ 上限拒绝晋升。
-        # 开关关闭时回退 max_per_family 旧逻辑（平滑迁移）。
         if self._cluster_quota_enabled:
             cluster_size = self._count_cluster_members(factor)
             if cluster_size >= self._cluster_max:
@@ -2465,35 +2450,6 @@ class EvolutionLoop:
                     getattr(self, "_trace_id", ""),
                 )
                 return None
-        else:
-            # ── 回退：max_per_family 家族配额（旧逻辑，平滑迁移） ──
-            factor_family = factor.get("family", "unknown")
-            max_per_family = self.budget.get("max_per_family", 15)
-            # GAP-070 (v2.98.0): 兜底家族 'other'/'unknown' 永久豁免上限——它们是
-            # "无法归类"的回收站家族，对其设限等价于对整个演化新因子晋升通道设总量
-            # 上限，压制演化空间；逻辑同质化保护已由 L2 准入去冗余（GAP-I206 相关性
-            # 预检 + 正交化闭环 + Gram-Schmidt 基底）承担。
-            if factor_family not in ("other", "unknown"):
-                try:
-                    repo = self._get_repo()
-                    existing_family = repo.get_by_family(
-                        family=factor_family,
-                        market=self.market,
-                        limit=100,
-                    )
-                    if len(existing_family) >= max_per_family:
-                        # GAP-F10 (v2.73.0): 家族拦截升级分级日志 + 结构化拒绝记录
-                        logger.warning(
-                            "[evo] 家族多样性限制拒绝晋升 [%s]: 家族 '%s' 已有 %d 个因子 (上限 %d, trace_id=%s)",
-                            factor_name,
-                            factor_family,
-                            len(existing_family),
-                            max_per_family,
-                            getattr(self, "_trace_id", ""),
-                        )
-                        return None
-                except Exception:
-                    pass
 
         fp = self.elite_dir / f"{factor['factor_id']}.json"
         # 将 factor 字段展开到顶层，方便 cli 直接读取
@@ -2721,7 +2677,6 @@ class EvolutionLoop:
             f_name = factor.get("name", "")
             f_source = factor.get("source", "")
             f_gen = factor.get("generation", 0)
-            f_family = factor.get("family", "unknown")
             f_parent_id = factor.get("parent_id")
             f_trace_id = factor.get("trace_id", "")
 
@@ -2730,7 +2685,6 @@ class EvolutionLoop:
                 factor_name=f_name,
                 factor_source=f_source,
                 factor_generation=f_gen,
-                factor_family=f_family,
                 factor_parent_id=f_parent_id,
                 market=self.market,
             )
@@ -2738,7 +2692,6 @@ class EvolutionLoop:
                 factor_id=f_id,
                 factor_name=f_name,
                 seed_name=lineage["seed_name"],
-                seed_family=lineage["seed_family"],
                 seed_market=lineage["seed_market"],
                 generation=lineage["generation"],
                 parent_id=f_parent_id,
@@ -2826,10 +2779,12 @@ class EvolutionLoop:
             factor_id = factor.get("factor_id")
             factor_name = factor.get("name", "?")
             factor_market: str = factor.get("market", "multi")
-            # 若因子未显式指定有效市场（multi/other 为默认值），使用演化上下文的市场
-            if factor_market in ("multi", "other") and self.market in ("futures", "stock"):
+            if self.market == "energy":
+                # 能源链专属工作流：统一强制 market="energy"（种子 dict 带 futures 穿透拦截）
                 factor_market = self.market
-            factor_family = factor.get("family", "other")
+            # 若因子未显式指定有效市场（multi/other 为默认值），使用演化上下文的市场
+            elif factor_market in ("multi", "other") and self.market in ("futures", "stock"):
+                factor_market = self.market
 
             l1 = evaluation.get("level_1_backtest", {})
 
@@ -2845,7 +2800,6 @@ class EvolutionLoop:
                 "generation": factor.get("generation", 0),
                 "trace_id": factor.get("trace_id"),
                 "market": factor_market,
-                "family": factor_family,
                 "is_elite": True,
                 "sharpe": l1.get("sharpe", 0.0),
                 "ic": l1.get("ic", 0.0),
@@ -3520,7 +3474,7 @@ class EvolutionLoop:
         """C1 评估晋升接线：microstructure 候选 → L2 评估链 → 审计 → elite。
 
         复用 ``_evaluate_cross_section``（横截面评估，内置 ic≥0.03 & sharpe≥1.5 门槛）
-        与 ``_promote_to_elite``（重复/家族/去冗余护栏），与 L2 演化晋升完全同构；
+        与 ``_promote_to_elite``（重复/去冗余护栏），与 L2 演化晋升完全同构；
         单候选评估/审计异常降级跳过，不阻断整批。tick 数据不足时
         ``MicrostructureFactorGenerator.generate_batch`` 返回空（全 skipped）。
 
@@ -4068,7 +4022,6 @@ class EvolutionLoop:
                     expression=expression,
                     name=factor_name,
                     market=self.market,
-                    family=parent.get("family", "operator"),
                     narrative=(f"算子演化: {expression} (基于父因子 {parent.get('name', '?')})"),
                     params={},
                     trace_id=trace_id,
@@ -4167,7 +4120,6 @@ class EvolutionLoop:
                 result,
                 name=f"op_evolved_{generation}_{parent.get('factor_id', '?')[:6]}",
                 market=self.market,
-                family=parent.get("family", "operator"),
                 narrative=(f"算子演化引擎: {result.best_expression} (基于父因子 {parent.get('name', '?')})"),
                 trace_id=trace_id,
                 parent_id=parent.get("factor_id", "?"),
@@ -4562,7 +4514,6 @@ class EvolutionLoop:
             "factor_id": factor.get("factor_id", ""),
             "name": factor.get("name", ""),
             "trace_id": trace_id,
-            "family": factor.get("family", ""),
         }
 
         l1 = evaluation.get("level_1_backtest", {})

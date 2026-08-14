@@ -226,7 +226,7 @@ class HighICScreener:
         # report.grade == "C" 且 report.veto_triggered 时阻止入库
 
     输入契约（缺失字段自动 skipped，不误杀）:
-        factor: dict（含 market / family / name）
+        factor: dict（含 market / name）
         evaluation: FactorEvaluation
             - level_1_backtest: ic/icir/sharpe/max_drawdown/monotonicity/
                                 oos_ratio/turnover_monthly/decay_6m/ic_volatility

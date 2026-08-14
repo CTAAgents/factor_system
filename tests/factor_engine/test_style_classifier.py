@@ -171,10 +171,10 @@ def _make_signal(fid: str, name: str, weight: float = 0.1) -> dict:
     }
 
 
-def test_adjustment_family_dimension_backward_compat() -> None:
-    """dimension='family' 保持 v2.55.0 行为（趋势因子 bull 下 ×1.3）。"""
+def test_adjustment_legacy_family_dimension_uses_style() -> None:
+    """dimension='family' 兼容遗留取值统一按 style 维度处理（bull 下 momentum ×1.3）。"""
     signals = [_make_signal("f1", "fut_trend_alpha")]
-    factors = [{"factor_id": "f1", "family": "trend", "name": "fut_trend_alpha"}]
+    factors = [{"factor_id": "f1", "name": "fut_trend_alpha"}]
     out = regime_adaptive_weight_adjustment(
         signals,
         {"regime": "bull"},
@@ -197,18 +197,17 @@ def test_adjustment_style_dimension() -> None:
     assert abs(out[0]["weight"] - 0.11) < 1e-6
 
 
-def test_adjustment_both_dimension_clamped() -> None:
-    """dimension='both' family×style 乘积并 clamp 到 [0.5, 1.5]。"""
-    # trend(1.3) × momentum(1.3) = 1.69 → clamp 到 1.5
+def test_adjustment_both_dimension_uses_style() -> None:
+    """dimension='both' 兼容遗留取值统一按 style 维度处理（无 family 乘积/clamp）。"""
     signals = [_make_signal("f1", "fut_trend_momentum", weight=0.1)]
-    factors = [{"factor_id": "f1", "family": "trend", "name": "fut_trend_momentum"}]
+    factors = [{"factor_id": "f1", "name": "fut_trend_momentum"}]
     out = regime_adaptive_weight_adjustment(
         signals,
         {"regime": "bull"},
         factors,
         dimension="both",
     )
-    assert abs(out[0]["weight"] - 0.15) < 1e-6
+    assert abs(out[0]["weight"] - 0.13) < 1e-6
 
 
 def test_adjustment_style_tags_precedence() -> None:
@@ -229,14 +228,14 @@ def test_adjustment_high_vol_decay_penalty() -> None:
     """high_vol 下衰减因子额外 ×0.8。"""
     signals = [_make_signal("f1", "fut_trend")]
     signals[0]["decay_6m"] = 0.30
-    factors = [{"factor_id": "f1", "family": "trend", "name": "fut_trend"}]
+    factors = [{"factor_id": "f1", "name": "fut_trend"}]
     out = regime_adaptive_weight_adjustment(
         signals,
         {"regime": "high_vol"},
         factors,
-        dimension="family",
+        dimension="style",
     )
-    # trend high_vol ×0.7，再衰减 ×0.8 → 0.056
+    # momentum high_vol ×0.7，再衰减 ×0.8 → 0.056
     assert abs(out[0]["weight"] - 0.1 * 0.7 * 0.8) < 1e-6
 
 

@@ -1,6 +1,6 @@
 # E.3 L4 状态库 SQLite 化详细设计（S2）
 
-> 版本: v2.104.0+16
+> 版本: v2.104.0+39
 > 关联: [E.2-storage-backend-comparison.md](./E.2-storage-backend-comparison.md)（S2 方案定位）、[E.1-duckdb-concurrency-design.md](./E.1-duckdb-concurrency-design.md)（现状基线）、[29-storage-convergence-plan.md](../plans/29-storage-convergence-plan.md)（P2 迁移、连接生命周期遗留登记）
 > 状态: **已实施（2026-08-13）**
 > 定位: 存储层后端替换（`state.duckdb` → SQLite WAL），API 契约不变，调用方零改动

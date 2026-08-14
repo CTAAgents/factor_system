@@ -17,6 +17,7 @@ import pandas as pd
 from fts.data_sources.trading_calendar import (
     TradingCalendar,
     mark_gap_anomalies,
+    mark_hold_anomalies,
     mark_panel_data_gaps,
 )
 
@@ -162,6 +163,58 @@ class TestMarkGapAnomalies:
         assert not mark_gap_anomalies(df).any()
 
 
+class TestMarkHoldAnomalies:
+    """持仓量突变标记（CTA 手册阶段1，v2.104.0+20）。"""
+
+    def _df(self, n: int = 30) -> pd.DataFrame:
+        idx = _weekdays("2024-01-01", n)
+        return pd.DataFrame(
+            {
+                "close": np.linspace(100, 102, n),
+                "hold": np.full(n, 1e5),
+            },
+            index=idx,
+        )
+
+    def test_normal_hold_no_anomaly(self) -> None:
+        """持仓量平稳 → 无异常标记。"""
+        assert not mark_hold_anomalies(self._df()).any()
+
+    def test_hold_spike_flagged(self) -> None:
+        """单日持仓量 3 倍突变 → 异常标记。"""
+        df = self._df()
+        i = 15
+        df.loc[df.index[i], "hold"] = 3e5  # 环比 +200% > 50%
+        anomaly = mark_hold_anomalies(df)
+        assert bool(anomaly.iloc[i]) is True
+        assert bool(anomaly.iloc[i - 1]) is False
+
+    def test_small_change_not_flagged(self) -> None:
+        """10% 正常波动 → 不标记。"""
+        df = self._df()
+        i = 15
+        df.loc[df.index[i], "hold"] = 1.1e5  # +10%
+        assert bool(mark_hold_anomalies(df).iloc[i]) is False
+
+    def test_hold_collapse_flagged(self) -> None:
+        """持仓量骤降至 0 → 异常标记。"""
+        df = self._df()
+        i = 10
+        df.loc[df.index[i], "hold"] = 0.0
+        anomaly = mark_hold_anomalies(df)
+        assert bool(anomaly.iloc[i]) is True
+
+    def test_single_row_no_anomaly(self) -> None:
+        """单行数据 → 全 False（不误标）。"""
+        df = self._df(n=1)
+        assert not mark_hold_anomalies(df).any()
+
+    def test_missing_hold_column_no_anomaly(self) -> None:
+        """无 hold 列 → 全 False（不崩溃）。"""
+        df = self._df().drop(columns=["hold"])
+        assert not mark_hold_anomalies(df).any()
+
+
 class TestPanelIntegration:
     def test_get_futures_panel_adds_gap_columns(self, mocker, monkeypatch):
         """get_futures_panel 面板 df 附加 data_gap/gap_anomaly 列。"""
@@ -191,6 +244,7 @@ class TestPanelIntegration:
         for df in panel.values():
             assert "data_gap" in df.columns
             assert "gap_anomaly" in df.columns
+            assert "hold_anomaly" in df.columns  # CTA 手册阶段1（v2.104.0+20）
             assert not df["data_gap"].any()  # 健康面板不误标
 
     def test_config_defaults_on(self):

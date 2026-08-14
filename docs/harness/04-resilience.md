@@ -1,6 +1,6 @@
 # FTS 韧性设计
 
-> 版本: v2.104.0+16
+> 版本: v2.104.0+39
 > 最后更新: 2026-08-05
 
 ---
@@ -130,6 +130,16 @@ state.json.bak.2    ← 上上上一次写入
 | `mcp_enabled=false`（默认） | Wind/iFinD MCP 未启用，`_call_mcp` 返回 None，明确跳过增强字段查询（is_available=False），主路径走 DUCKDB_CACHE/TQ/AKSHARE |
 | `mcp_enabled=true` 且已注入 handler | 直接调用注入的 MCP 客户端（`set_mcp_handler`） |
 | `mcp_enabled=true` 但未注入 handler | 抛 RuntimeError 显式初始化报错，避免静默失败掩盖配置错误 |
+
+### WorkFlow 执行韧性（v2.104.0+25，CTA 手册端到端工作流）
+
+| 场景 | 机制 |
+|:-----|:-----|
+| 单阶段动作执行 | 后台线程 subprocess，`StageAction.timeout` 超时熔断（超时标记 failed 不挂死），stdout/stderr 全量捕获留痕 |
+| 端到端执行 | 按阶段顺序推进、任一阶段失败即停（run 置 failed 可回放重试），`{factor_id}`/`{report_dir}` 动态占位符运行时解析（无 active 因子时显式报错不静默） |
+| JSON 产物解析 | `--json` 输出提取失败回退整体/末行扫描，解析失败仅产物为 None 不阻断执行 |
+| 批次状态持久化 | `WorkflowStore` SQLite WAL 双表（workflow_runs + stage_runs），崩溃/重启后可回放历史与继续审计 |
+| 前端静态托管 | `web/workflow_ui/dist` 未构建时返回引导提示（`npm run build`），不 500 |
 
 ### 数据源降级加固（v2.60.0，GAP-F04）
 

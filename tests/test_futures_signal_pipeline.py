@@ -1,13 +1,15 @@
 """
-tests/test_futures_signal_pipeline.py — 期货信号管道测试（_compute_ridge_weights + 辅助函数）
+tests/test_futures_signal_pipeline.py — 期货信号管道测试（L3 组合权重 + 辅助函数）
 
 覆盖:
-  - _compute_ridge_weights: sklearn 不可用回退、单因子/零因子、NaN 过滤、
-    训练样本不足、正常 Ridge 回归、显式 alpha、零系数回退
-  - _compute_factor_sign_flips: 正常截面 IC、空数据、少量品种
-  - _compute_composite_scores: 等权合成、Ridge 加权合成、方向校正
+  - _load_l3_combo_weights: 正常加载 / 缺失 / 损坏 / 空权重（严格模式退出）
+  - _load_l3_combo_factors: 按 L3 组合因子名过滤 / 缺失跳过 / 全缺失退出
+  - _classify_factor_category / _apply_regime_weight_adjustment: Regime 档位缩放
+  - _compute_per_variety_weights: 品种级 IC 自适应权重
+  - _compute_composite_scores: 加权合成（方向校正恒为空 dict）
 """
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -21,11 +23,13 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from futures_signal_pipeline import (
+    _apply_regime_weight_adjustment,
     _classify_delta_moves,
+    _classify_factor_category,
     _compute_composite_scores,
-    _compute_factor_sign_flips,
     _compute_per_variety_weights,
-    _compute_ridge_weights,
+    _load_l3_combo_factors,
+    _load_l3_combo_weights,
     _load_signal_factors,
     load_futures_elite_factors,
 )
@@ -196,346 +200,137 @@ class TestComputePerVarietyWeights:
         assert result["RB0"]["f_b"] == 1.0
 
 
-# ─── _compute_ridge_weights ──────────────────────────────────────────────
+# ─── L3 组合权重（v2.105.0：因子选择与基础权重由 L3 组合层负责）───
 
 
-class TestComputeRidgeWeights:
-    """_compute_ridge_weights 全覆盖测试。"""
+class TestLoadL3ComboWeights:
+    """_load_l3_combo_weights 严格模式测试。"""
 
-    def test_sklearn_not_available_fallback_to_equal_weight(self):
-        """sklearn 不可用时回退到等权。"""
-        panel, dates = _make_panel(n_symbols=3, n_days=120)
-        factor_names = ["f1", "f2", "f3"]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _make_factor_sign_flips(factor_names)
-
-        with patch.dict(sys.modules, {"sklearn.linear_model": None}):
-            with patch("futures_signal_pipeline.RidgeCV", create=True):
-                weights = _compute_ridge_weights(
-                    signal_matrix,
-                    panel,
-                    dates,
-                    flips,
-                    lookback=60,
-                )
-
-        assert len(weights) == 3
-        assert all(abs(w - 1.0 / 3) < 0.001 for w in weights.values())
-
-    def test_single_factor_equal_weight(self):
-        """单因子 → 等权（权重=1.0）。"""
-        panel, dates = _make_panel(n_symbols=2, n_days=60)
-        factor_names = ["f1"]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _make_factor_sign_flips(factor_names)
-
-        weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips,
-            lookback=30,
+    def test_load_normal(self, tmp_path):
+        """正常加载 → 返回 {name: weight}。"""
+        fp = tmp_path / "factor_weights.json"
+        fp.write_text(
+            json.dumps({"weights": {"f_a": 0.5, "f_b": 0.3}, "n_factors": 2}),
+            encoding="utf-8",
         )
+        weights = _load_l3_combo_weights(weights_path=fp)
+        assert weights == {"f_a": 0.5, "f_b": 0.3}
 
-        assert weights == {"f1": 1.0}
+    def test_missing_file_exits(self, tmp_path):
+        """文件缺失 → 严格模式 sys.exit(1)。"""
+        with pytest.raises(SystemExit) as e:
+            _load_l3_combo_weights(weights_path=tmp_path / "nope.json")
+        assert e.value.code == 1
 
-    def test_zero_factors_empty_dict(self):
-        """零因子 → 返回空 dict（所有品种因子集为空时）。"""
-        panel, dates = _make_panel(n_symbols=1, n_days=60)
-        signal_matrix = {"RB0": {}}
-        flips = {}
+    def test_corrupt_json_exits(self, tmp_path):
+        """JSON 损坏 → 严格模式 sys.exit(1)。"""
+        fp = tmp_path / "factor_weights.json"
+        fp.write_text("{not valid json", encoding="utf-8")
+        with pytest.raises(SystemExit) as e:
+            _load_l3_combo_weights(weights_path=fp)
+        assert e.value.code == 1
 
-        weights = _compute_ridge_weights(signal_matrix, panel, dates, flips)
-        assert weights == {}
-
-    def test_common_intersection_reduces_to_one(self):
-        """品种间因子交集只剩 1 个 → 等权回退。"""
-        panel, dates = _make_panel(n_symbols=3, n_days=80)
-        factor_names = ["f1", "f2", "f3"]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        # 删除 RB1 和 RB2 的 f2, f3，使交集只剩 f1
-        del signal_matrix["RB1"]["f2"]
-        del signal_matrix["RB1"]["f3"]
-        del signal_matrix["RB2"]["f2"]
-        del signal_matrix["RB2"]["f3"]
-        flips = _make_factor_sign_flips(factor_names)
-
-        weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips,
-            lookback=40,
-        )
-
-        assert weights == {"f1": 1.0}
-
-    def test_high_nan_factors_excluded(self):
-        """NaN 率 > 50% 的因子被排除。"""
-        panel, dates = _make_panel(n_symbols=4, n_days=80)
-        factor_names = ["f_good", "f_bad"]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _make_factor_sign_flips(factor_names)
-
-        # 让 f_bad 全部为 NaN
-        for sym in signal_matrix:
-            signal_matrix[sym]["f_bad"] = np.full(
-                len(signal_matrix[sym]["f_bad"]),
-                np.nan,
-            )
-
-        # 只剩 f_good 1 个因子 → 等权
-        weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips,
-            lookback=40,
-        )
-
-        assert "f_bad" not in weights
-        assert "f_good" in weights
-
-    def test_insufficient_samples_fallback(self):
-        """训练样本不足 → 回退到等权。"""
-        panel, dates = _make_panel(n_symbols=1, n_days=10)  # 极少数据
-        factor_names = ["f1", "f2", "f3"]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _make_factor_sign_flips(factor_names)
-
-        weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips,
-            lookback=5,
-        )
-
-        assert len(weights) == 3
-        assert all(abs(w - 1.0 / 3) < 0.001 for w in weights.values())
-
-    def test_normal_ridge_regression(self):
-        """正常 Ridge 回归 → 权重和为 1，强因子获得更高权重。"""
-        panel, dates = _make_panel(n_symbols=5, n_days=120)
-        factor_names = ["f1", "f2", "f3", "f4"]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _make_factor_sign_flips(factor_names)
-
-        weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips,
-            lookback=60,
-        )
-
-        assert len(weights) == 4
-        assert abs(sum(weights.values()) - 1.0) < 0.001
-        assert all(w >= 0 for w in weights.values())
-
-    def test_explicit_alpha_parameter(self):
-        """显式指定 alpha → 使用 Ridge(alpha=...) 而非 RidgeCV。"""
-        panel, dates = _make_panel(n_symbols=5, n_days=120)
-        factor_names = ["f1", "f2", "f3"]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _make_factor_sign_flips(factor_names)
-
-        weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips,
-            lookback=60,
-            alpha=10.0,
-        )
-
-        assert len(weights) == 3
-        assert abs(sum(weights.values()) - 1.0) < 0.001
-
-    def test_weights_sum_to_one(self):
-        """权重归一化：所有权重之和为 1。"""
-        panel, dates = _make_panel(n_symbols=5, n_days=150)
-        factor_names = [f"f{i}" for i in range(10)]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _make_factor_sign_flips(factor_names)
-
-        weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips,
-            lookback=80,
-        )
-
-        assert abs(sum(weights.values()) - 1.0) < 0.001
-
-    def test_direction_flip_affects_weights(self):
-        """方向校正影响权重：反转信号后的因子权重应不同。"""
-        panel, dates = _make_panel(n_symbols=5, n_days=120)
-        factor_names = ["f1", "f2", "f3"]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-
-        # 正常权重
-        flips_normal = _make_factor_sign_flips(factor_names)
-        weights_normal = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips_normal,
-            lookback=60,
-        )
-
-        # 全部反转
-        flips_reversed = {f: -1.0 for f in factor_names}
-        weights_reversed = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips_reversed,
-            lookback=60,
-        )
-
-        # 权重可能不同（因为 Ridge 取 abs(coef)，方向反转改变特征空间，
-        # 但 abs 操作使权重只取决于预测强度而非方向）
-        assert len(weights_normal) == len(weights_reversed)
-
-    def test_empty_cross_symbol_intersection_uses_coverage(self):
-        """回归: 全品种因子交集为空时（品种多、因子执行成功集合不同），
-        覆盖率阈值过滤应保留覆盖>=50%品种的因子，避免权重静默回退等权。"""
-        rng = np.random.default_rng(7)
-        panel, dates = _make_panel(n_symbols=5, n_days=120)
-        factor_names = ["f1", "f2", "f3", "f4"]
-        signal_matrix: dict[str, dict[str, np.ndarray]] = {}
-        for i, sym in enumerate(panel):
-            signal_matrix[sym] = {f: rng.normal(0, 1, len(panel[sym])) for f in factor_names}
-            # 前 4 只品种各缺 1 个因子 → 全品种交集为空，但各因子覆盖 4/5 >= 50%
-            if i < 4:
-                del signal_matrix[sym][f"f{i + 1}"]
-        flips = _make_factor_sign_flips(factor_names)
-
-        weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips,
-            lookback=60,
-        )
-
-        assert len(weights) == 4, f"覆盖率过滤应保留 4 个因子, 实际 {len(weights)}"
-        assert abs(sum(weights.values()) - 1.0) < 1e-6
-
-    def test_max_weight_cap_limits_single_factor(self):
-        """max_weight_cap=0.30：单因子权重不超过上限，其余因子按比例承接。"""
-        panel, dates = _make_panel(n_symbols=5, n_days=120)
-        factor_names = [f"f{i}" for i in range(5)]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _make_factor_sign_flips(factor_names)
-
-        weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips,
-            lookback=60,
-            max_weight_cap=0.30,
-        )
-
-        assert len(weights) == 5
-        assert abs(sum(weights.values()) - 1.0) < 0.001
-        assert max(weights.values()) <= 0.30 + 1e-6
-
-    def test_max_weight_cap_none_keeps_original(self):
-        """max_weight_cap=None：不截断，保持 Ridge 原始权重分布。"""
-        panel, dates = _make_panel(n_symbols=5, n_days=120)
-        factor_names = [f"f{i}" for i in range(5)]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _make_factor_sign_flips(factor_names)
-
-        weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips,
-            lookback=60,
-            max_weight_cap=None,
-        )
-
-        assert len(weights) == 5
-        assert abs(sum(weights.values()) - 1.0) < 0.001
-
-    def test_max_weight_cap_below_equal_weight_clamped(self):
-        """cap 低于等权时自动抬升到等权下限（避免无法归一化）。"""
-        panel, dates = _make_panel(n_symbols=3, n_days=120)
-        factor_names = [f"f{i}" for i in range(3)]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _make_factor_sign_flips(factor_names)
-
-        weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips,
-            lookback=60,
-            max_weight_cap=0.10,  # < 1/3 等权下限
-        )
-
-        assert len(weights) == 3
-        assert abs(sum(weights.values()) - 1.0) < 0.001
-        assert max(weights.values()) <= 1.0 / 3 + 1e-6
-
-    def test_max_weight_cap_single_factor_ignored(self):
-        """单因子时 cap 不生效（等权权重=1.0 保持）。"""
-        panel, dates = _make_panel(n_symbols=2, n_days=60)
-        factor_names = ["f1"]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _make_factor_sign_flips(factor_names)
-
-        weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            dates,
-            flips,
-            lookback=30,
-            max_weight_cap=0.30,
-        )
-
-        assert weights == {"f1": 1.0}
+    def test_empty_weights_exits(self, tmp_path):
+        """权重为空 → 严格模式 sys.exit(1)。"""
+        fp = tmp_path / "factor_weights.json"
+        fp.write_text(json.dumps({"weights": {}}), encoding="utf-8")
+        with pytest.raises(SystemExit) as e:
+            _load_l3_combo_weights(weights_path=fp)
+        assert e.value.code == 1
 
 
-# ─── _compute_factor_sign_flips ──────────────────────────────────────────
+class TestLoadL3ComboFactors:
+    """_load_l3_combo_factors 过滤测试。"""
+
+    def test_filter_by_l3_names(self):
+        """按 L3 组合因子名过滤；缺失因子跳过（不阻断）。"""
+        l3 = {"f_a": 0.5, "f_b": 0.3, "f_missing": 0.2}
+        db_factors = [
+            {"name": "f_a", "code": "..."},
+            {"name": "f_b", "code": "..."},
+            {"name": "f_other", "code": "..."},
+        ]
+        with patch(
+            "futures_signal_pipeline.load_futures_elite_factors_from_db",
+            return_value=db_factors,
+        ):
+            kept = _load_l3_combo_factors(l3)
+        assert {f["name"] for f in kept} == {"f_a", "f_b"}
+
+    def test_all_missing_exits(self):
+        """L3 组合因子全部缺失 → 严格模式 sys.exit(1)。"""
+        with patch(
+            "futures_signal_pipeline.load_futures_elite_factors_from_db",
+            return_value=[{"name": "f_other", "code": "..."}],
+        ):
+            with pytest.raises(SystemExit) as e:
+                _load_l3_combo_factors({"f_a": 1.0})
+        assert e.value.code == 1
 
 
-class TestComputeFactorSignFlips:
-    """_compute_factor_sign_flips 测试。"""
+class TestClassifyFactorCategory:
+    """_classify_factor_category 名称后缀启发式分类测试。"""
 
-    def test_normal_computation(self):
-        """正常截面 IC 计算 → 返回所有因子的方向校正值。"""
-        panel, dates = _make_panel(n_symbols=5, n_days=120)
-        factor_names = ["f1", "f2"]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _compute_factor_sign_flips(signal_matrix, panel, dates)
+    def test_reversal_priority_over_trend(self):
+        """basis 含 momentum 关键词 → 归 reversal（优先级高于 trend）。"""
+        assert _classify_factor_category("fut_basis_momentum_g18") == "reversal"
 
-        assert len(flips) == 2
-        assert all(v in (1.0, -1.0) for v in flips.values())
+    def test_trend(self):
+        assert _classify_factor_category("fut_aroon") == "trend"
+        assert _classify_factor_category("fut_intraday_momentum_g6") == "trend"
 
-    def test_empty_signal_matrix(self):
-        """空信号矩阵 → 抛出 StopIteration（无法获取第一个品种）。"""
-        with pytest.raises(StopIteration):
-            _compute_factor_sign_flips({}, {}, [])
+    def test_volume(self):
+        assert _classify_factor_category("fut_volume_price_corr") == "volume"
 
-    def test_few_common_symbols(self):
-        """共同品种 < 5 → IC 计算跳过，默认不反转。"""
-        panel, dates = _make_panel(n_symbols=2, n_days=60)
-        factor_names = ["f1"]
-        signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _compute_factor_sign_flips(
-            signal_matrix,
-            panel,
-            dates,
-            ic_lookback=10,
-        )
+    def test_neutral_fallback(self):
+        assert _classify_factor_category("unknown_factor_xyz") == "neutral"
 
-        assert flips["f1"] == 1.0  # 样本不足，默认不反转
+
+class TestApplyRegimeWeightAdjustment:
+    """_apply_regime_weight_adjustment 档位缩放测试。"""
+
+    def _weights(self):
+        return {
+            "fut_bias_g17": 0.4,  # reversal
+            "fut_aroon": 0.3,  # trend
+            "fut_volume_price_corr": 0.3,  # volume
+        }
+
+    def test_bull_amplifies_trend(self):
+        """趋势制度放大 trend 类、压缩 reversal 类。"""
+        w = self._weights()
+        out = _apply_regime_weight_adjustment(w, {"regime": "bull"}, [])
+        assert abs(sum(out.values()) - 1.0) < 1e-6
+        assert out["fut_aroon"] / w["fut_aroon"] > out["fut_bias_g17"] / w["fut_bias_g17"]
+
+    def test_oscillate_amplifies_reversal(self):
+        """震荡制度放大 reversal 类、压缩 trend 类。"""
+        w = self._weights()
+        out = _apply_regime_weight_adjustment(w, {"regime": "oscillate"}, [])
+        assert abs(sum(out.values()) - 1.0) < 1e-6
+        assert out["fut_bias_g17"] / w["fut_bias_g17"] > out["fut_aroon"] / w["fut_aroon"]
+
+    def test_high_vol_equal_scale_preserves_ratio(self):
+        """高波动制度全部 ×0.8，归一化后各因子权重比例与基础一致。"""
+        w = self._weights()
+        out = _apply_regime_weight_adjustment(w, {"regime": "high_vol"}, [])
+        assert abs(sum(out.values()) - 1.0) < 1e-6
+        for name, wi in w.items():
+            assert abs(out[name] - wi) < 1e-6
+
+    def test_unknown_keeps_base(self):
+        """unknown 无缩放配置 → 保持基础权重（归一化）。"""
+        w = self._weights()
+        out = _apply_regime_weight_adjustment(w, {"regime": "unknown"}, [])
+        assert abs(sum(out.values()) - 1.0) < 1e-6
+        for name, wi in w.items():
+            assert abs(out[name] - wi) < 1e-6
+
+    def test_keeps_all_factors(self):
+        """缩放不丢弃因子（不构成因子选择）。"""
+        w = self._weights()
+        out = _apply_regime_weight_adjustment(w, {"regime": "bear"}, [])
+        assert set(out.keys()) == set(w.keys())
 
 
 # ─── _compute_composite_scores ───────────────────────────────────────────
@@ -565,12 +360,12 @@ class TestComputeCompositeScores:
         assert len(scores) == 3
         assert all(isinstance(v, float) for v in scores.values())
 
-    def test_ridge_weighted_composite(self):
-        """Ridge 加权合成 → 权重应用于因子信号。"""
+    def test_weighted_composite(self):
+        """加权合成（L3 组合基础权重）→ 权重应用于因子信号。"""
         panel, dates = _make_panel(n_symbols=3, n_days=60)
         factor_names = ["f1", "f2"]
         signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = _make_factor_sign_flips(factor_names)
+        flips = {}
 
         factors = [
             {"name": "f1", "params": {}},
@@ -586,12 +381,12 @@ class TestComputeCompositeScores:
 
         assert len(scores) == 3
 
-    def test_sign_flip_applied(self):
-        """方向反转因子信号值应被反转。"""
+    def test_empty_sign_flips_keeps_signal(self):
+        """方向校正空 dict（v2.105.0 语义）→ 信号不反转。"""
         panel, dates = _make_panel(n_symbols=2, n_days=30)
         factor_names = ["f1"]
         signal_matrix = _make_signal_matrix(panel, factor_names)
-        flips = {"f1": -1.0}  # 反转
+        flips = {}  # 方向校正已移除，恒为空
 
         factors = [{"name": "f1", "params": {}}]
         scores, details = _compute_composite_scores(
@@ -600,11 +395,11 @@ class TestComputeCompositeScores:
             factors,
         )
 
-        # 验证信号被反转
+        # 空 flips → 信号保持原始方向（flip=+1）
         for sym, d in details.items():
             orig = signal_matrix[sym]["f1"][-1]
             if np.isfinite(orig):
-                assert abs(d["f1"] - (-orig)) < 0.001
+                assert abs(d["f1"] - orig) < 0.001
             else:
                 assert d["f1"] == 0.0
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -71,7 +72,6 @@ def sample_factor():
         "turnover_monthly": 0.35,
         "decay_6m": 0.03,
         "market": "stock",
-        "family": "technical",
         "is_elite": False,
         "metadata": {"backtest_period": "2020-2025"},
     }
@@ -89,7 +89,6 @@ def sample_factors_batch():
             "market": "stock" if i < 5 else "futures",
             "status": "active" if i < 8 else "failed",
             "is_elite": i < 6,
-            "family": f"family_{i % 3}",
             "decay_6m": round(0.02 + i * 0.01, 3),
         }
         for i in range(10)
@@ -775,34 +774,6 @@ class TestRepositoryInit:
 class TestAdvancedQueries:
     """高级查询 API 测试。"""
 
-    def test_get_by_family(self, repo, sample_factors_batch):
-        """测试按家族查询。"""
-        for f in sample_factors_batch:
-            repo.create_factor(f)
-
-        # 查询特定家族
-        factors = repo.get_by_family("family_0")
-        assert len(factors) > 0
-        for f in factors:
-            assert f["family"] == "family_0"
-
-    def test_get_by_family_with_filters(self, repo, sample_factors_batch):
-        """测试按家族查询带筛选条件。"""
-        for f in sample_factors_batch:
-            repo.create_factor(f)
-
-        # 带市场和阈值过滤
-        factors = repo.get_by_family("family_1", market="stock", min_sharpe=1.5)
-        for f in factors:
-            assert f["family"] == "family_1"
-            assert f["market"] == "stock"
-            assert f["sharpe"] >= 1.5
-
-    def test_get_by_family_empty(self, repo):
-        """测试查询不存在的家族。"""
-        factors = repo.get_by_family("nonexistent_family")
-        assert len(factors) == 0
-
     def test_get_eligible(self, repo, sample_factors_batch):
         """测试筛选合格因子。"""
         for f in sample_factors_batch:
@@ -829,29 +800,43 @@ class TestAdvancedQueries:
             assert f["sharpe"] >= 1.5
             assert f["is_elite"] is True
 
-    def test_get_diverse_factors(self, repo, sample_factors_batch):
-        """测试因子多样性选择。"""
+    @patch("fts.factor_engine.factor_clustering.cluster_factors_by_signal")
+    def test_get_diverse_factors(self, mock_cluster, repo, sample_factors_batch):
+        """测试因子多样性选择（按信号聚类簇配额）。"""
         for f in sample_factors_batch:
             f["is_elite"] = True
             f["status"] = "active"
             repo.create_factor(f)
 
-        # 获取多样化因子
+        captured: dict = {}
+
+        def _fake_cluster(code_factors, **kwargs):
+            fids = [f["factor_id"] for f in code_factors]
+            result = {
+                "assign": {fid: i % 3 for i, fid in enumerate(fids)},
+                "cluster_order": [0, 1, 2],
+                "cluster_members": {c: [fid for i, fid in enumerate(fids) if i % 3 == c] for c in range(3)},
+            }
+            captured["result"] = result
+            return result
+
+        mock_cluster.side_effect = _fake_cluster
+
+        # 获取多样化因子（eligible=5 > total_count=4 → 触发簇配额选择）
         diverse = repo.get_diverse_factors(
             market="stock",
-            total_count=5,
-            max_per_family=2,
+            total_count=4,
+            max_per_cluster=2,
         )
-        assert len(diverse) <= 5
+        assert len(diverse) <= 4
 
-        # 检查家族多样性
-        family_counts: dict[str, int] = {}
+        # 检查簇多样性：每个信号簇最多 2 个
+        assign = captured["result"]["assign"]
+        cluster_counts: dict[int, int] = {}
         for f in diverse:
-            fam = f.get("family", "unknown")
-            family_counts[fam] = family_counts.get(fam, 0) + 1
-
-        # 每个家族最多 2 个
-        for count in family_counts.values():
+            cid = assign.get(f["factor_id"])
+            cluster_counts[cid] = cluster_counts.get(cid, 0) + 1
+        for count in cluster_counts.values():
             assert count <= 2
 
     def test_get_diverse_factors_small_pool(self, repo, sample_factors_batch):
@@ -903,33 +888,3 @@ class TestAdvancedQueries:
         """测试不存在因子的谱系查询。"""
         lineage = repo.get_factor_lineage("nonexistent_id")
         assert lineage is None
-
-    def test_get_family_distribution(self, repo, sample_factors_batch):
-        """测试获取家族分布统计。"""
-        for f in sample_factors_batch:
-            repo.create_factor(f)
-
-        dist = repo.get_family_distribution()
-        assert len(dist) > 0
-
-        # 检查统计字段
-        for item in dist:
-            assert "family" in item
-            assert "count" in item
-            assert "avg_sharpe" in item
-            assert item["count"] > 0
-
-    def test_get_family_distribution_with_market(self, repo, sample_factors_batch):
-        """测试按市场过滤的家族分布。"""
-        for f in sample_factors_batch:
-            repo.create_factor(f)
-
-        stock_dist = repo.get_family_distribution(market="stock")
-        assert len(stock_dist) > 0
-        for item in stock_dist:
-            assert item["count"] > 0
-
-    def test_get_family_distribution_empty(self, repo):
-        """测试空数据库的家族分布。"""
-        dist = repo.get_family_distribution()
-        assert len(dist) == 0

@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.104.0+16
+> 版本: v2.104.0+39
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -28,6 +28,18 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 ---
 
 ## 2. 已完成里程碑
+
+### CTA 手册 WorkFlow 端到端工作流 UI（2026-08-14，build bump v2.104.0+25）
+
+**完成时间**: 2026-08-14
+
+**核心产出**:
+- ✅ 后端 `fts/workflow/` 子包：stages.py（11 阶段 + 质检闭环 = 12 节点，动作↔CLI 命令映射含 `{factor_id}`/`{report_dir}` 动态占位符）/ executor.py（WorkflowExecutor 单阶段后台线程 subprocess + 端到端顺序推进失败即停 + 超时熔断 + JSON 产物解析 + 批次状态汇总同步）/ store.py（WorkflowStore SQLite WAL 双表持久化）
+- ✅ `fts/monitor/http_server.py` 扩展：GET /workflow 托管 `web/workflow_ui/dist` 构建产物 + WorkFlow API（stages/runs/runs{id}/qa/board + POST runs/run_all/stage-action-run，懒加载单例）
+- ✅ 前端 `web/workflow_ui/` React18 + Vite SPA：StageFlow 阶段节点流实时轮询、端到端/单动作执行、批次历史、阶段详情弹窗（日志 + JSON 产物）、质检看板页（QA 7 状态 + 预警），hash 路由零依赖，构建产物 152KB
+- ✅ 种子数据修复：27 个缺 params 种子因子补 `params: {}`（GAP-118 关闭），`fts seed validate` 恢复全绿
+- ✅ 测试 tests/workflow/ 3 文件 28 用例 + ruff/mypy 全绿
+- ✅ 真实端到端实测：s1→s7 全绿（数据基建/因子库挖掘/预处理/IC-IR/Regime/多因子合成/五层调仓回测），s8 暴露存量 catalog verify JSON↔DuckDB 快照漂移（GAP-119 登记）
 
 ### v0.1.0（已完成）
 

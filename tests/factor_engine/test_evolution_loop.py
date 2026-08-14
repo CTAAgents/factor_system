@@ -783,7 +783,7 @@ def test_generate_operator_factor_constant_precheck_rejected(tmp_memory_dir, tmp
         llm_client=mock_llm_client,
         market="futures",
     )
-    parent = {"factor_id": "fct_p", "name": "p", "family": "trend"}
+    parent = {"factor_id": "fct_p", "name": "p"}
 
     def _fixed_choice(seq):
         return "ts_mean" if "ts_mean" in seq else seq[0]
@@ -835,7 +835,6 @@ def test_cross_section_prefilter_uses_real_cross_section_returns(tmp_memory_dir,
         "close",
         "cs_repro",
         market="stock",
-        family="op",
         narrative="t",
         trace_id="t",
     )
@@ -878,7 +877,6 @@ def test_cross_section_prefilter_rejects_constant_factor(tmp_memory_dir, tmp_eli
         "sub(close, close)",
         "cs_const",
         market="stock",
-        family="op",
         narrative="t",
         trace_id="t",
     )
@@ -4990,10 +4988,9 @@ class TestGapF16PromoteToElite:
     """_promote_to_elite 各拒绝分支 + 成功路径。"""
 
     @staticmethod
-    def _mock_repo(loop, get_factor_by_name=None, get_by_family=None, get_factor=None):
+    def _mock_repo(loop, get_factor_by_name=None, get_factor=None):
         mock_repo = MagicMock()
         mock_repo.get_factor_by_name.return_value = get_factor_by_name
-        mock_repo.get_by_family.return_value = get_by_family if get_by_family is not None else []
         mock_repo.get_factor.return_value = get_factor
         loop._get_repo = MagicMock(return_value=mock_repo)
         return mock_repo
@@ -5005,7 +5002,6 @@ class TestGapF16PromoteToElite:
             "name": name,
             "code": "def factor_program(data, params):\n    import numpy as np\n    return data['close']",
             "params": {},
-            "family": "trend",
             "market": "multi",
             "source": "macro_evolution",
             "parent_id": None,
@@ -5045,42 +5041,6 @@ class TestGapF16PromoteToElite:
         loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
         self._mock_repo(loop, get_factor_by_name={"factor_id": "fct_existing"})
         assert loop._promote_to_elite(self._make_factor(), self._make_evaluation(), shadow_observe=False) is None
-
-    def test_promote_family_limit_returns_none(self, tmp_memory_dir, tmp_elite_dir):
-        """家族因子数达上限 → 返回 None（结构簇配额关闭时回退 max_per_family 旧逻辑）。"""
-        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
-        loop.budget["max_per_family"] = 2
-        loop._cluster_quota_enabled = False  # GAP-077: 默认走结构簇配额，显式关闭以覆盖 max_per_family 回退路径
-        self._mock_repo(loop, get_by_family=[{"factor_id": "a"}, {"factor_id": "b"}])
-        assert loop._promote_to_elite(self._make_factor(), self._make_evaluation(), shadow_observe=False) is None
-
-    def test_promote_family_limit_other_exempt(self, tmp_memory_dir, tmp_elite_dir):
-        """兜底家族 'other' 达上限仍晋升（GAP-070：永久豁免）。"""
-        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
-        loop.budget["max_per_family"] = 2
-        self._mock_repo(loop, get_by_family=[{"factor_id": "a"}, {"factor_id": "b"}])
-        self._mock_screen_grade(loop)
-        loop.elite_tracker.init_tracker = MagicMock()
-        loop._check_elite_correlation = MagicMock(return_value=None)
-        factor = self._make_factor(fid="fct_prom070a", name="promote_other")
-        factor["family"] = "other"
-        fp = loop._promote_to_elite(factor, self._make_evaluation(), shadow_observe=False)
-        assert fp is not None
-        assert fp.exists()
-
-    def test_promote_family_limit_unknown_exempt(self, tmp_memory_dir, tmp_elite_dir):
-        """兜底家族 'unknown' 达上限仍晋升（GAP-070：永久豁免）。"""
-        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
-        loop.budget["max_per_family"] = 2
-        self._mock_repo(loop, get_by_family=[{"factor_id": "a"}, {"factor_id": "b"}])
-        self._mock_screen_grade(loop)
-        loop.elite_tracker.init_tracker = MagicMock()
-        loop._check_elite_correlation = MagicMock(return_value=None)
-        factor = self._make_factor(fid="fct_prom070b", name="promote_unknown")
-        factor["family"] = "unknown"
-        fp = loop._promote_to_elite(factor, self._make_evaluation(), shadow_observe=False)
-        assert fp is not None
-        assert fp.exists()
 
     def test_promote_multiple_test_fail_returns_none(self, tmp_memory_dir, tmp_elite_dir):
         """多重检验未通过 → 返回 None。"""

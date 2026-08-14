@@ -2,7 +2,7 @@
 tests/factor_engine/test_alternative_sentiment.py — C2 舆情情感因子生成器测试
 
 覆盖：词典打分（积极/消极/中性/混合/否定反转/无命中/空）/ 聚合（均值/离散/变化率
-手算对照）/ 契约字段 / 命名与家族 / 零未来截断一致性 / 窗口自适应 / 降级（空新闻/
+手算对照）/ 契约字段 / 命名与风格 / 零未来截断一致性 / 窗口自适应 / 降级（空新闻/
 少记录/少日/缺列）/ 批量生成 / 坏品种跳过 / CLI 3 用例。
 """
 
@@ -127,7 +127,6 @@ class TestSentimentGenerator:
         f = cand.factor
         assert f["factor_id"].startswith("fct_")
         assert f["name"] == "sent_RB0_sent_mean"
-        assert f["family"] == "behavioral"
         assert f["market"] == "futures"
         assert f["signature"]["frequency"] == "daily"
         assert f["signature"]["output_type"] == "signal"

@@ -3,9 +3,8 @@
 覆盖:
     1. normalize_factor_signature: 新版/旧版/空/非列表字段
     2. _map_output_type / detect_factor_market
-    3. normalize_factor_program: signature/market/family/symbols/kind 补全全路径
-    4. _infer_factor_family: 全部家族推断分支
-    5. _get_evolution_version / EVOLUTION_VERSION
+    3. normalize_factor_program: signature/market/symbols/kind 补全全路径
+    4. _get_evolution_version / EVOLUTION_VERSION
 """
 
 from __future__ import annotations
@@ -24,7 +23,6 @@ from fts.factor_engine.contracts import (  # noqa: E402
     EVOLUTION_VERSION,
     FactorKind,
     _get_evolution_version,
-    _infer_factor_family,
     _map_output_type,
     detect_factor_market,
     normalize_factor_program,
@@ -136,14 +134,6 @@ class TestNormalizeFactorProgram:
         f = normalize_factor_program({"name": "x"})
         assert f["market"] == "multi"
 
-    def test_family_standard_kept(self):
-        f = normalize_factor_program({"name": "x", "family": "trend"})
-        assert f["family"] == "trend"
-
-    def test_family_nonstandard_reinferred(self):
-        f = normalize_factor_program({"name": "momentum_alpha"})
-        assert f["family"] == "trend"
-
     def test_symbols_filled_empty(self):
         f = normalize_factor_program({"name": "x"})
         assert f["symbols"] == []
@@ -172,57 +162,6 @@ class TestNormalizeFactorProgram:
         original = {"name": "x"}
         normalized = normalize_factor_program(original)
         assert normalized is not original
-
-
-# ─── _infer_factor_family ──────────────────────────────────
-
-
-class TestInferFactorFamily:
-    def test_trend_keywords(self):
-        for name in ("trend_follow", "momentum_5d", "breakout_20", "follow_trend"):
-            assert _infer_factor_family({"name": name}) == "trend"
-
-    def test_mean_reversion_keywords(self):
-        for name in ("mean_reversion", "reversion_5", "regression_alpha", "bounce_ratio"):
-            assert _infer_factor_family({"name": name}) == "mean_reversion"
-
-    def test_carry_keywords(self):
-        for name in ("carry_ratio", "spread_3m", "arbitrage_zz", "basis_change"):
-            assert _infer_factor_family({"name": name}) == "carry"
-
-    def test_volume_keywords(self):
-        for name in ("volume_ratio", "money_flow", "capital_inflow"):
-            assert _infer_factor_family({"name": name}) == "volume"
-
-    def test_volatility_keywords(self):
-        for name in ("volatility_20", "garch_fit", "variance_ratio"):
-            assert _infer_factor_family({"name": name}) == "volatility"
-
-    def test_fundamental_keywords(self):
-        for name in ("fundamental_pe", "value_factor", "quality_score", "growth_rate"):
-            assert _infer_factor_family({"name": name}) == "fundamental"
-
-    def test_liquidity_keywords(self):
-        for name in ("liquidity_amihud", "liquid_ratio", "depth_5"):
-            assert _infer_factor_family({"name": name}) == "liquidity"
-
-    def test_library_prefixes(self):
-        assert _infer_factor_family({"name": "qlib_alpha1"}) == "qlib"
-        assert _infer_factor_family({"name": "gtja_191"}) == "gtja"
-        assert _infer_factor_family({"name": "alpha_001"}) == "wq101"
-        assert _infer_factor_family({"name": "wq_alpha"}) == "wq101"
-        assert _infer_factor_family({"name": "fut_trend"}) == "trend"
-
-    def test_microstructure_from_code(self):
-        assert _infer_factor_family({"name": "x", "code": "open_interest_chg"}) == "microstructure"
-        assert _infer_factor_family({"name": "x", "code": "order_flow"}) == "microstructure"
-
-    def test_macro_from_input_fields(self):
-        factor = {"name": "x", "signature": {"input_fields": ["macro_gdp"]}}
-        assert _infer_factor_family(factor) == "macro"
-
-    def test_unknown_returns_other(self):
-        assert _infer_factor_family({"name": "zzz_unknown"}) == "other"
 
 
 # ─── 版本号 ────────────────────────────────────────────────

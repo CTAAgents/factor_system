@@ -34,6 +34,33 @@ def _clean_registry():
     for k in keys:
         REGISTRY.unregister(k)
     yield
+@pytest.fixture(autouse=True)
+def _mock_new_stages(monkeypatch):
+    """mock Stage 2/3（基本面/期限结构）网络同步，保证测试离线且快速。"""
+
+    def _fake_fund(symbols, days=60, trace_id="", filler=None, provider=None):
+        return {
+            "success": len(symbols),
+            "failure": 0,
+            "rows": len(symbols),
+            "failures": [],
+            "missing_spot": [],
+        }
+
+    def _fake_ts(symbols, days=120, trace_id="", refresh_contract_kline=True):
+        return {
+            "success": len(symbols),
+            "failure": 0,
+            "rows": len(symbols),
+            "failures": [],
+            "no_section": [],
+        }
+
+    import fts.data_futures_fundamental_sync as fund_mod
+    import fts.data_futures_term_structure as ts_mod
+
+    monkeypatch.setattr(fund_mod, "sync_fundamental_fields", _fake_fund, raising=False)
+    monkeypatch.setattr(ts_mod, "sync_term_structure_fields", _fake_ts, raising=False)
     keys = list(REGISTRY._tasks.keys())
     for k in keys:
         REGISTRY.unregister(k)
@@ -133,6 +160,10 @@ class TestSyncFuturesDataJob:
         assert summary["trace_id"].startswith("fts.sync.sched_")
         assert "TQ_LOCAL" in summary["source_status"]
         assert "elapsed_seconds" in summary
+        assert summary["kline"]["rows"] == 15
+        assert summary["fundamental"]["success"] == 3
+        assert summary["term_structure"]["success"] == 3
+        assert summary["coverage"]["missing"] == []
 
     def test_partial_failure(self, tmp_path, monkeypatch):
         """部分品种失败时仍能继续。"""
@@ -230,3 +261,5 @@ class TestSyncFuturesDataJob:
         assert mock_agg.get_ohlcv.call_count == len(FUTURES_SUBSET)
         # 默认应为 82 个全品种
         assert len(FUTURES_SUBSET) >= 80
+
+

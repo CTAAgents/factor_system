@@ -1,4 +1,12 @@
-# 数据驱动 Regime 倍率表（GAP-L308）— 初始校准基准
+# ⚠️ DEPRECATED（v2.104.0+25 起废弃，仅归档，不再被任何代码读取）
+#
+# 本文件是已删除的 RegimeMultiplierEstimator（regime×family 数据驱动倍率估计器）
+# 的导出产物。v2.104.0+25 彻底移除因子家族(family)概念后，`REGIME_FAMILY_MULTIPLIERS`
+# 硬编码表 / `RegimeMultiplierEstimator` / `load_data_driven_multipliers` 全部删除，
+# 本表随之废弃。保留文件仅为避免文档一致性校验断链；正文 family 维度为历史数据，
+# 供归档参考，不得作为活动配置使用。
+#
+# 数据驱动 Regime 倍率表（GAP-L308）— 初始校准基准（历史归档）
 #
 # 由 RegimeMultiplierEstimator.export_yaml 产出。当前为 v1 初始校准基准：
 # 与硬编码 REGIME_FAMILY_MULTIPLIERS（portfolio_loop.py L367-411）对齐，

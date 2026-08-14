@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -553,7 +554,6 @@ class TestRepositoryGap:
                 factor_id="fct_l2_1",
                 factor_name="l2_name",
                 seed_name="seed_a",
-                seed_family="momentum",
                 seed_market="futures",
                 generation=2,
                 parent_id="fct_l1_1",
@@ -576,7 +576,6 @@ class TestRepositoryGap:
                     factor_id="fct_x",
                     factor_name="x",
                     seed_name="s",
-                    seed_family="f",
                     seed_market="stock",
                 )
                 is False
@@ -587,10 +586,9 @@ class TestRepositoryGap:
     def test_resolve_seed_lineage_self_seed(self, db_path: Path):
         repo = FactorRepository(db_path)
         try:
-            result = repo.resolve_seed_lineage("f1", "name1", "seed", 3, "fam", None, "futures")
+            result = repo.resolve_seed_lineage("f1", "name1", "seed", 3, None, "futures")
             assert result == {
                 "seed_name": "name1",
-                "seed_family": "fam",
                 "seed_market": "futures",
                 "generation": 3,
             }
@@ -600,7 +598,7 @@ class TestRepositoryGap:
     def test_resolve_seed_lineage_generation_zero(self, db_path: Path):
         repo = FactorRepository(db_path)
         try:
-            result = repo.resolve_seed_lineage("f1", "name1", "evolution", 0, "fam", "parent_x")
+            result = repo.resolve_seed_lineage("f1", "name1", "evolution", 0, factor_parent_id="parent_x")
             assert result["generation"] == 0
             assert result["seed_name"] == "name1"
         finally:
@@ -610,22 +608,18 @@ class TestRepositoryGap:
         """沿 parent_id 链回溯到种子因子。"""
         repo = FactorRepository(db_path)
         try:
-            seed_id = repo.create_factor(_mk_factor("seedA", source="seed", generation=0, family="famA"))
-            mid_id = repo.create_factor(
-                _mk_factor("midB", source="evolution", generation=1, family="famB", parent_id=seed_id)
-            )
+            seed_id = repo.create_factor(_mk_factor("seedA", source="seed", generation=0))
+            mid_id = repo.create_factor(_mk_factor("midB", source="evolution", generation=1, parent_id=seed_id))
             _ = mid_id
             result = repo.resolve_seed_lineage(
                 "child",
                 "childC",
                 "evolution",
                 2,
-                "famC",
                 factor_parent_id=mid_id,
                 market="stock",
             )
             assert result["seed_name"] == "seedA"
-            assert result["seed_family"] == "famA"
             assert result["seed_market"] == "stock"
             assert result["generation"] == 2 + 1  # child gen + mid gen
         finally:
@@ -635,9 +629,7 @@ class TestRepositoryGap:
         """父因子不存在 → break → 自身 fallback。"""
         repo = FactorRepository(db_path)
         try:
-            result = repo.resolve_seed_lineage(
-                "child", "childC", "evolution", 3, "famC", factor_parent_id="missing_parent"
-            )
+            result = repo.resolve_seed_lineage("child", "childC", "evolution", 3, factor_parent_id="missing_parent")
             assert result["seed_name"] == "childC"
             assert result["generation"] == 3
         finally:
@@ -652,7 +644,7 @@ class TestRepositoryGap:
                 raise RuntimeError("db error")
 
             monkeypatch.setattr(repo, "get_factor", _boom)
-            result = repo.resolve_seed_lineage("child", "childC", "evolution", 3, "famC", factor_parent_id="p1")
+            result = repo.resolve_seed_lineage("child", "childC", "evolution", 3, factor_parent_id="p1")
             assert result["seed_name"] == "childC"
         finally:
             repo.close()
@@ -680,17 +672,6 @@ class TestRepositoryGap:
         finally:
             repo.close()
 
-    def test_get_by_family_with_all_filters(self, db_path: Path):
-        repo = FactorRepository(db_path)
-        try:
-            repo.create_factor(_mk_factor("fam_a1", family="fam_x", ic=0.10, sharpe=2.0, market="stock"))
-            repo.create_factor(_mk_factor("fam_a2", family="fam_x", ic=0.01, sharpe=0.2, market="futures"))
-            out = repo.get_by_family("fam_x", market="stock", min_sharpe=1.0, min_ic=0.05)
-            assert len(out) == 1
-            assert out[0]["name"] == "fam_a1"
-        finally:
-            repo.close()
-
     def test_get_diverse_factors_small_pool_return_all(self, db_path: Path):
         """eligible 数 ≤ total_count → 直接全量返回（不进入轮流选择）。"""
         repo = FactorRepository(db_path)
@@ -702,7 +683,6 @@ class TestRepositoryGap:
                         market="stock",
                         status="active",
                         is_elite=True,
-                        family=f"fam_{i}",
                         ic=0.05,
                         sharpe=1.0,
                     )
@@ -713,7 +693,7 @@ class TestRepositoryGap:
             repo.close()
 
     def test_get_diverse_factors_round_robin(self, db_path: Path):
-        """eligible 多于 total_count → 家族轮流选择；max_per_family 与 added=False break 路径。"""
+        """eligible 多于 total_count → 信号簇轮流选择；max_per_cluster 与 added=False break 路径。"""
         repo = FactorRepository(db_path)
         try:
             for i in range(12):
@@ -723,29 +703,43 @@ class TestRepositoryGap:
                         market="stock",
                         status="active",
                         is_elite=True,
-                        family=f"fam_{i % 3}",
                         ic=0.05,
                         sharpe=1.0 + i * 0.1,
                     )
                 )
-            # 12 个合格因子 > total_count=10；max_per_family=3 → 每族取 3 → 共 9 个后 added=False break
-            diverse = repo.get_diverse_factors(
-                market="stock",
-                total_count=10,
-                max_per_family=3,
-                min_ic=0.02,
-                min_sharpe=0.5,
-            )
+            captured: dict = {}
+
+            def _fake_cluster(code_factors, **kwargs):
+                fids = [f["factor_id"] for f in code_factors]
+                result = {
+                    "assign": {fid: i % 3 for i, fid in enumerate(fids)},
+                    "cluster_order": [0, 1, 2],
+                    "cluster_members": {c: [fid for i, fid in enumerate(fids) if i % 3 == c] for c in range(3)},
+                }
+                captured["result"] = result
+                return result
+
+            with patch("fts.factor_engine.factor_clustering.cluster_factors_by_signal", side_effect=_fake_cluster):
+                # 12 个合格因子 > total_count=10；max_per_cluster=3 → 每簇取 3 → 共 9 个后 added=False break
+                diverse = repo.get_diverse_factors(
+                    market="stock",
+                    total_count=10,
+                    max_per_cluster=3,
+                    min_ic=0.02,
+                    min_sharpe=0.5,
+                )
             assert len(diverse) == 9
-            fam_counts: dict[str, int] = {}
+            assign = captured["result"]["assign"]
+            cluster_counts: dict[int, int] = {}
             for f in diverse:
-                fam_counts[f["family"]] = fam_counts.get(f["family"], 0) + 1
-            assert set(fam_counts.values()) == {3}
+                cid = assign.get(f["factor_id"])
+                cluster_counts[cid] = cluster_counts.get(cid, 0) + 1
+            assert set(cluster_counts.values()) == {3}
         finally:
             repo.close()
 
     def test_get_diverse_factors_round_robin_cap(self, db_path: Path):
-        """total_count 恰好覆盖部分家族（每族 2 个封顶）。"""
+        """total_count 恰好覆盖部分簇（每簇 2 个封顶）。"""
         repo = FactorRepository(db_path)
         try:
             for i in range(10):
@@ -755,23 +749,37 @@ class TestRepositoryGap:
                         market="stock",
                         status="active",
                         is_elite=True,
-                        family=f"fam_{i % 3}",
                         ic=0.05,
                         sharpe=1.0 + i * 0.1,
                     )
                 )
-            diverse = repo.get_diverse_factors(
-                market="stock",
-                total_count=5,
-                max_per_family=2,
-                min_ic=0.02,
-                min_sharpe=0.5,
-            )
+            captured: dict = {}
+
+            def _fake_cluster(code_factors, **kwargs):
+                fids = [f["factor_id"] for f in code_factors]
+                result = {
+                    "assign": {fid: i % 3 for i, fid in enumerate(fids)},
+                    "cluster_order": [0, 1, 2],
+                    "cluster_members": {c: [fid for i, fid in enumerate(fids) if i % 3 == c] for c in range(3)},
+                }
+                captured["result"] = result
+                return result
+
+            with patch("fts.factor_engine.factor_clustering.cluster_factors_by_signal", side_effect=_fake_cluster):
+                diverse = repo.get_diverse_factors(
+                    market="stock",
+                    total_count=5,
+                    max_per_cluster=2,
+                    min_ic=0.02,
+                    min_sharpe=0.5,
+                )
             assert len(diverse) == 5
-            fam_counts = {}
+            assign = captured["result"]["assign"]
+            cluster_counts: dict[int, int] = {}
             for f in diverse:
-                fam_counts[f["family"]] = fam_counts.get(f["family"], 0) + 1
-            assert max(fam_counts.values()) <= 2
+                cid = assign.get(f["factor_id"])
+                cluster_counts[cid] = cluster_counts.get(cid, 0) + 1
+            assert max(cluster_counts.values()) == 2
         finally:
             repo.close()
 

@@ -84,7 +84,6 @@ def build_factor_program(f: dict[str, Any]) -> dict[str, Any] | None:
         "name": f.get("name", f["factor_id"]),
         "code": code,
         "params": f.get("params") or {},
-        "family": f.get("family") or "other",
         "market": "futures",
         "economic_logic": f.get("economic_logic") or {},
     }

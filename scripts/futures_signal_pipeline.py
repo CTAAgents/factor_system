@@ -22,19 +22,17 @@ scripts/futures_signal_pipeline.py — 期货每日信号生成管道
     输出分多头信号 (做多) 和空头信号 (做空) 两部分。
     新增信号增量追踪（较昨日变化），用于判断趋势加速/衰竭。
 
-因子加权方法（v3 — Ridge 回归）:
-    基于 Shen & Xiu 的弱信号理论：当因子信号普遍较弱时，
-    L2 正则化（Ridge）优于 L1 选择（Lasso/硬阈值）。
-    使用全部精英因子（不按 IC 过滤），以 Ridge 回归学习差异化权重：
-    强因子自动获得高权重，弱因子获得接近零的权重但不被丢弃。
-    这替代了 v2 的 IC>0.3 硬过滤 + 等权合成。
+因子选择与基础权重（v4 — L3 组合权威源）:
+    因子选择与基础权重分配由 L3 组合层负责（factor_weights.json），
+    信号管道只负责信号计算 + 根据 Regime 做因子权重档位缩放调整，
+    不再自选因子（全部精英因子）也不自训 Ridge 权重（v2.105.0 起）。
+    方向以 L3 组合语义为准，移除截面 IC 方向校正；品种级 IC 自适应保留。
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import math
 import sys
 import time
 import warnings
@@ -160,10 +158,11 @@ def load_futures_elite_factors(ic_threshold: float = 0.3) -> list[dict[str, Any]
 def load_futures_elite_factors_from_db(
     ic_threshold: float = 0.3,
     db_path: str | Path | None = None,
+    market: str = "futures",
 ) -> list[dict[str, Any]]:
     """从 DuckDB 因子资产库（SSOT，plans/29）加载期货精英因子（GAP-097 v2.103.0）。
 
-    factor_catalog 表为权威源：market='futures' + is_elite=TRUE + status='active'。
+    factor_catalog 表为权威源：market={market} + is_elite=TRUE + status='active'。
     复用 metadata.evaluation（与 JSON 快照同构，含 level_1_backtest.ic/sharpe/t_stat）
     构造兼容 dict；缺失时用顶层 ic/sharpe/icir 列构造。加载失败/为空返回 []，
     由调用方回退 JSON 快照目录。
@@ -172,6 +171,7 @@ def load_futures_elite_factors_from_db(
         ic_threshold: IC 阈值（|ic| < 阈值跳过；信号管道 Ridge 加权模式用 0 全量加载）
         db_path: 注入测试用隔离库路径（默认经 FactorRepository market 路由到
                  data/factor_catalog_futures.duckdb）
+        market: 市场过滤（"futures" 通用 / "energy" 能源产业链独立库）
 
     Returns:
         与 JSON 快照同构的因子 dict 列表
@@ -179,9 +179,9 @@ def load_futures_elite_factors_from_db(
     try:
         from fts.factor_engine.factor_db.repository import FactorRepository
 
-        with FactorRepository(market="futures", db_path=db_path) as repo:
+        with FactorRepository(market=market, db_path=db_path) as repo:
             rows = repo.list_factors(
-                market="futures",
+                market=market,
                 status="active",
                 is_elite=True,
                 limit=10000,
@@ -245,7 +245,7 @@ def _load_signal_factors(ic_threshold: float = 0.0) -> list[dict[str, Any]]:
     不静默回退到不完整的 JSON 快照。
 
     Args:
-        ic_threshold: IC 阈值（信号管道 Ridge 加权模式下默认 0 = 全量加载不过滤）
+        ic_threshold: IC 阈值（信号管道 L3 组合过滤模式下默认 0 = 全量加载不过滤）
     """
     factors = load_futures_elite_factors_from_db(ic_threshold=ic_threshold)
     print(f"      [加载源] DuckDB 因子资产库（SSOT）: {len(factors)} 个")
@@ -255,6 +255,154 @@ def _load_signal_factors(ic_threshold: float = 0.0) -> list[dict[str, Any]]:
             "（JSON 快照已降级为只读备份，不作为加载源，请检查 L3 因子库状态）"
         )
     return factors
+
+
+# ─── L3 组合权重（因子选择与基础权重权威源，v2.105.0）────────
+# 信号管道回归「信号计算 + Regime 权重调整」定位：因子选择与基础权重
+# 分配由 L3 组合层负责（factor_weights.json），信号管道不再自选因子、
+# 不再自训 Ridge 权重。L3 组合为空/不可用 → 严格模式报错退出。
+
+
+def _load_l3_combo_weights(weights_path: str | Path | None = None) -> dict[str, float]:
+    """加载 L3 组合基础权重（权威源：memory/portfolio/futures/factor_weights.json）。
+
+    严格模式：文件缺失 / JSON 损坏 / 权重为空 → 打印 [ERROR] 并 sys.exit(1)，
+    信号管道不自行回退到全量精英因子或等权。
+
+    Args:
+        weights_path: 覆盖路径（测试注入）；None 用默认 L3 组合权重文件
+
+    Returns:
+        {factor_name: weight}（L3 组合原始权重，未归一化，sum=exposure_scale）
+    """
+    fp = (
+        Path(weights_path)
+        if weights_path
+        else PROJECT_ROOT / "memory" / "portfolio" / "futures" / "factor_weights.json"
+    )
+    if not fp.exists():
+        print(f"[ERROR] L3 组合权重文件缺失: {fp}（严格模式，退出）")
+        sys.exit(1)
+    try:
+        data = json.loads(fp.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[ERROR] L3 组合权重文件损坏: {fp}: {e}（严格模式，退出）")
+        sys.exit(1)
+    weights = data.get("weights") or {}
+    if not isinstance(weights, dict) or not weights:
+        print(f"[ERROR] L3 组合权重为空: {fp}（严格模式，退出）")
+        sys.exit(1)
+    n = data.get("n_factors")
+    print(
+        f"      [L3 组合] 加载基础权重: {len(weights)} 因子"
+        + (f" (n_factors={n})" if n else "")
+    )
+    return {k: float(v) for k, v in weights.items()}
+
+
+def _load_l3_combo_factors(l3_weights: dict[str, float]) -> list[dict[str, Any]]:
+    """按 L3 组合因子名从 DuckDB 因子资产库加载因子定义（严格模式）。
+
+    复用全量精英因子加载后按 name 交集过滤，保证 code/params 定义完整；
+    单个因子缺失 → 警告并跳过该因子（其权重由调用方同步剔除），不阻断主路径。
+    L3 组合因子整体无法加载 → [ERROR] 退出。
+
+    Args:
+        l3_weights: L3 组合权重 {factor_name: weight}
+
+    Returns:
+        因子定义列表（仅 L3 组合中的因子，保持 DB 顺序）
+    """
+    all_factors = load_futures_elite_factors_from_db(ic_threshold=0)
+    known = set(l3_weights.keys())
+    kept = [f for f in all_factors if f.get("name") in known]
+    missing = known - {f.get("name") for f in kept}
+    if missing:
+        print(f"      [警告] L3 组合因子在因子资产库中缺失，跳过: {', '.join(sorted(missing))}")
+    if not kept:
+        print("[ERROR] L3 组合因子均无法从 DuckDB 因子资产库加载（严格模式，退出）")
+        sys.exit(1)
+    return kept
+
+
+# ─── Regime 档位缩放权重调整（v2.105.0）────────────────────
+# 信号管道唯一允许的权重干预：按市场制度对 L3 基础权重做类别级缩放后
+# 归一化。缩放不丢弃因子（不构成因子选择），因子集合与基础权重仍由 L3 决定。
+
+_REGIME_FACTOR_SCALE: dict[str, dict[str, float]] = {
+    "bull": {"trend": 1.30, "reversal": 0.80, "volume": 1.00, "neutral": 1.00},
+    "bear": {"trend": 1.30, "reversal": 0.80, "volume": 1.00, "neutral": 1.00},
+    "oscillate": {"trend": 0.80, "reversal": 1.30, "volume": 1.00, "neutral": 1.00},
+    "high_vol": {"trend": 0.80, "reversal": 0.80, "volume": 0.80, "neutral": 0.80},
+    "low_vol": {"trend": 1.10, "reversal": 1.10, "volume": 1.10, "neutral": 1.10},
+}
+
+
+def _classify_factor_category(name: str) -> str:
+    """按因子名后缀启发式归类（trend / reversal / volume / neutral）。
+
+    优先级 reversal > trend > volume：基差/乖离类（basis/bias）优先判为
+    反转类，避免与动量关键词（momentum）歧义。
+    """
+    n = (name or "").lower()
+    reversal_kw = ("bias", "basis", "cross_carry", "roll_yield", "tail_risk", "pcr", "devstop")
+    trend_kw = ("adx", "aroon", "momentum", "trix", "kst", "force_index", "chandelier", "up_return", "break", "echo")
+    volume_kw = ("volume", "vwap", "crowd", "trade_imbalance", "spread", "flow", "efficiency", "kbar", "ultosc", "intraday")
+    for kw in reversal_kw:
+        if kw in n:
+            return "reversal"
+    for kw in trend_kw:
+        if kw in n:
+            return "trend"
+    for kw in volume_kw:
+        if kw in n:
+            return "volume"
+    return "neutral"
+
+
+def _apply_regime_weight_adjustment(
+    factor_weights: dict[str, float],
+    market_regime: dict,
+    factors: list[dict[str, Any]],
+) -> dict[str, float]:
+    """Regime 档位缩放：按市场制度对 L3 基础权重做类别级缩放后归一化。
+
+    信号管道仅在此处按 Regime 调整因子权重（缩放不丢弃因子），
+    因子选择与基础权重仍由 L3 组合决定。
+
+    Args:
+        factor_weights: L3 组合基础权重（已归一化）{factor_name: weight}
+        market_regime: Market Regime 检测结果（含 regime/confidence）
+        factors: 因子定义列表（含 name，用于类别归属）
+
+    Returns:
+        调整后权重 {factor_name: weight}（归一化，和=1）
+    """
+    regime_type = market_regime.get("regime", "unknown")
+    scale_map = _REGIME_FACTOR_SCALE.get(regime_type, {})
+    if not scale_map:
+        print(f"      [Regime 权重] 制度 {regime_type} 无缩放配置，保持 L3 基础权重")
+        total = sum(factor_weights.values()) or 1.0
+        return {k: v / total for k, v in factor_weights.items()}
+
+    adjusted: dict[str, float] = {}
+    cat_weight: dict[str, float] = {}
+    for name, w in factor_weights.items():
+        cat = _classify_factor_category(name)
+        scale = scale_map.get(cat, 1.0)
+        adjusted[name] = w * scale
+        cat_weight[cat] = cat_weight.get(cat, 0.0) + w
+
+    total = sum(adjusted.values())
+    if not np.isfinite(total) or total <= 1e-12:
+        print("      [Regime 权重] 缩放后权重和非法，回退 L3 基础权重")
+        return factor_weights
+    adjusted = {k: v / total for k, v in adjusted.items()}
+
+    cat_summary = ", ".join(f"{c}={s:.2f}" for c, s in sorted(cat_weight.items()))
+    top3 = ", ".join(f"{n}({w:.3f})" for n, w in sorted(adjusted.items(), key=lambda x: -x[1])[:3])
+    print(f"      [Regime 权重] {regime_type}: 类别缩放 {cat_summary} → Top: {top3}")
+    return adjusted
 
 
 def _inject_macro_to_panel(
@@ -437,469 +585,12 @@ def _generate_trading_advice(
     }
 
 
-def _compute_factor_sign_flips(
-    signal_matrix: dict[str, dict[str, np.ndarray]],
-    panel: dict[str, "pd.DataFrame"],
-    common_dates: list[str],
-    ic_lookback: int = 20,
-) -> dict[str, float]:
-    """用截面 IC 法计算每个因子是否需要反转信号。
-
-    方法：
-        对每个因子，遍历最近 ic_lookback 个交易日，收集该日所有品种的
-        因子信号值与未来 5 日收益率，计算 Spearman 秩相关性（截面 IC），
-        取平均。如果平均 IC < 0，反转因子信号（flip = -1.0）。
-
-    Args:
-        signal_matrix: 信号矩阵 (symbol → factor_name → array)
-        panel: 品种行情面板 (symbol → DataFrame)
-        common_dates: 共同交易日列表（字符串格式）
-        ic_lookback: 使用最近多少天的数据计算截面 IC
-
-    Returns:
-        dict[factor_name, sign_flip]  # +1=正常, -1=需反转
-    """
-    from scipy.stats import spearmanr
-
-    # 获取所有因子名称
-    first_sym = next(iter(signal_matrix))
-    factor_names = list(signal_matrix[first_sym].keys())
-
-    n_dates = len(common_dates)
-    # 多留 5 天给未来收益计算
-    start_idx = max(0, n_dates - ic_lookback - 5)
-
-    factor_sign_flips: dict[str, float] = {}
-    for fname in factor_names:
-        daily_ics: list[float] = []
-        for t in range(start_idx, n_dates - 5):
-            # 收集该日所有品种的信号值和未来 5 日收益（按日期定位，防错位）
-            signals_t: dict[str, float] = {}
-            future_rets: dict[str, float] = {}
-            t_date = common_dates[t]
-            for sym in signal_matrix:
-                sig = signal_matrix[sym].get(fname)
-                if sig is None:
-                    continue
-                df = panel.get(sym)
-                if df is None or df.empty:
-                    continue
-                # 按日期定位品种内位置（品种日期集可能与 common_dates 不完全对齐）
-                try:
-                    pos = df.index.get_loc(t_date)
-                except (KeyError, TypeError):
-                    continue
-                if pos >= len(sig) or not np.isfinite(sig[pos]):
-                    continue
-                signals_t[sym] = float(sig[pos])
-
-                closes = df["close"].values
-                if pos + 5 >= len(closes):
-                    continue
-                p_t = closes[pos]
-                if not np.isfinite(p_t) or p_t <= 1e-10:
-                    continue
-                ret = (closes[pos + 5] - p_t) / p_t
-                if np.isfinite(ret):
-                    future_rets[sym] = ret
-
-            # 计算截面 Spearman 相关性（抑制常量输入警告）
-            common = set(signals_t.keys()) & set(future_rets.keys())
-            if len(common) >= 5:
-                s_vals = [signals_t[s] for s in common]
-                r_vals = [future_rets[s] for s in common]
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=RuntimeWarning)
-                    try:
-                        from scipy.stats import ConstantInputWarning
-
-                        warnings.filterwarnings("ignore", category=ConstantInputWarning)
-                    except ImportError:
-                        pass
-                    r, _ = spearmanr(s_vals, r_vals)
-                if not np.isnan(r):
-                    daily_ics.append(r)
-
-        if daily_ics:
-            avg_ic = np.mean(daily_ics)
-            factor_sign_flips[fname] = -1.0 if avg_ic < 0 else 1.0
-        else:
-            factor_sign_flips[fname] = 1.0
-
-    return factor_sign_flips
-
-
-def _compute_ridge_weights(
-    signal_matrix: dict[str, dict[str, np.ndarray]],
-    panel: dict[str, "pd.DataFrame"],
-    common_dates: list[str],
-    factor_sign_flips: dict[str, float],
-    lookback: int = 120,
-    alpha: float | None = None,
-    max_weight_cap: float | None = 0.30,
-) -> dict[str, float]:
-    """用 Ridge 回归学习因子权重（替代等权合成）。
-
-    以方向校正后的因子信号值为特征、未来 5 日收益为目标，
-    Ridge 回归拟合系数取绝对值作为因子权重。
-    强因子自动获得高权重，弱因子获得接近零的权重但不被丢弃。
-
-    Args:
-        signal_matrix: 信号矩阵 (symbol → factor_name → array)
-        panel: 品种行情面板
-        common_dates: 共同交易日列表
-        factor_sign_flips: 方向校正（+1=正常, -1=需反转）
-        lookback: 训练窗口天数
-        alpha: Ridge 正则化强度，None 则用 RidgeCV 自动选择
-        max_weight_cap: 单因子权重上限（v2.104.0+7）：默认 0.30——Ridge 弱信号
-            场景易产生单因子权重过大（如 43.5%）导致事实单因子策略，
-            截断超限因子并将多余权重按比例重分配给未超限因子，再归一化。
-
-    Returns:
-        dict[factor_name, weight]  权重（已归一化，和为 1）
-    """
-    try:
-        from sklearn.linear_model import RidgeCV
-        from sklearn.preprocessing import StandardScaler
-    except ImportError:
-        print("      [Ridge] sklearn 不可用，回退到等权")
-        first_sym = next(iter(signal_matrix))
-        factor_names = list(signal_matrix[first_sym].keys())
-        n = len(factor_names)
-        return {f: 1.0 / n for f in factor_names}
-
-    first_sym = next(iter(signal_matrix))
-    factor_names = list(signal_matrix[first_sym].keys())
-    n_factors = len(factor_names)
-
-    if n_factors <= 1:
-        return {f: 1.0 for f in factor_names}
-
-    # 因子覆盖率过滤：品种数较多时，因子在不同品种上的执行成功集合必然不同，
-    # "全品种交集"几乎恒为空，导致权重静默回退等权（factor_weights={}）。
-    # 改为保留覆盖 >= 50% 品种的因子；缺失品种在训练样本级跳过
-    # （下方逐样本有效性检查已兜底）。
-    factor_coverage: dict[str, int] = {}
-    for sym in signal_matrix:
-        for fname in signal_matrix[sym]:
-            factor_coverage[fname] = factor_coverage.get(fname, 0) + 1
-    min_coverage = max(1, math.ceil(len(signal_matrix) * 0.5))
-    factor_names = sorted(f for f, c in factor_coverage.items() if c >= min_coverage)
-    n_factors = len(factor_names)
-    if n_factors <= 1:
-        fallback = {f: 1.0 / n_factors for f in factor_names} if n_factors > 0 else {}
-        return fallback
-
-    # 过滤训练窗口内 NaN 率过高的因子（弱因子在早期位置常全为 NaN）
-    n_dates = len(common_dates)
-    train_start = max(0, n_dates - lookback - 5)
-    train_end = n_dates - 5
-    valid_factor_names: list[str] = []
-    for fname in factor_names:
-        nan_count = 0
-        total = 0
-        for sym in signal_matrix:
-            arr = signal_matrix[sym].get(fname)
-            if arr is None:
-                continue
-            df = panel.get(sym)
-            if df is None or df.empty:
-                continue
-            # 抽样检查训练窗口首尾两个位置
-            for t in (train_start, train_end - 1):
-                if t >= train_end:
-                    continue
-                try:
-                    pos = df.index.get_loc(common_dates[t])
-                except (KeyError, TypeError):
-                    continue
-                if pos < len(arr):
-                    total += 1
-                    if not np.isfinite(arr[pos]):
-                        nan_count += 1
-        if total > 0 and nan_count / total < 0.5:
-            valid_factor_names.append(fname)
-        else:
-            pass  # 因子被排除（NaN 率过高）
-
-    if valid_factor_names:
-        dropped = set(factor_names) - set(valid_factor_names)
-        if dropped:
-            print(f"      [Ridge] 排除 {len(dropped)} 个高 NaN 因子: {', '.join(sorted(dropped))}")
-        factor_names = valid_factor_names
-    n_factors = len(factor_names)
-    if n_factors <= 1:
-        fallback = {f: 1.0 / n_factors for f in factor_names} if n_factors > 0 else {}
-        return fallback
-
-    # 构建训练数据：每个交易日 × 每个品种 = 一个样本
-    X_list: list[list[float]] = []
-    y_list: list[float] = []
-
-    n_dates = len(common_dates)
-    start_idx = max(0, n_dates - lookback - 5)
-
-    for t in range(start_idx, n_dates - 5):
-        for sym in signal_matrix:
-            sig = signal_matrix[sym]
-            df = panel.get(sym)
-            if df is None or df.empty:
-                continue
-            try:
-                pos = df.index.get_loc(common_dates[t])
-            except (KeyError, TypeError):
-                continue
-
-            # 特征：方向校正后的因子信号值
-            features: list[float] = []
-            valid = True
-            for fname in factor_names:
-                arr = sig.get(fname)
-                if arr is None or pos >= len(arr) or not np.isfinite(arr[pos]):
-                    valid = False
-                    break
-                flip = factor_sign_flips.get(fname, 1.0)
-                features.append(float(arr[pos]) * flip)
-            if not valid:
-                continue
-
-            # 目标：未来 5 日收益
-            closes = df["close"].values
-            if pos + 5 >= len(closes):
-                continue
-            p_t = closes[pos]
-            if not np.isfinite(p_t) or p_t <= 1e-10:
-                continue
-            ret = (closes[pos + 5] - p_t) / p_t
-            if not np.isfinite(ret):
-                continue
-
-            X_list.append(features)
-            y_list.append(ret)
-
-    min_samples = max(n_factors * 3, 30)
-    if len(X_list) < min_samples:
-        print(f"      [Ridge] 训练样本不足 ({len(X_list)} < {min_samples})，回退到等权")
-        return {f: 1.0 / n_factors for f in factor_names}
-
-    X = np.array(X_list)
-    y = np.array(y_list)
-
-    # 标准化特征
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    # ── 因子间相关性惩罚 (v6 新增) ──
-    corr_matrix = np.corrcoef(X_scaled, rowvar=False)
-    corr_matrix = np.nan_to_num(corr_matrix, nan=0.0, posinf=1.0, neginf=-1.0)
-
-    corr_threshold = 0.5
-    penalty_matrix = np.zeros_like(corr_matrix)
-    high_corr_pairs = []
-    for i in range(n_factors):
-        for j in range(i + 1, n_factors):
-            c = abs(corr_matrix[i, j])
-            if c > corr_threshold:
-                penalty_matrix[i, j] = c
-                penalty_matrix[j, i] = c
-                high_corr_pairs.append((factor_names[i], factor_names[j], c))
-
-    if high_corr_pairs:
-        print(f"      [相关性惩罚] 检测到 {len(high_corr_pairs)} 个高相关因子对 (|corr|>{corr_threshold}):")
-        for f1, f2, c in high_corr_pairs[:5]:
-            print(f"        - {f1} × {f2}: {c:.3f}")
-        if len(high_corr_pairs) > 5:
-            print(f"        ... 及其他 {len(high_corr_pairs) - 5} 对")
-
-    lambda_corr = 0.5
-
-    penalty_features_list = []
-    penalty_targets = []
-    for i in range(n_factors):
-        for j in range(i + 1, n_factors):
-            c = penalty_matrix[i, j]
-            if c > 0:
-                feat = np.zeros(n_factors)
-                feat[i] = np.sqrt(lambda_corr) * c
-                feat[j] = np.sqrt(lambda_corr) * c
-                penalty_features_list.append(feat)
-                penalty_targets.append(0.0)
-
-    if penalty_features_list:
-        penalty_X = np.array(penalty_features_list)
-        penalty_y = np.array(penalty_targets)
-
-        X_augmented = np.vstack([X_scaled, penalty_X])
-        y_augmented = np.concatenate([y, penalty_y])
-
-        print(
-            f"      [相关性惩罚] 追加 {len(penalty_features_list)} 个惩罚样本，"
-            f"训练集从 {len(X_scaled)} 增至 {len(X_augmented)}"
-        )
-    else:
-        X_augmented = X_scaled
-        y_augmented = y
-
-    # Ridge 回归（自动选择 alpha）
-    if alpha is not None:
-        from sklearn.linear_model import Ridge
-
-        ridge = Ridge(alpha=alpha, fit_intercept=True)
-    else:
-        ridge = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 5000.0, 10000.0], fit_intercept=True)
-    ridge.fit(X_augmented, y_augmented)
-
-    # 系数取绝对值 → 权重
-    coefs = np.abs(ridge.coef_)
-    total = coefs.sum()
-    if total < 1e-10:
-        return {f: 1.0 / n_factors for f in factor_names}
-
-    weights = {fname: float(coef) / float(total) for fname, coef in zip(factor_names, coefs)}
-
-    # ── 极端相关因子硬删除 (|corr| > 0.95) ──
-    extreme_threshold = 0.90
-    extreme_pairs = [(f1, f2, c) for f1, f2, c in high_corr_pairs if c > extreme_threshold]
-    removed_factors: set[str] = set()
-
-    # 保存原始因子列表（用于后续相关性监控时索引 X_scaled）
-    orig_factor_names = list(factor_names)
-
-    if extreme_pairs:
-        print(f"      [硬删除] 检测到 {len(extreme_pairs)} 个极端相关因子对 (|corr|>{extreme_threshold}):")
-        for f1, f2, c in extreme_pairs:
-            print(f"        🔴 {f1} × {f2} = {c:.4f}")
-
-        # 按权重保留更高的因子
-        extreme_factor_degree: dict[str, int] = {}
-        for f1, f2, _ in extreme_pairs:
-            extreme_factor_degree[f1] = extreme_factor_degree.get(f1, 0) + 1
-            extreme_factor_degree[f2] = extreme_factor_degree.get(f2, 0) + 1
-
-        for f1, f2, c in extreme_pairs:
-            w1 = weights.get(f1, 0)
-            w2 = weights.get(f2, 0)
-            if f1 not in removed_factors and f2 not in removed_factors:
-                keep = f1 if w1 >= w2 else f2
-                drop = f2 if keep == f1 else f1
-                # 完全转移权重
-                weights[keep] += weights[drop]
-                weights[drop] = 0.0
-                removed_factors.add(drop)
-                print(f"        → 保留 {keep} (w={weights[keep]:.4f}), 剔除 {drop} (w=0)")
-            elif f1 in removed_factors and f2 not in removed_factors:
-                weights[f2] += weights[f1]
-                removed_factors.add(f1)
-                print(f"        → 连锁: 剔除 {f1}, 保留 {f2}")
-            elif f2 in removed_factors and f1 not in removed_factors:
-                weights[f1] += weights[f2]
-                removed_factors.add(f2)
-                print(f"        → 连锁: 剔除 {f2}, 保留 {f1}")
-
-        # 移除被删除因子
-        weights = {k: v for k, v in weights.items() if k not in removed_factors}
-        factor_names = [f for f in factor_names if f not in removed_factors]
-        n_factors = len(factor_names)
-        print(f"      [硬删除] 已剔除 {len(removed_factors)} 个冗余因子: {', '.join(sorted(removed_factors))}")
-        print(f"      [硬删除] 剩余 {n_factors} 个因子")
-
-    # ── 高相关因子对权重调整 (0.7 < |corr| <= 0.95) ──
-    corr_adjusted = 0
-    for f1, f2, c in high_corr_pairs:
-        if 0.7 < c <= extreme_threshold:
-            # 跳过已被硬删除的因子
-            if f1 in removed_factors or f2 in removed_factors:
-                continue
-            w1 = weights.get(f1, 0)
-            w2 = weights.get(f2, 0)
-            if w1 + w2 > 0.01:
-                keep_factor = f1 if w1 >= w2 else f2
-                drop_factor = f2 if keep_factor == f1 else f1
-                shift_amount = weights.get(drop_factor, 0.0) * 0.5
-                weights[keep_factor] = weights.get(keep_factor, 0.0) + shift_amount
-                weights[drop_factor] = weights.get(drop_factor, 0.0) - shift_amount
-                corr_adjusted += 1
-
-    if corr_adjusted > 0:
-        print(f"      [相关性调整] 对 {corr_adjusted} 个高相关因子对进行权重转移")
-
-    total_w = sum(w for w in weights.values() if w > 0)
-    if total_w > 0:
-        weights = {k: max(0.0, v) / total_w for k, v in weights.items()}
-
-    # ── 单因子权重上限截断 (v2.104.0+7) ──
-    # Ridge 弱信号场景易产生单因子权重过大（如 fut_bias_g19 43.5%），
-    # 超过风控红线（单因子 ≤ 30%）。截断超限因子，将多余权重按比例
-    # 重分配给未超限因子，再归一化；多轮迭代至所有权重 ≤ cap。
-    if max_weight_cap is not None and max_weight_cap > 0 and len(weights) > 1:
-        n = len(weights)
-        if max_weight_cap < 1.0 / n:
-            # cap 低于等权下限：数学上不存在 Σ=1 且所有 w_i ≤ cap 的解，
-            # 回退等权（满足 Σ=1 的最分散分布）
-            weights = {k: 1.0 / n for k in weights}
-            print(f"      [权重上限] cap={max_weight_cap:.2f} < 等权(1/{n}={1.0/n:.3f})，回退等权")
-        else:
-            for _ in range(10):
-                over = [(k, v) for k, v in weights.items() if v > max_weight_cap]
-                if not over:
-                    break
-                excess = sum(v - max_weight_cap for _, v in over)
-                for k, v in over:
-                    weights[k] = max_weight_cap
-                under_keys = [k for k, v in weights.items() if v <= max_weight_cap]
-                under_sum = sum(weights[k] for k in under_keys)
-                if under_sum <= 0:
-                    break
-                for k in under_keys:
-                    weights[k] += excess * weights[k] / under_sum
-            # 最终归一化（迭代重分配可能引入浮点漂移）
-            total_w = sum(weights.values())
-            if total_w > 0:
-                weights = {k: v / total_w for k, v in weights.items()}
-            print(f"      [权重上限] 已应用 cap={max_weight_cap:.2f}，最大单因子权重={max(weights.values()):.4f}")
-
-    # 输出权重分布
-    w_sorted = sorted(weights.items(), key=lambda x: -x[1])
-    top3_str = ", ".join(f"{n}({w:.3f})" for n, w in w_sorted[:3])
-    bottom3_str = ", ".join(f"{n}({w:.3f})" for n, w in w_sorted[-3:])
-    alpha_used = ridge.alpha_ if hasattr(ridge, "alpha_") else alpha
-    print(f"      Ridge α={alpha_used:.2f} | 权重 Top3: {top3_str} | Bottom3: {bottom3_str}")
-
-    # 输出调整后的相关性监控（重新计算筛选后因子的相关矩阵）
-    try:
-        if removed_factors:
-            # 重新构建筛选后的因子特征矩阵，计算新的相关矩阵
-            X_filtered_list = []
-            for i, fname in enumerate(orig_factor_names):
-                if fname not in removed_factors:
-                    X_filtered_list.append(X_scaled[:, i])
-            if X_filtered_list:
-                X_filtered = np.column_stack(X_filtered_list)
-                corr_matrix_filtered = np.corrcoef(X_filtered, rowvar=False)
-                corr_matrix_filtered = np.nan_to_num(corr_matrix_filtered, nan=0.0)
-            else:
-                corr_matrix_filtered = corr_matrix
-        else:
-            corr_matrix_filtered = corr_matrix
-
-        w_vec = np.array([weights.get(f, 0) for f in factor_names])
-        port_corr = float(w_vec @ corr_matrix_filtered @ w_vec)
-        n_remaining = len(factor_names)
-        upper_tri_idx = np.triu_indices(n_remaining, k=1)
-        max_pair_corr = float(np.max(np.abs(corr_matrix_filtered[upper_tri_idx]))) if len(upper_tri_idx[0]) > 0 else 0.0
-        print(f"      [相关性监控] 组合相关性(w^T*C*w)={port_corr:.4f} | 最大因子对相关性={max_pair_corr:.4f}")
-    except (np.linalg.LinAlgError, ValueError):
-        print("      [相关性监控] 计算异常，跳过")
-
-    return weights
-
-
 def _compute_per_variety_weights(
     global_weights: dict[str, float],
     per_variety_ic: dict[str, dict[str, float]],
     min_ic: float = 0.01,
 ) -> dict[str, dict[str, float]]:
-    """将全局 Ridge 权重与品种级 IC 结合，生成品种级因子权重。
+    """将全局权重（L3 组合基础权重经 Regime 调整）与品种级 IC 结合，生成品种级因子权重。
 
     方法：
         对每个品种 v，因子 f 的有效权重 = global_weight[f] * |IC[f][v]|，
@@ -907,7 +598,7 @@ def _compute_per_variety_weights(
         如果品种 v 在因子 f 上无 IC 数据，回退到 global_weight[f]。
 
     Args:
-        global_weights: 全局 Ridge 权重 {factor_name: weight}
+        global_weights: 全局权重 {factor_name: weight}（L3 组合基础权重经 Regime 调整）
         per_variety_ic: 品种-因子 IC 矩阵 {factor_name: {variety: ic}}
         min_ic: IC 最小绝对值阈值，低于此值视为无效
 
@@ -956,10 +647,10 @@ def _compute_composite_scores(
     factor_weights: dict[str, float] | None = None,
     per_variety_weights: dict[str, dict[str, float]] | None = None,
 ) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
-    """合成因子信号（带方向校正 + 可选 Ridge 权重）。
+    """合成因子信号（可选权重；方向校正参数 v2.105.0 起恒为空 dict）。
 
     Args:
-        factor_weights: 全局因子权重字典（Ridge 学习结果），None 则等权。
+        factor_weights: 全局因子权重字典（L3 组合基础权重经 Regime 调整），None 则等权。
         per_variety_weights: 品种级因子权重 {variety: {factor: weight}}，
                               优先于 factor_weights 使用。
 
@@ -990,7 +681,7 @@ def _compute_composite_scores(
             if sig is None or len(sig) == 0:
                 continue
             val = float(sig[-1]) if np.isfinite(sig[-1]) else 0.0
-            # 方向校正
+            # 方向校正（v2.105.0 起恒为空 dict，flip 恒为 +1；方向以 L3 组合为准）
             flip = factor_sign_flips.get(name, 1.0)
             val *= flip
             w = effective_weights.get(name, default_weight) if effective_weights else default_weight
@@ -1418,7 +1109,7 @@ def _generate_trading_advice_report(
             w(f"| ... 及其他 {len(deviations) - 5} 个品种 | — | — |")
         w()
     else:
-        w("- 使用全局 Ridge 权重，未做品种级调整。")
+        w("- 使用 L3 组合基础权重（Regime 档位调整后），未做品种级调整。")
         w()
 
     # 权重最集中的前 3 个因子
@@ -1555,23 +1246,40 @@ def main(
     max_symbols: int = 25,
     days: int = 120,
     universe: str = "core",
-    recompute_weights: bool | None = None,
     macro_injection: bool = True,
-    max_weight_cap: float | None = 0.30,
+    chain: str = "",
 ) -> int:
     t0 = time.time()
     today = date.today().isoformat()
     print("=" * 60)
-    print(f"  期货信号生成管道 v5 (多空双向 + 信号增量) — {today}")
+    title = "期货信号生成管道 v5 (多空双向 + 信号增量)" if not chain else "能源产业链信号生成管道 (链专属工作流)"
+    print(f"  {title} — {today}")
     print("=" * 60)
 
-    # ── Step 1: 加载全部期货 Elite 因子（Ridge 加权模式下不过滤 IC）──
-    # GAP-097: DuckDB 因子资产库（SSOT）优先，JSON 快照目录降级回退
-    factors = _load_signal_factors(ic_threshold=0)
-    print(f"\n[1/5] 加载全部期货 Elite 因子: {len(factors)} 个")
+    # ── Step 1: 加载因子（因子选择与基础权重权威源） ──
+    # 通用模式 = L3 组合（factor_weights.json，严格模式）；
+    # 链模式 = 能源库精英因子（market="energy"），链级 L3 组合建立前先等权。
+    if chain == "energy":
+        from fts.data_futures import ENERGY_CHAIN_MARKET
+        from fts.factor_engine.factor_db.schema import get_db_path
+
+        factors = load_futures_elite_factors_from_db(
+            ic_threshold=0,
+            db_path=Path(get_db_path(ENERGY_CHAIN_MARKET)),
+            market=ENERGY_CHAIN_MARKET,
+        )
+        l3_weights = {f.get("name", ""): 1.0 for f in factors if f.get("name")}
+        print(f"\n[1/5] 加载能源链精英因子: {len(factors)} 个（等权基础，链级 L3 组合建立后可切换）")
+    else:
+        l3_weights = _load_l3_combo_weights()
+        factors = _load_l3_combo_factors(l3_weights)
+        # 同步剔除 DuckDB 中缺失因子的权重（与因子池保持一致）
+        kept_names = {f.get("name") for f in factors}
+        l3_weights = {k: v for k, v in l3_weights.items() if k in kept_names}
+        print(f"\n[1/5] 加载 L3 组合因子: {len(factors)} 个（基础权重 {len(l3_weights)} 个）")
 
     if not factors:
-        print("[ERROR] 无期货 Elite 因子，退出")
+        print("[ERROR] 无 L3 组合因子，退出")
         return 1
 
     # ── Step 2: 获取期货数据 ──
@@ -1580,7 +1288,13 @@ def main(
 
     provider = FTSDataProvider()
 
-    if universe == "all":
+    if chain == "energy":
+        # 能源链专属：9 训练 + 其余化工产业链盲测（泛化到全化工链）
+        from fts.data_futures import ENERGY_CHAIN_HOLDOUT, ENERGY_CHAIN_SYMBOLS
+
+        symbols = list(ENERGY_CHAIN_SYMBOLS) + list(ENERGY_CHAIN_HOLDOUT)
+        print(f"[2/4] 获取期货数据: 能源链训练 {len(ENERGY_CHAIN_SYMBOLS)} + 化工盲测 {len(ENERGY_CHAIN_HOLDOUT)} = {len(symbols)} 个品种, days={days}")
+    elif universe == "all":
         # 全量商品期货：FUTURES_SUBSET 剔除中金所金融期货
         FINANCIAL = {"IF0", "TF0", "IH0", "IC0", "TS0", "IM0"}
         symbols = [s for s in FUTURES_SUBSET if s not in FINANCIAL][:max_symbols]
@@ -1703,73 +1417,35 @@ def main(
     signal_matrix = _compute_signal_matrix(panel, factors, use_optimizer=True)
     print(f"      信号矩阵: {sum(len(v) for v in signal_matrix.values())} 项")
 
-    # 3b-3e: 方向校正 + Ridge 权重学习（GAP-072 v2.99.0: 权重周五重算，其余日冻结复用快照）
-    from scripts._signal_common import filter_factors_by_weights, load_weight_snapshot, save_weight_snapshot
+    # 3b-3f: L3 组合基础权重 + Regime 档位调整 + 品种级 IC 自适应 + 加权合成
+    # v2.105.0: 移除 Ridge 权重自训与截面 IC 方向校正（方向以 L3 组合为准），
+    # 因子集合与基础权重来自 L3 组合；品种级 IC 自适应保留。
+    factor_sign_flips: dict[str, float] = {}  # 方向校正已移除，统一 +1
 
-    snapshot_path = PROJECT_ROOT / "memory" / "portfolio" / "futures" / "futures_signal_weights.json"
-    if recompute_weights is None:
-        from fts.config import is_weight_recompute_day
+    # 3b: L3 组合基础权重（归一化到和=1）
+    total_base = sum(l3_weights.values()) or 1.0
+    factor_weights = {k: v / total_base for k, v in l3_weights.items()}
 
-        recompute_weights = is_weight_recompute_day()
+    # 3c: Regime 档位缩放权重调整（信号管道唯一权重干预：缩放不丢弃因子）
+    factor_weights = _apply_regime_weight_adjustment(factor_weights, market_regime, factors)
 
-    snapshot = load_weight_snapshot(snapshot_path) if not recompute_weights else None
-    # 品种-因子 IC 矩阵：重算路径计算并持久化到快照；冻结日从快照复用（报告 IC 章节不空）
-    per_variety_ic: dict[str, dict[str, float]] = {}
-    if snapshot is not None:
-        # 冻结日：复用上周权重快照，仅刷新因子值（新因子等待下次重算进入）
-        factor_weights = snapshot["factor_weights"]
-        factor_sign_flips = snapshot.get("factor_sign_flips", {})
-        per_variety_weights = snapshot.get("per_variety_weights") or {}
-        per_variety_ic = snapshot.get("per_variety_ic") or {}
-        factors = filter_factors_by_weights(factors, factor_weights)
-        print(
-            f"      [权重冻结] 复用 {snapshot.get('recomputed_at', '?')} 权重快照 "
-            f"({len(factor_weights)} 因子)，仅刷新因子值"
-        )
-    else:
-        # 重算日 / 冷启动：方向校正（截面 IC 法）
-        print("      方向校正: 截面 IC 法（因子信号 vs 未来 5 日收益的 Spearman 秩相关）...")
-        factor_sign_flips = _compute_factor_sign_flips(signal_matrix, panel, common_dates)
+    # 3d: 品种-因子 IC 矩阵（每个因子 × 每个品种的时序 IC，无方向校正）
+    print("      品种-因子 IC 矩阵计算...")
+    per_variety_ic = _compute_per_variety_ic_matrix(
+        signal_matrix,
+        panel,
+        common_dates,
+        factor_sign_flips,
+    )
+    n_factor_ic = len(per_variety_ic)
+    n_variety_ic = len(set(v for vics in per_variety_ic.values() for v in vics)) if per_variety_ic else 0
+    print(f"      IC 矩阵: {n_factor_ic} 因子 × {n_variety_ic} 品种")
 
-        # 3c: Ridge 回归学习因子权重（替代等权合成）
-        print("      权重学习: Ridge 回归（L2 正则化，弱因子保留不丢弃）...")
-        factor_weights = _compute_ridge_weights(
-            signal_matrix,
-            panel,
-            common_dates,
-            factor_sign_flips,
-            max_weight_cap=max_weight_cap,
-        )
-
-        # 3d: 品种-因子 IC 矩阵（每个因子 × 每个品种的时序 IC）
-        print("      品种-因子 IC 矩阵计算...")
-        per_variety_ic = _compute_per_variety_ic_matrix(
-            signal_matrix,
-            panel,
-            common_dates,
-            factor_sign_flips,
-        )
-        n_factor_ic = len(per_variety_ic)
-        n_variety_ic = len(set(v for vics in per_variety_ic.values() for v in vics)) if per_variety_ic else 0
-        print(f"      IC 矩阵: {n_factor_ic} 因子 × {n_variety_ic} 品种")
-
-        # 3e: 品种级 Ridge 权重分配（结合全局 Ridge 权重 + 品种级 IC）
-        per_variety_weights = _compute_per_variety_weights(
-            factor_weights,
-            per_variety_ic,
-        )
-        save_weight_snapshot(
-            snapshot_path,
-            factor_weights,
-            factor_sign_flips=factor_sign_flips,
-            per_variety_weights=per_variety_weights,
-            per_variety_ic=per_variety_ic,
-        )
-        print(f"      [权重] 本周重算日: 权重已学习并保存快照（含 IC 矩阵）-> {snapshot_path}")
-
-    n_flipped = sum(1 for v in factor_sign_flips.values() if v < 0)
-    if n_flipped > 0:
-        print(f"      方向反转: {n_flipped}/{n_factors} 个因子 (截面 IC<0)")
+    # 3e: 品种级权重（L3 基础权重经 Regime 调整 × 品种级 IC 自适应，保留）
+    per_variety_weights = _compute_per_variety_weights(
+        factor_weights,
+        per_variety_ic,
+    )
 
     if per_variety_weights:
         # 统计品种级权重相对于全局权重的平均偏离度
@@ -1784,9 +1460,9 @@ def main(
         avg_dev = total_dev / count if count > 0 else 0
         print(f"      品种级权重: {len(per_variety_weights)} 个品种, 平均偏离度: {avg_dev:.4f}")
     else:
-        print("      品种级权重: 无数据，回退到全局 Ridge 权重")
+        print("      品种级权重: 无数据，回退到全局权重")
 
-    # 3f: 加权合成（方向校正 + 品种级权重 / 全局 Ridge 权重）
+    # 3f: 加权合成（L3 基础权重经 Regime 调整 + 品种级权重，无方向校正）
     sym_scores, sym_details = _compute_composite_scores(
         signal_matrix,
         factor_sign_flips,
@@ -1888,7 +1564,13 @@ def main(
             print(f"      [价格动量] 调整 {n_adjusted} 个品种的信号 (blend={_PRICE_MOMENTUM_BLEND}, skip={n_skipped})")
 
     # ── Step 3e: 盲测品种验证（泛化能力检查） ──
-    holdout_set = set(FUTURES_HOLDOUT) & set(panel.keys())
+    # 链模式盲测池 = 其余化工产业链品种（链外盲测，泛化到全化工链）
+    if chain == "energy":
+        from fts.data_futures import ENERGY_CHAIN_HOLDOUT as _CHAIN_HOLDOUT
+
+        holdout_set = set(_CHAIN_HOLDOUT) & set(panel.keys())
+    else:
+        holdout_set = set(FUTURES_HOLDOUT) & set(panel.keys())
     holdout_result = _compute_holdout_validation(
         signal_matrix,
         panel,
@@ -1908,8 +1590,23 @@ def main(
     if holdout_result["warning"]:
         print(f"          {holdout_result['warning']}")
 
+    # 链模式控制台：盲测池化工链分层（外延泛化差异）
+    if chain == "energy" and holdout_result.get("details"):
+        from fts.data_futures import ENERGY_CHAIN_CHEMICAL_SECTORS, FUTURES_SECTOR_MAP
+
+        _sym_ics = holdout_result["details"]
+        for sec in ENERGY_CHAIN_CHEMICAL_SECTORS:
+            members = [
+                s for s in sorted(set(FUTURES_SECTOR_MAP.get(sec, [])) & holdout_set)
+                if s in _sym_ics
+            ]
+            ics = [_sym_ics[s] for s in members]
+            avg = float(np.mean(ics)) if ics else 0.0
+            print(f"          化工链分层 [{sec}]: 有效 {len(ics)}/{len(members)} 品种, 平均 IC {avg:.4f}")
+
     # ── Step 4: 保存信号快照 + 加载昨日信号计算增量 ──
-    report_dir = REPORTS_ROOT / "futures" / today
+    chain_report_root = "energy_chain" if chain == "energy" else "futures"
+    report_dir = REPORTS_ROOT / chain_report_root / today
     report_dir.mkdir(parents=True, exist_ok=True)
 
     # 保存今日信号快照 (JSON)
@@ -1920,7 +1617,7 @@ def main(
     )
 
     # 追加到历史 JSONL
-    history_path = REPORTS_ROOT / "futures" / "signal_scores_history.jsonl"
+    history_path = REPORTS_ROOT / chain_report_root / "signal_scores_history.jsonl"
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with open(history_path, "a", encoding="utf-8") as hf:
         hf.write(json.dumps({"date": today, "scores": sym_scores}, ensure_ascii=False) + "\n")
@@ -2028,13 +1725,12 @@ def main(
     w(f"# 期货信号报告 — {today}")
     w()
     w(f"生成时间: {today} | 耗时: {elapsed:.1f}s")
-    w(f"因子池: {len(factors)} 个（全部精英因子） | 覆盖品种: {len(sym_scores)} 个")
+    w(f"因子池: {len(factors)} 个（L3 组合因子） | 覆盖品种: {len(sym_scores)} 个")
     if per_variety_weights:
-        w("合成方法: 品种级 Ridge 权重（全局 Ridge 权重 × 品种 IC 自适应调整）")
+        w("合成方法: 品种级权重（L3 组合基础权重 × Regime 档位调整 × 品种 IC 自适应）")
     else:
-        w("合成方法: Ridge 回归加权（L2 正则化） | 方向校正: 截面 IC 法")
-    flips_info = f" | 方向反转: {n_flipped} 个因子 (截面 IC<0)"
-    w(f"方向校正: 截面 IC 法（因子信号 vs 未来 5 日收益的 Spearman 秩相关）{flips_info}")
+        w("合成方法: L3 组合基础权重（Regime 档位调整）")
+    w("权重来源: L3 组合（factor_weights.json）| Regime 调整: 档位缩放（bull/bear/oscillate/high_vol）")
     w(f"最新价: 盘中实时价（TQ-Local 优先，AKShare 降级） | 实时价覆盖 {rt_hit}/{len(sym_list)} 个品种")
     w()
     w()
@@ -2183,6 +1879,32 @@ def main(
             verdict = "✔ 有效" if abs(ic) > 0.02 else "⚠ 偏弱" if abs(ic) > 0.01 else "❌ 失效"
             w(f"| {sym} | {ic:.4f} | {verdict} |")
     w()
+
+    # 链模式：盲测池按化工产业链分层（聚酯链/油化工/煤化工），评估外延泛化差异
+    if chain == "energy" and holdout_sym_ics:
+        from fts.data_futures import (
+            ENERGY_CHAIN_CHEMICAL_SECTORS,
+            FUTURES_SECTOR_MAP,
+        )
+
+        w("### 盲测池化工链分层泛化")
+        w()
+        w("> 链因子向不同化工子链的外延泛化能力：分层 IC 越低、离能源链越远的子链泛化衰减越明显。")
+        w()
+        w("| 化工子链 | 盲测品种数 | 有效品种数 | 平均 IC | 有效占比 |")
+        w("|----------|-----------|-----------|---------|---------|")
+        chain_sec_syms: dict[str, set[str]] = {}
+        for sec in ENERGY_CHAIN_CHEMICAL_SECTORS:
+            chain_sec_syms[sec] = set(FUTURES_SECTOR_MAP.get(sec, [])) & holdout_set
+        for sec in ENERGY_CHAIN_CHEMICAL_SECTORS:
+            members = [s for s in sorted(chain_sec_syms[sec]) if s in holdout_sym_ics]
+            ics = [holdout_sym_ics[s] for s in members]
+            avg = float(np.mean(ics)) if ics else 0.0
+            n_total = len(chain_sec_syms[sec])
+            n_valid = len(ics)
+            ratio = f"{n_valid / n_total:.0%}" if n_total else "—"
+            w(f"| {sec} | {n_total} | {n_valid} | {avg:.4f} | {ratio} |")
+        w()
 
     # ── 品种-因子 IC 矩阵概览 ──
     w("## 品种-因子有效性矩阵 (IC)")
@@ -2413,9 +2135,11 @@ if __name__ == "__main__":
         help="品种池: core=25 核心品种 / all=全量商品期货（FUTURES_SUBSET 剔除金融期货）",
     )
     parser.add_argument(
-        "--force-recompute",
-        action="store_true",
-        help="强制重算 Ridge 权重并更新快照（GAP-072，默认按 l3_weight_recompute_cadence 自动判定）",
+        "--chain",
+        type=str,
+        default="",
+        choices=["", "energy"],
+        help="产业链专属工作流: energy（能源链 9 训练 + 其余化工链盲测，泛化到全化工产业链）",
     )
     parser.add_argument(
         "--no-macro-injection",
@@ -2424,20 +2148,13 @@ if __name__ == "__main__":
         help="关闭宏观字段注入（GAP-088；默认开启——fut_macro_* 因子读取真实宏观数据，"
         "拉取失败降级 close 代理，不阻断管道）",
     )
-    parser.add_argument(
-        "--max-weight-cap",
-        type=float,
-        default=None,
-        help="单因子权重上限（v2.104.0+7，默认 0.30；Ridge 弱信号场景单因子权重过大时截断并重分配）",
-    )
     args = parser.parse_args()
     sys.exit(
         main(
             max_symbols=args.max_symbols,
             days=args.days,
             universe=args.universe,
-            recompute_weights=True if args.force_recompute else None,
             macro_injection=args.macro_injection,
-            max_weight_cap=args.max_weight_cap if args.max_weight_cap is not None else 0.30,
+            chain=args.chain,
         )
     )

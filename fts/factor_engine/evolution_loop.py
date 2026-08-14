@@ -309,6 +309,7 @@ class EvolutionLoop:
         elite_dir: str | Path | None = None,
         memory_dir: str | Path = "memory/evolution",
         inject_dir: str | Path = "memory/knowledge/factors/l1_injected",
+        factor_pool_path: str | Path = "memory/knowledge/factors/factor_pool.json",
         budget: Optional[BudgetConfig] = None,
         verifier: Optional[FactorVerifier] = None,
         llm_client: Optional[Any] = None,
@@ -371,19 +372,9 @@ class EvolutionLoop:
         self.elite_dir = Path(elite_dir)
         self.elite_dir.mkdir(parents=True, exist_ok=True)
         self.inject_dir = Path(inject_dir)
+        self.factor_pool_path = Path(factor_pool_path)
         self.memory_dir = Path(memory_dir)
         self._budget: BudgetConfig = budget or DEFAULT_BUDGET_CONFIG
-        # GAP-F10 (v2.73.0): 家族多样性上限配置化——
-        # 未显式传入 budget 时，max_per_family 回退到 FTSConfig（FTS_MAX_PER_FAMILY，缺省 15）。
-        # 注：DEFAULT_BUDGET_CONFIG 本身含 max_per_family 键，故仅以 budget is None 判定，
-        # 而非检查键是否存在（否则配置回退永不生效）。
-        if budget is None:
-            try:
-                from fts.config.settings import get_config
-
-                self.budget["max_per_family"] = get_config().max_per_family
-            except Exception:
-                pass  # 配置读取失败沿用 DEFAULT_BUDGET_CONFIG 缺省值 15
 
         # ── P1-3 (Phase 3, 26 计划 §8): 提前达标停止（保守默认关闭） ──
         # budget 未显式配置时回退 FTSConfig（env FTS_EVOLUTION_STOP_* 可控）；

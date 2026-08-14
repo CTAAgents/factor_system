@@ -3,15 +3,12 @@
 覆盖:
     - 去重校验 collect 纯函数（YAML/内嵌内部重复检测、交叉重叠报告）
     - verify_seed_dedup.py CLI 门禁退出码
-    - max_per_family 家族上限配置化（FTSConfig + EvolutionLoop budget 回退）
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-
-import pandas as pd
 
 
 _FTS_ROOT = Path(__file__).resolve().parents[2]
@@ -112,77 +109,3 @@ class TestSeedDedupCli:
         assert mod.main(argv=["--json"]) == 0
         out = capsys.readouterr().out
         assert '"exact_duplicates"' in out
-
-
-# ─── 家族上限配置化 ────────────────────────────────────────
-
-
-class TestMaxPerFamilyConfig:
-    def _make_df(self) -> "pd.DataFrame":
-        import numpy as np
-        import pandas as pd
-
-        n = 60
-        dates = pd.date_range("2024-01-01", periods=n, freq="D")
-        close = 100 + np.arange(n) * 0.1
-        return pd.DataFrame(
-            {"open": close, "high": close + 1, "low": close - 1, "close": close, "volume": 1000.0},
-            index=dates,
-        )
-
-    def test_config_default_15(self):
-        from fts.config.settings import get_config
-
-        assert get_config().max_per_family == 15
-
-    def test_config_env_override(self, monkeypatch):
-        monkeypatch.setenv("FTS_MAX_PER_FAMILY", "3")
-        from fts.config.settings import FTSConfig
-
-        cfg = FTSConfig()
-        assert cfg.max_per_family == 3
-
-    def test_evolution_budget_fallback(self, monkeypatch, tmp_path):
-        """EvolutionLoop 未显式传 budget 时，max_per_family 从 FTSConfig 回退。"""
-        monkeypatch.setenv("FTS_MAX_PER_FAMILY", "3")
-        # 重置配置单例以便环境变量生效
-        import fts.config.settings as settings_mod
-
-        monkeypatch.setattr(settings_mod, "_default_config", None)
-        assert settings_mod.get_config().max_per_family == 3
-
-        df = self._make_df()
-        fwd = df["close"].pct_change().fillna(0.0).values
-
-        from fts.factor_engine.evolution_loop import EvolutionLoop
-
-        loop = EvolutionLoop(
-            data=df,
-            forward_returns=fwd,
-            elite_dir=str(tmp_path / "elite"),
-            memory_dir=str(tmp_path / "memory"),
-            n_trials_micro=5,
-            budget=None,
-        )
-        assert loop.budget.get("max_per_family", 15) == 3
-
-    def test_evolution_budget_explicit_wins(self, tmp_path):
-        """显式传入 budget 的 max_per_family 优先于配置。"""
-        df = self._make_df()
-        fwd = df["close"].pct_change().fillna(0.0).values
-
-        from fts.factor_engine.evolution_loop import EvolutionLoop
-        from fts.factor_engine.contracts import BudgetConfig, DEFAULT_BUDGET_CONFIG
-
-        # BudgetConfig 是 TypedDict(total=False)，部分传入需以 DEFAULT 为底合并，
-        # 保证演化循环读取的其他预算键（如 max_tokens_per_factor）完整。
-        full_budget = BudgetConfig({**DEFAULT_BUDGET_CONFIG, "max_per_family": 2})
-        loop = EvolutionLoop(
-            data=df,
-            forward_returns=fwd,
-            elite_dir=str(tmp_path / "elite"),
-            memory_dir=str(tmp_path / "memory"),
-            n_trials_micro=5,
-            budget=full_budget,
-        )
-        assert loop.budget.get("max_per_family") == 2

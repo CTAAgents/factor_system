@@ -1032,6 +1032,7 @@ class FuturesDataProvider:
                 from fts.data_sources.trading_calendar import (
                     TradingCalendar,
                     mark_gap_anomalies,
+                    mark_hold_anomalies,
                     mark_panel_data_gaps,
                 )
 
@@ -1046,6 +1047,8 @@ class FuturesDataProvider:
                     out = df.copy()
                     out["data_gap"] = bool(m.get("data_gap", False))
                     out["gap_anomaly"] = mark_gap_anomalies(out).to_numpy()
+                    # CTA 手册阶段1（v2.104.0+20）：持仓量突变标记（hold_anomaly 列）
+                    out["hold_anomaly"] = mark_hold_anomalies(out).to_numpy()
                     panel[sym] = out
         except Exception as e:  # noqa: BLE001 — 清洗失败降级，不阻断面板
             logger.warning("[G8] 断K/跳空清洗标记失败，跳过: %s", e)
@@ -1443,6 +1446,25 @@ FUTURES_HOLDOUT: list[str] = [
 # ─── 产业链分类映射（用于分层训练集选择）────────────────────
 
 FUTURES_SECTOR_MAP: dict[str, list[str]] = {
+    # 炼化聚酯链（能源产业链专属工作流身份，GAP-Ixxx）
+    # 置于首位：通用工作流中性化反向映射 {sym: sector} 按"后序覆盖前序"，
+    # 该 12 品种后续仍会被 能源/油化工/聚酯链/煤化工 分组覆盖，通用中性化语义不变；
+    # 本分组供链工作流身份识别与板块联动监控使用（与 ENERGY_CHAIN_SYMBOLS 对齐，
+    # 2026-08-15 由 9 扩至 12，覆盖四大化工子链）。
+    "炼化聚酯链": [
+        "SC0",
+        "FU0",
+        "BU0",
+        "PX0",
+        "TA0",
+        "PF0",
+        "L0",
+        "PP0",
+        "PG0",
+        "MA0",
+        "UR0",
+        "SA0",  # 能源(原油→燃料油/沥青) + 芳烃→聚酯 + 油化工(塑料/液化气) + 煤化工(甲醇/尿素/纯碱)
+    ],
     "黑色系": [
         "I0",
         "RB0",
@@ -1598,6 +1620,199 @@ FUTURES_STRATIFIED_SUBSET: list[str] = [
     "IC0",
     "IH0",
 ]
+
+
+# ─── 能源产业链专属工作流（独立于 FTS 通用工作流）────────────────
+# 设计（GAP-Ixxx）：全训 + 链外盲测，以能源链为核心泛化到全部化工产业链。
+# 训练链 = 12 个化工品种（覆盖四大化工子链，2026-08-15 由 9→12 扩池降相关性）：
+#   能源 3（SC/FU/BU）+ 聚酯链 3（PX/TA/PF）+ 油化工 3（L/PP/PG）+ 煤化工 3（MA/UR/SA）；
+#   原 9 品种 SC/FU/LU/BU/PG/PX/TA/PF/PR 中 LU（与 FU 高相关）/PR（与 PF 高相关）
+#   换出至盲测池，换入 L/PP/MA/UR/SA 覆盖油化工/煤化工子链，降低训练池内品种相关性。
+# 盲测池 = 其余化工产业链（聚酯链/油化工/煤化工）全部品种 − 训练 12 品种，
+#   验证链因子向整个化工产业链的外延泛化能力。
+# 存储路由：因子库 market="energy" → data/factor_catalog_energy.duckdb（独立文件），
+# 精英目录 → memory/knowledge/factors/energy_chain_elite（独立目录）。
+# 链内品种历史窗口受 PX0（2023-09 上市）限制约 2.5 年，
+# 质检以单品种时序 IC 为主（与期货路径一致），symbol_holdout 审计（需≥5留出）不适用。
+ENERGY_CHAIN_SYMBOLS: list[str] = [
+    "SC0",  # 原油 — INE，链上游源头（能源）
+    "FU0",  # 燃料油 — SHFE，原油下游（能源）
+    "BU0",  # 沥青 — SHFE，炼化下游（能源）
+    "PX0",  # 对二甲苯 — CZCE，芳烃链中游（聚酯链）
+    "TA0",  # PTA — CZCE，聚酯链中游（聚酯链）
+    "PF0",  # 短纤 — CZCE，聚酯成品（聚酯链）
+    "L0",   # 聚乙烯 — DCE，塑料（油化工）
+    "PP0",  # 聚丙烯 — DCE，塑料（油化工）
+    "PG0",  # 液化石油气 — DCE，炼厂伴生气（油化工）
+    "MA0",  # 甲醇 — CZCE，煤基化工（煤化工）
+    "UR0",  # 尿素 — CZCE，氮肥（煤化工）
+    "SA0",  # 纯碱 — CZCE，煤化工/建材（煤化工）
+]
+
+# 能源链专属训练链（全训：链内品种全部参与演化训练）
+ENERGY_CHAIN_TRAIN: list[str] = list(ENERGY_CHAIN_SYMBOLS)
+
+# 化工产业链分组（盲测池来源；橡胶为独立板块不计入，可按需扩展）
+ENERGY_CHAIN_CHEMICAL_SECTORS: tuple[str, ...] = ("聚酯链", "油化工", "煤化工")
+
+# 能源链专属盲测池（链外盲测：其余化工产业链品种，泛化验证链因子的外延能力）
+ENERGY_CHAIN_HOLDOUT: list[str] = sorted(
+    {
+        sym
+        for sec in ENERGY_CHAIN_CHEMICAL_SECTORS
+        for sym in FUTURES_SECTOR_MAP.get(sec, [])
+    }
+    - set(ENERGY_CHAIN_SYMBOLS)
+)
+
+# 能源链因子库/精英目录路由标记（与通用 "futures" 隔离）
+ENERGY_CHAIN_MARKET: str = "energy"
+
+# 能源链训练品种最小历史深度阈值（GAP-Ixxx，A 数据补全后核验标准）：
+# 真实（非 SYNTHETIC）日线行数 ≥ 该值方可保留在训练链参与演化训练；
+# 低于该值的品种经 scripts/sync_energy_chain_depth.py 补全，补全后仍不足则降级。
+# 2026-08-14 实测补全后：LU0=1492（2020-06 起）、PR0=473（2024-08 起）、PL0=260（盲测池）；
+# 2026-08-15 扩池至 12 品种后，最短历史为 PX0（2023-09 起，约 700 行），全部达标，共同窗口由 PX0 决定。
+ENERGY_CHAIN_MIN_TRAIN_ROWS: int = 300
+
+# 能源链 L1 独立输出目录（2026-08-15：与通用 L1 严格隔离）：
+# 通用 L1 产出：memory/meta_loop、memory/knowledge/factors/factor_pool.json、
+#   memory/knowledge/factors/l1_injected/、memory/debates/；
+# 能源链 L1 全部独立落在 energy 专属子目录，互不污染。
+ENERGY_CHAIN_L1_MEMORY_DIR: str = "memory/meta_loop/energy"
+ENERGY_CHAIN_L1_POOL_PATH: str = "memory/knowledge/factors/factor_pool_energy.json"
+ENERGY_CHAIN_L1_INJECT_DIR: str = "memory/knowledge/factors/l1_injected_energy"
+ENERGY_CHAIN_L1_DEBATES_DIR: str = "memory/debates/energy"
+
+
+# ─── 品种池/产业链配置加载（SSOT: config/futures_universe.yaml）────────────
+# 上方硬编码常量即为"内置默认"（兜底）。模块加载时若 YAML 存在且校验通过，
+# 则以 YAML 为准覆盖；YAML 缺失/损坏/校验失败则保留内置默认并告警。
+# 消费方经 `from fts.data_futures import XXX` 导入，常量名/类型不变，零改动。
+
+_FUTURES_UNIVERSE_YAML = Path(__file__).resolve().parent.parent / "config" / "futures_universe.yaml"
+
+
+def _load_futures_universe_config() -> bool:
+    """加载 config/futures_universe.yaml 并覆盖品种池/产业链常量。
+
+    校验规则（任一失败即回退内置默认）:
+      1) universe 展平无重复品种；
+      2) 各池（core/holdout/stratified/训练池）均 ⊆ universe；
+      3) 盲测池 ∩ 分层训练集 = ∅（机构标准 GAP-055）；
+      4) 泛化范围子链名必须存在于 sector_map；
+      5) 炼化聚酯链分组由 energy 训练池自动生成并置首位（与 ENERGY_CHAIN_SYMBOLS 对齐）。
+
+    Returns:
+        True=已应用 YAML 配置；False=YAML 缺失/损坏/校验失败，保留内置默认。
+    """
+    if not _FUTURES_UNIVERSE_YAML.exists():
+        return False
+    try:
+        import yaml  # type: ignore[import-untyped]
+
+        cfg = yaml.safe_load(_FUTURES_UNIVERSE_YAML.read_text(encoding="utf-8")) or {}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("品种池/产业链配置 YAML 解析失败，使用内置默认: %s", e)
+        return False
+    try:
+        universe = [s for grp in cfg["universe"].values() for s in grp]
+        core_subset = list(cfg["core_subset"])
+        holdout = list(cfg["holdout"])
+        stratified = list(cfg["stratified_subset"])
+        sector_map: dict[str, list[str]] = {k: list(v) for k, v in cfg["sector_map"].items()}
+        ew = cfg["workflows"]["energy"]
+        chain_symbols = list(ew["chain_symbols"])
+        chemical_sectors = tuple(ew["chemical_sectors"])
+
+        # 校验
+        assert len(set(universe)) == len(universe), "universe 含重复品种"
+        uni_set = set(universe)
+        for name, pool in (
+            ("core_subset", core_subset),
+            ("holdout", holdout),
+            ("stratified_subset", stratified),
+            ("energy.chain_symbols", chain_symbols),
+        ):
+            assert set(pool) <= uni_set, f"{name} 存在 universe 外品种"
+        assert not (set(holdout) & set(stratified)), "盲测池与分层训练集重叠"
+        for sec in chemical_sectors:
+            assert sec in sector_map, f"泛化范围子链 [{sec}] 不存在于 sector_map"
+    except (KeyError, TypeError, ValueError, AssertionError) as e:
+        logger.warning("品种池/产业链配置校验失败，使用内置默认: %s", e)
+        return False
+
+    # 应用（覆盖内置默认；炼化聚酯链分组置首位）
+    global FUTURES_SUBSET, FUTURES_CORE_SUBSET, FUTURES_HOLDOUT
+    global FUTURES_SECTOR_MAP, FUTURES_STRATIFIED_SUBSET
+    global ENERGY_CHAIN_SYMBOLS, ENERGY_CHAIN_TRAIN, ENERGY_CHAIN_CHEMICAL_SECTORS
+    global ENERGY_CHAIN_HOLDOUT, ENERGY_CHAIN_MARKET, ENERGY_CHAIN_MIN_TRAIN_ROWS
+    global ENERGY_CHAIN_L1_MEMORY_DIR, ENERGY_CHAIN_L1_POOL_PATH
+    global ENERGY_CHAIN_L1_INJECT_DIR, ENERGY_CHAIN_L1_DEBATES_DIR
+
+    FUTURES_SUBSET = list(universe)
+    FUTURES_CORE_SUBSET = list(core_subset)
+    FUTURES_HOLDOUT = list(holdout)
+    FUTURES_STRATIFIED_SUBSET = list(stratified)
+    FUTURES_SECTOR_MAP = {"炼化聚酯链": list(chain_symbols), **sector_map}
+
+    ENERGY_CHAIN_SYMBOLS = list(chain_symbols)
+    ENERGY_CHAIN_TRAIN = list(chain_symbols)
+    ENERGY_CHAIN_CHEMICAL_SECTORS = tuple(chemical_sectors)
+    ENERGY_CHAIN_HOLDOUT = sorted(
+        {
+            sym
+            for sec in ENERGY_CHAIN_CHEMICAL_SECTORS
+            for sym in FUTURES_SECTOR_MAP.get(sec, [])
+        }
+        - set(ENERGY_CHAIN_SYMBOLS)
+    )
+    ENERGY_CHAIN_MARKET = str(ew["market"])
+    ENERGY_CHAIN_MIN_TRAIN_ROWS = int(ew["min_train_rows"])
+    ENERGY_CHAIN_L1_MEMORY_DIR = str(ew["l1_memory_dir"])
+    ENERGY_CHAIN_L1_POOL_PATH = str(ew["l1_pool_path"])
+    ENERGY_CHAIN_L1_INJECT_DIR = str(ew["l1_inject_dir"])
+    ENERGY_CHAIN_L1_DEBATES_DIR = str(ew["l1_debates_dir"])
+    logger.info("品种池/产业链配置已从 %s 加载（SSOT）", _FUTURES_UNIVERSE_YAML.name)
+    return True
+
+
+_load_futures_universe_config()
+
+
+def check_energy_chain_depth(
+    min_rows: int = ENERGY_CHAIN_MIN_TRAIN_ROWS,
+) -> dict[str, int]:
+    """审计能源链训练链品种历史深度（kline_cache 真实行数，SYNTHETIC 排除）。
+
+    Args:
+        min_rows: 深度阈值（默认 ENERGY_CHAIN_MIN_TRAIN_ROWS）。
+
+    Returns:
+        {"ok": 达标品种数, "below": 不达标品种数, "below_symbols": [..]}。
+    """
+    try:
+        db = _get_reader()
+        try:
+            below: list[str] = []
+            ok = 0
+            for sym in ENERGY_CHAIN_TRAIN:
+                base = sym[:-1] if sym.endswith("0") else sym
+                n = db.execute(
+                    "SELECT COUNT(*) FROM kline_cache "
+                    "WHERE symbol IN (?, ?) AND period='daily' "
+                    "AND (source IS NULL OR source != 'SYNTHETIC')",
+                    [base, sym],
+                ).fetchone()[0]
+                if int(n) >= min_rows:
+                    ok += 1
+                else:
+                    below.append(sym)
+            return {"ok": ok, "below": len(below), "below_symbols": below}
+        finally:
+            _release_reader(db)
+    except Exception:  # noqa: BLE001
+        return {"ok": 0, "below": len(ENERGY_CHAIN_TRAIN), "below_symbols": list(ENERGY_CHAIN_TRAIN)}
 
 
 # ─── 品种中文名称映射（FUTURES_SUBSET 全量）─────────────────
@@ -2215,6 +2430,17 @@ __all__ = [
     "FUTURES_HOLDOUT",
     "FUTURES_SECTOR_MAP",
     "FUTURES_STRATIFIED_SUBSET",
+    "ENERGY_CHAIN_SYMBOLS",
+    "ENERGY_CHAIN_TRAIN",
+    "ENERGY_CHAIN_HOLDOUT",
+    "ENERGY_CHAIN_CHEMICAL_SECTORS",
+    "ENERGY_CHAIN_MARKET",
+    "ENERGY_CHAIN_MIN_TRAIN_ROWS",
+    "ENERGY_CHAIN_L1_MEMORY_DIR",
+    "ENERGY_CHAIN_L1_POOL_PATH",
+    "ENERGY_CHAIN_L1_INJECT_DIR",
+    "ENERGY_CHAIN_L1_DEBATES_DIR",
+    "check_energy_chain_depth",
     "FUTURES_SYMBOL_NAMES",
     "DYNAMIC_POOL_CACHE",
     "get_dynamic_core_subset",

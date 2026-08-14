@@ -12,8 +12,8 @@ cross_section/intraday/other），作为 L3 自适应权重 style 维度的依�
     4. 签名输入字段（含 volume 且 name 含 ratio → volume 等）
     5. 缺省 "other"
 
-与 ``contracts._infer_factor_family``（family 维度）互为补充，
-风格与家族是正交的两个维度，可同时存在。
+与因子分组（按信号相关性聚类）相互独立，风格与分组是正交的两个维度，
+可同时存在。
 
 用法:
     from fts.factor_engine.style_classifier import FactorStyleClassifier

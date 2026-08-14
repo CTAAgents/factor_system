@@ -488,16 +488,21 @@ class OpenAIClient(LLMClient):
     ) -> str:
         """构造 L1 Bootstrapping Prompt。"""
         snapshot_summary = json.dumps(
-            {k: v for k, v in market_snapshot.items() if k != "trace_id"},
+            {k: v for k, v in market_snapshot.items() if k not in ("trace_id", "chain_knowledge")},
             ensure_ascii=False,
             default=str,
         )[:2000]
         gaps_summary = json.dumps(debate_gaps[:5], ensure_ascii=False, default=str)[:1000]
+        # 能源产业链专属知识（GAP-121）：由 L1 感知层注入，作为独立知识段输入
+        chain_knowledge = market_snapshot.get("chain_knowledge", "")
+        chain_knowledge_block = (
+            f"\n【能源产业链专属市场知识】\n{chain_knowledge}\n" if chain_knowledge else ""
+        )
         return f"""你是因子工程专家（FTS L1 Bootstrapping Agent）。基于市场快照和辩论薄弱维度，生成 {max_candidates} 个期货因子候选。
 
 【市场快照】
 {snapshot_summary}
-
+{chain_knowledge_block}
 【辩论薄弱维度】
 {gaps_summary}
 

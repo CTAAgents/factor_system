@@ -485,7 +485,6 @@ class SentimentFactorGenerator:
             ),
             source="manual",
             market="futures",
-            family="behavioral",
             symbols=[symbol],
             trace_id=trace_id,
         )

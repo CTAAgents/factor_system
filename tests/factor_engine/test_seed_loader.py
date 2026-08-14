@@ -40,7 +40,6 @@ def seeds_dir() -> Path:
 def sample_code_yaml(tmp_path: Path) -> Path:
     """创建一个示例 code-based YAML 文件。"""
     doc = {
-        "family": "test_code",
         "version": "1.0",
         "market": "futures",
         "factors": [
@@ -78,7 +77,6 @@ def sample_code_yaml(tmp_path: Path) -> Path:
 def sample_expression_yaml(tmp_path: Path) -> Path:
     """创建一个示例 expression-based YAML 文件。"""
     doc = {
-        "family": "test_expr",
         "version": "1.0",
         "market": "stock",
         "factors": [
@@ -107,7 +105,6 @@ def sample_expression_yaml(tmp_path: Path) -> Path:
 def sample_fundamental_yaml(tmp_path: Path) -> Path:
     """创建一个示例 fundamental-based YAML 文件。"""
     doc = {
-        "family": "test_fund",
         "version": "1.0",
         "market": "stock",
         "factors": [
@@ -155,7 +152,6 @@ def invalid_yaml(tmp_path: Path) -> Path:
 def unknown_type_yaml(tmp_path: Path) -> Path:
     """创建未知因子类型的 YAML 文件。"""
     doc = {
-        "family": "test_unknown",
         "version": "1.0",
         "market": "stock",
         "factors": [
@@ -275,6 +271,19 @@ class TestDirectoryLoading:
         factors = load_factors_from_dir(stock_dir)
         assert factors == []
 
+    def test_load_energy_directory(self, seeds_dir: Path):
+        """能化专属种子目录（GAP-121）可正确加载全部 YAML 文件。"""
+        from fts.factor_engine.seed_loader import load_factors_from_dir
+
+        energy_dir = seeds_dir / "energy"
+        factors = load_factors_from_dir(energy_dir)
+        assert len(factors) >= 8
+        names = {f["name"] for f in factors}
+        # 能化种子使用 eng_ / ec_ 前缀（eng_=量价代理，ec_=链传导专属）
+        assert all(n.startswith(("eng_", "ec_")) for n in names), f"能化种子前缀异常: {names}"
+        # 全部带 energy 市场标记
+        assert {f["market"] for f in factors} == {"energy"}
+
     def test_load_nonexistent_directory(self, tmp_path: Path):
         """不存在的目录返回空列表。"""
         from fts.factor_engine.seed_loader import load_factors_from_dir
@@ -310,6 +319,21 @@ class TestLoadAllYamlSeeds:
 
         seeds = load_all_yaml_seeds(market="futures")
         assert len(seeds) == 185
+
+    def test_load_energy_mixed(self):
+        """energy 市场混入加载 = 通用期货种子 + 能化专属种子（GAP-121）。"""
+        from fts.factor_engine.seed_loader import load_all_yaml_seeds
+
+        seeds = load_all_yaml_seeds(market="energy")
+        names = {f["name"] for f in seeds}
+        eng_names = {n for n in names if n.startswith(("eng_", "ec_"))}
+        fut_names = {n for n in names if n.startswith("fut_")}
+        # 两线知识均注入
+        assert len(eng_names) >= 8, f"能化专属种子缺失: {len(eng_names)}"
+        assert len(fut_names) >= 100, f"通用期货种子缺失: {len(fut_names)}"
+        # energy 专属因子 market 标记为 energy
+        eng_markets = {f["market"] for f in seeds if f["name"].startswith(("eng_", "ec_"))}
+        assert eng_markets == {"energy"}
 
 
 # ─── 双路径一致性 ────────────────────────────────────────────
@@ -369,6 +393,26 @@ class TestDualPathConsistency:
             # 恢复
             set_seeds_dir(None)
 
+    def test_seedpool_energy_not_stock_branch(self):
+        """energy 市场走期货+能化分支，不再误走股票分支（GAP-121 修复）。"""
+        from fts.factor_engine.seed_loader import set_seeds_dir
+        from fts.factor_engine.seed_pool import SeedPool
+
+        # 临时设置 seeds 目录为不存在的路径 → YAML 路径失效，走硬编码兜底
+        set_seeds_dir("__nonexistent_seeds__")
+        try:
+            pool = SeedPool(market="energy", use_yaml=False)
+            seeds = pool.load_all_seeds()
+            names = {s["name"] for s in seeds}
+            # 不应包含股票专属种子（修复前误走股票分支的标志）
+            stock_only = {n for n in names if n.startswith(("alpha_", "qlib_", "gtja_", "fund_val_"))}
+            assert not stock_only, f"energy 市场误加载股票种子: {stock_only}"
+            # 硬编码兜底加载期货种子（YAML 失效时的保底）
+            fut_names = {n for n in names if n.startswith(("fut_", "tsmom_", "vol_"))}
+            assert len(fut_names) >= 50, f"硬编码兜底期货种子不足: {len(fut_names)}"
+        finally:
+            set_seeds_dir(None)
+
 
 # ─── 边界条件 ────────────────────────────────────────────────
 
@@ -399,7 +443,7 @@ class TestEdgeCases:
 
     def test_yaml_without_factors_key(self, tmp_path: Path):
         """缺少 factors 键的 YAML 返回空列表。"""
-        doc = {"family": "test", "version": "1.0", "market": "stock"}
+        doc = {"version": "1.0", "market": "stock"}
         p = tmp_path / "no_factors.yaml"
         with open(p, "w", encoding="utf-8") as f:
             yaml.dump(doc, f, allow_unicode=True)
@@ -412,7 +456,6 @@ class TestEdgeCases:
     def test_factor_missing_name(self, tmp_path: Path):
         """缺少 name 的因子被跳过。"""
         doc = {
-            "family": "test",
             "version": "1.0",
             "market": "stock",
             "factors": [
@@ -439,13 +482,14 @@ class TestIntegrityVerification:
     """测试完整性验证功能。"""
 
     def test_verify_all_yaml_integrity(self):
-        """所有 YAML 文件通过完整性验证。"""
+        """所有 YAML 文件通过完整性验证（futures 20 文件 185 因子 + energy 5 文件 14 因子）。"""
         from fts.factor_engine.seed_loader import verify_yaml_integrity
 
         report = verify_yaml_integrity()
         assert report["valid"] is True
-        assert report["total_files"] == 20
-        assert report["total_factors"] == 185
+        # 期货 20 文件 + 能化专属 5 文件（energy/，GAP-121）
+        assert report["total_files"] == 25
+        assert report["total_factors"] == 199
         assert len(report["errors"]) == 0
 
     def test_verify_report_structure(self):
@@ -559,28 +603,24 @@ class TestInputFieldEstimation:
         assert lb == 10
 
 
-# ─── 文件名家族推断（qlib / gtja / wq101）──────────────────
+# ─── 期货种子文件名集合 ────────────────────────────────────
 
 
-class TestFamilyInferenceFromFilename:
-    """测试 YAML 文件名到标准家族的推断映射。"""
+class TestFuturesSeedFileSet:
+    """测试期货种子文件名集合（_FUTURES_SEED_FILES，按文件名校验加载完整性）。"""
 
-    def test_qlib158_maps_to_qlib(self):
-        from fts.factor_engine.seed_loader import _infer_family_from_filename
+    def test_seed_file_set_contains_known_files(self):
+        from fts.factor_engine.seed_loader import _FUTURES_SEED_FILES
 
-        assert _infer_family_from_filename("qlib158.yaml") == "qlib"
+        assert "momentum.yaml" in _FUTURES_SEED_FILES
+        assert "term_structure.yaml" in _FUTURES_SEED_FILES
+        assert "volatility.yaml" in _FUTURES_SEED_FILES
 
-    def test_gtja191_maps_to_gtja(self):
-        from fts.factor_engine.seed_loader import _infer_family_from_filename
+    def test_seed_file_set_excludes_legacy_library_files(self):
+        """外部库种子（qlib158/gtja191/wq101）不属期货内置集合。"""
+        from fts.factor_engine.seed_loader import _FUTURES_SEED_FILES
 
-        assert _infer_family_from_filename("gtja191.yaml") == "gtja"
+        assert "qlib158.yaml" not in _FUTURES_SEED_FILES
+        assert "gtja191.yaml" not in _FUTURES_SEED_FILES
+        assert "wq101.yaml" not in _FUTURES_SEED_FILES
 
-    def test_wq101_maps_to_wq101(self):
-        from fts.factor_engine.seed_loader import _infer_family_from_filename
-
-        assert _infer_family_from_filename("wq101.yaml") == "wq101"
-
-    def test_unknown_filename_returns_none(self):
-        from fts.factor_engine.seed_loader import _infer_family_from_filename
-
-        assert _infer_family_from_filename("random_name.yaml") is None

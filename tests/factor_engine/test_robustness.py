@@ -137,6 +137,19 @@ class TestInjectMissing:
         result = _inject_missing(sample_data, 0.50, random_seed=42)
         assert not result["date"].isna().any()
 
+    def test_missing_bool_col_no_warning(self, sample_data):
+        """bool 列缺失注入不触发 FutureWarning，且被提升为 float。"""
+        import warnings
+
+        df = sample_data.copy()
+        df["flag"] = df["close"] > df["close"].mean()
+        assert df["flag"].dtype == bool
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FutureWarning)
+            result = _inject_missing(df, 0.20, random_seed=42)
+        assert result["flag"].dtype == float
+        assert result["flag"].isna().any()
+
 
 class TestGenerateOODData:
     """测试 _generate_ood_data 函数。"""

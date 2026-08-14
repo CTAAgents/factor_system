@@ -12,7 +12,6 @@ import json
 from scripts.futures_signal_pipeline import (
     load_futures_elite_factors,
     _compute_signal_matrix,
-    _compute_factor_sign_flips,
 )
 from fts.data import FTSDataProvider
 from fts.data_futures import FUTURES_SUBSET
@@ -67,12 +66,8 @@ def compute_correlation_matrix():
     use_name = any(first_factor_key == fi["name"] for fi in factor_info)
     print(f"    使用 key 类型: {'factor_id' if use_factor_id else 'name' if use_name else 'unknown'}")
 
-    # Step 4: 方向校正
-    print("[4] 方向校正...")
-    factor_sign_flips = _compute_factor_sign_flips(signal_matrix, panel, common_dates)
-
-    # Step 5: 构建因子特征矩阵
-    print("[5] 构建因子特征矩阵...")
+    # Step 4: 构建因子特征矩阵（v2.105.0：方向校正由 L3 组合负责，此处不反转信号）
+    print("[4] 构建因子特征矩阵...")
 
     # 确定每个因子在 signal_matrix 中的 key
     factor_features = {}
@@ -90,8 +85,7 @@ def compute_correlation_matrix():
             if matrix_key in signal_matrix[sym]:
                 arr = signal_matrix[sym][matrix_key]
                 if arr is not None and len(arr) > 0:
-                    sign = factor_sign_flips.get(matrix_key, 1)
-                    corrected = np.array([v * sign if np.isfinite(v) else 0.0 for v in arr])
+                    corrected = np.array([v if np.isfinite(v) else 0.0 for v in arr])
                     all_signals.append(corrected)
 
         if all_signals:

@@ -1,6 +1,6 @@
 # FTS 可观测性
 
-> 版本: v2.104.0+16
+> 版本: v2.104.0+39
 > 最后更新: 2026-08-05
 
 ---
@@ -70,7 +70,19 @@ CLI 入口 (cli.py)
 | `GET /api/v1/risk/status` | JSON | 风控规则状态 |
 | `GET /api/v1/live/factors` | JSON | Live 因子偏离监控列表 |
 | `GET /api/v1/live/factors/{id}/deviation` | JSON | 单因子偏离详情 |
+| `GET /workflow` | HTML | WorkFlow UI SPA（React 构建产物，web/workflow_ui/dist） |
+| `GET /api/workflow/stages` | JSON | WorkFlow 阶段定义（11 阶段 + 质检闭环） |
+| `GET /api/workflow/runs` / `runs/{id}` | JSON | 运行批次列表 / 批次详情（阶段动作记录含日志与 JSON 产物） |
+| `GET /api/workflow/qa/board` | JSON | 质检状态看板（QA 7 状态分布 + 预警清单） |
+| `POST /api/workflow/runs` / `runs/{id}/run_all` / `runs/{id}/stage/{s}/action/{a}/run` | JSON | 创建批次 / 端到端执行 / 单动作执行 |
 | `data_level_monitor_job`（每日 04:00） | 日志 | 数据级质量监控（GAP-F06）：缺失率/异常值/复权一致性/多源分歧四维检查结果与告警计数（scheduler 任务 `fts.dlm`） |
+
+### WorkFlow 全链路日志（v2.104.0+25）
+
+WorkFlow 执行全程留痕（`fts.workflow` logger）：
+- 批次创建/阶段推进/失败中止/完成均写日志（含 run_id 与阶段 id）
+- 每阶段动作 stdout+stderr 全量捕获入库（`stage_runs.log`，超 20KB 截断），JSON 产物单独入库（`stage_runs.output`）供 UI 展示
+- 批次状态由 `_sync_run_status` 按 stage_runs 汇总（running/failed/success），SQLite WAL 持久化（`data/workflow.db`）崩溃可回放
 
 ### 数据级质量监控任务（GAP-F06）
 
@@ -101,6 +113,13 @@ METRIC drift_alert{overlap=0.00,weight=1.00,o_th=0.50,w_th=0.40} 1
 - `[权重冻结] 复用 {recomputed_at} 权重快照（{k} 因子），仅刷新因子值`——冻结日复用快照（GAP-072，快照含 `normalize` 字段记录重算日标准化口径）
 - `[权重] 本周重算日: 权重已学习并保存快照 -> {path}`——重算日 Ridge 权重学习 + 快照落盘
 - `[警告] 信号计算错误: {n} 次`——因子执行异常计数（不阻断主流程）
+
+**期货信号管道日志（v2.105.0 架构对齐后，`scripts/futures_signal_pipeline.py`）**：
+- `[L3 组合] 加载基础权重: {n} 因子 (n_factors={k})`——L3 组合权重加载（因子选择与基础权重权威源）
+- `[Regime 权重] {regime}: 类别缩放 {cat} → Top: {top3}`——Regime 档位缩放权重调整结果（bull/bear/oscillate/high_vol/low_vol）
+- `[警告] L3 组合因子在因子资产库中缺失，跳过: ...`——单因子缺失降级（不阻断）
+- `[ERROR] L3 组合权重文件缺失/损坏/为空 ...（严格模式，退出）`——L3 组合不可用严格模式报错退出，不自行回退
+- `[权重冻结]/[权重] 本周重算日` 等 Ridge 权重快照日志已随 v2.105.0 移除
 
 ### 指标字段
 

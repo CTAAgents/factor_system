@@ -160,7 +160,6 @@ def test_best_factor_program_is_operator(engine: OperatorEvolutionEngine):
         result,
         name="op_evolved_001",
         market="futures",
-        family="operator",
         narrative="算子演化测试因子",
         trace_id="test-trace-001",
         parent_id="fct_parent",
@@ -240,7 +239,7 @@ def test_evolution_loop_operator_mode_calls_engine(monkeypatch, panel):
 
     monkeypatch.setattr(OperatorEvolutionEngine, "evolve", fake_evolve)
 
-    parent = {"factor_id": "fct_parent_1", "name": "parent", "family": "trend"}
+    parent = {"factor_id": "fct_parent_1", "name": "parent"}
     factor, summary = loop._generate_operator_factor(
         parent,
         generation=0,
@@ -268,7 +267,7 @@ def test_operator_engine_skipped_without_forward_returns(monkeypatch, panel):
 
     monkeypatch.setattr(OperatorEvolutionEngine, "evolve", fake_evolve)
 
-    parent = {"factor_id": "fct_parent_1", "name": "parent", "family": "trend"}
+    parent = {"factor_id": "fct_parent_1", "name": "parent"}
     factor, summary = loop._generate_operator_factor(
         parent,
         generation=0,

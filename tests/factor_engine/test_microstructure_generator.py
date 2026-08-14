@@ -2,7 +2,7 @@
 tests/factor_engine/test_microstructure_generator.py — C1 微观结构因子生成器测试
 
 覆盖：聚合正确性 / code 可执行 / 零未来函数截断一致性 / 窗口自适应 / 日期对齐 /
-数据不足降级（空 tick / 少行 / 少日）/ 契约字段 / 命名与家族 / 批量生成 / 排除当日。
+数据不足降级（空 tick / 少行 / 少日）/ 契约字段 / 命名与风格 / 批量生成 / 排除当日。
 """
 
 from __future__ import annotations
@@ -104,7 +104,6 @@ class TestMicrostructureGenerator:
         f = cand.factor
         assert f["factor_id"].startswith("fct_")
         assert f["name"] == "micro_RB0_ofi_mean"
-        assert f["family"] == "microstructure"
         assert f["market"] == "futures"
         assert f["signature"]["frequency"] == "daily"
         assert f["signature"]["output_type"] == "signal"

@@ -40,17 +40,21 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 DATABASE_PATH = DATA_DIR / "factor_catalog.duckdb"
 DATABASE_PATH_FUTURES = DATA_DIR / "factor_catalog_futures.duckdb"
+# 能源产业链专属独立因子库（GAP-Ixxx，与通用期货库零耦合）
+DATABASE_PATH_ENERGY = DATA_DIR / "factor_catalog_energy.duckdb"
 
 
 def get_db_path(market: str = "futures") -> Path:
     """按市场返回因子目录数据库路径。
 
     Args:
-        market: 市场类型（仅 "futures"）
+        market: 市场类型（"futures" 通用期货 / "energy" 能源产业链专属）
 
     Returns:
         对应的 DuckDB 文件路径
     """
+    if market == "energy":
+        return DATABASE_PATH_ENERGY
     return DATABASE_PATH_FUTURES
 
 
@@ -83,7 +87,6 @@ CREATE TABLE IF NOT EXISTS factor_catalog (
     decay_rate_3m    DOUBLE DEFAULT 0.0,
     decay_rate_6m    DOUBLE DEFAULT 0.0,
     market          VARCHAR NOT NULL DEFAULT 'futures',
-    family          VARCHAR NOT NULL DEFAULT 'other',
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_elite        BOOLEAN DEFAULT FALSE,
@@ -345,7 +348,6 @@ _CREATE_SEED_LINEAGE = """
 CREATE TABLE IF NOT EXISTS seed_lineage (
     lineage_id          VARCHAR PRIMARY KEY,
     seed_name           VARCHAR NOT NULL,        -- L0 种子因子名称
-    seed_family         VARCHAR NOT NULL,        -- L0 种子家族
     seed_market         VARCHAR NOT NULL,        -- 市场 (futures/stock)
     evolved_factor_id   VARCHAR NOT NULL,        -- L2 精英因子 ID
     evolved_factor_name VARCHAR NOT NULL,        -- L2 精英因子名称
@@ -356,7 +358,6 @@ CREATE TABLE IF NOT EXISTS seed_lineage (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sl_seed_name ON seed_lineage(seed_name);
-CREATE INDEX IF NOT EXISTS idx_sl_seed_family ON seed_lineage(seed_family);
 CREATE INDEX IF NOT EXISTS idx_sl_evolved_factor_id ON seed_lineage(evolved_factor_id);
 CREATE INDEX IF NOT EXISTS idx_sl_promoted_at ON seed_lineage(promoted_at DESC);
 """
@@ -425,6 +426,18 @@ def init_database(db_path: Optional[Path] = None, market: Optional[str] = None) 
         conn.execute(_CREATE_FACTOR_REVIEWS)
         # 迁移：清除旧版 decision 索引（阻塞 UPSERT，见 _CREATE_FACTOR_REVIEWS 注释）
         conn.execute("DROP INDEX IF EXISTS idx_frv_decision")
+        # 迁移：彻底移除因子家族列（v2.104.0+25，family 概念废弃，分组统一走信号聚类）
+        conn.execute("ALTER TABLE factor_catalog DROP COLUMN IF EXISTS family")
+        # DuckDB DROP COLUMN 约束：seed_lineage 其余索引（seed_name/evolved_factor_id/promoted_at）
+        # 引用 seed_family 之后列，迁移需先撤全部相关索引再重建（新建库路径实测 CatalogException）
+        conn.execute("DROP INDEX IF EXISTS idx_sl_seed_name")
+        conn.execute("DROP INDEX IF EXISTS idx_sl_seed_family")
+        conn.execute("DROP INDEX IF EXISTS idx_sl_evolved_factor_id")
+        conn.execute("DROP INDEX IF EXISTS idx_sl_promoted_at")
+        conn.execute("ALTER TABLE seed_lineage DROP COLUMN IF EXISTS seed_family")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sl_seed_name ON seed_lineage(seed_name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sl_evolved_factor_id ON seed_lineage(evolved_factor_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sl_promoted_at ON seed_lineage(promoted_at DESC)")
 
         conn.execute("CHECKPOINT")
         logger.info("[FactorDB] ✅ 数据库初始化完成")
@@ -505,14 +518,14 @@ def verify_database(db_path: Optional[Path] = None, market: Optional[str] = None
         # 种子溯源统计
         if "seed_lineage" in stats["tables"]:
             lineage_count = conn.execute("SELECT COUNT(*) FROM seed_lineage").fetchone()[0]
-            family_dist = conn.execute("""
-                SELECT seed_family, COUNT(*) as cnt
+            name_dist = conn.execute("""
+                SELECT seed_name, COUNT(*) as cnt
                 FROM seed_lineage
-                GROUP BY seed_family
+                GROUP BY seed_name
                 ORDER BY cnt DESC
             """).fetchall()
             stats["seed_lineage_count"] = int(lineage_count)
-            stats["seed_lineage_families"] = {str(r[0]): int(r[1]) for r in family_dist}
+            stats["seed_lineage_seeds"] = {str(r[0]): int(r[1]) for r in name_dist}
 
         return stats
 

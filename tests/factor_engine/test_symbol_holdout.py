@@ -300,7 +300,7 @@ def test_run_factor_audit_wires_symbol_ic_and_holdout(monkeypatch):
     loop.auditor = FakeAuditor()
     loop.data = pd.DataFrame({"close": [1.0, 2.0]})
     loop.forward_returns = np.zeros(2)
-    factor = {"factor_id": "f1", "name": "f1", "family": "test"}
+    factor = {"factor_id": "f1", "name": "f1"}
     evaluation = {
         "level_1_backtest": {
             "symbol_ic": {"S1": 0.1, "S2": -0.2},

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any, Optional, TypedDict, cast
 
 import numpy as np
@@ -45,6 +46,41 @@ class AdjustedMetrics(TypedDict, total=False):
     roll_cost_bps: float  # 展期成本合计（基点，持仓穿越换月日）
     financing_cost_bps: float  # 融资成本合计（年化基点，C7）
     cost_breakdown: dict[str, float]  # 成本构成明细（滑点/手续费/冲击/融资/展期，C7）
+
+
+@dataclass
+class VarietyCostConfig:
+    """品种差异化成本配置（CTA 手册阶段1：手续费按品种差异化）。
+
+    - 按比例收取品种（玻璃、纯碱等）: commission_type="ratio" + commission_bps
+    - 按固定金额收取品种（螺纹钢、铁矿石、玉米等）: commission_type="fixed"
+      + commission_per_lot（元/手）+ contract_multiplier（元/点），
+      换算 bps = 元/手 / (价格 × 乘数) × 10000
+    - 平今仓优惠/加收: close_today_ratio（<1 优惠 / >1 加收 / 1=默认），
+      综合倍率 = 0.5 + 0.5 × ratio（开仓侧 1.0、平仓侧按倍率）
+    - 滑点/冲击成本可选覆盖（None=沿用市场默认）
+    """
+
+    commission_type: str = "ratio"  # "ratio" 按比例 / "fixed" 固定金额（元/手）
+    commission_bps: Optional[float] = None  # 按比例手续费（基点，如 1.5 = 万1.5）
+    commission_per_lot: Optional[float] = None  # 固定金额（元/手）
+    contract_multiplier: Optional[float] = None  # 合约乘数（元/点）
+    slippage_bps: Optional[float] = None  # 滑点覆盖（None=市场默认）
+    impact_bps_per_pct: Optional[float] = None  # 冲击成本覆盖（None=市场默认）
+    close_today_ratio: float = 1.0  # 平今仓手续费倍率
+
+
+# 内置品种费率示例表（CTA 手册阶段1：按品种差异化，区分按比例/按固定金额）。
+# ⚠️ 示例值，上线前必须按交易所最新标准逐品种核验更新。
+_DEFAULT_VARIETY_COST_TABLE: dict[str, VarietyCostConfig] = {
+    # 按固定金额收取（双边约万3-万5等值，不可套用万1.2）
+    "RB": VarietyCostConfig(commission_type="fixed", commission_per_lot=14.4, contract_multiplier=10.0),  # 螺纹钢
+    "I": VarietyCostConfig(commission_type="fixed", commission_per_lot=32.0, contract_multiplier=100.0),  # 铁矿石
+    "C": VarietyCostConfig(commission_type="fixed", commission_per_lot=8.4, contract_multiplier=10.0),  # 玉米
+    # 按比例收取
+    "FG": VarietyCostConfig(commission_type="ratio", commission_bps=1.5),  # 玻璃 万1.5
+    "SA": VarietyCostConfig(commission_type="ratio", commission_bps=2.0),  # 纯碱 万2
+}
 
 
 # ─── 默认市场成本配置 ─────────────────────────────────────
@@ -113,6 +149,30 @@ _ASSUMED_ANNUAL_VOL = 0.15
 _MONTHS_PER_YEAR = 12
 
 
+def liquidity_slippage_bps(
+    amount_percentile: float,
+    base_slippage_bps: float = 1.0,
+    stress_slippage_bps: float = 2.0,
+    low_liquidity_percentile: float = 0.3,
+) -> float:
+    """流动性分档滑点（CTA 手册阶段1：基准单边 1 跳、压力测试 2 跳、低流动性强制 2 跳）。
+
+    日均成交额排名后 30% 的品种强制使用压力档滑点（流动性差，真实成交滑移更大）。
+
+    Args:
+        amount_percentile: 品种日均成交额在全市场的分位数（0~1）
+        base_slippage_bps: 基准滑点（默认 1.0 = 1 跳）
+        stress_slippage_bps: 压力/低流动性滑点（默认 2.0 = 2 跳）
+        low_liquidity_percentile: 低流动性阈值（默认 0.3 = 后 30%）
+
+    Returns:
+        建议滑点（bps）。
+    """
+    if amount_percentile < low_liquidity_percentile:
+        return stress_slippage_bps
+    return base_slippage_bps
+
+
 class TransactionCostModel:
     """交易成本模型。
 
@@ -124,6 +184,7 @@ class TransactionCostModel:
         self,
         config: CostConfig | None = None,
         market_configs: dict[str, CostConfig] | None = None,
+        variety_configs: dict[str, VarietyCostConfig] | None = None,
     ) -> None:
         """初始化交易成本模型。
 
@@ -131,8 +192,13 @@ class TransactionCostModel:
             config: 全局默认配置。为 None 时使用 "futures" 默认值。
             market_configs: 各市场专属配置字典。
                 未提供的市场将回退到全局默认配置或内置默认值。
+            variety_configs: 品种差异化成本配置表（CTA 手册阶段1），
+                key=品种代码（如 "RB"），None 时使用内置示例表。
         """
         self._market_configs: dict[str, CostConfig] = {}
+        self._variety_configs: dict[str, VarietyCostConfig] = (
+            dict(variety_configs) if variety_configs is not None else dict(_DEFAULT_VARIETY_COST_TABLE)
+        )
 
         # 加载外部覆盖
         if market_configs:
@@ -164,6 +230,45 @@ class TransactionCostModel:
             market,
             self._default_config,
         )
+
+    def get_effective_cost_bps(
+        self,
+        market: str = "futures",
+        symbol: Optional[str] = None,
+        avg_price: float = 100.0,
+    ) -> CostConfig:
+        """获取指定品种的生效成本配置（品种差异化覆盖市场默认，CTA 手册阶段1）。
+
+        品种级覆盖项：按比例/固定金额手续费、滑点、冲击成本、平今仓倍率；
+        未配置的品种返回市场默认，完全向后兼容。
+
+        Args:
+            market: 市场名称（"futures"）
+            symbol: 品种代码（如 "RB"/"FG"）；None 或未配置时返回市场默认
+            avg_price: 平均价格（固定金额手续费转 bps 用，元）
+
+        Returns:
+            合并后的 CostConfig（品种覆盖优先）。
+        """
+        cfg = dict(self.get_cost_bps(market))
+        vc = self._variety_configs.get(symbol or "")
+        if vc is not None:
+            if vc.slippage_bps is not None:
+                cfg["slippage_bps"] = vc.slippage_bps
+            if vc.impact_bps_per_pct is not None:
+                cfg["impact_bps_per_pct"] = vc.impact_bps_per_pct
+            # 手续费：固定金额转 bps = 元/手 / (价格×乘数) × 10000
+            if vc.commission_type == "fixed" and vc.commission_per_lot is not None:
+                mult = float(vc.contract_multiplier or 1.0)
+                price = float(avg_price or 100.0)
+                cfg["commission_bps"] = vc.commission_per_lot / (price * mult) * 10000.0
+            elif vc.commission_bps is not None:
+                cfg["commission_bps"] = vc.commission_bps
+            # 平今仓倍率：综合 = 0.5 + 0.5 × ratio（开仓 1.0、平仓按倍率）
+            if vc.close_today_ratio != 1.0:
+                base_comm = float(cfg.get("commission_bps", 0.0))
+                cfg["commission_bps"] = base_comm * (0.5 + 0.5 * float(vc.close_today_ratio))
+        return cast(CostConfig, cfg)
 
     @staticmethod
     def _roll_events_to_spread_map(
@@ -202,6 +307,7 @@ class TransactionCostModel:
         volume: np.ndarray | None = None,
         avg_price: float = 100.0,
         market: str = "futures",
+        symbol: Optional[str] = None,
         dates: np.ndarray | None = None,
         roll_dates: set[str] | None = None,
         roll_events: list[Any] | None = None,
@@ -210,7 +316,7 @@ class TransactionCostModel:
 
         步骤:
             1. 从信号变化估算月度换手率
-            2. 查询市场成本参数
+            2. 查询市场成本参数（品种差异化覆盖，CTA 手册阶段1）
             3. 计算总成本（滑点 + 手续费 + 冲击 + 展期）
             4. 应用最低成本下限
             5. 计算成本调整后夏普
@@ -219,8 +325,9 @@ class TransactionCostModel:
             metrics: 原始回测指标（必须包含 sharpe）。
             signal: 因子信号数组（-1~+1）。
             volume: 日成交量数组（用于冲击成本估算）。
-            avg_price: 平均价格（用于冲击成本缩放）。
+            avg_price: 平均价格（用于冲击成本缩放 + 固定金额手续费转 bps）。
             market: 市场类型。
+            symbol: 品种代码（如 "RB"），启用品种差异化成本（None=市场默认）。
             dates: 日期索引数组（与 signal 对齐，用于匹配换月日；v2.58.0 GAP-046）。
             roll_dates: 换月日期集合（ISO 字符串）；持仓穿越换月日时扣除展期成本
                 = |position| × roll_cost_bps（v2.58.0 GAP-046）。
@@ -231,7 +338,7 @@ class TransactionCostModel:
             AdjustedMetrics（含展期成本统计）。
         """
         gross_sharpe = metrics.get("sharpe", 0.0)
-        config = self.get_cost_bps(market)
+        config = self.get_effective_cost_bps(market, symbol=symbol, avg_price=avg_price)
 
         # 1. 从信号变化估算月度换手率
         if len(signal) > 1:

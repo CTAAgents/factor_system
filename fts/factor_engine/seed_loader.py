@@ -24,26 +24,29 @@ from .factor_program import create_factor_program
 
 logger = logging.getLogger(__name__)
 
-# ─── 期货 YAML 文件名 → 家族名映射 ─────────────────────────
-_FUTURES_FAMILY_FILE_MAP: dict[str, tuple[int, str]] = {
-    "momentum.yaml": (1, "动量因子家族"),
-    "term_structure.yaml": (2, "期限结构因子家族"),
-    "position_flow.yaml": (3, "持仓/资金流因子家族"),
-    "liquidity.yaml": (4, "流动性因子家族"),
-    "higher_moments.yaml": (5, "偏度/峰度/高阶矩因子家族"),
-    "volatility.yaml": (6, "波动率因子家族"),
-    "fundamental.yaml": (7, "基本面因子家族"),
-    "crowding.yaml": (8, "拥挤度因子家族"),
-    "alpha_behavior.yaml": (9, "Alpha/量价行为因子家族"),
-    "high_frequency.yaml": (10, "高频因子家族"),
-    "options.yaml": (11, "期权隐含信息因子家族"),
-    "market_regime.yaml": (12, "市场环境因子家族"),
-    "cta_registry.yaml": (13, "CTA注册表补充因子 V2.0"),
-    "operator_dict.yaml": (14, "算子字典种子因子"),
-    "vnpy_cta.yaml": (15, "vnpy CTA技术指标因子家族"),
-    "wind_cta.yaml": (16, "Wind平台特色因子家族"),
-    "mc_cta.yaml": (17, "MultiCharts平台特色因子家族"),
-}
+# ─── 期货 YAML 种子文件名（按文件名校验加载完整性） ──────
+_FUTURES_SEED_FILES: frozenset[str] = frozenset({
+    "momentum.yaml",
+    "term_structure.yaml",
+    "position_flow.yaml",
+    "liquidity.yaml",
+    "higher_moments.yaml",
+    "volatility.yaml",
+    "fundamental.yaml",
+    "crowding.yaml",
+    "alpha_behavior.yaml",
+    "high_frequency.yaml",
+    "options.yaml",
+    "market_regime.yaml",
+    "cta_registry.yaml",
+    "operator_dict.yaml",
+    "vnpy_cta.yaml",
+    "wind_cta.yaml",
+    "mc_cta.yaml",
+    "academic_papers.yaml",
+    "broker_reports.yaml",
+    "tinysoft.yaml",
+})
 
 # ─── 路径配置 ─────────────────────────────────────────────────
 
@@ -86,7 +89,7 @@ def list_yaml_files(directory: Path) -> list[Path]:
 # ─── 类型 1: Code-based 因子 ─────────────────────────────────
 
 
-def _code_factor_from_yaml(defn: dict[str, Any], market: str, family_hint: Optional[str] = None) -> FactorProgram:
+def _code_factor_from_yaml(defn: dict[str, Any], market: str) -> FactorProgram:
     """从 YAML 定义创建代码型因子（期货、内置种子）。"""
     signature = FactorSignature(
         input_fields=defn.get("input_fields", ["close"]),
@@ -115,7 +118,6 @@ def _code_factor_from_yaml(defn: dict[str, Any], market: str, family_hint: Optio
         source="seed",
         generation=0,
         market=defn.get("market") or market,
-        family=defn.get("family") or family_hint,
         symbols=defn.get("symbols", []),
         kind=FactorKind.CODE,
     )
@@ -236,7 +238,7 @@ def _estimate_input_fields(expression: str) -> list[str]:
     return sorted(fields)
 
 
-def _expression_factor_from_yaml(defn: dict[str, Any], market: str, family_hint: Optional[str] = None) -> FactorProgram:
+def _expression_factor_from_yaml(defn: dict[str, Any], market: str) -> FactorProgram:
     """从 YAML 定义创建表达式型因子。"""
     from .expr_dsl.seed_analyzer import estimate_lookback_static
 
@@ -274,7 +276,6 @@ def _expression_factor_from_yaml(defn: dict[str, Any], market: str, family_hint:
         source="seed",
         generation=0,
         market=defn.get("market") or market,
-        family=defn.get("family") or family_hint,
         symbols=defn.get("symbols", []),
         kind=FactorKind.OPERATOR,
     )
@@ -302,9 +303,7 @@ _FUNDAMENTAL_CODE_TEMPLATE = (
 )
 
 
-def _fundamental_factor_from_yaml(
-    defn: dict[str, Any], market: str, family_hint: Optional[str] = None
-) -> FactorProgram:
+def _fundamental_factor_from_yaml(defn: dict[str, Any], market: str) -> FactorProgram:
     """从 YAML 定义创建基本面因子。"""
     import textwrap
 
@@ -344,7 +343,6 @@ def _fundamental_factor_from_yaml(
         source="seed",
         generation=0,
         market=defn.get("market") or market,
-        family=defn.get("family") or family_hint,
         symbols=defn.get("symbols", []),
         kind=FactorKind.CODE,
     )
@@ -364,71 +362,19 @@ def _detect_factor_type(defn: dict[str, Any]) -> str:
     raise ValueError(f"Unknown factor type in YAML: {defn.get('name', '?')}")
 
 
-def _factor_from_yaml(defn: dict[str, Any], market: str, family_hint: Optional[str] = None) -> FactorProgram:
+def _factor_from_yaml(defn: dict[str, Any], market: str) -> FactorProgram:
     """从 YAML 定义创建 FactorProgram（自动检测类型）。"""
     ftype = _detect_factor_type(defn)
     if ftype == "code":
-        return _code_factor_from_yaml(defn, market, family_hint)
+        return _code_factor_from_yaml(defn, market)
     if ftype == "expression":
-        return _expression_factor_from_yaml(defn, market, family_hint)
+        return _expression_factor_from_yaml(defn, market)
     if ftype == "fundamental":
-        return _fundamental_factor_from_yaml(defn, market, family_hint)
+        return _fundamental_factor_from_yaml(defn, market)
     raise ValueError(f"Unknown factor type: {ftype}")
 
 
 # ─── 公开 API ────────────────────────────────────────────────
-
-
-def _infer_family_from_filename(filename: str) -> Optional[str]:
-    """从 YAML 文件名推断因子家族（使用标准 Family 枚举值）。
-
-    文件名匹配顺序：精确匹配 > 关键词匹配。
-    不匹配时返回 None，由 normalize_factor_program 处理。
-    """
-    name_lower = filename.lower().replace(".yaml", "").replace(".yml", "")
-    # 精确文件名映射（数据源文件名 → 标准家族）
-    exact_map = {
-        "qlib158": "qlib",
-        "gtja191": "gtja",
-        "wq101": "wq101",
-        "builtin": "technical",
-    }
-    if name_lower in exact_map:
-        return exact_map[name_lower]
-    # 关键词匹配
-    keyword_map = [
-        ("momentum", "trend"),
-        ("trend", "trend"),
-        ("cta_registry", "trend"),
-        ("qlib", "qlib"),
-        ("wq", "wq101"),
-        ("gtja", "gtja"),
-        ("reversion", "mean_reversion"),
-        ("mean_reversion", "mean_reversion"),
-        ("carry", "carry"),
-        ("spread", "carry"),
-        ("term_structure", "carry"),
-        ("volatility", "volatility"),
-        ("higher_moments", "volatility"),
-        ("options", "volatility"),
-        ("volume", "volume"),
-        ("high_frequency", "volume"),
-        ("liquidity", "liquidity"),
-        ("fundamental", "fundamental"),
-        ("position_flow", "microstructure"),
-        ("open_interest", "microstructure"),
-        ("alpha_behavior", "behavioral"),
-        ("crowding", "behavioral"),
-        ("market_regime", "macro"),
-        ("operator_dict", "technical"),
-        ("vnpy_cta", "technical"),
-        ("wind_cta", "technical"),
-        ("mc_cta", "technical"),
-    ]
-    for keyword, family in keyword_map:
-        if keyword in name_lower:
-            return family
-    return None
 
 
 def load_factors_from_yaml(
@@ -450,13 +396,12 @@ def load_factors_from_yaml(
         logger.warning(f"Empty YAML file: {filepath.name}")
         return []
     market = data.get("market", "stock")
-    family = data.get("family") or _infer_family_from_filename(filepath.name)
     factors = data.get("factors", [])
 
     result: list[FactorProgram] = []
     for defn in factors:
         try:
-            fp = _factor_from_yaml(defn, market, family_hint=family)
+            fp = _factor_from_yaml(defn, market)
             result.append(fp)
         except Exception as e:
             logger.warning(f"Failed to load factor '{defn.get('name', '?')}' from {filepath.name}: {e}")
@@ -499,7 +444,8 @@ def load_all_yaml_seeds(
 
     Args:
         trace_id: 可选的全链路 trace_id
-        market: 可选的市场过滤（'futures' / 'stock' / None=全部）
+        market: 可选的市场过滤（'futures' / 'stock' / 'energy' / None=全部）
+            - "energy": 混入加载通用期货种子（seeds/futures）+ 能化专属种子（seeds/energy）
         include_external: 是否加载外部种子（WQ101/Qlib158/GTJA191/基本面）
 
     Returns:
@@ -517,51 +463,57 @@ def load_all_yaml_seeds(
             if builtin.exists():
                 result.extend(load_factors_from_yaml(builtin, trace_id))
 
-    if market in (None, "futures"):
+    if market == "energy":
+        # 能源产业链专属市场（GAP-121）：混入加载 = 通用期货种子 + 能化专属种子
+        energy_dir = seeds_dir / "energy"
+        if energy_dir.exists():
+            energy_factors = load_factors_from_dir(energy_dir, trace_id)
+            logger.info(
+                "[yaml_seed] 能化专属 YAML 种子加载完成: %d 个因子, trace_id=%s",
+                len(energy_factors),
+                trace_id,
+            )
+            result.extend(energy_factors)
+
+    if market in (None, "futures", "energy"):
         futures_dir = seeds_dir / "futures"
         logger.info(
-            "[yaml_seed] 开始加载期货 YAML 种子 (17 家族), trace_id=%s",
+            "[yaml_seed] 开始加载期货 YAML 种子 (%d 个种子文件), trace_id=%s",
+            len(_FUTURES_SEED_FILES),
             trace_id,
         )
         futures_files = list_yaml_files(futures_dir)
-        futures_family_loaded: dict[int, tuple[str, int]] = {}
+        futures_loaded: dict[str, int] = {}
 
         for yaml_file in futures_files:
             fp_list = load_factors_from_yaml(yaml_file, trace_id)
             result.extend(fp_list)
 
-            # ── 分家族加载日志 ──
+            # ── 按种子文件加载日志 ──
             fname = yaml_file.name
-            if fname in _FUTURES_FAMILY_FILE_MAP:
-                fid, fam_name = _FUTURES_FAMILY_FILE_MAP[fname]
-                count = len(fp_list)
-                futures_family_loaded[fid] = (fam_name, count)
-                logger.info(
-                    "[yaml_seed] ★ 家族 %2d 加载完成: %s (%d 个因子), file=%s, trace_id=%s",
-                    fid,
-                    fam_name,
-                    count,
-                    fname,
-                    trace_id,
-                )
+            count = len(fp_list)
+            futures_loaded[fname] = count
+            logger.info(
+                "[yaml_seed] ★ 种子文件加载完成: %s (%d 个因子), trace_id=%s",
+                fname,
+                count,
+                trace_id,
+            )
 
-        # ── 期货家族汇总验证 ──
-        total_futures = sum(c for _, c in futures_family_loaded.values())
-        loaded_fids = sorted(futures_family_loaded.keys())
-        missing_fids = [f for f in range(1, 17) if f not in futures_family_loaded]
-
-        if missing_fids:
+        # ── 期货种子文件缺失校验 ──
+        missing_files = sorted(_FUTURES_SEED_FILES - set(futures_loaded))
+        if missing_files:
             logger.error(
-                "[yaml_seed] ❌ 期货家族不完整: 已加载 %s, 缺少 %s, trace_id=%s",
-                loaded_fids,
-                missing_fids,
+                "[yaml_seed] ❌ 期货种子文件不完整: 已加载 %d 个, 缺少 %s, trace_id=%s",
+                len(futures_loaded),
+                missing_files,
                 trace_id,
             )
         else:
             logger.info(
-                "[yaml_seed] ✅ 全部 %d 个期货家族加载完成, 总计 %d 个因子, trace_id=%s",
-                len(futures_family_loaded),
-                total_futures,
+                "[yaml_seed] ✅ 全部 %d 个期货种子文件加载完成, 总计 %d 个因子, trace_id=%s",
+                len(futures_loaded),
+                sum(futures_loaded.values()),
                 trace_id,
             )
 
@@ -584,8 +536,10 @@ def verify_yaml_integrity() -> dict[str, Any]:
         "files": [],
     }
 
-    for subdir in ["stock", "futures"]:
+    for subdir in ["stock", "futures", "energy"]:
         d = seeds_dir / subdir
+        if not d.exists():
+            continue
         for yaml_file in list_yaml_files(d):
             report["total_files"] += 1
             try:

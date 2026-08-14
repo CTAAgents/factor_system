@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.104.0+16
+> 版本: v2.104.0+39
 > 最后更新: 2026-08-10
 
 ---
@@ -42,13 +42,13 @@ FTS 配置采用三级优先级（高→低）：
 | `l2_orthogonal_basis_enabled` | bool | true | `FTS_L2_ORTHOGONAL_BASIS_ENABLED` | 多因子正交基底开关：L2 准入优先对 Gram-Schmidt 基底迭代残差化（GAP-I206 补充，v2.72.1） |
 | `l2_orthogonal_basis_max_size` | int | 10 | `FTS_L2_ORTHOGONAL_BASIS_MAX_SIZE` | 正交基底最大成员数（超出时按 Sharpe 降序淘汰最弱成员）（GAP-I206 补充，v2.72.1） |
 | `l2_orthogonal_basis_min_sharpe` | float | 1.0 | `FTS_L2_ORTHOGONAL_BASIS_MIN_SHARPE` | 基底成员最小 Sharpe（低于该值不再入选基底）（GAP-I206 补充，v2.72.1） |
-| `structure_cluster_quota_enabled` | bool | true | `FTS_CLUSTER_QUOTA_ENABLED` | 结构性聚类配额开关：以信号相关性聚类配额替代 max_per_family 家族配额（family 为来源标签非结构维度）；关闭回退 max_per_family 旧逻辑（GAP-077，v2.102.0） |
+| `structure_cluster_quota_enabled` | bool | true | `FTS_CLUSTER_QUOTA_ENABLED` | 结构性聚类配额开关：以信号相关性聚类配额控制 elite 多样性（v2.104.0+25 起 max_per_family 家族配额已彻底删除，仅保留聚类配额路径）（GAP-077，v2.102.0） |
 | `structure_cluster_max` | int | 15 | `FTS_CLUSTER_MAX` | 每结构簇最大因子数：与既有 elite \|corr\| ≥ corr_threshold 的同类成员数达上限拒绝晋升（GAP-077，v2.102.0） |
 | `structure_cluster_corr_threshold` | float | 0.85 | `FTS_CLUSTER_CORR_THRESHOLD` | 结构簇"同类"判定相关性阈值（略宽于 GAP-I206 的 0.9：0.9 强拦截 vs 0.85 数量配额）（GAP-077，v2.102.0） |
 | `shap_n_extreme` | int | 25 | `FTS_SHAP_N_EXTREME` | SHAP 极端样本数（top+bottom 各 N）：KernelExplainer 每因子评估量 ≈ n_extreme×2×nsamples；GAP-080 降频 50→25（v2.102.0） |
 | `shap_n_background` | int | 50 | `FTS_SHAP_N_BACKGROUND` | SHAP KernelExplainer 背景样本数：GAP-080 降频 100→50（v2.102.0） |
 | `shap_nsamples` | int | 50 | `FTS_SHAP_NSAMPLES` | SHAP 每极端样本 KernelExplainer 扰动次数（nsamples）：GAP-080 降频 100→50，与 n_extreme 合并 ~4x 评估量下降（v2.102.0） |
-| `evolution_success_pattern_enabled` | bool | true | `FTS_SUCCESS_PATTERN_ENABLED` | 成功模式定向演化开关：注入近期成功模式（方法/算子/窗口维度，排除 family）到 MacroEvolver prompt 作 soft 偏向（Phase 1.2 P0-1，26 号计划 §6） |
+| `evolution_success_pattern_enabled` | bool | true | `FTS_SUCCESS_PATTERN_ENABLED` | 成功模式定向演化开关：注入近期成功模式（方法/算子/窗口维度，排除 style_tags）到 MacroEvolver prompt 作 soft 偏向（Phase 1.2 P0-1，26 号计划 §6） |
 | `success_pattern_window_days` | int | 14 | `FTS_SUCCESS_PATTERN_WINDOW` | 成功模式滚动窗口（天）：窗口外模式不参与统计（防过拟合） |
 | `success_pattern_min_sample` | int | 10 | `FTS_SUCCESS_PATTERN_MIN_SAMPLE` | 成功模式样本下限：窗口内成功轨迹 < 该值 → 空报告（不注入） |
 | `evolution_stop_enabled` | bool | false | `FTS_EVOLUTION_STOP_ENABLED` | 提前达标停止开关（保守默认关闭）：连续 K 代零晋升 → 提前结束 run 正常收尾（Phase 3 P1-3，26 号计划 §8） |
@@ -76,7 +76,7 @@ FTS 配置采用三级优先级（高→低）：
 | `executor_max_workers` | int | 4 | `FTS_EXECUTOR_MAX_WORKERS` | 执行器后端并行工作数（GAP-I502，v2.83.0） |
 | `tick_cache_retention_days` | int | 7 | —（FuturesDataAggregator 构造参数） | tick_cache 保留天数：超过该时长的过期 tick 写入时自动清理（GAP-I503 首期，v2.84.0） |
 | `l3_turnover_penalty` | float | 0.0 | `FTS_L3_TURNOVER_PENALTY` | 组合目标函数换手惩罚系数 λ：粘性约束后按 1/(1+λ) 收缩权重变动（0=关闭，λ 越大换手越低，GAP-I303，v2.85.0） |
-| l3_weight_recompute_cadence | str | "daily" | FTS_L3_WEIGHT_RECOMPUTE_CADENCE | 权重重算频率：daily=每日重算 / weekly=仅 l3_weight_recompute_weekday 重算（GAP-072，v2.99.0；解绑 L3 与信号管道——信号管道每日生成信号，权重在重算日学习，其余日冻结复用快照；v2.104.0+7 默认改 daily——避免冻结日复用旧快照导致因子池骤减） |
+| l3_weight_recompute_cadence | str | "daily" | FTS_L3_WEIGHT_RECOMPUTE_CADENCE | L3 组合权重重算频率：daily=每日重算 / weekly=仅 l3_weight_recompute_weekday 重算（GAP-072，v2.99.0；v2.104.0+7 默认改 daily；v2.105.0 起仅作用于 PortfolioLoop L3 侧，信号管道不再消费——信号管道因子选择与基础权重直接读 L3 组合 factor_weights.json，不再自训权重） |
 | l3_weight_recompute_weekday | int | 4 | FTS_L3_WEIGHT_RECOMPUTE_WEEKDAY | 周度重算日（Python weekday 0=周一...4=周五，默认周五收盘后重算；GAP-072，v2.99.0） |
 | `l3_turnover_budget_enabled` | bool | `false` | `FTS_L3_TURNOVER_BUDGET_ENABLED` | G3 换手预算分配开关（v2.103.0+17）：`true`=启用（单日换手 > daily_turnover_cap=0.30 时按边际收益剔除弱信号回退当前持仓）；`false`=关闭（默认，不剔除；换手控制由粘性约束 + 换手惩罚 λ 双通道兜底）。期货周频场景关闭可避免 sharpe 被 SHARPE_CAP 截断后评分并列导致的误剔最强因子（2026-08-13 实测 fut_bias_g18=0.9859 被误剔归零） |
 | `evolution_shadow_observe`（环境变量直读） | bool | `false` | `FTS_EVOLUTION_SHADOW_OBSERVE` | 新晋级精英因子影子池观察期开关（v2.103.0+20）：`1`=晋升写入 shadow_pool 标记（观察 5 交易日，L3 观察期内不纳入组合）；`0`/未设=默认关闭（新晋级直接进正式组合）。仅作用于新晋级因子，重审降级因子 shadow_pool 保留不变 |
@@ -164,6 +164,36 @@ batch_random_seed: 42      # batch 随机种子
 
 > **evolution_mode 说明（Phase C.2 / GAP-I201）**：取值 `operator`（算子主干）/ `code`（代码创新）/ `hybrid`（混合）/ `batch`（批量挖掘漏斗），默认 `hybrid`，支持环境变量 `FTS_EVOLUTION_MODE` 覆盖。`batch` 模式（v2.65.0）每代对同一父因子批量生成 `batch_size` 个后代（macro 至多 1 次 + GP/operator 交替 + seed 递增），ThreadPoolExecutor 并行粗筛后按预筛 IC 排序截断 `batch_max_candidates` 个进入细评估准入链；token 护栏（每代至多 1 次 LLM）与既有熔断协同。
 
+### 3.1 品种池/产业链配置（config/futures_universe.yaml，v2.104.0+38）
+
+品种池与产业链分类单一事实源（SSOT），驱动 `fts.data_futures` 全部池常量。加载优先级：
+**`config/futures_universe.yaml` > 内置默认**（YAML 缺失/损坏/校验失败时回退内置默认并告警，保证无配置环境可运行）。
+
+```yaml
+universe:            # FUTURES_SUBSET（按交易所分组，展平后 82 品种）
+  dce: [V0, ...]     # 大商所
+  czce: [...]        # 郑商所
+  shfe: [...]        # 上期所
+  ine: [...]         # 能源中心
+  cffex: [...]       # 中金所
+  gfex: [...]        # 广期所
+core_subset: [...]   # FUTURES_CORE_SUBSET（25）
+holdout: [...]       # FUTURES_HOLDOUT（15 盲测池，GAP-055）
+stratified_subset: [...]       # FUTURES_STRATIFIED_SUBSET（19 分层训练集）
+sector_map: {...}    # FUTURES_SECTOR_MAP 主体（17 产业链；"炼化聚酯链"由 energy 训练池自动生成置首位）
+workflows:           # 产业链专属工作流（ENERGY_CHAIN_*）
+  energy:
+    chain_symbols: [...]        # 训练池（ENERGY_CHAIN_SYMBOLS，12）
+    chemical_sectors: [...]     # 泛化范围（ENERGY_CHAIN_CHEMICAL_SECTORS）
+    market: energy              # 因子库路由标记（ENERGY_CHAIN_MARKET）
+    min_train_rows: 300         # 训练品种深度阈值（ENERGY_CHAIN_MIN_TRAIN_ROWS）
+    l1_*: [...]                 # L1 独立输出目录（ENERGY_CHAIN_L1_*）
+```
+
+校验规则（任一失败即回退内置默认）：universe 无重复、各池 ⊆ universe、盲测池 ∩ 分层训练集 = ∅、
+泛化范围子链名存在于 sector_map。**energy 盲测池（ENERGY_CHAIN_HOLDOUT）自动派生** =
+泛化范围全部成员 − 训练池，改 `chain_symbols`/`chemical_sectors` 即自动重算，无需手写盲测池。
+
 ## 4. Verifier 配置（锁定不可修改）
 
 L2 Verifier 默认配置（定义在 `contracts.py` 中，初始化后锁定）：
@@ -238,7 +268,7 @@ L2 Verifier 默认配置（定义在 `contracts.py` 中，初始化后锁定）�
 | 熔断 token 比例 | 2.0x | 2.0x | — |
 | 连续低 IC/质量熔断 | 5 次 | 3 代 | — |
 | 失败率熔断 | 95% | 90% | — |
-| 单一家族最大精英因子数 | — | 3 | — |
+| 单结构簇最大精英因子数 | — | 15 | — |
 
 ---
 
@@ -248,5 +278,6 @@ L2 Verifier 默认配置（定义在 `contracts.py` 中，初始化后锁定）�
 |:-------------|:-----------|:---------|
 | `fts/config/settings.py:FTSConfig` | 所有字段有默认值 | `python -c "from fts.config.settings import FTSConfig; assert hasattr(FTSConfig, 'memory_dir')"` |
 | `config/settings.yaml` | YAML 可被 `load_config()` 解析 | `python -c "from fts.config.settings import load_config; cfg = load_config('config/settings.yaml')"` |
+| `config/futures_universe.yaml` | 品种池/产业链配置可被 `fts.data_futures` 加载且与内置默认等价 | `python -c "import fts.data_futures as df; assert len(df.FUTURES_SUBSET)==82 and len(df.ENERGY_CHAIN_SYMBOLS)==12"` |
 | `contracts.py:VerifierConfig` | 默认值与本文档一致 | 手动比对 |
 | `fts/factor_engine/symbol_holdout.py:SymbolHoldoutConfig` | `min_train_ic` 默认 0.05 与本文档一致 | 手动比对 |

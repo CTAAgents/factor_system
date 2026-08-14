@@ -62,7 +62,6 @@ def _base_factor(**overrides):
         "factor_id": "fct_test001",
         "name": "fut_test_factor",
         "market": "futures",
-        "family": "momentum",
     }
     f.update(overrides)
     return f

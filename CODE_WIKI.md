@@ -781,7 +781,7 @@ Re-export `fts.factor_engine.contracts` 的全部契约（版本号、FactorProg
 | `get_realtime_prices(symbols)` | 实时价（TDX_LOCAL 17709 快照 → AKShare 降级） |
 | `get_dynamic_core_subset()` | 数据驱动动态池（state.duckdb SSOT → JSON 缓存 → 静态池三级降级） |
 
-品种清单：`FUTURES_SUBSET`（82）、`FUTURES_CORE_SUBSET`（25）、`FUTURES_HOLDOUT`（15 盲测，GAP-055 按产业链分层）、`FUTURES_SECTOR_MAP`（**17 产业链**，GAP-S05 拆分）、`FUTURES_STRATIFIED_SUBSET`（21 分层训练集）。
+品种清单（SSOT：`config/futures_universe.yaml`，v2.104.0+38，`fts/data_futures` 内置默认兜底）：`FUTURES_SUBSET`（82）、`FUTURES_CORE_SUBSET`（25）、`FUTURES_HOLDOUT`（15 盲测，GAP-055 按产业链分层）、`FUTURES_SECTOR_MAP`（**18 产业链**，GAP-S05 拆分 + GAP-121 新增"炼化聚酯链"置首位，由 energy 训练池自动生成）、`FUTURES_STRATIFIED_SUBSET`（19 分层训练集）；能源产业链专属工作流（GAP-121）：`ENERGY_CHAIN_SYMBOLS`（12 训练，四大化工子链各 3：能源 SC/FU/BU + 聚酯 PX/TA/PF + 油化工 L/PP/PG + 煤化工 MA/UR/SA，v2.104.0+37 扩池降相关性）、`ENERGY_CHAIN_HOLDOUT`（8 化工链盲测，泛化范围 − 训练池自动派生）、`ENERGY_CHAIN_MARKET`="energy"（独立库 `factor_catalog_energy.duckdb`）、`ENERGY_CHAIN_MIN_TRAIN_ROWS`=300（训练品种深度阈值）与 `check_energy_chain_depth()`（审计，排除 SYNTHETIC）；深度补全 `scripts/sync_energy_chain_depth.py`（AKShare 全历史→kline_cache，LU0 1492/PR0 473/PL0 260 行）。能源链 L1 知识输入双线混入（v2.104.0+35）：`SeedPool(market="energy")` 混入加载通用期货种子（`seeds/futures`，185 因子）+ 能化专属种子（`seeds/energy/`，14 因子：energy_chain/crack_spread/polyester_chain/energy_chain_linkage/energy_basis_inventory，裂解价差/聚酯加工差/库存基差/链内联动/季节性开工），合计 199 因子；L1 独立输出 `ENERGY_CHAIN_L1_*`（memory/meta_loop/energy + factor_pool_energy.json + l1_injected_energy/ + debates/energy）。
 
 **VWAP 逻辑**: 有成交额 `amount/volume`；AKShare 有 settle `(H+L+C+settle)/4`；DuckDB/TDX 无 settle `(H+L+C)/3`。
 
@@ -987,7 +987,7 @@ A 股路径:     TDX_LOCAL 17709 股票端点 → 腾讯 HTTP API → 合成
 |--------|------|------|
 | `l1_meta_loop` | `59 7 * * 1-5` | L1 知识补给 + 种子注入 |
 | `l2_evolution_loop` | `0 0 * * 1-5` | L2 夜间演化（分层训练集排除盲测池） |
-| `l3_portfolio_loop` | `0 19 * * 1-5` | L3 期货组合构建（equal_weight 每日重算，与信号管道解绑 GAP-072） |
+| `l3_portfolio_loop` | `0 6 * * 1-5` | L3 期货组合构建（equal_weight 每日重算，与信号管道解绑 GAP-072） |
 | `l3_portfolio_loop_stock` | `30 19 * * 5` | L3 股票组合权重重算 |
 | `futures_signal_pipeline` | `0 20 * * 1-5` | 期货横截面信号报告 |
 | `daily_signal_pipeline` | `45 8 * * 1-5` | 股票/ETF 逐股打分信号 |

@@ -1,8 +1,8 @@
 # FTS 用户手册
 
-> **版本 2.99.0 · 最后更新 2026-08-10**
+> **版本 2.104.0+30 · 最后更新 2026-08-14**
 
-FTS 是一个**因子智能系统**——它每天自动分析市场数据，生成交易信号，帮你做量化投资决策。支持 A 股/ETF 和**期货**双市场因子演化与信号生成。
+FTS 是一个**因子智能系统**——它每天自动分析市场数据，生成交易信号，帮你做量化投资决策。当前主系统支持**期货**市场因子演化与信号生成（股票链路已于 v2.104.0 剥离至独立项目 fts-stock）。
 
 ---
 
@@ -63,8 +63,8 @@ OPENAI_MODEL=deepseek-chat
 fts version
 
 # 看到类似输出就对了:
-# FTS version: 2.99.0
-# Factor engine version: 2.99.0
+# FTS version: 2.104.0+24
+# Factor engine version: 2.104.0+24
 # Config memory_dir: memory
 ```
 
@@ -75,12 +75,7 @@ fts version
 
 ### 第四步：启动因子演化
 
-系统支持**股票**和**期货**双市场因子演化：
-
-**股票模式**（以沪深 300 ETF 为例）：
-```powershell
-fts evolution run --symbol 510300 --max-generations 3
-```
+系统支持**期货**市场因子演化（股票链路已于 v2.104.0 剥离至独立项目 fts-stock）：
 
 **期货横截面模式**（跨品种因子演化，默认）：
 ```powershell
@@ -88,12 +83,11 @@ fts evolution run --max-generations 3
 ```
 
 系统会：
-1. 从多源（DuckDB 缓存 → 通达信 → 天勤 → AKShare → 合成数据）加载 A 股/ETF 或期货数据
-2. 用 **645 个股票种子因子**（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面 + 163 JQ）开始演化
-3. 期货模式额外加载 **81 个专用种子因子**（14 大因子家族：趋势/基差/动量/波动等）
-4. 每代尝试改进因子代码和参数
-5. 经过三级评估 + 6 项强制审计 + 质量评分卡
-6. 输出 elite 因子到精英池
+1. 从多源（DuckDB 缓存 → 通达信 → 天勤 → AKShare → 合成数据）加载期货品种数据
+2. 用 **81 个期货专用种子因子**开始演化（覆盖动量/期限结构/持仓资金流/流动性/波动率/拥挤度等方向）
+3. 每代尝试改进因子代码和参数
+4. 经过三级评估 + 6 项强制审计 + 质量评分卡
+5. 输出 elite 因子到精英池
 
 ### 第五步：打开监控仪表盘
 
@@ -104,7 +98,7 @@ fts ui
 浏览器访问 `http://127.0.0.1:9100`，可以看到：
 - 系统健康状态
 - 三个循环的运行状态
-- Elite 因子列表
+- Elite 因子列表（按信号相关性聚类簇分组展示与筛选）
 - Token 消耗统计
 - 熔断状态
 
@@ -115,10 +109,11 @@ fts ui
 ### 你每天该做什么
 
 ```
-早晨 08:45 → 股票信号管道自动运行（开盘前，工作日）
-下午 17:00 → 股票/期货数据自动同步（工作日）
-晚间 20:00 → 期货信号管道自动运行 + 每周五 L3 组合权重重算
-晚间 23:00 → L2 Evolution 自动运行（因子演化）
+早晨 07:59 → L1 Meta-Loop 自动运行（市场感知 + 知识补给，工作日）
+凌晨 00:00 → L2 Evolution 自动运行（因子演化，工作日）
+下午 17:30 → 期货多源数据自动同步（工作日）
+晚间 19:00 → L3 组合权重重算（工作日，默认 equal_weight 每日重算）
+晚间 20:00 → 期货信号管道自动运行（工作日）
 每周六 08:00 → 期货核心品种动态池刷新（sync_liquidity_pool）
 随时       → fts ui 打开仪表盘查看状态
 ```
@@ -135,31 +130,25 @@ fts monitor
 # 3. 运行 L1 市场感知
 fts meta-loop run
 
-# 4. 运行因子演化（期货，默认）
+# 4. 运行因子演化（期货横截面，默认）
 fts evolution run --max-generations 5
 
-# 5. 运行因子演化（单只股票）
-fts evolution run --symbol 000001 --max-generations 5
-
-# 6. 运行横截面演化（沪深300全部成分股）
-fts evolution run --universe csi300 --max-stocks 20
-
-# 7. 运行 L3 组合构建（每周五权重重算，--force-recompute 强制重算）
+# 5. 运行 L3 组合构建（--force-recompute 强制重算）
 fts portfolio run --synthesis-mode sharpe_weight
 
-# 8. 查看产出的因子
-fts factor list --market futures
+# 6. 查看产出的因子
+fts factor list
 
-# 9. 查看某个因子的详情
+# 7. 查看某个因子的详情
 fts factor show fct_3f9a2b1c
 
-# 10. 查看种子因子
-fts factor seeds --market futures
+# 8. 查看种子因子
+fts factor seeds
 
-# 11. 手动同步期货数据（全品种 82 个）
+# 9. 手动同步期货数据（全品种 82 个）
 fts data sync-futures
 
-# 12. 查看多源数据状态（熔断器/成功率）
+# 10. 查看多源数据状态（熔断器/成功率）
 fts data status
 ```
 
@@ -169,10 +158,10 @@ fts data status
 # 第1天：熟悉系统
 fts version              # 看版本
 fts monitor              # 看状态
-fts scheduler list       # 看有哪些定时任务（当前 15 个）
+fts scheduler list       # 看有哪些定时任务（当前 13 个）
 
 # 第2天：跑一次因子演化
-fts evolution run --symbol 510300 --max-generations 3
+fts evolution run --max-generations 3
 
 # 第3天：查看结果
 fts factor list          # 看有没有 elite 因子
@@ -186,27 +175,25 @@ fts portfolio run --synthesis-mode sharpe_weight
 
 ## FTS 的一天
 
-系统每天自动运行多个循环与信号管道，不需要你手动操作。以下为定时任务全景（共 15 个）：
+系统每天自动运行多个循环与信号管道，不需要你手动操作。以下为定时任务全景（共 13 个）：
 
 | 任务 | 调度 | 说明 |
 |------|------|------|
-| `l1_meta_loop` | 每日 08:30 | L1 市场感知 + 知识补给 |
-| `daily_signal_pipeline` | 工作日 08:45 | 股票信号管道（开盘前） |
-| `l2_evolution_loop` | 每日 23:00 | L2 因子演化（核心） |
-| `l3_portfolio_loop` | 每周五 20:00 | L3 期货组合构建 + 权重重算 |
-| `l3_portfolio_loop_stock` | 每周五 08:30 | L3 股票组合构建（开盘前） |
+| `l1_meta_loop` | 工作日 07:59 | L1 市场感知 + 知识补给 |
+| `l2_evolution_loop` | 工作日 00:00 | L2 因子演化（核心） |
+| `l3_portfolio_loop` | 工作日 06:00 | L3 期货组合构建 + 权重重算（equal_weight 每日重算，开盘前） |
 | `futures_signal_pipeline` | 工作日 20:00 | 期货横截面信号管道 |
 | `sync_futures_data` | 工作日 17:30 | 同步期货 K 线（全品种 82 个） |
-| `sync_stock_data` | 工作日 17:00 | 同步股票/ETF 日 K 线 |
 | `health_check` | 每 10 分钟 | 健康检查 |
 | `data_quality_eval` | 每 5 分钟 | 数据质量评估 |
-| `monthly_decay_eval` | 每月 1 日 02:00 | 因子衰减月度评估 |
+| `monthly_decay_eval` | 每月 1 日 04:00 | 月度治理（准入重审 + 因子衰减评估） |
 | `data_level_monitor` | 每日 04:00 | 数据级监控 |
 | `logic_monitor` | 每日 22:00 | 逻辑监控 |
 | `factor_inspector` | 每日 03:00 | 精英因子巡检 |
 | `sync_liquidity_pool` | 每周六 08:00 | 期货核心品种动态池刷新 |
+| `mhf_signal` | 每 30 分钟 | MHF 中高频信号发布 |
 
-### 🌅 早上 08:30 — L1 Meta-Loop（市场感知 + 知识补给）
+### 🌅 早上 07:59 — L1 Meta-Loop（市场感知 + 知识补给）
 
 系统起床后的第一件事：看看今天市场发生了什么。
 
@@ -219,7 +206,7 @@ fts portfolio run --synthesis-mode sharpe_weight
 
 这步叫"知识补给"——相当于研究员早上先看一遍新闻。
 
-### 🌙 晚上 23:00 — L2 Evolution Loop（因子演化）
+### 🌙 凌晨 00:00 — L2 Evolution Loop（因子演化）
 
 核心环节。系统通宵干活，寻找赚钱的因子。
 
@@ -251,7 +238,7 @@ fts portfolio run --synthesis-mode sharpe_weight
   - 连续 3 代质量分 < 30 → 熔断
 ```
 
-### 📊 工作日每日 20:00 — L3 Portfolio Loop（组合构建 + 权重重算）
+### 📊 工作日每日 19:00 — L3 Portfolio Loop（组合构建 + 权重重算）
 
 把 Elite 因子组合成交易信号。组合权重按 `l3_weight_recompute_cadence` 重算（v2.104.0+7 默认 daily 每日重算；配置为 weekly 时周五重算、其余交易日冻结复用，冷启动保护）。
 
@@ -260,7 +247,7 @@ fts portfolio run --synthesis-mode sharpe_weight
 2. 信号合成（4 种模式）
    - equal_weight: 等权 1/N
    - sharpe_weight: 按 Sharpe 加权（期货默认）
-   - elastic_net: Elastic Net 回归（股票默认）
+   - elastic_net: Elastic Net 回归
    - adaptive: 制度自适应权重（Regime-aware + 风格维度）
 3. 组合质检三标准
    - 合成增益: 组合夏普 / 最佳单因子夏普 > 1
@@ -277,11 +264,11 @@ fts portfolio run --synthesis-mode sharpe_weight
 独立生成期货横截面信号报告（与 L3 解耦，工作日运行）。
 
 ```
-1. 加载期货 Elite 因子
+1. 加载 L3 组合因子与基础权重（factor_weights.json，v2.105.0 起因子选择由 L3 负责，严格模式：缺失即退出）
 2. 从 DuckDB 加载期货品种日线数据
-3. 方向校正（截面 IC 法，自动反转 IC<0 的因子）
-4. Ridge 回归加权合成综合得分（按 l3_weight_recompute_cadence 重算权重存快照，v2.104.0+7 默认 daily 每日重算，其余日复用）
-5. 输出排名 + 信号报告到 reports/{date}/
+3. Regime 档位缩放权重调整（bull/bear 放大趋势类、oscillate 放大反转类、high_vol 整体收缩）
+4. 品种级 IC 自适应权重（全局权重 × 品种 IC）+ 加权合成综合得分
+5. 输出排名 + 信号报告到 reports/futures/{date}/
 ```
 
 ### 🗓 每周六 08:00 — 期货动态池刷新
@@ -291,6 +278,10 @@ fts portfolio run --synthesis-mode sharpe_weight
 ### ⏰ 每 10 分钟 — 健康检查
 
 系统每 10 分钟检查一次各循环的状态，确保一切正常。
+
+### ⚡ 每 30 分钟 — MHF 中高频信号
+
+基于 30 分钟 bar 生成中高频反转混合信号，经 SignalBridge 发布（JSON 协议）。最新 bar 无更新时幂等跳过。
 
 ---
 
@@ -321,16 +312,13 @@ FTS 的因子质检遵循"六层框架 + 三阶段组合构建"，从数据到�
 
 ```powershell
 # 回测单个因子（含多持有期 IC、成本敏感性等完整评估）
-fts backtest run --factor-id fct_xxx --market futures
+fts backtest run --factor-id fct_xxx
 
 # 批量回测 + 对比排名
-fts backtest batch --market futures
+fts backtest batch
 
-# 跨市场泛化验证（期货→A股 / 期货→ETF / 股票→期货）
-fts factor cross-market --direction futures-to-stock
-
-# 查看因子家族分布
-fts factor stats --market futures
+# 查看因子聚类分布（信号相关性分组）
+fts factor stats
 
 # 查看因子演化血缘
 fts factor lineage fct_xxx
@@ -357,10 +345,9 @@ fts seed validate
 | 命令 | 作用 |
 |------|------|
 | `fts evolution run` | 启动演化（默认期货横截面模式） |
-| `fts evolution run --symbol 510300` | 对沪深 300 ETF 做演化 |
 | `fts evolution run --max-generations 5` | 只跑 5 代 |
-| `fts evolution run --universe csi300` | 横截面模式（沪深 300 成分股） |
-| `fts evolution run --universe csi300 --max-stocks 20` | 横截面模式，限 20 只股票 |
+| `fts evolution run --days 750` | 指定回溯天数（默认 750） |
+| `fts evolution run --universe futures` | 期货横截面模式（唯一品种池选项） |
 
 ### L1 Meta-Loop
 
@@ -384,13 +371,12 @@ fts seed validate
 | 命令 | 作用 |
 |------|------|
 | `fts factor list` | 列出所有 elite 因子 |
-| `fts factor list --market futures` | 列出期货 elite 因子 |
+| `fts factor list --cluster 0` | 按信号聚类簇 ID 筛选（DuckDB 模式） |
+| `fts factor list --diverse --total-count 10 --max-per-cluster 3` | 多样性选择（按信号聚类簇配额，默认单簇最多 3 个） |
 | `fts factor show <因子ID>` | 查看因子详情（含评估报告和质量评分卡） |
-| `fts factor seeds` | 列出所有种子因子 |
-| `fts factor seeds --market futures` | 列出期货种子因子 |
-| `fts factor stats --market futures` | 因子家族分布统计 |
+| `fts factor seeds` | 列出种子因子 |
+| `fts factor stats` | 因子聚类分布统计（信号相关性分组） |
 | `fts factor lineage <因子ID>` | 查询因子演化血缘 |
-| `fts factor cross-market` | 跨市场泛化验证 |
 | `fts factor review list` | 列出待审查因子队列（审查工作流） |
 
 ### 数据管理
@@ -398,10 +384,9 @@ fts seed validate
 | 命令 | 作用 |
 |------|------|
 | `fts data status` | 查看多源熔断器/成功率状态 |
-| `fts data sync-futures` | 主动同步期货 K 线（全品种） |
-| `fts data sync-stock` | 主动同步股票/ETF 日 K 线 |
-| `fts data cross-check` | 多源交叉验证指定 symbol+date |
-| `fts data fuse` | 多源 K 线融合（MEDIAN/MEAN/WEIGHTED/HIERARCHICAL/TRIMMED_MEAN） |
+| `fts data sync-futures` | 主动同步期货 K 线（全品种 82 个） |
+| `fts data cross-check --symbol RB0 --date 2026-08-04` | 多源交叉验证指定品种+日期 |
+| `fts data fuse --symbol RB0 --strategy MEDIAN` | 多源 K 线融合（MEDIAN/MEAN/WEIGHTED/HIERARCHICAL/TRIMMED_MEAN） |
 
 ### 回测与特征
 
@@ -429,7 +414,7 @@ fts seed validate
 | 命令 | 作用 |
 |------|------|
 | `fts scheduler run` | 启动定时调度器 |
-| `fts scheduler list` | 查看定时任务列表（15 个） |
+| `fts scheduler list` | 查看定时任务列表（13 个） |
 
 ### Web UI 仪表盘
 
@@ -443,7 +428,7 @@ fts ui --host 0.0.0.0           # 局域网可访问
 - **4 个指标卡**：系统健康、版本号、Token 用量、Elite 因子数
 - **循环状态卡**：L1/L2/L3 各自的运行状态、最近运行时间、错误信息
 - **熔断状态**：显示当前是否触发熔断及原因
-- **因子列表**：所有 elite 因子的 ID、名称、IC、夏普、质量分
+- **因子列表**：所有 elite 因子的 ID、名称、IC、夏普、质量分（按信号相关性聚类簇分组展示与筛选）
 
 ---
 
@@ -455,15 +440,20 @@ fts ui --host 0.0.0.0           # 局域网可访问
 
 ```yaml
 # 主要配置项
-default_market: "futures"              # 默认市场类型（stock/futures）
-max_generations: 10                   # 每轮演化最大代数
-population_size: 20                   # 种群大小
-micro_trials_per_generation: 50       # 每代调参次数
-evolution_mode: "hybrid"              # 演化模式: operator/code/hybrid
-meta_loop_interval_hours: 24          # L1 间隔
-portfolio_max_factors: 20             # L3 最大因子数
-portfolio_top_n: 5                    # L3 选用因子数
-log_level: "INFO"                     # 日志级别
+default_market: "futures"              # 默认市场类型（期货，唯一支持）
+llm_backend: "openai"                  # LLM 后端（openai/anthropic/mock）
+llm_temperature: 1.2                   # LLM 采样温度（0.0-2.0，越高生成越多样）
+max_generations: 10                    # 每轮演化最大代数
+population_size: 20                    # 种群大小
+micro_trials_per_generation: 50        # 每代调参次数
+evolution_mode: "hybrid"               # 演化模式: operator/code/hybrid
+meta_loop_interval_hours: 24           # L1 间隔
+meta_loop_max_tokens: 8000             # L1 每次最大 Token
+portfolio_max_factors: 20              # L3 最大因子数
+portfolio_top_n: 5                     # L3 选用因子数
+portfolio_decay_days: 90               # L3 因子衰减天数
+log_level: "INFO"                      # 日志级别
+log_file: "logs/fts.log"               # 日志文件
 
 # 质检相关（可在 .env 用环境变量覆盖）
 # FTS_EVAL_HORIZONS=1,5,10,20              # 多持有期 IC 持有期列表
@@ -502,7 +492,6 @@ OPENAI_MODEL=deepseek-chat
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `FTS_MEMORY_DIR` | 数据存储目录 | `memory` |
-| `FTS_ELITE_DIR` | 股票 elite 目录 | `memory/knowledge/factors/elite` |
 | `FTS_FUTURES_ELITE_DIR` | 期货 elite 目录 | `memory/knowledge/factors/futures_elite` |
 | `FTS_LOG_LEVEL` | 日志级别 | `INFO` |
 | `FTS_MAX_WORKERS` | 并行数 | `4` |
@@ -515,9 +504,7 @@ OPENAI_MODEL=deepseek-chat
 
 ### 数据源
 
-**A 股/ETF**：系统从**腾讯自选股 API**（qt.gtimg.cn）和**东方财富 API**（akshare）获取日线数据。
-
-**期货**：系统从本地 DuckDB 数据库（`data/fts_history.duckdb`）读取期货品种日线数据，支持 **82 个品种**（25 核心动态池 + 全量）。
+**期货**：系统从本地 DuckDB 数据库（`data/fts_history.duckdb`）读取期货品种日线数据，支持 **82 个连续合约**（25 核心动态池 + 全量）；期货基本面数据经 AKShare 期货基本面源获取。
 
 **数据源降级链**（熔断器 + 缓存 + 降级）：
 
@@ -633,21 +620,16 @@ fts factor show fct_xxxx
 
 ### 7. 怎么获取真实数据
 
-A 股/ETF 使用腾讯自选股公开 API，不需要额外配置。
 期货数据同步（默认全品种）：
 
 ```powershell
-fts data sync-futures            # 全品种 82 个（可加 --universe core 仅同步 25 核心）
-fts data sync-stock              # 股票/ETF
+fts data sync-futures            # 全品种 82 个（--symbol 指定品种）
 ```
 
 验证数据是否正常：
 
 ```powershell
-# A 股
-python -c "from fts.data import FTSDataProvider; df = FTSDataProvider().get_ohlcv('510300', days=250); print(df.shape)"
-
-# 期货
+# 期货面板
 python -c "from fts.data import FTSDataProvider; panel, dates = FTSDataProvider().get_futures_panel(['RB0','TA0'], days=250); print(len(panel))"
 ```
 
@@ -682,13 +664,12 @@ fts ui
 
 | 指标 | 值 |
 |------|:---:|
-| 版本 | v2.99.0 |
-| 测试通过 | 5267+ / 覆盖率 94.31% |
-| Python 源码 | 150+ 文件 |
-| 种子因子（股票） | 645（9 内置 + 101 世坤 + 158 Qlib + 191 国泰君安 + 23 基本面 + 163 JQ） |
-| 种子因子（期货） | 81（14 大因子家族） |
-| 定时任务 | 15 个 |
-| 期货品种 | 82 个（25 核心动态池 + 全量） |
+| 版本 | v2.104.0+30 |
+| 测试用例 | 6950（日常 not-slow 6924 + slow 26） |
+| Python 源码 | 220+ 文件 |
+| 种子因子（期货） | 81 |
+| 定时任务 | 13 个 |
+| 期货品种 | 82 个连续合约（25 核心动态池 + 全量） |
 
 ### 项目结构（简版）
 
@@ -701,39 +682,40 @@ factor_system/
 │   ├── core/              # 核心枚举与契约
 │   │   ├── enums.py       # 枚举定义（DataSource 等）
 │   │   └── contracts.py   # 核心契约（FactorProgram、BacktestMetrics 等）
-│   ├── data.py            # 统一数据层（A 股/ETF/期货）
+│   ├── data.py            # 统一数据层（期货）
 │   ├── data_futures.py    # 期货数据适配（DuckDB + 多源降级链）
-│   ├── data_sources/      # 多源数据适配器（TDX_LOCAL/TQ_PYTHON/AKShare/overnight_gap 等）
+│   ├── data_futures_fundamental.py  # 期货基本面数据（AKShare）
+│   ├── data_sources/      # 多源数据适配器（TDX_LOCAL/TQ_PYTHON/AKShare 等）
 │   ├── llm.py             # LLM 客户端（OpenAI/Anthropic/Mock）
 │   ├── factor_engine/     # 因子引擎（核心）
 │   │   ├── seed_pool.py          # 种子池管理器
-│   │   ├── seed_data/            # 种子因子库（WQ101 + Qlib158 + GTJA191 + JQ163）
-│   │   ├── seed_data_futures_full.py  # 期货种子（81，14 家族）
+│   │   ├── seed_data_futures_full.py  # 期货种子（81）
+│   │   ├── factor_clustering.py  # 信号相关性聚类分组（全流程统一）
+│   │   ├── evolution_futures.py  # L2 期货演化主循环
 │   │   ├── evolution_loop.py     # L2 演化主循环
 │   │   ├── meta_loop.py          # L1 元循环
 │   │   ├── portfolio_loop.py     # L3 组合循环（含组合质检三标准 + 风控接线）
 │   │   ├── evaluation_chain.py   # 三级评估链（多持有期 IC/IC t 值/胜率/Q1-Q5 等）
-│   │   ├── horizon_analysis.py   # 多持有期 IC 体系（GAP-060）
-│   │   ├── cost_sensitivity.py   # 成本敏感性扫描（GAP-061）
-│   │   ├── sector_linkage.py     # 板块联动检测（GAP-065）
-│   │   ├── portfolio_risk_controls.py  # 组合级回撤止损+相关性熔断（GAP-067）
-│   │   ├── weight_learning.py    # 权重学习（含 IC 协方差加权 w=Σ⁻¹μ）
 │   │   ├── audit.py              # 因子审计（6 项强制）
-│   │   ├── factor_quality_inspection.py  # 质量评分卡
-│   │   ├── verifier.py           # Verifier 锁定协议
-│   │   └── state.py              # 状态管理 + trace_id
-│   ├── pipeline/          # 因子管线
-│   ├── strategies/        # 策略层
-│   ├── monitor/           # 监控 + Web UI
-│   ├── scheduler/         # 定时任务调度（15 个任务）
-│   └── signal/            # 信号管道（期货/股票，独立任务）
+│   │   ├── factor_quality_card.py  # 质量评分卡
+│   │   ├── factor_db/            # 因子资产库 DuckDB（schema/repository/lineage）
+│   │   ├── expr_dsl/             # 表达式 DSL（parser/compiler/executor）
+│   │   └── barra/                # Barra 风格中性化
+│   ├── monitor/           # 监控 + Web UI（http_server.py）
+│   ├── scheduler/         # 定时任务调度（13 个任务）
+│   ├── workflow/          # 工作流编排
+│   ├── store/             # 存储层（DuckDB/SQLite/存储注册表）
+│   ├── bridge/            # 信号桥接（JSON/Redis/REST）
+│   ├── live_trade/        # 模拟交易与实盘接线
+│   ├── risk/              # 风险度量与管理
+│   └── ml/                # ML 模型层
 ├── scripts/               # 辅助脚本
 │   ├── sync_futures_data.py        # 期货数据同步
 │   ├── futures_signal_pipeline.py  # 期货信号管道
 │   ├── sync_liquidity_pool.py      # 动态池刷新
 │   └── run_futures_evolution.py    # 期货因子演化启动
 ├── config/                # 配置文件（settings.yaml）
-├── tests/                 # 测试（5000+ 个）
+├── tests/                 # 测试（6950 个）
 ├── docs/                  # 文档（含 harness 工程规范）
 ├── reports/               # 信号报告（按日期分文件夹）
 └── memory/                # 运行时数据（自动创建，含动态池/权重快照）

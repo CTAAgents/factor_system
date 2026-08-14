@@ -359,56 +359,9 @@ class PortfolioManager:
 
 # ─── Regime 自适应权重 ────────────────────────────────────
 
-# Regime → FactorFamily 权重倍率映射表
-# 基于优化计划 A.3: 不同市场制度下因子家族的表现差异
-REGIME_FAMILY_MULTIPLIERS: dict[str, dict[str, float]] = {
-    "bull": {
-        "trend": 1.3,  # 趋势因子 +30%
-        "momentum": 1.3,  # 动量因子 +30%
-        "breakout": 1.2,  # 突破因子 +20%
-        "carry": 1.1,  # 跨期套利 +10%
-        "cross_section": 1.1,  # 横截面因子 +10%
-        "fundamental": 1.0,  # 基本面不变
-        "mean_reversion": 0.7,  # 均值回归 -30%
-        "volatility": 0.9,  # 波动率因子 -10%
-    },
-    "bear": {
-        "trend": 1.1,  # 趋势因子 +10%（空头趋势仍有效）
-        "momentum": 0.8,  # 动量因子 -20%（反转风险）
-        "breakout": 0.7,  # 突破因子 -30%
-        "carry": 1.0,  # 跨期套利不变
-        "volatility": 1.3,  # 波动率因子 +30%（防御）
-        "mean_reversion": 1.2,  # 均值回归 +20%
-        "liquidity": 1.2,  # 流动性因子 +20%
-        "fundamental": 1.1,  # 基本面 +10%
-    },
-    "oscillate": {
-        "mean_reversion": 1.3,  # 均值回归 +30%（震荡市核心）
-        "reversal": 1.3,  # 反转因子 +30%
-        "trend": 0.8,  # 趋势因子 -20%
-        "momentum": 0.8,  # 动量因子 -20%
-        "volatility": 1.1,  # 波动率因子 +10%
-        "volume": 1.1,  # 成交量因子 +10%
-    },
-    "high_vol": {
-        "volatility": 1.3,  # 波动率因子 +30%
-        "mean_reversion": 1.1,  # 均值回归 +10%
-        "trend": 0.7,  # 趋势因子 -30%
-        "momentum": 0.7,  # 动量因子 -30%
-        "breakout": 0.5,  # 突破因子 -50%（高波动假突破多）
-        "carry": 1.0,  # 跨期套利不变
-    },
-    "low_vol": {
-        "trend": 1.2,  # 趋势因子 +20%
-        "momentum": 1.2,  # 动量因子 +20%
-        "mean_reversion": 1.0,  # 均值回归不变
-        "volatility": 0.7,  # 波动率因子 -30%
-        "fundamental": 1.1,  # 基本面 +10%
-    },
-}
-
 # Regime → FactorStyle 权重倍率映射表（A.3 style 维度，v2.56.0）
-# 与 REGIME_FAMILY_MULTIPLIERS（family 维度）并行，未覆盖的 style 按 1.0 中性。
+# family 概念已彻底移除（v2.104.0+25），制度调权统一走 FactorStyle 维度。
+# 未覆盖的 style 按 1.0 中性。
 REGIME_STYLE_MULTIPLIERS: dict[str, dict[str, float]] = {
     "bull": {
         "momentum": 1.3,  # 趋势牛 → 动量 +30%
@@ -465,83 +418,6 @@ REGIME_STYLE_MULTIPLIERS: dict[str, dict[str, float]] = {
 }
 
 
-def _infer_factor_family_from_name(name: str) -> str:
-    """从因子名称推断其家族分类。
-
-    Args:
-        name: 因子名称
-
-    Returns:
-        推断的家族名称（"trend", "mean_reversion" 等）
-    """
-    name_lower = name.lower()
-
-    if any(kw in name_lower for kw in ("trend", "momentum", "breakout", "follow")):
-        return "trend"
-    if any(kw in name_lower for kw in ("reversion", "mean", "reversal", "regression")):
-        return "mean_reversion"
-    if any(kw in name_lower for kw in ("carry", "spread", "arbitrage")):
-        return "carry"
-    # 先检查 volume 家族（避免被 vol 前缀误判为 volatility）
-    if any(kw in name_lower for kw in ("volume", "volume_ratio")):
-        return "volume"
-    if any(kw in name_lower for kw in ("volatility", "vol", "atr", "bollinger")):
-        return "volatility"
-    if any(kw in name_lower for kw in ("fundamental", "pe", "pb", "roe")):
-        return "fundamental"
-    if any(kw in name_lower for kw in ("liquidity", "illiquidity")):
-        return "liquidity"
-    if any(kw in name_lower for kw in ("cross_section", "cs_", "rank")):
-        return "cross_section"
-
-    return "other"
-
-
-# GAP-L308: 数据驱动 Regime 倍率表（进程级缓存，由 load_data_driven_multipliers 加载）
-_DATA_DRIVEN_FAMILY_MULTIPLIERS: dict[str, dict[str, float]] = {}
-_DEFAULT_REGIME_MULTIPLIERS_PATH = "docs/harness/_data/l3_regime_multipliers.yaml"
-
-
-def load_data_driven_multipliers(path: Optional[str] = None) -> dict[str, dict[str, float]]:
-    """加载数据驱动 Regime 倍率表（GAP-L308）。
-
-    从 `docs/harness/_data/l3_regime_multipliers.yaml` 加载
-    RegimeMultiplierEstimator.export_yaml 产出的倍率表并缓存到进程级全局。
-    文件缺失/损坏时保留空表（回退硬编码）。
-
-    Args:
-        path: YAML 路径（None 用默认路径）
-
-    Returns:
-        倍率表 dict（regime → family → multiplier）；未加载时为空 dict。
-    """
-    global _DATA_DRIVEN_FAMILY_MULTIPLIERS
-    p = Path(path) if path else Path(_DEFAULT_REGIME_MULTIPLIERS_PATH)
-    if not p.exists():
-        logger.info("[L3-Regime] 数据驱动倍率表不存在 (%s)，使用硬编码表", p)
-        return {}
-    try:
-        import yaml
-
-        doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-        mult = doc.get("multipliers") or {}
-        _DATA_DRIVEN_FAMILY_MULTIPLIERS = {
-            regime: {fam: float(v) for fam, v in fam_map.items()}
-            for regime, fam_map in mult.items()
-            if isinstance(fam_map, dict)
-        }
-        logger.info(
-            "[L3-Regime] 数据驱动倍率表加载成功 [%s]: %d regimes",
-            p,
-            len(_DATA_DRIVEN_FAMILY_MULTIPLIERS),
-        )
-        return _DATA_DRIVEN_FAMILY_MULTIPLIERS
-    except Exception as e:  # noqa: BLE001
-        logger.warning("[L3-Regime] 数据驱动倍率表加载失败 (%s)，使用硬编码表", e)
-        _DATA_DRIVEN_FAMILY_MULTIPLIERS = {}
-        return {}
-
-
 def _power_normalize_probs(probs: dict[str, float], power: float) -> dict[str, float]:
     """制度概率幂次归一化（GAP-095，regime blend 幂次调节）。
 
@@ -572,22 +448,20 @@ def regime_adaptive_weight_adjustment(
     regime: dict[str, Any],
     factors: list[dict[str, Any]],
     min_weight: float = 0.01,
-    dimension: str = "family",
+    dimension: str = "style",
     min_clamp: float = 0.5,
     max_clamp: float = 1.5,
     probability_mix: bool = True,
     blend_power: float = 1.0,
 ) -> list[PortfolioSignal]:
-    """根据市场制度自适应调整因子权重。
+    """根据市场制度自适应调整因子权重（family 维度已彻底移除，v2.104.0+25）。
 
     核心逻辑:
     1. 从 MarketRegime 获取当前制度名（bull/bear/oscillate/high_vol/low_vol）
-    2. 遍历每个 signal，根据其 factor_id 在 factors 中查找 family / style_tags
-    3. 按维度查表获取倍率:
-       - dimension="family": REGIME_FAMILY_MULTIPLIERS（FactorFamily 维度；
-         GAP-L308 数据驱动表 DATA_DRIVEN_FAMILY_MULTIPLIERS 存在时优先）
-       - dimension="style":  REGIME_STYLE_MULTIPLIERS（FactorStyle 维度，v2.56.0）
-       - dimension="both":   family × style 双倍率乘积，乘积 clamp 到 [min_clamp, max_clamp]×base
+    2. 遍历每个 signal，根据其 factor_id 在 factors 中查找 style_tags
+    3. 按 FactorStyle 查表获取倍率（REGIME_STYLE_MULTIPLIERS）:
+       - dimension="style": REGIME_STYLE_MULTIPLIERS（FactorStyle 维度）
+       - 其余取值（"both"/"family" 兼容遗留）一律按 style 维度处理
     4. 将原始权重 × 倍率 → 调整后权重（不低于 min_weight 比例）
     5. 对高波动期（high_vol）额外缩减衰减过快因子
 
@@ -596,16 +470,16 @@ def regime_adaptive_weight_adjustment(
       加权混合: mult = Σ p_i × table_i，替代硬查表——制度误判只按概率摊薄而非全错。
     - blend_power ≠ 1.0 时先对 regime_probs 做幂次归一化（GAP-095）:
       p_i' = p_i^power / Σ_j p_j^power，>1 锐化大概率制度、<1 钝化趋平。
-    - 无 regime_probs 或 probability_mix=False 时回退旧硬查表逻辑（向后兼容）。
+    - 无 regime_probs 或 probability_mix=False 时回退硬查表逻辑（向后兼容）。
 
     Args:
         signals: 合成后的信号列表
         regime: 市场制度检测结果 (from RegimeAwareSelector.detect())
-        factors: 原始因子列表（含 family/style_tags 字段）
+        factors: 原始因子列表（含 style_tags 字段）
         min_weight: 最小权重下限（避免完全归零）
-        dimension: 调整维度 "family" | "style" | "both"
-        min_clamp: 双维度乘积下限 clamp 倍率（dimension="both" 时生效）
-        max_clamp: 双维度乘积上限 clamp 倍率（dimension="both" 时生效）
+        dimension: 兼容参数（"style" 默认；"both"/"family" 遗留取值统一按 style 处理）
+        min_clamp: 保留参数（双维度乘积 clamp，family 维度移除后不生效）
+        max_clamp: 保留参数（双维度乘积 clamp，family 维度移除后不生效）
         probability_mix: 是否启用制度概率混合（regime blend，默认 True）
         blend_power: 制度概率混合幂次（默认 1.0 线性；GAP-095）
 
@@ -616,37 +490,23 @@ def regime_adaptive_weight_adjustment(
         return signals
 
     regime_name = regime.get("regime", "oscillate")
-    # GAP-L308: 数据驱动倍率优先（由 RegimeMultiplierEstimator 加载），缺失回退硬编码表
-    family_multipliers = (
-        _DATA_DRIVEN_FAMILY_MULTIPLIERS.get(regime_name, {})
-        if _DATA_DRIVEN_FAMILY_MULTIPLIERS
-        else REGIME_FAMILY_MULTIPLIERS.get(regime_name, {})
-    )
     style_multipliers = REGIME_STYLE_MULTIPLIERS.get(regime_name, {})
 
     # 制度概率混合（28-T3）：按制度概率对各制度倍率表加权混合
     regime_probs: dict[str, float] | None = regime.get("regime_probs") if probability_mix else None
     # GAP-095: 幂次归一化（blend_power≠1.0 时锐化/钝化概率分布，power=1 原样返回）
     regime_probs = _power_normalize_probs(regime_probs or {}, blend_power) or None
-    # blend 需跨制度取表（mult = Σ p_i × table_i）：数据驱动全表优先，缺失回退硬编码全表
-    family_tables: dict[str, dict[str, float]] = (
-        _DATA_DRIVEN_FAMILY_MULTIPLIERS if _DATA_DRIVEN_FAMILY_MULTIPLIERS else REGIME_FAMILY_MULTIPLIERS
-    )
     style_tables: dict[str, dict[str, float]] = REGIME_STYLE_MULTIPLIERS
-    if not family_multipliers and not style_multipliers and regime_probs is None:
+    if not style_multipliers and regime_probs is None:
         logger.info("[L3-Regime] 无制度倍率配置，跳过自适应调整 [regime=%s]", regime_name)
         return signals
 
-    # 构建 factor_id → family / style_tags 映射
-    factor_family_map: dict[str, str] = {}
+    # 构建 factor_id → style_tags 映射（显式 style_tags 优先，其次名称推断）
     factor_style_map: dict[str, str] = {}
     for f in factors:
         fid = f.get("factor_id", "")
         if not fid:
             continue
-        family = f.get("family", "")
-        factor_family_map[fid] = family or _infer_factor_family_from_name(f.get("name", ""))
-        # style: 显式 style_tags 优先，其次名称推断
         style_tags = f.get("style_tags") or []
         if style_tags and isinstance(style_tags, list):
             factor_style_map[fid] = str(style_tags[0])
@@ -657,31 +517,18 @@ def regime_adaptive_weight_adjustment(
     adjustment_log: list[str] = []
     for s in signals:
         fid = s.get("factor_id", "")
-        family = factor_family_map.get(fid, "other")
         style = factor_style_map.get(fid, "other")
 
-        # 获取各维度倍率（默认 1.0）；启用概率混合时按制度概率跨制度加权（28-T3）
+        # 获取 style 倍率（默认 1.0）；启用概率混合时按制度概率跨制度加权（28-T3）
         if regime_probs:
-            family_mult = sum(
-                p * (family_tables.get(r, {}).get(family, 1.0) if family_tables else 1.0)
-                for r, p in regime_probs.items()
-            )
             style_mult = sum(
                 p * (style_tables.get(r, {}).get(style, 1.0) if style_tables else 1.0)
                 for r, p in regime_probs.items()
             )
         else:
-            family_mult = family_multipliers.get(family, 1.0)
             style_mult = style_multipliers.get(style, 1.0)
 
-        if dimension == "style":
-            multiplier = style_mult
-        elif dimension == "both":
-            multiplier = family_mult * style_mult
-            # 双维度乘积 clamp 到 [min_clamp, max_clamp]，防止过度调权
-            multiplier = max(min_clamp, min(max_clamp, multiplier))
-        else:  # "family"（默认，向后兼容）
-            multiplier = family_mult
+        multiplier = style_mult
 
         # 高波动期额外缩减衰减因子
         if regime_name == "high_vol":
@@ -695,7 +542,7 @@ def regime_adaptive_weight_adjustment(
 
         if abs(adjusted_weight - original_weight) > 1e-6:
             adjustment_log.append(
-                f"  {s.get('name', fid)} [{family}/{style}]: "
+                f"  {s.get('name', fid)} [{style}]: "
                 f"{original_weight:.4f} → {adjusted_weight:.4f} (×{multiplier:.2f})"
             )
 
@@ -1044,7 +891,7 @@ def synthesize_signals(
                 )
     elif mode == "adaptive":
         # 自适应模式（A.3 / v2.56.0）: 以 Sharpe 权重为基，
-        # 后续由 Step 2.5 regime 双维度调整（family×style）+ RegimeSmoother 接管。
+        # 后续由 Step 2.5 regime style 维度调整 + RegimeSmoother 接管。
         # 回测路径 PortfolioConstructor(weight_method="adaptive") 语义与本分支一致。
         weight_sharpes = [max(f.get("_sharpe_raw", f.get("sharpe", 0)), 0.01) for f in factors]
         total_sharpe = sum(weight_sharpes)
@@ -1818,22 +1665,16 @@ def orthogonalize_factors(
             # ── Phase 1 详细日志 ──
             phase1_details = summary.get("phase1_details", [])
             phase1_code_dup = [d for d in phase1_details if d["type"] == "code_duplicate"]
-            phase1_family = [d for d in phase1_details if d["type"] == "family_prune"]
 
             logger.info(
-                "[L3] Phase 1 标记完成: 标记 %d 个 (代码重复=%d, 家族标记=%d)",
+                "[L3] Phase 1 标记完成: 标记 %d 个 (代码重复=%d)",
                 summary.get("phase1_marked", 0),
                 len(phase1_code_dup),
-                len(phase1_family),
             )
 
             if phase1_code_dup:
                 dup_msg = "; ".join(f"{d['removed']} (因:{d['reason']})" for d in phase1_code_dup)
                 logger.info("[L3] Phase 1-代码重复标记: %s", dup_msg)
-
-            if phase1_family:
-                fam_msg = "; ".join(f"{d['removed']} (因:{d['reason']})" for d in phase1_family)
-                logger.info("[L3] Phase 1-家族标记: %s", fam_msg)
 
             # ── Phase 2 详细日志（含 L2 先验合并）──
             phase2_details = summary.get("phase2_details", [])
@@ -3336,7 +3177,6 @@ def load_elite_factors(
                                 "market": f.get("market", market),
                                 "shadow_pool": metadata.get("shadow_pool"),
                                 "style_tags": style_tags,
-                                "family": f.get("family") or "other",
                                 # 正交化闭环（GAP-I206 补充，v2.71.0/v2.72.0 基底）
                                 "orthogonalized": metadata.get("orthogonalized", False),
                                 "orthogonalized_against": metadata.get("orthogonalized_against", ""),
@@ -3449,7 +3289,6 @@ def load_elite_factors(
                     "market": factor_market,
                     "shadow_pool": data.get("shadow_pool"),
                     "style_tags": style_tags,
-                    "family": data.get("family") or "other",
                 }
             )
         except (json.JSONDecodeError, TypeError) as e:

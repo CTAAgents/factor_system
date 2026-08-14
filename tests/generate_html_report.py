@@ -221,7 +221,7 @@ parts.append("""
 <table>
 <tr><th>阶段</th><th>数量</th><th>说明</th></tr>
 <tr><td>DuckDB 加载 (futures elite)</td><td>165</td><td>从 factor_catalog 加载 market=futures, is_elite=True</td></tr>
-<tr><td>去重 (name+family)</td><td>60</td><td>剔除 126 个重复因子</td></tr>
+<tr><td>去重 (name)</td><td>60</td><td>剔除 126 个重复因子</td></tr>
 <tr><td>Ridge 回归输入</td><td>58</td><td>排除 2 个高 NaN 因子</td></tr>
 <tr><td>硬删除 (|corr| > 0.95)</td><td class="score-neg">54</td><td>剔除 3 个极端相关因子</td></tr>
 <tr><td><strong>最终有效因子</strong></td><td><strong>54</strong></td><td>Ridge L2 正则化学习权重</td></tr>
@@ -240,14 +240,13 @@ parts.append("""
 
 # Weight table
 parts.append("<h3>因子权重分布 (Top 15)</h3>\n<table>\n")
-parts.append("<tr><th>排名</th><th>因子名称</th><th>家族</th><th>Ridge 权重</th><th>可视化</th></tr>\n")
-for rank, name, family, w in top_weights:
+parts.append("<tr><th>排名</th><th>因子名称</th><th>Ridge 权重</th><th>可视化</th></tr>\n")
+for rank, name, _, w in top_weights:
     bw = int(w / max_w * 200)
     parts.append(
         '<tr><td class="num">%d</td><td><code>%s</code></td>'
-        '<td><span class="chip">%s</span></td>'
         '<td class="num"><strong>%.4f</strong></td>'
-        '<td><div class="wbar" style="width:%dpx"></div></td></tr>\n' % (rank, name, family, w, bw)
+        '<td><div class="wbar" style="width:%dpx"></div></td></tr>\n' % (rank, name, w, bw)
     )
 parts.append("</table>\n")
 

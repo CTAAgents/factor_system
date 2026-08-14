@@ -311,7 +311,6 @@ class MicrostructureFactorGenerator:
             ),
             source="manual",
             market="futures",
-            family="microstructure",
             symbols=[symbol],
             trace_id=trace_id,
         )

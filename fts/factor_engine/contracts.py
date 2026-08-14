@@ -13,32 +13,10 @@ from enum import Enum
 from typing import Any, Literal, Optional, TypedDict, cast
 
 
-# ─── 市场与家族枚举 ─────────────────────────────────────────
+# ─── 市场枚举 ─────────────────────────────────────────────
 
 FactorMarket = Literal["futures", "stock", "etf", "bond", "multi"]
 """因子适用的市场类型。"""
-
-FactorFamily = Literal[
-    "trend",  # 趋势跟踪
-    "mean_reversion",  # 均值回归
-    "carry",  # 跨期/跨品种套利
-    "seasonality",  # 季节性
-    "cross_section",  # 横截面
-    "qlib",  # 微软 Qlib 开源因子库
-    "gtja",  # 国泰君安 191 因子库
-    "wq101",  # 世坤 WorldQuant 101 Alpha 因子库
-    "fundamental",  # 基本面
-    "technical",  # 技术指标
-    "microstructure",  # 微观结构
-    "macro",  # 宏观
-    "behavioral",  # 行为金融
-    "liquidity",  # 流动性
-    "volatility",  # 波动率
-    "volume",  # 成交量
-    "multi_factor",  # 多因子组合
-    "other",  # 其他
-]
-"""因子家族分类（17 大类）。"""
 
 
 # ─── 因子风格枚举（A.3 原设计落地，v2.56.0）─────────────────
@@ -173,7 +151,6 @@ class FactorProgram(TypedDict, total=False):
     trace_id: str  # 全链路 trace_id
     risk_tag: Optional[str]  # 风险标签，如 "vwap_approx"
     market: FactorMarket  # 适用市场: futures/stock/etf/multi
-    family: FactorFamily  # 因子家族分类
     style_tags: Optional[list[FactorStyle]]  # 风格标签（A.3，v2.56.0；缺省由分类器推断）
     symbols: list[str]  # 适用品种列表（空=全品种适用）
     factor_version: str  # 因子定义版本 (e.g., "v2")
@@ -359,7 +336,6 @@ class BudgetConfig(TypedDict, total=False):
     circuit_breaker_consecutive_low_ic: int  # 连续低 IC 熔断（默认 3）
     circuit_breaker_low_ic_threshold: float  # 低 IC 阈值（默认 0.01）
     circuit_breaker_failure_rate: float  # 失败率熔断（默认 0.95）
-    max_per_family: int  # 单一家族最大精英因子数（默认 3）
     evolution_stop_enabled: bool  # P1-3 (Phase 3): 提前达标停止开关（默认 False 保守）
     evolution_stop_consecutive_empty_generations: int  # P1-3: 连续零晋升 K 代 → 提前结束（默认 5）
 
@@ -409,7 +385,6 @@ DEFAULT_BUDGET_CONFIG: BudgetConfig = BudgetConfig(
     circuit_breaker_consecutive_low_ic=5,
     circuit_breaker_low_ic_threshold=0.005,
     circuit_breaker_failure_rate=0.95,
-    max_per_family=15,
 )
 """v1.1.0 默认预算配置 — 熔断触发后必须人类介入恢复。"""
 
@@ -765,9 +740,8 @@ class AdaptiveWeightConfig(TypedDict, total=False):
     """L3 自适应权重配置 — Regime 倍率维度与平滑参数。
 
     调整维度（dimension）:
-        - "family": 仅按 FactorFamily 倍率（既有 REGIME_FAMILY_MULTIPLIERS）
         - "style":  仅按 FactorStyle 倍率（REGIME_STYLE_MULTIPLIERS，v2.56.0）
-        - "both":   family × style 双倍率乘积（默认，乘积后 clamp 到 ±50%）
+        - "both":   style × style 双倍率乘积（默认，乘积后 clamp 到 ±50%）
 
     机构级优化（28-T4）:
         - probability_mix: 制度概率混合（regime blend，默认 True）
@@ -783,7 +757,7 @@ class AdaptiveWeightConfig(TypedDict, total=False):
     """
 
     enabled: bool  # 是否启用（默认 True）
-    dimension: str  # "family" | "style" | "both"（默认 "both"）
+    dimension: str  # "style" | "both"（默认 "both"）
     smoother: dict[str, float]  # RegimeSmoother 参数 {alpha, min_days}
     min_weight: float  # 调整后权重下限比例（默认 0.01）
     min_clamp: float  # 双维度乘积下限 clamp 倍率（默认 0.5）
@@ -897,7 +871,6 @@ __all__ = [
     "STATE_SCHEMA_VERSION",
     # 枚举类型
     "FactorMarket",
-    "FactorFamily",
     # 因子契约
     "FactorProgram",
     "FactorSignature",
@@ -1077,7 +1050,7 @@ def normalize_factor_program(factor: FactorProgram, market_hint: str | None = No
 
     处理内容:
     1. 规范化 signature 格式
-    2. 自动检测/补全 market/family/symbols 字段
+    2. 自动检测/补全 market/symbols 字段
     3. 填充默认值
 
     Args:
@@ -1105,31 +1078,6 @@ def normalize_factor_program(factor: FactorProgram, market_hint: str | None = No
         symbols = normalized.get("symbols", [])
         normalized["market"] = detect_factor_market(symbols, market_hint)
 
-    # 补全 family（非标准值也需要重新推断）
-    family = normalized.get("family", "")
-    standard_families = {
-        "trend",
-        "mean_reversion",
-        "carry",
-        "seasonality",
-        "cross_section",
-        "qlib",
-        "gtja",
-        "wq101",
-        "fundamental",
-        "technical",
-        "microstructure",
-        "macro",
-        "behavioral",
-        "liquidity",
-        "volatility",
-        "volume",
-        "multi_factor",
-        "other",
-    }
-    if not family or family not in standard_families:
-        normalized["family"] = _infer_factor_family(normalized)
-
     # 补全 symbols
     if "symbols" not in normalized:
         normalized["symbols"] = []
@@ -1148,54 +1096,3 @@ def normalize_factor_program(factor: FactorProgram, market_hint: str | None = No
 
     return normalized
 
-
-def _infer_factor_family(factor: FactorProgram) -> FactorFamily:
-    """根据因子特征推断其家族分类。
-
-    规则:
-    - name 包含 trend/momentum → trend
-    - name 包含 reversion/mean/regression → mean_reversion
-    - name 包含 carry/spread/arbitrage → carry
-    - name 包含 volume/flow → volume
-    - name 包含 volatility/vol → volatility
-    - name 包含 fundamental → fundamental
-    - name 包含 liquidity → liquidity
-    - code 包含 open_interest → microstructure
-    - name 以 qlib_ 开头 → qlib（微软 Qlib 因子库）
-    - name 以 gtja_ 开头 → gtja（国泰君安 191 因子库）
-    - name 以 alpha_/wq_ 开头 → wq101（世坤 WorldQuant 101 Alpha）
-    - name 以 fut_ 开头 → trend（期货传统量价因子多为趋势类）
-    """
-    name = (factor.get("name", "") or "").lower()
-    code = (factor.get("code", "") or "").lower()
-    sig = factor.get("signature", {})
-    input_fields = sig.get("input_fields", []) if sig else []
-
-    if any(kw in name for kw in ("trend", "momentum", "follow", "breakout")):
-        return "trend"
-    if any(kw in name for kw in ("reversion", "mean", "regression", "bounce")):
-        return "mean_reversion"
-    if any(kw in name for kw in ("carry", "spread", "arbitrage", "basis")):
-        return "carry"
-    if any(kw in name for kw in ("volume", "flow", "money", "capital")):
-        return "volume"
-    if any(kw in name for kw in ("volatility", "vol_", "garch", "variance")):
-        return "volatility"
-    if any(kw in name for kw in ("fundamental", "value", "quality", "growth")):
-        return "fundamental"
-    if any(kw in name for kw in ("liquidity", "liquid", "depth")):
-        return "liquidity"
-    # 因子库来源前缀：qlib/gtja/wq101 归入各自子家族
-    if name.startswith("qlib_"):
-        return "qlib"
-    if name.startswith("gtja_"):
-        return "gtja"
-    if name.startswith(("alpha_", "wq_")):
-        return "wq101"
-    if name.startswith("fut_"):
-        return "trend"
-    if any(kw in code for kw in ("open_interest", "order_flow", "tick")):
-        return "microstructure"
-    if any(kw in str(input_fields).lower() for kw in ("macro", "gdp", "cpi", "pmi")):
-        return "macro"
-    return "other"

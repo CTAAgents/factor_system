@@ -109,8 +109,8 @@ class FactorRepository:
                 factor_id, name, code, code_hash, params, signature,
                 economic_logic, source, parent_id, generation, trace_id,
                 sharpe, ic, icir, max_drawdown, turnover_monthly,
-                decay_6m, status, market, family, is_elite, metadata, style_tags
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                decay_6m, status, market, is_elite, metadata, style_tags
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             [
                 factor_id,
@@ -132,7 +132,6 @@ class FactorRepository:
                 factor.get("decay_6m", 0.05),
                 factor.get("status", "active"),
                 factor.get("market", "futures"),
-                factor.get("family") or "other",
                 factor.get("is_elite", False),
                 json.dumps(factor.get("metadata", {})),
                 json.dumps(factor.get("style_tags") or []),
@@ -341,7 +340,6 @@ class FactorRepository:
         factor_id: str,
         factor_name: str,
         seed_name: str,
-        seed_family: str,
         seed_market: str,
         generation: int = 0,
         parent_id: str | None = None,
@@ -353,7 +351,6 @@ class FactorRepository:
             factor_id: L2 精英因子 ID
             factor_name: L2 精英因子名称
             seed_name: L0 种子因子名称
-            seed_family: L0 种子家族
             seed_market: 市场 (futures/stock)
             generation: 从种子到精英的演化代数
             parent_id: 直接父因子 ID
@@ -367,14 +364,13 @@ class FactorRepository:
             conn = self._get_conn()
             conn.execute(
                 """INSERT INTO seed_lineage
-                   (lineage_id, seed_name, seed_family, seed_market,
+                   (lineage_id, seed_name, seed_market,
                     evolved_factor_id, evolved_factor_name, generation,
                     parent_id, trace_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     lineage_id,
                     seed_name,
-                    seed_family,
                     seed_market,
                     factor_id,
                     factor_name,
@@ -384,10 +380,9 @@ class FactorRepository:
                 ],
             )
             logger.debug(
-                "[seed_lineage] 写入: %s ← %s (family=%s, gen=%d)",
+                "[seed_lineage] 写入: %s ← %s (gen=%d)",
                 factor_name,
                 seed_name,
-                seed_family,
                 generation,
             )
             return True
@@ -401,7 +396,6 @@ class FactorRepository:
         factor_name: str,
         factor_source: str,
         factor_generation: int,
-        factor_family: str,
         factor_parent_id: str | None = None,
         market: str = "futures",
     ) -> dict[str, Any]:
@@ -415,18 +409,16 @@ class FactorRepository:
             factor_name: 当前因子名称
             factor_source: 当前因子来源
             factor_generation: 当前因子代数
-            factor_family: 当前因子家族
             factor_parent_id: 当前因子父 ID
             market: 市场
 
         Returns:
-            {"seed_name": str, "seed_family": str, "seed_market": str, "generation": int}
+            {"seed_name": str, "seed_market": str, "generation": int}
         """
         # 自身就是种子 → 直接返回
         if factor_source == "seed" or factor_generation == 0:
             return {
                 "seed_name": factor_name,
-                "seed_family": factor_family,
                 "seed_market": market,
                 "generation": factor_generation,
             }
@@ -453,7 +445,6 @@ class FactorRepository:
                 if parent_source == "seed" or parent_gen == 0:
                     return {
                         "seed_name": parent.get("name", ""),
-                        "seed_family": parent.get("family", factor_family),
                         "seed_market": parent.get("market", market),
                         "generation": total_gen,
                     }
@@ -470,7 +461,6 @@ class FactorRepository:
         )
         return {
             "seed_name": factor_name,
-            "seed_family": factor_family,
             "seed_market": market,
             "generation": factor_generation,
         }
@@ -850,50 +840,6 @@ class FactorRepository:
 
     # ─=== 高级查询 API (因子挖掘) ──────────────────────────
 
-    def get_by_family(
-        self,
-        family: str,
-        market: str | None = None,
-        min_sharpe: float | None = None,
-        min_ic: float | None = None,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        """按因子家族查询。
-
-        Args:
-            family: 因子家族名称 (momentum/mean_reversion/liquidity 等)
-            market: 市场过滤
-            min_sharpe: 最小 Sharpe 阈值
-            min_ic: 最小 IC 阈值
-            limit: 返回数量
-
-        Returns:
-            该家族的因子列表
-        """
-        conditions = ["family = ?"]
-        params: list[Any] = [family]
-
-        if market:
-            conditions.append("market = ?")
-            params.append(market)
-        if min_sharpe is not None:
-            conditions.append("sharpe >= ?")
-            params.append(min_sharpe)
-        if min_ic is not None:
-            conditions.append("ic >= ?")
-            params.append(min_ic)
-
-        sql = f"""
-            SELECT * FROM factor_catalog
-            WHERE {" AND ".join(conditions)}
-            ORDER BY sharpe DESC
-            LIMIT ?
-        """
-        params.append(limit)
-
-        result = self._execute(sql, params)
-        return self._rows_to_dicts(result.fetchall())
-
     def get_eligible(
         self,
         market: str = "futures",
@@ -936,19 +882,19 @@ class FactorRepository:
         self,
         market: str = "futures",
         total_count: int = 10,
-        max_per_family: int = 15,
+        max_per_cluster: int = 3,
         min_ic: float = 0.02,
         min_sharpe: float = 0.5,
     ) -> list[dict[str, Any]]:
-        """因子多样性选择 (避免因子集中在单一家族)。
+        """因子多样性选择 (按信号相关性聚类配额，替代家族配额)。
 
-        策略: 先按家族分组，在每个家族内按 Sharpe 排序，
-        然后轮流从每个家族选取最优因子，确保家族多样性。
+        策略: 先按信号相关性聚类，在每个簇内按 Sharpe 排序，
+        然后轮流从每个簇选取最优因子，确保簇间多样性。
 
         Args:
             market: 目标市场
             total_count: 需要的因子总数
-            max_per_family: 单一家族最大因子数
+            max_per_cluster: 单一信号簇最大因子数
             min_ic: 最小 IC 阈值
             min_sharpe: 最小 Sharpe 阈值
 
@@ -965,31 +911,47 @@ class FactorRepository:
         if len(eligible) <= total_count:
             return eligible
 
-        # 按家族分组
-        family_groups: dict[str, list[dict[str, Any]]] = {}
-        for factor in eligible:
-            fam = factor.get("family", "unknown")
-            if fam not in family_groups:
-                family_groups[fam] = []
-            family_groups[fam].append(factor)
+        # 信号相关性聚类（数据源不可用/信号不足时降级为 Sharpe 排序）
+        from fts.factor_engine.factor_clustering import cluster_factors_by_signal
 
-        # 每个家族内按 Sharpe 排序
-        for fam in family_groups:
-            family_groups[fam].sort(key=lambda x: x.get("sharpe", 0), reverse=True)
+        code_factors = [
+            {
+                "factor_id": f.get("factor_id"),
+                "code": f.get("code") or "",
+                "params": f.get("params") or {},
+            }
+            for f in eligible
+        ]
+        cluster_result = cluster_factors_by_signal(code_factors, cluster_threshold=0.5)
+        if not cluster_result:
+            logger.info("[repo] get_diverse_factors 聚类不可用，按 Sharpe 排序回退")
+            return sorted(eligible, key=lambda x: x.get("sharpe", 0), reverse=True)[:total_count]
 
-        # 多样性选择: 轮流从每个家族取一个
+        # 按簇分组（按成员数降序簇顺序稳定遍历）
+        fid_to_factor = {f.get("factor_id"): f for f in eligible}
+        cluster_groups: dict[int, list[dict[str, Any]]] = {}
+        for cid in cluster_result["cluster_order"]:
+            group = [fid_to_factor[fid] for fid in cluster_result["cluster_members"].get(cid, []) if fid in fid_to_factor]
+            if group:
+                cluster_groups[cid] = group
+
+        # 每个簇内按 Sharpe 排序
+        for cid in cluster_groups:
+            cluster_groups[cid].sort(key=lambda x: x.get("sharpe", 0), reverse=True)
+
+        # 多样性选择: 轮流从每个簇取一个
         selected: list[dict[str, Any]] = []
-        family_counters: dict[str, int] = {fam: 0 for fam in family_groups}
+        cluster_counters: dict[int, int] = {cid: 0 for cid in cluster_groups}
 
         while len(selected) < total_count:
             added = False
-            for fam, factors in family_groups.items():
+            for cid, factors in cluster_groups.items():
                 if len(selected) >= total_count:
                     break
-                idx = family_counters[fam]
-                if idx < min(len(factors), max_per_family):
+                idx = cluster_counters[cid]
+                if idx < min(len(factors), max_per_cluster):
                     selected.append(factors[idx])
-                    family_counters[fam] = idx + 1
+                    cluster_counters[cid] = idx + 1
                     added = True
             if not added:
                 break
@@ -1044,54 +1006,6 @@ class FactorRepository:
                 lineage["parent"] = parent_lineage
 
         return lineage
-
-    def get_family_distribution(
-        self,
-        market: str | None = None,
-        min_sharpe: float = 0.0,
-    ) -> list[dict[str, Any]]:
-        """获取因子家族分布统计。
-
-        Args:
-            market: 市场过滤
-            min_sharpe: 最小 Sharpe 阈值
-
-        Returns:
-            家族分布列表，包含 family, count, avg_sharpe, max_sharpe
-        """
-        conditions = ["status != 'deleted'", "sharpe >= ?"]
-        params: list[Any] = [min_sharpe]
-
-        if market:
-            conditions.append("market = ?")
-            params.append(market)
-
-        sql = f"""
-            SELECT
-                family,
-                COUNT(*) as factor_count,
-                AVG(sharpe) as avg_sharpe,
-                MAX(sharpe) as max_sharpe,
-                AVG(ic) as avg_ic
-            FROM factor_catalog
-            WHERE {" AND ".join(conditions)}
-            GROUP BY family
-            ORDER BY factor_count DESC
-        """
-
-        result = self._execute(sql, params)
-        rows = result.fetchall()
-
-        return [
-            {
-                "family": row[0] or "unknown",
-                "count": row[1],
-                "avg_sharpe": round(row[2], 3) if row[2] else 0.0,
-                "max_sharpe": round(row[3], 3) if row[3] else 0.0,
-                "avg_ic": round(row[4], 4) if row[4] else 0.0,
-            }
-            for row in rows
-        ]
 
     # ─=== 内部工具 ──────────────────────────────────────
 

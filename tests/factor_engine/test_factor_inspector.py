@@ -50,7 +50,6 @@ def _create_elite_factor(repo, factor_id, sharpe=1.0):
             "factor_id": factor_id,
             "name": f"Factor {factor_id}",
             "code": "close",
-            "family": "test",
             "market": "stock",
             "is_elite": True,
             "status": "active",

@@ -22,7 +22,6 @@ def test_operator_kind_routes_to_fast_path(data):
         "rank(ts_zscore(close, 60))",
         name="op_dispatch",
         market="futures",
-        family="mean_reversion",
         narrative="测试",
     )
     executor = FactorExecutor(factor)
@@ -47,7 +46,6 @@ def test_code_kind_still_uses_sandbox(data):
         },
         source="manual",
         market="futures",
-        family="trend",
     )
     executor = FactorExecutor(factor)
     out = executor.execute(data, {})
@@ -62,7 +60,6 @@ def test_operator_and_code_paths_agree(data):
         expr,
         name="op_parity",
         market="futures",
-        family="mean_reversion",
         narrative="测试",
     )
     fast = FactorExecutor(op_factor).execute(data, {})

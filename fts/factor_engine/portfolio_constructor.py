@@ -167,7 +167,6 @@ class PortfolioConstructor:
         factors = [
             {
                 "factor_id": fid,
-                "family": factor_metrics.get(fid, {}).get("family", "momentum"),
             }
             for fid in factor_ids
         ]

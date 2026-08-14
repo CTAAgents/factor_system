@@ -570,6 +570,124 @@ def compute_cluster_summary(
     }
 
 
+def cluster_factors_by_signal(
+    code_factors: list[dict[str, Any]],
+    *,
+    ref_symbols: tuple[str, ...] = ("RB0", "CU0", "IF0"),
+    days: int = 500,
+    cluster_threshold: float = DEFAULT_CLUSTER_THRESHOLD,
+) -> dict[str, Any] | None:
+    """基于信号相关性对因子做层次聚类（全流程统一分组入口）。
+
+    UI 因子列表分组、CLI factor stats / list、repository 多样性配额均调用本函数，
+    保证"按信号相关性聚类分组"在 FTS 全流程语义一致。
+
+    Args:
+        code_factors: 含 factor_id/code/params 的因子列表
+        ref_symbols: 参考品种优先序（因子代码列依赖差异大，多品种提高信号可计算率）
+        days: 参考品种回溯天数
+        cluster_threshold: 层次聚类距离阈值（1 - |corr|），
+            默认 0.7 等价于 |corr| >= 0.3 视为同一簇
+
+    Returns:
+        dict:
+            - assign: {factor_id: cluster_id}
+            - cluster_order: 按成员数降序的簇 ID 列表
+            - cluster_members: {cluster_id: [factor_id, ...]}
+        信号不足 / 数据源不可用 / 异常时返回 None（调用方降级为不分组）。
+    """
+    import numpy as _np
+
+    if len(code_factors) < 2:
+        logger.info("[cluster] 因子数 %d < 2，跳过聚类", len(code_factors))
+        return None
+
+    try:
+        from fts.data import FTSDataProvider
+        from fts.factor_engine.factor_program import FactorExecutor
+    except Exception as exc:  # noqa: BLE001 — 聚类依赖缺失属非致命
+        logger.warning("[cluster] 因子聚类依赖导入失败: %s", exc)
+        return None
+
+    provider = FTSDataProvider()
+    panels: dict[str, Any] = {}
+    for sym in ref_symbols:
+        try:
+            df = provider.get_futures_ohlcv(sym, days=days, trace_id="factor-cluster")
+            if df is not None and len(df) >= 100:
+                panels[sym] = df
+        except Exception:  # noqa: BLE001
+            continue
+    if not panels:
+        logger.warning("[cluster] 参考品种行情均不可用，降级不分组")
+        return None
+
+    # 逐因子按品种优先序执行信号，取首个成功信号
+    signals: dict[str, Any] = {}
+    for f in code_factors:
+        fid = f.get("factor_id") or ""
+        code = f.get("code") or ""
+        if not fid or not code:
+            continue
+        prog = {"factor_id": fid, "code": code}
+        params = f.get("params") or {}
+        for sym, df in panels.items():
+            try:
+                sig = FactorExecutor(prog).execute(df, params)
+                if sig is not None and len(sig) > 0 and not bool(_np.all(_np.isnan(sig))):
+                    signals[fid] = sig
+                    break
+            except Exception:  # noqa: BLE001 — 单因子/单品种失败不阻断聚类
+                continue
+
+    if len(signals) < 2:
+        logger.warning("[cluster] 有效信号 %d < 2，降级不分组", len(signals))
+        return None
+
+    # 信号两两 Pearson 相关矩阵（缺失对留 NaN，聚类按最大距离处理）
+    fids = list(signals.keys())
+    n = len(fids)
+    corr = _np.full((n, n), _np.nan)
+    _np.fill_diagonal(corr, 1.0)
+    for i in range(n):
+        for j in range(i + 1, n):
+            s1, s2 = signals[fids[i]], signals[fids[j]]
+            m = min(len(s1), len(s2))
+            valid = ~(_np.isnan(s1[:m]) | _np.isnan(s2[:m]))
+            if valid.sum() > 10:
+                c = float(_np.corrcoef(s1[:m][valid], s2[:m][valid])[0, 1])
+                corr[i, j] = c
+                corr[j, i] = c
+
+    engine = FactorClusteringEngine(cluster_threshold=cluster_threshold, linkage_method="average")
+    clusters = engine.cluster_by_correlation(corr, fids)
+
+    assign: dict[str, int] = {}
+    cluster_members: dict[int, list[str]] = {}
+    for cid, idxs in enumerate(clusters):
+        members = [fids[i] for i in idxs]
+        cluster_members[cid] = members
+        for mfid in members:
+            assign[mfid] = cid
+    # 无信号因子各自独立成簇（保证全量因子均有归属）
+    next_cid = len(cluster_members)
+    for f in code_factors:
+        fid = f.get("factor_id") or ""
+        if fid and fid not in assign:
+            assign[fid] = next_cid
+            cluster_members[next_cid] = [fid]
+            next_cid += 1
+
+    cluster_order = sorted(cluster_members.keys(), key=lambda c: -len(cluster_members[c]))
+    logger.info(
+        "[cluster] 因子聚类完成: %d 因子 → %d 簇 (可算信号 %d)",
+        len(code_factors),
+        len(cluster_members),
+        len(signals),
+    )
+    return {"assign": assign, "cluster_order": cluster_order, "cluster_members": cluster_members}
+
+
 def compute_pca_summary(pca_result: dict[str, Any]) -> dict[str, Any]:
     """计算 PCA 降维摘要。
 
@@ -595,6 +713,7 @@ __all__ = [
     "PCASignalCompressor",
     "compute_cluster_summary",
     "compute_pca_summary",
+    "cluster_factors_by_signal",
     "DEFAULT_CLUSTER_THRESHOLD",
     "DEFAULT_PCA_VARIANCE_RATIO",
 ]

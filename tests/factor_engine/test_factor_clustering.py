@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from unittest.mock import MagicMock, patch
 
 # 固定随机种子确保测试结果可复现
 np.random.seed(42)
@@ -13,6 +14,7 @@ from fts.factor_engine.factor_clustering import (
     DEFAULT_PCA_VARIANCE_RATIO,
     FactorClusteringEngine,
     PCASignalCompressor,
+    cluster_factors_by_signal,
     compute_cluster_summary,
     compute_pca_summary,
 )
@@ -514,3 +516,97 @@ class TestClusteringEdgePaths:
         panel = _make_panel_data()
         result = engine.run(factors, panel_data=panel)
         assert len(result) == len(factors)
+
+
+# ─── cluster_factors_by_signal（全流程统一分组入口）──────────
+
+
+class TestClusterFactorsBySignal:
+    """cluster_factors_by_signal 统一入口：UI/CLI/repository 共用。"""
+
+    def test_too_few_factors_returns_none(self) -> None:
+        """因子数 < 2 直接返回 None（不触发数据加载）。"""
+        assert cluster_factors_by_signal([{"factor_id": "f1", "code": "x"}]) is None
+
+    def test_no_panel_data_returns_none(self) -> None:
+        """参考品种行情不可用 → None（调用方降级为不分组）。"""
+        mock_provider = MagicMock()
+        mock_provider.get_futures_ohlcv.side_effect = RuntimeError("no data source")
+        with patch("fts.data.FTSDataProvider", return_value=mock_provider):
+            result = cluster_factors_by_signal(
+                [
+                    {"factor_id": "f1", "code": "x"},
+                    {"factor_id": "f2", "code": "x"},
+                ]
+            )
+        assert result is None
+
+    def test_groups_by_correlation(self) -> None:
+        """高相关信号同簇、低相关信号分簇。"""
+        df = pd.DataFrame({"close": np.arange(100.0)})
+        rng = np.random.RandomState(0)
+        base = np.linspace(0, 1, 100)
+        signals = {
+            "f1": base + rng.normal(0, 0.01, 100),
+            "f2": base + rng.normal(0, 0.01, 100),  # 与 f1 高相关
+            "f3": rng.normal(0, 1, 100),  # 与 f1/f2 低相关
+        }
+
+        class FakeExecutor:
+            def __init__(self, prog):
+                self.prog = prog
+
+            def execute(self, data, params):
+                return signals[self.prog["factor_id"]]
+
+        mock_provider = MagicMock()
+        mock_provider.get_futures_ohlcv.return_value = df
+        with (
+            patch("fts.data.FTSDataProvider", return_value=mock_provider),
+            patch("fts.factor_engine.factor_program.FactorExecutor", FakeExecutor),
+        ):
+            result = cluster_factors_by_signal(
+                [
+                    {"factor_id": "f1", "code": "x"},
+                    {"factor_id": "f2", "code": "x"},
+                    {"factor_id": "f3", "code": "x"},
+                ]
+            )
+
+        assert result is not None
+        assign = result["assign"]
+        assert assign["f1"] == assign["f2"]  # 高相关同簇
+        assert assign["f3"] != assign["f1"]  # 低相关分簇
+        # cluster_order 按成员数降序（大簇在前）
+        assert result["cluster_order"][0] in (assign["f1"], assign["f2"])
+
+    def test_no_signal_factors_single_cluster(self) -> None:
+        """无信号因子各自独立成簇（保证全量因子均有归属）。"""
+        df = pd.DataFrame({"close": np.arange(100.0)})
+        signals = {"f1": np.linspace(0, 1, 100), "f2": -np.linspace(0, 1, 100)}
+
+        class FakeExecutor:
+            def __init__(self, prog):
+                self.prog = prog
+
+            def execute(self, data, params):
+                return signals.get(self.prog["factor_id"])
+
+        mock_provider = MagicMock()
+        mock_provider.get_futures_ohlcv.return_value = df
+        with (
+            patch("fts.data.FTSDataProvider", return_value=mock_provider),
+            patch("fts.factor_engine.factor_program.FactorExecutor", FakeExecutor),
+        ):
+            result = cluster_factors_by_signal(
+                [
+                    {"factor_id": "f1", "code": "x"},
+                    {"factor_id": "f2", "code": "x"},
+                    {"factor_id": "f3", "code": "x"},  # 无信号 → 独立成簇
+                ]
+            )
+
+        assert result is not None
+        assign = result["assign"]
+        assert "f3" in assign  # 无信号因子也有簇归属
+        assert assign["f3"] not in (assign["f1"], assign["f2"])

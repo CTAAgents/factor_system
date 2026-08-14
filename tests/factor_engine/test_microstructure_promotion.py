@@ -42,7 +42,6 @@ def _make_candidate(factor_id: str, symbol: str = "RB0", kind: str = "ofi_mean")
             "params": {"dates": ["2026-01-05", "2026-01-06"], "values": [1.0, 2.0], "symbol": symbol},
             "signature": "sig",
             "economic_logic": {"microstructure": 3},
-            "family": "microstructure",
         },
         symbol=symbol,
         kind=kind,

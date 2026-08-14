@@ -45,15 +45,6 @@ CACHE_VERSION = 1
 # signal_index.json 元数据条目用此值标记 backend 与 version，便于未来变更失效
 PARQUET_CACHE_VERSION = 2
 
-# 因子家族分类（用于 Tier 2 预筛）
-FACTOR_FAMILIES: dict[str, list[str]] = {
-    "hf_microstructure": ["hf_", "option_", "bid_ask", "trade_imbalance"],
-    "trend": ["mkt_trend", "basis_momentum", "gp_alpha"],
-    "value_carry": ["basis", "mkt_concentration", "crowd_bias"],
-    "macro": ["macro_", "mobile_big_data", "bias"],
-    "volatility": ["upside_skewness", "ht_alpha", "historical_return"],
-}
-
 
 # ─── 数据类 ────────────────────────────────────────────────
 
@@ -600,21 +591,21 @@ class FactorOptimizer:
         self,
         factors: list[dict[str, Any]],
         max_corr_threshold: float = 0.7,
-        family_threshold: int = 3,  # 同家族因子数超过此值才需要预筛
+        min_factors: int = 3,  # 因子数超过此值才触发分层预筛
         mode: str = "mark",  # "mark"=只标记不删除, "remove"=硬删除（仅用于代码重复）
         l2_prior_correlations: Optional[list[dict[str, Any]]] = None,
         signal_matrix: Optional[dict[str, dict[str, np.ndarray]]] = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """两阶段正交化。
 
-        Phase 1: 廉价预筛（代码哈希 + 家族标记）
+        Phase 1: 廉价预筛（代码哈希）
         Phase 2: 昂贵统计标记（仅对预筛后的候选集）
         L2 Prior: 注入 L2 种子因子相关性预检结果作为先验
 
         Args:
             factors: 因子列表
             max_corr_threshold: 最大相关性阈值
-            family_threshold: 家族去重触发阈值
+            min_factors: 分层预筛触发的最小因子数阈值
             mode: "mark"(默认) 只标记相关性高的因子, 不硬删除
                   "remove" 硬删除代码完全重复的因子（仅限 Phase 1 Step 1）
             l2_prior_correlations: L2 种子因子相关性预检结果（先验数据）
@@ -641,9 +632,9 @@ class FactorOptimizer:
 
         t0 = time.perf_counter()
 
-        if len(factors) <= max(2, family_threshold):
+        if len(factors) <= max(2, min_factors):
             # 小因子池：跳过分层，直接返回
-            logger.info("[Optimizer] 跳过分层正交化: 因子数=%d <= 阈值=%d", len(factors), max(2, family_threshold))
+            logger.info("[Optimizer] 跳过分层正交化: 因子数=%d <= 阈值=%d", len(factors), max(2, min_factors))
             summary["elapsed_seconds"] = time.perf_counter() - t0
             return factors, summary
 
@@ -835,7 +826,6 @@ class FactorOptimizer:
         """Phase 1: 廉价预筛（标记模式）。
 
         1. 代码哈希标记（完全相同代码的因子标记为 code_duplicate）
-        2. 家族裁剪标记（同家族因子数过多时，标记为 family_pruned）
 
         Returns:
             (标记列表: [{"factor_id", "type", "reason"}], 详情列表)
@@ -878,66 +868,15 @@ class FactorOptimizer:
                 if d["type"] == "code_duplicate":
                     logger.info("  ⚠ 标记 %s — 原因: %s", d["removed"], d["reason"])
 
-        # Step 2: 家族标记（只标记，不删除）
-        family_groups: dict[str, list[dict[str, Any]]] = {}
-        for f in factors:
-            family = self._classify_family(f)
-            family_groups.setdefault(family, []).append(f)
-
-        family_mark_count = 0
-        for family, group in family_groups.items():
-            if len(group) > 10:  # 家族超过 10 个因子时标记
-                group_sorted = sorted(group, key=lambda x: abs(x.get("sharpe", 0)), reverse=True)
-                keep_n = min(len(group), 10)
-                logger.info(
-                    "[Optimizer] 家族标记: %s 家族 %d 个因子 → 标记后 %d 个为家族冗余",
-                    family,
-                    len(group),
-                    len(group) - keep_n,
-                )
-                for f in group_sorted[keep_n:]:
-                    fid = f.get("factor_id", "")
-                    flags.append(
-                        {
-                            "factor_id": fid,
-                            "type": "family_pruned",
-                            "reason": f"家族 {family} 超过 10 个，仅保留 Top {keep_n}",
-                        }
-                    )
-                    family_mark_count += 1
-                    details.append(
-                        {
-                            "type": "family_prune",
-                            "reason": f"家族 {family} 超过 10 个，保留 Top {keep_n}",
-                            "removed": f.get("name", "?"),
-                        }
-                    )
-
-        if family_mark_count > 0:
-            logger.info("[Optimizer] Phase 1-家族标记: 标记 %d 个因子", family_mark_count)
-            for d in details:
-                if d["type"] == "family_prune":
-                    logger.info("  ⚠ 标记 %s — 原因: %s", d["removed"], d["reason"])
-
-        total_marked = code_dup_count + family_mark_count
+        total_marked = code_dup_count
         if total_marked > 0:
             logger.info(
-                "[Optimizer] Phase 1 汇总: 标记 %d 个因子 (代码重复=%d, 家族标记=%d)",
+                "[Optimizer] Phase 1 汇总: 标记 %d 个因子 (代码重复=%d)",
                 total_marked,
                 code_dup_count,
-                family_mark_count,
             )
 
         return flags, details
-
-    def _classify_family(self, factor: dict[str, Any]) -> str:
-        """将因子分类到家族。"""
-        name = factor.get("name", "")
-        for family, keywords in FACTOR_FAMILIES.items():
-            for kw in keywords:
-                if kw in name:
-                    return family
-        return "other"
 
     def _phase2_correlation_marking(
         self,

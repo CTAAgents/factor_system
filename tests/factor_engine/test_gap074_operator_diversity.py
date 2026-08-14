@@ -22,9 +22,9 @@ from fts.factor_engine.operator_evolution import (
 def _make_parents() -> list[dict]:
     """三个父因子（factor_id 有序，供 UCT 选择测试）。"""
     return [
-        {"factor_id": "fct_p1", "name": "p1", "family": "trend"},
-        {"factor_id": "fct_p2", "name": "p2", "family": "trend"},
-        {"factor_id": "fct_p3", "name": "p3", "family": "trend"},
+        {"factor_id": "fct_p1", "name": "p1"},
+        {"factor_id": "fct_p2", "name": "p2"},
+        {"factor_id": "fct_p3", "name": "p3"},
     ]
 
 
@@ -103,7 +103,7 @@ def seed_capturing_engine(monkeypatch, sample_ohlcv, forward_returns):
 def test_operator_engine_seed_differs_by_generation(seed_capturing_engine):
     """同父因子不同 generation → 引擎 random_seed 不同（消除重复空转）。"""
     loop = seed_capturing_engine
-    parent = {"factor_id": "fct_gtja_094", "name": "gtja_094", "family": "operator"}
+    parent = {"factor_id": "fct_gtja_094", "name": "gtja_094"}
 
     factor1 = loop._try_operator_engine_evolution(parent, generation=1, trace_id="gap074-001")
     factor2 = loop._try_operator_engine_evolution(parent, generation=2, trace_id="gap074-002")
@@ -117,7 +117,7 @@ def test_operator_engine_seed_differs_by_generation(seed_capturing_engine):
 def test_operator_engine_seed_reproducible_same_generation(seed_capturing_engine):
     """同父因子同 generation → 种子一致（确定性/可复现性保留）。"""
     loop = seed_capturing_engine
-    parent = {"factor_id": "fct_gtja_094", "name": "gtja_094", "family": "operator"}
+    parent = {"factor_id": "fct_gtja_094", "name": "gtja_094"}
 
     loop._try_operator_engine_evolution(parent, generation=5, trace_id="gap074-003")
     loop._try_operator_engine_evolution(parent, generation=5, trace_id="gap074-004")

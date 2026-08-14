@@ -777,20 +777,18 @@ class TestCmdFactorListExtra:
     """测试 _cmd_factor_list 的 get_eligible 与 JSON 分支。"""
 
     def test_get_eligible(self, capsys):
-        """min_ic 设置且无 family/diverse → get_eligible。"""
+        """min_ic 设置且无 cluster/diverse → get_eligible。"""
         repo = MagicMock()
         repo.get_eligible.return_value = [
-            {"factor_id": "F1", "name": "trend_a", "family": "trend", "market": "futures"},
+            {"factor_id": "F1", "name": "trend_a", "market": "futures"},
         ]
         args = Namespace(
             elite_dir=None,
             market="futures",
-            family=None,
             min_ic=0.1,
             min_sharpe=None,
             diverse=False,
             total_count=10,
-            max_per_family=3,
             limit=50,
             json=False,
         )
@@ -816,12 +814,10 @@ class TestCmdFactorListExtra:
         args = Namespace(
             elite_dir=str(elite_dir),
             market="futures",
-            family=None,
             min_ic=None,
             min_sharpe=None,
             diverse=False,
             total_count=10,
-            max_per_family=3,
             limit=50,
             json=True,
         )

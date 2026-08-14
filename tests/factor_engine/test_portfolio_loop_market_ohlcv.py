@@ -45,7 +45,6 @@ def _factor(fid: str, name: str, sharpe: float = 1.8) -> dict:
         "ic": 0.05,
         "turnover": 0.3,
         "decay_6m": 0.05,
-        "family": "trend",
         "style_tags": ["momentum"],
         "code": "def f(data, params):\n    return data['close']",
     }

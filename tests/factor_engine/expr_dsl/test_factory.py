@@ -12,7 +12,6 @@ def test_create_operator_factor_fields():
         "rank(ts_zscore(close, 60))",
         name="op_rank_zscore",
         market="futures",
-        family="mean_reversion",
         narrative="滚动Z-score截面排名",
     )
     assert factor["kind"] == FactorKind.OPERATOR
@@ -26,4 +25,4 @@ def test_create_operator_factor_fields():
 
 def test_create_operator_factor_invalid_expression():
     with pytest.raises(Exception):
-        create_operator_factor("foo(close)", name="bad", market="futures", family="trend", narrative="bad")
+        create_operator_factor("foo(close)", name="bad", market="futures", narrative="bad")

@@ -3,8 +3,7 @@
 覆盖（Phase 1.3，GAP-XXX v2.102.0）:
     1. _count_cluster_members 方法级: 同类计数 / 混合信号 / 空 elite / 扫描上限 /
        新因子执行失败 / 索引文件跳过
-    2. _promote_to_elite 集成: 配额触发拒绝 / 配额未触发放行 / other 家族不再豁免 /
-       开关回退 max_per_family 旧逻辑（含 other/unknown 豁免恢复）
+    2. _promote_to_elite 集成: 配额触发拒绝 / 配额未触发放行 / 低相关簇不计数
 """
 
 from __future__ import annotations
@@ -57,7 +56,7 @@ def patched_execute():
         yield m
 
 
-def _make_factor(factor_id: str, code: str, name: str | None = None, family: str = "momentum") -> dict:
+def _make_factor(factor_id: str, code: str, name: str | None = None) -> dict:
     """构造最小演化因子 dict（含 contracts 必需字段）。"""
     return {
         "factor_id": factor_id,
@@ -79,7 +78,6 @@ def _make_factor(factor_id: str, code: str, name: str | None = None, family: str
         },
         "source": "evolved",
         "generation": 1,
-        "family": family,
     }
 
 
@@ -226,7 +224,7 @@ class TestCountClusterMembers:
 
 
 class TestPromoteToEliteClusterQuota:
-    """_promote_to_elite 中结构簇配额检查（替代 max_per_family 家族配额）。
+    """_promote_to_elite 中结构簇配额检查。
 
     集成测试统一用 shadow_observe=False（种子路径）以隔离配额逻辑——
     GAP-I206 相关性检查仅在 shadow_observe=True 时执行，避免交叉干扰。
@@ -273,25 +271,6 @@ class TestPromoteToEliteClusterQuota:
         data = json.loads(fp.read_text(encoding="utf-8"))
         assert data["factor_id"] == "fct_new_ok"
 
-    def test_quota_applies_to_other_family(
-        self,
-        sample_ohlcv,
-        forward_returns,
-        tmp_elite_dir,
-        tmp_memory_dir,
-        patched_execute,
-    ):
-        """other/unknown 家族不再豁免配额（修复 GAP-070 漏洞）。"""
-        _write_elites(tmp_elite_dir, 15, _CODE_P100)
-        loop = _make_loop(sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir)
-        _mock_repo_clear(loop)
-        factor = _make_factor("fct_new_other", _CODE_P100, family="other")
-        evaluation = _make_passing_evaluation("fct_new_other")
-
-        fp = loop._promote_to_elite(factor, evaluation, shadow_observe=False)
-
-        assert fp is None
-
     def test_quota_ignores_low_corr_cluster(
         self,
         sample_ohlcv,
@@ -311,42 +290,3 @@ class TestPromoteToEliteClusterQuota:
 
         assert fp is not None and fp.exists()
 
-    def test_fallback_rejects_by_family_when_disabled(
-        self,
-        sample_ohlcv,
-        forward_returns,
-        tmp_elite_dir,
-        tmp_memory_dir,
-        patched_execute,
-    ):
-        """开关关闭 → 回退 max_per_family 旧逻辑：同家族 15 个 → 拒绝。"""
-        loop = _make_loop(sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir)
-        loop._cluster_quota_enabled = False
-        mock_repo = _mock_repo_clear(loop)
-        mock_repo.get_by_family = MagicMock(return_value=[{}] * 15)
-        factor = _make_factor("fct_new_fb", _CODE_P100, family="momentum")
-        evaluation = _make_passing_evaluation("fct_new_fb")
-
-        fp = loop._promote_to_elite(factor, evaluation, shadow_observe=False)
-
-        assert fp is None
-        mock_repo.get_by_family.assert_called_once()
-
-    def test_fallback_exempts_other_family_when_disabled(
-        self,
-        sample_ohlcv,
-        forward_returns,
-        tmp_elite_dir,
-        tmp_memory_dir,
-        patched_execute,
-    ):
-        """开关关闭 → 回退旧逻辑：other 家族豁免配额 → 晋升成功。"""
-        loop = _make_loop(sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir)
-        loop._cluster_quota_enabled = False
-        _mock_repo_clear(loop)
-        factor = _make_factor("fct_new_fb_other", _CODE_P100, family="other")
-        evaluation = _make_passing_evaluation("fct_new_fb_other")
-
-        fp = loop._promote_to_elite(factor, evaluation, shadow_observe=False)
-
-        assert fp is not None and fp.exists()

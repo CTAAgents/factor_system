@@ -125,7 +125,7 @@ class OperatorEvolutionEngine:
         engine = OperatorEvolutionEngine(data_panel, target_col="forward_return")
         result = engine.evolve()
         factor = engine.best_factor_program(result, name="op_x", market="futures",
-                                            family="trend", narrative="...")
+                                            narrative="...")
     """
 
     def __init__(
@@ -450,7 +450,6 @@ class OperatorEvolutionEngine:
         *,
         name: str,
         market: str,
-        family: str,
         narrative: str,
         trace_id: Optional[str] = None,
         parent_id: Optional[str] = None,
@@ -462,7 +461,6 @@ class OperatorEvolutionEngine:
             expression=result.best_expression,
             name=name,
             market=market,
-            family=family,
             narrative=narrative,
             params={},
             trace_id=trace_id,

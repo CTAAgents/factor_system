@@ -24,7 +24,6 @@ def create_operator_factor(
     name: str,
     *,
     market: str,
-    family: str,
     narrative: str,
     params: Optional[dict[str, Any]] = None,
     trace_id: Optional[str] = None,
@@ -36,7 +35,6 @@ def create_operator_factor(
         expression: FTS-Expr 表达式，如 "rank(ts_zscore(close, 60))"
         name: 因子名
         market: futures/stock/etf/multi
-        family: 因子家族
         narrative: 经济逻辑叙述
         params: 可调参数（默认 {}）
         trace_id: 全链路 trace_id
@@ -70,7 +68,6 @@ def create_operator_factor(
         ),
         source=source,  # type: ignore[typeddict-item]
         market=market,
-        family=family,
         trace_id=trace_id,
     )
     factor["kind"] = FactorKind.OPERATOR

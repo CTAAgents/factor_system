@@ -1,8 +1,9 @@
 # L3/L4 机构级追赶专项实施计划（组合构建 + 优化执行 + 反馈闭环）
 
-> 版本: v2.104.0+16
+> 版本: v2.104.0+39
 > 最后更新: 2026-08-10
 > 状态: 已收尾（GAP-L301~L310 + L401/L402 全部落地，v2.61.0~v2.69.0）
+> ⚠️ **归档注记（v2.104.0+25）**：本计划为历史已完成计划，其中 GAP-L308 的 family 相关内容（`REGIME_FAMILY_MULTIPLIERS` 硬编码表 / `RegimeMultiplierEstimator` / `load_data_driven_multipliers` / `_data/l3_regime_multipliers.yaml`）已随 v2.104.0+25 因子家族概念彻底移除而删除/废弃，正文保留原文仅供历史参考。
 > 适用范围: L3 Portfolio Loop（组合构建）/ L4 优化与执行反馈层（资金分配·成本·归因·实盘反馈）/ L4 表达式组合算子层
 
 > ⚠️ **计划定位说明**：本计划是 [23-institutional-transformation-plan.md](./23-institutional-transformation-plan.md)（机构级改造总纲，GAP-I001~I503）在 **L3/L4 两个层级**的执行细则。总纲只登记结构性差距；本计划把 L3/L4 相关差距展开到「代码级实施步骤 + 测试方案」粒度，缺陷编号沿用总纲 GAP-I 系列、新增执行级编号 GAP-L3xx / GAP-L4xx 承接，**不重复登记、只引用展开**。与 plans/21（期货）、plans/22（股票）的关系为「层内专项 ↔ 流水线专项」：GAP-S01/S02（股票中性化/风格）、GAP-F 系列（期货成熟度）为前置依赖。

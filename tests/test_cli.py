@@ -467,7 +467,6 @@ class TestCmdFactorList:
         args.elite_dir = "/tmp/elite"
         args.market = "futures"
         # 显式关闭筛选参数，确保走目录直读模式（而非 DuckDB）
-        args.family = None
         args.min_ic = None
         args.min_sharpe = None
         args.diverse = False
@@ -500,12 +499,10 @@ class TestCmdFactorList:
         args = Namespace(
             elite_dir=str(elite_dir),
             market="futures",
-            family=None,
             min_ic=None,
             min_sharpe=None,
             diverse=False,
             total_count=10,
-            max_per_family=None,
             limit=50,
             json=False,
         )
@@ -530,7 +527,6 @@ class TestCmdFactorList:
         args.elite_dir = "/tmp/elite"
         args.market = "futures"
         # 显式关闭筛选参数，确保走目录直读模式（而非 DuckDB）
-        args.family = None
         args.min_ic = None
         args.min_sharpe = None
         args.diverse = False
@@ -725,7 +721,6 @@ def _write_factor_snapshot(elite_dir: Path, factor_id: str, name: str, ic: float
                 "generation": 0,
                 "trace_id": "trace-test",
                 "market": "futures",
-                "family": "momentum",
                 "evaluation": {
                     "level_1_backtest": {"ic": ic, "sharpe": sharpe, "max_drawdown": 0.05},
                 },
@@ -754,7 +749,6 @@ class TestFactorListDirectoryRead:
         args = Namespace(
             elite_dir=str(elite_dir),
             market="futures",
-            family=None,
             min_ic=None,
             min_sharpe=None,
             diverse=False,
@@ -779,7 +773,6 @@ class TestFactorListDirectoryRead:
         args = Namespace(
             elite_dir=str(elite_dir),
             market="futures",
-            family=None,
             min_ic=None,
             min_sharpe=None,
             diverse=False,
@@ -792,7 +785,6 @@ class TestFactorListDirectoryRead:
         out = capsys.readouterr().out
         assert "0.1234" in out
         assert "2.5000" in out
-        assert "momentum" in out  # family 顶层字段正常显示
 
 
 class TestBacktestBatchDirectoryRead:
@@ -1040,24 +1032,30 @@ class TestFactorStatsParser:
 
     def test_factor_list_diverse_parser(self):
         parser = build_parser()
-        args = parser.parse_args(["factor", "list", "--diverse", "--total-count", "8", "--max-per-family", "2"])
+        args = parser.parse_args(["factor", "list", "--diverse", "--total-count", "8", "--max-per-cluster", "2"])
         assert args.diverse is True
         assert args.total_count == 8
-        assert args.max_per_family == 2
+        assert args.max_per_cluster == 2
 
 
 class TestCmdFactorStats:
-    """测试 _cmd_factor_stats。"""
+    """测试 _cmd_factor_stats（信号聚类分布）。"""
 
     @patch("fts.cli._load_factor_repo")
-    def test_stats_with_data(self, mock_load, capsys):
-        """有数据时输出家族分布。"""
+    @patch("fts.factor_engine.factor_clustering.cluster_factors_by_signal")
+    def test_stats_with_data(self, mock_cluster, mock_load, capsys):
+        """有数据时输出聚类分布。"""
         mock_repo = mock_load.return_value
-        mock_repo.get_family_distribution.return_value = [
-            {"family": "trend", "count": 5},
-            {"family": "mean_reversion", "count": 3},
-            {"family": "volume", "count": 2},
+        mock_repo.get_eligible.return_value = [
+            {"factor_id": "f1", "name": "rep_a", "ic": 0.05, "sharpe": 1.5, "code": "x"},
+            {"factor_id": "f2", "name": "b", "ic": 0.03, "sharpe": 0.8, "code": "x"},
+            {"factor_id": "f3", "name": "c", "ic": 0.04, "sharpe": 1.2, "code": "x"},
         ]
+        mock_cluster.return_value = {
+            "assign": {"f1": 0, "f2": 0, "f3": 1},
+            "cluster_order": [0, 1],
+            "cluster_members": {0: ["f1", "f2"], 1: ["f3"]},
+        }
         args = MagicMock(spec=[])
         args.market = "futures"
         args.min_sharpe = 0.0
@@ -1065,14 +1063,15 @@ class TestCmdFactorStats:
         rc = _cmd_factor_stats(args)
         assert rc == 0
         captured = capsys.readouterr()
-        assert "trend" in captured.out
-        assert "10" in captured.out  # 合计
+        assert "因子聚类分布" in captured.out
+        assert "rep_a" in captured.out  # 簇 0 代表因子（sharpe 最高）
+        assert "3" in captured.out  # 合计
 
     @patch("fts.cli._load_factor_repo")
     def test_stats_empty(self, mock_load, capsys):
         """无数据时打印空提示。"""
         mock_repo = mock_load.return_value
-        mock_repo.get_family_distribution.return_value = []
+        mock_repo.get_eligible.return_value = []
         args = MagicMock(spec=[])
         args.market = None
         args.min_sharpe = 0.0
@@ -1083,12 +1082,18 @@ class TestCmdFactorStats:
         assert "无符合条件的因子" in captured.out
 
     @patch("fts.cli._load_factor_repo")
-    def test_stats_json_mode(self, mock_load, capsys):
+    @patch("fts.factor_engine.factor_clustering.cluster_factors_by_signal")
+    def test_stats_json_mode(self, mock_cluster, mock_load, capsys):
         """--json 模式输出 JSON。"""
         mock_repo = mock_load.return_value
-        mock_repo.get_family_distribution.return_value = [
-            {"family": "trend", "count": 5},
+        mock_repo.get_eligible.return_value = [
+            {"factor_id": "f1", "name": "rep_a", "ic": 0.05, "sharpe": 1.5, "code": "x"},
         ]
+        mock_cluster.return_value = {
+            "assign": {"f1": 0},
+            "cluster_order": [0],
+            "cluster_members": {0: ["f1"]},
+        }
         args = MagicMock(spec=[])
         args.market = None
         args.min_sharpe = 0.0
@@ -1096,8 +1101,8 @@ class TestCmdFactorStats:
         rc = _cmd_factor_stats(args)
         assert rc == 0
         captured = capsys.readouterr()
-        assert '"family"' in captured.out
-        assert '"trend"' in captured.out
+        assert '"cluster_distribution"' in captured.out
+        assert '"rep_a"' in captured.out
 
     @patch("fts.cli._load_factor_repo")
     def test_stats_repo_error(self, mock_load, capsys):
@@ -1156,46 +1161,21 @@ class TestCmdFactorListDuckDB:
     """测试 _cmd_factor_list 的 DuckDB 分支。"""
 
     @patch("fts.cli._load_factor_repo")
-    def test_list_by_family(self, mock_load, capsys):
-        """--family 走 DuckDB 分支。"""
-        mock_repo = mock_load.return_value
-        mock_repo.get_by_family.return_value = [
-            {"factor_id": "F_001", "name": "trend_a", "family": "trend", "market": "futures"},
-        ]
-        args = MagicMock(spec=[])
-        args.elite_dir = None
-        args.market = "futures"
-        args.family = "trend"
-        args.min_ic = None
-        args.min_sharpe = None
-        args.diverse = False
-        args.total_count = 10
-        args.max_per_family = 3
-        args.limit = 50
-        args.json = False
-        rc = _cmd_factor_list(args)
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "F_001" in captured.out
-        mock_repo.get_by_family.assert_called_once()
-
-    @patch("fts.cli._load_factor_repo")
     def test_list_diverse(self, mock_load, capsys):
         """--diverse 走多样性选择。"""
         mock_repo = mock_load.return_value
         mock_repo.get_diverse_factors.return_value = [
-            {"factor_id": "F_001", "name": "trend_a", "family": "trend"},
-            {"factor_id": "F_002", "name": "mr_b", "family": "mean_reversion"},
+            {"factor_id": "F_001", "name": "trend_a"},
+            {"factor_id": "F_002", "name": "mr_b"},
         ]
         args = MagicMock(spec=[])
         args.elite_dir = None
         args.market = "futures"
-        args.family = None
         args.min_ic = None
         args.min_sharpe = None
         args.diverse = True
         args.total_count = 5
-        args.max_per_family = 2
+        args.max_per_cluster = 2
         args.limit = 50
         args.json = False
         rc = _cmd_factor_list(args)
@@ -1212,12 +1192,10 @@ class TestCmdFactorListDuckDB:
         args = MagicMock(spec=[])
         args.elite_dir = None
         args.market = "futures"
-        args.family = "trend"
         args.min_ic = None
         args.min_sharpe = None
         args.diverse = False
         args.total_count = 10
-        args.max_per_family = 3
         args.limit = 50
         args.json = False
         rc = _cmd_factor_list(args)

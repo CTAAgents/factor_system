@@ -85,7 +85,6 @@ class FactorLineage:
             "factor_info": {
                 "factor_id": factor_id,
                 "name": factor.get("name"),
-                "family": factor.get("family"),
                 "source": factor.get("source"),
                 "generation": factor.get("generation", 0),
                 "status": factor.get("status"),
@@ -410,7 +409,6 @@ class FactorLineage:
                     {
                         "factor_id": fid,
                         "name": factor.get("name"),
-                        "family": factor.get("family"),
                         "sharpe": factor.get("sharpe", 0),
                         "ic": factor.get("ic", 0),
                         "is_degraded": True,
@@ -441,7 +439,6 @@ class FactorLineage:
             result = {
                 "factor_id": fid,
                 "name": factor.get("name"),
-                "family": factor.get("family"),
                 "sharpe": factor.get("sharpe", 0),
                 "ic": factor.get("ic", 0),
                 "is_degraded": degradation.get("is_degraded", False),

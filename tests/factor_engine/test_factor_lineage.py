@@ -52,7 +52,6 @@ def sample_factor(repo):
         {
             "name": "test_momentum_factor",
             "code": "def factor_program(data, params):\\n    return data['close']",
-            "family": "momentum",
             "market": "futures",
             "source": "seed",
             "sharpe": 1.5,
@@ -69,7 +68,6 @@ def evolved_factor(repo, sample_factor):
         {
             "name": "evolved_momentum_v1",
             "code": "def factor_program(data, params):\\n    return data['close'] * 1.1",
-            "family": "momentum",
             "market": "futures",
             "source": "evolved",
             "parent_id": sample_factor,
@@ -106,7 +104,6 @@ def declining_factor(repo):
         {
             "name": "declining_factor",
             "code": "def factor_program(data, params):\\n    return data['open']",
-            "family": "mean_reversion",
             "market": "futures",
             "source": "evolved",
             "sharpe": 1.0,
@@ -285,8 +282,7 @@ class TestBatchAudit:
                 {
                     "name": f"batch_factor_{i}",
                     "code": f"def factor_program(data, params):\\n    return data['close'] * {i}",
-                    "family": "momentum",
-                    "market": "futures",
+                            "market": "futures",
                     "source": "seed",
                     "sharpe": 1.0 + i * 0.2,
                     "ic": 0.04 + i * 0.005,
@@ -324,7 +320,6 @@ class TestBatchAudit:
             {
                 "name": "summary_test",
                 "code": "def factor_program(data, params):\\n    return data['close']",
-                "family": "test",
                 "market": "futures",
                 "sharpe": 1.0,
                 "ic": 0.04,
@@ -363,7 +358,6 @@ class TestEdgeCases:
             {
                 "name": "circle_1",
                 "code": "def f(d, p): return d['x']",
-                "family": "test",
                 "market": "stock",
                 "source": "evolved",
             }
@@ -372,7 +366,6 @@ class TestEdgeCases:
             {
                 "name": "circle_2",
                 "code": "def f(d, p): return d['x'] * 2",
-                "family": "test",
                 "market": "stock",
                 "source": "evolved",
                 "parent_id": fid1,

@@ -178,7 +178,7 @@ def test_portfolio_adaptive_weight():
         "a": pd.Series(np.full(50, 0.1), index=idx),
         "b": pd.Series(np.full(50, 0.1), index=idx),
     }
-    metrics = {"a": {"sharpe": 2.0, "family": "momentum"}, "b": {"sharpe": 1.0, "family": "value"}}
+    metrics = {"a": {"sharpe": 2.0}, "b": {"sharpe": 1.0}}
     regime = {"regime": "bull"}
     pc = PortfolioConstructor()
     result = pc.construct(signals, weight_method="adaptive", factor_metrics=metrics, regime=regime)

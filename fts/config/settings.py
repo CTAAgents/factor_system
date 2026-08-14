@@ -25,6 +25,8 @@ DEFAULT_MEMORY_DIR = "memory"
 # 股票剥离后 FTS 主系统定位期货因子系统，elite_dir 默认对齐期货精英目录。
 DEFAULT_ELITE_DIR = "memory/knowledge/factors/futures_elite"
 DEFAULT_FUTURES_ELITE_DIR = "memory/knowledge/factors/futures_elite"
+# 能源产业链专属精英目录（GAP-Ixxx，独立于通用期货精英目录）
+DEFAULT_ENERGY_CHAIN_ELITE_DIR = "memory/knowledge/factors/energy_chain_elite"
 
 
 # ─── 配置类 ──────────────────────────────────────────────
@@ -40,16 +42,22 @@ class FTSConfig:
     futures_elite_dir: str = field(
         default_factory=lambda: os.getenv("FTS_FUTURES_ELITE_DIR", DEFAULT_FUTURES_ELITE_DIR)
     )
+    energy_chain_elite_dir: str = field(
+        default_factory=lambda: os.getenv("FTS_ENERGY_CHAIN_ELITE_DIR", DEFAULT_ENERGY_CHAIN_ELITE_DIR)
+    )
 
     def get_elite_dir(self, market: str = "futures") -> str:
         """获取 elite 目录（股票剥离后统一为期货精英目录）。
 
         Args:
-            market: 兼容参数（历史调用方传 "futures"/"stock"），股票剥离后忽略
+            market: 兼容参数（历史调用方传 "futures"/"stock"），股票剥离后忽略；
+                    "energy" 返回能源产业链专属精英目录
 
         Returns:
             期货 elite 目录路径
         """
+        if market == "energy":
+            return self.energy_chain_elite_dir
         return self.futures_elite_dir
 
     # ── 数据配置 ──
@@ -79,19 +87,13 @@ class FTSConfig:
     # 粗筛淘汰阈值：粗筛 IC 低于该值直接淘汰，不进入精筛
     micro_coarse_ic_floor: float = field(default_factory=lambda: float(os.getenv("FTS_MICRO_COARSE_IC_FLOOR", "0.02")))
 
-    # ── 家族多样性上限 (GAP-F10, v2.73.0) ──
-    # 单一家族最大精英因子数：防止演化收敛过度集中于少数家族。
-    # BudgetConfig.max_per_family 优先；未显式传入 budget 时回退此配置（缺省沿用 15）。
-    max_per_family: int = field(default_factory=lambda: int(os.getenv("FTS_MAX_PER_FAMILY", "15")))
-
     # ── 结构性聚类配额 (GAP-077, v2.102.0) ──
-    # 以信号相关性聚类配额替代 max_per_family 家族配额：family 是知识注入来源标签
-    # （非正交结构维度），多样性控制改由信号相关性承担（_count_cluster_members）。
-    # 开关关闭 → 回退 max_per_family 旧逻辑（平滑迁移）。
+    # 以信号相关性聚类配额控制多样性：family 概念已彻底移除（v2.104.0+25），
+    # 因子分组/配额统一按信号相关性聚类（_count_cluster_members）。
     structure_cluster_quota_enabled: bool = field(
         default_factory=lambda: os.getenv("FTS_CLUSTER_QUOTA_ENABLED", "1") == "1"
     )
-    # 每结构簇最大因子数（对齐原 max_per_family 默认 15）
+    # 每结构簇最大因子数
     structure_cluster_max: int = field(default_factory=lambda: int(os.getenv("FTS_CLUSTER_MAX", "15")))
     # 判定"同类"的相关性阈值（略宽于 GAP-I206 的 0.9：0.9 强拦截 vs 0.85 数量配额）
     structure_cluster_corr_threshold: float = field(

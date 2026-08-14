@@ -141,6 +141,9 @@ def _inject_missing(
     date_cols = {"date", "index", "datetime", "timestamp"}
     feature_cols = [c for c in modified.columns if c.lower() not in date_cols]
     for col in feature_cols:
+        # bool 列不兼容 NaN（Pandas FutureWarning），先提升为 float（True→1.0/False→0.0）
+        if pd.api.types.is_bool_dtype(modified[col]):
+            modified[col] = modified[col].astype(float)
         col_idx = modified.columns.get_loc(col)
         modified.iloc[mask[:, col_idx], col_idx] = np.nan
     return modified

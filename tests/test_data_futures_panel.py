@@ -20,7 +20,6 @@ from fts.data_futures import (
     FuturesDataProvider,
     get_dominant_contracts,
 )
-from scripts.futures_signal_pipeline import _compute_factor_sign_flips
 
 
 def _make_df(dates: list[str], base: float = 100.0) -> pd.DataFrame:
@@ -97,37 +96,6 @@ class TestCommonDatesMajorityAlignment:
         panel, common_dates = provider.get_futures_panel(["A", "B"], days=120)
         assert list(panel.keys()) == ["SYNTHETIC"]
         assert len(common_dates) == 120
-
-
-# ═══════════════════════════════════════════════════════════
-# 2. 方向校正按日期定位
-# ═══════════════════════════════════════════════════════════
-
-
-class TestSignFlipDateAlignment:
-    def _signal_matrix(self):
-        """构造 2 品种信号矩阵 + 面板，B 品种少 1 天（日期错位）。"""
-        dates_a = [f"2026-0{m}-01" for m in range(1, 9)]  # 8 天
-        dates_b = dates_a[:4] + dates_a[5:]  # B 缺第 5 天
-        panel = {
-            "A": _make_df(dates_a, base=100.0),
-            "B": _make_df(dates_b, base=1000.0),
-        }
-        sig_a = np.linspace(-0.8, 0.8, len(dates_a))
-        sig_b = np.linspace(-0.6, 0.6, len(dates_b))
-        signal_matrix = {
-            "A": {"f": sig_a},
-            "B": {"f": sig_b},
-        }
-        return signal_matrix, panel
-
-    def test_flip_computed_with_date_lookup(self, mocker):
-        """品种日期错位时仍能按日期定位计算截面 IC，不抛异常。"""
-        signal_matrix, panel = self._signal_matrix()
-        common_dates = panel["A"].index.intersection(panel["B"].index)
-        flips = _compute_factor_sign_flips(signal_matrix, panel, common_dates)
-        assert "f" in flips
-        assert flips["f"] in (1.0, -1.0)
 
 
 # ═══════════════════════════════════════════════════════════

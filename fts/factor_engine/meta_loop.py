@@ -1094,9 +1094,18 @@ class MetaLoop:
         self.market = market
         self._state_store = state_store
 
-        # ── 感知层默认样本：期货五大板块品种 ──
+        # ── 感知层默认样本：期货五大板块品种 / 能源链专属品种 ──
         if sample_symbols:
             effective_symbols = sample_symbols
+        elif market == "energy":
+            # 能源产业链专属工作流（GAP-121）：默认感知能化链 9 训练品种
+            from fts.data_futures import ENERGY_CHAIN_SYMBOLS
+
+            effective_symbols = [s[:-1].lower() if s.endswith("0") else s.lower() for s in ENERGY_CHAIN_SYMBOLS]
+            logger.info(
+                "[L1.init] energy 市场默认感知品种: %s",
+                effective_symbols,
+            )
         else:
             effective_symbols = [
                 "rb",
@@ -1123,7 +1132,11 @@ class MetaLoop:
         )
         if market == "futures":
             logger.info(
-                "[L1.init] 期货知识注入模式: 将加载 81 个期货专用种子因子 (14 大因子家族)",
+                "[L1.init] 期货知识注入模式: 将加载 81 个期货专用种子因子",
+            )
+        elif market == "energy":
+            logger.info(
+                "[L1.init] 能源链知识注入模式（GAP-121）: 混入加载通用期货种子 + 能化专属种子",
             )
         else:
             logger.warning("[L1.init] 未知市场类型: %s", market)
@@ -1150,13 +1163,14 @@ class MetaLoop:
 
         _cfg = get_config()
         _macro_enabled = bool(getattr(_cfg, "l1_macro_extractor_enabled", True))
-        if market == "futures":
+        if market in ("futures", "energy"):
             self._extractor_pipeline = FuturesExtractorPipeline(
                 llm_client=self.llm_client,
                 macro_enabled=_macro_enabled,
             )
             logger.info(
-                "[L1.init] 期货提取器管道已就绪: 天软/研报/论文/宏观(macro_enabled=%s)",
+                "[L1.init] %s 提取器管道已就绪: 天软/研报/论文/宏观(macro_enabled=%s)",
+                "能源链" if market == "energy" else "期货",
                 _macro_enabled,
             )
         else:
@@ -1564,7 +1578,9 @@ class MetaLoop:
         """Step 1: agentic 感知 — f10/web_collector 拉取市场快照。"""
         if self.web_collector is None:
             logger.info("L1 Step 1: 未配置 web_collector, 跳过感知")
-            return {"trace_id": trace_id, "snapshots": {}, "skipped": True}
+            result: dict[str, Any] = {"trace_id": trace_id, "snapshots": {}, "skipped": True}
+            self._inject_chain_knowledge(result)
+            return result
 
         snapshots: dict[str, Any] = {}
         for sym in self.sample_symbols:
@@ -1575,11 +1591,77 @@ class MetaLoop:
                 logger.warning("L1 感知 %s 失败: %s", sym, e)
                 snapshots[sym] = {"error": str(e)}
 
-        return {
+        result = {
             "trace_id": trace_id,
             "snapshots": snapshots,
             "skipped": False,
         }
+        self._inject_chain_knowledge(result)
+        return result
+
+    def _subchain_symbols(self, subchain: str) -> str:
+        """从训练池动态推导子链品种（供 chain_knowledge 描述用）。"""
+        try:
+            from fts.data_futures import ENERGY_CHAIN_SYMBOLS, FUTURES_SECTOR_MAP
+
+            members = set(FUTURES_SECTOR_MAP.get(subchain, []))
+            return "/".join(sorted(set(ENERGY_CHAIN_SYMBOLS) & members)) or subchain
+        except Exception:  # noqa: BLE001
+            return subchain
+
+    def _inject_chain_knowledge(self, result: dict[str, Any]) -> None:
+        """能源链专属市场知识注入（GAP-121）：供 LLM bootstrap prompt 使用。"""
+        if self.market != "energy":
+            return
+        try:
+            from fts.data_futures import (
+                ENERGY_CHAIN_CHEMICAL_SECTORS,
+                ENERGY_CHAIN_HOLDOUT,
+                ENERGY_CHAIN_SYMBOLS,
+            )
+
+            # 品种-链条位置描述（随训练池配置动态生成：缺省取通用品种中文名，特殊链描述优先）
+            sym_desc: dict[str, str] = {}
+            from fts.data_futures import FUTURES_SYMBOL_NAMES
+
+            _chain_sym_desc = {
+                "SC0": "原油(INE，能源链源头)",
+                "FU0": "燃料油(SHFE，原油下游)",
+                "BU0": "沥青(SHFE，炼化下游)",
+                "PX0": "对二甲苯(CZCE，芳烃链中游/聚酯)",
+                "TA0": "PTA(CZCE，聚酯链中游)",
+                "PF0": "短纤(CZCE，聚酯成品)",
+                "L0": "聚乙烯(DCE，塑料/油化工)",
+                "PP0": "聚丙烯(DCE，塑料/油化工)",
+                "PG0": "液化石油气(DCE，炼厂伴生气/油化工)",
+                "MA0": "甲醇(CZCE，煤基化工/煤化工)",
+                "UR0": "尿素(CZCE，氮肥/煤化工)",
+                "SA0": "纯碱(CZCE，煤化工/建材)",
+            }
+            for sym in ENERGY_CHAIN_SYMBOLS:
+                sym_desc[sym] = _chain_sym_desc.get(sym) or FUTURES_SYMBOL_NAMES.get(sym, sym)
+
+            result["chain_knowledge"] = (
+                "【能源产业链专属知识】\n"
+                f"训练链 {len(ENERGY_CHAIN_SYMBOLS)} 品种: {', '.join(ENERGY_CHAIN_SYMBOLS)}\n"
+                f"品种-链条位置: {sym_desc}\n"
+                f"训练池覆盖四大化工子链: "
+                f"能源({self._subchain_symbols('能源')}) + 聚酯链({self._subchain_symbols('聚酯链')}) "
+                f"+ 油化工({self._subchain_symbols('油化工')}) + 煤化工({self._subchain_symbols('煤化工')})；\n"
+                "核心产业链逻辑: ①裂解价差（原油→燃料油/沥青/液化气，炼厂利润代理）；"
+                "②聚酯链加工差（PX-原油、PTA-PX、聚酯-PTA，围绕边际成本均值回归）；"
+                "③库存周期（沥青/液化气/PTA 季节性库存主导基差）；"
+                "④链内纵向传导（原油成本经链条在下游加速/衰减）；"
+                "⑤子链间相对强弱（油化工/煤化工与能源/聚酯的成本与利润周期差异）。\n"
+                f"链外盲测池（化工产业链泛化验证）: {sorted(ENERGY_CHAIN_HOLDOUT)}\n"
+                f"盲测分组: {', '.join(ENERGY_CHAIN_CHEMICAL_SECTORS)}\n"
+                "因子设计要求: 优先利用能化品种特有的波动聚集、量价协同（库存/开工代理）、"
+                "期限结构与价格位置（基差-库存回归）、链内联动、子链间相对强弱与季节性开工周期等机制；"
+                "narrative 须体现能化产业链机制而非泛化量价规律。"
+            )
+            logger.info("L1 Step 1: 能源链市场知识注入完成 (chain_knowledge_len=%d)", len(result["chain_knowledge"]))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("L1 Step 1: 能源链知识注入失败: %s", e)
 
     def _inject_candidate(self, cand: SeedCandidate, trace_id: str) -> Optional[str]:
         """Step 5: 注入候选到 L2 种子池入口。"""

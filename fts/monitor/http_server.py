@@ -8,6 +8,14 @@ fts.monitor.http_server — FTS Web UI 仪表盘服务器。
     GET /api/factors     → elite 因子列表 JSON
     GET /health          → 健康检查 JSON（含数据源状态，14.5）
     GET /metrics/data-sources → 多源数据源指标 JSON（14.5）
+    GET /workflow        → WorkFlow UI SPA（web/workflow_ui/dist）
+    GET /api/workflow/stages    → 阶段定义（11 阶段 + 质检闭环）
+    GET /api/workflow/runs      → 运行批次列表
+    GET /api/workflow/runs/{id} → 批次详情（阶段动作记录）
+    GET /api/workflow/qa/board  → 质检状态看板（QA 7 状态）
+    POST /api/workflow/runs                     → 创建批次
+    POST /api/workflow/runs/{id}/run_all        → 端到端执行
+    POST /api/workflow/runs/{id}/stage/{s}/action/{a}/run → 单动作执行
 
 用法:
     fts ui                    # 启动仪表盘（默认 9100 端口）
@@ -18,6 +26,7 @@ fts.monitor.http_server — FTS Web UI 仪表盘服务器。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -31,6 +40,76 @@ logger = logging.getLogger(__name__)
 
 # 数据源指标缓存（模块级别，GAP-14.5-001）
 _metrics_cache: dict = {"data": None, "ts": 0.0}
+
+
+# ─── 因子信号相关性聚类（UI 按"因子聚类"分组展示）──────────
+
+# 聚类结果 TTL 缓存（30 分钟）：UI 每 10s 刷新，命中缓存避免反复执行因子信号
+_cluster_cache: dict = {"key": "", "data": None, "ts": 0.0}
+_CLUSTER_CACHE_TTL: float = 1800.0
+
+# 参考品种（信号计算优先序）：因子代码列依赖差异大，多品种提高信号可计算率
+_CLUSTER_REF_SYMBOLS: tuple[str, ...] = ("RB0", "CU0", "IF0")
+_CLUSTER_DAYS: int = 500
+# 层次聚类距离阈值：distance = 1 - |corr|，0.5 等价于 |corr| >= 0.5 视为同一簇
+_CLUSTER_THRESHOLD: float = 0.5
+
+
+def _compute_signal_clusters(
+    code_factors: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """基于信号相关性对精英因子做层次聚类（薄包装，逻辑下沉 factor_clustering）。
+
+    Args:
+        code_factors: 含 factor_id/code/params/sharpe 的因子列表
+
+    Returns:
+        与 cluster_factors_by_signal 相同结构；失败返回 None（调用方降级为不分组）。
+    """
+    try:
+        from fts.factor_engine.factor_clustering import cluster_factors_by_signal
+    except Exception as exc:  # noqa: BLE001 — 聚类依赖缺失属非致命
+        logger.warning("[ui] 因子聚类依赖导入失败: %s", exc)
+        return None
+    return cluster_factors_by_signal(
+        code_factors,
+        ref_symbols=_CLUSTER_REF_SYMBOLS,
+        days=_CLUSTER_DAYS,
+        cluster_threshold=_CLUSTER_THRESHOLD,
+    )
+
+
+def _cluster_factors_by_signal(code_factors: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """带 TTL 缓存的信号聚类入口；缓存 key 基于 elite 因子 ID 集合。
+
+    Args:
+        code_factors: 含 factor_id/code/params 的精英因子列表
+
+    Returns:
+        与 _compute_signal_clusters 相同结构；失败返回 None。
+    """
+    fids = sorted({f.get("factor_id") or "" for f in code_factors})
+    fids = [f for f in fids if f]
+    if len(fids) < 3:
+        return None
+    key = hashlib.sha256("|".join(fids).encode("utf-8")).hexdigest()[:16]
+    now = time.time()
+    if (
+        _cluster_cache["key"] == key
+        and _cluster_cache["data"] is not None
+        and (now - _cluster_cache["ts"]) < _CLUSTER_CACHE_TTL
+    ):
+        return _cluster_cache["data"]
+    try:
+        data = _compute_signal_clusters(code_factors)
+    except Exception as exc:  # noqa: BLE001 — 聚类失败非致命，UI 降级不分组
+        logger.warning("[ui] 因子聚类计算失败: %s", exc)
+        data = None
+    if data is not None:
+        _cluster_cache["key"] = key
+        _cluster_cache["data"] = data
+        _cluster_cache["ts"] = now
+    return data
 
 
 # ─── 仪表盘 HTML（内嵌式单页应用）─────────────────────
@@ -87,25 +166,25 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .loop-card .error { color: var(--red); font-size: 12px; margin-top: 8px;
                       padding: 8px; background: rgba(239,68,68,0.1); border-radius: 6px; }
 
-  .family-dist-section { margin-bottom: 24px; }
-  .family-bar { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; }
-  .family-bar:hover { opacity: 0.8; }
-  .family-bar .tag { font-size: 12px; min-width: 80px; font-weight: 600; }
-  .family-bar .bar-track { flex: 1; height: 20px; background: rgba(255,255,255,0.05);
+  .cluster-dist-section { margin-bottom: 24px; }
+  .cluster-bar { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; }
+  .cluster-bar:hover { opacity: 0.8; }
+  .cluster-bar .tag { font-size: 12px; min-width: 80px; font-weight: 600; }
+  .cluster-bar .bar-track { flex: 1; height: 20px; background: rgba(255,255,255,0.05);
                            border-radius: 4px; overflow: hidden; position: relative; }
-  .family-bar .bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease;
+  .cluster-bar .bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease;
                           display: flex; align-items: center; padding-left: 6px; }
-  .family-bar .bar-fill span { font-size: 11px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
-  .family-bar .bar-stats { font-size: 11px; color: var(--muted); min-width: 120px; text-align: right; }
+  .cluster-bar .bar-fill span { font-size: 11px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+  .cluster-bar .bar-stats { font-size: 11px; color: var(--muted); min-width: 120px; text-align: right; }
 
-  .family-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-  .family-filter .chip { font-size: 11px; padding: 4px 10px; border-radius: 12px;
+  .cluster-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .cluster-filter .chip { font-size: 11px; padding: 4px 10px; border-radius: 12px;
                          border: 1px solid var(--border); cursor: pointer; color: var(--muted);
                          background: transparent; transition: all 0.2s; }
-  .family-filter .chip:hover { border-color: var(--blue); color: var(--text); }
-  .family-filter .chip.active { background: var(--blue); color: #fff; border-color: var(--blue); }
-  .family-filter .chip.all { border-color: var(--muted); }
-  .family-filter .chip.all.active { background: var(--muted); color: #fff; border-color: var(--muted); }
+  .cluster-filter .chip:hover { border-color: var(--blue); color: var(--text); }
+  .cluster-filter .chip.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .cluster-filter .chip.all { border-color: var(--muted); }
+  .cluster-filter .chip.all.active { background: var(--muted); color: #fff; border-color: var(--muted); }
 
   .section-title { font-size: 16px; font-weight: 600; margin-bottom: 12px;
                    display: flex; justify-content: space-between; align-items: center; }
@@ -117,10 +196,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .factor-table tr.clickable { cursor: pointer; }
   .factor-table tr.clickable:hover td { background: rgba(59,130,246,0.08); }
 
-  .family-header { background: rgba(59,130,246,0.08) !important; }
-  .family-header td { padding: 8px 12px; font-weight: 700; font-size: 14px;
+  .cluster-header { background: rgba(59,130,246,0.08) !important; }
+  .cluster-header td { padding: 8px 12px; font-weight: 700; font-size: 14px;
                       border-bottom: 2px solid var(--blue); }
-  .family-header .fam-count { font-size: 12px; font-weight: 400; color: var(--muted);
+  .cluster-header .cluster-count { font-size: 12px; font-weight: 400; color: var(--muted);
                               margin-left: 8px; }
 
   .detail-row { display: none; }
@@ -160,7 +239,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .grade-tag.C { background: rgba(239,68,68,0.2); color: var(--red); }
   .grade-tag.N { background: rgba(148,163,184,0.2); color: var(--muted); }
 
-  .fam-color { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+  .cluster-color.cluster-color { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
 
   footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 40px;
            padding-top: 16px; border-top: 1px solid var(--border); }
@@ -169,7 +248,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     .grid-4 { grid-template-columns: repeat(2, 1fr); }
     .loop-grid { grid-template-columns: 1fr; }
     .detail-grid { grid-template-columns: 1fr; }
-    .family-bar .bar-stats { display: none; }
+    .cluster-bar .bar-stats { display: none; }
   }
 
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
@@ -208,10 +287,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="loop-card"><div class="name">L3 <span class="badge loading">加载中...</span></div></div>
   </div>
 
-  <div class="section-title">家族分布 <span style="font-size:12px;color:var(--muted)" id="familySummaryNote"></span></div>
-  <div id="familyDistSection" class="family-dist-section"></div>
+  <div class="section-title">聚类分布 <span style="font-size:12px;color:var(--muted)" id="clusterSummaryNote"></span></div>
+  <div id="clusterDistSection" class="cluster-dist-section"></div>
 
-  <div class="family-filter" id="familyFilter"></div>
+  <div class="cluster-filter" id="clusterFilter"></div>
 
   <div class="section-title">Elite 因子 <span style="font-size:12px;color:var(--muted)" id="factorSummary"></span></div>
   <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;overflow-x:auto">
@@ -249,19 +328,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 </div>
 
 <script>
-const FAMILY_COLORS = {
-  momentum: '#22c55e', trend: '#22c55e',
-  carry: '#3b82f6', roll: '#3b82f6',
-  volatility: '#f97316', vol: '#f97316',
-  value: '#a855f7', quality: '#ec4899',
-  macro: '#06b6d4', sentiment: '#eab308',
-  basis: '#14b8a6', structure: '#8b5cf6',
-  spread: '#f43f5e', seasonal: '#f59e0b',
-  other: '#94a3b8', default: '#3b82f6',
-};
+const CLUSTER_PALETTE = ['#22c55e','#3b82f6','#f97316','#a855f7','#ec4899',
+                         '#06b6d4','#eab308','#14b8a6','#8b5cf6','#f43f5e',
+                         '#f59e0b','#94a3b8'];
 
-function getFamilyColor(family) {
-  return FAMILY_COLORS[family] || FAMILY_COLORS.default;
+function getClusterColor(cid) {
+  const i = parseInt(cid, 10);
+  return CLUSTER_PALETTE[isNaN(i) ? 0 : (i % CLUSTER_PALETTE.length)];
 }
 
 async function fetchJSON(url) {
@@ -290,44 +363,53 @@ function badgeText(status) {
 
 function sanitize(s) { return String(s ?? '--'); }
 
-let activeFamilyFilter = null;
+let activeClusterFilter = null;
 let cachedFactors = [];
 
-function renderFamilyDistribution(family_dist, family_summary, maxCount) {
-  const section = document.getElementById('familyDistSection');
+function renderClusterDistribution(cluster_dist, cluster_summary, maxCount, applied) {
+  const section = document.getElementById('clusterDistSection');
+  const note = document.getElementById('clusterSummaryNote');
+  if (!applied || !cluster_dist || Object.keys(cluster_dist).length === 0) {
+    section.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:4px 0">聚类不可用（信号数据缺失或数据源不可用），按列表展示</div>';
+    note.textContent = '';
+    return;
+  }
   const maxC = maxCount || 1;
-  const totalFamilies = Object.keys(family_dist).length;
+  const totalClusters = Object.keys(cluster_dist).length;
   let html = '';
-  for (const fam of Object.keys(family_dist)) {
-    const count = family_dist[fam];
+  for (const cid of Object.keys(cluster_dist)) {
+    const count = cluster_dist[cid];
     const pct = (count / maxC * 100).toFixed(0);
-    const color = getFamilyColor(fam);
-    const summary = (family_summary || []).find(s => s.family === fam);
+    const color = getClusterColor(cid);
+    const summary = (cluster_summary || []).find(s => String(s.cluster_id) === String(cid));
+    const rep = summary ? summary.rep_name : '-';
     const avgIc = summary ? summary.avg_ic.toFixed(4) : '--';
     const avgSharpe = summary ? summary.avg_sharpe.toFixed(2) : '--';
-    const isActive = activeFamilyFilter === fam;
-    html += '<div class="family-bar" onclick="toggleFamilyFilter(\''+fam+'\')" style="opacity:'+(activeFamilyFilter && !isActive ? 0.4 : 1)+'">'
-      + '<div class="tag"><span class="fam-color" style="background:'+color+'"></span>'+fam+'</div>'
+    const isActive = activeClusterFilter === cid;
+    html += '<div class="cluster-bar" onclick="toggleClusterFilter(\''+cid+'\')" style="opacity:'+(activeClusterFilter && !isActive ? 0.4 : 1)+'">'
+      + '<div class="tag"><span class="cluster-color" style="background:'+color+'"></span>簇'+cid+'</div>'
       + '<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:'+color+'"><span>'+count+'</span></div></div>'
-      + '<div class="bar-stats">IC: '+avgIc+' · Sharpe: '+avgSharpe+'</div></div>';
+      + '<div class="bar-stats">代表:'+rep+' · IC: '+avgIc+' · Sharpe: '+avgSharpe+'</div></div>';
   }
   section.innerHTML = html;
-  document.getElementById('familySummaryNote').textContent = '共 '+totalFamilies+' 个家族';
+  note.textContent = '共 '+totalClusters+' 个信号簇';
 }
 
-function toggleFamilyFilter(family) {
-  activeFamilyFilter = (activeFamilyFilter === family) ? null : family;
-  renderFamilyFilterChips();
+function toggleClusterFilter(cid) {
+  activeClusterFilter = (activeClusterFilter === cid) ? null : cid;
+  renderClusterFilterChips();
   renderFactorTable(cachedFactors);
 }
 
-function renderFamilyFilterChips() {
-  const filter = document.getElementById('familyFilter');
-  const families = Object.keys(cachedFactors.reduce(function(acc, f) { acc[f.family] = true; return acc; }, {}));
-  let html = '<span class="chip all'+(activeFamilyFilter ? '' : ' active')+'" onclick="activeFamilyFilter=null;renderFamilyFilterChips();renderFactorTable(cachedFactors)">全部</span>';
-  for (var i = 0; i < families.length; i++) {
-    var fam = families[i];
-    html += '<span class="chip'+(activeFamilyFilter === fam ? ' active' : '')+'" onclick="toggleFamilyFilter(\''+fam+'\')">'+fam+'</span>';
+function renderClusterFilterChips() {
+  const filter = document.getElementById('clusterFilter');
+  const clusters = {};
+  (cachedFactors || []).forEach(function(f) {
+    if (f.cluster_id !== undefined) clusters[f.cluster_id] = true;
+  });
+  let html = '<span class="chip all'+(activeClusterFilter ? '' : ' active')+'" onclick="activeClusterFilter=null;renderClusterFilterChips();renderFactorTable(cachedFactors)">全部</span>';
+  for (var cid in clusters) {
+    html += '<span class="chip'+(activeClusterFilter === cid ? ' active' : '')+'" onclick="toggleClusterFilter(\''+cid+'\')">簇'+cid+'</span>';
   }
   filter.innerHTML = html;
 }
@@ -362,7 +444,6 @@ function buildDetailHtml(f) {
     + '<div class="detail-section-title">基础信息</div>'
     + '<div class="detail-item"><span class="dl">因子 ID</span><span class="dv mono">'+sanitize(f.factor_id)+'</span></div>'
     + '<div class="detail-item"><span class="dl">市场</span><span class="dv">'+sanitize(f.market)+'</span></div>'
-    + '<div class="detail-item"><span class="dl">家族</span><span class="dv" style="color:'+getFamilyColor(f.family)+'">'+sanitize(f.family)+'</span></div>'
     + '<div class="detail-item"><span class="dl">状态</span><span class="dv"><span class="status-tag '+statusClass+'">'+status+'</span></span></div>'
     + '<div class="detail-section-title">评估指标</div>'
     + '<div class="detail-item"><span class="dl">评估状态</span><span class="dv">'+(f.evaluation_status === 'pending' ? '<span class="status-tag observing">未评估</span>' : '<span class="status-tag active">已评估</span>')+'</span></div>'
@@ -389,25 +470,26 @@ function buildDetailHtml(f) {
 function renderFactorTable(factors) {
   cachedFactors = factors;
   var fBody = document.getElementById('factorBody');
-  var filtered = activeFamilyFilter ? factors.filter(function(f) { return f.family === activeFamilyFilter; }) : factors;
+  var hasCluster = factors.length > 0 && factors[0].cluster_id !== undefined;
+  var filtered = activeClusterFilter ? factors.filter(function(f) { return String(f.cluster_id) === activeClusterFilter; }) : factors;
   if (filtered.length === 0) {
     fBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px">暂无 elite 因子</td></tr>';
     document.getElementById('factorSummary').textContent = '0 个';
     return;
   }
   document.getElementById('factorSummary').textContent = '共 '+filtered.length+' 个';
-  var currentFamily = '';
+  var currentCluster = undefined;
   var html = '';
   var detailHtml = '';
   for (var i = 0; i < filtered.length; i++) {
     var f = filtered[i];
-    if (f.family !== currentFamily) {
-      currentFamily = f.family;
-      var color = getFamilyColor(currentFamily);
-      var famCount = filtered.filter(function(x) { return x.family === currentFamily; }).length;
-      html += '<tr class="family-header"><td colspan="8">'
-        + '<span class="fam-color" style="background:'+color+'"></span>'+currentFamily
-        + '<span class="fam-count">'+famCount+' 个因子</span></td></tr>';
+    if (hasCluster && f.cluster_id !== currentCluster) {
+      currentCluster = f.cluster_id;
+      var color = getClusterColor(currentCluster);
+      var clCount = filtered.filter(function(x) { return x.cluster_id === currentCluster; }).length;
+      html += '<tr class="cluster-header"><td colspan="8">'
+        + '<span class="cluster-color" style="background:'+color+'"></span>簇'+currentCluster
+        + '<span class="cluster-count">'+clCount+' 个因子</span></td></tr>';
     }
     var notEvaluated = f.evaluation_status === 'pending';
     var sharpeVal = notEvaluated ? 0 : parseFloat(f.sharpe);
@@ -448,9 +530,9 @@ function renderCandidateTable(candidates) {
     if (c.source !== lastSrc) {
       lastSrc = c.source;
       var srcCnt = candidates.filter(function(x) { return x.source === c.source; }).length;
-      html += '<tr class="family-header"><td colspan="6">'
-        + '<span class="fam-color" style="background:'+getFamilyColor('other')+'"></span>'+sanitize(c.source)
-        + '<span class="fam-count">'+srcCnt+' 个</span></td></tr>';
+      html += '<tr class="cluster-header"><td colspan="6">'
+        + '<span class="cluster-color" style="background:#94a3b8"></span>'+sanitize(c.source)
+        + '<span class="cluster-count">'+srcCnt+' 个</span></td></tr>';
     }
     var stTag;
     if (c.status === 'pending') stTag = '<span class="status-tag observing">待注入</span>';
@@ -508,17 +590,16 @@ async function refresh() {
     if (retired > 0) noteParts.push('已淘汰: '+retired);
     document.getElementById('factorNote').textContent = noteParts.length ? noteParts.join(' · ') : '';
 
-    var familyDist = data.family_distribution || {};
-    var maxCount = 1;
-    for (var k in familyDist) { if (familyDist[k] > maxCount) maxCount = familyDist[k]; }
-
     try {
       var factorsResp = await fetchJSON('/api/factors');
       var flist = factorsResp.factors || [];
-      var familySummary = factorsResp.family_summary || [];
-      renderFamilyDistribution(familyDist, familySummary, maxCount);
+      var clusterDist = factorsResp.cluster_distribution || {};
+      var maxCount = 1;
+      for (var k in clusterDist) { if (clusterDist[k] > maxCount) maxCount = clusterDist[k]; }
+      var clusterSummary = factorsResp.cluster_summary || [];
+      renderClusterDistribution(clusterDist, clusterSummary, maxCount, !!factorsResp.clustering_applied);
       cachedFactors = flist;
-      renderFamilyFilterChips();
+      renderClusterFilterChips();
       renderFactorTable(flist);
     } catch (e) {
       var fBody = document.getElementById('factorBody');
@@ -741,15 +822,14 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 total_tokens_today=0,
             )
 
-        # 从 DuckDB 查询精英因子计数和家族分布
+        # 从 DuckDB 查询精英因子计数
         elite_count = 0
         overload_count = 0
         retired_count = 0
-        family_dist_map: dict[str, int] = {}
 
         def _fallback_json_stats() -> None:
             """DuckDB 不可用时降级到 JSON 文件统计。"""
-            nonlocal elite_count, overload_count, retired_count, family_dist_map
+            nonlocal elite_count, overload_count, retired_count
             elite_dir = root / "memory" / "knowledge" / "factors" / "futures_elite"
             if elite_dir.exists():
                 elite_count = len(list(elite_dir.glob("*.json")))
@@ -759,16 +839,6 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             retired_dir = root / "memory" / "knowledge" / "factors" / "retired"
             if retired_dir.exists():
                 retired_count = len(list(retired_dir.glob("*.json")))
-            if elite_dir.exists():
-                for fp in elite_dir.glob("*.json"):
-                    if fp.stem.startswith("_"):
-                        continue
-                    try:
-                        raw = json.loads(fp.read_text(encoding="utf-8"))
-                        fam = raw.get("family") or "other"
-                        family_dist_map[str(fam)] = family_dist_map.get(str(fam), 0) + 1
-                    except Exception:  # noqa: BLE001
-                        continue
 
         try:
             from ..factor_engine.factor_db.schema import DATABASE_PATH as _db_path
@@ -793,18 +863,6 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                     if status_row:
                         overload_count = int(status_row[0] or 0)
                         retired_count = int(status_row[1] or 0)
-
-                    # 家族分布（仅精英因子）
-                    fam_rows = _conn.execute("""
-                        SELECT family, COUNT(*) as cnt
-                        FROM factor_catalog
-                        WHERE is_elite = TRUE AND status != 'deleted'
-                        GROUP BY family
-                        ORDER BY cnt DESC
-                    """).fetchall()
-                    for fam_row in fam_rows:
-                        fam = str(fam_row[0] or "other")
-                        family_dist_map[fam] = int(fam_row[1])
                 finally:
                     _conn.close()
             else:
@@ -825,7 +883,6 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             "elite_factor_count": elite_count,
             "overloaded_count": overload_count,
             "retired_count": retired_count,
-            "family_distribution": dict(sorted(family_dist_map.items(), key=lambda x: -x[1])),
             "loops": [
                 {
                     "loop_name": loop.loop_name,
@@ -844,7 +901,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         return data
 
     def _build_factor_list(self) -> dict:
-        """构建 /api/factors 响应，包含家族分类和详细信息。
+        """构建 /api/factors 响应，包含信号聚类分组和详细信息。
 
         数据源优先级: DuckDB → JSON 文件降级。
         """
@@ -857,8 +914,79 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             logger.warning("[ui] DuckDB 因子查询失败，降级到 JSON 文件")
         return self._build_factor_list_json_fallback()
 
+    def _apply_cluster_groups(
+        self,
+        factors: list[dict[str, Any]],
+        code_factors: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """按信号相关性聚类给 factors 标注 cluster_id 并重排序。
+
+        Args:
+            factors: 展示用因子列表（无 code）
+            code_factors: 含 factor_id/code/params 的完整精英列表（与 factors 同集合）
+
+        Returns:
+            (factors, cluster_meta)；cluster_meta = {applied, distribution, summary}
+            聚类失败或全单因子簇时 applied=False，前端不分组展示。
+        """
+        cluster_meta: dict[str, Any] = {"applied": False, "distribution": {}, "summary": []}
+        cluster_result = _cluster_factors_by_signal(code_factors)
+        if not cluster_result:
+            return factors, cluster_meta
+
+        cluster_order = cluster_result["cluster_order"]
+        cluster_members = cluster_result["cluster_members"]
+
+        fid_to_factor = {f.get("factor_id"): f for f in factors}
+        cluster_stats: dict[int, dict[str, Any]] = {}
+        for cid in cluster_order:
+            members = cluster_members.get(cid, [])
+            ic_sum = sharpe_sum = 0.0
+            cnt = 0
+            best: tuple[str, float] | None = None
+            for mfid in members:
+                f = fid_to_factor.get(mfid)
+                if f is None:
+                    continue
+                ic = float(f.get("ic", 0) or 0)
+                sh = float(f.get("sharpe", 0) or 0)
+                ic_sum += ic
+                sharpe_sum += sh
+                cnt += 1
+                if best is None or sh > best[1]:
+                    best = (str(f.get("name", mfid)), sh)
+            if cnt == 0:
+                continue
+            cluster_stats[cid] = {
+                "cluster_id": cid,
+                "size": cnt,
+                "avg_ic": round(ic_sum / cnt, 4),
+                "avg_sharpe": round(sharpe_sum / cnt, 2),
+                "rep_name": best[0] if best else "-",
+            }
+            for mfid in members:
+                f = fid_to_factor.get(mfid)
+                if f is not None:
+                    f["cluster_id"] = cid
+
+        # 全部为单因子簇 → 无分组意义，前端直接按列表展示
+        if all(c["size"] <= 1 for c in cluster_stats.values()):
+            return factors, cluster_meta
+
+        cluster_meta["applied"] = True
+        cluster_meta["distribution"] = {str(cid): c["size"] for cid, c in cluster_stats.items()}
+        cluster_meta["summary"] = list(cluster_stats.values())
+        order_index = {cid: i for i, cid in enumerate(cluster_order)}
+        factors.sort(
+            key=lambda f: (
+                order_index.get(f.get("cluster_id"), 999),
+                -float(f.get("sharpe", 0) or 0),
+            )
+        )
+        return factors, cluster_meta
+
     def _build_factor_list_from_duckdb(self, db_path: Path) -> dict:
-        """从 DuckDB 查询精英因子列表（含家族分类和详细信息）。"""
+        """从 DuckDB 查询精英因子列表（含信号聚类分组和详细信息）。"""
         import duckdb as _duckdb
 
         conn = _duckdb.connect(str(db_path), read_only=True)
@@ -875,7 +1003,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 
             select_cols = """
                 fc.factor_id, fc.name, fc.generation, fc.source,
-                fc.family, fc.market, fc.status,
+                fc.market, fc.status,
                 fc.sharpe, fc.ic, fc.icir, fc.max_drawdown, fc.turnover_monthly,
                 fc.economic_logic, fc.metadata
             """
@@ -937,15 +1065,13 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 SELECT {select_cols}
                 {from_clause} {joins}
                 WHERE fc.is_elite = TRUE AND fc.status != 'deleted'
-                ORDER BY fc.family, fc.sharpe DESC
+                ORDER BY fc.sharpe DESC
             """
             rel = conn.execute(sql)
             cols = [desc[0] for desc in rel.description]  # fetchall 前取列名
             result = rel.fetchall()
 
             factors: list[dict] = []
-            family_dist: dict[str, int] = {}
-            family_stats: dict[str, dict[str, float]] = {}
 
             for row in result:
                 row_dict = dict(zip(cols, row))
@@ -993,16 +1119,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 else:
                     qs = None
 
-                family = str(row_dict.get("family") or "other")
-                family_dist[family] = family_dist.get(family, 0) + 1
                 ic_val = float(row_dict.get("ic", 0) or 0)
                 sharpe_val = float(row_dict.get("sharpe", 0) or 0)
-
-                if family not in family_stats:
-                    family_stats[family] = {"ic_sum": 0.0, "sharpe_sum": 0.0, "count": 0}
-                family_stats[family]["ic_sum"] += ic_val
-                family_stats[family]["sharpe_sum"] += sharpe_val
-                family_stats[family]["count"] += 1
 
                 factors.append(
                     {
@@ -1012,7 +1130,6 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                         "ic": f"{ic_val:.4f}",
                         "sharpe": f"{sharpe_val:.2f}",
                         "source": str(row_dict.get("source", "?")),
-                        "family": family,
                         "market": str(row_dict.get("market", "futures")),
                         "icir": f"{float(row_dict.get('icir', 0) or 0):.4f}",
                         "max_drawdown": f"{float(row_dict.get('max_drawdown', 0) or 0):.2%}",
@@ -1033,34 +1150,37 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                     }
                 )
 
-            # 按家族因子数排序，组内按 Sharpe 降序
-            family_order = sorted(family_dist.keys(), key=lambda f: -family_dist[f])
-            factors.sort(
-                key=lambda f: (
-                    family_order.index(f["family"]) if f["family"] in family_order else 999,
-                    -float(f["sharpe"]),
-                )
-            )
-
-            # 构建家族汇总
-            family_summary_list: list[dict] = []
-            for fam in family_order:
-                st = family_stats.get(fam, {"ic_sum": 0, "sharpe_sum": 0, "count": 1})
-                cnt = st["count"]
-                family_summary_list.append(
-                    {
-                        "family": fam,
-                        "count": cnt,
-                        "avg_ic": round(st["ic_sum"] / cnt, 4) if cnt else 0,
-                        "avg_sharpe": round(st["sharpe_sum"] / cnt, 2) if cnt else 0,
-                    }
-                )
+            # 信号相关性聚类分组（聚类查询独立执行，code/params 不入 UI 响应）
+            code_factors: list[dict[str, Any]] = []
+            try:
+                code_rows = conn.execute(
+                    "SELECT factor_id, code, params FROM factor_catalog WHERE is_elite = TRUE AND status != 'deleted'"
+                ).fetchall()
+                for cr in code_rows:
+                    p = cr[2]
+                    if isinstance(p, str):
+                        try:
+                            p = json.loads(p)
+                        except (json.JSONDecodeError, TypeError):
+                            p = {}
+                    code_factors.append(
+                        {
+                            "factor_id": str(cr[0] or ""),
+                            "code": str(cr[1] or "") if cr[1] is not None else "",
+                            "params": p or {},
+                        }
+                    )
+            except Exception:  # noqa: BLE001
+                logger.warning("[ui] 聚类数据查询失败，降级不分组")
+                code_factors = []
+            factors, cluster_meta = self._apply_cluster_groups(factors, code_factors)
 
             return {
                 "factors": factors,
                 "count": len(factors),
-                "family_distribution": dict(sorted(family_dist.items(), key=lambda x: -x[1])),
-                "family_summary": family_summary_list,
+                "cluster_distribution": cluster_meta["distribution"],
+                "cluster_summary": cluster_meta["summary"],
+                "clustering_applied": cluster_meta["applied"],
                 "source": "duckdb",
             }
         finally:
@@ -1072,8 +1192,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 
         elite_dir = Path.cwd() / "memory" / "knowledge" / "factors" / "futures_elite"
         factors: list[dict] = []
-        family_dist: dict[str, int] = {}
-        family_stats: dict[str, dict[str, float]] = {}
+        code_factors: list[dict[str, Any]] = []
 
         if elite_dir.exists():
             for fp in sorted(elite_dir.glob("*.json"), reverse=True)[:200]:
@@ -1084,17 +1203,9 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                     bt = raw.get("evaluation", {}).get("level_1_backtest", {})
                     eco = raw.get("economic_logic", {})
                     qs = raw.get("quality_score", {})
-                    family = raw.get("family") or "other"
-                    family = str(family) if not isinstance(family, str) else family
 
-                    family_dist[family] = family_dist.get(family, 0) + 1
                     ic_val = float(bt.get("ic", 0))
                     sharpe_val = float(bt.get("sharpe", 0))
-                    if family not in family_stats:
-                        family_stats[family] = {"ic_sum": 0.0, "sharpe_sum": 0.0, "count": 0}
-                    family_stats[family]["ic_sum"] += ic_val
-                    family_stats[family]["sharpe_sum"] += sharpe_val
-                    family_stats[family]["count"] += 1
 
                     factors.append(
                         {
@@ -1104,7 +1215,6 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                             "ic": f"{ic_val:.4f}",
                             "sharpe": f"{sharpe_val:.2f}",
                             "source": raw.get("source", "?"),
-                            "family": family,
                             "market": raw.get("market", "futures"),
                             "icir": f"{bt.get('icir', 0):.4f}",
                             "max_drawdown": f"{bt.get('max_drawdown', 0):.2%}",
@@ -1132,35 +1242,24 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                             else "pending",
                         }
                     )
+                    code_factors.append(
+                        {
+                            "factor_id": raw.get("factor_id", fp.stem),
+                            "code": raw.get("code", "") or "",
+                            "params": raw.get("params") or {},
+                        }
+                    )
                 except Exception:  # noqa: BLE001
                     continue
 
-        family_order = sorted(family_dist.keys(), key=lambda f: -family_dist[f])
-        factors.sort(
-            key=lambda f: (
-                family_order.index(f["family"]) if f["family"] in family_order else 999,
-                -float(f["sharpe"]),
-            )
-        )
-
-        family_summary_list: list[dict] = []
-        for fam in family_order:
-            st = family_stats.get(fam, {"ic_sum": 0, "sharpe_sum": 0, "count": 1})
-            cnt = st["count"]
-            family_summary_list.append(
-                {
-                    "family": fam,
-                    "count": cnt,
-                    "avg_ic": round(st["ic_sum"] / cnt, 4) if cnt else 0,
-                    "avg_sharpe": round(st["sharpe_sum"] / cnt, 2) if cnt else 0,
-                }
-            )
+        factors, cluster_meta = self._apply_cluster_groups(factors, code_factors)
 
         return {
             "factors": factors,
             "count": len(factors),
-            "family_distribution": dict(sorted(family_dist.items(), key=lambda x: -x[1])),
-            "family_summary": family_summary_list,
+            "cluster_distribution": cluster_meta["distribution"],
+            "cluster_summary": cluster_meta["summary"],
+            "clustering_applied": cluster_meta["applied"],
             "source": "json_fallback",
         }
 
@@ -1608,6 +1707,28 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             factor_id = path[len("/api/v1/live/factors/") : -len("/deviation")]
             self._respond_json(_build_live_deviation(factor_id))
 
+        elif path == "/api/workflow/stages":
+            self._respond_json(self._workflow_stages())
+
+        elif path == "/api/workflow/runs":
+            self._respond_json(self._workflow_runs())
+
+        elif path == "/api/workflow/status":
+            self._respond_json({"ok": True, "runs": _get_workflow()[0].list_runs(limit=5)})
+
+        elif path == "/api/workflow/qa/board":
+            self._respond_json(self._workflow_qa_board())
+
+        elif path.startswith("/api/workflow/runs/"):
+            run_id = path[len("/api/workflow/runs/") :]
+            if "/" in run_id:
+                self._respond_json({"error": "bad path"}, 400)
+            else:
+                self._respond_json(self._workflow_run_detail(run_id))
+
+        elif path == "/workflow" or path.startswith("/workflow/") or path.startswith("/assets/"):
+            self._serve_workflow_static(path)
+
         else:
             self._respond_json({"error": "not found"}, 404)
 
@@ -1623,6 +1744,16 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             self._handle_review_decision("reject")
         elif path == "/api/review/auto":
             self._handle_review_auto()
+        elif path == "/api/workflow/runs":
+            self._respond_json(self._workflow_create_run())
+        elif path.startswith("/api/workflow/runs/"):
+            parts = path[len("/api/workflow/runs/") :].split("/")
+            if len(parts) == 2 and parts[1] == "run_all":
+                self._respond_json(self._workflow_run_all(parts[0]))
+            elif len(parts) == 6 and parts[1] == "stage" and parts[3] == "action" and parts[5] == "run":
+                self._respond_json(self._workflow_run_action(parts[0], parts[2], parts[4]))
+            else:
+                self._respond_json({"error": "not found"}, 404)
         else:
             self._respond_json({"error": "not found"}, 404)
 
@@ -1673,6 +1804,116 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             return
 
         self._respond_json({"approved": True, "order": order})
+
+    # ─── WorkFlow API（CTA 手册端到端工作流） ──────────────────
+    def _workflow_stages(self) -> list[dict]:
+        from ..workflow import get_stages
+
+        return get_stages()
+
+    def _workflow_runs(self) -> dict:
+        store, _ = _get_workflow()
+        return {"runs": store.list_runs(limit=50)}
+
+    def _workflow_run_detail(self, run_id: str) -> dict:
+        store, _ = _get_workflow()
+        run = store.get_run(run_id)
+        if run is None:
+            return {"error": f"run not found: {run_id}"}
+        return {"run": run, "stage_runs": store.get_stage_runs(run_id)}
+
+    def _workflow_qa_board(self) -> dict:
+        """质检状态看板（QA 7 状态分布，手册 6.8）。"""
+        try:
+            from ..factor_engine.factor_db.repository import FactorRepository
+            from ..factor_engine.qa import status_board
+
+            repo = FactorRepository(market="futures")
+            try:
+                factors = repo.list_factors(market="futures", status=None, limit=500)
+            finally:
+                repo.close()
+            board = status_board(factors)
+            board["factors"] = len(factors)
+            return board
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[ui] QA board 构建失败: %s", e)
+            return {"error": str(e), "factors": 0}
+
+    def _workflow_create_run(self) -> dict:
+        store, _ = _get_workflow()
+        started_stage = self._request_body().get("started_stage", "s1")
+        run_id = store.create_run(started_stage)
+        return {"ok": True, "run_id": run_id, "started_stage": started_stage}
+
+    def _workflow_run_all(self, run_id: str) -> dict:
+        store, executor = _get_workflow()
+        if store.get_run(run_id) is None:
+            return {"error": f"run not found: {run_id}"}
+        body = self._request_body()
+        start_stage = body.get("start_stage") or body.get("started_stage") or "s1"
+        action_id = body.get("action_id")
+        executor.run_all(run_id, start_stage=start_stage, action_id=action_id)
+        return {"ok": True, "run_id": run_id, "start_stage": start_stage}
+
+    def _workflow_run_action(self, run_id: str, stage_id: str, action_id: str) -> dict:
+        store, executor = _get_workflow()
+        if store.get_run(run_id) is None:
+            return {"error": f"run not found: {run_id}"}
+        return executor.run_stage(run_id, stage_id, action_id)
+
+    def _request_body(self) -> dict:
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+            return json.loads(raw or "{}")
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _serve_workflow_static(self, path: str) -> None:
+        """托管 WorkFlow SPA 构建产物（/workflow → web/workflow_ui/dist）。"""
+        import mimetypes
+
+        dist = Path(__file__).resolve().parent.parent.parent / "web" / "workflow_ui" / "dist"
+        if path.startswith("/assets/"):
+            rel = path.lstrip("/")
+        elif path.startswith("/workflow"):
+            rel = path[len("/workflow") :].lstrip("/")
+        else:
+            rel = ""
+        if not rel or rel.endswith("/"):
+            rel = "index.html"
+        target = (dist / rel).resolve()
+        if not str(target).startswith(str(dist.resolve())) or not target.is_file():
+            target = dist / "index.html"
+        if not target.is_file():
+            self._respond_html(
+                "<h2>WorkFlow UI 未构建</h2>"
+                "<p>请先构建前端: <code>cd web/workflow_ui &amp;&amp; npm install &amp;&amp; npm run build</code></p>"
+            )
+            return
+        ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(target.read_bytes())
+
+
+# ─── WorkFlow 运行时单例（懒加载，避免 import 时创建 DB） ─────────
+
+_WORKFLOW_RUNTIME: Optional[tuple[Any, Any]] = None
+
+
+def _get_workflow() -> tuple[Any, Any]:
+    """返回 (WorkflowStore, WorkflowExecutor) 单例。"""
+    global _WORKFLOW_RUNTIME
+    if _WORKFLOW_RUNTIME is None:
+        from ..workflow import WorkflowExecutor, WorkflowStore
+
+        store = WorkflowStore()
+        _WORKFLOW_RUNTIME = (store, WorkflowExecutor(store))
+    return _WORKFLOW_RUNTIME
 
 
 # ─── 指标注册表（兼容旧版调用） ──────────────────────────

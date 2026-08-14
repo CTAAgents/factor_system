@@ -56,7 +56,6 @@ def _factor(fid: str, name: str, sharpe: float = 1.8) -> dict:
         "ic": 0.05,
         "turnover": 0.3,
         "decay_6m": 0.05,
-        "family": "trend",
         "style_tags": ["momentum"],
         "code": "def f(data, params):\n    return data['close']",
     }
@@ -184,11 +183,11 @@ def test_portfolio_loop_custom_adaptive_config() -> None:
     """自定义 adaptive_config 生效。"""
     cfg: AdaptiveWeightConfig = AdaptiveWeightConfig(
         enabled=True,
-        dimension="family",
+        dimension="style",
         smoother={"alpha": 0.2, "min_days": 5},
     )
     loop = PortfolioLoop(synthesis_mode="adaptive", adaptive_config=cfg)
-    assert loop.adaptive_config["dimension"] == "family"
+    assert loop.adaptive_config["dimension"] == "style"
     assert loop.adaptive_config["smoother"]["alpha"] == 0.2
 
 
@@ -208,34 +207,34 @@ def _make_signals(specs: list[tuple[str, str, float]]) -> list[dict]:
             "decay_6m": 0.05,
             "retained": True,
         }
-        for fid, _family, weight in specs
+        for fid, _style, weight in specs
     ]
 
 
 def _make_factors(specs: list[tuple[str, str]]) -> list[dict]:
     """构造最小因子列表（regime blend 测试用）。"""
-    return [{"factor_id": fid, "name": fid, "family": family} for fid, family in specs]
+    return [{"factor_id": fid, "name": fid, "style_tags": [style]} for fid, style in specs]
 
 
 def test_regime_blend_mixes_probability_weighted_multipliers() -> None:
     """regime_probs 存在时按概率混合倍率，而非硬查表。"""
-    signals = _make_signals([("f1", "trend", 0.10)])
+    signals = _make_signals([("f1", "momentum", 0.10)])
     regime = {
         "regime": "oscillate",
         "confidence": 0.5,
         "regime_probs": {"bull": 0.6, "oscillate": 0.4, "bear": 0.0, "high_vol": 0.0, "low_vol": 0.0},
     }
-    adjusted = regime_adaptive_weight_adjustment(signals, regime, _make_factors([("f1", "trend")]))
-    # bull trend 倍率 1.3 × 0.6 + oscillate trend 倍率 0.8 × 0.4 = 1.10
+    adjusted = regime_adaptive_weight_adjustment(signals, regime, _make_factors([("f1", "momentum")]))
+    # bull momentum 倍率 1.3 × 0.6 + oscillate momentum 倍率 0.8 × 0.4 = 1.10
     assert abs(adjusted[0]["weight"] - 0.10 * 1.10) < 1e-6
 
 
 def test_regime_blend_fallback_hardcoded() -> None:
     """无 regime_probs 时回退硬查表（向后兼容）。"""
-    signals = _make_signals([("f1", "trend", 0.10)])
+    signals = _make_signals([("f1", "momentum", 0.10)])
     regime = {"regime": "bull", "confidence": 0.8}
-    adjusted = regime_adaptive_weight_adjustment(signals, regime, _make_factors([("f1", "trend")]))
-    assert abs(adjusted[0]["weight"] - 0.10 * 1.3) < 1e-6  # bull/trend=1.3
+    adjusted = regime_adaptive_weight_adjustment(signals, regime, _make_factors([("f1", "momentum")]))
+    assert abs(adjusted[0]["weight"] - 0.10 * 1.3) < 1e-6  # bull/momentum=1.3
 
 
 # ─── GAP-095: regime blend 幂次调节（blend_power）────────────
@@ -283,11 +282,11 @@ def test_blend_power_default_matches_linear_mix() -> None:
         "confidence": 0.5,
         "regime_probs": {"bull": 0.6, "oscillate": 0.4, "bear": 0.0, "high_vol": 0.0, "low_vol": 0.0},
     }
-    factors = _make_factors([("f1", "trend")])
+    factors = _make_factors([("f1", "momentum")])
     # 注：adjustment 原地修改 signals，每次调用须用独立列表
-    w_default = regime_adaptive_weight_adjustment(_make_signals([("f1", "trend", 0.10)]), regime, factors)[0]["weight"]
+    w_default = regime_adaptive_weight_adjustment(_make_signals([("f1", "momentum", 0.10)]), regime, factors)[0]["weight"]
     w_explicit = regime_adaptive_weight_adjustment(
-        _make_signals([("f1", "trend", 0.10)]), regime, factors, blend_power=1.0
+        _make_signals([("f1", "momentum", 0.10)]), regime, factors, blend_power=1.0
     )[0]["weight"]
     assert abs(w_default - w_explicit) < 1e-9
     assert abs(w_default - 0.10 * (1.3 * 0.6 + 0.8 * 0.4)) < 1e-6
@@ -304,11 +303,11 @@ def test_blend_power_sharpens_toward_high_prob_regime() -> None:
         "confidence": 0.5,
         "regime_probs": {"bull": 0.6, "oscillate": 0.4, "bear": 0.0, "high_vol": 0.0, "low_vol": 0.0},
     }
-    factors = _make_factors([("f1", "trend")])
+    factors = _make_factors([("f1", "momentum")])
     w_sharp = regime_adaptive_weight_adjustment(
-        _make_signals([("f1", "trend", 0.10)]), regime, factors, blend_power=3.0
+        _make_signals([("f1", "momentum", 0.10)]), regime, factors, blend_power=3.0
     )[0]["weight"]
-    w_linear = regime_adaptive_weight_adjustment(_make_signals([("f1", "trend", 0.10)]), regime, factors)[0]["weight"]
+    w_linear = regime_adaptive_weight_adjustment(_make_signals([("f1", "momentum", 0.10)]), regime, factors)[0]["weight"]
     assert w_sharp > w_linear  # 锐化后更靠近 bull（倍率 1.3 > oscillate 0.8）
     expected = 0.10 * (1.3 * (0.6**3) / (0.6**3 + 0.4**3) + 0.8 * (0.4**3) / (0.6**3 + 0.4**3))
     assert abs(w_sharp - expected) < 1e-6

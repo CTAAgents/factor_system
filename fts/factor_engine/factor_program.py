@@ -734,7 +734,6 @@ def create_factor_program(
     trace_id: Optional[str] = None,
     risk_tag: Optional[str] = None,
     market: Optional[str] = None,
-    family: Optional[str] = None,
     symbols: Optional[list[str]] = None,
     factor_version: str = "v2",
     kind: FactorKind = FactorKind.CODE,
@@ -742,12 +741,11 @@ def create_factor_program(
     """创建一个新的因子程序实例。
 
     自动生成 factor_id 和时间戳。
-    支持多品种元数据（market/family/symbols），减少跨品种类型检查错误。
+    支持多品种元数据（market/symbols），减少跨品种类型检查错误。
 
     Args:
         risk_tag: 风险标签，如 "vwap_approx" 用于标记高风险因子。
         market: 适用市场 (futures/stock/etf/multi)
-        family: 因子家族分类
         symbols: 适用品种列表（空列表=全品种适用）
         factor_version: 因子定义版本号
     """
@@ -770,7 +768,6 @@ def create_factor_program(
         trace_id=trace_id or factor_id,
         risk_tag=risk_tag,
         market=market or "multi",  # type: ignore[typeddict-item]
-        family=family or "other",  # type: ignore[typeddict-item]
         symbols=normalized_symbols,
         factor_version=factor_version,
         is_multi_symbol=len(normalized_symbols) > 1,

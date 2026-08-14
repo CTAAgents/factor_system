@@ -225,7 +225,6 @@ class TestDeepFactorGenerator:
         assert factor["name"].startswith("deep_gru_")
         assert "def factor_program" in factor["code"]
         assert factor["source"] == "deep_evolution"
-        assert factor["family"] == "deep"
         assert factor["market"] == "futures"
         assert factor["parent_id"] == "rb_momentum"
         assert factor["deep_model"]["model"] == "gru"

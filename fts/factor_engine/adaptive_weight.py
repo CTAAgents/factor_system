@@ -6,7 +6,7 @@ fts.factor_engine.adaptive_weight — 自适应动态权重（A.3）
     - ``RegimeSmoother``: Regime 切换时的权重指数平滑，避免权重剧烈跳变
 
 底层复用 ``portfolio_loop.regime_adaptive_weight_adjustment`` 与
-``REGIME_FAMILY_MULTIPLIERS``（FactorFamily 倍率映射），保证行为一致。
+``REGIME_STYLE_MULTIPLIERS``（FactorStyle 倍率映射），保证行为一致。
 
 用法:
     from fts.factor_engine.adaptive_weight import AdaptiveWeightManager
@@ -34,15 +34,15 @@ class AdaptiveWeightManager:
     """自适应权重管理器（A.3）。
 
     包装 ``portfolio_loop.regime_adaptive_weight_adjustment``，
-    提供按 Regime 的 FactorFamily 权重倍率调整，支持配置热更新。
+    提供按 Regime 的 FactorStyle 权重倍率调整，支持配置热更新。
     """
 
     def __init__(self, multipliers: Optional[dict[str, dict[str, float]]] = None) -> None:
-        # 延迟导入避免循环依赖
-        from .portfolio_loop import REGIME_FAMILY_MULTIPLIERS
+        # 延迟导入避免循环依赖（style 维度倍率表，未传入时回退默认表）
+        from .portfolio_loop import REGIME_STYLE_MULTIPLIERS
 
         self._multipliers: dict[str, dict[str, float]] = dict(
-            multipliers if multipliers is not None else REGIME_FAMILY_MULTIPLIERS
+            multipliers if multipliers is not None else REGIME_STYLE_MULTIPLIERS
         )
 
     # ─── 核心调整 ──────────────────────────────────────────
@@ -59,7 +59,7 @@ class AdaptiveWeightManager:
         Args:
             signals: 合成后的信号列表（含 factor_id/weight/decay_6m 等）
             regime: Regime 检测结果（dict，含 ``regime`` 字段）
-            factors: 因子列表（含 family 字段）
+            factors: 因子列表（含 style_tags/factor_id）
             min_weight: 最小权重下限
 
         Returns:
@@ -83,7 +83,7 @@ class AdaptiveWeightManager:
         将因子信号构造为默认等权，调用 adjust 后提取权重。
 
         Args:
-            factors: 因子列表（含 factor_id/family）
+            factors: 因子列表（含 factor_id/style_tags）
             regime: Regime 检测结果
             base_weights: 基础权重（缺省等权）
 
