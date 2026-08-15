@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+68
+> 版本: v2.104.0+69
 > 最后更新: 2026-08-10
 
 ---
@@ -508,7 +508,10 @@ FTS (因子推演) — 支持期货横截面因子演化
 │ 选择与基础权重由 L3 组合提供 factor_weights.json，信号管道仅做信号   │
 │ 计算 + Regime 档位缩放权重调整，移除截面 IC 方向校正与 Ridge 回归；  │
 │ Market Regime 检测 = RegimeAwareSelector，品种-链对齐度修正 =        │
-│ compute_alignment；因子来源 = L3 组合因子（DuckDB factor_catalog）） │
+│ compute_alignment；因子来源 = L3 组合因子（DuckDB factor_catalog）； │
+│ v2.104.0+69 增量跨因子组合校验：快照含 factor_signature（因子名集合 │
+│ 签名），增量仅在前后因子组合一致时计算，组合变更标记无效防虚假增量；│
+│ 综合得分语义 = 品种级 IC 翻转后的相对强弱评分（负分=回归预期非方向））│
 │    │                                                                │
 │    ▼                                                                │
 │ reports/{date}/futures_signals_{date}.md                            │

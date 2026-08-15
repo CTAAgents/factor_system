@@ -28,6 +28,8 @@ from futures_signal_pipeline import (
     _classify_factor_category,
     _compute_composite_scores,
     _compute_per_variety_weights,
+    _compute_signal_deltas,
+    _factor_set_signature,
     _load_l3_combo_factors,
     _load_l3_combo_weights,
     _load_signal_factors,
@@ -595,3 +597,84 @@ class TestLoadSignalFactors:
         assert result == []
         mock_db.assert_called_once()
         mock_json.assert_not_called()
+
+
+# ─── _factor_set_signature / _compute_signal_deltas ──────────────────────
+
+
+class TestFactorSetSignature:
+    """因子组合签名测试（跨日增量可比性校验，v2.104.0+69）。"""
+
+    def test_same_names_same_signature_order_insensitive(self):
+        """相同因子集合 → 相同签名；与顺序无关。"""
+        f1 = [{"name": "a"}, {"name": "b"}, {"name": "c"}]
+        f2 = [{"name": "c"}, {"name": "a"}, {"name": "b"}]
+        assert _factor_set_signature(f1) == _factor_set_signature(f2)
+
+    def test_different_names_different_signature(self):
+        """不同因子集合 → 不同签名（L3 重算 8→7 因子可被检出）。"""
+        f8 = [{"name": f"f{i}"} for i in range(8)]
+        f7 = [{"name": f"f{i}"} for i in range(7)]
+        assert _factor_set_signature(f8) != _factor_set_signature(f7)
+
+    def test_signature_is_16_hex(self):
+        """签名为 16 位十六进制字符串。"""
+        sig = _factor_set_signature([{"name": "x"}, {"name": "y"}])
+        assert len(sig) == 16
+        assert all(c in "0123456789abcdef" for c in sig)
+
+
+class TestComputeSignalDeltas:
+    """跨因子组合增量校验测试（v2.104.0+69）。"""
+
+    def _sig(self, *names: str) -> str:
+        return _factor_set_signature([{"name": n} for n in names])
+
+    def test_same_combo_computes_delta(self):
+        """因子组合一致 → 正常计算增量。"""
+        today = {"A": 0.3, "B": -0.2, "C": 0.1}
+        prev = {"date": "2026-08-15", "scores": {"A": 0.5, "B": 0.0, "C": 0.3},
+                "factor_signature": self._sig("f1", "f2")}
+        deltas, prev_scores, has_delta, reason = _compute_signal_deltas(
+            today, prev, self._sig("f2", "f1")
+        )
+        assert has_delta is True
+        assert reason == ""
+        assert deltas["A"] == pytest.approx(-0.2)
+        assert deltas["B"] == pytest.approx(-0.2)
+        assert deltas["C"] == pytest.approx(-0.2)
+        assert prev_scores == {"A": 0.5, "B": 0.0, "C": 0.3}
+
+    def test_mismatched_combo_marks_invalid(self):
+        """因子组合不一致 → 增量标记无效（空 delta + 原因）。"""
+        today = {"A": 0.3, "B": -0.2}
+        prev = {"date": "2026-08-15", "scores": {"A": 0.5, "B": 0.0},
+                "factor_signature": self._sig("f1", "f2")}
+        deltas, prev_scores, has_delta, reason = _compute_signal_deltas(
+            today, prev, self._sig("f1", "f2", "f3")
+        )
+        assert has_delta is False
+        assert deltas == {}
+        assert "因子组合与今日不一致" in reason
+        # 昨日得分仍返回（报告用），但增量不展示
+        assert prev_scores == {"A": 0.5, "B": 0.0}
+
+    def test_no_prev_snapshot(self):
+        """无昨日快照 → 无增量 + 原因。"""
+        deltas, prev_scores, has_delta, reason = _compute_signal_deltas(
+            {"A": 0.3}, None, self._sig("f1")
+        )
+        assert has_delta is False
+        assert deltas == {} and prev_scores == {}
+        assert "无昨日信号快照" in reason
+
+    def test_legacy_snapshot_without_signature(self):
+        """旧格式快照（无 factor_signature）→ 兼容计算增量。"""
+        today = {"A": 0.3}
+        prev = {"date": "2026-08-15", "scores": {"A": 0.5}}  # 旧格式无签名
+        deltas, prev_scores, has_delta, reason = _compute_signal_deltas(
+            today, prev, self._sig("f1")
+        )
+        assert has_delta is True
+        assert deltas == {"A": -0.2}
+        assert reason == ""

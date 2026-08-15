@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+68
+> 版本: v2.104.0+69
 > 最后更新: 2026-08-15
 
 ---
@@ -12,6 +12,7 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+69** | **2026-08-16** | **信号管道跨因子组合增量校验 + 得分语义标注：快照新增 factor_signature（因子名集合 SHA256）与 semantics 字段，增量计算前校验前后因子组合一致（不一致→标记无效并提示，拦截 08-16 L3 重算 8→7 因子导致的虚假信号增量）；报告新增「信号语义说明」（综合得分=品种级 IC 翻转后的相对强弱评分，负分=回归预期非趋势方向信号），修正因子贡献排名过时注释；新增 TestFactorSetSignature + TestComputeSignalDeltas 8 用例，test_futures_signal_pipeline 38→46 passed + ruff 全绿** |** |
 | **v2.104.0+68** | **2026-08-16** | **load_elite_factors JSON 兜底路径补 icir 维度提取：与 sharpe/ic/turnover 同模式（优先 evaluation.level_1_backtest，缺失回退顶层字段，两处均缺默认 0.0）——旧版仅查 bt 致顶层 icir 丢失为 0，JSON 兜底路径综合评分缺 icir 维度；新增 TestLoadEliteFactors +3 用例，test_portfolio_loop 255→258 passed + ruff 全绿** |** |
 | **v2.104.0+67** | **2026-08-16** | **L3 CAP 数量安全阀 + OOS 校正评分：P1 聚类先行、CAP 后置为数量安全阀（排序键 use_oos_ic 取 oos_extrapolation.new_ic），修复 CAP 按样本内评分选优系统性偏向过拟合因子 + 聚类输入被收缩到 top-20 高分同质因子导致代表数骤降不稳定（能源链 verifier_warning 根因）；新增 10 用例（composite +3 / cap 安全阀 +4 / loop 集成 +3），受影响模块 325 passed + ruff 全绿** |** |
 | **v2.104.0+66** | **2026-08-16** | **修复 migrate_elite_json_to_catalog.py 残留 family 字段（v2.104.0+64 存量失败）：build_factor_dict 删除 family 列输出——factor_catalog 表已随 v2.104.0+30 family 概念移除删除该列，--sync 路径 repo.update_factor 写入 family 即触发 DuckDB BinderException（Referenced update column family not found），致 test_sync_updates_drifted_factor 存量失败；删除后 test_migrate_elite_json_to_catalog.py 17 用例全绿；同链路 migrate_from_json.py 确认无残留；其余 scripts family 引用为只读 JSON 快照字段不在本次范围** |** |

@@ -1,6 +1,6 @@
 # E.2 存储后端对比评估 — DuckDB 并发锁问题的根治方案选型
 
-> 版本: v2.104.0+68
+> 版本: v2.104.0+69
 > 关联: [E.1-duckdb-concurrency-design.md](./E.1-duckdb-concurrency-design.md)（现状缓解已实施）、[E.3-sqlite-state-store-design.md](./E.3-sqlite-state-store-design.md)（S2 详细设计）、[08-gap-analysis.md](../08-gap-analysis.md)、[29-storage-convergence-plan.md](../plans/29-storage-convergence-plan.md)
 > 状态: **已决策——采纳 S1+S2 组合路线，两条均已实施（2026-08-13）**：S2（L4 状态库 SQLite 化，见 E.3 §9）+ S1（L2/L3 DuckDB 写连接生命周期根治：写窗口短生命周期 + filelock 跨进程互斥 + read_only 读路径，见 E.4 §8）
 > 定位: 数据基础设施层选型决策文档。回答「DuckDB 并发锁问题能否从根本上解决、是否应弃用 DuckDB、替代方案是什么」三个问题。

@@ -89,6 +89,62 @@ def _yesterday_str() -> str:
     return (date.today() - timedelta(days=1)).isoformat()
 
 
+# ─── 信号得分语义与跨组合可比性校验（v2.104.0+69）────────
+# 综合得分 = 品种级 IC 方向翻转（per_variety_sign_flips）后的相对强弱评分，
+# 负分表示因子读数相对过热 / IC 反向修正后的均值回归预期，不是趋势方向信号。
+# 跨日增量仅在同一因子组合（factor_signature）下可比。
+_SIGNAL_SCORE_SEMANTICS: str = (
+    "综合得分为品种级 IC 方向翻转后的相对强弱评分"
+    "（负分 = 因子读数相对过热 / 回归预期，非趋势方向信号）；"
+    "跨日增量仅在同一因子组合下可比"
+)
+
+
+def _factor_set_signature(factors: list[dict[str, Any]]) -> str:
+    """因子组合签名：排序后的因子名集合 SHA256（前 16 位）。
+
+    用于校验跨日信号快照的因子组合是否一致：因子集合变化后，
+    前后两日综合得分语义不同，不可直接相减（避免 08-16 L3 重算
+    8→7 因子导致的虚假信号增量）。
+    """
+    names = sorted(f.get("name", "") for f in factors)
+    return hashlib.sha256(json.dumps(names, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+
+
+def _compute_signal_deltas(
+    today_scores: dict[str, float],
+    prev_snapshot: dict[str, Any] | None,
+    factor_signature: str,
+) -> tuple[dict[str, float], dict[str, float], bool, str]:
+    """较昨日信号增量计算（跨因子组合可比性校验）。
+
+    Args:
+        today_scores: 今日综合得分 {symbol: score}
+        prev_snapshot: 昨日信号快照 dict（None = 缺失）
+        factor_signature: 今日因子组合签名
+
+    Returns:
+        (sym_deltas, prev_scores, has_delta, skip_reason)
+        - 因子组合不一致 → sym_deltas 为空、has_delta=False、skip_reason 说明原因
+        - 旧快照无 factor_signature 字段 → 兼容处理，正常计算增量
+        - 无昨日快照 → has_delta=False、skip_reason 说明
+    """
+    if prev_snapshot is None:
+        return {}, {}, False, "无昨日信号快照，首次运行或数据缺失"
+    prev_scores: dict[str, float] = prev_snapshot.get("scores") or {}
+    prev_sig = prev_snapshot.get("factor_signature")
+    if prev_sig and prev_sig != factor_signature:
+        return (
+            {},
+            prev_scores,
+            False,
+            f"昨日快照因子组合与今日不一致（{prev_sig} ≠ {factor_signature}），"
+            "前后得分不可比，跳过增量计算",
+        )
+    sym_deltas = {s: sc - prev_scores[s] for s, sc in today_scores.items() if s in prev_scores}
+    return sym_deltas, prev_scores, bool(sym_deltas), ""
+
+
 def _dedup_factors(
     factors: list[dict[str, Any]],
     ic_threshold: float = 0.3,
@@ -1737,10 +1793,19 @@ def main(
     report_dir = REPORTS_ROOT / chain_report_root / today
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    # 保存今日信号快照 (JSON)
+    # 因子组合签名（跨日增量可比性校验；因子集合变化 → 增量标记无效）
+    factor_signature = _factor_set_signature(factors)
+
+    # 保存今日信号快照 (JSON)，附带因子组合签名与得分语义说明
+    snapshot_payload = {
+        "date": today,
+        "scores": sym_scores,
+        "factor_signature": factor_signature,
+        "semantics": _SIGNAL_SCORE_SEMANTICS,
+    }
     snapshot_path = report_dir / "signal_scores.json"
     snapshot_path.write_text(
-        json.dumps({"date": today, "scores": sym_scores}, ensure_ascii=False, indent=2),
+        json.dumps(snapshot_payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
@@ -1748,29 +1813,21 @@ def main(
     history_path = REPORTS_ROOT / chain_report_root / "signal_scores_history.jsonl"
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with open(history_path, "a", encoding="utf-8") as hf:
-        hf.write(json.dumps({"date": today, "scores": sym_scores}, ensure_ascii=False) + "\n")
+        hf.write(json.dumps(snapshot_payload, ensure_ascii=False) + "\n")
 
-    # 加载昨日信号，计算增量
+    # 加载昨日信号快照，计算增量（跨因子组合校验，组合不一致 → 增量无效）
+    prev_snapshot: dict[str, Any] | None = None
     try:
         yesterday_snapshot = report_dir.parent / _yesterday_str() / "signal_scores.json"
         if yesterday_snapshot.exists():
-            prev_data = json.loads(yesterday_snapshot.read_text(encoding="utf-8"))
-            prev_scores: dict[str, float] = prev_data.get("scores", {})
-            # 计算每个品种的信号增量
-            sym_deltas: dict[str, float] = {}
-            for sym, score in sym_scores.items():
-                prev = prev_scores.get(sym)
-                if prev is not None:
-                    sym_deltas[sym] = score - prev
-            has_delta = len(sym_deltas) > 0
-        else:
-            prev_scores = {}
-            sym_deltas = {}
-            has_delta = False
+            prev_snapshot = json.loads(yesterday_snapshot.read_text(encoding="utf-8"))
     except Exception:
-        prev_scores = {}
-        sym_deltas = {}
-        has_delta = False
+        prev_snapshot = None
+    sym_deltas, prev_scores, has_delta, delta_skip_reason = _compute_signal_deltas(
+        sym_scores, prev_snapshot, factor_signature
+    )
+    if delta_skip_reason:
+        print(f"      [增量] {delta_skip_reason}")
 
     # ── Step 5: 输出信号排名 ──
     if not sym_scores:
@@ -1872,6 +1929,14 @@ def main(
         w("合成方法: L3 组合基础权重（Regime 档位调整）")
     w("权重来源: L3 组合（factor_weights.json）| Regime 调整: 档位缩放（bull/bear/oscillate/high_vol）")
     w(f"最新价: 盘中实时价（TQ-Local 优先，AKShare 降级） | 实时价覆盖 {rt_hit}/{len(sym_list)} 个品种")
+    w()
+    w()
+    w("## 信号语义说明")
+    w()
+    w("> 综合得分 = 品种级 IC 方向翻转（per_variety_sign_flips）后的**相对强弱评分**。")
+    w("> **负分表示该品种因子读数相对过热（IC 反向修正后的均值回归预期），不等于趋势看空**；")
+    w("> 正分表示相对走强。方向判定请结合 Market Regime 与原始因子读数，勿将得分直接解读为方向信号。")
+    w("> 跨日信号增量仅在同一因子组合（factor_signature）下可比，因子组合变更时增量被标记无效。")
     w()
     w()
     w("## 市场制度 (Market Regime) — 产业链级")
@@ -2208,8 +2273,8 @@ def main(
     # 因子贡献排名
     w("## 因子贡献排名（当前市场最有效的因子）")
     w()
-    w("> 注：方向校正基于截面 IC。因子信号值已根据截面 IC 方向校正，")
-    w("> IC<0 的因子信号已反转，使信号方向与未来收益方向一致。")
+    w("> 注：v2.105.0 起移除截面 IC 方向校正，此处为各品种最新因子读数的均值，")
+    w("> 仅反映因子信号水平，不作方向判定；方向语义见「信号语义说明」。")
     w()
     factor_contribs: dict[str, list[float]] = {}
     for sym, details in sym_details.items():
