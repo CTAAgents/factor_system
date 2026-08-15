@@ -1,6 +1,6 @@
 # F.2 演化引擎分叉（evolution_loop → evolution_futures / evolution_stock）— 详细技术设计
 
-> 版本: v2.104.0+66-draft
+> 版本: v2.104.0+68-draft
 > 创建: 2026-08-12
 > 状态: **设计中**（待评审，未实现）
 > 关联: [F.1-data-contract-split-design.md](./F.1-data-contract-split-design.md)（契约拆分，Phase 3 依赖）、[14-cross-market-generalization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/14-cross-market-generalization-plan.md)（跨市场验证，分叉后独立演进）

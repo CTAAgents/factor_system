@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.104.0+66
+> 版本: v2.104.0+68
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -40,6 +40,17 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 - ✅ **D 层（一等公民 + 增量）**：信号矩阵持久化 DuckDB + `load_or_build_signal_matrix` 增量重算（`code_hash` 判定，仅新晋升/变更因子全量算，存量仅追加近窗口）
 - ✅ 测试：新增 test_l3_signal_service.py 16 用例 + test_numba_kernels 32→86 + test_factor_clustering 接 `signal_cache` 参数；受影响回归 880 用例全绿 + factor_engine 全目录 not-slow 4882 passed（2 个 test_risk_tag mock 晋升用例为存量失败，git stash 基线复测确认非本次引入）
 - ✅ GAP-124 登记并关闭
+
+### L3 CAP 数量安全阀与聚类顺序修正（2026-08-16，build bump v2.104.0+67，GAP-125）
+
+**完成时间**: 2026-08-16
+
+**核心产出**:
+- ✅ **顺序修正**：Step 1.7 CAP 由 P1 聚类前移至聚类 + 子链去冗余之后——聚类输入全部合格因子（不再被 CAP 收缩到 top-20 高分同质集合），修复聚类后代表数骤降不稳定（能源链两轮 20→3 / 20→2 触发 verifier_warning）
+- ✅ **CAP 语义弱化**：新增 `_cap_safety_valve` 数量安全阀——聚类后代表数仍超限才截断（防御性数量控制），不再按样本内评分"选优"（数据窥探式选择系统性偏向过拟合因子）
+- ✅ **OOS 校正评分**：`_factor_composite_score` 新增 `use_oos_ic` 参数——安全阀排序键 ic 维度优先取 Step 1.5 纯外推验证 `oos_extrapolation.new_ic`（无记录回退样本内）
+- ✅ 测试：test_portfolio_loop.py 245→255（composite use_oos_ic +3 / TestCapSafetyValve +4 / 聚类先行·安全阀集成 +3）；受影响模块 325 passed + ruff 全绿
+- ✅ GAP-125 登记并关闭
 
 ### CTA 手册 WorkFlow 端到端工作流 UI（2026-08-14，build bump v2.104.0+25）
 

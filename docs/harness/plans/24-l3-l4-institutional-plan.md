@@ -1,6 +1,6 @@
 # L3/L4 机构级追赶专项实施计划（组合构建 + 优化执行 + 反馈闭环）
 
-> 版本: v2.104.0+66
+> 版本: v2.104.0+68
 > 最后更新: 2026-08-10
 > 状态: 已收尾（GAP-L301~L310 + L401/L402 全部落地，v2.61.0~v2.69.0）
 > ⚠️ **归档注记（v2.104.0+25）**：本计划为历史已完成计划，其中 GAP-L308 的 family 相关内容（`REGIME_FAMILY_MULTIPLIERS` 硬编码表 / `RegimeMultiplierEstimator` / `load_data_driven_multipliers` / `_data/l3_regime_multipliers.yaml`）已随 v2.104.0+25 因子家族概念彻底移除而删除/废弃，正文保留原文仅供历史参考。

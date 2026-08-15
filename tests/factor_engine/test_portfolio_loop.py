@@ -19,6 +19,7 @@ tests/factor_engine/test_portfolio_loop.py — L3 Portfolio Loop 测试
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -157,6 +158,7 @@ from fts.factor_engine.portfolio_loop import (
     PortfolioLoop,
     _verifier_view,
     _factor_composite_score,
+    _cap_safety_valve,
     _dedup_factors_by_chain,
     _load_factor_symbol_ic,
     ENERGY_CHAIN_SUB_SYMBOLS,
@@ -465,6 +467,109 @@ class TestFactorCompositeScore:
     def test_empty_input(self):
         """空输入返回空 dict。"""
         assert _factor_composite_score([]) == {}
+
+    def test_use_oos_ic_overrides_in_sample_ic(self):
+        """use_oos_ic=True 时，有 oos_extrapolation.new_ic 的因子 ic 维度取样本外 IC。
+
+        v2.104.0+67：CAP 数量安全阀排序键走 OOS 校正评分，避免样本内高分
+        但外推衰减的过拟合因子靠裸样本内 IC 获得高排序。
+        """
+        factors = [
+            {"factor_id": "fct_a", "name": "a", "sharpe": 2.0, "icir": 1.0, "ic": 0.05, "turnover": 5.0},
+            {
+                "factor_id": "fct_b",
+                "name": "b",
+                "sharpe": 2.0,
+                "icir": 1.0,
+                "ic": 0.05,
+                "turnover": 5.0,
+                "oos_extrapolation": {"new_ic": 0.001, "ic_decay": 0.98, "needs_demotion": False},
+            },
+        ]
+        scores_in = _factor_composite_score(factors)
+        # 样本内：两因子 ic 相同 → 同分
+        assert scores_in["fct_a"] == scores_in["fct_b"]
+        scores_oos = _factor_composite_score(factors, use_oos_ic=True)
+        # OOS 校正：fct_b ic 用 0.001 → 显著低分
+        assert scores_oos["fct_a"] > scores_oos["fct_b"]
+
+    def test_use_oos_ic_fallback_without_oos(self):
+        """use_oos_ic=True 但无 oos_extrapolation 记录时，回退样本内 ic。"""
+        factors = [
+            {"factor_id": "fct_a", "name": "a", "sharpe": 2.0, "icir": 1.0, "ic": 0.05, "turnover": 5.0},
+            {"factor_id": "fct_b", "name": "b", "sharpe": 2.0, "icir": 1.0, "ic": 0.10, "turnover": 5.0},
+        ]
+        scores = _factor_composite_score(factors, use_oos_ic=True)
+        # 无 oos 记录 → 样本内 ic 生效：b(0.10) > a(0.05)
+        assert scores["fct_b"] > scores["fct_a"]
+
+    def test_default_no_oos_change(self):
+        """默认 use_oos_ic=False 时，即使有 oos_extrapolation 也忽略（行为不变）。"""
+        factors = [
+            {"factor_id": "fct_a", "name": "a", "sharpe": 2.0, "icir": 1.0, "ic": 0.05, "turnover": 5.0},
+            {
+                "factor_id": "fct_b",
+                "name": "b",
+                "sharpe": 2.0,
+                "icir": 1.0,
+                "ic": 0.05,
+                "turnover": 5.0,
+                "oos_extrapolation": {"new_ic": 0.001, "ic_decay": 0.98},
+            },
+        ]
+        scores = _factor_composite_score(factors)
+        assert scores["fct_a"] == scores["fct_b"]
+
+
+class TestCapSafetyValve:
+    """CAP 数量安全阀（v2.104.0+67）：聚类/子链去冗余后代表数超限才截断。
+
+    语义由「按样本内评分选优」降级为「数量安全阀」——不再承担选优职能，
+    避免数据窥探式选择系统性偏向过拟合因子；排序键使用 OOS 校正综合评分。
+    """
+
+    def test_below_cap_no_trim(self):
+        """代表数 ≤ cap 时原样返回（安全阀不触发）。"""
+        factors = [
+            {"factor_id": f"fct_{i}", "name": f"f{i}", "sharpe": 2.0, "icir": 1.0, "ic": 0.05, "turnover": 5.0}
+            for i in range(10)
+        ]
+        out = _cap_safety_valve(factors, cap=20)
+        assert out == factors
+        assert len(out) == 10
+
+    def test_above_cap_trims_to_cap(self):
+        """超限时按 OOS 校正综合评分排序截断到 cap（高评分保留）。"""
+        factors = [
+            {
+                "factor_id": f"fct_{i:02d}",
+                "name": f"f{i:02d}",
+                "sharpe": 2.0,
+                "icir": 1.0,
+                "ic": 0.02 + 0.01 * i,
+                "turnover": 5.0,
+            }
+            for i in range(25)
+        ]
+        out = _cap_safety_valve(factors, cap=20)
+        assert len(out) == 20
+        kept = {f["factor_id"] for f in out}
+        # ic 单调递增 → 评分最高者（fct_24）必保留、最低者（fct_00）必剔除
+        assert "fct_24" in kept
+        assert "fct_00" not in kept
+
+    def test_trims_to_cap_exactly(self):
+        """恰好超限 1 个时精确截到 cap。"""
+        factors = [
+            {"factor_id": f"fct_{i}", "name": f"f{i}", "sharpe": 2.0, "icir": 1.0, "ic": 0.05, "turnover": 5.0}
+            for i in range(21)
+        ]
+        out = _cap_safety_valve(factors, cap=20)
+        assert len(out) == 20
+
+    def test_empty_input(self):
+        """空输入安全返回。"""
+        assert _cap_safety_valve([], cap=20) == []
 
 
 class TestChainDedup:
@@ -1499,6 +1604,64 @@ class TestLoadEliteFactors:
         ids = {f["factor_id"] for f in factors}
         assert ids == {"fct_alpha", "fct_beta"}
 
+    def test_load_icir_from_level1_backtest(self, tmp_elite_dir):
+        """icir 在 evaluation.level_1_backtest 中时正确提取（与 sharpe/ic/turnover 同源）。"""
+        (tmp_elite_dir / "factor_a.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_a",
+                    "name": "a",
+                    "sharpe": 2.0,
+                    "evaluation": {
+                        "level_1_backtest": {
+                            "sharpe": 2.0,
+                            "ic": 0.05,
+                            "turnover_monthly": 0.3,
+                            "icir": 0.9,
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        factors = load_elite_factors(tmp_elite_dir, use_duckdb=False)
+        assert factors[0]["icir"] == 0.9
+
+    def test_load_icir_from_top_level(self, tmp_elite_dir):
+        """icir 在顶层（无 evaluation）时回退提取（v2.104.0+68 修复：旧版仅查 bt 致顶层 icir 丢失为 0）。"""
+        (tmp_elite_dir / "factor_b.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_b",
+                    "name": "b",
+                    "sharpe": 2.0,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                    "icir": 0.8,
+                }
+            ),
+            encoding="utf-8",
+        )
+        factors = load_elite_factors(tmp_elite_dir, use_duckdb=False)
+        assert factors[0]["icir"] == 0.8
+
+    def test_load_icir_missing_defaults_zero(self, tmp_elite_dir):
+        """两处均无 icir 时默认 0.0（不抛错，兼容旧格式）。"""
+        (tmp_elite_dir / "factor_c.json").write_text(
+            json.dumps(
+                {
+                    "factor_id": "fct_c",
+                    "name": "c",
+                    "sharpe": 2.0,
+                    "ic": 0.05,
+                    "turnover": 0.3,
+                }
+            ),
+            encoding="utf-8",
+        )
+        factors = load_elite_factors(tmp_elite_dir, use_duckdb=False)
+        assert factors[0]["icir"] == 0.0
+
 
 # ════════════════════════════════════════════════════════════
 # 9. PortfolioLoop 测试
@@ -1772,6 +1935,83 @@ class TestPortfolioLoop:
         result = loop.run()
         assert result.status in ("passed", "verifier_warning", "completed")
         assert result.n_factors_input >= 1
+
+    # ── v2.104.0+67: CAP 数量安全阀 + 聚类先行顺序 ──
+
+    def _write_mock_factors(self, elite_dir: Path, n: int = 25) -> None:
+        """批量写入 n 个 mock elite 因子（ic/sharpe 递增，均过质量门槛）。"""
+        for i in range(n):
+            (elite_dir / f"factor_{i:02d}.json").write_text(
+                json.dumps(
+                    {
+                        "factor_id": f"fct_mock_{i:02d}",
+                        "name": f"mock_factor_{i:02d}",
+                        "sharpe": round(2.0 + i * 0.01, 4),
+                        "ic": round(0.03 + i * 0.001, 4),
+                        "icir": round(0.8 + i * 0.01, 4),
+                        "turnover": round(1.0 + i * 0.1, 4),
+                        "decay_6m": 0.1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+    def test_cluster_receives_all_factors_before_cap(self, tmp_portfolio_dir, tmp_elite_dir):
+        """顺序修正：P1 聚类在 CAP 之前，聚类引擎接收全部合格因子（25 个而非 CAP 后 20 个）。
+
+        旧顺序（CAP→聚类）会把聚类输入收缩到 top-20 高分同质因子，
+        聚类后代表数骤降且不稳定；新顺序先聚类保多样性、CAP 后置防数量失控。
+        """
+        self._write_mock_factors(tmp_elite_dir, n=25)
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            enable_clustering=True,
+        )
+        loop._clustering_engine = MagicMock()
+        loop._clustering_engine.run.side_effect = lambda factors, panel_data=None, **kw: factors[:3]
+        result = loop.run()
+        # 聚类输入 = 全部 25 个因子（CAP 未在聚类前截断）
+        assert len(loop._clustering_engine.run.call_args[0][0]) == 25
+        assert result.n_factors_input == 25
+        # 聚类后仅 3 个代表 → CAP 安全阀不触发，保留代表而非 20 个
+        assert result.n_factors_retained <= 3
+
+    def test_cap_safety_valve_trims_after_cluster(self, tmp_portfolio_dir, tmp_elite_dir, caplog):
+        """聚类后代表数仍超限（25）时 CAP 安全阀截断（防御性数量控制）。"""
+        self._write_mock_factors(tmp_elite_dir, n=25)
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            enable_clustering=True,
+        )
+        loop._clustering_engine = MagicMock()
+        loop._clustering_engine.run.side_effect = lambda factors, panel_data=None, **kw: factors
+        with caplog.at_level(logging.INFO, logger="fts.factor_engine.portfolio_loop"):
+            result = loop.run()
+        assert "数量安全阀触发" in caplog.text  # Step 1.7 安全阀触发
+        assert result.n_factors_input == 25
+        assert result.n_factors_retained <= 20
+
+    def test_cap_not_triggered_at_cap(self, tmp_portfolio_dir, tmp_elite_dir, caplog):
+        """聚类后代表数恰好 = cap（20）时不截断（无需过滤分支）。"""
+        self._write_mock_factors(tmp_elite_dir, n=25)
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            enable_clustering=True,
+        )
+        loop._clustering_engine = MagicMock()
+        loop._clustering_engine.run.side_effect = lambda factors, panel_data=None, **kw: factors[:20]
+        with caplog.at_level(logging.INFO, logger="fts.factor_engine.portfolio_loop"):
+            result = loop.run()
+        assert "无需过滤" in caplog.text  # Step 1.7 安全阀未触发
+        assert len(loop._clustering_engine.run.call_args[0][0]) == 25
+        assert result.n_factors_input == 25
+        assert result.n_factors_retained <= 20
 
     # ── GAP-L303/L304: optimizer 接线 ──────────────────
 

@@ -688,6 +688,7 @@ def synthesize_signals(
     weight_config: Optional[Any] = None,
     ic_matrix: Optional[np.ndarray] = None,
     score_weights: Optional[dict[str, float]] = None,
+    score_floor: float = 0.5,
     signal_cache: Optional[Any] = None,
 ) -> tuple[list[PortfolioSignal], float, float]:
     """信号合成。
@@ -811,13 +812,14 @@ def synthesize_signals(
                 )
             )
     elif mode == "quality_weight":
-        # plans/36 改进项 3：权重 ∝ cap 后综合评分（0.5×等权下限防极端分化）。
-        # 综合评分见 _factor_composite_score（sharpe_cap/icir/ic/turnover_inv 加权，
-        # 风险调整口径替代原始 Sharpe 定权）。
+        # plans/36 改进项 3：权重 ∝ cap 后综合评分（等权下限防极端分化）。
+        # 等权下限系数 = score_floor / N，业务值由配置项 SSOT 控制：
+        # config/settings.yaml l3.factor_score.equal_weight_floor（调参仅改配置，
+        # 不改代码）；score_floor 默认 0.5 仅在配置缺失时兜底。
         score_map = _factor_composite_score(factors, score_weights)
         raw_scores = [score_map.get(f["factor_id"], 0.0) for f in factors]
         total_score = sum(raw_scores)
-        floor = 0.5 / n
+        floor = score_floor / n
         if total_score > 0:
             weights = [max(s / total_score, floor) for s in raw_scores]
         else:
@@ -1989,8 +1991,9 @@ SHARPE_CAP: float = 2.0
 """因子 Sharpe 上限截断：> 2.0 的因子按 2.0 计算权重，防止过拟合因子主导组合。"""
 
 ACTIVE_FACTOR_CAP: int = 20
-"""活跃因子数量上限：Elastic Net 信号合成前，按 Sharpe 排序保留前 N 个因子。
-超过此数量的因子自动过滤，防止冗余因子稀释组合夏普。"""
+"""因子数量安全阀（v2.104.0+67）：P1 聚类 + 子链去冗余后的代表数仍超过此
+上限时才按 OOS 校正综合评分截断（防御性数量控制）。不再承担"选优"职能——
+按样本内评分选优属数据窥探式选择，系统性偏向过拟合因子。"""
 
 L3_SIGNAL_CACHE_ENTRIES: int = 20000
 """L3 信号缓存容量上限（plans/40 A 层）：因子数上限 10000 × 多数据指纹，LRU 淘汰。
@@ -2157,6 +2160,7 @@ def _score_dim(f: dict[str, Any], dim: str) -> Optional[float]:
 def _factor_composite_score(
     factors: list[dict[str, Any]],
     weights: Optional[dict[str, float]] = None,
+    use_oos_ic: bool = False,
 ) -> dict[str, float]:
     """因子综合评分（plans/36 改进项 2）：替代裸 Sharpe 排序选入。
 
@@ -2164,14 +2168,31 @@ def _factor_composite_score(
     按权重加权求和。默认权重见 _DEFAULT_SCORE_WEIGHTS：
     sharpe_cap 0.30 / icir 0.30 / ic 0.20 / turnover_inv 0.20。
 
+    v2.104.0+67 新增 use_oos_ic：为 True 时 ic 维度优先取样本外 IC
+    （oos_extrapolation.new_ic，Step 1.5 纯外推验证产出），无记录回退样本内。
+    用于 CAP 数量安全阀排序键，避免样本内高分但外推衰减的过拟合因子靠裸
+    样本内 IC 获得高排序。
+
     Args:
         factors: 因子列表（需含 factor_id/sharpe/icir/ic/turnover，icir 缺失时
             该维度整体剔除并重归一化权重）
         weights: 维度权重覆盖（None=默认）
+        use_oos_ic: ic 维度是否优先取样本外 IC（默认 False，行为不变）
 
     Returns:
         {factor_id: score}，score ∈ [0, 1]
     """
+
+    def _dim_value(f: dict[str, Any], k: str) -> Optional[float]:
+        if use_oos_ic and k == "ic":
+            oos = f.get("oos_extrapolation")
+            if isinstance(oos, dict) and oos.get("new_ic") is not None:
+                try:
+                    return abs(float(oos["new_ic"]))
+                except (TypeError, ValueError):
+                    pass  # 非法值回退样本内
+        return _score_dim(f, k)
+
     if not factors:
         return {}
     w_all = dict(weights or _DEFAULT_SCORE_WEIGHTS)
@@ -2190,7 +2211,7 @@ def _factor_composite_score(
     dim_values: dict[str, list[float]] = {k: [] for k in w}
     for f in factors:
         for k in w:
-            v = _score_dim(f, k)
+            v = _dim_value(f, k)
             dim_values[k].append(v if v is not None else 0.0)
 
     n = len(factors)
@@ -2198,7 +2219,7 @@ def _factor_composite_score(
     for i, f in enumerate(factors):
         s = 0.0
         for k in w:
-            v = _score_dim(f, k)
+            v = _dim_value(f, k)
             if v is None:
                 s += w[k] * 0.5
                 continue
@@ -2209,6 +2230,44 @@ def _factor_composite_score(
             s += w[k] * (rank / n if n > 0 else 0.5)
         scores[f.get("factor_id", f.get("name", "?"))] = s
     return scores
+
+
+def _cap_safety_valve(
+    factors: list[dict[str, Any]],
+    cap: int,
+    score_map: Optional[dict[str, float]] = None,
+    score_config: Optional[dict[str, float]] = None,
+    use_oos_ic: bool = True,
+) -> list[dict[str, Any]]:
+    """CAP 数量安全阀（v2.104.0+67）：去冗余后代表数超限才截断。
+
+    语义：P1 聚类 + 子链去冗余后的代表数若仍超过 cap，按 OOS 校正综合评分
+    排序保留前 cap 个（防御性数量控制）。不再按样本内评分"选优"——样本内
+    指标选优属数据窥探式选择，系统性偏向过拟合因子；排序键 use_oos_ic=True
+    时 ic 维度优先取 oos_extrapolation.new_ic（Step 1.5 纯外推验证产出）。
+
+    Args:
+        factors: 去冗余后的代表因子列表
+        cap: 数量上限（≤0 时返回空列表）
+        score_map: 预计算的评分（None=内部按 use_oos_ic 计算）
+        score_config: 综合评分维度权重
+        use_oos_ic: 排序键是否用 OOS 校正评分（默认 True）
+
+    Returns:
+        截断后的因子列表（不超限时原样返回）
+    """
+    if cap <= 0:
+        return []
+    if len(factors) <= cap:
+        return factors
+    if score_map is None:
+        score_map = _factor_composite_score(factors, score_config, use_oos_ic=use_oos_ic)
+    sorted_factors = sorted(
+        factors,
+        key=lambda f: -score_map.get(f.get("factor_id", f.get("name", "?")), 0.0),
+    )
+    return sorted_factors[:cap]
+
 
 MIN_EVAL_DAYS: int = 500
 """最小评价窗口（交易日数）：面板数据回溯天数，确保评价窗口足够长避免短窗口虚高。"""
@@ -3619,6 +3678,12 @@ def load_elite_factors(
             turnover = bt.get("turnover_monthly")
             if turnover is None:
                 turnover = data.get("turnover", 0.3)
+            # v2.104.0+68：icir 与 sharpe/ic/turnover 同模式提取——
+            # 优先 level_1_backtest，缺失回退顶层字段（旧版仅查 bt，
+            # 顶层 icir 丢失为 0，导致 JSON 兜底路径综合评分缺 icir 维度）
+            icir = bt.get("icir")
+            if icir is None:
+                icir = data.get("icir", 0.0)
 
             # 根据 market 过滤 JSON 因子
             factor_market = data.get("market", "futures")
@@ -3637,7 +3702,7 @@ def load_elite_factors(
                     "name": data.get("name", fp.stem),
                     "sharpe": sharpe,
                     "ic": ic,
-                    "icir": bt.get("icir", 0.0) if bt else 0.0,
+                    "icir": icir,
                     "turnover": turnover,
                     "decay_6m": data.get("decay_6m", 0.05),
                     "code": code,
@@ -3833,6 +3898,7 @@ class PortfolioLoop:
         weight_config: Optional[Any] = None,
         turnover_penalty: Optional[float] = None,
         score_config: Optional[dict[str, float]] = None,
+        score_floor: float = 0.5,
         cluster_threshold: float = 0.7,
         cluster_top_n: int = 1,
         enable_chain_dedup: bool = True,
@@ -3871,6 +3937,9 @@ class PortfolioLoop:
         self._pca_compressor: Optional[Any] = None
         # plans/36 改进项 2/4：因子综合评分权重 + P1 聚类参数（阈值敏感性 / 簇内代表数）
         self.score_config = score_config
+        # quality_weight 等权下限系数（业务值经 config/settings.yaml
+        # l3.factor_score.equal_weight_floor 配置，SSOT；默认 0.5 仅配置缺失兜底）
+        self.score_floor = float(score_floor)
         self.cluster_threshold = float(cluster_threshold)
         self.cluster_top_n = max(1, int(cluster_top_n))
         # 子链维度去冗余（GAP-121 扩展）：单子链因子数上限，防产业链暴露集中
@@ -4438,38 +4507,7 @@ class PortfolioLoop:
                 else:
                     logger.info("[L3] Step 1.5: 纯外推验证完成, 无因子需要降级")
 
-            # Step 1.7: 活跃因子数量上限（ACTIVE_FACTOR_CAP）
-            # 超过上限时按综合评分排序保留前 N 个（plans/36 改进项 2，
-            # 替代裸 Sharpe 排序：sharpe_cap/icir/ic/turnover_inv 加权），
-            # 防止冗余因子稀释组合夏普。
-            if len(factors) > ACTIVE_FACTOR_CAP:
-                score_map = _factor_composite_score(factors, self.score_config)
-                sorted_factors = sorted(
-                    factors,
-                    key=lambda f: -score_map.get(f.get("factor_id", f.get("name", "?")), 0.0),
-                )
-                removed = sorted_factors[ACTIVE_FACTOR_CAP:]
-                factors = sorted_factors[:ACTIVE_FACTOR_CAP]
-                logger.info(
-                    "[L3] Step 1.7: ACTIVE_FACTOR_CAP=%d 触发, 过滤 %d 个因子 (综合评分排序)",
-                    ACTIVE_FACTOR_CAP,
-                    len(removed),
-                )
-                for r in removed:
-                    logger.info(
-                        "[L3] Step 1.7:   过滤因子 %s | sharpe=%.2f | ic=%.4f | icir=%.3f | score=%.4f",
-                        r.get("name", "?"),
-                        r.get("sharpe", 0),
-                        r.get("ic", 0),
-                        r.get("icir", 0),
-                        score_map.get(r.get("factor_id", r.get("name", "?")), 0.0),
-                    )
-            else:
-                logger.info(
-                    "[L3] Step 1.7: 因子数 %d ≤ ACTIVE_FACTOR_CAP=%d, 无需过滤",
-                    len(factors),
-                    ACTIVE_FACTOR_CAP,
-                )
+            # Step 1.7 → 移至 Step 1.8b 之后（v2.104.0+67：聚类先行，CAP 后置为数量安全阀）
 
             # Step 1.8: P1 因子聚类（可选，系统性降低冗余）
             if self.enable_clustering and len(factors) >= 3:
@@ -4558,6 +4596,42 @@ class PortfolioLoop:
                     self.enable_chain_dedup,
                     self.market,
                     len(factors),
+                )
+
+            # Step 1.7: 因子数量安全阀（ACTIVE_FACTOR_CAP，v2.104.0+67 起后置）
+            # 聚类 + 子链去冗余后代表数仍超限才截断（防御性数量控制）。
+            # 不再按样本内评分"选优"——样本内指标选优属数据窥探式选择，
+            # 系统性偏向过拟合因子；排序键用 OOS 校正综合评分。
+            if len(factors) > ACTIVE_FACTOR_CAP:
+                score_map = _factor_composite_score(
+                    factors, self.score_config, use_oos_ic=True
+                )
+                factors = _cap_safety_valve(
+                    factors,
+                    ACTIVE_FACTOR_CAP,
+                    score_map=score_map,
+                    score_config=self.score_config,
+                    use_oos_ic=True,
+                )
+                logger.info(
+                    "[L3] Step 1.7: ACTIVE_FACTOR_CAP=%d 数量安全阀触发, 保留 %d 个代表 (OOS 校正评分排序)",
+                    ACTIVE_FACTOR_CAP,
+                    len(factors),
+                )
+                for r in factors[:ACTIVE_FACTOR_CAP]:
+                    logger.info(
+                        "[L3] Step 1.7:   保留因子 %s | sharpe=%.2f | ic=%.4f | icir=%.3f | score=%.4f",
+                        r.get("name", "?"),
+                        r.get("sharpe", 0),
+                        r.get("ic", 0),
+                        r.get("icir", 0),
+                        score_map.get(r.get("factor_id", r.get("name", "?")), 0.0),
+                    )
+            else:
+                logger.info(
+                    "[L3] Step 1.7: 去冗余后代表数 %d ≤ ACTIVE_FACTOR_CAP=%d, 无需过滤",
+                    len(factors),
+                    ACTIVE_FACTOR_CAP,
                 )
 
             # Step 1.9: P2 PCA 降维（可选，信号源压缩）
@@ -4655,6 +4729,7 @@ class PortfolioLoop:
                 market=self.market,
                 weight_config=self.weight_config,
                 score_weights=self.score_config,
+                score_floor=self.score_floor,
                 signal_cache=self._signal_cache,
             )
             logger.info("[L3] Step 2: 信号合成完成, mode=%s, 信号数=%d", self.synthesis_mode, len(signals))

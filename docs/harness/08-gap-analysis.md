@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v2.104.0+66
+> 版本: v2.104.0+68
 > 最后更新: 2026-08-15
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -37,6 +37,8 @@
 > 总览更新（2026-08-14，GAP-120 登记）：**GAP-120 于当日登记（信号增量有效性验证缺失——交易建议报告第 3/4/5 节增量规则（±0.02 加速/减速阈值、第 3 批加仓"次日增量未反转"、止损"增量反转减半"、连续 3 天衰减平仓）为启发式经验规则，未经样本外统计验证：delta 分组单调性/增量 IC/增量动量/A-B 对照/阈值 regime 分层校准均缺失，可能为噪声驱动无效换手或损失最优阈值区分度，P2 开放 3→4、合计开放 4→5、总计 147→148，见 P2 新登记表）**。
 
 > 总览更新（2026-08-16 v2.104.0+63，GAP-124 登记并关闭，plans/40 L3 组合重算性能优化）：**L3 组合重算性能瓶颈（用户反馈"重算太慢"）四层根治——① A 层（纯 Python，3–10x）：L3 全部 8 处信号重算调用点接入 `SignalCache`（GAP-070 建而不用，本次接入主流程）+ `_align_signal_to_dates` 向量化对齐（`df.index.get_indexer` 替代 O(n²) `list.index`），单次 run 内信号重算收敛到 1 处；② B 层（DuckDB 下沉 2D）：新增 `l3_signal_service.py`（`SignalMatrixBundle` 2D/3D 信号矩阵 + `build_signal_matrix` + DuckDB corr/因子收益矩阵 SQL 下沉，E.4 短连接 + filelock）；③ C 层（numba 2D 内核）：`numba_kernels.py` ts_zscore/ts_cvar 1D 内核接入 `feature_ops`/`ops_library`（`cache=True`/`fastmath=False`，依赖缺失回退现值零漂移）；④ D 层（一等公民 + 增量）：信号矩阵持久化 DuckDB + `load_or_build_signal_matrix` 增量重算（`code_hash` 判定，仅新因子全量/存量追加窗口）；新增 test_l3_signal_service.py 16 用例 + test_numba_kernels 扩展 + test_factor_clustering 接 `signal_cache` 参数；P1 登记并关闭 1 项、合计关闭 144→145、总计 150→151、开放维持 6**。
+
+> 总览更新（2026-08-16 v2.104.0+67，GAP-125 登记并关闭）：**L3 ACTIVE_FACTOR_CAP 选优语义缺陷（GAP-121 能源链工作流衍生，2026-08-16 能源链重算 verifier_warning 根因）——CAP 在 P1 聚类前按样本内综合评分选 top-20，属数据窥探式选择：① 高分因子高度同质，聚类在 top-20 高分同质集合内成批歼灭（88/72 因子两轮分别聚类 20→3/20→2，代表数骤降且对因子库小幅变化敏感，触发 verifier_warning）；② 差异化但中等质量因子（期权/反转/量价类）在聚类前被 CAP 提前淘汰，多样性损失；③ 样本内评分选优系统性偏向过拟合因子（过拟合因子样本内 IC/Sharpe 恰恰最高），与零数据窥探红线冲突。修复三层：① 顺序调整——P1 聚类 + 子链去冗余先行（输入全部合格因子），CAP 后置为数量安全阀（聚类后代表数仍超限才截断，通常 no-op）；② CAP 语义弱化——从"选优"降级为"数量安全阀"，不再承担选优职能；③ 评分口径 OOS 校正——安全阀排序键 use_oos_ic=True，ic 维度优先取 Step 1.5 纯外推验证 oos_extrapolation.new_ic（无记录回退样本内）；新增 test_portfolio_loop +10 用例（composite +3 / TestCapSafetyValve +4 / loop 集成 +3），受影响模块 325 passed + ruff 全绿；P2 登记并关闭 1 项、总计 151→152、开放维持 6**。
 
 > 总览更新（2026-08-16 v2.104.0+64，能源链精英因子真实周期质检（退化检测）定时任务落地，GAP-121 能源链独立工作流扩展）：**新增 `scripts/energy_chain_degradation_dryrun.py --apply` 真实落库能力——三路检测（A reaudit Q1-Q10 / B IC 退化重验证 / C FactorInspector Sharpe 血缘）+ 仅 B 路为落库判据（CRITICAL→is_elite=false/status=degraded + elite JSON 移入 _deprecated，WARN→status=shadow 观察池，OK→追加 revalidation 留痕）；A 路 reaudit 在能源链 300 天窗口下 oos_consistency 因 n_windows<2 系统性硬拦截 failed（GAP-121 评估链修复反转放宽，全部 130 因子 audit_pass_rate=0.43）仅留痕不落库防短样本误杀；C 路因能源库血缘表（factor_audit_reports/factor_status_history）为空跳过；2026-08-16 首次真实落库 130 因子：degraded=23 / shadow=41 / retain=66 / failed=0，DuckDB energy 状态分布 degraded=23/shadow=41/active=69，elite JSON 迁入 _deprecated 23 个；定时任务「能化产业链因子定期质检（每周日 06:00）」由 `verify_qa_workflow.py --chain energy` 切换为 `energy_chain_degradation_dryrun.py --apply --days 300`；新增测试 test_energy_chain_degradation_apply.py 6 用例（隔离 DuckDB）全绿；报告输出 reports/energy_chain/{date}/qa/**。
 

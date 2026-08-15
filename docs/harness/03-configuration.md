@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.104.0+66
+> 版本: v2.104.0+68
 > 最后更新: 2026-08-10
 
 ---
@@ -85,6 +85,7 @@ FTS 配置采用三级优先级（高→低）：
 | `l3.chain_dedup.max_per_chain` | int | `2` | —（settings.yaml l3 段） | 子链去冗余单子链保留因子数上限：与 Step 1.8 信号相关性聚类互补（同子链因子即使信号相关性低仍共享产业链驱动）；symbol_ic 缺失因子归 unknown 组直接保留 |
 | `l3.synthesis.mode` | str | `"equal_weight"` | —（settings.yaml l3 段，CLI `--synthesis-mode` 优先） | L3 合成模式默认值（v2.104.0+62）：`equal_weight`/`quality_weight`/`sharpe_weight`/`elastic_net`/`adaptive`/`optimizer`/`risk_parity`；直接改配置即切换合成方法无需改代码 |
 | `l3.synthesis.optimizer_mode` | str | `"risk_parity"` | —（settings.yaml l3 段） | optimizer 类模式目标默认值：`risk_parity`/`mvo`/`bl`（v2.104.0+62）；`--synthesis-mode risk_parity` 即映射 optimizer + 本目标 |
+| `l3.factor_score.equal_weight_floor` | float | `0.5` | —（settings.yaml l3 段） | quality_weight 等权下限系数（配置项 SSOT，调参仅改本配置不改代码）：权重下限 = 系数 / N，防权重极端分化；提高系数可提升权重分散度但放大尾部因子暴露；代码默认 0.5 仅配置缺失兜底；取值域 (0,1] |
 | `FTS_L3_AUTO_FACTOR_RETURNS` | str | 未设 | env | L3 自动构建因子收益矩阵开关（v2.104.0+2）：`1`=optimizer 之外的模式也自动构建用于组合实测指标；optimizer/risk_parity 模式默认自动构建但**仅用于权重合成**（risk_parity 只用协方差 Σ，自动矩阵 Sharpe 虚高不影响权重；组合指标口径保持估算，不污染） |
 | `evolution_shadow_observe`（环境变量直读） | bool | `false` | `FTS_EVOLUTION_SHADOW_OBSERVE` | 新晋级精英因子影子池观察期开关（v2.103.0+20）：`1`=晋升写入 shadow_pool 标记（观察 5 交易日，L3 观察期内不纳入组合）；`0`/未设=默认关闭（新晋级直接进正式组合）。仅作用于新晋级因子，重审降级因子 shadow_pool 保留不变 |
 | `b_grade_observe_enabled`（GradeThreshold 配置） | bool | `false` | — | elite_tracker B 级因子观察期开关（v2.103.0+28 默认关闭）：`false`=B 级因子（30≤score<40）直接 active 入池，不进入 observing；`true`=恢复 3 个月（默认）观察期。与 shadow_pool 5 交易日观察为两套独立机制 |

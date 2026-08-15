@@ -615,6 +615,7 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
         # plans/36：因子综合评分权重 + P1 聚类参数（config/settings.yaml l3 段）
         l3_cfg = getattr(cfg, "l3", {}) or {}
         score_config = (l3_cfg.get("factor_score") or {}).get("weights") or None
+        score_floor = float((l3_cfg.get("factor_score") or {}).get("equal_weight_floor", 0.5))
         cluster_cfg = l3_cfg.get("cluster") or {}
         cluster_threshold = float(cluster_cfg.get("threshold", 0.7))
         cluster_top_n = int(cluster_cfg.get("top_n", 1))

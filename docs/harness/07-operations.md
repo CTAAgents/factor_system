@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+66
+> 版本: v2.104.0+68
 > 最后更新: 2026-08-15
 
 ---
@@ -12,6 +12,8 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+68** | **2026-08-16** | **load_elite_factors JSON 兜底路径补 icir 维度提取：与 sharpe/ic/turnover 同模式（优先 evaluation.level_1_backtest，缺失回退顶层字段，两处均缺默认 0.0）——旧版仅查 bt 致顶层 icir 丢失为 0，JSON 兜底路径综合评分缺 icir 维度；新增 TestLoadEliteFactors +3 用例，test_portfolio_loop 255→258 passed + ruff 全绿** |** |
+| **v2.104.0+67** | **2026-08-16** | **L3 CAP 数量安全阀 + OOS 校正评分：P1 聚类先行、CAP 后置为数量安全阀（排序键 use_oos_ic 取 oos_extrapolation.new_ic），修复 CAP 按样本内评分选优系统性偏向过拟合因子 + 聚类输入被收缩到 top-20 高分同质因子导致代表数骤降不稳定（能源链 verifier_warning 根因）；新增 10 用例（composite +3 / cap 安全阀 +4 / loop 集成 +3），受影响模块 325 passed + ruff 全绿** |** |
 | **v2.104.0+66** | **2026-08-16** | **修复 migrate_elite_json_to_catalog.py 残留 family 字段（v2.104.0+64 存量失败）：build_factor_dict 删除 family 列输出——factor_catalog 表已随 v2.104.0+30 family 概念移除删除该列，--sync 路径 repo.update_factor 写入 family 即触发 DuckDB BinderException（Referenced update column family not found），致 test_sync_updates_drifted_factor 存量失败；删除后 test_migrate_elite_json_to_catalog.py 17 用例全绿；同链路 migrate_from_json.py 确认无残留；其余 scripts family 引用为只读 JSON 快照字段不在本次范围** |** |
 | **v2.104.0+65** | **2026-08-16** | **P0-P2 regime/信号修复：IC方向符号修复 + Regime阈值/方向偏移 + 合成指数等权收益率 + 软投票去重复计票** |** |
 | **v2.104.0+64** | **2026-08-16** | **能源链精英因子真实周期质检（退化检测）落地：energy_chain_degradation_dryrun.py 新增 --apply 落库能力（仅 B 路 IC 退化判据——CRITICAL→is_elite=false/status=degraded + JSON 移入 _deprecated，WARN→shadow 观察池，OK→retain 留痕；A 路 reaudit 仅留痕不落库：能源链 300 天窗口 oos_consistency n_windows<2 系统性硬拦截误杀；C 路 Sharpe 血缘因 factor_audit_reports/factor_status_history 表为空跳过）；定时任务「能化产业链因子定期质检（每周日06:00）」由 verify_qa_workflow 切换为 energy_chain_degradation_dryrun.py --apply 真实落库；2026-08-16 首次真实落库 130 因子：degraded=23/shadow=41/retain=66/failed=0，DuckDB 状态分布 degraded=23/shadow=41/active=69，JSON _deprecated 迁移 23 个；summary 报告新增关键发现章节（A 路误杀根因 GAP-121 oos 硬拦截 + C 路血缘缺失说明）；报告输出 reports/energy_chain/{date}/qa/** |** |

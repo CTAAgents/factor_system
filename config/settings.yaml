@@ -56,6 +56,9 @@ l3:
       icir: 0.30         # IC 均值/IC 标准差（风险调整质量主指标）
       ic: 0.20           # |IC|
       turnover_inv: 0.20 # 低换手优先（-turnover，成本惩罚）
+    # quality_weight 等权下限系数（默认 0.5×等权）：权重下限 = equal_weight_floor / N，
+    # 防权重极端分化；提高系数（如 0.7）可提升权重分散度但会放大尾部因子暴露。
+    equal_weight_floor: 0.5
   # P1 因子聚类（改进项 4）
   cluster:
     threshold: 0.7       # 层次聚类距离阈值（1-|corr|）
