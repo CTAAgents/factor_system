@@ -1421,23 +1421,6 @@ def main(
             f"高对齐(≥0.7): {n_aligned}, 低对齐(<0.5): {n_misaligned}"
         )
 
-    def _is_identity_sector(
-        asm: dict[str, list[str]],
-        sector: str,
-    ) -> bool:
-        """判定 sector 是否为"合成身份分组"（其品种全部被其他 sector 覆盖，无独有品种）。
-
-        典型例：FUTURES_SECTOR_MAP 的"炼化聚酯链" = 能源/聚酯链/油化工/煤化工
-        四大子链训练池并集（12 品种），与四个互不重叠、恰覆盖全池的子链重复。
-        若让其参与主制度投票，每个品种会被重复计票（身份分组 + 所属子链各一次），
-        扭曲软投票结果 → 应剔除。
-        """
-        mine = set(asm.get(sector, []))
-        if not mine:
-            return True
-        others = {v for s, syms in asm.items() if s != sector for v in syms}
-        return mine <= others
-
     def _compute_primary_regime(
         sr: dict[str, dict],
         asm: dict[str, list[str]],
@@ -1447,15 +1430,18 @@ def main(
         修复原硬投票（仅品种数）缺陷：对"勉强判 bear (conf=50%)"的 sector 与
         "强判 bear (conf=100%)"的 sector 一视同仁给满票，推高主制度假置信度。
         现按 sector 置信度打折，主制度置信度 = 软票占比，语义更诚实。
-        同时剔除"合成身份分组"（品种被其他 sector 全量覆盖者，防重复计票）。
+        同时剔除"合成身份分组"（炼化聚酯链：训练池并集，品种被四真子链重复覆盖，
+        若参与投票会把每个品种重复计票 → 用显式名单剔除，防集合启发式误伤能源等真子链）。
         """
         if not sr or not asm:
             return {"regime": "unknown", "confidence": 0.0, "detected_at": datetime.now().isoformat(), "features": {}}
         regime_votes: dict[str, float] = {}
         vote_log: dict[str, dict] = {}
         skipped_identity: list[str] = []
+        # 炼化聚酯链 = 训练池并集身份分组（能源3+聚酯3+油化3+煤化3），其品种与四真子链完全重复
+        _IDENTITY_SECTORS = {"炼化聚酯链"}
         for sector, regime in sr.items():
-            if _is_identity_sector(asm, sector):
+            if sector in _IDENTITY_SECTORS:
                 skipped_identity.append(sector)
                 continue
             r = regime["regime"]

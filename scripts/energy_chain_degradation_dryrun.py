@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
 import sys
 import time
 import warnings
@@ -263,6 +264,106 @@ def run_ic_revalidation(
             w.writerow(r)
     log(f"[B] CSV 已写: {csv_path}")
     return results
+
+
+def apply_b_results(
+    *,
+    results: list[dict[str, Any]],
+    log: TeeLogger,
+    elite_dir: Path,
+    trace_id: str,
+    db_path: str | Path | None = None,
+) -> dict[str, int]:
+    """B 路 IC 退化结果落库（仅 B 路；A 路 reaudit / C 路血缘不落库）。
+
+    规则（与用户确认一致）：
+      - CRITICAL → is_elite=false, status=degraded + JSON 移入 _deprecated
+      - WARN     → status=shadow（保留 is_elite=true，观察池）
+      - OK       → 仅追加 revalidation 留痕（状态不变）
+    """
+    from datetime import datetime, timezone
+
+    from fts.factor_engine.factor_db.repository import FactorRepository, FactorStatusRepository
+
+    repo = FactorRepository(market="energy", db_path=db_path)
+    srepo = FactorStatusRepository(market="energy", db_path=db_path)
+    dep_dir = elite_dir / "_deprecated"
+    stats = {"degraded": 0, "shadow": 0, "retain": 0, "failed": 0}
+    try:
+        for r in results:
+            fid = r.get("factor_id", "")
+            status = r.get("status", "OK")
+            if not fid:
+                continue
+            try:
+                f = repo.get_factor(fid)
+                if not f:
+                    log(f"      ⚠️ 因子不存在，跳过: {fid}")
+                    stats["failed"] += 1
+                    continue
+                meta = f.get("metadata") or {}
+                if isinstance(meta, str):
+                    try:
+                        meta = json.loads(meta)
+                    except (json.JSONDecodeError, TypeError):
+                        meta = {}
+                if not isinstance(meta, dict):
+                    meta = {}
+                meta["degradation_revalidation"] = {
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "trace_id": trace_id,
+                    "status": status,
+                    "hist_ic": r.get("hist_ic"),
+                    "curr_ic": r.get("curr_ic"),
+                    "ic_drop": r.get("ic_drop"),
+                    "reasons": r.get("reasons", ""),
+                }
+                if status == "CRITICAL":
+                    # 1) DuckDB 降级
+                    repo.update_factor(fid, {"is_elite": False, "status": "degraded", "metadata": meta})
+                    srepo.update_factor_status(fid, "degraded")
+                    srepo.log_transition(
+                        fid,
+                        "active",
+                        "degraded",
+                        f"IC 退化降级（hist={r.get('hist_ic')} curr={r.get('curr_ic')} drop={r.get('ic_drop'):.1%}）",
+                        snapshot={"degradation_revalidation": meta["degradation_revalidation"]},
+                    )
+                    # 2) 精英 JSON 移入 _deprecated
+                    fp = elite_dir / f"{fid}.json"
+                    if fp.exists():
+                        dep_dir.mkdir(parents=True, exist_ok=True)
+                        dest = dep_dir / fp.name
+                        if dest.exists():
+                            dest.unlink()
+                        shutil.move(str(fp), str(dest))
+                        log(f"      🔴 {fid} {r.get('name','')}: degraded + JSON→_deprecated")
+                    else:
+                        log(f"      🔴 {fid} {r.get('name','')}: degraded（JSON 缺失: {fp}）")
+                    stats["degraded"] += 1
+                elif status == "WARN":
+                    repo.update_factor(fid, {"status": "shadow", "metadata": meta})
+                    srepo.update_factor_status(fid, "shadow")
+                    srepo.log_transition(
+                        fid,
+                        "active",
+                        "shadow",
+                        f"IC 退化观察（hist={r.get('hist_ic')} curr={r.get('curr_ic')} drop={r.get('ic_drop'):.1%}）",
+                        snapshot={"degradation_revalidation": meta["degradation_revalidation"]},
+                    )
+                    log(f"      ⚠️ {fid} {r.get('name','')}: shadow（观察池）")
+                    stats["shadow"] += 1
+                else:  # OK
+                    repo.update_factor(fid, {"metadata": meta})
+                    log(f"      ✅ {fid} {r.get('name','')}: retain（追加留痕）")
+                    stats["retain"] += 1
+            except Exception as e:  # noqa: BLE001
+                log(f"      ❌ {fid} 落库异常: {type(e).__name__}: {e}")
+                stats["failed"] += 1
+    finally:
+        repo.close()
+        srepo.close()
+    return stats
 
 
 # ──────────────────────────────────────────────────────────
@@ -529,6 +630,12 @@ def main() -> int:
     ap.add_argument(
         "--date", type=str, default=date.today().isoformat(), help="报告子目录日期（YYYY-MM-DD，默认当日；对齐 QA 用）"
     )
+    ap.add_argument(
+        "--apply",
+        action="store_true",
+        help="真实落库：仅按 B 路 IC 退化结果处置（CRITICAL→degraded+_deprecated，WARN→shadow，OK→留痕）；"
+        "A 路 reaudit 与 C 路血缘不落库（短样本误杀 / 血缘缺失）。默认 Dry-run。",
+    )
     args = ap.parse_args()
 
     today = args.date
@@ -601,6 +708,32 @@ def main() -> int:
     overall_log.log(f"[B] 完成 → stats={b_stats}")
     overall_log.log()
 
+    # [B-apply] 真实落库（仅 B 路；A 路/C 路不落库）
+    if args.apply:
+        from fts.config import get_config
+
+        elite_dir = Path(get_config().get_elite_dir("energy"))
+        overall_log.log("=" * 72)
+        overall_log.log("[B-apply] 按 B 路 IC 退化结果真实落库 ...")
+        overall_log.log(f"[B-apply] elite_dir={elite_dir} trace_id={_generate_trace_id('apply')}")
+        apply_stats: dict[str, int] = {}
+        try:
+            apply_stats = apply_b_results(
+                results=b_rows,
+                log=overall_log,
+                elite_dir=elite_dir,
+                trace_id=_generate_trace_id("apply"),
+            )
+            overall_log.log(f"[B-apply] 落库统计: {apply_stats}")
+        except Exception as e:  # noqa: BLE001
+            import traceback
+
+            overall_log.log(f"[B-apply] 落库异常: {type(e).__name__}: {e}")
+            overall_log.log(traceback.format_exc())
+    else:
+        overall_log.log("⚠️ Dry-run 模式：未落库。加 --apply 按 B 路结果真实处置（CRITICAL→degraded, WARN→shadow, OK→留痕）。")
+    overall_log.log()
+
     # [C] Inspector
     c_log = TeeLogger(out_dir / f"inspector_degradation_energy_{today}.log")
     try:
@@ -649,8 +782,16 @@ def main() -> int:
     overall_log.log(f"[*] 汇总 MD: {summary_path}")
     overall_log.log(f"[*] 总耗时: {elapsed:.1f}s")
     overall_log.log()
-    overall_log.log("🔒 Dry-run 声明：本次执行未更新 DuckDB、未移动/删除任何 energy_chain_elite JSON、未创建 _deprecated。")
-    overall_log.log("   请人工查看 energy_degradation_summary_*.md → 确认后回复 '--apply' 进入落库阶段。")
+    if args.apply:
+        overall_log.log(
+            f"✅ 已按 B 路结果真实落库（仅 B 路）：degraded={apply_stats.get('degraded', 0)} "
+            f"shadow={apply_stats.get('shadow', 0)} retain={apply_stats.get('retain', 0)} "
+            f"failed={apply_stats.get('failed', 0)}"
+        )
+        overall_log.log("   提示：A 路 reaudit（短样本 oos_consistency 系统性误杀）与 C 路（血缘缺失）均未落库，仅留痕报告。")
+    else:
+        overall_log.log("🔒 Dry-run 声明：本次执行未更新 DuckDB、未移动/删除任何 energy_chain_elite JSON、未创建 _deprecated。")
+        overall_log.log("   请人工查看 energy_degradation_summary_*.md → 确认后以 '--apply' 重跑（仅按 B 路落库）。")
 
     overall_log.close()
     return 0

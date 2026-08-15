@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+63
+> 版本: v2.104.0+66
 > 最后更新: 2026-08-15
 
 ---
@@ -12,6 +12,9 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+66** | **2026-08-16** | **修复 migrate_elite_json_to_catalog.py 残留 family 字段（v2.104.0+64 存量失败）：build_factor_dict 删除 family 列输出——factor_catalog 表已随 v2.104.0+30 family 概念移除删除该列，--sync 路径 repo.update_factor 写入 family 即触发 DuckDB BinderException（Referenced update column family not found），致 test_sync_updates_drifted_factor 存量失败；删除后 test_migrate_elite_json_to_catalog.py 17 用例全绿；同链路 migrate_from_json.py 确认无残留；其余 scripts family 引用为只读 JSON 快照字段不在本次范围** |** |
+| **v2.104.0+65** | **2026-08-16** | **P0-P2 regime/信号修复：IC方向符号修复 + Regime阈值/方向偏移 + 合成指数等权收益率 + 软投票去重复计票** |** |
+| **v2.104.0+64** | **2026-08-16** | **能源链精英因子真实周期质检（退化检测）落地：energy_chain_degradation_dryrun.py 新增 --apply 落库能力（仅 B 路 IC 退化判据——CRITICAL→is_elite=false/status=degraded + JSON 移入 _deprecated，WARN→shadow 观察池，OK→retain 留痕；A 路 reaudit 仅留痕不落库：能源链 300 天窗口 oos_consistency n_windows<2 系统性硬拦截误杀；C 路 Sharpe 血缘因 factor_audit_reports/factor_status_history 表为空跳过）；定时任务「能化产业链因子定期质检（每周日06:00）」由 verify_qa_workflow 切换为 energy_chain_degradation_dryrun.py --apply 真实落库；2026-08-16 首次真实落库 130 因子：degraded=23/shadow=41/retain=66/failed=0，DuckDB 状态分布 degraded=23/shadow=41/active=69，JSON _deprecated 迁移 23 个；summary 报告新增关键发现章节（A 路误杀根因 GAP-121 oos 硬拦截 + C 路血缘缺失说明）；报告输出 reports/energy_chain/{date}/qa/** |** |
 | **v2.104.0+63** | **2026-08-16** | **plans/40 L3 组合重算性能优化（A/B/C/D 四层落地）：A 层——L3 全部 8 处信号重算调用点接入 SignalCache（去重/OOS/聚类/PCA/_auto_build_factor_returns/elastic_net/ml_ensemble/_panel_factor_ic）+ 新增 _align_signal_to_dates 向量化对齐（df.index.get_indexer 替代 O(n²) list.index 日期查找）；B 层——新增 l3_signal_service.py（SignalMatrixBundle 2D/3D 信号矩阵 + build_signal_matrix 复用缓存向量化对齐 + DuckDB corr/因子收益矩阵 SQL 下沉，E.4 短连接纪律）；C 层——numba_kernels.py ts_zscore/ts_cvar 1D 内核接入 feature_ops/ops_library（cache=True/fastmath=False，回退现值零漂移）；D 层——信号矩阵一等公民持久化 DuckDB + load_or_build_signal_matrix 增量重算（code_hash 判定，仅新因子全量/存量追加窗口）；新增 test_l3_signal_service.py 16 用例 + test_numba_kernels 扩展 + test_factor_clustering 接 signal_cache 参数；受影响回归 880 用例全绿 + factor_engine 全目录 not-slow 4882 passed（2 个 test_risk_tag mock 晋升用例为存量失败，git stash 基线复测确认非本次引入）；GAP-124 登记关闭** |** |
 | **v2.104.0+62** | **2026-08-16** | **risk_parity 合成模式配置化（v2.104.0+61）：CLI --synthesis-mode 新增 risk_parity 快捷选项（映射 optimizer + optimizer_mode=risk_parity）；optimizer 类模式无显式矩阵时自动构建因子收益矩阵（_auto_build_factor_returns）但仅用于权重合成——risk_parity 只用协方差 Σ 不用 μ，规避自动矩阵 Sharpe 虚高（v2.104.0+2 实测 20.06）不影响权重，组合指标口径保持估算；settings.yaml 新增 l3.synthesis.{mode, optimizer_mode} 配置段（改配置即切换合成方法）；新增 test_run_optimizer_auto_matrix + test_synthesize_optimizer_risk_parity 2 用例（test_portfolio_loop 243→245）** |** |
 | **v2.104.0+61** | **2026-08-16** | **P0 多持有期 IC 面板向量化：compute_cs_multi_horizon_ic 接入 _cs_compute_ics_dispatch 分派（use_panel_vector 开关透传），真实 149x3063 面板单候选评估 2.74s→2.00s（-27%），对照测试 5 用例零漂移** |** |

@@ -100,7 +100,6 @@ def build_factor_dict(data: dict[str, Any], market: str, status: str) -> dict[st
         "generation": int(data.get("generation", 0) or 0),
         "trace_id": str(data.get("trace_id", "")),
         "market": factor_market,
-        "family": str(data.get("family") or "other"),
         "is_elite": True,
         "status": str(data.get("status", status)),
         "sharpe": float(metrics["sharpe"] or 0.0),
