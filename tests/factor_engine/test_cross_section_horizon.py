@@ -203,3 +203,98 @@ def test_cross_section_evaluate_empty_horizons_no_multi_horizon():
         horizons=(),
     )
     assert "multi_horizon" not in metrics
+
+
+# ─── P0 多持有期 IC 面板向量化零漂移对照（plans/37 Phase 1 延伸） ───
+
+
+def _assert_zero_drift(a: dict, b: dict) -> None:
+    """多持有期结果逐字段零漂移：标量精确一致 + 逐持有期浮点容差一致。"""
+    assert set(a) == set(b), f"字段不一致: {set(a)} vs {set(b)}"
+    for key in ("horizons", "best_horizon", "monotonic_decay"):
+        assert a[key] == b[key], f"字段不一致: {key} {a[key]} vs {b[key]}"
+    for key in ("ic_by_horizon", "icir_by_horizon", "win_rate_by_horizon", "decay_curve"):
+        assert set(a[key]) == set(b[key]), f"{key} 持有期不一致"
+        for h in a[key]:
+            np.testing.assert_allclose(a[key][h], b[key][h], atol=1e-12, rtol=1e-9, err_msg=f"{key}[{h}]")
+
+
+def _make_nan_panel(n_stocks: int = 40, n_dates: int = 400, seed: int = 23) -> dict[str, pd.DataFrame]:
+    """带缺口面板：部分标的中段日期缺失（reindex 后 close 含 NaN）。"""
+    panel = _make_panel(n_stocks=n_stocks, n_dates=n_dates, seed=seed)
+    dates = list(panel.values())[0].index
+    # 2 个标的中段缺 15 日（模拟上市/停牌缺口）
+    for idx, sym in enumerate(list(panel.keys())[-2:]):
+        drop = dates[idx * 30 + 40 : idx * 30 + 55]
+        panel[sym] = panel[sym].drop(index=drop)
+    return panel
+
+
+@pytest.mark.parametrize(
+    "panel_fn,desc",
+    [
+        (_make_panel, "全有限面板"),
+        (_make_nan_panel, "缺口面板（close 含 NaN）"),
+    ],
+)
+def test_cs_multi_horizon_panel_vector_zero_drift(panel_fn, desc: str) -> None:
+    """P0 验收：多持有期 IC 面板向量化 vs 旧路径逐字段零漂移。"""
+    panel = panel_fn()
+    dates = list(panel.values())[0].index
+    symbols = list(panel.keys())
+    oos_n = 120
+    signal = np.zeros((oos_n, len(symbols)))
+    for j, sym in enumerate(symbols):
+        signal[:, j] = panel[sym]["close"].diff().reindex(dates).values[-oos_n:]
+    old = compute_cs_multi_horizon_ic(
+        signal, panel, symbols, dates, oos_n, horizons=(1, 5, 10, 20), use_panel_vector=False
+    )
+    new = compute_cs_multi_horizon_ic(
+        signal, panel, symbols, dates, oos_n, horizons=(1, 5, 10, 20), use_panel_vector=True
+    )
+    assert old is not None and new is not None
+    _assert_zero_drift(old.to_dict(), new.to_dict())
+
+
+def test_cs_multi_horizon_panel_vector_short_sample_zero_drift() -> None:
+    """短样本（块数=1 退化路径）on/off 仍逐位一致。"""
+    panel = _make_panel(n_stocks=30, n_dates=120, seed=5)
+    dates = list(panel.values())[0].index
+    symbols = list(panel.keys())
+    oos_n = 15
+    signal = np.zeros((oos_n, len(symbols)))
+    for j, sym in enumerate(symbols):
+        signal[:, j] = panel[sym]["close"].diff().reindex(dates).values[-oos_n:]
+    old = compute_cs_multi_horizon_ic(signal, panel, symbols, dates, oos_n, horizons=(1, 5), use_panel_vector=False)
+    new = compute_cs_multi_horizon_ic(signal, panel, symbols, dates, oos_n, horizons=(1, 5), use_panel_vector=True)
+    assert old is not None and new is not None
+    _assert_zero_drift(old.to_dict(), new.to_dict())
+
+
+def test_cs_multi_horizon_panel_vector_invalid_horizon_both_none() -> None:
+    """h >= oos_n（fwd 全 NaN）退化路径：on/off 均返回 None 或同结构。"""
+    panel = _make_panel(n_stocks=30, n_dates=120, seed=6)
+    dates = list(panel.values())[0].index
+    symbols = list(panel.keys())
+    oos_n = 20
+    signal = np.zeros((oos_n, len(symbols)))
+    for j, sym in enumerate(symbols):
+        signal[:, j] = panel[sym]["close"].diff().reindex(dates).values[-oos_n:]
+    old = compute_cs_multi_horizon_ic(signal, panel, symbols, dates, oos_n, horizons=(1, 30), use_panel_vector=False)
+    new = compute_cs_multi_horizon_ic(signal, panel, symbols, dates, oos_n, horizons=(1, 30), use_panel_vector=True)
+    if old is None or new is None:
+        assert old is None and new is None
+    else:
+        _assert_zero_drift(old.to_dict(), new.to_dict())
+
+
+def test_cs_eval_multi_horizon_switch_identical() -> None:
+    """评估链集成：cross_section_evaluate_backtest 显式传入 horizons 时，
+    use_panel_vector on/off 的 multi_horizon 字段逐位一致（主链路口径统一）。"""
+    panel = _make_panel(n_stocks=30, n_dates=300)
+    dates = list(panel.values())[0].index
+    kw = dict(factor=_minimal_factor(), panel_data=panel, common_dates=dates, oos_ratio=0.3, horizons=(1, 5, 10))
+    bt_old = cross_section_evaluate_backtest(**kw, use_panel_vector=False)
+    bt_new = cross_section_evaluate_backtest(**kw, use_panel_vector=True)
+    assert "multi_horizon" in bt_old and "multi_horizon" in bt_new
+    _assert_zero_drift(bt_old["multi_horizon"], bt_new["multi_horizon"])

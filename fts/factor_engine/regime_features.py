@@ -26,12 +26,45 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .feature_ops import _rolling_apply_native
+
 logger = logging.getLogger(__name__)
 
 
 # ─── 默认参数 ──────────────────────────────────────────────
 
 _DEFAULT_ROLLING = 20  # 滚动窗口默认值
+
+
+def _rolling_autocorr(s: pd.Series, lag: int = 1) -> pd.Series:
+    """滚动 lag 自相关（等价 rolling(20, min_periods=5).apply(x.autocorr)）。
+
+    全有效窗口批量向量化；含 NaN 窗口逐行 dropna 精确计算（数据无缺口时不触发）。
+    """
+
+    def _row(v: np.ndarray) -> float:
+        if v.size <= lag:
+            return 0.0
+        a = v[lag:]
+        b = v[:-lag]
+        m = ~(np.isnan(a) | np.isnan(b))
+        if m.sum() <= 1:
+            return np.nan
+        c = np.corrcoef(a[m], b[m])[0, 1]
+        return float(c) if np.isfinite(c) else np.nan
+
+    def _batch(rows: np.ndarray) -> np.ndarray:
+        a = rows[:, lag:]
+        b = rows[:, :-lag]
+        ac = a - np.mean(a, axis=-1, keepdims=True)
+        bc = b - np.mean(b, axis=-1, keepdims=True)
+        cov = np.mean(ac * bc, axis=-1)
+        denom = np.sqrt(np.mean(ac * ac, axis=-1) * np.mean(bc * bc, axis=-1))
+        with np.errstate(invalid="ignore"):
+            res = np.divide(cov, denom, out=np.full_like(cov, np.nan), where=denom > 0)
+        return res
+
+    return pd.Series(_rolling_apply_native(s.to_numpy(dtype=float), 20, 5, _row, _batch), index=s.index)
 
 
 # ─── 单个特征提取 ──────────────────────────────────────────
@@ -295,12 +328,6 @@ def compute_hmm_feature_vector(
     ext_features_list.append(kurt[-n:])
 
     # 自相关（滚动 20d）
-    def _rolling_autocorr(s: pd.Series, lag: int = 1) -> pd.Series:
-        return s.rolling(20, min_periods=5).apply(
-            lambda x: x.autocorr(lag=lag) if len(x) > lag else 0.0,
-            raw=False,
-        )
-
     acf1 = _rolling_autocorr(rets, lag=1).fillna(0).to_numpy().reshape(-1, 1)
     ext_features_list.append(acf1[-n:])
 

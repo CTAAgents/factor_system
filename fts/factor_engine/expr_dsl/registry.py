@@ -15,7 +15,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 import pandas as pd
 
-from ..feature_ops import CompositeOps, PriceOps, RollingOps, TimeSeriesOps
+from ..feature_ops import CompositeOps, PriceOps, RollingOps, TimeSeriesOps, _rolling_series_out, _ts_argmax_vec, _ts_decay_linear_vec
 
 # L0 基础数据字段（数据访问层）
 # F.1 契约拆分: hold/settle 为期货专用字段（FuturesOHLCV），vwap/amount/returns 双市场通用
@@ -286,9 +286,7 @@ def build_registry() -> dict[str, OperatorMeta]:
     )
     add(
         "ts_decay_linear",
-        lambda x, n: x.rolling(n).apply(
-            lambda w: float(np.dot(w, np.arange(1, n + 1)) / (n * (n + 1) / 2.0)), raw=True
-        ),
+        lambda x, n: _rolling_series_out(_ts_decay_linear_vec, x, n),
         "L1",
         ("x", "n"),
         int_params=("n",),
@@ -298,7 +296,7 @@ def build_registry() -> dict[str, OperatorMeta]:
     )
     add(
         "ts_argmax",
-        lambda x, n: x.rolling(n).apply(np.argmax, raw=True),
+        lambda x, n: _rolling_series_out(_ts_argmax_vec, x, n),
         "L1",
         ("x", "n"),
         int_params=("n",),

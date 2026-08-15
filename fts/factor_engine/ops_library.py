@@ -22,9 +22,27 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .feature_ops import RollingOps
+from .feature_ops import RollingOps, _rolling_apply_native
 
 _MINP = 2  # 统一最小窗口期
+
+
+def _native_apply(
+    series: pd.Series | pd.DataFrame,
+    window: int,
+    min_periods: int,
+    row_fn,
+    batch_fn,
+):
+    """pandas ``rolling(window, min_periods).apply`` 的向量化等价（Series/DataFrame 通用）。
+
+    ``row_fn(valid_1d) -> float`` / ``batch_fn(rows_2d) -> (m,)`` 语义见
+    ``feature_ops._rolling_apply_native``；DataFrame（面板路径）逐列循环。
+    """
+    if isinstance(series, pd.DataFrame):
+        return series.apply(lambda col: _native_apply(col, window, min_periods, row_fn, batch_fn))
+    arr = _rolling_apply_native(series.to_numpy(dtype=float), window, min_periods, row_fn, batch_fn)
+    return pd.Series(arr, index=series.index)
 
 
 def _ret(series: pd.Series) -> pd.Series:
@@ -60,31 +78,37 @@ class D10Ops:
     def ts_parkinson(high: pd.Series, low: pd.Series, window: int = 20) -> pd.Series:
         """Parkinson 高低价波动率（σ² = mean((ln H/L)²)/(4ln2)）。"""
         hl = (np.log(high.clip(lower=1e-8)) - np.log(low.clip(lower=1e-8))).fillna(0.0)
-        var = (hl ** 2 / (4.0 * np.log(2.0))).rolling(window, min_periods=_MINP).mean()
-        return var.clip(lower=0.0).apply(np.sqrt).fillna(0.0)
+        var = (hl**2 / (4.0 * np.log(2.0))).rolling(window, min_periods=_MINP).mean()
+        return np.sqrt(var.clip(lower=0.0)).fillna(0.0)
 
     @staticmethod
-    def ts_garman_klass(open_p: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, window: int = 20) -> pd.Series:
+    def ts_garman_klass(
+        open_p: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, window: int = 20
+    ) -> pd.Series:
         """Garman-Klass 波动率（含跳空的日内波动）。"""
         o = np.log(open_p.clip(lower=1e-8)).fillna(0.0)
         h = np.log(high.clip(lower=1e-8)).fillna(0.0)
         lnl = np.log(low.clip(lower=1e-8)).fillna(0.0)
         c = np.log(close.clip(lower=1e-8)).fillna(0.0)
         var = 0.5 * (h - lnl) ** 2 - (2.0 * np.log(2.0) - 1.0) * (c - o) ** 2
-        return var.rolling(window, min_periods=_MINP).mean().clip(lower=0.0).apply(np.sqrt).fillna(0.0)
+        return np.sqrt(var.rolling(window, min_periods=_MINP).mean().clip(lower=0.0)).fillna(0.0)
 
     @staticmethod
-    def ts_rogers_satchell(open_p: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, window: int = 20) -> pd.Series:
+    def ts_rogers_satchell(
+        open_p: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, window: int = 20
+    ) -> pd.Series:
         """Rogers-Satchell 波动率（含漂移的日内波动）。"""
         o = np.log(open_p.clip(lower=1e-8)).fillna(0.0)
         h = np.log(high.clip(lower=1e-8)).fillna(0.0)
         lnl = np.log(low.clip(lower=1e-8)).fillna(0.0)
         c = np.log(close.clip(lower=1e-8)).fillna(0.0)
         var = (h - c) * (h - o) + (lnl - c) * (lnl - o)
-        return var.rolling(window, min_periods=_MINP).mean().clip(lower=0.0).apply(np.sqrt).fillna(0.0)
+        return np.sqrt(var.rolling(window, min_periods=_MINP).mean().clip(lower=0.0)).fillna(0.0)
 
     @staticmethod
-    def ts_yang_zhang(open_p: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, window: int = 20) -> pd.Series:
+    def ts_yang_zhang(
+        open_p: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, window: int = 20
+    ) -> pd.Series:
         """Yang-Zhang 波动率（隔夜+日内加权，最稳健）。"""
         o = np.log(open_p.clip(lower=1e-8)).fillna(0.0)
         c = np.log(close.clip(lower=1e-8)).fillna(0.0)
@@ -95,22 +119,22 @@ class D10Ops:
         open_vol = (o - c.shift(1)).rolling(window, min_periods=_MINP).std().fillna(0.0)
         rs = ((h - c) * (h - o) + (lnl - c) * (lnl - o)).rolling(window, min_periods=_MINP).mean().clip(lower=0.0)
         k = 0.34 / (1.34 + (window + 1.0) / (window - 1.0))
-        var = ov_vol ** 2 + k * open_vol ** 2 + (1.0 - k) * rs
-        return var.clip(lower=0.0).apply(np.sqrt).fillna(0.0)
+        var = ov_vol**2 + k * open_vol**2 + (1.0 - k) * rs
+        return np.sqrt(var.clip(lower=0.0)).fillna(0.0)
 
     @staticmethod
     def ts_downside_vol(series: pd.Series, window: int = 20) -> pd.Series:
         """下行波动率（仅负收益的标准差，下行风险）。"""
         r = _ret(series)
         neg = r.where(r < 0, 0.0)
-        return (neg ** 2).rolling(window, min_periods=_MINP).mean().apply(np.sqrt).fillna(0.0)
+        return np.sqrt((neg**2).rolling(window, min_periods=_MINP).mean()).fillna(0.0)
 
     @staticmethod
     def ts_upside_vol(series: pd.Series, window: int = 20) -> pd.Series:
         """上行波动率（仅正收益的标准差，上行风险）。"""
         r = _ret(series)
         pos = r.where(r > 0, 0.0)
-        return (pos ** 2).rolling(window, min_periods=_MINP).mean().apply(np.sqrt).fillna(0.0)
+        return np.sqrt((pos**2).rolling(window, min_periods=_MINP).mean()).fillna(0.0)
 
     @staticmethod
     def ts_vol_of_vol(series: pd.Series, window: int = 20) -> pd.Series:
@@ -123,7 +147,7 @@ class D10Ops:
         """双幂变差（跳跃稳健波动估计，σ=mean(|r_t||r_{t-1}|)·π/2）。"""
         r = _ret(series).abs()
         prod = (r * r.shift(1)).fillna(0.0)
-        return (prod * np.pi / 2.0).rolling(window, min_periods=_MINP).mean().apply(np.sqrt).fillna(0.0)
+        return np.sqrt((prod * np.pi / 2.0).rolling(window, min_periods=_MINP).mean()).fillna(0.0)
 
     @staticmethod
     def ts_range_vol(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 20) -> pd.Series:
@@ -172,7 +196,7 @@ class D10Ops:
         """溃疡指数（回撤平方均值开方，回撤疼痛度）。"""
         roll_max = series.rolling(window, min_periods=_MINP).max()
         dd = (series / roll_max.replace(0.0, np.nan) - 1.0).fillna(0.0)
-        return (dd ** 2).rolling(window, min_periods=_MINP).mean().apply(np.sqrt)
+        return np.sqrt((dd**2).rolling(window, min_periods=_MINP).mean())
 
     # ── 风险度量（VaR/CVaR） ───────────────────────────────
 
@@ -188,27 +212,68 @@ class D10Ops:
 
     @staticmethod
     def ts_cvar_95(series: pd.Series, window: int = 60) -> pd.Series:
-        """95% CVaR（低于 5% 分位收益的均值，条件尾部损失）。"""
+        """95% CVaR（低于 5% 分位收益的均值，条件尾部损失）。
+
+        plans/40 C 层：numba 快速路径（收益序列全有限 → ``cvar_1d`` alpha=0.05，
+        前缀/主区间分位语义与现值 ``_native_apply`` 逐位一致）；含 NaN/inf 或
+        开关关闭 → 回退现值实现，零漂移。
+        """
+        from .numba_kernels import cvar_1d
+
         r = _ret(series)
+        arr = r.to_numpy(dtype=float)
+        if np.isfinite(arr).all():
+            nb = cvar_1d(arr, int(window), 0.05)
+            if nb is not None:
+                return pd.Series(np.nan_to_num(nb, nan=0.0), index=series.index)
 
-        def _cvar(x: np.ndarray) -> float:
-            q = np.nanquantile(x, 0.05)
-            tail = x[x <= q]
-            return float(np.mean(tail)) if len(tail) else float(q)
+        def _cvar(v: np.ndarray) -> float:
+            q = np.nanquantile(v, 0.05)
+            tail = v[v <= q]
+            return float(np.mean(tail)) if tail.size else float(q)
 
-        return r.rolling(window, min_periods=_MINP).apply(_cvar, raw=True).fillna(0.0)
+        def _batch(rows: np.ndarray) -> np.ndarray:
+            s = np.sort(rows, axis=-1)
+            pos = 0.05 * (rows.shape[1] - 1)
+            lo, hi = int(np.floor(pos)), int(np.ceil(pos))
+            q = s[:, lo] + (s[:, hi] - s[:, lo]) * (pos - lo)
+            mask = rows <= q[:, None]
+            cnt = mask.sum(axis=-1)
+            return np.where(cnt > 0, np.where(mask, rows, 0.0).sum(axis=-1) / cnt, q)
+
+        return _native_apply(r, window, _MINP, _cvar, _batch).fillna(0.0)
 
     @staticmethod
     def ts_cvar_99(series: pd.Series, window: int = 60) -> pd.Series:
-        """99% CVaR（低于 1% 分位收益的均值）。"""
+        """99% CVaR（低于 1% 分位收益的均值）。
+
+        plans/40 C 层：numba 快速路径（收益序列全有限 → ``cvar_1d`` alpha=0.01）；
+        含 NaN/inf 或开关关闭 → 回退现值实现，零漂移。
+        """
+        from .numba_kernels import cvar_1d
+
         r = _ret(series)
+        arr = r.to_numpy(dtype=float)
+        if np.isfinite(arr).all():
+            nb = cvar_1d(arr, int(window), 0.01)
+            if nb is not None:
+                return pd.Series(np.nan_to_num(nb, nan=0.0), index=series.index)
 
-        def _cvar(x: np.ndarray) -> float:
-            q = np.nanquantile(x, 0.01)
-            tail = x[x <= q]
-            return float(np.mean(tail)) if len(tail) else float(q)
+        def _cvar(v: np.ndarray) -> float:
+            q = np.nanquantile(v, 0.01)
+            tail = v[v <= q]
+            return float(np.mean(tail)) if tail.size else float(q)
 
-        return r.rolling(window, min_periods=_MINP).apply(_cvar, raw=True).fillna(0.0)
+        def _batch(rows: np.ndarray) -> np.ndarray:
+            s = np.sort(rows, axis=-1)
+            pos = 0.01 * (rows.shape[1] - 1)
+            lo, hi = int(np.floor(pos)), int(np.ceil(pos))
+            q = s[:, lo] + (s[:, hi] - s[:, lo]) * (pos - lo)
+            mask = rows <= q[:, None]
+            cnt = mask.sum(axis=-1)
+            return np.where(cnt > 0, np.where(mask, rows, 0.0).sum(axis=-1) / cnt, q)
+
+        return _native_apply(r, window, _MINP, _cvar, _batch).fillna(0.0)
 
     @staticmethod
     def ts_semi_std(series: pd.Series, window: int = 20) -> pd.Series:
@@ -220,14 +285,14 @@ class D10Ops:
         """二阶下偏矩（低于 0 的平方收益均值）。"""
         r = _ret(series)
         neg = r.where(r < 0, 0.0)
-        return (neg ** 2).rolling(window, min_periods=_MINP).mean().fillna(0.0)
+        return (neg**2).rolling(window, min_periods=_MINP).mean().fillna(0.0)
 
     @staticmethod
     def ts_hpm_2(series: pd.Series, window: int = 20) -> pd.Series:
         """二阶上偏矩（高于 0 的平方收益均值）。"""
         r = _ret(series)
         pos = r.where(r > 0, 0.0)
-        return (pos ** 2).rolling(window, min_periods=_MINP).mean().fillna(0.0)
+        return (pos**2).rolling(window, min_periods=_MINP).mean().fillna(0.0)
 
     @staticmethod
     def ts_gain_std(series: pd.Series, window: int = 20) -> pd.Series:
@@ -259,7 +324,7 @@ class D10Ops:
         r = _ret(series)
         mu = r.rolling(window, min_periods=_MINP).mean()
         neg = r.where(r < 0, 0.0)
-        dd = (neg ** 2).rolling(window, min_periods=_MINP).mean().apply(np.sqrt).replace(0.0, np.nan)
+        dd = np.sqrt((neg**2).rolling(window, min_periods=_MINP).mean()).replace(0.0, np.nan)
         return (mu / dd).fillna(0.0)
 
     @staticmethod
@@ -554,7 +619,13 @@ class D11Ops:
         """CCI 顺势指标（偏离典型价的平均绝对偏差）。"""
         tp = (high + low + close) / 3.0
         ma = tp.rolling(window, min_periods=_MINP).mean()
-        md = tp.rolling(window, min_periods=_MINP).apply(lambda x: float(np.mean(np.abs(x - np.mean(x)))), raw=True)
+        md = _native_apply(
+            tp,
+            window,
+            _MINP,
+            lambda v: float(np.mean(np.abs(v - np.mean(v)))),
+            lambda rows: np.mean(np.abs(rows - np.mean(rows, axis=-1, keepdims=True)), axis=-1),
+        )
         return ((tp - ma) / (0.015 * md.replace(0.0, np.nan))).fillna(0.0)
 
     @staticmethod
@@ -577,7 +648,14 @@ class D11Ops:
         """TSI 真实强弱指数（双平滑动量比）。"""
         r = series.diff().fillna(0.0)
         num = r.ewm(span=short, min_periods=_MINP).mean().ewm(span=long, min_periods=_MINP).mean()
-        den = r.abs().ewm(span=short, min_periods=_MINP).mean().ewm(span=long, min_periods=_MINP).mean().replace(0.0, np.nan)
+        den = (
+            r.abs()
+            .ewm(span=short, min_periods=_MINP)
+            .mean()
+            .ewm(span=long, min_periods=_MINP)
+            .mean()
+            .replace(0.0, np.nan)
+        )
         return (100.0 * num / den).fillna(0.0)
 
     @staticmethod
@@ -589,7 +667,9 @@ class D11Ops:
         return (ms - ml).fillna(0.0)
 
     @staticmethod
-    def ts_ultimate_osc(high: pd.Series, low: pd.Series, close: pd.Series, short: int = 7, mid: int = 14, long: int = 28) -> pd.Series:
+    def ts_ultimate_osc(
+        high: pd.Series, low: pd.Series, close: pd.Series, short: int = 7, mid: int = 14, long: int = 28
+    ) -> pd.Series:
         """UO 终极振荡器（多周期加权动量）。"""
         prev_close = close.shift(1).fillna(close)
         bp = close - pd.concat([low, prev_close], axis=1).min(axis=1)
@@ -690,7 +770,9 @@ class D11Ops:
         return span.pct_change().fillna(0.0)
 
     @staticmethod
-    def ts_chaikin_osc(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, short: int = 3, long: int = 10) -> pd.Series:
+    def ts_chaikin_osc(
+        high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, short: int = 3, long: int = 10
+    ) -> pd.Series:
         """蔡金振荡（ADI 快慢 EMA 差）。"""
         adi = D11Ops.ts_adi(high, low, close, volume)
         es = adi.ewm(span=short, min_periods=_MINP).mean()
@@ -716,9 +798,7 @@ class D11Ops:
     def ts_atr(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> pd.Series:
         """ATR 平均真实波幅（真实波幅的均值）。"""
         prev_close = close.shift(1).fillna(close)
-        tr = pd.concat(
-            [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-        ).max(axis=1)
+        tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
         return tr.ewm(alpha=1.0 / window, min_periods=_MINP).mean().fillna(0.0)
 
     @staticmethod
@@ -763,16 +843,24 @@ class D11Ops:
     @staticmethod
     def ts_aroon_up(series: pd.Series, window: int = 25) -> pd.Series:
         """Aroon 上升（距窗口新高的期数占比）。"""
-        hh_pos = series.rolling(window, min_periods=_MINP).apply(
-            lambda x: float(np.argmax(x)), raw=True
+        hh_pos = _native_apply(
+            series,
+            window,
+            _MINP,
+            lambda v: float(np.argmax(v)),
+            lambda rows: np.argmax(rows, axis=-1).astype(float),
         )
         return (100.0 * (window - hh_pos) / window).fillna(0.0)
 
     @staticmethod
     def ts_aroon_down(series: pd.Series, window: int = 25) -> pd.Series:
         """Aroon 下降（距窗口新低的期数占比）。"""
-        ll_pos = series.rolling(window, min_periods=_MINP).apply(
-            lambda x: float(np.argmin(x)), raw=True
+        ll_pos = _native_apply(
+            series,
+            window,
+            _MINP,
+            lambda v: float(np.argmin(v)),
+            lambda rows: np.argmin(rows, axis=-1).astype(float),
         )
         return (100.0 * (window - ll_pos) / window).fillna(0.0)
 
@@ -818,9 +906,11 @@ class D11Ops:
         prev_low = low.shift(1).fillna(low)
         prev_close = close.shift(1).fillna(close)
         vm = (high - prev_low).abs()
-        tr = pd.concat(
-            [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-        ).max(axis=1).replace(0.0, np.nan)
+        tr = (
+            pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1)
+            .max(axis=1)
+            .replace(0.0, np.nan)
+        )
         num = vm.rolling(window, min_periods=_MINP).sum()
         den = tr.rolling(window, min_periods=_MINP).sum()
         return (num / den).fillna(1.0)
@@ -831,9 +921,11 @@ class D11Ops:
         prev_high = high.shift(1).fillna(high)
         prev_close = close.shift(1).fillna(close)
         vm = (prev_high - low).abs()
-        tr = pd.concat(
-            [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-        ).max(axis=1).replace(0.0, np.nan)
+        tr = (
+            pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1)
+            .max(axis=1)
+            .replace(0.0, np.nan)
+        )
         num = vm.rolling(window, min_periods=_MINP).sum()
         den = tr.rolling(window, min_periods=_MINP).sum()
         return (num / den).fillna(1.0)
@@ -848,7 +940,9 @@ class D11Ops:
     @staticmethod
     def ts_ichimoku_conv(high: pd.Series, low: pd.Series, window: int = 9) -> pd.Series:
         """云图转换线（9 期中值）。"""
-        return ((high.rolling(window, min_periods=_MINP).max() + low.rolling(window, min_periods=_MINP).min()) / 2.0).fillna(0.0)
+        return (
+            (high.rolling(window, min_periods=_MINP).max() + low.rolling(window, min_periods=_MINP).min()) / 2.0
+        ).fillna(0.0)
 
     @staticmethod
     def ts_ichimoku_base(high: pd.Series, low: pd.Series, window: int = 26) -> pd.Series:
@@ -1016,16 +1110,31 @@ class D12Ops:
     @staticmethod
     def ts_trend_angle(series: pd.Series, window: int = 20) -> pd.Series:
         """趋势角度（斜率反正切，弧度）。"""
-        slope = RollingOps.ts_slope(series, window=window) if hasattr(RollingOps, "ts_slope") else series.diff().fillna(0.0)
+        slope = (
+            RollingOps.ts_slope(series, window=window) if hasattr(RollingOps, "ts_slope") else series.diff().fillna(0.0)
+        )
         return np.arctan(slope.fillna(0.0))
 
     @staticmethod
     def ts_linear_trend_score(series: pd.Series, window: int = 20) -> pd.Series:
         """线性趋势得分（窗口线性拟合 R²，趋势确定性）。"""
-        r2 = series.rolling(window, min_periods=5).apply(
-            lambda x: float(np.corrcoef(np.arange(len(x)), x)[0, 1] ** 2) if np.std(x) > 0 else 0.0,
-            raw=True,
-        )
+
+        def _trend(v: np.ndarray) -> float:
+            if np.std(v) > 0:
+                return float(np.corrcoef(np.arange(v.size), v)[0, 1] ** 2)
+            return 0.0
+
+        def _batch(rows: np.ndarray) -> np.ndarray:
+            t = np.arange(rows.shape[1], dtype=float)
+            tc = t - t.mean()
+            xc = rows - np.mean(rows, axis=-1, keepdims=True)
+            var_x = np.mean(xc * xc, axis=-1)
+            cov = np.mean(xc * tc, axis=-1)
+            denom = np.sqrt(var_x) * np.sqrt(np.mean(tc * tc))
+            corr = np.divide(cov, denom, out=np.zeros_like(cov), where=var_x > 0)
+            return corr * corr
+
+        r2 = _native_apply(series, window, 5, _trend, _batch)
         return r2.fillna(0.0).clip(0.0, 1.0)
 
     @staticmethod
@@ -1151,7 +1260,13 @@ class D12Ops:
     @staticmethod
     def ts_range_expansion(series: pd.Series, window: int = 20) -> pd.Series:
         """区间扩张（当前窗口振幅 / 前一窗口振幅）。"""
-        amp = series.rolling(window, min_periods=_MINP).apply(lambda x: float(np.ptp(x)), raw=True)
+        amp = _native_apply(
+            series,
+            window,
+            _MINP,
+            lambda v: float(np.ptp(v)),
+            lambda rows: (np.max(rows, axis=-1) - np.min(rows, axis=-1)).astype(float),
+        )
         prev = amp.shift(window).replace(0.0, np.nan)
         return (amp / prev).fillna(1.0)
 
@@ -1200,7 +1315,9 @@ class D12Ops:
         return ((hh + ll) / 2.0).fillna(0.0)
 
     @staticmethod
-    def ts_supertrend_signal(series: pd.Series, high: pd.Series, low: pd.Series, window: int = 10, mult: float = 3.0) -> pd.Series:
+    def ts_supertrend_signal(
+        series: pd.Series, high: pd.Series, low: pd.Series, window: int = 10, mult: float = 3.0
+    ) -> pd.Series:
         """超级趋势信号（ATR 通道，+1 上升 / -1 下降）。"""
         atr = D11Ops.ts_atr(high, low, series, window)
         hl2 = (high + low) / 2.0
@@ -1231,7 +1348,15 @@ class D12Ops:
     @staticmethod
     def ts_sideways_flag(series: pd.Series, window: int = 20) -> pd.Series:
         """横盘标志（振幅收窄且无趋势）。"""
-        amp = series.rolling(window, min_periods=_MINP).apply(lambda x: float(np.ptp(x)) / max(abs(float(np.mean(x))), 1e-9), raw=True)
+        amp = _native_apply(
+            series,
+            window,
+            _MINP,
+            lambda v: float(np.ptp(v)) / max(abs(float(np.mean(v))), 1e-9),
+            lambda rows: (
+                (np.max(rows, axis=-1) - np.min(rows, axis=-1)) / np.maximum(np.abs(np.mean(rows, axis=-1)), 1e-9)
+            ),
+        )
         return (amp < 0.05).astype(float)
 
     @staticmethod
@@ -1311,18 +1436,26 @@ class D12Ops:
     def ts_adx_pos(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> pd.Series:
         """+DI 正向指标（+DM / TR 平滑）。"""
         pdm = D12Ops.ts_directional_up(high, low, window)
-        tr = pd.concat(
-            [high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1
-        ).max(axis=1).rolling(window, min_periods=_MINP).mean().replace(0.0, np.nan)
+        tr = (
+            pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1)
+            .max(axis=1)
+            .rolling(window, min_periods=_MINP)
+            .mean()
+            .replace(0.0, np.nan)
+        )
         return (100.0 * pdm / tr).fillna(0.0)
 
     @staticmethod
     def ts_adx_neg(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> pd.Series:
         """-DI 负向指标。"""
         ndm = D12Ops.ts_directional_down(high, low, window)
-        tr = pd.concat(
-            [high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1
-        ).max(axis=1).rolling(window, min_periods=_MINP).mean().replace(0.0, np.nan)
+        tr = (
+            pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1)
+            .max(axis=1)
+            .rolling(window, min_periods=_MINP)
+            .mean()
+            .replace(0.0, np.nan)
+        )
         return (100.0 * ndm / tr).fillna(0.0)
 
     @staticmethod
@@ -1536,9 +1669,18 @@ class D13Ops:
     @staticmethod
     def cs_trim_mean_diff(series: pd.Series, window: int = 20) -> pd.Series:
         """与修剪均值差（x - 10% 修剪均值）。"""
-        tm = series.rolling(window, min_periods=_MINP).apply(
-            lambda x: float(np.mean(np.sort(x)[int(len(x) * 0.1): max(int(len(x) * 0.9), 1)])), raw=True
-        )
+
+        def _trim(v: np.ndarray) -> float:
+            s = np.sort(v)
+            return float(np.mean(s[int(s.size * 0.1) : max(int(s.size * 0.9), 1)]))
+
+        def _batch(rows: np.ndarray) -> np.ndarray:
+            s = np.sort(rows, axis=-1)
+            lo = int(s.shape[1] * 0.1)
+            hi = max(int(s.shape[1] * 0.9), 1)
+            return np.mean(s[:, lo:hi], axis=-1)
+
+        tm = _native_apply(series, window, _MINP, _trim, _batch)
         return (series - tm).fillna(0.0)
 
     @staticmethod
@@ -1564,45 +1706,74 @@ class D13Ops:
     @staticmethod
     def cs_gini_score(series: pd.Series, window: int = 20) -> pd.Series:
         """基尼系数（窗口内分布不均匀度）。"""
-        def _gini(x: np.ndarray) -> float:
-            x = np.sort(x[~np.isnan(x)])
-            if len(x) < 2:
-                return 0.0
-            n = len(x)
-            return float((2.0 * np.sum((np.arange(1, n + 1)) * x) / (n * np.sum(x)) - (n + 1.0) / n)) if np.sum(x) else 0.0
 
-        return series.rolling(window, min_periods=_MINP).apply(_gini, raw=True).fillna(0.0)
+        def _gini(v: np.ndarray) -> float:
+            x = np.sort(v[~np.isnan(v)])
+            n = x.size
+            if n < 2:
+                return 0.0
+            s = float(np.sum(x))
+            if s == 0:
+                return 0.0
+            return float(2.0 * np.sum(np.arange(1, n + 1) * x) / (n * s) - (n + 1.0) / n)
+
+        def _batch(rows: np.ndarray) -> np.ndarray:
+            s = np.sort(rows, axis=-1)
+            sums = np.sum(s, axis=-1)
+            num = 2.0 * np.sum(np.arange(1, rows.shape[1] + 1) * s, axis=-1)
+            res = num / (rows.shape[1] * sums) - (rows.shape[1] + 1.0) / rows.shape[1]
+            return np.where(sums != 0, res, 0.0)
+
+        return _native_apply(series, window, _MINP, _gini, _batch).fillna(0.0)
 
     @staticmethod
     def cs_herfindahl(series: pd.Series, window: int = 20) -> pd.Series:
         """赫芬达尔指数（窗口内份额集中度，越集中越高）。"""
         mu = series.rolling(window, min_periods=_MINP).mean()
         share = (series / mu.replace(0.0, np.nan)).fillna(0.0)
-        return (share ** 2).rolling(window, min_periods=_MINP).mean().fillna(0.0)
+        return (share**2).rolling(window, min_periods=_MINP).mean().fillna(0.0)
 
     @staticmethod
     def cs_concentration(series: pd.Series, window: int = 20) -> pd.Series:
         """集中度（前 20% 值占总和比例）。"""
-        def _conc(x: np.ndarray) -> float:
-            x = np.sort(x[~np.isnan(x)])[::-1]
-            if len(x) < 2 or np.sum(x) == 0:
+
+        def _conc(v: np.ndarray) -> float:
+            x = np.sort(v[~np.isnan(v)])[::-1]
+            n = x.size
+            if n < 2 or np.sum(x) == 0:
                 return 0.0
-            k = max(1, len(x) // 5)
+            k = max(1, n // 5)
             return float(np.sum(x[:k]) / np.sum(x))
 
-        return series.rolling(window, min_periods=_MINP).apply(_conc, raw=True).fillna(0.0)
+        def _batch(rows: np.ndarray) -> np.ndarray:
+            s = np.sort(rows, axis=-1)[:, ::-1]
+            sums = np.sum(s, axis=-1)
+            k = max(1, rows.shape[1] // 5)
+            return np.where(sums != 0, np.sum(s[:, :k], axis=-1) / sums, 0.0)
+
+        return _native_apply(series, window, _MINP, _conc, _batch).fillna(0.0)
 
     @staticmethod
     def cs_top_bottom_spread(series: pd.Series, window: int = 20) -> pd.Series:
         """高低差（窗口 top10% 均值 - bottom10% 均值）。"""
-        def _spread(x: np.ndarray) -> float:
-            x = np.sort(x[~np.isnan(x)])
-            if len(x) < 10:
+
+        def _spread(v: np.ndarray) -> float:
+            x = np.sort(v[~np.isnan(v)])
+            n = x.size
+            if n < 10:
                 return 0.0
-            k = max(1, len(x) // 10)
+            k = max(1, n // 10)
             return float(np.mean(x[-k:]) - np.mean(x[:k]))
 
-        return series.rolling(window, min_periods=_MINP).apply(_spread, raw=True).fillna(0.0)
+        def _batch(rows: np.ndarray) -> np.ndarray:
+            w = rows.shape[1]
+            if w < 10:
+                return np.zeros(rows.shape[0], dtype=float)
+            s = np.sort(rows, axis=-1)
+            k = max(1, w // 10)
+            return np.mean(s[:, -k:], axis=-1) - np.mean(s[:, :k], axis=-1)
+
+        return _native_apply(series, window, _MINP, _spread, _batch).fillna(0.0)
 
     @staticmethod
     def cs_winner_loser_gap(series: pd.Series, window: int = 20) -> pd.Series:
@@ -1658,7 +1829,7 @@ class D13Ops:
         span = (q95 - q05).replace(0.0, np.nan)
         up = ((series - q95).clip(lower=0.0) / span).fillna(0.0)
         dn = ((q05 - series).clip(lower=0.0) / span).fillna(0.0)
-        return (up - dn)
+        return up - dn
 
     @staticmethod
     def cs_breadth_position(series: pd.Series, window: int = 20) -> pd.Series:
@@ -2262,7 +2433,7 @@ class D15Ops:
     def ts_volume_breakout(volume: pd.Series, window: int = 20) -> pd.Series:
         """量突破（volume 创窗口新高）。"""
         hh = volume.rolling(window, min_periods=_MINP).max().shift(1)
-        return ((volume > hh.fillna(volume))).astype(float)
+        return (volume > hh.fillna(volume)).astype(float)
 
     @staticmethod
     def ts_volume_zscore(volume: pd.Series, window: int = 20) -> pd.Series:
@@ -2392,12 +2563,20 @@ class D16Ops:
         return force.ewm(span=window, min_periods=_MINP).mean().fillna(0.0)
 
     @staticmethod
-    def ts_ease_of_movement(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, window: int = 14) -> pd.Series:
+    def ts_ease_of_movement(
+        high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, window: int = 14
+    ) -> pd.Series:
         """EMV 易动度（距离移动/量，价格流畅度）。"""
         mid = (high + low) / 2.0
         dist = mid.diff().fillna(0.0)
         box = (volume / (high - low).replace(0.0, np.nan)).fillna(0.0)
-        return (dist / box.replace(0.0, np.nan)).replace(np.inf, np.nan).fillna(0.0).rolling(window, min_periods=_MINP).mean()
+        return (
+            (dist / box.replace(0.0, np.nan))
+            .replace(np.inf, np.nan)
+            .fillna(0.0)
+            .rolling(window, min_periods=_MINP)
+            .mean()
+        )
 
     @staticmethod
     def ts_volume_price_regime(close: pd.Series, volume: pd.Series, window: int = 20) -> pd.Series:
@@ -2488,21 +2667,33 @@ class D16Ops:
     @staticmethod
     def ts_volume_concentration(volume: pd.Series, window: int = 20) -> pd.Series:
         """量集中度（前 20% 窗口量占比）。"""
-        def _conc(x: np.ndarray) -> float:
-            x = np.sort(x[~np.isnan(x)])[::-1]
-            if len(x) < 2 or np.sum(x) == 0:
+
+        def _conc(v: np.ndarray) -> float:
+            x = np.sort(v[~np.isnan(v)])[::-1]
+            n = x.size
+            if n < 2 or np.sum(x) == 0:
                 return 0.0
-            k = max(1, len(x) // 5)
+            k = max(1, n // 5)
             return float(np.sum(x[:k]) / np.sum(x))
 
-        return volume.rolling(window, min_periods=_MINP).apply(_conc, raw=True).fillna(0.0)
+        def _batch(rows: np.ndarray) -> np.ndarray:
+            s = np.sort(rows, axis=-1)[:, ::-1]
+            sums = np.sum(s, axis=-1)
+            k = max(1, rows.shape[1] // 5)
+            return np.where(sums != 0, np.sum(s[:, :k], axis=-1) / sums, 0.0)
+
+        return _native_apply(volume, window, _MINP, _conc, _batch).fillna(0.0)
 
     @staticmethod
     def ts_volume_cycle(volume: pd.Series, window: int = 20) -> pd.Series:
         """量周期（量能峰谷位置，周期相位）。"""
         vol_z = D16Ops.ts_liquidity_zscore(volume, window)
-        return vol_z.rolling(window, min_periods=_MINP).apply(
-            lambda x: float(np.argmax(x)) if len(x) else 0.0, raw=True
+        return _native_apply(
+            vol_z,
+            window,
+            _MINP,
+            lambda v: float(np.argmax(v)) if v.size else 0.0,
+            lambda rows: np.argmax(rows, axis=-1).astype(float),
         ).fillna(0.0)
 
     # ── 量能异常 ───────────────────────────────────────────
@@ -2755,7 +2946,9 @@ class D17Ops:
     def ts_market_regime_score(series: pd.Series, window: int = 20) -> pd.Series:
         """市场制度得分（趋势+波动综合，-1 熊 / +1 牛）。"""
         trend = D12Ops.ts_trend_strength_pct(series, window)
-        vol_regime = (D10Ops.ts_short_term_vol(series, 10) > D10Ops.ts_long_term_vol(series, window)).astype(float) * 2.0 - 1.0
+        vol_regime = (D10Ops.ts_short_term_vol(series, 10) > D10Ops.ts_long_term_vol(series, window)).astype(
+            float
+        ) * 2.0 - 1.0
         return ((trend + vol_regime) / 2.0).fillna(0.0)
 
     @staticmethod

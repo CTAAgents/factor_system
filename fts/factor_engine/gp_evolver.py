@@ -983,8 +983,16 @@ def factor_program(data, params):
         return x.rolling(window).sum()
 
     def ts_product(x, window=20):
-        # pandas ≥ 2.1 移除 Rolling.prod，改用 apply(np.prod)（与 feature_ops 对齐）
-        return x.rolling(window).apply(np.prod, raw=True)
+        # sliding_window_view 向量化（等价 rolling(window).apply(np.prod, raw=True)），
+        # 前缀 NaN；含 NaN/inf 窗口 np.prod=NaN 与 min_periods=window 语义一致
+        arr = np.asarray(x, dtype=float)
+        arr = np.where(np.isinf(arr), np.nan, arr)
+        n = arr.size
+        out = np.full(n, np.nan)
+        if n >= window:
+            view = np.lib.stride_tricks.sliding_window_view(arr, window)
+            out[window - 1:] = np.prod(view, axis=-1)
+        return pd.Series(out, index=x.index)
 
     def ts_rank(x, window=20):
         return x.rolling(window).rank(pct=True)

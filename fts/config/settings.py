@@ -245,8 +245,6 @@ class FTSConfig:
     max_workers: int = field(default_factory=lambda: int(os.getenv("FTS_MAX_WORKERS", "4")))
 
     # ── L1 Meta-Loop ──
-    meta_loop_interval_hours: int = 24
-    meta_loop_max_tokens: int = 8000
     # GAP-I103 (v2.80.0): 另类知识源——公告/舆情提取器开关（股票管道）
     l1_announcement_extractor_enabled: bool = field(
         default_factory=lambda: os.getenv("FTS_L1_ANNOUNCEMENT_EXTRACTOR_ENABLED", "1") == "1"
@@ -284,6 +282,19 @@ class FTSConfig:
     l3_turnover_budget_enabled: bool = field(
         default_factory=lambda: os.getenv("FTS_L3_TURNOVER_BUDGET_ENABLED", "0") == "1"
     )
+    # G1 同向敞口惩罚参数（35-gap-closure-plan G1，v2.104.0+X 配置化）：
+    # 触发条件：因子 IC 同向权重占比 ≥ l3_g1_align_threshold（ic>0 看多 / ic<0 看空）；
+    # compress_curve ∈ {linear, sqrt(更温和), exp(更激进)}；默认值与历史硬编码一致。
+    l3_g1_enabled: bool = field(default_factory=lambda: os.getenv("FTS_L3_G1_ENABLED", "1") == "1")
+    l3_g1_align_threshold: float = field(
+        default_factory=lambda: float(os.getenv("FTS_L3_G1_ALIGN_THRESHOLD", "0.60"))
+    )
+    l3_g1_max_compress: float = field(
+        default_factory=lambda: float(os.getenv("FTS_L3_G1_MAX_COMPRESS", "0.50"))
+    )
+    l3_g1_compress_curve: str = field(
+        default_factory=lambda: os.getenv("FTS_L3_G1_COMPRESS_CURVE", "linear")
+    )
 
     # ── C6 (v2.100.1): 因子自动重校准（decayed → 微调而非直接退役）──
     recalibration_enabled: bool = field(default_factory=lambda: os.getenv("FTS_RECALIBRATION_ENABLED", "0") == "1")
@@ -319,6 +330,23 @@ class FTSConfig:
     )
     # 期货涨跌停判定阈值（单日涨跌幅 ≥ 该值视为涨跌停，无法成交）
     futures_limit_pct: float = field(default_factory=lambda: float(os.getenv("FTS_FUTURES_LIMIT_PCT", "0.08")))
+
+    # ── 横截面评估全矩阵化（plans/37，panel_vector）──
+    # 用预对齐面板 + 全矩阵化 IC（fts/factor_engine/panel_vector.py）替代横截面
+    # 评估的逐日 spearmanr 循环（信号构建恒逐品种）。Phase 3（v2.104.0+57）起
+    # 默认开启：对照测试全绿 + 评估链 on/off 逐位一致。算子因子面板化执行
+    # （execute_factor_panel）经 plans/39 §11（v2.104.0+58）实测真实缺口面板
+    # 0.3x <5x 门槛登记豁免摘除——仅 IC 计算走矩阵化，信号恒逐品种零漂移。
+    # 可设 FTS_CROSS_SECTION_PANEL_VECTOR=false 关闭。
+    cross_section_panel_vector: bool = field(
+        default_factory=lambda: os.getenv("FTS_CROSS_SECTION_PANEL_VECTOR", "true").lower() == "true"
+    )
+
+    # ── 算子 numba 内核（plans/38 批 4）──
+    # 定点 @njit 清除含 NaN 多趟聚合 + 面板 2D 的 Python 循环（cvar_95/99、ts_rank、
+    # ts_zscore，见 fts/factor_engine/numba_kernels.py）。仅 numba/llvmlite 安装后
+    # 生效：缺失/版本冲突/FTS_OPS_NUMBA=false → 回退现值实现，零语义漂移。
+    ops_numba: bool = field(default_factory=lambda: os.getenv("FTS_OPS_NUMBA", "true").lower() == "true")
 
     # ── 回测容量约束（v2.67.0，GAP-I501）──
     # 回测是否启用容量限制（持仓市值 ≤ 品种日均成交额 × 比例，超限截断）
@@ -360,6 +388,18 @@ class FTSConfig:
             "max_turnover": 0.50,
             "max_decay_rate": 0.30,
             "min_n_factors": 3,
+        }
+    )
+
+    # ── L3 因子选择/组合构建（plans/36，v2.104.0+43）──
+    # factor_score.weights: 综合评分权重（sharpe_cap/icir/ic/turnover_inv，替代裸 Sharpe 排序选入）
+    # cluster.threshold/top_n: P1 因子聚类参数（阈值敏感性 / 簇内代表数）
+    l3: dict = field(
+        default_factory=lambda: {
+            "factor_score": {
+                "weights": {"sharpe_cap": 0.30, "icir": 0.30, "ic": 0.20, "turnover_inv": 0.20},
+            },
+            "cluster": {"threshold": 0.7, "top_n": 1},
         }
     )
 
@@ -452,7 +492,7 @@ def _apply_dict(cfg: FTSConfig, d: dict[str, Any]) -> None:
     """将字典值应用到配置实例。"""
     for key, value in d.items():
         if hasattr(cfg, key) and value is not None:
-            if key == "verifier" and isinstance(value, dict):
+            if key in ("verifier", "l3") and isinstance(value, dict):
                 current = getattr(cfg, key, {})
                 if isinstance(current, dict):
                     current.update(value)

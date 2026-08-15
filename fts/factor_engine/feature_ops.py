@@ -12,8 +12,9 @@ fts.factor_engine.feature_ops — 特征算子库 (Phase C.1)。
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 
 import numpy as np
 import pandas as pd
@@ -22,6 +23,256 @@ logger = logging.getLogger(__name__)
 
 OperatorCategory = str
 """算子类别: time_series / price / rolling / cross_section / composite / cross_symbol"""
+
+
+def _rolling_series_out(func: Callable[[np.ndarray, int], np.ndarray], series: pd.Series | pd.DataFrame, window: int):
+    """对 Series(1D)/DataFrame(2D) 执行 1D 向量化滚动 func 并还原类型。
+
+    func(arr_1d, window) -> 等长 ndarray。DataFrame（面板化执行路径，pdata
+    按列求值）逐列循环调用 —— 列数通常 ≤150，远快于原 rolling.apply 逐窗口回调。
+    """
+    arr = series.to_numpy(dtype=float)
+    if arr.ndim == 2:
+        cols = list(series.columns)
+        res = np.stack([func(arr[:, j], window) for j in range(len(cols))], axis=1)
+        return pd.DataFrame(res, index=series.index, columns=cols)
+    return pd.Series(func(arr, window), index=series.index)
+
+
+# ─── 缺口感知执行上下文（plans/39 5.1） ─────────────────────
+# 面板化执行（execute_factor_panel）把每个品种 reindex 到 union_dates，缺口日
+# 期在该品种列上成为 NaN 行。逐品种路径在品种自身日历上滚动（无 NaN 行），
+# 两者窗口内有效观测集合不同 → 验证回退。缺口感知模式把缺口列压缩为密集序列
+# （= 品种自身日历上的观测序列）计算后散射回原位置，与逐品种语义逐位一致。
+# 默认关闭（逐品种路径与既有对照测试保持既有 pandas 等价语义，零漂移）。
+
+_GAP_AWARE: bool = False
+
+
+@contextmanager
+def gap_aware_mode() -> Iterator[None]:
+    """在 execute_factor_panel 评估/验证作用域内开启缺口感知滚动语义。
+
+    逐品种路径 / 单元测试默认关闭；仅面板化执行开启，避免改变既有语义。
+    """
+    global _GAP_AWARE
+    prev = _GAP_AWARE
+    _GAP_AWARE = True
+    try:
+        yield
+    finally:
+        _GAP_AWARE = prev
+
+
+def _rolling_apply_native(
+    arr: np.ndarray,
+    window: int,
+    min_periods: int,
+    row_fn: Callable[[np.ndarray], float],
+    batch_fn: Callable[[np.ndarray], np.ndarray],
+) -> np.ndarray:
+    """pandas ``rolling(window, min_periods).apply(raw=True)`` 的 numpy 等价实现。
+
+    语义对齐（与 pandas 实测一致：窗口原始值保留 NaN，inf 一律视为 NaN，
+    仅按窗口内非 NaN 观测计数判定是否输出）：
+    - 前缀（窗口长度不足 window）逐窗口精确计算，量级 < window；
+    - 主区间 sliding_window_view：行内全有效 → ``batch_fn`` 批量向量化（一次调用）；
+      行内含 NaN → ``row_fn`` 逐行精确计算（真实无缺口数据不触发该路径）。
+
+    ``row_fn(raw_1d) -> float`` 接收**含 NaN 的原始窗口数组**，须与原始 lambda
+    语义一致（NaN 处理由内部函数自行兜底，如 nanquantile / 显式 dropna）；
+    ``batch_fn(rows_2d) -> (m,)`` 接收 ``(m, window)`` 全有效行块，批量向量化结果。
+
+    缺口感知（plans/39 5.1）：``gap_aware_mode`` 作用域内，含缺口（NaN）列先压缩
+    为密集序列（非 NaN 观测按序提取 = 品种自身日历），在原内核上计算后散射回
+    原位置；无缺口列走既有快路径，逐位不变（零漂移）。
+    """
+    arr = np.where(np.isinf(arr), np.nan, arr)
+    n = len(arr)
+    if _GAP_AWARE and n and np.isnan(arr).any():
+        idx = np.flatnonzero(~np.isnan(arr))
+        dense = arr[idx]
+        r = _rolling_apply_native(dense, window, min_periods, row_fn, batch_fn)
+        out: np.ndarray = np.full(n, np.nan, dtype=float)
+        out[idx] = r
+        return out
+    out = np.full(n, np.nan, dtype=float)
+    if n < min_periods:
+        return out
+    for i in range(min_periods - 1, min(window - 1, n)):
+        win = arr[max(0, i - window + 1) : i + 1]
+        if np.sum(~np.isnan(win)) >= min_periods:
+            out[i] = row_fn(win)
+    if n >= window:
+        view = np.lib.stride_tricks.sliding_window_view(arr, window)
+        valid = np.sum(~np.isnan(view), axis=-1)
+        full = valid == window
+        res = np.full(view.shape[0], np.nan, dtype=float)
+        if full.any():
+            res[full] = batch_fn(view[full])
+        partial = (valid >= min_periods) & ~full
+        for idx in np.flatnonzero(partial):
+            res[idx] = row_fn(view[idx])
+        out[window - 1 :] = res
+    return out
+
+
+def _ts_product_vec(arr: np.ndarray, window: int) -> np.ndarray:
+    """滚动乘积（等价 rolling(window).apply(np.prod, raw=True)）。"""
+    n = len(arr)
+    out: np.ndarray = np.full(n, np.nan, dtype=float)
+    if n >= window:
+        view = np.lib.stride_tricks.sliding_window_view(arr, window)
+        out[window - 1 :] = np.prod(view, axis=-1)
+    return out
+
+
+def _ts_zscore_vec(arr: np.ndarray, window: int) -> np.ndarray:
+    """滚动 Z-Score（等价 rolling(window).apply，含 std 守卫与 NaN skipna 语义）。"""
+    n = len(arr)
+    out: np.ndarray = np.full(n, np.nan, dtype=float)
+    if n >= window:
+        view = np.lib.stride_tricks.sliding_window_view(arr, window)
+        cnt = np.sum(~np.isnan(view), axis=-1)
+        valid = cnt >= window  # pandas min_periods 按非 NaN 观测计数
+        res = np.zeros(view.shape[0], dtype=float)
+        rows = cnt >= 2
+        if rows.any():
+            sub = view[rows]
+            with np.errstate(invalid="ignore"):
+                mean = np.nanmean(sub, axis=-1)
+                std = np.nanstd(sub, axis=-1, ddof=1)
+            z = np.zeros_like(std)
+            np.divide(sub[:, -1] - mean, std, out=z, where=std > 0)
+            res[rows] = np.where(std > 0, z, 0.0)
+        out[window - 1 :] = np.where(valid, res, np.nan)
+    return out
+
+
+def _ts_min_max_diff_vec(arr: np.ndarray, window: int) -> np.ndarray:
+    """滚动极差（等价 rolling(window).apply(max-min)，skipna）。"""
+    n = len(arr)
+    out: np.ndarray = np.full(n, np.nan, dtype=float)
+    if n >= window:
+        view = np.lib.stride_tricks.sliding_window_view(arr, window)
+        cnt = np.sum(~np.isnan(view), axis=-1)
+        valid = cnt >= window
+        res = np.full(view.shape[0], np.nan)
+        rows = cnt >= 1
+        if rows.any():
+            sub = view[rows]
+            res[rows] = np.nanmax(sub, axis=-1) - np.nanmin(sub, axis=-1)
+        out[window - 1 :] = np.where(valid, res, np.nan)
+    return out
+
+
+def _ts_cum_max_vec(arr: np.ndarray, window: int) -> np.ndarray:
+    """滚动累计最大值（等价 rolling(window).apply(x.cummax().iloc[-1])，skipna）。"""
+    n = len(arr)
+    out: np.ndarray = np.full(n, np.nan, dtype=float)
+    if n >= window:
+        view = np.lib.stride_tricks.sliding_window_view(arr, window)
+        cnt = np.sum(~np.isnan(view), axis=-1)
+        valid = cnt >= window
+        res = np.full(view.shape[0], np.nan)
+        rows = cnt >= 1
+        if rows.any():
+            sub = view[rows]
+            res[rows] = np.nanmax(sub, axis=-1)
+        out[window - 1 :] = np.where(valid, res, np.nan)
+    return out
+
+
+def _max_drawdown_vec(arr: np.ndarray, window: int) -> np.ndarray:
+    """滚动最大回撤（等价 rolling(window).apply((x/cummax-1).min())，skipna）。"""
+    n = len(arr)
+    out: np.ndarray = np.full(n, np.nan, dtype=float)
+    if n >= window:
+        view = np.lib.stride_tricks.sliding_window_view(arr, window)
+        cnt = np.sum(~np.isnan(view), axis=-1)
+        valid = cnt >= window
+        res = np.full(view.shape[0], np.nan)
+        rows = cnt >= 1
+        if rows.any():
+            sub = view[rows]
+            cm = np.maximum.accumulate(np.where(np.isnan(sub), -np.inf, sub), axis=-1)
+            cm = np.where(np.isnan(sub), np.nan, cm)
+            with np.errstate(invalid="ignore"):
+                res[rows] = np.nanmin(sub / cm - 1.0, axis=-1)
+        out[window - 1 :] = np.where(valid, res, np.nan)
+    return out
+
+
+def _ts_argmin_vec(arr: np.ndarray, window: int) -> np.ndarray:
+    """窗口内最小值位置（等价 rolling(window, min_periods=2).apply(np.argmin)）。"""
+    n = len(arr)
+    out: np.ndarray = np.full(n, np.nan, dtype=float)
+    if n >= 2:
+        for k in range(2, min(window, n + 1)):
+            head = arr[:k]
+            if np.count_nonzero(~np.isnan(head)) >= 2:
+                out[k - 1] = np.argmin(head)
+        if n >= window:
+            view = np.lib.stride_tricks.sliding_window_view(arr, window)
+            valid = np.sum(~np.isnan(view), axis=-1) >= 2
+            res = np.argmin(view, axis=-1)
+            out[window - 1 :] = np.where(valid, res, np.nan)
+    return out
+
+
+def _ts_argmax_vec(arr: np.ndarray, window: int) -> np.ndarray:
+    """窗口内最大值位置（等价 rolling(window).apply(np.argmax, raw=True)，min_periods=window）。"""
+    n = len(arr)
+    out: np.ndarray = np.full(n, np.nan, dtype=float)
+    if n >= window:
+        view = np.lib.stride_tricks.sliding_window_view(arr, window)
+        valid = np.sum(~np.isnan(view), axis=-1) >= window
+        res = np.argmax(view, axis=-1)
+        out[window - 1 :] = np.where(valid, res, np.nan)
+    return out
+
+
+def _ts_decay_linear_vec(arr: np.ndarray, window: int) -> np.ndarray:
+    """线性衰减加权（等价 rolling(n).apply(dot(w, arange)/sum)，min_periods=n）。"""
+    n = len(arr)
+    out: np.ndarray = np.full(n, np.nan, dtype=float)
+    if n >= window:
+        view = np.lib.stride_tricks.sliding_window_view(arr, window)
+        valid = np.sum(~np.isnan(view), axis=-1) >= window
+        w = np.arange(1, window + 1, dtype=float) / (window * (window + 1) / 2.0)
+        res = np.sum(view * w[None, :], axis=-1)
+        out[window - 1 :] = np.where(valid, res, np.nan)
+    return out
+
+
+def _self_corr_vec(arr: np.ndarray, window: int) -> np.ndarray:
+    """lag-1 自相关（等价 rolling(window, min_periods=3).apply(_lag1).fillna(0)）。"""
+    n = len(arr)
+    out: np.ndarray = np.zeros(n, dtype=float)
+    if n < 3 or window < 3:
+        return out
+    for k in range(3, min(window, n + 1)):
+        x0, x1 = arr[: k - 1], arr[1:k]
+        s0, s1 = float(x0.std()), float(x1.std())
+        if s0 == 0 or s1 == 0:
+            out[k - 1] = 0.0
+        else:
+            v = float(np.corrcoef(x0, x1)[0, 1])
+            out[k - 1] = 0.0 if np.isnan(v) else v
+    if n >= window:
+        view = np.lib.stride_tricks.sliding_window_view(arr, window)
+        x0, x1 = view[:, :-1], view[:, 1:]
+        npair = x0.shape[1]
+        with np.errstate(invalid="ignore"):
+            m0 = x0.mean(axis=-1)
+            m1 = x1.mean(axis=-1)
+            s0 = x0.std(axis=-1, ddof=0)
+            s1 = x1.std(axis=-1, ddof=0)
+            cov = np.sum((x0 - m0[:, None]) * (x1 - m1[:, None]), axis=-1) / (npair - 1)
+            corr = cov / (x0.std(axis=-1, ddof=1) * x1.std(axis=-1, ddof=1))
+        corr = np.where((s0 != 0) & (s1 != 0), corr, 0.0)
+        out[window - 1 :] = np.where(np.isnan(corr), 0.0, corr)
+    return out
 
 
 @dataclass
@@ -71,7 +322,7 @@ class TimeSeriesOps:
     @staticmethod
     def ts_product(series: pd.Series, window: int = 20) -> pd.Series:
         """滚动乘积。"""
-        return series.rolling(window=window).apply(np.prod, raw=True)
+        return _rolling_series_out(_ts_product_vec, series, window)
 
 
 # ─── 价格算子 ───────────────────────────────────────────────
@@ -116,15 +367,53 @@ class RollingOps:
 
     @staticmethod
     def ts_rank(series: pd.Series, window: int = 20) -> pd.Series:
-        """滚动窗口内排名。"""
+        """滚动窗口内排名（pct）。
+
+        numba 快速路径（plans/38 4.2/4.3）：1D 全有限数组 → ``rank_1d`` 内核；
+        面板（DataFrame）全有限 → ``rank_2d`` 单次 njit（消除逐列 pandas 循环）；
+        含 NaN/inf（面板缺口列）或开关关闭 → 回退 pandas ``rolling.rank``，零漂移。
+        """
+        if isinstance(series, pd.Series):
+            arr = series.to_numpy(dtype=float)
+            if np.isfinite(arr).all():
+                from .numba_kernels import rank_1d
+
+                nb = rank_1d(arr, window, window, pct=True)
+                if nb is not None:
+                    return pd.Series(nb, index=series.index)
+        elif isinstance(series, pd.DataFrame):
+            arr = series.to_numpy(dtype=float)
+            if np.isfinite(arr).all():
+                from .numba_kernels import rank_2d
+
+                nb = rank_2d(arr, window, window, pct=True)
+                if nb is not None:
+                    return pd.DataFrame(nb, index=series.index, columns=series.columns)
         return series.rolling(window=window).rank(pct=True)
 
     @staticmethod
     def ts_zscore(series: pd.Series, window: int = 20) -> pd.Series:
-        """滚动 Z-Score。"""
-        return series.rolling(window=window).apply(
-            lambda x: (x.iloc[-1] - x.mean()) / x.std() if len(x) > 1 and x.std() > 0 else 0
-        )
+        """滚动 Z-Score。
+
+        plans/40 C 层：numba 快速路径（1D/2D 全有限数组 → ``zscore_1d/zscore_2d``）；
+        含 NaN/inf（缺口列）或开关关闭 → 回退向量化现值 ``_ts_zscore_vec``，零漂移。
+        （plans/38 §4.5 曾回退现值；plans/40 复核后按 2D 面板语义重新启用）
+        """
+        from .numba_kernels import zscore_1d, zscore_2d
+
+        if isinstance(series, pd.Series):
+            arr = series.to_numpy(dtype=float)
+            if np.isfinite(arr).all():
+                nb = zscore_1d(arr, window)
+                if nb is not None:
+                    return pd.Series(nb, index=series.index)
+        elif isinstance(series, pd.DataFrame):
+            arr = series.to_numpy(dtype=float)
+            if np.isfinite(arr).all():
+                nb = zscore_2d(arr, window)
+                if nb is not None:
+                    return pd.DataFrame(nb, index=series.index, columns=series.columns)
+        return _rolling_series_out(_ts_zscore_vec, series, window)
 
     @staticmethod
     def ts_momentum(series: pd.Series, window: int = 20) -> pd.Series:
@@ -154,12 +443,12 @@ class RollingOps:
     @staticmethod
     def ts_min_max_diff(series: pd.Series, window: int = 20) -> pd.Series:
         """滚动极差。"""
-        return series.rolling(window=window).apply(lambda x: x.max() - x.min())
+        return _rolling_series_out(_ts_min_max_diff_vec, series, window)
 
     @staticmethod
     def ts_cum_max(series: pd.Series, window: int = 20) -> pd.Series:
         """滚动累计最大值。"""
-        return series.rolling(window=window).apply(lambda x: x.cummax().iloc[-1])
+        return _rolling_series_out(_ts_cum_max_vec, series, window)
 
     @staticmethod
     def ts_regression_residual(
@@ -226,37 +515,48 @@ class RollingOps:
         return buckets.reindex(series.index)
 
     @staticmethod
-    def ts_slope(series: pd.Series, window: int = 20) -> pd.Series:
+    def ts_slope(series: pd.Series | pd.DataFrame, window: int = 20) -> pd.Series | pd.DataFrame:
         """滚动线性回归斜率（GAP-I202，v2.75.0）。
 
         在滚动窗口内对序列关于时间索引（0,1,...,window-1）做一元线性回归，
         返回回归斜率，用于刻画局部趋势强度与方向。
         窗口内存在 NaN / 样本不足 / 方差过小时返回 NaN（安全降级）。
 
+        实现走 ``_rolling_apply_native``（plans/39 5.3）：无缺口列零漂移（等价
+        既有手动循环语义：仅全有限窗输出、min_periods=window）；缺口列在
+        ``gap_aware_mode`` 作用域内压缩-散射，与逐品种语义逐位一致（面板化）。
+
         Args:
-            series: 输入序列
+            series: 输入序列（Series），或面板路径 DataFrame/_GapAwareFrame
             window: 滚动窗口长度
 
         Returns:
-            斜率序列（NaN 安全）。
+            斜率序列（NaN 安全）；面板路径返回等宽 DataFrame。
         """
+        # 面板路径（DataFrame / _GapAwareFrame）：逐列调用（_rolling_apply_native 缺口感知）
+        if hasattr(series, "columns") and len(series.columns) > 0:
+            return pd.DataFrame({c: RollingOps.ts_slope(series[c], window) for c in series.columns})
+
         vals = series.to_numpy(dtype=float)
-        n = len(vals)
-        result = pd.Series(np.nan, index=series.index, dtype=float)
-        if n < window:
-            return result
         t: np.ndarray = np.arange(window, dtype=float)
         t_centered = t - t.mean()
         denom = float(t_centered @ t_centered)
-        if denom < 1e-12:
-            return result
-        for i in range(window - 1, n):
-            w = vals[i - window + 1 : i + 1]
+
+        def _row(w: np.ndarray) -> float:
             if not np.isfinite(w).all():
-                continue
+                return np.nan
             y_centered = w - w.mean()
-            result.iloc[i] = float(t_centered @ y_centered) / denom
-        return result
+            return float(t_centered @ y_centered) / denom
+
+        def _batch(rows: np.ndarray) -> np.ndarray:
+            y_centered = rows - rows.mean(axis=-1, keepdims=True)
+            return (t_centered @ y_centered.T) / denom
+
+        if denom < 1e-12:
+            out = np.full(len(vals), np.nan, dtype=float)
+        else:
+            out = _rolling_apply_native(vals, window, window, _row, _batch)
+        return pd.Series(out, index=series.index, dtype=float)
 
     @staticmethod
     def ts_quantile(series: pd.Series, window: int = 20, q: float = 0.5) -> pd.Series:
@@ -333,7 +633,7 @@ class TechnicalOps:
     @staticmethod
     def max_drawdown(series: pd.Series, window: int = 252) -> pd.Series:
         """滚动最大回撤。"""
-        return series.rolling(window=window).apply(lambda x: (x / x.cummax() - 1).min())
+        return _rolling_series_out(_max_drawdown_vec, series, window)
 
 
 # ─── 截面算子 ───────────────────────────────────────────────
@@ -1188,7 +1488,7 @@ class C8Ops:
     @staticmethod
     def ts_argmin(series: pd.Series, window: int = 20) -> pd.Series:
         """窗口内最小值位置（滞后形态，0=最新）。"""
-        return series.rolling(window, min_periods=2).apply(np.argmin, raw=True)
+        return _rolling_series_out(_ts_argmin_vec, series, window)
 
     @staticmethod
     def ts_ema(series: pd.Series, span: int = 20) -> pd.Series:
@@ -1205,26 +1505,21 @@ class C8Ops:
     def ts_range(series: pd.Series, window: int = 20) -> pd.Series:
         """滚动振幅 (max−min)/mean（相对波动，无量纲）。"""
         mean = series.rolling(window, min_periods=2).mean().replace(0.0, np.nan)
-        rng = (
-            series.rolling(window, min_periods=2).max()
-            - series.rolling(window, min_periods=2).min()
-        )
+        rng = series.rolling(window, min_periods=2).max() - series.rolling(window, min_periods=2).min()
         return (rng / mean).fillna(0.0)
 
     @staticmethod
     def ts_iqr(series: pd.Series, window: int = 20) -> pd.Series:
         """滚动四分位距（q75−q25，稳健离散度）。"""
-        return (
-            series.rolling(window, min_periods=2).quantile(0.75)
-            - series.rolling(window, min_periods=2).quantile(0.25)
+        return series.rolling(window, min_periods=2).quantile(0.75) - series.rolling(window, min_periods=2).quantile(
+            0.25
         )
 
     @staticmethod
     def ts_quantile_range(series: pd.Series, window: int = 20, q_hi: float = 0.9, q_lo: float = 0.1) -> pd.Series:
         """滚动分位差（q_hi − q_lo，尾部宽度）。"""
-        return (
-            series.rolling(window, min_periods=2).quantile(q_hi)
-            - series.rolling(window, min_periods=2).quantile(q_lo)
+        return series.rolling(window, min_periods=2).quantile(q_hi) - series.rolling(window, min_periods=2).quantile(
+            q_lo
         )
 
     @staticmethod
@@ -1536,17 +1831,7 @@ class C9Ops:
     @staticmethod
     def self_corr(series: pd.Series, window: int = 20) -> pd.Series:
         """lag-1 自相关（正→趋势持续，负→反转倾向；样本不足降级 0）。"""
-
-        def _lag1(arr: np.ndarray) -> float:
-            if len(arr) < 3:
-                return 0.0
-            x0, x1 = arr[:-1], arr[1:]
-            s0, s1 = float(x0.std()), float(x1.std())
-            if s0 == 0 or s1 == 0:
-                return 0.0
-            return float(np.corrcoef(x0, x1)[0, 1])
-
-        return series.rolling(window, min_periods=3).apply(_lag1, raw=True).fillna(0.0)
+        return _rolling_series_out(_self_corr_vec, series, window)
 
     @staticmethod
     def sign_entropy(series: pd.Series, window: int = 20) -> pd.Series:

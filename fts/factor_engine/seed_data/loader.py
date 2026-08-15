@@ -60,18 +60,54 @@ _ALPHA_OPS_SOURCE = """
         return _to_array(_to_series(x).rolling(d, min_periods=1).cov(_to_series(y)))
 
     def ts_argmax(x, d):
-        def _f(v): return np.argmax(v) if len(v) > 0 else 0
-        return _to_array(_to_series(x).rolling(d, min_periods=1).apply(_f, raw=True))
+        arr = _to_array(x)
+        n = len(arr)
+        out = np.full(n, np.nan, dtype=float)
+        if n > 0:
+            m = min(d, n)
+            for k in range(1, m):
+                if np.count_nonzero(~np.isnan(arr[:k])) >= 1:
+                    out[k - 1] = np.argmax(arr[:k])
+            view = np.lib.stride_tricks.sliding_window_view(arr, m)
+            valid = np.sum(~np.isnan(view), axis=-1) >= 1
+            res = np.argmax(view, axis=-1)
+            out[m - 1:] = np.where(valid, res, np.nan)
+        return out
 
     def ts_argmin(x, d):
-        def _f(v): return np.argmin(v) if len(v) > 0 else 0
-        return _to_array(_to_series(x).rolling(d, min_periods=1).apply(_f, raw=True))
+        arr = _to_array(x)
+        n = len(arr)
+        out = np.full(n, np.nan, dtype=float)
+        if n > 0:
+            m = min(d, n)
+            for k in range(1, m):
+                if np.count_nonzero(~np.isnan(arr[:k])) >= 1:
+                    out[k - 1] = np.argmin(arr[:k])
+            view = np.lib.stride_tricks.sliding_window_view(arr, m)
+            valid = np.sum(~np.isnan(view), axis=-1) >= 1
+            res = np.argmin(view, axis=-1)
+            out[m - 1:] = np.where(valid, res, np.nan)
+        return out
 
     def ts_rank(x, d):
-        def _f(v):
-            if len(v) <= 1: return 0.5
-            return np.argsort(np.argsort(v))[-1] / (len(v) - 1)
-        return _to_array(_to_series(x).rolling(d, min_periods=1).apply(_f, raw=True))
+        arr = _to_array(x)
+        n = len(arr)
+        out = np.full(n, np.nan, dtype=float)
+        if n > 0:
+            m = min(d, n)
+            if m == 1:
+                out[~np.isnan(arr)] = 0.5
+            else:
+                for k in range(1, m):
+                    head = arr[:k]
+                    if np.count_nonzero(~np.isnan(head)) >= 1:
+                        out[k - 1] = 0.5 if k <= 1 else np.argsort(np.argsort(head))[-1] / (k - 1)
+                view = np.lib.stride_tricks.sliding_window_view(arr, m)
+                valid = np.sum(~np.isnan(view), axis=-1) >= 1
+                rk = np.full(view.shape[0], np.nan, dtype=float)
+                rk[valid] = np.argsort(np.argsort(view[valid], axis=-1), axis=-1)[:, -1] / (m - 1)
+                out[m - 1:] = rk
+        return out
 
     def ts_min(x, d):
         return _to_array(_to_series(x).rolling(d, min_periods=1).min())
@@ -80,18 +116,29 @@ _ALPHA_OPS_SOURCE = """
         return _to_array(_to_series(x).rolling(d, min_periods=1).max())
 
     def ts_product(x, d):
-        return _to_array(_to_series(x).rolling(d, min_periods=1).apply(np.prod, raw=True))
+        arr = _to_array(x)
+        n = len(arr)
+        out = np.full(n, np.nan, dtype=float)
+        if n > 0:
+            m = min(d, n)
+            np.cumprod(arr, out=out)
+            view = np.lib.stride_tricks.sliding_window_view(arr, m)
+            out[m - 1:] = np.prod(view, axis=-1)
+        return out
 
     def signed_power(x, a):
         return np.sign(x) * np.abs(x) ** a
 
     def decay_linear(x, d):
-        w = np.arange(1, d + 1, dtype=float)
-        w = w / w.sum()
-        def _f(v):
-            if len(v) < d: return np.nan
-            return np.sum(v[-d:] * w)
-        return _to_array(_to_series(x).rolling(d, min_periods=d).apply(_f, raw=True))
+        arr = _to_array(x)
+        n = len(arr)
+        out = np.full(n, np.nan, dtype=float)
+        if n >= d:
+            w = np.arange(1, d + 1, dtype=float)
+            w = w / w.sum()
+            view = np.lib.stride_tricks.sliding_window_view(arr, d)
+            out[d - 1:] = np.sum(view * w[None, :], axis=-1)
+        return out
 
     def delta(x, d):
         return x - delay(x, d)
@@ -112,16 +159,34 @@ _ALPHA_OPS_SOURCE = """
         return -x
 
     def highday(x, d):
-        def _f(v):
-            if len(v) <= 1: return 0.0
-            return float(len(v) - 1 - np.argmax(v))
-        return _to_array(_to_series(x).rolling(d, min_periods=1).apply(_f, raw=True))
+        arr = _to_array(x)
+        n = len(arr)
+        out = np.full(n, np.nan, dtype=float)
+        if n > 0:
+            m = min(d, n)
+            for k in range(1, m):
+                if np.count_nonzero(~np.isnan(arr[:k])) >= 1:
+                    out[k - 1] = float(k - 1 - np.argmax(arr[:k]))
+            view = np.lib.stride_tricks.sliding_window_view(arr, m)
+            valid = np.sum(~np.isnan(view), axis=-1) >= 1
+            res = (m - 1) - np.argmax(view, axis=-1)
+            out[m - 1:] = np.where(valid, res, np.nan)
+        return out
 
     def lowday(x, d):
-        def _f(v):
-            if len(v) <= 1: return 0.0
-            return float(len(v) - 1 - np.argmin(v))
-        return _to_array(_to_series(x).rolling(d, min_periods=1).apply(_f, raw=True))
+        arr = _to_array(x)
+        n = len(arr)
+        out = np.full(n, np.nan, dtype=float)
+        if n > 0:
+            m = min(d, n)
+            for k in range(1, m):
+                if np.count_nonzero(~np.isnan(arr[:k])) >= 1:
+                    out[k - 1] = float(k - 1 - np.argmin(arr[:k]))
+            view = np.lib.stride_tricks.sliding_window_view(arr, m)
+            valid = np.sum(~np.isnan(view), axis=-1) >= 1
+            res = (m - 1) - np.argmin(view, axis=-1)
+            out[m - 1:] = np.where(valid, res, np.nan)
+        return out
 """
 
 _FACTOR_CODE_TEMPLATE = '''\
