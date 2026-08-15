@@ -282,6 +282,99 @@ class TestFactorClusteringEngineRun:
         assert len(result) >= 1
 
 
+class TestSelectRepresentativeScoreMap:
+    """plans/36 改进项 2/4：综合评分选代表 + 簇内 top-N（互相关约束）。"""
+
+    def test_score_map_priority_over_sharpe(self) -> None:
+        """提供 score_map 时按综合评分选代表（高分入选，即使 Sharpe 更低）。"""
+        engine = FactorClusteringEngine()
+        factors = [
+            {"factor_id": "a", "name": "a", "code": "...", "sharpe": 3.0},
+            {"factor_id": "b", "name": "b", "code": "...", "sharpe": 2.0},
+        ]
+        clusters = [[0, 1]]
+        fids = ["a", "b"]
+        # 评分：a 低分、b 高分（尽管 a 的 sharpe 更高）
+        selected = engine.select_representative_factors(
+            factors, clusters, fids, score_map={"a": 0.2, "b": 0.9}
+        )
+        assert len(selected) == 1
+        assert selected[0]["factor_id"] == "b"
+
+    def test_score_map_none_falls_back_to_sharpe(self) -> None:
+        """score_map=None 时回退 abs(sharpe) 排序（向后兼容）。"""
+        engine = FactorClusteringEngine()
+        factors = [
+            {"factor_id": "a", "name": "a", "code": "...", "sharpe": 1.0},
+            {"factor_id": "b", "name": "b", "code": "...", "sharpe": 2.5},
+        ]
+        clusters = [[0, 1]]
+        fids = ["a", "b"]
+        selected = engine.select_representative_factors(factors, clusters, fids)
+        assert selected[0]["factor_id"] == "b"
+
+    def test_cluster_top_n_keeps_two_low_corr(self) -> None:
+        """cluster_top_n=2 且簇内因子互相关<0.5 时保留 2 个代表。"""
+        engine = FactorClusteringEngine()
+        factors = [
+            {"factor_id": "a", "name": "a", "code": "...", "sharpe": 3.0},
+            {"factor_id": "b", "name": "b", "code": "...", "sharpe": 2.5},
+            {"factor_id": "c", "name": "c", "code": "...", "sharpe": 2.0},
+        ]
+        clusters = [[0, 1, 2]]
+        fids = ["a", "b", "c"]
+        # 相关矩阵：a↔b、a↔c、b↔c 均低相关（<0.5）
+        corr = np.array(
+            [
+                [1.0, 0.1, 0.2],
+                [0.1, 1.0, 0.3],
+                [0.2, 0.3, 1.0],
+            ]
+        )
+        selected = engine.select_representative_factors(
+            factors, clusters, fids, score_map={"a": 0.9, "b": 0.7, "c": 0.5},
+            cluster_top_n=2, corr_matrix=corr,
+        )
+        assert len(selected) == 2
+        assert {s["factor_id"] for s in selected} == {"a", "b"}
+
+    def test_cluster_top_n_corr_constraint_blocks(self) -> None:
+        """cluster_top_n=2 但次优代表与已选代表相关≥0.5 → 仅保留 1 个。"""
+        engine = FactorClusteringEngine()
+        factors = [
+            {"factor_id": "a", "name": "a", "code": "...", "sharpe": 3.0},
+            {"factor_id": "b", "name": "b", "code": "...", "sharpe": 2.5},
+            {"factor_id": "c", "name": "c", "code": "...", "sharpe": 2.0},
+        ]
+        clusters = [[0, 1, 2]]
+        fids = ["a", "b", "c"]
+        # a↔b 高相关 0.9（被拒），a↔c 低相关 0.1（可保留）→ 保留 a、c
+        corr = np.array(
+            [
+                [1.0, 0.9, 0.1],
+                [0.9, 1.0, 0.8],
+                [0.1, 0.8, 1.0],
+            ]
+        )
+        selected = engine.select_representative_factors(
+            factors, clusters, fids, score_map={"a": 0.9, "b": 0.7, "c": 0.5},
+            cluster_top_n=2, corr_matrix=corr,
+        )
+        assert len(selected) == 2
+        assert {s["factor_id"] for s in selected} == {"a", "c"}
+
+    def test_run_passes_score_map_and_top_n(self) -> None:
+        """run() 支持 score_map / cluster_top_n 透传（plans/36 接线）。"""
+        engine = FactorClusteringEngine()
+        factors = _make_factors(8)
+        panel = _make_panel_data()
+        score_map = {f["factor_id"]: 1.0 / (i + 1) for i, f in enumerate(factors)}
+        result = engine.run(factors, panel_data=panel, score_map=score_map, cluster_top_n=2)
+        assert len(result) <= len(factors)
+        for f in result:
+            assert "factor_id" in f
+
+
 # ═══════════════════════════════════════════════════════════
 # P2: PCASignalCompressor
 # ═══════════════════════════════════════════════════════════

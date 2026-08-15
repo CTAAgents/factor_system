@@ -408,12 +408,13 @@ def _panel_factor_ic(
     common_dates: Sequence[Any],
     fdata: dict[str, Any],
     horizon: int = 5,
+    signal_cache: Any = None,
 ) -> float:
     """单因子在替代面板上的平均截面 IC（执行因子代码 → 逐日 Spearman）。"""
     from .factor_program import FactorExecutor
 
     try:
-        executor = FactorExecutor(fdata)
+        executor = FactorExecutor(fdata, signal_cache=signal_cache)
     except Exception:  # noqa: BLE001
         return float("nan")
 
@@ -432,15 +433,19 @@ def _panel_factor_ic(
     if len(signals) < 10:
         return float("nan")
 
+    # 预计算每品种在 common_dates 上的位置（plans/40 A 层，替代 O(n²) list.index）
+    locs: dict[str, np.ndarray] = {}
+    for sym, df in panel.items():
+        locs[sym] = df.index.get_indexer(common_dates)
+
     ics: list[float] = []
-    for d in common_dates:
+    for t, d in enumerate(common_dates):
         x: list[float] = []
         y: list[float] = []
         for sym, sig in signals.items():
-            df = panel[sym]
-            if d not in df.index:
+            i = int(locs[sym][t])
+            if i < 0:
                 continue
-            i = list(df.index).index(d)
             cl = closes[sym]
             if i + horizon >= len(cl):
                 continue
@@ -466,6 +471,7 @@ def cross_market_ic_check(
     forward_returns: np.ndarray,
     dates: Sequence[Any],
     panel_market: str,
+    signal_cache: Any = None,
 ) -> dict[str, Any]:
     """跨市场迁移 IC 对比验证（③ 的对比部分）。
 

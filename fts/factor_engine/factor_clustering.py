@@ -78,6 +78,7 @@ class FactorClusteringEngine:
         factors: list[dict[str, Any]],
         panel_data: dict[str, Any],
         min_valid_points: int = 10,
+        signal_cache: Any = None,
     ) -> tuple[np.ndarray, list[str]]:
         """计算因子对的信号相关系数矩阵。
 
@@ -85,6 +86,7 @@ class FactorClusteringEngine:
             factors: 因子列表（需含 factor_id, code, params）
             panel_data: {symbol: DataFrame} 市场数据面板
             min_valid_points: 最少有效数据点
+            signal_cache: 可选信号缓存（plans/40 A 层），避免与全流程重复重算
 
         Returns:
             (corr_matrix, factor_ids): 相关系数矩阵和因子 ID 列表
@@ -108,7 +110,7 @@ class FactorClusteringEngine:
                 errors.append(f"{fid}: 代码为空或类型异常")
                 continue
             try:
-                executor = FactorExecutor(f)
+                executor = FactorExecutor(f, signal_cache=signal_cache)
                 sig = executor.execute(ref_df, f.get("params", {}))
                 if sig is not None and len(sig) > 0 and not np.all(np.isnan(sig)):
                     signals[fid] = sig
@@ -200,22 +202,33 @@ class FactorClusteringEngine:
         factors: list[dict[str, Any]],
         clusters: list[list[int]],
         factor_ids: list[str],
+        score_map: dict[str, float] | None = None,
+        cluster_top_n: int = 1,
+        corr_matrix: np.ndarray | None = None,
     ) -> list[dict[str, Any]]:
-        """从每个簇中选择代表因子（Sharpe 最高）。
+        """从每个簇中选择代表因子。
 
         Args:
             factors: 原始因子列表
             clusters: 簇索引列表
             factor_ids: 因子 ID 列表（与 clusters 中的索引对应）
+            score_map: 因子综合评分 {factor_id: score}（plans/36 改进项 2，
+                替代裸 Sharpe 排序；None=回退 abs(sharpe)）
+            cluster_top_n: 簇内保留代表数上限（plans/36 改进项 4，默认 1=每簇仅取最优）
+            corr_matrix: 因子信号相关矩阵（compute_signal_correlations 输出，
+                与 factor_ids 对齐）；cluster_top_n>1 时用于簇内代表互相关约束
+                （与已选代表 |corr| < 0.5 才允许多保留，防高相关重复暴露）
 
         Returns:
-            代表因子列表（每个簇选一个）
+            代表因子列表
         """
         # 构建 fid → factor 映射
         fid_to_factor: dict[str, dict[str, Any]] = {}
         for f in factors:
             fid = f.get("factor_id", f.get("name", "?"))
             fid_to_factor[fid] = f
+        # 预建 fid → 相关矩阵索引
+        fid_to_pos: dict[str, int] = {fid: i for i, fid in enumerate(factor_ids)}
 
         selected: list[dict[str, Any]] = []
         cluster_info: list[str] = []
@@ -230,7 +243,7 @@ class FactorClusteringEngine:
                     cluster_info.append(f"  簇{cluster_idx}: [{factor.get('name', fid)}] (单因子簇)")
                 continue
 
-            # 多因子簇：按 Sharpe 排序，选最高者
+            # 多因子簇：按综合评分（回退 Sharpe）降序排列
             cluster_factors = []
             for idx in cluster:
                 fid = factor_ids[idx]
@@ -241,17 +254,39 @@ class FactorClusteringEngine:
             if not cluster_factors:
                 continue
 
-            # 按 Sharpe 降序排列
-            cluster_factors.sort(key=lambda x: abs(x.get("sharpe", 0.0)), reverse=True)
-            best = cluster_factors[0]
-            selected.append(best)
+            def _sort_key(f: dict[str, Any]) -> float:
+                if score_map is not None:
+                    return float(score_map.get(f.get("factor_id", f.get("name", "?")), 0.0))
+                return abs(f.get("sharpe", 0.0))
+
+            cluster_factors.sort(key=_sort_key, reverse=True)
+
+            # 簇内保留 cluster_top_n 个代表；top_n>1 时要求与已选代表 |corr|<0.5
+            kept: list[dict[str, Any]] = []
+            for cand in cluster_factors:
+                if len(kept) >= cluster_top_n:
+                    break
+                if kept and corr_matrix is not None:
+                    c_pos = fid_to_pos.get(cand.get("factor_id", ""))
+                    if c_pos is None:
+                        continue
+                    if any(
+                        abs(corr_matrix[fid_to_pos[s.get("factor_id", "")]][c_pos]) >= 0.5
+                        for s in kept
+                        if s.get("factor_id", "") in fid_to_pos
+                    ):
+                        continue
+                kept.append(cand)
+            selected.extend(kept)
 
             # 日志
             names = [f.get("name", f.get("factor_id", "?")) for f in cluster_factors]
             sharpes = [f.get("sharpe", 0.0) for f in cluster_factors]
+            sort_label = "score" if score_map is not None else "sharpe"
+            kept_names = ", ".join(k.get("name", "?") for k in kept)
             cluster_info.append(
                 f"  簇{cluster_idx}: [{', '.join(f'{n}(s={s:.2f})' for n, s in zip(names, sharpes))}]"
-                f" → {best.get('name', '?')} (Sharpe={best.get('sharpe', 0.0):.2f})"
+                f" → {kept_names} ({sort_label} 排序)"
             )
 
         # 日志
@@ -271,12 +306,19 @@ class FactorClusteringEngine:
         self,
         factors: list[dict[str, Any]],
         panel_data: dict[str, Any] | None = None,
+        score_map: dict[str, float] | None = None,
+        cluster_top_n: int = 1,
+        signal_cache: Any = None,
     ) -> list[dict[str, Any]]:
         """执行完整的 P1 因子聚类流程。
 
         Args:
             factors: 待聚类的因子列表
             panel_data: 面板数据（用于计算信号相关性）。为 None 时跳过聚类，直接返回。
+            score_map: 因子综合评分 {factor_id: score}（plans/36 改进项 2；
+                None=回退 abs(sharpe) 选代表）
+            cluster_top_n: 簇内保留代表数上限（plans/36 改进项 4，默认 1）
+            signal_cache: 可选信号缓存（plans/40 A 层），避免与全流程重复重算
 
         Returns:
             聚类后的代表因子列表
@@ -301,8 +343,15 @@ class FactorClusteringEngine:
         # Step 2: 层次聚类
         clusters = self.cluster_by_correlation(corr_matrix, fids)
 
-        # Step 3: 选择代表因子
-        selected = self.select_representative_factors(factors, clusters, fids)
+        # Step 3: 选择代表因子（综合评分 + 簇内 top-N）
+        selected = self.select_representative_factors(
+            factors,
+            clusters,
+            fids,
+            score_map=score_map,
+            cluster_top_n=cluster_top_n,
+            corr_matrix=corr_matrix,
+        )
 
         return selected
 
@@ -349,6 +398,7 @@ class PCASignalCompressor:
         factors: list[dict[str, Any]],
         panel_data: dict[str, Any],
         min_valid_points: int = 10,
+        signal_cache: Any = None,
     ) -> tuple[np.ndarray, list[str], np.ndarray]:
         """计算因子信号矩阵。
 
@@ -356,6 +406,7 @@ class PCASignalCompressor:
             factors: 因子列表
             panel_data: {symbol: DataFrame} 市场数据
             min_valid_points: 最少有效数据点
+            signal_cache: 可选信号缓存（plans/40 A 层），避免与全流程重复重算
 
         Returns:
             (signal_matrix, factor_ids, dates):
@@ -379,7 +430,7 @@ class PCASignalCompressor:
             if not code:
                 continue
             try:
-                executor = FactorExecutor(f)
+                executor = FactorExecutor(f, signal_cache=signal_cache)
                 sig = executor.execute(ref_df, f.get("params", {}))
                 if sig is not None and len(sig) > 0 and not np.all(np.isnan(sig)):
                     signals[fid] = sig
@@ -412,12 +463,14 @@ class PCASignalCompressor:
         self,
         factors: list[dict[str, Any]],
         panel_data: dict[str, Any] | None = None,
+        signal_cache: Any = None,
     ) -> dict[str, Any]:
         """执行完整的 P2 PCA 降维流程。
 
         Args:
             factors: 因子列表
             panel_data: 面板数据（用于计算信号矩阵）。为 None 时跳过 PCA。
+            signal_cache: 可选信号缓存（plans/40 A 层），避免与全流程重复重算
 
         Returns:
             dict:

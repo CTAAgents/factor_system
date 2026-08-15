@@ -156,6 +156,10 @@ from fts.factor_engine.portfolio_loop import (
     PortfolioRunResult,
     PortfolioLoop,
     _verifier_view,
+    _factor_composite_score,
+    _dedup_factors_by_chain,
+    _load_factor_symbol_ic,
+    ENERGY_CHAIN_SUB_SYMBOLS,
 )
 
 # ── 产品代码 bug 补偿 ────────────────────────────────────
@@ -406,6 +410,221 @@ class TestL3Verifier:
         passed, reasons = v.check(_verifier_view(combo))
         assert passed is False
         assert any("夏普" in r for r in reasons)
+
+
+# ════════════════════════════════════════════════════════════
+# 1b. plans/36（v2.104.0+43）：因子综合评分 + quality_weight + 滚动 OOS
+# ════════════════════════════════════════════════════════════
+
+
+class TestFactorCompositeScore:
+    """plans/36 改进项 2：因子综合评分（替代裸 Sharpe 排序选入）。"""
+
+    @staticmethod
+    def _factors() -> list[dict]:
+        return [
+            {"factor_id": "f1", "name": "f1", "sharpe": 2.5, "icir": 0.8, "ic": 0.10, "turnover": 4.0},
+            {"factor_id": "f2", "name": "f2", "sharpe": 1.0, "icir": 0.2, "ic": 0.03, "turnover": 17.0},
+            {"factor_id": "f3", "name": "f3", "sharpe": 1.5, "icir": 0.5, "ic": 0.06, "turnover": 9.0},
+        ]
+
+    def test_monotonic_quality(self):
+        """高质量因子（高 sharpe/icir/ic、低换手）综合得分最高。"""
+        scores = _factor_composite_score(self._factors())
+        assert scores["f1"] > scores["f3"] > scores["f2"]
+
+    def test_sharpe_capped_at_two(self):
+        """sharpe_cap 维度按 SHARPE_CAP=2.0 截断：sharpe 2.5 与 2.0 同分。"""
+        factors = [
+            {"factor_id": "a", "name": "a", "sharpe": 2.5, "icir": 0.5, "ic": 0.05, "turnover": 5.0},
+            {"factor_id": "b", "name": "b", "sharpe": 2.0, "icir": 0.5, "ic": 0.05, "turnover": 5.0},
+        ]
+        scores = _factor_composite_score(factors)
+        assert scores["a"] == pytest.approx(scores["b"], abs=1e-9)
+
+    def test_missing_icir_dimension_downgrade(self):
+        """全部因子缺 icir 时该维度剔除并重归一化权重（不惩罚、不报错）。"""
+        factors = [
+            {"factor_id": f"f{i}", "name": f"f{i}", "sharpe": 1.0 + i, "ic": 0.05} for i in range(3)
+        ]
+        scores = _factor_composite_score(factors)
+        assert len(scores) == 3
+        assert all(0.0 <= v <= 1.0 for v in scores.values())
+
+    def test_custom_weights(self):
+        """icir 权重=0 时，仅 icir 不同的因子同分（权重可配置）。"""
+        factors = [
+            {"factor_id": "a", "name": "a", "sharpe": 2.0, "icir": 0.9, "ic": 0.05, "turnover": 5.0},
+            {"factor_id": "b", "name": "b", "sharpe": 2.0, "icir": 0.1, "ic": 0.05, "turnover": 5.0},
+        ]
+        scores = _factor_composite_score(
+            factors, {"sharpe_cap": 0.3, "icir": 0.0, "ic": 0.3, "turnover_inv": 0.4}
+        )
+        assert scores["a"] == pytest.approx(scores["b"], abs=1e-9)
+
+    def test_empty_input(self):
+        """空输入返回空 dict。"""
+        assert _factor_composite_score([]) == {}
+
+
+class TestChainDedup:
+    """子链维度去冗余（GAP-121 扩展）：单子链因子数上限，防产业链暴露集中。"""
+
+    @staticmethod
+    def _sic(symbols: list[str], base: float) -> dict:
+        """构造 symbol_ic：目标品种 base，其余品种 0。"""
+        return {s: base if s in symbols else 0.0 for s in ["SC0", "FU0", "BU0", "PX0", "TA0", "PF0", "L0", "PP0", "PG0", "MA0", "UR0", "SA0"]}
+
+    def test_chain_trims_excess(self, tmp_path):
+        """同一子链 3 个因子 → 保留综合评分前 2，移除评分最低者。"""
+        factors = [
+            {"factor_id": "a", "name": "fa", "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.5)},
+            {"factor_id": "b", "name": "fb", "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.4)},
+            {"factor_id": "c", "name": "fc", "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.3)},
+        ]
+        score_map = {"a": 0.9, "b": 0.6, "c": 0.3}
+        retained, stats = _dedup_factors_by_chain(factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, score_map)
+        kept = {f["factor_id"] for f in retained}
+        assert kept == {"a", "b"}
+        assert stats["removed"] == ["fc"]
+        assert stats["chains"]["能源"] == 2
+
+    def test_below_limit_all_kept(self, tmp_path):
+        """每子链 ≤2 因子 → 全部保留。"""
+        factors = [
+            {"factor_id": "a", "name": "fa", "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.5)},
+            {"factor_id": "b", "name": "fb", "symbol_ic": self._sic(["PX0", "TA0", "PF0"], 0.5)},
+            {"factor_id": "c", "name": "fc", "symbol_ic": self._sic(["L0", "PP0", "PG0"], 0.5)},
+        ]
+        retained, stats = _dedup_factors_by_chain(factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {"a": 1, "b": 1, "c": 1})
+        assert len(retained) == 3
+        assert stats["removed"] == []
+
+    def test_missing_symbol_ic_kept(self, tmp_path):
+        """symbol_ic 缺失因子归 unknown 组直接保留（不参与去冗余）。"""
+        factors = [
+            {"factor_id": "a", "name": "fa", "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.5)},
+            {"factor_id": "x", "name": "fx", "symbol_ic": None},
+            {"factor_id": "y", "name": "fy"},  # 无 symbol_ic 字段 → JSON 回退读取也失败
+        ]
+        retained, stats = _dedup_factors_by_chain(factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {"a": 1, "x": 1, "y": 1})
+        kept = {f["factor_id"] for f in retained}
+        assert kept == {"a", "x", "y"}
+        assert stats["removed"] == []
+
+    def test_max_per_chain_one(self, tmp_path):
+        """max_per_chain=1：每子链仅保留综合评分最高因子。"""
+        factors = [
+            {"factor_id": "a", "name": "fa", "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.5)},
+            {"factor_id": "b", "name": "fb", "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.4)},
+        ]
+        retained, stats = _dedup_factors_by_chain(factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 1, {"a": 0.9, "b": 0.6})
+        assert {f["factor_id"] for f in retained} == {"a"}
+        assert stats["removed"] == ["fb"]
+
+    def test_empty_input(self, tmp_path):
+        """空输入 → 空输出。"""
+        retained, stats = _dedup_factors_by_chain([], tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {})
+        assert retained == []
+        assert stats["removed"] == []
+
+    def test_load_symbol_ic_from_json(self, tmp_path):
+        """symbol_ic 从 elite JSON 兜底读取（DuckDB 加载路径不含该字段）。"""
+        factor = {"factor_id": "f1", "name": "f1"}
+        (tmp_path / "f1.json").write_text(
+            json.dumps(
+                {"evaluation": {"level_1_backtest": {"symbol_ic": {"SC0": 0.4, "TA0": 0.2}}}},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        sic = _load_factor_symbol_ic(factor, tmp_path)
+        assert sic == {"SC0": 0.4, "TA0": 0.2}
+        # 无 JSON 文件 → None
+        assert _load_factor_symbol_ic({"factor_id": "nope"}, tmp_path) is None
+
+
+class TestQualityWeightMode:
+    """plans/36 改进项 3：quality_weight 定权（∝综合评分，0.5×等权下限）。"""
+
+    @staticmethod
+    def _factors() -> list[dict]:
+        return [
+            {"factor_id": "f1", "name": "f1", "sharpe": 2.5, "icir": 0.8, "ic": 0.10, "turnover": 4.0},
+            {"factor_id": "f2", "name": "f2", "sharpe": 1.0, "icir": 0.2, "ic": 0.03, "turnover": 17.0},
+            {"factor_id": "f3", "name": "f3", "sharpe": 1.5, "icir": 0.5, "ic": 0.06, "turnover": 9.0},
+        ]
+
+    def test_weights_sum_to_one_and_quality_ordered(self):
+        """权重和=1，且综合评分最高者权重最大。"""
+        signals, _, _ = synthesize_signals(self._factors(), "quality_weight")
+        ws = {s["factor_id"]: s["weight"] for s in signals}
+        assert sum(ws.values()) == pytest.approx(1.0, abs=1e-6)
+        assert ws["f1"] > ws["f3"] > ws["f2"]
+
+    def test_floor_prevents_zero_weight(self):
+        """0.5×等权下限：低分因子权重恒 >0，不因评分低被清零。"""
+        factors = [
+            {"factor_id": "f1", "name": "f1", "sharpe": 2.0, "icir": 0.6, "ic": 0.05, "turnover": 5.0},
+            {"factor_id": "f2", "name": "f2", "sharpe": 0.5, "icir": 0.1, "ic": 0.01, "turnover": 15.0},
+        ]
+        signals, _, _ = synthesize_signals(factors, "quality_weight")
+        ws = {s["factor_id"]: s["weight"] for s in signals}
+        assert all(w > 0 for w in ws.values())
+        assert ws["f1"] > ws["f2"]
+
+    def test_custom_score_weights(self):
+        """score_weights 透传综合评分权重。"""
+        signals, _, _ = synthesize_signals(self._factors(), "quality_weight", score_weights={"icir": 1.0})
+        ws = {s["factor_id"]: s["weight"] for s in signals}
+        assert sum(ws.values()) == pytest.approx(1.0, abs=1e-6)
+
+
+class TestRollingOos:
+    """plans/36 改进项 4：组合层滚动样本外（w×R 滚动窗口夏普 + 衰减）。"""
+
+    def _returns(self, n: int = 240) -> pd.DataFrame:
+        rng = np.random.default_rng(42)
+        dates = pd.date_range("2020-01-01", periods=n, freq="B")
+        return pd.DataFrame(
+            {
+                "fct_001": rng.normal(0.0005, 0.01, n),
+                "fct_002": rng.normal(0.0003, 0.01, n),
+                "fct_003": rng.normal(0.0002, 0.01, n),
+            },
+            index=dates,
+        )
+
+    def _signals(self) -> list[PortfolioSignal]:
+        return [
+            PortfolioSignal(
+                factor_id="fct_001", name="m", weight=1.0 / 3, sharpe=2.0, ic=0.05,
+                turnover=5.0, decay_6m=0.1, orthogonalized=True, retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="fct_002", name="r", weight=1.0 / 3, sharpe=1.8, ic=0.04,
+                turnover=5.0, decay_6m=0.1, orthogonalized=True, retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="fct_003", name="v", weight=1.0 / 3, sharpe=1.5, ic=0.03,
+                turnover=5.0, decay_6m=0.1, orthogonalized=True, retained=True,
+            ),
+        ]
+
+    def test_rolling_oos_in_combo(self):
+        """factor_returns 可用（≥120 期）时 combo 输出 rolling_oos 滚动窗口。"""
+        combo = build_combo(self._signals(), mode="equal_weight", factor_returns=self._returns())
+        assert combo.get("rolling_oos") is not None
+        oos = combo["rolling_oos"]
+        assert "windows" in oos
+        assert len(oos["windows"]) >= 2
+        assert "decay_ratio" in oos
+        assert all({"start_idx", "sharpe"} <= set(w) for w in oos["windows"])
+
+    def test_rolling_oos_none_without_returns(self):
+        """无 factor_returns 时 rolling_oos=None（向后兼容）。"""
+        combo = build_combo(self._signals(), mode="equal_weight")
+        assert combo.get("rolling_oos") is None
 
 
 # ════════════════════════════════════════════════════════════
@@ -1634,6 +1853,76 @@ class TestPortfolioLoop:
         result = loop.run(factor_returns=fr, exposure_matrix=exposure)
         assert result.status in ("passed", "verifier_warning", "completed")
         assert result.n_factors_input == 3
+
+    def test_run_optimizer_auto_matrix(
+        self,
+        tmp_portfolio_dir,
+        tmp_elite_dir,
+        monkeypatch,
+    ):
+        """optimizer/risk_parity 无显式矩阵 → 自动构建（仅权重合成，指标保持估算）。
+
+        risk_parity 只用协方差 Σ 不用 μ——自动矩阵 Sharpe 虚高（v2.104.0+2 实测 20.06）
+        不影响权重正确性；组合指标口径保持估算（factor_returns 不传给 build_combo）。
+        """
+        ids = self._write_mock_elites(tmp_elite_dir)
+        # 面板非空以触发自动矩阵分支（autouse mock 默认返回空面板）
+        mock_provider = MagicMock()
+        mock_provider.return_value.get_futures_panel.return_value = (
+            {"RB0": pd.DataFrame({"close": [1.0, 2.0]})},
+            ["2024-01-01"],
+        )
+        monkeypatch.setattr("fts.data.FTSDataProvider", mock_provider)
+        rng = np.random.default_rng(23)
+        n = 40
+        fr = pd.DataFrame({ids[i]: rng.normal(0.0005, 0.01, size=n) for i in range(3)})
+        auto_called: dict[str, bool] = {}
+
+        def _fake_auto(panel, factors, elite_dir, market="futures", **kwargs):
+            auto_called["yes"] = True
+            return fr
+
+        monkeypatch.setattr(
+            "fts.factor_engine.portfolio_loop._auto_build_factor_returns", _fake_auto
+        )
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            synthesis_mode="optimizer",
+            optimizer_mode="risk_parity",
+        )
+        result = loop.run()
+        assert auto_called.get("yes") is True
+        assert result.status in ("passed", "verifier_warning", "completed")
+        combo = json.loads((tmp_portfolio_dir / "current_combo.json").read_text(encoding="utf-8"))
+        # 自动矩阵不污染组合指标：口径保持估算
+        assert combo.get("metrics_source") == "estimated"
+
+    def test_synthesize_optimizer_risk_parity(self):
+        """risk_parity 语义 = optimizer + risk_parity 目标：权重非负且归一（无需 μ 估计）。"""
+        factors = [
+            {"factor_id": "f1", "name": "f1", "sharpe": 2.0, "ic": 0.05, "turnover": 0.3, "decay_6m": 0.1},
+            {"factor_id": "f2", "name": "f2", "sharpe": 1.8, "ic": 0.04, "turnover": 0.4, "decay_6m": 0.2},
+            {"factor_id": "f3", "name": "f3", "sharpe": 1.5, "ic": 0.03, "turnover": 0.2, "decay_6m": 0.15},
+        ]
+        rng = np.random.default_rng(24)
+        n = 60
+        fr = pd.DataFrame(
+            {
+                "f1": rng.normal(0.001, 0.01, size=n),
+                "f2": rng.normal(0.0005, 0.01, size=n),
+                "f3": rng.normal(0.0002, 0.01, size=n),
+            }
+        )
+        signals, _max_corr, _turn = synthesize_signals(
+            factors, "optimizer", returns_matrix=fr, optimizer_mode="risk_parity"
+        )
+        assert signals
+        assert all(s["weight"] >= 0.0 for s in signals)
+        # risk_parity 为风险贡献等权目标，输出可为非全仓权重（≤1，仓位特征非归一保证）
+        assert sum(s["weight"] for s in signals) > 0.0
+        assert sum(s["weight"] for s in signals) <= 1.0 + 1e-6
 
     # ── GAP-L305 net 指标 ─────────────────────────────
 
@@ -3144,6 +3433,8 @@ class TestShadowPool:
         evaluation = {
             "level_1_backtest": {"sharpe": 2.0, "ic": 0.05},
             "level_3_multiple": {"passed": True},
+            # GAP-121: 晋升需携带 ≥2 窗口走航结果（WalkForward 强制门）
+            "walk_forward": {"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
             "passed": True,
         }
         # 直接调用 _promote_to_elite（repo 已 mock），显式开启观察期
@@ -3167,6 +3458,8 @@ class TestShadowPool:
         evaluation = {
             "level_1_backtest": {"sharpe": 2.0, "ic": 0.05},
             "level_3_multiple": {"passed": True},
+            # GAP-121: 晋升需携带 ≥2 窗口走航结果（WalkForward 强制门）
+            "walk_forward": {"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
             "passed": True,
         }
         path = loop._promote_to_elite(factor, evaluation, shadow_observe=False)
@@ -4433,7 +4726,7 @@ class TestQualityReportAndRunBranches:
         """Step 1.5 OOS 外推验证降级日志。"""
         self._write_factors(tmp_elite_dir, market="futures", n=1)
 
-        def _demote(factor, panel, combo_ts):
+        def _demote(factor, panel, combo_ts, **kwargs):
             return {
                 **factor,
                 "oos_extrapolation": {
@@ -4460,7 +4753,7 @@ class TestQualityReportAndRunBranches:
         """P1 聚类移除冗余因子。"""
         self._write_factors(tmp_elite_dir, n=3)
         with patch("fts.factor_engine.factor_clustering.FactorClusteringEngine") as m_cls:
-            m_cls.return_value.run.side_effect = lambda factors, panel: factors[:2]
+            m_cls.return_value.run.side_effect = lambda factors, panel, **kwargs: factors[:2]
             loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir, enable_clustering=True)
             result = loop.run()
         assert result.n_factors_input == 3
@@ -4470,7 +4763,7 @@ class TestQualityReportAndRunBranches:
         """P1 聚类无冗余因子移除。"""
         self._write_factors(tmp_elite_dir, n=3)
         with patch("fts.factor_engine.factor_clustering.FactorClusteringEngine") as m_cls:
-            m_cls.return_value.run.side_effect = lambda factors, panel: factors
+            m_cls.return_value.run.side_effect = lambda factors, panel, **kwargs: factors
             loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir, enable_clustering=True)
             result = loop.run()
         assert result.n_factors_input == 3

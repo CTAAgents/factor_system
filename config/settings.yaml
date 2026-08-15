@@ -21,14 +21,20 @@ micro_trials_per_generation: 50
 # operator(算子主干) / code(代码创新) / hybrid(混合)
 evolution_mode: "hybrid"
 
-# ── L1 Meta-Loop ──
-meta_loop_interval_hours: 24
-meta_loop_max_tokens: 8000
-
 # ── L3 Portfolio ──
 portfolio_max_factors: 20
 portfolio_top_n: 5
 portfolio_decay_days: 90
+
+# ── L3 G1 同向敞口惩罚（35-gap-closure-plan G1）──
+# 触发：因子 IC 同向权重占比 ≥ align_threshold（ic>0 看多 / ic<0 看空）
+# compress_curve ∈ {linear, sqrt(更温和), exp(更激进)}
+# 取值域: align_threshold ∈ (0,1]，max_compress ∈ (0,1]
+# 2026-08-15 风控评审后放宽：max_compress 0.50→0.70（全多组合敞口压至 70%，较 0.50 敞口 +40%）
+l3_g1_enabled: true
+l3_g1_align_threshold: 0.60
+l3_g1_max_compress: 0.70
+l3_g1_compress_curve: "linear"
 
 # ── L3 Verifier 配置 ──
 # 口径说明（GAP-122，v2.104.0+42）：min_sharpe 判定组合信号质量，Verifier 校验
@@ -40,6 +46,34 @@ verifier:
   max_turnover: 12.0
   max_decay_rate: 0.30
   min_n_factors: 3
+
+# ── L3 因子选择与组合构建（plans/36，v2.104.0+43）──
+l3:
+  # 因子综合评分（替代裸 Sharpe 排序选入，改进项 2）
+  factor_score:
+    weights:
+      sharpe_cap: 0.30   # cap 后 Sharpe（min(|sharpe|, SHARPE_CAP=2.0)）
+      icir: 0.30         # IC 均值/IC 标准差（风险调整质量主指标）
+      ic: 0.20           # |IC|
+      turnover_inv: 0.20 # 低换手优先（-turnover，成本惩罚）
+  # P1 因子聚类（改进项 4）
+  cluster:
+    threshold: 0.7       # 层次聚类距离阈值（1-|corr|）
+    top_n: 1             # 簇内保留代表数（2=允许簇内互补代表，需敏感性验证）
+  # 子链维度去冗余（能源链专属）：限制同一子链保留因子数，防产业链暴露集中。
+  # 与 cluster 信号相关性去冗余互补——同子链因子即使信号相关性低，
+  # 仍共享产业链驱动（原油→化工传导），同步放大子链暴露。
+  chain_dedup:
+    enabled: true
+    max_per_chain: 2     # 单子链保留因子数上限
+  # L3 合成模式默认值（v2.104.0+62，CLI --synthesis-mode 显式传参优先）：
+  # mode 可选 equal_weight / quality_weight / sharpe_weight / elastic_net /
+  #   adaptive / optimizer / risk_parity（= optimizer + risk_parity 目标快捷，
+  #   因子收益矩阵自动构建仅用于权重合成，指标口径保持估算）
+  # 直接改 mode 即可切换合成方法，无需改代码。
+  synthesis:
+    mode: equal_weight
+    optimizer_mode: risk_parity
 
 # ── 日志 ──
 log_level: "INFO"

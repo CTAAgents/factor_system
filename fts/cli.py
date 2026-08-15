@@ -582,6 +582,10 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
     universe = getattr(args, "universe", "futures")
     synthesis_mode = getattr(args, "synthesis_mode", None)
     optimizer_mode = getattr(args, "optimizer_mode", None) or getattr(cfg, "portfolio_optimizer_mode", "risk_parity")
+    # risk_parity 快捷选项（v2.104.0+62）：映射 optimizer + risk_parity 目标，矩阵自动构建
+    if synthesis_mode == "risk_parity":
+        synthesis_mode = "optimizer"
+        optimizer_mode = optimizer_mode or "risk_parity"
     if universe == "futures":
         elite_dir = cfg.get_elite_dir("futures")
         if synthesis_mode is None:
@@ -591,6 +595,13 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
         elite_dir = cfg.get_elite_dir("energy")
         if synthesis_mode is None:
             synthesis_mode = "equal_weight"
+    # 配置化默认合成模式（settings.yaml l3.synthesis.mode，CLI --synthesis-mode 优先；
+    # 未配置时保持上述 equal_weight 现状）
+    l3_cfg = getattr(cfg, "l3", {}) or {}
+    synth_cfg = l3_cfg.get("synthesis") or {}
+    if getattr(args, "synthesis_mode", None) is None and synth_cfg.get("mode"):
+        synthesis_mode = synth_cfg["mode"]
+        optimizer_mode = synth_cfg.get("optimizer_mode", optimizer_mode)
     print(f"[portfolio] universe={universe} elite_dir={elite_dir} mode={synthesis_mode} optimizer={optimizer_mode}")
 
     # 从配置加载 Verifier 配置
@@ -601,6 +612,13 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
         print(f"[portfolio] Verifier 配置已加载: max_correlation={verifier_cfg.get('max_correlation', 0.5)}")
 
     try:
+        # plans/36：因子综合评分权重 + P1 聚类参数（config/settings.yaml l3 段）
+        l3_cfg = getattr(cfg, "l3", {}) or {}
+        score_config = (l3_cfg.get("factor_score") or {}).get("weights") or None
+        cluster_cfg = l3_cfg.get("cluster") or {}
+        cluster_threshold = float(cluster_cfg.get("threshold", 0.7))
+        cluster_top_n = int(cluster_cfg.get("top_n", 1))
+        chain_dedup_cfg = l3_cfg.get("chain_dedup") or {}
         loop = PortfolioLoop(
             elite_dir=elite_dir,
             memory_dir=cfg.memory_dir + f"/portfolio/{universe}",
@@ -608,6 +626,11 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
             synthesis_mode=synthesis_mode,
             optimizer_mode=optimizer_mode,
             market=universe,
+            score_config=score_config,
+            cluster_threshold=cluster_threshold,
+            cluster_top_n=cluster_top_n,
+            enable_chain_dedup=bool(chain_dedup_cfg.get("enabled", True)),
+            chain_dedup_max_per_chain=int(chain_dedup_cfg.get("max_per_chain", 2)),
         )
         # GAP-I302: optimizer 模式与实测化输入（returns-matrix CSV）
         factor_returns = None
@@ -2439,8 +2462,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--synthesis-mode",
         type=str,
         default=None,
-        choices=["equal_weight", "sharpe_weight", "elastic_net", "adaptive", "optimizer"],
-        help="信号合成模式: equal_weight（默认）/ elastic_net / adaptive（Regime 自适应双维度）/ sharpe_weight / optimizer（GAP-I302，需 returns-matrix）",
+        choices=["equal_weight", "sharpe_weight", "quality_weight", "elastic_net", "adaptive", "optimizer", "risk_parity"],
+        help="信号合成模式: equal_weight（默认）/ elastic_net / adaptive（Regime 自适应双维度）/ sharpe_weight / quality_weight（plans/36 综合评分加权）/ optimizer（GAP-I302，需 returns-matrix）/ risk_parity（快捷=optimizer+risk_parity 目标，矩阵自动构建，v2.104.0+61）",
     )
     p_port_run.add_argument(
         "--optimizer-mode",
