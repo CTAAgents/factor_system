@@ -344,6 +344,49 @@ _REGIME_FACTOR_SCALE: dict[str, dict[str, float]] = {
 }
 
 
+# ─── Regime → 信号判定阈值（P0 修复：让主制度真正影响多空判定）────────
+# 修复 v2.105.0 硬编码 >0/<0 导致 "bull/bear 判定结果完全相同" 缺陷：
+# - bull 顺势做多：做多门槛贴近 0（-0.15），做空门槛抬高（-0.40）
+# - bear 顺势做空：做空门槛贴近 0（-0.15），做多门槛抬高（+0.40）
+# - high_vol 双向从严；low_vol 双向从宽；oscillate/unknown 对称保守
+_REGIME_SIGNAL_THRESHOLDS: dict[str, dict[str, float]] = {
+    "bull": {"long_min": -0.15, "short_max": -0.40},
+    "bear": {"long_min": 0.40, "short_max": -0.15},
+    "oscillate": {"long_min": 0.30, "short_max": -0.30},
+    "high_vol": {"long_min": 0.50, "short_max": -0.50},
+    "low_vol": {"long_min": 0.20, "short_max": -0.20},
+    "unknown": {"long_min": 0.30, "short_max": -0.30},
+}
+
+
+def _apply_regime_direction_bias(
+    sym_scores: dict[str, float],
+    regime_type: str,
+    confidence: float,
+    max_bias: float = 0.30,
+) -> tuple[dict[str, float], float]:
+    """Regime 方向偏移（P0 修复：主制度置信度越高，多空倾向越明显）。
+
+    - bull: 综合得分整体上移 (× (1 + bias)) → 更多做多候选
+    - bear: 综合得分整体下移 (× (1 - bias)) → 更多做空候选
+    - 其余制度不偏移
+
+    Args:
+        sym_scores: 品种 → 综合得分
+        regime_type: 主制度
+        confidence: 主制度置信度 (0~1)
+        max_bias: 最大偏移强度（置信度 100% 时的最大倍数偏移）
+
+    Returns:
+        (调整后得分, 实际应用的偏移强度 bias)
+    """
+    if regime_type not in ("bull", "bear") or confidence <= 0:
+        return sym_scores, 0.0
+    bias = max_bias * float(confidence)
+    factor = 1.0 + bias if regime_type == "bull" else 1.0 - bias
+    return {s: sc * factor for s, sc in sym_scores.items()}, bias
+
+
 def _classify_factor_category(name: str) -> str:
     """按因子名后缀启发式归类（trend / reversal / volume / neutral）。
 
@@ -652,6 +695,7 @@ def _compute_composite_scores(
     factors: list[dict[str, Any]],
     factor_weights: dict[str, float] | None = None,
     per_variety_weights: dict[str, dict[str, float]] | None = None,
+    per_variety_sign_flips: dict[str, dict[str, float]] | None = None,
 ) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
     """合成因子信号（可选权重；方向校正参数 v2.105.0 起恒为空 dict）。
 
@@ -659,6 +703,9 @@ def _compute_composite_scores(
         factor_weights: 全局因子权重字典（L3 组合基础权重经 Regime 调整），None 则等权。
         per_variety_weights: 品种级因子权重 {variety: {factor: weight}}，
                               优先于 factor_weights 使用。
+        per_variety_sign_flips: 品种级方向翻转 {variety: {factor: +1/-1}}。
+                              品种级权重用 abs(IC) 丢弃了符号，此处按 IC 符号在
+                              合成层恢复方向（P0 修复：反向因子正信号不再被当正贡献）。
 
     Returns:
         sym_scores: 品种 → 综合得分
@@ -687,8 +734,10 @@ def _compute_composite_scores(
             if sig is None or len(sig) == 0:
                 continue
             val = float(sig[-1]) if np.isfinite(sig[-1]) else 0.0
-            # 方向校正（v2.105.0 起恒为空 dict，flip 恒为 +1；方向以 L3 组合为准）
+            # 方向翻转：先应用品种级符号（IC 符号校准，P0 修复），再应用全局翻转
             flip = factor_sign_flips.get(name, 1.0)
+            if per_variety_sign_flips and sym in per_variety_sign_flips:
+                flip = per_variety_sign_flips[sym].get(name, flip)
             val *= flip
             w = effective_weights.get(name, default_weight) if effective_weights else default_weight
             signal_sum += val * w
@@ -1254,6 +1303,7 @@ def main(
     universe: str = "core",
     macro_injection: bool = True,
     chain: str = "",
+    force_regime: str = "",
 ) -> int:
     t0 = time.time()
     today = date.today().isoformat()
@@ -1371,19 +1421,52 @@ def main(
             f"高对齐(≥0.7): {n_aligned}, 低对齐(<0.5): {n_misaligned}"
         )
 
+    def _is_identity_sector(
+        asm: dict[str, list[str]],
+        sector: str,
+    ) -> bool:
+        """判定 sector 是否为"合成身份分组"（其品种全部被其他 sector 覆盖，无独有品种）。
+
+        典型例：FUTURES_SECTOR_MAP 的"炼化聚酯链" = 能源/聚酯链/油化工/煤化工
+        四大子链训练池并集（12 品种），与四个互不重叠、恰覆盖全池的子链重复。
+        若让其参与主制度投票，每个品种会被重复计票（身份分组 + 所属子链各一次），
+        扭曲软投票结果 → 应剔除。
+        """
+        mine = set(asm.get(sector, []))
+        if not mine:
+            return True
+        others = {v for s, syms in asm.items() if s != sector for v in syms}
+        return mine <= others
+
     def _compute_primary_regime(
         sr: dict[str, dict],
         asm: dict[str, list[str]],
     ) -> dict:
-        """从各产业链 regime 计算主制度（品种数加权投票）。"""
+        """从各产业链 regime 计算主制度（P1-2：软投票 = 品种数 × sector 置信度）。
+
+        修复原硬投票（仅品种数）缺陷：对"勉强判 bear (conf=50%)"的 sector 与
+        "强判 bear (conf=100%)"的 sector 一视同仁给满票，推高主制度假置信度。
+        现按 sector 置信度打折，主制度置信度 = 软票占比，语义更诚实。
+        同时剔除"合成身份分组"（品种被其他 sector 全量覆盖者，防重复计票）。
+        """
         if not sr or not asm:
             return {"regime": "unknown", "confidence": 0.0, "detected_at": datetime.now().isoformat(), "features": {}}
         regime_votes: dict[str, float] = {}
+        vote_log: dict[str, dict] = {}
+        skipped_identity: list[str] = []
         for sector, regime in sr.items():
+            if _is_identity_sector(asm, sector):
+                skipped_identity.append(sector)
+                continue
             r = regime["regime"]
-            regime_votes[r] = regime_votes.get(r, 0) + len(asm.get(sector, []))
+            c = float(regime.get("confidence", 0.5))
+            n_syms = len(asm.get(sector, []))
+            # 软票 = 品种数 × 置信度（低置信度判定打折；置信度 0.05 下限防零票）
+            votes = n_syms * max(0.05, c)
+            regime_votes[r] = regime_votes.get(r, 0) + votes
+            vote_log[sector] = {"regime": r, "confidence": round(c, 4), "n_syms": n_syms, "votes": round(votes, 4)}
         total = sum(regime_votes.values())
-        if total == 0:
+        if total <= 1e-12:
             return {"regime": "unknown", "confidence": 0.0, "detected_at": datetime.now().isoformat(), "features": {}}
         sorted_regimes = sorted(regime_votes.items(), key=lambda x: -x[1])
         primary = sorted_regimes[0][0]
@@ -1395,11 +1478,28 @@ def main(
             "features": {
                 "sector_breakdown": {s: sr[s]["regime"] for s in sr},
                 "sector_confidences": {s: sr[s]["confidence"] for s in sr},
+                "sector_vote_log": vote_log,
+                "skipped_identity_sectors": skipped_identity,
                 "primary_regime_weight": round(primary_weight, 4),
             },
         }
 
     market_regime = _compute_primary_regime(sector_regimes, active_sector_map)
+
+    # ── force-regime 覆盖（用于验证 Regime 对输出的实际影响） ──
+    if force_regime and force_regime in {"bull", "bear", "oscillate", "high_vol", "low_vol"}:
+        original_regime = market_regime.get("regime", "unknown")
+        original_conf = market_regime.get("confidence", 0.0)
+        features = market_regime.setdefault("features", {})
+        features["forced_regime"] = True
+        features["original_regime"] = original_regime
+        features["original_confidence"] = original_conf
+        market_regime["regime"] = force_regime
+        market_regime["confidence"] = 1.0
+        print(
+            f"\n[Regime] ⚠️  强制覆盖: {original_regime}({original_conf:.0%}) → "
+            f"{force_regime}(100%) [force-regime 验证模式]"
+        )
 
     _REGIME_LABELS = {
         "bull": "趋势上涨 (bull)",
@@ -1474,13 +1574,26 @@ def main(
     else:
         print("      品种级权重: 无数据，回退到全局权重")
 
-    # 3f: 加权合成（L3 基础权重经 Regime 调整 + 品种级权重，无方向校正）
+    # 3e2: 品种级方向翻转（IC 符号校准，P0 修复）
+    # 品种级权重用 abs(IC) 丢弃了符号：反向因子（如 fut_ma_crossover_simplified
+    # 在 20/20 品种上 IC 全负）的正信号被当作正贡献累加 → 综合得分恒正、
+    # bear 制度下永远无空头。此处按 IC 符号恢复每个 (品种×因子) 的方向。
+    per_variety_sign_flips: dict[str, dict[str, float]] = {}
+    for _fname, _vics in per_variety_ic.items():
+        for _var, _ic in _vics.items():
+            per_variety_sign_flips.setdefault(_var, {})[_fname] = 1.0 if _ic >= 0 else -1.0
+    n_flipped = sum(1 for v in per_variety_sign_flips.values() for f in v.values() if f < 0)
+    if n_flipped:
+        print(f"      [IC 方向] 品种级方向翻转: {n_flipped} 个 (因子×品种) 组合 IC<0，信号符号已反转")
+
+    # 3f: 加权合成（L3 基础权重经 Regime 调整 + 品种级权重 + 品种级方向翻转）
     sym_scores, sym_details = _compute_composite_scores(
         signal_matrix,
         factor_sign_flips,
         factors,
         factor_weights,
         per_variety_weights=per_variety_weights if per_variety_weights else None,
+        per_variety_sign_flips=per_variety_sign_flips or None,
     )
 
     # ── 品种-链对齐度修正信号权重 ──
@@ -1496,13 +1609,14 @@ def main(
             n_adjusted_align += 1
         print(f"      [对齐度] 应用品种-链对齐度修正: {n_adjusted_align} 个品种, blend={_ALIGNMENT_BLEND}")
 
-    # 3g: 对比全局权重 vs 品种级权重的合成结果
+    # 3g: 对比全局权重 vs 品种级权重的合成结果（两侧同用品种级方向翻转，保证 ρ 仅反映权重差异）
     if per_variety_weights:
         sym_scores_global, _ = _compute_composite_scores(
             signal_matrix,
             factor_sign_flips,
             factors,
             factor_weights,
+            per_variety_sign_flips=per_variety_sign_flips or None,
         )
         # 计算两种合成结果的排名差异
         sorted_var = sorted(sym_scores.keys())
@@ -1574,6 +1688,22 @@ def main(
             n_adjusted += 1
         if n_adjusted > 0:
             print(f"      [价格动量] 调整 {n_adjusted} 个品种的信号 (blend={_PRICE_MOMENTUM_BLEND}, skip={n_skipped})")
+
+    # ── Step 3h2: Regime 方向偏移（P0 修复：主制度置信度越高，多空倾向越明显）
+    # 放在价格动量之后、快照/判定之前：快照与报告保存一致的最终得分。
+    # 注意：盲测 IC 由 signal_matrix 原始信号计算，不受此处偏移影响（诊断口径保持纯净）。
+    regime_type = market_regime.get("regime", "unknown")
+    sym_scores, _regime_bias = _apply_regime_direction_bias(
+        sym_scores,
+        regime_type,
+        market_regime.get("confidence", 0.0),
+    )
+    if _regime_bias > 0:
+        _bias_sign = "+" if regime_type == "bull" else "-"
+        print(
+            f"      [Regime 方向] {regime_type}: 综合得分 ×(1{_bias_sign}{_regime_bias:.3f}) "
+            f"(bias={_regime_bias:.1%}, conf={market_regime.get('confidence', 0.0):.0%})"
+        )
 
     # ── Step 3e: 盲测品种验证（泛化能力检查） ──
     # 链模式盲测池 = 其余化工产业链品种（链外盲测，泛化到全化工链）
@@ -1663,8 +1793,11 @@ def main(
 
     # 多空双向排名：按信号强度（绝对值）排序
     ranked = sorted(sym_scores.items(), key=lambda x: -abs(x[1]))
-    long_signals = [(s, sc) for s, sc in ranked if sc > 0]
-    short_signals = [(s, sc) for s, sc in ranked if sc < 0]
+    # P0 修复：按主制度取多空阈值（bear 顺势做空/做多门槛抬高、bull 反之），
+    # 替换 v2.105.0 硬编码 >0/<0（该阈值导致 bull/bear 判定完全相同）。
+    _thr = _REGIME_SIGNAL_THRESHOLDS.get(regime_type, _REGIME_SIGNAL_THRESHOLDS["unknown"])
+    long_signals = [(s, sc) for s, sc in ranked if sc > _thr["long_min"]]
+    short_signals = [(s, sc) for s, sc in ranked if sc < _thr["short_max"]]
 
     # 4a: 品种元数据（名称 / 主力合约 / 盘中实时价）
     from fts.data_futures import (
@@ -1723,6 +1856,7 @@ def main(
                 f"{_contract(sym):>9s} {score:>+10.4f} {price:>10.2f} {top_str:<28s}"
             )
 
+    print(f"\n  [信号阈值] 主制度 {regime_type}: 做多 > {_thr['long_min']:.2f} / 做空 < {_thr['short_max']:.2f}")
     _print_signal_rows(long_signals, "多头信号 (做多)")
     _print_signal_rows(short_signals, "空头信号 (做空)")
 
@@ -1758,6 +1892,11 @@ def main(
     w()
     w(f"- **主制度** (品种数加权): {regime_label}")
     w(f"- **主制度置信度**: {market_regime['confidence']:.2%}")
+    _thr_r = _REGIME_SIGNAL_THRESHOLDS.get(regime_type, _REGIME_SIGNAL_THRESHOLDS["unknown"])
+    w(f"- **信号阈值** (主制度生效): 做多 > {_thr_r['long_min']:.2f} / 做空 < {_thr_r['short_max']:.2f}")
+    if _regime_bias > 0:
+        _bias_sign_r = "+" if regime_type == "bull" else "-"
+        w(f"- **方向偏移**: {regime_type} 置信度 {market_regime['confidence']:.0%} → 综合得分 ×(1{_bias_sign_r}{_regime_bias:.3f})")
     if sector_breakdown:
         w()
         w("### 产业链 Breakdown")
@@ -2168,6 +2307,13 @@ if __name__ == "__main__":
         help="关闭宏观字段注入（GAP-088；默认开启——fut_macro_* 因子读取真实宏观数据，"
         "拉取失败降级 close 代理，不阻断管道）",
     )
+    parser.add_argument(
+        "--force-regime",
+        type=str,
+        default="",
+        choices=["", "bull", "bear", "oscillate", "high_vol", "low_vol"],
+        help="验证用：强制覆盖主市场制度（不影响 SectorRegime 计算，仅对最终投票结果覆盖）",
+    )
     args = parser.parse_args()
     sys.exit(
         main(
@@ -2176,5 +2322,6 @@ if __name__ == "__main__":
             universe=args.universe,
             macro_injection=args.macro_injection,
             chain=args.chain,
+            force_regime=args.force_regime,
         )
     )

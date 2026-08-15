@@ -110,6 +110,8 @@ _VOL_HIGH_PERCENTILE = 0.80  # 高波动阈值：历史 80% 分位数以上
 _VOL_LOW_PERCENTILE = 0.20  # 低波动阈值：历史 20% 分位数以下
 _VOL_ABSOLUTE_LOW = 0.10  # 绝对值低波阈值（年化 10%）
 _VOL_ABSOLUTE_HIGH = 0.40  # 绝对值高波阈值（年化 40%）
+_VOL_HIGH_FLOOR = 0.15  # 相对高波阈值的绝对下限（年化 15%）：分位数过小（近恒定序列 q80<0.15）
+                        # 时兜底到该值，避免 effective_high≈current_vol 导致 vol_score 虚高误判 high_vol
 
 # ADX 指标
 _ADX_PERIOD = 14  # ADX 计算周期
@@ -540,15 +542,16 @@ def _detect_by_rule(ohlcv: pd.DataFrame, prev_regime: MarketRegime | None) -> Ma
     rolling_vol = rets.rolling(20).std() * np.sqrt(252)
     vol_history = rolling_vol.dropna()
     if len(vol_history) > 20:
-        vol_high_threshold = float(vol_history.quantile(_VOL_HIGH_PERCENTILE))
-        vol_low_threshold = float(vol_history.quantile(_VOL_LOW_PERCENTILE))
+        # P2：高波阈值以 sector 自身历史 80% 分位为主，`_VOL_HIGH_FLOOR` 绝对下限兜底
+        # （近恒定序列 q80 极小 → 阈值≈current → vol_score 虚高误判 high_vol，用 0.15 兜底）。
+        # 修复原 `max(quantile, _VOL_ABSOLUTE_HIGH=0.40)` 使低波 sector（如化工链
+        # vol_80≈0.15 < 0.40）永远到不了 high_vol、波动率相对定位失效；低波阈值保留
+        # 原 `min(quantile, _VOL_ABSOLUTE_LOW)` 兜底（防中等波动序列误判 low_vol）。
+        effective_high = float(max(vol_history.quantile(_VOL_HIGH_PERCENTILE), _VOL_HIGH_FLOOR))
+        effective_low = float(min(vol_history.quantile(_VOL_LOW_PERCENTILE), _VOL_ABSOLUTE_LOW))
     else:
-        vol_high_threshold = _VOL_ABSOLUTE_HIGH
-        vol_low_threshold = _VOL_ABSOLUTE_LOW
-
-    # 综合波动率阈值（分位数 OR 绝对值，取强者）
-    effective_high = max(vol_high_threshold, _VOL_ABSOLUTE_HIGH)
-    effective_low = min(vol_low_threshold, _VOL_ABSOLUTE_LOW)
+        effective_high = _VOL_ABSOLUTE_HIGH
+        effective_low = _VOL_ABSOLUTE_LOW
 
     # 波动率分位数
     vol_percentile = float((vol_history <= current_vol).mean()) if len(vol_history) > 2 else 0.5
@@ -783,10 +786,16 @@ class SectorRegimeSelector:
         panel: dict[str, pd.DataFrame],
         symbols: list[str],
     ) -> pd.DataFrame:
-        """从产业链内品种构建合成 OHLCV。
+        """从产业链内品种构建合成 OHLCV（P1-1：等权收益率指数 + 真实波幅）。
 
-        方法：取所有品种 close 的截面均值作为产业链综合价格序列，
-        构建合成 OHLCV（open/high/low 用 close 近似，volume 取截面和）。
+        方法（P1-1 修复）：
+        - close：各品种先归一化到"首个有效值=100"再取截面均值（等权收益率指数）。
+          修复原 close 截面均值被高价品种主导的问题（如 PP0≈8494 的拉动是
+          SC0≈555 的 15 倍，而原油 SC0 才是能源链宏观锚点）。
+        - high/low：各品种 high/low 用同除数归一化后取截面 max/min，恢复真实波幅。
+          修复原 high=low=close 导致 TR 恒 0、ADX 恒 0 的问题（规则法 ADX>25
+          增强分支恒走 0.80 折扣，sector 置信度被系统性压低）。
+        - volume：截面和（保留原逻辑）。
 
         参数:
             panel:   品种行情面板 (symbol → DataFrame)。
@@ -806,10 +815,44 @@ class SectorRegimeSelector:
             return pd.DataFrame()
 
         close_df = pd.DataFrame(close_matrix)
-        composite_close = close_df.mean(axis=1).dropna()
+        # 等权收益率指数：各品种归一化到首值=100 后取截面均值
+        first_valid = close_df.apply(
+            lambda s: s.dropna().iloc[0] if s.notna().any() else np.nan
+        )
+        norm_df = close_df.div(first_valid, axis=1) * 100.0
+        composite_close = norm_df.mean(axis=1).dropna()
 
         if len(composite_close) < 20:
             return pd.DataFrame()
+
+        # 真实波幅：high/low 用各品种截面 max/min（同除数归一化，与 close 同单位）
+        high_lo: dict[str, pd.Series] = {}
+        low_lo: dict[str, pd.Series] = {}
+        for sym in symbols:
+            df = panel.get(sym)
+            if df is None or df.empty:
+                continue
+            div = first_valid.get(sym)
+            if div is None or not np.isfinite(div) or div <= 0:
+                continue
+            if "high" in df.columns:
+                high_lo[sym] = df["high"] / div * 100.0
+            if "low" in df.columns:
+                low_lo[sym] = df["low"] / div * 100.0
+        composite_high: pd.Series
+        composite_low: pd.Series
+        if high_lo:
+            composite_high = (
+                pd.DataFrame(high_lo).max(axis=1).reindex(composite_close.index).fillna(composite_close)
+            )
+        else:
+            composite_high = composite_close
+        if low_lo:
+            composite_low = (
+                pd.DataFrame(low_lo).min(axis=1).reindex(composite_close.index).fillna(composite_close)
+            )
+        else:
+            composite_low = composite_close
 
         volume_df = pd.DataFrame(
             {
@@ -823,8 +866,8 @@ class SectorRegimeSelector:
         return pd.DataFrame(
             {
                 "open": composite_close.shift(1).fillna(composite_close),
-                "high": composite_close,
-                "low": composite_close,
+                "high": composite_high,
+                "low": composite_low,
                 "close": composite_close,
                 "volume": composite_volume,
             },
