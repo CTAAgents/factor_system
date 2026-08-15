@@ -136,6 +136,7 @@ from fts.factor_engine.contracts import (
     DriftMetrics,
     DriftAlertConfig,
     FactorCorrelation,
+    L3VerifierConfig,
     PortfolioCombo,
     PortfolioSignal,
     StickyConfig,
@@ -154,6 +155,7 @@ from fts.factor_engine.portfolio_loop import (
     load_elite_factors,
     PortfolioRunResult,
     PortfolioLoop,
+    _verifier_view,
 )
 
 # ── 产品代码 bug 补偿 ────────────────────────────────────
@@ -350,6 +352,60 @@ class TestL3Verifier:
         passed, reasons = v.check(combo)
         assert passed is False
         assert any("夏普" in r and "4.00" in r and "3.5" in r for r in reasons)
+
+    # ── GAP-122（v2.104.0+42）：Verifier 判定口径 —— min_sharpe 校验缩放前 signal_sharpe ──
+    def test_verifier_view_uses_signal_sharpe(self):
+        """判定视图将风控后 combo_sharpe 替换为缩放前 signal_sharpe，原组合不被修改。"""
+        combo = self.make_combo(sharpe=0.54, corr=0.2, turnover=0.3)
+        combo["signal_sharpe"] = 1.9782
+        view = _verifier_view(combo)
+        assert view["combo_sharpe"] == pytest.approx(1.9782)
+        assert combo["combo_sharpe"] == pytest.approx(0.54)
+
+    def test_verifier_view_missing_signal_sharpe_unchanged(self):
+        """signal_sharpe 缺失时判定视图原样返回（向后兼容）。"""
+        combo = self.make_combo(sharpe=2.5, corr=0.2, turnover=0.3)
+        view = _verifier_view(combo)
+        assert view["combo_sharpe"] == pytest.approx(2.5)
+        assert "signal_sharpe" not in view
+
+    def test_verifier_passes_risk_scaled_combo_via_view(self):
+        """GAP-122 核心：风控缩放压低 combo_sharpe=0.54 但 signal_sharpe=1.9782 ≥ 1.9
+        → Verifier 通过（原始风控后口径误判未通过）。"""
+        cfg: L3VerifierConfig = L3VerifierConfig(
+            min_sharpe=1.9,
+            max_correlation=0.5,
+            max_turnover=12.0,
+            max_decay_rate=0.30,
+            min_n_factors=3,
+            max_sharpe=3.5,
+        )
+        v = L3Verifier(cfg)
+        combo = self.make_combo(sharpe=0.54, corr=0.03, turnover=11.6)
+        combo["signal_sharpe"] = 1.9782
+        raw_passed, raw_reasons = v.check(combo)
+        assert raw_passed is False
+        assert any("夏普" in r for r in raw_reasons)
+        passed, reasons = v.check(_verifier_view(combo))
+        assert passed is True
+        assert reasons == []
+
+    def test_verifier_still_fails_low_signal_quality_via_view(self):
+        """口径修复不放松质量门槛：signal_sharpe=1.8 < 1.9 仍未通过。"""
+        cfg: L3VerifierConfig = L3VerifierConfig(
+            min_sharpe=1.9,
+            max_correlation=0.5,
+            max_turnover=12.0,
+            max_decay_rate=0.30,
+            min_n_factors=3,
+            max_sharpe=3.5,
+        )
+        v = L3Verifier(cfg)
+        combo = self.make_combo(sharpe=0.5, corr=0.03, turnover=11.6)
+        combo["signal_sharpe"] = 1.8
+        passed, reasons = v.check(_verifier_view(combo))
+        assert passed is False
+        assert any("夏普" in r for r in reasons)
 
 
 # ════════════════════════════════════════════════════════════

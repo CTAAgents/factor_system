@@ -300,7 +300,11 @@ def _load_l3_combo_weights(weights_path: str | Path | None = None) -> dict[str, 
     return {k: float(v) for k, v in weights.items()}
 
 
-def _load_l3_combo_factors(l3_weights: dict[str, float]) -> list[dict[str, Any]]:
+def _load_l3_combo_factors(
+    l3_weights: dict[str, float],
+    market: str = "futures",
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
     """按 L3 组合因子名从 DuckDB 因子资产库加载因子定义（严格模式）。
 
     复用全量精英因子加载后按 name 交集过滤，保证 code/params 定义完整；
@@ -309,11 +313,13 @@ def _load_l3_combo_factors(l3_weights: dict[str, float]) -> list[dict[str, Any]]
 
     Args:
         l3_weights: L3 组合权重 {factor_name: weight}
+        market: 因子库市场路由（"futures" 通用 / "energy" 能源链专属库）
+        db_path: 因子库路径覆盖（默认经 market 路由；链模式显式传能源库路径）
 
     Returns:
         因子定义列表（仅 L3 组合中的因子，保持 DB 顺序）
     """
-    all_factors = load_futures_elite_factors_from_db(ic_threshold=0)
+    all_factors = load_futures_elite_factors_from_db(ic_threshold=0, db_path=db_path, market=market)
     known = set(l3_weights.keys())
     kept = [f for f in all_factors if f.get("name") in known]
     missing = known - {f.get("name") for f in kept}
@@ -1258,18 +1264,24 @@ def main(
 
     # ── Step 1: 加载因子（因子选择与基础权重权威源） ──
     # 通用模式 = L3 组合（factor_weights.json，严格模式）；
-    # 链模式 = 能源库精英因子（market="energy"），链级 L3 组合建立前先等权。
+    # 链模式 = 链级 L3 组合（memory/portfolio/energy/factor_weights.json，
+    #   v2.104.0+39 起 active）：因子选择与基础权重由链级 L3 组合决定，
+    #   按名从能源库加载因子定义，不再全量精英因子等权。
     if chain == "energy":
         from fts.data_futures import ENERGY_CHAIN_MARKET
         from fts.factor_engine.factor_db.schema import get_db_path
 
-        factors = load_futures_elite_factors_from_db(
-            ic_threshold=0,
-            db_path=Path(get_db_path(ENERGY_CHAIN_MARKET)),
-            market=ENERGY_CHAIN_MARKET,
+        l3_weights = _load_l3_combo_weights(
+            weights_path=PROJECT_ROOT / "memory" / "portfolio" / "energy" / "factor_weights.json"
         )
-        l3_weights = {f.get("name", ""): 1.0 for f in factors if f.get("name")}
-        print(f"\n[1/5] 加载能源链精英因子: {len(factors)} 个（等权基础，链级 L3 组合建立后可切换）")
+        factors = _load_l3_combo_factors(
+            l3_weights,
+            market=ENERGY_CHAIN_MARKET,
+            db_path=Path(get_db_path(ENERGY_CHAIN_MARKET)),
+        )
+        kept_names = {f.get("name") for f in factors}
+        l3_weights = {k: v for k, v in l3_weights.items() if k in kept_names}
+        print(f"\n[1/5] 加载能源链 L3 组合因子: {len(factors)} 个（基础权重 {len(l3_weights)} 个）")
     else:
         l3_weights = _load_l3_combo_weights()
         factors = _load_l3_combo_factors(l3_weights)
@@ -1656,10 +1668,17 @@ def main(
 
     # 4a: 品种元数据（名称 / 主力合约 / 盘中实时价）
     from fts.data_futures import (
+        FUTURES_SECTOR_MAP,
         FUTURES_SYMBOL_NAMES,
         get_dominant_contracts,
         get_realtime_prices,
     )
+
+    # 品种 → 产业链 反向映射（后序覆盖前序，与通用中性化语义一致）
+    symbol_sector: dict[str, str] = {}
+    for _sector, _syms in FUTURES_SECTOR_MAP.items():
+        for _sym in _syms:
+            symbol_sector[_sym] = _sector
 
     sym_list = [s for s, _ in ranked]
     dominant = get_dominant_contracts(sym_list)
@@ -1681,8 +1700,8 @@ def main(
         return df.iloc[-1]["close"] if df is not None and not df.empty else 0.0
 
     # 控制台输出 — 多空双向
-    header = f"{'排名':>4s} {'品种':>6s} {'名称':>8s} {'主力合约':>9s} {'得分':>10s} {'实时价':>10s} {'Top因子':>28s}"
-    sep = f"{'-' * 4} {'-' * 6} {'-' * 8} {'-' * 9} {'-' * 10} {'-' * 10} {'-' * 28}"
+    header = f"{'排名':>4s} {'品种':>6s} {'名称':>8s} {'产业链':>8s} {'主力合约':>9s} {'得分':>10s} {'实时价':>10s} {'Top因子':>28s}"
+    sep = f"{'-' * 4} {'-' * 6} {'-' * 8} {'-' * 8} {'-' * 9} {'-' * 10} {'-' * 10} {'-' * 28}"
 
     def _print_signal_rows(signals, label, show_n=20):
         if not signals:
@@ -1700,7 +1719,8 @@ def main(
             top_factors = sorted(details.items(), key=lambda x: -abs(x[1]))[:3]
             top_str = ", ".join(f"{n}({v:+.3f})" for n, v in top_factors)
             print(
-                f"{i:>4d} {sym:>6s} {_name(sym):>8s} {_contract(sym):>9s} {score:>+10.4f} {price:>10.2f} {top_str:<28s}"
+                f"{i:>4d} {sym:>6s} {_name(sym):>8s} {symbol_sector.get(sym, '-'):>8s} "
+                f"{_contract(sym):>9s} {score:>+10.4f} {price:>10.2f} {top_str:<28s}"
             )
 
     _print_signal_rows(long_signals, "多头信号 (做多)")
@@ -1985,30 +2005,30 @@ def main(
 
     w("## 多头信号 (做多) — Top 20")
     w()
-    w("| 排名 | 品种 | 名称 | 主力合约 | 方向 | 信号强度 | 最新价 | Top 3 因子贡献 |")
-    w("|------|------|------|----------|------|----------|--------|----------------|")
+    w("| 排名 | 品种 | 名称 | 产业链 | 主力合约 | 方向 | 信号强度 | 最新价 | Top 3 因子贡献 |")
+    w("|------|------|------|--------|----------|------|----------|--------|----------------|")
     for i, (sym, score) in enumerate(long_signals[:20], 1):
         df = panel.get(sym)
         price = _price(sym, df)
         details = sym_details.get(sym, {})
         top3 = sorted(details.items(), key=lambda x: -abs(x[1]))[:3]
         top_str = " ".join(f"{n}({v:+.3f})" for n, v in top3)
-        w(f"| {i} | {sym} | {_name(sym)} | {_contract(sym)} | 多 | {abs(score):.4f} | {price:.2f} | {top_str} |")
+        w(f"| {i} | {sym} | {_name(sym)} | {symbol_sector.get(sym, '-')} | {_contract(sym)} | 多 | {abs(score):.4f} | {price:.2f} | {top_str} |")
     if not long_signals:
         w("| — | — | 无多头信号 | — | — | — | — | — |")
     w()
 
     w("## 空头信号 (做空) — Top 20")
     w()
-    w("| 排名 | 品种 | 名称 | 主力合约 | 方向 | 信号强度 | 最新价 | Top 3 因子贡献 |")
-    w("|------|------|------|----------|------|----------|--------|----------------|")
+    w("| 排名 | 品种 | 名称 | 产业链 | 主力合约 | 方向 | 信号强度 | 最新价 | Top 3 因子贡献 |")
+    w("|------|------|------|--------|----------|------|----------|--------|----------------|")
     for i, (sym, score) in enumerate(short_signals[:20], 1):
         df = panel.get(sym)
         price = _price(sym, df)
         details = sym_details.get(sym, {})
         top3 = sorted(details.items(), key=lambda x: -abs(x[1]))[:3]
         top_str = " ".join(f"{n}({v:+.3f})" for n, v in top3)
-        w(f"| {i} | {sym} | {_name(sym)} | {_contract(sym)} | 空 | {abs(score):.4f} | {price:.2f} | {top_str} |")
+        w(f"| {i} | {sym} | {_name(sym)} | {symbol_sector.get(sym, '-')} | {_contract(sym)} | 空 | {abs(score):.4f} | {price:.2f} | {top_str} |")
     if not short_signals:
         w("| — | — | 无空头信号 | — | — | — | — | — |")
     w()
@@ -2084,13 +2104,13 @@ def main(
     # 全部品种信号排名（按信号强度，含多空方向）
     w("## 全部品种信号排名")
     w()
-    w("| 排名 | 品种 | 名称 | 主力合约 | 方向 | 信号强度 | 最新价 |")
-    w("|------|------|------|----------|------|----------|--------|")
+    w("| 排名 | 品种 | 名称 | 产业链 | 主力合约 | 方向 | 信号强度 | 最新价 |")
+    w("|------|------|------|--------|----------|------|----------|--------|")
     for i, (sym, score) in enumerate(ranked, 1):
         df = panel.get(sym)
         price = _price(sym, df)
         direction = "多" if score > 0 else "空"
-        w(f"| {i} | {sym} | {_name(sym)} | {_contract(sym)} | {direction} | {abs(score):.4f} | {price:.2f} |")
+        w(f"| {i} | {sym} | {_name(sym)} | {symbol_sector.get(sym, '-')} | {_contract(sym)} | {direction} | {abs(score):.4f} | {price:.2f} |")
     w()
 
     report_dir.mkdir(parents=True, exist_ok=True)

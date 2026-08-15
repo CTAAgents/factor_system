@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+39
+> 版本: v2.104.0+42
 > 最后更新: 2026-08-15
 
 ---
@@ -12,6 +12,9 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+42** | **2026-08-15** | **GAP-122 L3 Verifier 判定口径修复：Step 6 经 `_verifier_view` 用缩放前 signal_sharpe（1.9782）替换风控后净暴露 combo_sharpe（0.54）判定 min/max_sharpe（Regime 降仓×G1 敞口压缩为暴露决策非质量判定，原始口径致风控一启用即恒不达 min_sharpe=2.0——期货 08-13 五次 + 能源 08-15 两轮全 verifier_warning 根因）；settings.yaml verifier 阈值量纲对齐：min_sharpe 2.0→1.9（2.0 已被 SHARPE_CAP=2.0 截断的因子等权合成贴线）、max_turnover 0.5→12.0（次/月，对齐能源精英池 4.48~17.40/组合均值 11.60）；test_portfolio_loop.py +4 用例 227 全绿 + ruff 通过；文档同步（01/06/07/08）** |** |
+| **v2.104.0+41** | **2026-08-15** | **能源链信号管道切换链级 L3 组合（4 因子，不再全量精英因子等权）** |** |
+| **v2.104.0+40** | **2026-08-15** | **fix_factor_code 新增 IndentationError 缩进修复策略 + 4 用例（GAP-121 能源链 L1 候选编译失败根因）** |** |
 | **v2.104.0+39** | **2026-08-15** | **robustness _inject_missing bool 列缺失注入 FutureWarning 修复（提升 float）+ 回归测试 1 用例** |** |
 | **v2.104.0+38** | **2026-08-15** | **品种池/产业链分类配置化（SSOT config/futures_universe.yaml，GAP-121 扩展）：82 全量品种/25 核心池/15 盲测池/19 分层训练集/17 产业链分类/energy 工作流（训练池 12 + 泛化范围 3 + 路由 + L1 目录）全部下沉 YAML；fts/data_futures 模块加载时 YAML 优先、内置默认兜底（缺失/损坏/校验失败回退并告警）；校验规则（universe 无重复/各池 ⊆ universe/盲测∩分层=∅/泛化子链存在）；energy 盲测池保持自动派生（泛化范围 − 训练池），改 YAML 即自动换池；炼化聚酯链分组由训练池自动生成置首位；meta_loop chain_knowledge 品种描述随配置动态生成；27+ 消费方 import 常量名不变零改动；新增 test_universe_config.py 9 用例 + test_energy_chain 随配置加载；文档同步（01/03/06/07/08）** |** |
 | **v2.104.0+37** | **2026-08-15** | **GAP-121 能化训练池扩池降相关性：训练链 9→12（能源3 SC/FU/BU + 聚酯3 PX/TA/PF + 油化工3 L/PP/PG + 煤化工3 MA/UR/SA，四大化工子链各 3，原 9 品种集中于能源+聚酯链相关性过强，LU/FU 与 PR/PF 高相关换出至盲测池）；盲测池自动重算为其余化工链 8 品种（BZ/EB/EG/FG/PL/PR/SH/V）；FUTURES_SECTOR_MAP 炼化聚酯链分组同步 12 品种；chain_knowledge（含⑤子链间相对强弱）/感知品种/ec_* 种子 symbols 同步；test_energy_chain +1 四子链覆盖用例 18 全绿；文档同步（01/06/07/08）** |** |

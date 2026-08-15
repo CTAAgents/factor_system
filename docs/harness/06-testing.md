@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.104.0+39
+> 版本: v2.104.0+42
 > 最后更新: 2026-08-10
 
 ---
@@ -426,7 +426,7 @@ TOTAL                                      20326   1254    94%
 | `tests/factor_engine/test_factor_quality_card.py` | ~100 | 因子质量评分卡（10 维评分，A/B/C 分级，可配置映射阈值） |
 | `tests/factor_engine/test_evolution_loop.py` | ~129 | L2 主循环（含孤立模块集成审查门禁测试：消融/因果/鲁棒/SHAP/特征重要性/逻辑监控 + 端到端流水线 + v2.59.0 GAP-F03 期货板块中性化注入 3 用例 + v2.60.0 GAP-F08 样本外强制 7 用例：WalkForward 冷启动/配置开关/审计优先 + v2.61.0 GAP-S01 股票中性化自动注入 4 用例：启用注入/键归一化/关闭跳过/空映射降级 + v2.65.0 GAP-I201 batch 集成 10 用例 + v2.66.0 GAP-X01/X02 3 用例：常数前置拦截/真实截面 IC/无截面能力拦截 + v2.98.2 GAP-071 审计复用 2 用例：复用评估链走航不调用兜底/缺失回退独立计算 + v2.104.0+14 GAP-115 熔断预算传播 3 用例：重绑传播到 UctSelector/熔断判定按最新阈值（0.99 触发、1.0 放行）/协作类 owner 动态读取一致） |
 | `tests/factor_engine/test_experience_chain.py` | ~19 | 经验链 |
-| `tests/factor_engine/test_factor_program.py` | ~32 | 因子程序 |
+| `tests/factor_engine/test_factor_program.py` | ~36 | 因子程序（v2.104.0+40 修复器新增 IndentationError 缩进修复 4 用例：反缩进语句 unexpected indent / 语句多余缩进 / unindent does not match / expected an indented block） |
 | `tests/factor_engine/test_failure_pattern.py` | ~22 | 失败模式聚类分析 |
 | `tests/factor_engine/test_macro_evolution.py` | ~30 | 宏观演化 |
 | `tests/factor_engine/test_meta_loop.py` | 95 | L1 元循环（含 schema 版本兼容冷启动测试；v2.72.0 GAP-I101 批量候选契约校验 + 吞吐指标 8 用例；v2.100.1 感知层样本按市场区分 6 用例：股票默认 CSI300[:13]/期货默认 13 品种不变/显式覆盖 + stock collector 走股票 OHLCV 不取实时价/期货原路径+实时价/股票 OHLCV 失败降级；v2.103.0 GAP-098 失败率熔断时序修复 3 用例：未验证批不误熔断（0/19 已验证 None）/整批 20 全失败熔断保留 + 3 注入 85% 不熔断/20 有效候选集成回归 completed+20 注入（tmp_state_store 隔离）；v2.104.0+10 GAP-I307 Step 2.5 去重口径修复 +2：scan_injected_names 读 factor_pool 按 market 过滤（l1_injected 清空仍可去重，stock 排除、无 market 历史纳入）/空 pool 返回空集；run 注入 entry 断言 market=futures） |
@@ -434,7 +434,7 @@ TOTAL                                      20326   1254    94%
 | `tests/factor_engine/test_micro_evolution.py` | ~13 | 微观演化（含 ImportError 覆盖 + 两阶段漏斗 5（GAP-I205）） |
 | `tests/factor_engine/test_monitor.py` | ~45 | 因子引擎监控 |
 | `tests/monitor/test_logic_monitor.py` | ~15 | 逻辑监控仪表盘（漂移检测/极端预测/换月日） |
-| `tests/factor_engine/test_portfolio_loop.py` | 225 | L3 组合循环（含粘性约束 5 + 漂移监控 7 + 影子池 6 + 过拟合保护 6 + 股票 L3 组合层 6（GAP-I301）+ plans/28 28-T4/T6/T10 用例扩增：exposure_scale 计算与消费/RegimeSmoother 不对称/指标上报接线 + v2.103.0+5 _build_factor_code_map 4 用例：内存 code 优先/DuckDB 补拉/JSON 快照兜底/全缺空映射 + **方案③① 双指标+实测自动构建（v2.104.0+2，8 用例：signal_sharpe 双指标 4——缩放分离/无缩放相等/measured 相等/空组合 None + _auto_build_factor_returns 自动构建 4——矩阵构建/数据不足回退/空面板/无 code 回退）**） |
+| `tests/factor_engine/test_portfolio_loop.py` | 227 | L3 组合循环（含粘性约束 5 + 漂移监控 7 + 影子池 6 + 过拟合保护 6 + 股票 L3 组合层 6（GAP-I301）+ plans/28 28-T4/T6/T10 用例扩增：exposure_scale 计算与消费/RegimeSmoother 不对称/指标上报接线 + v2.103.0+5 _build_factor_code_map 4 用例：内存 code 优先/DuckDB 补拉/JSON 快照兜底/全缺空映射 + **方案③① 双指标+实测自动构建（v2.104.0+2，8 用例：signal_sharpe 双指标 4——缩放分离/无缩放相等/measured 相等/空组合 None + _auto_build_factor_returns 自动构建 4——矩阵构建/数据不足回退/空面板/无 code 回退）+ GAP-122（v2.104.0+42，4 用例：_verifier_view 替换 signal_sharpe/缺失原样返回/风控缩放组合经视图通过/低信号质量仍失败）**） |
 | `tests/factor_engine/test_portfolio_loop_adaptive.py` | 22 | L3 adaptive 权重（v2.56.0 8 用例 + plans/28 28-T3/T6 扩增：probability_mix 概率混合/平滑参数契约 + **GAP-095 blend_power 幂次调节 6 用例 + GAP-094 calibration_path 接线 4 用例（v2.103.0+34）**） |
 | `tests/factor_engine/test_regime_multipliers.py` | ~14 | GAP-L308 数据驱动 Regime 倍率（估计/钳制/样本回退/YAML 往返/接线回退，v2.68.0 新增） |
 | `tests/factor_engine/test_data_provider_panel.py` | ~12 | GAP-L309 面板数据规模（PanelLoadingConfig/分层抽样/覆盖日志/默认参数透传，v2.68.0 新增） |
@@ -463,7 +463,7 @@ TOTAL                                      20326   1254    94%
 | `tests/test_elite_tracker.py` | ~72 | Elite 因子跟踪 |
 | `tests/test_http_server.py` | ~31 | Web UI 仪表盘 |
 | `tests/test_cross_market.py` | ~20 | 跨市场泛化验证（数据适配/分类/报告/集成/边缘情况） |
-| `tests/test_futures_signal_pipeline.py` | 38 | 信号管道 L3 组合权重严格模式（v2.105.0：正常/缺失退出/损坏退出/空权重退出）+ L3 组合因子过滤（缺失跳过/全缺失退出）+ 因子类别分类 + Regime 档位缩放 + 品种级 IC 自适应 + 组合合成（方向校正恒空 dict）+ delta 增量分类（v2.104.0+7）+ 加载源（v2.104.0+7）；Ridge 权重与方向校正测试已随 v2.105.0 移除 |
+| `tests/test_futures_signal_pipeline.py` | 39 | 信号管道 L3 组合权重严格模式（v2.105.0：正常/缺失退出/损坏退出/空权重退出）+ L3 组合因子过滤（缺失跳过/全缺失退出/market-db_path 链库路由透传 v2.104.0+41）+ 因子类别分类 + Regime 档位缩放 + 品种级 IC 自适应 + 组合合成（方向校正恒空 dict）+ delta 增量分类（v2.104.0+7）+ 加载源（v2.104.0+7）；Ridge 权重与方向校正测试已随 v2.105.0 移除 |
 | `tests/test_llm.py` | ~36 | LLM 客户端 |
 | `tests/test_monitor.py` | ~46 | 项目级监控 |
 | `tests/factor_db/test_schema.py` | ~12 | DuckDB Schema 测试 |

@@ -267,6 +267,18 @@ class TestLoadL3ComboFactors:
                 _load_l3_combo_factors({"f_a": 1.0})
         assert e.value.code == 1
 
+    def test_market_db_path_forwarded(self):
+        """链模式：market/db_path 参数透传底层加载（能源库路由）。"""
+        l3 = {"f_a": 0.5}
+        db_factors = [{"name": "f_a", "code": "..."}]
+        with patch(
+            "futures_signal_pipeline.load_futures_elite_factors_from_db",
+            return_value=db_factors,
+        ) as mock_load:
+            kept = _load_l3_combo_factors(l3, market="energy", db_path=Path("/tmp/energy.duckdb"))
+        assert {f["name"] for f in kept} == {"f_a"}
+        mock_load.assert_called_once_with(ic_threshold=0, db_path=Path("/tmp/energy.duckdb"), market="energy")
+
 
 class TestClassifyFactorCategory:
     """_classify_factor_category 名称后缀启发式分类测试。"""

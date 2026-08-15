@@ -139,7 +139,8 @@ def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
     1. 补全未闭合的字符串字面量（unterminated string literal）
     2. 修复不匹配的括号（closing parenthesis does not match opening）
     3. 通用语法修复（invalid syntax）— 行末补冒号
-    4. 全局括号平衡修复
+    4. 缩进类错误修复（unexpected indent / unindent does not match / expected an indented block）
+    5. 全局括号平衡修复
 
     Args:
         code: 原始因子代码
@@ -267,6 +268,60 @@ def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
                     fixed[idx] = line.replace(old, new)
                     if fixed[idx] != line:
                         candidate_codes.append("\n".join(fixed))
+
+    # ── Strategy 6: 缩进类错误修复（IndentationError） ──
+    # LLM 生成的因子代码常见问题：语句缩进错位导致
+    #   unexpected indent / unindent does not match any outer indentation level
+    #   / expected an indented block
+    _INDENT_ERR_KEYWORDS = (
+        "unexpected indent",
+        "unindent does not match",
+        "expected an indented block",
+    )
+
+    def _leading_spaces(s: str) -> int:
+        return len(s) - len(s.lstrip(" "))
+
+    if any(kw in error_msg for kw in _INDENT_ERR_KEYWORDS):
+        # 根因常出现在错误行前/后一行（如某语句被错误地反缩进，
+        # 解析器报错的却是紧随其后的缩进行），故对错误行邻域做候选。
+        focus_idx: list[int] = []
+        if line_no is not None:
+            idx = line_no - 1
+            for j in (idx - 1, idx, idx + 1):
+                if 0 <= j < len(lines):
+                    focus_idx.append(j)
+        else:
+            focus_idx = list(range(len(lines)))
+        for j in focus_idx:
+            cur_line = lines[j]
+            if not cur_line.strip():
+                continue
+            # 候选缩进 = 标准倍数 {0,4,8,12} ∪ 前后最近非空行的缩进
+            cand_indents: set[int] = {0, 4, 8, 12}
+            for k in range(j - 1, -1, -1):
+                if lines[k].strip():
+                    cand_indents.add(_leading_spaces(lines[k]))
+                    break
+            for k in range(j + 1, len(lines)):
+                if lines[k].strip():
+                    cand_indents.add(_leading_spaces(lines[k]))
+                    break
+            for ci in cand_indents:
+                if ci == _leading_spaces(cur_line):
+                    continue
+                fixed = lines.copy()
+                fixed[j] = " " * ci + cur_line.lstrip(" ")
+                candidate_codes.append("\n".join(fixed))
+        # expected an indented block：冒号行后补缩进 pass 形成代码块
+        if "expected an indented block" in error_msg and line_no is not None:
+            idx = line_no - 1
+            if 0 <= idx < len(lines) and lines[idx].rstrip().endswith(":"):
+                fixed = lines.copy()
+                fixed.insert(
+                    idx + 1, " " * (_leading_spaces(lines[idx]) + 4) + "pass"
+                )
+                candidate_codes.append("\n".join(fixed))
 
     # ── Strategy 4: 全局括号平衡修复 ──
     # 当上面所有策略都无效时，尝试对整个代码做括号对齐

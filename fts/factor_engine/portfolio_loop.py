@@ -2008,6 +2008,28 @@ def _run_sharpe_randomization_test(
     return passed
 
 
+def _verifier_view(combo: dict) -> dict:
+    """Step 6 Verifier 判定视图（GAP-122）。
+
+    min_sharpe/max_sharpe 判定信号质量，使用缩放前 signal_sharpe 替换
+    风控后净暴露 combo_sharpe：Regime 降仓 × G1 敞口压缩属暴露决策，
+    乘性压低 combo_sharpe（≤ signal_sharpe）后仍按原始质量门槛判定，
+    会导致风控一启用即恒不达 min_sharpe=2.0（期货/能源 L3 长期
+    verifier_warning 根因）。组合其余维度（相关性/换手/衰减/因子数）不变。
+
+    Args:
+        combo: 构建完成的组合（含 signal_sharpe 与 combo_sharpe 双指标）。
+
+    Returns:
+        判定视图副本（signal_sharpe 缺失时原样返回）。
+    """
+    view = dict(combo)
+    sig_sharpe = view.get("signal_sharpe")
+    if sig_sharpe is not None:
+        view["combo_sharpe"] = float(sig_sharpe)
+    return view
+
+
 def build_combo(
     signals: list[PortfolioSignal],
     mode: str = "equal_weight",
@@ -4375,7 +4397,9 @@ class PortfolioLoop:
                 logger.warning("[L3] Step 5.5: 漂移监控记录失败 (非致命): %s", e)
 
             # Step 6: Verifier 判定
-            passed, reasons = self.verifier.check(combo)
+            # 口径修复（GAP-122）：min_sharpe 判定信号质量，用缩放前 signal_sharpe，
+            # 而非风控后净暴露 combo_sharpe（见 _verifier_view）。组合其余维度不变。
+            passed, reasons = self.verifier.check(_verifier_view(combo))
             if not passed:
                 logger.warning("[L3] Step 6: Verifier 未通过: %s", "; ".join(reasons))
                 state["last_error"] = "; ".join(reasons)

@@ -708,3 +708,92 @@ def test_fix_factor_code_global_bracket_balance_mismatch_format():
         assert ok, "修复后的代码应通过语法验证"
     else:
         pass
+
+
+# ─── fix_factor_code 缩进类错误修复（GAP-121 能源链 L1 场景） ─────────────
+
+
+def test_fix_factor_code_unexpected_indent_dedented_statement():
+    """修复函数体内某语句被错误反缩进导致的 unexpected indent。
+
+    GAP-121 能源链 L1 候选 '油化工与煤化工相对强弱' 真实失败场景：
+    第 N 行语句丢失缩进（回到模块级），解析器却在紧随其后的缩进行
+    报 unexpected indent。
+    """
+    code = (
+        "def factor_program(data, params):\n"
+        "    import numpy as np\n"
+        "    n = len(data['close'])\n"
+        "    close = data['close']\n"
+        "    rs = close - 1\n"
+        "    # 动量\n"
+        "average = np.zeros(n)\n"
+        "    window = params.get('window', 5)\n"
+        "    for i in range(window, n):\n"
+        "        average[i] = np.mean(rs[i-window:i])\n"
+        "    out = np.clip(average, -1, 1)\n"
+        "    return out\n"
+    )
+    ok, reasons = validate_factor_code(code)
+    assert not ok, "原始代码应存在语法错误"
+    assert any("unexpected indent" in r for r in reasons), (
+        f"应报告 unexpected indent，实际: {reasons}"
+    )
+    fixed, fixed_code = fix_factor_code(code, "; ".join(reasons))
+    assert fixed, "反缩进语句应能被自动修复"
+    ok2, reasons2 = validate_factor_code(fixed_code)
+    assert ok2, f"修复后的代码应通过验证，实际失败: {reasons2}"
+    # 反缩进语句应恢复为函数体内缩进
+    assert "average = np.zeros(n)" in fixed_code
+    assert "\n    average = np.zeros(n)" in fixed_code
+
+
+def test_fix_factor_code_unexpected_indent_extra_indent():
+    """修复某语句自身多余缩进导致的 unexpected indent。"""
+    code = (
+        "def factor_program(data, params):\n"
+        "    import numpy as np\n"
+        "    n = len(data['close'])\n"
+        "        return np.zeros(n)\n"
+    )
+    ok, reasons = validate_factor_code(code)
+    assert not ok, "原始代码应存在语法错误"
+    fixed, fixed_code = fix_factor_code(code, "; ".join(reasons))
+    assert fixed, "多余缩进应能被自动修复"
+    ok2, _ = validate_factor_code(fixed_code)
+    assert ok2, "修复后的代码应通过验证"
+
+
+def test_fix_factor_code_unindent_does_not_match():
+    """修复 unindent does not match any outer indentation level。"""
+    code = (
+        "def factor_program(data, params):\n"
+        "    import numpy as np\n"
+        "    if len(data['close']) > 0:\n"
+        "        out = data['close']\n"
+        "      return out\n"
+    )
+    ok, reasons = validate_factor_code(code)
+    assert not ok, "原始代码应存在语法错误"
+    fixed, fixed_code = fix_factor_code(code, "; ".join(reasons))
+    assert fixed, "缩进级别不匹配应能被自动修复"
+    ok2, _ = validate_factor_code(fixed_code)
+    assert ok2, "修复后的代码应通过验证"
+
+
+def test_fix_factor_code_expected_indented_block():
+    """修复 expected an indented block（冒号后缺缩进代码块）。"""
+    code = (
+        "def factor_program(data, params):\n"
+        "    import numpy as np\n"
+        "    n = len(data['close'])\n"
+        "    if n > 0:\n"
+        "    return np.zeros(n)\n"
+    )
+    ok, reasons = validate_factor_code(code)
+    assert not ok, "原始代码应存在语法错误"
+    fixed, fixed_code = fix_factor_code(code, "; ".join(reasons))
+    assert fixed, "缺缩进块应能被自动修复"
+    ok2, _ = validate_factor_code(fixed_code)
+    assert ok2, "修复后的代码应通过验证"
+

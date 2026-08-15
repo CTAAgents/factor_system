@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+39
+> 版本: v2.104.0+42
 > 最后更新: 2026-08-10
 
 ---
@@ -277,7 +277,7 @@ fts/
 │   ├── factor_optimizer.py    # 因子优化器（FactorSignalCache 信号缓存 Parquet 化：put 写单列 Parquet（DuckDB 零依赖）+ checksum 校验 + .npy 只读兼容回退重建，plans/29 P3-A）
 │   ├── seed_data_futures_full.py # 期货全量种子因子（style_tags 14 类，81 因子）
 │   ├── seed_pool.py            # 期货种子池（81 因子，style_tags 14 类）
-│   ├── factor_program.py       # 因子程序（安全沙箱）
+│   ├── factor_program.py       # 因子程序（安全沙箱；fix_factor_code 自动修复器 v2.104.0+40 新增 IndentationError 缩进修复：反缩进语句/多余缩进/unindent mismatch/缺缩进块）
 │   ├── standardizer.py        # 因子标准化
 │   ├── verifier.py             # Verifier 锁定协议
 │   ├── state.py                # 演化状态管理 + trace_id 全链路
@@ -571,7 +571,12 @@ FTS (因子推演) — 支持期货横截面因子演化
 │   ② verify_qa_workflow.py --chain energy → 12 品种全链质检           │
 │   ③ futures_signal_pipeline.py --chain energy → 因子源切能源库、    │
 │      面板=12训练+8盲测、链外盲测 IC 对比、链内综合得分，             │
-│      输出 reports/energy_chain/{date}/（独立于 reports/futures/）   │
+│      输出 reports/energy_chain/{date}/（独立于 reports/futures/）；   │
+│      因子选择与基础权重由链级 L3 组合决定（memory/portfolio/energy/   │
+│      factor_weights.json，v2.104.0+39 起 active，4 因子：             │
+│      fut_cross_carry/fut_bias/fut_trend_strength/                    │
+│      eng_chain_linkage_momentum），按名从能源库加载定义（严格模式）， │
+│      不再全量精英因子等权（v2.104.0+41 切换，与通用模式对齐）        │
 │ FUTURES_SECTOR_MAP 新增"炼化聚酯链"分组（置于首位）：通用中性化反向 │
 │   映射{后序覆盖前序}下 12 品种仍归属 能源/油化工/聚酯链，通用语义不变│
 │ 训练链/盲测池再优化（v2.104.0+34，A+B+C）：                        │
@@ -630,6 +635,16 @@ FTS (因子推演) — 支持期货横截面因子演化
 │    combo_sharpe（风控后净暴露夏普）：缩放后权重口径（原有字段）        │
 │    measured 口径下 portfolio_returns 内部归一化，两者相等             │
 │    → PortfolioCombo.signal_sharpe 契约（estimated 差异可解释）       │
+│ ②b2 L3 Verifier 判定口径（GAP-122，portfolio_loop Step 6，           │
+│      v2.104.0+42）：min_sharpe/max_sharpe 判定信号质量，经            │
+│      _verifier_view 用缩放前 signal_sharpe 替换风控后 combo_sharpe    │
+│      （Regime 降仓 × G1 敞口压缩为暴露决策，乘性压低 combo_sharpe，   │
+│      原始口径致风控一启用即恒不达 min_sharpe=2.0——期货/能源 L3 长期  │
+│      verifier_warning 根因）；相关性/换手/衰减/因子数维度不变；       │
+│      config/settings.yaml verifier.min_sharpe=1.9（信号质量下限，     │
+│      原始 2.0 已由 SHARPE_CAP=2.0 截断的因子等权合成贴线）、           │
+│      max_turnover=12.0（对齐因子月度换手次/月量纲，原 0.5 为比例量纲   │
+│      与库内 4.48~17.40 次/月不匹配）                                  │
 │ ②c 实测化输入（方案①，_auto_build_factor_returns，v2.104.0+2）       │
 │    --returns-matrix 手动 CSV 优先（CLI 传入 factor_returns）          │
 │    自动构建默认关闭（env FTS_L3_AUTO_FACTOR_RETURNS=1 启用）：          │

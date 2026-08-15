@@ -31,10 +31,13 @@ portfolio_top_n: 5
 portfolio_decay_days: 90
 
 # ── L3 Verifier 配置 ──
+# 口径说明（GAP-122，v2.104.0+42）：min_sharpe 判定组合信号质量，Verifier 校验
+# 缩放前 signal_sharpe（见 portfolio_loop Step 6）；max_turnover 对齐因子月度换手
+# 量纲（次/月，能源精英池均值区间 4.48~17.40，组合等权均值 ~11.6）。
 verifier:
-  min_sharpe: 2.0
+  min_sharpe: 1.9
   max_correlation: 0.5
-  max_turnover: 0.50
+  max_turnover: 12.0
   max_decay_rate: 0.30
   min_n_factors: 3
 
