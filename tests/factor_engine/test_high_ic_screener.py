@@ -344,6 +344,34 @@ class TestScoringDetail:
         assert report.item("ic_win_rate").passed is None
         assert report.item("multi_regime").passed is None
 
+    def test_signal_halflife_zero_decay_full_score(self):
+        # GAP-121: decay_6m=0（信号完全稳定）→ 半衰期无穷，满分且不除零崩溃
+        ev = _base_evaluation(
+            level_1_backtest={
+                **_base_evaluation()["level_1_backtest"],
+                "decay_6m": 0.0,
+            }
+        )
+        report = HighICScreener().screen(factor=_base_factor(), evaluation=ev)
+        item = report.item("signal_halflife")
+        assert item is not None
+        assert item.passed is True
+        assert item.score == 6.0
+
+    def test_signal_halflife_single_edge_value(self):
+        # GAP-121: decay_6m=1.0（信号瞬时失效）→ 半衰期 1 天，极低分不崩溃
+        ev = _base_evaluation(
+            level_1_backtest={
+                **_base_evaluation()["level_1_backtest"],
+                "decay_6m": 1.0,
+            }
+        )
+        report = HighICScreener().screen(factor=_base_factor(), evaluation=ev)
+        item = report.item("signal_halflife")
+        assert item is not None
+        assert item.passed is False
+        assert item.score < 6.0
+
 
 # ─── 5. 市场统一性 ─────────────────────────────────────────
 

@@ -148,6 +148,8 @@ def _make_passing_evaluation(factor_id: str) -> FactorEvaluation:
         passed=True,
         failure_reasons=[],
         level_3_multiple={"passed": True},
+        # GAP-121: 晋升需携带 ≥2 窗口走航结果（WalkForward 强制门）
+        walk_forward={"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
         evaluated_at="2026-08-10T00:00:00",
     )
 

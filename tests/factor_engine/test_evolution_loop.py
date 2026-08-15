@@ -1861,7 +1861,10 @@ class TestEvolutionLoopCoverage:
             trace_id="test_trace",
             passed=True,
             failure_reasons=[],
+            level_1_backtest={"ic": 0.05, "sharpe": 2.0},
             level_3_multiple={"passed": True},
+            # GAP-121: 晋升需携带 ≥2 窗口走航结果（WalkForward 强制门）
+            walk_forward={"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
             evaluated_at="2026-07-18T00:00:00",
         )
         fp = loop._promote_to_elite(factor, evaluation)
@@ -1957,6 +1960,8 @@ class TestEvolutionLoopCoverage:
             failure_reasons=[],
             level_1_backtest={"ic": 0.05, "sharpe": 1.6},
             level_3_multiple={"passed": True},
+            # GAP-121: 晋升需携带 ≥2 窗口走航结果（WalkForward 强制门）
+            walk_forward={"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
             evaluated_at="2026-07-18T00:00:00",
         )
         fp = loop._promote_to_elite(factor, evaluation)
@@ -1991,6 +1996,8 @@ class TestEvolutionLoopCoverage:
             failure_reasons=[],
             level_1_backtest={"ic": 0.05, "sharpe": 1.6},
             level_3_multiple={"passed": True},
+            # GAP-121: 晋升需携带 ≥2 窗口走航结果（WalkForward 强制门）
+            walk_forward={"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
             evaluated_at="2026-07-18T00:00:00",
         )
         fp = loop._promote_to_elite(factor, evaluation)
@@ -3318,6 +3325,8 @@ class TestFactorAuditorIntegration:
             failure_reasons=[],
             level_1_backtest={"ic": 0.05, "sharpe": 1.5},
             level_3_multiple={"passed": True},
+            # GAP-121: 晋升需携带 ≥2 窗口走航结果（WalkForward 强制门）
+            walk_forward={"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
             evaluated_at="2026-07-18T00:00:00",
         )
 
@@ -3339,7 +3348,7 @@ class TestFactorAuditorIntegration:
         assert "audit_report" in record
 
     def test_promote_to_elite_audit_fails_blocks_promotion(self, minimal_loop, sample_seed, tmp_path):
-        """验证审计未通过时审计报告写入记录（阻塞在 run() 中执行）。"""
+        """GAP-121: 审计未通过（audit_report.passed=False）→ 审计硬门直接阻断晋升。"""
         from fts.factor_engine.audit import FactorAuditReport, AuditItemResult
 
         # 注入隔离 DuckDB：minimal_loop 默认连真实因子库，直接调 _promote_to_elite
@@ -3369,7 +3378,7 @@ class TestFactorAuditorIntegration:
             ],
             passed=False,
             pass_rate=0.3,
-            summary={"total": 2, "passed": 0},
+            summary={"total": 2, "passed": 0, "failed_items": ["causal_validity", "oos_consistency"]},
         )
 
         evaluation = FactorEvaluation(
@@ -3379,6 +3388,8 @@ class TestFactorAuditorIntegration:
             failure_reasons=[],
             level_1_backtest={"ic": 0.05, "sharpe": 1.5},
             level_3_multiple={"passed": True},
+            # GAP-121: 先通过 WalkForward 强制门，再由审计硬门拦截
+            walk_forward={"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
             evaluated_at="2026-07-18T00:00:00",
         )
 
@@ -3389,10 +3400,9 @@ class TestFactorAuditorIntegration:
             quality_score=45.0,
             audit_report=mock_report,
         )
-        assert path is not None
-        record = json.loads(path.read_text(encoding="utf-8"))
-        assert "audit_report" in record
-        assert record["audit_report"]["passed"] is False
+        assert path is None
+        # 审计失败不得写入 JSON 快照
+        assert not (minimal_loop.elite_dir / f"{sample_seed['factor_id']}.json").exists()
 
 
 class TestBacktestPipelineIntegrationExtended:
@@ -5016,6 +5026,8 @@ class TestGapF16PromoteToElite:
             "level_1_backtest": {"ic": 0.05, "sharpe": 2.0},
             "level_2_economic": {"theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3},
             "level_3_multiple": {"passed": passed_l3, "bonferroni_p": 0.01, "adjusted_t": 3.0},
+            # GAP-121: 晋升需携带 ≥2 窗口走航结果（WalkForward 强制门）
+            "walk_forward": {"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
             "passed": True,
             "failure_reasons": [],
         }
@@ -5034,6 +5046,7 @@ class TestGapF16PromoteToElite:
         screen.to_dict.return_value = {"grade": grade, "total_score": 80.0}
         screen.veto_reasons = []
         screen.total_score = 80.0
+        screen.items = []
         loop.high_ic_screener.screen = MagicMock(return_value=screen)
 
     def test_promote_duplicate_name_returns_none(self, tmp_memory_dir, tmp_elite_dir):
@@ -5058,6 +5071,62 @@ class TestGapF16PromoteToElite:
         self._mock_repo(loop)
         self._mock_screen_grade(loop, grade="C")
         assert loop._promote_to_elite(self._make_factor(), self._make_evaluation(), shadow_observe=False) is None
+
+    def test_promote_walkforward_missing_blocks(self, tmp_memory_dir, tmp_elite_dir):
+        """GAP-121: evaluation 无走航结果（n_windows<2）→ WalkForward 强制门拦截。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        self._mock_repo(loop)
+        self._mock_screen_grade(loop)
+        ev = self._make_evaluation()
+        ev["walk_forward"] = {"n_windows_completed": 0, "passed": False}
+        assert loop._promote_to_elite(self._make_factor(), ev, shadow_observe=False) is None
+
+    def test_promote_walkforward_single_window_blocks(self, tmp_memory_dir, tmp_elite_dir):
+        """GAP-121: 仅 1 个 OOS 窗口（<2）→ WalkForward 强制门拦截。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        self._mock_repo(loop)
+        self._mock_screen_grade(loop)
+        ev = self._make_evaluation()
+        ev["walk_forward"] = {"n_windows_completed": 1, "passed": True}
+        assert loop._promote_to_elite(self._make_factor(), ev, shadow_observe=False) is None
+
+    def test_promote_hic_b_grade_many_skipped_blocks(self, tmp_memory_dir, tmp_elite_dir):
+        """GAP-121: HighIC B 级但跳过项过多（信息不足）→ 禁止入库。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        self._mock_repo(loop)
+        screen = MagicMock()
+        screen.grade = "B"
+        screen.to_dict.return_value = {"grade": "B", "total_score": 65.0}
+        screen.veto_reasons = []
+        screen.total_score = 65.0
+        # 21 项中 14 项未判定（passed=None）> 上限 8
+        screen.items = [MagicMock(passed=None) for _ in range(14)] + [
+            MagicMock(passed=True) for _ in range(7)
+        ]
+        loop.high_ic_screener.screen = MagicMock(return_value=screen)
+        assert loop._promote_to_elite(self._make_factor(), self._make_evaluation(), shadow_observe=False) is None
+
+    def test_promote_hic_b_grade_covered_ok(self, tmp_memory_dir, tmp_elite_dir):
+        """GAP-121: HighIC B 级且跳过项在阈值内 → 不因信息不足被拦（后续正常晋升）。"""
+        loop = self._make_loop(tmp_memory_dir, tmp_elite_dir)
+        mock_repo = self._mock_repo(loop)
+        screen = MagicMock()
+        screen.grade = "B"
+        screen.to_dict.return_value = {"grade": "B", "total_score": 65.0}
+        screen.veto_reasons = []
+        screen.total_score = 65.0
+        # 21 项中 4 项未判定（≤ 上限 8）
+        screen.items = [MagicMock(passed=None) for _ in range(4)] + [
+            MagicMock(passed=True) for _ in range(17)
+        ]
+        loop.high_ic_screener.screen = MagicMock(return_value=screen)
+        loop.elite_tracker.init_tracker = MagicMock()
+        loop._check_elite_correlation = MagicMock(return_value=None)
+        factor = self._make_factor(fid="fct_prom_hic_b_ok")
+        factor["name"] = "hic_b_covered_ok"
+        fp = loop._promote_to_elite(factor, self._make_evaluation(), shadow_observe=False)
+        assert fp is not None
+        mock_repo.create_factor.assert_called_once()
 
     def test_promote_duckdb_write_failure_rolls_back(self, tmp_memory_dir, tmp_elite_dir):
         """DuckDB 写入失败 → 回滚 JSON 快照并返回 None。"""
@@ -5854,6 +5923,93 @@ class TestGapF16CrossSectionAndEvolution:
             evaluation = loop._evaluate_cross_section(factor, "t")
         assert evaluation["passed"] is False
         assert len(evaluation["failure_reasons"]) == 2
+
+    def test_evaluate_cross_section_hic_fields_passthrough(self, tmp_memory_dir):
+        """GAP-121: 横截面评估透传 HighICScreener 消费字段（extreme_perturbation /
+        cross_symbol_positive_ratio / backtest_pipeline）并派生 ic_volatility / decay_6m。"""
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+            cross_section_data={"S0": _make_ohlcv(120)},
+            cross_section_dates=pd.DatetimeIndex(pd.date_range("2026-01-01", periods=120)),
+        )
+        bt = {
+            "ic": 0.05,
+            "sharpe": 2.0,
+            "t_stat": 3.0,
+            "extreme_perturbation": {"ic_before": 0.05, "ic_after": 0.04, "ic_drop": 0.2},
+            "cross_symbol_positive_ratio": 0.8,
+            "net_excess_return": 0.02,
+        }
+        wf = {
+            "n_windows_completed": 2,
+            "ic_consistency": 0.5,
+            "ic_volatility": 0.15,
+            "windows": [{"ic": 0.05}, {"ic": 0.04}],
+        }
+        factor = _make_minimal_factor("fct_cs_hic")
+        with patch(
+            "fts.factor_engine.evolution_seeds.cross_section_evaluate_backtest", return_value=bt
+        ), patch(
+            "fts.factor_engine.evaluation_chain.cross_section_walk_forward", return_value=wf
+        ):
+            ev = loop._evaluate_cross_section(factor, "t")
+        # 顶层透传（HighICScreener 消费）
+        assert ev["extreme_perturbation"]["ic_drop"] == 0.2
+        assert ev["cross_symbol_positive_ratio"] == 0.8
+        assert ev["backtest_pipeline"] == {"net_excess_return": 0.02}
+        # wf 派生（param_sensitivity / signal_halflife 消费）
+        assert ev["level_1_backtest"]["ic_volatility"] == 0.15
+        assert ev["level_1_backtest"]["decay_6m"] == pytest.approx(0.5)
+
+    def test_evaluate_cross_section_hic_fields_no_wf(self, tmp_memory_dir):
+        """GAP-121: 走航未产出窗口时 ic_volatility/decay_6m 不覆盖，其余字段仍透传。"""
+        loop = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+            cross_section_data={"S0": _make_ohlcv(120)},
+            cross_section_dates=pd.DatetimeIndex(pd.date_range("2026-01-01", periods=120)),
+        )
+        bt = {
+            "ic": 0.05,
+            "sharpe": 2.0,
+            "t_stat": 3.0,
+            "extreme_perturbation": {"ic_drop": 0.1},
+            "cross_symbol_positive_ratio": 0.7,
+            "net_excess_return": 0.01,
+        }
+        factor = _make_minimal_factor("fct_cs_hic2")
+        with patch(
+            "fts.factor_engine.evolution_seeds.cross_section_evaluate_backtest", return_value=bt
+        ), patch(
+            "fts.factor_engine.evaluation_chain.cross_section_walk_forward",
+            return_value={"n_windows_completed": 0, "ic_consistency": 0.0, "ic_volatility": 0.0, "windows": []},
+        ):
+            ev = loop._evaluate_cross_section(factor, "t")
+        assert ev["extreme_perturbation"]["ic_drop"] == 0.1
+        assert ev["cross_symbol_positive_ratio"] == 0.7
+        assert "ic_volatility" not in ev["level_1_backtest"]
+        assert "decay_6m" not in ev["level_1_backtest"]
+
+    def test_energy_market_hic_v5_relaxed(self, tmp_memory_dir):
+        """GAP-121: energy 链 V5 放宽与 futures 对齐（logic_min_score=1.0），
+        L1 候选（LLM 生成因子 L2 四维最低=1）不再被 V5 一票否决误杀。"""
+        loop_energy = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+            market="energy",
+        )
+        loop_futures = EvolutionLoop(
+            data=_make_ohlcv(100),
+            forward_returns=np.zeros(100),
+            memory_dir=tmp_memory_dir,
+            market="futures",
+        )
+        assert loop_energy.high_ic_screener._config.logic_min_score == pytest.approx(1.0)
+        assert loop_futures.high_ic_screener._config.logic_min_score == pytest.approx(1.0)
 
     def test_run_gp_evolution_bad_fitness(self, tmp_memory_dir):
         """GP 适应度 <= 0 → RuntimeError。"""

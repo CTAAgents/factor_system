@@ -155,6 +155,43 @@ def test_evaluate_multiple_tests_with_data():
     assert 0 < mt["bonferroni_p"] <= 1.0
 
 
+def test_evaluate_multiple_tests_n_tested_batch_size():
+    """GAP-121: n_tested 传入本批次候选总数时，effective_n 与其对齐而非列表长度。
+
+    演化逐因子评估时列表仅含当前/已评估因子，若以列表长度代替候选规模，
+    Bonferroni 校正会退化（如首因子 n=1 无校正）。n_tested 显式传入时优先使用。
+    """
+    from fts.factor_engine.contracts import (
+        BacktestMetrics,
+        EconomicScore,
+        FactorEvaluation,
+        MultipleTestResult,
+    )
+
+    # 单因子评估（列表长度 1），但本批次候选总数 64
+    evals = [
+        FactorEvaluation(
+            factor_id="fct_now",
+            trace_id="t",
+            level_1_backtest=BacktestMetrics(t_stat=3.0),
+            level_2_economic=EconomicScore(),
+            level_3_multiple=MultipleTestResult(),
+            passed=False,
+            failure_reasons=[],
+            evaluated_at="2026-08-15",
+        )
+    ]
+    # 未传 n_tested：effective_n = 列表长度 = 1（退化）
+    mt_len = evaluate_multiple_tests(evals)
+    assert mt_len["effective_n_factors"] == 1
+    # 传 n_tested=64：effective_n 对齐批次候选规模，Bonferroni 收紧（校正后 p 更大）
+    mt_batch = evaluate_multiple_tests(evals, n_tested=64)
+    assert mt_batch["effective_n_factors"] == 64
+    assert mt_batch["bonferroni_p"] >= mt_len["bonferroni_p"]
+    # passed 判定相应收紧：同一 t 统计量在 n=1 时可过，n=64 时因 Bonferroni 拦截
+    assert mt_batch["adjusted_t"] == pytest.approx(mt_len["adjusted_t"] / 8.0)
+
+
 def test_evaluate_multiple_tests_with_correlation():
     """提供相关性矩阵时应调整有效因子数。"""
     from fts.factor_engine.contracts import (
@@ -824,6 +861,66 @@ class TestCrossSectionEvaluateBacktest:
         assert "max_drawdown" in bt
         assert "t_stat" in bt
 
+    def test_normal_panel_hic_fields(self):
+        """GAP-121: cross_section_evaluate_backtest 产出 HighICScreener 消费字段
+        （cross_symbol_positive_ratio / extreme_perturbation / net_excess_return）。"""
+        from fts.factor_engine.contracts import EconomicLogic, FactorSignature
+        from fts.factor_engine.evaluation_chain import cross_section_evaluate_backtest
+        from fts.factor_engine.factor_program import create_factor_program
+
+        fp = create_factor_program(
+            name="cross_mom_hic",
+            code=(
+                "import numpy as np\n"
+                "def factor_program(data, params):\n"
+                "    close = data['close'].values\n"
+                "    n = len(close)\n"
+                "    sig = np.zeros(n)\n"
+                "    for i in range(5, n):\n"
+                "        sig[i] = (close[i] - close[i-5]) / max(close[i-5], 1e-10)\n"
+                "    return np.clip(sig * 10, -1.0, 1.0)\n"
+            ),
+            params={},
+            signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
+            economic_logic=EconomicLogic(
+                theory=4, behavioral=3, microstructure=3, institutional=4, narrative="横截面字段补全测试"
+            ),
+            source="manual",
+        )
+        panel, dates = self._make_panel(10)
+        bt = cross_section_evaluate_backtest(fp, panel, dates)
+        # 跨品种 IC 正向占比（industry_coverage 消费）
+        assert 0.0 <= bt["cross_symbol_positive_ratio"] <= 1.0
+        # 极值扰动 IC（V2 / extreme_perturb 消费）
+        assert "extreme_perturbation" in bt
+        if bt["extreme_perturbation"] is not None:
+            assert "ic_drop" in bt["extreme_perturbation"]
+        # 扣成本后净超额（V4 / net_excess 消费）
+        assert "net_excess_return" in bt
+        assert isinstance(bt["net_excess_return"], float)
+
+    def test_normal_panel_hic_fields_constant_signal(self):
+        """GAP-121: 常数信号时 extreme_perturbation=None（screener skipped 兜底），
+        cross_symbol_positive_ratio 仍由 symbol_ic 派生（不足 5 个有效样本时缺失）。"""
+        from fts.factor_engine.contracts import EconomicLogic, FactorSignature
+        from fts.factor_engine.evaluation_chain import cross_section_evaluate_backtest
+        from fts.factor_engine.factor_program import create_factor_program
+
+        fp = create_factor_program(
+            name="const_sig",
+            code="import numpy as np\ndef factor_program(data, params):\n    return np.ones(len(data['close']))",
+            params={},
+            signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=1),
+            economic_logic=EconomicLogic(theory=3, behavioral=3, microstructure=3, institutional=3, narrative="常数"),
+            source="manual",
+        )
+        panel, dates = self._make_panel(10)
+        bt = cross_section_evaluate_backtest(fp, panel, dates)
+        # 常数信号下截面 IC 恒空 → 走 _cs_empty_metrics 降级（无新字段），
+        # HighICScreener 对缺失字段按 skipped 处理；非降级路径时字段须为合法值。
+        assert bt.get("extreme_perturbation") is None or isinstance(bt.get("extreme_perturbation"), dict)
+        assert bt.get("net_excess_return") is None or isinstance(bt.get("net_excess_return"), float)
+
     def test_few_stocks(self):
         """少于 5 只股票 → 返回零值 BacktestMetrics (line 483-487)。"""
         from fts.factor_engine.contracts import EconomicLogic, FactorSignature
@@ -1074,6 +1171,76 @@ class TestCrossSectionEvaluateBacktest:
         )
         assert "ic" in bt
         assert "sharpe" in bt
+
+
+# ─── cross_section_walk_forward ─────────────────────────
+
+
+class TestCrossSectionWalkForward:
+    """覆盖 cross_section_walk_forward（GAP-121 评估链修复新增）。"""
+
+    @staticmethod
+    def _make_panel(n_stocks: int, n_dates: int, seed: int = 7) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+        np.random.seed(seed)
+        dates = pd.date_range("2023-09-01", periods=n_dates, freq="D")
+        panel: dict[str, pd.DataFrame] = {}
+        for i in range(n_stocks):
+            close = 100 + i * 5.0 + np.cumsum(np.random.randn(n_dates) * 0.5)
+            panel[f"SYM_{i}"] = pd.DataFrame(
+                {
+                    "open": close + np.random.randn(n_dates) * 0.1,
+                    "high": close + np.abs(np.random.randn(n_dates)) * 0.3,
+                    "low": close - np.abs(np.random.randn(n_dates)) * 0.3,
+                    "close": close,
+                    "volume": np.random.randint(1000, 10000, n_dates).astype(float),
+                },
+                index=dates,
+            )
+        return panel, dates
+
+    @staticmethod
+    def _make_factor():
+        from fts.factor_engine.contracts import EconomicLogic, FactorSignature
+        from fts.factor_engine.factor_program import create_factor_program
+
+        return create_factor_program(
+            name="cs_wf_mom",
+            code=(
+                "import numpy as np\n"
+                "def factor_program(data, params):\n"
+                "    close = data['close'].values\n"
+                "    n = len(close)\n"
+                "    sig = np.zeros(n)\n"
+                "    for i in range(5, n):\n"
+                "        sig[i] = (close[i] - close[i-5]) / max(close[i-5], 1e-10)\n"
+                "    return np.clip(sig * 10, -1.0, 1.0)\n"
+            ),
+            params={},
+            signature=FactorSignature(input_fields=["close"], output_type="signal", frequency="daily", lookback=10),
+            economic_logic=EconomicLogic(
+                theory=4, behavioral=3, microstructure=3, institutional=4, narrative="横截面走航测试"
+            ),
+            source="manual",
+        )
+
+    def test_short_sample_produces_multiple_windows(self):
+        """GAP-121: 短样本（~700 行模拟能源链共同窗口）+ 短窗口配置应产出 ≥2 个 OOS 窗口。"""
+        from fts.factor_engine.evaluation_chain import cross_section_walk_forward
+
+        panel, dates = self._make_panel(12, n_dates=700)
+        config = {"window_years": 1, "step_months": 2, "min_oos_months": 1, "n_windows": 3}
+        wf = cross_section_walk_forward(self._make_factor(), panel, dates, config=config)
+        assert wf["n_windows_completed"] >= 2
+        # 走航窗口 IC 均为有限值（未因数据问题产生 NaN）
+        assert all(np.isfinite(w["ic"]) for w in wf["windows"])
+
+    def test_default_config_too_long_for_short_sample(self):
+        """默认 3 年训练窗口对短样本（<3 年）无法构建窗口 → n_windows=0。"""
+        from fts.factor_engine.evaluation_chain import cross_section_walk_forward
+
+        panel, dates = self._make_panel(12, n_dates=500)
+        wf = cross_section_walk_forward(self._make_factor(), panel, dates)
+        assert wf["n_windows_completed"] == 0
 
 
 # ─── _neutralize_signal_matrix ─────────────────────────

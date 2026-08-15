@@ -120,6 +120,15 @@ class AlignedExposureConfig:
     max_compress: float = 0.50
     compress_curve: str = "linear"
 
+    def __post_init__(self) -> None:
+        """配置契约校验（G1 风控参数，非法值快速失败，杜绝静默越界）。"""
+        if not (0.0 < self.align_threshold <= 1.0):
+            raise ValueError(f"align_threshold 必须在 (0,1]，实际 {self.align_threshold}")
+        if not (0.0 < self.max_compress <= 1.0):
+            raise ValueError(f"max_compress 必须在 (0,1]，实际 {self.max_compress}")
+        if self.compress_curve not in ("linear", "sqrt", "exp"):
+            raise ValueError(f"compress_curve 必须是 linear/sqrt/exp，实际 {self.compress_curve}")
+
 
 def check_aligned_exposure(
     signals: list[dict],

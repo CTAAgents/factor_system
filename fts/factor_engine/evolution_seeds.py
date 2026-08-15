@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
+import pandas as pd
 
 from .contracts import FactorEvaluation  # noqa: E402 — 延迟导入规避循环依赖
 from .evaluation_chain import cross_section_evaluate_backtest  # noqa: E402 — 延迟导入规避循环依赖
@@ -591,7 +592,8 @@ class SeedManager:
 
     def _evaluate_cross_section(self, factor: "FactorProgram", trace_id: str) -> "FactorEvaluation":
         """横截面模式下的评估：直接回测 + 自动构造 FactorEvaluation。"""
-        from .contracts import EconomicScore, MultipleTestResult
+        from .contracts import EconomicScore
+        from .evaluation_chain import cross_section_walk_forward, evaluate_multiple_tests
 
         bt = cross_section_evaluate_backtest(
             factor,
@@ -613,9 +615,42 @@ class SeedManager:
             dimensions_passed=3,
             narrative=el.get("narrative", "横截面评估（自动继承）"),
         )
-        mt = MultipleTestResult(
-            bonferroni_p=1.0, fdr_q=0.05, effective_n_factors=1, adjusted_t=bt.get("t_stat", 3.0), passed=True
-        )
+        # GAP-121 评估链修复: Level3 不再硬编码（bonferroni_p=1.0, effective_n=1,
+        # passed=True 恒过）——按本批次实际被检验因子数计算，与候选规模对齐。
+        prior_evals: list = list(getattr(self._owner, "_prior_evaluations", []) or [])
+        temp_eval = {"factor_id": factor["factor_id"], "trace_id": trace_id, "level_1_backtest": bt}
+        mt = evaluate_multiple_tests([*prior_evals, temp_eval])
+        # GAP-121 评估链修复: 横截面多窗口走航验证（短样本自适应窗口/步长）。
+        wf: Optional[dict] = None
+        try:
+            build_cfg = getattr(self._owner, "_build_wf_config", None)
+            wf = cross_section_walk_forward(
+                factor,
+                self._owner.cross_section_data,
+                self._owner.cross_section_dates,
+                config=build_cfg(pd.DataFrame(index=pd.DatetimeIndex(self._owner.cross_section_dates)))
+                if callable(build_cfg)
+                else None,
+                industry_map=self._owner.industry_map,
+                cap_map=self._owner.cap_map,
+                style_exposures=self._build_barra_exposures(),
+                vol_map=self._build_vol_map(),
+            )
+        except Exception as e:  # noqa: BLE001 — 走航失败记录但不阻断评估（晋升侧硬门槛兜底）
+            logger.warning("[Evo] 横截面走航验证失败 [%s]: %s", factor.get("factor_id", "?"), e)
+
+        # GAP-121 补全（横截面路径）：走航跨窗口 IC 波动率/一致性衰减
+        # （供 HighICScreener param_sensitivity / signal_halflife 消费；此前横截面
+        # level_1 不产出 ic_volatility/decay_6m 导致两项恒 skipped）。
+        if wf and wf.get("n_windows_completed", 0) > 0:
+            bt.setdefault("ic_volatility", float(wf.get("ic_volatility", 0.0) or 0.0))
+            bt["decay_6m"] = max(0.0, 1.0 - float(wf.get("ic_consistency", 0.0) or 0.0))
+        # GAP-121 补全（横截面路径）：端到端成本口径（net_excess_return 由
+        # cross_section_evaluate_backtest 派生，此处包装为 backtest_pipeline 供
+        # HighICScreener V4 / net_excess 消费）。
+        if bt.get("net_excess_return") is not None:
+            bt["backtest_pipeline"] = {"net_excess_return": bt["net_excess_return"]}
+
         reasons: list[str] = []
         if bt.get("ic", 0) < 0.03:
             reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
@@ -627,6 +662,10 @@ class SeedManager:
             level_1_backtest=bt,
             level_2_economic=ec,
             level_3_multiple=mt,
+            walk_forward=wf,
+            extreme_perturbation=bt.get("extreme_perturbation"),
+            cross_symbol_positive_ratio=bt.get("cross_symbol_positive_ratio"),
+            backtest_pipeline=bt.get("backtest_pipeline"),
             passed=len(reasons) == 0,
             failure_reasons=reasons,
             evaluated_at=datetime.now().isoformat(),

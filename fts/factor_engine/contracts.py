@@ -228,6 +228,7 @@ class FactorEvaluation(TypedDict, total=False):
     level_3_multiple: MultipleTestResult
     walk_forward: Optional[WalkForwardResult]  # 可选走航验证结果
     extreme_perturbation: Optional[dict]  # 极值扰动 IC 重算（GAP-F15: ic_before/ic_after/ic_drop/n_total/n_removed）
+    cross_symbol_positive_ratio: Optional[float]  # 跨品种 IC 正向占比（GAP-121 横截面路径补全，供 HighICScreener industry_coverage 消费）
     backtest_pipeline: Optional[dict[str, Any]]  # 端到端回测流水线结果（Phase B.2）
     ablation_check: Optional[dict[str, Any]]  # 消融实验检查结果（Phase A 集成）
     causal_validation: Optional[dict[str, Any]]  # 因果结构审查结果（Phase C 集成）
@@ -613,7 +614,7 @@ class PortfolioCombo(TypedDict, total=False):
     updated_at: str
     combo_id: str  # cmb_<8hex>
     trace_id: str
-    synthesis_mode: Literal["equal_weight", "sharpe_weight", "lightgbm"]
+    synthesis_mode: Literal["equal_weight", "sharpe_weight", "quality_weight", "lightgbm"]
     signals: list[PortfolioSignal]
     combo_sharpe: float  # 组合整体夏普（风控后净暴露口径：含 exposure_scale 仓位缩放）
     signal_sharpe: Optional[float]  # 缩放前信号质量夏普（风控约束前，方案③；None=未计算）
@@ -629,6 +630,7 @@ class PortfolioCombo(TypedDict, total=False):
     qc_standards: dict  # 组合质检三标准（GAP-063）：synthesis_gain/diversification_gain/drawdown_control_ratio + passed 标记
     exposure_scale: Optional[float]  # 置信度仓位缩放因子（28-T6，None=未启用）
     regime_meta: Optional[dict]  # regime 元信息 {regime, confidence, exposure_scale, entropy_norm}（28-T6）
+    rolling_oos: Optional[dict]  # 组合层滚动样本外（plans/36 改进项 4）：{windows:[{start_idx,sharpe}], decay_ratio, metrics_source}（None=returns 缺失未计算）
 
 
 class AgentOptimizationProposal(TypedDict, total=False):

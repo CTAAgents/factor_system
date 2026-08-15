@@ -3404,7 +3404,8 @@ class EvolutionLoop:
 
     def _evaluate_cross_section(self, factor: FactorProgram, trace_id: str) -> FactorEvaluation:
         """横截面模式下的评估：直接回测 + 自动构造 FactorEvaluation。"""
-        from .contracts import EconomicScore, MultipleTestResult
+        from .contracts import EconomicScore
+        from .evaluation_chain import cross_section_walk_forward, evaluate_multiple_tests
 
         bt = cross_section_evaluate_backtest(
             factor,
@@ -3426,9 +3427,30 @@ class EvolutionLoop:
             dimensions_passed=3,
             narrative=el.get("narrative", "横截面评估（自动继承）"),
         )
-        mt = MultipleTestResult(
-            bonferroni_p=1.0, fdr_q=0.05, effective_n_factors=1, adjusted_t=bt.get("t_stat", 3.0), passed=True
+        # GAP-121 评估链修复: Level3 不再硬编码（bonferroni_p=1.0, effective_n=1,
+        # passed=True 恒过）——按本批次实际被检验因子数（已评估 prior + 当前）
+        # 计算 Bonferroni/FDR，effective_n 与候选规模对齐。
+        temp_eval = {"factor_id": factor["factor_id"], "trace_id": trace_id, "level_1_backtest": bt}
+        mt = evaluate_multiple_tests(
+            [*self._prior_evaluations, temp_eval],  # type: ignore[arg-type] — FactorEvaluation dict 兼容
         )
+        # GAP-121 评估链修复: 横截面多窗口走航验证（短样本按 _build_wf_config
+        # 自适应窗口/步长，产出 ≥2 个 OOS 窗口方可支撑晋升/审计硬门槛）。
+        wf: Optional[dict[str, Any]] = None
+        try:
+            skeleton = pd.DataFrame({"close": 1.0}, index=pd.DatetimeIndex(self.cross_section_dates))
+            wf = cross_section_walk_forward(
+                factor,
+                self.cross_section_data,
+                self.cross_section_dates,
+                config=self._build_wf_config(skeleton),
+                industry_map=self.industry_map,
+                cap_map=self.cap_map,
+                style_exposures=self._build_barra_exposures(),
+                vol_map=self._build_vol_map(),
+            )
+        except Exception as e:  # noqa: BLE001 — 走航失败记录但不阻断评估（晋升侧硬门槛兜底）
+            logger.warning("[Evo] 横截面走航验证失败 [%s]: %s", factor.get("factor_id", "?"), e)
         reasons: list[str] = []
         if bt.get("ic", 0) < 0.03:
             reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
@@ -3460,6 +3482,7 @@ class EvolutionLoop:
             level_1_backtest=bt,
             level_2_economic=ec,
             level_3_multiple=mt,
+            walk_forward=wf,
             passed=len(reasons) == 0,
             failure_reasons=reasons,
             evaluated_at=datetime.now().isoformat(),

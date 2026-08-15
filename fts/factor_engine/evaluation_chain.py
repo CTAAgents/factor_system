@@ -259,6 +259,7 @@ def compute_cs_multi_horizon_ic(
     horizons: tuple[int, ...] = (1, 5, 10, 20),
     min_dates: int = 10,
     block_size: int = 20,
+    use_panel_vector: Optional[bool] = None,
 ) -> Optional[Any]:
     """横截面多持有期 IC（GAP-060 股票/横截面接入，v2.90.0）。
 
@@ -271,6 +272,12 @@ def compute_cs_multi_horizon_ic(
     本函数作用于截面信号矩阵，IC 是"每个截面期一次秩相关"的时序聚合，
     而非单标的信号与未来收益的时序相关。
 
+    use_panel_vector（plans/37 延伸，P0 性能）：块状截面 IC 经
+    `_cs_compute_ics_dispatch` 分派——True=panel_vector 全矩阵化（联合掩码
+    rank + 行内 Pearson），False=逐日 spearmanr；None=读配置
+    （cross_section_panel_vector，默认 true）。两路径逐位一致
+    （tests/factor_engine/test_cross_section_horizon.py 对照验证）。
+
     Args:
         oos_signal: 中性化后的信号矩阵 (n_dates, n_stocks)
         panel_data: {symbol: OHLCV DataFrame} 字典
@@ -280,11 +287,20 @@ def compute_cs_multi_horizon_ic(
         horizons: 持有期集合（天）
         min_dates: 有效截面期数下限（不足返回 None）
         block_size: 非重叠块大小（块状 IC 序列）
+        use_panel_vector: 面板向量 IC 开关（None=读配置，默认 true）
 
     Returns:
         HorizonAnalysisResult 或 None（数据不足/全部持有期无效）
     """
     from .horizon_analysis import HorizonAnalysisResult
+
+    if use_panel_vector is None:
+        try:
+            from ..config import get_config
+
+            use_panel_vector = bool(getattr(get_config(), "cross_section_panel_vector", False))
+        except Exception:  # noqa: BLE001 — 配置读取失败降级关闭
+            use_panel_vector = False
 
     n_dates = int(oos_signal.shape[0])
     if n_dates < min_dates:
@@ -310,16 +326,16 @@ def compute_cs_multi_horizon_ic(
         if h < oos_n:
             denom = np.maximum(np.abs(oos_close[: oos_n - h, :]), 1e-10)
             fwd[: oos_n - h, :] = (oos_close[h:, :] - oos_close[: oos_n - h, :]) / denom
-        # 块状截面 IC 序列（非重叠块）
+        # 块状截面 IC 序列（非重叠块；P0 面板向量分派，on/off 逐位一致）
         ics: list[float] = []
         n_blocks = max(n_dates // block_size, 1)
         for b in range(n_blocks):
             s = b * block_size
             e = min(s + block_size, n_dates)
-            ics.extend(_cs_compute_ics(oos_signal[s:e, :], fwd[s:e, :]))
+            ics.extend(_cs_compute_ics_dispatch(oos_signal[s:e, :], fwd[s:e, :], use_panel_vector))
         if not ics:
             # 块状失败退化全段
-            ics = _cs_compute_ics(oos_signal, fwd)
+            ics = _cs_compute_ics_dispatch(oos_signal, fwd, use_panel_vector)
         if not ics:
             continue
         ic_arr = np.asarray(ics, dtype=float)
@@ -537,6 +553,7 @@ def evaluate_multiple_tests(
     correlation_matrix: Optional[np.ndarray] = None,
     alpha: float = 0.01,
     fdr_q: float = 0.05,
+    n_tested: Optional[int] = None,
 ) -> MultipleTestResult:
     """Level 3 — 多重检验校正。
 
@@ -548,11 +565,16 @@ def evaluate_multiple_tests(
         correlation_matrix: 因子相关性矩阵（用于有效因子数调整）
         alpha: 显著性水平
         fdr_q: FDR 阈值
+        n_tested: 本批次实际被检验的候选因子总数（GAP-121 评估链修复）。
+            多重检验校正应基于"同一选择过程中被检验的全部候选数"，
+            而非传入列表长度——演化逐因子评估时列表仅含当前/已评估因子，
+            若以列表长度代替，第一个因子 n=1 使 Bonferroni 退化为无校正。
+            None = 回退 len(factors_evaluations)。
 
     Returns:
         MultipleTestResult（针对当前批次的统计）
     """
-    n = max(1, len(factors_evaluations))
+    n = max(1, n_tested if n_tested is not None else len(factors_evaluations))
 
     # 收集所有 t 统计量
     t_stats = []
@@ -842,6 +864,70 @@ def evaluate_walk_forward(
     return optimizer.evaluate(data, _evaluate_window)
 
 
+def cross_section_walk_forward(
+    factor: FactorProgram,
+    panel_data: dict[str, pd.DataFrame],
+    common_dates: pd.DatetimeIndex,
+    config: Optional[WalkForwardConfig] = None,
+    industry_map: Optional[dict[str, str]] = None,
+    cap_map: Optional[dict[str, float]] = None,
+    style_exposures: Optional[dict[str, Any]] = None,
+    vol_map: Optional[dict[str, float]] = None,
+) -> WalkForwardResult:
+    """横截面走航验证 — 滚动窗口内截面 IC 稳定性（GAP-121 评估链修复）。
+
+    横截面分支（_evaluate_cross_section）此前仅单一 OOS 尾部切片、无多窗口
+    滚动验证，walk_forward 为空导致审计 oos_consistency 全部 skipped 放行，
+    单一切片样本内 IC 无法排除演化数据窥探。本函数复用 WalkForwardOptimizer
+    对共同日期滚动切窗，窗口内调用 cross_section_evaluate_backtest
+    （oos_ratio=1.0，窗口本身即评估段）产出多窗口截面 IC。
+
+    Args:
+        factor: 因子程序
+        panel_data: {symbol: OHLCV DataFrame} 面板
+        common_dates: 面板共同日期索引
+        config: 走航配置（None=默认；短样本建议 _build_wf_config 适配）
+        industry_map / cap_map / style_exposures / vol_map: 中性化参数（透传）
+
+    Returns:
+        WalkForwardResult（n_windows_completed < 2 表示无法产出多窗口验证）
+    """
+    skeleton = pd.DataFrame({"close": 1.0}, index=pd.DatetimeIndex(common_dates))
+    optimizer = WalkForwardOptimizer(config=config)
+
+    def _eval_window(train_df: pd.DataFrame, oos_df: pd.DataFrame) -> dict[str, float]:
+        oos_dates = pd.DatetimeIndex(oos_df.index)
+        if len(oos_dates) < 10:
+            return {"ic": 0.0, "sharpe": 0.0, "turnover": 0.0}
+        sub_panel = {sym: df[df.index.isin(oos_dates)] for sym, df in panel_data.items()}
+        common = oos_dates
+        for df in sub_panel.values():
+            common = common.intersection(pd.DatetimeIndex(df.index))
+        if len(common) < 10:
+            return {"ic": 0.0, "sharpe": 0.0, "turnover": 0.0}
+        try:
+            bt = cross_section_evaluate_backtest(
+                factor,
+                sub_panel,
+                pd.DatetimeIndex(common),
+                oos_ratio=1.0,
+                industry_map=industry_map,
+                cap_map=cap_map,
+                style_exposures=style_exposures,
+                vol_map=vol_map,
+            )
+        except Exception as e:  # noqa: BLE001 — 单窗口失败不阻断走航
+            logger.warning("横截面走航窗口评估失败: %s", e)
+            return {"ic": 0.0, "sharpe": 0.0, "turnover": 0.0}
+        return {
+            "ic": float(bt.get("ic", 0.0) or 0.0),
+            "sharpe": float(bt.get("sharpe", 0.0) or 0.0),
+            "turnover": float(bt.get("turnover_monthly", 0.0) or 0.0),
+        }
+
+    return optimizer.evaluate(skeleton, _eval_window)
+
+
 # ══════════════════════════════════════════════════════════
 # 横截面评估（多标的）
 # ══════════════════════════════════════════════════════════
@@ -859,6 +945,7 @@ def cross_section_evaluate_backtest(
     long_only: bool = False,
     horizons: Optional[tuple[int, ...]] = None,
     holdout_ratio: float = 0.2,
+    use_panel_vector: Optional[bool] = None,
 ) -> BacktestMetrics:
     """横截面回测评估 — 单因子在多个标的上跨 section IC。
 
@@ -872,6 +959,13 @@ def cross_section_evaluate_backtest(
     自动检测信号方向:
         - 如果多空组合收益均值为负，自动翻转信号并重新计算指标
         - 确保因子方向与预测目标一致
+
+    use_panel_vector（plans/37 Phase 1；plans/39 §11 回退后仅作用于 IC 计算）:
+        True=用 panel_vector 全矩阵化 IC（联合掩码 rank + 行内 Pearson）替代
+        逐日 spearmanr，产出与旧路径逐位一致；None=读 FTSConfig 配置
+        （cross_section_panel_vector，默认 true）；False=旧路径。
+        信号/收益构建恒逐品种执行——算子因子面板化 execute_factor_panel 经
+        plans/39 §11 实测真实缺口面板 0.3x <5x 门槛登记豁免摘除。
 
     GAP-075（跨标的稳健性检查）:
         - 输出 `symbol_ic`（逐标的时序 IC，方向翻转同步），供审计 cross_symbol 激活
@@ -891,19 +985,28 @@ def cross_section_evaluate_backtest(
         long_only: 仅做多口径（GAP-S07），默认 False（期货横截面）
         horizons: 多持有期 IC 分析（GAP-060 横截面接入）；None 时从配置 eval_horizons 读取（空=关闭）
         holdout_ratio: 标的留出比例（GAP-075，默认 20%；行业分层，缺失回退随机）
+        use_panel_vector: 全矩阵化 IC 开关（None=读配置，默认关闭）
 
     Returns:
         BacktestMetrics
     """
-    executor = FactorExecutor(factor)
+    if use_panel_vector is None:
+        try:
+            from ..config import get_config
+
+            use_panel_vector = bool(getattr(get_config(), "cross_section_panel_vector", False))
+        except Exception:  # noqa: BLE001 — 配置读取失败降级关闭
+            use_panel_vector = False
     params = factor.get("params", {})
 
-    # Step 1: 每只股票运行因子 + 计算 forward_return
+    # Step 1: 信号与收益构建 — 恒逐品种执行（plans/39 §11 回退，v2.104.0+58）：
+    # 真实缺口面板算子因子面板化实测 0.3x（<5x 门槛，98% 列内部缺口致压缩-散射
+    # 开销反超），execute_factor_panel 从主链路摘除并登记豁免；use_panel_vector
+    # 仅用于 IC 计算分派（_cs_compute_ics_dispatch → 全矩阵化，见 Step 3）。
+    executor = FactorExecutor(factor)
     signal_dict, ret_dict = _cs_execute_factors(executor, params, panel_data)
     if len(signal_dict) < 5:
         return _cs_empty_metrics(oos_ratio)
-
-    # Step 2: 对齐到共同日期，构建矩阵 + OOS 切片
     oos_n = max(int(len(common_dates) * oos_ratio), 5)
     oos_signal, oos_ret = _cs_build_matrices(signal_dict, ret_dict, common_dates, oos_n)
     # GAP-060 横截面接入：标的列表统一定义（中性化/多持有期共用）
@@ -913,7 +1016,7 @@ def cross_section_evaluate_backtest(
     ic_pre_neutral: Optional[float] = None
     if industry_map is not None:
         # 中性化前 IC（方向检测前，供报告对比剥离效果）
-        pre_ics = _cs_compute_ics(oos_signal, oos_ret)
+        pre_ics = _cs_compute_ics_dispatch(oos_signal, oos_ret, use_panel_vector)
         if pre_ics:
             ic_pre_neutral = float(np.mean(pre_ics))
         oos_signal = _neutralize_signal_matrix(
@@ -939,7 +1042,7 @@ def cross_section_evaluate_backtest(
         )
 
     # Step 3: 每期截面 IC
-    ics = _cs_compute_ics(oos_signal, oos_ret)
+    ics = _cs_compute_ics_dispatch(oos_signal, oos_ret, use_panel_vector)
     if not ics:
         return _cs_empty_metrics(oos_ratio)
 
@@ -1063,6 +1166,7 @@ def cross_section_evaluate_backtest(
                 common_dates,
                 oos_n,
                 horizons=horizons,
+                use_panel_vector=use_panel_vector,
             )
             if hr is not None:
                 metrics["multi_horizon"] = hr.to_dict()
@@ -1085,6 +1189,34 @@ def cross_section_evaluate_backtest(
     except Exception:  # noqa: BLE001 — 留出验证失败降级为 None，不阻断既有评估
         logger.warning("标的留出验证失败，降级为 None")
         metrics["symbol_holdout"] = None
+
+    # GAP-121 补全（横截面路径）：跨品种 IC 正向占比（供 HighICScreener
+    # industry_coverage 消费；此前横截面评估不产出该字段导致该项恒 skipped）。
+    if symbol_ic:
+        _pos_cnt = sum(1 for v in symbol_ic.values() if v > 0)
+        metrics["cross_symbol_positive_ratio"] = float(_pos_cnt) / float(len(symbol_ic))
+
+    # GAP-121 补全（横截面路径）：极值扰动 IC 重算（供 HighICScreener
+    # V2 / extreme_perturb 消费）。将全部品种的截面信号/收益扁平化为长数组，
+    # 剔除极端信号样本后重算 IC（|IC| 口径，方向翻转不影响）。
+    try:
+        metrics["extreme_perturbation"] = _compute_extreme_perturbation_ic(
+            oos_signal.reshape(-1).astype(float),
+            oos_ret.reshape(-1).astype(float),
+            pct=0.01,
+        )
+    except Exception:  # noqa: BLE001 — 计算失败保持缺失，由 screener skipped 兜底
+        pass
+
+    # GAP-121 补全（横截面路径）：扣成本后净超额（月频，供 HighICScreener
+    # V4 / net_excess 消费）。多空组合月度均值 − 月度双边成本（单边 0.05%，
+    # 与 FactorVerifier 成本口径一致）。
+    try:
+        _monthly_gross = float(np.mean(ls_returns)) * 21.0
+        _monthly_cost = float(metrics.get("turnover_monthly", 0.0) or 0.0) * 2.0 * 0.0005
+        metrics["net_excess_return"] = _monthly_gross - _monthly_cost
+    except Exception:  # noqa: BLE001 — 成本估算失败保持缺失
+        pass
     return metrics
 
 
@@ -1145,6 +1277,33 @@ def _cs_compute_ics(oos_signal: np.ndarray, oos_ret: np.ndarray) -> list[float]:
         if not np.isnan(ic_val):
             ics.append(ic_val)
     return ics
+
+
+def _cs_compute_ics_dispatch(
+    oos_signal: np.ndarray,
+    oos_ret: np.ndarray,
+    use_panel_vector: bool,
+) -> list[float]:
+    """截面 IC 计算分派：panel_vector 全矩阵化 或 旧路径逐日 spearmanr。
+
+    panel_vector 路径（plans/37 Phase 1，fts/factor_engine/panel_vector.py）与
+    `_cs_compute_ics` 逐日一致（联合掩码 rank + 行内 Pearson，常数守卫/有效样本
+    下限同口径，经 tests/factor_engine/test_panel_vector.py 对照验证）；返回
+    list[float] 与 `_cs_compute_ics` 同构，下游消费零改动。
+
+    Args:
+        oos_signal / oos_ret: (n_dates, n_symbols) 矩阵
+        use_panel_vector: True=全矩阵化；False=旧路径逐日 spearmanr
+
+    Returns:
+        逐日 IC 序列（跳过无效日）
+    """
+    if use_panel_vector:
+        from .panel_vector import compute_cs_ics_vectorized
+
+        ics_arr, _ = compute_cs_ics_vectorized(oos_signal, oos_ret)
+        return [float(v) for v in ics_arr if not np.isnan(v)]
+    return _cs_compute_ics(oos_signal, oos_ret)
 
 
 def _cs_compute_layer_ics(

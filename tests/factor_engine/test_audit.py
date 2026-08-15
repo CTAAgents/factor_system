@@ -66,17 +66,21 @@ def forward_returns(n: int = 120) -> np.ndarray:
 
 
 class TestFactorAuditor:
-    def test_empty_audit_all_skipped(self, auditor: FactorAuditor, sample_factor: dict):
-        """无任何输入时，所有审计项均应为 skipped，整体未通过。"""
+    def test_empty_audit_hard_gate_on_oos(self, auditor: FactorAuditor, sample_factor: dict):
+        """GAP-121: 未提供 OOS 结果时 oos_consistency 硬拦截（failed），其余项 skipped。"""
         report = auditor.audit(factor=sample_factor)
         assert report.factor_id == "f_test_001"
         assert report.factor_name == "test_factor"
         assert report.passed is False
         # 7 项审计（GAP-075 新增 symbol_holdout）
         assert len(report.items) == 7
-        assert all(it.status == "skipped" for it in report.items)
+        # oos_consistency 样本外验证缺失 → 硬拦截 failed（原 skipped 放行）
+        assert report.item("oos_consistency").status == "failed"
+        assert all(
+            it.status == "skipped" for it in report.items if it.name != "oos_consistency"
+        )
         assert report.pass_rate == 0.0
-        assert report.summary["skipped"] == 7
+        assert report.summary["skipped"] == 6
 
     def test_report_item_lookup(self, auditor: FactorAuditor, sample_factor: dict):
         """report.item() 应按名称定位单项结果。"""
@@ -131,16 +135,16 @@ class TestOOSConsistency:
         item = auditor._check_oos_consistency(result)
         assert item.status == "failed"
 
-    def test_oos_skipped_when_missing(self, auditor: FactorAuditor):
-        """缺失 OOS 结果时应为 skipped。"""
+    def test_oos_failed_when_missing(self, auditor: FactorAuditor):
+        """GAP-121: 缺失 OOS 结果（样本外验证缺失）→ 硬拦截 failed（原 skipped 放行）。"""
         item = auditor._check_oos_consistency(None)
-        assert item.status == "skipped"
+        assert item.status == "failed"
 
-    def test_oos_skipped_when_single_window(self, auditor: FactorAuditor):
-        """GAP-073: WalkForward 仅完成 1 个窗口 → skipped（短样本无法做一致性验证）。"""
+    def test_oos_failed_when_single_window(self, auditor: FactorAuditor):
+        """GAP-121: 反转 GAP-073——WalkForward 仅完成 1 个窗口 → failed 硬拦截。"""
         result = {"ic_consistency": 0.0, "passed": False, "n_windows_completed": 1}
         item = auditor._check_oos_consistency(result)
-        assert item.status == "skipped"
+        assert item.status == "failed"
 
     def test_oos_evaluated_when_two_windows(self, auditor: FactorAuditor):
         """GAP-071: 窗口数 ≥2 仍正常评估（低一致性照常失败）。"""
@@ -357,10 +361,11 @@ class TestBHFDREcorrection:
 
 class TestEndToEnd:
     def test_all_skipped_when_no_input(self, auditor: FactorAuditor):
-        """无任何输入应全部 skipped。"""
+        """GAP-121: 无输入时 oos_consistency 硬拦截 failed，其余 6 项 skipped。"""
         report = auditor.audit()
         assert report.passed is False
-        assert report.summary["skipped"] == 7
+        assert report.item("oos_consistency").status == "failed"
+        assert report.summary["skipped"] == 6
 
     def test_complete_audit_with_cross_symbol_and_oos(self, auditor: FactorAuditor, sample_factor: dict):
         """仅提供跨品种 + OOS + p-values 时，这些项应通过/失败，其余 skipped。"""

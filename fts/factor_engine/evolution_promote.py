@@ -77,6 +77,9 @@ class EliteStore:
             self._cluster_max = int(getattr(_micro_cfg, "structure_cluster_max", 15))
             self._cluster_corr_threshold = float(getattr(_micro_cfg, "structure_cluster_corr_threshold", 0.85))
             self._cluster_max_scan = int(getattr(_micro_cfg, "l2_elite_corr_max_scan", 50))
+            # GAP-121 评估链修复: 高IC筛查 B 级禁止入库的跳过项数上限（21 项中
+            # 未判定项 > 上限 → 信息不足，B 级不得入库）
+            self._hic_max_skipped = int(getattr(_micro_cfg, "hic_max_skipped", 8))
         except Exception:
             # 配置读取失败时采用模块默认值，不阻断演化
             self._l2_elite_corr_threshold = 0.9
@@ -92,12 +95,14 @@ class EliteStore:
             self._cluster_max = 15
             self._cluster_corr_threshold = 0.85
             self._cluster_max_scan = 50
+            self._hic_max_skipped = 8
 
         # ── 组件实例化（原主类 __init__ L507-558 迁移；owner 提供 market/memory_dir/_decay_*） ──
         from .high_ic_screener import HighICScreener, HighICScreenConfig
 
-        if owner.market == "futures":
-            # 期货市场放宽 V5 经济逻辑维度最低分（LLM 演化因子 L2 评分偏低）
+        if owner.market in ("futures", "energy"):
+            # 期货市场放宽 V5 经济逻辑维度最低分（LLM 演化因子 L2 评分偏低）；
+            # energy 链为期货子集（能化产业链），V5 阈值与期货对齐（GAP-121）
             futures_config = HighICScreenConfig(logic_min_score=1.0)
             self.high_ic_screener = HighICScreener(config=futures_config)
         else:
@@ -668,12 +673,19 @@ class EliteStore:
             ),
             trace_id=getattr(self._owner, "_trace_id", ""),
         )
-        if high_ic_screen.grade == "C":
+        # GAP-121 评估链修复: B 级且关键检查项大量缺失（数据不足未判定）时同样
+        # 禁止入库——"信息不足"不能视为合格，与 C 级同拦截。
+        hic_skipped = sum(1 for it in high_ic_screen.items if it.passed is None)
+        if high_ic_screen.grade == "C" or (
+            high_ic_screen.grade == "B" and hic_skipped > self._hic_max_skipped
+        ):
             veto_info = (
                 "；".join(high_ic_screen.veto_reasons)
                 if high_ic_screen.veto_reasons
                 else f"总分 {high_ic_screen.total_score:.1f} < 60"
             )
+            if high_ic_screen.grade == "B":
+                veto_info = f"B 级但跳过项 {hic_skipped} > 上限 {self._hic_max_skipped}（信息不足，禁止入库）"
             print(
                 f"[evo] ★ 高IC筛查拦截 [{factor_name}]: "
                 f"grade={high_ic_screen.grade}, 总分={high_ic_screen.total_score:.1f}, "
@@ -690,6 +702,33 @@ class EliteStore:
             p_str = f"{bonf_p:.4f}" if isinstance(bonf_p, float) else str(bonf_p)
             t_str = f"{adj_t:.4f}" if isinstance(adj_t, float) else str(adj_t)
             print(f"[evo] 多重检验未通过 [{factor_name}]: Bonferroni p={p_str}, adjusted_t={t_str}")
+            return None
+
+        # ── GAP-121 评估链修复: WalkForward 多窗口 OOS 强制门 ──
+        # 未产出 ≥2 个样本外窗口（多窗口一致性验证不可行）禁止晋升——单一 OOS
+        # 切片 IC 无法排除演化在训练数据上反复选优的数据窥探（此前 n_windows<2
+        # 经 audit skipped 全部放行，能源链 64 因子 IC 0.11~0.39 全入池的根因）。
+        wf = evaluation.get("walk_forward") or {}
+        wf_windows = int(wf.get("n_windows_completed", 0) or 0)
+        if wf_windows < 2:
+            print(
+                f"[evo] ★ WalkForward 强制门拦截 [{factor_name}]: "
+                f"n_windows={wf_windows} < 2（多窗口 OOS 验证缺失，禁止晋升）"
+            )
+            logger.warning(
+                "[eval-gate] 因子 %s 多窗口 OOS 验证缺失（n_windows=%d < 2），禁止晋升（GAP-121）",
+                factor_name,
+                wf_windows,
+            )
+            return None
+
+        # ── GAP-121 评估链修复: 审计硬门 ──
+        # audit_report 存在但未通过（含 oos_consistency 等关键项 failed）时禁止晋升。
+        if audit_report is not None and not audit_report.passed:
+            failed_names = (audit_report.summary or {}).get("failed_items", [])
+            print(
+                f"[evo] ★ 审计硬门拦截 [{factor_name}]: 审计未通过（failed: {failed_names or '?'}）"
+            )
             return None
 
         # ── 写入质量评分卡 (Phase A.1 集成) ──

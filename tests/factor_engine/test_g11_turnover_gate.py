@@ -177,6 +177,7 @@ def test_cross_section_gate_rejects_when_enabled(monkeypatch):
     loop.cross_section_dates = dates
     loop.industry_map = None
     loop.cap_map = None
+    loop._prior_evaluations = []
     monkeypatch.setattr(loop, "_build_barra_exposures", lambda: None)
     monkeypatch.setattr(loop, "_build_vol_map", lambda: None)
     monkeypatch.setattr(
@@ -200,6 +201,7 @@ def test_cross_section_gate_off_when_null(monkeypatch):
     loop.cross_section_dates = dates
     loop.industry_map = None
     loop.cap_map = None
+    loop._prior_evaluations = []
     monkeypatch.setattr(loop, "_build_barra_exposures", lambda: None)
     monkeypatch.setattr(loop, "_build_vol_map", lambda: None)
     monkeypatch.setattr(

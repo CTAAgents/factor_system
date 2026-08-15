@@ -222,6 +222,7 @@ def _cs_loop(monkeypatch, panel: dict[str, pd.DataFrame], dates: pd.DatetimeInde
     loop.cross_section_dates = dates
     loop.industry_map = None
     loop.cap_map = None
+    loop._prior_evaluations = []
     monkeypatch.setattr(loop, "_build_barra_exposures", lambda: None)
     monkeypatch.setattr(loop, "_build_vol_map", lambda: None)
     return loop

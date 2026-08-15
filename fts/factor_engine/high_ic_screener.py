@@ -728,8 +728,12 @@ class HighICScreener:
 
         if raw >= 0.999:
             halflife = 1.0
+        elif raw <= 0.0:
+            # 零衰减 → 信号完全稳定，半衰期视为无穷（得满分，GAP-121 横截面
+            # decay_6m 补全后触发的边界：ln(1-0)=0 会除零）
+            halflife = float("inf")
         else:
-            halflife = math.log(0.5) / math.log(1.0 - raw) * 126.0 if raw < 1.0 else 1.0
+            halflife = math.log(0.5) / math.log(1.0 - raw) * 126.0
         if halflife >= cfg.half_life_min_days:
             score = 6.0
         else:

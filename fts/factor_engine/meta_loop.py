@@ -1497,6 +1497,32 @@ class MetaLoop:
                     verdict["failure_reasons"],
                     f", detail={detail}" if detail else "",
                 )
+                # GAP-123 P1③: 软失败（经济逻辑评分/narrative 不达标）触发一次 LLM 定向重写，
+                # 重写后重新验证，通过则走注入闭环（每候选最多重写 1 次，见 _try_fix_economic_logic）
+                if not self._is_hard_failure(verdict["failure_reasons"]):
+                    fixed_ok = self._try_fix_economic_logic(cand, trace_id)
+                    if fixed_ok:
+                        rejected_count -= 1
+                        passed_count += 1
+                        cand["passed_l1_verifier"] = True
+                        cand["failure_reasons"] = [f"经济逻辑重写修复: 原{verdict['failure_reasons']}"]
+                        # 重写后通过以 WARNING 级别输出：与首轮"未通过"warning 同级，
+                        # 确保默认日志级别下也能看到"未通过→重写→通过"完整闭环
+                        logger.warning(
+                            "[L1.verify] 候选[%d/%d] 经济逻辑重写后通过: name=%s, candidate_id=%s",
+                            i + 1,
+                            len(candidates),
+                            cand_name,
+                            cand_id,
+                        )
+                        injected_id = self._inject_candidate(cand, trace_id)
+                        if injected_id:
+                            injected_ids.append(injected_id)
+                            state["total_candidates_injected"] = state.get("total_candidates_injected", 0) + 1
+                            state.setdefault("candidates_ref", []).append(injected_id)
+                            batch_injected += 1
+                            self._consecutive_low_quality = 0
+                        continue
                 continue
 
             passed_count += 1
@@ -1758,6 +1784,63 @@ class MetaLoop:
         """
         text = " ".join(reasons)
         return ("编译" in text) or ("重复" in text)
+
+    def _try_fix_economic_logic(self, cand: SeedCandidate, trace_id: str) -> bool:
+        """GAP-123 P1③: 软失败候选经 LLM 定向重写 economic_logic 后重新验证。
+
+        流程: 调用 llm_client.fix_economic_logic（若支持）→ 更新 cand 的
+        economic_logic → 重新走 L1Verifier.check → 通过返回 True。
+
+        约束:
+            - 每候选仅重写 1 次（本方法只在软失败分支调用一次，不递归）
+            - LLM 客户端不支持（基类默认 None）/调用异常/重写后仍不达标 → 返回 False
+            - 不影响硬失败（编译/重复）路径，不改变熔断计数语义
+
+        Args:
+            cand: 未通过 L1 Verifier 的候选（软失败）
+            trace_id: 全链路 trace_id
+
+        Returns:
+            True — 重写成功且重新验证通过；False — 重写失败/仍不达标
+        """
+        llm = self.llm_client
+        if llm is None or not hasattr(llm, "fix_economic_logic"):
+            logger.info(
+                "[L1.fix_econ] LLM 客户端不支持 fix_economic_logic, 跳过, trace_id=%s, name=%s",
+                trace_id,
+                cand.get("name", "?"),
+            )
+            return False
+        try:
+            fixed_econ = llm.fix_economic_logic(cand, cand.get("failure_reasons", []), trace_id)
+        except Exception as e:
+            logger.warning(
+                "[L1.fix_econ] LLM 重写异常, trace_id=%s, name=%s, error=%s",
+                trace_id,
+                cand.get("name", "?"),
+                e,
+            )
+            return False
+        if not fixed_econ or not isinstance(fixed_econ, dict) or not fixed_econ.get("narrative"):
+            logger.info(
+                "[L1.fix_econ] 重写返回无效 economic_logic, 保持原候选, trace_id=%s, name=%s",
+                trace_id,
+                cand.get("name", "?"),
+            )
+            return False
+        cand["economic_logic"] = fixed_econ
+        re_verdict = self.verifier.check(cand, self.seed_pool)
+        if not re_verdict["passed"]:
+            logger.warning(
+                "[L1.fix_econ] 重写后仍不达标, trace_id=%s, name=%s, reasons=%s",
+                trace_id,
+                cand.get("name", "?"),
+                re_verdict["failure_reasons"],
+            )
+            return False
+        cand["passed_l1_verifier"] = True
+        cand["failure_reasons"] = re_verdict["failure_reasons"]
+        return True
 
     def _check_circuit_breaker(
         self,

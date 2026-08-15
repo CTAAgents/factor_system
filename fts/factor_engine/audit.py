@@ -335,24 +335,24 @@ class FactorAuditor:
         name = "oos_consistency"
 
         if oos_result is None:
+            # GAP-121 评估链修复: 未提供 OOS 结果即样本外验证缺失——样本内单切片
+            # IC 无法排除数据窥探，标记 failed（原 skipped 放行），由晋升审计硬门拦截。
             return AuditItemResult(
                 name=name,
-                status="skipped",
-                evidence="未提供 OOS 结果",
+                status="failed",
+                evidence="未提供 OOS 结果（样本外验证缺失，禁止放行）",
             )
 
-        # GAP-073 (v2.98.0): 短样本下 WalkForward 实际完成窗口数 < 2 时，单窗口
-        # 无法做跨窗口一致性验证（ic_consistency 退化为单窗口 IC 正负的 0/1 硬币），
-        # 标记 skipped 而非 failed——与 cross_symbol/stress_resilience/multiple_testing
-        # 等数据缺失项对齐，避免 500 行日频数据下演化候选全量被一致性项误杀。
-        # 仅当走航结果显式给出窗口数时生效；L1 兜底结果（无 n_windows_completed 键）
-        # 保持原判定逻辑。
+        # GAP-121 评估链修复: 反转 GAP-073 放宽。n_windows<2 无法做跨窗口一致性
+        # 验证（ic_consistency 退化为单窗口 IC 正负的 0/1 硬币），此前标记 skipped
+        # 放行导致单一 OOS 切片因子全部入库；现改为硬拦截 failed，配合横截面
+        # 走航接入（_build_wf_config 短样本自适应），晋升因子必须有多窗口 OOS 证据。
         n_windows = oos_result.get("n_windows_completed")
         if isinstance(n_windows, int) and n_windows < 2:
             return AuditItemResult(
                 name=name,
-                status="skipped",
-                evidence=f"WalkForward 窗口不足（n_windows={n_windows} < 2），跳过一致性判定",
+                status="failed",
+                evidence=f"WalkForward 窗口不足（n_windows={n_windows} < 2），无法验证样本外一致性",
             )
 
         ic_consistency = oos_result.get("ic_consistency", 0.0)

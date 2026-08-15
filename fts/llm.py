@@ -302,6 +302,32 @@ class LLMClient(ABC):
         )
         return []
 
+    def fix_economic_logic(
+        self,
+        candidate: dict[str, Any],
+        failure_reasons: list[str],
+        trace_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """GAP-123 P1③: 修复候选因子经济逻辑论证（定向重写）。
+
+        软失败（经济逻辑评分不达标 / narrative 长度不足）候选经此方法
+        由 LLM 重写 economic_logic 后重新验证。基类默认不支持（返回 None）。
+
+        Args:
+            candidate: 被拒绝的 SeedCandidate dict
+            failure_reasons: L1 Verifier 失败原因列表
+            trace_id: 全链路 trace_id
+
+        Returns:
+            修复后的 economic_logic dict（含四维评分 + narrative）或 None（不支持/失败）
+        """
+        logger.info(
+            "[fix_economic_logic] 基类默认返回 None（不支持）, trace_id=%s, candidate=%s",
+            trace_id,
+            candidate.get("name", "?"),
+        )
+        return None
+
 
 # ─── OpenAI 客户端 ────────────────────────────────────────
 
@@ -479,6 +505,92 @@ class OpenAIClient(LLMClient):
         )
         return truncated
 
+    def fix_economic_logic(
+        self,
+        candidate: dict[str, Any],
+        failure_reasons: list[str],
+        trace_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """GAP-123 P1③: LLM 定向重写候选因子的 economic_logic 论证。"""
+        import time
+
+        t0 = time.time()
+        prompt = self._build_econ_fix_prompt(candidate, failure_reasons, trace_id)
+        try:
+            raw_text, _ = self.complete(prompt, max_tokens=4000)
+        except Exception as e:
+            logger.error(
+                "[fix_economic_logic] LLM 调用失败, trace_id=%s, error=%s",
+                trace_id,
+                e,
+                exc_info=True,
+            )
+            return None
+        try:
+            data = LLMClient._parse_json(raw_text)
+        except LLMError as e:
+            logger.warning(
+                "[fix_economic_logic] JSON 解析失败, trace_id=%s, error=%s",
+                trace_id,
+                e,
+            )
+            return None
+        econ = data.get("economic_logic") if isinstance(data, dict) else None
+        if not isinstance(econ, dict) or "narrative" not in econ:
+            logger.warning(
+                "[fix_economic_logic] 响应缺 economic_logic.narrative, trace_id=%s",
+                trace_id,
+            )
+            return None
+        logger.info(
+            "[fix_economic_logic] 重写成功, trace_id=%s, candidate=%s, econ=%s, elapsed_ms=%.1f",
+            trace_id,
+            candidate.get("name", "?"),
+            {k: econ.get(k) for k in ("theory", "behavioral", "microstructure", "institutional")},
+            (time.time() - t0) * 1000,
+        )
+        return econ
+
+    @staticmethod
+    def _build_econ_fix_prompt(
+        candidate: dict[str, Any],
+        failure_reasons: list[str],
+        trace_id: str,
+    ) -> str:
+        """构造经济逻辑定向重写 Prompt（GAP-123 P1③）。"""
+        name = candidate.get("name", "?")
+        econ_summary = json.dumps(candidate.get("economic_logic", {}), ensure_ascii=False, default=str)
+        return f"""你是因子工程专家（FTS L1 经济逻辑修复 Agent）。以下候选因子的经济逻辑论证未通过 L1 Verifier，请仅重写其 economic_logic 论证（不改动代码）。
+
+【因子名称】
+{name}
+
+【当前 economic_logic】
+{econ_summary}
+
+【失败原因】
+{json.dumps(failure_reasons, ensure_ascii=False)}
+
+【修复要求 — 必须严格遵守】
+1. 四维（theory/behavioral/microstructure/institutional）各按 0-5 评分，至少 2 个维度 >= 3 分（L1 Verifier 达标线）
+2. 任一维度 >= 3 分，narrative 中必须包含该维度的【具体机制路径】（机制→行为→价格影响链条），禁止抽象套话（如 "liquidity may drop"、"limited"）
+3. narrative 必须逐维度说明评分依据，长度 >= 20 字，与本因子名称/语义一致
+4. 只输出 economic_logic 对象，不输出 code/params/signature
+
+【输出格式 — 纯 JSON】
+{{
+    "economic_logic": {{
+        "theory": <0-5>,
+        "behavioral": <0-5>,
+        "microstructure": <0-5>,
+        "institutional": <0-5>,
+        "narrative": "<逐维度论证，>= 20 字>"
+    }}
+}}
+
+【trace_id】: {trace_id}
+现在请重写该因子的 economic_logic。"""
+
     @staticmethod
     def _build_bootstrap_prompt(
         market_snapshot: dict[str, Any],
@@ -529,6 +641,18 @@ economic_logic 四维（theory/behavioral/microstructure/institutional）各按 
 - 0-1 分: 该因子与本维度无关或证据不足
 - institutional 维度对期货因子的评分口径: 机构参与度、持仓结构（COT/持仓集中度）、期限结构制度、资金流向、交割与套保制度等；若因子不涉及机构/制度层面，可给 0-2 分
 - narrative 必须逐维度说明评分依据，且长度 >= 20 字
+
+【论证-评分一致性 — GAP-123 强制规则】
+1. 任一维度评分 >= 3 分，narrative 中必须包含该维度的【具体机制路径】（机制→行为→价格影响链条），禁止使用抽象套话占位：
+   - ❌ 抽象套话: "liquidity may drop but not primary" / "weakly tied to market-making" / "limited" / "相关性强"
+   - ✅ 具体路径: "下行半方差占比抬升 → 卖压结构恶化 → 机构压力期追加保证金 → 强制平仓放大下跌"
+2. 评分与论证逐维对齐自检：为每个维度写叙事时，先列出"给该维 X 分的 1 条可检验机制"，无机制支撑的维度必须降分（<=2）
+3. 四维机制示例库（能源化工链场景，供参考风格，禁止照抄）：
+   - theory: 套利定价/库存周期/基差锚定/极值理论/风险传染/均值回归理论
+   - behavioral: 锚定效应/过度反应与修正/恐慌聚集/处置效应/注意力驱动
+   - microstructure: 订单流不平衡/持仓与成交分布/基差结构/波动率聚集/下行半方差
+   - institutional: 保证金追缴强制平仓/套保盘与交割制度/CTA 趋势资金/机构按估值中枢调仓/持仓集中度
+4. 生成完成后自检：narrative 中每个 >=3 分的维度必须能划出"机制→行为→价格影响"链路，否则调整评分或补全论证
 
 【常见错误 — 必须避免】
 ❌ 使用未定义变量
@@ -761,6 +885,30 @@ class MockLLMClient(LLMClient):
             [c["name"] for c in candidates],
         )
         return candidates
+
+    def fix_economic_logic(
+        self,
+        candidate: dict[str, Any],
+        failure_reasons: list[str],
+        trace_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """GAP-123 P1③: Mock 定向重写 — 返回四维全达标的修复 economic_logic。"""
+        logger.info(
+            "[fix_economic_logic] Mock 重写, trace_id=%s, candidate=%s, reasons=%s",
+            trace_id,
+            candidate.get("name", "?"),
+            failure_reasons,
+        )
+        return {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": (
+                "修复后论证: 理论机制明确（价格偏离均衡的均值回归），行为偏差具体（投资者锚定近期价格中枢），"
+                "微观结构路径清晰（波动率聚集反映订单流失衡），机构制度支撑充分（机构按锚定价值调仓强化回归）。"
+            ),
+        }
 
 
 # ─── 工厂函数 ─────────────────────────────────────────────

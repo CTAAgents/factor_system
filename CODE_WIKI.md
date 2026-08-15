@@ -1457,7 +1457,7 @@ mypy src/
 - **演化**: `evolution_mode` / `max_generations(10)` / `population_size(20)` / `micro_trials_per_generation(50)` / `micro_staged_evolution(true)` / `micro_coarse_trials(20)` / `micro_coarse_ic_floor(0.02)` / `max_per_family(15)` / `structure_cluster_*` / `shap_*(25/50/50)` / `evolution_success_pattern_*` / `evolution_stop_*(关/K=5)` / `extreme_perturb_pct(0.01)` / `eval_horizons((1,5,10,20))`
 - **L2 准入去冗余**: `l2_elite_corr_threshold(0.9)` / `l2_elite_orthogonalize(true)` / `l2_orthogonal_residual_corr_max(0.3)` / `l2_orthogonal_basis_enabled(true)` / `l2_barra_style_neutral(true)`
 - **批量挖掘**: `batch_size(20)` / `batch_max_candidates(5)` / `executor_backend("thread")` / `executor_max_workers(4)`
-- **L1**: `meta_loop_interval_hours(24)` / `meta_loop_max_tokens(8000)` / `l1_announcement_extractor_enabled(true)` / `l1_macro_extractor_enabled(true)`
+- **L1**: `l1_announcement_extractor_enabled(true)` / `l1_macro_extractor_enabled(true)`
 - **L3**: `portfolio_max_factors(20)` / `portfolio_top_n(5)` / `portfolio_decay_days(90)` / `portfolio_optimizer_mode("risk_parity")` / `l3_turnover_penalty(0.0)` / `l3_weight_recompute_cadence("weekly")` / `recalibration_enabled(false)`
 - **股票**: `stock_neutralization(true)` / `industry_map_path` / `cap_map_path`（默认动态化）/ `stock_signal_*`
 - **期货**: `futures_adjusted(true)` / `roll_cost_bps(2.0)` / `minute_cache_max_age_days(1)` / `futures_neutralization(true)` / `futures_enhance_enabled(false)` / `futures_limit_pct(0.08)`

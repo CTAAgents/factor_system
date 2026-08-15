@@ -110,6 +110,18 @@ class TestMockLLMClient:
         client.complete("test")
         assert client._call_count == 3
 
+    def test_fix_economic_logic_returns_fixed_scores(self):
+        """GAP-123 P1③: Mock fix_economic_logic 返回四维达标 economic_logic。"""
+        client = MockLLMClient()
+        cand = {"name": "fix_test", "economic_logic": {"theory": 2, "behavioral": 2, "microstructure": 2, "institutional": 2}}
+        fixed = client.fix_economic_logic(cand, ["经济逻辑达标维度 0/4 < 2"], "trace_fix")
+        assert fixed is not None
+        assert fixed["theory"] >= 3
+        assert fixed["behavioral"] >= 3
+        assert fixed["microstructure"] >= 3
+        assert fixed["institutional"] >= 3
+        assert len(fixed["narrative"]) >= 20
+
 
 # ═══════════════════════════════════════════════════════════
 # LLMClient.generate_json()
@@ -748,6 +760,69 @@ class TestBuildBootstrapPrompt:
         prompt = OpenAIClient._build_bootstrap_prompt(long_snapshot, [], 5, "trace_prompt_008")
         assert isinstance(prompt, str)
         assert len(prompt) > 0
+
+    def test_prompt_contains_argument_consistency_rules(self):
+        """GAP-123 P0: Prompt 包含论证-评分一致性强制规则。"""
+        prompt = OpenAIClient._build_bootstrap_prompt({}, [], 5, "trace_prompt_gap123")
+        assert "论证-评分一致性" in prompt
+        assert "机制路径" in prompt
+        assert "抽象套话" in prompt
+        assert "四维机制示例库" in prompt
+        assert "自检" in prompt
+
+    def test_prompt_contains_mechanism_example_library(self):
+        """GAP-123 P0: Prompt 包含四维机制示例库（理论/行为/微观/机构）。"""
+        prompt = OpenAIClient._build_bootstrap_prompt({}, [], 5, "trace_prompt_gap123_lib")
+        assert "theory" in prompt or "theory" in prompt.lower()
+        assert "behavioral" in prompt.lower()
+        assert "microstructure" in prompt.lower()
+        assert "institutional" in prompt.lower()
+        assert "保证金追缴" in prompt
+        assert "锚定效应" in prompt
+
+    def test_econ_fix_prompt_contains_requirements(self):
+        """GAP-123 P1③: _build_econ_fix_prompt 包含重写要求。"""
+        cand = {"name": "fix_factor", "economic_logic": {"theory": 2, "narrative": "短"}}
+        prompt = OpenAIClient._build_econ_fix_prompt(cand, ["经济逻辑达标维度 0/4 < 2"], "trace_econ_fix")
+        assert "fix_factor" in prompt
+        assert "失败原因" in prompt
+        assert "至少 2 个维度 >= 3 分" in prompt
+        assert "抽象套话" in prompt
+        assert "trace_econ_fix" in prompt
+
+    def test_econ_fix_llm_success(self):
+        """GAP-123 P1③: OpenAIClient.fix_economic_logic 成功解析重写结果。"""
+        resp = json.dumps(
+            {
+                "economic_logic": {
+                    "theory": 4,
+                    "behavioral": 4,
+                    "microstructure": 3,
+                    "institutional": 3,
+                    "narrative": "修复后论证: 理论机制明确, 行为偏差具体, 微观结构路径清晰, 机构制度支撑充分。",
+                }
+            }
+        )
+        client = OpenAIClient(api_key="sk-test", max_retries=0)
+        client.complete = MagicMock(return_value=(resp, 0))
+        fixed = client.fix_economic_logic({"name": "fix_factor"}, ["经济逻辑不达标"], "trace_econ_fix2")
+        assert fixed is not None
+        assert fixed["theory"] == 4
+        assert len(fixed["narrative"]) >= 20
+
+    def test_econ_fix_llm_invalid_response(self):
+        """GAP-123 P1③: LLM 返回缺 narrative 的响应 → None。"""
+        client = OpenAIClient(api_key="sk-test", max_retries=0)
+        client.complete = MagicMock(return_value=(json.dumps({"economic_logic": {"theory": 4}}), 0))
+        fixed = client.fix_economic_logic({"name": "fix_factor"}, ["经济逻辑不达标"], "trace_econ_fix3")
+        assert fixed is None
+
+    def test_econ_fix_llm_bad_json(self):
+        """GAP-123 P1③: LLM 返回非法 JSON → None（不抛异常）。"""
+        client = OpenAIClient(api_key="sk-test", max_retries=0)
+        client.complete = MagicMock(return_value=("not-json{{{", 0))
+        fixed = client.fix_economic_logic({"name": "fix_factor"}, ["经济逻辑不达标"], "trace_econ_fix4")
+        assert fixed is None
 
 
 # ═══════════════════════════════════════════════════════════

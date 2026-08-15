@@ -447,8 +447,6 @@ max_generations: 10                    # 每轮演化最大代数
 population_size: 20                    # 种群大小
 micro_trials_per_generation: 50        # 每代调参次数
 evolution_mode: "hybrid"               # 演化模式: operator/code/hybrid
-meta_loop_interval_hours: 24           # L1 间隔
-meta_loop_max_tokens: 8000             # L1 每次最大 Token
 portfolio_max_factors: 20              # L3 最大因子数
 portfolio_top_n: 5                     # L3 选用因子数
 portfolio_decay_days: 90               # L3 因子衰减天数

@@ -84,9 +84,17 @@ class RollCalendar:
             logger.warning("[RollCalendar] contract_kline 无数据 [%s]，返回空换月日历", base)
             return []
 
-        # 每日主力 = 成交量最大的合约（同日多行取 volume 最大）
+        # 每日主力 = 成交量最大的合约（同日多行取 volume 最大）。
+        # GAP-046 修复（v2.104.0+39）: volume 无效行（缺失/0）不参与主力判定——
+        # 无成交合约不应成为主力，否则产生大量"来回切换"的假换月事件（早期数据
+        # volume 大面积缺失时尤为严重）。
+        tradable = df[df["volume"].fillna(0.0) > 0.0]
+        if tradable.empty:
+            return []
         dominant = (
-            df.sort_values("volume", ascending=False).drop_duplicates(subset=["date"], keep="first").sort_values("date")
+            tradable.sort_values("volume", ascending=False)
+            .drop_duplicates(subset=["date"], keep="first")
+            .sort_values("date")
         )
         if len(dominant) < 2:
             return []
@@ -222,6 +230,11 @@ class RollCalendar:
                 """,
                 [base],
             ).fetchdf()
+            # GAP-046 修复（v2.104.0+39）: 生产库 contract_kline.date 为 VARCHAR 时
+            # fetchdf 返回 object(str)，_close_on 用 pd.Timestamp 比较将永远失配，
+            # 导致所有换月事件被误判为"切换日价格缺失"而跳过。统一规范化为
+            # datetime64 后与 Timestamp 比较稳定命中（DATE 列时 to_datetime 为幂等）。
+            df["date"] = pd.to_datetime(df["date"])
             return df
         except Exception as e:  # noqa: BLE001
             logger.warning("[RollCalendar] contract_kline 读取失败 [%s]: %s", base, e)

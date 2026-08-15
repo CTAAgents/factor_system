@@ -405,6 +405,8 @@ def test_promote_to_elite_deletes_l1_candidate_file(chdir_tmp):
         passed=True,
         failure_reasons=[],
         level_3_multiple={"passed": True},
+        # GAP-121: 晋升需携带 ≥2 窗口走航结果（WalkForward 强制门）
+        walk_forward={"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
         evaluated_at="2026-08-08T00:00:00",
     )
     fp = loop._promote_to_elite(factor, evaluation, shadow_observe=False)  # noqa: SLF001
@@ -459,6 +461,8 @@ def _make_promote_eval(fid: str) -> Any:
         passed=True,
         failure_reasons=[],
         level_3_multiple={"passed": True},
+        # GAP-121: 晋升需携带 ≥2 窗口走航结果（WalkForward 强制门）
+        walk_forward={"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
         evaluated_at="2026-08-13T00:00:00",
     )
 

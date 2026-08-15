@@ -1607,6 +1607,156 @@ class TestMetaLoop:
 
 
 # ════════════════════════════════════════════════════════
+# 7. GAP-123 P1③ — 软失败经济逻辑重写闭环测试
+# ════════════════════════════════════════════════════════
+
+
+class TestGap123EconFixLoop:
+    """GAP-123 P1③: 软失败（经济逻辑不达标）候选经 LLM 定向重写后注入。"""
+
+    def _make_weak_candidate(self, candidate_id: str = "cand_econfix") -> SeedCandidate:
+        """构造经济逻辑不达标（软失败）的候选。"""
+        return SeedCandidate(
+            candidate_id=candidate_id,
+            name="econ_fix_test_factor",
+            code="def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))\n",
+            params={"window": 10},
+            signature=FactorSignature(
+                input_fields=["close"],
+                output_type="signal",
+                frequency="daily",
+                lookback=15,
+            ),
+            economic_logic=EconomicLogic(
+                theory=2,
+                behavioral=2,
+                microstructure=2,
+                institutional=2,
+                narrative="该因子缺乏足够的机制论证支撑，经济逻辑不足。",
+            ),
+            source="l1_bootstrapping",
+            parent_topic="GAP-123 P1③ 测试",
+            is_executable=True,
+            is_duplicate=False,
+            passed_l1_verifier=False,
+            failure_reasons=["经济逻辑达标维度 0/4 < 2"],
+            trace_id="trace_gap123",
+            created_at="2026-08-15",
+        )
+
+    def test_try_fix_success_updates_candidate(self):
+        """LLM 返回达标 economic_logic → True 且候选被更新。"""
+        llm = MagicMock()
+        llm.fix_economic_logic.return_value = {
+            "theory": 4,
+            "behavioral": 4,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "修复后论证: 理论机制明确, 行为偏差具体, 微观结构路径清晰, 机构制度支撑充分。",
+        }
+        loop = MetaLoop(llm_client=llm)
+        cand = self._make_weak_candidate()
+        assert loop._try_fix_economic_logic(cand, "trace_gap123") is True
+        assert cand["economic_logic"]["theory"] == 4
+        assert cand["passed_l1_verifier"] is True  # 重验通过标记
+
+    def test_try_fix_llm_unsupported_returns_false(self):
+        """LLM 客户端不支持 fix_economic_logic（基类默认）→ False，候选不变。"""
+        loop = MetaLoop(llm_client=None)  # 无 LLM
+        cand = self._make_weak_candidate()
+        orig_econ = dict(cand["economic_logic"])
+        assert loop._try_fix_economic_logic(cand, "trace_gap123") is False
+        assert cand["economic_logic"] == orig_econ
+
+    def test_try_fix_llm_returns_none(self):
+        """LLM 返回 None → False，候选不变。"""
+        llm = MagicMock()
+        llm.fix_economic_logic.return_value = None
+        loop = MetaLoop(llm_client=llm)
+        cand = self._make_weak_candidate()
+        orig_econ = dict(cand["economic_logic"])
+        assert loop._try_fix_economic_logic(cand, "trace_gap123") is False
+        assert cand["economic_logic"] == orig_econ
+
+    def test_try_fix_rewrite_still_fails(self):
+        """重写后仍不达标 → False。"""
+        llm = MagicMock()
+        llm.fix_economic_logic.return_value = {
+            "theory": 2,
+            "behavioral": 2,
+            "microstructure": 2,
+            "institutional": 2,
+            "narrative": "重写后仍然只有直觉, 无机制论证。",
+        }
+        loop = MetaLoop(llm_client=llm)
+        cand = self._make_weak_candidate()
+        assert loop._try_fix_economic_logic(cand, "trace_gap123") is False
+
+    def test_try_fix_llm_exception_returns_false(self):
+        """LLM 调用异常 → False，候选不变。"""
+        llm = MagicMock()
+        llm.fix_economic_logic.side_effect = RuntimeError("LLM down")
+        loop = MetaLoop(llm_client=llm)
+        cand = self._make_weak_candidate()
+        orig_econ = dict(cand["economic_logic"])
+        assert loop._try_fix_economic_logic(cand, "trace_gap123") is False
+        assert cand["economic_logic"] == orig_econ
+
+    def test_verify_and_inject_soft_failure_rewritten(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
+    ):
+        """端到端: 软失败候选经重写后注入成功（GAP-123 P1③ 闭环）。"""
+        from fts.factor_engine.meta_loop import BootstrappingChain as BC
+
+        class WeakChain(BC):
+            def bootstrap(self, *args, **kwargs):
+                return [
+                    SeedCandidate(
+                        candidate_id="cand_weak_1",
+                        name="gap123_weak_factor",
+                        code="def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))\n",
+                        params={"window": 10},
+                        signature=FactorSignature(
+                            input_fields=["close"],
+                            output_type="signal",
+                            frequency="daily",
+                            lookback=15,
+                        ),
+                        economic_logic=EconomicLogic(
+                            theory=2,
+                            behavioral=2,
+                            microstructure=2,
+                            institutional=2,
+                            narrative="经济逻辑论证不足。",
+                        ),
+                        source="l1_bootstrapping",
+                        parent_topic="GAP-123 端到端",
+                        is_executable=True,
+                        is_duplicate=False,
+                        passed_l1_verifier=False,
+                        failure_reasons=[],
+                        trace_id="t",
+                        created_at="2026-08-15",
+                    )
+                ]
+
+        # 真实 MockLLMClient: fix_economic_logic 返回四维全达标
+        from fts.llm import MockLLMClient
+
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+            llm_client=MockLLMClient(),
+        )
+        loop.bootstrap_chain = WeakChain()
+        result = loop.run(max_bootstraps=1)
+        # 软失败候选经重写后注入成功
+        assert result.candidates_injected == 1
+        assert result.status == "completed"
+
+
 # 7. SeedPool L1 注入接口测试
 # ════════════════════════════════════════════════════════
 

@@ -54,7 +54,7 @@ def sample_yaml(tmp_path: Path) -> Path:
     """创建示例 YAML 配置文件。"""
     p = tmp_path / "config.yaml"
     p.write_text(
-        "max_generations: 50\npopulation_size: 100\nlog_level: DEBUG\nmeta_loop_interval_hours: 12\n",
+        "max_generations: 50\npopulation_size: 100\nlog_level: DEBUG\n",
         encoding="utf-8",
     )
     return p
@@ -86,8 +86,6 @@ class TestFTSConfigDefaults:
         assert cfg.population_size == 20
         assert cfg.micro_trials_per_generation == 50
         assert cfg.max_workers == 4
-        assert cfg.meta_loop_interval_hours == 24
-        assert cfg.meta_loop_max_tokens == 8000
         assert cfg.portfolio_max_factors == 20
         assert cfg.portfolio_top_n == 5
         assert cfg.portfolio_decay_days == 90
@@ -232,7 +230,7 @@ class TestLoadConfig:
         assert cfg.max_generations == 50
         assert cfg.population_size == 100
         assert cfg.log_level == "DEBUG"
-        assert cfg.meta_loop_interval_hours == 12
+        assert cfg.micro_trials_per_generation == 50  # 未在 YAML → 默认值
 
     # ── 场景 10: YAML 缺少字段 → 保留默认值 ──
 
@@ -541,12 +539,10 @@ class TestConfigPriority:
         """环境变量 > YAML > 默认值 优先级链。"""
         monkeypatch.setenv("FTS_MAX_GENERATIONS", "77")  # 最高优先级
         # YAML 中 population_size=100, 无 env var → 使用 YAML 值
-        # meta_loop_interval_hours 在 YAML 中 =12, 无 env var → YAML 值
         # micro_trials_per_generation 无 YAML 无 env var → 默认值 50
         cfg = load_config(str(sample_yaml))
         assert cfg.max_generations == 77  # env var
         assert cfg.population_size == 100  # YAML
-        assert cfg.meta_loop_interval_hours == 12  # YAML
         assert cfg.micro_trials_per_generation == 50  # 默认值
 
 

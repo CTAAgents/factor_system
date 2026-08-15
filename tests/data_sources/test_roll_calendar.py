@@ -155,6 +155,79 @@ class TestRollCalendarBuild:
         assert roll.new_close == pytest.approx(3606.0, rel=1e-6)
         assert roll.adj_ratio == pytest.approx(3606.0 / 3506.0, rel=1e-6)
 
+    def test_date_stored_as_varchar_matches_close(self, tmp_path):
+        """回归（v2.104.0+39）: contract_kline.date 为 VARCHAR 时切换日价格应命中。
+
+        生产库该列为 VARCHAR，fetchdf 返回 object(str)，历史实现 _close_on 用
+        pd.Timestamp 比较永远失配 → 所有换月事件误判"价格缺失"。修复后仍须检出事件。
+        """
+        db = tmp_path / "fts.duckdb"
+        con = duckdb.connect(str(db))
+        try:
+            con.execute("""
+                CREATE TABLE contract_kline (
+                    symbol VARCHAR, contract VARCHAR, period VARCHAR, date VARCHAR,
+                    open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE,
+                    volume DOUBLE, amount DOUBLE, hold DOUBLE, settle DOUBLE,
+                    source VARCHAR, fetched_at TIMESTAMP, trace_id VARCHAR
+                )
+            """)
+            dates = pd.date_range("2024-01-01", periods=100, freq="D")
+            rows = []
+            for i, d in enumerate(dates):
+                if i < 60:
+                    rows.append(("RB", "RB2509", "daily", str(d.date()), 3490, 3510, 3480, 3500 + i * 0.1, 100_000.0, 0.0, 50_000.0, 3500.0, "TEST", pd.Timestamp.now(), "t"))
+                    rows.append(("RB", "RB2601", "daily", str(d.date()), 3590, 3610, 3580, 3600 + i * 0.1, 10_000.0, 0.0, 5_000.0, 3600.0, "TEST", pd.Timestamp.now(), "t"))
+                else:
+                    rows.append(("RB", "RB2509", "daily", str(d.date()), 3490, 3510, 3480, 3500 + i * 0.1, 10_000.0, 0.0, 5_000.0, 3500.0, "TEST", pd.Timestamp.now(), "t"))
+                    rows.append(("RB", "RB2601", "daily", str(d.date()), 3590, 3610, 3580, 3600 + i * 0.1, 100_000.0, 0.0, 50_000.0, 3600.0, "TEST", pd.Timestamp.now(), "t"))
+            con.executemany("INSERT INTO contract_kline VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        finally:
+            con.close()
+        rc = RollCalendar(str(db))
+        rolls = rc.build_roll_calendar("RB0")
+        assert len(rolls) == 1
+        assert rolls[0].old_contract == "RB2509"
+        assert rolls[0].new_contract == "RB2601"
+        assert rolls[0].old_close == pytest.approx(3506.0, rel=1e-6)
+        assert rolls[0].new_close == pytest.approx(3606.0, rel=1e-6)
+
+    def test_zero_volume_rows_excluded_from_dominant(self, tmp_path):
+        """回归（v2.104.0+39）: volume 为 0 的行不参与主力判定，消除假换月来回切换。"""
+        db = tmp_path / "fts.duckdb"
+        con = duckdb.connect(str(db))
+        try:
+            con.execute("""
+                CREATE TABLE contract_kline (
+                    symbol VARCHAR, contract VARCHAR, period VARCHAR, date VARCHAR,
+                    open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE,
+                    volume DOUBLE, amount DOUBLE, hold DOUBLE, settle DOUBLE,
+                    source VARCHAR, fetched_at TIMESTAMP, trace_id VARCHAR
+                )
+            """)
+            # 5 日：前 3 日 A 主力（volume=100），第 4 日 A/B 均 volume=0，
+            # 第 5 日 B 主力（volume=100）→ 应只有一次 A→B 换月（第 4 日不参与判定）
+            dates = pd.date_range("2024-01-01", periods=5, freq="D")
+            rows = []
+            for i, d in enumerate(dates):
+                if i < 3:
+                    rows.append(("RB", "A", "daily", str(d.date()), 100, 101, 99, 100.0, 100.0, 0.0, 50.0, 100.0, "TEST", pd.Timestamp.now(), "t"))
+                    rows.append(("RB", "B", "daily", str(d.date()), 200, 201, 199, 200.0, 10.0, 0.0, 5.0, 200.0, "TEST", pd.Timestamp.now(), "t"))
+                elif i == 3:
+                    rows.append(("RB", "A", "daily", str(d.date()), 100, 101, 99, 100.0, 0.0, 0.0, 50.0, 100.0, "TEST", pd.Timestamp.now(), "t"))
+                    rows.append(("RB", "B", "daily", str(d.date()), 200, 201, 199, 200.0, 0.0, 0.0, 5.0, 200.0, "TEST", pd.Timestamp.now(), "t"))
+                else:
+                    rows.append(("RB", "A", "daily", str(d.date()), 100, 101, 99, 100.0, 10.0, 0.0, 50.0, 100.0, "TEST", pd.Timestamp.now(), "t"))
+                    rows.append(("RB", "B", "daily", str(d.date()), 200, 201, 199, 200.0, 100.0, 0.0, 5.0, 200.0, "TEST", pd.Timestamp.now(), "t"))
+            con.executemany("INSERT INTO contract_kline VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        finally:
+            con.close()
+        rc = RollCalendar(str(db))
+        rolls = rc.build_roll_calendar("RB0")
+        assert len(rolls) == 1
+        assert rolls[0].old_contract == "A"
+        assert rolls[0].new_contract == "B"
+
     def test_no_roll_single_contract(self, tmp_path):
         """单一合约无换月 → 空事件列表。"""
         db = tmp_path / "fts.duckdb"
