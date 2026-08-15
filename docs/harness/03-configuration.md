@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.104.0+42
+> 版本: v2.104.0+63
 > 最后更新: 2026-08-10
 
 ---
@@ -62,8 +62,6 @@ FTS 配置采用三级优先级（高→低）：
 | `batch_max_candidates` | int | 5 | `FTS_BATCH_MAX_CANDIDATES` | 通过粗筛后进入细评估的最大候选数（预算护栏，GAP-I201，v2.65.0） |
 | `batch_max_workers` | int | 4 | `FTS_BATCH_MAX_WORKERS` | 批量粗筛并行线程数（GAP-I201，v2.65.0） |
 | `batch_random_seed` | int | 42 | `FTS_BATCH_RANDOM_SEED` | 批量生成随机种子（同父多后代可复现，GAP-I201，v2.65.0） |
-| `meta_loop_interval_hours` | int | 24 | — | L1 Meta-Loop 间隔 |
-| `meta_loop_max_tokens` | int | 8000 | — | L1 单次运行 max token |
 | `l1_announcement_extractor_enabled` | bool | true | `FTS_L1_ANNOUNCEMENT_EXTRACTOR_ENABLED` | 另类知识源：公告/舆情提取器开关（原股票管道，GAP-I103，v2.82.0；已随股票管线剥离至 fts-stock（2026-08），配置项保留兼容、主系统不再使用） |
 | `l1_macro_extractor_enabled` | bool | true | `FTS_L1_MACRO_EXTRACTOR_ENABLED` | 另类知识源：宏观事件提取器开关（期货管道，GAP-I103，v2.82.0；仍由 L1 Meta-Loop 使用） |
 | `review_experience_chain`（环境变量直读） | bool | true | `FTS_REVIEW_EXPERIENCE_CHAIN` | 人审驳回意见是否写入经验链（GAP-I102 二期，v2.82.0） |
@@ -79,6 +77,15 @@ FTS 配置采用三级优先级（高→低）：
 | l3_weight_recompute_cadence | str | "daily" | FTS_L3_WEIGHT_RECOMPUTE_CADENCE | L3 组合权重重算频率：daily=每日重算 / weekly=仅 l3_weight_recompute_weekday 重算（GAP-072，v2.99.0；v2.104.0+7 默认改 daily；v2.105.0 起仅作用于 PortfolioLoop L3 侧，信号管道不再消费——信号管道因子选择与基础权重直接读 L3 组合 factor_weights.json，不再自训权重） |
 | l3_weight_recompute_weekday | int | 4 | FTS_L3_WEIGHT_RECOMPUTE_WEEKDAY | 周度重算日（Python weekday 0=周一...4=周五，默认周五收盘后重算；GAP-072，v2.99.0） |
 | `l3_turnover_budget_enabled` | bool | `false` | `FTS_L3_TURNOVER_BUDGET_ENABLED` | G3 换手预算分配开关（v2.103.0+17）：`true`=启用（单日换手 > daily_turnover_cap=0.30 时按边际收益剔除弱信号回退当前持仓）；`false`=关闭（默认，不剔除；换手控制由粘性约束 + 换手惩罚 λ 双通道兜底）。期货周频场景关闭可避免 sharpe 被 SHARPE_CAP 截断后评分并列导致的误剔最强因子（2026-08-13 实测 fut_bias_g18=0.9859 被误剔归零） |
+| `l3_g1_enabled` | bool | `true` | `FTS_L3_G1_ENABLED` | G1 同向敞口惩罚开关（v2.104.0+X 配置化，35-gap-closure-plan G1）：`false`=关闭（scale 恒 1.0，不压缩）；默认开启。开启时与置信度仓位缩放（28-T6）在 build_combo 乘性合并：`exposure_final = exposure_scale × aligned_scale` |
+| `l3_g1_align_threshold` | float | `0.60` | `FTS_L3_G1_ALIGN_THRESHOLD` | G1 同向敞口触发阈值（v2.104.0+X 配置化）：因子 IC 同向权重占比（max(看多,看空)）≥ 该值触发压缩；取值域 (0,1]，默认 0.60 = 历史硬编码。放宽（如 0.80）属风控决策，需评审后调整 |
+| `l3_g1_max_compress` | float | `0.50` | `FTS_L3_G1_MAX_COMPRESS` | G1 最大压缩系数（v2.104.0+X 配置化）：同向占比=1 时压缩至该下限；取值域 (0,1]，默认 0.50 = 历史硬编码（全多组合敞口压至 50%）。放宽（如 0.70）直接放大风险敞口 |
+| `l3_g1_compress_curve` | str | `"linear"` | `FTS_L3_G1_COMPRESS_CURVE` | G1 压缩曲线（v2.104.0+X 配置化）：`linear`（线性）/ `sqrt`（更温和）/ `exp`（更激进）；默认 linear = 历史硬编码 |
+| `l3.chain_dedup.enabled` | bool | `true` | —（settings.yaml l3 段） | 子链维度去冗余开关（GAP-121 扩展，能源链专属）：`true`=同一子链保留因子数 ≤ max_per_chain（超限按综合评分降序截断）；`false`=关闭。仅 market=energy 生效 |
+| `l3.chain_dedup.max_per_chain` | int | `2` | —（settings.yaml l3 段） | 子链去冗余单子链保留因子数上限：与 Step 1.8 信号相关性聚类互补（同子链因子即使信号相关性低仍共享产业链驱动）；symbol_ic 缺失因子归 unknown 组直接保留 |
+| `l3.synthesis.mode` | str | `"equal_weight"` | —（settings.yaml l3 段，CLI `--synthesis-mode` 优先） | L3 合成模式默认值（v2.104.0+62）：`equal_weight`/`quality_weight`/`sharpe_weight`/`elastic_net`/`adaptive`/`optimizer`/`risk_parity`；直接改配置即切换合成方法无需改代码 |
+| `l3.synthesis.optimizer_mode` | str | `"risk_parity"` | —（settings.yaml l3 段） | optimizer 类模式目标默认值：`risk_parity`/`mvo`/`bl`（v2.104.0+62）；`--synthesis-mode risk_parity` 即映射 optimizer + 本目标 |
+| `FTS_L3_AUTO_FACTOR_RETURNS` | str | 未设 | env | L3 自动构建因子收益矩阵开关（v2.104.0+2）：`1`=optimizer 之外的模式也自动构建用于组合实测指标；optimizer/risk_parity 模式默认自动构建但**仅用于权重合成**（risk_parity 只用协方差 Σ，自动矩阵 Sharpe 虚高不影响权重；组合指标口径保持估算，不污染） |
 | `evolution_shadow_observe`（环境变量直读） | bool | `false` | `FTS_EVOLUTION_SHADOW_OBSERVE` | 新晋级精英因子影子池观察期开关（v2.103.0+20）：`1`=晋升写入 shadow_pool 标记（观察 5 交易日，L3 观察期内不纳入组合）；`0`/未设=默认关闭（新晋级直接进正式组合）。仅作用于新晋级因子，重审降级因子 shadow_pool 保留不变 |
 | `b_grade_observe_enabled`（GradeThreshold 配置） | bool | `false` | — | elite_tracker B 级因子观察期开关（v2.103.0+28 默认关闭）：`false`=B 级因子（30≤score<40）直接 active 入池，不进入 observing；`true`=恢复 3 个月（默认）观察期。与 shadow_pool 5 交易日观察为两套独立机制 |
 | `adaptive_config.probability_mix` | bool | `true` | —（AdaptiveWeightConfig） | Regime 制度概率混合开关（regime blend，28-T4）：启用且 regime 含 `regime_probs` 时按概率加权混合全部制度倍率；关闭或缺失 probs 时回退硬查表（28 计划） |
@@ -123,6 +130,8 @@ FTS 配置采用三级优先级（高→低）：
 | `futures_enhance_enabled` | bool | `false` | `FTS_FUTURES_ENHANCE_ENABLED` | 字段增强层 iFinD SDK 选项（GAP-083 阶段 C，v2.101.0）：`false` 时仅默认注册天勤 TQSDKEnhanceSource（close_oi→hold/oi_change，零额外依赖）；`true` 时追加 IFindSDKSource（方案 A：iFinD 官方 SDK 直连补 settle/pre_settle 权威值，需本地安装 iFinDPy + .env 凭据 IFIND_TOKEN 或 IFIND_USERNAME/PASSWORD，失败自动降级） |
 | `backtest_trade_filter` | bool | `true` | `FTS_BACKTEST_TRADE_FILTER` | 回测是否启用涨跌停拦截 + 停牌过滤（GAP-F02，v2.59.0） |
 | `futures_limit_pct` | float | `0.08` | `FTS_FUTURES_LIMIT_PCT` | 期货涨跌停判定阈值（单日涨跌幅 ≥ 该值视为涨跌停，GAP-F02，v2.59.0） |
+| `cross_section_panel_vector` | bool | `true` | `FTS_CROSS_SECTION_PANEL_VECTOR` | 横截面评估全矩阵化开关（plans/37 Phase 1+3，plans/39 §11 回退后）：`cross_section_evaluate_backtest` 的 `_cs_compute_ics` 分派到 `panel_vector.compute_cs_ics_vectorized`（联合掩码 rank + 行内 Pearson），**信号/收益构建恒逐品种执行**（算子因子面板化 `execute_factor_panel` 经 plans/39 §11 v2.104.0+58 实测真实缺口面板 0.3x <5x 门槛登记豁免摘除，仅保留为独立模块/对照基准）；产出与旧路径逐位一致；**v2.104.0+57 起默认开启**（对照测试全绿 + 缺口面板实测产出一致/性能持平），可设 `false` 关闭 |
+| `ops_numba` | bool | `true` | `FTS_OPS_NUMBA` | numba 算子开关（plans/38，v2.104.0+59）：启用时 `numba_kernels.py` 走 numba 加速路径（**回退后仅 ts_rank 1D/2D 内核**，ts_cvar/ts_zscore 已回退现值）；关闭或依赖缺失/版本冲突时回退现值实现（零漂移），与 `cross_section_panel_vector` 正交互不耦合 |
 | `force_walkforward` | bool | `true` | `FTS_FORCE_WALKFORWARD` | 因子晋升路径是否强制 WalkForward 冷启动样本外验证（GAP-F08，v2.60.0） |
 | `margin_rate_map` | dict | 见默认表 | —（YAML） | 品种保证金率表（{symbol: 保证金率}，未配置品种用默认 0.10，GAP-F09，v2.60.0） |
 | `max_margin_usage` | float | `0.80` | `FTS_MAX_MARGIN_USAGE` | 最大保证金占用率（保证金占用/总权益，超过触发强平风险告警，GAP-F09，v2.60.0） |

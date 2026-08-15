@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.104.0+42
+> 版本: v2.104.0+63
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -28,6 +28,18 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 ---
 
 ## 2. 已完成里程碑
+
+### L3 组合重算性能优化 A/B/C/D 四层（2026-08-16，build bump v2.104.0+63，plans/40）
+
+**完成时间**: 2026-08-16
+
+**核心产出**:
+- ✅ **A 层（纯 Python，3–10x）**：L3 全部 8 处信号重算调用点（去重/OOS/聚类/PCA/`_auto_build_factor_returns`/elastic_net/ml_ensemble/`_panel_factor_ic`）接入 `SignalCache`（`L3_SIGNAL_CACHE_ENTRIES=20000` LRU）+ 新增 `_align_signal_to_dates` 向量化对齐（`df.index.get_indexer` 替代 O(n²) `list.index` 日期查找）——单次 run 内信号重算收敛到 1 处
+- ✅ **B 层（DuckDB 下沉 2D）**：新增 `l3_signal_service.py`——`SignalMatrixBundle` 2D/3D 信号矩阵 + `build_signal_matrix`（复用缓存 + 向量化对齐）+ DuckDB corr/因子收益矩阵 SQL 下沉（E.4 短连接 + filelock）
+- ✅ **C 层（numba 2D 内核）**：`numba_kernels.py` ts_zscore/ts_cvar 1D 内核接入 `feature_ops`/`ops_library`（`cache=True`/`fastmath=False`，依赖缺失回退现值零漂移）
+- ✅ **D 层（一等公民 + 增量）**：信号矩阵持久化 DuckDB + `load_or_build_signal_matrix` 增量重算（`code_hash` 判定，仅新晋升/变更因子全量算，存量仅追加近窗口）
+- ✅ 测试：新增 test_l3_signal_service.py 16 用例 + test_numba_kernels 32→86 + test_factor_clustering 接 `signal_cache` 参数；受影响回归 880 用例全绿 + factor_engine 全目录 not-slow 4882 passed（2 个 test_risk_tag mock 晋升用例为存量失败，git stash 基线复测确认非本次引入）
+- ✅ GAP-124 登记并关闭
 
 ### CTA 手册 WorkFlow 端到端工作流 UI（2026-08-14，build bump v2.104.0+25）
 

@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+42
+> 版本: v2.104.0+63
 > 最后更新: 2026-08-10
 
 ---
@@ -112,6 +112,8 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │    v2.66.0 (GAP-X03): 模板 ts_product 改用 rolling.apply(np.prod)       │
 │    (pandas≥2.1 移除 Rolling.prod); _evaluate_fitness 后处理对齐流水线    │
 │    (nan_to_num + clip[-10,10] + std<1e-12 常数罚分), 产物与运行时校验对齐│
+│    v2.104.0+54 (plans/37 Step 2 批 1): rolling.apply 类算子改            │
+│    sliding_window_view 向量化内核（ts_product 等 7 热算子 11–525x）      │
 │  ml/deep_factor.py — 深度因子生成器 (GAP-I203, v2.73.0; C5 2026-08-11):      │
 │    DeepFactorGenerator: OHLCV 特征(日收益率+量变化率) → 滚动窗口样本 →        │
 │    前 train_ratio 训练 GRUFactorModel (纯 numpy BPTT) 或                    │
@@ -170,7 +172,7 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  - orthogonalize_factors（因子正交化）                                  │
 │  - decay_test（衰减检验）                                              │
 │  - build_combo（构建组合，支持粘性约束）                                │
-│  - synthesize_signals（信号合成，支持六种模式：equal_weight/sharpe_weight/elastic_net/ml_ensemble/adaptive/optimizer（optimizer 内含 risk_parity/mvo/bl，C3 2026-08-11 并入 Black-Litterman 观点融合））│
+│  - synthesize_signals（信号合成，支持八种模式：equal_weight/sharpe_weight/quality_weight/elastic_net/ml_ensemble/adaptive/ic_weight/optimizer（optimizer 内含 risk_parity/mvo/bl，C3 2026-08-11 并入 Black-Litterman 观点融合）；CLI --synthesis-mode risk_parity 为 optimizer+risk_parity 快捷（v2.104.0+62，矩阵自动构建仅用于权重合成））│
 │  - ACTIVE_FACTOR_CAP=20（活跃因子数量上限，超出时按 Sharpe 排名保留 Top N）│
 │  - generate_agent_proposals（Agent 提案生成）                          │
 │  - load_elite_factors（加载 elite 因子，过滤影子池观察期因子）          │
@@ -188,7 +190,17 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │      → 使用 FactorExecutor 在参考品种上计算每个因子的信号序列           │
 │      → 计算 Pearson 相关系数矩阵                                        │
 │      → 层次聚类（average linkage，距离阈值默认 0.7）                    │
-│      → 从每个簇中选择 Sharpe 最高的代表因子                             │
+│      → 从每个簇中选择综合评分最高的代表因子（plans/36 改进项 2/4）      │
+│    Step 1.8b: 子链维度去冗余（GAP-121 扩展，能源链专属）                │
+│      → _dedup_factors_by_chain（portfolio_loop.py）                     │
+│      → 基于逐品种 IC（symbol_ic，评估链 GAP-075 输出，elite JSON        │
+│        兜底读取）构建"主导子链"画像（子链内平均 |IC| 最高者）           │
+│      → 同一子链保留因子数 ≤ l3.chain_dedup.max_per_chain（默认 2），    │
+│        链内按综合评分降序截断；symbol_ic 缺失因子归 unknown 组直接保留  │
+│      → 与 Step 1.8 信号相关性聚类互补：同子链因子即使信号相关性低，     │
+│        仍共享产业链驱动（原油→化工传导），同步放大子链暴露              │
+│      → 配置：settings.yaml l3.chain_dedup.{enabled, max_per_chain}      │
+│        （仅 market=energy 生效）                                        │
 │                                                                         │
 │  P2 PCA 降维流程:                                                       │
 │    Step 1.9: PCASignalCompressor.run() (可选，通过 enable_pca 控制)      │
@@ -253,7 +265,7 @@ fts/
 │   ├── evolution_uct.py        # UctSelector 协作类（34 计划领域 I，C 阶段 Phase 47a 由 Mixin 组合式重构）：_select_parent_uct/_update_uct_stats/_update_uct_failure + _check_circuit_breaker/_maybe_early_stop，状态 _uct_stats/_evolution_stop_*/_consecutive_empty_generations/_early_stop_* 随迁，_consecutive_low_ic 经 low_ic_box 注入；主类组合持有 + 转发桩
 │   ├── evolution_trace.py      # trace/经验链 Mixin（34 计划领域 J，2026-08-13）：12 方法（_record_*_trace ×6 + _build_parent_failure_ctx/_build_success_pattern_report/_record_experiment_variant/_export_experiment_log/_log_inspection_detail + _QualityInspectionResult 数据类），内部状态 _success_pattern_cache/_experiment_log_dir/_experiment_variants
 │   ├── evolution_channels.py   # 演化通道 Mixin（34 计划领域 G，2026-08-13）：_run_gp_evolution/_run_deep_evolution/_generate_operator_factor/_try_operator_engine_evolution（GP/深度/算子 DSL 三通道），组件 feature_ops_engine/feature_importance_analyzer 装配于主类
-│   ├── evolution_seeds.py      # 种子/横截面 Mixin（34 计划领域 D，2026-08-13）：_evaluate_and_promote_seeds（种子评估晋升编排，跨调 E/F/C/J 域方法）/ _merge_l1_candidates（GAP-031 L1 注入候选合并）/ _run_seed_correlation_check / _build_barra_exposures（GAP-I304 风格暴露缓存）/ _evaluate_cross_section / run_microstructure_promotion（C1 公开入口），组件 cap_map/industry_map/_barra_exposures_cache 装配于主类
+│   ├── evolution_seeds.py      # 种子/横截面 Mixin（34 计划领域 D，2026-08-13）：_evaluate_and_promote_seeds（种子评估晋升编排，跨调 E/F/C/J 域方法）/ _merge_l1_candidates（GAP-031 L1 注入候选合并）/ _run_seed_correlation_check / _build_barra_exposures（GAP-I304 风格暴露缓存）/ _evaluate_cross_section / run_microstructure_promotion（C1 公开入口），组件 cap_map/industry_map/_barra_exposures_cache 装配于主类；**v2.104.0+48 GAP-121 补全：_evaluate_cross_section 由走航结果派生 ic_volatility/decay_6m 并透传 extreme_perturbation/cross_symbol_positive_ratio/backtest_pipeline 至 FactorEvaluation（HighICScreener 消费字段，跳过项 9→2）**
 │   ├── evolution_audit.py      # 审计/验证 Mixin（34 计划领域 E，2026-08-13）：_run_factor_audit（FactorAuditor 编排 + GAP-F08 冷启动走航优先）/ _run_walkforward_oos（独立走航）/ _run_backtest_pipeline（BacktestPipeline 薄包装）/ _run_ablation_check（消融，_ABLATION_* 类常量 + _is_blocking_ablation）/ _run_robustness_check / _run_shap_analysis / _run_causal_validation / _build_wf_config（staticmethod 纯函数），组件 auditor/backtest_pipeline/ablation_experiment/robustness_tester/shap_analyzer/causal_validator 装配于主类；_signal_cache 与 B 域共享保留引用
 │   ├── evolution_review.py     # 定期评审/数据质量 Mixin（34 计划领域 F，2026-08-13）：_run_periodic_factor_review（精英因子定期重评估：自动淘汰 GAP-I305 + 衰减反馈联动 + LogicMonitor 集成 + 状态报告）/ _get_factor_data_for_review / _register_factor_baseline / _check_factor_data_quality（均 DataQualityMonitor 薄包装），组件 data_quality_monitor 与 A 域共享；elite_tracker/feedback_loop/logic_monitor 装配于主类
 │   ├── evolution_prefilter.py  # 候选预筛 Mixin（34 计划领域 H，2026-08-13）：_quick_prefilter（快速预筛三元组：信号变化/标准差/快速 IC，市场自适应阈值）/ _cross_section_prefilter（横截面真实截面 IC，GAP-X01）/ _check_factor_runtime（后代运行时校验，复用 BacktestPipeline 执行路径），纯读全局上下文 data/market/forward_returns/cross_section_*/_is_cross_section
@@ -266,10 +278,12 @@ fts/
 │   ├── microstructure_generator.py # 微观结构因子生成器（C1 2026-08-11）：tick→日频聚合→FactorProgram 独立候选源（get_ticks → compute_microstructure_factors → 日聚合 ofi_mean/obi_mean/ltr_mean/ofi_std → 日期查找 code 零未来；CLI fts factor micro-generate；执行器对 DatetimeIndex 注入 datetime 列供日期对齐；L2 晋升接线 evolution_loop.run_microstructure_promotion——生成候选→横截面评估（ic≥0.03&sharpe≥1.5）→FactorAuditor 6 项审计→_promote_to_elite 护栏，CLI fts factor micro-evaluate）
 │   ├── alternative_sentiment.py # 舆情情感因子生成器（C2 2026-08-11）：新闻→词典打分→日频聚合→FactorProgram 独立候选源（FinancialSentimentLexicon 内置金融情感词典±强度+否定反转 score_text ∈[-1,1]；EastmoneyNewsProvider 新闻搜索（失败降级空）；日聚合 sent_mean/sent_std/sent_chg；可选 DuckDB sentiment_daily 落库；CLI fts factor senti-generate；LLM 精修 LlmSentimentScorer（LLMClient.complete 约束 [-1,1] 异常降级）+ evaluate_lexicon_consistency（词典-LLM 一致性 ≥0.7 验收，CLI fts factor senti-consistency）
 │   ├── meta_loop.py            # L1 元循环
-│   ├── portfolio_loop.py       # L3 组合循环
+│   ├── portfolio_loop.py       # L3 组合循环（plans/40 接入 SignalCache + 向量化对齐 + 信号矩阵一等公民增量）
+│   ├── l3_signal_service.py    # L3 信号矩阵服务（plans/40 B/D 层，v2.104.0+63）：SignalMatrixBundle 2D/3D 信号矩阵 + build_signal_matrix（复用信号缓存 + df.index.get_indexer 向量化对齐）+ DuckDB corr/因子收益矩阵 SQL 下沉 + load_or_build_signal_matrix 增量重算（code_hash 判定，仅新因子全量/存量追加窗口），E.4 短连接 + filelock 纪律，依赖缺失逐品种现值回退零漂移
 │   ├── macro_evolution.py      # LLM 宏观演化
 │   ├── micro_evolution.py      # optuna 微观调参
 │   ├── evaluation_chain.py     # 三级评估链（CTA 手册阶段4：IR 按因子类别分级门槛，v2.104.0+19 接入 ir_thresholds）
+│   ├── panel_vector.py         # 横截面评估全矩阵化（plans/37）：AlignedPanel 预对齐面板 + compute_cs_ics_vectorized 全矩阵 IC（联合掩码 rank + 行内 Pearson）+ execute_factor_panel 面板化因子执行（算子因子 DSL 按列求值，动态抽样验证 + 安全回退），跨截面评估开关 cross_section_panel_vector 默认开启（v2.104.0+57）；plans/39 §11（v2.104.0+58）真实缺口面板算子面板化实测 0.3x <5x 门槛 → 评估链信号构建摘除面板化恒逐品种执行，仅 IC 计算走矩阵化，execute_factor_panel 保留为独立模块/对照基准（缺口感知滚动内核 gap_aware_mode + _GapAwareFrame） |
 │   ├── ir_thresholds.py        # 因子 IR 分类门槛（CTA 手册阶段4，v2.104.0+19）：量价 0.30/基本面 0.40/期限结构 0.35，按 style_tags 判定，未知回退最宽松档
 │   ├── signal_cache.py         # 质检信号缓存（GAP-071，v2.98.2）：LRU 信号复用
 │   ├── experience_chain.py     # 经验链存储
@@ -317,6 +331,7 @@ fts/
 │   ├── factor_quality_card.py  # 因子质量评分卡（10 维评分，A/B/C 分级准入）
 │   ├── adaptive_weight.py      # 自适应权重（AdaptiveWeightManager + RegimeSmoother 热更新）
 │   ├── feature_ops.py          # 特征算子注册表（50 算子 / 7 类）
+│   ├── numba_kernels.py        # numba 算子内核（plans/38，v2.104.0+59 回退后仅保留 ts_rank 1D/2D 内核；ts_cvar/ts_zscore 已回退现值实现；依赖缺失/FTS_OPS_NUMBA=false 时经 ops_numba 开关回退现值实现零漂移）
 │   ├── feature_importance.py   # 特征重要性分析（置换重要性）
 │   ├── gp_evolver.py           # GP 演化器（ExpressionTree + 交叉/变异 + multi_objective 适应度 + Pareto 前沿输出，v2.78.0）
 │   ├── pareto.py               # Pareto 多目标前沿（NSGA-II 快速非支配排序，GAP-I204 二期 v2.78.0）
@@ -641,10 +656,41 @@ FTS (因子推演) — 支持期货横截面因子演化
 │      （Regime 降仓 × G1 敞口压缩为暴露决策，乘性压低 combo_sharpe，   │
 │      原始口径致风控一启用即恒不达 min_sharpe=2.0——期货/能源 L3 长期  │
 │      verifier_warning 根因）；相关性/换手/衰减/因子数维度不变；       │
-│      config/settings.yaml verifier.min_sharpe=1.9（信号质量下限，     │
+│      config/settings.yaml verifier.min_sharpe=1.9（信号质量下限，       │
 │      原始 2.0 已由 SHARPE_CAP=2.0 截断的因子等权合成贴线）、           │
 │      max_turnover=12.0（对齐因子月度换手次/月量纲，原 0.5 为比例量纲   │
 │      与库内 4.48~17.40 次/月不匹配）                                  │
+│ ②b3 G1 参数配置化（v2.104.0+X，portfolio_risk_controls                │
+│      AlignedExposureConfig + portfolio_loop.PortfolioLoop）            │
+│      config/settings.yaml l3_g1_enabled/align_threshold/               │
+│      max_compress/compress_curve（或 FTS_L3_G1_* 环境变量）            │
+│      → FTSConfig → PortfolioLoop.__init__ 构建 self._g1_config        │
+│      → build_combo aligned_exposure_config 乘性合并                    │
+│      （exposure_final = 置信度缩放 × G1 aligned_scale）                │
+│      默认 0.60/0.50/linear 与历史硬编码一致，零行为变更；              │
+│      AlignedExposureConfig.__post_init__ 契约校验非法值快速失败        │
+│ ②b4 plans/36 因子选择综合评分改进（v2.104.0+50）：                     │
+│    ① 选入标准综合评分化——L2 截断排序与 L3 聚类代表排序由单一           │
+│      Sharpe 改为 _factor_composite_score（portfolio_loop.py）           │
+│      维度：sharpe_cap 0.30 + icir 0.30 + ic 0.20 + turnover_inv 0.20   │
+│      （percentile rank 截面归一化，缺失维度剔除后权重重归一），          │
+│      权重可配 config/settings.yaml l3.factor_score.weights             │
+│    ② quality_weight 定权模式——synthesize_signals 新增合成模式          │
+│      （综合评分定权 + 0.5×等权下限 max(w, 0.5/n) 归一化，防单因子      │
+│      权重塌缩），CLI --synthesis-mode quality_weight 可选              │
+│    ③ 聚类阈值参数化 + 簇内 top-N——cluster_threshold 0.7 与            │
+│      cluster_top_n（默认 1 保持现行为）可配（l3.cluster 段），          │
+│      top-N>1 时与已选代表互相关<0.5 约束才允许多保留（补充因子         │
+│      factor_clustering.select_representative_factors 新参数）；         │
+│      阈值敏感性扫描脚本 scripts/l3_cluster_sensitivity.py             │
+│      （0.60~0.80 五档 Jaccard 重合度报告）                             │
+│    ④ 组合层滚动 OOS + 质量报告口径统一——build_combo 新增              │
+│      rolling_oos（60 交易日滚动组合夏普 + decay_ratio，                │
+│      FactorReturnsBuilder.align_to_factors 对齐，滚动窗口             │
+│      不足首段 NaN 不参与衰减评估）；quality_report 增加 passed_gate    │
+│      统计（abs(ic)≥0.03 且 sharpe≥1.5，与 Step 1a 加载口径一致）      │
+│    → 契约：PortfolioCombo.synthesis_mode 增加 quality_weight、        │
+│      新增 rolling_oos: Optional[dict] 字段                             │
 │ ②c 实测化输入（方案①，_auto_build_factor_returns，v2.104.0+2）       │
 │    --returns-matrix 手动 CSV 优先（CLI 传入 factor_returns）          │
 │    自动构建默认关闭（env FTS_L3_AUTO_FACTOR_RETURNS=1 启用）：          │
@@ -697,6 +743,10 @@ FTS (因子推演) — 支持期货横截面因子演化
 │   EvolutionLoop 晋升路径 → WalkForwardOptimizer 冷启动多窗口验证     │
 │     → force_walkforward=true 强制（可配置跳过并记录原因）            │
 │     → 多窗口 OOS IC 一致性替代 L1 单段 ICIR 近似，审计 oos_consistency│
+│     → v2.104.0+44（GAP-121 评估链修复）: 横截面分支接入              │
+│       cross_section_walk_forward（短样本 _build_wf_config 自适应 ≥2  │
+│       窗口）；晋升 WalkForward 强制门（n_windows<2 拒绝晋升）+ 审计   │
+│       oos_consistency 缺失/窗口<2 硬拦截（反转 GAP-073 skipped 放行） │
 │ ①.5 L2 质检性能（GAP-071，v2.98.2）:                                  │
 │   双重 WalkForward 合并——审计 `_run_factor_audit` 优先复用三级评估链 │
 │   走航结果（evaluation["walk_forward"]，配置同源 `_build_wf_config`），│

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fts"
-version = "2.104.0+42"
+version = "2.104.0+63"
 description = "FTS — Factor Trading System: 独立因子策略系统，支持多因子挖掘、演化与交易"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,6 +19,8 @@ dependencies = [
     "shap>=0.46",
     "python-dotenv>=1.0",
     "duckdb>=1.0",
+    "numba==0.66.0",
+    "llvmlite==0.48.0",
 ]
 
 [project.optional-dependencies]
