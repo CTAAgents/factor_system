@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.104.0+69
+> 版本: v2.104.0+73
 > 最后更新: 2026-08-10
 
 ---
@@ -64,6 +64,7 @@ FTS 配置采用三级优先级（高→低）：
 | `batch_random_seed` | int | 42 | `FTS_BATCH_RANDOM_SEED` | 批量生成随机种子（同父多后代可复现，GAP-I201，v2.65.0） |
 | `l1_announcement_extractor_enabled` | bool | true | `FTS_L1_ANNOUNCEMENT_EXTRACTOR_ENABLED` | 另类知识源：公告/舆情提取器开关（原股票管道，GAP-I103，v2.82.0；已随股票管线剥离至 fts-stock（2026-08），配置项保留兼容、主系统不再使用） |
 | `l1_macro_extractor_enabled` | bool | true | `FTS_L1_MACRO_EXTRACTOR_ENABLED` | 另类知识源：宏观事件提取器开关（期货管道，GAP-I103，v2.82.0；仍由 L1 Meta-Loop 使用） |
+| `l1_extractor_max_factors` | int | 20 | `FTS_L1_EXTRACTOR_MAX_FACTORS` | L1 提取器单次 LLM 最大因子数（plans/41 A3，v2.104.0+71）：管道构造时注入研报/论文/宏观/WebSearch 等 LLM 提取源；天软 tinysoft 为静态 YAML 感知源不参与 |
 | `review_experience_chain`（环境变量直读） | bool | true | `FTS_REVIEW_EXPERIENCE_CHAIN` | 人审驳回意见是否写入经验链（GAP-I102 二期，v2.82.0） |
 | `review_mode`（环境变量直读） | str | `"auto"` | `FTS_REVIEW_MODE` | 审查模式：`auto`=机审优先（正常自动批准/低质自动驳回/异常值转人审）/ `manual`=纯人审（C8-2，2026-08-11；manual 下 auto_review 需 --force 显式覆盖） |
 | `review_auto_min_ic`（环境变量直读） | float | 0.02 | `FTS_REVIEW_MIN_IC` | 机审 IC 下限：低于视为低质自动驳回（C8-2） |
@@ -272,7 +273,7 @@ L2 Verifier 默认配置（定义在 `contracts.py` 中，初始化后锁定）�
 
 | 配置 | L1 默认值 | L2 默认值 | L3 默认值 |
 |:-----|:----------|:----------|:----------|
-| 单次 token 上限 | 50K | 200K | 100K |
+| 单次 token 上限 | 60K（plans/41 D1，v2.104.0+70：50K→60K） | 200K | 100K |
 | 月度 token 上限 | 1.5M | 6M | — |
 | 最大演化代数 | — | 50 | — |
 | 熔断 token 比例 | 2.0x | 2.0x | — |

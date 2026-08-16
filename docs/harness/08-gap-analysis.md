@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v2.104.0+69
+> 版本: v2.104.0+73
 > 最后更新: 2026-08-15
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -12,9 +12,9 @@
 |:-------|:-----|:-------|:-----|
 | P0 | 0 | 20 | 20 |
 | P1 | 1 | 57 | 58 |
-| P2 | 4 | 62 | 66 |
+| P2 | 6 | 62 | 68 |
 | GAP-C（Stage 3C 远期） | 1 | 7 | 8 |
-| **合计** | **6** | **146** | **152** |
+| **合计** | **8** | **146** | **154** |
 
 > 注：GAP-068/069（P1，原延期项）已于 v2.101.0 关闭；GAP-075（P1，跨标的稳健性检查）于 v2.101.0 收尾关闭（cross_symbol 激活 + 标的留出验证）；GAP-C 系列为 Stage 3C 远期机构级差距（细则见 plans/23 §3.3），C1~C8 已于 2026-08-11 全部首期实施（C1 含评估晋升接线 / C2 含 LLM 精修 / C8 含 C9 算子扩容二期 DSL 132），C4 开放项为真实多机集群部署（单机 LocalCluster 代码/测试/基准已落地），待硬件/基建条件成熟后按 DaskBackend 抽象接入。
 > GAP-081~089（数据字段缺口）于 2026-08-11 由数据字段字典审计（docs/factor_data_dict/）登记——A 股增强字段（北向/两融/股东/分析师）与期货持仓/结算字段为 P0 阻塞性数据缺口，详见下方登记表。
@@ -161,6 +161,8 @@
 
 | ID | 模块 | 差距描述 | 影响 | 处理期限 | 状态 |
 |:---|:-----|:---------|:-----|:---------|:-----|
+| GAP-126 | `fts/factor_engine/extractors/futures_pipeline.py` | 提取器源注册表配置化（plans/41 B1）：源清单仍硬编码注册（tinysoft/broker_reports/academic_papers/macro_events/web_search），新增因子源需改代码；未下沉 `config/extractors.yaml` SSOT（enabled/paused/max_factors/params 每源声明） | 新增/启停因子源需改代码重启，扩展成本高 | 下个里程碑 | 🔴 开放（2026-08-16 登记，plans/41 B 层范围调整暂缓） |
+| GAP-127 | `fts/factor_engine/extractors/` | 量化平台 API 直连（plans/41 B2/C 远期）：聚宽/米筐/BigQuant 等平台因子库 API 多数闭源/需授权，未做逐平台适配；当前动态源仅 WebSearchExtractor（公开网页检索） | 平台独有因子数据（社区因子/回测结果）无法程序化接入 | 远期 | 🔴 开放（2026-08-16 登记，收益受平台开放度制约） |
 | GAP-119 | `fts/cli.py` `_cmd_catalog_verify` | catalog verify JSON↔DuckDB 快照漂移：DuckDB 因子资产库（SSOT，E.3 迁移后权威）337 因子 vs JSON elite 快照仅 10 文件，`only_in_duckdb=327`，verify 判定不一致退出码 1；JSON 层 E.3 起冻结为只读快照不再随晋升更新，verify 的一致性契约（JSON↔DuckDB 全等）相对 DuckDB SSOT 架构过期 | `fts catalog verify` 恒失败，WorkFlow 端到端 s8 组合风控阶段被阻断（2026-08-14 真实端到端实测） | 1 月内 | ✅ 已关闭（v2.104.0+26：契约修正为 DuckDB SSOT 单向校验权威 + `--backfill` 幂等回填——`_cmd_catalog_verify` 新增 `_scan_json_snapshots`（扫描+损坏跳过）/`_backfill_json_snapshots`（从 DuckDB 回填缺失快照，tmp 原子写、不覆盖既有），真实回填 327 个 JSON 快照后 `fts catalog verify` ✅ 一致（337 交集 337，rc=0），WorkFlow s8 组合风控端到端解锁；新增 tests/test_catalog_verify.py 9 用例全绿） |
 | GAP-120 | `scripts/futures_signal_pipeline.py` `_classify_delta_moves` + `_generate_trading_advice_report` + `_compute_composite_scores` | 信号增量（delta = 今日信号 − 昨日信号）有效性未验证：交易建议报告第 3/4/5 节增量规则（±0.02 加速/减速阈值、第 3 批加仓"次日增量未反转"、止损"增量反转减半仓"、连续 3 天信号衰减平仓）为启发式经验规则——① 阈值 0.02 无统计依据，未做 delta 分组（十分位）次日/未来 5 日收益单调性检验；② 增量与未来收益的截面/时序 IC 未计算，"加速延续/减速反转"预测力未量化；③ 无 A/B 对照（启用 vs 关闭增量规则组合的净值/换手/回撤对比）；④ 阈值未按 regime（bull/bear）与信号强度分层校准 | 增量规则若为噪声驱动（day-over-day 差分放大模型输出噪声）→ 第 3 批加仓/止损减半/衰减平仓产生无效换手与摩擦成本；若有效则固定阈值未必最优，损失置信度区分；规则预测力无从量化（与 GAP-060 多持有期 IC 同类统计严谨缺口） | 下个里程碑 | 🔴 开放（2026-08-14 登记；验证方案：① 用 reports/futures/signal_scores_history.jsonl 历史快照回放构建 delta 序列；② delta 十分位分组单调性 + 增量 IC（对齐 G4 ICIR 口径）；③ 增量动量检验（Factor Momentum 方法）；④ 与"无增量规则"基线组合 A/B 净值/换手/回撤对比；⑤ 验证集阈值扫描 ±0.01~0.05 + regime 分层校准；落地为 `scripts/validate_signal_delta.py` + 验证报告） |
 | GAP-121 | `fts/factor_engine/evaluation_chain.py` + `fts/factor_engine/panel_vector.py`（plans/37） | 横截面评估性能瓶颈：`_cs_execute_factors` 逐品种执行 + `_cs_compute_ics` 逐日 spearmanr 循环（真实 149 品种 × 3062 日单候选 ~2s）；全矩阵化方案 `panel_vector` 已实现并接入开关（`cross_section_panel_vector`，默认关闭，IC 矩阵化生产实测 ~1.2x），但 2D 因子执行引擎（因子执行 + Series/reindex 构建，占生产耗时主导）未落地 | 演化吞吐受限，完整 9.5x 提速未兑现 | 下个里程碑 | 🔴 开放（2026-08-15 登记，plans/37：Phase 1 IC 矩阵化已完成——30 用例对照全绿、开关 on/off 评估产出一致；**Phase 2 Step 1 面板化执行引擎已完成**——`execute_factor_panel` 动态抽样验证 + 安全回退，真实期货面板受内部缺口限制实测 ~1x（诚实口径，见 plans/37 §4.5）；**Phase 2 Step 2 批 1 已完成（v2.104.0+54）**——feature_ops 7 个 P0 热算子（ts_product/ts_zscore/ts_min_max_diff/ts_cum_max/max_drawdown/ts_argmin/self_corr）改 sliding_window_view 内核 + ops_library 9 处伪 `apply(np.sqrt)` 直改，算子因子单候选 ~35s → 实测 11–525x，test_rolling_native 28 对照用例全绿；**批 2 已完成（v2.104.0+55）**——registry.ts_argmax/ts_decay_linear + seed_loader/seed_data 双模板 7 算子改自包含向量化（实测 4.8–96.8x），test_seed_ops_native 56 对照用例全绿；**批 3 已完成（v2.104.0+56）**——ops_library 真滚动回调 14 处（ts_cvar_95/99、CCI md、ts_aroon_up/down、ts_linear_trend_score、ts_amp/amp_ratio、cs_trim_mean_diff/gini/concentration/top_bottom_spread、ts_volume_concentration/cycle）+ regime_features._rolling_autocorr + gp_evolver 模板 ts_product 改 `feature_ops._rolling_apply_native` 通用内核（含 NaN 窗口保留 + inf→NaN 语义对齐 pandas），test_ops_native_batch3 48 对照用例全绿，实测 5.1–147x；**Phase 3 已完成（v2.104.0+57）**——`cross_section_panel_vector` 默认开启（走航/审计自动复用预对齐面板路径），切换前实测缺口面板（149×3000，8 品种内部缺口）on/off 产出一致 + 性能持平（operator 1.00x / code 1.05x），新增 test_default_panel_vector_enabled，顺带修复 GAP-121 引入的 test_g11/g4 mock 装配缺陷（缺 `_prior_evaluations`）；**plans/39 §11 回退（v2.104.0+58）**——缺口面板 2D 化改造完成（计数回溯窗 + 缺口感知滚动内核 + `_GapAwareFrame`，test_gap_panel_2d 39 用例全绿）但真实期货缺口面板（149×3062，98% 列内部缺口）算子因子面板化实测 **0.3x（<5x 门槛）**→ 按 §7 回退并登记豁免：**评估链信号构建摘除 `execute_factor_panel` 恒逐品种执行，仅 IC 计算保留全矩阵化（`compute_cs_ics_vectorized`）**，产出与旧路径逐位一致；`execute_factor_panel` 保留为独立模块（缺口感知滚动内核供独立调用方/对照基准复用）不参与主链路；新增 test_chain_operator_panel_fallback_per_symbol（面板化打桩抛错契约）→ test_panel_vector 32 用例全绿） |

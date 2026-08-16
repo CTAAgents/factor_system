@@ -1,6 +1,6 @@
 # FTS 韧性设计
 
-> 版本: v2.104.0+69
+> 版本: v2.104.0+73
 > 最后更新: 2026-08-05
 
 ---
@@ -30,7 +30,7 @@
 
 | 条件 | 阈值 |
 |:-----|:------|
-| 单日 token 超支 | >2x daily_token_limit (50K) |
+| 单日 token 超支 | >2x daily_token_limit (60K，plans/41 D1 上调) |
 | 失败率超限 | > circuit_breaker_failure_rate (95%) |
 | 连续低质量候选 | > circuit_breaker_consecutive_low_quality (5 次) |
 

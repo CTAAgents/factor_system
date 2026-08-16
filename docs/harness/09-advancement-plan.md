@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.104.0+69
+> 版本: v2.104.0+73
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -28,6 +28,17 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 ---
 
 ## 2. 已完成里程碑
+
+### L1 知识注入与因子注入增强（2026-08-16，build bump v2.104.0+70，plans/41）
+
+**完成时间**: 2026-08-16
+
+**核心产出**:
+- ✅ **A 层（感知 + 动态源）**：`l1_meta_loop_job` 接入 `web_collector`（市场快照感知 0 → 12 品种）；新增 `WebSearchExtractor` 动态因子源（必应检索量化平台/能化链关键词 → LLM 提取，每轮动态换新知识）；研报/论文/天软 `max_factors 5→8`
+- ✅ **C 层（实时链知识）**：`_inject_chain_knowledge` 扩展实时产业状态段（子链价差代理 + 波动聚集 + 库存/基差水位，面板异常自动降级），chain_knowledge 实测 861→1653 字符
+- ✅ **D 层（预算 + 分批）**：`DEFAULT_L1_BUDGET_CONFIG` 上调（daily_token_limit 60K、max_bootstraps 30）+ energy 按四子链分批 bootstrap（每批独立 chain_focus，futures 保持单批）
+- ✅ 测试：新增 test_web_search_extractor.py 8 用例 + test_meta_loop.py +9 用例；受影响模块 209 passed + ruff 全绿 + 端到端冒烟验证
+- ✅ 差距登记：GAP-126（提取器源配置化）、GAP-127（平台 API 直连）登记后续推进
 
 ### L3 组合重算性能优化 A/B/C/D 四层（2026-08-16，build bump v2.104.0+63，plans/40）
 

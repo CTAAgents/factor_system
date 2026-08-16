@@ -1,7 +1,7 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+69
-> 最后更新: 2026-08-15
+> 版本: v2.104.0+73
+> 最后更新: 2026-08-16
 
 ---
 
@@ -12,6 +12,9 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+73** | **2026-08-16** | **signal_sharpe raw 口径修复（用户评审：1.9 阈值在截断口径下不可达）：`build_combo` `pre_weighted_sharpe` 改用截断前原始 Sharpe `s._sharpe_raw`（缺省回退截断值，向后兼容）——截断口径下全部因子 sharpe 被 SHARPE_CAP=2.0 压平为 2.0，`signal_sharpe` 恒 = 2.0 × diversity（< 2.0），1.9 阈值在 quality_weight 小样本下几乎不可达（8-16 两次 verifier_warning 根因）；raw 口径恢复"真实信号质量"语义，1.9 判定质量下限重新有意义（实跑验收 signal_sharpe 1.87→8.64）；`synthesize_signals` quality_weight 分支透传 `_sharpe_raw`（与 sharpe_weight/adaptive 一致）；`max_sharpe` 上限 3.5→12.0（三处同步：contracts DEFAULT_L3_VERIFIER_CONFIG / config/settings.yaml verifier / settings.py 默认 dict——raw 口径信号质量上界由 2.0 提升，3.5 会恒触发过拟合警告；8.0 实测仍被 8.64 触及，12.0 过滤异常虚高预留余量，配随机化测试兜底）；权重计算/展示仍用截断值（防过拟合信息不丢失）；测试 test_portfolio_loop +3（quality_weight 透传 _sharpe_raw / raw 口径 signal_sharpe 反映真实质量且 1.9 可达 / 8.64 在 1.9~12.0 区间通过），test_fails_high_sharpe 4.0→13.0（上限 3.5→12.0 口径），模块 261 passed + ruff 全绿；文档同步（01/06/07）** |** |
+| **v2.104.0+72** | **2026-08-16** | **LogicMonitor 极端检测双口径（离散信号不误报）：连续信号保持 z-score（\|z\|>2 占比超阈值告警），离散信号（唯一值 ≤20，如突破因子 {-1,0,+1}）改用主导档位退化检测（单一档位占比 ≥95% 告警）——修复 z-score 对离散信号全部非零档位天然落入极端区的系统性误报（2026-08-16 能源链 fct_211b96d7 fut_price_volatility_breakout 22.1% 误报归因；fct_baf48ca5 7.1% 同步消除）；ExtremePredictionResult 新增 method/dominant_ratio/discrete_nunique 字段；LogicMonitor 新增 discrete_nunique_threshold（默认 20）/discrete_dominant_threshold（默认 0.95）可配置；format_report 展示检测口径；测试：test_logic_monitor 15→19 用例（离散突破因子不误报/退化离散信号告警/连续保持 zscore/阈值可配置），受影响模块 594 passed + ruff 全绿 + 真实因子回归（fct_211b96d7 → ✓正常）；文档同步（01-arch/06-testing/07-operations/11-plan）** |** |
+| **v2.104.0+70** | **2026-08-16** | **L1 知识注入与因子注入增强（plans/41 A/C/D 三层落地）：A 层——`l1_meta_loop_job` 接入 `web_collector`（市场快照感知从 0 → 12 品种）+ 新增 `WebSearchExtractor` 动态因子源（必应检索量化平台/能化链关键词 → LLM 提取，每轮动态换新知识）+ 研报/论文 `max_factors 5→8`（天软为静态 YAML 感知源不参与；+71 配置化提升至 20）；C 层——`_inject_chain_knowledge` 扩展实时产业状态段（`_build_chain_live_state`：子链价差代理 SC-FU/SC-BU/SC-TA/SC-L/MA-SA + 波动聚集 + 库存/基差水位，面板异常自动降级，chain_knowledge 实测 861→1653 字符）；D 层——`DEFAULT_L1_BUDGET_CONFIG` 上调（daily_token_limit 50K→60K、max_bootstraps 20→30）+ energy 市场按四子链分批 bootstrap（`_energy_subchain_batches` 按品种数比例分配，每批独立 chain_focus 注入 prompt；futures 保持单批向后兼容）；测试：新增 test_web_search_extractor.py 8 用例 + test_meta_loop.py +9 用例（子链分批/实时链知识/LLM 分批调用/预算配置），受影响模块 209 passed + ruff 全绿 + 端到端冒烟验证（skipped=False/12 快照/实时状态注入）；提取器源配置化（B）与平台 API 直连（C 远期）登记后续差距项；文档同步（01/03/06/07/08/09/plans/41）** |** |
 | **v2.104.0+69** | **2026-08-16** | **信号管道跨因子组合增量校验 + 得分语义标注：快照新增 factor_signature（因子名集合 SHA256）与 semantics 字段，增量计算前校验前后因子组合一致（不一致→标记无效并提示，拦截 08-16 L3 重算 8→7 因子导致的虚假信号增量）；报告新增「信号语义说明」（综合得分=品种级 IC 翻转后的相对强弱评分，负分=回归预期非趋势方向信号），修正因子贡献排名过时注释；新增 TestFactorSetSignature + TestComputeSignalDeltas 8 用例，test_futures_signal_pipeline 38→46 passed + ruff 全绿** |** |
 | **v2.104.0+68** | **2026-08-16** | **load_elite_factors JSON 兜底路径补 icir 维度提取：与 sharpe/ic/turnover 同模式（优先 evaluation.level_1_backtest，缺失回退顶层字段，两处均缺默认 0.0）——旧版仅查 bt 致顶层 icir 丢失为 0，JSON 兜底路径综合评分缺 icir 维度；新增 TestLoadEliteFactors +3 用例，test_portfolio_loop 255→258 passed + ruff 全绿** |** |
 | **v2.104.0+67** | **2026-08-16** | **L3 CAP 数量安全阀 + OOS 校正评分：P1 聚类先行、CAP 后置为数量安全阀（排序键 use_oos_ic 取 oos_extrapolation.new_ic），修复 CAP 按样本内评分选优系统性偏向过拟合因子 + 聚类输入被收缩到 top-20 高分同质因子导致代表数骤降不稳定（能源链 verifier_warning 根因）；新增 10 用例（composite +3 / cap 安全阀 +4 / loop 集成 +3），受影响模块 325 passed + ruff 全绿** |** |

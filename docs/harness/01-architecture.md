@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+69
+> 版本: v2.104.0+73
 > 最后更新: 2026-08-10
 
 ---
@@ -58,12 +58,22 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │  - extractors/ 多路知识源管道（GAP-I103，v2.82.0）                      │
 │    ├ 研报/论文/天软/YAML 三源 + 另类源：                               │
 │    ├ AnnouncementNewsExtractor（公告/舆情，已剥离至 fts-stock）        │
-│    └ MacroEventExtractor（宏观事件，期货管道）                        │
+│    ├ MacroEventExtractor（宏观事件，期货管道）                        │
+│    └ WebSearchExtractor（动态因子源，plans/41 A，v2.104.0+70：        │
+│      必应检索量化平台/能化链关键词 → LLM 提取，每轮动态换新知识）      │
+│      max_factors 配置化（A3，v2.104.0+71：l1_extractor_max_factors，  │
+│      研报/论文/宏观/WebSearch LLM 源统一配额，天软感知源不参与）       │
 │    多源并行收集（BaseExtractorPipeline.extract ThreadPoolExecutor）    │
 │  - FactorReviewWorkflow 人审驳回 → ExperienceChain（GAP-I102 二期）     │
 │  - 感知层样本：期货 → 五大板块 13 品种；web_collector 期货模式走        │
 │    FTSDataProvider.get_futures_ohlcv（v2.100.1 按市场区分的机制已随     │
-│    股票样本剥离至 fts-stock，成为历史记录）                            │
+│    股票样本剥离至 fts-stock，成为历史记录）；l1_meta_loop_job 已接入    │
+│    web_collector（plans/41 A，v2.104.0+70）                             │
+│  - 能源链实时知识注入（plans/41 C，v2.104.0+70）：_inject_chain_       │
+│    knowledge 静态链知识 + 实时产业状态段（子链价差/波动聚集/库存基差     │
+│    水位代理，面板异常自动降级）                                         │
+│  - 按子链分批 bootstrap（plans/41 D，v2.104.0+70）：energy 市场四子链   │
+│    各一批（每批独立 chain_focus 注入 prompt）；futures 保持单批         │
 │                                                                         │
 │  职责: 每日知识补给 → 种子因子注入 → 市场语境感知 → 演化方向指引        │
 └─────────────────────────────┬────────────────────────────────────────────┘
@@ -383,7 +393,7 @@ fts/
 │   ├── data_level_monitor.py   # 数据级质量监控（GAP-F06，v2.60.0）：缺失率/异常值/复权一致性/多源分歧
 │   ├── data_level_monitor.py   # 数据级质量监控（GAP-F06，v2.60.0）：缺失率/异常值/复权一致性/多源分歧
 │   ├── live_factor_monitor.py  # Live 因子偏离监控（C.2，v2.77.0）：30% 偏离阈值 + ingest_live_ic 实盘反馈数据源接入 + 衰减告警（GAP-I402）
-│   ├── logic_monitor.py        # 逻辑监控仪表盘（Phase C）
+│   ├── logic_monitor.py        # 逻辑监控仪表盘（Phase C；v2.104.0+72 极端检测双口径：连续信号 z-score / 离散信号主导档位退化，修复离散突破因子系统性误报）
 │   ├── k8s_deploy.py          # K8s 部署配置
 │   └── prometheus_setup.py     # Prometheus 指标配置
 ├── ml/                         # ML 模型层（v2.38.0）
@@ -668,6 +678,17 @@ FTS (因子推演) — 支持期货横截面因子演化
 │      原始 2.0 已由 SHARPE_CAP=2.0 截断的因子等权合成贴线）、           │
 │      max_turnover=12.0（对齐因子月度换手次/月量纲，原 0.5 为比例量纲   │
 │      与库内 4.48~17.40 次/月不匹配）                                  │
+│ ②b2a signal_sharpe raw 口径（v2.104.0+73，portfolio_loop                │
+│      build_combo）：signal_sharpe 的 pre_weighted_sharpe 改用截断前      │
+│      原始 Sharpe（s._sharpe_raw，quality_weight 分支透传）而非          │
+│      SHARPE_CAP=2.0 截断值——截断口径下全部因子 sharpe 压平为 2.0，       │
+│      signal_sharpe 恒 = 2.0 × diversity（< 2.0），1.9 阈值在             │
+│      quality_weight 小样本下几乎不可达（连续 verifier_warning 根因），  │
+│      raw 口径恢复"真实信号质量"语义；权重计算/展示仍用截断值（防         │
+│      过拟合信息不丢失），缺 _sharpe_raw 时回退截断值（向后兼容）；      │
+│      max_sharpe 上限 3.5→12.0（raw 口径信号质量上界由 2.0 提升，           │
+│      3.5 会恒触发过拟合警告；8.0 实测仍被 8.64 触及，12.0 过滤异常虚高，    │
+│      配随机化测试兜底）                                                    │
 │ ②b3 G1 参数配置化（v2.104.0+X，portfolio_risk_controls                │
 │      AlignedExposureConfig + portfolio_loop.PortfolioLoop）            │
 │      config/settings.yaml l3_g1_enabled/align_threshold/               │
@@ -1111,3 +1132,4 @@ class FactorKind(str, Enum):
 | 分钟级数据流 | `fts/data_sources/aggregator.py` 新增 `get_minute_ohlcv()` 方法；`fts/data_sources/tdx_local_source.py` 通达信本地 HTTP 统一源（端口 17709，日线+分钟+快照，v2.87.0，`TDX_RPC_URL=http://127.0.0.1:17709/`，`SUPPORTED_PERIODS={"day":"1d","1m":"1m","5m":"5m","15m":"15m","30m":"30m","60m":"1h"}`，日线 17 列/minute 11 列，`source_name="TDX_LOCAL"`）；`fts/data_sources/tqsdk_source.py` TQSDK 分钟数据源；`fts/factor_engine/backtest_pipeline.py` `BacktestInput.frequency` 字段；`fts/cli.py` `--frequency` 参数 | `minute_cache` 表结构存在 (symbol/period/datetime/open/high/low/close/volume/source)；`BacktestInput.frequency` 支持 "daily"/"1m"/"5m"/"15m"/"30m"/"60m"；年化因子自适应 252(daily)→98280(1m) | `pytest tests/test_backtest_frequency.py` |
 | EvolutionLoop Mixin 拆分（34 计划 B 阶段，2026-08-13） | `evolution_uct.py` EvolutionUctMixin（领域 I：_select_parent_uct/_update_uct_stats/_update_uct_failure/_check_circuit_breaker/_maybe_early_stop）；`evolution_trace.py` EvolutionTraceMixin（领域 J：_build_parent_failure_ctx/_build_success_pattern_report/_record_experiment_variant/_export_experiment_log/_record_audit_failed_trace/_record_ablation_failed_trace/_record_robustness_failed_trace/_record_causal_failed_trace/_record_success_trace/_record_failure_trace/_log_inspection_detail/_record_quality_filtered_trace + _QualityInspectionResult）；`evolution_channels.py` EvolutionChannelsMixin（领域 G：_run_gp_evolution/_run_deep_evolution/_generate_operator_factor/_try_operator_engine_evolution）；`evolution_seeds.py` EvolutionSeedsMixin（领域 D：_evaluate_and_promote_seeds/_merge_l1_candidates/_run_seed_correlation_check/_build_barra_exposures/_evaluate_cross_section/run_microstructure_promotion）；`evolution_audit.py` EvolutionAuditMixin（领域 E：_run_factor_audit/_run_walkforward_oos/_run_backtest_pipeline/_run_ablation_check/_run_robustness_check/_run_shap_analysis/_run_causal_validation/_build_wf_config/_is_blocking_ablation + _ABLATION_* 类常量）；`evolution_review.py` EvolutionReviewMixin（领域 F：_run_periodic_factor_review/_get_factor_data_for_review/_register_factor_baseline/_check_factor_data_quality）；`evolution_prefilter.py` EvolutionPrefilterMixin（领域 H：_quick_prefilter/_cross_section_prefilter/_check_factor_runtime）；`evolution_promote.py` EvolutionPromoteMixin（领域 C：_write_seed_correlation_index/_scan_elite_correlations/_check_elite_correlation/_count_cluster_members/_orthogonalize_via_basis/_orthogonalize_candidate/_load_elite_parent_factors/_release_repo_after/_get_repo/_promote_to_elite/_write_to_duckdb）；`evolution_candidate.py` EvolutionCandidateMixin（领域 B：_process_candidate，B 阶段收官）；`evolution_loop.py` `class EvolutionLoop(EvolutionTraceMixin, EvolutionChannelsMixin, EvolutionSeedsMixin, EvolutionAuditMixin, EvolutionReviewMixin, EvolutionPrefilterMixin, EvolutionPromoteMixin, EvolutionCandidateMixin)`；公开 API（EvolutionLoop/EvolutionRunResult/UCT_EXPLORATION_C/_add_trading_days/_build_shadow_pool/_QualityInspectionResult/main）与行为等价不变 | `python scripts/analyze_evolution_loop.py`（方法/属性分布基线，B 阶段收官 1470 行/9 方法）；Phase 46h 定向：`pytest tests/factor_engine/test_structure_cluster_quota.py tests/factor_engine/test_orthogonal_basis.py tests/factor_engine/test_l2_orthogonalize.py tests/factor_engine/test_l2_elite_redundancy.py tests/factor_engine/test_evolution_l1_merge.py tests/factor_engine/test_microstructure_promotion.py -m "not slow" -q`；Phase 46i 定向：`pytest tests/factor_engine/test_evolution_loop.py tests/factor_engine/test_evolution_stop.py tests/factor_engine/test_coverage_edge_cases.py tests/factor_engine/test_batch_mining.py -m "not slow" -q` |
 | 35-gap-closure-plan P2 批次（v2.103.0+15，2026-08-13） | `fts/data_sources/trading_calendar.py`（新）→ G8 统一交易日历层（`TradingCalendar` get_trading_days/is_trading_day/align 停牌 ffill + `mark_panel_data_gaps` 断K标记 + `mark_gap_anomalies` 跳空异常标记），`fts/data_futures.py get_futures_panel` 接入（data_gap/gap_anomaly 列，`inject_data_gap_enabled` 默认开，清洗失败降级）；`fts/factor_engine/barra/barra_neutralizer.py` → G10 中性化注入（`vol_map` 截面波动率列 + `dates` 时序月度去季节化 `_deseasonalize_time_series`，波动率列在场补截距），`cross_section_evaluate_backtest(vol_map=...)` 透传，`evolution_seeds.py`/`evolution_futures.py` `_build_vol_map` 双路径接入（与 `l2_barra_style_neutral` 同门控）；`fts/factor_engine/signal_contract.py` → G12 信号契约（`SignalDetail` 扩 target_lots/current_lots/delta_lots/score/regime/risk_usage + `to_lots` + `signal_map_to_factor_signal` 统一转换器 + validator 新字段校验），`scripts/mhf_signal_pipeline.py`/`fts/live_trade/tqsdk_mhf_executor.py` 接入；`fts/factor_engine/regime_multipliers.py` → G14 Regime 风控参数（`REGIME_RISK_PARAMS` 第二张表 + `resolve_risk_params` 平滑），`fts/risk/risk_manager.py`/`paper_trader_mhf.py` 接入；`fts/factor_engine/standardizer.py` → G9 MAD（mad_winsorize/mad_then_zscore）；`fts/factor_engine/capital_allocator.py` → G15 min_variance（Ledoit-Wolf 收缩）；`fts/factor_engine/evaluation_chain.py` → G11 日换手硬门槛 | `python -c "from fts.data_sources.trading_calendar import TradingCalendar, mark_panel_data_gaps, mark_gap_anomalies; assert len(TradingCalendar.from_symbol_dates({})._days) == 0"`；`pytest tests/data_sources/test_trading_calendar.py tests/factor_engine/test_barra_vol_season_neutral.py tests/factor_engine/test_regime_risk_params.py tests/factor_engine/test_signal_contract_g12.py -q`（53 passed）；`python -c "from fts.factor_engine.regime_multipliers import REGIME_RISK_PARAMS; assert REGIME_RISK_PARAMS['high_vol']['leverage_cap'] == 1.0"` |
+| ②b2a signal_sharpe raw 口径（v2.104.0+73，2026-08-16） | `fts/factor_engine/portfolio_loop.py` build_combo：`pre_weighted_sharpe` 改用 `s.get("_sharpe_raw", s.get("sharpe"))`（截断前原始值优先，缺失回退截断值）；`synthesize_signals` quality_weight 分支透传 `_sharpe_raw`；`fts/factor_engine/contracts.py` DEFAULT_L3_VERIFIER_CONFIG.max_sharpe 3.5→8.0 + `fts/config/settings.py`/`config/settings.yaml` verifier.max_sharpe=8.0（raw 口径信号质量上界 2.0→提升，3.5 会恒触发过拟合警告）；权重计算/展示仍用 SHARPE_CAP=2.0 截断值 | `python -c "from fts.factor_engine.contracts import DEFAULT_L3_VERIFIER_CONFIG as c; assert c['max_sharpe'] == 8.0"`；`python -m pytest tests/factor_engine/test_portfolio_loop.py -q`（261 passed，含 test_signal_sharpe_uses_raw_not_capped / test_raw_sharpe_forwarded / test_passes_high_sharpe_within_cap） |
