@@ -603,6 +603,132 @@ def test_fix_factor_code_valid_code_unchanged():
     assert fixed_code == code, "有效代码不应被修改"
 
 
+# ─── Strategy 6: LLM 高频语法瑕疵全局修复 ────────────────
+
+
+def test_fix_factor_code_and_or_operators():
+    """修复 && / || 逻辑运算符（LLM 高频误写为 C/JS 风格）。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    mask = (close > 0) && (close < 1) || (close == 0)\n"
+        "    return np.where(mask, 1, 0)\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: invalid syntax (line 4)")
+    assert fixed, "&& / || 应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+    assert "&&" not in fixed_code and "||" not in fixed_code
+
+
+def test_fix_factor_code_caret_power():
+    """修复 ^ 幂运算误写（→ **）。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    ret = np.diff(close) / close[:-1]\n"
+        "    mom = close[-1]^2 / np.mean(close)\n"
+        "    return np.nan_to_num(mom)\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: invalid syntax (line 5)")
+    assert fixed, "^ 幂运算应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+    assert "close[-1]**2" in fixed_code
+
+
+def test_fix_factor_code_bang_negation_keeps_neq():
+    """修复一元 !（→ not）且保留 !=。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    if !close.any() and close[0] != 0:\n"
+        "        return close\n"
+        "    return np.zeros(len(close))\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: invalid syntax (line 4)")
+    assert fixed, "一元 ! 应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+    assert "not close.any()" in fixed_code, "一元 ! 应修复为 not"
+    assert "!= 0" in fixed_code, "!= 不应被误改"
+
+
+def test_fix_factor_code_condition_assignment():
+    """修复 if/while 条件行内赋值 = → ==。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    if len(close) = 0:\n"
+        "        return close\n"
+        "    return np.zeros(len(close))\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: invalid syntax (line 4)")
+    assert fixed, "条件行内赋值应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+    assert "len(close) == 0" in fixed_code
+    assert "len(close) = 0" not in fixed_code
+
+
+def test_fix_factor_code_cannot_assign_real_message():
+    """真实 Python 错误消息（cannot assign）下仍能触发条件赋值修复。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    if len(close) = 0:\n"
+        "        return close\n"
+        "    return np.zeros(len(close))\n"
+    )
+    fixed, fixed_code = fix_factor_code(
+        code, "语法错误: cannot assign to function call here. Maybe you meant '==' instead of '='? (line 4)"
+    )
+    assert fixed, "cannot assign 错误消息也应触发修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok
+    assert "len(close) == 0" in fixed_code
+
+
+def test_fix_factor_code_trailing_backslash():
+    """去除行尾残留反斜杠（LLM 行续符误写）。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    ret = np.diff(close) / close[:-1] \\\n"
+        "    return np.nan_to_num(ret)\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: invalid syntax (line 4)")
+    assert fixed, "行尾反斜杠应能被去除"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+    assert " \\\n" not in fixed_code
+
+
+def test_fix_factor_code_combined_artifacts():
+    """同段多类 LLM 语法瑕疵组合修复。"""
+    code = (
+        "import numpy as np\n"
+        "def factor_program(data, params):\n"
+        "    close = data['close']\n"
+        "    if !np.isnan(close).all() && len(close) = 0:\n"
+        "        return close\n"
+        "    return np.zeros(len(close))\n"
+    )
+    fixed, fixed_code = fix_factor_code(code, "语法错误: invalid syntax (line 4)")
+    assert fixed, "组合瑕疵应能被修复"
+    ok, _ = validate_factor_code(fixed_code)
+    assert ok, "修复后的代码应通过语法验证"
+    assert "not np.isnan(close).all()" in fixed_code
+    assert " and " in fixed_code
+    assert "len(close) == 0" in fixed_code
+
+
 def test_fix_factor_code_unfixable_returns_false():
     """无法修复的代码应返回 False。"""
     code = "this is utterly broken python @@@@"

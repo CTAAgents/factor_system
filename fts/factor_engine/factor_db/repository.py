@@ -1504,6 +1504,17 @@ class FactorAuditReportRepository:
             "distinct_factors": int(distinct_factors),
         }
 
+    def delete_reports_for_factor(self, factor_id: str) -> int:
+        """删除因子的全部审计报告，返回删除行数（GAP-128 幂等前置清理）。"""
+        conn = self._get_conn()
+        count = conn.execute(
+            "SELECT COUNT(*) FROM factor_audit_reports WHERE factor_id = ?",
+            [factor_id],
+        ).fetchone()[0]
+        conn.execute("DELETE FROM factor_audit_reports WHERE factor_id = ?", [factor_id])
+        conn.execute("CHECKPOINT")
+        return int(count)
+
     def _row_to_dict(self, row) -> dict[str, Any]:
         cols = [
             "report_id",

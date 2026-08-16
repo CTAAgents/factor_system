@@ -741,6 +741,7 @@ class TestEdgeCases:
 class TestRepositoryInit:
     """Repository 初始化测试。"""
 
+    @pytest.mark.uses_real_factor_db  # GAP-129: 真实默认库路由断言
     def test_default_database_path(self):
         """测试默认数据库路径（股票剥离后默认 market=futures）。"""
         from fts.factor_engine.factor_db.schema import DATABASE_PATH_FUTURES

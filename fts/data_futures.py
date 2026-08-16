@@ -1674,6 +1674,8 @@ ENERGY_CHAIN_MARKET: str = "energy"
 # 2026-08-14 实测补全后：LU0=1492（2020-06 起）、PR0=473（2024-08 起）、PL0=260（盲测池）；
 # 2026-08-15 扩池至 12 品种后，最短历史为 PX0（2023-09 起，约 700 行），全部达标，共同窗口由 PX0 决定。
 ENERGY_CHAIN_MIN_TRAIN_ROWS: int = 300
+# 盲测池最小真实历史门槛（GAP-130 v2.104.0+80，config/futures_universe.yaml SSOT）
+ENERGY_CHAIN_MIN_HOLDOUT_ROWS: int = 250
 
 # 能源链 L1 独立输出目录（2026-08-15：与通用 L1 严格隔离）：
 # 通用 L1 产出：memory/meta_loop、memory/knowledge/factors/factor_pool.json、
@@ -1747,6 +1749,7 @@ def _load_futures_universe_config() -> bool:
     global FUTURES_SECTOR_MAP, FUTURES_STRATIFIED_SUBSET
     global ENERGY_CHAIN_SYMBOLS, ENERGY_CHAIN_TRAIN, ENERGY_CHAIN_CHEMICAL_SECTORS
     global ENERGY_CHAIN_HOLDOUT, ENERGY_CHAIN_MARKET, ENERGY_CHAIN_MIN_TRAIN_ROWS
+    global ENERGY_CHAIN_MIN_HOLDOUT_ROWS
     global ENERGY_CHAIN_L1_MEMORY_DIR, ENERGY_CHAIN_L1_POOL_PATH
     global ENERGY_CHAIN_L1_INJECT_DIR, ENERGY_CHAIN_L1_DEBATES_DIR
 
@@ -1769,6 +1772,7 @@ def _load_futures_universe_config() -> bool:
     )
     ENERGY_CHAIN_MARKET = str(ew["market"])
     ENERGY_CHAIN_MIN_TRAIN_ROWS = int(ew["min_train_rows"])
+    ENERGY_CHAIN_MIN_HOLDOUT_ROWS = int(ew.get("min_holdout_rows", 250))
     ENERGY_CHAIN_L1_MEMORY_DIR = str(ew["l1_memory_dir"])
     ENERGY_CHAIN_L1_POOL_PATH = str(ew["l1_pool_path"])
     ENERGY_CHAIN_L1_INJECT_DIR = str(ew["l1_inject_dir"])
@@ -2436,6 +2440,7 @@ __all__ = [
     "ENERGY_CHAIN_CHEMICAL_SECTORS",
     "ENERGY_CHAIN_MARKET",
     "ENERGY_CHAIN_MIN_TRAIN_ROWS",
+    "ENERGY_CHAIN_MIN_HOLDOUT_ROWS",
     "ENERGY_CHAIN_L1_MEMORY_DIR",
     "ENERGY_CHAIN_L1_POOL_PATH",
     "ENERGY_CHAIN_L1_INJECT_DIR",

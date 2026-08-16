@@ -259,6 +259,59 @@ class FTSConfig:
     l1_extractor_max_factors: int = field(
         default_factory=lambda: int(os.getenv("FTS_L1_EXTRACTOR_MAX_FACTORS", "20"))
     )
+    # plans/44 C2 (v2.104.0+83): L1 拒绝候选复活开关——每次运行 Step 2.75 扫描
+    # l1_rejected_* 目录，对编译失败候选规则/LLM 修复后重新验证注入（GAP-131 落盘闭环）
+    l1_rejected_retry: bool = field(
+        default_factory=lambda: os.getenv("FTS_L1_REJECTED_RETRY", "1") == "1"
+    )
+    # plans/44 P0（300 篇/天）：全球多源批量采集——arXiv 每类别 / OpenAlex 每源拉取数
+    l1_source_arxiv_max_results: int = field(
+        default_factory=lambda: int(os.getenv("FTS_L1_SOURCE_ARXIV_MAX_RESULTS", "50"))
+    )
+    # 东财研报分页大小（5→100，全行业覆盖 + 关键词过滤）
+    l1_source_report_page_size: int = field(
+        default_factory=lambda: int(os.getenv("FTS_L1_SOURCE_REPORT_PAGE_SIZE", "100"))
+    )
+    # 批量采集层开关（false 跳过采集层，保持旧路径向后兼容）
+    l1_bulk_enabled: bool = field(default_factory=lambda: os.getenv("FTS_L1_BULK_ENABLED", "1") == "1")
+    # embedding 粗筛/语义去重开关
+    l1_embedding_enabled: bool = field(default_factory=lambda: os.getenv("FTS_L1_EMBEDDING_ENABLED", "1") == "1")
+    # 相关性粗筛阈值
+    l1_embedding_threshold: float = field(
+        default_factory=lambda: float(os.getenv("FTS_L1_EMBEDDING_THRESHOLD", "0.30"))
+    )
+    # 语义去重阈值
+    l1_dedup_threshold: float = field(
+        default_factory=lambda: float(os.getenv("FTS_L1_DEDUP_THRESHOLD", "0.90"))
+    )
+    # 深读子集上限（篇/天，token 预算约束）
+    l1_knowledge_deepread_max: int = field(
+        default_factory=lambda: int(os.getenv("FTS_L1_KNOWLEDGE_DEEPREAD_MAX", "60"))
+    )
+    # WebSearch 动态检索开关（知识缺口 + 当日异动驱动 query）
+    l1_dynamic_websearch: bool = field(
+        default_factory=lambda: os.getenv("FTS_L1_DYNAMIC_WEBSEARCH", "1") == "1"
+    )
+    # 语义去重接入开关（bootstrap 候选 vs 已注入候选 embedding 相似度拦截）
+    l1_semantic_dedup: bool = field(
+        default_factory=lambda: os.getenv("FTS_L1_SEMANTIC_DEDUP", "1") == "1"
+    )
+    # plans/44 Phase 2 补丁（2026-08-16 用户确认"全球范围内不限中英文"）：
+    # OpenAlex 多语种分路语种清单（ISO 639-1，逐语种本地化关键词检索，language 字段如实标注）
+    l1_openalex_languages: list[str] = field(
+        default_factory=lambda: [
+            lang.strip() for lang in os.getenv("FTS_L1_OPENALEX_LANGUAGES", "en,zh,ja,de,fr,ko,es,ru").split(",") if lang.strip()
+        ]
+    )
+    # 非中英语种研报源开关（IEEJ/KEEI/IFPEN 日韩法能源研报，best effort）
+    l1_non_en_reports_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_L1_NON_EN_REPORTS_ENABLED", "1") == "1"
+    )
+    # plans/44 D2 (Phase 3): L1→L2 积压 warning 阈值（天）——L1 注入未被 L2 消费超过
+    # 该天数且存在积压时，l1_l2_funnel_report 输出 warning（防 L1 无限注入）
+    l1_l2_backlog_days: int = field(
+        default_factory=lambda: int(os.getenv("FTS_L1_L2_BACKLOG_DAYS", "7"))
+    )
 
     # ── L3 Portfolio ──
     portfolio_max_factors: int = 20

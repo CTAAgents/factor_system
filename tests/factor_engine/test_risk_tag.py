@@ -139,6 +139,7 @@ class TestEvolutionLoopRiskTag:
                 "ic_volatility": 0.1,
                 "consistency_score": 0.9,
                 "window_score": 1.0,
+                "n_windows_completed": 2,  # GAP-121 (v2.104.0+44) WalkForward 强制门: n_windows>=2 否则禁止晋升
             },
             "passed": passed,
             "failure_reasons": [],
@@ -444,3 +445,97 @@ def factor_program(data, params):
             loop._run_shap_analysis = MagicMock(return_value={})
             promoted = self._run_seed_promotion(loop, seed)
         assert promoted == 0, "鲁棒性失败种子不应晋升"
+
+    def test_seed_existing_in_db_skips_evaluation(self, sample_data, forward_returns, tmp_path):
+        """v2.104.0+75: 已入库且 active 的种子应在评估前被预跳过（evaluate 不被调用、不晋升）。"""
+        seed = self._make_seed("seed_existing")
+        loop = self._make_loop(sample_data, forward_returns, tmp_path)
+        mock_repo = MagicMock()
+        mock_repo.get_factor_by_name.return_value = {
+            "factor_id": "fct_existing",
+            "name": "seed_existing",
+            "status": "active",
+            "is_elite": True,
+        }
+        loop._get_repo = MagicMock(return_value=mock_repo)
+        loop.evaluation_chain.evaluate = MagicMock(
+            return_value=self._make_mock_evaluation(ic=0.09, passed=True)
+        )
+        promoted = self._run_seed_promotion(loop, seed)
+        assert promoted == 0, "已入库 active 种子应被预跳过、不晋升"
+        loop.evaluation_chain.evaluate.assert_not_called()
+        mock_repo.get_factor_by_name.assert_called_once_with("seed_existing", market=loop.market)
+
+    def test_seed_degraded_in_db_reevaluates_and_reactivates(self, sample_data, forward_returns, tmp_path):
+        """v2.104.0+76: 退化因子冷却期满（≥30 天）不被预跳过，重新评估通过后复用原 factor_id 激活晋升。"""
+        seed = self._make_seed("seed_degraded")
+        loop = self._make_loop(sample_data, forward_returns, tmp_path)
+        loop._cluster_quota_enabled = False  # GAP-077: 与既有晋升用例一致
+        degraded_record = {
+            "factor_id": "fct_old_degraded",
+            "name": "seed_degraded",
+            "status": "degraded",
+            "is_elite": False,
+            "updated_at": "2020-01-01T00:00:00",  # 冷却期满（> 30 天前降级）
+        }
+        mock_repo = MagicMock()
+        mock_repo.get_factor_by_name.return_value = degraded_record
+        mock_repo.get_factor.return_value = degraded_record  # _write_to_duckdb 幂等查询
+        loop._get_repo = MagicMock(return_value=mock_repo)
+        with patch.object(
+            loop.evaluation_chain,
+            "evaluate",
+            return_value=self._make_mock_evaluation(ic=0.09, passed=True),
+        ):
+            self._mock_quality_gates_pass(loop)
+            promoted = self._run_seed_promotion(loop, seed)
+            loop.evaluation_chain.evaluate.assert_called_once()
+        assert promoted == 1, "退化因子冷却期满后重新评估通过应重新晋升"
+        # 复用原 factor_id 走 update 激活路径，而非新建同名行
+        updated = mock_repo.update_factor.call_args
+        assert updated is not None, "应复用原 factor_id 走 update_factor 激活"
+        update_args = updated[0][1]
+        assert update_args.get("status") == "active", "退化记录应回写 status=active"
+        assert update_args.get("is_elite") is True, "退化记录应回写 is_elite=True"
+        mock_repo.create_factor.assert_not_called()
+
+    def test_seed_degraded_within_cooldown_skips_evaluation(self, sample_data, forward_returns, tmp_path):
+        """v2.104.0+76: 退化因子在冷却期内（<30 天）不参与评估（预跳过、不晋升）。"""
+        from datetime import datetime
+
+        seed = self._make_seed("seed_degraded_fresh")
+        loop = self._make_loop(sample_data, forward_returns, tmp_path)
+        degraded_record = {
+            "factor_id": "fct_fresh_degraded",
+            "name": "seed_degraded_fresh",
+            "status": "degraded",
+            "is_elite": False,
+            "updated_at": datetime.now().isoformat(),  # 刚降级（冷却期内）
+        }
+        mock_repo = MagicMock()
+        mock_repo.get_factor_by_name.return_value = degraded_record
+        loop._get_repo = MagicMock(return_value=mock_repo)
+        loop.evaluation_chain.evaluate = MagicMock(
+            return_value=self._make_mock_evaluation(ic=0.09, passed=True)
+        )
+        promoted = self._run_seed_promotion(loop, seed)
+        assert promoted == 0, "冷却期内退化种子应被跳过、不晋升"
+        loop.evaluation_chain.evaluate.assert_not_called()
+
+    def test_seed_not_in_db_evaluates_and_promotes(self, sample_data, forward_returns, tmp_path):
+        """v2.104.0+75: 未入库种子不触发预跳过，正常走评估并晋升。"""
+        seed = self._make_seed("seed_new")
+        loop = self._make_loop(sample_data, forward_returns, tmp_path)
+        loop._cluster_quota_enabled = False  # GAP-077: 与既有晋升用例一致
+        mock_repo = MagicMock()
+        mock_repo.get_factor_by_name.return_value = None
+        loop._get_repo = MagicMock(return_value=mock_repo)
+        with patch.object(
+            loop.evaluation_chain,
+            "evaluate",
+            return_value=self._make_mock_evaluation(ic=0.09, passed=True),
+        ):
+            self._mock_quality_gates_pass(loop)
+            promoted = self._run_seed_promotion(loop, seed)
+            loop.evaluation_chain.evaluate.assert_called_once()
+        assert promoted == 1, "未入库种子应正常评估晋升"

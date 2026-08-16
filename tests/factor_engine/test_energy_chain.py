@@ -16,6 +16,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 from fts.data_futures import (
     ENERGY_CHAIN_CHEMICAL_SECTORS,
     ENERGY_CHAIN_HOLDOUT,
@@ -105,6 +107,7 @@ class TestEnergyChainConfig:
 class TestEnergyChainStorageRouting:
     """能源链独立因子库 / 精英目录路由。"""
 
+    @pytest.mark.uses_real_factor_db  # GAP-129: 真实存储路由断言
     def test_db_path_isolated(self) -> None:
         assert get_db_path("energy") == DATABASE_PATH_ENERGY
         assert "factor_catalog_energy" in str(DATABASE_PATH_ENERGY)

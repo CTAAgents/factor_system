@@ -20,6 +20,11 @@ from fts.factor_engine.factor_db.schema import get_db_path
 # L3 因子资产库：期货市场库（SSOT）
 _DB_PATH = get_db_path("futures")
 
+# GAP-129: 真实数据依赖测试豁免 —— 模块级 _DB_PATH 在 fixture 生效前求值，
+# 且 BINCOUNT_FACTORS/NAN_GUARD_FACTORS 为真实存量因子代码（tmp 隔离库为空无法提供），
+# 属"真实数据依赖"类测试；读取仅 read_only，不产生污染。
+pytestmark = pytest.mark.uses_real_factor_db
+
 # 含 np.bincount 且需验证边界防护的精英因子
 BINCOUNT_FACTORS = ["fct_70d783d1", "fct_71372ef2", "fct_7b251afa"]
 

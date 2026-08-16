@@ -251,6 +251,11 @@ workflows:
     market: energy
     # 训练品种最小历史深度阈值（ENERGY_CHAIN_MIN_TRAIN_ROWS，真实非 SYNTHETIC 日线行数）
     min_train_rows: 300
+    # 盲测池品种最小真实历史门槛（ENERGY_CHAIN_MIN_HOLDOUT_ROWS，v2.104.0+81 GAP-130）：
+    # 盲测 IC 验证跳过历史不足的品种（数据样本过小 IC 估计噪声大），仅作防线；
+    # 对齐修复（GAP-130）后新上市品种（BZ0/PL0 等）已正确参与盲测，此门槛只过滤
+    # 真正过短的样本（默认 250 ≈ 1 年交易日）
+    min_holdout_rows: 250
     # L1 独立输出目录（ENERGY_CHAIN_L1_*，与通用 L1 严格隔离）
     l1_memory_dir: memory/meta_loop/energy
     l1_pool_path: memory/knowledge/factors/factor_pool_energy.json
