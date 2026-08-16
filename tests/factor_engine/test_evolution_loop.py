@@ -1204,7 +1204,7 @@ def test_run_batch_generation_all_rejected(
     loop._process_candidate.assert_not_called()
 
 
-def test_run_batch_mode_calls_batch_generation(
+def test_run_batch_stage_isolates_circuit_breaker(
     monkeypatch,
     sample_ohlcv,
     forward_returns,
@@ -1212,7 +1212,7 @@ def test_run_batch_mode_calls_batch_generation(
     tmp_elite_dir,
     mock_llm_client,
 ):
-    """验收: evolution_mode=batch 时 run() 每代调用 _run_batch_generation。"""
+    """45 计划候选②：run_batch_stage 独立入口熔断隔离——batch 失败不污染 _consecutive_low_ic。"""
     from fts.config.settings import get_config
 
     monkeypatch.setattr(get_config(), "evolution_mode", "batch")
@@ -1224,29 +1224,20 @@ def test_run_batch_mode_calls_batch_generation(
         llm_client=mock_llm_client,
         n_trials_micro=2,
     )
-    seeds = [
-        {
-            "factor_id": "seed_p1",
-            "name": "p1",
-            "code": "close - close.shift(1)",
-            "params": {},
-            "market": "stock",
-        }
-    ]
-    loop.seed_pool.load_all_seeds = MagicMock(return_value=seeds)
-    loop._merge_l1_candidates = MagicMock(side_effect=lambda s, t: s)
-    loop._run_seed_correlation_check = MagicMock(return_value=[])
-
-    def _fake_promote(seeds_arg, trace_id, state, elite_ids, seed_correlations=None):
-        for s in seeds_arg:
-            elite_ids.append(s["factor_id"])
-        return len(seeds_arg)
-
-    loop._evaluate_and_promote_seeds = MagicMock(side_effect=_fake_promote)
+    parent = {
+        "factor_id": "seed_p1",
+        "name": "p1",
+        "code": "close - close.shift(1)",
+        "params": {},
+        "market": "stock",
+    }
     loop._run_batch_generation = MagicMock(return_value=True)
-    result = loop.run(max_generation=2)
-    assert result.status == "completed"
-    assert loop._run_batch_generation.call_count == 2
+    state = loop.state_manager.load_or_init(1_000_000)
+    # 预置主循环熔断计数，验证 batch 执行后不被污染
+    loop._consecutive_low_ic = 3
+    loop.run_batch_stage(parent, 0, "test_trace", state, [], [])
+    assert loop._run_batch_generation.call_count == 1
+    assert loop._consecutive_low_ic == 3  # 熔断隔离生效
 
 
 # ─── micro_evolution coverage（续：GAP-I201 插入点打断的类方法归入此类） ──
@@ -1771,13 +1762,13 @@ class TestEvolutionLoopCoverage:
             memory_dir=tmp_memory_dir,
             n_trials_micro=2,
         )
-        # mock seed_pool.load_all_seeds 在循环内抛出异常
-        loop.seed_pool.load_all_seeds = MagicMock(side_effect=ValueError("种子池损坏"))
+        # 45 计划候选①：种子评估已独立，异常点在 run() 读 elite 池阶段
+        # 45 计划候选①：种子评估已独立，异常点在 run() 读 elite 池阶段
+        loop._load_elite_parent_factors = MagicMock(side_effect=ValueError("elite 池损坏"))
+        loop._load_seed_correlation_index = MagicMock(return_value=[])
         result = loop.run(max_generation=2)
         assert result.status == "paused"
-        assert "种子池损坏" in (result.circuit_breaker_reason or "")
-
-    # ─── 失败率熔断（line 293-295）───────────────────────
+        assert "elite 池损坏" in (result.circuit_breaker_reason or "")
 
     @pytest.mark.slow
     def test_evolution_loop_failure_rate_circuit_breaker(
@@ -2020,6 +2011,7 @@ class TestEvolutionLoopCoverage:
         repo = loop._get_repo()
         assert str(repo._db_path).endswith("catalog.duckdb")
 
+    @pytest.mark.uses_real_factor_db  # GAP-129: 真实默认库路由断言
     def test_get_repo_defaults_to_real_db(self, tmp_path, monkeypatch):
         """GAP-030: 未传 factor_db_path 时 _get_repo 应使用默认库路径（分库后按 market 路由）。"""
         import fts.factor_engine.factor_db.schema as schema
@@ -3074,8 +3066,8 @@ class TestEliteFactorTrackerIntegration:
         assert "ic" in result
         assert "sharpe" in result
 
-    def test_periodic_review_in_run_finally(self, minimal_loop, sample_dataframe, sample_forward_returns):
-        """验证定期重评估在 run() 的 finally 块中被调用。"""
+    def test_periodic_review_not_in_run_finally(self, minimal_loop, sample_dataframe, sample_forward_returns):
+        """45 计划候选③：评审周度化后，run() 的 finally 块不再调用定期重评估（职责归 l2_review_job 周度任务）。"""
         minimal_loop.elite_tracker.auto_retire = MagicMock(return_value=[])
         minimal_loop.elite_tracker.report = MagicMock(return_value={"status_counts": {}, "grade_counts": {}})
         minimal_loop.elite_tracker.update = MagicMock()
@@ -3084,7 +3076,7 @@ class TestEliteFactorTrackerIntegration:
             with patch.object(minimal_loop, "_evaluate_and_promote_seeds", return_value=0):
                 with patch.object(minimal_loop.seed_pool, "load_all_seeds", return_value=[]):
                     minimal_loop.run(max_generation=1)
-                    mock_review.assert_called_once()
+                    mock_review.assert_not_called()
 
 
 # ─── GP 演化集成测试 ──────────────────────────────────────
