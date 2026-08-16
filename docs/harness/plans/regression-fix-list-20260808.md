@@ -1,6 +1,6 @@
 # 全量回归失败项修复清单
 
-> 版本: v2.104.0+98
+> 版本: v2.104.0+100
 > 日期: 2026-08-08
 > 关联差距: GAP-039（开放）
 > 基线: `pytest tests/ -q -o addopts="" --continue-on-collection-errors` → 2841 passed / 67 failed / 10 skipped / 16 errors

@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+98
+> 版本: v2.104.0+100
 > 最后更新: 2026-08-10
 
 ---
@@ -384,7 +384,7 @@ fts/
 │   ├── high_ic_screener.py     # 高IC筛查剔除（B.4）：16项检查×6模块，5项一票否决，A/B/C/PASS评级
 │   ├── failure_classifier.py   # 失败模式分类器（10 种失败模式 + 改善建议）
 │   ├── factor_lineage.py       # 因子血缘追踪（谱系/趋势/退化检测/批量审计）
-│   ├── factor_inspector.py     # 定时巡检（自动检测退化因子并降级）+ FactorReviewWorkflow 审查工作流（GAP-I102：pending→approved/rejected 状态机 + factor_reviews 表意见回写 + CLI factor review 队列 + C8 2026-08-11 Web 人审工作台复用 + C8-2 机审/人审可配置：ReviewMode（FTS_REVIEW_MODE 默认 auto）+ AutoReviewPolicy 三态判定（正常批准/低质驳回/异常转人审）+ auto_review 批量机审 reviewer=auto）
+│   ├── factor_inspector.py     # 定时巡检（扫描能化链 elite 退化因子；GAP-132 起默认 market="energy" + dry-run，自动降级待评估历史恢复）+ FactorReviewWorkflow 审查工作流（GAP-I102：pending→approved/rejected 状态机 + factor_reviews 表意见回写 + CLI factor review 队列 + C8 2026-08-11 Web 人审工作台复用 + C8-2 机审/人审可配置：ReviewMode（FTS_REVIEW_MODE 默认 auto）+ AutoReviewPolicy 三态判定（正常批准/低质驳回/异常转人审）+ auto_review 批量机审 reviewer=auto）
 │   ├── monitor.py              # 循环监控
 │   ├── factor_quality_card.py  # 因子质量评分卡（10 维评分，A/B/C 分级准入）
 │   ├── adaptive_weight.py      # 自适应权重（AdaptiveWeightManager + RegimeSmoother 热更新）
@@ -464,7 +464,7 @@ fts/
 └── scheduler/                  # 调度层
     ├── __init__.py             # 模块入口 + 导出
     ├── engine.py               # SchedulerEngine（APScheduler 包装器）
-    ├── tasks.py                # TaskRegistry + TaskSpec + 注册默认任务（16 个；v2.104.0+98 起全部 enabled=False，内部调度停用，TRAE Schedule 为唯一调度源）
+    ├── tasks.py                # TaskRegistry + TaskSpec + 注册默认任务（16 个；v2.104.0+99 起默认全部 enabled=False，内部调度停用，TRAE Schedule 唯一调度源；env FTS_INTERNAL_SCHEDULER_ENABLED="1" 一键启用）
     ├── jobs.py                 # 任务工作函数（L1/L2/L3/信号管道/健康检查/因子巡检/月度治理[衰减+新标准重审]/数据质量/数据级监控）
     ├── hotswap.py              # 热更新支持
     └── watchdog.py             # 看门狗进程
@@ -1155,7 +1155,7 @@ class FactorKind(str, Enum):
 | L2 批量挖掘 | 周日 06:00 | 每周 | 45 计划候选②：BatchMiner 批量漏斗，熔断隔离不污染演化状态 |
 | L3 Portfolio Loop | 06:00 | 工作日每日 | 期货路径（futures_elite + market=futures，v2.73.0）：因子筛选（P1 聚类先行 + CAP 安全阀，v2.104.0+67） + 信号合成(默认equal_weight，v2.103.0+23) + Verifier 校验；GAP-072 v2.99.0 与期货信号管道解绑，工作日每日开盘前重算组合权重（v2.103.0+23；对齐 TRAE Schedule 期货 L3，2026-08-14 调整为开盘前 06:00） |
 | 期货信号管道 | 20:00 | 工作日每日 | 独立调度（GAP-072 v2.99.0 与 L3 解绑）：因子选择与基础权重由 L3 组合（factor_weights.json）提供（v2.105.0），信号管道仅做信号计算 + Regime 档位缩放权重调整；品种级 IC 自适应保留；方向校正与 Ridge 权重学习已移除；L3 组合缺失/为空 → 严格模式报错退出 |
-| 因子巡检 (FactorInspector) | 04:00 | 每日 | 基于 batch_audit 自动检测退化因子并降级 |
+| 因子巡检 (FactorInspector) | 04:00 | 每日 | 扫描能化链 elite 因子（market="energy"，GAP-132 统一巡检口径）检测退化因子；GAP-132 因评估历史不足暂以 dry-run（commit=False）运行，仅输出退化候选不落库，待评估多期积累后恢复自动降级 |
 | L2 周度评审 | 周日 10:00 | 每周 | 45 计划候选③：精英重审 + 衰减评估 + 自动淘汰（替代月度衰减 + run() 每日调用） |
 | Health Check | 每 10 分钟 | 高频 | 状态监控 |
 

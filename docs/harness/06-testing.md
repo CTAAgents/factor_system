@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.104.0+98
+> 版本: v2.104.0+100
 > 最后更新: 2026-08-17
 
 ---
@@ -529,7 +529,7 @@ TOTAL                                      20326   1254    94%
 | `tests/factor_engine/extractors/test_base.py` | ~26 | 提取器基类与管道抽象（LLM 提取全路径/YAML 转换/暂停持久化）（v2.47.0） |
 | `tests/factor_engine/extractors/test_stock_pipeline.py` | ~27 | 股票提取管道（v2.47.0） |
 | `tests/factor_engine/extractors/test_futures_pipeline.py` | ~27 | 期货提取管道（v2.47.0） |
-| `tests/scheduler/test_jobs.py` | ~37 | 调度任务定义（job 注册/运行/周期）（v2.47.0；v2.73.0 L3 期货路径 1 用例；v2.98.3 股票信号管道 3 用例 + 股票 L3 联动断言；v2.99.0 GAP-072 解绑断言——L3 job 不再联动信号管道（assert_not_called）、独立信号管道任务入口 called_once；v2.103.0+5 月度任务合并新标准重审 +2：Step A 重审 invoked（默认启用）/FTS_MONTHLY_REAUDIT_ENABLED=0 关闭） |
+| `tests/scheduler/test_jobs.py` | ~37 | 调度任务定义（job 注册/运行/周期）（v2.47.0；v2.73.0 L3 期货路径 1 用例；v2.98.3 股票信号管道 3 用例 + 股票 L3 联动断言；v2.99.0 GAP-072 解绑断言——L3 job 不再联动信号管道（assert_not_called）、独立信号管道任务入口 called_once；v2.103.0+5 月度任务合并新标准重审 +2：Step A 重审 invoked（默认启用）/FTS_MONTHLY_REAUDIT_ENABLED=0 关闭；v2.104.0+100 GAP-132：因子巡检断言更新——FactorInspector(market="energy") + commit=False dry-run） |
 | `tests/monitor/test_reaudit.py` | 9 | 新标准准入复审（v2.103.0+5，新建）：summarize_result 处置规则 5（全过 retain/鲁棒性失败 shadow/审计失败 retire/评估失败 retire/error 优先）+ build_factor_program 2（code 缺失 None/正常构造）+ apply_reaudit_results 2（隔离 DuckDB：retain·shadow·retire 三处置 + error 跳过 + status_history 留痕 / retire 状态变迁记录） |
 | `tests/factor_engine/test_evolution_l1_merge.py` | 14 | L1→L2 候选合并 + 精英晋升（v2.47.0 基础；v2.103.0+20 新增 2 用例——默认 shadow_observe 关闭（env 未设晋升记录无 shadow_pool）/FTS_EVOLUTION_SHADOW_OBSERVE=1 恢复（记录含 shadow_pool 且 observe_trading_days==5）；v2.104.0+10 GAP-I307 +1：消费后 total_count/pending_count 重算，不残留过期值） |
 | `tests/factor_engine/test_weight_learning.py` | ~30 | 机构级权重学习（风险调整/滚动样本外验证/面板市场自动匹配/跨市场 IC）（v2.75.0；v2.78.1 默认关闭断言 2 用例） |

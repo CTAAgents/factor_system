@@ -1,7 +1,7 @@
 # FTS 差距分析
 
-> 版本: v2.104.0+98
-> 最后更新: 2026-08-15
+> 版本: v2.104.0+100
+> 最后更新: 2026-08-17
 > 状态: 活跃 — 随项目迭代持续更新
 
 ---
@@ -11,10 +11,10 @@
 | 优先级 | 开放 | 已关闭 | 总计 |
 |:-------|:-----|:-------|:-----|
 | P0 | 0 | 20 | 20 |
-| P1 | 2 | 58 | 60 |
+| P1 | 3 | 58 | 61 |
 | P2 | 6 | 63 | 69 |
 | GAP-C（Stage 3C 远期） | 1 | 7 | 8 |
-| **合计** | **9** | **148** | **157** |
+| **合计** | **10** | **148** | **158** |
 
 > 注：GAP-068/069（P1，原延期项）已于 v2.101.0 关闭；GAP-075（P1，跨标的稳健性检查）于 v2.101.0 收尾关闭（cross_symbol 激活 + 标的留出验证）；GAP-C 系列为 Stage 3C 远期机构级差距（细则见 plans/23 §3.3），C1~C8 已于 2026-08-11 全部首期实施（C1 含评估晋升接线 / C2 含 LLM 精修 / C8 含 C9 算子扩容二期 DSL 132），C4 开放项为真实多机集群部署（单机 LocalCluster 代码/测试/基准已落地），待硬件/基建条件成熟后按 DaskBackend 抽象接入。
 > GAP-081~089（数据字段缺口）于 2026-08-11 由数据字段字典审计（docs/factor_data_dict/）登记——A 股增强字段（北向/两融/股东/分析师）与期货持仓/结算字段为 P0 阻塞性数据缺口，详见下方登记表。
@@ -66,6 +66,8 @@
 
 > 总览更新（2026-08-14 v2.104.0+25，家族概念彻底移除，追加登记）：**FactorFamily 枚举 / FactorProgram.family 字段 / factor_catalog.family 列 / seed_lineage.seed_family 列删除；`REGIME_FAMILY_MULTIPLIERS` 硬编码倍率表 / `RegimeMultiplierEstimator`（regime×family 数据驱动倍率估计器）/ `load_data_driven_multipliers` 全部删除（GAP-L308 数据驱动链路随家族概念移除退役，`_data/l3_regime_multipliers.yaml` 标记 deprecated 仅归档）；`max_per_family` / `FTS_MAX_PER_FAMILY` 删除，elite 多样性配额统一走信号相关性聚类 `structure_cluster_quota_*`（GAP-077 已关闭项成为唯一配额路径）；自适应权重仅保留 style 维度；因子分组/筛选/配额统一走 cluster（factor_clustering.cluster_factors_by_signal 统一入口，v2.104.0+24 起 family 降级为来源标签），分类判定仅用 style_tags；GAP-077（家族配额替代）与 GAP-L308（Regime 数据化）为历史已关闭项，其 family 相关实现随本次移除一并退役（归档注记，不影响既有关闭状态）**。
 
+> 总览更新（2026-08-17 v2.104.0+100，GAP-132 登记）：**退化检测因评估历史不足静默失效（P1）——`get_evaluation_trend` 要求 ≥2 条含 `level_1_sharpe` 的评估记录才计算趋势，而能化链库 `factor_evaluations` 每因子仅 1 条（311 条，2026-08-14 批量写入，FACTORS_WITH_2PLUS_EVALS=0），期货库同样不足（386 条仅 45 因子 ≥2 条）→ 全部返回 `insufficient_data`，`detect_degradation` 恒 False，每日因子巡检自动降级静默失效（2026-08-17 巡检实测能化链 242 个 active elite 全量 0 退化系假阴性）；`factor_inspector_job` 同步改默认 `market="energy"`（巡检口径统一能化链）+ `commit=False` dry-run（防评估不足期误降级）；P1 开放 2→3、合计开放 9→10、总计 157→158，见 P1 登记表**。
+
 ---
 
 ## 2. 差距登记表
@@ -91,6 +93,7 @@
 
 | ID | 模块 | 差距描述 | 影响 | 处理期限 | 状态 |
 |:---|:-----|:---------|:-----|:---------|:-----|
+| GAP-132 | `fts/factor_engine/factor_db/lineage.py` `get_evaluation_trend` + `fts/scheduler/jobs.py` `factor_inspector_job` + `factor_evaluations` 数据积累 | 退化检测因评估历史不足静默失效（数据/机制缺口）：`get_evaluation_trend` 要求 ≥2 条含 `level_1_sharpe` 的评估记录才计算趋势，能化链库 `factor_evaluations` 每因子仅 1 条（311 条，2026-08-14 23:33-23:42 批量写入，FACTORS_WITH_2PLUS_EVALS=0）、期货库 386 条仅 45 因子 ≥2 条 → 全部返回 `insufficient_data`，`detect_degradation` 恒 False | 因子退化安全机制形同虚设：每日巡检静默失效（2026-08-17 实测能化链 242 个 active elite 全量"0 退化"系假阴性），退化因子无法被识别与降级，L3/组合持续消费衰减因子 | 1 月内（评估多期积累后收口） | 🔴 开放（2026-08-17 登记：`factor_inspector_job` 已改默认能化链 + dry-run 防误降级；评估流水多期累积、趋势检测恢复后重审关闭） |
 | GAP-130 | `scripts/futures_signal_pipeline.py` `_compute_holdout_validation` + `_compute_per_variety_ic_matrix` | 盲测/IC 矩阵对新上市品种信号-收益错位：收盘价 `df.reindex(common_dates)` 正确对齐共同日期（头部 NaN），但因子信号 `np.array(arr)` 仍按品种自身索引、仅尾部 `np.pad` 补零——品种历史是共同日期尾部子集时，信号与收益错位量 = 品种上市日距共同日起点的缺失天数。2026-08-16 能化链盲测实测：BZ0 错位 32 天 / PL0 错位 42 天 → 盲测 IC 被稀释至 ≈0（-0.0085/-0.0080）误判失效；PR0 错位 2 天 IC 由正确对齐 -0.373 衰减至 -0.134；头部缺口 0 的 16 品种无影响（复算逐位一致）；修正对齐后 BZ0/PL0 原始 IC=-0.20/-0.18，落入训练池区间 [-0.17,-0.43] | 新上市品种盲测 IC/化工链分层泛化/品种-因子有效性矩阵被系统污染误判失效；品种级权重与方向翻转（per_variety_sign_flips）基于被污染的 IC（部分因子符号反转）；报告统计指标（盲测 IC/保持率/分层泛化）含伪影 | 1 周内 | ✅ 已关闭（v2.104.0+81：① 两函数因子信号改经 `align_signal_to_dates`（`df.index.get_indexer` 向量化对齐共同日期，缺失留 NaN，复用 fts/factor_engine/l3_signal_service.py 既有 helper）替代尾部补零——全历史品种（len(sig)==len(closes)）逐位不变零漂移，新上市品种正确对齐；② 盲测池最小真实历史门槛 `ENERGY_CHAIN_MIN_HOLDOUT_ROWS=250`（config/futures_universe.yaml SSOT）；新增 TestHoldoutValidationAlignment +4 用例全绿；重跑 energy 链管线验证 BZ0/PL0 盲测 IC 回升至正常区间） |
 | GAP-129 | `tests/`（test_evolution_loop 等 107 处 `EvolutionLoop(` 调用） + `fts/factor_engine/factor_db/schema.py` `get_db_path` | 测试组写真实因子库（测试污染生产 SSOT）：`EvolutionLoop`/各仓储未显式传 `factor_db_path` 时经 `get_db_path(market)` 路由到真实 `data/factor_catalog_{futures,energy}.duckdb`，全库 107 处 `EvolutionLoop(` 测试调用仅 9 处传 `factor_db_path` 隔离（GAP-030 注入机制已存在未被统一采用）——集成测试运行即向真实库写入 factor_catalog/factor_quality_scores/factor_audit_reports（2026-08-16 GAP-128 修复期间实测真实 futures 库出现 `unknown`/`audit_test_factor_001` 测试伪影行） | 测试数据污染 L3 因子资产库 SSOT，可被 L3/信号管线/质检看板误消费（同名因子覆盖/伪影行/统计失真）；与 GAP-128 落库后问题放大（质检行也随测试写入） | 1 周内 | ✅ 已关闭（v2.104.0+79，方案 plans/43 实施：① 根 `tests/conftest.py` autouse fixture 于单挂载点 `fts.factor_engine.factor_db.schema.get_db_path` 全局重定向至每测试独立 tmp DuckDB（4 仓储类构造时局部 `from .schema import get_db_path`，调用时解析模块符号，替换即全量生效；futures/energy 分库文件名保留仅位置迁移，仓储连接自动 init_database 幂等建表）；② `uses_real_factor_db` 标记注册（pytest_configure）+ 5 处豁免——真实路由断言（test_energy_chain/test_factor_db/test_cli_extra/test_evolution_loop）+ 真实存量因子代码数据依赖（test_bincount_boundary 模块级 `_DB_PATH` fixture 前求值无法隔离，read_only 读取无污染）；③ 新增 `tests/test_factor_db_isolation.py` 4 用例（get_db_path 落 tmp + 分库路由保留 / 4 仓储 `_db_path` 落 tmp / 晋升写入三表后真实库 COUNT 不变 / 豁免标记仍路由真实路径）；④ 零污染实测——`pytest tests/factor_engine/test_evolution_loop.py -m "not slow"` 242 passed 后真实库 futures factor_catalog=343/quality=105/audit=103、energy 307/306/307 三表 COUNT 与运行前基线完全一致；受影响回归 factor_db 目录 + test_factor_db + test_cli_extra 219 passed、隔离/豁免 7 passed、energy_chain+bincount 286 passed、ruff 全绿） |
 | GAP-128 | `fts/factor_engine/evolution_promote.py` `_write_to_duckdb` + `factor_db/repository.py` | 质检结果未落库（SSOT 一致性缺陷）：晋升管线 `_write_to_duckdb` 仅把 `quality_score`/`audit_report` 内嵌 `factor_catalog.metadata`（JSON 字段），`FactorQualityScoreRepository.save_score`/`FactorAuditReportRepository.save_report` 存在且有单测但**全库零生产调用方** → `factor_quality_scores`/`factor_audit_reports` 专属表恒空（2026-08-16 能化链 106 新精英 JSON 内嵌 audit 106/106 passed、评分 A 34/B 72，DB 两表 0 条；全市场存量同缺） | 质检记录无法经 DuckDB 查询/排序/血缘追踪，`energy_chain_degradation_dryrun.py` C 路（血缘表）跳过，`fts catalog verify` 无法校验质检完整性；违背 L3 因子资产库一数一源 SSOT | 1 周内 | ✅ 已关闭（v2.104.0+78：① 管线治本——`_write_to_duckdb` 落库后追加 `save_score`/`save_report`（非阻塞失败仅告警，写前按 factor_id 清理旧行保幂等，market 自动路由）；② 存量治标——新增 `scripts/backfill_factor_quality_audit.py` 全市场幂等回填并实测；③ 测试 +7 用例全绿） |

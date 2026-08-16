@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+98
+> 版本: v2.104.0+100
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,8 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+100** | **2026-08-17** | **GAP-132 因子巡检默认改能化链(market=energy)+dry-run：评估历史不足(每因子1条)致趋势检测 insufficient_data 退化检测静默失效，巡检防误降级；GAP 登记 08-gap-analysis** |** |
+| **v2.104.0+99** | **2026-08-17** | **内部调度器一键启停：FTS_INTERNAL_SCHEDULER_ENABLED env 开关 + fts scheduler status 子命令 + run 打印实际调度数** |** |
 | **v2.104.0+98** | **2026-08-17** | **内部调度停用：REGISTRY 全部任务 enabled=False，TRAE Schedule 为唯一调度源（INTERNAL_SCHEDULER_ENABLED 开关）** |** |
 | **v2.104.0+97** | **2026-08-17** | **组合防抖：每日巡检对 approved 因子豁免降级（_is_approved/deferred）+ 周度 review_l3_pool 叠加相对退化收口** |** |
 | **v2.104.0+96** | **2026-08-17** | **docs: 修正 §2.1 矩阵 L3 组合构建输入表述（仅 approved，消除 +L2 elite 冗余错误）** |** |
