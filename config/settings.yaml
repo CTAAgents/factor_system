@@ -12,6 +12,11 @@ llm_backend: "openai"
 # LLM 采样温度（0.0-2.0），调高可增加因子生成多样性；默认 1.2
 llm_temperature: 1.2
 
+# ── L1 提取器（plans/41 A3: max_factors 配置化，v2.104.0+71）──
+# 单次 LLM 提取最大因子数（研报/论文/宏观/WebSearch 等 LLM 提取源；
+# 天软 tinysoft 为静态 YAML 感知源，不调用 LLM，不参与该配额）
+l1_extractor_max_factors: 20
+
 # ── 演化配置 ──
 max_generations: 10
 population_size: 20
@@ -40,12 +45,17 @@ l3_g1_compress_curve: "linear"
 # 口径说明（GAP-122，v2.104.0+42）：min_sharpe 判定组合信号质量，Verifier 校验
 # 缩放前 signal_sharpe（见 portfolio_loop Step 6）；max_turnover 对齐因子月度换手
 # 量纲（次/月，能源精英池均值区间 4.48~17.40，组合等权均值 ~11.6）。
+# max_sharpe 上限（v2.104.0+73）：signal_sharpe 改用截断前 raw Sharpe 计算后，
+# 信号质量上界由 2.0（SHARPE_CAP 截断值）提升至 raw 口径（精英池原始 Sharpe
+# 区间 3.27~17.09，quality_weight 加权后实测 8.64），3.5 上限（按截断口径设计）
+# 与 raw 口径不自洽会恒触发过拟合警告；校准至 12.0 过滤异常虚高（预留波动余量）。
 verifier:
   min_sharpe: 1.9
   max_correlation: 0.5
   max_turnover: 12.0
   max_decay_rate: 0.30
   min_n_factors: 3
+  max_sharpe: 12.0
 
 # ── L3 因子选择与组合构建（plans/36，v2.104.0+43）──
 l3:

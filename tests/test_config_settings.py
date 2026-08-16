@@ -94,6 +94,14 @@ class TestFTSConfigDefaults:
         assert cfg.log_file == ""
         assert cfg.llm_backend == ""
         assert cfg.factor_turnover_daily_max == 0.45
+        # plans/41 A3 (v2.104.0+71): L1 提取器 max_factors 配置化默认 20
+        assert cfg.l1_extractor_max_factors == 20
+
+    def test_l1_extractor_max_factors_env_override(self, monkeypatch):
+        """FTS_L1_EXTRACTOR_MAX_FACTORS 环境变量覆盖（plans/41 A3 配置化）。"""
+        monkeypatch.setenv("FTS_L1_EXTRACTOR_MAX_FACTORS", "30")
+        cfg = load_config(config_path=None)
+        assert cfg.l1_extractor_max_factors == 30
 
     def test_factor_turnover_daily_max_default(self):
         """G11 日换手硬剔除阈值默认 0.45 开启（期货 P95 校准，v2.104.0+9）。"""

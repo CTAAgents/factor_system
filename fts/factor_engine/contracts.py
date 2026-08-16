@@ -560,15 +560,15 @@ DEFAULT_L1_VERIFIER_CONFIG: L1VerifierConfig = L1VerifierConfig(
 """v1.1.0 锁定的 L1 Verifier 默认配置 — 不可在运行时修改。"""
 
 DEFAULT_L1_BUDGET_CONFIG: L1BudgetConfig = L1BudgetConfig(
-    daily_token_limit=50_000,
+    daily_token_limit=60_000,
     monthly_token_limit=1_500_000,
-    max_bootstraps_per_run=20,  # 增加至 20: 容纳三源提取器(13) + LLM(7) 候选
+    max_bootstraps_per_run=30,  # plans/41 D1: 20→30，配合按子链分批与多源提取器
     max_tokens_per_candidate=5_000,
     circuit_breaker_token_ratio=2.0,
     circuit_breaker_failure_rate=0.95,
     circuit_breaker_consecutive_low_quality=5,
 )
-"""v1.1.0 默认 L1 预算配置 — 熔断触发后必须人类介入恢复。"""
+"""v1.1.0 默认 L1 预算配置 — 熔断触发后必须人类介入恢复。plans/41 D1 上调 daily_token_limit 50K→60K、max_bootstraps 20→30。"""
 
 
 # ══════════════════════════════════════════════════════════
@@ -665,7 +665,7 @@ class L3VerifierConfig(TypedDict, total=False):
     max_turnover: float  # 最大组合换手率（默认 0.50）
     max_decay_rate: float  # 最大衰减率（默认 0.30）
     min_n_factors: int  # 最少因子数（默认 3）
-    max_sharpe: float  # 最大组合夏普上限（默认 3.5，防止过拟合虚高）
+    max_sharpe: float  # 最大组合夏普上限（默认 8.0，raw 口径防过拟合虚高，v2.104.0+73）
 
 
 class L3MetaLoopState(TypedDict, total=False):
@@ -702,9 +702,15 @@ DEFAULT_L3_VERIFIER_CONFIG: L3VerifierConfig = L3VerifierConfig(
     max_turnover=0.50,
     max_decay_rate=0.30,
     min_n_factors=3,
-    max_sharpe=3.5,
+    max_sharpe=12.0,
 )
-"""v1.1.0 锁定的 L3 Verifier 默认配置 — 不可在运行时修改。"""
+"""v1.1.0 锁定的 L3 Verifier 默认配置 — 不可在运行时修改。
+
+max_sharpe=12.0（v2.104.0+73）：signal_sharpe 改用截断前 raw Sharpe 后，
+信号质量上界由 SHARPE_CAP=2.0 提升至 raw 口径，3.5 按截断口径设计会恒触发
+过拟合警告（8.0 实测仍被 8.64 触及，上调至 12.0 预留余量）；运行时实际值
+以 config/settings.yaml verifier.max_sharpe 为准。
+"""
 
 DEFAULT_L3_BUDGET = 100_000
 """L3 每周 token 预算 100K。"""

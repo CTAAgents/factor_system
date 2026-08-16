@@ -253,6 +253,12 @@ class FTSConfig:
     l1_macro_extractor_enabled: bool = field(
         default_factory=lambda: os.getenv("FTS_L1_MACRO_EXTRACTOR_ENABLED", "1") == "1"
     )
+    # plans/41 A3 (v2.104.0+71): L1 提取器单次 LLM 最大因子数（max_factors 配置化，
+    # 替换散落硬编码 20，管道构造时读取并注入 LLM 提取源——研报/论文/宏观/WebSearch；
+    # 天软 tinysoft 为静态 YAML 感知源，不调用 LLM，不参与该配额）
+    l1_extractor_max_factors: int = field(
+        default_factory=lambda: int(os.getenv("FTS_L1_EXTRACTOR_MAX_FACTORS", "20"))
+    )
 
     # ── L3 Portfolio ──
     portfolio_max_factors: int = 20
@@ -388,6 +394,7 @@ class FTSConfig:
             "max_turnover": 0.50,
             "max_decay_rate": 0.30,
             "min_n_factors": 3,
+            "max_sharpe": 12.0,
         }
     )
 

@@ -829,19 +829,22 @@ def synthesize_signals(
             weights = [w / w_sum for w in weights]
         signals = []
         for f, w in zip(factors, weights):
-            signals.append(
-                PortfolioSignal(
-                    factor_id=f["factor_id"],
-                    name=f["name"],
-                    weight=w,
-                    sharpe=f.get("sharpe", 0.0),
-                    ic=f.get("ic", 0.0),
-                    turnover=f.get("turnover", 0.0),
-                    decay_6m=f.get("decay_6m", 0.0),
-                    orthogonalized=False,
-                    retained=True,
-                )
+            signal = PortfolioSignal(
+                factor_id=f["factor_id"],
+                name=f["name"],
+                weight=w,
+                sharpe=f.get("sharpe", 0.0),
+                ic=f.get("ic", 0.0),
+                turnover=f.get("turnover", 0.0),
+                decay_6m=f.get("decay_6m", 0.0),
+                orthogonalized=False,
+                retained=True,
             )
+            # 透传截断前原始 Sharpe（GAP-122 口径修复，v2.104.0+73）：
+            # signal_sharpe 质量指标用 raw 值计算，权重/展示仍用截断后值。
+            if "_sharpe_raw" in f:
+                signal["_sharpe_raw"] = f["_sharpe_raw"]
+            signals.append(signal)
         logger.info(
             "[L3-WEIGHT] quality_weight 模式: score_total=%.3f, n_factors=%d",
             total_score,
@@ -2643,7 +2646,15 @@ def build_combo(
             pre_w = pre_w / pre_w_sum
         else:
             pre_w = np.ones(n_ret) / max(n_ret, 1)
-        pre_weighted_sharpe = float(np.sum(pre_w * np.array([s.get("sharpe", 0.0) for s in retained], dtype=float)))
+        pre_weighted_sharpe = float(
+            np.sum(
+                pre_w
+                * np.array(
+                    [s.get("_sharpe_raw", s.get("sharpe", 0.0)) for s in retained],
+                    dtype=float,
+                )
+            )
+        )
         pre_hhi = float(np.sum(pre_w**2))
         pre_effective_n = 1.0 / pre_hhi if pre_hhi > 0 else float(n_ret)
         pre_diversity_factor = min(1.0, (pre_effective_n / n_ret) ** 0.5)
@@ -4881,7 +4892,7 @@ class PortfolioLoop:
             # Step 5: 组合构建（含粘性约束 + 漂移监控）
             # 实测化输入（方案①）：--returns-matrix 手动 CSV 已由 CLI 传入（factor_returns 非 None）。
             # 自动构建（_auto_build_factor_returns）默认关闭：横截面多空腿（quantile=0.2, 25 品种）
-            # 收益矩阵 Sharpe 严重虚高（v2.104.0+2 实测 20.06，超 max_sharpe 3.5 过拟合告警），
+            # 收益矩阵 Sharpe 严重虚高（v2.104.0+2 实测 20.06，超 max_sharpe 上限过拟合告警），
             # 仅显式设置 FTS_L3_AUTO_FACTOR_RETURNS=1 时启用；其余场景回退估算口径。
             if factor_returns is None and panel_data and os.environ.get("FTS_L3_AUTO_FACTOR_RETURNS") == "1":
                 auto_fr = _auto_build_factor_returns(

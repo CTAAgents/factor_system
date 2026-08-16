@@ -352,12 +352,20 @@ class TestL3Verifier:
         assert any("0.80" in r for r in reasons)
 
     def test_fails_high_sharpe(self):
-        """夏普 4.0 > 3.5 应失败（P0 过拟合保护）。"""
+        """夏普 13.0 > 12.0 应失败（P0 过拟合保护，raw 口径上限 v2.104.0+73）。"""
         v = L3Verifier(DEFAULT_L3_VERIFIER_CONFIG)
-        combo = self.make_combo(sharpe=4.0, corr=0.2, turnover=0.3)
+        combo = self.make_combo(sharpe=13.0, corr=0.2, turnover=0.3)
         passed, reasons = v.check(combo)
         assert passed is False
-        assert any("夏普" in r and "4.00" in r and "3.5" in r for r in reasons)
+        assert any("夏普" in r and "13.00" in r and "12.0" in r for r in reasons)
+
+    def test_passes_high_sharpe_within_cap(self):
+        """raw 口径 signal_sharpe 在 1.9~12.0 区间内通过（原 3.5 上限会误伤 raw 信号质量）。"""
+        v = L3Verifier(DEFAULT_L3_VERIFIER_CONFIG)
+        combo = self.make_combo(sharpe=8.64, corr=0.2, turnover=0.3)
+        passed, reasons = v.check(combo)
+        assert passed is True
+        assert reasons == []
 
     # ── GAP-122（v2.104.0+42）：Verifier 判定口径 —— min_sharpe 校验缩放前 signal_sharpe ──
     def test_verifier_view_uses_signal_sharpe(self):
@@ -683,6 +691,21 @@ class TestQualityWeightMode:
         signals, _, _ = synthesize_signals(self._factors(), "quality_weight", score_weights={"icir": 1.0})
         ws = {s["factor_id"]: s["weight"] for s in signals}
         assert sum(ws.values()) == pytest.approx(1.0, abs=1e-6)
+
+    def test_raw_sharpe_forwarded(self):
+        """quality_weight 透传截断前原始 Sharpe（_sharpe_raw），供 signal_sharpe raw 口径使用。"""
+        factors = [
+            {"factor_id": "fct_a", "name": "factor_a", "sharpe": 5.0, "icir": 0.8, "ic": 0.10, "turnover": 4.0},
+            {"factor_id": "fct_b", "name": "factor_b", "sharpe": 1.8, "icir": 0.5, "ic": 0.06, "turnover": 9.0},
+        ]
+        signals, _, _ = synthesize_signals(factors, "quality_weight")
+        by_id = {s["factor_id"]: s for s in signals}
+        # 截断因子（5.0 > 2.0）：sharpe 显示截断值 2.0，_sharpe_raw 保留原始 5.0
+        assert by_id["fct_a"]["sharpe"] == 2.0
+        assert by_id["fct_a"].get("_sharpe_raw") == 5.0
+        # 未截断因子（1.8 <= 2.0）：无 _sharpe_raw 字段，直接回退 sharpe
+        assert by_id["fct_b"]["sharpe"] == 1.8
+        assert by_id["fct_b"].get("_sharpe_raw") is None
 
 
 class TestRollingOos:
@@ -1542,6 +1565,58 @@ class TestBuildCombo:
         """空组合 signal_sharpe 为 None。"""
         combo = build_combo([], mode="equal_weight")
         assert combo["signal_sharpe"] is None
+
+    def test_signal_sharpe_uses_raw_not_capped(self):
+        """v2.104.0+73：signal_sharpe 用截断前原始 Sharpe（_sharpe_raw）而非截断值 2.0。
+        全部因子被截断时，旧口径 signal_sharpe 恒 = 2.0 × diversity（< 2.0），
+        新口径反映真实信号质量，1.9 阈值可达。"""
+        signals = [
+            PortfolioSignal(
+                factor_id="fct_001",
+                name="raw_high",
+                weight=0.5,
+                sharpe=2.0,  # 截断后显示值
+                _sharpe_raw=5.0,
+                ic=0.05,
+                turnover=0.3,
+                decay_6m=0.1,
+                orthogonalized=False,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="fct_002",
+                name="capped",
+                weight=0.3,
+                sharpe=2.0,
+                _sharpe_raw=4.0,
+                ic=0.04,
+                turnover=0.4,
+                decay_6m=0.2,
+                orthogonalized=False,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="fct_003",
+                name="uncapped",
+                weight=0.2,
+                sharpe=1.8,  # 未截断：无 _sharpe_raw，回退 sharpe
+                ic=0.03,
+                turnover=0.5,
+                decay_6m=0.3,
+                orthogonalized=False,
+                retained=True,
+            ),
+        ]
+        combo = build_combo(signals, mode="equal_weight")
+        # 权重归一化: [0.5, 0.3, 0.2]，raw sharpe: [5.0, 4.0, 1.8] → 加权 4.06
+        pre_weighted = 0.5 * 5.0 + 0.3 * 4.0 + 0.2 * 1.8
+        hhi = 0.5**2 + 0.3**2 + 0.2**2
+        pre_diversity = min(1.0, ((1.0 / hhi) / 3) ** 0.5)
+        assert combo["signal_sharpe"] == pytest.approx(pre_weighted * pre_diversity, abs=1e-6)
+        # raw 口径下 signal_sharpe 明显高于截断口径（4.06 vs 2.0 加权），1.9 阈值可达
+        assert combo["signal_sharpe"] > 1.9
+        # 展示字段仍为截断值（防过拟合信息不丢失）
+        assert all(s["sharpe"] <= 2.0 for s in combo["signals"])
 
 
 # ════════════════════════════════════════════════════════════
