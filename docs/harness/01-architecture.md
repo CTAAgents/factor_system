@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+97
+> 版本: v2.104.0+98
 > 最后更新: 2026-08-10
 
 ---
@@ -464,7 +464,7 @@ fts/
 └── scheduler/                  # 调度层
     ├── __init__.py             # 模块入口 + 导出
     ├── engine.py               # SchedulerEngine（APScheduler 包装器）
-    ├── tasks.py                # TaskRegistry + TaskSpec + 注册默认任务（10 个）
+    ├── tasks.py                # TaskRegistry + TaskSpec + 注册默认任务（16 个；v2.104.0+98 起全部 enabled=False，内部调度停用，TRAE Schedule 为唯一调度源）
     ├── jobs.py                 # 任务工作函数（L1/L2/L3/信号管道/健康检查/因子巡检/月度治理[衰减+新标准重审]/数据质量/数据级监控）
     ├── hotswap.py              # 热更新支持
     └── watchdog.py             # 看门狗进程

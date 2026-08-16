@@ -263,7 +263,8 @@ def test_register_default_tasks_content(name: str, expected: dict):
     assert spec.callable_path == expected["callable"]
     assert spec.description == expected["desc"]
     assert spec.trace_id_prefix == expected["prefix"]
-    assert spec.enabled is True, f"任务 {name} 默认应启用"
+    # v2.104.0+98：内部调度停用，以 TRAE Schedule 为唯一调度源
+    assert spec.enabled is False, f"任务 {name} 默认应停用（内部调度 disabled）"
 
 
 def test_register_default_tasks_idempotent():

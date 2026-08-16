@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+97
+> 版本: v2.104.0+98
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,7 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+98** | **2026-08-17** | **内部调度停用：REGISTRY 全部任务 enabled=False，TRAE Schedule 为唯一调度源（INTERNAL_SCHEDULER_ENABLED 开关）** |** |
 | **v2.104.0+97** | **2026-08-17** | **组合防抖：每日巡检对 approved 因子豁免降级（_is_approved/deferred）+ 周度 review_l3_pool 叠加相对退化收口** |** |
 | **v2.104.0+96** | **2026-08-17** | **docs: 修正 §2.1 矩阵 L3 组合构建输入表述（仅 approved，消除 +L2 elite 冗余错误）** |** |
 | **v2.104.0+95** | **2026-08-17** | **同名标识符消除：core.enums.FactorStatus→CandidateStatus、elite_tracker→TrackerStatus（FactorStatus 仅剩生命周期 SSOT）+ 文档 §2.2.3** |** |

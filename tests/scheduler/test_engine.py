@@ -191,8 +191,8 @@ class TestSchedulerEngineStart:
         assert engine._scheduler is apscheduler_available
         assert engine.running is True
         apscheduler_available.start.assert_called_once()
-        # 14 = 13 个默认任务 + 1 个 sample_task（期货版：股票任务已剥离）
-        assert apscheduler_available.add_job.call_count == 17
+        # v2.104.0+98：内部调度停用（默认任务全 disabled），仅注册的 sample_task 被调度
+        assert apscheduler_available.add_job.call_count == 1
         # 验证 sample_task 的 job 被加入
         job_calls = apscheduler_available.add_job.call_args_list
         test_job_call = next(
@@ -203,7 +203,8 @@ class TestSchedulerEngineStart:
         assert test_job_call.kwargs["minute"] == "0"
         assert test_job_call.kwargs["hour"] == "9"
         assert "已启动" in caplog.text
-        assert "17 个任务" in caplog.text
+        # v2.104.0+98：内部调度停用，仅载入已显式 enabled 的任务
+        assert "1 个任务" in caplog.text
 
 
 # ─── stop ───────────────────────────────────────────────

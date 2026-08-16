@@ -84,8 +84,20 @@ class TaskRegistry:
 REGISTRY = TaskRegistry()
 
 
+# 内部调度器开关（v2.104.0+98 起停用）：
+# 内部 SchedulerEngine 调度全部任务 enabled=False，以 TRAE Schedule 为唯一调度源。
+# 如需恢复内部调度，置 True 并按需调整 cron（TRAE Schedule 与内部调度不可同时启用，
+# 否则同口径任务重复执行）。
+INTERNAL_SCHEDULER_ENABLED: bool = False
+
+
 def register_default_tasks() -> None:
-    """注册默认任务清单（幂等，重复调用安全）。"""
+    """注册默认任务清单（幂等，重复调用安全）。
+
+    任务清单保持完整注册（list_tasks/list_all 可见，用于 TRAE Schedule 对齐与文档），
+    但 enabled 统一为 INTERNAL_SCHEDULER_ENABLED（当前 False = 内部调度停用）：
+    SchedulerEngine.list_enabled() 返回空 → 内部调度器不执行任何任务。
+    """
     defaults = [
         TaskSpec(
             name="l1_meta_loop",
@@ -203,6 +215,8 @@ def register_default_tasks() -> None:
     for spec in defaults:
         if spec.name not in REGISTRY:
             REGISTRY.register(spec)
+        # v2.104.0+98：统一 enabled 状态（幂等，含已存在同名任务）
+        REGISTRY.get(spec.name).enabled = INTERNAL_SCHEDULER_ENABLED
 
 
 def list_tasks() -> list[TaskSpec]:
