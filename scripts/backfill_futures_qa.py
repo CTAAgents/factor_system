@@ -225,12 +225,14 @@ def main() -> int:
                 qrepo.save_score(quality_score)
         except Exception as e:  # noqa: BLE001
             logger.warning("[qa-refill] 评分卡落库失败 %s: %s", fid, e)
+        arepo = FactorAuditReportRepository(market="futures")
         try:
-            with FactorAuditReportRepository(market="futures") as arepo:
-                arepo.delete_reports_for_factor(fid)
-                arepo.save_report(audit_report.to_dict())
+            arepo.delete_reports_for_factor(fid)
+            arepo.save_report(audit_report.to_dict())
         except Exception as e:  # noqa: BLE001
             logger.warning("[qa-refill] 审计落库失败 %s: %s", fid, e)
+        finally:
+            arepo.close()
 
         # ── 落库：metadata.qa_review + 复核 ──
         from fts.factor_engine.factor_db.repository import FactorRepository
