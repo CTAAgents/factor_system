@@ -941,6 +941,13 @@ def factor_inspector_job() -> None:
 
     调用 FactorInspector.inspect_and_downgrade() 执行巡检，
     阈值默认 -0.2（Sharpe 下降 20% 触发降级）。
+
+    GAP-132（v2.104.0+100）：① 默认巡检能化链（market="energy"）——
+    期货通用与能化链为两套独立 catalog，巡检口径统一为能化链；
+    ② 因能化链/期货库评估历史不足（每因子仅 1 条评估记录）趋势检测
+    返回 insufficient_data、退化检测失效，暂以 dry-run（commit=False）
+    运行，仅输出退化候选不落库，待评估历史多期积累、GAP-132 关闭后
+    恢复自动降级（commit=True）。
     """
     trace_id = f"fts.inspector.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[因子巡检] 启动 trace_id=%s", trace_id)
@@ -948,17 +955,18 @@ def factor_inspector_job() -> None:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.factor_engine.factor_inspector import FactorInspector
 
-        inspector = FactorInspector()
+        inspector = FactorInspector(market="energy")
         result = inspector.inspect_and_downgrade(
             threshold=-0.2,
-            commit=True,
+            commit=False,
         )
         summary = result.get("summary", {})
         logger.info(
-            "[因子巡检] 完成: audited=%d degraded=%d downgraded=%d skipped=%d errors=%d (trace_id=%s)",
+            "[因子巡检] 完成: audited=%d degraded=%d downgraded=%d deferred_approved=%d skipped=%d errors=%d (trace_id=%s)",
             summary.get("total_audited", 0),
             summary.get("degraded_detected", 0),
             summary.get("downgraded", 0),
+            summary.get("deferred_approved", 0),
             summary.get("skipped", 0),
             summary.get("errors", 0),
             trace_id,

@@ -732,13 +732,14 @@ class TestFactorInspectorJob:
     """factor_inspector_job 测试。"""
 
     def test_success(self, caplog):
-        """成功路径：巡检完成并输出汇总。"""
+        """成功路径：能化链 dry-run 巡检并输出汇总。"""
         fake_inspector = _fake_module(FactorInspector=MagicMock())
         fake_inspector.FactorInspector.return_value.inspect_and_downgrade.return_value = {
             "summary": {
                 "total_audited": 5,
                 "degraded_detected": 1,
-                "downgraded": 1,
+                "downgraded": 0,
+                "deferred_approved": 0,
                 "skipped": 0,
                 "errors": 0,
             }
@@ -752,11 +753,13 @@ class TestFactorInspectorJob:
             caplog.set_level(logging.INFO)
             jobs.factor_inspector_job()
 
+        # GAP-132：默认巡检能化链 + dry-run（评估历史不足，退化检测未启用自动降级）
+        fake_inspector.FactorInspector.assert_called_once_with(market="energy")
         fake_inspector.FactorInspector.return_value.inspect_and_downgrade.assert_called_once_with(
             threshold=-0.2,
-            commit=True,
+            commit=False,
         )
-        assert "[因子巡检] 完成: audited=5 degraded=1 downgraded=1 skipped=0 errors=0" in caplog.text
+        assert "[因子巡检] 完成: audited=5 degraded=1 downgraded=0 deferred_approved=0 skipped=0 errors=0" in caplog.text
 
     def test_failure_caught(self, caplog):
         """巡检失败时捕获并记录错误。"""
