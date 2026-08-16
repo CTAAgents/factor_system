@@ -5037,6 +5037,46 @@ class TestQualityReportAndRunBranches:
         assert result.status in ("passed", "verifier_warning", "completed")
         assert result.n_factors_input == 1
 
+    def test_run_energy_panel_symbols_restricted(self, tmp_portfolio_dir, tmp_elite_dir):
+        """energy 市场 Step 0.5 面板收缩至能源化工 20 品种（训练池+盲测池），非全期货核心池。
+
+        GAP-121 扩展（v2.104.0+77）：get_futures_panel 必须显式传能源化工
+        20 品种子集（ENERGY_CHAIN_SYMBOLS ∪ ENERGY_CHAIN_HOLDOUT），
+        而非默认全期货核心池，以减少数据加载耗时；futures 市场保持默认全池。
+        """
+        from fts.data_futures import ENERGY_CHAIN_HOLDOUT, ENERGY_CHAIN_SYMBOLS
+
+        expected = sorted(set(ENERGY_CHAIN_SYMBOLS) | set(ENERGY_CHAIN_HOLDOUT))
+        assert len(expected) == 20, f"能源化工子集应为 20 品种，实际 {len(expected)}"
+
+        # energy 市场：显式传 20 品种子集
+        self._write_factors(tmp_elite_dir, market="energy", n=1)
+        with patch("fts.data.FTSDataProvider") as m_prov:
+            m_prov.return_value.get_futures_panel.return_value = (
+                {"SC0": pd.DataFrame({"close": [1.0, 2.0]})},
+                ["2024-01-01"],
+            )
+            loop = self._make_loop(tmp_portfolio_dir, tmp_elite_dir, market="energy")
+            result = loop.run(recompute_weights=True)
+        assert result.status in ("passed", "verifier_warning", "completed")
+        first_call = m_prov.return_value.get_futures_panel.call_args_list[0]
+        symbols = first_call.kwargs.get("symbols")
+        assert symbols is not None, "energy 市场 Step 0.5 必须显式传能源化工子集"
+        assert sorted(symbols) == expected
+
+        # futures 市场：保持默认（不传 symbols，走全期货核心池）
+        self._write_factors(tmp_elite_dir, market="futures", n=1)
+        with patch("fts.data.FTSDataProvider") as m_prov2:
+            m_prov2.return_value.get_futures_panel.return_value = (
+                {"RB0": pd.DataFrame({"close": [1.0, 2.0]})},
+                ["2024-01-01"],
+            )
+            loop2 = self._make_loop(tmp_portfolio_dir, tmp_elite_dir, market="futures")
+            result2 = loop2.run(recompute_weights=True)
+        assert result2.status in ("passed", "verifier_warning", "completed")
+        fut_first_call = m_prov2.return_value.get_futures_panel.call_args_list[0]
+        assert fut_first_call.kwargs.get("symbols") is None, "futures 市场保持默认全池"
+
     def test_run_oos_demotion_log(self, tmp_portfolio_dir, tmp_elite_dir):
         """Step 1.5 OOS 外推验证降级日志。"""
         self._write_factors(tmp_elite_dir, market="futures", n=1)

@@ -4399,11 +4399,23 @@ class PortfolioLoop:
             panel_data = None
             try:
                 from ..data import FTSDataProvider
+                from ..data_futures import ENERGY_CHAIN_HOLDOUT, ENERGY_CHAIN_SYMBOLS
 
                 provider = FTSDataProvider()
-                panel_data, _cdates = provider.get_futures_panel(days=MIN_EVAL_DAYS)
+                # GAP-121 扩展（v2.104.0+77）: energy 市场 Step 0.5 面板收缩至
+                # 能源化工 20 品种（训练池 12 + 盲测池 8，SSOT config/futures_universe.yaml），
+                # 减少全期货核心池数据加载耗时；面板仅用于相关性去重/Regime 合成，不参与权重计算。
+                symbols: Optional[list[str]] = None
+                scope = "全期货核心池"
+                if self.market == "energy":
+                    symbols = sorted(set(ENERGY_CHAIN_SYMBOLS) | set(ENERGY_CHAIN_HOLDOUT))
+                    scope = f"能源化工{len(symbols)}品种"
+                panel_data, _cdates = provider.get_futures_panel(symbols=symbols, days=MIN_EVAL_DAYS)
                 logger.info(
-                    "[L3] Step 0.5: 期货面板数据加载完成 (%d 品种, %d 交易日)", len(panel_data), len(_cdates)
+                    "[L3] Step 0.5: 期货面板数据加载完成 (%d 品种, %d 交易日) [scope=%s]",
+                    len(panel_data),
+                    len(_cdates),
+                    scope,
                 )
             except Exception as e:
                 logger.warning("[L3] Step 0.5: 期货面板数据加载失败 (%s)，使用 IC-only 去重", e)
