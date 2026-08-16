@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.104.0+73
+> 版本: v2.104.0+77
 > 最后更新: 2026-08-15
 
 ---
@@ -412,7 +412,7 @@ TOTAL                                      20326   1254    94%
 | `tests/factor_engine/test_portfolio_optimizer.py` | 19 | 组合优化器（GAP-F07）：风险平价/均值方差 + 换手/VaR/集中度/杠杆约束 + scipy 降级 + synthesize_signals optimizer 模式接入 |
 | `tests/data_sources/test_mcp_degradation.py` | 6 | MCP 降级（GAP-F04）：未启用返回 None / 启用未注入抛错 / 注入正常调用 |
 | `tests/factor_engine/test_ablation.py` | ~20 | 消融实验（五种消融模式 + 边界情况） |
-| `tests/factor_engine/test_risk_tag.py` | ~10 | 风险标签闭环验证 |
+| `tests/factor_engine/test_risk_tag.py` | 16 | 风险标签闭环验证（v2.104.0+74 存量失败修复：mock walk_forward 补 n_windows_completed=2，对齐 GAP-121 WalkForward 强制门；v2.104.0+75 新增种子预跳过 2 用例：已入库 active 种子评估前拦截、未入库种子正常评估晋升；v2.104.0+76 新增退化因子 2 用例：冷却期内（<30 天）跳过评估、冷却期满重新评估并复用原 factor_id 激活晋升） |
 | `tests/factor_engine/test_shap_analyzer.py` | ~14 | SHAP 局部可解释性分析 |
 | `tests/factor_engine/test_robustness.py` | ~20 | 鲁棒性审查（对抗样本/缺失值/分布外） |
 | `tests/factor_engine/test_causal_validator.py` | ~14 | 因果结构审查（自然实验/预测误差） |
@@ -556,7 +556,7 @@ TOTAL                                      20326   1254    94%
 | `tests/scripts/test_migrate_state_to_sqlite.py` | 6 | E.3 S2 状态库后端迁移脚本（2026-08-13）：迁移闭环（DuckDB 源→SQLite 目标行数一致/值 JSON 可解析）/seq 保序 + AUTOINCREMENT 接续（新增 upsert 从 max+1 继续）/幂等保护（目标非空未 --force 拒绝）/--force 覆盖重建清脏数据/源库写锁占用降级拒绝/源缺失报错 |
 | `tests/test_data_futures_fundamental.py` | 40 | 期货基本面 provider（库存/基差/仓单，GAP-083 补充 + GAP-091 关闭，2026-08-11）：品种解析 5 + 库存归一化 4 + 基差归一化 2 + 库存获取 7 + 基差获取 4 + 仓单 17（CZCE dict 聚合/缺品种/空表/非 dict + CZCE 成功/GFEX 成功/SHFE·DCE 东财路由/INE 东财小写码/无映射 EC 空/股指空/未知空/缓存/部分日失败跳过/核心子集全部路由/阶段 1 交易所映射覆盖/东财映射全覆盖/东财映射无孤儿）+ FTSDataProvider 挂接 2，全部 monkeypatch 隔离网络 |
 | `tests/store/test_duckdb_lock.py` | 4 | E.4 S1 跨进程写锁组件（2026-08-13）：互斥（A 持锁 B 超时获取失败，释放后主线程可再获取）/重复获取超时抛 TimeoutError/锁文件创建于 data/.locks/ 且窗口结束释放后可再获取/重复获取（同线程不可重入语义） |
-| **合计** | **5377+** | plans/28 追加：test_regime.py →86（T1~T6 扩增）、test_regime_hmm.py →47（T2 扩增）、新增 test_regime_calibration.py 3 + test_regime_model_selection.py 2 + test_regime_validation.py 3、test_portfolio_loop.py →217、test_portfolio_loop_adaptive.py →12、test_config_settings.py →65、test_prometheus_metrics.py →42（T10 +4）；plans/29 P1 追加：test_migrate_elite_json_to_catalog.py 17；plans/29 P2 追加：test_state_db.py 11 + test_migrate_state_to_duckdb.py 8；plans/29 P3-A 追加：test_factor_optimizer.py →51（TestFactorSignalCacheParquet +5）；plans/29 P3-B 追加：test_archive_history_cold.py 7；GAP-091 阶段 2 追加：test_data_futures_fundamental.py 36→40（+4：东财路由/INE/EC 空/映射覆盖）；E.3 S2 追加：test_state_db.py 11→14（+3 SQLite 特性） + test_migrate_state_to_sqlite.py 6；E.4 S1 追加：test_duckdb_lock.py 4；GAP-117 追加：test_gap_threshold_calibration.py 7；**plans/36（v2.104.0+43）追加：test_portfolio_loop.py 227→237（+10：综合评分 5 + quality_weight 3 + 滚动 OOS 2）+ test_factor_clustering.py 43→48（+5：TestSelectRepresentativeScoreMap——score_map 优先于 sharpe/回退兼容/top-2 低相关保留/相关≥0.5 拦截/run 透传）**；**plans/37（v2.104.0+54~+57）追加：test_rolling_native.py 28 + test_seed_ops_native.py 56 + test_ops_native_batch3.py 48 + test_panel_vector.py 30→31（Phase 3 默认开启回归）** |
+| **合计** | **5377+** | plans/28 追加：test_regime.py →86（T1~T6 扩增）、test_regime_hmm.py →47（T2 扩增）、新增 test_regime_calibration.py 3 + test_regime_model_selection.py 2 + test_regime_validation.py 3、test_portfolio_loop.py →217、test_portfolio_loop_adaptive.py →12、test_config_settings.py →65、test_prometheus_metrics.py →42（T10 +4）；plans/29 P1 追加：test_migrate_elite_json_to_catalog.py 17；plans/29 P2 追加：test_state_db.py 11 + test_migrate_state_to_duckdb.py 8；plans/29 P3-A 追加：test_factor_optimizer.py →51（TestFactorSignalCacheParquet +5）；plans/29 P3-B 追加：test_archive_history_cold.py 7；GAP-091 阶段 2 追加：test_data_futures_fundamental.py 36→40（+4：东财路由/INE/EC 空/映射覆盖）；E.3 S2 追加：test_state_db.py 11→14（+3 SQLite 特性） + test_migrate_state_to_sqlite.py 6；E.4 S1 追加：test_duckdb_lock.py 4；GAP-117 追加：test_gap_threshold_calibration.py 7；**plans/36（v2.104.0+43）追加：test_portfolio_loop.py 227→237（+10：综合评分 5 + quality_weight 3 + 滚动 OOS 2）+ test_factor_clustering.py 43→48（+5：TestSelectRepresentativeScoreMap——score_map 优先于 sharpe/回退兼容/top-2 低相关保留/相关≥0.5 拦截/run 透传）**；**plans/37（v2.104.0+54~+57）追加：test_rolling_native.py 28 + test_seed_ops_native.py 56 + test_ops_native_batch3.py 48 + test_panel_vector.py 30→31（Phase 3 默认开启回归）**；**v2.104.0+77（GAP-121 扩展）追加：test_portfolio_loop.py 261→262（+1：energy 市场 Step 0.5 面板收缩至能源化工 20 品种（ENERGY_CHAIN_SYMBOLS ∪ ENERGY_CHAIN_HOLDOUT），futures 市场保持默认全池）** |
 |
 
 ---

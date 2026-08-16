@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+73
+> 版本: v2.104.0+77
 > 最后更新: 2026-08-10
 
 ---
@@ -882,6 +882,7 @@ FTS (因子推演) — 支持期货横截面因子演化
   （get_dominant_contracts() 按 contract_kline 最新交易日最大成交量判定）。
 - L3 定时任务（20:00）组合构建显式走期货路径（v2.73.0）：`elite_dir=futures_elite_dir` + `market="futures"`，与 CLI `portfolio run --universe futures` 对齐；完成后触发信号管道使用 `--universe all` 全量商品池。
 - L3 `run()` Step 0.5 期货分支自动构建市场级合成 OHLCV（v2.98.1，方案 B）：未显式传 `market_ohlcv` 时，用 `SectorRegimeSelector._build_sector_ohlcv`（全品种 close 截面均值 + volume 截面和）构建市场级合成 OHLCV，激活 Step 2.5 Regime 自适应权重调整（此前定时任务/CLI 期货路径因 `market_ohlcv=None` 恒跳过）；数据不足/构建异常降级置 None 保持原跳过路径；仅期货路径生效（股票路径已随股票管线剥离至 fts-stock）。
+- L3 `run()` Step 0.5 面板范围按市场收缩（v2.104.0+77，GAP-121 扩展）：energy 市场显式传 `symbols=ENERGY_CHAIN_SYMBOLS ∪ ENERGY_CHAIN_HOLDOUT`（能源化工 20 品种 = 训练池 12 + 盲测池 8，SSOT config/futures_universe.yaml），替代默认全期货核心池（`FUTURES_CORE_SUBSET`，25 品种）——减少能源链每日重算的数据加载耗时；面板仅用于 Step 1a 相关性去重 / Step 1.5 OOS / Step 1.8 聚类 / Step 0.5b Regime 合成 OHLCV（合成指数改由能源化工 20 品种构建，Regime 检测语境与能源组合一致），不参与权重计算；futures 市场保持默认全池不变（`symbols=None` 走 `FUTURES_CORE_SUBSET`）。
 - Regime 机构级优化链路（plans/28，2026-08-11）：`regime_hmm.MultiHorizonHMMDetector`（多周期 HMM 后验概率输出 regime_probs，28-T2）→ `regime_calibration.RegimeConfidenceCalibrator`（置信度熵标定 exposure_scale 仓位缩放：`scaled = confidence × (1 − entropy_penalty × H_norm)`，28-T4，`_compute_exposure_scale` 在 Step 2.5 计算、build_combo 消费）→ `regime_model_selection.BICStateSelector`（BIC 状态数选择 + StateMapStabilizer 防翻转，28-T7）→ `regime_validation.RegimeOutOfSampleValidator`（制度有效性样本外验证 + 全制度概率比对，28-T9）。`PortfolioLoop` Step 2.5 组合链路：regime_probs 概率混合权重（`probability_mix` 开关，28-T3，无 probs / 关闭时回退硬查表）→ RegimeSmoother 不对称切换（`de_risk_alpha`/`re_risk_alpha`，28-T6）→ exposure_scale 置信度仓位缩放（`confidence_scale` 开关，关闭时恒 1.0）→ `prometheus_metrics.record_regime_metrics` 观测指标上报（fts_regime_confidence/entropy_norm/exposure_scale/blend_hhi/name，28-T10，失败不阻断主流程）。
 - 股票 L3 定时任务（v2.98.3，已剥离）：`l3_portfolio_loop_stock`（每周五 19:30 重算组合权重）与 `daily_signal_pipeline`（工作日 08:45）等股票调度已随股票管线剥离至 fts-stock（2026-08），主系统仅保留期货调度。
 
