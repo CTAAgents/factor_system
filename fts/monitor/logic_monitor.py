@@ -6,10 +6,12 @@ HARNESS §11-logic-review-plan.md §C.2:
 
 检查项:
     1. 因子行为漂移检测 — 计算因子输出与经典逻辑基准的相关性变化
-    2. 极端预测占比 — 预测收益率超过 ±5% 的样本比例，超阈值报警
+    2. 极端预测占比 — 连续信号：z-score 归一后 |z|>2 样本占比超阈值报警；
+       离散信号（唯一值 ≤20，如突破因子 {-1,0,+1}）：主导档位占比 ≥95% 退化报警
+       （v2.104.0+72 双口径，修复离散信号 z-score 系统性误报）
     3. 换月日信号异常报警 — 换月日前后信号均值/方差与历史对比，超 3σ 报警
 
-版本: v1.0.0
+版本: v1.1.0
 """
 
 from __future__ import annotations
@@ -87,6 +89,9 @@ class ExtremePredictionResult:
         extreme_ratio: 极端预测占比
         threshold: 报警阈值
         is_alarmed: 是否触发报警
+        method: 检测口径（"zscore" 连续信号 z-score / "discrete" 离散信号主导档位退化检测）
+        dominant_ratio: 离散口径下主导档位占比（连续口径为 NaN）
+        discrete_nunique: 离散口径下唯一值数量（连续口径为 None）
     """
 
     factor_id: str
@@ -96,6 +101,9 @@ class ExtremePredictionResult:
     extreme_ratio: float
     threshold: float = 0.05
     is_alarmed: bool = False
+    method: str = "zscore"
+    dominant_ratio: float = float("nan")
+    discrete_nunique: Optional[int] = None
 
 
 @dataclass
@@ -167,22 +175,34 @@ class LogicMonitor:
     DRIFT_THRESHOLD: float = 0.3
     EXTREME_RATIO_THRESHOLD: float = 0.05
     CONTRACT_SWITCH_SIGMA: float = 3.0
+    # 离散信号判定与退化告警（2026-08-16 v2.104.0+72，GAP-121 逻辑监控口径修正）：
+    # 离散三态信号（如突破因子 {-1,0,+1}）经 z-score 归一后全部非零档位天然落入 |z|>2
+    # 极端区，产生系统性误报。改为唯一值数量判定离散性，用"主导档位占比"检测退化
+    # （单一档位占比 ≥ 阈值 → 信号退化为近常数，因子失效）而非 z-score 极端值。
+    DISCRETE_NUNIQUE_THRESHOLD: int = 20
+    DISCRETE_DOMINANT_THRESHOLD: float = 0.95
 
     def __init__(
         self,
         drift_threshold: float = 0.3,
         extreme_ratio_threshold: float = 0.05,
         contract_switch_sigma: float = 3.0,
+        discrete_nunique_threshold: int = 20,
+        discrete_dominant_threshold: float = 0.95,
     ):
         """
         Args:
             drift_threshold: 漂移判断阈值（与基准的相关性低于此值视为漂移，默认 0.3）
             extreme_ratio_threshold: 极端预测占比报警阈值（默认 5%）
             contract_switch_sigma: 换月日异常 sigma 阈值（默认 3.0）
+            discrete_nunique_threshold: 信号唯一值数量 ≤ 此值判定为离散信号（默认 20）
+            discrete_dominant_threshold: 离散信号主导档位占比告警阈值（默认 0.95）
         """
         self._drift_threshold = drift_threshold
         self._extreme_ratio_threshold = extreme_ratio_threshold
         self._contract_switch_sigma = contract_switch_sigma
+        self._discrete_nunique_threshold = discrete_nunique_threshold
+        self._discrete_dominant_threshold = discrete_dominant_threshold
 
     def run(
         self,
@@ -282,7 +302,15 @@ class LogicMonitor:
         factor_id: str,
         signals: np.ndarray,
     ) -> ExtremePredictionResult:
-        """检查极端预测占比。"""
+        """检查极端预测占比（连续信号 z-score / 离散信号主导档位退化双口径）。
+
+        连续信号（唯一值数量 > discrete_nunique_threshold）沿用 z-score 口径：
+        归一化后 |z|>2 的样本占比超过阈值报警。
+        离散信号（唯一值数量 ≤ 阈值，如突破因子 {-1,0,+1}）改用主导档位退化
+        检测：计算各档位占比，单一档位占比 ≥ discrete_dominant_threshold 视为
+        信号退化为近常数（因子失效）报警；正常离散分布不报警——修复 z-score
+        对离散信号全部非零档位落入极端区的系统性误报（2026-08-16 能源链 22.1%）。
+        """
         valid = signals[~np.isnan(signals)]
         total = len(valid)
 
@@ -297,7 +325,12 @@ class LogicMonitor:
                 is_alarmed=False,
             )
 
-        # 信号标准化后判断极端值
+        # 离散信号判定：唯一值数量少 → 分箱口径
+        nunique = len(np.unique(valid))
+        if nunique <= self._discrete_nunique_threshold:
+            return self._check_extreme_discrete(factor_id, valid, total, nunique)
+
+        # 连续信号：信号标准化后判断极端值
         sig_mean = np.mean(valid)
         sig_std = np.std(valid)
         if sig_std > 0:
@@ -319,6 +352,37 @@ class LogicMonitor:
             extreme_ratio=float(extreme_ratio),
             threshold=self._extreme_ratio_threshold,
             is_alarmed=is_alarmed,
+            method="zscore",
+        )
+
+    def _check_extreme_discrete(
+        self,
+        factor_id: str,
+        valid: np.ndarray,
+        total: int,
+        nunique: int,
+    ) -> ExtremePredictionResult:
+        """离散信号极端检测（主导档位退化口径）。
+
+        对离散信号（如 {-1,0,+1} 突破因子），z-score 归一无统计意义（全部非零
+        档位天然 |z|>2）。改为统计各档位占比，检测主导档位占比是否 ≥ 阈值——
+        仅当信号退化为近常数（单一档位占比异常高，因子失效）时报警。
+        """
+        _, counts = np.unique(valid, return_counts=True)
+        dominant_ratio = float(np.max(counts)) / total
+        is_alarmed = dominant_ratio >= self._discrete_dominant_threshold
+
+        return ExtremePredictionResult(
+            factor_id=factor_id,
+            total_samples=total,
+            extreme_positive=0,
+            extreme_negative=0,
+            extreme_ratio=dominant_ratio,
+            threshold=self._discrete_dominant_threshold,
+            is_alarmed=is_alarmed,
+            method="discrete",
+            dominant_ratio=dominant_ratio,
+            discrete_nunique=nunique,
         )
 
     def _check_contract_switch(
@@ -428,6 +492,9 @@ class LogicMonitor:
         lines.append(f"   极端负向:        {e.extreme_negative}")
         lines.append(f"   极端占比:        {e.extreme_ratio:.2%}")
         lines.append(f"   报警阈值:        {e.threshold:.2%}")
+        lines.append(f"   检测口径:        {'离散-主导档位退化' if e.method == 'discrete' else '连续-zscore'}")
+        if e.method == "discrete":
+            lines.append(f"   主导档位占比:    {e.dominant_ratio:.2%}（唯一值 {e.discrete_nunique} 个）")
         lines.append(f"   是否报警:        {'⚠️ 是' if e.is_alarmed else '否'}")
 
         # 3. 换月日

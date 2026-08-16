@@ -274,6 +274,97 @@ def factor_program(data, params):
         # 常数信号不会产生极端值
         assert isinstance(result, LogicMonitorResult)
 
+    # ── v2.104.0+72 双口径检测（离散信号不误报）──
+
+    def _discrete_factor(self, name: str, signal_fn) -> FactorProgram:
+        """构造输出离散三态信号的因子。"""
+        code = f'''
+def factor_program(data, params):
+    """Alpha: {name}"""
+    import numpy as np
+    return {signal_fn}
+'''
+        return create_factor_program(
+            name=name,
+            code=code,
+            params={},
+            signature={
+                "input_fields": ["close", "volume"],
+                "output_type": "signal",
+                "frequency": "daily",
+            },
+            source="seed",
+            economic_logic={
+                "theory": 3,
+                "behavioral": 2,
+                "microstructure": 3,
+                "institutional": 2,
+                "narrative": name,
+            },
+        )
+
+    def test_discrete_breakout_factor_no_false_alarm(self, sample_data):
+        """离散三态突破因子（{-1,0,+1}，非零占比 22%）不应触发极端报警。
+
+        回归复现 fct_211b96d7（fut_price_volatility_breakout，能源链 22.1% 误报）：
+        z-score 口径下离散信号全部非零档位天然 |z|>2，须走主导档位退化口径。
+        """
+        signal = "np.where(np.arange(len(data['close'])) % 5 < 1, 1.0, np.where(np.arange(len(data['close'])) % 9 == 0, -1.0, 0.0))"
+        factor = self._discrete_factor("breakout_tri_state", signal)
+
+        monitor = LogicMonitor()
+        result = monitor.run(factor, sample_data, switch_dates=[])
+
+        ex = result.extreme_prediction
+        assert ex.method == "discrete", "离散信号应走 discrete 口径"
+        assert ex.discrete_nunique is not None and ex.discrete_nunique <= 20
+        # 非零占比约 22%，但主导档位（0）占比约 78% < 95% → 不告警
+        assert not ex.is_alarmed, "正常离散突破因子不应触发极端报警"
+        assert ex.dominant_ratio < monitor._discrete_dominant_threshold
+
+    def test_discrete_degenerate_factor_triggers_alarm(self):
+        """退化为近常数（单一档位占比 ≥95%）的离散信号应触发报警。"""
+        signal = "np.full(len(data['close']), 1.0)"
+        factor = self._discrete_factor("degenerate_constant", signal)
+        data = pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-01", periods=100, freq="D"),
+                "close": 100 + np.arange(100) * 0.1,
+            }
+        )
+
+        monitor = LogicMonitor()
+        result = monitor.run(factor, data, switch_dates=[])
+
+        ex = result.extreme_prediction
+        assert ex.method == "discrete"
+        assert ex.is_alarmed, "退化离散信号（主导档位 100%）应触发报警"
+        assert ex.dominant_ratio >= monitor._discrete_dominant_threshold
+
+    def test_continuous_signal_stays_zscore(self, sample_data, momentum_factor):
+        """连续信号应保持 z-score 口径（method='zscore'）。"""
+        monitor = LogicMonitor()
+        result = monitor.run(momentum_factor, sample_data, switch_dates=[])
+
+        ex = result.extreme_prediction
+        assert ex.method == "zscore"
+        assert ex.discrete_nunique is None
+
+    def test_discrete_threshold_configurable(self, sample_data):
+        """离散判定阈值应可配置。"""
+        signal = "np.where(np.arange(len(data['close'])) % 2 == 0, 1.0, 0.0)"
+        factor = self._discrete_factor("binary_signal", signal)
+
+        # nunique=2，默认阈值 20 判定离散
+        monitor = LogicMonitor()
+        result = monitor.run(factor, sample_data, switch_dates=[])
+        assert result.extreme_prediction.method == "discrete"
+
+        # 阈值设为 1 → nunique=2 > 1，判定连续（走 zscore）
+        monitor2 = LogicMonitor(discrete_nunique_threshold=1)
+        result2 = monitor2.run(factor, sample_data, switch_dates=[])
+        assert result2.extreme_prediction.method == "zscore"
+
 
 # ─── 换月日检测测试 ────────────────────────────────────────
 
