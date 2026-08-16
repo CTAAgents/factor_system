@@ -82,7 +82,25 @@ def _evaluate_cross_section(factor: dict, panel: dict, common_dates: Any, trace_
     mt = evaluate_multiple_tests([temp_eval])
     wf: Optional[dict] = None
     try:
-        wf = cross_section_walk_forward(factor, panel, common_dates, config=None)
+        # GAP-121 走航自适应配置（复刻 AuditPipeline._build_wf_config）：短样本
+        # 缩短窗口/步长，保证 500 日面板也能产出 >=2 个 OOS 窗口（config=None
+        # 默认长窗口配置对短样本返回 0 窗口，导致 OOS 审计缺失、因子全部
+        # needs_human/rejected，futures L3 池无法恢复）。
+        from fts.factor_engine.walk_forward import DEFAULT_WALK_FORWARD_CONFIG
+
+        cfg = dict(DEFAULT_WALK_FORWARD_CONFIG)
+        _n = len(common_dates) if common_dates is not None else 0
+        _years = _n / 250.0
+        if _years < 3.0:
+            if _years >= 2.0:
+                cfg.update(window_years=1, step_months=3, min_oos_months=2, n_windows=4)
+            elif _years >= 1.0:
+                cfg.update(window_years=1, step_months=2, min_oos_months=1, n_windows=3)
+            elif _years >= 0.5:
+                cfg.update(window_years=0, step_months=1, min_oos_months=0, n_windows=2)
+            else:
+                cfg.update(window_years=0, step_months=0, min_oos_months=0, n_windows=1)
+        wf = cross_section_walk_forward(factor, panel, common_dates, config=cfg)
     except Exception as e:  # noqa: BLE001
         logger.warning("[qa-refill] 横截面走航失败 %s: %s", factor.get("factor_id", "?"), e)
     if wf and wf.get("n_windows_completed", 0) > 0:
