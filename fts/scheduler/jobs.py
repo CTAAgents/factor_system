@@ -627,6 +627,38 @@ def l2_batch_mining_energy_job() -> None:
 # ── L2 周度评审 — 每周日 10:00（45 计划：评审周度化，替代月度衰减 + run() 每日调用）───
 
 
+def _review_gate_weekly(market: str, trace_id: str) -> dict[str, Any]:
+    """评审质检阀门周度巡检（v2.104.0+89，L2→L3 独立阀门模块功能 2）。
+
+    周末定期巡检：
+      Step C-1  review_l3_pool 复核 factor_reviews.approved（L3 池）因子——
+                不合格/质检失效撤销 approved，退回 L2 冷却池；
+      Step C-2  list_pending 待审因子按完整质检门禁机审兜底（review_inplace，
+                宁缺毋滥：质检记录缺失转人审，不流入 L3）。
+    """
+    from fts.factor_engine.factor_inspector import FactorReviewWorkflow
+
+    wf = FactorReviewWorkflow(market=market)
+    pool_res = wf.review_l3_pool(market=market)
+    demoted = pool_res.get("demoted", [])
+    pending = wf.list_pending(market=market, limit=200)
+    reviewed = 0
+    for item in pending:
+        fid = item.get("factor_id")
+        if fid:
+            wf.review_inplace(fid)
+            reviewed += 1
+    logger.info(
+        "[L2评审][%s] Step C 阀门巡检完成: L3池扫描=%d 退回=%d pending机审=%d (trace_id=%s)",
+        market,
+        pool_res.get("scanned", 0),
+        len(demoted),
+        reviewed,
+        trace_id,
+    )
+    return {"market": market, "scanned": pool_res.get("scanned", 0), "demoted": demoted, "auto_reviewed": reviewed}
+
+
 def l2_review_job() -> None:
     """L2 周度评审：精英重审 + 衰减评估 + 自动淘汰（45 计划候选③）。
 
@@ -709,6 +741,13 @@ def l2_review_job() -> None:
                 if repo.retire_factor(fid, reason="L2周度评审自动淘汰", elite_dir=elite_dir):
                     retired_count += 1
             logger.warning("[L2评审] 淘汰已同步至 DuckDB + JSON: %d/%d 个因子", retired_count, len(retired))
+
+        # ---- Step C: 评审质检阀门周度巡检（v2.104.0+89，功能 2） ----
+        # L3 池巡检 + pending 因子机审兜底
+        try:
+            _review_gate_weekly("futures", trace_id)
+        except Exception as e:  # noqa: BLE001
+            logger.error("[L2评审] Step C 阀门巡检失败（不阻断）: %s", e, exc_info=True)
     except Exception as e:
         logger.error("[L2评审] 失败: %s", e, exc_info=True)
 
@@ -775,6 +814,13 @@ def l2_review_energy_job() -> None:
                 ):
                     retired_count += 1
             logger.warning("[L2评审][energy] 淘汰已同步至 DuckDB + JSON: %d/%d 个因子", retired_count, len(retired))
+
+        # ---- Step C: 评审质检阀门周度巡检（v2.104.0+89，功能 2） ----
+        # L3 池巡检 + pending 因子机审兜底（energy 库 factor_catalog_energy.duckdb）
+        try:
+            _review_gate_weekly("energy", trace_id)
+        except Exception as e:  # noqa: BLE001
+            logger.error("[L2评审][energy] Step C 阀门巡检失败（不阻断）: %s", e, exc_info=True)
     except Exception as e:
         logger.error("[L2评审][energy] 失败: %s", e, exc_info=True)
 
