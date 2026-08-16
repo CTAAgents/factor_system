@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+100
+> 版本: v2.104.0+102
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,8 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+102** | **2026-08-17** | **L1 bulk 采集层修复+扩容：①东财研报 400 修复(必填 beginTime/endTime/qType) ②recent() 按 collected_at 采集时间过滤 ③nonen 导航垃圾黑名单过滤 ④新增 5 源(Crossref/NBER/巨潮/新浪/SemanticScholar) collect_all 5→10 源；实测：东财移除关键词硬过滤(采集层保量) 40 条、巨潮改 POST 13 条、Crossref/NBER/新浪各 20 条、SS 429 限速重试降级** |** |
+| **v2.104.0+101** | **2026-08-17** | **全局市场开关 FTS_DEFAULT_MARKET 运行时全局切换：调度任务门控(no-op)+CLI/仓储默认值跟随全局** |** |
 | **v2.104.0+100** | **2026-08-17** | **GAP-132 因子巡检默认改能化链(market=energy)+dry-run：评估历史不足(每因子1条)致趋势检测 insufficient_data 退化检测静默失效，巡检防误降级；GAP 登记 08-gap-analysis** |** |
 | **v2.104.0+99** | **2026-08-17** | **内部调度器一键启停：FTS_INTERNAL_SCHEDULER_ENABLED env 开关 + fts scheduler status 子命令 + run 打印实际调度数** |** |
 | **v2.104.0+98** | **2026-08-17** | **内部调度停用：REGISTRY 全部任务 enabled=False，TRAE Schedule 为唯一调度源（INTERNAL_SCHEDULER_ENABLED 开关）** |** |

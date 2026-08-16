@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+100
+> 版本: v2.104.0+102
 > 最后更新: 2026-08-10
 
 ---
@@ -69,10 +69,16 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │    Pipeline，l1_bulk_enabled 开关）：                                  │
 │    ├ bulk_collector.py — 全球多源批量采集：arXiv q-fin 4 类×50（l1_    │
 │    │   source_arxiv_max_results）+ OpenAlex（覆盖 SSRN 工作论文与全球   │
-│    │   期刊）+ 东财研报 pageSize=100（l1_source_report_page_size）+     │
-│    │   全球商品/原油报告（CFTC COT/EIA/IEA/OPEC），增量去重落独立库     │
-│    │   data/l1_knowledge_cache.duckdb（(source,ref_id) 唯一索引，       │
-│    │   E.4 短连接 + filelock），单日 ≥300 篇按来源分列审计（如实标注）  │
+│    │   期刊）+ 东财研报 pageSize=100（l1_source_report_page_size，      │
+│    │   v2.104.0+101 修复必填 beginTime/endTime/qType）+ 全球商品/原油    │
+│    │   报告（CFTC COT/EIA/IEA/OPEC）+ 日韩法能源机构研报（IEEJ/KEEI/    │
+│    │   IFPEN，v2.104.0+101 导航垃圾标题黑名单过滤）+ 新增 5 源           │
+│    │   （v2.104.0+101：Crossref 期刊/预印本 + NBER 工作论文 + 巨潮       │
+│    │   cninfo 中文公告/研报 + 新浪研报中心 + Semantic Scholar 429 限速  │
+│    │   重试降级），增量去重落独立库 data/l1_knowledge_cache.duckdb       │
+│    │   （(source,ref_id) 唯一索引，E.4 短连接 + filelock），单日 ≥300   │
+│    │   篇按来源分列审计（如实标注）；recent() 按 collected_at 采集时间  │
+│    │   过滤（v2.104.0+101，修复 arXiv 当日采集/发布日早于窗口被漏）     │
 │    ├ knowledge_filter.py — 粗筛层：TextEmbedder（paraphrase-           │
 │    │   multilingual-MiniLM-L12-v2 惰性加载，模型缺失降级关键词规则并    │
 │    │   如实标记）+ KnowledgeRelevanceFilter 余弦≥l1_embedding_threshold │
@@ -1158,6 +1164,11 @@ class FactorKind(str, Enum):
 | 因子巡检 (FactorInspector) | 04:00 | 每日 | 扫描能化链 elite 因子（market="energy"，GAP-132 统一巡检口径）检测退化因子；GAP-132 因评估历史不足暂以 dry-run（commit=False）运行，仅输出退化候选不落库，待评估多期积累后恢复自动降级 |
 | L2 周度评审 | 周日 10:00 | 每周 | 45 计划候选③：精英重审 + 衰减评估 + 自动淘汰（替代月度衰减 + run() 每日调用） |
 | Health Check | 每 10 分钟 | 高频 | 状态监控 |
+
+> 市场路由（v2.104.0+101）：全局市场开关 `FTS_DEFAULT_MARKET`（settings.default_market，默认 "futures"）。
+> 市场专属任务在函数入口门控（futures 任务仅全局 futures 时执行，energy 任务仅全局 energy 时执行，不匹配记日志 no-op 空转）；
+> `l1_meta_loop_job`/`factor_inspector_job` 未显式指定 market 时跟随全局；CLI `--market`/`--universe` 未指定时默认跟随全局；
+> `FactorRepository`/`FactorInspector` 构造 `market=None` 时跟随全局；共享数据/监控任务（sync_futures_data/health_check/data_quality_eval/data_level_monitor）不门控（energy 亦依赖期货数据层）。
 
 ---
 
