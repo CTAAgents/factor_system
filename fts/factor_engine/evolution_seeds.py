@@ -32,6 +32,7 @@ import pandas as pd
 
 from .contracts import FactorEvaluation  # noqa: E402 — 延迟导入规避循环依赖
 from .evaluation_chain import cross_section_evaluate_backtest  # noqa: E402 — 延迟导入规避循环依赖
+from .l1_l2_funnel import funnel_record  # noqa: E402 — plans/44 D1: L1→L2 闭环漏斗
 from .seed_pool import compute_seed_correlations  # noqa: E402
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型检查
@@ -51,12 +52,41 @@ class SeedManager:
     转发（兼容测试零改动，见 34 §8.5）。
     """
 
+    # v2.104.0+76: 退化因子冷却期（天）。质检不合格因子（status=degraded，
+    # 含种子池与从 elite 退回两类）在降级后冷却期内不参与种子评估，
+    # 期满后放行重新评估（回归通道，配合 _promote_to_elite 重新激活）。
+    _degraded_cooldown_days: int = 30
+
     def __init__(self, owner: Any) -> None:
         self._owner: Any = owner
         # ── 领域独享状态随迁（原主类 __init__ 对应段迁移） ──
         # GAP-I304 (v2.79.0): Barra 风格暴露缓存（成功=dict / 失败=None，避免每因子重复构建）
         self._barra_exposures_cache: Optional[dict[str, Any]] = None
         self._barra_exposures_attempted: bool = False
+
+    def _within_degraded_cooldown(self, existing: dict[str, Any]) -> bool:
+        """判断退化因子是否仍在冷却期内（v2.104.0+76）。
+
+        以 factor_catalog.updated_at 作为降级时间戳（factor_inspector 降级经
+        update_factor 自动回写 updated_at=CURRENT_TIMESTAMP）。时间戳缺失或
+        解析失败时返回 False（放行评估，宁多评估不锁死回归通道）。
+
+        Args:
+            existing: get_factor_by_name 返回的因子记录
+
+        Returns:
+            True: 冷却期内（降级未满 _degraded_cooldown_days 天）
+            False: 冷却期满或时间戳不可用
+        """
+        raw = existing.get("updated_at")
+        if not raw:
+            return False
+        try:
+            dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+            return (now - dt).days < self._degraded_cooldown_days
+        except (ValueError, TypeError):
+            return False
 
     def _evaluate_and_promote_seeds(
         self,
@@ -83,8 +113,49 @@ class SeedManager:
             晋升的种子因子数量
         """
         promoted = 0
+        skipped_existing = 0
         for seed in seeds:
             try:
+                # ── 预跳过优化（v2.104.0+75）：已入库且仍有效的种子不再重复评估 ──
+                # 此前去重仅在 _promote_to_elite（完整评估之后）执行，已入库的
+                # YAML 种子每次运行都被白跑一轮横截面评估（IC/质量卡/审计/回测），
+                # 能源链实测浪费约 34% 种子评估算力。此处前置查重，评估前拦截。
+                # v2.104.0+76 三态：active → 跳过（有效种子）；degraded 且在
+                # 冷却期内（< _degraded_cooldown_days 天）→ 跳过（质检不合格
+                # 因子 1 个月内不再评估）；degraded 且冷却期满 → 放行重新评估
+                # （回归通道，与 _promote_to_elite 退化因子重新激活对称）。
+                seed_name = seed.get("name", "")
+                try:
+                    existing = self._owner._get_repo().get_factor_by_name(
+                        seed_name, market=self._owner.market
+                    )
+                    if existing and existing.get("status") == "active":
+                        skipped_existing += 1
+                        logger.info(
+                            "[evo] 预跳过已入库种子: %s (DuckDB 已存在且 active, market=%s, trace_id=%s)",
+                            seed_name,
+                            self._owner.market,
+                            getattr(self._owner, "_trace_id", ""),
+                        )
+                        continue
+                    if (
+                        existing
+                        and existing.get("status") == "degraded"
+                        and self._within_degraded_cooldown(existing)
+                    ):
+                        skipped_existing += 1
+                        logger.info(
+                            "[evo] 冷却期内跳过退化种子: %s (degraded < %d 天, market=%s, trace_id=%s)",
+                            seed_name,
+                            self._degraded_cooldown_days,
+                            self._owner.market,
+                            getattr(self._owner, "_trace_id", ""),
+                        )
+                        continue
+                except Exception:
+                    # 查重失败不阻断评估（保持原行为，由 _promote_to_elite 兜底）
+                    pass
+
                 if self._owner._is_cross_section:
                     evaluation = self._owner._evaluate_cross_section(seed, trace_id)
                 else:
@@ -276,12 +347,21 @@ class SeedManager:
                         continue
                     elite_ids.append(seed["factor_id"])
                     promoted += 1
+                    # plans/44 D1: L1→L2 闭环 — L1 注入候选晋升精英回写 promoted
+                    self._record_l1_promoted(seed, trace_id)
                     print(
                         f"[evo] 种子因子晋升: {seed['name']} (IC={bt.get('ic', 0):.4f}, "
                         f"质量分={inspection.total_score}/50)"
                     )
             except Exception:
                 continue
+        if skipped_existing:
+            logger.info(
+                "[evo] 种子预跳过完成: 已入库 %d 个, 实际评估 %d 个, 晋升 %d 个",
+                skipped_existing,
+                len(seeds) - skipped_existing,
+                promoted,
+            )
         return promoted
 
     def _merge_l1_candidates(
@@ -434,6 +514,9 @@ class SeedManager:
             except OSError as e:
                 logger.warning("[GAP-036] 删除 L1 候选文件失败: %s, err=%s", cand_file.name, e)
 
+        # plans/44 D1: L1→L2 闭环 — 消费数回写漏斗（L2 读取 l1_injected_* 即计入 consumed）
+        self._record_l1_consumed(consumed_ids, trace_id)
+
         # 4. 幂等: factor_pool.json pending → injected
         if consumed_ids and pool_data is not None:
             for entry in pool_data.get("factors", []):
@@ -456,6 +539,27 @@ class SeedManager:
         if consumed_ids:
             print(f"[evo] 合并 L1 注入候选: {len(consumed_ids)} 个 (GAP-031)")
         return merged
+
+    def _record_l1_consumed(self, consumed_ids: list[str], trace_id: str) -> None:
+        """plans/44 D1: L2 消费 L1 注入候选回写漏斗 consumed（空消费无操作）。"""
+        if not consumed_ids:
+            return
+        try:
+            funnel_record(market=self._owner.market, consumed=len(consumed_ids), run_id=trace_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[L1.merge] 漏斗回写失败（不阻断）: %s", e)
+
+    def _record_l1_promoted(self, seed: "FactorProgram", trace_id: str) -> None:
+        """plans/44 D1: L1 注入候选晋升精英回写漏斗 promoted（非 L1 种子无操作）。
+
+        L1 候选 parent_id 为 cand_ 前缀（meta_loop 生成），base 种子 parent_id 为 None。
+        """
+        if not str(seed.get("parent_id", "") or "").startswith("cand_"):
+            return
+        try:
+            funnel_record(market=self._owner.market, promoted=1, run_id=trace_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[evo] 漏斗 promoted 回写失败（不阻断）: %s", e)
 
     def _run_seed_correlation_check(
         self,

@@ -89,17 +89,38 @@ def register_default_tasks() -> None:
     defaults = [
         TaskSpec(
             name="l1_meta_loop",
-            cron_expression="59 7 * * 1-5",  # 工作日每日 07:59（对齐 TRAE Schedule 期货 L1 96848d52）
+            cron_expression="0 0 * * *",  # 每日 00:00（45 计划调度基线：每日知识补给 + 种子注入，供 02:00 种子评估消费）
             callable_path="fts.scheduler.jobs.l1_meta_loop_job",
             description="L1 Meta-Loop：每日知识补给 + Bootstrapping + 种子注入",
             trace_id_prefix="fts.l1",
         ),
         TaskSpec(
-            name="l2_evolution_loop",
-            cron_expression="0 0 * * 1-5",  # 工作日每日 00:00（对齐 TRAE Schedule 期货 L2 e4d82f5b）
-            callable_path="fts.scheduler.jobs.l2_evolution_loop_job",
-            description="L2 Evolution Loop：夜间因子演化（LLM 改逻辑 + optuna 调参 + 横截面评估）",
+            name="l2_evolution_weekday",
+            cron_expression="0 4 * * 1-5",  # 工作日 04:00（45 计划调度基线：种子评估 02:00 后小预算演化 ≈10）
+            callable_path="fts.scheduler.jobs.l2_evolution_weekday_job",
+            description="L2 Evolution Loop（工作日 04:00 小预算 max_generation≈10，45 计划调度基线）：先种子后演化",
             trace_id_prefix="fts.l2",
+        ),
+        TaskSpec(
+            name="l2_evolution_weekend",
+            cron_expression="0 4 * * 6",  # 周六 04:00（45 计划调度基线：周末大预算演化 ≈50）
+            callable_path="fts.scheduler.jobs.l2_evolution_weekend_job",
+            description="L2 Evolution Loop（周六 04:00 大预算 max_generation≈50，45 计划调度基线）：周末集中大规模演化",
+            trace_id_prefix="fts.l2",
+        ),
+        TaskSpec(
+            name="l2_seed_promotion",
+            cron_expression="0 2 * * *",  # 每日 02:00（45 计划候选①：L1 00:00 注入后 2h 消费，先种子后演化）
+            callable_path="fts.scheduler.jobs.l2_seed_promotion_job",
+            description="L2 种子评估晋升（45 计划候选①）：种子相关性预检 + 评估晋升入 elite 池，供当日 04:00 演化消费为父因子（不重置演化状态计数器）",
+            trace_id_prefix="fts.l2_seed",
+        ),
+        TaskSpec(
+            name="l2_batch_mining",
+            cron_expression="0 6 * * 0",  # 周日 06:00（45 计划候选②：周末集中，CPU 密集错峰）
+            callable_path="fts.scheduler.jobs.l2_batch_mining_job",
+            description="L2 批量挖掘（45 计划候选②）：BatchMiner 批量漏斗（同父多后代→并行粗筛→准入链），熔断隔离不污染演化状态",
+            trace_id_prefix="fts.l2_batch",
         ),
         TaskSpec(
             name="l3_portfolio_loop",
@@ -130,11 +151,11 @@ def register_default_tasks() -> None:
             trace_id_prefix="fts.health",
         ),
         TaskSpec(
-            name="monthly_decay_eval",
-            cron_expression="0 4 1 * *",  # 每月 1 日 04:00（对齐 TRAE Schedule 月度衰减 a6f69113）
-            callable_path="fts.scheduler.jobs.monthly_decay_eval_job",
-            description="月度治理（2026-08-13 起与重审合并）：Step A 新标准准入重审（audit/robustness/评分卡复检 active elite，不合格降级观察或淘汰，FTS_MONTHLY_REAUDIT_ENABLED=0 关闭）+ Step B 因子衰减评估（A.2 增量评估 + 状态机 + 自动淘汰）",
-            trace_id_prefix="fts.decay",
+            name="l2_review",
+            cron_expression="0 10 * * 0",  # 每周日 10:00（45 计划候选③：月度衰减周度化，替代 monthly_decay_eval 注册）
+            callable_path="fts.scheduler.jobs.l2_review_job",
+            description="L2 周度评审（45 计划候选③）：Step A 新标准准入重审（audit/robustness/评分卡复检 active elite，不合格降级观察或淘汰，FTS_MONTHLY_REAUDIT_ENABLED=0 关闭）+ Step B 因子衰减评估（A.2 增量评估 + 状态机 + 自动淘汰）",
+            trace_id_prefix="fts.l2_review",
         ),
         TaskSpec(
             name="data_quality_eval",

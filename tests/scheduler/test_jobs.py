@@ -78,7 +78,7 @@ class TestL1MetaLoopJob:
     def test_success(self, caplog):
         """成功路径：构造 MetaLoop 并运行，日志输出完成状态。"""
         result = MagicMock(status="ok", injected_candidate_ids=["a", "b"])
-        fake_meta = _fake_module(MetaLoop=MagicMock())
+        fake_meta = _fake_module(MetaLoop=MagicMock(), _make_web_collector=MagicMock(return_value=MagicMock()))
         fake_meta.MetaLoop.return_value.run.return_value = result
         fake_llm = _fake_module(get_llm_client=MagicMock(return_value=MagicMock()))
         fake_cfg = _make_cfg_module()
@@ -100,7 +100,7 @@ class TestL1MetaLoopJob:
 
     def test_success_logs_trace_id(self, caplog):
         """启动日志包含 trace_id。"""
-        fake_meta = _fake_module(MetaLoop=MagicMock())
+        fake_meta = _fake_module(MetaLoop=MagicMock(), _make_web_collector=MagicMock(return_value=MagicMock()))
         fake_llm = _fake_module(get_llm_client=MagicMock())
         with patch.dict(
             sys.modules,
@@ -117,7 +117,7 @@ class TestL1MetaLoopJob:
 
     def test_failure_caught(self, caplog):
         """MetaLoop 构造失败时捕获并记录错误，不抛出。"""
-        fake_meta = _fake_module(MetaLoop=MagicMock(side_effect=RuntimeError("llm unavailable")))
+        fake_meta = _fake_module(MetaLoop=MagicMock(side_effect=RuntimeError("llm unavailable")), _make_web_collector=MagicMock(return_value=MagicMock()))
         with patch.dict(
             sys.modules,
             {
@@ -196,8 +196,8 @@ class TestL2EvolutionLoopJob:
             caplog.set_level(logging.INFO)
             jobs.l2_evolution_loop_job()
 
-        assert "[L2] 分层训练品种: 10 个" in caplog.text
-        assert "[L2] 完成: status=ok elite=2" in caplog.text
+        assert "[L2][weekday] 分层训练品种: 10 个" in caplog.text
+        assert "[L2][weekday] 完成: status=ok elite=2" in caplog.text
 
     def test_insufficient_train_symbols(self, caplog):
         """排除盲测品种后不足 10 个时跳过。"""
@@ -220,7 +220,7 @@ class TestL2EvolutionLoopJob:
             caplog.set_level(logging.INFO)
             jobs.l2_evolution_loop_job()
 
-        assert "[L2] 训练品种不足" in caplog.text
+        assert "[L2][weekday] 训练品种不足" in caplog.text
         # 未进入演化流程
         fake_evolution.EvolutionLoop.assert_not_called()
 
@@ -245,7 +245,7 @@ class TestL2EvolutionLoopJob:
             caplog.set_level(logging.INFO)
             jobs.l2_evolution_loop_job()
 
-        assert "[L2] 无期货数据，跳过" in caplog.text
+        assert "[L2][weekday] 无期货数据，跳过" in caplog.text
 
     def test_failure_caught(self, caplog):
         """演化运行失败时捕获并记录错误。"""
@@ -268,7 +268,7 @@ class TestL2EvolutionLoopJob:
             caplog.set_level(logging.ERROR)
             jobs.l2_evolution_loop_job()  # 不应抛出
 
-        assert "[L2] 运行失败: evolution crash" in caplog.text
+        assert "[L2][weekday] 运行失败: evolution crash" in caplog.text
 
 
 # ─── L3 Portfolio Loop ───────────────────────────────────
@@ -431,8 +431,8 @@ class TestHealthCheckJob:
 # ─── 月度衰减评估 ────────────────────────────────────────
 
 
-class TestMonthlyDecayEvalJob:
-    """monthly_decay_eval_job 测试。"""
+class TestL2ReviewJob:
+    """l2_review_job 测试（45 计划候选③：月度衰减周度化重命名）。"""
 
     def _build_mocks(self, retired=None, factor_results=None):
         fake_tracker_mod = _fake_module(
@@ -474,9 +474,9 @@ class TestMonthlyDecayEvalJob:
             patch("fts.monitor.prometheus_metrics.metrics_registry", fake_registry),
         ):
             caplog.set_level(logging.INFO)
-            jobs.monthly_decay_eval_job()
+            jobs.l2_review_job()
 
-        assert "[衰减评估] 完成:" in caplog.text
+        assert "[L2评审] 衰减评估完成:" in caplog.text
         fake_registry.update_decay_counts.assert_called_once_with(
             active=1,
             decaying=1,
@@ -504,7 +504,7 @@ class TestMonthlyDecayEvalJob:
             patch("fts.monitor.prometheus_metrics.metrics_registry", fake_registry),
         ):
             caplog.set_level(logging.INFO)
-            jobs.monthly_decay_eval_job()
+            jobs.l2_review_job()
 
         reaudit_mod.run_reaudit.assert_called_once()
         assert "Step A 新标准重审完成: retain=1 shadow=2 retire=3 error=0" in caplog.text
@@ -526,7 +526,7 @@ class TestMonthlyDecayEvalJob:
             patch("fts.monitor.prometheus_metrics.metrics_registry", fake_registry),
         ):
             caplog.set_level(logging.INFO)
-            jobs.monthly_decay_eval_job()
+            jobs.l2_review_job()
 
         assert "Step A 新标准重审已关闭" in caplog.text
 
@@ -549,12 +549,12 @@ class TestMonthlyDecayEvalJob:
             patch("fts.monitor.prometheus_metrics.metrics_registry", fake_registry),
         ):
             caplog.set_level(logging.WARNING)
-            jobs.monthly_decay_eval_job()
+            jobs.l2_review_job()
 
         repo = fake_db.FactorRepository.return_value
         assert repo.get_factor.call_count == 2
         assert repo.retire_factor.call_count == 2
-        assert "[衰减评估] 淘汰已同步至 DuckDB + JSON: 2/2 个因子" in caplog.text
+        assert "[L2评审] 淘汰已同步至 DuckDB + JSON: 2/2 个因子" in caplog.text
 
     def test_metrics_sync_failure_continues(self, caplog):
         """指标同步失败时记录 warning 并继续后续流程。"""
@@ -581,10 +581,10 @@ class TestMonthlyDecayEvalJob:
             patch("fts.monitor.prometheus_metrics.metrics_registry", MagicMock()),
         ):
             caplog.set_level(logging.INFO)
-            jobs.monthly_decay_eval_job()
+            jobs.l2_review_job()
 
-        assert "[衰减评估] 指标同步失败: list fail" in caplog.text
-        assert "[衰减评估] 完成:" in caplog.text
+        assert "[L2评审] 指标同步失败: list fail" in caplog.text
+        assert "[L2评审] 衰减评估完成:" in caplog.text
 
     def test_failure_caught(self, caplog):
         """评估失败时捕获并记录错误。"""
@@ -605,9 +605,9 @@ class TestMonthlyDecayEvalJob:
             patch("fts.monitor.prometheus_metrics.metrics_registry", MagicMock()),
         ):
             caplog.set_level(logging.ERROR)
-            jobs.monthly_decay_eval_job()  # 不应抛出
+            jobs.l2_review_job()  # 不应抛出
 
-        assert "[衰减评估] 失败: tracker crash" in caplog.text
+        assert "[L2评审] 失败: tracker crash" in caplog.text
 
 
 # ─── 逻辑监控 ────────────────────────────────────────────
@@ -859,3 +859,5 @@ class TestSyncLiquidityPoolJob:
             caplog.set_level(logging.ERROR)
             jobs.sync_liquidity_pool_job()
         assert "[L-Pool] 动态池刷新失败: snapshot failed" in caplog.text
+
+

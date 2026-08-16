@@ -27,6 +27,8 @@ from futures_signal_pipeline import (
     _classify_delta_moves,
     _classify_factor_category,
     _compute_composite_scores,
+    _compute_holdout_validation,
+    _compute_per_variety_ic_matrix,
     _compute_per_variety_weights,
     _compute_signal_deltas,
     _factor_set_signature,
@@ -678,3 +680,94 @@ class TestComputeSignalDeltas:
         assert has_delta is True
         assert deltas == {"A": -0.2}
         assert reason == ""
+
+
+class TestHoldoutValidationAlignment:
+    """GAP-130 (v2.104.0+80): 新上市品种信号-收益错位修复回归测试。
+
+    旧实现：IC 验证中收盘价 reindex 共同日期（头部 NaN），但因子信号仅尾部补零
+    → 品种历史是共同日期尾部子集时，信号与收益错位 = 上市日距共同日起点缺失
+    天数，盲测 IC/品种-因子 IC 被稀释至 ≈0 误判失效（2026-08-16 能化链实测
+    BZ0 错位 32 天 / PL0 错位 42 天）。修复：信号经 `_align_factor_signal`
+    （df.index.get_indexer 向量化对齐共同日期）替代尾部补零。
+    """
+
+    @staticmethod
+    def _make_panel(n_days: int = 100, head_gap: int = 10, seed: int = 7):
+        """构造含短历史新品种的面板：FULL0 全历史 + NEW0 晚 head_gap 天上市。"""
+        rng = np.random.default_rng(seed)
+        dates = pd.date_range("2025-01-01", periods=n_days, freq="B")
+        panel: dict[str, pd.DataFrame] = {}
+        for sym, idx in (("FULL0", dates), ("NEW0", dates[head_gap:])):
+            close = 100 + rng.normal(0, 1, len(idx)).cumsum()
+            panel[sym] = pd.DataFrame(
+                {
+                    "open": close,
+                    "high": close + 1,
+                    "low": close - 1,
+                    "close": close,
+                    "volume": np.full(len(idx), 1000.0),
+                },
+                index=idx,
+            )
+        return panel, list(dates)
+
+    @staticmethod
+    def _perfect_signal_matrix(panel: dict[str, pd.DataFrame], fwd: int = 5):
+        """完美预测信号：signal[t] = 前向收益 → 正确对齐时 Spearman IC = 1.0。"""
+        sm: dict[str, dict[str, np.ndarray]] = {}
+        for sym, df in panel.items():
+            closes = df["close"].values
+            fwd_ret = np.full(len(closes), np.nan)
+            fwd_ret[:-fwd] = (closes[fwd:] - closes[:-fwd]) / np.maximum(closes[:-fwd], 1e-10)
+            sm[sym] = {"f": fwd_ret}
+        return sm
+
+    def test_holdout_validation_short_history_alignment(self):
+        """短历史新品种经对齐修复后盲测 IC ≈ 1.0（旧实现错位 → ≈ 0）。"""
+        panel, common = self._make_panel()
+        sm = self._perfect_signal_matrix(panel)
+        res = _compute_holdout_validation(sm, panel, common, {}, {"NEW0"})
+        assert res["details"]["NEW0"] > 0.9
+        assert res["details"]["FULL0"] > 0.9
+        assert res["skipped_short"] == []
+
+    def test_per_variety_ic_matrix_short_history_alignment(self):
+        """短历史新品种品种-因子 IC 经对齐修复后 ≈ 1.0（旧实现错位 → ≈ 0）。"""
+        panel, common = self._make_panel()
+        sm = self._perfect_signal_matrix(panel)
+        icm = _compute_per_variety_ic_matrix(sm, panel, common, {})
+        assert icm["f"]["NEW0"] > 0.9
+        assert icm["f"]["FULL0"] > 0.9
+
+    def test_full_history_variety_unchanged(self):
+        """全历史品种（len(sig)==len(closes)）修复前后逐位一致（零漂移回归保护）。"""
+        panel, common = self._make_panel()
+        sm = self._perfect_signal_matrix(panel)
+        res = _compute_holdout_validation(sm, panel, common, {}, {"NEW0"})
+        # FULL0 与直接按自身索引（旧实现等价路径）逐位一致
+        df = panel["FULL0"]
+        closes = df["close"].values
+        fwd_ret = np.full(len(closes), np.nan)
+        fwd_ret[:-5] = (closes[5:] - closes[:-5]) / np.maximum(closes[:-5], 1e-10)
+        sig = np.where(np.isfinite(sm["FULL0"]["f"]), sm["FULL0"]["f"], 0.0)
+        valid = np.isfinite(fwd_ret)
+        from scipy.stats import spearmanr
+
+        direct_ic, _ = spearmanr(sig[valid], fwd_ret[valid])
+        assert res["details"]["FULL0"] == pytest.approx(direct_ic, abs=1e-9)
+
+    def test_holdout_min_rows_threshold(self):
+        """盲测池最小真实历史门槛：历史不足的盲测品种跳过不计（GAP-130）。"""
+        panel, common = self._make_panel(n_days=100, head_gap=50)
+        sm = self._perfect_signal_matrix(panel)
+        res = _compute_holdout_validation(
+            sm, panel, common, {}, {"NEW0"}, min_rows=60
+        )
+        assert "NEW0" in res["skipped_short"]
+        assert "NEW0" not in res["details"]
+        assert "历史不足跳过" in res["warning"]
+        # 门槛关闭（默认 0）时不跳过
+        res0 = _compute_holdout_validation(sm, panel, common, {}, {"NEW0"})
+        assert res0["skipped_short"] == []
+        assert "NEW0" in res0["details"]

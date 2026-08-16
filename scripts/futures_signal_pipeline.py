@@ -808,6 +808,28 @@ def _compute_composite_scores(
     return sym_scores, sym_details
 
 
+def _align_factor_signal(
+    sig: np.ndarray,
+    df: "pd.DataFrame",
+    common_dates: Any,
+) -> np.ndarray:
+    """将因子信号按共同日期对齐（GAP-130，v2.104.0+80）。
+
+    修复前：IC 验证函数中收盘价经 `df.reindex(common_dates)` 对齐共同日期
+    （头部 NaN），但因子信号 `np.array(arr)` 仍按品种自身索引、仅尾部补零。
+    品种历史是共同日期尾部子集时（新上市品种），信号与收益错位 = 上市日距
+    共同日起点的缺失天数，盲测 IC/品种-因子 IC 被系统稀释（2026-08-16 能化链
+    实测 BZ0 错位 32 天/PL0 错位 42 天 → IC 稀释至 ≈0 误判失效）。
+
+    修复：复用 `fts/factor_engine/l3_signal_service.align_signal_to_dates`
+    （`df.index.get_indexer` 向量化对齐共同日期，缺失留 NaN）替代尾部补零——
+    全历史品种（len(sig)==len(closes)）逐位不变零漂移。
+    """
+    from fts.factor_engine.l3_signal_service import align_signal_to_dates
+
+    return align_signal_to_dates(np.asarray(sig, dtype=float), df, list(common_dates))
+
+
 def _compute_per_variety_ic_matrix(
     signal_matrix: dict[str, dict[str, np.ndarray]],
     panel: dict[str, "pd.DataFrame"],
@@ -841,9 +863,8 @@ def _compute_per_variety_ic_matrix(
 
         for fname, arr in sym_signals.items():
             flip = factor_sign_flips.get(fname, 1.0)
-            sig = np.array(arr, dtype=float)
-            if len(sig) < len(closes):
-                sig = np.pad(sig, (0, len(closes) - len(sig)), constant_values=np.nan)[: len(closes)]
+            # GAP-130: 信号按共同日期对齐（替代尾部补零），修复新上市品种错位
+            sig = _align_factor_signal(arr, df, common_dates)
             sig = np.where(np.isfinite(sig), sig, 0.0) * flip
 
             valid = np.isfinite(sig) & np.isfinite(fwd_ret)
@@ -875,8 +896,14 @@ def _compute_holdout_validation(
     common_dates: list[str],
     factor_sign_flips: dict[str, float],
     holdout_set: set[str],
+    min_rows: int = 0,
 ) -> dict[str, Any]:
     """盲测品种验证：计算盲测品种 vs 训练品种的因子 IC 对比。
+
+    GAP-130 (v2.104.0+80): ① 因子信号改经 `_align_factor_signal` 对齐共同日期
+    （替代尾部补零），修复新上市品种（历史短于共同日期尾部子集）信号-收益错位
+    导致的盲测 IC 稀释误判；② 新增 `min_rows` 盲测池最小真实历史门槛——盲测
+    品种真实行数低于阈值时跳过不计（样本过小 IC 估计噪声大，仅作防线）。
 
     Args:
         signal_matrix: 信号矩阵
@@ -884,21 +911,36 @@ def _compute_holdout_validation(
         common_dates: 共同交易日列表
         factor_sign_flips: 方向校正
         holdout_set: 盲测品种集合
+        min_rows: 盲测品种最小历史行数门槛（<=0 不过滤）
 
     Returns:
-        dict with keys: holdout_ic, train_ic, ic_retention, warning, details
+        dict with keys: holdout_ic, train_ic, ic_retention, warning, details,
+        skipped_short（因历史不足跳过的盲测品种）
     """
     n_dates = len(common_dates)
     if n_dates < 10:
-        return {"holdout_ic": 0, "train_ic": 0, "ic_retention": 0, "warning": "交易日不足", "details": {}}
+        return {
+            "holdout_ic": 0,
+            "train_ic": 0,
+            "ic_retention": 0,
+            "warning": "交易日不足",
+            "details": {},
+            "skipped_short": [],
+        }
 
     holdout_ics: list[float] = []
     train_ics: list[float] = []
     sym_ics: dict[str, float] = {}
+    skipped_short: list[str] = []
 
     for sym, sym_signals in signal_matrix.items():
         df = panel.get(sym)
         if df is None or df.empty:
+            continue
+
+        # 盲测池最小真实历史门槛（GAP-130）：历史不足的盲测品种跳过不计
+        if sym in holdout_set and min_rows > 0 and len(df) < min_rows:
+            skipped_short.append(sym)
             continue
 
         # 对齐到共同日期
@@ -911,14 +953,12 @@ def _compute_holdout_validation(
         fwd_ret = np.zeros(len(closes))
         fwd_ret[:-5] = (closes[5:] - closes[:-5]) / np.maximum(closes[:-5], 1e-10)
 
-        # 所有因子的平均信号（方向校正后）
+        # 所有因子的平均信号（方向校正后，GAP-130 信号按共同日期对齐）
         composite_signal = np.zeros(len(closes))
         n_active = 0
         for fname, arr in sym_signals.items():
             flip = factor_sign_flips.get(fname, 1.0)
-            sig = np.array(arr, dtype=float)
-            if len(sig) < len(closes):
-                sig = np.pad(sig, (0, len(closes) - len(sig)), constant_values=np.nan)[: len(closes)]
+            sig = _align_factor_signal(arr, df, common_dates)
             sig = np.where(np.isfinite(sig), sig, 0.0) * flip
             composite_signal += sig
             n_active += 1
@@ -958,6 +998,8 @@ def _compute_holdout_validation(
         warning = f"⚠️ 盲测 IC ({avg_holdout:.4f}) 不足训练 IC ({avg_train:.4f}) 的 50%，因子泛化能力较弱"
     elif len(holdout_ics) < 3:
         warning = f"盲测品种有效数据不足 ({len(holdout_ics)}/{len(holdout_set)})"
+    if skipped_short:
+        warning = (warning + " " if warning else "") + f"盲测品种历史不足跳过: {', '.join(skipped_short)}"
 
     return {
         "holdout_ic": avg_holdout,
@@ -967,6 +1009,7 @@ def _compute_holdout_validation(
         "details": sym_ics,
         "n_holdout_valid": len(holdout_ics),
         "n_train_valid": len(train_ics),
+        "skipped_short": skipped_short,
     }
 
 
@@ -1749,10 +1792,13 @@ def main(
 
     # ── Step 3e: 盲测品种验证（泛化能力检查） ──
     # 链模式盲测池 = 其余化工产业链品种（链外盲测，泛化到全化工链）
+    _min_holdout_rows = 0
     if chain == "energy":
         from fts.data_futures import ENERGY_CHAIN_HOLDOUT as _CHAIN_HOLDOUT
+        from fts.data_futures import ENERGY_CHAIN_MIN_HOLDOUT_ROWS
 
         holdout_set = set(_CHAIN_HOLDOUT) & set(panel.keys())
+        _min_holdout_rows = ENERGY_CHAIN_MIN_HOLDOUT_ROWS
     else:
         holdout_set = set(FUTURES_HOLDOUT) & set(panel.keys())
     holdout_result = _compute_holdout_validation(
@@ -1761,6 +1807,7 @@ def main(
         common_dates,
         factor_sign_flips,
         holdout_set,
+        min_rows=_min_holdout_rows,
     )
     print(
         f"\n[盲测验证] 盲测品种: {len(holdout_set)} 个, "

@@ -40,7 +40,7 @@ def l1_meta_loop_job(market: str = "futures") -> None:
 
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
-        from fts.factor_engine.meta_loop import MetaLoop
+        from fts.factor_engine.meta_loop import MetaLoop, _make_web_collector
         from fts.llm import get_llm_client
         from fts.config import get_config
 
@@ -69,6 +69,8 @@ def l1_meta_loop_job(market: str = "futures") -> None:
             factor_pool_path=kwargs.get("factor_pool_path", "memory/knowledge/factors/factor_pool.json"),
             inject_dir=kwargs.get("inject_dir", "memory/knowledge/factors/l1_injected"),
             debates_dir=kwargs.get("debates_dir", "memory/debates"),
+            # plans/41 A1: 接入 web_collector 感知（市场快照注入 bootstrap prompt）
+            web_collector=_make_web_collector(market=market),
         )
         result = loop.run()
         logger.info("[L1] 完成: status=%s injected=%d", result.status, len(result.injected_candidate_ids))
@@ -76,13 +78,18 @@ def l1_meta_loop_job(market: str = "futures") -> None:
         logger.error("[L1] 运行失败: %s", e, exc_info=True)
 
 
-# ── L2 Evolution Loop — 每日 23:00 夜间因子演化 ──────────
+# ── L2 Evolution Loop — 工作日 04:00 小预算 / 周六 04:00 大预算（45 计划，先种子后演化）──
 
 
-def l2_evolution_loop_job() -> None:
-    """执行 L2 Evolution Loop（夜间因子演化 — 期货横截面）。"""
-    trace_id = f"fts.l2.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    logger.info("[L2] Evolution Loop 启动 trace_id=%s", trace_id)
+def _run_l2_evolution(max_generation: int, tag: str) -> None:
+    """执行 L2 Evolution Loop（因子演化 — 期货横截面）。
+
+    Args:
+        max_generation: 演化代数（工作日小预算 ≈10 / 周末大预算 ≈50）
+        tag: 运行标识（weekday / weekend），用于 trace_id 与日志
+    """
+    trace_id = f"fts.l2.{tag}.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[L2][%s] Evolution Loop 启动 trace_id=%s", tag, trace_id)
 
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
@@ -100,9 +107,9 @@ def l2_evolution_loop_job() -> None:
         # 准备期货横截面数据（分层训练集 + 排除盲测品种池）
         train_symbols = [s for s in FUTURES_STRATIFIED_SUBSET if s not in FUTURES_HOLDOUT]
         if len(train_symbols) < 10:
-            logger.error("[L2] 训练品种不足 (排除盲测后仅 %d 个)", len(train_symbols))
+            logger.error("[L2][%s] 训练品种不足 (排除盲测后仅 %d 个)", tag, len(train_symbols))
             return
-        logger.info("[L2] 分层训练品种: %d 个 (排除 %d 个盲测品种)", len(train_symbols), len(FUTURES_HOLDOUT))
+        logger.info("[L2][%s] 分层训练品种: %d 个 (排除 %d 个盲测品种)", tag, len(train_symbols), len(FUTURES_HOLDOUT))
         provider = FTSDataProvider()
         panel, common_dates = provider.get_futures_panel(
             symbols=train_symbols,
@@ -110,7 +117,7 @@ def l2_evolution_loop_job() -> None:
             trace_id=trace_id,
         )
         if not panel:
-            logger.error("[L2] 无期货数据，跳过")
+            logger.error("[L2][%s] 无期货数据，跳过", tag)
             return
 
         first_sym = list(panel.keys())[0]
@@ -137,14 +144,110 @@ def l2_evolution_loop_job() -> None:
             cross_section_dates=common_dates,
         )
         loop.budget = DEFAULT_BUDGET_CONFIG.copy()
-        loop.budget["max_generation"] = 10
+        loop.budget["max_generation"] = max_generation
 
-        result = loop.run(max_generation=10)
-        logger.info("[L2] 完成: status=%s elite=%d", result.status, len(result.elite_factor_ids))
+        result = loop.run(max_generation=max_generation)
+        logger.info("[L2][%s] 完成: status=%s elite=%d", tag, result.status, len(result.elite_factor_ids))
     except Exception as e:
-        logger.error("[L2] 运行失败: %s", e, exc_info=True)
+        logger.error("[L2][%s] 运行失败: %s", tag, e, exc_info=True)
 
 
+def l2_evolution_weekday_job() -> None:
+    """L2 演化（工作日 04:00，小预算 max_generation≈10，45 计划调度基线）。"""
+    _run_l2_evolution(10, "weekday")
+
+
+def l2_evolution_weekend_job() -> None:
+    """L2 演化（周六 04:00，大预算 max_generation≈50，45 计划调度基线）。"""
+    _run_l2_evolution(50, "weekend")
+
+
+def l2_evolution_loop_job() -> None:
+    """兼容入口：默认工作日小预算（原 00:00 任务名，45.6 调度基线后由两个新入口替代）。"""
+    _run_l2_evolution(10, "weekday")
+
+
+# ── L2 种子评估晋升 — 每日 02:00（45 计划候选①，先种子后演化）──
+
+
+def l2_seed_promotion_job() -> None:
+    """执行 L2 种子评估晋升（每日 02:00，L1 00:00 注入后消费）。
+
+    45 计划候选①：种子评估从 run() 拆出独立调度——L1 注入的种子 + 种子池
+    评估晋升入 elite 池，晋升结果当日被 L2 演化（04:00）消费为父因子。
+    本任务仅运行 run_seed_stage，不重置演化状态计数器（不调用 mark_running）。
+    """
+    trace_id = f"fts.l2_seed.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[L2种子] 启动 trace_id=%s", trace_id)
+
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.factor_engine.evolution_loop import EvolutionLoop
+        from fts.factor_engine.factor_verifier import FactorVerifier
+        from fts.factor_engine.seed_pool import SeedPool
+        from fts.llm import get_llm_client
+        from fts.config import get_config
+        from fts.data import FTSDataProvider
+        from fts.data_futures import FUTURES_STRATIFIED_SUBSET, FUTURES_HOLDOUT
+
+        cfg = get_config()
+
+        # 准备期货横截面数据（与 L2 演化同口径：分层训练集 + 排除盲测品种池）
+        train_symbols = [s for s in FUTURES_STRATIFIED_SUBSET if s not in FUTURES_HOLDOUT]
+        if len(train_symbols) < 10:
+            logger.error("[L2种子] 训练品种不足 (排除盲测后仅 %d 个)", len(train_symbols))
+            return
+        provider = FTSDataProvider()
+        panel, common_dates = provider.get_futures_panel(
+            symbols=train_symbols,
+            days=500,
+            trace_id=trace_id,
+        )
+        if not panel:
+            logger.error("[L2种子] 无期货数据，跳过")
+            return
+
+        first_sym = list(panel.keys())[0]
+        data_df = panel[first_sym]
+        closes = data_df["close"].values
+        fwd_ret = __import__("numpy").zeros(len(closes))
+        if len(closes) > 5:
+            fwd_ret[:-5] = (closes[5:] - closes[:-5]) / __import__("numpy").maximum(closes[:-5], 1e-10)
+
+        llm = get_llm_client()
+        seed_pool = SeedPool(market=cfg.default_market)
+        verifier = FactorVerifier()
+
+        loop = EvolutionLoop(
+            data=data_df,
+            forward_returns=fwd_ret,
+            elite_dir=cfg.elite_dir,
+            memory_dir=cfg.memory_dir + "/evolution",
+            llm_client=llm,
+            seed_pool=seed_pool,
+            verifier=verifier,
+            n_trials_micro=30,
+            cross_section_data=panel,
+            cross_section_dates=common_dates,
+        )
+
+        # 仅读状态（不 mark_running 重置演化计数器），避免污染夜间演化统计
+        state = loop.state_manager.load_or_init(loop.budget.get("nightly_token_limit", 1_000_000))
+        elite_ids: list[str] = []
+        promoted, _seed_corr, parent_seeds = loop.run_seed_stage(
+            trace_id,
+            state,
+            elite_ids,
+        )
+        logger.info(
+            "[L2种子] 完成: 晋升=%d elite=%d 父因子=%d (trace_id=%s)",
+            promoted,
+            len(elite_ids),
+            len(parent_seeds),
+            trace_id,
+        )
+    except Exception as e:
+        logger.error("[L2种子] 运行失败: %s", e, exc_info=True)
 # ── L3 Portfolio Loop — 工作日每日 19:00 组合权重重算（GAP-072 与信号管道解绑）───
 
 
@@ -240,16 +343,106 @@ def health_check_job() -> None:
         logger.error("[健康检查] 失败: %s", e, exc_info=True)
 
 
-# ── 月度衰减评估 — 每月 1 日 02:00（A.2）───────────────────
+
+# ── L2 批量挖掘 — 周日 06:00（45 计划候选②，周末错峰）──
 
 
-def monthly_decay_eval_job() -> None:
-    """月度因子衰减评估：对精英池执行增量评估并触发状态机/自动淘汰。
+def l2_batch_mining_job() -> None:
+    """执行 L2 批量挖掘（周日 06:00，CPU 密集错峰）。
 
-    关联设计: A.2 因子衰减追踪（EliteFactorTracker.run_monthly_evaluation）。
+    45 计划候选②：batch 批量漏斗从 run() 拆出独立调度——读 elite 池选父 →
+    BatchMiner 批量生成（同父多后代，方法轮换）→ 并行粗筛 → 通过者逐个走
+    准入链。熔断隔离：本任务经 run_batch_stage（保存/恢复 _consecutive_low_ic），
+    batch 失败不污染工作日/周末 L2 演化的熔断状态。
     """
-    trace_id = f"fts.decay.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    logger.info("[衰减评估] 启动 trace_id=%s", trace_id)
+    trace_id = f"fts.l2_batch.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[L2批量] 启动 trace_id=%s", trace_id)
+
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.factor_engine.evolution_loop import EvolutionLoop
+        from fts.factor_engine.factor_verifier import FactorVerifier
+        from fts.factor_engine.seed_pool import SeedPool
+        from fts.llm import get_llm_client
+        from fts.config import get_config
+        from fts.data import FTSDataProvider
+        from fts.data_futures import FUTURES_STRATIFIED_SUBSET, FUTURES_HOLDOUT
+
+        cfg = get_config()
+
+        # 准备期货横截面数据（与 L2 演化同口径）
+        train_symbols = [s for s in FUTURES_STRATIFIED_SUBSET if s not in FUTURES_HOLDOUT]
+        if len(train_symbols) < 10:
+            logger.error("[L2批量] 训练品种不足 (排除盲测后仅 %d 个)", len(train_symbols))
+            return
+        provider = FTSDataProvider()
+        panel, common_dates = provider.get_futures_panel(
+            symbols=train_symbols,
+            days=500,
+            trace_id=trace_id,
+        )
+        if not panel:
+            logger.error("[L2批量] 无期货数据，跳过")
+            return
+
+        first_sym = list(panel.keys())[0]
+        data_df = panel[first_sym]
+        closes = data_df["close"].values
+        fwd_ret = __import__("numpy").zeros(len(closes))
+        if len(closes) > 5:
+            fwd_ret[:-5] = (closes[5:] - closes[:-5]) / __import__("numpy").maximum(closes[:-5], 1e-10)
+
+        llm = get_llm_client()
+        seed_pool = SeedPool(market=cfg.default_market)
+        verifier = FactorVerifier()
+
+        loop = EvolutionLoop(
+            data=data_df,
+            forward_returns=fwd_ret,
+            elite_dir=cfg.elite_dir,
+            memory_dir=cfg.memory_dir + "/evolution",
+            llm_client=llm,
+            seed_pool=seed_pool,
+            verifier=verifier,
+            n_trials_micro=30,
+            cross_section_data=panel,
+            cross_section_dates=common_dates,
+        )
+
+        # 读 elite 池选父（UCT 树搜索；无父因子则跳过）
+        parent_seeds = loop._load_elite_parent_factors()
+        if not parent_seeds:
+            logger.info("[L2批量] elite 池无父因子，跳过")
+            return
+        parent = loop._select_parent_uct(parent_seeds)
+
+        state = loop.state_manager.load_or_init(loop.budget.get("nightly_token_limit", 1_000_000))
+        elite_ids: list[str] = []
+        seed_correlations = loop._load_seed_correlation_index()
+
+        ok = loop.run_batch_stage(
+            parent,
+            0,  # 独立任务从第 0 代批量
+            trace_id,
+            state,
+            elite_ids,
+            seed_correlations,
+        )
+        logger.info("[L2批量] 完成: 晋升=%s elite=%d (trace_id=%s)", ok, len(elite_ids), trace_id)
+    except Exception as e:
+        logger.error("[L2批量] 运行失败: %s", e, exc_info=True)
+# ── L2 周度评审 — 每周日 10:00（45 计划：评审周度化，替代月度衰减 + run() 每日调用）───
+
+
+def l2_review_job() -> None:
+    """L2 周度评审：精英重审 + 衰减评估 + 自动淘汰（45 计划候选③）。
+
+    关联设计: A.2 因子衰减追踪（EliteFactorTracker.run_monthly_evaluation）；
+    plans/45 §5.3 — 由月度衰减任务周度化而来（run() 不再每日调用
+    _run_periodic_factor_review，评审职责统一收敛到本任务）。
+    """
+    trace_id = f"fts.l2_review.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[L2评审] 启动 trace_id=%s", trace_id)
 
     # ---- Step A: 新标准全量重审（与月度衰减合并） ----
     if os.getenv("FTS_MONTHLY_REAUDIT_ENABLED", "1") == "1":
@@ -259,7 +452,7 @@ def monthly_decay_eval_job() -> None:
 
             rep = run_reaudit(market="futures", trace_id=f"{trace_id}.reaudit", apply=True, out_json=True)
             logger.info(
-                "[衰减评估] Step A 新标准重审完成: retain=%d shadow=%d retire=%d error=%d (total=%d)",
+                "[L2评审] Step A 新标准重审完成: retain=%d shadow=%d retire=%d error=%d (total=%d)",
                 rep.counts.get("retain", 0),
                 rep.counts.get("shadow", 0),
                 rep.counts.get("retire", 0),
@@ -267,9 +460,9 @@ def monthly_decay_eval_job() -> None:
                 rep.total,
             )
         except Exception as e:  # noqa: BLE001
-            logger.error("[衰减评估] Step A 重审失败（不阻断衰减评估）: %s", e, exc_info=True)
+            logger.error("[L2评审] Step A 重审失败（不阻断衰减评估）: %s", e, exc_info=True)
     else:
-        logger.info("[衰减评估] Step A 新标准重审已关闭（FTS_MONTHLY_REAUDIT_ENABLED=0）")
+        logger.info("[L2评审] Step A 新标准重审已关闭（FTS_MONTHLY_REAUDIT_ENABLED=0）")
 
     # ---- Step B: 衰减评估（原有逻辑） ----
 
@@ -281,7 +474,7 @@ def monthly_decay_eval_job() -> None:
         cfg = get_config()
         tracker = EliteFactorTracker(tracking_dir=f"{cfg.memory_dir}/tracking")
         report = tracker.run_monthly_evaluation()
-        logger.info("[衰减评估] 完成: %s", report)
+        logger.info("[L2评审] 衰减评估完成: %s", report)
 
         # 同步衰减计数到 Prometheus 指标
         try:
@@ -299,13 +492,13 @@ def monthly_decay_eval_job() -> None:
                 deprecated=counts.get("deprecated", 0),
             )
         except Exception as e:  # noqa: BLE001
-            logger.warning("[衰减评估] 指标同步失败: %s", e)
+            logger.warning("[L2评审] 指标同步失败: %s", e)
 
         # 自动淘汰（EliteFactorTracker 快照标记 retired）
         retire_mgr = AutoRetireManager(tracker)
         retired = retire_mgr.run()
         if retired:
-            logger.warning("[衰减评估] 快照标记淘汰: %d 个因子", len(retired))
+            logger.warning("[L2评审] 快照标记淘汰: %d 个因子", len(retired))
 
             # 同步淘汰到 DuckDB + JSON 文件（主流程中真正生效）
             from fts.factor_engine.factor_db import FactorRepository
@@ -320,11 +513,11 @@ def monthly_decay_eval_job() -> None:
                     elite_dir = cfg.get_elite_dir(mkt)
                 else:
                     elite_dir = cfg.get_elite_dir("futures")
-                if repo.retire_factor(fid, reason="月度衰减评估自动淘汰", elite_dir=elite_dir):
+                if repo.retire_factor(fid, reason="L2周度评审自动淘汰", elite_dir=elite_dir):
                     retired_count += 1
-            logger.warning("[衰减评估] 淘汰已同步至 DuckDB + JSON: %d/%d 个因子", retired_count, len(retired))
+            logger.warning("[L2评审] 淘汰已同步至 DuckDB + JSON: %d/%d 个因子", retired_count, len(retired))
     except Exception as e:
-        logger.error("[衰减评估] 失败: %s", e, exc_info=True)
+        logger.error("[L2评审] 失败: %s", e, exc_info=True)
 
 
 # ── 逻辑监控 — 每日 22:00（B.2 逻辑审查）───────────────────
@@ -788,10 +981,14 @@ def self_serial_exec(payload: dict, trace_id: str) -> None:
 __all__ = [
     "l1_meta_loop_job",
     "l2_evolution_loop_job",
+    "l2_evolution_weekday_job",
+    "l2_evolution_weekend_job",
+    "l2_seed_promotion_job",
+    "l2_batch_mining_job",
     "l3_portfolio_loop_job",
     "futures_signal_pipeline_job",
     "health_check_job",
-    "monthly_decay_eval_job",
+    "l2_review_job",
     "data_quality_eval_job",
     "logic_monitor_job",
     "factor_inspector_job",
@@ -799,4 +996,6 @@ __all__ = [
     "sync_liquidity_pool_job",
     "mhf_signal_job",
 ]
+
+
 

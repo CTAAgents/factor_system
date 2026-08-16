@@ -930,9 +930,6 @@ class EvolutionLoop:
             if seed_correlations:
                 self._write_seed_correlation_index(seed_correlations, trace_id)
 
-            # ── Phase A.2: 精英因子定期重评估 ──
-            self._run_periodic_factor_review(elite_ids, trace_id)
-
             # ── Phase 2 (P1-2): 导出结构化实验日志（非阻塞） ──
             self._export_experiment_log(
                 run_id,

@@ -613,63 +613,24 @@ class EvolutionLoop:
         start_gen = 1  # 每次运行从第 1 代开始
 
         try:
-            # ── Step 0: 种子因子相关性预检（轻量扫描，仅标记不删除） ──
-            print("[DEBUG-evo] 开始加载种子因子...")
-            seeds = self.seed_pool.load_all_seeds()
-            print(f"[DEBUG-evo] 种子因子加载完成: {len(seeds)} 个")
-            # GAP-031: 合并 L1 注入候选（pending 门控 + market 过滤 + 去重），
-            # 与种子同等参与相关性预检与种子评估晋升
-            print("[DEBUG-evo] 开始合并 L1 候选...")
-            seeds = self._merge_l1_candidates(seeds, trace_id)
-            print(f"[DEBUG-evo] 合并 L1 候选完成, 种子总数: {len(seeds)}")
-            print("[DEBUG-evo] 开始种子相关性预检...")
-            seed_correlations = self._run_seed_correlation_check(seeds, trace_id)
-            if seed_correlations:
-                high_corr_count = len(seed_correlations)
-                print(f"[evo] 种子因子相关性预检: {high_corr_count} 对高相关因子 (阈值≥0.95)")
-                for pair in seed_correlations[:5]:
-                    print(
-                        f"  - {pair['factor_id_a']} × {pair['factor_id_b']}: "
-                        f"Pearson={pair['pearson']:.4f} Spearman={pair['spearman']:.4f}"
-                    )
-                if high_corr_count > 5:
-                    print(f"  ... 还有 {high_corr_count - 5} 对")
-
-            # ── Step 1: 评估种子因子，合格直接晋升 elite ──
-            print(f"[DEBUG-evo] 种子相关性预检完成: {len(seed_correlations)} 对高相关因子")
-            print("[DEBUG-evo] 开始评估种子因子 (184 个, 横截面模式)... 这可能需要较长时间")
-            promoted_seeds = self._evaluate_and_promote_seeds(
-                seeds,
-                trace_id,
-                state,
-                elite_ids,
-                seed_correlations=seed_correlations,
-            )
-            if promoted_seeds > 0:
-                print(f"[evo] 种子因子晋升: {promoted_seeds} 个")
-
-            print(f"[DEBUG-evo] 种子评估完成, 晋升: {promoted_seeds} 个, elite_ids: {len(elite_ids)}")
-            # 使用已晋升的种子作为父因子（只有高IC种子才值得演化）
-            parent_seeds = [s for s in seeds if s["factor_id"] in elite_ids]
-            # 种子因子全部已存在 elite 快照（重复跳过、无新晋升）时，
-            # 回退加载 elite 池作为父因子，使演化可基于既有精英因子继续
+            # ── 45 计划候选①：种子评估已独立至 l2_seed_promotion_job（每日 02:00）。
+            #    本任务直接读 elite 池父因子（含当日刚晋升种子）+ 读取持久化相关性索引。
+            seed_correlations = self._load_seed_correlation_index()
+            parent_seeds = cast(list[FactorProgram], self._load_elite_parent_factors())
             if not parent_seeds:
-                parent_seeds = cast(list[FactorProgram], self._load_elite_parent_factors())
-                if not parent_seeds:
-                    print("[evo] 无合格父因子，跳过演化循环")
-                    self.state_manager.mark_completed(state)
-                    return EvolutionRunResult(
-                        run_id=run_id,
-                        trace_id=trace_id,
-                        generations_completed=0,
-                        total_factors_evaluated=0,
-                        total_factors_promoted=0,
-                        tokens_consumed=state.get("tokens_consumed", 0),
-                        status="completed",
-                        elite_factor_ids=elite_ids,
-                        seed_correlations=seed_correlations,
-                    )
-                print(f"[evo] 种子因子均已晋升过，改用 elite 池 {len(parent_seeds)} 个因子作为父因子")
+                print("[evo] 无合格父因子，跳过演化循环")
+                self.state_manager.mark_completed(state)
+                return EvolutionRunResult(
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    generations_completed=0,
+                    total_factors_evaluated=0,
+                    total_factors_promoted=0,
+                    tokens_consumed=state.get("tokens_consumed", 0),
+                    status="completed",
+                    elite_factor_ids=elite_ids,
+                    seed_correlations=seed_correlations,
+                )
 
             # ── P1-3 (Phase 3): 提前达标停止状态重置（基于 state 晋升计数） ──
             self._consecutive_empty_generations = 0
@@ -698,30 +659,8 @@ class EvolutionLoop:
                 # 选择父因子（UCT 树搜索，平衡探索与利用）
                 parent = self._select_parent_uct(parent_seeds)
 
-                # 读取演化模式配置 (Phase C.2 / GAP-I201 batch)
-                from fts.config.settings import get_config
-
-                _fts_evo_cfg = get_config()
-                _evo_mode = getattr(_fts_evo_cfg, "evolution_mode", "hybrid")
-
-                if _evo_mode == "batch":
-                    # ── BATCH 模式 (GAP-I201): 一代批量漏斗 ──
-                    # 批量生成（同父多后代）→ 并行粗筛 → 通过者逐个走准入链；
-                    # 状态持久化/熔断计数由 _run_batch_generation 内 _process_candidate 完成
-                    self._run_batch_generation(
-                        parent,
-                        generation,
-                        trace_id,
-                        state,
-                        elite_ids,
-                        seed_correlations,
-                    )
-                    # 经验链清理（generation 级）
-                    self.experience_chain.cleanup_if_needed()
-                    # P1-3 (Phase 3): 提前达标停止检查（本代零晋升计入）
-                    if self._maybe_early_stop(state):
-                        break
-                    continue
+                # 45 计划候选②：batch 批量挖掘已独立至 l2_batch_mining_job（周日 06:00），
+                # run() 不再按 evolution_mode=batch 走批量漏斗，统一走单因子演化路径。
 
                 # ── 单因子路径: Step 1 演化分派（macro/GP/operator，配置分派） ──
                 evolved = self._evolve_one(parent, generation, trace_id)
@@ -851,15 +790,103 @@ class EvolutionLoop:
             if seed_correlations:
                 self._write_seed_correlation_index(seed_correlations, trace_id)
 
-            # ── Phase A.2: 精英因子定期重评估 ──
-            self._run_periodic_factor_review(elite_ids, trace_id)
-
             # ── Phase 2 (P1-2): 导出结构化实验日志（非阻塞） ──
             self._export_experiment_log(
                 run_id,
                 trace_id,
                 state.get("last_generation", 0),
             )
+
+    def run_seed_stage(
+        self,
+        trace_id: str,
+        state: EvolutionState,
+        elite_ids: list[str],
+    ) -> tuple[int, list[FactorCorrelation], list[FactorProgram]]:
+        """种子评估晋升独立入口（45 计划候选①，先种子后演化）。
+
+        Step 0 种子相关性预检（轻量扫描，仅标记不删除）+ Step 1 评估晋升
+        （合格直接晋升 elite）+ 父因子选择（直接读 elite 池，含当日刚晋升种子）。
+        独立 job（l2_seed_promotion_job）与演化 run() 共用本入口；run() 演进时
+        仅消费返回值，不再内联种子逻辑。
+
+        Args:
+            trace_id: 全链路 trace_id
+            state: 演化状态（读取晋升计数，不重置）
+            elite_ids: 精英因子 ID 列表（方法内追加晋升结果）
+
+        Returns:
+            (promoted_seeds, seed_correlations, parent_seeds)
+        """
+        # ── Step 0: 种子因子相关性预检（轻量扫描，仅标记不删除） ──
+        print("[DEBUG-evo] 开始加载种子因子...")
+        seeds = self.seed_pool.load_all_seeds()
+        print(f"[DEBUG-evo] 种子因子加载完成: {len(seeds)} 个")
+        # GAP-031: 合并 L1 注入候选（pending 门控 + market 过滤 + 去重），
+        # 与种子同等参与相关性预检与种子评估晋升
+        print("[DEBUG-evo] 开始合并 L1 候选...")
+        seeds = self._merge_l1_candidates(seeds, trace_id)
+        print(f"[DEBUG-evo] 合并 L1 候选完成, 种子总数: {len(seeds)}")
+        print("[DEBUG-evo] 开始种子相关性预检...")
+        seed_correlations = self._run_seed_correlation_check(seeds, trace_id)
+        if seed_correlations:
+            high_corr_count = len(seed_correlations)
+            print(f"[evo] 种子因子相关性预检: {high_corr_count} 对高相关因子 (阈值≥0.95)")
+            for pair in seed_correlations[:5]:
+                print(
+                    f"  - {pair['factor_id_a']} × {pair['factor_id_b']}: "
+                    f"Pearson={pair['pearson']:.4f} Spearman={pair['spearman']:.4f}"
+                )
+            if high_corr_count > 5:
+                print(f"  ... 还有 {high_corr_count - 5} 对")
+
+        # ── Step 1: 评估种子因子，合格直接晋升 elite ──
+        print(f"[DEBUG-evo] 种子相关性预检完成: {len(seed_correlations)} 对高相关因子")
+        print("[DEBUG-evo] 开始评估种子因子 (184 个, 横截面模式)... 这可能需要较长时间")
+        promoted_seeds = self._evaluate_and_promote_seeds(
+            seeds,
+            trace_id,
+            state,
+            elite_ids,
+            seed_correlations=seed_correlations,
+        )
+        if promoted_seeds > 0:
+            print(f"[evo] 种子因子晋升: {promoted_seeds} 个")
+
+        # 45 计划候选①：父因子优先取本次晋升种子（只有高IC种子才值得演化），
+        # 无新晋升时回退读 elite 池（含既有精英因子），保持组件化等价。
+        parent_seeds = [s for s in seeds if s["factor_id"] in elite_ids]
+        if not parent_seeds:
+            parent_seeds = cast(list[FactorProgram], self._load_elite_parent_factors())
+            print("[evo] 无合格父因子，跳过演化循环")
+        else:
+            print(f"[evo] 基于 elite 池 {len(parent_seeds)} 个因子作为父因子")
+
+        # 45 计划候选①：种子评估独立任务（l2_seed_promotion_job）负责将
+        # 相关性预检结果持久化，供 run() 演化任务与 L3 批量读取（先验数据）。
+        if seed_correlations:
+            self._write_seed_correlation_index(seed_correlations, trace_id)
+
+        return promoted_seeds, seed_correlations, parent_seeds
+    def _load_seed_correlation_index(self) -> list[FactorCorrelation]:
+        """读取持久化的 L2 种子相关性索引（45 计划候选①）。
+
+        种子评估已独立至 l2_seed_promotion_job，run() 演化任务读取其写入的
+        elite 目录索引文件（_l2_seed_correlation_index.json）作为先验数据，
+        缺失时返回空列表（不阻断演化）。
+        """
+        try:
+            import json as _json
+
+            index_path = self.elite_dir / "_l2_seed_correlation_index.json"
+            if not index_path.exists():
+                return []
+            data = _json.loads(index_path.read_text(encoding="utf-8"))
+            return list(data.get("correlations", []))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("读取种子相关性索引失败: %s", e)
+            return []
+
 
     # ─── 内部方法 ───
 
@@ -1150,6 +1177,34 @@ class EvolutionLoop:
                 return None
 
         return new_factor, evolution_method, evolution_summary, tokens
+
+    def run_batch_stage(
+        self,
+        parent: FactorProgram,
+        generation: int,
+        trace_id: str,
+        state: dict[str, Any],
+        elite_ids: list[str],
+        seed_correlations: list[FactorCorrelation],
+    ) -> bool:
+        """batch 批量挖掘独立入口（45 计划候选②）。
+
+        供独立 job（l2_batch_mining_job，周日 06:00）与 run() batch 分支共用。
+        熔断隔离：_process_candidate 会写主循环 _consecutive_low_ic（连续低 IC 熔断），
+        独立 batch 任务失败不应污染主循环熔断状态 → 执行前保存、结束后恢复。
+        """
+        saved_low_ic = self._consecutive_low_ic
+        try:
+            return self._run_batch_generation(
+                parent,
+                generation,
+                trace_id,
+                state,
+                elite_ids,
+                seed_correlations,
+            )
+        finally:
+            self._consecutive_low_ic = saved_low_ic
 
     def _run_batch_generation(
         self,

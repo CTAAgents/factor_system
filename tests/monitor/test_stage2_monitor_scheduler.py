@@ -219,11 +219,11 @@ class TestMetricsRegistry:
 class TestSchedulerTasks:
     """新增定时任务注册。"""
 
-    def test_monthly_decay_task_registered(self):
-        task = get_task("monthly_decay_eval")
+    def test_l2_review_task_registered(self):
+        task = get_task("l2_review")
         assert task is not None
-        assert task.cron_expression == "0 4 1 * *"
-        assert "monthly_decay_eval_job" in task.callable_path
+        assert task.cron_expression == "0 10 * * 0"
+        assert "l2_review_job" in task.callable_path
 
     def test_data_quality_task_registered(self):
         task = get_task("data_quality_eval")
@@ -232,5 +232,5 @@ class TestSchedulerTasks:
 
     def test_default_tasks_include_new_ones(self):
         names = {t.name for t in list_tasks()}
-        assert "monthly_decay_eval" in names
+        assert "l2_review" in names
         assert "data_quality_eval" in names

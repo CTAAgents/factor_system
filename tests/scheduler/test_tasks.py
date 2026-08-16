@@ -49,16 +49,34 @@ def fresh_registry() -> TaskRegistry:
 
 DEFAULT_TASKS = {
     "l1_meta_loop": {
-        "cron": "59 7 * * 1-5",
+        "cron": "0 0 * * *",
         "callable": "fts.scheduler.jobs.l1_meta_loop_job",
         "desc": "L1 Meta-Loop：每日知识补给 + Bootstrapping + 种子注入",
         "prefix": "fts.l1",
     },
-    "l2_evolution_loop": {
-        "cron": "0 0 * * 1-5",
-        "callable": "fts.scheduler.jobs.l2_evolution_loop_job",
-        "desc": "L2 Evolution Loop：夜间因子演化（LLM 改逻辑 + optuna 调参 + 横截面评估）",
+    "l2_evolution_weekday": {
+        "cron": "0 4 * * 1-5",
+        "callable": "fts.scheduler.jobs.l2_evolution_weekday_job",
+        "desc": "L2 Evolution Loop（工作日 04:00 小预算 max_generation≈10，45 计划调度基线）：先种子后演化",
         "prefix": "fts.l2",
+    },
+    "l2_evolution_weekend": {
+        "cron": "0 4 * * 6",
+        "callable": "fts.scheduler.jobs.l2_evolution_weekend_job",
+        "desc": "L2 Evolution Loop（周六 04:00 大预算 max_generation≈50，45 计划调度基线）：周末集中大规模演化",
+        "prefix": "fts.l2",
+    },
+    "l2_seed_promotion": {
+        "cron": "0 2 * * *",
+        "callable": "fts.scheduler.jobs.l2_seed_promotion_job",
+        "desc": "L2 种子评估晋升（45 计划候选①）：种子相关性预检 + 评估晋升入 elite 池，供当日 04:00 演化消费为父因子（不重置演化状态计数器）",
+        "prefix": "fts.l2_seed",
+    },
+    "l2_batch_mining": {
+        "cron": "0 6 * * 0",
+        "callable": "fts.scheduler.jobs.l2_batch_mining_job",
+        "desc": "L2 批量挖掘（45 计划候选②）：BatchMiner 批量漏斗（同父多后代→并行粗筛→准入链），熔断隔离不污染演化状态",
+        "prefix": "fts.l2_batch",
     },
     "l3_portfolio_loop": {
         "cron": "0 6 * * 1-5",
@@ -84,11 +102,11 @@ DEFAULT_TASKS = {
         "desc": "健康检查：监控所有循环状态",
         "prefix": "fts.health",
     },
-    "monthly_decay_eval": {
-        "cron": "0 4 1 * *",
-        "callable": "fts.scheduler.jobs.monthly_decay_eval_job",
-        "desc": "月度治理（2026-08-13 起与重审合并）：Step A 新标准准入重审（audit/robustness/评分卡复检 active elite，不合格降级观察或淘汰，FTS_MONTHLY_REAUDIT_ENABLED=0 关闭）+ Step B 因子衰减评估（A.2 增量评估 + 状态机 + 自动淘汰）",
-        "prefix": "fts.decay",
+    "l2_review": {
+        "cron": "0 10 * * 0",
+        "callable": "fts.scheduler.jobs.l2_review_job",
+        "desc": "L2 周度评审（45 计划候选③）：Step A 新标准准入重审（audit/robustness/评分卡复检 active elite，不合格降级观察或淘汰，FTS_MONTHLY_REAUDIT_ENABLED=0 关闭）+ Step B 因子衰减评估（A.2 增量评估 + 状态机 + 自动淘汰）",
+        "prefix": "fts.l2_review",
     },
     "data_quality_eval": {
         "cron": "*/5 * * * *",
@@ -226,7 +244,7 @@ def test_registry_is_taskregistry():
 def test_register_default_tasks_registers_five():
     """register_default_tasks 注册默认任务。"""
     register_default_tasks()
-    assert len(REGISTRY) == 13
+    assert len(REGISTRY) == 16
 
 
 @pytest.mark.parametrize("name,expected", DEFAULT_TASKS.items())
@@ -274,9 +292,8 @@ def test_default_task_callables_importable():
 def test_list_tasks_returns_sorted():
     """list_tasks 返回按 name 排序的列表，自动注册默认任务。"""
     tasks = list_tasks()
-    assert len(tasks) == 13
+    assert len(tasks) == 16
     names = [t.name for t in tasks]
-    assert names == sorted(names)
     assert names == [
         "data_level_monitor",
         "data_quality_eval",
@@ -284,11 +301,14 @@ def test_list_tasks_returns_sorted():
         "futures_signal_pipeline",
         "health_check",
         "l1_meta_loop",
-        "l2_evolution_loop",
+        "l2_batch_mining",
+        "l2_evolution_weekday",
+        "l2_evolution_weekend",
+        "l2_review",
+        "l2_seed_promotion",
         "l3_portfolio_loop",
         "logic_monitor",
         "mhf_signal",
-        "monthly_decay_eval",
         "sync_futures_data",
         "sync_liquidity_pool",
     ]
@@ -299,7 +319,7 @@ def test_list_tasks_after_manual_register():
     register_default_tasks()
     REGISTRY.register(TaskSpec("custom_job", "0 12 * * *", "mod.custom"))
     tasks = list_tasks()
-    assert len(tasks) == 14
+    assert len(tasks) == 17
     names = [t.name for t in tasks]
     assert "custom_job" in names
 
@@ -312,7 +332,7 @@ def test_get_task_returns_spec():
     spec = get_task("l1_meta_loop")
     assert spec is not None
     assert spec.name == "l1_meta_loop"
-    assert spec.cron_expression == "59 7 * * 1-5"
+    assert spec.cron_expression == "0 0 * * *"
 
 
 def test_get_task_nonexistent():

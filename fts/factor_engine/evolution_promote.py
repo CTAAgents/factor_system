@@ -543,14 +543,27 @@ class EliteStore:
             repo = self._owner._get_repo()
             existing = repo.get_factor_by_name(factor_name, market=self._owner.market)
             if existing:
-                # GAP-F10 (v2.73.0): 被拒因子结构化记录（分级日志，替代 print）
-                logger.info(
-                    "[evo] 跳过重复因子: %s (DuckDB 已存在, market=%s, trace_id=%s)",
-                    factor_name,
-                    self._owner.market,
-                    getattr(self._owner, "_trace_id", ""),
-                )
-                return None
+                if existing.get("status") == "degraded":
+                    # v2.104.0+76: 退化因子重新评估通过 → 复用原 factor_id 激活，
+                    # 保留血缘与历史状态记录（_write_to_duckdb 幂等 update 路径
+                    # 重写为 active，不新建同名重复行）。
+                    logger.info(
+                        "[evo] 退化因子重新激活: %s (status=degraded, market=%s, 复用 factor_id=%s, trace_id=%s)",
+                        factor_name,
+                        self._owner.market,
+                        existing.get("factor_id"),
+                        getattr(self._owner, "_trace_id", ""),
+                    )
+                    factor["factor_id"] = existing["factor_id"]
+                else:
+                    # GAP-F10 (v2.73.0): 被拒因子结构化记录（分级日志，替代 print）
+                    logger.info(
+                        "[evo] 跳过重复因子: %s (DuckDB 已存在, market=%s, trace_id=%s)",
+                        factor_name,
+                        self._owner.market,
+                        getattr(self._owner, "_trace_id", ""),
+                    )
+                    return None
         except Exception:
             pass
 
@@ -983,7 +996,13 @@ class EliteStore:
             # ── 幂等写入：已存在则更新，不存在则创建 ──
             existing = repo.get_factor(factor_id)
             if existing:
-                repo.update_factor(factor_id, factor_dict)
+                updates = dict(factor_dict)
+                # v2.104.0+76: 退化因子重新激活——旧记录 status 非 active 时显式
+                # 回写 active（update_factor 仅更新传入字段，否则 is_elite=True
+                # 与 status=degraded 并存产生不一致状态）。
+                if existing.get("status") != "active":
+                    updates["status"] = "active"
+                repo.update_factor(factor_id, updates)
                 print(f"[evo] 🔄 更新已有因子 {factor_name} 到 DuckDB [market={factor_market}]")
             else:
                 repo.create_factor(factor_dict)
@@ -1019,6 +1038,34 @@ class EliteStore:
             }
 
             repo.add_evaluation(factor_id, eval_dict)
+
+            # ── GAP-128: 质检结果落专属表（幂等 + 非阻塞） ──
+            # factor_quality_scores / factor_audit_reports 与 factor_catalog 同库
+            # （market 自动路由 stock/futures/energy）；写前清理旧行保幂等；
+            # 失败仅告警不阻断晋升（与 seed_lineage 非阻塞模式一致）。
+            persist_market = str(getattr(self._owner, "market", "futures") or "futures")
+            if quality_score:
+                try:
+                    from fts.factor_engine.factor_db.repository import FactorQualityScoreRepository
+
+                    with FactorQualityScoreRepository(market=persist_market) as qrepo:
+                        qrepo.delete_scores_for_factor(factor_id)
+                        qrepo.save_score(quality_score)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[GAP-128] 质量评分落库失败 %s: %s", factor_id, e)
+            if audit_report is not None:
+                try:
+                    from fts.factor_engine.factor_db.repository import FactorAuditReportRepository
+
+                    arepo = FactorAuditReportRepository(market=persist_market)
+                    try:
+                        arepo.delete_reports_for_factor(factor_id)
+                        arepo.save_report(audit_report.to_dict())
+                    finally:
+                        arepo.close()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[GAP-128] 审计报告落库失败 %s: %s", factor_id, e)
+
             return True
 
         except Exception as e:

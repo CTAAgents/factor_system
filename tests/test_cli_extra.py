@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from fts.bridge import BridgeError
 from fts.cli import (
@@ -565,6 +566,7 @@ class TestCmdCatalogStats:
 class TestGetCatalogDbPath:
     """测试 _get_catalog_db_path。"""
 
+    @pytest.mark.uses_real_factor_db  # GAP-129: 真实默认库路径路由断言
     def test_returns_schema_path(self, tmp_path):
         """返回 factor_db.schema 分库后默认 market=futures 的 Path。"""
         fake = tmp_path / "db.duckdb"
