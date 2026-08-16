@@ -28,11 +28,12 @@ def _fake_module(**attrs: object) -> types.ModuleType:
 
 
 def _fake_cfg(**attrs: object) -> MagicMock:
-    """构造带指定字段的配置对象。"""
+    """构造带指定字段的配置对象（默认市场 futures，匹配 FTS_DEFAULT_MARKET 未设时语义）。"""
     return MagicMock(
         memory_dir="/tmp/mem",
         elite_dir="/tmp/elite",
         futures_elite_dir="/tmp/futures_elite",
+        default_market="futures",
         **attrs,
     )
 
@@ -731,8 +732,10 @@ class TestLogicMonitorJob:
 class TestFactorInspectorJob:
     """factor_inspector_job 测试。"""
 
-    def test_success(self, caplog):
-        """成功路径：能化链 dry-run 巡检并输出汇总。"""
+    @patch("fts.config.get_config")
+    def test_success(self, mock_cfg, caplog):
+        """成功路径：全局市场为 energy 时巡检能化链 + dry-run 输出汇总。"""
+        mock_cfg.return_value = types.SimpleNamespace(default_market="energy")
         fake_inspector = _fake_module(FactorInspector=MagicMock())
         fake_inspector.FactorInspector.return_value.inspect_and_downgrade.return_value = {
             "summary": {
@@ -753,13 +756,32 @@ class TestFactorInspectorJob:
             caplog.set_level(logging.INFO)
             jobs.factor_inspector_job()
 
-        # GAP-132：默认巡检能化链 + dry-run（评估历史不足，退化检测未启用自动降级）
+        # GAP-132：巡检市场跟随全局 FTS_DEFAULT_MARKET + dry-run（评估历史不足，不自动降级）
         fake_inspector.FactorInspector.assert_called_once_with(market="energy")
         fake_inspector.FactorInspector.return_value.inspect_and_downgrade.assert_called_once_with(
             threshold=-0.2,
             commit=False,
         )
         assert "[因子巡检] 完成: audited=5 degraded=1 downgraded=0 deferred_approved=0 skipped=0 errors=0" in caplog.text
+
+    @patch("fts.config.get_config")
+    def test_follows_global_market(self, mock_cfg, caplog):
+        """巡检市场跟随全局 FTS_DEFAULT_MARKET（futures 时巡检期货库）。"""
+        mock_cfg.return_value = types.SimpleNamespace(default_market="futures")
+        fake_inspector = _fake_module(FactorInspector=MagicMock())
+        fake_inspector.FactorInspector.return_value.inspect_and_downgrade.return_value = {
+            "summary": {"total_audited": 0, "degraded_detected": 0, "downgraded": 0,
+                        "deferred_approved": 0, "skipped": 0, "errors": 0}
+        }
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.factor_engine.factor_inspector": fake_inspector,
+            },
+        ):
+            jobs.factor_inspector_job()
+
+        fake_inspector.FactorInspector.assert_called_once_with(market="futures")
 
     def test_failure_caught(self, caplog):
         """巡检失败时捕获并记录错误。"""
@@ -774,6 +796,36 @@ class TestFactorInspectorJob:
             jobs.factor_inspector_job()  # 不应抛出
 
         assert "[因子巡检] 运行失败: inspector crash" in caplog.text
+
+
+class TestMarketGate:
+    """全局市场门控（FTS_DEFAULT_MARKET 运行时全局切换，v2.104.0+101）。"""
+
+    @patch("fts.config.get_config")
+    def test_market_gate_follows_global(self, mock_cfg):
+        """_market_gate 按全局市场返回 True/False。"""
+        mock_cfg.return_value = types.SimpleNamespace(default_market="futures")
+        assert jobs._market_gate("futures", task="t") is True
+        assert jobs._market_gate("energy", task="t") is False
+        mock_cfg.return_value = types.SimpleNamespace(default_market="energy")
+        assert jobs._market_gate("energy", task="t") is True
+        assert jobs._market_gate("futures", task="t") is False
+
+    @patch("fts.config.get_config")
+    def test_energy_job_noop_when_global_futures(self, mock_cfg, caplog):
+        """energy 专属任务在全局 futures 下门控 no-op（不触发重依赖导入）。"""
+        mock_cfg.return_value = types.SimpleNamespace(default_market="futures")
+        caplog.set_level(logging.INFO)
+        jobs.l2_batch_mining_energy_job()  # 门控短路，应立即返回不抛异常
+        assert "不匹配，跳过" in caplog.text
+
+    @patch("fts.config.get_config")
+    def test_futures_job_noop_when_global_energy(self, mock_cfg, caplog):
+        """futures 专属任务在全局 energy 下门控 no-op。"""
+        mock_cfg.return_value = types.SimpleNamespace(default_market="energy")
+        caplog.set_level(logging.INFO)
+        jobs.futures_signal_pipeline_job()  # 门控短路，不应触发信号管道
+        assert "不匹配，跳过" in caplog.text
 
 
 # ─── 数据质量评估 ────────────────────────────────────────

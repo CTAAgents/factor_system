@@ -36,13 +36,16 @@ class FactorRepository:
     _art_index_drop_count: int = 0
     _art_index_rebuild_count: int = 0
 
-    def __init__(self, db_path: str | Path | None = None, market: str = "futures"):
+    def __init__(self, db_path: str | Path | None = None, market: str | None = None):
         from .schema import get_db_path
 
         if db_path:
             self._db_path = Path(db_path)
         else:
-            self._db_path = get_db_path(market)
+            # 全局市场切换（v2.104.0+101）：market 未显式指定时跟随 FTS_DEFAULT_MARKET
+            from fts.config import get_config
+
+            self._db_path = get_db_path(market or get_config().default_market)
         self._conn = None
         self._last_columns: list[str] = []
 

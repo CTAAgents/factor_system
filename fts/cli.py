@@ -196,13 +196,15 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
     run_id = generate_run_id()
     session_id = getattr(args, "session_id", "") or ""
     cfg = get_config()
+    universe = args.universe or cfg.default_market
     print(f"[evolution] session_id={session_id} trace_id={trace_id} run_id={run_id}")
     print(f"[evolution] max_generations={args.max_generations}")
+    print(f"[evolution] universe={universe}（全局默认 FTS_DEFAULT_MARKET={cfg.default_market}）")
 
-    if args.universe in ("futures", "energy"):
+    if universe in ("futures", "energy"):
         # ── 期货横截面模式（使用期货专用种子因子） ──
         # 能源产业链专属工作流：--chain energy 或 --universe energy 或 --symbols 显式列表 → 链路由
-        chain = getattr(args, "chain", "") or ("energy" if args.universe == "energy" else "")
+        chain = getattr(args, "chain", "") or ("energy" if universe == "energy" else "")
         symbols_raw = getattr(args, "symbols", "") or ""
         if symbols_raw:
             chain_symbols = [s.strip().upper() for s in symbols_raw.split(",") if s.strip()]
@@ -578,8 +580,8 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
     cfg = get_config()
     print(f"[portfolio] session_id={session_id} trace_id={trace_id} run_id={run_id}")
 
-    # 根据 universe 选择 elite 目录和合成模式
-    universe = getattr(args, "universe", "futures")
+    # 根据 universe 选择 elite 目录和合成模式（默认跟随全局 FTS_DEFAULT_MARKET）
+    universe = getattr(args, "universe", None) or cfg.default_market
     synthesis_mode = getattr(args, "synthesis_mode", None)
     optimizer_mode = getattr(args, "optimizer_mode", None) or getattr(cfg, "portfolio_optimizer_mode", "risk_parity")
     # risk_parity 快捷选项（v2.104.0+62）：映射 optimizer + risk_parity 目标，矩阵自动构建
@@ -1113,7 +1115,7 @@ def _filter_factors_by_cluster(
 def _cmd_factor_list(args: argparse.Namespace) -> int:
     """列出 elite 因子（支持目录直读 + DuckDB 查询两种模式）。"""
     cfg = get_config()
-    market = getattr(args, "market", "futures")
+    market = getattr(args, "market", None) or cfg.default_market
 
     # 筛选参数决定是否走 DuckDB 查询
     cluster_id = getattr(args, "cluster", None)
@@ -1267,7 +1269,8 @@ def _compute_expr_type_distribution(
 
 def _cmd_factor_stats(args: argparse.Namespace) -> int:
     """统计因子聚类分布（信号相关性）+ 表达类型分布（GAP-S13）。"""
-    market = getattr(args, "market", "futures")
+    cfg = get_config()
+    market = getattr(args, "market", None) or cfg.default_market
     min_sharpe = getattr(args, "min_sharpe", 0.0)
     try:
         repo = _load_factor_repo(market=market)
@@ -2434,9 +2437,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_evo_run.add_argument(
         "--universe",
         type=str,
-        default="futures",
+        default=None,
         choices=["futures", "energy"],
-        help="演化品种池类型: futures（期货，默认）/ energy（能源产业链逻辑市场）",
+        help="演化品种池类型: futures/energy（默认跟随全局 FTS_DEFAULT_MARKET）",
     )
     p_evo_run.add_argument("--max-stocks", type=int, default=0, help="横截面模式最大标的数（0 = 使用全部品种）")
     p_evo_run.add_argument("--days", type=int, default=750, help="回溯天数（默认 750，GAP-S08 长窗口）")
@@ -2481,9 +2484,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_port_run.add_argument(
         "--universe",
         type=str,
-        default="futures",
+        default=None,
         choices=["futures", "energy"],
-        help="因子池类型: futures（期货）/ energy（能源产业链逻辑市场）",
+        help="因子池类型: futures/energy（默认跟随全局 FTS_DEFAULT_MARKET）",
     )
     p_port_run.add_argument(
         "--synthesis-mode",
@@ -2560,9 +2563,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_factor_list.add_argument(
         "--market",
         type=str,
-        default="futures",
+        default=None,
         choices=["futures", "energy"],
-        help="市场类型: futures（期货）/ energy（能源产业链逻辑市场）",
+        help="市场类型: futures/energy（默认跟随全局 FTS_DEFAULT_MARKET）",
     )
     p_factor_list.add_argument("--elite-dir", default=None, help="elite 因子目录（仅目录模式使用）")
     p_factor_list.add_argument("--cluster", type=int, default=None, help="按信号聚类簇 ID 筛选（DuckDB 模式）")
@@ -2590,9 +2593,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_factor_stats.add_argument(
         "--market",
         type=str,
-        default="futures",
+        default=None,
         choices=["futures", "energy"],
-        help="市场类型: futures（期货）/ energy（能源产业链逻辑市场）",
+        help="市场类型: futures/energy（默认跟随全局 FTS_DEFAULT_MARKET）",
     )
     p_factor_stats.add_argument("--min-sharpe", type=float, default=0.0, help="最低 Sharpe 阈值（默认 0.0）")
     p_factor_stats.add_argument("--json", action="store_true", help="JSON 格式输出")

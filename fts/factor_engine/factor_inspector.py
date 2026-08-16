@@ -66,8 +66,12 @@ class FactorInspector:
         self,
         repo: Optional[FactorRepository] = None,
         lineage: Optional[FactorLineage] = None,
-        market: str = "futures",
+        market: Optional[str] = None,
     ) -> None:
+        if market is None:
+            from fts.config import get_config
+
+            market = get_config().default_market
         self._repo = repo or FactorRepository(market=market)
         self._lineage = lineage or FactorLineage(self._repo)
 

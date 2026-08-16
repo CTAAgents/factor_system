@@ -15,6 +15,7 @@ from __future__ import annotations
 import sys
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import duckdb
 import pytest
@@ -69,6 +70,20 @@ class TestIsolationActive:
             assert arepo._db_path.is_relative_to(tmp_path)
         finally:
             arepo.close()
+
+    def test_repository_default_market_follows_global(self, tmp_path, monkeypatch) -> None:
+        """FactorRepository 未显式指定 market 时跟随全局 FTS_DEFAULT_MARKET（v2.104.0+101）。"""
+        from unittest.mock import patch as mpatch
+
+        with mpatch("fts.config.get_config") as mock_cfg:
+            mock_cfg.return_value = SimpleNamespace(default_market="energy")
+            with FactorRepository() as repo:
+                assert repo._db_path.name == schema.DATABASE_PATH_ENERGY.name
+                assert repo._db_path.is_relative_to(tmp_path)
+        with mpatch("fts.config.get_config") as mock_cfg:
+            mock_cfg.return_value = SimpleNamespace(default_market="futures")
+            with FactorRepository() as repo:
+                assert repo._db_path.name == schema.DATABASE_PATH_FUTURES.name
 
     def test_promotion_writes_do_not_touch_real_db(self) -> None:
         """模拟晋升写入（factor_catalog + quality + audit 三表）仅落隔离库，真实库 COUNT 不变。"""

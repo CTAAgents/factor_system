@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -360,6 +361,31 @@ class TestMain:
         assert "l3_abcd1234_20260718T000000" in captured.out
         assert "run_ef567890_20260718T000000" in captured.out
         assert "portfolio" in captured.out
+
+    @patch("fts.cli.PortfolioLoop")
+    @patch("fts.cli.get_config")
+    def test_portfolio_run_follows_global_market(self, mock_cfg, mock_port, capsys):
+        """portfolio run --universe 未指定时跟随全局 FTS_DEFAULT_MARKET（v2.104.0+101）。"""
+        mock_cfg.return_value = SimpleNamespace(
+            default_market="energy",
+            memory_dir="/mem",
+            get_elite_dir=lambda m: f"/elite/{m}",
+            portfolio_optimizer_mode="risk_parity",
+            l3={},
+            verifier={},
+        )
+        mock_loop = mock_port.return_value
+        mock_loop.run.return_value = MagicMock(
+            status="completed",
+            n_factors_retained=0,
+            combo_sharpe=0.0,
+        )
+        rc = main(["portfolio", "run"])
+        assert rc == 0
+        kwargs = mock_port.call_args.kwargs
+        assert kwargs["market"] == "energy"
+        assert kwargs["elite_dir"] == "/elite/energy"
+        assert "[portfolio] universe=energy" in capsys.readouterr().out
 
     @patch("fts.cli.list_scheduler_tasks", return_value=[])
     def test_scheduler_list_empty(self, mock_tasks, capsys):

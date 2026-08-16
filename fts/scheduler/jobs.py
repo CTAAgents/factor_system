@@ -29,12 +29,48 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # ── L1 Meta-Loop — 每日 08:30 知识补给 + 种子注入 ─────────
 
 
-def l1_meta_loop_job(market: str = "futures") -> None:
+def _market_gate(market: str, *, task: str) -> bool:
+    """全局市场门控（FTS_DEFAULT_MARKET 运行时全局切换，v2.104.0+101）。
+
+    任务专属市场与全局默认市场不一致时 no-op（记日志跳过），使 TRAE Schedule
+    外部任务在不匹配市场下自动空转，无需逐任务注册调整。
+
+    Args:
+        market: 任务专属市场（"futures"/"energy"）
+        task: 任务名（日志标识）
+
+    Returns:
+        True=继续执行；False=全局市场不匹配，已记录跳过日志
+    """
+    from fts.config import get_config
+
+    global_market = get_config().default_market
+    if global_market == market:
+        return True
+    logger.info(
+        "[%s] 全局市场=%s 与任务市场=%s 不匹配，跳过（FTS_DEFAULT_MARKET 全局切换）",
+        task,
+        global_market,
+        market,
+    )
+    return False
+
+
+def _global_market() -> str:
+    """解析全局市场（FTS_DEFAULT_MARKET env → cfg.default_market，默认 futures）。"""
+    from fts.config import get_config
+
+    return get_config().default_market
+
+
+def l1_meta_loop_job(market: str | None = None) -> None:
     """执行 L1 Meta-Loop（每日知识补给 + Bootstrapping + 种子注入）。
 
     Args:
-        market: 市场类型（futures 默认；energy 走能源链独立 L1 输出，GAP-121 2026-08-15）。
+        market: 市场类型（None=跟随全局 FTS_DEFAULT_MARKET；energy 走能源链独立 L1 输出，GAP-121 2026-08-15）。
     """
+    if market is None:
+        market = _global_market()
     trace_id = f"fts.l1.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L1] Meta-Loop 启动 trace_id=%s market=%s", trace_id, market)
 
@@ -90,6 +126,8 @@ def _run_l2_evolution(max_generation: int, tag: str) -> None:
     """
     trace_id = f"fts.l2.{tag}.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L2][%s] Evolution Loop 启动 trace_id=%s", tag, trace_id)
+    if not _market_gate("futures", task="L2演化"):
+        return
 
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
@@ -179,6 +217,8 @@ def l2_seed_promotion_job() -> None:
     """
     trace_id = f"fts.l2_seed.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L2种子] 启动 trace_id=%s", trace_id)
+    if not _market_gate("futures", task="L2种子"):
+        return
 
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
@@ -261,6 +301,8 @@ def l2_seed_promotion_energy_job() -> None:
     """
     trace_id = f"fts.l2_seed_energy.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L2种子][energy] 启动 trace_id=%s", trace_id)
+    if not _market_gate("energy", task="L2种子[energy]"):
+        return
 
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
@@ -362,6 +404,8 @@ def l3_portfolio_loop_job() -> None:
     """
     trace_id = f"fts.l3.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L3] Portfolio Loop 启动 trace_id=%s", trace_id)
+    if not _market_gate("futures", task="L3组合"):
+        return
 
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
@@ -416,6 +460,8 @@ def futures_signal_pipeline_job() -> None:
     """独立的期货信号管道任务（可单独调度）。"""
     trace_id = f"fts.signal.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[信号管道] 启动 trace_id=%s", trace_id)
+    if not _market_gate("futures", task="信号管道"):
+        return
     _run_futures_signal_pipeline()
 
 
@@ -451,6 +497,8 @@ def l2_batch_mining_job() -> None:
     """
     trace_id = f"fts.l2_batch.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L2批量] 启动 trace_id=%s", trace_id)
+    if not _market_gate("futures", task="L2批量"):
+        return
 
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
@@ -537,6 +585,8 @@ def l2_batch_mining_energy_job() -> None:
     """
     trace_id = f"fts.l2_batch_energy.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L2批量][energy] 启动 trace_id=%s", trace_id)
+    if not _market_gate("energy", task="L2批量[energy]"):
+        return
 
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
@@ -668,6 +718,8 @@ def l2_review_job() -> None:
     """
     trace_id = f"fts.l2_review.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L2评审] 启动 trace_id=%s", trace_id)
+    if not _market_gate("futures", task="L2评审"):
+        return
 
     # ---- Step A: 新标准全量重审（与月度衰减合并） ----
     if os.getenv("FTS_MONTHLY_REAUDIT_ENABLED", "1") == "1":
@@ -763,6 +815,8 @@ def l2_review_energy_job() -> None:
     """
     trace_id = f"fts.l2_review_energy.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L2评审][energy] 启动 trace_id=%s", trace_id)
+    if not _market_gate("energy", task="L2评审[energy]"):
+        return
 
     # ---- Step A: 新标准全量重审（market=energy） ----
     if os.getenv("FTS_MONTHLY_REAUDIT_ENABLED", "1") == "1":
@@ -835,6 +889,8 @@ def l2_energy_qa_review_job() -> None:
     """
     trace_id = f"fts.l2_qa_review.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L2评审质检][energy] 启动 trace_id=%s", trace_id)
+    if not _market_gate("energy", task="L2评审质检[energy]"):
+        return
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.factor_engine.energy_qa_review import EnergyQaReviewConfig, EnergyQaReviewPipeline
@@ -863,6 +919,8 @@ def logic_monitor_job() -> None:
     """
     trace_id = f"fts.logic.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[逻辑监控] 启动 trace_id=%s", trace_id)
+    if not _market_gate("futures", task="逻辑监控"):
+        return
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.monitor.logic_monitor import LogicMonitor
@@ -942,12 +1000,11 @@ def factor_inspector_job() -> None:
     调用 FactorInspector.inspect_and_downgrade() 执行巡检，
     阈值默认 -0.2（Sharpe 下降 20% 触发降级）。
 
-    GAP-132（v2.104.0+100）：① 默认巡检能化链（market="energy"）——
-    期货通用与能化链为两套独立 catalog，巡检口径统一为能化链；
-    ② 因能化链/期货库评估历史不足（每因子仅 1 条评估记录）趋势检测
-    返回 insufficient_data、退化检测失效，暂以 dry-run（commit=False）
-    运行，仅输出退化候选不落库，待评估历史多期积累、GAP-132 关闭后
-    恢复自动降级（commit=True）。
+    GAP-132（v2.104.0+100）：巡检市场跟随全局 FTS_DEFAULT_MARKET（energy/futures
+    两套独立 catalog 各自巡检，v2.104.0+101 起替代固定 energy）；
+    且因评估历史不足（每因子仅 1 条评估记录）趋势检测返回 insufficient_data、
+    退化检测失效，暂以 dry-run（commit=False）运行，仅输出退化候选不落库，
+    待评估历史多期积累、GAP-132 关闭后恢复自动降级（commit=True）。
     """
     trace_id = f"fts.inspector.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[因子巡检] 启动 trace_id=%s", trace_id)
@@ -955,7 +1012,7 @@ def factor_inspector_job() -> None:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.factor_engine.factor_inspector import FactorInspector
 
-        inspector = FactorInspector(market="energy")
+        inspector = FactorInspector(market=_global_market())
         result = inspector.inspect_and_downgrade(
             threshold=-0.2,
             commit=False,
@@ -1266,6 +1323,8 @@ def mhf_signal_job() -> None:
     """
     trace_id = f"fts.mhf.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[MHF] 信号任务启动 trace_id=%s", trace_id)
+    if not _market_gate("futures", task="MHF信号"):
+        return
 
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
