@@ -1,7 +1,7 @@
 # GAP-083 期货持仓/结算数据源接入 — 阶段 C 完整实施报告
 
 
-> 版本: v2.104.0+89
+> 版本: v2.104.0+90
 
 > 计划文档：`docs/harness/plans/27-futures-hold-settle-integration-plan.md`
 > 版本：v2.101.0（日常开发追加，不 bump）｜ 实施日期：2026-08-11

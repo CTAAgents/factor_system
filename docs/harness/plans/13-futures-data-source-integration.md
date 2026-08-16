@@ -1,6 +1,6 @@
 # 期货数据源集成实施计划（TQ + iFinD + Wind MCP）
 
-> 版本: v2.104.0+89
+> 版本: v2.104.0+90
 > 最后更新: 2026-08-05
 > 状态: Phase 14.0–14.5 全部完成，详见 [acceptance/v2.3.0/14.5-observability-acceptance.md](acceptance/v2.3.0/14.5-observability-acceptance.md)
 > 适用范围: FTS 期货数据层 (`fts/data_futures.py` + 衍生模块)

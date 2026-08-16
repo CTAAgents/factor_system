@@ -1,7 +1,7 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+89
-> 最后更新: 2026-08-16
+> 版本: v2.104.0+90
+> 最后更新: 2026-08-17
 
 ---
 
@@ -12,6 +12,7 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+90** | **2026-08-17** | **评审质检阀门定时自动化 + 调度时间调整 + futures 补质检专项：① `_review_gate_weekly` 落盘（jobs.py）并接入 `l2_review_job`/`l2_review_energy_job` Step C——周日评审执行 L3 池周度巡检 （`review_l3_pool` 复核 approved 因子，不合格/质检失效撤销退回 L2 冷却池）+ pending 待审因子机审兜底（`review_inplace`，宁缺毋滥）；② 调度时间对齐：L2 演化 工作日 03:00（≈10 代）/ 周六 03:00（≈50 代）、factor_inspector 每日 04:00、logic_monitor 每日 4:30、data_level_monitor 每日 05:00（tasks.py + test_tasks.py 39 passed）；③ futures 补质检记录专项 `scripts/backfill_futures_qa.py`：92 active elite 批量重跑横截面评估（面板 500 日，SYNTHETIC 兜底）→ 落库 factor_quality_scores/factor_audit_reports/metadata.qa_review → `review_inplace` 复核（dry-run 2 因子链路验证通过）；文档同步（factor_lifecycle/07-operations）** |** |
 | **v2.104.0+89** | **2026-08-17** | **评审质检独立阀门模块（L2→L3 唯一通道）：① 机审升级完整质检门禁——`AutoReviewPolicy.classify` 复核 audit/评分卡/高IC/多重检验/WalkForward/Q1-Q10 + IC/Sharpe（任一缺失→转人审宁缺毋滥，任一未通过→rejected）；② Q1-Q10 接入晋升链——`build_qa_review`（evaluation/audit 结果映射，audit items 缺失回退整体 passed）+ 落库 `metadata.qa_review`（futures/energy 双路径 `_write_to_duckdb`）；③ `FactorReviewWorkflow.review_inplace` 就地审核（approved→流向 L3 / rejected→退回 L2 / 质检缺失→撤销 approved），晋升落库后自动触发（非阻塞）；④ `review_l3_pool` 周度 L3 池巡检（周日 `l2_review_job` Step C：approved 因子按最新数据复核，不合格/质检失效撤销退回）；⑤ 存量回填脚本 `scripts/backfill_qa_review.py`（重建模式：JSON 快照+质检表恢复 metadata + 复核，high_ic 缺失按晋升强制门推断 B）；修复 `_extract_qa_meta` DuckDB JSON 字符串解析；**事故记录**：首次回填 apply 因 metadata 字符串未解析覆盖 306 因子 metadata，已重建恢复（correlation_metadata/shadow_pool 不可恢复为空）；存量复核结果 futures approved=0/rejected=39/needs_human=53（futures 组合空库待补质检后重审）、energy approved=192/214；新增测试 test_qa_gate.py 23 用例 + test_portfolio_loop 269；受影响回归 factor_engine not-slow 通过 + ruff 全绿；文档同步（01-arch/05-observability/06-testing/07-operations/factor_lifecycle）** |** |
 | **v2.104.0+88** | **2026-08-17** | **L3 权重重算因子强制 L2 质检评审（approved）硬过滤：`load_elite_factors`（portfolio_loop.py）DuckDB 路径新增 `_filter_review_approved`——仅 `factor_reviews.decision='approved'` 因子可参与组合权重重算，rejected 与未评审（无 review 记录）因子一律剔除（硬编码强制，无配置开关）；过滤链=质量门槛→影子池冷却→L2 评审合格→相关性去重（评审与冷却两条独立流程并存）；实测堵漏 fct_c6f0fc20（评审驳回仍 is_elite=true 参与重算）；JSON 兜底路径（历史退役降级）无 review 状态字段仅告警不强制；存量评审补齐：futures 156 + energy 307 未评审因子 `auto_review` 机审全 approved（FTS_REVIEW_EXPERIENCE_CHAIN=0 关闭经验链副作用），补齐后 futures elite+active=92（approved 91/rejected 1）、energy 238 approved 全覆盖不空库、默认库 303（approved 301/rejected 2）；新增测试 +6（test_portfolio_loop.py TestLoadEliteDuckdb +2 集成：rejected 剔除/unreviewed 剔除；TestFilterReviewApproved +4 单元：approved 保留/rejected 剔除/unreviewed 剔除/空输入），受影响回归 test_portfolio_loop 268 + 相关文件 60 passed + ruff 全绿；文档同步（01-arch/05-observability/06-testing/07-operations）** |** |
 | **v2.104.0+87** | **2026-08-17** | **能化链评审+质检合并统一管道（energy_qa_review.py）：[0]面板→[1]重审→[2]退化检测落库→[3]生命周期收口含冷却期30日回归→[4]Inspector→[5]报告；宁严勿松单维度降级；新增 l2_energy_qa_review_job + 15 测试** |** |
@@ -396,9 +397,9 @@ python -m fts.cli scheduler list
 | `monthly_decay_eval` | `0 4 1 * *` | 每月 1 日 04:00 | 月度因子衰减评估（A.2） |
 | `health_check` | `*/10 * * * *` | 每 10 分钟 | 健康检查：监控所有循环状态 |
 | `data_quality_eval` | `*/5 * * * *` | 每 5 分钟 | 数据质量周期评估（B.1） |
-| `data_level_monitor` | `0 4 * * *` | 每日 04:00 | 数据级质量监控（GAP-F06） |
-| `logic_monitor` | `0 22 * * *` | 每日 22:00 | 逻辑监控（B.2） |
-| `factor_inspector` | `0 3 * * *` | 每日 03:00 | 因子巡检与自动降级（B.2） |
+| `data_level_monitor` | `0 5 * * *` | 每日 05:00 | 数据级质量监控（GAP-F06） |
+| `logic_monitor` | `30 4 * * *` | 每日 4:30 | 逻辑监控（B.2） |
+| `factor_inspector` | `0 4 * * *` | 每日 04:00 | 因子巡检与自动降级（B.2） |
 
 ### 依赖
 
