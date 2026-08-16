@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v2.104.0+84
+> 版本: v2.104.0+89
 > 最后更新: 2026-08-15
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -306,6 +306,7 @@
 | GAP-L402 | `fts/factor_engine/feedback_loop.py` + `bridge/signal_bridge.py` | L4 实盘反馈闭环缺失：无 LiveFeedbackRecord 契约与回流通道（承接总纲 GAP-I401） | 因子状态仅基于历史回测 | D 阶段（v2.71.0） | ✅ 已关闭（v2.66.0：LiveFeedbackRecord 契约 + LiveFeedbackImporter 导入 + LiveVsBacktestICReport 对比 + CLI）。**数据源补全（D.1，v2.101.0）**：离真实账户前的 `position_return` 断点由模拟仓补齐——`fts/live_trade/simulated_portfolio.py`（`SimulatedPortfolio.apply_signal`/`mark_to_market`/`attribute_factor_returns` 生成 `LiveFeedbackRecord`）+ `simulated_engine.py`（历史回放 `SimulatedReplayEngine` + 实时纸面 `SimulatedPaperTrader`）+ `scripts/simulated_replay.py` 回放脚本，`--out` 落盘反馈记录供 `LiveFeedbackImporter` 导入驱动衰减判定；设计见 [D.1-simulated-portfolio-design.md](../../docs/harness/design/D.1-simulated-portfolio-design.md) |
 | GAP-L309 | `fts/factor_engine/portfolio_loop.py` | 组合层数据规模扩展：ElasticNet 硬编码 50 只×120 天，统计功效有限 | 截面回归功效不足、与 MIN_EVAL_DAYS=500 不一致 | 扩展期 | ✅ 已关闭（v2.67.1：PanelLoadingConfig 默认全 CSI300×500 天 + 流动性分层抽样 + 覆盖/幸存者偏差日志） |
 | GAP-L310 | `fts/factor_engine/seed_loader.py` | 种子加载链缺陷：① YAML 因子 `kind=FactorKind.*` 引用但 `FactorKind` 未导入（NameError → 期货种子 81/184 加载失败）；② 多行 `field_defs` 拼接进函数体时后续行无/残留缩进 → unexpected indent（analyst_revision/fundamental 等 38 处编译失败）；③ 测试断言引用已迁移函数 `_estimate_lookback`（seed_analyzer.estimate_lookback_static） | 种子因子批量加载失败/编译失败，种子库完整性验证失真；全量回归 21 例失败 | v2.68.0 | ✅ 已关闭（v2.68.0：L23 补 `FactorKind` 导入；`_fundamental_factor_from_yaml` 多行 field_defs strip+统一 4 空格缩进；test_seed_loader 改引 `estimate_lookback_static`；test_seed_pool/test_seed_loader 种子计数断言同步 714/898/30） |
+| GAP-125 | `fts/factor_engine/energy_qa_review.py` | 能化链评审（l2_review_energy_job）与定期质检（scripts/energy_chain_degradation_dryrun.py）职责重叠、判据竞争（同一因子可能质检判 degraded 而评审判 retire），且各自重复准备面板与 reaudit | 合并为统一管道（宁严勿松单维度降级 + 冷却期30日自动回归 + 单一状态机），消除重复计算与判据冲突 | 灰度 4 周（dry-run 对比后 apply） | 🔄 处理中（v2.104.0+87） |
 
 ---
 

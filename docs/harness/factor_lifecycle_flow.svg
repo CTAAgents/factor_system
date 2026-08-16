@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 486" width="100%" height="auto" role="img" aria-label="FTS 因子全生命周期流程图">
+  <style>
+    :root {
+      --surface: #F7F7F8;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --brand-text: #1A1759;
+      --brand-on: #FFFFFF;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --surface: #171717;
+        --text: #E5E5E5;
+        --text-muted: #A1A1AA;
+        --border: rgba(229, 229, 229, 0.12);
+        --brand: #6054F1;
+        --brand-soft: #1A1759;
+        --brand-text: #CFD8FF;
+        --brand-on: #FFFFFF;
+      }
+    }
+    .t { fill: var(--text); font: 400 14px/20px "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .th { fill: var(--text); font: 500 14px/20px "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .ts { fill: var(--text-muted); font: 400 12px/18px "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .arr { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .arrb { stroke: var(--brand); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .leader { stroke: var(--text-muted); stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 4 4; fill: none; }
+    rect.c-node { fill: var(--surface); stroke: var(--border); }
+    rect.c-brand-node { fill: var(--brand-soft); stroke: var(--brand); }
+    .c-brand-node .th { fill: var(--brand-text); }
+    .c-brand-node .ts { fill: var(--brand); }
+    .badge { fill: var(--brand); }
+    .badge-t { fill: var(--brand-on); font: 500 12px/18px "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .bound { fill: none; stroke: var(--text-muted); stroke-width: 1.2; stroke-dasharray: 5 4; }
+  </style>
+
+  <defs>
+    <marker id="mkA" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" fill="var(--text-muted)"/>
+    </marker>
+    <marker id="mkB" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" fill="var(--brand)"/>
+    </marker>
+  </defs>
+
+  <!-- N1 -->
+  <g>
+    <rect class="c-node" x="70" y="56" width="250" height="96" rx="8"/>
+    <text class="th" x="86" y="86">L0/L1 供给</text>
+    <text class="ts" x="86" y="110">每日 00:00 知识补给</text>
+    <text class="ts" x="86" y="130">+ 种子注入 → 候选池</text>
+  </g>
+
+  <!-- N2 -->
+  <g>
+    <rect class="c-node" x="400" y="56" width="250" height="96" rx="8"/>
+    <text class="th" x="416" y="86">L2 演化晋升</text>
+    <text class="ts" x="416" y="110">02:00 种子 · 04:00 演化 · 周日06:00 批量</text>
+    <text class="ts" x="416" y="130">Verifier · 6项审计 · 评分卡 · Q1-Q10</text>
+  </g>
+
+  <!-- N3 焦点 -->
+  <g>
+    <rect class="c-brand-node" x="400" y="212" width="250" height="96" rx="8"/>
+    <text class="th" x="416" y="242">L2 周度评审</text>
+    <text class="ts" x="416" y="266">周日 10:00 人审 / 机审</text>
+    <text class="ts" x="416" y="286">approved / rejected 落库 factor_reviews</text>
+    <rect class="badge" x="556" y="222" width="84" height="22" rx="11"/>
+    <text class="badge-t" x="566" y="237">L3 强制闸门</text>
+  </g>
+
+  <!-- N4 -->
+  <g>
+    <rect class="c-node" x="70" y="212" width="250" height="96" rx="8"/>
+    <text class="th" x="86" y="242">L3 组合构建</text>
+    <text class="ts" x="86" y="266">工作日 06:00 权重重算</text>
+    <text class="ts" x="86" y="286">质量 → 冷却 → approved → 去重 → 权重</text>
+  </g>
+
+  <!-- 主链连接 -->
+  <path class="arr" d="M320 104 L400 104" marker-end="url(#mkA)"/>
+  <path class="arrb" d="M525 152 L525 212" marker-end="url(#mkB)"/>
+  <path class="arrb" d="M400 260 L320 260" marker-end="url(#mkB)"/>
+
+  <!-- 监控容器 -->
+  <rect class="bound" x="70" y="352" width="580" height="118" rx="12"/>
+  <text class="th" x="86" y="380">持续监控与生命周期</text>
+  <text class="ts" x="86" y="404">每日 03:00 巡检降级 · 22:00 逻辑监控 · 月度 M1-M5 · 季度 F1-F6 · 半年度 D1-D4</text>
+  <text class="ts" x="86" y="424">退役 5 条红线 · 7 状态机（DRAFT→PENDING_QA→CORE⇄CANDIDATE→OBSERVATION⇄SUSPENDED→RETIRED）</text>
+  <text class="ts" x="86" y="444">状态权重上限：CORE ≤30% · CANDIDATE ≤15% · OBSERVATION ≤50% · 降级后 30 交易日冷却期可回归</text>
+
+  <!-- 反馈连接 -->
+  <path class="arr" d="M200 308 L200 352" marker-end="url(#mkA)"/>
+  <path class="leader" d="M360 352 L360 332 L525 332 L525 308" marker-end="url(#mkA)"/>
+</svg>

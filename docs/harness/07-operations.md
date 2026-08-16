@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+84
+> 版本: v2.104.0+89
 > 最后更新: 2026-08-16
 
 ---
@@ -12,6 +12,11 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+89** | **2026-08-17** | **评审质检独立阀门模块（L2→L3 唯一通道）：① 机审升级完整质检门禁——`AutoReviewPolicy.classify` 复核 audit/评分卡/高IC/多重检验/WalkForward/Q1-Q10 + IC/Sharpe（任一缺失→转人审宁缺毋滥，任一未通过→rejected）；② Q1-Q10 接入晋升链——`build_qa_review`（evaluation/audit 结果映射，audit items 缺失回退整体 passed）+ 落库 `metadata.qa_review`（futures/energy 双路径 `_write_to_duckdb`）；③ `FactorReviewWorkflow.review_inplace` 就地审核（approved→流向 L3 / rejected→退回 L2 / 质检缺失→撤销 approved），晋升落库后自动触发（非阻塞）；④ `review_l3_pool` 周度 L3 池巡检（周日 `l2_review_job` Step C：approved 因子按最新数据复核，不合格/质检失效撤销退回）；⑤ 存量回填脚本 `scripts/backfill_qa_review.py`（重建模式：JSON 快照+质检表恢复 metadata + 复核，high_ic 缺失按晋升强制门推断 B）；修复 `_extract_qa_meta` DuckDB JSON 字符串解析；**事故记录**：首次回填 apply 因 metadata 字符串未解析覆盖 306 因子 metadata，已重建恢复（correlation_metadata/shadow_pool 不可恢复为空）；存量复核结果 futures approved=0/rejected=39/needs_human=53（futures 组合空库待补质检后重审）、energy approved=192/214；新增测试 test_qa_gate.py 23 用例 + test_portfolio_loop 269；受影响回归 factor_engine not-slow 通过 + ruff 全绿；文档同步（01-arch/05-observability/06-testing/07-operations/factor_lifecycle）** |** |
+| **v2.104.0+88** | **2026-08-17** | **L3 权重重算因子强制 L2 质检评审（approved）硬过滤：`load_elite_factors`（portfolio_loop.py）DuckDB 路径新增 `_filter_review_approved`——仅 `factor_reviews.decision='approved'` 因子可参与组合权重重算，rejected 与未评审（无 review 记录）因子一律剔除（硬编码强制，无配置开关）；过滤链=质量门槛→影子池冷却→L2 评审合格→相关性去重（评审与冷却两条独立流程并存）；实测堵漏 fct_c6f0fc20（评审驳回仍 is_elite=true 参与重算）；JSON 兜底路径（历史退役降级）无 review 状态字段仅告警不强制；存量评审补齐：futures 156 + energy 307 未评审因子 `auto_review` 机审全 approved（FTS_REVIEW_EXPERIENCE_CHAIN=0 关闭经验链副作用），补齐后 futures elite+active=92（approved 91/rejected 1）、energy 238 approved 全覆盖不空库、默认库 303（approved 301/rejected 2）；新增测试 +6（test_portfolio_loop.py TestLoadEliteDuckdb +2 集成：rejected 剔除/unreviewed 剔除；TestFilterReviewApproved +4 单元：approved 保留/rejected 剔除/unreviewed 剔除/空输入），受影响回归 test_portfolio_loop 268 + 相关文件 60 passed + ruff 全绿；文档同步（01-arch/05-observability/06-testing/07-operations）** |** |
+| **v2.104.0+87** | **2026-08-17** | **能化链评审+质检合并统一管道（energy_qa_review.py）：[0]面板→[1]重审→[2]退化检测落库→[3]生命周期收口含冷却期30日回归→[4]Inspector→[5]报告；宁严勿松单维度降级；新增 l2_energy_qa_review_job + 15 测试** |** |
+| **v2.104.0+86** | **2026-08-17** | **plans/44 Phase3: L1→L2 闭环漏斗(consumed/promoted回写+积压报告) + bootstrap C4语义去重/B1负面样本/C3 narrative补全** |** |
+| **v2.104.0+85** | **2026-08-17** | **45 计划 L2 循环拆分：三候选全覆盖（种子评估每日02:00 / 批量挖掘周日06:00 / 评审周度化周日10:00）+ 调度基线 L1→每日00:00、L2 拆工作日04:00小预算+周六04:00大预算** |** |
 | **v2.104.0+84** | **2026-08-17** | **OWL 因子分组筛选旁路（plans/41 方案 A 实施完成，P2）：`fts/factor_engine/owl_factor_selector.py` 新增——cvxpy 建模有序加权 L1（`sum_largest` 差分等价式 + 0.5/n 归一与 sklearn Lasso 尺度对齐）、权重生成（linear/exp/log 非递增）、两阶段流程（OWL 收缩分组 + 组内正交联合 F 检验 + Bonferroni 校正）；`scripts/owl_sim_validation.py` 蒙特卡洛四实验（强相关组还原率 1.0/稀疏筛选真因子全保留/OWL 分组误差 < LASSO/样本外 Jaccard 1.0）；`portfolio_loop.py` Step 1.8c 旁路接入（`owl_config` 参数 + `_run_owl_sidecar` 复用 l3_signal_service 信号矩阵与 A 层缓存，report_only=true 默认不修改 factors 只落盘 `memory/portfolio/{universe}/owl/owl_report_{date}.json` + 写 state.owl_report）；config/settings.yaml l3.owl 配置段；修复 2 处集成 bug（模块级函数显式传 self、state 写局部变量）；新增测试 +35（test_owl_factor_selector 21 + test_owl_l3_integration 14）；回归 portfolio_loop 262 + l3_signal_service 16 + owl 35 全绿 + ruff/mypy 通过；文档同步（01-arch/06-testing/07-operations/plans/41）** |** |
 | **v2.104.0+83** | **2026-08-17** | **plans/44 Phase2补丁: L1知识补给全球多语种扩容(OpenAlex 8语种分路+日韩法研报源)** |** |
 | **v2.104.0+82** | **2026-08-16** | **GAP-131 L1 拒绝候选落盘（rejected_dir + _persist_rejected）+ fix_factor_code Strategy 6 LLM 高频语法瑕疵自动修复** |** |

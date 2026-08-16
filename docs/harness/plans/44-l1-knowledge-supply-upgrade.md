@@ -1,7 +1,7 @@
 # 44 — L1 每日知识补给增强计划（300 篇/天 + 四方向升级）
 
-> 版本: v2.104.0+84
-> 状态: 🔨 实施中（Phase 1-2 + 全球多语种补丁已完成；Phase 3 漏斗+闭环待办） · 优先级: P1 · 负责人: FTS Agent
+> 版本: v2.104.0+89
+> 状态: ✅ 实施完成（Phase 1-2 + 全球多语种补丁 + Phase 3 漏斗/闭环已全部完成） · 优先级: P1 · 负责人: FTS Agent
 > 关联: GAP-123（软失败重写）、GAP-126（提取器配置化，open）、GAP-127（平台 API，远期）、GAP-131（拒绝候选落盘，v2.104.0+82 已闭环）、plans/41（L1 知识注入增强）、plans/43
 > 决策（2026-08-16）：用户确认四方向全做（编译修复+失败复活 / 知识源扩容 / 验证漏斗优化 / L1→L2 闭环），核心目标 **每天全球范围内阅读 ≥300 篇论文/研报做知识补给**，节奏=先出方案再实施。
 
@@ -113,6 +113,7 @@
 | `l1_knowledge_deepread_max` | 60 | 深读子集上限（篇/天） |
 | `l1_openalex_languages` | `["en","zh","ja","de","fr","ko","es","ru"]` | OpenAlex 多语种分路语种清单（非中英语种全球覆盖） |
 | `l1_non_en_reports_enabled` | true | 非中英语种研报源（IEEJ/KEEI/IFPEN）开关 |
+| `l1_l2_backlog_days` | 7 | L1→L2 积压 warning 阈值（天），D2 报告用 |
 
 契约：
 - `LLMClient.fix_factor_code` 新接口（基类默认 None + OpenAI 实现 + Mock 实现）。
@@ -133,8 +134,9 @@
 | `test_llm_code_fix.py` | `fix_factor_code` LLM 接口契约 + 集成（规则失败→LLM 修复→通过注入）+ Mock 实现 |
 | `test_l1_rejected_retry.py` | 失败复活全流程/修复仍失败保留/移走已注入/目录损坏降级 |
 | `test_websearch_dynamic_query.py` | 知识缺口 query 生成/异动 query/开关 |
-| `test_l1_l2_funnel.py` | 转化统计回写/报告输出/消费积压 warning |
-| 受影响回归 | test_factor_program / test_meta_loop / test_extractors 目录 |
+| `test_l1_l2_funnel.py` | 转化统计回写（injected/consumed/promoted）/报告输出/消费积压 warning/MetaLoop.run 注入回写接线/SeedManager 消费与晋升回写 |
+| `test_meta_loop_phase3.py` | C4 语义去重拦截与开关/B1 负面样本注入 prompt/C3 bootstrap narrative 补全 |
+| 受影响回归 | test_factor_program / test_meta_loop / test_extractors 目录 / test_evolution_*（SeedManager） |
 
 ## 七、风险与降级
 
@@ -175,3 +177,5 @@
 | `LLMClient.fix_factor_code` → §三 方向1 C1 | 规则修复失败后 LLM 修复候选通过 validate | `test_llm_code_fix.py` |
 | `l1_rejected_*` 复活流程 → §三 方向1 C2 | 复活候选注入后从 rejected 移走 | `test_l1_rejected_retry.py` |
 | `state_kv` l1_l2_funnel → §三 方向4 | consumed/promoted 回写正确 | `test_l1_l2_funnel.py` |
+| bootstrap C4 语义去重 → §三 方向3 | 语义高相似候选 is_duplicate 置位 | `test_meta_loop_phase3.py` |
+| `_build_bootstrap_prompt` 负面样本段 → §三 方向3 B1 | prompt 含"已注入因子（负面样本）"段 | `test_meta_loop_phase3.py` |

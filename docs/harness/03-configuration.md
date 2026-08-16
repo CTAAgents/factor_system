@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.104.0+84
+> 版本: v2.104.0+89
 > 最后更新: 2026-08-10
 
 ---
@@ -65,6 +65,19 @@ FTS 配置采用三级优先级（高→低）：
 | `l1_announcement_extractor_enabled` | bool | true | `FTS_L1_ANNOUNCEMENT_EXTRACTOR_ENABLED` | 另类知识源：公告/舆情提取器开关（原股票管道，GAP-I103，v2.82.0；已随股票管线剥离至 fts-stock（2026-08），配置项保留兼容、主系统不再使用） |
 | `l1_macro_extractor_enabled` | bool | true | `FTS_L1_MACRO_EXTRACTOR_ENABLED` | 另类知识源：宏观事件提取器开关（期货管道，GAP-I103，v2.82.0；仍由 L1 Meta-Loop 使用） |
 | `l1_extractor_max_factors` | int | 20 | `FTS_L1_EXTRACTOR_MAX_FACTORS` | L1 提取器单次 LLM 最大因子数（plans/41 A3，v2.104.0+71）：管道构造时注入研报/论文/宏观/WebSearch 等 LLM 提取源；天软 tinysoft 为静态 YAML 感知源不参与 |
+| `l1_bulk_enabled` | bool | true | `FTS_L1_BULK_ENABLED` | plans/44 P0 批量采集层开关（arXiv/OpenAlex/东财/全球报告/日韩法研报，false 跳过采集层） |
+| `l1_source_arxiv_max_results` | int | 50 | `FTS_L1_SOURCE_ARXIV_MAX_RESULTS` | plans/44 arXiv 每类别拉取数（3→50，全球论文扩容） |
+| `l1_source_report_page_size` | int | 100 | `FTS_L1_SOURCE_REPORT_PAGE_SIZE` | plans/44 东财研报分页大小（5→100） |
+| `l1_embedding_enabled` | bool | true | `FTS_L1_EMBEDDING_ENABLED` | plans/44 embedding 粗筛/语义去重开关（本地多语种模型，缺失降级关键词） |
+| `l1_embedding_threshold` | float | 0.30 | `FTS_L1_EMBEDDING_THRESHOLD` | plans/44 相关性粗筛阈值 |
+| `l1_dedup_threshold` | float | 0.90 | `FTS_L1_DEDUP_THRESHOLD` | plans/44 语义去重阈值 |
+| `l1_knowledge_deepread_max` | int | 60 | `FTS_L1_KNOWLEDGE_DEEPREAD_MAX` | plans/44 深读子集上限（篇/天，token 预算约束） |
+| `l1_rejected_retry` | bool | true | `FTS_L1_REJECTED_RETRY` | plans/44 C2 拒绝候选复活开关（规则/LLM 修复后重新验证注入） |
+| `l1_dynamic_websearch` | bool | true | `FTS_L1_DYNAMIC_WEBSEARCH` | plans/44 A1 WebSearch 动态 query 开关（知识缺口 + 当日异动） |
+| `l1_semantic_dedup` | bool | true | `FTS_L1_SEMANTIC_DEDUP` | plans/44 C4 bootstrap 候选 vs 已注入语义高相似拦截开关 |
+| `l1_openalex_languages` | list[str] | 8 语种 | `FTS_L1_OPENALEX_LANGUAGES` | plans/44 OpenAlex 多语种分路语种清单（en/zh/ja/de/fr/ko/es/ru，ISO 639-1） |
+| `l1_non_en_reports_enabled` | bool | true | `FTS_L1_NON_EN_REPORTS_ENABLED` | plans/44 非中英语种研报源开关（IEEJ/KEEI/IFPEN 日韩法） |
+| `l1_l2_backlog_days` | int | 7 | `FTS_L1_L2_BACKLOG_DAYS` | plans/44 D2 L1→L2 积压 warning 阈值（天） |
 | `review_experience_chain`（环境变量直读） | bool | true | `FTS_REVIEW_EXPERIENCE_CHAIN` | 人审驳回意见是否写入经验链（GAP-I102 二期，v2.82.0） |
 | `review_mode`（环境变量直读） | str | `"auto"` | `FTS_REVIEW_MODE` | 审查模式：`auto`=机审优先（正常自动批准/低质自动驳回/异常值转人审）/ `manual`=纯人审（C8-2，2026-08-11；manual 下 auto_review 需 --force 显式覆盖） |
 | `review_auto_min_ic`（环境变量直读） | float | 0.02 | `FTS_REVIEW_MIN_IC` | 机审 IC 下限：低于视为低质自动驳回（C8-2） |

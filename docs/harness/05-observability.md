@@ -1,6 +1,6 @@
 # FTS 可观测性
 
-> 版本: v2.104.0+84
+> 版本: v2.104.0+89
 > 最后更新: 2026-08-05
 
 ---
@@ -103,6 +103,22 @@ scheduler 任务 `data_level_monitor_job`（每日 04:00）执行数据级质量
 METRIC drift_alert{overlap=0.00,weight=1.00,o_th=0.50,w_th=0.40} 1
 ```
 告警同时写入 `PortfolioLoop` state（`drift_alerted` / `drift_alert_info`）；`trigger_rebalance=True` 时生成 `AgentOptimizationProposal`（source=`drift_monitor`）附加到 proposals 供下游 Agent 消费。
+
+### L3 因子准入过滤日志（v2.104.0+88）
+
+`load_elite_factors`（portfolio_loop.py）DuckDB 路径按 L2 质检评审结果硬过滤（仅 `factor_reviews.decision='approved'` 因子参与权重重算）时输出：
+- `[L3] L2 评审过滤 [DuckDB]: 剔除 {n} 个评审驳回因子 (decision=rejected): ...`——评审驳回因子被拦截（如评审驳回仍 is_elite 的存量因子）
+- `[L3] L2 评审过滤 [DuckDB]: 剔除 {n} 个未评审因子 (factor_reviews 无 approved 记录): ...`——无评审记录因子被拦截
+- `[L3] L2 评审过滤 [DuckDB]: 保留 {n}/{m} 因子 (decision=approved)`——准入统计
+- `[L3] JSON 兜底路径 [{market}]: 无法校验 L2 阶段质检评审（JSON 无 factor_reviews 状态），仅按质量门槛+影子池过滤放行 {n} 个因子`——JSON 兜底降级路径告警（历史退役路径，生产 L3 走 DuckDB）
+
+### 评审质检阀门日志（v2.104.0+89）
+
+评审质检作为独立 L2→L3 阀门模块，就地审核 / L3 池巡检 / 机审门禁输出：
+- `[review] 因子 {id} 审查决定: {decision} (comment=..., reviewer=...)`——就地审核/人审/机审决定落库（approved/rejected）
+- `[review] L3 池巡检 [{market}]: 扫描 {n} 个 approved 因子，退回 {m} 个`——周度 L3 池巡检统计（功能 2，`l2_review_job` Step C）
+- `[evo] 就地审核失败（不阻断晋升）: {name}: {err}`——晋升链就地审核非阻塞降级
+- 机审门禁判定原因（`AutoReviewPolicy.classify`）：`质检记录缺失（...）宁缺毋滥转人审` / `6 项审计未通过` / `多重检验（Bonferroni）未通过` / `WalkForward 窗口 N < 2` / `质量评分卡 C 级` / `高IC筛查 C 级` / `Q1-Q10 入库质检未通过` / `疑似过拟合/未来函数（ic/sharpe 超上限）`
 
 ### 股票信号管道标准化与权重冻结日志（GAP-076 / GAP-072，v2.101.0；已随股票管线剥离至 fts-stock，2026-08）
 
