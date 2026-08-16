@@ -184,7 +184,7 @@ class TestL2EvolutionLoopJob:
             sys.modules,
             {
                 "fts.factor_engine.evolution_loop": fake_evolution,
-                "fts.factor_engine.factor_verifier": fake_verifier,
+                "fts.factor_engine.verifier": fake_verifier,
                 "fts.factor_engine.seed_pool": fake_seed,
                 "fts.factor_engine.contracts": fake_contracts,
                 "fts.data": fake_data,
@@ -208,7 +208,7 @@ class TestL2EvolutionLoopJob:
             sys.modules,
             {
                 "fts.factor_engine.evolution_loop": fake_evolution,
-                "fts.factor_engine.factor_verifier": fake_verifier,
+                "fts.factor_engine.verifier": fake_verifier,
                 "fts.factor_engine.seed_pool": fake_seed,
                 "fts.factor_engine.contracts": fake_contracts,
                 "fts.data": fake_data,
@@ -233,7 +233,7 @@ class TestL2EvolutionLoopJob:
             sys.modules,
             {
                 "fts.factor_engine.evolution_loop": fake_evolution,
-                "fts.factor_engine.factor_verifier": fake_verifier,
+                "fts.factor_engine.verifier": fake_verifier,
                 "fts.factor_engine.seed_pool": fake_seed,
                 "fts.factor_engine.contracts": fake_contracts,
                 "fts.data": fake_data,
@@ -256,7 +256,7 @@ class TestL2EvolutionLoopJob:
             sys.modules,
             {
                 "fts.factor_engine.evolution_loop": fake_evolution,
-                "fts.factor_engine.factor_verifier": fake_verifier,
+                "fts.factor_engine.verifier": fake_verifier,
                 "fts.factor_engine.seed_pool": fake_seed,
                 "fts.factor_engine.contracts": fake_contracts,
                 "fts.data": fake_data,

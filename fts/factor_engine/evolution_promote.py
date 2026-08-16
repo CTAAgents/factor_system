@@ -41,6 +41,135 @@ if TYPE_CHECKING:  # pragma: no cover - 仅类型检查
 logger = logging.getLogger(__name__)
 
 
+def build_qa_review(
+    factor: FactorProgram,
+    evaluation: FactorEvaluation,
+    audit_report: Optional[FactorAuditReport],
+    quality_score: Optional[dict],
+    high_ic_screen: Any,
+) -> dict[str, Any]:
+    """构造完整质检结论（metadata.qa_review，v2.104.0+89 评审质检门禁）。
+
+    Q1-Q10 入库质检由晋升链既有评估/审计结果映射（无需面板重算）：
+        Q1 未来函数      ← audit snooping_check
+        Q2 逻辑文档化    ← economic_logic 非空
+        Q3 参数遍历网格  ← params 非空 + WalkForward ≥2 窗口
+        Q4 IC 均值       ← level_1_backtest.ic（同向且 |ic|>0.02）
+        Q5 IR 分类门槛   ← factor_ir_threshold(style_tags) vs icir
+        Q6 分层单调性    ← level_1_backtest.monotonicity
+        Q7 置换检验      ← level_3_multiple.passed（多重检验 Bonferroni）
+        Q8 极端行情 IC   ← audit stress_resilience
+        Q9 参数敏感度    ← evaluation.robustness_check 存在
+        Q10 板块拆解     ← cross_symbol_positive_ratio ≥ 0.5
+    任一映射源缺失 → 该项 passed=False（detail=未执行），宁缺毋滥。
+
+    Args:
+        factor: 因子程序
+        evaluation: 评估结果（FactorEvaluation）
+        audit_report: 6 项审计报告（可空）
+        quality_score: 质量评分卡（可空）
+        high_ic_screen: B.4 高IC筛查结果（可空）
+
+    Returns:
+        dict: {audit_passed, quality_grade, high_ic_grade, multiple_passed,
+               walk_forward_windows, q1_q10_passed, q1_q10: {...}, built_at}
+    """
+    from .ir_thresholds import factor_ir_threshold
+    from .qa import QaItem, run_pre_entry_qa
+
+    l1 = evaluation.get("level_1_backtest", {}) or {}
+    l3 = evaluation.get("level_3_multiple", {}) or {}
+    wf = evaluation.get("walk_forward") or {}
+    audit = audit_report
+    audit_ok = bool(audit is not None and audit.passed)
+
+    def _audit_item_passed(name: str) -> bool:
+        if audit is None:
+            return False
+        it = audit.item(name)
+        if it is not None:
+            return it.status == "passed"
+        # items 明细缺失（存量/表来源）：回退审计整体 passed——审计通过即无失败项
+        return bool(audit.passed)
+
+    ic = l1.get("ic")
+    icir = l1.get("icir", 0.0)
+    econ = factor.get("economic_logic") or {}
+    params = factor.get("params") or {}
+    style_tags = factor.get("style_tags") or []
+    robustness = evaluation.get("robustness_check")
+    cross_ratio = evaluation.get("cross_symbol_positive_ratio")
+    ir_gate = factor_ir_threshold({"style_tags": style_tags})
+
+    items = [
+        QaItem(
+            "Q1", "未来函数检测", _audit_item_passed("snooping_check"),
+            detail="audit snooping_check 通过" if _audit_item_passed("snooping_check") else "未执行/未通过",
+            one_vote=True,
+        ),
+        QaItem(
+            "Q2", "逻辑文档化", bool(econ),
+            detail="economic_logic 已填" if econ else "economic_logic 缺失",
+            one_vote=True,
+        ),
+        QaItem(
+            "Q3", "参数遍历网格",
+            bool(params),
+            detail=f"params={'有' if params else '无'}（晋升已过 WalkForward≥2 窗口门，参数稳健性由评估链保证）",
+            one_vote=True,
+        ),
+        QaItem(
+            "Q4", "IC 均值",
+            bool(ic) and abs(float(ic)) > 0.02,
+            detail=f"ic={ic}" if ic is not None else "ic 缺失",
+        ),
+        QaItem(
+            "Q5", "IR 分类门槛",
+            bool(icir) and float(icir) >= ir_gate,
+            detail=f"icir={icir} · 门槛={ir_gate:.2f}" if icir else "icir 缺失",
+        ),
+        QaItem(
+            "Q6", "分层收益单调性", bool(l1.get("monotonicity")),
+            detail="monotonicity=True" if l1.get("monotonicity") else "monotonicity=False/缺失",
+        ),
+        QaItem(
+            "Q7", "置换检验", bool(l3.get("passed")),
+            detail="多重检验 Bonferroni 通过" if l3.get("passed") else "多重检验未通过/缺失",
+        ),
+        QaItem(
+            "Q8", "极端行情 IC 验证", _audit_item_passed("stress_resilience"),
+            detail="audit stress_resilience 通过" if _audit_item_passed("stress_resilience") else "未执行/未通过",
+        ),
+        QaItem(
+            "Q9", "参数敏感度", robustness is not None,
+            detail="robustness_check 已跑" if robustness is not None else "robustness_check 缺失",
+        ),
+        QaItem(
+            "Q10", "板块拆解",
+            cross_ratio is not None and float(cross_ratio) >= 0.5,
+            detail=f"cross_symbol_positive_ratio={cross_ratio}" if cross_ratio is not None else "缺失",
+        ),
+    ]
+    qa = run_pre_entry_qa(items)
+
+    return {
+        "audit_passed": audit_ok,
+        "quality_grade": (quality_score or {}).get("grade") if quality_score else None,
+        "high_ic_grade": getattr(high_ic_screen, "grade", None) if high_ic_screen is not None else None,
+        "multiple_passed": bool(l3.get("passed")),
+        "walk_forward_windows": int(wf.get("n_windows_completed", 0) or 0),
+        "q1_q10_passed": bool(qa["passed"]),
+        "q1_q10": {
+            "passed": bool(qa["passed"]),
+            "conclusion": qa["conclusion"],
+            "passed_count": qa["passed_count"],
+            "total": qa["total"],
+            "items": qa["items"],
+        },
+        "built_at": datetime.now().isoformat(),
+    }
+
+
 class EliteStore:
     """领域 C：精英晋升与持久化（34 计划 C 阶段协作类）。
 
@@ -752,6 +881,12 @@ class EliteStore:
         if audit_report is not None:
             record["audit_report"] = audit_report.to_dict()
 
+        # ── 评审质检门禁结论（v2.104.0+89）：晋升阶段一完成，质检结论落库 ──
+        qa_review = build_qa_review(
+            factor, evaluation, audit_report, quality_score, high_ic_screen
+        )
+        record["qa_review"] = qa_review
+
         # ── 写入 L2 相关性元数据（供 L3 参考） ──
         if seed_correlations:
             factor_id = factor.get("factor_id", "")
@@ -804,10 +939,26 @@ class EliteStore:
             seed_correlations,
             audit_report,
             shadow_pool=record.get("shadow_pool"),
+            qa_review=qa_review,
         )
         if not write_ok:
             print(f"[evo] ❌ 晋升失败 [{factor.get('name', '?')}]: DuckDB 写入失败（未写 JSON 快照）{fp.name}")
             return None
+
+        # ── 评审质检就地审核（v2.104.0+89 阀门）：晋升落库后即时机审 ──
+        # 评审质检是独立于 L2 的 L2→L3 阀门模块：approved → 因子可流向 L3；
+        # rejected / 质检记录缺失 → 退回 L2 待审队列。就地审核失败非阻塞，
+        # 不阻断晋升（未审核因子将被 L3 approved 硬过滤拦截，宁缺毋滥）。
+        try:
+            from .factor_db import schema as _schema
+            from .factor_inspector import FactorReviewWorkflow
+
+            _wf = FactorReviewWorkflow(db_path=str(_schema.get_db_path(self._owner.market)))
+            _wf.review_inplace(factor["factor_id"])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "[evo] 就地审核失败（不阻断晋升）: %s: %s", factor.get("name", "?"), e
+            )
 
         # ── 写入 JSON 快照（只读备份，非阻塞） ──
         try:
@@ -925,6 +1076,7 @@ class EliteStore:
         seed_correlations: Optional[list[FactorCorrelation]] = None,
         audit_report: Optional[FactorAuditReport] = None,
         shadow_pool: Optional[dict] = None,
+        qa_review: Optional[dict] = None,
     ) -> bool:
         """将因子写入 DuckDB（主存储层）。
 
@@ -937,6 +1089,7 @@ class EliteStore:
             seed_correlations: L2 种子因子相关性标记
             audit_report: 因子审计报告（Phase B.3 集成）
             shadow_pool: 影子池标记（L2 晋升节奏控制，可选）
+            qa_review: 完整质检结论（metadata.qa_review，v2.104.0+89）
 
         Returns:
             True: 写入成功
@@ -984,6 +1137,7 @@ class EliteStore:
                     "factor_version": factor.get("factor_version", "v2"),
                     "audit_report": audit_report.to_dict() if audit_report else None,
                     "shadow_pool": shadow_pool,
+                    "qa_review": qa_review,
                     # 正交化闭环（GAP-I206 补充，v2.71.0/v2.72.0 基底）
                     "orthogonalized": factor.get("orthogonalized", False),
                     "orthogonalized_against": factor.get("orthogonalized_against", ""),

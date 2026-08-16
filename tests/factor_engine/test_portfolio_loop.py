@@ -4848,6 +4848,7 @@ class TestLoadEliteDuckdb:
         """DuckDB 因子无 code_hash 时自动计算。"""
         repo = MagicMock()
         repo._execute.return_value.fetchone.return_value = [1]
+        repo._execute.return_value.fetchall.return_value = [("f1", "approved")]
         repo.list_factors.return_value = [self._db_factor()]
         with patch("fts.factor_engine.factor_db.FactorRepository", return_value=repo):
             factors = load_elite_factors(tmp_elite_dir, use_duckdb=True, market="stock")
@@ -4877,6 +4878,7 @@ class TestLoadEliteDuckdb:
         """DuckDB 相关性去重失败回退 IC-only。"""
         repo = MagicMock()
         repo._execute.return_value.fetchone.return_value = [2]
+        repo._execute.return_value.fetchall.return_value = [("f1", "approved"), ("f2", "approved")]
         repo.list_factors.return_value = [self._db_factor("f1"), self._db_factor("f2")]
         with (
             patch("fts.factor_engine.factor_db.FactorRepository", return_value=repo),
@@ -4894,6 +4896,26 @@ class TestLoadEliteDuckdb:
         with patch("fts.factor_engine.factor_db.FactorRepository", side_effect=RuntimeError("db down")):
             factors = load_elite_factors(tmp_elite_dir, use_duckdb=True, market="stock")
         assert factors == []
+
+    def test_duckdb_rejected_excluded(self, tmp_elite_dir):
+        """L2 评审驳回（decision=rejected）的因子不参与 L3 权重重算。"""
+        repo = MagicMock()
+        repo._execute.return_value.fetchone.return_value = [1]
+        repo._execute.return_value.fetchall.return_value = [("f1", "rejected")]
+        repo.list_factors.return_value = [self._db_factor()]
+        with patch("fts.factor_engine.factor_db.FactorRepository", return_value=repo):
+            factors = load_elite_factors(tmp_elite_dir, use_duckdb=True, market="stock")
+        assert factors == []
+
+    def test_duckdb_unreviewed_excluded(self, tmp_elite_dir):
+        """无 L2 评审记录（factor_reviews 无该因子）的因子被剔除。"""
+        repo = MagicMock()
+        repo._execute.return_value.fetchone.return_value = [2]
+        repo._execute.return_value.fetchall.return_value = [("f1", "approved")]  # f2 无评审记录
+        repo.list_factors.return_value = [self._db_factor("f1"), self._db_factor("f2")]
+        with patch("fts.factor_engine.factor_db.FactorRepository", return_value=repo):
+            factors = load_elite_factors(tmp_elite_dir, use_duckdb=True, market="stock")
+        assert [f["factor_id"] for f in factors] == ["f1"]
 
     def test_json_path_missing(self, tmp_path):
         """JSON 兜底路径不存在返回空列表。"""
@@ -4931,6 +4953,45 @@ class TestLoadEliteDuckdb:
         from fts.factor_engine.portfolio_loop import load_l2_correlation_index
 
         assert load_l2_correlation_index(tmp_elite_dir) == []
+
+
+class TestFilterReviewApproved:
+    """_filter_review_approved 单元测试：L2 评审合格硬过滤。"""
+
+    def _repo(self, reviews: list[tuple[str, str]]):
+        repo = MagicMock()
+        repo._execute.return_value.fetchall.return_value = reviews
+        return repo
+
+    def test_approved_kept(self):
+        """approved 因子全部保留。"""
+        from fts.factor_engine.portfolio_loop import _filter_review_approved
+
+        factors = [{"factor_id": "a", "name": "A"}, {"factor_id": "b", "name": "B"}]
+        passed = _filter_review_approved(factors, "test", self._repo([("a", "approved"), ("b", "approved")]))
+        assert [f["factor_id"] for f in passed] == ["a", "b"]
+
+    def test_rejected_excluded(self):
+        """评审驳回（rejected）因子被剔除。"""
+        from fts.factor_engine.portfolio_loop import _filter_review_approved
+
+        factors = [{"factor_id": "a", "name": "A"}, {"factor_id": "b", "name": "B"}]
+        passed = _filter_review_approved(factors, "test", self._repo([("a", "approved"), ("b", "rejected")]))
+        assert [f["factor_id"] for f in passed] == ["a"]
+
+    def test_unreviewed_excluded(self):
+        """无评审记录（未评审）因子被剔除。"""
+        from fts.factor_engine.portfolio_loop import _filter_review_approved
+
+        factors = [{"factor_id": "a", "name": "A"}, {"factor_id": "b", "name": "B"}]
+        passed = _filter_review_approved(factors, "test", self._repo([("a", "approved")]))
+        assert [f["factor_id"] for f in passed] == ["a"]
+
+    def test_empty_input(self):
+        """空输入直接返回空列表。"""
+        from fts.factor_engine.portfolio_loop import _filter_review_approved
+
+        assert _filter_review_approved([], "test", MagicMock()) == []
 
 
 # ════════════════════════════════════════════════════════════

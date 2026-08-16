@@ -3494,6 +3494,63 @@ def _filter_shadow_pending(factors: list[dict[str, Any]], source: str) -> list[d
     return [f for f in factors if not _is_shadow_pending(f)]
 
 
+def _filter_review_approved(factors: list[dict[str, Any]], source: str, repo: Any) -> list[dict[str, Any]]:
+    """按 L2 阶段质检评审结果过滤因子 — 仅 approved 可参与 L3 权重重算（硬编码强制）。
+
+    L3 参与组合权重重算的因子必须经过 L2 阶段质检评审合格
+    （factor_reviews.decision='approved'）；rejected 与未评审
+    （无 review 记录）因子一律剔除，无配置开关。
+
+    Args:
+        factors: 待过滤因子列表
+        source: 数据来源标识（用于日志）
+        repo: FactorRepository 实例（DuckDB 连接未关闭）
+
+    Returns:
+        评审合格（decision=approved）的因子列表
+    """
+    if not factors:
+        return factors
+
+    rows = repo._execute("SELECT factor_id, decision FROM factor_reviews", []).fetchall()
+    review_map: dict[str, str] = {r[0]: r[1] for r in rows}
+
+    passed: list[dict[str, Any]] = []
+    rejected: list[str] = []
+    unreviewed: list[str] = []
+    for f in factors:
+        fid = f.get("factor_id")
+        decision = review_map.get(fid)
+        if decision == "approved":
+            passed.append(f)
+        elif decision == "rejected":
+            rejected.append(f.get("name", fid))
+        else:
+            unreviewed.append(f.get("name", fid))
+
+    if rejected:
+        logger.warning(
+            "[L3] L2 评审过滤 [%s]: 剔除 %d 个评审驳回因子 (decision=rejected):\n  %s",
+            source,
+            len(rejected),
+            "\n  ".join(rejected[:10]) + ("\n  ..." if len(rejected) > 10 else ""),
+        )
+    if unreviewed:
+        logger.warning(
+            "[L3] L2 评审过滤 [%s]: 剔除 %d 个未评审因子 (factor_reviews 无 approved 记录):\n  %s",
+            source,
+            len(unreviewed),
+            "\n  ".join(unreviewed[:10]) + ("\n  ..." if len(unreviewed) > 10 else ""),
+        )
+    logger.info(
+        "[L3] L2 评审过滤 [%s]: 保留 %d/%d 因子 (decision=approved)",
+        source,
+        len(passed),
+        len(factors),
+    )
+    return passed
+
+
 # ─── 纯外推验证 ──────────────────────────────────────────
 
 
@@ -3744,6 +3801,7 @@ def load_elite_factors(
                     logger.info("[L3] ✅ 从 DuckDB 加载 %d 个 elite 因子 [market=%s]", len(factors), market)
                     passed = _filter_by_quality_gate(factors, "DuckDB")
                     passed = _filter_shadow_pending(passed, "DuckDB")
+                    passed = _filter_review_approved(passed, "DuckDB", repo)
                     try:
                         result = _deduplicate_by_base_name(
                             passed, "DuckDB", panel_data=panel_data, corr_threshold=corr_threshold
@@ -3867,6 +3925,14 @@ def load_elite_factors(
     )
     passed = _filter_by_quality_gate(factors, "JSON")
     passed = _filter_shadow_pending(passed, "JSON")
+    # JSON 兜底路径（历史退役降级，仅测试/极端场景）：文件无 review 状态字段，
+    # 无法校验 L2 阶段质检评审，仅告警不强制（生产 L3 走 DuckDB 已强制 approved）
+    logger.warning(
+        "[L3] JSON 兜底路径 [%s]: 无法校验 L2 阶段质检评审（JSON 无 factor_reviews 状态），"
+        "仅按质量门槛+影子池过滤放行 %d 个因子",
+        market,
+        len(passed),
+    )
     return _deduplicate_by_base_name(
         passed, "JSON", panel_data=panel_data, corr_threshold=corr_threshold, signal_cache=signal_cache
     )

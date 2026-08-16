@@ -331,6 +331,43 @@ def load_review_mode() -> str:
     return os.getenv("FTS_REVIEW_MODE", ReviewMode.AUTO.value)
 
 
+# 机审复核的完整质检结论键（v2.104.0+89 评审质检门禁，任一缺失 → 转人审宁缺毋滥）
+_QA_REVIEW_KEYS: tuple[str, ...] = (
+    "audit_passed",
+    "quality_grade",
+    "high_ic_grade",
+    "multiple_passed",
+    "walk_forward_windows",
+    "q1_q10_passed",
+)
+
+
+def _extract_qa_meta(metadata: Any) -> dict[str, Any]:
+    """从 factor_catalog.metadata 提取完整质检结论（metadata.qa_review 子对象）。
+
+    质检结论由晋升链写入 metadata.qa_review（v2.104.0+89 起）；缺失字段返回 None，
+    机审据此转人审（宁缺毋滥）。
+
+    Args:
+        metadata: factor_catalog.metadata（JSON 字符串 或 dict，可能为 None）
+
+    Returns:
+        dict: {audit_passed, quality_grade, high_ic_grade, multiple_passed,
+               walk_forward_windows, q1_q10_passed}（缺失项为 None）
+    """
+    if isinstance(metadata, str):
+        try:
+            import json
+
+            metadata = json.loads(metadata)
+        except (ValueError, TypeError):
+            metadata = {}
+    meta = metadata if isinstance(metadata, dict) else {}
+    qr = meta.get("qa_review")
+    qr = qr if isinstance(qr, dict) else {}
+    return {k: qr.get(k) for k in _QA_REVIEW_KEYS}
+
+
 @dataclass
 class AutoReviewPolicy:
     """机审判定策略（C8-2）：IC/Sharpe 边界 + 三态分类。
@@ -364,8 +401,25 @@ class AutoReviewPolicy:
             max_sharpe=_f("FTS_REVIEW_MAX_SHARPE", 30.0),
         )
 
-    def classify(self, ic: Any, sharpe: Any) -> tuple[Optional[ReviewDecision], str]:
-        """机审分类（三态）。decision=None 表示转人审。"""
+    def classify(
+        self,
+        ic: Any,
+        sharpe: Any,
+        qa_meta: Optional[dict[str, Any]] = None,
+    ) -> tuple[Optional[ReviewDecision], str]:
+        """机审分类（三态）。decision=None 表示转人审。
+
+        完整质检门禁（v2.104.0+89）：除 IC/Sharpe 外，复核因子完整质检结论
+        （6 项审计 / 质量评分卡 / 高IC筛查 / 多重检验 / WalkForward / Q1-Q10）。
+        任一关键项缺失 → 转人审（宁缺毋滥）；任一未通过 → rejected；
+        全部通过 + IC/Sharpe 正常 → approved。
+
+        Args:
+            ic: 因子 IC（factor_catalog 字段）
+            sharpe: 因子 Sharpe
+            qa_meta: 完整质检结论 {audit_passed, quality_grade, high_ic_grade,
+                multiple_passed, walk_forward_windows, q1_q10_passed}，None=未评审
+        """
         if ic is None or sharpe is None:
             return None, "IC/Sharpe 缺失，无法机审"
         try:
@@ -378,7 +432,25 @@ class AutoReviewPolicy:
             return None, f"疑似过拟合/未来函数 (ic={ic_f:.4f}, sharpe={sharpe_f:.2f} 超上限)"
         if ic_f < self.min_ic or sharpe_f < self.min_sharpe:
             return ReviewDecision.REJECTED, f"低质 (ic={ic_f:.4f}<{self.min_ic} 或 sharpe={sharpe_f:.2f}<{self.min_sharpe})"
-        return ReviewDecision.APPROVED, f"机审通过 (ic={ic_f:.4f}, sharpe={sharpe_f:.2f})"
+
+        # ── 完整质检结论门禁（v2.104.0+89，宁缺毋滥） ──
+        qa = qa_meta or {}
+        missing = [k for k in _QA_REVIEW_KEYS if qa.get(k) is None]
+        if missing:
+            return None, f"质检记录缺失（{', '.join(missing)}），宁缺毋滥转人审"
+        if not qa["audit_passed"]:
+            return ReviewDecision.REJECTED, "6 项审计未通过"
+        if not qa["multiple_passed"]:
+            return ReviewDecision.REJECTED, "多重检验（Bonferroni）未通过"
+        if int(qa.get("walk_forward_windows", 0)) < 2:
+            return ReviewDecision.REJECTED, f"WalkForward 窗口 {qa.get('walk_forward_windows')} < 2"
+        if qa["quality_grade"] == "C":
+            return ReviewDecision.REJECTED, "质量评分卡 C 级（淘汰）"
+        if qa["high_ic_grade"] == "C":
+            return ReviewDecision.REJECTED, "高IC筛查 C 级（剔除）"
+        if not qa["q1_q10_passed"]:
+            return ReviewDecision.REJECTED, "Q1-Q10 入库质检未通过"
+        return ReviewDecision.APPROVED, f"机审通过：完整质检合格 + ic={ic_f:.4f}, sharpe={sharpe_f:.2f}"
 
 
 class FactorReviewWorkflow:
@@ -446,7 +518,7 @@ class FactorReviewWorkflow:
                 params.append(market)
             rows = conn.execute(
                 f"""
-                SELECT c.factor_id, c.name, c.market, c.source, c.ic, c.sharpe
+                SELECT c.factor_id, c.name, c.market, c.source, c.ic, c.sharpe, c.metadata
                 FROM factor_catalog c
                 WHERE {where}
                 ORDER BY c.created_at DESC
@@ -454,8 +526,11 @@ class FactorReviewWorkflow:
                 """,
                 [*params, int(limit)],
             ).fetchall()
-            cols = ["factor_id", "name", "market", "source", "ic", "sharpe"]
-            return [dict(zip(cols, r)) for r in rows]
+            cols = ["factor_id", "name", "market", "source", "ic", "sharpe", "metadata"]
+            return [
+                {**dict(zip(cols, r)), "qa_meta": _extract_qa_meta(r[6])}
+                for r in rows
+            ]
         finally:
             conn.close()
 
@@ -531,7 +606,11 @@ class FactorReviewWorkflow:
         rejected: list[str] = []
         needs_human: list[dict[str, str]] = []
         for f in pending:
-            decision, reason = policy.classify(f.get("ic"), f.get("sharpe"))
+            decision, reason = policy.classify(
+                f.get("ic"),
+                f.get("sharpe"),
+                qa_meta=f.get("qa_meta"),
+            )
             if decision is None:
                 needs_human.append({"factor_id": f["factor_id"], "reason": reason})
                 continue
@@ -549,6 +628,90 @@ class FactorReviewWorkflow:
             "needs_human": needs_human,
             "skipped": 0,
         }
+
+    def review_inplace(self, factor_id: str) -> dict[str, Any]:
+        """就地审核单因子（评审质检阀门，v2.104.0+89）。
+
+        评审质检是独立于 L2 的 L2→L3 阀门模块：读取因子完整质检结论
+        （metadata.qa_review）后按升级门禁（AutoReviewPolicy）判定——
+            approved → 写 factor_reviews（幂等），因子可流向 L3；
+            rejected → 写 factor_reviews，因子退回 L2；
+            质检记录缺失（needs_human）→ 删除既有 approved（回到待审队列，
+            宁缺毋滥，不流向 L3）。
+        供晋升链「就地审核」（新晋升 elite 因子即时审核）与批量回填复用。
+
+        Args:
+            factor_id: 因子 ID
+
+        Returns:
+            dict: {factor_id, decision: approved/rejected/None, reason}
+        """
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT ic, sharpe, metadata FROM factor_catalog WHERE factor_id = ?",
+                [factor_id],
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return {"factor_id": factor_id, "decision": None, "reason": "因子不存在"}
+        ic, sharpe, metadata = row
+        qa_meta = _extract_qa_meta(metadata)
+        decision, reason = AutoReviewPolicy().classify(ic, sharpe, qa_meta=qa_meta)
+        if decision is None:
+            self._delete_review(factor_id)
+        else:
+            self._decide(factor_id, decision, comment=f"[就地审核] {reason}", reviewer="auto")
+        return {
+            "factor_id": factor_id,
+            "decision": decision.value if decision is not None else None,
+            "reason": reason,
+        }
+
+    def review_l3_pool(self, market: str = "futures") -> dict[str, Any]:
+        """周末定期巡检 L3 池（评审质检阀门功能 2，v2.104.0+89）。
+
+        对 factor_reviews.decision='approved'（L3 池）因子按最新 IC/Sharpe +
+        完整质检结论（metadata.qa_review）重新复核；不合格（rejected）或质检
+        失效（needs_human）→ 撤销 approved（DELETE），因子退回 L2 冷却池，
+        不再流向 L3。
+
+        Args:
+            market: 市场（futures/energy）
+
+        Returns:
+            dict: {scanned, demoted: [{factor_id, decision, reason}]}
+        """
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT r.factor_id FROM factor_reviews r "
+                "JOIN factor_catalog c ON c.factor_id = r.factor_id "
+                "WHERE r.decision = 'approved' AND c.market = ?",
+                [market],
+            ).fetchall()
+        finally:
+            conn.close()
+        approved = [r[0] for r in rows]
+        demoted: list[dict[str, str]] = []
+        for fid in approved:
+            res = self.review_inplace(fid)
+            if res.get("decision") != "approved":
+                demoted.append(
+                    {"factor_id": fid, "decision": res.get("decision") or "needs_human",
+                     "reason": res.get("reason", "")}
+                )
+        logger.info("[review] L3 池巡检 [%s]: 扫描 %d 个 approved 因子，退回 %d 个", market, len(approved), len(demoted))
+        return {"scanned": len(approved), "demoted": demoted}
+
+    def _delete_review(self, factor_id: str) -> None:
+        """删除因子评审记录（撤销 approved，退回 L2 待审队列）。"""
+        conn = self._conn()
+        try:
+            conn.execute("DELETE FROM factor_reviews WHERE factor_id = ?", [factor_id])
+        finally:
+            conn.close()
 
     def _decide(
         self,

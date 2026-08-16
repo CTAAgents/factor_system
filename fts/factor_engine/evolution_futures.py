@@ -2627,6 +2627,12 @@ class EvolutionLoop:
         # GAP-032 严格一致：DuckDB 是主存储。P1 起 JSON 仅降级为只读快照——
         # 先写 DuckDB，成功后写 JSON（JSON 写失败不阻断晋升）；DuckDB 失败
         # 则不写 JSON 直接判定晋升失败，杜绝"快照有、catalog 无"孤儿数据
+        from .evolution_promote import build_qa_review
+
+        qa_review = build_qa_review(
+            factor, evaluation, audit_report, quality_score, high_ic_screen
+        )
+        record["qa_review"] = qa_review
         write_ok = self._write_to_duckdb(
             factor,
             evaluation,
@@ -2634,10 +2640,25 @@ class EvolutionLoop:
             seed_correlations,
             audit_report,
             shadow_pool=record.get("shadow_pool"),
+            qa_review=qa_review,
         )
         if not write_ok:
             print(f"[evo] ❌ 晋升失败 [{factor.get('name', '?')}]: DuckDB 写入失败（未写 JSON 快照）{fp.name}")
             return None
+
+        # ── 评审质检就地审核（v2.104.0+89 阀门）：晋升落库后即时机审 ──
+        # 评审质检是独立于 L2 的 L2→L3 阀门模块：approved → 因子可流向 L3；
+        # rejected / 质检记录缺失 → 退回 L2 待审队列。就地审核失败非阻塞。
+        try:
+            from .factor_db import schema as _schema
+            from .factor_inspector import FactorReviewWorkflow
+
+            _wf = FactorReviewWorkflow(db_path=str(_schema.get_db_path(self.market)))
+            _wf.review_inplace(factor["factor_id"])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "[evo] 就地审核失败（不阻断晋升）: %s: %s", factor.get("name", "?"), e
+            )
 
         # ── 写入 JSON 快照（只读备份，非阻塞） ──
         try:
@@ -2753,6 +2774,7 @@ class EvolutionLoop:
         seed_correlations: Optional[list[FactorCorrelation]] = None,
         audit_report: Optional[FactorAuditReport] = None,
         shadow_pool: Optional[dict] = None,
+        qa_review: Optional[dict] = None,
     ) -> bool:
         """将因子写入 DuckDB（主存储层）。
 
@@ -2765,6 +2787,7 @@ class EvolutionLoop:
             seed_correlations: L2 种子因子相关性标记
             audit_report: 因子审计报告（Phase B.3 集成）
             shadow_pool: 影子池标记（L2 晋升节奏控制，可选）
+            qa_review: 完整质检结论（metadata.qa_review，v2.104.0+89）
 
         Returns:
             True: 写入成功
@@ -2812,6 +2835,7 @@ class EvolutionLoop:
                     "factor_version": factor.get("factor_version", "v2"),
                     "audit_report": audit_report.to_dict() if audit_report else None,
                     "shadow_pool": shadow_pool,
+                    "qa_review": qa_review,
                     # 正交化闭环（GAP-I206 补充，v2.71.0/v2.72.0 基底）
                     "orthogonalized": factor.get("orthogonalized", False),
                     "orthogonalized_against": factor.get("orthogonalized_against", ""),

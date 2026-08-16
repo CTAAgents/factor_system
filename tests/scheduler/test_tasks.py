@@ -55,15 +55,15 @@ DEFAULT_TASKS = {
         "prefix": "fts.l1",
     },
     "l2_evolution_weekday": {
-        "cron": "0 4 * * 1-5",
+        "cron": "0 3 * * 1-5",
         "callable": "fts.scheduler.jobs.l2_evolution_weekday_job",
-        "desc": "L2 Evolution Loop（工作日 04:00 小预算 max_generation≈10，45 计划调度基线）：先种子后演化",
+        "desc": "L2 Evolution Loop（工作日 03:00 小预算 max_generation≈10，45 计划调度基线）：先种子后演化",
         "prefix": "fts.l2",
     },
     "l2_evolution_weekend": {
-        "cron": "0 4 * * 6",
+        "cron": "0 3 * * 6",
         "callable": "fts.scheduler.jobs.l2_evolution_weekend_job",
-        "desc": "L2 Evolution Loop（周六 04:00 大预算 max_generation≈50，45 计划调度基线）：周末集中大规模演化",
+        "desc": "L2 Evolution Loop（周六 03:00 大预算 max_generation≈50，45 计划调度基线）：周末集中大规模演化",
         "prefix": "fts.l2",
     },
     "l2_seed_promotion": {
@@ -114,14 +114,20 @@ DEFAULT_TASKS = {
         "desc": "数据质量周期评估（B.1）：质量快照 + 告警检查",
         "prefix": "fts.dq",
     },
+    "data_level_monitor": {
+        "cron": "0 5 * * *",
+        "callable": "fts.scheduler.jobs.data_level_monitor_job",
+        "desc": "数据级质量监控（GAP-F06）：缺失率/异常值/多源分歧检查",
+        "prefix": "fts.dlm",
+    },
     "logic_monitor": {
-        "cron": "0 22 * * *",
+        "cron": "30 4 * * *",
         "callable": "fts.scheduler.jobs.logic_monitor_job",
         "desc": "逻辑监控（B.2）：因子行为漂移 + 极端预测 + 换月日异常检测",
         "prefix": "fts.logic",
     },
     "factor_inspector": {
-        "cron": "0 3 * * *",
+        "cron": "0 4 * * *",
         "callable": "fts.scheduler.jobs.factor_inspector_job",
         "desc": "因子巡检与自动降级（B.2）：扫描精英因子，检测退化并降级",
         "prefix": "fts.inspector",

@@ -1896,6 +1896,7 @@ class EvolutionLoop:
         seed_correlations: Optional[list[FactorCorrelation]] = None,
         audit_report: Optional[FactorAuditReport] = None,
         shadow_pool: Optional[dict] = None,
+        qa_review: Optional[dict] = None,
     ) -> bool:
         return self._elite_store._write_to_duckdb(
             factor,
@@ -1904,6 +1905,7 @@ class EvolutionLoop:
             seed_correlations,
             audit_report,
             shadow_pool,
+            qa_review,
         )
 
     def _scan_elite_correlations(

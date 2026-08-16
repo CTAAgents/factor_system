@@ -94,7 +94,7 @@ def _run_l2_evolution(max_generation: int, tag: str) -> None:
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.factor_engine.evolution_loop import EvolutionLoop
-        from fts.factor_engine.factor_verifier import FactorVerifier
+        from fts.factor_engine.verifier import FactorVerifier
         from fts.factor_engine.seed_pool import SeedPool
         from fts.factor_engine.contracts import DEFAULT_BUDGET_CONFIG
         from fts.llm import get_llm_client
@@ -183,7 +183,7 @@ def l2_seed_promotion_job() -> None:
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.factor_engine.evolution_loop import EvolutionLoop
-        from fts.factor_engine.factor_verifier import FactorVerifier
+        from fts.factor_engine.verifier import FactorVerifier
         from fts.factor_engine.seed_pool import SeedPool
         from fts.llm import get_llm_client
         from fts.config import get_config
@@ -248,6 +248,100 @@ def l2_seed_promotion_job() -> None:
         )
     except Exception as e:
         logger.error("[L2种子] 运行失败: %s", e, exc_info=True)
+
+
+def l2_seed_promotion_energy_job() -> None:
+    """执行能化产业链 L2 种子评估晋升（每日 02:00，L1 energy 00:00 注入后消费）。
+
+    45 计划候选① 的 energy 链路由（GAP-121 独立工作流）：L1 energy 注入候选 +
+    energy 种子池评估晋升入 energy elite 池（elite_dir=energy_chain_elite、
+    factor_db=factor_catalog_energy.duckdb），晋升结果当日被 energy L2 演化
+    （04:00，`fts.cli evolution run --chain energy`）消费为父因子。
+    仅运行 run_seed_stage，不重置演化状态计数器（不调用 mark_running）。
+    """
+    trace_id = f"fts.l2_seed_energy.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[L2种子][energy] 启动 trace_id=%s", trace_id)
+
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.factor_engine.evolution_loop import EvolutionLoop
+        from fts.factor_engine.verifier import FactorVerifier
+        from fts.factor_engine.contracts import FUTURES_VERIFIER_CONFIG
+        from fts.factor_engine.seed_pool import SeedPool
+        from fts.llm import get_llm_client
+        from fts.config import get_config
+        from fts.data import FTSDataProvider
+        from fts.data_futures import (
+            ENERGY_CHAIN_L1_INJECT_DIR,
+            ENERGY_CHAIN_L1_POOL_PATH,
+            ENERGY_CHAIN_MARKET,
+            ENERGY_CHAIN_SYMBOLS,
+        )
+
+        cfg = get_config()
+
+        # energy 链训练链（12 化工品种，SSOT: config/futures_universe.yaml，data_futures 内置兜底）
+        chain_symbols = list(ENERGY_CHAIN_SYMBOLS)
+        if len(chain_symbols) < 10:
+            logger.error("[L2种子][energy] 训练品种不足 (仅 %d 个)", len(chain_symbols))
+            return
+        provider = FTSDataProvider()
+        panel, common_dates = provider.get_futures_panel(
+            symbols=chain_symbols,
+            days=500,
+            trace_id=trace_id,
+        )
+        if not panel:
+            logger.error("[L2种子][energy] 无期货数据，跳过")
+            return
+
+        first_sym = list(panel.keys())[0]
+        data_df = panel[first_sym]
+        closes = data_df["close"].values
+        fwd_ret = __import__("numpy").zeros(len(closes))
+        if len(closes) > 5:
+            fwd_ret[:-5] = (closes[5:] - closes[:-5]) / __import__("numpy").maximum(closes[:-5], 1e-10)
+
+        llm = get_llm_client()
+        seed_pool = SeedPool(market="energy")
+        # energy 链保持期货验证配置（与 CLI `evolution run --chain energy` 口径一致）
+        verifier = FactorVerifier(FUTURES_VERIFIER_CONFIG)
+
+        loop = EvolutionLoop(
+            data=data_df,
+            forward_returns=fwd_ret,
+            elite_dir=cfg.get_elite_dir(ENERGY_CHAIN_MARKET),
+            memory_dir=cfg.memory_dir + "/evolution/energy_chain",
+            inject_dir=PROJECT_ROOT / ENERGY_CHAIN_L1_INJECT_DIR,
+            factor_pool_path=PROJECT_ROOT / ENERGY_CHAIN_L1_POOL_PATH,
+            llm_client=llm,
+            seed_pool=seed_pool,
+            verifier=verifier,
+            n_trials_micro=30,
+            cross_section_data=panel,
+            cross_section_dates=common_dates,
+            market=ENERGY_CHAIN_MARKET,
+        )
+
+        # 仅读状态（不 mark_running 重置演化计数器），避免污染 energy 演化统计
+        state = loop.state_manager.load_or_init(loop.budget.get("nightly_token_limit", 1_000_000))
+        elite_ids: list[str] = []
+        promoted, _seed_corr, parent_seeds = loop.run_seed_stage(
+            trace_id,
+            state,
+            elite_ids,
+        )
+        logger.info(
+            "[L2种子][energy] 完成: 晋升=%d elite=%d 父因子=%d (trace_id=%s)",
+            promoted,
+            len(elite_ids),
+            len(parent_seeds),
+            trace_id,
+        )
+    except Exception as e:
+        logger.error("[L2种子][energy] 运行失败: %s", e, exc_info=True)
+
+
 # ── L3 Portfolio Loop — 工作日每日 19:00 组合权重重算（GAP-072 与信号管道解绑）───
 
 
@@ -361,7 +455,7 @@ def l2_batch_mining_job() -> None:
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.factor_engine.evolution_loop import EvolutionLoop
-        from fts.factor_engine.factor_verifier import FactorVerifier
+        from fts.factor_engine.verifier import FactorVerifier
         from fts.factor_engine.seed_pool import SeedPool
         from fts.llm import get_llm_client
         from fts.config import get_config
@@ -431,6 +525,105 @@ def l2_batch_mining_job() -> None:
         logger.info("[L2批量] 完成: 晋升=%s elite=%d (trace_id=%s)", ok, len(elite_ids), trace_id)
     except Exception as e:
         logger.error("[L2批量] 运行失败: %s", e, exc_info=True)
+
+
+def l2_batch_mining_energy_job() -> None:
+    """执行能化产业链 L2 批量挖掘（周日 06:00，CPU 密集错峰，45 计划候选②）。
+
+    energy 链路由（GAP-121 独立工作流）：读 energy elite 池选父（UCT）→
+    BatchMiner 批量生成（同父多后代，方法轮换）→ 并行粗筛 → 通过者逐个走准入链。
+    熔断隔离：本任务经 run_batch_stage（保存/恢复 _consecutive_low_ic），
+    batch 失败不污染工作日/周末 energy L2 演化的熔断状态。
+    """
+    trace_id = f"fts.l2_batch_energy.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[L2批量][energy] 启动 trace_id=%s", trace_id)
+
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.factor_engine.evolution_loop import EvolutionLoop
+        from fts.factor_engine.verifier import FactorVerifier
+        from fts.factor_engine.contracts import FUTURES_VERIFIER_CONFIG
+        from fts.factor_engine.seed_pool import SeedPool
+        from fts.llm import get_llm_client
+        from fts.config import get_config
+        from fts.data import FTSDataProvider
+        from fts.data_futures import (
+            ENERGY_CHAIN_L1_INJECT_DIR,
+            ENERGY_CHAIN_L1_POOL_PATH,
+            ENERGY_CHAIN_MARKET,
+            ENERGY_CHAIN_SYMBOLS,
+        )
+
+        cfg = get_config()
+
+        # energy 链训练链（12 化工品种，SSOT: config/futures_universe.yaml，data_futures 内置兜底）
+        chain_symbols = list(ENERGY_CHAIN_SYMBOLS)
+        if len(chain_symbols) < 10:
+            logger.error("[L2批量][energy] 训练品种不足 (仅 %d 个)", len(chain_symbols))
+            return
+        provider = FTSDataProvider()
+        panel, common_dates = provider.get_futures_panel(
+            symbols=chain_symbols,
+            days=500,
+            trace_id=trace_id,
+        )
+        if not panel:
+            logger.error("[L2批量][energy] 无期货数据，跳过")
+            return
+
+        first_sym = list(panel.keys())[0]
+        data_df = panel[first_sym]
+        closes = data_df["close"].values
+        fwd_ret = __import__("numpy").zeros(len(closes))
+        if len(closes) > 5:
+            fwd_ret[:-5] = (closes[5:] - closes[:-5]) / __import__("numpy").maximum(closes[:-5], 1e-10)
+
+        llm = get_llm_client()
+        seed_pool = SeedPool(market="energy")
+        # energy 链保持期货验证配置（与 CLI `evolution run --chain energy` 口径一致）
+        verifier = FactorVerifier(FUTURES_VERIFIER_CONFIG)
+
+        loop = EvolutionLoop(
+            data=data_df,
+            forward_returns=fwd_ret,
+            elite_dir=cfg.get_elite_dir(ENERGY_CHAIN_MARKET),
+            memory_dir=cfg.memory_dir + "/evolution/energy_chain",
+            inject_dir=PROJECT_ROOT / ENERGY_CHAIN_L1_INJECT_DIR,
+            factor_pool_path=PROJECT_ROOT / ENERGY_CHAIN_L1_POOL_PATH,
+            llm_client=llm,
+            seed_pool=seed_pool,
+            verifier=verifier,
+            n_trials_micro=30,
+            cross_section_data=panel,
+            cross_section_dates=common_dates,
+            market=ENERGY_CHAIN_MARKET,
+        )
+
+        # 读 energy elite 池选父（UCT 树搜索；无父因子则跳过）
+        parent_seeds = loop._load_elite_parent_factors()
+        if not parent_seeds:
+            logger.info("[L2批量][energy] elite 池无父因子，跳过")
+            return
+        parent = loop._select_parent_uct(parent_seeds)
+
+        # 仅读状态（不 mark_running 重置演化计数器），避免污染 energy 演化统计
+        state = loop.state_manager.load_or_init(loop.budget.get("nightly_token_limit", 1_000_000))
+        elite_ids: list[str] = []
+        seed_correlations = loop._load_seed_correlation_index()
+
+        ok = loop.run_batch_stage(
+            parent,
+            0,  # 独立任务从第 0 代批量
+            trace_id,
+            state,
+            elite_ids,
+            seed_correlations,
+        )
+        logger.info("[L2批量][energy] 完成: 晋升=%s elite=%d (trace_id=%s)", ok, len(elite_ids), trace_id)
+    except Exception as e:
+        logger.error("[L2批量][energy] 运行失败: %s", e, exc_info=True)
+
+
 # ── L2 周度评审 — 每周日 10:00（45 计划：评审周度化，替代月度衰减 + run() 每日调用）───
 
 
@@ -518,6 +711,99 @@ def l2_review_job() -> None:
             logger.warning("[L2评审] 淘汰已同步至 DuckDB + JSON: %d/%d 个因子", retired_count, len(retired))
     except Exception as e:
         logger.error("[L2评审] 失败: %s", e, exc_info=True)
+
+
+def l2_review_energy_job() -> None:
+    """执行能化产业链 L2 周度评审（周日 10:00，45 计划候选③ energy 链路由）。
+
+    energy 链独立评审（GAP-121 独立工作流）：
+      Step A 新标准准入重审（market=energy，因子库 factor_catalog_energy.duckdb、
+            elite_dir=energy_chain_elite）；
+      Step B 衰减评估/自动淘汰（tracking 独立 memory/tracking/energy，与期货隔离），
+            退役同步回写 energy 因子库 DuckDB + JSON。
+    """
+    trace_id = f"fts.l2_review_energy.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[L2评审][energy] 启动 trace_id=%s", trace_id)
+
+    # ---- Step A: 新标准全量重审（market=energy） ----
+    if os.getenv("FTS_MONTHLY_REAUDIT_ENABLED", "1") == "1":
+        try:
+            sys.path.insert(0, str(PROJECT_ROOT))
+            from fts.monitor.reaudit import run_reaudit
+
+            rep = run_reaudit(market="energy", trace_id=f"{trace_id}.reaudit", apply=True, out_json=True)
+            logger.info(
+                "[L2评审][energy] Step A 新标准重审完成: retain=%d shadow=%d retire=%d error=%d (total=%d)",
+                rep.counts.get("retain", 0),
+                rep.counts.get("shadow", 0),
+                rep.counts.get("retire", 0),
+                rep.counts.get("error", 0),
+                rep.total,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error("[L2评审][energy] Step A 重审失败（不阻断衰减评估）: %s", e, exc_info=True)
+    else:
+        logger.info("[L2评审][energy] Step A 新标准重审已关闭（FTS_MONTHLY_REAUDIT_ENABLED=0）")
+
+    # ---- Step B: 衰减评估（energy 独立 tracking） ----
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.monitor.elite_tracker import EliteFactorTracker, AutoRetireManager
+        from fts.config import get_config
+
+        cfg = get_config()
+        tracker = EliteFactorTracker(tracking_dir=f"{cfg.memory_dir}/tracking/energy")
+        report = tracker.run_monthly_evaluation()
+        logger.info("[L2评审][energy] 衰减评估完成: %s", report)
+
+        # 自动淘汰（EliteFactorTracker 快照标记 retired）
+        retire_mgr = AutoRetireManager(tracker)
+        retired = retire_mgr.run()
+        if retired:
+            logger.warning("[L2评审][energy] 快照标记淘汰: %d 个因子", len(retired))
+
+            # 同步淘汰到 DuckDB + JSON（energy 因子库，主流程中真正生效）
+            from fts.factor_engine.factor_db import FactorRepository
+
+            repo = FactorRepository(market="energy")
+            retired_count = 0
+            for fid in retired:
+                if repo.retire_factor(
+                    fid,
+                    reason="L2周度评审自动淘汰[energy]",
+                    elite_dir=cfg.get_elite_dir("energy"),
+                ):
+                    retired_count += 1
+            logger.warning("[L2评审][energy] 淘汰已同步至 DuckDB + JSON: %d/%d 个因子", retired_count, len(retired))
+    except Exception as e:
+        logger.error("[L2评审][energy] 失败: %s", e, exc_info=True)
+
+
+def l2_energy_qa_review_job() -> None:
+    """执行能化链评审+质检统一管道（周日 10:00，方案 A，宁严勿松）。
+
+    合并 l2_review_energy_job 与 energy 链定期质检三路检测为单一管道：
+    [0]面板→[1]重审→[2]退化检测落库→[3]生命周期收口(冷却期30日自动回归)→[4]Inspector→[5]报告。
+    灰度：环境变量 FTS_ENERGY_QA_REVIEW_APPLY=0 时全管道 dry-run（不落库），
+    与现质检/评审结果逐因子对比一致后再置 1 落库。
+    """
+    trace_id = f"fts.l2_qa_review.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[L2评审质检][energy] 启动 trace_id=%s", trace_id)
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.factor_engine.energy_qa_review import EnergyQaReviewConfig, EnergyQaReviewPipeline
+
+        apply = os.getenv("FTS_ENERGY_QA_REVIEW_APPLY", "1") == "1"
+        pipe = EnergyQaReviewPipeline(config=EnergyQaReviewConfig(apply=apply))
+        result = pipe.run(trace_id=trace_id)
+        logger.info(
+            "[L2评审质检][energy] 完成 status=%s apply=%s stages=%s",
+            result.get("status"),
+            apply,
+            list((result.get("stages") or {}).keys()),
+        )
+    except Exception as e:
+        logger.error("[L2评审质检][energy] 运行失败: %s", e, exc_info=True)
 
 
 # ── 逻辑监控 — 每日 22:00（B.2 逻辑审查）───────────────────
@@ -984,11 +1270,15 @@ __all__ = [
     "l2_evolution_weekday_job",
     "l2_evolution_weekend_job",
     "l2_seed_promotion_job",
+    "l2_seed_promotion_energy_job",
     "l2_batch_mining_job",
+    "l2_batch_mining_energy_job",
     "l3_portfolio_loop_job",
     "futures_signal_pipeline_job",
     "health_check_job",
     "l2_review_job",
+    "l2_review_energy_job",
+    "l2_energy_qa_review_job",
     "data_quality_eval_job",
     "logic_monitor_job",
     "factor_inspector_job",

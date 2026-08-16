@@ -96,16 +96,16 @@ def register_default_tasks() -> None:
         ),
         TaskSpec(
             name="l2_evolution_weekday",
-            cron_expression="0 4 * * 1-5",  # 工作日 04:00（45 计划调度基线：种子评估 02:00 后小预算演化 ≈10）
+            cron_expression="0 3 * * 1-5",  # 工作日 03:00（v2.104.0+89 调整：种子评估 02:00 后演化）
             callable_path="fts.scheduler.jobs.l2_evolution_weekday_job",
-            description="L2 Evolution Loop（工作日 04:00 小预算 max_generation≈10，45 计划调度基线）：先种子后演化",
+            description="L2 Evolution Loop（工作日 03:00 小预算 max_generation≈10，45 计划调度基线）：先种子后演化",
             trace_id_prefix="fts.l2",
         ),
         TaskSpec(
             name="l2_evolution_weekend",
-            cron_expression="0 4 * * 6",  # 周六 04:00（45 计划调度基线：周末大预算演化 ≈50）
+            cron_expression="0 3 * * 6",  # 周六 03:00（v2.104.0+89 调整：周末大预算演化）
             callable_path="fts.scheduler.jobs.l2_evolution_weekend_job",
-            description="L2 Evolution Loop（周六 04:00 大预算 max_generation≈50，45 计划调度基线）：周末集中大规模演化",
+            description="L2 Evolution Loop（周六 03:00 大预算 max_generation≈50，45 计划调度基线）：周末集中大规模演化",
             trace_id_prefix="fts.l2",
         ),
         TaskSpec(
@@ -166,21 +166,21 @@ def register_default_tasks() -> None:
         ),
         TaskSpec(
             name="data_level_monitor",
-            cron_expression="0 4 * * *",  # 每日 04:00
+            cron_expression="0 5 * * *",  # 每日 05:00（v2.104.0+89 调整：巡检/监控错峰）
             callable_path="fts.scheduler.jobs.data_level_monitor_job",
             description="数据级质量监控（GAP-F06）：缺失率/异常值/多源分歧检查",
             trace_id_prefix="fts.dlm",
         ),
         TaskSpec(
             name="logic_monitor",
-            cron_expression="0 22 * * *",  # 每日 22:00
+            cron_expression="30 4 * * *",  # 每日 04:30（v2.104.0+89 调整：巡检后逻辑监控错峰）
             callable_path="fts.scheduler.jobs.logic_monitor_job",
             description="逻辑监控（B.2）：因子行为漂移 + 极端预测 + 换月日异常检测",
             trace_id_prefix="fts.logic",
         ),
         TaskSpec(
             name="factor_inspector",
-            cron_expression="0 3 * * *",  # 每日 03:00
+            cron_expression="0 4 * * *",  # 每日 04:00（v2.104.0+89 调整：巡检降级）
             callable_path="fts.scheduler.jobs.factor_inspector_job",
             description="因子巡检与自动降级（B.2）：扫描精英因子，检测退化并降级",
             trace_id_prefix="fts.inspector",
