@@ -71,10 +71,13 @@ class AnnouncementNewsExtractor(BaseExtractor):
         paused: bool = False,
         llm_client: Optional[Any] = None,
         market: str = "stock",
+        max_factors: int = 20,
     ):
         super().__init__(name=name, paused=paused, llm_client=llm_client)
         self.family_name = family_name
         self.market = market
+        # plans/41 A3: max_factors 配置化（管道构造时注入，默认 20）
+        self.max_factors = max_factors
 
     def extract(self, trace_id: str) -> list[SeedCandidate]:
         if self.paused:
@@ -87,7 +90,7 @@ class AnnouncementNewsExtractor(BaseExtractor):
             logger.info("[AnnouncementNewsExtractor] 公告 API 无数据, 返回空 (trace_id=%s)", trace_id)
             return []
 
-        candidates = self._llm_extract_factors(text, trace_id, max_factors=5, market=self.market)
+        candidates = self._llm_extract_factors(text, trace_id, max_factors=self.max_factors, market=self.market)  # plans/41 A3: 配置化配额
         for c in candidates:
             c["parent_topic"] = f"extractor_pipeline/{self.name}/{c.get('name', 'unknown')}"
             c["source"] = "l1_extractor_pipeline"
@@ -143,10 +146,13 @@ class MacroEventExtractor(BaseExtractor):
         paused: bool = False,
         llm_client: Optional[Any] = None,
         market: str = "futures",
+        max_factors: int = 20,
     ):
         super().__init__(name=name, paused=paused, llm_client=llm_client)
         self.family_name = family_name
         self.market = market
+        # plans/41 A3: max_factors 配置化（管道构造时注入，默认 20）
+        self.max_factors = max_factors
 
     def extract(self, trace_id: str) -> list[SeedCandidate]:
         if self.paused:
@@ -159,7 +165,7 @@ class MacroEventExtractor(BaseExtractor):
             logger.info("[MacroEventExtractor] 宏观日历无数据, 返回空 (trace_id=%s)", trace_id)
             return []
 
-        candidates = self._llm_extract_factors(text, trace_id, max_factors=5, market=self.market)
+        candidates = self._llm_extract_factors(text, trace_id, max_factors=20, market=self.market)  # plans/41 A3: max_factors 5→20
         for c in candidates:
             c["parent_topic"] = f"extractor_pipeline/{self.name}/{c.get('name', 'unknown')}"
             c["source"] = "l1_extractor_pipeline"

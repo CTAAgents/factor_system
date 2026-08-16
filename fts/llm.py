@@ -610,8 +610,13 @@ class OpenAIClient(LLMClient):
         chain_knowledge_block = (
             f"\n【能源产业链专属市场知识】\n{chain_knowledge}\n" if chain_knowledge else ""
         )
+        # plans/41 D2: 按子链分批聚焦（energy 市场四子链各一批）
+        chain_focus = market_snapshot.get("chain_focus", "")
+        chain_focus_block = (
+            f"\n【本批聚焦子链】\n{chain_focus}\n" if chain_focus else ""
+        )
         return f"""你是因子工程专家（FTS L1 Bootstrapping Agent）。基于市场快照和辩论薄弱维度，生成 {max_candidates} 个期货因子候选。
-
+{chain_focus_block}
 【市场快照】
 {snapshot_summary}
 {chain_knowledge_block}

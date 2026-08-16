@@ -2119,3 +2119,123 @@ class TestValidateBatchCandidates:
             elapsed_seconds=0.0,
         )
         assert result.candidates_per_minute == 0.0
+
+
+# ════════════════════════════════════════════════════════
+# 11. plans/41: L1 知识注入增强（web_collector 感知 + 实时链知识 + 子链分批 + 预算）
+# ════════════════════════════════════════════════════════
+
+
+class TestEnergySubchainBatches:
+    """plans/41 D2: energy 市场按子链分批。"""
+
+    def test_energy_returns_four_batches(self):
+        """energy 市场返回 4 个子链分批（每批带聚焦子链名）。"""
+        m = BootstrappingChain.__new__(BootstrappingChain)
+        m.market = "energy"
+        batches = m._energy_subchain_batches(30)
+        assert len(batches) == 4
+        focuses = [f[0] for f in batches]
+        assert any("能源" in f for f in focuses)
+        assert any("聚酯" in f for f in focuses)
+        assert any("油化工" in f for f in focuses)
+        assert any("煤化工" in f for f in focuses)
+        # 配额合计 = max_candidates
+        assert sum(b[1] for b in batches) == 30
+
+    def test_energy_small_candidates_keeps_total(self):
+        """max_candidates 较小时分批配额合计仍等于总量。"""
+        m = BootstrappingChain.__new__(BootstrappingChain)
+        m.market = "energy"
+        batches = m._energy_subchain_batches(8)
+        assert sum(b[1] for b in batches) == 8
+
+    def test_fallback_single_batch_on_error(self):
+        """子链划分异常时回退单批（向后兼容）。"""
+        m = BootstrappingChain.__new__(BootstrappingChain)
+        m.market = "energy"
+        with patch("fts.data_futures.FUTURES_SECTOR_MAP", side_effect=Exception("boom")):
+            result = m._energy_subchain_batches(30)
+        assert result == [("", 30)]
+
+
+class TestChainLiveState:
+    """plans/41 C1: 能源链实时产业状态注入。"""
+
+    def test_build_chain_live_state_with_panel(self):
+        """面板数据可用时产出价差/波动/价格位置段。"""
+        m = MetaLoop.__new__(MetaLoop)
+        with patch("fts.data.FTSDataProvider") as MockProvider:
+            import pandas as pd
+
+            idx = pd.date_range("2026-06-01", periods=60, freq="D")
+            df = pd.DataFrame(
+                {
+                    "close": [100.0 * (1 + i * 0.001) for i in range(60)],
+                    "open": [100.0] * 60,
+                    "high": [101.0] * 60,
+                    "low": [99.0] * 60,
+                    "volume": [1000] * 60,
+                },
+                index=idx,
+            )
+            panel = {f"{s}0": df for s in ["SC", "FU", "BU", "PX", "TA", "PF", "L", "PP", "PG", "MA", "UR", "SA"]}
+            MockProvider.return_value.get_futures_panel.return_value = (panel, idx)
+            text = m._build_chain_live_state()
+        assert "子链价差代理" in text
+        assert "波动聚集代理" in text
+        assert "库存/基差水位代理" in text
+
+    def test_build_chain_live_state_empty_on_failure(self):
+        """面板获取异常时返回空串（降级不阻断）。"""
+        m = MetaLoop.__new__(MetaLoop)
+        with patch("fts.data.FTSDataProvider", side_effect=Exception("boom")):
+            text = m._build_chain_live_state()
+        assert text == ""
+
+
+class TestBootstrapWithLlmSubchainBatching:
+    """plans/41 D2: _bootstrap_with_llm 按子链分批调用。"""
+
+    def test_energy_splits_into_batches(self):
+        """energy 市场按子链分批调用 LLM，每批 snapshot 携带 chain_focus。"""
+        m = BootstrappingChain.__new__(BootstrappingChain)
+        m.market = "energy"
+        m.llm_client = MagicMock()
+        m.llm_client.bootstrap_factors.side_effect = [
+            [{"name": f"f{i}", "code": "def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))"} for i in range(3)]
+            for _ in range(4)
+        ]
+        candidates = m._bootstrap_with_llm(
+            {"chain_knowledge": "k", "trace_id": "t"},
+            [],
+            max_candidates=12,
+            trace_id="t1",
+        )
+        # 4 次分批调用
+        assert m.llm_client.bootstrap_factors.call_count == 4
+        # 每批 snapshot 含 chain_focus
+        calls = [c[0][0] for c in m.llm_client.bootstrap_factors.call_args_list]
+        assert all("chain_focus" in c for c in calls)
+        # 候选数 = 4 批 × 3
+        assert len(candidates) == 12
+
+    def test_futures_single_batch(self):
+        """futures 市场保持单批调用（不拆分）。"""
+        m = BootstrappingChain.__new__(BootstrappingChain)
+        m.market = "futures"
+        m.llm_client = MagicMock()
+        m.llm_client.bootstrap_factors.return_value = []
+        m._bootstrap_with_llm({}, [], max_candidates=20, trace_id="t1")
+        assert m.llm_client.bootstrap_factors.call_count == 1
+
+
+class TestL1BudgetConfigPlans41:
+    """plans/41 D1: L1 预算上调。"""
+
+    def test_budget_raised(self):
+        """daily_token_limit 60K + max_bootstraps 30。"""
+        from fts.factor_engine.contracts import DEFAULT_L1_BUDGET_CONFIG
+
+        assert DEFAULT_L1_BUDGET_CONFIG["daily_token_limit"] == 60_000
+        assert DEFAULT_L1_BUDGET_CONFIG["max_bootstraps_per_run"] == 30

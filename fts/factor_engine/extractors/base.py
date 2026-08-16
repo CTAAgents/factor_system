@@ -87,7 +87,7 @@ class BaseExtractor(ABC):
         self,
         source_text: str,
         trace_id: str,
-        max_factors: int = 5,
+        max_factors: int = 20,
         market: str = "futures",
     ) -> list[SeedCandidate]:
         """使用 LLM 从给定文本中提取因子候选。
@@ -95,7 +95,7 @@ class BaseExtractor(ABC):
         Args:
             source_text: 文本内容（研报摘要、论文摘要等）
             trace_id: 全链路 trace_id
-            max_factors: 最大提取因子数
+            max_factors: 最大提取因子数（plans/41 A3：5→8→20）
             market: 市场类型（默认 "futures"）
 
         Returns:
@@ -152,10 +152,11 @@ class BaseExtractor(ABC):
 
 请返回最多 {max_factors} 个因子。"""
         try:
+            # plans/41 A3: max_factors 提升至 20 后，输出 token 预算同步放大（4000→8000）
             if hasattr(self.llm_client, "generate_json"):
-                result = self.llm_client.generate_json(prompt, max_tokens=4000)
+                result = self.llm_client.generate_json(prompt, max_tokens=8000)
             else:
-                text, _ = self.llm_client.complete(prompt, max_tokens=4000)
+                text, _ = self.llm_client.complete(prompt, max_tokens=8000)
                 # P1b: 保存 LLM 原始响应，便于沙箱编译失败等问题的定位分析
                 debug_path = f"debug_llm_response_{trace_id}_{self.name}.txt"
                 try:

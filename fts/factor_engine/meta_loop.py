@@ -618,6 +618,7 @@ def factor_program(data, params):
         llm_client: Optional[Any] = None,
         web_collector: Optional[Callable[..., dict]] = None,
         extractor_pipeline: Optional[Any] = None,
+        market: str = "futures",
     ):
         """
         Args:
@@ -627,10 +628,12 @@ def factor_program(data, params):
                         None 时跳过感知步骤。
             extractor_pipeline: 三源提取器管道（如 FuturesExtractorPipeline），
                         在 LLM 候选后自动调用来补充候选。
+            market: 市场类型（futures/energy；plans/41 D2 按子链分批依据）
         """
         self.llm_client = llm_client
         self.web_collector = web_collector
         self.extractor_pipeline = extractor_pipeline
+        self.market = market
 
     def bootstrap(
         self,
@@ -836,7 +839,7 @@ def factor_program(data, params):
         max_candidates: int,
         trace_id: str,
     ) -> list[SeedCandidate]:
-        """用 LLM 生成候选因子。"""
+        """用 LLM 生成候选因子（plans/41 D2: energy 市场按四子链分批）。"""
         import time
 
         t0 = time.time()
@@ -855,12 +858,36 @@ def factor_program(data, params):
                     trace_id,
                 )
                 return []
-            raw_candidates = llm_client.bootstrap_factors(
-                market_snapshot,
-                debate_gaps,
-                max_candidates,
-                trace_id,
-            )
+            raw_candidates: list[dict[str, Any]] = []
+            if self.market == "energy" and max_candidates >= 8:
+                # D2: 按四大化工子链分批（每批独立 chain_focus，提升多样性与总量）
+                batches = self._energy_subchain_batches(max_candidates)
+                for focus, per_batch in batches:
+                    batch_snapshot = dict(market_snapshot)
+                    batch_snapshot["chain_focus"] = focus
+                    batch_raw = llm_client.bootstrap_factors(
+                        batch_snapshot,
+                        debate_gaps,
+                        per_batch,
+                        trace_id,
+                    )
+                    raw_candidates.extend(batch_raw or [])
+                    logger.info(
+                        "[_bootstrap_with_llm] 子链批完成: focus=%s, per_batch=%d, got=%d, total=%d, trace_id=%s",
+                        focus,
+                        per_batch,
+                        len(batch_raw or []),
+                        len(raw_candidates),
+                        trace_id,
+                    )
+                raw_candidates = raw_candidates[:max_candidates]
+            else:
+                raw_candidates = llm_client.bootstrap_factors(
+                    market_snapshot,
+                    debate_gaps,
+                    max_candidates,
+                    trace_id,
+                )
             elapsed = (time.time() - t0) * 1000
             logger.info(
                 "[_bootstrap_with_llm] LLM 返回, trace_id=%s, elapsed_ms=%.1f, raw_count=%d",
@@ -932,6 +959,37 @@ def factor_program(data, params):
                 exc_info=True,
             )
             return []
+
+    def _energy_subchain_batches(self, max_candidates: int) -> list[tuple[str, int]]:
+        """构建 energy 市场按子链分批的 (聚焦子链, 每批候选数) 列表（plans/41 D2）。
+
+        四大化工子链各一批，按训练池品种数比例分配配额（至少 2/批，保证每批 prompt
+        有独立子链语境）。子链划分失败时回退单批（向后兼容）。
+        """
+        try:
+            from fts.data_futures import ENERGY_CHAIN_SYMBOLS, FUTURES_SECTOR_MAP
+
+            subchains = ["能源", "聚酯链", "油化工", "煤化工"]
+            members = {
+                sc: sorted(set(FUTURES_SECTOR_MAP.get(sc, [])) & set(ENERGY_CHAIN_SYMBOLS))
+                for sc in subchains
+            }
+            non_empty = [(sc, m) for sc, m in members.items() if m]
+            if len(non_empty) < 2:
+                return [("", max_candidates)]
+            total = sum(len(m) for _, m in non_empty)
+            batches: list[tuple[str, int]] = []
+            allocated = 0
+            for i, (sc, m) in enumerate(non_empty):
+                if i == len(non_empty) - 1:
+                    per_batch = max_candidates - allocated
+                else:
+                    per_batch = max(2, round(max_candidates * len(m) / total))
+                batches.append((f"{sc}({','.join(m)})", per_batch))
+                allocated += per_batch
+            return batches
+        except Exception:  # noqa: BLE001
+            return [("", max_candidates)]
 
     def _bootstrap_from_templates(
         self,
@@ -1184,6 +1242,7 @@ class MetaLoop:
             llm_client=self.llm_client,
             web_collector=self.web_collector,
             extractor_pipeline=self._extractor_pipeline,
+            market=market,
         )
 
         # 熔断计数器
@@ -1636,7 +1695,7 @@ class MetaLoop:
             return subchain
 
     def _inject_chain_knowledge(self, result: dict[str, Any]) -> None:
-        """能源链专属市场知识注入（GAP-121）：供 LLM bootstrap prompt 使用。"""
+        """能源链专属市场知识注入（GAP-121 + plans/41 C 层）：静态链知识 + 实时产业状态。"""
         if self.market != "energy":
             return
         try:
@@ -1667,6 +1726,9 @@ class MetaLoop:
             for sym in ENERGY_CHAIN_SYMBOLS:
                 sym_desc[sym] = _chain_sym_desc.get(sym) or FUTURES_SYMBOL_NAMES.get(sym, sym)
 
+            # plans/41 C1: 实时产业状态段（子链价差/基差-库存/开工代理），异常/缺失自动降级
+            live_state = self._build_chain_live_state()
+
             result["chain_knowledge"] = (
                 "【能源产业链专属知识】\n"
                 f"训练链 {len(ENERGY_CHAIN_SYMBOLS)} 品种: {', '.join(ENERGY_CHAIN_SYMBOLS)}\n"
@@ -1685,9 +1747,96 @@ class MetaLoop:
                 "期限结构与价格位置（基差-库存回归）、链内联动、子链间相对强弱与季节性开工周期等机制；"
                 "narrative 须体现能化产业链机制而非泛化量价规律。"
             )
+            if live_state:
+                result["chain_knowledge"] += (
+                    "\n【能源产业链实时产业状态】\n"
+                    "以下为训练链品种近 60 日量价衍生的实时产业代理（数据可用时注入，供因子设计参考）：\n"
+                    f"{live_state}"
+                )
             logger.info("L1 Step 1: 能源链市场知识注入完成 (chain_knowledge_len=%d)", len(result["chain_knowledge"]))
         except Exception as e:  # noqa: BLE001
             logger.warning("L1 Step 1: 能源链知识注入失败: %s", e)
+
+    def _build_chain_live_state(self) -> str:
+        """构建能源链实时产业状态描述（plans/41 C1）。
+
+        经 FTSDataProvider 拉取训练链品种近 60 日 OHLCV，计算并注入：
+          - 子链价差代理（如 SC-FU、SC-BU 裂解价差收益，炼厂利润代理）
+          - 基差-库存水位代理（近 20 日动量/波动率偏离，量价代理）
+          - 开工季节性代理（5 日/60 日滚动均值偏离）
+        任一环节异常/数据缺失自动降级（返回可用的部分），不阻断整体注入。
+
+        Returns:
+            实时产业状态文本（无可用数据返回空串）。
+        """
+        lines: list[str] = []
+        try:
+            from fts.data import FTSDataProvider
+            from fts.data_futures import ENERGY_CHAIN_SYMBOLS
+
+            provider = FTSDataProvider()
+            panel, _ = provider.get_futures_panel(symbols=list(ENERGY_CHAIN_SYMBOLS), days=60)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[L1.chain_live] 面板获取失败, 跳过实时状态: %s", e)
+            return ""
+
+        try:
+            import numpy as np
+
+            # 各品种量价代理（波动率聚集 / 动量 / 均值偏离）
+            px_stats: dict[str, dict[str, float]] = {}
+            for sym, df in panel.items():
+                if df is None or df.empty or "close" not in df.columns:
+                    continue
+                close = df["close"].astype(float).dropna()
+                if len(close) < 20:
+                    continue
+                ret = close.pct_change().dropna()
+                vol20 = float(ret.tail(20).std()) if len(ret) >= 20 else float("nan")
+                mom20 = float(close.iloc[-1] / close.iloc[-20] - 1) if len(close) >= 21 else float("nan")
+                ma5 = float(close.tail(5).mean())
+                ma60 = float(close.mean())
+                dev5 = (ma5 / ma60 - 1) if ma60 else float("nan")
+                px_stats[sym] = {
+                    "vol20": vol20,
+                    "mom20": mom20,
+                    "dev5": dev5,
+                }
+
+            # 子链价差代理（按链内上下游配对，缺失品种跳过）
+            pair_map = [
+                ("能源裂解", ("SC0", "FU0")),
+                ("能源裂解", ("SC0", "BU0")),
+                ("聚酯加工差", ("SC0", "TA0")),
+                ("油化工", ("SC0", "L0")),
+                ("煤化工", ("MA0", "SA0")),
+            ]
+            spread_parts: list[str] = []
+            for label, (a, b) in pair_map:
+                if a in px_stats and b in px_stats:
+                    ra, rb = px_stats[a]["mom20"], px_stats[b]["mom20"]
+                    if ra is not None and rb is not None and not (isinstance(ra, float) and np.isnan(ra)) and not (
+                        isinstance(rb, float) and np.isnan(rb)
+                    ):
+                        spread_parts.append(f"{label}({a}-{b}) 20日价差收益≈{ra - rb:+.3%}")
+            if spread_parts:
+                lines.append("子链价差代理: " + "; ".join(spread_parts))
+
+            # 波动率聚集 + 基差-库存水位代理（滚动偏离）
+            vol_parts: list[str] = []
+            pos_parts: list[str] = []
+            for sym, st in px_stats.items():
+                if not (isinstance(st["vol20"], float) and np.isnan(st["vol20"])):
+                    vol_parts.append(f"{sym} 20日波动≈{st['vol20']:.2%}")
+                if not (isinstance(st["dev5"], float) and np.isnan(st["dev5"])):
+                    pos_parts.append(f"{sym} 价格位置(5日/60日均值偏离)≈{st['dev5']:+.2%}")
+            if vol_parts:
+                lines.append("波动聚集代理: " + "; ".join(vol_parts[:12]))
+            if pos_parts:
+                lines.append("库存/基差水位代理(价格位置): " + "; ".join(pos_parts[:12]))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[L1.chain_live] 实时状态计算失败, 部分降级: %s", e)
+        return "\n".join(lines)
 
     def _inject_candidate(self, cand: SeedCandidate, trace_id: str) -> Optional[str]:
         """Step 5: 注入候选到 L2 种子池入口。"""

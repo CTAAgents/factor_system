@@ -21,6 +21,7 @@ import requests
 import yaml
 
 from ..contracts import SeedCandidate
+from ...config.settings import get_config
 from .base import BaseExtractor, BaseExtractorPipeline
 
 logger = logging.getLogger(__name__)
@@ -53,10 +54,12 @@ class YamlSeedExtractor(BaseExtractor):
         family_name: str = "",
         paused: bool = False,
         llm_client: Optional[Any] = None,
+        max_factors: int = 20,
     ):
         super().__init__(name=name, paused=paused, llm_client=llm_client)
         self.yaml_file = Path(yaml_file)
         self.family_name = family_name or name
+        self.max_factors = max_factors
 
     def extract(self, trace_id: str) -> list[SeedCandidate]:
         if self.paused:
@@ -147,6 +150,7 @@ class ResearchReportExtractor(BaseExtractor):
         family_name: str = "broker_cta",
         paused: bool = False,
         llm_client: Optional[Any] = None,
+        max_factors: int = 20,
     ):
         """
         Args:
@@ -154,9 +158,11 @@ class ResearchReportExtractor(BaseExtractor):
             family_name: 因子家族名称
             paused: 是否暂停
             llm_client: LLM 客户端
+            max_factors: 单次 LLM 提取最大因子数（plans/41 A3，默认 20）
         """
         super().__init__(name=name, paused=paused, llm_client=llm_client)
         self.family_name = family_name
+        self.max_factors = max_factors
 
     def extract(self, trace_id: str) -> list[SeedCandidate]:
         if self.paused:
@@ -174,7 +180,7 @@ class ResearchReportExtractor(BaseExtractor):
                 "[ResearchReportExtractor] 成功获取研报, 长度=%d, 开始 LLM 提取",
                 len(reports_text),
             )
-            candidates = self._llm_extract_factors(reports_text, trace_id, max_factors=5)
+            candidates = self._llm_extract_factors(reports_text, trace_id, max_factors=self.max_factors)
             if candidates:
                 # 标记来源
                 for c in candidates:
@@ -193,7 +199,7 @@ class ResearchReportExtractor(BaseExtractor):
             "持仓量分析、季节性模式、跳跃风险、偏度交易、尾部风险对冲等方向。"
             "请提取 3-5 个当前研究前沿的因子想法。"
         )
-        candidates = self._llm_extract_factors(fallback_text, trace_id, max_factors=5)
+        candidates = self._llm_extract_factors(fallback_text, trace_id, max_factors=self.max_factors)
         for c in candidates:
             c["parent_topic"] = f"extractor_pipeline/{self.name}/{c.get('name', 'unknown')}"
             c["source"] = "l1_extractor_pipeline"
@@ -280,6 +286,7 @@ class AcademicPaperExtractor(BaseExtractor):
         family_name: str = "academic_papers",
         paused: bool = False,
         llm_client: Optional[Any] = None,
+        max_factors: int = 20,
     ):
         """
         Args:
@@ -287,9 +294,11 @@ class AcademicPaperExtractor(BaseExtractor):
             family_name: 因子家族名称
             paused: 是否暂停
             llm_client: LLM 客户端
+            max_factors: 单次 LLM 提取最大因子数（plans/41 A3，默认 20）
         """
         super().__init__(name=name, paused=paused, llm_client=llm_client)
         self.family_name = family_name
+        self.max_factors = max_factors
 
     def extract(self, trace_id: str) -> list[SeedCandidate]:
         if self.paused:
@@ -307,7 +316,7 @@ class AcademicPaperExtractor(BaseExtractor):
                 "[AcademicPaperExtractor] 成功获取论文, 长度=%d, 开始 LLM 提取",
                 len(papers_text),
             )
-            candidates = self._llm_extract_factors(papers_text, trace_id, max_factors=5)
+            candidates = self._llm_extract_factors(papers_text, trace_id, max_factors=self.max_factors)
             for c in candidates:
                 c["parent_topic"] = f"extractor_pipeline/{self.name}/{c.get('name', 'unknown')}"
                 c["source"] = "l1_extractor_pipeline"
@@ -393,6 +402,7 @@ class FuturesExtractorPipeline(BaseExtractorPipeline):
         llm_client: Optional[Any] = None,
         macro_enabled: bool = True,
         state_store: Any | None = None,
+        max_factors: Optional[int] = None,
     ):
         """
         Args:
@@ -401,14 +411,20 @@ class FuturesExtractorPipeline(BaseExtractorPipeline):
             llm_client: LLM 客户端（用于动态因子提取）
             macro_enabled: 是否启用宏观事件提取器（GAP-I103）
             state_store: 可选状态存储（StateKVStore），缺省用全局 SSOT（供测试隔离）
+            max_factors: 单次 LLM 提取最大因子数（plans/41 A3 配置化；
+                        None=读 config/settings.yaml l1_extractor_max_factors，默认 20；
+                        仅作用于研报/论文/宏观/WebSearch 等 LLM 提取源，
+                        天软 tinysoft 为静态 YAML 感知源不参与）
         """
         self._pause_tinysoft_after_first = pause_tinysoft_after_first
         self._first_extract = True
+        # plans/41 A3: max_factors 配置化（显式参数 > FTSConfig > 默认 20）
+        if max_factors is None:
+            max_factors = get_config().l1_extractor_max_factors
+        self._max_factors = max_factors
 
-        # 源 1: 天软（YAML 静态读取）
-        # 源 2: 券商研报（动态，LLM 提取）
-        # 源 3: 学术论文（动态，arXiv + LLM 提取）
-        extractors = [
+        # LLM 提取源统一注入配置配额（天软为静态感知源不传参）
+        extractors: list[BaseExtractor] = [
             YamlSeedExtractor(
                 name="tinysoft",
                 yaml_file=SEEDS_DIR / FACTOR_FILE_MAP["tinysoft"],
@@ -420,12 +436,14 @@ class FuturesExtractorPipeline(BaseExtractorPipeline):
                 family_name="broker_cta",
                 paused=False,  # 默认启用
                 llm_client=llm_client,
+                max_factors=self._max_factors,
             ),
             AcademicPaperExtractor(
                 name="academic_papers",
                 family_name="academic_papers",
                 paused=False,  # 默认启用
                 llm_client=llm_client,
+                max_factors=self._max_factors,
             ),
         ]
         # GAP-I103 (v2.80.0): 另类知识源——宏观事件（期货侧，跨品种方向注入）
@@ -439,8 +457,20 @@ class FuturesExtractorPipeline(BaseExtractorPipeline):
                     paused=False,
                     llm_client=llm_client,
                     market="futures",
+                    max_factors=self._max_factors,
                 )
             )
+        # plans/41 A: WebSearch 动态因子源（检索量化平台/研报/社区 → LLM 提取）
+        from .web_search import WebSearchExtractor
+
+        extractors.append(
+            WebSearchExtractor(
+                name="web_search",
+                paused=False,
+                llm_client=llm_client,
+                max_factors=self._max_factors,
+            )
+        )
 
         super().__init__(
             extractors=extractors,
