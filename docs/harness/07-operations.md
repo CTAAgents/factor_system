@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+102
+> 版本: v2.104.0+105
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,9 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+105** | **2026-08-17** | **docs: 同步因子生命周期调度（business_flow/execution_modes_flowchart 调度时间修正 + TRAE Schedule 调度源 + SVG approved 豁免标注 + 任务数16）** |** |
+| **v2.104.0+104** | **2026-08-17** | **plans/46 知识源自动发现 M1-M4 实施：SourceRegistry+SourceProber(探活类型识别)+SourceDiscoverer(WebSearch+LLM发现)+DynamicSourceCollector(json/rss/html+LLM兜底)；collect_all 叠加注册表 active 动态源+canary 试采晋升；因子产出双健康度(技术失败冷却/连续零产出淘汰复权)；配置化阈值 l1_source_*；test_source_registry.py 新建** |** |
+| **v2.104.0+103** | **2026-08-17** | **所有定时自动化任务默认执行能化链：settings.yaml + settings.py 全局默认市场 default_market "futures"→"energy"（门控执行集整体切换：energy 任务执行、futures 任务 no-op；FTS_DEFAULT_MARKET 可覆盖）；logic_monitor_job 由固定 futures 改跟随全局 _global_market()（监控 factor_catalog_energy，与因子巡检口径一致）；验证：83 用例（scheduler/test_jobs + test_tasks + test_factor_db_isolation）全绿 + 门控实测 gate(energy)=True/gate(futures)=False + 能化库 elite+active=242；文档同步（01-arch 市场路由/07-operations）** |** |
 | **v2.104.0+102** | **2026-08-17** | **L1 bulk 采集层修复+扩容：①东财研报 400 修复(必填 beginTime/endTime/qType) ②recent() 按 collected_at 采集时间过滤 ③nonen 导航垃圾黑名单过滤 ④新增 5 源(Crossref/NBER/巨潮/新浪/SemanticScholar) collect_all 5→10 源；实测：东财移除关键词硬过滤(采集层保量) 40 条、巨潮改 POST 13 条、Crossref/NBER/新浪各 20 条、SS 429 限速重试降级** |** |
 | **v2.104.0+101** | **2026-08-17** | **全局市场开关 FTS_DEFAULT_MARKET 运行时全局切换：调度任务门控(no-op)+CLI/仓储默认值跟随全局** |** |
 | **v2.104.0+100** | **2026-08-17** | **GAP-132 因子巡检默认改能化链(market=energy)+dry-run：评估历史不足(每因子1条)致趋势检测 insufficient_data 退化检测静默失效，巡检防误降级；GAP 登记 08-gap-analysis** |** |

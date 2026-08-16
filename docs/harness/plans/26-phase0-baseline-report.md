@@ -1,7 +1,7 @@
 # Phase 0 演化基线统计报告（26 号计划）
 
 
-> 版本: v2.104.0+102
+> 版本: v2.104.0+105
 
 > 数据根: `memory/evolution`（state.json + traces + tracking，只读统计）
 > 生成: 2026-08-11

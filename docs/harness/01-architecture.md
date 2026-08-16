@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+102
+> 版本: v2.104.0+105
 > 最后更新: 2026-08-10
 
 ---
@@ -86,6 +86,17 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │    │   dedup 开关）                                                     │
 │    └ bulk_knowledge.py — BulkKnowledgeExtractor 深读层：命中子集        │
 │       ≤l1_knowledge_deepread_max 分块交 LLM 提取，token 受预算约束     │
+│  - 知识源自动发现（plans/46，v2.104.0+104）：                          │
+│    ├ source_registry.py — l1_knowledge_sources 注册表（DuckDB SSOT：   │
+│    │   source_id/url/type/status/健康度双维度），探活层 SourceProber   │
+│    │   纯规则 HTTP 嗅探识别 JSON/RSS/HTML + 评分，达标才注册           │
+│    ├ source_discovery.py — SourceDiscoverer：WebSearch → LLM 提取候选  │
+│    │   → l1_source_discovery 暂存 → 探活 → 注册（无 LLM 降级规则提取） │
+│    ├ DynamicSourceCollector（bulk_collector.py）— 动态源按 type 驱动    │
+│    │   解析：json 通用字段 / rss 内置 xml / html 链接 + LLM 兜底        │
+│    └ collect_all 叠加注册表 active 源 + pending canary（N 次成功晋升）  │
+│       健康度：技术维度连续失败→cooldown→retired；业务维度连续零因子     │
+│       产出→停用/复权（因子产出回写自 bulk_knowledge 深读层）           │
 │  - LLM 编译修复 + 失败复活（plans/44 方向1，v2.104.0+82）：            │
 │    ├ LLMClient.fix_factor_code（基类 None + OpenAI + Mock 实现）：规则  │
 │    │   6 策略修复失败后交 LLM 修复代码，validate_factor_code 复核通过   │
@@ -1165,9 +1176,9 @@ class FactorKind(str, Enum):
 | L2 周度评审 | 周日 10:00 | 每周 | 45 计划候选③：精英重审 + 衰减评估 + 自动淘汰（替代月度衰减 + run() 每日调用） |
 | Health Check | 每 10 分钟 | 高频 | 状态监控 |
 
-> 市场路由（v2.104.0+101）：全局市场开关 `FTS_DEFAULT_MARKET`（settings.default_market，默认 "futures"）。
+> 市场路由（v2.104.0+103）：全局市场开关 `FTS_DEFAULT_MARKET`（settings.default_market，默认 "energy" 能化链——所有定时自动化任务默认执行能化链，v2.104.0+103）。
 > 市场专属任务在函数入口门控（futures 任务仅全局 futures 时执行，energy 任务仅全局 energy 时执行，不匹配记日志 no-op 空转）；
-> `l1_meta_loop_job`/`factor_inspector_job` 未显式指定 market 时跟随全局；CLI `--market`/`--universe` 未指定时默认跟随全局；
+> `l1_meta_loop_job`/`factor_inspector_job`/`logic_monitor_job` 未显式指定 market 时跟随全局（logic_monitor 由固定 futures 改随全局，v2.104.0+103）；CLI `--market`/`--universe` 未指定时默认跟随全局；
 > `FactorRepository`/`FactorInspector` 构造 `market=None` 时跟随全局；共享数据/监控任务（sync_futures_data/health_check/data_quality_eval/data_level_monitor）不门控（energy 亦依赖期货数据层）。
 
 ---

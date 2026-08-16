@@ -1,6 +1,6 @@
 # FTS 业务流程图
 
-> 版本: v2.104.0+102
+> 版本: v2.104.0+105
 > 最后更新: 2026-08-05
 
 ## 全景业务流
@@ -96,14 +96,15 @@
   │                                                                         │
   │  portfolio_loop.py                                                      │
   │       │                                                                 │
-  │  ├── load_elite_factors(): 加载 elite 因子                              │
-  │  ├── orthogonalize_factors(): 因子正交化                                │
+  │  ├── load_approved_factors(): 加载 active elite → 质量门 → 影子池剔除   │
+  │  │      → approved 硬过滤（仅 factor_reviews.decision='approved'）      │
+  │  ├── orthogonalize_factors(): 因子正交化/去重                            │
   │  ├── decay_test(): 衰减检验                                              │
   │  ├── build_combo(): 构建组合 (等权/夏普加权/Elastic Net)                │
   │  ├── synthesize_signals(): 信号合成                                     │
   │  └── L3Verifier: L3 锁定协议                                            │
   │       │                                                                 │
-  │       │ PortfolioCombo → memory/portfolio/{market}/current_combo.json │
+  │       │ 组合权重快照 + combo_history（DuckDB SSOT）                     │
   │       ▼                                                                 │
   └───────┬─────────────────────────────────────────────────────────────────┘
           │
@@ -127,47 +128,59 @@
 ## 触发时序
 
 ```
-时间线
+时间线（调度源：TRAE Schedule 定时自动化；内部 fts/scheduler 默认停用，v2.104.0+99）
   │
-07:59  L1 Meta-Loop 启动（工作日每日，对齐 TRAE Schedule 期货 L1）
+00:00  L1 Meta-Loop 启动（每日，l1_meta_loop）
   │      ├── Web 感知 + 批量采集（arXiv/OpenAlex/东财/全球报告 ≥300 篇/天）→ 市场知识补给
   │      ├── embedding 粗筛 → LLM 深读提取（≤l1_knowledge_deepread_max）
   │      ├── 编译失败候选 LLM 修复/复活（l1_rejected_retry）
   │      ├── 种子因子注入 → l1_injected/ + factor_pool.json（pending）
   │      └── 演化方向指引 → L2
   │
-19:00  L3 Portfolio Loop 启动（工作日每日，期货，对齐 TRAE Schedule 期货 L3 19:00；equal_weight 等权漂移小，每日重算稳定）
-  │      ├── 加载 elite 因子
-  │      ├── 正交化 → 去相关性
-  │      ├── 衰减检验 → 淘汰失效因子
-  │      ├── 组合构建 → 权重分配
-  │      ├── 信号合成 → ScoredSignal
-  │      └── 期货信号管道 → 横截面信号报告（20:00 独立任务）
+02:00  L2 种子评估晋升（每日，l2_seed_promotion）
+  │      └── L1 注入种子相关性预检 + 评估晋升入 elite 池（供当日 04:00 演化消费为父因子，不重置演化状态计数器）
   │
-19:30  L3 Portfolio Loop（股票）启动（每周五 19:30 —— 已随股票管线剥离至 fts-stock，2026-08，主系统不再调度）
-  │
-00:00  L2 Evolution Loop 启动（工作日每日，对齐 TRAE Schedule 期货 L2）
-  │      ├── 加载种子因子 (81 期货专用)
-  │      ├── 合并 L1 注入候选 (GAP-031: pending 门控 + market 过滤 + 去重)
-  │      ├── 种子评估 → 晋升 elite (IC≥0.03, Sharpe≥1.5)
-  │      ├── LLM 宏观演化 → 新因子生成
+03:00  L2 Evolution Loop 启动（工作日 l2_evolution_weekday ≈10 代 / 周六 l2_evolution_weekend ≈50 代）
+  │      ├── 加载种子因子（81 期货专用）/ elite 父池（UCT 选择）
+  │      ├── 合并 L1 注入候选（pending 门控 + market 过滤 + 去重）
+  │      ├── GP/深度/算子 DSL 演化 → 新因子生成
   │      ├── optuna 微观调参 → 参数优化
-  │      ├── 三级评估 → 审计 → 质量评分卡 → elite 晋升
+  │      ├── 准入链（Verifier → 去冗余 → B.4 高IC → 多重检验 → WF → 审计 → 评分卡 → 影子池）
   │      └── 熔断检查 → 保护机制
   │
-08:45  股票/ETF 信号管道启动（已随股票管线剥离至 fts-stock，2026-08，主系统不再调度）
-20:00  期货信号管道启动（工作日每日，独立调度）
+06:00  L3 Portfolio Loop 启动（工作日，l3_portfolio_loop）
+  │      ├── 加载 active elite → 质量门 → 影子池剔除 → approved 硬过滤（仅 factor_reviews.decision='approved'）
+  │      ├── 去重/聚类/PCA → 权重重算（equal_weight）
+  │      └── 信号合成 → ScoredSignal（Verifier 校验）
   │
-每10分钟  Health Check
-         ├── 状态轮询
-         ├── 熔断检测
-         └── 告警通知
-
+周日06:00  L2 批量挖掘（l2_batch_mining）
+  │      └── BatchMiner 批量漏斗（同父多后代 → 并行粗筛 → 准入链），熔断隔离不污染演化状态
+  │
+周日10:00  L2 周度评审（l2_review）
+  │      ├── Step A reaudit 新标准重审（retain/shadow/retire）
+  │      ├── Step B 衰减评估 + AutoRetire 自动淘汰
+  │      └── Step C review_l3_pool 复核 L3 池 + list_pending 机审（approved 唯一收口出口，组合防抖）
+  │
+20:00  期货信号管道启动（工作日每日，独立调度）→ reports/futures/{date}/futures_signals_*.md
+  │
+每日04:00  因子巡检降级（factor_inspector：Sharpe↓20%；approved 因子豁免仅标记待周度评审收口）
+每日04:30  逻辑监控（logic_monitor：行为漂移 / 极端预测 / 换月异常）
+每日05:00  数据级监控（data_level_monitor：缺失率 / 异常值 / 多源分歧）
+每5分钟   数据质量评估（data_quality_eval）
+每10分钟  Health Check（状态轮询 / 熔断检测 / 告警通知）
+  │
 按需      WorkFlow UI（fts ui，2026-08-14 v2.104.0+25）
          ├── 用户在 /workflow 看板点击「创建并端到端执行」
          ├── WorkflowExecutor 按 11 阶段顺序真实执行 fts cli 动作
          ├── 失败即停、批次状态 SQLite 回放
          └── 质检看板 /api/workflow/qa/board 聚合 QA 7 状态分布
+（股票 L3 19:30 / 股票信号管道 08:45 已随股票管线剥离至 fts-stock，2026-08，主系统不再调度）
+
+调度源说明（v2.104.0+99）：内部 fts/scheduler 定时任务默认停用（FTS_INTERNAL_SCHEDULER_ENABLED 未设或 "0"），
+周期任务由 TRAE Schedule 定时自动化执行（时间与上表一致），内部调度器不重复执行。
+一键启用：$env:FTS_INTERNAL_SCHEDULER_ENABLED="1"; fts scheduler run
+一键停用：Remove-Item Env:FTS_INTERNAL_SCHEDULER_ENABLED; fts scheduler run
+状态查看：fts scheduler status
 ```
 
 ## 角色边界
@@ -194,5 +207,5 @@
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | 本文件描述 FTS 全景业务流，覆盖 `meta_loop.py`（L1）、`extractors/bulk_collector.py`+`bulk_knowledge.py`+`knowledge_filter.py`（L1 批量三层管线）、`evolution_loop.py`（L2）、`portfolio_loop.py`（L3）、`scheduler/engine.py`（调度器）、`monitor/`（监控）各模块的职责边界和触发时序 |
-| 可验证断言 | 业务流包含 L0~L3 四层 + 信号输出层共 5 层架构；时序图中 L1 07:59 / L3 期货 19:00 / L2 00:00 + 期货信号管道 20:00 + 每 10 分钟健康检查（股票 L3 19:30 与股票信号管道 08:45 已随股票管线剥离至 fts-stock，2026-08）；L1 07:59 时序含批量采集(≥300 篇/天)→embedding 粗筛→LLM 深读与失败复活（l1_rejected_retry）；角色边界表中 L1 不可修改因子代码、L2 不可构建组合、L3 不执行交易 |
-| 检验方式 | 对照 `01-architecture.md` 架构文档确认层级定义一致；检查 `scheduler/tasks.py` 确认定时任务时间点一致
+| 可验证断言 | 业务流包含 L0~L3 四层 + 信号输出层共 5 层架构；时序图为实际 cron：L1 00:00 / 种子评估 02:00 / 演化 03:00（工作日≈10 代·周六≈50 代）/ 批量 周日06:00 / 周度评审 周日10:00（含 review_l3_pool 收口）/ L3 工作日06:00（approved 硬过滤）/ 信号管道 20:00 / 巡检 04:00（approved 豁免）/ 逻辑 04:30 / 数据级 05:00 / 数据质量 每5min / 健康检查 每10min；内部调度停用（`FTS_INTERNAL_SCHEDULER_ENABLED` 默认 "0"），TRAE Schedule 为唯一调度源；L1 时序含批量采集(≥300 篇/天)→embedding 粗筛→LLM 深读与失败复活（l1_rejected_retry）；股票 L3 19:30 与股票信号管道 08:45 已随股票管线剥离至 fts-stock（2026-08）；角色边界表中 L1 不可修改因子代码、L2 不可构建组合、L3 不执行交易 |
+| 检验方式 | 对照 `01-architecture.md` 架构文档确认层级定义一致；对照 `fts/scheduler/tasks.py` REGISTRY 16 任务 cron 确认时间点一致；`fts scheduler status` 查看实际调度数（内部停用默认 0）

@@ -170,7 +170,7 @@
 
   <!-- 监控 -->
   <text class="th" x="36" y="404">监控层</text>
-  <text class="ts" x="36" y="428">每日 04:00 巡检降级（Sharpe↓20%→degraded）</text>
+  <text class="ts" x="36" y="428">每日 04:00 巡检降级（Sharpe↓20%；approved 豁免仅标记待周度评审收口）</text>
   <text class="ts" x="36" y="448">04:30 逻辑监控（行为漂移/极端预测/换月异常）</text>
   <text class="ts" x="36" y="468">05:00 数据级监控（缺失率/异常值/多源分歧）</text>
   <text class="ts" x="36" y="488">月度 M1-M5 · 季度 F1-F6 · 半年度 D1-D4 复检</text>
