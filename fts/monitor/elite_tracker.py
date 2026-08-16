@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 FactorGrade = Literal["A", "B", "C"]
 """因子质量等级。A(优秀)/B(合格)/C(不合格)"""
 
-FactorStatus = Literal[
+TrackerStatus = Literal[
     "active",  # 活跃
     "observing",  # 观察期 (B级因子)
     "decaying",  # 衰减中
@@ -506,7 +506,7 @@ class EliteFactorTracker:
                 decaying.append(snapshot)
         return decaying
 
-    def get_by_status(self, status: FactorStatus) -> list[dict]:
+    def get_by_status(self, status: TrackerStatus) -> list[dict]:
         """按状态筛选因子。
 
         Args:
@@ -847,7 +847,7 @@ def _is_past(iso_datetime: str) -> bool:
 __all__ = [
     "TrackingSnapshot",
     "FactorGrade",
-    "FactorStatus",
+    "TrackerStatus",
     "DecayGrade",
     "GradeThreshold",
     "AutoRetireConfig",

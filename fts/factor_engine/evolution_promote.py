@@ -87,8 +87,10 @@ def build_qa_review(
         if audit is None:
             return False
         it = audit.item(name)
-        if it is not None:
-            return it.status == "passed"
+        if it is not None and it.status == "passed":
+            return True
+        if it is not None and it.status == "failed":
+            return False
         # items 明细缺失（存量/表来源）：回退审计整体 passed——审计通过即无失败项
         return bool(audit.passed)
 

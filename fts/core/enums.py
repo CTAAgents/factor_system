@@ -29,8 +29,8 @@ class FactorPriority(str, Enum):
     LOW = "low"
 
 
-class FactorStatus(str, Enum):
-    """因子在种子池中的状态。"""
+class CandidateStatus(str, Enum):
+    """候选因子在种子池中的状态（区别于 status_board.FactorStatus 生命周期 7 状态）。"""
 
     PENDING = "pending"  # 待注入
     INJECTED = "injected"  # 已注入
@@ -69,4 +69,4 @@ class FusionStrategy(str, Enum):
     TRIMMED_MEAN = "trimmed_mean"  # 去掉最高/最低后取均值
 
 
-__all__ = ["EvolutionStage", "FactorPriority", "FactorStatus", "DataSource", "FusionStrategy"]
+__all__ = ["EvolutionStage", "FactorPriority", "CandidateStatus", "DataSource", "FusionStrategy"]

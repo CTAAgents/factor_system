@@ -1,6 +1,6 @@
 # 因子全生命周期管理（FTS）
 
-> 版本: v2.104.0+90
+> 版本: v2.104.0+97
 > 最后更新: 2026-08-17
 > 适用范围: 期货主链路（futures / energy，股票链路已剥离至 fts-stock）
 > 关联文档: [01-architecture.md](file:///d:/Programs/factor_system/docs/harness/01-architecture.md) · [05-observability.md](file:///d:/Programs/factor_system/docs/harness/05-observability.md) · [07-operations.md](file:///d:/Programs/factor_system/docs/harness/07-operations.md) · [plan 45](file:///d:/Programs/factor_system/docs/harness/plans/45-l2-loop-split-plan.md)
@@ -32,6 +32,60 @@
 | L3 组合构建 | 工作日 06:00 `l3_portfolio_loop` | 加载 approved 因子 → 去重 → 权重重算 |
 | 信号管道 | 工作日 20:00 | 消费 L3 权重生成信号报告 |
 | 巡检/监控 | 每日 04:00 巡检降级 · 4:30 逻辑监控 · 05:00 数据级监控 | 退化检测 / 行为漂移 / 数据质量 |
+
+### 2.1 端到端操作流程矩阵（周期环节 × 输入输出 × 验证 × 异常）
+
+| 环节 | 触发（任务 + 调度） | 输入 | 核心动作 | 输出落库 | 验证命令 | 异常处置 |
+|:-----|:--------------------|:-----|:---------|:---------|:---------|:---------|
+| **L0/L1 供给** | `l1_meta_loop` 每日 00:00 | 知识库/网页/种子源 + LLM + 市场快照（web_collector） | MetaLoop 知识补给 + Bootstrapping + 种子注入，市场快照注入 bootstrap prompt | 候选池 `factor_pool.json` + 注入 `l1_injected/`（`injected_candidate_ids`） | `pytest tests/factor_engine/test_meta_loop.py -q` | 异常仅日志不阻断次日；无数据跳过 |
+| **L2 种子评估** | `l2_seed_promotion` 每日 02:00 | L1 注入种子 + 种子池 + 期货横截面训练集（排除盲测池） | `run_seed_stage`：相关性预检 → 全链质检（Verifier/消融/审计/WF）→ 晋升 elite（不重置演化计数器） | `factor_catalog`（futures）+ elite 快照 + `shadow_pool` | `pytest tests/factor_engine/test_evolution_loop.py -k "seed or promote" -q` | 任一关卡失败拒绝晋升退回候选池；训练品种 <10 跳过 |
+| **L2 演化** | `l2_evolution_weekday` 工作日 03:00（≈10 代）/ `l2_evolution_weekend` 周六 03:00（≈50 代） | elite 父池（UCT 选择）+ 期货横截面面板 | GP/深度/算子 DSL 演化通道 → 准入链（Verifier → 去冗余 → B.4 高IC → 多重检验 → WF → 审计 → 评分卡 → 影子池） | `factor_catalog` + elite 快照 | `pytest tests/factor_engine/test_evolution_loop.py -q` | 熔断隔离（`_consecutive_low_ic` 保存/恢复）；数据不足跳过 |
+| **L2 批量挖掘** | `l2_batch_mining` 周日 06:00 | elite 父因子（UCT）+ 期货横截面面板 | `run_batch_stage`：BatchMiner 同父多后代批量生成 → 并行粗筛 → 逐个走准入链 | `factor_catalog` + elite 快照 | `pytest tests/factor_engine/test_batch_mining.py -q` | 熔断隔离（batch 失败不污染演化状态）；无父因子跳过 |
+| **L2 周度评审** | `l2_review` 周日 10:00 | 全部 active elite（含 L3 池 approved 子集 `factor_reviews.approved`） | Step A reaudit 新标准重审（retain/shadow/retire）→ Step B 衰减评估 + AutoRetire 同步 DuckDB → Step C `_review_gate_weekly`（`review_l3_pool` 复核 L3 池 + `list_pending` 机审兜底） | `factor_reviews` + `factor_status_history` + `factor_catalog`（retire/demote）+ tracking 快照 | `pytest tests/factor_engine/test_review_workflow.py tests/factor_engine/test_qa_gate.py tests/factor_engine/qa/ -q` | Step A 失败不阻断 B/C；rejected/质检失效退回 L2 冷却池（宁缺毋滥） |
+| **L3 组合构建** | `l3_portfolio_loop` 工作日 06:00 | **仅 approved**：`factor_reviews.decision='approved'`（L3 唯一消费对象；从 active elite 加载，经质量门/影子池后硬过滤，rejected/未评审剔除） | 加载 active elite → 质量门 → 影子池剔除 → **approved 硬过滤** → 去重/聚类/PCA → 权重重算（equal_weight 默认）→ Verifier 校验 | 组合权重快照 + `combo_history` | `pytest tests/factor_engine/test_portfolio_loop.py -k "ReviewApproved or LoadEliteDuckdb" -q` | 失败仅日志；冷启动保护 / 冻结日 `status='frozen'` 不重建 |
+| **信号管道** | `futures_signal_pipeline` 工作日 20:00 | L3 权重（周五重算快照，其余日冻结复用）+ 全量品种行情 | Ridge 权重（周五重算）→ 多空双向信号排名 → 报告 | `reports/futures/{date}/futures_signals_*.md` | `pytest tests/test_futures_signal_pipeline.py -q` | 权重冻结仅刷新因子值；失败仅日志 |
+| **巡检/监控** | `factor_inspector` 04:00 · `logic_monitor` 04:30 · `data_level_monitor` 05:00 · `data_quality_eval` 每 5min · 月度/季度/半年度复检 | elite 因子 + 行情/因子库 | 退化检测（`inspect_and_downgrade`，Sharpe 降 20% → 降级；**approved 因子豁免仅标记待周度评审收口**）· 行为漂移/极端预测/换月异常 · 缺失率/异常值/多源分歧 · M1-M5/F1-F6/D1-D4 复检 · 退役 5 红线 | `factor_catalog`（`status='degraded'`/RETIRED）+ tracking 快照 + 监控报告 | `pytest tests/factor_engine/test_qa_gate.py tests/factor_engine/qa/ -q` | **approved 因子豁免每日降级（周日 `review_l3_pool` 收口）**；非 approved 退化 → degraded + 30 日冷却；退役 → RETIRED；缓存缺失跳过不中断调度 |
+
+> 注：energy 能化链为独立路由（`l2_seed_promotion_energy_job` / `l2_batch_mining_energy_job` / `l2_review_energy_job` / `l2_energy_qa_review_job`，同周日 10:00 调度，因子库 `factor_catalog_energy.duckdb`），冷却期 30 **交易日**、两次不达标退役（宁严勿松），详见 §5.3。调度注册表全量核对见 `fts/scheduler/tasks.py`（15 任务）。
+
+## 2.2 术语统一：状态命名与对象集合
+
+> 单一事实源：`fts/factor_engine/qa/status_board.py` `FactorStatus`（7 状态唯一名）· `STATUS_LABELS`（中文名）· `STATUS_ALIAS_MAP`（全量别名归一）· `normalize_status()`（契约层统一，v2.104.0+95）。
+
+### 2.2.1 因子对象集合
+
+| 术语 | 定义 | 维度 |
+|:-----|:-----|:-----|
+| `active elite` | `factor_catalog.is_elite=1 AND status='active'`（服役中精英因子全集，状态机归一 CORE/CANDIDATE） | 生命周期状态 |
+| `L3 approved` | `factor_reviews.decision='approved'`（评审质检通过，L3 组合唯一消费对象） | 评审决策（正交维度） |
+
+**包含关系：`L3 approved ⊆ active elite`**——评审只写 `factor_reviews`（`review_inplace`/`review_l3_pool` 不改 `factor_catalog.status/is_elite`），故 approved 因子必然仍在 active elite 中；反之 active elite 还包括未评审（PENDING_QA）、影子池观察期、被撤销 approved 但未降级/退役的因子。每日巡检/监控（04:00 `factor_inspector` / 04:30 `logic_monitor`）对象为 **active elite 全量（不区分 approved）**；周日评审 Step C 对象为其中 **approved 子集（L3 池）+ pending 待审**。
+
+### 2.2.2 统一状态字典（7 状态唯一名）
+
+| 唯一状态 | 中文名 | 现状等价命名（别名 → 归一） |
+|:---------|:-------|:----------------------------|
+| `DRAFT` | 草稿 | — |
+| `PENDING_QA` | 待质检 | — |
+| `CORE` | 核心服役 | 主表 `active` · reaudit `retain` · tracker `active` |
+| `CANDIDATE` | 候选服役 | — |
+| `OBSERVATION` | 观察期 | 主表 `degraded` · reaudit `shadow` / 历史拼接 `active(shadow)`（v2.104.0+95 起新写入即 `OBSERVATION`）· tracker `observing`/`decaying`/`critical_decay` |
+| `SUSPENDED` | 暂停 | — |
+| `RETIRED` | 退役 | 主表 `retired` · reaudit `retire` · tracker `retired`/`deprecated` |
+
+**归一机制**：`normalize_status()` 经 `STATUS_ALIAS_MAP` 将主表小写 `status`、reaudit 处置、tracker 快照等历史命名统一映射到上表唯一状态；未知值原样返回（不误归一）。状态含义与组合权重上限见 §6.1；`factor_reviews.decision`（approved/rejected）为评审**决策维度**，不并入状态机。看板以「唯一状态(中文名)」输出，保证识别不混淆。
+
+### 2.2.3 同名标识符消除（一名多义根治）
+
+历史上 `FactorStatus` **一名三义**（同名冲突，v2.104.0+95 起根治）：
+
+| 位置 | 原标识符 | 语义 | 处理后 |
+|:-----|:---------|:-----|:-------|
+| `fts/core/enums.py` | `FactorStatus`（PENDING/INJECTED/DECAYED/REJECTED） | 种子池候选状态 | → `CandidateStatus` |
+| `fts/factor_engine/qa/status_board.py` | `FactorStatus`（7 状态） | 生命周期服役状态 **SSOT** | 保留 |
+| `fts/monitor/elite_tracker.py` | `FactorStatus`（Literal） | 衰减追踪快照状态 | → `TrackerStatus` |
+
+现在全项目 `FactorStatus` 仅指生命周期 7 状态机（唯一含义，不混淆）。
 
 ## 3. 晋升门槛完整校验链（L2 → elite）
 
@@ -90,7 +144,7 @@ Q1-Q10 由晋升链 `build_qa_review`（[evolution_promote.py](file:///d:/Progra
 
 ### 4.3 功能 2：周末定期巡检 L3 池
 
-`l2_review_job` Step C（周日 10:00）调用 `review_l3_pool(market)`（[factor_inspector.py](file:///d:/Programs/factor_system/fts/factor_engine/factor_inspector.py#L673)）：对 `factor_reviews.decision='approved'`（L3 池）因子按**最新 IC/Sharpe + 完整质检结论**重新复核，不合格（rejected）或质检失效（needs_human）→ 撤销 approved，**因子退回 L2 冷却池**，不再流向 L3。
+`l2_review_job` Step C（周日 10:00）调用 `review_l3_pool(market)`（[factor_inspector.py](file:///d:/Programs/factor_system/fts/factor_engine/factor_inspector.py#L722)）：对 `factor_reviews.decision='approved'`（L3 池）因子按**最新 IC/Sharpe + 完整质检结论 + 相对退化检测**重新复核（v2.104.0+97 防抖升级，双重门槛，任一命中即撤销 approved）——绝对低质（rejected）/ 质检失效（needs_human）/ **相对退化（Sharpe 相对趋势下降 ≥ threshold，默认 -0.2）** → 撤销 approved，**因子退回 L2 冷却池**，不再流向 L3。**每日巡检（`inspect_and_downgrade`）已对 approved 因子豁免直接降级**，本方法为 approved 因子唯一收口出口，保证 L3 组合每周至多变动一次（组合防抖）。
 
 ### 4.4 存量批量执行
 
@@ -126,6 +180,8 @@ Q1-Q10 由晋升链 `build_qa_review`（[evolution_promote.py](file:///d:/Progra
 实现：[status_board.py](file:///d:/Programs/factor_system/fts/factor_engine/qa/status_board.py)，CTA 手册 6.8。
 
 ### 6.1 状态定义与权重上限
+
+> 唯一状态名与别名归一见 §2.2.2（契约层统一，`STATUS_ALIAS_MAP`）。下表含义/权重为权威口径。
 
 | 状态 | 含义 | 组合权重上限 |
 |:-----|:-----|:------------|
@@ -164,7 +220,7 @@ DRAFT → PENDING_QA → CORE ⇄ CANDIDATE
 
 | 机制 | 实现/调度 | 规则 |
 |:-----|:----------|:-----|
-| 因子巡检降级 | `factor_inspector_job`（每日 04:00） | 扫描 elite 退化因子（质量分/IC 衰减），检测退化 → `status='degraded'` + `is_elite=False` |
+| 因子巡检降级 | `factor_inspector_job`（每日 04:00） | 扫描 elite 退化因子（质量分/IC 衰减），检测退化 → `status='degraded'` + `is_elite=False`；**approved（L3 池）因子豁免每日降级**（`_is_approved` 判定，仅标记 deferred 待周度评审收口，组合防抖 v2.104.0+97） |
 | 逻辑监控 | `logic_monitor_job`（每日 4:30） | 行为漂移 / 极端预测 / 换月日异常 |
 | 月度复检 M1-M5 | `monthly_recheck` | 五指标（IC/IR/分层/秩偏离等），1·2·3 项预警降权 50/30/0，连续 3 月退役 |
 | 季度复检 F1-F6 | `quarterly_recheck` | 全样本重算标记 |
@@ -190,6 +246,6 @@ DRAFT → PENDING_QA → CORE ⇄ CANDIDATE
 
 | 字段 | 值 |
 |:-----|:---|
-| 代码→文档映射 | 生命周期调度：`fts/scheduler/tasks.py` REGISTRY（cron）· `fts/scheduler/jobs.py`（l1_meta_loop_job / l2_seed_promotion_job / l2_evolution_*_job / l2_batch_mining_job / l2_review_job / l3_portfolio_loop_job）；晋升链：`fts/factor_engine/evolution_promote.py` `_promote_to_elite`；评审：`fts/factor_engine/factor_inspector.py` `FactorReviewWorkflow` / `AutoReviewPolicy`、`fts/monitor/reaudit.py`、`fts/monitor/elite_tracker.py`；冷却：`fts/factor_engine/evolution_seeds.py` `_within_degraded_cooldown`、`fts/factor_engine/portfolio_loop.py` `_is_shadow_pending`、`fts/factor_engine/energy_qa_review.py`；状态机：`fts/factor_engine/qa/status_board.py` |
-| 可验证断言 | ① 晋升硬门：`_promote_to_elite` 中 high_ic_screen grade=C 或（B 且 skipped>8）时返回 None、`level_3_multiple.passed=False` 返回 None、`walk_forward.n_windows_completed<2` 返回 None、`audit_report.passed=False` 返回 None；② L3 仅 approved：`_filter_review_approved` 仅保留 `factor_reviews.decision='approved'`；③ 冷却：`_within_degraded_cooldown` 以 `(now-updated_at).days < 30` 判定；④ 状态机：`STATUS_TRANSITIONS` 合法流转 + `STATUS_MAX_WEIGHT` 权重上限 |
-| 检验方式 | `pytest tests/factor_engine/test_portfolio_loop.py -k "ReviewApproved or LoadEliteDuckdb"`；`pytest tests/factor_engine/test_review_workflow.py`；`pytest tests/factor_engine/test_risk_tag.py`（冷却期）；`pytest tests/factor_engine/qa/ -v`（状态机/复检/退役）；`python scripts/verify_doc_consistency.py` |
+| 代码→文档映射 | 生命周期调度：`fts/scheduler/tasks.py` REGISTRY（cron，15 任务）· `fts/scheduler/jobs.py`（l1_meta_loop_job / l2_seed_promotion_job / l2_evolution_*_job / l2_batch_mining_job / l2_review_job / l3_portfolio_loop_job / futures_signal_pipeline_job / factor_inspector_job / logic_monitor_job / data_level_monitor_job）；晋升链：`fts/factor_engine/evolution_promote.py` `_promote_to_elite`；评审：`fts/factor_engine/factor_inspector.py` `FactorReviewWorkflow` / `AutoReviewPolicy` / `_is_approved`（approved 每日巡检豁免）· `review_l3_pool`（叠加相对退化收口，组合防抖 v2.104.0+97）、`fts/scheduler/jobs.py` `_review_gate_weekly`（Step C：review_l3_pool + list_pending 机审）、`fts/monitor/reaudit.py`、`fts/monitor/elite_tracker.py`；冷却：`fts/factor_engine/evolution_seeds.py` `_within_degraded_cooldown`、`fts/factor_engine/portfolio_loop.py` `_is_shadow_pending`、`fts/factor_engine/energy_qa_review.py`；状态机与命名统一：`fts/factor_engine/qa/status_board.py`（`FactorStatus` 7 唯一名 · `STATUS_LABELS` 中文名 · `STATUS_ALIAS_MAP` 全量别名归一 · `normalize_status`）· reaudit shadow 处置以 `OBSERVATION` 写入 status_history（替代历史拼接 `active(shadow)`） |
+| 可验证断言 | ① 晋升硬门：`_promote_to_elite` 中 high_ic_screen grade=C 或（B 且 skipped>8）时返回 None、`level_3_multiple.passed=False` 返回 None、`walk_forward.n_windows_completed<2` 返回 None、`audit_report.passed=False` 返回 None；② L3 仅 approved：`_filter_review_approved` 仅保留 `factor_reviews.decision='approved'`；③ 冷却：`_within_degraded_cooldown` 以 `(now-updated_at).days < 30` 判定；④ 状态机：`STATUS_TRANSITIONS` 合法流转 + `STATUS_MAX_WEIGHT` 权重上限 + `STATUS_ALIAS_MAP` 别名归一（`degraded`/`shadow`/`active(shadow)`/`observing`/`decaying`/`critical_decay`→`OBSERVATION`，`active`/`retain`→`CORE`，`retired`/`retire`/`deprecated`→`RETIRED`）；⑤ 端到端矩阵调度：tasks.py REGISTRY 15 任务 cron（L1 00:00 / 种子 02:00 / 演化 03:00 / 批量 周日 06:00 / 评审 周日 10:00 / L3 工作日 06:00 / 信号 20:00 / 巡检 04:00 · 逻辑 04:30 · 数据级 05:00）与 §2.1 矩阵一致；⑥ 组合防抖（v2.104.0+97）：`inspect_and_downgrade` 对 `factor_reviews.decision='approved'` 因子不降级（action=deferred、summary.deferred_approved 计数），`review_l3_pool` 叠加 `FactorLineage.detect_degradation` 相对退化（threshold=-0.2）命中撤销 approved |
+| 检验方式 | `pytest tests/factor_engine/test_portfolio_loop.py -k "ReviewApproved or LoadEliteDuckdb"`；`pytest tests/factor_engine/test_review_workflow.py`；`pytest tests/factor_engine/test_qa_gate.py`（评审阀门/相对退化收口）；`pytest tests/factor_engine/test_factor_inspector.py -k "approved or non_approved"`（approved 豁免）；`pytest tests/factor_engine/test_risk_tag.py`（冷却期）；`pytest tests/factor_engine/test_meta_loop.py`（L1）；`pytest tests/factor_engine/test_batch_mining.py`（批量）；`pytest tests/test_futures_signal_pipeline.py`（信号管道）；`pytest tests/factor_engine/qa/ -v`（状态机/复检/退役）；`pytest tests/factor_engine/qa/test_status_board.py -k "alias or labels"`（命名统一）；`pytest tests/monitor/test_reaudit.py -k "apply"`（shadow 统一状态）；`python scripts/verify_doc_consistency.py` |

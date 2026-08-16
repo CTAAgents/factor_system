@@ -8,7 +8,7 @@ from __future__ import annotations
 from fts.core.enums import (
     EvolutionStage,
     FactorPriority,
-    FactorStatus,
+    CandidateStatus,
     __all__ as enums_all,
 )
 
@@ -75,35 +75,35 @@ class TestFactorPriority:
         assert len(values) == len(set(values))
 
 
-# ─── FactorStatus ───────────────────────────────────────
+# ─── CandidateStatus ────────────────────────────────────
 
 
-class TestFactorStatus:
-    """FactorStatus 枚举：4 个成员。"""
+class TestCandidateStatus:
+    """CandidateStatus 枚举：4 个成员（种子池候选状态）。"""
 
     def test_members_count(self):
-        assert len(FactorStatus) == 4
+        assert len(CandidateStatus) == 4
 
     def test_members_values(self):
-        assert FactorStatus.PENDING.value == "pending"
-        assert FactorStatus.INJECTED.value == "injected"
-        assert FactorStatus.DECAYED.value == "decayed"
-        assert FactorStatus.REJECTED.value == "rejected"
+        assert CandidateStatus.PENDING.value == "pending"
+        assert CandidateStatus.INJECTED.value == "injected"
+        assert CandidateStatus.DECAYED.value == "decayed"
+        assert CandidateStatus.REJECTED.value == "rejected"
 
     def test_members_names(self):
-        assert FactorStatus.PENDING.name == "PENDING"
-        assert FactorStatus.INJECTED.name == "INJECTED"
-        assert FactorStatus.DECAYED.name == "DECAYED"
-        assert FactorStatus.REJECTED.name == "REJECTED"
+        assert CandidateStatus.PENDING.name == "PENDING"
+        assert CandidateStatus.INJECTED.name == "INJECTED"
+        assert CandidateStatus.DECAYED.name == "DECAYED"
+        assert CandidateStatus.REJECTED.name == "REJECTED"
 
     def test_str(self):
-        assert str(FactorStatus.PENDING) == "FactorStatus.PENDING"
-        assert str(FactorStatus.INJECTED) == "FactorStatus.INJECTED"
-        assert str(FactorStatus.DECAYED) == "FactorStatus.DECAYED"
-        assert str(FactorStatus.REJECTED) == "FactorStatus.REJECTED"
+        assert str(CandidateStatus.PENDING) == "CandidateStatus.PENDING"
+        assert str(CandidateStatus.INJECTED) == "CandidateStatus.INJECTED"
+        assert str(CandidateStatus.DECAYED) == "CandidateStatus.DECAYED"
+        assert str(CandidateStatus.REJECTED) == "CandidateStatus.REJECTED"
 
     def test_unique_values(self):
-        values = [m.value for m in FactorStatus]
+        values = [m.value for m in CandidateStatus]
         assert len(values) == len(set(values))
 
 
@@ -114,7 +114,7 @@ def test_no_duplicate_values_across_enums():
     """跨枚举无重复值（验证设计无冲突）。"""
     stage_values = {m.value for m in EvolutionStage}
     priority_values = {m.value for m in FactorPriority}
-    status_values = {m.value for m in FactorStatus}
+    status_values = {m.value for m in CandidateStatus}
     all_values = stage_values | priority_values | status_values
     total = len(stage_values) + len(priority_values) + len(status_values)
     assert len(all_values) == total  # 无交集
@@ -124,7 +124,7 @@ def test_all_exports():
     """__all__ 正确导出 5 个枚举类。"""
     assert "EvolutionStage" in enums_all
     assert "FactorPriority" in enums_all
-    assert "FactorStatus" in enums_all
+    assert "CandidateStatus" in enums_all
     assert "DataSource" in enums_all
     assert "FusionStrategy" in enums_all
     assert len(enums_all) == 5

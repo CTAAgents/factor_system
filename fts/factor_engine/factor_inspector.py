@@ -47,7 +47,7 @@ class DowngradeRecord:
     degradation_score: float
     previous_status: str
     new_status: str
-    action: str  # "downgraded" / "skipped" / "error"
+    action: str  # "downgraded" / "deferred"（approved 豁免，待周度评审）/ "skipped" / "error"
     details: dict[str, Any] = field(default_factory=dict)
 
 
@@ -97,6 +97,7 @@ class FactorInspector:
 
         records: list[DowngradeRecord] = []
         downgraded_count = 0
+        deferred_approved = 0
         skipped_count = 0
         error_count = 0
         audited_count = audit_results.get("total_audited", 0)
@@ -169,6 +170,34 @@ class FactorInspector:
                 skipped_count += 1
                 continue
 
+            # approved（L3 池）因子豁免每日降级（v2.104.0+97 组合防抖）：
+            # 仅标记待周度评审，退出统一由周日 review_l3_pool 复核收口，
+            # 避免每日对 L3 组合成员降级造成组合频繁变动/信号抖动。
+            if self._is_approved(factor_id):
+                records.append(
+                    DowngradeRecord(
+                        factor_id=factor_id,
+                        factor_name=factor_name,
+                        reason=info.get("recommendation", "Sharpe退化（approved 豁免）"),
+                        degradation_score=degradation_score,
+                        previous_status=previous_status,
+                        new_status=previous_status,
+                        action="deferred",
+                        details={
+                            "reason": "L3 池 approved 因子豁免每日降级，待周度评审收口",
+                            "sharpe_trend": info.get("sharpe_trend", {}),
+                            "ic_trend": info.get("ic_trend", {}),
+                        },
+                    )
+                )
+                deferred_approved += 1
+                logger.info(
+                    "[FactorInspector] approved 因子豁免降级: %s (%s)，待周日 review_l3_pool 收口",
+                    factor_id,
+                    factor_name,
+                )
+                continue
+
             # 4. 执行降级
             if commit:
                 success = self._repo.update_factor(
@@ -233,11 +262,34 @@ class FactorInspector:
                 "total_audited": audited_count,
                 "degraded_detected": len(degraded_factors),
                 "downgraded": downgraded_count,
+                "deferred_approved": deferred_approved,
                 "skipped": skipped_count,
                 "errors": error_count,
             },
             "records": [self._record_to_dict(r) for r in records],
         }
+
+    def _is_approved(self, factor_id: str) -> bool:
+        """因子是否处于 L3 准入（factor_reviews.decision='approved'）。
+
+        approved 因子受组合防抖保护（v2.104.0+97）：每日巡检豁免直接降级，
+        退出统一由周日 review_l3_pool 复核收口。
+
+        Args:
+            factor_id: 因子 ID
+
+        Returns:
+            True 表示该因子为 L3 池 approved 因子
+        """
+        try:
+            row = self._repo._execute(
+                "SELECT 1 FROM factor_reviews WHERE factor_id = ? AND decision = 'approved'",
+                [factor_id],
+            ).fetchone()
+            return row is not None
+        except Exception:  # noqa: BLE001
+            logger.warning("[FactorInspector] 查询 approved 状态失败: %s", factor_id)
+            return False
 
     def get_degraded_factors(
         self,
@@ -473,11 +525,13 @@ class FactorReviewWorkflow:
         repo: Optional[FactorRepository] = None,
         db_path: Optional[str] = None,
         experience_chain: Optional[Any] = None,
+        lineage: Optional[FactorLineage] = None,
         market: str = "futures",
     ) -> None:
         self._repo = repo or FactorRepository(market=market)
         self._db_path = db_path
         self._experience_chain = experience_chain
+        self._lineage = lineage or FactorLineage(self._repo)
 
     def _get_experience_chain(self):
         """懒加载经验链实例（开关关闭返回 None）。"""
@@ -669,16 +723,21 @@ class FactorReviewWorkflow:
             "reason": reason,
         }
 
-    def review_l3_pool(self, market: str = "futures") -> dict[str, Any]:
-        """周末定期巡检 L3 池（评审质检阀门功能 2，v2.104.0+89）。
+    def review_l3_pool(self, market: str = "futures", degradation_threshold: float = -0.2) -> dict[str, Any]:
+        """周末定期巡检 L3 池（评审质检阀门功能 2，v2.104.0+89；防抖升级 v2.104.0+97）。
 
-        对 factor_reviews.decision='approved'（L3 池）因子按最新 IC/Sharpe +
-        完整质检结论（metadata.qa_review）重新复核；不合格（rejected）或质检
-        失效（needs_human）→ 撤销 approved（DELETE），因子退回 L2 冷却池，
-        不再流向 L3。
+        对 factor_reviews.decision='approved'（L3 池）因子复核，任一命中即撤销
+        approved（DELETE），因子退回 L2 冷却池，不再流向 L3：
+          - 绝对门槛：最新 IC/Sharpe + 完整质检结论（review_inplace / AutoReviewPolicy）
+          - 相对退化叠加（高准入门槛）：FactorLineage.detect_degradation（Sharpe 相对
+            趋势退化，threshold=degradation_threshold 默认 -0.2）命中同样撤销。
+
+        每日巡检（inspect_and_downgrade）已对 approved 因子豁免直接降级，本方法为
+        approved 因子唯一收口出口，保证 L3 组合每周至多变动一次（组合防抖）。
 
         Args:
             market: 市场（futures/energy）
+            degradation_threshold: 相对退化阈值（Sharpe 变化率，负数为退化）
 
         Returns:
             dict: {scanned, demoted: [{factor_id, decision, reason}]}
@@ -702,6 +761,20 @@ class FactorReviewWorkflow:
                     {"factor_id": fid, "decision": res.get("decision") or "needs_human",
                      "reason": res.get("reason", "")}
                 )
+                continue
+            # 叠加相对退化检测（高准入门槛）：Sharpe 相对趋势退化 → 撤销 approved
+            try:
+                deg = self._lineage.detect_degradation(fid, threshold=degradation_threshold)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[review] 退化检测失败 %s: %s", fid, e)
+                continue
+            if deg.get("is_degraded"):
+                self._delete_review(fid)
+                demoted.append(
+                    {"factor_id": fid, "decision": "rejected",
+                     "reason": f"相对退化（Sharpe 变化 {deg.get('degradation_score')}）"}
+                )
+                logger.info("[review] L3 池因子相对退化撤销 approved: %s", fid)
         logger.info("[review] L3 池巡检 [%s]: 扫描 %d 个 approved 因子，退回 %d 个", market, len(approved), len(demoted))
         return {"scanned": len(approved), "demoted": demoted}
 

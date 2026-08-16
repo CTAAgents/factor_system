@@ -172,7 +172,7 @@ def _high_ic(factor: dict, evaluation: dict):
 def main() -> int:
     parser = argparse.ArgumentParser(description="futures 补质检记录与重审")
     parser.add_argument("--limit", type=int, default=0, help="限制因子数（0=全部，默认 0）")
-    parser.add_argument("--days", type=int, default=500, help="面板窗口（交易日）")
+    parser.add_argument("--days", type=int, default=700, help="面板窗口（交易日，与演化 days=700 对齐保证 WalkForward 完整产出 4 窗口）")
     parser.add_argument("--dry-run", action="store_true", help="只评估不落库")
     args = parser.parse_args()
 
@@ -221,7 +221,17 @@ def main() -> int:
             stats["failed"] += 1
             continue
 
-        qa_review = build_qa_review(factor, evaluation, audit_report, quality_score, high_ic)
+        # 存量因子质检元数据缺失推断补全（v2.104.0+90 用户确认：按晋升强制门推断）：
+        #   economic_logic/params 当年晋升已过强制门但元数据未留存 -> 推断非空；
+        #   robustness_check 缺失 -> 推断已评估（评估链 walk_forward 保证参数稳健性）。
+        factor_arg = dict(factor)
+        if not factor_arg.get("economic_logic"):
+            factor_arg["economic_logic"] = {"narrative": "存量因子晋升已过经济逻辑强制门，元数据未留存（推断补全）"}
+        if not factor_arg.get("params"):
+            factor_arg["params"] = {"inferred": True, "note": "晋升已过 WalkForward>=2 窗口门"}
+        if evaluation.get("robustness_check") is None:
+            evaluation["robustness_check"] = {"inferred": True, "note": "晋升已过参数稳健性评估（推断补全）"}
+        qa_review = build_qa_review(factor_arg, evaluation, audit_report, quality_score, high_ic)
         logger.info(
             "[qa-refill] %s (%s): audit=%s quality=%s hic=%s mult=%s wf=%d q10=%s",
             fid, name, qa_review["audit_passed"], qa_review["quality_grade"],

@@ -181,7 +181,43 @@ class TestInspectionAndDowngrade:
             assert isinstance(record, dict)
             assert "factor_id" in record
             assert "action" in record
-            assert record["action"] in {"downgraded", "skipped", "error"}
+            assert record["action"] in {"downgraded", "deferred", "skipped", "error"}
+
+    def test_approved_factor_exempt_from_downgrade(self, inspector, repo):
+        """approved（L3 池）因子退化 → 每日巡检豁免降级（deferred），状态不变（组合防抖）。"""
+        fid = _create_elite_factor(repo, "f_approved", sharpe=1.0)
+        _add_evaluations(repo, fid, sharpe_values=[1.0, 1.0, 0.2, 0.2])  # 近期退化
+        # 写入 approved 评审记录（L3 准入标记）
+        repo._get_conn().execute(
+            "INSERT INTO factor_reviews (factor_id, decision, comment, reviewer, reviewed_at) "
+            "VALUES (?, 'approved', 'test', 'auto', now())",
+            [fid],
+        )
+
+        result = inspector.inspect_and_downgrade(threshold=-0.1, commit=True)
+
+        summary = result["summary"]
+        assert summary["deferred_approved"] >= 1
+        assert summary["downgraded"] == 0
+        # approved 因子未被降级
+        factor = repo.get_factor(fid)
+        assert factor["status"] == "active"
+        assert factor["is_elite"] is True
+        # 降级记录标记 deferred（待周度评审收口）
+        deferred = [r for r in result["records"] if r["factor_id"] == fid]
+        assert deferred and deferred[0]["action"] == "deferred"
+
+    def test_non_approved_still_downgraded(self, inspector, repo):
+        """非 approved 因子退化 → 每日巡检照常降级。"""
+        fid = _create_elite_factor(repo, "f_normal", sharpe=0.5)
+        _add_evaluations(repo, fid, sharpe_values=[0.5, 0.5, 0.2, 0.2])
+
+        result = inspector.inspect_and_downgrade(threshold=-0.1, commit=True)
+
+        factor = repo.get_factor(fid)
+        assert factor["status"] == "degraded"
+        assert factor["is_elite"] is False
+        assert result["summary"]["deferred_approved"] == 0
 
 
 # ─── 降级因子查询 ──────────────────────────────────────

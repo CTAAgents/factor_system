@@ -192,6 +192,11 @@ class TestApplyReauditResults:
             # status_history 留痕（retain/shadow 各 1 + retire 1 = 3 条）
             n = repo._execute("SELECT COUNT(*) FROM factor_status_history").fetchone()[0]
             assert n == 3
+            # 契约层统一：shadow 处置历史记录用唯一状态 OBSERVATION，不再出现拼接怪名 active(shadow)
+            rows = repo._execute(
+                "SELECT to_status FROM factor_status_history WHERE reason LIKE '%shadow_pool 观察期%'"
+            ).fetchall()
+            assert [r[0] for r in rows] == ["OBSERVATION"]
 
     def test_retire_writes_status_history(self, tmp_path: Path) -> None:
         db = tmp_path / "reaudit2.duckdb"

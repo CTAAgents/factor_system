@@ -54,6 +54,17 @@ STATUS_MAX_WEIGHT: dict[str, float] = {
     "RETIRED": 0.0,
 }
 
+# 状态中文名（看板/文档展示，契约层统一命名）
+STATUS_LABELS: dict[str, str] = {
+    "DRAFT": "草稿",
+    "PENDING_QA": "待质检",
+    "CORE": "核心服役",
+    "CANDIDATE": "候选服役",
+    "OBSERVATION": "观察期",
+    "SUSPENDED": "暂停",
+    "RETIRED": "退役",
+}
+
 # 合法状态流转（手册 6.8 流转图）
 STATUS_TRANSITIONS: dict[str, list[str]] = {
     "DRAFT": ["PENDING_QA"],
@@ -65,14 +76,30 @@ STATUS_TRANSITIONS: dict[str, list[str]] = {
     "RETIRED": ["PENDING_QA"],
 }
 
-# 存量库 status 兼容映射（factor_db 历史 'active' → CORE）
-_LEGACY_STATUS_MAP = {"ACTIVE": "CORE"}
+# 全量别名 → 唯一状态（契约层统一，v2.104.0+95）：
+# 各模块历史命名（主表 factor_catalog.status / reaudit 处置 / EliteFactorTracker 快照）
+# 统一归一到 FactorStatus 唯一状态，消除"一义多名"与"一名多义"混淆。
+STATUS_ALIAS_MAP: dict[str, str] = {
+    # 主表 factor_catalog.status（存量小写值）
+    "ACTIVE": "CORE",
+    "DEGRADED": "OBSERVATION",
+    # reaudit 处置（status_history）
+    "ACTIVE(SHADOW)": "OBSERVATION",  # 历史拼接怪名（v2.104.0+95 起新写入为 OBSERVATION）
+    "SHADOW": "OBSERVATION",
+    "RETAIN": "CORE",
+    "RETIRE": "RETIRED",
+    # EliteFactorTracker 衰减快照（A.2）
+    "OBSERVING": "OBSERVATION",
+    "DECAYING": "OBSERVATION",
+    "CRITICAL_DECAY": "OBSERVATION",
+    "DEPRECATED": "RETIRED",
+}
 
 
 def normalize_status(status: str) -> str:
-    """规范化状态值（存量 'active' → CORE，未知值原样返回）。"""
+    """规范化状态值：历史命名按 STATUS_ALIAS_MAP 归一到唯一状态，未知值原样返回。"""
     s = (status or "").upper()
-    return _LEGACY_STATUS_MAP.get(s, s)
+    return STATUS_ALIAS_MAP.get(s, s)
 
 
 def can_transition(from_status: str, to_status: str) -> bool:
@@ -112,7 +139,8 @@ def status_board(factors: list[dict[str, Any]]) -> dict:
     serving = counts.get("CORE", 0) + counts.get("CANDIDATE", 0)
     lines = ["质检状态看板（因子状态统计）"]
     for st in FactorStatus:
-        lines.append(f"  {st.value}: {counts.get(st.value, 0)}")
+        label = STATUS_LABELS.get(st.value, "")
+        lines.append(f"  {st.value}({label}): {counts.get(st.value, 0)}")
     lines.append(f"  服役中（CORE+CANDIDATE）: {serving}")
     if obs_warning:
         lines.append("  预警因子清单: " + ", ".join(f"{w['name']}({w['status']})" for w in obs_warning))
@@ -171,7 +199,9 @@ def apply_status_transition(
 __all__ = [
     "FactorStatus",
     "STATUS_MAX_WEIGHT",
+    "STATUS_LABELS",
     "STATUS_TRANSITIONS",
+    "STATUS_ALIAS_MAP",
     "normalize_status",
     "can_transition",
     "max_weight_for_status",

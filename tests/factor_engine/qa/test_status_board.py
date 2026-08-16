@@ -41,6 +41,39 @@ def test_legacy_active_maps_to_core() -> None:
     assert can_transition("active", "OBSERVATION") is True
 
 
+def test_status_alias_map_unifies_all() -> None:
+    """契约层统一：各模块历史命名全量归一到唯一状态（消除一义多名/一名多义）。"""
+    # 主表 factor_catalog.status
+    assert normalize_status("active") == "CORE"
+    assert normalize_status("degraded") == "OBSERVATION"
+    assert normalize_status("retired") == "RETIRED"
+    # reaudit 处置（含历史拼接怪名 active(shadow)）
+    assert normalize_status("active(shadow)") == "OBSERVATION"
+    assert normalize_status("shadow") == "OBSERVATION"
+    assert normalize_status("retain") == "CORE"
+    assert normalize_status("retire") == "RETIRED"
+    # EliteFactorTracker 衰减快照
+    assert normalize_status("observing") == "OBSERVATION"
+    assert normalize_status("decaying") == "OBSERVATION"
+    assert normalize_status("critical_decay") == "OBSERVATION"
+    assert normalize_status("deprecated") == "RETIRED"
+    # 未知值原样返回（不误归一）
+    assert normalize_status("UNKNOWN_X") == "UNKNOWN_X"
+    # 归一后参与合法流转判定（degraded 视同 OBSERVATION）
+    assert can_transition("degraded", "CORE") is True
+    assert can_transition("degraded", "SUSPENDED") is True
+    assert can_transition("deprecated", "PENDING_QA") is True
+
+
+def test_status_labels_complete() -> None:
+    """每个唯一状态都有不混淆的中文名。"""
+    from fts.factor_engine.qa.status_board import STATUS_LABELS
+
+    assert len(STATUS_LABELS) == len(FactorStatus)
+    for s in FactorStatus:
+        assert STATUS_LABELS[s.value], f"状态 {s.value} 缺中文名"
+
+
 def test_status_weight_limits() -> None:
     """状态权重上限（手册 6.8）。"""
     assert max_weight_for_status("CORE") == 0.30

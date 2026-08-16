@@ -1,7 +1,7 @@
 # 34-evolution-loop-refactor-inventory.md — evolution_loop.py 职责盘点与属性耦合清单
 
 
-> 版本: v2.104.0+90
+> 版本: v2.104.0+97
 
 > 状态: Phase-0 盘点（B 阶段 Mixin 抽取 / C 阶段组合式重构的前置证据）
 > 日期: 2026-08-13

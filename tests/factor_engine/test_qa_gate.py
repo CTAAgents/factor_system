@@ -276,3 +276,50 @@ class TestReviewL3Pool:
             m_conn.return_value = conn
             res = wf.review_l3_pool(market="futures")
         assert res == {"scanned": 0, "demoted": []}
+
+    def test_demotes_relative_degradation(self):
+        """approved 因子相对退化（Sharpe 趋势下降）→ 撤销 approved（高门槛叠加收口）。"""
+        wf = FactorReviewWorkflow(db_path=":memory:")
+        with (
+            patch.object(wf, "_conn") as m_conn,
+            patch.object(
+                wf, "review_inplace",
+                return_value={"factor_id": "a", "decision": "approved", "reason": "ok"},
+            ),
+            patch.object(wf, "_lineage") as m_lineage,
+            patch.object(wf, "_delete_review") as m_del,
+        ):
+            conn = MagicMock()
+            conn.execute.return_value.fetchall.return_value = [("a",)]
+            m_conn.return_value = conn
+            m_lineage.detect_degradation.return_value = {
+                "is_degraded": True, "degradation_score": -0.35,
+            }
+            res = wf.review_l3_pool(market="futures")
+        assert res["scanned"] == 1
+        assert len(res["demoted"]) == 1
+        assert res["demoted"][0]["factor_id"] == "a"
+        assert res["demoted"][0]["reason"].startswith("相对退化")
+        m_del.assert_called_once_with("a")
+
+    def test_no_degradation_keeps_approved(self):
+        """approved 因子无相对退化 → 保留 approved（双重门槛未触发）。"""
+        wf = FactorReviewWorkflow(db_path=":memory:")
+        with (
+            patch.object(wf, "_conn") as m_conn,
+            patch.object(
+                wf, "review_inplace",
+                return_value={"factor_id": "a", "decision": "approved", "reason": "ok"},
+            ),
+            patch.object(wf, "_lineage") as m_lineage,
+            patch.object(wf, "_delete_review") as m_del,
+        ):
+            conn = MagicMock()
+            conn.execute.return_value.fetchall.return_value = [("a",)]
+            m_conn.return_value = conn
+            m_lineage.detect_degradation.return_value = {
+                "is_degraded": False, "degradation_score": 0.1,
+            }
+            res = wf.review_l3_pool(market="futures")
+        assert res == {"scanned": 1, "demoted": []}
+        m_del.assert_not_called()

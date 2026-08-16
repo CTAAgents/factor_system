@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 486" width="100%" height="auto" role="img" aria-label="FTS 因子全生命周期流程图">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 600" width="100%" height="auto" role="img" aria-label="FTS 因子全生命周期流程图">
   <style>
     :root {
       --surface: #F7F7F8;
@@ -46,53 +46,149 @@
     </marker>
   </defs>
 
-  <!-- N1 -->
+  <!-- ══ 顶层：主链 ══ -->
+  <!-- N1 L0/L1 供给 -->
   <g>
-    <rect class="c-node" x="70" y="56" width="250" height="96" rx="8"/>
-    <text class="th" x="86" y="86">L0/L1 供给</text>
-    <text class="ts" x="86" y="110">每日 00:00 知识补给</text>
-    <text class="ts" x="86" y="130">+ 种子注入 → 候选池</text>
+    <rect class="c-node" x="20" y="40" width="170" height="100" rx="8"/>
+    <text class="th" x="36" y="68">L0/L1 供给</text>
+    <text class="ts" x="36" y="92">每日 00:00</text>
+    <text class="ts" x="36" y="112">知识补给 + 种子注入 → 候选池</text>
   </g>
 
-  <!-- N2 -->
+  <!-- N2 L2 演化晋升 -->
   <g>
-    <rect class="c-node" x="400" y="56" width="250" height="96" rx="8"/>
-    <text class="th" x="416" y="86">L2 演化晋升</text>
-    <text class="ts" x="416" y="110">02:00 种子 · 04:00 演化 · 周日06:00 批量</text>
-    <text class="ts" x="416" y="130">Verifier · 6项审计 · 评分卡 · Q1-Q10</text>
+    <rect class="c-node" x="210" y="40" width="190" height="100" rx="8"/>
+    <text class="th" x="226" y="68">L2 演化晋升</text>
+    <text class="ts" x="226" y="92">种子 02:00 · 演化 03:00 · 批量 周日06:00</text>
+    <text class="ts" x="226" y="112">Verifier · 6项审计 · 评分卡 · Q1-Q10</text>
   </g>
 
-  <!-- N3 焦点 -->
+  <!-- N3 L2 周度评审（焦点） -->
   <g>
-    <rect class="c-brand-node" x="400" y="212" width="250" height="96" rx="8"/>
-    <text class="th" x="416" y="242">L2 周度评审</text>
-    <text class="ts" x="416" y="266">周日 10:00 人审 / 机审</text>
-    <text class="ts" x="416" y="286">approved / rejected 落库 factor_reviews</text>
-    <rect class="badge" x="556" y="222" width="84" height="22" rx="11"/>
-    <text class="badge-t" x="566" y="237">L3 强制闸门</text>
+    <rect class="c-brand-node" x="420" y="40" width="190" height="100" rx="8"/>
+    <text class="th" x="436" y="68">L2 周度评审</text>
+    <text class="ts" x="436" y="92">周日 10:00 人审 / 机审</text>
+    <text class="ts" x="436" y="112">approved / rejected → factor_reviews</text>
+    <rect class="badge" x="544" y="50" width="56" height="22" rx="11"/>
+    <text class="badge-t" x="552" y="65">强制闸门</text>
   </g>
 
-  <!-- N4 -->
+  <!-- N4 L3 组合构建 -->
   <g>
-    <rect class="c-node" x="70" y="212" width="250" height="96" rx="8"/>
-    <text class="th" x="86" y="242">L3 组合构建</text>
-    <text class="ts" x="86" y="266">工作日 06:00 权重重算</text>
-    <text class="ts" x="86" y="286">质量 → 冷却 → approved → 去重 → 权重</text>
+    <rect class="c-node" x="630" y="40" width="170" height="100" rx="8"/>
+    <text class="th" x="646" y="68">L3 组合构建</text>
+    <text class="ts" x="646" y="92">工作日 06:00 权重重算</text>
+    <text class="ts" x="646" y="112">approved → 去重 → 权重</text>
+  </g>
+
+  <!-- N5 信号管道 -->
+  <g>
+    <rect class="c-node" x="820" y="40" width="100" height="100" rx="8"/>
+    <text class="th" x="836" y="68">信号管道</text>
+    <text class="ts" x="836" y="92">工作日 20:00</text>
+    <text class="ts" x="836" y="112">多空信号报告</text>
   </g>
 
   <!-- 主链连接 -->
-  <path class="arr" d="M320 104 L400 104" marker-end="url(#mkA)"/>
-  <path class="arrb" d="M525 152 L525 212" marker-end="url(#mkB)"/>
-  <path class="arrb" d="M400 260 L320 260" marker-end="url(#mkB)"/>
+  <path class="arr" d="M190 90 L210 90" marker-end="url(#mkA)"/>
+  <path class="arrb" d="M400 90 L420 90" marker-end="url(#mkB)"/>
+  <path class="arr" d="M610 90 L630 90" marker-end="url(#mkA)"/>
+  <path class="arr" d="M800 90 L820 90" marker-end="url(#mkA)"/>
 
-  <!-- 监控容器 -->
-  <rect class="bound" x="70" y="352" width="580" height="118" rx="12"/>
-  <text class="th" x="86" y="380">持续监控与生命周期</text>
-  <text class="ts" x="86" y="404">每日 03:00 巡检降级 · 22:00 逻辑监控 · 月度 M1-M5 · 季度 F1-F6 · 半年度 D1-D4</text>
-  <text class="ts" x="86" y="424">退役 5 条红线 · 7 状态机（DRAFT→PENDING_QA→CORE⇄CANDIDATE→OBSERVATION⇄SUSPENDED→RETIRED）</text>
-  <text class="ts" x="86" y="444">状态权重上限：CORE ≤30% · CANDIDATE ≤15% · OBSERVATION ≤50% · 降级后 30 交易日冷却期可回归</text>
+  <!-- ══ 中层：7 状态机 ══ -->
+  <rect class="bound" x="20" y="170" width="900" height="150" rx="12"/>
+  <text class="th" x="36" y="192">7 状态机 · 组合权重上限</text>
 
-  <!-- 反馈连接 -->
-  <path class="arr" d="M200 308 L200 352" marker-end="url(#mkA)"/>
-  <path class="leader" d="M360 352 L360 332 L525 332 L525 308" marker-end="url(#mkA)"/>
+  <!-- DRAFT -->
+  <g>
+    <rect class="c-node" x="34" y="205" width="104" height="95" rx="8"/>
+    <text class="th" x="50" y="232">草稿</text>
+    <text class="ts" x="50" y="252">DRAFT · 0%</text>
+    <text class="ts" x="50" y="270">未质检</text>
+  </g>
+  <!-- PENDING_QA -->
+  <g>
+    <rect class="c-node" x="162" y="205" width="104" height="95" rx="8"/>
+    <text class="th" x="178" y="232">待质检</text>
+    <text class="ts" x="178" y="252">PENDING_QA · 0%</text>
+    <text class="ts" x="178" y="270">待机审/人审</text>
+  </g>
+  <!-- CORE -->
+  <g>
+    <rect class="c-brand-node" x="290" y="205" width="104" height="95" rx="8"/>
+    <text class="th" x="306" y="232">核心服役</text>
+    <text class="ts" x="306" y="252">CORE · ≤30%</text>
+    <text class="ts" x="306" y="270">存量 active 兼容</text>
+  </g>
+  <!-- CANDIDATE -->
+  <g>
+    <rect class="c-node" x="418" y="205" width="104" height="95" rx="8"/>
+    <text class="th" x="434" y="232">候选服役</text>
+    <text class="ts" x="434" y="252">CANDIDATE · ≤15%</text>
+    <text class="ts" x="434" y="270">晋升过渡</text>
+  </g>
+  <!-- OBSERVATION -->
+  <g>
+    <rect class="c-node" x="546" y="205" width="104" height="95" rx="8"/>
+    <text class="th" x="562" y="232">观察期</text>
+    <text class="ts" x="562" y="252">OBSERVATION · ≤50%</text>
+    <text class="ts" x="562" y="270">衰减/复检预警</text>
+  </g>
+  <!-- SUSPENDED -->
+  <g>
+    <rect class="c-node" x="674" y="205" width="104" height="95" rx="8"/>
+    <text class="th" x="690" y="232">暂停</text>
+    <text class="ts" x="690" y="252">SUSPENDED · 0%</text>
+    <text class="ts" x="690" y="270">风险/不确定</text>
+  </g>
+  <!-- RETIRED -->
+  <g>
+    <rect class="c-node" x="802" y="205" width="104" height="95" rx="8"/>
+    <text class="th" x="818" y="232">退役</text>
+    <text class="ts" x="818" y="252">RETIRED · 0%</text>
+    <text class="ts" x="818" y="270">复审可回归</text>
+  </g>
+
+  <!-- 状态机流转 -->
+  <path class="arr" d="M138 252 L162 252" marker-end="url(#mkA)"/>
+  <path class="arr" d="M266 252 L290 252" marker-end="url(#mkA)"/>
+  <!-- CORE ⇄ CANDIDATE（双向） -->
+  <path class="arr" d="M398 246 L414 246" marker-end="url(#mkA)"/>
+  <path class="arr" d="M414 258 L398 258" marker-end="url(#mkA)"/>
+  <path class="arr" d="M522 252 L546 252" marker-end="url(#mkA)"/>
+  <!-- OBSERVATION ⇄ SUSPENDED（双向） -->
+  <path class="arr" d="M650 246 L674 246" marker-end="url(#mkA)"/>
+  <path class="arr" d="M674 258 L650 258" marker-end="url(#mkA)"/>
+  <path class="arr" d="M778 252 L802 252" marker-end="url(#mkA)"/>
+
+  <!-- 回归：RETIRED → PENDING_QA（复审重新有效） -->
+  <path class="leader" d="M854 300 C854 322, 214 322, 214 300" marker-end="url(#mkA)"/>
+
+  <!-- ══ 底层：持续监控 · 冷却 · 退役 ══ -->
+  <rect class="bound" x="20" y="350" width="900" height="210" rx="12"/>
+  <text class="th" x="36" y="376">持续监控 · 冷却 · 退役（生命周期闭环）</text>
+
+  <!-- 监控 -->
+  <text class="th" x="36" y="404">监控层</text>
+  <text class="ts" x="36" y="428">每日 04:00 巡检降级（Sharpe↓20%→degraded）</text>
+  <text class="ts" x="36" y="448">04:30 逻辑监控（行为漂移/极端预测/换月异常）</text>
+  <text class="ts" x="36" y="468">05:00 数据级监控（缺失率/异常值/多源分歧）</text>
+  <text class="ts" x="36" y="488">月度 M1-M5 · 季度 F1-F6 · 半年度 D1-D4 复检</text>
+  <text class="ts" x="36" y="508">退役 5 红线独立触发（NaN 保守不误判）</text>
+
+  <!-- 冷却 -->
+  <text class="th" x="420" y="404">冷却</text>
+  <text class="ts" x="420" y="428">影子池观察 5 交易日（晋升后，L3 暂不纳入）</text>
+  <text class="ts" x="420" y="448">degraded 30 日冷却期（期满回归复用 factor_id）</text>
+  <text class="ts" x="420" y="468">energy 30 交易日 · 两次不达标退役（宁严勿松）</text>
+  <text class="ts" x="420" y="488">冷却期内种子/演化路径跳过</text>
+
+  <!-- 退役 -->
+  <text class="th" x="780" y="404">退役与回归</text>
+  <text class="ts" x="780" y="428">RETIRED 权重 0%</text>
+  <text class="ts" x="780" y="448">衰减超限 / IR 跌破 / 连续亏损</text>
+  <text class="ts" x="780" y="468">复审重新有效 → PENDING_QA</text>
+
+  <!-- 反馈：监控 → L2 周度评审（退化/降级反馈回评审） -->
+  <path class="leader" d="M534 350 L534 140" marker-end="url(#mkA)"/>
 </svg>

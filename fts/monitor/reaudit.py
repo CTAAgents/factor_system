@@ -332,9 +332,9 @@ def apply_reaudit_results(
                     repo.update_factor(fid, {"metadata": meta})
                     srepo.log_transition(
                         fid,
-                        "active(shadow)",
-                        "active(shadow)",
-                        f"重审鲁棒性未达标，降级观察池（robust={r.get('robustness_pass_rate')}）",
+                        "OBSERVATION",
+                        "OBSERVATION",
+                        f"重审鲁棒性未达标，降级观察池（robust={r.get('robustness_pass_rate')}，shadow_pool 观察期）",
                         snapshot={"reaudit": meta["reaudit"], "shadow_pool": meta["shadow_pool"]},
                     )
                     ok["shadow"] += 1
