@@ -53,6 +53,8 @@ from .factor_program import (
     validate_factor_code,
 )
 from .extractors import FuturesExtractorPipeline
+from .extractors.knowledge_filter import TextEmbedder, dedup_semantic  # plans/44 C4 语义去重
+from .l1_l2_funnel import funnel_record  # plans/44 D1: L1→L2 闭环漏斗
 from .seed_pool import SeedPool
 from .state import generate_run_id, generate_trace_id
 
@@ -722,6 +724,9 @@ def factor_program(data, params):
         # 2. LLM 补足剩余配额（提取器未填满的部分）
         llm_needed = max_candidates - len(candidates)
         if self.llm_client is not None and llm_needed > 0:
+            # plans/44 B1: 注入已注入因子名负面样本（≤20 个，控制 token），
+            # 引导 LLM 生成非重复机制；energy 子链分批经 dict 拷贝自然透传。
+            market_snapshot["negative_factor_names"] = sorted(existing_names)[:20]
             llm_candidates = self._bootstrap_with_llm(market_snapshot, debate_gaps, llm_needed, trace_id)
             candidates.extend(llm_candidates)
             logger.info(
@@ -767,6 +772,35 @@ def factor_program(data, params):
         # 4. 限制数量
         candidates = candidates[:max_candidates]
 
+        # plans/44 C4: 语义去重（l1_semantic_dedup 开关）— 候选名 vs 已注入名
+        # embedding 高相似（> l1_dedup_threshold）拦截同构不同名；模型缺失自动
+        # 降级为精确名称匹配（与既有行为等价，零回归）。
+        semantic_blocked: set[str] = set()
+        try:
+            from fts.config.settings import get_config
+
+            if getattr(get_config(), "l1_semantic_dedup", True) and candidates and existing_names:
+                cand_texts = [c.get("name", "") for c in candidates]
+                existing_texts = sorted(existing_names)[:200]
+                flags = dedup_semantic(
+                    cand_texts,
+                    existing_texts,
+                    threshold=float(getattr(get_config(), "l1_dedup_threshold", 0.90)),
+                    embedder=TextEmbedder(),
+                )
+                # 按名称匹配（候选 candidate_id 可能被下游重建，名称稳定）
+                for c, allowed in zip(candidates, flags):
+                    if not allowed and c.get("name"):
+                        semantic_blocked.add(str(c.get("name", "")).lower())
+                if semantic_blocked:
+                    logger.warning(
+                        "[bootstrap] 语义去重拦截: %d 个候选与已注入因子语义高相似, names=%s",
+                        len(semantic_blocked),
+                        sorted(semantic_blocked),
+                    )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[bootstrap] 语义去重异常, 跳过（不阻断）: %s", e)
+
         # 5. 编译验证 + 自动修复 + 去重标记
         validated: list[SeedCandidate] = []
         dup_count = 0
@@ -801,14 +835,35 @@ def factor_program(data, params):
                             cand["is_executable"] = False
                             cand.setdefault("failure_reasons", []).append(f"编译失败: {error_reason}")
                     else:
-                        cand["is_executable"] = False
-                        cand.setdefault("failure_reasons", []).append(f"编译失败: {error_reason}")
+                        # plans/44 C1: 规则修复失败 → LLM 修复兜底
+                        llm_fixed = self._try_llm_code_fix(cand["code"], error_reason, trace_id)
+                        if llm_fixed is not None:
+                            ok3, reasons3 = validate_factor_code(llm_fixed)
+                            if ok3:
+                                cand["is_executable"] = True
+                                cand["code"] = llm_fixed
+                                auto_fix_count += 1
+                                cand.setdefault("failure_reasons", []).append(f"LLM 修复成功: 原错误={error_reason}")
+                                logger.info(
+                                    "[bootstrap] LLM 修复成功, name=%s, candidate_id=%s, error=%s",
+                                    cand_name,
+                                    cand_id,
+                                    error_reason,
+                                )
+                            else:
+                                cand["is_executable"] = False
+                                cand.setdefault("failure_reasons", []).append(f"编译失败: LLM 修复仍无效 ({error_reason})")
+                        else:
+                            cand["is_executable"] = False
+                            cand.setdefault("failure_reasons", []).append(f"编译失败: {error_reason}")
             except Exception as e:
                 cand["is_executable"] = False
                 cand.setdefault("failure_reasons", []).append(f"编译异常: {e}")
 
-            # 去重判断
-            cand["is_duplicate"] = cand.get("name", "").lower() in existing_names
+            # 去重判断（名称精确匹配 + plans/44 C4 语义高相似拦截）
+            cand["is_duplicate"] = (
+                cand.get("name", "").lower() in existing_names or cand_name.lower() in semantic_blocked
+            )
             if cand["is_duplicate"]:
                 dup_count += 1
                 logger.warning(
@@ -831,6 +886,26 @@ def factor_program(data, params):
             auto_fix_count,
         )
         return validated
+
+    def _try_llm_code_fix(self, code: str, error_reason: str, trace_id: str) -> Optional[str]:
+        """plans/44 C1: 规则修复失败后调用 LLM 修复因子代码。
+
+        返回 LLM 修复后的代码（未经过 validate 复核，由调用方复核）；
+        LLM 不可用/无 fix_factor_code 接口/调用异常 → None。
+        """
+        llm = self.llm_client
+        if llm is None or not hasattr(llm, "fix_factor_code"):
+            return None
+        try:
+            fixed = llm.fix_factor_code(code, error_reason, trace_id)
+            return fixed if isinstance(fixed, str) and fixed.strip() else None
+        except Exception as e:
+            logger.warning(
+                "[bootstrap] LLM 代码修复异常, trace_id=%s, error=%s",
+                trace_id,
+                e,
+            )
+            return None
 
     def _bootstrap_with_llm(
         self,
@@ -903,6 +978,10 @@ def factor_program(data, params):
                 return []
             candidates: list[SeedCandidate] = []
             skipped = 0
+            # plans/44 C3: narrative < 20 字用模板补全（零额外 LLM 调用），
+            # 降低软失败损耗；与提取器路径 _ensure_narrative 行为一致。
+            from .extractors.base import _ensure_narrative
+
             for i, raw in enumerate(raw_candidates):
                 name = raw.get("name", "unknown")
                 code = raw.get("code", "")
@@ -923,7 +1002,7 @@ def factor_program(data, params):
                     code=code,
                     params=raw.get("params", {}),
                     signature=raw.get("signature", {}),
-                    economic_logic=raw.get("economic_logic", {}),
+                    economic_logic=_ensure_narrative(name, raw.get("economic_logic", {})),
                     source=raw.get("source", "l1_bootstrapping"),
                     parent_topic=raw.get("parent_topic", ""),
                     debate_round_ref=None,
@@ -1100,6 +1179,15 @@ class MetaRunResult:
 # ─── L1 Meta-Loop 主循环 ────────────────────────────────
 
 
+def _derive_rejected_dir(inject_dir: str | Path) -> Path:
+    """由 inject_dir 派生拒绝候选目录：l1_injected → l1_rejected；l1_injected_energy → l1_rejected_energy。"""
+    inject_path = Path(inject_dir)
+    name = inject_path.name
+    if name.startswith("l1_injected"):
+        return inject_path.parent / f"l1_rejected{name[len('l1_injected'):]}"
+    return inject_path.parent / "l1_rejected"
+
+
 class MetaLoop:
     """L1 Meta-Loop 主循环 — 每日 05:00 知识补给。
 
@@ -1116,6 +1204,7 @@ class MetaLoop:
         memory_dir: str | Path = "memory/meta_loop",
         factor_pool_path: str | Path = "memory/knowledge/factors/factor_pool.json",
         inject_dir: str | Path = "memory/knowledge/factors/l1_injected",
+        rejected_dir: str | Path | None = None,
         debates_dir: str | Path = "memory/debates",
         budget: Optional[L1BudgetConfig] = None,
         verifier: Optional[L1Verifier] = None,
@@ -1131,6 +1220,8 @@ class MetaLoop:
             memory_dir: L1 状态目录
             factor_pool_path: factor_pool.json 路径
             inject_dir: L1 注入因子存储目录
+            rejected_dir: L1 拒绝候选存储目录（None 时由 inject_dir 派生:
+                        l1_injected → l1_rejected；l1_injected_energy → l1_rejected_energy）
             debates_dir: 辩论数据目录
             budget: L1 预算配置
             verifier: L1 Verifier（None 时用默认）
@@ -1144,6 +1235,7 @@ class MetaLoop:
         self.memory_dir = Path(memory_dir)
         self.factor_pool_path = Path(factor_pool_path)
         self.inject_dir = Path(inject_dir)
+        self.rejected_dir = _derive_rejected_dir(inject_dir) if rejected_dir is None else Path(rejected_dir)
         self.debates_dir = Path(debates_dir)
         self.budget: L1BudgetConfig = dict(budget or DEFAULT_L1_BUDGET_CONFIG)  # type: ignore[assignment]
         self.verifier = verifier or L1Verifier(DEFAULT_L1_VERIFIER_CONFIG)
@@ -1323,6 +1415,10 @@ class MetaLoop:
             else:
                 logger.info("[L1.run] Step 2.5: 无历史注入因子，跳过去重")
 
+            # ─── Step 2.75: 拒绝候选复活（plans/44 C2） ──
+            retried = self._retry_rejected_candidates(state, trace_id, injected_ids)
+            logger.info("[L1.run] Step 2.75 完成: 复活注入=%d", retried)
+
             # ─── Step 3: factorengine Bootstrapping ─────────
             logger.info(
                 "[L1.run] Step 3: Bootstrapping 开始, max_cand=%d, debate_gaps=%d, existing_names=%d",
@@ -1355,6 +1451,11 @@ class MetaLoop:
                 trace_id,
                 injected_ids,
             )
+            # plans/44 D1: L1→L2 闭环 — 本次注入数回写漏斗（无论后续熔断与否）
+            try:
+                funnel_record(market=self.market, injected=len(injected_ids), run_id=trace_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[L1.run] 漏斗回写失败（不阻断）: %s", e)
             if circuit_broken:
                 logger.warning(
                     "[L1.run] Step 4 熔断触发: reason=%s, injected=%d",
@@ -1546,6 +1647,9 @@ class MetaLoop:
                 # 软失败（经济逻辑评分/narrative 不达标）不计入，避免 LLM 评分波动误触熔断
                 if self._is_hard_failure(verdict["failure_reasons"]):
                     self._consecutive_low_quality += 1
+                    # 硬失败（编译失败/重复）→ 立即落盘拒绝候选（含 code + 具体编译错误），
+                    # 此前不持久化导致不可追溯（2026-08-16 修复）
+                    self._persist_rejected(cand, bootstrap_detail or verdict["failure_reasons"], trace_id)
                 detail = bootstrap_detail or cand.get("failure_reasons")
                 logger.warning(
                     "[L1.verify] 候选[%d/%d] 未通过: name=%s, candidate_id=%s, reasons=%s%s",
@@ -1582,6 +1686,8 @@ class MetaLoop:
                             batch_injected += 1
                             self._consecutive_low_quality = 0
                         continue
+                    # 软失败重写后仍未达标 → 落盘拒绝候选供回溯
+                    self._persist_rejected(cand, verdict["failure_reasons"], trace_id)
                 continue
 
             passed_count += 1
@@ -1837,6 +1943,151 @@ class MetaLoop:
         except Exception as e:  # noqa: BLE001
             logger.warning("[L1.chain_live] 实时状态计算失败, 部分降级: %s", e)
         return "\n".join(lines)
+
+    def _retry_rejected_candidates(
+        self,
+        state: L1MetaLoopState,
+        trace_id: str,
+        injected_ids: list[str],
+    ) -> int:
+        """plans/44 C2: 扫描 l1_rejected_*，对编译失败候选修复代码后重新验证注入。
+
+        配置 `l1_rejected_retry` 关闭 / rejected 目录不存在 → 返回 0。
+        修复仍失败的候选保留在 rejected 目录（不重复尝试同轮）。
+        注入成功的候选从 rejected 目录移走（GAP-131 落盘闭环 → 复活）。
+
+        Returns:
+            本次复活注入数
+        """
+        from fts.config.settings import get_config
+
+        if not getattr(get_config(), "l1_rejected_retry", True):
+            logger.info("[L1.retry] l1_rejected_retry 关闭, 跳过复活")
+            return 0
+        if not self.rejected_dir.exists():
+            logger.info("[L1.retry] 无拒绝候选目录, 跳过复活: %s", self.rejected_dir)
+            return 0
+
+        revived: list[SeedCandidate] = []
+        for f in sorted(self.rejected_dir.glob("cand_*.json")):
+            try:
+                record = json.loads(f.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("[L1.retry] 拒绝候选解析失败, 跳过: %s, error=%s", f.name, e)
+                continue
+            reasons_text = " ".join(str(r) for r in record.get("l1_rejection", {}).get("reasons", []))
+            if "编译" not in reasons_text:
+                continue  # 仅复活编译失败类候选
+            code = record.get("code", "")
+            if not code:
+                continue
+            fixed_code = self._try_revive_code(code, reasons_text, trace_id)
+            if fixed_code is None:
+                logger.info(
+                    "[L1.retry] 复活修复仍失败, 保留: name=%s, file=%s",
+                    record.get("name", "?"),
+                    f.name,
+                )
+                continue
+            cand = dict(record)
+            cand["code"] = fixed_code
+            cand["is_executable"] = True
+            cand["passed_l1_verifier"] = False
+            cand["failure_reasons"] = []
+            revived.append(cand)
+        if not revived:
+            logger.info("[L1.retry] 无可复活候选, revived=0")
+            return 0
+
+        logger.info("[L1.retry] 复活候选 %d 个, 进入验证注入: trace_id=%s", len(revived), trace_id)
+        before = len(injected_ids)
+        self._verify_and_inject(revived, state, trace_id, injected_ids)
+        # 注入成功的候选从 rejected 目录移走
+        newly_injected = set(injected_ids[before:])
+        removed = 0
+        for cand in revived:
+            cid = cand.get("candidate_id")
+            if cid in newly_injected:
+                f = self.rejected_dir / f"{cid}.json"
+                try:
+                    f.unlink(missing_ok=True)
+                    removed += 1
+                except OSError as e:
+                    logger.warning("[L1.retry] 移走失败: %s, error=%s", f, e)
+        logger.info(
+            "[L1.retry] 复活完成: revived=%d, injected=%d, removed=%d",
+            len(revived),
+            len(newly_injected),
+            removed,
+        )
+        return len(newly_injected)
+
+    def _try_revive_code(self, code: str, error_reason: str, trace_id: str) -> Optional[str]:
+        """复活修复：先规则修复（fix_factor_code），再 LLM 修复兜底，均需过 validate_factor_code。
+
+        Returns:
+            修复后的可编译代码或 None（全部失败）
+        """
+        from fts.factor_engine.factor_program import fix_factor_code, validate_factor_code
+
+        ok, _ = validate_factor_code(code)
+        if ok:
+            return code  # 已可编译（错误信息可能已过时）
+        fixed, fixed_code = fix_factor_code(code, error_reason)
+        if fixed:
+            ok2, _ = validate_factor_code(fixed_code)
+            if ok2:
+                return fixed_code
+        # LLM 兜底
+        llm = self.llm_client
+        if llm is not None and hasattr(llm, "fix_factor_code"):
+            try:
+                llm_fixed = llm.fix_factor_code(code, error_reason, trace_id)
+            except Exception as e:
+                logger.warning("[L1.retry] LLM 修复异常, trace_id=%s, error=%s", trace_id, e)
+                llm_fixed = None
+            if isinstance(llm_fixed, str) and llm_fixed.strip():
+                ok3, _ = validate_factor_code(llm_fixed)
+                if ok3:
+                    return llm_fixed
+        return None
+
+    def _persist_rejected(self, cand: SeedCandidate, reasons: list[str], trace_id: str) -> Optional[str]:
+        """将未通过 L1 验证的候选落盘（含 code 与拒绝原因），供事后回溯/人工修复。
+
+        背景: 编译失败等硬失败候选此前仅日志记录即丢弃，代码不可追溯（2026-08-16 修复）。
+        落盘目录由 inject_dir 派生（l1_injected → l1_rejected；energy 同理）。
+        """
+        cand_id = cand.get("candidate_id", "unknown")
+        try:
+            self.rejected_dir.mkdir(parents=True, exist_ok=True)
+            record = dict(cand)
+            record["market"] = self.market
+            record["l1_rejection"] = {
+                "reasons": [str(r) for r in (reasons or [])],
+                "rejected_at": datetime.now().isoformat(),
+                "trace_id": trace_id,
+            }
+            out_file = self.rejected_dir / f"{cand_id}.json"
+            with open(out_file, "w", encoding="utf-8") as f:
+                json.dump(record, f, ensure_ascii=False, indent=2, default=str)
+            logger.warning(
+                "[L1.reject] 拒绝候选已落盘: name=%s, candidate_id=%s, path=%s, reasons=%s",
+                cand.get("name", "unknown"),
+                cand_id,
+                out_file,
+                record["l1_rejection"]["reasons"],
+            )
+            return cand_id
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "[L1.reject] 拒绝候选落盘失败: name=%s, candidate_id=%s, error=%s",
+                cand.get("name", "unknown"),
+                cand_id,
+                e,
+                exc_info=True,
+            )
+            return None
 
     def _inject_candidate(self, cand: SeedCandidate, trace_id: str) -> Optional[str]:
         """Step 5: 注入候选到 L2 种子池入口。"""

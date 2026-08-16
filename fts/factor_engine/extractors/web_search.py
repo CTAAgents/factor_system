@@ -31,6 +31,62 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _SCRIPT_STYLE_RE = re.compile(r"<script.*?</script>|<style.*?</style>", re.S)
 _WS_RE = re.compile(r"\s+")
 
+# 知识缺口维度桶（plans/44 A1）：已注入因子未覆盖的维度 → 生成检索 query
+_GAP_DIMENSIONS = (
+    ("库存", "商品期货 库存周期 因子"),
+    ("基差", "商品期货 基差 因子"),
+    ("季节性", "商品期货 季节性 因子"),
+    ("展期", "商品期货 展期收益 期限结构 因子"),
+    ("波动率聚集", "商品期货 波动率聚集 因子"),
+    ("情绪", "期货 市场情绪 持仓 因子"),
+    ("开工率", "化工 开工率 产能利用率 因子"),
+    ("仓单", "期货 仓单 注册仓单 因子"),
+    ("价差", "能化 跨品种价差 裂解价差 因子"),
+)
+
+
+class KnowledgeGapQueryGenerator:
+    """plans/44 A1: 知识缺口驱动检索方向生成器。
+
+    统计已注入因子（factor_pool 名 + parent_topic）的维度覆盖，
+    对未覆盖维度生成检索 query，实现"每轮动态换一批新知识"。
+    """
+
+    def __init__(self, injected_names: Optional[list[str]] = None):
+        # 注入的来源可替换（如 factor_pool 读取器）；None 时惰性读文件
+        self._injected_names = injected_names
+
+    def _load_injected(self) -> list[str]:
+        if self._injected_names is not None:
+            return self._injected_names
+        try:
+            from pathlib import Path
+
+            pool_path = Path("memory/knowledge/factors/factor_pool_energy.json")
+            if not pool_path.exists():
+                pool_path = Path("memory/knowledge/factors/factor_pool.json")
+            if not pool_path.exists():
+                return []
+            import json
+
+            data = json.loads(pool_path.read_text(encoding="utf-8"))
+            return [str(e.get("name", "")) + " " + str(e.get("parent_topic", "")) for e in data.get("factors", [])]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[gap_query] 读取已注入因子失败: %s", e)
+            return []
+
+    def generate(self, max_queries: int = 6) -> list[str]:
+        """返回未覆盖维度的检索 query（按缺口优先级）。"""
+        injected = " ".join(self._load_injected()).lower()
+        gap_queries: list[str] = []
+        for keyword, query in _GAP_DIMENSIONS:
+            if len(gap_queries) >= max_queries:
+                break
+            if keyword not in injected:
+                gap_queries.append(query)
+        logger.info("[gap_query] 知识缺口 query: %d 个 (覆盖维度=%d/总注入=%d)", len(gap_queries), len(_GAP_DIMENSIONS), len(injected.split()))
+        return gap_queries
+
 
 class WebSearchExtractor(BaseExtractor):
     """Web 搜索动态因子源：搜索 → 去标签 → LLM 提取因子。
@@ -55,18 +111,39 @@ class WebSearchExtractor(BaseExtractor):
         market: str = "futures",
         max_results_chars: int = 3000,
         max_factors: int = 20,
+        dynamic: bool = True,
     ) -> None:
         super().__init__(name=name, paused=paused, llm_client=llm_client)
-        self.queries = queries or [
+        self.base_queries = queries or [
             "量化因子 商品期货 趋势 期限结构 动量",
             "CTA 因子 化工期货 库存周期 基差",
             "商品期货 因子挖掘 波动率 季节性",
         ]
+        self.queries = list(self.base_queries)
         self.timeout = timeout
         self.market = market
         self.max_results_chars = max_results_chars
         # plans/41 A3: max_factors 配置化（管道构造时注入，默认 20）
         self.max_factors = max_factors
+        # plans/44 A1: 动态检索（知识缺口驱动，每轮换新 query）
+        self.dynamic = dynamic
+        self._gap_generator: Optional[KnowledgeGapQueryGenerator] = None
+
+    def _refresh_queries(self) -> None:
+        """plans/44 A1: 动态检索方向——知识缺口 query 置前 + 基础 query 兜底。"""
+        if not self.dynamic:
+            return
+        if self._gap_generator is None:
+            self._gap_generator = KnowledgeGapQueryGenerator()
+        gap = self._gap_generator.generate(max_queries=6)
+        if gap:
+            self.queries = gap + self.base_queries
+            logger.info(
+                "[%s] 动态检索方向: gap_queries=%d total=%d",
+                self.name,
+                len(gap),
+                len(self.queries),
+            )
 
     def extract(self, trace_id: str) -> list[SeedCandidate]:
         """搜索 → 去标签 → LLM 提取候选因子。"""
@@ -76,6 +153,9 @@ class WebSearchExtractor(BaseExtractor):
         if self.llm_client is None:
             logger.info("[WebSearchExtractor] 未配置 llm_client, 跳过提取")
             return []
+
+        # plans/44 A1: 每轮动态换新检索方向（知识缺口驱动）
+        self._refresh_queries()
 
         logger.info("[WebSearchExtractor] 开始搜索, trace_id=%s, queries=%d", trace_id, len(self.queries))
         merged_text = self._search_all()

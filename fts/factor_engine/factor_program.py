@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import logging
+import re
 import secrets
 import types
 import warnings
@@ -132,6 +133,25 @@ def generate_factor_id(name: str, code: str) -> str:
 # ─── 代码自动修复 ─────────────────────────────────────────
 
 
+def _rewrite_condition_assignment(code: str) -> str:
+    """将 if/elif/while 条件行内的赋值 `=` 改写为 `==`（LLM 常见误写）。
+
+    仅处理以 if/elif/while 开头的条件行，且目标为独立 ` = `（不触碰 ==/>=/<=/!=）。
+    """
+    lines = code.split("\n")
+    out: list[str] = []
+    for line in lines:
+        stripped = line.lstrip()
+        if (
+            re.match(r"(?:if|elif|while)\b", stripped)
+            and " == " not in line
+            and re.search(r"(?<![!<>=]) = (?![=])", line) is not None
+        ):
+            line = re.sub(r"(?<![!<>=]) = (?![=])", " == ", line, count=1)
+        out.append(line)
+    return "\n".join(out)
+
+
 def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
     """尝试自动修复因子代码中的常见语法错误。
 
@@ -141,6 +161,7 @@ def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
     3. 通用语法修复（invalid syntax）— 行末补冒号
     4. 缩进类错误修复（unexpected indent / unindent does not match / expected an indented block）
     5. 全局括号平衡修复
+    6. LLM 高频语法瑕疵全局修复（&&/||、一元 !、^ 幂、if 条件行内赋值 =、行尾残留反斜杠）
 
     Args:
         code: 原始因子代码
@@ -149,8 +170,6 @@ def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
     Returns:
         (fixed, fixed_code) — 修复成功返回 (True, 修复后的代码)，否则 (False, 原始代码)
     """
-    import re
-
     error_msg = error_reason.lower()
 
     # 提取行号
@@ -322,6 +341,54 @@ def fix_factor_code(code: str, error_reason: str = "") -> tuple[bool, str]:
                     idx + 1, " " * (_leading_spaces(lines[idx]) + 4) + "pass"
                 )
                 candidate_codes.append("\n".join(fixed))
+
+    # ── Strategy 6: LLM 高频语法瑕疵全局修复（invalid syntax 兜底） ──
+    # LLM 生成代码的常见非 Python 写法：&&/||、一元 !、^ 幂、if/while 条件行内赋值 =、
+    # 行尾残留反斜杠等。这些瑕疵常出现在非报错行，故对整段代码做全局变换并逐候选 ast 校验。
+    # 触发条件覆盖真实 Python 错误消息：invalid syntax / cannot assign（如 "if x = y:"）/
+    # unexpected character（如行尾反斜杠续行残留）。
+    if (
+        "invalid syntax" in error_msg
+        or "cannot assign" in error_msg
+        or "unexpected character" in error_msg
+    ):
+        base = code
+
+        def _push(v: str) -> None:
+            if v != base and v not in candidate_codes:
+                candidate_codes.append(v)
+
+        # 6a: 逻辑运算符 && / || → and / or
+        _push(base.replace("&&", " and ").replace("||", " or "))
+
+        # 6b: 幂运算 ^ → **（因子代码中 ^ 几乎均为数学幂，位异或场景可忽略）
+        _push(re.sub(r"\^", "**", base))
+
+        # 6c: if/elif/while 条件行内赋值 = → ==
+        _push(_rewrite_condition_assignment(base))
+
+        # 6d: 行尾残留反斜杠（非转义用途）去除
+        s7d_lines: list[str] = []
+        for _ln in base.split("\n"):
+            _stripped = _ln.rstrip()
+            if _stripped.endswith("\\"):
+                _ln = _stripped[:-1] + _ln[len(_stripped):]
+            s7d_lines.append(_ln)
+        _push("\n".join(s7d_lines))
+
+        # 6e: 一元 ! → not（先掩蔽 != 防误改，仅修复 ! 后接标识符/括号的场景）
+        masked = base.replace("!=", "\x00NEQ\x00")
+        s7e = re.sub(r"(?<![=!<>])\!(?=\s*\w|\s*\()", " not ", masked).replace("\x00NEQ\x00", "!=")
+        _push(s7e)
+
+        # 6f: 组合变换（覆盖同段多类瑕疵同时出现）
+        combo = "\n".join(s7d_lines)
+        combo_masked = combo.replace("!=", "\x00NEQ\x00")
+        combo = re.sub(r"(?<![=!<>])\!(?=\s*\w|\s*\()", " not ", combo_masked).replace("\x00NEQ\x00", "!=")
+        combo = combo.replace("&&", " and ").replace("||", " or ")
+        combo = _rewrite_condition_assignment(combo)
+        combo = re.sub(r"\^", "**", combo)
+        _push(combo)
 
     # ── Strategy 4: 全局括号平衡修复 ──
     # 当上面所有策略都无效时，尝试对整个代码做括号对齐

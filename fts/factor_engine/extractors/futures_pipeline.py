@@ -151,6 +151,7 @@ class ResearchReportExtractor(BaseExtractor):
         paused: bool = False,
         llm_client: Optional[Any] = None,
         max_factors: int = 20,
+        page_size: int = 100,  # plans/44 P0: 东财研报分页大小 5→100（全行业覆盖）
     ):
         """
         Args:
@@ -159,10 +160,12 @@ class ResearchReportExtractor(BaseExtractor):
             paused: 是否暂停
             llm_client: LLM 客户端
             max_factors: 单次 LLM 提取最大因子数（plans/41 A3，默认 20）
+            page_size: 东财研报分页大小（plans/44 P0 扩容，默认 100）
         """
         super().__init__(name=name, paused=paused, llm_client=llm_client)
         self.family_name = family_name
         self.max_factors = max_factors
+        self.page_size = page_size
 
     def extract(self, trace_id: str) -> list[SeedCandidate]:
         if self.paused:
@@ -217,9 +220,10 @@ class ResearchReportExtractor(BaseExtractor):
             # 尝试多个研报类型
             text_parts = []
 
-            for report_type in [1, 2]:  # 1=个股研报, 2=行业研报
+            for report_type in [1, 2, 3]:  # 1=个股研报, 2=行业研报, 3=策略研报
                 params = dict(_EASTMONEY_REPORT_PARAMS)
                 params["reportType"] = report_type
+                params["pageSize"] = self.page_size  # plans/44 P0: 5→100
                 try:
                     r = requests.get(
                         _EASTMONEY_REPORT_API,
@@ -230,7 +234,7 @@ class ResearchReportExtractor(BaseExtractor):
                     if r.status_code == 200:
                         data = r.json()
                         reports = data.get("data", [])
-                        for rep in reports[:3]:
+                        for rep in reports[: min(self.page_size, len(reports))]:
                             title = rep.get("title", "")
                             industry = rep.get("industryName", "")
                             stock = rep.get("stockName", "")
@@ -287,6 +291,7 @@ class AcademicPaperExtractor(BaseExtractor):
         paused: bool = False,
         llm_client: Optional[Any] = None,
         max_factors: int = 20,
+        max_results: int = 50,  # plans/44 P0: arXiv 每类别拉取数 3→50（全球 ≥300 篇/天）
     ):
         """
         Args:
@@ -295,10 +300,12 @@ class AcademicPaperExtractor(BaseExtractor):
             paused: 是否暂停
             llm_client: LLM 客户端
             max_factors: 单次 LLM 提取最大因子数（plans/41 A3，默认 20）
+            max_results: arXiv 每类别最大拉取数（plans/44 P0 扩容，默认 50）
         """
         super().__init__(name=name, paused=paused, llm_client=llm_client)
         self.family_name = family_name
         self.max_factors = max_factors
+        self.max_results = max_results
 
     def extract(self, trace_id: str) -> list[SeedCandidate]:
         if self.paused:
@@ -344,7 +351,7 @@ class AcademicPaperExtractor(BaseExtractor):
                     "search_query": f"cat:{cat}",
                     "sortBy": "submittedDate",
                     "sortOrder": "descending",
-                    "max_results": 3,
+                    "max_results": self.max_results,  # plans/44 P0: 3→50
                 }
                 try:
                     r = requests.get(
@@ -468,9 +475,32 @@ class FuturesExtractorPipeline(BaseExtractorPipeline):
                 name="web_search",
                 paused=False,
                 llm_client=llm_client,
+                market="futures",
                 max_factors=self._max_factors,
+                dynamic=getattr(get_config(), "l1_dynamic_websearch", True),
             )
         )
+        # plans/44 P0: 全球多源批量知识深读源（arXiv/OpenAlex/东财/全球报告，
+        # 三层管线：采集→粗筛→LLM 深读；l1_bulk_enabled 开关）
+        if getattr(get_config(), "l1_bulk_enabled", True):
+            from .bulk_knowledge import BulkKnowledgeExtractor
+
+            extractors.append(
+                BulkKnowledgeExtractor(
+                    name="bulk_knowledge",
+                    paused=False,
+                    llm_client=llm_client,
+                    market="futures",
+                    max_factors=self._max_factors,
+                    max_results=getattr(get_config(), "l1_source_arxiv_max_results", 50),
+                    page_size=getattr(get_config(), "l1_source_report_page_size", 100),
+                    deepread_max=getattr(get_config(), "l1_knowledge_deepread_max", 60),
+                    embedding_enabled=getattr(get_config(), "l1_embedding_enabled", True),
+                    embedding_threshold=getattr(get_config(), "l1_embedding_threshold", 0.30),
+                    openalex_languages=getattr(get_config(), "l1_openalex_languages", None),
+                    non_en_reports_enabled=getattr(get_config(), "l1_non_en_reports_enabled", True),
+                )
+            )
 
         super().__init__(
             extractors=extractors,

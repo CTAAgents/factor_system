@@ -31,6 +31,8 @@ def _no_real_data_source(monkeypatch):
     初始化 FTSDataProvider 并调用 `data_futures.get_realtime_prices`（内部
     TqSdk asyncio 事件循环 select 等待网络），断网/无行情环境下无限阻塞。
     此处统一 mock 两者，使感知步骤返回合成快照。
+    plans/44 P0: 同时屏蔽 BulkKnowledgeExtractor 的全球多源网络采集
+    （collect_all 4 源 × 30s 超时在测试环境不可接受；生产走真实采集）。
     """
     from unittest.mock import MagicMock
 
@@ -38,6 +40,21 @@ def _no_real_data_source(monkeypatch):
     mock_provider.return_value.get_realtime_prices.return_value = {"RB": 123.4}
     monkeypatch.setattr("fts.data.FTSDataProvider", mock_provider)
     monkeypatch.setattr("fts.data_futures.get_realtime_prices", lambda *a, **k: {"RB": 123.4})
+
+    # plans/44 P0: 屏蔽批量采集网络（collect_all 在 bulk_knowledge 模块 import 时绑定）
+    from fts.factor_engine.extractors import bulk_knowledge
+
+    monkeypatch.setattr(
+        bulk_knowledge,
+        "collect_all",
+        lambda **k: {
+            src: type("_R", (), {"collected": 0, "new": 0, "deduped": 0, "errors": []})()
+            for src in ("arxiv", "openalex", "eastmoney", "global")
+        },
+    )
+    # plans/44: CLI main() 测试零真实网络——屏蔽研报/论文/WebSearch 提取器网络请求
+    # （各提取器均 per-query except Exception 降级返回空，不阻断整体）
+    monkeypatch.setattr("requests.get", lambda *a, **k: (_ for _ in ()).throw(ConnectionError("test env: no network")))
 
 
 # 确保能导入 fts.factor_engine
@@ -2239,3 +2256,186 @@ class TestL1BudgetConfigPlans41:
 
         assert DEFAULT_L1_BUDGET_CONFIG["daily_token_limit"] == 60_000
         assert DEFAULT_L1_BUDGET_CONFIG["max_bootstraps_per_run"] == 30
+
+
+# ════════════════════════════════════════════════════════
+# 8. L1 拒绝候选落盘（不可追溯修复，2026-08-16）
+# ════════════════════════════════════════════════════════
+
+
+class TestMetaLoopRejectedPersistence:
+    """拒绝候选（硬失败/重写未过软失败）落盘到 l1_rejected 目录，供回溯修复。"""
+
+    def test_rejected_dir_derived_from_inject_dir(self, tmp_inject_dir):
+        """默认 rejected_dir 由 inject_dir 派生（l1_injected → l1_rejected）。"""
+        loop = MetaLoop(inject_dir=tmp_inject_dir)
+        assert loop.rejected_dir == tmp_inject_dir.parent / "l1_rejected"
+
+    def test_rejected_dir_energy_suffix(self, tmp_path):
+        """energy 注入目录派生 l1_rejected_energy。"""
+        inject = tmp_path / "l1_injected_energy"
+        loop = MetaLoop(inject_dir=inject)
+        assert loop.rejected_dir == tmp_path / "l1_rejected_energy"
+
+    def test_rejected_dir_explicit_override(self, tmp_path):
+        """显式传入 rejected_dir 优先于派生逻辑。"""
+        explicit = tmp_path / "my_rejected"
+        loop = MetaLoop(inject_dir=tmp_path / "l1_injected", rejected_dir=explicit)
+        assert loop.rejected_dir == explicit
+
+    def test_hard_failure_persisted(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir, tmp_state_store
+    ):
+        """硬失败（编译失败）候选落盘到 rejected_dir，含 code 与拒绝原因。"""
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+            state_store=tmp_state_store,
+        )
+        cand = SeedCandidate(
+            candidate_id="cand_compile_fail",
+            name="fut_carry_roll yield",
+            code="def factor_program(data, params):\n    return x @@@\n",
+            params={},
+            signature=FactorSignature(
+                input_fields=["close"],
+                output_type="signal",
+                frequency="daily",
+                lookback=1,
+            ),
+            economic_logic=EconomicLogic(
+                theory=4,
+                behavioral=4,
+                microstructure=4,
+                institutional=4,
+                narrative="该因子具备充分的经济逻辑论证，满足长度要求。",
+            ),
+            source="l1_bootstrapping",
+            parent_topic="硬失败落盘测试",
+            is_executable=False,
+            is_duplicate=False,
+            passed_l1_verifier=False,
+            failure_reasons=["编译失败: 语法错误: invalid syntax (line 2)"],
+            trace_id="t",
+            created_at="2026-08-16",
+        )
+        state = L1MetaLoopState(
+            run_id="test",
+            started_at="",
+            status="running",
+            tokens_consumed=0,
+            budget_limit=50000,
+            total_candidates_generated=0,
+            total_candidates_injected=0,
+        )
+        loop._verify_and_inject([cand], state, "l1_test", [])  # noqa: SLF001
+        rejected_file = loop.rejected_dir / "cand_compile_fail.json"
+        assert rejected_file.exists(), "硬失败候选应落盘"
+        record = json.loads(rejected_file.read_text(encoding="utf-8"))
+        assert record["name"] == "fut_carry_roll yield"
+        assert "invalid syntax" in record["l1_rejection"]["reasons"][0]
+        assert "def factor_program" in record["code"]
+        assert record["market"] == "futures"
+        assert record["l1_rejection"]["trace_id"] == "l1_test"
+        # 硬失败候选不应被注入
+        assert state["total_candidates_injected"] == 0
+
+    def test_soft_failure_rewrite_failed_persisted(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir, tmp_state_store
+    ):
+        """软失败重写后仍未达标 → 落盘拒绝候选。"""
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+            state_store=tmp_state_store,
+            llm_client=MagicMock(),  # fix_economic_logic 返回 None → 重写失败
+        )
+        cand = SeedCandidate(
+            candidate_id="cand_soft_fail",
+            name="soft_fail_factor",
+            code="def factor_program(data, params):\n    import numpy as np\n    return np.zeros(len(data['close']))\n",
+            params={},
+            signature=FactorSignature(
+                input_fields=["close"],
+                output_type="signal",
+                frequency="daily",
+                lookback=1,
+            ),
+            economic_logic=EconomicLogic(
+                theory=2,
+                behavioral=2,
+                microstructure=2,
+                institutional=2,
+                narrative="经济逻辑论证不足。",
+            ),
+            source="l1_bootstrapping",
+            parent_topic="软失败落盘测试",
+            is_executable=True,
+            is_duplicate=False,
+            passed_l1_verifier=False,
+            failure_reasons=["经济逻辑达标维度 0/4 < 2"],
+            trace_id="t",
+            created_at="2026-08-16",
+        )
+        state = L1MetaLoopState(
+            run_id="test",
+            started_at="",
+            status="running",
+            tokens_consumed=0,
+            budget_limit=50000,
+            total_candidates_generated=0,
+            total_candidates_injected=0,
+        )
+        loop._verify_and_inject([cand], state, "l1_test", [])  # noqa: SLF001
+        rejected_file = loop.rejected_dir / "cand_soft_fail.json"
+        assert rejected_file.exists(), "重写失败软失败候选应落盘"
+        record = json.loads(rejected_file.read_text(encoding="utf-8"))
+        assert "经济逻辑达标维度" in record["l1_rejection"]["reasons"][0]
+        assert state["total_candidates_injected"] == 0
+
+    def test_persist_rejected_writes_json(
+        self, tmp_meta_dir, tmp_factor_pool_path, tmp_inject_dir, tmp_debates_dir
+    ):
+        """_persist_rejected 直接写入可解析 JSON。"""
+        loop = MetaLoop(
+            memory_dir=tmp_meta_dir,
+            factor_pool_path=tmp_factor_pool_path,
+            inject_dir=tmp_inject_dir,
+            debates_dir=tmp_debates_dir,
+        )
+        cand = SeedCandidate(
+            candidate_id="cand_rej_1",
+            name="rejected_1",
+            code="def factor_program(data, params):\n    pass\n",
+            params={},
+            signature=FactorSignature(
+                input_fields=["close"],
+                output_type="signal",
+                frequency="daily",
+                lookback=1,
+            ),
+            economic_logic=EconomicLogic(
+                theory=3,
+                behavioral=3,
+                microstructure=3,
+                institutional=3,
+                narrative="测试拒绝落盘。",
+            ),
+            source="l1_bootstrapping",
+            parent_topic="测试",
+            trace_id="t",
+            created_at="2026-08-16",
+        )
+        result = loop._persist_rejected(cand, ["候选因子代码不可执行（沙箱编译失败）"], "l1_test")  # noqa: SLF001
+        assert result == "cand_rej_1"
+        file = loop.rejected_dir / "cand_rej_1.json"
+        assert file.exists()
+        record = json.loads(file.read_text(encoding="utf-8"))
+        assert record["code"].startswith("def factor_program")
+        assert record["l1_rejection"]["reasons"] == ["候选因子代码不可执行（沙箱编译失败）"]
+        assert record["l1_rejection"]["rejected_at"]
+        assert record["market"] == "futures"

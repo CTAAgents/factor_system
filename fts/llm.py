@@ -328,6 +328,31 @@ class LLMClient(ABC):
         )
         return None
 
+    def fix_factor_code(
+        self,
+        code: str,
+        error_reason: str,
+        trace_id: str,
+    ) -> Optional[str]:
+        """plans/44 C1: LLM 修复因子代码编译错误（规则修复兜底失败后调用）。
+
+        修复代码必须通过 `validate_factor_code`（语法 + factor_program 签名 + 沙箱约束）
+        才被采纳，否则保持原状。基类默认不支持（返回 None）。
+
+        Args:
+            code: 原始因子代码
+            error_reason: 编译错误信息（如 "语法错误: invalid syntax (line 12)"）
+            trace_id: 全链路 trace_id
+
+        Returns:
+            修复后的代码或 None（不支持/失败）
+        """
+        logger.info(
+            "[fix_factor_code] 基类默认返回 None（不支持）, trace_id=%s",
+            trace_id,
+        )
+        return None
+
 
 # ─── OpenAI 客户端 ────────────────────────────────────────
 
@@ -551,6 +576,73 @@ class OpenAIClient(LLMClient):
         )
         return econ
 
+    def fix_factor_code(
+        self,
+        code: str,
+        error_reason: str,
+        trace_id: str,
+    ) -> Optional[str]:
+        """plans/44 C1: LLM 修复因子代码编译错误（规则修复兜底失败后调用）。"""
+        import time
+
+        t0 = time.time()
+        prompt = self._build_code_fix_prompt(code, error_reason, trace_id)
+        try:
+            raw_text, _ = self.complete(prompt, max_tokens=4000)
+        except Exception as e:
+            logger.error(
+                "[fix_factor_code] LLM 调用失败, trace_id=%s, error=%s",
+                trace_id,
+                e,
+                exc_info=True,
+            )
+            return None
+        fixed = self._extract_python_code(raw_text)
+        logger.info(
+            "[fix_factor_code] 完成, trace_id=%s, elapsed_ms=%.1f, fixed_len=%d",
+            trace_id,
+            (time.time() - t0) * 1000,
+            len(fixed) if fixed else 0,
+        )
+        return fixed
+
+    @staticmethod
+    def _extract_python_code(raw: str) -> Optional[str]:
+        """从 LLM 响应中提取 Python 代码（去 ```python ``` 围栏）。"""
+        text = raw.strip()
+        if not text:
+            return None
+        if text.startswith("```"):
+            lines = text.split("\n")
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            out: list[str] = []
+            for ln in lines:
+                if ln.strip().startswith("```"):
+                    break
+                out.append(ln)
+            return "\n".join(out).strip() or None
+        return text or None
+
+    def _build_code_fix_prompt(self, code: str, error_reason: str, trace_id: str) -> str:
+        """构造因子代码修复 Prompt（plans/44 C1）。"""
+        return f"""你是资深量化因子工程师（FTS L1 代码修复 Agent）。以下因子程序存在 Python 语法错误，请修复。
+
+【编译错误】
+{error_reason}
+
+【修复要求 — 必须严格遵守】
+1. 仅修复语法错误，禁止改变因子逻辑语义
+2. 必须保持 `def factor_program(data, params):` 函数签名
+3. 仅允许使用 numpy/pandas/scipy/statsmodels 及 Python 标准库
+4. 直接输出完整修复后的 Python 代码（不要任何解释文字）
+
+【因子代码】
+```python
+{code}
+```"""
+
+
     @staticmethod
     def _build_econ_fix_prompt(
         candidate: dict[str, Any],
@@ -600,7 +692,7 @@ class OpenAIClient(LLMClient):
     ) -> str:
         """构造 L1 Bootstrapping Prompt。"""
         snapshot_summary = json.dumps(
-            {k: v for k, v in market_snapshot.items() if k not in ("trace_id", "chain_knowledge")},
+            {k: v for k, v in market_snapshot.items() if k not in ("trace_id", "chain_knowledge", "negative_factor_names")},
             ensure_ascii=False,
             default=str,
         )[:2000]
@@ -615,11 +707,20 @@ class OpenAIClient(LLMClient):
         chain_focus_block = (
             f"\n【本批聚焦子链】\n{chain_focus}\n" if chain_focus else ""
         )
+        # plans/44 B1: 已注入因子负面样本（≤20 个，防生成机制重复因子）
+        negative_names = market_snapshot.get("negative_factor_names") or []
+        negative_block = (
+            f"\n【已注入因子（负面样本 — 禁止生成机制/名称重复的因子）】\n"
+            f"{json.dumps(list(negative_names)[:20], ensure_ascii=False)}\n"
+            if negative_names
+            else ""
+        )
         return f"""你是因子工程专家（FTS L1 Bootstrapping Agent）。基于市场快照和辩论薄弱维度，生成 {max_candidates} 个期货因子候选。
 {chain_focus_block}
 【市场快照】
 {snapshot_summary}
 {chain_knowledge_block}
+{negative_block}
 【辩论薄弱维度】
 {gaps_summary}
 
@@ -914,6 +1015,26 @@ class MockLLMClient(LLMClient):
                 "微观结构路径清晰（波动率聚集反映订单流失衡），机构制度支撑充分（机构按锚定价值调仓强化回归）。"
             ),
         }
+
+    def fix_factor_code(
+        self,
+        code: str,
+        error_reason: str,
+        trace_id: str,
+    ) -> Optional[str]:
+        """plans/44 C1: Mock 修复 — 返回一个可通过语法验证的替换实现。"""
+        logger.info(
+            "[fix_factor_code] Mock 修复, trace_id=%s, error=%s, code_len=%d",
+            trace_id,
+            error_reason,
+            len(code),
+        )
+        return (
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    close = data['close']\n"
+            "    return np.zeros(len(close))\n"
+        )
 
 
 # ─── 工厂函数 ─────────────────────────────────────────────
