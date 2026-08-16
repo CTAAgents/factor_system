@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+77
+> 版本: v2.104.0+84
 > 最后更新: 2026-08-10
 
 ---
@@ -64,6 +64,31 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │      max_factors 配置化（A3，v2.104.0+71：l1_extractor_max_factors，  │
 │      研报/论文/宏观/WebSearch LLM 源统一配额，天软感知源不参与）       │
 │    多源并行收集（BaseExtractorPipeline.extract ThreadPoolExecutor）    │
+│  - 批量三层管线「采集(零 token)→粗筛(零 token)→LLM 深读」（plans/44    │
+│    P0，v2.104.0+82，BulkKnowledgeExtractor 注册进 FuturesExtractor     │
+│    Pipeline，l1_bulk_enabled 开关）：                                  │
+│    ├ bulk_collector.py — 全球多源批量采集：arXiv q-fin 4 类×50（l1_    │
+│    │   source_arxiv_max_results）+ OpenAlex（覆盖 SSRN 工作论文与全球   │
+│    │   期刊）+ 东财研报 pageSize=100（l1_source_report_page_size）+     │
+│    │   全球商品/原油报告（CFTC COT/EIA/IEA/OPEC），增量去重落独立库     │
+│    │   data/l1_knowledge_cache.duckdb（(source,ref_id) 唯一索引，       │
+│    │   E.4 短连接 + filelock），单日 ≥300 篇按来源分列审计（如实标注）  │
+│    ├ knowledge_filter.py — 粗筛层：TextEmbedder（paraphrase-           │
+│    │   multilingual-MiniLM-L12-v2 惰性加载，模型缺失降级关键词规则并    │
+│    │   如实标记）+ KnowledgeRelevanceFilter 余弦≥l1_embedding_threshold │
+│    │   + 语义去重 dedup_semantic（l1_dedup_threshold，l1_semantic_     │
+│    │   dedup 开关）                                                     │
+│    └ bulk_knowledge.py — BulkKnowledgeExtractor 深读层：命中子集        │
+│       ≤l1_knowledge_deepread_max 分块交 LLM 提取，token 受预算约束     │
+│  - LLM 编译修复 + 失败复活（plans/44 方向1，v2.104.0+82）：            │
+│    ├ LLMClient.fix_factor_code（基类 None + OpenAI + Mock 实现）：规则  │
+│    │   6 策略修复失败后交 LLM 修复代码，validate_factor_code 复核通过   │
+│    │   才采纳                                                          │
+│    └ l1_rejected_retry（Step 2.75 扫描同 market l1_rejected_*）：编译  │
+│       失败候选 LLM 修复→重验证→注入并移走（GAP-131 拒绝候选落盘闭环）  │
+│  - WebSearch 动态检索（plans/44 方向2 A1，v2.104.0+82）：             │
+│    KnowledgeGapQueryGenerator 统计已注入因子维度分布生成缺口 query +    │
+│    市场异动 query（l1_dynamic_websearch 开关）                         │
 │  - FactorReviewWorkflow 人审驳回 → ExperienceChain（GAP-I102 二期）     │
 │  - 感知层样本：期货 → 五大板块 13 品种；web_collector 期货模式走        │
 │    FTSDataProvider.get_futures_ohlcv（v2.100.1 按市场区分的机制已随     │
@@ -216,6 +241,15 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │        仍共享产业链驱动（原油→化工传导），同步放大子链暴露              │
 │      → 配置：settings.yaml l3.chain_dedup.{enabled, max_per_chain}      │
 │        （仅 market=energy 生效）                                        │
+│    Step 1.8c: OWL 因子分组筛选旁路（plans/41 方案 A，v2.104.0+84）      │
+│      → 与 Step 1.8 互补：信号聚类管"信号长得像不像"，OWL 管"对横截面   │
+│        收益有没有独立解释力"（横截面收益-载荷定价信息）                  │
+│      → OwlFactorSelector（cvxpy 有序加权 L1 + 组内正交 F 检验 +          │
+│        Bonferroni 校正）；复用 l3_signal_service 信号矩阵与 A 层缓存     │
+│      → 默认 report_only=true：只落盘 owl_report_{date}.json + 写          │
+│        state.owl_report，不修改 factors 列表（不越界主链路）             │
+│      → 配置：settings.yaml l3.owl.{enabled, weight_scheme, weight_tuning,│
+│        train_frac, group_corr_threshold, lambda_, report_only}          │
 │                                                                         │
 │  P2 PCA 降维流程:                                                       │
 │    Step 1.9: PCASignalCompressor.run() (可选，通过 enable_pca 控制)      │
@@ -428,12 +462,14 @@ fts/
 ├── factor_db/                   # DuckDB 因子数据库层
     ├── schema.py               # 数据库 Schema 定义（13 张表，含质量评分/状态历史/审计报告/反馈 4 表 + seed_lineage 溯源 + factor_reviews 审查表）
     ├── repository.py           # FactorRepository CRUD（含 `retire_factor()` 因子淘汰方法）
-    ├── quality_repository.py   # FactorQualityScoreRepository（质量评分持久化）
+    ├── quality_repository.py   # FactorQualityScoreRepository（质量评分持久化；晋升管线 `_write_to_duckdb` 消费，GAP-128）
     ├── status_repository.py    # FactorStatusRepository（生命周期状态历史，记录状态变迁日志）
-    ├── audit_repository.py     # FactorAuditReportRepository（审计报告持久化）
+    ├── audit_repository.py     # FactorAuditReportRepository（审计报告持久化；晋升管线 `_write_to_duckdb` 消费，GAP-128）
     ├── lineage.py              # FactorLineage 血缘追踪 + 批量审计
     └── correlations.py         # 因子相关性矩阵
 ```
+
+> **L3 质检落库数据流（GAP-128，v2.104.0+78）**：精英晋升时 `evolution_promote._write_to_duckdb` 除写入 `factor_catalog`（`quality_score`/`audit_report` 内嵌 `metadata`）与 `factor_evaluations` 外，另经 `FactorQualityScoreRepository.save_score()` / `FactorAuditReportRepository.save_report()` 落 `factor_quality_scores` / `factor_audit_reports` 专属表（写前按 factor_id 清理旧行保幂等，market 自动路由 stock/futures/energy，失败非阻塞仅告警）；存量因子由 `scripts/backfill_factor_quality_audit.py` 幂等回填。消费方：`energy_chain_degradation_dryrun.py` C 路血缘表、`catalog verify` 质检完整性校验、`monitor/http_server` 质检看板。
 
 ### 算子演化基础层（Phase C.2）
 
@@ -522,6 +558,11 @@ FTS (因子推演) — 支持期货横截面因子演化
 │ v2.104.0+69 增量跨因子组合校验：快照含 factor_signature（因子名集合 │
 │ 签名），增量仅在前后因子组合一致时计算，组合变更标记无效防虚假增量；│
 │ 综合得分语义 = 品种级 IC 翻转后的相对强弱评分（负分=回归预期非方向））│
+│ v2.104.0+81 盲测/IC 矩阵对齐修复（GAP-130）：_compute_holdout_ │
+│ validation + _compute_per_variety_ic_matrix 因子信号经 align_  │
+│ signal_to_dates 向量化对齐共同日期（替代尾部补零），消除新上市  │
+│ 品种（历史短于共同日期的尾部子集）信号-收益错位导致的盲测 IC   │
+│ 稀释误判（BZ0/PL0 由 ≈0 回升至训练池区间））                     │
 │    │                                                                │
 │    ▼                                                                │
 │ reports/{date}/futures_signals_{date}.md                            │
@@ -567,6 +608,8 @@ FTS (因子推演) — 支持期货横截面因子演化
 │ 多路径；_get_db()/DuckDBReader 读路径 read_only=True（E.4 S1 起）；_get_writer 已     │
 │ 降级为一次性短连接 deprecated（旧脚本兼容）                                           │
 └──────────────────────────────────────────────────────────────────────────────────────┘
+
+> **测试因子库隔离（GAP-129，v2.104.0+79）**：`get_db_path` 为单挂载点路由——4 个仓储类（FactorRepository/FactorQualityScoreRepository/FactorStatusRepository/FactorAuditReportRepository）构造时均局部 `from .schema import get_db_path`（调用时解析模块符号）。测试侧根 `tests/conftest.py` autouse fixture 替换该符号即全量重定向至每测试独立 tmp DuckDB（futures/energy 分库文件名保留、仓储连接自动 init_database 建表），常规测试零写真实库；真实路由断言 / 真实存量因子数据依赖测试以 `@pytest.mark.uses_real_factor_db` 显式豁免。生产路径（`fts/*`）不受 fixture 影响。**CI 护栏（v2.104.0+80）**：`scripts/verify_factor_db_untouched.py`（`--mode snapshot|check`，三表 COUNT + 行级 md5 指纹，路径直读 `schema.DATABASE_PATH_*` 常量防被隔离 fixture 架空）接入 `.github/workflows/ci.yml` test job——pytest 前 snapshot、后 check，任何测试写真实库即 CI 失败。
 
 ┌─ 期货截面中性化 + 回测真实性仿真（v2.59.0，GAP-F03/F02） ────────┐
 │ 板块映射（FUTURES_SECTOR_MAP 反向构建 {symbol: sector}）            │
@@ -632,6 +675,13 @@ FTS (因子推演) — 支持期货横截面因子演化
 │      bootstrap prompt 注入 chain_knowledge（12 训练品种/品种链条    │
 │      位置/盲测池/能化机制设计要求）；默认感知 12 能化品种；          │
 │      输出落 factor_pool_energy.json / l1_injected_energy/ 独立隔离  │
+│ GAP-131 拒绝候选落盘（v2.104.0+82）：硬失败（编译失败/重复）与软失败│
+│   重写后仍未达标候选落 l1_rejected_energy/（rejected_dir 由          │
+│   inject_dir 派生：l1_injected→l1_rejected / _energy 同理，可显式   │
+│   覆盖），含完整 code + l1_rejection 元数据（reasons/rejected_at/   │
+│   trace_id/market）；fix_factor_code Strategy 6 自动修复 LLM 高频   │
+│   语法瑕疵（&&/||→and/or、一元 !→not 保留 !=、^→**、条件行内赋值   │
+│   =→==、行尾残留反斜杠去除）                                       │
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌─ 多持有期 IC 体系（v2.90.0，GAP-060） ─────────────────────────┐
@@ -1088,13 +1138,17 @@ class FactorKind(str, Enum):
 
 ## 6. 各层循环运行时间
 
-| 循环 | 触发时间 | 频率 | 职责 |
 |:-----|:---------|:-----|:-----|
-| L1 Meta-Loop | 07:59 | 工作日每日 | 知识补给 + 种子注入（对齐 TRAE Schedule 期货 L1） |
-| L2 Evolution Loop | 00:00 | 工作日每日 | 夜间因子演化（对齐 TRAE Schedule 期货 L2） |
-| L3 Portfolio Loop | 19:00 | 工作日每日 | 期货路径（futures_elite + market=futures，v2.73.0）：因子筛选（P1 聚类先行 + CAP 安全阀，v2.104.0+67） + 信号合成(默认equal_weight，v2.103.0+23) + Verifier 校验；GAP-072 v2.99.0 与期货信号管道解绑，工作日每日收盘后重算组合权重（equal_weight 等权漂移小每日重算稳定；对齐 TRAE Schedule 期货 L3 19:00） |
+| 循环 | 触发时间 | 频率 | 职责 |
+| L1 Meta-Loop | 00:00 | 每日 | 知识补给 + 种子注入（45 计划调度基线，供 02:00 种子评估消费） |
+| L2 种子评估晋升 | 02:00 | 每日 | 45 计划候选①：种子相关性预检 + 评估晋升入 elite 池（先种子后演化，不重置演化状态计数器） |
+| L2 Evolution Loop（工作日） | 04:00 | 工作日 | 45 计划调度基线：小预算 max_generation≈10，父因子含当日刚晋升种子 |
+| L2 Evolution Loop（周末） | 周六 04:00 | 每周 | 45 计划调度基线：大预算 max_generation≈50，周末集中大规模演化 |
+| L2 批量挖掘 | 周日 06:00 | 每周 | 45 计划候选②：BatchMiner 批量漏斗，熔断隔离不污染演化状态 |
+| L3 Portfolio Loop | 06:00 | 工作日每日 | 期货路径（futures_elite + market=futures，v2.73.0）：因子筛选（P1 聚类先行 + CAP 安全阀，v2.104.0+67） + 信号合成(默认equal_weight，v2.103.0+23) + Verifier 校验；GAP-072 v2.99.0 与期货信号管道解绑，工作日每日开盘前重算组合权重（v2.103.0+23；对齐 TRAE Schedule 期货 L3，2026-08-14 调整为开盘前 06:00） |
 | 期货信号管道 | 20:00 | 工作日每日 | 独立调度（GAP-072 v2.99.0 与 L3 解绑）：因子选择与基础权重由 L3 组合（factor_weights.json）提供（v2.105.0），信号管道仅做信号计算 + Regime 档位缩放权重调整；品种级 IC 自适应保留；方向校正与 Ridge 权重学习已移除；L3 组合缺失/为空 → 严格模式报错退出 |
 | 因子巡检 (FactorInspector) | 03:00 | 每日 | 基于 batch_audit 自动检测退化因子并降级 |
+| L2 周度评审 | 周日 10:00 | 每周 | 45 计划候选③：精英重审 + 衰减评估 + 自动淘汰（替代月度衰减 + run() 每日调用） |
 | Health Check | 每 10 分钟 | 高频 | 状态监控 |
 
 ---

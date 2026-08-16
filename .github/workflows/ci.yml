@@ -79,9 +79,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install .[dev,evolution]
+      - name: Guard: snapshot real factor DB (pre-test)
+        # GAP-129 零污染护栏：测试前记录真实库三表 COUNT + 内容指纹基线
+        run: python scripts/verify_factor_db_untouched.py --mode snapshot --json
       - name: Run tests
         run: |
           python -m pytest tests/ --cov=fts --cov-report=xml --tb=short -q
+      - name: Guard: verify real factor DB untouched (post-test)
+        # 测试后对比基线：任何测试写真实 data/factor_catalog_*.duckdb → 差异 → CI 失败
+        run: python scripts/verify_factor_db_untouched.py --mode check --json
       - name: Upload coverage
         uses: codecov/codecov-action@v4
         with:

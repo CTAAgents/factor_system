@@ -1,6 +1,6 @@
 # FTS 股票管线剥离计划（不对称分离：主系统保留期货，股票独立成新项目）
 
-> 版本: v2.104.0+77-draft
+> 版本: v2.104.0+84-draft
 > 创建: 2026-08-12
 > 状态: **剥离完成并通过双项目整体验收**——股票独立项目 `d:\Programs\fts-stock`（v0.0.1）已组装并可独立运行（全量 5821 测试通过）；主系统（期货）股票残留已清理（测试全量 not-slow 6449 passed，13 个失败均为 DuckDB 锁冲突环境问题，非代码缺陷），P1-P6 全部完成，进入"边用边修"阶段
 > 关联: [F.1-data-contract-split-design.md](../design/F.1-data-contract-split-design.md)（契约拆分）、[F.2-evolution-engine-fork-design.md](../design/F.2-evolution-engine-fork-design.md)（引擎分叉）、[14-cross-market-generalization-plan.md](./14-cross-market-generalization-plan.md)（跨市场泛化）

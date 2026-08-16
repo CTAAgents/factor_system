@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.104.0+77
+> 版本: v2.104.0+84
 > 最后更新: 2026-08-10
 
 ---
@@ -84,6 +84,13 @@ FTS 配置采用三级优先级（高→低）：
 | `l3_g1_compress_curve` | str | `"linear"` | `FTS_L3_G1_COMPRESS_CURVE` | G1 压缩曲线（v2.104.0+X 配置化）：`linear`（线性）/ `sqrt`（更温和）/ `exp`（更激进）；默认 linear = 历史硬编码 |
 | `l3.chain_dedup.enabled` | bool | `true` | —（settings.yaml l3 段） | 子链维度去冗余开关（GAP-121 扩展，能源链专属）：`true`=同一子链保留因子数 ≤ max_per_chain（超限按综合评分降序截断）；`false`=关闭。仅 market=energy 生效 |
 | `l3.chain_dedup.max_per_chain` | int | `2` | —（settings.yaml l3 段） | 子链去冗余单子链保留因子数上限：与 Step 1.8 信号相关性聚类互补（同子链因子即使信号相关性低仍共享产业链驱动）；symbol_ic 缺失因子归 unknown 组直接保留 |
+| `l3.owl.enabled` | bool | `false` | —（settings.yaml l3 段） | OWL 因子分组筛选旁路开关（plans/41 方案 A，v2.104.0+84）：`true`=Step 1.8c 执行 OWL 旁路；`false`=零开销零行为变更 |
+| `l3.owl.report_only` | bool | `true` | —（settings.yaml l3 段） | OWL 旁路报告模式（默认 true）：`true`=仅输出交叉比对报告（落盘 `memory/portfolio/{universe}/owl/owl_report_{date}.json` + state.owl_report），不修改 factors 列表；`false` 预留契约本期不实现 |
+| `l3.owl.weight_scheme` | str | `"linear"` | —（settings.yaml l3 段） | OWL 权重衰减方案：`linear`/`exp`/`log`（非递增，大系数惩罚更重） |
+| `l3.owl.weight_tuning` | float | `0.5` | —（settings.yaml l3 段） | OWL 权重衰减强度 (0,1]：越大衰减越陡；0 退化全等权（≈LASSO 变体） |
+| `l3.owl.train_frac` | float | `0.7` | —（settings.yaml l3 段） | OWL 样本外切割训练窗比例（(0,1)，内部 clip 至 [0.5,0.95]）：系数只用训练窗拟合，检验窗仅验证稳定性（防数据窥探） |
+| `l3.owl.group_corr_threshold` | float | `0.5` | —（settings.yaml l3 段） | OWL 系数分组相关阈值：两两 |corr|≥thr 视为同组 |
+| `l3.owl.lambda_` | float | `0.05` | —（settings.yaml l3 段） | OWL 正则化强度（0.5/n 归一尺度，与 sklearn Lasso 对齐） |
 | `l3.synthesis.mode` | str | `"equal_weight"` | —（settings.yaml l3 段，CLI `--synthesis-mode` 优先） | L3 合成模式默认值（v2.104.0+62）：`equal_weight`/`quality_weight`/`sharpe_weight`/`elastic_net`/`adaptive`/`optimizer`/`risk_parity`；直接改配置即切换合成方法无需改代码 |
 | `l3.synthesis.optimizer_mode` | str | `"risk_parity"` | —（settings.yaml l3 段） | optimizer 类模式目标默认值：`risk_parity`/`mvo`/`bl`（v2.104.0+62）；`--synthesis-mode risk_parity` 即映射 optimizer + 本目标 |
 | `l3.factor_score.equal_weight_floor` | float | `0.5` | —（settings.yaml l3 段） | quality_weight 等权下限系数（配置项 SSOT，调参仅改本配置不改代码）：权重下限 = 系数 / N，防权重极端分化；提高系数可提升权重分散度但放大尾部因子暴露；代码默认 0.5 仅配置缺失兜底；取值域 (0,1] |
@@ -198,6 +205,7 @@ workflows:           # 产业链专属工作流（ENERGY_CHAIN_*）
     chemical_sectors: [...]     # 泛化范围（ENERGY_CHAIN_CHEMICAL_SECTORS）
     market: energy              # 因子库路由标记（ENERGY_CHAIN_MARKET）
     min_train_rows: 300         # 训练品种深度阈值（ENERGY_CHAIN_MIN_TRAIN_ROWS）
+    min_holdout_rows: 250       # 盲测池最小历史门槛（ENERGY_CHAIN_MIN_HOLDOUT_ROWS，v2.104.0+81 GAP-130；盲测 IC 验证跳过历史不足品种）
     l1_*: [...]                 # L1 独立输出目录（ENERGY_CHAIN_L1_*）
 ```
 

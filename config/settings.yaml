@@ -17,6 +17,10 @@ llm_temperature: 1.2
 # 天软 tinysoft 为静态 YAML 感知源，不调用 LLM，不参与该配额）
 l1_extractor_max_factors: 20
 
+# ── L1 拒绝候选复活（plans/44 C2，v2.104.0+83）──
+# 每次运行 Step 2.75 扫描 l1_rejected_*，对编译失败候选规则/LLM 修复后重新验证注入
+l1_rejected_retry: true
+
 # ── 演化配置 ──
 max_generations: 10
 population_size: 20
@@ -87,6 +91,18 @@ l3:
   synthesis:
     mode: equal_weight
     optimizer_mode: risk_parity
+  # OWL 因子分组筛选旁路（plans/41 方案 A）：与 Step 1.8 信号聚类互补——
+  # 信号聚类管"信号长得像不像"，OWL 管"对横截面收益有没有独立解释力"。
+  # report_only=true 仅输出交叉比对报告（memory/portfolio/{universe}/owl_report_*.json），
+  # 不修改 factors 列表；false 时按检验结果剔除非显著组（预留，本期不实现）。
+  owl:
+    enabled: false          # 默认关闭：零开销零行为变更
+    weight_scheme: linear   # OWL 权重衰减方案（linear/exp/log）
+    weight_tuning: 0.5      # 权重衰减强度 (0,1]
+    train_frac: 0.7         # 样本外切割训练窗比例（OWL 系数只用前段，防数据窥探）
+    group_corr_threshold: 0.5  # 系数分组相关阈值 |corr|>=thr 视为同组
+    lambda_: 0.05           # OWL 正则化强度（0.5/n 归一尺度，与 sklearn Lasso 对齐）
+    report_only: true
 
 # ── 日志 ──
 log_level: "INFO"

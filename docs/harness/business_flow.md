@@ -1,6 +1,6 @@
 # FTS 业务流程图
 
-> 版本: v2.104.0+77
+> 版本: v2.104.0+84
 > 最后更新: 2026-08-05
 
 ## 全景业务流
@@ -42,6 +42,9 @@
   │  ├── BootstrappingChain: 市场知识补给 (Web 感知)                        │
   │  ├── DebateQualityAnalyzer: 辩论质量分析                                │
   │  ├── FactorPoolManager: 因子池管理 (注入种子/淘汰劣质)                  │
+  │  ├── BulkKnowledgeExtractor: 批量采集→粗筛→LLM 深读 (≥300 篇/天)      │
+  │  ├── KnowledgeRelevanceFilter: embedding 粗筛 + 语义去重 (关键词降级)  │
+  │  ├── LLM 编译修复 + l1_rejected_retry: 失败候选复活 (GAP-131)          │
   │  ├── L1Verifier: L1 锁定协议                                            │
   │  └── MetaStateManager: 状态管理                                         │
   │       │                                                                 │
@@ -127,7 +130,9 @@
 时间线
   │
 07:59  L1 Meta-Loop 启动（工作日每日，对齐 TRAE Schedule 期货 L1）
-  │      ├── Web 感知 → 市场知识补给
+  │      ├── Web 感知 + 批量采集（arXiv/OpenAlex/东财/全球报告 ≥300 篇/天）→ 市场知识补给
+  │      ├── embedding 粗筛 → LLM 深读提取（≤l1_knowledge_deepread_max）
+  │      ├── 编译失败候选 LLM 修复/复活（l1_rejected_retry）
   │      ├── 种子因子注入 → l1_injected/ + factor_pool.json（pending）
   │      └── 演化方向指引 → L2
   │
@@ -188,6 +193,6 @@
 
 | 字段 | 值 |
 |:-----|:----|
-| 代码→文档映射 | 本文件描述 FTS 全景业务流，覆盖 `meta_loop.py`（L1）、`evolution_loop.py`（L2）、`portfolio_loop.py`（L3）、`scheduler/engine.py`（调度器）、`monitor/`（监控）各模块的职责边界和触发时序 |
-| 可验证断言 | 业务流包含 L0~L3 四层 + 信号输出层共 5 层架构；时序图中 L1 07:59 / L3 期货 19:00 / L2 00:00 + 期货信号管道 20:00 + 每 10 分钟健康检查（股票 L3 19:30 与股票信号管道 08:45 已随股票管线剥离至 fts-stock，2026-08）；角色边界表中 L1 不可修改因子代码、L2 不可构建组合、L3 不执行交易 |
+| 代码→文档映射 | 本文件描述 FTS 全景业务流，覆盖 `meta_loop.py`（L1）、`extractors/bulk_collector.py`+`bulk_knowledge.py`+`knowledge_filter.py`（L1 批量三层管线）、`evolution_loop.py`（L2）、`portfolio_loop.py`（L3）、`scheduler/engine.py`（调度器）、`monitor/`（监控）各模块的职责边界和触发时序 |
+| 可验证断言 | 业务流包含 L0~L3 四层 + 信号输出层共 5 层架构；时序图中 L1 07:59 / L3 期货 19:00 / L2 00:00 + 期货信号管道 20:00 + 每 10 分钟健康检查（股票 L3 19:30 与股票信号管道 08:45 已随股票管线剥离至 fts-stock，2026-08）；L1 07:59 时序含批量采集(≥300 篇/天)→embedding 粗筛→LLM 深读与失败复活（l1_rejected_retry）；角色边界表中 L1 不可修改因子代码、L2 不可构建组合、L3 不执行交易 |
 | 检验方式 | 对照 `01-architecture.md` 架构文档确认层级定义一致；检查 `scheduler/tasks.py` 确认定时任务时间点一致

@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.104.0+77
+> 版本: v2.104.0+84
 > 最后更新: 2026-08-10
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -28,6 +28,27 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 ---
 
 ## 2. 已完成里程碑
+
+### 质检结果落库 SSOT 闭环（2026-08-16，build bump v2.104.0+78，GAP-128）
+
+**完成时间**: 2026-08-16
+
+**核心产出**:
+- ✅ **管线治本**：`evolution_promote._write_to_duckdb` 落库后追加 `FactorQualityScoreRepository.save_score` / `FactorAuditReportRepository.save_report`（写前按 factor_id 清理旧行保幂等，market 自动路由 stock/futures/energy，失败非阻塞仅告警），`factor_quality_scores`/`factor_audit_reports` 专属表从此随晋升自动落库
+- ✅ **存量回填**：新增 `scripts/backfill_factor_quality_audit.py` 全市场幂等回填（factor_catalog.metadata → 两表，先清后插 + 孤儿清理），futures 105/103、energy 306/307 实测回填完成，`factor_audit_reports`/`factor_quality_scores` 两表从 0 条补齐至全量（旧因子无质检记录者如实跳过不伪造）
+- ✅ 测试：新增 test_backfill_factor_quality_audit.py + test_evolution_promote_gap128.py 共 7 用例全绿
+- ✅ 差距登记：GAP-128 登记并关闭（P1，质检结果未落库 SSOT 缺陷）
+
+### 测试因子库隔离（2026-08-16，build bump v2.104.0+79，GAP-129，plans/43）
+
+**完成时间**: 2026-08-16
+
+**核心产出**:
+- ✅ **单挂载点全局隔离**：根 `tests/conftest.py` autouse fixture `_isolated_factor_db` 于 `fts.factor_engine.factor_db.schema.get_db_path` 全局重定向至每测试独立 tmp DuckDB——4 仓储类构造时局部导入该符号一改全生效（futures/energy 分库文件名保留、仓储连接自动 init_database 建表），107 处测试调用零触碰零改造
+- ✅ **豁免机制**：`uses_real_factor_db` 标记注册（pytest_configure）+ 5 处豁免（真实路由断言 test_energy_chain/test_factor_db/test_cli_extra/test_evolution_loop + 真实存量因子代码数据依赖 test_bincount_boundary）
+- ✅ **验证测试**：新增 tests/test_factor_db_isolation.py 4 用例（隔离/仓储落 tmp/晋升零污染/豁免路由真实）；零污染实测 test_evolution_loop 242 用例运行后真实库 futures 343/105/103、energy 307/306/307 三表 COUNT 与基线完全一致
+- ✅ 受影响回归 factor_db 目录 + test_factor_db + test_cli_extra 219 passed、隔离/豁免 7 passed、energy_chain+bincount 286 passed、ruff 全绿
+- ✅ 差距登记：GAP-129 登记并关闭（P1，测试组写真实因子库污染生产 SSOT）
 
 ### L1 知识注入与因子注入增强（2026-08-16，build bump v2.104.0+70，plans/41）
 
