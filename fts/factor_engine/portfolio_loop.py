@@ -2272,6 +2272,133 @@ def _cap_safety_valve(
     return sorted_factors[:cap]
 
 
+def _run_owl_sidecar(
+    self: Any,
+    factors: list[dict[str, Any]],
+    panel_data: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """OWL 因子分组筛选旁路（plans/41 方案 A，Step 1.8c）。
+
+    与 Step 1.8 信号聚类互补：OWL 用横截面收益-载荷信息，判断"哪组因子对
+    横截面收益有独立解释力"。report_only=true 默认只输出交叉比对报告，
+    不修改 factors 列表（避免越界改动主链路）。
+
+    复用 plans/40 `l3_signal_service.build_signal_matrix`（叠加 A 层信号缓存，
+    不重复重算），产出 2D 信号矩阵 + 横截面平均前向收益 → 构造 OWL 输入。
+
+    Args:
+        self: PortfolioLoop 实例（读 owl_enabled/owl_report_only/_owl_selector_kwargs/
+            memory_dir/market/state）
+        factors: Step 1.8b 后的代表因子列表
+        panel_data: {symbol: DataFrame(OHLCV)} 市场面板
+
+    Returns:
+        dict:
+            - summary: {significant_groups, nonsignificant_factors, conflict_*, report_path}
+            - significant_groups / nonsignificant_factors / conflict_* 明细
+            - report_path: 落盘报告路径（或 None）
+        OWL 不可用/输入不足返回 None（旁路非致命）
+    """
+    try:
+        from .owl_factor_selector import OwlFactorSelector
+
+        if self._owl_selector is None:
+            self._owl_selector = OwlFactorSelector(**self._owl_selector_kwargs)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[L3] Step 1.8c: OWL 导入失败 (非致命): %s", e)
+        return None
+
+    # 构造 OWL 输入：2D 信号矩阵 + 横截面平均前向收益
+    from .l3_signal_service import build_signal_matrix
+
+    valid_factors = [f for f in factors if f.get("factor_id") or f.get("code")]
+    if len(valid_factors) < 3 or not panel_data:
+        return None
+    factor_codes = {f["factor_id"]: f for f in valid_factors if f.get("factor_id")}
+    try:
+        # 共同日期：取各品种 index 交集（与 build_signal_matrix 内部对齐一致）
+        common_dates = sorted(set.intersection(*(set(df.index) for df in panel_data.values() if df is not None and not df.empty)))
+    except Exception:  # noqa: BLE001
+        common_dates = []
+    if len(common_dates) < 30:
+        logger.warning("[L3] Step 1.8c: 共同日期不足 (%d)，跳过 OWL", len(common_dates))
+        return None
+
+    try:
+        bundle = build_signal_matrix(
+            panel_data,
+            valid_factors,
+            factor_codes,
+            common_dates,
+            forward_days=5,
+            signal_cache=getattr(self, "_signal_cache", None),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[L3] Step 1.8c: 信号矩阵构建失败 (非致命): %s", e)
+        return None
+
+    if bundle.signal_matrix.size == 0 or bundle.forward_returns.size == 0:
+        return None
+
+    # 3D (n_dates, n_stocks, n_factors) → 横截面信号：逐日跨品种均值（对齐
+    # 横截面收益口径）；y 用各日品种均值前向收益
+    X = np.nanmean(bundle.signal_matrix, axis=1)  # (n_dates, n_factors)
+    y = np.nanmean(bundle.forward_returns, axis=1)  # (n_dates,)
+    # 全 NaN 行剔除（收益缺失日无信息）
+    valid_rows = np.isfinite(y) & np.isfinite(X).any(axis=1)
+    X = X[valid_rows]
+    y = y[valid_rows]
+    if X.shape[0] < 30 or X.shape[1] < 3:
+        return None
+
+    result = self._owl_selector.select(X, y, factor_ids=bundle.factor_ids)
+    if not result.applied:
+        return None
+
+    # 交叉比对：信号聚类剔除（Step 1.8 已执行，此处仅 OWL 视角）——
+    # 收集 OWL 显著但不在当前 factors 里的因子（OWL 对当前因子池判断，
+    # conflict 以"OWL 判显著但位于其建议剔除名单之外"为粒度；此处简化：
+    # 输出 OWL 建议剔除名单 + 显著组，供人工复核）
+    report: dict[str, Any] = {
+        "applied": True,
+        "beta": np.round(result.beta, 6).tolist() if result.beta is not None else None,
+        "groups": result.groups,
+        "significant_groups": result.significant_groups,
+        "nonsignificant_factors": result.nonsignificant_factors,
+        "train_frac": result.train_frac,
+        "n_train": result.n_train,
+        "factor_ids": bundle.factor_ids,
+    }
+
+    summary = {
+        "significant_groups": result.significant_groups,
+        "nonsignificant_factors": result.nonsignificant_factors,
+        "n_groups": len(result.groups),
+        "n_significant_groups": len(result.significant_groups),
+        "n_factors": len(bundle.factor_ids),
+        "conflict_cluster_dropped_owl_kept": [],
+        "report_only": self.owl_report_only,
+    }
+
+    # 落盘报告（memory/portfolio/{universe}/owl_report_{date}.json）
+    report_path: Optional[str] = None
+    try:
+        from datetime import date
+
+        out_dir = Path(self.memory_dir) / "owl"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        report_path = str(out_dir / f"owl_report_{date.today().isoformat()}.json")
+        Path(report_path).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        summary["report_path"] = report_path
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[L3] Step 1.8c: OWL 报告落盘失败 (非致命): %s", e)
+
+    return {"summary": summary, **report}
+
+
 MIN_EVAL_DAYS: int = 500
 """最小评价窗口（交易日数）：面板数据回溯天数，确保评价窗口足够长避免短窗口虚高。"""
 
@@ -3915,6 +4042,7 @@ class PortfolioLoop:
         enable_chain_dedup: bool = True,
         chain_dedup_max_per_chain: int = 2,
         signal_store: Optional[tuple[str, str, str]] = None,
+        owl_config: Optional[dict[str, Any]] = None,
     ):
         self.memory_dir = Path(memory_dir)
         self.elite_dir = Path(elite_dir)
@@ -3956,6 +4084,20 @@ class PortfolioLoop:
         # 子链维度去冗余（GAP-121 扩展）：单子链因子数上限，防产业链暴露集中
         self.enable_chain_dedup = enable_chain_dedup
         self.chain_dedup_max_per_chain = max(1, int(chain_dedup_max_per_chain))
+        # plans/41 方案 A：OWL 因子分组筛选旁路配置（settings.yaml l3.owl）
+        # enabled=false（默认）零开销零行为变更；enabled+report_only=true 仅输出
+        # 交叉比对报告，不修改 factors 列表（避免越界改动主链路）。
+        owl_cfg = dict(owl_config or {})
+        self.owl_enabled = bool(owl_cfg.get("enabled", False))
+        self.owl_report_only = bool(owl_cfg.get("report_only", True))
+        self._owl_selector: Optional[Any] = None
+        self._owl_selector_kwargs = {
+            "weight_scheme": owl_cfg.get("weight_scheme", "linear"),
+            "weight_tuning": float(owl_cfg.get("weight_tuning", 0.5)),
+            "train_frac": float(owl_cfg.get("train_frac", 0.7)),
+            "group_corr_threshold": float(owl_cfg.get("group_corr_threshold", 0.5)),
+            "lambda_": float(owl_cfg.get("lambda_", 0.05)),
+        }
         # GAP-L303: optimizer 模式与配置（synthesis_mode="optimizer" 时生效）
         self.optimizer_mode = optimizer_mode
         self.optimizer_config = dict(optimizer_config or {})
@@ -4619,6 +4761,33 @@ class PortfolioLoop:
                     self.enable_chain_dedup,
                     self.market,
                     len(factors),
+                )
+
+            # Step 1.8c: OWL 因子分组筛选旁路（plans/41 方案 A）
+            # 与 Step 1.8 信号聚类互补：信号聚类管"信号长得像不像"，OWL 管
+            # "对横截面收益有没有独立解释力"。默认 report_only=true 仅输出
+            # 交叉比对报告，不修改 factors 列表（避免越界改动主链路）。
+            if self.owl_enabled and len(factors) >= 3 and panel_data:
+                logger.info("[L3] Step 1.8c: OWL 因子分组筛选旁路 (factors=%d)", len(factors))
+                try:
+                    owl_result = _run_owl_sidecar(self, factors, panel_data)
+                    if owl_result is not None:
+                        state["owl_report"] = owl_result.get("summary", {})
+                        logger.info(
+                            "[L3] Step 1.8c: OWL 完成 — 显著组 %d 个 / 建议剔除 %d 个 / "
+                            "信号聚类剔除∩OWL保留(待复核) %d 个",
+                            len(owl_result.get("significant_groups", [])),
+                            len(owl_result.get("nonsignificant_factors", [])),
+                            len(owl_result.get("conflict_cluster_dropped_owl_kept", [])),
+                        )
+                except Exception as e:
+                    logger.warning("[L3] Step 1.8c: OWL 旁路失败 (非致命): %s", e)
+            else:
+                logger.info(
+                    "[L3] Step 1.8c: OWL 旁路跳过 (enabled=%s, n_factors=%d, panel=%s)",
+                    self.owl_enabled,
+                    len(factors),
+                    bool(panel_data),
                 )
 
             # Step 1.7: 因子数量安全阀（ACTIVE_FACTOR_CAP，v2.104.0+67 起后置）

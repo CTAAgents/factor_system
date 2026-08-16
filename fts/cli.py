@@ -620,6 +620,7 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
         cluster_threshold = float(cluster_cfg.get("threshold", 0.7))
         cluster_top_n = int(cluster_cfg.get("top_n", 1))
         chain_dedup_cfg = l3_cfg.get("chain_dedup") or {}
+        owl_cfg = l3_cfg.get("owl") or {}
         loop = PortfolioLoop(
             elite_dir=elite_dir,
             memory_dir=cfg.memory_dir + f"/portfolio/{universe}",
@@ -632,6 +633,7 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
             cluster_top_n=cluster_top_n,
             enable_chain_dedup=bool(chain_dedup_cfg.get("enabled", True)),
             chain_dedup_max_per_chain=int(chain_dedup_cfg.get("max_per_chain", 2)),
+            owl_config=owl_cfg,
         )
         # GAP-I302: optimizer 模式与实测化输入（returns-matrix CSV）
         factor_returns = None
