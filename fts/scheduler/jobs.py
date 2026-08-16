@@ -916,11 +916,13 @@ def logic_monitor_job() -> None:
 
     从因子数据库加载活跃精英因子，逐个执行 LogicMonitor.run()，
     生成监控报告并记录日志。
+
+    市场口径（v2.104.0+103）：跟随全局 FTS_DEFAULT_MARKET（默认 energy 能化链，
+    监控 factor_catalog_energy；futures 时监控期货通用库），与因子巡检口径一致。
     """
+    market = _global_market()
     trace_id = f"fts.logic.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    logger.info("[逻辑监控] 启动 trace_id=%s", trace_id)
-    if not _market_gate("futures", task="逻辑监控"):
-        return
+    logger.info("[逻辑监控] 启动 trace_id=%s market=%s", trace_id, market)
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.monitor.logic_monitor import LogicMonitor
@@ -928,8 +930,8 @@ def logic_monitor_job() -> None:
 
         logic = LogicMonitor()
 
-        # 加载活跃精英因子（期货因子库，股票剥离后主系统仅期货）
-        repo = FactorRepository(market="futures")
+        # 加载活跃精英因子（市场跟随全局：energy 能化链 / futures 期货通用库）
+        repo = FactorRepository(market=market)
         conn = repo._get_conn()
         rows = conn.execute("SELECT * FROM factor_catalog WHERE is_elite = 1 AND status = 'active'").fetchall()
         columns = [desc[0] for desc in conn.description]

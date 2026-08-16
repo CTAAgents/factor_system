@@ -385,8 +385,10 @@ class TestFuturesSignalPipeline:
 
         assert "[信号管道] 失败: pipeline crash" in caplog.text
 
-    def test_futures_signal_pipeline_job(self, caplog):
-        """独立任务入口调用 _run_futures_signal_pipeline。"""
+    @patch("fts.config.get_config")
+    def test_futures_signal_pipeline_job(self, mock_cfg, caplog):
+        """独立任务入口调用 _run_futures_signal_pipeline（全局市场 futures 时执行）。"""
+        mock_cfg.return_value = types.SimpleNamespace(default_market="futures")
         with patch("fts.scheduler.jobs._run_futures_signal_pipeline") as mock_pipeline:
             caplog.set_level(logging.INFO)
             jobs.futures_signal_pipeline_job()

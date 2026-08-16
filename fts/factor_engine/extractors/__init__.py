@@ -16,9 +16,18 @@ from __future__ import annotations
 
 from .base import BaseExtractor, BaseExtractorPipeline
 from .futures_pipeline import FuturesExtractorPipeline
+from .source_discovery import DiscoveryRecord, DiscoveryStore, SourceDiscoverer
+from .source_registry import SourceInfo, SourceProber, SourceRegistry, is_probe_acceptable
 
 __all__ = [
     "BaseExtractor",
     "BaseExtractorPipeline",
     "FuturesExtractorPipeline",
+    "SourceRegistry",
+    "SourceInfo",
+    "SourceProber",
+    "is_probe_acceptable",
+    "SourceDiscoverer",
+    "DiscoveryStore",
+    "DiscoveryRecord",
 ]

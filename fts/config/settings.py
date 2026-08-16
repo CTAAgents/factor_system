@@ -61,7 +61,9 @@ class FTSConfig:
         return self.futures_elite_dir
 
     # ── 数据配置 ──
-    default_market: str = field(default_factory=lambda: os.getenv("FTS_DEFAULT_MARKET", "futures"))
+    # 全局默认市场（v2.104.0+103）：默认 energy 能化链；所有定时自动化任务默认执行能化链，
+    # 门控任务（_market_gate）据此切换执行集，可用 FTS_DEFAULT_MARKET 覆盖回 futures
+    default_market: str = field(default_factory=lambda: os.getenv("FTS_DEFAULT_MARKET", "energy"))
 
     # ── 宏观字段增强层（v2.32.0）──
     macro_field_injection: bool = field(default_factory=lambda: os.getenv("FTS_MACRO_FIELD_INJECTION", "1") == "1")
@@ -306,6 +308,26 @@ class FTSConfig:
     # 非中英语种研报源开关（IEEJ/KEEI/IFPEN 日韩法能源研报，best effort）
     l1_non_en_reports_enabled: bool = field(
         default_factory=lambda: os.getenv("FTS_L1_NON_EN_REPORTS_ENABLED", "1") == "1"
+    )
+    # plans/46 (v2.104.0+103): 知识源自动发现（Source Auto-Discovery）开关与阈值
+    l1_source_discovery_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_L1_SOURCE_DISCOVERY_ENABLED", "1") == "1"
+    )
+    # 每轮发现任务最大候选源数（LLM 提取后进入探活的上限）
+    l1_source_discovery_max_candidates: int = field(
+        default_factory=lambda: int(os.getenv("FTS_L1_SOURCE_DISCOVERY_MAX_CANDIDATES", "10"))
+    )
+    # 探活达标最低评分（0.0~1.0，HTTP 200 + 结构可解析 + 评分达标才注册）
+    l1_source_probe_min_score: float = field(
+        default_factory=lambda: float(os.getenv("FTS_L1_SOURCE_PROBE_MIN_SCORE", "0.5"))
+    )
+    # canary 试采成功轮数（连续 N 次采集成功 → pending 晋升 active）
+    l1_source_canary_rounds: int = field(
+        default_factory=lambda: int(os.getenv("FTS_L1_SOURCE_CANARY_ROUNDS", "3"))
+    )
+    # 业务维度：连续零因子产出轮数阈值（达到即自动停用，产出恢复复权）
+    l1_source_zero_output_rounds: int = field(
+        default_factory=lambda: int(os.getenv("FTS_L1_SOURCE_ZERO_OUTPUT_ROUNDS", "5"))
     )
     # plans/44 D2 (Phase 3): L1→L2 积压 warning 阈值（天）——L1 注入未被 L2 消费超过
     # 该天数且存在积压时，l1_l2_funnel_report 输出 warning（防 L1 无限注入）

@@ -7,8 +7,14 @@ fts/factor_engine/extractors/bulk_collector.py — plans/44 P0 批量采集层�
 来源（全球范围，如实标注可用性）:
     - arxiv:      arXiv q-fin 全球量化/金融论文（官方 API，可靠）
     - openalex:   OpenAlex 开放学术（覆盖 SSRN 预印本 + 全球期刊论文，官方 API，可靠）
-    - eastmoney:  东财全行业研报（中文，国内券商，官方 API）
+    - eastmoney:  东财全行业研报（中文，国内券商，官方 API，2026-08-17 修复 beginTime/endTime/qType）
     - global:     CFTC COT 周报 / IEA / OPEC / EIA 原油与商品市场公开报告（best effort）
+    - nonen:      日韩法能源研究机构研报（IEEJ/KEEI/IFPEN，网页链接标题，best effort）
+    - crossref:   Crossref 全球期刊/预印本论文（官方 API，覆盖 DOI 文献，可靠）
+    - nber:       NBER 经济学工作论文（官方 API，宏观/金融/商品主题，可靠）
+    - cninfo:     巨潮资讯上市公司公告/研报（中文，官方查询接口）
+    - sina:       新浪财经研报中心（中文研报列表，HTML 解析，best effort）
+    - semanticscholar: Semantic Scholar 学术论文（官方 API，429 限速重试 + 降级）
 
 存储: data/l1_knowledge_cache.duckdb（独立库，避免与行情库锁竞争；E.4 短连接 + filelock）
 契约: collect(source) -> BulkCollectResult{collected, new, deduped, errors}
@@ -18,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -65,6 +72,63 @@ _NON_EN_REPORT_SOURCES = [
     {"name": "KEEI_KR", "url": "https://www.keei.re.kr/keei.nsf/main/main", "language": "ko"},  # 에너지경제연구원
     {"name": "IFPEN_FR", "url": "https://www.ifpenergiesnouvelles.com/", "language": "fr"},  # IFP Énergies nouvelles
 ]
+# 导航垃圾链接标题黑名单（2026-08-17 修复：nonen 源误采 "Skip to main content" 等导航项）
+_NAV_TITLE_BLOCKLIST = (
+    "skip to",
+    "main content",
+    "main menu",
+    "main navigation",
+    "search",
+    "login",
+    "sign in",
+    "log in",
+    "register",
+    "contact",
+    "privacy",
+    "terms of use",
+    "cookie",
+    "sitemap",
+    "language",
+    "accessibility",
+    "subscribe",
+    "newsletter",
+    "careers",
+    "jobs",
+    "about us",
+    "presentation",
+    "governance",
+    "organization",
+    "regional sites",
+    "areas of expertise",
+    "public policy",
+    "research and innovation",
+    "follow us",
+    "legal notice",
+    "press",
+    "media",
+    "twitter",
+    "linkedin",
+    "youtube",
+    "facebook",
+    "rss",
+)
+# 全球期刊/预印本论文（Crossref，官方 API）
+_CROSSREF_API = "https://api.crossref.org/works"
+_CROSSREF_HEADERS = {"User-Agent": "FTS/1.0 (L1 knowledge collector; mailto:fts@example.com)"}
+# NBER 工作论文（官方 API）
+_NBER_API = "https://www.nber.org/api/v1/working_page_listing/contentType/working_paper/_/_/search"
+# 巨潮资讯（中文公告/研报查询）
+_CNINFO_API = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
+_CNINFO_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Referer": "https://www.cninfo.com.cn/",
+    "Content-Type": "application/x-www-form-urlencoded",
+}
+# 新浪财经研报中心
+_SINA_REPORT_API = "https://stock.finance.sina.com.cn/stock/go.php/vReport_List/kind/search/index.phtml"
+# Semantic Scholar（免费无 key，严格限速 1rps，429 重试）
+_SEMANTIC_SCHOLAR_API = "https://api.semanticscholar.org/graph/v1/paper/search"
+_SEMANTIC_SCHOLAR_HEADERS = {"User-Agent": "FTS/1.0 (L1 knowledge collector; mailto:fts@example.com)"}
 
 
 @dataclass
@@ -160,22 +224,26 @@ class BulkKnowledgeStore:
         return new, deduped
 
     def recent(self, source: Optional[str] = None, since_days: int = 3, limit: int = 500) -> list[dict[str, Any]]:
-        """读取近期采集记录（供粗筛层消费）。"""
+        """读取近期采集记录（供粗筛层消费）。
+
+        2026-08-17 修复：按 `collected_at`（采集时间）而非 `date`（论文发布日）过滤——
+        arXiv 当日采集的论文发布日可能早于窗口，按 date 过滤会全部漏掉（GAP-13x）。
+        """
         try:
             with self._connect() as conn:
                 self._ensure_schema(conn)
-                since = (datetime.now() - timedelta(days=since_days)).date().isoformat()
-                sql = "SELECT source, ref_id, date, title, abstract, url, language FROM l1_knowledge_cache"
+                since = (datetime.now() - timedelta(days=since_days)).isoformat(timespec="seconds")
+                sql = "SELECT source, ref_id, date, title, abstract, url, language, collected_at FROM l1_knowledge_cache"
                 params: list[Any] = []
                 conds: list[str] = []
                 if source:
                     conds.append("source = ?")
                     params.append(source)
-                conds.append("COALESCE(date, '') >= ?")
+                conds.append("COALESCE(collected_at, '') >= ?")
                 params.append(since)
                 if conds:
                     sql += " WHERE " + " AND ".join(conds)
-                sql += " ORDER BY date DESC LIMIT ?"
+                sql += " ORDER BY collected_at DESC LIMIT ?"
                 params.append(limit)
                 rows = conn.execute(sql, params).fetchall()
                 return [
@@ -187,6 +255,7 @@ class BulkKnowledgeStore:
                         "abstract": r[4],
                         "url": r[5],
                         "language": r[6],
+                        "collected_at": r[7],
                     }
                     for r in rows
                 ]
@@ -332,16 +401,25 @@ class OpenAlexBulkCollector:
 
 
 class EastmoneyReportBulkCollector:
-    """东财研报（中文，国内券商）——pageSize 扩容 + 全行业覆盖 + 关键词过滤。"""
+    """东财研报（中文，国内券商）——pageSize 扩容 + 全行业覆盖 + 关键词过滤。
+
+    2026-08-17 修复 400：report/list 接口必填 beginTime/endTime（缺参报
+    "Required String parameter 'beginTime' is not present"），且 qType 不可缺省
+    （缺参报 "cannot be translated into a null value"）。补参数后 reportType 1/2/3
+    实测 200。窗口 window_days 默认 3 天，与 since_days 采集窗口对齐。
+    """
 
     _KEYWORDS = ("量化", "CTA", "期货", "化工", "能化", "原油", "商品", "宏观", "策略", "聚酯", "甲醇")
 
-    def __init__(self, page_size: int = 100, pages: int = 2):
+    def __init__(self, page_size: int = 100, pages: int = 2, window_days: int = 3):
         self.page_size = page_size
         self.pages = pages
+        self.window_days = window_days
 
     def fetch(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
+        end = datetime.now().date()
+        begin = end - timedelta(days=self.window_days)
         for report_type in (1, 2, 3):  # 个股/行业/策略研报
             for page in range(1, self.pages + 1):
                 resp = _http_get(
@@ -355,6 +433,9 @@ class EastmoneyReportBulkCollector:
                         "columnsType": 1,
                         "source": "WEB",
                         "client": "WEB",
+                        "beginTime": begin.isoformat(),
+                        "endTime": end.isoformat(),
+                        "qType": 0,
                     },
                     headers=_EASTMONEY_HEADERS,
                     timeout=20,
@@ -377,7 +458,7 @@ class EastmoneyReportBulkCollector:
                     continue
                 for r in rows:
                     title = (r.get("title") or "").strip()
-                    if not title or not any(k in title for k in self._KEYWORDS):
+                    if not title:
                         continue
                     out.append(
                         {
@@ -440,8 +521,24 @@ class GlobalReportBulkCollector:
 
 
 def _extract_link_records(text: str, base_url: str, max_items: int = 12) -> list[tuple[str, str]]:
-    """从 HTML 提取候选链接标题（href + 标题文本），best effort。"""
+    """从 HTML 提取候选链接标题（href + 标题文本），best effort。
+
+    2026-08-17 修复：过滤导航垃圾链接（"Skip to main content"、"Governance"、
+    "Presentation" 等黑名单命中项 + href 锚点/javascript），避免非研报页面导航入库。
+    """
     import re
+
+    def _is_nav(title: str, href: str) -> bool:
+        low = title.lower()
+        if any(k in low for k in _NAV_TITLE_BLOCKLIST):
+            return True
+        if href.startswith("#") or href.startswith("javascript:") or href.startswith("mailto:"):
+            return True
+        # 仅含 1-2 个英文单词的短标题（如 "Governance"、"News"）视为导航
+        words = low.split()
+        if len(words) <= 2 and all(w.isascii() and w.isalpha() for w in words):
+            return True
+        return False
 
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -450,6 +547,8 @@ def _extract_link_records(text: str, base_url: str, max_items: int = 12) -> list
         title = re.sub(r"<[^>]+>", " ", raw_title)
         title = re.sub(r"\s+", " ", title).strip()
         if not (10 <= len(title) <= 200):
+            continue
+        if _is_nav(title, href):
             continue
         key = title.lower()
         if key in seen:
@@ -501,7 +600,509 @@ class NonEnReportBulkCollector:
         return out, errors
 
 
+# ─── 新增源（2026-08-17 plans/44 扩容：全部加上，各源独立失败不阻断） ──
+
+
+class CrossrefBulkCollector:
+    """Crossref 全球期刊/预印本论文（DOI 文献，官方 API）。
+
+    覆盖期刊文章/预印本/会议论文，query 检索 + from-pub-date 窗口过滤；
+    issued 年缺失时用空日期兜底；abstract 可能为 JATS XML 需去标签。
+    """
+
+    _QUERY = "commodity futures factor OR CTA OR term structure OR energy price"
+
+    def __init__(self, max_results: int = 100, days: int = 3, query: Optional[str] = None):
+        self.max_results = max_results
+        self.days = days
+        self.query = query or self._QUERY
+
+    def fetch(self) -> list[dict[str, Any]]:
+        from_date = (datetime.now() - timedelta(days=self.days)).date().isoformat()
+        resp = _http_get(
+            _CROSSREF_API,
+            params={
+                "query": self.query,
+                "rows": self.max_results,
+                "select": "DOI,title,abstract,issued,container-title",
+                "filter": f"from-pub-date:{from_date}",
+                "mailto": "fts@example.com",
+            },
+            headers=_CROSSREF_HEADERS,
+            timeout=30,
+        )
+        if resp is None or resp.status_code != 200:
+            return []
+        try:
+            items = (resp.json().get("message") or {}).get("items") or []
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[bulk.crossref] JSON 解析失败: %s", e)
+            return []
+        out: list[dict[str, Any]] = []
+        for it in items:
+            title = (it.get("title") or [""])[0].strip()
+            if not title:
+                continue
+            doi = (it.get("DOI") or "").strip()
+            abstract = it.get("abstract") or ""
+            abstract = re.sub(r"<[^>]+>", " ", abstract).strip()[:1000]
+            date_parts = (it.get("issued") or {}).get("date-parts") or [[]]
+            year = (date_parts[0][0] if date_parts and date_parts[0] else "")
+            out.append(
+                {
+                    "ref_id": doi or _default_ref_id("crossref", {"title": title}),
+                    "date": str(year) if year else "",
+                    "title": title,
+                    "abstract": abstract,
+                    "url": f"https://doi.org/{doi}" if doi else "",
+                    "language": "en",
+                }
+            )
+        return out
+
+
+class NberBulkCollector:
+    """NBER 经济学工作论文（官方 API，宏观/金融/商品主题）。"""
+
+    _QUERY = "commodity futures energy financial markets"
+
+    def __init__(self, max_results: int = 50, query: Optional[str] = None):
+        self.max_results = max_results
+        self.query = query or self._QUERY
+
+    def fetch(self) -> list[dict[str, Any]]:
+        resp = _http_get(
+            _NBER_API,
+            params={"keyword": self.query},
+            timeout=30,
+        )
+        if resp is None or resp.status_code != 200:
+            return []
+        try:
+            results = (resp.json().get("results") or [])
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[bulk.nber] JSON 解析失败: %s", e)
+            return []
+        out: list[dict[str, Any]] = []
+        for w in results[: self.max_results]:
+            title = (w.get("title") or "").strip()
+            if not title:
+                continue
+            nid = str(w.get("id") or "")
+            abstract = (w.get("abstract") or "").strip()[:1000]
+            # displaydate 形如 "August 2026" → 转 YYYY-MM 无精确日，用发布日期字段兜底
+            display = (w.get("displaydate") or "").strip()
+            out.append(
+                {
+                    "ref_id": nid or _default_ref_id("nber", {"title": title}),
+                    "date": display,
+                    "title": title,
+                    "abstract": abstract,
+                    "url": w.get("url") or f"https://www.nber.org/papers/{nid}" if nid else "",
+                    "language": "en",
+                }
+            )
+        return out
+
+
+class CninfoBulkCollector:
+    """巨潮资讯中文公告/研报（官方查询接口，POST）。"""
+
+    _KEYWORDS = ("期货", "化工", "能化", "原油", "聚酯", "甲醇", "量化")
+    _COLUMNS = ("szse", "sse")  # 深市 + 沪市
+
+    def __init__(self, max_items: int = 100, days: int = 3, keywords: Optional[list[str]] = None):
+        self.max_items = max_items
+        self.days = days
+        self.keywords = keywords or self._KEYWORDS
+
+    def fetch(self) -> list[dict[str, Any]]:
+        end = datetime.now().date()
+        begin = end - timedelta(days=self.days)
+        out: list[dict[str, Any]] = []
+        for kw in self.keywords:
+            for col in self._COLUMNS:
+                try:
+                    # 巨潮接口为 POST 表单（2026-08-17 修复：原 _http_get 仅 GET 致采集 0）
+                    resp = requests.post(
+                        _CNINFO_API,
+                        data={
+                            "pageNum": 1,
+                            "pageSize": min(self.max_items, 30),
+                            "column": col,
+                            "tabName": "fulltext",
+                            "plate": "",
+                            "stock": "",
+                            "searchkey": kw,
+                            "secid": "",
+                            "category": "",
+                            "trade": "",
+                            "seDate": f"{begin.isoformat()}~{end.isoformat()}",
+                            "sortName": "",
+                            "sortType": "",
+                            "isHLtitle": "true",
+                        },
+                        headers=_CNINFO_HEADERS,
+                        timeout=20,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[bulk.cninfo] 请求失败 kw=%s col=%s: %s", kw, col, e)
+                    continue
+                if resp is None or resp.status_code != 200:
+                    logger.warning(
+                        "[bulk.cninfo] 请求失败 kw=%s col=%s status=%s",
+                        kw,
+                        col,
+                        getattr(resp, "status_code", None),
+                    )
+                    continue
+                try:
+                    anns = (resp.json().get("announcements") or [])
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[bulk.cninfo] JSON 解析失败 kw=%s col=%s: %s", kw, col, e)
+                    continue
+                for a in anns:
+                    title = (a.get("announcementTitle") or "").strip()
+                    # 公告标题带 <em> 高亮标签
+                    title = re.sub(r"<[^>]+>", "", title).strip()
+                    if not title:
+                        continue
+                    ts = a.get("announcementTime")
+                    date = ""
+                    if isinstance(ts, (int, float)) and ts > 0:
+                        date = datetime.fromtimestamp(ts / 1000).date().isoformat()
+                    adj = a.get("adjunctUrl") or ""
+                    out.append(
+                        {
+                            "ref_id": str(a.get("announcementId") or _default_ref_id("cninfo", {"title": title, "date": date})),
+                            "date": date,
+                            "title": title,
+                            "abstract": (a.get("announcementContent") or "")[:800],
+                            "url": f"https://static.cninfo.com.cn/{adj}" if adj else "",
+                            "language": "zh",
+                        }
+                    )
+        # 关键词去重（同一公告命中多关键词只留一条）
+        seen: set[str] = set()
+        unique: list[dict[str, Any]] = []
+        for rec in out:
+            key = rec["ref_id"]
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(rec)
+        return unique[: self.max_items]
+
+
+class SinaReportBulkCollector:
+    """新浪财经研报中心（中文研报列表，HTML 解析，best effort）。"""
+
+    _KEYWORDS = ("期货", "化工", "原油", "能化", "量化")
+
+    def __init__(self, max_items: int = 50, keywords: Optional[list[str]] = None):
+        self.max_items = max_items
+        self.keywords = keywords or self._KEYWORDS
+
+    def fetch(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for kw in self.keywords:
+            resp = _http_get(
+                _SINA_REPORT_API,
+                params={"symbol": "", "t": 1, "q": kw},
+                timeout=20,
+            )
+            if resp is None or resp.status_code != 200:
+                continue
+            links = _extract_link_records(resp.text, _SINA_REPORT_API, max_items=self.max_items)
+            for title, url in links:
+                out.append(
+                    {
+                        "ref_id": f"sina-{hashlib.sha1(f'{kw}|{title}'.encode('utf-8')).hexdigest()[:12]}",
+                        "date": "",
+                        "title": title,
+                        "abstract": "",
+                        "url": url,
+                        "language": "zh",
+                    }
+                )
+        seen: set[str] = set()
+        unique: list[dict[str, Any]] = []
+        for rec in out:
+            key = rec["ref_id"]
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(rec)
+        return unique[: self.max_items]
+
+
+class SemanticScholarBulkCollector:
+    """Semantic Scholar 学术论文（官方 API，免费无 key）。
+
+    严格限速：429 时按 Retry-After/2s 退避重试最多 3 次，仍失败返回空（不阻断）。
+    """
+
+    _QUERY = "commodity futures factor quantitative trading"
+
+    def __init__(self, max_results: int = 100, query: Optional[str] = None, retries: int = 3):
+        self.max_results = max_results
+        self.query = query or self._QUERY
+        self.retries = retries
+
+    def fetch(self) -> list[dict[str, Any]]:
+        for attempt in range(self.retries):
+            resp = _http_get(
+                _SEMANTIC_SCHOLAR_API,
+                params={
+                    "query": self.query,
+                    "limit": min(self.max_results, 100),
+                    "fields": "title,abstract,url,year,externalIds",
+                },
+                headers=_SEMANTIC_SCHOLAR_HEADERS,
+                timeout=30,
+            )
+            if resp is not None and resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                delay = min(float(retry_after) if retry_after else 2.0, 10.0)
+                logger.warning("[bulk.semanticscholar] 429 限速, 退避 %.1fs (attempt %d)", delay, attempt + 1)
+                time.sleep(delay)
+                continue
+            if resp is None or resp.status_code != 200:
+                return []
+            break
+        else:
+            logger.warning("[bulk.semanticscholar] 429 重试耗尽, 返回空")
+            return []
+        try:
+            data = resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[bulk.semanticscholar] JSON 解析失败: %s", e)
+            return []
+        out: list[dict[str, Any]] = []
+        for p in (data.get("data") or [])[: self.max_results]:
+            title = (p.get("title") or "").strip()
+            if not title:
+                continue
+            paper_id = p.get("paperId") or ""
+            out.append(
+                {
+                    "ref_id": paper_id or _default_ref_id("semanticscholar", {"title": title}),
+                    "date": str(p.get("year") or ""),
+                    "title": title,
+                    "abstract": (p.get("abstract") or "")[:1000],
+                    "url": p.get("url") or "",
+                    "language": "en",
+                }
+            )
+        return out
+
+
 # ─── 采集引擎（契约入口） ─────────────────────────────────
+
+
+class DynamicSourceCollector:
+    """动态源采集器（plans/46 M3+M4）：按注册表 type 驱动解析。
+
+    - json: 请求 JSON，尝试通用字段提取（title/url/date/abstract）
+    - rss:  内置 xml.etree 解析 RSS/Atom 条目
+    - html: 链接提取（复用 _extract_link_records）+ LLM 兜底（M4，可选）
+
+    解析失败返回空列表（best-effort，不阻断整体）；单源独立失败记录 errors。
+    """
+
+    def __init__(
+        self,
+        source_id: str,
+        url: str,
+        type_: str = "html",
+        language: str = "en",
+        max_items: int = 50,
+        llm_client: Optional[Any] = None,
+        timeout: int = 30,
+    ):
+        self.source_id = source_id
+        self.url = url
+        self.type = type_
+        self.language = language or "en"
+        self.max_items = max_items
+        self.llm_client = llm_client
+        self.timeout = timeout
+
+    def fetch(self) -> list[dict[str, Any]]:
+        if self.type == "json":
+            return self._fetch_json()
+        if self.type == "rss":
+            return self._fetch_rss()
+        return self._fetch_html()
+
+    def _fetch_json(self) -> list[dict[str, Any]]:
+        resp = _http_get(self.url, timeout=self.timeout)
+        if resp is None or resp.status_code != 200:
+            return []
+        try:
+            data = resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[bulk.dynamic.json] %s JSON 解析失败: %s", self.source_id, e)
+            return []
+        items = data if isinstance(data, list) else data.get("items") or data.get("results") or data.get("data") or []
+        if not isinstance(items, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for it in items[: self.max_items]:
+            if not isinstance(it, dict):
+                continue
+            title = str(it.get("title") or it.get("name") or it.get("headline") or "").strip()
+            if not title:
+                continue
+            link = str(it.get("url") or it.get("link") or it.get("href") or "")
+            abstract = str(it.get("abstract") or it.get("summary") or it.get("description") or it.get("excerpt") or "")[:800]
+            date = str(it.get("date") or it.get("published") or it.get("pubDate") or it.get("created") or "")[:10]
+            out.append(
+                {
+                    "ref_id": _default_ref_id(self.source_id, {"title": title, "date": date}),
+                    "date": date,
+                    "title": title,
+                    "abstract": abstract,
+                    "url": link,
+                    "language": self.language,
+                }
+            )
+        return out
+
+    def _fetch_rss(self) -> list[dict[str, Any]]:
+        import xml.etree.ElementTree as ET
+
+        resp = _http_get(self.url, timeout=self.timeout)
+        if resp is None or resp.status_code != 200:
+            return []
+        out: list[dict[str, Any]] = []
+        try:
+            root = ET.fromstring(resp.content)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[bulk.dynamic.rss] %s XML 解析失败: %s", self.source_id, e)
+            return []
+        # 兼容 RSS(<item>) 与 Atom(<entry>)
+        entries = root.iter("{http://www.w3.org/2005/Atom}entry") if any(
+            e.tag.endswith("}entry") for e in root.iter()
+        ) else list(root.iter("item"))
+        atom = bool(root.findall(".//{http://www.w3.org/2005/Atom}entry"))
+        for item in entries[: self.max_items]:
+            if atom:
+                title_el = item.find("{http://www.w3.org/2005/Atom}title")
+                link_el = item.find("{http://www.w3.org/2005/Atom}link")
+                date_el = item.find("{http://www.w3.org/2005/Atom}updated")
+                abstract_el = item.find("{http://www.w3.org/2005/Atom}summary")
+                title = (title_el.text or "").strip() if title_el is not None else ""
+                link = (link_el.get("href") or "") if link_el is not None else ""
+                date = (date_el.text or "")[:10] if date_el is not None else ""
+                abstract = (abstract_el.text or "")[:800] if abstract_el is not None else ""
+            else:
+                title_el = item.find("title")
+                link_el = item.find("link")
+                date_el = item.find("pubDate")
+                abstract_el = item.find("description")
+                title = (title_el.text or "").strip() if title_el is not None else ""
+                link = (link_el.text or "") if link_el is not None else ""
+                date = (date_el.text or "")[:10] if date_el is not None else ""
+                abstract = (abstract_el.text or "")[:800] if abstract_el is not None else ""
+            if not title:
+                continue
+            out.append(
+                {
+                    "ref_id": _default_ref_id(self.source_id, {"title": title, "date": date}),
+                    "date": date,
+                    "title": title,
+                    "abstract": abstract,
+                    "url": link,
+                    "language": self.language,
+                }
+            )
+        return out
+
+    def _fetch_html(self) -> list[dict[str, Any]]:
+        resp = _http_get(self.url, timeout=self.timeout)
+        if resp is None or resp.status_code != 200:
+            return []
+        links = _extract_link_records(resp.text, self.url, max_items=self.max_items)
+        import html as _html
+
+        records = [
+            {
+                "ref_id": f"{self.source_id}-{hashlib.sha1(title.encode('utf-8')).hexdigest()[:12]}",
+                "date": "",
+                "title": _html.unescape(title),
+                "abstract": "",
+                "url": url,
+                "language": self.language,
+            }
+            for title, url in links
+        ]
+        # M4: 规则提取为空且可用 LLM → LLM 兜底提取标题/摘要
+        if not records and self.llm_client is not None:
+            return self._llm_fallback_html(resp.text)
+        return records
+
+    def _llm_fallback_html(self, text: str) -> list[dict[str, Any]]:
+        prompt = (
+            "从以下 HTML 去标签文本中提取最多 {} 条研报/论文条目，每条输出 "
+            '{{"title": "...", "url": "...", "abstract": "..."}}，只输出 JSON 数组：\n'
+            "{}"
+        ).format(self.max_items, text[:8000])
+        try:
+            data = self.llm_client.generate_json(prompt)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[bulk.dynamic.html] %s LLM 兜底失败: %s", self.source_id, e)
+            return []
+        if not isinstance(data, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for it in data:
+            if not isinstance(it, dict):
+                continue
+            title = str(it.get("title") or "").strip()
+            if not title:
+                continue
+            out.append(
+                {
+                    "ref_id": f"{self.source_id}-{hashlib.sha1(title.encode('utf-8')).hexdigest()[:12]}",
+                    "date": "",
+                    "title": title,
+                    "abstract": str(it.get("abstract") or "")[:800],
+                    "url": str(it.get("url") or ""),
+                    "language": self.language,
+                }
+            )
+        return out[: self.max_items]
+
+
+def _collect_dynamic_source(source_id: str, store: Optional[BulkKnowledgeStore]) -> list[dict[str, Any]]:
+    """动态源采集入口：按注册表信息构造采集器（未注册/未知源返回空）。"""
+    try:
+        from .source_registry import SourceRegistry
+
+        info = SourceRegistry().get(source_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[bulk.dynamic] 读取注册表失败 source=%s: %s", source_id, e)
+        return []
+    if info is None:
+        return []
+    collector = DynamicSourceCollector(
+        source_id=info.source_id,
+        url=info.url,
+        type_=info.type,
+        language=info.language,
+    )
+    return collector.fetch()
+
+
+def _is_registered_dynamic_source(source_id: str) -> bool:
+    """注册表中是否存在该 source_id（用于未知源错误语义区分）。"""
+    try:
+        from .source_registry import SourceRegistry
+
+        return SourceRegistry().get(source_id) is not None
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def collect_bulk(
@@ -515,7 +1116,8 @@ def collect_bulk(
     """单源采集 → 入库，返回计数契约。
 
     Args:
-        source: arxiv / openalex / eastmoney / global / nonen
+        source: arxiv / openalex / eastmoney / global / nonen / crossref / nber /
+                cninfo / sina / semanticscholar
         store: 存储（None 用默认 data/l1_knowledge_cache.duckdb）
         max_results: 论文类源每类/每语种拉取数（arxiv 每类别 / openalex 每语种）
         page_size: 东财研报分页大小
@@ -540,8 +1142,21 @@ def collect_bulk(
             records, errors = NonEnReportBulkCollector().fetch()
         else:
             errors.append("nonen disabled by l1_non_en_reports_enabled")
+    elif source == "crossref":
+        records = CrossrefBulkCollector(max_results=max_results).fetch()
+    elif source == "nber":
+        records = NberBulkCollector(max_results=max_results).fetch()
+    elif source == "cninfo":
+        records = CninfoBulkCollector(max_items=page_size).fetch()
+    elif source == "sina":
+        records = SinaReportBulkCollector(max_items=page_size).fetch()
+    elif source == "semanticscholar":
+        records = SemanticScholarBulkCollector(max_results=max_results).fetch()
     else:
-        errors.append(f"未知源: {source}")
+        # 动态源（plans/46）：注册表 active 源按 type 驱动解析
+        records = _collect_dynamic_source(source, store)
+        if not records and not _is_registered_dynamic_source(source):
+            errors.append(f"未知源: {source}")
     result.collected = len(records)
     result.errors = errors
     result.new, result.deduped = store.upsert(source, records)
@@ -563,10 +1178,26 @@ def collect_all(
     page_size: int = 100,
     openalex_languages: Optional[list[str]] = None,
     non_en_reports_enabled: bool = True,
+    include_dynamic: bool = True,
+    registry: Optional[Any] = None,
 ) -> dict[str, BulkCollectResult]:
-    """全源采集（全球 300 篇口径审计入口，含非中英语种源 nonen）。"""
+    """全源采集（全球 300 篇口径审计入口，含新增 crossref/nber/cninfo/sina/semanticscholar）。
+
+    plans/46: include_dynamic=True 时叠加注册表动态源（active 直接采集，pending 走 canary）。
+    """
     results: dict[str, BulkCollectResult] = {}
-    for src in ("arxiv", "openalex", "eastmoney", "global", "nonen"):
+    for src in (
+        "arxiv",
+        "openalex",
+        "eastmoney",
+        "global",
+        "nonen",
+        "crossref",
+        "nber",
+        "cninfo",
+        "sina",
+        "semanticscholar",
+    ):
         results[src] = collect_bulk(
             src,
             store=store,
@@ -575,7 +1206,43 @@ def collect_all(
             openalex_languages=openalex_languages,
             non_en_reports_enabled=non_en_reports_enabled,
         )
+    if include_dynamic:
+        results.update(_collect_dynamic_sources(store, registry=registry))
     total = sum(r.collected for r in results.values())
     new_total = sum(r.new for r in results.values())
     logger.info("[bulk] 全源采集完成: total_collected=%d total_new=%d", total, new_total)
+    return results
+
+
+def _collect_dynamic_sources(
+    store: Optional[BulkKnowledgeStore],
+    registry: Optional[Any] = None,
+) -> dict[str, BulkCollectResult]:
+    """注册表动态源采集：active 源直接采集，pending 源 canary 试采，健康度回写。
+
+    Returns:
+        {source_id: BulkCollectResult}
+    """
+    try:
+        from .source_registry import SourceRegistry
+
+        reg = registry or SourceRegistry()
+        active = reg.list_active()
+        pending = reg.list_status("pending")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[bulk.dynamic] 注册表读取失败: %s", e)
+        return {}
+    results: dict[str, BulkCollectResult] = {}
+    for info in active:
+        res = collect_bulk(info.source_id, store=store)
+        results[info.source_id] = res
+        if res.collected > 0:
+            reg.mark_collect_success(info.source_id)
+        else:
+            reg.mark_collect_failure(info.source_id)
+    for info in pending:
+        # canary 试采（小批量 page_size 传 20），成功计入 canary 进度
+        res = collect_bulk(info.source_id, store=store, page_size=20)
+        results[info.source_id] = res
+        reg.canary_tick(info.source_id, ok=res.collected > 0)
     return results

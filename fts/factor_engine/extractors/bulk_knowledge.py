@@ -67,7 +67,7 @@ class BulkKnowledgeExtractor(BaseExtractor):
             logger.info("[%s] 未配置 llm_client, 跳过", self.name)
             return []
 
-        # 1. 批量采集（计数契约审计：≥300 篇/天，全球多语种）
+        # 1. 批量采集（计数契约审计：≥300 篇/天，全球多语种 + plans/46 动态源）
         results = collect_all(
             store=self._store,
             max_results=self.max_results,
@@ -84,6 +84,10 @@ class BulkKnowledgeExtractor(BaseExtractor):
             counts,
             trace_id,
         )
+
+        # plans/46: 知识源自动发现（开关 l1_source_discovery_enabled，默认 on）
+        # 发现→探活→注册新源，供下一轮采集纳入；LLM 提取失败自动降级规则
+        self._maybe_discover_sources(trace_id)
 
         # 2. 读取近 3 日缓存 → 粗筛
         records = self._store.recent(since_days=3, limit=2000)
@@ -140,7 +144,61 @@ class BulkKnowledgeExtractor(BaseExtractor):
             len(unique),
             trace_id,
         )
+        # plans/46 因子产出回写：按深读来源(source)统计本轮是否产出候选，
+        # 有产出 → 注册表 mark_has_output（零产出计数清零）；无产出 → 不额外标记
+        # （连续零产出由调度侧按轮次推进，见 SourceRegistry.mark_zero_output）
+        self._report_source_output(hits, unique)
         return unique
+
+    def _report_source_output(self, hits: list[dict[str, Any]], candidates: list[dict[str, Any]]) -> None:
+        """按深读来源 source 回写因子产出（动态源业务健康度依据）。
+
+        产出归属：候选不携带具体来源（LLM 分块可能混合多源），故采用整体信号——
+        - 本轮有候选产出 → 所有出现在深读 hits 中的动态源 mark_has_output（宽松复权）
+        - 本轮零候选 → 深读 hits 中的动态源 mark_zero_output（严格淘汰）
+        组合语义：源只要持续贡献产出即保活；连续多轮零产出自动停用（plans/46 S5）。
+        固定源（arxiv/crossref 等）不在注册表，自动跳过。
+        """
+        try:
+            from .source_registry import SourceRegistry
+
+            reg = SourceRegistry()
+        except Exception:  # noqa: BLE001
+            return
+        produced = bool(candidates)
+        for r in hits:
+            src = r.get("source", "")
+            if not src or reg.get(src) is None:
+                continue  # 非动态源
+            if produced:
+                reg.mark_has_output(src)
+            else:
+                reg.mark_zero_output(src)
+
+    def _maybe_discover_sources(self, trace_id: str) -> None:
+        """plans/46: 触发知识源自动发现（受 l1_source_discovery_enabled 开关控制）。
+
+        发现→探活→注册由 SourceDiscoverer 完成，本方法只做开关判断与调度。
+        """
+        from fts.config.settings import get_config
+
+        cfg = get_config()
+        if not getattr(cfg, "l1_source_discovery_enabled", True):
+            return
+        try:
+            from .source_discovery import SourceDiscoverer
+
+            discoverer = SourceDiscoverer(llm_client=self.llm_client)
+            registered = discoverer.discover(trace_id=trace_id)
+            if registered:
+                logger.info(
+                    "[%s] 自动发现并注册 %d 个新源 trace_id=%s",
+                    self.name,
+                    len(registered),
+                    trace_id,
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[%s] 源自动发现异常(不阻断): %s", self.name, e)
 
     def _extract_chunk(self, chunk_texts: list[str], trace_id: str) -> list[dict[str, Any]]:
         merged = "\n---\n".join(chunk_texts)
