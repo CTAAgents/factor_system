@@ -267,6 +267,20 @@ def test_register_default_tasks_content(name: str, expected: dict):
     assert spec.enabled is False, f"任务 {name} 默认应停用（内部调度 disabled）"
 
 
+def test_internal_scheduler_env_switch(monkeypatch):
+    """FTS_INTERNAL_SCHEDULER_ENABLED 一键开关解析（默认停用 / 置 1 启用）。"""
+    from fts.scheduler.tasks import _load_internal_scheduler_enabled
+
+    monkeypatch.delenv("FTS_INTERNAL_SCHEDULER_ENABLED", raising=False)
+    assert _load_internal_scheduler_enabled() is False  # 默认停用
+    monkeypatch.setenv("FTS_INTERNAL_SCHEDULER_ENABLED", "1")
+    assert _load_internal_scheduler_enabled() is True  # 一键启用
+    monkeypatch.setenv("FTS_INTERNAL_SCHEDULER_ENABLED", "0")
+    assert _load_internal_scheduler_enabled() is False  # 显式停用
+    monkeypatch.setenv("FTS_INTERNAL_SCHEDULER_ENABLED", "true")
+    assert _load_internal_scheduler_enabled() is False  # 仅字符串 "1" 启用
+
+
 def test_register_default_tasks_idempotent():
     """register_default_tasks 幂等：重复调用不抛异常，任务数不变。"""
     register_default_tasks()

@@ -17,6 +17,7 @@ HARNESS §trace_id 全链路: 每个 task 启动时生成独立 trace_id。
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -84,11 +85,17 @@ class TaskRegistry:
 REGISTRY = TaskRegistry()
 
 
-# 内部调度器开关（v2.104.0+98 起停用）：
-# 内部 SchedulerEngine 调度全部任务 enabled=False，以 TRAE Schedule 为唯一调度源。
-# 如需恢复内部调度，置 True 并按需调整 cron（TRAE Schedule 与内部调度不可同时启用，
-# 否则同口径任务重复执行）。
-INTERNAL_SCHEDULER_ENABLED: bool = False
+# 内部调度器开关（v2.104.0+99 起环境变量化）：
+# 默认停用（FTS_INTERNAL_SCHEDULER_ENABLED 未设或 "0"），以 TRAE Schedule 为唯一调度源。
+# 一键启动：$env:FTS_INTERNAL_SCHEDULER_ENABLED="1"; fts scheduler run
+# 一键停用：Remove-Item Env:FTS_INTERNAL_SCHEDULER_ENABLED; fts scheduler run（或设 "0"）
+# 注意：TRAE Schedule 与内部调度不可同时启用，否则同口径任务重复执行。
+def _load_internal_scheduler_enabled() -> bool:
+    """读取内部调度器开关（FTS_INTERNAL_SCHEDULER_ENABLED，默认 "0"=停用）。"""
+    return os.getenv("FTS_INTERNAL_SCHEDULER_ENABLED", "0") == "1"
+
+
+INTERNAL_SCHEDULER_ENABLED: bool = _load_internal_scheduler_enabled()
 
 
 def register_default_tasks() -> None:

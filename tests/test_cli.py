@@ -935,6 +935,34 @@ class TestCmdSchedulerRun:
         assert "启动失败" in captured.err
 
 
+class TestCmdSchedulerStatus:
+    """测试 _cmd_scheduler_status（一键启停状态查看）。"""
+
+    def test_status_empty(self, capsys):
+        """空任务时显示注册/调度计数与一键启停指引。"""
+        with patch("fts.cli.list_scheduler_tasks", return_value=[]):
+            rc = main(["scheduler", "status"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "注册任务 0 个，实际调度 0 个" in out
+        assert "一键启用" in out
+        assert "一键停用" in out
+
+    def test_status_with_tasks(self, capsys):
+        """有任务时逐项显示启用状态。"""
+        task = MagicMock()
+        task.name = "test_task"
+        task.enabled = False
+        task.cron_expression = "0 4 * * *"
+        task.description = "测试任务"
+        with patch("fts.cli.list_scheduler_tasks", return_value=[task]):
+            rc = main(["scheduler", "status"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "注册任务 1 个，实际调度 0 个" in out
+        assert "test_task" in out
+
+
 # ═══════════════════════════════════════════════════════════
 # _cmd_scheduler_list — 有任务
 # ═══════════════════════════════════════════════════════════

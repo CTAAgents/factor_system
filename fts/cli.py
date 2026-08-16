@@ -693,7 +693,12 @@ def _cmd_scheduler_run(_args: argparse.Namespace) -> int:
     if not started:
         print("[scheduler] 调度器启动失败（APScheduler 未安装）", file=sys.stderr)
         return 1
-    print(f"[scheduler] 调度器已启动（{len(list_scheduler_tasks())} 个任务）")
+    tasks = list_scheduler_tasks()
+    enabled_n = sum(1 for t in tasks if t.enabled)
+    print(f"[scheduler] 调度器已启动（注册 {len(tasks)} 个任务，实际调度 {enabled_n} 个）")
+    if enabled_n == 0:
+        print("[scheduler] ⚠ 内部调度停用（0 任务调度，TRAE Schedule 为唯一调度源）")
+        print('[scheduler] 一键启用: $env:FTS_INTERNAL_SCHEDULER_ENABLED="1"; fts scheduler run')
     # 主线程阻塞保活（Windows 计划任务 / 后台运行场景），Ctrl+C 优雅停止
     import threading
 
@@ -701,6 +706,25 @@ def _cmd_scheduler_run(_args: argparse.Namespace) -> int:
         threading.Event().wait()
     except KeyboardInterrupt:
         engine.stop()
+    return 0
+
+
+def _cmd_scheduler_status(_args: argparse.Namespace) -> int:
+    """查看内部调度器开关状态与实际调度任务数（一键启停指引）。"""
+    import os
+
+    from .scheduler.tasks import INTERNAL_SCHEDULER_ENABLED
+
+    env_val = os.getenv("FTS_INTERNAL_SCHEDULER_ENABLED", "未设置（默认停用）")
+    tasks = list_scheduler_tasks()
+    enabled_n = sum(1 for t in tasks if t.enabled)
+    print(f"[scheduler] FTS_INTERNAL_SCHEDULER_ENABLED = {env_val}（解析为 {INTERNAL_SCHEDULER_ENABLED}）")
+    print(f"[scheduler] 注册任务 {len(tasks)} 个，实际调度 {enabled_n} 个")
+    for t in tasks:
+        status = "✔ 启用" if t.enabled else "✘ 停用"
+        print(f"  {status} {t.name:25s} | {t.cron_expression:12s} | {t.description}")
+    print('[scheduler] 一键启用: $env:FTS_INTERNAL_SCHEDULER_ENABLED="1"; fts scheduler run')
+    print("[scheduler] 一键停用: Remove-Item Env:FTS_INTERNAL_SCHEDULER_ENABLED; fts scheduler run")
     return 0
 
 
@@ -2501,6 +2525,8 @@ def build_parser() -> argparse.ArgumentParser:
     sched_sub = p_sched.add_subparsers(dest="subcommand", required=False)
     p_sched_run = sched_sub.add_parser("run", help="启动调度器后台运行")
     p_sched_run.set_defaults(func=_cmd_scheduler_run)
+    p_sched_status = sched_sub.add_parser("status", help="查看调度器开关状态与实际调度数")
+    p_sched_status.set_defaults(func=_cmd_scheduler_status)
     p_sched_list = sched_sub.add_parser("list", help="列出所有已注册任务")
     p_sched_list.set_defaults(func=_cmd_scheduler_list)
 
