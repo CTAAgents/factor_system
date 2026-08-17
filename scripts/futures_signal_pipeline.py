@@ -356,6 +356,23 @@ def _load_l3_combo_weights(weights_path: str | Path | None = None) -> dict[str, 
     return {k: float(v) for k, v in weights.items()}
 
 
+def _load_l3_subchain_meta(weights_path: str | Path) -> tuple[dict[str, dict[str, float]], dict[str, str]]:
+    """加载 L3 factor_weights.json 中的子链调制元信息（plans/47 §B）。
+
+    Args:
+        weights_path: factor_weights.json 路径
+
+    Returns:
+        (subchain_weights, symbol_chain)——enable=false 或旧产物无该字段 → 空 dict
+        （信号管线按全链权重，兼容现状）。
+    """
+    try:
+        data = json.loads(Path(weights_path).read_text(encoding="utf-8"))
+        return (data.get("subchain_weights") or {}), (data.get("symbol_chain") or {})
+    except (json.JSONDecodeError, OSError):
+        return {}, {}
+
+
 def _load_l3_combo_factors(
     l3_weights: dict[str, float],
     market: str = "futures",
@@ -752,6 +769,8 @@ def _compute_composite_scores(
     factor_weights: dict[str, float] | None = None,
     per_variety_weights: dict[str, dict[str, float]] | None = None,
     per_variety_sign_flips: dict[str, dict[str, float]] | None = None,
+    subchain_weights: dict[str, dict[str, float]] | None = None,
+    symbol_chain: dict[str, str] | None = None,
 ) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
     """合成因子信号（可选权重；方向校正参数 v2.105.0 起恒为空 dict）。
 
@@ -762,6 +781,9 @@ def _compute_composite_scores(
         per_variety_sign_flips: 品种级方向翻转 {variety: {factor: +1/-1}}。
                               品种级权重用 abs(IC) 丢弃了符号，此处按 IC 符号在
                               合成层恢复方向（P0 修复：反向因子正信号不再被当正贡献）。
+        subchain_weights: 子链差异化权重 {factor_name: {子链: m}}（plans/47 §B，
+              energy 链 L3 输出；None/空=全链权重，兼容现状）
+        symbol_chain: {品种: 子链} 映射（与 subchain_weights 配套）
 
     Returns:
         sym_scores: 品种 → 综合得分
@@ -796,6 +818,11 @@ def _compute_composite_scores(
                 flip = per_variety_sign_flips[sym].get(name, flip)
             val *= flip
             w = effective_weights.get(name, default_weight) if effective_weights else default_weight
+            # plans/47 §B：子链差异化权重调制（特异因子在无效子链降权/归零）
+            if subchain_weights and symbol_chain:
+                chain = symbol_chain.get(sym)
+                if chain:
+                    w *= subchain_weights.get(name, {}).get(chain, 1.0)
             signal_sum += val * w
             weight_sum += w
             details[name] = val
@@ -1403,6 +1430,7 @@ def main(
     macro_injection: bool = True,
     chain: str = "",
     force_regime: str = "",
+    enable_regime_gating: bool = False,
 ) -> int:
     t0 = time.time()
     today = date.today().isoformat()
@@ -1423,6 +1451,9 @@ def main(
         l3_weights = _load_l3_combo_weights(
             weights_path=PROJECT_ROOT / "memory" / "portfolio" / "energy" / "factor_weights.json"
         )
+        subchain_weights, symbol_chain = _load_l3_subchain_meta(
+            PROJECT_ROOT / "memory" / "portfolio" / "energy" / "factor_weights.json"
+        )
         factors = _load_l3_combo_factors(
             l3_weights,
             market=ENERGY_CHAIN_MARKET,
@@ -1431,8 +1462,11 @@ def main(
         kept_names = {f.get("name") for f in factors}
         l3_weights = {k: v for k, v in l3_weights.items() if k in kept_names}
         print(f"\n[1/5] 加载能源链 L3 组合因子: {len(factors)} 个（基础权重 {len(l3_weights)} 个）")
+        if subchain_weights:
+            print(f"      [子链权重] L3 子链差异化权重已加载: {len(subchain_weights)} 因子（plans/47 §B）")
     else:
         l3_weights = _load_l3_combo_weights()
+        subchain_weights, symbol_chain = {}, {}
         factors = _load_l3_combo_factors(l3_weights)
         # 同步剔除 DuckDB 中缺失因子的权重（与因子池保持一致）
         kept_names = {f.get("name") for f in factors}
@@ -1679,6 +1713,8 @@ def main(
         factor_weights,
         per_variety_weights=per_variety_weights if per_variety_weights else None,
         per_variety_sign_flips=per_variety_sign_flips or None,
+        subchain_weights=subchain_weights or None,
+        symbol_chain=symbol_chain or None,
     )
 
     # ── 品种-链对齐度修正信号权重 ──
@@ -1702,6 +1738,8 @@ def main(
             factors,
             factor_weights,
             per_variety_sign_flips=per_variety_sign_flips or None,
+            subchain_weights=subchain_weights or None,
+            symbol_chain=symbol_chain or None,
         )
         # 计算两种合成结果的排名差异
         sorted_var = sorted(sym_scores.keys())
@@ -1773,6 +1811,57 @@ def main(
             n_adjusted += 1
         if n_adjusted > 0:
             print(f"      [价格动量] 调整 {n_adjusted} 个品种的信号 (blend={_PRICE_MOMENTUM_BLEND}, skip={n_skipped})")
+
+    # ── Step 3h1: 子链方向 Gate（plans/48 §A/§B，仅 energy 且开关开启；先于全局方向偏置）──
+    # Gate 语义：子链 regime 置信度不足 → avoid（hard 剔除 / soft 降权）；
+    # long/short 子链仅放开对应方向信号；盲测池无子链归属品种默认回避。
+    # §B 暴露缩放：暴露 = map_confidence_to_exposure(子链置信度) × 品种-链对齐度。
+    if chain == "energy":
+        try:
+            from fts.config import get_config
+            from fts.factor_engine.portfolio_loop import ENERGY_CHAIN_SUB_SYMBOLS
+            from fts.factor_engine.regime_gate import (
+                GateConfig,
+                apply_exposure_scale,
+                apply_subchain_gate,
+                build_subchain_gates,
+                build_symbol_chain_map,
+            )
+
+            gate_cfg = (getattr(get_config(), "l3", {}) or {}).get("regime_gating") or {}
+            if gate_cfg.get("enabled", False) or enable_regime_gating:
+                gconf = GateConfig(**gate_cfg)
+                gates = build_subchain_gates(sector_regimes, ENERGY_CHAIN_SUB_SYMBOLS, gconf)
+                symbol_chain_map = build_symbol_chain_map(ENERGY_CHAIN_SUB_SYMBOLS)
+                sym_scores = apply_subchain_gate(
+                    sym_scores,
+                    gates,
+                    symbol_chain_map,
+                    gconf,
+                )
+                # §B：置信度→暴露缩放 × 品种-链对齐度（alignment_scores 已在 1547 行计算）
+                n_exposure_scale = sum(
+                    1
+                    for s, sc in sym_scores.items()
+                    if sc != 0.0 and s in symbol_chain_map
+                )
+                sym_scores = apply_exposure_scale(
+                    sym_scores,
+                    gates,
+                    symbol_chain_map,
+                    alignment_scores,
+                    gconf,
+                )
+                n_avoid = sum(1 for g in gates.values() if g["decision"] == "avoid")
+                print(
+                    f"      [子链 Gate] 应用方向 Gate + 暴露缩放: "
+                    f"{ {c: g['decision'] for c, g in gates.items()} } "
+                    f"(avoid={n_avoid}, mode={gconf.avoid_mode}, "
+                    f"exposure_scale={n_exposure_scale} 品种, "
+                    f"conf∈[{gconf.exposure_min},{gconf.exposure_sat}])"
+                )
+        except Exception as e:  # noqa: BLE001 — Gate 失败降级，不阻断主流程
+            print(f"      [子链 Gate] 应用失败（跳过，保持现状）: {e}")
 
     # ── Step 3h2: Regime 方向偏移（P0 修复：主制度置信度越高，多空倾向越明显）
     # 放在价格动量之后、快照/判定之前：快照与报告保存一致的最终得分。
@@ -2412,6 +2501,12 @@ if __name__ == "__main__":
         choices=["", "bull", "bear", "oscillate", "high_vol", "low_vol"],
         help="验证用：强制覆盖主市场制度（不影响 SectorRegime 计算，仅对最终投票结果覆盖）",
     )
+    parser.add_argument(
+        "--enable-regime-gating",
+        action="store_true",
+        help="启用子链方向 Gate + 暴露缩放（plans/48 §A/§B 灰度开关，默认关；"
+        "覆盖 config l3.regime_gating.enabled，仅 --chain energy 生效）",
+    )
     args = parser.parse_args()
     sys.exit(
         main(
@@ -2421,5 +2516,6 @@ if __name__ == "__main__":
             macro_injection=args.macro_injection,
             chain=args.chain,
             force_regime=args.force_regime,
+            enable_regime_gating=args.enable_regime_gating,
         )
     )

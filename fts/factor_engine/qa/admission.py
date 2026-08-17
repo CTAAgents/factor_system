@@ -29,6 +29,9 @@ ADMISSION_LEVELS: list[dict] = [
 DEFAULT_CORE_MIN_SCORE = 4.0
 DEFAULT_CANDIDATE_MIN_SCORE = 3.0
 
+# 单链特异因子受限权重上限（plans/49 §B3：特异性越强、适用面越窄 → 上限收紧）
+SUBCHAIN_SPECIFIC_MAX_WEIGHT = 0.10
+
 
 def classify_admission(
     score: float,
@@ -54,8 +57,15 @@ def classify_admission(
     return "CANDIDATE"
 
 
-def max_weight_for(level: str) -> float:
-    """返回指定准入等级的权重上限（手册 6.3：核心≤30%/候选≤15%/其他 0）。"""
+def max_weight_for(level: str, subchain_specific: bool = False) -> float:
+    """返回指定准入等级的权重上限（手册 6.3：核心≤30%/候选≤15%/其他 0）。
+
+    plans/49 §B3：单链特异因子（subchain_specific=True）上限收紧至
+    ``SUBCHAIN_SPECIFIC_MAX_WEIGHT``（10%）——特异性越强适用面越窄，
+    与 47 号调制矩阵 m[factor][子链] 的零权重链治理互补。
+    """
+    if subchain_specific:
+        return SUBCHAIN_SPECIFIC_MAX_WEIGHT
     for spec in ADMISSION_LEVELS:
         if spec["level"] == level:
             return spec["max_weight"]
@@ -70,8 +80,10 @@ def level_label(level: str) -> str:
     return "未知"
 
 
-def admission_summary(score: float, ir_ok: bool) -> dict:
+def admission_summary(score: float, ir_ok: bool, subchain_specific: bool = False) -> dict:
     """准入评估汇总（供质检报告第九部分引用）。
+
+    plans/49 §B3：单链特异因子（subchain_specific=True）权重上限收紧至 10%。
 
     Returns:
         dict: {score, ir_ok, level, label, max_weight, status}
@@ -83,7 +95,7 @@ def admission_summary(score: float, ir_ok: bool) -> dict:
         "ir_ok": bool(ir_ok),
         "level": level,
         "label": spec["label"],
-        "max_weight": spec["max_weight"],
+        "max_weight": max_weight_for(level, subchain_specific),
         "status": spec["status"],
     }
 
@@ -92,6 +104,7 @@ __all__ = [
     "ADMISSION_LEVELS",
     "DEFAULT_CORE_MIN_SCORE",
     "DEFAULT_CANDIDATE_MIN_SCORE",
+    "SUBCHAIN_SPECIFIC_MAX_WEIGHT",
     "classify_admission",
     "max_weight_for",
     "level_label",

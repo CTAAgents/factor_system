@@ -39,8 +39,14 @@ def quarterly_recheck(
     new_high_corr_pairs: Optional[int] = None,
     cond_ic_change: Optional[float] = None,
     sector_consistent: Optional[bool] = None,
+    subchain_verdict: Optional[dict] = None,
+    baseline_effective_chains: Optional[list] = None,
 ) -> dict:
     """季度全量复检（手册 6.6 F1-F6）。
+
+    F6 两级重构（plans/49 §B4）：跨产业链方向一致（外层，sector_consistent）+ 产业链内
+    子链特异可接受（内层，subchain_verdict=judge_q10_subchain 输出）——单链特异不再判
+    不一致；另对比入库 effective 子链集合，漂移 > 0 标记 scope 复核。
 
     Args:
         ic_ir_ratio: 当前全样本 IC/IR 与入库基准的比值（<1 表示衰减）
@@ -48,7 +54,9 @@ def quarterly_recheck(
         param_steps: 当前参数相对入库最优参数的档位偏移（>1 档标记）
         new_high_corr_pairs: 新增高相关（>0.6）因子对数量（>0 标记）
         cond_ic_change: Regime 条件 IC 相对入库的变化率（>50% 标记）
-        sector_consistent: 板块 IC 方向是否仍一致（False 标记）
+        sector_consistent: 跨产业链板块 IC 方向是否仍一致（False 标记）
+        subchain_verdict: judge_q10_subchain 输出（内层子链特异判定；None=不启用内层）
+        baseline_effective_chains: 入库时 effective 子链集合（供漂移检测）
 
     Returns:
         dict: {
@@ -98,10 +106,25 @@ def quarterly_recheck(
             f"条件 IC 变化率={cond_ic_change:.1%}（> {COND_IC_CHANGE_THRESHOLD:.0%} 标记）",
         )
 
-    if sector_consistent is None:
+    # F6 两级重构（plans/49 §B4）：
+    # ① 跨产业链方向一致（外层）② 产业链内子链特异可接受 + 有效链集合漂移（内层）
+    if sector_consistent is None and subchain_verdict is None:
         _item("F6", False, "板块拆解更新数据缺失，无法判定")
+    elif sector_consistent is False:
+        _item("F6", True, "跨产业链板块 IC 方向不一致")
+    elif subchain_verdict and subchain_verdict.get("verdict") == "conflicted":
+        _item("F6", True, "产业链内子链方向混乱（无有效子链且存在显著反向子链）")
+    elif baseline_effective_chains is not None and subchain_verdict is not None:
+        cur = set(subchain_verdict.get("effective_chains", []) or [])
+        base = set(baseline_effective_chains)
+        drift = sorted(cur ^ base)
+        _item(
+            "F6",
+            bool(drift),
+            f"子链有效集合漂移={'一致' if not drift else f'漂移: 当前{cur} vs 基准{base}'}",
+        )
     else:
-        _item("F6", not sector_consistent, f"板块 IC 方向一致性={'一致' if sector_consistent else '不一致'}")
+        _item("F6", False, "板块 IC 方向一致性一致")
 
     flagged = [k for k, v in ind.items() if v["flagged"]]
     return {

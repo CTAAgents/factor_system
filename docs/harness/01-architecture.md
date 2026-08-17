@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+108
+> 版本: v2.104.0+113
 > 最后更新: 2026-08-10
 
 ---
@@ -265,6 +265,67 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │        仍共享产业链驱动（原油→化工传导），同步放大子链暴露              │
 │      → 配置：settings.yaml l3.chain_dedup.{enabled, max_per_chain}      │
 │        （仅 market=energy 生效）                                        │
+│    Step 2b: 子链差异化权重调制（plans/47 §B，v2.104.0+109）             │
+│      → 与 Step 1.8b 互补：去冗余管"数量"（单链 ≤ max_per_chain），      │
+│        调制管"权重"（特异因子在无效子链降权/归零）                      │
+│      → subchain_weight.py：build_subchain_weights（m[factor][子链]，    │
+│        zero/soft 双模式）/ apply_subchain_modulation / 暴露监控         │
+│      → 数据源：A2 落库 factor_catalog.metadata.subchain_ic_profile/     │
+│        subchain_scope/subchain_specific（subchain_profile.py 画像）      │
+│      → factor_weights.json 输出 subchain_weights/symbol_chain，信号     │
+│        管线 _compute_composite_scores 按品种归属子链应用调制            │
+│      → 配置：settings.yaml l3.subchain_weight.{enabled, decay_mode,     │
+│        soft_min_ratio, scope_default, max_exposure_ratio}（灰度默认关） │
+│      → CLI：portfolio run --enable-subchain-weight（仅 energy 生效）    │
+│    Step 2.5: Regime 分层方向 Gate 与收益来源族激活（plans/48，v2.104.0+111）│
+│      → 方向层（A/B 模块，信号管线 Step 3h1，仅 energy 且 Gate 开启）：   │
+│        regime_gate.py build_subchain_gates（long/short/avoid/neutral +  │
+│        盲测池默认回避）→ apply_subchain_gate（avoid 剔除/soft 降权 +     │
+│        long/short 方向过滤）→ apply_exposure_scale（暴露 = 子链置信度    │
+│        映射 map_confidence_to_exposure × 品种-链对齐度；score=0 跳过与  │
+│        avoid-soft 保留降权结果防双重惩罚）；先于全局方向偏置（3h2）      │
+│      → 来源层（C 模块，Step 2.5）：因子按 subchain_scope（单链）路由     │
+│        subchain_regimes 子链 regime 倍率表（首期全局 REGIME_STYLE_       │
+│        MULTIPLIERS 复制初始化；无 scope/all/unknown/部分链回退全局）      │
+│      → 画像：build_subchain_return_source 入 _regime_meta.subchain_     │
+│        return_source；质量报告 subchain_gate_distribution 段（D3）       │
+│      → 配置：settings.yaml l3.regime_gating.{enabled, min_confidence,   │
+│        avoid_mode, soft_avoid_ratio, blind_default, exposure_min,       │
+│        exposure_sat}（灰度默认关）；CLI --enable-regime-gating           │
+│      → 与 Step 2b 正交串联：Gate 管"能否/方向"（品种得分层），调制管      │
+│        "怎么赚/赚多少"（因子权重层）——先方向后幅度                       │
+│      → 权重源头闭环（plans/50，v2.104.0+113）：`gate_scale_map`（Gate 决策 │
+│        → 链级缩放系数：avoid-hard→0.0 / avoid-soft→soft_avoid_ratio /     │
+│        long·short·neutral→1.0）+ `_merge_gate_scale_into_modulation`      │
+│        （m'[factor][子链] = m × gate_scale，avoid 链在权重源头归零/降权，│
+│        同步 factor_weights.json 的 subchain_weights 标注）；依赖 Step 2b  │
+│        调制矩阵存在（enable_subchain_weight），否则保持观测语义零行为变更│
+│      → 质量报告新增 `subchain_gate_scale` 段（四网合一第四段）            │
+│    Step 2.6: 子链质量矩阵 q[factor][子链]（plans/49，v2.104.0+112）       │
+│      → 质量层：评审质检与生命周期按"因子×子链"单元评估（张量化），与     │
+│        Step 2b 调制矩阵 m[factor][子链]（幅度层）、Step 2.5 Gate g[子链]  │
+│        （方向层）三者同网格正交——Gate 管"该子链现在能不能做"、质量矩阵  │
+│        管"该因子在该子链还值不值得做"、调制管"做多少"                    │
+│      → 存储：factor_db `subchain_factor_quality` 时序表（评估单元=        │
+│        (factor_id, market, chain)，n_symbols/mean_ic/std_ic/t_stat/p_     │
+│        value/effective/source/decision；晋升写首行 + 评审作业重算，E.4   │
+│        短连接）；subchain_lifecycle.py `compute_subchain_degradation`    │
+│        单元粒度退化（全部有效链衰减→degrade / 部分链→scope_shrink / 单链 │
+│        特异因子唯一链衰减→degrade，从未 effective→keep）                 │
+│      → 闭环：scope_shrink 剔除失效链 → 更新 metadata.subchain_scope →   │
+│        Step 2b 调制矩阵消费最新 metadata 自动重算（质量退化传导权重）    │
+│      → 评审张量化：Q10/F6 两级判定（judge_q10_subchain 外层跨产业链方向  │
+│        一致 + 内层子链特异 t 检验护栏、反向子链 avoid）；机审单链特异    │
+│        放行（AutoReviewPolicy 全链 IC<min 但 effective 子链 t 显著）；    │
+│        准入三级权重（SUBCHAIN_SPECIFIC_MAX_WEIGHT=0.10）                 │
+│      → 监控：质量报告 `subchain_quality_matrix` 段（各因子×子链最近期    │
+│        effective 快照 + scope 变化历史），与 subchain_exposure（47）/     │
+│        subchain_gate_distribution（48）三网合一                          │
+│      → 配置：settings.yaml l3.subchain_quality.{enabled, decay_threshold,│
+│        drop_severe, window_days, min_periods, cooldown_days}（灰度默认关） │
+│      → 可扩展：评估单元=(market, chain)，子链定义参数化                 │
+│        （config/futures_universe.yaml 加映射即扩展到黑色/有色/农产品/金融│
+│        等其它产业链、品种簇，评审/生命周期/调制/Gate 全部按单元自动生效）│
 │    Step 1.8c: OWL 因子分组筛选旁路（plans/41 方案 A，v2.104.0+84）      │
 │      → 与 Step 1.8 互补：信号聚类管"信号长得像不像"，OWL 管"对横截面   │
 │        收益有没有独立解释力"（横截面收益-载荷定价信息）                  │
@@ -1225,4 +1286,6 @@ class FactorKind(str, Enum):
 | EvolutionLoop Mixin 拆分（34 计划 B 阶段，2026-08-13） | `evolution_uct.py` EvolutionUctMixin（领域 I：_select_parent_uct/_update_uct_stats/_update_uct_failure/_check_circuit_breaker/_maybe_early_stop）；`evolution_trace.py` EvolutionTraceMixin（领域 J：_build_parent_failure_ctx/_build_success_pattern_report/_record_experiment_variant/_export_experiment_log/_record_audit_failed_trace/_record_ablation_failed_trace/_record_robustness_failed_trace/_record_causal_failed_trace/_record_success_trace/_record_failure_trace/_log_inspection_detail/_record_quality_filtered_trace + _QualityInspectionResult）；`evolution_channels.py` EvolutionChannelsMixin（领域 G：_run_gp_evolution/_run_deep_evolution/_generate_operator_factor/_try_operator_engine_evolution）；`evolution_seeds.py` EvolutionSeedsMixin（领域 D：_evaluate_and_promote_seeds/_merge_l1_candidates/_run_seed_correlation_check/_build_barra_exposures/_evaluate_cross_section/run_microstructure_promotion）；`evolution_audit.py` EvolutionAuditMixin（领域 E：_run_factor_audit/_run_walkforward_oos/_run_backtest_pipeline/_run_ablation_check/_run_robustness_check/_run_shap_analysis/_run_causal_validation/_build_wf_config/_is_blocking_ablation + _ABLATION_* 类常量）；`evolution_review.py` EvolutionReviewMixin（领域 F：_run_periodic_factor_review/_get_factor_data_for_review/_register_factor_baseline/_check_factor_data_quality）；`evolution_prefilter.py` EvolutionPrefilterMixin（领域 H：_quick_prefilter/_cross_section_prefilter/_check_factor_runtime）；`evolution_promote.py` EvolutionPromoteMixin（领域 C：_write_seed_correlation_index/_scan_elite_correlations/_check_elite_correlation/_count_cluster_members/_orthogonalize_via_basis/_orthogonalize_candidate/_load_elite_parent_factors/_release_repo_after/_get_repo/_promote_to_elite/_write_to_duckdb）；`evolution_candidate.py` EvolutionCandidateMixin（领域 B：_process_candidate，B 阶段收官）；`evolution_loop.py` `class EvolutionLoop(EvolutionTraceMixin, EvolutionChannelsMixin, EvolutionSeedsMixin, EvolutionAuditMixin, EvolutionReviewMixin, EvolutionPrefilterMixin, EvolutionPromoteMixin, EvolutionCandidateMixin)`；公开 API（EvolutionLoop/EvolutionRunResult/UCT_EXPLORATION_C/_add_trading_days/_build_shadow_pool/_QualityInspectionResult/main）与行为等价不变 | `python scripts/analyze_evolution_loop.py`（方法/属性分布基线，B 阶段收官 1470 行/9 方法）；Phase 46h 定向：`pytest tests/factor_engine/test_structure_cluster_quota.py tests/factor_engine/test_orthogonal_basis.py tests/factor_engine/test_l2_orthogonalize.py tests/factor_engine/test_l2_elite_redundancy.py tests/factor_engine/test_evolution_l1_merge.py tests/factor_engine/test_microstructure_promotion.py -m "not slow" -q`；Phase 46i 定向：`pytest tests/factor_engine/test_evolution_loop.py tests/factor_engine/test_evolution_stop.py tests/factor_engine/test_coverage_edge_cases.py tests/factor_engine/test_batch_mining.py -m "not slow" -q` |
 | 35-gap-closure-plan P2 批次（v2.103.0+15，2026-08-13） | `fts/data_sources/trading_calendar.py`（新）→ G8 统一交易日历层（`TradingCalendar` get_trading_days/is_trading_day/align 停牌 ffill + `mark_panel_data_gaps` 断K标记 + `mark_gap_anomalies` 跳空异常标记），`fts/data_futures.py get_futures_panel` 接入（data_gap/gap_anomaly 列，`inject_data_gap_enabled` 默认开，清洗失败降级）；`fts/factor_engine/barra/barra_neutralizer.py` → G10 中性化注入（`vol_map` 截面波动率列 + `dates` 时序月度去季节化 `_deseasonalize_time_series`，波动率列在场补截距），`cross_section_evaluate_backtest(vol_map=...)` 透传，`evolution_seeds.py`/`evolution_futures.py` `_build_vol_map` 双路径接入（与 `l2_barra_style_neutral` 同门控）；`fts/factor_engine/signal_contract.py` → G12 信号契约（`SignalDetail` 扩 target_lots/current_lots/delta_lots/score/regime/risk_usage + `to_lots` + `signal_map_to_factor_signal` 统一转换器 + validator 新字段校验），`scripts/mhf_signal_pipeline.py`/`fts/live_trade/tqsdk_mhf_executor.py` 接入；`fts/factor_engine/regime_multipliers.py` → G14 Regime 风控参数（`REGIME_RISK_PARAMS` 第二张表 + `resolve_risk_params` 平滑），`fts/risk/risk_manager.py`/`paper_trader_mhf.py` 接入；`fts/factor_engine/standardizer.py` → G9 MAD（mad_winsorize/mad_then_zscore）；`fts/factor_engine/capital_allocator.py` → G15 min_variance（Ledoit-Wolf 收缩）；`fts/factor_engine/evaluation_chain.py` → G11 日换手硬门槛 | `python -c "from fts.data_sources.trading_calendar import TradingCalendar, mark_panel_data_gaps, mark_gap_anomalies; assert len(TradingCalendar.from_symbol_dates({})._days) == 0"`；`pytest tests/data_sources/test_trading_calendar.py tests/factor_engine/test_barra_vol_season_neutral.py tests/factor_engine/test_regime_risk_params.py tests/factor_engine/test_signal_contract_g12.py -q`（53 passed）；`python -c "from fts.factor_engine.regime_multipliers import REGIME_RISK_PARAMS; assert REGIME_RISK_PARAMS['high_vol']['leverage_cap'] == 1.0"` |
 | ②b2a signal_sharpe raw 口径（v2.104.0+73，2026-08-16） | `fts/factor_engine/portfolio_loop.py` build_combo：`pre_weighted_sharpe` 改用 `s.get("_sharpe_raw", s.get("sharpe"))`（截断前原始值优先，缺失回退截断值）；`synthesize_signals` quality_weight 分支透传 `_sharpe_raw`；`fts/factor_engine/contracts.py` DEFAULT_L3_VERIFIER_CONFIG.max_sharpe 3.5→8.0 + `fts/config/settings.py`/`config/settings.yaml` verifier.max_sharpe=8.0（raw 口径信号质量上界 2.0→提升，3.5 会恒触发过拟合警告）；权重计算/展示仍用 SHARPE_CAP=2.0 截断值 | `python -c "from fts.factor_engine.contracts import DEFAULT_L3_VERIFIER_CONFIG as c; assert c['max_sharpe'] == 8.0"`；`python -m pytest tests/factor_engine/test_portfolio_loop.py -q`（261 passed，含 test_signal_sharpe_uses_raw_not_capped / test_raw_sharpe_forwarded / test_passes_high_sharpe_within_cap） |
+| 因子×子链质量矩阵（plans/49，v2.104.0+112，2026-08-17） | `fts/factor_engine/factor_db/schema.py` `subchain_factor_quality` 表（评估单元=(factor_id, market, chain)，n_symbols/mean_ic/std_ic/t_stat/p_value/effective/source/decision）；`fts/factor_engine/factor_db/repository.py` `SubchainQualityRepository`（UPSERT 幂等/时序查询/latest/recent，E.4 短连接）；`fts/factor_engine/subchain_profile.py` `build_subchain_quality_rows`（t=inf→None 序列化）；`fts/factor_engine/subchain_lifecycle.py` `compute_subchain_degradation`（全部有效链衰减→degrade/部分链→scope_shrink/单链特异唯一链→degrade/从未 effective→keep）+ `scope_without_chains` + `build_subchain_quality_matrix_snapshot`；`fts/factor_engine/qa/pre_entry.py` `judge_q10_subchain` 两级判定；`fts/factor_engine/factor_inspector.py` `AutoReviewPolicy.classify(subchain_profile=...)` 单链特异放行；`fts/factor_engine/qa/admission.py` `SUBCHAIN_SPECIFIC_MAX_WEIGHT=0.10`；`fts/factor_engine/qa/quarterly_check.py` F6 两级判定；`fts/factor_engine/energy_qa_review.py` `_subchain_degradation`/`_shrink_scope`；`fts/factor_engine/portfolio_loop.py` Step 2.6 质量矩阵（Step 2b 消费最新 metadata 自动重算闭环）；`config/settings.yaml` `l3.subchain_quality`（灰度默认关） | `python -m pytest tests/factor_engine/test_subchain_quality_store.py tests/factor_engine/test_qa_subchain.py tests/factor_engine/test_lifecycle_subchain.py -q`（46 passed）；`python -c "import duckdb; c=duckdb.connect(':memory:'); c.execute(\"SELECT column_name FROM information_schema.columns WHERE table_name='subchain_factor_quality'\")"` |
+| L3 权重层 Gate 闭环（plans/50，v2.104.0+113，2026-08-17） | `fts/factor_engine/regime_gate.py` `gate_scale_map(gates, config)`（Gate 决策 → 链级缩放系数：avoid-hard→0.0 / avoid-soft→soft_avoid_ratio / long·short·neutral→1.0）；`fts/factor_engine/portfolio_loop.py` Step 2.5 `_merge_gate_scale_into_modulation`（m'[factor][子链] = m × gate_scale，avoid 链权重源头归零/降权，同步 signals 的 subchain_weights 标注与 factor_weights.json 输出；依赖 `enable_subchain_weight` 调制矩阵存在否则观测语义零行为变更）；质量报告 `subchain_gate_scale` 段（与 subchain_exposure/gate_distribution/quality_matrix 四网合一） | `python -m pytest tests/factor_engine/test_regime_gate.py tests/factor_engine/test_subchain_weight.py -q`（59 passed，含 TestGateScaleMap 5 + TestMergeGateScaleIntoModulation 6）；`python -c "from fts.factor_engine.regime_gate import gate_scale_map; assert callable(gate_scale_map)"` |
 

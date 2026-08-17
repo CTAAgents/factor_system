@@ -1,7 +1,7 @@
 # FTS 晋级计划
 
-> 版本: v2.104.0+108
-> 最后更新: 2026-08-10
+> 版本: v2.104.0+113
+> 最后更新: 2026-08-17
 > 状态: 活跃 — 随项目迭代持续更新
 
 > **版本策略（v2.103.0 修订）**：版本号 = 里程碑版本 + build 段（SemVer build 段制）。日常开发（GAP 实现、测试、文档）通过 `python scripts/bump_version.py --build --message "..."` bump build 段（如 2.103.0 → 2.103.0+1，不限次）；满足发布条件（晋级里程碑完成 + 全量回归通过）时通过 `--type patch|minor|major --message "..."` bump 正式版本（build 清零，单日限一次）。详见 [07-operations.md §6 版本升级流程](07-operations.md)。
@@ -28,6 +28,41 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 ---
 
 ## 2. 已完成里程碑
+
+### Regime 分层方向 Gate 与品种暴露缩放（2026-08-17，build bump v2.104.0+111，GAP-136，plans/48）
+
+**完成时间**: 2026-08-17
+
+**核心产出**:
+- ✅ **A 子链方向 Gate**：新增 `fts/factor_engine/regime_gate.py`——`build_subchain_gates`（bull/bear 且 conf≥min_confidence(0.55)→long/short、conf 不足→avoid、oscillate 等→neutral、盲测池默认回避）+ `apply_subchain_gate`（hard 剔除/soft 降权 0.3/long·short 方向过滤）；信号管线 `main()` Step 3h1 接入（仅 `--chain energy` 且 Gate 开启生效，失败降级不阻断），settings.yaml `l3.regime_gating` 参数化
+- ✅ **B 品种暴露缩放**：`map_confidence_to_exposure`（分段 <0.4→0 / 0.4~0.7 线性 / ≥0.7→1.0）+ `apply_exposure_scale`（暴露 = 子链置信度映射 × 品种-链对齐度；score=0 跳过与 avoid-soft 保留降权结果防双重惩罚）；Step 3h1 Gate 之后、3h2 全局方向偏置之前接入
+- ✅ **C 收益来源族激活**：`regime_adaptive_weight_adjustment` 新增 `subchain_regimes` 参数——因子按 `subchain_scope`（单链）路由子链 regime 倍率表（首期全局 `REGIME_STYLE_MULTIPLIERS` 复制初始化，无 scope/all/unknown/部分链回退全局向后兼容）；Step 2.5 energy+Gate 开启时 `SectorRegimeSelector.detect_all` 检测子链 regime；`build_subchain_return_source` 画像入 `_regime_meta.subchain_return_source`
+- ✅ **D 灰度+串联+监控**：`--enable-regime-gating`（默认关）+ settings.yaml enabled=false 双通道；与 plans/47 幅度层调制正交串联验证（先方向后幅度）；质量报告新增 `subchain_gate_distribution` 段（与 `subchain_exposure` 互补——方向层 vs 幅度层监控）
+- ✅ 测试：test_regime_gate.py 26 用例（Gate 判定/映射分段边界/防双重惩罚/盲测）+ test_portfolio_loop_adaptive +9（子链路由/回退/概率混合/画像）+ test_subchain_weight +1（串联正交）= 36 用例全绿；受影响回归 694 passed + ruff 全绿
+- ✅ 差距登记：GAP-136 登记并关闭（P1，品种/子链 Regime 未作独立方向 Gate + 置信度未映射暴露）
+
+### 因子×子链质量矩阵：评审质检与生命周期张量化（2026-08-17，build bump v2.104.0+112，GAP-137，plans/49）
+
+**完成时间**: 2026-08-17
+
+**核心产出**:
+- ✅ **A 存储底座**：新增 `subchain_factor_quality` 时序表（评估单元=(factor_id, market, chain)，n_symbols/mean_ic/std_ic/t_stat/p_value/effective/source/decision，主键 factor_id+market+chain+evaluated_at）+ `SubchainQualityRepository`（UPSERT 幂等/时序查询/latest/recent，E.4 短连接）+ `build_subchain_quality_rows`（每因子×子链一行，t=inf→None 序列化）；晋升写首行 + 评审作业重算
+- ✅ **B 评审张量化**：Q10/F6 两级判定（`judge_q10_subchain`——外层跨产业链方向一致 + 内层子链特异 t 检验护栏（min_symbols=3/min_t_stat=2.0/min_chain_ic=0.10）+ 反向子链 avoid 标记，输出 consistent/subchain_specific/conflicted）；机审单链特异放行（`AutoReviewPolicy` 全链 IC<min 但 effective 子链 t 显著 → 放行且 scope=[有效链]，Sharpe 不放行、QA 门禁不变）；准入三级权重（`SUBCHAIN_SPECIFIC_MAX_WEIGHT=0.10` 受限权重）
+- ✅ **C 生命周期张量化**：`compute_subchain_degradation` 单元粒度退化——全部有效链衰减→degrade / 部分链→scope_shrink / 单链特异因子唯一链衰减→degrade / 从未 effective→keep（样本不足 None 不误判）；`_shrink_scope` 剔除失效链更新 `metadata.subchain_scope` → 47 调制矩阵 Step 2b 消费最新 metadata 自动重算闭环；冷却期 cooldown_days=30 防过激收缩
+- ✅ **D 闭环+监控+可扩展**：质量报告新增 `subchain_quality_matrix` 段（与 47 `subchain_exposure`/48 `subchain_gate_distribution` 三网合一——幅度/方向/质量三层正交）；子链定义参数化（`config/futures_universe.yaml` 加映射即扩展至黑色/有色/农产品/金融等其它产业链、品种簇）；灰度 `l3.subchain_quality.enabled=false` 默认关回退全链原逻辑
+- ✅ 测试：test_subchain_quality_store.py 13 + test_qa_subchain.py 19 + test_lifecycle_subchain.py 14 = 46 用例全绿；受影响回归 448 passed（qa 104 + portfolio 299 + evolution 45）+ ruff 全绿
+- ✅ 差距登记：GAP-137 登记并关闭（P1，评审质检与生命周期管理未子链化）
+
+### L3 权重层 Gate 闭环：Gate 并入子链调制矩阵（2026-08-17，build bump v2.104.0+113，GAP-138，plans/50）
+
+**完成时间**: 2026-08-17
+
+**核心产出**:
+- ✅ **A gate_scale_map**：`regime_gate.py` 新增纯函数——Gate 决策 → 链级权重缩放系数（avoid+hard→0.0 / avoid+soft→soft_avoid_ratio / long·short·neutral→1.0：方向过滤属信号层 Step 3h1 职责，权重层只回避方向不明链）
+- ✅ **B L3 权重源头闭环**：`portfolio_loop.py` Step 2.5 接线 `_merge_gate_scale_into_modulation`——Gate 开启 + energy + 子链 regime 检测成功时将 m'[factor][子链] = m × gate_scale（avoid 链权重源头归零/降权），同步 signals 的 `subchain_weights` 标注与 `factor_weights.json` 输出；依赖 Step 2b 调制矩阵存在（`enable_subchain_weight`）否则保持观测语义零行为变更；与信号层 Step 3h1 乘性串联防双重惩罚
+- ✅ **B3 观测**：质量报告新增 `subchain_gate_scale` 段——与 47 `subchain_exposure`（幅度）/48 `subchain_gate_distribution`（决策）/49 `subchain_quality_matrix`（质量）四网合一
+- ✅ 测试：test_regime_gate.py TestGateScaleMap 5 + test_subchain_weight.py TestMergeGateScaleIntoModulation 6 = 11 用例全绿；受影响回归 358 passed（portfolio 299 + regime_gate/subchain_weight 59）+ ruff 全绿
+- ✅ 差距登记：GAP-138 登记并关闭（P1，L3 权重源头未消费子链方向 Gate）
 
 ### 质检结果落库 SSOT 闭环（2026-08-16，build bump v2.104.0+78，GAP-128）
 

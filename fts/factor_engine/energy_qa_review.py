@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -310,6 +310,173 @@ class EnergyQaReviewPipeline:
             }
         return _compute_current_ic(proxy, panel, list(common_dates))
 
+    # ── plans/49 §C3：单元粒度退化旁路（因子×子链质量矩阵） ──
+
+    def _subchain_lifecycle_cfg(self):
+        """读取 l3.subchain_quality 退化检测配置（灰度开关，enabled=false 回退全链）。"""
+        try:
+            from fts.factor_engine.subchain_lifecycle import load_subchain_lifecycle_config
+
+            return load_subchain_lifecycle_config()
+        except Exception:  # noqa: BLE001
+            from fts.factor_engine.subchain_lifecycle import SubchainLifecycleConfig
+
+            return SubchainLifecycleConfig()
+
+    def _compute_curr_symbol_ic(
+        self,
+        factor_row: dict[str, Any],
+        panel: dict[str, Any],
+        common_dates: Any,
+    ) -> dict[str, float]:
+        """逐品种时序 IC（{品种: spearmanr}，对齐 evaluation.symbol_ic 口径，
+        plans/49 §C3 供子链画像重算）。样本 <5 / 常数信号·收益 / 计算失败品种跳过。
+        """
+        import numpy as np
+        import warnings as _w
+        from scipy.stats import spearmanr
+
+        from fts.factor_engine.factor_program import FactorExecutor
+
+        j = factor_row.get("_json_data")
+        if isinstance(j, dict):
+            proxy = dict(j)
+        else:
+            proxy = {
+                "factor_id": factor_row.get("factor_id", ""),
+                "name": factor_row.get("name", ""),
+                "code": factor_row.get("code") or "",
+                "params": factor_row.get("params") or {},
+                "evaluation": {"level_1_backtest": {"ic": factor_row.get("_hist_ic", 0.0)}},
+            }
+        out: dict[str, float] = {}
+        for sym, df in panel.items():
+            if df is None or df.empty or len(df) < 20:
+                continue
+            try:
+                executor = FactorExecutor(proxy)
+                sig = executor.execute(df, proxy.get("params", {}))
+                arr = np.where(
+                    np.isfinite(np.array(sig, dtype=float)),
+                    np.array(sig, dtype=float),
+                    np.nan,
+                )
+                pair = df.reindex(common_dates)
+                if len(arr) < len(pair):
+                    arr = np.pad(arr, (0, len(pair) - len(arr)), constant_values=np.nan)[: len(pair)]
+                closes = pair["close"].values
+                fwd_ret = np.zeros(len(closes))
+                fwd_ret[:-5] = (closes[5:] - closes[:-5]) / np.maximum(closes[:-5], 1e-10)
+                valid = ~(np.isnan(arr) | np.isnan(fwd_ret))
+                s, r = arr[valid], fwd_ret[valid]
+                if len(s) < 5 or np.std(s) < 1e-10 or np.std(r) < 1e-10:
+                    continue
+                with _w.catch_warnings():
+                    _w.filterwarnings("ignore", category=RuntimeWarning)
+                    ic_val, _ = spearmanr(s, r)
+                if not np.isnan(ic_val):
+                    out[sym] = float(ic_val)
+            except Exception:  # noqa: BLE001 — 单品种失败跳过不阻断
+                continue
+        return out
+
+    def _subchain_degradation(
+        self,
+        f: dict[str, Any],
+        panel: dict[str, Any],
+        common_dates: Any,
+        sc_cfg: Any,
+    ) -> tuple[str, list[str]]:
+        """单元粒度退化判定 + 写质量矩阵行（plans/49 §C3/C2 闭环）。
+
+        重算当前逐品种 IC → ``build_subchain_quality_rows`` 写当前行（source=review）
+        → 历史时序 ``compute_subchain_degradation`` 判定。
+
+        Returns:
+            (factor_status, scope_shrink_chains)
+        """
+        from fts.factor_engine.factor_db.repository import SubchainQualityRepository
+        from fts.factor_engine.subchain_lifecycle import compute_subchain_degradation
+        from fts.factor_engine.subchain_profile import build_subchain_quality_rows
+
+        fid = f.get("factor_id", "")
+        sic = self._compute_curr_symbol_ic(f, panel, common_dates)
+        if not sic:
+            return "keep", []
+        rows = build_subchain_quality_rows(fid, "energy", sic, source="review")
+        qrepo = SubchainQualityRepository(market=self.market, db_path=self.db_path)
+        try:
+            qrepo.save_subchain_quality(rows)
+            history = qrepo.query_subchain_quality(fid, "energy")
+        finally:
+            qrepo.close()
+        r = compute_subchain_degradation(history, sc_cfg)
+        if r["factor_status"] in ("degrade", "scope_shrink"):
+            logger.info("[L2评审质检][energy] 子链退化 factor=%s %s", fid, r["detail"])
+        return r["factor_status"], r["scope_shrink_chains"]
+
+    def _shrink_scope(self, f: dict[str, Any], remove_chains: list[str], trace_id: str) -> None:
+        """scope 收缩闭环（plans/49 §C2）：更新 metadata.subchain_scope 剔除失效链。
+
+        47 号调制矩阵在 Step 2b 消费最新 metadata 自动重算；scope="all"（≥3 链 effective
+        标记）时按当前画像 effective 链剔除，剩余 ≥ all_chains_effective_min 保持 "all"。
+        """
+        from fts.factor_engine.factor_db.repository import FactorRepository, FactorStatusRepository
+        from fts.factor_engine.subchain_profile import SubchainProfileConfig
+
+        fid = f.get("factor_id", "")
+        if not remove_chains:
+            return
+        repo = FactorRepository(market=self.market, db_path=self.db_path)
+        srepo = FactorStatusRepository(market=self.market, db_path=self.db_path)
+        try:
+            row = repo.get_factor(fid)
+            if not row:
+                return
+            meta = row.get("metadata") or {}
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
+            profile = meta.get("subchain_ic_profile") or {}
+            eff_chains = (
+                [c for c, st in profile.items() if bool(st.get("effective"))]
+                if isinstance(profile, dict)
+                else []
+            )
+            scope = meta.get("subchain_scope")
+            base = eff_chains if eff_chains else (scope if isinstance(scope, list) else [])
+            remove = set(remove_chains)
+            new_scope_list = [c for c in base if c not in remove]
+            if not new_scope_list:
+                # 全部失效链被剔除 → 交由 degraded 路径（此处不动，避免半状态）
+                return
+            cfg = SubchainProfileConfig()
+            new_scope: Any = (
+                "all" if len(new_scope_list) >= cfg.all_chains_effective_min else new_scope_list
+            )
+            meta["subchain_scope"] = new_scope
+            meta["subchain_shrink"] = {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "trace_id": trace_id,
+                "removed": remove_chains,
+            }
+            repo.update_factor(fid, {"metadata": meta})
+            srepo.log_transition(
+                fid,
+                str(f.get("_prev_status", "active")),
+                str(f.get("_prev_status", "active")),
+                f"子链 scope 收缩: 剔除 {remove_chains}",
+                snapshot={"subchain_shrink": meta["subchain_shrink"]},
+            )
+            logger.info("[L2评审质检][energy] scope 收缩 factor=%s removed=%s → %s", fid, remove_chains, new_scope)
+        finally:
+            repo.close()
+            srepo.close()
+
     def _stage_degradation(
         self,
         panel: dict[str, Any],
@@ -322,6 +489,7 @@ class EnergyQaReviewPipeline:
         tracker = self._ensure_tracker()
         dispositions: list[FactorDisposition] = []
         rows: list[dict[str, Any]] = []
+        sc_cfg = self._subchain_lifecycle_cfg()
         for f in factors:
             fid = f.get("factor_id", "")
             name = f.get("name", fid)
@@ -344,6 +512,18 @@ class EnergyQaReviewPipeline:
                 slope_grade=slope_grade if slope_grade in ("observe", "retired") else "normal",
                 cfg=self.cfg,
             )
+            # plans/49 §C3：单元粒度退化旁路（灰度 l3.subchain_quality.enabled 时）——
+            # 全有效链退化 → 强制 degrade；部分链失效 → scope 收缩（仍 active，闭环传导 47 调制）
+            if sc_cfg.enabled:
+                try:
+                    sc_status, sc_shrink = self._subchain_degradation(f, panel, common_dates, sc_cfg)
+                    if sc_status == "degrade" and disp.decision == "active":
+                        disp.decision = "degraded"
+                        disp.reasons.append("子链全有效链退化")
+                    elif sc_status == "scope_shrink":
+                        self._shrink_scope(f, sc_shrink, trace_id)
+                except Exception as se:  # noqa: BLE001 — 旁路失败回退全链判定
+                    logger.warning("[L2评审质检][energy] 子链退化旁路失败（回退全链）: %s", se)
             dispositions.append(disp)
             rows.append(
                 {

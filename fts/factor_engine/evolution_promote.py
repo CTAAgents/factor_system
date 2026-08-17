@@ -1112,6 +1112,60 @@ class EliteStore:
 
             l1 = evaluation.get("level_1_backtest", {})
 
+            # ── metadata 构建（plans/47 §A2：energy 链因子附带子链适用性画像）──
+            metadata: dict[str, Any] = {
+                "quality_score": quality_score,
+                "correlation_metadata": factor.get("correlation_metadata", {}),
+                "symbols": factor.get("symbols", []),
+                "risk_tag": factor.get("risk_tag"),
+                "factor_version": factor.get("factor_version", "v2"),
+                "audit_report": audit_report.to_dict() if audit_report else None,
+                "shadow_pool": shadow_pool,
+                "qa_review": qa_review,
+                # 正交化闭环（GAP-I206 补充，v2.71.0/v2.72.0 基底）
+                "orthogonalized": factor.get("orthogonalized", False),
+                "orthogonalized_against": factor.get("orthogonalized_against", ""),
+                "orthogonalized_pearson": factor.get("orthogonalized_pearson", 0.0),
+                "orthogonalized_basis": factor.get("orthogonalized_basis", []),
+                "orthogonal_signal": factor.get("orthogonal_signal", []),
+            }
+            # energy 链因子落子链画像（symbol_ic → 显著性护栏 → metadata；非 energy 不触发）
+            if factor_market == "energy":
+                sic = (l1 or {}).get("symbol_ic") or {}
+                if sic:
+                    try:
+                        from fts.factor_engine.subchain_profile import (
+                            build_subchain_metadata,
+                            build_subchain_quality_rows,
+                        )
+
+                        metadata.update(build_subchain_metadata(factor_id, sic))
+                        # plans/49 §A2：晋升写质量矩阵首行（QA/生命周期张量时序底座，
+                        # SSOT subchain_factor_quality 表；失败仅告警不阻断晋升）
+                        _rows = build_subchain_quality_rows(
+                            factor_id, "energy", sic, source="promotion"
+                        )
+                        if _rows:
+                            try:
+                                from fts.factor_engine.factor_db.repository import (
+                                    SubchainQualityRepository,
+                                )
+
+                                _qrepo = SubchainQualityRepository(market="energy")
+                                try:
+                                    _qrepo.save_subchain_quality(_rows)
+                                finally:
+                                    _qrepo.close()
+                            except Exception as qe:  # noqa: BLE001
+                                logger.warning(
+                                    "[evo] 质量矩阵首行写入失败（非致命，跳过）: factor=%s err=%s",
+                                    factor_id, qe,
+                                )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "[evo] 子链画像计算失败（非致命，跳过）: factor=%s err=%s", factor_id, e
+                        )
+
             factor_dict = {
                 "factor_id": factor_id,
                 "name": factor_name,
@@ -1131,22 +1185,7 @@ class EliteStore:
                 "max_drawdown": l1.get("max_drawdown", 0.0),
                 "turnover_monthly": l1.get("turnover_monthly", 0.0),
                 "decay_6m": l1.get("decay_6m", 0.0),
-                "metadata": {
-                    "quality_score": quality_score,
-                    "correlation_metadata": factor.get("correlation_metadata", {}),
-                    "symbols": factor.get("symbols", []),
-                    "risk_tag": factor.get("risk_tag"),
-                    "factor_version": factor.get("factor_version", "v2"),
-                    "audit_report": audit_report.to_dict() if audit_report else None,
-                    "shadow_pool": shadow_pool,
-                    "qa_review": qa_review,
-                    # 正交化闭环（GAP-I206 补充，v2.71.0/v2.72.0 基底）
-                    "orthogonalized": factor.get("orthogonalized", False),
-                    "orthogonalized_against": factor.get("orthogonalized_against", ""),
-                    "orthogonalized_pearson": factor.get("orthogonalized_pearson", 0.0),
-                    "orthogonalized_basis": factor.get("orthogonalized_basis", []),
-                    "orthogonal_signal": factor.get("orthogonal_signal", []),
-                },
+                "metadata": metadata,
             }
 
             # ── 幂等写入：已存在则更新，不存在则创建 ──

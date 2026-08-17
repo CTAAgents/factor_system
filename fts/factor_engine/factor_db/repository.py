@@ -76,6 +76,7 @@ class FactorRepository:
             self._last_columns = [desc[0] for desc in result.description]
         return result
 
+
     def close(self):
         """关闭数据库连接。"""
         if self._conn:
@@ -1548,3 +1549,177 @@ class FactorAuditReportRepository:
             else:
                 result[col] = val
         return result
+
+
+class SubchainQualityRepository:
+    """因子×子链质量矩阵仓储（plans/49 §A2，QA/生命周期张量化）。
+
+    提供对 ``subchain_factor_quality`` 表的读写访问（SSOT，一数一源）：
+    - ``save_subchain_quality``: 批量 UPSERT（按主键 factor×market×chain×evaluated_at 幂等）
+    - ``query_subchain_quality``: 单因子×子链质量时序（升序，供退化检测）
+    - ``latest_subchain_quality``: 每子链最新一行（供质量报告/监控快照）
+    - ``list_recent_quality``: 最近 N 期全量（供生命周期巡检批量加载）
+
+    写入遵循 E.4 S1 短连接 + lock_configuration 读共存；调用方用后 close。
+    """
+
+    _COLS = (
+        "factor_id", "market", "chain", "evaluated_at", "period_end",
+        "n_symbols", "mean_ic", "std_ic", "t_stat", "p_value",
+        "effective", "source", "decision",
+    )
+
+    def __init__(self, db_path: str | Path | None = None, market: str = "futures"):
+        from .schema import get_db_path
+
+        if db_path:
+            self._db_path = Path(db_path)
+        else:
+            self._db_path = get_db_path(market)
+        self._conn = None
+
+    def _get_conn(self):
+        if self._conn is None:
+            import duckdb
+            from .schema import init_database
+
+            if not Path(self._db_path).exists():
+                init_database(Path(self._db_path))
+            self._conn = duckdb.connect(str(self._db_path))
+            try:  # E.4 S1：写连接与只读连接共存
+                self._conn.execute("SET lock_configuration = true")
+            except Exception:  # noqa: BLE001 — 旧版不支持时静默降级
+                pass
+        return self._conn
+
+    def close(self) -> None:
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def save_subchain_quality(self, rows: list[dict[str, Any]]) -> int:
+        """批量 UPSERT 质量矩阵行（幂等：同主键覆盖；空输入 no-op）。
+
+        Args:
+            rows: [{factor_id, market, chain, evaluated_at, period_end,
+                    n_symbols, mean_ic, std_ic, t_stat, p_value,
+                    effective, source, decision}]
+
+        Returns:
+            写入行数
+        """
+        if not rows:
+            return 0
+        conn = self._get_conn()
+        for r in rows:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO subchain_factor_quality (
+                    factor_id, market, chain, evaluated_at, period_end,
+                    n_symbols, mean_ic, std_ic, t_stat, p_value,
+                    effective, source, decision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    r.get("factor_id", ""),
+                    r.get("market", ""),
+                    r.get("chain", ""),
+                    r.get("evaluated_at"),
+                    r.get("period_end"),
+                    r.get("n_symbols"),
+                    r.get("mean_ic"),
+                    r.get("std_ic"),
+                    r.get("t_stat"),
+                    r.get("p_value"),
+                    bool(r.get("effective", False)),
+                    r.get("source", "review"),
+                    r.get("decision", "keep"),
+                ],
+            )
+        conn.execute("CHECKPOINT")
+        return len(rows)
+
+    def query_subchain_quality(
+        self,
+        factor_id: str,
+        market: str = "energy",
+        chain: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """查询单因子×子链质量时序（按 factor×chain×evaluated_at 升序）。
+
+        Args:
+            factor_id: 因子 ID
+            market: 市场（energy/futures）
+            chain: 子链名（None=全部子链）
+
+        Returns:
+            行 dict 列表（evaluated_at 字符串化，JSON 安全）
+        """
+        sql = (
+            "SELECT * FROM subchain_factor_quality "
+            "WHERE factor_id = ? AND market = ?"
+        )
+        params: list[Any] = [factor_id, market]
+        if chain:
+            sql += " AND chain = ?"
+            params.append(chain)
+        sql += " ORDER BY chain, evaluated_at ASC"
+        rows = self._get_conn().execute(sql, params).fetchall()
+        out = []
+        for row in rows:
+            d = {c: v for c, v in zip(self._COLS, row)}
+            if d.get("evaluated_at"):
+                d["evaluated_at"] = str(d["evaluated_at"])
+            if d.get("period_end"):
+                d["period_end"] = str(d["period_end"])
+            out.append(d)
+        return out
+
+    def latest_subchain_quality(
+        self,
+        factor_id: str,
+        market: str = "energy",
+    ) -> dict[str, dict[str, Any]]:
+        """每子链最新一行质量快照（供质量报告/监控，plans/49 §D3）。"""
+        rows = self.query_subchain_quality(factor_id, market)
+        latest: dict[str, dict[str, Any]] = {}
+        for r in rows:  # 已按 chain, evaluated_at 升序 → 后写覆盖得每链最新
+            latest[r["chain"]] = r
+        return latest
+
+    def list_recent_quality(
+        self,
+        market: str = "energy",
+        min_evaluated_at: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """最近质量矩阵行（生命周期巡检批量加载）。
+
+        Args:
+            market: 市场
+            min_evaluated_at: ISO 时间下界（None=全部）
+
+        Returns:
+            行 dict 列表（factor_id→chain 可 GROUP BY 聚合退化）
+        """
+        sql = "SELECT * FROM subchain_factor_quality WHERE market = ?"
+        params: list[Any] = [market]
+        if min_evaluated_at:
+            sql += " AND evaluated_at >= ?"
+            params.append(min_evaluated_at)
+        sql += " ORDER BY evaluated_at ASC"
+        rows = self._get_conn().execute(sql, params).fetchall()
+        out = []
+        for row in rows:
+            d = {c: v for c, v in zip(self._COLS, row)}
+            if d.get("evaluated_at"):
+                d["evaluated_at"] = str(d["evaluated_at"])
+            if d.get("period_end"):
+                d["period_end"] = str(d["period_end"])
+            out.append(d)
+        return out

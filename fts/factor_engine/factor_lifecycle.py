@@ -123,10 +123,49 @@ def factor_lifecycle_plan() -> dict:
     }
 
 
+def factor_lifecycle_review_subchain(
+    rows: list[dict],
+    decay_threshold: float = 0.30,
+    drop_severe: float = 0.50,
+    min_periods: int = 5,
+) -> dict:
+    """因子×子链生命周期复核（plans/49 §C3 子链重载，保留全链原函数向后兼容）。
+
+    基于 ``subchain_factor_quality`` 质量矩阵时序做**单元粒度**退化检测
+    （复用 ``subchain_lifecycle.compute_subchain_degradation``）——解决全链 IC 掩蔽：
+    部分有效链失效 → scope_shrink（收缩而非整因子降级）；全部有效链失效 / 单链特异
+    唯一链失效 → degrade。
+
+    Args:
+        rows: ``SubchainQualityRepository.query_subchain_quality`` 输出
+            （factor×chain 多期，含 evaluated_at/mean_ic/effective）
+        decay_threshold: 有效链 IC 衰减触发阈值（> 阈值 → 标记 scope_shrink）
+        drop_severe: 全部有效链衰减严重阈值（> 阈值且当前不 effective → degrade）
+        min_periods: 子链质量时序最少期数（不足 → keep，不误判）
+
+    Returns:
+        {factor_status, per_chain, ever_effective_chains, scope_shrink_chains,
+         degrade_chains, detail}——见 ``compute_subchain_degradation`` 契约。
+    """
+    from fts.factor_engine.subchain_lifecycle import (
+        SubchainLifecycleConfig,
+        compute_subchain_degradation,
+    )
+
+    cfg = SubchainLifecycleConfig(
+        enabled=True,
+        decay_threshold=decay_threshold,
+        drop_severe=drop_severe,
+        min_periods=min_periods,
+    )
+    return compute_subchain_degradation(rows, cfg)
+
+
 __all__ = [
     "DEFAULT_WINDOW",
     "DEFAULT_IC_DECAY_RATIO",
     "DEFAULT_IR_FLOOR",
     "factor_lifecycle_review",
+    "factor_lifecycle_review_subchain",
     "factor_lifecycle_plan",
 ]

@@ -1,6 +1,6 @@
 # FTS 可观测性
 
-> 版本: v2.104.0+108
+> 版本: v2.104.0+113
 > 最后更新: 2026-08-05
 
 ---
@@ -55,6 +55,40 @@ CLI 入口 (cli.py)
 | age_hours | 距上次更新的小时数 | >24h = stale |
 | tokens_consumed | token 消耗量 | 按 budget 阈值 |
 | healthy | 综合判定 | False 时告警 |
+
+### L3 子链差异化权重观测（plans/47 §D2，v2.104.0+109）
+
+| 指标 | 来源 | 告警条件 |
+|:-----|:-----|:---------|
+| 子链权重暴露占比 | `PortfolioLoop` Step 2b 日志 `[L3] Step 2b: ... 子链暴露={...}` + 质量报告 `elite_final_quality_*.json` 的 `subchain_exposure` 段 | 单子链占比 > `l3.subchain_weight.max_exposure_ratio`（默认 0.5）→ warning |
+| 子链调制启用状态 | Step 2b 日志 + `factor_weights.json` 的 `subchain_weights`/`symbol_chain` 字段 | 开启时字段存在、关闭时缺失（灰度可观测） |
+| 子链画像落库 | `factor_catalog.metadata.subchain_ic_profile/scope/specific` | 非空即画像已生成（A2） |
+
+### 子链×制度 Gate 观测（plans/48 §D3，v2.104.0+111）
+
+| 指标 | 来源 | 告警条件 |
+|:-----|:-----|:---------|
+| 子链 Gate 分布 | `PortfolioLoop` Step 2.5 `[L3] Step 2.5: 子链 regime 检测完成（§C 路由）` 日志 + 质量报告 `elite_final_quality_*.json` 的 `subchain_gate_distribution` 段（各子链 decision：long/short/avoid/neutral） | 全子链 avoid（方向层全回避）→ warning（制度不明朗或检测异常） |
+| 收益来源族激活画像 | `PortfolioLoop._regime_meta.subchain_return_source`（{子链: {regime, confidence, active_styles}}） | 仅 energy + Gate 开启时非空（灰度可观测） |
+| Gate 启用状态 | `futures_signal_pipeline` Step 3h1 `[子链 Gate] 应用方向 Gate + 暴露缩放` 日志 + settings.yaml `l3.regime_gating.enabled` / CLI `--enable-regime-gating` | 开启时日志含 avoid 计数与暴露缩放品种数；关闭时无该段（与现状逐位一致） |
+
+### 子链质量矩阵观测（plans/49 §D3，v2.104.0+112）
+
+| 指标 | 来源 | 告警条件 |
+|:-----|:-----|:---------|
+| 质量矩阵快照 | 质量报告 `elite_final_quality_*.json` 的 `subchain_quality_matrix` 段（各因子×子链最近期 effective 快照 + scope 变化历史；DuckDB `subchain_factor_quality` 时序表 SSOT） | 与 47 `subchain_exposure`（幅度层）/48 `subchain_gate_distribution`（方向层）三网合一；因子 effective 子链集合变化 → 复核 |
+| 单元退化判定 | `compute_subchain_degradation` 输出 factor_status（keep/scope_shrink/degrade）+ `_shrink_scope` 剔除链写入 metadata.subchain_scope | 任一曾经 effective 子链判定失效 → 退化/收缩记录留痕（`factor_status_history`） |
+| scope 动态收缩 | `metadata.subchain_scope` 对比晋升期基准（A2 落库）变化 | scope 变化 → Step 2b 调制矩阵重算日志 + 质量矩阵段标注 |
+| 评审两级判定 | Q10/F6 输出 `q10_verdict`（consistent/subchain_specific/conflicted）+ avoid_chain 标记 | conflicted → flag；有效链集合漂移 > 阈值 → scope 复核标记 |
+| 质量矩阵启用状态 | settings.yaml `l3.subchain_quality.enabled` + 评审日志（`_stage_degradation` 子链旁路） | 开启时退化判定按单元粒度、关闭时全链原逻辑（灰度可观测） |
+
+### 子链 Gate 权重源头观测（plans/50 §B3，v2.104.0+113）
+
+| 指标 | 来源 | 告警条件 |
+|:-----|:-----|:---------|
+| Gate 缩放系数 | 质量报告 `elite_final_quality_*.json` 的 `subchain_gate_scale` 段（各子链 gate_scale 快照：avoid-hard=0.0 / avoid-soft=ratio / 其余=1.0；并入调制矩阵后 `factor_weights.json` 的 `subchain_weights` 同步缩放） | 与 47 `subchain_exposure`（幅度）/48 `subchain_gate_distribution`（决策）/49 `subchain_quality_matrix`（质量）四网合一；avoid 链 gate_scale=0 且调制矩阵存在 → 权重源头已回避 |
+| 调制矩阵合并 | `_merge_gate_scale_into_modulation` 应用日志 `[L3] Step 2.5: Gate 并入调制矩阵...` | 仅 energy + Gate 开启 + `enable_subchain_weight` 时生效；任一缺失 → 无该日志（观测语义，零行为变更） |
+| 权重源头回避 | `factor_weights.json` 的 `subchain_weights`（avoid 链系数 = 0 或 ×soft_avoid_ratio） | 与信号管道 Step 3h1 硬 Gate 乘性串联（权重层已回避 → 信号层对 0 得分跳过，无双重惩罚） |
 
 ### HTTP 监控端点
 

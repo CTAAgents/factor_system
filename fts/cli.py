@@ -258,12 +258,12 @@ def _cmd_evolution_run(args: argparse.Namespace) -> int:
         first_sym = list(panel.keys())[0]
         data_df = panel[first_sym]
 
-        # energy 链模式保持期货验证配置（EvolutionLoop 按 market 路由，非 futures 落全局验证器）
+        # energy 链模式保持期货评估口径（plans/47 §C1：截面样本小放宽；EvolutionLoop 按 market 路由）
         extra_kwargs: dict[str, Any] = {}
         if market != "futures":
-            from .factor_engine.contracts import FUTURES_VERIFIER_CONFIG
+            from .factor_engine.contracts import FUTURES_EVAL_CONFIG
 
-            extra_kwargs["verifier"] = FactorVerifier(FUTURES_VERIFIER_CONFIG)
+            extra_kwargs["verifier"] = FactorVerifier(FUTURES_EVAL_CONFIG)
 
         loop = EvolutionLoop(
             data=data_df,
@@ -617,12 +617,21 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
         # plans/36：因子综合评分权重 + P1 聚类参数（config/settings.yaml l3 段）
         l3_cfg = getattr(cfg, "l3", {}) or {}
         score_config = (l3_cfg.get("factor_score") or {}).get("weights") or None
-        score_floor = float((l3_cfg.get("factor_score") or {}).get("equal_weight_floor", 0.5))
         cluster_cfg = l3_cfg.get("cluster") or {}
         cluster_threshold = float(cluster_cfg.get("threshold", 0.7))
         cluster_top_n = int(cluster_cfg.get("top_n", 1))
         chain_dedup_cfg = l3_cfg.get("chain_dedup") or {}
         owl_cfg = l3_cfg.get("owl") or {}
+        # plans/47 §B：子链差异化权重（CLI --enable-subchain-weight 优先，缺省读配置）
+        subchain_cfg = l3_cfg.get("subchain_weight") or {}
+        enable_subchain_weight = bool(
+            getattr(args, "enable_subchain_weight", False) or subchain_cfg.get("enabled", False)
+        )
+        subchain_weight_config = None
+        if enable_subchain_weight:
+            from fts.factor_engine.subchain_weight import SubchainWeightConfig
+
+            subchain_weight_config = SubchainWeightConfig(**subchain_cfg)
         loop = PortfolioLoop(
             elite_dir=elite_dir,
             memory_dir=cfg.memory_dir + f"/portfolio/{universe}",
@@ -635,6 +644,8 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
             cluster_top_n=cluster_top_n,
             enable_chain_dedup=bool(chain_dedup_cfg.get("enabled", True)),
             chain_dedup_max_per_chain=int(chain_dedup_cfg.get("max_per_chain", 2)),
+            enable_subchain_weight=enable_subchain_weight,
+            subchain_weight_config=subchain_weight_config,
             owl_config=owl_cfg,
         )
         # GAP-I302: optimizer 模式与实测化输入（returns-matrix CSV）
@@ -2514,6 +2525,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-pca",
         action="store_true",
         help="启用 P2 PCA 降维权重（Step 1.9；equal_weight 模式下以 PCA 载荷×解释方差权重替换均匀等权，v2.103.0+24）",
+    )
+    p_port_run.add_argument(
+        "--enable-subchain-weight",
+        action="store_true",
+        help="启用子链差异化权重调制（plans/47 §B，仅 --universe energy 生效；特异因子在无效子链降权/归零，灰度开关默认关）",
     )
     p_port_run.set_defaults(func=_cmd_portfolio_run)
 

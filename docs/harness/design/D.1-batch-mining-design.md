@@ -1,6 +1,6 @@
 # D.1 批量挖掘漏斗 — 详细技术设计（GAP-I201，Stage 1）
 
-> 版本: v2.104.0+108
+> 版本: v2.104.0+113
 > 目标版本: v2.65.0
 > 关联: [23-institutional-transformation-plan.md](../plans/23-institutional-transformation-plan.md) GAP-I201（挖掘吞吐不足）、`fts/factor_engine/evolution_loop.py`（L2 主循环）
 > 状态: **设计完成，待实施**

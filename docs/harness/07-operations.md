@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+108
+> 版本: v2.104.0+113
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,11 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+113** | **2026-08-17** | **plans/50 L3 权重层 Gate 闭环：gate_scale_map + _merge_gate_scale_into_modulation 将 Gate avoid 决策并入子链调制矩阵（m'=m×gate_scale，avoid 链权重源头归零/降权，long/short/neutral 不干预）+ 质量报告 subchain_gate_scale 段** |** |
+| **v2.104.0+112** | **2026-08-17** | **GAP-137 关闭: plans/49 因子×子链质量矩阵(A/B/C/D) - 评审质检与生命周期张量化适配 47/48** |** |
+| **v2.104.0+111** | **2026-08-17** | **GAP-136 登记并关闭：plans/48 Regime 分层方向 Gate 四模块（A 子链方向 Gate `regime_gate.py` build_subchain_gates/apply_subchain_gate + 信号管线 Step 3h1 仅 energy 生效 / B 品种暴露缩放 map_confidence_to_exposure+apply_exposure_scale（置信度映射×对齐度，防双重惩罚）/ C 收益来源族激活 regime_adaptive_weight_adjustment(subchain_regimes) 按 subchain_scope 路由子链倍率+数据不足回退全局+build_subchain_return_source 画像入 _regime_meta / D --enable-regime-gating 灰度 + 质量报告 subchain_gate_distribution 段 + 与 plans/47 正交串联验证）；新增测试 36 用例 + 受影响回归 694 全绿 + ruff 通过** |** |
+| **v2.104.0+110** | **2026-08-17** | **GAP-135 登记（GP 因子评估链不一致 + 晋升期去重缺失）+ 重复因子去重退役 fct_55a1943c** |** |
+| **v2.104.0+109** | **2026-08-17** | **GAP-134 关闭：plans/47 子链差异化与跨市场结构感知（A 画像护栏+A2落库 / B L3子链权重+信号管线 / C 评估口径分离 / D 暴露监控）** |** |
 | **v2.104.0+108** | **2026-08-17** | **GAP-133 参数化收尾: L2训练池面板回溯天数硬编码常量改配置化(l2_panel_days=750下沉FTSConfig/settings.yaml, env FTS_L2_PANEL_DAYS可覆盖, jobs.py _get_l2_panel_days()统一5处, test_jobs TestEnergyChainPanelDays配置化)** |** |
 | **v2.104.0+107** | **2026-08-17** | **GAP-133方案②根治走航断崖: _build_wf_config(≥3年分支)数据不足(<1368行)自动回退短窗配置, 750行不再0窗口, 消除700魔法值依赖** |** |
 | **v2.104.0+106** | **2026-08-17** | **GAP-133 能化链L2种子评估500日短样本1窗口审计拦截修复(energy面板days 500->750, l2_panel_days统一5个训练池作业, v2.104.0+108起配置化)+训练池换池(PX0->EG0, 盲测池自动派生)** |** |

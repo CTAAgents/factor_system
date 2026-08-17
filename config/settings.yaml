@@ -86,6 +86,45 @@ l3:
   chain_dedup:
     enabled: true
     max_per_chain: 2     # 单子链保留因子数上限
+  # L3 子链差异化权重调制（plans/47 §B，仅 market=energy 生效）：
+  # 特异因子在无效子链降权/归零；enabled 默认 false=全链统一权重（兼容现状），
+  # CLI --enable-subchain-weight 显式传参优先。decay_mode: zero=归零 / soft=按 |mean_ic| 相对缩放。
+  subchain_weight:
+    enabled: false
+    decay_mode: zero
+    soft_min_ratio: 0.0
+    scope_default: all
+    max_exposure_ratio: 0.5   # 单子链暴露占比告警阈值（D2 监控）
+
+  # 子链方向 Gate（plans/48 §A/§B，仅 market=energy 生效）：
+  # 子链 regime 置信度不足 → avoid（hard=剔除 / soft=按 soft_avoid_ratio 降权）；
+  # 盲测池等无子链归属品种默认回避。enabled 默认 false=现状（全局软票+方向偏置）。
+  # exposure_min/exposure_sat：品种暴露缩放映射（§B1，置信度<min→0 / ≥sat→满仓 / 中间线性）。
+  regime_gating:
+    enabled: false
+    min_confidence: 0.55
+    avoid_mode: hard
+    soft_avoid_ratio: 0.3
+    blind_default: avoid
+    exposure_min: 0.4
+    exposure_sat: 0.7
+
+  # 因子×子链质量矩阵（plans/49，QA/生命周期张量化；subchain_quality_store.py 参数化 SSOT）。
+  # enabled=false 时评审/生命周期回退全链原逻辑（股票/无子链画像因子天然走回退）。
+  subchain_quality:
+    enabled: false
+    decay_threshold: 0.30   # 有效链 IC 衰减触发阈值（最近窗 vs 早期基准 >30% 标记）
+    drop_severe: 0.50       # 全部有效链衰减严重阈值（→ degrade）
+    window_days: 60         # 退化检测滚动窗口（按评估期次计，不足 min_periods → skipped）
+    min_periods: 5          # 子链质量时序最少期数（样本不足不误判）
+    cooldown_days: 30       # scope 收缩/degraded 冷却期（与 energy_qa_review 一致）
+
+# L2/L3 子链适用性画像显著性护栏（plans/47 §A3，subchain_profile.py 参数化 SSOT；
+# 三门槛 AND：min_symbols / min_t_stat(df=n-1) / min_chain_ic）
+subchain_profile:
+  min_symbols: 3
+  min_t_stat: 2.0
+  min_chain_ic: 0.10
   # L3 合成模式默认值（v2.104.0+62，CLI --synthesis-mode 显式传参优先）：
   # mode 可选 equal_weight / quality_weight / sharpe_weight / elastic_net /
   #   adaptive / optimizer / risk_parity（= optimizer + risk_parity 目标快捷，

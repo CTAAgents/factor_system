@@ -1,6 +1,6 @@
 # FTS 韧性设计
 
-> 版本: v2.104.0+108
+> 版本: v2.104.0+113
 > 最后更新: 2026-08-05
 
 ---
@@ -48,6 +48,39 @@
 | 熵标定输入无 probs | `RegimeConfidenceCalibrator.calibrate` 直通 `confidence`（视为确定性分布） | — |
 | 指标上报失败 | `record_regime_metrics` 异常仅告警不阻断主流程（Step 2.5 try/except） | 下一轮自动重试 |
 | HMM 检测失败（hmmlearn 不可用/训练异常） | 5 层降级链逐级回退（multi_hmm → msm → hmm → rule → oscillate/0.5） | 依赖/数据恢复后自动升级 |
+
+### 子链方向 Gate 回退路径（plans/48，v2.104.0+111）
+
+| 场景 | 降级行为 | 恢复方式 |
+|:-----|:---------|:---------|
+| Gate 判定/应用异常 | 信号管线 Step 3h1 try/except 捕获 → 跳过 Gate 保持现状得分（不阻断主流程），日志 `[子链 Gate] 应用失败（跳过，保持现状）` | 代码/数据修复后下一轮自动恢复 |
+| Gate 灰度未开启 | `l3.regime_gating.enabled=false` 或未传 `--enable-regime-gating` → 全局软票 + 方向偏置原逻辑（与现状逐位一致） | 观察后开启灰度，回退一键关闭 |
+| 子链 regime 检测失败（energy L3 Step 2.5） | `detect_all` 异常 → `subchain_regimes=None` 回退全局 regime 倍率（`regime_adaptive_weight_adjustment` 缺省分支） | 数据恢复后自动启用子链路由 |
+| 子链数据不足/无检测子链 | `build_subchain_gates` 缺检测子链 → neutral（不误杀）；因子无 scope/all/unknown/部分链 → 回退全局倍率 | 子链数据积累后自动下钻 |
+| 盲测池/无子链归属品种 | `blind_default="avoid"`（默认回避）不参与 Gate 决策 | 配置 `blind_default="neutral"` 保留 |
+| Gate 分布构建失败（D3） | Step 2.5 异常仅告警，质量报告 `subchain_gate_distribution` 为空段 | 下一轮自动重试 |
+
+### 子链质量矩阵与生命周期回退路径（plans/49，v2.104.0+112）
+
+| 场景 | 降级行为 | 恢复方式 |
+|:-----|:---------|:---------|
+| 质量矩阵灰度未开启 | `l3.subchain_quality.enabled=false` → 评审质检/生命周期回退全链原逻辑（Q10 跨板块方向一致、全链 IC 衰减，与现状逐位一致） | 观察后开启灰度，回退一键关闭 |
+| 子链 IC 时序样本不足 | 退化检测期数 < `min_periods`（默认 5）→ 返回 None（审计 skipped，不误判），不触发 scope_shrink/degrade | 每期评审写一行，期数积累后自动判定 |
+| 无子链画像因子（股票/无 scope） | `compute_subchain_degradation` 无 ever_effective → keep（因子状态不变）；`judge_q10_subchain` 无 chain 数据 → 回退原 Q10 语义 | 晋升/评审落库首行后自动下钻 |
+| scope 收缩过激（单期噪声误判失效链） | 需连续期数确认 + 冷却期 `cooldown_days`（30 交易日）保护才收缩；scope 回滚需重审达标 | 冷却期后重审，达标自动回 active 并重评子链画像 |
+| 质量矩阵落库失败 | `save_subchain_quality` 异常仅告警不阻断评审/晋升（E.4 短连接 + 幂等 UPSERT） | 下一轮评审自动重试写入 |
+| 质量矩阵快照构建失败（D3） | 质量报告 `subchain_quality_matrix` 段为空，主流程不阻断 | 下一轮自动重试 |
+| 单链特异放行误判 | 机审放行仍过完整 QA 门禁（audit/评分卡/多重检验/Q1Q10）；Sharpe < min_sharpe 不放行 | 质检门禁兜底，人审复核通道保留 |
+
+### 子链 Gate 权重源头回退路径（plans/50，v2.104.0+113）
+
+| 场景 | 降级行为 | 恢复方式 |
+|:-----|:---------|:---------|
+| Gate 灰度未开启 | `l3.regime_gating.enabled=false` 或未传 `--enable-regime-gating` → L3 调制矩阵不含 gate_scale（纯质量×幅度），`subchain_gate_scale` 段为空 | 显式打开灰度后自动并入 |
+| 无调制矩阵（`enable_subchain_weight` 未开） | Step 2.5 检测到 Gate 但 `self._subchain_modulation` 为空 → 仅记录 `subchain_gate_distribution`/`subchain_gate_scale` 观测段，不改变任何权重输出（依赖语义：权重层 Gate 需要子链调制通道） | 开启子链权重灰度后 Gate 并入生效 |
+| 非 energy 市场 | Step 2.5 子链 regime 检测跳过 → 无 Gate 并入（全链原逻辑） | 扩展到其它产业链时子链定义入 futures_universe.yaml 自动生效 |
+| Gate 并入失败（异常） | `_merge_gate_scale_into_modulation` 异常仅告警，保持观测语义（`subchain_gate_scale={}`），不阻断主流程 | 代码修复后下一轮自动恢复 |
+| 双重惩罚 | 权重层 gate_scale 已回避 avoid 链（系数 0/ratio）→ 信号层 Step 3h1 对 0 得分跳过 / soft 链不二次缩放（复用 plans/48 B3 语义） | 乘性串联天然防重复 |
 
 ### 熔断恢复流程
 

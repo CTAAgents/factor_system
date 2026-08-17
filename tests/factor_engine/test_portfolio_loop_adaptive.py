@@ -25,6 +25,7 @@ from fts.factor_engine.portfolio_loop import (
     PortfolioLoop,
     _compute_exposure_scale,
     _power_normalize_probs,
+    build_subchain_return_source,
     regime_adaptive_weight_adjustment,
     synthesize_signals,
 )
@@ -48,8 +49,8 @@ def _no_real_data_source(monkeypatch):
     return mock_provider
 
 
-def _factor(fid: str, name: str, sharpe: float = 1.8) -> dict:
-    return {
+def _factor(fid: str, name: str, sharpe: float = 1.8, subchain_scope=None) -> dict:
+    f = {
         "factor_id": fid,
         "name": name,
         "sharpe": sharpe,
@@ -59,6 +60,9 @@ def _factor(fid: str, name: str, sharpe: float = 1.8) -> dict:
         "style_tags": ["momentum"],
         "code": "def f(data, params):\n    return data['close']",
     }
+    if subchain_scope is not None:
+        f["subchain_scope"] = subchain_scope
+    return f
 
 
 def _factors() -> list[dict]:
@@ -381,3 +385,122 @@ def test_smoother_asymmetric_de_risk_faster() -> None:
     w2 = smoother.should_apply("bull", w1, {"a": 1.0})
     assert w2["a"] < 0.9  # 仅小幅回升
     assert w2["a"] > w1["a"]
+
+
+# ─── plans/48 §C：子链收益来源族激活路由 ────────────────────
+# 倍率表：bull/momentum=1.3，bear/momentum=0.8，high_vol/momentum=0.7
+_CHAIN_REGIMES = {
+    "能源": {"regime": "bull", "confidence": 0.9},
+    "煤化工": {"regime": "bear", "confidence": 0.8},
+}
+
+
+def test_subchain_route_single_chain_scope_uses_chain_regime() -> None:
+    """因子归属单一子链 → 用子链 regime 倍率；无 scope 因子回退全局。"""
+    signals = _make_signals([("f1", "momentum", 0.10), ("f2", "momentum", 0.10)])
+    factors = [
+        _factor("f1", "energy_only", subchain_scope="能源"),
+        _factor("f2", "global_factor", subchain_scope="all"),
+    ]
+    global_regime = {"regime": "bear", "confidence": 0.8}  # 全局 bear：momentum ×0.8
+    adjusted = regime_adaptive_weight_adjustment(
+        signals, global_regime, factors, subchain_regimes=_CHAIN_REGIMES
+    )
+    w = {s["factor_id"]: s["weight"] for s in adjusted}
+    assert abs(w["f1"] - 0.10 * 1.3) < 1e-6  # 路由到 能源/bull
+    assert abs(w["f2"] - 0.10 * 0.8) < 1e-6  # all → 回退全局 bear
+
+
+def test_subchain_route_list_scope_single() -> None:
+    """subchain_scope 为单元素列表 → 同样路由到子链 regime。"""
+    signals = _make_signals([("f1", "momentum", 0.10)])
+    factors = [_factor("f1", "energy_only", subchain_scope=["能源"])]
+    adjusted = regime_adaptive_weight_adjustment(
+        signals, {"regime": "bear"}, factors, subchain_regimes=_CHAIN_REGIMES
+    )
+    assert abs(adjusted[0]["weight"] - 0.10 * 1.3) < 1e-6
+
+
+def test_subchain_route_partial_chain_fallback() -> None:
+    """部分链 scope（多元素列表）→ 回退全局（避免跨链 regime 选择歧义）。"""
+    signals = _make_signals([("f1", "momentum", 0.10)])
+    factors = [_factor("f1", "two_chain", subchain_scope=["能源", "聚酯"])]
+    adjusted = regime_adaptive_weight_adjustment(
+        signals, {"regime": "bear"}, factors, subchain_regimes=_CHAIN_REGIMES
+    )
+    assert abs(adjusted[0]["weight"] - 0.10 * 0.8) < 1e-6  # 全局 bear
+
+
+def test_subchain_route_unknown_chain_fallback() -> None:
+    """scope 链不在 subchain_regimes（无检测数据）→ 回退全局。"""
+    signals = _make_signals([("f1", "momentum", 0.10)])
+    factors = [_factor("f1", "no_detect", subchain_scope="不存在链")]
+    adjusted = regime_adaptive_weight_adjustment(
+        signals, {"regime": "bear"}, factors, subchain_regimes=_CHAIN_REGIMES
+    )
+    assert abs(adjusted[0]["weight"] - 0.10 * 0.8) < 1e-6
+
+
+def test_subchain_route_none_backcompat() -> None:
+    """不传 subchain_regimes（缺省 None）→ 原全局逻辑，行为不变（回归保护）。"""
+    signals = _make_signals([("f1", "momentum", 0.10)])
+    factors = [_factor("f1", "energy_only", subchain_scope="能源")]
+    adjusted = regime_adaptive_weight_adjustment(signals, {"regime": "bull"}, factors)
+    assert abs(adjusted[0]["weight"] - 0.10 * 1.3) < 1e-6  # 全局 bull
+
+
+def test_subchain_route_with_probability_mix() -> None:
+    """子链 regime 含 regime_probs → 按子链概率混合（非全局概率）。"""
+    signals = _make_signals([("f1", "momentum", 0.10)])
+    factors = [_factor("f1", "energy_only", subchain_scope="能源")]
+    chain_with_probs = {
+        "能源": {
+            "regime": "oscillate",
+            "confidence": 0.5,
+            "regime_probs": {"bull": 0.6, "oscillate": 0.4},
+        }
+    }
+    adjusted = regime_adaptive_weight_adjustment(
+        signals, {"regime": "bear"}, factors, subchain_regimes=chain_with_probs
+    )
+    # 子链混合：bull momentum 1.3×0.6 + oscillate momentum 0.8×0.4 = 1.10
+    assert abs(adjusted[0]["weight"] - 0.10 * 1.10) < 1e-6
+
+
+def test_subchain_route_high_vol_shrinkage_uses_chain() -> None:
+    """高波动额外缩减（decay>0.2 ×0.8）按因子路由的子链 regime 判定。"""
+    signals = [
+        {
+            "factor_id": "f1",
+            "name": "f1",
+            "weight": 0.10,
+            "sharpe": 1.5,
+            "ic": 0.05,
+            "turnover": 0.3,
+            "decay_6m": 0.30,
+            "retained": True,
+        }
+    ]
+    factors = [_factor("f1", "energy_only", subchain_scope="能源")]
+    chain_high_vol = {"能源": {"regime": "high_vol", "confidence": 0.8}}
+    adjusted = regime_adaptive_weight_adjustment(
+        signals, {"regime": "bull"}, factors, subchain_regimes=chain_high_vol
+    )
+    # 子链 high_vol momentum 0.7 × decay 缩减 0.8 = 0.56
+    assert abs(adjusted[0]["weight"] - 0.10 * 0.7 * 0.8) < 1e-6
+
+
+def test_build_subchain_return_source() -> None:
+    """§C3 画像：{子链: {regime, confidence, active_styles}}（倍率≠1.0 的来源族）。"""
+    src = build_subchain_return_source(_CHAIN_REGIMES)
+    assert set(src.keys()) == {"能源", "煤化工"}
+    assert src["能源"]["regime"] == "bull"
+    assert src["能源"]["confidence"] == pytest.approx(0.9)
+    assert src["能源"]["active_styles"]["momentum"] == pytest.approx(1.3)
+    assert src["煤化工"]["active_styles"]["momentum"] == pytest.approx(0.8)
+
+
+def test_build_subchain_return_source_empty() -> None:
+    """空输入/None → {}（不抛异常）。"""
+    assert build_subchain_return_source(None) == {}
+    assert build_subchain_return_source({}) == {}

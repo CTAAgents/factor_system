@@ -1,6 +1,6 @@
 # 因子全生命周期管理（FTS）
 
-> 版本: v2.104.0+108
+> 版本: v2.104.0+113
 > 最后更新: 2026-08-17
 > 适用范围: 期货主链路（futures / energy，股票链路已剥离至 fts-stock）
 > 关联文档: [01-architecture.md](file:///d:/Programs/factor_system/docs/harness/01-architecture.md) · [05-observability.md](file:///d:/Programs/factor_system/docs/harness/05-observability.md) · [07-operations.md](file:///d:/Programs/factor_system/docs/harness/07-operations.md) · [plan 45](file:///d:/Programs/factor_system/docs/harness/plans/45-l2-loop-split-plan.md)
@@ -229,6 +229,7 @@ DRAFT → PENDING_QA → CORE ⇄ CANDIDATE
 | 半年度复检 D1-D4 | `semi_annual_recheck` | 逻辑复审 / 回测重跑 / 池重构 / 淘汰库复审 |
 | 退役红线（5 条） | `check_retirement` | 独立触发（衰减超限 / IR 跌破 / 连续亏损等），NaN 保守不误判 |
 | L3 纯外推衰减（P2） | `_validate_oos_extrapolation` | 晋升后每次 L3 检查新数据 IC，连续 3 次衰减 >20% 标记待降级 |
+| 单元粒度退化（子链，灰度） | `energy_qa_review` 退化段 + `factor_lifecycle_review_subchain`（plans/49，v2.104.0+112） | 按 (factor_id, market, chain) 评估——全部有效链衰减→整因子 degrade / 部分链失效→scope_shrink（`_shrink_scope` 剔除失效链更新 `metadata.subchain_scope`，47 调制矩阵自动重算）/ 单链特异因子唯一链失效→degrade；从未 effective→keep；样本不足（< `l3.subchain_quality.min_periods`）→None 不误判；冷却期 `cooldown_days=30` 防过激收缩，期满重审达标回 active。`l3.subchain_quality.enabled=false` 回退全链原逻辑 |
 
 ## 8. 与存储的映射
 

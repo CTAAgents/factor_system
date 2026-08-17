@@ -112,9 +112,78 @@ QA_ITEMS: list[dict] = [
         "name": "板块拆解",
         "stage": "阶段4",
         "one_vote": False,
-        "criterion": "分板块（黑色/能化/农产品/有色）IC 方向一致",
+        "criterion": "跨产业链 IC 方向一致（外层）；产业链内子链特异可接受（t 检验护栏，反向子链标记 avoid）——plans/49 §B1",
     },
 ]
+
+
+def judge_q10_subchain(
+    symbol_ic: dict[str, float],
+    chain_symbols: dict[str, list[str]] | None = None,
+    cfg=None,
+) -> dict:
+    """Q10 板块拆解两级判定（plans/49 §B1，产业链内子链特异）。
+
+    外层"跨产业链方向一致"由调用方按 sector 级 IC 判定（保留原语义）；
+    本函数处理产业链内子链特异——47 号实证子链特异因子是真实收益来源，
+    不再要求子链间 IC 方向一致，改为 t 检验护栏：
+      - effective 子链（n≥3 且 |t|≥2.0 且 |mean_ic|≥0.10）→ 子链特异可接受（不判失败）
+      - 与有效方向相反的显著子链 → 标记 avoid_chain（该链禁用，不判失败）
+      - 无 effective 且存在显著反向 → conflicted（整体方向混乱，判 Q10 失败）
+
+    Args:
+        symbol_ic: 逐品种时序 IC
+        chain_symbols: {子链: [品种]}（None → 懒加载 ENERGY_CHAIN_SUB_SYMBOLS）
+        cfg: SubchainProfileConfig（None → 默认）
+
+    Returns:
+        {"verdict": "consistent"|"subchain_specific"|"conflicted",
+         "effective_chains": [...], "avoid_chains": [...],
+         "passed": bool, "detail": str}
+    """
+    from fts.factor_engine.subchain_profile import (
+        SubchainProfileConfig,
+        compute_subchain_profile,
+    )
+
+    if chain_symbols is None:
+        try:  # 懒加载，避免模块级循环依赖
+            from fts.factor_engine.portfolio_loop import ENERGY_CHAIN_SUB_SYMBOLS
+
+            chain_symbols = ENERGY_CHAIN_SUB_SYMBOLS
+        except Exception:  # noqa: BLE001
+            chain_symbols = {}
+    cfg = cfg or SubchainProfileConfig()
+    prof = compute_subchain_profile("q10", symbol_ic, chain_symbols, cfg)
+    effective = [c for c, st in prof.chain_stats.items() if st.effective]
+
+    # 显著链按方向分组：t 检验显著的链也可能反向（std=0→t=inf 兜底场景）——
+    # 多数方向 = effective_chains（可接受），少数方向 = avoid_chain（该链禁用，不判失败）
+    eff_pos = [c for c in effective if (prof.chain_stats[c].mean_ic or 0.0) > 0]
+    eff_neg = [c for c in effective if (prof.chain_stats[c].mean_ic or 0.0) < 0]
+    majority = eff_pos if len(eff_pos) >= len(eff_neg) else eff_neg
+    reverse = eff_neg if majority is eff_pos else eff_pos
+    # 非 effective 但 |mean_ic| ≥ min_chain_ic 的链（方向明显偏离、t 不显著）也标记 avoid
+    reverse += [
+        c for c, st in prof.chain_stats.items()
+        if not st.effective and abs(st.mean_ic or 0.0) >= cfg.min_chain_ic
+    ]
+
+    if not majority and not reverse:
+        return {
+            "verdict": "consistent", "effective_chains": [], "avoid_chains": [],
+            "passed": True, "detail": "无显著子链画像（保持全链方向一致语义）",
+        }
+    if majority:
+        return {
+            "verdict": "subchain_specific", "effective_chains": majority,
+            "avoid_chains": reverse, "passed": True,
+            "detail": f"子链特异可接受: effective={majority}, avoid={reverse}",
+        }
+    return {
+        "verdict": "conflicted", "effective_chains": [], "avoid_chains": reverse,
+        "passed": False, "detail": f"无显著有效子链且存在显著反向子链: {reverse}",
+    }
 
 
 def run_pre_entry_qa(items: list[QaItem]) -> dict:

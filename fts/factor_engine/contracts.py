@@ -376,6 +376,32 @@ FUTURES_VERIFIER_CONFIG: VerifierConfig = VerifierConfig(
 """期货市场 Verifier 配置 — 适配期货更低夏普、更高噪声的特性。
 放宽阈值: min_sharpe=1.0, min_icir=0.3, min_t_stat=2.0"""
 
+# ─── 评估口径按市场分离（plans/47 §C1）────────────────────────
+# 期货/股票截面样本量差一个量级（期货 12–82 品种、每子链 3 品种 vs 股票 300 个股），
+# IC/审计阈值不可共用：期货截面样本小、IC 噪声大需放宽；股票截面样本大 IC 天然更小更稳。
+# 命名别名：STOCK_EVAL_CONFIG 为股票基线口径（同 DEFAULT_VERIFIER_CONFIG），
+# FUTURES_EVAL_CONFIG 为期货/能化放宽口径（同 FUTURES_VERIFIER_CONFIG）。
+# 语义约束：跨市场对比 IC 数字时必须标注口径市场（plans/47 §C3），禁止直接比对。
+STOCK_EVAL_CONFIG: VerifierConfig = DEFAULT_VERIFIER_CONFIG
+"""股票评估口径（300 个股截面样本大，阈值基准：min_ic=0.03/min_icir=0.5/min_sharpe=1.5）。"""
+
+FUTURES_EVAL_CONFIG: VerifierConfig = FUTURES_VERIFIER_CONFIG
+"""期货/能化评估口径（截面样本小、低信噪比放宽：min_ic=0.03/min_icir=0.3/min_sharpe=1.0/min_t_stat=2.0）。"""
+
+
+def get_eval_config(market: str) -> VerifierConfig:
+    """评估口径按市场路由（plans/47 §C1）。
+
+    Args:
+        market: 目标市场（"futures"/"energy"/"stock"）
+
+    Returns:
+        VerifierConfig — futures/energy → FUTURES_EVAL_CONFIG；stock/其他 → STOCK_EVAL_CONFIG
+    """
+    if market in ("futures", "energy"):
+        return FUTURES_EVAL_CONFIG
+    return STOCK_EVAL_CONFIG
+
 
 DEFAULT_BUDGET_CONFIG: BudgetConfig = BudgetConfig(
     nightly_token_limit=200_000,
@@ -602,6 +628,7 @@ class PortfolioSignal(TypedDict, total=False):
     correlation_flags: list[dict[str, Any]]  # 相关性诊断标记（L2 先验/分层正交化）
     orthogonalized_against: Optional[str]  # 正交化参照因子 ID（GAP-I206 透传）
     orthogonalized_pearson: float  # 与参照因子的 Pearson 相关（GAP-I206 透传）
+    subchain_weights: Optional[dict[str, float]]  # 子链差异化权重 {子链: m}（plans/47 §B，仅 energy 开启时）
 
 
 class PortfolioCombo(TypedDict, total=False):
@@ -900,6 +927,9 @@ __all__ = [
     # 默认配置
     "DEFAULT_VERIFIER_CONFIG",
     "FUTURES_VERIFIER_CONFIG",
+    "STOCK_EVAL_CONFIG",
+    "FUTURES_EVAL_CONFIG",
+    "get_eval_config",
     "DEFAULT_BUDGET_CONFIG",
     # Literal 类型
     "FactorSource",

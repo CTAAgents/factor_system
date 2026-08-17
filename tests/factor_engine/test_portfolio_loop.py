@@ -5317,7 +5317,7 @@ class TestQualityReportAndRunBranches:
         captured: dict[str, Any] = {}
         with patch(
             "fts.factor_engine.portfolio_loop.inject_to_fdt",
-            side_effect=lambda combo, proposals, out: (
+            side_effect=lambda combo, proposals, out, **kwargs: (
                 captured.update({"combo": combo, "proposals": proposals}),
                 {},
             )[1],
@@ -5355,7 +5355,7 @@ class TestQualityReportAndRunBranches:
         captured: dict[str, Any] = {}
         with patch(
             "fts.factor_engine.portfolio_loop.inject_to_fdt",
-            side_effect=lambda combo, proposals, out: (
+            side_effect=lambda combo, proposals, out, **kwargs: (
                 captured.update({"combo": combo, "proposals": proposals}),
                 {},
             )[1],

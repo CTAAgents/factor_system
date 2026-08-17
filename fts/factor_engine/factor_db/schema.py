@@ -213,6 +213,34 @@ CREATE INDEX IF NOT EXISTS idx_fqs_evaluated_at
     ON factor_quality_scores(evaluated_at);
 """
 
+# ─── plans/49：因子×子链质量矩阵时序（QA/生命周期张量化）────
+
+_CREATE_SUBCHAIN_FACTOR_QUALITY = """
+CREATE TABLE IF NOT EXISTS subchain_factor_quality (
+    factor_id      VARCHAR NOT NULL,
+    market         VARCHAR NOT NULL,
+    chain          VARCHAR NOT NULL,
+    evaluated_at   TIMESTAMP NOT NULL,
+    period_end     DATE,
+    n_symbols      INTEGER,
+    mean_ic        DOUBLE,
+    std_ic         DOUBLE,
+    t_stat         DOUBLE,
+    p_value        DOUBLE,
+    effective      BOOLEAN,
+    source         VARCHAR,   -- promotion | review | inspect | lifecycle
+    decision       VARCHAR,   -- keep | scope_shrink | degrade | retire（该单元判定）
+    PRIMARY KEY (factor_id, market, chain, evaluated_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sfq_factor_id
+    ON subchain_factor_quality(factor_id);
+CREATE INDEX IF NOT EXISTS idx_sfq_chain
+    ON subchain_factor_quality(chain);
+CREATE INDEX IF NOT EXISTS idx_sfq_evaluated_at
+    ON subchain_factor_quality(evaluated_at DESC);
+"""
+
 
 # ─── A.2: 因子状态变迁历史 ──────────────────────────────────
 
@@ -411,6 +439,7 @@ def init_database(db_path: Optional[Path] = None, market: Optional[str] = None) 
         conn.execute(_CREATE_FACTOR_VERSIONS)
         conn.execute(_CREATE_FACTOR_CORRELATIONS)
         conn.execute(_CREATE_FACTOR_QUALITY_SCORES)
+        conn.execute(_CREATE_SUBCHAIN_FACTOR_QUALITY)
         conn.execute(_CREATE_FACTOR_STATUS_HISTORY)
         conn.execute(_CREATE_FACTOR_AUDIT_REPORTS)
         # 幂等扩展 factor_catalog 生命周期字段（A.2）

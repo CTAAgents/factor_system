@@ -453,6 +453,7 @@ def regime_adaptive_weight_adjustment(
     max_clamp: float = 1.5,
     probability_mix: bool = True,
     blend_power: float = 1.0,
+    subchain_regimes: Optional[dict[str, dict[str, Any]]] = None,
 ) -> list[PortfolioSignal]:
     """根据市场制度自适应调整因子权重（family 维度已彻底移除，v2.104.0+25）。
 
@@ -472,6 +473,13 @@ def regime_adaptive_weight_adjustment(
       p_i' = p_i^power / Σ_j p_j^power，>1 锐化大概率制度、<1 钝化趋平。
     - 无 regime_probs 或 probability_mix=False 时回退硬查表逻辑（向后兼容）。
 
+    子链路由（plans/48 §C，收益来源族激活下钻子链）:
+    - 传入 subchain_regimes（SectorRegimeSelector.detect_all 输出）时，对归属单一子链
+      的因子（subchain_scope 为单链名/单元素列表）改用**其子链 regime** 的倍率表——
+      "该子链此刻激活哪些收益来源族"（首期以全局 REGIME_STYLE_MULTIPLIERS 复制初始化，
+      数据不足回退全局，向后兼容）。
+    - 无 subchain_scope / all / unknown / 部分链因子 → 回退全局 regime 倍率表（原逻辑）。
+
     Args:
         signals: 合成后的信号列表
         regime: 市场制度检测结果 (from RegimeAwareSelector.detect())
@@ -482,6 +490,8 @@ def regime_adaptive_weight_adjustment(
         max_clamp: 保留参数（双维度乘积 clamp，family 维度移除后不生效）
         probability_mix: 是否启用制度概率混合（regime blend，默认 True）
         blend_power: 制度概率混合幂次（默认 1.0 线性；GAP-095）
+        subchain_regimes: 子链制度检测结果 {子链: MarketRegime}（plans/48 §C 路由；
+            缺省 None=仅全局制度，向后兼容）
 
     Returns:
         调整后的 signals 列表（权重已更新，retained 可能变化）
@@ -496,7 +506,6 @@ def regime_adaptive_weight_adjustment(
     regime_probs: dict[str, float] | None = regime.get("regime_probs") if probability_mix else None
     # GAP-095: 幂次归一化（blend_power≠1.0 时锐化/钝化概率分布，power=1 原样返回）
     regime_probs = _power_normalize_probs(regime_probs or {}, blend_power) or None
-    style_tables: dict[str, dict[str, float]] = REGIME_STYLE_MULTIPLIERS
     if not style_multipliers and regime_probs is None:
         logger.info("[L3-Regime] 无制度倍率配置，跳过自适应调整 [regime=%s]", regime_name)
         return signals
@@ -513,25 +522,51 @@ def regime_adaptive_weight_adjustment(
         else:
             factor_style_map[fid] = _infer_factor_style_from_name(f.get("name", ""))
 
+    # plans/48 §C：因子归属子链路由（仅单链 scope 因子路由到子链 regime；all/unknown/部分链回退全局）
+    factor_subchain: dict[str, str] = {}
+    if subchain_regimes:
+        for f in factors:
+            fid = f.get("factor_id", "")
+            if not fid:
+                continue
+            scope = f.get("subchain_scope")
+            chain: str | None = None
+            if isinstance(scope, str) and scope not in ("all", "unknown"):
+                chain = scope
+            elif isinstance(scope, list) and len(scope) == 1:
+                chain = str(scope[0])
+            if chain and chain in subchain_regimes:
+                factor_subchain[fid] = chain
+
     # 应用倍率调整
     adjustment_log: list[str] = []
     for s in signals:
         fid = s.get("factor_id", "")
         style = factor_style_map.get(fid, "other")
 
+        # 子链路由（§C）：因子归属子链的 regime 优先；无归属回退全局 regime
+        chain = factor_subchain.get(fid)
+        eff_regime: dict[str, Any] = subchain_regimes[chain] if chain else regime  # type: ignore[index]
+        eff_regime_name = eff_regime.get("regime", "oscillate")
+        eff_multipliers = REGIME_STYLE_MULTIPLIERS.get(eff_regime_name, {})
+        eff_probs: dict[str, float] | None = (
+            eff_regime.get("regime_probs") if probability_mix else None
+        )
+        eff_probs = _power_normalize_probs(eff_probs or {}, blend_power) or None
+
         # 获取 style 倍率（默认 1.0）；启用概率混合时按制度概率跨制度加权（28-T3）
-        if regime_probs:
+        if eff_probs:
             style_mult = sum(
-                p * (style_tables.get(r, {}).get(style, 1.0) if style_tables else 1.0)
-                for r, p in regime_probs.items()
+                p * (REGIME_STYLE_MULTIPLIERS.get(r, {}).get(style, 1.0))
+                for r, p in eff_probs.items()
             )
         else:
-            style_mult = style_multipliers.get(style, 1.0)
+            style_mult = eff_multipliers.get(style, 1.0)
 
         multiplier = style_mult
 
-        # 高波动期额外缩减衰减因子
-        if regime_name == "high_vol":
+        # 高波动期额外缩减衰减因子（按因子路由的有效 regime 判定）
+        if eff_regime_name == "high_vol":
             decay = s.get("decay_6m", 0.0)
             if decay > 0.20:
                 multiplier *= 0.8  # 衰减快的因子再减 20%
@@ -543,7 +578,8 @@ def regime_adaptive_weight_adjustment(
         if abs(adjusted_weight - original_weight) > 1e-6:
             adjustment_log.append(
                 f"  {s.get('name', fid)} [{style}]: "
-                f"{original_weight:.4f} → {adjusted_weight:.4f} (×{multiplier:.2f})"
+                f"{original_weight:.4f} → {adjusted_weight:.4f} (×{multiplier:.2f}"
+                f"{f', chain={chain}' if chain else ''})"
             )
 
         s["weight"] = adjusted_weight
@@ -551,17 +587,54 @@ def regime_adaptive_weight_adjustment(
     # 日志
     if adjustment_log:
         logger.info(
-            "[L3-Regime] 自适应权重调整完成 [regime=%s, dim=%s, adjusted=%d/%d]:\n%s",
+            "[L3-Regime] 自适应权重调整完成 [regime=%s, dim=%s, subchain_routed=%d, adjusted=%d/%d]:\n%s",
             regime_name,
             dimension,
+            len(factor_subchain),
             len(adjustment_log),
             len(signals),
             "\n".join(adjustment_log),
         )
     else:
-        logger.info("[L3-Regime] 自适应权重调整完成 [regime=%s, dim=%s, 无需调整]", regime_name, dimension)
+        logger.info(
+            "[L3-Regime] 自适应权重调整完成 [regime=%s, dim=%s, subchain_routed=%d, 无需调整]",
+            regime_name,
+            dimension,
+            len(factor_subchain),
+        )
 
     return signals
+
+
+def build_subchain_return_source(
+    subchain_regimes: Optional[dict[str, dict[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    """构建子链收益来源族激活画像（plans/48 §C3，供质量报告/监控消费）。
+
+    语义："该子链该 regime 下赚什么钱"。首期以全局 REGIME_STYLE_MULTIPLIERS
+    复制初始化（数据不足回退全局，向后兼容）；后续数据积累后可替换为基于
+    symbol_ic × 子链 regime 的历史聚合矩阵。
+
+    Args:
+        subchain_regimes: SectorRegimeSelector.detect_all 输出 {子链: MarketRegime}。
+
+    Returns:
+        {子链: {regime, confidence, active_styles}}——active_styles 为该子链 regime
+        下激活强度 ≠ 1.0 的来源族/风格及其倍率；无检测或空输入返回 {}。
+    """
+    if not subchain_regimes:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for chain, r in subchain_regimes.items():
+        rname = str(r.get("regime", "unknown"))
+        table = REGIME_STYLE_MULTIPLIERS.get(rname, {})
+        active = {s: m for s, m in table.items() if m != 1.0}
+        out[chain] = {
+            "regime": rname,
+            "confidence": round(float(r.get("confidence", 0.0) or 0.0), 4),
+            "active_styles": active,
+        }
+    return out
 
 
 def _compute_exposure_scale(
@@ -2027,6 +2100,75 @@ v2.104.0+106 GAP-133 聚酯链 PX0→EG0）。"""
 
 DEFAULT_CHAIN_DEDUP_MAX_PER_CHAIN: int = 2
 """子链去冗余：单一子链保留因子数上限（默认 2，防产业链暴露集中）。"""
+
+
+def _compute_subchain_exposure(modulation: dict[str, dict[str, float]]) -> dict[str, float]:
+    """子链权重暴露占比（plans/47 §D2 监控，懒加载避免顶层循环依赖）。
+
+    Args:
+        modulation: build_subchain_weights 输出 {factor_id: {子链: m}}
+
+    Returns:
+        {子链: 占比 (0~1)}；空调制 → 空 dict
+    """
+    if not modulation:
+        return {}
+    from .subchain_weight import compute_chain_exposure
+
+    return compute_chain_exposure(modulation, ENERGY_CHAIN_SUB_SYMBOLS)
+
+
+def _merge_gate_scale_into_modulation(
+    modulation: dict[str, dict[str, float]],
+    gate_scale: dict[str, float],
+    signals: list[dict[str, Any]],
+) -> dict[str, dict[str, float]]:
+    """将子链 Gate 缩放系数并入调制矩阵（plans/50 §B1）。
+
+    m'[factor][子链] = m[factor][子链] × gate_scale[子链]（就地更新，返回同 dict）。
+    同步更新 signals 中 Step 2b 标注的 subchain_weights（供 factor_weights.json
+    输出，使 Gate 回避在权重源头生效）。仅处理 gate_scale != 1.0 的链
+    （long/short/neutral → 1.0 权重层不干预，避免浮点抖动）；gate_scale 未覆盖
+    的链保持原值（新子链/未知链不误伤）。
+
+    Args:
+        modulation: build_subchain_weights 输出 {factor_id: {子链: m}}（就地修改）
+        gate_scale: gate_scale_map 输出 {子链: 缩放系数}（avoid-hard=0 / avoid-soft=ratio / 其余=1.0）
+        signals: L3 信号列表（含 Step 2b 写入的 subchain_weights 标注）
+    """
+    for row in modulation.values():
+        for chain, sc in gate_scale.items():
+            if chain in row and sc != 1.0:
+                row[chain] = round(row[chain] * sc, 4)
+    for s in signals:
+        sw = s.get("subchain_weights")
+        if sw:
+            for chain, sc in gate_scale.items():
+                if chain in sw and sc != 1.0:
+                    sw[chain] = round(sw[chain] * sc, 4)
+    return modulation
+
+
+def _build_quality_matrix_snapshot(market: str) -> dict:
+    """因子×子链质量矩阵快照（plans/49 §D3 监控段，懒加载避免顶层循环依赖）。
+
+    仅 market=energy 且 l3.subchain_quality.enabled 时读取
+    ``subchain_factor_quality`` 最新行（SSOT）；否则返回 {}（灰度默认关）。
+    """
+    if market != "energy":
+        return {}
+    try:
+        from .subchain_lifecycle import (
+            build_subchain_quality_matrix_snapshot,
+            load_subchain_lifecycle_config,
+        )
+
+        if not load_subchain_lifecycle_config().enabled:
+            return {}
+        return build_subchain_quality_matrix_snapshot("energy")
+    except Exception as e:  # noqa: BLE001 — 快照失败不阻断主流程
+        logger.warning("[L3] 质量矩阵快照构建失败（跳过）: %s", e)
+        return {}
 
 
 def _load_factor_symbol_ic(factor: dict[str, Any], elite_dir: str | Path) -> Optional[dict[str, float]]:
@@ -3791,6 +3933,9 @@ def load_elite_factors(
                                 "market": f.get("market", market),
                                 "shadow_pool": metadata.get("shadow_pool"),
                                 "style_tags": style_tags,
+                                # plans/47 §B：子链适用性画像透传（A2 落库字段，供子链差异化权重调制）
+                                "subchain_scope": metadata.get("subchain_scope"),
+                                "subchain_ic_profile": metadata.get("subchain_ic_profile") or {},
                                 # 正交化闭环（GAP-I206 补充，v2.71.0/v2.72.0 基底）
                                 "orthogonalized": metadata.get("orthogonalized", False),
                                 "orthogonalized_against": metadata.get("orthogonalized_against", ""),
@@ -3974,6 +4119,8 @@ def inject_to_fdt(
     combo: PortfolioCombo,
     proposals: list[AgentOptimizationProposal],
     output_dir: str | Path,
+    subchain_weights: Optional[dict[str, dict[str, float]]] = None,
+    symbol_chain: Optional[dict[str, str]] = None,
 ) -> dict[str, str]:
     """将组合 + 建议注入 FDT 可消费的配置目录。
 
@@ -3981,6 +4128,9 @@ def inject_to_fdt(
         combo: 组合
         proposals: Agent 优化建议列表
         output_dir: 输出目录（如 memory/portfolio）
+        subchain_weights: 子链差异化权重矩阵 {factor_name: {子链: m}}（plans/47 §B，
+            仅 energy 开启时传入；None=不输出，兼容现状）
+        symbol_chain: {品种: 子链} 映射（供信号管线按品种定位子链调制权重）
 
     Returns:
         {file_type: absolute_path} 的映射
@@ -4004,19 +4154,20 @@ def inject_to_fdt(
         if s.get("retained", True):
             weights[s["name"]] = s["weight"]
     weights_fp = out / "factor_weights.json"
+    payload: dict[str, Any] = {
+        "version": EVOLUTION_VERSION,
+        "updated_at": combo.get("updated_at", datetime.now().isoformat()),
+        "synthesis_mode": combo.get("synthesis_mode", "equal_weight"),
+        "weights": weights,
+        "combo_sharpe": combo.get("combo_sharpe", 0),
+        "n_factors": combo.get("n_factors", 0),
+    }
+    # plans/47 §B：子链差异化权重矩阵 + 品种→子链映射（信号管线按品种应用调制）
+    if subchain_weights and symbol_chain:
+        payload["subchain_weights"] = subchain_weights
+        payload["symbol_chain"] = symbol_chain
     weights_fp.write_text(
-        json.dumps(
-            {
-                "version": EVOLUTION_VERSION,
-                "updated_at": combo.get("updated_at", datetime.now().isoformat()),
-                "synthesis_mode": combo.get("synthesis_mode", "equal_weight"),
-                "weights": weights,
-                "combo_sharpe": combo.get("combo_sharpe", 0),
-                "n_factors": combo.get("n_factors", 0),
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
+        json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     paths["weights"] = str(weights_fp.resolve())
@@ -4108,6 +4259,8 @@ class PortfolioLoop:
         cluster_top_n: int = 1,
         enable_chain_dedup: bool = True,
         chain_dedup_max_per_chain: int = 2,
+        enable_subchain_weight: bool = False,
+        subchain_weight_config: Optional[Any] = None,
         signal_store: Optional[tuple[str, str, str]] = None,
         owl_config: Optional[dict[str, Any]] = None,
     ):
@@ -4151,6 +4304,19 @@ class PortfolioLoop:
         # 子链维度去冗余（GAP-121 扩展）：单子链因子数上限，防产业链暴露集中
         self.enable_chain_dedup = enable_chain_dedup
         self.chain_dedup_max_per_chain = max(1, int(chain_dedup_max_per_chain))
+        # plans/47 §B：子链差异化权重调制（灰度开关默认关，仅 market="energy" 生效；
+        # 与 Step 1.8b 去冗余互补：去冗余管"数量"，调制管"权重"）
+        self.enable_subchain_weight = bool(enable_subchain_weight)
+        if subchain_weight_config is None:
+            from .subchain_weight import SubchainWeightConfig
+
+            subchain_weight_config = SubchainWeightConfig()
+        self.subchain_weight_config = subchain_weight_config
+        self._subchain_modulation: dict[str, dict[str, float]] = {}
+        self._subchain_symbol_chain: dict[str, str] = {}
+        # plans/50 §B3：子链 Gate 缩放系数快照（并入调制矩阵后落质量报告观测段；
+        # Gate 未开启/非 energy → 空 dict，与 subchain_gate_distribution 语义一致）
+        self._subchain_gate_scale: dict[str, float] = {}
         # plans/41 方案 A：OWL 因子分组筛选旁路配置（settings.yaml l3.owl）
         # enabled=false（默认）零开销零行为变更；enabled+report_only=true 仅输出
         # 交叉比对报告，不修改 factors 列表（避免越界改动主链路）。
@@ -4324,6 +4490,23 @@ class PortfolioLoop:
                 "below_sharpe_threshold": sum(1 for s in sharpes if s < _RUNTIME_MIN_SHARPE) if sharpes else 0,
             },
             "factors": factors,
+            # plans/47 §D2：子链权重暴露占比（特异因子治理监控；仅调制开启时有值）
+            "subchain_exposure": (
+                _compute_subchain_exposure(self._subchain_modulation)
+                if self._subchain_modulation
+                else {}
+            ),
+            # plans/48 §D3：子链×制度 Gate 分布（各子链 decision；仅 energy 且 Gate 开启时有值，
+            # 与 subchain_exposure 互补——方向层 vs 幅度层监控）
+            "subchain_gate_distribution": (
+                getattr(self, "_subchain_gate_distribution", None) or {}
+            ),
+            # plans/50 §B3：子链 Gate 缩放系数快照（并入调制矩阵后权重源头回避程度；
+            # 仅 energy + Gate 开启 + 调制矩阵存在时有值，四网合一的第四段）
+            "subchain_gate_scale": dict(self._subchain_gate_scale),
+            # plans/49 §D3：因子×子链质量矩阵快照（最近期 effective/退化 decision；
+            # 仅 energy 且 subchain_quality 开启时有值，与上两段三网合一）
+            "subchain_quality_matrix": _build_quality_matrix_snapshot(self.market),
         }
 
         ts = _dt.now().strftime("%Y-%m-%d")
@@ -5004,6 +5187,40 @@ class PortfolioLoop:
                 )
             state["total_signals_processed"] = len(signals)
 
+            # plans/47 §B：子链差异化权重调制（灰度，仅 energy 且开关开启；与 Step 1.8b 去冗余互补）
+            if self.enable_subchain_weight and self.market == "energy":
+                try:
+                    from .subchain_weight import (
+                        build_subchain_weights,
+                        build_symbol_chain_map,
+                        compute_chain_exposure,
+                    )
+
+                    mod = build_subchain_weights(
+                        factors, ENERGY_CHAIN_SUB_SYMBOLS, self.subchain_weight_config
+                    )
+                    self._subchain_modulation = mod
+                    self._subchain_symbol_chain = build_symbol_chain_map(ENERGY_CHAIN_SUB_SYMBOLS)
+                    for s in signals:
+                        sw = mod.get(s.get("factor_id", s.get("name", "?")))
+                        if sw:
+                            s["subchain_weights"] = sw
+                    exp = compute_chain_exposure(mod, ENERGY_CHAIN_SUB_SYMBOLS)
+                    over = {
+                        c: round(v, 3)
+                        for c, v in exp.items()
+                        if v > self.subchain_weight_config.max_exposure_ratio
+                    }
+                    logger.info(
+                        "[L3] Step 2b: 子链差异化权重调制完成 (factors=%d, decay_mode=%s), 子链暴露=%s%s",
+                        len(signals),
+                        self.subchain_weight_config.decay_mode,
+                        {c: round(v, 3) for c, v in exp.items()},
+                        f" 超阈值告警: {over}" if over else "",
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[L3] Step 2b: 子链调制失败（非致命，跳过）: %s", e)
+
             # Step 2.5: Regime 自适应权重调整
             if self.enable_regime_adaptation and market_ohlcv is not None:
                 try:
@@ -5016,6 +5233,96 @@ class PortfolioLoop:
 
                     aconfig = self.adaptive_config or DEFAULT_ADAPTIVE_CONFIG
                     if aconfig.get("enabled", True):
+                        # plans/48 §C：energy 且子链 Gate 开启时，检测子链 regime 供因子权重
+                        # 路由（收益来源族激活下钻子链）；未开启/失败回退全局（向后兼容）。
+                        subchain_regimes: Optional[dict[str, dict[str, Any]]] = None
+                        if self.market == "energy" and panel_data:
+                            try:
+                                from fts.config import get_config
+
+                                gate_cfg = (getattr(get_config(), "l3", {}) or {}).get(
+                                    "regime_gating"
+                                ) or {}
+                            except Exception:  # noqa: BLE001
+                                gate_cfg = {}
+                            if gate_cfg.get("enabled", False):
+                                try:
+                                    from .regime import SectorRegimeSelector
+
+                                    sector_selector = SectorRegimeSelector()
+                                    subchain_regimes = sector_selector.detect_all(
+                                        panel_data, sector_map=ENERGY_CHAIN_SUB_SYMBOLS
+                                    )
+                                    if subchain_regimes:
+                                        logger.info(
+                                            "[L3] Step 2.5: 子链 regime 检测完成（§C 路由）: %s",
+                                            {
+                                                c: r.get("regime", "unknown")
+                                                for c, r in subchain_regimes.items()
+                                            },
+                                        )
+                                        # plans/48 §D3：构建子链×制度 Gate 分布（各子链 decision），
+                                        # 入质量报告段（与 plans/47 §D2 的 subchain_exposure 互补）
+                                        try:
+                                            from .regime_gate import (
+                                                GateConfig as _GateConfig,
+                                            )
+                                            from .regime_gate import (
+                                                build_subchain_gates as _build_gates,
+                                            )
+
+                                            _gconf = _GateConfig(**gate_cfg)
+                                            _gates = _build_gates(
+                                                subchain_regimes,
+                                                ENERGY_CHAIN_SUB_SYMBOLS,
+                                                _gconf,
+                                            )
+                                            self._subchain_gate_distribution = {
+                                                c: g["decision"] for c, g in _gates.items()
+                                            }
+                                            # plans/50 §B1：Gate 决策并入子链调制矩阵
+                                            # （m'[factor][子链] = m × gate_scale——avoid 链在权重源头
+                                            # 归零/降权；long/short/neutral 不干预：方向过滤属信号层
+                                            # Step 3h1 职责，权重层只回避方向不明链；依赖 Step 2b 调制
+                                            # 矩阵存在，否则保持观测语义零行为变更）
+                                            try:
+                                                from .regime_gate import (
+                                                    gate_scale_map as _gate_scale_map,
+                                                )
+
+                                                _gscale = _gate_scale_map(_gates, _gconf)
+                                                if self._subchain_modulation:
+                                                    _merge_gate_scale_into_modulation(
+                                                        self._subchain_modulation,
+                                                        _gscale,
+                                                        signals,
+                                                    )
+                                                self._subchain_gate_scale = {
+                                                    c: round(v, 4)
+                                                    for c, v in _gscale.items()
+                                                }
+                                                logger.info(
+                                                    "[L3] Step 2.5: Gate 并入调制矩阵"
+                                                    "（avoid 链权重源头归零/降权）: %s",
+                                                    self._subchain_gate_scale,
+                                                )
+                                            except Exception as gs_err:  # noqa: BLE001
+                                                logger.warning(
+                                                    "[L3] Step 2.5: Gate 并入调制矩阵失败（跳过，保持观测语义）: %s",
+                                                    gs_err,
+                                                )
+                                                self._subchain_gate_scale = {}
+                                        except Exception as gd_err:  # noqa: BLE001
+                                            logger.warning(
+                                                "[L3] Step 2.5: Gate 分布构建失败（跳过）: %s",
+                                                gd_err,
+                                            )
+                                            self._subchain_gate_distribution = {}
+                                except Exception as se:  # noqa: BLE001
+                                    logger.warning(
+                                        "[L3] Step 2.5: 子链 regime 检测失败（回退全局）: %s", se
+                                    )
+                                    subchain_regimes = None
                         signals = regime_adaptive_weight_adjustment(
                             signals,
                             regime,
@@ -5026,6 +5333,7 @@ class PortfolioLoop:
                             max_clamp=aconfig.get("max_clamp", 1.5),
                             probability_mix=aconfig.get("probability_mix", True),
                             blend_power=aconfig.get("blend_power", 1.0),
+                            subchain_regimes=subchain_regimes,
                         )
                         # 28-T4: 计算并暂存置信度仓位缩放因子（T6 在 build_combo 消费）
                         self._regime_exposure_scale = _compute_exposure_scale(
@@ -5040,6 +5348,12 @@ class PortfolioLoop:
                             "confidence": regime.get("confidence", 0.0),
                             "exposure_scale": self._regime_exposure_scale,
                             "entropy_norm": None,
+                            # plans/48 §C3：子链收益来源族激活画像（仅 energy+Gate 开启时非空）
+                            "subchain_return_source": (
+                                build_subchain_return_source(subchain_regimes)
+                                if subchain_regimes
+                                else None
+                            ),
                         }
                         # 28-T10: 上报 regime 观测指标（置信度/熵/exposure_scale/blend HHI），
                         # 供 /metrics 审计；失败不阻断主流程。
@@ -5219,7 +5533,13 @@ class PortfolioLoop:
                 )
                 if rebal_proposal is not None:
                     proposals.append(rebal_proposal)
-            paths = inject_to_fdt(combo, proposals, self.memory_dir)
+            paths = inject_to_fdt(
+                combo,
+                proposals,
+                self.memory_dir,
+                subchain_weights=self._subchain_modulation or None,
+                symbol_chain=self._subchain_symbol_chain or None,
+            )
             logger.info("[L3] Step 7: 注入完成, 路径=%s", paths)
 
             # 保存组合

@@ -462,6 +462,7 @@ class AutoReviewPolicy:
         ic: Any,
         sharpe: Any,
         qa_meta: Optional[dict[str, Any]] = None,
+        subchain_profile: Optional[dict[str, dict[str, Any]]] = None,
     ) -> tuple[Optional[ReviewDecision], str]:
         """机审分类（三态）。decision=None 表示转人审。
 
@@ -470,11 +471,18 @@ class AutoReviewPolicy:
         任一关键项缺失 → 转人审（宁缺毋滥）；任一未通过 → rejected；
         全部通过 + IC/Sharpe 正常 → approved。
 
+        单链特异放行（plans/49 §B2）：全链 IC < min_ic 但存在 t 检验显著的
+        effective 子链（subchain_ic_profile 画像，47 号三门槛）时，不再因全链
+        IC 稀释而拒绝——继续走 QA 门禁，门禁通过即 approved（reason 标注
+        effective 子链，scope 由调用方按画像设置）；Sharpe 门槛不放行。
+
         Args:
             ic: 因子 IC（factor_catalog 字段）
             sharpe: 因子 Sharpe
             qa_meta: 完整质检结论 {audit_passed, quality_grade, high_ic_grade,
                 multiple_passed, walk_forward_windows, q1_q10_passed}，None=未评审
+            subchain_profile: 子链画像 {子链: {effective, t_stat, mean_ic, ...}}
+                （plans/49 §B2 单链特异放行输入；None/空 = 不启用）
         """
         if ic is None or sharpe is None:
             return None, "IC/Sharpe 缺失，无法机审"
@@ -486,8 +494,17 @@ class AutoReviewPolicy:
             return None, "IC/Sharpe 非有限值"
         if ic_f > self.max_ic or sharpe_f > self.max_sharpe:
             return None, f"疑似过拟合/未来函数 (ic={ic_f:.4f}, sharpe={sharpe_f:.2f} 超上限)"
-        if ic_f < self.min_ic or sharpe_f < self.min_sharpe:
-            return ReviewDecision.REJECTED, f"低质 (ic={ic_f:.4f}<{self.min_ic} 或 sharpe={sharpe_f:.2f}<{self.min_sharpe})"
+
+        # plans/49 §B2：单链特异放行判定（仅 IC 维度；Sharpe 不放行）
+        subchain_eff: list[str] = []
+        if ic_f < self.min_ic and subchain_profile:
+            subchain_eff = [
+                c for c, st in subchain_profile.items() if bool(st.get("effective"))
+            ]
+        if sharpe_f < self.min_sharpe:
+            return ReviewDecision.REJECTED, f"低质 (sharpe={sharpe_f:.2f}<{self.min_sharpe})"
+        if ic_f < self.min_ic and not subchain_eff:
+            return ReviewDecision.REJECTED, f"低质 (ic={ic_f:.4f}<{self.min_ic})"
 
         # ── 完整质检结论门禁（v2.104.0+89，宁缺毋滥） ──
         qa = qa_meta or {}
@@ -506,7 +523,8 @@ class AutoReviewPolicy:
             return ReviewDecision.REJECTED, "高IC筛查 C 级（剔除）"
         if not qa["q1_q10_passed"]:
             return ReviewDecision.REJECTED, "Q1-Q10 入库质检未通过"
-        return ReviewDecision.APPROVED, f"机审通过：完整质检合格 + ic={ic_f:.4f}, sharpe={sharpe_f:.2f}"
+        suffix = f"，单链特异放行: effective 子链={subchain_eff}" if subchain_eff else ""
+        return ReviewDecision.APPROVED, f"机审通过：完整质检合格 + ic={ic_f:.4f}, sharpe={sharpe_f:.2f}{suffix}"
 
 
 class FactorReviewWorkflow:

@@ -1196,6 +1196,22 @@ def cross_section_evaluate_backtest(
         _pos_cnt = sum(1 for v in symbol_ic.values() if v > 0)
         metrics["cross_symbol_positive_ratio"] = float(_pos_cnt) / float(len(symbol_ic))
 
+    # plans/47 §C2：子链 IC 画像报告段（A 模块产物——每因子×子链显著性画像）。
+    # 仅当四子链中至少一个品种命中（n_symbols>0）时输出，避免污染无子链语义的评估
+    # （股票 symbol_ic 键不匹配 ENERGY_CHAIN_SUB_SYMBOLS → 全 n=0 → 不输出）。
+    if symbol_ic:
+        try:
+            from .subchain_profile import build_subchain_metadata
+
+            _scm = build_subchain_metadata(str(factor.get("factor_id", "")), symbol_ic)
+            _any_hit = any(
+                st.get("n_symbols", 0) > 0 for st in _scm["subchain_ic_profile"].values()
+            )
+            if _any_hit:
+                metrics["subchain_ic_report"] = _scm
+        except Exception as e:  # noqa: BLE001 — 画像生成失败降级，不阻断既有评估
+            logger.warning("[subchain_ic_report] 生成失败（非致命，跳过）: %s", e)
+
     # GAP-121 补全（横截面路径）：极值扰动 IC 重算（供 HighICScreener
     # V2 / extreme_perturb 消费）。将全部品种的截面信号/收益扁平化为长数组，
     # 剔除极端信号样本后重算 IC（|IC| 口径，方向翻转不影响）。
