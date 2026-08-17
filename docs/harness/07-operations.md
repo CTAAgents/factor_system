@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+113
+> 版本: v2.104.0+114
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,7 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+114** | **2026-08-17** | **plans/51 张量化衔接缺口与契约缺口修复：A 契约（params 双哈希增量判定/形状防护/bundle 契约完整化）B 接线（D 层生产自动激活/存储域登记/A 层缓存补盲/对齐与 3D 构建收敛/B4 豁免）C 规范（numba 状态纠偏/缓存容量配置化/降级观测补全/warmup）** |** |
 | **v2.104.0+113** | **2026-08-17** | **plans/50 L3 权重层 Gate 闭环：gate_scale_map + _merge_gate_scale_into_modulation 将 Gate avoid 决策并入子链调制矩阵（m'=m×gate_scale，avoid 链权重源头归零/降权，long/short/neutral 不干预）+ 质量报告 subchain_gate_scale 段** |** |
 | **v2.104.0+112** | **2026-08-17** | **GAP-137 关闭: plans/49 因子×子链质量矩阵(A/B/C/D) - 评审质检与生命周期张量化适配 47/48** |** |
 | **v2.104.0+111** | **2026-08-17** | **GAP-136 登记并关闭：plans/48 Regime 分层方向 Gate 四模块（A 子链方向 Gate `regime_gate.py` build_subchain_gates/apply_subchain_gate + 信号管线 Step 3h1 仅 energy 生效 / B 品种暴露缩放 map_confidence_to_exposure+apply_exposure_scale（置信度映射×对齐度，防双重惩罚）/ C 收益来源族激活 regime_adaptive_weight_adjustment(subchain_regimes) 按 subchain_scope 路由子链倍率+数据不足回退全局+build_subchain_return_source 画像入 _regime_meta / D --enable-regime-gating 灰度 + 质量报告 subchain_gate_distribution 段 + 与 plans/47 正交串联验证）；新增测试 36 用例 + 受影响回归 694 全绿 + ruff 通过** |** |

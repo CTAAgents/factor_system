@@ -1,6 +1,6 @@
 # E.1 DuckDB 并发模型根治 — 详细技术设计（GAP-056）
 
-> 版本: v2.104.0+113
+> 版本: v2.104.0+114
 > 关联: [08-gap-analysis.md](../08-gap-analysis.md) GAP-056、`fts/data_futures.py`（DuckDBConnection/AsyncWriteQueue/retry_on_conflict）、`fts/scheduler/`（多任务并发写入）
 > 状态: **已实施（含分库方案扩展）**
 > 定位: 数据基础设施层架构决策变更（单写者 + 多只读 + 批量导入），改动集中在 `fts/data_futures.py` 与配置层，不改动业务模块
