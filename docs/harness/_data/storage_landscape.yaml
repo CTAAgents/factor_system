@@ -96,6 +96,16 @@ domains:
     status: active
     migrated_from: [signal_cache]
 
+  # ── L3 信号矩阵一等公民（plans/40 D 层；plans/51 B2 登记）──────────
+  - domain: l3_signal_assets
+    description: L3 组合信号矩阵持久化（factor×market×end_date×symbol 信号数组 + code/params 双哈希 meta，plans/40 D 层增量复用；路径经 FTS_L3_SIGNAL_STORE_DB 配置，可重建非唯一事实源）
+    backend: duckdb
+    path: data/l3_signal_store.duckdb
+    tables: [l3_signal_matrix, l3_signal_meta]
+    partition_key: ""
+    retention: "按 (factor, market, end_date) UPSERT 重写，可重建"
+    status: active
+
   - domain: signal_cache
     description: 因子信号缓存旧格式（memory/cache/factor_signals/ 裸 .npy，P3-A 已切 Parquet，.npy 只读兼容；P4 冻结期≥1 发布周期后清理）
     backend: npy

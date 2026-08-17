@@ -509,7 +509,8 @@ def cross_market_ic_check(
         fdata = factor_codes.get(fid)
         if not fdata:
             continue
-        ic_alt = _panel_factor_ic(panel_alt, dates_alt, fdata)
+        # plans/51 B3：透传 signal_cache（替代面板重算复用主流程缓存）
+        ic_alt = _panel_factor_ic(panel_alt, dates_alt, fdata, signal_cache=signal_cache)
         ic_p = float(ic_primary.get(fid, float("nan")))
         factor_ic[fid] = {"ic_primary": ic_p, "ic_alternate": ic_alt}
         if np.isfinite(ic_p) and np.isfinite(ic_alt):

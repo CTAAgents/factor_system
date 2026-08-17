@@ -1759,6 +1759,102 @@ class TestPortfolioLoop:
         assert result.n_factors_retained == 0
         assert result.error is None
 
+    # ── plans/51 B1：D 层信号库自动激活 ──
+    def test_signal_store_auto_enabled_from_config(self, tmp_portfolio_dir, tmp_elite_dir, monkeypatch):
+        """配置启用时构造自动激活 D 层信号库（end_date 由运行时推导）。"""
+        from types import SimpleNamespace
+
+        fake_cfg = SimpleNamespace(
+            l3_signal_store_enabled=True,
+            l3_signal_store_db="data/test_l3_signal_store.duckdb",
+        )
+        monkeypatch.setattr("fts.config.settings._default_config", fake_cfg)
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+        )
+        assert loop._signal_store is not None
+        assert loop._signal_store[0] == "futures"
+        assert loop._signal_store[1] == ""  # end_date 运行时推导
+        assert loop._signal_store[2] == "data/test_l3_signal_store.duckdb"
+
+    def test_signal_store_disabled_stays_none(self, tmp_portfolio_dir, tmp_elite_dir, monkeypatch):
+        """配置关闭或缺失时构造不激活（保持现状）。"""
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(
+            "fts.config.settings._default_config",
+            SimpleNamespace(l3_signal_store_enabled=False, l3_signal_store_db=""),
+        )
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+        )
+        assert loop._signal_store is None
+
+    def test_signal_store_explicit_overrides_config(self, tmp_portfolio_dir, tmp_elite_dir, monkeypatch):
+        """调用方显式传 signal_store 优先于配置自动激活。"""
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(
+            "fts.config.settings._default_config",
+            SimpleNamespace(l3_signal_store_enabled=False, l3_signal_store_db=""),
+        )
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            signal_store=("futures", "2026-08-16", "data/custom.duckdb"),
+        )
+        assert loop._signal_store == ("futures", "2026-08-16", "data/custom.duckdb")
+
+    def test_auto_build_derives_end_date(self, tmp_path, monkeypatch):
+        """plans/51 B1：signal_store end_date 为空时由面板最新交易日推导并透传。"""
+        import numpy as np
+        import pandas as pd
+        from fts.factor_engine import l3_signal_service as l3svc
+        from fts.factor_engine.portfolio_loop import _auto_build_factor_returns
+
+        captured: dict = {}
+
+        def _fake_load_or_build(panel, valid_factors, factor_codes, common_dates,
+                                market, end_date, db_path, forward_days, signal_cache, use_store):
+            captured["market"] = market
+            captured["end_date"] = end_date
+            captured["db_path"] = db_path
+            return l3svc.build_signal_matrix(
+                panel, valid_factors, factor_codes, common_dates,
+                forward_days=forward_days, signal_cache=signal_cache,
+            )
+
+        monkeypatch.setattr(l3svc, "load_or_build_signal_matrix", _fake_load_or_build)
+
+        dates = pd.date_range("2024-01-01", periods=40, freq="D")
+        rng = np.random.default_rng(7)
+        panel = {}
+        for sym in [f"SY{i:02d}" for i in range(12)]:  # ≥ FactorReturnsConfig.min_stocks(10)
+            close = 100.0 + np.cumsum(rng.normal(0, 1, 40))
+            panel[sym] = pd.DataFrame({"close": close}, index=dates)
+        code = (
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    a = data['close'].pct_change(3).to_numpy(dtype=float)\n"
+            "    a[np.isnan(a)] = 0.0\n"
+            "    return a\n"
+        )
+        factors = [{"factor_id": "f1", "code": code}, {"factor_id": "f2", "code": code}]
+
+        fr = _auto_build_factor_returns(
+            panel, factors, tmp_path, market="futures",
+            signal_store=("futures", None, None),
+        )
+        assert fr is not None
+        assert captured["market"] == "futures"
+        assert captured["end_date"] == "2024-02-09"  # 面板最新交易日（40 日窗口末）
+        assert captured["db_path"] is None
+
     def test_run_with_mock_factors(self, tmp_portfolio_dir, tmp_elite_dir):
         """使用 mock elite 因子运行。"""
         # 写入一个 mock elite 因子

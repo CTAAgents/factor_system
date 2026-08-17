@@ -435,6 +435,22 @@ class FTSConfig:
     # 生效：缺失/版本冲突/FTS_OPS_NUMBA=false → 回退现值实现，零语义漂移。
     ops_numba: bool = field(default_factory=lambda: os.getenv("FTS_OPS_NUMBA", "true").lower() == "true")
 
+    # ── L3 信号矩阵一等公民增量库（plans/40 D 层；plans/51 B1 激活）──
+    # L3 组合重算经 l3_signal_service.load_or_build_signal_matrix 复用已入库
+    # (factor, code, params) 信号（同窗口因子级增量复用，窗口推进经 A2 形状防护
+    # 安全重算）。可设 FTS_L3_SIGNAL_STORE=false 关闭（回退纯全量构建，零漂移）。
+    l3_signal_store_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_L3_SIGNAL_STORE", "true").lower() == "true"
+    )
+    # L3 信号矩阵库路径（登记于 storage_landscape.yaml l3_signal_assets 域，plans/51 B2）
+    l3_signal_store_db: str = field(
+        default_factory=lambda: os.getenv("FTS_L3_SIGNAL_STORE_DB", "data/l3_signal_store.duckdb")
+    )
+    # L3 信号缓存容量上限（plans/40 A 层；plans/51 C2 配置化，原模块级常量 20000）
+    l3_signal_cache_entries: int = field(
+        default_factory=lambda: int(os.getenv("FTS_L3_SIGNAL_CACHE_ENTRIES", "20000"))
+    )
+
     # ── 回测容量约束（v2.67.0，GAP-I501）──
     # 回测是否启用容量限制（持仓市值 ≤ 品种日均成交额 × 比例，超限截断）
     backtest_capacity_cap: bool = field(

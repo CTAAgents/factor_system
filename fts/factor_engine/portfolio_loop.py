@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal, Optional, Sequence, cast
+from typing import Any, Literal, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -1293,37 +1293,6 @@ def _build_factor_code_map(
     return factor_codes
 
 
-def _align_signal_to_dates(
-    sig: np.ndarray | pd.Series,
-    df: pd.DataFrame,
-    common_dates: Sequence[Any],
-) -> np.ndarray:
-    """将信号序列按共同日期向量化对齐（plans/40 A 层，替代 O(n²) 线性查找）。
-
-    原实现 `list(df.index).index(d)` 嵌套在 N因子×N品种 双重循环内是 O(n²) 热点；
-    此处用 `df.index.get_indexer(common_dates)`（hash 查找，O(n)）一次性对齐，
-    语义不变：不在 df 索引中的日期留 NaN，越界（sig 短于 df）也留 NaN。
-
-    Args:
-        sig: 因子信号序列（长度与 df 行数一致或更短）
-        df: 品种 OHLCV DataFrame
-        common_dates: 目标对齐日期序列
-
-    Returns:
-        aligned: 长度 = len(common_dates) 的 float64 数组，缺失为 NaN
-    """
-    n_dates = len(common_dates)
-    out = np.full(n_dates, np.nan, dtype=np.float64)
-    if df is None or len(df) == 0:
-        return out
-    sig_arr = np.asarray(sig, dtype=np.float64)
-    loc = df.index.get_indexer(common_dates)  # -1 表示不在
-    valid = (loc >= 0) & (loc < len(sig_arr))
-    if np.any(valid):
-        out[valid] = sig_arr[loc[valid]]
-    return out
-
-
 def _auto_build_factor_returns(
     panel: dict[str, Any],
     factors: list[dict[str, Any]],
@@ -1379,6 +1348,9 @@ def _auto_build_factor_returns(
         # signal_store 非 None 时走一等公民增量构建（仅重算新/变更因子）
         if signal_store is not None and len(signal_store) == 3:
             _mkt, _end, _db = signal_store
+            # plans/51 B1：end_date 未显式指定时用面板最新交易日推导（增量判定维度）
+            if not _end:
+                _end = str(common_dates[-1])[:10]
             bundle = load_or_build_signal_matrix(
                 panel,
                 valid_factors,
@@ -1460,7 +1432,7 @@ def _compute_elastic_net_weights(
 
     import numpy as np
     from ..data import FTSDataProvider
-    from .factor_program import FactorExecutor
+    from .l3_signal_service import build_signal_matrix  # plans/51 B5 信号矩阵收敛
     from .weight_learning import (
         WeightLearningConfig,
         _fit_elasticnet_coefs,
@@ -1507,33 +1479,19 @@ def _compute_elastic_net_weights(
     n_factors = len(valid_factors)
     logger.info("[L3] Elastic Net 因子: %d 个（含代码）", n_factors)
 
-    # ── 3. 计算因子信号矩阵: [n_dates, n_stocks, n_factors] ──
-    signal_matrix = np.full((n_dates, n_stocks, n_factors), np.nan)
-    for j, f in enumerate(valid_factors):
-        fid = f["factor_id"]
-        fdata = factor_codes[fid]
-        try:
-            executor = FactorExecutor(fdata, signal_cache=signal_cache)
-        except Exception:
-            continue
-        for i, sym in enumerate(stocks):
-            df = panel[sym]
-            try:
-                sig = executor.execute(df, fdata.get("params", {}))
-                # 向量化对齐（plans/40 A 层），替代 O(n²) list.index 查找
-                signal_matrix[:, i, j] = _align_signal_to_dates(sig, df, common_dates)
-            except Exception:
-                continue
-
-    # ── 4. 计算 5 日前向收益 ──
-    forward_returns = np.full((n_dates, n_stocks), np.nan)
-    horizon = 5
-    for i, sym in enumerate(stocks):
-        df = panel[sym]
-        closes = df["close"].values
-        fwd = np.full(len(closes), np.nan)
-        fwd[:-horizon] = (closes[horizon:] - closes[:-horizon]) / np.maximum(closes[:-horizon], 1e-10)
-        forward_returns[:, i] = _align_signal_to_dates(fwd, df, common_dates)
+    # ── 3. 计算因子信号矩阵 + 前向收益 ──
+    # plans/51 B5：收敛到 l3_signal_service 单一服务（复用信号缓存 + 向量化对齐），
+    # 消除与 _auto_build_factor_returns 的双实现漂移
+    bundle = build_signal_matrix(
+        panel,
+        valid_factors,
+        factor_codes,
+        common_dates,
+        forward_days=5,
+        signal_cache=signal_cache,
+    )
+    signal_matrix = bundle.signal_matrix
+    forward_returns = bundle.forward_returns
 
     # ── 5. 逐日 Elastic Net 截面回归 ──
     mean_coefs = _fit_elasticnet_coefs(signal_matrix, forward_returns, l1_ratio=l1_ratio, cv_folds=cv_folds)
@@ -1635,7 +1593,7 @@ def _compute_ml_ensemble_weights(
 
     import numpy as np
     from ..data import FTSDataProvider
-    from .factor_program import FactorExecutor
+    from .l3_signal_service import build_signal_matrix  # plans/51 B5 信号矩阵收敛
 
     # ── 1. 加载期货核心面板数据 ──
     provider = FTSDataProvider()
@@ -1661,33 +1619,18 @@ def _compute_ml_ensemble_weights(
 
     n_factors = len(valid_factors)
 
-    # ── 3. 计算因子信号矩阵: [n_dates, n_stocks, n_factors] ──
-    signal_matrix = np.full((n_dates, n_stocks, n_factors), np.nan)
-    for j, f in enumerate(valid_factors):
-        fid = f["factor_id"]
-        fdata = factor_codes[fid]
-        try:
-            executor = FactorExecutor(fdata, signal_cache=signal_cache)
-        except Exception:
-            continue
-        for i, sym in enumerate(stocks):
-            df = panel[sym]
-            try:
-                sig = executor.execute(df, fdata.get("params", {}))
-                # 向量化对齐（plans/40 A 层），替代 O(n²) list.index 查找
-                signal_matrix[:, i, j] = _align_signal_to_dates(sig, df, common_dates)
-            except Exception:
-                continue
-
-    # ── 4. 计算 5 日前向收益 ──
-    forward_returns = np.full((n_dates, n_stocks), np.nan)
-    horizon = 5
-    for i, sym in enumerate(stocks):
-        df = panel[sym]
-        closes = df["close"].values
-        fwd = np.full(len(closes), np.nan)
-        fwd[:-horizon] = (closes[horizon:] - closes[:-horizon]) / np.maximum(closes[:-horizon], 1e-10)
-        forward_returns[:, i] = _align_signal_to_dates(fwd, df, common_dates)
+    # ── 3. 计算因子信号矩阵 + 前向收益 ──
+    # plans/51 B5：收敛到 l3_signal_service 单一服务（复用信号缓存 + 向量化对齐）
+    bundle = build_signal_matrix(
+        panel,
+        valid_factors,
+        factor_codes,
+        common_dates,
+        forward_days=5,
+        signal_cache=signal_cache,
+    )
+    signal_matrix = bundle.signal_matrix
+    forward_returns = bundle.forward_returns
 
     # ── 5. 展平为样本矩阵训练 ML 模型 ──
     X_flat = signal_matrix.reshape(-1, n_factors)
@@ -2072,8 +2015,7 @@ ACTIVE_FACTOR_CAP: int = 20
 按样本内评分选优属数据窥探式选择，系统性偏向过拟合因子。"""
 
 L3_SIGNAL_CACHE_ENTRIES: int = 20000
-"""L3 信号缓存容量上限（plans/40 A 层）：因子数上限 10000 × 多数据指纹，LRU 淘汰。
-单次 L3 run 内同一因子信号只算一次，消除 8 处重复重算。"""
+"""（plans/51 C2 配置化迁移完成：见 FTSConfig.l3_signal_cache_entries，此处保留仅作缺失兜底）"""
 
 _DEFAULT_SCORE_WEIGHTS: dict[str, float] = {
     "sharpe_cap": 0.30,
@@ -3748,7 +3690,8 @@ def _validate_oos_extrapolation(
     try:
         from .factor_program import FactorExecutor
 
-        executor = FactorExecutor(factor)
+        # plans/51 B3：复用共享 SignalCache（参数已存在但未透传的盲点）
+        executor = FactorExecutor(factor, signal_cache=signal_cache)
 
         # 收集所有新数据（晋升后的数据）
         new_data_list = []
@@ -4274,8 +4217,30 @@ class PortfolioLoop:
         # plans/40 A 层：L3 全流程共享信号缓存（去重/OOS/聚类/PCA/权重学习复用，避免重复重算）
         from .signal_cache import SignalCache
 
-        self._signal_cache = SignalCache(max_entries=L3_SIGNAL_CACHE_ENTRIES)
-        # plans/40 D 层：信号矩阵一等公民增量库 (market, end_date, db_path)；None 关闭
+        cache_entries = L3_SIGNAL_CACHE_ENTRIES  # 兜底默认
+        try:
+            from fts.config.settings import get_config as _cfg_signal
+
+            cache_entries = int(getattr(_cfg_signal(), "l3_signal_cache_entries", cache_entries) or cache_entries)
+        except Exception:  # noqa: BLE001 — 配置读取失败用兜底
+            pass
+        self._signal_cache = SignalCache(max_entries=cache_entries)
+        # plans/40 D 层：信号矩阵一等公民增量库 (market, end_date, db_path)；None 关闭。
+        # plans/51 B1：调用方未显式传且配置启用时自动激活（end_date 空 → 由
+        # _auto_build_factor_returns 用面板最新交易日推导），生产构造点零改动。
+        if signal_store is None:
+            try:
+                from fts.config.settings import get_config
+
+                _cfg = get_config()
+                if getattr(_cfg, "l3_signal_store_enabled", False):
+                    signal_store = (
+                        market,
+                        "",
+                        getattr(_cfg, "l3_signal_store_db", "") or "",
+                    )
+            except Exception:  # noqa: BLE001 — 配置读取失败则不激活（保持现状）
+                signal_store = None
         self._signal_store = signal_store
         # 粘性约束默认启用（DEFAULT_STICKY_CONFIG: ±30% 变动 / 新因子首日封顶 0.10）
         self.sticky_config = sticky_config or DEFAULT_STICKY_CONFIG

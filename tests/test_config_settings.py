@@ -130,6 +130,27 @@ class TestFTSConfigDefaults:
         cfg = load_config(config_path=None)
         assert cfg.portfolio_optimizer_mode == "mvo"
 
+    # ── plans/51 B1：L3 信号矩阵一等公民增量库配置 ──
+    def test_l3_signal_store_defaults(self):
+        """L3 信号库默认启用 + 默认路径（plans/51 B1）。"""
+        cfg = FTSConfig()
+        assert cfg.l3_signal_store_enabled is True
+        assert cfg.l3_signal_store_db == "data/l3_signal_store.duckdb"
+
+    def test_l3_signal_store_env_override(self, monkeypatch):
+        """FTS_L3_SIGNAL_STORE / FTS_L3_SIGNAL_STORE_DB 环境变量覆盖。"""
+        monkeypatch.setenv("FTS_L3_SIGNAL_STORE", "false")
+        monkeypatch.setenv("FTS_L3_SIGNAL_STORE_DB", "data/alt_l3_signal.duckdb")
+        cfg = load_config(config_path=None)
+        assert cfg.l3_signal_store_enabled is False
+        assert cfg.l3_signal_store_db == "data/alt_l3_signal.duckdb"
+
+    def test_l3_signal_cache_entries(self, monkeypatch):
+        """L3 信号缓存容量配置化（plans/51 C2）：默认 20000 + env 覆盖。"""
+        assert FTSConfig().l3_signal_cache_entries == 20000
+        monkeypatch.setenv("FTS_L3_SIGNAL_CACHE_ENTRIES", "5000")
+        assert load_config(config_path=None).l3_signal_cache_entries == 5000
+
     # ── v2.59.0 (GAP-F03/F02) 期货中性化 + 回测真实性仿真 ──
     def test_futures_neutralization_defaults(self):
         """期货板块中性化配置默认值（v2.59.0）。"""
