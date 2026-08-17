@@ -2895,6 +2895,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     # 挂载到 args 传递到各子命令作为日志聚合标识
     args.session_id = generate_session_id()
 
+    # plans/51 C6：后台线程预热 numba 内核（cache=True 已落盘 __pycache__；
+    # 首进程 ~1.1s 编译与主命令并行，规避 L2 CLI 短生命周期冷启动延迟）
+    try:
+        import threading as _th
+
+        def _warmup_numba() -> None:
+            try:
+                from fts.factor_engine.numba_kernels import warmup
+
+                warmup()
+            except Exception:  # noqa: BLE001 — 预热失败不影响主命令
+                pass
+
+        _th.Thread(target=_warmup_numba, daemon=True).start()
+    except Exception:  # noqa: BLE001 — 线程启动失败静默降级
+        pass
+
     if getattr(args, "version", False):
         return _cmd_version(args)
 

@@ -25,12 +25,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 from collections import OrderedDict
 from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 class SignalCache:
@@ -46,6 +49,7 @@ class SignalCache:
         self._lock = threading.RLock()
         self._hits = 0
         self._misses = 0
+        self._evictions = 0
 
     # ─── 查询/写入 ───────────────────────────────────────
 
@@ -81,6 +85,13 @@ class SignalCache:
             self._cache.move_to_end(key)
             while len(self._cache) > self._max_entries:
                 self._cache.popitem(last=False)
+                self._evictions += 1
+                # plans/51 C3：淘汰可观测（debug 级，高频场景不噪）
+                logger.debug(
+                    "SignalCache LRU 淘汰（累计 %d 条, max_entries=%d）",
+                    self._evictions,
+                    self._max_entries,
+                )
 
     def clear(self) -> None:
         """清空缓存（命中/未命中计数保留）。"""
@@ -100,7 +111,12 @@ class SignalCache:
     def stats(self) -> dict[str, int]:
         """缓存命中统计（供观测/测试）。"""
         with self._lock:
-            return {"hits": self._hits, "misses": self._misses, "entries": len(self._cache)}
+            return {
+                "hits": self._hits,
+                "misses": self._misses,
+                "entries": len(self._cache),
+                "evictions": self._evictions,  # plans/51 C3
+            }
 
     # ─── 内部 ────────────────────────────────────────────
 
