@@ -463,6 +463,10 @@ class EvolutionLoop:
         # ── C 阶段 47a: UCT 协作类（UctSelector）——领域状态随迁协作类，
         # 主循环仅持 _consecutive_low_ic 可变引用（box），经 property 读写。
         self._low_ic_box: list[int] = [0]
+        # 生成端去重前置缓存（GAP-135 前置）：{normalized_code}，懒加载于首次
+        # 演化后代检查时扫描 elite 池构建，运行中动态更新（本 run 已生成/已评估
+        # 的表达式并入），避免重复表达式重复走评估链浪费算力。
+        self._seen_expression_norms: Optional[set[str]] = None
         self._uct_selector = UctSelector(
             budget=self.budget,
             low_ic_box=self._low_ic_box,
@@ -695,6 +699,34 @@ class EvolutionLoop:
                     )
                     self._record_experiment_variant(
                         new_factor, parent, generation, evolution_method, evolution_summary, None, "verifier_failed"
+                    )
+                    self._update_uct_failure(parent)  # GAP-074: UCT 失败反馈
+                    # P1-3 (Phase 3): 提前达标停止检查（本代零晋升计入）
+                    if self._maybe_early_stop(state):
+                        break
+                    continue
+
+                # ── Step 1.35: 生成端去重前置（GAP-135 前置，评估链前拦截重复表达式） ──
+                # 与 elite 池既有因子或本 run 已生成/已评估的表达式规范化一致时直接丢弃，
+                # 避免重复因子跑完整评估链（回测/审计/走航）浪费算力；晋升端去重（
+                # _promote_to_elite GAP-135）保留为兜底。
+                if self._is_generated_duplicate(new_factor):
+                    logger.info(
+                        "[L2-dedup] 生成端拦截重复表达式 [%s] gen=%d method=%s",
+                        new_factor.get("name", "?"),
+                        generation,
+                        evolution_method,
+                    )
+                    self._record_failure_trace(
+                        new_factor,
+                        generation,
+                        evolution_method,
+                        "生成端同表达式去重（前置拦截）",
+                        [],
+                        trace_id,
+                    )
+                    self._record_experiment_variant(
+                        new_factor, parent, generation, evolution_method, evolution_summary, None, "expr_duplicate"
                     )
                     self._update_uct_failure(parent)  # GAP-074: UCT 失败反馈
                     # P1-3 (Phase 3): 提前达标停止检查（本代零晋升计入）
@@ -1938,6 +1970,72 @@ class EvolutionLoop:
 
     def _load_elite_parent_factors(self) -> list[dict[str, Any]]:
         return self._elite_store._load_elite_parent_factors()
+
+    # ── 生成端去重前置（GAP-135 前置，plans 补充）：评估链前拦截重复表达式 ──
+
+    def _build_seen_expression_norms(self) -> set[str]:
+        """懒加载已见表达式规范化集合（本 run 去重基准）。
+
+        扫描 elite_dir 全部 JSON 快照，收集 ``normalize_expression`` 规范化后的
+        code（排除 ``_`` 前缀的辅助文件）。调用方按需构建一次并缓存于
+        ``_seen_expression_norms``；异常时静默降级为空集（不阻断演化）。
+
+        Returns:
+            {normalized_code} 集合
+        """
+        from .evolution_promote import normalize_expression
+
+        import json as _json
+
+        norms: set[str] = set()
+        try:
+            if not self.elite_dir.exists():
+                return norms
+            for fp in sorted(self.elite_dir.glob("*.json")):
+                if fp.name.startswith("_"):
+                    continue
+                try:
+                    data = _json.loads(fp.read_text(encoding="utf-8"))
+                except Exception:  # noqa: BLE001
+                    continue
+                code = data.get("code")
+                if not code:
+                    continue
+                norm = normalize_expression(str(code))
+                if norm:
+                    norms.add(norm)
+        except Exception as e:  # noqa: BLE001 — 去重降级不阻断演化
+            logger.warning("[L2-dedup] 已见表达式集合构建失败（降级放行）: %s", e)
+        return norms
+
+    def _is_generated_duplicate(self, factor: FactorProgram) -> bool:
+        """生成端同表达式去重判定（Step 1.35 前置拦截）。
+
+        将后代因子 code 规范化后与已见集合比对（elite 池既有 + 本 run 已生成/
+        已评估），命中返回 True（调用方直接丢弃，不进入评估链）。未命中则把该
+        表达式并入已见集合（本 run 后续代相同表达式也拦截，防同批重复）。
+
+        Args:
+            factor: 演化生成的后代因子（含 code）
+
+        Returns:
+            True=与既有/已生成表达式重复，应拦截
+        """
+        from .evolution_promote import normalize_expression
+
+        code = factor.get("code")
+        if not code:
+            return False
+        norm = normalize_expression(str(code))
+        if not norm:
+            return False
+        if self._seen_expression_norms is None:
+            self._seen_expression_norms = self._build_seen_expression_norms()
+        seen = self._seen_expression_norms
+        if norm in seen:
+            return True
+        seen.add(norm)
+        return False
 
     def _write_seed_correlation_index(
         self,

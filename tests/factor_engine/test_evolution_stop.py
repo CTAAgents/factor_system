@@ -13,13 +13,29 @@ from unittest.mock import MagicMock
 
 
 def _mocks(loop, *, parent=None):
-    """构造 run() 集成 mock：种子空 + 恒零晋升演化路径。"""
-    fake_factor = {"factor_id": "fct_es001", "name": "es_cand", "code": "x", "params": {}}
-    fake_parent = parent or {"factor_id": "fct_es_parent", "name": "es_parent", "code": "x", "params": {}}
+    """构造 run() 集成 mock：种子空 + 恒零晋升演化路径。
+
+    每代生成不同 code（模拟真实演化每代产出新表达式），避免 Step 1.35
+    生成端去重前置将后续代全部拦截——测试意图是验证提前停止计数，
+    与表达式去重正交。
+    """
+    _gen = {"n": 0}
+
+    def _evolve_one_side(*_args, **_kwargs):
+        _gen["n"] += 1
+        n = _gen["n"]
+        return (
+            {"factor_id": f"fct_es{n:03d}", "name": f"es_cand_{n}", "code": f"x{n}", "params": {}},
+            "operator_evolution",
+            "s",
+            0,
+        )
+
+    fake_parent = parent or {"factor_id": "fct_es_parent", "name": "es_parent", "code": "x0", "params": {}}
     loop.seed_pool.load_all_seeds = MagicMock(return_value=[])
     loop._evaluate_and_promote_seeds = MagicMock(return_value=0)
     loop._load_elite_parent_factors = MagicMock(return_value=[fake_parent])
-    loop._evolve_one = MagicMock(return_value=(fake_factor, "operator_evolution", "s", 0))
+    loop._evolve_one = MagicMock(side_effect=_evolve_one_side)
     loop._check_factor_runtime = MagicMock(return_value=(True, ""))
     loop._quick_prefilter = MagicMock(return_value=(True, "", 0.05))
     loop._process_candidate = MagicMock(return_value=False)

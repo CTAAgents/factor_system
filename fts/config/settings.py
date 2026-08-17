@@ -75,8 +75,8 @@ class FTSConfig:
     llm_temperature: float = field(default_factory=lambda: float(os.getenv("FTS_LLM_TEMPERATURE", "1.2")))
 
     # ── 演化配置 ──
-    # ── 演化模式 (Phase C.2): operator(算子主干) / code(代码创新) / hybrid(混合) / batch(批量挖掘 GAP-I201) ──
-    evolution_mode: str = field(default_factory=lambda: os.getenv("FTS_EVOLUTION_MODE", "hybrid"))
+    # ── 演化模式 (Phase C.2): operator(算子主干) / operator_first(算子优先,LLM/GP兜底) / code(代码创新) / hybrid(混合) / batch(批量挖掘 GAP-I201) ──
+    evolution_mode: str = field(default_factory=lambda: os.getenv("FTS_EVOLUTION_MODE", "operator_first"))
     max_generations: int = 10
     population_size: int = 20
     micro_trials_per_generation: int = 50

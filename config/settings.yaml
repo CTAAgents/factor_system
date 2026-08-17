@@ -29,8 +29,10 @@ population_size: 20
 micro_trials_per_generation: 50
 
 # ── 演化模式 (Phase C.2) ──
-# operator(算子主干) / code(代码创新) / hybrid(混合)
-evolution_mode: "hybrid"
+# operator(算子主干) / operator_first(算子优先,LLM/GP兜底) / code(代码创新) / hybrid(混合)
+# v2.105.0+2 起默认 operator_first：本地算子演化优先（零 token），LLM/GP 兜底，
+# 控制云 API token 消耗（配合生成端去重前置 Step 1.35 减少重复评估算力）。
+evolution_mode: "operator_first"
 
 # ── L3 Portfolio ──
 portfolio_max_factors: 20
