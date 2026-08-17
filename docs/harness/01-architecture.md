@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+105
+> 版本: v2.104.0+108
 > 最后更新: 2026-08-10
 
 ---
@@ -656,10 +656,12 @@ FTS (因子推演) — 支持期货横截面因子演化
 │ 链配置（SSOT: config/futures_universe.yaml，v2.104.0+38；           │
 │   fts/data_futures.py 内置默认兜底，缺失/损坏/校验失败回退并告警）： │
 │   ENERGY_CHAIN_SYMBOLS=12 化工链品种（四大子链各 3：能源 SC/FU/BU│
-│     聚酯 PX/TA/PF、油化工 L/PP/PG、煤化工 MA/UR/SA；v2.104.0+37  │
-│     扩池降训练池内相关性）                                         │
+│     聚酯 PF/TA/EG、油化工 L/PP/PG、煤化工 MA/UR/SA；v2.104.0+37  │
+│     扩池降训练池内相关性；v2.104.0+106 PX0(2023-09 上市短历史)换出│
+│     至盲测池、EG0(2018-12 上市长历史)换入）                     │
 │   ENERGY_CHAIN_TRAIN=12 全训；ENERGY_CHAIN_HOLDOUT=其余化工链 8   │
-│     品种（化工链成员 − 训练 12，链外泛化盲测，随配置自动派生）     │
+│     品种（化工链成员 − 训练 12，链外泛化盲测，随配置自动派生，    │
+│     含 PX0，不含 EG0）                                           │
 │   ENERGY_CHAIN_MARKET="energy"（因子库路由标记）                    │
 │ 全量品种池 FUTURES_SUBSET/CORE/HOLDOUT/STRATIFIED 与 17 产业链     │
 │   分类同源 config/futures_universe.yaml（"炼化聚酯链"由训练池自动   │
@@ -693,6 +695,11 @@ FTS (因子推演) — 支持期货横截面因子演化
 │   聚酯3 PX/TA/PF + 油化工3 L/PP/PG + 煤化工3 MA/UR/SA，覆盖四大   │
 │   化工子链）；LU/PR 与 FU/PF 高相关换出至盲测池；盲测池自动重算为 │
 │   8 品种（BZ/EB/EG/FG/PL/PR/SH/V）；链知识/感知品种/ec_* 种子同步 │
+│ 训练池换池（v2.104.0+106，GAP-133）：聚酯链代表 PX0→EG0（PX0 2023-│
+│   09 上市仅 704 行封顶训练公共窗口，EG0 2018-12 上市 1861 行）—— │
+│   训练链 = SC/FU/BU/PF/TA/EG/L/PP/PG/MA/UR/SA（12），PX0 自动入  │
+│   盲测池；energy 面板回溯 500→750 日（config l2_panel_days=750，│
+│   env FTS_L2_PANEL_DAYS 可覆盖；方案②回退分支可切 4 完整窗口）│
 │ L1 知识输入双线混入（v2.104.0+35）：energy 模式一次运行注入        │
 │   ① 通用期货市场知识+因子：seeds/futures 种子 + 提取器管道          │
 │      （天软/研报/论文/宏观）                                        │

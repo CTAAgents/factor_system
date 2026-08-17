@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.104.0+105
+> 版本: v2.104.0+108
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,9 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.104.0+108** | **2026-08-17** | **GAP-133 参数化收尾: L2训练池面板回溯天数硬编码常量改配置化(l2_panel_days=750下沉FTSConfig/settings.yaml, env FTS_L2_PANEL_DAYS可覆盖, jobs.py _get_l2_panel_days()统一5处, test_jobs TestEnergyChainPanelDays配置化)** |** |
+| **v2.104.0+107** | **2026-08-17** | **GAP-133方案②根治走航断崖: _build_wf_config(≥3年分支)数据不足(<1368行)自动回退短窗配置, 750行不再0窗口, 消除700魔法值依赖** |** |
+| **v2.104.0+106** | **2026-08-17** | **GAP-133 能化链L2种子评估500日短样本1窗口审计拦截修复(energy面板days 500->750, l2_panel_days统一5个训练池作业, v2.104.0+108起配置化)+训练池换池(PX0->EG0, 盲测池自动派生)** |** |
 | **v2.104.0+105** | **2026-08-17** | **docs: 同步因子生命周期调度（business_flow/execution_modes_flowchart 调度时间修正 + TRAE Schedule 调度源 + SVG approved 豁免标注 + 任务数16）** |** |
 | **v2.104.0+104** | **2026-08-17** | **plans/46 知识源自动发现 M1-M4 实施：SourceRegistry+SourceProber(探活类型识别)+SourceDiscoverer(WebSearch+LLM发现)+DynamicSourceCollector(json/rss/html+LLM兜底)；collect_all 叠加注册表 active 动态源+canary 试采晋升；因子产出双健康度(技术失败冷却/连续零产出淘汰复权)；配置化阈值 l1_source_*；test_source_registry.py 新建** |** |
 | **v2.104.0+103** | **2026-08-17** | **所有定时自动化任务默认执行能化链：settings.yaml + settings.py 全局默认市场 default_market "futures"→"energy"（门控执行集整体切换：energy 任务执行、futures 任务 no-op；FTS_DEFAULT_MARKET 可覆盖）；logic_monitor_job 由固定 futures 改跟随全局 _global_market()（监控 factor_catalog_energy，与因子巡检口径一致）；验证：83 用例（scheduler/test_jobs + test_tasks + test_factor_db_isolation）全绿 + 门控实测 gate(energy)=True/gate(futures)=False + 能化库 elite+active=242；文档同步（01-arch 市场路由/07-operations）** |** |

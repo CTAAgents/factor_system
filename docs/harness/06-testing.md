@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.104.0+105
+> 版本: v2.104.0+108
 > 最后更新: 2026-08-17
 
 ---
@@ -443,7 +443,7 @@ TOTAL                                      20326   1254    94%
 | `tests/factor_engine/test_success_pattern.py` | 14 | 成功模式定向演化（Phase 1.2 P0-1/26 计划 §6）：`analyze_success_patterns` 8（空链空报告 / 窗口截断 / by_method 晋升率 / 时间衰减权重 / top_operators 提取 / top_window_bins 分箱 / min_sample 不足空报告 / 坏 recorded_at 降级）+ MacroEvolver prompt 注入 4（有 report 含"近期成功模式"段落 / 无 report 不含 / 空 report 不注入 / 带 report 正常产出因子）+ `_evolve_one` 传递与缓存 2（macro 分支传 report / 进程内缓存二次调用不重读经验链） |
 | `tests/factor_engine/test_orthogonal_basis.py` | 19 | GAP-I206 补充（v2.72.1）正交基底 + GAP-I305 衰减分级：IC 斜率 5（上升正斜率/下降负斜率/平坦近零/点数不足回零/归一化范围）+ 衰减分级 5（normal/observe/retired 判定/update 写入分级字段/auto_retire 按级退役）+ 基底管理器 7（空基底/注册加载/上限淘汰/重复注册更新/Gram-Schmidt 正交性/弱候选拒绝/无基底返回 None）+ L2 集成 2（开关关闭返回 None/基底成员缺失降级） |
 | `tests/factor_engine/test_factor_quality_card.py` | ~100 | 因子质量评分卡（10 维评分，A/B/C 分级，可配置映射阈值） |
-| `tests/factor_engine/test_evolution_loop.py` | ~129 | L2 主循环（含孤立模块集成审查门禁测试：消融/因果/鲁棒/SHAP/特征重要性/逻辑监控 + 端到端流水线 + v2.59.0 GAP-F03 期货板块中性化注入 3 用例 + v2.60.0 GAP-F08 样本外强制 7 用例：WalkForward 冷启动/配置开关/审计优先 + v2.61.0 GAP-S01 股票中性化自动注入 4 用例：启用注入/键归一化/关闭跳过/空映射降级 + v2.65.0 GAP-I201 batch 集成 10 用例 + v2.66.0 GAP-X01/X02 3 用例：常数前置拦截/真实截面 IC/无截面能力拦截 + v2.98.2 GAP-071 审计复用 2 用例：复用评估链走航不调用兜底/缺失回退独立计算 + v2.104.0+14 GAP-115 熔断预算传播 3 用例：重绑传播到 UctSelector/熔断判定按最新阈值（0.99 触发、1.0 放行）/协作类 owner 动态读取一致） |
+| `tests/factor_engine/test_evolution_loop.py` | ~131 | L2 主循环（含孤立模块集成审查门禁测试：消融/因果/鲁棒/SHAP/特征重要性/逻辑监控 + 端到端流水线 + v2.59.0 GAP-F03 期货板块中性化注入 3 用例 + v2.60.0 GAP-F08 样本外强制 7 用例：WalkForward 冷启动/配置开关/审计优先 + v2.61.0 GAP-S01 股票中性化自动注入 4 用例：启用注入/键归一化/关闭跳过/空映射降级 + v2.65.0 GAP-I201 batch 集成 10 用例 + v2.66.0 GAP-X01/X02 3 用例：常数前置拦截/真实截面 IC/无截面能力拦截 + v2.98.2 GAP-071 审计复用 2 用例：复用评估链走航不调用兜底/缺失回退独立计算 + v2.104.0+14 GAP-115 熔断预算传播 3 用例：重绑传播到 UctSelector/熔断判定按最新阈值（0.99 触发、1.0 放行）/协作类 owner 动态读取一致 + v2.104.0+107 GAP-133 方案② _build_wf_config 断崖根治 3 用例：≥3 年分支 1400 行默认（window_years=3）/750~1367 行回退短窗（window_years=1,step=3mo）/750 行端到端 WalkForwardOptimizer n_windows≥2） |
 | `tests/factor_engine/test_experience_chain.py` | ~19 | 经验链 |
 | `tests/factor_engine/test_factor_program.py` | ~36 | 因子程序（v2.104.0+40 修复器新增 IndentationError 缩进修复 4 用例：反缩进语句 unexpected indent / 语句多余缩进 / unindent does not match / expected an indented block） |
 | `tests/factor_engine/test_failure_pattern.py` | ~22 | 失败模式聚类分析 |
@@ -529,7 +529,7 @@ TOTAL                                      20326   1254    94%
 | `tests/factor_engine/extractors/test_base.py` | ~26 | 提取器基类与管道抽象（LLM 提取全路径/YAML 转换/暂停持久化）（v2.47.0） |
 | `tests/factor_engine/extractors/test_stock_pipeline.py` | ~27 | 股票提取管道（v2.47.0） |
 | `tests/factor_engine/extractors/test_futures_pipeline.py` | ~27 | 期货提取管道（v2.47.0） |
-| `tests/scheduler/test_jobs.py` | ~41 | 调度任务定义（job 注册/运行/周期）（v2.47.0；v2.73.0 L3 期货路径 1 用例；v2.98.3 股票信号管道 3 用例 + 股票 L3 联动断言；v2.99.0 GAP-072 解绑断言——L3 job 不再联动信号管道（assert_not_called）、独立信号管道任务入口 called_once；v2.103.0+5 月度任务合并新标准重审 +2：Step A 重审 invoked（默认启用）/FTS_MONTHLY_REAUDIT_ENABLED=0 关闭；v2.104.0+100 GAP-132：因子巡检断言更新——FactorInspector(market="energy") + commit=False dry-run；v2.104.0+101 全局市场门控 +4：TestMarketGate 3（_market_gate 按全局 True/False / energy 任务全局 futures 下 no-op / futures 任务全局 energy 下 no-op）+ 巡检跟随全局 1（futures 时巡检期货库）；_fake_cfg 默认 default_market="futures"） |
+| `tests/scheduler/test_jobs.py` | ~44 | 调度任务定义（job 注册/运行/周期）（v2.47.0；v2.73.0 L3 期货路径 1 用例；v2.98.3 股票信号管道 3 用例 + 股票 L3 联动断言；v2.99.0 GAP-072 解绑断言——L3 job 不再联动信号管道（assert_not_called）、独立信号管道任务入口 called_once；v2.103.0+5 月度任务合并新标准重审 +2：Step A 重审 invoked（默认启用）/FTS_MONTHLY_REAUDIT_ENABLED=0 关闭；v2.104.0+100 GAP-132：因子巡检断言更新——FactorInspector(market="energy") + commit=False dry-run；v2.104.0+101 全局市场门控 +4：TestMarketGate 3（_market_gate 按全局 True/False / energy 任务全局 futures 下 no-op / futures 任务全局 energy 下 no-op）+ 巡检跟随全局 1（futures 时巡检期货库）；v2.104.0+106 GAP-133 +1：回溯 750 日多窗口区间断言；v2.104.0+108 参数化 +2：TestEnergyChainPanelDays——l2_panel_days 配置值=750（≥698）+ env FTS_L2_PANEL_DAYS 覆盖 800；_fake_cfg 默认 default_market="futures"） |
 | `tests/monitor/test_reaudit.py` | 9 | 新标准准入复审（v2.103.0+5，新建）：summarize_result 处置规则 5（全过 retain/鲁棒性失败 shadow/审计失败 retire/评估失败 retire/error 优先）+ build_factor_program 2（code 缺失 None/正常构造）+ apply_reaudit_results 2（隔离 DuckDB：retain·shadow·retire 三处置 + error 跳过 + status_history 留痕 / retire 状态变迁记录） |
 | `tests/factor_engine/test_evolution_l1_merge.py` | 14 | L1→L2 候选合并 + 精英晋升（v2.47.0 基础；v2.103.0+20 新增 2 用例——默认 shadow_observe 关闭（env 未设晋升记录无 shadow_pool）/FTS_EVOLUTION_SHADOW_OBSERVE=1 恢复（记录含 shadow_pool 且 observe_trading_days==5）；v2.104.0+10 GAP-I307 +1：消费后 total_count/pending_count 重算，不残留过期值） |
 | `tests/factor_engine/test_weight_learning.py` | ~30 | 机构级权重学习（风险调整/滚动样本外验证/面板市场自动匹配/跨市场 IC）（v2.75.0；v2.78.1 默认关闭断言 2 用例） |
