@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.105.0+1
+> 版本: v2.105.0+2
 > 最后更新: 2026-08-10
 
 ---
@@ -25,7 +25,7 @@ FTS 配置采用三级优先级（高→低）：
 | `elite_dir` | str | `"memory/knowledge/factors/futures_elite"` | `FTS_ELITE_DIR` | elite 因子存储目录（股票剥离后默认对齐期货精英目录，v2.86.0） |
 | `default_market` | str | `"futures"` | `FTS_DEFAULT_MARKET` | 默认市场类型；v2.104.0+101 起为**全局市场开关**——调度任务门控（futures/energy 专属任务仅全局市场匹配时执行）、CLI `--market`/`--universe` 未指定时默认值、`FactorRepository`/`FactorInspector` 构造 `market=None` 时路由均跟随 |
 | `llm_backend` | str | `""` | `FTS_LLM_BACKEND` | LLM 后端选择（空=自动检测）|
-| `evolution_mode` | str | `"hybrid"` | `FTS_EVOLUTION_MODE` | 演化模式: operator(算子主干) / code(代码创新) / hybrid(混合) / batch(批量挖掘漏斗, GAP-I201, v2.65.0) |
+| `evolution_mode` | str | `"operator_first"` | `FTS_EVOLUTION_MODE` | 演化模式: operator(算子主干) / operator_first(算子优先,LLM/GP兜底, v2.105.0+2 默认) / code(代码创新) / hybrid(混合) / batch(批量挖掘漏斗, GAP-I201, v2.65.0) |
 | 演化 CLI 失败率熔断阈值 | float | 1.0 | `FTS_EVOLUTION_CB_FAILURE_RATE` | `fts.cli evolution run` 失败率熔断阈值（v2.103.0+28 默认 0.99→1.0=禁用失败率熔断，夜间演化默认跑满世代数；保留 token 与连续低 IC 熔断兜底；设 <1.0 可恢复失败率熔断） |
 | `max_generations` | int | 10 | — | L2 最大演化代数 |
 | `population_size` | int | 20 | — | 种群大小 |
@@ -211,14 +211,14 @@ llm_backend: "openai"
 max_generations: 10
 micro_trials_per_generation: 50
 portfolio_max_factors: 20
-evolution_mode: "hybrid"   # operator(算子主干) / code(代码创新) / hybrid(混合) / batch(批量挖掘漏斗, GAP-I201)
+evolution_mode: "operator_first"   # operator(算子主干) / operator_first(算子优先,LLM/GP兜底) / code(代码创新) / hybrid(混合) / batch(批量挖掘漏斗, GAP-I201)
 batch_size: 20             # batch 模式每代候选生成数
 batch_max_candidates: 5    # batch 模式进入细评估的最大候选数
 batch_max_workers: 4       # batch 粗筛并行线程数
 batch_random_seed: 42      # batch 随机种子
 ```
 
-> **evolution_mode 说明（Phase C.2 / GAP-I201）**：取值 `operator`（算子主干）/ `code`（代码创新）/ `hybrid`（混合）/ `batch`（批量挖掘漏斗），默认 `hybrid`，支持环境变量 `FTS_EVOLUTION_MODE` 覆盖。`batch` 模式（v2.65.0）每代对同一父因子批量生成 `batch_size` 个后代（macro 至多 1 次 + GP/operator 交替 + seed 递增），ThreadPoolExecutor 并行粗筛后按预筛 IC 排序截断 `batch_max_candidates` 个进入细评估准入链；token 护栏（每代至多 1 次 LLM）与既有熔断协同。
+> **evolution_mode 说明（Phase C.2 / GAP-I201）**：取值 `operator`（算子主干）/ `operator_first`（算子优先，LLM/GP 兜底，v2.105.0+2 起默认）/ `code`（代码创新）/ `hybrid`（混合）/ `batch`（批量挖掘漏斗），默认 `operator_first`，支持环境变量 `FTS_EVOLUTION_MODE` 覆盖。`operator_first` 模式优先走本地算子演化（零 token 消耗），算子失败/空结果时 LLM macro 与 GP 兜底，配合生成端去重前置（Step 1.35）减少重复评估算力。`batch` 模式（v2.65.0）每代对同一父因子批量生成 `batch_size` 个后代（macro 至多 1 次 + GP/operator 交替 + seed 递增），ThreadPoolExecutor 并行粗筛后按预筛 IC 排序截断 `batch_max_candidates` 个进入细评估准入链；token 护栏（每代至多 1 次 LLM）与既有熔断协同。
 
 ### 3.1 品种池/产业链配置（config/futures_universe.yaml，v2.104.0+38）
 

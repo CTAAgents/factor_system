@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.105.0+1
+> 版本: v2.105.0+2
 > 最后更新: 2026-08-10
 
 ---
@@ -162,6 +162,11 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │    - operator 生成常数校验前移: 生成循环内 evaluate 过滤非常数表达式       │
 │    - _execute_factor_code exec 后 exec_globals.update(local_vars), 修复    │
 │      eval_fts_expr 未定义 (模块级 import 绑定并入 factor_program.__globals__)
+│  Step 1.35 生成端去重前置 (v2.105.0+2, GAP-135 前置补盲):                    │
+│    演化后代在评估链前经 _is_generated_duplicate 规范化比对 (normalize_     │
+│    expression 空白压缩, _build_seen_expression_norms 懒加载 elite 池 + 本  │
+│    run 已生成/已评估集合) 命中即拦截 (expr_duplicate 失败轨迹 + UCT 惩罚),  │
+│    避免重复表达式跑回测/审计/走航; 晋升端 _promote_to_elite 去重保留兜底   │
 │  seed_pool.py — 期货种子池管理（81 因子，style_tags 14 类）                     │
 │  factor_program.py — 因子程序（图灵完备代码 + 安全沙箱）                  │
 │  verifier.py — Verifier 锁定协议                                       │

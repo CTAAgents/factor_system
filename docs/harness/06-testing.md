@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.105.0+1
+> 版本: v2.105.0+2
 > 最后更新: 2026-08-17
 
 ---
@@ -70,6 +70,7 @@ tests/
 │   ├── test_qa_subchain.py           # 评审质检张量化测试（plans/49 B 模块，19 用例：judge_q10_subchain 两级判定——全链一致/子链特异（t 显著放行）/反向子链 avoid/跨链冲突/多数方向分组；AutoReviewPolicy 单链特异放行（全链 IC<min 但 effective 子链放行/Sharpe 不放行/QA 门禁仍执行/无 profile 兼容）；admission 受限权重 SUBCHAIN_SPECIFIC_MAX_WEIGHT；F6 两级判定含有效链集合漂移）
 │   ├── test_lifecycle_subchain.py    # 生命周期张量化测试（plans/49 C 模块，14 用例：compute_subchain_degradation 全分支——全部有效链衰减→degrade/部分链→scope_shrink/单链特异唯一链衰减→degrade/从未 effective→keep/样本不足 None/空输入；scope_without_chains；配置加载；TestModulationClosedLoop scope 缩减传导 47 调制矩阵）
 │   ├── test_evolution_loop.py       # L2 主循环测试
+│   ├── test_evolution_dedup_prefilter.py # 生成端去重前置测试（Step 1.35，10 用例：`_is_generated_duplicate`/`_build_seen_expression_norms`——elite 命中拦截/空白规范化等价/同 run 拦截/非重复放行/空目录降级/`_` 前缀跳过/缓存懒加载）
 │   ├── test_experience_chain.py     # 经验链测试
 │   ├── test_factor_program.py       # 因子程序（安全沙箱）测试（GAP-131 +7 用例：fix_factor_code Strategy 6 LLM 高频语法瑕疵全局修复——&&/||→and/or、一元 !→not 保留 !=、^→**、条件行内赋值 =→==、行尾反斜杠去除、组合修复）
 │   ├── test_failure_pattern.py      # 失败模式聚类分析测试
@@ -514,6 +515,7 @@ TOTAL                                      20326   1254    94%
 | `tests/factor_engine/test_energy_chain.py` | 18 | 能源产业链专属工作流（v2.104.0+33；v2.104.0+34 追加深度阈值 3 用例；v2.104.0+35 追加 TestEnergyChainL1Knowledge 4 用例；v2.104.0+37 扩池 9→12 断言更新 + 新增四子链覆盖用例；v2.104.0+38 池定义随 config/futures_universe.yaml 加载）：训练链=12 化工品种全训（能源3 SC/FU/BU+聚酯3 PX/TA/PF+油化工3 L/PP/PG+煤化工3 MA/UR/SA，四大子链各 3 覆盖）/盲测池=其余化工链 8 品种无重叠·全量内·覆盖聚酯·油化工·煤化工/get_db_path·get_elite_dir 独立路由/FUTURES_SECTOR_MAP 新增炼化聚酯链置于首位且通用中性化反向映射不变/load_futures_elite_factors_from_db market=energy 独立库路由/ENERGY_CHAIN_MIN_TRAIN_ROWS=300 阈值+check_energy_chain_depth 审计契约（ok+below=12/真实行情品种≥1）/L1 知识输入双线混入（SeedPool energy 混入 8+ 能化种子、energy 默认感知 12 品种、chain_knowledge 注入含裂解/聚酯/库存/链传导、bootstrap prompt 含能化知识段） |
 | `tests/factor_engine/test_experiment_log.py` | 9 | 结构化实验日志（Phase 2 P1-2/26 计划 §7）：writer schema 4（分组与 by_method 汇总/幂等覆盖/非法 payload 跳过+warning/嵌套目录自动创建）+ `extract_scores` 2（指标映射 turnover←turnover_monthly/空评估默认 {}）+ EvolutionLoop 集成 3（record_variant 字段完整含 quality_grade 合并/export 落盘/run() finally 自动导出） |
 | `tests/factor_engine/test_evolution_stop.py` | 8 | 提前达标停止（Phase 3 P1-3/26 计划 §8）：`_maybe_early_stop` 3（连续 K 代零晋升触发+reason/中断晋升归零需重新累计/开关关闭恒 False 不累计）+ run() 集成 3（连续 K 代提前结束 early_stopped+代数正确/开关关闭跑满/提前停止后实验日志仍导出）+ FTSConfig 2（保守默认关闭 K=5/env 覆盖生效） |
+| `tests/factor_engine/test_evolution_dedup_prefilter.py` | 10 | 生成端去重前置 Step 1.35（GAP-135 前置补盲，v2.105.0+2）：`_is_generated_duplicate`/`_build_seen_expression_norms`——elite 池既有表达式命中拦截/规范化（空白压缩）等价判定/本 run 已生成表达式同批拦截/非重复放行并入已见集合/无 code 因子放行/空 elite 目录放行/`_` 前缀辅助文件跳过/目录不存在降级安全/缓存懒加载且复用/`normalize_expression` 契约 |
 | `tests/factor_db/test_correlations.py` | ~8 | 因子相关性矩阵计算测试 |
 | `tests/factor_db/test_yaml_loader.py` | ~6 | YAML 种子因子加载测试 |
 | `tests/factor_engine/test_factor_lineage.py` | ~27 | 因子数据血缘审计（演化谱系/评估趋势/退化检测/批量审计） |

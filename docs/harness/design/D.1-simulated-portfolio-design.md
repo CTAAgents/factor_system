@@ -1,6 +1,6 @@
 # D.1 模拟仓模块 — 详细技术设计
 
-> 版本: v2.105.0+1
+> 版本: v2.105.0+2
 > 状态: **已实现**（`fts/live_trade/` 新增 `contracts.py` / `simulated_portfolio.py` / `simulated_engine.py` / `sqlite_store.py` + 回放脚本 + 测试）
 > 关联: [C.2-live-trading-integration-design.md](file:///d:/Programs/factor_system/docs/harness/design/C.2-live-trading-integration-design.md)（实盘对接）、[C.3-feedback-loop-design.md](file:///d:/Programs/factor_system/docs/harness/design/C.3-feedback-loop-design.md)（反馈闭环）
 > 前置: C.2 已实现（信号契约/风控/模拟适配/Live 反馈闭环）
