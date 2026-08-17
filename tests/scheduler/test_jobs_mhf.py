@@ -45,6 +45,8 @@ class FakeExecutor:
 def patch_deps(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeSignalBridge.published.clear()
     FakeExecutor.instances.clear()
+    # GAP-140③ 全局默认市场 energy：本测试组只测信号发布/执行逻辑，不测 market gate
+    monkeypatch.setattr(jobs_mod, "_market_gate", lambda market, *, task: True)
 
     def _fake_generate(trace_id: str = "") -> dict[str, Any]:
         return {

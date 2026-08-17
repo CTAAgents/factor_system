@@ -176,7 +176,9 @@ class TestAggregatorGetTicks:
     """测试 Aggregator.get_ticks 缓存 → 源降级。"""
 
     def _tick_df(self, n: int = 10) -> pd.DataFrame:
-        times = pd.date_range("2026-08-07 14:30:00", periods=n, freq="500ms")
+        # 动态基准（保留期内，避免固定日期超 tick_cache_retention_days 被清理，GAP-140⑥）
+        base = (pd.Timestamp.now().normalize() - pd.Timedelta(days=1)).strftime("%Y-%m-%d") + " 14:30:00"
+        times = pd.date_range(base, periods=n, freq="500ms")
         return pd.DataFrame(
             {
                 "symbol": ["RB0"] * n,
@@ -246,7 +248,9 @@ class TestAggregatorGetTicks:
 
             def _make_df(self, symbol, count):
                 n = min(count, 5)
-                times = pd.date_range("2026-08-07 14:30:00", periods=n, freq="500ms")
+                # 动态基准（保留期内，避免固定日期超保留期被清理，GAP-140⑥）
+                base = (pd.Timestamp.now().normalize() - pd.Timedelta(days=1)).strftime("%Y-%m-%d") + " 14:30:00"
+                times = pd.date_range(base, periods=n, freq="500ms")
                 return pd.DataFrame(
                     {
                         "symbol": [symbol] * n,

@@ -245,7 +245,9 @@ class TestE2EScenarios:
         assert len(tasks) >= 4  # 4 default tasks
         names = [t.name for t in tasks]
         assert "l1_meta_loop" in names
-        assert "l2_evolution_loop" in names
+        # v2.104.0+98 内部调度停用重构：l2_evolution_loop 拆分为 weekday/weekend 两任务
+        assert "l2_evolution_weekday" in names
+        assert "l2_evolution_weekend" in names
         assert "l3_portfolio_loop" in names
         assert "health_check" in names
 

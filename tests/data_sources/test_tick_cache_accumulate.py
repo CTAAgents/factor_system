@@ -18,7 +18,10 @@ from fts.data_sources.aggregator import FuturesDataAggregator
 from fts.data_sources.migrate import migrate_schema
 
 
-def _tick_df(n: int = 10, start: str = "2026-08-07 14:30:00", freq: str = "500ms") -> pd.DataFrame:
+def _tick_df(n: int = 10, start: str | None = None, freq: str = "500ms") -> pd.DataFrame:
+    if start is None:
+        # 动态基准（保留期内，避免固定日期超 tick_cache_retention_days 被清理，GAP-140⑥）
+        start = (pd.Timestamp.now().normalize() - pd.Timedelta(days=1)).strftime("%Y-%m-%d") + " 14:30:00"
     times = pd.date_range(start, periods=n, freq=freq)
     return pd.DataFrame(
         {
@@ -93,10 +96,11 @@ class TestTickCacheDedup:
 
     def test_partial_overlap_dedup(self, tmp_path: Path) -> None:
         """部分重叠：重叠 tick 去重，新增 tick 追加（跨会话累积）。"""
+        base = (pd.Timestamp.now().normalize() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
         agg = _make_agg(tmp_path)
         try:
-            batch1 = _tick_df(n=5, start="2026-08-07 14:30:00")
-            batch2 = _tick_df(n=8, start="2026-08-07 14:30:00")  # 与 batch1 重叠 5 条 + 新增 3 条
+            batch1 = _tick_df(n=5, start=f"{base} 14:30:00")
+            batch2 = _tick_df(n=8, start=f"{base} 14:30:00")  # 与 batch1 重叠 5 条 + 新增 3 条
             agg._write_tick_cache(batch1)
             agg._write_tick_cache(batch2)
             assert _count_rows(agg) == 8
@@ -121,44 +125,47 @@ class TestTickCacheTimeWindow:
     """时间窗口查询。"""
 
     def test_start_time_filter(self, tmp_path: Path) -> None:
+        base = (pd.Timestamp.now().normalize() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
         agg = _make_agg(tmp_path)
         try:
-            df = _tick_df(n=10, start="2026-08-07 14:30:00")  # 覆盖 14:30:00 ~ 14:30:04.5
+            df = _tick_df(n=10, start=f"{base} 14:30:00")  # 覆盖 14:30:00 ~ 14:30:04.5
             agg._write_tick_cache(df)
-            out = agg.get_ticks("RB0", count=100, trace_id="t", start_time="2026-08-07 14:30:01")
+            out = agg.get_ticks("RB0", count=100, trace_id="t", start_time=f"{base} 14:30:01")
             assert not out.empty
-            assert (out["datetime"] >= pd.Timestamp("2026-08-07 14:30:01")).all()
+            assert (out["datetime"] >= pd.Timestamp(f"{base} 14:30:01")).all()
             assert len(out) < 10
         finally:
             agg.close()  # E.4 S1: no persistent conn
 
     def test_end_time_filter(self, tmp_path: Path) -> None:
+        base = (pd.Timestamp.now().normalize() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
         agg = _make_agg(tmp_path)
         try:
-            df = _tick_df(n=10, start="2026-08-07 14:30:00")
+            df = _tick_df(n=10, start=f"{base} 14:30:00")
             agg._write_tick_cache(df)
-            out = agg.get_ticks("RB0", count=100, trace_id="t", end_time="2026-08-07 14:30:03")
+            out = agg.get_ticks("RB0", count=100, trace_id="t", end_time=f"{base} 14:30:03")
             assert not out.empty
-            assert (out["datetime"] <= pd.Timestamp("2026-08-07 14:30:03")).all()
+            assert (out["datetime"] <= pd.Timestamp(f"{base} 14:30:03")).all()
             assert len(out) < 10
         finally:
             agg.close()  # E.4 S1: no persistent conn
 
     def test_window_both_bounds(self, tmp_path: Path) -> None:
+        base = (pd.Timestamp.now().normalize() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
         agg = _make_agg(tmp_path)
         try:
-            df = _tick_df(n=10, start="2026-08-07 14:30:00")
+            df = _tick_df(n=10, start=f"{base} 14:30:00")
             agg._write_tick_cache(df)
             out = agg.get_ticks(
                 "RB0",
                 count=100,
                 trace_id="t",
-                start_time="2026-08-07 14:30:01",
-                end_time="2026-08-07 14:30:03",
+                start_time=f"{base} 14:30:01",
+                end_time=f"{base} 14:30:03",
             )
             assert not out.empty
-            assert (out["datetime"] >= pd.Timestamp("2026-08-07 14:30:01")).all()
-            assert (out["datetime"] <= pd.Timestamp("2026-08-07 14:30:03")).all()
+            assert (out["datetime"] >= pd.Timestamp(f"{base} 14:30:01")).all()
+            assert (out["datetime"] <= pd.Timestamp(f"{base} 14:30:03")).all()
         finally:
             agg.close()  # E.4 S1: no persistent conn
 
@@ -180,20 +187,24 @@ class TestTickCacheRetention:
     def test_prune_expired(self, tmp_path: Path) -> None:
         agg = _make_agg(tmp_path, retention_days=7)
         try:
-            old = _tick_df(n=3, start="2026-07-01 14:30:00")
-            fresh = _tick_df(n=3, start="2026-08-07 14:30:00")
+            _now = pd.Timestamp.now().normalize()
+            old_start = (_now - pd.Timedelta(days=20)).strftime("%Y-%m-%d") + " 14:30:00"
+            fresh_start = (_now - pd.Timedelta(days=1)).strftime("%Y-%m-%d") + " 14:30:00"
+            old = _tick_df(n=3, start=old_start)
+            fresh = _tick_df(n=3, start=fresh_start)
             agg._write_tick_cache(old)
             agg._write_tick_cache(fresh)  # 触发清理
             assert _count_rows(agg) == 3
             out = agg.get_ticks("RB0", count=100, trace_id="t")
-            assert (out["datetime"] >= pd.Timestamp("2026-08-07")).all()
+            assert (out["datetime"] >= pd.Timestamp(fresh_start)).all()
         finally:
             agg.close()  # E.4 S1: no persistent conn
 
     def test_fresh_data_kept(self, tmp_path: Path) -> None:
         agg = _make_agg(tmp_path, retention_days=7)
         try:
-            df = _tick_df(n=5, start="2026-08-07 14:30:00")
+            base = (pd.Timestamp.now().normalize() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            df = _tick_df(n=5, start=f"{base} 14:30:00")
             agg._write_tick_cache(df)
             assert _count_rows(agg) == 5
         finally:

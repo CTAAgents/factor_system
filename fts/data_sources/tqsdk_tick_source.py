@@ -20,7 +20,7 @@ from typing import Any, Optional
 import pandas as pd
 
 from fts.data_sources.base import BaseFuturesSource, SourceUnavailable
-from fts.data_sources.tqsdk_source import _SYMBOL_MAP
+from fts.data_sources.tqsdk_source import _SYMBOL_MAP, _import_tqsdk_safe
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ class TQSDKTickSource(BaseFuturesSource):
     def is_available(self) -> bool:
         """探活：检查 tqsdk 包是否已安装 + 账号配置。"""
         try:
-            import tqsdk  # noqa: F401
+            _import_tqsdk_safe()
         except ImportError:
             return False
         return bool(os.environ.get("TQSDK_USERNAME") and os.environ.get("TQSDK_PASSWORD"))
@@ -106,7 +106,7 @@ class TQSDKTickSource(BaseFuturesSource):
             含 TICK_COLUMNS schema 的 DataFrame，失败返回 None
         """
         try:
-            import tqsdk  # type: ignore[import-untyped]
+            tqsdk = _import_tqsdk_safe()
         except ImportError:
             logger.warning("[%s] tqsdk 未安装，请执行 pip install tqsdk", self.source_name)
             return None

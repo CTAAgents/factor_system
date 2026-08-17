@@ -129,7 +129,9 @@ class TqSdkMhfExecutor:
     # ── 供测试注入 ──────────────────────────────────────────
     def _build_api(self) -> Any:
         """构建 TqApi（TqSim 模拟账户；backtest_window 时启用回放撮合）。"""
-        import tqsdk  # noqa: F401
+        from fts.data_sources.tqsdk_source import _import_tqsdk_safe
+
+        tqsdk = _import_tqsdk_safe()
         from tqsdk import TqAuth, TqSim
 
         user = self._cfg.tq_user or os.environ.get("TQSDK_USERNAME", "")

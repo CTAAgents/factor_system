@@ -25,6 +25,7 @@ from typing import Any, Optional
 import pandas as pd
 
 from fts.data_sources.base import BaseFuturesSource
+from fts.data_sources.tqsdk_source import _import_tqsdk_safe
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class TQSDKEnhanceSource(BaseFuturesSource):
     def is_available(self) -> bool:
         """探活：tqsdk 已安装且 .env 配置了天勤账号。"""
         try:
-            import tqsdk  # noqa: F401
+            _import_tqsdk_safe()
         except ImportError:
             return False
         return bool(os.environ.get("TQSDK_USERNAME") and os.environ.get("TQSDK_PASSWORD"))
@@ -99,7 +100,7 @@ class TQSDKEnhanceSource(BaseFuturesSource):
             DataFrame 或 None（失败/降级）
         """
         try:
-            import tqsdk  # type: ignore[import-untyped]
+            tqsdk = _import_tqsdk_safe()
         except ImportError:
             logger.warning("[%s] tqsdk 未安装，跳过字段增强", self.source_name)
             return None

@@ -118,6 +118,34 @@ _SYMBOL_MAP: dict[str, str] = {
 }
 
 
+def _import_tqsdk_safe():
+    """安全导入 tqsdk：隔离 shinny_structlog 对全局 logging 状态的污染（GAP-140⑤）。
+
+    tqsdk 依赖 shinny_structlog，其模块导入时会替换全局 logging 状态：
+    ① ``logging.setLoggerClass(ShinnyLogger)``；② ``Logger.root`` / ``Logger.manager``
+    类属性重建（新 Manager 的 loggerDict 为空）；③ ``logging.getLogger`` 函数替换——
+    导致 pytest caplog 捕获失效、root handlers 被清空、既有 named logger 管理状态丢失。
+    此处快照-恢复隔离副作用，返回 tqsdk 模块供调用方使用。
+
+    Returns:
+        tqsdk 模块对象（已导入）。
+    """
+    import logging
+
+    snap_get_logger = logging.getLogger
+    snap_logger_root = logging.Logger.root
+    snap_manager = logging.Logger.manager
+    try:
+        import tqsdk  # noqa: F401
+    finally:
+        logging.getLogger = snap_get_logger
+        logging.Logger.root = snap_logger_root
+        logging.Logger.manager = snap_manager
+        # 还原被 shinny_structlog setLoggerClass(ShinnyLogger) 污染的 manager.loggerClass
+        logging.setLoggerClass(logging.Logger)
+    return tqsdk
+
+
 class TQSDKSource(BaseFuturesSource):
     """天勤 TQSDK 数据源适配器（Python SDK）。
 
@@ -146,7 +174,7 @@ class TQSDKSource(BaseFuturesSource):
     def is_available(self) -> bool:
         """探活：检查 tqsdk 包是否已安装。"""
         try:
-            import tqsdk  # noqa: F401
+            _import_tqsdk_safe()
 
             return True
         except ImportError:
@@ -189,7 +217,7 @@ class TQSDKSource(BaseFuturesSource):
             DataFrame 或 None
         """
         try:
-            import tqsdk  # type: ignore[import-untyped]
+            tqsdk = _import_tqsdk_safe()
         except ImportError:
             logger.warning("[%s] tqsdk 未安装，请执行 pip install tqsdk", self.source_name)
             return None
