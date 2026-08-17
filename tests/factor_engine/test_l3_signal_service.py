@@ -409,8 +409,9 @@ class TestLoadOrBuildIncremental:
 
     # ─── plans/51 A2：增量合并形状防护 ──────────────────────
     def test_shape_mismatch_recomputes(self, tmp_path):
-        """A2：库行数与当前面板不一致 → 降级重算，结果与全量一致（不静默错位）。"""
-        panel = _mk_panel(n_days=30, symbols=("RB", "CU"))
+        """plans/52：窗口推进（同源数据 30→45 日，前缀一致）→ 增量追加，与全量逐位一致。"""
+        full_panel = _mk_panel(n_days=100, symbols=("RB", "CU"))
+        panel = {s: df.iloc[:30] for s, df in full_panel.items()}
         f = _mk_factor("f1", window=2)
         factor_codes = {f["factor_id"]: f}
         dates = sorted(set.intersection(*[set(df.index) for df in panel.values()]))
@@ -421,8 +422,8 @@ class TestLoadOrBuildIncremental:
             panel, [f], factor_codes, dates, "futures", "2026-08-16", db_path=str(db)
         )
 
-        # 数据更新：同 end_date、窗口变长（45 日）→ 形状不符 → 降级重算
-        panel2 = _mk_panel(n_days=45, symbols=("RB", "CU"))
+        # 数据更新：同 end_date、窗口变长（45 日）→ 前缀一致 → 增量追加（与全量一致）
+        panel2 = {s: df.iloc[:45] for s, df in full_panel.items()}
         dates2 = sorted(set.intersection(*[set(df.index) for df in panel2.values()]))
         full = build_signal_matrix(panel2, [f], factor_codes, dates2)
         inc = load_or_build_signal_matrix(
@@ -447,5 +448,124 @@ class TestLoadOrBuildIncremental:
         full = build_signal_matrix(panel, factors, factor_codes, dates)
         inc = load_or_build_signal_matrix(
             panel, factors, factor_codes, dates, "futures", "2026-08-16", db_path=str(db)
+        )
+        assert np.allclose(inc.signal_matrix, full.signal_matrix, equal_nan=True)
+
+    # ─── plans/52：增量窗口追加 ─────────────────────────────
+    def test_append_window_matches_full(self, tmp_path):
+        """plans/52：前缀一致 + 增量日期 → 仅重算新增段，与全量逐位一致。"""
+        full_panel = _mk_panel(n_days=100, symbols=("RB", "CU", "ZN"))
+        panel = {s: df.iloc[:30] for s, df in full_panel.items()}
+        f = _mk_factor("f1", window=3)
+        factor_codes = {f["factor_id"]: f}
+        dates = sorted(set.intersection(*[set(df.index) for df in panel.values()]))
+        db = tmp_path / "l3_signal.duckdb"
+
+        load_or_build_signal_matrix(
+            panel, [f], factor_codes, dates, "futures", "2026-08-16", db_path=str(db)
+        )
+
+        # 窗口推进：45 日（前缀 30 日一致 + 增量 15 日）
+        panel2 = {s: df.iloc[:45] for s, df in full_panel.items()}
+        dates2 = sorted(set.intersection(*[set(df.index) for df in panel2.values()]))
+        full = build_signal_matrix(panel2, [f], factor_codes, dates2)
+        inc = load_or_build_signal_matrix(
+            panel2, [f], factor_codes, dates2, "futures", "2026-08-16", db_path=str(db)
+        )
+        assert inc.signal_matrix.shape == full.signal_matrix.shape
+        assert np.allclose(inc.signal_matrix, full.signal_matrix, equal_nan=True)
+        assert np.allclose(inc.forward_returns, full.forward_returns, equal_nan=True)
+
+    def test_append_window_rolling_operator(self, tmp_path):
+        """plans/52：rolling 窗口算子（window=50）增量追加与全量逐位一致（窗口回退覆盖）。"""
+        full_panel = _mk_panel(n_days=200, symbols=("RB", "CU", "ZN"))
+        panel = {s: df.iloc[:80] for s, df in full_panel.items()}
+        f = _mk_factor("f1", window=50)
+        factor_codes = {f["factor_id"]: f}
+        dates = sorted(set.intersection(*[set(df.index) for df in panel.values()]))
+        db = tmp_path / "l3_signal.duckdb"
+
+        load_or_build_signal_matrix(
+            panel, [f], factor_codes, dates, "futures", "2026-08-16", db_path=str(db)
+        )
+        panel2 = {s: df.iloc[:100] for s, df in full_panel.items()}
+        dates2 = sorted(set.intersection(*[set(df.index) for df in panel2.values()]))
+        full = build_signal_matrix(panel2, [f], factor_codes, dates2)
+        inc = load_or_build_signal_matrix(
+            panel2, [f], factor_codes, dates2, "futures", "2026-08-16", db_path=str(db)
+        )
+        assert np.allclose(inc.signal_matrix, full.signal_matrix, equal_nan=True)
+
+    def test_prefix_mismatch_falls_back_full(self, tmp_path):
+        """plans/52：前缀不一致（历史修订）→ 降级全量，结果正确。"""
+        panel = _mk_panel(n_days=30, symbols=("RB", "CU", "ZN"))
+        f = _mk_factor("f1", window=3)
+        factor_codes = {f["factor_id"]: f}
+        dates = sorted(set.intersection(*[set(df.index) for df in panel.values()]))
+        db = tmp_path / "l3_signal.duckdb"
+
+        load_or_build_signal_matrix(
+            panel, [f], factor_codes, dates, "futures", "2026-08-16", db_path=str(db)
+        )
+
+        # 历史修订：同 end_date 但日期序列整体后移（前缀不一致）
+        panel2 = _mk_panel(n_days=30, symbols=("RB", "CU", "ZN"))
+        for sym, df in panel2.items():
+            df.index = pd.date_range("2024-02-01", periods=len(df), freq="D")
+        dates2 = sorted(set.intersection(*[set(df.index) for df in panel2.values()]))
+        full = build_signal_matrix(panel2, [f], factor_codes, dates2)
+        inc = load_or_build_signal_matrix(
+            panel2, [f], factor_codes, dates2, "futures", "2026-08-16", db_path=str(db)
+        )
+        assert np.allclose(inc.signal_matrix, full.signal_matrix, equal_nan=True)
+
+    def test_append_verify_fail_falls_back(self, tmp_path, monkeypatch):
+        """plans/52：增量对照验证失败 → 该因子降级全量重算（零漂移兜底）。"""
+        from fts.factor_engine import l3_signal_service as l3svc
+
+        panel = _mk_panel(n_days=30, symbols=("RB", "CU", "ZN"))
+        f = _mk_factor("f1", window=3)
+        factor_codes = {f["factor_id"]: f}
+        dates = sorted(set.intersection(*[set(df.index) for df in panel.values()]))
+        db = tmp_path / "l3_signal.duckdb"
+
+        load_or_build_signal_matrix(
+            panel, [f], factor_codes, dates, "futures", "2026-08-16", db_path=str(db)
+        )
+        monkeypatch.setattr(l3svc, "_verify_append", lambda *a, **k: False)
+
+        panel2 = _mk_panel(n_days=45, symbols=("RB", "CU", "ZN"))
+        dates2 = sorted(set.intersection(*[set(df.index) for df in panel2.values()]))
+        full = build_signal_matrix(panel2, [f], factor_codes, dates2)
+        inc = load_or_build_signal_matrix(
+            panel2, [f], factor_codes, dates2, "futures", "2026-08-16", db_path=str(db)
+        )
+        assert np.allclose(inc.signal_matrix, full.signal_matrix, equal_nan=True)
+
+    def test_legacy_meta_without_digest(self, tmp_path):
+        """plans/52：meta 无 dates_digest（旧库）→ 前缀未知 → 降级全量，结果正确。"""
+        import duckdb
+
+        panel = _mk_panel(n_days=30, symbols=("RB", "CU", "ZN"))
+        f = _mk_factor("f1", window=3)
+        factor_codes = {f["factor_id"]: f}
+        dates = sorted(set.intersection(*[set(df.index) for df in panel.values()]))
+        db = tmp_path / "l3_signal.duckdb"
+
+        load_or_build_signal_matrix(
+            panel, [f], factor_codes, dates, "futures", "2026-08-16", db_path=str(db)
+        )
+        # 模拟旧库：清空 dates_digest
+        con = duckdb.connect(str(db))
+        try:
+            con.execute("UPDATE l3_signal_meta SET dates_digest = ''")
+        finally:
+            con.close()
+
+        panel2 = _mk_panel(n_days=45, symbols=("RB", "CU", "ZN"))
+        dates2 = sorted(set.intersection(*[set(df.index) for df in panel2.values()]))
+        full = build_signal_matrix(panel2, [f], factor_codes, dates2)
+        inc = load_or_build_signal_matrix(
+            panel2, [f], factor_codes, dates2, "futures", "2026-08-16", db_path=str(db)
         )
         assert np.allclose(inc.signal_matrix, full.signal_matrix, equal_nan=True)

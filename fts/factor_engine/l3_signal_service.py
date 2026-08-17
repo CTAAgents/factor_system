@@ -268,6 +268,10 @@ def _numpy_corr_matrix(signal_2d: np.ndarray, min_valid_points: int = 10) -> np.
 _L3_SIGNAL_TABLE = "l3_signal_matrix"
 _L3_SIGNAL_META_TABLE = "l3_signal_meta"
 _DEFAULT_DB_PATH = "data/l3_signal_store.duckdb"
+# plans/52：增量窗口追加的执行回退长度——旧窗口尾部回退段覆盖滚动窗口算子
+# 的历史回溯需求（DSL/feature_ops 最大支持窗口上限的保守值；无法覆盖的超长
+# 窗口因子由抽样对照验证兜底自动降级全量）
+_W_RECALL = 500
 
 
 def _default_db_path() -> str:
@@ -313,9 +317,18 @@ def _init_tables(con) -> None:
             n_dates BIGINT NOT NULL,
             n_symbols BIGINT NOT NULL,
             updated_at VARCHAR NOT NULL,
+            dates_digest VARCHAR NOT NULL DEFAULT '',
             PRIMARY KEY (factor_id, market, end_date)
         )"""
     )
+    # plans/52：存量库迁移补 dates_digest 列（增量窗口追加前缀判定用）
+    try:
+        con.execute(
+            f"ALTER TABLE {_L3_SIGNAL_META_TABLE} "
+            "ADD COLUMN IF NOT EXISTS dates_digest VARCHAR NOT NULL DEFAULT ''"
+        )
+    except Exception:  # noqa: BLE001 — 旧版本不支持 IF NOT EXISTS 时忽略（列可能已存在）
+        pass
     con.execute(
         f"""CREATE TABLE IF NOT EXISTS {_L3_SIGNAL_TABLE} (
             factor_id VARCHAR NOT NULL,
@@ -332,6 +345,23 @@ def _params_hash(params: dict[str, Any]) -> str:
     import hashlib
 
     return hashlib.sha256(json.dumps(params or {}, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _dates_digest(dates: Sequence[Any]) -> str:
+    """日期序列指纹（plans/52 前缀追加判定）：blake2 摘要，空序列返回空串。
+
+    增量窗口追加需判定"库中旧窗口日期 = 当前 common_dates 前缀"，对日期序列
+    求指纹做 O(1) 比对（替代逐日比对）。空序列返回空串（与"未记录"兼容）。
+    """
+    if not dates:
+        return ""
+    import hashlib
+
+    h = hashlib.blake2b(digest_size=16)
+    for d in dates:
+        h.update(str(d).encode("utf-8"))
+        h.update(b"\x1f")
+    return h.hexdigest()
 
 
 def persist_signal_matrix(
@@ -372,6 +402,7 @@ def persist_signal_matrix(
                     for fid in bundle.factor_ids
                 }
                 updated_at = pd.Timestamp.now().isoformat()
+                dates_digest = _dates_digest(list(bundle.dates))  # plans/52 前缀判定指纹
                 for j, fid in enumerate(bundle.factor_ids):
                     code_hash = factor_code_hashes.get(fid, "")
                     con.execute(
@@ -379,7 +410,7 @@ def persist_signal_matrix(
                         [fid, market, end_date],
                     )
                     con.execute(
-                        f"INSERT INTO {_L3_SIGNAL_META_TABLE} VALUES (?,?,?,?,?,?,?,?)",
+                        f"INSERT INTO {_L3_SIGNAL_META_TABLE} VALUES (?,?,?,?,?,?,?,?,?)",
                         [
                             fid,
                             code_hash,
@@ -389,6 +420,7 @@ def persist_signal_matrix(
                             int(bundle.signal_matrix.shape[0]),
                             int(bundle.signal_matrix.shape[1]),
                             updated_at,
+                            dates_digest,
                         ],
                     )
                     con.execute(
@@ -563,6 +595,230 @@ def _code_hash(code: str) -> str:
     return hashlib.sha256((code or "").encode("utf-8")).hexdigest()
 
 
+# ─── 增量窗口追加（plans/52 GAP-139）────────────────────
+
+
+def _classify_reusable(
+    factor_ids: Sequence[str],
+    market: str,
+    end_date: str,
+    common_dates: Sequence[Any],
+    db_path: str | Path | None = None,
+    append_enabled: bool = True,
+) -> tuple[list[str], dict[str, int], list[str]]:
+    """按前缀一致性细分可复用因子（plans/52）。
+
+    Returns:
+        (direct_reuse, append_plan, fallback_ids):
+            direct_reuse — 窗口未变（旧窗 = 当前窗口），直接读库复用；
+            append_plan — {factor_id: n_old}，前缀一致且有增量日期，走增量窗口追加；
+            fallback_ids — 前缀不一致 / 元数据缺失（旧库无 digest），降级全量重算（A2 兜底）。
+    """
+    if not factor_ids:
+        return [], {}, []
+    db_path = db_path or _default_db_path()
+    meta: dict[str, tuple[int, str]] = {}
+    try:
+        con = _connect(db_path, read_only=True)
+        try:
+            rows = con.execute(
+                f"SELECT factor_id, n_dates, dates_digest FROM {_L3_SIGNAL_META_TABLE} "
+                f"WHERE market=? AND end_date=? AND factor_id = ANY(select unnest(?::varchar[]))",
+                [market, end_date, list(factor_ids)],
+            ).fetchall()
+        finally:
+            con.close()
+        meta = {r[0]: (int(r[1] or 0), (r[2] or "")) for r in rows}
+    except Exception:  # noqa: BLE001 — 查询失败按"前缀未知"降级全量
+        meta = {}
+    n_total = len(common_dates)
+    direct: list[str] = []
+    append_plan: dict[str, int] = {}
+    fallback: list[str] = []
+    for fid in factor_ids:
+        m = meta.get(fid)
+        if m is None:
+            fallback.append(fid)
+            continue
+        n_old, old_digest = m
+        if n_old <= 0 or n_old > n_total or not old_digest:
+            # 元数据异常 / digest 缺失（旧库未写）→ 前缀未知 → 全量（安全兼容）
+            fallback.append(fid)
+            continue
+        if old_digest != _dates_digest(common_dates[:n_old]):
+            fallback.append(fid)  # 前缀不一致（历史修订/窗口变化）→ 全量
+        elif n_total > n_old and append_enabled:
+            append_plan[fid] = n_old
+        else:
+            direct.append(fid)
+    return direct, append_plan, fallback
+
+
+def _verify_append(
+    panel: dict[str, pd.DataFrame],
+    fdata: dict[str, Any],
+    executor: Any,
+    common_dates: Sequence[Any],
+    stocks: Sequence[str],
+    full_signal: np.ndarray,
+    n_old: int,
+) -> bool:
+    """抽样对照验证（plans/52 零漂移兜底）。
+
+    抽 2 个品种做全量执行，在新增日期段与增量拼接结果逐位比对。因子代码对同一
+    因子所有品种共享窗口语义 → 抽样验证通过即代表回退段覆盖充分，全品种增量可信；
+    任一不一致 → 调用方降级该因子全量重算。
+    """
+    n_total = len(common_dates)
+    if n_old >= n_total:
+        return True
+    sample_syms = [s for s in panel if s in stocks][:2]
+    if not sample_syms:
+        return True  # 无可验证品种 → 保守放行（无增量信号可验证）
+    new_dates = list(common_dates[n_old:])
+    stock_idx = {s: i for i, s in enumerate(stocks)}
+    try:
+        for sym in sample_syms:
+            df = panel.get(sym)
+            if df is None or df.empty:
+                continue
+            sig = executor.execute(df, fdata.get("params", {}))
+            sig_arr = np.asarray(sig, dtype=np.float64)
+            loc = df.index.get_indexer(new_dates)
+            col = stock_idx[sym]
+            for t, _d in enumerate(new_dates):
+                i = int(loc[t])
+                if i < 0 or i >= len(sig_arr):
+                    continue
+                exp = float(sig_arr[i])
+                got = float(full_signal[n_old + t, col])
+                if not (np.isnan(exp) and np.isnan(got)):
+                    if np.isnan(exp) or np.isnan(got) or not np.isclose(exp, got, rtol=1e-10, atol=1e-12):
+                        return False
+    except Exception:  # noqa: BLE001 — 验证执行异常 → 保守降级全量
+        return False
+    return True
+
+
+def _append_window_signals(
+    panel: dict[str, pd.DataFrame],
+    append_factors: list[dict[str, Any]],
+    factor_codes: dict[str, dict[str, Any]],
+    common_dates: Sequence[Any],
+    append_plan: dict[str, int],
+    loaded: Optional[SignalMatrixBundle],
+    signal_cache: Any = None,
+    recall: int = _W_RECALL,
+) -> tuple[dict[str, np.ndarray], list[str]]:
+    """增量窗口追加执行（plans/52 GAP-139）。
+
+    对每个可增量因子：旧窗口信号（前 n_old 行）取自已加载的 ``loaded``，新段信号
+    用"旧窗口尾部回退 + 新增交易日"切片执行后截取——滚动窗口算子在增量段前缀的
+    历史回溯由回退段提供，与全量执行逐位一致。抽样对照验证不过 → 该因子并入
+    ``verify_fail`` 由调用方降级全量重算（零漂移）。
+
+    Returns:
+        (append_signals, verify_fail): {factor_id: (n_total, n_stocks) 完整新窗信号矩阵},
+        验证失败需全量重算的因子 ID 列表
+    """
+    from .factor_program import FactorExecutor
+
+    n_total = len(common_dates)
+    if loaded is None or not append_factors:
+        return {}, [f["factor_id"] for f in append_factors]
+    stocks = list(loaded.symbols)
+    stock_idx = {s: i for i, s in enumerate(stocks)}
+    fid_loaded = {fid: j for j, fid in enumerate(loaded.factor_ids)}
+    exec_start_by_fid: dict[str, int] = {}
+    for f in append_factors:
+        fid = f["factor_id"]
+        n_old = append_plan.get(fid, 0)
+        exec_start_by_fid[fid] = max(0, n_old - recall)
+
+    append_signals: dict[str, np.ndarray] = {}
+    verify_fail: list[str] = []
+    for f in append_factors:
+        fid = f["factor_id"]
+        n_old = append_plan.get(fid, 0)
+        if n_old <= 0 or n_old >= n_total:
+            verify_fail.append(fid)
+            continue
+        fdata = factor_codes.get(fid)
+        if not fdata or fid not in fid_loaded:
+            verify_fail.append(fid)
+            continue
+        try:
+            executor = FactorExecutor(fdata, signal_cache=signal_cache)
+        except Exception:  # noqa: BLE001 — 编译失败留 NaN（与现值一致）
+            verify_fail.append(fid)
+            continue
+        exec_start = exec_start_by_fid[fid]
+        exec_dates = list(common_dates[exec_start:])
+        full: np.ndarray = np.full((n_total, len(stocks)), np.nan, dtype=np.float64)
+        # 旧窗口段（前 n_old 行）从 loaded 取（防御 loaded 行数 < n_old 时截断）
+        old_col = loaded.signal_matrix[:, :, fid_loaded[fid]]
+        full[: min(n_old, old_col.shape[0])] = old_col[:n_old]
+        # 新段执行：回退切片数据执行 → 截取新增日期输出
+        for sym, df in panel.items():
+            col = stock_idx.get(sym)
+            if col is None or df is None or df.empty:
+                continue
+            try:
+                df_exec = df.loc[df.index.isin(exec_dates)]
+                if df_exec.empty:
+                    continue
+                sig = executor.execute(df_exec, fdata.get("params", {}))
+                sig_arr = np.asarray(sig, dtype=np.float64)
+                loc = df_exec.index.get_indexer(common_dates)
+                for t in range(n_old, n_total):
+                    i = int(loc[t])
+                    if 0 <= i < len(sig_arr):
+                        full[t, col] = sig_arr[i]
+            except Exception:  # noqa: BLE001 — 单品种执行失败留 NaN（与现值一致）
+                continue
+        # 抽样对照验证（零漂移兜底）
+        if _verify_append(panel, fdata, executor, common_dates, stocks, full, n_old):
+            append_signals[fid] = full
+        else:
+            logger.warning(
+                "[L3-SIGNAL] 增量窗口追加对照验证失败（factor=%s n_old=%d），降级全量重算",
+                fid,
+                n_old,
+            )
+            verify_fail.append(fid)
+    return append_signals, verify_fail
+
+
+def _persist_factor_bundle(
+    signal_2d: np.ndarray,
+    fid: str,
+    symbols: Sequence[str],
+    dates: Sequence[Any],
+    code_hash: str,
+    params_hash: str,
+    market: str,
+    end_date: str,
+    db_path: str | Path | None = None,
+) -> bool:
+    """单因子完整窗信号回写（plans/52：增量追加后更新库中整窗 + meta digest）。"""
+    n_dates = signal_2d.shape[0]
+    bundle = SignalMatrixBundle(
+        signal_matrix=signal_2d.reshape(n_dates, signal_2d.shape[1], 1),
+        forward_returns=np.full((n_dates, signal_2d.shape[1]), np.nan, dtype=np.float64),
+        dates=list(dates),
+        symbols=list(symbols),
+        factor_ids=[fid],
+    )
+    return persist_signal_matrix(
+        bundle,
+        {fid: code_hash},
+        market,
+        end_date,
+        db_path,
+        params_hashes={fid: params_hash},
+    )
+
+
 def load_or_build_signal_matrix(
     panel: dict[str, pd.DataFrame],
     valid_factors: list[dict[str, Any]],
@@ -578,10 +834,11 @@ def load_or_build_signal_matrix(
     """D 层：信号矩阵一等公民读取 + 增量构建（架构级根治）。
 
     对已入库且 (code_hash, params_hash) 均一致的因子从 DuckDB 读取（不重算）；
-    仅对新增/变更/形状不符因子全量重算（plans/51 A1：params 纳入增量判定；
-    A2：库行数与当前面板不一致或读取失败时降级重算，不静默错位），合并为
-    完整 3D 信号矩阵后回写。语义与 ``build_signal_matrix`` 完全一致
-    （新算部分逐品种执行 + 向量化对齐）。
+    仅对新增/变更/前缀不符因子全量重算（plans/51 A1：params 纳入增量判定；
+    A2：行数与面板不一致/读取失败降级重算不静默错位）；前缀一致且有增量日期的
+    因子走**增量窗口追加**（plans/52：仅重算新增交易日 + 窗口回退段，抽样对照
+    验证不过自动全量，零漂移），合并为完整 3D 信号矩阵后回写。语义与
+    ``build_signal_matrix`` 完全一致（新算部分逐品种执行 + 向量化对齐）。
 
     Args:
         panel: {symbol: DataFrame(OHLCV)} 市场面板
@@ -614,28 +871,73 @@ def load_or_build_signal_matrix(
         factor_ids, code_hashes, market, end_date, db_path, params_hashes=params_hashes
     )
 
-    # A2（plans/51）：形状/读取防护——库中行数与当前面板不一致或读取失败时，
-    # 降级并入重算集（不静默错位、不丢信号）
-    recompute_ids = set(to_recompute)
+    # plans/52：增量窗口追加开关（读配置，缺失默认开启；抽样对照验证兜底零漂移）
+    append_enabled = True
+    try:
+        from fts.config.settings import get_config as _cfg_append
+
+        append_enabled = bool(getattr(_cfg_append(), "l3_signal_store_append_window", True))
+    except Exception:  # noqa: BLE001 — 配置读取失败默认开启
+        append_enabled = True
+
+    # 可复用因子细分：直读 / 增量窗口追加 / 降级全量（plans/52 前缀判定）
+    direct_reuse, append_plan, fallback = _classify_reusable(
+        reusable, market, end_date, common_dates, db_path, append_enabled=append_enabled
+    )
+    if fallback:
+        logger.info(
+            "[L3-SIGNAL] %d 个可复用因子前缀不一致/元数据缺失，降级全量重算（plans/52 前缀判定）",
+            len(fallback),
+        )
+    recompute_ids = set(to_recompute) | set(fallback)
+
+    # 读库：direct 因子（窗口未变，行数应 == n_dates）+ append 因子（旧窗，行数 = n_old）分开读
     loaded: Optional[SignalMatrixBundle] = None
-    if reusable:
-        loaded = load_signal_matrix(reusable, market, end_date, db_path)
+    if direct_reuse:
+        loaded = load_signal_matrix(direct_reuse, market, end_date, db_path, common_dates=common_dates)
         if loaded is not None and loaded.signal_matrix.shape[0] != n_dates:
             logger.warning(
                 "[L3-SIGNAL] 信号库行数 %d != 当前面板 %d 行（market=%s end_date=%s），"
                 "降级重算 %d 个因子",
-                loaded.signal_matrix.shape[0], n_dates, market, end_date, len(loaded.factor_ids),
+                loaded.signal_matrix.shape[0], n_dates, market, end_date, len(direct_reuse),
             )
-            recompute_ids |= set(loaded.factor_ids)
+            recompute_ids |= set(direct_reuse)
             loaded = None
         elif loaded is None:
             logger.warning(
                 "[L3-SIGNAL] 信号库读取失败（market=%s end_date=%s），降级重算 %d 个可复用因子",
-                market, end_date, len(reusable),
+                market, end_date, len(direct_reuse),
             )
-            recompute_ids |= set(reusable)
+            recompute_ids |= set(direct_reuse)
+    loaded_append: Optional[SignalMatrixBundle] = None
+    if append_plan:
+        loaded_append = load_signal_matrix(
+            list(append_plan.keys()), market, end_date, db_path, common_dates=common_dates
+        )
+        if loaded_append is None:
+            logger.warning(
+                "[L3-SIGNAL] 信号库读取失败（增量追加因子，market=%s end_date=%s），降级重算 %d 个",
+                market, end_date, len(append_plan),
+            )
+            recompute_ids |= set(append_plan.keys())
 
-    # 仅增量重算新/变更/形状不符因子
+    # 增量窗口追加执行（仅重算新增交易日 + 回退段；对照验证不过 → 并入全量）
+    append_signals: dict[str, np.ndarray] = {}
+    if append_plan and loaded_append is not None:
+        append_factors = [f for f in valid_factors if f["factor_id"] in append_plan]
+        append_signals, append_fail = _append_window_signals(
+            panel, append_factors, factor_codes, common_dates, append_plan,
+            loaded_append, signal_cache=signal_cache,
+        )
+        if append_fail:
+            recompute_ids |= set(append_fail)
+        if append_signals:
+            logger.info(
+                "[L3-SIGNAL] 增量窗口追加完成: %d 个因子仅重算新增交易日（plans/52）",
+                len(append_signals),
+            )
+
+    # 全量重算（新/变更/前缀不符/验证失败）
     bundle_new: Optional[SignalMatrixBundle] = None
     recompute_factors = [f for f in valid_factors if f["factor_id"] in recompute_ids]
     if recompute_factors:
@@ -658,6 +960,16 @@ def load_or_build_signal_matrix(
             for i, sym in enumerate(loaded.symbols):
                 if sym in stocks:
                     mat[:, stocks.index(sym), fid_pos[fid]] = loaded.signal_matrix[:, i, j]
+    # 增量追加信号列序对齐（append_signals 列序 = loaded_append.symbols）
+    if append_signals and loaded_append is not None:
+        col_map = {s: i for i, s in enumerate(loaded_append.symbols)}
+        for fid, sig_full in append_signals.items():
+            if fid not in fid_pos:
+                continue
+            for ci, sym in enumerate(stocks):
+                li = col_map.get(sym)
+                if li is not None:
+                    mat[:, ci, fid_pos[fid]] = sig_full[:, li]
 
     # 前向收益（始终按当前 panel 重建，保证口径一致）
     fwd: np.ndarray = np.full((n_dates, len(stocks)), np.nan, dtype=np.float64)
@@ -670,11 +982,18 @@ def load_or_build_signal_matrix(
         f[:-forward_days] = (closes[forward_days:] - closes[:-forward_days]) / np.maximum(closes[:-forward_days], 1e-10)
         fwd[:, i] = align_signal_to_dates(f, df, common_dates)
 
-    # 回写新算因子（短写连接 + filelock，失败不阻断）
+    # 回写（短写连接 + filelock，失败不阻断）：全量重算因子 + 增量追加因子（整窗 + meta digest）
     if bundle_new is not None and bundle_new.factor_ids:
         persist_signal_matrix(
             bundle_new, code_hashes, market, end_date, db_path, params_hashes=params_hashes
         )
+    if append_signals and loaded_append is not None:
+        for fid, sig_full in append_signals.items():
+            _persist_factor_bundle(
+                sig_full, fid, loaded_append.symbols, common_dates,
+                code_hashes.get(fid, ""), params_hashes.get(fid, ""),
+                market, end_date, db_path,
+            )
 
     return SignalMatrixBundle(
         signal_matrix=mat,

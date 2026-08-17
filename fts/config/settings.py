@@ -450,6 +450,12 @@ class FTSConfig:
     l3_signal_cache_entries: int = field(
         default_factory=lambda: int(os.getenv("FTS_L3_SIGNAL_CACHE_ENTRIES", "20000"))
     )
+    # L3 信号矩阵增量窗口追加（plans/52，GAP-139）：窗口推进时对可复用因子仅重算
+    # 新增交易日 + 窗口回退段（抽样对照验证兜底，验证不过自动全量，零漂移）；
+    # false 回退"同窗口因子级复用"现行为（跨日全量重算）。
+    l3_signal_store_append_window: bool = field(
+        default_factory=lambda: os.getenv("FTS_L3_SIGNAL_APPEND_WINDOW", "true").lower() == "true"
+    )
 
     # ── 回测容量约束（v2.67.0，GAP-I501）──
     # 回测是否启用容量限制（持仓市值 ≤ 品种日均成交额 × 比例，超限截断）

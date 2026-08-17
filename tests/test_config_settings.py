@@ -151,6 +151,12 @@ class TestFTSConfigDefaults:
         monkeypatch.setenv("FTS_L3_SIGNAL_CACHE_ENTRIES", "5000")
         assert load_config(config_path=None).l3_signal_cache_entries == 5000
 
+    def test_l3_signal_store_append_window(self, monkeypatch):
+        """L3 增量窗口追加配置（plans/52 GAP-139）：默认开启 + env 覆盖。"""
+        assert FTSConfig().l3_signal_store_append_window is True
+        monkeypatch.setenv("FTS_L3_SIGNAL_APPEND_WINDOW", "false")
+        assert load_config(config_path=None).l3_signal_store_append_window is False
+
     # ── v2.59.0 (GAP-F03/F02) 期货中性化 + 回测真实性仿真 ──
     def test_futures_neutralization_defaults(self):
         """期货板块中性化配置默认值（v2.59.0）。"""
