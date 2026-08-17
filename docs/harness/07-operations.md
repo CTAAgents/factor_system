@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.105.0
+> 版本: v2.105.0+1
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,7 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.105.0+1** | **2026-08-17** | **子链张量化开关正式启用（灰度默认关 → 全开）：`l3.subchain_weight`/`l3.regime_gating`/`l3.subchain_quality` 三组 enabled=false → true（decay_mode=zero / avoid_mode=hard 激进模式）；前置回填：energy 库 196 个 elite 因子子链画像（`subchain_scope`/`subchain_ic_profile`/`subchain_specific`，27 个单链特异与 plans/47 实测一致）+ `subchain_factor_quality` 784 行质量矩阵（scripts/backfill_subchain_profile.py）；L3 实测调制矩阵 + Gate 缩放 + 质量矩阵快照四段监控全部生效** |
 | **v2.105.0** | **2026-08-17** | **架构里程碑 v2.105.0：子链张量化四层闭环——plans/47 调制矩阵 m[factor][子链] + plans/48 方向 Gate g[子链] + plans/49 质量矩阵 q[factor][子链] + plans/50 权重源头 Gate 闭环，评审质检/生命周期/组合权重/信号管道全链路子链差异化** |** |
 | **v2.104.0+115** | **2026-08-17** | **plans/52 增量窗口追加落地：meta dates_digest 前缀判定 + 回退段增量执行 + 抽样对照验证兜底 + l3_signal_store_append_window 配置（GAP-139 关闭）** |** |
 | **v2.104.0+114** | **2026-08-17** | **plans/51 张量化衔接缺口与契约缺口修复：A 契约（params 双哈希增量判定/形状防护/bundle 契约完整化）B 接线（D 层生产自动激活/存储域登记/A 层缓存补盲/对齐与 3D 构建收敛/B4 豁免）C 规范（numba 状态纠偏/缓存容量配置化/降级观测补全/warmup）** |** |

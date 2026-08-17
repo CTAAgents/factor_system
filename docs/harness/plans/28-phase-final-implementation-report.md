@@ -1,6 +1,6 @@
 # 28 — Regime 机构级优化 — 最终实施报告
 
-> 版本: v2.105.0
+> 版本: v2.105.0+1
 >
 > 计划文档：`docs/harness/plans/28-regime-institutional-optimization-plan.md`（版本 v2.103.0，日常开发追加，不 bump）
 > 实施日期：2026-08-11 ｜ 执行方式：子代理逐任务 + 主会话审查

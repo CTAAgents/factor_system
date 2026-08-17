@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.105.0
+> 版本: v2.105.0+1
 > 最后更新: 2026-08-10
 
 ---
@@ -97,7 +97,7 @@ FTS 配置采用三级优先级（高→低）：
 | `l3_g1_compress_curve` | str | `"linear"` | `FTS_L3_G1_COMPRESS_CURVE` | G1 压缩曲线（v2.104.0+X 配置化）：`linear`（线性）/ `sqrt`（更温和）/ `exp`（更激进）；默认 linear = 历史硬编码 |
 | `l3.chain_dedup.enabled` | bool | `true` | —（settings.yaml l3 段） | 子链维度去冗余开关（GAP-121 扩展，能源链专属）：`true`=同一子链保留因子数 ≤ max_per_chain（超限按综合评分降序截断）；`false`=关闭。仅 market=energy 生效 |
 | `l3.chain_dedup.max_per_chain` | int | `2` | —（settings.yaml l3 段） | 子链去冗余单子链保留因子数上限：与 Step 1.8 信号相关性聚类互补（同子链因子即使信号相关性低仍共享产业链驱动）；symbol_ic 缺失因子归 unknown 组直接保留 |
-| `l3.subchain_weight.enabled` | bool | `false` | —（settings.yaml l3 段） | 子链差异化权重调制开关（plans/47 §B，v2.104.0+109）：`true`=特异因子在无效子链降权/归零（灰度，CLI `--enable-subchain-weight` 显式传参优先）；`false`=全链统一权重（兼容现状）。仅 market=energy 生效 |
+| `l3.subchain_weight.enabled` | bool | `true` | —（settings.yaml l3 段） | 子链差异化权重调制开关（plans/47 §B，v2.104.0+109）：`true`=特异因子在无效子链降权/归零（灰度，CLI `--enable-subchain-weight` 显式传参优先）；`false`=全链统一权重（兼容现状）。仅 market=energy 生效。**v2.105.0 起默认启用（decay_mode=zero）**——未投产环境开启验证，前置已回填 196 因子画像 |
 | `l3.subchain_weight.decay_mode` | str | `"zero"` | —（settings.yaml l3 段） | 非 effective 子链权重模式：`zero`=归零 / `soft`=按 \|mean_ic\|/max_chain_ic 相对缩放 |
 | `l3.subchain_weight.soft_min_ratio` | float | `0.0` | —（settings.yaml l3 段） | soft 模式最低保留比例（0.0=可归零，1.0=等效全链） |
 | `l3.subchain_weight.scope_default` | str | `"all"` | —（settings.yaml l3 段） | 无 subchain_scope 画像因子的默认处理（`all`=全链保留，防误杀） |
@@ -105,14 +105,14 @@ FTS 配置采用三级优先级（高→低）：
 | `l3.subchain_profile.min_symbols` | int | `3` | —（settings.yaml l3 段） | 子链显著性护栏门槛①：子链内最小品种数（NaN 剔除后，不足直接 effective=False） |
 | `l3.subchain_profile.min_t_stat` | float | `2.0` | —（settings.yaml l3 段） | 子链显著性护栏门槛②：单样本 t 检验 \|t\| 门槛（df=n−1=2；默认 0.184 双侧 p，刻意宽松滤噪声） |
 | `l3.subchain_profile.min_chain_ic` | float | `0.10` | —（settings.yaml l3 段） | 子链显著性护栏门槛③：\|mean_ic\| 绝对值门槛（防"显著但微弱"） |
-| `l3.regime_gating.enabled` | bool | `false` | —（settings.yaml l3 段） | 子链方向 Gate 开关（plans/48 §A，v2.104.0+111）：`true`=信号管线 Step 3h1 按子链 regime 做方向 Gate（avoid 剔除/降权 + long/short 方向过滤 + 暴露缩放），同时 **L3 权重层 Step 2.5 将 Gate 决策并入子链调制矩阵**（plans/50 §B1：m'[factor][子链] = m × gate_scale，avoid 链权重源头归零/降权——需 `enable_subchain_weight` 调制矩阵存在，否则保持观测语义）；`false`=全局软票 + 方向偏置（兼容现状）。仅 market=energy 生效；CLI `--enable-regime-gating` 显式传参优先，默认关（灰度显式打开） |
+| `l3.regime_gating.enabled` | bool | `true` | —（settings.yaml l3 段） | 子链方向 Gate 开关（plans/48 §A，v2.104.0+111）：`true`=信号管线 Step 3h1 按子链 regime 做方向 Gate（avoid 剔除/降权 + long/short 方向过滤 + 暴露缩放），同时 **L3 权重层 Step 2.5 将 Gate 决策并入子链调制矩阵**（plans/50 §B1：m'[factor][子链] = m × gate_scale，avoid 链权重源头归零/降权——需 `enable_subchain_weight` 调制矩阵存在，否则保持观测语义）；`false`=全局软票 + 方向偏置（兼容现状）。仅 market=energy 生效；CLI `--enable-regime-gating` 显式传参优先。**v2.105.0 起默认启用（avoid_mode=hard）** |
 | `l3.regime_gating.min_confidence` | float | `0.55` | —（settings.yaml l3 段） | 子链方向 Gate 置信度门槛：bull/bear 且置信度 ≥ 门槛才给方向（long/short）；方向判定存在但置信度不足 → avoid（方向不明不参与，防子链 3 品种噪声误 Gate） |
 | `l3.regime_gating.avoid_mode` | str | `"hard"` | —（settings.yaml l3 段） | avoid 子链处理模式：`hard`=剔除（零持仓）/ `soft`=按 soft_avoid_ratio 降权（小仓位保留，连续过渡防 cliff） |
 | `l3.regime_gating.soft_avoid_ratio` | float | `0.3` | —（settings.yaml l3 段） | soft_avoid 降权系数（0.3=保留 30% 暴露） |
 | `l3.regime_gating.blind_default` | str | `"avoid"` | —（settings.yaml l3 段） | 无子链归属品种（盲测池等）默认处理：`avoid`=回避（不放行）/ `neutral`=保留 |
 | `l3.regime_gating.exposure_min` | float | `0.4` | —（settings.yaml l3 段） | 暴露缩放映射下限（plans/48 §B）：子链置信度 < exposure_min → 品种暴露 0（不参与） |
 | `l3.regime_gating.exposure_sat` | float | `0.7` | —（settings.yaml l3 段） | 暴露缩放映射饱和点：子链置信度 ≥ exposure_sat → 品种暴露 1.0（满仓）；中间线性插值；暴露 = 置信度映射 × 品种-链对齐度 |
-| `l3.subchain_quality.enabled` | bool | `false` | —（settings.yaml l3 段） | 因子×子链质量矩阵与生命周期张量化开关（plans/49，v2.104.0+112）：`true`=评审质检（Q10/F6 两级判定 + 机审单链特异放行 + 准入三级权重）与生命周期（单元粒度退化检测 + scope 动态收缩闭环）按 (factor_id, market, chain) 单元评估，质量矩阵入 `subchain_factor_quality` 表；`false`=回退全链原逻辑（向后兼容，无子链画像的股票/期货因子天然走回退）。仅 market=energy 生效 |
+| `l3.subchain_quality.enabled` | bool | `true` | —（settings.yaml l3 段） | 因子×子链质量矩阵与生命周期张量化开关（plans/49，v2.104.0+112）：`true`=评审质检（Q10/F6 两级判定 + 机审单链特异放行 + 准入三级权重）与生命周期（单元粒度退化检测 + scope 动态收缩闭环）按 (factor_id, market, chain) 单元评估，质量矩阵入 `subchain_factor_quality` 表；`false`=回退全链原逻辑（向后兼容，无子链画像的股票/期货因子天然走回退）。仅 market=energy 生效。**v2.105.0 起默认启用**（2026-08-17 已回填 196 因子画像 + 784 行质量矩阵） |
 | `l3.subchain_quality.decay_threshold` | float | `0.30` | —（settings.yaml l3 段） | 子链有效 IC 衰减触发阈值（对齐全链 `_rolling_stats` 口径）：该子链最近 window 期均值 IC 较早期基准衰减 ≥ 阈值判定失效链 |
 | `l3.subchain_quality.drop_severe` | float | `0.50` | —（settings.yaml l3 段） | 子链严重衰减阈值：衰减 ≥ 阈值直接触发退化（不待冷却期确认） |
 | `l3.subchain_quality.window_days` | int | `60` | —（settings.yaml l3 段） | 子链退化检测回看天数（内部映射为最近期数窗口 `window=max(1, round(window_days/30))`，期 = 一次评审评估）：当前期 vs 早期基准的对比期数，样本不足返回 None（审计 skipped 不误判） |
