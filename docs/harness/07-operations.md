@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.105.0+7
+> 版本: v2.105.0+8
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,7 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.105.0+8** | **2026-08-17** | **GAP-144 实施：L2 晋升入口子链放行——单链特异/部分链因子全链 IC 被无效子链稀释时，energy 链 + l2_subchain_waiver_enabled 开启 + 存在 effective 子链（t 检验三门槛）则豁免 Verifier IC/ICIR 维度与评分卡全链 IC 打分（Sharpe/回撤/OOS 等其它维度仍硬判），评估链横截面 IC 门槛同步豁免；演化路径（evolution_candidate）与种子路径（evolution_seeds）双入口接线；新增 test_subchain_waiver.py 16 用例** |** |
 | **v2.105.0+7** | **2026-08-17** | **GAP-140 全量回归93预存失败专项清零 + GAP-135/123/I306/126/120 登记表状态同步 + 表达式去重种子豁免** |** |
 | **v2.105.0+6** | **2026-08-17** | **监控任务修复：④数据级监控检查品种改为能化链12品种(ENERGY_CHAIN_SYMBOLS)；②因子巡检inspect_and_downgrade透传market；③逻辑监控mock数据补OHLCV列+因子params透传(LogicMonitor.run与job双层)消除KeyError** |** |
 | **v2.105.0+5** | **2026-08-17** | **修复 L3 子链差异化权重调制失效两处接线：①inject_to_fdt 的 subchain_weights 键由 factor_id 统一归一为 name（与 factor_weights.json weights 键及信号管线 _compute_composite_scores 按 name 消费对齐，此前 factor_id 键导致调制静默回退全权重）；②端到端键链路验证（build→inject→load→composite 调制真实生效）；新增 3 用例（test_subchain_weight.py 21→24）** |** |

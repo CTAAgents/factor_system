@@ -24,13 +24,103 @@ n_trials_micro / _micro_staged_evolution / _signal_cache（归 AuditPipeline，
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from .contracts import FactorCorrelation, FactorEvaluation, FactorProgram  # noqa: E402 — 延迟导入规避循环依赖
 from .evolution_trace import _QualityInspectionResult  # noqa: E402 — 类型注解运行时解析
 from .micro_evolution import evolve_micro  # noqa: E402 — 延迟导入规避循环依赖
 
 logger = logging.getLogger(__name__)
+
+
+def _subchain_waiver_effective_ic(evaluation: Any) -> Optional[float]:
+    """子链放行：effective 子链最大 |mean_ic|（GAP-144）。
+
+    Args:
+        evaluation: FactorEvaluation（level_1_backtest.subchain_ic_report 画像）
+
+    Returns:
+        effective 子链 max |mean_ic|；无 effective 子链/画像缺失 → None。
+    """
+    try:
+        l1 = evaluation.get("level_1_backtest") or {}
+        report = l1.get("subchain_ic_report") or {}
+        profile = report.get("subchain_ic_profile") or {}
+    except AttributeError:
+        return None
+    eff_ics = [
+        abs(float(st["mean_ic"]))
+        for c, st in profile.items()
+        if bool(st.get("effective")) and st.get("mean_ic") is not None
+    ]
+    return max(eff_ics) if eff_ics else None
+
+
+def _subchain_waiver_view(evaluation: Any) -> Any:
+    """评分卡放行视图：以 effective 子链 IC 替换全链 IC（GAP-144）。
+
+    单链特异因子全链 IC 被无效子链稀释，评分卡（ic_score 维度权重 1.0）会因此
+    打低分导致 C 级淘汰——放行视图仅替换 ic 字段供评分卡评估，其余评估产物不变
+    （Sharpe/回撤等仍用全链口径，保持其它维度硬判语义）。
+
+    Args:
+        evaluation: FactorEvaluation（已标记 subchain_waiver=True）
+
+    Returns:
+        浅拷贝 evaluation，level_1_backtest.ic 替换为 effective 子链 max |mean_ic|。
+    """
+    eff_ic = _subchain_waiver_effective_ic(evaluation)
+    if eff_ic is None:
+        return evaluation
+    view = dict(evaluation)
+    l1 = dict(view.get("level_1_backtest") or {})
+    l1["ic"] = eff_ic
+    view["level_1_backtest"] = l1
+    return view
+
+
+def _subchain_waiver_enabled(owner: Any) -> bool:
+    """读取 L2 子链放行开关（GAP-144，灰度默认关）。"""
+    try:
+        from fts.config import get_config
+
+        return bool(getattr(get_config(), "l2_subchain_waiver_enabled", False))
+    except Exception:  # noqa: BLE001 — 配置读取失败保守回退关闭
+        return False
+
+
+def _apply_subchain_ic_waiver(
+    owner: Any,
+    evaluation: Any,
+    verifier_result: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Verifier 判定子链 IC 放行（GAP-144，plans/49 §B2 晋升入口对齐）。
+
+    仅 energy 链 + 开关开启 + 存在 effective 子链时生效；只豁免 IC/ICIR 两个
+    被全链稀释的维度，其余维度（Sharpe/回撤/OOS/单调性等）失败仍拦截。
+
+    Args:
+        owner: EvolutionLoop（market/config 读取）
+        evaluation: FactorEvaluation（level_1_backtest.subchain_ic_report 画像）
+        verifier_result: Verifier.check 输出
+
+    Returns:
+        豁免后 VerifierResult（passed=True, failure_reasons=[]）或 None（不豁免）。
+    """
+    if not (getattr(owner, "market", "") == "energy" and _subchain_waiver_enabled(owner)):
+        return None
+    if _subchain_waiver_effective_ic(evaluation) is None:
+        return None
+    reasons = verifier_result.get("failure_reasons", [])
+    kept = [
+        r for r in reasons
+        if not (r.startswith("Level 1 失败: IC=") or r.startswith("Level 1 失败: ICIR="))
+    ]
+    if len(kept) == len(reasons):
+        return None  # 无 IC/ICIR 维度失败（无需放行）
+    if kept:
+        return None  # 其它维度失败 → 仍拦截（仅放行 IC 稀释维度）
+    return {**verifier_result, "passed": True, "failure_reasons": [], "subchain_waiver": True}
 
 
 class CandidateProcessor:
@@ -142,13 +232,30 @@ class CandidateProcessor:
 
         # ── Step 4: Verifier 判定 ──
         verifier_result = self._owner.verifier.check(evaluation)
+        # GAP-144：单链特异因子子链 IC 放行（仅 energy + 开关 + effective 子链；
+        # 豁免 IC/ICIR 稀释维度，Sharpe/回撤/OOS 等其它维度仍硬判）。
+        if not verifier_result["passed"]:
+            _waiver = _apply_subchain_ic_waiver(self._owner, evaluation, verifier_result)
+            if _waiver is not None:
+                logger.info(
+                    "[L2][%s] 子链放行通过（GAP-144）：全链 IC 被无效子链稀释，"
+                    "effective 子链存在，豁免 IC/ICIR 维度",
+                    optimized_factor.get("name", "?"),
+                )
+                verifier_result = _waiver
+                evaluation["subchain_waiver"] = True
         print(f"[DEBUG-evo] verifier_result={verifier_result}")
         print(f"[DEBUG-evo] evaluation.get('level_1_backtest')={evaluation.get('level_1_backtest')}")
 
         # ── Step 4.5: 因子质量评分卡 (Phase A.1) ──
+        # GAP-144：子链放行时评分卡用放行视图（effective 子链 IC 替换全链 IC），
+        # 避免单链特异因子因全链 IC 稀释在评分卡被打 C 级淘汰。
+        _inspection_eval = (
+            _subchain_waiver_view(evaluation) if evaluation.get("subchain_waiver") else evaluation
+        )
         inspection: _QualityInspectionResult = self._owner.quality_inspector.inspect(
             factor=optimized_factor,
-            evaluation=evaluation,
+            evaluation=_inspection_eval,
         )
 
         # ── Step 4.5.5: 端到端回测流水线 (Phase B.2) ──

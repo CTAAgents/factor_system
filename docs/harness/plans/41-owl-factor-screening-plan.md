@@ -1,7 +1,7 @@
 # 41 — OWL 因子分组筛选计划（方案 A：L3 Step 1.8 旁路验证）
 
 
-> 版本: v2.105.0+7
+> 版本: v2.105.0+8
 
 > 状态: 已实施（2026-08-17） · 优先级: P2 · 负责人: FTS Agent
 > 关联: plans/36, plans/40, GAP-I206, factor_clustering, l3_signal_service

@@ -203,6 +203,16 @@ class FTSConfig:
         default_factory=lambda: os.getenv("FTS_L2_QA_GATE_ENABLED", "1") == "1"
     )
 
+    # ── L2 晋升子链放行 (GAP-144, v2.105.0+8) ──
+    # 单链特异因子晋升保护：Verifier 用全链 IC 门槛（min_ic=0.03），单链特异/部分链
+    # 因子全链 IC 被无效/反向子链稀释 < 门槛时在晋升入口被拦截（走不到落库落画像）。
+    # 开启后，energy 链因子存在 effective 子链（t 检验三门槛画像）时豁免 IC/ICIR
+    # 稀释维度（Sharpe/回撤/OOS 等其它维度仍硬判），复用 plans/49 §B2 语义。
+    # 灰度默认关（兼容现状），仅 market="energy" 生效。
+    l2_subchain_waiver_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_L2_SUBCHAIN_WAIVER_ENABLED", "0") == "1"
+    )
+
     # ── L2 去冗余-正交基底 (GAP-I206 补充, v2.72.0) ──
     # 正交基底维护（Gram-Schmidt 迭代残差化）：候选因子对基底逐因子 OLS 残差，
     # 与整个基底正交后入库并注册为新基底成员；基底按 Sharpe 降序保留上限

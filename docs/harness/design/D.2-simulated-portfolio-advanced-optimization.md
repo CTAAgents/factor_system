@@ -1,6 +1,6 @@
 # D.2 模拟交易模块 — 进阶优化方案
 
-> 版本: v2.105.0+7
+> 版本: v2.105.0+8
 > 状态: **已实现**（P0.1 股票中性化+L3 补齐 → P0.2 组合级风控 → P1.1 tick 撮合 → P1.2 PARTIAL+标定 → P2 限价单/竞价，2026-08-11）
 > 关联: [D.1-simulated-portfolio-design.md](file:///d:/Programs/factor_system/docs/harness/design/D.1-simulated-portfolio-design.md)（模拟仓基础设计）、[C.3-feedback-loop-design.md](file:///d:/Programs/factor_system/docs/harness/design/C.3-feedback-loop-design.md)（反馈闭环）
 > 前置: D.1 已实现（SQLite 持久化 + 反馈闭环已上线）

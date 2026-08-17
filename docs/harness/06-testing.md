@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v2.105.0+7
+> 版本: v2.105.0+8
 > 最后更新: 2026-08-17
 
 ---
@@ -69,6 +69,7 @@ tests/
 │   ├── test_subchain_quality_store.py # 子链质量矩阵存储测试（plans/49 A 模块，13 用例：subchain_factor_quality 建表/UPSERT 幂等/时序查询（按 factor×chain 升序）/latest 每链最新/recent 批量/空输入/自建库 + build_subchain_quality_rows 每链行·t=inf→None 序列化·空 IC·时间戳默认）
 │   ├── test_qa_subchain.py           # 评审质检张量化测试（plans/49 B 模块，19 用例：judge_q10_subchain 两级判定——全链一致/子链特异（t 显著放行）/反向子链 avoid/跨链冲突/多数方向分组；AutoReviewPolicy 单链特异放行（全链 IC<min 但 effective 子链放行/Sharpe 不放行/QA 门禁仍执行/无 profile 兼容）；admission 受限权重 SUBCHAIN_SPECIFIC_MAX_WEIGHT；F6 两级判定含有效链集合漂移）
 │   ├── test_lifecycle_subchain.py    # 生命周期张量化测试（plans/49 C 模块，14 用例：compute_subchain_degradation 全分支——全部有效链衰减→degrade/部分链→scope_shrink/单链特异唯一链衰减→degrade/从未 effective→keep/样本不足 None/空输入；scope_without_chains；配置加载；TestModulationClosedLoop scope 缩减传导 47 调制矩阵）
+│   ├── test_subchain_waiver.py       # L2 晋升子链放行测试（GAP-144，16 用例：effective 子链 max |mean_ic| 提取——单链/多链取 max/无 effective/画像缺失；Verifier 豁免——仅 IC/ICIR 稀释维度放行/Sharpe 等其它维度仍拦截/开关关不放行/非 energy 不放行/无 effective 不放行；评分卡放行视图 ic 替换其余不变；种子路径评估链 IC 门槛豁免 + Verifier 豁免同构）
 │   ├── test_evolution_loop.py       # L2 主循环测试
 │   ├── test_evolution_dedup_prefilter.py # 生成端去重前置测试（Step 1.35，10 用例：`_is_generated_duplicate`/`_build_seen_expression_norms`——elite 命中拦截/空白规范化等价/同 run 拦截/非重复放行/空目录降级/`_` 前缀跳过/缓存懒加载）
 │   ├── test_experience_chain.py     # 经验链测试

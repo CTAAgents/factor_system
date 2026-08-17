@@ -41,6 +41,97 @@ if TYPE_CHECKING:  # pragma: no cover - 仅类型检查
 logger = logging.getLogger(__name__)
 
 
+def _subchain_waiver_pass(owner: Any, bt: dict[str, Any]) -> bool:
+    """子链放行判定（GAP-144）：energy + 开关 + effective 子链存在 → True。
+
+    Args:
+        owner: EvolutionLoop（market/配置读取）
+        bt: level_1_backtest 指标（含 cross_section_evaluate_backtest 产出的
+            subchain_ic_report 画像段）
+
+    Returns:
+        True=豁免全链 IC 稀释维度；False=不豁免（IC 门槛照常判定）。
+    """
+    if not (getattr(owner, "market", "") == "energy"):
+        return False
+    try:
+        from fts.config import get_config
+
+        if not bool(getattr(get_config(), "l2_subchain_waiver_enabled", False)):
+            return False
+    except Exception:  # noqa: BLE001 — 配置读取失败保守回退
+        return False
+    try:
+        report = (bt.get("subchain_ic_report") or {}).get("subchain_ic_profile") or {}
+        return any(bool(st.get("effective")) for st in report.values())
+    except AttributeError:
+        return False
+
+
+def _subchain_waiver_view(evaluation: "FactorEvaluation") -> "FactorEvaluation":
+    """评分卡放行视图：effective 子链 max |mean_ic| 替换全链 IC（GAP-144）。"""
+    eff_ic = _subchain_waiver_effective_ic(evaluation)
+    if eff_ic is None:
+        return evaluation
+    view = dict(evaluation)
+    l1 = dict(view.get("level_1_backtest") or {})
+    l1["ic"] = eff_ic
+    view["level_1_backtest"] = l1
+    return view
+
+
+def _subchain_waiver_effective_ic(evaluation: "FactorEvaluation") -> Optional[float]:
+    """effective 子链最大 |mean_ic|（GAP-144）；无 → None。"""
+    try:
+        l1 = evaluation.get("level_1_backtest") or {}
+        report = l1.get("subchain_ic_report") or {}
+        profile = report.get("subchain_ic_profile") or {}
+    except AttributeError:
+        return None
+    eff_ics = [
+        abs(float(st["mean_ic"]))
+        for c, st in profile.items()
+        if bool(st.get("effective")) and st.get("mean_ic") is not None
+    ]
+    return max(eff_ics) if eff_ics else None
+
+
+def _apply_seed_subchain_waiver(
+    owner: Any,
+    evaluation: "FactorEvaluation",
+    verifier_result: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Verifier 子链 IC 放行（GAP-144，种子路径与演化路径同构）。
+
+    仅 energy + 开关 + effective 子链时生效；只豁免 IC/ICIR 稀释维度，
+    其余维度（Sharpe/回撤/OOS 等）失败仍拦截。
+
+    Returns:
+        豁免后 VerifierResult（passed=True）或 None（不豁免）。
+    """
+    if not (getattr(owner, "market", "") == "energy"):
+        return None
+    try:
+        from fts.config import get_config
+
+        if not bool(getattr(get_config(), "l2_subchain_waiver_enabled", False)):
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    if _subchain_waiver_effective_ic(evaluation) is None:
+        return None
+    reasons = verifier_result.get("failure_reasons", [])
+    kept = [
+        r for r in reasons
+        if not (r.startswith("Level 1 失败: IC=") or r.startswith("Level 1 失败: ICIR="))
+    ]
+    if len(kept) == len(reasons):
+        return None  # 无 IC/ICIR 失败
+    if kept:
+        return None  # 其它维度失败仍拦截
+    return {**verifier_result, "passed": True, "failure_reasons": [], "subchain_waiver": True}
+
+
 class SeedManager:
     """领域 D：种子管理与横截面评估（34 计划 C 阶段协作类）。
 
@@ -194,6 +285,19 @@ class SeedManager:
                 if passed:
                     # ── Verifier 判定（v2.50.0 与演化因子完全对齐） ──
                     verifier_result = self._owner.verifier.check(evaluation)
+                    # GAP-144：子链放行（energy + 开关 + effective 子链）时豁免
+                    # IC/ICIR 稀释维度，Sharpe 等其它维度仍硬判（与演化路径一致）。
+                    if not verifier_result.get("passed", False):
+                        _waiver = _apply_seed_subchain_waiver(
+                            self._owner, evaluation, verifier_result
+                        )
+                        if _waiver is not None:
+                            logger.info(
+                                "[evo][%s] 种子子链放行通过（GAP-144）",
+                                seed.get("name", "?"),
+                            )
+                            verifier_result = _waiver
+                            evaluation["subchain_waiver"] = True
                     if not verifier_result.get("passed", False):
                         self._owner._record_failure_trace(
                             seed,
@@ -214,9 +318,15 @@ class SeedManager:
                             continue
 
                     # 种子因子质量评分卡 (Phase A.1 集成)
+                    # GAP-144：子链放行时评分卡用放行视图（effective 子链 IC）
+                    _seed_inspect_eval = (
+                        _subchain_waiver_view(evaluation)
+                        if evaluation.get("subchain_waiver")
+                        else evaluation
+                    )
                     inspection = self._owner.quality_inspector.inspect(
                         factor=seed,
-                        evaluation=evaluation,
+                        evaluation=_seed_inspect_eval,
                     )
                     if inspection.filtered:
                         self._owner._log_inspection_detail(
@@ -757,7 +867,11 @@ class SeedManager:
 
         reasons: list[str] = []
         if bt.get("ic", 0) < 0.03:
-            reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
+            # GAP-144：子链放行（energy + 开关 + effective 子链）时豁免全链 IC
+            # 稀释维度——单链特异因子全链 IC 被无效子链稀释，但存在 t 检验显著的
+            # effective 子链；Sharpe 等其它维度仍硬判。
+            if not _subchain_waiver_pass(self._owner, bt):
+                reasons.append(f"截面 IC={bt.get('ic', 0):.4f} < 0.03")
         if bt.get("sharpe", 0) < 1.5:
             reasons.append(f"截面夏普={bt.get('sharpe', 0):.4f} < 1.5")
         return FactorEvaluation(
