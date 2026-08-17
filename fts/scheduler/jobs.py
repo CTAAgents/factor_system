@@ -25,12 +25,17 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# ── 训练池面板回溯天数（GAP-133，GAP-073 v2.98.0 同款修复）─────────────
-# energy/futures 各 L2 评估作业统一 700 日：位于 _build_wf_config [2,3) 年分支
-# （window_years=1/step=3mo/min_oos=2mo）可切 4 个走航窗口，审计 oos_consistency
-# 需要 n_windows≥2；勿超 750 行（≥3 年切默认 window_years=3=1095 日分支 →
-# 数据不足产出 0 窗口，比 500 日更糟）。实测: 500→1 窗口、700→4 窗口、750→0 窗口。
-_L2_TRAINING_PANEL_DAYS = 700
+
+
+def _get_l2_panel_days() -> int:
+    """L2 训练池面板回溯天数（GAP-133 参数化，config l2_panel_days，env FTS_L2_PANEL_DAYS 可覆盖）。
+
+    Returns:
+        面板回溯天数（默认 750）
+    """
+    from fts.config import get_config
+
+    return get_config().l2_panel_days
 
 
 # ── L1 Meta-Loop — 每日 08:30 知识补给 + 种子注入 ─────────
@@ -158,7 +163,7 @@ def _run_l2_evolution(max_generation: int, tag: str) -> None:
         provider = FTSDataProvider()
         panel, common_dates = provider.get_futures_panel(
             symbols=train_symbols,
-            days=_L2_TRAINING_PANEL_DAYS,
+            days=_get_l2_panel_days(),
             trace_id=trace_id,
         )
         if not panel:
@@ -247,7 +252,7 @@ def l2_seed_promotion_job() -> None:
         provider = FTSDataProvider()
         panel, common_dates = provider.get_futures_panel(
             symbols=train_symbols,
-            days=_L2_TRAINING_PANEL_DAYS,
+            days=_get_l2_panel_days(),
             trace_id=trace_id,
         )
         if not panel:
@@ -337,7 +342,7 @@ def l2_seed_promotion_energy_job() -> None:
         provider = FTSDataProvider()
         panel, common_dates = provider.get_futures_panel(
             symbols=chain_symbols,
-            days=_L2_TRAINING_PANEL_DAYS,
+            days=_get_l2_panel_days(),
             trace_id=trace_id,
         )
         if not panel:
@@ -527,7 +532,7 @@ def l2_batch_mining_job() -> None:
         provider = FTSDataProvider()
         panel, common_dates = provider.get_futures_panel(
             symbols=train_symbols,
-            days=_L2_TRAINING_PANEL_DAYS,
+            days=_get_l2_panel_days(),
             trace_id=trace_id,
         )
         if not panel:
@@ -621,7 +626,7 @@ def l2_batch_mining_energy_job() -> None:
         provider = FTSDataProvider()
         panel, common_dates = provider.get_futures_panel(
             symbols=chain_symbols,
-            days=_L2_TRAINING_PANEL_DAYS,
+            days=_get_l2_panel_days(),
             trace_id=trace_id,
         )
         if not panel:

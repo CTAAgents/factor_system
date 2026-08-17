@@ -922,17 +922,23 @@ class TestSyncLiquidityPoolJob:
 
 
 class TestEnergyChainPanelDays:
-    """_L2_TRAINING_PANEL_DAYS 常量约束（GAP-133，GAP-073 同款修复）。
+    """l2_panel_days 配置项约束（GAP-133，v2.104.0+107 参数化）。
 
-    700 日位于 _build_wf_config [2,3) 年分支（window_years=1/step=3mo/min_oos=2mo）
-    可切 4 个走航窗口（审计 oos_consistency 需 n_windows≥2）；v2.104.0+107 方案②
-    已为 ≥3 年分支加数据不足回退，750+ 行不再产出 0 窗口，700 仍为 4 窗口最优值。
+    750 日：_build_wf_config 方案②回退分支下可切 4 个完整 OOS 窗口
+    （审计 oos_consistency 需 n_windows≥2）；env FTS_L2_PANEL_DAYS 可覆盖。
     """
 
-    def test_panel_days_in_multi_window_band(self) -> None:
-        assert jobs._L2_TRAINING_PANEL_DAYS == 700
-        # [2,3) 年分支（W=365/S=91/M=60，oos=max(60,91)=91）下 4 窗口需 N≥698；
-        # 700 满足 4 窗口且有安全余量（≥3 年分支断崖已由方案②回退消除）
-        assert 698 <= jobs._L2_TRAINING_PANEL_DAYS
+    def test_panel_days_from_config(self) -> None:
+        from fts.config.settings import load_config
+
+        assert load_config().l2_panel_days == 750
+        # 回退分支（W=365/S=91/M=60，oos=max(60,91)=91）下 4 窗口需 N≥698
+        assert 698 <= load_config().l2_panel_days
+
+    def test_panel_days_env_override(self, monkeypatch) -> None:
+        from fts.config.settings import load_config
+
+        monkeypatch.setenv("FTS_L2_PANEL_DAYS", "800")
+        assert load_config().l2_panel_days == 800
 
 

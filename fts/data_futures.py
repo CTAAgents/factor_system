@@ -1635,7 +1635,7 @@ FUTURES_STRATIFIED_SUBSET: list[str] = [
 # 存储路由：因子库 market="energy" → data/factor_catalog_energy.duckdb（独立文件），
 # 精英目录 → memory/knowledge/factors/energy_chain_elite（独立目录）。
 # 链内品种历史窗口 v2.104.0+106 起不再受 PX0 限制（最长品种约 6 年，共同窗口由
-#   jobs.py `_L2_TRAINING_PANEL_DAYS=700` 决定，走航可切 4 窗口）。
+#   jobs.py `_get_l2_panel_days()`（config l2_panel_days=750，env FTS_L2_PANEL_DAYS 可覆盖）决定，走航可切 4 窗口）。
 ENERGY_CHAIN_SYMBOLS: list[str] = [
     "SC0",  # 原油 — INE，链上游源头（能源）
     "FU0",  # 燃料油 — SHFE，原油下游（能源）

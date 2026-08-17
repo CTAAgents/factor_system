@@ -217,6 +217,12 @@ class FTSConfig:
     # 面板字段缺失的风格自动跳过（BarraStyleEngine 全 NaN 处理），不阻断评估。
     l2_barra_style_neutral: bool = field(default_factory=lambda: os.getenv("FTS_L2_BARRA_STYLE_NEUTRAL", "1") == "1")
 
+    # ── L2 训练池面板回溯天数 (GAP-133, v2.104.0+107) ──
+    # energy/futures 各 L2 评估作业统一回溯天数：750 日在
+    # _build_wf_config 回退分支下可切 4 个完整 OOS 窗口（审计
+    # oos_consistency 需 n_windows≥2）；env FTS_L2_PANEL_DAYS 可覆盖。
+    l2_panel_days: int = field(default_factory=lambda: int(os.getenv("FTS_L2_PANEL_DAYS", "750")))
+
     # ── 因子衰减自动退役闭环 (GAP-I305, v2.72.0) ──
     # 滚动 6M IC 线性回归斜率分级：|slope| >= observe_slope → 观察；
     # |slope| >= retire_slope → 退役。slope 归一化到 [-1.0, 1.0]
