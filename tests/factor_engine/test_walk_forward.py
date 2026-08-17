@@ -795,6 +795,59 @@ class TestEvaluateEdgeCases:
 
 
 # ══════════════════════════════════════════════════════════
+# GAP-073/GAP-133 回归：短样本窗口数（500 日 1 窗口 vs 700 日多窗口）
+# ══════════════════════════════════════════════════════════
+
+
+class TestShortSampleWindows:
+    """[2,3) 年分支配置下窗口数随数据长度变化（GAP-133 复现/修复依据）。
+
+    `_build_wf_config` 对 500 行（约 2 年）适配 window_years=1 / step_months=3 /
+    min_oos_months=2 / n_windows=4：500 行只能切 1 个窗口（审计 oos_consistency
+    n_windows<2 硬拦截 → 种子全部被拦、0 晋升）；700 行可切 4 窗口（可过审计）。
+    """
+
+    _CONFIG: WalkForwardConfig = {
+        "window_years": 1,
+        "step_months": 3,
+        "min_oos_months": 2,
+        "n_windows": 4,
+    }
+
+    def test_500d_only_single_window(self) -> None:
+        """500 行短样本仅 1 个窗口（GAP-133 复现：审计 oos_consistency 硬拦截）。"""
+        opt = WalkForwardOptimizer(self._CONFIG)
+        data = make_data(500)
+        result = opt.evaluate(data, make_evaluate_fn(ic=0.05, sharpe=1.5, turnover=0.1))
+        assert result["n_windows_completed"] == 1
+        # n_windows<2 时审计硬拦截（GAP-121），passed=False
+        assert result["passed"] is False
+
+    def test_700d_four_windows(self) -> None:
+        """700 行可切 4 个窗口（GAP-133 修复目标：days=700 走航通过）。"""
+        opt = WalkForwardOptimizer(self._CONFIG)
+        data = make_data(700)
+        result = opt.evaluate(data, make_evaluate_fn(ic=0.05, sharpe=1.5, turnover=0.1))
+        assert result["n_windows_completed"] == 4
+        assert result["ic_consistency"] == 1.0
+        assert result["passed"] is True
+
+    def test_750d_boundary_default_branch_zero_windows(self) -> None:
+        """默认 3 年配置在 800 行下 0 窗口（原始配置行为）。
+
+        GAP-133 方案②（v2.104.0+107）后 `_build_wf_config` 已对数据不足的 ≥3 年
+        分支回退短样本配置，管线不再产出此 0 窗口；本用例锁定"默认配置本身在
+        短数据下 0 窗口"这一属性，作为回退必要性的依据。
+        """
+        opt = WalkForwardOptimizer(
+            {"window_years": 3, "step_months": 6, "min_oos_months": 3, "n_windows": 4}
+        )
+        data = make_data(800)
+        result = opt.evaluate(data, make_evaluate_fn(ic=0.05, sharpe=1.5, turnover=0.1))
+        assert result["n_windows_completed"] == 0
+
+
+# ══════════════════════════════════════════════════════════
 # WalkForwardOptimizer — 集成测试
 # ══════════════════════════════════════════════════════════
 

@@ -1625,22 +1625,24 @@ FUTURES_STRATIFIED_SUBSET: list[str] = [
 # ─── 能源产业链专属工作流（独立于 FTS 通用工作流）────────────────
 # 设计（GAP-Ixxx）：全训 + 链外盲测，以能源链为核心泛化到全部化工产业链。
 # 训练链 = 12 个化工品种（覆盖四大化工子链，2026-08-15 由 9→12 扩池降相关性）：
-#   能源 3（SC/FU/BU）+ 聚酯链 3（PX/TA/PF）+ 油化工 3（L/PP/PG）+ 煤化工 3（MA/UR/SA）；
+#   能源 3（SC/FU/BU）+ 聚酯链 3（PF/TA/EG）+ 油化工 3（L/PP/PG）+ 煤化工 3（MA/UR/SA）；
 #   原 9 品种 SC/FU/LU/BU/PG/PX/TA/PF/PR 中 LU（与 FU 高相关）/PR（与 PF 高相关）
 #   换出至盲测池，换入 L/PP/MA/UR/SA 覆盖油化工/煤化工子链，降低训练池内品种相关性。
+# v2.104.0+106（GAP-133）：聚酯链代表 PX0→EG0——PX0（2023-09 上市，仅 704 行）会封顶
+#   训练公共窗口致走航窗口数受限，EG0（2018-12 上市，1861 行）历史更长；PX0 自动回盲测池。
 # 盲测池 = 其余化工产业链（聚酯链/油化工/煤化工）全部品种 − 训练 12 品种，
 #   验证链因子向整个化工产业链的外延泛化能力。
 # 存储路由：因子库 market="energy" → data/factor_catalog_energy.duckdb（独立文件），
 # 精英目录 → memory/knowledge/factors/energy_chain_elite（独立目录）。
-# 链内品种历史窗口受 PX0（2023-09 上市）限制约 2.5 年，
-# 质检以单品种时序 IC 为主（与期货路径一致），symbol_holdout 审计（需≥5留出）不适用。
+# 链内品种历史窗口 v2.104.0+106 起不再受 PX0 限制（最长品种约 6 年，共同窗口由
+#   jobs.py `_L2_TRAINING_PANEL_DAYS=700` 决定，走航可切 4 窗口）。
 ENERGY_CHAIN_SYMBOLS: list[str] = [
     "SC0",  # 原油 — INE，链上游源头（能源）
     "FU0",  # 燃料油 — SHFE，原油下游（能源）
     "BU0",  # 沥青 — SHFE，炼化下游（能源）
-    "PX0",  # 对二甲苯 — CZCE，芳烃链中游（聚酯链）
-    "TA0",  # PTA — CZCE，聚酯链中游（聚酯链）
     "PF0",  # 短纤 — CZCE，聚酯成品（聚酯链）
+    "TA0",  # PTA — CZCE，聚酯链中游（聚酯链）
+    "EG0",  # 乙二醇 — DCE，聚酯原料/防冻剂（聚酯链）
     "L0",   # 聚乙烯 — DCE，塑料（油化工）
     "PP0",  # 聚丙烯 — DCE，塑料（油化工）
     "PG0",  # 液化石油气 — DCE，炼厂伴生气（油化工）
@@ -1673,6 +1675,8 @@ ENERGY_CHAIN_MARKET: str = "energy"
 # 低于该值的品种经 scripts/sync_energy_chain_depth.py 补全，补全后仍不足则降级。
 # 2026-08-14 实测补全后：LU0=1492（2020-06 起）、PR0=473（2024-08 起）、PL0=260（盲测池）；
 # 2026-08-15 扩池至 12 品种后，最短历史为 PX0（2023-09 起，约 700 行），全部达标，共同窗口由 PX0 决定。
+# v2.104.0+106（GAP-133）PX0 换出训练链（入盲测池）、EG0 换入（2018-12 起约 1861 行），
+# 训练链最短历史为 PF0（2020-10 起约 1418 行），共同窗口不再受 PX0 限制（由 jobs.py 面板天数决定）。
 ENERGY_CHAIN_MIN_TRAIN_ROWS: int = 300
 # 盲测池最小真实历史门槛（GAP-130 v2.104.0+80，config/futures_universe.yaml SSOT）
 ENERGY_CHAIN_MIN_HOLDOUT_ROWS: int = 250

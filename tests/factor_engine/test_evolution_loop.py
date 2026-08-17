@@ -5196,10 +5196,33 @@ class TestGapF16WalkForwardAndAudit:
             memory_dir=tmp_memory_dir,
         )
 
-    def test_build_wf_config_3y(self, tmp_memory_dir):
-        """数据 ≥3 年 → 默认配置。"""
+    def test_build_wf_config_3y_default_when_data_sufficient(self, tmp_memory_dir):
+        """数据充足（≥1368 行）→ 3 年默认配置（训练窗 1095 日可构建 ≥2 窗口）。"""
+        cfg = EvolutionLoop._build_wf_config(_make_ohlcv(1400))
+        assert cfg["window_years"] == 3
+        assert cfg["n_windows"] == 4
+
+    def test_build_wf_config_3y_short_data_fallback(self, tmp_memory_dir):
+        """≥3 年分支但数据不足构建 3 年训练窗（750~1367 行）→ 回退短样本分支（GAP-133 方案②）。"""
         cfg = EvolutionLoop._build_wf_config(_make_ohlcv(800))
-        assert cfg["n_windows"] >= 4
+        assert cfg["window_years"] == 1
+        assert cfg["step_months"] == 3
+        assert cfg["min_oos_months"] == 2
+        assert cfg["n_windows"] == 4
+
+    def test_build_wf_config_750_never_zero_windows(self, tmp_memory_dir):
+        """GAP-133 方案②回归：750 行不再产出 0 窗口（≥2 窗口，审计 oos_consistency 可过）。"""
+        data = _make_ohlcv(750)
+        cfg = EvolutionLoop._build_wf_config(data)
+        from fts.factor_engine.walk_forward import WalkForwardOptimizer
+
+        df = data.set_index(pd.date_range("2020-01-01", periods=750, freq="B"))
+
+        def _fn(train, oos):
+            return {"ic": 0.05, "sharpe": 1.5, "turnover": 0.1}
+
+        result = WalkForwardOptimizer(cfg).evaluate(df, _fn)
+        assert result["n_windows_completed"] >= 2
 
     def test_build_wf_config_2y(self, tmp_memory_dir):
         cfg = EvolutionLoop._build_wf_config(_make_ohlcv(600))

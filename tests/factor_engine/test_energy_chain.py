@@ -42,7 +42,7 @@ class TestEnergyChainConfig:
     """能源链专属训练链与盲测池配置。"""
 
     def test_train_is_full_energy_chain(self) -> None:
-        """训练链 = 12 个化工品种（四大化工子链，2026-08-15 由 9 扩至 12 降相关性）。"""
+        """训练链 = 12 个化工品种（四大化工子链；v2.104.0+106 GAP-133 换池 PX0→EG0）。"""
         assert len(ENERGY_CHAIN_SYMBOLS) == 12
         assert ENERGY_CHAIN_TRAIN == ENERGY_CHAIN_SYMBOLS
         assert set(ENERGY_CHAIN_SYMBOLS) == {
@@ -51,9 +51,9 @@ class TestEnergyChainConfig:
             "FU0",
             "BU0",
             # 聚酯链
-            "PX0",
-            "TA0",
             "PF0",
+            "TA0",
+            "EG0",
             # 油化工
             "L0",
             "PP0",
@@ -65,10 +65,10 @@ class TestEnergyChainConfig:
         }
 
     def test_train_covers_four_subsectors(self) -> None:
-        """训练池覆盖能源/聚酯链/油化工/煤化工四大子链，各 3 个代表（降相关性）。"""
+        """训练池覆盖能源/聚酯链/油化工/煤化工四大子链（v2.104.0+106 聚酯链 PX0→EG0）。"""
         expected_per_sector = {
             "能源": {"SC0", "FU0", "BU0"},
-            "聚酯链": {"PX0", "TA0", "PF0"},
+            "聚酯链": {"PF0", "TA0", "EG0"},
             "油化工": {"L0", "PP0", "PG0"},
             "煤化工": {"MA0", "UR0", "SA0"},
         }
@@ -197,12 +197,12 @@ class TestEnergyChainL1Knowledge:
         assert pool._market == "energy"
 
     def test_meta_loop_energy_default_symbols(self) -> None:
-        """energy 模式下感知层默认品种 = 能化链 12 训练品种（非通用 13 品种）。"""
+        """energy 模式下感知层默认品种 = 能化链 12 训练品种（非通用 13 品种；v2.104.0+106 PX0→EG0）。"""
         from fts.factor_engine.meta_loop import MetaLoop
 
         loop = MetaLoop(market="energy", llm_client=None, web_collector=None)
         assert loop.market == "energy"
-        assert loop.sample_symbols == ["sc", "fu", "bu", "px", "ta", "pf", "l", "pp", "pg", "ma", "ur", "sa"]
+        assert loop.sample_symbols == ["sc", "fu", "bu", "pf", "ta", "eg", "l", "pp", "pg", "ma", "ur", "sa"]
 
     def test_meta_loop_energy_chain_knowledge_injected(self) -> None:
         """energy 模式下感知快照注入能化专属市场知识（chain_knowledge）。"""

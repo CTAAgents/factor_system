@@ -98,16 +98,16 @@ class TestDynamicRecompute:
     def test_change_train_pool_recomputes_holdout(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """核心诉求验证：只改 YAML 训练池，盲测池自动重算。"""
         cfg = _base_cfg()
-        # 把 PX0 从训练池挪到盲测池（模拟一次换池）
+        # 把 TA0 从训练池挪到盲测池（模拟一次换池；基线链已含 EG0、PX0 已在盲测池）
         cfg["workflows"]["energy"]["chain_symbols"] = [
-            s for s in cfg["workflows"]["energy"]["chain_symbols"] if s != "PX0"
+            s for s in cfg["workflows"]["energy"]["chain_symbols"] if s != "TA0"
         ]
         p = _write_tmp_yaml(tmp_path, cfg)
         monkeypatch.setattr(df, "_FUTURES_UNIVERSE_YAML", p)
         assert df._load_futures_universe_config() is True
         assert len(df.ENERGY_CHAIN_SYMBOLS) == 11
-        assert "PX0" not in df.ENERGY_CHAIN_SYMBOLS
-        assert "PX0" in df.ENERGY_CHAIN_HOLDOUT  # PX0 回到盲测池
+        assert "TA0" not in df.ENERGY_CHAIN_SYMBOLS
+        assert "TA0" in df.ENERGY_CHAIN_HOLDOUT  # TA0 回到盲测池
         assert not (set(df.ENERGY_CHAIN_SYMBOLS) & set(df.ENERGY_CHAIN_HOLDOUT))
 
     def test_lianhua_chain_group_derived_and_first(

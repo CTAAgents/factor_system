@@ -918,3 +918,21 @@ class TestSyncLiquidityPoolJob:
         assert "[L-Pool] 动态池刷新失败: snapshot failed" in caplog.text
 
 
+# ─── energy 链面板回溯天数（GAP-133） ─────────────────────
+
+
+class TestEnergyChainPanelDays:
+    """_L2_TRAINING_PANEL_DAYS 常量约束（GAP-133，GAP-073 同款修复）。
+
+    700 日位于 _build_wf_config [2,3) 年分支（window_years=1/step=3mo/min_oos=2mo）
+    可切 4 个走航窗口（审计 oos_consistency 需 n_windows≥2）；v2.104.0+107 方案②
+    已为 ≥3 年分支加数据不足回退，750+ 行不再产出 0 窗口，700 仍为 4 窗口最优值。
+    """
+
+    def test_panel_days_in_multi_window_band(self) -> None:
+        assert jobs._L2_TRAINING_PANEL_DAYS == 700
+        # [2,3) 年分支（W=365/S=91/M=60，oos=max(60,91)=91）下 4 窗口需 N≥698；
+        # 700 满足 4 窗口且有安全余量（≥3 年分支断崖已由方案②回退消除）
+        assert 698 <= jobs._L2_TRAINING_PANEL_DAYS
+
+

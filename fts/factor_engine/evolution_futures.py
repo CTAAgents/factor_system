@@ -4429,6 +4429,9 @@ class EvolutionLoop:
 
         数据不足 3 年时缩短窗口，保证短样本也能构建多窗口冷启动验证；
         数据 < 半年（约 125 交易日）无法构建，由调用方跳过并记录原因。
+        v2.104.0+107（GAP-133 方案②）：≥3 年分支默认 3 年训练窗（1095 日）在数据
+        不足构建 ≥2 窗口（< 1368 行）时回退短样本分支（1 年窗/3 月步/2 月 OOS），
+        消除"750 行切默认分支产出 0 窗口"断崖——审计 oos_consistency 需 n_windows≥2。
 
         Args:
             data: 主时间序列数据
@@ -4442,6 +4445,15 @@ class EvolutionLoop:
         n = len(data)
         years = n / 250.0
         if years >= 3.0:
+            # 默认配置 ≥2 窗口所需行数 = window_days + step_days + min_oos_days
+            #   = int(3*365.25) + int(6*30.44) + int(3*30.44) = 1095+182+91 = 1368
+            need_2_windows = (
+                int(cfg["window_years"] * 365.25)
+                + int(cfg["step_months"] * 30.44)
+                + int(cfg["min_oos_months"] * 30.44)
+            )
+            if n < need_2_windows:
+                cfg.update(window_years=1, step_months=3, min_oos_months=2, n_windows=4)
             return cfg
         if years >= 2.0:
             cfg.update(window_years=1, step_months=3, min_oos_months=2, n_windows=4)

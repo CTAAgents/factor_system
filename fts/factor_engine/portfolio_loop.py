@@ -2017,12 +2017,13 @@ _SCORE_DIMENSIONS: tuple[str, ...] = ("sharpe_cap", "icir", "ic", "turnover_inv"
 
 ENERGY_CHAIN_SUB_SYMBOLS: dict[str, list[str]] = {
     "能源": ["SC0", "FU0", "BU0"],
-    "聚酯": ["PX0", "TA0", "PF0"],
+    "聚酯": ["PF0", "TA0", "EG0"],
     "油化工": ["L0", "PP0", "PG0"],
     "煤化工": ["MA0", "UR0", "SA0"],
 }
 """能化产业链四大子链品种映射，与 config/futures_universe.yaml
-workflows.energy.chain_symbols 顺序对齐（能源/聚酯/油化工/煤化工各 3 品种）。"""
+workflows.energy.chain_symbols 顺序对齐（能源/聚酯/油化工/煤化工各 3 品种；
+v2.104.0+106 GAP-133 聚酯链 PX0→EG0）。"""
 
 DEFAULT_CHAIN_DEDUP_MAX_PER_CHAIN: int = 2
 """子链去冗余：单一子链保留因子数上限（默认 2，防产业链暴露集中）。"""
