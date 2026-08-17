@@ -1,0 +1,147 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 664" width="100%" height="auto" role="img" aria-label="L1 到 L2 因子注入与演化时序图">
+<style>
+:root {
+  --surface: #F7F7F8;
+  --surface-muted: #EFEFF2;
+  --text: #171717;
+  --text-muted: #52525B;
+  --border: rgba(23, 23, 23, 0.12);
+  --brand: #4B3FE3;
+  --brand-soft: #F2F7FF;
+  --brand-soft-strong: #E5EAFF;
+  --brand-text: #1A1759;
+}
+.th { fill: var(--text); font: 500 14px "PingFang SC", system-ui, sans-serif; }
+.ts { fill: var(--text-muted); font: 400 12px "PingFang SC", system-ui, sans-serif; }
+.tm { fill: var(--text-muted); font: 500 12px "JetBrains Mono", ui-monospace, monospace; }
+.pc { fill: var(--surface); stroke: var(--border); }
+.pc-b { fill: var(--brand-soft); stroke: var(--brand); }
+.pc-b .th { fill: var(--brand-text); }
+.pc-b .ts { fill: var(--brand); }
+.lf { stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 4; }
+.msg { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.msg-b { stroke: var(--brand); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.cap { fill: var(--surface); stroke: var(--border); }
+.cap-b { fill: var(--surface); stroke: var(--brand); }
+.act { fill: var(--brand-soft-strong); }
+.num { fill: var(--surface-muted); stroke: var(--border); }
+</style>
+<defs>
+  <marker id="sa" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+    <path d="M1 1 L7 4 L1 7 Z" fill="var(--text-muted)"/>
+  </marker>
+  <marker id="sab" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+    <path d="M1 1 L7 4 L1 7 Z" fill="var(--brand)"/>
+  </marker>
+</defs>
+
+<!-- 参与者行 -->
+<g>
+  <rect class="pc" x="45" y="48" width="100" height="56" rx="8"/>
+  <text class="th" x="95" y="72" text-anchor="middle">L1 MetaLoop</text>
+  <text class="ts" x="95" y="92" text-anchor="middle">每日 00:00</text>
+</g>
+<g>
+  <rect class="pc-b" x="160" y="48" width="150" height="56" rx="8"/>
+  <text class="th" x="235" y="72" text-anchor="middle">注入产物</text>
+  <text class="tm" x="235" y="92" text-anchor="middle">l1_injected/ + pool</text>
+</g>
+<g>
+  <rect class="pc" x="325" y="48" width="120" height="56" rx="8"/>
+  <text class="th" x="385" y="72" text-anchor="middle">L2 种子评估</text>
+  <text class="ts" x="385" y="92" text-anchor="middle">每日 02:00</text>
+</g>
+<g>
+  <rect class="pc" x="495" y="48" width="90" height="56" rx="8"/>
+  <text class="th" x="540" y="72" text-anchor="middle">elite 池</text>
+  <text class="ts" x="540" y="92" text-anchor="middle">DuckDB</text>
+</g>
+<g>
+  <rect class="pc" x="605" y="48" width="60" height="56" rx="8"/>
+  <text class="th" x="635" y="72" text-anchor="middle">L2 演化</text>
+  <text class="ts" x="635" y="92" text-anchor="middle">04:00/周末</text>
+</g>
+
+<!-- 生命线 -->
+<line class="lf" x1="95" y1="120" x2="95" y2="600"/>
+<line class="lf" x1="235" y1="120" x2="235" y2="600"/>
+<line class="lf" x1="385" y1="120" x2="385" y2="600"/>
+<line class="lf" x1="540" y1="120" x2="540" y2="600"/>
+<line class="lf" x1="635" y1="120" x2="635" y2="600"/>
+
+<!-- 激活条 -->
+<rect class="act" x="91" y="132" width="8" height="92" rx="4"/>
+<rect class="act" x="231" y="218" width="8" height="70" rx="4"/>
+<rect class="act" x="381" y="290" width="8" height="122" rx="4"/>
+<rect class="act" x="631" y="472" width="8" height="122" rx="4"/>
+
+<!-- m1 -->
+<rect class="num" x="46" y="140" width="22" height="22" rx="999"/>
+<text class="ts" x="57" y="156" text-anchor="middle">1</text>
+<path class="msg" d="M95 166 C 130 166, 130 150, 95 150"/>
+<rect class="cap" x="112" y="150" width="118" height="22" rx="999"/>
+<text class="ts" x="171" y="165" text-anchor="middle">知识/因子注入 + 验证</text>
+
+<!-- m2 -->
+<rect class="num" x="46" y="196" width="22" height="22" rx="999"/>
+<text class="ts" x="57" y="212" text-anchor="middle">2</text>
+<path class="msg" d="M97 222 L233 222" marker-end="url(#sa)"/>
+<rect class="cap" x="112" y="210" width="120" height="22" rx="999"/>
+<text class="ts" x="172" y="225" text-anchor="middle">写入 pending + market</text>
+
+<!-- m3 -->
+<rect class="num" x="46" y="264" width="22" height="22" rx="999"/>
+<text class="ts" x="57" y="280" text-anchor="middle">3</text>
+<path class="msg-b" d="M237 290 L383 290" marker-end="url(#sab)"/>
+<rect class="cap-b" x="252" y="278" width="126" height="22" rx="999"/>
+<text class="ts" x="315" y="293" text-anchor="middle" style="fill:var(--brand)">读取候选 · 消费</text>
+
+<!-- m4 -->
+<rect class="num" x="46" y="322" width="22" height="22" rx="999"/>
+<text class="ts" x="57" y="338" text-anchor="middle">4</text>
+<path class="msg" d="M385 352 C 420 352, 420 336, 385 336"/>
+<rect class="cap" x="404" y="336" width="152" height="22" rx="999"/>
+<text class="ts" x="480" y="351" text-anchor="middle">预检 + 完整评估链</text>
+
+<!-- m5 -->
+<rect class="num" x="46" y="380" width="22" height="22" rx="999"/>
+<text class="ts" x="57" y="396" text-anchor="middle">5</text>
+<path class="msg" d="M387 412 L538 412" marker-end="url(#sa)"/>
+<rect class="cap" x="402" y="400" width="126" height="22" rx="999"/>
+<text class="ts" x="465" y="415" text-anchor="middle">晋升 elite 池</text>
+
+<!-- m6 -->
+<rect class="num" x="46" y="448" width="22" height="22" rx="999"/>
+<text class="ts" x="57" y="464" text-anchor="middle">6</text>
+<path class="msg" d="M542 474 L633 474" marker-end="url(#sa)"/>
+<rect class="cap" x="547" y="462" width="86" height="22" rx="999"/>
+<text class="ts" x="590" y="477" text-anchor="middle">读父因子</text>
+
+<!-- m7 -->
+<rect class="num" x="46" y="508" width="22" height="22" rx="999"/>
+<text class="ts" x="57" y="524" text-anchor="middle">7</text>
+<path class="msg" d="M635 544 C 670 544, 670 528, 635 528"/>
+<rect class="cap" x="582" y="528" width="128" height="22" rx="999"/>
+<text class="ts" x="646" y="543" text-anchor="middle">演化循环</text>
+
+<!-- m8 -->
+<rect class="num" x="46" y="576" width="22" height="22" rx="999"/>
+<text class="ts" x="57" y="592" text-anchor="middle">8</text>
+<path class="msg-b" d="M633 594 L542 594" marker-end="url(#sab)"/>
+<rect class="cap-b" x="547" y="582" width="86" height="22" rx="999"/>
+<text class="ts" x="590" y="597" text-anchor="middle" style="fill:var(--brand)">晋升写回</text>
+
+<!-- 阶段说明 -->
+<g>
+  <rect class="pc" x="40" y="620" width="196" height="30" rx="8"/>
+  <text class="ts" x="138" y="640" text-anchor="middle">① L1 知识/因子生成</text>
+</g>
+<g>
+  <rect class="pc" x="252" y="620" width="196" height="30" rx="8"/>
+  <text class="ts" x="350" y="640" text-anchor="middle">② L2 种子评估晋升</text>
+</g>
+<g>
+  <rect class="pc" x="464" y="620" width="216" height="30" rx="8"/>
+  <text class="ts" x="572" y="640" text-anchor="middle">③ L2 演化主循环</text>
+</g>
+</svg>

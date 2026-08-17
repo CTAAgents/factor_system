@@ -1,6 +1,6 @@
 # 因子全生命周期管理（FTS）
 
-> 版本: v2.105.0+2
+> 版本: v2.105.0+3
 > 最后更新: 2026-08-17
 > 适用范围: 期货主链路（futures / energy，股票链路已剥离至 fts-stock）
 > 关联文档: [01-architecture.md](file:///d:/Programs/factor_system/docs/harness/01-architecture.md) · [05-observability.md](file:///d:/Programs/factor_system/docs/harness/05-observability.md) · [07-operations.md](file:///d:/Programs/factor_system/docs/harness/07-operations.md) · [plan 45](file:///d:/Programs/factor_system/docs/harness/plans/45-l2-loop-split-plan.md)
@@ -20,18 +20,18 @@
 
 ![因子全生命周期流程图](factor_lifecycle_flow.svg)
 
-主链路：**L0/L1 供给 → L2 演化晋升 → L2 周度评审（L3 强制 approved 闸门）→ L3 组合构建**，底部持续监控与生命周期闭环（巡检降级 / 逻辑监控 / M·F·D 复检 / 退役红线 / 7 状态机 / 冷却期）将降级与退役反馈回 L2 评审，冷却期满可回归。
+主链路：**L0/L1 供给 → L2 演化晋升 → L2 评审质检阀门（每日 04:00 机审，L3 强制 approved 闸门）+ L2 周度评审（周日 10:00 全量重审）→ L3 组合构建**，底部持续监控与生命周期闭环（机审阀门 / 巡检降级 / 逻辑监控 / M·F·D 复检 / 退役红线 / 7 状态机 / 冷却期）将降级与退役反馈回 L2 评审，冷却期满可回归。
 
 | 阶段 | 调度 | 产出 |
 |:-----|:-----|:-----|
 | L0/L1 供给 | 每日 00:00 `l1_meta_loop` | 知识补给 + 种子注入 → 候选池 |
-| L2 种子评估晋升 | 每日 02:00 `l2_seed_promotion` | 种子相关性预检 → 评估 → 晋升 elite |
-| L2 演化 | 工作日 03:00（≈10 代）/ 周六 03:00（≈50 代） | GP 演化 + UCT 选择 → 晋升 elite |
+| L2 种子评估晋升 | 每日 01:00（并入「L2 种子评估+因子演化」合并任务第一步，v2.105.0+3 起） | 种子相关性预检 → 评估 → 晋升 elite |
+| L2 演化 | 每日 01:00（合并任务第二步：工作日 ≈10 代 / 周末 ≈50 代，v2.105.0+3 起） | GP 演化 + UCT 选择 → 晋升 elite（Step 1.35 生成端去重前置） |
 | L2 批量挖掘 | 周日 06:00 `l2_batch_mining` | BatchMiner 批量漏斗 → L1→L2 合并 |
 | L2 周度评审 | 周日 10:00 `l2_review` | reaudit 重审 + 衰减评估 + 自动淘汰 |
-| L3 组合构建 | 工作日 06:00 `l3_portfolio_loop` | 加载 approved 因子 → 去重 → 权重重算 |
+| L2 评审质检阀门 + 监控 | 每日 04:00（合并任务，v2.105.0+3 起）：① pending 机审 + approved 复核 → ② 巡检降级 → ③ 逻辑监控 → ④ 数据级监控 | approved 落库 / 退化检测 / 行为漂移 / 数据质量 |
+| L3 组合构建 | 工作日 05:00 `fts portfolio run --universe energy` | 加载 approved 因子 → 去重 → 权重重算 |
 | 信号管道 | 工作日 20:00 | 消费 L3 权重生成信号报告 |
-| 巡检/监控 | 每日 04:00 巡检降级 · 4:30 逻辑监控 · 05:00 数据级监控 | 退化检测 / 行为漂移 / 数据质量 |
 
 > **调度源（v2.104.0+99）**：内部 `fts/scheduler` 定时任务默认全部停用（`INTERNAL_SCHEDULER_ENABLED` 读 `FTS_INTERNAL_SCHEDULER_ENABLED`，默认 "0"），周期任务由 **TRAE Schedule 定时自动化**执行（时间与上表一致），内部调度器不重复执行。一键启停：`$env:FTS_INTERNAL_SCHEDULER_ENABLED="1"; fts scheduler run`（启用）· `Remove-Item Env:FTS_INTERNAL_SCHEDULER_ENABLED; fts scheduler run`（停用）· `fts scheduler status`（查看状态）。
 
@@ -40,15 +40,15 @@
 | 环节 | 触发（任务 + 调度） | 输入 | 核心动作 | 输出落库 | 验证命令 | 异常处置 |
 |:-----|:--------------------|:-----|:---------|:---------|:---------|:---------|
 | **L0/L1 供给** | `l1_meta_loop` 每日 00:00 | 知识库/网页/种子源 + LLM + 市场快照（web_collector） | MetaLoop 知识补给 + Bootstrapping + 种子注入，市场快照注入 bootstrap prompt | 候选池 `factor_pool.json` + 注入 `l1_injected/`（`injected_candidate_ids`） | `pytest tests/factor_engine/test_meta_loop.py -q` | 异常仅日志不阻断次日；无数据跳过 |
-| **L2 种子评估** | `l2_seed_promotion` 每日 02:00 | L1 注入种子 + 种子池 + 期货横截面训练集（排除盲测池） | `run_seed_stage`：相关性预检 → 全链质检（Verifier/消融/审计/WF）→ 晋升 elite（不重置演化计数器） | `factor_catalog`（futures）+ elite 快照 + `shadow_pool` | `pytest tests/factor_engine/test_evolution_loop.py -k "seed or promote" -q` | 任一关卡失败拒绝晋升退回候选池；训练品种 <10 跳过 |
-| **L2 演化** | `l2_evolution_weekday` 工作日 03:00（≈10 代）/ `l2_evolution_weekend` 周六 03:00（≈50 代） | elite 父池（UCT 选择）+ 期货横截面面板 | GP/深度/算子 DSL 演化通道 → 准入链（Verifier → 去冗余 → B.4 高IC → 多重检验 → WF → 审计 → 评分卡 → 影子池） | `factor_catalog` + elite 快照 | `pytest tests/factor_engine/test_evolution_loop.py -q` | 熔断隔离（`_consecutive_low_ic` 保存/恢复）；数据不足跳过 |
+| **L2 种子评估** | `l2_seed_promotion` 每日 01:00（并入「L2 种子评估+因子演化」合并任务第一步，v2.105.0+3） | L1 注入种子 + 种子池 + 期货横截面训练集（排除盲测池） | `run_seed_stage`：相关性预检 → 全链质检（Verifier/消融/审计/WF）→ 晋升 elite（不重置演化计数器） | `factor_catalog`（futures）+ elite 快照 + `shadow_pool` | `pytest tests/factor_engine/test_evolution_loop.py -k "seed or promote" -q` | 任一关卡失败拒绝晋升退回候选池；训练品种 <10 跳过 |
+| **L2 演化** | 每日 01:00（合并任务第二步，工作日 ≈10 代 / 周末 ≈50 代，v2.105.0+3 起，原 `l2_evolution_weekday`/`l2_evolution_weekend` 已并入） | elite 父池（UCT 选择）+ 期货横截面面板 | 生成端去重前置（Step 1.35）→ GP/深度/算子 DSL 演化通道 → 准入链（Verifier → 去冗余 → B.4 高IC → 多重检验 → WF → 审计 → 评分卡 → 影子池） | `factor_catalog` + elite 快照 | `pytest tests/factor_engine/test_evolution_loop.py -q` | 熔断隔离（`_consecutive_low_ic` 保存/恢复）；数据不足跳过 |
 | **L2 批量挖掘** | `l2_batch_mining` 周日 06:00 | elite 父因子（UCT）+ 期货横截面面板 | `run_batch_stage`：BatchMiner 同父多后代批量生成 → 并行粗筛 → 逐个走准入链 | `factor_catalog` + elite 快照 | `pytest tests/factor_engine/test_batch_mining.py -q` | 熔断隔离（batch 失败不污染演化状态）；无父因子跳过 |
 | **L2 周度评审** | `l2_review` 周日 10:00 | 全部 active elite（含 L3 池 approved 子集 `factor_reviews.approved`） | Step A reaudit 新标准重审（retain/shadow/retire）→ Step B 衰减评估 + AutoRetire 同步 DuckDB → Step C `_review_gate_weekly`（`review_l3_pool` 复核 L3 池 + `list_pending` 机审兜底） | `factor_reviews` + `factor_status_history` + `factor_catalog`（retire/demote）+ tracking 快照 | `pytest tests/factor_engine/test_review_workflow.py tests/factor_engine/test_qa_gate.py tests/factor_engine/qa/ -q` | Step A 失败不阻断 B/C；rejected/质检失效退回 L2 冷却池（宁缺毋滥） |
-| **L3 组合构建** | `l3_portfolio_loop` 工作日 06:00 | **仅 approved**：`factor_reviews.decision='approved'`（L3 唯一消费对象；从 active elite 加载，经质量门/影子池后硬过滤，rejected/未评审剔除） | 加载 active elite → 质量门 → 影子池剔除 → **approved 硬过滤** → 去重/聚类/PCA → 权重重算（equal_weight 默认）→ Verifier 校验 | 组合权重快照 + `combo_history` | `pytest tests/factor_engine/test_portfolio_loop.py -k "ReviewApproved or LoadEliteDuckdb" -q` | 失败仅日志；冷启动保护 / 冻结日 `status='frozen'` 不重建 |
+| **L3 组合构建** | `fts portfolio run --universe energy` 工作日 05:00（energy 链，v2.105.0+3；原 `l3_portfolio_loop` 期货 06:00 保持期货侧） | **仅 approved**：`factor_reviews.decision='approved'`（L3 唯一消费对象；从 active elite 加载，经质量门/影子池后硬过滤，rejected/未评审剔除） | 加载 active elite → 质量门 → 影子池剔除 → **approved 硬过滤** → 去重/聚类/PCA → 权重重算（quality_weight 默认）→ Step 2b 子链调制 + Step 2.5 Gate → Verifier 校验 | 组合权重快照 + `combo_history` | `pytest tests/factor_engine/test_portfolio_loop.py -k "ReviewApproved or LoadEliteDuckdb" -q` | 失败仅日志；冷启动保护 / 冻结日 `status='frozen'` 不重建 |
 | **信号管道** | `futures_signal_pipeline` 工作日 20:00 | L3 权重（周五重算快照，其余日冻结复用）+ 全量品种行情 | Ridge 权重（周五重算）→ 多空双向信号排名 → 报告 | `reports/futures/{date}/futures_signals_*.md` | `pytest tests/test_futures_signal_pipeline.py -q` | 权重冻结仅刷新因子值；失败仅日志 |
-| **巡检/监控** | `factor_inspector` 04:00 · `logic_monitor` 04:30 · `data_level_monitor` 05:00 · `data_quality_eval` 每 5min · 月度/季度/半年度复检 | elite 因子 + 行情/因子库 | 退化检测（`inspect_and_downgrade`，Sharpe 降 20% → 降级；**approved 因子豁免仅标记待周度评审收口**）· 行为漂移/极端预测/换月异常 · 缺失率/异常值/多源分歧 · M1-M5/F1-F6/D1-D4 复检 · 退役 5 红线 | `factor_catalog`（`status='degraded'`/RETIRED）+ tracking 快照 + 监控报告 | `pytest tests/factor_engine/test_qa_gate.py tests/factor_engine/qa/ -q` | **approved 因子豁免每日降级（周日 `review_l3_pool` 收口）**；非 approved 退化 → degraded + 30 日冷却；退役 → RETIRED；缓存缺失跳过不中断调度 |
+| **评审质检阀门+巡检/监控** | 每日 04:00 合并任务（v2.105.0+3，并入原 `factor_inspector` 04:00 · `logic_monitor` 04:30 · `data_level_monitor` 05:00）：① `_review_gate_weekly` 机审 → ② 巡检降级 → ③ 逻辑监控 → ④ 数据级监控 · `data_quality_eval` 每 5min · 月度/季度/半年度复检 | elite 因子 + 行情/因子库 | 机审（pending→approved/rejected）· 退化检测（`inspect_and_downgrade`，Sharpe 降 20% → 降级；**approved 因子豁免仅标记待周度评审收口**）· 行为漂移/极端预测/换月异常 · 缺失率/异常值/多源分歧 · M1-M5/F1-F6/D1-D4 复检 · 退役 5 红线 | `factor_catalog`（`status='degraded'`/RETIRED）+ tracking 快照 + 监控报告 | `pytest tests/factor_engine/test_qa_gate.py tests/factor_engine/qa/ -q` | **approved 因子豁免每日降级（周日 `review_l3_pool` 收口）**；非 approved 退化 → degraded + 30 日冷却；退役 → RETIRED；缓存缺失跳过不中断调度 |
 
-> 注：energy 能化链为独立路由（`l2_seed_promotion_energy_job` / `l2_batch_mining_energy_job` / `l2_review_energy_job` / `l2_energy_qa_review_job`，同周日 10:00 调度，因子库 `factor_catalog_energy.duckdb`），冷却期 30 **交易日**、两次不达标退役（宁严勿松），详见 §5.3。调度注册表全量核对见 `fts/scheduler/tasks.py`（16 任务，内部已停用，TRAE Schedule 调度）。
+> 注：energy 能化链为独立路由（`l2_seed_promotion_energy_job` 并入「L2 种子评估+因子演化」每日 01:00 合并任务；`l2_batch_mining_energy_job` 周日 06:00；`l2_review_energy_job`/`l2_energy_qa_review_job` 周日 10:00；每日 04:00 评审质检阀门 + 三项监控合并任务，v2.105.0+3），因子库 `factor_catalog_energy.duckdb`，冷却期 30 **交易日**、两次不达标退役（宁严勿松），详见 §5.3。调度注册表全量核对见 `fts/scheduler/tasks.py`（16 任务，内部已停用，TRAE Schedule 调度——当前 8 个 Active + 6 个 Paused 已由合并任务接管）。
 
 ## 2.2 术语统一：状态命名与对象集合
 

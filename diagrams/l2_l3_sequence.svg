@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 668" width="100%" height="auto" role="img" aria-label="L2 到 L3 的定时任务时序图">
+<style>
+:root{color-scheme:light;--surface:#F7F7F8;--surface-muted:#EFEFF2;--text:#171717;--text-muted:#52525B;--border:rgba(23,23,23,0.12);--brand:#4B3FE3;--brand-soft:#F2F7FF;--brand-text:#1A1759;--font-sans:"SF Pro Text","PingFang SC",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--surface:#171717;--surface-muted:#262626;--text:#E5E5E5;--text-muted:#A1A1AA;--border:rgba(229,229,229,0.12);--brand:#6054F1;--brand-soft:#1A1759;--brand-text:#CFD8FF}}
+.pt{fill:var(--text);font:500 14px/20px var(--font-sans);text-anchor:middle}
+.ps{fill:var(--text-muted);font:400 12px/18px var(--font-sans);text-anchor:middle}
+.ln{stroke:var(--border);stroke-width:1;stroke-dasharray:3 4}
+.ml{fill:var(--text);font:400 12px/18px var(--font-sans)}
+.arr{stroke:var(--text-muted);stroke-width:1.5;fill:none;stroke-linecap:round}
+.arr-main{stroke:var(--brand);stroke-width:1.8;fill:none;stroke-linecap:round}
+.head{fill:var(--surface-muted);stroke:var(--border)}
+.head-focus{fill:var(--brand-soft);stroke:var(--brand)}
+.hf-t{fill:var(--brand-text);font:500 14px/20px var(--font-sans);text-anchor:middle}
+.hf-s{fill:var(--brand);font:400 12px/18px var(--font-sans);text-anchor:middle}
+</style>
+<defs>
+<marker id="sq" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1 L7 4 L1 7 Z" fill="var(--text-muted)"/></marker>
+<marker id="sqb" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1 L7 4 L1 7 Z" fill="var(--brand)"/></marker>
+</defs>
+<rect x="0" y="0" width="720" height="668" fill="var(--surface)"/>
+<g>
+<rect class="head" x="45" y="16" width="60" height="48" rx="8"/>
+<text class="pt" x="75" y="34">L1 补给</text>
+<text class="ps" x="75" y="54">00:00</text>
+<rect class="head-focus" x="188" y="16" width="60" height="48" rx="8"/>
+<text class="hf-t" x="218" y="34">L2 合并</text>
+<text class="hf-s" x="218" y="54">01:00</text>
+<rect class="head" x="331" y="16" width="60" height="48" rx="8"/>
+<text class="pt" x="361" y="34">评审质检</text>
+<text class="ps" x="361" y="54">周日10:00</text>
+<rect class="head" x="474" y="16" width="60" height="48" rx="8"/>
+<text class="pt" x="504" y="34">L3 组合</text>
+<text class="ps" x="504" y="54">工作日05:00</text>
+<rect class="head" x="617" y="16" width="60" height="48" rx="8"/>
+<text class="pt" x="647" y="34">信号管线</text>
+<text class="ps" x="647" y="54">工作日20:00</text>
+</g>
+<g>
+<line class="ln" x1="75" y1="70" x2="75" y2="640"/>
+<line class="ln" x1="218" y1="70" x2="218" y2="640"/>
+<line class="ln" x1="361" y1="70" x2="361" y2="640"/>
+<line class="ln" x1="504" y1="70" x2="504" y2="640"/>
+<line class="ln" x1="647" y1="70" x2="647" y2="640"/>
+</g>
+<path class="arr-main" d="M 75 104 L 216 104" marker-end="url(#sqb)"/>
+<text class="ml" x="96" y="98">注入 L1 候选</text>
+<path class="arr" d="M 218 160 C 258 160 258 190 218 190"/>
+<text class="ml" x="230" y="180">种子晋升 + 演化 → elite 池</text>
+<path class="arr" d="M 218 236 L 359 236" marker-end="url(#sq)"/>
+<text class="ml" x="240" y="230">待评审因子入池</text>
+<path class="arr" d="M 361 292 C 401 292 401 322 361 322"/>
+<text class="ml" x="373" y="312">机审 → factor_reviews=approved</text>
+<path class="arr-main" d="M 361 368 L 502 368" marker-end="url(#sqb)"/>
+<text class="ml" x="384" y="362">准入开放（硬门禁通过）</text>
+<path class="arr" d="M 504 424 C 544 424 544 454 504 454"/>
+<text class="ml" x="516" y="444">硬过滤 + Step2b/2.5 → 权重</text>
+<path class="arr-main" d="M 504 500 L 645 500" marker-end="url(#sqb)"/>
+<text class="ml" x="528" y="494">factor_weights.json</text>
+<path class="arr" d="M 647 556 C 687 556 687 586 647 586"/>
+<text class="ml" x="659" y="576">读权重 → 横截面信号报告</text>
+</svg>

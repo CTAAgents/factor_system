@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 676" width="100%" height="auto" role="img" aria-label="L1 到 L2 因子注入与演化完整链路流程图">
+<style>
+:root {
+  --surface: #F7F7F8;
+  --surface-muted: #EFEFF2;
+  --text: #171717;
+  --text-muted: #52525B;
+  --border: rgba(23, 23, 23, 0.12);
+  --brand: #4B3FE3;
+  --brand-soft: #F2F7FF;
+  --brand-text: #1A1759;
+}
+.th { fill: var(--text); font: 500 14px "PingFang SC", system-ui, sans-serif; }
+.ts { fill: var(--text-muted); font: 400 12px "PingFang SC", system-ui, sans-serif; }
+.tm { fill: var(--text-muted); font: 500 12px "JetBrains Mono", ui-monospace, monospace; }
+.arr { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.arr-b { stroke: var(--brand); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.node { fill: var(--surface); stroke: var(--border); }
+.node-b { fill: var(--brand-soft); stroke: var(--brand); }
+.lane { fill: none; stroke: var(--border); stroke-dasharray: 6 4; }
+.lane-tag { fill: var(--surface-muted); stroke: var(--border); }
+.lbl { fill: var(--surface); stroke: var(--border); }
+</style>
+<defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+    <path d="M1 1 L7 4 L1 7 Z" fill="var(--text-muted)"/>
+  </marker>
+  <marker id="arb" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+    <path d="M1 1 L7 4 L1 7 Z" fill="var(--brand)"/>
+  </marker>
+</defs>
+
+<!-- L1 层 -->
+<rect class="lane" x="40" y="44" width="640" height="212" rx="12"/>
+<rect class="lane-tag" x="52" y="56" width="196" height="24" rx="999"/>
+<text class="ts" x="150" y="72" text-anchor="middle">L1 注入层 · 每日 00:00</text>
+
+<g>
+  <rect class="node" x="60" y="92" width="180" height="52" rx="8"/>
+  <text class="th" x="150" y="116" text-anchor="middle">知识注入</text>
+  <text class="ts" x="150" y="134" text-anchor="middle">研报 / 论文 / Web 提取</text>
+</g>
+<g>
+  <rect class="node" x="480" y="92" width="180" height="52" rx="8"/>
+  <text class="th" x="570" y="116" text-anchor="middle">因子注入</text>
+  <text class="ts" x="570" y="134" text-anchor="middle">Bootstrap / LLM / 模板</text>
+</g>
+<g>
+  <rect class="node" x="255" y="146" width="210" height="52" rx="8"/>
+  <text class="th" x="360" y="170" text-anchor="middle">L1 验证 + 沙箱编译</text>
+  <text class="ts" x="360" y="188" text-anchor="middle">Verifier 门禁 · 失败落 l1_rejected</text>
+</g>
+<g>
+  <rect class="node-b" x="170" y="206" width="380" height="52" rx="8"/>
+  <text class="th" x="360" y="230" text-anchor="middle" style="fill:var(--brand-text)">注入产物 · 待消费</text>
+  <text class="tm" x="360" y="248" text-anchor="middle" style="fill:var(--brand)">l1_injected/ + factor_pool.json(pending)</text>
+</g>
+
+<path class="arr" d="M150 144 C 150 150, 190 146, 252 150" marker-end="url(#ar)"/>
+<path class="arr" d="M570 144 C 570 150, 500 146, 468 150" marker-end="url(#ar)"/>
+<path class="arr" d="M360 198 L360 204" marker-end="url(#ar)"/>
+
+<!-- L2 层 -->
+<rect class="lane" x="40" y="268" width="640" height="344" rx="12"/>
+<rect class="lane-tag" x="52" y="280" width="224" height="24" rx="999"/>
+<text class="ts" x="164" y="296" text-anchor="middle">L2 种子评估 → 演化主循环</text>
+
+<g>
+  <rect class="node" x="60" y="318" width="205" height="52" rx="8"/>
+  <text class="th" x="162" y="342" text-anchor="middle">合并 L1 候选</text>
+  <text class="ts" x="162" y="360" text-anchor="middle">pending 门控 + market 过滤 + 去重</text>
+</g>
+<g>
+  <rect class="node" x="285" y="318" width="185" height="52" rx="8"/>
+  <text class="th" x="377" y="342" text-anchor="middle">相关性预检 + 评估链</text>
+  <text class="ts" x="377" y="360" text-anchor="middle">WF / Verifier / 审计 / 消融</text>
+</g>
+<g>
+  <rect class="node-b" x="490" y="318" width="190" height="52" rx="8"/>
+  <text class="th" x="585" y="342" text-anchor="middle" style="fill:var(--brand-text)">晋升 elite 池</text>
+  <text class="ts" x="585" y="360" text-anchor="middle" style="fill:var(--brand)">DuckDB factor_catalog</text>
+</g>
+
+<g>
+  <rect class="node" x="60" y="482" width="180" height="52" rx="8"/>
+  <text class="th" x="150" y="506" text-anchor="middle">父因子选择</text>
+  <text class="ts" x="150" y="524" text-anchor="middle">读 elite 池 / 新晋升种子</text>
+</g>
+<g>
+  <rect class="node" x="260" y="482" width="190" height="52" rx="8"/>
+  <text class="th" x="355" y="506" text-anchor="middle">演化循环</text>
+  <text class="ts" x="355" y="524" text-anchor="middle">UCT → LLM 改逻辑 → Optuna</text>
+</g>
+<g>
+  <rect class="node" x="470" y="482" width="210" height="52" rx="8"/>
+  <text class="th" x="575" y="506" text-anchor="middle">新因子评估晋升</text>
+  <text class="ts" x="575" y="524" text-anchor="middle">同评估链 → 写回 elite</text>
+</g>
+
+<text class="ts" x="52" y="318" style="font-weight:500">① 种子评估</text>
+<text class="ts" x="52" y="386" style="font-weight:500">02:00</text>
+<text class="ts" x="52" y="470" style="font-weight:500">② 演化主循环</text>
+<text class="ts" x="52" y="540" style="font-weight:500">04:00 / 周末</text>
+
+<path class="arr" d="M360 258 V282 H160 V316" marker-end="url(#ar)"/>
+<rect class="lbl" x="170" y="274" width="84" height="22" rx="999"/>
+<text class="ts" x="212" y="289" text-anchor="middle">消费候选</text>
+
+<path class="arr" d="M265 344 L283 344" marker-end="url(#ar)"/>
+<path class="arr" d="M470 344 L488 344" marker-end="url(#ar)"/>
+
+<path class="arr" d="M520 370 V418 H150 V480" marker-end="url(#ar)"/>
+<rect class="lbl" x="268" y="408" width="88" height="22" rx="999"/>
+<text class="ts" x="312" y="423" text-anchor="middle">读父因子</text>
+
+<path class="arr" d="M240 508 L258 508" marker-end="url(#ar)"/>
+<path class="arr" d="M450 508 L468 508" marker-end="url(#ar)"/>
+
+<path class="arr-b" d="M585 482 V370" marker-end="url(#arb)"/>
+<rect class="lbl" x="598" y="414" width="96" height="22" rx="999"/>
+<text class="ts" x="646" y="429" text-anchor="middle">晋升回 elite</text>
+
+<!-- 闭环说明 -->
+<rect class="node" x="40" y="626" width="640" height="36" rx="8"/>
+<text class="ts" x="360" y="649" text-anchor="middle">L1→L2 闭环 · l1_l2_funnel 漏斗 consumed / promoted 回写（plans/44 D1）</text>
+</svg>

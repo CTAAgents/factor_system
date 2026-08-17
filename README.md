@@ -3,7 +3,7 @@
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
 [![Tests](https://img.shields.io/badge/tests-7840%20passing-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.105.0%2B2-blue)](#)
+[![Version](https://img.shields.io/badge/version-2.105.0%2B3-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -279,10 +279,11 @@ print(status_report_to_json(report))
 
 | 循环 | 调度时间 | 核心职责 |
 |------|----------|----------|
-| L1 Meta-Loop | 工作日每日 07:59 | 市场感知、知识补给、Bootstrapping、Debate 分析 |
-| L2 Evolution | 工作日每日 00:00 | LLM 宏观改逻辑 + Optuna 微观调参、三级评估链、质量评分 |
-| L3 Portfolio | 工作日每日 19:00 | 因子筛选、正交化、信号合成、Verifier 校验（GAP-072 与信号管道解绑，equal_weight 权重每日重算） |
-| 期货信号管道 | 工作日每日 20:00 | 横截面信号报告（v2.105.0 起因子选择与基础权重由 L3 组合提供，仅信号计算 + Regime 档位缩放权重调整） |
+| L1 Meta-Loop | 每日 00:00 | 市场感知、知识补给、Bootstrapping、Debate 分析（能化链） |
+| L2 种子+演化 | 每日 01:00（工作日 ≈10 代 / 周末 ≈50 代） | 种子评估晋升 + LLM/GP/算子演化、三级评估链、质量评分（v2.105.0+3 合并任务，含生成端去重前置 Step 1.35） |
+| L2 评审质检阀门+监控 | 每日 04:00 | pending 机审 + approved 复核、因子巡检降级（approved 豁免）、逻辑/数据级监控（v2.105.0+3 合并任务） |
+| L3 Portfolio | 工作日每日 05:00 | 因子筛选（仅 approved）、正交化、权重重算（quality_weight + 子链调制/Gate）、Verifier 校验 |
+| 信号管线 | 工作日每日 20:00 | 横截面信号报告（v2.105.0 起因子选择与基础权重由 L3 组合提供，仅信号计算 + Regime 档位缩放权重调整） |
 
 ### 6 类因子强制审计
 

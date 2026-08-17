@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 800" width="100%" height="auto" role="img" aria-label="L2 因子到 L3 组合权重的完整流转流程">
+<style>
+:root{color-scheme:light;--surface:#F7F7F8;--surface-muted:#EFEFF2;--text:#171717;--text-muted:#52525B;--border:rgba(23,23,23,0.12);--brand:#4B3FE3;--brand-soft:#F2F7FF;--brand-text:#1A1759;--danger:#E8463A;--success:#1DC981;--font-sans:"SF Pro Text","PingFang SC",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--surface:#171717;--surface-muted:#262626;--text:#E5E5E5;--text-muted:#A1A1AA;--border:rgba(229,229,229,0.12);--brand:#6054F1;--brand-soft:#1A1759;--brand-text:#CFD8FF}}
+.stage{fill:var(--surface);stroke:var(--border);stroke-dasharray:5 4}
+.stage-focus{fill:var(--surface);stroke:var(--brand);stroke-width:1.6}
+.node{fill:var(--surface-muted);stroke:var(--border)}
+.node-focus{fill:var(--brand-soft);stroke:var(--brand)}
+.node-ok{fill:var(--surface-muted);stroke:var(--success)}
+.node-ko{fill:var(--surface-muted);stroke:var(--danger)}
+.t{fill:var(--text);font:500 14px/20px var(--font-sans)}
+.ts{fill:var(--text-muted);font:400 12px/18px var(--font-sans)}
+.st{fill:var(--text);font:500 16px/24px var(--font-sans)}
+.ss{fill:var(--text-muted);font:400 12px/18px var(--font-sans)}
+.arr{stroke:var(--text-muted);stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.arr-main{stroke:var(--brand);stroke-width:1.8;fill:none;stroke-linecap:round}
+.arr-ko{stroke:var(--danger);stroke-width:1.4;fill:none;stroke-dasharray:4 3;stroke-linecap:round}
+.lg{font:400 12px/18px var(--font-sans);fill:var(--text-muted)}
+</style>
+<defs>
+<marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1 L7 4 L1 7 Z" fill="var(--text-muted)"/></marker>
+<marker id="arb" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1 L7 4 L1 7 Z" fill="var(--brand)"/></marker>
+</defs>
+<rect x="0" y="0" width="720" height="800" fill="var(--surface)"/>
+<g>
+<rect class="stage" x="50" y="16" width="620" height="132" rx="12"/>
+<text class="st" x="66" y="40">L2 因子生产 · 每日 01:00 合并任务</text>
+<rect class="node" x="75" y="56" width="270" height="62" rx="8"/>
+<text class="t" x="90" y="80">种子评估晋升</text>
+<text class="ts" x="90" y="102">L1候选→run_seed_stage→elite</text>
+<rect class="node" x="375" y="56" width="270" height="62" rx="8"/>
+<text class="t" x="390" y="80">因子演化</text>
+<text class="ts" x="390" y="102">Step1.35去重→评估链→elite</text>
+<text class="ss" x="66" y="136">产出：energy_chain_elite + factor_catalog_energy.duckdb（elite/active，含子链画像）</text>
+</g>
+<path class="arr-main" d="M 340 148 L 340 186" marker-end="url(#arb)"/>
+<text class="lg" x="352" y="172">晋升 elite</text>
+<g>
+<rect class="stage-focus" x="50" y="188" width="620" height="156" rx="12"/>
+<text class="st" x="66" y="212">评审质检阀门 · 周日 10:00（L2→L3 硬门禁）</text>
+<rect class="node" x="75" y="228" width="270" height="62" rx="8"/>
+<text class="t" x="90" y="252">机审 / 质检</text>
+<text class="ts" x="90" y="274">Q1-Q10 + 审计 → factor_reviews</text>
+<rect class="node-ok" x="375" y="228" width="270" height="30" rx="8"/>
+<text class="t" x="390" y="248">approved → 流向 L3</text>
+<rect class="node-ko" x="375" y="266" width="270" height="30" rx="8"/>
+<text class="t" x="390" y="286">rejected → 退回 L2 冷却池</text>
+<text class="ss" x="66" y="330">周度复核 review_l3_pool 撤销不合格（组合防抖：approved 豁免每日降级）</text>
+</g>
+<path class="arr-main" d="M 340 344 L 340 382" marker-end="url(#arb)"/>
+<text class="lg" x="352" y="368">approved 因子</text>
+<g>
+<rect class="stage" x="50" y="384" width="620" height="184" rx="12"/>
+<text class="st" x="66" y="408">L3 组合权重重算 · 工作日 05:00</text>
+<rect class="node-focus" x="75" y="424" width="270" height="56" rx="8"/>
+<text class="t" x="90" y="448">approved 硬过滤</text>
+<text class="ts" x="90" y="468">仅 decision=approved，无开关</text>
+<rect class="node" x="375" y="424" width="270" height="56" rx="8"/>
+<text class="t" x="390" y="448">去冗余 + 综合评分</text>
+<text class="ts" x="390" y="468">Step1.8b 子链去重 + quality_weight</text>
+<rect class="node" x="75" y="496" width="270" height="56" rx="8"/>
+<text class="t" x="90" y="520">子链调制 + Gate</text>
+<text class="ts" x="90" y="540">Step2b m × Step2.5 g → m'</text>
+<rect class="node" x="375" y="496" width="270" height="56" rx="8"/>
+<text class="t" x="390" y="520">产出权重权威源</text>
+<text class="ts" x="390" y="540">factor_weights.json</text>
+<path class="arr" d="M 210 480 L 210 494" marker-end="url(#ar)"/>
+<path class="arr" d="M 510 480 L 510 494" marker-end="url(#ar)"/>
+<path class="arr" d="M 345 524 L 373 524" marker-end="url(#ar)"/>
+<text class="ss" x="66" y="558">质量报告四段：subchain_exposure / gate_distribution / gate_scale / quality_matrix</text>
+</g>
+<path class="arr-main" d="M 340 568 L 340 606" marker-end="url(#arb)"/>
+<text class="lg" x="352" y="592">factor_weights.json</text>
+<g>
+<rect class="stage" x="50" y="608" width="620" height="120" rx="12"/>
+<text class="st" x="66" y="632">信号管线 · 工作日 20:00</text>
+<rect class="node" x="75" y="648" width="270" height="56" rx="8"/>
+<text class="t" x="90" y="672">消费权重</text>
+<text class="ts" x="90" y="692">因子选择 + 基础权重（不自选）</text>
+<rect class="node" x="375" y="648" width="270" height="56" rx="8"/>
+<text class="t" x="390" y="672">输出信号</text>
+<text class="ts" x="390" y="692">横截面信号报告 + Regime 档位缩放</text>
+<path class="arr" d="M 345 676 L 373 676" marker-end="url(#ar)"/>
+</g>
+<g>
+<path class="arr-main" d="M 66 752 L 104 752"/>
+<text class="lg" x="112" y="756">主路径（approved）</text>
+<path class="arr-ko" d="M 244 752 L 282 752"/>
+<text class="lg" x="290" y="756">拒绝旁路（rejected）</text>
+<path class="arr" d="M 422 752 L 460 752"/>
+<text class="lg" x="468" y="756">阶段流转</text>
+</g>
+</svg>

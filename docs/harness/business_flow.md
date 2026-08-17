@@ -1,6 +1,6 @@
 # FTS 业务流程图
 
-> 版本: v2.105.0+2
+> 版本: v2.105.0+3
 > 最后更新: 2026-08-05
 
 ## 全景业务流
@@ -148,10 +148,10 @@
   │      ├── 准入链（Verifier → 去冗余 → B.4 高IC → 多重检验 → WF → 审计 → 评分卡 → 影子池）
   │      └── 熔断检查 → 保护机制
   │
-06:00  L3 Portfolio Loop 启动（工作日，l3_portfolio_loop）
-  │      ├── 加载 active elite → 质量门 → 影子池剔除 → approved 硬过滤（仅 factor_reviews.decision='approved'）
-  │      ├── 去重/聚类/PCA → 权重重算（equal_weight）
-  │      └── 信号合成 → ScoredSignal（Verifier 校验）
+05:00  L3 Portfolio Loop 启动（工作日，energy：fts portfolio run --universe energy）
+  │      ├── 加载 active elite → 质量门 → 影子池剔除 → approved 硬过滤（仅 factor_reviews.decision='approved'，消费当日 04:00 机审结果）
+  │      ├── 去重/聚类 → quality_weight 综合评分 → Step 2b 子链调制 + Step 2.5 Gate
+  │      └── 信号合成 → ScoredSignal（Verifier 校验）→ factor_weights.json
   │
 周日06:00  L2 批量挖掘（l2_batch_mining）
   │      └── BatchMiner 批量漏斗（同父多后代 → 并行粗筛 → 准入链），熔断隔离不污染演化状态
@@ -161,11 +161,15 @@
   │      ├── Step B 衰减评估 + AutoRetire 自动淘汰
   │      └── Step C review_l3_pool 复核 L3 池 + list_pending 机审（approved 唯一收口出口，组合防抖）
   │
-20:00  期货信号管道启动（工作日每日，独立调度）→ reports/futures/{date}/futures_signals_*.md
+17:30  期货多源数据同步（工作日每日，Phase 14.5）→ 行情缓存更新（供次日 01:00 L2 使用）
   │
-每日04:00  因子巡检降级（factor_inspector：Sharpe↓20%；approved 因子豁免仅标记待周度评审收口）
-每日04:30  逻辑监控（logic_monitor：行为漂移 / 极端预测 / 换月异常）
-每日05:00  数据级监控（data_level_monitor：缺失率 / 异常值 / 多源分歧）
+20:00  信号管线启动（工作日每日，消费 factor_weights.json）→ 横截面信号报告
+  │
+每日04:00  评审质检阀门 + 三项监控合并任务（v2.105.0+3，原 04:00 巡检 / 04:30 逻辑 / 05:00 数据并入）
+  │      ├── ① pending 机审 + approved 复核（_review_gate_weekly：新因子当日 approved，供 05:00 L3 消费）
+  │      ├── ② 因子巡检降级（factor_inspector：Sharpe↓20%；approved 因子豁免仅标记待周度评审收口）
+  │      ├── ③ 逻辑监控（logic_monitor：行为漂移 / 极端预测 / 换月异常）
+  │      └── ④ 数据级监控（data_level_monitor：缺失率 / 异常值 / 多源分歧）
 每5分钟   数据质量评估（data_quality_eval）
 每10分钟  Health Check（状态轮询 / 熔断检测 / 告警通知）
   │

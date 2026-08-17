@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v2.105.0+2
+> 版本: v2.105.0+3
 > 最后更新: 2026-08-17
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -97,6 +97,8 @@
 > 总览更新（2026-08-17 v2.105.0，08-gap-analysis.md 全面审计修正）：**① 编号冲突修复——GAP-099 双编号（P1 同向敞口惩罚 v2.103.0+9 关闭 vs P2 evolution_loop God Class）：P2 项重编号 GAP-141 并关闭（34 计划 C 阶段 Phase 47a-47i 全部完成、继承链清零、纯组合 9 协作类）；GAP-125 双编号（P1 信号管道方向缺陷 v2.104.0+65 关闭 vs GAP-L 能化链评审质检合并）：GAP-L 项重编号 GAP-142 保持处理中（EnergyQaReviewPipeline 已实施接入 jobs.py `l2_energy_qa_review_job`，灰度对比观察）；v2.104.0+67 历史记录 ACTIVE_FACTOR_CAP 为编号复用无登记行，已注记不计数。② GAP-121 收尾关闭——全部计划工作落地（IC 矩阵化 + 算子原生向量化批 1-3 + Phase 3 `cross_section_panel_vector` 默认开启），剩余「完整 9.5x 提速」按 plans/39 §11 真实缺口面板实测 0.3x<5x 门槛正式豁免（信号恒逐品种零漂移、仅 IC 矩阵化；`execute_factor_panel` 保留独立模块登记豁免）。③ 总览计数按登记表程序化重算：P0 21（主 12 + I 5 + L 4）/P1 82（主 68 + I 10 + L 4）/P2 69（主 15 + 新登记 44 + I 5 + L 5）/C 8，合计 180。④ C4 状态对齐总览——行状态改 🟡 已实施首期/二期多机后置开放（GAP-C 唯一开放项）。⑤ 代码修复批次（GAP-135/140/123/I306/120/126）详情见各登记表关闭记录；剩余开放：P1 1（GAP-132 评估历史积累中）、P2 5（089 受限/090 冻结期/093 远期/127 远期/142 处理中）、C 1（C4 二期后置）**。
 
 > 总览更新（2026-08-17 v2.105.0+2，GAP-135 ① 前置补盲实施）：**GAP-135 根因①（QA 结论与入库矛盾，晋升路径未以 q1_q10 结论为准入门禁）已由 v2.105.0 门禁实施（`l2_qa_gate_enabled` 一票否决拦截）**；本次前置补盲根治③（晋升期缺同表达式去重）的效率侧——去重全在晋升端 `_promote_to_elite`，重复后代跑完完整评估链（回测/审计/走航）才被拒，token/算力浪费但 elite 池不污染；新增 Step 1.35 生成端去重前置：`_is_generated_duplicate`（`normalize_expression` 空白压缩规范化比对 elite 池既有 + 本 run 已生成/已评估表达式，懒加载 `_build_seen_expression_norms` 扫描 elite_dir 排除 `_` 前缀辅助文件），命中即拦截并 `_record_failure_trace`/`_record_experiment_variant`（expr_duplicate）/`_update_uct_failure`（父因子 UCT 惩罚反馈），评估链前拦截；配合 `evolution_mode` 默认切换 operator_first（本地算子演化优先零 token）整体控制算力消耗；晋升端去重保留兜底。新增测试 10 用例全绿；受影响回归 280 通过 + 4 既有 GAP-135 门禁失败（test_evolution_l1_merge 3 + test_evolution_loop 1，mock 因子无质检字段被 `l2_qa_gate_enabled` 一票否决拦截——与本次改动无关，git stash 隔离验证确认）**。
+
+> 总览更新（2026-08-17 v2.105.0+3，TRAE Schedule 调度合并）：**能化链定时任务精简 12 → 8 Active，工作日「评审质检 → 组合权重」链路闭环——① L2 种子评估+因子演化合并为每日 01:00（原 02:00 种子 / 工作日 03:00 演化 / 周末 03:00 演化并入，工作日 ≈10 代 / 周末 ≈50 代，Step 1.35 生成端去重前置内嵌）；② 评审质检阀门 + 三项监控合并为每日 04:00（原 04:00 巡检 / 04:30 逻辑 / 05:00 数据并入，前置 `_review_gate_weekly` pending 机审 + approved 复核）——全部在 05:00 L3 组合重算之前执行，**新因子 approved 延迟 7 天 → 当日**（工作日 L2 演化新晋升 pending 因子 04:00 机审 approved 后当日 05:00 进组合），且 approved 豁免每日降级语义保留（组合防抖）；周日重量级评审质检（10:00 全量重审+衰减+生命周期）保持周度不并入；6 个原任务 pause 保留可回退。调度文档同步 business_flow / execution_modes_flowchart / factor_lifecycle / README / 07-operations**。
 
 ---
 

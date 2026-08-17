@@ -37,6 +37,8 @@
     .bound { fill: none; stroke: var(--text-muted); stroke-width: 1.2; stroke-dasharray: 5 4; }
   </style>
 
+  <rect x="0" y="0" width="940" height="600" fill="var(--surface)"/>
+
   <defs>
     <marker id="mkA" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
       <path d="M1 1 L7 4 L1 7 Z" fill="var(--text-muted)"/>
@@ -170,9 +172,9 @@
 
   <!-- 监控 -->
   <text class="th" x="36" y="404">监控层</text>
-  <text class="ts" x="36" y="428">每日 04:00 巡检降级（Sharpe↓20%；approved 豁免仅标记待周度评审收口）</text>
-  <text class="ts" x="36" y="448">04:30 逻辑监控（行为漂移/极端预测/换月异常）</text>
-  <text class="ts" x="36" y="468">05:00 数据级监控（缺失率/异常值/多源分歧）</text>
+  <text class="ts" x="36" y="428">每日 04:00 评审质检阀门+监控合并任务（v2.105.0+3）：① pending 机审+approved 复核</text>
+  <text class="ts" x="36" y="448">② 巡检降级（Sharpe↓20%；approved 豁免仅标记待周度评审收口）③ 逻辑监控</text>
+  <text class="ts" x="36" y="468">④ 数据级监控（缺失率/异常值/多源分歧）</text>
   <text class="ts" x="36" y="488">月度 M1-M5 · 季度 F1-F6 · 半年度 D1-D4 复检</text>
   <text class="ts" x="36" y="508">退役 5 红线独立触发（NaN 保守不误判）</text>
 
