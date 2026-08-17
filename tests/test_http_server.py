@@ -1754,11 +1754,20 @@ class TestReviewAutoEndpoints:
 
     def test_get_review_pending_includes_mode_and_flag(self):
         """GET /api/review/pending 返回 mode 字段 + needs_human 标注（不落库）。"""
+        import json as _json
+
         handler = _make_review_get_handler(path="/api/review/pending")
+        ok_qa = {
+            "audit_passed": True, "quality_grade": "B", "high_ic_grade": "A",
+            "multiple_passed": True, "walk_forward_windows": 4, "q1_q10_passed": True,
+        }
         items = [
-            {"factor_id": "fct_ok", "name": "ok", "market": "futures", "ic": 0.05, "sharpe": 2.0},
-            {"factor_id": "fct_high", "name": "high", "market": "futures", "ic": 0.9, "sharpe": 2.0},
-            {"factor_id": "fct_nan", "name": "nan", "market": "stock", "ic": None, "sharpe": None},
+            {"factor_id": "fct_ok", "name": "ok", "market": "futures", "ic": 0.05, "sharpe": 2.0,
+             "metadata": _json.dumps({"qa_review": ok_qa})},
+            {"factor_id": "fct_high", "name": "high", "market": "futures", "ic": 0.9, "sharpe": 2.0,
+             "metadata": _json.dumps({"qa_review": ok_qa})},
+            {"factor_id": "fct_nan", "name": "nan", "market": "stock", "ic": None, "sharpe": None,
+             "metadata": None},
         ]
         with patch("fts.factor_engine.factor_inspector.FactorReviewWorkflow") as mock_cls:
             mock_cls.return_value.list_pending.return_value = items

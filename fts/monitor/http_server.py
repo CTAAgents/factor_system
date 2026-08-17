@@ -1572,6 +1572,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             from ..factor_engine.factor_inspector import (
                 AutoReviewPolicy,
                 FactorReviewWorkflow,
+                _extract_qa_meta,
                 load_review_mode,
             )
 
@@ -1580,7 +1581,13 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             annotated: list[dict[str, Any]] = []
             for f in items:
                 f = dict(f)
-                decision, reason = policy.classify(f.get("ic"), f.get("sharpe"))
+                # v2.104.0+89：机审须复核完整质检结论（缺 qa_meta 转人审宁缺毋滥）——
+                # 从 metadata.qa_review 提取，与 auto_review 批量机审同口径（GAP-140①）
+                decision, reason = policy.classify(
+                    f.get("ic"),
+                    f.get("sharpe"),
+                    qa_meta=_extract_qa_meta(f.get("metadata")),
+                )
                 f["needs_human"] = decision is None
                 f["review_reason"] = reason
                 annotated.append(f)
