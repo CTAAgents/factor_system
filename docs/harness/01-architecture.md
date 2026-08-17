@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+114
+> 版本: v2.104.0+115
 > 最后更新: 2026-08-10
 
 ---
@@ -415,7 +415,7 @@ fts/
 │   ├── alternative_sentiment.py # 舆情情感因子生成器（C2 2026-08-11）：新闻→词典打分→日频聚合→FactorProgram 独立候选源（FinancialSentimentLexicon 内置金融情感词典±强度+否定反转 score_text ∈[-1,1]；EastmoneyNewsProvider 新闻搜索（失败降级空）；日聚合 sent_mean/sent_std/sent_chg；可选 DuckDB sentiment_daily 落库；CLI fts factor senti-generate；LLM 精修 LlmSentimentScorer（LLMClient.complete 约束 [-1,1] 异常降级）+ evaluate_lexicon_consistency（词典-LLM 一致性 ≥0.7 验收，CLI fts factor senti-consistency）
 │   ├── meta_loop.py            # L1 元循环
 │   ├── portfolio_loop.py       # L3 组合循环（plans/40 接入 SignalCache + 向量化对齐 + 信号矩阵一等公民增量）
-│   ├── l3_signal_service.py    # L3 信号矩阵服务（plans/40 B/D 层 v2.104.0+63，plans/51 A/B 修复）：SignalMatrixBundle 2D/3D 信号矩阵 + build_signal_matrix（复用信号缓存 + df.index.get_indexer 向量化对齐）+ load_or_build_signal_matrix 增量重算（(code_hash, params_hash) 双哈希判定 + 行数形状防护，plans/51 A1/A2）+ DuckDB 持久化 l3_signal_store.duckdb（l3_signal_assets 存储域，plans/51 B2，生产经 PortfolioLoop 配置自动激活 B1）+ duckdb_corr_matrix 备用接口（plans/51 B4 豁免未接入生产），E.4 短连接 + filelock 纪律，依赖缺失逐品种现值回退零漂移
+│   ├── l3_signal_service.py    # L3 信号矩阵服务（plans/40 B/D 层 v2.104.0+63，plans/51 A/B 修复，plans/52 增量窗口追加）：SignalMatrixBundle 2D/3D 信号矩阵 + build_signal_matrix（复用信号缓存 + df.index.get_indexer 向量化对齐）+ load_or_build_signal_matrix 增量构建——(code_hash, params_hash) 双哈希判定（A1）+ 前缀一致且有增量日期走**增量窗口追加**（plans/52：meta `dates_digest` 指纹判定 + 旧窗尾部回退段执行 + 抽样对照验证兜底零漂移；前缀不符/验证不过/旧库无 digest 降级全量 A2）+ DuckDB 持久化 l3_signal_store.duckdb（l3_signal_assets 存储域，plans/51 B2，生产经 PortfolioLoop 配置自动激活 B1）+ duckdb_corr_matrix 备用接口（plans/51 B4 豁免未接入生产），E.4 短连接 + filelock 纪律，依赖缺失逐品种现值回退零漂移
 │   ├── macro_evolution.py      # LLM 宏观演化
 │   ├── micro_evolution.py      # optuna 微观调参
 │   ├── evaluation_chain.py     # 三级评估链（CTA 手册阶段4：IR 按因子类别分级门槛，v2.104.0+19 接入 ir_thresholds）

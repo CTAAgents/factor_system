@@ -1,8 +1,8 @@
 # 52 号计划 — L3 信号矩阵增量窗口追加（D 层性能兑现）
 
-> 版本: v2.104.0+114（创建于 2026-08-17）
+> 版本: v2.104.0+115（创建于 2026-08-17）
 > 关联: 40-l3-portfolio-optimization-plan.md（D2 承诺）、51-vectorization-gap-fix-plan.md（B1 激活）、GAP-139
-> 状态: 📋 计划待确认（登记 GAP-139，实施需确认后启动）
+> 状态: ✅ 已完成（2026-08-17，GAP-139 关闭）
 > 优先级: P2 · 负责人: FTS Agent
 
 ---
@@ -120,6 +120,20 @@ rolling corr 等）窗口长度在代码内部，**无法静态判定**。若仅
 - **meta 迁移** → 幂等 + 缺列降级，存量库安全；
 - **收益不承诺端到端量级**：增量收益集中在信号构建段，受 IC/OOS/聚类等环节摊薄，
   以第 5.3 提数为准。
+
+## 6.1 实施记录（2026-08-17 落地，GAP-139 关闭）
+
+| 项 | 落地 |
+|------|------|
+| meta `dates_digest` | `_init_tables` 建表增列 + `ALTER TABLE ADD COLUMN IF NOT EXISTS` 幂等迁移（存量库缺列 → `_classify_reusable` 降级全量安全兼容）；`persist_signal_matrix` 写 `_dates_digest(bundle.dates)`（blake2） |
+| 前缀判定 | `_classify_reusable(reusable, market, end_date, common_dates, db_path, append_enabled)` → (direct_reuse, append_plan{fid: n_old}, fallback)；digest 缺失/前缀不符 → fallback 全量 |
+| 增量执行 | `_append_window_signals`：旧窗尾部 `_W_RECALL=500` 回退段 + 新增交易日切片执行 + 截断拼接；`_verify_append` 抽样 2 品种全量执行对照新段逐位一致（不过 → 该因子全量 + warning） |
+| 接线 | `load_or_build_signal_matrix`：direct/append 分开读库（行数语义不同）+ 合并列序对齐；增量因子 `_persist_factor_bundle` 单因子整窗回写（更新整窗 + meta digest） |
+| 配置 | `l3_signal_store_append_window`（settings，默认 true；`FTS_L3_SIGNAL_APPEND_WINDOW=false` 回退现行为——`append_plan` 为空走 direct，行数不符降级全量） |
+| 测试 | test_l3_signal_service +6（同源切片构造窗口推进：增量 vs 全量逐位一致 / rolling window=50 回退 / 前缀不一致降级 / 验证失败兜底 / 旧库无 digest 兼容 / shape_mismatch 改造）+ test_config_settings +1；26 + 400 affected passed + ruff/mypy 通过 |
+
+> 测试数据修正说明：`_mk_panel(n_days)` 每次调用独立 re-seed，不同天数版本随机序列不相关，
+> 不构成"同源窗口推进"——增量一致性测试改用单源超长面板 `iloc[:n]` 切片（前缀一致的前提）。
 
 ## 7. 12 项检查清单映射（实施时逐项核对）
 

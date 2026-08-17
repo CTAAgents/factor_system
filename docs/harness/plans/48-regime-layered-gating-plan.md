@@ -1,6 +1,6 @@
 # 48 — Regime 分层方向 Gate 与品种暴露缩放计划（A/B/C/D 四模块）
 
-> 版本: v2.104.0+114
+> 版本: v2.104.0+115
 
 > 状态: ✅ 已完成（v2.104.0+111，A/B/C/D 四模块全部实施） · 优先级: P1 · 负责人: FTS Agent · 关联: plans/47（子链差异化权重，已完成）, GAP-136（登记并关闭）, regime.py / futures_signal_pipeline.py / portfolio_loop.py
 

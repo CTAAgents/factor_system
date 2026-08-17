@@ -1,6 +1,6 @@
 # FTS 韧性设计
 
-> 版本: v2.104.0+114
+> 版本: v2.104.0+115
 > 最后更新: 2026-08-05
 
 ---
@@ -211,6 +211,7 @@ state.json.bak.2    ← 上上上一次写入
 | numba 内核（`numba_kernels.py`） | numba/llvmlite 缺失或版本冲突 / `FTS_OPS_NUMBA=false` | `enabled()` 双判定（依赖可用 + 开关），调用点回退 pandas/numpy 现值实现，零语义漂移 | import 失败 `logger.warning`（l3_signal_service/numba_kernels 模块级）；内核异常 `logger.warning`（rank/zscore/cvar 入口） |
 | DuckDB 相关（`l3_signal_service` corr/持久化） | duckdb 缺失 / SQL 异常 / 库文件损坏 | `duckdb_corr_matrix` 回退 `_numpy_corr_matrix`；`persist/load/incremental` 外层 except 降级（不阻断主流程）；`load_or_build` 读失败 → 该批因子并入重算集（plans/51 A2） | persist 失败 `logger.warning`；load/增量失败 `logger.debug`；行数/读取降级重算 `logger.warning` |
 | L3 信号矩阵增量库（plans/51 B1） | `FTS_L3_SIGNAL_STORE=false` / 配置读取失败 | `PortfolioLoop` 不激活 `signal_store`，回退纯 `build_signal_matrix` 全量构建，产出一致零漂移 | 构造未激活无日志（保持现状）；增量命中/重算见 `[L3-SIGNAL]` 日志（05-observability） |
+| 增量窗口追加（plans/52，GAP-139） | 前缀不一致（历史修订/窗口收缩）/ meta `dates_digest` 缺失（旧库）/ 抽样对照验证不过 / `FTS_L3_SIGNAL_APPEND_WINDOW=false` | 该因子降级全量重算（A1 双哈希优先级更高：code/params 变化即全量），结果与全量逐位一致 | 前缀不符/验证失败 `logger.warning`；追加完成 `logger.info` |
 | SignalCache 容量 | 条目超过 `l3_signal_cache_entries` 上限 | LRU 淘汰最久未使用项（plans/51 C3 起可观测） | 淘汰 `logger.debug`（累计数）；`stats()` 暴露 `evictions` |
 
 ## 5. 安全沙箱

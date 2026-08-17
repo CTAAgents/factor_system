@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v2.104.0+114
+> 版本: v2.104.0+115
 > 最后更新: 2026-08-17
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -12,9 +12,9 @@
 |:-------|:-----|:-------|:-----|
 | P0 | 0 | 20 | 20 |
 | P1 | 4 | 63 | 67 |
-| P2 | 7 | 63 | 70 |
+| P2 | 6 | 64 | 70 |
 | GAP-C（Stage 3C 远期） | 1 | 7 | 8 |
-| **合计** | **12** | **153** | **165** |
+| **合计** | **11** | **154** | **165** |
 
 > 注：GAP-068/069（P1，原延期项）已于 v2.101.0 关闭；GAP-075（P1，跨标的稳健性检查）于 v2.101.0 收尾关闭（cross_symbol 激活 + 标的留出验证）；GAP-C 系列为 Stage 3C 远期机构级差距（细则见 plans/23 §3.3），C1~C8 已于 2026-08-11 全部首期实施（C1 含评估晋升接线 / C2 含 LLM 精修 / C8 含 C9 算子扩容二期 DSL 132），C4 开放项为真实多机集群部署（单机 LocalCluster 代码/测试/基准已落地），待硬件/基建条件成熟后按 DaskBackend 抽象接入。
 > GAP-081~089（数据字段缺口）于 2026-08-11 由数据字段字典审计（docs/factor_data_dict/）登记——A 股增强字段（北向/两融/股东/分析师）与期货持仓/结算字段为 P0 阻塞性数据缺口，详见下方登记表。
@@ -87,6 +87,8 @@
 > 总览更新（2026-08-17 v2.104.0+113，GAP-138 登记并关闭，plans/50 L3 权重层 Gate 闭环）：**L3 权重源头未消费子链方向 Gate（P1）——plans/48 的 Gate 仅在信号管道 Step 3h1 硬生效（avoid 剔除/降权 + long/short 方向过滤），L3 产出的 `factor_weights.json` 中调制矩阵 m[factor][子链]（plans/47）只携带"质量×幅度"语义、未并入 Gate 回避决策 → avoid 子链在权重源头仍保留调制系数 1.0，方向回避完全依赖下游信号层补救（职责倒挂）；且 q（质量）/m（幅度）/g（方向）三层矩阵在 L3 中割裂（g 仅作 `subchain_gate_distribution` 观测段）。方案（plans/50 A/B 模块）：A `regime_gate.py` 新增 `gate_scale_map(gates, config)` 纯函数——Gate 决策 → 链级缩放系数（avoid+hard→0.0 / avoid+soft→soft_avoid_ratio / long·short·neutral→1.0 不干预：方向过滤属信号层职责）；B `portfolio_loop.py` Step 2.5 接线 `_merge_gate_scale_into_modulation`——Gate 开启 + energy + 子链 regime 检测成功时将 m'[factor][子链] = m × gate_scale（avoid 链权重源头归零/降权），同步更新 signals 的 subchain_weights 标注与 `factor_weights.json` 输出；依赖 Step 2b 调制矩阵存在（`enable_subchain_weight`），否则保持观测语义零行为变更；质量报告新增 `subchain_gate_scale` 段（四网合一第四段）。新增测试 11 用例（test_regime_gate TestGateScaleMap 5 + test_subchain_weight TestMergeGateScaleIntoModulation 6）+ 受影响回归 358 全绿（portfolio 299 + regime_gate/subchain_weight 59）+ ruff 全绿；P1 登记并关闭 1 项、合计关闭 152→153、合计 163→164、开放维持 11（登记 +1 后关闭 -1），见 P1 登记表**。
 
 > 总览更新（2026-08-17 v2.104.0+114，GAP-139 登记，D 层增量窗口追加未实现，plans/51 诚实记录）：**L3 信号矩阵增量库仅"同窗口因子级复用"——`load_or_build_signal_matrix` 增量判定维度 (factor, market, end_date) 且 end_date 由面板最新交易日推导（plans/51 B1）→ 每日窗口推进即增量判定全 miss、触发 A2 形状防护全量重算，plans/40 D2 承诺的"存量因子仅追加最近交易日窗口信号、不重算历史"未实现（正确性已由 A2 双哈希+形状防护保证，性能未兑现：跨日运行信号重算量=全量，增量库仅同日多次运行/重试命中）；P2 登记 1 项、P2 开放 6→7、总计 69→70、合计开放 11→12、总计 164→165，见 P2 新登记表，实施计划见 plans/52**。
+
+> 总览更新（2026-08-17 v2.104.0+115，GAP-139 登记并关闭，plans/52 增量窗口追加落地）：**D 层增量仅同窗口因子级复用（跨日全量重算，plans/51 诚实记录）——落地 plans/52 兑现 plans/40 D2"存量追加窗口"：① meta 表增 `dates_digest` 列（blake2 日期序列指纹，`_init_tables` 幂等迁移，存量库缺列降级全量安全兼容）；② `_classify_reusable` 前缀判定细分可复用因子——旧窗日期指纹 = 当前窗口前缀且无增量 → 直读复用；前缀一致 + 增量日期 → **增量窗口追加**（`_append_window_signals`：旧窗尾部 `_W_RECALL=500` 回退段 + 新增交易日切片执行 + 截断，滚动窗口算子历史回溯由回退段提供）；前缀不一致/元数据缺失/`_verify_append` 抽样 2 品种对照验证不过 → 降级全量（零漂移兜底）；③ `load_or_build_signal_matrix` 接线（direct/append 分开读库 + 合并列序对齐）+ 增量因子单因子整窗回写 `_persist_factor_bundle`；④ 配置 `l3_signal_store_append_window`（默认 true，env `FTS_L3_SIGNAL_APPEND_WINDOW=false` 回退现行为）；新增测试 6 用例（增量追加 vs 全量逐位一致/rolling window=50 窗口回退/前缀不一致降级/验证失败兜底/旧库无 digest 兼容）+ config 1 用例，test_l3_signal_service 26 passed + 受影响回归 400 passed（portfolio 299 + weight_learning + config + storage）+ ruff/mypy 通过；P2 登记并关闭 1 项、P2 开放 7→6、合计关闭 153→154、开放 12→11、总计 165 维持，见 P2 新登记表**。
 
 ---
 
@@ -205,7 +207,7 @@
 
 | ID | 模块 | 差距描述 | 影响 | 处理期限 | 状态 |
 |:---|:-----|:---------|:-----|:---------|:-----|
-| GAP-139 | `fts/factor_engine/l3_signal_service.py`（`load_or_build_signal_matrix`/`persist_signal_matrix`）+ `fts/factor_engine/portfolio_loop.py`（`_auto_build_factor_returns` end_date 推导） | D 层增量仅"同窗口因子级复用"（plans/51 B1 诚实记录）：增量判定维度 (factor, market, end_date) 且 end_date=面板最新交易日 → 每日窗口推进增量判定全 miss、A2 形状防护降级全量重算；plans/40 D2 承诺的"存量因子仅追加最近交易日窗口信号、不重算历史"未实现（正确性已由 A1 双哈希 + A2 形状防护保证，性能未兑现） | 每日 L3 组合重算仍全量重算全部因子信号，增量库仅同日多次运行/重试命中（跨日运行重算量=全量） | 下个里程碑 | 🔴 开放（2026-08-17 登记，实施计划见 plans/52；关键设计：任意因子代码窗口不可静态判定 → 增量段用"旧窗口尾部回退 + 新日期拼接执行 + 截断" + 抽样对照验证兜底（验证不过全量，零漂移）） |
+| GAP-139 | `fts/factor_engine/l3_signal_service.py`（`load_or_build_signal_matrix`/`persist_signal_matrix`）+ `fts/factor_engine/portfolio_loop.py`（`_auto_build_factor_returns` end_date 推导） | D 层增量仅"同窗口因子级复用"（plans/51 B1 诚实记录）：增量判定维度 (factor, market, end_date) 且 end_date=面板最新交易日 → 每日窗口推进增量判定全 miss、A2 形状防护降级全量重算；plans/40 D2 承诺的"存量因子仅追加最近交易日窗口信号、不重算历史"未实现（正确性已由 A1 双哈希 + A2 形状防护保证，性能未兑现） | 每日 L3 组合重算仍全量重算全部因子信号，增量库仅同日多次运行/重试命中（跨日运行重算量=全量） | 下个里程碑 | ✅ 已关闭（v2.104.0+，plans/52 落地：① meta 表增 `dates_digest` 列（blake2 日期序列指纹，`_init_tables` 幂等迁移 + 存量库缺列降级全量安全兼容）；② `_classify_reusable` 前缀判定细分可复用因子（直读 / 增量窗口追加 / 降级全量）；③ `_append_window_signals` 增量执行——旧窗尾部 `_W_RECALL=500` 回退段 + 新增交易日切片执行 + 截断，`_verify_append` 抽样 2 品种对照验证兜底（不过自动全量零漂移）；④ `load_or_build_signal_matrix` 接线 + 单因子整窗回写 `_persist_factor_bundle`；⑤ 配置 `l3_signal_store_append_window`（默认 true，env 可关回退现行为）；新增测试 6 用例（增量 vs 全量逐位一致/rolling 窗口 50 回退/前缀不一致降级/验证失败兜底/旧库兼容）+ config 1 用例，test_l3_signal_service 26 passed + 受影响回归 400 passed + ruff/mypy 通过，详见 plans/52） |
 | GAP-126 | `fts/factor_engine/extractors/futures_pipeline.py` | 提取器源注册表配置化（plans/41 B1）：源清单仍硬编码注册（tinysoft/broker_reports/academic_papers/macro_events/web_search），新增因子源需改代码；未下沉 `config/extractors.yaml` SSOT（enabled/paused/max_factors/params 每源声明） | 新增/启停因子源需改代码重启，扩展成本高 | 下个里程碑 | 🔴 开放（2026-08-16 登记，plans/41 B 层范围调整暂缓） |
 | GAP-127 | `fts/factor_engine/extractors/` | 量化平台 API 直连（plans/41 B2/C 远期）：聚宽/米筐/BigQuant 等平台因子库 API 多数闭源/需授权，未做逐平台适配；当前动态源仅 WebSearchExtractor（公开网页检索） | 平台独有因子数据（社区因子/回测结果）无法程序化接入 | 远期 | 🔴 开放（2026-08-16 登记，收益受平台开放度制约） |
 | GAP-131 | `fts/factor_engine/meta_loop.py` + `factor_program.py` | L1 拒绝候选不可追溯：编译失败等硬失败候选仅在日志记录后即丢弃，代码不落盘（2026-08-16 能化链 L1 实测 `fut_carry_roll yield` / `fut_hei_ma` 两因子沙箱编译失败被拒后代码完全丢失），事后无法回溯修复；且 `fix_factor_code` 自动修复仅 5 种策略，LLM 高频语法瑕疵（&&/||、一元 !、^ 幂、条件行内赋值 =、行尾残留反斜杠）未覆盖 | 被拒候选成为一次性丢弃数据，编译失败类因子无修复通道；自动修复率受限 | 当日 | ✅ 已关闭（v2.104.0+82：① `MetaLoop` 新增 `rejected_dir`（默认由 inject_dir 派生 l1_injected→l1_rejected / l1_injected_energy→l1_rejected_energy，可显式覆盖）+ `_persist_rejected`——硬失败（编译失败/重复，含 bootstrap 具体编译错误）与软失败重写后仍未达标候选落盘 `{candidate_id}.json`（完整 code + `l1_rejection` 元数据：reasons/rejected_at/trace_id/market）；② `fix_factor_code` 新增 Strategy 6 全局修复（&&/||→and/or、一元 !→not 掩蔽 != 防误改、^→**、if/elif/while 条件行内赋值 =→==、行尾残留反斜杠去除 + 组合变换），触发条件覆盖真实错误消息（invalid syntax / cannot assign / unexpected character）；新增 test_factor_program +7、test_meta_loop +6；受影响回归全绿 + ruff/mypy 通过） |

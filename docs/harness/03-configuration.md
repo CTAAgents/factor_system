@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.104.0+114
+> 版本: v2.104.0+115
 > 最后更新: 2026-08-10
 
 ---
@@ -186,6 +186,7 @@ FTS 配置采用三级优先级（高→低）：
 | `l3_signal_store_enabled` | bool | `true` | `FTS_L3_SIGNAL_STORE` | L3 信号矩阵一等公民增量库开关（plans/40 D 层，plans/51 B1 激活）：`PortfolioLoop` 构造自动启用 `l3_signal_service.load_or_build_signal_matrix`，同 (factor, code, params) 信号不再重算（同窗口因子级增量复用，窗口推进经 A2 形状防护安全重算）；`false` 回退纯全量构建零漂移 |
 | `l3_signal_store_db` | str | `data/l3_signal_store.duckdb` | `FTS_L3_SIGNAL_STORE_DB` | L3 信号矩阵库路径（登记于 `storage_landscape.yaml` l3_signal_assets 域，plans/51 B2） |
 | `l3_signal_cache_entries` | int | `20000` | `FTS_L3_SIGNAL_CACHE_ENTRIES` | L3 信号缓存容量上限（plans/40 A 层；plans/51 C2 配置化，原模块级常量） |
+| `l3_signal_store_append_window` | bool | `true` | `FTS_L3_SIGNAL_APPEND_WINDOW` | L3 信号矩阵增量窗口追加（plans/52，GAP-139）：窗口推进时对可复用因子仅重算新增交易日 + 窗口回退段（meta `dates_digest` 前缀判定，抽样对照验证不过自动全量零漂移）；`false` 回退"同窗口因子级复用"现行为（跨日全量重算） |
 
 ### 2.1 G11 日换手口径说明（信号翻转率）
 
