@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v2.104.0+115
+> 版本: v2.105.0
 > 最后更新: 2026-08-17
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -11,10 +11,10 @@
 | 优先级 | 开放 | 已关闭 | 总计 |
 |:-------|:-----|:-------|:-----|
 | P0 | 0 | 20 | 20 |
-| P1 | 4 | 63 | 67 |
+| P1 | 5 | 63 | 68 |
 | P2 | 6 | 64 | 70 |
 | GAP-C（Stage 3C 远期） | 1 | 7 | 8 |
-| **合计** | **11** | **154** | **165** |
+| **合计** | **12** | **154** | **166** |
 
 > 注：GAP-068/069（P1，原延期项）已于 v2.101.0 关闭；GAP-075（P1，跨标的稳健性检查）于 v2.101.0 收尾关闭（cross_symbol 激活 + 标的留出验证）；GAP-C 系列为 Stage 3C 远期机构级差距（细则见 plans/23 §3.3），C1~C8 已于 2026-08-11 全部首期实施（C1 含评估晋升接线 / C2 含 LLM 精修 / C8 含 C9 算子扩容二期 DSL 132），C4 开放项为真实多机集群部署（单机 LocalCluster 代码/测试/基准已落地），待硬件/基建条件成熟后按 DaskBackend 抽象接入。
 > GAP-081~089（数据字段缺口）于 2026-08-11 由数据字段字典审计（docs/factor_data_dict/）登记——A 股增强字段（北向/两融/股东/分析师）与期货持仓/结算字段为 P0 阻塞性数据缺口，详见下方登记表。
@@ -90,6 +90,8 @@
 
 > 总览更新（2026-08-17 v2.104.0+115，GAP-139 登记并关闭，plans/52 增量窗口追加落地）：**D 层增量仅同窗口因子级复用（跨日全量重算，plans/51 诚实记录）——落地 plans/52 兑现 plans/40 D2"存量追加窗口"：① meta 表增 `dates_digest` 列（blake2 日期序列指纹，`_init_tables` 幂等迁移，存量库缺列降级全量安全兼容）；② `_classify_reusable` 前缀判定细分可复用因子——旧窗日期指纹 = 当前窗口前缀且无增量 → 直读复用；前缀一致 + 增量日期 → **增量窗口追加**（`_append_window_signals`：旧窗尾部 `_W_RECALL=500` 回退段 + 新增交易日切片执行 + 截断，滚动窗口算子历史回溯由回退段提供）；前缀不一致/元数据缺失/`_verify_append` 抽样 2 品种对照验证不过 → 降级全量（零漂移兜底）；③ `load_or_build_signal_matrix` 接线（direct/append 分开读库 + 合并列序对齐）+ 增量因子单因子整窗回写 `_persist_factor_bundle`；④ 配置 `l3_signal_store_append_window`（默认 true，env `FTS_L3_SIGNAL_APPEND_WINDOW=false` 回退现行为）；新增测试 6 用例（增量追加 vs 全量逐位一致/rolling window=50 窗口回退/前缀不一致降级/验证失败兜底/旧库无 digest 兼容）+ config 1 用例，test_l3_signal_service 26 passed + 受影响回归 400 passed（portfolio 299 + weight_learning + config + storage）+ ruff/mypy 通过；P2 登记并关闭 1 项、P2 开放 7→6、合计关闭 153→154、开放 12→11、总计 165 维持，见 P2 新登记表**。
 
+> 总览更新（2026-08-17 v2.105.0 发布前全量回归，GAP-140 登记）：**全量回归 93 个预存失败专项（P1）——2026-08-17 `pytest tests/ -m "not slow"` 实测 7748 passed / 93 failed，逐项根因核验全部为**历史版本语义变更未同步旧测试**或**环境依赖**，与 plans/47-52 子链张量化改动无关（本会话相关 test_regime_gate/test_subchain_weight/test_portfolio_loop 299/test_qa*/test_lifecycle_subchain 独立全绿）：① **v2.104.0+89 评审门禁语义变更**未同步 C8-2 旧测试（`AutoReviewPolicy.classify` 缺 qa_meta → 转人审，test_auto_review 6 个仍断言直接 approved）；② **v2.104.0+98 内部调度停用**未同步 E2E 任务断言（test_e2e test_10 断言 `l2_evolution_loop` 在任务注册表）；③ **v2.104.0+103 全局默认市场 futures→energy** 致市场路由断言过期（test_factor_db 默认库路径、test_evolution_loop promote market、merge L1 候选等 ~5 个）；④ **GAP-133（+107）走航数据不足回退**致 900 行数据断言过期（test_build_wf_config_long_data 期望 3 年窗实得 1 年窗）；⑤ **日志 caplog 全量顺序污染**（scheduler engine/jobs 40+ 与 test_portfolio_loop 3 个日志断言 caplog 为空，单独跑全绿——某测试全量运行时改写 logger 处理器，属测试隔离缺陷）；⑥ **环境依赖**：本地 TQ/tick 数据源不可用（tick_cache/tqsdk 10 个）、LLM mock 环境（extractors 4 个）、随机种子（operator_evolution 1 个）、并发版本 bump 竞态（test_package_init 1 个）。影响：全量回归门禁不可作为发布验收（被预存失败淹没）；修复需逐项同步 +89/+98/+103/+107 语义变更的旧测试断言 + 修 scheduler 日志测试隔离 + 环境依赖标记 skip。P1 开放 4→5、合计开放 11→12、总计 165→166，见 P1 登记表**。
+
 ---
 
 ## 2. 差距登记表
@@ -115,6 +117,7 @@
 
 | ID | 模块 | 差距描述 | 影响 | 处理期限 | 状态 |
 |:---|:-----|:---------|:-----|:---------|:-----|
+| GAP-140 | `tests/` 全量回归 93 个预存失败（`test_auto_review.py` + `scheduler/test_engine.py` + `scheduler/test_jobs.py` + `scheduler/test_jobs_mhf.py` + `data_sources/test_tick_cache_accumulate.py` + `data_sources/test_tqsdk_tick_source.py` + `factor_engine/extractors/*` + `test_evolution_loop.py` + `test_portfolio_loop.py` + `test_factor_db.py` + `test_e2e.py` + `test_http_server.py` + `monitor/*` + `test_package_init.py` 等） | 全量回归 93 个**预存失败**（2026-08-17 实测 7748 passed / 93 failed），根因六类：① v2.104.0+89 评审门禁语义变更未同步 C8-2 旧测试（`AutoReviewPolicy.classify` 缺 qa_meta→转人审，test_auto_review 6 个仍断言 approved）；② v2.104.0+98 内部调度停用未同步 E2E（test_e2e test_10 断言 l2_evolution_loop）；③ v2.104.0+103 全局默认市场 energy 致市场路由断言过期（test_factor_db/promote/merge ~5 个）；④ GAP-133（+107）走航回退致 900 行断言过期；⑤ scheduler engine/jobs 40+ 与 portfolio_loop 3 个日志断言 caplog 空（全量顺序污染，单独跑全绿）；⑥ 环境依赖（TQ/tick 本地不可用 10 个、LLM mock 4 个、随机种子 1 个、并发 bump 竞态 1 个） | 全量回归门禁不可作发布验收（被预存失败淹没）；CI 全量步骤恒红掩盖真实回归信号 | 1 月内 | 🔴 开放（2026-08-17 登记：逐项根因已核验、全部非 plans/47-52 引入（相关模块局部回归全绿）；修复 = 同步 +89/+98/+103/+107 语义变更的旧测试断言 + scheduler 日志测试隔离 + 环境依赖 skip 标记，待专项） |
 | GAP-138 | `fts/factor_engine/regime_gate.py`（+ `gate_scale_map`）+ `fts/factor_engine/portfolio_loop.py`（Step 2.5）+ `factor_weights.json`（subchain_weights 输出） | L3 权重源头未消费子链方向 Gate：plans/48 的 Gate（`apply_subchain_gate`）仅在**信号管道** Step 3h1 硬生效（avoid 剔除/降权 + long/short 方向过滤），L3 产出的 `factor_weights.json` 中调制矩阵 **m[factor][子链]**（plans/47）只携带"质量×幅度"语义、未并入 Gate 回避决策 → avoid 子链在权重源头仍保留调制系数 1.0，方向回避完全依赖下游信号层补救（职责倒挂）；且 q（质量）/m（幅度）/g（方向）三层矩阵在 L3 中割裂（g 仅作 `subchain_gate_distribution` 观测段，不参与权重） | avoid 子链在权重源头不回避（factor_weights.json 调制系数恒 1.0），Gate 语义仅靠信号层补救；三层矩阵未闭合，扩展到其它产业链时新链 avoid 同样权重源头不感知 | 1 月内 | ✅ 已关闭（v2.104.0+113，plans/50 A/B 模块：A `regime_gate.py` 新增 `gate_scale_map` 纯函数——Gate 决策 → 链级缩放系数（avoid+hard→0.0 / avoid+soft→soft_avoid_ratio / long·short·neutral→1.0，方向过滤属信号层职责权重层不重复）；B `portfolio_loop.py` Step 2.5 接线 `_merge_gate_scale_into_modulation`——Gate 开启 + energy + 子链 regime 检测成功时将 m'[factor][子链] = m × gate_scale（avoid 链权重源头归零/降权），同步更新 signals 的 subchain_weights 标注与 factor_weights.json 输出；依赖 Step 2b 调制矩阵存在（enable_subchain_weight）否则保持观测语义零行为变更；质量报告新增 `subchain_gate_scale` 段（与 subchain_exposure/gate_distribution/quality_matrix 四网合一）；新增测试 11 用例 + 受影响回归 358 全绿，详见 plans/50） |
 | GAP-137 | `fts/factor_engine/qa/pre_entry.py`（Q10）+ `qa/quarterly_check.py`（F6）+ `factor_inspector.py`（机审/退化）+ `factor_lifecycle.py`（IC 衰减）+ `energy_qa_review.py`（统一管道退化）+ `factor_catalog.metadata`（scope 静态化） | 评审质检与生命周期管理未子链化：plans/47 已建 m[factor][子链] 调制矩阵、plans/48 已建 g[子链] 方向 Gate，但评审质检（Q10/F6「板块方向一致」、机审全链 IC 门槛、准入分类）与生命周期（全链 IC 衰减/退化检测/退役红线）仍为**全链单值口径**——① 单链特异因子全链 IC 被稀释 < min_ic 被机审/评分卡/Q10 系统性误杀（47 实证 10 个单链特异因子）；② 全链衰减检测双向掩蔽（有效链失效被无效链稀释不触发=假阴性、单链失效触发整因子降级=假阳性）；③ `subchain_scope` 画像晋升时一次性落库后静态化，检测到单链失效不收缩 scope → 47 调制矩阵永远用旧画像，质量退化不传导权重；④ 评审/生命周期/调制（47）/Gate（48）互不联动无闭环 | 单链特异因子（真实收益来源）被系统性惩罚/误杀；失效子链暴露不剔除持续产生负贡献；scope 静态化致权重矩阵陈旧 | 1 月内 | ✅ 已关闭（v2.104.0+112，plans/49 A/B/C/D 四模块：A 存储底座（`subchain_factor_quality` 表 + `SubchainQualityRepository` + `build_subchain_quality_rows`，评估单元=(factor_id,market,chain)，晋升写首行/评审重算）；B 评审张量化（Q10 两级判定 `judge_q10_subchain` + 机审单链特异放行 + 准入三级权重 0.10 + F6 两级判定）；C 生命周期张量化（`compute_subchain_degradation` 单元粒度退化 + `_shrink_scope` 闭环 + 退役红线）；D 监控三网合一 + 子链定义参数化可扩展；灰度 `l3.subchain_quality.enabled=false` 默认关回退全链原逻辑；新增测试 46 用例 + 受影响回归 448 全绿，详见 plans/49） |
 | GAP-135 | `fts/factor_engine/evolution_promote.py`（晋升准入）+ `fts/factor_engine/qa/`（QA 评审/审计）+ `fts/factor_engine/gp_evolver.py`/`evolution_loop.py`（GP 演化） | GP 因子评估链/晋升准入不一致 + 晋升期缺同表达式去重：① **QA 结论与入库矛盾**——2026-08-17 能化链演化晋升的 2 个 GP 因子（fct_6f207959/fct_55a1943c）`qa_review.q1_q10_passed=false`、结论「禁止入库」（Q2 逻辑文档化未过：economic_logic 缺失），但仍被晋升入库（promoted_at 落库 + elite JSON 快照写入），晋升路径未以 q1_q10 结论为准入门禁；② **审计因果项异常跳过**——两因子 audit causal_validity 均「因果检验执行异常: 因子代码为空」（代码实际存在），GP 因子审计代码读取疑似缺陷，因果维度恒 skipped；③ **晋升期缺去重**——同批次两个表达式完全相同（`rank(low)`，树深 1/规模 2，参数与回测指标逐位一致）的因子仍双双晋升，信号相关≈1.0 重复因子占用精英名额 | QA 门禁形同虚设（「禁止入库」结论不阻止晋升）；审计覆盖缺失（GP 因子因果项恒跳过）；重复因子污染精英池/L3 组合（相关 1.0 重复计权、稀释组合多样性） | 1 周内 | 🔴 开放（2026-08-17 登记：同日已手动退役 fct_55a1943c（active→retired，factor_status_history 留痕，elite JSON 移 `_retired/`）保留 fct_6f207959 治标；根因修复待评估链接线——晋升前校验 q1_q10 结论 / 晋升期表达式或信号去重 / 审计代码读取修复） |
