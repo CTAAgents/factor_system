@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.104.0+113
+> 版本: v2.104.0+114
 > 最后更新: 2026-08-10
 
 ---
@@ -174,7 +174,7 @@ FTS 配置采用三级优先级（高→低）：
 | `backtest_trade_filter` | bool | `true` | `FTS_BACKTEST_TRADE_FILTER` | 回测是否启用涨跌停拦截 + 停牌过滤（GAP-F02，v2.59.0） |
 | `futures_limit_pct` | float | `0.08` | `FTS_FUTURES_LIMIT_PCT` | 期货涨跌停判定阈值（单日涨跌幅 ≥ 该值视为涨跌停，GAP-F02，v2.59.0） |
 | `cross_section_panel_vector` | bool | `true` | `FTS_CROSS_SECTION_PANEL_VECTOR` | 横截面评估全矩阵化开关（plans/37 Phase 1+3，plans/39 §11 回退后）：`cross_section_evaluate_backtest` 的 `_cs_compute_ics` 分派到 `panel_vector.compute_cs_ics_vectorized`（联合掩码 rank + 行内 Pearson），**信号/收益构建恒逐品种执行**（算子因子面板化 `execute_factor_panel` 经 plans/39 §11 v2.104.0+58 实测真实缺口面板 0.3x <5x 门槛登记豁免摘除，仅保留为独立模块/对照基准）；产出与旧路径逐位一致；**v2.104.0+57 起默认开启**（对照测试全绿 + 缺口面板实测产出一致/性能持平），可设 `false` 关闭 |
-| `ops_numba` | bool | `true` | `FTS_OPS_NUMBA` | numba 算子开关（plans/38，v2.104.0+59）：启用时 `numba_kernels.py` 走 numba 加速路径（**回退后仅 ts_rank 1D/2D 内核**，ts_cvar/ts_zscore 已回退现值）；关闭或依赖缺失/版本冲突时回退现值实现（零漂移），与 `cross_section_panel_vector` 正交互不耦合 |
+| `ops_numba` | bool | `true` | `FTS_OPS_NUMBA` | numba 算子开关（plans/38 批4 + plans/40 C 层，v2.104.0+63）：启用时 `numba_kernels.py` 走 numba 加速路径（ts_rank 1D/2D 内核 + **plans/40 C 层重新接入的 ts_zscore/ts_cvar 1D 内核**，见 `feature_ops.ts_zscore` / `ops_library.ts_cvar_95/99` 快速路径）；关闭或依赖缺失/版本冲突时回退现值实现（零漂移），与 `cross_section_panel_vector` 正交互不耦合 |
 | `force_walkforward` | bool | `true` | `FTS_FORCE_WALKFORWARD` | 因子晋升路径是否强制 WalkForward 冷启动样本外验证（GAP-F08，v2.60.0） |
 | `margin_rate_map` | dict | 见默认表 | —（YAML） | 品种保证金率表（{symbol: 保证金率}，未配置品种用默认 0.10，GAP-F09，v2.60.0） |
 | `max_margin_usage` | float | `0.80` | `FTS_MAX_MARGIN_USAGE` | 最大保证金占用率（保证金占用/总权益，超过触发强平风险告警，GAP-F09，v2.60.0） |
@@ -183,6 +183,9 @@ FTS 配置采用三级优先级（高→低）：
 | `duckdb_read_pool_size` | int | `4` | `FTS_DUCKDB_READ_POOL_SIZE` | DuckDB 读连接池大小（读操作与单写者解耦，互不阻塞，GAP-056，v2.86.0） |
 | `duckdb_batch_size` | int | `1000` | `FTS_DUCKDB_BATCH_SIZE` | DuckDB 批量写入缓冲行数（批量 COPY 降低 commit 频率，GAP-056，v2.86.0） |
 | `duckdb_commit_every` | int | `100` | `FTS_DUCKDB_COMMIT_EVERY` | DuckDB 批量写入 commit 周期（秒，GAP-056，v2.86.0） |
+| `l3_signal_store_enabled` | bool | `true` | `FTS_L3_SIGNAL_STORE` | L3 信号矩阵一等公民增量库开关（plans/40 D 层，plans/51 B1 激活）：`PortfolioLoop` 构造自动启用 `l3_signal_service.load_or_build_signal_matrix`，同 (factor, code, params) 信号不再重算（同窗口因子级增量复用，窗口推进经 A2 形状防护安全重算）；`false` 回退纯全量构建零漂移 |
+| `l3_signal_store_db` | str | `data/l3_signal_store.duckdb` | `FTS_L3_SIGNAL_STORE_DB` | L3 信号矩阵库路径（登记于 `storage_landscape.yaml` l3_signal_assets 域，plans/51 B2） |
+| `l3_signal_cache_entries` | int | `20000` | `FTS_L3_SIGNAL_CACHE_ENTRIES` | L3 信号缓存容量上限（plans/40 A 层；plans/51 C2 配置化，原模块级常量） |
 
 ### 2.1 G11 日换手口径说明（信号翻转率）
 

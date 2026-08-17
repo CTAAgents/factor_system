@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.104.0+113
+> 版本: v2.104.0+114
 > 最后更新: 2026-08-10
 
 ---
@@ -415,11 +415,11 @@ fts/
 │   ├── alternative_sentiment.py # 舆情情感因子生成器（C2 2026-08-11）：新闻→词典打分→日频聚合→FactorProgram 独立候选源（FinancialSentimentLexicon 内置金融情感词典±强度+否定反转 score_text ∈[-1,1]；EastmoneyNewsProvider 新闻搜索（失败降级空）；日聚合 sent_mean/sent_std/sent_chg；可选 DuckDB sentiment_daily 落库；CLI fts factor senti-generate；LLM 精修 LlmSentimentScorer（LLMClient.complete 约束 [-1,1] 异常降级）+ evaluate_lexicon_consistency（词典-LLM 一致性 ≥0.7 验收，CLI fts factor senti-consistency）
 │   ├── meta_loop.py            # L1 元循环
 │   ├── portfolio_loop.py       # L3 组合循环（plans/40 接入 SignalCache + 向量化对齐 + 信号矩阵一等公民增量）
-│   ├── l3_signal_service.py    # L3 信号矩阵服务（plans/40 B/D 层，v2.104.0+63）：SignalMatrixBundle 2D/3D 信号矩阵 + build_signal_matrix（复用信号缓存 + df.index.get_indexer 向量化对齐）+ DuckDB corr/因子收益矩阵 SQL 下沉 + load_or_build_signal_matrix 增量重算（code_hash 判定，仅新因子全量/存量追加窗口），E.4 短连接 + filelock 纪律，依赖缺失逐品种现值回退零漂移
+│   ├── l3_signal_service.py    # L3 信号矩阵服务（plans/40 B/D 层 v2.104.0+63，plans/51 A/B 修复）：SignalMatrixBundle 2D/3D 信号矩阵 + build_signal_matrix（复用信号缓存 + df.index.get_indexer 向量化对齐）+ load_or_build_signal_matrix 增量重算（(code_hash, params_hash) 双哈希判定 + 行数形状防护，plans/51 A1/A2）+ DuckDB 持久化 l3_signal_store.duckdb（l3_signal_assets 存储域，plans/51 B2，生产经 PortfolioLoop 配置自动激活 B1）+ duckdb_corr_matrix 备用接口（plans/51 B4 豁免未接入生产），E.4 短连接 + filelock 纪律，依赖缺失逐品种现值回退零漂移
 │   ├── macro_evolution.py      # LLM 宏观演化
 │   ├── micro_evolution.py      # optuna 微观调参
 │   ├── evaluation_chain.py     # 三级评估链（CTA 手册阶段4：IR 按因子类别分级门槛，v2.104.0+19 接入 ir_thresholds）
-│   ├── panel_vector.py         # 横截面评估全矩阵化（plans/37）：AlignedPanel 预对齐面板 + compute_cs_ics_vectorized 全矩阵 IC（联合掩码 rank + 行内 Pearson）+ execute_factor_panel 面板化因子执行（算子因子 DSL 按列求值，动态抽样验证 + 安全回退），跨截面评估开关 cross_section_panel_vector 默认开启（v2.104.0+57）；plans/39 §11（v2.104.0+58）真实缺口面板算子面板化实测 0.3x <5x 门槛 → 评估链信号构建摘除面板化恒逐品种执行，仅 IC 计算走矩阵化，execute_factor_panel 保留为独立模块/对照基准（缺口感知滚动内核 gap_aware_mode + _GapAwareFrame） |
+│   ├── panel_vector.py         # 横截面评估全矩阵化（plans/37）：AlignedPanel 预对齐面板 + compute_cs_ics_vectorized 全矩阵 IC（联合掩码 rank + 行内 Pearson）+ execute_factor_panel 面板化因子执行（算子因子 DSL 按列求值，动态抽样验证 + 安全回退），跨截面评估开关 cross_section_panel_vector 默认开启（v2.104.0+57）；plans/39 §11（v2.104.0+58）真实缺口面板算子面板化实测 0.3x <5x 门槛 → 评估链信号构建摘除面板化恒逐品种执行，仅 IC 计算走矩阵化，execute_factor_panel 保留为独立模块/对照基准（缺口感知滚动内核 gap_aware_mode + _GapAwareFrame）；**plans/51 C5 登记：execute_factor_panel / build_forward_return_matrix / prealign_panel 为独立基准模块（无生产调用），未经对照验证禁止再次接入主链路** |
 │   ├── ir_thresholds.py        # 因子 IR 分类门槛（CTA 手册阶段4，v2.104.0+19）：量价 0.30/基本面 0.40/期限结构 0.35，按 style_tags 判定，未知回退最宽松档
 │   ├── signal_cache.py         # 质检信号缓存（GAP-071，v2.98.2）：LRU 信号复用
 │   ├── experience_chain.py     # 经验链存储
@@ -467,7 +467,7 @@ fts/
 │   ├── factor_quality_card.py  # 因子质量评分卡（10 维评分，A/B/C 分级准入）
 │   ├── adaptive_weight.py      # 自适应权重（AdaptiveWeightManager + RegimeSmoother 热更新）
 │   ├── feature_ops.py          # 特征算子注册表（50 算子 / 7 类）
-│   ├── numba_kernels.py        # numba 算子内核（plans/38，v2.104.0+59 回退后仅保留 ts_rank 1D/2D 内核；ts_cvar/ts_zscore 已回退现值实现；依赖缺失/FTS_OPS_NUMBA=false 时经 ops_numba 开关回退现值实现零漂移）
+│   ├── numba_kernels.py        # numba 算子内核（plans/38 批4 + plans/40 C 层：ts_rank 1D/2D 内核 + ts_zscore/ts_cvar 1D 内核（feature_ops/ops_library 快速路径，v2.104.0+63 重新接入）；依赖缺失/FTS_OPS_NUMBA=false 时经 ops_numba 开关回退现值实现零漂移）
 │   ├── feature_importance.py   # 特征重要性分析（置换重要性）
 │   ├── gp_evolver.py           # GP 演化器（ExpressionTree + 交叉/变异 + multi_objective 适应度 + Pareto 前沿输出，v2.78.0）
 │   ├── pareto.py               # Pareto 多目标前沿（NSGA-II 快速非支配排序，GAP-I204 二期 v2.78.0）

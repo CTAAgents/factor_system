@@ -1,6 +1,6 @@
 # 37 号计划 — 横截面评估全矩阵化提速（panel_vector）
 
-> 版本: v2.104.0+113（创建于 2026-08-15）
+> 版本: v2.104.0+114（创建于 2026-08-15）
 > 关联 GAP: GAP-121（08-gap-analysis.md P2 新登记）/ GAP-I502 执行器后端
 > 状态: ✅ Phase 1 + Phase 2（Step 1 + 批 1/2/3）+ Phase 3 全部完成；计划可归档
 
@@ -58,11 +58,11 @@ max|ΔIC| ~ 1e-16 完全一致。
 ### 4.1 新配置项（FTSConfig）
 
 ```
-cross_section_panel_vector: bool = env FTS_CROSS_SECTION_PANEL_VECTOR（默认 false）
+cross_section_panel_vector: bool = env FTS_CROSS_SECTION_PANEL_VECTOR（默认 true，Phase 3 v2.104.0+57 切换）
 ```
 
 - `None`（调用方未显式指定）→ 读取配置；显式传入优先（测试可控）。
-- 默认关闭：不改变任何现有行为；开启前须对照测试全绿。
+- 默认开启（v2.104.0+57 起）：对照测试全绿 + 缺口面板产出一致/性能持平后切换。
 
 ### 4.2 接入点（evaluation_chain.cross_section_evaluate_backtest）
 
