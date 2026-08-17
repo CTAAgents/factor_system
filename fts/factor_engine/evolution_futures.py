@@ -574,6 +574,8 @@ class EvolutionLoop:
         from .causal_validator import CausalValidator
 
         self.causal_validator = CausalValidator()
+        # 因果审查跳过计数（因子执行异常时显式跳过，用于 run 汇总告警，避免静默旁路）
+        self._causal_skipped_count: int = 0
 
         # 子模块: 特征重要性分析 (Phase C.1 集成)
         from .feature_importance import FeatureImportanceAnalyzer
@@ -894,6 +896,11 @@ class EvolutionLoop:
                 state["early_stop_reason"] = self._early_stop_reason
                 print(f"[evo] 提前达标停止: {self._early_stop_reason}（正常收尾）")
             self.state_manager.mark_completed(state)
+            if self._causal_skipped_count:
+                print(
+                    f"[evo] ⚠️ 因果审查跳过 {self._causal_skipped_count} 个因子"
+                    "（因子执行异常已显式跳过，建议核查因子参数契约）"
+                )
             return EvolutionRunResult(
                 run_id=run_id,
                 trace_id=trace_id,
@@ -2627,12 +2634,43 @@ class EvolutionLoop:
         # GAP-032 严格一致：DuckDB 是主存储。P1 起 JSON 仅降级为只读快照——
         # 先写 DuckDB，成功后写 JSON（JSON 写失败不阻断晋升）；DuckDB 失败
         # 则不写 JSON 直接判定晋升失败，杜绝"快照有、catalog 无"孤儿数据
-        from .evolution_promote import build_qa_review
+        from .evolution_promote import build_qa_review, find_duplicate_expression
 
         qa_review = build_qa_review(
             factor, evaluation, audit_report, quality_score, high_ic_screen
         )
         record["qa_review"] = qa_review
+
+        # ── GAP-135 ① 评审质检结论门禁：一票否决项未过（禁止入库）禁止晋升（与 EliteStore 同款）──
+        from fts.config.settings import get_config as _qa_cfg
+
+        _veto = qa_review.get("q1_q10", {}).get("one_vote_failed", [])
+        if _qa_cfg().l2_qa_gate_enabled and _veto:
+            _concl = qa_review.get("q1_q10", {}).get("conclusion", "禁止入库")
+            print(
+                f"[evo] ★ Q1-Q10 质检门禁拦截 [{factor.get('name', '?')}]: "
+                f"结论={_concl}（one_vote_failed={_veto}），禁止晋升（GAP-135）"
+            )
+            logger.warning(
+                "[qa-gate] 因子 %s 质检结论「%s」禁止晋升（GAP-135）",
+                factor.get("name", "?"),
+                _concl,
+            )
+            return None
+
+        # ── GAP-135 ② 晋升期同表达式去重（与 EliteStore 同款）──
+        _dup = find_duplicate_expression(self.elite_dir, factor)
+        if _dup:
+            print(
+                f"[evo] ★ 表达式去重拦截 [{factor.get('name', '?')}]: "
+                f"与既有 elite {_dup['name']} ({_dup['factor_id']}) 表达式重复，拒绝晋升（GAP-135）"
+            )
+            logger.warning(
+                "[L2-dedup] 因子 %s 与既有 elite %s 同表达式，拒绝晋升（GAP-135）",
+                factor.get("name", "?"),
+                _dup["factor_id"],
+            )
+            return None
         write_ok = self._write_to_duckdb(
             factor,
             evaluation,
@@ -3118,6 +3156,11 @@ class EvolutionLoop:
                     )
             except Exception:
                 continue
+        if self._causal_skipped_count:
+            print(
+                f"[evo] ⚠️ 种子阶段因果审查跳过 {self._causal_skipped_count} 个因子"
+                "（因子执行异常已显式跳过，建议核查因子参数契约）"
+            )
         return promoted
 
     def _merge_l1_candidates(
@@ -4956,8 +4999,15 @@ class EvolutionLoop:
             is_passed = result.get("n_anomalous", 0) == 0
             return {**result, "passed": is_passed}
         except Exception as e:
-            logger.warning("因果验证异常: %s", e)
-            return {"passed": True, "error": str(e)}
+            # 显式跳过 + 累计计数：因果审查异常不再静默旁路，供 run 汇总告警
+            self._causal_skipped_count = getattr(self, "_causal_skipped_count", 0) + 1
+            logger.warning(
+                "因果验证异常已跳过 (累计 %s, factor_id=%s): %s",
+                self._causal_skipped_count,
+                factor.get("factor_id", "?"),
+                e,
+            )
+            return {"passed": True, "skipped": True, "error": str(e)}
 
     def _record_causal_failed_trace(
         self,

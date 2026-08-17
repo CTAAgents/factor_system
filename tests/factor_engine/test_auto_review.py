@@ -34,25 +34,44 @@ def _isolate_factor_db(tmp_path, monkeypatch):
     return str(isolated_db)
 
 
-def _insert_factor(conn, factor_id: str, name: str, ic, sharpe, market: str = "futures") -> None:
+def _passing_qa_meta() -> dict:
+    """完整质检结论（v2.104.0+89 机审门禁通过所需）。"""
+    return {
+        "audit_passed": True,
+        "quality_grade": "B",
+        "high_ic_grade": "A",
+        "multiple_passed": True,
+        "walk_forward_windows": 4,
+        "q1_q10_passed": True,
+    }
+
+
+def _insert_factor(conn, factor_id: str, name: str, ic, sharpe, market: str = "futures",
+                   metadata: dict | None = None) -> None:
     """向隔离 factor_catalog 插入一条因子（ic/sharpe 可控）。"""
+    import json
+
+    meta_json = json.dumps({"qa_review": metadata}) if metadata else "{}"
     conn.execute(
         "INSERT INTO factor_catalog (factor_id, name, code, code_hash, "
-        "economic_logic, source, market, ic, sharpe) "
-        "VALUES (?, ?, 'def f(): pass', 'h', '{}', 'seed', ?, ?, ?)",
-        [factor_id, name, market, ic, sharpe],
+        "economic_logic, source, market, ic, sharpe, metadata) "
+        "VALUES (?, ?, 'def f(): pass', 'h', '{}', 'seed', ?, ?, ?, ?)",
+        [factor_id, name, market, ic, sharpe, meta_json],
     )
 
 
 def _seed_factors(db_path: str) -> None:
-    """插入四类机审样本：正常 / 低质 / 异常高 / 缺失。"""
+    """插入四类机审样本：正常 / 低质 / 异常高 / 缺失（含完整质检结论）。"""
     import duckdb
 
     conn = duckdb.connect(db_path)
     try:
-        _insert_factor(conn, "fct_ar_normal", "normal", 0.05, 2.0)
-        _insert_factor(conn, "fct_ar_low", "low_quality", 0.01, 1.5)
-        _insert_factor(conn, "fct_ar_high", "overfit_high", 0.9, 2.0)
+        _insert_factor(conn, "fct_ar_normal", "normal", 0.05, 2.0,
+                       metadata=_passing_qa_meta())
+        _insert_factor(conn, "fct_ar_low", "low_quality", 0.01, 1.5,
+                       metadata=_passing_qa_meta())
+        _insert_factor(conn, "fct_ar_high", "overfit_high", 0.9, 2.0,
+                       metadata=_passing_qa_meta())
         _insert_factor(conn, "fct_ar_missing", "missing", None, None)
     finally:
         conn.close()
@@ -125,15 +144,21 @@ class TestAutoReviewPolicy:
         assert decision == ReviewDecision.REJECTED
 
     def test_normal_approved(self):
-        """正常范围 → 自动批准。"""
-        decision, reason = _policy().classify(0.05, 2.0)
+        """正常范围 + 完整质检结论 → 自动批准。"""
+        decision, reason = _policy().classify(0.05, 2.0, qa_meta=_passing_qa_meta())
         assert decision == ReviewDecision.APPROVED
         assert "机审通过" in reason
 
     def test_boundary_equal_approved(self):
-        """等于边界值（min/max）→ 正常（严格大于/小于才触发异常）。"""
-        assert _policy().classify(0.02, 0.5)[0] == ReviewDecision.APPROVED
-        assert _policy().classify(0.8, 30.0)[0] == ReviewDecision.APPROVED
+        """等于边界值（min/max）+ 完整质检结论 → 正常（严格大于/小于才触发异常）。"""
+        assert _policy().classify(0.02, 0.5, qa_meta=_passing_qa_meta())[0] == ReviewDecision.APPROVED
+        assert _policy().classify(0.8, 30.0, qa_meta=_passing_qa_meta())[0] == ReviewDecision.APPROVED
+
+    def test_missing_qa_meta_to_human(self):
+        """缺完整质检结论（v2.104.0+89 门禁）→ 宁缺毋滥转人审。"""
+        decision, reason = _policy().classify(0.05, 2.0)
+        assert decision is None
+        assert "质检记录缺失" in reason
 
     def test_from_env_overrides(self, monkeypatch):
         """FTS_REVIEW_* env 覆盖阈值（非法值回退默认）。"""

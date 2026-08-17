@@ -252,6 +252,8 @@ def _mock_seed_evaluation_pass(loop: EvolutionLoop) -> None:
         "total_ic": 0.05,
         "oos_results": [{"passed": True, "ic_consistency": 0.8}],
         "p_values": [0.01, 0.02],
+        # GAP-121（v2.104.0）：晋升需 ≥2 窗口走航结果（WalkForward 强制门），mock 通过
+        "walk_forward": {"n_windows_completed": 4, "ic_consistency": 0.8, "passed": True},
     }
     loop.evaluation_chain.evaluate = mock_eval
     mock_inspection = MagicMock()
@@ -269,6 +271,21 @@ def _mock_seed_evaluation_pass(loop: EvolutionLoop) -> None:
     loop._run_causal_validation = MagicMock(return_value={"passed": True})
     loop._run_robustness_check = MagicMock(return_value={"passed": True})
     loop._run_shap_analysis = MagicMock(return_value={})
+    # v2.105.0+2（45 计划候选①）：演化父因子来源改为 elite 池（种子评估已独立至
+    # l2_seed_promotion_job），测试 tmp elite 池为空会「无合格父因子」跳过演化循环——
+    # mock 一个父因子使演化主流程照常运行（GAP-140 语义变更同步）。
+    loop._load_elite_parent_factors = MagicMock(
+        return_value=[
+            {
+                "factor_id": "seed_parent",
+                "name": "seed_parent",
+                "code": "close - close.shift(5)",
+                "params": {"window": 5},
+                "economic_logic": {"narrative": "test"},
+                "market": "futures",
+            }
+        ]
+    )
 
 
 def _mock_review_pass(loop: EvolutionLoop) -> None:
@@ -350,8 +367,16 @@ def test_evolution_loop_runs_minimal(sample_ohlcv, forward_returns, tmp_memory_d
 
 
 @pytest.mark.slow
-def test_evolution_loop_produces_metrics(sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client):
+def test_evolution_loop_produces_metrics(
+    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client, monkeypatch
+):
     """运行后指标应被正确填充。"""
+    # v2.105.0+2 默认 operator_first（零 token 本地演化）；本用例验证宏观演化 token
+    # 指标，显式 hybrid 模式（GAP-140 语义变更同步）。get_config 为缓存单例，
+    # setenv 在全量运行时可能不生效，直接改实例属性。
+    from fts.config.settings import get_config as _qc
+
+    monkeypatch.setattr(_qc(), "evolution_mode", "hybrid")
     loop = EvolutionLoop(
         data=sample_ohlcv,
         forward_returns=forward_returns,
@@ -432,11 +457,16 @@ def test_evolution_loop_record_experience_traces(
 
 @pytest.mark.slow
 def test_evolution_loop_circuit_breaker_on_token(
-    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client
+    sample_ohlcv, forward_returns, tmp_memory_dir, tmp_elite_dir, mock_llm_client, monkeypatch
 ):
     """token 超过 2x 预算应触发熔断。"""
     from fts.factor_engine.contracts import BudgetConfig
 
+    # v2.105.0+2 默认 operator_first 零 token 不触发 token 熔断；显式 hybrid（GAP-140 语义变更同步）。
+    # get_config 为缓存单例，setenv 在全量运行时可能不生效，直接改实例属性。
+    from fts.config.settings import get_config as _qc
+
+    monkeypatch.setattr(_qc(), "evolution_mode", "hybrid")
     # 设置极小预算 + 极大 mock token
     mock_llm_client.complete.return_value = (
         json.dumps(
@@ -1615,8 +1645,14 @@ class TestEvolutionLoopCoverage:
         forward_returns,
         tmp_memory_dir,
         tmp_elite_dir,
+        monkeypatch,
     ):
         """宏观演化和 GP 演化均失败时，应在 failure 目录生成轨迹文件。"""
+        # v2.105.0+2 默认 operator_first 失败路径不写 mutation_summary 关键词，显式 hybrid（GAP-140 同步）。
+        # get_config 为缓存单例，setenv 在全量运行时可能不生效，直接改实例属性。
+        from fts.config.settings import get_config as _qc
+
+        monkeypatch.setattr(_qc(), "evolution_mode", "hybrid")
         loop = EvolutionLoop(
             data=sample_ohlcv,
             forward_returns=forward_returns,
@@ -1648,8 +1684,14 @@ class TestEvolutionLoopCoverage:
         tmp_memory_dir,
         tmp_elite_dir,
         mock_evolve_micro,
+        monkeypatch,
     ):
         """微观演化抛出异常应跳过本代并继续。"""
+        # v2.105.0+2 默认 operator_first 零 token；本用例断言宏观演化消耗 token，显式 hybrid（GAP-140 同步）。
+        # get_config 为缓存单例，setenv 在全量运行时可能不生效，直接改实例属性。
+        from fts.config.settings import get_config as _qc
+
+        monkeypatch.setattr(_qc(), "evolution_mode", "hybrid")
         loop = EvolutionLoop(
             data=sample_ohlcv,
             forward_returns=forward_returns,
@@ -1777,7 +1819,6 @@ class TestEvolutionLoopCoverage:
         forward_returns,
         tmp_memory_dir,
         tmp_elite_dir,
-        mock_llm_client,
     ):
         """运行内高失败率应触发熔断。"""
         from fts.factor_engine.contracts import BudgetConfig
@@ -1799,7 +1840,6 @@ class TestEvolutionLoopCoverage:
             memory_dir=tmp_memory_dir,
             budget=budget,
             n_trials_micro=2,
-            llm_client=mock_llm_client,
         )
         _mock_seed_evaluation_pass(loop)
         # 运行时校验和快速预筛选 mock 通过（算子因子需 mock 绕过实时执行）
@@ -1807,22 +1847,11 @@ class TestEvolutionLoopCoverage:
         loop._quick_prefilter = MagicMock(return_value=(True, "", 0.05))
         # 回测管线 mock 跳过真实回测，仅聚焦熔断链路
         loop._run_backtest_pipeline = MagicMock(return_value=None)
-        # v2.50.0 种子路径与演化因子共用 Verifier：种子阶段判定通过（晋升提供父因子），
-        # 演化因子阶段判定拒绝 → 主循环全失败 → 失败率熔断
-        seeds = loop.seed_pool.load_all_seeds()
-        seed_count = len(seeds)
-        verifier_calls = {"n": 0}
-
-        def _verifier_side_effect(evaluation):
-            verifier_calls["n"] += 1
-            if verifier_calls["n"] <= seed_count:
-                return {"passed": True, "failure_reasons": []}
-            return {"passed": False, "failure_reasons": ["模拟失败"]}
-
-        # 让 Verifier 拒绝演化因子（种子阶段通过、主循环中评估通过但 Verifier 判定失败）
-        # 这样种子因子能通过评估晋升提供父因子，
-        # 但主循环中所有演化因子都失败 → 失败率熔断
-        loop.verifier.check = MagicMock(side_effect=_verifier_side_effect)
+        # v2.105.0+2（45 计划候选①）：种子评估已独立至 l2_seed_promotion_job，
+        # run() 内 verifier 仅被演化因子调用（父因子来自 elite 池）→ 全部判定失败
+        # → 主循环全失败 → 失败率熔断（GAP-140 语义变更同步；不注入 llm_client，
+        # 走 operator_first 纯算子路径保证 evaluated 计数稳定）
+        loop.verifier.check = MagicMock(return_value={"passed": False, "failure_reasons": ["模拟失败"]})
         result = loop.run(max_generation=15)
         assert result.status == "circuit_broken"
         assert "失败率" in (result.circuit_breaker_reason or "")
@@ -1858,7 +1887,9 @@ class TestEvolutionLoopCoverage:
             walk_forward={"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
             evaluated_at="2026-07-18T00:00:00",
         )
-        fp = loop._promote_to_elite(factor, evaluation)
+        fp = loop._promote_to_elite(
+            factor, evaluation, audit_report=_make_passing_audit_report()
+        )
         assert fp.exists()
         assert fp.suffix == ".json"
         data = json.loads(fp.read_text(encoding="utf-8"))
@@ -1991,7 +2022,9 @@ class TestEvolutionLoopCoverage:
             walk_forward={"n_windows_completed": 4, "ic_consistency": 0.75, "passed": True},
             evaluated_at="2026-07-18T00:00:00",
         )
-        fp = loop._promote_to_elite(factor, evaluation)
+        fp = loop._promote_to_elite(
+            factor, evaluation, audit_report=_make_passing_audit_report()
+        )
         assert fp is not None
         assert fp.exists()
         data = json.loads(fp.read_text(encoding="utf-8"))
@@ -2764,14 +2797,26 @@ class TestGapF08WalkForwardEnforcement:
             evaluated_at="2026-08-09T00:00:00",
         )
 
-    def test_build_wf_config_long_data_uses_default(self, minimal_loop):
-        """数据 ≥3 年时使用默认 WalkForward 配置。"""
+    def test_build_wf_config_long_data_falls_back(self, minimal_loop):
+        """≥3 年但行数 <1368（v2.104.0+107 数据不足回退）→ 短样本窗配置。"""
         import pandas as pd
 
         long_data = pd.DataFrame(
             {"close": np.linspace(3000.0, 4000.0, 900), "volume": np.ones(900) * 1e5},
             index=pd.date_range("2022-01-01", periods=900, freq="D"),
-        )  # ~3.6 年
+        )  # ~3.6 年但不足 2 窗口所需 1368 行
+        cfg = minimal_loop._build_wf_config(long_data)
+        assert cfg["window_years"] == 1
+        assert cfg["step_months"] == 3
+
+    def test_build_wf_config_long_data_uses_default(self, minimal_loop):
+        """数据 ≥3 年且 ≥1368 行（默认配置可构建 ≥2 窗口）→ 使用默认 WalkForward 配置。"""
+        import pandas as pd
+
+        long_data = pd.DataFrame(
+            {"close": np.linspace(3000.0, 4000.0, 1400), "volume": np.ones(1400) * 1e5},
+            index=pd.date_range("2022-01-01", periods=1400, freq="D"),
+        )  # ~5.6 年，1400 > 1368 → 默认 3 年窗
         cfg = minimal_loop._build_wf_config(long_data)
         assert cfg["window_years"] == 3
         assert cfg["step_months"] == 6
@@ -3290,6 +3335,12 @@ class TestFactorAuditorIntegration:
             "name": "audit_test_factor",
             "code": "close + high",
             "factor_type": "test",
+            "params": {"N": 20},
+            # GAP-135: Q2 逻辑文档化/Q3 参数网格一票否决
+            "economic_logic": {
+                "theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3,
+                "narrative": "审计测试因子经济逻辑",
+            },
         }
 
         mock_report = FactorAuditReport(
@@ -5003,13 +5054,18 @@ class TestGapF16PromoteToElite:
             "factor_id": fid,
             "name": name,
             "code": "def factor_program(data, params):\n    import numpy as np\n    return data['close']",
-            "params": {},
+            "params": {"N": 20},
             "market": "multi",
             "source": "macro_evolution",
             "parent_id": None,
             "generation": 1,
             "trace_id": "t",
             "symbols": ["RB0"],
+            # GAP-135: Q2 逻辑文档化/Q3 参数网格一票否决
+            "economic_logic": {
+                "theory": 3, "behavioral": 3, "microstructure": 3, "institutional": 3,
+                "narrative": "测试经济逻辑",
+            },
         }
 
     @staticmethod
@@ -5116,7 +5172,10 @@ class TestGapF16PromoteToElite:
         loop._check_elite_correlation = MagicMock(return_value=None)
         factor = self._make_factor(fid="fct_prom_hic_b_ok")
         factor["name"] = "hic_b_covered_ok"
-        fp = loop._promote_to_elite(factor, self._make_evaluation(), shadow_observe=False)
+        fp = loop._promote_to_elite(
+            factor, self._make_evaluation(), shadow_observe=False,
+            audit_report=_make_passing_audit_report(),
+        )
         assert fp is not None
         mock_repo.create_factor.assert_called_once()
 
@@ -5140,12 +5199,15 @@ class TestGapF16PromoteToElite:
         loop.elite_tracker.init_tracker = MagicMock()
         loop._check_elite_correlation = MagicMock(return_value=None)
         factor = self._make_factor()
-        fp = loop._promote_to_elite(factor, self._make_evaluation(), shadow_observe=False)
+        fp = loop._promote_to_elite(
+            factor, self._make_evaluation(), shadow_observe=False,
+            audit_report=_make_passing_audit_report(),
+        )
         assert fp is not None
         assert fp.exists()
         data = json.loads(fp.read_text(encoding="utf-8"))
-        # 因子 market=multi → 使用演化上下文市场（默认 futures）
-        assert data["market"] == "futures"
+        # 因子 market=multi → 使用演化上下文市场（v2.104.0+103 默认 energy）
+        assert data["market"] == "energy"
         mock_repo.create_factor.assert_called_once()
 
     def test_promote_bootstrapping_cleans_injected_file(self, tmp_memory_dir, tmp_elite_dir):
@@ -5162,7 +5224,10 @@ class TestGapF16PromoteToElite:
         factor = self._make_factor(fid="fct_prom010", name="bs_factor")
         factor["source"] = "bootstrapping"
         factor["parent_id"] = "cand_test"
-        fp = loop._promote_to_elite(factor, self._make_evaluation(), shadow_observe=False)
+        fp = loop._promote_to_elite(
+            factor, self._make_evaluation(), shadow_observe=False,
+            audit_report=_make_passing_audit_report(),
+        )
         assert fp is not None
         assert not (inject_dir / "cand_test.json").exists()
 
@@ -6092,6 +6157,7 @@ class TestGapF16MergeL1Candidates:
         cand_file = inject_dir / "cand_abc12345.json"
         cand_file.write_text(json.dumps(cand), encoding="utf-8")
         loop = self._make_loop(tmp_memory_dir, inject_dir)
+        loop.market = "futures"  # GAP-140③：全局默认市场 energy，显式匹配候选 futures
         real_exists = Path.exists
 
         def fake_exists(self):

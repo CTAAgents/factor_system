@@ -587,8 +587,9 @@ class TestConfigPriority:
 
 
 def test_evolution_mode_default_hybrid():
+    # v2.105.0+2（GAP-135 ① 前置补盲）：默认 evolution_mode 由 hybrid 切为 operator_first
     cfg = load_config(config_path=None)  # 不落盘场景下取默认值
-    assert cfg.evolution_mode in ("operator", "code", "hybrid")
+    assert cfg.evolution_mode == "operator_first"
 
 
 def test_validate_evolution_mode():

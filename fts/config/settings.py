@@ -196,6 +196,12 @@ class FTSConfig:
     l2_orthogonal_min_retained_ratio: float = field(
         default_factory=lambda: float(os.getenv("FTS_L2_ORTHOGONAL_MIN_RETAINED_RATIO", "0.3"))
     )
+    # Q1-Q10 入库质检结论门禁（GAP-135, v2.105.0）：晋升前校验 qa_review.q1_q10_passed，
+    # 结论「禁止入库/待综合评定」时拒绝晋升——评审质检结论与入库必须一致（此前 GP 因子
+    # 「禁止入库」结论仍被晋升入库的缺陷）。默认开启，可经 env FTS_L2_QA_GATE_ENABLED=false 关闭。
+    l2_qa_gate_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_L2_QA_GATE_ENABLED", "1") == "1"
+    )
 
     # ── L2 去冗余-正交基底 (GAP-I206 补充, v2.72.0) ──
     # 正交基底维护（Gram-Schmidt 迭代残差化）：候选因子对基底逐因子 OLS 残差，

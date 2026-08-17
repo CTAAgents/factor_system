@@ -166,10 +166,69 @@ def build_qa_review(
             "conclusion": qa["conclusion"],
             "passed_count": qa["passed_count"],
             "total": qa["total"],
+            # GAP-135: 透出一票否决项（Q1-Q3）与评分项失败清单，供晋升门禁消费
+            "one_vote_failed": qa["one_vote_failed"],
+            "scoring_failed": qa["scoring_failed"],
+            "scoring_pass_ratio": qa["scoring_pass_ratio"],
             "items": qa["items"],
         },
         "built_at": datetime.now().isoformat(),
     }
+
+
+def normalize_expression(code: str) -> str:
+    """表达式规范化：去除空白/换行后压缩为单空格分隔，用于同表达式去重（GAP-135）。"""
+    return " ".join(str(code or "").split())
+
+
+def find_duplicate_expression(
+    elite_dir: Path,
+    factor: dict[str, Any],
+) -> Optional[dict[str, str]]:
+    """GAP-135 ② 晋升期同表达式去重：扫描既有 elite JSON 快照，返回与候选因子
+    规范化代码相同的既有因子 {factor_id, name}；无命中返回 None。
+
+    对同批次重复（首个晋升落库后，后续同表达式因子被本扫描发现）与跨批次历史
+    重复均生效；目录缺失/扫描异常静默放行（不阻断晋升，宁放勿误杀）。
+
+    Args:
+        elite_dir: elite 快照目录（JSON 文件）
+        factor: 待晋升候选因子（含 code）
+
+    Returns:
+        {"factor_id": ..., "name": ...} 或 None
+    """
+    code = factor.get("code")
+    if not code:
+        return None
+    norm = normalize_expression(str(code))
+    if not norm:
+        return None
+    try:
+        if not elite_dir.exists():
+            return None
+        for fp in sorted(elite_dir.glob("*.json")):
+            if fp.name.startswith("_"):
+                continue
+            try:
+                data = json.loads(fp.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+            if not isinstance(data, dict):
+                continue
+            other = data.get("code")
+            if not other:
+                continue
+            if data.get("factor_id") == factor.get("factor_id"):
+                continue
+            if normalize_expression(str(other)) == norm:
+                return {
+                    "factor_id": data.get("factor_id", "?"),
+                    "name": data.get("name", data.get("factor_name", "?")),
+                }
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[L2-dedup] 同表达式去重扫描异常（放行）: %s", e)
+    return None
 
 
 class EliteStore:
@@ -717,7 +776,8 @@ class EliteStore:
         # 将 factor 字段展开到顶层，方便 cli 直接读取
         record = dict(factor)
         # 确保 market 字段正确：若因子为默认 "multi"，使用演化上下文的市场
-        if record.get("market", "multi") in ("multi", "other") and self._owner.market in ("futures",):
+        # v2.104.0+103 全局默认市场 futures→energy，转换覆盖 futures/energy 两市场
+        if record.get("market", "multi") in ("multi", "other") and self._owner.market in ("futures", "energy"):
             record["market"] = self._owner.market
         record["evaluation"] = evaluation
 
@@ -888,6 +948,46 @@ class EliteStore:
             factor, evaluation, audit_report, quality_score, high_ic_screen
         )
         record["qa_review"] = qa_review
+
+        # ── GAP-135 ① 评审质检结论门禁：一票否决项未过（禁止入库）禁止晋升 ──
+        # Q1-Q3 一票否决项任一未过（未来函数/逻辑未文档化/参数未网格）即结论「禁止入库」，
+        # 评审结论与入库必须一致（此前 GP 因子「禁止入库」结论仍被晋升入库的缺陷修复）；
+        # 评分项通过率 <0.6（待综合评定）不在此门禁范围（软性评定，避免误伤字段缺失因子）。
+        # 开关 l2_qa_gate_enabled（env FTS_L2_QA_GATE_ENABLED=false 关闭）。
+        from fts.config.settings import get_config as _qa_cfg
+
+        _veto = qa_review.get("q1_q10", {}).get("one_vote_failed", [])
+        if _qa_cfg().l2_qa_gate_enabled and _veto:
+            _concl = qa_review.get("q1_q10", {}).get("conclusion", "禁止入库")
+            print(
+                f"[evo] ★ Q1-Q10 质检门禁拦截 [{factor.get('name', '?')}]: "
+                f"结论={_concl}（one_vote_failed={_veto}），禁止晋升（GAP-135）"
+            )
+            logger.warning(
+                "[qa-gate] 因子 %s 质检结论「%s」禁止晋升（GAP-135）",
+                factor.get("name", "?"),
+                _concl,
+            )
+            return None
+
+        # ── GAP-135 ② 晋升期同表达式去重：与既有 elite 表达式相同的演化后代拒绝晋升 ──
+        # 种子导入（source=seed/bootstrapping）为幂等初始化路径，重复由 DuckDB
+        # 名称检查（get_factor_by_name）兜底，豁免表达式去重——仅对演化产物
+        # （operator/gp/macro/uct 后代）执行，防重复后代跑完评估链的算力浪费。
+        _evolved_src = str(factor.get("source") or "")
+        if _evolved_src not in ("seed", "bootstrapping"):
+            _dup = find_duplicate_expression(self._owner.elite_dir, factor)
+            if _dup:
+                print(
+                    f"[evo] ★ 表达式去重拦截 [{factor.get('name', '?')}]: "
+                    f"与既有 elite {_dup['name']} ({_dup['factor_id']}) 表达式重复，拒绝晋升（GAP-135）"
+                )
+                logger.warning(
+                    "[L2-dedup] 因子 %s 与既有 elite %s 同表达式，拒绝晋升（GAP-135）",
+                    factor.get("name", "?"),
+                    _dup["factor_id"],
+                )
+                return None
 
         # ── 写入 L2 相关性元数据（供 L3 参考） ──
         if seed_correlations:

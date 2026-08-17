@@ -113,6 +113,11 @@ def _make_loop(tmp_path, market: str = "futures"):
 def chdir_tmp(tmp_path, monkeypatch):
     """将 cwd 切到 tmp，使相对路径 memory/knowledge/... 落在 tmp 内。"""
     monkeypatch.chdir(tmp_path)
+    # GAP-135/140：本测试组测 L1 合并/晋升路径，不测质检门禁（mock 因子无审计数据会被
+    # 一票否决拦截），门禁行为由 test_gap135_qa_gate.py 独立覆盖，此处关闭开关。
+    from fts.config.settings import get_config as _qc
+
+    monkeypatch.setattr(_qc(), "l2_qa_gate_enabled", False)
     return tmp_path
 
 

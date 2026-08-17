@@ -33,6 +33,15 @@ def _isolate_factor_db(tmp_path, monkeypatch):
     monkeypatch.setattr(schema, "DATABASE_PATH", isolated_db)
 
 
+@pytest.fixture(autouse=True)
+def _disable_qa_gate(monkeypatch):
+    """GAP-135/140：本文件测晋升路径（正交化），不测质检门禁——关闭门禁开关
+    （mock 因子无审计数据会被一票否决拦截；门禁由 test_gap135_qa_gate.py 独立覆盖）。"""
+    from fts.config.settings import get_config as _qc
+
+    monkeypatch.setattr(_qc(), "l2_qa_gate_enabled", False)
+
+
 # ─── 信号工厂: 控制候选与参照 elite 的相关性与残差保留比 ───
 #
 # 参照 elite: SIG_ELITE_BASE（arange+100）

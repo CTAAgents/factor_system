@@ -3827,12 +3827,17 @@ class TestShadowPool:
         loop._get_repo = MagicMock(return_value=mock_repo)
         return loop, elite_dir
 
-    def test_promote_to_elite_writes_shadow_pool(self, tmp_path):
+    def test_promote_to_elite_writes_shadow_pool(self, tmp_path, monkeypatch):
         """显式开启观察期（shadow_observe=True）给新因子写入 shadow_pool 标记。
 
         v2.103.0+20 起默认观察期关闭（env FTS_EVOLUTION_SHADOW_OBSERVE），
         本用例显式传 True 验证观察期写入路径仍可用（等价 env=1）。
+        本用例只测 shadow_pool 写入路径，与 GAP-135 质检门禁无关（mock 因子无审计
+        数据会被一票否决拦截），故关闭门禁开关。
         """
+        from fts.config.settings import get_config as _qc
+
+        monkeypatch.setattr(_qc(), "l2_qa_gate_enabled", False)
         loop, elite_dir = self._make_evolution_loop(tmp_path)
 
         factor = {
@@ -3856,8 +3861,15 @@ class TestShadowPool:
         assert data["shadow_pool"]["observe_trading_days"] == 5
         assert "observe_until" in data["shadow_pool"]
 
-    def test_promote_seed_skips_shadow_pool(self, tmp_path):
-        """种子因子（shadow_observe=False）不写 shadow_pool。"""
+    def test_promote_seed_skips_shadow_pool(self, tmp_path, monkeypatch):
+        """种子因子（shadow_observe=False）不写 shadow_pool。
+
+        同 test_promote_to_elite_writes_shadow_pool：本用例只测 shadow_pool 路径，
+        关闭 GAP-135 质检门禁（mock 因子无审计数据）。
+        """
+        from fts.config.settings import get_config as _qc
+
+        monkeypatch.setattr(_qc(), "l2_qa_gate_enabled", False)
         loop, elite_dir = self._make_evolution_loop(tmp_path)
 
         factor = {

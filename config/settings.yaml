@@ -39,6 +39,9 @@ portfolio_max_factors: 20
 portfolio_top_n: 5
 portfolio_decay_days: 90
 l2_panel_days: 750
+# Q1-Q10 入库质检结论门禁（GAP-135）：晋升前校验 qa_review.q1_q10_passed，
+# 结论「禁止入库/待综合评定」拒绝晋升；env FTS_L2_QA_GATE_ENABLED=false 关闭
+l2_qa_gate_enabled: true
 
 # ── L3 G1 同向敞口惩罚（35-gap-closure-plan G1）──
 # 触发：因子 IC 同向权重占比 ≥ align_threshold（ic>0 看多 / ic<0 看空）

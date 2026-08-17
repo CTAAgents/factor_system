@@ -77,6 +77,14 @@ class TestLoaderRiskTag:
 class TestEvolutionLoopRiskTag:
     """验证 evolution_loop 对 vwap_approx 因子施加更高 IC 阈值。"""
 
+    @pytest.fixture(autouse=True)
+    def _disable_qa_gate(self, monkeypatch):
+        """GAP-135/140：本类测 risk_tag 阈值晋升路径，不测质检门禁——关闭门禁开关
+        （mock 种子因子无审计数据会被一票否决拦截；门禁由 test_gap135_qa_gate.py 独立覆盖）。"""
+        from fts.config.settings import get_config as _qc
+
+        monkeypatch.setattr(_qc(), "l2_qa_gate_enabled", False)
+
     @pytest.fixture
     def sample_data(self) -> pd.DataFrame:
         """生成合成数据。"""

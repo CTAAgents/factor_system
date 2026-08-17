@@ -29,9 +29,21 @@ def _isolate_factor_db(tmp_path, monkeypatch):
     monkeypatch.setattr(schema, "DATABASE_PATH", isolated_db)
 
 
+@pytest.fixture(autouse=True)
+def _disable_qa_gate(monkeypatch):
+    """GAP-135/140：本文件测晋升路径（聚类配额），不测质检门禁——关闭门禁开关
+    （mock 因子无审计数据会被一票否决拦截；门禁由 test_gap135_qa_gate.py 独立覆盖）。"""
+    from fts.config.settings import get_config as _qc
+
+    monkeypatch.setattr(_qc(), "l2_qa_gate_enabled", False)
+
+
 # ─── 信号工厂: 按 code 内 marker 分发信号，控制相关性 ───
 
 _CODE_P100 = "def factor_program(data, params):\n    return np.arange(len(data), dtype=float) + 100.0  # SIG_P100"
+# 信号与 SIG_P100 逐位相同（供配额同类计数），但代码字符串可区分，
+# 避免 GAP-135 晋升期同表达式去重误拦截配额放行路径（配额逻辑测信号聚类、非表达式）。
+_CODE_P100_ALT = "def factor_program(data, params):\n    return np.arange(len(data), dtype=float) + 100.0  # SIG_P100 alt"
 _CODE_NOISE = "def factor_program(data, params):\n    rng = np.random.default_rng(1)\n    return rng.normal(size=len(data))  # SIG_NOISE"
 _CODE_BOOM = "def factor_program(data, params):\n    raise RuntimeError('boom')  # SIG_BOOM"
 
@@ -264,7 +276,7 @@ class TestPromoteToEliteClusterQuota:
         _write_elites(tmp_elite_dir, 14, _CODE_P100)
         loop = _make_loop(sample_ohlcv, forward_returns, tmp_elite_dir, tmp_memory_dir)
         _mock_repo_clear(loop)
-        factor = _make_factor("fct_new_ok", _CODE_P100)
+        factor = _make_factor("fct_new_ok", _CODE_P100_ALT)
         evaluation = _make_passing_evaluation("fct_new_ok")
 
         fp = loop._promote_to_elite(factor, evaluation, shadow_observe=False)

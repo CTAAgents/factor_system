@@ -743,11 +743,11 @@ class TestRepositoryInit:
 
     @pytest.mark.uses_real_factor_db  # GAP-129: 真实默认库路由断言
     def test_default_database_path(self):
-        """测试默认数据库路径（股票剥离后默认 market=futures）。"""
-        from fts.factor_engine.factor_db.schema import DATABASE_PATH_FUTURES
+        """测试默认数据库路径（v2.104.0+103 全局默认市场 futures→energy）。"""
+        from fts.factor_engine.factor_db.schema import DATABASE_PATH_ENERGY, DATABASE_PATH_FUTURES
 
         repo = FactorRepository()
-        assert repo._db_path == DATABASE_PATH_FUTURES
+        assert repo._db_path == DATABASE_PATH_ENERGY
         repo.close()
 
         repo_futures = FactorRepository(market="futures")
