@@ -1373,19 +1373,40 @@ def _auto_build_factor_returns(
                 signal_cache=signal_cache,
             )
 
-        builder = FactorReturnsBuilder()
+        # GAP-I306: 自动构建矩阵质量修正——① 分位腿加宽 quantile 0.2→0.3（25 品种
+        # 每腿 5→7-8 只，降低小样本噪声致 Sharpe 虚高 20.06）；② 方向校准 directional=True
+        # （全样本平均收益为负翻转符号，防反向因子收益为负污染组合）；③ 收益缩尾
+        # （见下方 winsorize，抑制极端日收益对年化夏普的虚高）。
+        from .factor_returns import FactorReturnsConfig, FactorReturnsBuilder
+
+        builder = FactorReturnsBuilder(
+            FactorReturnsConfig(quantile=0.3, min_stocks=10, directional=True)
+        )
         fr = builder.build_from_panel(
             signal_matrix=bundle.signal_matrix,
             forward_returns=bundle.forward_returns,
             dates=bundle.dates,
             factor_ids=bundle.factor_ids,
         )
+        returns_df = fr.returns.copy()
+        # 收益缩尾：逐因子列按 ±3×MAD（MAD<1e-10 兜底恒等）截断极端日收益，抑制
+        # 单日极端多空收益对夏普的虚高（GAP-I306，宁保守勿虚高）。
+        for col in returns_df.columns:
+            s = returns_df[col].dropna()
+            if len(s) == 0:
+                continue
+            med = float(s.median())
+            mad = float((s - med).abs().median())
+            if mad < 1e-10:
+                continue
+            lo, hi = med - 3.0 * 1.4826 * mad, med + 3.0 * 1.4826 * mad
+            returns_df[col] = returns_df[col].clip(lo, hi)
         logger.info(
-            "[L3-FR] 自动构建因子收益矩阵完成: %d 因子 × %d 交易日（measured 口径）",
+            "[L3-FR] 自动构建因子收益矩阵完成: %d 因子 × %d 交易日（measured 口径, quantile=0.3 + 方向校准 + MAD 缩尾）",
             len(valid_factors),
             len(common_dates),
         )
-        return fr.returns
+        return returns_df
     except Exception as e:  # noqa: BLE001
         logger.warning("[L3-FR] 自动构建因子收益矩阵失败，回退估算口径: %s", e)
         return None
@@ -4106,8 +4127,20 @@ def inject_to_fdt(
         "n_factors": combo.get("n_factors", 0),
     }
     # plans/47 §B：子链差异化权重矩阵 + 品种→子链映射（信号管线按品种应用调制）
+    # 键统一为 name（与 weights 字段一致）：调制矩阵由 build_subchain_weights 以 factor_id
+    # 为键构建，而信号管线 _compute_composite_scores 按 name 消费——此前原样透传 factor_id
+    # 键导致管线 get(name) 静默回退全权重（调制失效）；此处经 combo.signals 的
+    # factor_id→name 映射归一（信号无 factor_id 时保留原键，兼容旧产物/测试夹具）。
     if subchain_weights and symbol_chain:
-        payload["subchain_weights"] = subchain_weights
+        _id2name = {
+            s.get("factor_id"): s.get("name")
+            for s in combo.get("signals", [])
+            if s.get("factor_id") and s.get("name")
+        }
+        _name_keyed: dict[str, dict[str, float]] = {}
+        for _fid, _row in subchain_weights.items():
+            _name_keyed[_id2name.get(_fid, _fid)] = _row
+        payload["subchain_weights"] = _name_keyed
         payload["symbol_chain"] = symbol_chain
     weights_fp.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),

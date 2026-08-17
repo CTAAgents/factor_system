@@ -188,6 +188,50 @@ class TestL3Integration:
         assert data["symbol_chain"] == sc
         assert set(data["weights"].keys()) == {"f1", "f2"}
 
+    def test_inject_to_fdt_subchain_key_normalized_to_name(self, tmp_path):
+        # 方案 A 键一致性修复：调制矩阵以 factor_id 构建（fct_xxx），信号管线按 name 消费
+        # （fut_xxx）——注入时经 combo.signals 的 factor_id→name 映射归一，管线 get(name) 命中。
+        from fts.factor_engine.portfolio_loop import inject_to_fdt
+
+        combo = {
+            "version": "v2",
+            "updated_at": "2026-08-17T00:00:00",
+            "synthesis_mode": "quality_weight",
+            "combo_sharpe": 1.5,
+            "n_factors": 2,
+            "signals": [
+                {"factor_id": "fct_aaa", "name": "fut_alpha", "weight": 0.6, "retained": True},
+                {"factor_id": "fct_bbb", "name": "fut_beta", "weight": 0.4, "retained": True},
+            ],
+        }
+        sw = {
+            "fct_aaa": {"能源": 1.0, "聚酯": 0.0, "油化工": 0.0, "煤化工": 0.0},
+            "fct_bbb": {"能源": 0.0, "聚酯": 0.0, "油化工": 0.0, "煤化工": 0.0},
+        }
+        sc = {"SC0": "能源", "FU0": "能源", "BU0": "能源"}
+        inject_to_fdt(combo, [], tmp_path, subchain_weights=sw, symbol_chain=sc)
+        data = json.loads((tmp_path / "factor_weights.json").read_text(encoding="utf-8"))
+        # 键已归一为 name（fut_xxx），与 weights 字段键一致 → 管线按 name 消费可命中
+        assert set(data["subchain_weights"].keys()) == {"fut_alpha", "fut_beta"}
+        assert data["subchain_weights"]["fut_alpha"]["能源"] == 1.0
+        assert data["subchain_weights"]["fut_beta"]["能源"] == 0.0
+
+    def test_inject_to_fdt_subchain_key_missing_id_keeps_key(self, tmp_path):
+        # 信号无 factor_id（旧产物/测试夹具）时保留原键，不误伤
+        from fts.factor_engine.portfolio_loop import inject_to_fdt
+
+        combo = {
+            "version": "v2",
+            "updated_at": "2026-08-17T00:00:00",
+            "synthesis_mode": "equal_weight",
+            "n_factors": 1,
+            "signals": [{"name": "f1", "weight": 1.0, "retained": True}],
+        }
+        sw = {"f1": {"能源": 1.0, "聚酯": 0.0, "油化工": 0.0, "煤化工": 0.0}}
+        inject_to_fdt(combo, [], tmp_path, subchain_weights=sw, symbol_chain={"SC0": "能源"})
+        data = json.loads((tmp_path / "factor_weights.json").read_text(encoding="utf-8"))
+        assert data["subchain_weights"] == sw  # 无 factor_id → 键不变
+
     def test_inject_to_fdt_without_subchain_compat(self, tmp_path):
         # 兼容现状：不传子链参数 → 输出不含子链字段（enable=false 回归路径）
         from fts.factor_engine.portfolio_loop import inject_to_fdt
@@ -227,6 +271,66 @@ class TestL3Integration:
         )
         assert scores["symA"] == pytest.approx(1.0)  # 有效子链全权重
         assert "symB" not in scores  # 无效子链权重 0 → 权重和为 0，不进入组合
+
+    def test_end_to_end_subchain_key_chain(self, tmp_path):
+        # 方案 A/B 端到端：build_subchain_weights（factor_id 键）→ inject_to_fdt
+        # （归一为 name 键）→ _load_l3_subchain_meta（按 name 读回）→
+        # _compute_composite_scores（按 name 消费）——调制矩阵真实生效。
+        from fts.factor_engine.portfolio_loop import inject_to_fdt
+        from fts.factor_engine.subchain_weight import SubchainWeightConfig, build_subchain_weights
+        from scripts.futures_signal_pipeline import _compute_composite_scores, _load_l3_subchain_meta
+
+        # 真实形态：factor_id=fct_xxx，name=fut_xxx（generate_factor_id 生成）
+        f1 = {
+            "factor_id": "fct_aaa",
+            "name": "fut_alpha",
+            "subchain_scope": ["能源"],
+            "subchain_ic_profile": _profile({"能源"}, {"能源": 0.20}),
+        }
+        f2 = {
+            "factor_id": "fct_bbb",
+            "name": "fut_beta",
+            "subchain_scope": "all",
+            "subchain_ic_profile": {},
+        }
+        mod = build_subchain_weights([f1, f2], CHAINS, SubchainWeightConfig())
+        assert set(mod.keys()) == {"fct_aaa", "fct_bbb"}  # 矩阵键 = factor_id
+        assert mod["fct_aaa"]["能源"] == 1.0
+        assert mod["fct_aaa"]["聚酯"] == 0.0
+        assert mod["fct_bbb"]["能源"] == 1.0  # all → 全链 1.0
+
+        combo = {
+            "version": "v2",
+            "updated_at": "2026-08-17T00:00:00",
+            "synthesis_mode": "quality_weight",
+            "n_factors": 2,
+            "signals": [
+                {"factor_id": "fct_aaa", "name": "fut_alpha", "weight": 0.6, "retained": True},
+                {"factor_id": "fct_bbb", "name": "fut_beta", "weight": 0.4, "retained": True},
+            ],
+        }
+        inject_to_fdt(combo, [], tmp_path, subchain_weights=mod, symbol_chain=SYMBOL_CHAIN)
+        sw, sc = _load_l3_subchain_meta(tmp_path / "factor_weights.json")
+        assert set(sw.keys()) == {"fut_alpha", "fut_beta"}  # 注入端已归一 name 键
+        assert sw["fut_alpha"]["能源"] == 1.0
+        assert sw["fut_alpha"]["聚酯"] == 0.0
+
+        # 管线消费：fut_alpha 在无效子链（聚酯 PF0）权重 0 → 仅全链 fut_beta 留在 PF0
+        signal_matrix = {
+            "SC0": {"fut_alpha": np.array([1.0]), "fut_beta": np.array([1.0])},
+            "PF0": {"fut_alpha": np.array([1.0]), "fut_beta": np.array([1.0])},
+            "TA0": {"fut_alpha": np.array([1.0])},  # 仅单链特异因子 → 权重和 0 → 剔除
+        }
+        factor_weights = {"fut_alpha": 0.6, "fut_beta": 0.4}
+        factors = [{"name": "fut_alpha"}, {"name": "fut_beta"}]
+        scores, _ = _compute_composite_scores(
+            signal_matrix, {}, factors, factor_weights, subchain_weights=sw, symbol_chain=sc
+        )
+        assert scores["SC0"] == pytest.approx(1.0)  # 有效子链全权重（0.6+0.4 归一）
+        assert "TA0" not in scores  # fut_alpha 权重 0 → 权重和 0，剔除（调制生效）
+        # PF0 中 fut_alpha 被归零、fut_beta 保留 → 得分仍为全链因子主导的 1.0
+        # （调制语义=降权而非剔除品种，此处断言不再包含被归零的 fut_alpha 单独主导）
+        assert scores["PF0"] == pytest.approx(1.0)
 
     def test_compute_composite_scores_no_subchain_compat(self):
         # 不传子链参数 → 全链权重（兼容现状）

@@ -143,6 +143,81 @@ class TestFactorReturnsBuilder:
 
 
 # ════════════════════════════════════════════════════════════
+# 1.5 GAP-I306: 自动构建矩阵质量修正（quantile/方向校准/MAD 缩尾）
+# ════════════════════════════════════════════════════════════
+
+
+def test_auto_build_factor_returns_robust_config_and_winsorize(tmp_path, monkeypatch):
+    """_auto_build_factor_returns 使用 quantile=0.3+directional=True，并对收益做 MAD 缩尾。
+
+    覆盖 GAP-I306：25 品种 quantile=0.2 每腿仅 5 只致 Sharpe 虚高 20.06——
+    修复后分位腿加宽、方向校准、极端日收益截断。
+    """
+    from types import SimpleNamespace
+
+    import fts.factor_engine.factor_returns as fr_mod
+    import fts.factor_engine.l3_signal_service as l3_mod
+    from fts.factor_engine.portfolio_loop import _auto_build_factor_returns
+
+    n = 30
+    idx = pd.date_range("2026-01-01", periods=n)
+    panel = {
+        sym: pd.DataFrame({"close": np.linspace(3000 + i * 1000, 4000 + i * 1000, n)}, index=idx)
+        for i, sym in enumerate(("RB0", "CU0", "AU0", "M0"))
+    }
+    factors = [
+        {
+            "factor_id": "f1",
+            "code": (
+                "def factor_program(data, params):\n"
+                "    import numpy as np\n"
+                "    return np.tanh(data['close'].values / 1000.0)\n"
+            ),
+        },
+        {
+            "factor_id": "f2",
+            "code": (
+                "def factor_program(data, params):\n"
+                "    import numpy as np\n"
+                "    return np.tanh(data['close'].values / 2000.0)\n"
+            ),
+        },
+    ]
+
+    captured: dict = {}
+
+    class FakeBuilder:
+        def __init__(self, config=None):
+            captured["config"] = config
+
+        def build_from_panel(self, **kw):
+            # 0.1/0.2 交替 29 行 + 1 个极端离群 10.0 → MAD>0 缩尾应截断离群
+            base = [0.1 if i % 2 == 0 else 0.2 for i in range(n)]
+            base[-1] = 10.0
+            return SimpleNamespace(
+                returns=pd.DataFrame({"f1": base, "f2": [0.15] * n}, index=idx)
+            )
+
+    monkeypatch.setattr(fr_mod, "FactorReturnsBuilder", FakeBuilder)
+    monkeypatch.setattr(
+        l3_mod,
+        "build_signal_matrix",
+        lambda *a, **k: SimpleNamespace(
+            signal_matrix=np.zeros((n, 4, 2)),
+            forward_returns=np.zeros((n, 4)),
+            dates=list(idx),
+            factor_ids=["f1", "f2"],
+        ),
+    )
+    out = _auto_build_factor_returns(panel, factors, tmp_path, market="futures")
+    assert out is not None
+    assert captured["config"].quantile == 0.3
+    assert captured["config"].directional is True
+    # MAD 缩尾生效：极端离群 10.0 被截断（中位数 0.15、MAD=0.05 → 上界≈0.37）
+    assert float(out["f1"].max()) < 1.0
+
+
+# ════════════════════════════════════════════════════════════
 # 2. RiskModelEstimator 测试
 # ════════════════════════════════════════════════════════════
 
