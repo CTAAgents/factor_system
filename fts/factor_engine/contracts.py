@@ -546,6 +546,9 @@ class L1VerifierConfig(TypedDict, total=False):
     require_executable: bool  # 必须可执行（默认 True）
     require_not_duplicate: bool  # 必须不重复（默认 True）
     min_narrative_length: int  # narrative 最小长度（默认 20 字符）
+    # 论证-评分一致性检查（GAP-123 P2④，默认 False=关闭）：开启后对得分 ≥3 的维度
+    # 校验 narrative 是否含该维度机制关键词，避免「高分低论证」凑分通过。
+    require_argument_consistency: bool
 
 
 class L1VerifierResult(TypedDict, total=False):
@@ -582,6 +585,7 @@ DEFAULT_L1_VERIFIER_CONFIG: L1VerifierConfig = L1VerifierConfig(
     require_executable=True,
     require_not_duplicate=True,
     min_narrative_length=20,
+    require_argument_consistency=False,  # GAP-123 P2④ 默认关闭（零行为变更，可经配置开启）
 )
 """v1.1.0 锁定的 L1 Verifier 默认配置 — 不可在运行时修改。"""
 

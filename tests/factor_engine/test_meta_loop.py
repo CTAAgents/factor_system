@@ -315,6 +315,40 @@ class TestL1Verifier:
         v.lock()
         assert v.is_locked is True
 
+    # ─── GAP-123 P2④: 论证-评分一致性检查（默认关闭） ───
+
+    def test_argument_consistency_default_off(self, valid_candidate):
+        """require_argument_consistency 默认关闭 → 高分低论证候选不被额外拦截。"""
+        valid_candidate["economic_logic"] = EconomicLogic(
+            theory=4, behavioral=4, microstructure=4, institutional=4,
+            narrative="动量延续策略",  # 无任何机制关键词
+        )
+        v = L1Verifier()
+        result = v.check(valid_candidate, SeedPool())
+        # 默认关闭：不因论证缺失被拒（仅 narrative 长度等常规项判定）
+        assert not any("缺乏该维度机制论证" in r for r in result["failure_reasons"])
+
+    def test_argument_consistency_rejects_high_score_no_mechanism(self, valid_candidate):
+        """开启后：理论维度 4 分但 narrative 无机制关键词 → 拒绝。"""
+        valid_candidate["economic_logic"] = EconomicLogic(
+            theory=4, behavioral=3, microstructure=3, institutional=3,
+            narrative="该因子基于价格动量构建，用于趋势跟踪",
+        )
+        v = L1Verifier(L1VerifierConfig(require_argument_consistency=True))
+        result = v.check(valid_candidate, SeedPool())
+        assert result["passed"] is False
+        assert any("缺乏该维度机制论证" in r for r in result["failure_reasons"])
+
+    def test_argument_consistency_passes_with_mechanism(self, valid_candidate):
+        """开启后：高分维度含机制关键词 → 通过。"""
+        valid_candidate["economic_logic"] = EconomicLogic(
+            theory=4, behavioral=3, microstructure=3, institutional=3,
+            narrative="动量效应源于行为偏差下的反应不足与羊群效应，理论模型支持风险溢价补偿，成交活跃度反映流动性，机构持仓集中度增强趋势延续",
+        )
+        v = L1Verifier(L1VerifierConfig(require_argument_consistency=True))
+        result = v.check(valid_candidate, SeedPool())
+        assert not any("缺乏该维度机制论证" in r for r in result["failure_reasons"])
+
 
 # ════════════════════════════════════════════════════════
 # 2. MetaStateManager 测试

@@ -91,6 +91,14 @@ class L1Verifier:
     任何运行时尝试修改 _config 应抛 RuntimeError。
     """
 
+    # GAP-123 P2④: 各维度机制关键词（论证-评分一致性检查；narrative 命中任一即视为有机制支撑）
+    _DIM_MECHANISM_KEYWORDS: dict[str, tuple[str, ...]] = {
+        "theory": ("理论", "定理", "模型", "均衡", "定价", "风险溢价", "溢价", "补偿"),
+        "behavioral": ("行为", "偏差", "过度反应", "反应不足", "动量", "反转", "羊群", "处置", "锚定", "投资者情绪"),
+        "microstructure": ("微观", "流动性", "价差", "盘口", "成交", "订单", "做市", "冲击", "深度"),
+        "institutional": ("机构", "持仓", "期限结构", "基差", "资金", "换月", "套保", "参与者", "仓位"),
+    }
+
     def __init__(self, config: L1VerifierConfig = DEFAULT_L1_VERIFIER_CONFIG):
         self._config: L1VerifierConfig = dict(config)  # type: ignore[assignment]
         self._locked: bool = True
@@ -118,6 +126,17 @@ class L1Verifier:
                 dimensions_passed += 1
         if dimensions_passed < config.get("min_economic_score", 2):
             reasons.append(f"经济逻辑达标维度 {dimensions_passed}/4 < {config['min_economic_score']}")
+
+        # GAP-123 P2④: 论证-评分一致性检查（默认关闭，开启后防「高分低论证」凑分）
+        if config.get("require_argument_consistency", False):
+            narrative_text = economic.get("narrative", "") or ""
+            for dim, kws in self._DIM_MECHANISM_KEYWORDS.items():
+                score = economic.get(dim, 0)
+                if score >= 3 and narrative_text and not any(kw in narrative_text for kw in kws):
+                    reasons.append(
+                        f"经济逻辑维度 {dim} 评分 {score} ≥3 但 narrative 缺乏该维度机制论证（GAP-123）"
+                    )
+                    break
 
         # 2. 可执行性
         if config.get("require_executable", True):
