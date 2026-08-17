@@ -1,0 +1,54 @@
+# config/extractors.yaml — 提取器源注册表 SSOT（GAP-126）
+#
+# 期货 L1 知识补给多源清单（FuturesExtractorPipeline 消费）。新增/启停因子源
+# 只需在此登记，无需改代码（fts/factor_engine/extractors/futures_pipeline.py
+# build_futures_extractors 读取本文件构造提取器列表）。
+#
+# 每源字段：
+#   enabled:  是否参与管道（false = 完全排除，不实例化）
+#   paused:   是否暂停（true = 实例化但提取时跳过，可运行时经状态存储恢复）
+#   params:   各源特有构造参数（yaml_file/family_name/page_size 等）
+# 单次 LLM 提取最大因子数走全局配置（l1_extractor_max_factors），不支持每源覆盖。
+#
+# 缺失/损坏时回退内置默认（全源启用），不阻断管道。
+version: 1
+
+sources:
+  # 源 1: 天软 YAML 静态感知源（首次提取后自动暂停，经 pause_tinysoft_after_first 控制）
+  tinysoft:
+    enabled: true
+    paused: false
+    params:
+      yaml_file: tinysoft.yaml
+      family_name: tinysoft_momentum
+
+  # 源 2: 券商研报（东财 API 实时获取 + LLM 提取）
+  broker_reports:
+    enabled: true
+    paused: false
+    params:
+      family_name: broker_cta
+      page_size: 100
+
+  # 源 3: 学术论文（arXiv API + LLM 提取）
+  academic_papers:
+    enabled: true
+    paused: false
+
+  # 源 4: 宏观事件（GAP-I103，跨品种方向注入）
+  macro_events:
+    enabled: true
+    paused: false
+
+  # 源 5: WebSearch 动态因子源（检索量化平台/研报/社区 → LLM 提取）
+  web_search:
+    enabled: true
+    paused: false
+    params:
+      dynamic: true
+
+  # 源 6: 全球多源批量知识深读（plans/44 P0：arXiv/OpenAlex/东财/全球报告，
+  #       三层管线：采集→粗筛→LLM 深读；l1_bulk_enabled 开关总控）
+  bulk_knowledge:
+    enabled: true
+    paused: false

@@ -394,6 +394,163 @@ class AcademicPaperExtractor(BaseExtractor):
 # ─── 管道 ──────────────────────────────────────────────────
 
 
+# GAP-126: 提取器源注册表配置化（config/extractors.yaml SSOT）。
+# 每源 enabled/paused/max_factors/params 下沉 YAML；缺失/损坏回退内置默认（全源启用）。
+_DEFAULT_SOURCE_CONFIG: dict[str, dict[str, Any]] = {
+    "tinysoft": {"enabled": True, "paused": False, "params": {"family_name": "tinysoft_momentum"}},
+    "broker_reports": {"enabled": True, "paused": False, "params": {"family_name": "broker_cta", "page_size": 100}},
+    "academic_papers": {"enabled": True, "paused": False},
+    "macro_events": {"enabled": True, "paused": False},
+    "web_search": {"enabled": True, "paused": False, "params": {"dynamic": True}},
+    "bulk_knowledge": {"enabled": True, "paused": False},
+}
+
+
+def load_extractor_source_config(
+    config_path: Optional[str | Path] = None,
+) -> dict[str, dict[str, Any]]:
+    """读取提取器源注册表（config/extractors.yaml，env FTS_EXTRACTORS_CONFIG 可覆盖）。
+
+    Args:
+        config_path: 显式配置文件路径（None → env 覆盖或 config/extractors.yaml）
+
+    Returns:
+        {source_name: {enabled, paused, max_factors, params}}；缺失/损坏回退内置默认。
+    """
+    import os
+
+    path = Path(config_path or os.getenv("FTS_EXTRACTORS_CONFIG", "config/extractors.yaml"))
+    try:
+        if not path.exists():
+            logger.warning("[ExtractorConfig] 源注册表不存在 %s，回退内置默认", path)
+            return {k: dict(v) for k, v in _DEFAULT_SOURCE_CONFIG.items()}
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        sources = data.get("sources") or {}
+        merged: dict[str, dict[str, Any]] = {}
+        for name, default in _DEFAULT_SOURCE_CONFIG.items():
+            entry = dict(sources.get(name, {}))
+            merged[name] = {
+                "enabled": bool(entry.get("enabled", default["enabled"])),
+                "paused": bool(entry.get("paused", default["paused"])),
+                "max_factors": entry.get("max_factors", default.get("max_factors")),
+                "params": dict(entry.get("params", {})),
+            }
+        return merged
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[ExtractorConfig] 源注册表解析失败（%s），回退内置默认", e)
+        return {k: dict(v) for k, v in _DEFAULT_SOURCE_CONFIG.items()}
+
+
+def build_futures_extractors(
+    llm_client: Optional[Any] = None,
+    max_factors: Optional[int] = None,
+    macro_enabled: bool = True,
+    config_path: Optional[str | Path] = None,
+) -> list[BaseExtractor]:
+    """按 config/extractors.yaml 源注册表构造期货提取器列表（GAP-126）。
+
+    构造器标志（macro_enabled / l1_bulk_enabled）与 YAML enabled 取交集：
+    YAML 可整体启停某源，构造函数标志为运行时硬开关（向后兼容）。
+
+    Args:
+        llm_client: LLM 客户端
+        max_factors: 单次 LLM 提取最大因子数（None → FTSConfig）
+        macro_enabled: 宏观事件源硬开关（False 强制排除，兼容旧调用）
+        config_path: 源注册表路径（None → 默认/环境覆盖）
+
+    Returns:
+        按注册顺序构造的提取器列表（仅 enabled 源）
+    """
+    cfg = load_extractor_source_config(config_path)
+    if max_factors is None:
+        max_factors = get_config().l1_extractor_max_factors
+
+    extractors: list[BaseExtractor] = []
+
+    def _want(name: str, hard_flag: bool = True) -> bool:
+        return bool(hard_flag and cfg.get(name, {}).get("enabled", True))
+
+    if _want("tinysoft"):
+        p = cfg["tinysoft"].get("params", {})
+        extractors.append(
+            YamlSeedExtractor(
+                name="tinysoft",
+                yaml_file=SEEDS_DIR / p.get("yaml_file", FACTOR_FILE_MAP["tinysoft"]),
+                family_name=p.get("family_name", "tinysoft_momentum"),
+                paused=cfg["tinysoft"].get("paused", False),
+            )
+        )
+    if _want("broker_reports"):
+        p = cfg["broker_reports"].get("params", {})
+        extractors.append(
+            ResearchReportExtractor(
+                name="broker_reports",
+                family_name=p.get("family_name", "broker_cta"),
+                paused=cfg["broker_reports"].get("paused", False),
+                llm_client=llm_client,
+                max_factors=max_factors,
+                page_size=p.get("page_size", 100),
+            )
+        )
+    if _want("academic_papers"):
+        extractors.append(
+            AcademicPaperExtractor(
+                name="academic_papers",
+                family_name="academic_papers",
+                paused=cfg["academic_papers"].get("paused", False),
+                llm_client=llm_client,
+                max_factors=max_factors,
+            )
+        )
+    if _want("macro_events", macro_enabled):
+        from .alternative_sources import MacroEventExtractor
+
+        extractors.append(
+            MacroEventExtractor(
+                name="macro_events",
+                family_name="macro_events",
+                paused=cfg["macro_events"].get("paused", False),
+                llm_client=llm_client,
+                market="futures",
+                max_factors=max_factors,
+            )
+        )
+    if _want("web_search"):
+        from .web_search import WebSearchExtractor
+
+        p = cfg["web_search"].get("params", {})
+        extractors.append(
+            WebSearchExtractor(
+                name="web_search",
+                paused=cfg["web_search"].get("paused", False),
+                llm_client=llm_client,
+                market="futures",
+                max_factors=max_factors,
+                dynamic=p.get("dynamic", getattr(get_config(), "l1_dynamic_websearch", True)),
+            )
+        )
+    if _want("bulk_knowledge") and getattr(get_config(), "l1_bulk_enabled", True):
+        from .bulk_knowledge import BulkKnowledgeExtractor
+
+        extractors.append(
+            BulkKnowledgeExtractor(
+                name="bulk_knowledge",
+                paused=cfg["bulk_knowledge"].get("paused", False),
+                llm_client=llm_client,
+                market="futures",
+                max_factors=max_factors,
+                max_results=getattr(get_config(), "l1_source_arxiv_max_results", 50),
+                page_size=getattr(get_config(), "l1_source_report_page_size", 100),
+                deepread_max=getattr(get_config(), "l1_knowledge_deepread_max", 60),
+                embedding_enabled=getattr(get_config(), "l1_embedding_enabled", True),
+                embedding_threshold=getattr(get_config(), "l1_embedding_threshold", 0.30),
+                openalex_languages=getattr(get_config(), "l1_openalex_languages", None),
+                non_en_reports_enabled=getattr(get_config(), "l1_non_en_reports_enabled", True),
+            )
+        )
+    return extractors
+
+
 class FuturesExtractorPipeline(BaseExtractorPipeline):
     """期货三源提取器管道。
 
@@ -430,77 +587,13 @@ class FuturesExtractorPipeline(BaseExtractorPipeline):
             max_factors = get_config().l1_extractor_max_factors
         self._max_factors = max_factors
 
-        # LLM 提取源统一注入配置配额（天软为静态感知源不传参）
-        extractors: list[BaseExtractor] = [
-            YamlSeedExtractor(
-                name="tinysoft",
-                yaml_file=SEEDS_DIR / FACTOR_FILE_MAP["tinysoft"],
-                family_name="tinysoft_momentum",
-                paused=False,  # 首次提取启用
-            ),
-            ResearchReportExtractor(
-                name="broker_reports",
-                family_name="broker_cta",
-                paused=False,  # 默认启用
-                llm_client=llm_client,
-                max_factors=self._max_factors,
-            ),
-            AcademicPaperExtractor(
-                name="academic_papers",
-                family_name="academic_papers",
-                paused=False,  # 默认启用
-                llm_client=llm_client,
-                max_factors=self._max_factors,
-            ),
-        ]
-        # GAP-I103 (v2.80.0): 另类知识源——宏观事件（期货侧，跨品种方向注入）
-        if macro_enabled:
-            from .alternative_sources import MacroEventExtractor
-
-            extractors.append(
-                MacroEventExtractor(
-                    name="macro_events",
-                    family_name="macro_events",
-                    paused=False,
-                    llm_client=llm_client,
-                    market="futures",
-                    max_factors=self._max_factors,
-                )
-            )
-        # plans/41 A: WebSearch 动态因子源（检索量化平台/研报/社区 → LLM 提取）
-        from .web_search import WebSearchExtractor
-
-        extractors.append(
-            WebSearchExtractor(
-                name="web_search",
-                paused=False,
-                llm_client=llm_client,
-                market="futures",
-                max_factors=self._max_factors,
-                dynamic=getattr(get_config(), "l1_dynamic_websearch", True),
-            )
+        # GAP-126: 源注册表配置化——按 config/extractors.yaml 构造（enabled 过滤），
+        # macro_enabled 为运行时硬开关（False 强制排除宏观源，兼容旧调用）
+        extractors = build_futures_extractors(
+            llm_client=llm_client,
+            max_factors=max_factors,
+            macro_enabled=macro_enabled,
         )
-        # plans/44 P0: 全球多源批量知识深读源（arXiv/OpenAlex/东财/全球报告，
-        # 三层管线：采集→粗筛→LLM 深读；l1_bulk_enabled 开关）
-        if getattr(get_config(), "l1_bulk_enabled", True):
-            from .bulk_knowledge import BulkKnowledgeExtractor
-
-            extractors.append(
-                BulkKnowledgeExtractor(
-                    name="bulk_knowledge",
-                    paused=False,
-                    llm_client=llm_client,
-                    market="futures",
-                    max_factors=self._max_factors,
-                    max_results=getattr(get_config(), "l1_source_arxiv_max_results", 50),
-                    page_size=getattr(get_config(), "l1_source_report_page_size", 100),
-                    deepread_max=getattr(get_config(), "l1_knowledge_deepread_max", 60),
-                    embedding_enabled=getattr(get_config(), "l1_embedding_enabled", True),
-                    embedding_threshold=getattr(get_config(), "l1_embedding_threshold", 0.30),
-                    openalex_languages=getattr(get_config(), "l1_openalex_languages", None),
-                    non_en_reports_enabled=getattr(get_config(), "l1_non_en_reports_enabled", True),
-                )
-            )
 
         super().__init__(
             extractors=extractors,

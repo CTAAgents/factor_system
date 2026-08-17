@@ -173,7 +173,10 @@ class TestBaseExtractor:
         ext = DummyExtractor("src_a", llm_client=_Stub())
         candidates = ext._llm_extract_factors("text", "t1")
         assert len(candidates) == 1
-        assert candidates[0]["economic_logic"] == {}
+        # plans/44 C3 narrative 补全：非 dict 归一为空 dict 后由 _ensure_narrative 填充 narrative（非空 {}）
+        econ = candidates[0]["economic_logic"]
+        assert isinstance(econ, dict)
+        assert econ.get("narrative", "").strip()
 
     def test_llm_extract_exception_returns_empty(self):
         class _Stub:

@@ -352,9 +352,12 @@ class TestFuturesExtractorPipeline:
     """测试期货提取器管道。"""
 
     def test_construct_three_sources(self, tmp_path: Path):
-        """管道包含三源及宏观事件源且市场为 futures（GAP-I103）。"""
+        """管道包含六源（三源 + 宏观 + WebSearch + 批量深读）且市场为 futures（GAP-I103/plans41/44）。"""
         pipe = FuturesExtractorPipeline(state_path=str(tmp_path / "state.json"))
-        assert set(pipe.extractors) == {"tinysoft", "broker_reports", "academic_papers", "macro_events"}
+        assert set(pipe.extractors) == {
+            "tinysoft", "broker_reports", "academic_papers",
+            "macro_events", "web_search", "bulk_knowledge",
+        }
         assert pipe.market == "futures"
 
     def test_tinysoft_yaml_path_resolved(self):
@@ -422,10 +425,13 @@ class TestFactory:
     """测试便捷工厂函数。"""
 
     def test_create_pipeline(self, tmp_path: Path):
-        """工厂函数返回可用的管道实例。"""
+        """工厂函数返回可用的管道实例（六源）。"""
         pipe = create_futures_extractor_pipeline(
             state_path=str(tmp_path / "state.json"),
             pause_tinysoft_after_first=False,
         )
         assert isinstance(pipe, FuturesExtractorPipeline)
-        assert set(pipe.extractors) == {"tinysoft", "broker_reports", "academic_papers", "macro_events"}
+        assert set(pipe.extractors) == {
+            "tinysoft", "broker_reports", "academic_papers",
+            "macro_events", "web_search", "bulk_knowledge",
+        }
