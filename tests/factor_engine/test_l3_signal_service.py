@@ -253,6 +253,84 @@ class TestPersistLoadIncremental:
     def test_missing_returns_none(self, tmp_path):
         assert load_signal_matrix(["f1"], "futures", "2026-08-16", db_path=str(tmp_path / "none.duckdb")) is None
 
+    # ─── plans/51 A1：params 纳入增量判定 ───────────────────
+    def test_params_hash_judgment(self, tmp_path):
+        """A1：同 code 改 params → 重算；同 code 同 params → 复用。"""
+        from fts.factor_engine.l3_signal_service import _code_hash, _params_hash
+
+        panel = _mk_panel(n_days=30, symbols=("RB",))
+        f = _mk_factor("f1", window=2)
+        factor_codes = {f["factor_id"]: f}
+        dates = sorted(panel["RB"].index)
+        db = tmp_path / "l3_signal.duckdb"
+
+        code_hash = _code_hash(f["code"])
+        p_hash = _params_hash(f["params"])
+        bundle = build_signal_matrix(panel, [f], factor_codes, dates)
+        persist_signal_matrix(
+            bundle, {"f1": code_hash}, "futures", "2026-08-16",
+            db_path=str(db), params_hashes={"f1": p_hash},
+        )
+
+        # 同 code 同 params → 复用
+        to_recomp, reusable = incremental_factor_ids(
+            ["f1"], {"f1": code_hash}, "futures", "2026-08-16", db_path=str(db),
+            params_hashes={"f1": p_hash},
+        )
+        assert to_recomp == []
+        assert reusable == ["f1"]
+
+        # 同 code 改 params → 重算（不得静默复用旧参数信号）
+        to_recomp, reusable = incremental_factor_ids(
+            ["f1"], {"f1": code_hash}, "futures", "2026-08-16", db_path=str(db),
+            params_hashes={"f1": _params_hash({"seed": 999})},
+        )
+        assert to_recomp == ["f1"]
+        assert reusable == []
+
+    def test_params_hash_none_backward_compat(self, tmp_path):
+        """A1：params_hashes=None 时仅比 code_hash（向后兼容）。"""
+        from fts.factor_engine.l3_signal_service import _code_hash, _params_hash
+
+        panel = _mk_panel(n_days=30, symbols=("RB",))
+        f = _mk_factor("f1", window=2)
+        factor_codes = {f["factor_id"]: f}
+        dates = sorted(panel["RB"].index)
+        db = tmp_path / "l3_signal.duckdb"
+        code_hash = _code_hash(f["code"])
+        bundle = build_signal_matrix(panel, [f], factor_codes, dates)
+        persist_signal_matrix(
+            bundle, {"f1": code_hash}, "futures", "2026-08-16",
+            db_path=str(db), params_hashes={"f1": _params_hash(f["params"])},
+        )
+
+        # 不传 params_hashes：仅比 code_hash → 复用（与旧调用方行为一致）
+        to_recomp, reusable = incremental_factor_ids(
+            ["f1"], {"f1": code_hash}, "futures", "2026-08-16", db_path=str(db),
+        )
+        assert to_recomp == []
+        assert reusable == ["f1"]
+
+    # ─── plans/51 A3：load bundle 契约 ─────────────────────
+    def test_load_dates_and_fwd_contract(self, tmp_path):
+        """A3：load 结果——传 common_dates 回填 dates；forward_returns 全 NaN。"""
+        panel = _mk_panel(n_days=30, symbols=("RB",))
+        f = _mk_factor("f1", window=2)
+        dates = sorted(panel["RB"].index)
+        db = tmp_path / "l3_signal.duckdb"
+        load_or_build_signal_matrix(
+            panel, [f], {f["factor_id"]: f}, dates, "futures", "2026-08-16", db_path=str(db)
+        )
+
+        loaded = load_signal_matrix(["f1"], "futures", "2026-08-16", db_path=str(db), common_dates=dates)
+        assert loaded is not None
+        assert loaded.dates == list(dates)[: loaded.signal_matrix.shape[0]]
+        assert np.isnan(loaded.forward_returns).all()
+
+        loaded2 = load_signal_matrix(["f1"], "futures", "2026-08-16", db_path=str(db))
+        assert loaded2 is not None
+        assert loaded2.dates == []
+
 
 class TestLoadOrBuildIncremental:
     """D 层：信号矩阵一等公民 + 增量重算。"""
@@ -327,4 +405,47 @@ class TestLoadOrBuildIncremental:
             db_path=str(db), use_store=False,
         )
         full = build_signal_matrix(panel, factors, factor_codes, dates)
+        assert np.allclose(inc.signal_matrix, full.signal_matrix, equal_nan=True)
+
+    # ─── plans/51 A2：增量合并形状防护 ──────────────────────
+    def test_shape_mismatch_recomputes(self, tmp_path):
+        """A2：库行数与当前面板不一致 → 降级重算，结果与全量一致（不静默错位）。"""
+        panel = _mk_panel(n_days=30, symbols=("RB", "CU"))
+        f = _mk_factor("f1", window=2)
+        factor_codes = {f["factor_id"]: f}
+        dates = sorted(set.intersection(*[set(df.index) for df in panel.values()]))
+        db = tmp_path / "l3_signal.duckdb"
+
+        # 首次构建（30 日窗口入库）
+        load_or_build_signal_matrix(
+            panel, [f], factor_codes, dates, "futures", "2026-08-16", db_path=str(db)
+        )
+
+        # 数据更新：同 end_date、窗口变长（45 日）→ 形状不符 → 降级重算
+        panel2 = _mk_panel(n_days=45, symbols=("RB", "CU"))
+        dates2 = sorted(set.intersection(*[set(df.index) for df in panel2.values()]))
+        full = build_signal_matrix(panel2, [f], factor_codes, dates2)
+        inc = load_or_build_signal_matrix(
+            panel2, [f], factor_codes, dates2, "futures", "2026-08-16", db_path=str(db)
+        )
+        assert inc.signal_matrix.shape == full.signal_matrix.shape
+        assert np.allclose(inc.signal_matrix, full.signal_matrix, equal_nan=True)
+        assert np.allclose(inc.forward_returns, full.forward_returns, equal_nan=True)
+
+    def test_shape_match_merges_from_store(self, tmp_path):
+        """A2：形状一致时直接从库合并（f1 复用库信号）。"""
+        panel = _mk_panel(n_days=30, symbols=("RB", "CU"))
+        f1, f2 = _mk_factor("f1", window=2), _mk_factor("f2", window=4)
+        dates = sorted(set.intersection(*[set(df.index) for df in panel.values()]))
+        db = tmp_path / "l3_signal.duckdb"
+
+        load_or_build_signal_matrix(
+            panel, [f1], {f1["factor_id"]: f1}, dates, "futures", "2026-08-16", db_path=str(db)
+        )
+        factors = [f1, f2]
+        factor_codes = {f["factor_id"]: f for f in factors}
+        full = build_signal_matrix(panel, factors, factor_codes, dates)
+        inc = load_or_build_signal_matrix(
+            panel, factors, factor_codes, dates, "futures", "2026-08-16", db_path=str(db)
+        )
         assert np.allclose(inc.signal_matrix, full.signal_matrix, equal_nan=True)

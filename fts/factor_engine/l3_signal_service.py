@@ -95,7 +95,7 @@ def align_signal_to_dates(
     语义: 不在 df 索引中的日期留 NaN；越界（sig 短于 df）也留 NaN。
     """
     n_dates = len(common_dates)
-    out = np.full(n_dates, np.nan, dtype=np.float64)
+    out: np.ndarray = np.full(n_dates, np.nan, dtype=np.float64)
     if df is None or len(df) == 0:
         return out
     sig_arr = np.asarray(sig, dtype=np.float64)
@@ -137,7 +137,7 @@ def build_signal_matrix(
 
     stocks = sorted(panel.keys())
     n_dates, n_stocks, n_factors = len(common_dates), len(stocks), len(valid_factors)
-    signal_matrix = np.full((n_dates, n_stocks, n_factors), np.nan, dtype=np.float64)
+    signal_matrix: np.ndarray = np.full((n_dates, n_stocks, n_factors), np.nan, dtype=np.float64)
 
     for j, f in enumerate(valid_factors):
         fdata = factor_codes.get(f["factor_id"])
@@ -157,13 +157,13 @@ def build_signal_matrix(
             except Exception:  # noqa: BLE001 — 单品种执行失败留 NaN
                 continue
 
-    forward_returns = np.full((n_dates, n_stocks), np.nan, dtype=np.float64)
+    forward_returns: np.ndarray = np.full((n_dates, n_stocks), np.nan, dtype=np.float64)
     for i, sym in enumerate(stocks):
         df = panel.get(sym)
         if df is None or df.empty or "close" not in df.columns:
             continue
         closes = df["close"].to_numpy(dtype=np.float64)
-        fwd = np.full(len(closes), np.nan, dtype=np.float64)
+        fwd: np.ndarray = np.full(len(closes), np.nan, dtype=np.float64)
         fwd[:-forward_days] = (
             (closes[forward_days:] - closes[:-forward_days]) / np.maximum(closes[:-forward_days], 1e-10)
         )
@@ -189,6 +189,12 @@ def duckdb_corr_matrix(
 ) -> np.ndarray:
     """用 DuckDB SQL 计算因子时间序列两两 Pearson 相关（C++ 向量化）。
 
+    保留状态（plans/51 B4 豁免）：**未接入生产**——本实现逐对执行一次 SQL
+    查询（Python 循环 + 每对一次往返），而参考品种因子数通常 <100，消费方
+    ``portfolio_loop._compute_signal_correlations`` / ``factor_clustering``
+    沿用 numpy ``corrcoef`` 单次调用更优。本函数保留为备用路径（依赖缺失/超大
+    相关矩阵场景），与 numpy 语义逐位一致（``test_matches_numpy_reference``）。
+
     输入 (n_dates, n_factors) 时间序列矩阵（参考品种），输出 (n, n) 相关矩阵。
     与 np.corrcoef 语义一致：逐对忽略任一列 NaN；有效点数 ≤ min_valid_points
     的对置 NaN。
@@ -202,7 +208,7 @@ def duckdb_corr_matrix(
         corr: (n_factors, n_factors) 相关矩阵（对角 1.0）
     """
     n = len(factor_ids)
-    corr = np.full((n, n), np.nan, dtype=np.float64)
+    corr: np.ndarray = np.full((n, n), np.nan, dtype=np.float64)
     if n == 0:
         return corr
     np.fill_diagonal(corr, 1.0)
@@ -244,7 +250,7 @@ def duckdb_corr_matrix(
 def _numpy_corr_matrix(signal_2d: np.ndarray, min_valid_points: int = 10) -> np.ndarray:
     """numpy 参考实现（与 duckdb_corr_matrix 语义一致）。"""
     n = signal_2d.shape[1]
-    corr = np.full((n, n), np.nan, dtype=np.float64)
+    corr: np.ndarray = np.full((n, n), np.nan, dtype=np.float64)
     np.fill_diagonal(corr, 1.0)
     for i in range(n):
         for j in range(i + 1, n):
@@ -262,6 +268,22 @@ def _numpy_corr_matrix(signal_2d: np.ndarray, min_valid_points: int = 10) -> np.
 _L3_SIGNAL_TABLE = "l3_signal_matrix"
 _L3_SIGNAL_META_TABLE = "l3_signal_meta"
 _DEFAULT_DB_PATH = "data/l3_signal_store.duckdb"
+
+
+def _default_db_path() -> str:
+    """默认信号库路径：配置优先（plans/51 B2 存储域登记后路径可配），缺失回退硬编码。
+
+    离线/测试环境 get_config 可能失败，回退 ``_DEFAULT_DB_PATH`` 保证可运行。
+    """
+    try:
+        from fts.config.settings import get_config
+
+        p = get_config().l3_signal_store_db
+        if p:
+            return p
+    except Exception:  # noqa: BLE001 — 配置读取失败回退硬编码
+        pass
+    return _DEFAULT_DB_PATH
 
 
 def _connect(db_path: str | Path, read_only: bool = False):
@@ -318,6 +340,7 @@ def persist_signal_matrix(
     market: str,
     end_date: str,
     db_path: str | Path | None = None,
+    params_hashes: Optional[dict[str, str]] = None,
 ) -> bool:
     """将信号矩阵写入 DuckDB（D 层，短写连接 + filelock）。
 
@@ -327,13 +350,15 @@ def persist_signal_matrix(
         market: 市场标识
         end_date: 数据截止日（YYYY-MM-DD）
         db_path: DuckDB 路径（默认 data/l3_signal_store.duckdb）
+        params_hashes: factor_id → params_hash（真实参数哈希，plans/51 A1；
+            None 时回退空参数哈希——仅限测试/兼容路径，主流程必须传真值）
 
     Returns:
         写入成功返回 True
     """
     if bundle.signal_matrix.size == 0 or not bundle.factor_ids:
         return False
-    db_path = db_path or _DEFAULT_DB_PATH
+    db_path = db_path or _default_db_path()
     try:
         from fts.store.duckdb_lock import duckdb_write_lock
 
@@ -341,8 +366,9 @@ def persist_signal_matrix(
             con = _connect(db_path)
             try:
                 _init_tables(con)
-                params_hashes = {
-                    fid: _params_hash({})
+                params_hashes = params_hashes or {}
+                stored_params_hashes = {
+                    fid: (params_hashes.get(fid) or _params_hash({}))
                     for fid in bundle.factor_ids
                 }
                 updated_at = pd.Timestamp.now().isoformat()
@@ -357,7 +383,7 @@ def persist_signal_matrix(
                         [
                             fid,
                             code_hash,
-                            params_hashes[fid],
+                            stored_params_hashes[fid],
                             market,
                             end_date,
                             int(bundle.signal_matrix.shape[0]),
@@ -390,14 +416,29 @@ def load_signal_matrix(
     market: str,
     end_date: str,
     db_path: str | Path | None = None,
+    common_dates: Optional[Sequence[Any]] = None,
 ) -> Optional[SignalMatrixBundle]:
     """从 DuckDB 读取信号矩阵（D 层，只读短连接）。
 
+    契约说明（plans/51 A3）:
+        - signal_matrix 完整（symbols 为持久化时的品种全集，含 NaN 缺失列）；
+        - forward_returns 全 NaN —— D 层持久化不含前向收益，需调用方按 panel 重建
+          （参考 load_or_build_signal_matrix 的合并重建逻辑），不可直接消费；
+        - dates 仅在传入 common_dates 时回填；forward_days 取默认 5，持久化时不
+          含该元数据，调用方需自行确认。
+
+    Args:
+        factor_ids: 待读取因子
+        market: 市场标识
+        end_date: 数据截止日
+        db_path: DuckDB 路径
+        common_dates: 目标日期序列（回填 bundle.dates；行数与库中不一致时以库中
+            n_dates 为准截断/填充 NaN）
+
     Returns:
-        SignalMatrixBundle（symbols 为持久化时的品种全集，含 NaN 缺失列）；
-        无记录/失败返回 None
+        SignalMatrixBundle；无记录/失败返回 None
     """
-    db_path = db_path or _DEFAULT_DB_PATH
+    db_path = db_path or _default_db_path()
     try:
         con = _connect(db_path, read_only=True)
         try:
@@ -432,7 +473,7 @@ def load_signal_matrix(
     symbols = sorted({r[0] for r in rows})
     factor_ids_loaded = [f for f in factor_ids]
     n_f = len(factor_ids_loaded)
-    mat = np.full((n_dates, len(symbols), n_f), np.nan, dtype=np.float64)
+    mat: np.ndarray = np.full((n_dates, len(symbols), n_f), np.nan, dtype=np.float64)
     sym_idx = {s: i for i, s in enumerate(symbols)}
     fid_idx = {f: j for j, f in enumerate(factor_ids_loaded)}
     for sym, fid, sig in rows:
@@ -441,11 +482,14 @@ def load_signal_matrix(
             mat[: min(n_dates, len(arr)), sym_idx[sym], fid_idx[fid]] = arr[:n_dates]
 
     # 前向收益（从信号矩阵无法反推，D 层持久化不含；由调用方按需重建）
-    fwd = np.full((n_dates, len(symbols)), np.nan, dtype=np.float64)
+    fwd: np.ndarray = np.full((n_dates, len(symbols)), np.nan, dtype=np.float64)
+    dates_out: list[Any] = []
+    if common_dates is not None:
+        dates_out = list(common_dates)[:n_dates]
     return SignalMatrixBundle(
         signal_matrix=mat,
         forward_returns=fwd,
-        dates=[],
+        dates=dates_out,
         symbols=symbols,
         factor_ids=factor_ids_loaded,
     )
@@ -457,11 +501,14 @@ def incremental_factor_ids(
     market: str,
     end_date: str,
     db_path: str | Path | None = None,
+    params_hashes: Optional[dict[str, str]] = None,
 ) -> tuple[list[str], list[str]]:
     """增量判定（D 层）：返回 (需要全量重算的因子, 已入库可复用的因子)。
 
-    规则: 因子不在 meta 表 / 无 code_hash 或 code_hash 与库中不一致 →
-    全量重算；其余视为可复用。
+    规则（plans/51 A1 修订）: 因子不在 meta 表 / 无 code_hash 或 code_hash 与库中
+    不一致 → 全量重算；params_hashes 非 None 时同时校验 params_hash——不一致同样
+    重算（同 factor_id 改参数后不得静默复用旧信号，与 SignalCache key 含 params
+    的口径一致）。params_hashes 为 None 时仅比对 code_hash（向后兼容）。
 
     Args:
         factor_ids: 待处理因子
@@ -469,35 +516,43 @@ def incremental_factor_ids(
         market: 市场
         end_date: 数据截止日
         db_path: DuckDB 路径
+        params_hashes: factor_id → params_hash（plans/51 A1；None=仅比 code_hash）
 
     Returns:
         (to_recompute, reusable): 需重算 / 可复用因子 ID 列表
     """
     if not factor_ids:
         return [], []
-    db_path = db_path or _DEFAULT_DB_PATH
-    stored: dict[str, str] = {}
+    db_path = db_path or _default_db_path()
+    stored: dict[str, tuple[str, str]] = {}
     try:
         con = _connect(db_path, read_only=True)
         try:
             rows = con.execute(
-                f"SELECT factor_id, code_hash FROM {_L3_SIGNAL_META_TABLE} "
+                f"SELECT factor_id, code_hash, params_hash FROM {_L3_SIGNAL_META_TABLE} "
                 f"WHERE market=? AND end_date=? AND factor_id = ANY(select unnest(?::varchar[]))",
                 [market, end_date, list(factor_ids)],
             ).fetchall()
         finally:
             con.close()
-        stored = {r[0]: (r[1] or "") for r in rows}
+        stored = {r[0]: ((r[1] or ""), (r[2] or "")) for r in rows}
     except Exception:  # noqa: BLE001
         stored = {}
     to_recompute: list[str] = []
     reusable: list[str] = []
     for fid in factor_ids:
-        expected = factor_code_hashes.get(fid, "")
-        if fid in stored and expected and stored.get(fid) == expected:
-            reusable.append(fid)
-        else:
-            to_recompute.append(fid)
+        expected_code = factor_code_hashes.get(fid, "")
+        expected_params = (params_hashes or {}).get(fid, "")
+        if fid in stored and expected_code:
+            s_code, s_params = stored[fid]
+            same_code = s_code == expected_code
+            same_params = (params_hashes is None) or (
+                bool(expected_params) and s_params == expected_params
+            )
+            if same_code and same_params:
+                reusable.append(fid)
+                continue
+        to_recompute.append(fid)
     return to_recompute, reusable
 
 
@@ -522,9 +577,11 @@ def load_or_build_signal_matrix(
 ) -> SignalMatrixBundle:
     """D 层：信号矩阵一等公民读取 + 增量构建（架构级根治）。
 
-    对已入库且 code_hash 一致的因子从 DuckDB 读取（不重算）；仅对新增/变更因子
-    全量重算，合并为完整 3D 信号矩阵后回写（增量重算）。语义与
-    ``build_signal_matrix`` 完全一致（新算部分逐品种执行 + 向量化对齐）。
+    对已入库且 (code_hash, params_hash) 均一致的因子从 DuckDB 读取（不重算）；
+    仅对新增/变更/形状不符因子全量重算（plans/51 A1：params 纳入增量判定；
+    A2：库行数与当前面板不一致或读取失败时降级重算，不静默错位），合并为
+    完整 3D 信号矩阵后回写。语义与 ``build_signal_matrix`` 完全一致
+    （新算部分逐品种执行 + 向量化对齐）。
 
     Args:
         panel: {symbol: DataFrame(OHLCV)} 市场面板
@@ -552,22 +609,43 @@ def load_or_build_signal_matrix(
         )
 
     code_hashes = {f["factor_id"]: _code_hash(f.get("code", "")) for f in valid_factors}
-    to_recompute, reusable = incremental_factor_ids(factor_ids, code_hashes, market, end_date, db_path)
+    params_hashes = {f["factor_id"]: _params_hash(f.get("params", {})) for f in valid_factors}
+    to_recompute, reusable = incremental_factor_ids(
+        factor_ids, code_hashes, market, end_date, db_path, params_hashes=params_hashes
+    )
 
-    # 仅增量重算新/变更因子
+    # A2（plans/51）：形状/读取防护——库中行数与当前面板不一致或读取失败时，
+    # 降级并入重算集（不静默错位、不丢信号）
+    recompute_ids = set(to_recompute)
+    loaded: Optional[SignalMatrixBundle] = None
+    if reusable:
+        loaded = load_signal_matrix(reusable, market, end_date, db_path)
+        if loaded is not None and loaded.signal_matrix.shape[0] != n_dates:
+            logger.warning(
+                "[L3-SIGNAL] 信号库行数 %d != 当前面板 %d 行（market=%s end_date=%s），"
+                "降级重算 %d 个因子",
+                loaded.signal_matrix.shape[0], n_dates, market, end_date, len(loaded.factor_ids),
+            )
+            recompute_ids |= set(loaded.factor_ids)
+            loaded = None
+        elif loaded is None:
+            logger.warning(
+                "[L3-SIGNAL] 信号库读取失败（market=%s end_date=%s），降级重算 %d 个可复用因子",
+                market, end_date, len(reusable),
+            )
+            recompute_ids |= set(reusable)
+
+    # 仅增量重算新/变更/形状不符因子
     bundle_new: Optional[SignalMatrixBundle] = None
-    recompute_factors = [f for f in valid_factors if f["factor_id"] in to_recompute]
+    recompute_factors = [f for f in valid_factors if f["factor_id"] in recompute_ids]
     if recompute_factors:
         bundle_new = build_signal_matrix(
             panel, recompute_factors, factor_codes, common_dates,
             forward_days=forward_days, signal_cache=signal_cache,
         )
-    loaded: Optional[SignalMatrixBundle] = None
-    if reusable:
-        loaded = load_signal_matrix(reusable, market, end_date, db_path)
 
     # 合并
-    mat = np.full((n_dates, len(stocks), n_factors), np.nan, dtype=np.float64)
+    mat: np.ndarray = np.full((n_dates, len(stocks), n_factors), np.nan, dtype=np.float64)
     fid_pos = {f: j for j, f in enumerate(factor_ids)}
     if bundle_new is not None:
         for j, fid in enumerate(bundle_new.factor_ids):
@@ -582,19 +660,21 @@ def load_or_build_signal_matrix(
                     mat[:, stocks.index(sym), fid_pos[fid]] = loaded.signal_matrix[:, i, j]
 
     # 前向收益（始终按当前 panel 重建，保证口径一致）
-    fwd = np.full((n_dates, len(stocks)), np.nan, dtype=np.float64)
+    fwd: np.ndarray = np.full((n_dates, len(stocks)), np.nan, dtype=np.float64)
     for i, sym in enumerate(stocks):
         df = panel.get(sym)
         if df is None or df.empty or "close" not in df.columns:
             continue
         closes = df["close"].to_numpy(dtype=np.float64)
-        f = np.full(len(closes), np.nan, dtype=np.float64)
+        f: np.ndarray = np.full(len(closes), np.nan, dtype=np.float64)
         f[:-forward_days] = (closes[forward_days:] - closes[:-forward_days]) / np.maximum(closes[:-forward_days], 1e-10)
         fwd[:, i] = align_signal_to_dates(f, df, common_dates)
 
     # 回写新算因子（短写连接 + filelock，失败不阻断）
     if bundle_new is not None and bundle_new.factor_ids:
-        persist_signal_matrix(bundle_new, code_hashes, market, end_date, db_path)
+        persist_signal_matrix(
+            bundle_new, code_hashes, market, end_date, db_path, params_hashes=params_hashes
+        )
 
     return SignalMatrixBundle(
         signal_matrix=mat,
