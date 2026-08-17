@@ -1377,7 +1377,8 @@ def _auto_build_factor_returns(
         # 每腿 5→7-8 只，降低小样本噪声致 Sharpe 虚高 20.06）；② 方向校准 directional=True
         # （全样本平均收益为负翻转符号，防反向因子收益为负污染组合）；③ 收益缩尾
         # （见下方 winsorize，抑制极端日收益对年化夏普的虚高）。
-        from .factor_returns import FactorReturnsConfig, FactorReturnsBuilder
+        # FactorReturnsBuilder 已在上方导入（L1328），此处仅补 FactorReturnsConfig。
+        from .factor_returns import FactorReturnsConfig
 
         builder = FactorReturnsBuilder(
             FactorReturnsConfig(quantile=0.3, min_stocks=10, directional=True)
