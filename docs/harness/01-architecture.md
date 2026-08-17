@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.105.0+3
+> 版本: v2.105.0+7
 > 最后更新: 2026-08-10
 
 ---
@@ -1242,7 +1242,7 @@ class FactorKind(str, Enum):
 | L2 种子评估+因子演化 | 01:00 | 每日 | **v2.105.0+3 合并任务**（原 02:00 种子 / 工作日 03:00 演化 / 周末 03:00 演化并入）：① 种子相关性预检 + 评估晋升入 elite 池（不重置演化状态计数器）；② 演化主循环（工作日 ≈10 代 / 周末 ≈50 代，生成端去重前置 Step 1.35） |
 | L2 批量挖掘 | 周日 06:00 | 每周 | 45 计划候选②：BatchMiner 批量漏斗，熔断隔离不污染演化状态 |
 | L2 周度评审 | 周日 10:00 | 每周 | 45 计划候选③：精英重审 + 衰减评估 + 自动淘汰（energy 走 `l2_energy_qa_review_job` 评审质检统一管道，全量重审+退化检测+生命周期） |
-| 评审质检阀门 + 三项监控 | 04:00 | 每日 | **v2.105.0+3 合并任务**（原 04:00 因子巡检 / 04:30 逻辑监控 / 05:00 数据级监控并入）：① `_review_gate_weekly` pending 机审 + approved 复核 → ② `factor_inspector` 巡检降级（approved 豁免每日降级）→ ③ `logic_monitor` 逻辑监控 → ④ `data_level_monitor` 数据级监控——全部在 05:00 L3 之前，新因子当日 approved 进组合 |
+| 评审质检阀门 + 三项监控 | 04:00 | 每日 | **v2.105.0+3 合并任务**（原 04:00 因子巡检 / 04:30 逻辑监控 / 05:00 数据级监控并入）：① `_review_gate_weekly` pending 机审 + approved 复核 → ② `factor_inspector` 巡检降级（approved 豁免每日降级）→ ③ `logic_monitor` 逻辑监控 → ④ `data_level_monitor` 数据级监控——全部在 05:00 L3 之前，新因子当日 approved 进组合；v2.105.0+6 修复：④ 数据级监控检查品种=ENERGY_CHAIN_SYMBOLS 能化链 12 品种（原误用动态核心子集）、② factor_inspector 显式透传 market、③ logic_monitor mock OHLCV + 因子 params 透传（消除 KeyError） |
 | L3 Portfolio Loop（energy） | 05:00 | 工作日每日 | energy 路径（`fts portfolio run --universe energy`）：approved 硬过滤（消费当日 04:00 机审结果）→ 去重 → quality_weight 综合评分 → Step 2b 子链调制 + Step 2.5 Gate → factor_weights.json（v2.105.0 起信号管道因子选择与基础权重权威源） |
 | 期货信号管道 | 20:00 | 工作日每日 | 独立调度（GAP-072 v2.99.0 与 L3 解绑）：因子选择与基础权重由 L3 组合（factor_weights.json）提供（v2.105.0），信号管道仅做信号计算 + Regime 档位缩放权重调整；L3 组合缺失/为空 → 严格模式报错退出 |
 | 期货多源数据同步 | 17:30 | 工作日每日 | Phase 14.5：行情多源缓存更新（供次日 01:00 L2 使用） |

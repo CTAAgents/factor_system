@@ -631,13 +631,13 @@ class TestLogicMonitorJob:
             repo = None
         else:
             conn = MagicMock()
-            conn.description = [("factor_id",), ("name",), ("code",)]
+            conn.description = [("factor_id",), ("name",), ("code",), ("params",)]
             conn.execute.return_value.fetchall.return_value = (
                 rows
                 if rows is not None
                 else [
-                    ("f1", "F1", "code1"),
-                    ("f2", "F2", "code2"),
+                    ("f1", "F1", "code1", None),
+                    ("f2", "F2", "code2", None),
                 ]
             )
             repo._get_conn.return_value = conn
@@ -670,6 +670,45 @@ class TestLogicMonitorJob:
 
         assert "[逻辑监控] 完成: total=2 drift=2 extreme=2" in caplog.text
         assert "[逻辑监控] 因子异常: f1 drift=True extreme=True" in caplog.text
+
+    def test_factor_params_passed(self):
+        """因子 params（JSON 字符串）透传 FactorProgram，避免 params['window'] KeyError。"""
+        fake_logic, fake_db, fake_repo_mod, fake_contracts = self._build_mocks(
+            rows=[("f1", "F1", "code1", '{"window": 10}')]
+        )
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.monitor.logic_monitor": fake_logic,
+                "fts.factor_engine.factor_db": fake_db,
+                "fts.factor_engine.factor_db.repository": fake_repo_mod,
+                "fts.factor_engine.contracts": fake_contracts,
+            },
+        ):
+            jobs.logic_monitor_job()
+
+        call = fake_contracts.FactorProgram.call_args
+        assert call is not None
+        assert call.kwargs.get("params") == {"window": 10}
+
+    def test_mock_data_has_ohlcv_columns(self):
+        """模拟数据含 open/high/low/close/volume，匹配因子代码 K 线字段引用。"""
+        fake_logic, fake_db, fake_repo_mod, fake_contracts = self._build_mocks()
+        with patch.dict(
+            sys.modules,
+            {
+                "fts.monitor.logic_monitor": fake_logic,
+                "fts.factor_engine.factor_db": fake_db,
+                "fts.factor_engine.factor_db.repository": fake_repo_mod,
+                "fts.factor_engine.contracts": fake_contracts,
+            },
+        ):
+            jobs.logic_monitor_job()
+
+        args, kwargs = fake_logic.LogicMonitor.return_value.run.call_args
+        mock_df = args[1] if len(args) > 1 else kwargs.get("data")
+        assert {"open", "high", "low", "close", "volume"} <= set(mock_df.columns)
+        assert (mock_df["high"] >= mock_df["low"]).all()
 
     def test_no_active_factors(self, caplog):
         """无活跃精英因子时跳过。"""
@@ -761,6 +800,7 @@ class TestFactorInspectorJob:
         # GAP-132：巡检市场跟随全局 FTS_DEFAULT_MARKET + dry-run（评估历史不足，不自动降级）
         fake_inspector.FactorInspector.assert_called_once_with(market="energy")
         fake_inspector.FactorInspector.return_value.inspect_and_downgrade.assert_called_once_with(
+            market="energy",
             threshold=-0.2,
             commit=False,
         )

@@ -224,7 +224,8 @@ class LogicMonitor:
 
         # 获取因子信号
         executor = FactorExecutor(factor)
-        signals = executor.execute(data, {})
+        # 透传因子 params（code 内 params['window'] 等必传参数），缺省空字典
+        signals = executor.execute(data, factor.get("params") or {})
         if len(signals) != len(data):
             signals = np.full(len(data), np.nan)
 

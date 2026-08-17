@@ -224,12 +224,31 @@ class TestSchedulerIntegration:
         with patch("duckdb.connect", side_effect=RuntimeError("db locked")):
             assert _read_kline_cache(MagicMock(), "RB") is None
 
+    def test_job_checks_energy_chain_symbols(self) -> None:
+        """数据级监控检查品种为能化链 12 品种（非动态核心子集）。"""
+        from fts.scheduler import jobs
+
+        seen: list[str] = []
+
+        def fake_read(db_path, sym, limit=120):
+            seen.append(sym)
+            return None  # 无缓存 → 跳过（仅记录）
+
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch.object(jobs, "_read_kline_cache", side_effect=fake_read),
+            patch("fts.data_futures.ENERGY_CHAIN_SYMBOLS", ["SC0", "TA0"]),
+        ):
+            jobs.data_level_monitor_job()
+
+        assert seen == ["SC0", "TA0"]
+
     def test_task_registered(self) -> None:
-        """data_level_monitor 任务已注册且启用。"""
+        """data_level_monitor 任务已注册（v2.104.0+98 内部调度停用后 enabled=False）。"""
         from fts.scheduler.tasks import register_default_tasks, get_task
 
         register_default_tasks()
         task = get_task("data_level_monitor")
         assert task is not None
-        assert task.enabled
+        assert task.enabled is False
         assert task.callable_path == "fts.scheduler.jobs.data_level_monitor_job"

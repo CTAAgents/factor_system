@@ -1,6 +1,6 @@
 # 36. 因子选择与组合构建改进计划（GAP-122 延伸，v2.104.0+42 规划）
 
-> 版本: v2.105.0+3（实施完成）
+> 版本: v2.105.0+7（实施完成）
 > 状态: ✅ 已实施（2026-08-15 v2.104.0+50 全部落地，见 07-operations 版本条目）
 > 关联: GAP-122（L3 Verifier 判定口径修复，已关闭）、35-gap-closure-plan、plans/29 存储收敛、config/settings.yaml
 > 范围: 主系统 L3 Portfolio Loop 因子选择与组合构建链路（`fts/factor_engine/portfolio_loop.py`），适用通用期货 + 能源链双 universe

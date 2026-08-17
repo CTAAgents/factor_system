@@ -228,6 +228,30 @@ class TestLogicMonitorRun:
         assert len(report) > 0
         assert "逻辑监控报告" in report
 
+    def test_run_passes_factor_params_to_executor(self, sample_data, momentum_factor):
+        """run() 透传因子 params 给 FactorExecutor（修复 params['window'] 必传参数 KeyError）。"""
+        from fts.monitor import logic_monitor as lm
+
+        captured: dict[str, object] = {}
+        original = lm.FactorExecutor
+
+        class _FakeExecutor:
+            def __init__(self, factor):
+                captured["factor_params"] = factor.get("params")
+
+            def execute(self, data, params):
+                captured["execute_params"] = params
+                return np.zeros(len(data))
+
+        lm.FactorExecutor = _FakeExecutor
+        try:
+            monitor = lm.LogicMonitor()
+            monitor.run(momentum_factor, sample_data, switch_dates=[])
+        finally:
+            lm.FactorExecutor = original
+
+        assert captured.get("execute_params") == {"lookback": 20}
+
 
 # ─── 极端因子测试 ──────────────────────────────────────────
 

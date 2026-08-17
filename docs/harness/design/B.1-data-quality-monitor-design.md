@@ -1,6 +1,6 @@
 # B.1 数据质量实时监控 — 详细技术设计
 
-> 版本: v2.105.0+3
+> 版本: v2.105.0+7
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase B.1
 > 状态: **已实现**（实现方向与原设计不同）
 > 实现说明: 实际实现为 `fts/monitor/data_quality_monitor.py`（v0.1.0），监控对象从"数据源三维指标（完整性/准确性/及时性）"调整为**因子级质量监控**：IC 漂移（IC Z-Score 阈值告警）+ 容量突变（容量变化率阈值告警）+ `validate_market_data()` 市场数据完整性校验。HTTP 端点: `GET /metrics`、`GET /metrics/data-sources`（`fts/monitor/http_server.py`）。原设计的 `register_source`/`evaluate_all`/多源交叉偏差/跳点检测/PSI 漂移等均未实现。

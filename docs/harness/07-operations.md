@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.105.0+3
+> 版本: v2.105.0+7
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,10 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v2.105.0+7** | **2026-08-17** | **GAP-140 全量回归93预存失败专项清零 + GAP-135/123/I306/126/120 登记表状态同步 + 表达式去重种子豁免** |** |
+| **v2.105.0+6** | **2026-08-17** | **监控任务修复：④数据级监控检查品种改为能化链12品种(ENERGY_CHAIN_SYMBOLS)；②因子巡检inspect_and_downgrade透传market；③逻辑监控mock数据补OHLCV列+因子params透传(LogicMonitor.run与job双层)消除KeyError** |** |
+| **v2.105.0+5** | **2026-08-17** | **修复 L3 子链差异化权重调制失效两处接线：①inject_to_fdt 的 subchain_weights 键由 factor_id 统一归一为 name（与 factor_weights.json weights 键及信号管线 _compute_composite_scores 按 name 消费对齐，此前 factor_id 键导致调制静默回退全权重）；②端到端键链路验证（build→inject→load→composite 调制真实生效）；新增 3 用例（test_subchain_weight.py 21→24）** |** |
+| **v2.105.0+4** | **2026-08-17** | **修复 CausalValidator 因果审查静默旁路：validate 执行因子改用 factor.get('params', {}) 与评估链口径一致（params['window'] 直取型因子不再 KeyError）+ 异常兜底显式标记 skipped + run 汇总计数告警 + 回归测试（test_causal_validator.py 直取型用例 / test_evolution_loop 兜底断言 skipped）+ 文档同步（05-observability / 06-testing）** |** |
 | **v2.105.0+3** | **2026-08-17** | **TRAE Schedule 定时任务合并（调度精简 12 → 8 Active）：①「能化产业链L2种子评估+因子演化（每日01:00）」合并原种子评估晋升（02:00）+ 夜间演化（工作日 03:00）+ 周末演化（03:00）三任务——01:00 依次执行种子晋升 → 演化（工作日 ≈10 代 / 周末 ≈50 代），生成端去重前置 Step 1.35 内嵌自动生效；②「能化产业链L2监控+评审质检阀门（每日04:00）」合并原因子巡检降级（04:00）+ 逻辑监控（04:30）+ 数据级监控（05:00）三任务并前置 pending 机审阀门（`_review_gate_weekly`）——04:00 依次执行机审 → 巡检降级（approved 豁免每日降级）→ 逻辑监控 → 数据级监控，全部在 05:00 L3 之前，新因子 approved 延迟 7 天 → 当日；周日重量级评审质检（10:00）保留不动。原 6 任务 pause 保留可回退。文档同步：business_flow / execution_modes_flowchart / factor_lifecycle（+SVG）/ README / 08-gap-analysis / 07 版本历史** |
 | **v2.105.0** | **2026-08-17** | **架构里程碑 v2.105.0：子链张量化四层闭环——plans/47 调制矩阵 m[factor][子链] + plans/48 方向 Gate g[子链] + plans/49 质量矩阵 q[factor][子链] + plans/50 权重源头 Gate 闭环，评审质检/生命周期/组合权重/信号管道全链路子链差异化** |** |
 | **v2.104.0+115** | **2026-08-17** | **plans/52 增量窗口追加落地：meta dates_digest 前缀判定 + 回退段增量执行 + 抽样对照验证兜底 + l3_signal_store_append_window 配置（GAP-139 关闭）** |** |

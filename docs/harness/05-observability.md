@@ -1,6 +1,6 @@
 # FTS 可观测性
 
-> 版本: v2.105.0+3
+> 版本: v2.105.0+7
 > 最后更新: 2026-08-05
 
 ---
@@ -89,6 +89,13 @@ CLI 入口 (cli.py)
 | Gate 缩放系数 | 质量报告 `elite_final_quality_*.json` 的 `subchain_gate_scale` 段（各子链 gate_scale 快照：avoid-hard=0.0 / avoid-soft=ratio / 其余=1.0；并入调制矩阵后 `factor_weights.json` 的 `subchain_weights` 同步缩放） | 与 47 `subchain_exposure`（幅度）/48 `subchain_gate_distribution`（决策）/49 `subchain_quality_matrix`（质量）四网合一；avoid 链 gate_scale=0 且调制矩阵存在 → 权重源头已回避 |
 | 调制矩阵合并 | `_merge_gate_scale_into_modulation` 应用日志 `[L3] Step 2.5: Gate 并入调制矩阵...` | 仅 energy + Gate 开启 + `enable_subchain_weight` 时生效；任一缺失 → 无该日志（观测语义，零行为变更） |
 | 权重源头回避 | `factor_weights.json` 的 `subchain_weights`（avoid 链系数 = 0 或 ×soft_avoid_ratio） | 与信号管道 Step 3h1 硬 Gate 乘性串联（权重层已回避 → 信号层对 0 得分跳过，无双重惩罚） |
+
+### 因果审查跳过告警（v2.105.0+4，修复旁路静默）
+
+| 指标 | 来源 | 告警条件 |
+|:-----|:-----|:---------|
+| 因果审查跳过计数 | `_run_causal_validation` 异常分支日志 `因果验证异常已跳过 (累计 N, factor_id=...)`（evolution_futures / evolution_audit 两路径共用 `CausalValidator`，异常时返回 `skipped=True` + `error` 写入 `evaluation.causal_validation`） | 出现任意一次即 warning；run 收尾打印 `[evo] ⚠️ 因果审查跳过 N 个因子` 汇总（种子阶段 `_evaluate_and_promote_seeds` / 演化 `run()` 各一处），N>0 时人工核查因子参数契约 |
+| 因果审查执行参数 | `CausalValidator.validate` 使用 `factor.get("params", {})` 执行因子（与评估链 evaluation_chain 口径一致） | 因子代码 `params['window']` 直取型若无法解析 → 上述跳过告警（根因已在 v2.105.0+4 修复，回归锚点 test_causal_validator.py 直取型用例） |
 
 ### HTTP 监控端点
 

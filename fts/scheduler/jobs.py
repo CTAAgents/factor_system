@@ -963,20 +963,32 @@ def logic_monitor_job() -> None:
         for factor in all_elite_factors:
             try:
                 factor_id = factor.get("factor_id", "unknown")
-                # 构建简化的 FactorProgram 用于检查
+                # 构建简化的 FactorProgram 用于检查（params 随因子透传，
+                # 避免 code 内 params['window'] 等必传参数 KeyError）
+                import json
+
                 from fts.factor_engine.contracts import FactorProgram
 
+                raw_params = factor.get("params")
+                params = json.loads(raw_params) if isinstance(raw_params, str) and raw_params else (raw_params or {})
                 fp = FactorProgram(
                     factor_id=factor_id,
                     name=factor.get("name", "unknown"),
                     code=factor.get("code", ""),
+                    params=params,
                 )
-                # 用模拟数据做行为漂移检测
+                # 用模拟 OHLCV 数据做行为漂移检测（补全 high/low/volume 列，
+                # 匹配因子代码的 K 线字段引用，避免 KeyError）
                 n = 500
+                base = 100 + np.cumsum(np.random.randn(n) * 0.5)
                 mock_data = pd.DataFrame(
                     {
                         "date": pd.date_range("2020-01-01", periods=n, freq="B"),
-                        "close": 100 + np.cumsum(np.random.randn(n) * 0.5),
+                        "open": base * (1 + np.random.randn(n) * 0.002),
+                        "high": base * (1 + np.abs(np.random.randn(n)) * 0.01 + 0.001),
+                        "low": base * (1 - np.abs(np.random.randn(n)) * 0.01 - 0.001),
+                        "close": base,
+                        "volume": np.abs(np.random.randn(n)) * 1e5 + 1e4,
                     }
                 )
                 result = logic.run(fp, mock_data, switch_dates=[])
@@ -1026,8 +1038,10 @@ def factor_inspector_job() -> None:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.factor_engine.factor_inspector import FactorInspector
 
-        inspector = FactorInspector(market=_global_market())
+        market = _global_market()
+        inspector = FactorInspector(market=market)
         result = inspector.inspect_and_downgrade(
+            market=market,
             threshold=-0.2,
             commit=False,
         )
@@ -1107,15 +1121,16 @@ def _read_kline_cache(db_path: Path, symbol: str, limit: int = 120) -> "object |
 def data_level_monitor_job() -> None:
     """数据级质量监控（GAP-F06）：缺失率/异常值/复权一致性/多源分歧。
 
-    读取核心期货品种 DuckDB 缓存执行四维检查（复权一致性需第二复权源，
-    暂以多源分歧覆盖；复权一致性检查由监控器接口保留，供对账流程调用）。
+    读取能化链核心品种（ENERGY_CHAIN_SYMBOLS，market=energy）DuckDB 缓存
+    执行四维检查（复权一致性需第二复权源，暂以多源分歧覆盖；复权一致性
+    检查由监控器接口保留，供对账流程调用）。
     尽力而为：缓存缺失/读取失败仅记录日志，不中断其他调度任务。
     """
     trace_id = f"fts.dlm.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.monitor.data_level_monitor import create_data_level_monitor
-        from fts.data_futures import get_dynamic_core_subset
+        from fts.data_futures import ENERGY_CHAIN_SYMBOLS
 
         db_path = PROJECT_ROOT / "data" / "fts_history.duckdb"
         if not db_path.exists():
@@ -1127,7 +1142,7 @@ def data_level_monitor_job() -> None:
         critical = 0
         checked_symbols = 0
 
-        for sym in list(get_dynamic_core_subset())[:10]:
+        for sym in ENERGY_CHAIN_SYMBOLS:
             df = _read_kline_cache(db_path, sym, limit=120)
             if df is None or len(df) == 0:
                 continue
@@ -1413,6 +1428,3 @@ __all__ = [
     "sync_liquidity_pool_job",
     "mhf_signal_job",
 ]
-
-
-
