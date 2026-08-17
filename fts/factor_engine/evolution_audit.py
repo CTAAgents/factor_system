@@ -88,6 +88,8 @@ class AuditPipeline:
         from .causal_validator import CausalValidator
 
         self.causal_validator = CausalValidator()
+        # 因果审查跳过计数（因子执行异常时显式跳过，避免静默旁路）
+        self._causal_skipped_count: int = 0
 
     # v2.50.0 判定语义：核心价格列（因子正常依赖的输入）与信息型消融模式
     # 不参与"伪相关"拦截判定——时序因子依赖时序因果（shuffle_dates）、
@@ -561,5 +563,12 @@ class AuditPipeline:
             is_passed = result.get("n_anomalous", 0) == 0
             return {**result, "passed": is_passed}
         except Exception as e:
-            logger.warning("因果验证异常: %s", e)
-            return {"passed": True, "error": str(e)}
+            # 显式跳过 + 累计计数：因果审查异常不再静默旁路
+            self._causal_skipped_count = getattr(self, "_causal_skipped_count", 0) + 1
+            logger.warning(
+                "因果验证异常已跳过 (累计 %s, factor_id=%s): %s",
+                self._causal_skipped_count,
+                factor.get("factor_id", "?"),
+                e,
+            )
+            return {"passed": True, "skipped": True, "error": str(e)}

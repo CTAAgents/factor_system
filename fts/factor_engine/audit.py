@@ -304,8 +304,16 @@ class FactorAuditor:
         try:
             # 使用 CausalValidator 做快速反事实检验
             from .contracts import FactorProgram
+            from .expr_dsl import compile_expr_to_code
 
             prog = cast(FactorProgram, dict(factor))
+            # GAP-135 ③: GP/算子因子审计代码读取修复——dict 缺 code 时从 expr 编译补齐，
+            # 避免因果检验以「因子代码为空」静默跳过（代码实际存在于 expr/表达式字段）。
+            if not str(prog.get("code") or "").strip() and prog.get("expr"):
+                try:
+                    prog["code"] = compile_expr_to_code(str(prog["expr"]))
+                except Exception:  # noqa: BLE001
+                    logger.debug("因果检验 expr→code 编译失败: %s", prog.get("expr"))
             result = self._causal_validator.validate(prog, data, forward_returns)
             anomaly_rate = result.get("summary", {}).get("anomaly_rate", 0.0)
             # 异常率 > 0 视为有因果结构（因子对事件有反应）

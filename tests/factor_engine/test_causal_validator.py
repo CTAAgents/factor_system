@@ -95,6 +95,46 @@ def factor_program(data, params):
 
 
 @pytest.fixture
+def direct_index_params_factor() -> FactorProgram:
+    """因子代码用 params['window'] 直接索引（无默认值兜底）。
+
+    回归锚点：CausalValidator 必须使用 factor.get("params", {}) 执行因子，
+    与评估链口径一致；若回退为硬编码空 {}，此类因子会抛 KeyError: 'window'，
+    因果审查被静默跳过（2026-08-17 种子评估期间 3 因子复现）。
+    """
+    code = '''
+def factor_program(data, params):
+    """Alpha: direct_index_params"""
+    import numpy as np
+    close = data['close'].values if hasattr(data, 'close') else data['close']
+    window = int(params['window'])  # 直接索引：必须由调用方注入具体参数
+    if len(close) < window + 1:
+        return np.full(len(close), np.nan)
+    signal = np.full(len(close), np.nan)
+    signal[window:] = (close[window:] - close[:-window]) / np.maximum(close[:-window], 1e-10)
+    return signal
+'''
+    return create_factor_program(
+        name="test_direct_index_params_causal",
+        code=code,
+        params={"window": 5},
+        signature={
+            "input_fields": ["close", "volume"],
+            "output_type": "signal",
+            "frequency": "daily",
+        },
+        source="seed",
+        economic_logic={
+            "theory": 3,
+            "behavioral": 3,
+            "microstructure": 3,
+            "institutional": 3,
+            "narrative": "direct index params test",
+        },
+    )
+
+
+@pytest.fixture
 def mock_events() -> list[NaturalExperiment]:
     """3 个测试用自然实验事件（在数据范围内）。"""
     return [
@@ -266,6 +306,27 @@ class TestCausalValidatorValidate:
         assert isinstance(report, str)
         assert len(report) > 0
         assert "因果结构审查报告" in report
+
+    def test_validate_direct_index_params_factor_no_keyerror(
+        self,
+        sample_data,
+        forward_returns,
+        direct_index_params_factor,
+        mock_events,
+    ):
+        """params 直取型因子（params['window']）因果验证不应抛 KeyError。
+
+        回归锚点（2026-08-17）：CausalValidator 曾硬编码空 {} 执行因子，
+        导致 params['window'] 直取型因子 KeyError 被 except 静默兜底为
+        passed=True，因果审查实际未执行。修复后必须能正常完成验证。
+        """
+        validator = CausalValidator(events=mock_events)
+        result = validator.validate(direct_index_params_factor, sample_data, forward_returns)
+
+        assert isinstance(result, CausalValidationResult)
+        assert result["factor_id"] is not None
+        assert result["n_events"] > 0
+        assert len(result["all_events"]) > 0
 
 
 # ─── 事件过滤测试 ──────────────────────────────────────────

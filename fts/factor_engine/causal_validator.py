@@ -163,9 +163,10 @@ class CausalValidator:
             data = data.copy()
             data["date"] = data.index
 
-        # 获取因子信号
+        # 获取因子信号（使用因子自身 params，与评估链 evaluation_chain 口径一致；
+        # 传空 {} 会导致 params['window'] 直取型因子抛 KeyError，因果审查被静默跳过）
         executor = FactorExecutor(factor)
-        signals = executor.execute(data, {})
+        signals = executor.execute(data, factor.get("params", {}))
 
         if len(signals) != len(data):
             signals = np.full(len(data), np.nan)
