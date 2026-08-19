@@ -1,6 +1,6 @@
 # 52 号计划 — L3 信号矩阵增量窗口追加（D 层性能兑现）
 
-> 版本: v3.0.0（创建于 2026-08-17）
+> 版本: v3.0.0+1（创建于 2026-08-17）
 > 关联: 40-l3-portfolio-optimization-plan.md（D2 承诺）、51-vectorization-gap-fix-plan.md（B1 激活）、GAP-139
 > 状态: ✅ 已完成（2026-08-17，GAP-139 关闭）
 > 优先级: P2 · 负责人: FTS Agent

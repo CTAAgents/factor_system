@@ -61,9 +61,10 @@ class FTSConfig:
         return self.futures_elite_dir
 
     # ── 数据配置 ──
-    # 全局默认市场（v2.104.0+103）：默认 energy 能化链；所有定时自动化任务默认执行能化链，
-    # 门控任务（_market_gate）据此切换执行集，可用 FTS_DEFAULT_MARKET 覆盖回 futures
-    default_market: str = field(default_factory=lambda: os.getenv("FTS_DEFAULT_MARKET", "energy"))
+    # 全局默认市场（v2.104.0+103 临时切 energy；v3.0.0+1 反转回 futures）：
+    # 双系统切分后（plans/57）FTS 为因子生产系统，默认工作市场为全部期货
+    # （§5.4 全期货覆盖 84 品种/17 产业链），门控任务（_market_gate）据此切换执行集
+    default_market: str = field(default_factory=lambda: os.getenv("FTS_DEFAULT_MARKET", "futures"))
 
     # ── 宏观字段增强层（v2.32.0）──
     macro_field_injection: bool = field(default_factory=lambda: os.getenv("FTS_MACRO_FIELD_INJECTION", "1") == "1")

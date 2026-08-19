@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v3.0.0
+> 版本: v3.0.0+1
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,7 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v3.0.0+1** | **2026-08-20** | **全局默认市场反转回 futures + 定时自动化任务面向全期货重建（plans/57 双系统切分落地）：① settings.default_market 默认 'energy'→'futures'（v2.104.0+103 临时切换反转——FTS 因子生产默认面向全部期货 84 品种/17 产业链，门控任务 _market_gate 执行集切换）；② TRAE Schedule 定时任务重建：删除 4 个能化链 energy 专属任务（L1 energy 知识补给/L2 energy 种子演化/04:00 energy 监控阀门/周日 energy 评审质检），新建 5 个全期货任务（L1 知识补给 l1_meta_loop_job()/L2 种子评估+演化 l2_seed_promotion+evolution_weekday\|weekend/L2 监控+评审质检阀门 04:00/L2 周度评审 l2_review_job 周日/外部因子导入 import_external_factors_job 月度）；保留数据基础设施（多源同步/QuantData 刷新）与 RD 交易建议（14:30/21:30）共 8 Active；文档同步 01-architecture 市场路由 + 03-configuration default_market 说明** |** |
 | **v3.0.0** | **2026-08-20** | **双系统切分架构级发布（plans/57 阶段 0-13 全部完成，major bump v2.105.0+33 → v3.0.0）：FTS 角色重定位为因子生产系统，策略合成职责迁移 Regime-Driven——① 信号契约 v1（design/F.3：l3_signal_meta 追加 schema_version/factor_status/factor_scope 三列 + 历史回填 + 决策/训练双模式隔离 + 增量幂等 + 新鲜度校验 + 降级熔断）；② FTS L3 组合侧退役登记（retired_l3.py 35 项 + import 期 DeprecationWarning + warn_if_retired 告警，存量调用点兼容不删码；物理删除为后续独立里程碑）；③ RD 承接（strategy_synthesis/combo_verifier/money_management/crowding_gate 权威替换/backtest_engine 消费信号矩阵/L2 子链化 5 子链）；④ 全期货覆盖规划（config/futures_universe.yaml coverage_priority P0-P3，84 品种/17 产业链）；⑤ 存量因子集中重审管道（review_legacy_factors.py 分族 FDR-BH + audit 分层抽样）；验收（2026-08-20）：阶段 0 A/B（状态一致率 92.04%/方向一致率 97.55%）+ 阶段 1 双轨对账（信号余弦 1.0000/组合方向 100%/绩效差 0.000000）全门槛通过 + 因子映射 10/12 Spearman=1.0000 + 全量回归 8129 passed（残留 21 项预存，登记 GAP-158）；文档同步全部 Harness 文档（01-architecture 双系统切分章节/02-lifecycle Phase 48/03-configuration 新配置/04-resilience 信号降级熔断/05-observability 退役观测/06-testing 测试数/08-gap GAP-154~158/09-advancement 里程碑/business_flow 角色边界/factor_lifecycle 退役登记/execution_modes/production_plan/README/CODE_WIKI）** |** |
 | **v2.105.0+33** | **2026-08-20** | **plans/57 双系统切分：阶段1真实双轨对账全门槛通过 + 步骤12 FTS L3 组合侧退役登记** |** |
 | **v2.105.0+32** | **2026-08-19** | **QuantData 权威主链路切换（规划）：`fts/data_sources/quantdata_provider.py`（duckdb 只读短连接直读 continuous_daily/continuous_map/kline_daily，FTS_QUANTDATA_HOME 配置）+ DataSource 枚举 QUANTDATA + aggregator 降级链头部插入（QUANTDATA→DUCKDB_CACHE→TDX_LOCAL→TQ_PYTHON→AKSHARE→SYNTHETIC）+ 品种映射 RB0↔RB（88 vs 82）+ 复权策略（QuantData 自带 adj_factor，RollCalendar 降级避免双重复权）+ 期限结构权威构建（continuous_map 近远月→term_spread/roll_yield，D15 算子接线）+ settle 非权威标注 + 字段权威矩阵 L0/L1/L2（GAP-156/157/158 登记，fundamental 禁依赖）；外部因子导入管道（extract_* 升级为常态化带准入评估管道）与演化挖掘期货结构约束随主链路落地** |** |

@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v3.0.0
+> 版本: v3.0.0+1
 > 最后更新: 2026-08-18
 
 ---
@@ -1413,7 +1413,7 @@ class FactorKind(str, Enum):
 | 期货多源数据同步 | 17:30 | 工作日每日 | Phase 14.5：行情多源缓存更新（供次日 01:00 L2 使用） |
 | Health Check | 每 10 分钟 | 高频 | 状态监控 |
 
-> 市场路由（v2.104.0+103）：全局市场开关 `FTS_DEFAULT_MARKET`（settings.default_market，默认 "energy" 能化链——所有定时自动化任务默认执行能化链，v2.104.0+103）。
+> 市场路由（v2.104.0+103 切 energy；**v3.0.0+1 反转回 futures**）：全局市场开关 `FTS_DEFAULT_MARKET`（settings.default_market，默认 "futures" 全部期货——plans/57 双系统切分后 FTS 为因子生产系统，默认工作市场为全部期货，覆盖 84 品种/17 产业链）。
 > 市场专属任务在函数入口门控（futures 任务仅全局 futures 时执行，energy 任务仅全局 energy 时执行，不匹配记日志 no-op 空转）；
 > `l1_meta_loop_job`/`factor_inspector_job`/`logic_monitor_job` 未显式指定 market 时跟随全局（logic_monitor 由固定 futures 改随全局，v2.104.0+103）；CLI `--market`/`--universe` 未指定时默认跟随全局；
 > `FactorRepository`/`FactorInspector` 构造 `market=None` 时跟随全局；共享数据/监控任务（sync_futures_data/health_check/data_quality_eval/data_level_monitor）不门控（energy 亦依赖期货数据层）。

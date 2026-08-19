@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v3.0.0
+> 版本: v3.0.0+1
 > 最后更新: 2026-08-10
 
 ---
@@ -24,7 +24,7 @@ FTS 配置采用三级优先级（高→低）：
 | 存储域契约路径（plans/29 P0） | str（注册表内部） | `docs/harness/_data/storage_landscape.yaml` | `FTS_STORAGE_LANDSCAPE_PATH` | 存储域注册表 YAML 路径（StorageRegistry 加载，13 域；缺省回落内置默认路径，缺失时注册表空不抛错）（GAP-090，v2.101.0） |
 | 写路径严格模式（GAP-150） | bool | `"1"`（严格） | `FTS_STORAGE_WRITE_STRICT` | FactorRepository 默认路径写入口契约：未登记 storage_landscape 抛 ValueError 阻断（强制先登记）；置 `"0"` 回退告警模式（v2.105.0+20） |
 | `elite_dir` | str | `"memory/knowledge/factors/futures_elite"` | `FTS_ELITE_DIR` | elite 因子存储目录（股票剥离后默认对齐期货精英目录，v2.86.0） |
-| `default_market` | str | `"futures"` | `FTS_DEFAULT_MARKET` | 默认市场类型；v2.104.0+101 起为**全局市场开关**——调度任务门控（futures/energy 专属任务仅全局市场匹配时执行）、CLI `--market`/`--universe` 未指定时默认值、`FactorRepository`/`FactorInspector` 构造 `market=None` 时路由均跟随 |
+| `default_market` | str | `"futures"` | `FTS_DEFAULT_MARKET` | 默认市场类型；v2.104.0+101 起为**全局市场开关**——调度任务门控（futures/energy 专属任务仅全局市场匹配时执行）、CLI `--market`/`--universe` 未指定时默认值、`FactorRepository`/`FactorInspector` 构造 `market=None` 时路由均跟随；v2.104.0+103 曾临时默认 energy 能化链，**v3.0.0+1 反转回 futures**（plans/57 双系统切分后 FTS 因子生产默认面向全部期货 84 品种/17 产业链） |
 | `llm_backend` | str | `""` | `FTS_LLM_BACKEND` | LLM 后端选择（空=自动检测）|
 | `evolution_mode` | str | `"operator_first"` | `FTS_EVOLUTION_MODE` | 演化模式: operator(算子主干) / operator_first(算子优先,LLM/GP兜底, v2.105.0+2 默认) / code(代码创新) / hybrid(混合) / batch(批量挖掘漏斗, GAP-I201, v2.65.0) |
 | 演化 CLI 失败率熔断阈值 | float | 1.0 | `FTS_EVOLUTION_CB_FAILURE_RATE` | `fts.cli evolution run` 失败率熔断阈值（v2.103.0+28 默认 0.99→1.0=禁用失败率熔断，夜间演化默认跑满世代数；保留 token 与连续低 IC 熔断兜底；设 <1.0 可恢复失败率熔断） |
