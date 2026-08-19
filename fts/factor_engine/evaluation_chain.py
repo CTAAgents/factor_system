@@ -1075,9 +1075,13 @@ def cross_section_evaluate_backtest(
     ls_returns = _cs_long_short_returns(oos_signal, oos_ret)
     ls_mean = float(np.mean(ls_returns))
 
+    # 信号方向翻转标志（plans/53 §A2）：regime 画像需用方向校正后的信号
+    _was_flipped = False
+
     # 如果多空收益为负，翻转信号方向
     if ls_mean < 0:
         oos_signal_flipped = -oos_signal
+        _was_flipped = True
         ls_returns = _cs_long_short_returns(oos_signal_flipped, oos_ret)
         # 重新计算 IC（翻转后 Spearman 相关取反）
         ics_flipped = [-ic for ic in ics]
@@ -1211,6 +1215,49 @@ def cross_section_evaluate_backtest(
                 metrics["subchain_ic_report"] = _scm
         except Exception as e:  # noqa: BLE001 — 画像生成失败降级，不阻断既有评估
             logger.warning("[subchain_ic_report] 生成失败（非致命，跳过）: %s", e)
+
+    # plans/53 §A2：Regime 画像报告段（因子×制度显著性画像，开关 l3_regime_ic_report_enabled）。
+    # 市场级信号 = 横截面均值（方向校正后），regime_series = 面板合成 OHLCV 滚动检测。
+    # 仅 energy 面板（symbol 命中 ENERGY_CHAIN_SYMBOLS）且开关开启时构建
+    # （RegimeSeriesBuilder 滚动检测有秒级成本，批量评估场景不默认开启，防性能退化）。
+    try:
+        from fts.config.settings import get_config as _rp_cfg
+
+        _rp_enabled = bool(getattr(_rp_cfg(), "l3_regime_ic_report_enabled", False))
+    except Exception:  # noqa: BLE001
+        _rp_enabled = False
+    if _rp_enabled and panel_data:
+        try:
+            from fts.data_futures import ENERGY_CHAIN_SYMBOLS
+
+            _is_energy = bool(set(panel_data.keys()) & set(ENERGY_CHAIN_SYMBOLS))
+        except Exception:  # noqa: BLE001
+            _is_energy = False
+        if _is_energy:
+            try:
+                from .regime_profile import RegimeSeriesBuilder, build_regime_metadata
+
+                _builder = RegimeSeriesBuilder()
+                _regime_series = _builder.build_from_panel(panel_data, sorted(panel_data.keys()))
+                if not _regime_series.empty:
+                    _oos_dates = common_dates[-oos_n:]
+                    _sig_arr = -oos_signal if _was_flipped else oos_signal
+                    _mkt_sig = pd.Series(np.nanmean(_sig_arr, axis=1), index=_oos_dates)
+                    _mkt_ret = pd.Series(np.nanmean(oos_ret, axis=1), index=_oos_dates)
+                    _al = pd.DataFrame({"sig": _mkt_sig, "fwd": _mkt_ret}).reindex(
+                        _regime_series.index
+                    )
+                    _valid = _al.dropna()
+                    if len(_valid) >= 20:
+                        _rm = build_regime_metadata(
+                            str(factor.get("factor_id", "")),
+                            _valid["sig"].to_numpy(),
+                            _valid["fwd"].to_numpy(),
+                            _regime_series.loc[_valid.index].to_numpy(),
+                        )
+                        metrics["regime_ic_report"] = _rm
+            except Exception as e:  # noqa: BLE001 — 画像生成失败降级，不阻断既有评估
+                logger.warning("[regime_ic_report] 生成失败（非致命，跳过）: %s", e)
 
     # GAP-121 补全（横截面路径）：极值扰动 IC 重算（供 HighICScreener
     # V2 / extreme_perturb 消费）。将全部品种的截面信号/收益扁平化为长数组，

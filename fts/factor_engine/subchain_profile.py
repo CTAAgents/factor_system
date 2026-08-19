@@ -69,7 +69,7 @@ class SubchainProfileConfig(BaseModel):
 
     min_symbols: int = Field(default=3, ge=1, description="子链内最小品种数（门槛①）")
     min_t_stat: float = Field(default=2.0, gt=0.0, description="|t| 门槛（门槛②，df=n-1）")
-    min_chain_ic: float = Field(default=0.10, ge=0.0, description="|mean_ic| 门槛（门槛③）")
+    min_chain_ic: float = Field(default=0.02, ge=0.0, description="|mean_ic| 门槛（门槛③）")
     all_chains_effective_min: int = Field(
         default=3, ge=1, description="≥ 此子链数 effective 时 scope='all'"
     )

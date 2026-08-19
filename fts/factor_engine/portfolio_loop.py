@@ -2234,6 +2234,262 @@ def _dedup_factors_by_chain(
     return retained, {"removed": removed, "chains": counts}
 
 
+def _dedup_factors_by_chain_cluster(
+    factors: list[dict[str, Any]],
+    elite_dir: str | Path,
+    chain_symbols: dict[str, list[str]],
+    max_per_chain: int,
+    score_map: dict[str, float],
+    panel_data: Optional[dict[str, Any]] = None,
+    corr_threshold: float = 0.5,
+    cluster_top_n: int = 1,
+    signal_cache: Optional[Any] = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """链内相关性聚类去冗余（v2.105.0+13 升级，替代 `_dedup_factors_by_chain`）。
+
+    与全局 P1（Step 1.8）的口径差异：全局 P1 在单一参考品种上对全部因子做
+    信号相关性聚类，会系统性误伤子链特异因子（并入通用大簇、代表被全链高分
+    因子拿走）。本函数按子链维度去冗余：
+
+    - 归链画像优先级：subchain_scope（A2 落库，单链/部分链）→ symbol_ic
+      主导子链（链内平均 |IC| 最高者）兜底 → unknown 归通用池直接保留
+    - 链内聚类：对每个子链用其品种面板（chain_symbols[chain]）计算因子信号
+      相关性（链内多品种平均相关，非单品种），层次聚类（corr_threshold 距离
+      阈值），每簇按综合评分留代表（cluster_top_n）
+    - 聚类后仍叠加 max_per_chain 数量上限（防产业链暴露集中）
+    - 部分链因子参与其所有 effective 子链，任一链保留即存活
+    - 无画像/unknown 因子 = 全链通用因子，直接进入组合（m=1.0 全链生效，
+      与 l3.subchain_weight.scope_default=all 语义一致，不做子链去冗余）
+
+    Args:
+        factors: 待去冗余因子列表（含 factor_id / subchain_scope / symbol_ic）
+        elite_dir: 精英因子目录（symbol_ic 兜底读取）
+        chain_symbols: {子链名: [品种]} 映射
+        max_per_chain: 聚类后单子链保留因子数上限
+        score_map: {factor_id: 综合评分}（簇内/链内择优依据）
+        panel_data: {symbol: DataFrame} 面板数据（None=降级为纯数量截断，
+            复用 `_dedup_factors_by_chain` 语义）
+        corr_threshold: 链内层次聚类距离阈值（1-|corr|，默认 0.5）
+        cluster_top_n: 链内每簇保留代表数上限（默认 1）
+        signal_cache: 可选信号缓存（plans/40 A 层）
+
+    Returns:
+        (保留因子列表, 统计信息 {removed: [name], chains: {链: 保留数}})
+    """
+    if not factors:
+        return [], {"removed": [], "chains": {}}
+
+    # 1. 归链画像：subchain_scope 优先 → symbol_ic 主导子链兜底 → unknown 通用池
+    chain_of: dict[str, list[str]] = {}
+    for f in factors:
+        fid = f.get("factor_id", f.get("name", "?"))
+        scope = f.get("subchain_scope")
+        if isinstance(scope, str) and scope not in ("all", "unknown"):
+            chain_of[fid] = [scope]
+        elif isinstance(scope, list) and scope:
+            chain_of[fid] = [c for c in scope if c in chain_symbols]
+        elif not chain_of.get(fid):
+            sic = _load_factor_symbol_ic(f, elite_dir)
+            if sic:
+                prof: dict[str, Optional[float]] = {}
+                for chain, syms in chain_symbols.items():
+                    ics = [abs(float(sic[s])) for s in syms if s in sic]
+                    prof[chain] = float(np.mean(ics)) if ics else None
+                valid = {c: v for c, v in prof.items() if v is not None}
+                chain_of[fid] = [max(valid, key=valid.get)] if valid else []
+            else:
+                chain_of[fid] = []
+
+    # 2. 按子链分组（部分链因子归入其所有 effective 链）
+    by_chain: dict[str, list[dict[str, Any]]] = {c: [] for c in chain_symbols}
+    unknown_kept: list[dict[str, Any]] = []
+    for f in factors:
+        fid = f.get("factor_id", f.get("name", "?"))
+        chains = chain_of.get(fid, [])
+        if not chains:
+            unknown_kept.append(f)  # 通用池直接保留
+        else:
+            for c in chains:
+                by_chain[c].append(f)
+
+    # 3. 链内聚类去冗余 + 数量上限
+    retained: list[dict[str, Any]] = []
+    removed: list[str] = []
+    counts: dict[str, int] = {}
+    kept_ids: set[str] = set()
+    for chain, members in by_chain.items():
+        if not members:
+            counts[chain] = 0
+            continue
+        chain_panels = {s: panel_data[s] for s in chain_symbols[chain] if panel_data and s in panel_data}
+        kept = _dedup_within_chain(
+            members,
+            chain_panels,
+            score_map,
+            max_per_chain,
+            corr_threshold,
+            cluster_top_n,
+            signal_cache,
+        )
+        counts[chain] = len(kept)
+        for f in kept:
+            fid = f.get("factor_id", f.get("name", "?"))
+            if fid in kept_ids:
+                continue  # 部分链因子已在其他链保留（任一链保留即存活）
+            kept_ids.add(fid)
+            retained.append(f)
+
+    # 4. 合并：通用池 + 各链代表
+    for f in unknown_kept:
+        fid = f.get("factor_id", f.get("name", "?"))
+        if fid in kept_ids:
+            continue
+        kept_ids.add(fid)
+        retained.append(f)
+    for f in factors:
+        fid = f.get("factor_id", f.get("name", "?"))
+        if fid not in kept_ids:
+            removed.append(f.get("name", fid))
+    return retained, {"removed": removed, "chains": counts}
+
+
+def _dedup_within_chain(
+    members: list[dict[str, Any]],
+    chain_panels: dict[str, Any],
+    score_map: dict[str, float],
+    max_per_chain: int,
+    corr_threshold: float,
+    cluster_top_n: int,
+    signal_cache: Optional[Any],
+) -> list[dict[str, Any]]:
+    """单子链内去冗余：相关性聚类留代表 + 数量上限截断。
+
+    Args:
+        members: 归属该子链的因子列表
+        chain_panels: 该子链品种面板 {symbol: DataFrame}（空=降级纯数量截断）
+        score_map: 综合评分
+        max_per_chain: 数量上限
+        corr_threshold: 聚类距离阈值（1-|corr|）
+        cluster_top_n: 每簇代表数
+        signal_cache: 信号缓存
+
+    Returns:
+        该子链保留的因子列表
+    """
+    if len(members) <= max_per_chain:
+        return list(members)
+
+    selected: list[dict[str, Any]] = []
+    if chain_panels:
+        try:
+            corr, fids = _compute_chain_signal_correlations(members, chain_panels, signal_cache)
+            if corr is not None and len(fids) >= 2:
+                from .factor_clustering import FactorClusteringEngine
+
+                engine = FactorClusteringEngine(cluster_threshold=corr_threshold, linkage_method="average")
+                clusters = engine.cluster_by_correlation(corr, fids)
+                fid_to_factor = {f.get("factor_id", f.get("name", "?")): f for f in members}
+                for cluster in clusters:
+                    # 簇内按综合评分取最优代表
+                    cands = [fid_to_factor[fids[i]] for i in cluster if fids[i] in fid_to_factor]
+                    if not cands:
+                        continue
+                    cands.sort(key=lambda f: -score_map.get(f.get("factor_id", f.get("name", "?")), 0.0))
+                    selected.extend(cands[:cluster_top_n])
+        except Exception as e:  # noqa: BLE001 — 聚类失败降级纯数量截断（非致命）
+            logger.warning("[L3] Step 1.8b: 链内聚类失败 (非致命), 降级数量截断: %s", e)
+            selected = []
+
+    if not selected:
+        # 降级：纯数量截断（原 _dedup_factors_by_chain 语义）
+        members_sorted = sorted(
+            members,
+            key=lambda f: -score_map.get(f.get("factor_id", f.get("name", "?")), 0.0),
+        )
+        return members_sorted[:max_per_chain]
+
+    # 数量上限兜底（聚类代表数仍可能超过 max_per_chain）
+    if len(selected) > max_per_chain:
+        selected.sort(key=lambda f: -score_map.get(f.get("factor_id", f.get("name", "?")), 0.0))
+        selected = selected[:max_per_chain]
+    return selected
+
+
+def _compute_chain_signal_correlations(
+    members: list[dict[str, Any]],
+    chain_panels: dict[str, Any],
+    signal_cache: Optional[Any] = None,
+    min_valid_points: int = 10,
+) -> tuple[Optional[np.ndarray], list[str]]:
+    """计算子链内因子信号相关性矩阵（链内多品种平均相关）。
+
+    对子链的每个品种分别计算因子信号，两两 Pearson 相关后取链内品种平均
+    （与全局 P1 的单参考品种口径不同——避免单品种噪声导致子链特异因子
+    被误判为同源而合并）。
+
+    Args:
+        members: 因子列表（含 code/params）
+        chain_panels: 该子链品种面板 {symbol: DataFrame}
+        signal_cache: 信号缓存
+        min_valid_points: 最少有效数据点
+
+    Returns:
+        (corr_matrix, factor_ids)：面板/信号不足时返回 (None, [])
+    """
+    from .factor_program import FactorExecutor, FactorCompileError
+
+    if not chain_panels:
+        return None, []
+
+    fids = [f.get("factor_id", f.get("name", "?")) for f in members]
+    n = len(fids)
+    if n < 2:
+        return None, []
+
+    corr_accum = np.zeros((n, n))
+    corr_count = np.zeros((n, n))
+    any_computed = False
+
+    for sym, df in chain_panels.items():
+        signals: dict[str, np.ndarray] = {}
+        for f in members:
+            fid = f.get("factor_id", f.get("name", "?"))
+            code = f.get("code", "")
+            if not code or not isinstance(code, str):
+                continue
+            try:
+                sig = FactorExecutor(f, signal_cache=signal_cache).execute(df, f.get("params", {}))
+                if sig is not None and len(sig) > 0 and not np.all(np.isnan(sig)):
+                    signals[fid] = np.asarray(sig, dtype=float)
+            except (FactorCompileError, Exception):  # noqa: BLE001 — 单品种失败不阻断
+                continue
+        if len(signals) < 2:
+            continue
+        for i in range(n):
+            for j in range(i + 1, n):
+                s1, s2 = signals.get(fids[i]), signals.get(fids[j])
+                if s1 is None or s2 is None:
+                    continue
+                m = min(len(s1), len(s2))
+                valid = ~(np.isnan(s1[:m]) | np.isnan(s2[:m]))
+                if valid.sum() > min_valid_points:
+                    c = float(np.corrcoef(s1[:m][valid], s2[:m][valid])[0, 1])
+                    if np.isfinite(c):
+                        corr_accum[i, j] += c
+                        corr_accum[j, i] += c
+                        corr_count[i, j] += 1
+                        corr_count[j, i] += 1
+                        any_computed = True
+
+    if not any_computed:
+        return None, []
+
+    # 链内多品种平均相关；无有效品种对的 pair 以 0（不相似）兜底
+    corr_matrix = np.where(corr_count > 0, corr_accum / np.maximum(corr_count, 1), 0.0)
+    np.fill_diagonal(corr_matrix, 1.0)
+    return corr_matrix, fids
+
+
 def _score_dim(f: dict[str, Any], dim: str) -> Optional[float]:
     """提取因子综合评分单维度原始值（plans/36 改进项 2）。
 
@@ -2624,6 +2880,8 @@ def build_combo(
     regime_meta: Optional[dict] = None,
     aligned_exposure_config: Optional[Any] = None,
     turnover_budget_config: Optional[Any] = None,
+    beta_scale: Optional[float] = None,
+    crowding_scale: Optional[float] = None,
 ) -> PortfolioCombo:
     """构建组合 — 归一化权重 + 计算组合指标。
 
@@ -2646,6 +2904,12 @@ def build_combo(
             AlignedExposureConfig，None=关闭，向后兼容；启用时与 exposure_scale 乘性合并）
         turnover_budget_config: 换手预算分配配置（G3，35-gap-closure-plan；
             TurnoverBudgetConfig，None=关闭，向后兼容；归一化后剔除边际收益最低弱信号）
+        beta_scale: L0 宏观 Beta 层总敞口倍率（plans/55 §C，None=未启用；与
+            exposure_scale × aligned_scale 乘性合并：exposure_final = exposure_scale ×
+            aligned_scale × beta_scale）
+        crowding_scale: 拥挤×置信度联合门控敞口倍率（plans/56 §B，None=未启用；
+            乘性链扩为 exposure_final = exposure_scale × aligned_scale × beta_scale ×
+            crowding_scale）
 
     Returns:
         PortfolioCombo
@@ -2729,14 +2993,39 @@ def build_combo(
                 aligned_scale,
             )
 
-    # 置信度仓位缩放（28-T6）：归一化后统一缩放总暴露，随组合落盘可追溯
-    if (exposure_scale is not None or aligned_scale < 1.0) and total_w > 0:
-        exposure_scale = float(exposure_scale if exposure_scale is not None else 1.0) * aligned_scale
+    # 置信度仓位缩放（28-T6）+ L0 宏观 Beta 层（plans/55 §C）+ 拥挤度联合门控（plans/56 §B）：
+    # 归一化后统一缩放总暴露，
+    # exposure_final = exposure_scale × aligned_scale × beta_scale × crowding_scale，
+    # 随组合落盘可追溯（beta_scale/crowding_scale 并入 regime_meta）。
+    _beta_scale = float(beta_scale if beta_scale is not None else 1.0)
+    _crowd_scale = float(crowding_scale if crowding_scale is not None else 1.0)
+    if (
+        exposure_scale is not None
+        or aligned_scale < 1.0
+        or beta_scale is not None
+        or crowding_scale is not None
+    ) and total_w > 0:
+        exposure_scale = (
+            float(exposure_scale if exposure_scale is not None else 1.0)
+            * aligned_scale
+            * _beta_scale
+            * _crowd_scale
+        )
         for s in retained:
             s["weight"] = s["weight"] * exposure_scale
-        logger.info("[L3-WEIGHT] 仓位缩放: exposure_scale=%.4f (置信度×同向敞口)", exposure_scale)
+        logger.info(
+            "[L3-WEIGHT] 仓位缩放: exposure_scale=%.4f (置信度×同向敞口×Beta层=%.2f×拥挤度=%.2f)",
+            exposure_scale,
+            _beta_scale,
+            _crowd_scale,
+        )
         # regime_meta 统一携带 exposure_scale，保证落盘可追溯（不修改调用方传入 dict）
-        regime_meta = {**(regime_meta or {}), "exposure_scale": round(exposure_scale, 4)}
+        regime_meta = {
+            **(regime_meta or {}),
+            "exposure_scale": round(exposure_scale, 4),
+            "beta_scale": round(_beta_scale, 4),
+            "crowding_scale": round(_crowd_scale, 4),
+        }
 
     # [WEIGHT-LOG] 归一化后权重分布
     sorted_retained = sorted(retained, key=lambda x: -x["weight"])
@@ -3901,6 +4190,10 @@ def load_elite_factors(
                                 # plans/47 §B：子链适用性画像透传（A2 落库字段，供子链差异化权重调制）
                                 "subchain_scope": metadata.get("subchain_scope"),
                                 "subchain_ic_profile": metadata.get("subchain_ic_profile") or {},
+                                # plans/53 §A2：Regime 画像透传（A2 落库字段，供组合层条件化与晋升门槛消费）
+                                "regime_scope": metadata.get("regime_scope"),
+                                "regime_ic_profile": metadata.get("regime_ic_profile") or {},
+                                "regime_dependent": metadata.get("regime_dependent", False),
                                 # 正交化闭环（GAP-I206 补充，v2.71.0/v2.72.0 基底）
                                 "orthogonalized": metadata.get("orthogonalized", False),
                                 "orthogonalized_against": metadata.get("orthogonalized_against", ""),
@@ -4236,6 +4529,8 @@ class PortfolioLoop:
         cluster_top_n: int = 1,
         enable_chain_dedup: bool = True,
         chain_dedup_max_per_chain: int = 2,
+        chain_dedup_corr_threshold: float = 0.5,
+        chain_dedup_cluster_top_n: int = 1,
         enable_subchain_weight: bool = False,
         subchain_weight_config: Optional[Any] = None,
         signal_store: Optional[tuple[str, str, str]] = None,
@@ -4287,6 +4582,10 @@ class PortfolioLoop:
         self._regime_smoother: Optional[Any] = None
         # 28-T4: 置信度仓位缩放因子（Step 2.5 计算，T6 在 build_combo 消费）与 regime 元信息
         self._regime_exposure_scale: float = 1.0
+        # plans/55: L0 宏观 Beta 层总敞口倍率（Step 2.5 计算，C 模块在 build_combo 乘性并入）
+        self._regime_beta_scale: float = 1.0
+        # plans/56: 拥挤×置信度联合门控敞口倍率（Step 2.5 计算，B 模块在 build_combo 乘性并入）
+        self._regime_crowding_scale: float = 1.0
         self._regime_meta: Optional[dict[str, Any]] = None
         # P1/P2 控制开关
         self.enable_clustering = enable_clustering
@@ -4300,9 +4599,13 @@ class PortfolioLoop:
         self.score_floor = float(score_floor)
         self.cluster_threshold = float(cluster_threshold)
         self.cluster_top_n = max(1, int(cluster_top_n))
-        # 子链维度去冗余（GAP-121 扩展）：单子链因子数上限，防产业链暴露集中
+        # 子链维度去冗余（GAP-121 扩展）：v2.105.0+13 起为链内相关性聚类去冗余
+        # （链内多品种平均相关 → 层次聚类留代表 → 叠加 max_per_chain 数量上限），
+        # 替代 v2.104.0+60 的"symbol_ic 数量截断"；futures 侧不受影响。
         self.enable_chain_dedup = enable_chain_dedup
         self.chain_dedup_max_per_chain = max(1, int(chain_dedup_max_per_chain))
+        self.chain_dedup_corr_threshold = max(0.05, float(chain_dedup_corr_threshold))
+        self.chain_dedup_cluster_top_n = max(1, int(chain_dedup_cluster_top_n))
         # plans/47 §B：子链差异化权重调制（灰度开关默认关，仅 market="energy" 生效；
         # 与 Step 1.8b 去冗余互补：去冗余管"数量"，调制管"权重"）
         self.enable_subchain_weight = bool(enable_subchain_weight)
@@ -4313,6 +4616,20 @@ class PortfolioLoop:
         self.subchain_weight_config = subchain_weight_config
         self._subchain_modulation: dict[str, dict[str, float]] = {}
         self._subchain_symbol_chain: dict[str, str] = {}
+        # plans/53 §B2：Regime 条件化因子权重配置（settings.yaml l3.regime_conditional，
+        # 仅 market="energy" 且 enabled 时生效；灰度默认关=零行为变更）
+        self._regime_conditional_enabled = False
+        self._regime_conditional_config: Any = None
+        try:
+            from .regime_conditional_weight import RegimeConditionalConfig as _RCConfig
+            from fts.config import get_config as _rc_cfg
+
+            _rc = (getattr(_rc_cfg(), "l3", {}) or {}).get("regime_conditional") or {}
+            self._regime_conditional_config = _RCConfig(**_rc)
+            self._regime_conditional_enabled = bool(_rc.get("enabled", False))
+        except Exception as _rc_err:  # noqa: BLE001
+            logger.warning("[L3] Regime 条件化配置读取失败，回退默认（关闭）: %s", _rc_err)
+            self._regime_conditional_config = None
         # plans/50 §B3：子链 Gate 缩放系数快照（并入调制矩阵后落质量报告观测段；
         # Gate 未开启/非 energy → 空 dict，与 subchain_gate_distribution 语义一致）
         self._subchain_gate_scale: dict[str, float] = {}
@@ -4924,7 +5241,11 @@ class PortfolioLoop:
             # Step 1.7 → 移至 Step 1.8b 之后（v2.104.0+67：聚类先行，CAP 后置为数量安全阀）
 
             # Step 1.8: P1 因子聚类（可选，系统性降低冗余）
-            if self.enable_clustering and len(factors) >= 3:
+            # v2.105.0+13：market=energy 关闭全局 P1 —— 子链张量化口径下，
+            # 全局单品种信号聚类会误伤子链特异因子（被并入通用大簇、代表被
+            # 全链高分因子拿走），去冗余职责整体下沉至 Step 1.8b 链内聚类。
+            use_global_clustering = self.enable_clustering and self.market != "energy"
+            if use_global_clustering and len(factors) >= 3:
                 logger.info(
                     "[L3] Step 1.8: 开始 P1 因子聚类 (factors=%d, threshold=%s, top_n=%d)",
                     len(factors),
@@ -4967,43 +5288,51 @@ class PortfolioLoop:
                     logger.warning("[L3] Step 1.8: P1 聚类失败 (非致命): %s", e)
             else:
                 logger.info(
-                    "[L3] Step 1.8: P1 聚类跳过 (enable_clustering=%s, n_factors=%d)",
+                    "[L3] Step 1.8: P1 聚类跳过 (enable_clustering=%s, market=%s, n_factors=%d)",
                     self.enable_clustering,
+                    self.market,
                     len(factors),
                 )
 
             # Step 1.8b: 子链维度去冗余（GAP-121 扩展，能源链专属）
-            # 与 Step 1.8 信号相关性聚类互补——同子链因子即使信号相关性低，
-            # 仍共享产业链驱动（原油→化工传导），限制单子链因子数防暴露集中。
+            # v2.105.0+13 升级为链内相关性聚类去冗余：归链画像（subchain_scope →
+            # symbol_ic 兜底 → unknown 通用池直接保留），链内多品种平均相关聚类
+            # （corr_threshold）留代表（cluster_top_n），再叠加 max_per_chain 上限。
+            # 与 Step 2b/2.5 互补：去冗余管"链内相关性"，调制管"子链权重"。
             if self.enable_chain_dedup and self.market == "energy" and len(factors) >= 3:
                 logger.info(
-                    "[L3] Step 1.8b: 子链去冗余 (market=%s, max_per_chain=%d, factors=%d)",
+                    "[L3] Step 1.8b: 子链聚类去冗余 (market=%s, max_per_chain=%d, corr_threshold=%.2f, factors=%d)",
                     self.market,
                     self.chain_dedup_max_per_chain,
+                    self.chain_dedup_corr_threshold,
                     len(factors),
                 )
                 try:
                     score_map = _factor_composite_score(factors, self.score_config)
-                    factors, chain_stats = _dedup_factors_by_chain(
+                    factors, chain_stats = _dedup_factors_by_chain_cluster(
                         factors,
                         self.elite_dir,
                         ENERGY_CHAIN_SUB_SYMBOLS,
                         self.chain_dedup_max_per_chain,
                         score_map,
+                        panel_data=panel_data,
+                        corr_threshold=self.chain_dedup_corr_threshold,
+                        cluster_top_n=self.chain_dedup_cluster_top_n,
+                        signal_cache=self._signal_cache,
                     )
                     if chain_stats["removed"]:
                         logger.info(
-                            "[L3] Step 1.8b: 子链去冗余移除 %d 个因子 (%d → %d): %s",
+                            "[L3] Step 1.8b: 子链聚类去冗余移除 %d 个因子 (%d → %d): %s",
                             len(chain_stats["removed"]),
                             len(factors) + len(chain_stats["removed"]),
                             len(factors),
                             chain_stats["removed"],
                         )
                     else:
-                        logger.info("[L3] Step 1.8b: 子链去冗余无移除，保留 %d 个", len(factors))
+                        logger.info("[L3] Step 1.8b: 子链聚类去冗余无移除，保留 %d 个", len(factors))
                     logger.info("[L3] Step 1.8b: 子链保留分布 %s", chain_stats["chains"])
                 except Exception as e:
-                    logger.warning("[L3] Step 1.8b: 子链去冗余失败 (非致命): %s", e)
+                    logger.warning("[L3] Step 1.8b: 子链聚类去冗余失败 (非致命): %s", e)
             else:
                 logger.info(
                     "[L3] Step 1.8b: 子链去冗余跳过 (enable=%s, market=%s, n_factors=%d)",
@@ -5354,6 +5683,129 @@ class PortfolioLoop:
                                 else None
                             ),
                         }
+                        # plans/55 §C: L0 宏观 Beta 层总敞口倍率（仅 energy 且开关开启）
+                        # 顺 β 方向配置总敞口：RISK_OFF → off_scale（压缩）；RISK_ON → on_scale。
+                        # 与 exposure_scale（量价置信度）× aligned_scale（G1 同向）在 build_combo
+                        # 乘性合并（exposure_final = exposure_scale × aligned_scale × beta_scale），
+                        # 数据缺失/异常 → 1.0（零行为变更），失败降级不阻断主流程。
+                        self._regime_beta_scale = 1.0
+                        _beta_meta: dict[str, Any] = {"beta_scale": 1.0}
+                        if self.market == "energy":
+                            try:
+                                from fts.config import get_config as _beta_cfg
+                                from fts.factor_engine.regime_beta_layer import (
+                                    BetaDetector,
+                                    BetaLayerConfig,
+                                    compute_beta_scale,
+                                )
+
+                                beta_cfg = (getattr(_beta_cfg(), "l3", {}) or {}).get(
+                                    "regime_beta_layer"
+                                ) or {}
+                                if beta_cfg.get("enabled", False):
+                                    bconf = BetaLayerConfig(**beta_cfg)
+                                    from ..data import FTSDataProvider
+
+                                    _fin_panel, _ = FTSDataProvider().get_futures_panel(
+                                        symbols=list(bconf.fin_symbols),
+                                        days=bconf.days,
+                                        trace_id=trace_id or "",
+                                    )
+                                    bstate = BetaDetector(bconf).detect(_fin_panel)
+                                    self._regime_beta_scale = compute_beta_scale(
+                                        bstate["state"], bconf
+                                    )
+                                    _beta_meta = {
+                                        "beta_scale": round(self._regime_beta_scale, 4),
+                                        "beta_state": bstate["state"],
+                                        "beta_confidence": round(
+                                            float(bstate.get("confidence", 0.0)), 4
+                                        ),
+                                        "beta_trend_score": round(
+                                            float(bstate.get("trend_score", 0.0)), 6
+                                        ),
+                                        "beta_risk_pref_z": round(
+                                            float(bstate.get("risk_pref_z", 0.0)), 6
+                                        ),
+                                    }
+                                    logger.info(
+                                        "[L3] Step 2.5: Beta 层 %s conf=%.2f → beta_scale=%.2f",
+                                        bstate["state"],
+                                        float(bstate.get("confidence", 0.0)),
+                                        self._regime_beta_scale,
+                                    )
+                            except Exception as be:  # noqa: BLE001 — Beta 层失败回退 1.0
+                                logger.warning(
+                                    "[L3] Step 2.5: Beta 层计算失败，回退 scale=1.0: %s", be
+                                )
+                                self._regime_beta_scale = 1.0
+                                _beta_meta = {"beta_scale": 1.0, "beta_error": str(be)}
+                        self._regime_meta = {**self._regime_meta, **_beta_meta}
+                        # plans/56 §B: 拥挤×置信度联合门控（仅 energy 且开关开启）
+                        # 拥挤度（6 信号合成）→ 联合门控倍率 crowding_scale，与 Beta 层
+                        # （方向层）正交——Beta 管"顺不顺势"，拥挤度管"势有没有被透支"。
+                        # 数据缺失/异常 → 1.0（零行为变更），失败降级不阻断主流程。
+                        self._regime_crowding_scale = 1.0
+                        _crowding_meta: dict[str, Any] = {"crowding_scale": 1.0}
+                        if self.market == "energy":
+                            try:
+                                from fts.config import get_config as _crowd_cfg
+                                from fts.factor_engine.regime_crowding import (
+                                    CrowdingSignalConfig,
+                                    build_joint_gate_scale,
+                                    compute_crowding_signals,
+                                )
+
+                                crowd_cfg = (getattr(_crowd_cfg(), "l3", {}) or {}).get(
+                                    "regime_crowding"
+                                ) or {}
+                                if crowd_cfg.get("enabled", False):
+                                    cconf = CrowdingSignalConfig(**crowd_cfg)
+                                    from ..data import FTSDataProvider
+                                    from fts.data_futures import ENERGY_CHAIN_SYMBOLS
+
+                                    _crowd_panel, _ = FTSDataProvider().get_futures_panel(
+                                        symbols=list(ENERGY_CHAIN_SYMBOLS),
+                                        days=cconf.days,
+                                        trace_id=trace_id or "",
+                                    )
+                                    crowd = compute_crowding_signals(_crowd_panel, cconf)
+                                    self._regime_crowding_scale = build_joint_gate_scale(
+                                        crowd["crowding_score"],
+                                        float(regime.get("confidence", 0.5)),
+                                        cconf,
+                                    )
+                                    _crowding_meta = {
+                                        "crowding_scale": round(
+                                            self._regime_crowding_scale, 4
+                                        ),
+                                        "crowding_score": round(
+                                            float(crowd["crowding_score"]), 4
+                                        ),
+                                        "crowding_direction": crowd["direction"],
+                                        "crowding_signals": {
+                                            k: v
+                                            for k, v in crowd["signals"].items()
+                                            if v
+                                        },
+                                    }
+                                    logger.info(
+                                        "[L3] Step 2.5: 拥挤度 score=%.2f dir=%s "
+                                        "→ crowding_scale=%.2f",
+                                        float(crowd["crowding_score"]),
+                                        crowd["direction"],
+                                        self._regime_crowding_scale,
+                                    )
+                            except Exception as ce:  # noqa: BLE001 — 拥挤度失败回退 1.0
+                                logger.warning(
+                                    "[L3] Step 2.5: 拥挤度计算失败，回退 scale=1.0: %s", ce
+                                )
+                                self._regime_crowding_scale = 1.0
+                                _crowding_meta = {
+                                    "crowding_scale": 1.0,
+                                    "crowding_error": str(ce),
+                                }
+                        self._regime_meta = {**self._regime_meta, **_crowding_meta}
                         # 28-T10: 上报 regime 观测指标（置信度/熵/exposure_scale/blend HHI），
                         # 供 /metrics 审计；失败不阻断主流程。
                         try:
@@ -5365,6 +5817,16 @@ class PortfolioLoop:
                                 regime.get("confidence", 0.0),
                                 regime.get("regime_probs"),
                                 self._regime_exposure_scale,
+                                beta_scale=self._regime_beta_scale,
+                                beta_state=str(
+                                    (self._regime_meta or {}).get("beta_state", "")
+                                ),
+                                crowding_scale=self._regime_crowding_scale,
+                                crowding_state=str(
+                                    (self._regime_meta or {}).get(
+                                        "crowding_direction", ""
+                                    )
+                                ),
                             )
                         except Exception as met_err:
                             logger.warning("[L3] Step 2.5: Regime 指标上报失败: %s", met_err)
@@ -5397,6 +5859,31 @@ class PortfolioLoop:
                                         s["weight"] = smoothed[s["factor_id"]]
                         except Exception as sm_err:
                             logger.warning("[L3] Step 2.5: RegimeSmoother 失败，使用调整后权重: %s", sm_err)
+                    # plans/53 §B2：Regime 条件化因子权重（当前制度 IC 显著为负的因子
+                    # 降权/归零，与 regime 倍率叠加；仅 energy 且开关开启时生效）
+                    if self._regime_conditional_enabled and self.market == "energy":
+                        try:
+                            from .regime_conditional_weight import build_regime_conditioned_weights
+
+                            _cur = regime.get("regime", "oscillate")
+                            _mod = build_regime_conditioned_weights(
+                                factors, _cur, self._regime_conditional_config
+                            )
+                            _applied = 0
+                            for s in signals:
+                                if not s.get("retained", True):
+                                    continue
+                                _m = _mod.get(s.get("factor_id", s.get("name", "?")), 1.0)
+                                if _m != 1.0:
+                                    s["weight"] = float(s.get("weight", 0.0)) * _m
+                                    _applied += 1
+                            if _applied:
+                                logger.info(
+                                    "[L3] Step 2.5b: Regime 条件化应用 %d 个因子（regime=%s, decay=%s）",
+                                    _applied, _cur, self._regime_conditional_config.decay_mode,
+                                )
+                        except Exception as rc_err:  # noqa: BLE001
+                            logger.warning("[L3] Step 2.5b: Regime 条件化失败（非致命，跳过）: %s", rc_err)
                     logger.info(
                         "[L3] Step 2.5: Regime=%s (confidence=%.2f), 自适应调整完成 [dim=%s, exposure_scale=%.2f]",
                         regime.get("regime", "unknown"),
@@ -5489,6 +5976,8 @@ class PortfolioLoop:
                 regime_meta=self._regime_meta,
                 aligned_exposure_config=self._g1_config,
                 turnover_budget_config=TurnoverBudgetConfig() if self.turnover_budget_enabled else None,
+                beta_scale=self._regime_beta_scale,
+                crowding_scale=self._regime_crowding_scale,
             )
             logger.info(
                 "[L3] Step 5: 组合构建完成, 夏普=%.2f, 换手率=%.2f",

@@ -896,8 +896,9 @@ def l2_energy_qa_review_job() -> None:
 
     合并 l2_review_energy_job 与 energy 链定期质检三路检测为单一管道：
     [0]面板→[1]重审→[2]退化检测落库→[3]生命周期收口(冷却期30日自动回归)→[4]Inspector→[5]报告。
-    灰度：环境变量 FTS_ENERGY_QA_REVIEW_APPLY=0 时全管道 dry-run（不落库），
-    与现质检/评审结果逐因子对比一致后再置 1 落库。
+    灰度：环境变量 FTS_ENERGY_QA_REVIEW_APPLY 默认 "0"（dry-run 安全默认，不落库；
+    v2.105.0+18 默认值反转，显式置 1 才落库），apply=True 时落库前强制影子校验
+    （与上次基线逐因子判定一致，无基线/判定漂移拒绝落库）。
     """
     trace_id = f"fts.l2_qa_review.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     logger.info("[L2评审质检][energy] 启动 trace_id=%s", trace_id)
@@ -907,7 +908,7 @@ def l2_energy_qa_review_job() -> None:
         sys.path.insert(0, str(PROJECT_ROOT))
         from fts.factor_engine.energy_qa_review import EnergyQaReviewConfig, EnergyQaReviewPipeline
 
-        apply = os.getenv("FTS_ENERGY_QA_REVIEW_APPLY", "1") == "1"
+        apply = os.getenv("FTS_ENERGY_QA_REVIEW_APPLY", "0") == "1"
         pipe = EnergyQaReviewPipeline(config=EnergyQaReviewConfig(apply=apply))
         result = pipe.run(trace_id=trace_id)
         logger.info(
@@ -921,6 +922,41 @@ def l2_energy_qa_review_job() -> None:
 
 
 # ── 逻辑监控 — 每日 22:00（B.2 逻辑审查）───────────────────
+
+
+
+def l2_subchain_quality_job(market: str | None = None) -> None:
+    """批量子链质量评估（FTS 标准工作流，2026-08-19 沉淀）。
+
+    对所有 active 因子批量计算逐品种 IC → 子链画像 → 落库 subchain_factor_quality
+    质量矩阵，补齐画像覆盖，供 L2 评审质检退化检测（单元粒度）与 L3 子链差异化
+    调制消费。三门槛经 subchain_profile.SubchainProfileConfig 参数化
+    （min_chain_ic=0.02，v2.105.0+16 由 0.10 校准）。无有效链因子不自动降级，
+    metadata 标记 pending_validation 交进一步验证。
+
+    Args:
+        market: 市场（None=跟随全局 FTS_DEFAULT_MARKET，默认 energy）
+    """
+    if market is None:
+        market = _global_market()
+    trace_id = f"fts.subchain_eval.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.info("[子链评估][%s] 启动 trace_id=%s", market, trace_id)
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from fts.factor_engine.subchain_eval import SubchainEvalConfig, SubchainEvalRunner
+
+        runner = SubchainEvalRunner(config=SubchainEvalConfig(market=market))
+        result = runner.run(trace_id=trace_id)
+        logger.info(
+            "[子链评估][%s] 完成 status=%s factors=%d rows=%d no_effective=%d",
+            market,
+            result.get("status"),
+            result.get("factors_total"),
+            result.get("rows_saved"),
+            len(result.get("no_effective_chains") or []),
+        )
+    except Exception as e:
+        logger.error("[子链评估][%s] 运行失败: %s", market, e, exc_info=True)
 
 
 def logic_monitor_job() -> None:
@@ -977,18 +1013,23 @@ def logic_monitor_job() -> None:
                     code=factor.get("code", ""),
                     params=params,
                 )
-                # 用模拟 OHLCV 数据做行为漂移检测（补全 high/low/volume 列，
-                # 匹配因子代码的 K 线字段引用，避免 KeyError）
+                # 用模拟 OHLCV 数据做行为漂移检测（补全 high/low/volume/settle 列，
+                # 匹配因子代码的 K 线字段引用，避免 KeyError；settle 为期货结算价，
+                # 按主链路代理公式 (H+L+C)/3 近似——TQSDK/TDX_LOCAL 主路径不提供该字段）
                 n = 500
                 base = 100 + np.cumsum(np.random.randn(n) * 0.5)
+                mock_high = base * (1 + np.abs(np.random.randn(n)) * 0.01 + 0.001)
+                mock_low = base * (1 - np.abs(np.random.randn(n)) * 0.01 - 0.001)
                 mock_data = pd.DataFrame(
                     {
                         "date": pd.date_range("2020-01-01", periods=n, freq="B"),
                         "open": base * (1 + np.random.randn(n) * 0.002),
-                        "high": base * (1 + np.abs(np.random.randn(n)) * 0.01 + 0.001),
-                        "low": base * (1 - np.abs(np.random.randn(n)) * 0.01 - 0.001),
+                        "high": mock_high,
+                        "low": mock_low,
                         "close": base,
+                        "settle": (mock_high + mock_low + base) / 3.0,
                         "volume": np.abs(np.random.randn(n)) * 1e5 + 1e4,
+                        "hold": np.abs(np.random.randn(n)) * 1e6 + 1e5,
                     }
                 )
                 result = logic.run(fp, mock_data, switch_dates=[])
@@ -1089,6 +1130,40 @@ def data_quality_eval_job() -> None:
 # ── 数据级质量监控 ─ 每日 04:00（GAP-F06）─────────────
 
 
+# kline_cache 字段完整性分级（GAP-151，v2.105.0+19）：
+# - 核心字段（date/open/high/low/close/volume）：数据不可用 → 跳过（宁缺毋滥，报错级）
+# - 增强字段（hold/settle/pre_settle）：走代理降级链（如 hold 20 日滚动均量），告警级
+# hold 字段 100% 缺失曾静默被代理填充掩盖——现在代理填充前显式暴露缺口。
+KLINE_CORE_FIELDS = ("date", "open", "high", "low", "close", "volume")
+KLINE_EXTENDED_FIELDS = ("hold", "settle", "pre_settle")
+
+
+def _check_kline_field_integrity(df: "object", symbol: str) -> bool:
+    '''数据契约字段完整性校验（GAP-151 分级）：核心字段不可用返回 False（调用方跳过），
+    增强字段缺失仅告警（代理降级链保留但显式暴露）。在代理填充前调用。
+    '''
+    core_missing = [
+        c for c in KLINE_CORE_FIELDS if c not in df.columns or int(df[c].notna().sum()) == 0
+    ]
+    ext_missing = [
+        c for c in KLINE_EXTENDED_FIELDS if c not in df.columns or int(df[c].notna().sum()) == 0
+    ]
+    if core_missing:
+        logger.error(
+            "数据级监控 核心字段缺失[symbol=%s] 缺失/全空列=%s —— 数据不可用，跳过（宁缺毋滥）",
+            symbol,
+            core_missing,
+        )
+        return False
+    if ext_missing:
+        logger.warning(
+            "数据级监控 增强字段缺失[symbol=%s] 缺失/全空列=%s（下游走代理值——请优先修复数据源）",
+            symbol,
+            ext_missing,
+        )
+    return True
+
+
 def _read_kline_cache(db_path: Path, symbol: str, limit: int = 120) -> "object | None":
     """从 DuckDB kline_cache 读取单个品种最近 K 线（尽力而为）。
 
@@ -1103,16 +1178,62 @@ def _read_kline_cache(db_path: Path, symbol: str, limit: int = 120) -> "object |
     try:
         import duckdb
 
+        raw_sym = symbol.strip().upper()
+        base_sym = raw_sym[:-1] if raw_sym.endswith("0") else raw_sym
+        variants = [base_sym, f"{base_sym}0", f"{base_sym}.SHFE", f"{base_sym}.DCE", f"{base_sym}.CZCE", f"{base_sym}.CFFEX"]
+
+        raw_limit = max(int(limit) * 4, 480)
+
         con = duckdb.connect(str(db_path), read_only=True)
         try:
-            variants = [symbol, f"{symbol}0", f"{symbol}.SHFE", f"{symbol}.DCE", f"{symbol}.CZCE", f"{symbol}.CFFEX"]
             placeholders = ",".join(["?"] * len(variants))
-            return con.execute(
+            df = con.execute(
                 f"SELECT * FROM kline_cache WHERE symbol IN ({placeholders}) ORDER BY date DESC LIMIT ?",
-                [*variants, int(limit)],
+                [*variants, int(raw_limit)],
             ).df()
         finally:
             con.close()
+
+        if df is None or df.empty:
+            return None
+
+        # 字段完整度优先去重（GAP-148）：同一 date 存在多 symbol 变体时优先保留
+        # 扩展字段更完整的行（历史裸数据变体如 SC 的 vwap/source/oi_change 全空，
+        # 与 SC0 重叠时混行导致样本缩水 + 缺失率虚高）。
+        score_cols = ("hold", "settle", "vwap", "oi_change", "source", "fetched_at", "trace_id")
+        completeness = sum(
+            df[col].notna().astype(int) for col in score_cols if col in df.columns
+        )
+        df["_completeness"] = completeness
+        df = df.sort_values(["date", "_completeness"], ascending=[True, False])
+        df = df.drop_duplicates(subset="date", keep="first")
+        df = df.drop(columns=["_completeness"])
+
+        # 去重后截取最近 limit 个交易日（升序取尾部）
+        if len(df) > int(limit):
+            df = df.tail(int(limit))
+
+        df = df.reset_index(drop=True)
+
+        if not _check_kline_field_integrity(df, base_sym):  # GAP-151 核心字段不可用→跳过
+            return None
+
+        if "settle" in df.columns:
+            mask_settle = df["settle"].isna() | (df["settle"] <= 0)
+            df.loc[mask_settle, "settle"] = (df["high"] + df["low"] + df["close"]) / 3.0
+        if "hold" in df.columns:
+            mask_hold = df["hold"].isna() | (df["hold"] <= 0)
+            df.loc[mask_hold, "hold"] = df["volume"].rolling(window=20, min_periods=1).mean()
+        # pre_settle 代理填充（与 aggregator._derive_pre_settle 同款语义：前日结算价，
+        # 兜底前日收盘价；TDX 主路径不产出该字段，全历史 NA 需读取端兜底）
+        if "pre_settle" in df.columns:
+            mask_pre = df["pre_settle"].isna() | (df["pre_settle"] <= 0)
+            if mask_pre.any():
+                if "settle" in df.columns:
+                    df.loc[mask_pre, "pre_settle"] = df["settle"].shift(1)
+                df.loc[mask_pre & df["pre_settle"].isna(), "pre_settle"] = df["close"].shift(1)
+
+        return df
     except Exception as e:  # noqa: BLE001
         logger.debug("数据级监控 读取缓存失败 symbol=%s: %s", symbol, e)
         return None
@@ -1160,6 +1281,144 @@ def data_level_monitor_job() -> None:
         )
     except Exception as e:
         logger.error("数据级监控 运行失败: %s (trace_id=%s)", e, trace_id)
+
+def factor_level_monitor_job() -> None:
+    """因子级监控任务：数据质量 + 逻辑正确性 + 实盘表现监控。
+
+    对因子库（factor_catalog_energy.duckdb）执行三维检查：
+    1. 因子数据质量：完整性（必填字段缺失）、一致性（状态/指标合理性）、血缘追踪
+    2. 因子逻辑正确性：代码可执行性、因子签名完整性
+    3. 实盘因子表现：LiveFactorMonitor 偏离检测（如适用）
+
+    尽力而为：因子库缺失或读取失败仅记录日志，不中断其他调度任务。
+    """
+    trace_id = f"fts.flm.sched_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        import duckdb
+
+        db_path = PROJECT_ROOT / "data" / "factor_catalog_energy.duckdb"
+        if not db_path.exists():
+            logger.info("因子级监控 无因子库 %s，跳过 (trace_id=%s)", db_path, trace_id)
+            return
+
+        con = duckdb.connect(str(db_path), read_only=True)
+        try:
+            total_factors = con.execute("SELECT COUNT(*) FROM factor_catalog").fetchone()[0]
+            if total_factors == 0:
+                logger.info("因子级监控 因子库为空 (trace_id=%s)", trace_id)
+                return
+
+            integrity_issues: list[str] = []
+            null_name = con.execute("SELECT COUNT(*) FROM factor_catalog WHERE name IS NULL OR name = ''").fetchone()[0]
+            if null_name > 0:
+                integrity_issues.append(f"name 缺失: {null_name} 条")
+
+            null_code = con.execute("SELECT COUNT(*) FROM factor_catalog WHERE code IS NULL OR code = ''").fetchone()[0]
+            if null_code > 0:
+                integrity_issues.append(f"code 缺失: {null_code} 条")
+
+            null_params = con.execute("SELECT COUNT(*) FROM factor_catalog WHERE params IS NULL").fetchone()[0]
+            if null_params > 0:
+                integrity_issues.append(f"params 缺失: {null_params} 条")
+
+            consistency_issues: list[str] = []
+            # 合法状态集引用权威定义（GAP-149 VALID_CATALOG_STATUS，9 状态含
+            # shadow/failed/retired/archived/deprecated），禁止硬编码子集造成误报
+            from fts.factor_engine.factor_db.repository import VALID_CATALOG_STATUS
+
+            _status_ph = ", ".join(["?"] * len(VALID_CATALOG_STATUS))
+            invalid_status = con.execute(
+                f"SELECT COUNT(*) FROM factor_catalog WHERE status NOT IN ({_status_ph})",
+                list(VALID_CATALOG_STATUS),
+            ).fetchone()[0]
+            if invalid_status > 0:
+                consistency_issues.append(f"非法状态: {invalid_status} 条")
+
+            negative_sharpe = con.execute("SELECT COUNT(*) FROM factor_catalog WHERE sharpe < 0 AND is_elite = TRUE").fetchone()[0]
+            if negative_sharpe > 0:
+                consistency_issues.append(f"elite 因子 Sharpe < 0: {negative_sharpe} 条")
+
+            lineage_issues: list[str] = []
+            child_without_parent = con.execute("""
+                SELECT COUNT(*) FROM factor_catalog fc
+                WHERE fc.parent_id IS NOT NULL
+                AND fc.parent_id NOT IN (SELECT factor_id FROM factor_catalog)
+            """).fetchone()[0]
+            if child_without_parent > 0:
+                lineage_issues.append(f"孤儿因子（parent_id 不存在）: {child_without_parent} 条")
+
+            logic_issues: list[str] = []
+            factors_no_eval = con.execute("""
+                SELECT COUNT(*) FROM factor_catalog fc
+                WHERE fc.is_elite = TRUE
+                AND fc.factor_id NOT IN (SELECT DISTINCT factor_id FROM factor_evaluations)
+            """).fetchone()[0]
+            if factors_no_eval > 0:
+                logic_issues.append(f"elite 因子无评估记录: {factors_no_eval} 条")
+
+            failed_evals = con.execute("""
+                SELECT COUNT(*) FROM factor_catalog fc
+                JOIN factor_evaluations fe ON fc.factor_id = fe.factor_id
+                WHERE fc.is_elite = TRUE AND fe.overall_passed = FALSE
+            """).fetchone()[0]
+            if failed_evals > 0:
+                logic_issues.append(f"elite 因子评估未通过: {failed_evals} 条")
+
+            try:
+                from fts.monitor.live_factor_monitor import LiveFactorMonitor
+                monitor = LiveFactorMonitor()
+                elite_factors = con.execute("""
+                    SELECT factor_id, name, ic, sharpe, max_drawdown
+                    FROM factor_catalog
+                    WHERE is_elite = TRUE AND status = 'active'
+                """).fetchall()
+                if elite_factors:
+                    for row in elite_factors:
+                        factor_id, name, ic, sharpe, max_dd = row
+                        metrics: dict[str, float] = {}
+                        if ic is not None:
+                            metrics["ic"] = ic
+                        if sharpe is not None:
+                            metrics["sharpe"] = sharpe
+                        if max_dd is not None:
+                            metrics["max_drawdown"] = max_dd
+                        if metrics:
+                            monitor.set_backtest_baseline(factor_id, metrics)
+                    logger.info(
+                        "因子级监控 LiveMonitor: 已加载 %d 个 elite 因子回测基线 (trace_id=%s)",
+                        len(elite_factors),
+                        trace_id,
+                    )
+            except Exception as e:
+                logger.debug("因子级监控 LiveMonitor 初始化失败: %s", e)
+
+            total_issues = len(integrity_issues) + len(consistency_issues) + len(lineage_issues) + len(logic_issues)
+            logger.info(
+                "因子级监控 完成: factors=%d integrity=%d consistency=%d lineage=%d logic=%d total_issues=%d (trace_id=%s)",
+                total_factors,
+                len(integrity_issues),
+                len(consistency_issues),
+                len(lineage_issues),
+                len(logic_issues),
+                total_issues,
+                trace_id,
+            )
+            for issue in integrity_issues:
+                logger.warning("因子级监控 [完整性] %s (trace_id=%s)", issue, trace_id)
+            for issue in consistency_issues:
+                logger.warning("因子级监控 [一致性] %s (trace_id=%s)", issue, trace_id)
+            for issue in lineage_issues:
+                logger.warning("因子级监控 [血缘] %s (trace_id=%s)", issue, trace_id)
+            for issue in logic_issues:
+                logger.warning("因子级监控 [逻辑] %s (trace_id=%s)", issue, trace_id)
+
+        finally:
+            con.close()
+
+    except Exception as e:
+        logger.error("因子级监控 运行失败: %s (trace_id=%s)", e, trace_id)
+
 
 
 def _verify_field_coverage(kline_ok: bool, fundamental_ok: bool, term_ok: bool) -> dict[str, Any]:
@@ -1421,6 +1680,7 @@ __all__ = [
     "l2_review_job",
     "l2_review_energy_job",
     "l2_energy_qa_review_job",
+    "l2_subchain_quality_job",
     "data_quality_eval_job",
     "logic_monitor_job",
     "factor_inspector_job",

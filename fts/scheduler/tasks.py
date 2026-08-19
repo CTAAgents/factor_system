@@ -218,6 +218,13 @@ def register_default_tasks() -> None:
             description="MHF 中高频信号（plans/33 Phase 4）：30m 反转混合信号 → SignalBridge 发布（JSON）",
             trace_id_prefix="fts.mhf",
         ),
+        TaskSpec(
+            name="l2_subchain_quality",
+            cron_expression="0 9 * * 0",  # 每周日 09:00（评审质检 10:00 前刷新全量 active 因子画像）
+            callable_path="fts.scheduler.jobs.l2_subchain_quality_job",
+            description="批量子链质量评估（2026-08-19 沉淀标准工作流）：全部 active 因子逐品种 IC → 子链画像 → 落库 subchain_factor_quality 质量矩阵，供退化检测/子链调制消费；无有效链因子标记 pending_validation 不自动降级",
+            trace_id_prefix="fts.subchain_eval",
+        ),
     ]
     for spec in defaults:
         if spec.name not in REGISTRY:

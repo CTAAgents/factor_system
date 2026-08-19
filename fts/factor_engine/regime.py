@@ -898,10 +898,15 @@ class RegimeAwareSelector:
         use_hmm: bool = True,
         use_multi_hmm: bool = True,
         use_msm: bool = False,
+        observe_days: int = 0,
     ) -> None:
         self.lookback_days = lookback_days
         self._profiles: dict[str, RegimeFactorProfile] = {}
         self._prev_regime: MarketRegime | None = None
+        # plans/54 P1-3: 观察期机制（0=关闭兼容现状；>0 时状态跳变须连续保持 N 次才切换）
+        self.observe_days = int(observe_days)
+        self._observe_candidate: str | None = None
+        self._observe_count: int = 0
 
         # 单周期 HMM 检测器
         self._hmm_detector = HMMRegimeDetector() if use_hmm and _HMM_AVAILABLE else None
@@ -1038,6 +1043,37 @@ class RegimeAwareSelector:
             _feats_rp = (result.get("features") or {}).get("regime_probs")
             if isinstance(_feats_rp, dict) and _feats_rp:
                 result["regime_probs"] = _feats_rp
+
+        # ── plans/54 P1-3: 观察期机制（状态跳变不立即切换） ──
+        # 文档 §7.1："跳变违背持续性，默认怀疑需证据"——候选新制度须连续
+        # observe_days 次保持才确认切换；观察期内维持旧制度（不放大仓位）。
+        # 与既有概率平滑（0.7 保留）/防抖（同日）互补；observe_days=0 关闭（兼容现状）。
+        if (
+            self.observe_days > 0
+            and result is not None
+            and self._prev_regime is not None
+            and result["regime"] != self._prev_regime["regime"]
+        ):
+            if self._observe_candidate == result["regime"]:
+                self._observe_count += 1
+            else:
+                self._observe_candidate = result["regime"]
+                self._observe_count = 1
+            if self._observe_count < self.observe_days:
+                # 观察期内维持旧制度（保留置信度，标记 observed 可追溯）
+                result = dict(self._prev_regime)
+                result["observed"] = True
+                result["candidate_regime"] = self._observe_candidate
+                result["observe_count"] = self._observe_count
+            else:
+                # 连续达标 → 确认切换（清空观察状态）
+                self._observe_candidate = None
+                self._observe_count = 0
+                result["observed"] = True
+                result["confirmed"] = True
+        elif result is not None:
+            self._observe_candidate = None
+            self._observe_count = 0
 
         # ── 更新上次结果 ────────────────────────────────
         self._prev_regime = result

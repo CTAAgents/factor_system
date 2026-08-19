@@ -182,7 +182,80 @@ class StorageRegistry:
                 issues.append(f"[{domain.domain}] planned 域必须声明 migrated_from")
         return issues
 
+    # ── 写路径契约（GAP-150，2026-08-19） ─────────────────
+
+    def find_by_path(self, path: str | Path) -> StorageDomain | None:
+        """按实际写路径反查登记域（相对项目根规范化比对）。
+
+        - 模板路径（如 ``data/factor_catalog_{stock,futures,energy}.duckdb``）按
+          前缀 + 后缀拆分匹配；
+        - 项目根外路径（测试 tmp / 外部库）返回 None（显式注入豁免）。
+        """
+        p = Path(path)
+        try:
+            rel = p.resolve().relative_to(PROJECT_ROOT.resolve())
+        except ValueError:
+            return None
+        rel_str = rel.as_posix()
+        for d in self._domains.values():
+            dpath = d.path
+            if "{" in dpath:
+                prefix, _, rest = dpath.partition("{")
+                suffix = rest.split("}", 1)[1] if "}" in rest else ""
+                if rel_str.startswith(prefix) and rel_str.endswith(suffix):
+                    return d
+            elif rel_str.startswith(dpath):
+                return d
+        return None
+
+    def warn_unregistered_write(
+        self,
+        path: str | Path,
+        caller: str = "",
+        strict: bool = False,
+    ) -> StorageDomain | None:
+        """写路径注册断言（GAP-150）：路径未落在登记域时告警或抛错。
+
+        - 告警模式（strict=False，默认）：未登记 warning，SSOT 可观测化；
+        - 严格模式（strict=True，v2.105.0+19）：未登记抛 ValueError（阻断，强制先登记）。
+
+        返回匹配域（None = 未登记）。
+        """
+        d = self.find_by_path(path)
+        if d is None:
+            if strict:
+                raise ValueError(
+                    f"[StorageRegistry] 写路径未登记: {path}（严格模式，新增写路径必须先登记 "
+                    f"storage_landscape.yaml，SSOT）"
+                )
+            logger.warning(
+                "[StorageRegistry] 写路径未登记: %s%s——新增写路径必须先登记 storage_landscape.yaml（SSOT）",
+                path,
+                f"（调用方: {caller}）" if caller else "",
+            )
+        return d
+
 
 def load_storage_landscape(yaml_path: str | Path | None = None) -> StorageRegistry:
     """便捷工厂：加载存储域注册表。"""
     return StorageRegistry(yaml_path=yaml_path)
+
+
+# 写路径契约进程级单例（GAP-150，v2.105.0+21）：各写入口高频调用避免重复解析 YAML。
+_REGISTRY_CACHE: StorageRegistry | None = None
+
+
+class _NoResetRegistryError(RuntimeError):
+    """单例重置受限标记（测试环境如需隔离请直接构造 StorageRegistry）。"""
+
+
+def get_storage_registry() -> StorageRegistry:
+    """返回进程级 StorageRegistry 单例（首次调用加载，之后复用）。
+
+    服务 GAP-150 写路径契约检查（repository/state_db/l3_signal/data_futures
+    写入口统一入口）；测试隔离请直接构造 StorageRegistry，不走单例。
+    """
+    global _REGISTRY_CACHE
+    if _REGISTRY_CACHE is None:
+        _REGISTRY_CACHE = StorageRegistry()
+    return _REGISTRY_CACHE

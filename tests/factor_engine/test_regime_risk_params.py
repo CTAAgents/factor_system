@@ -9,7 +9,11 @@
 
 from __future__ import annotations
 
-from fts.factor_engine.regime_multipliers import REGIME_RISK_PARAMS, resolve_risk_params
+from fts.factor_engine.regime_multipliers import (
+    BETA_RISK_PARAMS,
+    REGIME_RISK_PARAMS,
+    resolve_risk_params,
+)
 from fts.live_trade.paper_trader_mhf import MhfRiskConfig
 from fts.risk.risk_manager import RiskManager
 
@@ -109,3 +113,55 @@ class TestMhfConfigFromRegime:
         assert cfg.max_positions == 12
         assert cfg.target_pct == 0.1
         assert cfg.stop_loss_pct == 0.008
+
+
+class TestBetaRiskParams:
+    """plans/55 §D — L0 宏观 Beta 档位叠加（在量价制度参数基础上乘性收紧）。"""
+
+    def test_beta_off_stacks_on_bear(self):
+        """RISK_OFF 叠加 bear：杠杆 1.5×0.7、单日亏损 0.015×0.7（乘性取更严）。"""
+        params = resolve_risk_params("bear", dict(_BASE), beta_state="RISK_OFF")
+        assert abs(params["leverage_cap"] - 1.5 * 0.7) < 1e-9
+        assert abs(params["daily_loss_pct"] - 0.015 * 0.7) < 1e-9
+        assert params["stop_loss_pct"] == 0.010  # 未在 BETA 表 → 保持量价制度值
+
+    def test_beta_on_no_change(self):
+        """RISK_ON 无额外约束：与量价制度解析一致。"""
+        params = resolve_risk_params("bull", dict(_BASE), beta_state="RISK_ON")
+        assert params["leverage_cap"] == 2.5
+
+    def test_beta_off_stacks_on_high_vol(self):
+        """RISK_OFF 叠加 high_vol：1.0×0.7（双风险态最严）。"""
+        params = resolve_risk_params("high_vol", dict(_BASE), beta_state="RISK_OFF")
+        assert abs(params["leverage_cap"] - 0.7) < 1e-9
+
+    def test_beta_unknown_keeps_base(self):
+        """未知 beta_state 不叠加：与量价制度解析一致。"""
+        params = resolve_risk_params("bear", dict(_BASE), beta_state="weird")
+        assert params["leverage_cap"] == 1.5
+
+    def test_beta_table_keys(self):
+        """BETA_RISK_PARAMS 覆盖四态，RISK_OFF 含收紧倍率。"""
+        assert set(BETA_RISK_PARAMS.keys()) == {"RISK_ON", "RISK_OFF", "RANGE_BOUND", "unknown"}
+        assert BETA_RISK_PARAMS["RISK_OFF"]["leverage_cap"] == 0.7
+
+
+class TestRiskManagerBeta:
+    """plans/55 §D — RiskManager beta_state 注入（不改 check() 内部逻辑）。"""
+
+    def test_beta_off_injected(self):
+        rm = RiskManager(regime="bear", beta_state="RISK_OFF")
+        # 默认 3.0 → bear 1.5 → RISK_OFF ×0.7 = 1.05
+        assert abs(rm._config["max_leverage"] - 1.5 * 0.7) < 1e-9
+        # 默认 0.05 → bear 0.015 → RISK_OFF ×0.7 = 0.0105
+        assert abs(rm._config["daily_loss_limit_pct"] - 0.015 * 0.7) < 1e-9
+
+    def test_beta_on_no_extra(self):
+        rm = RiskManager(regime="bull", beta_state="RISK_ON")
+        assert rm._config["max_leverage"] == 2.5
+
+    def test_beta_state_none_unchanged(self):
+        """未传 beta_state 与现状一致（回归保护）。"""
+        rm_plain = RiskManager(regime="bear")
+        rm_beta = RiskManager(regime="bear", beta_state=None)
+        assert rm_beta._config["max_leverage"] == rm_plain._config["max_leverage"]

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -159,6 +159,114 @@ class LogicMonitorResult:
 
 
 # ─── 逻辑监控器 ────────────────────────────────────────────
+
+
+@dataclass
+class MarketPremiseResult:
+    """市场前提监控结果（plans/54 P0-3，文档 §9.2 监控前提而非结果）。
+
+    Attributes:
+        regime: 激活市场制度（bull/bear/oscillate/high_vol/low_vol；None=未知）。
+        trend_score: 板块等权指数 MA20-MA60 归一化趋势。
+        vol_percentile: 20 日年化 realized vol 历史分位。
+        trend_structure_ok: 趋势结构是否仍在（趋势制度下 |trend_score| 达标）。
+        vol_structure_ok: 波动结构是否仍在（高波制度 vol 在高位 / 震荡制度未爆波）。
+        premise_ok: 前提是否健康（True=前提在，False=前提消失需告警）。
+        alert: 前提消失告警信息（None=无）。
+    """
+
+    regime: str | None
+    trend_score: float
+    vol_percentile: float
+    trend_structure_ok: bool
+    vol_structure_ok: bool
+    premise_ok: bool
+    alert: str | None
+
+
+def check_market_premise(
+    panel: dict[str, Any],
+    active_regime: str | None = None,
+    *,
+    trend_min: float = 0.02,
+    vol_min_percentile: float = 0.5,
+    vol_max_percentile: float = 0.7,
+) -> MarketPremiseResult:
+    """市场前提监控（plans/54 P0-3，外部 Regime-Driven §9.2）。
+
+    优先监控前提条件而非输出指标：趋势策略监控"趋势结构是否还在"（|trend_score|），
+    高波动策略监控"波动结构是否还在"（vol 分位），而非"收益率是否还在"——
+    前提消失才是真失效，收益率降只是症状。
+
+    Args:
+        panel: 组合/板块面板 {symbol: OHLCV}（等权指数 close 计算）。
+        active_regime: 激活市场制度（None=未知 → 前提视为健康，不误报）。
+        trend_min: 趋势结构下限（|MA20-MA60|/MA60，默认 0.02）。
+        vol_min_percentile: 高波制度下 vol 分位下限（默认 0.5，仍在高位）。
+        vol_max_percentile: 震荡制度下 vol 分位上限（默认 0.7，未爆波）。
+
+    Returns:
+        MarketPremiseResult；面板不足 → 前提视为健康（不误报）。
+    """
+    # 等权指数（close 归一化首值=100 后截面均值）
+    closes: dict[str, Any] = {}
+    for sym, df in panel.items():
+        if df is None or df.empty or "close" not in df.columns:
+            continue
+        c = pd.to_numeric(df["close"], errors="coerce")
+        if c.dropna().empty:
+            continue
+        closes[sym] = c
+    if len(closes) < 2:
+        return MarketPremiseResult(active_regime, 0.0, 0.5, True, True, True, None)
+    mat = pd.DataFrame(closes).dropna(how="all")
+    if mat.empty:
+        return MarketPremiseResult(active_regime, 0.0, 0.5, True, True, True, None)
+    first_valid = mat.apply(lambda s: s.dropna().iloc[0])
+    idx = (mat.div(first_valid, axis=1) * 100.0).mean(axis=1).dropna()
+    if len(idx) < 25:
+        return MarketPremiseResult(active_regime, 0.0, 0.5, True, True, True, None)
+
+    ma_s = idx.rolling(20).mean()
+    ma_l = idx.rolling(60).mean()
+    trend_score = float((ma_s.iloc[-1] - ma_l.iloc[-1]) / (ma_l.iloc[-1] + 1e-9))
+    rets = idx.pct_change().dropna()
+    vol = rets.rolling(20).std() * np.sqrt(252)
+    vol_h = vol.dropna()
+    vol_percentile = float((vol_h <= vol.iloc[-1]).mean()) if not vol_h.empty else 0.5
+
+    # 按制度约束对应维度（其余维度不约束，防跨制度误报）
+    if active_regime in ("bull", "bear"):
+        trend_ok = abs(trend_score) >= trend_min
+        vol_ok = True
+    elif active_regime == "high_vol":
+        trend_ok = True  # 高波制度不约束趋势结构
+        vol_ok = vol_percentile >= vol_min_percentile
+    elif active_regime in ("oscillate", "low_vol"):
+        trend_ok = True  # 震荡制度不约束趋势结构
+        vol_ok = vol_percentile <= vol_max_percentile
+    else:
+        trend_ok, vol_ok = True, True  # 未知制度不误报
+
+    premise_ok = trend_ok and vol_ok
+    alert = None
+    if not premise_ok:
+        parts = []
+        if not trend_ok:
+            parts.append(f"趋势结构消失(trend={trend_score:.3f}<{trend_min:.2f})")
+        if not vol_ok:
+            parts.append(f"波动结构异常(vol分位={vol_percentile:.2f})")
+        alert = f"市场前提消失[{active_regime or 'unknown'}]: {'; '.join(parts)}"
+
+    return MarketPremiseResult(
+        regime=active_regime,
+        trend_score=round(trend_score, 6),
+        vol_percentile=round(vol_percentile, 4),
+        trend_structure_ok=trend_ok,
+        vol_structure_ok=vol_ok,
+        premise_ok=premise_ok,
+        alert=alert,
+    )
 
 
 class LogicMonitor:

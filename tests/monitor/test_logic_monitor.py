@@ -252,6 +252,44 @@ class TestLogicMonitorRun:
 
         assert captured.get("execute_params") == {"lookback": 20}
 
+    def test_dsl_settle_factor_runs_with_settle_column(self, sample_data):
+        """DSL 因子引用 settle 列时，含 settle 列的模拟数据可正常执行。
+
+        回归 fct_4d57a00f KeyError（2026-08-17）：逻辑监控 mock 数据原缺 settle 列，
+        eval_fts_expr('ts_vol_percentile(settle, 71)') 读取缺列即抛错；
+        修复后 mock 数据按主链路代理公式 (H+L+C)/3 补 settle，DSL 因子不再报错。
+        """
+        code = '''
+from fts.factor_engine.expr_dsl.runtime import eval_fts_expr
+
+def factor_program(data, params):
+    return eval_fts_expr('ts_vol_percentile(settle, 71)', data, params)
+'''
+        factor = create_factor_program(
+            name="dsl_settle_monitor",
+            code=code,
+            params={},
+            signature={
+                "input_fields": ["close", "settle"],
+                "output_type": "signal",
+                "frequency": "daily",
+            },
+            source="seed",
+            economic_logic={
+                "theory": 3,
+                "behavioral": 3,
+                "microstructure": 3,
+                "institutional": 3,
+                "narrative": "dsl settle monitor test",
+            },
+        )
+        data = sample_data.copy()
+        data["settle"] = (data["high"] + data["low"] + data["close"]) / 3.0
+
+        monitor = LogicMonitor()
+        result = monitor.run(factor, data, switch_dates=[])
+        assert isinstance(result, LogicMonitorResult)
+
 
 # ─── 极端因子测试 ──────────────────────────────────────────
 

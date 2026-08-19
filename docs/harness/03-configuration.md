@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.105.0+8
+> 版本: v2.105.0+28
 > 最后更新: 2026-08-10
 
 ---
@@ -22,6 +22,7 @@ FTS 配置采用三级优先级（高→低）：
 |:-------|:-----|:-------|:---------|:-----|
 | `memory_dir` | str | `"memory"` | `FTS_MEMORY_DIR` | 运行时状态持久化目录 |
 | 存储域契约路径（plans/29 P0） | str（注册表内部） | `docs/harness/_data/storage_landscape.yaml` | `FTS_STORAGE_LANDSCAPE_PATH` | 存储域注册表 YAML 路径（StorageRegistry 加载，13 域；缺省回落内置默认路径，缺失时注册表空不抛错）（GAP-090，v2.101.0） |
+| 写路径严格模式（GAP-150） | bool | `"1"`（严格） | `FTS_STORAGE_WRITE_STRICT` | FactorRepository 默认路径写入口契约：未登记 storage_landscape 抛 ValueError 阻断（强制先登记）；置 `"0"` 回退告警模式（v2.105.0+20） |
 | `elite_dir` | str | `"memory/knowledge/factors/futures_elite"` | `FTS_ELITE_DIR` | elite 因子存储目录（股票剥离后默认对齐期货精英目录，v2.86.0） |
 | `default_market` | str | `"futures"` | `FTS_DEFAULT_MARKET` | 默认市场类型；v2.104.0+101 起为**全局市场开关**——调度任务门控（futures/energy 专属任务仅全局市场匹配时执行）、CLI `--market`/`--universe` 未指定时默认值、`FactorRepository`/`FactorInspector` 构造 `market=None` 时路由均跟随 |
 | `llm_backend` | str | `""` | `FTS_LLM_BACKEND` | LLM 后端选择（空=自动检测）|
@@ -95,8 +96,10 @@ FTS 配置采用三级优先级（高→低）：
 | `l3_g1_align_threshold` | float | `0.60` | `FTS_L3_G1_ALIGN_THRESHOLD` | G1 同向敞口触发阈值（v2.104.0+X 配置化）：因子 IC 同向权重占比（max(看多,看空)）≥ 该值触发压缩；取值域 (0,1]，默认 0.60 = 历史硬编码。放宽（如 0.80）属风控决策，需评审后调整 |
 | `l3_g1_max_compress` | float | `0.50` | `FTS_L3_G1_MAX_COMPRESS` | G1 最大压缩系数（v2.104.0+X 配置化）：同向占比=1 时压缩至该下限；取值域 (0,1]，默认 0.50 = 历史硬编码（全多组合敞口压至 50%）。放宽（如 0.70）直接放大风险敞口 |
 | `l3_g1_compress_curve` | str | `"linear"` | `FTS_L3_G1_COMPRESS_CURVE` | G1 压缩曲线（v2.104.0+X 配置化）：`linear`（线性）/ `sqrt`（更温和）/ `exp`（更激进）；默认 linear = 历史硬编码 |
-| `l3.chain_dedup.enabled` | bool | `true` | —（settings.yaml l3 段） | 子链维度去冗余开关（GAP-121 扩展，能源链专属）：`true`=同一子链保留因子数 ≤ max_per_chain（超限按综合评分降序截断）；`false`=关闭。仅 market=energy 生效 |
-| `l3.chain_dedup.max_per_chain` | int | `2` | —（settings.yaml l3 段） | 子链去冗余单子链保留因子数上限：与 Step 1.8 信号相关性聚类互补（同子链因子即使信号相关性低仍共享产业链驱动）；symbol_ic 缺失因子归 unknown 组直接保留 |
+| `l3.chain_dedup.enabled` | bool | `true` | —（settings.yaml l3 段） | 子链维度去冗余开关（GAP-121 扩展，能源链专属）：`true`=同一子链保留因子数 ≤ max_per_chain；`false`=关闭。仅 market=energy 生效。**v2.105.0+13 升级**：由"symbol_ic 数量截断"改为"链内相关性聚类去冗余"（链内多品种平均相关 → 层次聚类留代表 → 叠加数量上限） |
+| `l3.chain_dedup.max_per_chain` | int | `2` | —（settings.yaml l3 段） | 子链去冗余单子链保留因子数上限：链内聚类后仍超限按综合评分截断（同子链因子即使信号相关性低仍共享产业链驱动）；无画像/unknown 因子归通用池直接保留 |
+| `l3.chain_dedup.corr_threshold` | float | `0.5` | —（settings.yaml l3 段） | 链内聚类距离阈值（1-\|corr\|）：**v2.105.0+13 新增**，收紧于全局 P1 的 0.7（子链内因子本就较少，更高相关性才归同簇、保留更多因子） |
+| `l3.chain_dedup.cluster_top_n` | int | `1` | —（settings.yaml l3 段） | 链内每簇保留代表数上限：**v2.105.0+13 新增**，默认 1=每簇仅取综合评分最优 |
 | `l3.subchain_weight.enabled` | bool | `true` | —（settings.yaml l3 段） | 子链差异化权重调制开关（plans/47 §B，v2.104.0+109）：`true`=特异因子在无效子链降权/归零（灰度，CLI `--enable-subchain-weight` 显式传参优先）；`false`=全链统一权重（兼容现状）。仅 market=energy 生效。**v2.105.0 起默认启用（decay_mode=zero）**——未投产环境开启验证，前置已回填 196 因子画像 |
 | `l3.subchain_weight.decay_mode` | str | `"zero"` | —（settings.yaml l3 段） | 非 effective 子链权重模式：`zero`=归零 / `soft`=按 \|mean_ic\|/max_chain_ic 相对缩放 |
 | `l3.subchain_weight.soft_min_ratio` | float | `0.0` | —（settings.yaml l3 段） | soft 模式最低保留比例（0.0=可归零，1.0=等效全链） |
@@ -118,6 +121,30 @@ FTS 配置采用三级优先级（高→低）：
 | `l3.subchain_quality.window_days` | int | `60` | —（settings.yaml l3 段） | 子链退化检测回看天数（内部映射为最近期数窗口 `window=max(1, round(window_days/30))`，期 = 一次评审评估）：当前期 vs 早期基准的对比期数，样本不足返回 None（审计 skipped 不误判） |
 | `l3.subchain_quality.min_periods` | int | `5` | —（settings.yaml l3 段） | 退化检测最小期数护栏：历史期数 < min_periods 不做退化判定（风险 1：子链 IC 时序样本不足保护） |
 | `l3.subchain_quality.cooldown_days` | int | `30` | —（settings.yaml l3 段） | degraded 因子冷却期（交易日，复用 energy_qa_review 冷却期）：冷却期内不重审，期满重审达标 → 回 active 并重评子链画像（scope 回滚机制） |
+| `l3.regime_beta_layer.enabled` | bool | `true` | —（settings.yaml l3 段，2026-08-19 灰度开启） | L0 宏观 Beta 层开关（plans/55，v2.105.0+22）：`true`=识别市场 Beta 方向（RISK_ON/RISK_OFF/RANGE_BOUND）并顺 β 方向配置敞口（信号管线多空不对称偏置 + 组合 beta_scale 乘性缩放 + 实盘风控档位叠加）；`false`=零行为变更。仅 market=energy 生效；信号管线 CLI `--enable-regime-beta` 显式传参优先。**灰度开启依据**：预测力决策门通过（step=1 日频 fwd=10 收益 K-W p=0.0203 显著 + 排序 RISK_ON>RANGE_BOUND>RISK_OFF 正确，trace_id beta-kw-v3b-20260819） |
+| `l3.regime_beta_layer.days` | int | `130` | —（settings.yaml l3 段） | 金融期货数据回溯天数（≥ 趋势长窗+余量） |
+| `l3.regime_beta_layer.fin_symbols` | list | `[IF0, IH0, IC0, IM0, TF0, TS0]` | —（settings.yaml l3 段） | 金融期货合成指数成分（CFFEX 连续合约格式，FTS 品种池内） |
+| `l3.regime_beta_layer.trend_window_short` | int | `20` | —（settings.yaml l3 段） | 合成指数趋势短窗（MA20） |
+| `l3.regime_beta_layer.trend_window_long` | int | `60` | —（settings.yaml l3 段） | 合成指数趋势长窗（MA60），趋势分 = (MA20-MA60)/MA60 |
+| `l3.regime_beta_layer.vol_window` | int | `20` | —（settings.yaml l3 段） | realized vol 计算窗口（年化） |
+| `l3.regime_beta_layer.vol_threshold_percentile` | float | `0.8` | —（settings.yaml l3 段） | 高波动历史分位阈值：最新 vol 高于此 → 波动门控为"高"（不可判 RISK_ON） |
+| `l3.regime_beta_layer.risk_pref_pair` | list | `[IF0, TF0]` | —（settings.yaml l3 段） | 股债比（风险资产/避险资产）：FTS 池内无 T0，以 TF0 五年期国债为避险锚 |
+| `l3.regime_beta_layer.risk_pref_window` | int | `20` | —（settings.yaml l3 段） | 股债比滚动 z-score 窗口（换月缺口 ffill + min_periods 兜底） |
+| `l3.regime_beta_layer.min_confidence` | float | `0.5` | —（settings.yaml l3 段） | Beta 置信度门槛：软投票置信度低于 → RANGE_BOUND（不偏置） |
+| `l3.regime_beta_layer.min_votes` | int | `2` | —（settings.yaml l3 段） | 软投票最少一致信号数（trend/vol 门控/risk_pref 三源） |
+| `l3.regime_beta_layer.on_scale` | float | `1.0` | —（settings.yaml l3 段） | RISK_ON 组合总敞口倍率（顺正 β，默认不放大） |
+| `l3.regime_beta_layer.on_long_boost` | float | `0.10` | —（settings.yaml l3 段） | RISK_ON 多头信号加分（×1.10） |
+| `l3.regime_beta_layer.on_short_suppress` | float | `0.10` | —（settings.yaml l3 段） | RISK_ON 空头信号减分（×0.90） |
+| `l3.regime_beta_layer.off_scale` | float | `0.7` | —（settings.yaml l3 段，灰度保守档） | RISK_OFF 组合总敞口倍率（灰度保守档：压缩 30%，原设计 0.5；观察稳定后校准调优） |
+| `l3.regime_beta_layer.off_long_suppress` | float | `0.25` | —（settings.yaml l3 段，灰度保守档） | RISK_OFF 多头信号抑制（灰度保守档：×0.75，原设计 ×0.60） |
+| `l3.regime_beta_layer.off_short_boost` | float | `0.10` | —（settings.yaml l3 段，灰度保守档） | RISK_OFF 空头信号放大（灰度保守档：×1.10，原设计 ×1.20，期货反向进攻） |
+| `l3.regime_crowding.enabled` | bool | `false` | —（settings.yaml l3 段，plans/56 默认关） | 拥挤度体系化开关（plans/56，v2.105.0+25）：`true`=6 信号合成拥挤度 + 联合门控 + 多空方向偏置；`false`=零行为变更。仅 market=energy 生效；信号管线 CLI `--enable-regime-crowding` 显式传参优先。**决策门 ❌ 未通过（高拥挤样本不足 + 事件研究命中率 0%），灰度保持关闭，待阈值校准后重跑** |
+| `l3.regime_crowding.days` | int | `300` | —（settings.yaml l3 段） | 拥挤度面板回溯天数（≥ 动量长窗 + 分位历史） |
+| `l3.regime_crowding.high_crowding` | float | `0.6` | —（settings.yaml l3 段） | 高拥挤阈值（score ≥ → 触发联合门控/方向偏置）；决策门实测高拥挤样本过少（2/105），待校准 |
+| `l3.regime_crowding.high_conf_high_crowd_scale` | float | `0.5` | —（settings.yaml l3 段） | 联合门控：高置信+高拥挤 → 敞口减半 |
+| `l3.regime_crowding.low_conf_high_crowd_scale` | float | `0.0` | —（settings.yaml l3 段） | 联合门控：低置信+高拥挤 → 离场 |
+| `l3.regime_crowding.long_crowd_suppress` | float | `0.30` | —（settings.yaml l3 段） | 多头拥挤：多头信号 ×0.70（减多不抢反弹） |
+| `l3.regime_crowding.short_crowd_suppress` | float | `0.30` | —（settings.yaml l3 段） | 空头拥挤：空头信号 ×0.70（减空不追空/不逼空） |
 | `l3.owl.enabled` | bool | `false` | —（settings.yaml l3 段） | OWL 因子分组筛选旁路开关（plans/41 方案 A，v2.104.0+84）：`true`=Step 1.8c 执行 OWL 旁路；`false`=零开销零行为变更 |
 | `l3.owl.report_only` | bool | `true` | —（settings.yaml l3 段） | OWL 旁路报告模式（默认 true）：`true`=仅输出交叉比对报告（落盘 `memory/portfolio/{universe}/owl/owl_report_{date}.json` + state.owl_report），不修改 factors 列表；`false` 预留契约本期不实现 |
 | `l3.owl.weight_scheme` | str | `"linear"` | —（settings.yaml l3 段） | OWL 权重衰减方案：`linear`/`exp`/`log`（非递增，大系数惩罚更重） |
@@ -125,6 +152,16 @@ FTS 配置采用三级优先级（高→低）：
 | `l3.owl.train_frac` | float | `0.7` | —（settings.yaml l3 段） | OWL 样本外切割训练窗比例（(0,1)，内部 clip 至 [0.5,0.95]）：系数只用训练窗拟合，检验窗仅验证稳定性（防数据窥探） |
 | `l3.owl.group_corr_threshold` | float | `0.5` | —（settings.yaml l3 段） | OWL 系数分组相关阈值：两两 |corr|≥thr 视为同组 |
 | `l3.owl.lambda_` | float | `0.05` | —（settings.yaml l3 段） | OWL 正则化强度（0.5/n 归一尺度，与 sklearn Lasso 对齐） |
+| `l3.regime_conditional.enabled` | bool | `false` | —（settings.yaml l3 段） | 因子×制度条件化权重开关（plans/53 §B，仅 market=energy 生效）：`true`=Step 2.5 后当前制度 IC 显著为负（ic < -min_abs_ic）的因子权重归零/降权；`false`=零行为变更 |
+| `l3.regime_conditional.decay_mode` | str | `"zero"` | —（settings.yaml l3 段） | 显著负向因子处理模式：`zero`=归零 / `soft`=按 \|ic\|/max_ic 相对缩放（soft_min_ratio 保底） |
+| `l3.regime_conditional.soft_min_ratio` | float | `0.0` | —（settings.yaml l3 段） | soft 模式最低保留比例（0.0=可归零，1.0=等效全保留） |
+| `l3.regime_conditional.scope_default` | str | `"all"` | —（settings.yaml l3 段） | 无 regime 画像字段因子的默认处理（all=全保留，不误杀） |
+| `l3.regime_conditional.min_abs_ic` | float | `0.05` | —（settings.yaml l3 段） | 显著负向 IC 幅度门槛：ic < -min_abs_ic 才触发降权（对齐 regime_profile.min_abs_ic） |
+| `l3_regime_ic_report_enabled` | bool | `false` | `FTS_L3_REGIME_IC_REPORT`（settings.py FTSConfig） | 评估链 regime_ic_report 报告段开关（plans/53 §A2）：`true`=横截面评估对 energy 面板构建"因子×制度"画像（秒级成本，批量评估默认关）；`false`=零开销 |
+| `regime_profile.min_regime_samples` | int | `20` | —（settings.yaml regime_profile 段） | Regime 画像护栏门槛①：制度内最小样本数（不足直接 effective=False） |
+| `regime_profile.min_positive_regimes` | int | `2` | —（settings.yaml regime_profile 段） | 晋升门槛（plans/53 §C1）：regime_ic_report 存在且有效制度数低于此值 → 拒绝晋升（防单制度过拟合因子） |
+| `regime_profile.min_abs_ic` | float | `0.05` | —（settings.yaml regime_profile 段） | Regime 画像护栏门槛②：\|IC\| 幅度门槛（制度内样本 20~60 下 0.03 噪声误报率高，实施校准为 0.05） |
+| `regime_profile.all_regimes_effective_min` | int | `3` | —（settings.yaml regime_profile 段） | ≥ 此制度数 effective 时 scope='all'（不降权） |
 | `l3.synthesis.mode` | str | `"equal_weight"` | —（settings.yaml l3 段，CLI `--synthesis-mode` 优先） | L3 合成模式默认值（v2.104.0+62）：`equal_weight`/`quality_weight`/`sharpe_weight`/`elastic_net`/`adaptive`/`optimizer`/`risk_parity`；直接改配置即切换合成方法无需改代码 |
 | `l3.synthesis.optimizer_mode` | str | `"risk_parity"` | —（settings.yaml l3 段） | optimizer 类模式目标默认值：`risk_parity`/`mvo`/`bl`（v2.104.0+62）；`--synthesis-mode risk_parity` 即映射 optimizer + 本目标 |
 | `l3.factor_score.equal_weight_floor` | float | `0.5` | —（settings.yaml l3 段） | quality_weight 等权下限系数（配置项 SSOT，调参仅改本配置不改代码）：权重下限 = 系数 / N，防权重极端分化；提高系数可提升权重分散度但放大尾部因子暴露；代码默认 0.5 仅配置缺失兜底；取值域 (0,1] |

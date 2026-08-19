@@ -32,7 +32,8 @@ CHAINS: dict[str, list[str]] = {
 }
 
 HIGH = [0.20, 0.21, 0.22]  # 同向一致 → effective
-WEAK = [0.05, 0.06, 0.07]  # 弱均值（③拦截）
+# 弱均值（③拦截）：min_chain_ic=0.02（v2.105.0+16 由 0.10 校准），0.006 < 0.02
+WEAK = [0.005, 0.006, 0.007]
 
 
 def _symbol_ic(chains_ics: dict[str, list[float]]) -> dict[str, float]:
@@ -70,8 +71,8 @@ class TestJudgeChain:
         assert st.t_stat < 2.0
 
     def test_weak_mean_rejected(self):
-        # t 很大但 |mean|<0.10 → ③拦截
-        st = _single_chain_stat([0.07, 0.08, 0.09])
+        # t 很大但 |mean|<0.02 → ③拦截（min_chain_ic=0.02 校准）
+        st = _single_chain_stat([0.015, 0.016, 0.017])
         assert st.effective is False
         assert st.t_stat > 10
 
@@ -107,9 +108,9 @@ class TestEdgeCases:
         assert st.effective is True  # std 兜底，仅由③决定
 
     def test_identical_weak_std_zero(self):
-        st = _single_chain_stat([0.08, 0.08, 0.08])
+        st = _single_chain_stat([0.01, 0.01, 0.01])
         assert st.t_stat == float("inf")
-        assert st.effective is False  # std 兜底下仍被③拦截
+        assert st.effective is False  # std 兜底下仍被③拦截（0.01 < 0.02）
 
     def test_threshold_parametric(self):
         # t 落在 [2.0, 2.92) 之间的数组：mean=0.10, std(ddof=1)=0.07, t≈2.47
@@ -238,13 +239,14 @@ class TestContractAndGuardrail:
                 assert hasattr(st, field)
 
     def test_random_noise_false_positive(self):
-        # 统计护栏：随机噪声（mean≈0）下 subchain_specific 比例 < 5%
+        # 统计护栏：随机噪声（mean≈0，σ=0.01=半门槛）下 subchain_specific 比例 < 5%
+        # σ 与门槛同比校准（旧 0.10 → σ0.05；新 0.02 → σ0.01），保持护栏语义
         rng = np.random.default_rng(42)
         n_specific = 0
         n_trials = 1000
         for _ in range(n_trials):
             sic = {
-                sym: float(rng.normal(0.0, 0.05))
+                sym: float(rng.normal(0.0, 0.01))
                 for syms in CHAINS.values()
                 for sym in syms
             }

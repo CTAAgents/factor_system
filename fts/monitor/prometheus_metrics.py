@@ -157,11 +157,16 @@ class MetricsRegistry:
         confidence: float,
         probs: dict[str, float] | None = None,
         exposure_scale: float = 1.0,
+        beta_scale: float = 1.0,
+        beta_state: str = "",
+        crowding_scale: float = 1.0,
+        crowding_state: str = "",
     ) -> None:
-        """记录某市场当前 regime 观测指标（28-T10）。
+        """记录某市场当前 regime 观测指标（28-T10 + plans/55 §E + plans/56 §D）。
 
-        置信度、归一化熵、exposure_scale 与 blend HHI 全部落盘供 /metrics 审计；
-        无 probs（硬查表回退场景）时熵为 0.0、HHI 为 1.0（确定性分布）。
+        置信度、归一化熵、exposure_scale、beta_scale/beta_state、crowding_scale/
+        crowding_state 与 blend HHI 全部落盘供 /metrics 审计；无 probs（硬查表回退
+        场景）时熵为 0.0、HHI 为 1.0。
 
         Args:
             market: 市场标识（futures/stock/...）。
@@ -169,6 +174,10 @@ class MetricsRegistry:
             confidence: 制度置信度 ∈ [0, 1]（越界钳制）。
             probs: 制度后验概率分布；可无。
             exposure_scale: 置信度仓位缩放因子。
+            beta_scale: L0 宏观 Beta 层总敞口倍率（plans/55 §C，默认 1.0=未启用）。
+            beta_state: L0 宏观 Beta 状态（RISK_ON/RISK_OFF/RANGE_BOUND/unknown）。
+            crowding_scale: 拥挤×置信度联合门控倍率（plans/56 §B，默认 1.0=未启用）。
+            crowding_state: 拥挤度状态（long/short/neutral 或空）。
         """
         entropy_norm, blend_hhi = _entropy_norm_hhi(probs)
         with self._lock:
@@ -178,6 +187,10 @@ class MetricsRegistry:
                 "entropy_norm": entropy_norm,
                 "exposure_scale": float(exposure_scale),
                 "blend_hhi": blend_hhi,
+                "beta_scale": float(beta_scale),
+                "beta_state": beta_state or "",
+                "crowding_scale": float(crowding_scale),
+                "crowding_state": crowding_state or "",
             }
 
     # ─── Live 因子指标 (C.2) ─────────────────────────────

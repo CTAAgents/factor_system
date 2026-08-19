@@ -889,3 +889,65 @@ class TestAdvancedQueries:
         """测试不存在因子的谱系查询。"""
         lineage = repo.get_factor_lineage("nonexistent_id")
         assert lineage is None
+
+
+# ─── GAP-149 状态枚举运行时校验（v2.105.0+18） ────────────
+
+
+def test_update_factor_rejects_invalid_status(repo):
+    """写入口 update_factor 非法状态 → ValueError。"""
+    with pytest.raises(ValueError, match="非法因子状态"):
+        repo.update_factor("f1", {"status": "HACKED"})
+
+
+def test_update_factor_accepts_valid_status(repo, sample_factor):
+    """写入口 update_factor 合法状态通过。"""
+    fid = repo.create_factor(sample_factor)
+    assert repo.update_factor(fid, {"status": "shadow"}) is True
+
+
+def test_update_factor_accepts_archived_status(repo, sample_factor):
+    """生命周期终态 archived/deprecated（futures 库存量值）合法。"""
+    fid = repo.create_factor(sample_factor)
+    assert repo.update_factor(fid, {"status": "archived"}) is True
+    assert repo.update_factor(fid, {"status": "deprecated"}) is True
+
+
+def test_update_factor_status_rejects_invalid(repo):
+    """写入口 update_factor_status 非法状态 → ValueError。"""
+    from fts.factor_engine.factor_db.repository import FactorStatusRepository
+
+    srepo = FactorStatusRepository(repo._db_path)
+    try:
+        with pytest.raises(ValueError, match="非法因子状态"):
+            srepo.update_factor_status("f1", "BOGUS")
+    finally:
+        srepo.close()
+
+
+def test_create_factor_rejects_invalid_status(repo, sample_factor):
+    """写入口 create_factor 非法状态 → ValueError。"""
+    with pytest.raises(ValueError, match="非法因子状态"):
+        repo.create_factor({**sample_factor, "status": "HACKED"})
+
+
+def test_list_invalid_status_scans_legacy(tmp_path):
+    """存量库非法状态可被扫描（直插 SQL 模拟历史遗留，绕过写入口）。"""
+    from fts.factor_engine.factor_db.schema import init_database
+    from fts.factor_engine.factor_db.repository import FactorRepository
+
+    db = tmp_path / "legacy.duckdb"
+    init_database(db)
+    r = FactorRepository(db)
+    try:
+        fid = r.create_factor({"name": "legacy_ok", "code": "c", "status": "active"})
+        conn = r._get_conn()
+        conn.execute("UPDATE factor_catalog SET status = ? WHERE factor_id = ?", ["HACKED", fid])
+        conn.execute("CHECKPOINT")
+        bad = r.list_invalid_status()
+        assert len(bad) == 1
+        assert bad[0]["factor_id"] == fid
+        assert bad[0]["status"] == "HACKED"
+        assert r.list_invalid_status(market="energy") == []  # market 过滤无命中
+    finally:
+        r.close()

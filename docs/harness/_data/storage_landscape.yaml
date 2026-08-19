@@ -39,9 +39,9 @@ domains:
 
   # ── L3 因子资产库（SSOT 目标，JSON 快照将降级为只读） ───────────
   - domain: factor_assets
-    description: 因子/评估/版本/审查/血缘（股票期货物理分库）
+    description: 因子/评估/版本/审查/血缘（股票/期货/能化链物理分库，energy 库 2026-08-19 GAP-150 登记——能化链评审质检/退化检测/生命周期消费）
     backend: duckdb
-    path: data/factor_catalog_{stock,futures}.duckdb
+    path: data/factor_catalog_{stock,futures,energy}.duckdb
     tables: [factor_catalog, factor_evaluations, factor_versions, factor_reviews, factor_correlations, seed_lineage]
     partition_key: ""
     retention: "永久"

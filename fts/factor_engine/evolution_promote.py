@@ -1266,6 +1266,38 @@ class EliteStore:
                             "[evo] 子链画像计算失败（非致命，跳过）: factor=%s err=%s", factor_id, e
                         )
 
+            # plans/53 §A2 + §C1：Regime 画像落库与晋升门槛（energy 链因子；评估链产出
+            # regime_ic_report 时生效，未产出 → 不拦截，向后兼容）。
+            if factor_market == "energy":
+                _regime_report = (l1 or {}).get("regime_ic_report") or {}
+                if _regime_report:
+                    # §C1 晋升门槛：有效制度数（regime_scope 列表长度）< min_positive_regimes
+                    # → 拒绝晋升（防单制度过拟合因子混入精英池）。
+                    # scope="all"/"unknown"（非 list）→ 放行（保守性设计，不误杀数据不足因子）。
+                    try:
+                        from fts.config.settings import get_config as _rc_cfg
+                        from fts.factor_engine.regime_profile import regime_gate_passed
+
+                        _min_pos = int(
+                            (getattr(_rc_cfg(), "regime_profile", {}) or {}).get(
+                                "min_positive_regimes", 2
+                            )
+                        )
+                    except Exception:  # noqa: BLE001
+                        _min_pos = 2
+                    if not regime_gate_passed(_regime_report, _min_pos):
+                        logger.warning(
+                            "[evo] Regime 门槛拒绝晋升 [%s]: 有效制度数不足 "
+                            "(scope=%s, market=%s, trace_id=%s)",
+                            factor_name,
+                            _regime_report.get("regime_scope"),
+                            self._owner.market,
+                            getattr(self._owner, "_trace_id", ""),
+                        )
+                        return None
+                    # §A2 落库：画像写入 metadata（供 L3 组合层条件化消费）
+                    metadata.update(_regime_report)
+
             factor_dict = {
                 "factor_id": factor_id,
                 "name": factor_name,

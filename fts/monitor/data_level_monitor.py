@@ -52,6 +52,10 @@ class DataLevelConfig:
     missing_ratio_critical: float = 0.20
     # 关键字段集合（缺失率逐字段检查）
     key_fields: tuple[str, ...] = ("close", "volume", "hold")  # GAP-085: 原 open_interest 与期货日线字段 hold 错位 → 修正
+    # 代理字段失真（GAP-151，v2.105.0+21）：增强字段缺失率组级度量（超阈值→critical，
+    # 下游走代理值如 hold 20 日滚动均量——失真风险显式化）
+    proxy_fields: tuple[str, ...] = ("hold", "settle", "pre_settle")
+    proxy_ratio_critical: float = 0.50
 
     # 准确性：异常值
     outlier_zscore: float = 3.0
@@ -132,6 +136,13 @@ class DataLevelMonitor:
             return alerts
         n_rows = len(df)
 
+        # 派生字段豁免（GAP-148）：adj_factor 由 RollCalendar 在读取时计算
+        # （data_futures.get_ohlcv 复权路径），kline_cache 按设计不持久化该列，
+        # 其 100% 缺失属正常，不计入全表缺失率避免误报。
+        derived_cols = [c for c in ("adj_factor",) if c in df.columns]
+        if derived_cols:
+            df = df.drop(columns=derived_cols)
+
         total_missing = float(df.isna().sum().sum()) / (n_rows * df.shape[1])
         if total_missing > self._config.missing_ratio_critical:
             alerts.append(
@@ -184,6 +195,30 @@ class DataLevelMonitor:
                         f"missing_ratio_{col}",
                         ratio,
                         self._config.missing_ratio_warning,
+                    )
+                )
+
+        # 代理字段失真检查（GAP-151，v2.105.0+21）：增强字段缺失率组级度量，
+        # 超阈值 → critical（下游走代理值，失真风险显式化，避免静默代理）
+        proxy_ratios = []
+        for col in self._config.proxy_fields:
+            if col not in df.columns:
+                continue
+            proxy_ratios.append(float(df[col].isna().sum()) / n_rows)
+        if proxy_ratios:
+            avg_proxy = sum(proxy_ratios) / len(proxy_ratios)
+            if avg_proxy > self._config.proxy_ratio_critical:
+                alerts.append(
+                    self._make_alert(
+                        "proxy_missing_ratio",
+                        scope,
+                        "critical",
+                        f"代理字段（{'+'.join(self._config.proxy_fields)}）平均缺失率 "
+                        f"{avg_proxy:.1%} 超过严重阈值 {self._config.proxy_ratio_critical:.1%}"
+                        f"——下游将走代理值（失真风险）",
+                        "proxy_missing_ratio",
+                        avg_proxy,
+                        self._config.proxy_ratio_critical,
                     )
                 )
         return alerts

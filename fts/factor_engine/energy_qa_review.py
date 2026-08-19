@@ -26,9 +26,15 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 
+from fts.factor_engine.factor_lifecycle import estimate_ic_half_life
+
 logger = logging.getLogger(__name__)
 
 Decision = Literal["active", "shadow", "degraded", "retire"]
+
+# 落库影子校验基线（state_kv 命名空间/键，v2.105.0+18 反沉降通道）
+_BASELINE_NS = "energy_qa_review"
+_BASELINE_KEY = "degradation_baseline"
 
 
 # ─── 配置 ─────────────────────────────────────────────────
@@ -42,6 +48,7 @@ class EnergyQaReviewConfig(BaseModel):
     ic_threshold: float = 0.02      # |IC| 下限（退化判据）
     drop_threshold: float = 0.30    # IC 降幅比例阈值（→ shadow）
     drop_severe: float = 0.50       # IC 降幅严重阈值（→ degraded）
+    half_life_min_days: float = 63.0  # IC 半衰期下限（plans/54 P0-2，≈3 个月交易日；低于 → shadow 观察）
     sharpe_drop: float = -0.20      # Inspector Sharpe 相对变化阈值
     observe_slope: float = 0.10     # 6M IC 斜率观察阈值
     retire_slope: float = 0.20      # 6M IC 斜率退役阈值
@@ -75,10 +82,12 @@ def decide_factor(
     hist_ic: float,
     slope_grade: str,  # normal / observe / retired
     cfg: EnergyQaReviewConfig,
+    half_life_days: Optional[float] = None,  # plans/54 P0-2：IC 半衰期（None=未估计）
 ) -> FactorDisposition:
     """宁严勿松：任一退化信号命中即取严（不做双确认）。
 
     - shadow: 重审不合格 | |IC|<ic_threshold | IC降幅>drop_threshold | slope=observe
+      | 半衰期过短（< half_life_min_days，plans/54 P0-2）
     - degraded: IC降幅>=drop_severe | slope=retired
     - active: 全部达标（含 shadow 观察池达标回归）
     """
@@ -99,6 +108,8 @@ def decide_factor(
         reasons.append("斜率退役")
     if severe:
         reasons.append(f"IC降幅严重>{cfg.drop_severe:.0%}")
+    if half_life_days is not None and half_life_days < cfg.half_life_min_days:
+        reasons.append(f"半衰期过短({half_life_days:.0f}d<{cfg.half_life_min_days:.0f}d)")
 
     if severe or slope_grade == "retired":
         decision: Decision = "degraded"
@@ -122,6 +133,43 @@ def decide_factor(
     )
 
 
+def check_invalid_when(
+    f: dict[str, Any],
+    current_regime: str | None,
+) -> tuple[bool, dict[str, Any]]:
+    """因子失效条件命中检查（plans/54 P0-1，外部 Regime-Driven §3 第二问 / §6.1）。
+
+    因子自身声明 invalid_when（顶层 FactorProgram 字段或 metadata.invalid_when），
+    其 regimes 含当前市场制度 → 命中（该 regime 下因子不适用）。纯函数可单测。
+
+    Args:
+        f: 因子 dict（含 invalid_when 或 metadata.invalid_when）。
+        current_regime: 当前市场制度（bull/bear/oscillate/high_vol/low_vol）；
+            None（无法检测）→ 不命中。
+
+    Returns:
+        (是否命中, 命中详情 dict)。无声明/无当前 regime → (False, {})。
+    """
+    iw = f.get("invalid_when")
+    if not iw:
+        meta = f.get("metadata") or {}
+        if isinstance(meta, dict):
+            iw = meta.get("invalid_when")
+    if not iw or not current_regime:
+        return False, {}
+    if isinstance(iw, str):  # 容错：字符串形式视作 conditions 单条
+        iw = {"regimes": [], "conditions": [iw], "notes": ""}
+    regimes = iw.get("regimes") or []
+    if current_regime in regimes:
+        return True, {
+            "regime": current_regime,
+            "declared_regimes": list(regimes),
+            "conditions": list(iw.get("conditions") or []),
+            "notes": iw.get("notes", ""),
+        }
+    return False, {}
+
+
 # ─── 统一管道 ─────────────────────────────────────────────
 
 
@@ -141,6 +189,7 @@ class EnergyQaReviewPipeline:
         elite_dir: Optional[str | Path] = None,
         tracking_dir: Optional[str | Path] = None,
         db_path: Optional[str | Path] = None,
+        state_db_path: Optional[str | Path] = None,
     ) -> None:
         from fts.config import get_config
         from fts.data_futures import ENERGY_CHAIN_MARKET, ENERGY_CHAIN_SYMBOLS
@@ -152,6 +201,7 @@ class EnergyQaReviewPipeline:
         self.elite_dir = Path(elite_dir or self._app_cfg.get_elite_dir(self.market))
         self.tracking_dir = Path(tracking_dir or f"{self._app_cfg.memory_dir}/tracking/energy")
         self.db_path = db_path
+        self.state_db_path = state_db_path
         self.project_root = Path(__file__).resolve().parent.parent.parent
         self.out_dir: Optional[Path] = None
         self._tracker: Any = None
@@ -182,6 +232,9 @@ class EnergyQaReviewPipeline:
         # [4] Inspector 血缘（尽力而为）
         inspector = self._stage_inspector(trace_id, out_dir)
 
+        # [4.5] invalid_when 失效条件命中检查（plans/54 P0-1，纯观测不干预）
+        invalid_when = self._stage_invalid_when(panel, trace_id)
+
         # [5] 统一报告
         summary = self._write_report(
             trace_id=trace_id,
@@ -191,6 +244,7 @@ class EnergyQaReviewPipeline:
             deg_stats=deg_stats,
             lifecycle=lifecycle,
             inspector=inspector,
+            invalid_when=invalid_when,
         )
         logger.info(
             "[L2评审质检][energy] 完成 trace_id=%s apply=%s status=%s",
@@ -502,6 +556,16 @@ class EnergyQaReviewPipeline:
                 curr_ic = 0.0
             snap = tracker.get(fid) or {}
             slope_grade = str(snap.get("decay_grade") or "normal")
+            # plans/54 P0-2：IC 半衰期维度（从因子评估 decay_6m 估算；缺失 → None 不触发）
+            half_life_days: Optional[float] = None
+            try:
+                _ev = f.get("evaluation") or (f.get("metadata") or {}).get("evaluation") or {}
+                _l1 = (_ev or {}).get("level_1_backtest") or {}
+                _decay = _l1.get("decay_6m")
+                if isinstance(_decay, (int, float)):
+                    half_life_days = estimate_ic_half_life(float(_decay))
+            except Exception:  # noqa: BLE001 — 半衰期估算失败不阻断
+                half_life_days = None
             disp = decide_factor(
                 factor_id=fid,
                 name=name,
@@ -511,6 +575,7 @@ class EnergyQaReviewPipeline:
                 hist_ic=hist_ic,
                 slope_grade=slope_grade if slope_grade in ("observe", "retired") else "normal",
                 cfg=self.cfg,
+                half_life_days=half_life_days,
             )
             # plans/49 §C3：单元粒度退化旁路（灰度 l3.subchain_quality.enabled 时）——
             # 全有效链退化 → 强制 degrade；部分链失效 → scope 收缩（仍 active，闭环传导 47 调制）
@@ -540,8 +605,11 @@ class EnergyQaReviewPipeline:
             encoding="utf-8-sig",
         )
 
-        # 统一落库（apply=True 才生效；shadow/degraded/retire 处置）
+        # 统一落库（apply=True 才生效；落库前置影子校验，dry/apply 均持久化基线）
+        if self.cfg.apply:
+            self._assert_apply_consistency(dispositions, common_dates, trace_id)
         stats = self._apply_dispositions(dispositions, trace_id, out_dir)
+        self._persist_baseline(dispositions, common_dates, trace_id)
         logger.info("[L2评审质检][energy] [2]退化检测 待审=%d stats=%s", len(dispositions), stats)
         return dispositions, stats
 
@@ -627,6 +695,91 @@ class EnergyQaReviewPipeline:
             repo.close()
             srepo.close()
         return stats
+
+    # ── 落库影子校验（v2.105.0+18 反沉降通道） ─────────────
+
+    def _load_baseline(self) -> dict[str, Any] | None:
+        """读取上次运行基线（state_kv，无基线返回 None）。"""
+        from fts.store.state_db import StateKVStore
+
+        store = StateKVStore(self.state_db_path)
+        try:
+            val = store.get(_BASELINE_NS, _BASELINE_KEY)
+        finally:
+            store.close()
+        return val if isinstance(val, dict) else None
+
+    def _persist_baseline(
+        self,
+        dispositions: list[FactorDisposition],
+        common_dates: Any,
+        trace_id: str,
+    ) -> None:
+        """每次运行（dry/apply）后更新基线快照（state_kv + state_history 追加可回放）。"""
+        from fts.factor_engine.l3_signal_service import _dates_digest
+        from fts.store.state_db import StateKVStore
+
+        store = StateKVStore(self.state_db_path)
+        try:
+            store.upsert(
+                _BASELINE_NS,
+                _BASELINE_KEY,
+                {
+                    "panel_digest": _dates_digest(list(common_dates)),
+                    "trace_id": trace_id,
+                    "apply": self.cfg.apply,
+                    "recorded_at": datetime.now(timezone.utc).isoformat(),
+                    "dispositions": [
+                        {"factor_id": d.factor_id, "decision": d.decision} for d in dispositions
+                    ],
+                },
+                run_id=trace_id,
+            )
+        finally:
+            store.close()
+
+    def _assert_apply_consistency(
+        self,
+        dispositions: list[FactorDisposition],
+        common_dates: Any,
+        trace_id: str,
+    ) -> None:
+        """apply 前置影子校验：与上次同面板基线逐因子判定一致，否则拒绝落库。
+
+        复用 l3_signal_service._dates_digest 面板指纹（同输入下判定必须稳定）：
+        - 无基线 → 拒绝（必须先跑 dry-run 生成基线，强化灰度流程）
+        - 同面板指纹 + 判定漂移 → 拒绝（代码/参数变更导致判定口径漂移）
+        - 面板指纹变化（数据漂移）→ 跳过断言放行（差异合理）
+        """
+        from fts.factor_engine.l3_signal_service import _dates_digest
+
+        digest = _dates_digest(list(common_dates))
+        baseline = self._load_baseline()
+        if baseline is None:
+            raise RuntimeError(
+                f"[L2评审质检][energy] 无 dry-run 基线，拒绝落库：请先以 "
+                f"FTS_ENERGY_QA_REVIEW_APPLY=0 运行一次生成基线（trace_id={trace_id}）"
+            )
+        if baseline.get("panel_digest") != digest:
+            logger.warning(
+                "[L2评审质检][energy] 面板指纹变化（数据漂移），跳过一致性断言: %s → %s",
+                str(baseline.get("panel_digest", ""))[:12],
+                digest[:12],
+            )
+            return
+        cur = {d.factor_id: d.decision for d in dispositions}
+        prev = {d["factor_id"]: d["decision"] for d in baseline.get("dispositions", [])}
+        if cur != prev:
+            drift = [
+                f"{fid}: {prev.get(fid)}→{cur.get(fid)}"
+                for fid in sorted(set(cur) | set(prev))
+                if cur.get(fid) != prev.get(fid)
+            ]
+            raise RuntimeError(
+                f"[L2评审质检][energy] 影子校验失败：同面板下判定漂移 {len(drift)} 个因子，"
+                f"拒绝落库（{'；'.join(drift[:10])}{'…' if len(drift) > 10 else ''}）"
+            )
+        logger.info("[L2评审质检][energy] 影子校验通过: %d 因子判定与基线一致", len(cur))
 
     # ── [3] 生命周期收口 ─────────────────────────────────
 
@@ -803,6 +956,50 @@ class EnergyQaReviewPipeline:
             logger.warning("[L2评审质检][energy] [4]Inspector 跳过: %s", e)
             return {"skipped": True, "error": str(e)}
 
+    # ── [4.5] invalid_when 命中检查（plans/54 P0-1，纯观测） ──
+
+    def _stage_invalid_when(
+        self, panel: dict[str, Any], trace_id: str
+    ) -> dict[str, Any]:
+        """因子失效条件命中检查：检测当前主 regime（一次）+ 遍历因子比对声明。
+
+        纯观测不干预：仅报告命中因子（invalid_when_hits 段），不改 disposition。
+        当前 regime 检测失败/无声明因子 → 如实标注，不误报。
+        """
+        current: str | None = None
+        try:
+            from fts.factor_engine.regime import SectorRegimeSelector
+
+            sel = SectorRegimeSelector(lookback_days=60, use_hmm=False)
+            sector_map = {"energy": [s for s in self.chain_symbols if s in panel]}
+            regimes = sel.detect_all(panel, sector_map=sector_map)
+            if regimes:
+                current = next(iter(regimes.values()))["regime"]
+        except Exception as e:  # noqa: BLE001 — 检测失败不阻断
+            logger.warning("[L2评审质检][energy] [4.5]当前 regime 检测失败: %s", e)
+
+        hits: list[dict[str, Any]] = []
+        n_declared = 0
+        try:
+            for f in self._load_elite_with_hist():
+                hit, detail = check_invalid_when(f, current)
+                if hit:
+                    detail["factor_id"] = f.get("factor_id", "")
+                    detail["name"] = f.get("name", "")
+                    hits.append(detail)
+                elif (f.get("invalid_when") or (f.get("metadata") or {}).get("invalid_when")):
+                    n_declared += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[L2评审质检][energy] [4.5]invalid_when 检查失败: %s", e)
+
+        logger.info(
+            "[L2评审质检][energy] [4.5]invalid_when current=%s declared=%s hits=%s",
+            current,
+            n_declared + len(hits),
+            len(hits),
+        )
+        return {"current_regime": current, "hits": hits, "n_hits": len(hits)}
+
     # ── [5] 报告 ─────────────────────────────────────────
 
     def _write_report(
@@ -815,6 +1012,7 @@ class EnergyQaReviewPipeline:
         deg_stats: dict[str, int],
         lifecycle: dict[str, Any],
         inspector: dict[str, Any],
+        invalid_when: dict[str, Any],
     ) -> dict[str, Any]:
         summary: dict[str, Any] = {
             "trace_id": trace_id,
@@ -826,6 +1024,7 @@ class EnergyQaReviewPipeline:
                 "degradation": deg_stats,
                 "lifecycle": lifecycle,
                 "inspector": inspector,
+                "invalid_when": invalid_when,
             },
             "factors": [
                 {
@@ -852,6 +1051,8 @@ class EnergyQaReviewPipeline:
             f"- 退化处置: {deg_stats}",
             f"- 生命周期: {lifecycle}",
             f"- Inspector: skipped={inspector.get('skipped', False)}",
+            f"- invalid_when 命中: {invalid_when.get('n_hits', 0)}"
+            f"（当前 regime: {invalid_when.get('current_regime', '未知')}）",
             "",
             "## 逐因子处置",
             "",
@@ -861,6 +1062,19 @@ class EnergyQaReviewPipeline:
         for d in dispositions:
             md_lines.append(f"| {d.name}({d.factor_id}) | {d.prev_status} | {d.decision} | {'+'.join(d.reasons)} |")
         md_lines.append("")
+        hits = invalid_when.get("hits") or []
+        if hits:
+            md_lines.append("## invalid_when 失效条件命中（plans/54 P0-1，纯观测）")
+            md_lines.append("")
+            md_lines.append("| 因子 | 命中 regime | 声明失效制度 | 声明条件 |")
+            md_lines.append("|---|---|---|---|")
+            for h in hits:
+                md_lines.append(
+                    f"| {h.get('name', '')}({h.get('factor_id', '')}) | "
+                    f"{h.get('regime', '')} | {','.join(h.get('declared_regimes', []))} | "
+                    f"{'; '.join(h.get('conditions', []))} |"
+                )
+            md_lines.append("")
         (self.out_dir / f"energy_qa_review_summary_{today}.md").write_text("\n".join(md_lines), encoding="utf-8")
         return summary
 

@@ -389,6 +389,18 @@ def _build_default_aggregator():
     except Exception:  # noqa: BLE001
         pass
 
+    # 字段增强层（GAP-148，对齐 FuturesDataProvider 构建模式）：TQSDKEnhanceSource
+    # 补充权威 hold/oi_change（.env 已配置 TQSDK_USERNAME/PASSWORD 时真实生效；
+    # 无凭据/失败经 _enhance_fields 优雅降级不阻断）。此前 enhancers=[] 导致
+    # sync 写缓存路径从未做字段增强，kline_cache 近 120 日 oi_change 全缺。
+    enhancers: list = []
+    try:
+        from fts.data_sources.tqsdk_enhance_source import TQSDKEnhanceSource
+
+        enhancers.append(TQSDKEnhanceSource())
+    except Exception:  # noqa: BLE001
+        pass
+
     db_path = None
     from fts.data_futures import _DUCKDB_PATH
 
@@ -397,7 +409,7 @@ def _build_default_aggregator():
 
     return FuturesDataAggregator(
         sources=sources,
-        enhancers=[],
+        enhancers=enhancers,
         db_path=db_path,
         cache_max_age_days=30,
     )
@@ -621,6 +633,9 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
         cluster_threshold = float(cluster_cfg.get("threshold", 0.7))
         cluster_top_n = int(cluster_cfg.get("top_n", 1))
         chain_dedup_cfg = l3_cfg.get("chain_dedup") or {}
+        # v2.105.0+13：链内相关性聚类去冗余参数（corr_threshold 收紧于全局 P1 的 0.7）
+        chain_dedup_corr_threshold = float(chain_dedup_cfg.get("corr_threshold", 0.5))
+        chain_dedup_cluster_top_n = int(chain_dedup_cfg.get("cluster_top_n", 1))
         owl_cfg = l3_cfg.get("owl") or {}
         # plans/47 §B：子链差异化权重（CLI --enable-subchain-weight 优先，缺省读配置）
         subchain_cfg = l3_cfg.get("subchain_weight") or {}
@@ -644,6 +659,8 @@ def _cmd_portfolio_run(args: argparse.Namespace) -> int:
             cluster_top_n=cluster_top_n,
             enable_chain_dedup=bool(chain_dedup_cfg.get("enabled", True)),
             chain_dedup_max_per_chain=int(chain_dedup_cfg.get("max_per_chain", 2)),
+            chain_dedup_corr_threshold=chain_dedup_corr_threshold,
+            chain_dedup_cluster_top_n=chain_dedup_cluster_top_n,
             enable_subchain_weight=enable_subchain_weight,
             subchain_weight_config=subchain_weight_config,
             owl_config=owl_cfg,

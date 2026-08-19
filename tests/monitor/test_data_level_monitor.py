@@ -87,6 +87,36 @@ class TestMissing:
     def test_empty_df_no_alert(self) -> None:
         assert DataLevelMonitor().check_missing(pd.DataFrame()) == []
 
+    def test_adj_factor_derived_exempted(self) -> None:
+        """GAP-148：adj_factor 为读取时派生字段（kline_cache 按设计不落库），
+        全表缺失率豁免其 100% 缺失，不触发误报。"""
+        monitor = DataLevelMonitor(config=DataLevelConfig(missing_ratio_warning=0.05))
+        df = _make_ohlcv(n=100)
+        df["adj_factor"] = np.nan  # 100% 缺失的派生列
+        assert monitor.check_missing(df) == []
+
+    def test_proxy_fields_all_empty_critical(self) -> None:
+        """GAP-151：代理字段（hold/settle/pre_settle）全部缺失 → 组级 critical 告警
+        （下游走代理值，失真风险显式化，不再静默）。"""
+        monitor = DataLevelMonitor()
+        df = _make_ohlcv(n=100)
+        df["hold"] = np.nan
+        df["settle"] = np.nan
+        df["pre_settle"] = np.nan
+        alerts = monitor.check_missing(df)
+        proxy_alerts = [a for a in alerts if a.alert_type == "proxy_missing_ratio"]
+        assert proxy_alerts and proxy_alerts[0].severity == "critical"
+
+    def test_proxy_fields_partial_under_threshold_no_alert(self) -> None:
+        """GAP-151：代理字段缺失率低于阈值（默认 0.5）→ 不触发失真告警。"""
+        monitor = DataLevelMonitor()
+        df = _make_ohlcv(n=100)
+        df["hold"] = 200_000.0
+        df.loc[:19, "hold"] = np.nan  # 20% 缺失（<50%）
+        df["settle"] = 100.0
+        df["pre_settle"] = 100.0
+        assert not any(a.alert_type == "proxy_missing_ratio" for a in monitor.check_missing(df))
+
 
 class TestOutliers:
     def test_clean_data_no_alert(self) -> None:
@@ -242,6 +272,70 @@ class TestSchedulerIntegration:
             jobs.data_level_monitor_job()
 
         assert seen == ["SC0", "TA0"]
+
+    def test_read_kline_cache_completeness_dedup(self) -> None:
+        """GAP-148：双符号变体（SC/SC0）同日期重叠时，完整度去重保留字段完整行。"""
+        from fts.scheduler.jobs import _read_kline_cache
+
+        dates = pd.to_datetime(["2026-08-10", "2026-08-11", "2026-08-12"])
+        base_cols = {
+            "symbol": ["SC0", "SC0", "SC0"],
+            "period": ["daily"] * 3,
+            "date": dates,
+            "open": [100.0] * 3,
+            "high": [101.0] * 3,
+            "low": [99.0] * 3,
+            "close": [100.5] * 3,
+            "volume": [1e5] * 3,
+            "amount": [1e7] * 3,
+            "hold": [2e5] * 3,
+            "settle": [100.5] * 3,
+            "pre_settle": [100.0] * 3,
+            "oi_change": [100.0] * 3,
+            "vwap": [100.2] * 3,
+            "source": ["TDX_LOCAL"] * 3,
+            "fetched_at": [pd.Timestamp.now()] * 3,
+            "trace_id": ["t1"] * 3,
+            "adj_factor": [1.0] * 3,
+        }
+        sc0 = pd.DataFrame(base_cols)
+        sc = sc0.copy()
+        sc["symbol"] = "SC"  # 历史裸数据变体：扩展字段全空 + 无 hold
+        sc["vwap"] = np.nan
+        sc["oi_change"] = np.nan
+        sc["source"] = np.nan
+        sc["fetched_at"] = np.nan
+        sc["trace_id"] = np.nan
+        sc["hold"] = np.nan
+        combined = pd.concat([sc0, sc], ignore_index=True)
+
+        class _FakeCon:
+            def __init__(self, df: pd.DataFrame) -> None:
+                self._df = df
+
+            def execute(self, sql: str, params=None):  # type: ignore[no-untyped-def]
+                return self
+
+            def df(self) -> pd.DataFrame:
+                return self._df
+
+            def close(self) -> None:  # read_kline_cache finally 关闭连接
+                return
+
+        with patch("duckdb.connect", return_value=_FakeCon(combined)):
+            out = _read_kline_cache(MagicMock(), "SC0", limit=120)
+
+        assert out is not None and len(out) == 3  # 3 个独立日期不缩水
+        assert set(out["symbol"]) == {"SC0"}  # 完整行保留
+        assert int(out["vwap"].isna().sum()) == 0
+
+    def test_sync_aggregator_has_tqsdk_enhancer(self) -> None:
+        """GAP-148：sync 聚合器注册 TQSDK 增强源（此前 enhancers=[] 致 oi_change 全缺）。"""
+        from fts.cli import _build_default_aggregator
+
+        agg = _build_default_aggregator()
+        names = [e.source_name for e in agg.enhancers]
+        assert "TQSDK_ENHANCE" in names
 
     def test_task_registered(self) -> None:
         """data_level_monitor 任务已注册（v2.104.0+98 内部调度停用后 enabled=False）。"""

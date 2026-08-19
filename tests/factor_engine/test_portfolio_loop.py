@@ -160,6 +160,7 @@ from fts.factor_engine.portfolio_loop import (
     _factor_composite_score,
     _cap_safety_valve,
     _dedup_factors_by_chain,
+    _dedup_factors_by_chain_cluster,
     _load_factor_symbol_ic,
     ENERGY_CHAIN_SUB_SYMBOLS,
 )
@@ -655,6 +656,154 @@ class TestChainDedup:
         assert sic == {"SC0": 0.4, "TA0": 0.2}
         # 无 JSON 文件 → None
         assert _load_factor_symbol_ic({"factor_id": "nope"}, tmp_path) is None
+
+
+class TestChainDedupCluster:
+    """链内相关性聚类去冗余（v2.105.0+13）：归链画像 → 链内多品种平均相关聚类 → 数量上限。"""
+
+    @staticmethod
+    def _sic(symbols: list[str], base: float) -> dict:
+        """构造 symbol_ic：目标品种 base，其余品种 0。"""
+        return {s: base if s in symbols else 0.0 for s in ["SC0", "FU0", "BU0", "PX0", "TA0", "PF0", "L0", "PP0", "PG0", "MA0", "UR0", "SA0"]}
+
+    @staticmethod
+    def _panel() -> dict[str, pd.DataFrame]:
+        """构造与 ENERGY_CHAIN_SUB_SYMBOLS 对齐的子链面板（每子链 3 品种）。"""
+        rng = np.random.default_rng(42)
+        dates = pd.date_range("2025-01-01", periods=60, freq="B")
+        panel: dict[str, pd.DataFrame] = {}
+        for sym in ["SC0", "FU0", "BU0", "TA0", "PF0", "EG0", "L0", "PP0", "PG0", "MA0", "UR0", "SA0"]:
+            close = 100 + np.cumsum(rng.normal(0, 1, len(dates)))
+            panel[sym] = pd.DataFrame(
+                {
+                    "open": close,
+                    "high": close * 1.01,
+                    "low": close * 0.99,
+                    "close": close,
+                    "volume": rng.integers(1000, 5000, len(dates)),
+                },
+                index=dates,
+            )
+        return panel
+
+    @staticmethod
+    def _factor(fid: str, chain: list[str], code: str) -> dict[str, Any]:
+        return {"factor_id": fid, "name": fid, "subchain_scope": chain, "code": code}
+
+    @staticmethod
+    def _momentum_code() -> str:
+        return (
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    close = np.asarray(data['close'], dtype=float)\n"
+            "    sig = np.full(len(close), np.nan)\n"
+            "    sig[5:] = close[5:] / np.maximum(close[:-5], 1e-10) - 1.0\n"
+            "    return sig"
+        )
+
+    @staticmethod
+    def _volume_code() -> str:
+        return (
+            "def factor_program(data, params):\n"
+            "    import numpy as np\n"
+            "    vol = np.asarray(data['volume'], dtype=float)\n"
+            "    sig = np.full(len(vol), np.nan)\n"
+            "    sig[5:] = vol[5:] / np.maximum(vol[:-5], 1e-10) - 1.0\n"
+            "    return sig"
+        )
+
+    def test_unknown_scope_kept(self, tmp_path):
+        """无画像/unknown 因子（通用池）直接保留，不参与链内去冗余。"""
+        factors = [
+            self._factor("a", ["能源"], self._momentum_code()),
+            self._factor("b", ["能源"], self._momentum_code()),
+            {"factor_id": "u", "name": "u", "code": self._momentum_code()},  # 无 subchain_scope
+            {"factor_id": "w", "name": "w", "subchain_scope": "unknown", "code": self._momentum_code()},
+        ]
+        retained, stats = _dedup_factors_by_chain_cluster(
+            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {"a": 1, "b": 0.9, "u": 1, "w": 1},
+            panel_data=self._panel(),
+        )
+        kept = {f["factor_id"] for f in retained}
+        assert kept == {"a", "b", "u", "w"}
+        assert stats["removed"] == []
+
+    def test_chain_cluster_dedup_high_corr(self, tmp_path):
+        """同链高相关因子（≥阈值）聚为同簇，仅留综合评分最优代表。"""
+        factors = [
+            self._factor("a", ["能源"], self._momentum_code()),
+            self._factor("b", ["能源"], self._momentum_code()),  # 同 code → 高相关
+            self._factor("c", ["能源"], self._volume_code()),    # 不同 code → 低相关
+        ]
+        retained, stats = _dedup_factors_by_chain_cluster(
+            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {"a": 0.9, "b": 0.6, "c": 0.5},
+            panel_data=self._panel(),
+        )
+        kept = {f["factor_id"] for f in retained}
+        assert "a" in kept  # 高相关簇代表（评分最高）
+        assert "b" not in kept  # 高相关冗余被移除
+        assert "c" in kept  # 低相关保留
+        assert stats["chains"]["能源"] <= 2
+
+    def test_chain_cluster_respects_max_per_chain(self, tmp_path):
+        """聚类后数量仍超 max_per_chain → 按综合评分截断。"""
+        factors = [
+            self._factor(f"f{i}", ["能源"], self._momentum_code()) for i in range(5)
+        ]
+        # 5 个高相关因子聚 1 簇 → 1 代表 ≤ 2，不截断
+        retained, stats = _dedup_factors_by_chain_cluster(
+            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {f"f{i}": (5 - i) / 5 for i in range(5)},
+            panel_data=self._panel(),
+        )
+        assert len(retained) == 1
+        assert retained[0]["factor_id"] == "f0"  # 综合评分最高
+        assert stats["chains"]["能源"] == 1
+
+    def test_partial_chain_factor_kept_if_kept_in_any_chain(self, tmp_path):
+        """部分链因子参与其所有 effective 子链，任一链保留即存活。"""
+        factors = [
+            self._factor("x", ["能源", "油化工"], self._momentum_code()),  # 部分链
+            self._factor("y", ["油化工"], self._momentum_code()),          # 与 x 同簇
+        ]
+        retained, stats = _dedup_factors_by_chain_cluster(
+            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {"x": 0.9, "y": 0.6},
+            panel_data=self._panel(),
+        )
+        kept = {f["factor_id"] for f in retained}
+        assert kept == {"x", "y"}  # 链内均未超上限 → 全部保留
+
+    def test_symbol_ic_fallback_attribution(self, tmp_path):
+        """无 subchain_scope 时回退 symbol_ic 主导子链归链。"""
+        factors = [
+            {"factor_id": "s1", "name": "s1", "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.5), "code": self._momentum_code()},
+            {"factor_id": "s2", "name": "s2", "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.3), "code": self._momentum_code()},
+        ]
+        retained, stats = _dedup_factors_by_chain_cluster(
+            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 1, {"s1": 0.9, "s2": 0.6},
+            panel_data=self._panel(),
+        )
+        kept = {f["factor_id"] for f in retained}
+        assert kept == {"s1"}  # 能源链同簇，max_per_chain=1 → 仅评分最优
+        assert stats["chains"]["能源"] == 1
+
+    def test_no_panel_falls_back_quantity_trim(self, tmp_path):
+        """无面板数据 → 降级纯数量截断（与旧 _dedup_factors_by_chain 语义一致）。"""
+        factors = [
+            self._factor(f"f{i}", ["能源"], self._momentum_code()) for i in range(4)
+        ]
+        retained, stats = _dedup_factors_by_chain_cluster(
+            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {f"f{i}": (4 - i) / 4 for i in range(4)},
+            panel_data=None,
+        )
+        assert len(retained) == 2
+        assert {f["factor_id"] for f in retained} == {"f0", "f1"}
+
+    def test_empty_input(self, tmp_path):
+        """空输入 → 空输出。"""
+        retained, stats = _dedup_factors_by_chain_cluster([], tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {})
+        assert retained == []
+        assert stats["removed"] == []
+        assert stats["chains"] == {}
 
 
 class TestQualityWeightMode:
@@ -1793,6 +1942,41 @@ class TestPortfolioLoop:
             use_duckdb=False,
         )
         assert loop._signal_store is None
+
+    # ── plans/53 §B2：Regime 条件化配置读取 ──
+    def test_regime_conditional_enabled_from_config(self, tmp_portfolio_dir, tmp_elite_dir, monkeypatch):
+        """配置启用时构造开启 Regime 条件化（decay_mode 透传）。"""
+        from types import SimpleNamespace
+
+        fake_cfg = SimpleNamespace(
+            l3_signal_store_enabled=False,
+            l3_signal_store_db="",
+            l3={"regime_conditional": {"enabled": True, "decay_mode": "soft", "min_abs_ic": 0.05}},
+        )
+        monkeypatch.setattr("fts.config.settings._default_config", fake_cfg)
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+            market="energy",
+        )
+        assert loop._regime_conditional_enabled is True
+        assert loop._regime_conditional_config.decay_mode == "soft"
+
+    def test_regime_conditional_disabled_by_default(self, tmp_portfolio_dir, tmp_elite_dir, monkeypatch):
+        """配置缺失/enabled=false → 默认关闭（零行为变更）。"""
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(
+            "fts.config.settings._default_config",
+            SimpleNamespace(l3_signal_store_enabled=False, l3_signal_store_db="", l3={}),
+        )
+        loop = PortfolioLoop(
+            memory_dir=tmp_portfolio_dir,
+            elite_dir=tmp_elite_dir,
+            use_duckdb=False,
+        )
+        assert loop._regime_conditional_enabled is False
 
     def test_signal_store_explicit_overrides_config(self, tmp_portfolio_dir, tmp_elite_dir, monkeypatch):
         """调用方显式传 signal_store 优先于配置自动激活。"""
@@ -4543,6 +4727,89 @@ class TestStickySharpeBuildComboBranches:
         assert abs(total - 0.5) < 1e-6  # 归一化 1.0 × scale 0.5
         assert combo.get("exposure_scale") == 0.5
         assert combo.get("regime_meta", {}).get("exposure_scale") == 0.5
+
+    def test_build_combo_multiplicative_beta_scale(self):
+        """plans/55 §C: exposure_final = exposure_scale × aligned × beta_scale 乘性合并。"""
+        signals = [
+            PortfolioSignal(
+                factor_id="a",
+                name="f1",
+                weight=2.0,
+                sharpe=1.0,
+                ic=0.05,
+                turnover=0.1,
+                decay_6m=0.0,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="b",
+                name="f2",
+                weight=1.0,
+                sharpe=1.2,
+                ic=0.06,
+                turnover=0.1,
+                decay_6m=0.0,
+                retained=True,
+            ),
+        ]
+        # 仅 beta_scale（RISK_OFF 压缩 0.5，无 exposure_scale/G1）
+        combo = build_combo(signals, "equal_weight", "trace-x", beta_scale=0.5)
+        total = sum(s["weight"] for s in combo["signals"])
+        assert abs(total - 0.5) < 1e-6
+        assert combo.get("regime_meta", {}).get("beta_scale") == 0.5
+
+        # 三因子乘性合并：exposure_scale=1.0 × beta_scale=0.5 → 0.5
+        combo2 = build_combo(
+            signals, "equal_weight", "trace-x", exposure_scale=1.0, beta_scale=0.5
+        )
+        assert abs(sum(s["weight"] for s in combo2["signals"]) - 0.5) < 1e-6
+
+        # 全默认（None）→ 归一化 1.0，不受影响（回归保护）
+        combo3 = build_combo(signals, "equal_weight", "trace-x")
+        assert abs(sum(s["weight"] for s in combo3["signals"]) - 1.0) < 1e-6
+        assert combo3.get("regime_meta") is None or combo3["regime_meta"].get("beta_scale") in (None, 1.0)
+
+    def test_build_combo_multiplicative_crowding_scale(self):
+        """plans/56 §B: 乘性链 exposure_final = exposure_scale × aligned × beta × crowding。"""
+        signals = [
+            PortfolioSignal(
+                factor_id="a",
+                name="f1",
+                weight=2.0,
+                sharpe=1.0,
+                ic=0.05,
+                turnover=0.1,
+                decay_6m=0.0,
+                retained=True,
+            ),
+            PortfolioSignal(
+                factor_id="b",
+                name="f2",
+                weight=1.0,
+                sharpe=1.2,
+                ic=0.06,
+                turnover=0.1,
+                decay_6m=0.0,
+                retained=True,
+            ),
+        ]
+        # 仅 crowding_scale=0.5 → 归一化 1.0 × 0.5
+        combo = build_combo(signals, "equal_weight", "trace-x", crowding_scale=0.5)
+        assert abs(sum(s["weight"] for s in combo["signals"]) - 0.5) < 1e-6
+        assert combo.get("regime_meta", {}).get("crowding_scale") == 0.5
+
+        # 四因子乘性：exposure=1.0 × beta=0.8 × crowding=0.5 → 0.4
+        combo2 = build_combo(
+            signals,
+            "equal_weight",
+            "trace-x",
+            exposure_scale=1.0,
+            beta_scale=0.8,
+            crowding_scale=0.5,
+        )
+        assert abs(sum(s["weight"] for s in combo2["signals"]) - 0.4) < 1e-6
+        assert combo2.get("regime_meta", {}).get("beta_scale") == 0.8
+        assert combo2.get("regime_meta", {}).get("crowding_scale") == 0.5
 
 
 # ════════════════════════════════════════════════════════════

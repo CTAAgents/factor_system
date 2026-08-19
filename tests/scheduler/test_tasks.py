@@ -138,6 +138,12 @@ DEFAULT_TASKS = {
         "desc": "数据驱动动态池刷新（GAP-054）：TqSdk 流动性快照 → 渐进式替换 → 落盘动态池缓存",
         "prefix": "fts.lpool",
     },
+    "l2_subchain_quality": {
+        "cron": "0 9 * * 0",
+        "callable": "fts.scheduler.jobs.l2_subchain_quality_job",
+        "desc": "批量子链质量评估（2026-08-19 沉淀标准工作流）：全部 active 因子逐品种 IC → 子链画像 → 落库 subchain_factor_quality 质量矩阵，供退化检测/子链调制消费；无有效链因子标记 pending_validation 不自动降级",
+        "prefix": "fts.subchain_eval",
+    },
 }
 
 
@@ -250,7 +256,7 @@ def test_registry_is_taskregistry():
 def test_register_default_tasks_registers_five():
     """register_default_tasks 注册默认任务。"""
     register_default_tasks()
-    assert len(REGISTRY) == 16
+    assert len(REGISTRY) == 17
 
 
 @pytest.mark.parametrize("name,expected", DEFAULT_TASKS.items())
@@ -313,7 +319,7 @@ def test_default_task_callables_importable():
 def test_list_tasks_returns_sorted():
     """list_tasks 返回按 name 排序的列表，自动注册默认任务。"""
     tasks = list_tasks()
-    assert len(tasks) == 16
+    assert len(tasks) == 17
     names = [t.name for t in tasks]
     assert names == [
         "data_level_monitor",
@@ -327,6 +333,7 @@ def test_list_tasks_returns_sorted():
         "l2_evolution_weekend",
         "l2_review",
         "l2_seed_promotion",
+        "l2_subchain_quality",
         "l3_portfolio_loop",
         "logic_monitor",
         "mhf_signal",
@@ -340,7 +347,7 @@ def test_list_tasks_after_manual_register():
     register_default_tasks()
     REGISTRY.register(TaskSpec("custom_job", "0 12 * * *", "mod.custom"))
     tasks = list_tasks()
-    assert len(tasks) == 17
+    assert len(tasks) == 18
     names = [t.name for t in tasks]
     assert "custom_job" in names
 

@@ -1431,6 +1431,8 @@ def main(
     chain: str = "",
     force_regime: str = "",
     enable_regime_gating: bool = False,
+    enable_regime_beta: bool = False,
+    enable_regime_crowding: bool = False,
 ) -> int:
     t0 = time.time()
     today = date.today().isoformat()
@@ -1862,6 +1864,86 @@ def main(
                 )
         except Exception as e:  # noqa: BLE001 — Gate 失败降级，不阻断主流程
             print(f"      [子链 Gate] 应用失败（跳过，保持现状）: {e}")
+
+    # ── Step 3h1.5: L0 宏观 Beta 层方向偏置（plans/55 §B，仅 energy 且开关开启）──
+    # 顺 β 方向配置敞口：RISK_ON 顺正 β 进攻（多头加分/空头减分）、
+    # RISK_OFF 降多头/放大空头（期货反向进攻）。置于子链 Gate 之后、量价方向偏置
+    # 之前：Beta 层动多空相对权重（宏观层），与子链 Gate（中观方向）正交，防互相覆盖。
+    # 失败降级不阻断主流程（对齐 plans/48 接入纪律）。
+    beta_state: dict[str, Any] = {}
+    if chain == "energy":
+        try:
+            from fts.config import get_config as _beta_cfg
+            from fts.factor_engine.regime_beta_layer import (
+                BetaDetector,
+                BetaLayerConfig,
+                apply_beta_bias,
+            )
+
+            beta_cfg = (getattr(_beta_cfg(), "l3", {}) or {}).get("regime_beta_layer") or {}
+            if beta_cfg.get("enabled", False) or enable_regime_beta:
+                bconf = BetaLayerConfig(**beta_cfg)
+                fin_panel, _fin_dates = provider.get_futures_panel(
+                    symbols=list(bconf.fin_symbols),
+                    days=bconf.days,
+                    trace_id=f"futures_signal_{today}",
+                )
+                beta_state = BetaDetector(bconf).detect(fin_panel)
+                if beta_state.get("state") in ("RISK_ON", "RISK_OFF"):
+                    sym_scores, _beta_bias = apply_beta_bias(
+                        sym_scores, beta_state["state"], bconf
+                    )
+                    print(
+                        f"      [Beta 层] {beta_state['state']} "
+                        f"(conf={beta_state.get('confidence', 0.0):.0%}, "
+                        f"trend={beta_state.get('trend_score', 0.0):.3f}, "
+                        f"risk_pref_z={beta_state.get('risk_pref_z', 0.0):.2f}): "
+                        f"多头 ×{_beta_bias['long_factor']:.2f} / "
+                        f"空头 ×{_beta_bias['short_factor']:.2f}"
+                    )
+                else:
+                    print(
+                        f"      [Beta 层] {beta_state.get('state', 'unknown')}: "
+                        f"不偏置（保持现状）"
+                    )
+        except Exception as e:  # noqa: BLE001 — Beta 层失败降级，不阻断主流程
+            print(f"      [Beta 层] 应用失败（跳过，保持现状）: {e}")
+
+    # ── Step 3h1.6: 拥挤度多空方向偏置（plans/56 §C，仅 energy 且开关开启）──
+    # 拥挤透支防御：long_crowded 减多不抢反弹、short_crowded（逼空）减空不追空；
+    # 与 Beta 层（Step 3h1.5 方向层）正交——Beta 管"顺不顺势"，拥挤度管"势有没有被透支"。
+    # 数据缺失/异常 → 不干预，失败降级不阻断主流程。
+    if chain == "energy":
+        try:
+            from fts.config import get_config as _crowd_cfg
+            from fts.factor_engine.regime_crowding import (
+                CrowdingSignalConfig,
+                apply_crowding_direction_bias,
+                compute_crowding_signals,
+            )
+
+            crowd_cfg = (getattr(_crowd_cfg(), "l3", {}) or {}).get("regime_crowding") or {}
+            if crowd_cfg.get("enabled", False) or enable_regime_crowding:
+                cconf = CrowdingSignalConfig(**crowd_cfg)
+                crowd = compute_crowding_signals(panel, cconf)
+                if crowd["direction"] in ("long", "short"):
+                    sym_scores, _crowd_bias = apply_crowding_direction_bias(
+                        sym_scores, crowd["direction"], cconf
+                    )
+                    print(
+                        f"      [拥挤度] {crowd['direction']}_crowded "
+                        f"(score={crowd['crowding_score']:.2f}, "
+                        f"触发={[k for k, v in crowd['signals'].items() if v]}): "
+                        f"多头 ×{_crowd_bias['long_factor']:.2f} / "
+                        f"空头 ×{_crowd_bias['short_factor']:.2f}"
+                    )
+                else:
+                    print(
+                        f"      [拥挤度] {crowd['direction']} "
+                        f"(score={crowd['crowding_score']:.2f}): 不干预（保持现状）"
+                    )
+        except Exception as e:  # noqa: BLE001 — 拥挤度失败降级，不阻断主流程
+            print(f"      [拥挤度] 应用失败（跳过，保持现状）: {e}")
 
     # ── Step 3h2: Regime 方向偏移（P0 修复：主制度置信度越高，多空倾向越明显）
     # 放在价格动量之后、快照/判定之前：快照与报告保存一致的最终得分。
@@ -2507,6 +2589,18 @@ if __name__ == "__main__":
         help="启用子链方向 Gate + 暴露缩放（plans/48 §A/§B 灰度开关，默认关；"
         "覆盖 config l3.regime_gating.enabled，仅 --chain energy 生效）",
     )
+    parser.add_argument(
+        "--enable-regime-beta",
+        action="store_true",
+        help="启用 L0 宏观 Beta 层方向偏置（plans/55 §B 灰度开关，默认关；"
+        "覆盖 config l3.regime_beta_layer.enabled，仅 --chain energy 生效）",
+    )
+    parser.add_argument(
+        "--enable-regime-crowding",
+        action="store_true",
+        help="启用拥挤度多空方向偏置（plans/56 §C 灰度开关，默认关；"
+        "覆盖 config l3.regime_crowding.enabled，仅 --chain energy 生效）",
+    )
     args = parser.parse_args()
     sys.exit(
         main(
@@ -2517,5 +2611,7 @@ if __name__ == "__main__":
             chain=args.chain,
             force_regime=args.force_regime,
             enable_regime_gating=args.enable_regime_gating,
+            enable_regime_beta=args.enable_regime_beta,
+            enable_regime_crowding=args.enable_regime_crowding,
         )
     )

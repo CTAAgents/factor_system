@@ -85,12 +85,15 @@ l3:
   cluster:
     threshold: 0.7       # 层次聚类距离阈值（1-|corr|）
     top_n: 1             # 簇内保留代表数（2=允许簇内互补代表，需敏感性验证）
-  # 子链维度去冗余（能源链专属）：限制同一子链保留因子数，防产业链暴露集中。
-  # 与 cluster 信号相关性去冗余互补——同子链因子即使信号相关性低，
-  # 仍共享产业链驱动（原油→化工传导），同步放大子链暴露。
+  # 子链维度去冗余（能源链专属，v2.105.0+13 升级为链内相关性聚类去冗余）：
+  # 归链画像优先级：subchain_scope → symbol_ic 主导子链兜底 → unknown 通用池直接保留。
+  # 链内用子链品种面板计算多品种平均信号相关 → 层次聚类（corr_threshold）→ 每簇留代表（cluster_top_n）
+  # → 叠加 max_per_chain 数量上限。无画像/unknown 因子=全链通用因子直接进入组合（不做子链去冗余）。
   chain_dedup:
     enabled: true
-    max_per_chain: 2     # 单子链保留因子数上限
+    max_per_chain: 2     # 聚类后单子链保留因子数上限（防产业链暴露集中）
+    corr_threshold: 0.5  # 链内聚类距离阈值（1-|corr|，收紧于全局 P1 的 0.7）
+    cluster_top_n: 1     # 链内每簇保留代表数上限
   # L3 子链差异化权重调制（plans/47 §B，仅 market=energy 生效）：
   # 特异因子在无效子链降权/归零；enabled 默认 false=全链统一权重（兼容现状），
   # CLI --enable-subchain-weight 显式传参优先。decay_mode: zero=归零 / soft=按 |mean_ic| 相对缩放。
@@ -116,6 +119,19 @@ l3:
     exposure_min: 0.4
     exposure_sat: 0.7
 
+  # 因子×制度条件化权重（plans/53 §B，仅 market=energy 生效）：
+  # 当前市场制度下 IC 显著为负（ic < -min_abs_ic）的因子权重归零/降权，
+  # 避免"逆制度因子"拖累组合；regime_scope=all/unknown 或当前制度 effective → 全保留。
+  # 与 Step 2.5 regime 倍率叠加（先倍率调权 → 再条件化）。
+  # v2.105.0+9 实盘灰度开启；2026-08-17 用户决策：soft 相对基准（|ic|/max_ic）在
+  # "当前制度 IC 恰为各制度最强"时 m=1.0 不降权（实测 3 因子），改用 zero 归零（激进）。
+  regime_conditional:
+    enabled: true
+    decay_mode: zero
+    soft_min_ratio: 0.0
+    scope_default: all
+    min_abs_ic: 0.05
+
   # 因子×子链质量矩阵（plans/49，QA/生命周期张量化；subchain_quality_store.py 参数化 SSOT）。
   # enabled=false 时评审/生命周期回退全链原逻辑（股票/无子链画像因子天然走回退）。
   # v2.105.0 起启用（2026-08-17 已回填 196 因子画像 + 784 行质量矩阵）
@@ -127,12 +143,81 @@ l3:
     min_periods: 5          # 子链质量时序最少期数（样本不足不误判）
     cooldown_days: 30       # scope 收缩/degraded 冷却期（与 energy_qa_review 一致）
 
+  # L0 宏观 Beta 层（plans/55，仅 market=energy 生效）：
+  # 识别市场 Beta 方向（RISK_ON/RISK_OFF/RANGE_BOUND）并顺 β 方向配置敞口——
+  # RISK_OFF 压缩总敞口（off_scale）+ 信号管线降多头/放大空头（期货反向进攻）。
+  # 信号：金融期货合成指数趋势（MA20-MA60）+ 20日 realized vol 分位 + IF0/TF0 股债比 z-score。
+  # enabled 默认 false=现状（零行为变更）；CLI --enable-regime-beta 显式传参优先（信号管线）。
+  # 2026-08-19 灰度开启（预测力决策门通过：step=1 日频 fwd=10 收益 K-W p=0.0203 显著 +
+  # 排序 RISK_ON>RANGE_BOUND>RISK_OFF 正确，trace_id beta-kw-v3b-20260819）。
+  # 灰度保守档：off_scale 0.5→0.7（压缩 30% 温和）、off_long_suppress 0.40→0.25、
+  # off_short_boost 0.20→0.10（方向偏置温和起步），观察稳定后按回测/实盘校准调优。
+  regime_beta_layer:
+    enabled: true
+    days: 130                # 金融期货数据回溯天数
+    fin_symbols: [IF0, IH0, IC0, IM0, TF0, TS0]  # CFFEX 合成指数成分（FTS 连续合约格式）
+    trend_window_short: 20   # 趋势短窗（MA20）
+    trend_window_long: 60    # 趋势长窗（MA60）
+    vol_window: 20           # realized vol 窗口
+    vol_threshold_percentile: 0.8  # 高波动历史分位阈值
+    risk_pref_pair: [IF0, TF0]     # 股债比：风险资产/避险资产（FTS 池内无 T0，以 TF0 为避险锚）
+    risk_pref_window: 20     # 股债比滚动 z-score 窗口
+    min_confidence: 0.5      # 置信度门槛：低于 → RANGE_BOUND（不偏置）
+    min_votes: 2             # 软投票最少一致信号数
+    on_scale: 1.0            # RISK_ON 总敞口倍率（顺正β，不放大）
+    on_long_boost: 0.10      # RISK_ON 多头加分
+    on_short_suppress: 0.10  # RISK_ON 空头减分
+    off_scale: 0.7           # RISK_OFF 总敞口倍率（灰度保守档：压缩 30%）
+    off_long_suppress: 0.25  # RISK_OFF 多头抑制（灰度保守档：×0.75）
+    off_short_boost: 0.10    # RISK_OFF 空头放大（灰度保守档：×1.10）
+
+  # 拥挤度体系化（plans/56，仅 market=energy 生效）：
+  # 6 信号（板块相关趋近/放量滞涨/动量衰竭/波动突升/OI 天量/换手透支）合成拥挤度 score
+  # + 方向分解（多头/空头拥挤，逼空识别）→ 联合门控（高置信+高拥挤减半、低置信+高拥挤离场）
+  # + 多空方向偏置（减多不抢反弹、减空不追空）。enabled 默认 false=现状（零行为变更）；
+  # CLI --enable-regime-crowding 显式传参优先（信号管线）。与 Beta 层（55）正交互补。
+  regime_crowding:
+    enabled: false
+    days: 300                # 拥挤度面板回溯天数（≥ 动量长窗 + 分位历史）
+    corr_window: 20          # 板块内品种相关滚动窗口
+    corr_percentile: 0.75     # 相关历史分位（创新高 → 触发）
+    corr_min_level: 0.5      # 相关绝对水平下限
+    volume_ratio_threshold: 1.5  # 量能比阈值（volume/20日均量，放量）
+    price_stall_threshold: 0.01   # 放量滞涨：|短期涨幅| < 阈值
+    momentum_short: 20       # 动量短窗
+    momentum_long: 60        # 动量长窗
+    vol_window: 20           # realized vol 窗口
+    vol_spike_percentile: 0.75    # 波动突升分位
+    oi_window: 20            # OI 量能比窗口
+    oi_percentile: 0.75       # OI 天量分位
+    turnover_window: 20      # 换手率窗口
+    turnover_percentile: 0.75 # 换手透支分位
+    stall_trigger_ratio: 0.5 # 板块内信号触发品种占比阈值
+    high_crowding: 0.4       # 高拥挤阈值（≥ → 触发门控）
+    direction_window: 20     # 方向分解收益窗口
+    confidence_threshold: 0.5    # 联合门控置信度高/低分界
+    high_conf_high_crowd_scale: 0.5  # 高置信+高拥挤 → 敞口减半
+    low_conf_high_crowd_scale: 0.0   # 低置信+高拥挤 → 离场
+    long_crowd_suppress: 0.30   # 多头拥挤：多头信号 ×0.70（减多不抢反弹）
+    short_crowd_suppress: 0.30  # 空头拥挤：空头信号 ×0.70（减空不追空/不逼空）
+
 # L2/L3 子链适用性画像显著性护栏（plans/47 §A3，subchain_profile.py 参数化 SSOT；
 # 三门槛 AND：min_symbols / min_t_stat(df=n-1) / min_chain_ic）
+# v2.105.0+16: min_chain_ic 从 0.10 降至 0.02（2026-08-19 验证：8 个因子中 6 个在 0.02 阈值下通过子链评估，
+# 原 0.10 过于严格导致有效全链因子被误判为无效，详见子链质量评估专项）
 subchain_profile:
   min_symbols: 3
   min_t_stat: 2.0
-  min_chain_ic: 0.10
+  min_chain_ic: 0.02
+
+# 因子×Regime 画像护栏（plans/53 §A/§C，regime_profile.py 参数化 SSOT）：
+# 三门槛 AND：min_regime_samples / ICIR>0 / min_abs_ic；
+# min_positive_regimes=晋升硬门槛——regime_ic_report 存在且有效制度数低于此值 → 拒绝晋升。
+regime_profile:
+  min_regime_samples: 20
+  min_positive_regimes: 2
+  min_abs_ic: 0.05
+  all_regimes_effective_min: 3
   # L3 合成模式默认值（v2.104.0+62，CLI --synthesis-mode 显式传参优先）：
   # mode 可选 equal_weight / quality_weight / sharpe_weight / elastic_net /
   #   adaptive / optimizer / risk_parity（= optimizer + risk_parity 目标快捷，

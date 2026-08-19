@@ -77,7 +77,7 @@ _DEFAULT_CONFIG: RiskConfig = {
 class RiskManager:
     """实时风控管理器（C.2 §4）。"""
 
-    def __init__(self, config: RiskConfig | None = None, regime: str | None = None) -> None:
+    def __init__(self, config: RiskConfig | None = None, regime: str | None = None, beta_state: str | None = None) -> None:
         """初始化风控管理器。
 
         Args:
@@ -85,6 +85,10 @@ class RiskManager:
             regime: 当前市场制度（G14，可选）。提供且命中 `REGIME_RISK_PARAMS`
                 时，将表内 leverage_cap / daily_loss_pct 注入对应配置项
                 （max_leverage / daily_loss_limit_pct），按制度收紧/放大风控边界。
+                不改变 `check()` 内部逻辑。
+            beta_state: L0 宏观 Beta 档位（plans/55 §D，可选，如 "RISK_OFF"）。
+                命中 `BETA_RISK_PARAMS` 时按倍率在量价制度参数基础上叠加收紧
+                （乘性取更严：RISK_OFF → max_leverage ×0.7、daily_loss_limit ×0.7）。
                 不改变 `check()` 内部逻辑。
         """
         merged: dict[str, Any] = dict(_DEFAULT_CONFIG)
@@ -108,6 +112,24 @@ class RiskManager:
                     )
             except Exception as e:  # noqa: BLE001 — 注入失败回退常量，不阻断初始化
                 logger.warning("[RiskManager] Regime 风控参数注入失败，回退常量: %s", e)
+        if beta_state:
+            try:
+                from fts.factor_engine.regime_multipliers import BETA_RISK_PARAMS
+
+                muls = BETA_RISK_PARAMS.get(beta_state, {})
+                for key, mult in muls.items():
+                    target = {"leverage_cap": "max_leverage", "daily_loss_pct": "daily_loss_limit_pct"}.get(key)
+                    if target and target in merged and mult > 0:
+                        merged[target] = float(merged[target]) * float(mult)
+                if muls:
+                    logger.info(
+                        "[RiskManager] BetaState=%s 风控档位叠加: max_leverage=%.2f, daily_loss_limit=%.2f",
+                        beta_state,
+                        merged["max_leverage"],
+                        merged["daily_loss_limit_pct"],
+                    )
+            except Exception as e:  # noqa: BLE001 — 注入失败回退常量，不阻断初始化
+                logger.warning("[RiskManager] Beta 档位风控参数注入失败，回退常量: %s", e)
         self._config: RiskConfig = cast(RiskConfig, merged)
 
     # ─── 主入口 ──────────────────────────────────────────

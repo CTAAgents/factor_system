@@ -388,6 +388,13 @@ def persist_signal_matrix(
     """
     if bundle.signal_matrix.size == 0 or not bundle.factor_ids:
         return False
+    # GAP-150 写路径契约（严格模式）：默认信号库必须登记（显式注入豁免）
+    if db_path is None:
+        from fts.store import get_storage_registry
+
+        get_storage_registry().warn_unregistered_write(
+            _default_db_path(), caller="L3SignalStore", strict=True
+        )
     db_path = db_path or _default_db_path()
     try:
         from fts.store.duckdb_lock import duckdb_write_lock

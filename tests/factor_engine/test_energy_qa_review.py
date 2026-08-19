@@ -235,6 +235,7 @@ def test_pipeline_dryrun_does_not_write(monkeypatch, tmp_path):
         config=EnergyQaReviewConfig(apply=False),
         elite_dir=tmp_path / "elite",
         tracking_dir=tmp_path / "tracking",
+        state_db_path=tmp_path / "state.db",  # v2.105.0+18 基线写隔离库，防污染真实 state.db
     )
     (pipe.tracking_dir).mkdir(parents=True, exist_ok=True)
 
@@ -271,3 +272,74 @@ def test_apply_dispositions(pipe, monkeypatch):
     assert stats["active"] == 1
     assert stats["shadow"] == 1
     assert stats["degraded"] == 1
+
+
+# ─── 落库影子校验（v2.105.0+18 反沉降通道） ───────────────
+
+
+def _mk_dispositions(*pairs: tuple[str, str]):
+    from fts.factor_engine.energy_qa_review import FactorDisposition
+
+    return [FactorDisposition(factor_id=fid, name=fid, prev_status="active", decision=dec) for fid, dec in pairs]
+
+
+_DATES = ["2026-01-01", "2026-01-02", "2026-01-03"]
+
+
+def _shadow_pipe(tmp_path: Path, apply: bool = True) -> EnergyQaReviewPipeline:
+    return EnergyQaReviewPipeline(
+        config=EnergyQaReviewConfig(apply=apply),
+        elite_dir=tmp_path / "elite",
+        tracking_dir=tmp_path / "tracking",
+        state_db_path=tmp_path / "state.db",
+    )
+
+
+def test_apply_rejects_without_baseline(tmp_path):
+    """无基线（未跑过 dry-run）→ apply 拒绝落库。"""
+    p = _shadow_pipe(tmp_path)
+    with pytest.raises(RuntimeError, match="无 dry-run 基线"):
+        p._assert_apply_consistency(_mk_dispositions(("f1", "active")), _DATES, "t1")
+
+
+def test_apply_rejects_judgement_drift(tmp_path):
+    """同面板指纹 + 判定漂移 → 拒绝落库（含漂移因子清单）。"""
+    p = _shadow_pipe(tmp_path)
+    p._persist_baseline(_mk_dispositions(("f1", "active"), ("f2", "shadow")), _DATES, "t1")
+    with pytest.raises(RuntimeError, match="判定漂移 1 个因子.*f1: active→degraded"):
+        p._assert_apply_consistency(_mk_dispositions(("f1", "degraded"), ("f2", "shadow")), _DATES, "t2")
+
+
+def test_apply_passes_consistent(tmp_path):
+    """同面板指纹 + 判定一致 → 通过（不抛）。"""
+    p = _shadow_pipe(tmp_path)
+    disp = _mk_dispositions(("f1", "active"), ("f2", "shadow"))
+    p._persist_baseline(disp, _DATES, "t1")
+    p._assert_apply_consistency(disp, _DATES, "t2")
+
+
+def test_apply_skips_on_panel_drift(tmp_path):
+    """面板指纹变化（数据漂移）→ 跳过断言放行（即使判定变化）。"""
+    p = _shadow_pipe(tmp_path)
+    p._persist_baseline(_mk_dispositions(("f1", "active")), _DATES, "t1")
+    p._assert_apply_consistency(_mk_dispositions(("f1", "degraded")), _DATES + ["2026-01-04"], "t2")
+
+
+def test_baseline_roundtrip(tmp_path):
+    """基线持久化往返：写后 state_kv 可读、dispositions 一致、历史可回放。"""
+    from fts.store.state_db import StateKVStore
+
+    p = _shadow_pipe(tmp_path, apply=False)
+    p._persist_baseline(_mk_dispositions(("f1", "active"), ("f2", "degraded")), _DATES, "t1")
+    bl = p._load_baseline()
+    assert bl is not None
+    assert bl["panel_digest"] != ""
+    assert bl["trace_id"] == "t1"
+    assert {d["factor_id"] for d in bl["dispositions"]} == {"f1", "f2"}
+    store = StateKVStore(tmp_path / "state.db")
+    try:
+        hist = store.history(namespace="energy_qa_review", key="degradation_baseline")
+        assert len(hist) == 1
+        assert hist[0]["run_id"] == "t1"
+    finally:
+        store.close()

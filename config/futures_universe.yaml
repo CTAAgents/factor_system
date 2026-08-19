@@ -227,7 +227,8 @@ sector_map:
 workflows:
   energy:
     # 训练池（ENERGY_CHAIN_SYMBOLS / ENERGY_CHAIN_TRAIN）：
-    # 四大化工子链各 3 代表（能源 SC/FU/BU + 聚酯 PF/TA/EG + 油化工 L/PP/PG + 煤化工 MA/UR/SA），
+    # 五大化工子链（能源 3 + 聚酯 3 + 油化工 3 + 煤化工 3 + 橡胶 2），
+    # 2026-08-19 增扩橡胶子链 RU0/BR0 入训练池，NR0 保留盲测池做泛化检验；
     # 2026-08-15 由 9 扩至 12 降训练池内相关性（LU/PR 与 FU/PF 高相关换出至盲测池）。
     # v2.104.0+106（GAP-133）：聚酯链代表 PX0→EG0——PX0 2023-09 上市仅 704 行会封顶训练
     # 公共窗口（走航窗口数受限），EG0 2018-12 上市 1861 行；PX0 自动回盲测池。
@@ -244,11 +245,15 @@ workflows:
       - MA0   # 甲醇（煤化工，煤基化工）
       - UR0   # 尿素（煤化工，氮肥）
       - SA0   # 纯碱（煤化工/建材）
+      - RU0   # 天然橡胶（橡胶，2026-08-19 自盲测池升维）
+      - BR0   # 丁二烯橡胶（橡胶，2026-08-19 自盲测池升维）
     # 泛化范围（ENERGY_CHAIN_CHEMICAL_SECTORS，盲测池来源子链）
+    # 2026-08-19 增扩橡胶子链（RU0/NR0/BR0），盲测池自动派生
     chemical_sectors:
       - 聚酯链
       - 油化工
       - 煤化工
+      - 橡胶
     # 因子库/精英目录路由标记（ENERGY_CHAIN_MARKET）
     market: energy
     # 训练品种最小历史深度阈值（ENERGY_CHAIN_MIN_TRAIN_ROWS，真实非 SYNTHETIC 日线行数）

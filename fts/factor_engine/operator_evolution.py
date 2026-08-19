@@ -135,13 +135,22 @@ class OperatorEvolutionEngine:
         registry: Optional[dict[str, OperatorMeta]] = None,
         config: Optional[OperatorEvolutionConfig] = None,
         train_mask: Optional[pd.Series] = None,
+        cross_section_data: Optional[dict[str, pd.DataFrame]] = None,
+        cross_section_dates: Optional[pd.DatetimeIndex] = None,
     ) -> None:
+        """横截面模式（GAP-146 v2.105.0+11）：注入 cross_section_data /
+        cross_section_dates 后，适应度评估切换为截面 Spearman IC 口径
+        （与快速预筛/正式评估同口径），消除单品种时序高分、截面无区分
+        度的适应度-验收错配；未注入时保持单序列 IC/Sharpe 原逻辑。
+        """
         self._data = data_panel
         self._train_mask = train_mask
         self._target_col = target_col
         self._registry = registry if registry is not None else build_registry()
         self._config = config or OperatorEvolutionConfig()
         self._rng = random.Random(self._config.random_seed)
+        self._cross_section_data = cross_section_data
+        self._cross_section_dates = cross_section_dates
 
         # 面板可用 L0 字段（面板中存在且属于 DSL 基础字段）
         self._available_fields = sorted(set(L0_FIELDS) & set(data_panel.columns)) or ["close"]
@@ -220,7 +229,13 @@ class OperatorEvolutionEngine:
 
         数据泄露防护: 当 train_mask 存在时，仅在训练集上计算适应度，
         确保 OOS 数据不被用于 GP/算子搜索过程中的选择。
+
+        横截面模式（GAP-146）：注入 cross_section_data 后分派
+        `_evaluate_cs_fitness`，以截面 Spearman IC 为适应度。
         """
+        if self._cross_section_data is not None:
+            return self._evaluate_cs_fitness(expr)
+
         cached = self._fitness_cache.get(expr)
         if cached is not None:
             return cached
@@ -283,6 +298,96 @@ class OperatorEvolutionEngine:
             fitness = abs(ic) * 0.6 + max(sharpe, 0) * 0.4
 
         score = _FitnessScore(ic=float(ic), sharpe=float(sharpe), fitness=float(fitness))
+        self._fitness_cache[expr] = score
+        return score
+
+    def _evaluate_cs_fitness(self, expr: str) -> _FitnessScore:
+        """横截面模式适应度（GAP-146 v2.105.0+11）。
+
+        对每品种执行 DSL 表达式 + 5 日前向收益（与评估链
+        `_cs_execute_factors` 同口径），按共同日期前 60% 训练段对齐，
+        逐期截面 Spearman IC 均值作为适应度——与快速预筛/正式评估
+        （`_cs_compute_ics`）完全同口径，引导算子搜索直接优化截面区分度。
+
+        Returns:
+            截面 IC 均值（可为负，fitness 取绝对值）；有效品种 <5、
+            共同日期为空或截面 IC 全无效时按罚分处理。
+        """
+        from .evaluation_chain import _cs_build_matrices, _cs_compute_ics
+        from .expr_dsl.validator import compute_max_lookback
+
+        cached = self._fitness_cache.get(expr)
+        if cached is not None:
+            return cached
+
+        self._total_evaluations += 1
+        try:
+            node = parse_expression(expr)
+            # 纯字段/无算子表达式（lookback=0）罚分（与单序列路径 GAP-I202 同规则）
+            if compute_max_lookback(node, self._registry) == 0:
+                score = _FitnessScore(fitness=_PENALTY_WEAK)
+                self._fitness_cache[expr] = score
+                return score
+        except Exception:
+            score = _FitnessScore(fitness=_PENALTY_WEAK)
+            self._fitness_cache[expr] = score
+            return score
+
+        signal_dict: dict[str, pd.Series] = {}
+        ret_dict: dict[str, pd.Series] = {}
+        for sym, df in self._cross_section_data.items():
+            try:
+                values = evaluate(node, df, self._registry)
+                if isinstance(values, float):
+                    values = pd.Series(values, index=df.index)
+                else:
+                    values = pd.Series(values)
+                    values.index = df.index
+                signal_dict[sym] = values
+                closes = df["close"].values
+                fwd_ret = np.zeros(len(closes))
+                if len(closes) > 5:
+                    fwd_ret[:-5] = (closes[5:] - closes[:-5]) / np.maximum(closes[:-5], 1e-10)
+                ret_dict[sym] = pd.Series(fwd_ret, index=df.index)
+            except Exception:  # noqa: BLE001 - 单品种失败跳过，与预筛一致
+                continue
+
+        if len(signal_dict) < 5:
+            score = _FitnessScore(fitness=_PENALTY_NO_SIGNAL)
+            self._fitness_cache[expr] = score
+            return score
+
+        common = self._cross_section_dates
+        if common is None or len(common) == 0:
+            score = _FitnessScore(fitness=_PENALTY_NO_SIGNAL)
+            self._fitness_cache[expr] = score
+            return score
+
+        # 数据泄露防护: 仅训练段（与单序列路径 train_mask 同语义，前 60%）
+        if self._train_mask is not None and len(self._train_mask) == len(common):
+            train_dates = common[self._train_mask.values]
+        else:
+            n_train = max(int(len(common) * 0.6), 1)
+            train_dates = common[:n_train]
+        if len(train_dates) < _MIN_SAMPLES:
+            score = _FitnessScore(fitness=_PENALTY_NO_SIGNAL)
+            self._fitness_cache[expr] = score
+            return score
+
+        signal_matrix, ret_matrix = _cs_build_matrices(
+            signal_dict,
+            ret_dict,
+            train_dates,
+            len(train_dates),
+        )
+        ics = _cs_compute_ics(signal_matrix, ret_matrix)
+        if not ics:
+            score = _FitnessScore(fitness=_PENALTY_NO_SIGNAL)
+            self._fitness_cache[expr] = score
+            return score
+
+        ic_mean = float(np.mean(ics))
+        score = _FitnessScore(ic=ic_mean, sharpe=0.0, fitness=abs(ic_mean))
         self._fitness_cache[expr] = score
         return score
 

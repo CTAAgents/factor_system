@@ -28,6 +28,78 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def compute_position_target(
+    signal_strength: float,
+    confidence: float,
+    realized_vol: float,
+    risk_budget: float,
+    max_position: float = 1.0,
+    min_position: float = 0.0,
+) -> float:
+    """头寸公式 f(信号强度, 置信度, 波动率, 风险预算)（plans/54 P2-3）。
+
+    目标仓位 = clip(|信号强度| × 置信度 × (风险预算 / 年化波动率), [min_position, max_position])：
+    - 信号越强仓位越大（信号强度线性）
+    - 置信度越高仓位越大（识别可信度调制）
+    - 波动率越高仓位越小（风险预算约束，vol targeting 语义）
+    - 风险预算（目标波动率）越高仓位越大
+
+    Args:
+        signal_strength: 信号强度（如综合得分/IC，正负均可取绝对值）。
+        confidence: 识别置信度 ∈ [0,1]。
+        realized_vol: 年化波动率（>0；≤0 或 NaN → 保守按 risk_budget 满仓的风险倍数）。
+        risk_budget: 风险预算（目标年化波动率，如 0.15）。
+        max_position: 仓位上限（默认 1.0）。
+        min_position: 仓位下限（默认 0.0）。
+
+    Returns:
+        目标仓位 ∈ [min_position, max_position]。
+    """
+    import math
+
+    strength = abs(float(signal_strength))
+    conf = max(0.0, min(1.0, float(confidence)))
+    vol = float(realized_vol)
+    budget = float(risk_budget) if float(risk_budget) > 0 else 0.15
+    if not math.isfinite(vol) or vol <= 1e-9:
+        vol_scale = 1.0  # 波动率不可用 → 不放大（保守）
+    else:
+        vol_scale = budget / vol
+    target = strength * conf * vol_scale
+    return float(np.clip(target, min_position, max_position))
+
+
+def shrink_factor_diversity(
+    weights: dict[str, float],
+    confidence: float,
+    low_conf_threshold: float = 0.4,
+    keep_ratio: float = 0.5,
+) -> dict[str, float]:
+    """对称化仓位（plans/54 P2-1，文档 §7.1）：低置信度不仅减仓还缩小因子种类。
+
+    低置信度（confidence < low_conf_threshold）时保留权重 top keep_ratio 的因子
+    （其余归零后重归一化）——"缩小策略种类"；高置信度不干预（原样返回）。
+
+    Args:
+        weights: 因子 → 权重。
+        confidence: 识别置信度 ∈ [0,1]。
+        low_conf_threshold: 低置信度阈值（默认 0.4）。
+        keep_ratio: 保留因子比例（默认 0.5 = 砍半）。
+
+    Returns:
+        调整后权重 dict（新 dict，不修改入参）。
+    """
+    if confidence >= low_conf_threshold or not weights:
+        return dict(weights)
+    n_keep = max(1, int(round(len(weights) * keep_ratio)))
+    top = sorted(weights.items(), key=lambda kv: -abs(kv[1]))[:n_keep]
+    kept = dict(top)
+    total = sum(abs(v) for v in kept.values())
+    if total <= 1e-12:
+        return dict(weights)
+    return {k: v / total * sum(abs(vv) for vv in weights.values()) for k, v in kept.items()}
+
+
 @dataclass
 class AllocationResult:
     """资金分配结果。"""

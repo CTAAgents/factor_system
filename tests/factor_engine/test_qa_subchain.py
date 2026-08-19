@@ -33,8 +33,8 @@ CHAINS: dict[str, list[str]] = {
 }
 
 
-def _ic(energy=0.02, polyester=0.01, oil=0.0, coal=0.01) -> dict:
-    """构造四子链逐品种 IC（默认全部近零 → 无显著子链）。"""
+def _ic(energy=0.01, polyester=0.01, oil=0.0, coal=0.01) -> dict:
+    """构造四子链逐品种 IC（默认全部低于 0.02 门槛 → 无显著子链）。"""
     return {
         "SC0": energy, "FU0": energy, "BU0": energy,
         "PF0": polyester, "TA0": polyester, "EG0": polyester,

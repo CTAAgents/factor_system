@@ -1,7 +1,7 @@
 # FTS 系统架构文档
 
-> 版本: v2.105.0+8
-> 最后更新: 2026-08-10
+> 版本: v2.105.0+28
+> 最后更新: 2026-08-18
 
 ---
 
@@ -9,11 +9,82 @@
 
 FTS（Factor Intelligence System，因子智能系统）是一个独立的期货因子策略系统，专注于期货因子推演、策略组建与交易信号产出。数据层基于 DuckDB kline_cache（主源）+ AKShare/通达信/天勤（降级）提供期货行情数据，FTS **本身包含自洽的数据源适配层**，无外部数据项目依赖。股票管线已剥离至独立项目 fts-stock（v0.0.1，2026-08）。
 
+### 1.1 QuantData 集成（v2.105.0+11 新增）
+
+自 v2.105.0+11 起，FTS 支持通过 QuantData（D:\QuantData）获取统一数据服务，作为现有数据层的**补充数据源**。
+
+#### 数据依赖映射
+
+| FTS 数据需求 | QuantData 表 | 消费接口 | 状态 |
+|:-------------|:-------------|:---------|:-----|
+| 日线 OHLCV (FuturesOHLCV 契约) | kline_daily | get_factor_input() | ✅ 已实现 |
+| 分钟 OHLCV | kline_minute | get_bars(symbol, '1m') | ✅ 已实现 |
+| 实时 Tick | HotDataLayer (内存) | get_tick(symbol) | ✅ 已实现 |
+| 基本面数据 (库存/产量/消费) | fundamental_data | get_fundamental(symbol) | 🔄 开发中 |
+| 基差数据 | basis_data | get_basis(symbol) | 🔄 开发中 |
+| 期限结构数据 | term_structure | get_term_structure(symbol) | 🔄 开发中 |
+| 持仓结构数据 | position_structure | get_position_structure(symbol) | 🔄 开发中 |
+
+#### FuturesOHLCV ↔ QuantData 字段映射
+
+| FTS FuturesOHLCV | QuantData kline_daily | 类型 | 说明 |
+|:-----------------|:---------------------|:-----|:-----|
+| symbol | symbol | VARCHAR(16) | 直接映射 |
+| date | trade_date | DATE | 格式转换 |
+| open | open | DOUBLE | 直接映射 |
+| high | high | DOUBLE | 直接映射 |
+| low | low | DOUBLE | 直接映射 |
+| close | close | DOUBLE | 直接映射 |
+| volume | volume | DOUBLE | 直接映射 |
+| amount | amount | DOUBLE | 直接映射 |
+| **hold** | **open_interest** | DOUBLE | ⚠️ 字段名不同，需映射 |
+| settle | settle | DOUBLE | 直接映射 |
+| pre_settle | pre_settle | DOUBLE | 直接映射 |
+| oi_change | oi_change | DOUBLE | 直接映射 |
+| vwap | vwap | DOUBLE | 直接映射 |
+| source | source | VARCHAR(50) | 直接映射 |
+| trace_id | trace_id | VARCHAR(50) | 直接映射 |
+
+#### QuantData 接入代码示例
+
+```python
+# fts/data_sources/quantdata_provider.py
+
+import sys
+sys.path.insert(0, "D:/QuantData")
+from client_v2 import QuantDataClient
+
+
+class QuantDataProvider:
+    """QuantData 数据提供者 - 对齐 FuturesOHLCV 契约"""
+
+    def __init__(self):
+        self._client = QuantDataClient()
+
+    def get_ohlcv(
+        self, symbol: str, lookback: int = 252
+    ) -> pd.DataFrame:
+        """获取 OHLCV 数据，列名对齐 FuturesOHLCV"""
+        df = self._client.get_factor_input(symbol, lookback)
+        # 列名映射: open_interest -> hold
+        if "open_interest" in df.columns:
+            df["hold"] = df["open_interest"]
+        return df
+
+    def get_fundamental(self, symbol: str) -> pd.DataFrame:
+        """获取基本面数据"""
+        return self._client.get_fundamental(symbol)
+
+    def get_basis(self, symbol: str) -> pd.DataFrame:
+        """获取基差数据"""
+        return self._client.get_basis(symbol)
+```
+
 ### 项目边界
 
 | 职责 | 归属 |
 |:-----|:-----|
-| 行情数据获取（期货 OHLCV） | **FTS（通过 DuckDB kline_cache/分钟 + AKShare futures_zh_daily_sina + 通达信/TQSDK 分钟数据）** |
+| 行情数据获取（期货 OHLCV） | **FTS（通过 DuckDB kline_cache + QuantData + AKShare/通达信/TQSDK）** |
 | 因子推演（挖掘/演化/评估） | **FTS 核心能力** |
 | 多因子策略组建 | **FTS 核心能力** |
 | 交易信号产出 | **FTS 核心能力** |
@@ -255,23 +326,35 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │      → 计算 Pearson 相关系数矩阵                                        │
 │      → 层次聚类（average linkage，距离阈值默认 0.7）                    │
 │      → 从每个簇中选择综合评分最高的代表因子（plans/36 改进项 2/4）      │
+│      → 【v2.105.0+13 子链张量化口径】market=energy 关闭全局 P1：全局单 │
+│        品种信号聚类在子链权重架构下会系统性误伤子链特异因子（单参考品种│
+│        相关 → 子链特异因子被并入通用大簇、代表被全链高分因子拿走），   │
+│        去冗余职责整体下沉至 Step 1.8b 链内聚类（仅 market=energy；     │
+│        futures 侧保留全局 P1 原逻辑）                                  │
 │    Step 1.7: CAP 数量安全阀（ACTIVE_FACTOR_CAP=20，v2.104.0+67 起）：   │
 │      → 聚类 + 子链去冗余后代表数仍超限才截断（防御性；不再按样本内评分 │
 │        选优——避免数据窥探式选择系统性偏向过拟合因子）                  │
 │      → 截断排序键 = OOS 校正综合评分（use_oos_ic=True：因子带           │
 │        oos_extrapolation.new_ic 时 ic 维度取样本外 IC，否则回退样本内） │
-│    Step 1.8b: 子链维度去冗余（GAP-121 扩展，能源链专属）                │
-│      → _dedup_factors_by_chain（portfolio_loop.py）                     │
-│      → 基于逐品种 IC（symbol_ic，评估链 GAP-075 输出，elite JSON        │
-│        兜底读取）构建"主导子链"画像（子链内平均 |IC| 最高者）           │
-│      → 同一子链保留因子数 ≤ l3.chain_dedup.max_per_chain（默认 2），    │
-│        链内按综合评分降序截断；symbol_ic 缺失因子归 unknown 组直接保留  │
-│      → 与 Step 1.8 信号相关性聚类互补：同子链因子即使信号相关性低，     │
-│        仍共享产业链驱动（原油→化工传导），同步放大子链暴露              │
-│      → 配置：settings.yaml l3.chain_dedup.{enabled, max_per_chain}      │
-│        （仅 market=energy 生效）                                        │
+│    Step 1.8b: 子链维度去冗余（GAP-121 扩展，能源链专属；v2.105.0+13 升级│
+│      为链内相关性聚类去冗余，替代"symbol_ic 数量截断"）                │
+│      → 归链画像优先级：subchain_scope（A2 落库，单链/部分链）→          │
+│        symbol_ic 主导子链兜底 → unknown 归通用池直接保留                │
+│      → 链内聚类：对每个子链用其品种面板（ENERGY_CHAIN_SUB_SYMBOLS）    │
+│        计算因子信号相关性（链内多品种平均相关，非单品种），层次聚类     │
+│        （average linkage，距离阈值 l3.chain_dedup.corr_threshold=0.5），│
+│        每簇按综合评分留代表（cluster_top_n）                           │
+│      → 聚类后仍叠加数量上限 l3.chain_dedup.max_per_chain（默认 2）截断，│
+│        防产业链暴露集中；部分链因子参与其所有 effective 子链，任一链   │
+│        保留即存活                                                      │
+│      → 无画像/unknown 因子=全链通用因子，直接进入组合（m=1.0 全链生效，│
+│        与 l3.subchain_weight.scope_default=all 语义一致，不做子链去冗余）│
+│      → 与 Step 2b/2.5 互补：去冗余管"链内相关性"（同链高相关同信息源），│
+│        调制管"权重"（特异因子在无效子链降权/归零）                      │
+│      → 配置：settings.yaml l3.chain_dedup.{enabled, max_per_chain,      │
+│        corr_threshold, cluster_top_n}（仅 market=energy 生效）          │
 │    Step 2b: 子链差异化权重调制（plans/47 §B，v2.104.0+109）             │
-│      → 与 Step 1.8b 互补：去冗余管"数量"（单链 ≤ max_per_chain），      │
+│      → 与 Step 1.8b 互补：去冗余管"链内相关性"（同链高相关同信息源），  │
 │        调制管"权重"（特异因子在无效子链降权/归零）                      │
 │      → subchain_weight.py：build_subchain_weights（m[factor][子链]，    │
 │        zero/soft 双模式）/ apply_subchain_modulation / 暴露监控         │
@@ -306,6 +389,73 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │        同步 factor_weights.json 的 subchain_weights 标注）；依赖 Step 2b  │
 │        调制矩阵存在（enable_subchain_weight），否则保持观测语义零行为变更│
 │      → 质量报告新增 `subchain_gate_scale` 段（四网合一第四段）            │
+│    Step 2.5b: Regime 条件化因子权重（plans/53 §B，v2.105.0+9）            │
+│      → 因子层条件化：当前市场制度下 IC 显著为负（ic < -min_abs_ic）的      │
+│        因子权重归零/降权（regime_conditional_weight.py                    │
+│        build_regime_conditioned_weights，zero/soft 双模式）                │
+│      → 数据源：A2 落库 factor_catalog.metadata.regime_ic_profile/         │
+│        regime_scope/regime_dependent（regime_profile.py 画像：IC/ICIR/    │
+│        胜率/scope，复用 regime_validation G7 单一实现）；评估链            │
+│        `regime_ic_report` 报告段（l3_regime_ic_report_enabled 默认关 +    │
+│        energy 面板限定）；regime_series 由 RegimeSeriesBuilder（规则检测   │
+│        lookback=60，plans/53 §D 实测 K-W p=0.030 有区分力）构建            │
+│      → 接入：Step 2.5 regime 倍率调整之后乘性应用 m（与倍率叠加）；        │
+│        scope=all/unknown/无画像/当前制度 effective → m=1.0 不误杀          │
+│      → 配置：settings.yaml l3.regime_conditional.{enabled, decay_mode,    │
+│        soft_min_ratio, scope_default, min_abs_ic}（灰度默认关）            │
+│      → 晋升门槛（§C1）：regime_gate_passed——有效制度数 <                 │
+│        regime_profile.min_positive_regimes（默认 2）拒绝晋升（evolution_  │
+│        promote.py，防单制度过拟合因子）；scope 非 list 放行                │
+│    Step 2.5c: L0 宏观 Beta 层（plans/55，v2.105.0+22，灰度保守档已开启）          │
+│      → 宏观层：识别市场 Beta 方向（RISK_ON/RISK_OFF/RANGE_BOUND）并顺 β   │
+│        方向配置敞口（外部 Regime-Driven §1.3 Beta 优先：正 β 进攻、负 β  │
+│        反向做空进攻、状态不明防御；Alpha 仅作识别错误缓冲）                │
+│      → 信号（regime_beta_layer.py BetaDetector，全部日频 CFFEX 池内可算）：│
+│        金融期货合成指数（IF0/IH0/IC0/IM0/TF0/TS0 等权归一化）趋势          │
+│        MA20-MA60 + 20 日 realized vol 历史分位（门控）+ IF0/TF0 股债比    │
+│        20 日滚动 z-score（风险偏好方向）→ 软投票 + min_confidence 门槛    │
+│      → 消费 ① 信号管线 Step 3h1.5（仅 energy 且开关开启，子链 Gate 之后、 │
+│        量价方向偏置 3h2 之前）：apply_beta_bias 多空不对称——RISK_OFF 多头  │
+│        ×0.6 / 空头 ×1.2（期货反向进攻），动多空相对权重                   │
+│      → 消费 ② 组合层 build_combo（Step 5）：beta_scale 乘性并入            │
+│        exposure_final = exposure_scale × aligned_scale × beta_scale        │
+│        （RISK_OFF → off_scale=0.5 压缩总敞口，动总敞口，与 ① 职责分离防    │
+│        双重惩罚）；regime_meta 落盘 beta_state/beta_scale 可追溯            │
+│      → 消费 ③ 实盘风控（plans/55 §D）：BETA_RISK_PARAMS 在量价制度参数上  │
+│        叠加收紧（RISK_OFF → 杠杆 ×0.7、单日亏损 ×0.7，乘性取更严），       │
+│        RiskManager(config, regime, beta_state) 注入（不改 check() 内部逻辑）│
+│      → 配置：settings.yaml l3.regime_beta_layer.{enabled=false, days,      │
+│        fin_symbols, trend/vol/risk_pref 窗口与阈值, min_confidence,        │
+│        min_votes, on/off 缩放系数}；CLI --enable-regime-beta（信号管线）    │
+│      → 可观测：Prometheus fts_beta_state/fts_beta_scale；校验脚本          │
+│        scripts/regime_beta_predictive_power_check.py（K-W 区分度决策门）    │
+│      → 数据核验：CFFEX 六品种真实日线可达（kline_cache→TQ-Local 降级链）   │
+│      → 二期（未接线）：macro_regime.py 四象限（PMI/CPI，月度）作慢层/交叉  │
+│        验证；实盘 http_server 传 beta_state                                │
+│    Step 2.5d: 拥挤度体系化（plans/56，v2.105.0+25，灰度默认关）              │
+│      → 透支防御层：识别方向是否被拥挤透支（外部 Regime-Driven §7.2）——    │
+│        与 Beta 层（Step 2.5c 方向层）正交互补：Beta 管"顺不顺势"，拥挤度    │
+│        管"势有没有被透支"；拥挤既可能多头也可能空头（逼空）                │
+│      → 信号（regime_crowding.py compute_crowding_signals，6 信号合成）：   │
+│        corr_convergence（逐品种对滚动相关趋近 1 创新高）/ volume_stall     │
+│        （放量滞涨·缩量阴跌，ratio 口径）/ momentum_decay（动量差走弱）/    │
+│        vol_structure（波动突升）/ oi_concentration（OI 天量，hold 缺失     │
+│        降级）/ turnover_overheat（换手分位）→ 合成 score ∈[0,1] + 方向     │
+│        分解（long/short/neutral，逼空识别，修复 G3 全 abs 抹方向）          │
+│      → 消费 ① 组合层 build_combo（Step 5）：crowding_scale 乘性并入        │
+│        exposure_final = exposure_scale × aligned × beta × crowding        │
+│        （联合门控 build_joint_gate_scale：高置信+高拥挤 ×0.5 / 低置信+      │
+│        高拥挤 ×0.0 离场 / 其余 ×1.0，降档而非反手）                        │
+│      → 消费 ② 信号管线 Step 3h1.6（Beta 层之后）：apply_crowding_         │
+│        direction_bias——long_crowded 减多不抢反弹 / short_crowded 减空      │
+│        不追空（逼空防御），`--enable-regime-crowding` 灰度                 │
+│      → 配置：settings.yaml l3.regime_crowding.{enabled=false, days, 6 信号 │
+│        阈值, high_crowding, 联合门控系数, 方向抑制系数}                     │
+│      → 可观测：Prometheus crowding_scale/crowding_state；校验脚本          │
+│        scripts/regime_crowding_predictive_power_check.py（K-W 决策门 +     │
+│        事件研究阈值校准）                                                  │
+│      → 决策门：❌ 未通过（高拥挤样本 2/105 不足 + 事件研究命中率 0%）——     │
+│        灰度保持关闭，待阈值校准后重跑；仍无区分力则降级纯观测层             │
 │    Step 2.6: 子链质量矩阵 q[factor][子链]（plans/49，v2.104.0+112）       │
 │      → 质量层：评审质检与生命周期按"因子×子链"单元评估（张量化），与     │
 │        Step 2b 调制矩阵 m[factor][子链]（幅度层）、Step 2.5 Gate g[子链]  │
@@ -409,7 +559,7 @@ fts/
 │   ├── evolution_audit.py      # 审计/验证 Mixin（34 计划领域 E，2026-08-13）：_run_factor_audit（FactorAuditor 编排 + GAP-F08 冷启动走航优先）/ _run_walkforward_oos（独立走航）/ _run_backtest_pipeline（BacktestPipeline 薄包装）/ _run_ablation_check（消融，_ABLATION_* 类常量 + _is_blocking_ablation）/ _run_robustness_check / _run_shap_analysis / _run_causal_validation / _build_wf_config（staticmethod 纯函数），组件 auditor/backtest_pipeline/ablation_experiment/robustness_tester/shap_analyzer/causal_validator 装配于主类；_signal_cache 与 B 域共享保留引用
 │   ├── evolution_review.py     # 定期评审/数据质量 Mixin（34 计划领域 F，2026-08-13）：_run_periodic_factor_review（精英因子定期重评估：自动淘汰 GAP-I305 + 衰减反馈联动 + LogicMonitor 集成 + 状态报告）/ _get_factor_data_for_review / _register_factor_baseline / _check_factor_data_quality（均 DataQualityMonitor 薄包装），组件 data_quality_monitor 与 A 域共享；elite_tracker/feedback_loop/logic_monitor 装配于主类
 │   ├── energy_qa_review.py   # 能化链评审+质检统一管道（v2.104.0+87，方案A）：合并l2_review_energy_job 与 energy 定期质检三路检测为单一管道[0]面板→[1]重审(run_reaudit market=energy, 不合格→shadow)→[2]退化检测(单维度命中取严: |IC|<ic_threshold/降幅>drop_threshold/斜率observe→shadow; 降幅>=drop_severe/斜率retired→degraded+JSON移_deprecated)→[3]生命周期收口(AutoRetire + 冷却期回归: degraded 30交易日到期自动回归复核, 连续2次不达标→retire)→[4]Inspector→[5]统一报告; 宁严勿松——不合格因子不进组合, shadow/冷却期兜底可回归
-│   ├── evolution_prefilter.py  # 候选预筛 Mixin（34 计划领域 H，2026-08-13）：_quick_prefilter（快速预筛三元组：信号变化/标准差/快速 IC，市场自适应阈值）/ _cross_section_prefilter（横截面真实截面 IC，GAP-X01）/ _check_factor_runtime（后代运行时校验，复用 BacktestPipeline 执行路径），纯读全局上下文 data/market/forward_returns/cross_section_*/_is_cross_section
+│   ├── evolution_prefilter.py  # 候选预筛 Mixin（34 计划领域 H，2026-08-13）：_quick_prefilter（快速预筛三元组：信号变化/标准差/快速 IC，市场自适应阈值）/ _cross_section_prefilter（横截面真实截面 IC，GAP-X01）/ _check_factor_runtime（后代运行时校验，复用 BacktestPipeline 执行路径），纯读全局上下文 data/market/forward_returns/cross_section_*/_is_cross_section；阈值自适应分支 futures/energy（期货类市场 0.01，其余 0.02，v2.105.0+11 GAP-146 energy 并入期货分支）
 │   ├── evolution_promote.py   # 精英晋升/持久化 Mixin（34 计划领域 C，2026-08-13）：_promote_to_elite（精英晋升全流程：去重/结构簇配额/L2 准入去冗余/正交化闭环/高IC筛查/多重检验/影子池（v2.103.0+20 起默认关闭，FTS_EVOLUTION_SHADOW_OBSERVE=1 恢复）/种子溯源/追踪器注册，@_release_repo_after）/ _write_to_duckdb（DuckDB 主存储幂等写入）/ _scan_elite_correlations / _check_elite_correlation / _count_cluster_members / _orthogonalize_via_basis（Gram-Schmidt 基底）/ _orthogonalize_candidate（单参照 OLS）/ _load_elite_parent_factors / _write_seed_correlation_index / _get_repo（延迟初始化仓储）/ _release_repo_after（E.4 S1 写锁释放装饰器），领域独享状态 _repo/_cluster_*/_l2_*/orthogonal_basis/high_ic_screener/elite_tracker 装配于主类
 │   ├── evolution_candidate.py # 候选准入链 Mixin（34 计划领域 B，2026-08-13，B 阶段收官）：_process_candidate（Step 2-6 准入链：微观演化→三级评估→UCT 反馈→Verifier→质量评分卡→端到端回测→数据质量→6 项强制审计→消融→因果→鲁棒性→SHAP→晋升/淘汰→状态持久化），21 个跨域方法经 Callable 类型声明经 MRO 派发
 │   ├── orthogonal_basis.py     # 多因子正交基底（GAP-I206 补充, v2.72.1）：Gram-Schmidt 迭代残差化 + 基底注册/持久化
@@ -516,8 +666,8 @@ fts/
 │   ├── elite_tracker.py        # Elite 因子追踪
 │   ├── reaudit.py              # 新标准准入复审（2026-08-13）：run_reaudit（复用演化准入链 横截面评估→Verifier→审计→鲁棒性→评分卡）+ apply_reaudit_results（retain/shadow/retire 回写 + status_history 留痕）；月度任务 monthly_decay_eval_job Step A + 手动 CLI 共用
 │   ├── data_quality_monitor.py # 数据质量监控（B.1）：完整性/准确性/及时性三维指标
-│   ├── data_level_monitor.py   # 数据级质量监控（GAP-F06，v2.60.0）：缺失率/异常值/复权一致性/多源分歧
-│   ├── data_level_monitor.py   # 数据级质量监控（GAP-F06，v2.60.0）：缺失率/异常值/复权一致性/多源分歧
+│   ├── data_level_monitor.py   # 数据级质量监控（GAP-F06 + GAP-148，v2.60.0 + v2.105.0+17）：缺失率/异常值/复权一致性/多源分歧（adj_factor 派生字段豁免）
+│   ├── data_level_monitor.py   # 数据级质量监控（GAP-F06 + GAP-148，v2.60.0 + v2.105.0+17）：缺失率/异常值/复权一致性/多源分歧（adj_factor 派生字段豁免）
 │   ├── live_factor_monitor.py  # Live 因子偏离监控（C.2，v2.77.0）：30% 偏离阈值 + ingest_live_ic 实盘反馈数据源接入 + 衰减告警（GAP-I402）
 │   ├── logic_monitor.py        # 逻辑监控仪表盘（Phase C；v2.104.0+72 极端检测双口径：连续信号 z-score / 离散信号主导档位退化，修复离散突破因子系统性误报）
 │   ├── k8s_deploy.py          # K8s 部署配置
@@ -586,7 +736,7 @@ AST (ExprNode 树)
 
 ### 算子演化引擎（Phase 3+ / C.4）
 
-在 DSL 算子空间做**适应度导向的进化式搜索**，取代 `_generate_operator_factor` 的纯随机组合。`fts/factor_engine/operator_evolution.py` 提供 `OperatorEvolutionEngine`：种群初始化（validator 校验通过）→ 适应度评估（DSL executor → IC/Sharpe）→ 锦标赛选择 → 子树交叉/变异（ExprNode 层面，参数受 `param_bounds` 约束）→ 精英保留，多代迭代后取最优表达式经 `create_operator_factor` 产出 `kind=OPERATOR` 因子。设计文档见 [C.4-operator-evolution-engine-design.md](design/C.4-operator-evolution-engine-design.md)。GAP-026（GP 算子命名与 DSL 未对齐）随本引擎落地关闭。
+在 DSL 算子空间做**适应度导向的进化式搜索**，取代 `_generate_operator_factor` 的纯随机组合。`fts/factor_engine/operator_evolution.py` 提供 `OperatorEvolutionEngine`：种群初始化（validator 校验通过）→ 适应度评估（DSL executor → IC/Sharpe）→ 锦标赛选择 → 子树交叉/变异（ExprNode 层面，参数受 `param_bounds` 约束）→ 精英保留，多代迭代后取最优表达式经 `create_operator_factor` 产出 `kind=OPERATOR` 因子。设计文档见 [C.4-operator-evolution-engine-design.md](design/C.4-operator-evolution-engine-design.md)。GAP-026（GP 算子命名与 DSL 未对齐）随本引擎落地关闭。**横截面适应度（v2.105.0+11，GAP-146）**：引擎注入 `cross_section_data`/`cross_section_dates` 后，适应度评估切换为截面口径——对每品种执行 DSL 表达式 + 5 日前向收益，按共同日期对齐后逐期 Spearman IC（复用 evaluation_chain `_cs_build_matrices`/`_cs_compute_ics`，与快速预筛/正式评估同口径），消除"单品种时序高分、截面无区分度"的适应度-验收错配；训练段截取（前 60%）防数据泄露，有效品种 <5 或截面 IC 无效时按罚分处理。
 
 **多样性护栏（GAP-074，v2.100.0）**：① 父因子 UCT 失败反馈——`_select_parent_uct` 的 UCT 统计在演化失败/运行时校验失败/快速预筛失败三条 continue 路径上同步更新（`_update_uct_failure`，visits+1 无正奖励），避免失败父因子 `visits` 恒 0 导致永远选中 `parents[0]` 的选择坍缩；② 算子演化种子注入代际——`_try_operator_engine_evolution` 随机种子由 `md5(factor_id)` 改为 `md5(factor_id::generation)`，同父因子不同代产生不同搜索轨迹，消除 50 代重复执行同一确定性子任务的空转。
 
@@ -667,7 +817,8 @@ FTS (因子推演) — 支持期货横截面因子演化
 │    │   → 每日最大成交量判定主力 → 换月事件序列                      │
 │    │   → adj_factor = 切换日新合约收盘 / 旧合约收盘（比率法后复权）  │
 │    ▼                                                                │
-│ kline_cache 新增 adj_factor 列（migrate_schema 幂等补列）            │
+│ adj_factor 由 RollCalendar 读取时计算（不回写缓存，migrate_schema   │
+│ 幂等补列仅保证列存在；GAP-148 数据级监控豁免该派生字段）            │
 │    │                                                                │
 │    │ FuturesDataProvider.get_ohlcv(adjusted=True)（默认）           │
 │    │   → 原始 OHLC × 累积复权因子 → 复权序列（因子计算用）          │
@@ -1241,7 +1392,8 @@ class FactorKind(str, Enum):
 | L1 Meta-Loop | 00:00 | 每日 | 知识补给 + 种子注入（45 计划调度基线，供 01:00 合并任务消费） |
 | L2 种子评估+因子演化 | 01:00 | 每日 | **v2.105.0+3 合并任务**（原 02:00 种子 / 工作日 03:00 演化 / 周末 03:00 演化并入）：① 种子相关性预检 + 评估晋升入 elite 池（不重置演化状态计数器）；② 演化主循环（工作日 ≈10 代 / 周末 ≈50 代，生成端去重前置 Step 1.35） |
 | L2 批量挖掘 | 周日 06:00 | 每周 | 45 计划候选②：BatchMiner 批量漏斗，熔断隔离不污染演化状态 |
-| L2 周度评审 | 周日 10:00 | 每周 | 45 计划候选③：精英重审 + 衰减评估 + 自动淘汰（energy 走 `l2_energy_qa_review_job` 评审质检统一管道，全量重审+退化检测+生命周期） |
+| L2 批量子链评估 | 周日 09:00 | 每周 | **v2.105.0+16 新增**（`l2_subchain_quality_job`，subchain_eval.py）：全部 active 因子批量逐品种 IC → 子链画像 → 落库 `subchain_factor_quality` 质量矩阵（min_chain_ic=0.02，v2.105.0+16 由 0.10 校准），10:00 评审质检前刷新全量画像；无有效链因子不自动降级，metadata 标记 `pending_validation` 交进一步验证 |
+| L2 周度评审 | 周日 10:00 | 每周 | 45 计划候选③：精英重审 + 衰减评估 + 自动淘汰（energy 走 `l2_energy_qa_review_job` 评审质检统一管道，全量重审+退化检测+生命周期，退化检测消费 09:00 批量子链评估画像；**v2.105.0+18 落库影子校验**——apply=True 前强制读上次基线（state_kv `energy_qa_review/degradation_baseline`，每次运行 dispositions 快照 + 面板 `dates_digest` 指纹），无基线拒绝落库、同面板判定漂移拒绝落库、面板漂移跳过断言；`FTS_ENERGY_QA_REVIEW_APPLY` 默认 "0" dry-run 安全默认） |
 | 评审质检阀门 + 三项监控 | 04:00 | 每日 | **v2.105.0+3 合并任务**（原 04:00 因子巡检 / 04:30 逻辑监控 / 05:00 数据级监控并入）：① `_review_gate_weekly` pending 机审 + approved 复核 → ② `factor_inspector` 巡检降级（approved 豁免每日降级）→ ③ `logic_monitor` 逻辑监控 → ④ `data_level_monitor` 数据级监控——全部在 05:00 L3 之前，新因子当日 approved 进组合；v2.105.0+6 修复：④ 数据级监控检查品种=ENERGY_CHAIN_SYMBOLS 能化链 12 品种（原误用动态核心子集）、② factor_inspector 显式透传 market、③ logic_monitor mock OHLCV + 因子 params 透传（消除 KeyError） |
 | L3 Portfolio Loop（energy） | 05:00 | 工作日每日 | energy 路径（`fts portfolio run --universe energy`）：approved 硬过滤（消费当日 04:00 机审结果）→ 去重 → quality_weight 综合评分 → Step 2b 子链调制 + Step 2.5 Gate → factor_weights.json（v2.105.0 起信号管道因子选择与基础权重权威源） |
 | 期货信号管道 | 20:00 | 工作日每日 | 独立调度（GAP-072 v2.99.0 与 L3 解绑）：因子选择与基础权重由 L3 组合（factor_weights.json）提供（v2.105.0），信号管道仅做信号计算 + Regime 档位缩放权重调整；L3 组合缺失/为空 → 严格模式报错退出 |

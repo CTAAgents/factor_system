@@ -276,3 +276,85 @@ def test_operator_engine_skipped_without_forward_returns(monkeypatch, panel):
     assert calls == [], "无 forward_returns 时不应调用引擎，回退随机生成"
     assert factor["kind"] == FactorKind.OPERATOR
     assert factor.get("expression")
+
+
+# ── 7. 横截面模式适应度（GAP-146 v2.105.0+11） ─────────────
+
+
+def _make_cs_panel(
+    n_sym: int = 6,
+    n: int = 120,
+    seed: int = 7,
+) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+    """构造多品种横截面面板（共同日期一致，含 OHLCV 字段）。"""
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2024-01-01", periods=n, freq="B")
+    panel: dict[str, pd.DataFrame] = {}
+    for i in range(n_sym):
+        close = 100.0 * np.exp(np.cumsum(rng.normal(0.0005 * (i + 1), 0.01, n)))
+        panel[f"S{i}"] = pd.DataFrame(
+            {
+                "open": close * (1 + rng.normal(0, 0.002, n)),
+                "high": close * (1 + np.abs(rng.normal(0, 0.004, n))),
+                "low": close * (1 - np.abs(rng.normal(0, 0.004, n))),
+                "close": close,
+                "volume": rng.uniform(1000, 5000, n),
+            },
+            index=dates,
+        )
+    return panel, dates
+
+
+def _make_cs_engine(
+    panel: dict[str, pd.DataFrame],
+    dates: pd.DatetimeIndex,
+    **kw,
+) -> OperatorEvolutionEngine:
+    """构造横截面模式引擎（注入面板 + 共同日期 + 前 60% 训练掩码）。"""
+    n = len(dates)
+    train_mask = pd.Series([True] * int(n * 0.6) + [False] * (n - int(n * 0.6)), index=dates)
+    return OperatorEvolutionEngine(
+        data_panel=panel["S0"],
+        target_col="forward_return",
+        config=OperatorEvolutionConfig(population_size=6, max_generations=2, random_seed=5),
+        train_mask=train_mask,
+        cross_section_data=panel,
+        cross_section_dates=dates,
+        **kw,
+    )
+
+
+def test_cs_mode_insufficient_symbols_penalty():
+    """横截面模式有效品种 <5 → 罚分（GAP-146）。"""
+    panel, dates = _make_cs_panel(n_sym=4)
+    eng = _make_cs_engine(panel, dates)
+    score = eng._evaluate_fitness("ts_rank(close, 10)")
+    assert score.fitness < 0, f"品种不足应罚分, fitness={score.fitness}"
+
+
+def test_cs_mode_fitness_uses_cs_ic(monkeypatch):
+    """横截面模式 fitness = abs(截面 Spearman IC 均值)（GAP-146）。"""
+    panel, dates = _make_cs_panel()
+    eng = _make_cs_engine(panel, dates)
+    monkeypatch.setattr(
+        "fts.factor_engine.evaluation_chain._cs_compute_ics",
+        lambda sig, ret: [0.05, -0.01],
+    )
+    score = eng._evaluate_fitness("ts_rank(close, 10)")
+    assert score.fitness == pytest.approx(0.02)
+    assert score.ic == pytest.approx(0.02)
+
+
+def test_cs_mode_evolve_returns_result(monkeypatch):
+    """横截面模式完整演化可运行（GAP-146 截面适应度驱动搜索）。"""
+    panel, dates = _make_cs_panel()
+    eng = _make_cs_engine(panel, dates)
+    # 截面 IC mock 为正，保证演化推进不因噪声全灭
+    monkeypatch.setattr(
+        "fts.factor_engine.evaluation_chain._cs_compute_ics",
+        lambda sig, ret: [0.03],
+    )
+    result = eng.evolve()
+    assert result.generations_completed == 2
+    assert result.best_expression
+    assert result.best_fitness > 0

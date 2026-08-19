@@ -103,9 +103,10 @@ class CandidatePrefilter:
             return False, f"信号标准差过小: {sig_std:.2e} < 1e-6", 0.0
 
         # 检查3: 快速 IC 检查（导致 NaN 也视为无效）
-        # 期货日频单品种时序 IC 信噪比低（常见 0.01-0.02 区间），
+        # 期货/能化链日频时序 IC 信噪比低（常见 0.01-0.02 区间），
         # 阈值按市场自适应放宽，避免拦截本可进入截面评估的后代
-        ic_threshold = 0.01 if self._owner.market == "futures" else 0.02
+        # （GAP-146 v2.105.0+11: energy 链并入期货类分支 0.01）
+        ic_threshold = 0.01 if self._owner.market in ("futures", "energy") else 0.02
         fr = self._owner.forward_returns
         if fr is not None and len(fr) == len(signal):
             valid = ~(np.isnan(signal) | np.isnan(fr))
@@ -184,7 +185,8 @@ class CandidatePrefilter:
             return True, "", 0.0
 
         ic_abs = abs(float(np.mean(ics)))
-        ic_threshold = 0.01 if self._owner.market == "futures" else 0.02
+        # GAP-146 v2.105.0+11: energy 链并入期货类分支 0.01
+        ic_threshold = 0.01 if self._owner.market in ("futures", "energy") else 0.02
         if ic_abs < ic_threshold:
             return False, (f"横截面快速 IC 过低: abs(IC)={ic_abs:.4f} < {ic_threshold}"), 0.0
         return True, "", ic_abs

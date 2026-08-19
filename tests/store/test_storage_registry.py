@@ -108,3 +108,53 @@ class TestStorageDomain:
         monkeypatch.setenv("FTS_STORAGE_LANDSCAPE_PATH", str(p))
         reg = load_storage_landscape()
         assert reg.get("custom").backend == StorageBackend.PARQUET
+
+
+class TestWritePathContract:
+    """写路径契约（GAP-150，v2.105.0+18）：find_by_path 反查 + 未登记告警。"""
+
+    def test_find_by_path_matches_factor_assets_template(self, registry: StorageRegistry) -> None:
+        """模板路径匹配：factor_catalog_energy.duckdb 落在 factor_assets 域。"""
+        d = registry.find_by_path("data/factor_catalog_energy.duckdb")
+        assert d is not None
+        assert d.domain == "factor_assets"
+
+    def test_find_by_path_template_stock_futures(self, registry: StorageRegistry) -> None:
+        d = registry.find_by_path("data/factor_catalog_futures.duckdb")
+        assert d is not None
+        assert d.domain == "factor_assets"
+
+    def test_find_by_path_registered_concrete(self, registry: StorageRegistry) -> None:
+        """非模板域精确前缀匹配（run_state / state.db）。"""
+        d = registry.find_by_path("data/state.db")
+        assert d is not None
+        assert d.domain == "run_state"
+
+    def test_find_by_path_unregistered_returns_none(self, registry: StorageRegistry, tmp_path) -> None:
+        """项目根外路径（测试 tmp）→ 未登记（显式注入豁免）。"""
+        assert registry.find_by_path(tmp_path / "x.duckdb") is None
+
+    def test_warn_unregistered_write_logs(self, registry: StorageRegistry, tmp_path, caplog) -> None:
+        """未登记写路径 → warning（告警模式，不抛错）。"""
+        with caplog.at_level("WARNING", logger="fts.store.registry"):
+            d = registry.warn_unregistered_write(tmp_path / "y.db", caller="Test")
+        assert d is None
+        assert any("写路径未登记" in r.message for r in caplog.records)
+
+    def test_warn_registered_no_log(self, registry: StorageRegistry, caplog) -> None:
+        """已登记写路径 → 无告警，返回匹配域。"""
+        with caplog.at_level("WARNING", logger="fts.store.registry"):
+            d = registry.warn_unregistered_write("data/factor_catalog_energy.duckdb")
+        assert d is not None
+        assert not any("写路径未登记" in r.message for r in caplog.records)
+
+    def test_strict_unregistered_raises(self, registry: StorageRegistry, tmp_path) -> None:
+        """严格模式（strict=True）：未登记写路径 → ValueError 阻断。"""
+        with pytest.raises(ValueError, match="写路径未登记"):
+            registry.warn_unregistered_write(tmp_path / "z.db", caller="Test", strict=True)
+
+    def test_strict_registered_ok(self, registry: StorageRegistry) -> None:
+        """严格模式：已登记路径 → 不抛，返回匹配域。"""
+        d = registry.warn_unregistered_write("data/factor_catalog_futures.duckdb", strict=True)
+        assert d is not None
+        assert d.domain == "factor_assets"

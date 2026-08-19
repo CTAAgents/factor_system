@@ -5724,6 +5724,62 @@ class TestGapF16PrefilterAndRuntime:
         assert ok is True
         assert ic == 0.08
 
+    def test_cross_section_prefilter_energy_threshold_relaxed(self, tmp_memory_dir):
+        """energy 链并入期货类预筛阈值分支（GAP-146）：IC=0.015（0.01~0.02 之间）放行。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._is_cross_section = True
+        loop.market = "energy"
+        loop.cross_section_data = {f"S{i}": _make_ohlcv(50) for i in range(6)}
+        loop.cross_section_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=50))
+        with (
+            patch(
+                "fts.factor_engine.evaluation_chain._cs_execute_factors",
+                return_value=(
+                    {f"S{i}": np.ones(50) for i in range(6)},
+                    {f"S{i}": np.zeros(50) for i in range(6)},
+                ),
+            ),
+            patch(
+                "fts.factor_engine.evaluation_chain._cs_build_matrices",
+                return_value=(np.ones((50, 6)), np.zeros((50, 6))),
+            ),
+            patch(
+                "fts.factor_engine.evaluation_chain._cs_compute_ics",
+                return_value=[0.015],
+            ),
+        ):
+            ok, reason, ic = loop._cross_section_prefilter(_make_minimal_factor(), "t")
+        assert ok is True
+        assert ic == 0.015
+
+    def test_cross_section_prefilter_energy_still_rejects_weak(self, tmp_memory_dir):
+        """energy 链阈值放宽后仍拦截 <0.01 的弱 IC（GAP-146 边界）。"""
+        loop = self._make_loop(tmp_memory_dir)
+        loop._is_cross_section = True
+        loop.market = "energy"
+        loop.cross_section_data = {f"S{i}": _make_ohlcv(50) for i in range(6)}
+        loop.cross_section_dates = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=50))
+        with (
+            patch(
+                "fts.factor_engine.evaluation_chain._cs_execute_factors",
+                return_value=(
+                    {f"S{i}": np.ones(50) for i in range(6)},
+                    {f"S{i}": np.zeros(50) for i in range(6)},
+                ),
+            ),
+            patch(
+                "fts.factor_engine.evaluation_chain._cs_build_matrices",
+                return_value=(np.ones((50, 6)), np.zeros((50, 6))),
+            ),
+            patch(
+                "fts.factor_engine.evaluation_chain._cs_compute_ics",
+                return_value=[0.005],
+            ),
+        ):
+            ok, reason, _ = loop._cross_section_prefilter(_make_minimal_factor(), "t")
+        assert ok is False
+        assert "IC 过低" in reason
+
 
 class TestGapF16EvolveOneAndBatch:
     """_evolve_one method_hint 各分支 + batch 漏斗。"""

@@ -559,7 +559,16 @@ def _write_scope(timeout: float = 30.0) -> Iterator[DuckDBWriter]:
             writer.execute("DELETE FROM t WHERE symbol = ?", [s])
             writer.executemany("INSERT INTO t VALUES (?, ?)", rows)
     """
+    from fts.store import get_storage_registry
     from fts.store.duckdb_lock import duckdb_write_lock
+
+    # GAP-150 写路径契约（严格模式）：生产默认行情库必须登记；
+    # 测试 monkeypatch 替换路径时豁免（非默认即显式注入语义）
+    _prod_default = Path(__file__).resolve().parent.parent / "data" / "fts_history.duckdb"
+    if Path(_DUCKDB_PATH).resolve() == _prod_default.resolve():
+        get_storage_registry().warn_unregistered_write(
+            _DUCKDB_PATH, caller="data_futures", strict=True
+        )
 
     with duckdb_write_lock(_DUCKDB_PATH, timeout=timeout):
         writer = DuckDBWriter(_DUCKDB_PATH)

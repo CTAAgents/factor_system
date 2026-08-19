@@ -119,6 +119,9 @@ class TestResolveSymbol:
     def test_suffix0_mapping(self):
         assert TQSDKEnhanceSource()._resolve_symbol("RB0") == "KQ.m@SHFE.rb"
 
+    def test_im0_cffex_mapping(self):
+        assert TQSDKEnhanceSource()._resolve_symbol("IM0") == "KQ.m@CFFEX.IM"
+
     def test_no_suffix_auto_append(self):
         assert TQSDKEnhanceSource()._resolve_symbol("RB") == "KQ.m@SHFE.rb"
 

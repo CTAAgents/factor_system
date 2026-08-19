@@ -393,8 +393,12 @@ class EvolutionChannels:
             # 评估数据源: 横截面模式用代表序列（与 micro_evolution 一致）
             if self._owner._is_cross_section and self._owner.cross_section_data is not None:
                 data = list(self._owner.cross_section_data.values())[0].copy()
+                cs_data = self._owner.cross_section_data
+                cs_dates = self._owner.cross_section_dates
             else:
                 data = self._owner.data.copy()
+                cs_data = None
+                cs_dates = None
             target_col = "forward_return"
             if self._owner.forward_returns is None or len(self._owner.forward_returns) != len(data):
                 logger.debug("算子演化引擎跳过: 无 forward_returns 评估数据")
@@ -411,13 +415,22 @@ class EvolutionChannels:
             ) % (2**31)
 
             # 数据泄露防护: 构建训练集掩码（前 60% 数据），
-            # 确保算子演化仅在训练集上计算适应度
+            # 确保算子演化仅在训练集上计算适应度；
+            # 横截面模式（GAP-146）按共同日期构建，使截面适应度
+            # 与单序列路径同语义截取训练段
             train_ratio = 0.6
-            train_size = max(int(len(data) * train_ratio), 1)
-            train_mask = pd.Series(
-                [True] * train_size + [False] * (len(data) - train_size),
-                index=data.index,
-            )
+            if cs_dates is not None and len(cs_dates) > 0:
+                train_size = max(int(len(cs_dates) * train_ratio), 1)
+                train_mask = pd.Series(
+                    [True] * train_size + [False] * (len(cs_dates) - train_size),
+                    index=cs_dates,
+                )
+            else:
+                train_size = max(int(len(data) * train_ratio), 1)
+                train_mask = pd.Series(
+                    [True] * train_size + [False] * (len(data) - train_size),
+                    index=data.index,
+                )
 
             engine = OperatorEvolutionEngine(
                 data_panel=data,
@@ -428,6 +441,8 @@ class EvolutionChannels:
                     random_seed=seed,
                 ),
                 train_mask=train_mask,
+                cross_section_data=cs_data,
+                cross_section_dates=cs_dates,
             )
             result = engine.evolve()
             if result.best_fitness <= 0:

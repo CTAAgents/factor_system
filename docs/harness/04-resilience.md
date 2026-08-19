@@ -1,6 +1,6 @@
 # FTS 韧性设计
 
-> 版本: v2.105.0+8
+> 版本: v2.105.0+28
 > 最后更新: 2026-08-05
 
 ---
@@ -60,6 +60,28 @@
 | 盲测池/无子链归属品种 | `blind_default="avoid"`（默认回避）不参与 Gate 决策 | 配置 `blind_default="neutral"` 保留 |
 | Gate 分布构建失败（D3） | Step 2.5 异常仅告警，质量报告 `subchain_gate_distribution` 为空段 | 下一轮自动重试 |
 
+### L0 宏观 Beta 层回退路径（plans/55，v2.105.0+22）
+
+| 场景 | 降级行为 | 恢复方式 |
+|:-----|:---------|:---------|
+| Beta 层灰度未开启 | `l3.regime_beta_layer.enabled=false` 或未传 `--enable-regime-beta` → 不检测不偏置（与现状逐位一致） | 观察后开启灰度，回退一键关闭 |
+| 金融期货面板数据不足（<2 品种 / 指数 <2 行 / 无 trend+vol） | `BetaDetector.detect` 返回 `unknown` → `compute_beta_scale=1.0`、`apply_beta_bias` 不干预（零行为变更） | 数据恢复后自动检测 |
+| 股债比缺口/计算异常 | `risk_pref_z=NaN`（ffill + min_periods 兜底后仍不足）→ 降级为 trend+vol 2 信号投票，不崩溃 | 数据积累后自动恢复 3 信号 |
+| Beta 检测/消费异常 | 信号管线 Step 3h1.5 与 portfolio_loop Step 2.5 try/except 捕获 → 回退 scale=1.0 不阻断主流程，日志 `[Beta 层] 应用失败（跳过，保持现状）` / `[L3] Step 2.5: Beta 层计算失败，回退 scale=1.0` | 代码/数据修复后下一轮自动恢复 |
+| Beta 状态置信度不足 | 软投票置信度 < `min_confidence` → 视为 RANGE_BOUND（不偏置） | 信号一致性恢复后自动判定 |
+| 实盘风控 beta_state 注入失败 | `RiskManager` 异常捕获 → 回退常量（不阻断初始化） | 修复后自动注入 |
+| 二期未接线（四象限慢层/实盘 http_server 传 beta_state） | 当前不参与消费（保持现状） | 二期按 plans/55 排期接线 |
+
+### 拥挤度体系化回退路径（plans/56，v2.105.0+25）
+
+| 场景 | 降级行为 | 恢复方式 |
+|:-----|:---------|:---------|
+| 拥挤度灰度未开启 | `l3.regime_crowding.enabled=false` 或未传 `--enable-regime-crowding` → 不检测不干预（与现状逐位一致） | 决策门校准通过后开启，回退一键关闭 |
+| 面板数据不足（<2 品种 / 无 close/volume） | `compute_crowding_signals` 返回 score=0.0/neutral/fallback → 联合门控 scale=1.0、方向偏置不干预（零行为变更） | 数据恢复后自动计算 |
+| 单信号失败（如 OI 缺失） | 对应信号降级跳过（score 按可用信号归一化），不阻断合成 | 数据补齐后自动恢复 |
+| 拥挤度检测/消费异常 | 组合层 Step 2.5 与信号管线 Step 3h1.6 try/except 捕获 → 回退 scale=1.0 不阻断主流程，日志 `[L3] Step 2.5: 拥挤度计算失败` / `[拥挤度] 应用失败` | 代码/数据修复后下一轮自动恢复 |
+| 决策门未通过 | **灰度保持关闭**（当前状态）：高拥挤样本不足 + 事件研究命中率 0%，待阈值校准 | 校准 6 信号分位 + high_crowding 后重跑决策门 |
+
 ### 子链质量矩阵与生命周期回退路径（plans/49，v2.104.0+112）
 
 | 场景 | 降级行为 | 恢复方式 |
@@ -81,6 +103,28 @@
 | 非 energy 市场 | Step 2.5 子链 regime 检测跳过 → 无 Gate 并入（全链原逻辑） | 扩展到其它产业链时子链定义入 futures_universe.yaml 自动生效 |
 | Gate 并入失败（异常） | `_merge_gate_scale_into_modulation` 异常仅告警，保持观测语义（`subchain_gate_scale={}`），不阻断主流程 | 代码修复后下一轮自动恢复 |
 | 双重惩罚 | 权重层 gate_scale 已回避 avoid 链（系数 0/ratio）→ 信号层 Step 3h1 对 0 得分跳过 / soft 链不二次缩放（复用 plans/48 B3 语义） | 乘性串联天然防重复 |
+
+### 评审质检 apply 落库影子校验（v2.105.0+18，反沉降通道）
+
+`l2_energy_qa_review_job` 灰度阀门 `FTS_ENERGY_QA_REVIEW_APPLY`（默认 "0" dry-run）落库前强制一致性断言（复用 l3_signal_service `_dates_digest` 面板指纹）：
+
+| 场景 | 降级行为 | 恢复方式 |
+|:-----|:---------|:---------|
+| 无基线（未跑过 dry-run/apply） | apply=True 拒绝落库（RuntimeError），不写库不改状态 | 先以 `FTS_ENERGY_QA_REVIEW_APPLY=0` 跑一次生成基线 |
+| 同面板指纹下判定漂移 | 逐因子 (factor_id→decision) 与基线不一致 → 拒绝落库，日志列出漂移清单 | 人工确认漂移原因（代码/参数变更），复核后重跑更新基线 |
+| 面板指纹变化（数据漂移） | 跳过一致性断言（warning），放行落库 | 数据恢复稳定后下一轮自动恢复断言 |
+| 落库判定误伤（degraded 误降） | 冷却期 30 日回归自动恢复 active（JSON 自 `_deprecated` 移回） | 自动（`_scan_cooldown_regression`） |
+| 基线写入失败（state.db 不可用） | 基线断言无法读取 → 保守拒绝落库 | state.db 恢复后自动恢复 |
+
+> 反沉降通道缺口登记：retire 仍为终态（误 retire 无自动恢复路径）、无整批快照回滚命令（GAP-149~151 相邻排期）。
+
+### 写路径与数据契约校验（GAP-150/151，v2.105.0+20，严格/分级模式）
+
+| 场景 | 降级行为 | 恢复方式 |
+|:-----|:---------|:---------|
+| 写路径未登记 storage_landscape（GAP-150） | `warn_unregistered_write` 严格模式默认开启，**四写入口全覆盖（v2.105.0+21）**：`FactorRepository`（因子库）/ `StateKVStore.upsert`（状态库）/ `l3_signal_service.persist`（信号库）/ `data_futures._write_scope`（行情库）默认路径未登记抛 ValueError 阻断；env `FTS_STORAGE_WRITE_STRICT=0` 回退 warning；显式注入豁免 | 新增写路径先登记 `_data/storage_landscape.yaml` |
+| 行情加载字段缺失/全空（GAP-151 分级） | 核心字段（date/open/high/low/close/volume）→ error+跳过（`_check_kline_field_integrity` 返回 False，宁缺毋滥）；增强字段（hold/settle/pre_settle）→ warning+代理降级显式暴露（`_read_kline_cache` 代理填充前） | 修复数据源/缓存契约；核心缺失跳过、增强代理为显式降级非静默 |
+| 因子状态写入口非法值（GAP-149） | `_validate_catalog_status` 抛 ValueError（create/update/update_factor_status 三入口） | 写合法枚举值；存量非法状态扫描确认归零（energy/futures 实测 0，合法集含 archived/deprecated） |
 
 ### 熔断恢复流程
 

@@ -17,6 +17,7 @@ from .registry import (
     StorageDomain,
     StorageRegistry,
     load_storage_landscape,
+    get_storage_registry,
 )
 from .state_db import DEFAULT_STATE_DB, StateKVStore
 
@@ -25,6 +26,7 @@ __all__ = [
     "StorageDomain",
     "StorageRegistry",
     "load_storage_landscape",
+    "get_storage_registry",
     "StateKVStore",
     "DEFAULT_STATE_DB",
     "duckdb_write_lock",

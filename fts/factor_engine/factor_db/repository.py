@@ -24,6 +24,31 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# factor_catalog.status 合法枚举（GAP-149，2026-08-19）：存量小写生命周期值。
+# 与 qa/status_board.FactorStatus（大写 7 状态，看板归一）互为映射——
+# STATUS_ALIAS_MAP 负责两套体系互转；写入口在此层拦截非法值。
+# v2.105.0+19 补 archived/deprecated（futures 库生命周期终态：归档/废弃，实测
+# 132+5 条被旧监控口径误报为非法，修正后存量非法归零）。
+VALID_CATALOG_STATUS: tuple[str, ...] = (
+    "active",
+    "shadow",
+    "degraded",
+    "pending",
+    "failed",
+    "deleted",
+    "retired",
+    "archived",
+    "deprecated",
+)
+
+
+def _validate_catalog_status(status: Any) -> str:
+    """校验 factor_catalog.status 写入值合法（GAP-149），非法抛 ValueError。"""
+    s = (status or "").strip()
+    if s not in VALID_CATALOG_STATUS:
+        raise ValueError(f"非法因子状态: {status!r}（合法集: {', '.join(VALID_CATALOG_STATUS)}）")
+    return s
+
 
 class FactorRepository:
     """因子目录 Repository。
@@ -48,6 +73,23 @@ class FactorRepository:
             self._db_path = get_db_path(market or get_config().default_market)
         self._conn = None
         self._last_columns: list[str] = []
+        # GAP-150 写路径契约（v2.105.0+19 严格模式）：默认路径必须落在 storage_landscape
+        # 登记域，未登记抛 ValueError（阻断——强制先登记）；显式注入路径（测试隔离/定制）
+        # 豁免。env FTS_STORAGE_WRITE_STRICT=0 可回退告警模式。
+        if db_path is None:
+            try:
+                from fts.store import get_storage_registry
+
+                import os as _os
+
+                strict = _os.getenv("FTS_STORAGE_WRITE_STRICT", "1") == "1"
+                get_storage_registry().warn_unregistered_write(
+                    self._db_path, caller="FactorRepository", strict=strict
+                )
+            except ValueError:
+                raise  # 严格模式路径未登记：阻断（强制先登记）
+            except Exception:  # noqa: BLE001 — registry 不可用降级（告警不阻断）
+                logger.debug("[FactorRepo] 写路径契约检查跳过: %s", self._db_path)
 
     def _get_conn(self):
         """获取或创建数据库连接。
@@ -103,6 +145,8 @@ class FactorRepository:
         import hashlib
 
         conn = self._get_conn()
+        if factor.get("status"):
+            _validate_catalog_status(factor["status"])  # GAP-149 写入口枚举校验
         factor_id = factor.get("factor_id", f"fct_{uuid.uuid4().hex[:8]}")
         code = factor.get("code", "")
         code_hash = hashlib.sha256(code.encode()).hexdigest() if code else ""
@@ -209,6 +253,8 @@ class FactorRepository:
         Returns:
             是否成功
         """
+        if "status" in updates:
+            _validate_catalog_status(updates["status"])  # GAP-149 写入口枚举校验
         conn = self._get_conn()
         set_clauses = []
         params = []
@@ -259,6 +305,28 @@ class FactorRepository:
     def delete_factor(self, factor_id: str) -> bool:
         """删除因子（软删除，将状态设为 'deleted'）。"""
         return self.update_factor(factor_id, {"status": "deleted"})
+
+    def list_invalid_status(self, market: str | None = None) -> list[dict[str, Any]]:
+        """扫描库内非法状态因子（GAP-149 存量体检）：status 不在合法枚举内。
+
+        Args:
+            market: 市场过滤（None 全市场）
+
+        Returns:
+            非法状态因子明细（factor_id/name/status/market/is_elite），供人工处置。
+        """
+        placeholders = ", ".join(["?"] * len(VALID_CATALOG_STATUS))
+        sql = (
+            f"SELECT factor_id, name, status, market, is_elite FROM factor_catalog "
+            f"WHERE status NOT IN ({placeholders})"
+        )
+        params: list[Any] = [*VALID_CATALOG_STATUS]
+        if market:
+            sql += " AND market = ?"
+            params.append(market)
+        rows = self._execute(sql, params).fetchall()
+        cols = self._last_columns
+        return [dict(zip(cols, r)) for r in rows]
 
     def retire_factor(
         self,
@@ -1334,6 +1402,8 @@ class FactorStatusRepository:
         （``status``/``sharpe``/``name``/``market`` 上的二级索引）会误报
         主键冲突。通过 DROP 所有二级索引 → UPDATE → 重建索引 规避。
         """
+        if status:
+            _validate_catalog_status(status)  # GAP-149 写入口枚举校验
         from datetime import datetime, timezone
 
         conn = self._get_conn()

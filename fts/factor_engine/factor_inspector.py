@@ -566,10 +566,16 @@ class FactorReviewWorkflow:
         return ExperienceChain()
 
     def _conn(self):
-        """获取审查表连接（连接由调用方关闭）。"""
+        """获取审查表连接（连接由调用方关闭）。
+
+        db_path 显式传入时优先（CLI/测试/演化链路）；否则与因子仓库同库
+        （按 market 路由），修复评审质检阀门 review 表与因子库跨库漂移：
+        此前无 db_path 时落到默认库 factor_catalog.duckdb，导致 energy/futures
+        门禁扫描空跑（错库 bug）。
+        """
         from .factor_db import schema
 
-        return schema.get_connection(self._db_path)
+        return schema.get_connection(self._db_path or self._repo._db_path)
 
     def list_pending(
         self,

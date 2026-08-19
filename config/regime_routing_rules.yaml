@@ -1,0 +1,230 @@
+# ==============================================================================
+# FTS 分层策略路由系统 - 核心配置文件
+# 作用：定义不同 Regime (产业链状态) 下的因子筛选、策略映射与仓位管理规则
+# 版本：v1.0.0
+# 维护者：FTS Core Team
+# ==============================================================================
+
+version: "1.0.0"
+description: "Regime-Driven Strategy Routing Rules"
+
+# ==============================================================================
+# 1. 全局宏观规则 (Global Rules)
+# 作用：根据宏观市场状态，约束系统整体的风险敞口
+# ==============================================================================
+global_rules:
+  bull_market:  # 全球普涨周期 (Risk On)
+    global_position_limit: 0.8       # 允许的最大总仓位 (80%)
+    single_instrument_limit: 0.15    # 单品种最大仓位 (15%)
+    allow_short: false               # 禁止做空，趋势性做多为主
+    max_leverage: 2.0                # 最大杠杆倍数
+  
+  range_market: # 结构市/震荡市
+    global_position_limit: 0.5       # 中等总仓位 (50%)
+    single_instrument_limit: 0.10    # 单品种中等仓位 (10%)
+    allow_short: true                # 允许做空，可做结构性套利
+    max_leverage: 1.5                # 中等杠杆倍数
+  
+  bear_market:  # 全球普跌周期 (Risk Off)
+    global_position_limit: 0.2       # 低总仓位 (20%)
+    single_instrument_limit: 0.05    # 单品种低仓位 (5%)
+    allow_short: true                # 允许做空，防御或对冲
+    max_leverage: 1.0                # 无杠杆，纯现货或期货单边
+
+# ==============================================================================
+# 2. 产业链中观规则 (Sector Rules)
+# 作用：根据产业链所处的驱动逻辑，筛选和加权可用的因子池
+# 关键：解决“因子特异性”问题，实现产业链内的因子动态切换
+# ==============================================================================
+sector_rules:
+  
+  # ============================================================================
+  # 2.1. 黑色系产业链 (Black Metals)
+  # 核心逻辑：地产周期 + 铁矿成本
+  # ============================================================================
+  black_metals:
+    # 成本驱动状态 (铁矿强，钢厂被动接受成本)
+    cost_driven:
+      active_factors:
+        - "iron_ore_futures_spread"      # 铁矿期货基差 (核心)
+        - "iron_ore_inventory"            # 铁矿港口库存
+        - "coking_coal_spot_price"       # 焦炭现货价格
+      excluded_factors:
+        - "property_sales_survey"        # 需求端因子失效
+      weighting_method: "equal_weight"   # 等权重配置
+  
+    # 需求驱动状态 (地产复苏，钢厂补库)
+    demand_driven:
+      active_factors:
+        - "rebar_delivery_volume"        # 螺纹钢成交量 (核心)
+        - "hot_roll_inventory"           # 热卷社会库存
+        - "property_new_starts"         # 地产新开工面积
+      excluded_factors:
+        - "iron_ore_futures_spread"      # 成本端因子权重降低
+      weighting_method: "volume_weight"  # 按成交量加权
+  
+    # 政策驱动状态 (如环保限产)
+    policy_driven:
+      active_factors:
+        - "production_restriction_index" # 钢厂产能利用率 (核心)
+        - "coking_coal_allowance"       # 焦化厂产能
+        - "steel_mill_profit"           # 钢厂利润 (政策环境下利润修复)
+      excluded_factors:
+        - "iron_ore_futures_spread"
+        - "rebar_delivery_volume"
+      weighting_method: "capacity_weight" # 按产能加权
+
+  # ============================================================================
+  # 2.2. 有色金属产业链 (Non-Ferrous Metals)
+  # 核心逻辑：全球宏观 + 美元指数 + 工业需求
+  # ============================================================================
+  non_ferrous_metals:
+    # 宏观风险偏好驱动
+    macro_driven:
+      active_factors:
+        - "us_dollar_index"              # 美元指数 (核心)
+        - "global_pmi_index"            # 全球制造业 PMI
+        - "lf_concentration_ratio"       # 前五大有色金属品种集中度
+      excluded_factors:
+        - "industry_specific_inventory" # 行业特定库存失效
+      weighting_method: "macro_weight"   # 按宏观因子解释力加权
+  
+    # 产业库存周期驱动
+    inventory_cycle:
+      active_factors:
+        - "copper_lme_inventory"         # 伦铜 LME 库存 (核心)
+        - "aluminum_shfe_inventory"      # 上期所铝库存
+        - "zinc_inventory_change"       # 锌库存变化率
+      excluded_factors:
+        - "us_dollar_index"
+      weighting_method: "inventory_change_rate" # 按库存变化率加权
+  
+    # 产能周期驱动 (如电解铝)
+    capacity_cycle:
+      active_factors:
+        - "smelter_operating_rate"       # 电解铝厂开工率 (核心)
+        - "electricity_cost_index"       # 电力成本指数
+        - "bauxite_import_volume"        # 铝土矿进口量
+      excluded_factors:
+        - "us_dollar_index"
+      weighting_method: "production_weight"
+
+  # ============================================================================
+  # 2.3. 能源化工产业链 (Energy & Chemicals)
+  # 核心逻辑：原油成本 + 地缘政治 + 下游需求
+  # ============================================================================
+  energy_chemicals:
+    # 原油成本驱动
+    crude_driven:
+      active_factors:
+        - "brent_crude_futures"          # 布伦特原油期货 (核心)
+        - "opec_production_change"       # OPEC 产量变动
+        - "us_oil_inventory_eia"         # 美国 EIA 原油库存
+      excluded_factors:
+        - "downstream_chemical_inventory"
+      weighting_method: "crude_correlation" # 与油价相关性加权
+  
+    # 下游化工品利润驱动
+    downstream_driven:
+      active_factors:
+        - "px_refining_margin"           # PX 炼化价差 (核心)
+        - "tao_gasoline_spread"          # 汽油-原油价差
+        - "ethylene_profit_index"        # 乙烯利润指数
+      excluded_factors:
+        - "brent_crude_futures"
+      weighting_method: "profit_weight"
+  
+    # 供需再平衡状态
+    rebalancing:
+      active_factors:
+        - "suez_canal_tariff"            # 苏伊士运河通行费
+        - "red_sea_shipping_cost"        # 红海航运成本
+        - "european_natural_gas"         # 欧洲天然气价格
+      excluded_factors:
+        - "brent_crude_futures"
+        - "px_refining_margin"
+      weighting_method: "equal_weight"
+
+# ==============================================================================
+# 3. 微观品种状态与交易策略映射 (Instrument State Mapping)
+# 作用：根据品种当前的技术形态/波动状态，选择具体的交易执行策略
+# ==============================================================================
+strategy_mapping:
+  
+  # 强趋势状态 (如单边上涨/下跌)
+  strong_trend_up:
+    strategy_type: "trend_following"
+    description: "强趋势跟随策略 (顺势做多)"
+    parameters:
+      stop_loss_atr_multiple: 3.0        # 3倍 ATR 止损
+      trailing_stop: true                # 启用移动止损
+      position_add_method: "breakout"    # 突破后加仓
+      max_drawdown_tolerance: 0.15       # 允许该笔交易最大回撤 15%
+  
+  strong_trend_down:
+    strategy_type: "trend_following"
+    description: "强趋势跟随策略 (顺势做空)"
+    parameters:
+      stop_loss_atr_multiple: 3.0
+      trailing_stop: true
+      position_add_method: "breakdown"
+      max_drawdown_tolerance: 0.15
+
+  # 弱趋势状态 (趋势不明确，可能震荡)
+  weak_trend:
+    strategy_type: "breakout_preparation"
+    description: "突破前夜策略 (轻仓试探)"
+    parameters:
+      stop_loss_atr_multiple: 2.0
+      trailing_stop: false               # 不启用移动止损
+      position_add_method: "failed_breakout" # 假突破反手
+      max_drawdown_tolerance: 0.08
+  
+  # 均值回归/震荡状态
+  mean_reversion:
+    strategy_type: "range_trading"
+    description: "区间震荡策略 (高抛低吸)"
+    parameters:
+      trading_range_lookback: 20         # 回看 20 日确定区间
+      entry_atr_multiple: 2.0            # 2倍 ATR 距离入场
+      take_profit_ratio: 0.5             # 盈亏比 1:0.5 即止盈
+      stop_loss_atr_multiple: 3.0
+      max_drawdown_tolerance: 0.10
+
+  # 极端高波动状态 (风险警示)
+  high_volatility:
+    strategy_type: "grid_trading"
+    description: "网格交易策略 (风控优先)"
+    parameters:
+      grid_size_atr_multiple: 0.5        # 网格宽度为 0.5 倍 ATR
+      max_layers: 10                     # 最大 10 层网格
+      single_layer_volume_ratio: 0.1     # 每层单量为计划总仓位的 10%
+      total_exposure_limit: 0.5          # 即使填满网格，总仓位也不超过计划的 50%
+      stop_loss_method: "portfolio_drawdown" # 组合级止损
+  
+  # 流动性枯竭状态 (极端风险)
+  illiquid_market:
+    strategy_type: "liquidation_only"
+    description: "流动性回收策略 (仅平仓)"
+    parameters:
+      allow_new_position: false
+      mandatory_exit_volume_ratio: 0.2   # 若流动性持续低，强制减仓至原仓位的 20%
+      liquidity_check_interval: "10min" # 每 10 分钟检查一次流动性
+
+# ==============================================================================
+# 4. 异常状态处理与熔断机制 (Circuit Breaker)
+# 作用：在极端行情下，强制中断所有策略，保护本金
+# ==============================================================================
+circuit_breaker:
+  global_stop_loss:
+    trigger_condition: "total_portfolio_drawdown >= 0.10" # 全组合回撤超过 10%
+    action: "halt_all_trading"                              # 停止所有交易
+  
+  single_sector_stop_loss:
+    trigger_condition: "sector_drawdown >= 0.15"           # 单产业链回撤超过 15%
+    action: "halt_sector_trading"                           # 停止该产业链交易
+    
+  flash_crash_protection:
+    trigger_condition: "intraday_volatility_spike >= 5.0x_normal" # 日内波动率飙升超过平时 5 倍
+    action: "reduce_position_to_minimum"                     # 所有品种减仓至最小限额
+    cooldown_period_minutes: 60                               # 冷却期 60 分钟

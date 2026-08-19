@@ -109,6 +109,23 @@ class EconomicLogic(TypedDict, total=False):
     narrative: str  # LLM 生成的经济学解释（必填，非空）
 
 
+class InvalidWhen(TypedDict, total=False):
+    """因子失效条件声明（plans/54 P0-1，外部 Regime-Driven §3 第二问 / §6.1 invalid_when）。
+
+    因子自身显式声明"在什么市场形态下会亏钱"——把应对从黑箱变成可审计决策。
+    消费：L2 评审质检按当前 regime 命中检查（invalid_when_hits 报告段，纯观测不干预），
+    后续可扩展为自动降权/剔除（plans/54 P0-1 远期）。
+
+    regimes: 失效市场制度（bull/bear/oscillate/high_vol/low_vol）。
+    conditions: 失效触发条件（自然语言，审计可读）。
+    notes: 补充说明（如失效级别/退出路径/冷却建议）。
+    """
+
+    regimes: list[str]
+    conditions: list[str]
+    notes: str
+
+
 from .walk_forward import WalkForwardResult  # noqa: E402 — 延迟导入规避循环依赖
 
 
@@ -161,6 +178,7 @@ class FactorProgram(TypedDict, total=False):
     operator_count: Optional[int]  # 算子个数
     max_lookback: Optional[int]  # 最大 lookback (PIT 静态分析, 防未来函数)
     evaluation: Optional[FactorEvaluation]  # 三级评估结果（晋升/质检后回填）
+    invalid_when: Optional[InvalidWhen]  # 失效条件声明（plans/54 P0-1，可选；无=未声明）
 
 
 # ─── 评估结果契约 ─────────────────────────────────────────

@@ -692,7 +692,7 @@ class TestLogicMonitorJob:
         assert call.kwargs.get("params") == {"window": 10}
 
     def test_mock_data_has_ohlcv_columns(self):
-        """模拟数据含 open/high/low/close/volume，匹配因子代码 K 线字段引用。"""
+        """模拟数据含 open/high/low/close/volume/settle，匹配因子代码 K 线字段引用。"""
         fake_logic, fake_db, fake_repo_mod, fake_contracts = self._build_mocks()
         with patch.dict(
             sys.modules,
@@ -707,7 +707,7 @@ class TestLogicMonitorJob:
 
         args, kwargs = fake_logic.LogicMonitor.return_value.run.call_args
         mock_df = args[1] if len(args) > 1 else kwargs.get("data")
-        assert {"open", "high", "low", "close", "volume"} <= set(mock_df.columns)
+        assert {"open", "high", "low", "close", "volume", "settle"} <= set(mock_df.columns)
         assert (mock_df["high"] >= mock_df["low"]).all()
 
     def test_no_active_factors(self, caplog):
@@ -980,5 +980,159 @@ class TestEnergyChainPanelDays:
 
         monkeypatch.setenv("FTS_L2_PANEL_DAYS", "800")
         assert load_config().l2_panel_days == 800
+
+
+# ─── 因子级监控（GAP-149 合法状态集对齐） ────────────────
+
+
+class TestFactorLevelMonitorJob:
+    """factor_level_monitor_job：合法状态集须引用 VALID_CATALOG_STATUS（9 状态）。
+
+    v2.105.0+2 修复：硬编码子集 ('active','degraded','pending','deleted') 将
+    shadow/failed/retired/archived/deprecated 误报为非法（实测 energy 库 172 条
+    shadow 全量误报）；修复后仅真实非法状态被检出。
+    """
+
+    def _make_catalog_db(self, tmp_path):
+        """构造含 factor_catalog / factor_evaluations 的最小因子库。"""
+        import duckdb
+
+        db_path = tmp_path / "data" / "factor_catalog_energy.duckdb"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        con = duckdb.connect(str(db_path))
+        try:
+            con.execute(
+                """
+                CREATE TABLE factor_catalog (
+                    factor_id VARCHAR PRIMARY KEY,
+                    name VARCHAR,
+                    code VARCHAR,
+                    params VARCHAR,
+                    status VARCHAR,
+                    market VARCHAR,
+                    is_elite BOOLEAN,
+                    sharpe DOUBLE,
+                    max_drawdown DOUBLE,
+                    ic DOUBLE,
+                    parent_id VARCHAR
+                )
+                """
+            )
+            con.execute(
+                """
+                CREATE TABLE factor_evaluations (
+                    factor_id VARCHAR,
+                    overall_passed BOOLEAN
+                )
+                """
+            )
+        finally:
+            con.close()
+        return db_path
+
+    def _insert(self, db_path, rows):
+        import duckdb
+
+        con = duckdb.connect(str(db_path))
+        try:
+            con.executemany(
+                "INSERT INTO factor_catalog VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                rows,
+            )
+        finally:
+            con.close()
+
+    def _run_job(self, tmp_path, caplog):
+        fake_lfm = _fake_module(LiveFactorMonitor=MagicMock())
+        with (
+            patch.object(jobs, "PROJECT_ROOT", tmp_path),
+            patch.dict(sys.modules, {"fts.monitor.live_factor_monitor": fake_lfm}),
+        ):
+            caplog.set_level(logging.INFO)
+            jobs.factor_level_monitor_job()
+
+    def test_shadow_status_not_reported(self, tmp_path, caplog) -> None:
+        """shadow 为合法状态：与 active 同组不产生"非法状态"告警；真实非法值仍检出。"""
+        db_path = self._make_catalog_db(tmp_path)
+        self._insert(
+            db_path,
+            [
+                ("f1", "n1", "c1", "{}", "active", "energy", True, 0.5, 0.1, 0.05, None),
+                ("f2", "n2", "c2", "{}", "shadow", "energy", True, 0.4, 0.1, 0.05, None),
+                ("f3", "n3", "c3", "{}", "bogus_status", "energy", False, 0.1, 0.1, 0.05, None),
+            ],
+        )
+        self._run_job(tmp_path, caplog)
+
+        assert "因子级监控 完成: factors=3" in caplog.text
+        assert "非法状态: 1 条" in caplog.text  # 仅 bogus_status 命中
+
+    def test_all_legal_statuses_clean(self, tmp_path, caplog) -> None:
+        """VALID_CATALOG_STATUS 全部 9 状态均合法 → 一致性 0 项。"""
+        db_path = self._make_catalog_db(tmp_path)
+        from fts.factor_engine.factor_db.repository import VALID_CATALOG_STATUS
+
+        rows = []
+        for i, st in enumerate(VALID_CATALOG_STATUS):
+            rows.append((f"f{i}", f"n{i}", f"c{i}", "{}", st, "energy", False, 0.1, 0.1, 0.05, None))
+        self._insert(db_path, rows)
+        self._run_job(tmp_path, caplog)
+
+        assert f"因子级监控 完成: factors={len(VALID_CATALOG_STATUS)}" in caplog.text
+        assert "非法状态" not in caplog.text
+
+
+# ─── GAP-151 数据契约字段完整性断言（v2.105.0+19 分级） ─────
+
+
+class TestKlineFieldIntegrity:
+    """_check_kline_field_integrity：核心字段不可用→False 跳过；增强字段缺失→True 告警。"""
+
+    def _make_df(self, **cols):
+        import pandas as pd
+
+        return pd.DataFrame(cols)
+
+    def test_core_missing_columns_returns_false(self, caplog):
+        """核心字段（open/high/low/close/volume/date）缺失 → False + error 日志。"""
+        df = self._make_df(close=[2.0])  # 缺 date/open/high/low/volume
+        with caplog.at_level("ERROR", logger="fts.scheduler.jobs"):
+            ok = jobs._check_kline_field_integrity(df, "SC0")
+        assert ok is False
+        assert any("核心字段缺失" in r.message and "open" in r.message for r in caplog.records)
+
+    def test_core_all_empty_returns_false(self, caplog):
+        """核心字段存在但全空 → False（数据不可用，宁缺毋滥）。"""
+        df = self._make_df(
+            date=["2026-01-01"], open=[None], high=[None], low=[None], close=[None], volume=[None],
+            hold=[10], settle=[1.0], pre_settle=[1.0],
+        )
+        with caplog.at_level("ERROR", logger="fts.scheduler.jobs"):
+            ok = jobs._check_kline_field_integrity(df, "FU0")
+        assert ok is False
+
+    def test_extended_all_empty_warns_but_passes(self, caplog):
+        """增强字段全空（hold 100% 缺失场景）→ True + warning（代理降级，显式暴露）。"""
+        df = self._make_df(
+            date=["2026-01-01", "2026-01-02"], open=[1.0, 2.0], close=[2.0, 3.0],
+            high=[3.0, 4.0], low=[0.5, 1.0], volume=[100, 200],
+            hold=[None, None], settle=[1.0, 2.0], pre_settle=[1.0, 2.0],
+        )
+        with caplog.at_level("WARNING", logger="fts.scheduler.jobs"):
+            ok = jobs._check_kline_field_integrity(df, "RB0")
+        assert ok is True
+        assert any("增强字段缺失" in r.message and "hold" in r.message for r in caplog.records)
+
+    def test_complete_fields_ok_no_warning(self, caplog):
+        """核心+增强字段齐全且非空 → True 无告警。"""
+        df = self._make_df(
+            date=["2026-01-01", "2026-01-02"], open=[1.0, 2.0], close=[2.0, 3.0],
+            high=[3.0, 4.0], low=[0.5, 1.0], volume=[100, 200],
+            hold=[10, 20], settle=[1.0, 2.0], pre_settle=[1.0, 2.0],
+        )
+        with caplog.at_level("WARNING", logger="fts.scheduler.jobs"):
+            ok = jobs._check_kline_field_integrity(df, "RB0")
+        assert ok is True
+        assert not any("字段完整性" in r.message or "字段缺失" in r.message for r in caplog.records)
 
 

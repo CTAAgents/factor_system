@@ -87,6 +87,7 @@ class StateKVStore:
 
     def __init__(self, db_path: str | Path | None = None) -> None:
         self._db_path = Path(db_path or DEFAULT_STATE_DB)
+        self._is_default = db_path is None  # GAP-150：仅默认库受写路径契约约束（显式注入豁免）
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn: sqlite3.Connection | None = sqlite3.connect(
@@ -121,6 +122,13 @@ class StateKVStore:
             ts: 显式时间戳（ISO），缺省当前时间
         """
         assert self._conn is not None
+        # GAP-150 写路径契约（严格模式）：默认库写入口必须登记（显式注入豁免）
+        if self._is_default:
+            from fts.store import get_storage_registry
+
+            get_storage_registry().warn_unregistered_write(
+                self._db_path, caller="StateKVStore", strict=True
+            )
         value_json = json.dumps(value, ensure_ascii=False, default=str)
         ts_val = ts or datetime.now().isoformat()
         with self._lock:

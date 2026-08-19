@@ -111,11 +111,41 @@ _SYMBOL_MAP: dict[str, str] = {
     "IF0": "KQ.m@CFFEX.IF",
     "IH0": "KQ.m@CFFEX.IH",
     "IC0": "KQ.m@CFFEX.IC",
+    "IM0": "KQ.m@CFFEX.IM",
     "TF0": "KQ.m@CFFEX.TF",
     "T0": "KQ.m@CFFEX.T",
     "TS0": "KQ.m@CFFEX.TS",
     "TL0": "KQ.m@CFFEX.TL",
 }
+
+
+class _TqCompatLogger(logging.Logger):
+    """tqsdk 运行期 logger 兼容子类（GAP-140⑤ 配套补丁）。
+
+    tqsdk 内部 logger 依赖 shinny_structlog 的 ShinnyLogger（其 ``_log`` 接受任意 kwargs
+    并转 ``extra``），典型调用如 ``api.py:3612``::
+
+        self._logger.debug("process start", product="tqsdk-python", version=..., ...)
+
+    而 ``_import_tqsdk_safe`` 为隔离 shinny_structlog 污染已把 loggerClass 还原为标准
+    ``logging.Logger``，其 ``_log`` 不接收 ``product`` 等裸 kwargs，TqApi 构造时必然抛
+    ``TypeError: Logger._log() got an unexpected keyword argument 'product'``。
+    此子类仅忽略未知 kwargs，日志内容与级别行为与标准 Logger 完全一致，供 ``TqApi``
+    logger 使用（不影响项目其他 logger）。
+    """
+
+    def _log(
+        self,
+        level: int,
+        msg: object,
+        args: tuple,
+        exc_info: Optional[BaseException] = None,
+        extra: Optional[dict] = None,
+        stack_info: bool = False,
+        stacklevel: int = 1,
+        **kwargs: Any,
+    ) -> None:
+        super()._log(level, msg, args, exc_info=exc_info, extra=extra, stack_info=stack_info, stacklevel=stacklevel)
 
 
 def _import_tqsdk_safe():
@@ -126,6 +156,9 @@ def _import_tqsdk_safe():
     类属性重建（新 Manager 的 loggerDict 为空）；③ ``logging.getLogger`` 函数替换——
     导致 pytest caplog 捕获失效、root handlers 被清空、既有 named logger 管理状态丢失。
     此处快照-恢复隔离副作用，返回 tqsdk 模块供调用方使用。
+    同时以 ``_TqCompatLogger`` 还原 loggerClass（标准 Logger 子类，``_log`` 忽略未知
+    kwargs），保证 TqApi 运行期 logger 接受 ``debug(..., product=...)`` 裸 kwargs 调用
+    而不崩（见 ``_TqCompatLogger`` docstring）。
 
     Returns:
         tqsdk 模块对象（已导入）。
@@ -141,8 +174,11 @@ def _import_tqsdk_safe():
         logging.getLogger = snap_get_logger
         logging.Logger.root = snap_logger_root
         logging.Logger.manager = snap_manager
-        # 还原被 shinny_structlog setLoggerClass(ShinnyLogger) 污染的 manager.loggerClass
-        logging.setLoggerClass(logging.Logger)
+        # 还原被 shinny_structlog setLoggerClass(ShinnyLogger) 污染的 manager.loggerClass。
+        # 兼容层: 使用 _TqCompatLogger（标准 Logger 子类，_log 忽略未知 kwargs），
+        # 保证 TqApi 运行期全部 logger（含 getChild 子 logger）接受 debug(product=...)
+        # 等裸 kwargs 调用（api.py:3612 / auth.py:114），日志行为与标准 Logger 一致。
+        logging.setLoggerClass(_TqCompatLogger)
     return tqsdk
 
 

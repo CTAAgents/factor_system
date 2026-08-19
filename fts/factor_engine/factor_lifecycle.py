@@ -52,6 +52,28 @@ def _rolling_stats(
     return mean, std, ir
 
 
+def estimate_ic_half_life(decay_6m: Optional[float]) -> Optional[float]:
+    """估算因子 IC 半衰期（plans/54 P0-2，文档 §8.3 半衰期估计）。
+
+    与 high_ic_screener._check_signal_halflife 同口径：
+        half_life ≈ ln(0.5) / ln(1 - decay) * 126（126 ≈ 半年交易日）。
+
+    Args:
+        decay_6m: 半年衰减率（0~1，1 = 完全衰减）；None/非数值 → None。
+
+    Returns:
+        半衰期天数；零衰减 → inf（信号完全稳定）；无效输入 → None。
+    """
+    if not isinstance(decay_6m, (int, float)):
+        return None
+    raw = abs(float(decay_6m))
+    if raw >= 0.999:
+        return 1.0
+    if raw <= 0.0:
+        return float("inf")  # 零衰减 → 无穷（除零防护）
+    return float(np.log(0.5) / np.log(1.0 - raw) * 126.0)
+
+
 def factor_lifecycle_review(
     ic_series: np.ndarray,
     oos_baseline_ic: float,

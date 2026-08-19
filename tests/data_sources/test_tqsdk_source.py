@@ -219,3 +219,45 @@ class TestFetchOhlcv:
         assert _SYMBOL_MAP["M0"] == "KQ.m@DCE.m"
         # 映射表规模
         assert len(_SYMBOL_MAP) > 70
+
+
+# ─── GAP-140⑤ 兼容层：TqApi 运行期 logger ─────────────────
+
+
+class TestTqCompatLogger:
+    """兼容层验证：tqsdk 运行期 logger 接受裸 kwargs（api.py:3612 / auth.py:114）。
+
+    ``_import_tqsdk_safe`` 还原 loggerClass 后，TqApi 内部
+    ``debug("process start", product=..., version=...)`` 等调用携带自定义 kwargs，
+    标准 ``logging.Logger._log`` 不接受 → 必须由兼容子类兜住。
+    """
+
+    def test_import_restores_compat_logger_class(self, monkeypatch):
+        import logging
+
+        _install_fake_tqsdk(monkeypatch)
+        snap_cls = logging.getLoggerClass()
+        try:
+            from fts.data_sources.tqsdk_source import _TqCompatLogger, _import_tqsdk_safe
+
+            _import_tqsdk_safe()
+            # loggerClass 还原为兼容子类（标准 Logger 子类，行为一致）
+            assert logging.getLoggerClass() is _TqCompatLogger
+            assert issubclass(_TqCompatLogger, logging.Logger)
+
+            # 模拟 api.py:229 强制 DEBUG + api.py:3612 裸 kwargs 调用，不抛 TypeError
+            tq_logger = logging.getLogger("TqApi")
+            tq_logger.setLevel(logging.DEBUG)
+            tq_logger.debug(
+                "process start",
+                product="tqsdk-python",
+                version="3.10.2",
+                os="Windows",
+                py_version="3.12",
+            )
+            # 模拟 auth.py:114（ShinnyLoggerAdapter 透传 user_name 裸 kwargs）
+            tq_auth_logger = tq_logger.getChild("TqAuth")
+            tq_auth_logger.setLevel(logging.DEBUG)
+            tq_auth_logger.debug("login", user_name="tq_user")
+        finally:
+            logging.setLoggerClass(snap_cls)

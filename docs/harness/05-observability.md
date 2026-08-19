@@ -1,6 +1,6 @@
 # FTS 可观测性
 
-> 版本: v2.105.0+8
+> 版本: v2.105.0+28
 > 最后更新: 2026-08-05
 
 ---
@@ -71,6 +71,23 @@ CLI 入口 (cli.py)
 | 子链 Gate 分布 | `PortfolioLoop` Step 2.5 `[L3] Step 2.5: 子链 regime 检测完成（§C 路由）` 日志 + 质量报告 `elite_final_quality_*.json` 的 `subchain_gate_distribution` 段（各子链 decision：long/short/avoid/neutral） | 全子链 avoid（方向层全回避）→ warning（制度不明朗或检测异常） |
 | 收益来源族激活画像 | `PortfolioLoop._regime_meta.subchain_return_source`（{子链: {regime, confidence, active_styles}}） | 仅 energy + Gate 开启时非空（灰度可观测） |
 | Gate 启用状态 | `futures_signal_pipeline` Step 3h1 `[子链 Gate] 应用方向 Gate + 暴露缩放` 日志 + settings.yaml `l3.regime_gating.enabled` / CLI `--enable-regime-gating` | 开启时日志含 avoid 计数与暴露缩放品种数；关闭时无该段（与现状逐位一致） |
+
+### L0 宏观 Beta 层观测（plans/55 §E，v2.105.0+22）
+
+| 指标 | 来源 | 告警条件 |
+|:-----|:-----|:---------|
+| Beta 状态 | Prometheus `fts_beta_state`（RISK_ON/RISK_OFF/RANGE_BOUND/unknown，经 `record_regime_metrics(beta_state=...)` 落 `_regime_metrics.beta_state`）+ `PortfolioLoop._regime_meta.beta_state`（current_combo.json 落盘可追溯） | RISK_OFF 连续 N 日 + 组合未收缩敞口 → warning（Beta 层未生效） |
+| Beta 敞口倍率 | Prometheus `fts_beta_scale` + `_regime_meta.beta_scale`（build_combo 乘性并入后落盘）+ 信号管线 Step 3h1.5 `[Beta 层] ... 多头 ×x / 空头 ×x` 日志 | RISK_OFF 时 `beta_scale > 0.9` → warning（压缩未生效） |
+| Beta 信号明细 | 信号管线 `[Beta 层]` 日志（trend/risk_pref_z/置信度）+ BetaDetector 输出 `trend_score/vol_score/risk_pref_z` | `risk_pref_z` 恒 NaN（股债比缺口无法修复）→ warning |
+| Beta 启用状态 | settings.yaml `l3.regime_beta_layer.enabled` / CLI `--enable-regime-beta` + 日志段存在性 | 开启时日志含 `[Beta 层]`；关闭时无该段（与现状逐位一致） |
+
+### 拥挤度体系化观测（plans/56 §D，v2.105.0+25）
+
+| 指标 | 来源 | 告警条件 |
+|:-----|:-----|:---------|
+| 拥挤度敞口倍率 | Prometheus `crowding_scale`（经 `record_regime_metrics(crowding_scale=...)` 落 `_regime_metrics.crowding_scale`）+ `_regime_meta.crowding_scale`（current_combo.json 落盘） | 高拥挤（score≥high_crowding）时 `crowding_scale > 0.6` → warning（联合门控未收缩） |
+| 拥挤度状态 | Prometheus `crowding_state`（long/short/neutral）+ `_regime_meta.crowding_direction` + 信号管线 Step 3h1.6 `[拥挤度]` 日志（score/触发信号列表/多空因子） | long/short_crowded 触发时日志含方向因子；neutral 不干预 |
+| 决策门状态 | `reports/energy/{date}/regime_crowding_predictive_power.md`（K-W p / 事件研究命中率误报率） | 决策门未通过期间灰度保持关闭（当前状态） |
 
 ### 子链质量矩阵观测（plans/49 §D3，v2.104.0+112）
 
@@ -160,6 +177,13 @@ METRIC drift_alert{overlap=0.00,weight=1.00,o_th=0.50,w_th=0.40} 1
 - `[review] L3 池巡检 [{market}]: 扫描 {n} 个 approved 因子，退回 {m} 个`——周度 L3 池巡检统计（功能 2，`l2_review_job` Step C）
 - `[evo] 就地审核失败（不阻断晋升）: {name}: {err}`——晋升链就地审核非阻塞降级
 - 机审门禁判定原因（`AutoReviewPolicy.classify`）：`质检记录缺失（...）宁缺毋滥转人审` / `6 项审计未通过` / `多重检验（Bonferroni）未通过` / `WalkForward 窗口 N < 2` / `质量评分卡 C 级` / `高IC筛查 C 级` / `Q1-Q10 入库质检未通过` / `疑似过拟合/未来函数（ic/sharpe 超上限）`
+
+**评审质检落库影子校验日志（v2.105.0+18，反沉降通道）**：
+- `[L2评审质检][energy] 影子校验通过: %d 因子判定与基线一致`——apply 前置断言通过（同面板指纹）
+- `[L2评审质检][energy] 影子校验失败：同面板下判定漂移 %d 个因子，拒绝落库（...）`——判定漂移 → 拒绝落库（RuntimeError）
+- `[L2评审质检][energy] 无 dry-run 基线，拒绝落库：请先以 FTS_ENERGY_QA_REVIEW_APPLY=0 运行一次生成基线`——无基线拒绝
+- `[L2评审质检][energy] 面板指纹变化（数据漂移），跳过一致性断言: ...`——数据更新跳过断言（warning）
+- 基线快照：state_kv `energy_qa_review/degradation_baseline`（每次运行 upsert + state_history 追加可回放，含 panel_digest/trace_id/apply/dispositions）
 
 ### 股票信号管道标准化与权重冻结日志（GAP-076 / GAP-072，v2.101.0；已随股票管线剥离至 fts-stock，2026-08）
 

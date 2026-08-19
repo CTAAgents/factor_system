@@ -472,6 +472,13 @@ class FTSConfig:
     l3_signal_store_append_window: bool = field(
         default_factory=lambda: os.getenv("FTS_L3_SIGNAL_APPEND_WINDOW", "true").lower() == "true"
     )
+    # L3/评估链 Regime 画像报告段（plans/53 §A2）：横截面评估时构建"因子×制度"画像
+    # （regime_ic_report → 晋升 metadata 落库，供组合层条件化与晋升门槛消费）。
+    # 默认关：RegimeSeriesBuilder 滚动检测有秒级成本，批量评估场景不默认开启；
+    # 仅 energy 面板且显式开启时生效。可设 FTS_L3_REGIME_IC_REPORT=false 关闭。
+    l3_regime_ic_report_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_L3_REGIME_IC_REPORT", "false").lower() == "true"
+    )
 
     # ── 回测容量约束（v2.67.0，GAP-I501）──
     # 回测是否启用容量限制（持仓市值 ≤ 品种日均成交额 × 比例，超限截断）
@@ -528,6 +535,11 @@ class FTSConfig:
             "cluster": {"threshold": 0.7, "top_n": 1},
         }
     )
+
+    # ── Regime 画像护栏参数（plans/53 §A/§C，regime_profile.py 参数化 SSOT）──
+    # min_regime_samples/min_abs_ic: 制度画像 effective 门槛
+    # min_positive_regimes: 晋升门槛——有效制度数低于此值拒绝晋升（防单制度过拟合）
+    regime_profile: dict = field(default_factory=dict)
 
     # ── 日志 ──
     log_level: str = field(default_factory=lambda: os.getenv("FTS_LOG_LEVEL", "INFO"))

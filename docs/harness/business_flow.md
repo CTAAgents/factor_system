@@ -1,6 +1,6 @@
 # FTS 业务流程图
 
-> 版本: v2.105.0+8
+> 版本: v2.105.0+28
 > 最后更新: 2026-08-05
 
 ## 全景业务流
@@ -156,10 +156,15 @@
 周日06:00  L2 批量挖掘（l2_batch_mining）
   │      └── BatchMiner 批量漏斗（同父多后代 → 并行粗筛 → 准入链），熔断隔离不污染演化状态
   │
+周日09:00  L2 批量子链评估（l2_subchain_quality_job，v2.105.0+16）
+  │      └── 全部 active 因子逐品种 IC → 子链画像 → 落库 subchain_factor_quality 质量矩阵
+  │           （min_chain_ic=0.02；无有效链因子标记 pending_validation 不自动降级，10:00 评审质检前刷新画像）
+  │
 周日10:00  L2 周度评审（l2_review）
   │      ├── Step A reaudit 新标准重审（retain/shadow/retire）
   │      ├── Step B 衰减评估 + AutoRetire 自动淘汰
   │      └── Step C review_l3_pool 复核 L3 池 + list_pending 机审（approved 唯一收口出口，组合防抖）
+  │           （energy 走 l2_energy_qa_review_job 评审质检统一管道，退化检测消费 09:00 子链画像）
   │
 17:30  期货多源数据同步（工作日每日，Phase 14.5）→ 行情缓存更新（供次日 01:00 L2 使用）
   │
