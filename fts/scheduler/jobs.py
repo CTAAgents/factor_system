@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-
 def _get_l2_panel_days() -> int:
     """L2 训练池面板回溯天数（GAP-133 参数化，config l2_panel_days，env FTS_L2_PANEL_DAYS 可覆盖）。
 
@@ -495,7 +494,6 @@ def health_check_job() -> None:
         logger.error("[健康检查] 失败: %s", e, exc_info=True)
 
 
-
 # ── L2 批量挖掘 — 周日 06:00（45 计划候选②，周末错峰）──
 
 
@@ -924,7 +922,6 @@ def l2_energy_qa_review_job() -> None:
 # ── 逻辑监控 — 每日 22:00（B.2 逻辑审查）───────────────────
 
 
-
 def l2_subchain_quality_job(market: str | None = None) -> None:
     """批量子链质量评估（FTS 标准工作流，2026-08-19 沉淀）。
 
@@ -1054,6 +1051,36 @@ def logic_monitor_job() -> None:
             extreme_count,
             trace_id,
         )
+
+        # plan54 P0-3: 市场前提监控（面板级，监控前提而非结果——趋势/波动结构是否
+        # 仍在激活制度内；仅 energy 市场生效，前提消失告警，失败降级不阻断）
+        if market == "energy":
+            try:
+                from fts.data import FTSDataProvider
+                from fts.data_futures import ENERGY_CHAIN_SYMBOLS
+                from fts.factor_engine.regime import SectorRegimeSelector
+                from fts.monitor.logic_monitor import check_market_premise
+
+                _panel, _ = FTSDataProvider().get_futures_panel(
+                    symbols=list(ENERGY_CHAIN_SYMBOLS), days=130, trace_id=trace_id
+                )
+                _sel = SectorRegimeSelector(lookback_days=60, use_hmm=False)
+                _sector_map = {"energy": [s for s in ENERGY_CHAIN_SYMBOLS if s in _panel]}
+                _regimes = _sel.detect_all(_panel, sector_map=_sector_map)
+                _active = next(iter(_regimes.values()))["regime"] if _regimes else None
+                prem = check_market_premise(_panel, _active)
+                if not prem.premise_ok:
+                    logger.warning("[逻辑监控] 市场前提告警: %s (trace_id=%s)", prem.alert, trace_id)
+                else:
+                    logger.info(
+                        "[逻辑监控] 市场前提健康 regime=%s trend=%.4f vol_pct=%.2f (trace_id=%s)",
+                        _active,
+                        prem.trend_score,
+                        prem.vol_percentile,
+                        trace_id,
+                    )
+            except Exception as e:  # noqa: BLE001 — 前提监控失败降级，不阻断
+                logger.warning("[逻辑监控] 市场前提监控失败（降级跳过）: %s", e)
     except Exception as e:
         logger.error("[逻辑监控] 运行失败: %s (trace_id=%s)", e, trace_id)
 
@@ -1139,15 +1166,11 @@ KLINE_EXTENDED_FIELDS = ("hold", "settle", "pre_settle")
 
 
 def _check_kline_field_integrity(df: "object", symbol: str) -> bool:
-    '''数据契约字段完整性校验（GAP-151 分级）：核心字段不可用返回 False（调用方跳过），
+    """数据契约字段完整性校验（GAP-151 分级）：核心字段不可用返回 False（调用方跳过），
     增强字段缺失仅告警（代理降级链保留但显式暴露）。在代理填充前调用。
-    '''
-    core_missing = [
-        c for c in KLINE_CORE_FIELDS if c not in df.columns or int(df[c].notna().sum()) == 0
-    ]
-    ext_missing = [
-        c for c in KLINE_EXTENDED_FIELDS if c not in df.columns or int(df[c].notna().sum()) == 0
-    ]
+    """
+    core_missing = [c for c in KLINE_CORE_FIELDS if c not in df.columns or int(df[c].notna().sum()) == 0]
+    ext_missing = [c for c in KLINE_EXTENDED_FIELDS if c not in df.columns or int(df[c].notna().sum()) == 0]
     if core_missing:
         logger.error(
             "数据级监控 核心字段缺失[symbol=%s] 缺失/全空列=%s —— 数据不可用，跳过（宁缺毋滥）",
@@ -1180,7 +1203,14 @@ def _read_kline_cache(db_path: Path, symbol: str, limit: int = 120) -> "object |
 
         raw_sym = symbol.strip().upper()
         base_sym = raw_sym[:-1] if raw_sym.endswith("0") else raw_sym
-        variants = [base_sym, f"{base_sym}0", f"{base_sym}.SHFE", f"{base_sym}.DCE", f"{base_sym}.CZCE", f"{base_sym}.CFFEX"]
+        variants = [
+            base_sym,
+            f"{base_sym}0",
+            f"{base_sym}.SHFE",
+            f"{base_sym}.DCE",
+            f"{base_sym}.CZCE",
+            f"{base_sym}.CFFEX",
+        ]
 
         raw_limit = max(int(limit) * 4, 480)
 
@@ -1201,9 +1231,7 @@ def _read_kline_cache(db_path: Path, symbol: str, limit: int = 120) -> "object |
         # 扩展字段更完整的行（历史裸数据变体如 SC 的 vwap/source/oi_change 全空，
         # 与 SC0 重叠时混行导致样本缩水 + 缺失率虚高）。
         score_cols = ("hold", "settle", "vwap", "oi_change", "source", "fetched_at", "trace_id")
-        completeness = sum(
-            df[col].notna().astype(int) for col in score_cols if col in df.columns
-        )
+        completeness = sum(df[col].notna().astype(int) for col in score_cols if col in df.columns)
         df["_completeness"] = completeness
         df = df.sort_values(["date", "_completeness"], ascending=[True, False])
         df = df.drop_duplicates(subset="date", keep="first")
@@ -1282,6 +1310,7 @@ def data_level_monitor_job() -> None:
     except Exception as e:
         logger.error("数据级监控 运行失败: %s (trace_id=%s)", e, trace_id)
 
+
 def factor_level_monitor_job() -> None:
     """因子级监控任务：数据质量 + 逻辑正确性 + 实盘表现监控。
 
@@ -1335,7 +1364,9 @@ def factor_level_monitor_job() -> None:
             if invalid_status > 0:
                 consistency_issues.append(f"非法状态: {invalid_status} 条")
 
-            negative_sharpe = con.execute("SELECT COUNT(*) FROM factor_catalog WHERE sharpe < 0 AND is_elite = TRUE").fetchone()[0]
+            negative_sharpe = con.execute(
+                "SELECT COUNT(*) FROM factor_catalog WHERE sharpe < 0 AND is_elite = TRUE"
+            ).fetchone()[0]
             if negative_sharpe > 0:
                 consistency_issues.append(f"elite 因子 Sharpe < 0: {negative_sharpe} 条")
 
@@ -1367,6 +1398,7 @@ def factor_level_monitor_job() -> None:
 
             try:
                 from fts.monitor.live_factor_monitor import LiveFactorMonitor
+
                 monitor = LiveFactorMonitor()
                 elite_factors = con.execute("""
                     SELECT factor_id, name, ic, sharpe, max_drawdown
@@ -1418,7 +1450,6 @@ def factor_level_monitor_job() -> None:
 
     except Exception as e:
         logger.error("因子级监控 运行失败: %s (trace_id=%s)", e, trace_id)
-
 
 
 def _verify_field_coverage(kline_ok: bool, fundamental_ok: bool, term_ok: bool) -> dict[str, Any]:
@@ -1626,7 +1657,10 @@ def mhf_signal_job() -> None:
         SignalBridge(protocol="json", output_dir=str(PROJECT_ROOT / "signals")).publish(payload)
         logger.info(
             "[MHF] 信号发布完成: %s symbols=%d bar=%s (trace_id=%s)",
-            payload["signal_id"], payload["symbols"], payload.get("bar_time"), trace_id,
+            payload["signal_id"],
+            payload["symbols"],
+            payload.get("bar_time"),
+            trace_id,
         )
         self_serial_exec(payload, trace_id)
     except Exception as e:  # noqa: BLE001
@@ -1658,8 +1692,10 @@ def self_serial_exec(payload: dict, trace_id: str) -> None:
         )
         logger.info(
             "[MHF] 模拟执行串行完成: ok=%s targets=%d equity=%.2f (trace_id=%s)",
-            result.get("ok"), len(result.get("targets") or {}),
-            (result.get("equity") or {}).get("balance", 0.0), exec_trace,
+            result.get("ok"),
+            len(result.get("targets") or {}),
+            (result.get("equity") or {}).get("balance", 0.0),
+            exec_trace,
         )
     except Exception as e:  # noqa: BLE001
         logger.error("[MHF] 模拟执行失败: %s (trace_id=%s)", e, trace_id)

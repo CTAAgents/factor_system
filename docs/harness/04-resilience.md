@@ -1,6 +1,6 @@
 # FTS 韧性设计
 
-> 版本: v2.105.0+28
+> 版本: v3.0.0
 > 最后更新: 2026-08-05
 
 ---
@@ -81,6 +81,27 @@
 | 单信号失败（如 OI 缺失） | 对应信号降级跳过（score 按可用信号归一化），不阻断合成 | 数据补齐后自动恢复 |
 | 拥挤度检测/消费异常 | 组合层 Step 2.5 与信号管线 Step 3h1.6 try/except 捕获 → 回退 scale=1.0 不阻断主流程，日志 `[L3] Step 2.5: 拥挤度计算失败` / `[拥挤度] 应用失败` | 代码/数据修复后下一轮自动恢复 |
 | 决策门未通过 | **灰度保持关闭**（当前状态）：高拥挤样本不足 + 事件研究命中率 0%，待阈值校准 | 校准 6 信号分位 + high_crowding 后重跑决策门 |
+
+### QuantData 权威主链路降级路径（v2.105.0+32 规划，GAP-156）
+
+| 场景 | 降级行为 | 恢复方式 |
+|:-----|:---------|:---------|
+| QuantData 库不可达（DuckDB 打开失败/文件缺失/权限） | `QuantDataProvider` 熔断（连续失败 3 次 + 冷却）→ aggregator 降级链顺延 DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON → AKSHARE → SYNTHETIC，不影响其他源 | 数据/权限恢复后下一轮自动升级回 QuantData |
+| QuantData 品种缺失（88 品种 vs FTS 82，映射外品种） | 映射校验失败 → 该品种顺延降级链，不阻断面板构建 | QuantData 补品种后自动覆盖 |
+| QuantData 无 settle/amount/vwap（kline_daily 仅 OHLCV+OI） | Provider 返回 NaN → aggregator `_enhance_fields`（TQSDKEnhanceSource）补充 → 仍缺则典型价/均量代理，**标注非权威来源**（GAP-158，不硬拒） | QuantData 侧补 settle 采集后可升 L0 |
+| 期限结构权威构建失败（continuous_map 缺映射日/近远月对齐不足） | 当日 term_spread/roll_yield 缺失置 NaN，D15 算子自动跳过（数据不足不误报），不阻断主流程 | 映射数据补齐后自动恢复 |
+| 复权序列异常（QuantData 连续序列与 FTS RollCalendar 交叉验证偏离 >0.5%） | aggregator cross_check 记录分歧 `data/data_source_disagreements.jsonl`，按现有分歧处理策略降级，不静默采信 | 差异分析后统一口径 |
+
+### FTS 信号接口降级熔断（plans/57，v3.0.0，RD 消费侧容错底线）
+
+RD（Regime-Driven）经因子信号契约 v1 拉取 FTS 信号矩阵失败时的降级语义（design/F.3 §7）：
+
+| 场景 | 降级行为 | 恢复方式 |
+|:-----|:---------|:---------|
+| FTS 信号拉取失败（连续 N=3 次） | RD `signal_client` 熔断 → 冷却 5 分钟 → 降级到 RD 本地 11 因子规则法（纯本地全链路可运行） | 冷却后自动重试，恢复后回 FTS 信号消费 |
+| 信号过期（end_date < 决策日-1） | 视为过期走降级（同上），报告注明 `degraded: fts_signal_unavailable` | 下一交易日 FTS 增量追加后就绪 |
+| schema_version 不兼容 | RD 拉取时校验告警 → 降级本地规则法，不静默消费异构契约 | FTS 契约版本对齐后自动恢复 |
+| FTS 完全不可用 | RD 无 FTS 也可完整运行 = 天然回滚通道，是阶段 1 安全双轨的底层保障 | — |
 
 ### 子链质量矩阵与生命周期回退路径（plans/49，v2.104.0+112）
 

@@ -1,9 +1,9 @@
-﻿# FTS — Factor Intelligence System
+# FTS — Factor Intelligence System
 
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
 [![Tests](https://img.shields.io/badge/tests-7840%20passing-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.105.0%2B28-blue)](#)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -126,9 +126,11 @@ python scripts/futures_signal_pipeline.py --chain energy --days 120
 
 ### L3 Portfolio Loop
 
+> ⚠️ **v3.0.0（plans/57 双系统切分）**：L3 组合侧已登记退役（`retired_l3.py` + `warn_if_retired` 告警），策略合成职责迁移 Regime-Driven；本章节命令保留供存量兼容与信号矩阵基础设施使用。
+
 | 命令 | 说明 |
 |------|------|
-| `fts portfolio run [options]` | 启动 L3 组合构建 |
+| `fts portfolio run [options]` | 启动 L3 组合构建（退役登记期，仅供存量兼容） |
 
 L3 参数：
 

@@ -227,6 +227,43 @@ class CandidateProcessor:
         self._prior_evaluations.append(evaluation)
         self._owner.state_manager.increment_evaluated(state)
 
+        # ── Step 3.5: 期货特有结构约束（R1/R2 软约束灰度，v2.105.0+32，任务 B）──
+        # 基于权威数据防空谈因子：R1 校验结构字段可得性（L2 缺失字段禁依赖）；
+        # R2 energy 子链有效性（无任何 effective 子链 → 标记软降权，不硬拦截）。
+        # 仅观测标记 + 日志，不改变晋升逻辑（灰度观察后收紧）。
+        try:
+            from datetime import datetime as _dt
+
+            from fts.factor_engine.structure_constraints import (
+                check_structure_fields,
+            )
+
+            _sig = optimized_factor.get("signature") or {}
+            _r1 = check_structure_fields(list(_sig.get("input_fields") or []))
+            _l1 = evaluation.get("level_1_backtest") or {}
+            _sc_profile = (_l1.get("subchain_ic_report") or {}).get("subchain_ic_profile") or {}
+            _eff_chains = [c for c, st in _sc_profile.items() if st.get("effective")]
+            _subchain_invalid = bool(_sc_profile) and not _eff_chains
+            _meta = optimized_factor.setdefault("metadata", {})
+            _meta["structure_constraints"] = {
+                "r1": _r1,
+                "subchain_effective": _eff_chains,
+                "subchain_invalid": _subchain_invalid,
+                "checked_at": _dt.now().isoformat(),
+            }
+            if not _r1["ok"]:
+                logger.warning(
+                    "[structure][%s] L2 缺失字段禁依赖: %s",
+                    optimized_factor.get("name", "?"), _r1["l2_missing"],
+                )
+            if _subchain_invalid:
+                logger.info(
+                    "[structure][%s] 无有效子链（软降权标记，灰度不硬拦截）",
+                    optimized_factor.get("name", "?"),
+                )
+        except Exception as _e:  # noqa: BLE001 — 结构约束为观测层，失败不阻断准入链
+            logger.debug("[structure] 约束评估跳过: %s", _e)
+
         # ── UCT 反馈: 根据子因子表现更新父因子统计 ──
         self._owner._update_uct_stats(parent, evaluation)
 

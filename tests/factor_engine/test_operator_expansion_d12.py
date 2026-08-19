@@ -53,7 +53,7 @@ def _call(name, c, h, l):
     """按签名调用 D12 算子。"""
     if name in ("ts_donchian_break", "ts_donchian_mid", "ts_directional_up", "ts_directional_down"):
         return getattr(D12Ops, name)(h, l, 20)
-    if name in ("ts_adx_pos", "ts_adx_neg", "ts_adx"):
+    if name in ("ts_adx_pos", "ts_adx_neg", "ts_adx", "ts_adx_wilder", "ts_atr_ratio"):
         return getattr(D12Ops, name)(h, l, c, 14)
     if name == "ts_supertrend_signal":
         return getattr(D12Ops, name)(c, h, l, 10, 3.0)
@@ -85,6 +85,10 @@ class TestD12Finite:
 
     @pytest.mark.parametrize("name", D12_NAMES)
     def test_constant_no_exception(self, name, constant):
+        if name == "ts_adx_wilder":
+            # 常数序列下与 RD _adx_series 精确一致：DI 分母为 0 → dx 全 NaN
+            # （plans/57 §4.3 映射保真，禁止 fillna 造成真实数据漂移）
+            pytest.skip("ts_adx_wilder 常数序列全 NaN（对齐 RD 精确口径）")
         h = constant + 0.5
         l = constant - 0.5
         assert _finite(_call(name, constant, h, l)), name

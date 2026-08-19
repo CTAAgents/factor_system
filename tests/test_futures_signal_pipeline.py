@@ -33,6 +33,7 @@ from futures_signal_pipeline import (
     _compute_signal_deltas,
     _factor_set_signature,
     _load_l3_combo_factors,
+    _load_l3_combo_meta,
     _load_l3_combo_weights,
     _load_signal_factors,
     load_futures_elite_factors,
@@ -241,6 +242,56 @@ class TestLoadL3ComboWeights:
         with pytest.raises(SystemExit) as e:
             _load_l3_combo_weights(weights_path=fp)
         assert e.value.code == 1
+
+
+class TestLoadL3ComboMeta:
+    """_load_l3_combo_meta 过拟合风险元信息加载测试。"""
+
+    def test_load_full(self, tmp_path):
+        """正常加载 → combo_sharpe + qc_standards + 随机化检验。"""
+        fp = tmp_path / "factor_weights.json"
+        fp.write_text(
+            json.dumps({"weights": {"f_a": 0.5}, "combo_sharpe": 0.918}),
+            encoding="utf-8",
+        )
+        (tmp_path / "current_combo.json").write_text(
+            json.dumps(
+                {
+                    "combo_sharpe": 0.918,
+                    "qc_standards": {"synthesis_passed": False},
+                    "sharpe_randomization_passed": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        meta = _load_l3_combo_meta(weights_path=fp)
+        assert meta["combo_sharpe"] == 0.918
+        assert meta["qc_standards"] == {"synthesis_passed": False}
+        assert meta["sharpe_randomization_passed"] is True
+
+    def test_combo_missing_current_combo(self, tmp_path):
+        """current_combo.json 缺失 → 仅 combo_sharpe，不报错。"""
+        fp = tmp_path / "factor_weights.json"
+        fp.write_text(
+            json.dumps({"weights": {"f_a": 0.5}, "combo_sharpe": 0.918}),
+            encoding="utf-8",
+        )
+        meta = _load_l3_combo_meta(weights_path=fp)
+        assert meta["combo_sharpe"] == 0.918
+        assert "qc_standards" not in meta
+        assert "sharpe_randomization_passed" not in meta
+
+    def test_corrupt_weights_returns_empty(self, tmp_path):
+        """factor_weights.json 损坏 → 空 dict（不退出，报告回退静态文本）。"""
+        fp = tmp_path / "factor_weights.json"
+        fp.write_text("{not valid json", encoding="utf-8")
+        assert _load_l3_combo_meta(weights_path=fp) == {}
+
+    def test_missing_meta_fields_returns_empty(self, tmp_path):
+        """无 combo_sharpe 字段（旧产物）→ 空 dict。"""
+        fp = tmp_path / "factor_weights.json"
+        fp.write_text(json.dumps({"weights": {"f_a": 0.5}}), encoding="utf-8")
+        assert _load_l3_combo_meta(weights_path=fp) == {}
 
 
 class TestLoadL3ComboFactors:

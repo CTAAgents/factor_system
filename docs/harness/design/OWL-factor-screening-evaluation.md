@@ -1,6 +1,6 @@
 # OWL 因子分组筛选评估报告 — FTS 因子去冗余机制对标分析
 
-> 版本: v2.105.0+28
+> 版本: v3.0.0
 > 状态: 评估完成 · 未实施 · 优先级: P2
 > 负责人: FTS Agent · 关联: GAP-I206, plans/36, plans/40, factor_clustering, orthogonal_basis
 

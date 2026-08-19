@@ -1,6 +1,6 @@
 # FTS 可观测性
 
-> 版本: v2.105.0+28
+> 版本: v3.0.0
 > 最后更新: 2026-08-05
 
 ---
@@ -220,6 +220,19 @@ L3 信号矩阵服务（`l3_signal_service.py`）日志前缀统一 `[L3-SIGNAL]
 
 **SignalCache 命中观测**（plans/51 C3）：`SignalCache.stats()` 返回 `{hits, misses, entries, evictions}`；
 LRU 淘汰记录 `logger.debug`（高频场景不噪）。L3 增量复用效果由"二次运行日志对比重算因子数"验证。
+
+### L3 退役与信号契约观测（plans/57，v3.0.0）
+
+双系统切分后 FTS 侧新增观测点（design/F.3 §6 trace_id 贯穿）：
+
+| 观测点 | 位置/含义 | 级别 |
+|:-----|:---------|:-----|
+| L3 组合侧退役告警 | `fts/factor_engine/retired_l3.py` `warn_if_retired`——import 期 DeprecationWarning + 调用点告警，存量调用不再新增 | warning |
+| 退役调用图扫描 | `scripts/scan_l3_retirement.py`（只读）报告存量调用点分布，物理删除前核对依据 | info |
+| 信号契约版本指纹 | RD 决策日志记录 `{end_date + dates_digest + schema_version}`，阶段 1 双轨对账按指纹精确定位消费版本 | info |
+| 信号拉取 trace_id | RD `signal_client` 每次拉取记录 `{trace_id, market, factor_ids, end_date, rows}`（承接 FTS 父 trace_id） | info |
+| 信号降级熔断 | RD 报告注明 `degraded: fts_signal_unavailable`（design/F.3 §7） | warning |
+| 历史回填校验 | `verify_backfill_consistency` 拼接校验（重叠区容差 1e-8）通过/失败留痕 | info/warning |
 
 ### 指标字段
 

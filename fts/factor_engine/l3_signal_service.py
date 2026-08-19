@@ -329,6 +329,18 @@ def _init_tables(con) -> None:
         )
     except Exception:  # noqa: BLE001 — 旧版本不支持 IF NOT EXISTS 时忽略（列可能已存在）
         pass
+    # plans/57 信号契约 v1：追加 schema_version / factor_status / factor_scope 三列（幂等迁移）。
+    # DuckDB 1.5.x 不支持 ADD COLUMN 带约束（NOT NULL/DEFAULT），故用无约束 ADD；
+    # 写入侧恒提供全量值、读取侧 NULL 回退默认（load_signal_meta），语义等价默认列。
+    for _ddl in (
+        f"ALTER TABLE {_L3_SIGNAL_META_TABLE} ADD COLUMN IF NOT EXISTS schema_version INTEGER",
+        f"ALTER TABLE {_L3_SIGNAL_META_TABLE} ADD COLUMN IF NOT EXISTS factor_status VARCHAR",
+        f"ALTER TABLE {_L3_SIGNAL_META_TABLE} ADD COLUMN IF NOT EXISTS factor_scope JSON",
+    ):
+        try:
+            con.execute(_ddl)
+        except Exception:  # noqa: BLE001 — 旧版本不支持时忽略（列可能已存在）
+            pass
     con.execute(
         f"""CREATE TABLE IF NOT EXISTS {_L3_SIGNAL_TABLE} (
             factor_id VARCHAR NOT NULL,
@@ -371,6 +383,9 @@ def persist_signal_matrix(
     end_date: str,
     db_path: str | Path | None = None,
     params_hashes: Optional[dict[str, str]] = None,
+    factor_status_map: Optional[dict[str, str]] = None,
+    factor_scope_map: Optional[dict[str, dict[str, Any]]] = None,
+    schema_version: int = 1,
 ) -> bool:
     """将信号矩阵写入 DuckDB（D 层，短写连接 + filelock）。
 
@@ -382,6 +397,11 @@ def persist_signal_matrix(
         db_path: DuckDB 路径（默认 data/l3_signal_store.duckdb）
         params_hashes: factor_id → params_hash（真实参数哈希，plans/51 A1；
             None 时回退空参数哈希——仅限测试/兼容路径，主流程必须传真值）
+        factor_status_map: factor_id → factor_status（active/degraded/shadow/retired，
+            plans/57 契约 v1 状态传播；None 落默认 pending）
+        factor_scope_map: factor_id → {"subchain_scope": str|list, "subchain_specific": list}
+            （plans/57 契约 v1 特异因子链范围；None 落通用 {all, []}）
+        schema_version: 契约版本（FTS 侧契约变更时递增，RD 校验不兼容即降级）
 
     Returns:
         写入成功返回 True
@@ -408,6 +428,8 @@ def persist_signal_matrix(
                     fid: (params_hashes.get(fid) or _params_hash({}))
                     for fid in bundle.factor_ids
                 }
+                status_map = factor_status_map or {}
+                scope_map = factor_scope_map or {}
                 updated_at = pd.Timestamp.now().isoformat()
                 dates_digest = _dates_digest(list(bundle.dates))  # plans/52 前缀判定指纹
                 for j, fid in enumerate(bundle.factor_ids):
@@ -417,7 +439,10 @@ def persist_signal_matrix(
                         [fid, market, end_date],
                     )
                     con.execute(
-                        f"INSERT INTO {_L3_SIGNAL_META_TABLE} VALUES (?,?,?,?,?,?,?,?,?)",
+                        f"INSERT INTO {_L3_SIGNAL_META_TABLE} "
+                        "(factor_id, code_hash, params_hash, market, end_date, n_dates, n_symbols, "
+                        "updated_at, dates_digest, schema_version, factor_status, factor_scope) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,CAST(? AS JSON))",
                         [
                             fid,
                             code_hash,
@@ -428,6 +453,12 @@ def persist_signal_matrix(
                             int(bundle.signal_matrix.shape[1]),
                             updated_at,
                             dates_digest,
+                            int(schema_version),
+                            status_map.get(fid, "pending"),
+                            json.dumps(
+                                scope_map.get(fid) or {"subchain_scope": "all", "subchain_specific": []},
+                                ensure_ascii=False,
+                            ),
                         ],
                     )
                     con.execute(
@@ -532,6 +563,181 @@ def load_signal_matrix(
         symbols=symbols,
         factor_ids=factor_ids_loaded,
     )
+
+
+def load_signal_meta(
+    factor_ids: Sequence[str],
+    market: str,
+    end_date: str,
+    db_path: str | Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """读取信号矩阵 meta（D 层，只读短连接）——plans/57 契约 v1。
+
+    返回 {factor_id: {code_hash, params_hash, schema_version, factor_status,
+    factor_scope, dates_digest, n_dates, n_symbols, updated_at}}；
+    无记录/失败返回 {}（RD 侧据此判定信号缺失 → 降级）。
+
+    Args:
+        factor_ids: 待读取因子
+        market: 市场标识
+        end_date: 数据截止日
+        db_path: DuckDB 路径
+    """
+    if not factor_ids:
+        return {}
+    db_path = db_path or _default_db_path()
+    out: dict[str, dict[str, Any]] = {}
+    try:
+        con = _connect(db_path, read_only=True)
+        try:
+            rows = con.execute(
+                f"SELECT factor_id, code_hash, params_hash, schema_version, factor_status, "
+                f"factor_scope, dates_digest, n_dates, n_symbols, updated_at "
+                f"FROM {_L3_SIGNAL_META_TABLE} "
+                f"WHERE market=? AND end_date=? AND factor_id = ANY(select unnest(?::varchar[]))",
+                [market, end_date, list(factor_ids)],
+            ).fetchall()
+        finally:
+            con.close()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[L3-SIGNAL] meta 读取失败（非致命）: %s", e)
+        return out
+    for r in rows:
+        fid, scope = r[0], r[5]
+        try:
+            scope = json.loads(scope) if isinstance(scope, str) else scope
+        except Exception:  # noqa: BLE001 — 历史脏数据降级为通用范围
+            scope = {"subchain_scope": "all", "subchain_specific": []}
+        out[fid] = {
+            "code_hash": r[1],
+            "params_hash": r[2],
+            "schema_version": int(r[3] or 1),
+            "factor_status": r[4] or "pending",
+            "factor_scope": scope,
+            "dates_digest": r[6] or "",
+            "n_dates": int(r[7] or 0),
+            "n_symbols": int(r[8] or 0),
+            "updated_at": r[9],
+        }
+    return out
+
+
+def backfill_signal_matrix(
+    panel: dict[str, pd.DataFrame],
+    valid_factors: list[dict[str, Any]],
+    factor_codes: dict[str, dict[str, Any]],
+    common_dates: Sequence[Any],
+    market: str,
+    end_date: str,
+    db_path: str | Path | None = None,
+    forward_days: int = 5,
+    signal_cache: Any = None,
+    factor_status_map: Optional[dict[str, str]] = None,
+    factor_scope_map: Optional[dict[str, dict[str, Any]]] = None,
+    schema_version: int = 1,
+) -> SignalMatrixBundle:
+    """历史回填模式（plans/57 §6.5 / §6.8.3，复用 build_signal_matrix 核心）。
+
+    输入 QuantData 全历史面板 + (date_range, factor_ids)，按当前因子代码/参数
+    全量回算并持久化到指定 db_path（回填工作区，不污染生产信号库）。
+
+    版本锁定（§6.8.3 ①）：回填执行 code 与 factor_codes 内 code_hash 比对，
+    不一致（因子已演化变更）→ 日志告警并用当前 code 重算（重审本就是重新评估）；
+    code_hash+params_hash 双哈希保证回填版本与实盘一致。
+
+    Args:
+        panel: {symbol: DataFrame(OHLCV)} 全历史面板（QuantData continuous_daily）
+        valid_factors: 含 factor_id/code 的因子列表
+        factor_codes: factor_id → 因子记录（含 code/params/code_hash）
+        common_dates: 目标对齐日期序列（date_range 内全部交易日）
+        market: 市场标识
+        end_date: 数据截止日（YYYY-MM-DD，date_range 上界）
+        db_path: 回填落库路径（默认 _default_db_path()——调用方应传工作区路径隔离）
+        forward_days: 前向持有期
+        signal_cache: 可选信号缓存
+        factor_status_map / factor_scope_map: 契约 meta（plans/57 状态传播）
+        schema_version: 契约版本
+
+    Returns:
+        SignalMatrixBundle（已持久化到 db_path）
+    """
+    # 版本锁定：执行 code 与库中 code_hash 比对，不一致告警（仍用当前 code 重算）
+    for f in valid_factors:
+        fid = f.get("factor_id")
+        rec = factor_codes.get(fid) if fid else None
+        if rec is None:
+            continue
+        code = f.get("code") or rec.get("code", "")
+        known_hash = rec.get("code_hash") or _code_hash(rec.get("code", ""))
+        if _code_hash(code) != known_hash:
+            logger.warning(
+                "[L3-SIGNAL] 回填版本锁定: 因子 %s 执行 code 与库中 code_hash 不一致，"
+                "用当前 code 重算（重审口径）", fid,
+            )
+    bundle = build_signal_matrix(
+        panel, valid_factors, factor_codes, common_dates,
+        forward_days=forward_days, signal_cache=signal_cache,
+    )
+    code_hashes = {f["factor_id"]: _code_hash(f.get("code", "")) for f in valid_factors}
+    params_hashes = {f["factor_id"]: _params_hash(f.get("params", {})) for f in valid_factors}
+    persist_signal_matrix(
+        bundle, code_hashes, market, end_date, db_path,
+        params_hashes=params_hashes,
+        factor_status_map=factor_status_map,
+        factor_scope_map=factor_scope_map,
+        schema_version=schema_version,
+    )
+    return bundle
+
+
+def verify_backfill_consistency(
+    backfill_bundle: SignalMatrixBundle,
+    rolling_bundle: SignalMatrixBundle,
+    atol: float = 1e-8,
+) -> dict[str, Any]:
+    """回填矩阵 vs 存量滚动矩阵重叠区一致性校验（plans/57 §6.8.3 ④）。
+
+    按重叠 (dates, symbols, factor_ids) 切片逐因子比对最大绝对差；
+    不一致（max_diff > atol）→ 以回填为准由调用方统一口径（此处仅报告）。
+
+    Args:
+        backfill_bundle: 历史回填矩阵（310 日窗）
+        rolling_bundle: 存量滚动矩阵（300/500 日窗，重叠区 = 回填尾部）
+        atol: 容差（默认 1e-8）
+
+    Returns:
+        {"consistent": bool, "max_diff": float, "per_factor": {fid: max_diff},
+         "n_overlap_dates": int, "n_overlap_symbols": int}
+    """
+    d_b, d_r = set(map(str, backfill_bundle.dates)), set(map(str, rolling_bundle.dates))
+    overlap_dates = sorted(d_b & d_r)
+    overlap_syms = sorted(set(backfill_bundle.symbols) & set(rolling_bundle.symbols))
+    per_factor: dict[str, float] = {}
+    for fid in backfill_bundle.factor_ids:
+        if fid not in rolling_bundle.factor_ids:
+            continue
+        jb, jr = backfill_bundle.factor_ids.index(fid), rolling_bundle.factor_ids.index(fid)
+        sb, sr = backfill_bundle.symbols, rolling_bundle.symbols
+        b_idx = {s: i for i, s in enumerate(sb)}
+        r_idx = {s: i for i, s in enumerate(sr)}
+        db_idx = {str(d): i for i, d in enumerate(backfill_bundle.dates)}
+        dr_idx = {str(d): i for i, d in enumerate(rolling_bundle.dates)}
+        max_diff = 0.0
+        for d in overlap_dates:
+            for s in overlap_syms:
+                v_b = backfill_bundle.signal_matrix[db_idx[d], b_idx[s], jb]
+                v_r = rolling_bundle.signal_matrix[dr_idx[d], r_idx[s], jr]
+                if np.isfinite(v_b) and np.isfinite(v_r):
+                    max_diff = max(max_diff, abs(float(v_b) - float(v_r)))
+        per_factor[fid] = max_diff
+    max_diff = max(per_factor.values()) if per_factor else 0.0
+    return {
+        "consistent": max_diff <= atol,
+        "max_diff": max_diff,
+        "per_factor": per_factor,
+        "n_overlap_dates": len(overlap_dates),
+        "n_overlap_symbols": len(overlap_syms),
+    }
 
 
 def incremental_factor_ids(
@@ -806,8 +1012,14 @@ def _persist_factor_bundle(
     market: str,
     end_date: str,
     db_path: str | Path | None = None,
+    factor_status: str = "pending",
+    factor_scope: Optional[dict[str, Any]] = None,
+    schema_version: int = 1,
 ) -> bool:
-    """单因子完整窗信号回写（plans/52：增量追加后更新库中整窗 + meta digest）。"""
+    """单因子完整窗信号回写（plans/52：增量追加后更新库中整窗 + meta digest）。
+
+    plans/57 契约 v1：factor_status/factor_scope/schema_version 一并落 meta。
+    """
     n_dates = signal_2d.shape[0]
     bundle = SignalMatrixBundle(
         signal_matrix=signal_2d.reshape(n_dates, signal_2d.shape[1], 1),
@@ -823,6 +1035,9 @@ def _persist_factor_bundle(
         end_date,
         db_path,
         params_hashes={fid: params_hash},
+        factor_status_map={fid: factor_status},
+        factor_scope_map={fid: factor_scope} if factor_scope is not None else None,
+        schema_version=schema_version,
     )
 
 
@@ -1019,6 +1234,9 @@ __all__ = [
     "duckdb_corr_matrix",
     "persist_signal_matrix",
     "load_signal_matrix",
+    "load_signal_meta",
+    "backfill_signal_matrix",
+    "verify_backfill_consistency",
     "incremental_factor_ids",
     "load_or_build_signal_matrix",
 ]

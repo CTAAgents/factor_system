@@ -25,7 +25,12 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
+from .retired_l3 import warn_if_retired
+
 logger = logging.getLogger(__name__)
+
+# 退役登记（plans/57 §4.1：资金分配平移 RD 后 FTS 侧标记弃用）
+warn_if_retired("capital_allocator")
 
 
 def compute_position_target(

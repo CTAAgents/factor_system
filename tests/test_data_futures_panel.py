@@ -5,8 +5,9 @@ tests/test_data_futures_panel.py — 期货面板 common_dates 多数对齐 + �
   1. get_futures_panel: 全品种日期交集为空时，common_dates 仍返回多数共有日期
   2. get_futures_panel: 全部品种数据失败时降级合成数据
   3. 方向校正按日期定位（df.index.get_loc），品种日期错位不污染 IC
-  4. 品种名称映射 FUTURES_SYMBOL_NAMES（82 品种全量）
+  4. 品种名称映射 FUTURES_SYMBOL_NAMES（84 品种全量）
   5. 主力合约判定 get_dominant_contracts（contract_kline 最新交易日最大成交量）
+  6. 全期货覆盖规划 FUTURES_COVERAGE_PLAN（plans/57 §9 步骤0，P0-P3 84 品种）
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from fts.data_futures import (
+    FUTURES_COVERAGE_PLAN,
     FUTURES_SYMBOL_NAMES,
     FUTURES_SUBSET,
     FuturesDataProvider,
@@ -116,6 +118,40 @@ class TestSymbolNames:
         assert FUTURES_SYMBOL_NAMES["SC0"] == "原油"
         assert FUTURES_SYMBOL_NAMES["AU0"] == "黄金"
         assert FUTURES_SYMBOL_NAMES["SA0"] == "纯碱"
+
+
+# ═══════════════════════════════════════════════════════════
+# 6. 全期货覆盖规划（plans/57 §9 步骤0）
+# ═══════════════════════════════════════════════════════════
+
+
+class TestCoveragePlan:
+    def test_coverage_union_equals_universe(self):
+        """P0-P3 并集 = FUTURES_SUBSET（84 品种全覆盖，无遗漏无越界）。"""
+        cov_syms = {s for v in FUTURES_COVERAGE_PLAN.values() for s in v["symbols"]}
+        assert cov_syms == set(FUTURES_SUBSET)
+        assert len(cov_syms) == 84
+
+    def test_coverage_levels_disjoint(self):
+        """四优先级级别间品种互不重叠。"""
+        sets = [set(v["symbols"]) for v in FUTURES_COVERAGE_PLAN.values()]
+        for i in range(len(sets)):
+            for j in range(i + 1, len(sets)):
+                assert not (sets[i] & sets[j])
+
+    def test_p0_energy_24(self):
+        """P0 能源化工 24 品种先行（存量因子重审衔接对象）。"""
+        p0 = set(FUTURES_COVERAGE_PLAN["P0_energy_chemicals"]["symbols"])
+        assert len(p0) == 24
+        assert {"SC0", "TA0", "L0", "MA0", "RU0"} <= p0
+
+    def test_coverage_chains_in_sector_map(self):
+        """覆盖级别声明的产业链名均存在于 sector_map（17 产业链细化）。"""
+        from fts.data_futures import FUTURES_SECTOR_MAP
+
+        for v in FUTURES_COVERAGE_PLAN.values():
+            for chain in v["chains"]:
+                assert chain in FUTURES_SECTOR_MAP, f"覆盖链 {chain} 不在 sector_map"
 
 
 # ═══════════════════════════════════════════════════════════

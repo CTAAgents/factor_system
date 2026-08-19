@@ -542,6 +542,144 @@ class TestLoadOrBuildIncremental:
         )
         assert np.allclose(inc.signal_matrix, full.signal_matrix, equal_nan=True)
 
+
+# ═══════════════════════════════════════════════════════════════
+# plans/57 信号契约 v1（schema_version / factor_status / factor_scope）
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestSignalContractV1:
+    def test_meta_columns_roundtrip(self, tmp_path):
+        """plans/57：meta 三列（schema_version/factor_status/factor_scope）写读一致。"""
+        from fts.factor_engine.l3_signal_service import load_signal_meta
+
+        panel = _mk_panel(n_days=30, symbols=("RB",))
+        f = _mk_factor("f1", window=2)
+        dates = sorted(panel["RB"].index)
+        db = tmp_path / "l3_signal.duckdb"
+        bundle = build_signal_matrix(panel, [f], {f["factor_id"]: f}, dates)
+        persist_signal_matrix(
+            bundle,
+            {"f1": "h1"},
+            "futures",
+            "2026-08-16",
+            db_path=str(db),
+            params_hashes={"f1": "p1"},
+            factor_status_map={"f1": "active"},
+            factor_scope_map={"f1": {"subchain_scope": ["聚酯链"], "subchain_specific": ["TA0"]}},
+            schema_version=1,
+        )
+        meta = load_signal_meta(["f1"], "futures", "2026-08-16", db_path=str(db))
+        assert meta["f1"]["factor_status"] == "active"
+        assert meta["f1"]["schema_version"] == 1
+        assert meta["f1"]["params_hash"] == "p1"
+        assert meta["f1"]["factor_scope"]["subchain_scope"] == ["聚酯链"]
+        assert meta["f1"]["factor_scope"]["subchain_specific"] == ["TA0"]
+
+    def test_meta_defaults(self, tmp_path):
+        """plans/57：未传 status/scope → 默认 pending / 通用范围 {all, []}。"""
+        from fts.factor_engine.l3_signal_service import load_signal_meta
+
+        panel = _mk_panel(n_days=20, symbols=("CU",))
+        f = _mk_factor("f1", window=2)
+        dates = sorted(panel["CU"].index)
+        db = tmp_path / "l3_signal.duckdb"
+        bundle = build_signal_matrix(panel, [f], {f["factor_id"]: f}, dates)
+        persist_signal_matrix(bundle, {"f1": "h1"}, "futures", "2026-08-16", db_path=str(db))
+        meta = load_signal_meta(["f1"], "futures", "2026-08-16", db_path=str(db))
+        assert meta["f1"]["factor_status"] == "pending"
+        assert meta["f1"]["schema_version"] == 1
+        assert meta["f1"]["factor_scope"] == {"subchain_scope": "all", "subchain_specific": []}
+
+    def test_load_signal_meta_missing(self, tmp_path):
+        """plans/57：无记录 → {}（RD 侧判定信号缺失 → 降级）。"""
+        from fts.factor_engine.l3_signal_service import load_signal_meta
+
+        db = tmp_path / "nope.duckdb"
+        assert load_signal_meta(["f1"], "futures", "2026-08-16", db_path=str(db)) == {}
+
+
+class TestBackfillSignalMatrix:
+    def test_backfill_persists_with_meta(self, tmp_path):
+        """plans/57 §6.5：历史回填入口构建 + 落库 + meta 状态传播。"""
+        from fts.factor_engine.l3_signal_service import (
+            _code_hash,
+            backfill_signal_matrix,
+            load_signal_meta,
+        )
+
+        panel = _mk_panel(n_days=40, symbols=("RB", "CU"))
+        f = _mk_factor("f1", window=3)
+        factor_codes = {f["factor_id"]: f}
+        dates = sorted(set.intersection(*[set(df.index) for df in panel.values()]))
+        db = tmp_path / "backfill.duckdb"
+        bundle = backfill_signal_matrix(
+            panel, [f], factor_codes, dates, "futures", "2026-08-16",
+            db_path=str(db), factor_status_map={"f1": "shadow"},
+        )
+        assert bundle.factor_ids == ["f1"]
+        meta = load_signal_meta(["f1"], "futures", "2026-08-16", db_path=str(db))
+        assert meta["f1"]["factor_status"] == "shadow"
+        # 版本锁定：执行 code 与库中 code_hash 一致 → 无告警且回填成功
+        assert meta["f1"]["code_hash"] == _code_hash(f["code"])
+
+    def test_backfill_isolated_workspace(self, tmp_path):
+        """plans/57 §6.8.3：回填工作区与生产库隔离（不同 db_path 互不污染）。"""
+        from fts.factor_engine.l3_signal_service import backfill_signal_matrix, load_signal_meta
+
+        panel = _mk_panel(n_days=30, symbols=("RB",))
+        f = _mk_factor("f1", window=2)
+        factor_codes = {f["factor_id"]: f}
+        dates = sorted(panel["RB"].index)
+        prod = tmp_path / "prod.duckdb"
+        work = tmp_path / "workspace.duckdb"
+        backfill_signal_matrix(
+            panel, [f], factor_codes, dates, "futures", "2026-08-16",
+            db_path=str(work), factor_status_map={"f1": "active"},
+        )
+        # 生产库无记录（隔离生效）
+        assert load_signal_meta(["f1"], "futures", "2026-08-16", db_path=str(prod)) == {}
+        assert load_signal_meta(["f1"], "futures", "2026-08-16", db_path=str(work))["f1"]["factor_status"] == "active"
+
+
+class TestVerifyBackfillConsistency:
+    def _bundles(self):
+        """直接构造含有效信号值的 bundle（不依赖因子执行环境）。"""
+        from fts.factor_engine.l3_signal_service import SignalMatrixBundle
+
+        dates = pd.date_range("2024-01-01", periods=20, freq="D")
+        mat = np.random.default_rng(0).normal(size=(20, 2, 1))
+        return SignalMatrixBundle(
+            signal_matrix=mat,
+            forward_returns=np.full((20, 2), np.nan),
+            dates=list(dates),
+            symbols=["RB", "CU"],
+            factor_ids=["f1"],
+        )
+
+    def test_consistent_overlap(self):
+        """plans/57 §6.8.3 ④：同源数据重叠区 max_diff ≤ 1e-8 → consistent。"""
+        from fts.factor_engine.l3_signal_service import verify_backfill_consistency
+
+        b1 = self._bundles()
+        res = verify_backfill_consistency(b1, b1)
+        assert res["consistent"] is True
+        assert res["max_diff"] == 0.0
+
+    def test_detect_drift(self):
+        """plans/57 §6.8.3 ④：回填/滚动矩阵被改动 → 不一致告警（调用方统一口径）。"""
+        from fts.factor_engine.l3_signal_service import verify_backfill_consistency
+
+        b1 = self._bundles()
+        b2 = self._bundles()
+        b2.signal_matrix[-1, 0, 0] += 0.5  # 注入漂移
+        res = verify_backfill_consistency(b1, b2)
+        assert res["consistent"] is False
+        assert res["max_diff"] > 1e-8
+        assert res["n_overlap_dates"] > 0
+
+
+class TestLoadOrBuildIncrementalLegacy:
     def test_legacy_meta_without_digest(self, tmp_path):
         """plans/52：meta 无 dates_digest（旧库）→ 前缀未知 → 降级全量，结果正确。"""
         import duckdb

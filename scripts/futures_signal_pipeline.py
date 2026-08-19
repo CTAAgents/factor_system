@@ -373,6 +373,43 @@ def _load_l3_subchain_meta(weights_path: str | Path) -> tuple[dict[str, dict[str
         return {}, {}
 
 
+def _load_l3_combo_meta(weights_path: str | Path | None = None) -> dict[str, Any]:
+    """加载 L3 组合过拟合风险元信息（供 trading_advice 第 7 节动态展示）。
+
+    combo_sharpe 读 factor_weights.json；qc_standards / sharpe_randomization_passed
+    为 L3 重算组合详情，补充读同目录 current_combo.json（两者 updated_at 一致）。
+    任一文件缺失 / JSON 损坏 → 返回空 dict（报告回退静态文本，不阻断主路径）。
+
+    Args:
+        weights_path: factor_weights.json 路径；None 用默认 L3 组合权重文件
+
+    Returns:
+        {"combo_sharpe": float, "qc_standards": dict, "sharpe_randomization_passed": bool}
+    """
+    fp = (
+        Path(weights_path)
+        if weights_path
+        else PROJECT_ROOT / "memory" / "portfolio" / "futures" / "factor_weights.json"
+    )
+    meta: dict[str, Any] = {}
+    try:
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        if isinstance(data.get("combo_sharpe"), (int, float)):
+            meta["combo_sharpe"] = float(data["combo_sharpe"])
+    except (json.JSONDecodeError, OSError):
+        return meta
+    combo_path = fp.with_name("current_combo.json")
+    try:
+        combo = json.loads(combo_path.read_text(encoding="utf-8"))
+        if isinstance(combo.get("qc_standards"), dict):
+            meta["qc_standards"] = combo["qc_standards"]
+        if isinstance(combo.get("sharpe_randomization_passed"), bool):
+            meta["sharpe_randomization_passed"] = combo["sharpe_randomization_passed"]
+    except (json.JSONDecodeError, OSError):
+        pass
+    return meta
+
+
 def _load_l3_combo_factors(
     l3_weights: dict[str, float],
     market: str = "futures",
@@ -1104,6 +1141,7 @@ def _generate_trading_advice_report(
     name_fn: callable,
     price_fn: callable,
     contract_fn: callable,
+    l3_combo_meta: dict[str, Any] | None = None,
 ) -> None:
     """生成交易建议报告（独立于信号排名报告）。
 
@@ -1316,7 +1354,24 @@ def _generate_trading_advice_report(
     if max_weight > 0.3 + 1e-9:
         w(f"| **因子集中风险** | 当前 Top 因子权重 {max_weight:.1%} > 30% | 建议增加多样性或手动限制 |")
     w("| **流动性风险** | 部分品种流动性不足 | 主力合约优先，避开持仓量 < 1 万手的品种 |")
-    w("| **过拟合风险** | 组合夏普 1.12，Verifier 未通过 | 不过度依赖信号，严格止损 |")
+    combo_sharpe = (l3_combo_meta or {}).get("combo_sharpe")
+    if combo_sharpe is not None:
+        # 动态读取 L3 组合真实数据（combo_sharpe + qc_standards + 随机化检验）
+        qc = (l3_combo_meta or {}).get("qc_standards") or {}
+        rand_passed = (l3_combo_meta or {}).get("sharpe_randomization_passed")
+        parts = []
+        if rand_passed is not None:
+            parts.append(f"随机化检验{'通过' if rand_passed else '未通过'}")
+        synth_passed = qc.get("synthesis_passed")
+        if synth_passed is not None:
+            parts.append(f"合成增益{'通过' if synth_passed else '未通过'}")
+        desc = f"组合夏普 {combo_sharpe:.2f}"
+        if parts:
+            desc += "，" + "，".join(parts)
+        w(f"| **过拟合风险** | {desc} | 不过度依赖信号，严格止损 |")
+    else:
+        # 元信息缺失（文件缺失/损坏/旧产物）→ 回退静态文本，不阻断主路径
+        w("| **过拟合风险** | 组合夏普 1.12，Verifier 未通过 | 不过度依赖信号，严格止损 |")
     w()
 
     # ── 8. 今日交易执行计划 ──
@@ -1456,6 +1511,9 @@ def main(
         subchain_weights, symbol_chain = _load_l3_subchain_meta(
             PROJECT_ROOT / "memory" / "portfolio" / "energy" / "factor_weights.json"
         )
+        l3_combo_meta = _load_l3_combo_meta(
+            PROJECT_ROOT / "memory" / "portfolio" / "energy" / "factor_weights.json"
+        )
         factors = _load_l3_combo_factors(
             l3_weights,
             market=ENERGY_CHAIN_MARKET,
@@ -1469,6 +1527,7 @@ def main(
     else:
         l3_weights = _load_l3_combo_weights()
         subchain_weights, symbol_chain = {}, {}
+        l3_combo_meta = _load_l3_combo_meta()
         factors = _load_l3_combo_factors(l3_weights)
         # 同步剔除 DuckDB 中缺失因子的权重（与因子池保持一致）
         kept_names = {f.get("name") for f in factors}
@@ -2544,6 +2603,7 @@ def main(
         name_fn=_name,
         price_fn=_price,
         contract_fn=_contract,
+        l3_combo_meta=l3_combo_meta,
     )
 
     return 0

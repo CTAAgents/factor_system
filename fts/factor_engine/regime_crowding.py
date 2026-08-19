@@ -1,6 +1,9 @@
 """
 fts.factor_engine.regime_crowding — 拥挤度体系化（plans/56）。
 
+⚠️ 已退役（plans/57 §4.1/§5.3，2026-08-20）：拥挤度门控职责迁移至 Regime-Driven
+`crowding_gate`（本模块权威口径平移，接口不变）。FTS 侧标记弃用，仅存量调用点兼容。
+
 哲学依据（外部 Regime-Driven §7.2）：Beta 方向识别之后，还要识别方向是否已被
 **拥挤透支**——期货多空双向下，拥挤既可能发生在多头，也可能发生在空头（如大举
 做空后的逼空）。价值不在"经常对"，而在"错的时候亏得少"。
@@ -37,7 +40,12 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field
 
+from .retired_l3 import warn_if_retired
+
 logger = logging.getLogger(__name__)
+
+# 退役登记（plans/57 §4.1：拥挤度平移 RD 后 FTS 侧标记弃用）
+warn_if_retired("regime_crowding")
 
 # ─── 方向定义 ─────────────────────────────────────────────
 

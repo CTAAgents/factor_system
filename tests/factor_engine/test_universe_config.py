@@ -47,9 +47,11 @@ class TestLoaderApply:
         p = _write_tmp_yaml(tmp_path, _base_cfg())
         monkeypatch.setattr(df, "_FUTURES_UNIVERSE_YAML", p)
         assert df._load_futures_universe_config() is True
-        assert len(df.FUTURES_SUBSET) == 82
-        assert len(df.ENERGY_CHAIN_SYMBOLS) == 12
-        assert len(df.ENERGY_CHAIN_HOLDOUT) == 8
+        # 与真实 YAML 等价（plans/57 全期货覆盖：82→84 增 T0/TL0；
+        # 2026-08-19 橡胶子链 RU0/BR0 入训练池 12→14，盲测池 8→9）
+        assert len(df.FUTURES_SUBSET) == 84
+        assert len(df.ENERGY_CHAIN_SYMBOLS) == 14
+        assert len(df.ENERGY_CHAIN_HOLDOUT) == 9
 
     def test_missing_yaml_falls_back(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(df, "_FUTURES_UNIVERSE_YAML", tmp_path / "not_exist.yaml")
@@ -105,7 +107,8 @@ class TestDynamicRecompute:
         p = _write_tmp_yaml(tmp_path, cfg)
         monkeypatch.setattr(df, "_FUTURES_UNIVERSE_YAML", p)
         assert df._load_futures_universe_config() is True
-        assert len(df.ENERGY_CHAIN_SYMBOLS) == 11
+        # 基线训练池 14（含 RU0/BR0，2026-08-19）→ 移除 TA0 后 13
+        assert len(df.ENERGY_CHAIN_SYMBOLS) == 13
         assert "TA0" not in df.ENERGY_CHAIN_SYMBOLS
         assert "TA0" in df.ENERGY_CHAIN_HOLDOUT  # TA0 回到盲测池
         assert not (set(df.ENERGY_CHAIN_SYMBOLS) & set(df.ENERGY_CHAIN_HOLDOUT))

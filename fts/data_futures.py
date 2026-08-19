@@ -672,6 +672,16 @@ class FuturesDataProvider:
             from fts.data_sources.tdx_local_source import TdxLocalSource
 
             sources: list = []
+            # QuantData 权威源置首（v2.105.0+32 主链路切换，GAP-156）：
+            # QUANTDATA → TDX_LOCAL → TQ_PYTHON → AKSHARE → SYNTHETIC
+            try:
+                from fts.data_sources.quantdata_provider import QuantDataProvider
+
+                qd = QuantDataProvider()
+                # 不在这探活 — 让 aggregator 的熔断器管理失败状态
+                sources.append(qd)
+            except Exception as _e:
+                logger.debug("QuantDataProvider 实例化失败，跳过权威源 [%s]", _e)
             try:
                 tq = TdxLocalSource()
                 # 不在这探活 — 让 aggregator 的熔断器管理失败状态
@@ -1295,9 +1305,9 @@ class FuturesDataProvider:
         )
 
 
-# ─── 期货品种子集（82 个连续合约）───────────────────────────
+# ─── 期货品种子集（84 个连续合约）───────────────────────────
 
-# 来自 AKShare futures_display_main_sina() 的完整列表
+# 来自 AKShare futures_display_main_sina() 的完整列表（+ T0/TL0 国债，plans/57 全期货覆盖）
 FUTURES_SUBSET: list[str] = [
     # 大商所 (dce) — 22 个
     "V0",
@@ -1374,13 +1384,15 @@ FUTURES_SUBSET: list[str] = [
     "LU0",
     "BC0",
     "EC0",
-    # 中金所 (cffex) — 6 个
+    # 中金所 (cffex) — 8 个
     "IF0",
     "TF0",
     "IH0",
     "IC0",
     "TS0",
     "IM0",
+    "T0",
+    "TL0",
     # 广期所 (gfex) — 5 个
     "SI0",
     "LC0",
@@ -1707,6 +1719,9 @@ ENERGY_CHAIN_L1_DEBATES_DIR: str = "memory/debates/energy"
 
 _FUTURES_UNIVERSE_YAML = Path(__file__).resolve().parent.parent / "config" / "futures_universe.yaml"
 
+# 全期货覆盖优先级规划（plans/57 §9 步骤0，P0→P3 扩展路线；YAML coverage_priority 加载后覆盖）
+FUTURES_COVERAGE_PLAN: dict[str, dict[str, object]] = {}
+
 
 def _load_futures_universe_config() -> bool:
     """加载 config/futures_universe.yaml 并覆盖品种池/产业链常量。
@@ -1765,6 +1780,7 @@ def _load_futures_universe_config() -> bool:
     global ENERGY_CHAIN_MIN_HOLDOUT_ROWS
     global ENERGY_CHAIN_L1_MEMORY_DIR, ENERGY_CHAIN_L1_POOL_PATH
     global ENERGY_CHAIN_L1_INJECT_DIR, ENERGY_CHAIN_L1_DEBATES_DIR
+    global FUTURES_COVERAGE_PLAN
 
     FUTURES_SUBSET = list(universe)
     FUTURES_CORE_SUBSET = list(core_subset)
@@ -1790,6 +1806,27 @@ def _load_futures_universe_config() -> bool:
     ENERGY_CHAIN_L1_POOL_PATH = str(ew["l1_pool_path"])
     ENERGY_CHAIN_L1_INJECT_DIR = str(ew["l1_inject_dir"])
     ENERGY_CHAIN_L1_DEBATES_DIR = str(ew["l1_debates_dir"])
+
+    # 全期货覆盖优先级规划（plans/57 §9 步骤0，best-effort：缺失/损坏不阻断主配置）。
+    # 校验：每级 symbols ⊆ universe、级别间交集为空、四级并集 = universe。
+    _coverage: dict[str, dict[str, object]] = {}
+    raw_cov = cfg.get("coverage_priority")
+    if isinstance(raw_cov, dict) and raw_cov:
+        try:
+            cov_sets: list[set[str]] = []
+            for key, item in raw_cov.items():
+                syms = list(item["symbols"])  # type: ignore[index]
+                assert set(syms) <= uni_set, f"coverage_priority[{key}] 存在 universe 外品种"
+                cov_sets.append(set(syms))
+                _coverage[key] = {"chains": list(item["chains"]), "symbols": syms}  # type: ignore[index]
+            for i in range(len(cov_sets)):
+                for j in range(i + 1, len(cov_sets)):
+                    assert not (cov_sets[i] & cov_sets[j]), "coverage_priority 级别间品种重叠"
+            assert set().union(*cov_sets) == uni_set, "coverage_priority 并集 != universe"
+        except (KeyError, TypeError, ValueError, AssertionError) as e:
+            logger.warning("coverage_priority 校验失败，覆盖规划不加载: %s", e)
+            _coverage = {}
+    FUTURES_COVERAGE_PLAN = _coverage
     logger.info("品种池/产业链配置已从 %s 加载（SSOT）", _FUTURES_UNIVERSE_YAML.name)
     return True
 
@@ -1917,6 +1954,8 @@ FUTURES_SYMBOL_NAMES: dict[str, str] = {
     "IC0": "中证500",
     "TS0": "2年期国债",
     "IM0": "中证1000",
+    "T0": "10年期国债",
+    "TL0": "30年期国债",
     # 广期所 (gfex)
     "SI0": "工业硅",
     "LC0": "碳酸锂",
@@ -2010,6 +2049,8 @@ _SYMBOL_MARK_NAMES: dict[str, str] = {
     "IC0": "中证500指数期货",
     "TS0": "2年期国债期货",
     "IM0": "中证1000股指期货",
+    "T0": "10年期国债期货",
+    "TL0": "30年期国债期货",
     # 广期所
     "SI0": "工业硅",
     "LC0": "碳酸锂",

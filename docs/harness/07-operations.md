@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v2.105.0+28
+> 版本: v3.0.0
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,12 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v3.0.0** | **2026-08-20** | **双系统切分架构级发布（plans/57 阶段 0-13 全部完成，major bump v2.105.0+33 → v3.0.0）：FTS 角色重定位为因子生产系统，策略合成职责迁移 Regime-Driven——① 信号契约 v1（design/F.3：l3_signal_meta 追加 schema_version/factor_status/factor_scope 三列 + 历史回填 + 决策/训练双模式隔离 + 增量幂等 + 新鲜度校验 + 降级熔断）；② FTS L3 组合侧退役登记（retired_l3.py 35 项 + import 期 DeprecationWarning + warn_if_retired 告警，存量调用点兼容不删码；物理删除为后续独立里程碑）；③ RD 承接（strategy_synthesis/combo_verifier/money_management/crowding_gate 权威替换/backtest_engine 消费信号矩阵/L2 子链化 5 子链）；④ 全期货覆盖规划（config/futures_universe.yaml coverage_priority P0-P3，84 品种/17 产业链）；⑤ 存量因子集中重审管道（review_legacy_factors.py 分族 FDR-BH + audit 分层抽样）；验收（2026-08-20）：阶段 0 A/B（状态一致率 92.04%/方向一致率 97.55%）+ 阶段 1 双轨对账（信号余弦 1.0000/组合方向 100%/绩效差 0.000000）全门槛通过 + 因子映射 10/12 Spearman=1.0000 + 全量回归 8129 passed（残留 21 项预存，登记 GAP-158）；文档同步全部 Harness 文档（01-architecture 双系统切分章节/02-lifecycle Phase 48/03-configuration 新配置/04-resilience 信号降级熔断/05-observability 退役观测/06-testing 测试数/08-gap GAP-154~158/09-advancement 里程碑/business_flow 角色边界/factor_lifecycle 退役登记/execution_modes/production_plan/README/CODE_WIKI）** |** |
+| **v2.105.0+33** | **2026-08-20** | **plans/57 双系统切分：阶段1真实双轨对账全门槛通过 + 步骤12 FTS L3 组合侧退役登记** |** |
+| **v2.105.0+32** | **2026-08-19** | **QuantData 权威主链路切换（规划）：`fts/data_sources/quantdata_provider.py`（duckdb 只读短连接直读 continuous_daily/continuous_map/kline_daily，FTS_QUANTDATA_HOME 配置）+ DataSource 枚举 QUANTDATA + aggregator 降级链头部插入（QUANTDATA→DUCKDB_CACHE→TDX_LOCAL→TQ_PYTHON→AKSHARE→SYNTHETIC）+ 品种映射 RB0↔RB（88 vs 82）+ 复权策略（QuantData 自带 adj_factor，RollCalendar 降级避免双重复权）+ 期限结构权威构建（continuous_map 近远月→term_spread/roll_yield，D15 算子接线）+ settle 非权威标注 + 字段权威矩阵 L0/L1/L2（GAP-156/157/158 登记，fundamental 禁依赖）；外部因子导入管道（extract_* 升级为常态化带准入评估管道）与演化挖掘期货结构约束随主链路落地** |** |
+| **v2.105.0+31** | **2026-08-19** | **逻辑监控市场前提段扩展至非 energy 链路+预存测试修复+发布说明** |** |
+| **v2.105.0+30** | **2026-08-19** | **GAP-155 premise 窗口固定(252d)+high_vol 标签前提交叉验证** |** |
+| **v2.105.0+29** | **2026-08-19** | **energy active 因子回填 regime 画像（plans/53 A2）** |** |
 | **v2.105.0+28** | **2026-08-19** | **GAP-154 修复 TQSDK 增强源品种映射缺 IM0（_SYMBOL_MAP 补 CFFEX.IM，增强层 IM0 hold 取数恢复）；测试 +1** |** |
 | **v2.105.0+27** | **2026-08-19** | **修复 TQSDK 数据源运行期 Logger 兼容（GAP-140⑤ 配套补丁）：_import_tqsdk_safe 还原 loggerClass 后 TqApi 内部 debug(product=/user_name=) 裸 kwargs 调用触发 Logger._log TypeError，导致信号管道/数据级监控 TQSDK 全品种降级；以 _TqCompatLogger（标准 Logger 子类，_log 忽略未知 kwargs）替代 setLoggerClass(logging.Logger)，TQSDK 取数恢复真实数据通路，测试 +1（test_tqsdk_source TestTqCompatLogger）** |** |
 | **v2.105.0+26** | **2026-08-19** | **plans/54 全部方向落地：P0-1 invalid_when + P0-2 半衰期 + P0-3 前提监控 + P1-3 观察期 + P2-1/2/3 组合深化 + P3-1 假设书审查** |** |

@@ -74,9 +74,10 @@ class FuturesDataAggregator:
     熔断器: 每源独立计数器 + 冷却时间
     """
 
-    # 默认 K 线主路径（5 级降级）
+    # 默认 K 线主路径（6 级降级；QUANTDATA 权威源 v2.105.0+32 主链路切换）
     DEFAULT_KLINE_SOURCES: tuple[str, ...] = (
         DataSource.DUCKDB_CACHE.value,
+        DataSource.QUANTDATA.value,
         DataSource.TDX_LOCAL.value,
         DataSource.TQ_PYTHON.value,
         DataSource.AKSHARE.value,

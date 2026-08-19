@@ -39,12 +39,13 @@ class CandidateStatus(str, Enum):
 
 
 class DataSource(str, Enum):
-    """FTS 数据源枚举 — 10 个成员。
+    """FTS 数据源枚举 — 11 个成员。
 
     对应多源数据融合策略中的源标识符。
     """
 
     DUCKDB_CACHE = "DUCKDB_CACHE"  # DuckDB 本地缓存（主路径 Top1）
+    QUANTDATA = "QUANTDATA"  # QuantData 权威数据源（D:\QuantData，v2.105.0+32 主链路切换）
     TQ_LOCAL = "TQ_LOCAL"  # 通达信本地 HTTP（已废弃，7721 端口不存在，v2.87.0 起由 TDX_LOCAL 统一承载）
     TQ_PYTHON = "TQ_PYTHON"  # 通达信 TQ-Python SDK
     AKSHARE = "AKSHARE"  # AKShare 即时获取（降级）

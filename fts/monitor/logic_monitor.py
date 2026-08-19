@@ -191,6 +191,7 @@ def check_market_premise(
     trend_min: float = 0.02,
     vol_min_percentile: float = 0.5,
     vol_max_percentile: float = 0.7,
+    vol_window: int = 252,
 ) -> MarketPremiseResult:
     """市场前提监控（plans/54 P0-3，外部 Regime-Driven §9.2）。
 
@@ -204,6 +205,8 @@ def check_market_premise(
         trend_min: 趋势结构下限（|MA20-MA60|/MA60，默认 0.02）。
         vol_min_percentile: 高波制度下 vol 分位下限（默认 0.5，仍在高位）。
         vol_max_percentile: 震荡制度下 vol 分位上限（默认 0.7，未爆波）。
+        vol_window: vol 分位历史窗口（默认 252，对齐 regime.py _VOL_HISTORY_DAYS；
+            固定窗口消除面板长度导致的分位漂移，GAP-155）。
 
     Returns:
         MarketPremiseResult；面板不足 → 前提视为健康（不误报）。
@@ -233,6 +236,8 @@ def check_market_premise(
     rets = idx.pct_change().dropna()
     vol = rets.rolling(20).std() * np.sqrt(252)
     vol_h = vol.dropna()
+    if vol_window > 0:
+        vol_h = vol_h.iloc[-vol_window:]  # GAP-155: 固定分位窗口，消除面板长度漂移
     vol_percentile = float((vol_h <= vol.iloc[-1]).mean()) if not vol_h.empty else 0.5
 
     # 按制度约束对应维度（其余维度不约束，防跨制度误报）

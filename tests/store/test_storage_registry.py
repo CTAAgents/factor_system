@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from fts.store import StorageBackend, StorageDomain, StorageRegistry, load_storage_landscape
@@ -149,9 +151,19 @@ class TestWritePathContract:
         assert not any("写路径未登记" in r.message for r in caplog.records)
 
     def test_strict_unregistered_raises(self, registry: StorageRegistry, tmp_path) -> None:
-        """严格模式（strict=True）：未登记写路径 → ValueError 阻断。"""
+        """严格模式（strict=True）：项目根内未登记写路径 → ValueError 阻断。"""
+        # 项目根内未登记路径（GAP-150 严格模式语义；项目根外 tmp 属显式注入豁免，
+        # 兼容 GAP-129 测试隔离重定向，见 find_by_path 注释，2026-08-20）
         with pytest.raises(ValueError, match="写路径未登记"):
-            registry.warn_unregistered_write(tmp_path / "z.db", caller="Test", strict=True)
+            registry.warn_unregistered_write(
+                str(Path(__file__).resolve().parents[2] / "memory" / "_strict_unregistered_tmp.db"),
+                caller="Test", strict=True,
+            )
+
+    def test_strict_outside_root_exempt(self, registry: StorageRegistry, tmp_path) -> None:
+        """严格模式：项目根外路径（测试 tmp / 外部库）→ 豁免不抛（GAP-129 隔离兼容）。"""
+        # 不抛且返回 None（显式注入豁免）
+        assert registry.warn_unregistered_write(tmp_path / "z.db", caller="Test", strict=True) is None
 
     def test_strict_registered_ok(self, registry: StorageRegistry) -> None:
         """严格模式：已登记路径 → 不抛，返回匹配域。"""

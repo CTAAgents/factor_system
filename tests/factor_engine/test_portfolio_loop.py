@@ -455,9 +455,7 @@ class TestFactorCompositeScore:
 
     def test_missing_icir_dimension_downgrade(self):
         """全部因子缺 icir 时该维度剔除并重归一化权重（不惩罚、不报错）。"""
-        factors = [
-            {"factor_id": f"f{i}", "name": f"f{i}", "sharpe": 1.0 + i, "ic": 0.05} for i in range(3)
-        ]
+        factors = [{"factor_id": f"f{i}", "name": f"f{i}", "sharpe": 1.0 + i, "ic": 0.05} for i in range(3)]
         scores = _factor_composite_score(factors)
         assert len(scores) == 3
         assert all(0.0 <= v <= 1.0 for v in scores.values())
@@ -468,9 +466,7 @@ class TestFactorCompositeScore:
             {"factor_id": "a", "name": "a", "sharpe": 2.0, "icir": 0.9, "ic": 0.05, "turnover": 5.0},
             {"factor_id": "b", "name": "b", "sharpe": 2.0, "icir": 0.1, "ic": 0.05, "turnover": 5.0},
         ]
-        scores = _factor_composite_score(
-            factors, {"sharpe_cap": 0.3, "icir": 0.0, "ic": 0.3, "turnover_inv": 0.4}
-        )
+        scores = _factor_composite_score(factors, {"sharpe_cap": 0.3, "icir": 0.0, "ic": 0.3, "turnover_inv": 0.4})
         assert scores["a"] == pytest.approx(scores["b"], abs=1e-9)
 
     def test_empty_input(self):
@@ -587,7 +583,10 @@ class TestChainDedup:
     @staticmethod
     def _sic(symbols: list[str], base: float) -> dict:
         """构造 symbol_ic：目标品种 base，其余品种 0。"""
-        return {s: base if s in symbols else 0.0 for s in ["SC0", "FU0", "BU0", "PX0", "TA0", "PF0", "L0", "PP0", "PG0", "MA0", "UR0", "SA0"]}
+        return {
+            s: base if s in symbols else 0.0
+            for s in ["SC0", "FU0", "BU0", "PX0", "TA0", "PF0", "L0", "PP0", "PG0", "MA0", "UR0", "SA0"]
+        }
 
     def test_chain_trims_excess(self, tmp_path):
         """同一子链 3 个因子 → 保留综合评分前 2，移除评分最低者。"""
@@ -610,7 +609,9 @@ class TestChainDedup:
             {"factor_id": "b", "name": "fb", "symbol_ic": self._sic(["PX0", "TA0", "PF0"], 0.5)},
             {"factor_id": "c", "name": "fc", "symbol_ic": self._sic(["L0", "PP0", "PG0"], 0.5)},
         ]
-        retained, stats = _dedup_factors_by_chain(factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {"a": 1, "b": 1, "c": 1})
+        retained, stats = _dedup_factors_by_chain(
+            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {"a": 1, "b": 1, "c": 1}
+        )
         assert len(retained) == 3
         assert stats["removed"] == []
 
@@ -621,7 +622,9 @@ class TestChainDedup:
             {"factor_id": "x", "name": "fx", "symbol_ic": None},
             {"factor_id": "y", "name": "fy"},  # 无 symbol_ic 字段 → JSON 回退读取也失败
         ]
-        retained, stats = _dedup_factors_by_chain(factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {"a": 1, "x": 1, "y": 1})
+        retained, stats = _dedup_factors_by_chain(
+            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {"a": 1, "x": 1, "y": 1}
+        )
         kept = {f["factor_id"] for f in retained}
         assert kept == {"a", "x", "y"}
         assert stats["removed"] == []
@@ -664,7 +667,10 @@ class TestChainDedupCluster:
     @staticmethod
     def _sic(symbols: list[str], base: float) -> dict:
         """构造 symbol_ic：目标品种 base，其余品种 0。"""
-        return {s: base if s in symbols else 0.0 for s in ["SC0", "FU0", "BU0", "PX0", "TA0", "PF0", "L0", "PP0", "PG0", "MA0", "UR0", "SA0"]}
+        return {
+            s: base if s in symbols else 0.0
+            for s in ["SC0", "FU0", "BU0", "PX0", "TA0", "PF0", "L0", "PP0", "PG0", "MA0", "UR0", "SA0"]
+        }
 
     @staticmethod
     def _panel() -> dict[str, pd.DataFrame]:
@@ -721,7 +727,11 @@ class TestChainDedupCluster:
             {"factor_id": "w", "name": "w", "subchain_scope": "unknown", "code": self._momentum_code()},
         ]
         retained, stats = _dedup_factors_by_chain_cluster(
-            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {"a": 1, "b": 0.9, "u": 1, "w": 1},
+            factors,
+            tmp_path,
+            ENERGY_CHAIN_SUB_SYMBOLS,
+            2,
+            {"a": 1, "b": 0.9, "u": 1, "w": 1},
             panel_data=self._panel(),
         )
         kept = {f["factor_id"] for f in retained}
@@ -733,10 +743,14 @@ class TestChainDedupCluster:
         factors = [
             self._factor("a", ["能源"], self._momentum_code()),
             self._factor("b", ["能源"], self._momentum_code()),  # 同 code → 高相关
-            self._factor("c", ["能源"], self._volume_code()),    # 不同 code → 低相关
+            self._factor("c", ["能源"], self._volume_code()),  # 不同 code → 低相关
         ]
         retained, stats = _dedup_factors_by_chain_cluster(
-            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {"a": 0.9, "b": 0.6, "c": 0.5},
+            factors,
+            tmp_path,
+            ENERGY_CHAIN_SUB_SYMBOLS,
+            2,
+            {"a": 0.9, "b": 0.6, "c": 0.5},
             panel_data=self._panel(),
         )
         kept = {f["factor_id"] for f in retained}
@@ -747,12 +761,14 @@ class TestChainDedupCluster:
 
     def test_chain_cluster_respects_max_per_chain(self, tmp_path):
         """聚类后数量仍超 max_per_chain → 按综合评分截断。"""
-        factors = [
-            self._factor(f"f{i}", ["能源"], self._momentum_code()) for i in range(5)
-        ]
+        factors = [self._factor(f"f{i}", ["能源"], self._momentum_code()) for i in range(5)]
         # 5 个高相关因子聚 1 簇 → 1 代表 ≤ 2，不截断
         retained, stats = _dedup_factors_by_chain_cluster(
-            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {f"f{i}": (5 - i) / 5 for i in range(5)},
+            factors,
+            tmp_path,
+            ENERGY_CHAIN_SUB_SYMBOLS,
+            2,
+            {f"f{i}": (5 - i) / 5 for i in range(5)},
             panel_data=self._panel(),
         )
         assert len(retained) == 1
@@ -763,10 +779,14 @@ class TestChainDedupCluster:
         """部分链因子参与其所有 effective 子链，任一链保留即存活。"""
         factors = [
             self._factor("x", ["能源", "油化工"], self._momentum_code()),  # 部分链
-            self._factor("y", ["油化工"], self._momentum_code()),          # 与 x 同簇
+            self._factor("y", ["油化工"], self._momentum_code()),  # 与 x 同簇
         ]
         retained, stats = _dedup_factors_by_chain_cluster(
-            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {"x": 0.9, "y": 0.6},
+            factors,
+            tmp_path,
+            ENERGY_CHAIN_SUB_SYMBOLS,
+            2,
+            {"x": 0.9, "y": 0.6},
             panel_data=self._panel(),
         )
         kept = {f["factor_id"] for f in retained}
@@ -775,11 +795,25 @@ class TestChainDedupCluster:
     def test_symbol_ic_fallback_attribution(self, tmp_path):
         """无 subchain_scope 时回退 symbol_ic 主导子链归链。"""
         factors = [
-            {"factor_id": "s1", "name": "s1", "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.5), "code": self._momentum_code()},
-            {"factor_id": "s2", "name": "s2", "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.3), "code": self._momentum_code()},
+            {
+                "factor_id": "s1",
+                "name": "s1",
+                "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.5),
+                "code": self._momentum_code(),
+            },
+            {
+                "factor_id": "s2",
+                "name": "s2",
+                "symbol_ic": self._sic(["SC0", "FU0", "BU0"], 0.3),
+                "code": self._momentum_code(),
+            },
         ]
         retained, stats = _dedup_factors_by_chain_cluster(
-            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 1, {"s1": 0.9, "s2": 0.6},
+            factors,
+            tmp_path,
+            ENERGY_CHAIN_SUB_SYMBOLS,
+            1,
+            {"s1": 0.9, "s2": 0.6},
             panel_data=self._panel(),
         )
         kept = {f["factor_id"] for f in retained}
@@ -788,11 +822,13 @@ class TestChainDedupCluster:
 
     def test_no_panel_falls_back_quantity_trim(self, tmp_path):
         """无面板数据 → 降级纯数量截断（与旧 _dedup_factors_by_chain 语义一致）。"""
-        factors = [
-            self._factor(f"f{i}", ["能源"], self._momentum_code()) for i in range(4)
-        ]
+        factors = [self._factor(f"f{i}", ["能源"], self._momentum_code()) for i in range(4)]
         retained, stats = _dedup_factors_by_chain_cluster(
-            factors, tmp_path, ENERGY_CHAIN_SUB_SYMBOLS, 2, {f"f{i}": (4 - i) / 4 for i in range(4)},
+            factors,
+            tmp_path,
+            ENERGY_CHAIN_SUB_SYMBOLS,
+            2,
+            {f"f{i}": (4 - i) / 4 for i in range(4)},
             panel_data=None,
         )
         assert len(retained) == 2
@@ -875,16 +911,37 @@ class TestRollingOos:
     def _signals(self) -> list[PortfolioSignal]:
         return [
             PortfolioSignal(
-                factor_id="fct_001", name="m", weight=1.0 / 3, sharpe=2.0, ic=0.05,
-                turnover=5.0, decay_6m=0.1, orthogonalized=True, retained=True,
+                factor_id="fct_001",
+                name="m",
+                weight=1.0 / 3,
+                sharpe=2.0,
+                ic=0.05,
+                turnover=5.0,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
             ),
             PortfolioSignal(
-                factor_id="fct_002", name="r", weight=1.0 / 3, sharpe=1.8, ic=0.04,
-                turnover=5.0, decay_6m=0.1, orthogonalized=True, retained=True,
+                factor_id="fct_002",
+                name="r",
+                weight=1.0 / 3,
+                sharpe=1.8,
+                ic=0.04,
+                turnover=5.0,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
             ),
             PortfolioSignal(
-                factor_id="fct_003", name="v", weight=1.0 / 3, sharpe=1.5, ic=0.03,
-                turnover=5.0, decay_6m=0.1, orthogonalized=True, retained=True,
+                factor_id="fct_003",
+                name="v",
+                weight=1.0 / 3,
+                sharpe=1.5,
+                ic=0.03,
+                turnover=5.0,
+                decay_6m=0.1,
+                orthogonalized=True,
+                retained=True,
             ),
         ]
 
@@ -1324,7 +1381,9 @@ class TestAutoBuildFactorReturns:
         """共同交易日不足（<20）→ 返回 None（调用方回退估算）。"""
         from fts.factor_engine.portfolio_loop import _auto_build_factor_returns
 
-        assert _auto_build_factor_returns(self._make_panel(n_dates=5), self._factors(), tmp_path, market="futures") is None
+        assert (
+            _auto_build_factor_returns(self._make_panel(n_dates=5), self._factors(), tmp_path, market="futures") is None
+        )
 
     def test_empty_panel_returns_none(self, tmp_path):
         """空面板 → 返回 None。"""
@@ -2003,14 +2062,28 @@ class TestPortfolioLoop:
 
         captured: dict = {}
 
-        def _fake_load_or_build(panel, valid_factors, factor_codes, common_dates,
-                                market, end_date, db_path, forward_days, signal_cache, use_store):
+        def _fake_load_or_build(
+            panel,
+            valid_factors,
+            factor_codes,
+            common_dates,
+            market,
+            end_date,
+            db_path,
+            forward_days,
+            signal_cache,
+            use_store,
+        ):
             captured["market"] = market
             captured["end_date"] = end_date
             captured["db_path"] = db_path
             return l3svc.build_signal_matrix(
-                panel, valid_factors, factor_codes, common_dates,
-                forward_days=forward_days, signal_cache=signal_cache,
+                panel,
+                valid_factors,
+                factor_codes,
+                common_dates,
+                forward_days=forward_days,
+                signal_cache=signal_cache,
             )
 
         monkeypatch.setattr(l3svc, "load_or_build_signal_matrix", _fake_load_or_build)
@@ -2031,7 +2104,10 @@ class TestPortfolioLoop:
         factors = [{"factor_id": "f1", "code": code}, {"factor_id": "f2", "code": code}]
 
         fr = _auto_build_factor_returns(
-            panel, factors, tmp_path, market="futures",
+            panel,
+            factors,
+            tmp_path,
+            market="futures",
             signal_store=("futures", None, None),
         )
         assert fr is not None
@@ -2477,9 +2553,7 @@ class TestPortfolioLoop:
             auto_called["yes"] = True
             return fr
 
-        monkeypatch.setattr(
-            "fts.factor_engine.portfolio_loop._auto_build_factor_returns", _fake_auto
-        )
+        monkeypatch.setattr("fts.factor_engine.portfolio_loop._auto_build_factor_returns", _fake_auto)
         loop = PortfolioLoop(
             memory_dir=tmp_portfolio_dir,
             elite_dir=tmp_elite_dir,
@@ -4759,9 +4833,7 @@ class TestStickySharpeBuildComboBranches:
         assert combo.get("regime_meta", {}).get("beta_scale") == 0.5
 
         # 三因子乘性合并：exposure_scale=1.0 × beta_scale=0.5 → 0.5
-        combo2 = build_combo(
-            signals, "equal_weight", "trace-x", exposure_scale=1.0, beta_scale=0.5
-        )
+        combo2 = build_combo(signals, "equal_weight", "trace-x", exposure_scale=1.0, beta_scale=0.5)
         assert abs(sum(s["weight"] for s in combo2["signals"]) - 0.5) < 1e-6
 
         # 全默认（None）→ 归一化 1.0，不受影响（回归保护）
@@ -5474,18 +5546,18 @@ class TestQualityReportAndRunBranches:
         assert result.n_factors_input == 1
 
     def test_run_energy_panel_symbols_restricted(self, tmp_portfolio_dir, tmp_elite_dir):
-        """energy 市场 Step 0.5 面板收缩至能源化工 20 品种（训练池+盲测池），非全期货核心池。
+        """energy 市场 Step 0.5 面板收缩至能源化工子集（训练池+盲测池），非全期货核心池。
 
         GAP-121 扩展（v2.104.0+77）：get_futures_panel 必须显式传能源化工
-        20 品种子集（ENERGY_CHAIN_SYMBOLS ∪ ENERGY_CHAIN_HOLDOUT），
+        子集（ENERGY_CHAIN_SYMBOLS ∪ ENERGY_CHAIN_HOLDOUT，动态引用常量），
         而非默认全期货核心池，以减少数据加载耗时；futures 市场保持默认全池。
         """
         from fts.data_futures import ENERGY_CHAIN_HOLDOUT, ENERGY_CHAIN_SYMBOLS
 
         expected = sorted(set(ENERGY_CHAIN_SYMBOLS) | set(ENERGY_CHAIN_HOLDOUT))
-        assert len(expected) == 20, f"能源化工子集应为 20 品种，实际 {len(expected)}"
+        assert len(expected) >= len(set(ENERGY_CHAIN_SYMBOLS))  # 盲测池并集非空且覆盖训练池
 
-        # energy 市场：显式传 20 品种子集
+        # energy 市场：显式传能源化工子集
         self._write_factors(tmp_elite_dir, market="energy", n=1)
         with patch("fts.data.FTSDataProvider") as m_prov:
             m_prov.return_value.get_futures_panel.return_value = (

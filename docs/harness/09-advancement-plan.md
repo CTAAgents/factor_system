@@ -1,6 +1,6 @@
 # FTS 晋级计划
 
-> 版本: v2.105.0+28
+> 版本: v3.0.0
 > 最后更新: 2026-08-17
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -28,6 +28,22 @@ v0.1.0 ───→ v0.2.0 ───→ v0.3.0 ───→ v1.1.0 ───→ 
 ---
 
 ## 2. 已完成里程碑
+
+### 双系统切分：FTS 因子生产 / Regime-Driven 策略合成（2026-08-20，里程碑版本 v3.0.0，plans/57）
+
+**完成时间**: 2026-08-20（里程碑版本 v3.0.0，build v2.105.0+33 → major bump）
+
+**架构意义**: FTS 角色重定位为**因子生产系统**，策略合成职责整体迁移外部 Regime-Driven——① **信号契约 v1 固化**（design/F.3：l3_signal_meta 追加 schema_version/factor_status/factor_scope 三列 + 历史回填 + 决策/训练双模式隔离 + 增量幂等 + 新鲜度校验 + 降级熔断）；② **FTS L3 组合侧退役登记**（retired_l3.py 35 项 + DeprecationWarning + warn_if_retired 告警，存量调用兼容不删码；物理删除为后续独立里程碑）；③ **RD 承接**（strategy_synthesis/combo_verifier/money_management/crowding_gate 权威替换/backtest_engine 消费信号矩阵/L2 子链化 5 子链）；④ **全期货覆盖规划**（coverage_priority P0-P3，84 品种/17 产业链）；⑤ **存量因子集中重审管道**（review_legacy_factors.py 分族 FDR-BH + audit 分层抽样）。
+
+**验收证据（2026-08-20 实测）**: 阶段 0 A/B（状态一致率 92.04% / 方向一致率 97.55% 双门槛通过）+ 阶段 1 双轨对账（信号余弦 1.0000 / 组合方向 100% / 敞口差 0.00% / 绩效差 0.000000 全门槛通过）+ 因子映射 10/12 Spearman=1.0000 + 全量回归 8129 passed（残留 21 项预存，登记 GAP-158）。
+
+### QuantData 权威主链路 + 外部因子常态化导入 + 期货结构约束（2026-08-19，build bump v2.105.0+32，GAP-156/157/158，任务 0/A/B）
+
+**完成时间**: 2026-08-19（build bump v2.105.0+32）
+
+**架构意义**: 落实"权威数据仅限 QuantData"原则——① **主链路切换**：`quantdata_provider.py`（duckdb 只读短连接直读 continuous_daily/continuous_map/kline_daily，FTS_QUANTDATA_HOME 配置，不依赖 client_v2）置首 aggregator 降级链（QUANTDATA→DUCKDB_CACHE→TDX_LOCAL→TQ_PYTHON→AKSHARE→SYNTHETIC），82/82 品种映射全覆盖，复权用 QuantData 自带 adj_factor（RollCalendar 降级避免双重复权），settle 非权威标注；② **期限结构权威构建**：continuous_map 近远月映射 → term_spread/roll_yield，D15 算子由"注册未接线"转可用；③ **外部因子导入管道**：6 个 extract_* YAML 升级为常态化导入（字段权威校验 L2 缺失禁依赖 → 去重 → 注入 l1_injected + factor_pool → L2 种子评估链准入），月度调度；④ **演化挖掘期货结构约束**：R1 字段可得性 / R2 子链有效性软约束（演化端 _process_candidate 观测标记）/ R3 信号去冗余 / R4 家族筛选 API / R5 期限结构接线。
+
+**数据边界（诚实标注）**: QuantData 无 fundamental（库存/仓单/现货基差，GAP-157 禁依赖）、无 settle/amount（GAP-158 L1 降级）、主力连续历史 ~2019 起（长历史由 kline_cache 兜底）。
 
 ### 子链张量化四层闭环（2026-08-17，里程碑版本 v2.105.0，plans/47/48/49/50）
 

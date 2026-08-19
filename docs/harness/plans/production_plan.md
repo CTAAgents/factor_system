@@ -1,9 +1,11 @@
 # FTS 生产就绪计划
 
-> 版本: v2.105.0+28
-> 最后更新: 2026-08-07
+> 版本: v3.0.0
+> 最后更新: 2026-08-20
 
 > ⚠️ **重要说明**：FTS 当前为**开发阶段**，尚未达到生产就绪状态。本文档记录生产部署所需的各项准备工作。
+
+> 📌 **v3.0.0（2026-08-20，plans/57 双系统切分）**：FTS 角色收敛为**因子生产系统**（因子管理 + 信号矩阵输出），策略合成职责迁移外部 Regime-Driven；FTS L3 组合侧已登记退役（`retired_l3.py`，不删码）。生产部署边界相应变化：FTS 负责因子管线定时任务 + 信号库（`l3_signal_store.duckdb`，因子信号契约 v1），策略合成由 RD 承接（信号拉取经 `signal_client`，熔断降级本地规则法兜底）。详见 [57-dual-system-factor-strategy-split-plan.md](57-dual-system-factor-strategy-split-plan.md)。
 
 ---
 

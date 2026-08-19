@@ -1,5 +1,5 @@
 # FTS 算子目录（自动生成 by scripts/generate_operator_catalog.py，勿手改）
-# 算子总数: 512
+# 算子总数: 514
 operators:
   - name: abs
     category: L4
@@ -1006,6 +1006,14 @@ operators:
     lookback_param: window
     differentiable: true
     economic_meaning: +DI正向指标
+  - name: ts_adx_wilder
+    category: L5
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: Wilder ADX归一化[0,1]
   - name: ts_alpha
     category: L4
     params: [x, y, window]
@@ -1078,6 +1086,14 @@ operators:
     lookback_param: window
     differentiable: true
     economic_meaning: ATR平均真实波幅
+  - name: ts_atr_ratio
+    category: L1
+    params: [high, low, close, window]
+    int_params: [window]
+    param_bounds: {window: 2-100}
+    lookback_param: window
+    differentiable: true
+    economic_meaning: ATR/价格(波动状态)
   - name: ts_avg_drawdown
     category: L1
     params: [series, window]
@@ -2166,7 +2182,7 @@ operators:
     economic_meaning: 二阶下偏矩(负收益平方均值)
   - name: ts_ma_diff
     category: L1
-    params: [x, short, long]
+    params: [series, short, long]
     int_params: [long, short]
     param_bounds: {long: 5-250, short: 2-60}
     lookback_param: long

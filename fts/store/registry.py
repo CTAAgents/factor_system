@@ -218,16 +218,24 @@ class StorageRegistry:
 
         - 告警模式（strict=False，默认）：未登记 warning，SSOT 可观测化；
         - 严格模式（strict=True，v2.105.0+19）：未登记抛 ValueError（阻断，强制先登记）。
+        - **项目根外路径（测试 tmp / 外部库）豁免**：GAP-129 测试隔离将 get_db_path
+          重定向至 pytest tmp（项目根外），严格模式对项目根外路径不做阻断
+          （find_by_path 注释「显式注入豁免」语义落地，2026-08-20 修复）。
 
-        返回匹配域（None = 未登记）。
+        返回匹配域（None = 未登记/豁免）。
         """
+        try:
+            Path(path).resolve().relative_to(PROJECT_ROOT.resolve())
+            inside_root = True
+        except ValueError:
+            inside_root = False
         d = self.find_by_path(path)
-        if d is None:
-            if strict:
-                raise ValueError(
-                    f"[StorageRegistry] 写路径未登记: {path}（严格模式，新增写路径必须先登记 "
-                    f"storage_landscape.yaml，SSOT）"
-                )
+        if d is None and strict and inside_root:
+            raise ValueError(
+                f"[StorageRegistry] 写路径未登记: {path}（严格模式，新增写路径必须先登记 "
+                f"storage_landscape.yaml，SSOT）"
+            )
+        if d is None and not strict:
             logger.warning(
                 "[StorageRegistry] 写路径未登记: %s%s——新增写路径必须先登记 storage_landscape.yaml（SSOT）",
                 path,

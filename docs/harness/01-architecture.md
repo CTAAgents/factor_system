@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v2.105.0+28
+> 版本: v3.0.0
 > 最后更新: 2026-08-18
 
 ---
@@ -9,85 +9,85 @@
 
 FTS（Factor Intelligence System，因子智能系统）是一个独立的期货因子策略系统，专注于期货因子推演、策略组建与交易信号产出。数据层基于 DuckDB kline_cache（主源）+ AKShare/通达信/天勤（降级）提供期货行情数据，FTS **本身包含自洽的数据源适配层**，无外部数据项目依赖。股票管线已剥离至独立项目 fts-stock（v0.0.1，2026-08）。
 
-### 1.1 QuantData 集成（v2.105.0+11 新增）
+### 1.0 双系统切分（v3.0.0 架构级调整，plans/57）
 
-自 v2.105.0+11 起，FTS 支持通过 QuantData（D:\QuantData）获取统一数据服务，作为现有数据层的**补充数据源**。
+> **角色重定位**：FTS 由"因子生产 + 策略合成"混体收敛为**因子生产系统**（专注因子管理与信号矩阵输出）；策略合成职责整体迁移至外部 **Regime-Driven**（三层 Regime + 信号合成 + 五要素路由 + 组合风控）。详见 [57-dual-system-factor-strategy-split-plan.md](../plans/57-dual-system-factor-strategy-split-plan.md)。
 
-#### 数据依赖映射
+**目标三层架构**：
 
-| FTS 数据需求 | QuantData 表 | 消费接口 | 状态 |
-|:-------------|:-------------|:---------|:-----|
-| 日线 OHLCV (FuturesOHLCV 契约) | kline_daily | get_factor_input() | ✅ 已实现 |
-| 分钟 OHLCV | kline_minute | get_bars(symbol, '1m') | ✅ 已实现 |
-| 实时 Tick | HotDataLayer (内存) | get_tick(symbol) | ✅ 已实现 |
-| 基本面数据 (库存/产量/消费) | fundamental_data | get_fundamental(symbol) | 🔄 开发中 |
-| 基差数据 | basis_data | get_basis(symbol) | 🔄 开发中 |
-| 期限结构数据 | term_structure | get_term_structure(symbol) | 🔄 开发中 |
-| 持仓结构数据 | position_structure | get_position_structure(symbol) | 🔄 开发中 |
-
-#### FuturesOHLCV ↔ QuantData 字段映射
-
-| FTS FuturesOHLCV | QuantData kline_daily | 类型 | 说明 |
-|:-----------------|:---------------------|:-----|:-----|
-| symbol | symbol | VARCHAR(16) | 直接映射 |
-| date | trade_date | DATE | 格式转换 |
-| open | open | DOUBLE | 直接映射 |
-| high | high | DOUBLE | 直接映射 |
-| low | low | DOUBLE | 直接映射 |
-| close | close | DOUBLE | 直接映射 |
-| volume | volume | DOUBLE | 直接映射 |
-| amount | amount | DOUBLE | 直接映射 |
-| **hold** | **open_interest** | DOUBLE | ⚠️ 字段名不同，需映射 |
-| settle | settle | DOUBLE | 直接映射 |
-| pre_settle | pre_settle | DOUBLE | 直接映射 |
-| oi_change | oi_change | DOUBLE | 直接映射 |
-| vwap | vwap | DOUBLE | 直接映射 |
-| source | source | VARCHAR(50) | 直接映射 |
-| trace_id | trace_id | VARCHAR(50) | 直接映射 |
-
-#### QuantData 接入代码示例
-
-```python
-# fts/data_sources/quantdata_provider.py
-
-import sys
-sys.path.insert(0, "D:/QuantData")
-from client_v2 import QuantDataClient
-
-
-class QuantDataProvider:
-    """QuantData 数据提供者 - 对齐 FuturesOHLCV 契约"""
-
-    def __init__(self):
-        self._client = QuantDataClient()
-
-    def get_ohlcv(
-        self, symbol: str, lookback: int = 252
-    ) -> pd.DataFrame:
-        """获取 OHLCV 数据，列名对齐 FuturesOHLCV"""
-        df = self._client.get_factor_input(symbol, lookback)
-        # 列名映射: open_interest -> hold
-        if "open_interest" in df.columns:
-            df["hold"] = df["open_interest"]
-        return df
-
-    def get_fundamental(self, symbol: str) -> pd.DataFrame:
-        """获取基本面数据"""
-        return self._client.get_fundamental(symbol)
-
-    def get_basis(self, symbol: str) -> pd.DataFrame:
-        """获取基差数据"""
-        return self._client.get_basis(symbol)
 ```
+数据层        D:\QuantData（已有）—— 行情/存储，RD 与 FTS 均只读
+                ↑ 只读
+因子生产层    FTS（保留：注入/演化/质检/生命周期/因子资产库/信号矩阵输出）
+                → 输出：因子信号矩阵 + 因子画像（子链/regime/质量）+ 因子状态
+                ↓ 接口（因子信号契约 v1，design/F.3）
+策略合成层    Regime-Driven（扩展：三层 Regime + 信号合成 + 五要素路由 + 组合风控）
+                → 输出：每日交易计划 / 交易管道
+```
+
+**切分落地状态（v3.0.0）**：
+- **FTS 保留（基础设施，函数级锁定）**：信号矩阵构建/增量（`l3_signal_service`）、信号序列计算（`futures_signal_pipeline._compute_signal_matrix`）、正交化/中性化、DSL 算子库、数据链路（`FTSDataProvider` → QuantData）；**存量因子资产不继承**（作为候选池保留，重审后决定去留，plans/57 §6.7-6.8）。
+- **FTS 退役登记（`fts/factor_engine/retired_l3.py`，v3.0.0）**：L3 组合侧 35 项——`futures_signal_pipeline` 组合侧 + `portfolio_loop` 策略侧（synthesize_signals/弹性网/ML/BL/build_combo/组合校验/衰减换手/regime 调制）+ `weight_learning`/`capital_allocator`/`regime_crowding` 三模块标记弃用；import 期 DeprecationWarning + `warn_if_retired` 调用告警；**存量调用点兼容不删码**（物理删除为后续独立里程碑，需另行授权）。退役扫描脚本 `scripts/scan_l3_retirement.py`（只读）。
+- **RD 承接**：`strategy_synthesis.py`（信号合成）、`combo_verifier.py`（组合校验）、`money_management.py`（权重学习/资金分配）、`crowding_gate.py`（拥挤度权威替换，FTS 版为权威）、`signal_client.py`（契约拉取）、`backtest_engine` 消费信号矩阵、L2 子链化（energy_chemicals → 5 子链）。
+- **接口层**：因子信号契约 v1（[design/F.3](../design/F.3-signal-contract-v1-design.md)）——l3_signal_meta 追加 `schema_version`/`factor_status`/`factor_scope` 三列 + 历史回填模式；双模式读取（决策/训练）隔离防未来函数；增量幂等 + 新鲜度校验 + 降级熔断。
+- **验收证据（2026-08-20）**：阶段 0 A/B（状态一致率 92.04% / 方向一致率 97.55% 双门槛通过）+ 阶段 1 双轨对账（信号余弦 1.0000 / 组合方向 100% / 绩效差 0.000000 全门槛通过）+ 因子映射 10/12 Spearman=1.0000 + 全量回归 8129 passed（残留 21 项预存，登记 GAP-158）。
+
+### 1.1 QuantData 权威数据集成（v2.105.0+32 规划，主链路切换）
+
+> **原则**：FTS 可消费的**权威数据仅限 D:\QuantData**（本机统一金融数据仓库，TqSdk 主源 + integrity_checker 完整性校验）。其他来源（AKShare/通达信/天勤/WebSearch）**权威性受质疑，时效性、完整性无法保证**，一律降级为标注来源的兜底层。一切因子挖掘必须基于实际可消费数据，禁止空谈数据可得性。
+
+#### 1.1.1 QuantData 实测数据现实（2026-08-19）
+
+`D:\QuantData\market_data\kline_history.duckdb`（3.3GB）实测表：
+
+| 表 | 规模 | 关键列 | 权威字段 |
+|:----|:-----|:-------|:---------|
+| `kline_daily` | 127.6万行 / 5339 合约 / 2016-01~2026-08 | symbol, trade_date, open, high, low, close, volume, open_interest | **OHLCV + open_interest**（无 amount/settle） |
+| `continuous_daily` | 23.9万行 / 88 品种 | symbol, **series_type(main/sub)**, trade_date, OHLCV, open_interest, **adj_factor**, main_contract | **后复权连续序列**（重叠窗口平滑换月） |
+| `continuous_map` | 12.1万行 / 88 品种 | symbol, trade_date, **main_contract, sub_contract** | **主力/次主力逐日映射**（期限结构构建源） |
+| `kline_minute` | 3552万行 | symbol, period(60/300/900/1800/3600/14400), trade_datetime, OHLCV, open_oi, close_oi | OHLCV + 持仓 |
+| `kline_tick` | 19.5万行 | symbol, datetime, last_price, **bid/ask_price1~5, bid/ask_volume1~5**, open_interest | 5 档盘口 + 持仓 |
+| `instrument_info` | 7633 合约 | instrument_id, ins_class, exchange_id, product_id, price_tick, volume_multiple, expire_datetime | 合约元数据 |
+
+**QuantData 不含**（`client_v2.get_factor_input` 对缺失列填 NaN）：`amount`/`settle`/`pre_settle`/`vwap`/`oi_change`，以及**库存/仓单/现货基差/宏观**（fundamental 类）——后述字段 FTS 无任何权威来源，登记 GAP-157/158。
+
+#### 1.1.2 字段权威矩阵（SSOT，贯穿导入管道/演化约束/信号链路）
+
+| 层级 | 字段 | 来源 | 状态 |
+|:-----|:-----|:-----|:-----|
+| **L0 权威** | open / high / low / close / volume / hold(=open_interest) | QuantData continuous_daily | 切换中（本计划） |
+| **L0 权威（接线后）** | term_spread / roll_yield | QuantData continuous_map 近远月映射 + kline_daily 构建 | 开发中（本计划） |
+| **L1 降级·非权威** | vwap / amount / settle / pre_settle | FTS 现有缓存 + 增强源 + 代理兜底 | 标注来源，不硬拒 |
+| **L2 缺失·禁依赖** | fut_inventory / fut_warehouse_receipt / fut_spot_price / fut_near_basis / fut_dom_basis 等 9 字段 | 无权威源（AKShare 非权威） | GAP-157 禁依赖 |
+
+#### 1.1.3 主链路切换设计
+
+- **降级链**（`FuturesDataAggregator.DEFAULT_KLINE_SOURCES`）：`QUANTDATA → DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON → AKSHARE → SYNTHETIC`
+- **Provider**：`fts/data_sources/quantdata_provider.py`（新增）——DuckDB **只读短连接**直读 kline_history.duckdb，**不依赖** `D:\QuantData\client_v2.py`（避免跨项目 `sys.path.insert` 绝对路径注入，CLAUDE.md §5.9）；路径经 `FTS_QUANTDATA_HOME` 配置解析
+- **品种映射**：FTS `RB0` ↔ QuantData `RB`（88 vs 82 品种，覆盖 SHFE/DCE/CZCE/CFFEX/INE/GFEX 六交易所，大小写转换 `RB→rb` 对齐 TqSdk product）
+- **复权策略**：QuantData `continuous_daily` 自带后复权 adj_factor（±5 日重叠窗口平滑换月）→ 主链路直接消费其复权序列；`RollCalendar.apply_adjustment` 仅作 QuantData 缺失时的降级路径，**避免双重复权**（FTS 单日比率 vs QuantData 重叠窗口存在细微差异，沿用 aggregator cross_check 0.5% 阈值交叉验证）
+- **settle 处理**：QuantData 无 settle → Provider 返回 NaN → aggregator `_enhance_fields`（TQSDKEnhanceSource）补充 → 仍缺则 `(H+L+C)/3` 典型价代理，全程标注"非权威来源"
+- **期限结构权威构建**：`continuous_map` 取 (main_contract, sub_contract) → `kline_daily` 对齐近远月 close → `term_spread=(sub_close−main_close)/main_close`、`roll_yield=term_spread/时间间隔` → 注入因子面板，D15 算子（ts_term_spread/ts_roll_yield）由"注册未接线"转可用
+- **历史深度边界（2026-08-19 实测）**：QuantData 主力连续历史起点 ~2019（全 82 品种行数 158~2036，中位 1625），**无 FTS kline_cache 的 15 年深度**。当前评估/演化窗口（days=500~700）QuantData 完全覆盖；长窗口回测/早期历史由降级链 kline_cache 承接（非权威但深度兜底），QuantData 不做历史回填拼接（避免数据口径混用）。
+
+#### 1.1.4 与既有数据层的边界
+
+| 层 | 归属 | 变更 |
+|:----|:-----|:-----|
+| 权威行情主链路 | QuantData（continuous_daily） | 本计划切换 |
+| FTS 本地缓存 | `data/fts_history.duckdb` kline_cache | 保留为降级 + 非权威字段（settle/vwap/amount）承载 |
+| 基本面/期限结构 Parquet | `memory/cache/futures_fundamental/`、`futures_term_structure/`（AKShare 源） | 降级层；期限结构改由 QuantData 权威构建后仅作回退 |
+| 实时 tick | QuantData HotDataLayer（TqSdk） | 后续接入（不在本次范围） |
 
 ### 项目边界
 
 | 职责 | 归属 |
 |:-----|:-----|
-| 行情数据获取（期货 OHLCV） | **FTS（通过 DuckDB kline_cache + QuantData + AKShare/通达信/TQSDK）** |
+| 行情数据获取（期货 OHLCV） | **FTS（QuantData 权威主链路 + DUCKDB_CACHE/TDX_LOCAL/TQ_PYTHON/AKSHARE/SYNTHETIC 降级链）** |
 | 因子推演（挖掘/演化/评估） | **FTS 核心能力** |
-| 多因子策略组建 | **FTS 核心能力** |
-| 交易信号产出 | **FTS 核心能力** |
+| 因子信号矩阵输出 | **FTS 核心能力（因子信号契约 v1，design/F.3）** |
+| 多因子策略组建（信号→组合权重） | **Regime-Driven（v3.0.0 起；FTS L3 组合侧已登记退役，retired_l3.py）** |
+| 交易信号产出 / 每日交易计划 | **Regime-Driven（v3.0.0 起）** |
 | 循环调度与状态管理 | **FTS 核心能力** |
 | 健康监控与 HTTP 指标 | **FTS 核心能力** |
 
@@ -298,6 +298,12 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  L3 Portfolio Loop (组合循环 — 组合构建与信号产出层)                     │
 │                                                                         │
+│  ⚠️ v3.0.0 已登记退役（plans/57 双系统切分）：组合构建/信号合成/组合    │
+│     校验/资金分配职责迁移 Regime-Driven；本层保留仅供存量兼容            │
+│     （retired_l3.py 登记 + warn_if_retired 告警，不删码）。              │
+│     保留基础设施：信号矩阵构建/增量（l3_signal_service）、正交化、      │
+│     DSL 算子库、数据链路（→ QuantData）。                               │
+│                                                                         │
 │  portfolio_loop.py                                                     │
 │  - PortfolioManager（组合管理器，含 combo_history 归档）                │
 │  - factor_clustering.py（P1 因子聚类模块）                              │
@@ -406,6 +412,12 @@ FTS 采用 5 层分层架构，从高层的人类设定到底层的组合执行�
 │      → 晋升门槛（§C1）：regime_gate_passed——有效制度数 <                 │
 │        regime_profile.min_positive_regimes（默认 2）拒绝晋升（evolution_  │
 │        promote.py，防单制度过拟合因子）；scope 非 list 放行                │
+│      → 标签前提交叉验证（plans/54 P0-3，v2.105.0+30）：energy 组合          │
+│        high_vol 标签需规则法 vol 维度复核（regime.high_vol_premise_check  │
+│        ——EWMA≥q80 或 20d 波动分位≥0.5 任一成立即前提有效，数据不足不误报）；│
+│        不成立 → 标签覆盖 oscillate + conf×0.6 + method 标注               │
+│        premise_override，regime_meta 记 premise_cross_check 段             │
+│        （ok/ewma_vol/eff_high/vol_percentile/reason/overridden_to）       │
 │    Step 2.5c: L0 宏观 Beta 层（plans/55，v2.105.0+22，灰度保守档已开启）          │
 │      → 宏观层：识别市场 Beta 方向（RISK_ON/RISK_OFF/RANGE_BOUND）并顺 β   │
 │        方向配置敞口（外部 Regime-Driven §1.3 Beta 优先：正 β 进攻、负 β  │
@@ -747,10 +759,11 @@ AST (ExprNode 树)
 ### 全局数据流
 
 ```
-DuckDB kline_cache (期货, data/fts_history.duckdb)     AKShare / 通达信 / TQSDK（降级源）
+QuantData continuous_daily (权威主链路, 88品种后复权)   DuckDB kline_cache（降级）· AKShare/通达信/TQSDK（兜底）
     │                                                       │
-    │ OHLCV 日线 (期货连续合约, 复权)                        │ 日线/分钟 即时获取
-    │                                                       │
+    │ OHLCV+持仓 日线 (连续合约, 自带 adj_factor 复权)      │ 日线/分钟 即时获取
+    │ QUANTDATA → DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON      │
+    │                     → AKSHARE → SYNTHETIC             │
     ▼                                                       ▼
 FTS (因子推演) — 支持期货横截面因子演化
     │
@@ -775,15 +788,15 @@ FTS (因子推演) — 支持期货横截面因子演化
 
 ```
 ┌─ 日线数据路径 ───────────────────────────────────────────────────┐
-│ AKShare futures_zh_daily_sina                                      │
+│ QuantData continuous_daily（权威主链路，88品种后复权）            │
 │    │                                                                │
-│    │ scripts/download_futures.py（断点续传）                        │
+│    │ quantdata_provider（duckdb 只读短连接直读）   ← 优先级1 QUANTDATA│
 │    ▼                                                                │
 │ DuckDB kline_cache (data/fts_history.duckdb)                        │
 │    │                                                                │
-│    │ FuturesDataProvider._from_kline_cache()     ← 优先级1          │
-│    │ AKShare 即时获取（降级）                       ← 优先级2        │
-│    │ 合成数据（降级）                                ← 优先级3        │
+│    │ FuturesDataProvider._from_kline_cache()     ← 优先级2          │
+│    │ TDX_LOCAL / TQ_PYTHON / AKShare 即时获取（降级） ← 优先级3~5    │
+│    │ 合成数据（降级）                                ← 优先级6        │
 │    ▼                                                                │
 │ FTSDataProvider.get_futures_ohlcv() / get_futures_panel()            │
 │    │                                                                │
@@ -1444,4 +1457,5 @@ class FactorKind(str, Enum):
 | ②b2a signal_sharpe raw 口径（v2.104.0+73，2026-08-16） | `fts/factor_engine/portfolio_loop.py` build_combo：`pre_weighted_sharpe` 改用 `s.get("_sharpe_raw", s.get("sharpe"))`（截断前原始值优先，缺失回退截断值）；`synthesize_signals` quality_weight 分支透传 `_sharpe_raw`；`fts/factor_engine/contracts.py` DEFAULT_L3_VERIFIER_CONFIG.max_sharpe 3.5→8.0 + `fts/config/settings.py`/`config/settings.yaml` verifier.max_sharpe=8.0（raw 口径信号质量上界 2.0→提升，3.5 会恒触发过拟合警告）；权重计算/展示仍用 SHARPE_CAP=2.0 截断值 | `python -c "from fts.factor_engine.contracts import DEFAULT_L3_VERIFIER_CONFIG as c; assert c['max_sharpe'] == 8.0"`；`python -m pytest tests/factor_engine/test_portfolio_loop.py -q`（261 passed，含 test_signal_sharpe_uses_raw_not_capped / test_raw_sharpe_forwarded / test_passes_high_sharpe_within_cap） |
 | 因子×子链质量矩阵（plans/49，v2.104.0+112，2026-08-17） | `fts/factor_engine/factor_db/schema.py` `subchain_factor_quality` 表（评估单元=(factor_id, market, chain)，n_symbols/mean_ic/std_ic/t_stat/p_value/effective/source/decision）；`fts/factor_engine/factor_db/repository.py` `SubchainQualityRepository`（UPSERT 幂等/时序查询/latest/recent，E.4 短连接）；`fts/factor_engine/subchain_profile.py` `build_subchain_quality_rows`（t=inf→None 序列化）；`fts/factor_engine/subchain_lifecycle.py` `compute_subchain_degradation`（全部有效链衰减→degrade/部分链→scope_shrink/单链特异唯一链→degrade/从未 effective→keep）+ `scope_without_chains` + `build_subchain_quality_matrix_snapshot`；`fts/factor_engine/qa/pre_entry.py` `judge_q10_subchain` 两级判定；`fts/factor_engine/factor_inspector.py` `AutoReviewPolicy.classify(subchain_profile=...)` 单链特异放行；`fts/factor_engine/qa/admission.py` `SUBCHAIN_SPECIFIC_MAX_WEIGHT=0.10`；`fts/factor_engine/qa/quarterly_check.py` F6 两级判定；`fts/factor_engine/energy_qa_review.py` `_subchain_degradation`/`_shrink_scope`；`fts/factor_engine/portfolio_loop.py` Step 2.6 质量矩阵（Step 2b 消费最新 metadata 自动重算闭环）；`config/settings.yaml` `l3.subchain_quality`（灰度默认关） | `python -m pytest tests/factor_engine/test_subchain_quality_store.py tests/factor_engine/test_qa_subchain.py tests/factor_engine/test_lifecycle_subchain.py -q`（46 passed）；`python -c "import duckdb; c=duckdb.connect(':memory:'); c.execute(\"SELECT column_name FROM information_schema.columns WHERE table_name='subchain_factor_quality'\")"` |
 | L3 权重层 Gate 闭环（plans/50，v2.104.0+113，2026-08-17） | `fts/factor_engine/regime_gate.py` `gate_scale_map(gates, config)`（Gate 决策 → 链级缩放系数：avoid-hard→0.0 / avoid-soft→soft_avoid_ratio / long·short·neutral→1.0）；`fts/factor_engine/portfolio_loop.py` Step 2.5 `_merge_gate_scale_into_modulation`（m'[factor][子链] = m × gate_scale，avoid 链权重源头归零/降权，同步 signals 的 subchain_weights 标注与 factor_weights.json 输出；依赖 `enable_subchain_weight` 调制矩阵存在否则观测语义零行为变更）；质量报告 `subchain_gate_scale` 段（与 subchain_exposure/gate_distribution/quality_matrix 四网合一） | `python -m pytest tests/factor_engine/test_regime_gate.py tests/factor_engine/test_subchain_weight.py -q`（59 passed，含 TestGateScaleMap 5 + TestMergeGateScaleIntoModulation 6）；`python -c "from fts.factor_engine.regime_gate import gate_scale_map; assert callable(gate_scale_map)"` |
+| QuantData 权威主链路切换（v2.105.0+32 规划，2026-08-19） | `fts/data_sources/quantdata_provider.py`（新增）→ QuantDataProvider：DuckDB 只读短连接直读 `D:\QuantData\market_data\kline_history.duckdb`（continuous_daily/continuous_map/kline_daily），路径经 `FTS_QUANTDATA_HOME` 配置解析（不依赖 client_v2，避免 sys.path 绝对路径注入）；`fts/core/enums.py` DataSource 增 QUANTDATA；`fts/data_sources/aggregator.py` DEFAULT_KLINE_SOURCES 头部插入 `QUANTDATA → DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON → AKSHARE → SYNTHETIC`；品种映射 FTS(RB0)↔QuantData(RB)（88 vs 82，SHFE/DCE/CZCE/CFFEX/INE/GFEX 六交易所）；复权策略 = QuantData 自带 adj_factor 后复权（连续序列），RollCalendar 仅降级（避免双重复权）；期限结构权威构建（continuous_map 近远月映射 + kline_daily → term_spread/roll_yield，D15 算子 ts_term_spread/ts_roll_yield 接线）；settle 非权威标注（增强源/`(H+L+C)/3` 代理）；字段权威矩阵 L0 权威（OHLCV+hold）/L1 降级非权威（vwap/amount/settle/pre_settle）/L2 缺失禁依赖（fundamental 9 字段，GAP-157）；因子面板 hold 优先 QuantData 权威值，aggregator cross_check 0.5% 阈值交叉验证 | `python -c "from fts.data_sources.quantdata_provider import QuantDataProvider; p=QuantDataProvider(); df=p.get_ohlcv('RB', 300); assert 'hold' in df.columns and len(df) > 0"`；`python -m pytest tests/data_sources/test_quantdata_provider.py -q`（映射/复权/期限结构构建/降级单测） |
 

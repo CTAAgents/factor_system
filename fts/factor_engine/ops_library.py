@@ -1467,6 +1467,43 @@ class D12Ops:
         return dx.rolling(window, min_periods=_MINP).mean().fillna(0.0)
 
     @staticmethod
+    def ts_adx_wilder(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> pd.Series:
+        """Wilder ADX 归一化 [0,1]（对齐 RD Regime-Driven adx_strength 精确口径）。
+
+        与 ts_adx（rolling mean）不同：本实现使用 Wilder EWM 平滑（alpha=1/window,
+        adjust=False），并归一化到 [0,1]——语义等价 RD ``factors/price_volume._adx_series``，
+        保证映射 Spearman 达标（plans/57 §4.3 因子映射）。
+        """
+        up = high.diff()
+        down = -low.diff()
+        plus_dm = pd.Series(np.where((up > down) & (up > 0), up, 0.0), index=high.index)
+        minus_dm = pd.Series(np.where((down > up) & (down > 0), down, 0.0), index=high.index)
+        tr = (
+            pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1)
+            .max(axis=1)
+        )
+        alpha = 1.0 / window
+        atr = tr.ewm(alpha=alpha, adjust=False).mean()
+        plus_di = 100.0 * plus_dm.ewm(alpha=alpha, adjust=False).mean() / atr.replace(0, np.nan)
+        minus_di = 100.0 * minus_dm.ewm(alpha=alpha, adjust=False).mean() / atr.replace(0, np.nan)
+        dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+        return dx.ewm(alpha=alpha, adjust=False).mean() / 100.0
+
+    @staticmethod
+    def ts_atr_ratio(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> pd.Series:
+        """ATR/价格（波动状态，对齐 RD AtrRatioFactor 精确口径）。
+
+        真实波幅 TR = max(high-low, |high-close.shift|, |low-close.shift|)，
+        ATR = TR 滚动均值，输出 ATR/close（plans/57 §4.3 因子映射）。
+        """
+        tr = (
+            pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1)
+            .max(axis=1)
+        )
+        atr = tr.rolling(window, min_periods=_MINP).mean()
+        return atr / close
+
+    @staticmethod
     def ts_trend_vol_ratio(series: pd.Series, window: int = 20) -> pd.Series:
         """趋势波动比（方向收益 / 波动，趋势 vs 噪音）。"""
         return D12Ops.ts_relative_strength(series, window)

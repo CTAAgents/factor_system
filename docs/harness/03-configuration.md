@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v2.105.0+28
+> 版本: v3.0.0
 > 最后更新: 2026-08-10
 
 ---
@@ -224,6 +224,8 @@ FTS 配置采用三级优先级（高→低）：
 | `l3_signal_store_db` | str | `data/l3_signal_store.duckdb` | `FTS_L3_SIGNAL_STORE_DB` | L3 信号矩阵库路径（登记于 `storage_landscape.yaml` l3_signal_assets 域，plans/51 B2） |
 | `l3_signal_cache_entries` | int | `20000` | `FTS_L3_SIGNAL_CACHE_ENTRIES` | L3 信号缓存容量上限（plans/40 A 层；plans/51 C2 配置化，原模块级常量） |
 | `l3_signal_store_append_window` | bool | `true` | `FTS_L3_SIGNAL_APPEND_WINDOW` | L3 信号矩阵增量窗口追加（plans/52，GAP-139）：窗口推进时对可复用因子仅重算新增交易日 + 窗口回退段（meta `dates_digest` 前缀判定，抽样对照验证不过自动全量零漂移）；`false` 回退"同窗口因子级复用"现行为（跨日全量重算） |
+| QuantData 权威主链路路径（v2.105.0+32） | str | `D:\QuantData` | `FTS_QUANTDATA_HOME` | QuantData 数据仓库根目录：`fts/data_sources/quantdata_provider.py` duckdb 只读短连接直读 continuous_daily/continuous_map/kline_daily；聚合器降级链头部插入 QUANTDATA（QUANTDATA→DUCKDB_CACHE→TDX_LOCAL→TQ_PYTHON→AKSHARE→SYNTHETIC），不依赖跨项目 client_v2.py |
+| 信号契约 v1 三列（plans/57，v3.0.0） | — | schema_version=1 / factor_status=pending / factor_scope=`{"subchain_scope":"all"}` | — | `l3_signal_meta` 追加列（幂等迁移）：`schema_version`（契约版本，RD 校验不兼容即降级）、`factor_status`（active/degraded/shadow/retired，FTS 状态传播）、`factor_scope`（subchain_scope + subchain_specific 特异因子链范围）；RD `signal_client` 决策/训练双模式拉取 + 增量幂等 + 新鲜度校验 + 降级熔断（design/F.3） |
 
 ### 2.1 G11 日换手口径说明（信号翻转率）
 

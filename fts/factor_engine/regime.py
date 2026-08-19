@@ -111,7 +111,7 @@ _VOL_LOW_PERCENTILE = 0.20  # 低波动阈值：历史 20% 分位数以下
 _VOL_ABSOLUTE_LOW = 0.10  # 绝对值低波阈值（年化 10%）
 _VOL_ABSOLUTE_HIGH = 0.40  # 绝对值高波阈值（年化 40%）
 _VOL_HIGH_FLOOR = 0.15  # 相对高波阈值的绝对下限（年化 15%）：分位数过小（近恒定序列 q80<0.15）
-                        # 时兜底到该值，避免 effective_high≈current_vol 导致 vol_score 虚高误判 high_vol
+# 时兜底到该值，避免 effective_high≈current_vol 导致 vol_score 虚高误判 high_vol
 
 # ADX 指标
 _ADX_PERIOD = 14  # ADX 计算周期
@@ -658,6 +658,67 @@ def _compute_current_vol_estimate(rets: pd.Series) -> float:
         return 0.15
 
 
+def high_vol_premise_check(
+    ohlcv: pd.DataFrame,
+    *,
+    vol_window: int = _VOL_HISTORY_DAYS,
+    vol_min_percentile: float = 0.5,
+    ewma_span: int = 30,
+) -> dict[str, Any]:
+    """high_vol 标签前提交叉验证（plans/54 P0-3 落地，GAP-155）。
+
+    以规则法（_detect_rule 波动率段）同口径复核 high_vol 标签的市场前提——
+    "波动结构是否仍在"（监控前提而非结果）：
+      - absolute 判据: 当前 EWMA vol ≥ 历史 q80（_VOL_HIGH_PERCENTILE，_VOL_HIGH_FLOOR 兜底）；
+      - relative 判据: 当前 20d 波动分位（固定 vol_window 窗口）≥ vol_min_percentile；
+    任一成立即前提有效（防误杀）；数据不足 → 前提视为健康（不误报）。
+
+    Args:
+        ohlcv: 含 open/high/low/close/volume 列的 DataFrame（DatetimeIndex）。
+        vol_window: 波动分位历史窗口（默认 _VOL_HISTORY_DAYS=252）。
+        vol_min_percentile: 相对分位下限（默认 0.5，中位数以上）。
+        ewma_span: EWMA 波动跨度（默认 30，对齐 _ewma_volatility）。
+
+    Returns:
+        {"ok": bool, "ewma_vol": float, "eff_high": float,
+         "vol_percentile": float, "reason": str}——ok=True 表示前提有效。
+    """
+    if ohlcv is None or ohlcv.empty or "close" not in ohlcv.columns:
+        return {"ok": True, "ewma_vol": 0.0, "eff_high": 0.0, "vol_percentile": 0.5, "reason": "insufficient"}
+    close = ohlcv["close"].dropna()
+    if len(close) < 20:
+        return {"ok": True, "ewma_vol": 0.0, "eff_high": 0.0, "vol_percentile": 0.5, "reason": "insufficient"}
+    rets = close.pct_change().dropna()
+    ewma_vol = _ewma_volatility(rets, span=ewma_span)
+    current_ewma = float(ewma_vol.iloc[-1]) if len(ewma_vol) > 0 else 0.0
+    rolling_vol = rets.rolling(20).std() * np.sqrt(252)
+    vol_h = rolling_vol.dropna()
+    if vol_window > 0:
+        vol_h = vol_h.iloc[-vol_window:]
+    if len(vol_h) > 20:
+        eff_high = float(max(vol_h.quantile(_VOL_HIGH_PERCENTILE), _VOL_HIGH_FLOOR))
+    else:
+        eff_high = float(_VOL_ABSOLUTE_HIGH)
+    roll_cur = float(rolling_vol.iloc[-1]) if not rolling_vol.empty else 0.0
+    vol_percentile = float((vol_h <= roll_cur).mean()) if len(vol_h) > 2 else 0.5
+    ewma_ok = current_ewma >= eff_high
+    pct_ok = vol_percentile >= vol_min_percentile
+    ok = bool(ewma_ok or pct_ok)
+    parts = []
+    if not ewma_ok:
+        parts.append(f"EWMA vol {current_ewma:.3f}<q80 {eff_high:.3f}")
+    if not pct_ok:
+        parts.append(f"vol 分位 {vol_percentile:.2f}<{vol_min_percentile:.2f}")
+    reason = "premise_ok" if ok else "premise_lost: " + "; ".join(parts)
+    return {
+        "ok": ok,
+        "ewma_vol": round(current_ewma, 6),
+        "eff_high": round(eff_high, 6),
+        "vol_percentile": round(vol_percentile, 4),
+        "reason": reason,
+    }
+
+
 # ─── SectorRegimeSelector ─────────────────────────────────
 
 
@@ -816,9 +877,7 @@ class SectorRegimeSelector:
 
         close_df = pd.DataFrame(close_matrix)
         # 等权收益率指数：各品种归一化到首值=100 后取截面均值
-        first_valid = close_df.apply(
-            lambda s: s.dropna().iloc[0] if s.notna().any() else np.nan
-        )
+        first_valid = close_df.apply(lambda s: s.dropna().iloc[0] if s.notna().any() else np.nan)
         norm_df = close_df.div(first_valid, axis=1) * 100.0
         composite_close = norm_df.mean(axis=1).dropna()
 
@@ -842,15 +901,11 @@ class SectorRegimeSelector:
         composite_high: pd.Series
         composite_low: pd.Series
         if high_lo:
-            composite_high = (
-                pd.DataFrame(high_lo).max(axis=1).reindex(composite_close.index).fillna(composite_close)
-            )
+            composite_high = pd.DataFrame(high_lo).max(axis=1).reindex(composite_close.index).fillna(composite_close)
         else:
             composite_high = composite_close
         if low_lo:
-            composite_low = (
-                pd.DataFrame(low_lo).min(axis=1).reindex(composite_close.index).fillna(composite_close)
-            )
+            composite_low = pd.DataFrame(low_lo).min(axis=1).reindex(composite_close.index).fillna(composite_close)
         else:
             composite_low = composite_close
 

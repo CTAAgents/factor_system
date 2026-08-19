@@ -102,3 +102,37 @@ class TestMarketPremise:
         res = check_market_premise(_panel(close), "high_vol")
         assert res.premise_ok is True
         assert res.vol_structure_ok is True
+
+    def test_vol_window_restricts_history(self) -> None:
+        """vol_window 固定窗口：分位仅使用最近 vol_window 个有效波动点（消除全历史拖累）。"""
+        rng = np.random.default_rng(42)
+        close = [100.0]
+        for _ in range(300):
+            close.append(close[-1] * (1.0 + float(rng.normal(0, 0.04))))  # 前段高波
+        for _ in range(100):
+            close.append(close[-1] * (1.0 + float(rng.normal(0, 0.005))))  # 近期回落
+        panel = _panel(close)
+        full = check_market_premise(panel, "high_vol")
+        win = check_market_premise(panel, "high_vol", vol_window=60)
+        # 手动重算窗口 60 分位作为 oracle（与实现同口径）
+        mat = pd.DataFrame({s: pd.to_numeric(df["close"], errors="coerce") for s, df in panel.items()}).dropna(
+            how="all"
+        )
+        fv = mat.apply(lambda s: s.dropna().iloc[0])
+        idx = (mat.div(fv, axis=1) * 100.0).mean(axis=1).dropna()
+        v20 = idx.pct_change().dropna().rolling(20).std() * np.sqrt(252)
+        vh = v20.dropna().iloc[-60:]
+        expect = float((vh <= v20.dropna().iloc[-1]).mean())
+        assert abs(win.vol_percentile - expect) < 1e-6
+        assert win.vol_percentile != full.vol_percentile  # 窗口截断确实改变分位
+
+    def test_vol_window_short_panel_unchanged(self) -> None:
+        """短面板（<vol_window）时窗口截取全部有效点，行为与全历史一致。"""
+        close: list[float] = [100.0]
+        for k in range(1, 61):
+            close.append(close[-1] * (1.05 if k % 2 else 0.95))
+        panel = _panel(close)
+        default = check_market_premise(panel, "high_vol")
+        explicit = check_market_premise(panel, "high_vol", vol_window=252)
+        assert default.vol_percentile == explicit.vol_percentile
+        assert default.premise_ok == explicit.premise_ok

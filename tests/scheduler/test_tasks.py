@@ -256,7 +256,7 @@ def test_registry_is_taskregistry():
 def test_register_default_tasks_registers_five():
     """register_default_tasks 注册默认任务。"""
     register_default_tasks()
-    assert len(REGISTRY) == 17
+    assert len(REGISTRY) == 18
 
 
 @pytest.mark.parametrize("name,expected", DEFAULT_TASKS.items())
@@ -319,7 +319,7 @@ def test_default_task_callables_importable():
 def test_list_tasks_returns_sorted():
     """list_tasks 返回按 name 排序的列表，自动注册默认任务。"""
     tasks = list_tasks()
-    assert len(tasks) == 17
+    assert len(tasks) == 18
     names = [t.name for t in tasks]
     assert names == [
         "data_level_monitor",
@@ -327,6 +327,7 @@ def test_list_tasks_returns_sorted():
         "factor_inspector",
         "futures_signal_pipeline",
         "health_check",
+        "import_external_factors",
         "l1_meta_loop",
         "l2_batch_mining",
         "l2_evolution_weekday",
@@ -347,7 +348,7 @@ def test_list_tasks_after_manual_register():
     register_default_tasks()
     REGISTRY.register(TaskSpec("custom_job", "0 12 * * *", "mod.custom"))
     tasks = list_tasks()
-    assert len(tasks) == 18
+    assert len(tasks) == 19
     names = [t.name for t in tasks]
     assert "custom_job" in names
 

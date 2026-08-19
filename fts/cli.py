@@ -384,6 +384,13 @@ def _build_default_aggregator():
     from fts.data_sources.tdx_local_source import TdxLocalSource
 
     sources: list = []
+    # QuantData 权威源置首（v2.105.0+32 主链路切换，GAP-156，对齐 FuturesDataProvider 构建模式）
+    try:
+        from fts.data_sources.quantdata_provider import QuantDataProvider
+
+        sources.append(QuantDataProvider())
+    except Exception:  # noqa: BLE001
+        pass
     try:
         sources.append(TdxLocalSource())
     except Exception:  # noqa: BLE001

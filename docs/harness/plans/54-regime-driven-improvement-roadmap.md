@@ -1,6 +1,6 @@
 # 54 — Regime-Driven 思想吸纳与 FTS 改进方向规划
 
-> 版本: v2.105.0+28（当前基线） · 文档类型: 方向规划（推进中）
+> 版本: v3.0.0（当前基线） · 文档类型: 方向规划（推进中）
 
 > 状态: ✅ 全部方向已完成（P0×3 + P1×3 + P2×3 + P3×1，v2.105.0+26） · 优先级: P1 · 负责人: FTS Agent
 > 来源文档: `D:\Regime-Driven\docs\REGIME_STRATEGY_DESIGN.md`（v3.0.3 定稿，2026-08-18）
@@ -101,6 +101,14 @@ HARNESS 13 项检查清单 + GAP 登记流程逐个推进。
   维度（bull/bear 约束趋势结构、high_vol 约束 vol≥下限、oscillate/low_vol 约束 vol≤上限、
   未知/面板不足不误报），前提消失输出"市场前提消失[regime]: 趋势结构消失/波动结构异常"告警；
   新增 test_market_premise.py 7 用例 + logic_monitor 回归 28 全绿。
+- **落地补盲（v2.105.0+30，GAP-155）**：① `check_market_premise` 新增 `vol_window=252` 默认参数
+  固定分位窗口（对齐 regime.py `_VOL_HISTORY_DAYS`，消除 180d/252d/437d 窗口分位漂移
+  0.45/0.57/0.71 的阈值边界不稳）；② `regime.py` 新增 `high_vol_premise_check`——规则法 vol
+  前提交叉验证（EWMA≥q80 或 20d 波动分位≥0.5 任一成立即前提有效，数据不足不误报）；
+  ③ portfolio_loop Step 2.5 接线（仅 energy）：组合 high_vol 标签前提不成立 → 标签覆盖
+  oscillate + conf×0.6 + method 标注 premise_override，regime_meta 新增 `premise_cross_check`
+  段（ok/ewma_vol/eff_high/vol_percentile/reason/overridden_to）透明留痕；
+  新增测试 7 用例（test_market_premise +2 + test_regime_premise_check.py 5）。
 
 ### P1 — 核心思想落地（文档的灵魂）
 

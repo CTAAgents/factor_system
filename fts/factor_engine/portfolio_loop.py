@@ -549,17 +549,12 @@ def regime_adaptive_weight_adjustment(
         eff_regime: dict[str, Any] = subchain_regimes[chain] if chain else regime  # type: ignore[index]
         eff_regime_name = eff_regime.get("regime", "oscillate")
         eff_multipliers = REGIME_STYLE_MULTIPLIERS.get(eff_regime_name, {})
-        eff_probs: dict[str, float] | None = (
-            eff_regime.get("regime_probs") if probability_mix else None
-        )
+        eff_probs: dict[str, float] | None = eff_regime.get("regime_probs") if probability_mix else None
         eff_probs = _power_normalize_probs(eff_probs or {}, blend_power) or None
 
         # 获取 style 倍率（默认 1.0）；启用概率混合时按制度概率跨制度加权（28-T3）
         if eff_probs:
-            style_mult = sum(
-                p * (REGIME_STYLE_MULTIPLIERS.get(r, {}).get(style, 1.0))
-                for r, p in eff_probs.items()
-            )
+            style_mult = sum(p * (REGIME_STYLE_MULTIPLIERS.get(r, {}).get(style, 1.0)) for r, p in eff_probs.items())
         else:
             style_mult = eff_multipliers.get(style, 1.0)
 
@@ -1380,9 +1375,7 @@ def _auto_build_factor_returns(
         # FactorReturnsBuilder 已在上方导入（L1328），此处仅补 FactorReturnsConfig。
         from .factor_returns import FactorReturnsConfig
 
-        builder = FactorReturnsBuilder(
-            FactorReturnsConfig(quantile=0.3, min_stocks=10, directional=True)
-        )
+        builder = FactorReturnsBuilder(FactorReturnsConfig(quantile=0.3, min_stocks=10, directional=True))
         fr = builder.build_from_panel(
             signal_matrix=bundle.signal_matrix,
             forward_returns=bundle.forward_returns,
@@ -2563,10 +2556,7 @@ def _factor_composite_score(
         return {}
     w_all = dict(weights or _DEFAULT_SCORE_WEIGHTS)
     # 仅保留当前列表中至少一个因子有值的维度（缺失维度剔除，防空维 0 分惩罚）
-    present = [
-        k for k in _SCORE_DIMENSIONS
-        if any(_score_dim(f, k) is not None for f in factors)
-    ]
+    present = [k for k in _SCORE_DIMENSIONS if any(_score_dim(f, k) is not None for f in factors)]
     w = {k: float(w_all.get(k, 0.0)) for k in present}
     total_w = sum(w.values())
     if total_w <= 0:
@@ -2680,7 +2670,9 @@ def _run_owl_sidecar(
     factor_codes = {f["factor_id"]: f for f in valid_factors if f.get("factor_id")}
     try:
         # 共同日期：取各品种 index 交集（与 build_signal_matrix 内部对齐一致）
-        common_dates = sorted(set.intersection(*(set(df.index) for df in panel_data.values() if df is not None and not df.empty)))
+        common_dates = sorted(
+            set.intersection(*(set(df.index) for df in panel_data.values() if df is not None and not df.empty))
+        )
     except Exception:  # noqa: BLE001
         common_dates = []
     if len(common_dates) < 30:
@@ -3000,16 +2992,10 @@ def build_combo(
     _beta_scale = float(beta_scale if beta_scale is not None else 1.0)
     _crowd_scale = float(crowding_scale if crowding_scale is not None else 1.0)
     if (
-        exposure_scale is not None
-        or aligned_scale < 1.0
-        or beta_scale is not None
-        or crowding_scale is not None
+        exposure_scale is not None or aligned_scale < 1.0 or beta_scale is not None or crowding_scale is not None
     ) and total_w > 0:
         exposure_scale = (
-            float(exposure_scale if exposure_scale is not None else 1.0)
-            * aligned_scale
-            * _beta_scale
-            * _crowd_scale
+            float(exposure_scale if exposure_scale is not None else 1.0) * aligned_scale * _beta_scale * _crowd_scale
         )
         for s in retained:
             s["weight"] = s["weight"] * exposure_scale
@@ -4427,9 +4413,7 @@ def inject_to_fdt(
     # factor_id→name 映射归一（信号无 factor_id 时保留原键，兼容旧产物/测试夹具）。
     if subchain_weights and symbol_chain:
         _id2name = {
-            s.get("factor_id"): s.get("name")
-            for s in combo.get("signals", [])
-            if s.get("factor_id") and s.get("name")
+            s.get("factor_id"): s.get("name") for s in combo.get("signals", []) if s.get("factor_id") and s.get("name")
         }
         _name_keyed: dict[str, dict[str, float]] = {}
         for _fid, _row in subchain_weights.items():
@@ -4808,15 +4792,11 @@ class PortfolioLoop:
             "factors": factors,
             # plans/47 §D2：子链权重暴露占比（特异因子治理监控；仅调制开启时有值）
             "subchain_exposure": (
-                _compute_subchain_exposure(self._subchain_modulation)
-                if self._subchain_modulation
-                else {}
+                _compute_subchain_exposure(self._subchain_modulation) if self._subchain_modulation else {}
             ),
             # plans/48 §D3：子链×制度 Gate 分布（各子链 decision；仅 energy 且 Gate 开启时有值，
             # 与 subchain_exposure 互补——方向层 vs 幅度层监控）
-            "subchain_gate_distribution": (
-                getattr(self, "_subchain_gate_distribution", None) or {}
-            ),
+            "subchain_gate_distribution": (getattr(self, "_subchain_gate_distribution", None) or {}),
             # plans/50 §B3：子链 Gate 缩放系数快照（并入调制矩阵后权重源头回避程度；
             # 仅 energy + Gate 开启 + 调制矩阵存在时有值，四网合一的第四段）
             "subchain_gate_scale": dict(self._subchain_gate_scale),
@@ -5373,9 +5353,7 @@ class PortfolioLoop:
             # 不再按样本内评分"选优"——样本内指标选优属数据窥探式选择，
             # 系统性偏向过拟合因子；排序键用 OOS 校正综合评分。
             if len(factors) > ACTIVE_FACTOR_CAP:
-                score_map = _factor_composite_score(
-                    factors, self.score_config, use_oos_ic=True
-                )
+                score_map = _factor_composite_score(factors, self.score_config, use_oos_ic=True)
                 factors = _cap_safety_valve(
                     factors,
                     ACTIVE_FACTOR_CAP,
@@ -5473,8 +5451,12 @@ class PortfolioLoop:
             weight_matrix = factor_returns
             if self.synthesis_mode == "optimizer" and weight_matrix is None and panel_data:
                 auto_fr = _auto_build_factor_returns(
-                    panel_data, factors, self.elite_dir, market=self.market,
-                    signal_cache=self._signal_cache, signal_store=self._signal_store,
+                    panel_data,
+                    factors,
+                    self.elite_dir,
+                    market=self.market,
+                    signal_cache=self._signal_cache,
+                    signal_store=self._signal_store,
                 )
                 if auto_fr is not None:
                     weight_matrix = auto_fr
@@ -5524,9 +5506,7 @@ class PortfolioLoop:
                         compute_chain_exposure,
                     )
 
-                    mod = build_subchain_weights(
-                        factors, ENERGY_CHAIN_SUB_SYMBOLS, self.subchain_weight_config
-                    )
+                    mod = build_subchain_weights(factors, ENERGY_CHAIN_SUB_SYMBOLS, self.subchain_weight_config)
                     self._subchain_modulation = mod
                     self._subchain_symbol_chain = build_symbol_chain_map(ENERGY_CHAIN_SUB_SYMBOLS)
                     for s in signals:
@@ -5535,9 +5515,7 @@ class PortfolioLoop:
                             s["subchain_weights"] = sw
                     exp = compute_chain_exposure(mod, ENERGY_CHAIN_SUB_SYMBOLS)
                     over = {
-                        c: round(v, 3)
-                        for c, v in exp.items()
-                        if v > self.subchain_weight_config.max_exposure_ratio
+                        c: round(v, 3) for c, v in exp.items() if v > self.subchain_weight_config.max_exposure_ratio
                     }
                     logger.info(
                         "[L3] Step 2b: 子链差异化权重调制完成 (factors=%d, decay_mode=%s), 子链暴露=%s%s",
@@ -5559,6 +5537,36 @@ class PortfolioLoop:
 
                     regime = self._regime_selector.detect(market_ohlcv)  # type: ignore[arg-type]
 
+                    # plans/54 P0-3 标签前提交叉验证（GAP-155，仅 energy）：
+                    # high_vol 标签需规则法 vol 维度复核（EWMA≥q80 或 20d 波动分位≥0.5），
+                    # 前提不成立（波动结构回落）→ 标签覆盖 oscillate + conf×0.6，
+                    # 防 HMM 标签与相对波动结构背离时高波档位误配；失败降级不阻断主流程。
+                    if self.market == "energy":
+                        try:
+                            from .regime import high_vol_premise_check as _hv_premise
+
+                            _pc = _hv_premise(market_ohlcv)
+                            _override_to: Optional[str] = None
+                            if regime.get("regime") == "high_vol" and not _pc["ok"]:
+                                _override_to = "oscillate"
+                                regime["regime"] = "oscillate"
+                                regime["confidence"] = round(float(regime.get("confidence", 0.5)) * 0.6, 4)
+                                regime["method"] = f"{regime.get('method', 'unknown')}+premise_override"
+                                logger.warning(
+                                    "[L3] Step 2.5: high_vol 标签前提交叉验证未通过(%s) → 降级 oscillate (conf×0.6)",
+                                    _pc["reason"],
+                                )
+                            self._regime_meta["premise_cross_check"] = {
+                                "ok": bool(_pc["ok"]),
+                                "ewma_vol": _pc["ewma_vol"],
+                                "eff_high": _pc["eff_high"],
+                                "vol_percentile": _pc["vol_percentile"],
+                                "reason": _pc["reason"],
+                                "overridden_to": _override_to,
+                            }
+                        except Exception as _pce:  # noqa: BLE001 — 交叉验证失败不阻断
+                            logger.warning("[L3] Step 2.5: 前提交叉验证失败（跳过）: %s", _pce)
+
                     aconfig = self.adaptive_config or DEFAULT_ADAPTIVE_CONFIG
                     if aconfig.get("enabled", True):
                         # plans/48 §C：energy 且子链 Gate 开启时，检测子链 regime 供因子权重
@@ -5568,9 +5576,7 @@ class PortfolioLoop:
                             try:
                                 from fts.config import get_config
 
-                                gate_cfg = (getattr(get_config(), "l3", {}) or {}).get(
-                                    "regime_gating"
-                                ) or {}
+                                gate_cfg = (getattr(get_config(), "l3", {}) or {}).get("regime_gating") or {}
                             except Exception:  # noqa: BLE001
                                 gate_cfg = {}
                             if gate_cfg.get("enabled", False):
@@ -5584,10 +5590,7 @@ class PortfolioLoop:
                                     if subchain_regimes:
                                         logger.info(
                                             "[L3] Step 2.5: 子链 regime 检测完成（§C 路由）: %s",
-                                            {
-                                                c: r.get("regime", "unknown")
-                                                for c, r in subchain_regimes.items()
-                                            },
+                                            {c: r.get("regime", "unknown") for c, r in subchain_regimes.items()},
                                         )
                                         # plans/48 §D3：构建子链×制度 Gate 分布（各子链 decision），
                                         # 入质量报告段（与 plans/47 §D2 的 subchain_exposure 互补）
@@ -5625,13 +5628,9 @@ class PortfolioLoop:
                                                         _gscale,
                                                         signals,
                                                     )
-                                                self._subchain_gate_scale = {
-                                                    c: round(v, 4)
-                                                    for c, v in _gscale.items()
-                                                }
+                                                self._subchain_gate_scale = {c: round(v, 4) for c, v in _gscale.items()}
                                                 logger.info(
-                                                    "[L3] Step 2.5: Gate 并入调制矩阵"
-                                                    "（avoid 链权重源头归零/降权）: %s",
+                                                    "[L3] Step 2.5: Gate 并入调制矩阵（avoid 链权重源头归零/降权）: %s",
                                                     self._subchain_gate_scale,
                                                 )
                                             except Exception as gs_err:  # noqa: BLE001
@@ -5647,9 +5646,7 @@ class PortfolioLoop:
                                             )
                                             self._subchain_gate_distribution = {}
                                 except Exception as se:  # noqa: BLE001
-                                    logger.warning(
-                                        "[L3] Step 2.5: 子链 regime 检测失败（回退全局）: %s", se
-                                    )
+                                    logger.warning("[L3] Step 2.5: 子链 regime 检测失败（回退全局）: %s", se)
                                     subchain_regimes = None
                         signals = regime_adaptive_weight_adjustment(
                             signals,
@@ -5678,9 +5675,7 @@ class PortfolioLoop:
                             "entropy_norm": None,
                             # plans/48 §C3：子链收益来源族激活画像（仅 energy+Gate 开启时非空）
                             "subchain_return_source": (
-                                build_subchain_return_source(subchain_regimes)
-                                if subchain_regimes
-                                else None
+                                build_subchain_return_source(subchain_regimes) if subchain_regimes else None
                             ),
                         }
                         # plans/55 §C: L0 宏观 Beta 层总敞口倍率（仅 energy 且开关开启）
@@ -5699,9 +5694,7 @@ class PortfolioLoop:
                                     compute_beta_scale,
                                 )
 
-                                beta_cfg = (getattr(_beta_cfg(), "l3", {}) or {}).get(
-                                    "regime_beta_layer"
-                                ) or {}
+                                beta_cfg = (getattr(_beta_cfg(), "l3", {}) or {}).get("regime_beta_layer") or {}
                                 if beta_cfg.get("enabled", False):
                                     bconf = BetaLayerConfig(**beta_cfg)
                                     from ..data import FTSDataProvider
@@ -5712,21 +5705,13 @@ class PortfolioLoop:
                                         trace_id=trace_id or "",
                                     )
                                     bstate = BetaDetector(bconf).detect(_fin_panel)
-                                    self._regime_beta_scale = compute_beta_scale(
-                                        bstate["state"], bconf
-                                    )
+                                    self._regime_beta_scale = compute_beta_scale(bstate["state"], bconf)
                                     _beta_meta = {
                                         "beta_scale": round(self._regime_beta_scale, 4),
                                         "beta_state": bstate["state"],
-                                        "beta_confidence": round(
-                                            float(bstate.get("confidence", 0.0)), 4
-                                        ),
-                                        "beta_trend_score": round(
-                                            float(bstate.get("trend_score", 0.0)), 6
-                                        ),
-                                        "beta_risk_pref_z": round(
-                                            float(bstate.get("risk_pref_z", 0.0)), 6
-                                        ),
+                                        "beta_confidence": round(float(bstate.get("confidence", 0.0)), 4),
+                                        "beta_trend_score": round(float(bstate.get("trend_score", 0.0)), 6),
+                                        "beta_risk_pref_z": round(float(bstate.get("risk_pref_z", 0.0)), 6),
                                     }
                                     logger.info(
                                         "[L3] Step 2.5: Beta 层 %s conf=%.2f → beta_scale=%.2f",
@@ -5735,9 +5720,7 @@ class PortfolioLoop:
                                         self._regime_beta_scale,
                                     )
                             except Exception as be:  # noqa: BLE001 — Beta 层失败回退 1.0
-                                logger.warning(
-                                    "[L3] Step 2.5: Beta 层计算失败，回退 scale=1.0: %s", be
-                                )
+                                logger.warning("[L3] Step 2.5: Beta 层计算失败，回退 scale=1.0: %s", be)
                                 self._regime_beta_scale = 1.0
                                 _beta_meta = {"beta_scale": 1.0, "beta_error": str(be)}
                         self._regime_meta = {**self._regime_meta, **_beta_meta}
@@ -5756,9 +5739,7 @@ class PortfolioLoop:
                                     compute_crowding_signals,
                                 )
 
-                                crowd_cfg = (getattr(_crowd_cfg(), "l3", {}) or {}).get(
-                                    "regime_crowding"
-                                ) or {}
+                                crowd_cfg = (getattr(_crowd_cfg(), "l3", {}) or {}).get("regime_crowding") or {}
                                 if crowd_cfg.get("enabled", False):
                                     cconf = CrowdingSignalConfig(**crowd_cfg)
                                     from ..data import FTSDataProvider
@@ -5776,30 +5757,19 @@ class PortfolioLoop:
                                         cconf,
                                     )
                                     _crowding_meta = {
-                                        "crowding_scale": round(
-                                            self._regime_crowding_scale, 4
-                                        ),
-                                        "crowding_score": round(
-                                            float(crowd["crowding_score"]), 4
-                                        ),
+                                        "crowding_scale": round(self._regime_crowding_scale, 4),
+                                        "crowding_score": round(float(crowd["crowding_score"]), 4),
                                         "crowding_direction": crowd["direction"],
-                                        "crowding_signals": {
-                                            k: v
-                                            for k, v in crowd["signals"].items()
-                                            if v
-                                        },
+                                        "crowding_signals": {k: v for k, v in crowd["signals"].items() if v},
                                     }
                                     logger.info(
-                                        "[L3] Step 2.5: 拥挤度 score=%.2f dir=%s "
-                                        "→ crowding_scale=%.2f",
+                                        "[L3] Step 2.5: 拥挤度 score=%.2f dir=%s → crowding_scale=%.2f",
                                         float(crowd["crowding_score"]),
                                         crowd["direction"],
                                         self._regime_crowding_scale,
                                     )
                             except Exception as ce:  # noqa: BLE001 — 拥挤度失败回退 1.0
-                                logger.warning(
-                                    "[L3] Step 2.5: 拥挤度计算失败，回退 scale=1.0: %s", ce
-                                )
+                                logger.warning("[L3] Step 2.5: 拥挤度计算失败，回退 scale=1.0: %s", ce)
                                 self._regime_crowding_scale = 1.0
                                 _crowding_meta = {
                                     "crowding_scale": 1.0,
@@ -5818,15 +5788,9 @@ class PortfolioLoop:
                                 regime.get("regime_probs"),
                                 self._regime_exposure_scale,
                                 beta_scale=self._regime_beta_scale,
-                                beta_state=str(
-                                    (self._regime_meta or {}).get("beta_state", "")
-                                ),
+                                beta_state=str((self._regime_meta or {}).get("beta_state", "")),
                                 crowding_scale=self._regime_crowding_scale,
-                                crowding_state=str(
-                                    (self._regime_meta or {}).get(
-                                        "crowding_direction", ""
-                                    )
-                                ),
+                                crowding_state=str((self._regime_meta or {}).get("crowding_direction", "")),
                             )
                         except Exception as met_err:
                             logger.warning("[L3] Step 2.5: Regime 指标上报失败: %s", met_err)
@@ -5866,9 +5830,7 @@ class PortfolioLoop:
                             from .regime_conditional_weight import build_regime_conditioned_weights
 
                             _cur = regime.get("regime", "oscillate")
-                            _mod = build_regime_conditioned_weights(
-                                factors, _cur, self._regime_conditional_config
-                            )
+                            _mod = build_regime_conditioned_weights(factors, _cur, self._regime_conditional_config)
                             _applied = 0
                             for s in signals:
                                 if not s.get("retained", True):
@@ -5880,7 +5842,9 @@ class PortfolioLoop:
                             if _applied:
                                 logger.info(
                                     "[L3] Step 2.5b: Regime 条件化应用 %d 个因子（regime=%s, decay=%s）",
-                                    _applied, _cur, self._regime_conditional_config.decay_mode,
+                                    _applied,
+                                    _cur,
+                                    self._regime_conditional_config.decay_mode,
                                 )
                         except Exception as rc_err:  # noqa: BLE001
                             logger.warning("[L3] Step 2.5b: Regime 条件化失败（非致命，跳过）: %s", rc_err)
@@ -5944,8 +5908,12 @@ class PortfolioLoop:
             # 仅显式设置 FTS_L3_AUTO_FACTOR_RETURNS=1 时启用；其余场景回退估算口径。
             if factor_returns is None and panel_data and os.environ.get("FTS_L3_AUTO_FACTOR_RETURNS") == "1":
                 auto_fr = _auto_build_factor_returns(
-                    panel_data, factors, self.elite_dir, market=self.market,
-                    signal_cache=self._signal_cache, signal_store=self._signal_store,
+                    panel_data,
+                    factors,
+                    self.elite_dir,
+                    market=self.market,
+                    signal_cache=self._signal_cache,
+                    signal_store=self._signal_store,
                 )
                 if auto_fr is not None:
                     factor_returns = auto_fr

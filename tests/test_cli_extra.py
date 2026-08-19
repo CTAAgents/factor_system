@@ -146,7 +146,7 @@ class TestBuildDefaultAggregator:
     """测试 _build_default_aggregator（TQ 源 + DuckDB 路径探测）。"""
 
     def test_with_tq_source_and_db(self, tmp_path):
-        """TQ 源可用 + DuckDB 存在时聚合器携带 db_path。"""
+        """TQ 源可用 + DuckDB 存在时聚合器携带 db_path（QUANTDATA 权威源置首，v2.105.0+32）。"""
         duck = tmp_path / "f.duckdb"
         duck.write_bytes(b"")
         with (
@@ -159,17 +159,21 @@ class TestBuildDefaultAggregator:
         kwargs = m_agg.call_args.kwargs
         assert kwargs["db_path"] == duck
         assert kwargs["cache_max_age_days"] == 30
-        assert len(kwargs["sources"]) == 1
+        # QUANTDATA（权威源置首） + TDX_LOCAL
+        assert len(kwargs["sources"]) == 2
+        assert kwargs["sources"][0].source_name == "QUANTDATA"
 
     def test_tq_source_init_fails(self, tmp_path):
-        """TQ 源初始化失败时静默跳过（sources 为空）。"""
+        """TQ 源初始化失败时静默跳过（仍保留 QUANTDATA 权威源，v2.105.0+32）。"""
         with (
             patch("fts.data_futures._DUCKDB_PATH", tmp_path / "none.duckdb"),
             patch("fts.data_sources.tdx_local_source.TdxLocalSource", side_effect=RuntimeError("tq unavailable")),
             patch("fts.data_sources.aggregator.FuturesDataAggregator") as m_agg,
         ):
             _build_default_aggregator()
-        assert m_agg.call_args.kwargs["sources"] == []
+        sources = m_agg.call_args.kwargs["sources"]
+        assert len(sources) == 1
+        assert sources[0].source_name == "QUANTDATA"
         assert m_agg.call_args.kwargs["db_path"] is None
 
 

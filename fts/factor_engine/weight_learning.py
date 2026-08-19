@@ -1,6 +1,10 @@
 """
 fts.factor_engine.weight_learning — 机构级权重学习增强（v2.74.0）。
 
+⚠️ 已退役（plans/57 §4.1/§5.3，2026-08-20）：策略合成职责迁移至 Regime-Driven
+`strategy_synthesis` / `money_management`。本模块标记弃用，仅存量调用点兼容；
+新增调用禁止（FTS 仅保留因子管理 + 信号矩阵输出）。
+
 在 Elastic Net 截面回归权重之上补齐头部机构的三层处理，学习样本空间
 根据目标交易市场自动匹配：
 
@@ -16,7 +20,7 @@ fts.factor_engine.weight_learning — 机构级权重学习增强（v2.74.0）�
     cfg = WeightLearningConfig()
     resolved = resolve_panel_market(cfg.panel_market, market)  # "auto" → market
 
-版本: v1.0.0
+版本: v1.0.0（retired @ 2026-08-20）
 """
 
 from __future__ import annotations
@@ -28,7 +32,12 @@ from typing import Any, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from .retired_l3 import warn_if_retired
+
 logger = logging.getLogger(__name__)
+
+# 退役登记（plans/57 §4.1：整体平移 RD 后 FTS 侧标记弃用）
+warn_if_retired("weight_learning")
 
 
 # ─── 契约 ─────────────────────────────────────────────────

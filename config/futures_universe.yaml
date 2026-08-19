@@ -17,8 +17,9 @@
 version: 1
 
 # ══════════════════════════════════════════════════════════════════
-# 1. 全量品种池 universe（82 品种 = FUTURES_SUBSET，按交易所分组）
+# 1. 全量品种池 universe（84 品种 = FUTURES_SUBSET，按交易所分组）
 #    品种代码为 FTS 连续合约格式（{品种}0，如 RB0 = 螺纹钢主力连续）
+#    2026-08-20 增补 T0（10年期国债）/TL0（30年期国债）至 84（plans/57 §9 步骤0 全期货覆盖）
 # ══════════════════════════════════════════════════════════════════
 universe:
   dce:   # 大商所（22）
@@ -96,13 +97,15 @@ universe:
     - LU0   # 低硫燃料油
     - BC0   # 国际铜
     - EC0   # 集运欧线
-  cffex: # 中金所（6）
+  cffex: # 中金所（8）
     - IF0   # 沪深300
     - TF0   # 5年期国债
     - IH0   # 上证50
     - IC0   # 中证500
     - TS0   # 2年期国债
     - IM0   # 中证1000
+    - T0    # 10年期国债
+    - TL0   # 30年期国债
   gfex:  # 广期所（5）
     - SI0   # 工业硅
     - LC0   # 碳酸锂
@@ -217,7 +220,7 @@ sector_map:
   果蔬:          [AP0, CJ0]                                      # 苹果/红枣（鲜果现货驱动）
   贵金属:        [AU0, AG0, PT0, PD0]                            # 黄金/白银/铂/钯
   新能源/新材料:  [LC0, SI0, PS0]                                 # 碳酸锂/工业硅/多晶硅
-  金融期货:      [IF0, IC0, IH0, IM0, TF0, TS0]                  # 股指 + 国债
+  金融期货:      [IF0, IC0, IH0, IM0, TF0, TS0, T0, TL0]          # 股指 + 国债（含 10Y/30Y，2026-08-20）
 
 # ══════════════════════════════════════════════════════════════════
 # 6. 产业链专属工作流 workflows（ENERGY_CHAIN_*）
@@ -268,3 +271,34 @@ workflows:
     l1_pool_path: memory/knowledge/factors/factor_pool_energy.json
     l1_inject_dir: memory/knowledge/factors/l1_injected_energy
     l1_debates_dir: memory/debates/energy
+
+# ══════════════════════════════════════════════════════════════════
+# 7. 全期货覆盖优先级规划 coverage_priority（plans/57 §9 步骤0，FUTURES_COVERAGE_PLAN）
+#    目标：智能因子系统面向全部期货所有品种（84 品种 / 17 产业链）。
+#    以 RD 全市场骨架（6 产业链）为策略消费基准，FTS 17 产业链为因子生产细化。
+#    扩展优先级 P0→P3，逐链推进（每链先小规模验证再铺开），
+#    扩展完成前 RD 本地 11 因子对未覆盖链兜底。
+#    校验：每级 symbols ⊆ universe、四级别交集为空、并集 = universe（loader 内置断言）。
+# ══════════════════════════════════════════════════════════════════
+coverage_priority:
+  # P0 能源化工（24 品种，先行）：能源 SC/FU/BU/LU、聚酯链 TA/PF/EG/PX/PR、
+  #   油化工 L/PP/V/PG/EB/BZ/PL、煤化工 MA/SA/UR/FG/SH、橡胶 RU/BR/NR。
+  #   存量因子（含退役）集中重审衔接（plans/57 §6.8）。
+  P0_energy_chemicals:
+    chains: [能源, 聚酯链, 油化工, 煤化工, 橡胶]
+    symbols: [SC0, FU0, BU0, LU0, TA0, PF0, EG0, PX0, PR0, L0, PP0, V0, PG0, EB0, BZ0, PL0, MA0, SA0, UR0, FG0, SH0, RU0, BR0, NR0]
+  # P1 黑色系（8）+ 有色金属（9）（17 品种）：RB/HC/I/J/JM/SS/SM/SF；CU/AL/ZN/NI/PB/SN/BC/AO/AD。
+  #   量价适用强、流动性好。
+  P1_ferrous_nonferrous:
+    chains: [黑色系, 有色金属]
+    symbols: [RB0, HC0, I0, J0, JM0, SS0, SM0, SF0, CU0, AL0, ZN0, NI0, PB0, SN0, BC0, AO0, AD0]
+  # P2 农产品群 + 贵金属（27 品种）：油脂油料 M/Y/A/B/P/OI/RM/RS/PK、谷物 C/CS/RR/WH/JR/RI/LR、
+  #   软商品 SR/CF/CY、畜牧 LH/JD、果蔬 AP/CJ、贵金属 AU/AG/PT/PD。
+  P2_agri_precious:
+    chains: [油脂油料, 谷物, 软商品, 畜牧, 果蔬, 贵金属]
+    symbols: [M0, Y0, A0, B0, P0, OI0, RM0, RS0, PK0, C0, CS0, RR0, WH0, JR0, RI0, LR0, SR0, CF0, CY0, LH0, JD0, AP0, CJ0, AU0, AG0, PT0, PD0]
+  # P3 金融期货（8）+ 新能源/新材料（3）+ 造纸/航运（5）（16 品种）：IF/IH/IC/IM/T/TF/TS/TL；
+  #   LC/SI/PS；SP/LG/FB/OP/EC。逻辑特殊或数据浅，先做 QuantData 可用性核查。
+  P3_financial_newenergy:
+    chains: [金融期货, 新能源/新材料, 造纸/林浆纸, 航运]
+    symbols: [IF0, IH0, IC0, IM0, T0, TF0, TS0, TL0, LC0, SI0, PS0, SP0, LG0, FB0, OP0, EC0]

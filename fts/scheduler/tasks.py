@@ -225,6 +225,13 @@ def register_default_tasks() -> None:
             description="批量子链质量评估（2026-08-19 沉淀标准工作流）：全部 active 因子逐品种 IC → 子链画像 → 落库 subchain_factor_quality 质量矩阵，供退化检测/子链调制消费；无有效链因子标记 pending_validation 不自动降级",
             trace_id_prefix="fts.subchain_eval",
         ),
+        TaskSpec(
+            name="import_external_factors",
+            cron_expression="0 9 1 * *",  # 每月 1 日 09:00（v2.105.0+32 常态化导入管道）
+            callable_path="fts.scheduler.jobs.import_external_factors_job",
+            description="外部因子常态化导入（extract_* 升级）：6 源 YAML 加载 → 字段权威校验（L2 缺失禁依赖）→ 去重 → 注入 l1_injected + factor_pool → 由 L2 种子评估链准入；默认 apply 注入，幂等可重入",
+            trace_id_prefix="fts.import",
+        ),
     ]
     for spec in defaults:
         if spec.name not in REGISTRY:

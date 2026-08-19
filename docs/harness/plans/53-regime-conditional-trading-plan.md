@@ -1,6 +1,6 @@
 # 53 — Regime 条件化因子交易计划（D/A/B/C 四模块）
 
-> 版本: v2.105.0+28（实施完成）
+> 版本: v3.0.0（实施完成）
 
 > 状态: ✅ 已完成（2026-08-17，D/A/B/C 四模块实施完成） · 优先级: P1 · 负责人: FTS Agent · 关联: plans/28, plans/47, plans/48, GAP-105, regime_validation.py, config/futures_universe.yaml
 

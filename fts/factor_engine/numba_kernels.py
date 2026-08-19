@@ -27,13 +27,14 @@ Python 循环。真实规模对照（149×3000 面板，2026-08-15 实测）逐�
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 # ─── 依赖可用性探测（import 失败 / 版本异常 → 回退现值，零漂移） ───
-try:  # numba 是可选依赖：未安装时全库降级为不可用，调用方回退现值实现
+try:  # numba 是可选依赖：未安装/版本不兼容时全库降级为不可用，调用方回退现值实现
     import numba as _nb
     from numba import njit
 
@@ -41,7 +42,20 @@ try:  # numba 是可选依赖：未安装时全库降级为不可用，调用方
     _NUMBA_VERSION: str | None = getattr(_nb, "__version__", None)
 except Exception:  # noqa: BLE001 — 任何导入失败都视为不可用，不阻断主链路
     _nb = None  # type: ignore[assignment]
-    njit = None  # type: ignore[assignment]
+
+    def _njit_passthrough(*args: Any, **kwargs: Any) -> Any:
+        """@njit 装饰器透传：numba 不可用时使 @njit(...) 成为 no-op。
+
+        关键修复（2026-08-20）：numba 安装但版本不兼容（如 numpy≥2.5 时 numba 需要
+        numpy≤2.4）时，`import numba` 抛 ImportError 被捕获，但模块级 `@njit(...)`
+        仍会执行——njit=None 导致整模块 import 抛 TypeError，调用方无法降级。
+        改为返回原函数，模块可正常加载，enabled()=False → 内核入口返回 None → 回退现值。
+        """
+        if args and callable(args[0]):
+            return args[0]  # @njit 无括号用法
+        return lambda f: f  # @njit(...) 带括号用法
+
+    njit = _njit_passthrough  # type: ignore[assignment]
     _NUMBA_AVAILABLE = False
     _NUMBA_VERSION = None
     logger.warning("numba 不可用，算子 numba 内核回退现值实现（零漂移）")

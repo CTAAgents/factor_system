@@ -1211,6 +1211,8 @@ class OperatorRegistry:
             ("ts_adx_pos", _D12.ts_adx_pos, ["high", "low", "close", "window"]),
             ("ts_adx_neg", _D12.ts_adx_neg, ["high", "low", "close", "window"]),
             ("ts_adx", _D12.ts_adx, ["high", "low", "close", "window"]),
+            ("ts_adx_wilder", _D12.ts_adx_wilder, ["high", "low", "close", "window"]),
+            ("ts_atr_ratio", _D12.ts_atr_ratio, ["high", "low", "close", "window"]),
             ("ts_trend_vol_ratio", _D12.ts_trend_vol_ratio, ["series", "window"]),
             ("ts_trend_entropy", _D12.ts_trend_entropy, ["series", "window"]),
             ("ts_up_down_strength", _D12.ts_up_down_strength, ["series", "window"]),
