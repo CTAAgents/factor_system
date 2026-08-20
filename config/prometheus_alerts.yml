@@ -101,3 +101,130 @@ groups:
         annotations:
           summary: "因子演化回路可能卡住"
           description: "回路已运行超过 1 小时未完成（上次完成时间戳距今超过 1 小时）。可能需要检查 LLM 调用或 Optuna 优化过程。"
+
+  # ── QuantData 数据新鲜度告警 ──
+  # v3.0.0+6: FTS K 线唯一数据源 = QuantData，以下告警监控 QuantData 数据新鲜度
+  #
+  # 指标说明（需在 fts/monitor/http_server.py 和 quantdata_provider.py 中埋点）:
+  #   fts_qd_latest_data_timestamp    Gauge   最新数据时间戳（Unix 秒），按合约/品种标签
+  #   fts_qd_data_completeness_ratio  Gauge   数据完整率（应有合约数 / 实际有数据合约数）
+  #   fts_qd_stale_contracts          Gauge   数据过期合约数（超过阈值未更新）
+  #   fts_qd_zero_volume_ratio        Gauge   零成交量 K 线占比（异常检测）
+  #   fts_qd_read_latency_seconds     Gauge   DuckDB 读取延迟（秒）
+  #   fts_qd_read_errors_total        Counter 读取错误累计次数
+  #   fts_qd_contracts_total          Gauge   已注册合约总数
+  #   fts_qd_contracts_with_data      Gauge   有有效数据的合约数
+  - name: fts_quantdata_freshness
+    interval: 30s
+    rules:
+      - alert: QuantDataDataStale
+        expr: fts_qd_latest_data_timestamp > 0 and (time() - fts_qd_latest_data_timestamp) > 86400
+        for: 1h
+        labels:
+          severity: critical
+          team: fts
+          component: quantdata
+        annotations:
+          summary: "QuantData 数据过期（超过 24 小时未更新）"
+          description: "合约 {{ $labels.contract }} 的最新数据时间为 {{ $value | humanizeTimestamp }}，距今已超过 24 小时。QuantData 数据采集可能中断，请检查 QuantData 数据管道。"
+          runbook_url: "https://wiki.example.com/fts/alerts/qd-data-stale"
+
+      - alert: QuantDataDataCompletenessLow
+        expr: fts_qd_data_completeness_ratio < 0.95
+        for: 30m
+        labels:
+          severity: warning
+          team: fts
+          component: quantdata
+        annotations:
+          summary: "QuantData 数据完整率低于 95%"
+          description: "当前数据完整率为 {{ $value | humanizePercentage }}，低于 95% 阈值。有 {{ $labels.stale_contracts | default 0 }} 个合约数据过期。"
+          runbook_url: "https://wiki.example.com/fts/alerts/qd-completeness"
+
+      - alert: QuantDataStaleContractsHigh
+        expr: fts_qd_stale_contracts > 5
+        for: 1h
+        labels:
+          severity: warning
+          team: fts
+          component: quantdata
+        annotations:
+          summary: "QuantData 过期合约数过多"
+          description: "当前有 {{ $value }} 个合约数据超过 freshness 阈值未更新。可能是某些合约停牌或 QuantData 采集异常。"
+          runbook_url: "https://wiki.example.com/fts/alerts/qd-stale-contracts"
+
+      - alert: QuantDataZeroVolumeAnomaly
+        expr: fts_qd_zero_volume_ratio > 0.1
+        for: 2h
+        labels:
+          severity: warning
+          team: fts
+          component: quantdata
+        annotations:
+          summary: "QuantData 零成交量 K 线占比异常"
+          description: "零成交量 K 线占比为 {{ $value | humanizePercentage }}，超过 10% 阈值。可能存在数据质量问题或批量停牌。"
+          runbook_url: "https://wiki.example.com/fts/alerts/qd-zero-volume"
+
+      - alert: QuantDataReadLatencyHigh
+        expr: fts_qd_read_latency_seconds > 5.0
+        for: 10m
+        labels:
+          severity: warning
+          team: fts
+          component: quantdata
+        annotations:
+          summary: "QuantData DuckDB 读取延迟过高"
+          description: "DuckDB 读取延迟为 {{ $value }}s，超过 5s 阈值。可能是 I/O 瓶颈或并发锁竞争。"
+          runbook_url: "https://wiki.example.com/fts/alerts/qd-read-latency"
+
+      - alert: QuantDataReadErrorsHigh
+        expr: increase(fts_qd_read_errors_total[1h]) > 10
+        for: 30m
+        labels:
+          severity: critical
+          team: fts
+          component: quantdata
+        annotations:
+          summary: "QuantData 读取错误频繁发生"
+          description: "过去 1 小时内 QuantData 读取错误次数超过 10 次。可能是 DuckDB 文件损坏或连接池耗尽。"
+          runbook_url: "https://wiki.example.com/fts/alerts/qd-read-errors"
+
+      - alert: QuantDataNoDataAllContracts
+        expr: fts_qd_contracts_total > 0 and fts_qd_contracts_with_data == 0
+        for: 30m
+        labels:
+          severity: critical
+          team: fts
+          component: quantdata
+        annotations:
+          summary: "QuantData 所有合约均无数据"
+          description: "已注册 {{ $value }} 个合约，但无一有有效数据。QuantData 数据源可能完全不可用。"
+          runbook_url: "https://wiki.example.com/fts/alerts/qd-no-data"
+
+  # ── QuantData 断路器与降级告警 ──
+  - name: fts_quantdata_circuit
+    interval: 15s
+    rules:
+      - alert: QuantDataCircuitOpen
+        expr: fts_circuit_open{source="QUANTDATA"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          team: fts
+          component: quantdata
+        annotations:
+          summary: "QuantData 熔断器已开启"
+          description: "QuantData 熔断器已开启，请求被降级至 SYNTHETIC 合成数据。请立即检查 QuantData 数据管道状态。"
+          runbook_url: "https://wiki.example.com/fts/alerts/qd-circuit-open"
+
+      - alert: QuantDataFallbackActive
+        expr: fts_data_source_success_rate{source="QUANTDATA"} < 0.5
+        for: 10m
+        labels:
+          severity: warning
+          team: fts
+          component: quantdata
+        annotations:
+          summary: "QuantData 成功率持续低于 50%"
+          description: "QuantData 数据源成功率为 {{ $value | humanizePercentage }}，持续低于 50%。系统可能频繁降级。"
+          runbook_url: "https://wiki.example.com/fts/alerts/qd-fallback"

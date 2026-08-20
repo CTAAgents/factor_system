@@ -1,6 +1,6 @@
 # E.4 L2/L3 DuckDB 连接生命周期根治详细设计（S1）
 
-> 版本: v3.0.0+5
+> 版本: v3.0.0+6
 > 关联: [E.2-storage-backend-comparison.md](./E.2-storage-backend-comparison.md)（S1 方案定位，已决策）、[E.3-sqlite-state-store-design.md](./E.3-sqlite-state-store-design.md)（S2 已完成，L4 已 SQLite 化）、[E.1-duckdb-concurrency-design.md](./E.1-duckdb-concurrency-design.md)（单写者现状基线）、[04-resilience.md](../04-resilience.md)（并发韧性）
 > 状态: **已实施（2026-08-13）**
 > 定位: 受保护数据层（`fts/data_futures.py` + `fts/data_sources/aggregator.py` + `fts/factor_engine/factor_db/repository.py`）连接生命周期根治——写连接短生命周期 + 跨进程写互斥 + 读路径 read_only

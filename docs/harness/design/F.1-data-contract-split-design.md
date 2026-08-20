@@ -1,6 +1,6 @@
 # F.1 数据契约拆分（FusedOHLCV → StockOHLCV / FuturesOHLCV）— 详细技术设计
 
-> 版本: v3.0.0+5-draft
+> 版本: v3.0.0+6-draft
 > 创建: 2026-08-12
 > 状态: **设计中**（待评审，未实现）
 > 关联: [29-storage-convergence-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/29-storage-convergence-plan.md)（六层存储）、[F.2-evolution-engine-fork-design.md](./F.2-evolution-engine-fork-design.md)（引擎分叉，联动本设计）

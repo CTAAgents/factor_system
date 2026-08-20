@@ -899,7 +899,8 @@ def test_try_cache_works_on_legacy_varchar_schema(legacy_varchar_db: Path):
     assert df is not None, "GAP-022 修复后 _try_cache 不应返 None"
     assert len(df) == 5
     # 验证 date 列保留为字符串（VARCHAR schema 不被 CAST 改变列类型）
-    assert df["date"].dtype == object
+    # pandas 3: StringDtype -> "str"  |  pandas 2: object
+    assert str(df["date"].dtype) in ("object", "str")
     assert df["date"].iloc[0] == "2026-08-04"
     # 验证按 date DESC 排序（最新在前）
     assert df["date"].iloc[0] > df["date"].iloc[-1]

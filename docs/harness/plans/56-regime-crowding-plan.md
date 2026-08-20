@@ -1,6 +1,6 @@
 # 56 — 拥挤度体系化计划（D3：6 信号 + 联合门控 + 多空方向）
 
-> 版本: v3.0.0+5+N（build bump 后更新） · 文档类型: 实施立项计划
+> 版本: v3.0.0+6+N（build bump 后更新） · 文档类型: 实施立项计划
 
 > 状态: ✅ 已实施（A-D 四模块完成，灰度默认关）· 决策门校准后仍 ❌ 未通过 → **正式降级为纯观测层**（enabled=false，仅 Prometheus/报告观测） · 优先级: P1 · 负责人: FTS Agent
 > 来源思想: `D:\Regime-Driven\docs\REGIME_STRATEGY_DESIGN.md` §7.2（拥挤度门控）、附录 A（事件研究法校准）

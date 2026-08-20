@@ -29,6 +29,14 @@ route:
       repeat_interval: 10m
       continue: true
 
+    # QuantData 数据新鲜度告警 -> 专用通知渠道
+    - match:
+        component: quantdata
+      receiver: "quantdata-receiver"
+      group_wait: 30s
+      repeat_interval: 30m
+      continue: true
+
 # 抑制规则: 当严重告警已触发时，抑制同一组件的警告告警
 inhibit_rules:
   - source_match:
@@ -36,6 +44,14 @@ inhibit_rules:
     target_match:
       severity: "warning"
     equal: ["alertname", "component"]
+
+  # QuantData: 熔断器开启时，抑制数据新鲜度类 warning 告警（避免刷屏）
+  - source_match:
+      alertname: "QuantDataCircuitOpen"
+    target_match:
+      component: "quantdata"
+      severity: "warning"
+    equal: []
 
 # 通知接收者定义
 receivers:
@@ -47,6 +63,11 @@ receivers:
   - name: "critical-receiver"
     webhook_configs:
       - url: "http://localhost:5001/webhook/critical"
+        send_resolved: true
+
+  - name: "quantdata-receiver"
+    webhook_configs:
+      - url: "http://localhost:5001/webhook/quantdata"
         send_resolved: true
     # 邮件通知 (可选)
     # email_configs:
