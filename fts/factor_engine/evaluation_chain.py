@@ -14,6 +14,7 @@ HARNESS §11-loop-engineering.md §4:
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 from typing import Any, Optional
 
@@ -1185,6 +1186,20 @@ def cross_section_evaluate_backtest(
     # GAP-075: 跨标的稳健性检查输出
     if symbol_ic:
         metrics["symbol_ic"] = symbol_ic
+
+    # scope 域评估（P0 方案）：域内统计量产出（全链口径聚合，开关默认开
+    # FTS_SCOPE_DOMAIN_ENABLED=0 回退）；失败不阻断既有评估。
+    try:
+        from .scope_domain.hooks import attach_evaluation_domain_stats, scope_domain_enabled
+
+        if symbol_ic and scope_domain_enabled():
+            attach_evaluation_domain_stats(
+                metrics,
+                symbol_ic,
+                market=os.getenv("FTS_DEFAULT_MARKET", "futures"),
+            )
+    except Exception as _se:  # noqa: BLE001
+        logger.warning("scope 域内统计产出失败（跳过）: %s", _se)
 
     # GAP-160 (v3.0.0+7): 板块级覆盖率（cross_symbol 软门控D 通道输入）
     metrics["cross_symbol_sector_coverage"] = _cs_sector_coverage(symbol_ic, industry_map)

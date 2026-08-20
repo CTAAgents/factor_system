@@ -424,6 +424,27 @@ def _extract_qa_meta(metadata: Any) -> dict[str, Any]:
     return {k: qr.get(k) for k in _QA_REVIEW_KEYS}
 
 
+def _extract_scope_domain(metadata: Any) -> Optional[dict[str, Any]]:
+    """从 factor_catalog.metadata 提取域内统计量（metadata.scope_domain，P0 方案）。
+
+    Args:
+        metadata: factor_catalog.metadata（JSON 字符串 或 dict，可能为 None）
+
+    Returns:
+        dict 或 None（无 scope_domain / 非 dict → None，机审回退全链口径）。
+    """
+    if isinstance(metadata, str):
+        try:
+            import json
+
+            metadata = json.loads(metadata)
+        except (ValueError, TypeError):
+            metadata = {}
+    meta = metadata if isinstance(metadata, dict) else {}
+    sd = meta.get("scope_domain")
+    return sd if isinstance(sd, dict) else None
+
+
 @dataclass
 class AutoReviewPolicy:
     """机审判定策略（C8-2）：IC/Sharpe 边界 + 三态分类。
@@ -463,6 +484,7 @@ class AutoReviewPolicy:
         sharpe: Any,
         qa_meta: Optional[dict[str, Any]] = None,
         subchain_profile: Optional[dict[str, dict[str, Any]]] = None,
+        domain_stats: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[ReviewDecision], str]:
         """机审分类（三态）。decision=None 表示转人审。
 
@@ -476,6 +498,10 @@ class AutoReviewPolicy:
         IC 稀释而拒绝——继续走 QA 门禁，门禁通过即 approved（reason 标注
         effective 子链，scope 由调用方按画像设置）；Sharpe 门槛不放行。
 
+        scope 域内门禁（P0 方案）：传入 metadata.scope_domain（域内统计量）且
+        FTS_SCOPE_DOMAIN_ENABLED 开启时，域内 IC/Sharpe 达标 → 全链 IC/Sharpe
+        门槛豁免（域内口径优先，特异因子不再被无效链稀释）。
+
         Args:
             ic: 因子 IC（factor_catalog 字段）
             sharpe: 因子 Sharpe
@@ -483,6 +509,7 @@ class AutoReviewPolicy:
                 multiple_passed, walk_forward_windows, q1_q10_passed}，None=未评审
             subchain_profile: 子链画像 {子链: {effective, t_stat, mean_ic, ...}}
                 （plans/49 §B2 单链特异放行输入；None/空 = 不启用）
+            domain_stats: 域内统计量（metadata.scope_domain，P0 方案）
         """
         if ic is None or sharpe is None:
             return None, "IC/Sharpe 缺失，无法机审"
@@ -495,15 +522,35 @@ class AutoReviewPolicy:
         if ic_f > self.max_ic or sharpe_f > self.max_sharpe:
             return None, f"疑似过拟合/未来函数 (ic={ic_f:.4f}, sharpe={sharpe_f:.2f} 超上限)"
 
+        # P0 方案：scope 域内门禁（域内 IC/Sharpe 达标 → 全链 IC/Sharpe 豁免）
+        domain_ok = False
+        if domain_stats:
+            try:
+                from .scope_domain.hooks import domain_gate_decision, scope_domain_enabled
+
+                if scope_domain_enabled():
+                    domain_ok = (
+                        domain_gate_decision(
+                            ic=ic_f,
+                            sharpe=sharpe_f,
+                            domain_stats=domain_stats,
+                            min_ic=self.min_ic,
+                            min_sharpe=self.min_sharpe,
+                        )
+                        == "approved"
+                    )
+            except Exception:  # noqa: BLE001 — 域内门禁失败回退全链判定
+                domain_ok = False
+
         # plans/49 §B2：单链特异放行判定（仅 IC 维度；Sharpe 不放行）
         subchain_eff: list[str] = []
         if ic_f < self.min_ic and subchain_profile:
             subchain_eff = [
                 c for c, st in subchain_profile.items() if bool(st.get("effective"))
             ]
-        if sharpe_f < self.min_sharpe:
+        if sharpe_f < self.min_sharpe and not domain_ok:
             return ReviewDecision.REJECTED, f"低质 (sharpe={sharpe_f:.2f}<{self.min_sharpe})"
-        if ic_f < self.min_ic and not subchain_eff:
+        if ic_f < self.min_ic and not subchain_eff and not domain_ok:
             return ReviewDecision.REJECTED, f"低质 (ic={ic_f:.4f}<{self.min_ic})"
 
         # ── 完整质检结论门禁（v2.104.0+89，宁缺毋滥） ──
@@ -740,7 +787,11 @@ class FactorReviewWorkflow:
             return {"factor_id": factor_id, "decision": None, "reason": "因子不存在"}
         ic, sharpe, metadata = row
         qa_meta = _extract_qa_meta(metadata)
-        decision, reason = AutoReviewPolicy().classify(ic, sharpe, qa_meta=qa_meta)
+        # P0 方案：域内统计量（metadata.scope_domain）传入机审，域内口径优先
+        _sd = _extract_scope_domain(metadata)
+        decision, reason = AutoReviewPolicy().classify(
+            ic, sharpe, qa_meta=qa_meta, domain_stats=_sd
+        )
         if decision is None:
             self._delete_review(factor_id)
         else:

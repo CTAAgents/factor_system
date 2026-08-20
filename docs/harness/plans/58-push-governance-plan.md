@@ -1,6 +1,6 @@
 # 58 — GitHub 推送范围治理计划（Push Safety）
 
-> 版本: v3.0.0+10
+> 版本: v3.0.0+11
 > 日期: 2026-08-20 · 状态: ✅ 已实施 · 优先级: P1
 > 关联: .gitignore "Push safety" 段、scripts/cleanup_push_scope.py、CLAUDE.md §5.9（安全与可移植性）
 

@@ -33,6 +33,24 @@ DEFAULT_ENERGY_CHAIN_ELITE_DIR = "memory/knowledge/factors/energy_chain_elite"
 
 
 @dataclass
+class ScopeDomainSettings:
+    """scope 域评估配置（特异因子全流程适配 P0 方案，2026-08-20）。
+
+    域内评估默认开启（FTS_SCOPE_DOMAIN_ENABLED 默认 "1"），运行中发现 bug/行为
+    漂移可即时置 "0" 回退全链口径；各接入点保留显式回退通道与可观测日志。
+    """
+
+    enabled: bool = field(default_factory=lambda: os.getenv("FTS_SCOPE_DOMAIN_ENABLED", "1") == "1")
+    min_dates: int = field(default_factory=lambda: int(os.getenv("FTS_SCOPE_DOMAIN_MIN_DATES", "500")))
+    subperiods: int = field(default_factory=lambda: int(os.getenv("FTS_SCOPE_DOMAIN_SUBPERIODS", "3")))
+    subperiod_ratio: float = field(
+        default_factory=lambda: float(os.getenv("FTS_SCOPE_DOMAIN_SUBPERIOD_RATIO", "0.67"))
+    )
+    permutation_n: int = field(default_factory=lambda: int(os.getenv("FTS_SCOPE_DOMAIN_PERMUTATION_N", "200")))
+    schema_version: int = field(default_factory=lambda: int(os.getenv("FTS_SCOPE_DOMAIN_SCHEMA_VERSION", "2")))
+
+
+@dataclass
 class FTSConfig:
     """FTS 全局配置。"""
 
@@ -207,12 +225,16 @@ class FTSConfig:
     # ── L2 晋升子链放行 (GAP-144, v2.105.0+8) ──
     # 单链特异因子晋升保护：Verifier 用全链 IC 门槛（min_ic=0.03），单链特异/部分链
     # 因子全链 IC 被无效/反向子链稀释 < 门槛时在晋升入口被拦截（走不到落库落画像）。
-    # 开启后，energy 链因子存在 effective 子链（t 检验三门槛画像）时豁免 IC/ICIR
-    # 稀释维度（Sharpe/回撤/OOS 等其它维度仍硬判），复用 plans/49 §B2 语义。
-    # 灰度默认关（兼容现状），仅 market="energy" 生效。
+    # 开启后，energy/futures（sector_map 17 链）因子存在 effective 子链（t 检验三门槛
+    # 画像或 scope 域内画像）时豁免 IC/ICIR 稀释维度（Sharpe/回撤/OOS 等其它维度仍硬判），
+    # 复用 plans/49 §B2 语义。默认开启（跟随 scope_domain，FTS_L2_SUBCHAIN_WAIVER_ENABLED=0 回退）。
     l2_subchain_waiver_enabled: bool = field(
-        default_factory=lambda: os.getenv("FTS_L2_SUBCHAIN_WAIVER_ENABLED", "0") == "1"
+        default_factory=lambda: os.getenv("FTS_L2_SUBCHAIN_WAIVER_ENABLED", "1") == "1"
     )
+
+    # ── scope 域评估（特异因子全流程适配，P0 方案）──
+    # 域内评估默认开启；FTS_SCOPE_DOMAIN_ENABLED=0 即时回退全链口径。
+    scope_domain: ScopeDomainSettings = field(default_factory=ScopeDomainSettings)
 
     # ── L2 去冗余-正交基底 (GAP-I206 补充, v2.72.0) ──
     # 正交基底维护（Gram-Schmidt 迭代残差化）：候选因子对基底逐因子 OLS 残差，

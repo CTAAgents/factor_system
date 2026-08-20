@@ -257,6 +257,13 @@ workflows:
       - 油化工
       - 煤化工
       - 橡胶
+    # 四大化工子链品种映射（scope 域评估链级划分；自 ENERGY_CHAIN_SUB_SYMBOLS 迁移
+    # YAML 化，消除 portfolio_loop 代码硬编码，2026-08-20 P0 方案）
+    sub_symbols:
+      能源: [SC0, FU0, BU0]
+      聚酯: [PF0, TA0, EG0]
+      油化工: [L0, PP0, PG0]
+      煤化工: [MA0, UR0, SA0]
     # 因子库/精英目录路由标记（ENERGY_CHAIN_MARKET）
     market: energy
     # 训练品种最小历史深度阈值（ENERGY_CHAIN_MIN_TRAIN_ROWS，真实非 SYNTHETIC 日线行数）

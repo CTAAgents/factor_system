@@ -2045,15 +2045,28 @@ _SCORE_DIMENSIONS: tuple[str, ...] = ("sharpe_cap", "icir", "ic", "turnover_inv"
 
 # ─── 子链维度去冗余（GAP-121 扩展，v2.104.0+X）──────────────────────────────
 
-ENERGY_CHAIN_SUB_SYMBOLS: dict[str, list[str]] = {
-    "能源": ["SC0", "FU0", "BU0"],
-    "聚酯": ["PF0", "TA0", "EG0"],
-    "油化工": ["L0", "PP0", "PG0"],
-    "煤化工": ["MA0", "UR0", "SA0"],
-}
-"""能化产业链四大子链品种映射，与 config/futures_universe.yaml
-workflows.energy.chain_symbols 顺序对齐（能源/聚酯/油化工/煤化工各 3 品种；
-v2.104.0+106 GAP-133 聚酯链 PX0→EG0）。"""
+def _load_energy_sub_symbols() -> dict[str, list[str]]:
+    """能化链四大子链映射：优先 scope resolver（YAML workflows.energy.sub_symbols，
+    2026-08-20 起 YAML 为 SSOT）；解析失败回退内置（与 config/futures_universe.yaml
+    workflows.energy.chain_symbols 顺序对齐：能源/聚酯/油化工/煤化工各 3 品种）。"""
+    try:
+        from fts.factor_engine.scope_domain.resolver import resolve_chain_map
+
+        mapped = resolve_chain_map("energy")
+        if mapped:
+            return mapped
+    except Exception:  # noqa: BLE001 — resolver 失败回退内置
+        pass
+    return {
+        "能源": ["SC0", "FU0", "BU0"],
+        "聚酯": ["PF0", "TA0", "EG0"],
+        "油化工": ["L0", "PP0", "PG0"],
+        "煤化工": ["MA0", "UR0", "SA0"],
+    }
+
+
+ENERGY_CHAIN_SUB_SYMBOLS: dict[str, list[str]] = _load_energy_sub_symbols()
+"""能化产业链四大子链品种映射（scope resolver 统一加载，YAML SSOT）。"""
 
 DEFAULT_CHAIN_DEDUP_MAX_PER_CHAIN: int = 2
 """子链去冗余：单一子链保留因子数上限（默认 2，防产业链暴露集中）。"""

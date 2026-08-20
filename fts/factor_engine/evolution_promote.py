@@ -949,6 +949,12 @@ class EliteStore:
         )
         record["qa_review"] = qa_review
 
+        # ── scope 域评估画像（P0 方案）：域内统计量持久化到 metadata ──
+        # 供评审域内门禁 / 信号契约 v2 / 退化域内口径消费（域内评估默认开）。
+        _scope_ds = (evaluation or {}).get("domain_stats")
+        if isinstance(_scope_ds, dict) and _scope_ds:
+            record["scope_domain"] = _scope_ds
+
         # ── GAP-135 ① 评审质检结论门禁：一票否决项未过（禁止入库）禁止晋升 ──
         # Q1-Q3 一票否决项任一未过（未来函数/逻辑未文档化/参数未网格）即结论「禁止入库」，
         # 评审结论与入库必须一致（此前 GP 因子「禁止入库」结论仍被晋升入库的缺陷修复）；

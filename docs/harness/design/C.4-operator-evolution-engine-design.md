@@ -1,6 +1,6 @@
 # C.4 算子演化引擎 — 详细技术设计（Phase 3+）
 
-> 版本: v3.0.0+10
+> 版本: v3.0.0+11
 > 关联: [C.1-feature-engineering-platform-design.md](file:///d:/Programs/factor_system/docs/harness/design/C.1-feature-engineering-platform-design.md)（特征工程中台）、`fts/factor_engine/expr_dsl/`（FTS-Expr DSL 基础层）
 > 状态: **已实现**（v2.10.0）
 > 实现说明: 由 `fts/factor_engine/operator_evolution.py`（`OperatorEvolutionEngine`）承担，在 DSL 算子空间做适应度导向的进化式搜索，产物为 **OPERATOR 类型因子**（`kind=OPERATOR`、携带 `expression`/`max_lookback`）。关闭 GAP-026（GP 引擎算子命名与 DSL 对齐：引擎直接以 DSL 注册表为算子空间）。
