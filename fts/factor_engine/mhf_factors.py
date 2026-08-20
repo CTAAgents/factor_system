@@ -13,7 +13,7 @@ fts/factor_engine/mhf_factors.py — 中高频（MHF）分钟级因子族（Phas
 数据规约：输入 DataFrame 含 open/high/low/close/volume，索引为 DatetimeIndex
 （或含 datetime 列自动识别），与 multi_frequency.py 约定一致。
 
-设计文档: docs/harness/plans/33-mhf-trading-plan.md §Phase 1
+设计文档: docs/archive/plans/33-mhf-trading-plan.md §Phase 1
 """
 
 from __future__ import annotations

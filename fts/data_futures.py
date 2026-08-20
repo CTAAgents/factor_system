@@ -753,7 +753,7 @@ class FuturesDataProvider:
                 minute_sources=minute_sources,
                 tick_sources=tick_sources,
                 db_path=db_path,
-                cache_max_age_days=30,
+                cache_max_age_days=1,
                 minute_cache_max_age_days=_agg_cfg().minute_cache_max_age_days,
             )
             logger.info(
@@ -829,18 +829,24 @@ class FuturesDataProvider:
             except Exception:  # noqa: BLE001
                 adjusted = True
         if adjusted and symbol.endswith("0"):
-            try:
-                from fts.data_sources.roll_calendar import RollCalendar
+            # 主链路 QUANTDATA 来源（continuous_daily 已按 adj_factor 后复权）→ 不再二次复权，
+            # 避免双重复权污染因子历史值（quantdata_provider L22-23"Provider 已复权，上层不得再复权"）。
+            # 非 QuantData 降级链（kline_cache/SYNTHETIC/akshare 等未复权数据）→ 保留 RollCalendar 复权回退。
+            if df.attrs.get("source") == "QUANTDATA":
+                logger.debug("[复权] [%s] QuantData 已复权序列，跳过 RollCalendar 二次复权", symbol)
+            else:
+                try:
+                    from fts.data_sources.roll_calendar import RollCalendar
 
-                df, rolls = RollCalendar().apply_adjustment(df, symbol)
-                if rolls:
-                    logger.info(
-                        "[复权] [%s] 应用 %d 次换月复权（因子计算用）",
-                        symbol,
-                        len(rolls),
-                    )
-            except Exception as e:  # noqa: BLE001
-                logger.warning("[复权] [%s] 复权失败，返回原始序列: %s", symbol, e)
+                    df, rolls = RollCalendar().apply_adjustment(df, symbol)
+                    if rolls:
+                        logger.info(
+                            "[复权] [%s] 应用 %d 次换月复权（因子计算用）",
+                            symbol,
+                            len(rolls),
+                        )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[复权] [%s] 复权失败，返回原始序列: %s", symbol, e)
 
         # GAP-066 (v2.96.0): 夜盘/隔夜跳空列注入（配置开关，默认关闭，不改变既有列结构）
         try:
@@ -890,7 +896,11 @@ class FuturesDataProvider:
                         logger.debug("Aggregator 返回合成数据 [%s]，尝试 AKShare 直连", symbol)
                     else:
                         logger.info("Aggregator 命中 [%s][%s] %d 行", symbol, source, len(agg_df))
-                        return self._from_aggregator_df(agg_df, symbol)
+                        out = self._from_aggregator_df(agg_df, symbol)
+                        # 记录数据源：QUANTDATA 主链路已复权（continuous_daily adj_factor），
+                        # get_ohlcv 据此跳过 RollCalendar 二次复权（避免双重复权，quantdata_provider L22-23）
+                        out.attrs["source"] = source
+                        return out
             except Exception as e:
                 logger.warning("Aggregator 获取失败 [%s]: %s，降级到直接路径", symbol, e)
 

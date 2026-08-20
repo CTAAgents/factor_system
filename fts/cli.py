@@ -419,7 +419,7 @@ def _build_default_aggregator():
         sources=sources,
         enhancers=enhancers,
         db_path=db_path,
-        cache_max_age_days=30,
+        cache_max_age_days=1,
     )
 
 

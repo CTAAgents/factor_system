@@ -17,7 +17,7 @@ fts/factor_engine/microstructure_factors.py — Level2 订单流微观结构因�
 
 HARNESS §5.3 契约优先: 输出列契约冻结 —— datetime/direction/trade_volume/ofi/obi/large_trade_ratio。
 
-设计文档: docs/harness/plans/23-institutional-transformation-plan.md（GAP-I503 首期）
+设计文档: docs/archive/plans/23-institutional-transformation-plan.md（GAP-I503 首期）
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 # FTS 存储域盘点登记（Storage Landscape — Layer 3 数据）
-# 来源: docs/harness/plans/29-storage-convergence-plan.md §1.2 勘察量化
+# 来源: docs/archive/plans/29-storage-convergence-plan.md §1.2 勘察量化
 # 契约: fts/store/registry.py StorageRegistry 加载并校验
 # status 取值: active（当前权威存储）/ legacy（待迁移）/ planned（目标态）/ archived
 # 原则: 一数一源 SSOT，legacy 域必须声明 migrated_to，planned 域必须声明 migrated_from

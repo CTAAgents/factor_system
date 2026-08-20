@@ -13,7 +13,7 @@ fts/factor_engine/mhf_signals.py — 混合信号合成（Phase 2）。
     - 向量化截面排名，NaN 品种不参与选择（保持原仓位逻辑由回测引擎处理）
     - 周期无关：5m/15m 输入均可
 
-设计文档: docs/harness/plans/33-mhf-trading-plan.md §Phase 2
+设计文档: docs/archive/plans/33-mhf-trading-plan.md §Phase 2
 """
 
 from __future__ import annotations

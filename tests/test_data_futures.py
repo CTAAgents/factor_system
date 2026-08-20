@@ -412,7 +412,7 @@ class TestInitDefaultAggregator:
         self._patch_sources(mocker)
         provider = FuturesDataProvider(use_akshare_fallback=False, aggregator=None)
         assert provider._aggregator is mock_agg
-        assert patched_agg.call_args.kwargs["cache_max_age_days"] == 30
+        assert patched_agg.call_args.kwargs["cache_max_age_days"] == 1
 
     def test_aggregator_initialized_with_sources_failing(self, mocker):
         """部分源实例化失败被跳过，聚合器仍初始化（空源列表）。"""

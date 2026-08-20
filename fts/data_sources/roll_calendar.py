@@ -66,14 +66,23 @@ class RollCalendar:
 
     # ─── 换月日历构建 ────────────────────────────────────
 
-    def build_roll_calendar(self, symbol: str) -> list[RollEvent]:
+    def build_roll_calendar(
+        self,
+        symbol: str,
+        backfill_days: int = 20,
+    ) -> list[RollEvent]:
         """构建指定品种的换月事件序列。
 
         主力判定：每日成交量最大的合约。当日主力与前一交易日主力不同时，
-        记为一次换月事件；切换日价格取两合约当日收盘（缺任一则跳过该事件）。
+        记为一次换月事件；切换日价格取两合约当日收盘——切换日任一价格缺失
+        （真实数据缺口）时，向前回溯最近共同交易日（窗口 `backfill_days`，
+        默认 20 个交易日）取两合约收盘价计算 adj_ratio，避免单日缺口导致
+        换月事件被跳过、复权跳空未消除；回溯窗口内仍无共同价格才跳过。
 
         Args:
             symbol: 连续合约代码（如 "RB0" / "CU0"），内部剥离末尾 "0"。
+            backfill_days: 切换日缺价时向前回溯的交易日窗口上限。
+                （默认 20：全库缺价救回率 5日→63% / 20日→78%）
 
         Returns:
             按日期升序排列的 RollEvent 列表；数据缺失时返回空列表。
@@ -112,18 +121,34 @@ class RollCalendar:
             # DuckDB fetchdf 返回 datetime64 → 规范化回 datetime.date（与 dataclass 注解一致）
             roll_date = pd.Timestamp(dates[i]).date()
 
-            # 切换日两合约收盘价（缺失则跳过本次事件）
-            old_close = self._close_on(base, old_contract, roll_date, df)
-            new_close = self._close_on(base, new_contract, roll_date, df)
+            # 切换日两合约收盘价（缺失则回溯最近共同交易日）
+            old_close, new_close, used_date = self._closes_with_backfill(
+                base,
+                old_contract,
+                new_contract,
+                roll_date,
+                df,
+                backfill_days,
+            )
             if old_close is None or new_close is None or old_close <= 0:
                 logger.warning(
-                    "[RollCalendar] 切换日价格缺失，跳过换月事件 [%s] %s→%s @ %s",
+                    "[RollCalendar] 切换日价格缺失且回溯 %d 日内无共同价格，跳过换月事件 [%s] %s→%s @ %s",
+                    backfill_days,
                     base,
                     old_contract,
                     new_contract,
                     roll_date,
                 )
                 continue
+            if used_date != roll_date:
+                logger.info(
+                    "[RollCalendar] 切换日缺价，回溯 %s 取价 [%s] %s→%s @ %s",
+                    used_date,
+                    base,
+                    old_contract,
+                    new_contract,
+                    roll_date,
+                )
 
             events.append(
                 RollEvent(
@@ -246,14 +271,61 @@ class RollCalendar:
                 pass
 
     @staticmethod
-    def _close_on(base: str, contract: str, roll_date, df: pd.DataFrame) -> Optional[float]:
-        """取指定合约在指定日期的收盘价（无记录返回 None）。"""
-        # datetime64 列与 datetime.date 直接 == 可能失效，统一转 Timestamp 比较
+    def _closes_with_backfill(
+        base: str,
+        old_contract: str,
+        new_contract: str,
+        roll_date,
+        df: pd.DataFrame,
+        backfill_days: int = 20,
+    ) -> tuple[Optional[float], Optional[float], date]:
+        """取切换日两合约收盘价；切换日缺价时向前回溯最近共同交易日。
+
+        真实数据源（QuantData/历史库）可能存在单日缺口：切换日某合约当日
+        无记录，而相邻交易日数据完整。此时直接跳过换月事件会遗留复权跳空，
+        故向前回溯最多 `backfill_days` 个交易日，取两合约共同有收盘价的
+        最近一天收盘价计算 adj_ratio。
+
+        Args:
+            base: 品种代码（仅用于日志语义，查询按 contract 过滤）。
+            old_contract: 切换前主力合约。
+            new_contract: 切换后主力合约。
+            roll_date: 切换日（date 或 datetime）。
+            df: contract_kline 全量数据（已 to_datetime 规范化 date）。
+            backfill_days: 回溯交易日窗口上限（含切换日）。
+
+        Returns:
+            (old_close, new_close, used_date)；回溯窗口内无共同价格时
+            old_close/new_close 为 None。
+        """
         roll_ts = pd.Timestamp(roll_date)
-        sub = df[(df["contract"] == contract) & (df["date"] == roll_ts)]
-        if sub.empty:
-            return None
-        return float(sub["close"].iloc[0])
+
+        def _close_on_day(contract: str, day) -> Optional[float]:
+            sub = df[(df["contract"] == contract) & (df["date"] == pd.Timestamp(day))]
+            if sub.empty:
+                return None
+            return float(sub["close"].iloc[0])
+
+        # 1) 切换日本身两合约价格齐全 → 直接使用
+        old_close = _close_on_day(old_contract, roll_ts)
+        new_close = _close_on_day(new_contract, roll_ts)
+        if old_close is not None and new_close is not None and old_close > 0:
+            return old_close, new_close, roll_ts.date()
+
+        # 2) 切换日缺价 → 向前回溯最近共同交易日（窗口内）
+        prior = df[df["date"] < roll_ts].sort_values("date")
+        if prior.empty:
+            return None, None, roll_ts.date()
+        prior_dates = prior["date"].drop_duplicates().tolist()
+        # 窗口 = 切换日前最近 backfill_days 个交易日（升序）
+        window = prior_dates[-backfill_days:] if backfill_days > 0 else prior_dates
+        for day in reversed(window):
+            oc = _close_on_day(old_contract, day)
+            nc = _close_on_day(new_contract, day)
+            if oc is not None and nc is not None and oc > 0:
+                return oc, nc, pd.Timestamp(day).date()
+
+        return None, None, roll_ts.date()
 
 
 __all__ = ["RollCalendar", "RollEvent", "DEFAULT_DB_PATH"]

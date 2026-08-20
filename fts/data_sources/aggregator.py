@@ -159,7 +159,13 @@ class FuturesDataAggregator:
         # 1) 尝试缓存
         df = self._try_cache(symbol, days)
         if df is not None and not df.empty:
-            df = self._set_source(df, DataSource.DUCKDB_CACHE.value)
+            # 保留缓存数据的真实来源（v3.1.0+3）：缓存行自带 source 列——
+            # QUANTDATA 写入的缓存为已复权序列，上层据此跳过 RollCalendar 二次复权；
+            # 旧 TDX_LOCAL 等未复权缓存仍标记为原来源（走 RollCalendar 复权回退）。
+            cached_src = str(DataSource.DUCKDB_CACHE.value)
+            if "source" in df.columns and df["source"].notna().any():
+                cached_src = str(df["source"].iloc[0])
+            df = self._set_source(df, cached_src)
             df = self._enhance_fields(df, symbol, trace_id)
             df = self._derive_pre_settle(df)
             # 14.2: 缓存命中后自动交叉验证最近 N 天
@@ -803,6 +809,13 @@ class FuturesDataAggregator:
                 return
             try:
                 con.register("df_new", df)
+                # 幂等覆盖（v3.1.0+3）：先删本批 (symbol, period, date) 旧行再插入——
+                # QuantData 权威数据覆盖旧 TDX_LOCAL 缓存行，缓存保持一数一源。
+                # 不用 INSERT OR REPLACE / ON CONFLICT（DuckDB 需唯一约束，测试库/旧表无 PK 会失败）。
+                con.execute(
+                    "DELETE FROM kline_cache WHERE (symbol, period, CAST(date AS VARCHAR)) IN "
+                    "(SELECT symbol, period, CAST(date AS VARCHAR) FROM df_new)"
+                )
                 # 显式列 + CAST(date AS VARCHAR)：双 schema 兼容
                 # - 新 schema（date DATE）：CAST 转为 'YYYY-MM-DD' 字符串
                 # - 老 schema（date VARCHAR）：CAST 透传，零成本

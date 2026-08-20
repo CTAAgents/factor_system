@@ -649,11 +649,11 @@ fts ui
 | 代码 Wiki | `CODE_WIKI.md` |
 | 执行模式流程图 | `harness/execution_modes_flowchart.md` |
 | 业务流程图 | `harness/business_flow.md` |
-| 生产部署 | `docs/harness/plans/production_plan.md` |
+| 生产部署 | `docs/archive/plans/production_plan.md` |
 | 工程规范 | `docs/harness/` |
 | 角色职责 | `agents/fts-agent.md` |
-| 策略手册 | `docs/harness/reports/strategy_manual.md` |
-| 因子质检补全计划 | `docs/harness/plans/25-futures-factor-qc-complement-plan.md` |
+| 策略手册 | `docs/archive/plans/strategy_manual.md` |
+| 因子质检补全计划 | `docs/archive/plans/25-futures-factor-qc-complement-plan.md` |
 | README | `README.md` |
 
 ### 工程指标

@@ -5,7 +5,7 @@
   python scripts/cleanup_push_scope.py prune --apply      # 实际执行 git rm --cached（保留本地文件，不删除工作区）
   python scripts/cleanup_push_scope.py verify             # 验证：扫描 git 跟踪中的禁止推送项
 
-参考: .gitignore 的 "Push safety" 段 + docs/harness/plans/58-push-governance-plan.md
+参考: .gitignore 的 "Push safety" 段 + docs/archive/plans/58-push-governance-plan.md
 """
 
 from __future__ import annotations

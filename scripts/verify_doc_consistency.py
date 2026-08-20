@@ -85,11 +85,11 @@ def check_doc_assertions(doc_path: Path) -> list[str]:
         if seed_count == 0:
             issues.append("种子池数 185 未在文档中体现")
 
-    # 06-testing: 检查测试用例数
+    # 06-testing: 检查测试用例数（2026-08-20 收集口径 8469）
     if doc_name == "06-testing.md":
-        test_count = len(re.findall(r"4020\+?", content))
+        test_count = len(re.findall(r"8469", content))
         if test_count == 0:
-            issues.append("测试用例数 4020+ 未在文档中体现")
+            issues.append("测试用例数 8469 未在文档中体现")
 
     # 07-operations: 检查版本号文件是否存在
     if doc_name == "07-operations.md":
@@ -140,13 +140,12 @@ def check_version_consistency() -> list[dict[str, str]]:
     with open(pyproject, "rb") as f:
         target_version = "v" + _toml.load(f)["project"]["version"]
 
-    # 核心文档 + 计划文档 + 设计文档（排除历史验收文档）
+    # 核心文档 + 流程文档（历史计划/设计文档已归档至 docs/archive/，不再扫描）
     doc_patterns = [
         "docs/harness/0*.md",  # 01-09
         "docs/harness/business_flow.md",
         "docs/harness/execution_modes_flowchart.md",
-        "docs/harness/plans/*.md",
-        "docs/harness/design/*.md",
+        "docs/harness/factor_lifecycle.md",
     ]
 
     checked: set[Path] = set()

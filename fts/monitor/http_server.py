@@ -38,6 +38,44 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# F.4 §3.3 portable 预校验: code 允许 import 的模块白名单 (R1/R2 检测)
+PORTABLE_ALLOWED_MODULES: frozenset[str] = frozenset(
+    {"numpy", "pandas", "math", "statistics"}
+)
+
+
+def _check_factor_portable(code: str) -> tuple[bool, str]:
+    """F.4 §3.3 portable 预校验：检测 code 是否可独立执行（无 FTS 运行时依赖）。
+
+    规则:
+        R1 依赖 FTS 内部模块 (import fts / from fts / eval_fts_expr) → 不可移植
+        R2 import 目标不在白名单 {numpy, pandas, math, statistics} → 不可移植
+    返回: (portable, non_portable_reason)
+    """
+    import ast as _ast
+
+    if "eval_fts_expr" in code:
+        return False, "depends_on_fts_runtime"
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError:
+        return False, "code_syntax_error"
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root == "fts":
+                    return False, "depends_on_fts_runtime"
+                if root not in PORTABLE_ALLOWED_MODULES:
+                    return False, f"non_whitelisted_import:{root}"
+        elif isinstance(node, _ast.ImportFrom):
+            root = (node.module or "").split(".")[0]
+            if root == "fts":
+                return False, "depends_on_fts_runtime"
+            if root and root not in PORTABLE_ALLOWED_MODULES:
+                return False, f"non_whitelisted_import:{root}"
+    return True, ""
+
 # 数据源指标缓存（模块级别，GAP-14.5-001）
 _metrics_cache: dict = {"data": None, "ts": 0.0}
 
@@ -985,6 +1023,99 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         )
         return factors, cluster_meta
 
+    def _build_factor_definitions(self) -> dict:
+        """构建 /api/factors/definitions 响应：active+elite 因子完整定义（含 code/params）。
+
+        供下游系统（Regime-Driven）REST 拉取因子定义后本地组装计算。
+        数据源: futures 因子库（factor_catalog_futures.duckdb）。
+        """
+        try:
+            from ..factor_engine.factor_db.schema import get_db_path
+
+            db_path = get_db_path("futures")
+            if Path(db_path).exists():
+                return self._build_factor_definitions_from_duckdb(Path(db_path))
+            logger.warning("[ui] futures 因子库不存在: %s", db_path)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[ui] 因子定义查询失败: %s", e)
+        return {
+            "schema_version": 1,
+            "generated_at": "",
+            "count": 0,
+            "factors": [],
+            "degraded": "factor_db_unavailable",
+        }
+
+    def _build_factor_definitions_from_duckdb(self, db_path: Path) -> dict:
+        """从 DuckDB 查询 active+elite 因子定义（F.4 §2.3 契约，含 hash/portable/scope）。"""
+        import ast as _ast
+        from datetime import datetime
+
+        import duckdb as _duckdb
+
+        cols = [
+            "factor_id", "name", "code", "params", "market", "status",
+            "is_elite", "sharpe", "ic", "icir", "max_drawdown",
+            "turnover_monthly", "economic_logic", "style_tags",
+        ]
+        conn = _duckdb.connect(str(db_path), read_only=True)
+        try:
+            rows = conn.execute(
+                "SELECT factor_id, name, code, params, market, status, is_elite, "
+                "sharpe, ic, icir, max_drawdown, turnover_monthly, "
+                "economic_logic, style_tags "
+                "FROM factor_catalog "
+                "WHERE status = 'active' AND is_elite = TRUE "
+                "ORDER BY sharpe DESC"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        factors: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            for jf in ("params", "economic_logic", "style_tags"):
+                raw = d.get(jf)
+                if raw:
+                    try:
+                        d[jf] = json.loads(raw) if isinstance(raw, str) else raw
+                    except (json.JSONDecodeError, TypeError):
+                        d[jf] = None
+            code = str(d.get("code") or "")
+            portable, reason = _check_factor_portable(code)
+            factors.append(
+                {
+                    "factor_id": d["factor_id"],
+                    "name": d["name"],
+                    "code": code if portable else "",
+                    "code_hash": hashlib.sha256(code.encode("utf-8")).hexdigest()[:16],
+                    "params": d["params"] or {},
+                    "params_hash": hashlib.sha256(
+                        json.dumps(d["params"] or {}, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                    ).hexdigest()[:16],
+                    "market": d["market"],
+                    "status": d["status"],
+                    "is_elite": d["is_elite"],
+                    "portable": portable,
+                    "non_portable_reason": reason,
+                    "factor_scope": {"subchain_scope": "all", "subchain_specific": []},
+                    "sharpe": d["sharpe"],
+                    "ic": d["ic"],
+                    "icir": d["icir"],
+                    "max_drawdown": d["max_drawdown"],
+                    "turnover_monthly": d["turnover_monthly"],
+                    "economic_logic": d["economic_logic"],
+                    "style_tags": d["style_tags"],
+                }
+            )
+
+        return {
+            "schema_version": 1,
+            "generated_at": datetime.now().isoformat(),
+            "count": len(factors),
+            "factors": factors,
+        }
+
     def _build_factor_list_from_duckdb(self, db_path: Path) -> dict:
         """从 DuckDB 查询精英因子列表（含信号聚类分组和详细信息）。"""
         import duckdb as _duckdb
@@ -1682,6 +1813,9 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/factors":
             self._respond_json(self._build_factor_list())
+
+        elif path == "/api/factors/definitions":
+            self._respond_json(self._build_factor_definitions())
 
         elif path == "/api/candidates":
             self._respond_json(self._build_candidate_list())

@@ -158,7 +158,7 @@ class TestBuildDefaultAggregator:
         m_agg.assert_called_once()
         kwargs = m_agg.call_args.kwargs
         assert kwargs["db_path"] == duck
-        assert kwargs["cache_max_age_days"] == 30
+        assert kwargs["cache_max_age_days"] == 1
         # QUANTDATA（权威源置首） + TDX_LOCAL
         assert len(kwargs["sources"]) == 2
         assert kwargs["sources"][0].source_name == "QUANTDATA"

@@ -8,7 +8,7 @@
 取代 evolution_loop._generate_operator_factor 的纯随机组合生成，
 并关闭 GAP-026（GP 算子命名与 DSL 对齐：本引擎直接以 DSL 注册表为算子空间）。
 
-设计文档: docs/harness/design/C.4-operator-evolution-engine-design.md
+设计文档: docs/archive/design/C.4-operator-evolution-engine-design.md
 """
 
 from __future__ import annotations

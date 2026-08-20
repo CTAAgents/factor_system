@@ -37,8 +37,10 @@ logs/
 # Documentation (Harness specs and key project docs are tracked; other project-local docs are not)
 docs/*
 !docs/harness/
+!docs/archive/
 !docs/FTS_manual.md
 # business_flow.md 已移至 docs/harness/business_flow.md，由 !docs/harness/ 覆盖
+# docs/archive/ 为 Harness 历史文档归档（2026-08-20 Harness 精简压缩），完整入库保留
 
 # Research / experimental
 brain_field_test.py

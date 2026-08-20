@@ -27,7 +27,7 @@ from fts.data_sources.tqsdk_source import _SYMBOL_MAP, _import_tqsdk_safe
 
 logger = logging.getLogger(__name__)
 
-# tick 返回列（tick_cache 对齐，见 docs/harness/plans/16-tick-data-source-plan.md §1.3）
+# tick 返回列（tick_cache 对齐，见 docs/archive/plans/16-tick-data-source-plan.md §1.3）
 TICK_COLUMNS: list[str] = [
     "symbol",
     "datetime",

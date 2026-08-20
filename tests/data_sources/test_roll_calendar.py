@@ -6,7 +6,7 @@ tests/data_sources/test_roll_calendar.py — 期货换月日历与复权测试 (
   2. compute_adjust_factors — 比率法后复权累积因子
   3. apply_adjustment — 复权序列 + adj_factor 列
   4. contract_kline 缺失降级（无表/无数据 → 原始序列 + 因子 1.0）
-  5. 切换日价格缺失 → 跳过该换月事件
+  5. 切换日价格缺失 → 回溯最近共同交易日取价（默认 5 日窗口内仍无共同价才跳过）
   6. BacktestPipeline 展期成本扣除（持仓穿越换月日）
   7. settings 配置默认值（futures_adjusted / roll_cost_bps）
   8. FuturesDataProvider.get_ohlcv(adjusted) 复权应用
@@ -275,8 +275,13 @@ class TestRollCalendarBuild:
         rc = RollCalendar(str(db))
         assert rc.build_roll_calendar("RB0") == []
 
-    def test_missing_prices_skips_event(self, tmp_path):
-        """切换日旧合约收盘缺失 → 跳过该换月事件。"""
+    def test_missing_prices_backfills_common_day(self, tmp_path):
+        """切换日旧合约收盘缺失 → 回溯最近共同交易日取价，不再跳过事件。
+
+        构造：前 3 日 RB2509 主力（volume=100）；第 4 日起 RB2601 主力（volume=100），
+        且切换日（第 4 日）起 RB2509 无记录。回溯窗口内第 3 日两合约均有收盘
+        （RB2509=3500, RB2601=3600）→ 事件保留，adj_ratio 用回溯日价格。
+        """
         db = tmp_path / "fts.duckdb"
         con = duckdb.connect(str(db))
         try:
@@ -291,7 +296,6 @@ class TestRollCalendarBuild:
             dates = pd.date_range("2024-01-01", periods=6, freq="D")
             rows = []
             for i, d in enumerate(dates):
-                # 前 3 日 RB2509 主力；第 4 日起 RB2601 主力，但切换日缺 RB2509 收盘
                 if i < 3:
                     rows.append(
                         (
@@ -332,7 +336,83 @@ class TestRollCalendarBuild:
                         )
                     )
                 else:
-                    # RB2509 第 4 日起无记录（缺失）
+                    # RB2509 第 4 日起无记录（缺失），切换日缺旧合约价
+                    rows.append(
+                        (
+                            "RB",
+                            "RB2601",
+                            "daily",
+                            d.date(),
+                            3600,
+                            3610,
+                            3590,
+                            3600.0,
+                            100.0,
+                            0.0,
+                            50.0,
+                            3600.0,
+                            "TEST",
+                            pd.Timestamp.now(),
+                            "t",
+                        )
+                    )
+            con.executemany("INSERT INTO contract_kline VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        finally:
+            con.close()
+        rc = RollCalendar(str(db))
+        rolls = rc.build_roll_calendar("RB0")
+        assert len(rolls) == 1
+        roll = rolls[0]
+        assert roll.old_contract == "RB2509"
+        assert roll.new_contract == "RB2601"
+        # 切换日为第 4 日（2024-01-04），取价回溯到第 3 日
+        assert roll.date == pd.Timestamp("2024-01-04").date()
+        assert roll.old_close == pytest.approx(3500.0, rel=1e-6)
+        assert roll.new_close == pytest.approx(3600.0, rel=1e-6)
+        assert roll.adj_ratio == pytest.approx(3600.0 / 3500.0, rel=1e-6)
+
+    def test_missing_prices_backfill_window_exhausted_skips(self, tmp_path):
+        """回溯窗口内两合约仍无共同交易日 → 跳过该换月事件（降级保留）。
+
+        构造：前 3 日仅 RB2509（主力 volume=100，RB2601 无数据）；第 4 日起仅
+        RB2601（volume=100，RB2509 无数据）→ 切换日 RB2509 缺失，且回溯窗口内
+        （前 3 日）RB2601 从未出现 → 无共同交易日，事件跳过。
+        """
+        db = tmp_path / "fts.duckdb"
+        con = duckdb.connect(str(db))
+        try:
+            con.execute("""
+                CREATE TABLE contract_kline (
+                    symbol VARCHAR, contract VARCHAR, period VARCHAR, date DATE,
+                    open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE,
+                    volume DOUBLE, amount DOUBLE, hold DOUBLE, settle DOUBLE,
+                    source VARCHAR, fetched_at TIMESTAMP, trace_id VARCHAR
+                )
+            """)
+            dates = pd.date_range("2024-01-01", periods=6, freq="D")
+            rows = []
+            for i, d in enumerate(dates):
+                if i < 3:
+                    rows.append(
+                        (
+                            "RB",
+                            "RB2509",
+                            "daily",
+                            d.date(),
+                            3500,
+                            3510,
+                            3490,
+                            3500.0,
+                            100.0,
+                            0.0,
+                            50.0,
+                            3500.0,
+                            "TEST",
+                            pd.Timestamp.now(),
+                            "t",
+                        )
+                    )
+                else:
                     rows.append(
                         (
                             "RB",

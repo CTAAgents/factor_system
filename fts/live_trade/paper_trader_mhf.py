@@ -12,7 +12,7 @@ fts/live_trade/paper_trader_mhf.py — 分钟级模拟盘（Paper Trading，Phas
 - 允许隔夜持仓
 - **内存模式**：状态仅内存维护，结果由调用方落文件（DuckDB 锁兼容）
 
-设计文档: docs/harness/plans/33-mhf-trading-plan.md §Phase 3
+设计文档: docs/archive/plans/33-mhf-trading-plan.md §Phase 3
 """
 
 from __future__ import annotations

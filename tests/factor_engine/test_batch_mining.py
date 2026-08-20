@@ -1,6 +1,6 @@
 """tests/factor_engine/test_batch_mining.py — 批量挖掘漏斗单元测试（GAP-I201）。
 
-设计文档: docs/harness/design/D.1-batch-mining-design.md §8 验收标准。
+设计文档: docs/archive/design/D.1-batch-mining-design.md §8 验收标准。
 """
 
 from __future__ import annotations

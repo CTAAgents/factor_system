@@ -32,12 +32,10 @@ def get_version_from_pyproject() -> str:
 
 
 def collect_docs() -> list[Path]:
-    """收集所有需要同步版本号的文档（排除历史验收文档）。"""
+    """收集所有需要同步版本号的文档（排除历史验收文档；历史计划/设计文档已归档至 docs/archive/）。"""
     docs: list[Path] = []
     glob_patterns = [
-        "*.md",  # 核心文档
-        "plans/*.md",  # 计划文档
-        "design/*.md",  # 设计文档
+        "*.md",  # 核心文档 + 流程文档（顶层）
     ]
     for pattern in glob_patterns:
         docs.extend(HARNESS_DIR.glob(pattern))

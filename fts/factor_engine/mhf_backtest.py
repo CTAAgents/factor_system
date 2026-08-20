@@ -11,7 +11,7 @@ fts/factor_engine/mhf_backtest.py — 分钟级事件驱动回测引擎（Phase 
 
 输出：分钟净值 + 日聚合净值 + 指标（年化/夏普/回撤/换手/成本占比）+ 交易明细。
 
-设计文档: docs/harness/plans/33-mhf-trading-plan.md §Phase 2
+设计文档: docs/archive/plans/33-mhf-trading-plan.md §Phase 2
 """
 
 from __future__ import annotations

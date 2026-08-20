@@ -3,7 +3,7 @@ fts.risk.simulated_adapter — 模拟交易适配器（C.2 实盘对接）。
 
 FTS 角色边界: 本适配器仅做模拟成交，真实交易执行由下游系统（FDT）负责。
 
-设计参考: docs/harness/design/C.2-live-trading-integration-design.md §3.3
+设计参考: docs/archive/design/C.2-live-trading-integration-design.md §3.3
 """
 
 from __future__ import annotations

@@ -231,7 +231,7 @@ class QuantDataProvider(BaseFuturesSource):
             try:
                 df = con.execute(
                     "SELECT trade_date AS date, open, high, low, close, volume, "
-                    "open_interest AS hold "
+                    "open_interest AS hold, adj_factor "
                     "FROM continuous_daily "
                     "WHERE symbol = ? AND series_type = 'main' "
                     "ORDER BY trade_date DESC LIMIT ?",

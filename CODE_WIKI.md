@@ -960,7 +960,7 @@ review_legacy_factors.py
 - [CHANGELOG.md](file:///d:/Programs/factor_system/CHANGELOG.md) — 版本历史
 - [docs/FTS_manual.md](file:///d:/Programs/factor_system/docs/FTS_manual.md) — FTS 使用手册
 - `docs/harness/` — HARNESS 工程规范（01-architecture / 02-lifecycle / 06-testing / 07-operations / 08-gap-analysis / 09-advancement-plan 等）
-- `docs/harness/design/` — 设计决策（A.1 质量卡 / A.2 衰减追踪 / D.1-D.2 模拟交易 / E.3 状态库 / E.4 连接生命周期 / **F.3 信号契约 v1** 等）
-- `docs/harness/plans/` — 实施计划（29 存储收敛 / 37 面板向量化 / 40 L3 组合优化 / 41 L1 知识注入 / 45 L2 循环拆分 / 47-49 子链体系 / 51-52 信号矩阵 / 53-57 Regime 与双系统切分）
+- `docs/archive/design/` — 历史设计决策（A.1 质量卡 / A.2 衰减追踪 / D.1-D.2 模拟交易 / E.3 状态库 / E.4 连接生命周期 / **F.3 信号契约 v1** 等，已归档）
+- `docs/archive/plans/` — 历史实施计划（29 存储收敛 / 37 面板向量化 / 40 L3 组合优化 / 41 L1 知识注入 / 45 L2 循环拆分 / 47-49 子链体系 / 51-52 信号矩阵 / 53-57 Regime 与双系统切分，已归档；索引见 `docs/archive/README.md`）
 - [DISCLAIMER.md](file:///d:/Programs/factor_system/DISCLAIMER.md) — 免责声明
 - [COMPLIANCE.md](file:///d:/Programs/factor_system/COMPLIANCE.md) — 开源合规指南

@@ -147,7 +147,7 @@ class TestCheckDocAssertions:
         assert vdc.check_doc_assertions(bad) != []
 
     def test_06_testing_count(self, iso: dict[str, Path]) -> None:
-        ok = _write_doc(iso["harness"] / "06-testing.md", extra_body="4020+ 用例")
+        ok = _write_doc(iso["harness"] / "06-testing.md", extra_body="8469 用例")
         assert vdc.check_doc_assertions(ok) == []
         bad = _write_doc(iso["harness"] / "06-testing.md")
         assert vdc.check_doc_assertions(bad) != []
@@ -206,11 +206,16 @@ class TestCheckVersionConsistency:
             "actual": "v9.9.9",
         }
 
-    def test_plans_subdir_scanned(self, iso: dict[str, Path]) -> None:
+    def test_archived_plans_not_scanned(self, iso: dict[str, Path]) -> None:
+        # 归档后 docs/harness/plans 不再纳入版本号扫描（历史计划已移入 docs/archive/）
         (iso["harness"] / "plans").mkdir()
         _write_doc(iso["harness"] / "plans" / "23-plan.md", version="v9.9.9")
+        assert vdc.check_version_consistency() == []
+
+    def test_factor_lifecycle_scanned(self, iso: dict[str, Path]) -> None:
+        _write_doc(iso["harness"] / "factor_lifecycle.md", version="v9.9.9")
         issues = vdc.check_version_consistency()
-        assert [i["file"] for i in issues] == ["23-plan.md"]
+        assert [i["file"] for i in issues] == ["factor_lifecycle.md"]
 
     def test_doc_without_version_header_skipped(self, iso: dict[str, Path]) -> None:
         (iso["harness"] / "04-resilience.md").write_text("# 无版本头\n", encoding="utf-8")

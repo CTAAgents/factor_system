@@ -6,7 +6,7 @@ fts/factor_engine/batch_mining.py — 批量挖掘漏斗（GAP-I201，Stage 1）
 按预筛 IC 排序截断进入细评估。准入链（micro/eval/审计/4 重审查/晋升）
 由 evolution_loop._process_candidate 复用，本模块零业务耦合（依赖注入）。
 
-设计文档: docs/harness/design/D.1-batch-mining-design.md
+设计文档: docs/archive/design/D.1-batch-mining-design.md
 
 版本: v1.0.0（GAP-I201，v2.65.0）
 """

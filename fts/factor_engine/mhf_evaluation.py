@@ -8,7 +8,7 @@ fts/factor_engine/mhf_evaluation.py — 分钟因子评估（Phase 1）。
     - 时间切割：训练/验证按时间严格切分，禁止样本复用
     - 多重检验：批量因子评估时用 FDR 校正（BH 方法）控制假阳性
 
-设计文档: docs/harness/plans/33-mhf-trading-plan.md §Phase 1
+设计文档: docs/archive/plans/33-mhf-trading-plan.md §Phase 1
 """
 
 from __future__ import annotations
