@@ -1,6 +1,6 @@
 # 51 号计划 — 张量化改造衔接缺口与契约缺口修复（vectorization_gap_fix）
 
-> 版本: v3.0.0+25（创建于 2026-08-17）
+> 版本: v3.1.0（创建于 2026-08-17）
 > 关联: 37-panel-vector-plan.md（面板向量化，已归档）、38-numba-batch4-plan.md（numba 批4）、
 >       39-gap-panel-2d-plan.md（缺口面板 2D，已回退）、40-l3-portfolio-optimization-plan.md（L3 四层）
 > 状态: ✅ 已完成（2026-08-17，Phase A/B/C 全部落地）

@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts"
 
 from reconcile_dual_track import (  # noqa: E402
     cosine_similarity, direction_consistency, exposure_diff, turnover_diff,
-    rolling_return_diff, drawdown_diff, reconcile, _demo, GATES,
+    rolling_return_diff, drawdown_diff, reconcile, _demo,
 )
 
 

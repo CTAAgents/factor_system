@@ -8,8 +8,6 @@ tests/factor_engine/test_scope_domain.py — scope 域评估模块测试（P0 �
 
 from __future__ import annotations
 
-import math
-import os
 
 import pytest
 
@@ -230,7 +228,6 @@ class TestDetectSymbolCandidates:
     def test_detect_strong_symbol(self):
         """一个品种时序 IC 稳定（跨子期一致）→ 被探测为候选；噪声品种不入选。"""
         import numpy as np
-        import pandas as pd
 
         from fts.factor_engine.evaluation_chain import _detect_symbol_candidates
 

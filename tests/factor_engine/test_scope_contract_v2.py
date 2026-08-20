@@ -25,7 +25,6 @@ def _mk_panel(n_days: int = 30, symbols: tuple[str, ...] = ("RB", "CU")):
 
 def _bundle(n_days: int = 30):
     from fts.factor_engine.l3_signal_service import (
-        SignalMatrixBundle,
         build_signal_matrix,
     )
 

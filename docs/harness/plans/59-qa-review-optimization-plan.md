@@ -1,6 +1,6 @@
 # 59 — 因子评审质检体系优化计划（QA Review Optimization）
 
-> 版本: v3.0.0+25 · 状态: 📝 计划中（GAP-161~168 已登记）
+> 版本: v3.1.0 · 状态: 📝 计划中（GAP-161~168 已登记）
 > 日期: 2026-08-20 · 优先级: P1
 > 关联: [factor_lifecycle.md](../factor_lifecycle.md) · [08-gap-analysis.md](../08-gap-analysis.md)（GAP-161~168）· `fts/factor_engine/qa/` · `factor_inspector.py` · `high_ic_screener.py` · `factor_quality_card.py` · `ir_thresholds.py` · `scope_domain/` · `monitor/data_quality_monitor.py`
 

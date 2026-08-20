@@ -1,6 +1,6 @@
 # 35-gap-closure-plan.md — 全链路缺口关闭实施方案（G1–G17）
 
-> 版本: v3.0.0+25
+> 版本: v3.1.0
 > 状态: **全部完成（v2.104.0 里程碑验收通过）**——G1-G17 全部实现+测试；G16 批次末评估=维持暂缓（§5.9）；G17 FDT 交接（§5.10）；全量回归 `pytest tests/ -m "not slow"` **6621 passed 全绿**（2026-08-13）
 > ⚠️ **归档注记（v2.104.0+25）**：本计划为历史已完成计划，正文中 family 相关内容（§5.9 G16 契约 `{code, family, ic, icir, robustness_meta}` / `suggested_family` 字段、§2 关键核查基线 "family/style 双维倍率表"）为历史记录——v2.104.0+25 因子家族概念已彻底移除（`REGIME_FAMILY_MULTIPLIERS`/RegimeMultiplierEstimator 删除、分类判定仅用 style_tags、分组/配额走信号聚类），G16 维持暂缓不启用，正文保留原文仅供历史参考。
 > 日期: 2026-08-13

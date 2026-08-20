@@ -29,8 +29,11 @@ _MP = 2  # 与 ops_library._MINP 对齐（真实算子统一最小窗口期）
 
 def _kernel_mean(arr: np.ndarray, window: int, min_periods: int = _MP) -> np.ndarray:
     """缺口感知滚动均值内核（线性统计代表）。"""
-    row_fn = lambda v: float(np.nanmean(v))
-    batch_fn = lambda rows: np.nanmean(rows, axis=-1)
+    def row_fn(v: np.ndarray) -> float:
+        return float(np.nanmean(v))
+
+    def batch_fn(rows: np.ndarray) -> np.ndarray:
+        return np.nanmean(rows, axis=-1)
     with gap_aware_mode():
         return _rolling_apply_native(arr, window, min_periods, row_fn, batch_fn)
 
@@ -108,8 +111,11 @@ def test_gap_free_zero_drift_on_off(window: int) -> None:
     arr = rng.standard_normal(120)
 
     def off(arr_in: np.ndarray) -> np.ndarray:
-        row_fn = lambda v: float(np.nanmean(v))
-        batch_fn = lambda rows: np.nanmean(rows, axis=-1)
+        def row_fn(v: np.ndarray) -> float:
+            return float(np.nanmean(v))
+
+        def batch_fn(rows: np.ndarray) -> np.ndarray:
+            return np.nanmean(rows, axis=-1)
         return _rolling_apply_native(arr_in, window, _MP, row_fn, batch_fn)
 
     on = _kernel_mean(arr, window)
@@ -214,8 +220,11 @@ def test_panel_dataframe_matches_per_symbol(window: int) -> None:
         dtype=float,
     )
 
-    row_fn = lambda v: float(np.nanmean(v))
-    batch_fn = lambda rows: np.nanmean(rows, axis=-1)
+    def row_fn(v: np.ndarray) -> float:
+        return float(np.nanmean(v))
+
+    def batch_fn(rows: np.ndarray) -> np.ndarray:
+        return np.nanmean(rows, axis=-1)
     with gap_aware_mode():
         got = _native_apply(df, window, _MP, row_fn, batch_fn)
     for col in df.columns:

@@ -17,9 +17,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
-
 from fts.factor_engine.scope_domain.types import FactorScope
+
+logger = logging.getLogger(__name__)
 
 _UNIVERSE_YAML = Path(__file__).resolve().parent.parent.parent.parent / "config" / "futures_universe.yaml"
 

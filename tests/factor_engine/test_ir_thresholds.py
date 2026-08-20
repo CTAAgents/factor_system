@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 from fts.factor_engine.ir_thresholds import (
-    DEFAULT_IR_THRESHOLD,
     IR_THRESHOLDS,
     classify_factor_category,
     factor_ir_threshold,

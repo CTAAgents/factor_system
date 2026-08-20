@@ -14,7 +14,6 @@ import json
 
 import numpy as np
 import pandas as pd
-import pytest
 from unittest.mock import MagicMock
 
 from fts.factor_engine.contracts import FactorEvaluation
@@ -217,7 +216,6 @@ class TestExpressionDedupOnPromotion:
 class TestCausalValidityCodeResolution:
     def test_expr_factor_code_compiled_in_audit(self):
         """缺 code 但含 expr 的因子：审计 causal_validity 应从 expr 编译补齐 code。"""
-        from fts.factor_engine.audit import AuditItemResult, FactorAuditReport
 
         from fts.factor_engine.audit import FactorAuditor
 

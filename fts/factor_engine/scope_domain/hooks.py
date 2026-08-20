@@ -15,11 +15,11 @@ import logging
 import os
 from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
-
 from fts.factor_engine.scope_domain.evaluator import compute_domain_stats
 from fts.factor_engine.scope_domain.resolver import resolve_chain_map
 from fts.factor_engine.scope_domain.types import DomainStats, FactorScope
+
+logger = logging.getLogger(__name__)
 
 _ENV_ENABLED = "FTS_SCOPE_DOMAIN_ENABLED"
 
