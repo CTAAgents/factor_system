@@ -1,6 +1,6 @@
 # 因子全生命周期管理（FTS）
 
-> 版本: v3.0.0+6
+> 版本: v3.0.0+7
 > 最后更新: 2026-08-17
 > 适用范围: 期货主链路（futures / energy，股票链路已剥离至 fts-stock）
 > 关联文档: [01-architecture.md](file:///d:/Programs/factor_system/docs/harness/01-architecture.md) · [05-observability.md](file:///d:/Programs/factor_system/docs/harness/05-observability.md) · [07-operations.md](file:///d:/Programs/factor_system/docs/harness/07-operations.md) · [plan 45](file:///d:/Programs/factor_system/docs/harness/plans/45-l2-loop-split-plan.md)

@@ -114,11 +114,12 @@ class FactorAuditReport:
 class FactorAuditConfig:
     """因子审计配置。"""
 
-    # 跨品种验证（A+C 双机制，v2.103.0 GAP-096）
+    # 跨品种验证（A+C 双机制，v2.103.0 GAP-096；D 板块覆盖率，v3.0.0+7 GAP-160）
     min_cross_symbol_ratio: float = 0.8  # 主防线：≥80% 品种 IC 为正
     min_mean_ic: float = 0.05  # 软门控A：平均 IC 强度下限
     ratio_floor: float = 0.6  # 软门控A：符号比例下限（联合 min_mean_ic）
     binomial_alpha: float = 0.05  # 软门控C：二项检验显著性水平
+    min_sector_coverage: int = 5  # 软门控D：板块级覆盖率下限（训练池 7 大板块中 ≥5 板块有代表品种 IC 为正）
 
     # 多重检验
     bonferroni_alpha: float = 0.05  # Bonferroni 校正显著性
@@ -178,6 +179,7 @@ class FactorAuditor:
         oos_result: Optional[dict[str, Any]] = None,
         p_values: Optional[list[float]] = None,
         symbol_holdout: Optional[dict[str, Any]] = None,
+        sector_coverage: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> FactorAuditReport:
         """执行完整审计流程。
@@ -193,8 +195,10 @@ class FactorAuditor:
             ohlcv_by_symbol: 品种 → OHLCV DataFrame (压力测试)
             oos_result: 外部已计算的 OOS 结果 (含 ic_consistency, passed 等)
             p_values: 多重检验的 p 值列表
-            symbol_holdout: 标的留出验证结果 dict (GAP-075，含 train_ic/holdout_ic/
+            symbol_holdout: 标的留出验证结果 dict (GAP-075/160，含 train_ic/holdout_ic/
                 ic_retention/passed)，缺失标记 skipped
+            sector_coverage: 板块级覆盖率 dict (v3.0.0+7 GAP-160，含 covered_sectors/
+                total_sectors)，cross_symbol 软门控D 通道
             **kwargs: 保留扩展
 
         Returns:
@@ -207,7 +211,7 @@ class FactorAuditor:
         items: list[AuditItemResult] = []
         items.append(self._check_causal_validity(factor, data, forward_returns))
         items.append(self._check_oos_consistency(oos_result))
-        items.append(self._check_cross_symbol(symbol_ic_map))
+        items.append(self._check_cross_symbol(symbol_ic_map, sector_coverage))
         items.append(self._check_symbol_holdout(symbol_holdout))
         items.append(self._check_stress_resilience(signals_by_symbol, ohlcv_by_symbol))
         items.append(self._check_multiple_testing(p_values))
@@ -386,17 +390,22 @@ class FactorAuditor:
     def _check_cross_symbol(
         self,
         symbol_ic_map: Optional[dict[str, float]],
+        sector_coverage: Optional[dict[str, Any]] = None,
     ) -> AuditItemResult:
-        """跨品种验证（A+C 双机制 OR 判定，v2.103.0 GAP-096）。
+        """跨品种验证（A+C 双机制 + D 板块覆盖率 OR 判定，v2.103.0 GAP-096 / v3.0.0+7 GAP-160）。
 
         任一机制通过即通过：
         - 主防线：≥ min_cross_symbol_ratio（默认 80%）品种 IC 为正
         - 软门控A：平均 IC ≥ min_mean_ic 且符号比例 ≥ ratio_floor
         - 软门控C：IC>0 品种数经二项检验显著高于随机（binomtest p < binomial_alpha）
+        - 软门控D（v3.0.0+7）：板块级覆盖率——训练池 7 大板块中 ≥ min_sector_coverage
+          板块有代表品种 IC 为正（板块内品种 IC 为正比例 ≥50%），给"板块特异但全池
+          符号比不足"的因子合理通道（契合 plans/47 子链机制）
 
         短样本下 IC 符号噪声大，绝对值符号门槛过严（GAP-096）：22 品种要求 18/22
         为正，5 品种负即拒，大量 14-17/22 泛化尚可的因子被边界误杀。A+C 双机制
-        保留强泛化主防线，同时允许"平均 IC 强"或"符号比例二项显著"的因子通过。
+        保留强泛化主防线，同时允许"平均 IC 强"或"符号比例二项显著"的因子通过；
+        D 板块覆盖率通道针对全期货异构品种池（7 大板块定价逻辑各异）补充。
         """
         name = "cross_symbol"
 
@@ -440,7 +449,21 @@ class FactorAuditor:
         except Exception:  # noqa: BLE001 — scipy 缺失/异常时降级为不通过，不阻断
             passed_binomial = False
 
-        passed = passed_ratio or passed_mean or passed_binomial
+        # 机制4（软门控D，v3.0.0+7）：板块级覆盖率（sector_coverage 缺失时降级不启用）
+        passed_sector = False
+        sector_detail = None
+        if sector_coverage:
+            covered = int(sector_coverage.get("covered_sectors", 0))
+            total = int(sector_coverage.get("total_sectors", 0))
+            min_cover = int(self._config.min_sector_coverage)
+            passed_sector = total > 0 and covered >= min_cover
+            sector_detail = {
+                "covered_sectors": covered,
+                "total_sectors": total,
+                "threshold": min_cover,
+            }
+
+        passed = passed_ratio or passed_mean or passed_binomial or passed_sector
 
         mechanisms = []
         if passed_ratio:
@@ -449,6 +472,20 @@ class FactorAuditor:
             mechanisms.append("mean_ic")
         if passed_binomial:
             mechanisms.append("binomial")
+        if passed_sector:
+            mechanisms.append("sector_coverage")
+
+        details: dict[str, Any] = {
+            "n_symbols": n_symbols,
+            "n_positive": n_positive,
+            "positive_ratio": positive_ratio,
+            "mean_ic": mean_ic,
+            "binomial_p": binomial_p,
+            "threshold": self._config.min_cross_symbol_ratio,
+            "mechanisms": mechanisms,
+        }
+        if sector_detail:
+            details["sector_coverage"] = sector_detail
 
         return AuditItemResult(
             name=name,
@@ -456,18 +493,11 @@ class FactorAuditor:
             evidence=(
                 f"positive_ratio={positive_ratio:.1%} ({n_positive}/{n_symbols})"
                 f", mean_ic={mean_ic:.4f}, binomial_p={binomial_p:.4f}"
+                f", sector={sector_detail or 'n/a'}"
                 f", passed_via={mechanisms or 'none'}"
             ),
             score=positive_ratio,
-            details={
-                "n_symbols": n_symbols,
-                "n_positive": n_positive,
-                "positive_ratio": positive_ratio,
-                "mean_ic": mean_ic,
-                "binomial_p": binomial_p,
-                "threshold": self._config.min_cross_symbol_ratio,
-                "mechanisms": mechanisms,
-            },
+            details=details,
         )
 
     # ─── 3.5 标的留出验证（GAP-075）────────────────────────

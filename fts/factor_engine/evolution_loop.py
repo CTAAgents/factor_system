@@ -161,9 +161,9 @@ from .evolution_promote import EliteStore  # noqa: E402
 from .evolution_candidate import CandidateProcessor  # noqa: E402
 
 # GAP-070: 质检链信号缓存容量上限（LRU，超出淘汰最久未使用项）。
-# 每条目为一份完整面板信号（~4MB/104品种×5163日），16 条上限覆盖单候选
+# 每条目为一份完整面板信号（~4MB/104品种×5163日），64 条上限覆盖单候选
 # L1/极值扰动/消融 baseline/鲁棒性 baseline/SHAP 全部复用场景。
-_QC_SIGNAL_CACHE_MAX_ENTRIES: int = 16
+_QC_SIGNAL_CACHE_MAX_ENTRIES: int = 64
 
 # ─── 演化结果 ─────────────────────────────────────────────
 
@@ -325,6 +325,7 @@ class EvolutionLoop:
         industry_map: Optional[dict[str, str]] = None,
         cap_map: Optional[dict[str, float]] = None,
         experiment_log_dir: Optional[str | Path] = None,
+        holdout_panel: Optional[dict[str, pd.DataFrame]] = None,
     ):
         self.data = data
         self.forward_returns = forward_returns
@@ -365,6 +366,29 @@ class EvolutionLoop:
                     )
             except Exception as e:  # noqa: BLE001
                 logger.warning("[EvolutionLoop] 期货板块映射注入失败，跳过中性化: %s", e)
+
+        # ── GAP-160 (v3.0.0+7): 盲测池 panel（symbol_holdout 审计用，真外延泛化）──
+        # 未显式传入且为 futures 横截面模式时自动构建（FUTURES_HOLDOUT 15 品种，
+        # 与训练池零重叠）；失败容错 None → symbol_holdout 回退训练池内留出。
+        self.holdout_panel = holdout_panel
+        if self.holdout_panel is None and self._is_cross_section and market == "futures":
+            try:
+                from fts.config.settings import get_config as _get_panel_cfg
+                from fts.data import FTSDataProvider
+                from fts.data_futures import FUTURES_HOLDOUT
+
+                _days = int(getattr(_get_panel_cfg(), "l2_panel_days", 750) or 750)
+                self.holdout_panel, _ = FTSDataProvider().get_futures_panel(
+                    symbols=FUTURES_HOLDOUT,
+                    days=_days,
+                )
+                logger.info(
+                    "[EvolutionLoop][GAP-160] 盲测池 panel 构建完成: %d 品种",
+                    len(self.holdout_panel or {}),
+                )
+            except Exception as e:  # noqa: BLE001 — 盲测池构建失败回退训练池内留出
+                logger.warning("[EvolutionLoop][GAP-160] 盲测池 panel 构建失败，回退训练池内留出: %s", e)
+                self.holdout_panel = None
 
         # ── 市场隔离: 自动按 market 选择 elite 目录 ──
         if elite_dir is None:

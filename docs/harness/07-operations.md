@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v3.0.0+6
+> 版本: v3.0.0+7
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,7 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v3.0.0+7** | **2026-08-20** | **feat(GAP-160): 盲测池接入演化审计链——symbol_holdout 改用 FUTURES_HOLDOUT 15 品种真外延验证（逐品种时序 IC，不要求共同窗口，use_blind_pool 开关回退）+ cross_symbol 新增板块级覆盖率第 4 通道（min_sector_coverage=5，适配 7 大板块异构池）+ 演化主链自动构建盲测 panel + test_audit_sector_coverage 19 用例** |** |
 | **v3.0.0+6** | **2026-08-20** | **v3.0.0+6: pandas 3 StringDtype 兼容性修复 + QuantData 数据新鲜度告警规则** |** |
 | **v3.0.0+5** | **2026-08-20** | **v3.0.0+1 架构级改造：FTS K线唯一数据源=QuantData，去天勤/通达信实时/AKShare默认降级链** |** |
 | **v3.0.0+4** | **2026-08-20** | **fix: seed_lineage 溯源写入修复——旧库残留 seed_family NOT NULL 列致 NOT NULL 约束失败，写入前幂等迁移对齐表结构并补写 fut_rainbow_ma 溯源记录** |** |

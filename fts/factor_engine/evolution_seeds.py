@@ -818,6 +818,7 @@ class SeedManager:
             style_exposures=self._build_barra_exposures(),
             vol_map=self._build_vol_map(),
             long_only=False,
+            holdout_panel_data=getattr(self._owner, "holdout_panel", None),  # GAP-160: 盲测池
         )
         # 从因子自身读取经济逻辑评分（种子 YAML 或 LLM 生成），默认 3 分
         el = factor.get("economic_logic", {}) or {}

@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v3.0.0+6
+> 版本: v3.0.0+7
 > 最后更新: 2026-08-17
 
 ---
@@ -472,6 +472,7 @@ TOTAL                                      20326   1254    94%
 | `tests/factor_engine/test_seed_pool.py` | ~16 | 种子池（含 GTJA191） |
 | `tests/factor_engine/test_stress_test.py` | 29 | 压力测试（v2.71.0 新增字符串/非 Datetime 索引回归 1 用例，修复索引类型比较 bug） |
 | `tests/factor_engine/test_symbol_holdout.py` | 18 | 标的留出验证（GAP-075）+ 弱信号保护（v2.104.0+15 GAP-116 +3：弱信号 \|train_ic\|<min_train_ic 返回 None（审计 skipped）/min_train_ic=0 向后兼容/强信号不受影响） |
+| `tests/factor_engine/test_audit_sector_coverage.py` | 19 | cross_symbol 板块覆盖率通道（v3.0.0+7 GAP-160）：板块内品种 IC 为正比例 ≥50% 计数/≥5 板块通过/板块数不足失败/无板块映射降级 skipped + 盲测池 symbol_holdout 模式（train 时序 IC 均值 vs 盲测 15 品种时序 IC 均值 retention 判定/弱信号 skipped/use_blind_pool=false 回退旧路径） |
 | `tests/factor_engine/test_uct_selection.py` | ~10 | UCT 树搜索父因子选择 |
 | `tests/factor_engine/test_verifier.py` | 17 | Verifier（v2.104.0+13 GAP-114 换手成本敏感净收益校验 +5：高换手成本覆盖准入/成本未覆盖拦截/极端高换手净夏普必败/turnover_cost_net=False 回退绝对硬剔/cost_adjusted 明细字段完整） |
 | `tests/factor_engine/test_walk_forward.py` | ~57 | 走航验证 |

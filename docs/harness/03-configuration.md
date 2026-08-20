@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v3.0.0+6
+> 版本: v3.0.0+7
 > 最后更新: 2026-08-10
 
 ---
@@ -366,6 +366,31 @@ L2 Verifier 默认配置（定义在 `contracts.py` 中，初始化后锁定）�
 | 连续低 IC/质量熔断 | 5 次 | 3 代 | — |
 | 失败率熔断 | 95% | 90% | — |
 | 单结构簇最大精英因子数 | — | 15 | — |
+
+## 6.1 因子审计阈值（FactorAuditConfig，模块级 dataclass）
+
+| 配置 | 默认值 | 说明 |
+|:-----|:-------|:-----|
+| `min_cross_symbol_ratio` | 0.8 | cross_symbol 主防线：≥80% 品种 IC 为正 |
+| `min_mean_ic` | 0.05 | 软门控A：平均 IC 强度下限（联合 `ratio_floor`） |
+| `ratio_floor` | 0.6 | 软门控A：符号比例下限 |
+| `binomial_alpha` | 0.05 | 软门控C：二项检验显著性水平 |
+| `min_sector_coverage` | 5 | 软门控D（v3.0.0+7）：板块级覆盖率下限——训练池 7 大板块中 ≥5 板块有代表品种 IC 为正即通过 |
+| `bonferroni_alpha` / `fdr_alpha` | 0.05 | 多重检验校正显著性 |
+| `lookback_max_lag` | 5 | 数据窥探检验最大滞后阶数 |
+| `stress_max_drawdown` | 0.40 | 压力场景最大回撤上限 |
+| `min_oos_pass_ratio` | 0.5 | OOS 最小窗口通过率 |
+
+## 6.2 标的留出验证（SymbolHoldoutConfig）
+
+| 配置 | 默认值 | 说明 |
+|:-----|:-------|:-----|
+| `use_blind_pool` | true | 盲测池模式（v3.0.0+7 GAP-160）：holdout 用 FUTURES_HOLDOUT 15 品种（与训练池零重叠）；false 回退训练池内行业分层留出（GAP-075 语义） |
+| `min_ic_retention` | 0.5 | IC 保持率下限（holdout_ic / \|train_ic\|） |
+| `min_holdout_ic` | 0.0 | 留出集 IC 下限 |
+| `min_train_ic` | 0.05 | 训练集 \|IC\| 下限（弱信号判定不可靠 → skipped） |
+| `holdout_ratio` | 0.2 | 训练池内留出模式的分层留出比例（盲测池模式下不使用） |
+| `min_holdout_symbols` | 5 | 留出集最少标的数（不足无法算截面 IC） |
 
 ---
 

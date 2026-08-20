@@ -1,6 +1,6 @@
 # 49 — 因子×子链质量矩阵：评审质检与生命周期张量化计划（QA/生命周期适配 47/48）
 
-> 版本: v3.0.0+6
+> 版本: v3.0.0+7
 > 状态: ✅ 已完成（v2.104.0+112，A/B/C/D 四模块全部实施） · 优先级: P1 · 负责人: FTS Agent · 关联: plans/47（子链差异化权重，已完成）, plans/48（Regime 分层 Gate，已完成）, GAP-136（已关闭）, GAP-137（已登记并关闭）, qa/（评审质检）, factor_lifecycle / energy_qa_review / factor_inspector（生命周期）
 
 ## 一、背景与问题定位

@@ -946,6 +946,7 @@ def cross_section_evaluate_backtest(
     horizons: Optional[tuple[int, ...]] = None,
     holdout_ratio: float = 0.2,
     use_panel_vector: Optional[bool] = None,
+    holdout_panel_data: Optional[dict[str, pd.DataFrame]] = None,
 ) -> BacktestMetrics:
     """横截面回测评估 — 单因子在多个标的上跨 section IC。
 
@@ -986,6 +987,10 @@ def cross_section_evaluate_backtest(
         horizons: 多持有期 IC 分析（GAP-060 横截面接入）；None 时从配置 eval_horizons 读取（空=关闭）
         holdout_ratio: 标的留出比例（GAP-075，默认 20%；行业分层，缺失回退随机）
         use_panel_vector: 全矩阵化 IC 开关（None=读配置，默认关闭）
+        holdout_panel_data: 盲测池 panel（GAP-160，v3.0.0+7）——非空且
+            SymbolHoldoutConfig.use_blind_pool=true 时，symbol_holdout 改用盲测池
+            品种逐品种时序 IC（与训练池零重叠、真外延泛化），替代训练池内部留出；
+            None/关闭时回退训练池内行业分层留出（GAP-075 语义）
 
     Returns:
         BacktestMetrics
@@ -1180,16 +1185,35 @@ def cross_section_evaluate_backtest(
     # GAP-075: 跨标的稳健性检查输出
     if symbol_ic:
         metrics["symbol_ic"] = symbol_ic
+
+    # GAP-160 (v3.0.0+7): 板块级覆盖率（cross_symbol 软门控D 通道输入）
+    metrics["cross_symbol_sector_coverage"] = _cs_sector_coverage(symbol_ic, industry_map)
+
+    # GAP-075/160: 跨标的留出验证——use_blind_pool 默认接入盲测池（FUTURES_HOLDOUT）
     try:
         from .symbol_holdout import SymbolHoldoutConfig, run_symbol_holdout
 
-        ho = run_symbol_holdout(
-            signal_dict,
-            ret_dict,
-            SymbolHoldoutConfig(holdout_ratio=holdout_ratio),
-            industry_map,
-        )
-        metrics["symbol_holdout"] = ho.to_dict() if ho is not None else None
+        ho_cfg = SymbolHoldoutConfig(holdout_ratio=holdout_ratio)
+        if ho_cfg.use_blind_pool and holdout_panel_data:
+            # 盲测池模式：训练池 vs 盲测池逐品种时序 IC（全期原始信号，方向同步取反）
+            direction = -1.0 if _was_flipped else 1.0
+            tr_ics = _cs_symbol_ts_ics(signal_dict, ret_dict, direction)
+            ho_sig, ho_ret = _cs_execute_factors(executor, params, holdout_panel_data)
+            ho_ics = _cs_symbol_ts_ics(ho_sig, ho_ret, direction)
+            metrics["symbol_holdout"] = _cs_blind_holdout_metrics(
+                tr_ics,
+                ho_ics,
+                ho_cfg,
+                list(holdout_panel_data.keys()),
+            )
+        else:
+            ho = run_symbol_holdout(
+                signal_dict,
+                ret_dict,
+                ho_cfg,
+                industry_map,
+            )
+            metrics["symbol_holdout"] = ho.to_dict() if ho is not None else None
     except Exception:  # noqa: BLE001 — 留出验证失败降级为 None，不阻断既有评估
         logger.warning("标的留出验证失败，降级为 None")
         metrics["symbol_holdout"] = None
@@ -1303,6 +1327,94 @@ def _cs_execute_factors(
         except Exception:  # noqa: BLE001
             continue
     return signal_dict, ret_dict
+
+
+def _cs_symbol_ts_ics(
+    signal_dict: dict[str, pd.Series],
+    ret_dict: dict[str, pd.Series],
+    direction: float = 1.0,
+    min_valid: int = 5,
+) -> list[float]:
+    """逐品种时序 Spearman IC（全期原始信号，与 symbol_ic 同构；direction 同步取反）。
+
+    不要求品种间共同日期窗口——晚上市品种（如 EC0）仅用自身有效期，规避
+    共同窗口被新上市品种拖累（GAP-160 盲测池接入的关键口径选择）。
+    """
+    ics: list[float] = []
+    for sym in signal_dict:
+        sig = signal_dict[sym]
+        ret = ret_dict.get(sym)
+        if ret is None:
+            continue
+        valid = ~(sig.isna() | ret.isna())
+        if int(valid.sum()) < min_valid:
+            continue
+        s = sig[valid].to_numpy(dtype=float)
+        r = ret[valid].to_numpy(dtype=float)
+        if np.std(s) < 1e-10 or np.std(r) < 1e-10:
+            continue
+        ic_val, _ = sp_stats.spearmanr(s, r)
+        if not np.isnan(ic_val):
+            ics.append(float(ic_val) * direction)
+    return ics
+
+
+def _cs_blind_holdout_metrics(
+    train_ics: list[float],
+    holdout_ics: list[float],
+    cfg: Any,
+    holdout_symbols: list[str],
+) -> Optional[dict[str, Any]]:
+    """盲测池留出验证指标（GAP-160，v3.0.0+7）。
+
+    train_ic = 训练池品种时序 IC 均值（同口径），holdout_ic = 盲测池品种时序 IC 均值；
+    retention = holdout_ic / |train_ic|；弱信号（|train_ic| < min_train_ic）返回 None
+    （审计项 skipped，GAP-116 弱信号保护）。判定与训练池内留出模式同阈值。
+    """
+    if not train_ics or not holdout_ics:
+        return None
+    train_ic = float(np.mean(train_ics))
+    holdout_ic = float(np.mean(holdout_ics))
+    if abs(train_ic) < cfg.min_train_ic:
+        return None
+    retention = holdout_ic / abs(train_ic) if abs(train_ic) > 1e-10 else (1.0 if holdout_ic >= 0 else -1.0)
+    passed = holdout_ic >= cfg.min_holdout_ic and retention >= cfg.min_ic_retention
+    return {
+        "n_train": int(len(train_ics)),
+        "n_holdout": int(len(holdout_ics)),
+        "train_ic": float(train_ic),
+        "holdout_ic": float(holdout_ic),
+        "ic_retention": float(retention),
+        "passed": bool(passed),
+        "holdout_symbols": list(holdout_symbols),
+        "detail": {"n_dates": 0, "stratified": False, "blind_pool": True},
+    }
+
+
+def _cs_sector_coverage(
+    symbol_ic: Optional[dict[str, float]],
+    industry_map: Optional[dict[str, str]],
+) -> Optional[dict[str, Any]]:
+    """板块级覆盖率（GAP-160，cross_symbol 软门控D 通道输入）。
+
+    按 industry_map（{symbol: sector}）将品种归板块，统计"板块内品种 IC 为正
+    比例 ≥ 50%"的板块数（covered）与训练池覆盖板块总数（total）。无映射返回 None
+    （审计通道降级不启用）。
+    """
+    if not symbol_ic or not industry_map:
+        return None
+    by_sector: dict[str, list[float]] = {}
+    for sym, ic in symbol_ic.items():
+        sec = industry_map.get(sym)
+        if sec:
+            by_sector.setdefault(sec, []).append(float(ic))
+    if not by_sector:
+        return None
+    covered = 0
+    for ics in by_sector.values():
+        if ics and sum(1 for ic in ics if ic > 0) / len(ics) >= 0.5:
+            covered += 1
+    return {"covered_sectors": int(covered), "total_sectors": int(len(by_sector))}
 
 
 def _cs_build_matrices(

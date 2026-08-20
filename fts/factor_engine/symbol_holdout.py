@@ -26,9 +26,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SymbolHoldoutConfig:
-    """标的留出验证配置（契约见 01-architecture GAP-075）。"""
+    """标的留出验证配置（契约见 01-architecture GAP-075/160）。"""
 
-    holdout_ratio: float = 0.2        # 每行业留出比例
+    use_blind_pool: bool = True        # v3.0.0+7 GAP-160：默认盲测池模式（holdout=FUTURES_HOLDOUT 15 品种，与训练池零重叠）；false 回退训练池内行业分层留出（GAP-075 语义）
+    holdout_ratio: float = 0.2        # 每行业留出比例（仅训练池内留出模式使用）
     min_holdout_symbols: int = 5      # 留出集最少标的数（不足无法算截面 IC → None）
     min_symbols_per_ic: int = 5       # 单期截面 IC 最少有效标的
     min_ic_retention: float = 0.5     # IC 保持率下限（holdout_ic / |train_ic|）

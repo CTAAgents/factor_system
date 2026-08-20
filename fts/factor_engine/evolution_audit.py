@@ -370,7 +370,8 @@ class AuditPipeline:
                 data=owner.data,
                 forward_returns=owner.forward_returns,
                 symbol_ic_map=l1.get("symbol_ic") or None,  # GAP-075: 激活 cross_symbol
-                symbol_holdout=l1.get("symbol_holdout") or None,  # GAP-075: 标的留出审计项
+                symbol_holdout=l1.get("symbol_holdout") or None,  # GAP-075/160: 标的留出审计项
+                sector_coverage=l1.get("cross_symbol_sector_coverage") or None,  # GAP-160: 板块覆盖率通道
                 oos_result=oos_result,
                 p_values=p_values if p_values else None,
             )

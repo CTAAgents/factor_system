@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v3.0.0+6
+> 版本: v3.0.0+7
 > 最后更新: 2026-08-18
 
 ---
@@ -1071,15 +1071,21 @@ FTS (因子推演) — 支持期货横截面因子演化
 │    compute_multi_frequency_signal 统一入口复用 get_minute_ohlcv     │
 │      （minute_cache→TDX 17709→TQ-Local→TQSDK 4 级降级链）           │
 │    backtest_minute_signal（T+1 日频持有，滑点+手续费双向）          │
-│ ⑨ 跨标的稳健性检查（GAP-075，v2.101.0 收尾）                       │
-│    cross_section_evaluate_backtest 输出 symbol_ic（逐标的时序 IC）  │
-│      + symbol_holdout（行业分层留出 20% 验证，train 定方向/留出集  │
-│        IC 保持率）→ _run_factor_audit 传 symbol_ic_map 激活审计    │
-│      cross_symbol（≥80% 标的 IC 为正，或二项检验显著/平均 IC      │
-│        达阈值且符号比例≥下限，A+C 双机制 OR 判定，v2.103.0）        │
-│        + 新增审计项 symbol_holdout                                  │
-│      （留出集 IC > 0 且保持率 ≥ 阈值）；数据缺失→skipped           │
-└─────────────────────────────────────────────────────────────────────┘
+│ ⑨ 跨标的稳健性检查（GAP-075，v2.101.0 收尾；GAP-160 盲测池接入，v3.0.0+7）│
+│    cross_section_evaluate_backtest 输出 symbol_ic（逐标的时序 IC）          │
+│      + symbol_holdout → _run_factor_audit 传 symbol_ic_map 激活审计         │
+│      cross_symbol（≥80% 标的 IC 为正，或二项检验显著/平均 IC 达阈值且      │
+│        符号比例≥下限，A+C 双机制 OR 判定，v2.103.0；v3.0.0+7 新增第 4 通道 │
+│        板块级覆盖率——训练池 7 大板块中 ≥5 板块有代表品种 IC 为正即通过）   │
+│        + 新增审计项 symbol_holdout                                          │
+│      （留出集 IC > 0 且保持率 ≥ 阈值）；数据缺失→skipped                   │
+│    v3.0.0+7（GAP-160）：symbol_holdout 默认接入盲测池 FUTURES_HOLDOUT      │
+│      （15 品种、与训练池零重叠、覆盖 10 条产业链）——盲测品种逐品种时序    │
+│      IC 均值=holdout_ic（不要求共同窗口，规避晚上市品种拖累），            │
+│      retention=holdout_ic/|train_ic| ≥ 0.5 且 holdout_ic>0 通过；           │
+│      替代训练池内部行业留出（样本内验证，统计效力差）；                    │
+│      use_blind_pool=false 回退原训练池内留出（GAP-075 语义）                │
+└─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ 实盘执行链路 + 样本外强制 + 保证金建模（v2.60.0，GAP-F01/F08/F09）─┐
 │ ① 样本外强制（GAP-F08）:                                             │
