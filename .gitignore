@@ -70,6 +70,8 @@ debug_llm_response_*.txt
 output/
 signals/
 test_full_run.log
+# 一次性探索脚本（保留本地，禁止入库）
+scripts/_*.py
 
 # ── Push safety：严格禁止推送到 GitHub 的运行时/敏感内容 ──
 # RHI 自进化运行时历史（2026-08-20 起，勿入库）
