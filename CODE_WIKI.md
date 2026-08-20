@@ -1,25 +1,35 @@
 # FTS (Factor Trading System) — Code Wiki
 
-> **版本**: v2.105.0+33 | **最后更新**: 2026-08-20
+> **版本**: v3.0.0+2 | **最后更新**: 2026-08-20
 >
-> 本文档基于当前源代码重新分析生成（上一版停留在 v2.103.0 / 2026-08-12），是 FTS 项目的代码级参考文档，面向开发者阅读。
+> 本文档基于当前源代码重新分析生成（上一版停留在 v2.105.0+33 / 2026-08-20），是 FTS 项目的代码级参考文档，面向开发者阅读。
 > 覆盖：项目整体架构、主要模块职责、关键类与函数说明、依赖关系、项目运行方式。
 >
-> **⚠️ 工程现状标注（2026-08-20）**：**FTS 主系统定位为期货因子智能系统，默认市场为能化产业链（energy）**。
-> 股票管线已通过 plans/32 不对称分离剥离为独立项目 `d:\Programs\fts-stock`（v0.0.1），主系统清理已执行，
-> 共享文件的股票分支已剥离。文中保留的 A 股/ETF 相关描述仅作历史与架构参考，不属于期货主系统的运行路径。
+> **⚠️ 工程现状标注（v3.0.0 双系统切分正式发布，plans/57 阶段 0-13 全部完成）**：
+> **FTS 系统定位为「期货市场因子生产系统」**——面向全部期货品种（84 品种/17 产业链，coverage_priority P0-P3），
+> 专注**因子发现、评估、管理、生命周期与因子信号矩阵输出**；**不再具备交易信号产生与组合权重重算的功能和能力**
+> （策略合成职责已正式迁移 Regime-Driven）。股票管线已通过 plans/32 剥离为独立项目 `d:\Programs\fts-stock`（v0.0.1）。
+> 文中保留的 A 股/ETF 相关描述仅作历史与架构参考，不属于期货主系统的运行路径。
 >
-> **⚠️ L3 退役状态（plans/57，v2.105.0+33）**：**FTS 已退役「L3 组合侧（策略合成职责）」**——信号合成/组合校验/
-> 权重学习/资金分配/拥挤度调制等策略侧职责迁移至 Regime-Driven（RD），FTS 仅保留**因子管理 + 信号矩阵输出**。
-> 退役落地为**登记制**（`fts/factor_engine/retired_l3.py` 全 35 项登记 + `warn_if_retired` 告警，2026-08-20 步骤 12 完成）：
-> **存量调用点兼容不删码，物理删除 + SemVer bump 归发布操作（需显式授权 + 全量回归）**。
-> 因此 `PortfolioLoop` / `l3_portfolio_loop` 任务 / `synthesize_signals` 等代码仍在仓库，处于「标记退役、兼容运行」状态；
-> FTS **保留**的 L3 基础设施：信号矩阵（`l3_signal_service`）、正交化（`orthogonalize_factors`）、信号序列计算（`_compute_signal_matrix`）。
+> **⚠️ L3 组合侧已正式退役（plans/57 §4.1/§5.3，v3.0.0 登记完成，v2.105.0+33 步骤 12 起）**：
+> - **组合权重重算（L3 Portfolio Loop）**：`fts portfolio run` / `l3_portfolio_loop` 任务 / `PortfolioLoop` 已退役，**不再构成 FTS 能力**
+> - **交易信号产生**：`futures_signal_pipeline` 信号管道（组合信号/交易建议/信号报告）已退役
+> - **退役登记**：`retired_l3.py` 全 **35 项**登记（futures_signal_pipeline 组合侧 11 + portfolio_loop 策略侧 21 + 整体迁移模块 3），
+>   存量调用点经 `warn_if_retired` 发出 DeprecationWarning；物理删除为后续独立里程碑（待授权 + 全量回归）
+> - **FTS 保留能力**：因子生产（L1 知识注入/L2 演化/评审质检/生命周期）+ **因子信号矩阵输出**
+>   （`l3_signal_service` → `l3_signal_store.duckdb`，信号契约 v1 经 F.3 冻结，供 Regime-Driven 消费）+ 正交化（`orthogonalize_factors`）
 >
-> **v2.104.0 → v2.105.0 期间重大演进（本版 Wiki 相比 v2.103.0 版的新增重点）**：
-> - **能化产业链独立工作流（GAP-121）**：12 化工品种训练链 + 8 化工链外盲测池，独立因子库 `factor_catalog_energy.duckdb`、独立 L1 输出、独立评审质检管道
-> - **子链张量化（plans/47-49）**：子链适用性画像（subchain_profile）、子链差异化权重调制（subchain_weight）、因子×子链单元粒度退化检测（subchain_lifecycle）、质量矩阵落库（subchain_factor_quality）
-> - **L2 评审+质检统一管道（方案 A）**：energy_qa_review.py 合并定期评审与定期质检为单一模块，宁严勿松原则
+> **⚠️ 全局默认市场（v3.0.0+1 反转，v3.0.0+2 完成 YAML 同步）**：`settings.py` 代码默认与 `config/settings.yaml` 均已
+> 反转回 `futures`（FTS 因子生产默认面向全部期货 84 品种/17 产业链），`FTS_DEFAULT_MARKET` 环境变量可覆盖。
+> 上一版 v2.105.0+33 的文档曾如实标注 settings.yaml 残留 `default_market: "energy"` 的配置漂移，已于 v3.0.0+2 修复对齐。
+>
+> **v2.104.0 → v3.0.0 期间重大演进（本版 Wiki 相比 v2.103.0 版的新增重点）**：
+> - **双系统切分（plans/57，v3.0.0）**：FTS 角色=因子生产系统；L3 组合侧退役登记 35 项；信号契约 v1（F.3）；
+>   全期货覆盖规划（coverage_priority P0-P3）；存量因子集中重审管道（review_legacy_factors.py 分族 FDR-BH）
+> - **全局默认市场反转 + 定时任务全期货重建（v3.0.0+1）**：TRAE Schedule 删除 4 个 energy 专属任务、新建 5 个全期货任务（8 Active）
+> - **能化产业链独立工作流（GAP-121）**：12 化工品种训练链 + 8 化工链外盲测池，独立因子库 `factor_catalog_energy.duckdb`
+> - **子链张量化（plans/47-49）**：子链适用性画像、子链差异化权重调制、因子×子链单元粒度退化检测、质量矩阵落库
+> - **L2 评审+质检统一管道（方案 A）**：energy_qa_review.py 合并定期评审与定期质检
 > - **L3 信号矩阵服务（plans/40/52）**：l3_signal_service.py 信号矩阵 B/D 层收敛 + 增量窗口追加（GAP-139）
 > - **CTA 手册 WorkFlow 端到端工作流（v2.104.0+25）**：fts/workflow/ 11 阶段 + 质检闭环，Web UI 一键驱动
 > - **权威数据源 QuantData（v2.105.0+32，GAP-156）**：字段权威矩阵校验，K 线主路径首级
@@ -61,33 +71,36 @@
 
 ## 1. 项目概述
 
-**FTS (Factor Trading System)** 是一个 AI 原生的量化因子智能系统，通过三层进化循环实现因子的自动化发现、评估、组合与演化，输出标准化的交易信号（ScoredSignal / FactorSignal），交易执行由下游系统（FDT 等）负责。
+**FTS (Factor Trading System)** 是一个 AI 原生的量化因子智能系统，通过三层进化循环实现因子的自动化发现、评估、组合与演化，输出标准化的因子信号矩阵（信号契约 v1，schema_version/factor_status/factor_scope），下游策略合成与交易执行由 Regime-Driven 系统（及 FDT 等）负责。
 
 ### 核心定位
 
 ```
-数据源（DuckDB / QuantData / TDX-Local 17709 / TQSDK / AKShare / Wind / iFinD / 东财）
+数据源（QuantData 唯一权威 K 线源 / DuckDB 缓存 / Wind / iFinD 字段增强）
     ↓
-FTS（因子智能系统 → 因子信号矩阵）
+FTS（因子生产系统 → 因子信号矩阵）
     ├── L0 Program（人类设定层：program.md）
     ├── L1 Meta-Loop（每日市场感知 + 知识补给 + Bootstrapping）
     ├── L2 Evolution Loop（因子演化 + 三级评估 + 评审质检 + 审计）
-    └── L3（组合侧已退役 plans/57）→ 仅保留信号矩阵/正交化基础设施
-    ↓ 信号契约 v1（schema_version/factor_status/factor_scope）
-下游策略合成系统（Regime-Driven，承接信号合成/组合校验/资金分配）
+    └── L3（组合侧已退役 plans/57 v3.0.0）→ 仅保留信号矩阵/正交化基础设施
+    ↓ 信号契约 v1（schema_version/factor_status/factor_scope，design/F.3 冻结）
+下游策略合成系统（Regime-Driven：strategy_synthesis/combo_verifier/money_management/crowding_gate）
 ```
 
 ### 核心能力
 
 | 能力 | 说明 |
 |------|------|
-| **因子生产循环** | L1 Meta-Loop（每日 00:00 知识补给）+ L2 Evolution Loop（工作日 03:00 ≈10 代 / 周六 03:00 ≈50 代）+ 信号管线（工作日 20:00 信号矩阵产出）。**L3 组合侧已退役（plans/57）：策略合成迁移 Regime-Driven，FTS 仅保留信号矩阵/正交化基础设施**（`l3_portfolio_loop` 任务处于登记兼容期） |
-| **能化产业链独立闭环（GAP-121）** | 12 化工品种训练链（能源3 SC/FU/BU + 聚酯3 PX/TA/PF + 油化工3 L/PP/PG + 煤化工3 MA/UR/SA）+ 8 化工链外盲测池，独立因子库/精英目录/报告，`fts evolution run --chain energy` |
-| **因子种子库** | 期货 YAML 种子（seeds/futures/ + seeds/energy/）+ 内置种子（wq101/qlib158/jq/gtja191/fundamental，合规不包含第三方专有实现）+ L1 注入（l1_injected/） |
+| **因子生产循环** | L1 Meta-Loop（每日知识补给）+ L2 Evolution Loop（工作日/周末演化）+ 评审质检 + 信号矩阵产出（工作日 20:00）。**L3 组合侧已正式退役（plans/57 v3.0.0）：策略合成迁移 Regime-Driven，FTS 仅保留信号矩阵/正交化基础设施**（`retired_l3.py` 35 项登记 + `warn_if_retired` 告警） |
+| **信号契约 v1（F.3）** | `l3_signal_meta` 追加 schema_version/factor_status/factor_scope 三列（幂等迁移），决策/训练双模式隔离，增量幂等 + 新鲜度校验 + 降级熔断，RD 校验不兼容即降级 |
+| **全期货覆盖规划（plans/57）** | `config/futures_universe.yaml` coverage_priority P0-P3 逐链推进（P0 能源化工 24 / P1 黑色系+有色 17 / P2 农产品群+贵金属 27 / P3 其余），84 品种/17 产业链 |
+| **存量因子集中重审（v3.0.0）** | `scripts/review_legacy_factors.py` 清点分层（active/shadow/degraded/deleted）→ 分族 FDR-BH 校正（α=0.05）→ audit 分层抽样（promote 100%/observe 30%/retire 10%），`FTS_REVIEW_LEGACY_APPLY=1` 才落库 |
+| **能化产业链独立闭环（GAP-121）** | 12 化工品种训练链（能源3 SC/FU/BU + 聚酯3 PX/TA/PF + 油化工3 L/PP/PG + 煤化工3 MA/UR/SA）+ 8 化工链外盲测池，独立因子库/精英目录/报告；v3.0.0+1 起 energy 专属定时任务删除，energy 因子库作为候选池保留（`fts evolution run --chain energy` 仍可手动调用） |
+| **因子种子库** | 期货 YAML 种子（seeds/futures/ + seeds/energy/）+ 内置种子（wq101/qlib158/jq/gtja191/fundamental，合规不包含第三方专有实现）+ L1 注入（l1_injected/）+ 外部因子常态化导入（import_external_factors_job 月度） |
 | **FTS-Expr DSL** | 算子表达式语言（L0 字段 + L1 时序 + L2 横截面 + L3 逻辑 + L4 组合 + L5 领域算子，约 500+ 算子），双注册表一致性校验，PIT 静态审计防未来函数 |
 | **进化搜索多引擎** | GP 遗传规划 + OperatorEvolution + 符号回归 + 批量挖掘漏斗（GAP-I201）+ 深度因子（GRU/Transformer 纯 numpy）+ LLM 宏观演化（四模式：operator/code/hybrid/batch） |
 | **六层存储架构** | L1 配置(YAML) → L2 行情库(DuckDB+Parquet 归档) → L3 因子资产库(DuckDB SSOT，期货/能源双库) → L4 运行状态库(SQLite WAL) → L5 信号缓存(Parquet+checksum) → L6 日志血缘(JSONL) |
-| **多源数据融合** | K 线主路径 6 级降级（DUCKDB_CACHE → QUANTDATA → TDX_LOCAL(17709) → TQ_PYTHON → AKSHARE → SYNTHETIC）+ 字段增强层（TQSDKEnhance/iFinDSDK/Wind/iFinD）+ 熔断器（5 次失败 6h 冷却）+ 交叉验证（0.5% 分歧记录）+ 5 种融合策略 |
+| **多源数据融合** | K 线唯一数据源 QuantData（v3.0.0+1；DUCKDB_CACHE 读取缓存 → QUANTDATA → SYNTHETIC 兜底；天勤 TQ_PYTHON/TQSDK、TDX_LOCAL 实时、AKShare 已从默认聚合器移除）+ 字段增强层（iFinDSDK/Wind/iFinD）+ 熔断器（每源连续 5 次失败 → 6h 冷却）+ 交叉验证（0.5% 分歧记录）+ 5 种融合策略 |
 | **权威数据源（GAP-156）** | QuantData（D:\QuantData 本机统一金融数据仓库），字段权威矩阵校验（L0 权威 open/high/low/close/volume/hold、L1 降级、L2 缺失禁依赖） |
 | **因子评审质检体系** | 10 维 0-50 分质量评分卡 + 6 项强制审计 + 7 状态机（DRAFT/PENDING_QA/CORE/CANDIDATE/OBSERVATION/SUSPENDED/RETIRED）+ Q1-Q10 入库前质检 + M1-M5 月度复检 + F1-F6 季度复检 + D1-D4 半年度复检 + 5 红线退役 |
 | **子链张量化（plans/47-49）** | 子链画像（t 检验护栏）、子链差异化权重调制矩阵、因子×子链单元粒度退化检测（scope_shrink 传导调制矩阵）、质量矩阵落库 |
@@ -105,7 +118,7 @@ FTS（因子智能系统 → 因子信号矩阵）
 - **核心依赖**: numpy, pandas, scipy, pyyaml, shap, python-dotenv, duckdb, **numba==0.66.0 + llvmlite==0.48.0（锁定）**
 - **可选依赖**: optuna（演化）、openai/anthropic（LLM）、akshare（数据）、scikit-learn（组合）、lightgbm/xgboost（ML）、redis（桥接）、hmmlearn/statsmodels（Regime）、fastapi/uvicorn（监控）、distributed（分布式）
 - **数据存储**: DuckDB（`data/fts_history.duckdb` 行情库 / `data/factor_catalog_{futures,energy}.duckdb` 因子资产库 / `data/l3_signal_store.duckdb` 信号矩阵库）+ Parquet（信号缓存/冷归档/期限结构）+ SQLite WAL（`data/state.db` 状态库 / `data/workflow.db` 工作流 / `data/sim_portfolio.db` 模拟仓）
-- **调度**: APScheduler（可选，`FTS_INTERNAL_SCHEDULER_ENABLED=1` 启用；默认以 TRAE Schedule 为唯一调度源）+ ProcessWatchdog 进程守护
+- **调度**: APScheduler（可选，`FTS_INTERNAL_SCHEDULER_ENABLED=1` 启用；默认以 TRAE Schedule 为唯一调度源，v3.0.0+1 起 8 Active 全期货任务）+ ProcessWatchdog 进程守护
 - **监控**: 纯标准库 HTTP 仪表盘 + Prometheus 端点（`/metrics`）
 - **包管理**: setuptools，`pyproject.toml` 定义元数据，`fts` 命令入口注册
 
@@ -125,13 +138,13 @@ FTS（因子智能系统 → 因子信号矩阵）
 │                    L1 Meta-Loop（每日 00:00）                         │
 │  agentic 市场感知 → debate 分析 → Bootstrapping 三源候选              │
 │  （提取器/LLM/模板）→ L1 Verifier 判定 → 注入 factor_pool.json         │
-│  energy 市场：按四子链分批 + 实时链知识面板注入（GAP-121 + plans/41）   │
+│  能化链：按四子链分批 + 实时链知识面板注入（GAP-121 + plans/41）        │
 │  L1→L2 漏斗统计（l1_l2_funnel：injected/consumed/promoted）           │
 └─────────────────────────────────┬───────────────────────────────────┘
                                   │ 种子候选（l1_injected/）
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│          L2 Evolution Loop（工作日 03:00 ≈10 代 / 周六 ≈50 代）        │
+│          L2 Evolution Loop（工作日 04:00 ≈10 代 / 周六 ≈50 代）        │
 │  DataQualityMonitor 数据校验 → State 加载 → 熔断预检查                 │
 │  循环（每代）:                                                       │
 │    UCT 父因子选择 → 演化分派（macro/GP/operator/deep/transformer）    │
@@ -144,11 +157,13 @@ FTS（因子智能系统 → 因子信号矩阵）
                                   │ 精英因子（futures_elite|energy_elite）
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│           L3（组合侧已退役 plans/57，v2.105.0+33 登记完成）            │
-│  退役：信号合成/组合校验/权重学习/资金分配/拥挤度调制 → 迁 Regime-Driven │
-│  保留：信号矩阵（l3_signal_service）/ 正交化（orthogonalize_factors）  │
-│  代码状态：登记兼容期（warn_if_retired 告警，物理删除待授权+全量回归）   │
-│  输出：因子信号矩阵（l3_signal_store.duckdb，信号契约 v1 供 RD 消费）   │
+│   L3（组合侧已正式退役 plans/57 §4.1/§5.3，v3.0.0 登记完成）           │
+│  退役：信号合成/组合校验/权重学习/资金分配/拥挤度调制 → 迁 Regime-Driven│
+│  （retired_l3.py 35 项 + warn_if_retired 告警，物理删除待授权）        │
+│  保留：信号矩阵（l3_signal_service，信号契约 v1）/ 正交化              │
+│  （orthogonalize_factors）                                           │
+│  输出：因子信号矩阵（l3_signal_store.duckdb，schema_version/          │
+│        factor_status/factor_scope 三列，供 RD 消费）                  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -197,13 +212,12 @@ RegimeAwareSelector.detect() 四级检测链（置信度 gate ≥ 0.3）:
 ### 2.4 数据流架构
 
 ```
-期货日线 K 线主路径（6 级降级，FuturesDataAggregator 统一入口）:
-  DUCKDB_CACHE → QUANTDATA(权威) → TDX_LOCAL(17709) → TQ_PYTHON(TQSDK) → AKSHARE → SYNTHETIC
+期货日线 K 线主路径（v3.0.0+1 起唯一数据源 QuantData，FuturesDataAggregator 统一入口）:
+  DUCKDB_CACHE(读取缓存) → QUANTDATA(唯一权威源) → SYNTHETIC(测试/离线兜底)
                     ↓
              字段增强层（并行，不阻断主路径）:
-               TQSDKEnhanceSource（hold/oi_change）
                IFindSDKSource / Wind / iFinD（settle/oi_change/pre_settle/hold）
-               QuantData 权威字段矩阵（L0/L1/L2 分级约束）
+               QuantData 权威字段矩阵（L0/L1/L2 分级约束；hold=L0，oi_change 差分自算）
                     ↓
               熔断器（每源连续 5 次失败 → UNAVAILABLE → 6h 冷却 → 探活恢复）
                     ↓
@@ -214,8 +228,8 @@ RegimeAwareSelector.detect() 四级检测链（置信度 gate ≥ 0.3）:
                     ↓
               因子引擎（三层循环）
 
-期货分钟路径:  minute_cache → TDX_LOCAL(17709, 5m) → TQSDK
-期货 tick 路径: tick_cache → TQSDK_TICK（5 档盘口）
+期货分钟路径:  minute_cache → TDX_LOCAL(17709, 5m)（显式扩展场景；天勤 TQSDK 已移除）
+期货 tick 路径: 默认不注册（因子生命周期管理不需要；需显式传 TQSDKTickSource）
 宏观字段注入:  MacroFieldAligner（东财+中债登默认源，发布滞后防未来函数）
 基本面字段:    AkshareFuturesFundamentalProvider（库存/基差/仓单）
 期限结构:      sync_term_structure_fields（contract_kline 截面 → Parquet）
@@ -228,7 +242,7 @@ RegimeAwareSelector.detect() 四级检测链（置信度 gate ≥ 0.3）:
 ```
 fts/                          # 核心源码（约 200 个 Python 文件）
 ├── __init__.py               # 版本号动态读取（pyproject.toml 单一真源）+ 自动加载 .env
-├── cli.py                    # CLI 统一入口（15 命令组，全部带 trace_id）
+├── cli.py                    # CLI 统一入口（15+ 命令组，全部带 trace_id）
 ├── llm.py                    # LLM 客户端（OpenAI/Anthropic/Mock 三后端）
 ├── data.py                   # 数据层统一入口（FTSDataProvider）
 ├── data_futures.py           # 期货数据核心（DuckDB 持久化/多源降级/换月复权/品种池）
@@ -242,7 +256,8 @@ fts/                          # 核心源码（约 200 个 Python 文件）
 │   ├── evolution_loop.py     # L2 演化主循环（9 协作类组合式重构）
 │   ├── meta_loop.py          # L1 Meta-Loop
 │   ├── portfolio_loop.py     # L3 组合构建（276KB，组合侧已退役登记 plans/57，仅正交化保留）
-│   ├── l3_signal_service.py  # L3 信号矩阵 B/D 层（plans/40/52）
+│   ├── retired_l3.py         # L3 组合侧退役登记（35 项 + warn_if_retired 告警，v3.0.0）
+│   ├── l3_signal_service.py  # L3 信号矩阵 B/D 层（plans/40/52 + 信号契约 v1）
 │   ├── energy_qa_review.py   # 能化链 L2 评审质检统一管道（方案 A）
 │   ├── l1_l2_funnel.py       # L1→L2 闭环漏斗统计（plans/44）
 │   ├── subchain_profile.py   # 子链适用性画像（plans/47）
@@ -273,7 +288,7 @@ fts/                          # 核心源码（约 200 个 Python 文件）
 
 config/                       # 项目配置（settings.yaml/futures_universe.yaml/extractors.yaml）
 seeds/                        # YAML 种子因子（futures/ + energy/）
-scripts/                      # 工具脚本（180+ 个：同步/迁移/验证/回测/诊断）
+scripts/                      # 工具脚本（180+ 个：同步/迁移/验证/回测/诊断/重审）
 tests/                        # 分场景测试（core/data_sources/factor_engine/config/cli/...）
 web/workflow_ui/              # WorkFlow React SPA（构建产物 dist）
 docs/                         # 项目文档（harness 工程规范 + FTS_manual 手册）
@@ -299,7 +314,7 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 | `FusionMeta` / `FusionReport` | 多源融合元数据 / 融合报告（`fts data fuse` 输出） |
 | `FuturesDataLineage` | 期货数据同步血缘追踪契约 |
 
-**关键枚举（`enums.py`）**：`EvolutionStage`（L0/L1/L2/L3）、`FactorPriority`、`CandidateStatus`、`DataSource`（11 源）、`FusionStrategy`（MEDIAN/MEAN/WEIGHTED/HIERARCHICAL/TRIMMED_MEAN）。
+**关键枚举（`enums.py`）**：`EvolutionStage`（L0/L1/L2/L3）、`FactorPriority`、`CandidateStatus`、`DataSource`（11 源，含 QUANTDATA）、`FusionStrategy`（MEDIAN/MEAN/WEIGHTED/HIERARCHICAL/TRIMMED_MEAN）。
 
 **关键函数（`atomic.py`）**：
 - `atomic_write(path, data)` / `atomic_read(path, default)`：临时文件 + `os.replace` 原子读写
@@ -312,18 +327,18 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 **职责**：FTS 全局配置加载与管理。加载优先级：环境变量（`FTS_*`）> YAML 配置文件 > 模块默认值。覆盖路径、数据、LLM、演化、L1/L2/L3、DuckDB 并发、Verifier、回测仿真、风控等 80+ 配置项。
 
 **关键类**：
-- `FTSConfig`（dataclass）：全局配置模型。核心方法 `get_elite_dir(market="futures")`（market="energy" 返回能源产业链专属目录）；字段均从 `os.getenv("FTS_*")` 读取
+- `FTSConfig`（dataclass）：全局配置模型。核心方法 `get_elite_dir(market="futures")`（market="energy" 返回能源产业链专属目录）；`default_market` 字段代码默认 `futures`（v3.0.0+1 反转，**注意 settings.yaml 残留 `energy` 覆盖，见 §8.1**）；字段均从 `os.getenv("FTS_*")` 读取
 - `DimensionWeights` / `GradeThresholds` / `FactorQualityCardFullConfig`：质量评分卡配置（[factor_quality_card_config.py](file:///d:/Programs/factor_system/fts/config/factor_quality_card_config.py)，10 维权重/分级阈值/各维度映射）
 - `FuturesFieldConsumptionConfig`（Pydantic）：期货字段消费字典 SSOT（[futures_field_consumption.py](file:///d:/Programs/factor_system/fts/config/futures_field_consumption.py)，kline 17 字段 / fundamental 9 字段 / term_structure 4 字段）
 
 **关键函数**：
 - `get_config()`：全局配置单例（延迟初始化）
 - `load_config(config_path)`：加载 YAML → 应用环境变量覆盖
-- `is_weight_recompute_day(cfg, today)`：L3 权重重算日判定（GAP-072，cadence daily/weekly）
+- `is_weight_recompute_day(cfg, today)`：~~L3 权重重算日判定（GAP-072，已随 L3 退役 v3.0.0）~~
 - `validate_evolution_mode(mode)`：演化模式校验 ∈ {operator, operator_first, code, hybrid, batch}
 - `get_quality_card_config()` / `create_config(...)` / `get_futures_config()` 等预设
 
-**依赖**：yaml、os、dataclasses；`config/settings.yaml` 为实际生效值，`config/futures_universe.yaml` 为品种池 SSOT。
+**依赖**：yaml、os、dataclasses；`config/settings.yaml` 为实际生效值，`config/futures_universe.yaml` 为品种池/产业链 SSOT。
 
 ### 4.3 因子引擎 `fts.factor_engine`
 
@@ -355,12 +370,13 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 
 #### 4.3.3 L3 Portfolio Loop `portfolio_loop.py`（276KB 大文件）
 
-> **⚠️ 退役状态（plans/57 §4.1/§5.3，v2.105.0+33）**：本文件**策略侧函数已退役登记**——
+> **⚠️ 退役状态（plans/57 §4.1/§5.3，v3.0.0 登记完成）**：本文件**策略侧函数已正式退役登记**（21 项，列于 `retired_l3.py`）——
 > `synthesize_signals` / `_compute_elastic_net_weights` / `_compute_ml_ensemble_weights` / `_synthesize_bl_weights` /
 > `regime_adaptive_weight_adjustment` / `build_combo` / `_cap_safety_valve` / `_validate_combo_sharpe` /
 > `_run_sharpe_randomization_test` / `decay_test` / `apply_turnover_penalty` / `_apply_sticky_constraints` /
 > `_compute_subchain_exposure` / `_merge_gate_scale_into_modulation` / `_greedy_select_by_correlation` /
-> `_dedup_factors_by_chain*` / `_filter_*` 共 20 项，策略合成职责迁移 Regime-Driven。
+> `_dedup_factors_by_chain` / `_dedup_factors_by_chain_cluster` / `_dedup_within_chain` / `_filter_by_quality_gate` /
+> `_filter_shadow_pending` / `_filter_review_approved`，策略合成职责迁移 Regime-Driven。
 > **保留**：`orthogonalize_factors`（正交化，FTS 保留基础设施）。代码处于登记兼容期，未物理删除。
 
 **职责**（历史定位，v1.2.0，仅供追溯）：Step 0.5 加载面板（energy 收缩至能化 20 品种）→ Step 1 加载 elite 因子（DuckDB 优先，仅 approved 放行）→ Step 1.5 纯外推验证（OOS IC 衰减标记降级）→ Step 1.8 因子聚类（energy 关闭全局 P1，去冗余下沉 Step 1.8b 链内聚类）→ Step 1.9 P2 PCA 降维 → Step 2 信号合成（八种模式）→ Step 2.5 Regime 自适应权重（子链 Gate/Beta 层/拥挤度门控/条件化权重）→ Step 3 正交化 → Step 4 衰减检验 → Step 5 组合构建（粘性约束+换手惩罚+置信度缩放）→ Step 5.5 漂移监控 → Step 6 L3 Verifier → Step 7 注入 FDT + 报告。**上述策略侧流程整体退役**，仅保留 Step 3 正交化。
@@ -374,21 +390,23 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 **关键函数（保留项）**：
 - `orthogonalize_factors(...)`：因子正交化（分层/相关矩阵/代码哈希三模式）——**FTS 保留**
 
-**关键函数（退役项，仅追溯）**：`synthesize_signals`（信号合成）、`build_combo`（组合构建）、`regime_adaptive_weight_adjustment`（制度调制）、`_factor_composite_score`（综合评分）、`_dedup_factors_by_chain_cluster` / `_dedup_within_chain`（链内聚类去冗余）、`_compute_elastic_net_weights` / `_compute_ml_ensemble_weights`（权重学习）、`_auto_build_factor_returns`（因子收益矩阵）、`load_elite_factors` / `inject_to_fdt`。
+**关键函数（退役项，仅追溯）**：见上方 21 项清单。
 
-#### 4.3.4 L3 信号矩阵服务 `l3_signal_service.py`（plans/40 B/D 层 + plans/52 增量窗口）
+#### 4.3.4 L3 信号矩阵服务 `l3_signal_service.py`（plans/40 B/D 层 + plans/52 增量窗口 + 信号契约 v1）
 
 > **✅ 保留资产（plans/57 §2.2）**：信号矩阵构建/增量是 FTS 在 L3 退役后**保留的基础设施**，
-> 经信号契约 v1（schema_version/factor_status/factor_scope）输出给 Regime-Driven 消费。
+> 经**信号契约 v1**（`design/F.3` 冻结：schema_version/factor_status/factor_scope）输出给 Regime-Driven 消费。
 
 **职责**：把 L3 组合重算中最重的"信号重复重算"收敛为单一 2D/3D 信号矩阵服务：B 层构建统一 (n_dates, n_symbols, n_factors) 信号矩阵；D 层持久化到 `data/l3_signal_store.duckdb`（按 (code_hash, params_hash) 双哈希增量判定，GAP-139 增量窗口追加）。
+
+**信号契约 v1（F.3，v3.0.0）**：`l3_signal_meta` 表幂等追加三列——`schema_version`（INTEGER，契约版本，RD 校验不兼容即降级熔断）、`factor_status`（VARCHAR，factor_id → active/degraded/shadow/retired 状态传播）、`factor_scope`（JSON，factor_id → {subchain_scope, subchain_specific} 作用域画像）；配套决策/训练双模式隔离 + 增量幂等（dates_digest）+ 新鲜度校验。
 
 **关键类/函数**：
 - `SignalMatrixBundle`（dataclass）：信号矩阵构建结果（signal_matrix/forward_returns/dates/symbols/factor_ids/forward_days）
 - `align_signal_to_dates(sig, df, common_dates)`：向量化日期对齐（hash 查找 O(n)）
 - `build_signal_matrix(panel, valid_factors, factor_codes, common_dates, forward_days, signal_cache)`：B 层核心
-- `persist_signal_matrix(...)`：D 层写入（短写连接 + duckdb_write_lock + GAP-150 写路径契约校验）
-- `load_signal_matrix(...)` / `load_signal_meta(...)`：D 层只读读取（含 code_hash/params_hash/schema_version/dates_digest）
+- `persist_signal_matrix(...)`：D 层写入（短写连接 + duckdb_write_lock + GAP-150 写路径契约校验；接受 factor_status_map/factor_scope_map/schema_version 契约参数）
+- `load_signal_matrix(...)` / `load_signal_meta(...)`：D 层只读读取（含 code_hash/params_hash/schema_version/factor_status/factor_scope/dates_digest）
 - `backfill_signal_matrix(...)`：增量窗口追加回填（`_W_RECALL=500` 回退段 + `dates_digest` 前缀判定 + `_verify_append` 验证兜底）
 - `load_or_build_signal_matrix(...)`：增量判定入口（前缀一致 + 有增量 → 增量；否则全量）
 
@@ -407,6 +425,8 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 
 **职责**：合并定期评审与 energy 链定期质检为单一管道：`[0] 公共面板 → [1] 准入重审 → [2] 退化检测落库 → [3] 生命周期收口（含冷却期回归）→ [4] Inspector 血缘 → [4.5] invalid_when 命中检查 → [5] 统一报告`。原则"宁严勿松"：任一退化信号命中即降级。
 
+> **v3.0.0+1 定位调整**：能化链专属定时任务已删除，energy 因子库作为**候选池**保留；该管道经 `l2_energy_qa_review_job` 手动调用（`FTS_ENERGY_QA_REVIEW_APPLY=1` 正式落库），全期货评审质检走 `l2_review_job`/`factor_level_monitor_job`。
+
 **关键类**：
 - `EnergyQaReviewConfig`（Pydantic）：days=300/apply=False（默认 dry-run）/ic_threshold=0.02/drop_threshold=0.30/drop_severe=0.50/cooldown_days=30
 - `EnergyQaReviewPipeline`：`run(trace_id)` 六阶段串行；`_stage_degradation`（退化检测+统一落库）、`_stage_lifecycle`（AutoRetire+冷却期回归）、`_subchain_degradation`（单元粒度退化）、`_shrink_scope`（scope 收缩）、`_assert_apply_consistency`（影子校验，反沉降通道 v2.105.0+18）
@@ -419,7 +439,7 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 
 #### 4.3.7 因子资产库 `factor_db/`
 
-- **[schema.py](file:///d:/Programs/factor_system/fts/factor_engine/factor_db/schema.py)**：DuckDB 表结构定义（v1.2）。`get_db_path(market)` 按市场返回库路径：`factor_catalog_futures.duckdb` / `factor_catalog_energy.duckdb` / `factor_catalog.duckdb`。核心表：`factor_catalog`（因子主表：factor_id PK/name/code/code_hash/params/economic_logic/status/market/is_elite/metadata）、`factor_evaluations`（L1-L3 三级评估）、`factor_versions`（代码版本历史）、`factor_correlations`、`factor_quality_scores`、`factor_status_history`、`factor_audit_reports`、`feedback_*`（C.3 反馈闭环）、`seed_lineage`、`subchain_factor_quality`。
+- **[schema.py](file:///d:/Programs/factor_system/fts/factor_engine/factor_db/schema.py)**：DuckDB 表结构定义（v1.2）。`get_db_path(market)` 按市场返回库路径：`factor_catalog_futures.duckdb` / `factor_catalog_energy.duckdb` / `factor_catalog.duckdb`。核心表：`factor_catalog`（因子主表：factor_id PK/name/code/code_hash/params/economic_logic/status/market/is_elite/metadata）、`factor_evaluations`（L1-L3 三级评估）、`factor_versions`（代码版本历史）、`factor_correlations`、`factor_quality_scores`、`factor_status_history`、`factor_audit_reports`、`factor_reviews`（L2 评审决策 approved/rejected）、`feedback_*`（C.3 反馈闭环）、`seed_lineage`、`subchain_factor_quality`。
 - **[repository.py](file:///d:/Programs/factor_system/fts/factor_engine/factor_db/repository.py)**：仓储层（GAP-149 状态枚举校验 9 值；GAP-150 写路径契约）。`FactorRepository`（create_factor 带 sha256 code_hash + 版本记录 + CHECKPOINT / get / update / list / retire / get_versions / get_evaluations）、`FactorQualityScoreRepository`、`FactorStatusRepository`（update_factor_status/log_transition）、`FactorAuditReportRepository`、`SubchainQualityRepository`。
 - **[lineage.py](file:///d:/Programs/factor_system/fts/factor_engine/factor_db/lineage.py)**：`FactorLineage.get_lineage(factor_id)` 血缘追踪（ancestors 父链/descendants 子因子/versions/evaluations）。
 
@@ -487,10 +507,19 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 - **[causal_validator.py](file:///d:/Programs/factor_system/fts/factor_engine/causal_validator.py)**：`CausalValidator.validate(factor, data, forward_returns)` 自然实验事件因果验证（ANOMALY_SIGMA_THRESHOLD=3.0）。
 - **[backtest_pipeline.py](file:///d:/Programs/factor_system/fts/factor_engine/backtest_pipeline.py)**：`BacktestPipeline.run(input_data)` 4 阶段（DATA_LOAD → FACTOR_COMPUTE → PERFORMANCE → REPORT）+ `run_batch` 批量回测排名。
 
+#### 4.3.13 退役登记 `retired_l3.py`（v3.0.0）
+
+**职责**：L3 组合侧退役对象登记（plans/57 §4.1/§5.3）。`RetiredEntry`（name/module/migrated_to/status）登记 35 项；`warn_if_retired(name)` 对存量调用点发 DeprecationWarning；`is_retired(name)` 判定；`retired_registry()` 全量导出（审计/报告用）。
+
+**35 项清单**：
+- **futures_signal_pipeline.py（组合侧）11 项**：`_compute_composite_scores` / `_compute_per_variety_weights` / `_apply_regime_weight_adjustment` / `_apply_regime_direction_bias` / `_generate_trading_advice` / `_generate_trading_advice_report` / `_compute_holdout_validation` / `_load_l3_combo_weights` / `_load_l3_subchain_meta` / `_load_l3_combo_meta` / `_load_l3_combo_factors`
+- **portfolio_loop.py（策略侧）21 项**：`synthesize_signals` / `_compute_elastic_net_weights` / `_compute_ml_ensemble_weights` / `_synthesize_bl_weights` / `regime_adaptive_weight_adjustment` / `build_combo` / `_cap_safety_valve` / `_validate_combo_sharpe` / `_run_sharpe_randomization_test` / `decay_test` / `apply_turnover_penalty` / `_apply_sticky_constraints` / `_compute_subchain_exposure` / `_merge_gate_scale_into_modulation` / `_greedy_select_by_correlation` / `_dedup_factors_by_chain` / `_dedup_factors_by_chain_cluster` / `_dedup_within_chain` / `_filter_by_quality_gate` / `_filter_shadow_pending` / `_filter_review_approved`
+- **整体迁移模块 3 项**：`weight_learning`（→ RD strategy_synthesis/money_management）/ `capital_allocator`（→ RD money_management.capital_allocate）/ `regime_crowding`（→ RD crowding_gate 权威口径平移）
+
 ### 4.4 数据提供者层 `fts.data*`
 
 - **[data.py](file:///d:/Programs/factor_system/fts/data.py)**：统一数据入口。`FTSDataProvider`：`get_futures_ohlcv(symbol, days)` / `get_futures_panel(symbols, days)`（默认动态池）/ `enrich_futures_fundamental`（注入 9 基本面字段）/ `synthesize_ohlcv`（合成兜底）；`get_data_provider()` 全局单例。
-- **[data_futures.py](file:///d:/Programs/factor_system/fts/data_futures.py)**（约 2500 行）：期货数据核心。`FuturesDataProvider`：`get_ohlcv`（换月复权 + 跳空注入）/ `get_minute_ohlcv` / `get_tick_data` / `get_futures_panel`（G8 断K/跳空/持仓量异常标记）；连接管理 `AsyncWriteQueue` / `DuckDBConnection` / `DuckDBWriter` / `DuckDBReader`；品种池常量（SSOT 由 futures_universe.yaml 驱动）：`FUTURES_SUBSET`（84）/ `FUTURES_CORE_SUBSET`（25）/ `FUTURES_HOLDOUT`（15 盲测池）/ `FUTURES_STRATIFIED_SUBSET`（19）/ `ENERGY_CHAIN_SYMBOLS/TRAIN/HOLDOUT`（12 训练 + 8 盲测）/ `FUTURES_SECTOR_MAP`（17 产业链）。
+- **[data_futures.py](file:///d:/Programs/factor_system/fts/data_futures.py)**（约 2500 行）：期货数据核心。`FuturesDataProvider`：`get_ohlcv`（换月复权 + 跳空注入）/ `get_minute_ohlcv` / `get_tick_data` / `get_futures_panel`（G8 断K/跳空/持仓量异常标记）；连接管理 `AsyncWriteQueue` / `DuckDBConnection` / `DuckDBWriter` / `DuckDBReader`；品种池常量（SSOT 由 futures_universe.yaml 驱动）：`FUTURES_SUBSET`（84）/ `FUTURES_CORE_SUBSET`（25）/ `FUTURES_HOLDOUT`（15 盲测池）/ `FUTURES_STRATIFIED_SUBSET`（19）/ `ENERGY_CHAIN_SYMBOLS/TRAIN/HOLDOUT`（12 训练 + 8 盲测）/ `FUTURES_SECTOR_MAP`（17 产业链）/ `FUTURES_COVERAGE_PLAN`（coverage_priority P0-P3）。
 - **[data_futures_fundamental.py](file:///d:/Programs/factor_system/fts/data_futures_fundamental.py)**：`AkshareFuturesFundamentalProvider`（库存=东财主源+99 期货兜底；基差=futures_spot_price_daily；仓单=CZCE/GFEX 官方 + SHFE/DCE/INE 东财）。
 - **[data_futures_term_structure.py](file:///d:/Programs/factor_system/fts/data_futures_term_structure.py)**：`sync_term_structure_fields` 期限结构每日同步（term_spread/roll_yield → Parquet）。
 
@@ -498,7 +527,7 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 
 **[base.py](file:///d:/Programs/factor_system/fts/data_sources/base.py)**：`BaseFuturesSource`（ABC）定义 3 抽象方法（fetch_ohlcv/fetch_quote/is_available）+ `SourceUnavailable` 异常 + `validate_ohlcv_row` 字段校验。
 
-**[aggregator.py](file:///d:/Programs/factor_system/fts/data_sources/aggregator.py)**（核心）：`FuturesDataAggregator` 多级降级 + 字段增强层 + 熔断器 + 交叉验证。主路径 `DUCKDB_CACHE → QUANTDATA → TDX_LOCAL → TQ_PYTHON → AKSHARE → SYNTHETIC`。关键方法：`get_ohlcv`（17 列 schema）/ `get_minute_ohlcv` / `get_ticks` / `_enhance_fields`（settle/pre_settle/oi_change/hold 覆盖 GAP-083）/ `_derive_pre_settle` / `_synthesize` / `_is_circuit_open`（5 次失败 6h 冷却）/ `cross_check` / `get_source_status`。
+**[aggregator.py](file:///d:/Programs/factor_system/fts/data_sources/aggregator.py)**（核心）：`FuturesDataAggregator` 多级降级 + 字段增强层 + 熔断器 + 交叉验证。主路径 `QUANTDATA → DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON → AKSHARE → SYNTHETIC`。关键方法：`get_ohlcv`（17 列 schema）/ `get_minute_ohlcv` / `get_ticks` / `_enhance_fields`（settle/pre_settle/oi_change/hold 覆盖 GAP-083）/ `_derive_pre_settle` / `_synthesize` / `_is_circuit_open`（5 次失败 6h 冷却）/ `cross_check` / `get_source_status`。
 
 | 数据源 | 职责 |
 |---|---|
@@ -520,7 +549,7 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 
 ### 4.6 存储注册表与状态库 `fts.store`
 
-- **[registry.py](file:///d:/Programs/factor_system/fts/store/registry.py)**：`StorageRegistry` 从 `docs/harness/_data/storage_landscape.yaml` 加载 FTS 全部存储域权威契约（SSOT 一数一源）。`get(domain)` / `find_by_path` / `warn_unregistered_write`（GAP-150 写路径契约断言）/ `get_storage_registry()` 进程级单例。
+- **[registry.py](file:///d:/Programs/factor_system/fts/store/registry.py)**：`StorageRegistry` 从 `docs/harness/_data/storage_landscape.yaml` 加载 FTS 全部存储域权威契约（SSOT 一数一源）。`get(domain)` / `find_by_path` / `warn_unregistered_write`（GAP-150 写路径契约断言，严格模式默认开启，`FTS_STORAGE_WRITE_STRICT=0` 回退告警）/ `get_storage_registry()` 进程级单例。
 - **[duckdb_lock.py](file:///d:/Programs/factor_system/fts/store/duckdb_lock.py)**：`duckdb_write_lock(db_path, timeout)` 跨进程写锁（E.4 S1：Windows msvcrt / POSIX fcntl，非阻塞轮询，不可重入）。
 - **[state_db.py](file:///d:/Programs/factor_system/fts/store/state_db.py)**：`StateKVStore` L4 运行状态库（E.3 S2 自 DuckDB 迁移至 SQLite WAL）：`state_kv` 当前态 UPSERT + `state_history` 历史回放。`upsert(namespace, key, value, run_id, ts)` 单事务原子写；`get_state_store()` 进程级单例。
 
@@ -563,9 +592,9 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 
 | 文件 | 关键类/函数 | 职责 |
 |---|---|---|
-| [data_level_monitor.py](file:///d:/Programs/factor_system/fts/monitor/data_level_monitor.py) | `DataLevelMonitor` | 数据级质量监控（GAP-F06）：完整性/异常值 3σ/复权一致性/多源分歧四维 |
+| [data_level_monitor.py](file:///d:/Programs/factor_system/fts/monitor/data_level_monitor.py) | `DataLevelMonitor` | 数据级质量监控（GAP-F06）：完整性/异常值 3σ/复权一致性/多源分歧四维 + 代理失真量化（proxy_fields/proxy_ratio_critical=0.5，GAP-151） |
 | [data_quality_monitor.py](file:///d:/Programs/factor_system/fts/monitor/data_quality_monitor.py) | `DataQualityMonitor` | 因子级实时质量：IC 漂移（Z-Score）+ 容量突变 + B.1 三维指标函数 |
-| [logic_monitor.py](file:///d:/Programs/factor_system/fts/monitor/logic_monitor.py) | `LogicMonitor` | 逻辑监控：因子行为漂移/极端预测（连续+离散双口径）/换月日异常/市场前提（plans/54 P0-3） |
+| [logic_monitor.py](file:///d:/Programs/factor_system/fts/monitor/logic_monitor.py) | `LogicMonitor` | 逻辑监控：因子行为漂移/极端预测（连续+离散双口径，discrete_nunique_threshold=20）/换月日异常/市场前提（plans/54 P0-3） |
 | [live_factor_monitor.py](file:///d:/Programs/factor_system/fts/monitor/live_factor_monitor.py) | `LiveFactorMonitor` | Live 表现 vs 回测基线偏离（默认 30%）+ GAP-I402 衰减告警 |
 | [elite_tracker.py](file:///d:/Programs/factor_system/fts/monitor/elite_tracker.py) | `EliteFactorTracker` / `AutoRetireManager` | 精英因子 OOS 跟踪：周度 IC 记录、衰减检测（滚动 6M 回归斜率）、A/B/C 分级、状态机与自动淘汰 |
 | [prometheus_metrics.py](file:///d:/Programs/factor_system/fts/monitor/prometheus_metrics.py) | `MetricsRegistry` / `metrics_registry` | Prometheus 指标注册表（A.2/A.3/C.2/C.3/28-T10 Regime 观测），`render()` 供 /metrics |
@@ -575,11 +604,11 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 ### 4.12 调度层 `fts.scheduler`
 
 - **[tasks.py](file:///d:/Programs/factor_system/fts/scheduler/tasks.py)**：`TaskSpec` 契约 + `TaskRegistry` + `register_default_tasks()` 注册 18 个默认任务；统一 `enabled = FTS_INTERNAL_SCHEDULER_ENABLED`（默认 "0" 停用，以 TRAE Schedule 为唯一调度源）。
-- **[jobs.py](file:///d:/Programs/factor_system/fts/scheduler/jobs.py)**：任务工作函数（全部签名 `() -> None`，内部生成 trace_id，捕获全部异常）。关键辅助：`_market_gate`（市场门控）、`_read_kline_cache`（字段完整度优先去重 GAP-148 + settle/hold/pre_settle 代理填充）、`_check_kline_field_integrity`（GAP-151）。
+- **[jobs.py](file:///d:/Programs/factor_system/fts/scheduler/jobs.py)**：任务工作函数（全部签名 `() -> None`，内部生成 trace_id，捕获全部异常）。关键辅助：`_market_gate`（全局市场门控，v2.104.0+101）、`_global_market()`（跟随 `FTS_DEFAULT_MARKET` → cfg.default_market，默认 futures）、`_read_kline_cache`（字段完整度优先去重 GAP-148 + settle/hold/pre_settle 代理填充）、`_check_kline_field_integrity`（GAP-151 核心字段缺失→error+跳过，增强字段→warning+代理降级）。
 - **[engine.py](file:///d:/Programs/factor_system/fts/scheduler/engine.py)**：`SchedulerEngine`（APScheduler BackgroundScheduler 包装，未安装静默降级）；`start_watchdog` 进程守护。
 - **[watchdog.py](file:///d:/Programs/factor_system/fts/scheduler/watchdog.py)**：`ProcessWatchdog`（崩溃自动拉起，连续 3 次 <30s → 熔断 5 分钟）。
 
-**全部注册定时任务**：
+**内部注册表全部 18 个定时任务**（`enabled=False` 统一停用，仅作 TRAE Schedule 对齐清单与文档）：
 
 | 任务名 | cron 表达式 | 职责 |
 |---|---|---|
@@ -587,22 +616,34 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 | `l2_seed_promotion` | `0 2 * * *` | L2 种子评估晋升（45 计划候选①） |
 | `l2_evolution_weekday` | `0 3 * * 1-5` | L2 因子演化（小预算 ≈10 代） |
 | `l2_evolution_weekend` | `0 3 * * 6` | L2 因子演化（大预算 ≈50 代） |
+| `l3_portfolio_loop` | `0 6 * * 1-5` | L3 Portfolio Loop（**已退役登记 plans/57**，登记兼容期，调用将告警） |
+| `futures_signal_pipeline` | `0 20 * * 1-5` | 期货信号管道（**组合侧已退役登记**，信号计算部分保留） |
+| `sync_futures_data` | `30 17 * * 1-5` | 期货多源数据同步（Stage1 kline/Stage2 fundamental/Stage3 term_structure） |
+| `health_check` | `*/10 * * * *` | 健康检查（check_all_status） |
+| `l2_review` | `0 10 * * 0` | L2 周度评审（准入重审+衰减评估+阀门巡检） |
+| `data_quality_eval` | `*/5 * * * *` | 数据质量周期评估（B.1） |
+| `data_level_monitor` | `0 5 * * *` | 数据级质量监控（GAP-F06） |
 | `logic_monitor` | `30 4 * * *` | 逻辑监控（行为漂移/极端预测/换月异常/市场前提） |
 | `factor_inspector` | `0 4 * * *` | 因子巡检与自动降级 |
-| `data_level_monitor` | `0 5 * * *` | 数据级质量监控（GAP-F06） |
-| `l3_portfolio_loop` | `0 6 * * 1-5` | L3 Portfolio Loop（**已退役登记 plans/57**：组合侧职责迁移 RD，此任务处于登记兼容期，调用将告警） |
-| `l2_batch_mining` | `0 6 * * 0` | L2 批量挖掘（45 计划候选②） |
 | `sync_liquidity_pool` | `0 8 * * 6` | 数据驱动动态池刷新（GAP-054） |
+| `mhf_signal` | `*/30 * * * *` | MHF 中高频信号（30m 反转）→ Bridge 发布 + TqSdk 模拟执行 |
 | `l2_subchain_quality` | `0 9 * * 0` | 批量子链质量评估 |
 | `import_external_factors` | `0 9 1 * *` | 外部因子常态化导入（v2.105.0+32） |
-| `l2_review` | `0 10 * * 0` | L2 周度评审（准入重审+衰减评估+阀门巡检） |
-| `sync_futures_data` | `30 17 * * 1-5` | 期货多源数据同步（Stage1 kline/Stage2 fundamental/Stage3 term_structure） |
-| `futures_signal_pipeline` | `0 20 * * 1-5` | 期货信号管道（横截面信号报告） |
-| `data_quality_eval` | `*/5 * * * *` | 数据质量周期评估（B.1） |
-| `health_check` | `*/10 * * * *` | 健康检查（check_all_status） |
-| `mhf_signal` | `*/30 * * * *` | MHF 中高频信号（30m 反转）→ Bridge 发布 + TqSdk 模拟执行 |
+| `l2_batch_mining` | `0 6 * * 0` | L2 批量挖掘（45 计划候选②） |
 
-**jobs.py 中的 energy 链路由任务**（GAP-121 独立工作流，经 TRAE Schedule 或手动调用）：`l2_seed_promotion_energy_job` / `l2_batch_mining_energy_job` / `l2_review_energy_job` / `l2_energy_qa_review_job`（`FTS_ENERGY_QA_REVIEW_APPLY=0` 默认 dry-run）/ `factor_level_monitor_job`。
+**TRAE Schedule 定时任务（v3.0.0+1 重建后 8 Active，全期货）**：
+
+| 任务 | 说明 |
+|---|---|
+| L1 知识补给 `l1_meta_loop_job()` | 每日，全期货市场感知 + 知识注入 |
+| L2 种子评估+演化 `l2_seed_promotion` + `evolution_weekday\|weekend` | 每日 01:00 合并任务（先种子晋升 → 演化，工作日 ≈10 代/周末 ≈50 代，生成端去重 Step 1.35 内嵌） |
+| L2 监控+评审质检阀门 | 每日 04:00 合并任务（机审 → 巡检降级 approved 豁免 → 逻辑监控 → 数据级监控，全部在 05:00 前） |
+| L2 周度评审 `l2_review_job()` | 每周日，准入重审 + 衰减评估 + 阀门巡检 |
+| 外部因子导入 `import_external_factors_job()` | 每月 1 日，6 源 YAML → 字段权威校验 → 去重 → 注入 |
+| 数据基础设施（多源同步 `sync_futures_data_job` / QuantData 每日日线刷新） | 工作日数据同步 |
+| RD 交易建议（14:30 / 21:30） | Regime-Driven 交易建议产出 |
+
+**jobs.py 中保留的 energy 链 job 函数**（GAP-121 独立工作流，**v3.0.0+1 起不再定时调度**，仅供手动调用）：`l2_seed_promotion_energy_job` / `l2_batch_mining_energy_job` / `l2_review_energy_job` / `l2_energy_qa_review_job`（`FTS_ENERGY_QA_REVIEW_APPLY=0` 默认 dry-run）/ `factor_level_monitor_job`。
 
 ### 4.13 工作流层 `fts.workflow`
 
@@ -613,7 +654,7 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 ### 4.14 LLM 客户端 `fts.llm`
 
 - **`LLMClient`**（ABC）：`complete(prompt)` / `generate_json(prompt)`（多级 JSON 修复解析）/ `bootstrap_factors(...)`（L1 Bootstrapping）/ `fix_economic_logic(...)`（GAP-123）/ `fix_factor_code(...)`（plans/44 C1）。
-- **`OpenAIClient`**：`OPENAI_API_KEY`（必填）/ `OPENAI_BASE_URL`（可指向 DeepSeek 等兼容端点）/ `OPENAI_MODEL`（默认 gpt-4o）；`_build_bootstrap_prompt` 含能源链知识段/子链聚焦/负面样本。
+- **`OpenAIClient`**：`OPENAI_API_KEY`（必填）/ `OPENAI_BASE_URL`（可指向 DeepSeek 等兼容端点）/ `OPENAI_MODEL`（默认 gpt-4o）；`_build_bootstrap_prompt` 含能源链知识段/子链聚焦/负面样本/论证-评分一致性规则。
 - **`AnthropicClient`**：`ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL`（默认 claude-sonnet-4-20250514）。
 - **`MockLLMClient`**：开发/测试用模拟客户端。
 - **`get_llm_client(backend, temperature)`**：工厂函数，自动检测顺序 `FTS_LLM_BACKEND` → `OPENAI_API_KEY` → `ANTHROPIC_API_KEY` → Mock。
@@ -622,7 +663,7 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 
 **职责**：FTS 全部 CLI 子命令的 argparse 定义与实现（约 2950 行，30+ 命令函数）。`main()` 为每个 CLI 会话挂载 session_id + 后台线程预热 numba 内核。所有命令生成 trace_id 贯穿全流程。
 
-**子命令组**：`evolution run`（L2，`--chain energy` / `--symbols` 显式品种）/ `meta-loop run`（L1）/ `portfolio run`（L3，`--synthesis-mode` 多模式）/ `monitor` / `data`（status/sync-futures/cross-check/fuse）/ `catalog`（stats/verify/backup）/ `factor`（list/show/seeds/stats/lineage/review/recalibrate/micro-generate/senti-generate）/ `seed`（validate/report/dedup）/ `backtest`（run/batch/compare）/ `feature`（list/analyze）/ `gp evolve` / `feedback`（trigger/process/report/stats/import/live-ic）/ `bridge`（serve/publish/status）/ `scheduler`（run/status/list）/ `ui`（Web UI 9100）/ `version`。
+**子命令组**：`evolution run`（L2，`--chain energy` / `--symbols` 显式品种）/ `meta-loop run`（L1）/ `portfolio run`（L3，⚠️ 已退役登记，不建议调用）/ `monitor` / `data`（status/sync-futures/cross-check/fuse）/ `catalog`（stats/verify/backup）/ `factor`（list/show/seeds/stats/lineage/review/recalibrate/micro-generate/senti-generate）/ `seed`（validate/report/dedup）/ `backtest`（run/batch/compare）/ `feature`（list/analyze）/ `gp evolve` / `feedback`（trigger/process/report/stats/import/live-ic）/ `bridge`（serve/publish/status）/ `scheduler`（run/status/list）/ `ui`（Web UI 9100）/ `version`。
 
 **关键辅助函数**：`_prepare_futures_data`（横截面面板准备 + 宏观注入）、`_build_default_aggregator`（QuantData→TDX_LOCAL 源 + TQSDKEnhanceSource 增强）、`_relaxed_futures_quality_config` / `_relaxed_futures_audit_config`。
 
@@ -635,17 +676,19 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 | `EvolutionLoop.run()` | [evolution_loop.py](file:///d:/Programs/factor_system/fts/factor_engine/evolution_loop.py) | L2 因子演化主入口（逐代 UCT→演化→准入） |
 | `MetaLoop.run()` | [meta_loop.py](file:///d:/Programs/factor_system/fts/factor_engine/meta_loop.py) | L1 市场感知 + 知识补给 + Bootstrapping |
 | `PortfolioLoop.run()` | [portfolio_loop.py](file:///d:/Programs/factor_system/fts/factor_engine/portfolio_loop.py) | L3 组合构建主入口（**已退役登记 plans/57**，登记兼容期运行将告警） |
+| `retired_l3.warn_if_retired()` | [retired_l3.py](file:///d:/Programs/factor_system/fts/factor_engine/retired_l3.py) | L3 退役对象调用告警（35 项登记） |
 | `FactorVerifier.check()` | [verifier.py](file:///d:/Programs/factor_system/fts/factor_engine/verifier.py) | 三级评估判定（锁定机制） |
 | `FactorAuditor.audit()` | [audit.py](file:///d:/Programs/factor_system/fts/factor_engine/audit.py) | 6 项强制审计 |
 | `FactorQualityCard.evaluate()` | [factor_quality_card.py](file:///d:/Programs/factor_system/fts/factor_engine/factor_quality_card.py) | 10 维 50 分制质量评分 |
 | `FactorRepository` | [repository.py](file:///d:/Programs/factor_system/fts/factor_engine/factor_db/repository.py) | 因子资产库 DuckDB 仓储 |
-| `build_signal_matrix()` | [l3_signal_service.py](file:///d:/Programs/factor_system/fts/factor_engine/l3_signal_service.py) | L3 信号矩阵 B 层构建 |
+| `build_signal_matrix()` | [l3_signal_service.py](file:///d:/Programs/factor_system/fts/factor_engine/l3_signal_service.py) | L3 信号矩阵 B 层构建（信号契约 v1） |
+| `persist_signal_matrix()` | [l3_signal_service.py](file:///d:/Programs/factor_system/fts/factor_engine/l3_signal_service.py) | L3 信号矩阵 D 层写入（schema_version/factor_status/factor_scope） |
 | `EnergyQaReviewPipeline.run()` | [energy_qa_review.py](file:///d:/Programs/factor_system/fts/factor_engine/energy_qa_review.py) | 能化链评审质检统一管道 |
 | `compute_subchain_degradation()` | [subchain_lifecycle.py](file:///d:/Programs/factor_system/fts/factor_engine/subchain_lifecycle.py) | 因子×子链单元退化判定 |
 | `FuturesDataAggregator.get_ohlcv()` | [aggregator.py](file:///d:/Programs/factor_system/fts/data_sources/aggregator.py) | 多源降级 K 线主入口 |
 | `FuturesDataProvider.get_ohlcv()` | [data_futures.py](file:///d:/Programs/factor_system/fts/data_futures.py) | 期货日 K 主入口（复权+跳空） |
 | `FTSConfig` / `get_config()` | [settings.py](file:///d:/Programs/factor_system/fts/config/settings.py) | 全局配置（env > YAML > 默认） |
-| `StorageRegistry.warn_unregistered_write()` | [registry.py](file:///d:/Programs/factor_system/fts/store/registry.py) | 写路径契约断言（GAP-150） |
+| `StorageRegistry.warn_unregistered_write()` | [registry.py](file:///d:/Programs/factor_system/fts/store/registry.py) | 写路径契约断言（GAP-150 严格模式） |
 | `StateKVStore.upsert()` | [state_db.py](file:///d:/Programs/factor_system/fts/store/state_db.py) | L4 状态库原子写（SQLite WAL） |
 | `RiskManager.check()` | [risk_manager.py](file:///d:/Programs/factor_system/fts/risk/risk_manager.py) | 五项风控规则校验 |
 | `SimulatedPortfolio.apply_signal()` | [simulated_portfolio.py](file:///d:/Programs/factor_system/fts/live_trade/simulated_portfolio.py) | 模拟仓信号应用（干预→风控→撮合） |
@@ -676,6 +719,7 @@ fts/factor_engine（L1/L2/L3 主循环）
    ├── qa / factor_db（质检 + DuckDB 因子资产库）
    ├── subchain_*（子链体系）
    ├── energy_qa_review（评审质检管道）
+   ├── retired_l3（L3 退役登记，v3.0.0）
    └── regime_* / mhf_* / panel_vector / numba_kernels
    ↑
 fts/scheduler（tasks/jobs/engine/watchdog）──► 调用全部 Loop 与监控
@@ -693,7 +737,8 @@ fts/cli ──► 以上全部（统一入口）
 **关键链路**：
 - **L1 链**：`meta_loop`（MetaLoop/BootstrappingChain/L1Verifier）→ `extractors`（多源提取）→ `l1_l2_funnel.funnel_record` → factor_pool.json → L2 消费
 - **L2 链**：`evolution_loop`（EvolutionLoop + 9 协作类）→ `factor_db`（写 factor_catalog_{futures,energy}.duckdb）→ `energy_qa_review`（退化检测/冷却期回归）→ `subchain_eval`（质量矩阵）
-- **L3 链（已退役组合侧，plans/57）**：`l3_signal_service`（信号矩阵 B/D 层，**保留**）→ 信号契约 v1 输出给 **Regime-Driven**（策略合成）消费；`portfolio_loop` 策略侧函数退役登记（`retired_l3.py` 全 35 项，RD 承接 strategy_synthesis/combo_verifier/money_management）
+- **信号矩阵链（FTS 保留能力，v3.0.0）**：`l3_signal_service`（build_signal_matrix → persist_signal_matrix，信号契约 v1 三列）→ `l3_signal_store.duckdb` → **Regime-Driven** 消费（strategy_synthesis/combo_verifier/money_management/crowding_gate）
+- **L3 组合侧（已退役 plans/57 §4.1）**：`retired_l3.py` 35 项登记；`portfolio_loop` 策略侧 / `futures_signal_pipeline` 组合侧函数禁止新增调用点
 - **数据链**：`data_sources.base`（契约）← 各适配器 → `aggregator`（降级+熔断）→ `data_futures`（FuturesDataProvider）→ `data.FTSDataProvider`（引擎统一入口）
 - **存储链**：`store.registry`（域登记 SSOT）→ `store.duckdb_lock`（写锁）→ 各 DuckDB/SQLite/Parquet
 
@@ -713,8 +758,9 @@ pip install -e ".[llm,evolution,regime]" # 按需 extra
 ### 7.2 环境准备
 
 1. 复制 `.env.example` 为 `.env`，配置 `OPENAI_API_KEY`（或 `ANTHROPIC_API_KEY`）、`TQSDK_USER/TQSDK_PASSWORD`（如需 TQSDK 源）、`IFIND_TOKEN`（可选）等
-2. 数据源：启动通达信客户端确保端口 17709 可访问（TDX_LOCAL）；或配置 `FTS_QUANTDATA_HOME` 指向权威数据仓库（QuantData）
+2. 数据源：启动通达信客户端确保端口 17709 可访问（TDX_LOCAL）；或配置 `FTS_QUANTDATA_HOME` 指向权威数据仓库（QuantData，默认 D:\QuantData）
 3. 使用 [start_fts.ps1](file:///d:/Programs/factor_system/start_fts.ps1) 启动（PowerShell 加载 .env 并设置 FTS_CONFIG_FILE/FTS_MEMORY_DIR）
+4. **全局默认市场**：如需全期货工作流，设置 `$env:FTS_DEFAULT_MARKET='futures'`（覆盖 settings.yaml 残留的 `energy`，见 §8.1）
 
 ### 7.3 常用 CLI
 
@@ -722,8 +768,8 @@ pip install -e ".[llm,evolution,regime]" # 按需 extra
 fts version                    # 查看版本
 fts monitor                    # 系统健康状态
 fts meta-loop run              # L1 市场感知（--market futures/energy）
-fts evolution run --max-generations 10          # L2 因子演化
-fts evolution run --chain energy --max-generations 10   # 能化链专属演化
+fts evolution run --max-generations 10          # L2 因子演化（全期货）
+fts evolution run --chain energy --max-generations 10   # 能化链专属演化（候选池工作流）
 fts portfolio run --universe futures            # L3 组合构建（⚠️ 已退役登记 plans/57，不建议调用）
 fts factor list --market futures                # 列出 elite 因子
 fts factor lineage fct_xxxxxxxx                 # 因子血缘
@@ -738,7 +784,7 @@ fts data fuse --strategy MEDIAN                 # 多源融合
 fts data cross-check --symbol RB0 --date 2026-08-19   # 多源交叉验证
 ```
 
-### 7.4 能化产业链工作流（GAP-121）
+### 7.4 能化产业链工作流（GAP-121 候选池）
 
 ```bash
 # 0) 数据深度补全（LU0/PR0/PL0 等新上市品种）
@@ -750,15 +796,21 @@ fts evolution run --chain energy --max-generations 10
 # 2) 因子质检（12 品种全链质检）
 python scripts/verify_qa_workflow.py --chain energy --days 300
 
-# 3) 信号组合 + 综合得分（12 训练 + 8 化工盲测）
-python scripts/futures_signal_pipeline.py --chain energy --days 120
-
-# 4) L2 评审质检统一管道（FTS_ENERGY_QA_REVIEW_APPLY=1 正式落库）
+# 3) L2 评审质检统一管道（FTS_ENERGY_QA_REVIEW_APPLY=1 正式落库）
 $env:FTS_ENERGY_QA_REVIEW_APPLY='1'
 python -u -c "from fts.scheduler.jobs import l2_energy_qa_review_job; l2_energy_qa_review_job()"
 ```
 
-### 7.5 运行测试
+### 7.5 存量因子集中重审（v3.0.0 新增）
+
+```bash
+# 分族 FDR-BH 校正 + audit 分层抽样；默认 dry-run（FTS_REVIEW_LEGACY_APPLY=1 才落库）
+python scripts/review_legacy_factors.py
+$env:FTS_REVIEW_LEGACY_APPLY='1'
+python scripts/review_legacy_factors.py
+```
+
+### 7.6 运行测试
 
 ```bash
 # 日常回归（跳过 slow 重量级测试，单进程）
@@ -772,9 +824,9 @@ pytest tests/data_sources/ -v
 pytest tests/ -v
 ```
 
-### 7.6 定时调度
+### 7.7 定时调度
 
-默认以 TRAE Schedule 为唯一调度源（内部 APScheduler 停用）。如需内部调度：
+默认以 TRAE Schedule 为唯一调度源（v3.0.0+1 起 8 Active 全期货任务；内部 APScheduler 停用）。如需内部调度：
 
 ```bash
 $env:FTS_INTERNAL_SCHEDULER_ENABLED='1'
@@ -791,27 +843,29 @@ fts scheduler run
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `FTS_DEFAULT_MARKET` | `energy` | 默认市场 |
+| `FTS_DEFAULT_MARKET` | `futures`（代码默认，v3.0.0+1） | 全局默认市场。**⚠️ 注意：`config/settings.yaml` 第 7 行仍残留 `default_market: "energy"`（优先级高于代码默认）→ 未设 env 时实际生效值为 `energy`**；设 `FTS_DEFAULT_MARKET=futures` 即回到全期货工作流。该 YAML 漂移建议修复对齐 |
 | `FTS_MEMORY_DIR` | `./memory` | 运行时持久化目录 |
 | `FTS_LOG_LEVEL` | `INFO` | 日志级别 |
 | `FTS_LLM_BACKEND` | - | LLM 后端（openai/anthropic/mock） |
 | `FTS_EVOLUTION_MODE` | `operator_first` | 演化模式（operator/operator_first/code/hybrid/batch） |
-| `FTS_INTERNAL_SCHEDULER_ENABLED` | `0` | 内部 APScheduler 开关 |
+| `FTS_INTERNAL_SCHEDULER_ENABLED` | `0` | 内部 APScheduler 开关（TRAE Schedule 为唯一调度源） |
 | `FTS_ENERGY_QA_REVIEW_APPLY` | `0` | 能化链评审质检灰度开关（1=正式落库） |
+| `FTS_REVIEW_LEGACY_APPLY` | `0` | 存量因子集中重审落库开关（v3.0.0，1=正式落库） |
 | `FTS_QUANTDATA_HOME` | `D:\QuantData` | 权威数据仓库路径 |
 | `FTS_L3_SIGNAL_STORE_DB` | - | L3 信号矩阵库路径 |
 | `FTS_EXTRACTORS_CONFIG` | - | L1 提取器源注册表配置路径 |
+| `FTS_STORAGE_WRITE_STRICT` | `1` | 存储域写路径契约严格模式（0=回退告警） |
 
 ### 8.2 配置文件
 
 | 文件 | 职责 |
 |---|---|
-| [config/settings.yaml](file:///d:/Programs/factor_system/config/settings.yaml) | 全局配置（llm/演化/L3 verifier/子链/regime 等） |
-| [config/futures_universe.yaml](file:///d:/Programs/factor_system/config/futures_universe.yaml) | 品种池/产业链 SSOT（84 品种 + 17 产业链 + energy 工作流） |
+| [config/settings.yaml](file:///d:/Programs/factor_system/config/settings.yaml) | 全局配置（llm/演化/L3 verifier/子链/regime 等；default_market 已统一 futures） |
+| [config/futures_universe.yaml](file:///d:/Programs/factor_system/config/futures_universe.yaml) | 品种池/产业链 SSOT（84 品种 + 17 产业链 + coverage_priority P0-P3 + energy 工作流） |
 | [config/extractors.yaml](file:///d:/Programs/factor_system/config/extractors.yaml) | L1 知识源注册表 |
 | docs/harness/_data/storage_landscape.yaml | 存储域注册表契约（SSOT 一数一源） |
 | docs/harness/_data/operator_catalog.yaml | 算子目录 |
-| docs/harness/_data/l3_regime_multipliers.yaml | Regime 倍率 |
+| docs/harness/_data/l3_regime_multipliers.yaml | Regime 倍率（family 概念移除后标记 deprecated 仅归档） |
 
 ---
 
@@ -830,17 +884,19 @@ UCT 父因子选择 → 演化分派（macro/GP/operator/deep/transformer）
   → 影子池 5 日观察 → DuckDB 先写（SSOT）→ JSON 快照备份
 ```
 
-### 9.2 L3 组合构建流程（⚠️ 已退役 plans/57，仅追溯）
+### 9.2 因子信号矩阵输出流程（FTS 保留能力，v3.0.0）
 
 ```
-加载 elite 因子（DuckDB，仅 approved）→ 质量门槛/影子池过滤
-  → 基础名去重 → 因子聚类去冗余（链内聚类）→ P2 PCA
-  → 信号合成（8 模式）→ Regime 自适应权重（子链 Gate/Beta/拥挤度）
-  → 正交化 → 衰减检验 → 组合构建（粘性约束/换手惩罚/置信度缩放）
-  → L3 Verifier → 注入 FDT + 质量/归因/走航/风控报告
+elite 因子（DuckDB，仅 approved + L2 评审放行）
+  → 信号计算（SignalCache 复用 + align_signal_to_dates 向量化对齐）
+  → build_signal_matrix（B 层：(n_dates, n_symbols, n_factors) 3D 矩阵）
+  → persist_signal_matrix（D 层：l3_signal_store.duckdb，
+      (code_hash, params_hash) 双哈希增量 + 信号契约 v1 三列
+      schema_version/factor_status/factor_scope）
+  → 增量窗口追加（load_or_build_signal_matrix：dates_digest 前缀判定
+      + _W_RECALL=500 回退段 + _verify_append 抽样对照验证）
+  → Regime-Driven 消费（决策/训练双模式隔离 + 新鲜度校验 + 降级熔断）
 ```
-**上述流程整体退役（plans/57 §4.1）**：信号合成/组合构建/制度调制迁移 Regime-Driven（strategy_synthesis/combo_verifier）。
-FTS 侧**保留** `l3_signal_service` 信号矩阵输出（信号契约 v1）与 `orthogonalize_factors` 正交化。
 
 ### 9.3 期货数据同步（Stage1-3）
 
@@ -852,29 +908,43 @@ sync_futures_data_job（工作日 17:30）
   → 字段覆盖校验（futures_field_consumption SSOT）+ gzip 摘要落盘
 ```
 
+### 9.4 存量因子集中重审流程（v3.0.0）
+
+```
+review_legacy_factors.py
+  Stage 0 清点分层：按现状态分层（active/shadow/degraded/deleted）
+  → 分族 FDR-BH 校正（α=0.05，复检/转正/恢复三族独立）
+  → audit 分层抽样（promote 100% / observe 30% / retire 10%）
+  → 处置：复检/转正/恢复（dry-run 灰度，FTS_REVIEW_LEGACY_APPLY=1 才落库）
+```
+
 ---
 
 ## 10. 测试体系
 
-- **测试结构**：`tests/core` / `tests/data_sources` / `tests/factor_engine` / `tests/config` / `tests/cli` 等。全量回归 2026-08-20 实测 **8129 passed / 21 failed**（plans/57 步骤 12；README 徽章 7840 待同步），残留 21 项均为预存 GAP（GAP-158 工作区既有 portfolio_loop 本地改动 / pandas-3 只读 / regime_features，非本次计划引入），覆盖率 92%
+- **测试结构**：`tests/core` / `tests/data_sources` / `tests/factor_engine` / `tests/config` / `tests/cli` 等。全量回归 2026-08-20（v3.0.0 验收）实测 **8129 passed / 21 failed**（残留 21 项均为预存 GAP——GAP-158 工作区既有 portfolio_loop 本地改动 / pandas-3 只读 / regime_features，非 plans/57 引入），覆盖率 92%
 - **slow 分级**：重量级真实演化/回测测试统一 `@pytest.mark.slow`（日常回归用 `-m "not slow"` 跳过，全量验收必跑）
 - **回归测试政策**（2026-08-13 修订）：日常任务仅跑受影响的模块/集成测试；全量回归仅在发布前/晋级里程碑与每月底例行巡检执行
 - **DuckDB 约束**：嵌入式单进程写约束下 xdist 多 worker 并发写会锁冲突，日常回归建议单进程执行
-- **关键测试文件**：`test_evolution_loop.py`（演化主循环）、`test_meta_loop.py`、`test_portfolio_loop.py`（L3，240+ 用例）、`test_panel_vector.py`（横截面全矩阵化）、`test_l3_signal_service`（信号矩阵）、`test_subchain_eval.py`（子链质量评估）、`test_energy_qa_review`（评审质检）、`test_aggregator.py`（多源聚合）、`test_regime_gate.py`（子链 Gate）
+- **CI 护栏**：`.github/workflows/ci.yml` 含 `verify_factor_db_untouched.py`（真实因子库零污染快照/check）+ `verify_qa_workflow.py --synthetic`（质检 SOP 端到端）+ lint/mypy
+- **关键测试文件**：`test_evolution_loop.py`（演化主循环）、`test_meta_loop.py`、`test_portfolio_loop.py`（L3，240+ 用例）、`test_panel_vector.py`（横截面全矩阵化）、`test_l3_signal_service`（信号矩阵）、`test_subchain_eval.py`（子链质量评估）、`test_energy_qa_review`（评审质检）、`test_aggregator.py`（多源聚合）、`test_regime_gate.py`（子链 Gate）、`test_dual_track.py`（v3.0.0 双轨对账）
 
 ---
 
 ## 11. 附录 A: 版本历史
 
-当前版本 **v2.105.0+33**。近期关键版本（详见 [CHANGELOG.md](file:///d:/Programs/factor_system/CHANGELOG.md) 与 docs/harness/07-operations.md）：
+当前版本 **v3.0.0+1**。近期关键版本（详见 [CHANGELOG.md](file:///d:/Programs/factor_system/CHANGELOG.md) 与 docs/harness/07-operations.md）：
 
 | 版本 | 关键变更 |
 |---|---|
-| v2.105.0+33 | **plans/57 步骤 12：L3 组合侧退役登记**（retired_l3.py 全 35 项 + warn_if_retired，双轨对账 100% 通过；物理删除待授权）；步骤 13 energy 链闭环验收 |
+| v3.0.0+2 | **配置漂移修复（2026-08-20）**：`config/settings.yaml` default_market 由残留的 `energy` 同步为 `futures`，消除 v3.0.0+1 代码默认与 YAML 实际生效值的不一致（03-configuration 示例本就为 futures，现全部对齐） |
+| v3.0.0+1 | **定时任务全期货重建（2026-08-20）**：settings.default_market 代码默认反转回 futures；TRAE Schedule 删除 4 个 energy 专属任务、新建 5 个全期货任务（8 Active）；energy 因子库转候选池保留 |
+| v3.0.0 | **双系统切分架构级发布（plans/57 阶段 0-13 完成，2026-08-20）**：FTS 角色重定位因子生产系统；L3 组合侧退役登记（retired_l3.py 35 项 + warn_if_retired）；信号契约 v1（F.3）；RD 承接 strategy_synthesis/combo_verifier/money_management/crowding_gate；全期货覆盖规划（coverage_priority P0-P3）；存量因子集中重审（review_legacy_factors.py 分族 FDR-BH）；验收 8129 passed（残留 21 项预存 GAP-158） |
+| v2.105.0+33 | plans/57 双系统切分：阶段 1 真实双轨对账全门槛通过 + 步骤 12 L3 组合侧退役登记 |
+| v2.105.0+32 | 权威数据源 QuantData（GAP-156）+ 外部因子常态化导入管道 |
 | v2.105.0 | 能化链 L2 评审质检正式落库（FTS_ENERGY_QA_REVIEW_APPLY=1）、子链张量化 enabled、L3 权重重算评审硬过滤 |
 | v2.105.0+16 | 批量子链质量评估工作流（subchain_eval，min_chain_ic 0.10→0.02 校准） |
 | v2.105.0+18 | 反沉降通道（同面板指纹判定漂移拒绝落库） |
-| v2.105.0+32 | 权威数据源 QuantData（GAP-156）+ 外部因子常态化导入 |
 | v2.104.0+25 | CTA 手册 WorkFlow 端到端工作流（fts/workflow + Web UI） |
 | v2.104.0+70 | L1 知识注入增强（plans/41：WebSearch 动态源 + 子链分批 bootstrap） |
 | v2.104.0+111 | plans/48 Regime 分层方向 Gate |
@@ -891,7 +961,7 @@ sync_futures_data_job（工作日 17:30）
 - [CHANGELOG.md](file:///d:/Programs/factor_system/CHANGELOG.md) — 版本历史
 - [docs/FTS_manual.md](file:///d:/Programs/factor_system/docs/FTS_manual.md) — FTS 使用手册
 - `docs/harness/` — HARNESS 工程规范（01-architecture / 02-lifecycle / 06-testing / 07-operations / 08-gap-analysis / 09-advancement-plan 等）
-- `docs/harness/design/` — 设计决策（A.1 质量卡 / A.2 衰减追踪 / D.1-D.2 模拟交易 / E.3 状态库 / E.4 连接生命周期 / F.1-F.3 契约等）
-- `docs/harness/plans/` — 实施计划（29 存储收敛 / 37 面板向量化 / 40 L3 组合优化 / 41 L1 知识注入 / 45 L2 循环拆分 / 47-49 子链体系 / 51-52 信号矩阵 / **57 双系统职责重划（L3 组合侧退役）** / 54-57 Regime 等）
+- `docs/harness/design/` — 设计决策（A.1 质量卡 / A.2 衰减追踪 / D.1-D.2 模拟交易 / E.3 状态库 / E.4 连接生命周期 / **F.3 信号契约 v1** 等）
+- `docs/harness/plans/` — 实施计划（29 存储收敛 / 37 面板向量化 / 40 L3 组合优化 / 41 L1 知识注入 / 45 L2 循环拆分 / 47-49 子链体系 / 51-52 信号矩阵 / 53-57 Regime 与双系统切分）
 - [DISCLAIMER.md](file:///d:/Programs/factor_system/DISCLAIMER.md) — 免责声明
 - [COMPLIANCE.md](file:///d:/Programs/factor_system/COMPLIANCE.md) — 开源合规指南

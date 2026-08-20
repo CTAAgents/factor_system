@@ -428,6 +428,15 @@ class FTSConfig:
     futures_enhance_enabled: bool = field(
         default_factory=lambda: os.getenv("FTS_FUTURES_ENHANCE_ENABLED", "false").lower() == "true"
     )
+    # 天勤 TQSDK 源 opt-in（v3.0.0+2，GAP-159，plans/57 QuantData 主链路彻底解耦）：
+    # 主链路为 QUANTDATA 时天勤增强源（TQSDKEnhanceSource）/分钟源（TQSDKSource 5m）/
+    # tick 源（TQSDKTickSource）不再默认挂载（此前默认注册致感知链路逐品种自建天勤连接 +
+    # 15s wait_update，L1 Meta-Loop 实测每品种 ~20s）；QuantData 下 hold 已为 L0 权威
+    # （open_interest），天勤增强冗余。需要天勤 fallback/增强时显式设
+    # FTS_TQSDK_SOURCES_ENABLED=true 恢复旧行为。
+    tqsdk_sources_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_TQSDK_SOURCES_ENABLED", "false").lower() == "true"
+    )
     # 回测是否启用涨跌停拦截 + 停牌过滤（真实成交仿真）
     backtest_trade_filter: bool = field(
         default_factory=lambda: os.getenv("FTS_BACKTEST_TRADE_FILTER", "true").lower() == "true"

@@ -73,6 +73,8 @@ class FactorRepository:
             self._db_path = get_db_path(market or get_config().default_market)
         self._conn = None
         self._last_columns: list[str] = []
+        # seed_lineage 结构对齐标志（旧库残留 seed_family NOT NULL 列，写入前需一次幂等迁移）
+        self._seed_lineage_schema_checked = False
         # GAP-150 写路径契约（v2.105.0+19 严格模式）：默认路径必须落在 storage_landscape
         # 登记域，未登记抛 ValueError（阻断——强制先登记）；显式注入路径（测试隔离/定制）
         # 豁免。env FTS_STORAGE_WRITE_STRICT=0 可回退告警模式。
@@ -432,8 +434,15 @@ class FactorRepository:
             True 写入成功，False 写入失败
         """
         try:
-            lineage_id = f"sl_{uuid.uuid4().hex[:8]}"
             conn = self._get_conn()
+            if not self._seed_lineage_schema_checked:
+                # 旧库（建表 DDL 仍含 seed_family NOT NULL）INSERT 会触发约束失败；
+                # 写入前幂等对齐表结构（与 schema.ensure_seed_lineage_schema 一致）
+                from .schema import ensure_seed_lineage_schema
+
+                ensure_seed_lineage_schema(conn)
+                self._seed_lineage_schema_checked = True
+            lineage_id = f"sl_{uuid.uuid4().hex[:8]}"
             conn.execute(
                 """INSERT INTO seed_lineage
                    (lineage_id, seed_name, seed_market,

@@ -2374,15 +2374,12 @@ def _make_web_collector(provider: Any | None = None, market: str = "futures") ->
         except Exception as e:
             result["warnings"].append(f"OHLCV 获取失败: {e}")
 
-        # 2. 获取实时价格
-        try:
-            from fts.data_futures import get_realtime_prices
-
-            prices = get_realtime_prices([contract_symbol])
-            if contract_symbol in prices:
-                result["quote"]["realtime_price"] = prices[contract_symbol]
-        except Exception as e:
-            result["warnings"].append(f"实时价获取失败: {e}")
+        # 2. 实时价：v3.0.0+1 起 FTS 因子生命周期管理不需要盘中实时价，
+        #    不再连接 TDX_LOCAL/AKShare 网络源；quote 直接用 QuantData 日线最新收盘
+        #    （来源标注 fts_data_provider，避免 LLM 感知误以为盘中实时）。
+        bars = result["kline"].get("bars", [])
+        last_close = float(bars[-1]["close"]) if bars else None
+        result["quote"]["realtime_price"] = last_close
 
         return result
 

@@ -47,7 +47,7 @@ class DataSource(str, Enum):
     DUCKDB_CACHE = "DUCKDB_CACHE"  # DuckDB 本地缓存（主路径 Top1）
     QUANTDATA = "QUANTDATA"  # QuantData 权威数据源（D:\QuantData，v2.105.0+32 主链路切换）
     TQ_LOCAL = "TQ_LOCAL"  # 通达信本地 HTTP（已废弃，7721 端口不存在，v2.87.0 起由 TDX_LOCAL 统一承载）
-    TQ_PYTHON = "TQ_PYTHON"  # 通达信 TQ-Python SDK
+    TQ_PYTHON = "TQ_PYTHON"  # 通达信 TQ-Python SDK（v3.0.0+1 起从默认降级链移除，K 线唯一数据源 QuantData）
     AKSHARE = "AKSHARE"  # AKShare 即时获取（降级）
     SYNTHETIC = "SYNTHETIC"  # 合成数据降级（保证系统可运行）
     WIND = "WIND"  # 万得金融终端（字段增强层）

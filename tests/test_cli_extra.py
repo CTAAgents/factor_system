@@ -176,6 +176,37 @@ class TestBuildDefaultAggregator:
         assert sources[0].source_name == "QUANTDATA"
         assert m_agg.call_args.kwargs["db_path"] is None
 
+    def test_tqsdk_disabled_no_enhancer(self, tmp_path):
+        """GAP-159: tqsdk_sources_enabled=False（默认）→ enhancers 为空（天勤增强源不注册）。"""
+        cfg = SimpleNamespace(
+            tqsdk_sources_enabled=False,
+            futures_enhance_enabled=False,
+        )
+        with (
+            patch("fts.data_futures._DUCKDB_PATH", tmp_path / "none.duckdb"),
+            patch("fts.data_sources.tdx_local_source.TdxLocalSource"),
+            patch("fts.cli.get_config", return_value=cfg),
+            patch("fts.data_sources.aggregator.FuturesDataAggregator") as m_agg,
+        ):
+            _build_default_aggregator()
+        assert len(m_agg.call_args.kwargs["enhancers"]) == 0
+
+    def test_tqsdk_enabled_registers_enhancer(self, tmp_path):
+        """GAP-159: tqsdk_sources_enabled=True → TQSDKEnhanceSource 被注册（opt-in 恢复旧行为）。"""
+        cfg = SimpleNamespace(
+            tqsdk_sources_enabled=True,
+            futures_enhance_enabled=False,
+        )
+        with (
+            patch("fts.data_futures._DUCKDB_PATH", tmp_path / "none.duckdb"),
+            patch("fts.data_sources.tdx_local_source.TdxLocalSource"),
+            patch("fts.data_sources.tqsdk_enhance_source.TQSDKEnhanceSource"),
+            patch("fts.cli.get_config", return_value=cfg),
+            patch("fts.data_sources.aggregator.FuturesDataAggregator") as m_agg,
+        ):
+            _build_default_aggregator()
+        assert len(m_agg.call_args.kwargs["enhancers"]) == 1
+
 
 # ═══════════════════════════════════════════════════════════
 # fts data 子命令组

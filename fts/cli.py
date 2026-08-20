@@ -397,16 +397,17 @@ def _build_default_aggregator():
         pass
 
     # 字段增强层（GAP-148，对齐 FuturesDataProvider 构建模式）：TQSDKEnhanceSource
-    # 补充权威 hold/oi_change（.env 已配置 TQSDK_USERNAME/PASSWORD 时真实生效；
-    # 无凭据/失败经 _enhance_fields 优雅降级不阻断）。此前 enhancers=[] 导致
-    # sync 写缓存路径从未做字段增强，kline_cache 近 120 日 oi_change 全缺。
+    # 补充权威 hold/oi_change。v3.0.0+2（GAP-159）起默认不再挂载（QuantData 主链路下
+    # hold 已为 L0 权威，oi_change 由 QuantDataProvider 差分自算），由
+    # tqsdk_sources_enabled（env FTS_TQSDK_SOURCES_ENABLED）显式开启恢复。
     enhancers: list = []
-    try:
-        from fts.data_sources.tqsdk_enhance_source import TQSDKEnhanceSource
+    if get_config().tqsdk_sources_enabled:
+        try:
+            from fts.data_sources.tqsdk_enhance_source import TQSDKEnhanceSource
 
-        enhancers.append(TQSDKEnhanceSource())
-    except Exception:  # noqa: BLE001
-        pass
+            enhancers.append(TQSDKEnhanceSource())
+        except Exception:  # noqa: BLE001
+            pass
 
     db_path = None
     from fts.data_futures import _DUCKDB_PATH

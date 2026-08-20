@@ -1,6 +1,6 @@
 # FTS 韧性设计
 
-> 版本: v3.0.0+1
+> 版本: v3.0.0+5
 > 最后更新: 2026-08-05
 
 ---
@@ -86,9 +86,9 @@
 
 | 场景 | 降级行为 | 恢复方式 |
 |:-----|:---------|:---------|
-| QuantData 库不可达（DuckDB 打开失败/文件缺失/权限） | `QuantDataProvider` 熔断（连续失败 3 次 + 冷却）→ aggregator 降级链顺延 DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON → AKSHARE → SYNTHETIC，不影响其他源 | 数据/权限恢复后下一轮自动升级回 QuantData |
-| QuantData 品种缺失（88 品种 vs FTS 82，映射外品种） | 映射校验失败 → 该品种顺延降级链，不阻断面板构建 | QuantData 补品种后自动覆盖 |
-| QuantData 无 settle/amount/vwap（kline_daily 仅 OHLCV+OI） | Provider 返回 NaN → aggregator `_enhance_fields`（TQSDKEnhanceSource）补充 → 仍缺则典型价/均量代理，**标注非权威来源**（GAP-158，不硬拒） | QuantData 侧补 settle 采集后可升 L0 |
+| QuantData 库不可达（DuckDB 打开失败/文件缺失/权限） | `QuantDataProvider` 熔断（连续失败 3 次 + 冷却）→ 读取缓存 DUCKDB_CACHE 兜底 → 仍缺则 SYNTHETIC 保证可运行（v3.0.0+1 起天勤/通达信/AKShare 已从默认链移除，不静默降级外部网络源） | 数据/权限恢复后下一轮自动升级回 QuantData |
+| QuantData 品种缺失（88 品种 vs FTS 82，映射外品种） | 映射校验失败 → 该品种无数据（不阻断面板构建），如实标注缺失 | QuantData 补品种后自动覆盖 |
+| QuantData 无 settle/amount/vwap（kline_daily 仅 OHLCV+OI） | Provider 返回 NaN（v3.0.0+1 起天勤 TQSDKEnhanceSource 已移除；hold 由 QuantData open_interest 权威覆盖 L0、oi_change 由 QuantDataProvider 差分自算）→ 仍缺则典型价/均量代理，**标注非权威来源**（GAP-158，不硬拒） | QuantData 侧补 settle 采集后可升 L0 |
 | 期限结构权威构建失败（continuous_map 缺映射日/近远月对齐不足） | 当日 term_spread/roll_yield 缺失置 NaN，D15 算子自动跳过（数据不足不误报），不阻断主流程 | 映射数据补齐后自动恢复 |
 | 复权序列异常（QuantData 连续序列与 FTS RollCalendar 交叉验证偏离 >0.5%） | aggregator cross_check 记录分歧 `data/data_source_disagreements.jsonl`，按现有分歧处理策略降级，不静默采信 | 差异分析后统一口径 |
 

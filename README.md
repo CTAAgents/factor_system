@@ -3,7 +3,7 @@
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
 [![Tests](https://img.shields.io/badge/tests-7840%20passing-blue)](#)
-[![Version](https://img.shields.io/badge/version-3.0.0%2B1-blue)](#)
+[![Version](https://img.shields.io/badge/version-3.0.0%2B5-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -17,11 +17,15 @@
 
 ## 概述
 
-FTS 是一个 AI 原生的量化因子智能系统，通过三层进化循环实现因子的自动化发现、评估、组合与演化：
+FTS 是一个 AI 原生的量化因子智能系统，通过进化循环实现因子的自动化发现、评估与演化：
 
 - **L1 Meta-Loop** — 每日市场感知与知识补给
 - **L2 Evolution Loop** — 夜间因子自动演化（LLM 改逻辑 + Optuna 调参）
-- **L3 Portfolio Loop** — 组合构建与信号产出
+- **因子信号矩阵输出** — `l3_signal_service` → `l3_signal_store.duckdb`（信号契约 v1，供策略合成系统消费）
+
+> **⚠️ v3.0.0（plans/57 双系统切分）**：FTS 系统定位为**期货市场因子生产系统**（默认市场为期货），
+> **不再具备交易信号产生与组合权重重算的功能和能力**——L3 组合侧已退役登记（`retired_l3.py` 35 项 + `warn_if_retired` 告警），
+> 策略合成职责迁移 Regime-Driven。系统默认市场为期货市场（`FTS_DEFAULT_MARKET`；注意 `config/settings.yaml` 残留 `energy` 覆盖，见配置章节）。
 
 支持期货品种的横截面因子演化（股票市场已剥离至独立项目 fts-stock，v0.0.1，2026-08），内置 6 类因子强制审计、50 分制质量评分卡、APScheduler 全自动定时调度、HTTP 监控端点与 Web UI 仪表盘。
 
@@ -97,14 +101,14 @@ L2 演化参数：
 
 ### 能源产业链专属工作流（GAP-121）
 
-独立于通用期货工作流的链级闭环（因子挖掘 → 质检 → 信号组合 → 综合得分），
+独立于通用期货工作流的链级闭环（因子挖掘 → 质检），信号组合与策略合成已迁移至 Regime-Driven。
 以 12 个化工品种为训练链、其余化工产业链 8 品种为链外盲测池，
 因子库/精英目录/报告独立隔离。品种池与产业链分类单一事实源：
 `config/futures_universe.yaml`（训练池/泛化范围/盲测池派生，改 YAML 即自动换池，
 `fts/data_futures` 内置默认兜底，v2.104.0+38）：
 
 ```bash
-# 0) 数据深度补全（LU0/PR0/PL0 等新上市品种，AKShare 全历史 → kline_cache）
+# 0) 数据深度补全（LU0/PR0/PL0 等新上市品种，显式扩展场景按需启用）
 python scripts/sync_energy_chain_depth.py            # 全品种；--symbols LU0,PR0 指定
 python scripts/sync_energy_chain_depth.py --dry-run  # 只报告不写库
 
@@ -114,9 +118,7 @@ fts evolution run --chain energy --max-generations 10
 # 2) 因子质检（12 品种全链质检）
 python scripts/verify_qa_workflow.py --chain energy --days 300
 
-# 3) 信号组合 + 综合得分（12 训练 + 8 化工盲测，链外盲测 IC 对比 + 化工链分层泛化）
-python scripts/futures_signal_pipeline.py --chain energy --days 120
-# 输出: reports/energy_chain/{date}/（信号快照 + 交易建议 + 盲测泛化对比 + 分层）
+# 3) （已迁移）信号组合 + 综合得分 → 已迁移 Regime-Driven
 ```
 
 训练链/盲测池再优化（2026-08-15）：扩池 9→12 品种（能源3 SC/FU/BU + 聚酯3 PX/TA/PF +
@@ -124,23 +126,16 @@ python scripts/futures_signal_pipeline.py --chain energy --days 120
 其余化工链 8 品种；`ENERGY_CHAIN_MIN_TRAIN_ROWS=300` 深度阈值 +
 `check_energy_chain_depth()` 审计（排除 SYNTHETIC 合成脏数据）。
 
-### L3 Portfolio Loop
+### L3 Portfolio Loop（⛔ 能力已移除 v3.0.0）
 
-> ⚠️ **v3.0.0（plans/57 双系统切分）**：L3 组合侧已登记退役（`retired_l3.py` + `warn_if_retired` 告警），策略合成职责迁移 Regime-Driven；本章节命令保留供存量兼容与信号矩阵基础设施使用。
+> ⚠️ **v3.0.0（plans/57 双系统切分）**：组合权重重算已从 FTS 能力中移除——`fts portfolio run` / `l3_portfolio_loop` 任务 / `PortfolioLoop` 均已退役登记（`retired_l3.py` + `warn_if_retired` 告警），策略合成职责迁移 Regime-Driven。
+> **FTS 不再提供该功能，以下命令不应用作日常能力；遗留命令保留仅供追溯/存量兼容。**
 
 | 命令 | 说明 |
 |------|------|
-| `fts portfolio run [options]` | 启动 L3 组合构建（退役登记期，仅供存量兼容） |
+| `fts portfolio run [options]` | ~~L3 组合构建~~ 已退役（遗留命令，勿用） |
 
-L3 参数：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--universe` | `futures` | 组合市场（`futures`） |
-| `--synthesis-mode` | 自动 | 信号合成模式（`elastic_net` / `adaptive` / `sharpe_weight` / `equal_weight` / `ml_ensemble` / `optimizer`） |
-| `--optimizer-mode` | `risk_parity` | optimizer 目标（`risk_parity` / `mvo`，GAP-L303） |
-| `--returns-matrix` | 无 | 因子收益矩阵 CSV 路径（optimizer 模式与组合实测化需要，可选） |
-| --force-recompute | 关闭 | 强制全量重算组合权重（GAP-072，默认按 l3_weight_recompute_cadence 判定：daily 每日重算，weekly 仅周五重算） |
+（遗留参数：`--universe` / `--synthesis-mode` / `--optimizer-mode` / `--returns-matrix` / `--force-recompute`，均属旧组合权重重算能力，不再属于 FTS。）
 
 ### 因子管理
 
@@ -223,10 +218,10 @@ evo = EvolutionLoop()
 result = evo.run(max_generations=10, universe="futures")
 print(result.status, result.total_factors_evaluated)
 
-# L3 组合构建
-portfolio = PortfolioLoop()
-result = portfolio.run(universe="futures", synthesis_mode="sharpe_weight")
-print(result.combo_sharpe, result.n_factors_retained)
+# L3 组合构建（⚠️ 已退役 v3.0.0，plans/57）
+# portfolio = PortfolioLoop()
+# result = portfolio.run(universe="futures", synthesis_mode="sharpe_weight")
+# print(result.combo_sharpe, result.n_factors_retained)
 
 # L1 Meta-Loop
 meta = MetaLoop()
@@ -277,15 +272,15 @@ print(status_report_to_json(report))
 - **状态持久化**：`fts/workflow/store.py` SQLite WAL（`data/workflow.db`，workflow_runs + stage_runs 双表，崩溃可回放）
 - **前端**：`web/workflow_ui/` React18 + Vite SPA（`fts ui` → `http://127.0.0.1:9100/workflow`）
 
-### 三层进化循环
+### 因子生产调度
 
 | 循环 | 调度时间 | 核心职责 |
 |------|----------|----------|
 | L1 Meta-Loop | 每日 00:00 | 市场感知、知识补给、Bootstrapping、Debate 分析（能化链） |
 | L2 种子+演化 | 每日 01:00（工作日 ≈10 代 / 周末 ≈50 代） | 种子评估晋升 + LLM/GP/算子演化、三级评估链、质量评分（v2.105.0+3 合并任务，含生成端去重前置 Step 1.35） |
 | L2 评审质检阀门+监控 | 每日 04:00 | pending 机审 + approved 复核、因子巡检降级（approved 豁免）、逻辑/数据级监控（v2.105.0+3 合并任务） |
-| L3 Portfolio | 工作日每日 05:00 | 因子筛选（仅 approved）、正交化、权重重算（quality_weight + 子链调制/Gate）、Verifier 校验 |
-| 信号管线 | 工作日每日 20:00 | 横截面信号报告（v2.105.0 起因子选择与基础权重由 L3 组合提供，仅信号计算 + Regime 档位缩放权重调整） |
+| ~~L3 Portfolio~~ | ~~工作日每日 05:00~~ | **⛔ 组合权重重算已移除（v3.0.0，plans/57）**：策略合成迁移 Regime-Driven，FTS 不再提供该能力 |
+| ~~信号管线~~ | ~~工作日每日 20:00~~ | **⛔ 交易信号产生已移除（v3.0.0）**：组合信号/交易建议类输出不再属于 FTS；FTS 唯一信号出口为因子信号矩阵（l3_signal_store，供 RD 消费） |
 
 ### 6 类因子强制审计
 
@@ -313,14 +308,16 @@ print(status_report_to_json(report))
 | 鲁棒性 | 6 | 消融/扰动敏感性 |
 | 经济逻辑 | 5 | 可解释性评分 |
 
-### 信号合成模式
+### 信号合成模式（⛔ 已迁移 v3.0.0）
+
+> 以下多因子合成与权重分配模式已随 L3 组合侧一并迁移至 Regime-Driven 系统，FTS 不再提供该能力。
 
 | 模式 | 适用场景 | 算法 |
 |------|----------|------|
-| `equal_weight` | 期货（默认） | 等权合成（enable_pca=True 时用 P2 PCA 权重） |
-| `sharpe_weight` | 期货（备用） | 因子夏普比率加权 |
-| `elastic_net` | 期货（备用） | L1+L2 正则化学习权重 |
-| `adaptive` | 通用（v2.56.0） | Sharpe 基权重 + Regime 自适应 style 维度（FactorStyle）+ RegimeSmoother 平滑 |
+| `equal_weight` | ~~期货（默认）~~ | ~~等权合成~~ |
+| `sharpe_weight` | ~~期货（备用）~~ | ~~因子夏普比率加权~~ |
+| `elastic_net` | ~~期货（备用）~~ | ~~L1+L2 正则化学习权重~~ |
+| `adaptive` | ~~通用~~ | ~~Sharpe 基权重 + Regime 自适应~~ |
 
 ### Market Regime 自适应
 
@@ -335,7 +332,7 @@ print(status_report_to_json(report))
 
 ### 断路器保护
 
-L2/L3 内置多层熔断机制：
+L2 内置多层熔断机制（L3 相关熔断已随能力移除）：
 
 - **低 IC 熔断** — 连续 5 代 IC < 0.005 时暂停演化
 - **失败率熔断** — 因子淘汰率超过阈值时触发
@@ -355,7 +352,7 @@ fts/                          # 核心源码（86 个 Python 文件）
 │   ├── factor_quality_card.py# 50 分制质量评分卡
 │   ├── evolution_loop.py     # L2 演化主循环（operator/code/hybrid/batch 四模式）
 │   ├── batch_mining.py       # 批量挖掘漏斗（GAP-I201：批量生成 + 并行粗筛，v2.65.0）
-│   ├── portfolio_loop.py     # L3 组合构建
+│   ├── portfolio_loop.py     # L3 组合构建（遗留文件：组合/信号能力已移除 v3.0.0 plans/57）
 │   ├── meta_loop.py          # L1 Meta-Loop
 │   ├── factor_db/            # 因子数据库（DuckDB）
 │   ├── seed_data/            # 种子因子库
@@ -367,7 +364,7 @@ fts/                          # 核心源码（86 个 Python 文件）
 ├── ml/                       # ML 模型层（LightGBM/XGBoost/Ensemble，v2.38.0）
 ├── bridge/                   # VNPY 信号桥接层（JSON/Redis/REST，v2.38.0）
 ├── data.py                   # 数据层统一入口
-├── data_futures.py           # 期货数据（DuckDB + AKShare）
+├── data_futures.py           # 期货数据（v3.0.0+1：QuantData 权威主链路 + 显式扩展）
 ├── live_trade/               # 实盘执行链路（orders/stop_orders/intervention/gateway）+ 模拟仓（D.1：contracts/simulated_portfolio/simulated_engine/sqlite_store；D.2：book/matching tick 盘口撮合 + 组合级风控 + PARTIAL/限价单/集合竞价，回放+纸面+SQLite 持久化）
 ├── llm.py                    # LLM 客户端（OpenAI/Anthropic/Mock）
 └── cli.py                    # CLI 统一入口
@@ -386,8 +383,8 @@ memory/                       # 运行时持久化（自动创建）
 |-------|------|------|
 | `evolution` | Optuna 贝叶斯调参 | `pip install -e ".[evolution]"` |
 | `llm` | LLM 客户端 | `pip install -e ".[llm]"` |
-| `mcp` | MCP 数据源（AKShare） | `pip install -e ".[mcp]"` |
-| `portfolio` | 组合构建（scikit-learn） | `pip install -e ".[portfolio]"` |
+| `mcp` | MCP 数据源（Wind/iFinD 增强层） | `pip install -e ".[mcp]"` |
+| `portfolio` | ~~组合构建（scikit-learn）~~ | `pip install -e ".[portfolio]"`（⛔ 已迁移，勿新增） |
 | `ml` | ML 模型层（LightGBM/XGBoost） | `pip install -e ".[ml]"` |
 | `bridge` | 信号桥接（redis-py） | `pip install -e ".[bridge]"` |
 | `regime` | 市场制度检测（hmmlearn/statsmodels） | `pip install -e ".[regime]"` |

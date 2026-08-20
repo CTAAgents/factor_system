@@ -438,6 +438,68 @@ class TestInitDefaultAggregator:
 
 
 # ═══════════════════════════════════════════════════════════
+# 5b. tqsdk_sources_enabled opt-in 挂载开关 (GAP-159)
+# ═══════════════════════════════════════════════════════════
+
+
+class TestTqsdkSourcesOptIn:
+    """GAP-159: tqsdk_sources_enabled opt-in 开关——控制 TQSDK 分钟/tick/增强源挂载。
+
+    主链路为 QUANTDATA 时天勤源默认不挂载，显式 FTS_TQSDK_SOURCES_ENABLED=true 恢复旧行为。
+    """
+
+    def _get_aggregator_kwargs(self, mocker, tqsdk_enabled: bool):
+        """构造 provider 并返回 FuturesDataAggregator 构造 kwargs。"""
+        from types import SimpleNamespace
+
+        mocker.patch(
+            "fts.config.settings.get_config",
+            return_value=SimpleNamespace(
+                tqsdk_sources_enabled=tqsdk_enabled,
+                futures_enhance_enabled=False,
+                minute_cache_max_age_days=1,
+            ),
+        )
+        mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", return_value=mocker.MagicMock())
+        mocker.patch(
+            "fts.data_sources.tqsdk_source.TQSDKSource", return_value=mocker.MagicMock()
+        )
+        mocker.patch(
+            "fts.data_sources.tqsdk_tick_source.TQSDKTickSource", return_value=mocker.MagicMock()
+        )
+        mocker.patch(
+            "fts.data_sources.tqsdk_enhance_source.TQSDKEnhanceSource", return_value=mocker.MagicMock()
+        )
+        mocker.patch("fts.data_sources.ifind_sdk_source.IFindSDKSource", return_value=mocker.MagicMock())
+        agg_mock = mocker.patch(
+            "fts.data_sources.aggregator.FuturesDataAggregator",
+            return_value=mocker.MagicMock(),
+        )
+        FuturesDataProvider(use_akshare_fallback=False, aggregator=None)
+        return agg_mock.call_args.kwargs
+
+    def test_tqsdk_disabled_no_tqsdk_sources(self, mocker):
+        """tqsdk_sources_enabled=False（默认）——分钟/tick/增强源均不含天勤源。"""
+        kwargs = self._get_aggregator_kwargs(mocker, tqsdk_enabled=False)
+        # 分钟源仅 TDX_LOCAL（5m），无 TQSDKSource
+        assert len(kwargs["minute_sources"]) == 1
+        # tick 源为空
+        assert len(kwargs["tick_sources"]) == 0
+        # 增强源为空
+        assert len(kwargs["enhancers"]) == 0
+
+    def test_tqsdk_enabled_registers_all_tqsdk(self, mocker):
+        """tqsdk_sources_enabled=True——分钟/tick/增强源均注册天勤源。"""
+        kwargs = self._get_aggregator_kwargs(mocker, tqsdk_enabled=True)
+        # 分钟源: TDX_LOCAL(5m) + TQSDKSource(5m)
+        assert len(kwargs["minute_sources"]) == 2
+        # tick 源: TQSDKTickSource
+        assert len(kwargs["tick_sources"]) == 1
+        # 增强源: TQSDKEnhanceSource
+        assert len(kwargs["enhancers"]) == 1
+
+
+# ═══════════════════════════════════════════════════════════
 # 6. _from_aggregator_df
 # ═══════════════════════════════════════════════════════════
 

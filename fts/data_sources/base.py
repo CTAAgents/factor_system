@@ -6,7 +6,7 @@
   - SourceUnavailable: 数据源不可用异常（向上传播供熔断判定）
   - validate_ohlcv_row: OHLCV 行字段校验
 
-K 线主路径: TDX_LOCAL → TQ_PYTHON → AKSHARE（不含 Wind/iFinD）
+K 线主路径（v3.0.0+1 起唯一数据源 QuantData）: QUANTDATA（+ DUCKDB_CACHE 读取缓存 + SYNTHETIC 兜底）
 字段增强层: WIND / IFIND（独立并行）
 
 HARNESS §5.3 契约优先: 适配器必须继承本类并实现 3 个抽象方法。

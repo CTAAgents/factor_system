@@ -36,8 +36,10 @@ _OHLCV_COLS = ("open", "high", "low", "close", "volume")
 class TQSDKEnhanceSource(BaseFuturesSource):
     """天勤 TQSDK 字段增强源（补充 hold/oi_change）。
 
-    不参与 K 线主路径（DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON → AKSHARE）；
-    仅作为 aggregator 的 enhancer，经 `_enhance_fields` 覆盖主路径的 hold/oi_change。
+    ⚠️ v3.0.0+1 起已从默认聚合器移除（K 线唯一数据源 QuantData）：
+    hold 由 QuantData continuous_daily open_interest 权威覆盖（L0），
+    oi_change 由 QuantDataProvider 从 hold 差分自算；本类保留供显式使用/兼容。
+    不参与 K 线主路径（v3.0.0+1 起 K 线唯一数据源 QuantData）。
     """
 
     source_name: str = "TQSDK_ENHANCE"

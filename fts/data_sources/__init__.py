@@ -1,7 +1,9 @@
-"""fts.data_sources — 期货多源数据适配器子包（v2.3.0）。
+"""fts.data_sources — 期货数据适配器子包（v2.3.0）。
 
-K 线主路径（5 级降级）:
-    DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON → AKSHARE → SYNTHETIC
+K 线主路径（v3.0.0+1 起唯一数据源 QuantData）:
+    DUCKDB_CACHE(读取缓存) → QUANTDATA → SYNTHETIC(测试/离线兜底)
+    天勤（TQSDK/TQ_PYTHON）、通达信实时（TDX_LOCAL）、AKShare 即时抓取
+    已从默认链移除——FTS 因子生命周期管理仅依赖 QuantData 不同周期数据。
 
 字段增强层（独立并行）:
     WIND  — settle / oi_change / 期权 IV/PCR

@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v3.0.0+1
+> 版本: v3.0.0+5
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,11 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v3.0.0+5** | **2026-08-20** | **v3.0.0+1 架构级改造：FTS K线唯一数据源=QuantData，去天勤/通达信实时/AKShare默认降级链** |** |
+| **v3.0.0+4** | **2026-08-20** | **fix: seed_lineage 溯源写入修复——旧库残留 seed_family NOT NULL 列致 NOT NULL 约束失败，写入前幂等迁移对齐表结构并补写 fut_rainbow_ma 溯源记录** |** |
+| **v3.0.0+3** | **2026-08-20** | **GAP-159: 天勤源默认解耦——修复 TdxLocalSource 未导入 bug + 测试更新（21 passed）** |** |
+| **v3.0.0+2** | **2026-08-20** | **fix(config): settings.yaml default_market 漂移修复（energy→futures，v3.0.0+1 反转落地）** |** |
+| **v3.0.0+2** | **2026-08-20** | **QuantData 主链路彻底解耦——天勤源默认不再挂载（GAP-159 登记并关闭，plans/57 方案 2）**：主链路为 QUANTDATA 时 TQSDKEnhanceSource（增强）/TQSDKSource（分钟 5m）/TQSDKTickSource（tick）不再默认注册（此前默认挂载致 L1/L2 感知链路逐品种自建天勤连接 + 15s wait_update，L1 Meta-Loop 实测每品种 ~20s 拖慢感知），新增 `tqsdk_sources_enabled` 配置（env `FTS_TQSDK_SOURCES_ENABLED`，默认 false，显式 true 恢复旧行为）统一门控 `FuturesDataProvider._init_default_aggregator` 与 `cli._build_default_aggregator` 三处挂载点；`futures_enhance_enabled` 语义收敛为「在已启用天勤增强源基础上追加 IFindSDKSource」；文档同步 01-architecture（数据链/文件清单/全局数据流）/03-configuration（新配置+增强开关语义）/04-resilience（降级表） |** |
 | **v3.0.0+1** | **2026-08-20** | **全局默认市场反转回 futures + 定时自动化任务面向全期货重建（plans/57 双系统切分落地）：① settings.default_market 默认 'energy'→'futures'（v2.104.0+103 临时切换反转——FTS 因子生产默认面向全部期货 84 品种/17 产业链，门控任务 _market_gate 执行集切换）；② TRAE Schedule 定时任务重建：删除 4 个能化链 energy 专属任务（L1 energy 知识补给/L2 energy 种子演化/04:00 energy 监控阀门/周日 energy 评审质检），新建 5 个全期货任务（L1 知识补给 l1_meta_loop_job()/L2 种子评估+演化 l2_seed_promotion+evolution_weekday\|weekend/L2 监控+评审质检阀门 04:00/L2 周度评审 l2_review_job 周日/外部因子导入 import_external_factors_job 月度）；保留数据基础设施（多源同步/QuantData 刷新）与 RD 交易建议（14:30/21:30）共 8 Active；文档同步 01-architecture 市场路由 + 03-configuration default_market 说明** |** |
 | **v3.0.0** | **2026-08-20** | **双系统切分架构级发布（plans/57 阶段 0-13 全部完成，major bump v2.105.0+33 → v3.0.0）：FTS 角色重定位为因子生产系统，策略合成职责迁移 Regime-Driven——① 信号契约 v1（design/F.3：l3_signal_meta 追加 schema_version/factor_status/factor_scope 三列 + 历史回填 + 决策/训练双模式隔离 + 增量幂等 + 新鲜度校验 + 降级熔断）；② FTS L3 组合侧退役登记（retired_l3.py 35 项 + import 期 DeprecationWarning + warn_if_retired 告警，存量调用点兼容不删码；物理删除为后续独立里程碑）；③ RD 承接（strategy_synthesis/combo_verifier/money_management/crowding_gate 权威替换/backtest_engine 消费信号矩阵/L2 子链化 5 子链）；④ 全期货覆盖规划（config/futures_universe.yaml coverage_priority P0-P3，84 品种/17 产业链）；⑤ 存量因子集中重审管道（review_legacy_factors.py 分族 FDR-BH + audit 分层抽样）；验收（2026-08-20）：阶段 0 A/B（状态一致率 92.04%/方向一致率 97.55%）+ 阶段 1 双轨对账（信号余弦 1.0000/组合方向 100%/绩效差 0.000000）全门槛通过 + 因子映射 10/12 Spearman=1.0000 + 全量回归 8129 passed（残留 21 项预存，登记 GAP-158）；文档同步全部 Harness 文档（01-architecture 双系统切分章节/02-lifecycle Phase 48/03-configuration 新配置/04-resilience 信号降级熔断/05-observability 退役观测/06-testing 测试数/08-gap GAP-154~158/09-advancement 里程碑/business_flow 角色边界/factor_lifecycle 退役登记/execution_modes/production_plan/README/CODE_WIKI）** |** |
 | **v2.105.0+33** | **2026-08-20** | **plans/57 双系统切分：阶段1真实双轨对账全门槛通过 + 步骤12 FTS L3 组合侧退役登记** |** |

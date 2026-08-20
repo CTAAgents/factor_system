@@ -2,10 +2,10 @@
 
 HARNESS §5.3 契约优先: 5 级 K 线主路径 + 字段增强层 + 熔断器 + 多源交叉验证。
 
-K 线主路径（5 级降级）:
+K 线主路径（5 级降级，v3.0.0+1 去天勤直连——FTS 因子生命周期管理仅依赖 QuantData）:
     1. DUCKDB_CACHE  — 命中本地缓存（最新交易日 = today/today-1）
-    2. TQ_LOCAL      — 通达信本地 HTTP 127.0.0.1:7721
-    3. TQ_PYTHON     — 通达信 TQ-Python SDK
+    2. QUANTDATA     — QuantData 权威主链路（duckdb 只读短连接，v2.105.0+32 置首）
+    3. TDX_LOCAL     — 通达信本地 HTTP 127.0.0.1:17709
     4. AKSHARE       — 兼容旧数据
     5. SYNTHETIC     — 合成降级（保证系统可运行）
 
@@ -67,20 +67,21 @@ class BreakerState:
 
 
 class FuturesDataAggregator:
-    """多源期货数据聚合器（v2.3.0）。
+    """多源期货数据聚合器（v2.3.0，v3.0.0+1 重构）。
 
-    K 线主路径: DUCKDB_CACHE → TQ_LOCAL → TQ_PYTHON → AKSHARE → SYNTHETIC
-    字段增强层: WIND + IFIND（K 线后并行）
+    K 线主路径（默认）: DUCKDB_CACHE → QUANTDATA → SYNTHETIC
+    字段增强层: WIND + IFIND（K 线后并行，补充非权威字段）
+    显式扩展: TDX_LOCAL / AKSHARE 仅在调用方显式注册时启用（分钟/实时/补洞场景），
+              默认 K 线主路径不再包含外部实时源
     熔断器: 每源独立计数器 + 冷却时间
     """
 
-    # 默认 K 线主路径（6 级降级；QUANTDATA 权威源 v2.105.0+32 主链路切换）
+    # 默认 K 线主路径（v3.0.0+1：FTS 因子生命周期管理 K 线唯一数据源 = QuantData，
+    # 去 TQ_PYTHON 天勤直连；TDX_LOCAL/AKSHARE 降级保留为显式扩展场景，
+    # 由调用方按需注册 sources 参数，不进入默认降级链）
     DEFAULT_KLINE_SOURCES: tuple[str, ...] = (
         DataSource.DUCKDB_CACHE.value,
         DataSource.QUANTDATA.value,
-        DataSource.TDX_LOCAL.value,
-        DataSource.TQ_PYTHON.value,
-        DataSource.AKSHARE.value,
         DataSource.SYNTHETIC.value,
     )
 
@@ -105,7 +106,7 @@ class FuturesDataAggregator:
         Args:
             sources: K 线主路径数据源列表（按优先级）
             enhancers: 字段增强层数据源列表（并行）
-            minute_sources: 分钟数据源列表（v2.30.0，按优先级：TDX → TQ-Local → TQSDK）
+            minute_sources: 分钟数据源列表（v2.30.0；v3.0.0+1 起默认仅 TDX_LOCAL，天勤 TQSDK 已移除）
             tick_sources: tick 逐笔数据源列表（v2.31.0，按优先级）
             db_path: DuckDB 缓存路径（None 时禁用缓存）
             circuit_breaker_threshold: 连续失败次数阈值（默认 5）

@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v3.0.0+1
+> 版本: v3.0.0+5
 > 最后更新: 2026-08-10
 
 ---
@@ -207,7 +207,8 @@ FTS 配置采用三级优先级（高→低）：
 | `inject_data_gap_enabled` | bool | `true` | `FTS_INJECT_DATA_GAP` | G8 断K/跳空清洗标记：`get_futures_panel` 面板 df 是否附加 data_gap/gap_anomaly 列（断K不进因子计算、异常跳空进 QC，v2.103.0+15） |
 | `factor_turnover_daily_max` | float\|null | `0.45` | `FTS_FACTOR_TURNOVER_DAILY_MAX` | G11 日换手硬剔除阈值（信号翻转率口径 turnover/(21×2)）：`evaluate_backtest`/`_evaluate_cross_section` 失败原因接入该门槛。**2026-08-13 判定（v2.104.0+9 修订）：期货换手成本低，但换手率过高同样无交易价值 → 期货主系统默认 `0.45` 开启（P95 校准：83 个 active 期货因子真实分布 P95=0.456，仅拦 top ~5% 天天翻仓的极端抖动因子）**（v2.103.0+15 观察期 → v2.104.0+1 定值 0.30 → v2.104.0+5 回默认关闭 → v2.104.0+9 重开 0.45；env：数值=覆盖阈值，"off"/"none"/"0"=关闭，空值=默认 0.45；股票侧 fts-stock 如需更严可设 0.30=P90 参考值；口径说明见 §2.1） |
 | `futures_neutralization` | bool | `true` | `FTS_FUTURES_NEUTRALIZATION` | 期货横截面因子评估是否做板块/产业链中性化（GAP-F03，v2.59.0） |
-| `futures_enhance_enabled` | bool | `false` | `FTS_FUTURES_ENHANCE_ENABLED` | 字段增强层 iFinD SDK 选项（GAP-083 阶段 C，v2.101.0）：`false` 时仅默认注册天勤 TQSDKEnhanceSource（close_oi→hold/oi_change，零额外依赖）；`true` 时追加 IFindSDKSource（方案 A：iFinD 官方 SDK 直连补 settle/pre_settle 权威值，需本地安装 iFinDPy + .env 凭据 IFIND_TOKEN 或 IFIND_USERNAME/PASSWORD，失败自动降级） |
+| `futures_enhance_enabled` | bool | `false` | `FTS_FUTURES_ENHANCE_ENABLED` | 字段增强层 iFinD SDK 选项（GAP-083 阶段 C，v2.101.0）：`true` 时在 `tqsdk_sources_enabled` 已启用天勤增强源的基础上**追加** IFindSDKSource（方案 A：iFinD 官方 SDK 直连补 settle/pre_settle 权威值，需本地安装 iFinDPy + .env 凭据 IFIND_TOKEN 或 IFIND_USERNAME/PASSWORD，失败自动降级）。v3.0.0+2 起天勤增强源由 `tqsdk_sources_enabled` 统一门控，本开关仅控制 iFinD SDK 追加 |
+| `tqsdk_sources_enabled` | bool | `false` | `FTS_TQSDK_SOURCES_ENABLED` | 天勤 TQSDK 源 opt-in（v3.0.0+2，plans/57 QuantData 主链路彻底解耦）：主链路为 QUANTDATA 时天勤增强源（TQSDKEnhanceSource，close_oi→hold/oi_change）、分钟源（TQSDKSource 5m）、tick 源（TQSDKTickSource）**不再默认挂载**（此前默认注册导致感知链路逐品种自建天勤连接 + 15s wait_update，L1 Meta-Loop 实测每品种 ~20s）；QuantData 下 hold 已为 L0 权威字段（open_interest），天勤增强冗余。需要天勤 fallback/增强时显式设 `true` 恢复旧行为 |
 | `backtest_trade_filter` | bool | `true` | `FTS_BACKTEST_TRADE_FILTER` | 回测是否启用涨跌停拦截 + 停牌过滤（GAP-F02，v2.59.0） |
 | `futures_limit_pct` | float | `0.08` | `FTS_FUTURES_LIMIT_PCT` | 期货涨跌停判定阈值（单日涨跌幅 ≥ 该值视为涨跌停，GAP-F02，v2.59.0） |
 | `cross_section_panel_vector` | bool | `true` | `FTS_CROSS_SECTION_PANEL_VECTOR` | 横截面评估全矩阵化开关（plans/37 Phase 1+3，plans/39 §11 回退后）：`cross_section_evaluate_backtest` 的 `_cs_compute_ics` 分派到 `panel_vector.compute_cs_ics_vectorized`（联合掩码 rank + 行内 Pearson），**信号/收益构建恒逐品种执行**（算子因子面板化 `execute_factor_panel` 经 plans/39 §11 v2.104.0+58 实测真实缺口面板 0.3x <5x 门槛登记豁免摘除，仅保留为独立模块/对照基准）；产出与旧路径逐位一致；**v2.104.0+57 起默认开启**（对照测试全绿 + 缺口面板实测产出一致/性能持平），可设 `false` 关闭 |
@@ -224,7 +225,7 @@ FTS 配置采用三级优先级（高→低）：
 | `l3_signal_store_db` | str | `data/l3_signal_store.duckdb` | `FTS_L3_SIGNAL_STORE_DB` | L3 信号矩阵库路径（登记于 `storage_landscape.yaml` l3_signal_assets 域，plans/51 B2） |
 | `l3_signal_cache_entries` | int | `20000` | `FTS_L3_SIGNAL_CACHE_ENTRIES` | L3 信号缓存容量上限（plans/40 A 层；plans/51 C2 配置化，原模块级常量） |
 | `l3_signal_store_append_window` | bool | `true` | `FTS_L3_SIGNAL_APPEND_WINDOW` | L3 信号矩阵增量窗口追加（plans/52，GAP-139）：窗口推进时对可复用因子仅重算新增交易日 + 窗口回退段（meta `dates_digest` 前缀判定，抽样对照验证不过自动全量零漂移）；`false` 回退"同窗口因子级复用"现行为（跨日全量重算） |
-| QuantData 权威主链路路径（v2.105.0+32） | str | `D:\QuantData` | `FTS_QUANTDATA_HOME` | QuantData 数据仓库根目录：`fts/data_sources/quantdata_provider.py` duckdb 只读短连接直读 continuous_daily/continuous_map/kline_daily；聚合器降级链头部插入 QUANTDATA（QUANTDATA→DUCKDB_CACHE→TDX_LOCAL→TQ_PYTHON→AKSHARE→SYNTHETIC），不依赖跨项目 client_v2.py |
+| QuantData 权威主链路路径（v2.105.0+32，v3.0.0+1 重构） | str | `D:\QuantData` | `FTS_QUANTDATA_HOME` | QuantData 数据仓库根目录：`fts/data_sources/quantdata_provider.py` duckdb 只读短连接直读 continuous_daily/continuous_map/kline_daily；FTS 因子生命周期管理 K 线唯一数据源；默认降级链：DUCKDB_CACHE→QUANTDATA→SYNTHETIC，TDX_LOCAL/AKShare 仅为显式扩展场景，不依赖跨项目 client_v2.py |
 | 信号契约 v1 三列（plans/57，v3.0.0） | — | schema_version=1 / factor_status=pending / factor_scope=`{"subchain_scope":"all"}` | — | `l3_signal_meta` 追加列（幂等迁移）：`schema_version`（契约版本，RD 校验不兼容即降级）、`factor_status`（active/degraded/shadow/retired，FTS 状态传播）、`factor_scope`（subchain_scope + subchain_specific 特异因子链范围）；RD `signal_client` 决策/训练双模式拉取 + 增量幂等 + 新鲜度校验 + 降级熔断（design/F.3） |
 
 ### 2.1 G11 日换手口径说明（信号翻转率）

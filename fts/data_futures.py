@@ -3,25 +3,31 @@ fts.data_futures — 期货数据提供者
 
 基于 DuckDB（data/fts_history.duckdb）的 kline_cache 表提供期货连续合约 OHLCV 数据。
 
-数据源优先级:
-    K 线主路径: DuckDB → TQ_LOCAL → TQ_PYTHON → AKShare → SYNTHETIC
-    实时价路径: TQ_LOCAL → AKShare（降级）
+数据源架构（v3.0.0+1 重构——FTS 因子生命周期管理 K 线唯一数据源 = QuantData）:
+    默认 K 线主路径（因子管理主链路）: DuckDB(缓存) → QuantData → SYNTHETIC(兜底)
+    显式扩展（分钟级/盘中实时，按需启用）: TDX_LOCAL（通达信 17709）/ AKShare 直连
 
 数据流:
-    因子引擎 → FTSDataProvider → FuturesDataProvider → DuckDB (kline_cache)
-                                                     ↘ akshare 即时获取（降级）
+    因子引擎 → FTSDataProvider → FuturesDataProvider → FuturesDataAggregator
+                                                     ↘ QuantDataProvider（权威只读）
+                                                     ↘ SYNTHETIC（极端兜底）
+
+说明:
+    - v3.0.0+1 起 FTS 对 QuantData 的采集方式无感，仅只读消费其 DuckDB 库；
+      如需盘中实时数据，应驱动 QuantData 由其采集，FTS 不再直连天勤/通达信实时/AKShare 网络源。
+    - TDX_LOCAL（分钟级）/ AKShare 仅保留为显式扩展场景，不再进入默认日线降级链。
 
 期货特有字段:
-    - hold: 持仓量（open interest），日线和分钟线均有
-    - settle: 结算价（仅日线）
+    - hold: 持仓量（open interest，QuantData L0 权威）
+    - oi_change: 由 hold 一阶差分自算（v3.0.0+1 去天勤 TQSDKEnhanceSource 派生）
+    - settle/amount/pre_settle: QuantData 无权威源，标注非权威（GAP-158）
 
 ⚠️ VWAP 字段说明:
-    vwap 字段的计算逻辑:
+    vwap 字段的计算逻辑（v3.0.0+1 统一非权威路径）:
     - 精确 VWAP（有成交额时）: amount / volume
-    - AKShare 路径（有 settle 时）: (H + L + C + settle) / 4
-    - DuckDB 路径（无 settle 时）: (H + L + C) / 3（典型价格）
-    settle 参与计算的思路是：结算价是期货交易所官方定价基准，比
-    简单平均更贴近期货价格特征。最终信号质量由演化引擎的 IC/Sharpe 指标评判。
+    - 典型价兜底: (H + L + C) / 3
+    settle 参与计算的思路已退役——FTS 因子管理不再依赖盘中实时定价，
+    信号质量由演化引擎的 IC/Sharpe 指标评判。
 
 期货截面含义:
     横截面是"不同品种 × 同一日期"，可做跨品种因子（如跨商品动量、品种间强弱）。
@@ -636,13 +642,16 @@ def _get_db() -> Any:
 
 
 class FuturesDataProvider:
-    """期货数据提供者 — 基于 DuckDB kline_cache 表。
+    """期货数据提供者 — 基于 DuckDB kline_cache 表（v3.0.0+1 重构）。
 
-    数据源优先级:
+    默认 K 线数据路径（因子生命周期管理主链路）:
         1. DuckDB kline_cache（连续合约，已持久化）
-        2. TQ-Local 通达信本地客户端（HTTP 7721）
-        3. AKShare 即时获取（futures_zh_daily_sina API）
-        4. 合成数据降级（保证系统可运行）
+        2. QuantDataProvider（QuantData 权威只读 DuckDB）
+        3. 合成数据降级（保证系统可运行）
+
+    显式扩展场景（按需启用，不进入默认日线降级链）:
+        - TDX_LOCAL（通达信 17709，分钟级/盘中实时补洞）
+        - AKShare 直连（contract mapping/实时价降级）
 
     用法:
         provider = FuturesDataProvider()
@@ -650,10 +659,12 @@ class FuturesDataProvider:
         panel, dates = provider.get_futures_panel(["RB0", "CU0", "AU0"], days=500)
     """
 
-    def __init__(self, use_akshare_fallback: bool = True, aggregator: Optional[Any] = None):
+    def __init__(self, use_akshare_fallback: bool = False, aggregator: Optional[Any] = None):
         """
         Args:
-            use_akshare_fallback: 是否在 DuckDB 无数据时尝试 AKShare 即时获取。
+            use_akshare_fallback: 已退役参数（v3.0.0+1 起默认 K 线链不再包含 AKShare；
+                保留签名兼容旧调用方，设为 True 时仅影响 _from_akshare 辅助路径，
+                不进入默认日线 K 线降级链）。
             aggregator: FuturesDataAggregator 实例；None 时惰性初始化默认聚合器。
         """
         self._use_akshare = use_akshare_fallback
@@ -664,16 +675,17 @@ class FuturesDataProvider:
     def _init_default_aggregator(self) -> None:
         """惰性初始化默认 FuturesDataAggregator（按需导入 + 探活）。
 
-        v2.87.0: TQLocalSource(7721) 与 TDXMinuteSource(17709) 合并为 TdxLocalSource(17709)。
+        v3.0.0+1：FTS 因子生命周期管理 K 线唯一数据源 = QuantData。
+        默认 K 线链 = QuantData（权威） → SYNTHETIC（兜底），
+        TDX_LOCAL / AKSHARE 仅作为分钟级或显式扩展场景，不再进入默认日线降级链。
         """
         try:
             from fts.config.settings import get_config as _agg_cfg
             from fts.data_sources.aggregator import FuturesDataAggregator
-            from fts.data_sources.tdx_local_source import TdxLocalSource
 
             sources: list = []
             # QuantData 权威源置首（v2.105.0+32 主链路切换，GAP-156）：
-            # QUANTDATA → TDX_LOCAL → TQ_PYTHON → AKSHARE → SYNTHETIC
+            # QUANTDATA → SYNTHETIC（v3.0.0+1 去 TQ_PYTHON 天勤直连、去 TDX_LOCAL/AKSHARE 默认降级）
             try:
                 from fts.data_sources.quantdata_provider import QuantDataProvider
 
@@ -682,50 +694,51 @@ class FuturesDataProvider:
                 sources.append(qd)
             except Exception as _e:
                 logger.debug("QuantDataProvider 实例化失败，跳过权威源 [%s]", _e)
-            try:
-                tq = TdxLocalSource()
-                # 不在这探活 — 让 aggregator 的熔断器管理失败状态
-                sources.append(tq)
-            except Exception:
-                logger.debug("TdxLocalSource 实例化失败，跳过")
 
-            # ── 分钟数据源（v2.85.0：TDX 统一源 + 天勤 TQSDK）──
+            # ── 分钟数据源（v2.85.0：TDX 统一源；v3.0.0+2（GAP-159）起天勤 TQSDK 源默认不挂载，
+            # 显式 FTS_TQSDK_SOURCES_ENABLED=true 恢复旧行为）──
             minute_sources: list = []
             try:
+                from fts.data_sources.tdx_local_source import TdxLocalSource
+
                 minute_sources.append(TdxLocalSource(period="5m"))
             except Exception:
                 logger.debug("TdxLocalSource(5m) 初始化失败，跳过分钟源")
+            if _agg_cfg().tqsdk_sources_enabled:
+                try:
+                    from fts.data_sources.tqsdk_source import TQSDKSource
 
-            try:
-                from fts.data_sources.tqsdk_source import TQSDKSource
+                    minute_sources.append(TQSDKSource(period="5m"))
+                except Exception:
+                    logger.debug("TQSDKSource 初始化失败，跳过")
 
-                minute_sources.append(TQSDKSource(period="5m"))
-            except Exception:
-                logger.debug("TQSDKSource 初始化失败，跳过")
-
-            # ── tick 逐笔数据源（v2.31.0）──
+            # ── tick 逐笔数据源（v2.31.0；v3.0.0+2（GAP-159）起天勤 TQSDK tick 源默认不挂载，
+            # 显式 FTS_TQSDK_SOURCES_ENABLED=true 恢复）──
             tick_sources: list = []
-            try:
-                from fts.data_sources.tqsdk_tick_source import TQSDKTickSource
+            if _agg_cfg().tqsdk_sources_enabled:
+                try:
+                    from fts.data_sources.tqsdk_tick_source import TQSDKTickSource
 
-                tick_sources.append(TQSDKTickSource())
-            except Exception:
-                logger.debug("TQSDKTickSource 初始化失败，跳过 tick 源")
+                    tick_sources.append(TQSDKTickSource())
+                except Exception:
+                    logger.debug("TQSDKTickSource 初始化失败，跳过 tick 源")
 
             db_path = _DUCKDB_PATH if _DUCKDB_PATH.exists() else None
 
-            # ── 字段增强层（GAP-083 阶段 C）：TQSDK 真实持仓增强 + iFinD SDK 可选 ──
-            # TQSDKEnhanceSource 默认注册：天勤账号已在 .env，零额外依赖，补充权威 hold/oi_change，
-            # 失败自动降级（_enhance_fields 内部 try/except + 熔断器）不阻断主路径。
+            # ── 字段增强层（GAP-083 阶段 C；v3.0.0+2（GAP-159）起 TQSDKEnhanceSource 默认不挂载——
+            # hold 已由 QuantData continuous_daily open_interest 权威覆盖（L0），oi_change 由
+            # QuantDataProvider 从 hold 差分自算，settle/amount 保持非权威 L1（GAP-158）；
+            # 显式 FTS_TQSDK_SOURCES_ENABLED=true 恢复天勤增强）──
             # futures_enhance_enabled=true 时追加 IFindSDKSource（方案 A：iFinD 官方 SDK 直连，
             # 补 settle/pre_settle 权威值；需本地安装 iFinDPy + .env 凭据，失败自动降级）。
             enhancers: list = []
-            try:
-                from fts.data_sources.tqsdk_enhance_source import TQSDKEnhanceSource
+            if _agg_cfg().tqsdk_sources_enabled:
+                try:
+                    from fts.data_sources.tqsdk_enhance_source import TQSDKEnhanceSource
 
-                enhancers.append(TQSDKEnhanceSource())
-            except Exception as _e:
-                logger.debug("TQSDKEnhanceSource 实例化失败，跳过字段增强 [%s]", _e)
+                    enhancers.append(TQSDKEnhanceSource())
+                except Exception as _e:
+                    logger.debug("TQSDKEnhanceSource 实例化失败，跳过字段增强 [%s]", _e)
             if _agg_cfg().futures_enhance_enabled:
                 try:
                     from fts.data_sources.ifind_sdk_source import IFindSDKSource
@@ -973,7 +986,8 @@ class FuturesDataProvider:
         """获取期货 tick 逐笔数据（含 5 档盘口）。
 
         通过 FuturesDataAggregator.get_ticks() 获取，
-        降级链: tick_cache → TQSDKTickSource。
+        v3.0.0+1 起默认聚合器不再注册 tick 源（因子生命周期管理不需要 tick）；
+        如需 tick 数据须显式传入 TQSDKTickSource 等源。
 
         Args:
             symbol: 期货连续合约代码（如 "RB0"）。
@@ -2373,9 +2387,9 @@ def _try_akshare_realtime(symbols: list[str]) -> dict[str, float]:
 def get_realtime_prices(symbols: list[str] | None = None) -> dict[str, float]:
     """获取期货品种盘中实时价。
 
-    数据源优先级（与 K 线主路径一致）:
-        1. TDX_LOCAL — 通达信本地 HTTP 统一源 17709 实时快照（get_market_snapshot）
-        2. AKSHARE — AKShare futures_zh_minute_sina 分时行情（降级）
+    ⚠️ v3.0.0+1 起 FTS 因子生命周期管理不需要盘中实时价（K 线唯一数据源 QuantData），
+    本函数保留供显式调用/兼容；默认聚合器与 L1 感知已不再使用。
+    数据源优先级: TDX_LOCAL(通达信 17709) → AKShare（降级）。
 
     盘中实时价用于信号报告"最新价"展示；非交易时段返回当日最新分时价。
 

@@ -410,6 +410,27 @@ CREATE TABLE IF NOT EXISTS factor_reviews (
 # ─── 初始化函数 ──────────────────────────────────────────
 
 
+def ensure_seed_lineage_schema(conn) -> None:
+    """幂等对齐 seed_lineage 表结构（v2.104.0+25 family 列废弃）。
+
+    旧库（建表 DDL 仍含 seed_family VARCHAR NOT NULL）在写入 seed_lineage 时，
+    因 INSERT 不含该列会触发 NOT NULL constraint failed。init_database 的
+    CREATE TABLE IF NOT EXISTS 不会修改已存在的表，旧库需显式执行本迁移。
+    幂等：对已是新结构的库执行无副作用（DROP ... IF EXISTS / 索引重建）。
+
+    DuckDB DROP COLUMN 约束：被索引引用的列需先撤索引，且引用其后列的索引
+    也需一并撤销再重建（新建库路径实测 CatalogException）。
+    """
+    conn.execute("DROP INDEX IF EXISTS idx_sl_seed_name")
+    conn.execute("DROP INDEX IF EXISTS idx_sl_seed_family")
+    conn.execute("DROP INDEX IF EXISTS idx_sl_evolved_factor_id")
+    conn.execute("DROP INDEX IF EXISTS idx_sl_promoted_at")
+    conn.execute("ALTER TABLE seed_lineage DROP COLUMN IF EXISTS seed_family")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sl_seed_name ON seed_lineage(seed_name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sl_evolved_factor_id ON seed_lineage(evolved_factor_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sl_promoted_at ON seed_lineage(promoted_at DESC)")
+
+
 def init_database(db_path: Optional[Path] = None, market: Optional[str] = None) -> Path:
     """初始化因子目录数据库，创建所有表和索引。
 
@@ -457,16 +478,8 @@ def init_database(db_path: Optional[Path] = None, market: Optional[str] = None) 
         conn.execute("DROP INDEX IF EXISTS idx_frv_decision")
         # 迁移：彻底移除因子家族列（v2.104.0+25，family 概念废弃，分组统一走信号聚类）
         conn.execute("ALTER TABLE factor_catalog DROP COLUMN IF EXISTS family")
-        # DuckDB DROP COLUMN 约束：seed_lineage 其余索引（seed_name/evolved_factor_id/promoted_at）
-        # 引用 seed_family 之后列，迁移需先撤全部相关索引再重建（新建库路径实测 CatalogException）
-        conn.execute("DROP INDEX IF EXISTS idx_sl_seed_name")
-        conn.execute("DROP INDEX IF EXISTS idx_sl_seed_family")
-        conn.execute("DROP INDEX IF EXISTS idx_sl_evolved_factor_id")
-        conn.execute("DROP INDEX IF EXISTS idx_sl_promoted_at")
-        conn.execute("ALTER TABLE seed_lineage DROP COLUMN IF EXISTS seed_family")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sl_seed_name ON seed_lineage(seed_name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sl_evolved_factor_id ON seed_lineage(evolved_factor_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sl_promoted_at ON seed_lineage(promoted_at DESC)")
+        # 迁移：seed_lineage 移除废弃的 seed_family 列（旧库残留 NOT NULL 会阻断写入）
+        ensure_seed_lineage_schema(conn)
 
         conn.execute("CHECKPOINT")
         logger.info("[FactorDB] ✅ 数据库初始化完成")

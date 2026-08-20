@@ -135,13 +135,22 @@ class TestFromKlineCacheEdge:
 
 
 class TestEnhancersRegistration:
-    def _build_provider(self, mocker, enhance_enabled: bool):
-        """构造 provider 并返回 aggregator 构造 kwargs。"""
+    def _build_provider(self, mocker, enhance_enabled: bool, tqsdk_enabled: bool = False):
+        """构造 provider 并返回 aggregator 构造 kwargs。
+
+        Args:
+            enhance_enabled: futures_enhance_enabled 开关（控制 iFinD SDK 追加）
+            tqsdk_enabled: tqsdk_sources_enabled 开关（控制 TQSDKEnhanceSource 注册，v3.0.0+2 opt-in）
+        """
         from types import SimpleNamespace
 
         mocker.patch(
             "fts.config.settings.get_config",
-            return_value=SimpleNamespace(futures_enhance_enabled=enhance_enabled, minute_cache_max_age_days=1),
+            return_value=SimpleNamespace(
+                futures_enhance_enabled=enhance_enabled,
+                tqsdk_sources_enabled=tqsdk_enabled,
+                minute_cache_max_age_days=1,
+            ),
         )
         mocker.patch("fts.data_sources.tdx_local_source.TdxLocalSource", return_value=mocker.MagicMock())
         fake_tq = mocker.MagicMock()
@@ -156,41 +165,47 @@ class TestEnhancersRegistration:
         provider = FuturesDataProvider(use_akshare_fallback=False, aggregator=None)
         return provider, agg_mock, fake_tq
 
-    def test_default_registers_tqsdk(self, mocker):
-        """默认注册 TQSDKEnhanceSource（天勤账号已配置，真实持仓增强），iFinD/Wind 不注册。"""
-        _, agg_mock, fake_tq = self._build_provider(mocker, enhance_enabled=False)
+    def test_default_no_tqsdk_enhancer(self, mocker):
+        """默认 tqsdk_sources_enabled=False → enhancers 为空（天勤增强源不注册，GAP-159 opt-in）。"""
+        _, agg_mock, _fake_tq = self._build_provider(mocker, enhance_enabled=False)
+        kwargs = agg_mock.call_args.kwargs
+        assert len(kwargs["enhancers"]) == 0
+
+    def test_tqsdk_enabled_registers_enhance_source(self, mocker):
+        """tqsdk_sources_enabled=True → TQSDKEnhanceSource 被注册（opt-in 恢复旧行为）。"""
+        _, agg_mock, fake_tq = self._build_provider(mocker, enhance_enabled=False, tqsdk_enabled=True)
         kwargs = agg_mock.call_args.kwargs
         assert len(kwargs["enhancers"]) == 1
         assert kwargs["enhancers"][0] is fake_tq
 
-    def test_enabled_registers_tqsdk_ifind_sdk(self, mocker):
-        """启用 futures_enhance_enabled → TQSDK + iFinD SDK 两个增强源。"""
+    def test_tqsdk_enabled_plus_ifind_sdk(self, mocker):
+        """tqsdk_sources_enabled=True + futures_enhance_enabled=True → TQSDK + iFinD SDK 两个增强源。"""
         fake_sdk = mocker.MagicMock()
         mocker.patch("fts.data_sources.ifind_sdk_source.IFindSDKSource", return_value=fake_sdk)
-        _, agg_mock, fake_tq = self._build_provider(mocker, enhance_enabled=True)
+        _, agg_mock, fake_tq = self._build_provider(mocker, enhance_enabled=True, tqsdk_enabled=True)
         kwargs = agg_mock.call_args.kwargs
         assert len(kwargs["enhancers"]) == 2
         assert kwargs["enhancers"][0] is fake_tq
         assert kwargs["enhancers"][1] is fake_sdk
 
-    def test_enabled_sdk_instantiation_failure_skips(self, mocker):
-        """启用但 IFindSDKSource 实例化失败 → 跳过该源，TQSDK 仍注册，不阻断。"""
+    def test_ifind_sdk_instantiation_failure_skips(self, mocker):
+        """tqsdk_enabled + IFindSDKSource 实例化失败 → 跳过 iFinD，TQSDK 仍注册。"""
         mocker.patch(
             "fts.data_sources.ifind_sdk_source.IFindSDKSource",
             side_effect=RuntimeError("init fail"),
         )
-        _, agg_mock, fake_tq = self._build_provider(mocker, enhance_enabled=True)
+        _, agg_mock, fake_tq = self._build_provider(mocker, enhance_enabled=True, tqsdk_enabled=True)
         kwargs = agg_mock.call_args.kwargs
         assert len(kwargs["enhancers"]) == 1
         assert kwargs["enhancers"][0] is fake_tq
 
-    def test_enabled_import_failure_degrades(self, mocker):
-        """启用但 IFindSDKSource 模块导入失败 → 仅 TQSDK 注册，不抛异常。"""
+    def test_ifind_sdk_import_failure_degrades(self, mocker):
+        """tqsdk_enabled + IFindSDKSource 模块导入失败 → 仅 TQSDK 注册，不抛异常。"""
         mocker.patch(
             "fts.data_sources.ifind_sdk_source.IFindSDKSource",
             side_effect=ImportError("no ifind sdk"),
         )
-        _, agg_mock, fake_tq = self._build_provider(mocker, enhance_enabled=True)
+        _, agg_mock, fake_tq = self._build_provider(mocker, enhance_enabled=True, tqsdk_enabled=True)
         kwargs = agg_mock.call_args.kwargs
         assert len(kwargs["enhancers"]) == 1
         assert kwargs["enhancers"][0] is fake_tq

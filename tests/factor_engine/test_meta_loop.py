@@ -2006,18 +2006,17 @@ class TestMakeWebCollector:
         )
 
     def test_futures_mode_keeps_futures_path(self):
-        """期货模式保持原行为：主连转换 + 期货 OHLCV + 实时价。"""
+        """期货模式：主连转换 + 期货 OHLCV + 最新收盘（v3.0.0+1 去实时价——FTS 因子管理仅依赖 QuantData，realtime_price 取 QuantData 日线最新 close）。"""
         provider = MagicMock()
         provider._futures.get_ohlcv.return_value = self._make_df()
 
-        with patch("fts.data_futures.get_realtime_prices", return_value={"RB0": 123.4}):
-            collect = _make_web_collector(provider, market="futures")
-            snap = collect("rb")
+        collect = _make_web_collector(provider, market="futures")
+        snap = collect("rb")
 
         provider._futures.get_ohlcv.assert_called_once_with("RB0", days=60)
         provider.get_ohlcv.assert_not_called()
         assert snap["contract_symbol"] == "RB0"
-        assert snap["quote"]["realtime_price"] == 123.4
+        assert snap["quote"]["realtime_price"] == 10.5  # 最新 close（QuantData 日线）
 
 
 # ════════════════════════════════════════════════════════

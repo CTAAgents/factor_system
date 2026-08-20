@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v3.0.0+1
+> 版本: v3.0.0+5
 > 最后更新: 2026-08-18
 
 ---
@@ -62,11 +62,12 @@ FTS（Factor Intelligence System，因子智能系统）是一个独立的期货
 
 #### 1.1.3 主链路切换设计
 
-- **降级链**（`FuturesDataAggregator.DEFAULT_KLINE_SOURCES`）：`QUANTDATA → DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON → AKSHARE → SYNTHETIC`
+- **降级链**（`FuturesDataAggregator.DEFAULT_KLINE_SOURCES`）：v3.0.0+1 起 **K 线唯一数据源 QuantData**——`DUCKDB_CACHE`（QuantData 读取缓存）→ `QUANTDATA`（唯一权威源）→ `SYNTHETIC`（测试/离线兜底）；天勤（TQ_PYTHON/TQSDK 分钟·tick·增强）、通达信实时快照（TDX_LOCAL）、AKShare 即时抓取已从默认链移除（FTS 因子生命周期管理不需要盘中实时数据）
 - **Provider**：`fts/data_sources/quantdata_provider.py`（新增）——DuckDB **只读短连接**直读 kline_history.duckdb，**不依赖** `D:\QuantData\client_v2.py`（避免跨项目 `sys.path.insert` 绝对路径注入，CLAUDE.md §5.9）；路径经 `FTS_QUANTDATA_HOME` 配置解析
 - **品种映射**：FTS `RB0` ↔ QuantData `RB`（88 vs 82 品种，覆盖 SHFE/DCE/CZCE/CFFEX/INE/GFEX 六交易所，大小写转换 `RB→rb` 对齐 TqSdk product）
 - **复权策略**：QuantData `continuous_daily` 自带后复权 adj_factor（±5 日重叠窗口平滑换月）→ 主链路直接消费其复权序列；`RollCalendar.apply_adjustment` 仅作 QuantData 缺失时的降级路径，**避免双重复权**（FTS 单日比率 vs QuantData 重叠窗口存在细微差异，沿用 aggregator cross_check 0.5% 阈值交叉验证）
-- **settle 处理**：QuantData 无 settle → Provider 返回 NaN → aggregator `_enhance_fields`（TQSDKEnhanceSource）补充 → 仍缺则 `(H+L+C)/3` 典型价代理，全程标注"非权威来源"
+- **settle 处理**：QuantData 无 settle → Provider 返回 NaN → `(H+L+C)/3` 典型价代理，全程标注"非权威来源"（GAP-158 L1 降级；v3.0.0+1 起天勤 TQSDKEnhanceSource 已从默认聚合器移除，hold 由 QuantData open_interest 权威覆盖、oi_change 由 QuantDataProvider 差分自算）
+- **天勤源移除（v3.0.0+1，K 线唯一数据源 QuantData）**：默认聚合器不再挂载 TQSDKEnhanceSource / TQSDKSource / TQSDKTickSource——FTS 对 QuantData 采集方式无感，只消费 QuantData 不同周期数据；天勤相关 Source 类保留供显式使用/兼容（不参与默认链路），分钟级默认仅 TDX_LOCAL（显式扩展场景）、tick 默认不注册
 - **期限结构权威构建**：`continuous_map` 取 (main_contract, sub_contract) → `kline_daily` 对齐近远月 close → `term_spread=(sub_close−main_close)/main_close`、`roll_yield=term_spread/时间间隔` → 注入因子面板，D15 算子（ts_term_spread/ts_roll_yield）由"注册未接线"转可用
 - **历史深度边界（2026-08-19 实测）**：QuantData 主力连续历史起点 ~2019（全 82 品种行数 158~2036，中位 1625），**无 FTS kline_cache 的 15 年深度**。当前评估/演化窗口（days=500~700）QuantData 完全覆盖；长窗口回测/早期历史由降级链 kline_cache 承接（非权威但深度兜底），QuantData 不做历史回填拼接（避免数据口径混用）。
 
@@ -74,10 +75,10 @@ FTS（Factor Intelligence System，因子智能系统）是一个独立的期货
 
 | 层 | 归属 | 变更 |
 |:----|:-----|:-----|
-| 权威行情主链路 | QuantData（continuous_daily） | 本计划切换 |
-| FTS 本地缓存 | `data/fts_history.duckdb` kline_cache | 保留为降级 + 非权威字段（settle/vwap/amount）承载 |
+| 权威行情主链路（唯一 K 线源） | QuantData（continuous_daily） | v3.0.0+1 起 K 线唯一数据源（天勤/通达信实时/AKShare 已从默认聚合器移除） |
+| FTS 本地缓存 | `data/fts_history.duckdb` kline_cache | 保留为 QuantData 读取缓存 + 非权威字段（settle/vwap/amount）承载 |
 | 基本面/期限结构 Parquet | `memory/cache/futures_fundamental/`、`futures_term_structure/`（AKShare 源） | 降级层；期限结构改由 QuantData 权威构建后仅作回退 |
-| 实时 tick | QuantData HotDataLayer（TqSdk） | 后续接入（不在本次范围） |
+| 实时 tick | QuantData HotDataLayer（TqSdk） | 后续接入（不在本次范围；FTS 因子生命周期管理不需要 tick） |
 
 ### 项目边界
 
@@ -554,8 +555,8 @@ fts/
 │   ├── ifind_source.py         # iFinD 数据源
 │   ├── wind_source.py          # Wind 数据源
 │   ├── tdx_local_source.py     # 通达信本地 HTTP 统一源（端口 17709，日线+分钟+快照，v2.87.0；GAP-084 股票列扩展已随股票管线剥离至 fts-stock）
-│   ├── tqsdk_source.py         # 天勤 TQSDK 数据源（分钟/日线）
-│   ├── tqsdk_enhance_source.py # 天勤 TQSDK 字段增强源（GAP-083 阶段 C：close_oi→hold、差分→oi_change）
+│   ├── tqsdk_source.py         # 天勤 TQSDK 数据源（分钟/日线，v3.0.0+2 起经 tqsdk_sources_enabled opt-in 默认不挂载）
+│   ├── tqsdk_enhance_source.py # 天勤 TQSDK 字段增强源（GAP-083 阶段 C：close_oi→hold、差分→oi_change；v3.0.0+2 起 opt-in 默认不挂载）
 │   ├── ifind_sdk_source.py     # iFinD 官方 SDK 字段增强源（GAP-083 方案 A 框架保留：settle/pre_settle 权威，无 iFinDPy 权限不启用，pre_settle 走零依赖派生）
 │   ├── macro_aligner.py        # 宏观字段增强层（EDB 时序对齐 + 注入，v2.32.0；v2.101.0 默认源切 EastmoneyMacroSource）
 │   ├── macro_eastmoney_source.py # 东财/中债登宏观数据源（GAP-088 数据源闭环，v2.101.0：东财 RPT_ECONOMY_CPI/CUSTOMS + akshare 中债登 1 年期/美债 10 年期，edb_cache 与 IFindSource 同构互操作）
@@ -759,7 +760,7 @@ AST (ExprNode 树)
 ### 全局数据流
 
 ```
-QuantData continuous_daily (权威主链路, 88品种后复权)   DuckDB kline_cache（降级）· AKShare/通达信/TQSDK（兜底）
+QuantData continuous_daily (权威主链路, 88品种后复权)   DuckDB kline_cache（降级）· AKShare/通达信（兜底）· TQSDK（opt-in, FTS_TQSDK_SOURCES_ENABLED=true 才挂载）
     │                                                       │
     │ OHLCV+持仓 日线 (连续合约, 自带 adj_factor 复权)      │ 日线/分钟 即时获取
     │ QUANTDATA → DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON      │

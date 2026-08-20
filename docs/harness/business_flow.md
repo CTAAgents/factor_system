@@ -1,6 +1,6 @@
 # FTS 业务流程图
 
-> 版本: v3.0.0+1
+> 版本: v3.0.0+5
 > 最后更新: 2026-08-05
 
 ## 全景业务流
@@ -9,11 +9,11 @@
   ┌─────────────────────────────────────────────────────────────────────────┐
   │                          数据接入层                                     │
   │                                                                         │
-  │  TDX_LOCAL (通达信 HTTP 17709) / TQ_PYTHON (天勤) / AKSHARE (降级)      │
+  │  QuantData (唯一权威 K 线源, DuckDB 只读) + Wind/iFinD 字段增强层          │
   │       │                                                                 │
   │       │ 期货 OHLCV K 线数据（主力连续/换月复权）                        │
   │       ▼                                                                 │
-  │  data_futures.py (DuckDB 缓存 + 多源降级链)                              │
+  │  data_futures.py (v3.0.0+1：QuantData 权威主链路 + 显式扩展)              │
   │       │                                                                 │
   │       │ 统一数据接口 (get_panel / get_forward_returns / get_dates)      │
   │       ▼                                                                 │

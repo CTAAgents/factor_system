@@ -1,6 +1,6 @@
 # F.3 因子信号接口契约 v1（FTS → Regime-Driven）— 详细设计
 
-> 版本: v3.0.0+1-draft
+> 版本: v3.0.0+5-draft
 > 创建: 2026-08-20
 > 状态: **设计中**（随 plans/57 阶段 1 实施，步骤 2-3 据此落地）
 > 关联: [57-dual-system-factor-strategy-split-plan.md](../plans/57-dual-system-factor-strategy-split-plan.md)（§三 接口契约草案）、[l3_signal_service.py](file:///d:/Programs/factor_system/fts/factor_engine/l3_signal_service.py)（FTS 侧实现）、RD `signal_client.py`（RD 侧实现）

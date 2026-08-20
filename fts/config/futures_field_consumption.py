@@ -53,7 +53,7 @@ class FieldConsumption(BaseModel):
 _KLINE_FIELDS: list[FieldConsumption] = [
     FieldConsumption(
         field="symbol", group="kline", channel="kline_cache",
-        source="DUCKDB_CACHE → TDX_LOCAL → TQ_PYTHON → AKSHARE → SYNTHETIC",
+        source="QUANTDATA（唯一数据源 v3.0.0+1，+ DUCKDB_CACHE 读取缓存 + SYNTHETIC 兜底）",
         coverage="全 82 品种连续合约（v2.89.0 起全品种）",
         consumers=["全部期货下游"],
     ),

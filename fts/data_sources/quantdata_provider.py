@@ -3,9 +3,9 @@ fts.data_sources.quantdata_provider — QuantData 权威数据源（v2.105.0+32 
 
 权威原则
 --------
-FTS 可消费的**权威数据仅限 D:\\QuantData**（本机统一金融数据仓库，TqSdk 主源 +
-integrity_checker 完整性校验）。其他来源（AKShare/通达信/天勤/WebSearch）权威性
-受质疑，一律降级为标注来源的兜底层（AGENTS.md 数据源降级链）。
+FTS 因子生命周期管理的 **K 线唯一数据源 = QuantData**（v3.0.0+1 起）：
+FTS 对 QuantData 的采集方式无感，仅只读消费其 DuckDB 库；不再直连天勤/通达信实时/
+AKShare 等外部源（其他来源权威性受质疑，已从默认聚合器移除）。
 
 数据现实（2026-08-19 实测）
 ---------------------------
@@ -21,8 +21,9 @@ integrity_checker 完整性校验）。其他来源（AKShare/通达信/天勤/W
   `sys.path.insert` 绝对路径注入，CLAUDE.md §5.9）；路径经 `FTS_QUANTDATA_HOME` 配置解析。
 - 复权：continuous_daily 自带后复权 adj_factor，主链路直接消费其复权序列；
   与 FTS `RollCalendar` 二选一（Provider 已复权，上层不得再复权，避免双重复权）。
-- settle/amount/pre_settle/oi_change 为 QuantData 无权威源字段（GAP-158）→ 置 NaN，
+- settle/amount/pre_settle 为 QuantData 无权威源字段（GAP-158）→ 置 NaN，
   由 aggregator 增强层补充或典型价/均量代理，全程标注非权威。
+- oi_change 由 hold 一阶差分自算（v3.0.0+1 去天勤 TQSDKEnhanceSource 后的权威派生）。
 
 字段权威矩阵（SSOT，导入管道/演化约束/信号链路共用）
 ------------------------------------------------------
@@ -218,8 +219,9 @@ class QuantDataProvider(BaseFuturesSource):
         """拉取 QuantData 连续合约日线（17 列 kline_cache schema，date 列）。
 
         主链路读取 continuous_daily 的 series_type='main'（后复权连续序列，自带 adj_factor），
-        open_interest → hold。非权威字段（amount/settle/pre_settle/oi_change）置 NaN 由
-        增强层补充（GAP-158）；vwap 用典型价 (H+L+C)/3。
+        open_interest → hold（L0 权威）；oi_change 由 hold 一阶差分自算（v3.0.0+1 去天勤
+        TQSDKEnhanceSource 后由本 Provider 直接提供，无天勤依赖）。非权威字段
+        （amount/settle/pre_settle）置 NaN（GAP-158）；vwap 用典型价 (H+L+C)/3。
         """
         if self._is_circuit_open():
             raise SourceUnavailable(self.source_name, "熔断器 OPEN（连续失败超阈值）")
@@ -251,9 +253,12 @@ class QuantDataProvider(BaseFuturesSource):
         df["date"] = pd.to_datetime(df["date"]).dt.date
         for col in ("open", "high", "low", "close", "volume", "hold"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
-        # 非权威字段（GAP-158）：QuantData 无，置 NaN（float）由增强层补充；
-        # 用 np.nan 而非 pd.NA，保证 np.isnan 兼容（aggregator._derive_pre_settle 依赖）
-        for col in ("amount", "settle", "pre_settle", "oi_change"):
+        # 非权威字段（GAP-158）：QuantData 无 amount/settle/pre_settle，置 NaN（float）
+        # 保持与 aggregator._derive_pre_settle 兼容；oi_change 由 hold 一阶差分自算
+        # （v3.0.0+1 去天勤 TQSDKEnhanceSource 后的权威派生，与旧增强层同口径：
+        # diff().fillna(0.0)）
+        df["oi_change"] = df["hold"].diff().fillna(0.0)
+        for col in ("amount", "settle", "pre_settle"):
             df[col] = np.nan
         # vwap 典型价（amount 不可得时）
         df["vwap"] = (df["high"] + df["low"] + df["close"]) / 3.0
