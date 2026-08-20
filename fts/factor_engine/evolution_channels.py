@@ -362,6 +362,44 @@ class EvolutionChannels:
                 logger.debug("算子因子生成尝试 %d/10 失败: %s", attempt + 1, e)
                 continue
 
+        # 兜底：随机生成 10 次失败（种子/面板偶发）→ 降级为固定简单表达式，
+        # 避免演化链因随机失败中断（宁缺毋滥但不断链）。
+        for fallback_expr in ("ts_mean(close, 5)", "ts_std(close, 10)", "ts_mom(close, 10)"):
+            try:
+                node = parse_expression(fallback_expr)
+                errors, max_lookback = validate_expr(node, registry)
+                if errors:
+                    continue
+                probe_data = (
+                    list(self._owner.cross_section_data.values())[0]
+                    if (self._owner._is_cross_section and self._owner.cross_section_data is not None)
+                    else self._owner.data
+                )
+                sig = evaluate(node, probe_data, registry)
+                sig_arr = sig.values if isinstance(sig, pd.Series) else np.asarray(sig, dtype=float)
+                sig_arr = np.asarray(sig_arr, dtype=float)
+                if sig_arr.size == 0 or np.nanstd(sig_arr) < 1e-8:
+                    continue
+                parent_id = parent.get("factor_id", "?")
+                factor_id = "fct_" + hashlib.md5(f"op_fallback_{parent_id}_{fallback_expr}".encode()).hexdigest()[:8]
+                new_factor = create_operator_factor(
+                    expression=fallback_expr,
+                    name=f"op_fallback_{factor_id[:6]}",
+                    market=self._owner.market,
+                    narrative=f"算子演化兜底: {fallback_expr}",
+                    params={},
+                    trace_id=trace_id,
+                    source="operator_evolution",
+                )
+                new_factor["factor_id"] = factor_id
+                new_factor["parent_id"] = parent_id
+                new_factor["generation"] = generation
+                logger.warning("算子因子随机生成失败，降级兜底表达式: %s", fallback_expr)
+                return new_factor, f"OpFallback: {fallback_expr}"
+            except Exception as fe:  # noqa: BLE001
+                logger.debug("算子因子兜底表达式 %s 失败: %s", fallback_expr, fe)
+                continue
+
         raise RuntimeError(f"无法生成合法算子因子 (10 次尝试均失败, parent={parent.get('name', '?')})")
 
     def _try_operator_engine_evolution(

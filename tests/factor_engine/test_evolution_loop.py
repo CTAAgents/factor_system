@@ -5206,8 +5206,8 @@ class TestGapF16PromoteToElite:
         assert fp is not None
         assert fp.exists()
         data = json.loads(fp.read_text(encoding="utf-8"))
-        # 因子 market=multi → 使用演化上下文市场（v2.104.0+103 默认 energy）
-        assert data["market"] == "energy"
+        # 因子 market=multi → 使用演化上下文市场（v3.0.0+1 全局默认 futures）
+        assert data["market"] == getattr(loop, "market", "futures")
         mock_repo.create_factor.assert_called_once()
 
     def test_promote_bootstrapping_cleans_injected_file(self, tmp_memory_dir, tmp_elite_dir):

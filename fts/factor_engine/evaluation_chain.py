@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from datetime import datetime
 from typing import Any, Optional
 
@@ -1187,6 +1188,19 @@ def cross_section_evaluate_backtest(
     if symbol_ic:
         metrics["symbol_ic"] = symbol_ic
 
+    # GAP-161（演化生成端品种级通道）：品种级特异候选探测——全链分散但单品种
+    # 时序 IC ≥ min_ic 且跨子期一致 ≥2/3 的品种列表；写入 metrics 供晋升放行消费
+    # （域内评估开启时；宁漏标不误标，失败不阻断）。
+    try:
+        from .scope_domain.hooks import scope_domain_enabled
+
+        if symbol_ic and scope_domain_enabled():
+            cands = _detect_symbol_candidates(oos_signal, oos_ret, symbols_list, symbol_ic)
+            if cands:
+                metrics["symbol_candidates"] = cands
+    except Exception as _sc:  # noqa: BLE001
+        logger.warning("品种级候选探测失败（跳过）: %s", _sc)
+
     # scope 域评估（P0 方案）：域内统计量产出（全链口径聚合，开关默认开
     # FTS_SCOPE_DOMAIN_ENABLED=0 回退）；失败不阻断既有评估。
     try:
@@ -1404,6 +1418,52 @@ def _cs_blind_holdout_metrics(
         "holdout_symbols": list(holdout_symbols),
         "detail": {"n_dates": 0, "stratified": False, "blind_pool": True},
     }
+
+
+def _detect_symbol_candidates(
+    oos_signal: np.ndarray,
+    oos_ret: np.ndarray,
+    symbols_list: list[str],
+    symbol_ic: dict[str, float],
+    min_ic: float = 0.02,
+    subperiods: int = 3,
+) -> list[str]:
+    """品种级特异候选探测（GAP-161，演化生成端品种级通道）。
+
+    单品种时序 IC ≥ min_ic 且跨子期一致 ≥2/3（分段 IC 同号占比）→ 候选。
+    全链分散但单品种稳定 = 可能真实特异（非噪声）；宁漏标不误标。
+    """
+    out: list[str] = []
+    for j, sym in enumerate(symbols_list):
+        ic = symbol_ic.get(sym)
+        if ic is None or abs(float(ic)) < min_ic:
+            continue
+        try:
+            s = np.asarray(oos_signal[:, j], dtype=float)
+            r = np.asarray(oos_ret[:, j], dtype=float)
+        except (IndexError, TypeError):
+            continue
+        valid = np.isfinite(s) & np.isfinite(r)
+        s, r = s[valid], r[valid]
+        if len(s) < 60:  # 单品种样本窗下限（约 3 个月）
+            continue
+        seg_ics: list[float] = []
+        for part in np.array_split(np.arange(len(s)), subperiods):
+            ss, rr = s[part], r[part]
+            if len(ss) < 5 or float(np.std(ss)) < 1e-10 or float(np.std(rr)) < 1e-10:
+                continue
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                ic_seg, _ = sp_stats.spearmanr(ss, rr)
+            if not np.isnan(ic_seg):
+                seg_ics.append(float(ic_seg))
+        if len(seg_ics) < 2:
+            continue
+        pos = sum(1 for v in seg_ics if v > 0)
+        ratio = max(pos, len(seg_ics) - pos) / len(seg_ics)
+        if ratio >= 2 / 3:
+            out.append(sym)
+    return out
 
 
 def _cs_sector_coverage(

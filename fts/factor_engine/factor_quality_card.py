@@ -410,6 +410,7 @@ class FactorQualityCard:
         capacity_estimate: float = 10_000_000,
         icir: float = 0.0,
         calmar: float = 0.0,
+        liquidity_scale: float = 1.0,
     ) -> FactorQualityScore:
         """执行评分卡计算。
 
@@ -427,6 +428,8 @@ class FactorQualityCard:
             capacity_estimate: 容量估算 (元)
             icir: ICIR (IC 均值/标准差)
             calmar: Calmar 比率
+            liquidity_scale: 流动性环境缩放系数（plans/59 OPT-08，默认 1.0 不缩放；
+                移仓期/价差扩大时由调用方传 <1 系数下调容量与交易性分）
 
         Returns:
             FactorQualityScore: 完整评分卡
@@ -444,6 +447,7 @@ class FactorQualityCard:
             capacity_estimate=capacity_estimate,
             icir=icir,
             calmar=calmar,
+            liquidity_scale=liquidity_scale,
         )
 
         total_score = self._compute_total(dimension_scores)
@@ -476,6 +480,7 @@ class FactorQualityCard:
         capacity_estimate: float,
         icir: float,
         calmar: float,
+        liquidity_scale: float = 1.0,
     ) -> list[DimensionScore]:
         """计算所有 10 个维度的评分。"""
         scores: list[DimensionScore] = []
@@ -544,8 +549,11 @@ class FactorQualityCard:
             }
         )
 
-        # 5. 容量: 容量估算
+        # 5. 容量: 容量估算（plans/59 OPT-08：流动性环境缩放——移仓期/价差扩大下调）
         capacity_score = _map_capacity_to_score(capacity_estimate, capacity_cfg)
+        from fts.factor_engine.qa.liquidity_env import apply_capacity_scale
+
+        capacity_score = apply_capacity_scale(capacity_score, liquidity_scale)
         scores.append(
             {
                 "name": "capacity_score",
@@ -555,8 +563,9 @@ class FactorQualityCard:
             }
         )
 
-        # 6. 交易性: 换手率
+        # 6. 交易性: 换手率（plans/59 OPT-08：流动性环境缩放）
         tradability_score = _map_turnover_to_score(turnover, turnover_cfg)
+        tradability_score = apply_capacity_scale(tradability_score, liquidity_scale)
         scores.append(
             {
                 "name": "tradability_score",

@@ -34,14 +34,21 @@ logger = logging.getLogger(__name__)
 
 
 def _subchain_waiver_effective_ic(evaluation: Any) -> Optional[float]:
-    """子链放行：effective 子链最大 |mean_ic|（GAP-144）。
+    """子链放行有效 IC：scope 域内 IC 优先（P0 方案），回退 effective 子链最大 |mean_ic|。
 
     Args:
-        evaluation: FactorEvaluation（level_1_backtest.subchain_ic_report 画像）
+        evaluation: FactorEvaluation（含 domain_stats 域内统计 / level_1_backtest.subchain_ic_report 画像）
 
     Returns:
-        effective 子链 max |mean_ic|；无 effective 子链/画像缺失 → None。
+        有效 IC；无有效域/画像 → None。
     """
+    # P0 方案：域内统计量（评估链已产出 domain_stats，全链口径聚合）
+    try:
+        ds = evaluation.get("domain_stats")
+        if isinstance(ds, dict) and ds.get("ic") is not None and float(ds["ic"]) > 0:
+            return float(ds["ic"])
+    except (TypeError, ValueError, AttributeError):
+        pass
     try:
         l1 = evaluation.get("level_1_backtest") or {}
         report = l1.get("subchain_ic_report") or {}
@@ -57,7 +64,7 @@ def _subchain_waiver_effective_ic(evaluation: Any) -> Optional[float]:
 
 
 def _subchain_waiver_view(evaluation: Any) -> Any:
-    """评分卡放行视图：以 effective 子链 IC 替换全链 IC（GAP-144）。
+    """评分卡放行视图：以域内/effective 子链 IC 替换全链 IC（GAP-144 + P0 域内）。
 
     单链特异因子全链 IC 被无效子链稀释，评分卡（ic_score 维度权重 1.0）会因此
     打低分导致 C 级淘汰——放行视图仅替换 ic 字段供评分卡评估，其余评估产物不变
@@ -67,7 +74,7 @@ def _subchain_waiver_view(evaluation: Any) -> Any:
         evaluation: FactorEvaluation（已标记 subchain_waiver=True）
 
     Returns:
-        浅拷贝 evaluation，level_1_backtest.ic 替换为 effective 子链 max |mean_ic|。
+        浅拷贝 evaluation，level_1_backtest.ic 替换为域内/effective 子链 IC。
     """
     eff_ic = _subchain_waiver_effective_ic(evaluation)
     if eff_ic is None:
@@ -80,13 +87,22 @@ def _subchain_waiver_view(evaluation: Any) -> Any:
 
 
 def _subchain_waiver_enabled(owner: Any) -> bool:
-    """读取 L2 子链放行开关（GAP-144，灰度默认关）。"""
+    """读取 L2 子链放行开关（GAP-144；v3.0.0+12 起默认开启，futures/energy 均生效）。"""
     try:
         from fts.config import get_config
 
         return bool(getattr(get_config(), "l2_subchain_waiver_enabled", False))
     except Exception:  # noqa: BLE001 — 配置读取失败保守回退关闭
         return False
+
+
+def _symbol_candidates(evaluation: Any) -> list[str]:
+    """品种级特异候选（评估链 GAP-161 探测：跨子期稳定单品种）。"""
+    try:
+        cands = evaluation.get("symbol_candidates") or []
+        return [c for c in cands if isinstance(c, str)]
+    except AttributeError:
+        return []
 
 
 def _apply_subchain_ic_waiver(
@@ -96,20 +112,23 @@ def _apply_subchain_ic_waiver(
 ) -> Optional[dict[str, Any]]:
     """Verifier 判定子链 IC 放行（GAP-144，plans/49 §B2 晋升入口对齐）。
 
-    仅 energy 链 + 开关开启 + 存在 effective 子链时生效；只豁免 IC/ICIR 两个
-    被全链稀释的维度，其余维度（Sharpe/回撤/OOS/单调性等）失败仍拦截。
+    futures（sector_map 17 链）/ energy 均生效（v3.0.0+12 起去 energy 限制）；
+    GAP-161（v3.0.0+16）：品种级特异候选（symbol_candidates，跨子期稳定）同样
+    豁免 IC/ICIR 被全链稀释维度；其余维度（Sharpe/回撤/OOS/单调性等）失败仍拦截。
 
     Args:
         owner: EvolutionLoop（market/config 读取）
-        evaluation: FactorEvaluation（level_1_backtest.subchain_ic_report 画像）
+        evaluation: FactorEvaluation（domain_stats / subchain_ic_report 画像 /
+            symbol_candidates 品种级候选）
         verifier_result: Verifier.check 输出
 
     Returns:
         豁免后 VerifierResult（passed=True, failure_reasons=[]）或 None（不豁免）。
     """
-    if not (getattr(owner, "market", "") == "energy" and _subchain_waiver_enabled(owner)):
+    if not _subchain_waiver_enabled(owner):
         return None
-    if _subchain_waiver_effective_ic(evaluation) is None:
+    has_symbol = bool(_symbol_candidates(evaluation))
+    if _subchain_waiver_effective_ic(evaluation) is None and not has_symbol:
         return None
     reasons = verifier_result.get("failure_reasons", [])
     kept = [

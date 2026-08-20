@@ -22,7 +22,7 @@ fts.factor_engine.ir_thresholds — 因子 IR 分类门槛（CTA 手册阶段4�
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -73,17 +73,26 @@ def classify_factor_category(factor: Any) -> str:
     return "量价"
 
 
-def factor_ir_threshold(factor: Any) -> float:
+def factor_ir_threshold(factor: Any, regime: Optional[str] = None) -> float:
     """返回因子对应的分类 IR 门槛（手册阶段4）。
+
+    plans/59 OPT-01（GAP-161）：传入 regime 时按乘数调整 IR 门槛
+    （未启用/无 regime → 原值，向后兼容）。
 
     Args:
         factor: 因子元数据（dict 或对象）
+        regime: 当前市场制度（可选）
 
     Returns:
-        IR 门槛（0.30 / 0.35 / 0.40）。
+        IR 门槛（默认 0.30 / 0.35 / 0.40；regime 调整后可为其他值）。
     """
     category = classify_factor_category(factor)
-    return IR_THRESHOLDS.get(category, DEFAULT_IR_THRESHOLD)
+    base = IR_THRESHOLDS.get(category, DEFAULT_IR_THRESHOLD)
+    if not regime:
+        return base
+    from fts.factor_engine.regime_thresholds import apply_regime_multiplier
+
+    return apply_regime_multiplier(base, regime, "min_ir")
 
 
 __all__ = ["IR_THRESHOLDS", "DEFAULT_IR_THRESHOLD", "classify_factor_category", "factor_ir_threshold"]

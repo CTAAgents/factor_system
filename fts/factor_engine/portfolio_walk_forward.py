@@ -253,8 +253,10 @@ class PortfolioWalkForward:
         if test_df.shape[1] < 2:
             return 0.0
         corr = test_df.corr().abs()
-        np.fill_diagonal(corr.values, 0.0)
-        return float(corr.values.max()) if len(corr) > 0 else 0.0
+        # pandas 3: .values 为只读视图，fill_diagonal 需可写副本
+        corr_arr = corr.to_numpy(copy=True)
+        np.fill_diagonal(corr_arr, 0.0)
+        return float(corr_arr.max()) if corr_arr.size else 0.0
 
     def _compute_consistency_score(
         self,

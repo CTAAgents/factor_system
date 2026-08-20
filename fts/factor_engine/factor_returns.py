@@ -226,9 +226,11 @@ class FactorReturnsBuilder:
         """组合内最大因子间 |相关性|（对角线剔除）。"""
         if factor_returns.shape[1] < 2:
             return 0.0
-        corr = factor_returns.corr().abs().values
-        np.fill_diagonal(corr, 0.0)
-        return float(np.nanmax(corr)) if corr.size else 0.0
+        corr = factor_returns.corr().abs()
+        # pandas 3: .values 为只读视图，fill_diagonal 需可写副本
+        corr_arr = corr.to_numpy(copy=True)
+        np.fill_diagonal(corr_arr, 0.0)
+        return float(np.nanmax(corr_arr)) if corr_arr.size else 0.0
 
 
 __all__ = [

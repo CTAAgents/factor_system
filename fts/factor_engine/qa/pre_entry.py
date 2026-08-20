@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,7 @@ def judge_q10_subchain(
     symbol_ic: dict[str, float],
     chain_symbols: dict[str, list[str]] | None = None,
     cfg=None,
+    symbol_guard_passed: Optional[bool] = None,
 ) -> dict:
     """Q10 板块拆解两级判定（plans/49 §B1，产业链内子链特异）。
 
@@ -131,13 +133,18 @@ def judge_q10_subchain(
       - 与有效方向相反的显著子链 → 标记 avoid_chain（该链禁用，不判失败）
       - 无 effective 且存在显著反向 → conflicted（整体方向混乱，判 Q10 失败）
 
+    P2 品种级分支：单品种候选（品种级特异）须过 scope 域内真伪护栏
+    （symbol_guard_passed=True）才判"品种特异可接受"；否则 conflicted
+    （宁漏标不误标——单品种高 IC 无法与过拟合噪声区分时判失败）。
+
     Args:
         symbol_ic: 逐品种时序 IC
         chain_symbols: {子链: [品种]}（None → 懒加载 ENERGY_CHAIN_SUB_SYMBOLS）
         cfg: SubchainProfileConfig（None → 默认）
+        symbol_guard_passed: 品种级护栏结论（P2；None=未启用品种级判定）
 
     Returns:
-        {"verdict": "consistent"|"subchain_specific"|"conflicted",
+        {"verdict": "consistent"|"subchain_specific"|"symbol_specific"|"conflicted",
          "effective_chains": [...], "avoid_chains": [...],
          "passed": bool, "detail": str}
     """
@@ -145,6 +152,20 @@ def judge_q10_subchain(
         SubchainProfileConfig,
         compute_subchain_profile,
     )
+
+    # P2：单品种候选（品种级特异）——须过域内护栏才可接受
+    if symbol_guard_passed is not None and len(symbol_ic) == 1:
+        if symbol_guard_passed:
+            return {
+                "verdict": "symbol_specific", "effective_chains": [], "avoid_chains": [],
+                "passed": True,
+                "detail": "品种特异可接受（scope 域内真伪护栏通过，宁漏标不误标）",
+            }
+        return {
+            "verdict": "conflicted", "effective_chains": [], "avoid_chains": [],
+            "passed": False,
+            "detail": "单品种候选未过真伪护栏（疑似过拟合噪声），判 Q10 失败",
+        }
 
     if chain_symbols is None:
         try:  # 懒加载，避免模块级循环依赖

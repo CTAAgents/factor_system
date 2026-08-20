@@ -13,6 +13,16 @@ domains:
     retention: "永久（随代码版本管理）"
     status: active
 
+  # ── P3 品种特有字段（框架先行，2026-08-20） ─────────────────────
+  # 品种级特异因子数据前提：注册表 YAML 为 SSOT；真实数据源接入后按字段落
+  # memory（增强列，非权威源——缺失降级不阻断因子流程）。写路径须经本域登记。
+  - domain: specific_fields
+    description: 品种特有字段注册表（config/specific_fields.yaml，SSOT）+ 未来采集增强列（memory/cache/specific_fields/{symbol}.parquet，GAP-162）
+    backend: yaml
+    path: config/specific_fields.yaml
+    retention: "永久（随代码版本管理）"
+    status: active
+
   # ── L2 行情库 ──────────────────────────────────────────────────
   # 32-stock-extraction-plan.md P3: 原 market_history 域拆为期货/股票两域
   # （不对称分离：主系统保留期货，股票域迁至 d:\Programs\fts-stock）

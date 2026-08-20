@@ -2097,7 +2097,10 @@ class TestPortfolioLoop:
         code = (
             "def factor_program(data, params):\n"
             "    import numpy as np\n"
-            "    a = data['close'].pct_change(3).to_numpy(dtype=float)\n"
+            "    close = np.asarray(data['close'], dtype=float)\n"
+            "    a = np.zeros_like(close)\n"
+            "    if len(close) > 3:\n"
+            "        a[3:] = (close[3:] - close[:-3]) / np.maximum(np.abs(close[:-3]), 1e-10)\n"
             "    a[np.isnan(a)] = 0.0\n"
             "    return a\n"
         )

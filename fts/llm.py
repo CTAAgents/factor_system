@@ -707,6 +707,11 @@ class OpenAIClient(LLMClient):
         chain_focus_block = (
             f"\n【本批聚焦子链】\n{chain_focus}\n" if chain_focus else ""
         )
+        # P3: 品种级知识聚焦（品种特异因子数据前提——品种特有产业逻辑/数据源）
+        symbol_focus = market_snapshot.get("symbol_focus", "")
+        symbol_focus_block = (
+            f"\n【本批聚焦品种】\n{symbol_focus}\n" if symbol_focus else ""
+        )
         # plans/44 B1: 已注入因子负面样本（≤20 个，防生成机制重复因子）
         negative_names = market_snapshot.get("negative_factor_names") or []
         negative_block = (
@@ -717,6 +722,7 @@ class OpenAIClient(LLMClient):
         )
         return f"""你是因子工程专家（FTS L1 Bootstrapping Agent）。基于市场快照和辩论薄弱维度，生成 {max_candidates} 个期货因子候选。
 {chain_focus_block}
+{symbol_focus_block}
 【市场快照】
 {snapshot_summary}
 {chain_knowledge_block}

@@ -2270,14 +2270,17 @@ class TestBootstrapWithLlmSubchainBatching:
         # 候选数 = 4 批 × 3
         assert len(candidates) == 12
 
-    def test_futures_single_batch(self):
-        """futures 市场保持单批调用（不拆分）。"""
+    def test_futures_chain_batched(self):
+        """futures 市场按 17 产业链分批注入（P1 方案：scope resolver 统一分批）。"""
         m = BootstrappingChain.__new__(BootstrappingChain)
         m.market = "futures"
         m.llm_client = MagicMock()
         m.llm_client.bootstrap_factors.return_value = []
         m._bootstrap_with_llm({}, [], max_candidates=20, trace_id="t1")
-        assert m.llm_client.bootstrap_factors.call_count == 1
+        # 17 链各一批（>=2 即分批生效）
+        assert m.llm_client.bootstrap_factors.call_count >= 2
+        calls = [c[0][0] for c in m.llm_client.bootstrap_factors.call_args_list]
+        assert all("chain_focus" in c for c in calls)
 
 
 class TestL1BudgetConfigPlans41:

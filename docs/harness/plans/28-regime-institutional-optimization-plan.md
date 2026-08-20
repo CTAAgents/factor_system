@@ -1,7 +1,7 @@
 # 28 — Regime 机构级优化实施计划（置信度仓位缩放 + 制度概率混合权重）
 
 
-> 版本: v3.0.0+11
+> 版本: v3.0.0+25
 
 > 状态: ✅ 已实施（T1~T10 全部完成，2026-08-11；实施记录见 [07-operations.md](../07-operations.md) v2.101.0「Regime 机构级优化计划」条目，远期差距登记 GAP-092~095）
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐步实现本计划。步骤使用复选框（`- [ ]`）语法跟踪。

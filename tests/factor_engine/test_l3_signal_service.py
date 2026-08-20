@@ -28,14 +28,18 @@ from fts.factor_engine.l3_signal_service import (
 
 
 def _mk_factor(fid: str, window: int = 5, seed: int = 0) -> dict:
-    """构造简单因子程序（close 的 window 日 pct_change 归一化）。"""
+    """构造简单因子程序（close 的 window 日收益率归一化；ndarray 环境兼容）。"""
     return {
         "factor_id": fid,
         "name": fid,
         "code": (
             "def factor_program(data, params):\n"
             "    import numpy as np\n"
-            "    s = data['close'].pct_change(%d)\n"
+            "    close = np.asarray(data['close'], dtype=float)\n"
+            "    w = %d\n"
+            "    s = np.zeros_like(close)\n"
+            "    if len(close) > w:\n"
+            "        s[w:] = (close[w:] - close[:-w]) / np.maximum(np.abs(close[:-w]), 1e-10)\n"
             "    a = np.asarray(s, dtype=float)\n"
             "    a[np.isnan(a)] = 0.0\n"
             "    return a\n" % window

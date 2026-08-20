@@ -150,7 +150,8 @@ class TestApplySubchainIcWaiver:
         })
         assert result is None  # 开关关 → 不放行
 
-    def test_non_energy_market_blocks(self, monkeypatch):
+    def test_futures_market_allowed(self, monkeypatch):
+        """futures 市场子链放行生效（P1 去 energy 限制，v3.0.0+12 起默认开启）。"""
         _enable_waiver(monkeypatch, True)
         owner = SimpleNamespace(market="futures")
         ev = _evaluation({"能源"}, ic=0.01)
@@ -158,7 +159,7 @@ class TestApplySubchainIcWaiver:
             "passed": False,
             "failure_reasons": ["Level 1 失败: IC=0.0100 < 0.03"],
         })
-        assert result is None
+        assert result is not None and result.get("passed") is True
 
     def test_no_effective_blocks(self, monkeypatch):
         _enable_waiver(monkeypatch, True)

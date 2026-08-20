@@ -1046,6 +1046,7 @@ class TestFactorLevelMonitorJob:
         fake_lfm = _fake_module(LiveFactorMonitor=MagicMock())
         with (
             patch.object(jobs, "PROJECT_ROOT", tmp_path),
+            patch.object(jobs, "_global_market", return_value="energy"),
             patch.dict(sys.modules, {"fts.monitor.live_factor_monitor": fake_lfm}),
         ):
             caplog.set_level(logging.INFO)
@@ -1080,6 +1081,49 @@ class TestFactorLevelMonitorJob:
 
         assert f"因子级监控 完成: factors={len(VALID_CATALOG_STATUS)}" in caplog.text
         assert "非法状态" not in caplog.text
+
+    def test_futures_market_routes_to_futures_db(self, tmp_path, caplog) -> None:
+        """futures 市场：因子级监控路由到 factor_catalog_futures.duckdb（非 energy 库）。"""
+        import duckdb
+
+        db_path = tmp_path / "data" / "factor_catalog_futures.duckdb"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        con = duckdb.connect(str(db_path))
+        try:
+            con.execute(
+                """
+                CREATE TABLE factor_catalog (
+                    factor_id VARCHAR PRIMARY KEY,
+                    name VARCHAR,
+                    code VARCHAR,
+                    params VARCHAR,
+                    status VARCHAR,
+                    market VARCHAR,
+                    is_elite BOOLEAN,
+                    sharpe DOUBLE,
+                    max_drawdown DOUBLE,
+                    ic DOUBLE,
+                    parent_id VARCHAR
+                )
+                """
+            )
+            con.execute("CREATE TABLE factor_evaluations (factor_id VARCHAR, overall_passed BOOLEAN)")
+            con.execute(
+                "INSERT INTO factor_catalog VALUES ('f1','n1','c1','{}','active','futures',TRUE,0.5,0.1,0.05,NULL)"
+            )
+        finally:
+            con.close()
+
+        fake_lfm = _fake_module(LiveFactorMonitor=MagicMock())
+        with (
+            patch.object(jobs, "PROJECT_ROOT", tmp_path),
+            patch.object(jobs, "_global_market", return_value="futures"),
+            patch.dict(sys.modules, {"fts.monitor.live_factor_monitor": fake_lfm}),
+        ):
+            caplog.set_level(logging.INFO)
+            jobs.factor_level_monitor_job()
+
+        assert "因子级监控 完成: factors=1" in caplog.text
 
 
 # ─── GAP-151 数据契约字段完整性断言（v2.105.0+19 分级） ─────

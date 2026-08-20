@@ -1,6 +1,6 @@
 # FTS 配置管理
 
-> 版本: v3.0.0+11
+> 版本: v3.0.0+25
 > 最后更新: 2026-08-10
 
 ---
@@ -85,6 +85,30 @@ FTS 配置采用三级优先级（高→低）：
 | `review_auto_max_ic`（环境变量直读） | float | 0.8 | `FTS_REVIEW_MAX_IC` | 机审 IC 上限：高于疑过拟合/未来函数转人审（C8-2） |
 | `review_auto_min_sharpe`（环境变量直读） | float | 0.5 | `FTS_REVIEW_MIN_SHARPE` | 机审 Sharpe 下限：低于视为低质自动驳回（C8-2） |
 | `review_auto_max_sharpe`（环境变量直读） | float | 30.0 | `FTS_REVIEW_MAX_SHARPE` | 机审 Sharpe 上限：高于疑过拟合/未来函数转人审（C8-2） |
+| `regime_thresholds_enabled`（环境变量直读） | bool | false | `FTS_REGIME_THRESHOLDS_ENABLED` | Regime 条件化门槛总开关（plans/59 OPT-01，GAP-161）：开启后机审 min_ic/min_sharpe、IR 分类门槛（ir_thresholds）、月度复检 M2 健康下限按市场制度乘数调整（乘数表见 `fts/factor_engine/regime_thresholds.py` `RegimeThresholdConfig`，默认全 1.0 恒等）；关闭（默认）回退静态门槛，向后兼容 |
+| `fdr_discount_enabled`（环境变量直读） | bool | false | `FTS_FDR_DISCOUNT_ENABLED` | 跨运行累积 FDR 折扣总开关（plans/59 OPT-02，GAP-162）：开启后晋升多重检验门按 `p_eff = p × discount^retries` 放大 p 值（retries=因子历史评估次数），重试越多显著性要求越严；关闭（默认）回退原 Bonferroni 判定，向后兼容 |
+| `fdr_discount`（环境变量直读） | float | 1.25 | `FTS_FDR_DISCOUNT` | 跨运行 FDR 折扣每次重试的 p 值放大系数（>1 收紧；plans/59 OPT-02） |
+| `fdr_alpha`（环境变量直读） | float | 0.05 | `FTS_FDR_ALPHA` | 跨运行 FDR 折扣显著性水平（p_eff ≤ alpha 判通过；plans/59 OPT-02） |
+| `specific_observe_enabled`（环境变量直读） | bool | true | `FTS_SPECIFIC_OBSERVE_ENABLED` | 特异因子观察期总开关（plans/59 OPT-03，GAP-163）：开启后品种/子链特异画像晋升时写观察期标记（20 天），观察期满由评审复核（`review_specific_observations`）用晋升后真实 OOS 域内 IC 判定固化/撤销/顺延；关闭回退旧"一次判定终身"行为 |
+| `specific_observe_days`（环境变量直读） | int | 20 | `FTS_SPECIFIC_OBSERVE_DAYS` | 特异观察期天数（自然日，近似 20 交易日；plans/59 OPT-03） |
+| `specific_confirm_min_ic`（环境变量直读） | float | 0.02 | `FTS_SPECIFIC_CONFIRM_MIN_IC` | 观察期满域内 \|IC\| 固化下限（≥ 该值固化特异画像；plans/59 OPT-03） |
+| `specific_revoke_ic_decay`（环境变量直读） | float | 0.50 | `FTS_SPECIFIC_REVOKE_IC_DECAY` | 域内 IC 较基线衰减>该比例 → 撤销特异画像回退全链（plans/59 OPT-03） |
+| `data_gate_enabled`（环境变量直读） | bool | true | `FTS_DATA_GATE_ENABLED` | 数据质量-评审联动门禁总开关（plans/59 OPT-05，GAP-165）：开启后评审机审 approved 前注入当期数据质量快照（`data_quality_provider`），缺失率/异常值/多源分歧超严重线 → 标记 data_degraded 暂不 approved（延迟下期）；reject 路径不受影响 |
+| `data_gate_critical_missing`（环境变量直读） | float | 0.20 | `FTS_DATA_GATE_CRITICAL_MISSING` | 数据门禁全表缺失率严重阈值（对齐 data_level_monitor；plans/59 OPT-05） |
+| `data_gate_warning_missing`（环境变量直读） | float | 0.05 | `FTS_DATA_GATE_WARNING_MISSING` | 数据门禁全表缺失率警告阈值（plans/59 OPT-05） |
+| `data_gate_critical_outlier`（环境变量直读） | float | 0.10 | `FTS_DATA_GATE_CRITICAL_OUTLIER` | 数据门禁异常值占比严重阈值（plans/59 OPT-05） |
+| `data_gate_critical_disagreement`（环境变量直读） | float | 0.005 | `FTS_DATA_GATE_CRITICAL_DISAGREEMENT` | 数据门禁多源分歧严重阈值（同字段跨源偏差比例；plans/59 OPT-05） |
+| `review_sla_enabled`（环境变量直读） | bool | true | `FTS_REVIEW_SLA_ENABLED` | 人审 SLA 自动处置总开关（plans/59 OPT-06，GAP-166）：开启后 `enforce_review_sla` 扫描 pending 因子——超 sla_days 未审降权 50%、超 escalation_days 退回 L2 冷却池（degraded + review rejected 留痕），全程机审无需人工介入 |
+| `review_sla_days`（环境变量直读） | int | 5 | `FTS_REVIEW_SLA_DAYS` | 待审超 N 天 → 降权 50%（plans/59 OPT-06） |
+| `review_sla_escalation_days`（环境变量直读） | int | 10 | `FTS_REVIEW_SLA_ESCALATION_DAYS` | 待审超 2N 天 → 退 L2 冷却池（plans/59 OPT-06） |
+| `review_sla_weight_scale`（环境变量直读） | float | 0.5 | `FTS_REVIEW_SLA_WEIGHT_SCALE` | warned 阶段权重缩放系数（plans/59 OPT-06） |
+| `param_robust_enabled`（环境变量直读） | bool | true | `FTS_PARAM_ROBUST_ENABLED` | 参数稳健区动态化总开关（plans/59 OPT-07，GAP-167）：开启后评估链产出 `param_robustness`（网格扰动鲁棒区占比）时，Q3 入库质检按其 verdict 判定（fragile 窄峰参数一票否决）、季度 F3 优先鲁棒区占比判定、月度复检附加窄峰参数预警；缺失回退旧行为（params 非空/档位偏移），向后兼容 |
+| `param_robust_neighborhood`（环境变量直读） | float | 0.20 | `FTS_PARAM_ROBUST_NEIGHBORHOOD` | 数值参数邻域比例（±20%，三档网格；plans/59 OPT-07） |
+| `param_robust_decay`（环境变量直读） | float | 0.30 | `FTS_PARAM_ROBUST_DECAY` | 网格点绩效衰减阈值（> 阈值视为失稳点；plans/59 OPT-07） |
+| `param_robust_min_ratio`（环境变量直读） | float | 0.60 | `FTS_PARAM_ROBUST_MIN_RATIO` | 鲁棒区占比合格线（≥ 该值 → robust；plans/59 OPT-07） |
+| `liquidity_env_enabled`（环境变量直读） | bool | true | `FTS_LIQUIDITY_ENV_ENABLED` | 容量/交易性评分流动性环境动态化总开关（plans/59 OPT-08，GAP-168）：开启后 `FactorQualityCard.evaluate` 支持 `liquidity_scale`（<1 下调 capacity/tradability 分），调用方按流动性快照（移仓窗口/价差比）传入；默认 1.0 不缩放，向后兼容 |
+| `liquidity_scale_min`（环境变量直读） | float | 0.5 | `FTS_LIQUIDITY_SCALE_MIN` | 移仓期容量/交易性分缩放下限系数（plans/59 OPT-08） |
+| `liquidity_spread_warning`（环境变量直读） | float | 1.5 | `FTS_LIQUIDITY_SPREAD_WARNING` | 价差比警告线（当前价差/基准价差 > 该值开始线性下调；plans/59 OPT-08） |
 | `executor_backend` | str | `"thread"` | `FTS_EXECUTOR_BACKEND` | 批量粗筛执行器后端：`thread`/`process`/`dask`/`ray`，可插拔分布式扩展预留（GAP-I502，v2.83.0；默认 thread 保持现状，dask/ray 缺依赖自动降级 process） |
 | `executor_max_workers` | int | 4 | `FTS_EXECUTOR_MAX_WORKERS` | 执行器后端并行工作数（GAP-I502，v2.83.0） |
 | `tick_cache_retention_days` | int | 7 | —（FuturesDataAggregator 构造参数） | tick_cache 保留天数：超过该时长的过期 tick 写入时自动清理（GAP-I503 首期，v2.84.0） |
@@ -227,6 +251,16 @@ FTS 配置采用三级优先级（高→低）：
 | `l3_signal_store_append_window` | bool | `true` | `FTS_L3_SIGNAL_APPEND_WINDOW` | L3 信号矩阵增量窗口追加（plans/52，GAP-139）：窗口推进时对可复用因子仅重算新增交易日 + 窗口回退段（meta `dates_digest` 前缀判定，抽样对照验证不过自动全量零漂移）；`false` 回退"同窗口因子级复用"现行为（跨日全量重算） |
 | QuantData 权威主链路路径（v2.105.0+32，v3.0.0+1 重构） | str | `D:\QuantData` | `FTS_QUANTDATA_HOME` | QuantData 数据仓库根目录：`fts/data_sources/quantdata_provider.py` duckdb 只读短连接直读 continuous_daily/continuous_map/kline_daily；FTS 因子生命周期管理 K 线唯一数据源；默认降级链：DUCKDB_CACHE→QUANTDATA→SYNTHETIC，TDX_LOCAL/AKShare 仅为显式扩展场景，不依赖跨项目 client_v2.py |
 | 信号契约 v1 三列（plans/57，v3.0.0） | — | schema_version=1 / factor_status=pending / factor_scope=`{"subchain_scope":"all"}` | — | `l3_signal_meta` 追加列（幂等迁移）：`schema_version`（契约版本，RD 校验不兼容即降级）、`factor_status`（active/degraded/shadow/retired，FTS 状态传播）、`factor_scope`（subchain_scope + subchain_specific 特异因子链范围）；RD `signal_client` 决策/训练双模式拉取 + 增量幂等 + 新鲜度校验 + 降级熔断（design/F.3） |
+| scope 域评估（P0 方案，v3.0.0+12） | — | enabled="1" | `FTS_SCOPE_DOMAIN_ENABLED` | 域内评估总开关（默认开启；=0 即时回退全链口径）：评估链产出 `domain_stats`、评审域内门禁（AutoReviewPolicy domain_stats 入参）、晋升落库 `metadata.scope_domain`、GAP-144 子链放行默认跟随；品种级特异须过真伪护栏（guard_passed） |
+| scope_domain.min_dates | int | `500` | `FTS_SCOPE_DOMAIN_MIN_DATES` | 域内最小样本窗（交易日，品种级护栏门槛①） |
+| scope_domain.subperiods | int | `3` | `FTS_SCOPE_DOMAIN_SUBPERIODS` | 跨子期一致性检验子期数 K（护栏门槛②） |
+| scope_domain.subperiod_ratio | float | `0.67` | `FTS_SCOPE_DOMAIN_SUBPERIOD_RATIO` | 同号子期占比门槛（≥2/3） |
+| scope_domain.permutation_n | int | `200` | `FTS_SCOPE_DOMAIN_PERMUTATION_N` | 域内置换检验次数（P2 增强位） |
+| scope_domain.schema_version | int | `2` | `FTS_SCOPE_DOMAIN_SCHEMA_VERSION` | 信号契约版本（factor_scope 支持 kind=symbol，v2 幂等迁移，v1 兼容） |
+| l2_subchain_waiver_enabled | bool | `true` | `FTS_L2_SUBCHAIN_WAIVER_ENABLED` | 晋升子链放行开关（GAP-144；v3.0.0+12 起默认开启，futures/energy 均生效，=0 回退） |
+| specific_fields_enabled | bool | `false` | `FTS_SPECIFIC_FIELDS_ENABLED` | 品种特有数据源通道（P3 框架先行，默认关；真实数据源接入时显式开启） |
+| specific_fields_path | str | `config/specific_fields.yaml` | `FTS_SPECIFIC_FIELDS_PATH` | 品种特有字段注册表路径（`{symbol: {field: {source/channel/storage/enabled}}}`） |
+| specific_fields_cache_dir | str | `memory/cache/specific_fields` | `FTS_SPECIFIC_FIELDS_CACHE_DIR` | 品种特有字段数据缓存目录（GAP-162：外部采集脚本写入 `{symbol}.parquet`（date+字段列），enrich 按 date 对齐注入，缺失降级不阻断） |
 
 ### 2.1 G11 日换手口径说明（信号翻转率）
 

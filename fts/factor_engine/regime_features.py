@@ -235,7 +235,11 @@ def cross_symbol_correlation(
     values = triu.stack().values
     if len(values) == 0:
         return 0.0
-    return float(np.nanmean(values))
+    # 常量品种（收益全 0）→ 相关为 NaN → 按 0 处理（无相关性信息）
+    finite_vals = values[np.isfinite(values)]
+    if len(finite_vals) == 0:
+        return 0.0
+    return float(np.mean(finite_vals))
 
 
 # ─── 综合特征提取 ──────────────────────────────────────────

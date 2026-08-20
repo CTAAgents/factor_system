@@ -116,8 +116,16 @@ def build_qa_review(
         ),
         QaItem(
             "Q3", "参数遍历网格",
-            bool(params),
-            detail=f"params={'有' if params else '无'}（晋升已过 WalkForward≥2 窗口门，参数稳健性由评估链保证）",
+            bool(params)
+            and (not ((evaluation or {}).get("param_robustness") or {}).get("verdict") == "fragile"),
+            detail=(
+                f"params={'有' if params else '无'}"
+                + (
+                    f" · 参数稳健区: {((evaluation or {}).get('param_robustness') or {}).get('detail', '')}"
+                    if ((evaluation or {}).get("param_robustness") or {}).get("verdict")
+                    else "（晋升已过 WalkForward≥2 窗口门，参数稳健性由评估链保证）"
+                )
+            ),
             one_vote=True,
         ),
         QaItem(
@@ -908,6 +916,35 @@ class EliteStore:
             print(f"[evo] 多重检验未通过 [{factor_name}]: Bonferroni p={p_str}, adjusted_t={t_str}")
             return None
 
+        # ── plans/59 OPT-02（GAP-162）：跨运行累积 FDR 折扣 ──
+        # Bonferroni 只控单次批次；因子历史评估次数越多，显著性要求越严
+        # （p_eff = p × discount^retries）。默认关闭（FTS_FDR_DISCOUNT_ENABLED），
+        # 显式开启生效；折扣判定异常回退原多重检验结果（不阻断晋升）。
+        try:
+            from fts.factor_engine.fdr_discount import FdrDiscountConfig, fdr_passed
+
+            fdr_cfg = FdrDiscountConfig.from_env()
+            if fdr_cfg.enabled:
+                bonf_p = level_3.get("bonferroni_p")
+                if isinstance(bonf_p, float):
+                    fid = (
+                        factor.get("factor_id", "")
+                        if hasattr(factor, "get")
+                        else getattr(factor, "factor_id", "")
+                    )
+                    retries = len(repo.get_evaluations(fid, limit=50)) if fid and repo else 0
+                    if not fdr_passed(bonf_p, retries, fdr_cfg):
+                        capped = min(retries, fdr_cfg.max_retries_cap)
+                        p_eff = min(1.0, bonf_p * (fdr_cfg.discount**capped))
+                        print(
+                            f"[evo] ★ 多重检验未通过 [{factor_name}]: "
+                            f"跨运行重试折扣后 p_eff={p_eff:.4f} > alpha={fdr_cfg.alpha}"
+                            f"（历史评估 {retries} 次）"
+                        )
+                        return None
+        except Exception:  # noqa: BLE001 — 折扣判定异常回退原多重检验结果
+            logger.warning("[eval-gate] FDR 折扣判定异常，回退原多重检验结果", exc_info=True)
+
         # ── GAP-121 评估链修复: WalkForward 多窗口 OOS 强制门 ──
         # 未产出 ≥2 个样本外窗口（多窗口一致性验证不可行）禁止晋升——单一 OOS
         # 切片 IC 无法排除演化在训练数据上反复选优的数据窥探（此前 n_windows<2
@@ -953,7 +990,33 @@ class EliteStore:
         # 供评审域内门禁 / 信号契约 v2 / 退化域内口径消费（域内评估默认开）。
         _scope_ds = (evaluation or {}).get("domain_stats")
         if isinstance(_scope_ds, dict) and _scope_ds:
+            # GAP-161：品种级特异候选（评估链探测）→ scope 升级为 symbol
+            # （演化生成端品种级通道：全链分散但单品种跨子期稳定）
+            _syms: list[str] = []
+            try:
+                _cands = (evaluation or {}).get("symbol_candidates") or []
+                _syms = [c for c in _cands if isinstance(c, str)]
+            except AttributeError:
+                _syms = []
+            if _syms:
+                _scope_ds["scope"] = {
+                    "kind": "symbol",
+                    "symbols": _syms[:1],
+                    "evidence": (_scope_ds.get("scope") or {}).get("evidence", {}),
+                }
+                _scope_ds["n_symbols"] = 1
             record["scope_domain"] = _scope_ds
+
+        # ── P2 过渡保护：无画像因子标记 scope_pending（观察期）──
+        # 晋升初期无子链/域画像（subchain_ic_profile / domain_stats）时，评审对
+        # "全链低质"转人审而非直接拒绝（宁缺毋滥→过渡观察，不误杀真特异）；
+        # 画像由 subchain_eval 批量回填后自然消除（scope_pending=False）。
+        _l1_ev = (evaluation or {}).get("level_1_backtest") or {}
+        _has_profile = bool(
+            _scope_ds
+            or (_l1_ev.get("subchain_ic_report") or {}).get("subchain_ic_profile")
+        )
+        record["scope_pending"] = not _has_profile
 
         # ── GAP-135 ① 评审质检结论门禁：一票否决项未过（禁止入库）禁止晋升 ──
         # Q1-Q3 一票否决项任一未过（未来函数/逻辑未文档化/参数未网格）即结论「禁止入库」，
@@ -1235,6 +1298,25 @@ class EliteStore:
                 "orthogonalized_basis": factor.get("orthogonalized_basis", []),
                 "orthogonal_signal": factor.get("orthogonal_signal", []),
             }
+            # ── plans/59 OPT-03（GAP-163）：特异因子观察期标记 ──
+            # 品种/子链特异画像不"一次判定终身"——晋升时写观察期标记，
+            # 观察期满由巡检用真实 OOS 域内 IC 复核固化/撤销（specific_observe.py）。
+            try:
+                from fts.factor_engine.specific_observe import (
+                    SpecificObserveConfig,
+                    build_observe_marker,
+                )
+
+                _so_cfg = SpecificObserveConfig.from_env()
+                if _so_cfg.enabled:
+                    _sd = (evaluation or {}).get("domain_stats") or {}
+                    _kind = (_sd.get("scope") or {}).get("kind")
+                    if _kind in ("symbol", "chain"):
+                        metadata["specific_observe"] = build_observe_marker(
+                            datetime.now(), _sd.get("ic"), _so_cfg
+                        )
+            except Exception:  # noqa: BLE001 — 观察期标记失败不阻断晋升
+                logger.warning("[promote] 特异观察期标记失败（跳过）", exc_info=True)
             # energy 链因子落子链画像（symbol_ic → 显著性护栏 → metadata；非 energy 不触发）
             if factor_market == "energy":
                 sic = (l1 or {}).get("symbol_ic") or {}

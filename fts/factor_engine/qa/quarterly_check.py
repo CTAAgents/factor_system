@@ -28,6 +28,8 @@ CORR_HIGH_THRESHOLD = 0.6
 COND_IC_CHANGE_THRESHOLD = 0.50
 # F3: 参数档位偏移标记阈值
 PARAM_STEP_THRESHOLD = 1
+# F3 升级（plans/59 OPT-07）：参数鲁棒区占比合格线（对齐 ParamRobustnessConfig 默认）
+PARAM_ROBUST_MIN_RATIO = 0.60
 
 QUARTERLY_ITEMS: list[str] = ["F1", "F2", "F3", "F4", "F5", "F6"]
 
@@ -41,8 +43,17 @@ def quarterly_recheck(
     sector_consistent: Optional[bool] = None,
     subchain_verdict: Optional[dict] = None,
     baseline_effective_chains: Optional[list] = None,
+    regime_change: Optional[str] = None,
+    param_robust_ratio: Optional[float] = None,
 ) -> dict:
     """季度全量复检（手册 6.6 F1-F6）。
+
+    F3 升级（plans/59 OPT-07）：传入 param_robust_ratio（参数鲁棒区占比）时优先按
+    鲁棒区判定（< 0.60 窄峰参数标记）；缺失回退 param_steps 档位偏移判定（向后兼容）。
+
+    F5 升级（plans/59 OPT-01）：传入 regime_change 时触发"门槛调整告警"——
+    评审门槛已按新 regime 调整，需复核门槛适配性（原 cond_ic_change 条件 IC
+    变化检测保留为并行维度）。
 
     F6 两级重构（plans/49 §B4）：跨产业链方向一致（外层，sector_consistent）+ 产业链内
     子链特异可接受（内层，subchain_verdict=judge_q10_subchain 输出）——单链特异不再判
@@ -57,6 +68,7 @@ def quarterly_recheck(
         sector_consistent: 跨产业链板块 IC 方向是否仍一致（False 标记）
         subchain_verdict: judge_q10_subchain 输出（内层子链特异判定；None=不启用内层）
         baseline_effective_chains: 入库时 effective 子链集合（供漂移检测）
+        regime_change: 评审门槛 regime 变化描述（如 "oscillate→trend"，非 None 触发门槛调整告警）
 
     Returns:
         dict: {
@@ -79,7 +91,15 @@ def quarterly_recheck(
     else:
         _item("F2", layered_ratio < 0.8, f"分层多空收益与入库基准比值={layered_ratio:.2f}（<0.8 标记）")
 
-    if param_steps is None:
+    # F3 升级（plans/59 OPT-07）：参数鲁棒区占比优先判定（窄峰参数标记），
+    # 缺失回退档位偏移（向后兼容）
+    if param_robust_ratio is not None:
+        _item(
+            "F3",
+            param_robust_ratio < PARAM_ROBUST_MIN_RATIO,
+            f"参数鲁棒区占比={param_robust_ratio:.2f}（< {PARAM_ROBUST_MIN_RATIO:.0%} 窄峰参数风险）",
+        )
+    elif param_steps is None:
         _item("F3", False, "参数最优性验证数据缺失，无法判定")
     else:
         _item(
@@ -97,7 +117,15 @@ def quarterly_recheck(
             f"新增高相关（>{CORR_HIGH_THRESHOLD:.0%}）对={new_high_corr_pairs}（>0 需正交化）",
         )
 
-    if cond_ic_change is None:
+    # F5 升级（plans/59 OPT-01）：评审门槛 regime 变化 → 门槛调整告警
+    # （原 cond_ic_change 条件 IC 变化检测保留为并行维度）
+    if regime_change is not None:
+        _item(
+            "F5",
+            True,
+            f"门槛调整告警：评审门槛随 regime 变化（{regime_change}）已调整，需复核门槛适配性",
+        )
+    elif cond_ic_change is None:
         _item("F5", False, "Regime 条件 IC 更新数据缺失，无法判定")
     else:
         _item(

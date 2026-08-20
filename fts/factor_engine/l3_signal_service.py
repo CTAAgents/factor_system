@@ -399,9 +399,11 @@ def persist_signal_matrix(
             None 时回退空参数哈希——仅限测试/兼容路径，主流程必须传真值）
         factor_status_map: factor_id → factor_status（active/degraded/shadow/retired，
             plans/57 契约 v1 状态传播；None 落默认 pending）
-        factor_scope_map: factor_id → {"subchain_scope": str|list, "subchain_specific": list}
-            （plans/57 契约 v1 特异因子链范围；None 落通用 {all, []}）
-        schema_version: 契约版本（FTS 侧契约变更时递增，RD 校验不兼容即降级）
+        factor_scope_map: factor_id → scope 定义（plans/57 契约 v1：{"subchain_scope":
+            str|list, "subchain_specific": list}；P2 契约 v2 扩展：{"kind": "all"|"chain"|
+            "symbol", "chains": [...], "symbols": [...], "evidence": {...}}——JSON 列直通，
+            写入方按因子 metadata.scope_domain 构造；RD 不识别 v2 时按 schema_version 降级）
+        schema_version: 契约版本（FTS 侧契约变更时递增，RD 校验不兼容即降级；P2 起支持 2）
 
     Returns:
         写入成功返回 True

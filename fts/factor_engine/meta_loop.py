@@ -953,9 +953,17 @@ def factor_program(data, params):
                 )
                 return []
             raw_candidates: list[dict[str, Any]] = []
-            if self.market == "energy" and max_candidates >= 8:
-                # D2: 按四大化工子链分批（每批独立 chain_focus，提升多样性与总量）
-                batches = self._energy_subchain_batches(max_candidates)
+            if max_candidates >= 8:
+                # P1 方案：futures 17 链 / energy 子链分批注入（每批独立 chain_focus，
+                # 提升多样性与品种/子链聚焦；scope resolver 统一加载，失败回退单批）
+                try:
+                    from .scope_domain.hooks import chain_focus_batches
+
+                    batches = chain_focus_batches(self.market, max_candidates)
+                except Exception:  # noqa: BLE001 — 分批失败回退单批
+                    batches = []
+                if not batches:
+                    batches = [("", max_candidates)]
                 for focus, per_batch in batches:
                     batch_snapshot = dict(market_snapshot)
                     batch_snapshot["chain_focus"] = focus

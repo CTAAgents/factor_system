@@ -1,0 +1,44 @@
+# config/specific_fields.yaml — 品种特有字段注册表（P3 框架先行）
+#
+# 目的：为品种级特异因子的"数据前提"提供注册+加载通道。
+# 通用 fundamental 9 字段为全品种统一 schema，无法表达品种特有逻辑（如特定
+# 交割库库存、船运贴水、产业政策代理量等）；本表按品种注册特有条目。
+#
+# 结构: {symbol: {field: {source, channel, storage, description, enabled}}}
+#   - source: 数据来源（如 akshare/ifind/手工/占位）
+#   - channel: 采集通道（占位框架阶段无真实采集，后续 GAP 接入）
+#   - storage: 落库域（parquet/memory；写路径须在 storage_landscape 登记）
+#   - enabled: 是否启用（false=注册但未采集，加载器跳过不告警）
+#
+# 首批为占位条目（source=placeholder，不采集）；真实数据源接入列为后续 GAP。
+# 消费方: fts/factor_engine/scope_domain/specific_fields.py  load_specific_fields()
+
+version: 1
+
+fields:
+  # 原油（SC0）：中东原油到岸贴水（品种特有贸易流结构）——首个可落地字段
+  # 数据经外部采集脚本写入 memory/cache/specific_fields/SC0.parquet（date + 字段列，
+  # 与 kline 面板 date 对齐）；enrich_specific_fields 按启用清单注入，缺失降级不阻断。
+  SC0:
+    sc_freight_premium:
+      source: manual_import
+      channel: file
+      storage: memory
+      description: 中东原油到岸贴水代理（外部采集导入 memory/cache/specific_fields/SC0.parquet）
+      enabled: true
+  # 贵金属（AU0）：金银比代理（黄金/白银相对定价，跨品种特有）
+  AU0:
+    au_ag_ratio:
+      source: placeholder
+      channel: none
+      storage: memory
+      description: 金银比代理（占位未采集）
+      enabled: false
+  # 航运（EC0）：集运欧线运价指数（品种独有运费结构）
+  EC0:
+    scfi_index:
+      source: placeholder
+      channel: none
+      storage: memory
+      description: 集运欧线运价指数（占位未采集）
+      enabled: false

@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v3.0.0+11
+> 版本: v3.0.0+25
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,20 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v3.0.0+25** | **2026-08-20** | **plans/59 OPT-08 容量/交易性评分流动性环境动态化（GAP-168）：新增 liquidity_env 缩放纯函数 + FactorQualityCard.evaluate liquidity_scale 接入 + 13 测试；plans/59 八项优化全部完成** |** |
+| **v3.0.0+24** | **2026-08-20** | **plans/59 OPT-07 参数稳健区动态化（GAP-167）：新增 param_robustness 网格扰动/鲁棒区检测纯函数 + Q3/F3/月度复检三接入点 + 19 测试** |** |
+| **v3.0.0+23** | **2026-08-20** | **plans/59 OPT-05 数据质量-评审联动（GAP-165）+ OPT-06 人审 SLA 自动降级（GAP-166）：新增 data_gate/review_sla 纯函数 + review_inplace 数据门禁 + enforce_review_sla 全程机审 + 27 测试** |** |
+| **v3.0.0+22** | **2026-08-20** | **plans/59 OPT-04 IC 口径一致性校验（GAP-164）：新增 ic_consistency 纯函数 + review_inplace 接入（漂移转人审）+ 12 测试** |** |
+| **v3.0.0+21** | **2026-08-20** | **plans/59 OPT-03 特异因子观察期与 OOS 前瞻复核（GAP-163）：新增 specific_observe 观察期/贝叶斯收缩/OOS 复核纯函数 + 晋升落库标记 + review_specific_observations 复核入口 + 20 测试** |** |
+| **v3.0.0+20** | **2026-08-20** | **plans/59 OPT-02 跨运行累积 FDR 折扣（GAP-162）：新增 fdr_discount 折扣纯函数 + evolution_promote 多重检验门接入 + 14 测试** |** |
+| **v3.0.0+19** | **2026-08-20** | **docs: 08-gap-analysis 全量瘦身校正——删除 v2.104.0 前关闭的早期差距条目与第 3 节差距详情、重编号冲突（GAP-152/153→176/177、GAP-154~158→169~173、L系列 161/162→174/175）、统一总览口径并跑通 verify_doc_consistency** |** |
+| **v3.0.0+18** | **2026-08-20** | **plans/59 OPT-01 Regime 条件化门槛（GAP-161）：新增 regime_thresholds 乘数查表 + AutoReviewPolicy/IR 分类门槛/月度M2/F5 四接入点 + 19 测试** |** |
+| **v3.0.0+17** | **2026-08-20** | **fix: SC0 贴水采集脚本骨架（scripts/collect_specific_fields.py，manual csv/json 导入→parquet 幂等 upsert，placeholder 报告位）+ 预存失败 29 项修复——① pandas3 read-only：factor_returns.max_abs_correlation / portfolio_walk_forward._max_corr 改 to_numpy(copy=True)（连带修复 portfolio_loop measured 7 项）；② v3.0.0+1 市场反转断言：test_promote_success/test_default_database_path/tqsdk 默认解耦；③ v2.105.0+16 energy 训练池 12→14（含橡胶）；④ GAP-160 holdout_panel 最小装配补齐（g11/g4 5 处）；⑤ GAP-149 状态枚举 decaying→degraded；⑥ regime_features 常量品种相关 NaN→0；⑦ l3_signal_service 因子代码 ndarray 兼容；测试 +5（collect_specific_fields）** |** |
+| **v3.0.0+16** | **2026-08-20** | **feat(GAP-161/162): 演化生成端品种级通道 + 品种特有数据源真实接入——GAP-161 评估链 _detect_symbol_candidates 探测（跨子期稳定单品种，宁漏标不误标）+ 晋升 Verifier 品种级放行（symbol_candidates 豁免 IC/ICIR 稀释）+ 落库 scope 升级 kind=symbol；GAP-162 specific_fields 真实 parquet 加载通道（date 对齐注入，缓存缺失降级不阻断）+ SC0.sc_freight_premium 首个启用字段 + settings specific_fields_cache_dir；测试 +4（探测 2/真实注入 1/缺失降级 1）** |** |
+| **v3.0.0+15** | **2026-08-20** | **feat(P3): 品种特有数据源通道框架——config/specific_fields.yaml 注册表（SC0/AU0/EC0 占位条目）+ scope_domain/specific_fields.py 加载器（enabled 过滤/注入降级不阻断）+ settings specific_fields 配置（默认关）+ llm.py symbol_focus 品种级知识聚焦 prompt 块 + storage_landscape 登记 specific_fields 域（planned）** |** |
+| **v3.0.0+14** | **2026-08-20** | **feat(P2): 品种级特异因子通道——evaluate_symbol_scope 品种域评估 + symbol_scope_guard 真伪鉴别护栏（样本窗/跨子期/显著性，宁漏标不误标）+ 晋升 scope_pending 过渡保护（无画像全链低质转人审不误杀）+ 评审过渡保护 + Q10 品种级分支（护栏通过才判品种特异）+ 信号契约 v2（factor_scope 支持 kind=symbol/evidence，schema_version=2 幂等，v1 兼容）+ test_scope_contract_v2 6 用例** |** |
+| **v3.0.0+13** | **2026-08-20** | **feat(P1): 特异因子 futures 全链对齐——GAP-144 子链放行去 energy 限制（futures sector_map 17 链生效，域内 IC 优先于 effective 子链画像）+ L1 注入按 futures 17 链分批（chain_focus_batches 统一加载，原仅 energy）+ subchain_eval 扩展 futures（_FuturesEvalAdapter 复用逐品种 IC 算法）；meta_loop 测试改 futures 分批断言** |** |
+| **v3.0.0+12** | **2026-08-20** | **feat(P0): scope 域评估模块——特异因子全流程适配第一步：新建 fts/factor_engine/scope_domain（types/resolver/evaluator/guard/hooks，域内 IC/Sharpe/子期一致/显著性护栏），评估链产出 domain_stats + 晋升落库 metadata.scope_domain + 评审域内门禁（AutoReviewPolicy domain_stats 入参）+ energy 子链 YAML 化（workflows.energy.sub_symbols 替换 ENERGY_CHAIN_SUB_SYMBOLS 硬编码）；开关 FTS_SCOPE_DOMAIN_ENABLED 默认开启可回退；test_scope_domain 19 用例** |** |
 | **v3.0.0+11** | **2026-08-20** | **测试随重构：新增 tests/scripts 运维脚本测试 89 用例（test_rhi_global_setup 23 + test_cleanup_push_scope 40 + test_seeds_yaml 26），CLAUDE.md 测试数同步 709→8303，06-testing.md 补 v3.0.0+10 增量** |** |
 | **v3.0.0+10** | **2026-08-20** | **RHI Harness 自进化落地 + GitHub 推送范围治理：新增 scripts/rhi_global_setup.py 与 scripts/cleanup_push_scope.py；CLAUDE.md 追加 RHI 章节、AGENTS.md 补充反模式表；.gitignore 新增 Push safety 段并解除 seeds/（L1 配置层 26 YAML）误拦；移出 12 个一次性探索脚本跟踪；治理计划登记 plans/58** |** |
 | **v3.0.0+9** | **2026-08-20** | **RHI Harness 自进化落地：新增 scripts/rhi_global_setup.py（FTS 适配版四维评分）；CLAUDE.md 追加 RHI 章节并修正 12→13 项清单笔误；AGENTS.md 补充 10 条反模式表 + verify_doc_consistency 引用 + D:\Knowledge 知识库引用** |** |

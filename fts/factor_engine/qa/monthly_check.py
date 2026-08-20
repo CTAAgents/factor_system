@@ -37,6 +37,8 @@ IR_HEALTH_RATIO = 0.8
 IC_DECAY_WARN = 0.30
 # M5: 排名偏差预警阈值
 RANK_DEV_WARN = 0.10
+# plans/59 OPT-07：参数鲁棒区占比合格线（对齐 ParamRobustnessConfig 默认）
+PARAM_ROBUST_MIN_RATIO = 0.60
 
 MONTHLY_INDICATORS: list[str] = ["M1", "M2", "M3", "M4", "M5"]
 
@@ -61,8 +63,13 @@ def monthly_recheck(
     prev_month_layered_negative: bool = False,
     rank_deviation: Optional[float] = None,
     prev_warn_months: int = 0,
+    regime: Optional[str] = None,
+    param_robust_ratio: Optional[float] = None,
 ) -> dict:
     """月度滚动复检（手册 6.5 M1-M5 + 分级处置路径）。
+
+    plans/59 OPT-01（GAP-161）：传入 regime 时 M2 的 IR 健康下限按乘数调整
+    （未启用/无 regime → 原值，向后兼容）。
 
     Args:
         ic_series: IC 序列（含近 60 日数据）
@@ -72,6 +79,9 @@ def monthly_recheck(
         prev_month_layered_negative: 上月分层收益是否 < 0（M4 连续两月判定）
         rank_deviation: 因子排名 vs 实际持仓排名偏差比例（0-1，None 无法判定）
         prev_warn_months: 上月累计连续预警月数
+        regime: 当前市场制度（可选；调整 M2 IR 健康下限）
+        param_robust_ratio: 参数鲁棒区占比（plans/59 OPT-07，可选；< 0.60 附加预警，
+            不并入 M1-M5 warn_count，避免改变既有处置梯度）
 
     Returns:
         dict: {
@@ -98,12 +108,17 @@ def monthly_recheck(
             "detail": f"60日IC均值={mean:.4f}（健康: 同向且 |IC|>{IC_MIN}）",
         }
 
-    # M2 滚动 60 日 IR（年化）≥ 分类门槛×80%
+    # M2 滚动 60 日 IR（年化）≥ 分类门槛×80%（plans/59 OPT-01：regime 乘数调整健康下限）
     if mean is None or std is None or std <= 1e-12:
         ind["M2"] = {"passed": False, "warned": False, "detail": "IR 样本不足，无法判定"}
     else:
         ir = float(mean / std * np.sqrt(252))
-        health_floor = ir_gate * IR_HEALTH_RATIO
+        eff_ir_gate = ir_gate
+        if regime:
+            from fts.factor_engine.regime_thresholds import apply_regime_multiplier
+
+            eff_ir_gate = apply_regime_multiplier(ir_gate, regime, "min_ir")
+        health_floor = eff_ir_gate * IR_HEALTH_RATIO
         warn = bool(ir < health_floor)
         ind["M2"] = {"passed": not warn, "warned": warn, "detail": f"60日IR={ir:.2f}（健康下限={health_floor:.2f}）"}
 
@@ -165,11 +180,24 @@ def monthly_recheck(
         weight_scale = 1.0
         reason = "全部健康，继续正常服役"
 
+    # plans/59 OPT-07：参数鲁棒区附加预警（< 0.60 窄峰参数风险；不并入 warn_count，
+    # 避免改变既有 M1-M5 处置梯度）
+    if param_robust_ratio is None:
+        param_robust: dict = {"passed": True, "warned": False, "detail": "参数鲁棒区数据缺失，无法判定"}
+    else:
+        pr_warn = param_robust_ratio < PARAM_ROBUST_MIN_RATIO
+        param_robust = {
+            "passed": not pr_warn,
+            "warned": pr_warn,
+            "detail": f"参数鲁棒区占比={param_robust_ratio:.2f}（< {PARAM_ROBUST_MIN_RATIO:.0%} 窄峰参数预警）",
+        }
+
     return {
         "indicators": ind,
         "warn_count": warn_count,
         "prev_warn_months": prev_warn_months,
         "consecutive_warn_months": consecutive,
+        "param_robust": param_robust,
         "action": action,
         "weight_scale": float(weight_scale),
         "reason": reason,

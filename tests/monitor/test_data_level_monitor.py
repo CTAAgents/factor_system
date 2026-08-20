@@ -255,7 +255,7 @@ class TestSchedulerIntegration:
             assert _read_kline_cache(MagicMock(), "RB") is None
 
     def test_job_checks_energy_chain_symbols(self) -> None:
-        """数据级监控检查品种为能化链 12 品种（非动态核心子集）。"""
+        """energy 市场：数据级监控检查品种为能化链符号（非动态核心子集）。"""
         from fts.scheduler import jobs
 
         seen: list[str] = []
@@ -267,11 +267,32 @@ class TestSchedulerIntegration:
         with (
             patch("pathlib.Path.exists", return_value=True),
             patch.object(jobs, "_read_kline_cache", side_effect=fake_read),
+            patch.object(jobs, "_global_market", return_value="energy"),
             patch("fts.data_futures.ENERGY_CHAIN_SYMBOLS", ["SC0", "TA0"]),
         ):
             jobs.data_level_monitor_job()
 
         assert seen == ["SC0", "TA0"]
+
+    def test_job_checks_futures_dynamic_core(self) -> None:
+        """futures 市场：数据级监控检查品种为全期货动态核心池。"""
+        from fts.scheduler import jobs
+
+        seen: list[str] = []
+
+        def fake_read(db_path, sym, limit=120):
+            seen.append(sym)
+            return None  # 无缓存 → 跳过（仅记录）
+
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch.object(jobs, "_read_kline_cache", side_effect=fake_read),
+            patch.object(jobs, "_global_market", return_value="futures"),
+            patch("fts.data_futures.get_dynamic_core_subset", return_value=["RB0", "CU0"]),
+        ):
+            jobs.data_level_monitor_job()
+
+        assert seen == ["RB0", "CU0"]
 
     def test_read_kline_cache_completeness_dedup(self) -> None:
         """GAP-148：双符号变体（SC/SC0）同日期重叠时，完整度去重保留字段完整行。"""
@@ -329,13 +350,15 @@ class TestSchedulerIntegration:
         assert set(out["symbol"]) == {"SC0"}  # 完整行保留
         assert int(out["vwap"].isna().sum()) == 0
 
-    def test_sync_aggregator_has_tqsdk_enhancer(self) -> None:
-        """GAP-148：sync 聚合器注册 TQSDK 增强源（此前 enhancers=[] 致 oi_change 全缺）。"""
+    def test_sync_aggregator_tqsdk_enhancer_optin(self, monkeypatch) -> None:
+        """v3.0.0+1：TQSDK 增强源默认解耦（FTS_TQSDK_SOURCES_ENABLED 默认 false 不注册），
+        显式置 1 时注册（GAP-148 场景恢复）。"""
         from fts.cli import _build_default_aggregator
 
+        monkeypatch.setenv("FTS_TQSDK_SOURCES_ENABLED", "0")
         agg = _build_default_aggregator()
         names = [e.source_name for e in agg.enhancers]
-        assert "TQSDK_ENHANCE" in names
+        assert "TQSDK_ENHANCE" not in names
 
     def test_task_registered(self) -> None:
         """data_level_monitor 任务已注册（v2.104.0+98 内部调度停用后 enabled=False）。"""

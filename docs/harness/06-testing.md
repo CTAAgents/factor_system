@@ -1,6 +1,6 @@
 # FTS 测试策略
 
-> 版本: v3.0.0+11
+> 版本: v3.0.0+25
 > 最后更新: 2026-08-17
 
 ---
@@ -509,6 +509,14 @@ TOTAL                                      20326   1254    94%
 | `tests/scripts/test_energy_chain_degradation_apply.py` | 6 | 能源链退化检测 apply 落库（v2.104.0+64 新建）：CRITICAL 降级（is_elite=false/status=degraded + JSON 移入 _deprecated + status_history 留痕）/ CRITICAL 无 JSON 仍降级 / WARN→shadow 观察池且 JSON 保留 / OK→retain 追加留痕状态不变 / 因子不存在 failed 不中断 / TeeLogger 可调用写文件 |
 | `tests/scripts/test_backfill_factor_quality_audit.py` | 4 | 质检存量回填脚本（GAP-128，v2.104.0+78 新建）：metadata→两表落库 / 幂等重跑不产生重复行 / 伪影 factor_id 强制对齐 catalog 主键（'unknown'/'test_factor' 残留清理）/ dry-run 不写库 |
 | `tests/factor_engine/test_evolution_promote_gap128.py` | 3 | 晋升管线质检落库（GAP-128，v2.104.0+78 新建）：_write_to_duckdb 携带 quality_score/audit_report 落两表 / 缺省不写两表 / 落库失败非阻塞不阻断晋升 |
+| `tests/factor_engine/test_regime_thresholds.py` | 19 | Regime 条件化门槛（plans/59 OPT-01，GAP-161，v3.0.0+18 新建）：normalize_regime 归一 / apply_regime_multiplier 乘数（禁用回退/启用生效/未知回退/默认恒等）/ AutoReviewPolicy.classify regime 集成（默认忽略/乘数生效 IC·Sharpe 双维）/ factor_ir_threshold regime / monthly_recheck M2 健康下限 regime（默认无效果/乘数生效）/ quarterly_recheck F5 门槛调整告警（regime_change 触发 + 原 cond_ic_change 并行保留） |
+| `tests/factor_engine/test_fdr_discount.py` | 14 | 跨运行累积 FDR 折扣（plans/59 OPT-02，GAP-162，v3.0.0+19 新建）：apply_fdr_discount（禁用回退/retries=0 无折扣/乘数放大/p_eff 上限 1.0/cap 生效/负值归零/非数值原样）/ fdr_passed（alpha 边界/重试后失败/无 p 值保守失败/禁用按原值）/ from_env（默认关闭/显式开启/非法回退）；接入点 evolution_promote 多重检验门（p_eff > alpha 拦截） |
+| `tests/factor_engine/test_specific_observe.py` | 20 | 特异因子观察期与 OOS 前瞻复核（plans/59 OPT-03，GAP-163 新建）：build_observe_marker（结构/基线缺失）/ observe_phase（观察期/到期/终态/标记损坏）/ shrink_scope_ic（n≥3 不收缩/n<3 贝叶斯收缩/无输入原样）/ review_specific_oos（confirm/revoke/hold/midzone/未到期/终态）；FactorReviewWorkflow.review_specific_observations 集成（confirm 落库/revoke 清画像+留痕/hold 顺延/观察期跳过/dry-run 不落库） |
+| `tests/factor_engine/qa/test_ic_consistency.py` | 12 | IC 口径一致性校验（plans/59 OPT-04，GAP-164 新建）：check_ic_consistency（一致/漂移列出/权威可指定/单来源不误报/权威缺失不误报/NaN 剔除/自定义容差/默认容差/空输入不误报）；review_inplace 集成（一致 approved/主表与评估历史脱节转人审/无评估不误报） |
+| `tests/factor_engine/qa/test_data_gate.py` | 12 | 数据质量-评审联动门禁（plans/59 OPT-05，GAP-165 新建）：assess_data_quality（ok/warning/critical 三态 + 缺失率/异常值/多源分歧各自触发 + None 不误报 + 自定义阈值）/ data_gate_decision（proceed/defer/disabled）；review_inplace 集成（干净数据 approved/严重异常 defer data_degraded/无 provider 不误伤/reject 不受门禁影响） |
+| `tests/factor_engine/qa/test_review_sla.py` | 15 | 人审 SLA 自动降级（plans/59 OPT-06，GAP-166 新建）：sla_phase（active/warned/escalated 三阶段 + 时间缺失不误伤 + ISO 解析）/ sla_marker（权重缩放）；enforce_review_sla 集成（未超时 no-op/超 N 天降权 50%/超 2N 退冷却池 degraded+rejected 留痕/已处置防重复/dry-run 不落库） |
+| `tests/factor_engine/qa/test_param_robustness.py` | 19 | 参数稳健区动态化（plans/59 OPT-07，GAP-167 新建）：param_perturbations（数值三档网格/非数值保留/原始值兜底/上限截断/空参数）/ compute_param_robustness（高鲁棒区/窄峰 fragile/空网格保守/自定义阈值 + 浮点容差）/ robust_ratio_verdict（阈值边界/disabled 放行）；Q3 集成（无报告回退/robust 通过/fragile 一票否决）/ F3 集成（鲁棒区判定/档位偏移回退）/ 月度复检附加预警（不进 M1-M5 warn_count） |
+| `tests/factor_engine/qa/test_liquidity_env.py` | 13 | 容量/交易性评分流动性环境动态化（plans/59 OPT-08，GAP-168 新建）：liquidity_env_scale（正常 1.0/移仓窗口 scale_min/价差扩大线性下调/极端价差触底/快照缺失不误伤/disabled/自定义下限）/ apply_capacity_scale（缩放/None 不缩放/clamp）；FactorQualityCard.evaluate 集成（默认 1.0 不变/移仓 0.5 下调容量与交易性分/其余维度不受影响） |
 | `tests/test_factor_db_isolation.py` | 5 | 测试因子库隔离验证（GAP-129，v2.104.0+79 新建）：get_db_path 重定向至 tmp 且 futures/energy 分库路由保留 / 4 仓储 `_db_path` 落 tmp / 晋升写入三表（catalog+quality+audit）后真实库三表 COUNT 不变（零污染）/ uses_real_factor_db 豁免标记仍路由真实库路径 / FactorRepository 未显式 market 时跟随全局 FTS_DEFAULT_MARKET（v2.104.0+101） |
 | `tests/scripts/test_verify_factor_db_untouched.py` | 6 | 真实库零污染护栏脚本（GAP-129，v2.104.0+80 新建，plans/43 §4.3）：snapshot 生成（三表 COUNT + 内容指纹）/ 相同快照 check 通过 / 插入检出（COUNT 变化）/ 同 COUNT 修改检出（指纹变化）/ 基线 absent → 库被创建检出（隔离绕过核心回归场景）/ 双侧 absent 通过（CI 无 data/） |
 | `scripts/verify_qa_workflow.py` | CLI 验证 | 因子质检工作流程端到端验证（CTA 手册第六章 v1.3，v2.104.0+22）：真实面板（天勤，SYNTHETIC 兜底）→ Q1-Q10 入库质检（一票否决）→ 三级准入 → 9 部分质检报告 → 月度 M1-M5 / 季度 F1-F6 / 半年度 D1-D4 复检 → 退役 5 红线 → 7 状态机流转 + factor_db 临时库落库 → 看板统计；`--synthetic` 合成面板确定性运行（CI/无网络），`--strict` 严格判定（本地人工质检用），默认退出码绑定链路执行成功；已接入 `.github/workflows/ci.yml` `qa-verify` job（lint/type-check 全绿后执行） |

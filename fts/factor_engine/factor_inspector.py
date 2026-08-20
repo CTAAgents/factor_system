@@ -445,6 +445,19 @@ def _extract_scope_domain(metadata: Any) -> Optional[dict[str, Any]]:
     return sd if isinstance(sd, dict) else None
 
 
+def _meta_flag(metadata: Any, key: str) -> bool:
+    """metadata 布尔标记读取（JSON 字符串或 dict；缺失/非 bool → False）。"""
+    if isinstance(metadata, str):
+        try:
+            import json
+
+            metadata = json.loads(metadata)
+        except (ValueError, TypeError):
+            return False
+    meta = metadata if isinstance(metadata, dict) else {}
+    return bool(meta.get(key))
+
+
 @dataclass
 class AutoReviewPolicy:
     """机审判定策略（C8-2）：IC/Sharpe 边界 + 三态分类。
@@ -485,6 +498,7 @@ class AutoReviewPolicy:
         qa_meta: Optional[dict[str, Any]] = None,
         subchain_profile: Optional[dict[str, dict[str, Any]]] = None,
         domain_stats: Optional[dict[str, Any]] = None,
+        regime: Optional[str] = None,
     ) -> tuple[Optional[ReviewDecision], str]:
         """机审分类（三态）。decision=None 表示转人审。
 
@@ -510,6 +524,8 @@ class AutoReviewPolicy:
             subchain_profile: 子链画像 {子链: {effective, t_stat, mean_ic, ...}}
                 （plans/49 §B2 单链特异放行输入；None/空 = 不启用）
             domain_stats: 域内统计量（metadata.scope_domain，P0 方案）
+            regime: 当前市场制度（bull/bear/oscillate/high_vol/low_vol）；非 None 时
+                min_ic/min_sharpe 按 regime 乘数调整（plans/59 OPT-01，未启用回退原值）
         """
         if ic is None or sharpe is None:
             return None, "IC/Sharpe 缺失，无法机审"
@@ -521,6 +537,16 @@ class AutoReviewPolicy:
             return None, "IC/Sharpe 非有限值"
         if ic_f > self.max_ic or sharpe_f > self.max_sharpe:
             return None, f"疑似过拟合/未来函数 (ic={ic_f:.4f}, sharpe={sharpe_f:.2f} 超上限)"
+
+        # plans/59 OPT-01（GAP-161）：Regime 条件化门槛——min_ic/min_sharpe 按 regime
+        # 乘数调整（未启用/无 regime → 原值）；过拟合上限 max_ic/max_sharpe 不放宽。
+        eff_min_ic = float(self.min_ic)
+        eff_min_sharpe = float(self.min_sharpe)
+        if regime:
+            from .regime_thresholds import apply_regime_multiplier
+
+            eff_min_ic = apply_regime_multiplier(self.min_ic, regime, "min_ic")
+            eff_min_sharpe = apply_regime_multiplier(self.min_sharpe, regime, "min_sharpe")
 
         # P0 方案：scope 域内门禁（域内 IC/Sharpe 达标 → 全链 IC/Sharpe 豁免）
         domain_ok = False
@@ -534,8 +560,8 @@ class AutoReviewPolicy:
                             ic=ic_f,
                             sharpe=sharpe_f,
                             domain_stats=domain_stats,
-                            min_ic=self.min_ic,
-                            min_sharpe=self.min_sharpe,
+                            min_ic=eff_min_ic,
+                            min_sharpe=eff_min_sharpe,
                         )
                         == "approved"
                     )
@@ -544,14 +570,14 @@ class AutoReviewPolicy:
 
         # plans/49 §B2：单链特异放行判定（仅 IC 维度；Sharpe 不放行）
         subchain_eff: list[str] = []
-        if ic_f < self.min_ic and subchain_profile:
+        if ic_f < eff_min_ic and subchain_profile:
             subchain_eff = [
                 c for c, st in subchain_profile.items() if bool(st.get("effective"))
             ]
-        if sharpe_f < self.min_sharpe and not domain_ok:
-            return ReviewDecision.REJECTED, f"低质 (sharpe={sharpe_f:.2f}<{self.min_sharpe})"
-        if ic_f < self.min_ic and not subchain_eff and not domain_ok:
-            return ReviewDecision.REJECTED, f"低质 (ic={ic_f:.4f}<{self.min_ic})"
+        if sharpe_f < eff_min_sharpe and not domain_ok:
+            return ReviewDecision.REJECTED, f"低质 (sharpe={sharpe_f:.2f}<{eff_min_sharpe})"
+        if ic_f < eff_min_ic and not subchain_eff and not domain_ok:
+            return ReviewDecision.REJECTED, f"低质 (ic={ic_f:.4f}<{eff_min_ic})"
 
         # ── 完整质检结论门禁（v2.104.0+89，宁缺毋滥） ──
         qa = qa_meta or {}
@@ -701,6 +727,237 @@ class FactorReviewWorkflow:
         finally:
             conn.close()
 
+    def review_specific_observations(
+        self,
+        market: Optional[str] = None,
+        ic_provider: Optional[Any] = None,
+        commit: bool = True,
+        today: Any = None,
+    ) -> dict[str, Any]:
+        """特异因子观察期满 OOS 复核（plans/59 OPT-03 / GAP-163）。
+
+        扫描 factor_catalog 中带 ``metadata.specific_observe`` 标记的特异因子：
+          - 观察期未满 → 跳过（保持观察态）；
+          - 观察期满 → 用 ``ic_provider(factor_id, marker)`` 取晋升后域内 IC，
+            ``review_specific_oos`` 判定 confirm / revoke / hold；
+              confirm：标记 status=confirmed（特异画像保留）；
+              revoke：删除观察标记 + 清除特异画像（scope_domain.scope.kind → all，
+                     metadata.subchain_specific → False）并留痕 specific_revoke；
+              hold：observe_until 顺延 hold_grace_days（数据不可得宁缺毋滥方向）。
+        ic_provider 为 None 或返回 None（数据不可得）→ hold 顺延，不误固化/误撤销。
+
+        Args:
+            market: 限定市场（None 为全部）
+            ic_provider: (factor_id, marker) -> 晋升后域内 IC；None=数据不可得
+            commit: 是否实际落库（False 为 dry-run）
+            today: 当前日期（None → date.today()）
+
+        Returns:
+            {scanned, observing, review_due, confirmed, revoked, held, errors, decisions}
+        """
+        import json as _json
+        from datetime import date, timedelta
+
+        from fts.factor_engine.specific_observe import (
+            PHASE_OBSERVING,
+            STATUS_CONFIRMED,
+            SpecificObserveConfig,
+            observe_phase,
+            review_specific_oos,
+        )
+
+        cfg = SpecificObserveConfig.from_env()
+        stats: dict[str, Any] = {
+            "scanned": 0,
+            "observing": 0,
+            "review_due": 0,
+            "confirmed": 0,
+            "revoked": 0,
+            "held": 0,
+            "errors": 0,
+            "decisions": [],
+        }
+        conn = self._conn()
+        try:
+            params: list[Any] = []
+            where = "metadata LIKE '%specific_observe%'"
+            if market:
+                where += " AND market = ?"
+                params.append(market)
+            rows = conn.execute(
+                f"SELECT factor_id, name, metadata FROM factor_catalog WHERE {where}",
+                params,
+            ).fetchall()
+        finally:
+            conn.close()
+
+        for fid, name, meta_raw in rows:
+            stats["scanned"] += 1
+            meta = meta_raw if isinstance(meta_raw, dict) else {}
+            if isinstance(meta_raw, str):
+                try:
+                    meta = _json.loads(meta_raw)
+                except (_json.JSONDecodeError, TypeError):
+                    meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
+            marker = meta.get("specific_observe")
+            if not isinstance(marker, dict):
+                continue
+            phase = observe_phase(marker, today, cfg)
+            if phase == PHASE_OBSERVING:
+                stats["observing"] += 1
+                continue
+            stats["review_due"] += 1
+            cur_ic = ic_provider(fid, marker) if callable(ic_provider) else None
+            decision, detail = review_specific_oos(marker, cur_ic, cfg)
+            entry = {"factor_id": fid, "name": name, "decision": decision, "detail": detail}
+            stats["decisions"].append(entry)
+            if decision == "confirm":
+                marker["status"] = STATUS_CONFIRMED
+                marker["reviewed_at"] = str(today or date.today())
+                if commit:
+                    self._repo.update_factor(fid, {"metadata": meta})
+                stats["confirmed"] += 1
+            elif decision == "revoke":
+                # 撤销特异画像：删观察标记 + 回退全链口径（metadata.scope_domain）+ 留痕
+                meta.pop("specific_observe", None)
+                meta["subchain_specific"] = False
+                meta["specific_revoke"] = {
+                    "at": str(today or date.today()),
+                    "factor_id": fid,
+                    **detail,
+                }
+                sd = meta.get("scope_domain")
+                if isinstance(sd, dict) and isinstance(sd.get("scope"), dict):
+                    sd["scope"] = {
+                        "kind": "all",
+                        "chains": [],
+                        "symbols": [],
+                        "evidence": {"revoked_by": "specific_observe"},
+                    }
+                if commit:
+                    self._repo.update_factor(fid, {"metadata": meta})
+                stats["revoked"] += 1
+            else:  # hold：观察期顺延
+                until = marker.get("observe_until")
+                if isinstance(until, str) and until:
+                    try:
+                        due = date.fromisoformat(until) + timedelta(days=cfg.hold_grace_days)
+                        marker["observe_until"] = due.isoformat()
+                    except ValueError:
+                        pass
+                if commit:
+                    self._repo.update_factor(fid, {"metadata": meta})
+                stats["held"] += 1
+
+        return stats
+
+    def enforce_review_sla(
+        self,
+        market: Optional[str] = None,
+        commit: bool = True,
+        today: Any = None,
+    ) -> dict[str, Any]:
+        """人审 SLA 自动处置（plans/59 OPT-06 / GAP-166，全程机审）。
+
+        扫描 factor_catalog 中 pending 因子（服役中且无 factor_reviews 记录）：
+          - 超 sla_days → warned：metadata.review_sla={status:warned, weight_scale:0.5}
+            （降权 50%，组合构建消费 weight_scale）；
+          - 超 escalation_days → escalated：status=degraded（退 L2 冷却池，
+            evolution_seeds 30 日冷却后回归）+ factor_reviews 写 rejected
+            （comment=SLA 超时退冷却池，全程留痕）。
+        已处置（metadata.review_sla 存在且非 active）因子跳过，防重复处置。
+
+        Args:
+            market: 限定市场（None 为全部）
+            commit: 是否实际落库（False 为 dry-run）
+            today: 当前日期（None → date.today()）
+
+        Returns:
+            {scanned, active, warned, escalated, skipped, errors, actions}
+        """
+        import json as _json
+
+        from fts.factor_engine.qa.review_sla import (
+            META_KEY,
+            PHASE_ACTIVE,
+            PHASE_ESCALATED,
+            PHASE_WARNED,
+            ReviewSlaConfig,
+            sla_marker,
+            sla_phase,
+        )
+
+        cfg = ReviewSlaConfig.from_env()
+        stats: dict[str, Any] = {
+            "scanned": 0,
+            "active": 0,
+            "warned": 0,
+            "escalated": 0,
+            "skipped": 0,
+            "errors": 0,
+            "actions": [],
+        }
+        if not cfg.enabled:
+            return stats
+        conn = self._conn()
+        try:
+            params: list[Any] = []
+            where = (
+                "NOT EXISTS (SELECT 1 FROM factor_reviews r WHERE r.factor_id = c.factor_id)"
+                " AND c.is_elite = 1"
+            )
+            if market:
+                where += " AND c.market = ?"
+                params.append(market)
+            rows = conn.execute(
+                f"SELECT c.factor_id, c.name, c.market, c.created_at, c.status, c.metadata "
+                f"FROM factor_catalog c WHERE {where}",
+                params,
+            ).fetchall()
+        finally:
+            conn.close()
+
+        for fid, name, fmarket, created_at, status, meta_raw in rows:
+            stats["scanned"] += 1
+            meta = meta_raw if isinstance(meta_raw, dict) else {}
+            if isinstance(meta_raw, str):
+                try:
+                    meta = _json.loads(meta_raw)
+                except (_json.JSONDecodeError, TypeError):
+                    meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
+            existing = meta.get(META_KEY)
+            if isinstance(existing, dict) and existing.get("status") not in (None, PHASE_ACTIVE):
+                stats["skipped"] += 1  # 已处置（warned/escalated），防重复
+                continue
+            phase = sla_phase(created_at, today, cfg)
+            entry = {"factor_id": fid, "name": name, "phase": phase}
+            stats["actions"].append(entry)
+            if phase == PHASE_ACTIVE:
+                stats["active"] += 1
+                continue
+            if phase == PHASE_WARNED:
+                meta[META_KEY] = sla_marker(PHASE_WARNED, cfg)
+                if commit:
+                    self._repo.update_factor(fid, {"metadata": meta})
+                stats["warned"] += 1
+            else:  # escalated：退 L2 冷却池（degraded 30 日冷却）+ 留痕 rejected
+                if commit:
+                    self._repo.update_factor(fid, {"status": "degraded"})
+                    self._decide(
+                        fid,
+                        ReviewDecision.REJECTED,
+                        comment="[SLA] 待审超 2N 交易日未处置，自动退回 L2 冷却池（全程机审）",
+                        reviewer="auto",
+                    )
+                    meta[META_KEY] = sla_marker(PHASE_ESCALATED, cfg)
+                    self._repo.update_factor(fid, {"metadata": meta})
+                stats["escalated"] += 1
+        return stats
+
     def auto_review(
         self,
         limit: int = 200,
@@ -758,7 +1015,11 @@ class FactorReviewWorkflow:
             "skipped": 0,
         }
 
-    def review_inplace(self, factor_id: str) -> dict[str, Any]:
+    def review_inplace(
+        self,
+        factor_id: str,
+        data_quality_provider: Optional[Any] = None,
+    ) -> dict[str, Any]:
         """就地审核单因子（评审质检阀门，v2.104.0+89）。
 
         评审质检是独立于 L2 的 L2→L3 阀门模块：读取因子完整质检结论
@@ -771,6 +1032,8 @@ class FactorReviewWorkflow:
 
         Args:
             factor_id: 因子 ID
+            data_quality_provider: (factor_id) -> 当期数据质量快照
+                {missing_ratio, outlier_ratio, source_disagreement}（可选，plans/59 OPT-05）
 
         Returns:
             dict: {factor_id, decision: approved/rejected/None, reason}
@@ -787,11 +1050,69 @@ class FactorReviewWorkflow:
             return {"factor_id": factor_id, "decision": None, "reason": "因子不存在"}
         ic, sharpe, metadata = row
         qa_meta = _extract_qa_meta(metadata)
+        # plans/59 OPT-04（GAP-164）：IC 口径一致性校验——主表 ic（权威口径）vs
+        # 最新评估 IC；偏差 > 容差 → 口径漂移告警，转人审（宁缺毋滥，不静默通过）。
+        try:
+            from fts.factor_engine.qa.ic_consistency import check_ic_consistency
+
+            _evals = self._repo.get_evaluations(factor_id, limit=1)
+            _eval_ic = _evals[0].get("level_1_ic") if _evals else None
+            _ic_check = check_ic_consistency({"catalog": ic, "evaluation": _eval_ic})
+            if not _ic_check["consistent"]:
+                self._delete_review(factor_id)
+                return {
+                    "factor_id": factor_id,
+                    "decision": None,
+                    "reason": f"IC 口径不一致告警（{_ic_check['detail']}），转人审",
+                }
+        except Exception:  # noqa: BLE001 — 口径校验失败回退正常评审
+            logger.warning("[review] IC 口径校验失败（跳过）: %s", factor_id, exc_info=True)
         # P0 方案：域内统计量（metadata.scope_domain）传入机审，域内口径优先
         _sd = _extract_scope_domain(metadata)
         decision, reason = AutoReviewPolicy().classify(
             ic, sharpe, qa_meta=qa_meta, domain_stats=_sd
         )
+        # P2 过渡保护：scope_pending（无画像）因子全链低质 → 转人审而非直接拒绝
+        # （宁缺毋滥→过渡观察，不误杀真特异；画像由 subchain_eval 回填后消除）
+        if (
+            decision == ReviewDecision.REJECTED
+            and reason.startswith("低质")
+            and _meta_flag(metadata, "scope_pending")
+        ):
+            self._delete_review(factor_id)
+            return {
+                "factor_id": factor_id,
+                "decision": None,
+                "reason": "scope_pending 过渡保护：无画像全链低质，转人审",
+            }
+        # plans/59 OPT-05（GAP-165）：数据质量门禁——数据严重异常时不写 approved
+        # （延迟下期判定，避免污染评审历史）；reject 路径不受影响（宁缺毋滥）。
+        if decision == ReviewDecision.APPROVED:
+            try:
+                from fts.factor_engine.qa.data_gate import (
+                    DataQualityGateConfig,
+                    assess_data_quality,
+                    data_gate_decision,
+                )
+
+                _dq_cfg = DataQualityGateConfig.from_env()
+                _dq = (data_quality_provider(factor_id) if callable(data_quality_provider) else None) or {}
+                _qa = assess_data_quality(
+                    _dq.get("missing_ratio"),
+                    _dq.get("outlier_ratio"),
+                    _dq.get("source_disagreement"),
+                    _dq_cfg,
+                )
+                if data_gate_decision(_qa, _dq_cfg) == "defer":
+                    self._delete_review(factor_id)
+                    return {
+                        "factor_id": factor_id,
+                        "decision": None,
+                        "reason": f"数据质量异常延迟评审（{_qa['detail']}），暂不 approved",
+                        "data_degraded": True,
+                    }
+            except Exception:  # noqa: BLE001 — 数据门禁失败回退正常评审
+                logger.warning("[review] 数据质量门禁失败（跳过）: %s", factor_id, exc_info=True)
         if decision is None:
             self._delete_review(factor_id)
         else:

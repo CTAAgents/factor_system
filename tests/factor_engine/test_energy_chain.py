@@ -42,8 +42,8 @@ class TestEnergyChainConfig:
     """能源链专属训练链与盲测池配置。"""
 
     def test_train_is_full_energy_chain(self) -> None:
-        """训练链 = 12 个化工品种（四大化工子链；v2.104.0+106 GAP-133 换池 PX0→EG0）。"""
-        assert len(ENERGY_CHAIN_SYMBOLS) == 12
+        """训练链 = 14 个化工品种（四大子链 + 橡胶；v2.105.0+16 增扩 RU0/BR0 入训练池）。"""
+        assert len(ENERGY_CHAIN_SYMBOLS) == 14
         assert ENERGY_CHAIN_TRAIN == ENERGY_CHAIN_SYMBOLS
         assert set(ENERGY_CHAIN_SYMBOLS) == {
             # 能源
@@ -62,6 +62,9 @@ class TestEnergyChainConfig:
             "MA0",
             "UR0",
             "SA0",
+            # 橡胶（v2.105.0+16 增扩）
+            "RU0",
+            "BR0",
         }
 
     def test_train_covers_four_subsectors(self) -> None:
@@ -197,12 +200,12 @@ class TestEnergyChainL1Knowledge:
         assert pool._market == "energy"
 
     def test_meta_loop_energy_default_symbols(self) -> None:
-        """energy 模式下感知层默认品种 = 能化链 12 训练品种（非通用 13 品种；v2.104.0+106 PX0→EG0）。"""
+        """energy 模式下感知层默认品种 = 能化链 14 训练品种（含橡胶；v2.105.0+16 增扩 RU0/BR0）。"""
         from fts.factor_engine.meta_loop import MetaLoop
 
         loop = MetaLoop(market="energy", llm_client=None, web_collector=None)
         assert loop.market == "energy"
-        assert loop.sample_symbols == ["sc", "fu", "bu", "pf", "ta", "eg", "l", "pp", "pg", "ma", "ur", "sa"]
+        assert loop.sample_symbols == ["sc", "fu", "bu", "pf", "ta", "eg", "l", "pp", "pg", "ma", "ur", "sa", "ru", "br"]
 
     def test_meta_loop_energy_chain_knowledge_injected(self) -> None:
         """energy 模式下感知快照注入能化专属市场知识（chain_knowledge）。"""
@@ -213,7 +216,7 @@ class TestEnergyChainL1Knowledge:
         knowledge = snapshot.get("chain_knowledge", "")
         assert knowledge, "energy 模式应注入 chain_knowledge"
         # 核心能化机制关键词
-        for kw in ("训练链 12 品种", "裂解价差", "聚酯链加工差", "库存周期", "链内纵向传导", "子链间相对强弱"):
+        for kw in ("训练链 14 品种", "裂解价差", "聚酯链加工差", "库存周期", "链内纵向传导", "子链间相对强弱"):
             assert kw in knowledge, f"chain_knowledge 缺少能化知识: {kw}"
         # 通用期货模式不注入
         from fts.factor_engine.meta_loop import MetaLoop as _ML

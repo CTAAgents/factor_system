@@ -224,13 +224,13 @@ class TestStatusRepository:
             )
             ok = status_repo.update_factor_status(
                 "fct_s2",
-                "decaying",
+                "degraded",
                 consecutive_ic_negative_months=3,
                 decay_rate_3m=0.25,
             )
             assert ok is True
             factor = factor_repo.get_factor("fct_s2")
-            assert factor["status"] == "decaying"
+            assert factor["status"] == "degraded"
             assert factor["consecutive_ic_negative_months"] == 3
             assert factor["decay_rate_3m"] == 0.25
             assert factor["status_updated_at"] is not None

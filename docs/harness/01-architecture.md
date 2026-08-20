@@ -1,6 +1,6 @@
 # FTS 系统架构文档
 
-> 版本: v3.0.0+11
+> 版本: v3.0.0+25
 > 最后更新: 2026-08-18
 
 ---
@@ -572,6 +572,7 @@ fts/
 │   ├── evolution_audit.py      # 审计/验证 Mixin（34 计划领域 E，2026-08-13）：_run_factor_audit（FactorAuditor 编排 + GAP-F08 冷启动走航优先）/ _run_walkforward_oos（独立走航）/ _run_backtest_pipeline（BacktestPipeline 薄包装）/ _run_ablation_check（消融，_ABLATION_* 类常量 + _is_blocking_ablation）/ _run_robustness_check / _run_shap_analysis / _run_causal_validation / _build_wf_config（staticmethod 纯函数），组件 auditor/backtest_pipeline/ablation_experiment/robustness_tester/shap_analyzer/causal_validator 装配于主类；_signal_cache 与 B 域共享保留引用
 │   ├── evolution_review.py     # 定期评审/数据质量 Mixin（34 计划领域 F，2026-08-13）：_run_periodic_factor_review（精英因子定期重评估：自动淘汰 GAP-I305 + 衰减反馈联动 + LogicMonitor 集成 + 状态报告）/ _get_factor_data_for_review / _register_factor_baseline / _check_factor_data_quality（均 DataQualityMonitor 薄包装），组件 data_quality_monitor 与 A 域共享；elite_tracker/feedback_loop/logic_monitor 装配于主类
 │   ├── energy_qa_review.py   # 能化链评审+质检统一管道（v2.104.0+87，方案A）：合并l2_review_energy_job 与 energy 定期质检三路检测为单一管道[0]面板→[1]重审(run_reaudit market=energy, 不合格→shadow)→[2]退化检测(单维度命中取严: |IC|<ic_threshold/降幅>drop_threshold/斜率observe→shadow; 降幅>=drop_severe/斜率retired→degraded+JSON移_deprecated)→[3]生命周期收口(AutoRetire + 冷却期回归: degraded 30交易日到期自动回归复核, 连续2次不达标→retire)→[4]Inspector→[5]统一报告; 宁严勿松——不合格因子不进组合, shadow/冷却期兜底可回归
+│   ├── scope_domain/         # 品种/产业链特异因子域评估模块（P0-P3 方案，v3.0.0+12~15）：types（FactorScope/DomainStats 契约）· resolver（sector_map 17 链 + energy 子链 YAML SSOT）· evaluator（域内 IC/Sharpe/子期一致/半衰期 + evaluate_symbol_scope 品种级）· guard（真伪鉴别护栏：样本窗≥500/跨子期≥0.67/显著性，宁漏标不误标）· hooks（评估链 domain_stats 产出/评审域内门禁/L1 按链分批/品种级护栏）· specific_fields（品种特有字段注册+加载框架，P3）；开关 FTS_SCOPE_DOMAIN_ENABLED 默认开启可回退；GAP-144 子链放行 futures 17 链生效；信号契约 v2 factor_scope 支持 kind=symbol
 │   ├── evolution_prefilter.py  # 候选预筛 Mixin（34 计划领域 H，2026-08-13）：_quick_prefilter（快速预筛三元组：信号变化/标准差/快速 IC，市场自适应阈值）/ _cross_section_prefilter（横截面真实截面 IC，GAP-X01）/ _check_factor_runtime（后代运行时校验，复用 BacktestPipeline 执行路径），纯读全局上下文 data/market/forward_returns/cross_section_*/_is_cross_section；阈值自适应分支 futures/energy（期货类市场 0.01，其余 0.02，v2.105.0+11 GAP-146 energy 并入期货分支）
 │   ├── evolution_promote.py   # 精英晋升/持久化 Mixin（34 计划领域 C，2026-08-13）：_promote_to_elite（精英晋升全流程：去重/结构簇配额/L2 准入去冗余/正交化闭环/高IC筛查/多重检验/影子池（v2.103.0+20 起默认关闭，FTS_EVOLUTION_SHADOW_OBSERVE=1 恢复）/种子溯源/追踪器注册，@_release_repo_after）/ _write_to_duckdb（DuckDB 主存储幂等写入）/ _scan_elite_correlations / _check_elite_correlation / _count_cluster_members / _orthogonalize_via_basis（Gram-Schmidt 基底）/ _orthogonalize_candidate（单参照 OLS）/ _load_elite_parent_factors / _write_seed_correlation_index / _get_repo（延迟初始化仓储）/ _release_repo_after（E.4 S1 写锁释放装饰器），领域独享状态 _repo/_cluster_*/_l2_*/orthogonal_basis/high_ic_screener/elite_tracker 装配于主类
 │   ├── evolution_candidate.py # 候选准入链 Mixin（34 计划领域 B，2026-08-13，B 阶段收官）：_process_candidate（Step 2-6 准入链：微观演化→三级评估→UCT 反馈→Verifier→质量评分卡→端到端回测→数据质量→6 项强制审计→消融→因果→鲁棒性→SHAP→晋升/淘汰→状态持久化），21 个跨域方法经 Callable 类型声明经 MRO 派发

@@ -1,6 +1,6 @@
 # C.2 实盘对接与实时监控 — 详细技术设计
 
-> 版本: v3.0.0+11
+> 版本: v3.0.0+25
 > 关联: [11-factor-mining-optimization-plan.md](file:///d:/Programs/factor_system/docs/harness/plans/11-factor-mining-optimization-plan.md) → Phase C.2
 > 状态: **已实现**（信号契约/风控/模拟适配/Live 监控已落地）
 > 实现说明: FTS 定位为**因子智能系统**，输出 `ScoredSignal`（定义于 `fts/strategies/base_v2.py`，含 symbol/direction/grade/total/weight 及指标字段）供下游交易系统（FDT）消费。本设计的 JSON Schema 信号契约（`FactorSignal`/`SignalDetail` 定义于 `fts/factor_engine/signal_contract.py`）、`SignalValidator`、`fts/risk/` 交易适配层（`RiskManager` 五项风控规则 + `TradeAdapter` 抽象基类 + `SimulatedTradeAdapter`）、`LiveFactorMonitor`（30% 偏离阈值）、HTTP 端点（`POST /api/v1/signal/submit` 等）均已实现。交易执行严格由下游系统负责（角色边界原则）。

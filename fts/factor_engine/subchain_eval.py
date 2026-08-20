@@ -46,8 +46,17 @@ class SubchainEvalConfig(BaseModel):
     out_dir: str = "reports/energy_chain/{date}/subchain_eval"
 
 
-def _load_chain_symbols() -> dict[str, list[str]]:
-    """懒加载子链品种映射（SSOT：portfolio_loop.ENERGY_CHAIN_SUB_SYMBOLS）。"""
+def _load_chain_symbols(market: str = "energy") -> dict[str, list[str]]:
+    """懒加载子链品种映射（P1 方案：scope resolver 统一加载；futures→sector_map 17 链，
+    energy→sub_symbols 四大子链；失败回退 ENERGY_CHAIN_SUB_SYMBOLS 内置）。"""
+    try:
+        from fts.factor_engine.scope_domain.resolver import resolve_chain_map
+
+        mapped = resolve_chain_map(market)
+        if mapped:
+            return mapped
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from fts.factor_engine.portfolio_loop import ENERGY_CHAIN_SUB_SYMBOLS
 
@@ -55,6 +64,30 @@ def _load_chain_symbols() -> dict[str, list[str]]:
     except Exception:  # noqa: BLE001 — 无子链映射回退空（行生成安全）
         logger.warning("[子链评估] 子链品种映射加载失败，回退空映射")
         return {}
+
+
+class _FuturesEvalAdapter:
+    """futures 批量子链评估面板适配器（复用评审质检逐品种 IC 算法，不复制）。
+
+    EnergyQaReviewPipeline 为 energy 专属（链映射/面板为 energy 14 品种），
+    futures 场景以本适配器提供同接口 _prepare_panel/_compute_curr_symbol_ic。
+    """
+
+    def __init__(self, days: int) -> None:
+        self.days = days
+        self._ic_engine: Any = None
+
+    def _prepare_panel(self):
+        from fts.cli import _prepare_futures_data
+
+        return _prepare_futures_data(days=self.days)
+
+    def _compute_curr_symbol_ic(self, factor_row: dict[str, Any], panel: dict[str, Any], common_dates: Any):
+        from fts.factor_engine.energy_qa_review import EnergyQaReviewPipeline
+
+        if self._ic_engine is None:
+            self._ic_engine = EnergyQaReviewPipeline(config=None)
+        return self._ic_engine._compute_curr_symbol_ic(factor_row, panel, common_dates)
 
 
 @dataclass
@@ -137,13 +170,15 @@ class SubchainEvalRunner:
     # ── [0] 面板/管道复用 ───────────────────────────────
 
     def _pipeline(self):
-        """评审质检管道实例（复用面板加载与逐品种 IC 口径，避免复制算法）。"""
+        """面板/管道实例：energy 复用 EnergyQaReviewPipeline；futures 走轻量面板适配器。"""
         from fts.factor_engine.energy_qa_review import EnergyQaReviewConfig, EnergyQaReviewPipeline
 
-        return EnergyQaReviewPipeline(
-            config=EnergyQaReviewConfig(days=self.cfg.days),
-            db_path=self.db_path,
-        )
+        if self.cfg.market == "energy":
+            return EnergyQaReviewPipeline(
+                config=EnergyQaReviewConfig(days=self.cfg.days),
+                db_path=self.db_path,
+            )
+        return _FuturesEvalAdapter(self.cfg.days)
 
     # ── [1] 因子加载 ────────────────────────────────────
 
@@ -195,7 +230,7 @@ class SubchainEvalRunner:
         )
 
         cfg = SubchainProfileConfig()  # 三门槛 SSOT（min_chain_ic=0.02，v2.105.0+16）
-        chain_symbols = _load_chain_symbols()
+        chain_symbols = _load_chain_symbols(self.cfg.market)
         qrepo = SubchainQualityRepository(market=self.cfg.market, db_path=self.db_path)
         results: list[FactorEvalResult] = []
         rows_saved = 0

@@ -236,6 +236,23 @@ class FTSConfig:
     # 域内评估默认开启；FTS_SCOPE_DOMAIN_ENABLED=0 即时回退全链口径。
     scope_domain: ScopeDomainSettings = field(default_factory=ScopeDomainSettings)
 
+    # ── 品种特有数据源通道（P3 框架先行）──
+    # 品种特有字段注册表（config/specific_fields.yaml）按需加载；因涉及外部数据源
+    # 且为框架先行，默认关闭（FTS_SPECIFIC_FIELDS_ENABLED=1 显式开启）。
+    specific_fields_enabled: bool = field(
+        default_factory=lambda: os.getenv("FTS_SPECIFIC_FIELDS_ENABLED", "0") == "1"
+    )
+    specific_fields_path: str = field(
+        default_factory=lambda: os.getenv(
+            "FTS_SPECIFIC_FIELDS_PATH", "config/specific_fields.yaml"
+        )
+    )
+    specific_fields_cache_dir: str = field(
+        default_factory=lambda: os.getenv(
+            "FTS_SPECIFIC_FIELDS_CACHE_DIR", "memory/cache/specific_fields"
+        )
+    )
+
     # ── L2 去冗余-正交基底 (GAP-I206 补充, v2.72.0) ──
     # 正交基底维护（Gram-Schmidt 迭代残差化）：候选因子对基底逐因子 OLS 残差，
     # 与整个基底正交后入库并注册为新基底成员；基底按 Sharpe 降序保留上限
