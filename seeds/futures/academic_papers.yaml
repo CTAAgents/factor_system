@@ -1,0 +1,219 @@
+family: academic_papers
+version: '1.0'
+market: futures
+factors:
+- name: fut_tsmom_vol_scaled
+  description: 波动率缩放时序动量：将原始TSMOM收益用滚动波动率缩放，使每个品种贡献相同风险。Moskowitz(2012)核心贡献。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            lookback = int(params.get('lookback', 12))
+            vol_span = int(params.get('vol_span', 60))
+            target_vol = float(params.get('target_vol', 0.15))
+            if n < max(lookback, vol_span) + 2:
+                return np.zeros(n)
+            # 过去 lookback 期收益率
+            ret = (close[lookback:] - close[:-lookback]) / np.maximum(close[:-lookback], 1e-10)
+            # 滚动波动率（指数加权）
+            daily_ret = np.diff(close) / np.maximum(close[:-1], 1e-10)
+            sig = np.zeros(n)
+            for i in range(vol_span, n):
+                ewma_vol = np.std(daily_ret[i - vol_span : i]) * np.sqrt(252)
+                raw_signal = (close[i - lookback] < close[i - 1]) * 2 - 1  # 方向
+                scaled_signal = raw_signal * (target_vol / max(ewma_vol, 0.01))
+                sig[i] = np.clip(scaled_signal, -1.0, 1.0)
+            return sig
+  params:
+    lookback: 12
+    vol_span: 60
+    target_vol: 0.15
+  input_fields:
+  - close
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 波动率缩放时序动量：将原始TSMOM收益用滚动波动率缩放，使每个品种贡献相同风险。Moskowitz(2012)核心贡献。
+- name: fut_tsmom_multi_signal
+  description: 多周期趋势信号：综合多个回看期的趋势信号（12/6/3个月），信号越强趋势越确定。Moskowitz(2012)多周期验证。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            windows = [3, 6, 12]
+            max_lb = max(windows) * 21
+            if n < max_lb + 2:
+                return np.zeros(n)
+            sig = np.zeros(n)
+            for i in range(max_lb, n):
+                signals = []
+                for w in windows:
+                    lb = w * 21
+                    ret = (close[i] - close[i - lb]) / max(close[i - lb], 1e-10)
+                    signals.append(1 if ret > 0 else -1 if ret < 0 else 0)
+                sig[i] = np.mean(signals)
+            return np.clip(sig, -1.0, 1.0)
+  params: {}
+  input_fields:
+  - close
+  lookback: 260
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 多周期趋势信号：综合多个回看期的趋势信号（12/6/3个月），信号越强趋势越确定。
+- name: fut_cross_carry
+  description: 跨品种相对carry：基于展期收益的截面排序，做多高carry品种做空低carry品种。Koijen(2018)跨资产carry。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            # 展期收益近似：近月-远月价格差
+            # 这里用价格变化率代理
+            n = len(close)
+            window = int(params.get('window', 20))
+            if n < window + 2:
+                return np.zeros(n)
+            # 滚动收益率作为carry代理
+            ret = np.diff(close) / np.maximum(close[:-1], 1e-10)
+            carry = np.zeros(n)
+            for i in range(window, n):
+                carry[i] = np.mean(ret[i - window : i])
+            sig = np.tanh(carry * 10)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 跨品种相对carry：基于展期收益的截面排序，做多高carry品种做空低carry品种。Koijen(2018)跨资产carry。
+- name: fut_carry_vol_adjusted
+  description: 经波动率调整的carry：用波动率缩放carry信号，高波动时降低仓位。Koijen(2018)风险平价carry。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            window = int(params.get('window', 20))
+            vol_span = int(params.get('vol_span', 60))
+            if n < max(window, vol_span) + 2:
+                return np.zeros(n)
+            ret = np.diff(close) / np.maximum(close[:-1], 1e-10)
+            sig = np.zeros(n)
+            for i in range(max(window, vol_span), n):
+                carry = np.mean(ret[i - window : i])
+                vol = np.std(ret[i - vol_span : i]) * np.sqrt(252)
+                if vol > 0.01:
+                    sig[i] = carry / vol * 0.5
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+    vol_span: 60
+  input_fields:
+  - close
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 经波动率调整的carry：用波动率缩放carry信号，高波动时降低仓位。Koijen(2018)风险平价carry。
+- name: fut_inventory_change_rate
+  description: 库存变化率：库存的月度变化率。库存下降=供应紧张=做多。Gorton(2013)证明库存是期货收益的核心预测变量。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+            n = len(close)
+            window = int(params.get('window', 20))
+            if n < window + 2:
+                return np.zeros(n)
+            # 用成交量变化代理库存变化
+            vol_change = (volume[window:] - volume[:-window]) / np.maximum(volume[:-window], 1e-10)
+            sig = np.zeros(n)
+            # 库存下降（成交量减少）= 供应紧张 = 做多
+            sig[window:] = -np.tanh(vol_change * 2)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 2
+    microstructure: 3
+    institutional: 4
+    narrative: 库存变化率：库存的月度变化率。库存下降=供应紧张=做多。Gorton(2013)证明库存是期货收益的核心预测变量。
+- name: fut_basis_inventory_combo
+  description: 基差-库存联合因子：结合基差（近月-远月）和库存信号的联合因子。基差走强+库存下降=最强做多信号。Gorton(2013)理论基础。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+            n = len(close)
+            window = int(params.get('window', 20))
+            if n < window + 2:
+                return np.zeros(n)
+            # 基差代理：短期收益率
+            ret = np.diff(close) / np.maximum(close[:-1], 1e-10)
+            # 库存代理：成交量变化
+            vol_chg = np.diff(volume) / np.maximum(volume[:-1], 1e-10)
+            sig = np.zeros(n)
+            for i in range(window, n):
+                basis = np.mean(ret[i - window : i])
+                inv = np.mean(vol_chg[i - window : i])
+                # 基差走强(+basis) + 库存下降(-inv) = 做多
+                sig[i] = basis - inv
+            sig = np.tanh(sig * 10)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 2
+    microstructure: 3
+    institutional: 4
+    narrative: 基差-库存联合因子：结合基差和库存信号的联合因子。基差走强+库存下降=最强做多信号。

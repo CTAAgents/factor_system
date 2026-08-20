@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v3.0.0+7
+> 版本: v3.0.0+10
 
 > 总览更新（2026-08-20 v3.0.0+2，GAP-159 登记并关闭）：**天勤源默认挂载违背 QuantData 主链路解耦原则（P2，plans/57 方案 2）——L1 Meta-Loop 全期货执行实测：主链路为 QUANTDATA 时聚合器仍默认注册 TQSDKEnhanceSource/TQSDKSource(5m)/TQSDKTickSource，`get_ohlcv` 命中缓存后无条件执行 `_enhance_fields` → 感知链路逐品种用 .env 免费账号自建天勤连接（free-api）+ 15s wait_update，每品种 ~20s 拖慢感知，且 FTS 对数据采集方式非无感**。修复：新增 `tqsdk_sources_enabled`（env `FTS_TQSDK_SOURCES_ENABLED`，默认 false）统一门控 `_init_default_aggregator`（enhancers/minutes/ticks 三处天勤挂载）与 `cli._build_default_aggregator`（enhancers）——默认零天勤连接，显式 true 恢复旧行为；`futures_enhance_enabled` 语义收敛为「已启用天勤增强源基础上追加 IFindSDKSource」；新增 test_data_futures 挂载开关 2 用例 + test_cli 1 用例；P2 开放 7→6、关闭 65→66；合计开放 11→10（已关闭维持 179、总计 189，口径自洽：开放 10 + 已关闭 179 = 189，顺带修正原 11+179=190 的合计漂移），详见 P2 新登记表。
 

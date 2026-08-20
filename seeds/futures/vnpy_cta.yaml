@@ -1,0 +1,771 @@
+family: vnpy_cta
+version: '1.0'
+market: futures
+factors:
+- name: fut_rsi
+  description: RSI因子：相对强弱指数。RSI<30超卖做多，RSI>70超买做空。CTA经典反转信号。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 14))\n    oversold = float(params.get('oversold', 30))\n    overbought = float(params.get('overbought',\
+    \ 70))\n\n    # 计算价格变化\n    delta = np.zeros(n)\n    delta[1:] = close[1:] - close[:-1]\n\
+    \n    # 上涨和下跌\n    gain = np.maximum(delta, 0)\n    loss = -np.minimum(delta,\
+    \ 0)\n\n    # 平均上涨/下跌（SMA）\n    avg_gain = np.zeros(n)\n    avg_loss = np.zeros(n)\n\
+    \n    for i in range(min(window, n)):\n        avg_gain[i] = np.mean(gain[max(0,\
+    \ i-window+1):i+1]) if i > 0 else 0\n        avg_loss[i] = np.mean(loss[max(0,\
+    \ i-window+1):i+1]) if i > 0 else 0\n\n    for i in range(window, n):\n      \
+    \  avg_gain[i] = (avg_gain[i-1] * (window - 1) + gain[i]) / window\n        avg_loss[i]\
+    \ = (avg_loss[i-1] * (window - 1) + loss[i]) / window\n\n    # RSI 计算\n    rs\
+    \ = np.zeros(n)\n    mask = avg_loss > 1e-10\n    rs[mask] = avg_gain[mask] /\
+    \ avg_loss[mask]\n    rsi = 100 - (100 / (1 + rs))\n\n    # 超买做空 (-1), 超卖做多 (+1)\n\
+    \    signal = np.where(rsi > overbought, -1.0, np.where(rsi < oversold, 1.0, 0.0))\n\
+    \    # 中间区域线性映射\n    mid_mask = (rsi >= oversold) & (rsi <= overbought)\n    signal[mid_mask]\
+    \ = (oversold + overbought - 2 * rsi[mid_mask]) / (overbought - oversold)\n  \
+    \  signal = np.tanh(signal * 0.5)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+    oversold: 30
+    overbought: 70
+  input_fields:
+  - close
+  lookback: 20
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: RSI因子：相对强弱指数。RSI<30超卖做多，RSI>70超买做空。CTA经典反转信号。
+- name: fut_bollinger
+  description: 布林带因子：价格突破上下轨做趋势跟踪，带宽收缩做均值回归。CTA经典波动率通道策略。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 20))\n    num_std = float(params.get('num_std', 2.0))\n\n    # 计算布林带\n    sma\
+    \ = np.zeros(n)\n    std = np.zeros(n)\n    for i in range(window, n):\n     \
+    \   seg = close[max(0, i-window+1):i+1]\n        sma[i] = np.mean(seg)\n     \
+    \   std[i] = np.std(seg, ddof=0)\n\n    upper = sma + num_std * std\n    lower\
+    \ = sma - num_std * std\n\n    # 价格突破上轨做多，突破下轨做空\n    # 越靠近上轨信号越正，越靠近下轨信号越负\n\
+    \    bandwidth = np.maximum(upper - lower, 1e-10)\n    signal = (close - sma)\
+    \ / (bandwidth / 2)\n    signal = np.clip(signal, -1.0, 1.0)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+    num_std: 2.0
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 布林带因子：价格突破上下轨做趋势跟踪，带宽收缩做均值回归。CTA经典波动率通道策略。
+- name: fut_atr
+  description: ATR因子：平均真实波动范围。ATR高=波动大=降低仓位偏空，ATR低=波动小=趋势延续偏多。CTA波动率管理核心。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 14))\n\n    # 计算真实波动范围\n    high_low = np.zeros(n)\n    high_close = np.zeros(n)\n\
+    \    low_close = np.zeros(n)\n    high_low[1:] = high[1:] - low[1:]\n    high_close[1:]\
+    \ = np.abs(high[1:] - close[:-1])\n    low_close[1:] = np.abs(low[1:] - close[:-1])\n\
+    \n    tr = np.maximum(high_low, np.maximum(high_close, low_close))\n\n    # ATR\
+    \ = SMA of TR\n    atr = np.zeros(n)\n    for i in range(min(window, n)):\n  \
+    \      if i > 0:\n            atr[i] = np.mean(tr[max(0, i-window+1):i+1])\n \
+    \   for i in range(window, n):\n        atr[i] = (atr[i-1] * (window - 1) + tr[i])\
+    \ / window\n\n    # ATR 归一化：高波动偏空，低波动偏多\n    norm_atr = atr / np.maximum(close,\
+    \ 1e-10)\n    signal = -np.tanh(norm_atr * 50)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 20
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: ATR因子：平均真实波动范围。ATR高=波动大=降低仓位偏空，ATR低=波动小=趋势延续偏多。CTA波动率管理核心。
+- name: fut_keltner
+  description: 肯特纳通道因子：基于EMA+ATR的通道突破系统。突破上轨做多，突破下轨做空。CTA经典突破策略。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 20))\n    atr_window = int(params.get('atr_window', 10))\n    multiplier = float(params.get('multiplier',\
+    \ 2.0))\n\n    # EMA 中线\n    alpha = 2.0 / (window + 1)\n    ema = np.zeros(n)\n\
+    \    ema[0] = close[0]\n    for i in range(1, n):\n        ema[i] = alpha * close[i]\
+    \ + (1 - alpha) * ema[i-1]\n\n    # ATR 计算\n    high_low = np.zeros(n)\n    high_close\
+    \ = np.zeros(n)\n    low_close = np.zeros(n)\n    high_low[1:] = high[1:] - low[1:]\n\
+    \    high_close[1:] = np.abs(high[1:] - close[:-1])\n    low_close[1:] = np.abs(low[1:]\
+    \ - close[:-1])\n    tr = np.maximum(high_low, np.maximum(high_close, low_close))\n\
+    \n    atr = np.zeros(n)\n    for i in range(min(atr_window, n)):\n        if i\
+    \ > 0:\n            atr[i] = np.mean(tr[max(0, i-atr_window+1):i+1])\n    for\
+    \ i in range(atr_window, n):\n        atr[i] = (atr[i-1] * (atr_window - 1) +\
+    \ tr[i]) / atr_window\n\n    upper = ema + multiplier * atr\n    lower = ema -\
+    \ multiplier * atr\n\n    # 突破上轨做多，突破下轨做空\n    signal = np.where(close > upper,\
+    \ 1.0, np.where(close < lower, -1.0, 0.0))\n    # 通道内线性映射\n    in_channel = (close\
+    \ >= lower) & (close <= upper)\n    half_width = np.maximum(upper - lower, 1e-10)\n\
+    \    signal[in_channel] = 2 * (close[in_channel] - ema[in_channel]) / half_width[in_channel]\n\
+    \n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+    atr_window: 10
+    multiplier: 2.0
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 肯特纳通道因子：基于EMA+ATR的通道突破系统。突破上轨做多，突破下轨做空。CTA经典突破策略。
+- name: fut_donchian
+  description: 唐奇安通道因子：N日最高价突破做多，N日最低价突破做空。海龟交易法则核心。CTA经典趋势跟踪系统。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 20))\n\n    # 计算唐奇安通道\n    upper = np.zeros(n)\n    lower = np.zeros(n)\n  \
+    \  mid = np.zeros(n)\n    for i in range(window, n):\n        upper[i] = np.max(high[max(0,\
+    \ i-window+1):i+1])\n        lower[i] = np.min(low[max(0, i-window+1):i+1])\n\
+    \        mid[i] = (upper[i] + lower[i]) / 2\n\n    # 突破上轨做多，突破下轨做空\n    signal\
+    \ = np.where(close > upper, 1.0, np.where(close < lower, -1.0, 0.0))\n    # 通道内：价格在通道中的位置\n\
+    \    in_channel = (close >= lower) & (close <= upper) & (upper > lower)\n    range_width\
+    \ = np.maximum(upper[in_channel] - lower[in_channel], 1e-10)\n    signal[in_channel]\
+    \ = 2 * (close[in_channel] - mid[in_channel]) / range_width\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 唐奇安通道因子：N日最高价突破做多，N日最低价突破做空。海龟交易法则核心。CTA经典趋势跟踪系统。
+- name: fut_adx
+  description: ADX因子：平均趋向指数。ADX>25=强趋势做动量，ADX<20=弱趋势做反转。CTA趋势强度判断核心。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 14))\n\n    # 计算方向运动\n    up_move = np.zeros(n)\n    down_move = np.zeros(n)\n\
+    \    up_move[1:] = high[1:] - high[:-1]\n    down_move[1:] = low[:-1] - low[1:]\n\
+    \n    plus_dm = np.zeros(n)\n    minus_dm = np.zeros(n)\n    for i in range(1,\
+    \ n):\n        if up_move[i] > down_move[i] and up_move[i] > 0:\n            plus_dm[i]\
+    \ = up_move[i]\n        if down_move[i] > up_move[i] and down_move[i] > 0:\n \
+    \           minus_dm[i] = down_move[i]\n\n    # ATR 用于归一化\n    high_low = np.zeros(n)\n\
+    \    high_close = np.zeros(n)\n    low_close = np.zeros(n)\n    high_low[1:] =\
+    \ high[1:] - low[1:]\n    high_close[1:] = np.abs(high[1:] - close[:-1])\n   \
+    \ low_close[1:] = np.abs(low[1:] - close[:-1])\n    tr = np.maximum(high_low,\
+    \ np.maximum(high_close, low_close))\n\n    # 平滑\n    atr = np.zeros(n)\n    pdi\
+    \ = np.zeros(n)\n    ndi = np.zeros(n)\n    for i in range(min(window, n)):\n\
+    \        if i > 0:\n            atr[i] = np.mean(tr[max(0, i-window+1):i+1])\n\
+    \            pdi[i] = 100 * np.mean(plus_dm[max(0, i-window+1):i+1]) / max(atr[i],\
+    \ 1e-10)\n            ndi[i] = 100 * np.mean(minus_dm[max(0, i-window+1):i+1])\
+    \ / max(atr[i], 1e-10)\n    for i in range(window, n):\n        atr[i] = (atr[i-1]\
+    \ * (window - 1) + tr[i]) / window\n        pdi[i] = 100 * (pdi[i-1] * (window\
+    \ - 1) + plus_dm[i]) / max(atr[i] * window, 1e-10)\n        ndi[i] = 100 * (ndi[i-1]\
+    \ * (window - 1) + minus_dm[i]) / max(atr[i] * window, 1e-10)\n\n    # ADX = abs(+DI\
+    \ - -DI) / (+DI + -DI) 的平滑\n    dx = np.zeros(n)\n    di_sum = pdi + ndi\n   \
+    \ mask = di_sum > 1e-10\n    dx[mask] = 100 * np.abs(pdi[mask] - ndi[mask]) /\
+    \ di_sum[mask]\n\n    adx = np.zeros(n)\n    for i in range(min(window, n)):\n\
+    \        if i > 0:\n            adx[i] = np.mean(dx[max(0, i-window+1):i+1])\n\
+    \    for i in range(window, n):\n        adx[i] = (adx[i-1] * (window - 1) + dx[i])\
+    \ / window\n\n    # ADX>25 强趋势做动量方向，ADX<20 弱趋势偏向反转\n    # 结合 +DI/-DI 方向\n    trend_bias\
+    \ = np.where(pdi > ndi, 1.0, -1.0)\n    signal = np.where(adx > 25, trend_bias,\
+    \ np.where(adx < 20, -trend_bias * 0.5, 0.0))\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 20
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: ADX因子：平均趋向指数。ADX>25=强趋势做动量，ADX<20=弱趋势做反转。CTA趋势强度判断核心。
+- name: fut_cci
+  description: CCI因子：商品通道指数。CCI>100超买做空，CCI<-100超卖做多。CTA经典摆动指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 20))\n\n    # 典型价格 = (H + L + C) / 3\n    tp = (high + low + close) / 3\n\n\
+    \    # SMA of TP\n    sma_tp = np.zeros(n)\n    mean_dev = np.zeros(n)\n    for\
+    \ i in range(window, n):\n        seg = tp[max(0, i-window+1):i+1]\n        sma_tp[i]\
+    \ = np.mean(seg)\n        mean_dev[i] = np.mean(np.abs(seg - sma_tp[i]))\n\n \
+    \   # CCI = (TP - SMA(TP)) / (0.015 * Mean Deviation)\n    cci = np.zeros(n)\n\
+    \    denom = 0.015 * np.maximum(mean_dev, 1e-10)\n    cci[window:] = (tp[window:]\
+    \ - sma_tp[window:]) / denom[window:]\n\n    # CCI>100 超买做空，CCI<-100 超卖做多\n  \
+    \  signal = np.where(cci > 100, -1.0, np.where(cci < -100, 1.0, 0.0))\n    # 中间区域线性映射\n\
+    \    mid = np.abs(cci) <= 100\n    signal[mid] = -cci[mid] / 100.0\n    signal\
+    \ = np.tanh(signal * 0.5)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0),\
+    \ -1.0, 1.0)"
+  params:
+    window: 20
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: CCI因子：商品通道指数。CCI>100超买做空，CCI<-100超卖做多。CTA经典摆动指标。
+- name: fut_kdj
+  description: KDJ因子：随机指标。K线向上突破D线金叉做多，死叉做空。CTA经典短线反转信号。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    k_window = int(params.get('k_window',\
+    \ 9))\n    d_window = int(params.get('d_window', 3))\n\n    # 计算 K 值\n    k =\
+    \ np.zeros(n)\n    for i in range(k_window, n):\n        hh = np.max(high[max(0,\
+    \ i-k_window+1):i+1])\n        ll = np.min(low[max(0, i-k_window+1):i+1])\n  \
+    \      if hh > ll:\n            k[i] = 100 * (close[i] - ll) / (hh - ll)\n   \
+    \     else:\n            k[i] = 50\n\n    # D 值 = K 的 SMA\n    d = np.zeros(n)\n\
+    \    for i in range(d_window, n):\n        d[i] = np.mean(k[max(0, i-d_window+1):i+1])\n\
+    \n    # K > D 金叉做多，K < D 死叉做空\n    # 超买区 (K>80) 做空，超卖区 (K<20) 做多\n    signal =\
+    \ np.where(k > 80, -1.0, np.where(k < 20, 1.0, 0.0))\n    # 结合 K-D 交叉\n    crossover\
+    \ = np.sign(k - d)\n    zero_mask = np.abs(signal) < 0.01\n    signal[zero_mask]\
+    \ = crossover[zero_mask] * 0.5\n\n    return np.clip(np.nan_to_num(signal, nan=0.0),\
+    \ -1.0, 1.0)"
+  params:
+    k_window: 9
+    d_window: 3
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: KDJ因子：随机指标。K线向上突破D线金叉做多，死叉做空。CTA经典短线反转信号。
+- name: fut_williams
+  description: 威廉%R因子：Williams %R。%R>-20超买做空，%R<-80超卖做多。CTA短线反转信号。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 14))\n\n    # Williams %R = (HH - Close) / (HH - LL) * -100\n    wr = np.zeros(n)\n\
+    \    for i in range(window, n):\n        hh = np.max(high[max(0, i-window+1):i+1])\n\
+    \        ll = np.min(low[max(0, i-window+1):i+1])\n        if hh > ll:\n     \
+    \       wr[i] = -100 * (hh - close[i]) / (hh - ll)\n        else:\n          \
+    \  wr[i] = -50\n\n    # %R > -20 超买做空，%R < -80 超卖做多\n    signal = np.where(wr\
+    \ > -20, -1.0, np.where(wr < -80, 1.0, 0.0))\n    # 中间区域线性映射\n    mid = (wr >=\
+    \ -80) & (wr <= -20)\n    signal[mid] = (-wr[mid] - 50) / 30.0\n    signal = np.tanh(signal\
+    \ * 0.5)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 20
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: 威廉%R因子：Williams %R。%R>-20超买做空，%R<-80超卖做多。CTA短线反转信号。
+- name: fut_mfi
+  description: MFI因子：资金流量指标。量价结合的RSI。MFI>80超买做空，MFI<20超卖做多。CTA量价分析核心。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n    volume = data['volume'].values if\
+    \ hasattr(data, 'volume') else data['volume']\n\n    window = int(params.get('window',\
+    \ 14))\n\n    # 典型价格\n    tp = (high + low + close) / 3\n\n    # 资金流 = TP * Volume\n\
+    \    money_flow = tp * volume\n\n    # 正/负资金流\n    pos_mf = np.zeros(n)\n    neg_mf\
+    \ = np.zeros(n)\n    for i in range(1, n):\n        if tp[i] > tp[i-1]:\n    \
+    \        pos_mf[i] = money_flow[i]\n        elif tp[i] < tp[i-1]:\n          \
+    \  neg_mf[i] = money_flow[i]\n\n    # MF Ratio = Sum(Positive MF) / Sum(Negative\
+    \ MF)\n    mfr = np.zeros(n)\n    for i in range(window, n):\n        pos_sum\
+    \ = np.sum(pos_mf[max(0, i-window+1):i+1])\n        neg_sum = np.sum(neg_mf[max(0,\
+    \ i-window+1):i+1])\n        if neg_sum > 1e-10:\n            mfr[i] = pos_sum\
+    \ / neg_sum\n        else:\n            mfr[i] = 100.0\n\n    # MFI = 100 - 100\
+    \ / (1 + MFR)\n    mfi = 100 - 100 / (1 + mfr)\n\n    # MFI>80 超买做空，MFI<20 超卖做多\n\
+    \    signal = np.where(mfi > 80, -1.0, np.where(mfi < 20, 1.0, 0.0))\n    mid\
+    \ = (mfi >= 20) & (mfi <= 80)\n    signal[mid] = (20 + 80 - 2 * mfi[mid]) / 60.0\n\
+    \    signal = np.tanh(signal * 0.5)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+  input_fields:
+  - close
+  - high
+  - low
+  - volume
+  lookback: 20
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 4
+    institutional: 3
+    narrative: MFI因子：资金流量指标。量价结合的RSI。MFI>80超买做空，MFI<20超卖做多。CTA量价分析核心。
+- name: fut_obv
+  description: OBV因子：能量潮。OBV与价格背离做反转，OBV趋势确认做动量。CTA量价配合核心指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    volume = data['volume'].values\
+    \ if hasattr(data, 'volume') else data['volume']\n\n    window = int(params.get('window',\
+    \ 20))\n\n    # OBV 计算\n    obv = np.zeros(n)\n    obv[0] = volume[0]\n    for\
+    \ i in range(1, n):\n        if close[i] > close[i-1]:\n            obv[i] = obv[i-1]\
+    \ + volume[i]\n        elif close[i] < close[i-1]:\n            obv[i] = obv[i-1]\
+    \ - volume[i]\n        else:\n            obv[i] = obv[i-1]\n\n    # OBV 与价格的趋势一致性\n\
+    \    # 计算 OBV 和价格的斜率方向\n    obv_slope = np.zeros(n)\n    price_slope = np.zeros(n)\n\
+    \    for i in range(window, n):\n        obv_slope[i] = (obv[i] - obv[i-window])\
+    \ / max(obv[i-window], 1e-10)\n        price_slope[i] = (close[i] - close[i-window])\
+    \ / max(close[i-window], 1e-10)\n\n    # 正相关 = 趋势确认（动量），负相关 = 背离（反转）\n    corr\
+    \ = obv_slope * price_slope\n    signal = np.tanh(corr * 50)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+  input_fields:
+  - close
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: OBV因子：能量潮。OBV与价格背离做反转，OBV趋势确认做动量。CTA量价配合核心指标。
+- name: fut_sar
+  description: SAR因子：抛物线停损转向。价格在SAR上方做多，下方做空。CTA经典趋势跟踪止损系统。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    acceleration = float(params.get('acceleration',\
+    \ 0.02))\n    max_acc = float(params.get('max_acceleration', 0.2))\n\n    # 简化\
+    \ SAR 计算\n    sar = np.zeros(n)\n    ep = np.zeros(n)  # 极值点\n    af = np.zeros(n)\
+    \  # 加速因子\n    trend = np.zeros(n)  # 1=上升, -1=下降\n\n    # 初始化\n    if n > 1:\n\
+    \        trend[0] = 1 if close[0] <= close[1] else -1\n        if trend[0] > 0:\n\
+    \            sar[0] = np.min(low[:2])\n            ep[0] = np.max(high[:2])\n\
+    \        else:\n            sar[0] = np.max(high[:2])\n            ep[0] = np.min(low[:2])\n\
+    \        af[0] = acceleration\n\n    for i in range(1, n):\n        sar[i] = sar[i-1]\
+    \ + af[i-1] * (ep[i-1] - sar[i-1])\n\n        if trend[i-1] > 0:  # 上升趋势\n   \
+    \         sar[i] = min(sar[i], low[i-1], low[i-2] if i >= 2 else low[i-1])\n \
+    \       else:  # 下降趋势\n            sar[i] = max(sar[i], high[i-1], high[i-2] if\
+    \ i >= 2 else high[i-1])\n\n        # 反转判断\n        if trend[i-1] > 0 and close[i]\
+    \ < sar[i]:\n            trend[i] = -1\n            sar[i] = ep[i-1]\n       \
+    \     ep[i] = low[i]\n            af[i] = acceleration\n        elif trend[i-1]\
+    \ < 0 and close[i] > sar[i]:\n            trend[i] = 1\n            sar[i] = ep[i-1]\n\
+    \            ep[i] = high[i]\n            af[i] = acceleration\n        else:\n\
+    \            trend[i] = trend[i-1]\n            af[i] = min(af[i-1] + acceleration,\
+    \ max_acc)\n            if trend[i] > 0:\n                ep[i] = max(ep[i-1],\
+    \ high[i])\n            else:\n                ep[i] = min(ep[i-1], low[i])\n\n\
+    \    # 价格在SAR上方做多，下方做空\n    signal = np.where(close > sar, np.tanh((close - sar)\
+    \ / np.maximum(sar, 1e-10) * 10),\n                      -np.tanh((sar - close)\
+    \ / np.maximum(sar, 1e-10) * 10))\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    acceleration: 0.02
+    max_acceleration: 0.2
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 30
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: SAR因子：抛物线停损转向。价格在SAR上方做多，下方做空。CTA经典趋势跟踪止损系统。
+- name: fut_aroon
+  description: Aroon因子：阿隆指标。AroonUp>AroonDown做多，反之做空。CTA趋势方向判断。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 25))\n\n    aroon_up = np.zeros(n)\n    aroon_down = np.zeros(n)\n\n    for\
+    \ i in range(window, n):\n        seg_high = high[max(0, i-window+1):i+1]\n  \
+    \      seg_low = low[max(0, i-window+1):i+1]\n        hh_idx = np.argmax(seg_high)\n\
+    \        ll_idx = np.argmin(seg_low)\n        aroon_up[i] = 100 * (window - 1\
+    \ - hh_idx) / (window - 1)\n        aroon_down[i] = 100 * (window - 1 - ll_idx)\
+    \ / (window - 1)\n\n    # AroonUp > AroonDown 做多，反之做空\n    diff = aroon_up - aroon_down\n\
+    \    signal = np.tanh(diff / 50)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0),\
+    \ -1.0, 1.0)"
+  params:
+    window: 25
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 30
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: Aroon因子：阿隆指标。AroonUp>AroonDown做多，反之做空。CTA趋势方向判断。
+- name: fut_trix
+  description: TRIX因子：三重指数移动平均。TRIX上穿Signal做多，下穿做空。CTA趋势跟踪指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 15))\n    signal_window = int(params.get('signal_window', 9))\n\n    # 三次 EMA\n\
+    \    def _ema(arr, w):\n        a = 2.0 / (w + 1)\n        result = np.zeros_like(arr)\n\
+    \        result[0] = arr[0]\n        for i in range(1, len(arr)):\n          \
+    \  result[i] = a * arr[i] + (1 - a) * result[i-1]\n        return result\n\n \
+    \   ema1 = _ema(close, window)\n    ema2 = _ema(ema1, window)\n    ema3 = _ema(ema2,\
+    \ window)\n\n    # TRIX = EMA3 的百分比变化率\n    trix = np.zeros(n)\n    trix[1:] =\
+    \ (ema3[1:] - ema3[:-1]) / np.maximum(ema3[:-1], 1e-10) * 100\n\n    # Signal\
+    \ 线\n    signal_line = _ema(trix, signal_window)\n\n    # TRIX > Signal 做多，< Signal\
+    \ 做空\n    signal = np.tanh((trix - signal_line) * 2)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 15
+    signal_window: 9
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: TRIX因子：三重指数移动平均。TRIX上穿Signal做多，下穿做空。CTA趋势跟踪指标。
+- name: fut_roc
+  description: ROC因子：价格变化率。ROC上穿零轴做多，下穿零轴做空。CTA动量反转双用指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 12))\n\n    # ROC = (Close - Close_n) / Close_n * 100\n    roc = np.zeros(n)\n\
+    \    roc[window:] = (close[window:] - close[:-window]) / np.maximum(close[:-window],\
+    \ 1e-10) * 100\n\n    # ROC 正做多，负做空\n    signal = np.tanh(roc / 10)\n\n    return\
+    \ np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 12
+  input_fields:
+  - close
+  lookback: 18
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: ROC因子：价格变化率。ROC上穿零轴做多，下穿零轴做空。CTA动量反转双用指标。
+- name: fut_natr
+  description: NATR因子：归一化ATR。ATR/Close，波动率占比信号。NATR高=波动率占比大=偏回落。CTA波动率管理。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 14))\n\n    # ATR 计算\n    high_low = np.zeros(n)\n    high_close = np.zeros(n)\n\
+    \    low_close = np.zeros(n)\n    high_low[1:] = high[1:] - low[1:]\n    high_close[1:]\
+    \ = np.abs(high[1:] - close[:-1])\n    low_close[1:] = np.abs(low[1:] - close[:-1])\n\
+    \    tr = np.maximum(high_low, np.maximum(high_close, low_close))\n\n    atr =\
+    \ np.zeros(n)\n    for i in range(min(window, n)):\n        if i > 0:\n      \
+    \      atr[i] = np.mean(tr[max(0, i-window+1):i+1])\n    for i in range(window,\
+    \ n):\n        atr[i] = (atr[i-1] * (window - 1) + tr[i]) / window\n\n    # NATR\
+    \ = ATR / Close * 100\n    natr = atr / np.maximum(close, 1e-10) * 100\n\n   \
+    \ # NATR 高 = 波动占比大 = 偏回落\n    signal = -np.tanh(natr / 5)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 20
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: NATR因子：归一化ATR。ATR/Close，波动率占比信号。NATR高=波动率占比大=偏回落。CTA波动率管理。
+- name: fut_linearreg
+  description: 线性回归因子：线性回归斜率。斜率正做多，负做空。CTA趋势方向与强度判断。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 14))\n    x = np.arange(window, dtype=float)\n    sx = np.sum(x)\n    sxx =\
+    \ np.sum(x * x)\n    denom = window * sxx - sx * sx\n\n    slope = np.zeros(n)\n\
+    \    for i in range(window, n):\n        y = close[max(0, i-window+1):i+1]\n \
+    \       sy = np.sum(y)\n        sxy = np.sum(x * y)\n        if abs(denom) > 1e-10:\n\
+    \            slope[i] = (window * sxy - sx * sy) / denom\n\n    # 斜率归一化\n    norm_slope\
+    \ = slope / np.maximum(close, 1e-10)\n    signal = np.tanh(norm_slope * 100)\n\
+    \n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+  input_fields:
+  - close
+  lookback: 20
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: 线性回归因子：线性回归斜率。斜率正做多，负做空。CTA趋势方向与强度判断。
+- name: fut_apo
+  description: APO因子：绝对价格振荡器。快EMA-慢EMA。APO正则做多，负则做空。CTA趋势动能指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    fast_period = int(params.get('fast_period',\
+    \ 12))\n    slow_period = int(params.get('slow_period', 26))\n\n    def _ema(arr,\
+    \ w):\n        a = 2.0 / (w + 1)\n        result = np.zeros_like(arr)\n      \
+    \  result[0] = arr[0]\n        for i in range(1, len(arr)):\n            result[i]\
+    \ = a * arr[i] + (1 - a) * result[i-1]\n        return result\n\n    fast_ema\
+    \ = _ema(close, fast_period)\n    slow_ema = _ema(close, slow_period)\n\n    #\
+    \ APO = Fast EMA - Slow EMA\n    apo = fast_ema - slow_ema\n\n    # 归一化\n    norm_apo\
+    \ = apo / np.maximum(close, 1e-10)\n    signal = np.tanh(norm_apo * 50)\n\n  \
+    \  return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    fast_period: 12
+    slow_period: 26
+  input_fields:
+  - close
+  lookback: 30
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: APO因子：绝对价格振荡器。快EMA-慢EMA。APO正则做多，负则做空。CTA趋势动能指标。
+- name: fut_ppo
+  description: PPO因子：百分比价格振荡器。(快EMA-慢EMA)/慢EMA。PPO正则做多，负则做空。CTA趋势动能指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    fast_period = int(params.get('fast_period',\
+    \ 12))\n    slow_period = int(params.get('slow_period', 26))\n\n    def _ema(arr,\
+    \ w):\n        a = 2.0 / (w + 1)\n        result = np.zeros_like(arr)\n      \
+    \  result[0] = arr[0]\n        for i in range(1, len(arr)):\n            result[i]\
+    \ = a * arr[i] + (1 - a) * result[i-1]\n        return result\n\n    fast_ema\
+    \ = _ema(close, fast_period)\n    slow_ema = _ema(close, slow_period)\n\n    #\
+    \ PPO = (Fast EMA - Slow EMA) / Slow EMA * 100\n    ppo = np.zeros(n)\n    denom\
+    \ = np.maximum(np.abs(slow_ema), 1e-10)\n    ppo = (fast_ema - slow_ema) / denom\
+    \ * 100\n\n    signal = np.tanh(ppo / 2)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    fast_period: 12
+    slow_period: 26
+  input_fields:
+  - close
+  lookback: 30
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: PPO因子：百分比价格振荡器。(快EMA-慢EMA)/慢EMA。PPO正则做多，负则做空。CTA趋势动能指标。
+- name: fut_macd_hist
+  description: MACD柱状线因子：MACD快线-信号线。柱状线正则做多，负则做空。CTA经典趋势跟踪指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    fast_period = int(params.get('fast_period',\
+    \ 12))\n    slow_period = int(params.get('slow_period', 26))\n    signal_period\
+    \ = int(params.get('signal_period', 9))\n\n    def _ema(arr, w):\n        a =\
+    \ 2.0 / (w + 1)\n        result = np.zeros_like(arr)\n        result[0] = arr[0]\n\
+    \        for i in range(1, len(arr)):\n            result[i] = a * arr[i] + (1\
+    \ - a) * result[i-1]\n        return result\n\n    fast_ema = _ema(close, fast_period)\n\
+    \    slow_ema = _ema(close, slow_period)\n\n    # MACD 快线\n    macd_line = fast_ema\
+    \ - slow_ema\n\n    # Signal 线\n    signal_line = _ema(macd_line, signal_period)\n\
+    \n    # 柱状线 = MACD - Signal\n    histogram = macd_line - signal_line\n\n    #\
+    \ 柱状线正则做多，负则做空\n    norm_hist = histogram / np.maximum(close, 1e-10)\n    signal\
+    \ = np.tanh(norm_hist * 100)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0),\
+    \ -1.0, 1.0)"
+  params:
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
+  input_fields:
+  - close
+  lookback: 30
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: MACD柱状线因子：MACD快线-信号线。柱状线正则做多，负则做空。CTA经典趋势跟踪指标。
+- name: fut_wma_cross
+  description: WMA交叉因子：加权移动平均价格位置。价格在WMA上方做多，下方做空。CTA趋势跟踪。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 20))\n\n    # WMA 计算\n    weights = np.arange(1, window + 1, dtype=float)\n\
+    \    wma = np.zeros(n)\n    for i in range(window, n):\n        seg = close[max(0,\
+    \ i-window+1):i+1]\n        wma[i] = np.sum(seg * weights) / np.sum(weights)\n\
+    \n    # 价格在 WMA 上方做多，下方做空\n    signal = np.where(close > wma, 1.0, -1.0)\n   \
+    \ # 距 WMA 距离归一化\n    dist = (close - wma) / np.maximum(wma, 1e-10)\n    signal\
+    \ = np.tanh(dist * 20)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0,\
+    \ 1.0)"
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: WMA交叉因子：加权移动平均价格位置。价格在WMA上方做多，下方做空。CTA趋势跟踪。
+- name: fut_ultosc
+  description: Ultimate Oscillator因子：终极振荡器。多周期加权超买超卖判断。UO>70超买做空，UO<30超卖做多。CTA综合摆动指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    p1 = int(params.get('period1',\
+    \ 7))\n    p2 = int(params.get('period2', 14))\n    p3 = int(params.get('period3',\
+    \ 28))\n\n    def _calc_uo(arr_h, arr_l, arr_c, period):\n        n = len(arr_c)\n\
+    \        bp = np.zeros(n)  # 买入压力\n        tr = np.zeros(n)  # 真实波动\n        for\
+    \ i in range(1, n):\n            bp[i] = arr_c[i] - min(arr_l[i], arr_c[i-1])\n\
+    \            tr[i] = max(arr_h[i], arr_c[i-1]) - min(arr_l[i], arr_c[i-1])\n \
+    \       avg_bp = np.zeros(n)\n        avg_tr = np.zeros(n)\n        for i in range(period,\
+    \ n):\n            avg_bp[i] = np.sum(bp[max(0, i-period+1):i+1])\n          \
+    \  avg_tr[i] = np.sum(tr[max(0, i-period+1):i+1])\n        result = np.zeros(n)\n\
+    \        mask = avg_tr > 1e-10\n        result[mask] = avg_bp[mask] / avg_tr[mask]\n\
+    \        return result\n\n    uo1 = _calc_uo(high, low, close, p1)\n    uo2 =\
+    \ _calc_uo(high, low, close, p2)\n    uo3 = _calc_uo(high, low, close, p3)\n\n\
+    \    # UO = 4*UO1 + 2*UO2 + UO3\n    uo = (4 * uo1 + 2 * uo2 + uo3) / 7 * 100\n\
+    \n    # UO>70 超买做空，UO<30 超卖做多\n    signal = np.where(uo > 70, -1.0, np.where(uo\
+    \ < 30, 1.0, 0.0))\n    mid = (uo >= 30) & (uo <= 70)\n    signal[mid] = (30 +\
+    \ 70 - 2 * uo[mid]) / 40.0\n    signal = np.tanh(signal * 0.5)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    period1: 7
+    period2: 14
+    period3: 28
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 35
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: Ultimate Oscillator因子：终极振荡器。多周期加权超买超卖判断。UO>70超买做空，UO<30超卖做多。CTA综合摆动指标。
+- name: fut_boll_squeeze
+  description: 布林带收缩因子：带宽/价格比率。带宽收缩=蓄力突破，带宽扩张=趋势延续。CTA波动率周期判断。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 20))\n    num_std = float(params.get('num_std', 2.0))\n\n    # 计算布林带带宽\n   \
+    \ bandwidth = np.zeros(n)\n    for i in range(window, n):\n        seg = close[max(0,\
+    \ i-window+1):i+1]\n        sma = np.mean(seg)\n        std = np.std(seg, ddof=0)\n\
+    \        bandwidth[i] = 2 * num_std * std / max(sma, 1e-10)\n\n    # 带宽的 Z-score\n\
+    \    bw_mean = np.mean(bandwidth[max(0, n-100):n]) if n > 100 else np.mean(bandwidth[max(0,\
+    \ n-window):n])\n    bw_std = np.std(bandwidth[max(0, n-100):n]) if n > 100 else\
+    \ np.std(bandwidth[max(0, n-window):n])\n\n    if bw_std > 1e-10:\n        bw_z\
+    \ = (bandwidth - bw_mean) / bw_std\n    else:\n        bw_z = np.zeros(n)\n\n\
+    \    # 带宽收缩到极低 = 即将突破（做多/空方向由后续价格决定）\n    # 这里用带宽的负值：收缩蓄力偏正，扩张偏负\n    signal =\
+    \ -np.tanh(bw_z * 0.5)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0,\
+    \ 1.0)"
+  params:
+    window: 20
+    num_std: 2.0
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 布林带收缩因子：带宽/价格比率。带宽收缩=蓄力突破，带宽扩张=趋势延续。CTA波动率周期判断。

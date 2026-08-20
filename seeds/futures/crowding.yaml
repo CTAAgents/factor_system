@@ -1,0 +1,219 @@
+family: crowding
+version: '1.0'
+market: futures
+factors:
+- name: fut_crowd_volume
+  description: 成交额拥挤度：成交量 vs 3年90%分位数。成交拥挤=过热=做空。广发6维度拥挤度之一。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        n = len(volume)
+        window = int(params.get('window', 60))
+        if n < window * 2:
+            return np.zeros(n)
+        # 成交额拥挤度：成交量 vs 3年90%分位数
+        hist = volume[:window]
+        p90 = np.percentile(hist, 90) if len(hist) > 0 else 1e10
+        ratio = volume / max(p90, 1)
+        sig = -np.tanh((ratio - 1) * 5)
+        # 成交拥挤 => 过热 => 做空
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 60
+  input_fields:
+  - volume
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 4
+    narrative: 成交额拥挤度：成交量 vs 3年90%分位数。成交拥挤=过热=做空。广发6维度拥挤度之一。
+- name: fut_crowd_volatility
+  description: 波动拥挤度：Beta 拥挤度，波动率 vs 历史90%分位数。广发6维度拥挤度之二。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 60))
+        if n < window * 2:
+            return np.zeros(n)
+        returns = np.zeros(n)
+        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        # Beta 拥挤度：波动率 vs 历史 90% 分位数
+        hist_vol = np.array([np.std(returns[max(0, i-20+1):i+1]) for i in range(window)])
+        p90 = np.percentile(hist_vol, 90) if len(hist_vol) > 0 else 1e10
+        recent_vol = np.array([np.std(returns[max(0, i-20+1):i+1]) for i in range(n)])
+        ratio = recent_vol / max(p90, 1)
+        sig = -np.tanh((ratio - 1) * 5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 60
+  input_fields:
+  - close
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 4
+    narrative: 波动拥挤度：Beta 拥挤度，波动率 vs 历史90%分位数。广发6维度拥挤度之二。
+- name: fut_crowd_turnover
+  description: 换手率拥挤度：换手率 vs 历史90%分位数。广发行业拥挤度6信号之一。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        hold = data['hold'].values if hasattr(data, 'hold') else data.get('hold', np.ones(len(volume)))
+        n = len(volume)
+        window = int(params.get('window', 60))
+        if n < window * 2:
+            return np.zeros(n)
+        turnover = np.zeros(n)
+        for i in range(1, n):
+            turnover[i] = volume[i] / max(hold[i], 1)
+        hist = turnover[:window]
+        p90 = np.percentile(hist, 90) if len(hist) > 0 else 1e10
+        ratio = turnover / max(p90, 1)
+        sig = -np.tanh((ratio - 1) * 5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 60
+  input_fields:
+  - volume
+  - hold
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 4
+    narrative: 换手率拥挤度：换手率 vs 历史90%分位数。广发行业拥挤度6信号之一。
+- name: fut_crowd_bias_volume
+  description: 成交量乖离率拥挤度：成交量乖离率 vs 历史90%分位数。广发行业拥挤度6信号之一。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        n = len(volume)
+        window = int(params.get('window', 60))
+        if n < window * 2:
+            return np.zeros(n)
+        ma = np.convolve(volume, np.ones(window)/window, mode='same')
+        bias = (volume - ma) / np.maximum(ma, 1e-10)
+        hist = bias[:window]
+        p90 = np.percentile(hist, 90) if len(hist) > 0 else 1e10
+        ratio = bias / max(p90, 1)
+        sig = -np.tanh((ratio - 1) * 5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 60
+  input_fields:
+  - volume
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 4
+    narrative: 成交量乖离率拥挤度：成交量乖离率 vs 历史90%分位数。广发行业拥挤度6信号之一。
+- name: fut_crowd_bias_amount
+  description: 成交额乖离率拥挤度：成交额乖离率 vs 历史90%分位数。广发行业拥挤度6信号之一。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        n = len(volume)
+        window = int(params.get('window', 60))
+        if n < window * 2:
+            return np.zeros(n)
+        amount = close * volume
+        ma = np.convolve(amount, np.ones(window)/window, mode='same')
+        bias = (amount - ma) / np.maximum(ma, 1e-10)
+        hist = bias[:window]
+        p90 = np.percentile(hist, 90) if len(hist) > 0 else 1e10
+        ratio = bias / max(p90, 1)
+        sig = -np.tanh((ratio - 1) * 5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 60
+  input_fields:
+  - close
+  - volume
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 4
+    narrative: 成交额乖离率拥挤度：成交额乖离率 vs 历史90%分位数。广发行业拥挤度6信号之一。
+- name: fut_crowd_composite
+  description: 复合拥挤度因子：3维度(成交量/换手率/成交额)中≥2个拥挤=综合拥挤。广发行业最优参数。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        hold = data['hold'].values if hasattr(data, 'hold') else data.get('hold', np.ones(len(close)))
+        n = len(volume)
+        window = int(params.get('window', 60))
+        if n < window * 2:
+            return np.zeros(n)
+        # 复合拥挤度：3个维度及以上触发记为拥挤
+        turnover = np.zeros(n)
+        for i in range(1, n):
+            turnover[i] = volume[i] / max(hold[i], 1)
+        amount = close * volume
+        # 多维度信号
+        signals = []
+        for arr in [volume, turnover, amount]:
+            ma = np.convolve(arr, np.ones(window)/window, mode='same')
+            bias = (arr - ma) / np.maximum(ma, 1e-10)
+            hist = bias[:window]
+            p90 = np.percentile(hist, 90) if len(hist) > 0 else 1e10
+            sig = (bias / max(p90, 1)) > 1
+            signals.append(sig.astype(float))
+        # 3个维度中 ≥2 个拥挤 => 综合拥挤
+        composite = np.mean(signals, axis=0)
+        sig = -np.tanh(composite * 5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 60
+  input_fields:
+  - close
+  - volume
+  - hold
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 4
+    narrative: 复合拥挤度因子：3维度(成交量/换手率/成交额)中≥2个拥挤=综合拥挤。广发行业最优参数。

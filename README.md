@@ -3,7 +3,7 @@
 > **因子智能系统** — AI 原生的量化因子发现、评估、组合与演化引擎
 
 [![Tests](https://img.shields.io/badge/tests-7840%20passing-blue)](#)
-[![Version](https://img.shields.io/badge/version-3.0.0%2B7-blue)](#)
+[![Version](https://img.shields.io/badge/version-3.0.0%2B10-blue)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](#)
 
@@ -278,7 +278,7 @@ print(status_report_to_json(report))
 |------|----------|----------|
 | L1 Meta-Loop | 每日 00:00 | 市场感知、知识补给、Bootstrapping、Debate 分析（能化链） |
 | L2 种子+演化 | 每日 01:00（工作日 ≈10 代 / 周末 ≈50 代） | 种子评估晋升 + LLM/GP/算子演化、三级评估链、质量评分（v2.105.0+3 合并任务，含生成端去重前置 Step 1.35） |
-| L2 评审质检阀门+监控 | 每日 04:00 | pending 机审 + approved 复核、因子巡检降级（approved 豁免）、逻辑/数据级监控（v2.105.0+3 合并任务） |
+| L2 评审质检统一任务 | 每日 04:00 | 合并原「周日周度评审」与「每日阀门+监控」：周日重量级全量重审+衰减淘汰+阀门收口，其余日轻量阀门+巡检+逻辑/数据/因子级监控（v3.0.0） |
 | ~~L3 Portfolio~~ | ~~工作日每日 05:00~~ | **⛔ 组合权重重算已移除（v3.0.0，plans/57）**：策略合成迁移 Regime-Driven，FTS 不再提供该能力 |
 | ~~信号管线~~ | ~~工作日每日 20:00~~ | **⛔ 交易信号产生已移除（v3.0.0）**：组合信号/交易建议类输出不再属于 FTS；FTS 唯一信号出口为因子信号矩阵（l3_signal_store，供 RD 消费） |
 

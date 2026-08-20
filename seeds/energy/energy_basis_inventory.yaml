@@ -1,0 +1,86 @@
+family: energy_basis_inventory
+version: '1.0'
+market: energy
+description: 能化专属 — 能化库存/基差因子（能化品种现货库存与期限结构，BU/PG/TA 等季节性库存驱动）
+factors:
+- name: eng_basis_stock_reversion
+  description: 基差-库存回归：期限结构斜率（短长均价比）与价格位置组合，捕捉能化库存季节性压力。
+  market: energy
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 15))
+        if n < window + 1:
+            return np.zeros(n)
+        ma_s = np.convolve(close, np.ones(5) / 5, mode='same')
+        ma_l = np.convolve(close, np.ones(window) / window, mode='same')
+        slope = (ma_s - ma_l) / np.maximum(ma_l, 1e-10)
+        # 价格位置：当前价在 window 区间内的分位
+        pos = np.zeros(n)
+        for i in range(window, n):
+            seg = close[i - window + 1:i + 1]
+            rng = np.max(seg) - np.min(seg)
+            pos[i] = (close[i] - np.min(seg)) / rng if rng > 1e-10 else 0.5
+        # 期限结构走陡 + 价格低位 → 库存拐点预期（基差-库存回归）
+        sig = 0.6 * np.tanh(slope / 0.05) + 0.4 * (0.5 - pos)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 15
+  input_fields:
+  - close
+  lookback: 17
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 能化品种（沥青/液化气/PTA）库存季节性主导基差：期限结构走陡+价格低位预示累库拐点后压力释放，基差向库存方向均值回归。
+- name: eng_stock_pressure_reversal
+  description: 库存压力反转：波动率脉冲后的价格反转（库存数据发布/补库窗口的均值回归）。
+  market: energy
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 10))
+        if n < window + 2:
+            return np.zeros(n)
+        ret = np.zeros(n)
+        ret[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        vol = np.zeros(n)
+        for i in range(1, n):
+            seg = ret[max(0, i - window + 1):i + 1]
+            vol[i] = np.std(seg)
+        chg = np.zeros(n)
+        chg[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        # 高波动脉冲后反向（库存冲击后的均值回归）
+        high_vol = np.zeros(n)
+        if n > window:
+            th = np.percentile(vol[window:], 80)
+            high_vol = vol > th
+        sig = np.where(
+            high_vol,
+            -np.tanh(chg / 0.02),
+            np.tanh(chg / 0.05) * 0.3,
+        )
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - close
+  lookback: 12
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 4
+    institutional: 3
+    narrative: 能化品种库存数据发布引发波动率脉冲，脉冲后价格向库存均衡回归；高波动反转捕捉库存冲击后的超调修复。

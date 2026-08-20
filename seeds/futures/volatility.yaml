@@ -1,0 +1,75 @@
+family: volatility
+version: '1.0'
+market: futures
+factors:
+- name: fut_cv
+  description: 变异系数因子(CV)：标准差/均值。中信回看5日年化7.5%夏普0.98。CV高=波动大=均值回归做空。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 5))
+        if n < window + 1:
+            return np.zeros(n)
+        # 变异系数 = std / mean
+        cv = np.zeros(n)
+        for i in range(window, n):
+            seg = close[max(0, i-window+1):i+1]
+            mu = np.mean(seg)
+            if mu > 1e-10:
+                cv[i] = np.std(seg) / mu
+        # CV 高 => 波动大 => 均值回归做空
+        sig = -np.tanh(cv * 50)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 5
+  input_fields:
+  - close
+  lookback: 10
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 变异系数因子(CV)：标准差/均值。中信回看5日年化7.5%夏普0.98。CV高=波动大=均值回归做空。
+- name: fut_downside_volatility
+  description: 实际下行波动率因子：仅计算负收益部分的波动率。华泰期货，回归系数<0。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window + 1:
+            return np.zeros(n)
+        returns = np.zeros(n)
+        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        dvol = np.zeros(n)
+        for i in range(window, n):
+            neg = returns[max(0, i-window+1):i+1]
+            neg = neg[neg < 0]
+            if len(neg) > 1:
+                dvol[i] = np.std(neg)
+        # 下行波动率高 => 风险大 => 做空
+        sig = -np.tanh(dvol * 50)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 实际下行波动率因子：仅计算负收益部分的波动率。华泰期货，回归系数<0。

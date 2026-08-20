@@ -1,0 +1,75 @@
+family: energy_chain_linkage
+version: '1.0'
+market: energy
+description: 能化专属 — 能化链内联动因子（原油→燃料油/沥青/液化气 + 芳烃→聚酯 纵向传导，季节性开工联动）
+factors:
+- name: eng_chain_linkage_momentum
+  description: 链内纵向联动动量：原油（链源头）传导下游的领涨领跌——短长均价比变化率捕捉链条传导强度。
+  market: energy
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 10))
+        if n < window + 2:
+            return np.zeros(n)
+        # 链内联动：价格趋势斜率的变化率（传导加速/衰减）
+        ma = np.convolve(close, np.ones(window) / window, mode='same')
+        slope = np.zeros(n)
+        slope[1:] = (ma[1:] - ma[:-1]) / np.maximum(ma[:-1], 1e-10)
+        accel = np.zeros(n)
+        accel[1:] = slope[1:] - slope[:-1]
+        # 传导加速（斜率二阶导为正）→ 链内联动加强，顺势
+        sig = np.tanh(slope / 0.03) * 0.6 + np.tanh(accel / 0.01) * 0.4
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - close
+  lookback: 12
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 原油→燃料油/沥青/液化气与芳烃→聚酯的纵向传导：上游价格变动经成本传导链条在下游加速/衰减，斜率二阶导捕捉传导强度变化。
+- name: eng_seasonal_open_cycle
+  description: 能化季节性开工周期：价格波动聚集与趋势相位，捕捉沥青/聚酯季节性开工率（旺季去库/淡季累库）。
+  market: energy
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window + 1:
+            return np.zeros(n)
+        ret = np.zeros(n)
+        ret[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        vol = np.zeros(n)
+        for i in range(1, n):
+            seg = ret[max(0, i - window + 1):i + 1]
+            vol[i] = np.std(seg)
+        ma_l = np.convolve(close, np.ones(window) / window, mode='same')
+        trend = (close - ma_l) / np.maximum(ma_l, 1e-10)
+        # 季节性周期：趋势 + 波动相位（开工旺季量能聚集，价格趋势+波动共振）
+        sig = np.tanh(trend / 0.05) * (0.5 + 0.5 * np.clip(vol / 0.03, 0.0, 1.0))
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 22
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 能化品种（沥青/聚酯/液化气）季节性开工率周期：旺季开工去库伴随趋势与波动聚集共振，趋势×波动相位捕捉开工周期相位。

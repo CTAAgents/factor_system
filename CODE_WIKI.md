@@ -620,7 +620,7 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 | `futures_signal_pipeline` | `0 20 * * 1-5` | 期货信号管道（**组合侧已退役登记**，信号计算部分保留） |
 | `sync_futures_data` | `30 17 * * 1-5` | 期货多源数据同步（Stage1 kline/Stage2 fundamental/Stage3 term_structure） |
 | `health_check` | `*/10 * * * *` | 健康检查（check_all_status） |
-| `l2_review` | `0 10 * * 0` | L2 周度评审（准入重审+衰减评估+阀门巡检） |
+| `l2_review` | `0 10 * * 0` | L2 周度评审（准入重审+衰减评估+阀门巡检；**v3.0.0 起并入 TRAE Schedule 每日 04:00 统一任务周日重量级分支**，内部注册表保留 cron） |
 | `data_quality_eval` | `*/5 * * * *` | 数据质量周期评估（B.1） |
 | `data_level_monitor` | `0 5 * * *` | 数据级质量监控（GAP-F06） |
 | `logic_monitor` | `30 4 * * *` | 逻辑监控（行为漂移/极端预测/换月异常/市场前提） |
@@ -637,8 +637,7 @@ data/                         # 运行时数据库（DuckDB/SQLite/Parquet，自
 |---|---|
 | L1 知识补给 `l1_meta_loop_job()` | 每日，全期货市场感知 + 知识注入 |
 | L2 种子评估+演化 `l2_seed_promotion` + `evolution_weekday\|weekend` | 每日 01:00 合并任务（先种子晋升 → 演化，工作日 ≈10 代/周末 ≈50 代，生成端去重 Step 1.35 内嵌） |
-| L2 监控+评审质检阀门 | 每日 04:00 合并任务（机审 → 巡检降级 approved 豁免 → 逻辑监控 → 数据级监控，全部在 05:00 前） |
-| L2 周度评审 `l2_review_job()` | 每周日，准入重审 + 衰减评估 + 阀门巡检 |
+| L2 评审质检统一任务 | 每日 04:00（v3.0.0 合并原「周日周度评审」+「每日阀门+监控」：周日重量级 `l2_review_job` 全量重审+衰减淘汰+阀门收口，其余日轻量五步 ①机审→②巡检降级 approved 豁免→③逻辑监控→④数据级监控→⑤因子级监控，全部在 05:00 前） |
 | 外部因子导入 `import_external_factors_job()` | 每月 1 日，6 源 YAML → 字段权威校验 → 去重 → 注入 |
 | 数据基础设施（多源同步 `sync_futures_data_job` / QuantData 每日日线刷新） | 工作日数据同步 |
 | RD 交易建议（14:30 / 21:30） | Regime-Driven 交易建议产出 |

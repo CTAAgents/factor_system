@@ -1,6 +1,6 @@
 # FTS 可观测性
 
-> 版本: v3.0.0+7
+> 版本: v3.0.0+10
 > 最后更新: 2026-08-05
 
 ---
@@ -174,7 +174,7 @@ METRIC drift_alert{overlap=0.00,weight=1.00,o_th=0.50,w_th=0.40} 1
 
 评审质检作为独立 L2→L3 阀门模块，就地审核 / L3 池巡检 / 机审门禁输出：
 - `[review] 因子 {id} 审查决定: {decision} (comment=..., reviewer=...)`——就地审核/人审/机审决定落库（approved/rejected）
-- `[review] L3 池巡检 [{market}]: 扫描 {n} 个 approved 因子，退回 {m} 个`——周度 L3 池巡检统计（功能 2，`l2_review_job` Step C）
+- `[review] L3 池巡检 [{market}]: 扫描 {n} 个 approved 因子，退回 {m} 个`——周度 L3 池巡检统计（功能 2，`l2_review_job` Step C，v3.0.0 起由每日 04:00 统一任务周日重量级分支执行）
 - `[evo] 就地审核失败（不阻断晋升）: {name}: {err}`——晋升链就地审核非阻塞降级
 - 机审门禁判定原因（`AutoReviewPolicy.classify`）：`质检记录缺失（...）宁缺毋滥转人审` / `6 项审计未通过` / `多重检验（Bonferroni）未通过` / `WalkForward 窗口 N < 2` / `质量评分卡 C 级` / `高IC筛查 C 级` / `Q1-Q10 入库质检未通过` / `疑似过拟合/未来函数（ic/sharpe 超上限）`
 

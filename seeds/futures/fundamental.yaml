@@ -1,0 +1,164 @@
+family: fundamental
+version: '1.0'
+market: futures
+factors:
+- name: fut_volume_price_corr_full
+  description: 量价相关性因子：筛选上涨放量下跌缩量的品种。中信回看63日年化7%夏普1.1。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        n = len(close)
+        window = int(params.get('window', 63))
+        if n < window:
+            return np.zeros(n)
+        returns = np.zeros(n)
+        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        corr = np.zeros(n)
+        for i in range(window, n):
+            r = returns[i-window+1:i+1]
+            v = volume[i-window+1:i+1]
+            if np.std(r) > 1e-10 and np.std(v) > 1e-10:
+                corr[i] = np.corrcoef(r, v)[0, 1]
+        # 正相关(上涨放量下跌缩量) => 做多；负相关 => 做空
+        sig = np.tanh(corr * 3)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 63
+  input_fields:
+  - close
+  - volume
+  lookback: 68
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 4
+    narrative: 量价相关性因子：筛选上涨放量下跌缩量的品种。中信回看63日年化7%夏普1.1。
+- name: fut_trend_strength
+  description: 趋势强度因子：位移/路程比，衡量价格趋势流畅性。中信回看243日年化7%夏普0.9。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        high = data['high'].values if hasattr(data, 'high') else data['high']
+        low = data['low'].values if hasattr(data, 'low') else data['low']
+        n = len(close)
+        window = int(params.get('window', 243))
+        if n < window + 1:
+            return np.zeros(n)
+        # 趋势强度 = 位移/路程 = (close[t]-close[t-window]) / sum(|close[i]-close[i-1]|)
+        displacement = np.zeros(n)
+        displacement[window:] = close[window:] - close[:-window]
+        path = np.zeros(n)
+        for i in range(1, n):
+            path[i] = path[i-1] + abs(close[i] - close[i-1])
+        path_ret = np.zeros(n)
+        path_ret[window:] = path[window:] - path[:-window]
+        ts = np.zeros(n)
+        for i in range(window, n):
+            if path_ret[i] > 1e-10:
+                ts[i] = displacement[i] / path_ret[i]
+        # 趋势强度高(位移/路程接近1) => 趋势跟踪
+        sig = np.tanh(ts * 5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 120
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 120
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 趋势强度因子：位移/路程比，衡量价格趋势流畅性。中信回看243日年化7%夏普0.9。
+- name: fut_amplitude
+  description: 振幅因子：(high-low)/close 滚动均值。振幅收缩=突破前兆做多，振幅扩大=见顶做空。中信年化9.7%夏普1.3。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        high = data['high'].values if hasattr(data, 'high') else data['high']
+        low = data['low'].values if hasattr(data, 'low') else data['low']
+        n = len(close)
+        window = int(params.get('window', 63))
+        if n < window + 1:
+            return np.zeros(n)
+        # 振幅 = (high-low)/close 的滚动均值
+        amp = (high - low) / np.maximum(close, 1e-10)
+        avg_amp = np.array([np.mean(amp[max(0, i-window+1):i+1]) for i in range(n)])
+        # 振幅收缩 -> 突破前兆 -> 做多；振幅扩大 -> 见顶 -> 做空
+        chg = np.zeros(n)
+        chg[window:] = (avg_amp[window:] - avg_amp[:-window]) / np.maximum(avg_amp[:-window], 1e-10)
+        sig = -np.tanh(chg * 10)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 63
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 68
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 振幅因子：(high-low)/close 滚动均值。振幅收缩=突破前兆做多，振幅扩大=见顶做空。中信年化9.7%夏普1.3。
+- name: fut_mobile_big_data
+  description: 移动大数据因子(近似版)：用量价加速度替代人流/物流数据。东证原版样本外夏普3.19。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window + 1:
+            return np.zeros(n)
+        # 移动大数据因子近似版：用量价加速度替代
+        # 原版使用人流/物流等另类数据，此处用成交量加速度代理
+        ret = np.zeros(n)
+        ret[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        vol_chg = np.zeros(n)
+        vol_chg[1:] = (volume[1:] - volume[:-1]) / np.maximum(volume[:-1], 1e-10)
+        # 加速度 = 价格加速 + 成交量加速
+        accel = np.zeros(n)
+        for i in range(window, n):
+            ret_slope = np.polyfit(range(window), ret[i-window+1:i+1], 1)[0] if np.std(ret[i-window+1:i+1]) > 1e-10 else 0
+            vol_slope = np.polyfit(range(window), vol_chg[i-window+1:i+1], 1)[0] if np.std(vol_chg[i-window+1:i+1]) > 1e-10 else 0
+            accel[i] = ret_slope + vol_slope * 0.5
+        sig = np.tanh(accel * 50)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: 移动大数据因子(近似版)：用量价加速度替代人流/物流数据。东证原版样本外夏普3.19。

@@ -1,0 +1,983 @@
+family: tinysoft
+version: '1.0'
+market: futures
+factors:
+- name: fut_main_contract_return
+  description: 主力涨幅：主力合约过去 N 日价格涨幅，衡量趋势动量强度。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            window = int(params.get('lookback', 20))
+            if n < window + 2:
+                return np.zeros(n)
+            ret = (close[window:] - close[:-window]) / np.maximum(close[:-window], 1e-10)
+            sig = np.zeros(n)
+            sig[window:] = np.tanh(ret / 0.05)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    lookback: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 主力涨幅：主力合约过去 N 日价格涨幅，衡量趋势动量强度。
+- name: fut_up_day_ratio
+  description: 上涨次数占比：过去 N 日内上涨天数占比，判断趋势持续性。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            window = int(params.get('lookback', 20))
+            if n < window + 2:
+                return np.zeros(n)
+            ret = np.diff(close) / np.maximum(close[:-1], 1e-10)
+            up_ratio = np.zeros(n)
+            for i in range(window, n):
+                up_ratio[i] = np.sum(ret[i - window : i] > 0) / window
+            sig = (up_ratio - 0.5) * 2
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    lookback: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 2
+    institutional: 3
+    narrative: 上涨次数占比：过去 N 日内上涨天数占比，判断趋势持续性。
+- name: fut_up_return_ratio
+  description: 涨幅占比：过去 N 日内上涨收益占全部收益的比例，衡量上涨动能强度。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            window = int(params.get('lookback', 20))
+            if n < window + 2:
+                return np.zeros(n)
+            ret = np.diff(close) / np.maximum(close[:-1], 1e-10)
+            ratio = np.zeros(n)
+            for i in range(window, n):
+                seg = ret[i - window : i]
+                up_sum = np.sum(seg[seg > 0])
+                total = np.sum(np.abs(seg))
+                ratio[i] = up_sum / max(total, 1e-10)
+            sig = (ratio - 0.5) * 2
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    lookback: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 2
+    institutional: 3
+    narrative: 涨幅占比：过去 N 日内上涨收益占全部收益的比例，衡量上涨动能强度。
+- name: fut_price_ma_ratio
+  description: 均线偏离比值：价格与均线的比值，衡量价格偏离程度。价格远高于均线=超买。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            window = int(params.get('window', 20))
+            if n < window + 1:
+                return np.zeros(n)
+            ma = np.convolve(close, np.ones(window) / window, mode='same')
+            ratio = close / np.maximum(ma, 1e-10)
+            sig = np.tanh((ratio - 1.0) * 5)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: 均线偏离比值：价格与均线的比值，衡量价格偏离程度。价格远高于均线=超买。
+- name: fut_ma_crossover
+  description: 快慢均线偏离率：(快均线-慢均线)/慢均线，MACD 核心思想。快线上穿慢线=做多。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            fast = int(params.get('fast', 5))
+            slow = int(params.get('slow', 20))
+            if n < slow + 1:
+                return np.zeros(n)
+            ma_fast = np.convolve(close, np.ones(fast) / fast, mode='same')
+            ma_slow = np.convolve(close, np.ones(slow) / slow, mode='same')
+            dev = (ma_fast - ma_slow) / np.maximum(ma_slow, 1e-10)
+            sig = np.tanh(dev * 20)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    fast: 5
+    slow: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: 快慢均线偏离率：(快均线-慢均线)/慢均线，MACD 核心思想。快线上穿慢线=做多。
+- name: fut_overnight_trend
+  description: 隔夜趋势因子：(开盘-前收盘)/前收盘，隔夜跳空方向。隔夜上涨=利多延续。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            open = data['open'].values if hasattr(data, 'open') else data['open']
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            if n < 3:
+                return np.zeros(n)
+            overnight = (open - np.roll(close, 1)) / np.maximum(np.roll(close, 1), 1e-10)
+            overnight[0] = 0
+            window = int(params.get('window', 5))
+            avg_overnight = np.convolve(overnight, np.ones(window) / window, mode='same')
+            sig = np.tanh(avg_overnight * 20)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 5
+  input_fields:
+  - open
+  - close
+  lookback: 10
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 3
+    narrative: 隔夜趋势因子：(开盘-前收盘)/前收盘，隔夜跳空方向。隔夜上涨=利多延续。
+- name: fut_intraday_momentum
+  description: 日内动量因子：(收盘-开盘)/开盘，衡量日内趋势强度。日内强势=短期动量。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            open = data['open'].values if hasattr(data, 'open') else data['open']
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            if n < 2:
+                return np.zeros(n)
+            intra_ret = (close - open) / np.maximum(open, 1e-10)
+            window = int(params.get('window', 10))
+            if n < window:
+                return np.zeros(n)
+            avg_intra = np.convolve(intra_ret, np.ones(window) / window, mode='same')
+            sig = np.tanh(avg_intra * 20)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - open
+  - close
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 日内动量因子：(收盘-开盘)/开盘，衡量日内趋势强度。日内强势=短期动量。
+- name: fut_intraday_amplitude
+  description: 日内累计振幅因子：日内振幅的滚动平均，衡量价格活跃度。振幅扩大=趋势启动。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            high = data['high'].values if hasattr(data, 'high') else data['high']
+            low = data['low'].values if hasattr(data, 'low') else data['low']
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            if n < 2:
+                return np.zeros(n)
+            amp = (high - low) / np.maximum(close, 1e-10)
+            window = int(params.get('window', 10))
+            if n < window:
+                return np.zeros(n)
+            avg_amp = np.convolve(amp, np.ones(window) / window, mode='same')
+            sig = np.tanh((avg_amp - np.mean(avg_amp)) / np.maximum(np.std(avg_amp), 1e-10))
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - high
+  - low
+  - close
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 日内累计振幅因子：日内振幅的滚动平均，衡量价格活跃度。振幅扩大=趋势启动。
+- name: fut_gk_vol_trend
+  description: 日内GK波动趋势因子：Garman-Klass 波动率估计的趋势方向。GK波动率上升=波动加剧=趋势延续。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            high = data['high'].values if hasattr(data, 'high') else data['high']
+            low = data['low'].values if hasattr(data, 'low') else data['low']
+            open = data['open'].values if hasattr(data, 'open') else data['open']
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            if n < 5:
+                return np.zeros(n)
+            hl = np.log(high / np.maximum(low, 1e-10))
+            co = np.log(close / np.maximum(open, 1e-10))
+            gk = 0.5 * hl ** 2 - (2 * np.log(2) - 1) * co ** 2
+            gk = np.clip(gk, 0, None)
+            window = int(params.get('window', 10))
+            if n < window:
+                return np.zeros(n)
+            avg_gk = np.convolve(gk, np.ones(window) / window, mode='same')
+            # 波动率趋势方向
+            trend = np.gradient(avg_gk)
+            sig = np.tanh(trend * 100)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - high
+  - low
+  - open
+  - close
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 日内GK波动趋势因子：Garman-Klass 波动率估计的趋势方向。GK波动率上升=波动加剧=趋势延续。
+- name: fut_rs_vol_trend
+  description: 日内RS波动趋势因子：Rogers-Satchell 波动率估计的趋势方向。RS对漂移项更稳健。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            high = data['high'].values if hasattr(data, 'high') else data['high']
+            low = data['low'].values if hasattr(data, 'low') else data['low']
+            open = data['open'].values if hasattr(data, 'open') else data['open']
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            if n < 5:
+                return np.zeros(n)
+            ho = np.log(high / np.maximum(open, 1e-10))
+            hc = np.log(high / np.maximum(close, 1e-10))
+            lo = np.log(low / np.maximum(open, 1e-10))
+            lc = np.log(low / np.maximum(close, 1e-10))
+            rs = ho * hc + lo * lc
+            rs = np.clip(rs, 0, None)
+            window = int(params.get('window', 10))
+            if n < window:
+                return np.zeros(n)
+            avg_rs = np.convolve(rs, np.ones(window) / window, mode='same')
+            trend = np.gradient(avg_rs)
+            sig = np.tanh(trend * 100)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - high
+  - low
+  - open
+  - close
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 日内RS波动趋势因子：Rogers-Satchell 波动率估计的趋势方向。RS对漂移项更稳健。
+- name: fut_pk_vol_trend
+  description: 日内PK波动趋势因子：Parkinson 波动率估计的趋势方向。仅用高低价，计算简单。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            high = data['high'].values if hasattr(data, 'high') else data['high']
+            low = data['low'].values if hasattr(data, 'low') else data['low']
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            if n < 5:
+                return np.zeros(n)
+            hl = np.log(high / np.maximum(low, 1e-10))
+            pk = hl ** 2 / (4 * np.log(2))
+            window = int(params.get('window', 10))
+            if n < window:
+                return np.zeros(n)
+            avg_pk = np.convolve(pk, np.ones(window) / window, mode='same')
+            trend = np.gradient(avg_pk)
+            sig = np.tanh(trend * 100)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - high
+  - low
+  - close
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 日内PK波动趋势因子：Parkinson 波动率估计的趋势方向。仅用高低价，计算简单。
+- name: fut_yz_vol_trend
+  description: 日内YZ波动趋势因子：Yang-Zhang 波动率估计的趋势方向。YZ综合了隔夜和日内波动，最全面。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            high = data['high'].values if hasattr(data, 'high') else data['high']
+            low = data['low'].values if hasattr(data, 'low') else data['low']
+            open = data['open'].values if hasattr(data, 'open') else data['open']
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            if n < 5:
+                return np.zeros(n)
+            co = np.log(close / np.maximum(open, 1e-10))
+            oc = np.log(open / np.maximum(np.roll(close, 1), 1e-10))
+            oc[0] = 0
+            hl = np.log(high / np.maximum(low, 1e-10))
+            ho = np.log(high / np.maximum(open, 1e-10))
+            hc = np.log(high / np.maximum(close, 1e-10))
+            lo = np.log(low / np.maximum(open, 1e-10))
+            lc = np.log(low / np.maximum(close, 1e-10))
+            rs = ho * hc + lo * lc
+            rs = np.clip(rs, 0, None)
+            k = 0.34 / (1.34 + (window + 1) / (window - 1)) if window > 1 else 0.34
+            window = int(params.get('window', 10))
+            if n < window:
+                return np.zeros(n)
+            # 简化的 Yang-Zhang
+            yz = np.zeros(n)
+            for i in range(1, n):
+                start = max(0, i - window + 1)
+                seg_o = oc[start:i+1]
+                seg_c = co[start:i+1]
+                seg_rs = rs[start:i+1]
+                yz[i] = np.var(seg_o) + 0.5 * np.var(seg_c) + 0.5 * np.mean(seg_rs)
+            trend = np.gradient(yz)
+            sig = np.tanh(trend * 100)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - high
+  - low
+  - open
+  - close
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 日内YZ波动趋势因子：Yang-Zhang 波动率估计的趋势方向。YZ综合了隔夜和日内波动，最全面。
+- name: fut_vwap_break
+  description: 均价突破因子：价格突破 VWAP 的程度。价格>VWAP=多头强势，突破幅度越大信号越强。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            high = data['high'].values if hasattr(data, 'high') else data['high']
+            low = data['low'].values if hasattr(data, 'low') else data['low']
+            volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+            n = len(close)
+            window = int(params.get('window', 20))
+            if n < window + 1:
+                return np.zeros(n)
+            typical_price = (high + low + close) / 3
+            vwap = np.convolve(typical_price * volume, np.ones(window), mode='same') / np.maximum(np.convolve(volume, np.ones(window), mode='same'), 1e-10)
+            break_dev = (close - vwap) / np.maximum(vwap, 1e-10)
+            sig = np.tanh(break_dev * 20)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - high
+  - low
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 均价突破因子：价格突破 VWAP 的程度。价格>VWAP=多头强势，突破幅度越大信号越强。
+- name: fut_norm_vwap_break
+  description: 标准化均价突破因子：用波动率标准化的 VWAP 偏离，避免不同品种量级差异。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            high = data['high'].values if hasattr(data, 'high') else data['high']
+            low = data['low'].values if hasattr(data, 'low') else data['low']
+            volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+            n = len(close)
+            window = int(params.get('window', 20))
+            if n < window + 2:
+                return np.zeros(n)
+            typical_price = (high + low + close) / 3
+            vwap = np.convolve(typical_price * volume, np.ones(window), mode='same') / np.maximum(np.convolve(volume, np.ones(window), mode='same'), 1e-10)
+            ret = np.diff(close) / np.maximum(close[:-1], 1e-10)
+            vol = np.zeros(n)
+            for i in range(window, n):
+                vol[i] = np.std(ret[i - window : i])
+            break_dev = (close - vwap) / np.maximum(vwap, 1e-10)
+            sig = np.zeros(n)
+            for i in range(window, n):
+                if vol[i] > 1e-10:
+                    sig[i] = break_dev[i] / vol[i]
+            sig = np.tanh(sig * 5)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - high
+  - low
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 标准化均价突破因子：用波动率标准化的 VWAP 偏离，避免不同品种量级差异。
+- name: fut_log_price_diff
+  description: 主力对数价格差：合约价格的对数差分，衡量价格水平变化。价格越低=价值越高=做多。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            window = int(params.get('window', 60))
+            if n < window + 2:
+                return np.zeros(n)
+            log_p = np.log(np.maximum(close, 1e-10))
+            # 价格偏离长期均值程度
+            ma = np.convolve(log_p, np.ones(window) / window, mode='same')
+            dev = ma - log_p
+            # 价格越低(dev越大)越做多(均值回归)
+            sig = np.tanh(dev * 3)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 60
+  input_fields:
+  - close
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 2
+    institutional: 4
+    narrative: 主力对数价格差：合约价格的对数差分，衡量价格水平变化。价格越低=价值越高=做多。
+- name: fut_oi_growth
+  description: 持仓量涨幅：持仓量的 N 日增长率。持仓快速增长=资金流入=趋势确认。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            hold = data['hold'].values if hasattr(data, 'hold') else data.get('hold', np.ones(len(close) if 'close' in data else 1))
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            window = int(params.get('window', 10))
+            if n < window + 2:
+                return np.zeros(n)
+            oi_growth = (hold[window:] - hold[:-window]) / np.maximum(hold[:-window], 1e-10)
+            sig = np.zeros(n)
+            sig[window:] = np.tanh(oi_growth * 2)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - close
+  - hold
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 持仓量涨幅：持仓量的 N 日增长率。持仓快速增长=资金流入=趋势确认。
+- name: fut_oi_value_change
+  description: 持仓金额变化比值：持仓金额(持仓量×价格)的变化率，结合价格和持仓量双重信息。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            hold = data['hold'].values if hasattr(data, 'hold') else data.get('hold', np.ones(len(close) if 'close' in data else 1))
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            window = int(params.get('window', 10))
+            if n < window + 2:
+                return np.zeros(n)
+            oi_value = hold * close
+            change = (oi_value[window:] - oi_value[:-window]) / np.maximum(oi_value[:-window], 1e-10)
+            sig = np.zeros(n)
+            sig[window:] = np.tanh(change * 2)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - close
+  - hold
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 持仓金额变化比值：持仓金额(持仓量×价格)的变化率，结合价格和持仓量双重信息。
+- name: fut_oi_value_growth
+  description: 持仓金额涨幅：持仓金额的 N 日增长率（绝对值）。衡量资金流入流出规模。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            hold = data['hold'].values if hasattr(data, 'hold') else data.get('hold', np.ones(len(close) if 'close' in data else 1))
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            window = int(params.get('window', 20))
+            if n < window + 2:
+                return np.zeros(n)
+            oi_value = hold * close
+            growth = (oi_value[window:] - oi_value[:-window]) / np.maximum(oi_value[:-window], 1e-10)
+            sig = np.zeros(n)
+            sig[window:] = np.tanh(growth * 2)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - hold
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 持仓金额涨幅：持仓金额的 N 日增长率（绝对值）。衡量资金流入流出规模。
+- name: fut_wr_level
+  description: 仓单水平：仓单数量的原始水平值。仓单高=现货供应充足=利空。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            # 注：仓单数据需要外部数据源，这里用成交量近似
+            volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+            n = len(close)
+            if n < 5:
+                return np.zeros(n)
+            # 仓单水平用成交量的长期均值作为代理
+            window = int(params.get('window', 60))
+            if n < window:
+                return np.zeros(n)
+            avg_vol = np.convolve(volume, np.ones(window) / window, mode='same')
+            level = (volume - avg_vol) / np.maximum(avg_vol, 1e-10)
+            sig = -np.tanh(level * 2)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 60
+  input_fields:
+  - close
+  - volume
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 2
+    microstructure: 3
+    institutional: 4
+    narrative: 仓单水平：仓单数量的原始水平值。仓单高=现货供应充足=利空。
+- name: fut_wr_growth
+  description: 仓单涨幅：仓单数量的 N 日增长率。仓单增长加快=供应过剩=利空。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+            n = len(close)
+            window = int(params.get('window', 20))
+            if n < window + 2:
+                return np.zeros(n)
+            # 仓单增长率用成交量增长率代理
+            vol_growth = (volume[window:] - volume[:-window]) / np.maximum(volume[:-window], 1e-10)
+            sig = np.zeros(n)
+            sig[window:] = -np.tanh(vol_growth * 2)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 2
+    microstructure: 3
+    institutional: 4
+    narrative: 仓单涨幅：仓单数量的 N 日增长率。仓单增长加快=供应过剩=利空。
+- name: fut_cv2
+  description: 变异系数因子2：标准差/均值，用滚动窗口末端的波动率替代均值，强调尾部波动。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            window = int(params.get('window', 20))
+            if n < window + 2:
+                return np.zeros(n)
+            ret = np.diff(close) / np.maximum(close[:-1], 1e-10)
+            cv2 = np.zeros(n)
+            for i in range(window, n):
+                seg = close[i - window : i]
+                seg_ret = ret[i - window : i]
+                std_val = np.std(seg_ret)
+                mean_val = np.mean(seg)
+                cv2[i] = std_val / max(mean_val, 1e-10) if mean_val > 0 else 0
+            sig = np.tanh((cv2 - np.mean(cv2)) / np.maximum(np.std(cv2), 1e-10))
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: 变异系数因子2：标准差/均值，用滚动窗口末端的波动率替代均值，强调尾部波动。
+- name: fut_idiosyncratic_vol
+  description: 特质波动率：回归残差的波动率，剥离市场因子后的特质波动。特质波动率高=高估=做空。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            window = int(params.get('window', 20))
+            if n < window + 2:
+                return np.zeros(n)
+            ret = np.diff(close) / np.maximum(close[:-1], 1e-10)
+            ivol = np.zeros(n)
+            for i in range(window, n):
+                seg = ret[i - window : i]
+                # 以均值为市场基准，残差=收益-均值
+                mu = np.mean(seg)
+                resid = seg - mu
+                ivol[i] = np.std(resid)
+            sig = np.tanh((ivol - np.mean(ivol)) / np.maximum(np.std(ivol), 1e-10))
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 特质波动率：回归残差的波动率，剥离市场因子后的特质波动。特质波动率高=高估=做空。
+- name: fut_rs_vol
+  description: RS波动率因子：Rogers-Satchell 波动率估计，对漂移项稳健。高RS波动率=风险加大=做空。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            high = data['high'].values if hasattr(data, 'high') else data['high']
+            low = data['low'].values if hasattr(data, 'low') else data['low']
+            open = data['open'].values if hasattr(data, 'open') else data['open']
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            if n < 5:
+                return np.zeros(n)
+            ho = np.log(high / np.maximum(open, 1e-10))
+            hc = np.log(high / np.maximum(close, 1e-10))
+            lo = np.log(low / np.maximum(open, 1e-10))
+            lc = np.log(low / np.maximum(close, 1e-10))
+            rs = ho * hc + lo * lc
+            rs = np.clip(rs, 0, None)
+            window = int(params.get('window', 20))
+            if n < window:
+                return np.zeros(n)
+            avg_rs = np.convolve(rs, np.ones(window) / window, mode='same')
+            sig = np.tanh((avg_rs - np.mean(avg_rs)) / np.maximum(np.std(avg_rs), 1e-10))
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - high
+  - low
+  - open
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: RS波动率因子：Rogers-Satchell 波动率估计，对漂移项稳健。高RS波动率=风险加大=做空。
+- name: fut_gk_vol
+  description: GK波动率因子：Garman-Klass 波动率估计，利用OHLC四价信息。高GK波动率=做空。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            high = data['high'].values if hasattr(data, 'high') else data['high']
+            low = data['low'].values if hasattr(data, 'low') else data['low']
+            open = data['open'].values if hasattr(data, 'open') else data['open']
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            if n < 5:
+                return np.zeros(n)
+            hl = np.log(high / np.maximum(low, 1e-10))
+            co = np.log(close / np.maximum(open, 1e-10))
+            gk = 0.5 * hl ** 2 - (2 * np.log(2) - 1) * co ** 2
+            gk = np.clip(gk, 0, None)
+            window = int(params.get('window', 20))
+            if n < window:
+                return np.zeros(n)
+            avg_gk = np.convolve(gk, np.ones(window) / window, mode='same')
+            sig = np.tanh((avg_gk - np.mean(avg_gk)) / np.maximum(np.std(avg_gk), 1e-10))
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - high
+  - low
+  - open
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: GK波动率因子：Garman-Klass 波动率估计，利用OHLC四价信息。高GK波动率=做空。
+- name: fut_pk_vol
+  description: PK波动率因子：Parkinson 波动率估计，仅用高低价。高PK波动率=做空。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            high = data['high'].values if hasattr(data, 'high') else data['high']
+            low = data['low'].values if hasattr(data, 'low') else data['low']
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            if n < 5:
+                return np.zeros(n)
+            hl = np.log(high / np.maximum(low, 1e-10))
+            pk = hl ** 2 / (4 * np.log(2))
+            window = int(params.get('window', 20))
+            if n < window:
+                return np.zeros(n)
+            avg_pk = np.convolve(pk, np.ones(window) / window, mode='same')
+            sig = np.tanh((avg_pk - np.mean(avg_pk)) / np.maximum(np.std(avg_pk), 1e-10))
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - high
+  - low
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: PK波动率因子：Parkinson 波动率估计，仅用高低价。高PK波动率=做空。
+- name: fut_yz_vol
+  description: YZ波动率因子：Yang-Zhang 波动率估计，综合隔夜和日内波动。最全面的OHLC波动率估计。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            high = data['high'].values if hasattr(data, 'high') else data['high']
+            low = data['low'].values if hasattr(data, 'low') else data['low']
+            open = data['open'].values if hasattr(data, 'open') else data['open']
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            if n < 5:
+                return np.zeros(n)
+            co = np.log(close / np.maximum(open, 1e-10))
+            oc = np.log(open / np.maximum(np.roll(close, 1), 1e-10))
+            oc[0] = 0
+            ho = np.log(high / np.maximum(open, 1e-10))
+            hc = np.log(high / np.maximum(close, 1e-10))
+            lo = np.log(low / np.maximum(open, 1e-10))
+            lc = np.log(low / np.maximum(close, 1e-10))
+            rs = ho * hc + lo * lc
+            rs = np.clip(rs, 0, None)
+            window = int(params.get('window', 20))
+            if n < window:
+                return np.zeros(n)
+            yz = np.zeros(n)
+            for i in range(1, n):
+                start = max(0, i - window + 1)
+                seg_o = oc[start:i+1]
+                seg_c = co[start:i+1]
+                seg_rs = rs[start:i+1]
+                yz[i] = np.var(seg_o) + 0.5 * np.var(seg_c) + 0.5 * np.mean(seg_rs)
+            sig = np.tanh((yz - np.mean(yz)) / np.maximum(np.std(yz), 1e-10))
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - high
+  - low
+  - open
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: YZ波动率因子：Yang-Zhang 波动率估计，综合隔夜和日内波动。最全面的OHLC波动率估计。
+- name: fut_volatility_directional
+  description: 波动率因子：滚动波动率的变化方向。波动率上升=风险加大=做空，波动率下降=风险消化=做多。
+  market: futures
+  code: |2
+
+        def factor_program(data, params):
+            import numpy as np
+            close = data['close'].values if hasattr(data, 'close') else data['close']
+            n = len(close)
+            window = int(params.get('window', 20))
+            if n < window + 3:
+                return np.zeros(n)
+            ret = np.diff(close) / np.maximum(close[:-1], 1e-10)
+            vol = np.zeros(n)
+            for i in range(window, n):
+                vol[i] = np.std(ret[i - window : i])
+            # 波动率变化方向
+            vol_change = np.diff(vol)
+            sig = np.zeros(n)
+            sig[window+1:] = -np.tanh(vol_change[window-1:] * 100)
+            return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: 波动率因子：滚动波动率的变化方向。波动率上升=风险加大=做空，波动率下降=风险消化=做多。

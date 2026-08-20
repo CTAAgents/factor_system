@@ -1,0 +1,114 @@
+family: term_structure
+version: '1.0'
+market: futures
+factors:
+- name: fut_roll_yield_carry
+  description: 展期收益(Roll Yield/Carry)：Back结构做多获得展期收益，Contango做空。华泰年化9.63%夏普1.94。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('lookback', 5))
+        hold = int(params.get('holding', 15))
+        if n < window + 5 + hold:
+            return np.zeros(n)
+        # 用多周期 MA 斜率近似展期收益率
+        ma_short = np.convolve(close, np.ones(5)/5, mode='same')
+        ma_long = np.convolve(close, np.ones(window)/window, mode='same')
+        roll_yield = (ma_short - ma_long) / np.maximum(ma_long, 1e-10)
+        sig = np.clip(roll_yield / 0.1, -1.0, 1.0)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    lookback: 5
+    holding: 15
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 4
+    institutional: 5
+    narrative: 展期收益(Roll Yield/Carry)：Back结构做多获得展期收益，Contango做空。华泰年化9.63%夏普1.94。
+- name: fut_stable_term_structure
+  description: 稳定样本期限结构：OLS回归判断期限结构稳定性。稳定样本回看5日调仓15日年化12.61%夏普1.19。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        lookback = int(params.get('lookback', 5))
+        hold = int(params.get('holding', 15))
+        if n < lookback * 3 + 5:
+            return np.zeros(n)
+        # 用 OLS 斜率稳定性近似期限结构稳定性
+        ma_short = np.convolve(close, np.ones(5)/5, mode='same')
+        ma_mid = np.convolve(close, np.ones(10)/10, mode='same')
+        slope = (ma_short - ma_mid) / np.maximum(ma_mid, 1e-10)
+        # 滑动窗口内斜率的标准差 -> 稳定性
+        stable = np.zeros(n)
+        for i in range(lookback, n):
+            seg = slope[max(0, i-lookback+1):i+1]
+            if len(seg) > 1:
+                # 标准差越小越稳定
+                stable[i] = -np.std(seg)
+        sig = np.tanh(stable * 50)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    lookback: 5
+    holding: 15
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 稳定样本期限结构：OLS回归判断期限结构稳定性。稳定样本回看5日调仓15日年化12.61%夏普1.19。
+- name: fut_basis_factor
+  description: 基差因子：用 close/settle 偏离近似基差，无结算价时用 MA 比替代。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        settle = data.get('settle', close).values if hasattr(data.get('settle', close), 'values') else data.get('settle', close)
+        n = len(close)
+        window = int(params.get('window', 10))
+        if n < window + 1:
+            return np.zeros(n)
+        # 基差因子：用 close/settle 偏离近似（settle=结算价）
+        # 若无结算价，用 close 的短长 MA 比替代
+        try:
+            basis = (close - settle) / np.maximum(settle, 1e-10)
+        except Exception:
+            ma_s = np.convolve(close, np.ones(3)/3, mode='same')
+            ma_l = np.convolve(close, np.ones(20)/20, mode='same')
+            basis = (ma_s - ma_l) / np.maximum(ma_l, 1e-10)
+        sig = np.clip(basis / 0.02, -1.0, 1.0)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - close
+  - settle
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 基差因子：用 close/settle 偏离近似基差，无结算价时用 MA 比替代。

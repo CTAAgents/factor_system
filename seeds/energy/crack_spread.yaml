@@ -1,0 +1,75 @@
+family: crack_spread
+version: '1.0'
+market: energy
+description: 能化专属 — 裂解价差/炼化利润因子（原油→燃料油/沥青/液化气链条传导）
+factors:
+- name: eng_crack_spread_momentum
+  description: 裂解价差动量代理：短长均值比变化近似炼化利润方向，价差扩张期下游品种趋势延续（原油成本传导）。
+  market: energy
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 10))
+        if n < window + 2:
+            return np.zeros(n)
+        # 短周期均值比代表裂解价差方向代理（炼化利润强弱）
+        ma_s = np.convolve(close, np.ones(3) / 3, mode='same')
+        ma_l = np.convolve(close, np.ones(window) / window, mode='same')
+        spread = (ma_s - ma_l) / np.maximum(ma_l, 1e-10)
+        # 价差动量：spread 上行=炼化利润扩张
+        mom = np.zeros(n)
+        mom[1:] = spread[1:] - spread[:-1]
+        sig = np.tanh(mom / 0.02)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - close
+  lookback: 12
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 裂解价差（原油与成品油/沥青价差）扩张期炼厂利润上升，下游品种价格趋势延续；成本传导与库存周期共同驱动。
+- name: eng_refinery_margin_proxy
+  description: 炼厂利润代理：波动率放大的价格趋势强度，捕捉炼化环节利润弹性（高波动期利润兑现更充分）。
+  market: energy
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window + 2:
+            return np.zeros(n)
+        ret = np.zeros(n)
+        ret[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        vol = np.zeros(n)
+        for i in range(1, n):
+            seg = ret[max(0, i - window + 1):i + 1]
+            vol[i] = np.std(seg)
+        ma_l = np.convolve(close, np.ones(window) / window, mode='same')
+        trend = (close - ma_l) / np.maximum(ma_l, 1e-10)
+        # 利润弹性：趋势 × 波动率（高波动期炼化利润兑现充分，信号更强）
+        sig = np.tanh(trend / 0.05) * np.clip(vol / 0.02, 0.5, 2.0)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 22
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: 炼厂利润弹性随波动率放大：高波动期裂解价差兑现更充分，趋势信号与波动率乘积捕捉利润弹性强度。

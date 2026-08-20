@@ -1,0 +1,78 @@
+family: polyester_chain
+version: '1.0'
+market: energy
+description: 能化专属 — 聚酯链加工差因子（PX→PTA→聚酯短纤/瓶片，芳烃链中游传导）
+factors:
+- name: eng_polyester_processing_margin
+  description: 聚酯链加工费代理：布林带带宽捕捉 PTA/聚酯加工费区间，带宽收窄后扩张预期（加工差均值回归）。
+  market: energy
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window + 2:
+            return np.zeros(n)
+        ma = np.convolve(close, np.ones(window) / window, mode='same')
+        std = np.zeros(n)
+        for i in range(1, n):
+            seg = close[max(0, i - window + 1):i + 1]
+            std[i] = np.std(seg)
+        bb_width = (2 * std) / np.maximum(ma, 1e-10)
+        avg_w = np.mean(bb_width[window:]) if n > window else 0.0
+        # 带宽低于均值（加工差压缩）→ 回归扩张预期；趋势方向辅助
+        sig = np.tanh((avg_w - bb_width) * 20)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 22
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 聚酯链加工费（PX-原油、PTA-PX、聚酯-PTA 价差）围绕行业边际成本均值回归，带宽收窄预示加工差扩张，芳烃/聚酯品种价格弹性放大。
+- name: eng_polyester_inventory_cycle
+  description: 聚酯链库存周期代理：量价协同度与库存去化节奏（开工/库存主导 PTA/聚酯价格波动）。
+  market: energy
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        n = len(close)
+        window = int(params.get('window', 10))
+        if n < window + 1:
+            return np.zeros(n)
+        chg = np.zeros(n)
+        chg[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        vol_ma = np.convolve(volume, np.ones(window) / window, mode='same')
+        vol_ratio = volume / np.maximum(vol_ma, 1e-10)
+        # 量价协同：放量+上涨=去库预期（利多）；放量+下跌=累库（利空）
+        sig = np.where(
+            vol_ratio > 1.2,
+            np.tanh(chg / 0.02),
+            np.where(vol_ratio < 0.8, np.tanh(chg / 0.05) * 0.5, np.tanh(chg / 0.03) * 0.3),
+        )
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - close
+  - volume
+  lookback: 12
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 4
+    institutional: 4
+    narrative: 聚酯链库存周期主导价格：放量上涨反映去库预期（下游补库），放量下跌反映累库（供应过剩），量价协同捕捉开工率与库存节奏。

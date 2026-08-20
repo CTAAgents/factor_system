@@ -1,6 +1,6 @@
 # FTS 业务流程图
 
-> 版本: v3.0.0+7
+> 版本: v3.0.0+10
 > 最后更新: 2026-08-05
 
 ## 全景业务流
@@ -158,23 +158,26 @@
   │
 周日09:00  L2 批量子链评估（l2_subchain_quality_job，v2.105.0+16）
   │      └── 全部 active 因子逐品种 IC → 子链画像 → 落库 subchain_factor_quality 质量矩阵
-  │           （min_chain_ic=0.02；无有效链因子标记 pending_validation 不自动降级，10:00 评审质检前刷新画像）
-  │
-周日10:00  L2 周度评审（l2_review）
-  │      ├── Step A reaudit 新标准重审（retain/shadow/retire）
-  │      ├── Step B 衰减评估 + AutoRetire 自动淘汰
-  │      └── Step C review_l3_pool 复核 L3 池 + list_pending 机审（approved 唯一收口出口，组合防抖）
-  │           （energy 走 l2_energy_qa_review_job 评审质检统一管道，退化检测消费 09:00 子链画像）
+  │           （min_chain_ic=0.02；无有效链因子标记 pending_validation 不自动降级，04:00 评审质检前刷新画像）
   │
 17:30  期货多源数据同步（工作日每日，Phase 14.5）→ 行情缓存更新（供次日 01:00 L2 使用）
   │
 20:00  信号管线启动（工作日每日，消费 factor_weights.json）→ 横截面信号报告
   │
-每日04:00  评审质检阀门 + 三项监控合并任务（v2.105.0+3，原 04:00 巡检 / 04:30 逻辑 / 05:00 数据并入）
-  │      ├── ① pending 机审 + approved 复核（_review_gate_weekly：新因子当日 approved，供 05:00 L3 消费）
-  │      ├── ② 因子巡检降级（factor_inspector：Sharpe↓20%；approved 因子豁免仅标记待周度评审收口）
-  │      ├── ③ 逻辑监控（logic_monitor：行为漂移 / 极端预测 / 换月异常）
-  │      └── ④ 数据级监控（data_level_monitor：缺失率 / 异常值 / 多源分歧）
+每日04:00  FTS L2 因子生命周期管理+监控统一任务（v3.0.0 合并原「周日 10:00 L2 周度评审」+「每日 04:00 阀门+三项监控」，TRAE Schedule 3f5d5da3）
+  │      ├──【周日重量级分支】（l2_review_job）
+  │      │    ├── Step A reaudit 新标准重审（retain/shadow/retire）
+  │      │    ├── Step B 衰减评估 + AutoRetire 自动淘汰
+  │      │    └── Step C review_l3_pool 复核 L3 池 + list_pending 机审（approved 唯一收口出口，组合防抖）
+  │      │         （energy 走 l2_energy_qa_review_job 手动调用，退化检测消费 09:00 子链画像）
+  │      └──【每日轻量五步】
+  │           ├── ① pending 机审 + approved 复核（_review_gate_weekly：新因子当日 approved）
+  │           ├── ② 因子巡检降级（factor_inspector：Sharpe↓20%；approved 因子豁免仅标记待周日收口）
+  │           ├── ③ 逻辑监控（logic_monitor：行为漂移 / 极端预测 / 换月异常 / 市场前提）
+  │           ├── ④ 数据级监控（data_level_monitor：缺失率 / 异常值 / 多源分歧）
+  │           └── ⑤ 因子级监控（factor_level_monitor：完整性 / 一致性 / 血缘 / 逻辑 / 实盘偏离）
+  │           （周日执行重量级分支后 Step C 已覆盖轻量①，可跳过；05:00 起消费当日 04:00 机审结果）
+  │
 每5分钟   数据质量评估（data_quality_eval）
 每10分钟  Health Check（状态轮询 / 熔断检测 / 告警通知）
   │
@@ -217,5 +220,5 @@
 | 字段 | 值 |
 |:-----|:----|
 | 代码→文档映射 | 本文件描述 FTS 全景业务流，覆盖 `meta_loop.py`（L1）、`extractors/bulk_collector.py`+`bulk_knowledge.py`+`knowledge_filter.py`（L1 批量三层管线）、`evolution_loop.py`（L2）、`portfolio_loop.py`（L3）、`scheduler/engine.py`（调度器）、`monitor/`（监控）各模块的职责边界和触发时序 |
-| 可验证断言 | 业务流包含 L0~L3 四层 + 信号输出层共 5 层架构；时序图为实际 cron：L1 00:00 / 种子评估 02:00 / 演化 03:00（工作日≈10 代·周六≈50 代）/ 批量 周日06:00 / 周度评审 周日10:00（含 review_l3_pool 收口）/ L3 工作日06:00（approved 硬过滤）/ 信号管道 20:00 / 巡检 04:00（approved 豁免）/ 逻辑 04:30 / 数据级 05:00 / 数据质量 每5min / 健康检查 每10min；内部调度停用（`FTS_INTERNAL_SCHEDULER_ENABLED` 默认 "0"），TRAE Schedule 为唯一调度源；L1 时序含批量采集(≥300 篇/天)→embedding 粗筛→LLM 深读与失败复活（l1_rejected_retry）；股票 L3 19:30 与股票信号管道 08:45 已随股票管线剥离至 fts-stock（2026-08）；角色边界表中 L1 不可修改因子代码、L2 不可构建组合、L3 不执行交易 |
+| 可验证断言 | 业务流包含 L0~L3 四层 + 信号输出层共 5 层架构；时序图为实际 cron：L1 00:00 / 种子评估 02:00 / 演化 03:00（工作日≈10 代·周六≈50 代）/ 批量 周日06:00 / L3 工作日06:00（approved 硬过滤）/ 信号管道 20:00 / 评审质检统一任务 每日04:00（周日重量级：l2_review_job 全量重审+衰减+review_l3_pool 收口；平日轻量：①机审→②巡检 approved 豁免→③逻辑→④数据级→⑤因子级）/ 数据质量 每5min / 健康检查 每10min；内部调度停用（`FTS_INTERNAL_SCHEDULER_ENABLED` 默认 "0"），TRAE Schedule 为唯一调度源；L1 时序含批量采集(≥300 篇/天)→embedding 粗筛→LLM 深读与失败复活（l1_rejected_retry）；股票 L3 19:30 与股票信号管道 08:45 已随股票管线剥离至 fts-stock（2026-08）；角色边界表中 L1 不可修改因子代码、L2 不可构建组合、L3 不执行交易 |
 | 检验方式 | 对照 `01-architecture.md` 架构文档确认层级定义一致；对照 `fts/scheduler/tasks.py` REGISTRY 16 任务 cron 确认时间点一致；`fts scheduler status` 查看实际调度数（内部停用默认 0）

@@ -171,9 +171,9 @@ def register_default_tasks() -> None:
         ),
         TaskSpec(
             name="l2_review",
-            cron_expression="0 10 * * 0",  # 每周日 10:00（45 计划候选③：月度衰减周度化，替代 monthly_decay_eval 注册）
+            cron_expression="0 10 * * 0",  # 每周日 10:00（45 计划候选③：月度衰减周度化，替代 monthly_decay_eval 注册）；v3.0.0 起实际调度已并入 TRAE Schedule 每日 04:00「FTS L2 因子生命周期管理+监控」统一任务周日重量级分支（本注册保留 cron 仅供内部调度器兼容，内部调度默认停用 FTS_INTERNAL_SCHEDULER_ENABLED=0）
             callable_path="fts.scheduler.jobs.l2_review_job",
-            description="L2 周度评审（45 计划候选③）：Step A 新标准准入重审（audit/robustness/评分卡复检 active elite，不合格降级观察或淘汰，FTS_MONTHLY_REAUDIT_ENABLED=0 关闭）+ Step B 因子衰减评估（A.2 增量评估 + 状态机 + 自动淘汰）",
+            description="L2 周度评审（45 计划候选③）：Step A 新标准准入重审（audit/robustness/评分卡复检 active elite，不合格降级观察或淘汰，FTS_MONTHLY_REAUDIT_ENABLED=0 关闭）+ Step B 因子衰减评估（A.2 增量评估 + 状态机 + 自动淘汰）；v3.0.0 起由每日 04:00 统一任务周日重量级分支调用（TRAE Schedule 3f5d5da3）",
             trace_id_prefix="fts.l2_review",
         ),
         TaskSpec(

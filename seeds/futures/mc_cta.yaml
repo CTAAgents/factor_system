@@ -1,0 +1,713 @@
+family: mc_cta
+version: '1.0'
+market: futures
+factors:
+- name: fut_t3_ma
+  description: T3移动平均因子：Tillson T3 MA，比传统EMA更平滑，减少滞后和噪声。T3>价格=偏多，T3<价格=偏空。MultiCharts
+    PowerLanguage经典平滑指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 14))\n    v_factor = float(params.get('v_factor', 0.7))\n\n    # T3 移动平均计算 (Tillson\
+    \ T3)\n    # T3 = GD(GD(GD(close))), GD = EMA(EMA(price))\n    def ema(series,\
+    \ period):\n        result = np.zeros_like(series)\n        result[0] = series[0]\n\
+    \        alpha = 2.0 / (period + 1)\n        for i in range(1, len(series)):\n\
+    \            result[i] = alpha * series[i] + (1 - alpha) * result[i-1]\n     \
+    \   return result\n\n    c1 = -v_factor ** 3\n    c2 = 3 * v_factor ** 2 + 3 *\
+    \ v_factor ** 3\n    c3 = -6 * v_factor ** 2 - 3 * v_factor - 3 * v_factor **\
+    \ 3\n    c4 = 1 + 3 * v_factor + v_factor ** 3 + 3 * v_factor ** 2\n\n    e1 =\
+    \ ema(close, window)\n    e2 = ema(e1, window)\n    e3 = ema(e2, window)\n   \
+    \ e4 = ema(e3, window)\n    e5 = ema(e4, window)\n    e6 = ema(e5, window)\n\n\
+    \    t3 = c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3\n\n    # 价格相对于T3的位置：T3<价格=偏多，T3>价格=偏空\n\
+    \    signal = (close - t3) / np.maximum(close, 1e-10)\n    signal = np.tanh(signal\
+    \ * 50)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+    v_factor: 0.7
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: T3移动平均因子：Tillson T3 MA，比传统EMA更平滑，减少滞后和噪声。T3<价格=偏多，T3>价格=偏空。
+- name: fut_fisher_transform
+  description: Fisher Transform因子：Ehlers Fisher Transform，将价格正态化。极端值>2=做空，<-2=做多。MC
+    Ehlers系列经典指标，识别价格转折点。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 10))\n\n    # 计算中间价\n    mid = (high + low) / 2.0\n\n    # 滚动窗口极值\n    hp =\
+    \ np.zeros(n)\n    lp = np.zeros(n)\n    for i in range(window, n):\n        hp[i]\
+    \ = np.max(mid[max(0, i-window+1):i+1])\n        lp[i] = np.min(mid[max(0, i-window+1):i+1])\n\
+    \n    # Fisher Transform\n    value = np.zeros(n)\n    for i in range(window,\
+    \ n):\n        range_ = hp[i] - lp[i]\n        if range_ > 1e-10:\n          \
+    \  raw = 2.0 * (mid[i] - lp[i]) / range_ - 1.0\n            # 钳制\n           \
+    \ raw = np.clip(raw, -0.999, 0.999)\n            value[i] = 0.5 * np.log((1 +\
+    \ raw) / (1 - raw))\n        else:\n            value[i] = value[i-1] if i > 0\
+    \ else 0.0\n\n    # Fisher > 2 偏空, < -2 偏多\n    signal = -np.tanh(value * 0.5)\n\
+    \n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 10
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 20
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 3
+    institutional: 2
+    narrative: Fisher Transform因子：Ehlers Fisher Transform，将价格正态化。极端值>2偏空，<-2偏多。
+- name: fut_mama
+  description: MAMA因子：MESA Adaptive Moving Average，自适应调整周期。快速MAMA上穿慢速FAMA=偏多，下穿=偏空。MC
+    Ehlers系列自适应均线。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    fast_limit = float(params.get('fast_limit',\
+    \ 0.5))\n    slow_limit = float(params.get('slow_limit', 0.05))\n\n    # MAMA\
+    \ 计算 (MESA Adaptive Moving Average)\n    # 使用相位变化检测自适应周期\n    alpha = slow_limit\
+    \ * np.ones(n)\n    mama = np.zeros(n)\n    fama = np.zeros(n)\n    mama[0] =\
+    \ close[0]\n    fama[0] = close[0]\n\n    for i in range(4, n):\n        # Hilbert\
+    \ Transform 相位检测\n        smooth = (4 * close[i] + 3 * close[i-1] + 2 * close[i-2]\
+    \ + close[i-3]) / 10.0\n        if i >= 6:\n            detrender = (0.0962 *\
+    \ smooth + 0.5769 * smooth + 0.5769 * smooth + 0.0962 * smooth) / 2.0  # 简化\n\
+    \        # 自适应 alpha\n        alpha[i] = fast_limit / (1 + np.exp(-10 * (close[i]\
+    \ - close[i-1]) / np.maximum(close[i-1], 1e-10)))\n        alpha[i] = np.clip(alpha[i],\
+    \ slow_limit, fast_limit)\n\n        mama[i] = alpha[i] * close[i] + (1 - alpha[i])\
+    \ * mama[i-1]\n        fama[i] = 0.5 * alpha[i] * mama[i] + (1 - 0.5 * alpha[i])\
+    \ * fama[i-1]\n\n    # MAMA 上穿 FAMA = 偏多，下穿 = 偏空\n    signal = (mama - fama) /\
+    \ np.maximum(close, 1e-10)\n    signal = np.tanh(signal * 50)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    fast_limit: 0.5
+    slow_limit: 0.05
+  input_fields:
+  - close
+  lookback: 30
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 2
+    narrative: MAMA因子：MESA Adaptive Moving Average，自适应调整周期。MAMA上穿FAMA=偏多，下穿=偏空。
+- name: fut_ehlers_corr_cycle
+  description: Ehlers相关周期因子：自相关周期检测，识别市场循环周期。周期短=趋势强=偏多，周期长=震荡=偏空。MC Ehlers系列周期检测。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 20))\n    max_cycle = int(params.get('max_cycle', 40))\n\n    # 计算自相关周期\n  \
+    \  cycle_quality = np.zeros(n)\n    for i in range(window * 2, n):\n        seg\
+    \ = close[max(0, i-window+1):i+1]\n        seg_mean = np.mean(seg)\n        seg_std\
+    \ = np.std(seg, ddof=0)\n        if seg_std < 1e-10:\n            continue\n \
+    \       seg_norm = (seg - seg_mean) / seg_std\n\n        # 自相关计算\n        best_corr\
+    \ = 0\n        best_lag = 0\n        for lag in range(2, min(max_cycle, len(seg_norm)\
+    \ // 2)):\n            corr = np.corrcoef(seg_norm[:-lag], seg_norm[lag:])[0,\
+    \ 1]\n            if np.abs(corr) > np.abs(best_corr):\n                best_corr\
+    \ = corr\n                best_lag = lag\n\n        # 周期短=趋势强=偏多，周期长=震荡=偏空\n \
+    \       if best_lag > 0:\n            cycle_quality[i] = np.abs(best_corr) / np.maximum(best_lag,\
+    \ 1)\n\n    signal = np.tanh(cycle_quality * 5 - 2)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+    max_cycle: 40
+  input_fields:
+  - close
+  lookback: 50
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 2
+    narrative: Ehlers相关周期因子：自相关周期检测，周期短=趋势强偏多，周期长=震荡偏空。
+- name: fut_choppiness_index
+  description: 混沌指数因子：Choppiness Index，市场趋势vs震荡判断。CI<38.2=趋势市场偏多，CI>61.8=震荡市场偏空。MC经典市场状态滤波器。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 14))\n\n    # Choppiness Index 计算\n    tr = np.zeros(n)\n    for i in range(1,\
+    \ n):\n        tr[i] = np.max([\n            high[i] - low[i],\n            np.abs(high[i]\
+    \ - close[i-1]),\n            np.abs(low[i] - close[i-1])\n        ])\n\n    atr\
+    \ = np.zeros(n)\n    for i in range(window, n):\n        atr[i] = np.mean(tr[max(0,\
+    \ i-window+1):i+1])\n\n    highest = np.zeros(n)\n    lowest = np.zeros(n)\n \
+    \   for i in range(window, n):\n        highest[i] = np.max(high[max(0, i-window+1):i+1])\n\
+    \        lowest[i] = np.min(low[max(0, i-window+1):i+1])\n\n    # CI = sum(TR)\
+    \ / (最高 - 最低) 的对数标准化\n    sum_tr = np.zeros(n)\n    for i in range(window, n):\n\
+    \        sum_tr[i] = np.sum(tr[max(0, i-window+1):i+1])\n\n    range_ = np.maximum(highest\
+    \ - lowest, 1e-10)\n    ci = 100 * np.log(sum_tr / range_) / np.log(window + 1)\n\
+    \n    # CI < 38.2 = 趋势市场做多, CI > 61.8 = 震荡市场做空\n    signal = np.where(ci < 38.2,\
+    \ 1.0, np.where(ci > 61.8, -1.0, 0.0))\n    mid_mask = (ci >= 38.2) & (ci <= 61.8)\n\
+    \    signal[mid_mask] = (61.8 + 38.2 - 2 * ci[mid_mask]) / (61.8 - 38.2)\n   \
+    \ signal = np.tanh(signal * 0.5)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0),\
+    \ -1.0, 1.0)"
+  params:
+    window: 14
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: 混沌指数因子：CI<38.2=趋势偏多，CI>61.8=震荡偏空。MC经典市场状态滤波器。
+- name: fut_vortex
+  description: Vortex Indicator因子：趋势方向检测。VI+上穿VI- = 上升趋势偏多，VI-上穿VI+ = 下降趋势偏空。MC经典趋势检测因子。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 14))\n\n    # Vortex Indicator 计算\n    vm_plus = np.zeros(n)\n    vm_minus =\
+    \ np.zeros(n)\n    tr = np.zeros(n)\n\n    for i in range(1, n):\n        vm_plus[i]\
+    \ = np.abs(high[i] - low[i-1])\n        vm_minus[i] = np.abs(low[i] - high[i-1])\n\
+    \        tr[i] = np.max([\n            high[i] - low[i],\n            np.abs(high[i]\
+    \ - close[i-1]),\n            np.abs(low[i] - close[i-1])\n        ])\n\n    sum_vp\
+    \ = np.zeros(n)\n    sum_vm = np.zeros(n)\n    sum_tr = np.zeros(n)\n\n    for\
+    \ i in range(window, n):\n        sum_vp[i] = np.sum(vm_plus[max(0, i-window+1):i+1])\n\
+    \        sum_vm[i] = np.sum(vm_minus[max(0, i-window+1):i+1])\n        sum_tr[i]\
+    \ = np.sum(tr[max(0, i-window+1):i+1])\n\n    vi_plus = np.where(sum_tr > 1e-10,\
+    \ sum_vp / sum_tr, 0)\n    vi_minus = np.where(sum_tr > 1e-10, sum_vm / sum_tr,\
+    \ 0)\n\n    # VI+ > VI- = 偏多, VI- > VI+ = 偏空\n    signal = vi_plus - vi_minus\n\
+    \    signal = np.tanh(signal * 3)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: Vortex Indicator因子：VI+上穿VI-偏多，VI-上穿VI+偏空。MC经典趋势检测。
+- name: fut_kst
+  description: KST因子：Know Sure Thing，多周期ROC合成指标。KST上穿零轴=偏多，下穿零轴=偏空。MC经典多周期趋势指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    r1 = int(params.get('r1',\
+    \ 10))\n    r2 = int(params.get('r2', 15))\n    r3 = int(params.get('r3', 20))\n\
+    \    r4 = int(params.get('r4', 30))\n\n    # 多周期ROC\n    roc = np.zeros(n)\n \
+    \   roc[1:] = close[1:] / np.maximum(close[:-1], 1e-10) - 1\n\n    # 四个周期SMA\n\
+    \    sma1 = np.zeros(n)\n    sma2 = np.zeros(n)\n    sma3 = np.zeros(n)\n    sma4\
+    \ = np.zeros(n)\n\n    for i in range(r1, n):\n        sma1[i] = np.mean(roc[max(0,\
+    \ i-r1+1):i+1])\n    for i in range(r2, n):\n        sma2[i] = np.mean(roc[max(0,\
+    \ i-r2+1):i+1])\n    for i in range(r3, n):\n        sma3[i] = np.mean(roc[max(0,\
+    \ i-r3+1):i+1])\n    for i in range(r4, n):\n        sma4[i] = np.mean(roc[max(0,\
+    \ i-r4+1):i+1])\n\n    # KST = 1*SMA1 + 2*SMA2 + 3*SMA3 + 4*SMA4\n    kst = sma1\
+    \ + 2 * sma2 + 3 * sma3 + 4 * sma4\n    signal = np.tanh(kst * 50)\n\n    return\
+    \ np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    r1: 10
+    r2: 15
+    r3: 20
+    r4: 30
+  input_fields:
+  - close
+  lookback: 40
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: KST因子：Know Sure Thing，多周期ROC合成。上穿零轴偏多，下穿偏空。
+- name: fut_coppock
+  description: Coppock Curve因子：长期趋势变化检测。Coppock上穿零轴=长期趋势转多，下穿=长期趋势转空。MC经典长期趋势指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    roc_window = int(params.get('roc_window',\
+    \ 14))\n    wma_window = int(params.get('wma_window', 10))\n\n    # 长期ROC\n  \
+    \  roc_long = np.zeros(n)\n    roc_short = np.zeros(n)\n    for i in range(roc_window,\
+    \ n):\n        roc_long[i] = (close[i] / np.maximum(close[max(0, i-roc_window)],\
+    \ 1e-10) - 1) * 100\n    for i in range(roc_window // 2, n):\n        roc_short[i]\
+    \ = (close[i] / np.maximum(close[max(0, i-roc_window//2)], 1e-10) - 1) * 100\n\
+    \n    # RoC = 14个月ROC + 11个月ROC (按月近似)\n    # 日线近似: 14天ROC + 11天ROC\n    roc_sum\
+    \ = roc_long + roc_short\n\n    # 加权移动平均\n    coppock = np.zeros(n)\n    for i\
+    \ in range(wma_window, n):\n        weights = np.arange(1, wma_window + 1)\n \
+    \       seg = roc_sum[max(0, i-wma_window+1):i+1]\n        if len(seg) == wma_window:\n\
+    \            coppock[i] = np.sum(seg * weights) / np.sum(weights)\n\n    # Coppock上穿零轴=偏多，下穿=偏空\n\
+    \    signal = np.tanh(coppock * 0.1)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    roc_window: 14
+    wma_window: 10
+  input_fields:
+  - close
+  lookback: 50
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 2
+    institutional: 4
+    narrative: Coppock Curve因子：长期趋势变化检测，上穿零轴偏多，下穿零轴偏空。
+- name: fut_market_facilitation
+  description: 市场促进指数因子：Bill Williams MFI，量价关系分析。量价齐升=有效突破偏多，量缩价升=弱势偏空。MC Bill Williams经典因子。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n    volume = data['volume'].values if\
+    \ hasattr(data, 'volume') else data['volume']\n\n    window = int(params.get('window',\
+    \ 14))\n\n    # 市场促进指数 = (最高-最低) / 成交量\n    range_ = np.maximum(high - low, 1e-10)\n\
+    \    volume_safe = np.maximum(volume + 1e-10, 1e-10)\n    mf = range_ / volume_safe\n\
+    \n    # 价格变化方向\n    price_change = np.zeros(n)\n    price_change[1:] = close[1:]\
+    \ - close[:-1]\n\n    # 量价关系评分\n    # 量增价涨 = +1 (有效突破), 量增价跌 = -1 (有效下跌)\n   \
+    \ # 量缩价涨 = -0.5 (弱势反弹), 量缩价跌 = +0.5 (缩量整理)\n    signal_raw = np.zeros(n)\n   \
+    \ for i in range(1, n):\n        vol_up = volume[i] > np.mean(volume[max(0, i-window):i])\
+    \ if i >= window else True\n        if price_change[i] > 0 and vol_up:\n     \
+    \       signal_raw[i] = 1.0\n        elif price_change[i] < 0 and vol_up:\n  \
+    \          signal_raw[i] = -1.0\n        elif price_change[i] > 0 and not vol_up:\n\
+    \            signal_raw[i] = -0.5\n        elif price_change[i] < 0 and not vol_up:\n\
+    \            signal_raw[i] = 0.5\n\n    signal = np.tanh(signal_raw)\n\n    return\
+    \ np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+  input_fields:
+  - close
+  - high
+  - low
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 3
+    narrative: 市场促进指数因子：Bill Williams MFI，量价齐升偏多，量缩价升偏空。
+- name: fut_ease_of_movement
+  description: Ease of Movement因子：量价关系效率。EOM上升=价格轻松上涨偏多，EOM下降=价格上涨阻力大偏空。MC经典量价效率因子。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n    volume = data['volume'].values if\
+    \ hasattr(data, 'volume') else data['volume']\n\n    window = int(params.get('window',\
+    \ 14))\n\n    # Ease of Movement = ( (H+L)/2 - (H_prev+L_prev)/2 ) / (成交量 / (H-L)\
+    \ )\n    midpoint = (high + low) / 2.0\n    mid_move = np.zeros(n)\n    mid_move[1:]\
+    \ = midpoint[1:] - midpoint[:-1]\n\n    box_ratio = np.zeros(n)\n    box_ratio[1:]\
+    \ = (volume[1:] / 1e6) / np.maximum(high[1:] - low[1:], 1e-10)\n\n    eom = np.zeros(n)\n\
+    \    eom[1:] = mid_move[1:] / np.maximum(box_ratio[1:], 1e-10)\n\n    # 滚动均值\n\
+    \    eom_sma = np.zeros(n)\n    for i in range(window, n):\n        eom_sma[i]\
+    \ = np.mean(eom[max(0, i-window+1):i+1])\n\n    signal = np.tanh(eom_sma * 10)\n\
+    \n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+  input_fields:
+  - close
+  - high
+  - low
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: Ease of Movement因子：量价关系效率，EOM上升偏多，下降偏空。
+- name: fut_chandelier_exit
+  description: Chandelier Exit因子：波动率跟踪止损。价格突破Chandelier Exit上轨=偏多，跌破下轨=偏空。MC经典波动率跟踪止损工具。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 22))\n    mult = float(params.get('mult', 3.0))\n\n    # ATR 计算\n    tr = np.zeros(n)\n\
+    \    for i in range(1, n):\n        tr[i] = np.max([\n            high[i] - low[i],\n\
+    \            np.abs(high[i] - close[i-1]),\n            np.abs(low[i] - close[i-1])\n\
+    \        ])\n\n    atr = np.zeros(n)\n    for i in range(window, n):\n       \
+    \ atr[i] = np.mean(tr[max(0, i-window+1):i+1])\n\n    # 最高价滚动最高\n    highest =\
+    \ np.zeros(n)\n    lowest = np.zeros(n)\n    for i in range(window, n):\n    \
+    \    highest[i] = np.max(high[max(0, i-window+1):i+1])\n        lowest[i] = np.min(low[max(0,\
+    \ i-window+1):i+1])\n\n    # 长止损 = 最高 - mult * ATR, 短止损 = 最低 + mult * ATR\n  \
+    \  long_stop = highest - mult * atr\n    short_stop = lowest + mult * atr\n\n\
+    \    # 价格 >= 长止损 && 价格 > 短止损 = 偏多(上升趋势)\n    # 价格 <= 短止损 && 价格 < 长止损 = 偏空(下降趋势)\n\
+    \    signal = np.where(close >= long_stop, 1.0, np.where(close <= short_stop,\
+    \ -1.0, 0.0))\n    signal = np.tanh(signal * 0.5)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 22
+    mult: 3.0
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 30
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: Chandelier Exit因子：波动率跟踪止损，价格突破上轨偏多，跌破下轨偏空。
+- name: fut_volatility_ratio
+  description: Volatility Ratio因子：日内波动爆发检测。VR高=波动爆发=趋势启动偏多，VR低=波动萎缩=震荡偏空。MC经典波动率选时因子。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 14))\n\n    # Volatility Ratio = 当日真实波动范围 / 过去N日真实波动范围均值\n    tr = np.zeros(n)\n\
+    \    for i in range(1, n):\n        tr[i] = np.max([\n            high[i] - low[i],\n\
+    \            np.abs(high[i] - close[i-1]),\n            np.abs(low[i] - close[i-1])\n\
+    \        ])\n\n    avg_tr = np.zeros(n)\n    for i in range(window, n):\n    \
+    \    avg_tr[i] = np.mean(tr[max(0, i-window+1):i+1])\n\n    vr = np.where(avg_tr\
+    \ > 1e-10, tr / avg_tr, 1.0)\n\n    # VR > 1.5 = 波动爆发 = 趋势启动偏多\n    # VR < 0.5\
+    \ = 波动萎缩 = 震荡偏空\n    signal = np.where(vr > 1.5, 1.0, np.where(vr < 0.5, -0.5,\
+    \ 0.0))\n    signal = np.tanh(signal)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: Volatility Ratio因子：波动爆发偏多，波动萎缩偏空。MC经典选时因子。
+- name: fut_kase_devstop
+  description: Kase DevStops因子：基于波动率的智能止损。价格突破DevStop上轨=偏多，跌破下轨=偏空。MC高级波动率止损工具。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 14))\n    mult = float(params.get('mult', 2.0))\n\n    # Kase DevStops: 使用波动率加权止损\n\
+    \    tr = np.zeros(n)\n    for i in range(1, n):\n        tr[i] = np.max([\n \
+    \           high[i] - low[i],\n            np.abs(high[i] - close[i-1]),\n   \
+    \         np.abs(low[i] - close[i-1])\n        ])\n\n    # 中位数波动率(更稳健)\n    med_tr\
+    \ = np.zeros(n)\n    for i in range(window, n):\n        med_tr[i] = np.median(tr[max(0,\
+    \ i-window+1):i+1])\n\n    # 价格极值\n    highest = np.zeros(n)\n    lowest = np.zeros(n)\n\
+    \    for i in range(window, n):\n        highest[i] = np.max(high[max(0, i-window+1):i+1])\n\
+    \        lowest[i] = np.min(low[max(0, i-window+1):i+1])\n\n    # 波动率权重\n    vol_weight\
+    \ = 1.0 + np.tanh(med_tr * 10) * 0.5  # 0.5-1.5\n\n    # DevStops\n    dev_stop_long\
+    \ = highest - mult * med_tr * vol_weight\n    dev_stop_short = lowest + mult *\
+    \ med_tr * vol_weight\n\n    # 价格相对位置\n    signal = np.where(close >= dev_stop_long,\
+    \ 1.0, np.where(close <= dev_stop_short, -1.0, 0.0))\n    signal = np.tanh(signal\
+    \ * 0.5)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+    mult: 2.0
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: Kase DevStops因子：基于波动率的智能止损，突破上轨偏多，跌破下轨偏空。
+- name: fut_acceleration_bands
+  description: Acceleration Bands因子：波动率自适应通道，带宽随波动率变化。价格突破上轨=偏多，跌破下轨=偏空。MC Bill Williams波动率通道。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 20))\n    width = float(params.get('width', 2.0))\n\n    # Acceleration Bands\n\
+    \    # 上轨 = 最高 * (1 + width * (最高 - 最低) / (最高 + 最低))\n    # 下轨 = 最低 * (1 - width\
+    \ * (最高 - 最低) / (最高 + 最低))\n\n    upper = np.zeros(n)\n    lower = np.zeros(n)\n\
+    \    for i in range(window, n):\n        seg_h = high[max(0, i-window+1):i+1]\n\
+    \        seg_l = low[max(0, i-window+1):i+1]\n        hi = np.max(seg_h)\n   \
+    \     lo = np.min(seg_l)\n        mid = (hi + lo) / 2\n        if mid > 1e-10:\n\
+    \            band = (hi - lo) / mid\n            upper[i] = hi * (1 + width *\
+    \ band)\n            lower[i] = lo * (1 - width * band)\n\n    # 价格突破上轨 = 偏多(加速上涨),\
+    \ 跌破下轨 = 偏空(加速下跌)\n    signal = np.where(close >= upper, 1.0, np.where(close <=\
+    \ lower, -1.0, 0.0))\n    # 在通道内线性映射\n    inside = (close > lower) & (close <\
+    \ upper) & (upper > lower)\n    signal[inside] = 2 * (close[inside] - lower[inside])\
+    \ / (upper[inside] - lower[inside]) - 1\n    signal = np.tanh(signal * 0.5)\n\n\
+    \    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+    width: 2.0
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 30
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: Acceleration Bands因子：波动率自适应通道，突破上轨偏多，跌破下轨偏空。
+- name: fut_rainbow_ma
+  description: Rainbow MA因子：多周期均线带状排列。均线多头发散=偏多，空头发散=偏空，纠缠=震荡偏空。MC经典多周期均线分析。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    periods = params.get('periods',\
+    \ [5, 10, 20, 30, 50])\n\n    # 多周期SMA\n    mas = []\n    for p in periods:\n\
+    \        ma = np.zeros(n)\n        for i in range(min(p, n), n):\n           \
+    \ ma[i] = np.mean(close[max(0, i-p+1):i+1])\n        mas.append(ma)\n\n    # 均线发散度:\
+    \ 最长期均线偏离度\n    if len(mas) >= 2:\n        spread = np.zeros(n)\n        for i\
+    \ in range(periods[-1], n):\n            vals = [m[i] for m in mas]\n        \
+    \    spread[i] = (np.max(vals) - np.min(vals)) / np.maximum(np.min(vals), 1e-10)\n\
+    \n        # 价格在均线带中的位置\n        pos = np.zeros(n)\n        for i in range(periods[-1],\
+    \ n):\n            vals = [m[i] for m in mas]\n            ma_min = np.min(vals)\n\
+    \            ma_max = np.max(vals)\n            if ma_max > ma_min:\n        \
+    \        pos[i] = (close[i] - ma_min) / (ma_max - ma_min)\n            else:\n\
+    \                pos[i] = 0.5\n\n        # 多头排列: 价格 > 所有均线 = 偏多\n        # 空头排列:\
+    \ 价格 < 所有均线 = 偏空\n        signal = 2 * pos - 1\n        # 发散度调整: 发散大=信号强, 发散小=信号弱\n\
+    \        signal = signal * np.tanh(spread * 50)\n    else:\n        signal = np.zeros(n)\n\
+    \n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    periods:
+    - 5
+    - 10
+    - 20
+    - 30
+    - 50
+  input_fields:
+  - close
+  lookback: 60
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: Rainbow MA因子：多周期均线多头发散偏多，空头发散偏空，纠缠偏空。
+- name: fut_force_index
+  description: Elder Force Index因子：量价动量，设计用于识别真实趋势。FI>0=量价齐升偏多，FI<0=量价齐跌偏空。MC经典量价指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    volume = data['volume'].values\
+    \ if hasattr(data, 'volume') else data['volume']\n\n    window = int(params.get('window',\
+    \ 13))\n\n    # Force Index = 成交量 * (收盘 - 前收盘)\n    price_change = np.zeros(n)\n\
+    \    price_change[1:] = close[1:] - close[:-1]\n    fi = price_change * volume\n\
+    \n    # 平滑\n    fi_smooth = np.zeros(n)\n    for i in range(window, n):\n    \
+    \    fi_smooth[i] = np.mean(fi[max(0, i-window+1):i+1])\n\n    # 归一化\n    fi_signal\
+    \ = np.zeros(n)\n    for i in range(window, n):\n        seg = fi_smooth[max(0,\
+    \ i-window+1):i+1]\n        seg_std = np.std(seg, ddof=0)\n        if seg_std\
+    \ > 1e-10:\n            fi_signal[i] = fi_smooth[i] / seg_std\n\n    signal =\
+    \ np.tanh(fi_signal * 0.5)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0),\
+    \ -1.0, 1.0)"
+  params:
+    window: 13
+  input_fields:
+  - close
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 3
+    narrative: Elder Force Index因子：量价动量，FI>0偏多，FI<0偏空。MC经典量价指标。
+- name: fut_herrick_payoff
+  description: Herrick Payoff Index因子：结合价格、成交量和持仓量的综合指标。HPI>0=资金流入偏多，HPI<0=资金流出偏空。MC经典多因子合成指标。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n    volume = data['volume'].values if\
+    \ hasattr(data, 'volume') else data['volume']\n    open_interest = data.get('open_interest',\
+    \ np.zeros(n)).values if hasattr(data, 'open_interest') else data.get('open_interest',\
+    \ np.zeros(n))\n\n    window = int(params.get('window', 14))\n    mult = float(params.get('mult',\
+    \ 100))\n\n    # Herrick Payoff Index\n    # HPI = mult * (成交量 * (价格变动) * (1 -\
+    \ |价格变动|))\n    # 使用持仓量作为权重\n\n    price_change = np.zeros(n)\n    price_change[1:]\
+    \ = close[1:] - close[:-1]\n    price_range = np.maximum(high - low, 1e-10)\n\
+    \    mid = (high + low) / 2.0\n\n    hpi = np.zeros(n)\n    for i in range(1,\
+    \ n):\n        # 价格变动比率\n        ret = price_change[i] / np.maximum(mid[i], 1e-10)\n\
+    \        # 成交量 * 价格变动 * (1 - |价格变动|) * 持仓量因子\n        oi_factor = 1.0\n      \
+    \  if i > 0 and hasattr(open_interest, '__iter__'):\n            # 持仓量变化\n   \
+    \         if isinstance(open_interest, (list, np.ndarray)) and len(open_interest)\
+    \ > i:\n                oi_change = open_interest[i] - open_interest[i-1]\n  \
+    \              oi_factor = 1.0 + np.tanh(oi_change / np.maximum(np.abs(open_interest[i-1]),\
+    \ 1e-10)) * 0.5\n        hpi[i] = mult * volume[i] * ret * (1 - np.abs(ret)) *\
+    \ oi_factor\n\n    # 平滑\n    hpi_smooth = np.zeros(n)\n    for i in range(window,\
+    \ n):\n        hpi_smooth[i] = np.mean(hpi[max(0, i-window+1):i+1])\n\n    signal\
+    \ = np.tanh(hpi_smooth / np.maximum(np.abs(hpi_smooth).max() + 1e-10, 1e-10) *\
+    \ 2)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+    mult: 100
+  input_fields:
+  - close
+  - high
+  - low
+  - volume
+  - oi
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: Herrick Payoff Index因子：结合价格、成交量、持仓量，HPI>0偏多，HPI<0偏空。
+- name: fut_inside_bar
+  description: Inside Bar突破因子：内包线形态，高低点均在前一日范围内。内包线后突破上轨=偏多，跌破下轨=偏空。MC经典模式识别因子。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 5))\n    lookback = int(params.get('lookback', 3))\n\n    # Inside Bar: 当日最高\
+    \ <= 前日最高 AND 当日最低 >= 前日最低\n    inside = np.zeros(n, dtype=bool)\n    for i in\
+    \ range(1, n):\n        inside[i] = (high[i] <= high[i-1]) and (low[i] >= low[i-1])\n\
+    \n    # 识别内包线后的突破方向\n    signal = np.zeros(n)\n    for i in range(window, n):\n\
+    \        # 检查过去window天内是否有内包线\n        has_inside = np.any(inside[max(0, i-window):i])\n\
+    \        if has_inside:\n            # 找最近内包线的高点低点\n            for j in range(i,\
+    \ max(0, i-window), -1):\n                if inside[j]:\n                    #\
+    \ 突破上轨 = 偏多, 跌破下轨 = 偏空\n                    if close[i] > high[j]:\n         \
+    \               signal[i] = 1.0\n                    elif close[i] < low[j]:\n\
+    \                        signal[i] = -1.0\n                    break\n\n    signal\
+    \ = np.tanh(signal)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0,\
+    \ 1.0)"
+  params:
+    window: 5
+    lookback: 3
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 2
+    narrative: Inside Bar突破因子：内包线后突破上轨偏多，跌破下轨偏空。MC模式识别。
+- name: fut_outside_bar
+  description: Outside Bar反转因子：外包线形态，高低点超出前日范围。外包线配合收涨=偏多，收跌=偏空。MC经典反转形态因子。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 5))\n\n    # Outside Bar: 当日最高 > 前日最高 AND 当日最低 < 前日最低\n    outside = np.zeros(n,\
+    \ dtype=bool)\n    bullish_outside = np.zeros(n)\n    for i in range(1, n):\n\
+    \        outside[i] = (high[i] > high[i-1]) and (low[i] < low[i-1])\n        if\
+    \ outside[i]:\n            # 收涨 = 看涨外包, 收跌 = 看跌外包\n            if close[i] > close[i-1]:\n\
+    \                bullish_outside[i] = 1.0\n            else:\n               \
+    \ bullish_outside[i] = -1.0\n\n    # 外包线后确认\n    signal = np.zeros(n)\n    for\
+    \ i in range(window, n):\n        for j in range(max(0, i-window), i):\n     \
+    \       if outside[j] and bullish_outside[j] != 0:\n                # 外包线后方向一致\n\
+    \                price_dir = 1 if close[i] > close[j] else -1\n              \
+    \  if price_dir * bullish_outside[j] > 0:\n                    signal[i] = bullish_outside[j]\n\
+    \                break\n\n    signal = np.tanh(signal)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 5
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 2
+    narrative: Outside Bar反转因子：外包线收涨偏多，收跌偏空。MC经典反转形态。
+- name: fut_123_reversal
+  description: 123反转形态因子：1-2-3结构反转。上升趋势中价格破前低=偏空，下降趋势中价格破前高=偏多。MC经典形态识别因子。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n\n    window = int(params.get('window',\
+    \ 10))\n    confirm = int(params.get('confirm', 3))\n\n    # 123 反转形态识别\n    #\
+    \ 上升123: 1=高点, 2=回调低点, 3=突破前高 -> 偏多\n    # 下降123: 1=低点, 2=反弹高点, 3=跌破前低 -> 偏空\n\
+    \n    signal = np.zeros(n)\n    for i in range(window * 2, n):\n        # 最近window天的高点/低点\n\
+    \        seg_h = high[max(0, i-window*2):i]\n        seg_l = low[max(0, i-window*2):i]\n\
+    \        seg_c = close[max(0, i-window*2):i]\n\n        # 寻找最近的高点(1)和回调低点(2)\n\
+    \        h1_idx = np.argmax(seg_h)\n        l2_idx = np.argmin(seg_l[h1_idx:])\
+    \ + h1_idx if h1_idx < len(seg_l) - 1 else h1_idx\n\n        # 下降123: 1=低点, 2=反弹高点,\
+    \ 3=突破前低\n        l1_idx = np.argmin(seg_l)\n        h2_idx = np.argmax(seg_h[l1_idx:])\
+    \ + l1_idx if l1_idx < len(seg_h) - 1 else l1_idx\n\n        # 上升123: 价格突破前高\n\
+    \        if h1_idx < l2_idx < len(seg_c) - 1:\n            if seg_c[-1] > seg_h[h1_idx]\
+    \ and seg_c[l2_idx] < seg_c[h1_idx]:\n                signal[i] = 1.0  # 突破前高\
+    \ = 偏多\n\n        # 下降123: 价格跌破前低\n        if l1_idx < h2_idx < len(seg_c) - 1:\n\
+    \            if seg_c[-1] < seg_l[l1_idx] and seg_c[h2_idx] > seg_c[l1_idx]:\n\
+    \                signal[i] = -1.0  # 跌破前低 = 偏空\n\n    signal = np.tanh(signal)\n\
+    \n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 10
+    confirm: 3
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 20
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 3
+    institutional: 2
+    narrative: 123反转形态因子：上升123偏多，下降123偏空。MC经典形态识别。

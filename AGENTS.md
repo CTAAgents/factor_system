@@ -200,3 +200,24 @@ AI仅可读，如需修改需专项确认，禁止私自重构、删除、改动
 ## 十、Claude Code 兼容规则
 
 本模板为量化全场景通用开放规则，Claude Code 只需在项目根目录 CLAUDE.md 中添加 @AGENTS.md，即可自动继承所有挖掘、投研、回测、实盘规范，实现多AI工具规则统一、无差异适配。
+
+## 十一、AI 行为反模式与质量护栏（Harness 机读）
+
+以下 10 条反模式由 `scripts/pre_commit_harness_check.py` 自动检测（规则源 `docs/harness/harness-rules.yaml`），AI/开发者提交前必须自查，命中即整改：
+
+| ID | 反模式 | 严重度 | 检测条件 |
+|:--:|--------|:------:|----------|
+| AP01 | 巨型 Prompt | P1 | AGENTS.md > 300 行 |
+| AP02 | 跳过审核直接编码 | P0 | 无 plan/spec 直接提交 |
+| AP03 | Rules 不维护 | P1 | 规则文件 > 30 天未改 |
+| AP04 | MCP 过度接入 | P2 | MCP 服务 > 10 个 |
+| AP05 | Skill 不原子化 | P1 | 单 Skill > 200 行 |
+| AP06 | 盲目信任 AI 输出 | P0 | 生产路径无独立验证 |
+| AP07 | 循环无停止条件 | P0 | Loop Contract stop 为空 |
+| AP08 | 多循环共写 STATE | P1 | 多 Loop 同 state 目录 |
+| AP09 | Chat 历史当文档 | P2 | 知识仅在对话历史 |
+| AP10 | 一个 PR 改所有 | P1 | PR > 20 文件 |
+
+**文档一致性校验（必跑）**：涉及 `docs/harness/` 变更后必须运行 `python scripts/verify_doc_consistency.py`——自动解析各文档末尾的一致性元数据表格并报告 PASS/FAIL（Layer 2 自动校验，C15 规则已纳入 `docs/harness/harness-rules.yaml`）。
+
+**知识库参考**：回答 FTS 相关问题优先参考本机个人知识库 `D:\Knowledge`，按相关性读取引用其中的内容，禁止凭空推断。

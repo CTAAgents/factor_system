@@ -1,0 +1,116 @@
+family: liquidity
+version: '1.0'
+market: futures
+factors:
+- name: fut_turnover
+  description: 换手率因子：成交量/持仓量。2022年后流动性因子表现较好。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        hold = data['hold'].values if hasattr(data, 'hold') else data.get('hold', np.ones(len(close)))
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window + 1:
+            return np.zeros(n)
+        # 换手率 = volume / hold
+        turnover = np.zeros(n)
+        for i in range(1, n):
+            turnover[i] = volume[i] / max(hold[i], 1)
+        avg_turn = np.convolve(turnover, np.ones(window)/window, mode='same')
+        # 换手率偏离 -> 异常流动性
+        dev = (turnover - avg_turn) / np.maximum(avg_turn, 1e-10)
+        sig = np.tanh(dev * 2)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - volume
+  - hold
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 3
+    narrative: 换手率因子：成交量/持仓量。2022年后流动性因子表现较好。
+- name: fut_bid_ask_spread
+  description: 买卖价差因子：用(high-low)/close近似价差。价差扩大=流动性恶化=做空。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        high = data['high'].values if hasattr(data, 'high') else data['high']
+        low = data['low'].values if hasattr(data, 'low') else data['low']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window + 1:
+            return np.zeros(n)
+        # 用 (high-low)/close 近似买卖价差
+        spread = (high - low) / np.maximum(close, 1e-10)
+        avg_spread = np.convolve(spread, np.ones(window)/window, mode='same')
+        # 价差扩大 -> 流动性恶化 -> 做空(流动性溢价)
+        sig = np.tanh((spread - avg_spread) / np.maximum(avg_spread, 1e-10) * 2)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 买卖价差因子：用(high-low)/close近似价差。价差扩大=流动性恶化=做空。
+- name: fut_amihud_full
+  description: Amihud非流动性因子：|收益率|/成交额。非流动性高=难交易=流动性溢价做空。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window:
+            return np.zeros(n)
+        returns = np.zeros(n)
+        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        abs_ret = np.abs(returns)
+        amihud = np.zeros(n)
+        for i in range(1, n):
+            turnover = volume[i] * close[i]
+            if turnover > 1e-10:
+                amihud[i] = abs_ret[i] / turnover
+        avg = np.array([np.mean(amihud[max(0, i-window+1):i+1]) if i >= 1 else 0 for i in range(n)])
+        z = (avg - np.mean(avg[window:])) / np.maximum(np.std(avg[window:]), 1e-10)
+        sig = -np.tanh(z)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: Amihud非流动性因子：|收益率|/成交额。非流动性高=难交易=流动性溢价做空。

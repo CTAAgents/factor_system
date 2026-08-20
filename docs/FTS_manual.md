@@ -188,7 +188,7 @@ fts factor stats
 | `l2_evolution_weekend` | 周六 03:00 | L2 因子演化（≈50 代） |
 | `l2_seed_promotion` | 每日 02:00 | 种子评估晋升 |
 | `l2_batch_mining` | 周日 06:00 | 批量挖掘漏斗 |
-| `l2_review` | 周日 10:00 | 周度评审（准入重审+衰减评估+阀门巡检） |
+| `l2_review` | 周日 10:00（已并入每日 04:00 统一任务周日分支） | 周度评审（准入重审+衰减评估+阀门巡检） |
 | `l2_subchain_quality` | 周日 09:00 | 批量子链质量评估 |
 | `logic_monitor` | 每日 04:30 | 逻辑监控 |
 | `factor_inspector` | 每日 04:00 | 精英因子巡检 |

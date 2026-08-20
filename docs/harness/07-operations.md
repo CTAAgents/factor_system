@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v3.0.0+7
+> 版本: v3.0.0+10
 > 最后更新: 2026-08-17
 
 ---
@@ -12,6 +12,9 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v3.0.0+10** | **2026-08-20** | **RHI Harness 自进化落地 + GitHub 推送范围治理：新增 scripts/rhi_global_setup.py 与 scripts/cleanup_push_scope.py；CLAUDE.md 追加 RHI 章节、AGENTS.md 补充反模式表；.gitignore 新增 Push safety 段并解除 seeds/（L1 配置层 26 YAML）误拦；移出 12 个一次性探索脚本跟踪；治理计划登记 plans/58** |** |
+| **v3.0.0+9** | **2026-08-20** | **RHI Harness 自进化落地：新增 scripts/rhi_global_setup.py（FTS 适配版四维评分）；CLAUDE.md 追加 RHI 章节并修正 12→13 项清单笔误；AGENTS.md 补充 10 条反模式表 + verify_doc_consistency 引用 + D:\Knowledge 知识库引用** |** |
+| **v3.0.0+8** | **2026-08-20** | **doc+comment: 评审质检调度合并对齐——v3.0.0 起「L2 周度评审（周日 10:00）」已并入 TRAE Schedule 每日 04:00「FTS L2 因子生命周期管理+监控」统一任务（周日重量级 l2_review_job 全量重审+衰减淘汰+阀门收口，其余日轻量五步阀门+巡检+监控）；同步 factor_lifecycle/business_flow/01-architecture/execution_modes/README/CODE_WIKI/FTS_manual/05-observability 及 SVG 调度描述，tasks.py/jobs.py 注释对齐** |** |
 | **v3.0.0+7** | **2026-08-20** | **feat(GAP-160): 盲测池接入演化审计链——symbol_holdout 改用 FUTURES_HOLDOUT 15 品种真外延验证（逐品种时序 IC，不要求共同窗口，use_blind_pool 开关回退）+ cross_symbol 新增板块级覆盖率第 4 通道（min_sector_coverage=5，适配 7 大板块异构池）+ 演化主链自动构建盲测 panel + test_audit_sector_coverage 19 用例** |** |
 | **v3.0.0+6** | **2026-08-20** | **v3.0.0+6: pandas 3 StringDtype 兼容性修复 + QuantData 数据新鲜度告警规则** |** |
 | **v3.0.0+5** | **2026-08-20** | **v3.0.0+1 架构级改造：FTS K线唯一数据源=QuantData，去天勤/通达信实时/AKShare默认降级链** |** |

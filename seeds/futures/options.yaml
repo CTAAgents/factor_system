@@ -1,0 +1,121 @@
+family: options
+version: '1.0'
+market: futures
+factors:
+- name: fut_option_vol_term
+  description: 波动率期限结构因子(日频近似)：短波动率-长波动率。华泰当月IV-次月IV年化23.1%。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window * 2:
+            return np.zeros(n)
+        # 日频近似：用不同周期波动率之差近似波动率期限结构
+        returns = np.zeros(n)
+        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        vol_short = np.array([np.std(returns[max(0, i-5+1):i+1]) for i in range(n)])
+        vol_long = np.array([np.std(returns[max(0, i-window+1):i+1]) for i in range(n)])
+        # 短波动率 - 长波动率 > 0 = 近月IV > 远月IV = 看空
+        spread = (vol_short - vol_long) / np.maximum(vol_long, 1e-10)
+        sig = -np.tanh(spread * 5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 波动率期限结构因子(日频近似)：短波动率-长波动率。华泰当月IV-次月IV年化23.1%。
+- name: fut_option_skew
+  description: IV偏斜因子(日频近似)：上行波动率/下行波动率比。东证47个期权指标中SKEW效果较好。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        high = data['high'].values if hasattr(data, 'high') else data['high']
+        low = data['low'].values if hasattr(data, 'low') else data['low']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window + 1:
+            return np.zeros(n)
+        # 日频近似：用上行/下行波动率比近似 IV 偏斜
+        returns = np.zeros(n)
+        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        up_vol = np.zeros(n)
+        down_vol = np.zeros(n)
+        for i in range(window, n):
+            r = returns[i-window+1:i+1]
+            pos = r[r > 0]
+            neg = r[r < 0]
+            up_vol[i] = np.std(pos) if len(pos) > 1 else 0
+            down_vol[i] = np.std(neg) if len(neg) > 1 else 0
+        # SKEW = 上行波动率 / 下行波动率，比例高 => 看跌保护需求大 => 看空
+        skew = up_vol / np.maximum(down_vol, 1e-10)
+        sig = -np.tanh((skew - 1) * 3)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - high
+  - low
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: IV偏斜因子(日频近似)：上行波动率/下行波动率比。东证47个期权指标中SKEW效果较好。
+- name: fut_option_pcr
+  description: PCR类因子(日频近似)：下跌日成交量/上涨日成交量比。东证PCR近月优于远月。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        n = len(close)
+        window = int(params.get('window', 10))
+        if n < window + 1:
+            return np.zeros(n)
+        # 日频近似：用成交量方向比近似 PCR
+        # 下跌日成交量 / 上涨日成交量
+        chg = np.zeros(n)
+        chg[1:] = close[1:] - close[:-1]
+        down_vol = np.where(chg < 0, volume, 0)
+        up_vol = np.where(chg > 0, volume, 0)
+        cum_down = np.convolve(down_vol, np.ones(window)/window, mode='same')
+        cum_up = np.convolve(up_vol, np.ones(window)/window, mode='same')
+        pcr = cum_down / np.maximum(cum_up, 1e-10)
+        # PCR 高 => 看跌成交多 => 看空
+        sig = -np.tanh((pcr - 1) * 3)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 10
+  input_fields:
+  - close
+  - volume
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: PCR类因子(日频近似)：下跌日成交量/上涨日成交量比。东证PCR近月优于远月。

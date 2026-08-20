@@ -1,0 +1,217 @@
+family: cta_registry
+version: '1.0'
+market: futures
+factors:
+- name: tsmom_5d
+  description: 5日时序动量：短期价格趋势跟踪。CTA注册表核心因子。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 5))
+        if n < window + 1:
+            return np.zeros(n)
+        ret = np.zeros(n)
+        ret[window:] = (close[window:] - close[:-window]) / np.maximum(close[:-window], 1e-10)
+        sig = np.tanh(ret / 0.02)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 5
+  input_fields:
+  - close
+  lookback: 10
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: 5日时序动量：短期价格趋势跟踪。CTA注册表核心因子。
+- name: tsmom_22d
+  description: 22日时序动量：月度价格趋势跟踪。CTA注册表核心因子。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 22))
+        if n < window + 1:
+            return np.zeros(n)
+        ret = np.zeros(n)
+        ret[window:] = (close[window:] - close[:-window]) / np.maximum(close[:-window], 1e-10)
+        sig = np.tanh(ret / 0.05)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 22
+  input_fields:
+  - close
+  lookback: 30
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: 22日时序动量：月度价格趋势跟踪。CTA注册表核心因子。
+- name: basis_level
+  description: 基差水平因子：(close-settle)/settle 滚动均值。CTA注册表核心因子。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        settle = data.get('settle', close).values if hasattr(data.get('settle', close), 'values') else data.get('settle', close)
+        n = len(close)
+        window = int(params.get('window', 10))
+        if n < window + 1:
+            return np.zeros(n)
+        basis = (close - settle) / np.maximum(settle, 1e-10)
+        avg_basis = np.convolve(basis, np.ones(window)/window, mode='same')
+        sig = np.clip(avg_basis / 0.02, -1.0, 1.0)
+        return sig
+  params:
+    window: 10
+  input_fields:
+  - close
+  - settle
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 基差水平因子：(close-settle)/settle 滚动均值。CTA注册表核心因子。
+- name: volatility_annual
+  description: 年化波动率因子：20日滚动波动率年化。高波动做空（波动率溢价）。CTA注册表核心因子。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window + 1:
+            return np.zeros(n)
+        returns = np.zeros(n)
+        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        vol = np.array([np.std(returns[max(0, i-window+1):i+1]) * np.sqrt(252) for i in range(n)])
+        sig = -np.tanh(vol / 0.5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: 年化波动率因子：20日滚动波动率年化。高波动做空（波动率溢价）。CTA注册表核心因子。
+- name: liquidity_ratio
+  description: 成交持仓比因子：volume/hold 偏离度。流动性异常信号。CTA注册表核心因子。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        hold = data['hold'].values if hasattr(data, 'hold') else data.get('hold', np.ones(len(close)))
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window + 1:
+            return np.zeros(n)
+        turnover = np.zeros(n)
+        for i in range(1, n):
+            turnover[i] = volume[i] / max(hold[i], 1)
+        avg_turn = np.convolve(turnover, np.ones(window)/window, mode='same')
+        dev = (turnover - avg_turn) / np.maximum(avg_turn, 1e-10)
+        sig = np.tanh(dev * 2)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - volume
+  - hold
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 3
+    narrative: 成交持仓比因子：volume/hold 偏离度。流动性异常信号。CTA注册表核心因子。
+- name: long_term_reversal
+  description: 长期反转因子：120日收益率反转。做多跌多的做空涨多的。CTA注册表核心因子。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 120))
+        if n < window + 1:
+            return np.zeros(n)
+        ret = np.zeros(n)
+        ret[window:] = (close[window:] - close[:-window]) / np.maximum(close[:-window], 1e-10)
+        sig = -np.tanh(ret / 0.1)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 120
+  input_fields:
+  - close
+  lookback: 130
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: 长期反转因子：120日收益率反转。做多跌多的做空涨多的。CTA注册表核心因子。
+- name: oi_change_rate
+  description: 持仓量变化率因子：5日持仓量变化率。资金流入/流出信号。CTA注册表核心因子。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        hold = data['hold'].values if hasattr(data, 'hold') else data.get('hold', np.zeros(1000))
+        n = len(hold)
+        window = int(params.get('window', 5))
+        if n < window + 1:
+            return np.zeros(n)
+        oi_chg = np.zeros(n)
+        oi_chg[window:] = (hold[window:] - hold[:-window]) / np.maximum(hold[:-window], 1e-10)
+        sig = np.tanh(oi_chg * 5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 5
+  input_fields:
+  - hold
+  lookback: 10
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 4
+    narrative: 持仓量变化率因子：5日持仓量变化率。资金流入/流出信号。CTA注册表核心因子。

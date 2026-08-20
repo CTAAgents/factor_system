@@ -1,0 +1,643 @@
+family: wind_cta
+version: '1.0'
+market: futures
+factors:
+- name: fut_garman_klass
+  description: Garman-Klass波动率因子：基于OHLC的日内波动率估计，比传统Close-to-Close波动率更高效。高波动偏空，低波动偏多。Wind平台经典波动率估计器。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    open_ = data['open'].values\
+    \ if hasattr(data, 'open') else data['open']\n    high = data['high'].values if\
+    \ hasattr(data, 'high') else data['high']\n    low = data['low'].values if hasattr(data,\
+    \ 'low') else data['low']\n    close = data['close'].values if hasattr(data, 'close')\
+    \ else data['close']\n\n    window = int(params.get('window', 20))\n\n    # Garman-Klass\
+    \ 波动率: σ² = 0.5*(ln(H/L))² - (2*ln2-1)*(ln(C/O))²\n    log_hl = np.log(high /\
+    \ np.maximum(low, 1e-10))\n    log_co = np.log(close / np.maximum(open_, 1e-10))\n\
+    \    gk_var = 0.5 * log_hl ** 2 - (2 * np.log(2) - 1) * log_co ** 2\n    gk_var\
+    \ = np.maximum(gk_var, 0)  # 防止负方差\n\n    # 滚动均值\n    gk_vol = np.zeros(n)\n \
+    \   for i in range(window, n):\n        gk_vol[i] = np.sqrt(np.mean(gk_var[max(0,\
+    \ i-window+1):i+1]))\n\n    # 归一化：高波动偏空，低波动偏多\n    gk_norm = gk_vol / np.maximum(close,\
+    \ 1e-10)\n    signal = -np.tanh(gk_norm * 100)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+  input_fields:
+  - open
+  - high
+  - low
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: Garman-Klass波动率因子：基于OHLC的日内波动率估计，比传统Close-to-Close波动率更高效。高波动偏空，低波动偏多。
+- name: fut_yang_zhang
+  description: Yang-Zhang波动率因子：考虑跳空的最优波动率估计器，结合隔夜与日内波动。Wind平台最精确波动率估计。高波动偏空，低波动偏多。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    open_ = data['open'].values\
+    \ if hasattr(data, 'open') else data['open']\n    high = data['high'].values if\
+    \ hasattr(data, 'high') else data['high']\n    low = data['low'].values if hasattr(data,\
+    \ 'low') else data['low']\n    close = data['close'].values if hasattr(data, 'close')\
+    \ else data['close']\n\n    window = int(params.get('window', 20))\n\n    # 隔夜波动\n\
+    \    overnight = np.zeros(n)\n    overnight[1:] = np.log(open_[1:] / np.maximum(close[:-1],\
+    \ 1e-10))\n\n    # 日内波动\n    log_hl = np.log(high / np.maximum(low, 1e-10))\n\
+    \    log_co = np.log(close / np.maximum(open_, 1e-10))\n\n    # 开收盘波动\n    open_close\
+    \ = np.zeros(n)\n    open_close[1:] = np.log(close[1:] / np.maximum(open_[1:],\
+    \ 1e-10))\n\n    yz_var = np.zeros(n)\n    for i in range(window, n):\n      \
+    \  seg_o = overnight[max(0, i-window+1):i+1]\n        seg_hl = log_hl[max(0, i-window+1):i+1]\n\
+    \        seg_co = log_co[max(0, i-window+1):i+1]\n        seg_oc = open_close[max(0,\
+    \ i-window+1):i+1]\n\n        # σ² = σ_overnight² + k*σ_intraday² + (1-k)*σ_oc²\n\
+    \        var_overnight = np.var(seg_o, ddof=0)\n        var_hl = np.var(seg_hl,\
+    \ ddof=0)\n        var_co = np.var(seg_co, ddof=0)\n        var_oc = np.var(seg_oc,\
+    \ ddof=0)\n\n        k = 0.34 / (1.34 + (window - 1) / (window + 1))\n       \
+    \ yz_var[i] = var_overnight + k * var_hl + (1 - k) * var_oc\n\n    yz_vol = np.sqrt(np.maximum(yz_var,\
+    \ 0))\n\n    # 归一化：高波动偏空\n    yz_norm = yz_vol / np.maximum(close, 1e-10)\n  \
+    \  signal = -np.tanh(yz_norm * 100)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+  input_fields:
+  - open
+  - high
+  - low
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 5
+    institutional: 3
+    narrative: Yang-Zhang波动率因子：考虑跳空的最优波动率估计器，结合隔夜与日内波动。
+- name: fut_vol_skew
+  description: 波动率偏度因子：已实现波动率的偏度分布。正偏=波动率右尾长=下跌风险大偏空，负偏=波动率左尾长=反弹潜力偏多。Wind平台高阶波动率因子。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 20))\n    vol_window = int(params.get('vol_window', 10))\n\n    # 计算日收益率\n \
+    \   ret = np.zeros(n)\n    ret[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1],\
+    \ 1e-10)\n\n    # 已实现波动率（滚动标准差）\n    rv = np.zeros(n)\n    for i in range(vol_window,\
+    \ n):\n        rv[i] = np.std(ret[max(0, i-vol_window+1):i+1], ddof=0)\n\n   \
+    \ # 滚动偏度\n    skew = np.zeros(n)\n    for i in range(window, n):\n        seg\
+    \ = ret[max(0, i-window+1):i+1]\n        if len(seg) > 2 and np.std(seg, ddof=0)\
+    \ > 1e-10:\n            skew[i] = np.mean((seg - np.mean(seg)) ** 3) / (np.std(seg,\
+    \ ddof=0) ** 3 + 1e-10)\n\n    # 正偏=下跌风险大偏空，负偏=反弹潜力偏多\n    signal = -np.tanh(skew\
+    \ * 0.5)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+    vol_window: 10
+  input_fields:
+  - close
+  lookback: 30
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: 波动率偏度因子：已实现波动率的偏度分布。正偏=波动率右尾长=下跌风险大偏空，负偏相反。
+- name: fut_tail_risk
+  description: 尾部风险因子：基于极值收益率分布的尾部风险度量。尾部越厚=极端风险越大=偏空。Wind平台风险管理核心因子。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 30))\n    q = float(params.get('quantile', 0.05))\n\n    # 日收益率\n    ret = np.zeros(n)\n\
+    \    ret[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)\n\n  \
+    \  # 尾部风险: 下尾与上尾的比值\n    tail_ratio = np.zeros(n)\n    for i in range(window,\
+    \ n):\n        seg = ret[max(0, i-window+1):i+1]\n        if len(seg) > 0:\n \
+    \           lower = np.percentile(seg, q * 100)\n            upper = np.percentile(seg,\
+    \ (1 - q) * 100)\n            # 下尾均值 / 上尾均值（绝对值）\n            lower_tail = seg[seg\
+    \ <= lower]\n            upper_tail = seg[seg >= upper]\n            if len(upper_tail)\
+    \ > 0 and np.abs(np.mean(upper_tail)) > 1e-10:\n                tail_ratio[i]\
+    \ = np.abs(np.mean(lower_tail)) / np.abs(np.mean(upper_tail))\n            else:\n\
+    \                tail_ratio[i] = 1.0\n\n    # 尾部比 > 1 = 下尾风险更大偏空，< 1 = 上尾机会更大偏多\n\
+    \    signal = -np.tanh((tail_ratio - 1) * 3)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 30
+    quantile: 0.05
+  input_fields:
+  - close
+  lookback: 35
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 尾部风险因子：基于极值收益率分布的尾部风险度量。尾部越厚=极端风险越大=偏空。
+- name: fut_serial_corr
+  description: 序列相关因子：收益率自相关结构。正自相关=趋势延续做动量，负自相关=均值回归做反转。Wind平台市场效率判断因子。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 20))\n    lag = int(params.get('lag', 1))\n\n    # 日收益率\n    ret = np.zeros(n)\n\
+    \    ret[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)\n\n  \
+    \  # Lag自相关\n    autocorr = np.zeros(n)\n    for i in range(window + lag, n):\n\
+    \        seg1 = ret[max(0, i-window+1):i+1-lag]\n        seg2 = ret[max(0, i-window+lag):i+1]\n\
+    \        if len(seg1) > 1 and np.std(seg1, ddof=0) > 1e-10 and np.std(seg2, ddof=0)\
+    \ > 1e-10:\n            autocorr[i] = np.corrcoef(seg1, seg2)[0, 1]\n        else:\n\
+    \            autocorr[i] = 0.0\n\n    # 正自相关=趋势延续做动量，负自相关=均值回归做反转\n    signal\
+    \ = np.tanh(autocorr * 2)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0),\
+    \ -1.0, 1.0)"
+  params:
+    window: 20
+    lag: 1
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 序列相关因子：收益率自相关结构。正自相关=趋势延续做动量，负自相关=均值回归做反转。
+- name: fut_efficiency_ratio
+  description: 效率比因子：Kaufman效率比=方向变动/总变动。效率比高=强趋势做动量，效率比低=震荡做反转。Wind平台趋势质量判断核心。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 10))\n\n    # 方向变动 = |Close - Close_n|\n    # 总变动 = sum(|Close_i - Close_{i-1}|)\n\
+    \    direction = np.zeros(n)\n    noise = np.zeros(n)\n    for i in range(window,\
+    \ n):\n        direction[i] = np.abs(close[i] - close[i-window])\n        total_noise\
+    \ = np.sum(np.abs(np.diff(close[max(0, i-window):i+1])))\n        noise[i] = total_noise\n\
+    \n    # 效率比 = 方向 / 噪音\n    er = np.zeros(n)\n    mask = noise > 1e-10\n    er[mask]\
+    \ = direction[mask] / noise[mask]\n    er = np.clip(er, 0, 1)\n\n    # 效率比高=趋势强做动量，效率比低=震荡做反转\n\
+    \    # 映射到[-1, 1]：高效率偏正，低效率偏负\n    signal = (er - 0.5) * 2\n    signal = np.tanh(signal\
+    \ * 1.5)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 10
+  input_fields:
+  - close
+  lookback: 15
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 效率比因子：Kaufman效率比=方向变动/总变动。效率比高=强趋势做动量，低=震荡做反转。
+- name: fut_hurst
+  description: Hurst指数因子：基于重标极差(R/S)分析的Hurst指数。H>0.5=趋势持续做动量，H<0.5=均值回归做反转。Wind平台市场分形结构判断。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 30))\n    min_chunk = int(params.get('min_chunk', 5))\n\n    def _hurst_rs(series):\n\
+    \        n = len(series)\n        if n < min_chunk * 2:\n            return 0.5\n\
+    \        # R/S 分析\n        mean = np.mean(series)\n        dev = series - mean\n\
+    \        cumsum = np.cumsum(dev)\n        r = np.max(cumsum) - np.min(cumsum)\n\
+    \        s = np.std(series, ddof=0)\n        if s < 1e-10:\n            return\
+    \ 0.5\n        rs = r / s\n        return np.log(rs) / np.log(n) if n > 1 else\
+    \ 0.5\n\n    hurst = np.zeros(n)\n    for i in range(window, n):\n        seg\
+    \ = close[max(0, i-window+1):i+1]\n        h = _hurst_rs(seg)\n        hurst[i]\
+    \ = np.clip(h, 0, 1)\n\n    # H > 0.5 趋势偏多，H < 0.5 反转偏空\n    signal = (hurst -\
+    \ 0.5) * 2\n    signal = np.tanh(signal * 2)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 30
+    min_chunk: 5
+  input_fields:
+  - close
+  lookback: 35
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: Hurst指数因子：基于重标极差(R/S)分析的Hurst指数。H>0.5=趋势持续做动量，H<0.5=均值回归做反转。
+- name: fut_market_micro
+  description: 市场微观结构因子：基于HLC的买卖压力指标。Close在H-L区间位置+成交量加权。买入压力大做多，卖出压力大做空。Wind平台微观结构分析因子。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n    volume = data['volume'].values if\
+    \ hasattr(data, 'volume') else data['volume']\n\n    window = int(params.get('window',\
+    \ 14))\n\n    # 买卖压力：价格在H-L区间的位置\n    hl_range = np.maximum(high - low, 1e-10)\n\
+    \    pressure = (close - low) / hl_range  # [0, 1]: 0=卖压大, 1=买压大\n\n    # 成交量加权买卖压力\n\
+    \    vwap_pressure = pressure * volume\n\n    # 滚动平均\n    avg_pressure = np.zeros(n)\n\
+    \    for i in range(window, n):\n        avg_pressure[i] = np.mean(vwap_pressure[max(0,\
+    \ i-window+1):i+1]) / np.maximum(np.mean(volume[max(0, i-window+1):i+1]), 1e-10)\n\
+    \n    # 映射到 [-1, 1]\n    signal = (avg_pressure - 0.5) * 2\n    signal = np.tanh(signal\
+    \ * 2)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 14
+  input_fields:
+  - close
+  - high
+  - low
+  - volume
+  lookback: 20
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 3
+    microstructure: 5
+    institutional: 3
+    narrative: 市场微观结构因子：基于HLC的买卖压力指标。买入压力大做多，卖出压力大做空。
+- name: fut_liquidity_gap
+  description: 流动性缺口因子：价格冲击的预期成本度量。流动性缺口大=冲击成本高=偏空。Wind平台流动性风险度量。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n    volume = data['volume'].values if\
+    \ hasattr(data, 'volume') else data['volume']\n\n    window = int(params.get('window',\
+    \ 20))\n\n    # Amihud 非流动性指标: |r| / (P * V)\n    ret = np.zeros(n)\n    ret[1:]\
+    \ = np.abs(close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)\n\n    amihud\
+    \ = np.zeros(n)\n    for i in range(1, n):\n        dollar_vol = close[i] * volume[i]\n\
+    \        if dollar_vol > 1e-10:\n            amihud[i] = ret[i] / dollar_vol *\
+    \ 1e6  # 缩放\n\n    # 滚动均值\n    avg_illiquidity = np.zeros(n)\n    for i in range(window,\
+    \ n):\n        avg_illiquidity[i] = np.mean(amihud[max(0, i-window+1):i+1])\n\n\
+    \    # 流动性越差（Amihud越高）偏空\n    # 对数缩放\n    log_illiq = np.log(np.maximum(avg_illiquidity,\
+    \ 1e-10))\n    signal = -np.tanh(log_illiq * 0.5)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+  input_fields:
+  - close
+  - high
+  - low
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 5
+    institutional: 3
+    narrative: 流动性缺口因子：价格冲击的预期成本度量。流动性缺口大=冲击成本高=偏空。
+- name: fut_volume_quality
+  description: 成交量质量因子：成交量对价格变动的贡献度。量价配合好=趋势可靠做动量，量价背离=趋势可疑做反转。Wind平台量价分析核心。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    volume = data['volume'].values\
+    \ if hasattr(data, 'volume') else data['volume']\n\n    window = int(params.get('window',\
+    \ 20))\n\n    # 价格变动\n    price_chg = np.zeros(n)\n    price_chg[1:] = (close[1:]\
+    \ - close[:-1]) / np.maximum(close[:-1], 1e-10)\n\n    # 成交量变化率\n    vol_chg =\
+    \ np.zeros(n)\n    vol_chg[1:] = (volume[1:] - volume[:-1]) / np.maximum(volume[:-1],\
+    \ 1e-10)\n\n    # 量价相关性（滚动）\n    vp_corr = np.zeros(n)\n    for i in range(window\
+    \ + 1, n):\n        p_seg = price_chg[max(0, i-window+1):i+1]\n        v_seg =\
+    \ vol_chg[max(0, i-window+1):i+1]\n        if len(p_seg) > 1 and np.std(p_seg,\
+    \ ddof=0) > 1e-10 and np.std(v_seg, ddof=0) > 1e-10:\n            vp_corr[i] =\
+    \ np.corrcoef(p_seg, v_seg)[0, 1]\n        else:\n            vp_corr[i] = 0.0\n\
+    \n    # 涨时放量(+corr) = 趋势确认做动量\n    # 涨时缩量(-corr) = 趋势背离做反转\n    signal = vp_corr\
+    \ * np.sign(price_chg)\n    signal = np.tanh(signal * 2)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+  input_fields:
+  - close
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 成交量质量因子：成交量对价格变动的贡献度。量价配合好=趋势可靠做动量，量价背离=趋势可疑做反转。
+- name: fut_price_velocity
+  description: 价格加速度因子：动量的一阶差分（加速度）。加速度正则动量加速偏多，加速度负则动量衰减偏空。Wind平台趋势动能二阶分析。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 10))\n    accel_window = int(params.get('accel_window', 5))\n\n    # 价格变化率（速度）\n\
+    \    velocity = np.zeros(n)\n    velocity[window:] = (close[window:] - close[:-window])\
+    \ / np.maximum(close[:-window], 1e-10)\n\n    # 速度的变化率（加速度）\n    acceleration\
+    \ = np.zeros(n)\n    acceleration[accel_window:] = (velocity[accel_window:] -\
+    \ velocity[:-accel_window]) / np.maximum(np.abs(velocity[:-accel_window]), 1e-10)\n\
+    \    acceleration = np.clip(acceleration, -5, 5)\n\n    # 加速度正=动量加速做多，加速度负=动量衰减做空\n\
+    \    signal = np.tanh(acceleration * 2)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 10
+    accel_window: 5
+  input_fields:
+  - close
+  lookback: 20
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: 价格加速度因子：动量的一阶差分（加速度）。加速度正则动量加速偏多，负则动量衰减偏空。
+- name: fut_accumulation
+  description: 累积量因子：基于成交量和价格位置的累积量指标。量价位置综合判断趋势强度。Wind平台高级量价分析。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    high = data['high'].values\
+    \ if hasattr(data, 'high') else data['high']\n    low = data['low'].values if\
+    \ hasattr(data, 'low') else data['low']\n    volume = data['volume'].values if\
+    \ hasattr(data, 'volume') else data['volume']\n\n    window = int(params.get('window',\
+    \ 20))\n\n    # 价格位置: 当日收盘在N日区间的位置\n    hh = np.zeros(n)\n    ll = np.zeros(n)\n\
+    \    for i in range(window, n):\n        hh[i] = np.max(high[max(0, i-window+1):i+1])\n\
+    \        ll[i] = np.min(low[max(0, i-window+1):i+1])\n\n    pos = np.zeros(n)\n\
+    \    range_mask = (hh - ll) > 1e-10\n    pos[range_mask] = (close[range_mask]\
+    \ - ll[range_mask]) / (hh[range_mask] - ll[range_mask])\n\n    # 成交量确认：价格在高位时放量\
+    \ = 趋势确认，缩量 = 背离\n    vol_ma = np.zeros(n)\n    for i in range(window, n):\n \
+    \       vol_ma[i] = np.mean(volume[max(0, i-window+1):i+1])\n\n    vol_ratio =\
+    \ volume / np.maximum(vol_ma, 1e-10)\n\n    # 累积量 = 价格位置 * 成交量确认\n    accumulation\
+    \ = (pos - 0.5) * 2 * np.clip(vol_ratio, 0.5, 2.0)\n    signal = np.tanh(accumulation\
+    \ * 1.5)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+  input_fields:
+  - close
+  - high
+  - low
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 累积量因子：基于成交量和价格位置的累积量指标。量价位置综合判断趋势强度。
+- name: fut_multi_period_mom
+  description: 多周期动量因子：短中长三期动量加权组合。三周期共振=强趋势信号，分歧=震荡信号。Wind平台综合动量判断。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    short_w = int(params.get('short_window',\
+    \ 5))\n    mid_w = int(params.get('mid_window', 20))\n    long_w = int(params.get('long_window',\
+    \ 60))\n\n    # 三周期动量\n    short_mom = np.zeros(n)\n    mid_mom = np.zeros(n)\n\
+    \    long_mom = np.zeros(n)\n\n    short_mom[short_w:] = (close[short_w:] - close[:-short_w])\
+    \ / np.maximum(close[:-short_w], 1e-10)\n    mid_mom[mid_w:] = (close[mid_w:]\
+    \ - close[:-mid_w]) / np.maximum(close[:-mid_w], 1e-10)\n    long_mom[long_w:]\
+    \ = (close[long_w:] - close[:-long_w]) / np.maximum(close[:-long_w], 1e-10)\n\n\
+    \    # 归一化到[-1, 1]\n    short_sig = np.tanh(short_mom * 10)\n    mid_sig = np.tanh(mid_mom\
+    \ * 5)\n    long_sig = np.tanh(long_mom * 2)\n\n    # 加权组合：短期权重高，但分歧时降低权重\n  \
+    \  consensus = 1 - np.abs(np.std([short_sig, mid_sig, long_sig], axis=0))\n  \
+    \  signal = (short_sig * 0.5 + mid_sig * 0.3 + long_sig * 0.2) * consensus\n \
+    \   signal = np.tanh(signal * 1.5)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    short_window: 5
+    mid_window: 20
+    long_window: 60
+  input_fields:
+  - close
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: 多周期动量因子：短中长三期动量加权组合。三周期共振=强趋势信号，分歧=震荡信号。
+- name: fut_vol_cone
+  description: 波动率锥因子：短期波动率与长期波动率的比值。波动率锥上翘=短期风险加大偏空，下倾=短期风险缓解偏多。Wind平台波动率期限结构分析。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    short_w = int(params.get('short_window',\
+    \ 5))\n    long_w = int(params.get('long_window', 60))\n\n    # 日收益率\n    ret\
+    \ = np.zeros(n)\n    ret[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1],\
+    \ 1e-10)\n\n    # 短期和长期波动率\n    short_vol = np.zeros(n)\n    long_vol = np.zeros(n)\n\
+    \    for i in range(long_w, n):\n        short_vol[i] = np.std(ret[max(0, i-short_w+1):i+1],\
+    \ ddof=0) * np.sqrt(252 / short_w)\n        long_vol[i] = np.std(ret[max(0, i-long_w+1):i+1],\
+    \ ddof=0) * np.sqrt(252 / long_w)\n\n    # 波动率锥 = 短期 / 长期\n    vol_cone = np.zeros(n)\n\
+    \    mask = long_vol > 1e-10\n    vol_cone[mask] = short_vol[mask] / long_vol[mask]\n\
+    \    vol_cone = np.clip(vol_cone, 0.1, 5.0)\n\n    # 上翘(>1) = 短期风险加大偏空，下倾(<1)\
+    \ = 短期风险缓解偏多\n    signal = np.tanh((1 - vol_cone) * 2)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    short_window: 5
+    long_window: 60
+  input_fields:
+  - close
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 波动率锥因子：短期波动率与长期波动率的比值。波动率锥上翘=短期风险加大偏空，下倾相反。
+- name: fut_fractal_dim
+  description: 价格分形维度因子：基于Higuchi算法的分形维度。D接近1=趋势强，D接近2=噪音大。Wind平台市场结构分析。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 30))\n    kmax = int(params.get('kmax', 10))\n\n    def _higuchi_fd(series,\
+    \ k_max):\n        n = len(series)\n        if n < k_max * 2:\n            return\
+    \ 1.5\n        lk = np.zeros(k_max)\n        for k in range(1, k_max + 1):\n \
+    \           lm = 0.0\n            for m in range(k):\n                n_m = int(np.floor((n\
+    \ - m) / k))\n                if n_m <= 1:\n                    continue\n   \
+    \             segments = series[m + np.arange(n_m) * k]\n                length\
+    \ = np.sum(np.abs(np.diff(segments))) * (n - 1) / (n_m * k)\n                lm\
+    \ += length\n            lk[k-1] = lm / k if k > 0 else 0\n        # 对log(k)和log(L(k))做线性回归\n\
+    \        k_vals = np.arange(1, k_max + 1, dtype=float)\n        valid = lk > 1e-10\n\
+    \        if np.sum(valid) < 3:\n            return 1.5\n        log_k = np.log(k_vals[valid])\n\
+    \        log_l = np.log(lk[valid])\n        fd = (np.sum(log_k * log_l) - np.sum(log_k)\
+    \ * np.sum(log_l) / len(log_k)) /              (np.sum(log_k ** 2) - np.sum(log_k)\
+    \ ** 2 / len(log_k) + 1e-10)\n        return 2.0 - fd  # 分形维度\n\n    fd = np.zeros(n)\n\
+    \    for i in range(window, n):\n        seg = close[max(0, i-window+1):i+1]\n\
+    \        fd[i] = _higuchi_fd(seg, kmax)\n\n    # D接近1=趋势强，D接近2=噪音大\n    # 低分形维度(趋势强)偏多，高分形维度(噪音大)偏空\n\
+    \    signal = np.tanh((1.5 - fd) * 2)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 30
+    kmax: 10
+  input_fields:
+  - close
+  lookback: 35
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: 价格分形维度因子：基于Higuchi算法的分形维度。D接近1=趋势强，D接近2=噪音大。
+- name: fut_vp_corr_stability
+  description: 量价相关性稳定性因子：量价相关性的时间序列稳定性。稳定性高=量价关系可靠做趋势，稳定性低=量价关系紊乱做反转。Wind平台量价关系深度分析。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n    volume = data['volume'].values\
+    \ if hasattr(data, 'volume') else data['volume']\n\n    window = int(params.get('window',\
+    \ 20))\n    sub_w = int(params.get('sub_window', 10))\n\n    # 价格变动和成交量变化\n  \
+    \  price_chg = np.zeros(n)\n    price_chg[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1],\
+    \ 1e-10)\n    vol_chg = np.zeros(n)\n    vol_chg[1:] = (volume[1:] - volume[:-1])\
+    \ / np.maximum(volume[:-1], 1e-10)\n\n    # 主窗口和子窗口的量价相关性\n    main_corr = np.zeros(n)\n\
+    \    sub_corr = np.zeros(n)\n    for i in range(window + sub_w, n):\n        seg\
+    \ = slice(max(0, i-window+1), i+1)\n        p = price_chg[seg]\n        v = vol_chg[seg]\n\
+    \        if np.std(p, ddof=0) > 1e-10 and np.std(v, ddof=0) > 1e-10:\n       \
+    \     main_corr[i] = np.corrcoef(p, v)[0, 1]\n\n        sub_seg = slice(max(0,\
+    \ i-sub_w+1), i+1)\n        p2 = price_chg[sub_seg]\n        v2 = vol_chg[sub_seg]\n\
+    \        if np.std(p2, ddof=0) > 1e-10 and np.std(v2, ddof=0) > 1e-10:\n     \
+    \       sub_corr[i] = np.corrcoef(p2, v2)[0, 1]\n\n    # 稳定性 = 1 - |主相关 - 子相关|\n\
+    \    stability = 1 - np.abs(main_corr - sub_corr)\n    stability = np.clip(stability,\
+    \ 0, 1)\n\n    # 稳定性高=量价关系可靠做趋势方向\n    trend_dir = np.tanh(price_chg * 10)\n \
+    \   signal = stability * trend_dir\n    signal = np.tanh(signal * 2)\n\n    return\
+    \ np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+    sub_window: 10
+  input_fields:
+  - close
+  - volume
+  lookback: 30
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 量价相关性稳定性因子：量价相关性的时间序列稳定性。稳定性高=量价关系可靠做趋势，低=关系紊乱做反转。
+- name: fut_jump_risk
+  description: 跳跃风险因子：收益率的非连续跳跃幅度和频率度量。跳跃频繁=微观结构风险大=偏空。Wind平台微观结构风险分析。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 20))\n    jump_th = float(params.get('jump_threshold', 3.0))\n\n    # 日收益率\n\
+    \    ret = np.zeros(n)\n    ret[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1],\
+    \ 1e-10)\n\n    # 滚动标准差\n    rolling_std = np.zeros(n)\n    for i in range(window,\
+    \ n):\n        rolling_std[i] = np.std(ret[max(0, i-window+1):i+1], ddof=0)\n\n\
+    \    # 跳跃检测：|r| > threshold * σ\n    jump_count = np.zeros(n)\n    jump_magnitude\
+    \ = np.zeros(n)\n    for i in range(window, n):\n        seg = ret[max(0, i-window+1):i+1]\n\
+    \        seg_std = np.std(seg, ddof=0)\n        if seg_std > 1e-10:\n        \
+    \    jumps = np.abs(seg) > jump_th * seg_std\n            jump_count[i] = np.sum(jumps)\n\
+    \            if np.sum(jumps) > 0:\n                jump_magnitude[i] = np.mean(np.abs(seg[jumps]))\
+    \ / seg_std\n\n    # 跳跃频率高+幅度大=风险大偏空\n    jump_score = jump_count * jump_magnitude\n\
+    \    signal = -np.tanh(jump_score * 0.1)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+    jump_threshold: 3.0
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 5
+    institutional: 3
+    narrative: 跳跃风险因子：收益率的非连续跳跃幅度和频率度量。跳跃频繁=微观结构风险大=偏空。
+- name: fut_rogers_satchell
+  description: Rogers-Satchell波动率因子：允许漂移项的日内波动率估计器。比Garman-Klass更鲁棒。Wind平台高级波动率估计器。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    open_ = data['open'].values\
+    \ if hasattr(data, 'open') else data['open']\n    high = data['high'].values if\
+    \ hasattr(data, 'high') else data['high']\n    low = data['low'].values if hasattr(data,\
+    \ 'low') else data['low']\n    close = data['close'].values if hasattr(data, 'close')\
+    \ else data['close']\n\n    window = int(params.get('window', 20))\n\n    # Rogers-Satchell\
+    \ 波动率: σ² = ln(H/C)*ln(H/O) + ln(L/C)*ln(L/O)\n    log_ho = np.log(high / np.maximum(open_,\
+    \ 1e-10))\n    log_lo = np.log(low / np.maximum(open_, 1e-10))\n    log_hc = np.log(high\
+    \ / np.maximum(close, 1e-10))\n    log_lc = np.log(low / np.maximum(close, 1e-10))\n\
+    \n    rs_var = log_ho * log_hc + log_lo * log_lc\n    rs_var = np.maximum(rs_var,\
+    \ 0)\n\n    # 滚动均值\n    rs_vol = np.zeros(n)\n    for i in range(window, n):\n\
+    \        rs_vol[i] = np.sqrt(np.mean(rs_var[max(0, i-window+1):i+1]))\n\n    #\
+    \ 归一化：高波动偏空\n    rs_norm = rs_vol / np.maximum(close, 1e-10)\n    signal = -np.tanh(rs_norm\
+    \ * 100)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 20
+  input_fields:
+  - open
+  - high
+  - low
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: Rogers-Satchell波动率因子：允许漂移项的日内波动率估计器。比Garman-Klass更鲁棒。
+- name: fut_vol_kurtosis
+  description: 波动率峰度因子：收益率的峰度。高峰度=厚尾=极端事件风险大偏空。Wind平台高阶矩风险分析。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 30))\n\n    # 日收益率\n    ret = np.zeros(n)\n    ret[1:] = (close[1:] - close[:-1])\
+    \ / np.maximum(close[:-1], 1e-10)\n\n    # 滚动峰度（超额峰度，正态分布=3）\n    kurt = np.zeros(n)\n\
+    \    for i in range(window, n):\n        seg = ret[max(0, i-window+1):i+1]\n \
+    \       if len(seg) > 3 and np.std(seg, ddof=0) > 1e-10:\n            kurt[i]\
+    \ = np.mean((seg - np.mean(seg)) ** 4) / (np.std(seg, ddof=0) ** 4 + 1e-10)\n\n\
+    \    # 超额峰度 > 3 为厚尾 = 风险偏空\n    excess_kurt = kurt - 3\n    signal = -np.tanh(excess_kurt\
+    \ * 0.3)\n\n    return np.clip(np.nan_to_num(signal, nan=0.0), -1.0, 1.0)"
+  params:
+    window: 30
+  input_fields:
+  - close
+  lookback: 35
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: 波动率峰度因子：收益率的峰度。高峰度=厚尾=极端事件风险大偏空。
+- name: fut_asymmetry
+  description: 涨跌不对称因子：上涨日和下跌日的收益率不对称性。上行/下行波动率比<1=下跌风险更大偏空。Wind平台风险收益不对称分析。
+  market: futures
+  code: "def factor_program(data, params):\n    import numpy as np\n    n = len(data['close'].values\
+    \ if hasattr(data, 'close') else data['close'])\n\n    close = data['close'].values\
+    \ if hasattr(data, 'close') else data['close']\n\n    window = int(params.get('window',\
+    \ 30))\n\n    # 日收益率\n    ret = np.zeros(n)\n    ret[1:] = (close[1:] - close[:-1])\
+    \ / np.maximum(close[:-1], 1e-10)\n\n    # 上行/下行波动率比\n    asym = np.zeros(n)\n\
+    \    for i in range(window, n):\n        seg = ret[max(0, i-window+1):i+1]\n \
+    \       up_ret = seg[seg > 0]\n        down_ret = seg[seg < 0]\n        up_vol\
+    \ = np.std(up_ret, ddof=0) if len(up_ret) > 1 else 0\n        down_vol = np.std(down_ret,\
+    \ ddof=0) if len(down_ret) > 1 else 0\n        if down_vol > 1e-10:\n        \
+    \    asym[i] = up_vol / down_vol\n        elif up_vol > 1e-10:\n            asym[i]\
+    \ = 2.0  # 只有上涨\n        else:\n            asym[i] = 1.0\n\n    # 上行/下行波动率比 <\
+    \ 1 = 下跌更剧烈 = 偏空\n    signal = np.tanh((asym - 1) * 2)\n\n    return np.clip(np.nan_to_num(signal,\
+    \ nan=0.0), -1.0, 1.0)"
+  params:
+    window: 30
+  input_fields:
+  - close
+  lookback: 35
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: 涨跌不对称因子：上涨日和下跌日的收益率不对称性。上行/下行波动率比<1=下跌风险更大偏空。

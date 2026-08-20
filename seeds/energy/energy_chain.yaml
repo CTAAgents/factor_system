@@ -1,0 +1,282 @@
+family: energy_chain
+version: '1.0'
+market: energy
+# 能化产业链专属知识种子（GAP-121 2026-08-15）
+# L1 知识输入 = 通用期货种子（seeds/futures，185 因子）+ 本文件（能化链专属知识因子）。
+# 覆盖链内 12 品种（2026-08-15 扩池降相关性，四大化工子链）：
+#   能源 SC0 原油 / FU0 燃料油 / BU0 沥青；
+#   聚酯链 PX0 对二甲苯 / TA0 PTA / PF0 短纤；
+#   油化工 L0 聚乙烯 / PP0 聚丙烯 / PG0 液化气；
+#   煤化工 MA0 甲醇 / UR0 尿素 / SA0 纯碱。
+# 因子均为单标的 OHLCV 可计算，编码能化产业链传导逻辑（裂解价差/加工利润/季节性/高波动特征）。
+factors:
+- name: ec_processing_margin_reversion
+  description: 能化加工利润均值回归代理：价格对长均线的偏离近似加工利润，偏离回归。能化品加工利润（裂解/聚酯）受产能周期驱动具有强均值回归特性。
+  market: energy
+  symbols:
+  - SC0
+  - FU0
+  - BU0
+  - PX0
+  - TA0
+  - PF0
+  - L0
+  - PP0
+  - PG0
+  - MA0
+  - UR0
+  - SA0
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        short_w = int(params.get('short_window', 5))
+        long_w = int(params.get('long_window', 60))
+        if n < long_w + 2:
+            return np.zeros(n)
+        ma_short = np.convolve(close, np.ones(short_w)/short_w, mode='same')
+        ma_long = np.convolve(close, np.ones(long_w)/long_w, mode='same')
+        # 加工利润代理：短均线 - 长均线偏离，偏离越正 => 利润越高 => 均值回归做空
+        margin = (ma_short - ma_long) / np.maximum(ma_long, 1e-10)
+        sig = -np.tanh(margin * 30)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    short_window: 5
+    long_window: 60
+  input_fields:
+  - close
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 能化加工利润均值回归：炼化裂解差与聚酯加工差受产能与库存周期驱动，利润高企吸引供给回归，偏离长均线后回归。
+- name: ec_chain_relative_strength
+  description: 能化链内相对强弱：品种动量相对自身长基准的强度。原油成本端涨跌沿 SC→FU/LU→BU→PG 与 PX→TA→PF/PR 传导，链内相对强弱捕捉领涨领跌切换。
+  market: energy
+  symbols:
+  - SC0
+  - FU0
+  - BU0
+  - PX0
+  - TA0
+  - PF0
+  - L0
+  - PP0
+  - PG0
+  - MA0
+  - UR0
+  - SA0
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        mom_w = int(params.get('momentum_window', 20))
+        base_w = int(params.get('base_window', 60))
+        if n < base_w + 2:
+            return np.zeros(n)
+        mom = np.zeros(n)
+        mom[mom_w:] = close[mom_w:] / np.maximum(close[:-mom_w], 1e-10) - 1.0
+        base = np.convolve(close, np.ones(base_w)/base_w, mode='same')
+        # 相对强弱：短动量 vs 长基准偏离（链内传导的速度差异）
+        rel = mom / np.maximum(np.abs(base)/np.maximum(base, 1e-10) + 0.05, 1e-10)
+        sig = np.tanh(rel * 50)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    momentum_window: 20
+    base_window: 60
+  input_fields:
+  - close
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 能化链内相对强弱：原油成本与聚酯需求沿产业链分环节传导，各品种对成本端反应速度与幅度不同，相对动量捕捉传导领先滞后结构。
+- name: ec_energy_seasonality
+  description: 能化季节性因子：能化品需求淡旺季日历效应（成品油夏季出行旺季、聚酯金九银十、沥青道路施工季节）。基于交易日序号编码弱季节性。
+  market: energy
+  symbols:
+  - SC0
+  - FU0
+  - BU0
+  - PX0
+  - TA0
+  - PF0
+  - L0
+  - PP0
+  - PG0
+  - MA0
+  - UR0
+  - SA0
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        if n < 30:
+            return np.zeros(n)
+        # 用年内交易日序号近似月度，捕捉弱季节性周期（无显式日期时用序列位置）
+        period = int(params.get('period', 252))
+        phase = np.zeros(n)
+        for i in range(n):
+            phase[i] = np.sin(2 * np.pi * (i % period) / period)
+        sig = np.tanh(phase * 0.4)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    period: 252
+  input_fields:
+  - close
+  lookback: 30
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 2
+    institutional: 4
+    narrative: 能化季节性：成品油与聚酯需求具备年度淡旺季周期，季节性仓位在需求旺季偏多、淡季偏空，作为链内背景因子与趋势/利润因子合成。
+- name: ec_energy_vol_adjusted_momentum
+  description: 能化波动率调整动量：能化品高波动，纯动量噪音大，按波动率缩放提高信噪比。原油-成品油链波动聚集，波动调整后动量更稳健。
+  market: energy
+  symbols:
+  - SC0
+  - FU0
+  - BU0
+  - PX0
+  - TA0
+  - PF0
+  - L0
+  - PP0
+  - PG0
+  - MA0
+  - UR0
+  - SA0
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        mom_w = int(params.get('momentum_window', 20))
+        vol_w = int(params.get('vol_window', 20))
+        if n < mom_w + vol_w + 2:
+            return np.zeros(n)
+        ret = np.zeros(n)
+        ret[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        mom = np.zeros(n)
+        mom[mom_w:] = close[mom_w:] / np.maximum(close[:-mom_w], 1e-10) - 1.0
+        vol = np.zeros(n)
+        for i in range(vol_w, n):
+            seg = ret[max(0, i-vol_w+1):i+1]
+            vol[i] = np.std(seg)
+        # 波动率缩放动量：mom / vol，波动越大动量信号权重越低
+        scaled = mom / np.maximum(vol, 1e-4)
+        sig = np.tanh(scaled * 0.5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    momentum_window: 20
+    vol_window: 20
+  input_fields:
+  - close
+  lookback: 45
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 能化波动率调整动量：能化品种波动率高且聚集，原始动量被噪音主导，按已实现波动率缩放后信噪比提升，趋势信号更稳健。
+- name: ec_downstream_reversion
+  description: 能化下游反转：TA/PF/PR 聚酯成品与 BU 沥青需求端对短期事件反应过度，短窗口反转。上游成本冲击后下游弹性滞后，超涨超跌回归。
+  market: energy
+  symbols:
+  - BU0
+  - PX0
+  - TA0
+  - PF0
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 5))
+        if n < window + 2:
+            return np.zeros(n)
+        ret = np.zeros(n)
+        ret[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        short_ret = np.zeros(n)
+        for i in range(window, n):
+            short_ret[i] = np.sum(ret[i-window+1:i+1])
+        # 下游超涨做空、超跌做多（短窗口反转）
+        sig = -np.tanh(short_ret * 15)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 5
+  input_fields:
+  - close
+  lookback: 10
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 4
+    institutional: 3
+    narrative: 能化下游短反转：聚酯成品与沥青终端需求对价格事件反应过度，库存与补库节奏使价格超涨超跌后回归，短窗口反转收益。
+- name: ec_crack_margin_proxy
+  description: 裂解价差代理：能化品价格对成本中枢（长均线）的偏离比例，近似裂解/加工利润水位。利润极端高/低时对应开工率调整，价格向成本中枢回归。
+  market: energy
+  symbols:
+  - SC0
+  - FU0
+  - BU0
+  - PX0
+  - TA0
+  - PF0
+  - L0
+  - PP0
+  - PG0
+  - MA0
+  - UR0
+  - SA0
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        long_w = int(params.get('long_window', 120))
+        if n < long_w + 2:
+            return np.zeros(n)
+        ma_long = np.convolve(close, np.ones(long_w)/long_w, mode='same')
+        # 裂解/加工利润代理：价格偏离成本中枢比例，利润极端 => 供给调整 => 回归
+        dev = (close - ma_long) / np.maximum(ma_long, 1e-10)
+        sig = -np.tanh(dev * 40)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    long_window: 120
+  input_fields:
+  - close
+  lookback: 125
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 5
+    narrative: 裂解价差代理：能化品利润水位决定开工率与进口套利，价格对成本中枢大幅偏离时产能/贸易流调整驱动回归，长期反转结构。

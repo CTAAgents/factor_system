@@ -1,0 +1,173 @@
+family: momentum
+version: '1.0'
+market: futures
+factors:
+- name: fut_xsmom
+  description: 截面动量(XSMOM)：做多过去收益高的品种，做空过去收益低的品种。期货月频动量效应显著。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        j = int(params.get('lookback', 20))
+        k = int(params.get('holding', 1))
+        if n < j + 2:
+            return np.zeros(n)
+        # 截面动量：过去 J 日收益率
+        ret = np.zeros(n)
+        ret[j:] = (close[j:] - close[:-j]) / np.maximum(close[:-j], 1e-10)
+        # 滞后 k 日执行（简化）
+        sig = np.zeros(n)
+        sig[j+k:] = np.tanh(ret[j:-k] / 0.05)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    lookback: 20
+    holding: 1
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 截面动量(XSMOM)：做多过去收益高的品种，做空过去收益低的品种。期货月频动量效应显著。
+- name: fut_tsmom
+  description: 时序动量(TSMOM)：资产自身历史收益为正则做多，为负则做空。AQR 跨资产58种资产25年数据验证。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        k = int(params.get('lookback_months', 3))
+        j = int(params.get('skip_days', 20))
+        window = k * 21
+        if n < window + j + 1:
+            return np.zeros(n)
+        # 时序动量：过去收益率 sign(收益) 决定方向，滞后 1 个月
+        ret = np.zeros(n)
+        ret[window+j:] = (close[window+j:] - close[j:n-window]) / np.maximum(close[j:n-window], 1e-10)
+        sig = np.sign(ret) * 0.5
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    lookback_months: 3
+    skip_days: 20
+  input_fields:
+  - close
+  lookback: 85
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 时序动量(TSMOM)：资产自身历史收益为正则做多，为负则做空。AQR 跨资产58种资产25年数据验证。
+- name: fut_short_reversal
+  description: 短期反转：3-5日价格反转效应，做多跌多的做空涨多的。与月频动量共存。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 5))
+        if n < window + 1:
+            return np.zeros(n)
+        ret = np.zeros(n)
+        ret[window:] = (close[window:] - close[:-window]) / np.maximum(close[:-window], 1e-10)
+        # 短期反转：做多跌多的，做空涨多的
+        sig = -np.tanh(ret / 0.02)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 5
+  input_fields:
+  - close
+  lookback: 10
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: 短期反转：3-5日价格反转效应，做多跌多的做空涨多的。与月频动量共存。
+- name: fut_composite_momentum
+  description: 复合动量：XSMOM+TSMOM 结合，同时考虑截面排序和方向。中信最优参数(J=243,K=10)年化9.61%夏普0.95。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        j = int(params.get('lookback', 243))
+        k = int(params.get('holding', 10))
+        if n < j + k + 1:
+            return np.zeros(n)
+        # XSMOM 成分
+        ret = np.zeros(n)
+        ret[j:] = (close[j:] - close[:-j]) / np.maximum(close[:-j], 1e-10)
+        xs = np.tanh(ret / 0.05)
+        # TSMOM 成分
+        ts = np.sign(ret) * 0.5
+        # 复合动量
+        sig = xs * 0.6 + ts * 0.4
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    lookback: 120
+    holding: 10
+  input_fields:
+  - close
+  lookback: 120
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 4
+    narrative: 复合动量：XSMOM+TSMOM 结合，同时考虑截面排序和方向。中信最优参数(J=243,K=10)年化9.61%夏普0.95。
+- name: fut_basis_momentum
+  description: 基差动量：期限结构同比变化率，剔除季节性影响。中信最优(J=243,K=3)年化6.89%夏普0.81。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        j = int(params.get('lookback', 243))
+        k = int(params.get('holding', 3))
+        if n < j + k + 1:
+            return np.zeros(n)
+        # 基差动量：用 MA 比例近似近远月价差的同比变化
+        ma_short = np.convolve(close, np.ones(5)/5, mode='same')
+        ma_long = np.convolve(close, np.ones(20)/20, mode='same')
+        basis = (ma_short - ma_long) / np.maximum(ma_long, 1e-10)
+        # 基差的变化率
+        basis_chg = np.zeros(n)
+        basis_chg[j:] = (basis[j:] - basis[:-j]) / np.maximum(np.abs(basis[:-j]), 1e-10)
+        sig = np.tanh(basis_chg * 5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    lookback: 120
+    holding: 3
+  input_fields:
+  - close
+  lookback: 120
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 基差动量：期限结构同比变化率，剔除季节性影响。中信最优(J=243,K=3)年化6.89%夏普0.81。

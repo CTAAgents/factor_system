@@ -1,0 +1,111 @@
+family: higher_moments
+version: '1.0'
+market: futures
+factors:
+- name: fut_skewness_full
+  description: 偏度因子：负偏度品种存在风险溢价。期货尾部风险大，负偏度需风险溢价补偿。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window + 1:
+            return np.zeros(n)
+        returns = np.zeros(n)
+        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        skew = np.zeros(n)
+        for i in range(window, n):
+            r = returns[i-window+1:i+1]
+            mu, s = np.mean(r), np.std(r)
+            if s > 1e-10:
+                skew[i] = np.mean((r - mu)**3) / (s**3)
+        sig = -np.tanh(skew * 2)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 偏度因子：负偏度品种存在风险溢价。期货尾部风险大，负偏度需风险溢价补偿。
+- name: fut_upside_skewness
+  description: 上行偏度因子：仅计算正收益的偏度。中信回看20日持仓4日年化5.5%夏普0.90。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window + 1:
+            return np.zeros(n)
+        returns = np.zeros(n)
+        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        uskew = np.zeros(n)
+        for i in range(window, n):
+            r = returns[i-window+1:i+1]
+            pos = r[r > 0]
+            if len(pos) > 2 and np.std(pos) > 1e-10:
+                mu = np.mean(pos)
+                uskew[i] = np.mean((pos - mu)**3) / (np.std(pos)**3)
+        sig = -np.tanh(uskew * 2)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 3
+    institutional: 3
+    narrative: 上行偏度因子：仅计算正收益的偏度。中信回看20日持仓4日年化5.5%夏普0.90。
+- name: fut_kurtosis
+  description: 峰度因子：高峰度=极端风险=做空。高阶矩因子中表现最优，中信回看14日持仓2日年化6.0%夏普0.95。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 14))
+        if n < window + 1:
+            return np.zeros(n)
+        returns = np.zeros(n)
+        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        kurt = np.zeros(n)
+        for i in range(window, n):
+            r = returns[i-window+1:i+1]
+            mu, s = np.mean(r), np.std(r)
+            if s > 1e-10:
+                kurt[i] = np.mean((r - mu)**4) / (s**4) - 3
+        # 高峰度 -> 极端风险 -> 做空
+        sig = -np.tanh(kurt * 0.5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 14
+  input_fields:
+  - close
+  lookback: 20
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 3
+    narrative: 峰度因子：高峰度=极端风险=做空。高阶矩因子中表现最优，中信回看14日持仓2日年化6.0%夏普0.95。

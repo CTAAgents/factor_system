@@ -1,0 +1,113 @@
+family: position_flow
+version: '1.0'
+market: futures
+factors:
+- name: fut_open_interest_full
+  description: 持仓量因子：持仓增加+价格上涨=多头主导，持仓增加+价格下跌=空头主导。期货特有持仓量因子。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        hold = data['hold'].values if hasattr(data, 'hold') else data.get('hold', np.zeros(len(close)))
+        n = len(close)
+        j = int(params.get('lookback', 5))
+        if n < j + 2:
+            return np.zeros(n)
+        oi_chg = np.zeros(n)
+        oi_chg[j:] = (hold[j:] - hold[:-j]) / np.maximum(hold[:-j], 1e-10)
+        chg = np.zeros(n)
+        chg[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        sig = np.where(oi_chg > 0.03, np.tanh(chg / 0.02) * 0.6,
+                       np.where(oi_chg < -0.03, -np.tanh(chg / 0.02) * 0.3, 0))
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    lookback: 5
+  input_fields:
+  - close
+  - hold
+  lookback: 10
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 5
+    institutional: 4
+    narrative: 持仓量因子：持仓增加+价格上涨=多头主导，持仓增加+价格下跌=空头主导。期货特有持仓量因子。
+- name: fut_warehouse_receipt
+  description: 仓单因子：仓单增加=现货供应增加=利空。中信最优(J=3,K=1)年化10.10%夏普1.48。需AKShare仓单数据注入。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        j = int(params.get('lookback', 3))
+        k = int(params.get('holding', 1))
+        if n < j + k + 2:
+            return np.zeros(n)
+        # 仓单因子：AKShare 仓单数据需外部注入，用持仓量变化近似
+        # 仓单增加表示现货供应增加，利空价格
+        hold = data['hold'].values if hasattr(data, 'hold') else data.get('hold', np.zeros(n))
+        if np.max(np.abs(hold)) > 0:
+            wr_chg = np.zeros(n)
+            wr_chg[j:] = (hold[j:] - hold[:-j]) / np.maximum(hold[:-j], 1e-10)
+            sig = -np.tanh(wr_chg * 5)
+        else:
+            sig = np.zeros(n)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    lookback: 3
+    holding: 1
+  input_fields:
+  - close
+  - hold
+  lookback: 8
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 仓单因子：仓单增加=现货供应增加=利空。中信最优(J=3,K=1)年化10.10%夏普1.48。需AKShare仓单数据注入。
+- name: fut_hedge_pressure
+  description: 对冲压力因子：套保者增加空头(持仓增+价格跌)=对冲压力增大。中信年化6.0%夏普0.90。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        hold = data['hold'].values if hasattr(data, 'hold') else data.get('hold', np.zeros(len(close)))
+        n = len(close)
+        j = int(params.get('lookback', 243))
+        if n < j + 2:
+            return np.zeros(n)
+        # 对冲压力 = 持仓量变化率 × 价格方向
+        # 套保者增加空头(持仓增加+价格下跌) = 对冲压力增大
+        oi_chg = np.zeros(n)
+        oi_chg[j:] = (hold[j:] - hold[:-j]) / np.maximum(hold[:-j], 1e-10)
+        ret = np.zeros(n)
+        ret[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        # 对冲压力增大(持仓增+价格跌) => 做空；对冲压力减小 => 做多
+        hp = oi_chg * np.sign(ret)
+        sig = -np.tanh(hp * 5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    lookback: 120
+  input_fields:
+  - close
+  - hold
+  lookback: 120
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 4
+    behavioral: 3
+    microstructure: 4
+    institutional: 4
+    narrative: 对冲压力因子：套保者增加空头(持仓增+价格跌)=对冲压力增大。中信年化6.0%夏普0.90。

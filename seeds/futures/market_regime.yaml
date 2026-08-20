@@ -1,0 +1,310 @@
+family: market_regime
+version: '1.0'
+market: futures
+factors:
+- name: fut_macro_cpi
+  description: CPI宏观环境因子：CPI上升=通胀压力=商品承压做空。需外部注入cpi数据或降级为趋势近似。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        # CPI 宏观环境因子：需外部注入 cpi 字段
+        # 无数据时用 close 的长期趋势替代
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        cpi = data.get('cpi', None)
+        if cpi is not None:
+            cpi_arr = cpi.values if hasattr(cpi, 'values') else cpi
+            sig = -np.tanh((cpi_arr - np.mean(cpi_arr)) / np.maximum(np.std(cpi_arr), 1e-10))
+        else:
+            n = len(close)
+            if n < 60:
+                return np.zeros(n)
+            trend = np.zeros(n)
+            trend[60:] = (close[60:] - close[:-60]) / np.maximum(close[:-60], 1e-10)
+            sig = np.tanh(trend * 10) * 0.3
+        return np.clip(sig, -1.0, 1.0)
+  params: {}
+  input_fields:
+  - close
+  lookback: 1
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 2
+    institutional: 5
+    narrative: CPI宏观环境因子：CPI上升=通胀压力=商品承压做空。需外部注入cpi数据或降级为趋势近似。
+- name: fut_macro_interest_rate
+  description: 利率宏观环境因子：利率上升=融资成本增加=商品承压做空。需外部注入rate数据。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        rate = data.get('rate', None)
+        if rate is not None:
+            rate_arr = rate.values if hasattr(rate, 'values') else rate
+            sig = -np.tanh((rate_arr - np.mean(rate_arr)) / np.maximum(np.std(rate_arr), 1e-10))
+        else:
+            n = len(close)
+            if n < 30:
+                return np.zeros(n)
+            vol = np.array([np.std(close[max(0, i-30+1):i+1]) for i in range(n)])
+            sig = -np.tanh(vol / np.maximum(np.mean(vol), 1e-10) * 2) * 0.3
+        return np.clip(sig, -1.0, 1.0)
+  params: {}
+  input_fields:
+  - close
+  lookback: 1
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 2
+    institutional: 5
+    narrative: 利率宏观环境因子：利率上升=融资成本增加=商品承压做空。需外部注入rate数据。
+- name: fut_macro_export
+  description: 出口总值宏观因子：出口增长=外需强劲=商品利好做多。需外部注入export数据。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        export = data.get('export', None)
+        if export is not None:
+            export_arr = export.values if hasattr(export, 'values') else export
+            sig = np.tanh((export_arr - np.mean(export_arr)) / np.maximum(np.std(export_arr), 1e-10))
+        else:
+            n = len(close)
+            if n < 20:
+                return np.zeros(n)
+            ma = np.convolve(close, np.ones(20)/20, mode='same')
+            slope = np.zeros(n)
+            slope[1:] = (ma[1:] - ma[:-1]) / np.maximum(ma[:-1], 1e-10)
+            sig = np.tanh(slope * 30) * 0.3
+        return np.clip(sig, -1.0, 1.0)
+  params: {}
+  input_fields:
+  - close
+  lookback: 1
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 2
+    institutional: 5
+    narrative: 出口总值宏观因子：出口增长=外需强劲=商品利好做多。需外部注入export数据。
+- name: fut_macro_import
+  description: 进口总值宏观因子：进口增长=内需强劲=商品利好做多。需外部注入import_data数据（GAP-088 补消费）。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        import_data = data.get('import_data', None)
+        if import_data is not None:
+            import_arr = import_data.values if hasattr(import_data, 'values') else import_data
+            sig = np.tanh((import_arr - np.mean(import_arr)) / np.maximum(np.std(import_arr), 1e-10))
+        else:
+            n = len(close)
+            if n < 20:
+                return np.zeros(n)
+            ma = np.convolve(close, np.ones(20)/20, mode='same')
+            slope = np.zeros(n)
+            slope[1:] = (ma[1:] - ma[:-1]) / np.maximum(ma[:-1], 1e-10)
+            sig = np.tanh(slope * 30) * 0.3
+        return np.clip(sig, -1.0, 1.0)
+  params: {}
+  input_fields:
+  - close
+  lookback: 1
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 2
+    institutional: 5
+    narrative: 进口总值宏观因子：进口增长=内需强劲=商品利好做多。需外部注入import_data数据。
+- name: fut_macro_us_bond
+  description: 美债收益率宏观因子：美债收益率上升=美元走强=商品承压做空。需外部注入us_bond数据。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        us_bond = data.get('us_bond', None)
+        if us_bond is not None:
+            us_arr = us_bond.values if hasattr(us_bond, 'values') else us_bond
+            sig = -np.tanh((us_arr - np.mean(us_arr)) / np.maximum(np.std(us_arr), 1e-10))
+        else:
+            n = len(close)
+            if n < 20:
+                return np.zeros(n)
+            # 美债收益率上升 => 商品承压的近似
+            sig = np.zeros(n) * 0.2
+        return np.clip(sig, -1.0, 1.0)
+  params: {}
+  input_fields:
+  - close
+  lookback: 1
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 5
+    behavioral: 3
+    microstructure: 2
+    institutional: 5
+    narrative: 美债收益率宏观因子：美债收益率上升=美元走强=商品承压做空。需外部注入us_bond数据。
+- name: fut_mkt_trend
+  description: 市场趋势强度：R²衡量趋势强度。中信商品市场4因子之一。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 60))
+        if n < window + 1:
+            return np.zeros(n)
+        # 市场趋势强度+方向：R² × 斜率符号
+        # R² 衡量趋势强度，斜率符号决定方向（上涨=+，下跌=-）
+        trend = np.zeros(n)
+        for i in range(window, n):
+            y = close[i-window+1:i+1]
+            x = np.arange(window)
+            if np.std(y) > 1e-10:
+                r2 = np.corrcoef(x, y)[0, 1]**2
+                slope_sign = np.sign(y[-1] - y[0])
+                trend[i] = r2 * slope_sign
+        sig = np.tanh(trend * 5)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 60
+  input_fields:
+  - close
+  lookback: 65
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: 市场趋势强度：R²衡量趋势强度。中信商品市场4因子之一。
+- name: fut_mkt_speculation
+  description: 市场投机度：成交量/持仓量。投机度高=情绪过热=做空。中信商品市场4因子之一。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        hold = data['hold'].values if hasattr(data, 'hold') else data.get('hold', np.ones(len(close)))
+        n = len(volume)
+        window = int(params.get('window', 20))
+        if n < window + 1:
+            return np.zeros(n)
+        # 市场投机度 = 成交量 / 持仓量
+        turn = np.zeros(n)
+        for i in range(1, n):
+            turn[i] = volume[i] / max(hold[i], 1)
+        avg = np.convolve(turn, np.ones(window)/window, mode='same')
+        dev = (turn - avg) / np.maximum(avg, 1e-10)
+        # 投机度高 => 情绪过热 => 做空
+        sig = -np.tanh(dev * 3)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - volume
+  - hold
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 3
+    narrative: 市场投机度：成交量/持仓量。投机度高=情绪过热=做空。中信商品市场4因子之一。
+- name: fut_mkt_rotation
+  description: 市场轮动速度：高频波动/低频波动比。轮动快=风格切换频繁。中信商品市场4因子之一。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        n = len(close)
+        window = int(params.get('window', 20))
+        if n < window * 2:
+            return np.zeros(n)
+        # 市场轮动速度：用品种间相关性变化率近似
+        # 单品种内用高频波动 vs 低频波动比
+        returns = np.zeros(n)
+        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-10)
+        vol_high = np.array([np.std(returns[max(0, i-5+1):i+1]) for i in range(n)])
+        vol_low = np.array([np.std(returns[max(0, i-window+1):i+1]) for i in range(n)])
+        ratio = vol_high / np.maximum(vol_low, 1e-10)
+        sig = np.tanh(ratio * 2)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 3
+    institutional: 3
+    narrative: 市场轮动速度：高频波动/低频波动比。轮动快=风格切换频繁。中信商品市场4因子之一。
+- name: fut_mkt_concentration
+  description: 成交集中度：成交额偏离度。成交集中=资金集中=趋势延续。中信商品市场4因子之一。
+  market: futures
+  code: |2
+
+    def factor_program(data, params):
+        import numpy as np
+        close = data['close'].values if hasattr(data, 'close') else data['close']
+        volume = data['volume'].values if hasattr(data, 'volume') else data['volume']
+        n = len(volume)
+        window = int(params.get('window', 20))
+        if n < window + 1:
+            return np.zeros(n)
+        # 成交集中度：用单个品种成交量占比的波动近似
+        amount = close * volume
+        ma = np.convolve(amount, np.ones(window)/window, mode='same')
+        dev = (amount - ma) / np.maximum(ma, 1e-10)
+        # 成交集中 => 资金集中 => 趋势延续
+        sig = np.tanh(dev * 2)
+        return np.clip(sig, -1.0, 1.0)
+  params:
+    window: 20
+  input_fields:
+  - close
+  - volume
+  lookback: 25
+  output_type: signal
+  frequency: daily
+  economic_logic:
+    theory: 3
+    behavioral: 4
+    microstructure: 4
+    institutional: 3
+    narrative: 成交集中度：成交额偏离度。成交集中=资金集中=趋势延续。中信商品市场4因子之一。
+

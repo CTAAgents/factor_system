@@ -117,5 +117,25 @@ diff 中不必要的改动减少
 因过度复杂而重写的次数减少
 澄清性问题在实现之前提出（而非在犯错之后）
 所有代码变更都有对应的文档更新
-所有 commit 前都通过了 12 项检查清单
+所有 commit 前都通过了 13 项检查清单
 trace_id 贯穿所有模块和日志
+
+---
+
+## RHI 递归 Harness 自进化（FTS 适配版，v9.22.0+）
+
+将本 CLAUDE.md 作为 Harness prompt 进行版本化自优化（参考 RHI arXiv:2607.15524 + MemoHarness arXiv:2607.14159），评分维度已按 FTS 实际规则适配：
+
+```bash
+python scripts/rhi_global_setup.py init     # 首版快照
+python scripts/rhi_global_setup.py step     # 执行一轮自优化（每次修改 CLAUDE.md 后运行）
+python scripts/rhi_global_setup.py status   # 查看评分、改进率与收敛状态
+```
+
+评分维度（FTS 适配版）：
+- memory_coverage (0.30)：memory 存储体系 + D:\Knowledge 知识库引用
+- rule_completeness (0.30)：13 项检查清单 + 反模式(AP) + verify_doc_consistency
+- consistency (0.20)：docs/harness 文档体系 + trace_id 全链路 + 差距管理
+- clarity (0.20)：CLAUDE.md 本体行数（<500 最佳）与版本号纪律
+
+改进率低于 0.3 或达最大轮次后自动收敛。

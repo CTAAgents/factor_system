@@ -105,7 +105,7 @@ DEFAULT_TASKS = {
     "l2_review": {
         "cron": "0 10 * * 0",
         "callable": "fts.scheduler.jobs.l2_review_job",
-        "desc": "L2 周度评审（45 计划候选③）：Step A 新标准准入重审（audit/robustness/评分卡复检 active elite，不合格降级观察或淘汰，FTS_MONTHLY_REAUDIT_ENABLED=0 关闭）+ Step B 因子衰减评估（A.2 增量评估 + 状态机 + 自动淘汰）",
+        "desc": "L2 周度评审（45 计划候选③）：Step A 新标准准入重审（audit/robustness/评分卡复检 active elite，不合格降级观察或淘汰，FTS_MONTHLY_REAUDIT_ENABLED=0 关闭）+ Step B 因子衰减评估（A.2 增量评估 + 状态机 + 自动淘汰）；v3.0.0 起由每日 04:00 统一任务周日重量级分支调用（TRAE Schedule 3f5d5da3）",
         "prefix": "fts.l2_review",
     },
     "data_quality_eval": {

@@ -31,8 +31,8 @@ venv/
 # Runtime data
 data/
 memory/
-seeds/
 logs/
+# seeds/ 为 L1 配置层（AGENTS.md：seeds/*.yaml + config/），纯 YAML/MD 配置无运行时产物，全部入库
 
 # Documentation (Harness specs and key project docs are tracked; other project-local docs are not)
 docs/*
@@ -70,3 +70,23 @@ debug_llm_response_*.txt
 output/
 signals/
 test_full_run.log
+
+# ── Push safety：严格禁止推送到 GitHub 的运行时/敏感内容 ──
+# RHI 自进化运行时历史（2026-08-20 起，勿入库）
+.rhi/
+# 数据库与数据文件（防御性兜底；data/ 已整体排除）
+*.duckdb
+*.db
+*.db-wal
+*.db-shm
+# 日志（防御性兜底；logs/ 已整体排除）
+*.log
+# 证书/私钥/凭据文件（严格禁止，发现即清理）
+*.key
+*.pem
+*.p12
+*.jks
+*.crt
+credentials*
+.env.local
+.env.production
