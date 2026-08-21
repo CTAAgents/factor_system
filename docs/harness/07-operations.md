@@ -1,6 +1,6 @@
 # FTS 运维与版本管理
 
-> 版本: v3.1.0+4
+> 版本: v3.1.0+7
 > 最后更新: 2026-08-20
 
 ---
@@ -12,6 +12,9 @@
 
 | 版本 | 日期 | 说明 |
 |:-----|:-----|:-----|
+| **v3.1.0+7** | **2026-08-21** | **fix: 逻辑监控 mock 数据补 vwap 列，修复 GP 因子 fct_dab917bd KeyError** |** |
+| **v3.1.0+6** | **2026-08-21** | **close GAP-150/151: 存储域写路径契约收口 + 数据契约字段完整性单源化** |** |
+| **v3.1.0+5** | **2026-08-21** | **fix GAP-132/170/173: 退化检测兜底 + pandas 3.0 只读数组修复 + 回归清理** |** |
 | **v3.1.0+4** | **2026-08-20** | **Harness 精简压缩：docs/harness 顶层 12 篇 md 由 ~1.2MB 压缩至 ~118KB（只留现状基线）；历史计划/设计/验收/评审 123 文件归档至 docs/archive/ 并生成索引；CLAUDE.md 141→117 行、AGENTS.md 178→119 行；verify_doc_consistency/update_doc_versions 移除 plans/design 扫描范围、06-testing 断言 4020+→8469；12 处代码 docstring 引用 docs/harness/{plans,design}→docs/archive** |** |
 | **v3.1.0+3** | **2026-08-20** | **换月日历根治（plans/60 阶段A落地）：主链路统一消费 QuantData continuous_daily 复权序列——① get_ohlcv QUANTDATA 来源跳过 RollCalendar 二次复权（消除双重复权）；② aggregator 缓存命中保留真实 source（QUANTDATA 已复权 vs TDX 未复权回退）；③ 日线 cache_max_age_days 30→1（QuantData 每日刷新真实消费，不再永久命中旧缓存）；④ _write_cache 幂等覆盖（先删后插，QuantData 覆盖旧 TDX 行）；⑤ fetch_ohlcv 透传 adj_factor。验证：全 88 品种复权序列与 QuantData 0 偏差、346 因子全量信号重算（1655×19×346，中位有效率93.7%）、active 86 因子符号同向率 65.1%；523 测试全绿** |** |
 | **v3.1.0+2** | **2026-08-20** | **RollCalendar backfill_days 默认值 5→20：切换日缺价回溯窗口扩大，全库缺价救回率 63%→78%（跳过 127→76，另救回 51 个超5日窗口事件）；文档 04-resilience/06-testing 同步；test_roll_calendar 17 passed** |** |

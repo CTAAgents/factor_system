@@ -242,6 +242,59 @@ class TestDegradationDetection:
         result = lineage.detect_degradation(declining_factor, threshold=-0.3)
         assert isinstance(result["is_degraded"], bool)
 
+    # ─=== GAP-132：评估历史不足时绝对水平兜底 ──────────────────
+
+    def test_single_eval_low_sharpe_degraded(self, repo, lineage):
+        """仅 1 条评估且 Sharpe 低于兜底线 → 判退化（不再静默失效）。"""
+        fid = repo.create_factor(
+            {"name": "single_low_sharpe", "code": "def f(d,p):\\n    return d['close']", "market": "futures", "source": "evolved"}
+        )
+        repo.add_evaluation(fid, {"sharpe": 0.6, "ic": 0.02, "overall_passed": True})
+        result = lineage.detect_degradation(fid)
+        assert result["data_sufficient"] is False
+        assert result["is_degraded"] is True
+        assert result["degradation_reason"] == "absolute_sharpe_below_floor(0.60<1.0)"
+        assert result["recommendation"] == "考虑暂停使用该因子"
+
+    def test_single_eval_high_sharpe_healthy(self, repo, lineage):
+        """仅 1 条评估但 Sharpe 高于兜底线 → 不判退化。"""
+        fid = repo.create_factor(
+            {"name": "single_high_sharpe", "code": "def f(d,p):\\n    return d['close']", "market": "futures", "source": "evolved"}
+        )
+        repo.add_evaluation(fid, {"sharpe": 1.8, "ic": 0.06, "overall_passed": True})
+        result = lineage.detect_degradation(fid)
+        assert result["data_sufficient"] is False
+        assert result["is_degraded"] is False
+
+    def test_single_eval_negative_ic_degraded(self, repo, lineage):
+        """仅 1 条评估且 IC 为负 → 判退化（绝对水平兜底）。"""
+        fid = repo.create_factor(
+            {"name": "single_neg_ic", "code": "def f(d,p):\\n    return d['close']", "market": "futures", "source": "evolved"}
+        )
+        repo.add_evaluation(fid, {"sharpe": 1.5, "ic": -0.02, "overall_passed": True})
+        result = lineage.detect_degradation(fid)
+        assert result["is_degraded"] is True
+        assert result["degradation_reason"] == "absolute_ic_negative(-0.0200)"
+
+    def test_single_eval_failed_degraded(self, repo, lineage):
+        """仅 1 条评估且 overall_passed=False → 判退化。"""
+        fid = repo.create_factor(
+            {"name": "single_failed", "code": "def f(d,p):\\n    return d['close']", "market": "futures", "source": "evolved"}
+        )
+        repo.add_evaluation(fid, {"sharpe": 1.6, "ic": 0.05, "overall_passed": False})
+        result = lineage.detect_degradation(fid)
+        assert result["is_degraded"] is True
+        assert result["degradation_reason"] == "latest_eval_failed"
+
+    def test_no_eval_not_degraded(self, repo, lineage):
+        """无任何评估记录 → 不判退化（无数据可判断）。"""
+        fid = repo.create_factor(
+            {"name": "no_eval", "code": "def f(d,p):\\n    return d['close']", "market": "futures", "source": "evolved"}
+        )
+        result = lineage.detect_degradation(fid)
+        assert result["data_sufficient"] is False
+        assert result["is_degraded"] is False
+
 
 # ─=== 血缘报告测试 ──────────────────────────────────
 

@@ -48,10 +48,17 @@ class SimSQLiteStore:
         """初始化并建表。
 
         Args:
-            db_path: SQLite 文件路径
+            db_path: SQLite 文件路径（默认生产路径须经存储域登记；显式注入豁免）
         """
         self._db_path = db_path
         self._conn: Optional[sqlite3.Connection] = None
+        # GAP-150 写路径契约（严格模式）：默认模拟组合库必须登记（显式注入豁免）
+        if db_path == "memory/portfolio/simulated/sim_state.db":
+            from fts.store import get_storage_registry
+
+            get_storage_registry().warn_unregistered_write(
+                db_path, caller="SimSQLiteStore", strict=True
+            )
         self._connect()
 
     # ─── 生命周期 ────────────────────────────────────────

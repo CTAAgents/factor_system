@@ -1160,6 +1160,13 @@ class FuturesDataProvider:
         if len(df) > days:
             df = df.iloc[-days:]
 
+        # GAP-151 数据契约字段完整性校验（代理填充前）：核心字段不可用→跳过，
+        # 增强字段（hold/settle）缺失→warning 显式暴露代理降级链（GAP-083 兜底继续）。
+        from fts.store.data_contract import check_kline_field_integrity
+
+        if not check_kline_field_integrity(df, sym, logger, extended_fields=("hold", "settle")):
+            return None
+
         # GAP-083 真实优先/代理兜底：settle/hold 无效（NULL 或 0 占位）才用代理
         # settle 代理：(H+L+C)/3 —— 与 vwap 回退公式保持一致，业内典型做法
         # hold 代理：20 日滚动均量（反映资金关注度持续性，因子代码中需注意此为代理）

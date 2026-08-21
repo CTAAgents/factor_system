@@ -561,10 +561,14 @@ class _ArrayDataWrapper:
         self._columns = list(df.columns)
 
     def __getitem__(self, key: str) -> np.ndarray:
-        """返回列数据为 ndarray（而非 Series）。"""
+        """返回列数据为 ndarray（而非 Series）。
+
+        pandas 3.0: .to_numpy() 可能返回只读视图，显式 .copy() 确保可写
+        （legacy 模板因子常做原地赋值如 data['close'][i] = val）。
+        """
         if key not in self._df.columns:
             raise KeyError(f"列 '{key}' 不存在，可用列: {self._columns}")
-        return self._df[key].to_numpy().astype(np.float64)
+        return self._df[key].to_numpy().astype(np.float64).copy()
 
     def __getattr__(self, name: str) -> np.ndarray:
         """属性访问列（兼容 `hasattr(data, 'volume')` + `data.volume` 写法）。
@@ -572,9 +576,11 @@ class _ArrayDataWrapper:
         pandas DataFrame 支持 df.volume 属性访问列；本 wrapper 保持该语义，
         否则因子代码中 `hasattr(data, 'volume')` 恒为 False，导致
         volume 等列被替换为常量（如 volume_zero 消融失效）。
+
+        pandas 3.0: 显式 .copy() 确保返回可写数组。
         """
         if name in self._df.columns:
-            return self._df[name].to_numpy().astype(np.float64)
+            return self._df[name].to_numpy().astype(np.float64).copy()
         raise AttributeError(f"'data' 没有属性 '{name}'")
 
     def __contains__(self, key: str) -> bool:
@@ -779,9 +785,9 @@ class FactorExecutor:
                 try:
                     result = self._compiled(data, params)  # type: ignore[misc]
                 except Exception:
-                    # 最终回退: dict[str, np.ndarray] 格式
+                    # 最终回退: dict[str, np.ndarray] 格式（pandas 3.0 需 .copy() 保可写）
                     data_dict: dict[str, np.ndarray] = {
-                        col: data[col].to_numpy().astype(np.float64) for col in data.columns
+                        col: data[col].to_numpy().astype(np.float64).copy() for col in data.columns
                     }
                     try:
                         result = self._compiled(data_dict, params)  # type: ignore[misc]
@@ -815,7 +821,9 @@ class FactorExecutor:
             node = parse_expression(expression)
             _OPERATOR_AST_CACHE[expression] = node
         series = evaluate(node, data, _get_operator_registry())
-        result: np.ndarray = np.asarray(series, dtype=np.float64)
+        # pandas 3.0: np.asarray(Series, dtype=float) 可能返回只读视图，
+        # 显式 .copy() 确保可写（GAP-170）
+        result: np.ndarray = np.asarray(series, dtype=np.float64).copy()
 
         expected_len = len(data)
         result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)

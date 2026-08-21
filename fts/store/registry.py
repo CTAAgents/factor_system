@@ -184,11 +184,32 @@ class StorageRegistry:
 
     # ── 写路径契约（GAP-150，2026-08-19） ─────────────────
 
+    # 目录型域按后端扩展名兼容匹配（GAP-150 关闭语义，2026-08-21）：
+    # lineage_logs/experiment_logs 等 path 为纯目录（如 data），若任意后缀文件
+    # 都算已登记，则未登记的新写路径会被宽匹配掩盖 → 严格模式形同虚设。
+    # 目录型域仅当文件扩展名与域后端兼容时才视为匹配。
+    _DIR_BACKEND_EXTS: dict[str, tuple[str, ...]] = {
+        StorageBackend.DUCKDB.value: (".duckdb",),
+        StorageBackend.PARQUET.value: (".parquet",),
+        StorageBackend.JSON.value: (".json",),
+        StorageBackend.JSONL.value: (".jsonl",),
+        StorageBackend.YAML.value: (".yaml", ".yml"),
+        StorageBackend.NPY.value: (".npy",),
+        StorageBackend.SQLITE.value: (".db", ".sqlite", ".sqlite3"),
+        # mixed（报告类 csv/png/json 混存）兼容任意扩展名
+    }
+
     def find_by_path(self, path: str | Path) -> StorageDomain | None:
         """按实际写路径反查登记域（相对项目根规范化比对）。
 
-        - 模板路径（如 ``data/factor_catalog_{stock,futures,energy}.duckdb``）按
+        匹配规则（GAP-150 关闭语义，2026-08-21 收紧宽匹配）：
+        - 文件级域（具体路径，如 ``data/state.db``）：前缀匹配（含同源衍生
+          文件如 ``.wal`` 备份）；
+        - 模板域（如 ``data/factor_catalog_{stock,futures,energy}.duckdb``）：
           前缀 + 后缀拆分匹配；
+        - 目录级域（path 为纯目录，如 ``data``）：仅当文件扩展名与域后端
+          兼容时匹配（lineage_logs=jsonl / experiment_logs=json），否则跳过——
+          未登记的新写路径（如 ``data/foo.duckdb``）不再被宽匹配掩盖；
         - 项目根外路径（测试 tmp / 外部库）返回 None（显式注入豁免）。
         """
         p = Path(path)
@@ -199,12 +220,18 @@ class StorageRegistry:
         rel_str = rel.as_posix()
         for d in self._domains.values():
             dpath = d.path
-            if "{" in dpath:
+            if "{" in dpath:  # 模板域：前缀 + 后缀
                 prefix, _, rest = dpath.partition("{")
                 suffix = rest.split("}", 1)[1] if "}" in rest else ""
                 if rel_str.startswith(prefix) and rel_str.endswith(suffix):
                     return d
-            elif rel_str.startswith(dpath):
+            elif Path(dpath).suffix == "" and not dpath.endswith("/"):
+                # 目录级域：须与后端扩展名兼容（weak 匹配收紧）
+                if rel_str.startswith(dpath.rstrip("/") + "/"):
+                    exts = self._DIR_BACKEND_EXTS.get(d.backend.value)
+                    if exts is None or any(rel_str.endswith(e) for e in exts):
+                        return d
+            elif rel_str.startswith(dpath):  # 文件级域：前缀匹配（含同源衍生）
                 return d
         return None
 

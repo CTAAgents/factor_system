@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from fts.data_futures import (
     FUTURES_COVERAGE_PLAN,
@@ -243,3 +244,71 @@ class TestFetchDominantAkshare:
 
         result = _fetch_dominant_akshare(["RU0"])
         assert result == {}
+
+
+# ═══════════════════════════════════════════════════════════
+# GAP-151 主加载路径字段完整性校验（_from_kline_cache 接入）
+# ═══════════════════════════════════════════════════════════
+
+_KLINE_COLS = ["date", "open", "high", "low", "close", "volume", "amount", "hold", "settle", "vwap", "symbol"]
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeReader:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def execute(self, sql, params=None):
+        return _FakeResult(self._rows)
+
+
+def _kline_row(**kw):
+    """构造单行 kline_cache 查询结果（11 列，缺省取默认值）。"""
+    base = {
+        "date": "2026-01-05", "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5,
+        "volume": 100.0, "amount": 0.0, "hold": 10.0, "settle": 1.5,
+        "vwap": 2.0, "symbol": "RB0",
+    }
+    base.update(kw)
+    return tuple(base[c] for c in _KLINE_COLS)
+
+
+class TestFromKlineCacheFieldIntegrity:
+    def test_extended_hold_missing_warns_and_proxy(self, mocker, caplog):
+        """增强字段 hold 全空（GAP-083 代理场景）→ warning + 代理填充后返回 df。"""
+        provider = FuturesDataProvider(use_akshare_fallback=False)
+        mocker.patch("fts.data_futures._get_reader", return_value=_FakeReader([_kline_row(hold=None)]))
+        mocker.patch("fts.data_futures._release_reader", return_value=None)
+        with caplog.at_level("WARNING", logger="fts.data_futures"):
+            df = provider._from_kline_cache("RB0", 60)
+        assert df is not None
+        assert any("增强字段缺失" in r.message and "hold" in r.message for r in caplog.records)
+        # hold 代理填充（20 日滚动均量退化为单行自身 volume）
+        assert df["hold"].iloc[-1] == pytest.approx(100.0)
+
+    def test_core_missing_returns_none(self, mocker, caplog):
+        """核心字段全空（close=None）→ error + 返回 None（宁缺毋滥）。"""
+        provider = FuturesDataProvider(use_akshare_fallback=False)
+        mocker.patch("fts.data_futures._get_reader", return_value=_FakeReader([_kline_row(close=None)]))
+        mocker.patch("fts.data_futures._release_reader", return_value=None)
+        with caplog.at_level("ERROR", logger="fts.data_futures"):
+            df = provider._from_kline_cache("RB0", 60)
+        assert df is None
+        assert any("核心字段缺失" in r.message and "close" in r.message for r in caplog.records)
+
+    def test_complete_fields_no_warning(self, mocker, caplog):
+        """核心+增强字段齐全 → 返回 df 无告警。"""
+        provider = FuturesDataProvider(use_akshare_fallback=False)
+        mocker.patch("fts.data_futures._get_reader", return_value=_FakeReader([_kline_row()]))
+        mocker.patch("fts.data_futures._release_reader", return_value=None)
+        with caplog.at_level("WARNING", logger="fts.data_futures"):
+            df = provider._from_kline_cache("RB0", 60)
+        assert df is not None
+        assert not any("字段缺失" in r.message for r in caplog.records)

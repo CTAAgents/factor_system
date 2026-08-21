@@ -1,6 +1,6 @@
 # FTS 差距分析
 
-> 版本: v3.1.0+4
+> 版本: v3.1.0+7
 > 最后更新: 2026-08-20
 > 状态: 活跃 — 随项目迭代持续更新
 
@@ -13,26 +13,16 @@
 | 优先级 | 开放 | 已关闭 | 总计 |
 |:-------|:-----|:-------|:-----|
 | P0 | 0 | 2 | 2 |
-| P1 | 5 | 35 | 40 |
+| P1 | 0 | 40 | 40 |
 | P2 | 12 | 17 | 29 |
 | GAP-C（Stage 3C 远期） | 1 | 7 | 8 |
-| **合计** | **18** | **61** | **79** |
+| **合计** | **13** | **66** | **79** |
 
-> 总览口径：开放 = 状态列非「✅」项（🔴 开放 / 🟡 开放中·部分 / 🔄 处理中）；已关闭 = 状态列为「✅ 已关闭/已实施/已修复」。P1 开放 5（GAP-132/150/151/170/173）；P2 开放 12（GAP-089/090/093/127/142/152/153/156/157/158/174/175）；GAP-C 开放 1（C4 真实多机集群后置）。
+> 总览口径：开放 = 状态列非「✅」项（🔴 开放 / 🟡 开放中·部分 / 🔄 处理中）；已关闭 = 状态列为「✅ 已关闭/已实施/已修复」。P1 已全部关闭（GAP-150/151 于 v3.1.0+6 关闭）；P2 开放 12（GAP-089/090/093/127/142/152/153/156/157/158/174/175）；GAP-C 开放 1（C4 真实多机集群后置）。
 
 ---
 
 ## 2. 开放差距登记表
-
-### P1 — 重要改进（提升效率或稳定性）
-
-| ID | 模块 | 差距描述 | 影响 | 处理期限 | 状态 |
-|:---|:-----|:---------|:-----|:---------|:-----|
-| GAP-132 | `fts/factor_engine/factor_db/lineage.py` `get_evaluation_trend` + `fts/scheduler/jobs.py` `factor_inspector_job` + `factor_evaluations` 数据积累 | 退化检测因评估历史不足静默失效：`get_evaluation_trend` 要求 ≥2 条含 `level_1_sharpe` 的评估记录才计算趋势，各库 `FACTORS_WITH_2PLUS_EVALS=0` → 全部返回 `insufficient_data`，`detect_degradation` 恒 False | 因子退化安全机制形同虚设：每日巡检静默失效，退化因子无法被识别与降级 | 1 月内（评估多期积累后收口） | 🔴 开放（2026-08-17 登记：`factor_inspector_job` 已改默认全期货 + dry-run 防误降级；评估流水多期累积、趋势检测恢复后重审关闭） |
-| GAP-150 | `fts/store/registry.py`（`StorageRegistry.validate_contract`）+ 各数据域写路径 | 存储域契约仅静态校验 YAML 字段，不拦截实际写入：写入库路径/表名由调用方自由指定，无法保证落在 registry 登记域内 → 域漂移/双写只在数据消费侧暴露 | SSOT 契约在写入口形同虚设，新增写路径绕过注册表后契约失效且不可见 | 下个里程碑 | 🟡 部分（v2.105.0+19：`find_by_path` 反查 + 告警模式；+20 严格模式默认开启——`FactorRepository` 默认路径未登记抛 ValueError（`FTS_STORAGE_WRITE_STRICT=0` 回退告警），显式注入豁免；其余写入口（信号库/状态库/行情库）接入排期；测试 +8） |
-| GAP-151 | `fts/data_futures.py`（`_read_kline_cache` 等加载路径）+ 数据契约消费方 | 数据契约字段完整性缺运行时断言：`hold` 字段 100% 缺失被三层代理兜底掩盖，加载后无必填字段清单校验 | 必填字段缺失被代理值"合理化"，因子表现"合理但失真"，缺失不可见 | 下个里程碑 | 🟡 部分（v2.105.0+19：`KLINE_REQUIRED_FIELDS` + 加载后完整性告警；+20 分级校验——核心字段缺失→error+跳过，增强字段缺失→warning+代理降级显式暴露；测试 +4） |
-| GAP-170 | `fts/factor_engine/factor_program.py`（`_ArrayDataWrapper` + 沙箱回退）+ 环境（pandas 3.0.5） | pandas 3.0 `np.asarray(Series, dtype=float)` 返回只读数组：legacy Python 模板因子中原地赋值抛 `ValueError: assignment destination is read-only`；三层回退全部失败 → `FactorCompileError` → 信号留 NaN | legacy Python 模板因子路径失效（operator/DSL 因子不受影响）；影响存量手写模板因子与对应测试 | 下个里程碑 | 🔴 开放（2026-08-20 登记：修复方向——回退路径对 ndarray 显式 `.copy()` 或模板 `np.asarray(..., dtype=float).copy()`，待专项） |
-| GAP-173 | `fts/factor_engine/portfolio_loop.py`（signal_sharpe measured/estimated 语义）+ 相关测试 + 环境（pandas 3.0.5） | 全量回归残留预存失败 21 项（8129 passed / 21 failed）：① portfolio_loop signal_sharpe 断言 `estimated` ≠ `measured`（工作区既有本地改动引入）；② `test_portfolio_walk_forward` 5 项 pandas 3.0 只读数组错误；③ `test_regime_features` 常数序列相关 nan vs 0.0 | 全量回归门禁仍有预存失败（与双系统切分无关，属工作区既有状态与环境兼容） | 下个里程碑 | 🔴 开放（2026-08-20 登记：非双系统切分引入；pandas-3 只读归并 GAP-170 专项） |
 
 ### P2 — 一般改进（优化代码质量）
 
@@ -72,10 +62,15 @@
 | GAP-177 | 拥挤度体系（plans/56 A-D 四模块，决策门未过降级纯观测层） | v2.105.0+25 |
 | GAP-081 | A 股特有字段接入（迁移 fts-stock 实施） | v2.104.0+1 |
 
-### P1（35）
+### P1（40）
 
 | ID | 主题 | 关闭版本 |
 |:---|:-----|:---------|
+| GAP-150 | 存储域写路径契约收口（find_by_path 后端扩展名收紧 + SimSQLiteStore 接入严格模式） | v3.1.0+6 |
+| GAP-151 | 数据契约字段完整性校验单源化（data_contract 共享模块 + _from_kline_cache 接入） | v3.1.0+6 |
+| GAP-132 | 退化检测评估历史不足静默失效（绝对水平兜底 Sharpe<1.0/IC<0/未通过） | v3.0.0+53 |
+| GAP-170 | pandas 3.0 只读数组导致 legacy 模板因子赋值失败（`.copy()` 全链路兜底） | v3.0.0+53 |
+| GAP-173 | 全量回归残留 21 项失败（signal_sharpe 断言 + pandas 只读 + 常数序列相关） | v3.0.0+53 |
 | GAP-176 | 宏观 Beta 层（plans/55 A-E 五模块，灰度保守档） | v2.105.0+22 |
 | GAP-147 | 评审质检阀门错库（_conn 按 market 路由） | v2.105.0+12 |
 | GAP-144 | L2 晋升入口子链 IC 豁免放行（subchain_waiver） | v2.105.0+8 |

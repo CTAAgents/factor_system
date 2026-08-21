@@ -243,15 +243,22 @@ class FactorLineage:
         factor_id: str,
         threshold: float = -0.2,
         window: int = 10,
+        abs_sharpe_floor: float = 1.0,
     ) -> dict[str, Any]:
         """检测因子质量是否退化。
 
-        基于 Sharpe/IC 的近期变化趋势判断是否退化。
+        基于 Sharpe/IC 的近期变化趋势判断是否退化；评估历史不足
+        （no_data / insufficient_data）时**不静默失效**（GAP-132），
+        改用最新单条评估的绝对水平兜底判断：
+        - 最新 Sharpe < abs_sharpe_floor（默认 1.0，低于晋升门槛 1.5 的明显偏低线）
+        - 或最新 IC < 0
+        - 或最新一次评估 overall_passed=False
 
         Args:
             factor_id: 因子 ID
-            threshold: 退化阈值（Sharpe 变化率）
+            threshold: 退化阈值（Sharpe 变化率，负数为退化）
             window: 滑动窗口大小
+            abs_sharpe_floor: 绝对水平兜底的 Sharpe 下限（评估历史不足时生效）
 
         Returns:
             退化检测结果
@@ -259,12 +266,44 @@ class FactorLineage:
         sharpe_trend = self.get_evaluation_trend(factor_id, "sharpe")
         ic_trend = self.get_evaluation_trend(factor_id, "ic")
 
-        is_degraded = sharpe_trend.get("trend") == "declining" and sharpe_trend.get("pct_change", 0) < threshold * 100
+        trend_status = sharpe_trend.get("trend")
+        data_sufficient = trend_status not in ("no_data", "insufficient_data")
+
+        is_degraded = False
+        degradation_reason: str | None = None
+        degradation_score = 0.0
+
+        if data_sufficient:
+            degradation_score = round(sharpe_trend.get("pct_change", 0) / 100, 4)
+            if trend_status == "declining" and sharpe_trend.get("pct_change", 0) < threshold * 100:
+                is_degraded = True
+                degradation_reason = "trend_declining"
+        else:
+            # GAP-132 兜底：评估历史不足时用最新单条评估的绝对水平判断退化
+            latest_evals = self.repo.get_evaluations(factor_id, limit=1)
+            latest = latest_evals[0] if latest_evals else None
+            if latest is not None:
+                latest_sharpe = latest.get("level_1_sharpe")
+                latest_ic = latest.get("level_1_ic")
+                if latest_sharpe is not None and float(latest_sharpe) < abs_sharpe_floor:
+                    is_degraded = True
+                    degradation_reason = f"absolute_sharpe_below_floor({float(latest_sharpe):.2f}<{abs_sharpe_floor})"
+                    degradation_score = round(float(latest_sharpe) - abs_sharpe_floor, 4)
+                elif latest_ic is not None and float(latest_ic) < 0:
+                    is_degraded = True
+                    degradation_reason = f"absolute_ic_negative({float(latest_ic):.4f})"
+                    degradation_score = round(float(latest_ic), 4)
+                elif latest.get("overall_passed") is False:
+                    is_degraded = True
+                    degradation_reason = "latest_eval_failed"
+                    degradation_score = -1.0
 
         return {
             "factor_id": factor_id,
             "is_degraded": is_degraded,
-            "degradation_score": round(sharpe_trend.get("pct_change", 0) / 100, 4),
+            "degradation_reason": degradation_reason,
+            "data_sufficient": data_sufficient,
+            "degradation_score": degradation_score,
             "sharpe_trend": sharpe_trend,
             "ic_trend": ic_trend,
             "recommendation": ("考虑暂停使用该因子" if is_degraded else "继续监控"),

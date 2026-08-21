@@ -136,6 +136,44 @@ class TestWritePathContract:
         """项目根外路径（测试 tmp）→ 未登记（显式注入豁免）。"""
         assert registry.find_by_path(tmp_path / "x.duckdb") is None
 
+    def test_find_by_path_dir_domain_backend_compat(self, registry: StorageRegistry) -> None:
+        """目录级域按后端扩展名匹配（GAP-150 关闭语义）：data/*.jsonl→lineage_logs，
+        data/*.json→experiment_logs，扩展名不兼容则不算已登记。"""
+        d = registry.find_by_path("data/foo.jsonl")
+        assert d is not None and d.domain == "lineage_logs"
+        d = registry.find_by_path("data/foo.json")
+        assert d is not None and d.domain == "experiment_logs"
+        # mixed 后端兼容任意扩展名
+        d = registry.find_by_path("reports/foo.csv")
+        assert d is not None and d.domain == "reports"
+
+    def test_find_by_path_dir_domain_backend_mismatch_none(self, registry: StorageRegistry) -> None:
+        """目录级域扩展名不兼容（如 data/foo.duckdb 未登记）：不被 lineage/experiment
+        目录域宽匹配掩盖 → None（严格模式可拦截，GAP-150 关闭语义）。"""
+        assert registry.find_by_path("data/_unregistered_foo.duckdb") is None
+        assert registry.find_by_path("data/_unregistered_foo.parquet") is None
+
+    def test_find_by_path_same_dir_multi_backend(self, registry: StorageRegistry) -> None:
+        """同目录多后端域（memory/cache/factor_signals）：.parquet→signal_parquet，
+        .npy→signal_cache（legacy），互不误匹配。"""
+        d = registry.find_by_path("memory/cache/factor_signals/x.parquet")
+        assert d is not None and d.domain == "signal_parquet"
+        d = registry.find_by_path("memory/cache/factor_signals/x.npy")
+        assert d is not None and d.domain == "signal_cache"
+
+    def test_find_by_path_wal_derived_file(self, registry: StorageRegistry) -> None:
+        """文件级域同源衍生文件（SQLite WAL）：sim_state.db.wal 仍归属 sim_portfolio。"""
+        d = registry.find_by_path("memory/portfolio/simulated/sim_state.db.wal")
+        assert d is not None and d.domain == "sim_portfolio"
+
+    def test_strict_unregistered_dir_backend_mismatch_raises(self, registry: StorageRegistry) -> None:
+        """严格模式：data/ 下扩展名不兼容的未登记路径 → ValueError 阻断（宽匹配已收紧）。"""
+        with pytest.raises(ValueError, match="写路径未登记"):
+            registry.warn_unregistered_write(
+                str(Path(__file__).resolve().parents[2] / "data" / "_gap150_unregistered.duckdb"),
+                caller="Test", strict=True,
+            )
+
     def test_warn_unregistered_write_logs(self, registry: StorageRegistry, tmp_path, caplog) -> None:
         """未登记写路径 → warning（告警模式，不抛错）。"""
         with caplog.at_level("WARNING", logger="fts.store.registry"):

@@ -47,6 +47,28 @@ class TestResolver:
         assert set(m) == {"能源", "聚酯", "油化工", "煤化工"}
         assert m["能源"] == ["SC0", "FU0", "BU0"]
 
+    def test_energy_sub_symbols_member_validated(self, caplog):
+        """energy 子链短名（如"聚酯"）不与 17 产业链名逐名比对——成员品种合法即不告警。"""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+        m = resolve_chain_map("energy")
+        assert "聚酯" in m and m["聚酯"] == ["PF0", "TA0", "EG0"]
+        assert not any("不存在于 sector_map" in r.message for r in caplog.records)
+
+    def test_warn_unknown_symbols(self, caplog):
+        """子链成员品种不在 sector_map 任一链 → 告警（品种级校验保留）。"""
+        import logging
+
+        from fts.factor_engine.scope_domain.resolver import _warn_unknown_symbols
+
+        caplog.set_level(logging.WARNING)
+        _warn_unknown_symbols(
+            {"聚酯": ["PF0", "TA0", "XXX0"]},
+            {"聚酯链": ["PF0", "TA0", "EG0"]},
+        )
+        assert any("未知品种" in r.message for r in caplog.records)
+
     def test_resolve_scope(self):
         assert resolve_scope(None).kind == "all"
         s = resolve_scope({"kind": "chain", "chains": ["黑色系", "橡胶"]})

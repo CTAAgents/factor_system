@@ -57,7 +57,9 @@ def resolve_chain_map(market: str = "futures") -> dict[str, list[str]]:
         sub = ew.get("sub_symbols")
         if isinstance(sub, dict) and sub:
             out: dict[str, list[str]] = {k: list(v) for k, v in sub.items()}
-            _warn_unknown_chains(out, sector_map)
+            # energy 子链为短名（如"聚酯"），与 futures 17 产业链名（"聚酯链"）并不
+            # 逐一对名——做品种级校验：子链成员必须存在于 sector_map 任一产业链。
+            _warn_unknown_symbols(out, sector_map)
             return out
         chem = list(ew.get("chemical_sectors") or [])
         return {c: list(sector_map[c]) for c in chem if c in sector_map}
@@ -70,6 +72,15 @@ def _warn_unknown_chains(chain_map: dict[str, list[str]], sector_map: dict[str, 
     for c in chain_map:
         if c not in sector_map:
             logger.warning("[scope] 链 [%s] 不存在于 sector_map，映射可能失效", c)
+
+
+def _warn_unknown_symbols(chain_map: dict[str, list[str]], sector_map: dict[str, list[str]]) -> None:
+    """子链成员必须存在于 sector_map 任一产业链；未知品种告警不阻断。"""
+    known = {s for syms in sector_map.values() for s in syms}
+    for chain, syms in chain_map.items():
+        unknown = [s for s in syms if s not in known]
+        if unknown:
+            logger.warning("[scope] 子链 [%s] 含未知品种 %s，映射可能失效", chain, unknown)
 
 
 def symbols_for_chain(market: str, chain: str) -> list[str]:

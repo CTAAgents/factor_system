@@ -77,14 +77,14 @@ class TestL1MetaLoopJob:
     """l1_meta_loop_job 测试。"""
 
     def test_success(self, caplog):
-        """成功路径：构造 MetaLoop 并运行，日志输出完成状态。"""
+        """成功路径：构造 MetaLoop 并运行，日志输出完成状态，并自动写执行报告。"""
         result = MagicMock(status="ok", injected_candidate_ids=["a", "b"])
         fake_meta = _fake_module(MetaLoop=MagicMock(), _make_web_collector=MagicMock(return_value=MagicMock()))
         fake_meta.MetaLoop.return_value.run.return_value = result
         fake_llm = _fake_module(get_llm_client=MagicMock(return_value=MagicMock()))
         fake_cfg = _make_cfg_module()
 
-        with patch.dict(
+        with patch("fts.scheduler.jobs._write_l1_report") as mock_report, patch.dict(
             sys.modules,
             {
                 "fts.factor_engine.meta_loop": fake_meta,
@@ -98,12 +98,13 @@ class TestL1MetaLoopJob:
         assert "[L1] 完成: status=ok injected=2" in caplog.text
         fake_meta.MetaLoop.assert_called_once()
         fake_meta.MetaLoop.return_value.run.assert_called_once()
+        mock_report.assert_called_once()
 
     def test_success_logs_trace_id(self, caplog):
         """启动日志包含 trace_id。"""
         fake_meta = _fake_module(MetaLoop=MagicMock(), _make_web_collector=MagicMock(return_value=MagicMock()))
         fake_llm = _fake_module(get_llm_client=MagicMock())
-        with patch.dict(
+        with patch("fts.scheduler.jobs._write_l1_report"), patch.dict(
             sys.modules,
             {
                 "fts.factor_engine.meta_loop": fake_meta,
@@ -117,9 +118,9 @@ class TestL1MetaLoopJob:
         assert "[L1] Meta-Loop 启动 trace_id=fts.l1.sched_" in caplog.text
 
     def test_failure_caught(self, caplog):
-        """MetaLoop 构造失败时捕获并记录错误，不抛出。"""
+        """MetaLoop 构造失败时捕获并记录错误、写 failed 报告，不抛出。"""
         fake_meta = _fake_module(MetaLoop=MagicMock(side_effect=RuntimeError("llm unavailable")), _make_web_collector=MagicMock(return_value=MagicMock()))
-        with patch.dict(
+        with patch("fts.scheduler.jobs._write_l1_report") as mock_report, patch.dict(
             sys.modules,
             {
                 "fts.factor_engine.meta_loop": fake_meta,
@@ -131,6 +132,90 @@ class TestL1MetaLoopJob:
             jobs.l1_meta_loop_job()  # 不应抛出
 
         assert "[L1] 运行失败: llm unavailable" in caplog.text
+        assert mock_report.call_args.kwargs["status"] == "failed"
+
+    def test_success_auto_writes_report(self):
+        """成功路径自动写执行报告：状态/注入数/市场正确透传。"""
+        result = MagicMock(status="completed", injected_candidate_ids=["a", "b", "c"])
+        fake_meta = _fake_module(MetaLoop=MagicMock(), _make_web_collector=MagicMock(return_value=MagicMock()))
+        fake_meta.MetaLoop.return_value.run.return_value = result
+        fake_llm = _fake_module(get_llm_client=MagicMock(return_value=MagicMock()))
+        fake_cfg = _make_cfg_module()
+
+        with patch("fts.scheduler.jobs._write_l1_report") as mock_report, patch.dict(
+            sys.modules,
+            {
+                "fts.factor_engine.meta_loop": fake_meta,
+                "fts.llm": fake_llm,
+                "fts.config": fake_cfg,
+            },
+        ):
+            jobs.l1_meta_loop_job()
+
+        kwargs = mock_report.call_args.kwargs
+        assert kwargs["status"] == "completed"
+        assert kwargs["injected_count"] == 3
+        assert kwargs["market"] == "futures"
+
+
+class TestWriteL1Report:
+    """l1_meta_loop_job 执行报告自动写入（_write_l1_report 单元测试）。"""
+
+    def test_creates_report(self, tmp_path):
+        """生成报告文件且内容含关键字段。"""
+        report = jobs._write_l1_report(
+            market="futures",
+            trace_id="fts.l1.sched_20260820170000",
+            status="completed",
+            started_at="2026-08-20 16:49:00",
+            completed_at="2026-08-20 17:00:35",
+            injected_count=23,
+            factor_pool_total=264,
+            inject_dir_count=23,
+            report_dir=tmp_path,
+        )
+        assert report.exists()
+        text = report.read_text(encoding="utf-8")
+        assert "状态: completed" in text
+        assert "本次注入候选数: 23" in text
+        assert "因子池总数: 264" in text
+
+    def test_overwrites_same_day(self, tmp_path):
+        """同日重复执行覆盖旧内容（只保留一份当日日志）。"""
+        jobs._write_l1_report(
+            market="futures",
+            trace_id="t1",
+            status="completed",
+            started_at="2026-08-20 16:00:00",
+            completed_at="2026-08-20 16:30:00",
+            injected_count=10,
+            factor_pool_total=100,
+            inject_dir_count=10,
+            report_dir=tmp_path,
+        )
+        jobs._write_l1_report(
+            market="futures",
+            trace_id="t2",
+            status="failed",
+            started_at="2026-08-20 17:00:00",
+            completed_at="2026-08-20 17:05:00",
+            injected_count=0,
+            factor_pool_total=0,
+            inject_dir_count=0,
+            note="运行失败: boom",
+            report_dir=tmp_path,
+        )
+        files = list(tmp_path.glob("*.log"))
+        assert len(files) == 1
+        text = files[0].read_text(encoding="utf-8")
+        assert "状态: failed" in text and "运行失败: boom" in text
+        assert "状态: completed" not in text
+
+    def test_count_factor_pool_total_count(self, tmp_path):
+        """因子池计数优先取 total_count 字段。"""
+        pool = tmp_path / "pool.json"
+        pool.write_text(json.dumps({"total_count": 185, "factors": [{}]}), encoding="utf-8")
+        assert jobs._count_factor_pool(str(pool)) == 185
 
 
 # ─── L2 Evolution Loop ───────────────────────────────────
@@ -692,7 +777,7 @@ class TestLogicMonitorJob:
         assert call.kwargs.get("params") == {"window": 10}
 
     def test_mock_data_has_ohlcv_columns(self):
-        """模拟数据含 open/high/low/close/volume/settle，匹配因子代码 K 线字段引用。"""
+        """模拟数据含 open/high/low/close/volume/settle/vwap，匹配因子代码 K 线字段引用。"""
         fake_logic, fake_db, fake_repo_mod, fake_contracts = self._build_mocks()
         with patch.dict(
             sys.modules,
@@ -707,7 +792,7 @@ class TestLogicMonitorJob:
 
         args, kwargs = fake_logic.LogicMonitor.return_value.run.call_args
         mock_df = args[1] if len(args) > 1 else kwargs.get("data")
-        assert {"open", "high", "low", "close", "volume", "settle"} <= set(mock_df.columns)
+        assert {"open", "high", "low", "close", "volume", "settle", "vwap"} <= set(mock_df.columns)
         assert (mock_df["high"] >= mock_df["low"]).all()
 
     def test_no_active_factors(self, caplog):
@@ -797,12 +882,13 @@ class TestFactorInspectorJob:
             caplog.set_level(logging.INFO)
             jobs.factor_inspector_job()
 
-        # GAP-132：巡检市场跟随全局 FTS_DEFAULT_MARKET + dry-run（评估历史不足，不自动降级）
+        # GAP-132：巡检市场跟随全局 FTS_DEFAULT_MARKET；退化检测绝对水平兜底
+        # 恢复自动降级（commit=True，2026-08-20 关闭）
         fake_inspector.FactorInspector.assert_called_once_with(market="energy")
         fake_inspector.FactorInspector.return_value.inspect_and_downgrade.assert_called_once_with(
             market="energy",
             threshold=-0.2,
-            commit=False,
+            commit=True,
         )
         assert "[因子巡检] 完成: audited=5 degraded=1 downgraded=0 deferred_approved=0 skipped=0 errors=0" in caplog.text
 

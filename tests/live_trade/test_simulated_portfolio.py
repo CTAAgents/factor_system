@@ -350,3 +350,35 @@ def test_portfolio_risk_status():
     pf.mark_to_market("2026-01-06", {"RB0": 2500.0})  # 2手*10*500=1万亏损=10%
     risked = pf.portfolio_risk_status({"RB0": 2500.0})
     assert risked["force_close"] or risked["max_severity"] in ("BLOCK", "FORCE_CLOSE")
+
+
+# ─── GAP-150 写路径契约（v3.1.0+6） ────────────────────────
+
+
+def test_sqlite_store_default_path_registry_ok(tmp_path, monkeypatch):
+    """GAP-150：默认路径（sim_state.db 已登记 sim_portfolio 域）构造不抛。
+
+    _connect 打桩避免真实落盘污染项目目录。
+    """
+    import fts.live_trade.sqlite_store as sqlite_store_mod
+    from fts.store import StorageRegistry
+
+    monkeypatch.setattr(sqlite_store_mod.SimSQLiteStore, "_connect", lambda self: None)
+    monkeypatch.setattr("fts.store.get_storage_registry", StorageRegistry)
+    store = SimSQLiteStore()
+    assert store._db_path == "memory/portfolio/simulated/sim_state.db"
+
+
+def test_sqlite_store_default_path_strict_blocks(tmp_path, monkeypatch):
+    """GAP-150：registry 未登记默认路径（严格模式）→ ValueError 阻断；显式注入豁免。"""
+    import fts.live_trade.sqlite_store as sqlite_store_mod
+    from fts.store import StorageRegistry
+
+    monkeypatch.setattr(sqlite_store_mod.SimSQLiteStore, "_connect", lambda self: None)
+    empty = StorageRegistry(yaml_path=tmp_path / "empty_landscape.yaml")
+    monkeypatch.setattr("fts.store.get_storage_registry", lambda: empty)
+
+    with pytest.raises(ValueError, match="写路径未登记"):
+        SimSQLiteStore()  # 默认路径未登记 → 阻断
+    store = SimSQLiteStore(str(tmp_path / "sim.db"))  # 显式注入路径 → 豁免
+    assert store._db_path == str(tmp_path / "sim.db")
